@@ -11,10 +11,48 @@ const crypto = require('node:crypto');
 
 const ROOT = path.join(__dirname, '..');
 
-// בענן הנתונים חייבים לשבת על דיסק קבוע ולא בתוך תיקיית הקוד — שם הם נמחקים
-// בכל עדכון גרסה. המיקום נקבע במשתני סביבה, ובהרצה מקומית נשאר כמו שהיה.
-const DATA_DIR = process.env.DATA_DIR ?? path.join(ROOT, 'data');
-const UPLOADS_DIR = process.env.UPLOADS_DIR ?? path.join(ROOT, 'uploads');
+/**
+ * האם הנתיב הוא נקודת עיגון של דיסק — כלומר דיסק שחובר לשרת.
+ * מזהים לפי מזהה ההתקן: לתיקייה על דיסק אחר יש מזהה שונה מזה של תיקיית האב.
+ */
+function isMountPoint(dir) {
+  try {
+    const self = fs.statSync(dir);
+    if (!self.isDirectory()) return false;
+    fs.accessSync(dir, fs.constants.W_OK);
+    return self.dev !== fs.statSync(path.dirname(dir)).dev;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * איתור דיסק קבוע כשלא הוגדרו משתני סביבה.
+ * בלי זה, שכחה של הגדרה אחת גורמת לכתיבה לתוך תיקיית הקוד — שנמחקת
+ * בכל פרסום גרסה בענן, והנתונים נעלמים בלי שום הודעה.
+ */
+function detectPersistentDisk() {
+  for (const candidate of ['/var/mesimon', '/var/data', '/data', '/mnt/data', '/mnt/disk']) {
+    if (isMountPoint(candidate)) return candidate;
+  }
+  return null;
+}
+
+const detectedDisk = process.env.DATA_DIR ? null : detectPersistentDisk();
+
+const DATA_DIR = process.env.DATA_DIR
+  ?? (detectedDisk ? path.join(detectedDisk, 'data') : path.join(ROOT, 'data'));
+const UPLOADS_DIR = process.env.UPLOADS_DIR
+  ?? (detectedDisk ? path.join(detectedDisk, 'uploads') : path.join(ROOT, 'uploads'));
+
+// האם הנתונים יושבים במקום שנמחק בכל פרסום גרסה
+const STORAGE = {
+  dataDir: DATA_DIR,
+  uploadsDir: UPLOADS_DIR,
+  source: process.env.DATA_DIR ? 'env' : detectedDisk ? 'detected' : 'local',
+  disk: detectedDisk,
+  ephemeralInCloud: !process.env.DATA_DIR && !detectedDisk && !!process.env.RENDER
+};
 
 for (const dir of [DATA_DIR, UPLOADS_DIR]) {
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
@@ -464,6 +502,11 @@ function bootstrap() {
     }
   }
 
+  // סימני חיים של מסד הנתונים — אם התאריך הזה מתאפס אחרי פרסום גרסה,
+  // סימן שהנתונים אינם יושבים על דיסק קבוע
+  if (getSetting('installed_at') === null) setSetting('installed_at', nowIso());
+  setSetting('boot_count', Number(getSetting('boot_count', 0)) + 1);
+
   if (get('SELECT COUNT(*) AS c FROM users').c === 0) seedDemoData();
 }
 
@@ -689,7 +732,7 @@ function seedDemoData() {
 }
 
 module.exports = {
-  db, DB_PATH, UPLOADS_DIR, ROOT,
+  db, DB_PATH, UPLOADS_DIR, ROOT, STORAGE,
   all, get, run,
   nowIso, hashPassword, verifyPassword,
   getSetting, setSetting, allSettings,

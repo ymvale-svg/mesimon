@@ -99,7 +99,30 @@ server.listen(PORT, HOST, () => {
   console.log(`  מקומי:   http://localhost:${PORT}`);
   if (lan) console.log(`  ברשת:    http://${lan.address}:${PORT}`);
   console.log(`  נתונים:  ${D.DB_PATH}`);
+
+  const source = {
+    env: 'לפי משתני סביבה',
+    detected: `דיסק קבוע שזוהה אוטומטית (${D.STORAGE.disk})`,
+    local: 'תיקייה מקומית'
+  }[D.STORAGE.source];
+  console.log(`  אחסון:   ${source}`);
   console.log('');
+
+  // בענן, כתיבה לתוך תיקיית הקוד נמחקת בכל פרסום גרסה — אזהרה בולטת ולא שורה שקטה
+  if (D.STORAGE.ephemeralInCloud) {
+    console.log('  ' + '='.repeat(64));
+    console.log('  ⚠  אזהרה: הנתונים אינם נשמרים!');
+    console.log('');
+    console.log('     המערכת כותבת לתוך תיקיית הקוד, שנמחקת בכל פרסום גרסה.');
+    console.log('     כל המשימות, המשתמשים והקבצים יימחקו בעדכון הבא.');
+    console.log('');
+    console.log('     לתיקון: יש לחבר דיסק קבוע (Disk) בנתיב /var/mesimon');
+    console.log('     ולהגדיר את משתני הסביבה:');
+    console.log('       DATA_DIR      = /var/mesimon/data');
+    console.log('       UPLOADS_DIR   = /var/mesimon/uploads');
+    console.log('  ' + '='.repeat(64));
+    console.log('');
+  }
 });
 
 const shutdown = () => {

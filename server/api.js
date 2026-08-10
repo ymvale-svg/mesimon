@@ -1267,9 +1267,20 @@ router.patch('/api/vendors/:id', async (req, res, ctx) => {
 router.get('/api/admin/settings', async (req, res, ctx) => {
   const actor = ctx.requireActor();
   requireFullPerm(actor, 'manage_automations');
+  let dbSizeKb = null;
+  try {
+    dbSizeKb = Math.round(fs.statSync(D.DB_PATH).size / 1024);
+  } catch { /* עדיין לא נוצר */ }
+
   sendJson(res, 200, {
     settings: D.allSettings(),
     defaults: D.DEFAULT_SETTINGS,
+    storage: {
+      ...D.STORAGE,
+      dbSizeKb,
+      installedAt: D.getSetting('installed_at', null),
+      bootCount: Number(D.getSetting('boot_count', 0))
+    },
     rules: D.all('SELECT * FROM automation_rules ORDER BY id').map((r) => ({
       id: r.id, name: r.name, triggerKey: r.trigger_key, actionKey: r.action_key,
       params: JSON.parse(r.params), enabled: !!r.enabled, builtIn: !!r.built_in, lastRunAt: r.last_run_at
