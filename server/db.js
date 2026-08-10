@@ -268,6 +268,19 @@ CREATE TABLE IF NOT EXISTS templates (
   created_at TEXT    NOT NULL
 );
 
+-- הזמנות למערכת: קישור חד-פעמי לקביעת סיסמה, במקום להעביר סיסמאות בדואר
+CREATE TABLE IF NOT EXISTS invites (
+  token       TEXT PRIMARY KEY,
+  target_type TEXT NOT NULL CHECK (target_type IN ('user','vendor')),
+  target_id   INTEGER NOT NULL,
+  invited_by  INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at  TEXT NOT NULL,
+  expires_at  TEXT NOT NULL,
+  used_at     TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_invites_target ON invites(target_type, target_id);
+
 CREATE TABLE IF NOT EXISTS sessions (
   token       TEXT PRIMARY KEY,
   actor_type  TEXT NOT NULL CHECK (actor_type IN ('user','vendor')),

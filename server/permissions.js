@@ -29,7 +29,8 @@ const MATRIX = {
   change_task_status:       { admin: true,  manager: true,  employee: 'own',      vendor: 'assigned' },
   assign_task_to_vendor:    { admin: true,  manager: true,  employee: false,      vendor: false },
   approve_vendor_output:    { admin: true,  manager: true,  employee: false,      vendor: false },
-  manage_users:             { admin: true,  manager: false, employee: false,      vendor: false },
+  // מנהל מחלקה רשאי לנהל עובדים פנימיים במחלקה שלו בלבד (הרחבה מעבר לאפיון המקורי)
+  manage_users:             { admin: true,  manager: 'own', employee: false,      vendor: false },
   manage_automations:       { admin: true,  manager: false, employee: false,      vendor: false },
   view_reports:             { admin: true,  manager: true,  employee: false,      vendor: false },
   export_data:              { admin: true,  manager: true,  employee: false,      vendor: false },
@@ -56,6 +57,7 @@ const MATRIX_LABELS = {
 };
 
 const MATRIX_NOTES = {
+  'manage_users.manager': 'רק עובדים פנימיים במחלקה שלו',
   'view_internal_board.employee': 'רק משימות שהוא חלק מהן',
   'view_vendor_boards.vendor': 'רואה רק את הבורד שלו',
   'change_task_status.employee': 'למשימות שלו',

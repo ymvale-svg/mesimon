@@ -53,12 +53,49 @@ const AdminView = (() => {
 
   // ------------------------------------------------------------- משתמשים
 
+  /** מציג את תוצאת ההזמנה — ואם הדואר לא נשלח, את הקישור להעתקה ידנית */
+  function showInviteResult(invite, name) {
+    if (!invite) return;
+    if (invite.emailSent) return UI.success(`נשלחה הזמנה במייל אל ${name}`);
+
+    const linkBox = el('input', { type: 'text', value: invite.link, readonly: true, style: { direction: 'ltr' } });
+    linkBox.value = invite.link;
+    UI.modal({
+      title: 'ההזמנה נוצרה — הדואר לא נשלח',
+      body: el('div', {}, [
+        el('div.alert.alert-warn', {}, [
+          el('span', { text: '✉️' }),
+          el('div', { text: invite.emailError === 'שליחת דואר אינה מוגדרת במערכת'
+            ? 'שליחת דואר אינה מוגדרת עדיין. אפשר להעביר את הקישור הזה ידנית.'
+            : `שליחת הדואר נכשלה: ${invite.emailError}` })
+        ]),
+        UI.field(`קישור אישי עבור ${name}`, linkBox, 'הקישור מאפשר לקבוע סיסמה ולהיכנס. תקף 14 יום.'),
+        el('button.btn.btn-primary', {
+          onclick: () => {
+            linkBox.select();
+            navigator.clipboard?.writeText(invite.link);
+            UI.success('הקישור הועתק');
+          }
+        }, ['העתקת הקישור'])
+      ]),
+      footer: [el('button.btn', { onclick: () => document.querySelector('.modal-backdrop')?.remove() }, ['סגירה'])]
+    });
+  }
+
   async function usersTab(body) {
     const data = await API.adminUsers();
+    const scoped = data.scope === 'department';
+
     UI.mount(body,
+      scoped
+        ? el('div.alert.alert-info.mb', {}, [
+            el('span', { text: 'ℹ️' }),
+            el('div', { text: `כמנהל/ת מחלקה אפשר להוסיף ולנהל עובדים פנימיים במחלקת ${data.department} בלבד. להוספת מנהלים או מחלקות אחרות יש לפנות למנהל המערכת.` })
+          ])
+        : null,
       el('div.flex.mb', {}, [
         el('div.spacer'),
-        el('button.btn.btn-primary', { onclick: () => userDialog() }, ['＋ משתמש חדש'])
+        el('button.btn.btn-primary', { onclick: () => userDialog(null, data) }, ['＋ משתמש חדש'])
       ]),
       el('div.table-wrap', {}, [
         el('table.data', {}, [
@@ -76,7 +113,20 @@ const AdminView = (() => {
                 class: u.status === 'active' ? 'text-ok' : 'text-danger',
                 text: u.status === 'active' ? '● פעיל' : '○ לא פעיל'
               })]),
-              el('td', {}, [el('button.btn.btn-sm', { onclick: () => userDialog(u) }, ['עריכה'])])
+              el('td', {}, [
+                el('div.flex', {}, [
+                  el('button.btn.btn-sm', { onclick: () => userDialog(u, data) }, ['עריכה']),
+                  el('button.btn.btn-sm', {
+                    title: 'שליחה חוזרת של הזמנה לקביעת סיסמה',
+                    onclick: async () => {
+                      try {
+                        const r = await API.resendInvite('user', u.id);
+                        showInviteResult(r.invite, u.name);
+                      } catch (err) { UI.error(err); }
+                    }
+                  }, ['✉ הזמנה'])
+                ])
+              ])
             ])
           ))
         ])
@@ -84,27 +134,53 @@ const AdminView = (() => {
     );
   }
 
-  function userDialog(user = null) {
+  function userDialog(user = null, listData = {}) {
     const isEdit = !!user;
+    const scoped = listData.scope === 'department';
     const nameInput = el('input', { type: 'text', value: user?.name ?? '' });
     const emailInput = el('input', { type: 'email', value: user?.email ?? '' });
-    const roleSelect = UI.select([
-      { value: 'employee', label: 'עובד פנימי' },
-      { value: 'manager', label: 'מנהל מחלקה' },
-      { value: 'admin', label: 'מנהל מערכת' }
-    ], user?.role ?? 'employee');
-    const deptInput = el('input', { type: 'text', value: user?.department ?? 'שיווק ומכירות' });
+    const roleSelect = UI.select(
+      scoped
+        ? [{ value: 'employee', label: 'עובד פנימי' }]
+        : [
+            { value: 'employee', label: 'עובד פנימי' },
+            { value: 'manager', label: 'מנהל מחלקה' },
+            { value: 'admin', label: 'מנהל מערכת' }
+          ],
+      user?.role ?? 'employee'
+    );
+    // בחירה חופשית: השדה ריק כברירת מחדל, והמחלקות הקיימות מוצעות כהשלמה
+    const deptListId = 'dept-options';
+    const deptInput = el('input', {
+      type: 'text',
+      value: user?.department ?? (scoped ? listData.department : '') ?? '',
+      placeholder: 'שם המחלקה',
+      list: deptListId,
+      readonly: scoped || null
+    });
+    const deptOptions = el(`datalist#${deptListId}`, {},
+      (listData.departments ?? []).map((d) => el('option', { value: d })));
     const statusSelect = UI.select([{ value: 'active', label: 'פעיל' }, { value: 'inactive', label: 'לא פעיל' }], user?.status ?? 'active');
-    const passInput = el('input', { type: 'text', placeholder: isEdit ? 'השאר ריק כדי לא לשנות' : '1234' });
+    const passInput = el('input', { type: 'text', placeholder: isEdit ? 'השאר ריק כדי לא לשנות' : 'ריק = תישלח הזמנה' });
 
     const saveBtn = el('button.btn.btn-primary', {}, ['שמירה']);
     const m = UI.modal({
       title: isEdit ? `עריכת משתמש — ${user.name}` : 'משתמש חדש',
       body: el('div', {}, [
+        deptOptions,
         UI.field('שם מלא', nameInput),
         UI.field('אימייל', emailInput, 'משמש גם לכניסה למערכת'),
         el('div.row', {}, [UI.field('רמת גישה', roleSelect), UI.field('סטטוס', statusSelect)]),
-        el('div.row', {}, [UI.field('מחלקה', deptInput), UI.field('סיסמה', passInput)])
+        el('div.row', {}, [
+          UI.field('מחלקה', deptInput, scoped ? 'נקבע לפי המחלקה שלך' : 'אפשר לבחור מהקיימות או להקליד מחלקה חדשה'),
+          UI.field('סיסמה', passInput, isEdit ? null : 'מומלץ להשאיר ריק — תישלח הזמנה לקביעת סיסמה')
+        ]),
+        !isEdit
+          ? el('div.alert.alert-info', {}, [
+              el('span', { text: '✉️' }),
+              el('div', { text: 'עם השמירה תישלח הזמנה במייל ובה הלוגו של המערכת, שמך ושם הארגון. המוזמן קובע לעצמו סיסמה.' })
+            ])
+          : null
       ]),
       footer: [saveBtn, el('div.spacer')]
     });
@@ -121,12 +197,16 @@ const AdminView = (() => {
       if (!payload.name || !payload.email) return UI.toast('נדרשים שם ואימייל', 'error');
       saveBtn.disabled = true;
       try {
+        let created = null;
         if (isEdit) await API.updateUser(user.id, payload);
-        else await API.createUser({ ...payload, password: payload.password ?? '1234' });
+        else created = await API.createUser(payload);
         m.close();
-        UI.success('נשמר');
+        if (created?.invite) showInviteResult(created.invite, payload.name);
+        else UI.success('נשמר');
+        // רינדור מלא ולא רק של גוף המסך: שינוי פרטי המשתמש המחובר משפיע
+        // גם על הסרגל העליון, שנבנה בנפרד ואחרת נשאר עם השם הישן
         await App.reloadReference();
-        reload();
+        App.render();
       } catch (err) { saveBtn.disabled = false; UI.error(err); }
     });
   }
@@ -163,6 +243,15 @@ const AdminView = (() => {
               el('td', {}, [
                 el('div.flex', {}, [
                   el('button.btn.btn-sm', { onclick: () => vendorDialog(v) }, ['עריכה']),
+                  el('button.btn.btn-sm', {
+                    title: 'שליחה חוזרת של הזמנה לפורטל הספקים',
+                    onclick: async () => {
+                      try {
+                        const r = await API.resendInvite('vendor', v.id);
+                        showInviteResult(r.invite, v.contactName || v.name);
+                      } catch (err) { UI.error(err); }
+                    }
+                  }, ['✉ הזמנה']),
                   v.boardId ? el('button.btn.btn-sm', { onclick: () => App.navigate('vendorBoards', { boardId: v.boardId }) }, ['לבורד']) : null
                 ])
               ])
@@ -210,12 +299,16 @@ const AdminView = (() => {
       if (!payload.name || !payload.email) return UI.toast('נדרשים שם ואימייל', 'error');
       saveBtn.disabled = true;
       try {
+        let created = null;
         if (isEdit) await API.updateVendor(vendor.id, payload);
-        else await API.createVendor({ ...payload, password: payload.password ?? '1234' });
+        else created = await API.createVendor(payload);
         m.close();
-        UI.success('נשמר');
+        if (created?.invite) showInviteResult(created.invite, payload.contactName || payload.name);
+        else UI.success('נשמר');
+        // רינדור מלא ולא רק של גוף המסך: שינוי פרטי המשתמש המחובר משפיע
+        // גם על הסרגל העליון, שנבנה בנפרד ואחרת נשאר עם השם הישן
         await App.reloadReference();
-        reload();
+        App.render();
       } catch (err) { saveBtn.disabled = false; UI.error(err); }
     });
   }

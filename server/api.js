@@ -8,6 +8,8 @@ const D = require('./db');
 const P = require('./permissions');
 const Auth = require('./auth');
 const Rules = require('./rules-engine');
+const Google = require('./google-auth');
+const Invites = require('./invites');
 const {
   Router, badRequest, forbidden, notFound,
   readJson, sendJson, sendText, parseUrl
@@ -241,9 +243,55 @@ function findCompanyLogo() {
   return `/img/${encodeURIComponent(preferred)}`;
 }
 
-// זמין גם לפני התחברות — מסך הכניסה מציג את הלוגו
+// זמין גם לפני התחברות — מסך הכניסה מציג את הלוגו ואת אמצעי הכניסה
 router.get('/api/branding', async (req, res) => {
-  sendJson(res, 200, { companyLogo: findCompanyLogo() });
+  sendJson(res, 200, { companyLogo: findCompanyLogo(), googleLogin: Google.isEnabled() });
+});
+
+// ---------------------------------------------------------------------------
+// כניסה עם Google
+// ---------------------------------------------------------------------------
+
+const redirectTo = (res, location) => {
+  res.writeHead(302, { location, 'cache-control': 'no-store' });
+  res.end();
+};
+
+router.get('/api/auth/google/start', async (req, res) => {
+  if (!Google.isEnabled()) throw badRequest('כניסה עם Google אינה מוגדרת במערכת');
+  redirectTo(res, Google.authorizeUrl(req));
+});
+
+router.get('/api/auth/google/callback', async (req, res) => {
+  const params = parseUrl(req).searchParams;
+  const fail = (message) => redirectTo(res, `/?googleError=${encodeURIComponent(message)}`);
+
+  if (!Google.isEnabled()) return fail('כניסה עם Google אינה מוגדרת במערכת');
+  if (params.get('error')) return fail('הכניסה בוטלה');
+
+  const code = params.get('code');
+  const state = params.get('state');
+  if (!code || !state) return fail('חסרים פרטים בחזרה מ-Google');
+  // מונע זיוף בקשה: המצב חייב להיות כזה שהמערכת עצמה יצרה ולא נוצל עדיין
+  if (!Google.consumeState(state)) return fail('הבקשה פגה או אינה תקינה. נסה להתחבר שוב.');
+
+  try {
+    const profile = await Google.exchangeCodeForProfile(code, req);
+    const match = Google.matchAccount(profile);
+    const actor = Auth.loadActor(match.actorType, match.id);
+    if (!actor) return fail('החשבון אינו פעיל במערכת');
+
+    const { token, expires } = Auth.createSession(match.actorType, match.id);
+    res.writeHead(302, {
+      location: '/',
+      'set-cookie': Auth.cookieHeader(token, expires, req),
+      'cache-control': 'no-store'
+    });
+    res.end();
+  } catch (err) {
+    console.error('[משימון] כניסה עם Google נכשלה:', err.message);
+    fail(err.message);
+  }
 });
 
 // ---------------------------------------------------------------------------
@@ -288,6 +336,41 @@ function publicActor(actor) {
     readOnly: !!actor.readOnly
   };
 }
+
+// ---------------------------------------------------------------------------
+// מימוש הזמנה — פתוח ללא התחברות, מוגן באמצעות האסימון שבקישור
+// ---------------------------------------------------------------------------
+
+router.get('/api/invite/:token', async (req, res, ctx) => {
+  const found = Invites.find(ctx.params.token);
+  if (found.error) return sendJson(res, 200, { valid: false, error: found.error });
+
+  sendJson(res, 200, {
+    valid: true,
+    name: found.account.name,
+    email: found.account.email,
+    isVendor: found.invite.target_type === 'vendor',
+    inviter: found.inviter,
+    orgName: D.getSetting('org_name', ''),
+    expiresAt: found.invite.expires_at
+  });
+});
+
+router.post('/api/invite/:token', async (req, res, ctx) => {
+  const { password } = await readJson(req);
+  const clean = String(password ?? '');
+  if (clean.length < 8) throw badRequest('הסיסמה חייבת להכיל לפחות 8 תווים');
+
+  const result = Invites.redeem(ctx.params.token, clean);
+  if (result.error) throw badRequest(result.error);
+
+  const actor = Auth.loadActor(result.actorType, result.id);
+  if (!actor) throw badRequest('החשבון אינו פעיל');
+
+  const { token, expires } = Auth.createSession(result.actorType, result.id);
+  res.setHeader('set-cookie', Auth.cookieHeader(token, expires, req));
+  sendJson(res, 200, { actor: publicActor(actor), permissions: P.permissionsFor(actor) });
+});
 
 // ---------------------------------------------------------------------------
 // טעינה ראשונית
@@ -1083,7 +1166,7 @@ router.get('/api/reports', async (req, res, ctx) => {
   const actor = ctx.requireActor();
   requirePerm(actor, 'view_reports');
 
-  const workload = D.all("SELECT id, full_name FROM users WHERE status='active' ORDER BY full_name").map((u) => {
+  const workload = D.all("SELECT id, full_name, department FROM users WHERE status='active' ORDER BY full_name").map((u) => {
     const rows = D.all(
       `SELECT t.*, c.is_final FROM tasks t
          LEFT JOIN board_columns c ON c.board_id = t.board_id AND c.key = t.status
@@ -1091,7 +1174,7 @@ router.get('/api/reports', async (req, res, ctx) => {
     );
     const open = rows.filter((r) => !r.is_final);
     return {
-      id: u.id, name: u.full_name,
+      id: u.id, name: u.full_name, department: String(u.department ?? '').trim() || 'ללא שיוך',
       open: open.length,
       overdue: open.filter((r) => r.due_date && new Date(r.due_date).getTime() < Date.now()).length,
       urgent: open.filter((r) => r.priority === 'urgent').length,
@@ -1121,6 +1204,22 @@ router.get('/api/reports', async (req, res, ctx) => {
     };
   });
 
+  // חתך מחלקתי — התמונה של החברה לפי מחלקות, למנהל המערכת ולמנהל המחלקה
+  const departments = [];
+  const byDept = new Map();
+  for (const row of workload) {
+    const key = row.department;
+    if (!byDept.has(key)) byDept.set(key, { name: key, people: 0, open: 0, overdue: 0, urgent: 0, done: 0 });
+    const entry = byDept.get(key);
+    entry.people++;
+    entry.open += row.open;
+    entry.overdue += row.overdue;
+    entry.urgent += row.urgent;
+    entry.done += row.done;
+  }
+  for (const entry of byDept.values()) departments.push(entry);
+  departments.sort((a, b) => b.open - a.open || a.name.localeCompare(b.name, 'he'));
+
   const projects = listProjectsFor(actor).map((p) => {
     const rows = D.all(
       `SELECT t.*, c.is_final FROM tasks t
@@ -1142,7 +1241,7 @@ router.get('/api/reports', async (req, res, ctx) => {
       GROUP BY b.type, c.key ORDER BY b.type, c.position`
   );
 
-  sendJson(res, 200, { workload, vendors, projects, statusBreakdown });
+  sendJson(res, 200, { workload, departments, vendors, projects, statusBreakdown });
 });
 
 router.get('/api/export/tasks.csv', async (req, res, ctx) => {
@@ -1173,18 +1272,48 @@ router.get('/api/export/tasks.csv', async (req, res, ctx) => {
 // ניהול משתמשים — מנהל מערכת בלבד
 // ---------------------------------------------------------------------------
 
+/**
+ * מנהל מערכת מנהל את כל המשתמשים.
+ * מנהל מחלקה מנהל אך ורק עובדים פנימיים במחלקה שלו — לא מנהלים אחרים,
+ * לא משתמשים ממחלקה אחרת, ואינו יכול להעניק רמת גישה גבוהה משלו.
+ */
+const isDeptManager = (actor) => actor.type === 'user' && actor.role === 'manager';
+
+function assertMayManageUser(actor, target) {
+  if (actor.role === 'admin') return;
+  if (!isDeptManager(actor)) throw forbidden();
+  if (target.role !== 'employee') throw forbidden('מנהל מחלקה רשאי לנהל עובדים פנימיים בלבד');
+  if ((target.department ?? '') !== (actor.department ?? '')) {
+    throw forbidden('מנהל מחלקה רשאי לנהל משתמשים במחלקה שלו בלבד');
+  }
+}
+
 router.get('/api/admin/users', async (req, res, ctx) => {
   const actor = ctx.requireActor();
-  requireFullPerm(actor, 'manage_users');
+  requirePerm(actor, 'manage_users');
+
+  const rows = actor.role === 'admin'
+    ? D.all('SELECT id, full_name, email, role, department, status FROM users ORDER BY full_name')
+    : D.all("SELECT id, full_name, email, role, department, status FROM users WHERE department = ? AND role = 'employee' ORDER BY full_name", actor.department);
+
+  const departments = D.all(
+    "SELECT DISTINCT department AS name FROM users WHERE department IS NOT NULL AND trim(department) <> '' ORDER BY department"
+  ).map((r) => r.name);
+
   sendJson(res, 200, {
-    users: D.all('SELECT id, full_name, email, role, department, status, created_at FROM users ORDER BY full_name')
-      .map((u) => ({ id: u.id, name: u.full_name, email: u.email, role: u.role, roleLabel: P.ROLE_LABELS[u.role], department: u.department, status: u.status }))
+    scope: actor.role === 'admin' ? 'all' : 'department',
+    department: actor.department,
+    departments,
+    users: rows.map((u) => ({
+      id: u.id, name: u.full_name, email: u.email, role: u.role,
+      roleLabel: P.ROLE_LABELS[u.role], department: u.department, status: u.status
+    }))
   });
 });
 
 router.post('/api/admin/users', async (req, res, ctx) => {
   const actor = ctx.requireActor();
-  requireFullPerm(actor, 'manage_users');
+  requirePerm(actor, 'manage_users');
   const b = await readJson(req);
   const name = String(b.name ?? '').trim();
   const email = String(b.email ?? '').trim().toLowerCase();
@@ -1193,25 +1322,80 @@ router.post('/api/admin/users', async (req, res, ctx) => {
     throw badRequest('כתובת האימייל כבר קיימת במערכת');
   }
   if (!['admin', 'manager', 'employee'].includes(b.role)) throw badRequest('רמת גישה לא תקינה');
-  D.run(
+
+  // מנהל מחלקה — רק עובד פנימי, ורק במחלקה שלו. נכפה ולא רק נבדק.
+  if (isDeptManager(actor)) {
+    if (b.role !== 'employee') throw forbidden('מנהל מחלקה רשאי להוסיף עובדים פנימיים בלבד');
+    b.department = actor.department;
+  }
+
+  // בלי סיסמה מפורשת נקבעת סיסמה אקראית שאיש אינו יודע —
+  // הכניסה נעשית דרך קישור ההזמנה, שבו המשתמש קובע סיסמה בעצמו
+  const password = b.password || crypto.randomBytes(24).toString('base64url');
+  const result = D.run(
     'INSERT INTO users (full_name, email, password_hash, role, department, status, created_at) VALUES (?,?,?,?,?,?,?)',
-    name, email, D.hashPassword(b.password || '1234'), b.role, b.department || 'שיווק ומכירות', 'active', D.nowIso()
+    name, email, D.hashPassword(password), b.role, String(b.department ?? '').trim(), 'active', D.nowIso()
   );
-  sendJson(res, 201, { ok: true });
+
+  const invite = b.invite === false ? null : await Invites.createAndSend({
+    targetType: 'user',
+    targetId: Number(result.lastInsertRowid),
+    email,
+    recipientName: name,
+    inviter: { id: actor.id, name: actor.name },
+    baseUrl: Google.publicBase(req)
+  });
+
+  sendJson(res, 201, { ok: true, invite });
+});
+
+/** שליחה חוזרת של הזמנה למשתמש או לספק קיים */
+router.post('/api/admin/invite', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  const b = await readJson(req);
+  const targetType = b.targetType === 'vendor' ? 'vendor' : 'user';
+
+  if (targetType === 'user') requireFullPerm(actor, 'manage_users');
+  else requirePerm(actor, 'assign_task_to_vendor');
+
+  const account = targetType === 'user'
+    ? D.get('SELECT id, full_name AS name, email FROM users WHERE id = ?', Number(b.id))
+    : D.get('SELECT id, name, email FROM vendors WHERE id = ?', Number(b.id));
+  if (!account) throw notFound('החשבון לא נמצא');
+
+  const invite = await Invites.createAndSend({
+    targetType,
+    targetId: account.id,
+    email: account.email,
+    recipientName: account.name,
+    inviter: { id: actor.id, name: actor.name },
+    baseUrl: Google.publicBase(req)
+  });
+
+  sendJson(res, 200, { invite });
 });
 
 router.patch('/api/admin/users/:id', async (req, res, ctx) => {
   const actor = ctx.requireActor();
-  requireFullPerm(actor, 'manage_users');
+  requirePerm(actor, 'manage_users');
   const user = D.get('SELECT * FROM users WHERE id = ?', Number(ctx.params.id));
   if (!user) throw notFound();
   const b = await readJson(req);
   if (b.role && !['admin', 'manager', 'employee'].includes(b.role)) throw badRequest('רמת גישה לא תקינה');
   if (user.id === actor.id && b.status === 'inactive') throw badRequest('לא ניתן להשבית את החשבון שלך');
+
+  // מנהל מחלקה: רק על עובדים במחלקה שלו, ובלי לשנות רמת גישה או שיוך מחלקה
+  if (isDeptManager(actor)) {
+    assertMayManageUser(actor, user);
+    if (b.role && b.role !== 'employee') throw forbidden('מנהל מחלקה אינו רשאי להעניק רמת גישה גבוהה יותר');
+    b.role = 'employee';
+    b.department = actor.department;
+  }
   D.run(
     'UPDATE users SET full_name = ?, email = ?, role = ?, department = ?, status = ? WHERE id = ?',
     b.name ?? user.full_name, (b.email ?? user.email).toLowerCase(), b.role ?? user.role,
-    b.department ?? user.department, b.status ?? user.status, user.id
+    b.department !== undefined ? String(b.department ?? '').trim() : user.department,
+    b.status ?? user.status, user.id
   );
   if (b.password) D.run('UPDATE users SET password_hash = ? WHERE id = ?', D.hashPassword(b.password), user.id);
   sendJson(res, 200, { ok: true });
@@ -1231,14 +1415,26 @@ router.post('/api/vendors', async (req, res, ctx) => {
   if (D.get('SELECT 1 FROM vendors WHERE lower(email)=?', email) || D.get('SELECT 1 FROM users WHERE lower(email)=?', email)) {
     throw badRequest('כתובת האימייל כבר קיימת במערכת');
   }
+  const password = b.password || crypto.randomBytes(24).toString('base64url');
   const r = D.run(
     'INSERT INTO vendors (name, contact_name, email, phone, password_hash, status, read_only, created_at) VALUES (?,?,?,?,?,?,?,?)',
-    name, b.contactName ?? '', email, b.phone ?? '', D.hashPassword(b.password || '1234'),
+    name, b.contactName ?? '', email, b.phone ?? '', D.hashPassword(password),
     'active', b.readOnly ? 1 : 0, D.nowIso()
   );
+  const vendorId = Number(r.lastInsertRowid);
   // כל ספק מקבל בורד ייעודי משלו — פרק 3
-  D.createVendorBoard(Number(r.lastInsertRowid), name);
-  sendJson(res, 201, { ok: true });
+  D.createVendorBoard(vendorId, name);
+
+  const invite = b.invite === false ? null : await Invites.createAndSend({
+    targetType: 'vendor',
+    targetId: vendorId,
+    email,
+    recipientName: b.contactName || name,
+    inviter: { id: actor.id, name: actor.name },
+    baseUrl: Google.publicBase(req)
+  });
+
+  sendJson(res, 201, { ok: true, invite });
 });
 
 router.patch('/api/vendors/:id', async (req, res, ctx) => {

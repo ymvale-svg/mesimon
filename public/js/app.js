@@ -36,6 +36,11 @@ const App = (() => {
 
   async function boot() {
     UI.mount(root(), UI.spinner());
+
+    // קישור הזמנה — קביעת סיסמה לפני שיש בכלל סשן
+    const inviteToken = InviteView.tokenFromUrl();
+    if (inviteToken) return InviteView.render(root(), inviteToken, boot);
+
     try {
       const data = await API.bootstrap();
       Object.assign(state, data);

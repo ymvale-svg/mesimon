@@ -22,13 +22,54 @@ const ReportsView = (() => {
         el('div.spacer'),
         App.may('export_data') ? el('a.btn', { href: '/api/export/tasks.csv' }, ['⬇ ייצוא כל המשימות ל-CSV']) : null
       ]),
-      el('div.grid.grid-2', { style: { alignItems: 'start' } }, [
+      departmentCard(data.departments),
+      el('div.grid.grid-2.mt', { style: { alignItems: 'start' } }, [
         workloadCard(data.workload),
         statusCard(data.statusBreakdown)
       ]),
       el('div.mt', {}, [vendorCard(data.vendors)]),
       el('div.mt', {}, [projectCard(data.projects)])
     );
+  }
+
+  /** חתך מחלקתי — תמונת החברה לפי מחלקות */
+  function departmentCard(rows) {
+    if (!rows?.length) return null;
+    const maxOpen = Math.max(1, ...rows.map((r) => r.open));
+
+    return el('div.card', {}, [
+      el('div.card-head', {}, [
+        el('h3', { text: 'חתך מחלקתי' }),
+        el('div.spacer'),
+        el('span.mute-sm', { text: `${rows.length} מחלקות` })
+      ]),
+      el('div.card-pad', {}, [
+        el('div.grid.grid-3', {}, rows.map((d) =>
+          el('div', { style: { border: '1px solid var(--border)', borderRadius: 'var(--radius-lg)', padding: '13px 15px' } }, [
+            el('div.flex', {}, [
+              el('b', { text: d.name, style: { fontSize: '14px' } }),
+              el('div.spacer'),
+              el('span.mute-sm', { text: `${d.people} עובדים` })
+            ]),
+            el('div', { style: { fontSize: '25px', fontWeight: '800', lineHeight: '1.2', marginTop: '4px' }, text: String(d.open) }),
+            el('div.mute-sm', { text: 'משימות פתוחות' }),
+            el('div.bar-track', { style: { marginTop: '8px' } }, [
+              el('div', {
+                style: {
+                  width: `${(d.open / maxOpen) * 100}%`,
+                  background: d.overdue ? 'var(--danger)' : 'var(--brand)'
+                }
+              })
+            ]),
+            el('div.flex', { style: { marginTop: '9px', flexWrap: 'wrap' } }, [
+              d.overdue ? el('span.tag.tag-overdue', {}, [`${d.overdue} באיחור`]) : null,
+              d.urgent ? el('span.tag.tag-urgent', {}, [`${d.urgent} דחוף`]) : null,
+              el('span.mute-sm', { text: `${d.done} הושלמו` })
+            ])
+          ])
+        ))
+      ])
+    ]);
   }
 
   function workloadCard(rows) {
@@ -40,6 +81,7 @@ const ReportsView = (() => {
           el('div.flex', {}, [
             UI.avatar(r.name, { small: true }),
             el('b', { text: r.name, style: { fontSize: '13px' } }),
+            el('span.mute-sm', { text: r.department }),
             el('div.spacer'),
             r.overdue ? el('span.tag.tag-overdue', {}, [`${r.overdue} באיחור`]) : null,
             r.urgent ? el('span.tag.tag-urgent', {}, [`${r.urgent} דחוף`]) : null,
