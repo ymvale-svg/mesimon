@@ -368,6 +368,57 @@ const AdminView = (() => {
     department_name: ['שם המחלקה', '']
   };
 
+  /** מצב אחסון הנתונים — התשובה לשאלה "האם הנתונים שלי נשמרים" */
+  function storageCard(s) {
+    if (!s) return null;
+
+    const label = {
+      env: 'דיסק קבוע לפי הגדרות השרת',
+      detected: `דיסק קבוע שזוהה אוטומטית (${s.disk})`,
+      local: 'תיקייה מקומית על המחשב'
+    }[s.source] ?? s.source;
+
+    const rows = [
+      ['מיקום מסד הנתונים', s.dataDir],
+      ['מיקום הקבצים המצורפים', s.uploadsDir],
+      ['סוג האחסון', label],
+      ['גודל מסד הנתונים', s.dbSizeKb === null ? '—' : `${s.dbSizeKb} KB`],
+      ['מסד הנתונים נוצר בתאריך', s.installedAt ? UI.formatDateTime(s.installedAt) : '—'],
+      ['מספר הפעלות של השרת מאז', String(s.bootCount || 0)]
+    ];
+
+    const alert = s.ephemeralInCloud
+      ? el('div.alert.alert-danger', {}, [
+          el('span', { text: '⚠️' }),
+          el('div', {}, [
+            el('b', { text: 'הנתונים אינם נשמרים' }),
+            el('div', { text: 'המערכת כותבת לתוך תיקיית הקוד בשרת, שנמחקת בכל פרסום גרסה. כל המשימות, המשתמשים והקבצים יימחקו בעדכון הבא. יש לחבר דיסק קבוע בנתיב /var/mesimon.' })
+          ])
+        ])
+      : el('div.alert.alert-ok', {}, [
+          el('span', { text: '✅' }),
+          el('div', {}, [
+            el('b', { text: 'הנתונים נשמרים' }),
+            el('div', { text: 'אם התאריך שלמטה נשאר זהה גם אחרי פרסום גרסה חדשה — האחסון תקין.' })
+          ])
+        ]);
+
+    return el('div.card.mb', {}, [
+      el('div.card-head', {}, [el('h3', { text: 'אחסון הנתונים' })]),
+      el('div.card-pad', {}, [
+        alert,
+        el('table.data', { style: { width: '100%' } }, [
+          el('tbody', {}, rows.map(([k, v]) =>
+            el('tr', { style: { cursor: 'default' } }, [
+              el('th', { style: { width: '230px' }, text: k }),
+              el('td.wrap', { text: v })
+            ])
+          ))
+        ])
+      ])
+    ]);
+  }
+
   async function settingsTab(body) {
     settingsData = await API.settings();
     const s = settingsData.settings;
@@ -413,6 +464,7 @@ const AdminView = (() => {
     });
 
     UI.mount(body,
+      storageCard(settingsData.storage),
       el('div.alert.alert-info.mb', {}, [
         el('span', { text: '🔧' }),
         el('div', { text: 'כל הפרמטרים המספריים של האוטומציות מוגדרים כאן ולא בקוד — כך שניתן לכוונן אותם תוך כדי עבודה, בהתאם לצורך בפועל.' })
