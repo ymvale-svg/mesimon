@@ -1,0 +1,23 @@
+# הגדרות פריסה לענן (Render). הקובץ הזה נקרא אוטומטית ומגדיר את השירות,
+# את הדיסק הקבוע שעליו יושבים הנתונים, ואת גרסת Node.
+# אין לערוך אותו אלא אם יודעים מה עושים.
+services:
+  - type: web
+    name: mesimon
+    runtime: node
+    plan: starter          # נדרש תשלום — התוכנית החינמית מוחקת את הנתונים
+    region: frankfurt      # אירופה — הקרוב ביותר לישראל מבחינת זמן תגובה ורגולציה
+    buildCommand: "echo אין תלויות להתקין"
+    startCommand: node server/index.js
+    healthCheckPath: /api/branding
+    envVars:
+      - key: NODE_VERSION
+        value: "24"
+      - key: DATA_DIR
+        value: /var/mesimon/data
+      - key: UPLOADS_DIR
+        value: /var/mesimon/uploads
+    disk:
+      name: mesimon-data   # הדיסק שורד עדכוני גרסה — כאן נשמרים מסד הנתונים והקבצים
+      mountPath: /var/mesimon
+      sizeGB: 5

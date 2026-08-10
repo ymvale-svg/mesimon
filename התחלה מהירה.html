@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<title>משימון — התחלה מהירה</title>
+<style>
+  body { font-family: "Segoe UI", Arial, sans-serif; background: #f1f5f9; color: #0f172a;
+         line-height: 1.7; margin: 0; padding: 30px 20px; }
+  .page { max-width: 780px; margin: 0 auto; background: #fff; border-radius: 16px;
+          padding: 38px 44px; box-shadow: 0 4px 20px rgba(15,23,42,.08); }
+  h1 { font-size: 30px; margin: 0 0 4px; color: #115e59; }
+  .sub { color: #64748b; margin-bottom: 30px; }
+  h2 { font-size: 19px; margin: 34px 0 12px; padding-bottom: 7px; border-bottom: 2px solid #ccfbf1; }
+  ol { padding-inline-start: 22px; }
+  ol > li { margin-bottom: 16px; }
+  .box { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px;
+         padding: 12px 16px; margin: 10px 0; }
+  .addr { font-family: Consolas, monospace; font-size: 16px; font-weight: bold;
+          color: #0f766e; direction: ltr; display: inline-block; }
+  .warn { background: #fffbeb; border: 1px solid #fde68a; border-radius: 10px;
+          padding: 12px 16px; margin: 14px 0; }
+  .ok { background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 10px;
+        padding: 12px 16px; margin: 14px 0; }
+  table { width: 100%; border-collapse: collapse; margin: 12px 0; }
+  th, td { text-align: right; padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-size: 14px; }
+  th { background: #f8fafc; font-size: 13px; color: #475569; }
+  code { background: #f1f5f9; padding: 2px 6px; border-radius: 5px;
+         font-family: Consolas, monospace; direction: ltr; display: inline-block; }
+  .big { font-size: 17px; font-weight: 600; }
+  @media print { body { background: #fff; padding: 0; } .page { box-shadow: none; } }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <h1>משימון</h1>
+  <div class="sub">מערכת ניהול משימות ופרויקטים · אשל הירדן · מחלקת שיווק ומכירות</div>
+
+  <h2>איך מפעילים — 3 צעדים</h2>
+
+  <ol>
+    <li>
+      <span class="big">פותחים את התיקייה של המערכת</span>
+      <div class="box"><code>P:\תפעול\תפעול כללי\מיחשוב\משימון</code></div>
+    </li>
+
+    <li>
+      <span class="big">לוחצים לחיצה כפולה על הקובץ <code>הפעלת משימון.bat</code></span>
+      <div>נפתח חלון שחור עם כיתוב. <b>אין לסגור אותו.</b> אחרי כ־3 שניות הדפדפן נפתח לבד.</div>
+      <div class="warn">
+        החלון השחור הוא המערכת עצמה. כל עוד הוא פתוח — המערכת עובדת.
+        ברגע שסוגרים אותו, המערכת נסגרת לכולם.
+      </div>
+    </li>
+
+    <li>
+      <span class="big">מתחברים</span>
+      <div>אם הדפדפן לא נפתח לבד, פותחים אותו ומקלידים בשורת הכתובת:</div>
+      <div class="box"><span class="addr">http://localhost:3000</span></div>
+    </li>
+  </ol>
+
+  <h2>משתמשים להתחלה</h2>
+  <p>הסיסמה של כולם היא <code>1234</code>. אלו משתמשי הדגמה — יש להחליף אותם למשתמשים אמיתיים.</p>
+  <table>
+    <tr><th>מי</th><th>אימייל לכניסה</th><th>מה רואה</th></tr>
+    <tr><td>אבי כהן</td><td><code>admin@eshel.co.il</code></td><td>הכול, כולל ניהול המערכת</td></tr>
+    <tr><td>רונית לוי</td><td><code>manager@eshel.co.il</code></td><td>כל משימות המחלקה והספקים, דוחות</td></tr>
+    <tr><td>דנה שמש</td><td><code>dana@eshel.co.il</code></td><td>רק המשימות שהיא חלק מהן</td></tr>
+    <tr><td>סטודיו "פיקסל"</td><td><code>pixel@vendor.co.il</code></td><td>רק המשימות שהוקצו לו (פורטל ספקים)</td></tr>
+  </table>
+
+  <h2>איך עמיתים מתחברים מהמחשב שלהם</h2>
+  <p>הם לא צריכים להתקין שום דבר. פותחים דפדפן ומקלידים את הכתובת:</p>
+  <div class="box"><span class="addr">http://10.0.0.113:3000</span></div>
+  <div class="warn">
+    הכתובת הזו מופיעה גם בחלון השחור, בשורה שכתוב לידה <b>"ברשת"</b>.
+    אם היא לא עובדת אצלם — יש להסתכל בחלון השחור ולהעתיק את מה שכתוב שם,
+    כי הכתובת עשויה להשתנות.
+  </div>
+
+  <h2>איך סוגרים</h2>
+  <p>סוגרים את החלון השחור. זהו. המערכת נסגרת ואף אחד לא יכול להיכנס אליה עד ההפעלה הבאה.</p>
+
+  <h2>מה עושים ראשון, לפני שמתחילים לעבוד באמת</h2>
+  <ol>
+    <li>נכנסים כ־<b>אבי כהן</b> (מנהל מערכת).</li>
+    <li>הולכים ל־<b>ניהול המערכת ← משתמשים והרשאות</b>, מוסיפים את אנשי הצוות האמיתיים ומוחקים או משביתים את משתמשי הדמו.</li>
+    <li><b>ניהול המערכת ← ספקים חיצוניים</b> — מוסיפים את הספקים האמיתיים. לכל ספק נוצר אוטומטית מרחב עבודה נפרד משלו.</li>
+    <li>מחליפים לכולם את הסיסמה <code>1234</code>.</li>
+    <li><b>ניהול המערכת ← הגדרות מערכת</b> — כאן מכווננים כמה ימים לפני תאריך היעד נשלחת תזכורת לספק, ומתי משימה דחופה "מוקפצת" למנהל.</li>
+  </ol>
+
+  <h2>אם משהו לא עובד</h2>
+  <table>
+    <tr><th>מה קורה</th><th>מה עושים</th></tr>
+    <tr>
+      <td>החלון השחור נפתח וכתוב בו ש־Node.js אינו מותקן</td>
+      <td>נכנסים ל־<code>https://nodejs.org</code>, מורידים את הכפתור הירוק (LTS),
+          מתקינים עם Next עד הסוף, ומריצים שוב את הקובץ.</td>
+    </tr>
+    <tr>
+      <td>כתוב "משימון כבר פועל על המחשב הזה"</td>
+      <td>המערכת כבר רצה. פשוט פותחים דפדפן בכתובת <code>http://localhost:3000</code>.</td>
+    </tr>
+    <tr>
+      <td>הדפדפן אומר שלא ניתן להתחבר</td>
+      <td>בודקים שהחלון השחור עדיין פתוח. אם נסגר — מריצים את הקובץ שוב.</td>
+    </tr>
+    <tr>
+      <td>עמית ברשת לא מצליח להיכנס</td>
+      <td>מוודאים שהמחשב שמריץ את המערכת דלוק והחלון פתוח, ומעתיקים לו את הכתובת
+          המדויקת שכתובה בחלון השחור ליד המילה "ברשת".</td>
+    </tr>
+  </table>
+
+  <div class="ok">
+    <b>רוצים שהמערכת תעלה לבד בכל בוקר, בלי שאף אחד ילחץ על הקובץ?</b><br>
+    זה אפשרי — צריך להגדיר אותה כשירות על שרת. זו משימה קצרה למחשוב, פעם אחת.
+    עד אז, המערכת עובדת רק כשהחלון השחור פתוח על מחשב אחד.
+  </div>
+
+</div>
+</body>
+</html>
