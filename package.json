@@ -1,0 +1,15 @@
+{
+  "name": "mesimon",
+  "version": "1.0.0",
+  "description": "משימון — מערכת ניהול משימות ופרויקטים, אשל הירדן / מחלקת שיווק ומכירות",
+  "private": true,
+  "type": "commonjs",
+  "main": "server/index.js",
+  "scripts": {
+    "start": "node server/index.js",
+    "reset": "node server/reset.js"
+  },
+  "engines": {
+    "node": ">=22.5.0"
+  }
+}

@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<title>MESIMON — העלאה לענן</title>
+<style>
+  body { font-family: "Segoe UI", Arial, sans-serif; background: #f1f5f9; color: #0f172a;
+         line-height: 1.75; margin: 0; padding: 30px 20px; }
+  .page { max-width: 820px; margin: 0 auto; background: #fff; border-radius: 16px;
+          padding: 38px 46px; box-shadow: 0 4px 20px rgba(15,23,42,.08); }
+  h1 { font-size: 29px; margin: 0 0 4px; color: #115e59; }
+  .sub { color: #64748b; margin-bottom: 28px; }
+  h2 { font-size: 20px; margin: 36px 0 12px; padding-bottom: 7px; border-bottom: 2px solid #ccfbf1; }
+  h3 { font-size: 16px; margin: 22px 0 8px; }
+  ol > li { margin-bottom: 14px; }
+  code { background: #f1f5f9; padding: 2px 7px; border-radius: 5px;
+         font-family: Consolas, monospace; direction: ltr; display: inline-block; }
+  .box { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px; padding: 12px 16px; margin: 10px 0; }
+  .warn { background: #fffbeb; border: 1px solid #fde68a; border-radius: 10px; padding: 13px 17px; margin: 16px 0; }
+  .stop { background: #fef2f2; border: 1px solid #fecaca; border-radius: 10px; padding: 13px 17px; margin: 16px 0; }
+  .ok   { background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 10px; padding: 13px 17px; margin: 16px 0; }
+  table { width: 100%; border-collapse: collapse; margin: 14px 0; }
+  th, td { text-align: right; padding: 9px 11px; border-bottom: 1px solid #e2e8f0; font-size: 14px; vertical-align: top; }
+  th { background: #f8fafc; font-size: 13px; color: #475569; }
+  .big { font-size: 17px; font-weight: 600; }
+  .step-note { color: #64748b; font-size: 13.5px; }
+  @media print { body { background:#fff; padding:0 } .page { box-shadow:none } }
+</style>
+</head>
+<body>
+<div class="page">
+
+<h1>העלאת MESIMON לענן</h1>
+<div class="sub">מדריך צעד אחר צעד · אשל הירדן</div>
+
+<div class="stop">
+  <b>לקרוא לפני שמתחילים.</b><br>
+  בענן המערכת חשופה לאינטרנט — כל אחד בעולם שיידע את הכתובת יגיע למסך הכניסה.
+  לכן <b>אסור להעלות לענן כל עוד הסיסמאות הן 1234</b>. הסעיף האחרון במסמך מפרט
+  מה חובה לעשות לפני שמכניסים נתונים אמיתיים.
+</div>
+
+<h2>מה זה עולה ומה מקבלים</h2>
+<table>
+  <tr><th>נושא</th><th>פירוט</th></tr>
+  <tr><td>עלות</td><td>כ־7 דולר לחודש לשרת, ועוד כדולר לחודש לאחסון. סך הכול כ־30 ש״ח לחודש.</td></tr>
+  <tr><td>מה מקבלים</td><td>כתובת קבועה באינטרנט עם HTTPS, זמינה 24/7, בלי מחשב שצריך להישאר דלוק במשרד.</td></tr>
+  <tr><td>איפה הנתונים</td><td>פרנקפורט, גרמניה. זו האפשרות הקרובה ביותר לישראל מבחינת מהירות ורגולציה.</td></tr>
+  <tr><td>כמה זמן</td><td>כשעה בפעם הראשונה.</td></tr>
+</table>
+
+<h2>שלב 1 — פותחים חשבון GitHub ומעלים את הקוד</h2>
+<div class="step-note">GitHub הוא המקום שבו הקוד יישמר. שירות הענן מושך משם את הקוד בכל עדכון.</div>
+<ol>
+  <li>נכנסים ל־<code>https://github.com/signup</code> ופותחים חשבון עם אימייל העבודה.</li>
+  <li>אחרי ההרשמה לוחצים על הכפתור הירוק <b>New</b> ליצירת מאגר חדש.</li>
+  <li>ממלאים:
+    <div class="box">
+      Repository name: <code>mesimon</code><br>
+      ומסמנים <b>Private</b> — חשוב, כדי שהקוד לא יהיה גלוי לכולם.
+    </div>
+    לוחצים <b>Create repository</b>.
+  </li>
+  <li>במסך שנפתח לוחצים על הקישור <b>uploading an existing file</b>.</li>
+  <li>פותחים את התיקייה <code>P:\תפעול\תפעול כללי\מיחשוב\משימון</code>,
+      בוחרים את כל התוכן שלה (Ctrl+A) וגוררים לחלון הדפדפן.
+    <div class="warn">
+      <b>לא לגרור את התיקיות <code>data</code> ו־<code>uploads</code>.</b>
+      אלו הנתונים המקומיים שלך; בענן ייווצרו נתונים חדשים משלו.
+      אם הן נגררו בטעות — לוחצים על ה־X שלידן ומסירים.
+    </div>
+  </li>
+  <li>גוללים למטה ולוחצים <b>Commit changes</b>. ההעלאה לוקחת דקה.</li>
+</ol>
+
+<h2>שלב 2 — פותחים חשבון בשירות הענן</h2>
+<ol>
+  <li>נכנסים ל־<code>https://render.com</code> ולוחצים <b>Get Started</b>.</li>
+  <li>בוחרים <b>Sign in with GitHub</b> — כך השניים מחוברים אוטומטית.</li>
+  <li>מאשרים ל־Render גישה למאגר <code>mesimon</code> בלבד (לא לכל המאגרים).</li>
+</ol>
+
+<h2>שלב 3 — יוצרים את השירות</h2>
+<ol>
+  <li>בלוח הבקרה לוחצים <b>New +</b> ואז <b>Blueprint</b>.
+    <div class="step-note">בוחרים Blueprint ולא Web Service — יש בתיקייה קובץ הגדרות
+    בשם <code>render.yaml</code> שמגדיר הכול מראש: את השרת, את הדיסק לנתונים ואת גרסת התוכנה.</div>
+  </li>
+  <li>בוחרים את המאגר <code>mesimon</code> ולוחצים <b>Connect</b>.</li>
+  <li>Render יציג שהוא זיהה שירות בשם <b>mesimon</b> עם דיסק של 5GB. לוחצים <b>Apply</b>.</li>
+  <li>מחכים. הפעם הראשונה לוקחת 3–5 דקות. כשמופיע <b>Live</b> בירוק — המערכת עלתה.</li>
+  <li>למעלה במסך מופיעה הכתובת, משהו כמו:
+    <div class="box"><code>https://mesimon.onrender.com</code></div>
+    זו הכתובת שתחלק לצוות ולספקים. היא כבר מאובטחת ב־HTTPS.
+  </li>
+</ol>
+
+<h2>שלב 4 — חובה לפני שמכניסים נתונים אמיתיים</h2>
+<div class="stop">
+  <b>עד שהצעדים האלה לא בוצעו, אין להזין למערכת שום מידע אמיתי.</b>
+</div>
+<ol>
+  <li><b>להחליף את כל הסיסמאות.</b> נכנסים כמנהל מערכת ←
+      ניהול המערכת ← משתמשים והרשאות, ולכל משתמש קובעים סיסמה חזקה
+      (12 תווים לפחות, לא סיסמה שמשמשת במקום אחר). אותו דבר לכל ספק.</li>
+  <li><b>להשבית את משתמשי הדמו.</b> אבי כהן, רונית לוי, דנה שמש, יוסי ברק
+      וכן שני ספקי הדמו — למחוק או להעביר לסטטוס לא פעיל.</li>
+  <li><b>להגדיר גיבוי.</b> בתפריט Render של השירות יש <b>Disks</b> ובו אפשרות
+      Snapshot. כדאי להפעיל גיבוי יומי.</li>
+  <li><b>לבדוק שהכול עובד</b> — להתחבר, ליצור משימה, להעלות קובץ, לצאת ולהיכנס שוב.</li>
+</ol>
+
+<h2>איך מעדכנים את המערכת בהמשך</h2>
+<p>כשמשנים משהו בקוד: נכנסים למאגר ב־GitHub, לוחצים <b>Add file ← Upload files</b>,
+גוררים את הקבצים המעודכנים ולוחצים <b>Commit changes</b>.
+Render מזהה את השינוי ומעלה גרסה חדשה תוך דקות, לבד.</p>
+<div class="ok">
+  <b>הנתונים לא נמחקים בעדכון.</b> מסד הנתונים והקבצים יושבים על דיסק נפרד
+  שנשאר במקומו בין גרסאות. זה מוגדר מראש בקובץ ההגדרות.
+</div>
+
+<h2>אם משהו משתבש</h2>
+<table>
+  <tr><th>מה קורה</th><th>מה עושים</th></tr>
+  <tr><td>הפריסה נכשלה (Failed)</td>
+      <td>לוחצים על <b>Logs</b> בתפריט השירות ומסתכלים בשורות האדומות האחרונות.
+          ברוב המקרים זה קובץ שלא הועלה. אפשר לשלוח לי את הטקסט ואבדוק.</td></tr>
+  <tr><td>האתר נטען אבל ריק</td>
+      <td>לוודא שהתיקייה <code>public</code> הועלתה ל־GitHub על כל תוכנה.</td></tr>
+  <tr><td>אי אפשר להתחבר</td>
+      <td>אחרי 10 ניסיונות כושלים הכניסה נחסמת ל־15 דקות מאותו מחשב. להמתין ולנסות שוב.</td></tr>
+  <tr><td>הנתונים נעלמו אחרי עדכון</td>
+      <td>סימן שהשירות נוצר כ־Web Service ולא כ־Blueprint, ולכן בלי דיסק קבוע.
+          יש למחוק את השירות ולחזור על שלב 3 עם Blueprint.</td></tr>
+</table>
+
+<h2>רוצה כתובת משלך במקום mesimon.onrender.com?</h2>
+<p>אם יש לחברה דומיין (למשל <code>eshel.co.il</code>), אפשר להצמיד כתובת כמו
+<code>mesimon.eshel.co.il</code>. זה נעשה בתפריט <b>Settings ← Custom Domain</b> של Render,
+ודורש הוספת רשומה אחת אצל מי שמנהל את הדומיין של החברה. תהליך של 10 דקות,
+אבל צריך גישה לניהול הדומיין — כנראה דרך המחשוב.</p>
+
+</div>
+</body>
+</html>
