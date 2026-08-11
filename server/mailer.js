@@ -17,6 +17,8 @@ const CONFIG = {
   user: process.env.SMTP_USER ?? '',
   pass: process.env.SMTP_PASS ?? '',
   from: process.env.SMTP_FROM ?? process.env.SMTP_USER ?? '',
+  // שם התצוגה של השולח. ברירת המחדל נגזרת מהארגון בזמן השליחה.
+  fromName: process.env.SMTP_FROM_NAME ?? null,
   // 465 הוא TLS מלא מרגע החיבור; 587 מתחיל בטקסט ועובר ל-TLS דרך STARTTLS
   secure: process.env.SMTP_SECURE ? process.env.SMTP_SECURE === '1' : Number(process.env.SMTP_PORT ?? 587) === 465
 };
@@ -27,7 +29,8 @@ const status = () => ({
   enabled: isEnabled(),
   host: CONFIG.host || null,
   port: CONFIG.port,
-  from: CONFIG.from || null
+  from: CONFIG.from || null,
+  fromName: CONFIG.fromName
 });
 
 // ---------------------------------------------------------------------------
@@ -138,7 +141,7 @@ async function send(message) {
 
     const boundary = `mesimon_${Date.now().toString(36)}`;
     const headers = [
-      `From: ${formatAddress(CONFIG.from, message.fromName ?? 'MESIMON')}`,
+      `From: ${formatAddress(CONFIG.from, CONFIG.fromName ?? message.fromName ?? 'MESIMON')}`,
       `To: ${formatAddress(message.to, message.toName)}`,
       `Subject: ${encodeHeader(message.subject)}`,
       'MIME-Version: 1.0',

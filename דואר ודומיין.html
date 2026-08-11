@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<title>MESIMON — דואר יוצא מהדומיין mesimon.co.il</title>
+<style>
+  body { font-family: "Segoe UI", Arial, sans-serif; background: #f1f5f9; color: #0f172a;
+         line-height: 1.75; margin: 0; padding: 30px 20px; }
+  .page { max-width: 840px; margin: 0 auto; background: #fff; border-radius: 16px;
+          padding: 38px 46px; box-shadow: 0 4px 20px rgba(15,23,42,.08); }
+  h1 { font-size: 28px; margin: 0 0 4px; color: #115e59; }
+  .sub { color: #64748b; margin-bottom: 28px; }
+  h2 { font-size: 20px; margin: 34px 0 12px; padding-bottom: 7px; border-bottom: 2px solid #ccfbf1; }
+  h3 { font-size: 16px; margin: 22px 0 8px; }
+  ol > li, ul > li { margin-bottom: 12px; }
+  code { background: #f1f5f9; padding: 2px 7px; border-radius: 5px;
+         font-family: Consolas, monospace; direction: ltr; display: inline-block; }
+  .box { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px; padding: 12px 16px; margin: 10px 0; }
+  .warn { background: #fffbeb; border: 1px solid #fde68a; border-radius: 10px; padding: 13px 17px; margin: 16px 0; }
+  .ok   { background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 10px; padding: 13px 17px; margin: 16px 0; }
+  .stop { background: #fef2f2; border: 1px solid #fecaca; border-radius: 10px; padding: 13px 17px; margin: 16px 0; }
+  table { width: 100%; border-collapse: collapse; margin: 14px 0; }
+  th, td { text-align: right; padding: 9px 11px; border-bottom: 1px solid #e2e8f0; font-size: 14px; vertical-align: top; }
+  th { background: #f8fafc; font-size: 13px; color: #475569; }
+  .mono td:first-child { font-family: Consolas, monospace; direction: ltr; }
+  @media print { body { background:#fff; padding:0 } .page { box-shadow:none } }
+</style>
+</head>
+<body>
+<div class="page">
+
+<h1>דואר יוצא מ־@mesimon.co.il</h1>
+<div class="sub">איך גורמים לתזכורות ולהזמנות להישלח מהדומיין החדש</div>
+
+<div class="stop">
+  <b>הנקודה שחייבים להבין ראשונה.</b><br>
+  אי אפשר פשוט "לכתוב" כתובת שולח. אם MESIMON יטען שהוא שולח מ־@mesimon.co.il בלי שהדומיין
+  אישר לו את זה, ג׳ימייל ואאוטלוק יזרקו את המייל לספאם או ידחו אותו לגמרי.
+  צריך שני דברים: <b>שירות ששולח בשמך</b>, ו<b>שלוש רשומות DNS</b> שמאשרות לו לעשות זאת.
+</div>
+
+<h2>שלב 1 — לבחור מי שולח</h2>
+
+<table>
+  <tr><th>אפשרות</th><th>מתי מתאים</th><th>עלות</th></tr>
+  <tr>
+    <td><b>שירות דואר תפעולי</b><br>(Resend / Brevo / Mailgun)</td>
+    <td><b>מומלץ.</b> בנוי בדיוק לזה — תזכורות והזמנות שנשלחות אוטומטית מכתובת
+        <code>noreply@mesimon.co.il</code> שאף אחד לא קורא.</td>
+    <td>בנפח שלך — בדרך כלל חינם. כדאי לאמת בעצמך, המדרגות משתנות.</td>
+  </tr>
+  <tr>
+    <td><b>Google Workspace</b> על הדומיין</td>
+    <td>אם בכל מקרה תרצה תיבות דואר אמיתיות <code>@mesimon.co.il</code> לאנשים.</td>
+    <td>תשלום לכל תיבה, חודשי.</td>
+  </tr>
+  <tr>
+    <td>תיבת ג׳ימייל פרטית</td>
+    <td>לבדיקה מהירה בלבד. <b>לא לייצור</b> — המייל ייצא מכתובת הג׳ימייל שלך ולא מהדומיין.</td>
+    <td>חינם</td>
+  </tr>
+</table>
+
+<h2>שלב 2 — לאמת את הדומיין אצל הספק</h2>
+
+<p>אחרי ההרשמה, הספק יבקש לאמת שאתה בעל mesimon.co.il, וייתן לך רשומות DNS להוסיף.
+זה מה שהוא ייתן — <b>הערכים המדויקים מגיעים ממנו, לא מכאן</b>:</p>
+
+<table class="mono">
+  <tr><th>סוג</th><th>למה זה</th></tr>
+  <tr><td>TXT (SPF)</td><td>מצהיר אילו שרתים מורשים לשלוח בשם הדומיין. בלעדיו — ספאם.</td></tr>
+  <tr><td>TXT או CNAME (DKIM)</td><td>חתימה דיגיטלית על כל מייל, שמוכיחה שהוא לא זויף.</td></tr>
+  <tr><td>TXT (DMARC)</td><td>אומר לג׳ימייל מה לעשות עם מייל שנכשל בשתי הבדיקות. לא חובה אבל מומלץ.</td></tr>
+</table>
+
+<div class="warn">
+  את הרשומות מוסיפים <b>אצל מי שמנהל את הדומיין mesimon.co.il</b> — החברה שקנית ממנה אותו.
+  אם המחשוב מנהל את זה, זה התהליך שצריך להעביר להם: העתקה של 2–3 שורות ללוח ה-DNS.
+  האימות אצל הספק לוקח מדקות עד כמה שעות עד שהרשומות מתפשטות.
+</div>
+
+<h2>שלב 3 — להזין את הפרטים ב-Render</h2>
+
+<p>הספק ייתן לך פרטי SMTP. נכנסים לשירות ב-Render ← <b>Environment</b>, ומוסיפים:</p>
+
+<table class="mono">
+  <tr><th>Key</th><th>Value</th></tr>
+  <tr><td>SMTP_HOST</td><td>מה שהספק נתן (למשל <code>smtp.resend.com</code>)</td></tr>
+  <tr><td>SMTP_PORT</td><td><code>587</code></td></tr>
+  <tr><td>SMTP_USER</td><td>שם המשתמש מהספק</td></tr>
+  <tr><td>SMTP_PASS</td><td>המפתח / הסיסמה מהספק</td></tr>
+  <tr><td>SMTP_FROM</td><td><code>noreply@mesimon.co.il</code> ← <b>זו הכתובת שתופיע כשולח</b></td></tr>
+  <tr><td>SMTP_FROM_NAME</td><td><code>MESIMON</code> (אופציונלי — שם התצוגה ליד הכתובת)</td></tr>
+</table>
+
+<p><b>שומרים.</b> Render מפרסם מחדש לבד, וזה הכול — כל ההזמנות והתזכורות ייצאו מהכתובת הזו.</p>
+
+<div class="ok">
+  <b>בדיקה:</b> ניהול המערכת ← משתמשים והרשאות ← לוחצים "✉ הזמנה" ליד עצמך.
+  אם הגיע מייל מ־noreply@mesimon.co.il — סיימנו. אם לא, הלוג ב-Render יראה בדיוק
+  מה שרת הדואר החזיר.
+</div>
+
+<h2>ובזמן שאתה שם — האתר עצמו על הדומיין</h2>
+
+<p>קנית דומיין, אז שווה שהמערכת תשב עליו במקום על הכתובת של Render:</p>
+
+<ol>
+  <li>ב-Render: <b>Settings ← Custom Domain ← Add</b>, ומזינים <code>mesimon.co.il</code>
+      (ואם רוצים גם <code>www.mesimon.co.il</code>).</li>
+  <li>Render ייתן רשומה אחת להוסיף ב-DNS. מוסיפים אותה אצל מנהל הדומיין.</li>
+  <li>Render מנפיק תעודת HTTPS אוטומטית. תוך דקות עד שעה הכתובת עולה.</li>
+  <li><b>חשוב:</b> להוסיף משתנה סביבה <code>PUBLIC_URL</code> = <code>https://mesimon.co.il</code>.
+      בלעדיו קישורי ההזמנות במיילים ימשיכו להצביע לכתובת של Render.</li>
+</ol>
+
+<div class="warn">
+  אם הגדרת כניסה עם Google — הדומיין החדש חייב להתווסף גם שם, ב-Google Cloud Console,
+  כ-Authorized redirect URI: <code>https://mesimon.co.il/api/auth/google/callback</code>.
+  אחרת הכניסה עם Google תישבר ברגע שתעבור לדומיין.
+</div>
+
+<h2>אם המייל לא מגיע</h2>
+
+<table>
+  <tr><th>מה קורה</th><th>מה עושים</th></tr>
+  <tr><td>ההזמנה נוצרת ומוצג קישור להעתקה</td>
+      <td>סימן שהדואר לא מוגדר או נכשל. זה מכוון — הוספת משתמש לא נכשלת בגלל דואר.
+          הסיבה המדויקת מופיעה בחלון וגם ב-Logs.</td></tr>
+  <tr><td>"שרת הדואר דחה את AUTH"</td><td>שם משתמש או מפתח שגויים. להעתיק מחדש מהספק.</td></tr>
+  <tr><td>המייל מגיע לספאם</td><td>רשומות ה-SPF/DKIM עדיין לא התפשטו, או שאחת מהן הודבקה חלקית.
+          לבדוק בלוח האימות של הספק שכל הרשומות מסומנות כתקינות.</td></tr>
+  <tr><td>"פסק זמן בחיבור"</td><td>פורט חסום. לנסות <code>465</code> ולהוסיף
+          <code>SMTP_SECURE</code> = <code>1</code>.</td></tr>
+</table>
+
+</div>
+</body>
+</html>
