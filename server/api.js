@@ -170,6 +170,14 @@ function shapeTask(task, actor, { withDetails = false } = {}) {
     canChangeStatus: mayOnTask(actor, 'change_task_status', task, project)
       && !(isVendor(actor) && actor.readOnly),
     attachmentsCount: D.get('SELECT COUNT(*) c FROM attachments WHERE task_id = ?', task.id).c,
+    // מספר הקבצים השונים (ולא הגרסאות) — לחישוב "+N" מדויק בשורת המשימה
+    filesCount: D.get('SELECT COUNT(DISTINCT filename) c FROM attachments WHERE task_id = ?', task.id).c,
+    // הגרסה האחרונה של כל קובץ — כדי שהקובץ יוצג בשורת המשימה עצמה ולא רק במקום נפרד
+    attachments: D.all(
+      `SELECT id, filename, mime, size, version FROM attachments a
+        WHERE task_id = ? AND version = (SELECT MAX(version) FROM attachments WHERE task_id = a.task_id AND filename = a.filename)
+        ORDER BY created_at DESC LIMIT 4`, task.id
+    ).map((a) => ({ id: a.id, filename: a.filename, mime: a.mime, size: a.size, version: a.version })),
     commentsCount: D.get(
       `SELECT COUNT(*) c FROM comments WHERE task_id = ?${isVendor(actor) ? ' AND internal = 0' : ''}`,
       task.id
@@ -454,8 +462,13 @@ router.get('/api/bootstrap', async (req, res, ctx) => {
 });
 
 function listProjectsFor(actor) {
+  const pinned = new Set(
+    actor.type === 'user'
+      ? D.all('SELECT project_id FROM project_pins WHERE user_id = ?', actor.id).map((r) => r.project_id)
+      : []
+  );
   const rows = D.all('SELECT * FROM projects ORDER BY status, name');
-  return rows.map((p) => {
+  const shaped = rows.map((p) => {
     const stats = D.get(
       `SELECT COUNT(*) total,
               SUM(CASE WHEN c.is_final = 1 THEN 1 ELSE 0 END) done
@@ -473,10 +486,31 @@ function listProjectsFor(actor) {
       dueDate: p.due_date,
       status: p.status,
       tasksTotal: stats.total ?? 0,
-      tasksDone: stats.done ?? 0
+      tasksDone: stats.done ?? 0,
+      pinned: pinned.has(p.id)
     };
   });
+
+  // נעוצים ראשונים, ובתוך כל קבוצה הסדר המקורי נשמר
+  return [...shaped.filter((p) => p.pinned), ...shaped.filter((p) => !p.pinned)];
 }
+
+router.post('/api/projects/:id/pin', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  if (isVendor(actor)) throw forbidden();
+  const project = D.get('SELECT id FROM projects WHERE id = ?', Number(ctx.params.id));
+  if (!project) throw notFound('הפרויקט לא נמצא');
+  D.run('INSERT OR IGNORE INTO project_pins (user_id, project_id, created_at) VALUES (?,?,?)',
+    actor.id, project.id, D.nowIso());
+  sendJson(res, 200, { pinned: true });
+});
+
+router.delete('/api/projects/:id/pin', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  if (isVendor(actor)) throw forbidden();
+  D.run('DELETE FROM project_pins WHERE user_id = ? AND project_id = ?', actor.id, Number(ctx.params.id));
+  sendJson(res, 200, { pinned: false });
+});
 
 // ---------------------------------------------------------------------------
 // משימות
@@ -1228,9 +1262,12 @@ router.get('/api/home', async (req, res, ctx) => {
   ).filter((row) => {
     const task = D.get('SELECT * FROM tasks WHERE id = ?', row.task_id);
     return task && canSeeTask(actor, task);
-  }).slice(0, 15).map((row) => ({
+  }).slice(0, 60).map((row) => ({
     id: row.id, action: row.action, details: row.details,
-    actorName: row.actor_name || 'המערכת', taskId: row.task_id,
+    actorName: row.actor_name || 'המערכת',
+    // הממשק מבדיל חזותית בין עדכון של אדם לעדכון של המערכת
+    actorType: row.actor_type ?? 'system',
+    taskId: row.task_id,
     taskTitle: row.task_title, createdAt: row.created_at
   }));
 

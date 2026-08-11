@@ -299,6 +299,43 @@ const BoardView = (() => {
 
   // ------------------------------------------------------------- כרטיס משימה בלוח
 
+  // שני שבבים בכרטיס — הכרטיס בקנבן צר, ומעבר לזה הוא נמתח לגובה
+  const MAX_CARD_CHIPS = 2;
+
+  /**
+   * הקבצים של המשימה בכרטיס עצמו, מתחת לתגיות. השרת שולח את הגרסה
+   * האחרונה של כל קובץ (עד ארבעה), ולכן "+N" מונה את מה שהגיע — לחיצה עליו
+   * מתפשטת לכרטיס ופותחת את המשימה, שם הרשימה המלאה.
+   */
+  function cardFileChips(task) {
+    const files = task.attachments ?? [];
+    if (!files.length) return null;
+    // filesCount הוא מספר הקבצים השונים בשרת; files מוגבל ל-4 ולכן
+    // חישוב מתוכו היה מציג '+N' קטן מהאמת
+    const total = task.filesCount ?? files.length;
+    const rest = total - MAX_CARD_CHIPS;
+
+    return el('div.file-chips', { style: { marginBottom: '8px' } }, [
+      ...files.slice(0, MAX_CARD_CHIPS).map((att) =>
+        el('a.file-chip', {
+          href: `/api/attachments/${att.id}/download`,
+          title: `${att.filename} · גרסה ${att.version} · ${UI.fileSize(att.size)}`,
+          // בלי עצירה הלחיצה הייתה גם מורידה וגם פותחת את כרטיס המשימה
+          onclick: (e) => e.stopPropagation()
+        }, [
+          el('span', { text: UI.fileIcon(att.filename) }),
+          el('span.fc-name', { text: att.filename }),
+          att.version > 1 ? el('span.fc-ver', { text: `v${att.version}` }) : null
+        ])),
+      rest > 0
+        ? el('span.file-chip-more', {
+            text: `+${rest}`,
+            title: files.slice(MAX_CARD_CHIPS).map((a) => a.filename).join('\n')
+          }, [])
+        : null
+    ]);
+  }
+
   function card(task) {
     const due = UI.dueLabel(task.dueDate);
     const selectable = !App.isVendor();
@@ -323,6 +360,7 @@ const BoardView = (() => {
       task.projectName ? el('div.tc-project', { text: task.projectName }) : null,
       el('div.tc-title', { text: task.title, style: selectable ? { paddingInlineEnd: '18px' } : {} }),
       el('div.tc-tags', {}, UI.taskTags(task)),
+      cardFileChips(task),
       el('div.tc-foot', {}, [
         task.checklistTotal
           ? el('span.tc-check', {}, [
@@ -330,7 +368,7 @@ const BoardView = (() => {
               `${task.checklistDone}/${task.checklistTotal}`
             ])
           : null,
-        task.attachmentsCount ? el('span', { text: `📎 ${task.attachmentsCount}` }) : null,
+        // מונה המהדקים הוסר — הקבצים עצמם מוצגים למעלה בכרטיס
         task.commentsCount ? el('span', { text: `💬 ${task.commentsCount}` }) : null,
         el('div.spacer'),
         el('span', {

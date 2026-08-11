@@ -19,6 +19,33 @@ const HomeView = (() => {
   const showsDepartmentCut = () =>
     !App.isVendor() && App.may('view_reports') && ORG_WIDE_ROLES.includes(App.state.actor?.role);
 
+  /**
+   * תקרות הצגה. כל רשימה כאן יושבת בתיבת גלילה בגובה קבוע, ולכן אפשר להרשות
+   * יותר פריטים מבעבר: הם אינם מאריכים את העמוד אלא את הגלילה הפנימית.
+   */
+  const FEED_MAX = 30;      // השרת ממילא מחזיר עד 15 רשומות — זו תקרה הגנתית
+  const LIST_MAX = 20;      // כרטיסי משימה ברשימה האישית
+  const APPROVAL_MAX = 15;
+
+  /**
+   * ‎.feed-scroll‎ מגדיר max-height ולא height, ולכן רשימה קצרה אינה נכנסת
+   * לתיבה קטועה — היא פשוט נשארת בגובהה הטבעי. מכאן שאין צורך בתנאי על
+   * מספר הפריטים: התיבה נכנסת לפעולה רק כשהרשימה באמת מתחילה למתוח את העמוד.
+   * הגובה עצמו ב-CSS; inline נמסר רק היכן שפריט גבוה בהרבה משורת פיד.
+   */
+  const scrollBox = (children, { maxHeight = null, extraClass = '' } = {}) =>
+    el(`div.feed-scroll${extraClass}`, maxHeight ? { style: { maxHeight } } : {}, children);
+
+  /** ניסוח מספר בעברית — יחיד מקבל מילה ולא ספרה בודדת */
+  const countLabel = (n, one, many) => (n === 1 ? one : `${n} ${many}`);
+
+  /**
+   * תיבת גלילה מסתירה את סוף הרשימה, ולכן הכותרת נושאת את המספר.
+   * כשהתקרה חתכה פריטים נאמר גם המספר המלא, כדי שלא ייראה שזה הכול.
+   */
+  const shownLabel = (shown, total, one, many) =>
+    (shown < total ? `${shown} מתוך ${total} ${many}` : countLabel(total, one, many));
+
   async function render(container) {
     UI.mount(container, UI.spinner());
     let data;
@@ -119,15 +146,22 @@ const HomeView = (() => {
   /** כרטיס רשימה אחד. קבוצה ריקה מסתפקת בשורה שקטה ולא במסגרת ריקה עם איור. */
   function taskListCard({ title, note, tasks, emptyText, onAll }) {
     const sorted = byUrgency(tasks);
+    const shown = sorted.slice(0, LIST_MAX);
+    // המחלקה והמספר בכותרת אחת ולא בשני שדות — כדי לא לדחוק את כפתור 'לכל המשימות'
+    const subtitle = [note, sorted.length ? shownLabel(shown.length, sorted.length, 'משימה אחת', 'משימות') : null]
+      .filter(Boolean).join(' · ');
+
     return el('div.card', {}, [
       el('div.card-head', {}, [
         el('h3', { text: title }),
-        note ? el('span.mute-sm', { text: note }) : null,
+        subtitle ? el('span.mute-sm', { text: subtitle }) : null,
         el('div.spacer'),
         sorted.length ? el('button.btn.btn-sm', { onclick: onAll }, ['לכל המשימות']) : null
       ]),
       sorted.length
-        ? el('div.card-pad.flex-col', {}, sorted.slice(0, 8).map(taskRow))
+        // כרטיס משימה גבוה פי כמה משורת פיד, ולכן תקרה נדיבה מזו שב-CSS —
+        // אחרת נראה כרטיס אחד וחצי והרשימה מרגישה קטועה ולא נגללת
+        ? el('div.card-pad', {}, [scrollBox(shown.map(taskRow), { maxHeight: '420px', extraClass: '.flex-col' })])
         : el('div.card-pad', {}, [el('div.mute-sm', { text: emptyText })])
     ]);
   }
@@ -182,11 +216,15 @@ const HomeView = (() => {
     return el('div.card.mt', {}, [
       el('div.card-head', {}, [
         el('h3', { text: 'חתך מחלקתי' }),
-        el('span.mute-sm', { text: 'לחיצה על מחלקה פותחת את הלוח שלה' }),
+        el('span.mute-sm', {
+          text: `${countLabel(list.length, 'מחלקה אחת', 'מחלקות')} · לחיצה על מחלקה פותחת את הלוח שלה`
+        }),
         el('div.spacer'),
         el('button.btn.btn-sm', { onclick: () => App.navigate('reports') }, ['לדוחות המלאים'])
       ]),
-      el('div.table-wrap', { style: { border: '0' } }, [
+      // התיבה על ‎.table-wrap‎ עצמו ולא סביבו: הוא כבר אזור הגלילה של הטבלה,
+      // ורק כך כותרת העמודות הדביקה (‎th sticky‎) נשארת גלויה בזמן הגלילה
+      el('div.table-wrap.feed-scroll', { style: { border: '0' } }, [
         el('table.data', {}, [
           el('thead', {}, [
             el('tr', {}, [
@@ -217,24 +255,32 @@ const HomeView = (() => {
   }
 
   function approvalCard(tasks) {
+    const shown = tasks.slice(0, APPROVAL_MAX);
+    const rows = shown.map((t) => el('div.task-card', { onclick: () => TaskCardView.open(t.id) }, [
+      el('div.tc-title', { text: t.title }),
+      el('div.tc-tags', {}, [
+        UI.statusTag(t),
+        t.assigneeName ? el('span.tag.tag-vendor', {}, [t.assigneeName]) : null,
+        levelTag(t),
+        ...UI.taskTags(t)
+      ])
+    ]));
+
     return el('div.card', {}, [
       el('div.card-head', {}, [
         el('h3', { text: App.isVendor() ? 'ממתין לבדיקת הצוות' : 'תוצרי ספקים הממתינים לאישור' }),
+        shown.length
+          ? el('span.mute-sm', { text: shownLabel(shown.length, tasks.length, 'פריט אחד', 'פריטים') })
+          : null,
         el('div.spacer'),
         !App.isVendor() ? el('button.btn.btn-sm', { onclick: () => App.navigate('vendorBoards') }, ['לבורדי הספקים']) : null
       ]),
-      el('div.card-pad.flex-col', {},
-        tasks.length
-          ? tasks.slice(0, 6).map((t) => el('div.task-card', { onclick: () => TaskCardView.open(t.id) }, [
-              el('div.tc-title', { text: t.title }),
-              el('div.tc-tags', {}, [
-                UI.statusTag(t),
-                t.assigneeName ? el('span.tag.tag-vendor', {}, [t.assigneeName]) : null,
-                levelTag(t),
-                ...UI.taskTags(t)
-              ])
-            ]))
-          : [UI.empty('אין פריטים הממתינים לבדיקה', '✅')])
+      el('div.card-pad', {}, [
+        // כרטיס כאן נמוך מזה שברשימה האישית (בלי שורת תחתית), ולכן תקרה נמוכה יותר
+        rows.length
+          ? scrollBox(rows, { maxHeight: '360px', extraClass: '.flex-col' })
+          : UI.empty('אין פריטים הממתינים לבדיקה', '✅')
+      ])
     ]);
   }
 
@@ -259,9 +305,23 @@ const HomeView = (() => {
 
     const dayNames = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי', 'שישי', 'שבת'];
 
+    /**
+     * המונה נספר מן השורות עצמן ולא מאורך weekAhead: השרת מחזיר משימות עד
+     * שבוע מרגע זה, כלומר גם משימה שיעדה מחרתיים־בעוד־שבוע בשעה מאוחרת מן
+     * השעה הנוכחית — והיא נופלת מחוץ לשבעת הימים המוצגים. מונה שמראה מספר
+     * גדול ממה שבתיבה נראה כאילו התיבה מסתירה, וזה בדיוק מה שהמונה בא למנוע.
+     */
+    const shownCount = days.reduce((sum, d) => sum + d.items.length, 0);
+
     return el('div.card', {}, [
-      el('div.card-head', {}, [el('h3', { text: 'השבוע הקרוב' })]),
-      el('div.card-pad', {}, days.map((d) =>
+      el('div.card-head', {}, [
+        el('h3', { text: 'השבוע הקרוב' }),
+        shownCount
+          ? el('span.mute-sm', { text: countLabel(shownCount, 'משימה אחת', 'משימות') })
+          : null
+      ]),
+      // שבע השורות קבועות, אך יום עמוס מותח אותן — אותה תיבה, בגובה שמראה שבוע רגיל שלם
+      el('div.card-pad', {}, [scrollBox(days.map((d) =>
         el('div', { style: { display: 'flex', gap: '10px', padding: '6px 0', borderBottom: '1px dashed var(--border)' } }, [
           el('div', { style: { width: '86px', flex: 'none' } }, [
             el('div', { style: { fontWeight: d.isToday ? '800' : '600', color: d.isToday ? 'var(--brand)' : 'inherit' },
@@ -282,7 +342,7 @@ const HomeView = (() => {
               ]))
             : [el('div.mute-sm', { text: '—' })])
         ])
-      ))
+      ), { maxHeight: '380px' })])
     ]);
   }
 
@@ -296,28 +356,44 @@ const HomeView = (() => {
     automation: 'אוטומציה'
   };
 
+  function feedRow(f) {
+    return el('div.history-item', {
+      class: f.actorType === 'system' ? 'system' : '',
+      style: { cursor: 'pointer' },
+      onclick: () => TaskCardView.open(f.taskId)
+    }, [
+      el('div.h-dot'),
+      el('div.h-body', {}, [
+        el('div', {}, [
+          el('b', { text: f.actorName }),
+          ' ',
+          el('span', { text: ACTION_TEXT[f.action] ?? f.action }),
+          ' — ',
+          el('span', { style: { color: 'var(--brand)' }, text: f.taskTitle })
+        ]),
+        // יש רשומות ללא פירוט, ובלי הסינון היה נדפס 'undefined' לפני הזמן
+        el('div.h-meta', { text: [f.details, UI.relative(f.createdAt)].filter(Boolean).join(' · ') })
+      ])
+    ]);
+  }
+
+  /**
+   * הפיד יושב בתיבת גלילה בגובה קבוע: קודם לכן כל עדכון הוסיף שורה לעמוד
+   * והאריך אותו בלי סוף. הכותרת מציינת את מספר העדכונים כדי שגובה קבוע
+   * לא יסתיר את העובדה שיש עוד מתחת לקיפול.
+   */
   function feedCard(feed) {
+    const items = feed.slice(0, FEED_MAX);
     return el('div.card', {}, [
-      el('div.card-head', {}, [el('h3', { text: 'פיד עדכונים אחרון' })]),
-      el('div.card-pad', {}, feed.length
-        ? feed.map((f) => el('div.history-item', {
-            class: f.actorType === 'system' ? 'system' : '',
-            style: { cursor: 'pointer' },
-            onclick: () => TaskCardView.open(f.taskId)
-          }, [
-            el('div.h-dot'),
-            el('div.h-body', {}, [
-              el('div', {}, [
-                el('b', { text: f.actorName }),
-                ' ',
-                el('span', { text: ACTION_TEXT[f.action] ?? f.action }),
-                ' — ',
-                el('span', { style: { color: 'var(--brand)' }, text: f.taskTitle })
-              ]),
-              el('div.h-meta', { text: `${f.details} · ${UI.relative(f.createdAt)}` })
-            ])
-          ]))
-        : [UI.empty('אין עדכונים אחרונים', '📰')])
+      el('div.card-head', {}, [
+        el('h3', { text: 'פיד עדכונים אחרון' }),
+        items.length
+          ? el('span.mute-sm', { text: shownLabel(items.length, feed.length, 'עדכון אחד', 'עדכונים') })
+          : null
+      ]),
+      el('div.card-pad', {}, [
+        items.length ? scrollBox(items.map(feedRow)) : UI.empty('אין עדכונים אחרונים', '📰')
+      ])
     ]);
   }
 

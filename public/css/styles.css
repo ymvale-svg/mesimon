@@ -419,6 +419,62 @@ table.data tbody tr:hover { background: var(--surface-2); }
 table.data tbody tr:last-child td { border-bottom: 0; }
 table.data td.wrap { white-space: normal; min-width: 240px; }
 
+/* ---------------------------------------------------------------- נעיצת פרויקטים */
+
+.nav-item { position: relative; }
+.nav-pin {
+  border: 0; background: none; cursor: pointer; flex: none;
+  font-size: 12px; line-height: 1; padding: 3px 4px; border-radius: 5px;
+  /* visibility ולא רק opacity: אלמנט שקוף עדיין מקבל לחיצות, ובמסך מגע
+     שאין בו ריחוף הקשה בקצה השורה הייתה נועצת פרויקט במקום לפתוח אותו */
+  opacity: 0; visibility: hidden;
+  /* הסמל הוא אמוג'י, ואמוג'י מתעלם מ-color — ההבחנה נעשית בהרוויה */
+  filter: grayscale(1);
+  transition: opacity .12s, filter .12s;
+}
+.nav-item:hover .nav-pin,
+.nav-pin:focus-visible { opacity: .75; visibility: visible; }
+.nav-pin:hover { opacity: 1; background: rgba(15, 23, 42, .08); }
+/* פרויקט נעוץ — הסימון גלוי תמיד ובצבעו המלא */
+.nav-pin.is-pinned { opacity: 1; visibility: visible; filter: none; }
+/* במסך מגע אין ריחוף, ולכן הסימון גלוי תמיד — אחרת אין דרך לנעוץ */
+@media (hover: none) {
+  .nav-pin { opacity: .75; visibility: visible; }
+}
+.nav-pinned-sep {
+  height: 1px; background: var(--border); margin: 6px 10px 7px;
+}
+
+/* ---------------------------------------------------------------- פיד עדכונים בגובה קבוע */
+
+/* בלי הגבלת גובה כל עדכון הוסיף שורה והעמוד התארך בלי סוף */
+.feed-scroll {
+  max-height: 320px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-inline-end: 4px;
+}
+.feed-scroll::-webkit-scrollbar { width: 8px; }
+.feed-scroll::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 8px; border: 2px solid var(--surface); }
+
+/* ---------------------------------------------------------------- קבצים בתוך שורת המשימה */
+
+.file-chips { display: flex; gap: 5px; flex-wrap: wrap; align-items: center; min-width: 0; }
+.file-chip {
+  display: inline-flex; align-items: center; gap: 5px; max-width: 190px;
+  padding: 2px 8px 2px 6px; border: 1px solid var(--border);
+  border-radius: 999px; background: var(--surface-2);
+  font-size: 11.5px; color: var(--text-soft); text-decoration: none;
+  white-space: nowrap; overflow: hidden;
+}
+.file-chip:hover { border-color: var(--brand); background: var(--brand-light); color: var(--text); }
+.file-chip .fc-name { overflow: hidden; text-overflow: ellipsis; }
+.file-chip .fc-ver {
+  flex: none; font-size: 10px; font-weight: 700; color: var(--text-mute);
+  background: var(--surface); border-radius: 4px; padding: 0 4px;
+}
+.file-chip-more { font-size: 11.5px; color: var(--text-mute); flex: none; }
+
 /* ---------------------------------------------------------------- טבלה מקובצת (תצוגה ראשית) */
 
 .grid-view { display: flex; flex-direction: column; gap: 20px; }

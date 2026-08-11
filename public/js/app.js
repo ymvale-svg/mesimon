@@ -216,6 +216,33 @@ const App = (() => {
 
   // ------------------------------------------------------------- תצוגה
 
+  /**
+   * כפתור נעיצת פרויקט, יושב בתוך שורת הניווט של הפרויקט.
+   * השורה עצמה היא כפתור שמנווט ללוח, ולכן חייבים לעצור את בעבוע האירוע —
+   * אחרת כל נעיצה הייתה גם מחליפה מסך תחת ידיו של המשתמש.
+   */
+  function pinButton(p) {
+    const btn = el(`button.nav-pin${p.pinned ? '.is-pinned' : ''}`, {
+      type: 'button',
+      title: p.pinned ? 'שחרור הנעיצה' : 'נעיצה לראש הרשימה'
+    }, ['📌']);
+
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      e.preventDefault();
+      btn.disabled = true; // לחיצה כפולה בזמן הבקשה הייתה שולחת נעיצה וביטול זה אחר זה
+      try {
+        await API.pinProject(p.id, !p.pinned);
+        await reloadReference();
+        render(); // התפריט נבנה מחדש ומסדר את הנעוצים בראש הרשימה
+      } catch (err) {
+        btn.disabled = false;
+        UI.error(err);
+      }
+    });
+    return btn;
+  }
+
   function sidebar() {
     const items = [];
     const add = (name, params, extra = {}) => {
@@ -238,16 +265,32 @@ const App = (() => {
     add('board');
     if (may('view_vendor_boards')) add('vendorBoards');
 
+    // הבלוק הזה כולו לא נבנה לספק — מסלול הספק חזר כבר למעלה עם רשימת הניווט שלו
     items.push(el('div.nav-group', { text: 'פרויקטים' }));
-    for (const p of state.projects.filter((p) => p.status !== 'done')) {
-      items.push(el(`button.nav-item${state.route.name === 'board' && state.route.params.projectId === p.id ? '.active' : ''}`, {
+    const projectItem = (p) =>
+      el(`button.nav-item${state.route.name === 'board' && state.route.params.projectId === p.id ? '.active' : ''}`, {
         onclick: () => navigate('board', { projectId: p.id })
       }, [
         el('span.ico', { text: '•' }),
-        el('span', { text: p.name, style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }),
-        el('span.count', { text: `${p.tasksDone}/${p.tasksTotal}` })
-      ]));
-    }
+        // minWidth: 0 הוא מה שמאפשר לשלוש הנקודות לעבוד בכלל: בלעדיו פריט בתוך flex
+        // לא מתכווץ מתחת לרוחב הטקסט, ושם ארוך היה דוחף את המונה ואת כפתור הנעיצה
+        // מחוץ לרוחב התפריט — כלומר הנעיצה הייתה נחתכת ולא ניתנת ללחיצה
+        el('span', { text: p.name, style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: '0' } }),
+        el('span.count', { text: `${p.tasksDone}/${p.tasksTotal}` }),
+        pinButton(p)
+      ]);
+
+    /**
+     * השרת כבר מחזיר את הנעוצים בראש, אך את החלוקה מחשבים כאן מחדש כדי שהחוצץ
+     * יישאר במקום הנכון גם אחרי סינון הפרויקטים שהושלמו.
+     */
+    const openProjects = state.projects.filter((p) => p.status !== 'done');
+    const pinnedProjects = openProjects.filter((p) => p.pinned);
+    const otherProjects = openProjects.filter((p) => !p.pinned);
+    items.push(...pinnedProjects.map(projectItem));
+    // חוצץ רק כששתי הקבוצות מאוכלסות — אחרת היה נראה כקו תלוש בראש הרשימה או בסופה
+    if (pinnedProjects.length && otherProjects.length) items.push(el('div.nav-pinned-sep'));
+    items.push(...otherProjects.map(projectItem));
     if (may('create_project')) {
       items.push(el('button.nav-item', { onclick: () => BoardView.openProjectDialog() }, [
         el('span.ico', { text: '＋' }), el('span', { text: 'פרויקט חדש' })

@@ -123,6 +123,7 @@ const TaskCardView = (() => {
       ...alerts,
       vendorWorkflowBar(),
       descNode,
+      inlineFiles(),
       checklistSection(),
       el('div.tabs', {}, [
         el(`button${activeTab === 'comments' ? '.active' : ''}`, { onclick: () => { activeTab = 'comments'; draw(modalRef.box.querySelector('.task-detail')); } },
@@ -323,6 +324,63 @@ const TaskCardView = (() => {
   }
 
   // ------------------------------------------------------------- קבצים
+
+  // עד ארבעה שבבים ליד תוכן המשימה — יש כאן רוחב, אך רשימה ארוכה הייתה
+  // דוחקת את הצ׳קליסט והתגובות מטה
+  const MAX_INLINE_CHIPS = 4;
+
+  const filesTab = () => { activeTab = 'files'; draw(modalRef.box.querySelector('.task-detail')); };
+
+  /**
+   * הגרסה העדכנית של כל קובץ. ‎task.attachments‎ בכרטיס מכיל את כל הגרסאות
+   * והשרת מסדר אותן לפי שם ואז גרסה יורדת — ולכן ההופעה הראשונה של כל שם
+   * היא העדכנית שבהן.
+   */
+  function currentFiles() {
+    const seen = new Set();
+    return (task.attachments ?? []).filter((a) => {
+      if (seen.has(a.filename)) return false;
+      seen.add(a.filename);
+      return true;
+    });
+  }
+
+  /**
+   * הקבצים העדכניים צמוד לתוכן המשימה עצמו, כדי שקובץ שהועלה ייראה במקום
+   * שבו המשימה נכתבה ולא רק בלשונית נפרדת. זו הצצה בלבד — היסטוריית
+   * הגרסאות המלאה וההעלאה נשארות בלשונית "קבצים".
+   */
+  function inlineFiles() {
+    const files = currentFiles();
+    if (!files.length) return null;
+    const rest = files.length - MAX_INLINE_CHIPS;
+
+    return el('div.file-chips', { style: { margin: '10px 0 2px' } }, [
+      el('span.mute-sm', { text: 'קבצים:' }),
+      ...files.slice(0, MAX_INLINE_CHIPS).map((a) =>
+        el('a.file-chip', {
+          href: `/api/attachments/${a.id}/download`,
+          title: `${a.filename} · גרסה ${a.version} · ${UI.fileSize(a.size)} · ${a.uploaderName}`
+        }, [
+          el('span', { text: UI.fileIcon(a.filename) }),
+          el('span.fc-name', { text: a.filename }),
+          // מספר הגרסה מוצג רק כשיש מה לספר — "v1" על כל שבב היה רעש
+          a.version > 1 ? el('span.fc-ver', { text: `v${a.version}` }) : null
+        ])),
+      rest > 0
+        ? el('span.file-chip-more', {
+            text: `+${rest}`,
+            title: files.slice(MAX_INLINE_CHIPS).map((a) => a.filename).join('\n'),
+            style: { cursor: 'pointer' },
+            onclick: filesTab
+          }, [])
+        : null,
+      // יש גרסאות קודמות שאינן מוצגות כאן — הפניה לרשימה המלאה
+      task.attachments.length > files.length
+        ? el('button.btn.btn-sm.btn-ghost', { onclick: filesTab }, ['כל הגרסאות'])
+        : null
+    ]);
+  }
 
   function filesSection() {
     const fileInput = el('input', { type: 'file', style: { display: 'none' }, multiple: true });
