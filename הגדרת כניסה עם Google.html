@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<title>MESIMON — הגדרת כניסה עם Google</title>
+<style>
+  body { font-family: "Segoe UI", Arial, sans-serif; background: #f1f5f9; color: #0f172a;
+         line-height: 1.75; margin: 0; padding: 30px 20px; }
+  .page { max-width: 820px; margin: 0 auto; background: #fff; border-radius: 16px;
+          padding: 38px 46px; box-shadow: 0 4px 20px rgba(15,23,42,.08); }
+  h1 { font-size: 28px; margin: 0 0 4px; color: #115e59; }
+  .sub { color: #64748b; margin-bottom: 26px; }
+  h2 { font-size: 20px; margin: 34px 0 12px; padding-bottom: 7px; border-bottom: 2px solid #ccfbf1; }
+  ol > li { margin-bottom: 14px; }
+  code { background: #f1f5f9; padding: 2px 7px; border-radius: 5px;
+         font-family: Consolas, monospace; direction: ltr; display: inline-block; }
+  .box { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px; padding: 12px 16px; margin: 10px 0; }
+  .warn { background: #fffbeb; border: 1px solid #fde68a; border-radius: 10px; padding: 13px 17px; margin: 16px 0; }
+  .ok   { background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 10px; padding: 13px 17px; margin: 16px 0; }
+  .stop { background: #fef2f2; border: 1px solid #fecaca; border-radius: 10px; padding: 13px 17px; margin: 16px 0; }
+  table { width: 100%; border-collapse: collapse; margin: 14px 0; }
+  th, td { text-align: right; padding: 9px 11px; border-bottom: 1px solid #e2e8f0; font-size: 14px; vertical-align: top; }
+  th { background: #f8fafc; font-size: 13px; color: #475569; }
+  .mono td:first-child { font-family: Consolas, monospace; direction: ltr; white-space: nowrap; }
+  @media print { body { background:#fff; padding:0 } .page { box-shadow:none } }
+</style>
+</head>
+<body>
+<div class="page">
+
+<h1>כניסה עם חשבון Google</h1>
+<div class="sub">כ-15 דקות · חינם · פעם אחת בלבד</div>
+
+<div class="ok">
+  <b>מה זה נותן:</b> במקום לזכור סיסמה נפרדת, מי שיש לו חשבון Google לוחץ כפתור אחד ונכנס.
+  <b>מה זה לא נותן:</b> חשבון Google אינו יוצר משתמש חדש. הכניסה מותרת אך ורק לכתובת
+  שכבר רשומה במערכת כמשתמש או כספק פעיל — אחרת כל אדם בעולם עם חשבון Google היה נכנס.
+  אתה קודם מוסיף את האדם למערכת, ורק אז הוא יכול להיכנס עם Google.
+</div>
+
+<h2>שלב 1 — פרויקט ב-Google Cloud</h2>
+<ol>
+  <li>נכנסים ל־<code>console.cloud.google.com</code> עם חשבון Google שלך.</li>
+  <li>למעלה, ליד הלוגו, יש בוחר פרויקטים. לוחצים עליו ואז <b>New Project</b>.</li>
+  <li>שם הפרויקט: <code>MESIMON</code>. לוחצים <b>Create</b> וממתינים כמה שניות.</li>
+  <li><b>לוודא שהפרויקט החדש נבחר</b> בבוחר שלמעלה לפני שממשיכים — זו טעות נפוצה,
+      ואז ההגדרות נכנסות לפרויקט אחר.</li>
+</ol>
+
+<h2>שלב 2 — מסך ההסכמה</h2>
+<p>זה המסך שהמשתמש רואה כשהוא מאשר את הכניסה. חובה להגדיר אותו לפני יצירת המפתחות.</p>
+<ol>
+  <li>בתפריט הצד: <b>APIs &amp; Services</b> ← <b>OAuth consent screen</b>.</li>
+  <li>סוג: <b>External</b> ← <b>Create</b>.</li>
+  <li>ממלאים:
+    <div class="box">
+      App name: <code>MESIMON</code><br>
+      User support email: המייל שלך<br>
+      Developer contact information: אותו מייל
+    </div>
+    את הלוגו והדומיינים אפשר להשאיר ריקים.
+  </li>
+  <li><b>Scopes</b> — לא נוגעים בכלום. המערכת מבקשת רק שם ואימייל, וזה נכלל בברירת המחדל.</li>
+  <li>שומרים עד הסוף.</li>
+</ol>
+
+<div class="warn">
+  <b>חשוב — Publishing status.</b> אחרי היצירה המסך במצב <b>Testing</b>, ואז רק כתובות
+  שתוסיף ידנית כ-Test users יכולות להיכנס, וההרשאה פגה כל 7 ימים. לוחצים
+  <b>Publish app</b> ומאשרים.
+  <br><br>
+  זה <b>לא</b> שולח את האפליקציה לבדיקה של Google — בדיקה נדרשת רק להרשאות רגישות,
+  ואנחנו מבקשים שם ואימייל בלבד. הפרסום בטוח, כי בכל מקרה נכנסת רק כתובת שרשומה במערכת.
+</div>
+
+<h2>שלב 3 — יצירת המפתחות</h2>
+<ol>
+  <li><b>APIs &amp; Services</b> ← <b>Credentials</b> ← <b>Create Credentials</b>
+      ← <b>OAuth client ID</b>.</li>
+  <li>Application type: <b>Web application</b>. Name: <code>MESIMON Web</code>.</li>
+  <li>גוללים ל־<b>Authorized redirect URIs</b> ולוחצים <b>ADD URI</b> לכל אחת מאלה:
+    <div class="box">
+      <code>https://mesimon.onrender.com/api/auth/google/callback</code><br>
+      <code>https://mesimon.co.il/api/auth/google/callback</code><br>
+      <code>http://localhost:3000/api/auth/google/callback</code>
+    </div>
+    <b>להוסיף את שלושתן עכשיו</b> — כך המעבר לדומיין החדש לא ישבור את הכניסה,
+    והבדיקה המקומית תמשיך לעבוד.
+  </li>
+  <li>לוחצים <b>Create</b>. נפתח חלון עם <b>Client ID</b> ו-<b>Client Secret</b>.</li>
+</ol>
+
+<div class="stop">
+  <b>אל תשלח לי את ה-Client Secret</b> ואל תשמור אותו בקובץ. מדביקים ישר ב-Render.
+  אם נחשף — מוחקים את ה-Client ב-Google ומייצרים חדש.
+</div>
+
+<h2>שלב 4 — מזינים ב-Render</h2>
+<p>בשירות <code>mesimon</code> ← <b>Environment</b>:</p>
+<table class="mono">
+  <tr><th>Key</th><th>Value</th></tr>
+  <tr><td>GOOGLE_CLIENT_ID</td><td>ה-Client ID (מסתיים ב-<code>.apps.googleusercontent.com</code>)</td></tr>
+  <tr><td>GOOGLE_CLIENT_SECRET</td><td>ה-Client Secret</td></tr>
+</table>
+<p><b>Save.</b> Render מפרסם מחדש, ובמסך הכניסה יופיע הכפתור "כניסה עם חשבון Google".
+כל עוד שני המשתנים אינם מוגדרים — הכפתור פשוט לא מוצג, והכניסה עם סיסמה עובדת כרגיל.</p>
+
+<h2>שלב 5 — בודקים</h2>
+<ol>
+  <li>נכנסים למערכת ומוודאים שהכתובת שאתה מתכוון להיכנס בה
+      (<code>ymvale@gmail.com</code>) רשומה כמשתמש פעיל.</li>
+  <li>יוצאים מהמערכת, ובמסך הכניסה לוחצים <b>"כניסה עם חשבון Google"</b>.</li>
+  <li>בוחרים חשבון ומאשרים. אמור לחזור למערכת מחובר.</li>
+</ol>
+
+<h2>אם משהו לא עובד</h2>
+<table>
+  <tr><th>מה מופיע</th><th>מה זה אומר</th></tr>
+  <tr><td><code>redirect_uri_mismatch</code></td>
+      <td>הכתובת שהמערכת שלחה אינה ברשימה. הכי נפוץ: נכנסת דרך <code>www</code> או דרך
+          דומיין שלא הוספת. להוסיף את הכתובת המדויקת מסרגל הדפדפן + <code>/api/auth/google/callback</code>.</td></tr>
+  <tr><td>"הכתובת אינה רשומה במערכת"</td>
+      <td>עובד כמתוכנן. צריך קודם להוסיף את המשתמש עם אותה כתובת מייל בדיוק.</td></tr>
+  <tr><td>"האפליקציה לא אומתה" / רק אני יכול להיכנס</td>
+      <td>מסך ההסכמה נשאר ב-Testing. לחזור ל-OAuth consent screen וללחוץ <b>Publish app</b>.</td></tr>
+  <tr><td>הכפתור לא מופיע בכלל</td>
+      <td>אחד משני משתני הסביבה חסר או מכיל רווח בסוף. לבדוק ב-Render.</td></tr>
+</table>
+
+<div class="box">
+  <b>אחרי שתעבור ל-mesimon.co.il</b> — אין מה לשנות ב-Google אם הוספת את שלוש הכתובות
+  מראש. רק לזכור להוסיף ב-Render את <code>PUBLIC_URL</code> = <code>https://mesimon.co.il</code>.
+</div>
+
+</div>
+</body>
+</html>
