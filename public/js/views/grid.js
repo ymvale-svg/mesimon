@@ -25,6 +25,7 @@ const GridView = (() => {
   const GROUP_OPTIONS = [
     { value: 'project', label: 'פרויקט' },
     { value: 'assignee', label: 'אחראי' },
+    { value: 'department', label: 'מחלקה' },
     { value: 'status', label: 'סטטוס' },
     { value: 'priority', label: 'עדיפות' },
     { value: 'board', label: 'בורד' },
@@ -56,6 +57,9 @@ const GridView = (() => {
       } else if (groupBy === 'assignee') {
         const key = t.assigneeId ? `${t.assigneeType}:${t.assigneeId}` : 'none';
         push(key, t.assigneeName ?? 'ללא אחראי', { assignee: t.assigneeId ? key : null }, t);
+      } else if (groupBy === 'department') {
+        // משימה ארגונית אינה משויכת למחלקה — היא נופלת לקבוצת "ללא שיוך" שבסוף
+        push(t.departmentId ?? 'none', t.departmentName ?? 'ללא שיוך', { departmentId: t.departmentId }, t);
       } else if (groupBy === 'status') {
         push(`${t.boardId}:${t.status}`, t.statusLabel, { status: t.status, boardId: t.boardId, color: t.statusColor }, t);
       } else if (groupBy === 'priority') {
@@ -324,7 +328,14 @@ const GridView = (() => {
 
     cell.appendChild(el('div.title-box', {}, [
       text,
-      el('div.title-tags', {}, UI.taskTags(task)),
+      // הרמה הארגונית מסומנת בשורה עצמה — בטבלה מעורבת זה ההבדל היחיד שנראה
+      // לעין בין משימה שבאחריות המחלקה לבין משימה שהוטלה על כל הארגון
+      el('div.title-tags', {}, [
+        task.level === 'organization'
+          ? el('span.tag.tag-internal', { title: 'משימה ארגונית — חוצה מחלקות' }, ['🏛 ארגונית'])
+          : null,
+        ...UI.taskTags(task)
+      ]),
       el('button.open-card', {
         title: 'פתיחת כרטיס המשימה',
         onclick: (e) => { e.stopPropagation(); TaskCardView.open(task.id); }
@@ -451,6 +462,8 @@ const GridView = (() => {
       // הקבוצה קובעת את ערך ההתחלה של השדה שלפיו קיבצנו
       if (state.groupBy === 'project' && group.meta.projectId) payload.projectId = group.meta.projectId;
       if (state.groupBy === 'priority') payload.priority = group.key;
+      // בקבוצת "ללא שיוך" אין מחלקה להציע, והשרת ישייך לפי האחראי או היוצר
+      if (state.groupBy === 'department' && group.meta.departmentId) payload.departmentId = group.meta.departmentId;
       if (state.groupBy === 'assignee' && group.meta.assignee) {
         const [type, id] = group.meta.assignee.split(':');
         payload.assigneeType = type;

@@ -50,6 +50,7 @@ function loadActor(type, id, token = null) {
       email: u.email,
       role: u.role,
       department: u.department,
+      departmentId: u.department_id ?? null,
       token
     };
   }

@@ -1,8 +1,8 @@
 'use strict';
 /**
- * מסך 2 — לוח המשימות (פרק 5.2 באפיון).
+ * מסך 2 — לוח המשימות.
  * שלוש תצוגות: כרטיסיות (קנבן) עם גרירה ושחרור, טבלה, וציר זמן.
- * מציג את הבורד הפנימי בלבד; בורדי הספקים מוצגים בתצוגת-העל הנפרדת (פרק 3).
+ * מציג את הבורד הפנימי בלבד; בורדי הספקים מוצגים בתצוגת-העל הנפרדת.
  */
 
 const BoardView = (() => {
@@ -14,6 +14,16 @@ const BoardView = (() => {
   let currentScope = 'internal';
   let currentTasks = [];
   let containerRef = null;
+
+  // רשימת המחלקות לחתך המחלקתי. נטענת פעם אחת בלבד — היא משתנה לעיתים רחוקות,
+  // ואין טעם לפנות לשרת בכל רענון של הלוח.
+  let departments = [];
+
+  /**
+   * האם השחקן רואה יותר ממחלקה אחת. זו אותה הגדרה שהשרת מפעיל (isOrgWide),
+   * והוא מתעלם מפרמטר departmentId לכל תפקיד אחר — ולכן לא מציעים לו את החתך.
+   */
+  const isOrgWide = () => ['superadmin', 'admin', 'executive'].includes(App.state.actor?.role);
 
   // ------------------------------------------------------------- טעינה
 
@@ -31,6 +41,8 @@ const BoardView = (() => {
       priority: params.priority ?? '',
       status: params.status ?? '',
       boardId: params.boardId ?? '',
+      level: params.level ?? '',
+      departmentId: params.departmentId ?? '',
       q: '',
       archived: params.archived ? '1' : '',
       onlyOverdue: !!params.overdue,
@@ -42,9 +54,20 @@ const BoardView = (() => {
 
   const filtersKeep = (key, params) => (params.keepFilters ? filters[key] : '');
 
+  async function ensureDepartments() {
+    if (!isOrgWide() || departments.length) return;
+    try {
+      const data = await API.departments();
+      departments = data.departments;
+    } catch {
+      // כשל בטעינת המחלקות אינו אמור למנוע את הצגת הלוח — החתך פשוט לא יוצע
+    }
+  }
+
   async function load(opts = {}) {
     if (!opts.silent) UI.mount(containerRef, header(), UI.spinner());
     try {
+      await ensureDepartments();
       const query = { ...filters };
       delete query.onlyOverdue;
       delete query.pendingReview;
@@ -166,6 +189,22 @@ const BoardView = (() => {
       UI.select(priorityOptions, filters.priority, { onchange: (e) => set('priority', e.target.value) })
     ];
 
+    // רמת המשימה — הפרדה בין מה שבאחריות המחלקה לבין מה שהוטל על כל הארגון.
+    // לספק אין מחלקה ולכן השרת מתעלם מהפרמטר עבורו.
+    if (!App.isVendor()) {
+      items.push(UI.select([
+        { value: '', label: 'כל הרמות' },
+        { value: 'department', label: 'מחלקתיות' },
+        { value: 'organization', label: 'ארגוניות' }
+      ], filters.level, { onchange: (e) => set('level', e.target.value) }));
+    }
+
+    if (isOrgWide() && departments.length) {
+      const departmentOptions = [{ value: '', label: 'כל המחלקות' },
+        ...departments.map((d) => ({ value: d.id, label: d.name }))];
+      items.push(UI.select(departmentOptions, filters.departmentId, { onchange: (e) => set('departmentId', e.target.value) }));
+    }
+
     if (currentScope === 'vendors') {
       const vendorOptions = [{ value: '', label: 'כל הספקים' },
         ...App.state.vendors.map((v) => ({ value: v.boardId, label: v.name }))];
@@ -184,7 +223,7 @@ const BoardView = (() => {
 
     items.push(el('div.spacer'));
 
-    // מסננים אישיים שמורים — פרק 5.2
+    // מסננים אישיים שמורים
     if (!App.isVendor()) {
       if (App.state.savedFilters.length) {
         items.push(UI.select(
@@ -193,7 +232,9 @@ const BoardView = (() => {
           {
             onchange: (e) => {
               const saved = App.state.savedFilters.find((f) => String(f.id) === e.target.value);
-              if (saved) { filters = { ...filters, ...saved.payload }; load(); }
+              // מסנן שנשמר לפני שנוספו רמת המשימה והחתך המחלקתי אינו נושא את
+              // המפתחות האלה — מאפסים אותם ל"הכול" כדי שהמסנן יטען כפי שנשמר
+              if (saved) { filters = { ...filters, level: '', departmentId: '', ...saved.payload }; load(); }
             }
           }
         ));
@@ -208,8 +249,8 @@ const BoardView = (() => {
     const name = await UI.prompt('שם המסנן', { title: 'שמירת מסנן אישי' });
     if (!name) return;
     try {
-      const { projectId, assignee, priority, status, boardId, q, onlyOverdue } = filters;
-      const data = await API.saveFilter(name, { projectId, assignee, priority, status, boardId, q, onlyOverdue });
+      const { projectId, assignee, priority, status, boardId, level, departmentId, q, onlyOverdue } = filters;
+      const data = await API.saveFilter(name, { projectId, assignee, priority, status, boardId, level, departmentId, q, onlyOverdue });
       App.state.savedFilters = data.savedFilters;
       UI.success('המסנן נשמר');
       draw();
@@ -445,6 +486,15 @@ const BoardView = (() => {
     const assigneeSelect = UI.select(assigneeOptions,
       task?.assigneeId ? `${task.assigneeType}:${task.assigneeId}` : '');
 
+    // רמת המשימה מוצעת רק למי שרשאי להטיל משימה ארגונית. לכל השאר המשימה
+    // נשארת מחלקתית, וברירת המחדל היא מחלקתית גם עבורם.
+    const levelSelect = App.may('assign_org_wide_task')
+      ? UI.select([
+          { value: 'department', label: 'מחלקתית' },
+          { value: 'organization', label: 'ארגונית' }
+        ], task?.level ?? 'department')
+      : null;
+
     const prioritySelect = UI.select(App.state.priorities.map((p) => ({ value: p.key, label: p.label })), task?.priority ?? 'normal');
     const dueInput = el('input', { type: 'date', value: UI.toInputDate(task?.dueDate) });
     const activateInput = el('input', { type: 'date', value: UI.toInputDate(task?.activateAt) });
@@ -477,6 +527,9 @@ const BoardView = (() => {
       UI.field('כותרת המשימה', titleInput),
       UI.field('תיאור', descInput),
       el('div.row', {}, [UI.field('פרויקט', projectSelect), UI.field('אחראי', assigneeSelect)]),
+      levelSelect
+        ? UI.field('רמת המשימה', levelSelect, 'משימה ארגונית חוצה מחלקות ואינה משויכת למחלקה אחת')
+        : null,
       el('div.row', {}, [UI.field('עדיפות', prioritySelect), UI.field('תאריך יעד', dueInput)]),
       el('div.row', {}, [
         UI.field('תלות במשימה אחרת', dependsSelect, 'המשימה לא תיסגר לפני שהמשימה החוסמת תושלם'),
@@ -511,6 +564,9 @@ const BoardView = (() => {
         recurrenceFreq: freqSelect.value,
         recurrencePolicy: policySelect.value
       };
+      // בלי הרשאה להטיל משימה ארגונית לא שולחים את השדה כלל, כדי שעריכה של
+      // משימה ארגונית קיימת לא תוריד אותה בשוגג לרמה המחלקתית
+      if (levelSelect) payload.level = levelSelect.value;
       if (!isEdit) {
         payload.checklist = checklistInput.value.split('\n').map((s) => s.trim()).filter(Boolean);
       }

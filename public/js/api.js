@@ -72,6 +72,12 @@ const API = (() => {
     adminUsers: () => call('GET', '/api/admin/users'),
     createUser: (body) => call('POST', '/api/admin/users', body),
     resendInvite: (targetType, id) => call('POST', '/api/admin/invite', { targetType, id }),
+
+    departments: ({ includeInactive } = {}) =>
+      call('GET', `/api/departments${includeInactive ? '?includeInactive=1' : ''}`),
+    createDepartment: (body) => call('POST', '/api/departments', body),
+    updateDepartment: (id, body) => call('PATCH', `/api/departments/${id}`, body),
+    deleteDepartment: (id) => call('DELETE', `/api/departments/${id}`),
     updateUser: (id, body) => call('PATCH', `/api/admin/users/${id}`, body),
 
     createVendor: (body) => call('POST', '/api/vendors', body),

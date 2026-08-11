@@ -1,8 +1,8 @@
 'use strict';
 /**
- * מנוע הכללים — פרק 7 באפיון.
+ * מנוע הכללים — האוטומציות, התזכורות וההקפצות של המערכת.
  *
- * עקרון המימוש (פרק 7.5): הוספת כלל חדש אינה דורשת שינוי מבני במערכת.
+ * עקרון המימוש: הוספת כלל חדש אינה דורשת שינוי מבני במערכת.
  * כל טריגר הוא פונקציה ברישום TRIGGERS, כל פעולה היא פונקציה ברישום ACTIONS,
  * והחיבור ביניהם נשמר בטבלת automation_rules וניתן לעריכה ממסך הניהול.
  *
@@ -41,7 +41,7 @@ const statusLabel = (task) => {
   return col ? col.label : task.status;
 };
 
-/** משימות "חיות": לא בארכיון, לא בסטטוס סופי, וכבר הופעלו (פרק 7.4) */
+/** משימות "חיות": לא בארכיון, לא בסטטוס סופי, וכבר הופעלו (חלף תאריך ההפעלה) */
 function activeTasks() {
   const now = D.nowIso();
   return D.all(
@@ -71,7 +71,7 @@ function markFired(ruleId, taskId, marker) {
 // ---------------------------------------------------------------------------
 
 const TRIGGERS = {
-  /** 7.1 — X ימים לפני תאריך היעד: תזכורת ראשונה לספק */
+  /** X ימים לפני תאריך היעד: תזכורת ראשונה לספק */
   vendor_due_soon: {
     label: 'X ימים לפני תאריך היעד (משימת ספק)',
     paramsSchema: [{ key: 'days_before', label: 'ימים לפני היעד', type: 'number', settingKey: 'vendor_reminder_days_before' }],
@@ -91,7 +91,7 @@ const TRIGGERS = {
     }
   },
 
-  /** 7.1 — Y שעות לפני תאריך היעד: התראה מקדימה למנהל */
+  /** Y שעות לפני תאריך היעד: התראה מקדימה למנהל */
   manager_pre_due: {
     label: 'Y שעות לפני תאריך היעד (התראה מקדימה למנהל)',
     paramsSchema: [{ key: 'hours_before', label: 'שעות לפני היעד', type: 'number', settingKey: 'manager_alert_hours_before' }],
@@ -109,7 +109,7 @@ const TRIGGERS = {
     }
   },
 
-  /** 7.1 — חריגה בפועל מתאריך היעד */
+  /** חריגה בפועל מתאריך היעד */
   task_overdue: {
     label: 'חריגה בפועל מתאריך היעד',
     paramsSchema: [],
@@ -125,7 +125,7 @@ const TRIGGERS = {
     }
   },
 
-  /** 7.2 — משימה דחופה שסטטוסה לא השתנה פרק זמן קצוב */
+  /** משימה דחופה שסטטוסה לא השתנה פרק זמן קצוב */
   urgent_stale: {
     label: "משימה בעדיפות 'דחוף' שסטטוסה לא השתנה",
     paramsSchema: [{ key: 'hours', label: 'שעות ללא שינוי סטטוס', type: 'number', settingKey: 'escalation_hours_urgent' }],
@@ -143,7 +143,7 @@ const TRIGGERS = {
     }
   },
 
-  /** 7.3 — הגיע מועד יצירת המופע הבא של משימה חוזרת */
+  /** הגיע מועד יצירת המופע הבא של משימה חוזרת */
   recurring_due: {
     label: 'הגיע מועד המופע הבא של משימה חוזרת',
     paramsSchema: [],
@@ -161,7 +161,7 @@ const TRIGGERS = {
     }
   },
 
-  /** 7.4 — הגיע תאריך ההפעלה של משימה עתידית */
+  /** הגיע תאריך ההפעלה של משימה עתידית */
   scheduled_activation: {
     label: 'הגיע תאריך ההפעלה של משימה עתידית',
     paramsSchema: [],
@@ -270,7 +270,7 @@ const ACTIONS = {
     run(rule, event) {
       const { task, meta } = event;
 
-      // 7.3 — מדיניות ברירת מחדל: לא נוצר מופע כפול עד לסגירת הקודם.
+      // מדיניות ברירת מחדל: לא נוצר מופע כפול עד לסגירת הקודם.
       // המדיניות ניתנת לשינוי ברמת המשימה הבודדת (recurrence_policy).
       const policy = task.recurrence_policy === 'inherit'
         ? D.getSetting('recurring_default_policy', 'skip_if_open')

@@ -2,7 +2,7 @@
 /**
  * שכבת הנתונים של משימון.
  * משתמשת ב-node:sqlite המובנה ב-Node — ללא תלויות חיצוניות.
- * מימוש ישויות הנתונים מפרק 4 באפיון.
+ * מימוש ישויות הנתונים של המערכת.
  */
 const { DatabaseSync } = require('node:sqlite');
 const fs = require('node:fs');
@@ -74,8 +74,10 @@ CREATE TABLE IF NOT EXISTS users (
   full_name     TEXT    NOT NULL,
   email         TEXT    NOT NULL UNIQUE,
   password_hash TEXT    NOT NULL,
-  role          TEXT    NOT NULL CHECK (role IN ('admin','manager','employee')),
-  department    TEXT    NOT NULL DEFAULT 'שיווק ומכירות',
+  -- רשימת התפקידים נאכפת בקוד (permissions.js) ולא כאן, כדי שהוספת תפקיד
+  -- לא תדרוש שינוי סכמה על מסד נתונים חי
+  role          TEXT    NOT NULL,
+  department    TEXT    NOT NULL DEFAULT '',
   status        TEXT    NOT NULL DEFAULT 'active' CHECK (status IN ('active','inactive')),
   created_at    TEXT    NOT NULL
 );
@@ -92,7 +94,7 @@ CREATE TABLE IF NOT EXISTS vendors (
   created_at    TEXT    NOT NULL
 );
 
--- פרק 3: בורד פנימי ובורדי ספקים הם ישויות נפרדות לחלוטין
+-- בורד פנימי ובורדי ספקים הם ישויות נפרדות לחלוטין
 CREATE TABLE IF NOT EXISTS boards (
   id         INTEGER PRIMARY KEY AUTOINCREMENT,
   name       TEXT    NOT NULL,
@@ -139,7 +141,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   created_by         INTEGER REFERENCES users(id),
   status_changed_at  TEXT    NOT NULL,
   completed_at       TEXT,
-  activate_at        TEXT,               -- פרק 7.4 — משימות עתידיות מתוזמנות
+  activate_at        TEXT,               -- משימות עתידיות מתוזמנות
   depends_on_task_id INTEGER REFERENCES tasks(id) ON DELETE SET NULL,
   is_recurring       INTEGER NOT NULL DEFAULT 0,
   recurrence_freq    TEXT    CHECK (recurrence_freq IN ('daily','weekly','monthly')),
@@ -164,7 +166,7 @@ CREATE TABLE IF NOT EXISTS comments (
   author_type TEXT    NOT NULL CHECK (author_type IN ('user','vendor','system')),
   author_id   INTEGER,
   body        TEXT    NOT NULL,
-  internal    INTEGER NOT NULL DEFAULT 0,   -- פרק 5.4 — הערות פנימיות מוסתרות מהספק
+  internal    INTEGER NOT NULL DEFAULT 0,   -- הערות פנימיות מוסתרות מהספק
   created_at  TEXT    NOT NULL
 );
 
@@ -200,7 +202,7 @@ CREATE TABLE IF NOT EXISTS notifications (
   created_at   TEXT    NOT NULL
 );
 
--- לוג בלתי ניתן לשינוי (פרק 4.4 / 5.3) — נאכף גם ברמת ה-DB
+-- לוג בלתי ניתן לשינוי — נאכף גם ברמת ה-DB
 CREATE TABLE IF NOT EXISTS audit_log (
   id         INTEGER PRIMARY KEY AUTOINCREMENT,
   task_id    INTEGER REFERENCES tasks(id) ON DELETE CASCADE,
@@ -230,7 +232,7 @@ CREATE TABLE IF NOT EXISTS settings (
   value TEXT NOT NULL
 );
 
--- פרק 7.5 — מנוע כללים ניתן להרחבה
+-- מנוע כללים ניתן להרחבה
 CREATE TABLE IF NOT EXISTS automation_rules (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
   name        TEXT    NOT NULL,
@@ -266,6 +268,15 @@ CREATE TABLE IF NOT EXISTS templates (
   name       TEXT    NOT NULL,
   payload    TEXT    NOT NULL,
   created_at TEXT    NOT NULL
+);
+
+-- מחלקות הארגון. לכל מחלקה מנהל אחד, וכל עובד משויך למחלקה אחת.
+CREATE TABLE IF NOT EXISTS departments (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  name            TEXT NOT NULL UNIQUE,
+  manager_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  status          TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','inactive')),
+  created_at      TEXT NOT NULL
 );
 
 -- הזמנות למערכת: קישור חד-פעמי לקביעת סיסמה, במקום להעביר סיסמאות בדואר
@@ -380,7 +391,7 @@ function notify({ targetType, targetId, kind, title, body = '', taskId = null })
 // ברירות מחדל ונתוני התחלה
 // ---------------------------------------------------------------------------
 
-// פרק 7 — כל הפרמטרים המספריים הם הגדרות קונפיגורביליות, לא ערכים קבועים בקוד
+// כל הפרמטרים המספריים הם הגדרות קונפיגורביליות, לא ערכים קבועים בקוד
 const DEFAULT_SETTINGS = {
   vendor_reminder_days_before: 3,          // X — תזכורת ראשונה לספק
   manager_alert_hours_before: 24,          // Y — התראה מקדימה למנהל
@@ -388,9 +399,9 @@ const DEFAULT_SETTINGS = {
   scheduler_interval_minutes: 5,           // תדירות הרצת מנוע הכללים
   max_upload_mb: 25,
   allowed_extensions: ['pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'png', 'jpg', 'jpeg', 'gif', 'svg', 'zip', 'ai', 'psd', 'mp4', 'txt', 'csv'],
-  recurring_default_policy: 'skip_if_open', // פרק 7.3 — לא נוצר מופע כפול עד לסגירת הקודם
+  recurring_default_policy: 'skip_if_open', // לא נוצר מופע כפול עד לסגירת הקודם
   org_name: 'אשל הירדן',
-  department_name: 'מחלקת שיווק ומכירות'
+  org_logo_note: ''
 };
 
 const INTERNAL_COLUMNS = [
@@ -399,7 +410,7 @@ const INTERNAL_COLUMNS = [
   { key: 'done', label: 'הושלם', position: 2, is_final: 1, color: '#16a34a' }
 ];
 
-// פרק 8 — מצבי המשימה בזרימת העבודה מול ספק
+// מצבי המשימה בזרימת העבודה מול ספק
 const VENDOR_COLUMNS = [
   { key: 'awaiting_upload', label: 'ממתין להעלאת תוצרים', position: 0, is_final: 0, color: '#64748b' },
   { key: 'uploaded', label: 'הועלה — ממתין לבדיקה', position: 1, is_final: 0, color: '#0891b2' },
@@ -515,6 +526,8 @@ function bootstrap({ demo = false } = {}) {
     }
   }
 
+  migrate();
+
   // סימני חיים של מסד הנתונים — אם התאריך הזה מתאפס אחרי פרסום גרסה,
   // סימן שהנתונים אינם יושבים על דיסק קבוע
   if (getSetting('installed_at') === null) setSetting('installed_at', nowIso());
@@ -524,6 +537,103 @@ function bootstrap({ demo = false } = {}) {
   // נתוני הדגמה נוצרים רק במפורש: node server/seed-demo.js
   if (demo && get('SELECT COUNT(*) AS c FROM users').c === 0) seedDemoData();
   else ensureFirstAdmin();
+}
+
+/**
+ * מסדי נתונים שנוצרו בגרסה קודמת מגבילים את עמוד role לשלושה תפקידים בלבד.
+ * SQLite אינו מאפשר לשנות CHECK, ולכן בונים את הטבלה מחדש ומעבירים את הנתונים.
+ * רץ פעם אחת בלבד — אחרי הבנייה התנאי כבר אינו קיים.
+ */
+function relaxUserRoleConstraint() {
+  const schema = get("SELECT sql FROM sqlite_master WHERE type='table' AND name='users'")?.sql ?? '';
+  if (!schema.includes('CHECK (role IN')) return;
+
+  const existing = db.prepare('PRAGMA table_info(users)').all().map((c) => c.name);
+  const carried = ['id', 'full_name', 'email', 'password_hash', 'role', 'department',
+    'department_id', 'status', 'created_at'].filter((c) => existing.includes(c));
+
+  db.exec('PRAGMA foreign_keys = OFF');
+  try {
+    db.exec('BEGIN');
+    db.exec(`
+      CREATE TABLE users_migrated (
+        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+        full_name     TEXT    NOT NULL,
+        email         TEXT    NOT NULL UNIQUE,
+        password_hash TEXT    NOT NULL,
+        role          TEXT    NOT NULL,
+        department    TEXT    NOT NULL DEFAULT '',
+        department_id INTEGER REFERENCES departments(id) ON DELETE SET NULL,
+        status        TEXT    NOT NULL DEFAULT 'active' CHECK (status IN ('active','inactive')),
+        created_at    TEXT    NOT NULL
+      )`);
+    db.exec(`INSERT INTO users_migrated (${carried.join(', ')}) SELECT ${carried.join(', ')} FROM users`);
+    db.exec('DROP TABLE users');
+    db.exec('ALTER TABLE users_migrated RENAME TO users');
+    db.exec('COMMIT');
+    console.log('[משימון] טבלת המשתמשים הורחבה לתמיכה בתפקידים נוספים.');
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  } finally {
+    db.exec('PRAGMA foreign_keys = ON');
+  }
+}
+
+/**
+ * הרחבות סכמה על מסד נתונים קיים.
+ * חייב להיות בטוח להרצה חוזרת, ובלי לאבד נתונים — הוא רץ על המערכת החיה.
+ */
+function migrate() {
+  const columns = (table) => db.prepare(`PRAGMA table_info(${table})`).all().map((c) => c.name);
+
+  const addColumn = (table, column, definition) => {
+    if (!columns(table).includes(column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+  };
+
+  relaxUserRoleConstraint();
+
+  addColumn('users', 'department_id', 'INTEGER REFERENCES departments(id) ON DELETE SET NULL');
+  // רמת המשימה: מחלקתית (ברירת מחדל) או ארגונית — משימה שהנהלה מטילה על כל הארגון
+  addColumn('tasks', 'level', "TEXT NOT NULL DEFAULT 'department'");
+  addColumn('tasks', 'department_id', 'INTEGER REFERENCES departments(id) ON DELETE SET NULL');
+
+  // המחלקות היו עד כה טקסט חופשי בכל משתמש. הופכים אותן לישויות ומקשרים.
+  const legacy = all(
+    "SELECT DISTINCT department AS name FROM users WHERE department IS NOT NULL AND trim(department) <> ''"
+  );
+  for (const { name } of legacy) {
+    if (!get('SELECT 1 FROM departments WHERE name = ?', name)) {
+      run('INSERT INTO departments (name, created_at) VALUES (?,?)', name, nowIso());
+    }
+  }
+  run(`UPDATE users SET department_id = (SELECT id FROM departments d WHERE d.name = users.department)
+       WHERE department_id IS NULL AND department IS NOT NULL AND trim(department) <> ''`);
+
+  // מנהל מחלקה שאין לה מנהל מוגדר — נרשם כמנהל שלה
+  run(`UPDATE departments SET manager_user_id = (
+         SELECT u.id FROM users u
+         WHERE u.department_id = departments.id AND u.role = 'manager' AND u.status = 'active'
+         ORDER BY u.id LIMIT 1
+       ) WHERE manager_user_id IS NULL`);
+
+  // שיוך מחלקתי למשימות קיימות, לפי המחלקה של האחראי
+  run(`UPDATE tasks SET department_id = (
+         SELECT u.department_id FROM users u WHERE u.id = tasks.assignee_id
+       ) WHERE department_id IS NULL AND assignee_type = 'user'`);
+
+  // הגדרת "שם המחלקה" הפכה מיותרת מרגע שיש טבלת מחלקות
+  run("DELETE FROM settings WHERE key = 'department_name'");
+
+  // אף אחד אינו רשאי להעניק רמה שווה או גבוהה משלו, ולכן ללא הקידום הזה
+  // הרמה העליונה הייתה בלתי-נגישה במערכת קיימת. מקודם המנהל הוותיק ביותר.
+  if (!get("SELECT 1 FROM users WHERE role = 'superadmin'")) {
+    const first = get("SELECT id, full_name FROM users WHERE role = 'admin' AND status = 'active' ORDER BY id LIMIT 1");
+    if (first) {
+      run("UPDATE users SET role = 'superadmin' WHERE id = ?", first.id);
+      console.log(`[משימון] ${first.full_name} קודם לרמת אדמין על — הרמה העליונה במערכת.`);
+    }
+  }
 }
 
 /** יוצר חשבון מנהל מערכת יחיד כשמסד הנתונים ריק ממשתמשים */
@@ -539,7 +649,7 @@ function ensureFirstAdmin() {
     process.env.ADMIN_NAME ?? 'מנהל מערכת',
     email,
     hashPassword(password),
-    'admin',
+    'superadmin',
     'שיווק ומכירות',
     'active',
     nowIso()

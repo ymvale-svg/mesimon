@@ -1,6 +1,6 @@
 'use strict';
 /**
- * מסך 3 — כרטיס משימה מפורט (פרק 5.3 באפיון).
+ * מסך 3 — כרטיס משימה מפורט.
  * נפתח בלחיצה מכל מקום במערכת.
  */
 
@@ -67,7 +67,7 @@ const TaskCardView = (() => {
 
     const alerts = [];
 
-    // אזהרה חזותית אם המשימה תלויה במשימה שטרם הושלמה (פרק 5.3)
+    // אזהרה חזותית אם המשימה תלויה במשימה שטרם הושלמה
     if (task.dependency?.blocking) {
       alerts.push(el('div.alert.alert-warn', {}, [
         el('span', { text: '🔗' }),
@@ -138,7 +138,7 @@ const TaskCardView = (() => {
     ]);
   }
 
-  /** פרק 8 — פעולות זרימת העבודה מול הספק */
+  /** פעולות זרימת העבודה מול הספק */
   function vendorWorkflowBar() {
     if (task.boardType !== 'vendor') return null;
     const actions = [];
@@ -481,6 +481,27 @@ const TaskCardView = (() => {
 
     const due = UI.dueLabel(task.dueDate);
 
+    // רמת המשימה — מחלקתית שייכת למחלקה אחת, ארגונית חוצה מחלקות ואינה משויכת
+    // לאף אחת מהן. הפיכת משימה לארגונית שמורה למי שרשאי להטיל משימות ברמה
+    // הארגונית; לכל השאר זו תצוגה בלבד.
+    const levelControl = task.permissions.edit && App.may('assign_org_wide_task')
+      ? UI.select([
+          { value: 'department', label: 'מחלקתית' },
+          { value: 'organization', label: 'ארגונית' }
+        ], task.level, {
+          onchange: async (e) => {
+            try {
+              await API.updateTask(task.id, { level: e.target.value });
+              await reload();
+              refreshBackground();
+            } catch (err) {
+              UI.error(err);
+              await reload(); // החזרת הפקד לערך שהשרת מכיר
+            }
+          }
+        })
+      : el('div', {}, [el('span.tag.tag-internal', {}, [task.levelLabel])]);
+
     return el('div.td-side', {}, [
       sec('סטטוס', statusControl),
       sec('אחראי', assigneeControl),
@@ -494,6 +515,15 @@ const TaskCardView = (() => {
         })
       ])),
       sec('פרויקט', el('div', { text: task.projectName ?? '—' })),
+      sec('רמת המשימה', el('div', {}, [
+        levelControl,
+        el('div.mute-sm', {
+          text: task.level === 'organization'
+            ? 'משימה ארגונית — חוצה מחלקות ואינה משויכת למחלקה אחת'
+            : `מחלקה: ${task.departmentName ?? 'ללא שיוך'}`,
+          style: { marginTop: '4px' }
+        })
+      ])),
       task.dependency
         ? sec('תלות במשימה', el('a', { onclick: () => open(task.dependency.id), style: { cursor: 'pointer' } },
             [`#${task.dependency.id} — ${task.dependency.title}`, task.dependency.blocking ? ' ⚠️' : ' ✓']))

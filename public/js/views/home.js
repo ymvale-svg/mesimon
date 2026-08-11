@@ -1,14 +1,34 @@
 'use strict';
-/** מסך 1 — דף הבית האישי (פרק 5.1 באפיון). */
+/**
+ * מסך 1 — דף הבית האישי.
+ * כל עובד — מנהל מחלקה כמו עובד פנימי — רואה כאן את המשימות שלו בשתי הרמות:
+ * המשימות המחלקתיות והמשימות שהוטלו ברמה הארגונית. מי שרואה את כל הארגון
+ * מקבל בנוסף חתך מחלקתי מרוכז.
+ */
 
 const HomeView = (() => {
   const { el } = UI;
 
+  /** התפקידים שרואים את כל הארגון ולא מחלקה אחת — רק להם יש טעם בחתך מחלקתי */
+  const ORG_WIDE_ROLES = ['superadmin', 'admin', 'executive'];
+
+  /**
+   * מנהל מחלקה גם הוא בעל הרשאת דוחות, אך מוגבלת למחלקתו — ולכן חתך בין מחלקות
+   * אינו רלוונטי לו. לכן נדרשים גם ההרשאה וגם תפקיד ברמת ארגון.
+   */
+  const showsDepartmentCut = () =>
+    !App.isVendor() && App.may('view_reports') && ORG_WIDE_ROLES.includes(App.state.actor?.role);
+
   async function render(container) {
     UI.mount(container, UI.spinner());
     let data;
+    let reports = null;
     try {
-      data = await API.home();
+      // החתך המחלקתי נשען על דוח הארגון. נטען במקביל, וכשל בו לא מפיל את הדשבורד.
+      [data, reports] = await Promise.all([
+        API.home(),
+        showsDepartmentCut() ? API.reports().catch(() => null) : Promise.resolve(null)
+      ]);
     } catch (err) {
       return UI.mount(container, UI.empty(err.message, '⚠️'));
     }
@@ -25,9 +45,10 @@ const HomeView = (() => {
         ])
       ]),
       widgets(data.widgets),
+      reports ? departmentCutCard(reports.departments) : null,
       el('div.grid.grid-2.mt', { style: { alignItems: 'start' } }, [
         el('div.flex-col', { style: { gap: '14px' } }, [
-          myTasksCard(data.tasks.mine),
+          ...myTasksCards(data.tasks.mine),
           App.may('approve_vendor_output') || App.isVendor()
             ? approvalCard(data.tasks.awaitingApproval)
             : null
@@ -62,12 +83,20 @@ const HomeView = (() => {
     ]);
   }
 
+  const isOrgTask = (task) => task.level === 'organization';
+
+  /**
+   * משימה ארגונית מסומנת בתגית משלה, גם כשהיא מופיעה בתוך רשימה מעורבת
+   * (כרטיסי האישור), כדי שהרמה תהיה מובחנת במבט אחד ולא רק לפי הכותרת שמעליה.
+   */
+  const levelTag = (task) => (isOrgTask(task) ? el('span.tag.tag-internal', {}, ['🏢 ארגונית']) : null);
+
   function taskRow(task) {
     const due = UI.dueLabel(task.dueDate);
     return el('div.task-card', { onclick: () => TaskCardView.open(task.id) }, [
       task.projectName ? el('div.tc-project', { text: task.projectName }) : null,
       el('div.tc-title', { text: task.title }),
-      el('div.tc-tags', {}, [UI.statusTag(task), ...UI.taskTags(task)]),
+      el('div.tc-tags', {}, [UI.statusTag(task), levelTag(task), ...UI.taskTags(task)]),
       el('div.tc-foot', {}, [
         el('span', {
           text: due.text,
@@ -79,23 +108,111 @@ const HomeView = (() => {
     ]);
   }
 
-  function myTasksCard(tasks) {
-    const sorted = [...tasks].sort((a, b) => {
-      if (a.overdue !== b.overdue) return a.overdue ? -1 : 1;
-      if (!a.dueDate) return 1;
-      if (!b.dueDate) return -1;
-      return new Date(a.dueDate) - new Date(b.dueDate);
-    });
+  /** באיחור קודם, ואחריו לפי קרבת תאריך היעד; משימות ללא יעד בסוף */
+  const byUrgency = (tasks) => [...tasks].sort((a, b) => {
+    if (a.overdue !== b.overdue) return a.overdue ? -1 : 1;
+    if (!a.dueDate) return 1;
+    if (!b.dueDate) return -1;
+    return new Date(a.dueDate) - new Date(b.dueDate);
+  });
+
+  /** כרטיס רשימה אחד. קבוצה ריקה מסתפקת בשורה שקטה ולא במסגרת ריקה עם איור. */
+  function taskListCard({ title, note, tasks, emptyText, onAll }) {
+    const sorted = byUrgency(tasks);
     return el('div.card', {}, [
       el('div.card-head', {}, [
-        el('h3', { text: 'המשימות שלי' }),
+        el('h3', { text: title }),
+        note ? el('span.mute-sm', { text: note }) : null,
         el('div.spacer'),
-        el('button.btn.btn-sm', {
-          onclick: () => (App.isVendor() ? App.navigate('vendor') : App.navigate('board', { mine: true }))
-        }, ['לכל המשימות'])
+        sorted.length ? el('button.btn.btn-sm', { onclick: onAll }, ['לכל המשימות']) : null
       ]),
-      el('div.card-pad.flex-col', {},
-        sorted.length ? sorted.slice(0, 8).map(taskRow) : [UI.empty('אין משימות פתוחות המשויכות אליך', '🎉')])
+      sorted.length
+        ? el('div.card-pad.flex-col', {}, sorted.slice(0, 8).map(taskRow))
+        : el('div.card-pad', {}, [el('div.mute-sm', { text: emptyText })])
+    ]);
+  }
+
+  /**
+   * רשימת המשימות האישית מפוצלת לשתי קבוצות מופרדות — מחלקתי וארגוני.
+   * רמת המשימה מגיעה כבר בנתוני דף הבית (level), ולכן אין צורך בטעינה נוספת.
+   */
+  function myTasksCards(tasks) {
+    // ספק אינו משויך למחלקה ואינו מקבל משימות ארגוניות — עבורו נשארת רשימה אחת
+    if (App.isVendor()) {
+      return [taskListCard({
+        title: 'המשימות שלי',
+        tasks,
+        emptyText: 'אין משימות פתוחות המשויכות אליך',
+        onAll: () => App.navigate('vendor')
+      })];
+    }
+
+    const orgTasks = tasks.filter(isOrgTask);
+    const deptTasks = tasks.filter((t) => !isOrgTask(t));
+
+    return [
+      taskListCard({
+        title: 'המשימות שלי במחלקה',
+        note: App.state.actor.department || null,
+        tasks: deptTasks,
+        emptyText: 'אין משימות מחלקתיות פתוחות',
+        onAll: () => App.navigate('board', { mine: true, level: 'department' })
+      }),
+      taskListCard({
+        title: 'משימות ברמה הארגונית',
+        note: 'משימות שהוטלו על פני כל הארגון',
+        tasks: orgTasks,
+        emptyText: 'לא הוטלו עליך משימות ברמה הארגונית',
+        onAll: () => App.navigate('board', { mine: true, level: 'organization' })
+      })
+    ];
+  }
+
+  /**
+   * חתך מחלקתי מרוכז — שורה למחלקה, ולחיצה עליה פותחת את הלוח מסונן לאותה מחלקה.
+   * 'באיחור' ו'דחוף' נשארים שני מצבים נפרדים גם כאן, בשתי עמודות.
+   */
+  function departmentCutCard(rows) {
+    const list = (rows ?? []).filter((d) => d.people || d.open || d.overdue);
+    if (!list.length) return null;
+
+    const cell = (value, tagClass) =>
+      el('td', {}, [value ? el(`span.tag.${tagClass}`, {}, [String(value)]) : el('span.mute-sm', { text: '—' })]);
+
+    return el('div.card.mt', {}, [
+      el('div.card-head', {}, [
+        el('h3', { text: 'חתך מחלקתי' }),
+        el('span.mute-sm', { text: 'לחיצה על מחלקה פותחת את הלוח שלה' }),
+        el('div.spacer'),
+        el('button.btn.btn-sm', { onclick: () => App.navigate('reports') }, ['לדוחות המלאים'])
+      ]),
+      el('div.table-wrap', { style: { border: '0' } }, [
+        el('table.data', {}, [
+          el('thead', {}, [
+            el('tr', {}, [
+              el('th', { text: 'מחלקה' }),
+              el('th', { text: 'עובדים' }),
+              el('th', { text: 'פתוחות' }),
+              el('th', { text: 'באיחור' }),
+              el('th', { text: 'דחופות' }),
+              el('th', { text: 'ארגוניות' })
+            ])
+          ]),
+          el('tbody', {}, list.map((d) => el('tr', {
+            // שורת "ללא שיוך" מגיעה מהשרת בלי מזהה, ואין לוח שאפשר לסנן אליה
+            onclick: d.id ? () => App.navigate('board', { departmentId: d.id }) : null,
+            style: { cursor: d.id ? 'pointer' : 'default' },
+            title: d.id ? `פתיחת הלוח של ${d.name}` : null
+          }, [
+            el('td.wrap', {}, [el('b', { text: d.name })]),
+            el('td', { text: String(d.people) }),
+            el('td', { text: String(d.open) }),
+            cell(d.overdue, 'tag-overdue'),
+            cell(d.urgent, 'tag-urgent'),
+            cell(d.orgTasks, 'tag-internal')
+          ])))
+        ])
+      ])
     ]);
   }
 
@@ -113,6 +230,7 @@ const HomeView = (() => {
               el('div.tc-tags', {}, [
                 UI.statusTag(t),
                 t.assigneeName ? el('span.tag.tag-vendor', {}, [t.assigneeName]) : null,
+                levelTag(t),
                 ...UI.taskTags(t)
               ])
             ]))
@@ -153,9 +271,14 @@ const HomeView = (() => {
           el('div', { style: { flex: '1' } }, d.items.length
             ? d.items.map((t) => el('div', {
                 style: { cursor: 'pointer', fontSize: '13px', padding: '2px 0' },
-                onclick: () => TaskCardView.open(t.id)
+                onclick: () => TaskCardView.open(t.id),
+                title: isOrgTask(t) ? 'משימה ברמה הארגונית' : null
               }, [
-                el('span', { style: { color: t.overdue ? 'var(--danger)' : 'inherit' }, text: `• ${t.title}` })
+                // הצבע מסמן איחור בפועל, והסמל מסמן שהמשימה ארגונית — שני מצבים נפרדים
+                el('span', {
+                  style: { color: t.overdue ? 'var(--danger)' : 'inherit' },
+                  text: `• ${isOrgTask(t) ? '🏢 ' : ''}${t.title}`
+                })
               ]))
             : [el('div.mute-sm', { text: '—' })])
         ])

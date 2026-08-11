@@ -48,7 +48,13 @@ function getTaskOr404(id) {
 const projectOf = (task) => (task.project_id ? D.get('SELECT * FROM projects WHERE id = ?', task.project_id) : null);
 const boardOf = (task) => D.get('SELECT * FROM boards WHERE id = ?', task.board_id);
 
-/** פרק 3 — מה כל שחקן רשאי לראות */
+/** המחלקה של האחראי על המשימה — נדרש להכרעה על משימות ארגוניות */
+function assigneeDepartmentId(task) {
+  if (task.assignee_type !== 'user' || !task.assignee_id) return null;
+  return D.get('SELECT department_id FROM users WHERE id = ?', task.assignee_id)?.department_id ?? null;
+}
+
+/** מה כל שחקן רשאי לראות — הבורדים נפרדים, וההיקף נקבע לפי התפקיד */
 function canSeeTask(actor, task) {
   const board = boardOf(task);
   if (!board) return false;
@@ -57,11 +63,28 @@ function canSeeTask(actor, task) {
     // ספק רואה אך ורק את הבורד שלו ואת המשימות שהוקצו לו
     return board.type === 'vendor' && board.vendor_id === actor.id && task.assignee_id === actor.id;
   }
-  if (actor.role === 'admin' || actor.role === 'manager') return true;
+
+  // הנהלה ומעלה רואים את כל הארגון
+  if (P.isOrgWide(actor)) return true;
+
+  if (actor.role === 'manager') {
+    // מנהל מחלקה: משימות המחלקה שלו, ומשימות ארגוניות של אנשיה
+    if (board.type === 'vendor') return P.may(actor, 'view_vendor_boards');
+    return P.isInActorDepartment(actor, task, assigneeDepartmentId(task))
+      || P.isTaskParticipant(actor, task, projectOf(task));
+  }
 
   // עובד פנימי: רק בבורד הפנימי, ורק משימות שהוא חלק מהן
   if (board.type !== 'internal') return false;
   return P.isTaskParticipant(actor, task, projectOf(task));
+}
+
+/**
+ * בדיקת הרשאה על משימה, עם המחלקה של האחראי — הכרחית להכרעה על משימות
+ * ארגוניות. עוטף את P.canOnTask כדי שאף קורא לא ישכח את הפרמטר הזה.
+ */
+function mayOnTask(actor, action, task, project = null) {
+  return P.canOnTask(actor, action, task, project, assigneeDepartmentId(task));
 }
 
 function assertVisible(actor, task) {
@@ -136,9 +159,16 @@ function shapeTask(task, actor, { withDetails = false } = {}) {
     checklistDone,
     dependsOnTaskId: task.depends_on_task_id,
     dependency: dependency ? { id: dependency.id, title: dependency.title, blocking: dependencyBlocking } : null,
+    level: task.level ?? 'department',
+    levelLabel: (task.level ?? 'department') === 'organization' ? 'ארגונית' : 'מחלקתית',
+    departmentId: task.department_id ?? null,
+    departmentName: task.department_id
+      ? D.get('SELECT name FROM departments WHERE id = ?', task.department_id)?.name ?? null
+      : null,
     // רמזי הרשאה ברמת המשימה — מאפשרים לטבלה להציג עריכה במקום רק למי שרשאי
-    canEdit: P.canOnTask(actor, 'edit_delete_task', task, project),
-    canChangeStatus: P.canOnTask(actor, 'change_task_status', task, project) && !(isVendor(actor) && actor.readOnly),
+    canEdit: mayOnTask(actor, 'edit_delete_task', task, project),
+    canChangeStatus: mayOnTask(actor, 'change_task_status', task, project)
+      && !(isVendor(actor) && actor.readOnly),
     attachmentsCount: D.get('SELECT COUNT(*) c FROM attachments WHERE task_id = ?', task.id).c,
     commentsCount: D.get(
       `SELECT COUNT(*) c FROM comments WHERE task_id = ?${isVendor(actor) ? ' AND internal = 0' : ''}`,
@@ -200,8 +230,8 @@ function shapeTask(task, actor, { withDetails = false } = {}) {
     })),
     columns: columnsOf(task.board_id).map((c) => ({ key: c.key, label: c.label, color: c.color, isFinal: !!c.is_final })),
     permissions: {
-      edit: P.canOnTask(actor, 'edit_delete_task', task, project),
-      changeStatus: P.canOnTask(actor, 'change_task_status', task, project) && !(isVendor(actor) && actor.readOnly),
+      edit: mayOnTask(actor, 'edit_delete_task', task, project),
+      changeStatus: mayOnTask(actor, 'change_task_status', task, project) && !(isVendor(actor) && actor.readOnly),
       approve: P.may(actor, 'approve_vendor_output'),
       comment: !(isVendor(actor) && actor.readOnly),
       upload: !(isVendor(actor) && actor.readOnly),
@@ -332,6 +362,7 @@ function publicActor(actor) {
     role: actor.role,
     roleLabel: P.ROLE_LABELS[actor.role],
     department: actor.department ?? null,
+    departmentId: actor.departmentId ?? null,
     boardId: actor.boardId ?? null,
     readOnly: !!actor.readOnly
   };
@@ -391,7 +422,6 @@ router.get('/api/bootstrap', async (req, res, ctx) => {
     roleLabels: P.ROLE_LABELS,
     settings: {
       orgName: D.getSetting('org_name', 'אשל הירדן'),
-      departmentName: D.getSetting('department_name', 'מחלקת שיווק ומכירות'),
       maxUploadMb: D.getSetting('max_upload_mb', 25),
       allowedExtensions: D.getSetting('allowed_extensions', [])
     },
@@ -459,7 +489,7 @@ router.get('/api/tasks', async (req, res, ctx) => {
   const where = ['1=1'];
   const params = [];
 
-  // הפרדת הבורדים — פרק 3
+  // הפרדת הבורדים — הבורד הפנימי ובורדי הספקים אינם נחשפים זה לזה
   if (isVendor(actor)) {
     where.push("b.type = 'vendor'", 'b.vendor_id = ?', 't.assignee_id = ?');
     params.push(actor.id, actor.id);
@@ -479,13 +509,39 @@ router.get('/api/tasks', async (req, res, ctx) => {
     if (actor.role === 'employee') {
       where.push('(t.assignee_id = ? AND t.assignee_type = \'user\' OR t.created_by = ? OR p.manager_id = ?)');
       params.push(actor.id, actor.id, actor.id);
+    } else if (actor.role === 'manager' && scope !== 'vendors') {
+      // מנהל מחלקה: המחלקה שלו, משימות ארגוניות של אנשיה, ומה שהוא עצמו חלק ממנו
+      where.push(`(
+        t.department_id = ?
+        OR (t.level = 'organization' AND t.assignee_type = 'user'
+            AND t.assignee_id IN (SELECT id FROM users WHERE department_id = ?))
+        OR (t.assignee_type = 'user' AND t.assignee_id = ?)
+        OR t.created_by = ?
+        OR p.manager_id = ?
+      )`);
+      params.push(actor.departmentId, actor.departmentId, actor.id, actor.id, actor.id);
+    }
+
+    // סינון לפי רמת המשימה — הדשבורד מפריד בין מחלקתי לארגוני
+    const taskLevel = q.get('level');
+    if (taskLevel === 'department' || taskLevel === 'organization') {
+      where.push('t.level = ?');
+      params.push(taskLevel);
+    }
+
+    // חתך מחלקתי — למי שרואה יותר ממחלקה אחת
+    const deptFilter = q.get('departmentId');
+    if (deptFilter && P.isOrgWide(actor)) {
+      where.push(`(t.department_id = ? OR (t.assignee_type = 'user'
+        AND t.assignee_id IN (SELECT id FROM users WHERE department_id = ?)))`);
+      params.push(Number(deptFilter), Number(deptFilter));
     }
   }
 
   const archived = q.get('archived') === '1';
   where.push(archived ? 't.archived = 1' : 't.archived = 0');
 
-  // פרק 7.4 — משימות עתידיות אינן מופיעות ברשימות הפעילות
+  // משימות עתידיות מתוזמנות אינן מופיעות ברשימות הפעילות
   if (q.get('includeScheduled') !== '1') {
     where.push('(t.activate_at IS NULL OR t.activate_at <= ?)');
     params.push(D.nowIso());
@@ -552,7 +608,7 @@ router.post('/api/tasks', async (req, res, ctx) => {
   let assigneeType = body.assigneeType ?? null;
   let assigneeId = body.assigneeId ? Number(body.assigneeId) : null;
 
-  // הקצאה לספק מחייבת הרשאה, ומעבירה את המשימה לבורד של אותו ספק (פרק 3)
+  // הקצאה לספק מחייבת הרשאה, ומעבירה את המשימה לבורד של אותו ספק
   if (assigneeType === 'vendor') {
     requirePerm(actor, 'assign_task_to_vendor');
     const vendorBoard = D.get("SELECT id FROM boards WHERE type='vendor' AND vendor_id = ?", assigneeId);
@@ -575,12 +631,31 @@ router.post('/api/tasks', async (req, res, ctx) => {
   const status = String(body.status ?? '') || Rules.firstColumnKey(boardId);
   if (!columnMeta(boardId, status)) throw badRequest('סטטוס לא קיים בבורד זה');
 
+  // רמת המשימה: ארגונית מוטלת בידי הנהלה ומעלה, אחרת מחלקתית.
+  // משימה מחלקתית משויכת למחלקת האחראי, ואם אין אחראי — למחלקת היוצר.
+  const wantsOrgLevel = body.level === 'organization';
+  if (wantsOrgLevel) requirePerm(actor, 'assign_org_wide_task');
+  const taskLevel = wantsOrgLevel ? 'organization' : 'department';
+
+  let taskDepartmentId = null;
+  if (!wantsOrgLevel) {
+    if (assigneeType === 'user' && assigneeId) {
+      taskDepartmentId = D.get('SELECT department_id FROM users WHERE id = ?', assigneeId)?.department_id ?? null;
+    }
+    if (!taskDepartmentId && body.departmentId) taskDepartmentId = Number(body.departmentId);
+    if (!taskDepartmentId && actor.type === 'user') taskDepartmentId = actor.departmentId ?? null;
+    // מנהל מחלקה אינו יוצר משימות למחלקה אחרת
+    if (isDeptManager(actor) && taskDepartmentId !== actor.departmentId) {
+      taskDepartmentId = actor.departmentId ?? null;
+    }
+  }
+
   const res1 = D.run(
     `INSERT INTO tasks
       (title, description, project_id, board_id, assignee_type, assignee_id, status, priority,
        due_date, created_at, created_by, status_changed_at, activate_at, depends_on_task_id,
-       is_recurring, recurrence_freq, recurrence_policy)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+       is_recurring, recurrence_freq, recurrence_policy, level, department_id)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     title,
     String(body.description ?? ''),
     body.projectId ? Number(body.projectId) : null,
@@ -597,7 +672,9 @@ router.post('/api/tasks', async (req, res, ctx) => {
     body.dependsOnTaskId ? Number(body.dependsOnTaskId) : null,
     body.isRecurring ? 1 : 0,
     body.isRecurring ? (body.recurrenceFreq ?? 'weekly') : null,
-    body.recurrencePolicy ?? 'inherit'
+    body.recurrencePolicy ?? 'inherit',
+    taskLevel,
+    taskDepartmentId
   );
   const id = Number(res1.lastInsertRowid);
 
@@ -632,9 +709,9 @@ router.patch('/api/tasks/:id', async (req, res, ctx) => {
 
   if (isVendor(actor) && actor.readOnly) throw forbidden('לחשבון שלך הוגדרה הרשאת צפייה בלבד');
 
-  // שינוי סטטוס — מסלול נפרד עם כללי הזרימה של פרק 8
+  // שינוי סטטוס — מסלול נפרד עם כללי הזרימה בין הסטטוסים
   if (body.status !== undefined && body.status !== task.status) {
-    if (!P.canOnTask(actor, 'change_task_status', task, project)) throw forbidden('אין לך הרשאה לשנות את סטטוס המשימה');
+    if (!mayOnTask(actor, 'change_task_status', task, project)) throw forbidden('אין לך הרשאה לשנות את סטטוס המשימה');
     changeStatus(task, body.status, actor);
   }
 
@@ -642,7 +719,7 @@ router.patch('/api/tasks/:id', async (req, res, ctx) => {
   const wantsMore = Object.keys(body).some((k) => !editableByAll.has(k));
   if (wantsMore) {
     if (isVendor(actor)) throw forbidden('ספק אינו רשאי לערוך את שדות המשימה');
-    if (!P.canOnTask(actor, 'edit_delete_task', task, project)) throw forbidden('אין לך הרשאה לערוך משימה זו');
+    if (!mayOnTask(actor, 'edit_delete_task', task, project)) throw forbidden('אין לך הרשאה לערוך משימה זו');
 
     const changes = [];
     const setField = (field, column, value, label, formatter = (v) => v) => {
@@ -675,6 +752,17 @@ router.patch('/api/tasks/:id', async (req, res, ctx) => {
       changes.push('עודכנה מדיניות המופע החוזר');
     }
 
+    // רמת המשימה — מחלקתית או ארגונית
+    if (body.level !== undefined && body.level !== (task.level ?? 'department')) {
+      if (body.level !== 'department' && body.level !== 'organization') throw badRequest('רמת משימה לא תקינה');
+      if (body.level === 'organization') requirePerm(actor, 'assign_org_wide_task');
+      const nextDept = body.level === 'organization'
+        ? null
+        : (assigneeDepartmentId(task) ?? (actor.type === 'user' ? actor.departmentId : null));
+      D.run('UPDATE tasks SET level = ?, department_id = ? WHERE id = ?', body.level, nextDept, task.id);
+      changes.push(`רמת המשימה: ${body.level === 'organization' ? 'ארגונית' : 'מחלקתית'}`);
+    }
+
     // שינוי אחראי — כולל מעבר בין בורדים
     if (body.assigneeType !== undefined || body.assigneeId !== undefined) {
       const newType = body.assigneeType ?? task.assignee_type;
@@ -692,6 +780,11 @@ router.patch('/api/tasks/:id', async (req, res, ctx) => {
         const prevName = assigneeName(task) ?? '—';
         let status = task.status;
         if (boardId !== task.board_id) status = Rules.firstColumnKey(boardId);
+        // משימה מחלקתית עוברת עם האחראי למחלקה שלו
+        if ((task.level ?? 'department') === 'department' && newType === 'user' && newId) {
+          const dept = D.get('SELECT department_id FROM users WHERE id = ?', newId)?.department_id ?? null;
+          D.run('UPDATE tasks SET department_id = ? WHERE id = ?', dept, task.id);
+        }
         D.run('UPDATE tasks SET assignee_type = ?, assignee_id = ?, board_id = ?, status = ?, status_changed_at = ? WHERE id = ?',
           newType, newId, boardId, status, D.nowIso(), task.id);
         const updated = getTaskOr404(task.id);
@@ -711,13 +804,13 @@ router.patch('/api/tasks/:id', async (req, res, ctx) => {
   sendJson(res, 200, { task: shapeTask(getTaskOr404(task.id), actor, { withDetails: true }) });
 });
 
-/** מימוש חוקי המעבר של פרק 8 + בדיקת תלות */
+/** מימוש חוקי המעבר בין הסטטוסים + בדיקת תלות */
 function changeStatus(task, newStatus, actor, note = '') {
   const target = columnMeta(task.board_id, newStatus);
   if (!target) throw badRequest('סטטוס לא קיים בבורד זה');
   const current = columnMeta(task.board_id, task.status);
 
-  // אזהרת תלות — לא ניתן לסגור משימה שתלויה במשימה שטרם הושלמה (פרק 5.3)
+  // אזהרת תלות — לא ניתן לסגור משימה שתלויה במשימה שטרם הושלמה
   if (target.is_final && task.depends_on_task_id) {
     const dep = D.get('SELECT * FROM tasks WHERE id = ?', task.depends_on_task_id);
     if (dep) {
@@ -800,7 +893,7 @@ router.post('/api/tasks/:id/review', async (req, res, ctx) => {
   sendJson(res, 200, { task: shapeTask(getTaskOr404(task.id), actor, { withDetails: true }) });
 });
 
-/** פעולות אצווה — פרק 5.2 */
+/** פעולות אצווה */
 router.post('/api/tasks/bulk', async (req, res, ctx) => {
   const actor = ctx.requireActor();
   if (isVendor(actor)) throw forbidden();
@@ -815,10 +908,10 @@ router.post('/api/tasks/bulk', async (req, res, ctx) => {
       assertVisible(actor, task);
       const project = projectOf(task);
       if (action === 'status') {
-        if (!P.canOnTask(actor, 'change_task_status', task, project)) throw forbidden();
+        if (!mayOnTask(actor, 'change_task_status', task, project)) throw forbidden();
         changeStatus(task, value, actor);
       } else if (action === 'assignee') {
-        if (!P.canOnTask(actor, 'edit_delete_task', task, project)) throw forbidden();
+        if (!mayOnTask(actor, 'edit_delete_task', task, project)) throw forbidden();
         const [type, rawId] = String(value).split(':');
         if (type === 'vendor') requirePerm(actor, 'assign_task_to_vendor');
         const boardId = type === 'vendor'
@@ -831,11 +924,11 @@ router.post('/api/tasks/bulk', async (req, res, ctx) => {
         D.audit(task.id, actorRef(actor), 'updated', `שינוי אחראי (פעולת אצווה)`);
         notifyAssignment(task.id, type, Number(rawId), task.title);
       } else if (action === 'priority') {
-        if (!P.canOnTask(actor, 'edit_delete_task', task, project)) throw forbidden();
+        if (!mayOnTask(actor, 'edit_delete_task', task, project)) throw forbidden();
         D.run('UPDATE tasks SET priority = ? WHERE id = ?', value, task.id);
         D.audit(task.id, actorRef(actor), 'updated', `עדיפות שונתה ל-${PRIORITIES.find((p) => p.key === value)?.label}`);
       } else if (action === 'archive') {
-        if (!P.canOnTask(actor, 'edit_delete_task', task, project)) throw forbidden();
+        if (!mayOnTask(actor, 'edit_delete_task', task, project)) throw forbidden();
         D.run('UPDATE tasks SET archived = ? WHERE id = ?', value ? 1 : 0, task.id);
         D.audit(task.id, actorRef(actor), 'updated', value ? 'הועברה לארכיון' : 'הוחזרה מהארכיון');
       } else {
@@ -853,7 +946,7 @@ router.delete('/api/tasks/:id', async (req, res, ctx) => {
   const actor = ctx.requireActor();
   const task = getTaskOr404(ctx.params.id);
   assertVisible(actor, task);
-  if (!P.canOnTask(actor, 'edit_delete_task', task, projectOf(task))) throw forbidden('אין לך הרשאה למחוק משימה זו');
+  if (!mayOnTask(actor, 'edit_delete_task', task, projectOf(task))) throw forbidden('אין לך הרשאה למחוק משימה זו');
   D.run('DELETE FROM tasks WHERE id = ?', task.id);
   sendJson(res, 200, { ok: true });
 });
@@ -865,7 +958,7 @@ router.post('/api/tasks/:id/checklist', async (req, res, ctx) => {
   const task = getTaskOr404(ctx.params.id);
   assertVisible(actor, task);
   if (isVendor(actor)) throw forbidden();
-  if (!P.canOnTask(actor, 'edit_delete_task', task, projectOf(task))) throw forbidden();
+  if (!mayOnTask(actor, 'edit_delete_task', task, projectOf(task))) throw forbidden();
   const { text } = await readJson(req);
   const clean = String(text ?? '').trim();
   if (!clean) throw badRequest('נדרש טקסט');
@@ -881,7 +974,7 @@ router.patch('/api/checklist/:id', async (req, res, ctx) => {
   if (!item) throw notFound();
   const task = getTaskOr404(item.task_id);
   assertVisible(actor, task);
-  if (!P.canOnTask(actor, 'change_task_status', task, projectOf(task))) throw forbidden();
+  if (!mayOnTask(actor, 'change_task_status', task, projectOf(task))) throw forbidden();
   const { done } = await readJson(req);
   D.run('UPDATE checklist_items SET done = ? WHERE id = ?', done ? 1 : 0, item.id);
   D.audit(task.id, actorRef(actor), 'checklist', `${done ? 'הושלם' : 'בוטל'} סעיף: ${item.text}`);
@@ -894,7 +987,7 @@ router.delete('/api/checklist/:id', async (req, res, ctx) => {
   if (!item) throw notFound();
   const task = getTaskOr404(item.task_id);
   assertVisible(actor, task);
-  if (isVendor(actor) || !P.canOnTask(actor, 'edit_delete_task', task, projectOf(task))) throw forbidden();
+  if (isVendor(actor) || !mayOnTask(actor, 'edit_delete_task', task, projectOf(task))) throw forbidden();
   D.run('DELETE FROM checklist_items WHERE id = ?', item.id);
   sendJson(res, 200, { task: shapeTask(getTaskOr404(task.id), actor, { withDetails: true }) });
 });
@@ -910,7 +1003,7 @@ router.post('/api/tasks/:id/comments', async (req, res, ctx) => {
   const text = String(body ?? '').trim();
   if (!text) throw badRequest('נדרש תוכן לתגובה');
 
-  // הערה פנימית זמינה רק לצוות הפנימי (פרק 5.4)
+  // הערה פנימית זמינה רק לצוות הפנימי
   const isInternal = !isVendor(actor) && !!internal;
   const result = D.run(
     'INSERT INTO comments (task_id, author_type, author_id, body, internal, created_at) VALUES (?,?,?,?,?,?)',
@@ -964,7 +1057,7 @@ router.post('/api/tasks/:id/attachments', async (req, res, ctx) => {
   const maxMb = Number(D.getSetting('max_upload_mb', 25));
   if (buffer.length > maxMb * 1024 * 1024) throw badRequest(`הקובץ חורג מהמגבלה (${maxMb}MB)`);
 
-  // גרסאות היסטוריות — הקובץ הקודם נשמר ואינו נדרס (פרק 5.3)
+  // גרסאות היסטוריות — הקובץ הקודם נשמר ואינו נדרס
   const prev = D.get('SELECT MAX(version) v FROM attachments WHERE task_id = ? AND filename = ?', task.id, name);
   const version = (prev?.v ?? 0) + 1;
 
@@ -978,7 +1071,7 @@ router.post('/api/tasks/:id/attachments', async (req, res, ctx) => {
   );
   D.audit(task.id, actorRef(actor), 'attachment', `הועלה קובץ "${name}" (גרסה ${version})`);
 
-  // פרק 8, שלב 2 — העלאת תוצרים מקדמת את הסטטוס אוטומטית
+  // העלאת תוצרים מקדמת את הסטטוס אוטומטית
   if (isVendor(actor) && task.status === 'awaiting_upload') {
     changeStatus(getTaskOr404(task.id), 'uploaded', actor, 'עודכן אוטומטית בעקבות העלאת תוצר');
   }
@@ -1026,7 +1119,7 @@ router.post('/api/projects', async (req, res, ctx) => {
   );
   const id = Number(r.lastInsertRowid);
 
-  // יצירה מתבנית (שלב ג׳)
+  // יצירה מתבנית
   if (b.templateId) {
     const tpl = D.get("SELECT * FROM templates WHERE id = ? AND kind = 'project'", Number(b.templateId));
     if (tpl) {
@@ -1098,7 +1191,7 @@ router.post('/api/notifications/read', async (req, res, ctx) => {
 });
 
 // ---------------------------------------------------------------------------
-// דף הבית — פרק 5.1
+// דף הבית
 // ---------------------------------------------------------------------------
 
 router.get('/api/home', async (req, res, ctx) => {
@@ -1159,14 +1252,26 @@ router.get('/api/home', async (req, res, ctx) => {
 });
 
 // ---------------------------------------------------------------------------
-// דוחות — שלב ד׳
+// דוחות
 // ---------------------------------------------------------------------------
 
 router.get('/api/reports', async (req, res, ctx) => {
   const actor = ctx.requireActor();
   requirePerm(actor, 'view_reports');
 
-  const workload = D.all("SELECT id, full_name, department FROM users WHERE status='active' ORDER BY full_name").map((u) => {
+  // מנהל מחלקה מקבל את חתך המחלקה שלו בלבד. האכיפה כאן ולא בתצוגה —
+  // סינון בצד הלקוח היה מסתיר נתונים שכבר נשלחו אליו.
+  const scoped = !P.isOrgWide(actor);
+  const scopeId = scoped ? (actor.departmentId ?? null) : null;
+
+  const workload = D.all(
+    scoped
+      ? `SELECT id, full_name, department, department_id, role
+         FROM users WHERE status='active' AND department_id IS ? ORDER BY full_name`
+      : `SELECT id, full_name, department, department_id, role
+         FROM users WHERE status='active' ORDER BY full_name`,
+    ...(scoped ? [scopeId] : [])
+  ).map((u) => {
     const rows = D.all(
       `SELECT t.*, c.is_final FROM tasks t
          LEFT JOIN board_columns c ON c.board_id = t.board_id AND c.key = t.status
@@ -1174,7 +1279,9 @@ router.get('/api/reports', async (req, res, ctx) => {
     );
     const open = rows.filter((r) => !r.is_final);
     return {
-      id: u.id, name: u.full_name, department: String(u.department ?? '').trim() || 'ללא שיוך',
+      id: u.id, name: u.full_name, role: u.role, roleLabel: P.ROLE_LABELS[u.role],
+      departmentId: u.department_id,
+      department: String(u.department ?? '').trim() || 'ללא שיוך',
       open: open.length,
       overdue: open.filter((r) => r.due_date && new Date(r.due_date).getTime() < Date.now()).length,
       urgent: open.filter((r) => r.priority === 'urgent').length,
@@ -1204,21 +1311,37 @@ router.get('/api/reports', async (req, res, ctx) => {
     };
   });
 
-  // חתך מחלקתי — התמונה של החברה לפי מחלקות, למנהל המערכת ולמנהל המחלקה
-  const departments = [];
+  // חתך מחלקתי — תמונת הארגון לפי מחלקות
   const byDept = new Map();
+  const bucket = (id, name) => {
+    const key = id ?? 'none';
+    if (!byDept.has(key)) {
+      byDept.set(key, { id: id ?? null, name, people: 0, open: 0, overdue: 0, urgent: 0, done: 0, orgTasks: 0 });
+    }
+    return byDept.get(key);
+  };
+  for (const d of D.all("SELECT id, name FROM departments WHERE status = 'active' ORDER BY name")) {
+    bucket(d.id, d.name);
+  }
   for (const row of workload) {
-    const key = row.department;
-    if (!byDept.has(key)) byDept.set(key, { name: key, people: 0, open: 0, overdue: 0, urgent: 0, done: 0 });
-    const entry = byDept.get(key);
+    const entry = bucket(row.departmentId, row.department);
     entry.people++;
     entry.open += row.open;
     entry.overdue += row.overdue;
     entry.urgent += row.urgent;
     entry.done += row.done;
   }
-  for (const entry of byDept.values()) departments.push(entry);
-  departments.sort((a, b) => b.open - a.open || a.name.localeCompare(b.name, 'he'));
+  // משימות ארגוניות נספרות לפי המחלקה של האחראי עליהן
+  for (const row of D.all(`SELECT u.department_id AS did, COUNT(*) AS c
+                           FROM tasks t JOIN users u ON u.id = t.assignee_id
+                           WHERE t.level = 'organization' AND t.assignee_type = 'user' AND t.archived = 0
+                           GROUP BY u.department_id`)) {
+    const entry = byDept.get(row.did ?? 'none');
+    if (entry) entry.orgTasks = row.c;
+  }
+  const departments = [...byDept.values()]
+    .filter((d) => d.people > 0 || d.id !== null)
+    .sort((a, b) => b.open - a.open || a.name.localeCompare(b.name, 'he'));
 
   const projects = listProjectsFor(actor).map((p) => {
     const rows = D.all(
@@ -1237,11 +1360,23 @@ router.get('/api/reports', async (req, res, ctx) => {
        FROM tasks t
        JOIN boards b ON b.id = t.board_id
        JOIN board_columns c ON c.board_id = t.board_id AND c.key = t.status
+       LEFT JOIN users u ON u.id = t.assignee_id AND t.assignee_type = 'user'
       WHERE t.archived = 0
-      GROUP BY b.type, c.key ORDER BY b.type, c.position`
+        AND (? IS NULL OR t.department_id IS ? OR u.department_id IS ?)
+      GROUP BY b.type, c.key ORDER BY b.type, c.position`,
+    scoped ? 1 : null, scopeId, scopeId
   );
 
-  sendJson(res, 200, { workload, departments, vendors, projects, statusBreakdown });
+  sendJson(res, 200, {
+    workload,
+    departments,
+    vendors,
+    projects,
+    statusBreakdown,
+    scope: scoped ? 'department' : 'organization',
+    departmentId: scopeId,
+    departmentName: scoped ? (actor.department || 'ללא שיוך') : null
+  });
 });
 
 router.get('/api/export/tasks.csv', async (req, res, ctx) => {
@@ -1272,6 +1407,102 @@ router.get('/api/export/tasks.csv', async (req, res, ctx) => {
 // ניהול משתמשים — מנהל מערכת בלבד
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// מחלקות
+// ---------------------------------------------------------------------------
+
+const shapeDepartment = (d) => ({
+  id: d.id,
+  name: d.name,
+  status: d.status,
+  managerUserId: d.manager_user_id,
+  managerName: d.manager_user_id
+    ? D.get('SELECT full_name FROM users WHERE id = ?', d.manager_user_id)?.full_name ?? null
+    : null,
+  peopleCount: D.get('SELECT COUNT(*) c FROM users WHERE department_id = ? AND status = ?', d.id, 'active').c
+});
+
+/** רשימת המחלקות — נדרשת לכל מי שממלא טופס משתמש או מסנן לפי מחלקה */
+router.get('/api/departments', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  if (isVendor(actor)) throw forbidden();
+  // includeInactive=1 נדרש למסך ניהול המחלקות; טפסי שיוך מקבלים פעילות בלבד
+  const all = parseUrl(req).searchParams.get('includeInactive') === '1';
+  const rows = all
+    ? D.all('SELECT * FROM departments ORDER BY name')
+    : D.all("SELECT * FROM departments WHERE status = 'active' ORDER BY name");
+  sendJson(res, 200, { departments: rows.map(shapeDepartment) });
+});
+
+router.post('/api/departments', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  requirePerm(actor, 'manage_departments');
+  const b = await readJson(req);
+  const name = String(b.name ?? '').trim();
+  if (!name) throw badRequest('נדרש שם מחלקה');
+  if (D.get('SELECT 1 FROM departments WHERE name = ?', name)) throw badRequest('מחלקה בשם זה כבר קיימת');
+
+  const r = D.run('INSERT INTO departments (name, created_at) VALUES (?,?)', name, D.nowIso());
+  const id = Number(r.lastInsertRowid);
+  if (b.managerUserId) setDepartmentManager(id, Number(b.managerUserId));
+
+  sendJson(res, 201, { department: shapeDepartment(D.get('SELECT * FROM departments WHERE id = ?', id)) });
+});
+
+router.patch('/api/departments/:id', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  requirePerm(actor, 'manage_departments');
+  const dept = D.get('SELECT * FROM departments WHERE id = ?', Number(ctx.params.id));
+  if (!dept) throw notFound('המחלקה לא נמצאה');
+  const b = await readJson(req);
+
+  if (b.name !== undefined) {
+    const name = String(b.name).trim();
+    if (!name) throw badRequest('נדרש שם מחלקה');
+    const clash = D.get('SELECT 1 FROM departments WHERE name = ? AND id <> ?', name, dept.id);
+    if (clash) throw badRequest('מחלקה בשם זה כבר קיימת');
+    D.run('UPDATE departments SET name = ? WHERE id = ?', name, dept.id);
+    // המחלקה נשמרת גם כטקסט על המשתמש, לתצוגה ולייצוא
+    D.run('UPDATE users SET department = ? WHERE department_id = ?', name, dept.id);
+  }
+  if (b.status !== undefined) {
+    if (!['active', 'inactive'].includes(b.status)) throw badRequest('סטטוס לא תקין');
+    D.run('UPDATE departments SET status = ? WHERE id = ?', b.status, dept.id);
+  }
+  if (b.managerUserId !== undefined) {
+    setDepartmentManager(dept.id, b.managerUserId ? Number(b.managerUserId) : null);
+  }
+
+  sendJson(res, 200, { department: shapeDepartment(D.get('SELECT * FROM departments WHERE id = ?', dept.id)) });
+});
+
+router.delete('/api/departments/:id', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  requirePerm(actor, 'manage_departments');
+  const dept = D.get('SELECT * FROM departments WHERE id = ?', Number(ctx.params.id));
+  if (!dept) throw notFound('המחלקה לא נמצאה');
+
+  const people = D.get('SELECT COUNT(*) c FROM users WHERE department_id = ?', dept.id).c;
+  if (people > 0) throw badRequest(`למחלקה משויכים ${people} משתמשים. יש להעביר אותם למחלקה אחרת קודם.`);
+
+  D.run('DELETE FROM departments WHERE id = ?', dept.id);
+  sendJson(res, 200, { ok: true });
+});
+
+/** קובע את מנהל המחלקה, ומשייך אותו אליה כמנהל מחלקה */
+function setDepartmentManager(departmentId, userId) {
+  if (userId === null) {
+    D.run('UPDATE departments SET manager_user_id = NULL WHERE id = ?', departmentId);
+    return;
+  }
+  const user = D.get('SELECT * FROM users WHERE id = ?', userId);
+  if (!user) throw badRequest('המשתמש שנבחר כמנהל אינו קיים');
+
+  const name = D.get('SELECT name FROM departments WHERE id = ?', departmentId).name;
+  D.run('UPDATE departments SET manager_user_id = ? WHERE id = ?', userId, departmentId);
+  D.run('UPDATE users SET department_id = ?, department = ? WHERE id = ?', departmentId, name, userId);
+}
+
 /**
  * מנהל מערכת מנהל את כל המשתמשים.
  * מנהל מחלקה מנהל אך ורק עובדים פנימיים במחלקה שלו — לא מנהלים אחרים,
@@ -1279,34 +1510,60 @@ router.get('/api/export/tasks.csv', async (req, res, ctx) => {
  */
 const isDeptManager = (actor) => actor.type === 'user' && actor.role === 'manager';
 
+/** האם actor רשאי לנהל את המשתמש הקיים target */
 function assertMayManageUser(actor, target) {
-  if (actor.role === 'admin') return;
-  if (!isDeptManager(actor)) throw forbidden();
-  if (target.role !== 'employee') throw forbidden('מנהל מחלקה רשאי לנהל עובדים פנימיים בלבד');
-  if ((target.department ?? '') !== (actor.department ?? '')) {
+  if (!P.mayManageRole(actor, target.role)) {
+    throw forbidden(`אין לך הרשאה לנהל חשבון ברמת ${P.ROLE_LABELS[target.role] ?? target.role}`);
+  }
+  if (isDeptManager(actor) && (target.department_id ?? null) !== (actor.departmentId ?? null)) {
     throw forbidden('מנהל מחלקה רשאי לנהל משתמשים במחלקה שלו בלבד');
   }
 }
+
+/** מתרגם קלט מחלקה — מזהה קיים או שם חדש — למזהה מחלקה */
+function resolveDepartment(actor, body) {
+  if (body.newDepartmentName) {
+    requirePerm(actor, 'manage_departments');
+    const name = String(body.newDepartmentName).trim();
+    if (!name) throw badRequest('נדרש שם למחלקה החדשה');
+    const existing = D.get('SELECT id FROM departments WHERE name = ?', name);
+    if (existing) return existing.id;
+    return Number(D.run('INSERT INTO departments (name, created_at) VALUES (?,?)', name, D.nowIso()).lastInsertRowid);
+  }
+  if (body.departmentId) {
+    const id = Number(body.departmentId);
+    const dept = D.get('SELECT status FROM departments WHERE id = ?', id);
+    if (!dept) throw badRequest('המחלקה שנבחרה אינה קיימת');
+    if (dept.status !== 'active') throw badRequest('לא ניתן לשייך משתמש למחלקה מושבתת');
+    return id;
+  }
+  return null;
+}
+
+const departmentName = (id) => (id ? D.get('SELECT name FROM departments WHERE id = ?', id)?.name ?? '' : '');
 
 router.get('/api/admin/users', async (req, res, ctx) => {
   const actor = ctx.requireActor();
   requirePerm(actor, 'manage_users');
 
-  const rows = actor.role === 'admin'
-    ? D.all('SELECT id, full_name, email, role, department, status FROM users ORDER BY full_name')
-    : D.all("SELECT id, full_name, email, role, department, status FROM users WHERE department = ? AND role = 'employee' ORDER BY full_name", actor.department);
+  const rows = P.isOrgWide(actor)
+    ? D.all('SELECT id, full_name, email, role, department, department_id, status FROM users ORDER BY full_name')
+    : D.all(`SELECT id, full_name, email, role, department, department_id, status FROM users
+             WHERE department_id IS ? AND role = 'employee' ORDER BY full_name`, actor.departmentId);
 
-  const departments = D.all(
-    "SELECT DISTINCT department AS name FROM users WHERE department IS NOT NULL AND trim(department) <> '' ORDER BY department"
-  ).map((r) => r.name);
+  const departments = D.all("SELECT * FROM departments WHERE status = 'active' ORDER BY name").map(shapeDepartment);
 
   sendJson(res, 200, {
-    scope: actor.role === 'admin' ? 'all' : 'department',
+    scope: P.isOrgWide(actor) ? 'all' : 'department',
     department: actor.department,
+    departmentId: actor.departmentId,
     departments,
+    assignableRoles: P.assignableRoles(actor).map((role) => ({ value: role, label: P.ROLE_LABELS[role] })),
+    mayManageDepartments: P.may(actor, 'manage_departments'),
     users: rows.map((u) => ({
       id: u.id, name: u.full_name, email: u.email, role: u.role,
-      roleLabel: P.ROLE_LABELS[u.role], department: u.department, status: u.status
+      roleLabel: P.ROLE_LABELS[u.role], department: u.department,
+      departmentId: u.department_id, status: u.status
     }))
   });
 });
@@ -1321,12 +1578,17 @@ router.post('/api/admin/users', async (req, res, ctx) => {
   if (D.get('SELECT 1 FROM users WHERE lower(email)=?', email) || D.get('SELECT 1 FROM vendors WHERE lower(email)=?', email)) {
     throw badRequest('כתובת האימייל כבר קיימת במערכת');
   }
-  if (!['admin', 'manager', 'employee'].includes(b.role)) throw badRequest('רמת גישה לא תקינה');
+  if (!P.INTERNAL_ROLES.includes(b.role)) throw badRequest('רמת גישה לא תקינה');
+  if (!P.mayManageRole(actor, b.role)) {
+    throw forbidden(`אין לך הרשאה להעניק רמת גישה ${P.ROLE_LABELS[b.role]}`);
+  }
 
-  // מנהל מחלקה — רק עובד פנימי, ורק במחלקה שלו. נכפה ולא רק נבדק.
-  if (isDeptManager(actor)) {
-    if (b.role !== 'employee') throw forbidden('מנהל מחלקה רשאי להוסיף עובדים פנימיים בלבד');
-    b.department = actor.department;
+  // מנהל מחלקה — רק במחלקה שלו. נכפה ולא רק נבדק.
+  let departmentId = isDeptManager(actor) ? actor.departmentId : resolveDepartment(actor, b);
+
+  // מנהל מחלקה חייב מחלקה: או קיימת שנבחרה, או חדשה שהוא יהיה המנהל שלה
+  if (b.role === 'manager' && !departmentId) {
+    throw badRequest('משתמש ברמת מנהל מחלקה חייב להיות משויך למחלקה. יש לבחור מחלקה קיימת או להגדיר מחלקה חדשה.');
   }
 
   // בלי סיסמה מפורשת נקבעת סיסמה אקראית שאיש אינו יודע —
@@ -1334,12 +1596,19 @@ router.post('/api/admin/users', async (req, res, ctx) => {
   const password = b.password || crypto.randomBytes(24).toString('base64url');
   const result = D.run(
     'INSERT INTO users (full_name, email, password_hash, role, department, status, created_at) VALUES (?,?,?,?,?,?,?)',
-    name, email, D.hashPassword(password), b.role, String(b.department ?? '').trim(), 'active', D.nowIso()
+    name, email, D.hashPassword(password), b.role, departmentName(departmentId), 'active', D.nowIso()
   );
+  const newUserId = Number(result.lastInsertRowid);
+  D.run('UPDATE users SET department_id = ? WHERE id = ?', departmentId, newUserId);
+
+  // מנהל מחלקה נרשם כמנהל של אותה מחלקה
+  if (b.role === 'manager' && departmentId) {
+    D.run('UPDATE departments SET manager_user_id = ? WHERE id = ?', newUserId, departmentId);
+  }
 
   const invite = b.invite === false ? null : await Invites.createAndSend({
     targetType: 'user',
-    targetId: Number(result.lastInsertRowid),
+    targetId: newUserId,
     email,
     recipientName: name,
     inviter: { id: actor.id, name: actor.name },
@@ -1381,22 +1650,36 @@ router.patch('/api/admin/users/:id', async (req, res, ctx) => {
   const user = D.get('SELECT * FROM users WHERE id = ?', Number(ctx.params.id));
   if (!user) throw notFound();
   const b = await readJson(req);
-  if (b.role && !['admin', 'manager', 'employee'].includes(b.role)) throw badRequest('רמת גישה לא תקינה');
+  if (b.role && !P.INTERNAL_ROLES.includes(b.role)) throw badRequest('רמת גישה לא תקינה');
   if (user.id === actor.id && b.status === 'inactive') throw badRequest('לא ניתן להשבית את החשבון שלך');
 
-  // מנהל מחלקה: רק על עובדים במחלקה שלו, ובלי לשנות רמת גישה או שיוך מחלקה
-  if (isDeptManager(actor)) {
-    assertMayManageUser(actor, user);
-    if (b.role && b.role !== 'employee') throw forbidden('מנהל מחלקה אינו רשאי להעניק רמת גישה גבוהה יותר');
-    b.role = 'employee';
-    b.department = actor.department;
+  assertMayManageUser(actor, user);
+  if (b.role && b.role !== user.role && !P.mayManageRole(actor, b.role)) {
+    throw forbidden(`אין לך הרשאה להעניק רמת גישה ${P.ROLE_LABELS[b.role]}`);
+  }
+
+  // מנהל מחלקה אינו משנה תפקיד ואינו מעביר בין מחלקות
+  let targetDepartmentId = isDeptManager(actor)
+    ? actor.departmentId
+    : (b.departmentId !== undefined || b.newDepartmentName ? resolveDepartment(actor, b) : user.department_id);
+  if (isDeptManager(actor)) b.role = 'employee';
+
+  const nextRole = b.role ?? user.role;
+  if (nextRole === 'manager' && !targetDepartmentId) {
+    throw badRequest('משתמש ברמת מנהל מחלקה חייב להיות משויך למחלקה.');
   }
   D.run(
-    'UPDATE users SET full_name = ?, email = ?, role = ?, department = ?, status = ? WHERE id = ?',
-    b.name ?? user.full_name, (b.email ?? user.email).toLowerCase(), b.role ?? user.role,
-    b.department !== undefined ? String(b.department ?? '').trim() : user.department,
-    b.status ?? user.status, user.id
+    'UPDATE users SET full_name = ?, email = ?, role = ?, department = ?, department_id = ?, status = ? WHERE id = ?',
+    b.name ?? user.full_name, (b.email ?? user.email).toLowerCase(), nextRole,
+    departmentName(targetDepartmentId), targetDepartmentId, b.status ?? user.status, user.id
   );
+
+  // שינוי תפקיד לניהול מחלקה רושם אותו כמנהל שלה; ירידה מהתפקיד משחררת
+  if (nextRole === 'manager' && targetDepartmentId) {
+    D.run('UPDATE departments SET manager_user_id = ? WHERE id = ?', user.id, targetDepartmentId);
+  } else if (user.role === 'manager' && nextRole !== 'manager') {
+    D.run('UPDATE departments SET manager_user_id = NULL WHERE manager_user_id = ?', user.id);
+  }
   if (b.password) D.run('UPDATE users SET password_hash = ? WHERE id = ?', D.hashPassword(b.password), user.id);
   sendJson(res, 200, { ok: true });
 });
@@ -1422,7 +1705,7 @@ router.post('/api/vendors', async (req, res, ctx) => {
     'active', b.readOnly ? 1 : 0, D.nowIso()
   );
   const vendorId = Number(r.lastInsertRowid);
-  // כל ספק מקבל בורד ייעודי משלו — פרק 3
+  // כל ספק מקבל בורד ייעודי משלו
   D.createVendorBoard(vendorId, name);
 
   const invite = b.invite === false ? null : await Invites.createAndSend({
@@ -1659,7 +1942,7 @@ router.delete('/api/templates/:id', async (req, res, ctx) => {
   sendJson(res, 200, { ok: true });
 });
 
-// --- חיפוש גלובלי (כולל ארכיון) — פרק 5.1 ---
+// --- חיפוש גלובלי (כולל ארכיון) ---
 
 router.get('/api/search', async (req, res, ctx) => {
   const actor = ctx.requireActor();

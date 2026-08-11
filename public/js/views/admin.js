@@ -10,6 +10,7 @@ const AdminView = (() => {
 
   const TABS = [
     { key: 'users', label: 'משתמשים והרשאות', perm: 'manage_users' },
+    { key: 'departments', label: 'מחלקות', perm: 'manage_departments' },
     { key: 'vendors', label: 'ספקים חיצוניים', perm: 'assign_task_to_vendor' },
     { key: 'automations', label: 'אוטומציות וכללים', perm: 'manage_automations' },
     { key: 'settings', label: 'הגדרות מערכת', perm: 'manage_automations' },
@@ -39,6 +40,7 @@ const AdminView = (() => {
     const body = container.querySelector('#admin-body');
     try {
       if (tab === 'users') await usersTab(body);
+      else if (tab === 'departments') await departmentsTab(body);
       else if (tab === 'vendors') vendorsTab(body);
       else if (tab === 'automations') await automationsTab(body);
       else if (tab === 'settings') await settingsTab(body);
@@ -108,7 +110,8 @@ const AdminView = (() => {
               el('td', {}, [el('div.flex', {}, [UI.avatar(u.name, { small: true }), el('b', { text: u.name })])]),
               el('td', { text: u.email }),
               el('td', {}, [el('span.tag.tag-internal', {}, [u.roleLabel])]),
-              el('td', { text: u.department }),
+              // משתמש יכול להיות ללא שיוך למחלקה (הנהלה, מנהל מערכת) — מסומן במקף ולא בתא ריק
+              el('td', { text: u.department || '—' }),
               el('td', {}, [el('span', {
                 class: u.status === 'active' ? 'text-ok' : 'text-danger',
                 text: u.status === 'active' ? '● פעיל' : '○ לא פעיל'
@@ -134,32 +137,58 @@ const AdminView = (() => {
     );
   }
 
+  /** בחירת "מחלקה חדשה" בתוך הרשימה הנפתחת — נשלח כ-newDepartmentName ולא כמזהה */
+  const NEW_DEPT = '__new__';
+
   function userDialog(user = null, listData = {}) {
     const isEdit = !!user;
     const scoped = listData.scope === 'department';
     const nameInput = el('input', { type: 'text', value: user?.name ?? '' });
     const emailInput = el('input', { type: 'email', value: user?.email ?? '' });
-    const roleSelect = UI.select(
-      scoped
-        ? [{ value: 'employee', label: 'עובד פנימי' }]
-        : [
-            { value: 'employee', label: 'עובד פנימי' },
-            { value: 'manager', label: 'מנהל מחלקה' },
-            { value: 'admin', label: 'מנהל מערכת' }
-          ],
-      user?.role ?? 'employee'
+
+    // רמות הגישה מגיעות מהשרת כשהן מסוננות לפי מה שהמשתמש המחובר רשאי להעניק —
+    // מנהל מחלקה יקבל כך רק 'עובד פנימי', בלי החלטה בקוד הממשק.
+    // אם רמת הגישה הנוכחית של הנערך אינה ברשימה (רמה שווה או גבוהה משל המנהל),
+    // מוסיפים אותה כדי לא להציג שדה ריק ולא לשנות לו רמה בשוגג.
+    const roleOptions = [...(listData.assignableRoles ?? [])];
+    if (isEdit && !roleOptions.some((r) => String(r.value) === user.role)) {
+      roleOptions.unshift({ value: user.role, label: user.roleLabel ?? user.role });
+    }
+    const roleSelect = UI.select(roleOptions, user?.role ?? roleOptions[0]?.value ?? '');
+
+    // המחלקות הן ישויות במערכת — בחירה מרשימה סגורה ולא הקלדה חופשית,
+    // כדי שלא ייווצרו מחלקות כפולות בגלל הבדל באיות.
+    const deptOptions = [
+      { value: '', label: 'ללא שיוך' },
+      ...(listData.departments ?? []).map((d) => ({ value: String(d.id), label: d.name }))
+    ];
+    if (listData.mayManageDepartments) deptOptions.push({ value: NEW_DEPT, label: '＋ הגדרת מחלקה חדשה…' });
+    const deptSelect = UI.select(
+      deptOptions,
+      String(user?.departmentId ?? (scoped ? listData.departmentId : '') ?? ''),
+      // מנהל מחלקה מוסיף עובדים למחלקה שלו בלבד, והשרת כופה זאת בכל מקרה
+      scoped ? { disabled: true } : {}
     );
-    // בחירה חופשית: השדה ריק כברירת מחדל, והמחלקות הקיימות מוצעות כהשלמה
-    const deptListId = 'dept-options';
-    const deptInput = el('input', {
-      type: 'text',
-      value: user?.department ?? (scoped ? listData.department : '') ?? '',
-      placeholder: 'שם המחלקה',
-      list: deptListId,
-      readonly: scoped || null
-    });
-    const deptOptions = el(`datalist#${deptListId}`, {},
-      (listData.departments ?? []).map((d) => el('option', { value: d })));
+
+    const newDeptInput = el('input', { type: 'text', placeholder: 'שם המחלקה החדשה' });
+    const newDeptField = UI.field('שם המחלקה החדשה', newDeptInput, 'המחלקה תיווצר עם שמירת המשתמש');
+
+    // מנהל מחלקה חייב שיוך — עדיף להסביר מראש מאשר להפתיע בשגיאה בשמירה
+    const managerNote = el('div.alert.alert-warn', {}, [
+      el('span', { text: '👤' }),
+      el('div', { text: 'מנהל מחלקה חייב להיות משויך למחלקה. יש לבחור מחלקה קיימת, או להגדיר מחלקה חדשה שהוא ינהל.' })
+    ]);
+
+    function syncDeptFields() {
+      const wantsNew = deptSelect.value === NEW_DEPT;
+      newDeptField.style.display = wantsNew ? '' : 'none';
+      if (!wantsNew) newDeptInput.value = '';
+      managerNote.style.display = roleSelect.value === 'manager' ? '' : 'none';
+    }
+    roleSelect.addEventListener('change', syncDeptFields);
+    deptSelect.addEventListener('change', syncDeptFields);
+    syncDeptFields();
+
     const statusSelect = UI.select([{ value: 'active', label: 'פעיל' }, { value: 'inactive', label: 'לא פעיל' }], user?.status ?? 'active');
     const passInput = el('input', { type: 'text', placeholder: isEdit ? 'השאר ריק כדי לא לשנות' : 'ריק = תישלח הזמנה' });
 
@@ -167,14 +196,15 @@ const AdminView = (() => {
     const m = UI.modal({
       title: isEdit ? `עריכת משתמש — ${user.name}` : 'משתמש חדש',
       body: el('div', {}, [
-        deptOptions,
         UI.field('שם מלא', nameInput),
         UI.field('אימייל', emailInput, 'משמש גם לכניסה למערכת'),
         el('div.row', {}, [UI.field('רמת גישה', roleSelect), UI.field('סטטוס', statusSelect)]),
         el('div.row', {}, [
-          UI.field('מחלקה', deptInput, scoped ? 'נקבע לפי המחלקה שלך' : 'אפשר לבחור מהקיימות או להקליד מחלקה חדשה'),
+          UI.field('מחלקה', deptSelect, scoped ? 'נקבע לפי המחלקה שלך' : 'ברירת המחדל היא ללא שיוך למחלקה'),
           UI.field('סיסמה', passInput, isEdit ? null : 'מומלץ להשאיר ריק — תישלח הזמנה לקביעת סיסמה')
         ]),
+        newDeptField,
+        managerNote,
         !isEdit
           ? el('div.alert.alert-info', {}, [
               el('span', { text: '✉️' }),
@@ -186,15 +216,23 @@ const AdminView = (() => {
     });
 
     saveBtn.addEventListener('click', async () => {
+      const wantsNewDept = deptSelect.value === NEW_DEPT;
       const payload = {
         name: nameInput.value.trim(),
         email: emailInput.value.trim(),
         role: roleSelect.value,
-        department: deptInput.value.trim(),
         status: statusSelect.value
       };
+      // או מזהה מחלקה קיימת, או שם למחלקה חדשה — השרת אינו מקבל שם מחלקה חופשי
+      if (wantsNewDept) payload.newDepartmentName = newDeptInput.value.trim();
+      else payload.departmentId = deptSelect.value ? Number(deptSelect.value) : null;
+
       if (passInput.value.trim()) payload.password = passInput.value.trim();
       if (!payload.name || !payload.email) return UI.toast('נדרשים שם ואימייל', 'error');
+      if (wantsNewDept && !payload.newDepartmentName) return UI.toast('נדרש שם למחלקה החדשה', 'error');
+      if (payload.role === 'manager' && !wantsNewDept && !payload.departmentId) {
+        return UI.toast('מנהל מחלקה חייב להיות משויך למחלקה — יש לבחור מחלקה קיימת או להגדיר מחלקה חדשה', 'error');
+      }
       saveBtn.disabled = true;
       try {
         let created = null;
@@ -207,6 +245,109 @@ const AdminView = (() => {
         // גם על הסרגל העליון, שנבנה בנפרד ואחרת נשאר עם השם הישן
         await App.reloadReference();
         App.render();
+      } catch (err) { saveBtn.disabled = false; UI.error(err); }
+    });
+  }
+
+  // ------------------------------------------------------------- מחלקות
+
+  async function departmentsTab(body) {
+    // מסך הניהול מציג גם מחלקות מושבתות; טפסי שיוך מקבלים פעילות בלבד
+    const data = await API.departments({ includeInactive: true });
+
+    UI.mount(body,
+      el('div.alert.alert-info.mb', {}, [
+        el('span', { text: '🏢' }),
+        el('div', { text: 'המחלקה היא היחידה שלפיה נחתכות ההרשאות: מנהל מחלקה רואה ומנהל את המשימות והעובדים של המחלקה שלו. משימה יכולה להיות מחלקתית או ארגונית.' })
+      ]),
+      el('div.flex.mb', {}, [
+        el('div.spacer'),
+        el('button.btn.btn-primary', { onclick: () => departmentDialog() }, ['＋ מחלקה חדשה'])
+      ]),
+      el('div.table-wrap', {}, [
+        el('table.data', {}, [
+          el('thead', {}, [el('tr', {}, [
+            el('th', { text: 'מחלקה' }), el('th', { text: 'מנהל/ת' }), el('th', { text: 'אנשים' }),
+            el('th', { text: 'סטטוס' }), el('th', { text: '' })
+          ])]),
+          el('tbody', {}, data.departments.length ? data.departments.map((d) =>
+            el('tr', {}, [
+              el('td', {}, [el('b', { text: d.name })]),
+              el('td', {}, [d.managerName
+                ? el('div.flex', {}, [UI.avatar(d.managerName, { small: true }), el('span', { text: d.managerName })])
+                : el('span.mute-sm', { text: 'לא הוגדר' })]),
+              el('td', { text: String(d.peopleCount) }),
+              el('td', {}, [el('span', {
+                class: d.status === 'active' ? 'text-ok' : 'text-danger',
+                text: d.status === 'active' ? '● פעילה' : '○ לא פעילה'
+              })]),
+              el('td', {}, [
+                el('div.flex', {}, [
+                  el('button.btn.btn-sm', { onclick: () => departmentDialog(d) }, ['עריכה']),
+                  el('button.btn.btn-sm.btn-danger', {
+                    onclick: async () => {
+                      if (!await UI.confirm(`למחוק את המחלקה "${d.name}"?`, { danger: true, okText: 'מחיקה' })) return;
+                      try {
+                        await API.deleteDepartment(d.id);
+                        UI.success('המחלקה נמחקה');
+                        reload();
+                      } catch (err) {
+                        // מחלקה שעדיין משויכים לה אנשים אינה נמחקת — השרת מסביר בדיוק כמה ומה לעשות
+                        UI.error(err);
+                      }
+                    }
+                  }, ['מחיקה'])
+                ])
+              ])
+            ])
+          ) : [el('tr', {}, [el('td', { colspan: '5' }, [UI.empty('אין מחלקות מוגדרות', '🏢')])])])
+        ])
+      ])
+    );
+  }
+
+  function departmentDialog(dept = null) {
+    const isEdit = !!dept;
+    const nameInput = el('input', { type: 'text', value: dept?.name ?? '' });
+
+    // כל המשתמשים הפעילים מוצעים כמנהלים — מי מהם באמת מתאים נקבע בשרת,
+    // ולכן רמת הגישה מוצגת לצד השם כדי שהבחירה תהיה מושכלת
+    const managerSelect = UI.select([
+      { value: '', label: 'ללא מנהל' },
+      ...App.state.users.map((u) => ({ value: String(u.id), label: `${u.name} — ${u.roleLabel}` }))
+    ], String(dept?.managerUserId ?? ''));
+
+    const statusSelect = UI.select(
+      [{ value: 'active', label: 'פעילה' }, { value: 'inactive', label: 'לא פעילה' }],
+      dept?.status ?? 'active'
+    );
+
+    const saveBtn = el('button.btn.btn-primary', {}, ['שמירה']);
+    const m = UI.modal({
+      title: isEdit ? `עריכת מחלקה — ${dept.name}` : 'מחלקה חדשה',
+      body: el('div', {}, [
+        UI.field('שם המחלקה', nameInput, isEdit ? 'שינוי השם מתעדכן בכל המשתמשים המשויכים למחלקה' : null),
+        UI.field('מנהל/ת המחלקה', managerSelect, 'מי שייבחר ישויך למחלקה הזו ויקבל עליה אחריות ניהולית'),
+        isEdit ? UI.field('סטטוס', statusSelect) : null
+      ]),
+      footer: [saveBtn, el('div.spacer')]
+    });
+
+    saveBtn.addEventListener('click', async () => {
+      const name = nameInput.value.trim();
+      if (!name) return UI.toast('נדרש שם מחלקה', 'error');
+      // ריק נשלח כ-null במפורש, כדי שאפשר יהיה גם לבטל מנהל קיים
+      const managerUserId = managerSelect.value ? Number(managerSelect.value) : null;
+      saveBtn.disabled = true;
+      try {
+        if (isEdit) await API.updateDepartment(dept.id, { name, managerUserId, status: statusSelect.value });
+        else await API.createDepartment({ name, managerUserId });
+        m.close();
+        UI.success('נשמר');
+        // מינוי מנהל משייך אותו למחלקה — כולל את המשתמש המחובר עצמו,
+        // ולכן נטענים מחדש נתוני הייחוס ולא רק הטבלה
+        await App.reloadReference();
+        reload();
       } catch (err) { saveBtn.disabled = false; UI.error(err); }
     });
   }
@@ -449,16 +590,16 @@ const AdminView = (() => {
 
   // ------------------------------------------------------------- הגדרות
 
+  /** כל הגדרה והסבר קצר מה היא עושה בפועל */
   const SETTING_LABELS = {
-    vendor_reminder_days_before: ['X — ימים לפני היעד לתזכורת ראשונה לספק', 'פרק 7.1'],
-    manager_alert_hours_before: ['Y — שעות לפני היעד להתראה מקדימה למנהל', 'פרק 7.1'],
-    escalation_hours_urgent: ['שעות ללא שינוי סטטוס עד להקפצת משימה דחופה', 'פרק 7.2'],
+    vendor_reminder_days_before: ['X — ימים לפני היעד לתזכורת ראשונה לספק', 'הערך שמנוע הכללים משתמש בו לתזכורת האוטומטית לספק'],
+    manager_alert_hours_before: ['Y — שעות לפני היעד להתראה מקדימה למנהל', 'ההתראה נשלחת למנהל לפני שהמשימה חורגת מהיעד'],
+    escalation_hours_urgent: ['שעות ללא שינוי סטטוס עד להקפצת משימה דחופה', 'משימה דחופה שאינה זזה מוקפצת אוטומטית לתשומת לב המנהל'],
     scheduler_interval_minutes: ['תדירות הרצת מנוע הכללים (דקות)', ''],
-    max_upload_mb: ['גודל מרבי לקובץ (MB)', 'נספח 11'],
-    allowed_extensions: ['סוגי קבצים מותרים (מופרדים בפסיק)', 'נספח 11'],
-    recurring_default_policy: ['מדיניות ברירת מחדל למשימות חוזרות חופפות', 'פרק 7.3'],
-    org_name: ['שם הארגון', ''],
-    department_name: ['שם המחלקה', '']
+    max_upload_mb: ['גודל מרבי לקובץ (MB)', 'נאכף בכל העלאת קובץ — הן במשימות והן בפורטל הספקים'],
+    allowed_extensions: ['סוגי קבצים מותרים (מופרדים בפסיק)', 'קובץ מסוג שאינו ברשימה יידחה בהעלאה'],
+    recurring_default_policy: ['מדיניות ברירת מחדל למשימות חוזרות חופפות', 'קובע מה קורה כשמגיע מועד למופע חדש והמופע הקודם עדיין פתוח'],
+    org_name: ['שם הארגון', 'מופיע בכותרות המערכת ובהזמנות שנשלחות במייל']
   };
 
   /** מצב אחסון הנתונים — התשובה לשאלה "האם הנתונים שלי נשמרים" */
@@ -517,7 +658,7 @@ const AdminView = (() => {
     const s = settingsData.settings;
     const inputs = {};
 
-    const fields = Object.entries(SETTING_LABELS).map(([key, [label, ref]]) => {
+    const fields = Object.entries(SETTING_LABELS).map(([key, [label, hint]]) => {
       let control;
       if (key === 'recurring_default_policy') {
         control = UI.select([
@@ -532,7 +673,7 @@ const AdminView = (() => {
         control = el('input', { type: 'text', value: s[key] ?? '' });
       }
       inputs[key] = control;
-      return UI.field(label, control, ref ? `מקור באפיון: ${ref}` : null);
+      return UI.field(label, control, hint || null);
     });
 
     const saveBtn = el('button.btn.btn-primary', {}, ['שמירת הגדרות']);
@@ -629,6 +770,17 @@ const AdminView = (() => {
 
   // ------------------------------------------------------------- מטריצת הרשאות
 
+  /**
+   * ניסוח הסייגים בתא במטריצה. ערך שאינו true/false מגדיר היקף מוקטן,
+   * ו-'department' — ההיקף החדש — מוגבל למחלקה של המשתמש.
+   */
+  const SCOPE_LABELS = {
+    department: 'המחלקה שלו',
+    own: 'שלו בלבד',
+    assigned: 'שהוקצו לו',
+    self_board: 'הבורד שלו'
+  };
+
   async function matrixTab(body) {
     settingsData = settingsData ?? await API.settings().catch(() => null);
     if (!settingsData) return UI.mount(body, UI.empty('אין הרשאה לצפות במטריצה', '🔒'));
@@ -636,19 +788,33 @@ const AdminView = (() => {
     const cell = (v) => {
       if (v.value === true) return el('td.v-yes', { text: '✓' });
       if (v.value === false) return el('td.v-no', {}, [v.note ? el('span.v-partial', { text: `✗ ${v.note}` }) : el('span', { text: '✗' })]);
-      return el('td.v-partial', { text: v.note ?? 'חלקי' });
+      // הסייג עצמו בשורה אחת, וההערה מהמטריצה מתחתיו כהבהרה
+      return el('td.v-partial', {}, [
+        el('b', { text: `◑ ${SCOPE_LABELS[v.value] ?? 'חלקי'}` }),
+        v.note ? el('div.mute-sm', { text: v.note }) : null
+      ]);
     };
 
     UI.mount(body,
       el('div.alert.alert-info.mb', {}, [
         el('span', { text: '🔐' }),
-        el('div', { text: 'זוהי מטריצת ההרשאות המלאה מפרק 6 באפיון. היא נאכפת בצד השרת ומהווה מקור אמת יחיד — הממשק בונה את התצוגה ממנה.' })
+        el('div', { text: 'זוהי מטריצת ההרשאות המלאה של המערכת. היא נאכפת בצד השרת ומהווה מקור אמת יחיד — הממשק בונה את התצוגה ממנה ואינו קובע הרשאות בעצמו.' })
+      ]),
+      el('div.flex.mb', {}, [
+        el('span.mute-sm', { text: '✓ מותר במלואו' }),
+        el('span.mute-sm', { text: '◑ מותר בהיקף מוגבל' }),
+        el('span.mute-sm', { text: '✗ אסור' }),
+        el('div.spacer'),
+        el('span.mute-sm', { text: 'שש רמות גישה — אפשר לגלול את הטבלה לצדדים' })
       ]),
       el('div.table-wrap', {}, [
-        el('table.data.matrix-table', {}, [
+        // שש עמודות תפקידים אינן נכנסות לרוחב המסך; רוחב מינימלי מפעיל את
+        // הגלילה האופקית של ‎.table-wrap‎ במקום לדחוס את העמודות לבלי קרוא
+        el('table.data.matrix-table', { style: { minWidth: '1040px' } }, [
           el('thead', {}, [el('tr', {}, [
-            el('th', { text: 'פעולה' }),
-            ...settingsData.roles.map((r) => el('th', { style: { textAlign: 'center' }, text: settingsData.roleLabels[r] }))
+            el('th', { style: { minWidth: '250px' }, text: 'פעולה' }),
+            ...settingsData.roles.map((r) =>
+              el('th', { style: { textAlign: 'center', minWidth: '130px' }, text: settingsData.roleLabels[r] }))
           ])]),
           el('tbody', {}, settingsData.matrix.map((row) =>
             el('tr', { style: { cursor: 'default' } }, [el('td.wrap', {}, [el('b', { text: row.label })]), ...row.values.map(cell)])
@@ -687,7 +853,7 @@ const AdminView = (() => {
     UI.mount(body,
       el('div.alert.alert-info.mb', {}, [
         el('span', { text: '📑' }),
-        el('div', { text: 'תבניות משימות ופרויקטים קבועות — שלב ג׳ ברודמאפ. תבנית פרויקט יוצרת אוטומטית את משימות הבסיס שלו.' })
+        el('div', { text: 'תבניות למשימות ולפרויקטים שחוזרים על עצמם. תבנית פרויקט יוצרת אוטומטית את משימות הבסיס שלו.' })
       ]),
       el('div.flex.mb', {}, [el('div.spacer'), el('button.btn.btn-primary', { onclick: dialog }, ['＋ תבנית חדשה'])]),
       el('div.grid.grid-2', {}, data.templates.length ? data.templates.map((t) =>

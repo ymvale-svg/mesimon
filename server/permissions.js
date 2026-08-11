@@ -1,68 +1,94 @@
 'use strict';
 /**
- * מטריצת ההרשאות המפורטת — פרק 6 באפיון.
- * זהו מקור האמת היחיד: גם השרת אוכף לפיה, וגם הממשק מקבל ממנה את התצוגה.
+ * מטריצת ההרשאות — מקור האמת היחיד של המערכת.
+ * השרת אוכף לפיה, והממשק מקבל ממנה את התצוגה. אין הרשאה שנקבעת בקוד הממשק.
  *
- * ערכים אפשריים:
- *   true   — מותר במלואו
- *   false  — אסור
- *   'own'  — מותר חלקית, רק על משימות/פרויקטים שהמשתמש חלק מהם
- *   'assigned' — רק על משימות שהוקצו לו (ספק)
+ * היררכיית התפקידים, מלמעלה למטה:
+ *   אדמין על      — שליטה מלאה, ובעתיד יוכל להקים חברות נוספות
+ *   מנהל מערכת    — ניהול המערכת ברמת הארגון: משתמשים, מחלקות, אוטומציות
+ *   הנהלה         — ניהול עסקי: מטיל משימות ברמה הארגונית, רואה את כל הארגון
+ *   מנהל מחלקה    — ניהול המחלקה שלו: משימות, עובדים וספקים של המחלקה
+ *   עובד פנימי    — המשימות שהוא חלק מהן
+ *   ספק חיצוני    — רק המשימות שהוקצו לו, בבורד הייעודי שלו
+ *
+ * ערכים אפשריים בכל תא:
+ *   true         — מותר במלואו
+ *   false        — אסור
+ *   'department' — מוגבל למחלקה של המשתמש
+ *   'own'        — מוגבל למשימות שהוא חלק מהן
+ *   'assigned'   — רק משימות שהוקצו לו (ספק)
  *   'self_board' — רק בבורד הייעודי שלו (ספק)
  */
 
-const ROLES = ['admin', 'manager', 'employee', 'vendor'];
+const ROLES = ['superadmin', 'admin', 'executive', 'manager', 'employee', 'vendor'];
 
 const ROLE_LABELS = {
+  superadmin: 'אדמין על',
   admin: 'מנהל מערכת',
+  executive: 'הנהלה',
   manager: 'מנהל מחלקה',
   employee: 'עובד פנימי',
   vendor: 'ספק חיצוני'
 };
 
+/** דירוג לצורך "מי רשאי לנהל את מי" — אין הענקת רמה שווה או גבוהה משלך */
+const ROLE_RANK = { superadmin: 5, admin: 4, executive: 3, manager: 2, employee: 1, vendor: 0 };
+
+/** התפקידים שאינם ספק, לשימוש בטפסים */
+const INTERNAL_ROLES = ROLES.filter((r) => r !== 'vendor');
+
 const MATRIX = {
-  view_internal_board:      { admin: true,  manager: true,  employee: 'own',      vendor: false },
-  view_vendor_boards:       { admin: true,  manager: true,  employee: false,      vendor: 'self_board' },
-  create_project:           { admin: true,  manager: true,  employee: false,      vendor: false },
-  create_task:              { admin: true,  manager: true,  employee: true,       vendor: false },
-  edit_delete_task:         { admin: true,  manager: true,  employee: 'own',      vendor: false },
-  change_task_status:       { admin: true,  manager: true,  employee: 'own',      vendor: 'assigned' },
-  assign_task_to_vendor:    { admin: true,  manager: true,  employee: false,      vendor: false },
-  approve_vendor_output:    { admin: true,  manager: true,  employee: false,      vendor: false },
-  // מנהל מחלקה רשאי לנהל עובדים פנימיים במחלקה שלו בלבד (הרחבה מעבר לאפיון המקורי)
-  manage_users:             { admin: true,  manager: 'own', employee: false,      vendor: false },
-  manage_automations:       { admin: true,  manager: false, employee: false,      vendor: false },
-  view_reports:             { admin: true,  manager: true,  employee: false,      vendor: false },
-  export_data:              { admin: true,  manager: true,  employee: false,      vendor: false },
-  vendor_upload_deliverable:{ admin: false, manager: false, employee: false,      vendor: true },
-  view_internal_comments:   { admin: true,  manager: true,  employee: true,       vendor: false }
+  view_internal_board:      { superadmin: true, admin: true,  executive: true,  manager: 'department', employee: 'own', vendor: false },
+  view_vendor_boards:       { superadmin: true, admin: true,  executive: true,  manager: true,        employee: false, vendor: 'self_board' },
+  create_project:           { superadmin: true, admin: true,  executive: true,  manager: true,        employee: false, vendor: false },
+  create_task:              { superadmin: true, admin: true,  executive: true,  manager: true,        employee: true,  vendor: false },
+  assign_org_wide_task:     { superadmin: true, admin: true,  executive: true,  manager: false,       employee: false, vendor: false },
+  edit_delete_task:         { superadmin: true, admin: true,  executive: true,  manager: 'department', employee: 'own', vendor: false },
+  change_task_status:       { superadmin: true, admin: true,  executive: true,  manager: 'department', employee: 'own', vendor: 'assigned' },
+  assign_task_to_vendor:    { superadmin: true, admin: true,  executive: true,  manager: true,        employee: false, vendor: false },
+  approve_vendor_output:    { superadmin: true, admin: true,  executive: true,  manager: true,        employee: false, vendor: false },
+  manage_users:             { superadmin: true, admin: true,  executive: true,  manager: 'department', employee: false, vendor: false },
+  manage_departments:       { superadmin: true, admin: true,  executive: true,  manager: false,       employee: false, vendor: false },
+  manage_organizations:     { superadmin: true, admin: false, executive: false, manager: false,       employee: false, vendor: false },
+  manage_automations:       { superadmin: true, admin: true,  executive: false, manager: false,       employee: false, vendor: false },
+  view_reports:             { superadmin: true, admin: true,  executive: true,  manager: 'department', employee: false, vendor: false },
+  export_data:              { superadmin: true, admin: true,  executive: true,  manager: true,        employee: false, vendor: false },
+  vendor_upload_deliverable:{ superadmin: false, admin: false, executive: false, manager: false,      employee: false, vendor: true },
+  view_internal_comments:   { superadmin: true, admin: true,  executive: true,  manager: true,        employee: true,  vendor: false }
 };
 
-// תיאורי השורות, לתצוגה במסך ההרשאות
 const MATRIX_LABELS = {
-  view_internal_board:      'צפייה בכל משימות המחלקה (בורד פנימי)',
+  view_internal_board:      'צפייה במשימות בבורד הפנימי',
   view_vendor_boards:       'צפייה בבורדי הספקים (תצוגת-על)',
   create_project:           'יצירת פרויקט',
   create_task:              'יצירת משימה',
+  assign_org_wide_task:     'הטלת משימה ברמה הארגונית',
   edit_delete_task:         'עריכה / מחיקה של משימה',
   change_task_status:       'שינוי סטטוס משימה',
   assign_task_to_vendor:    'הקצאת משימה לספק',
   approve_vendor_output:    'אישור תוצרי ספק (סגירת משימה סופית)',
   manage_users:             'ניהול משתמשים והרשאות',
+  manage_departments:       'ניהול מחלקות',
+  manage_organizations:     'ניהול חברות בארגון',
   manage_automations:       'הגדרת אוטומציות וכללים',
-  view_reports:             'צפייה בדוחות מחלקתיים',
+  view_reports:             'צפייה בדוחות',
   export_data:              'ייצוא נתונים',
   vendor_upload_deliverable:'העלאת תוצרים / הערות (בפורטל הספק)',
   view_internal_comments:   'צפייה בהערות ובשדות פנימיים'
 };
 
 const MATRIX_NOTES = {
-  'manage_users.manager': 'רק עובדים פנימיים במחלקה שלו',
+  'view_internal_board.manager': 'המחלקה שלו, ומשימות ארגוניות של אנשיה',
   'view_internal_board.employee': 'רק משימות שהוא חלק מהן',
   'view_vendor_boards.vendor': 'רואה רק את הבורד שלו',
+  'edit_delete_task.manager': 'משימות המחלקה שלו',
+  'edit_delete_task.employee': 'רק משימות בבעלותו',
+  'change_task_status.manager': 'משימות המחלקה שלו',
   'change_task_status.employee': 'למשימות שלו',
   'change_task_status.vendor': 'למשימות שהוקצו לו בלבד',
-  'edit_delete_task.employee': 'רק משימות בבעלותו'
+  'manage_users.manager': 'עובדים פנימיים במחלקה שלו',
+  'view_reports.manager': 'חתך המחלקה שלו',
+  'manage_organizations.superadmin': 'הקמת חברות — יופעל בהמשך'
 };
 
 /** רמת ההרשאה הגולמית של השחקן לפעולה */
@@ -73,15 +99,12 @@ function level(actor, action) {
   return row[role] ?? false;
 }
 
-/** האם מותר בכלל (גם אם חלקית) */
-function may(actor, action) {
-  return level(actor, action) !== false;
-}
+const may = (actor, action) => level(actor, action) !== false;
+const can = (actor, action) => level(actor, action) === true;
 
-/** האם מותר במלואו, ללא סייגים */
-function can(actor, action) {
-  return level(actor, action) === true;
-}
+/** האם התפקיד רואה את כל הארגון ולא רק מחלקה אחת */
+const isOrgWide = (actor) =>
+  actor.type === 'user' && ['superadmin', 'admin', 'executive'].includes(actor.role);
 
 /** האם השחקן משויך למשימה (אחראי / יוצר / מנהל הפרויקט) */
 function isTaskParticipant(actor, task, project) {
@@ -95,20 +118,46 @@ function isTaskParticipant(actor, task, project) {
 }
 
 /**
- * בדיקת הרשאה על משימה ספציפית.
- * מחזירה true/false לאחר יישום הסייגים ('own' / 'assigned').
+ * האם המשימה בתחום המחלקה של השחקן.
+ * משימה ארגונית נחשבת בתחום המחלקה אם היא הוקצתה למי מאנשי המחלקה.
  */
-function canOnTask(actor, action, task, project = null) {
+function isInActorDepartment(actor, task, assigneeDepartmentId = undefined) {
+  if (!actor.departmentId) return false;
+  if (task.department_id && task.department_id === actor.departmentId) return true;
+  if (task.level === 'organization' && assigneeDepartmentId === actor.departmentId) return true;
+  return false;
+}
+
+/**
+ * בדיקת הרשאה על משימה ספציפית, לאחר יישום הסייגים.
+ * assigneeDepartmentId נדרש כדי להכריע על משימות ארגוניות.
+ */
+function canOnTask(actor, action, task, project = null, assigneeDepartmentId = undefined) {
   const lvl = level(actor, action);
   if (lvl === true) return true;
   if (lvl === false) return false;
+  if (lvl === 'department') {
+    return isInActorDepartment(actor, task, assigneeDepartmentId) || isTaskParticipant(actor, task, project);
+  }
   if (lvl === 'own' || lvl === 'assigned' || lvl === 'self_board') {
     return isTaskParticipant(actor, task, project);
   }
   return false;
 }
 
-/** מבנה ההרשאות שנשלח לממשק */
+/**
+ * האם actor רשאי לנהל חשבון של תפקיד מסוים.
+ * אין הענקה או עריכה של תפקיד בדירוג שווה או גבוה משל המנהל עצמו.
+ */
+function mayManageRole(actor, targetRole) {
+  if (!may(actor, 'manage_users')) return false;
+  if (actor.role === 'superadmin') return true;
+  return (ROLE_RANK[targetRole] ?? 99) < ROLE_RANK[actor.role];
+}
+
+/** התפקידים שהשחקן רשאי להעניק בטופס משתמש */
+const assignableRoles = (actor) => INTERNAL_ROLES.filter((role) => mayManageRole(actor, role));
+
 function permissionsFor(actor) {
   const out = {};
   for (const action of Object.keys(MATRIX)) out[action] = level(actor, action);
@@ -128,6 +177,7 @@ function matrixForDisplay() {
 }
 
 module.exports = {
-  ROLES, ROLE_LABELS, MATRIX, MATRIX_LABELS, MATRIX_NOTES,
-  level, may, can, canOnTask, isTaskParticipant, permissionsFor, matrixForDisplay
+  ROLES, INTERNAL_ROLES, ROLE_LABELS, ROLE_RANK, MATRIX, MATRIX_LABELS, MATRIX_NOTES,
+  level, may, can, canOnTask, isTaskParticipant, isInActorDepartment, isOrgWide,
+  mayManageRole, assignableRoles, permissionsFor, matrixForDisplay
 };
