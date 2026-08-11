@@ -147,7 +147,7 @@ async function send(message) {
       'MIME-Version: 1.0',
       `Content-Type: multipart/alternative; boundary="${boundary}"`,
       ''
-    ].join('\r\n');
+    ].filter((line) => line !== null).join('\r\n');
 
     const body = [
       `--${boundary}`,

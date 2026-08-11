@@ -173,7 +173,15 @@ async function createAndSend({ targetType, targetId, email, recipientName, invit
       link,
       isVendor: targetType === 'vendor'
     });
-    await Mailer.send({ to: email, toName: recipientName, fromName: `MESIMON · ${orgName}`, ...message });
+    await Mailer.send({
+      to: email,
+      toName: recipientName,
+      fromName: `MESIMON · ${orgName}`,
+      // תשובה תגיע למי שהזמין, ולא לכתובת noreply שאין מאחוריה תיבה
+      replyTo: inviter?.email ?? null,
+      replyToName: inviter?.name ?? null,
+      ...message
+    });
     result.emailSent = true;
   } catch (err) {
     result.emailError = err.message;

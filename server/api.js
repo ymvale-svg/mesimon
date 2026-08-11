@@ -1648,7 +1648,7 @@ router.post('/api/admin/users', async (req, res, ctx) => {
     targetId: newUserId,
     email,
     recipientName: name,
-    inviter: { id: actor.id, name: actor.name },
+    inviter: { id: actor.id, name: actor.name, email: actor.email },
     baseUrl: Google.publicBase(req)
   });
 
@@ -1674,7 +1674,7 @@ router.post('/api/admin/invite', async (req, res, ctx) => {
     targetId: account.id,
     email: account.email,
     recipientName: account.name,
-    inviter: { id: actor.id, name: actor.name },
+    inviter: { id: actor.id, name: actor.name, email: actor.email },
     baseUrl: Google.publicBase(req)
   });
 
@@ -1750,7 +1750,7 @@ router.post('/api/vendors', async (req, res, ctx) => {
     targetId: vendorId,
     email,
     recipientName: b.contactName || name,
-    inviter: { id: actor.id, name: actor.name },
+    inviter: { id: actor.id, name: actor.name, email: actor.email },
     baseUrl: Google.publicBase(req)
   });
 
