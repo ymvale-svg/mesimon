@@ -59,7 +59,70 @@
   </li>
 </ol>
 
-<h2>שלב 3 — מעתיקים את הרשומות לעורך ה-Zone</h2>
+<h2>שלב 3 — תרגום הרשומות לעורך ה-Zone</h2>
+
+<div class="stop">
+  <b>ההבדל שמפיל את רוב האנשים:</b> Resend מציג שמות <b>מקוצרים</b> (<code>send</code>,
+  <code>_dmarc</code>), והעורך של הדומיין עובד בשמות <b>מלאים עם נקודה בסוף</b>
+  (<code>send.mesimon.co.il.</code>). חייבים להשלים את השם — אחרת האימות לא יעבור.
+</div>
+
+<p>אלה ארבע הרשומות, מתורגמות לעמודות של העורך:</p>
+
+<table>
+  <tr>
+    <th>מה זה</th><th>סוג</th><th>שם הדומיין</th><th>מפרט</th>
+  </tr>
+  <tr>
+    <td>DKIM<br><small>חתימה</small></td>
+    <td>TXT</td>
+    <td><code>resend._domainkey.mesimon.co.il.</code></td>
+    <td>ה-Content שמתחיל ב-<code>p=MIGfMA0...</code> — <b>במלואו</b></td>
+  </tr>
+  <tr>
+    <td>SPF<br><small>אישור שליחה</small></td>
+    <td>MX</td>
+    <td><code>send.mesimon.co.il.</code></td>
+    <td><code>feedback-smtp...amazonses.com</code> · עדיפות <b>10</b></td>
+  </tr>
+  <tr>
+    <td>SPF<br><small>אישור שליחה</small></td>
+    <td>TXT</td>
+    <td><code>send.mesimon.co.il.</code></td>
+    <td><code>v=spf1 include:...amazonses.com ~all</code></td>
+  </tr>
+  <tr>
+    <td>DMARC<br><small>מומלץ</small></td>
+    <td>TXT</td>
+    <td><code>_dmarc.mesimon.co.il.</code></td>
+    <td><code>v=DMARC1; p=none;</code></td>
+  </tr>
+</table>
+
+<p>בעמודת <b>TTL</b> — <code>3600</code> בכל הרשומות. (Resend כותב "Auto", לעורך שלך אין
+אפשרות כזו ו-3600 הוא בדיוק מה שהוא מתכוון אליו.)</p>
+
+<div class="warn">
+  <b>הערכים בטבלה של Resend מקוצרים עם <code>[…]</code> — אסור להקליד את מה שרואים.</b>
+  בכל שורה יש כפתור העתקה (מופיע בריחוף על השורה). לוחצים עליו ומדביקים.
+  מפתח ה-DKIM הוא מחרוזת של מאות תווים; העתקה חלקית שלו נכשלת בשקט.
+</div>
+
+<div class="ok">
+  <b>ה-MX החדש לא יפגע בדואר של הדומיין.</b> הוא יושב על תת-הדומיין
+  <code>send.mesimon.co.il</code> ולא על הדומיין הראשי, ולכן אינו מתנגש עם רשומת ה-MX
+  הקיימת. מאותה סיבה גם ה-SPF כאן אינו מתנגש עם SPF ראשי — הוא על תת-דומיין.
+</div>
+
+<div class="warn">
+  <b>אחרי השמירה — תסתכל על השורות שנוספו.</b> יש עורכים שמוסיפים את שם הדומיין לבד.
+  אם מופיע <code>send.mesimon.co.il.mesimon.co.il.</code> — זה מה שקרה, ואז צריך להזין
+  את השם הקצר (<code>send</code>) במקום המלא.
+</div>
+
+<p><b>את המתג "Enable Receiving" משאירים כבוי.</b> הוא נועד לקבלת דואר, והמערכת רק שולחת.</p>
+
+<h2>שלב 3ב — שומרים ומאמתים</h2>
 <p>פותחים בחלון נפרד את פאנל הדומיין ← <b>עריכת Zone</b>, ולכל רשומה שהופיעה ב-Resend:</p>
 <ol>
   <li>לוחצים <b>"הוסף רשומה ריקה"</b> בתחתית העמוד.</li>
