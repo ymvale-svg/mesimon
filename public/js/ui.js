@@ -145,38 +145,54 @@ const UI = (() => {
     return { close, box, backdrop };
   }
 
+  /**
+   * ‎m.close()‎ מפעיל את ‎onClose‎, ולכן חייבים להכריע את התוצאה לפני הסגירה:
+   * אחרת הביטול שב-onClose היה קודם לאישור, והבטחה מכבדת רק את ההכרעה הראשונה.
+   * הדגל שומר על זה גם אם ייווסף בעתיד מסלול סגירה נוסף.
+   */
+  function settler(resolve) {
+    let done = false;
+    return (value) => {
+      if (done) return;
+      done = true;
+      resolve(value);
+    };
+  }
+
   function confirm(message, { title = 'אישור פעולה', danger = false, okText = 'אישור' } = {}) {
     return new Promise((resolve) => {
+      const finish = settler(resolve);
       const m = modal({
         title,
         body: el('p', { text: message, style: { margin: 0 } }),
         footer: [
           el(`button.btn${danger ? '.btn-danger' : '.btn-primary'}`, {
-            onclick: () => { m.close(); resolve(true); }
+            onclick: () => { finish(true); m.close(); }
           }, [okText]),
-          el('button.btn', { onclick: () => { m.close(); resolve(false); } }, ['ביטול'])
+          el('button.btn', { onclick: () => { finish(false); m.close(); } }, ['ביטול'])
         ],
-        onClose: () => resolve(false)
+        onClose: () => finish(false)
       });
     });
   }
 
   function prompt(label, { title = 'הזנת ערך', value = '', multiline = false, okText = 'אישור' } = {}) {
     return new Promise((resolve) => {
+      const finish = settler(resolve);
       const input = multiline
         ? el('textarea', { value })
         : el('input', { type: 'text', value });
       if (!multiline) input.value = value;
-      const submit = () => { m.close(); resolve(input.value.trim() || null); };
+      const submit = () => { finish(input.value.trim() || null); m.close(); };
       input.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !multiline) submit(); });
       const m = modal({
         title,
         body: el('div.field', {}, [el('label', { text: label }), input]),
         footer: [
           el('button.btn.btn-primary', { onclick: submit }, [okText]),
-          el('button.btn', { onclick: () => { m.close(); resolve(null); } }, ['ביטול'])
+          el('button.btn', { onclick: () => { finish(null); m.close(); } }, ['ביטול'])
         ],
-        onClose: () => resolve(null)
+        onClose: () => finish(null)
       });
     });
   }
