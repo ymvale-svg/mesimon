@@ -408,7 +408,7 @@ const DEFAULT_SETTINGS = {
   max_upload_mb: 25,
   allowed_extensions: ['pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'png', 'jpg', 'jpeg', 'gif', 'svg', 'zip', 'ai', 'psd', 'mp4', 'txt', 'csv'],
   recurring_default_policy: 'skip_if_open', // לא נוצר מופע כפול עד לסגירת הקודם
-  org_name: 'אשל הירדן',
+  org_name: 'MESIMON',
   // כתובת המערכת כפי שמשתמשים מגיעים אליה — קישורי ההזמנות נבנים ממנה
   public_url: '',
   org_logo_note: ''

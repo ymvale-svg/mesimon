@@ -429,7 +429,7 @@ router.get('/api/bootstrap', async (req, res, ctx) => {
     priorities: PRIORITIES,
     roleLabels: P.ROLE_LABELS,
     settings: {
-      orgName: D.getSetting('org_name', 'אשל הירדן'),
+      orgName: D.getSetting('org_name', 'MESIMON'),
       maxUploadMb: D.getSetting('max_upload_mb', 25),
       allowedExtensions: D.getSetting('allowed_extensions', [])
     },

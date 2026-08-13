@@ -1,7 +1,6 @@
 'use strict';
 /**
  * משימון — נקודת הכניסה לשרת.
- * אשל הירדן / מחלקת שיווק ומכירות.
  */
 const http = require('node:http');
 const path = require('node:path');
@@ -93,7 +92,7 @@ server.listen(PORT, HOST, () => {
   console.log('');
   console.log('  ╭──────────────────────────────────────────────╮');
   console.log('  │   משימון — מערכת ניהול משימות ופרויקטים      │');
-  console.log('  │   אשל הירדן · מחלקת שיווק ומכירות            │');
+  console.log('  │   משימות שעובדות בשבילך                      │');
   console.log('  ╰──────────────────────────────────────────────╯');
   console.log('');
   console.log(`  מקומי:   http://localhost:${PORT}`);

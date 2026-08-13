@@ -34,7 +34,7 @@ const VendorPortalView = (() => {
       el('div', { text: '🏢', style: { fontSize: '30px' } }),
       el('div', { style: { flex: '1' } }, [
         el('h2', { text: actor.name }),
-        el('p', { text: 'פורטל הספקים — כאן מרוכזות המשימות שהוקצו לך על ידי מחלקת שיווק ומכירות של אשל הירדן.' })
+        el('p', { text: 'פורטל הספקים — כאן מרוכזות המשימות שהוקצו לך.' })
       ]),
       actor.readOnly ? el('span.tag', { style: { background: '#fff', color: 'var(--accent)' } }, ['צפייה בלבד']) : null
     ]);
