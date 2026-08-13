@@ -1813,7 +1813,18 @@ router.put('/api/admin/settings', async (req, res, ctx) => {
   requireFullPerm(actor, 'manage_automations');
   const b = await readJson(req);
   for (const [key, value] of Object.entries(b.settings ?? {})) {
-    if (key in D.DEFAULT_SETTINGS) D.setSetting(key, value);
+    if (!(key in D.DEFAULT_SETTINGS)) continue;
+    // כתובת המערכת נכנסת לקישורי ההזמנות — סלאש עודף או כתובת בלי סכימה
+    // היו מייצרים קישור שבור אצל הנמען
+    if (key === 'public_url') {
+      const clean = String(value ?? '').trim().replace(/\/+$/, '');
+      if (clean && !/^https?:\/\/[^\s/]+/.test(clean)) {
+        throw badRequest('כתובת המערכת חייבת להתחיל ב-https:// או ב-http://');
+      }
+      D.setSetting(key, clean);
+      continue;
+    }
+    D.setSetting(key, value);
   }
   if (b.settings?.scheduler_interval_minutes) Rules.start();
   sendJson(res, 200, { settings: D.allSettings() });

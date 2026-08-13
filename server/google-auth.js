@@ -22,9 +22,18 @@ const CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET ?? '';
 
 const isEnabled = () => Boolean(CLIENT_ID && CLIENT_SECRET);
 
-/** כתובת הבסיס הציבורית של המערכת, לבניית כתובת החזרה */
+/**
+ * כתובת הבסיס הציבורית של המערכת — לקישורי ההזמנות ולכתובת החזרה מ-Google.
+ *
+ * סדר העדיפות: ההגדרה במסך הניהול, אחריה משתנה הסביבה, ולבסוף הכתובת שממנה
+ * הגיעה הבקשה. ההגדרה ראשונה כדי שמנהל יוכל לשנות את הדומיין מתוך המערכת
+ * בלי לגעת בהגדרות השרת — אחרת קישור בהזמנה ממשיך להצביע לכתובת הזמנית.
+ */
 function publicBase(req) {
+  const configured = D.getSetting('public_url', '');
+  if (configured) return String(configured).replace(/\/+$/, '');
   if (process.env.PUBLIC_URL) return String(process.env.PUBLIC_URL).replace(/\/+$/, '');
+
   const proto = String(req.headers['x-forwarded-proto'] ?? '').split(',')[0].trim()
     || (req.socket?.encrypted ? 'https' : 'http');
   const host = String(req.headers['x-forwarded-host'] ?? req.headers.host ?? 'localhost');

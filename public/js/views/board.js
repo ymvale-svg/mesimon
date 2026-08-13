@@ -461,13 +461,23 @@ const BoardView = (() => {
     const totalDays = Math.max(1, Math.ceil((end - start) / 86400000));
     const pct = (date) => ((new Date(date) - start) / 86400000 / totalDays) * 100;
 
-    const ticks = [];
+    // התוויות ממוקמות באחוזים בדיוק כמו הפסים. קודם הן היו פריטי flex בחלוקה
+    // שווה, כלומר מערכת קואורדינטות שנייה שלא התלכדה עם התאריכים — והסטייה
+    // הצטברה לרוחב הציר.
+    const todayOffset = Math.round((today - start) / 86400000);
     const step = Math.max(1, Math.round(totalDays / 14));
-    for (let i = 0; i < totalDays; i += step) {
+    const ticks = [];
+
+    // סדרת התוויות עוגנת ביום הנוכחי, כך שהיום עצמו תמיד מקבל תווית.
+    // בלי העיגון הזה, צעד של יומיים גרם ליום הנוכחי ליפול בין שתי תוויות.
+    for (let i = todayOffset % step; i < totalDays; i += step) {
       const d = new Date(start); d.setDate(d.getDate() + i);
-      ticks.push(el(`div.tl-day${d.getTime() === today.getTime() ? '.today' : ''}`, {
-        text: `${d.getDate()}.${d.getMonth() + 1}`
-      }));
+      const isToday = i === todayOffset;
+      ticks.push(el(`div.tl-day${isToday ? '.today' : ''}`, {
+        style: { insetInlineStart: `${(i / totalDays) * 100}%` }
+      }, [
+        el('span.tl-day-label', { text: isToday ? `היום ${d.getDate()}.${d.getMonth() + 1}` : `${d.getDate()}.${d.getMonth() + 1}` })
+      ]));
     }
 
     const rows = withDates

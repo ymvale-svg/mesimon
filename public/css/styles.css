@@ -645,15 +645,21 @@ th.cell-bar { background: var(--border) !important; }
 .tl-grid { position: relative; min-width: 760px; }
 .tl-head { display: flex; border-bottom: 1px solid var(--border); padding-bottom: 6px; margin-bottom: 10px; }
 .tl-head .tl-label { width: 230px; flex: none; font-size: 12px; font-weight: 700; color: var(--text-soft); }
-.tl-head .tl-days { flex: 1; display: flex; }
-.tl-head .tl-day { flex: 1; text-align: center; font-size: 10.5px; color: var(--text-mute); border-inline-start: 1px solid var(--border); }
-.tl-head .tl-day.today { color: var(--danger); font-weight: 800; }
+/* מיקום מוחלט באחוזים — אותה מערכת קואורדינטות של הפסים, אחרת הציר משקר */
+.tl-head .tl-days { flex: 1; position: relative; height: 15px; }
+.tl-head .tl-day { position: absolute; top: 0; bottom: -6px; border-inline-start: 1px solid var(--border); }
+.tl-head .tl-day-label {
+  position: absolute; inset-inline-start: 4px; top: -1px;
+  font-size: 10.5px; color: var(--text-mute); white-space: nowrap;
+}
+.tl-head .tl-day.today { border-inline-start: 2px solid var(--danger); }
+.tl-head .tl-day.today .tl-day-label { color: var(--danger); font-weight: 800; }
 .tl-row { display: flex; align-items: center; margin-bottom: 7px; }
 .tl-row .tl-label { width: 230px; flex: none; font-size: 12.5px; padding-inline-end: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
 .tl-row .tl-label:hover { color: var(--brand); }
 .tl-track { flex: 1; position: relative; height: 24px; background: var(--surface-2); border-radius: 6px; }
 .tl-bar { position: absolute; top: 4px; height: 16px; border-radius: 5px; cursor: pointer; display: flex; align-items: center; padding: 0 6px; font-size: 10.5px; color: #fff; font-weight: 700; overflow: hidden; }
-.tl-today-line { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--danger); opacity: .5; }
+.tl-today-line { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--danger); opacity: .45; }
 
 /* ---------------------------------------------------------------- מודל */
 
