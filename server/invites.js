@@ -87,8 +87,15 @@ const escape = (value) =>
  * גוף ההזמנה. הלוגו של המערכת נבנה מ-HTML ולא מתמונה, כי לקוחות דואר
  * חוסמים תמונות כברירת מחדל — וכותרת חסומה היא כותרת שלא נראית.
  */
-function buildEmail({ recipientName, inviterName, orgName, link, isVendor }) {
+function buildEmail({ recipientName, inviterName, orgName, link, isVendor, replyTo }) {
   const title = `הוזמנת ל־MESIMON — ${orgName}`;
+
+  // כתובת השולח היא noreply שאין מאחוריה תיבת דואר. אם הוגדרה כתובת לתשובה,
+  // תשובה של הנמען מגיעה לאדם ולכן מזמינים אותו להשיב; ואם לא — חייבים לומר
+  // לו שאין להשיב, אחרת הוא יכתוב לתהום ויניח שקיבלנו.
+  const replyNote = replyTo
+    ? `בשאלות אפשר להשיב להודעה זו — התשובה תגיע ל${inviterName}.`
+    : 'זו הודעה אוטומטית מכתובת שאינה מנוטרת. אין להשיב להודעה זו.';
 
   const intro = isVendor
     ? `${escape(inviterName)} הזמין/ה אותך לפורטל הספקים של ${escape(orgName)}. דרכו תקבל/י את המשימות שהוקצו לך, תוכל/י להעלות תוצרים ולעקוב אחר הסטטוס.`
@@ -122,8 +129,10 @@ function buildEmail({ recipientName, inviterName, orgName, link, isVendor }) {
           </div>
         </td></tr>
 
-        <tr><td style="background:#f8fafc;padding:16px 30px;text-align:center;color:${BRAND.mute};font-size:12px;border-top:1px solid ${BRAND.border};">
-          ${escape(orgName)} · נשלח אוטומטית מ־MESIMON. אם ההזמנה אינה מיועדת לך, אפשר להתעלם מהודעה זו.
+        <tr><td style="background:#f8fafc;padding:16px 30px;text-align:center;color:${BRAND.mute};font-size:12px;border-top:1px solid ${BRAND.border};line-height:1.6;">
+          ${escape(orgName)} · נשלח אוטומטית מ־MESIMON.<br>
+          ${escape(replyNote)}<br>
+          אם ההזמנה אינה מיועדת לך, אפשר להתעלם מהודעה זו.
         </td></tr>
 
       </table>
@@ -143,7 +152,9 @@ function buildEmail({ recipientName, inviterName, orgName, link, isVendor }) {
     'לכניסה ולקביעת סיסמה:',
     link,
     '',
-    `הקישור אישי ותקף ל־${TTL_DAYS} ימים.`
+    `הקישור אישי ותקף ל־${TTL_DAYS} ימים.`,
+    '',
+    replyNote
   ].join('\n');
 
   return { subject: title, html, text };
@@ -171,7 +182,9 @@ async function createAndSend({ targetType, targetId, email, recipientName, invit
       inviterName: inviter?.name ?? 'מנהל המערכת',
       orgName,
       link,
-      isVendor: targetType === 'vendor'
+      isVendor: targetType === 'vendor',
+      // אותה כתובת שנכנסת לכותרת Reply-To, כדי שהטקסט לא יסתור את ההתנהגות
+      replyTo: inviter?.email ?? process.env.SMTP_REPLY_TO ?? null
     });
     await Mailer.send({
       to: email,
