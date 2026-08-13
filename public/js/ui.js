@@ -63,18 +63,43 @@ const UI = (() => {
     return formatDate(iso);
   }
 
-  /** ניסוח קריא של מרחק לתאריך יעד */
+  /**
+   * ניסוח קריא של מרחק לתאריך יעד.
+   *
+   * ההפרש נמדד בימי לוח ולא בזמן שחלף. חישוב לפי זמן שחלף הזיז את כל
+   * התוויות ביום שלם: משימה שיעדה היום נמצאת שבר-יום מעכשיו, ועיגול השבר
+   * למעלה הציג אותה כ"מחר" — ומכאן נראה כאילו המערכת מקדימה את התאריך ביום.
+   * Math.round ולא floor, כדי שמעבר שעון קיץ (יום של 23 או 25 שעות) לא יסיט.
+   */
   function dueLabel(iso) {
     if (!iso) return { text: 'ללא תאריך יעד', tone: 'mute' };
-    const days = Math.ceil((new Date(iso).setHours(23, 59, 59) - Date.now()) / 86400000);
-    if (days < 0) return { text: `באיחור ${Math.abs(days)} ימים`, tone: 'danger' };
+
+    const due = new Date(iso);
+    due.setHours(0, 0, 0, 0);
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const days = Math.round((due - today) / 86400000);
+
+    if (days < 0) {
+      const late = Math.abs(days);
+      return { text: late === 1 ? 'באיחור יום' : `באיחור ${late} ימים`, tone: 'danger' };
+    }
     if (days === 0) return { text: 'היעד היום', tone: 'warn' };
     if (days === 1) return { text: 'היעד מחר', tone: 'warn' };
     if (days <= 7) return { text: `בעוד ${days} ימים`, tone: 'normal' };
     return { text: formatDate(iso), tone: 'mute' };
   }
 
-  const toInputDate = (iso) => (iso ? new Date(iso).toISOString().slice(0, 10) : '');
+  /**
+   * תאריך לשדה קלט. מקזזים את היסט אזור הזמן לפני החיתוך, כי toISOString
+   * מחזיר UTC: תאריך יעד בשעה מאוחרת היה נחתך ליום הקודם ושדה העריכה היה
+   * מציג יום אחד אחורה ממה שמוצג בכל שאר המערכת.
+   */
+  const toInputDate = (iso) => {
+    if (!iso) return '';
+    const d = new Date(iso);
+    return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+  };
   const fromInputDate = (value) => {
     if (!value) return null;
     const d = new Date(`${value}T17:00:00`);
