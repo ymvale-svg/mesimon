@@ -604,6 +604,8 @@ function migrate() {
   relaxUserRoleConstraint();
 
   addColumn('users', 'department_id', 'INTEGER REFERENCES departments(id) ON DELETE SET NULL');
+  // קובץ שצורף לתגובה בשיחה — כדי שיוצג בתוך ההודעה שבה נשלח, ולא רק ברשימה
+  addColumn('attachments', 'comment_id', 'INTEGER REFERENCES comments(id) ON DELETE SET NULL');
   // רמת המשימה: מחלקתית (ברירת מחדל) או ארגונית — משימה שהנהלה מטילה על כל הארגון
   addColumn('tasks', 'level', "TEXT NOT NULL DEFAULT 'department'");
   addColumn('tasks', 'department_id', 'INTEGER REFERENCES departments(id) ON DELETE SET NULL');

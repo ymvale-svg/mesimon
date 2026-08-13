@@ -201,7 +201,11 @@ function shapeTask(task, actor, { withDetails = false } = {}) {
         ? D.get('SELECT name FROM vendors WHERE id = ?', c.author_id)?.name ?? 'ספק'
         : c.author_type === 'user'
           ? D.get('SELECT full_name FROM users WHERE id = ?', c.author_id)?.full_name ?? 'משתמש'
-          : 'המערכת'
+          : 'המערכת',
+    // הקבצים שצורפו להודעה הזו — מוצגים בתוכה ולא רק ברשימת הקבצים הכללית
+    attachments: D.all(
+      'SELECT id, filename, size, mime, version FROM attachments WHERE comment_id = ? ORDER BY id', c.id
+    )
   }));
 
   const attachments = D.all('SELECT * FROM attachments WHERE task_id = ? ORDER BY filename, version DESC', task.id).map((a) => ({
@@ -1033,9 +1037,11 @@ router.post('/api/tasks/:id/comments', async (req, res, ctx) => {
   const task = getTaskOr404(ctx.params.id);
   assertVisible(actor, task);
   if (isVendor(actor) && actor.readOnly) throw forbidden('לחשבון שלך הוגדרה הרשאת צפייה בלבד');
-  const { body, internal } = await readJson(req);
+  const { body, internal, files } = await readJson(req);
   const text = String(body ?? '').trim();
-  if (!text) throw badRequest('נדרש תוכן לתגובה');
+  const attached = Array.isArray(files) ? files.filter((f) => f && f.filename && f.data) : [];
+  // הודעה עם קובץ בלבד היא שימוש לגיטימי — לא מחייבים טקסט כשיש מה לצרף
+  if (!text && !attached.length) throw badRequest('נדרש תוכן לתגובה או קובץ מצורף');
 
   // הערה פנימית זמינה רק לצוות הפנימי
   const isInternal = !isVendor(actor) && !!internal;
@@ -1044,6 +1050,13 @@ router.post('/api/tasks/:id/comments', async (req, res, ctx) => {
     task.id, isVendor(actor) ? 'vendor' : 'user', actor.id, text, isInternal ? 1 : 0, D.nowIso()
   );
   const commentId = Number(result.lastInsertRowid);
+
+  // הקבצים נשמרים אחרי התגובה כדי שיהיה להם מזהה להיקשר אליו.
+  // כישלון באחד מהם לא משאיר תגובה בלי הסבר — השגיאה עולה למשתמש.
+  const savedFiles = attached.map((f) => saveAttachment(task, actor, f, commentId));
+  for (const f of savedFiles) {
+    D.audit(task.id, actorRef(actor), 'attachment', `צורף קובץ "${f.name}" לתגובה (גרסה ${f.version})`);
+  }
 
   for (const uid of extractMentions(text)) {
     D.run('INSERT OR IGNORE INTO comment_mentions (comment_id, user_id) VALUES (?,?)', commentId, uid);
@@ -1071,13 +1084,12 @@ router.post('/api/tasks/:id/comments', async (req, res, ctx) => {
 
 // --- קבצים מצורפים ---
 
-router.post('/api/tasks/:id/attachments', async (req, res, ctx) => {
-  const actor = ctx.requireActor();
-  const task = getTaskOr404(ctx.params.id);
-  assertVisible(actor, task);
-  if (isVendor(actor) && actor.readOnly) throw forbidden('לחשבון שלך הוגדרה הרשאת צפייה בלבד');
-
-  const { filename, mime, data } = await readJson(req);
+/**
+ * שומר קובץ מצורף למשימה ומחזיר את מזהה הרשומה.
+ * משותף להעלאה מלשונית הקבצים ולצירוף קובץ לתגובה בשיחה — כך המגבלות
+ * (סוגי קבצים, גודל, ניהול גרסאות) נאכפות במקום אחד בלבד.
+ */
+function saveAttachment(task, actor, { filename, mime, data }, commentId = null) {
   const name = String(filename ?? '').trim();
   if (!name || !data) throw badRequest('חסר קובץ');
 
@@ -1098,11 +1110,23 @@ router.post('/api/tasks/:id/attachments', async (req, res, ctx) => {
   const stored = `${task.id}_${crypto.randomBytes(8).toString('hex')}${path.extname(name)}`;
   fs.writeFileSync(path.join(D.UPLOADS_DIR, stored), buffer);
 
-  D.run(
-    'INSERT INTO attachments (task_id, filename, stored_name, version, size, mime, uploader_type, uploader_id, created_at) VALUES (?,?,?,?,?,?,?,?,?)',
-    task.id, name, stored, version, buffer.length, mime || 'application/octet-stream',
+  const inserted = D.run(
+    `INSERT INTO attachments (task_id, comment_id, filename, stored_name, version, size, mime, uploader_type, uploader_id, created_at)
+     VALUES (?,?,?,?,?,?,?,?,?,?)`,
+    task.id, commentId, name, stored, version, buffer.length, mime || 'application/octet-stream',
     isVendor(actor) ? 'vendor' : 'user', actor.id, D.nowIso()
   );
+  return { id: Number(inserted.lastInsertRowid), name, version };
+}
+
+router.post('/api/tasks/:id/attachments', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  const task = getTaskOr404(ctx.params.id);
+  assertVisible(actor, task);
+  if (isVendor(actor) && actor.readOnly) throw forbidden('לחשבון שלך הוגדרה הרשאת צפייה בלבד');
+
+  const payload = await readJson(req);
+  const { name, version } = saveAttachment(task, actor, payload);
   D.audit(task.id, actorRef(actor), 'attachment', `הועלה קובץ "${name}" (גרסה ${version})`);
 
   // העלאת תוצרים מקדמת את הסטטוס אוטומטית

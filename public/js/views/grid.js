@@ -297,56 +297,6 @@ const GridView = (() => {
     return cell;
   }
 
-  // ------------------------------------------------------------- קבצים בשורה
-
-  // שני שבבים בלבד בשורה — יותר מזה מאריך את השורה ומטשטש את הכותרת
-  const MAX_ROW_CHIPS = 2;
-
-  /** שבב קובץ — קישור הורדה ישיר, כדי שלא יידרש לפתוח את הכרטיס בשביל קובץ */
-  function fileChip(att) {
-    return el('a.file-chip', {
-      href: `/api/attachments/${att.id}/download`,
-      title: `${att.filename} · גרסה ${att.version} · ${UI.fileSize(att.size)}`,
-      // הכותרת שבאותו תא נערכת בלחיצה — עצירת ההתפשטות משאירה את הלחיצה כהורדה
-      onclick: (e) => e.stopPropagation()
-    }, [
-      el('span', { text: UI.fileIcon(att.filename) }),
-      el('span.fc-name', { text: att.filename }),
-      // מספר הגרסה מוצג רק כשיש מה לספר — "v1" על כל שבב היה רעש בכל שורה
-      att.version > 1 ? el('span.fc-ver', { text: `v${att.version}` }) : null
-    ]);
-  }
-
-  /**
-   * הקבצים של המשימה בתוך תא הכותרת עצמו, בשורה שמתחת לכותרת.
-   * זה התא היחיד שרוחבו גמיש (ב-colgroup הוא ללא width), וגם התא שבו
-   * המשימה נכתבה — ולכן שם הקובץ נראה. בעמודת ההתקדמות (175px) אפילו
-   * שבב אחד אינו נכנס לצד סרגל הצ׳קליסט והמונים.
-   *
-   * השרת שולח את הגרסה האחרונה של כל קובץ ועד ארבעה קבצים, ולכן "+N"
-   * מונה את מה שהגיע; הרשימה המלאה נמצאת בכרטיס המשימה.
-   */
-  function fileChipsRow(task) {
-    const files = task.attachments ?? [];
-    if (!files.length) return null;
-    // filesCount הוא מספר הקבצים השונים בשרת; files מוגבל ל-4 ולכן
-    // חישוב מתוכו היה מציג '+N' קטן מהאמת
-    const total = task.filesCount ?? files.length;
-    const rest = total - MAX_ROW_CHIPS;
-
-    return el('div.file-chips', { style: { marginTop: '4px' } }, [
-      ...files.slice(0, MAX_ROW_CHIPS).map(fileChip),
-      rest > 0
-        ? el('span.file-chip-more', {
-            text: `+${rest}`,
-            title: files.slice(MAX_ROW_CHIPS).map((a) => a.filename).join('\n'),
-            style: { cursor: 'pointer' },
-            onclick: (e) => { e.stopPropagation(); TaskCardView.open(task.id); }
-          }, [])
-        : null
-    ]);
-  }
-
   function titleCell(task, group) {
     const cell = el('td.cell-title', {});
     const text = el('span.title-text', { text: task.title });
@@ -392,9 +342,6 @@ const GridView = (() => {
       }, ['פתיחה ↗'])
     ]));
 
-    // שורת השבבים נוספת רק כשיש קבצים — אחרת גובה השורה היה גדל לחינם
-    const files = fileChipsRow(task);
-    if (files) cell.appendChild(files);
     return cell;
   }
 

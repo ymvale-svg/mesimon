@@ -474,6 +474,12 @@ table.data td.wrap { white-space: normal; min-width: 240px; }
   background: var(--surface); border-radius: 4px; padding: 0 4px;
 }
 .file-chip-more { font-size: 11.5px; color: var(--text-mute); flex: none; }
+/* הסרת קובץ שנבחר לצירוף ועדיין לא נשלח */
+.chip-x {
+  border: 0; background: none; cursor: pointer; padding: 0 2px;
+  color: var(--text-mute); font-size: 12px; line-height: 1; flex: none;
+}
+.chip-x:hover { color: var(--danger); }
 
 /* ---------------------------------------------------------------- טבלה מקובצת (תצוגה ראשית) */
 

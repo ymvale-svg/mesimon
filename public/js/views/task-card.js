@@ -123,7 +123,6 @@ const TaskCardView = (() => {
       ...alerts,
       vendorWorkflowBar(),
       descNode,
-      inlineFiles(),
       checklistSection(),
       el('div.tabs', {}, [
         el(`button${activeTab === 'comments' ? '.active' : ''}`, { onclick: () => { activeTab = 'comments'; draw(modalRef.box.querySelector('.task-detail')); } },
@@ -268,13 +267,53 @@ const TaskCardView = (() => {
     const input = el('textarea', { placeholder: 'הוספת תגובה… ניתן לתייג עמיתים באמצעות @שם' });
     const internalCheck = el('input', { type: 'checkbox' });
 
+    // קבצים שנבחרו ועדיין לא נשלחו. נשמרים כאן ולא ב-DOM כדי שהתצוגה
+    // תיבנה מהמצב ולא להיפך.
+    let pending = [];
+    const pendingBox = el('div.file-chips', { style: { margin: '8px 0 0' } });
+
+    const drawPending = () => {
+      UI.mount(pendingBox, ...pending.map((f, i) =>
+        el('span.file-chip', {}, [
+          el('span', { text: UI.fileIcon(f.filename) }),
+          el('span.fc-name', { text: f.filename }),
+          el('span.mute-sm', { text: UI.fileSize(f.size) }),
+          el('button.chip-x', {
+            title: 'הסרה',
+            onclick: () => { pending.splice(i, 1); drawPending(); }
+          }, ['✕'])
+        ])));
+      pendingBox.style.display = pending.length ? 'flex' : 'none';
+    };
+    drawPending();
+
+    const fileInput = el('input', { type: 'file', multiple: true, style: { display: 'none' } });
+    fileInput.addEventListener('change', async () => {
+      for (const file of [...fileInput.files]) {
+        pending.push({
+          filename: file.name,
+          mime: file.type || 'application/octet-stream',
+          size: file.size,
+          data: await new Promise((resolve) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(reader.result);
+            reader.readAsDataURL(file);
+          })
+        });
+      }
+      fileInput.value = '';
+      drawPending();
+    });
+
     const send = async () => {
       const body = input.value.trim();
-      if (!body) return;
+      // הודעה עם קובץ בלבד היא שימוש לגיטימי, ולכן לא דורשים טקסט כשיש צירוף
+      if (!body && !pending.length) return;
       try {
-        const data = await API.addComment(task.id, body, internalCheck.checked);
+        const data = await API.addComment(task.id, body, internalCheck.checked, pending);
         task = data.task;
         input.value = '';
+        pending = [];
         draw(modalRef.box.querySelector('.task-detail'));
         refreshBackground();
       } catch (err) { UI.error(err); }
@@ -302,7 +341,19 @@ const TaskCardView = (() => {
                   c.internal ? el('span.tag.tag-high', {}, ['🔒 הערה פנימית']) : null,
                   el('time', { text: UI.formatDateTime(c.createdAt) })
                 ]),
-                el('div.c-text', {}, [UI.renderMentions(c.body, names)])
+                c.body ? el('div.c-text', {}, [UI.renderMentions(c.body, names)]) : null,
+                // הקובץ מוצג בתוך ההודעה שבה נשלח — שם הוא נמצא בהקשר שלו
+                c.attachments?.length
+                  ? el('div.file-chips', { style: { marginTop: '6px' } }, c.attachments.map((a) =>
+                      el('a.file-chip', {
+                        href: `/api/attachments/${a.id}/download`,
+                        title: `${a.filename} · ${UI.fileSize(a.size)}`
+                      }, [
+                        el('span', { text: UI.fileIcon(a.filename) }),
+                        el('span.fc-name', { text: a.filename }),
+                        el('span.mute-sm', { text: UI.fileSize(a.size) })
+                      ])))
+                  : null
               ])
             ])))
         : UI.empty('אין תגובות עדיין', '💬'),
@@ -310,8 +361,14 @@ const TaskCardView = (() => {
         ? el('div', { style: { marginTop: '12px' } }, [
             mentionBar,
             input,
+            pendingBox,
+            fileInput,
             el('div.flex', { style: { marginTop: '8px' } }, [
               el('button.btn.btn-primary', { onclick: send }, ['שליחת תגובה']),
+              el('button.btn', {
+                title: 'צירוף קובץ להודעה',
+                onclick: () => fileInput.click()
+              }, ['📎 צירוף קובץ']),
               task.permissions.seeInternal
                 ? el('label.checkbox', { title: 'הערות פנימיות מוסתרות לחלוטין מהספק' }, [internalCheck, '🔒 הערה פנימית (מוסתרת מהספק)'])
                 : null,
@@ -325,62 +382,7 @@ const TaskCardView = (() => {
 
   // ------------------------------------------------------------- קבצים
 
-  // עד ארבעה שבבים ליד תוכן המשימה — יש כאן רוחב, אך רשימה ארוכה הייתה
-  // דוחקת את הצ׳קליסט והתגובות מטה
-  const MAX_INLINE_CHIPS = 4;
-
   const filesTab = () => { activeTab = 'files'; draw(modalRef.box.querySelector('.task-detail')); };
-
-  /**
-   * הגרסה העדכנית של כל קובץ. ‎task.attachments‎ בכרטיס מכיל את כל הגרסאות
-   * והשרת מסדר אותן לפי שם ואז גרסה יורדת — ולכן ההופעה הראשונה של כל שם
-   * היא העדכנית שבהן.
-   */
-  function currentFiles() {
-    const seen = new Set();
-    return (task.attachments ?? []).filter((a) => {
-      if (seen.has(a.filename)) return false;
-      seen.add(a.filename);
-      return true;
-    });
-  }
-
-  /**
-   * הקבצים העדכניים צמוד לתוכן המשימה עצמו, כדי שקובץ שהועלה ייראה במקום
-   * שבו המשימה נכתבה ולא רק בלשונית נפרדת. זו הצצה בלבד — היסטוריית
-   * הגרסאות המלאה וההעלאה נשארות בלשונית "קבצים".
-   */
-  function inlineFiles() {
-    const files = currentFiles();
-    if (!files.length) return null;
-    const rest = files.length - MAX_INLINE_CHIPS;
-
-    return el('div.file-chips', { style: { margin: '10px 0 2px' } }, [
-      el('span.mute-sm', { text: 'קבצים:' }),
-      ...files.slice(0, MAX_INLINE_CHIPS).map((a) =>
-        el('a.file-chip', {
-          href: `/api/attachments/${a.id}/download`,
-          title: `${a.filename} · גרסה ${a.version} · ${UI.fileSize(a.size)} · ${a.uploaderName}`
-        }, [
-          el('span', { text: UI.fileIcon(a.filename) }),
-          el('span.fc-name', { text: a.filename }),
-          // מספר הגרסה מוצג רק כשיש מה לספר — "v1" על כל שבב היה רעש
-          a.version > 1 ? el('span.fc-ver', { text: `v${a.version}` }) : null
-        ])),
-      rest > 0
-        ? el('span.file-chip-more', {
-            text: `+${rest}`,
-            title: files.slice(MAX_INLINE_CHIPS).map((a) => a.filename).join('\n'),
-            style: { cursor: 'pointer' },
-            onclick: filesTab
-          }, [])
-        : null,
-      // יש גרסאות קודמות שאינן מוצגות כאן — הפניה לרשימה המלאה
-      task.attachments.length > files.length
-        ? el('button.btn.btn-sm.btn-ghost', { onclick: filesTab }, ['כל הגרסאות'])
-        : null
-    ]);
-  }
 
   function filesSection() {
     const fileInput = el('input', { type: 'file', style: { display: 'none' }, multiple: true });
