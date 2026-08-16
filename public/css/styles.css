@@ -713,6 +713,15 @@ th.cell-bar { background: var(--border) !important; }
 .task-line.is-done { opacity: .58; }
 .task-line.is-done .tk-title { text-decoration: line-through; text-decoration-thickness: 1.5px; }
 
+/* שורת סטטוס במסך ניהול הסטטוסים */
+.status-row { display: flex; align-items: center; gap: 9px; padding: 7px 0; }
+.status-row + .status-row { border-top: 1px solid var(--border); }
+.status-row .spacer { flex: 1; }
+.status-row .status-chip {
+  min-width: 120px; text-align: center; color: #fff; font-weight: 700;
+  font-size: 12px; padding: 4px 10px; border-radius: 6px; flex: none;
+}
+
 /* בורר צבע הפרויקט */
 .color-swatches { display: flex; gap: 5px; flex-wrap: wrap; }
 .color-swatch {

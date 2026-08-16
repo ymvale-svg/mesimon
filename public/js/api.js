@@ -93,6 +93,9 @@ const API = (() => {
     runRules: () => call('POST', '/api/admin/rules/run', {}),
     wipeSystem: (confirm) => call('POST', '/api/admin/wipe', { confirm }),
     addColumn: (boardId, body) => call('POST', `/api/boards/${boardId}/columns`, body),
+    updateColumn: (boardId, id, body) => call('PATCH', `/api/boards/${boardId}/columns/${id}`, body),
+    deleteColumn: (boardId, id, moveTo) =>
+      call('DELETE', `/api/boards/${boardId}/columns/${id}${moveTo ? `?moveTo=${encodeURIComponent(moveTo)}` : ''}`),
 
     saveFilter: (name, payload) => call('POST', '/api/saved-filters', { name, payload }),
     deleteFilter: (id) => call('DELETE', `/api/saved-filters/${id}`),

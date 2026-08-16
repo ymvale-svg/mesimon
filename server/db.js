@@ -429,7 +429,9 @@ const DEFAULT_SETTINGS = {
 const INTERNAL_COLUMNS = [
   { key: 'new', label: 'חדש', position: 0, is_final: 0, color: '#64748b' },
   { key: 'in_progress', label: 'בטיפול', position: 1, is_final: 0, color: '#2563eb' },
-  { key: 'done', label: 'הושלם', position: 2, is_final: 1, color: '#16a34a' }
+  // משימה שהכדור בה אצל מישהו אחר — היא אינה "בטיפול" ואינה תקועה סתם
+  { key: 'waiting_reply', label: 'ממתין לתשובה', position: 2, is_final: 0, color: '#d97706' },
+  { key: 'done', label: 'הושלם', position: 3, is_final: 1, color: '#16a34a' }
 ];
 
 // מצבי המשימה בזרימת העבודה מול ספק
@@ -626,6 +628,20 @@ function migrate() {
   addColumn('projects', 'created_by', 'INTEGER REFERENCES users(id)');
   // צבע הפרויקט — צובע את שורות המשימות שלו, לזיהוי במבט ולא בקריאה
   addColumn('projects', 'color', "TEXT NOT NULL DEFAULT ''");
+
+  /**
+   * סדר העמודות הוא סדר הזרימה, ולכן העמודה הסופית חייבת להיות אחרונה.
+   * ‎ensureBoardColumns‎ מוסיף עמודה חדשה במיקום הקבוע שהוגדר לה בקוד, ובמסד
+   * קיים המיקום הזה כבר תפוס — כך "ממתין לתשובה", שנוסף לבורד הפנימי, נחת
+   * על אותו מספר כמו "הושלם". הסדר נבנה כאן מחדש בכל עלייה: הלא-סופיות לפי
+   * סדרן הקיים, והסופית אחריהן.
+   */
+  for (const board of all('SELECT id FROM boards')) {
+    const cols = all(
+      'SELECT id, position FROM board_columns WHERE board_id = ? ORDER BY is_final, position, id', board.id
+    );
+    cols.forEach((c, i) => { if (c.position !== i) run('UPDATE board_columns SET position = ? WHERE id = ?', i, c.id); });
+  }
 
   // המחלקות היו עד כה טקסט חופשי בכל משתמש. הופכים אותן לישויות ומקשרים.
   const legacy = all(

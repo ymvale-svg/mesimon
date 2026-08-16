@@ -12,6 +12,7 @@ const AdminView = (() => {
     { key: 'users', label: 'משתמשים והרשאות', perm: 'manage_users' },
     { key: 'departments', label: 'מחלקות', perm: 'manage_departments' },
     { key: 'vendors', label: 'ספקים חיצוניים', perm: 'assign_task_to_vendor' },
+    { key: 'statuses', label: 'סטטוסים', perm: 'manage_automations' },
     { key: 'automations', label: 'אוטומציות וכללים', perm: 'manage_automations' },
     { key: 'settings', label: 'הגדרות מערכת', perm: 'manage_automations' },
     { key: 'matrix', label: 'מטריצת הרשאות', perm: 'manage_users' },
@@ -44,6 +45,7 @@ const AdminView = (() => {
       if (tab === 'users') await usersTab(body);
       else if (tab === 'departments') await departmentsTab(body);
       else if (tab === 'vendors') vendorsTab(body);
+      else if (tab === 'statuses') await statusesTab(body);
       else if (tab === 'automations') await automationsTab(body);
       else if (tab === 'settings') await settingsTab(body);
       else if (tab === 'matrix') await matrixTab(body);
@@ -736,6 +738,129 @@ const AdminView = (() => {
         ])
       ])
     ]);
+  }
+
+  // ------------------------------------------------------------- סטטוסים
+
+  /**
+   * ניהול הסטטוסים של כל בורד. הסטטוס אינו רשימה קשיחה בקוד אלא נתון —
+   * וכשחסר סטטוס באמצע העבודה אפשר להוסיף אותו כאן, בלי לחכות לגרסה.
+   */
+  async function statusesTab(container) {
+    // הבורד הפנימי ראשון — הוא זה שמשתמשים בו יום-יום
+    const boards = [...App.state.boards].sort((a, b) => (a.type === b.type ? 0 : a.type === 'internal' ? -1 : 1));
+    const reloadBoards = async () => { await App.reloadReference(); App.refreshChrome(); render(containerRef); };
+
+    const columnRow = (board, col, index, list) => {
+      const first = index === 0;
+      const last = index === list.length - 1;
+      return el('div.status-row', {}, [
+        el('span.status-chip', { style: { background: col.color }, text: col.label }),
+        col.isFinal
+          ? el('span.mute-sm', { text: 'סטטוס סופי — משימה בו נחשבת סגורה' })
+          : el('span.mute-sm', { text: `מפתח: ${col.key}` }),
+        el('div.spacer'),
+        // הסטטוס הסופי נשאר אחרון: סדר העמודות הוא סדר הזרימה
+        !col.isFinal && !first
+          ? el('button.btn.btn-sm', { title: 'הקדמה בזרימה', onclick: () => move(board, col, 'up') }, ['→'])
+          : null,
+        !col.isFinal && !last
+          ? el('button.btn.btn-sm', { title: 'איחור בזרימה', onclick: () => move(board, col, 'down') }, ['←'])
+          : null,
+        el('button.btn.btn-sm', { onclick: () => columnDialog(board, col) }, ['עריכה']),
+        !col.isFinal
+          ? el('button.btn.btn-sm.btn-danger', { onclick: () => removeColumn(board, col) }, ['מחיקה'])
+          : null
+      ]);
+    };
+
+    const move = async (board, col, dir) => {
+      try { await API.updateColumn(board.id, col.id, { move: dir }); await reloadBoards(); }
+      catch (err) { UI.error(err); }
+    };
+
+    UI.mount(container,
+      el('div.alert.alert-info.mb', {}, [
+        el('span', { text: 'ℹ️' }),
+        el('div', { text: 'הסטטוסים הם עמודות הזרימה של הבורד. אפשר להוסיף סטטוס, לשנות את שמו וצבעו ולסדר אותו מחדש. הסטטוס הסופי הוא זה שסוגר את המשימה, ולכן אינו נמחק ונשאר אחרון.' })
+      ]),
+      ...boards.map((board) => {
+        // הסופי אחרון גם אם המיקום בבסיס הנתונים אומר אחרת
+        const cols = [...board.columns].sort((a, b) => (a.isFinal === b.isFinal ? 0 : a.isFinal ? 1 : -1));
+        return el('div.card.mb', {}, [
+          el('div.card-head', {}, [
+            el('h3', { text: board.name }),
+            el('span.mute-sm', { text: board.type === 'vendor' ? 'בורד ספק' : 'הבורד הפנימי' }),
+            el('div.spacer'),
+            el('button.btn.btn-sm.btn-primary', { onclick: () => columnDialog(board, null) }, ['＋ סטטוס חדש'])
+          ]),
+          el('div.card-pad', {}, cols.map((c, i) => columnRow(board, c, i, cols)))
+        ]);
+      })
+    );
+
+    function columnDialog(board, col) {
+      const isEdit = !!col;
+      const labelInput = el('input', { type: 'text', value: col?.label ?? '' });
+      const colorInput = el('input', { type: 'color', value: col?.color ?? '#8b5cf6' });
+      const swatches = el('div.color-swatches', {}, ['#64748b', '#2563eb', '#0891b2', '#7c3aed', '#d97706', '#dc2626', '#16a34a', '#c2410c'].map((c) =>
+        el('button.color-swatch', { type: 'button', style: { background: c }, onclick: () => { colorInput.value = c; } })
+      ));
+      const saveBtn = el('button.btn.btn-primary', {}, ['שמירה']);
+      const m = UI.modal({
+        title: isEdit ? `עריכת סטטוס — ${col.label}` : `סטטוס חדש ב${board.name}`,
+        body: el('div', {}, [
+          UI.field('שם הסטטוס', labelInput),
+          UI.field('צבע', el('div.flex', {}, [colorInput, swatches])),
+          !isEdit
+            ? el('div.alert.alert-info', {}, [
+                el('span', { text: '↕' }),
+                el('div', { text: 'הסטטוס ייכנס לפני הסטטוס הסופי, ואפשר להזיז אותו אחר כך בחיצים.' })
+              ])
+            : null
+        ]),
+        footer: [saveBtn, el('div.spacer')]
+      });
+      saveBtn.addEventListener('click', async () => {
+        const label = labelInput.value.trim();
+        if (!label) return UI.toast('נדרש שם לסטטוס', 'error');
+        saveBtn.disabled = true;
+        try {
+          if (isEdit) await API.updateColumn(board.id, col.id, { label, color: colorInput.value });
+          else await API.addColumn(board.id, { label, color: colorInput.value });
+          m.close();
+          UI.success(isEdit ? 'הסטטוס עודכן' : 'הסטטוס נוסף');
+          await reloadBoards();
+        } catch (err) { saveBtn.disabled = false; UI.error(err); }
+      });
+    }
+
+    async function removeColumn(board, col) {
+      // המשימות שיושבות בסטטוס חייבות יעד — אחרת הן היו נשארות בסטטוס שאינו קיים
+      const others = board.columns.filter((c) => c.key !== col.key);
+      const targetSelect = UI.select(others.map((c) => ({ value: c.key, label: c.label })), others[0]?.key ?? '');
+      const okBtn = el('button.btn.btn-danger', {}, ['מחיקה']);
+      const m = UI.modal({
+        title: `מחיקת הסטטוס "${col.label}"`,
+        body: el('div', {}, [
+          el('div.alert.alert-warn', {}, [
+            el('span', { text: '⚠️' }),
+            el('div', { text: 'משימות שנמצאות כרגע בסטטוס הזה יועברו לסטטוס שייבחר כאן. משימה שתישאר בסטטוס שנמחק לא תופיע בשום תצוגה.' })
+          ]),
+          UI.field('להעביר את המשימות אל', targetSelect)
+        ]),
+        footer: [okBtn, el('div.spacer')]
+      });
+      okBtn.addEventListener('click', async () => {
+        okBtn.disabled = true;
+        try {
+          const r = await API.deleteColumn(board.id, col.id, targetSelect.value);
+          m.close();
+          UI.success(r.moved ? `הסטטוס נמחק, ${r.moved} משימות הועברו` : 'הסטטוס נמחק');
+          await reloadBoards();
+        } catch (err) { okBtn.disabled = false; UI.error(err); }
+      });
+    }
   }
 
   async function settingsTab(body) {

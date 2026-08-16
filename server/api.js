@@ -457,7 +457,8 @@ router.get('/api/bootstrap', async (req, res, ctx) => {
       name: b.name,
       type: b.type,
       vendorId: b.vendor_id,
-      columns: columnsOf(b.id).map((c) => ({ key: c.key, label: c.label, color: c.color, isFinal: !!c.is_final }))
+      // המזהה נדרש למסך ניהול הסטטוסים — המפתח אינו ניתן לשינוי ואינו מזהה שורה
+      columns: columnsOf(b.id).map((c) => ({ id: c.id, key: c.key, label: c.label, color: c.color, isFinal: !!c.is_final }))
     })),
     projects: isVendor(actor) ? [] : listProjectsFor(actor),
     users: isVendor(actor)
@@ -2096,8 +2097,71 @@ router.post('/api/boards/:id/columns', async (req, res, ctx) => {
   const position = finalCol ? finalCol.position : maxPos + 1;
   if (finalCol) D.run('UPDATE board_columns SET position = position + 1 WHERE board_id = ? AND position >= ?', board.id, position);
   D.run('INSERT INTO board_columns (board_id, key, label, position, is_final, color) VALUES (?,?,?,?,0,?)',
-    board.id, key, label, position, b.color ?? '#8b5cf6');
+    board.id, key, label, position, hexColor(b.color) || '#8b5cf6');
   sendJson(res, 201, { columns: columnsOf(board.id) });
+});
+
+/**
+ * שינוי סטטוס קיים — שם, צבע ומיקום בזרימה. המפתח עצמו אינו ניתן לשינוי:
+ * הוא שמור בכל משימה, בכל כלל אוטומציה ובכל מסנן שמור, ושינויו היה מנתק
+ * אותם מהסטטוס בלי שדבר על המסך ירמז על כך.
+ */
+router.patch('/api/boards/:boardId/columns/:id', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  requireFullPerm(actor, 'manage_automations');
+  const col = D.get('SELECT * FROM board_columns WHERE id = ? AND board_id = ?',
+    Number(ctx.params.id), Number(ctx.params.boardId));
+  if (!col) throw notFound('הסטטוס לא נמצא');
+  const b = await readJson(req);
+
+  const label = b.label !== undefined ? String(b.label).trim() : col.label;
+  if (!label) throw badRequest('נדרשת כותרת לסטטוס');
+  D.run('UPDATE board_columns SET label = ?, color = ? WHERE id = ?',
+    label, b.color !== undefined ? (hexColor(b.color) || col.color) : col.color, col.id);
+
+  // הזזה בזרימה: הסטטוס הסופי נשאר אחרון, אחרת הסדר מפסיק לתאר את התהליך
+  if (b.move === 'up' || b.move === 'down') {
+    const dir = b.move === 'up' ? -1 : 1;
+    const neighbour = D.get(
+      `SELECT * FROM board_columns WHERE board_id = ? AND is_final = ? AND position ${dir < 0 ? '<' : '>'} ?
+        ORDER BY position ${dir < 0 ? 'DESC' : 'ASC'} LIMIT 1`,
+      col.board_id, col.is_final, col.position
+    );
+    if (neighbour) {
+      D.run('UPDATE board_columns SET position = ? WHERE id = ?', neighbour.position, col.id);
+      D.run('UPDATE board_columns SET position = ? WHERE id = ?', col.position, neighbour.id);
+    }
+  }
+  sendJson(res, 200, { columns: columnsOf(col.board_id) });
+});
+
+/**
+ * מחיקת סטטוס. משימות שיושבות בו מועברות לסטטוס אחר שנבחר במפורש — מחיקה
+ * שמשאירה משימות עם סטטוס שאינו קיים מוציאה אותן מכל תצוגה ומכל דוח, והן
+ * נעלמות בלי שאיש שם לב.
+ */
+router.delete('/api/boards/:boardId/columns/:id', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  requireFullPerm(actor, 'manage_automations');
+  const col = D.get('SELECT * FROM board_columns WHERE id = ? AND board_id = ?',
+    Number(ctx.params.id), Number(ctx.params.boardId));
+  if (!col) throw notFound('הסטטוס לא נמצא');
+  if (col.is_final) throw badRequest('לא ניתן למחוק את הסטטוס הסופי — בלעדיו אי אפשר לסגור משימה');
+  if (D.get('SELECT COUNT(*) c FROM board_columns WHERE board_id = ?', col.board_id).c <= 2) {
+    throw badRequest('בבורד חייבים להישאר לפחות שני סטטוסים');
+  }
+
+  const inUse = D.get('SELECT COUNT(*) c FROM tasks WHERE board_id = ? AND status = ?', col.board_id, col.key).c;
+  const moveTo = String(new URL(req.url, 'http://x').searchParams.get('moveTo') ?? '');
+  if (inUse) {
+    const target = D.get('SELECT key FROM board_columns WHERE board_id = ? AND key = ? AND id <> ?',
+      col.board_id, moveTo, col.id);
+    if (!target) throw badRequest(`${inUse} משימות נמצאות בסטטוס הזה — יש לבחור לאיזה סטטוס להעביר אותן`);
+    D.run('UPDATE tasks SET status = ?, status_changed_at = ? WHERE board_id = ? AND status = ?',
+      target.key, D.nowIso(), col.board_id, col.key);
+  }
+  D.run('DELETE FROM board_columns WHERE id = ?', col.id);
+  sendJson(res, 200, { columns: columnsOf(col.board_id), moved: inUse });
 });
 
 // --- מסננים שמורים ותבניות ---
