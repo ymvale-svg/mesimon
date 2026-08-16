@@ -477,7 +477,8 @@ const BoardView = (() => {
 
     const assigneeOptions = [
       { value: '', label: 'ללא אחראי' },
-      ...App.state.users.map((u) => ({ value: `user:${u.id}`, label: `${u.name} — ${u.roleLabel}` })),
+      // רמת הגישה מצורפת לשם רק כשהצופה רשאי לראות רמות
+      ...App.state.users.map((u) => ({ value: `user:${u.id}`, label: u.roleLabel ? `${u.name} — ${u.roleLabel}` : u.name })),
       ...(App.may('assign_task_to_vendor')
         ? App.state.vendors.filter((v) => v.status === 'active').map((v) => ({ value: `vendor:${v.id}`, label: `${v.name} (ספק חיצוני)` }))
         : [])

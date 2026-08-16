@@ -21,7 +21,9 @@ const AdminView = (() => {
   async function render(container, params = {}) {
     containerRef = container;
     if (params.tab) tab = params.tab;
-    const allowed = TABS.filter((t) => App.may(t.perm));
+    // מטריצת ההרשאות פורשת את כל היררכיית הרמות, ולכן היא סגורה בפני מי
+    // שאינו רשאי לראות רמות גישה — גם אם הוא מנהל משתמשים במחלקתו
+    const allowed = TABS.filter((t) => App.may(t.perm) && (t.key !== 'matrix' || App.state.actor.seesRoles));
     if (!allowed.some((t) => t.key === tab)) tab = allowed[0]?.key;
 
     UI.mount(container,
@@ -102,14 +104,15 @@ const AdminView = (() => {
       el('div.table-wrap', {}, [
         el('table.data', {}, [
           el('thead', {}, [el('tr', {}, [
-            el('th', { text: 'שם' }), el('th', { text: 'אימייל' }), el('th', { text: 'רמת גישה' }),
+            el('th', { text: 'שם' }), el('th', { text: 'אימייל' }),
+            data.seesRoles ? el('th', { text: 'רמת גישה' }) : null,
             el('th', { text: 'מחלקה' }), el('th', { text: 'סטטוס' }), el('th', { text: '' })
           ])]),
           el('tbody', {}, data.users.map((u) =>
             el('tr', {}, [
               el('td', {}, [el('div.flex', {}, [UI.avatar(u.name, { small: true }), el('b', { text: u.name })])]),
               el('td', { text: u.email }),
-              el('td', {}, [el('span.tag.tag-internal', {}, [u.roleLabel])]),
+              data.seesRoles ? el('td', {}, [el('span.tag.tag-internal', {}, [u.roleLabel])]) : null,
               // משתמש יכול להיות ללא שיוך למחלקה (הנהלה, מנהל מערכת) — מסומן במקף ולא בתא ריק
               el('td', { text: u.department || '—' }),
               el('td', {}, [el('span', {
@@ -152,7 +155,8 @@ const AdminView = (() => {
     // מוסיפים אותה כדי לא להציג שדה ריק ולא לשנות לו רמה בשוגג.
     const roleOptions = [...(listData.assignableRoles ?? [])];
     if (isEdit && !roleOptions.some((r) => String(r.value) === user.role)) {
-      roleOptions.unshift({ value: user.role, label: user.roleLabel ?? user.role });
+      // ללא הרשאה לראות רמות אין תווית להציג — נשמר הערך בלי לחשוף את שמו
+      roleOptions.unshift({ value: user.role, label: user.roleLabel ?? 'הרמה הנוכחית' });
     }
     const roleSelect = UI.select(roleOptions, user?.role ?? roleOptions[0]?.value ?? '');
 
@@ -355,7 +359,8 @@ const AdminView = (() => {
     // ולכן רמת הגישה מוצגת לצד השם כדי שהבחירה תהיה מושכלת
     const managerSelect = UI.select([
       { value: '', label: 'ללא מנהל' },
-      ...App.state.users.map((u) => ({ value: String(u.id), label: `${u.name} — ${u.roleLabel}` }))
+      // רמת הגישה מצורפת לשם רק כשהצופה רשאי לראות רמות
+      ...App.state.users.map((u) => ({ value: String(u.id), label: u.roleLabel ? `${u.name} — ${u.roleLabel}` : u.name }))
     ], String(dept?.managerUserId ?? ''));
 
     const statusSelect = UI.select(

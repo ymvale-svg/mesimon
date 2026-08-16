@@ -371,7 +371,9 @@ function publicActor(actor) {
     name: actor.name,
     email: actor.email,
     role: actor.role,
-    roleLabel: P.ROLE_LABELS[actor.role],
+    // רמת הגישה מוצגת רק למי שרשאי לראות רמות; לשאר אין לה שימוש בממשק
+    roleLabel: P.seesRoles(actor) ? P.ROLE_LABELS[actor.role] : null,
+    seesRoles: P.seesRoles(actor),
     department: actor.department ?? null,
     departmentId: actor.departmentId ?? null,
     boardId: actor.boardId ?? null,
@@ -447,7 +449,11 @@ router.get('/api/bootstrap', async (req, res, ctx) => {
     users: isVendor(actor)
       ? []
       : D.all("SELECT id, full_name, email, role, department, status FROM users WHERE status='active' ORDER BY full_name")
-          .map((u) => ({ id: u.id, name: u.full_name, email: u.email, role: u.role, roleLabel: P.ROLE_LABELS[u.role] })),
+          .map((u) => ({
+            id: u.id, name: u.full_name, email: u.email,
+            role: P.seesRoles(actor) ? u.role : null,
+            roleLabel: P.seesRoles(actor) ? P.ROLE_LABELS[u.role] : null
+          })),
     vendors: P.may(actor, 'view_vendor_boards') && !isVendor(actor)
       ? D.all('SELECT id, name, contact_name, email, phone, status, read_only FROM vendors ORDER BY name')
           .map((v) => ({
@@ -1343,7 +1349,9 @@ router.get('/api/reports', async (req, res, ctx) => {
     );
     const open = rows.filter((r) => !r.is_final);
     return {
-      id: u.id, name: u.full_name, role: u.role, roleLabel: P.ROLE_LABELS[u.role],
+      id: u.id, name: u.full_name,
+      role: P.seesRoles(actor) ? u.role : null,
+      roleLabel: P.seesRoles(actor) ? P.ROLE_LABELS[u.role] : null,
       departmentId: u.department_id,
       department: String(u.department ?? '').trim() || 'ללא שיוך',
       open: open.length,
@@ -1611,6 +1619,7 @@ router.get('/api/admin/users', async (req, res, ctx) => {
 
   sendJson(res, 200, {
     scope: P.isOrgWide(actor) ? 'all' : 'department',
+    seesRoles: P.seesRoles(actor),
     department: actor.department,
     departmentId: actor.departmentId,
     departments,
@@ -1619,7 +1628,7 @@ router.get('/api/admin/users', async (req, res, ctx) => {
     mayManageDepartments: P.may(actor, 'manage_departments'),
     users: rows.map((u) => ({
       id: u.id, name: u.full_name, email: u.email, role: u.role,
-      roleLabel: P.ROLE_LABELS[u.role], department: u.department,
+      roleLabel: P.seesRoles(actor) ? P.ROLE_LABELS[u.role] : null, department: u.department,
       departmentId: u.department_id, status: u.status,
       grants: D.all('SELECT grant_key FROM user_grants WHERE user_id = ?', u.id).map((g) => g.grant_key)
     }))

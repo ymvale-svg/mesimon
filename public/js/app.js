@@ -470,7 +470,8 @@ const App = (() => {
         UI.avatar(state.actor.name, { vendor: isVendor() }),
         el('div', {}, [
           el('div.name', { text: state.actor.name }),
-          el('div.role', { text: state.actor.roleLabel })
+          // רמת הגישה מוצגת רק למי שרשאי לראות רמות; לשאר מוצגת המחלקה
+          el('div.role', { text: state.actor.roleLabel ?? state.actor.department ?? (isVendor() ? 'ספק חיצוני' : '') })
         ])
       ])
     ]);
@@ -489,7 +490,9 @@ const App = (() => {
         ]),
         el('table.data', { style: { width: '100%' } }, [
           el('tbody', {}, [
-            el('tr', {}, [el('th', { text: 'רמת גישה' }), el('td', { text: state.actor.roleLabel })]),
+            state.actor.roleLabel
+              ? el('tr', {}, [el('th', { text: 'רמת גישה' }), el('td', { text: state.actor.roleLabel })])
+              : null,
             state.actor.department ? el('tr', {}, [el('th', { text: 'מחלקה' }), el('td', { text: state.actor.department })]) : null,
             isVendor() ? el('tr', {}, [el('th', { text: 'הרשאת עדכון' }), el('td', { text: state.actor.readOnly ? 'צפייה בלבד' : 'מלאה' })]) : null
           ])

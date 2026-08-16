@@ -131,6 +131,13 @@ function level(actor, action) {
 const may = (actor, action) => level(actor, action) !== false;
 const can = (actor, action) => level(actor, action) === true;
 
+/**
+ * מי רשאי לראות את רמות ההרשאה של אחרים. זהו מידע ניהולי שאין סיבה
+ * שכל עובד יראה — מי מנהל את מי הוא עניין של הנהלת המערכת.
+ */
+const seesRoles = (actor) =>
+  actor.type === 'user' && ['superadmin', 'admin'].includes(actor.role);
+
 /** האם התפקיד רואה את כל הארגון ולא רק מחלקה אחת */
 const isOrgWide = (actor) =>
   actor.type === 'user' && ['superadmin', 'admin', 'executive'].includes(actor.role);
@@ -206,6 +213,6 @@ function matrixForDisplay() {
 module.exports = {
   ROLES, INTERNAL_ROLES, ROLE_LABELS, ROLE_RANK, MATRIX, MATRIX_LABELS, MATRIX_NOTES,
   GRANTS, GRANT_KEYS, hasGrant,
-  level, may, can, canOnTask, isTaskParticipant, isInActorDepartment, isOrgWide,
+  level, may, can, canOnTask, isTaskParticipant, isInActorDepartment, isOrgWide, seesRoles,
   mayManageRole, assignableRoles, permissionsFor, matrixForDisplay
 };
