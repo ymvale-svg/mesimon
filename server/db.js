@@ -124,7 +124,8 @@ CREATE TABLE IF NOT EXISTS projects (
   due_date    TEXT,
   status      TEXT    NOT NULL DEFAULT 'active' CHECK (status IN ('active','frozen','done')),
   created_at  TEXT    NOT NULL,
-  created_by  INTEGER REFERENCES users(id)
+  created_by  INTEGER REFERENCES users(id),
+  color       TEXT    NOT NULL DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS tasks (
@@ -623,6 +624,8 @@ function migrate() {
   addColumn('tasks', 'department_id', 'INTEGER REFERENCES departments(id) ON DELETE SET NULL');
   // מי פתח את הפרויקט — הפרויקט נשאר ברשימה שלו גם אם מונה לו מנהל אחר
   addColumn('projects', 'created_by', 'INTEGER REFERENCES users(id)');
+  // צבע הפרויקט — צובע את שורות המשימות שלו, לזיהוי במבט ולא בקריאה
+  addColumn('projects', 'color', "TEXT NOT NULL DEFAULT ''");
 
   // המחלקות היו עד כה טקסט חופשי בכל משתמש. הופכים אותן לישויות ומקשרים.
   const legacy = all(

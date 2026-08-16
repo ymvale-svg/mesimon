@@ -47,6 +47,16 @@ function getTaskOr404(id) {
 }
 
 const projectOf = (task) => (task.project_id ? D.get('SELECT * FROM projects WHERE id = ?', task.project_id) : null);
+
+/**
+ * צבע הפרויקט. כשלא נבחר צבע נגזר אחד יציב מהמזהה, כדי שכל פרויקט יהיה
+ * מובחן במבט כבר מהרגע הראשון — צבע שנשאר קבוע בין טעינות ובין משתמשים.
+ */
+const PROJECT_COLORS = ['#0f766e', '#c2410c', '#2563eb', '#7c3aed', '#be123c', '#0891b2', '#65a30d', '#a16207'];
+const projectColor = (project) => (project ? project.color || PROJECT_COLORS[project.id % PROJECT_COLORS.length] : null);
+
+/** צבע מתקבל רק בתבנית hex — הערך נכנס ישירות ל-style בממשק */
+const hexColor = (value) => (/^#[0-9a-fA-F]{6}$/.test(String(value ?? '')) ? String(value) : '');
 const boardOf = (task) => D.get('SELECT * FROM boards WHERE id = ?', task.board_id);
 
 /** המחלקה של האחראי על המשימה — נדרש להכרעה על משימות ארגוניות */
@@ -136,6 +146,7 @@ function shapeTask(task, actor, { withDetails = false } = {}) {
     description: task.description,
     projectId: task.project_id,
     projectName: project ? project.name : null,
+    projectColor: projectColor(project),
     boardId: task.board_id,
     boardType: board ? board.type : null,
     boardName: board ? board.name : null,
@@ -534,6 +545,9 @@ function listProjectsFor(actor) {
       startDate: p.start_date,
       dueDate: p.due_date,
       status: p.status,
+      color: projectColor(p),
+      // הצבע שנבחר בפועל, להבדיל מהנגזר — כדי שבורר הצבע יידע אם יש בחירה
+      colorChosen: p.color || null,
       tasksTotal: stats.total ?? 0,
       tasksDone: stats.done ?? 0,
       pinned: pinned.has(p.id)
@@ -1236,10 +1250,10 @@ router.post('/api/projects', async (req, res, ctx) => {
   const name = String(b.name ?? '').trim();
   if (!name) throw badRequest('נדרש שם פרויקט');
   const r = D.run(
-    `INSERT INTO projects (name, description, manager_id, start_date, due_date, status, created_at, created_by)
-     VALUES (?,?,?,?,?,?,?,?)`,
+    `INSERT INTO projects (name, description, manager_id, start_date, due_date, status, created_at, created_by, color)
+     VALUES (?,?,?,?,?,?,?,?,?)`,
     name, String(b.description ?? ''), b.managerId ? Number(b.managerId) : null,
-    b.startDate || null, b.dueDate || null, b.status ?? 'active', D.nowIso(), actor.id
+    b.startDate || null, b.dueDate || null, b.status ?? 'active', D.nowIso(), actor.id, hexColor(b.color)
   );
   const id = Number(r.lastInsertRowid);
 
@@ -1269,12 +1283,14 @@ router.patch('/api/projects/:id', async (req, res, ctx) => {
   if (!project) throw notFound();
   const b = await readJson(req);
   D.run(
-    'UPDATE projects SET name = ?, description = ?, manager_id = ?, start_date = ?, due_date = ?, status = ? WHERE id = ?',
+    'UPDATE projects SET name = ?, description = ?, manager_id = ?, start_date = ?, due_date = ?, status = ?, color = ? WHERE id = ?',
     b.name ?? project.name, b.description ?? project.description,
     b.managerId !== undefined ? (b.managerId ? Number(b.managerId) : null) : project.manager_id,
     b.startDate !== undefined ? (b.startDate || null) : project.start_date,
     b.dueDate !== undefined ? (b.dueDate || null) : project.due_date,
-    b.status ?? project.status, project.id
+    b.status ?? project.status,
+    b.color !== undefined ? hexColor(b.color) : (project.color ?? ''),
+    project.id
   );
   sendJson(res, 200, { projects: listProjectsFor(actor) });
 });
@@ -1295,7 +1311,16 @@ router.get('/api/notifications', async (req, res, ctx) => {
   const rows = D.all(
     'SELECT * FROM notifications WHERE target_type = ? AND target_id = ? ORDER BY created_at DESC LIMIT 100',
     actor.type === 'vendor' ? 'vendor' : 'user', actor.id
-  );
+  ).filter((n) => {
+    /**
+     * שכבת הגנה שנייה: התראה על משימה שהמשתמש אינו רשאי לראות אינה מוצגת.
+     * זה מנקה גם התראות שנוצרו בעבר, כשהמנוע שלח כל התראה לכל מנהל בארגון,
+     * ומונע דליפה של כותרת משימה של מחלקה אחרת דרך רשימת ההתראות.
+     */
+    if (!n.task_id) return true;
+    const task = D.get('SELECT * FROM tasks WHERE id = ?', n.task_id);
+    return !task || canSeeTask(actor, task);
+  });
   // שם המשימה נשלח עם ההתראה. בלעדיו הממשק נאלץ לשלוח בקשה נפרדת לכל
   // משימה כדי להציג את שמה בכרטיס המוקפץ — בקשה לכל התראה.
   const titles = new Map();

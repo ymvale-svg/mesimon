@@ -409,7 +409,8 @@ const App = (() => {
       el(`button.nav-item${state.route.name === 'board' && state.route.params.projectId === p.id ? '.active' : ''}`, {
         onclick: () => navigate('board', { projectId: p.id })
       }, [
-        el('span.ico', { text: '•' }),
+        // הנקודה נושאת את צבע הפרויקט — אותו סימן שמופיע בשורות המשימות שלו
+        el('span.ico', {}, [el('span.project-dot', { style: { background: p.color, margin: '0' } })]),
         // minWidth: 0 הוא מה שמאפשר לשלוש הנקודות לעבוד בכלל: בלעדיו פריט בתוך flex
         // לא מתכווץ מתחת לרוחב הטקסט, ושם ארוך היה דוחף את המונה ואת כפתור הנעיצה
         // מחוץ לרוחב התפריט — כלומר הנעיצה הייתה נחתכת ולא ניתנת ללחיצה

@@ -406,13 +406,10 @@ textarea { resize: vertical; min-height: 76px; }
 .task-card .tc-check { display: flex; align-items: center; gap: 5px; }
 
 /* סימון "בוצע" ישירות משורת המשימה */
-.task-card .tc-head { display: flex; align-items: flex-start; gap: 9px; }
-.task-card .tc-done-box {
-  width: 16px; height: 16px; flex: none; margin-top: 2px;
+.tc-done-box {
+  width: 15px; height: 15px; flex: none;
   accent-color: var(--ok); cursor: pointer;
 }
-.task-card.is-done { opacity: .62; }
-.task-card.is-done .tc-title { text-decoration: line-through; text-decoration-thickness: 1.5px; }
 .progress-mini { width: 44px; height: 4px; border-radius: 3px; background: var(--border); overflow: hidden; }
 .progress-mini > div { height: 100%; background: var(--ok); }
 .task-card .select-box { position: absolute; top: 9px; left: 9px; }
@@ -608,6 +605,11 @@ th.cell-bar { background: var(--border) !important; }
 
 .cell-progress { overflow: hidden; }
 .cell-project, .cell-board { color: var(--text-soft); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* נקודת צבע הפרויקט לצד שמו — אותו סימן שמופיע כפס בתחילת השורה */
+.project-dot {
+  display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+  margin-inline-end: 6px; vertical-align: middle; flex: none;
+}
 
 /* --- שורת סיכום ושורת הוספה --- */
 
@@ -688,6 +690,37 @@ th.cell-bar { background: var(--border) !important; }
 .modal-body { padding: 20px; overflow-y: auto; }
 .modal-foot { padding: 13px 20px; border-top: 1px solid var(--border); display: flex; gap: 9px; justify-content: flex-start; background: var(--surface-2); border-radius: 0 0 16px 16px; }
 .modal-foot .spacer { flex: 1; }
+
+/* --- שורת משימה מרוכזת (רשימת "המשימות שלי") --- */
+
+.task-line {
+  display: flex; align-items: center; gap: 7px; min-width: 0;
+  padding: 7px 8px; border-radius: 8px; cursor: pointer;
+  border: 1px solid transparent; font-size: 12.5px;
+  transition: background .12s, border-color .12s;
+}
+.task-line:hover { background: var(--surface-2); border-color: var(--border); }
+.task-line + .task-line { border-top: 1px solid var(--border); border-radius: 0; }
+.task-line .tk-bar { width: 3px; align-self: stretch; border-radius: 2px; flex: none; }
+/* שם הפרויקט מתקצר לפני הכותרת: הכותרת היא המידע, הפרויקט הוא ההקשר */
+.task-line .tk-project { color: var(--text-mute); flex: 0 1 auto; min-width: 40px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.task-line .tk-title { font-weight: 600; flex: 1 1 auto; min-width: 60px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.task-line .tk-sep { color: var(--border-strong); flex: none; }
+.task-line .tk-due { color: var(--text-mute); white-space: nowrap; flex: none; }
+.task-line .spacer { flex: 1 0 6px; }
+.task-line .tk-flags { display: flex; gap: 3px; flex: none; font-size: 13px; }
+.task-line .tag { flex: none; }
+.task-line.is-done { opacity: .58; }
+.task-line.is-done .tk-title { text-decoration: line-through; text-decoration-thickness: 1.5px; }
+
+/* בורר צבע הפרויקט */
+.color-swatches { display: flex; gap: 5px; flex-wrap: wrap; }
+.color-swatch {
+  width: 22px; height: 22px; border-radius: 6px; cursor: pointer;
+  border: 1px solid rgba(0, 0, 0, .12); padding: 0;
+}
+.color-swatch:hover { transform: scale(1.12); }
+input[type="color"] { width: 46px; height: 30px; padding: 2px; cursor: pointer; flex: none; }
 
 /* --- תצוגה מקדימה של קובץ בתוך המערכת --- */
 

@@ -346,7 +346,12 @@ const GridView = (() => {
       // אינה פותחת את הכרטיס — רק לחיצה על שאר השורה
       onclick: () => TaskCardView.open(task.id)
     }, [
-      el('td.cell-bar', { style: { background: group.color } }),
+      /**
+       * הפס הצדדי נושא את צבע הפרויקט, ולא את צבע הקבוצה. הקבוצה כבר מסומנת
+       * בכותרת שמעליה, ואילו הצבע הזה הוא מה שמאפשר לזהות במבט לאיזה פרויקט
+       * שייכת שורה כשהרשימה מקובצת לפי אחראי או סטטוס ולא לפי פרויקט.
+       */
+      el('td.cell-bar', { style: { background: task.projectColor ?? group.color } }),
       ctx.selectable
         ? el('td.cell-check', {}, [
             el('input', {
@@ -365,7 +370,11 @@ const GridView = (() => {
       showBoard ? el('td.cell-board', {}, [
         el(`span.tag.${task.boardType === 'vendor' ? 'tag-vendor' : 'tag-internal'}`, {}, [task.boardName ?? '—'])
       ]) : null,
-      state.groupBy !== 'project' ? el('td.cell-project', { text: task.projectName ?? '—' }) : null,
+      state.groupBy !== 'project'
+        ? el('td.cell-project', {}, task.projectName
+            ? [el('span.project-dot', { style: { background: task.projectColor } }), task.projectName]
+            : ['—'])
+        : null,
       assigneeCell(task),
       statusCell(task),
       priorityCell(task),

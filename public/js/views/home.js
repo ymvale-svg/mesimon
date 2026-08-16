@@ -32,7 +32,7 @@ const HomeView = (() => {
    * יותר פריטים מבעבר: הם אינם מאריכים את העמוד אלא את הגלילה הפנימית.
    */
   const FEED_MAX = 30;      // השרת ממילא מחזיר עד 15 רשומות — זו תקרה הגנתית
-  const LIST_MAX = 20;      // כרטיסי משימה ברשימה האישית
+  const LIST_MAX = 40;      // שורות משימה ברשימה האישית — שורה אחת לכל משימה
   const APPROVAL_MAX = 15;
 
   /**
@@ -182,7 +182,7 @@ const HomeView = (() => {
         // מחזיר אותה — אחרת הסימון היה נעלם ברגע שנעשה, ולא היה נראה כלל
         if (wantDone) keepCompleted.set(task.id, task);
         else keepCompleted.delete(task.id);
-        box.closest('.task-card')?.classList.toggle('is-done', wantDone);
+        box.closest('.task-line')?.classList.toggle('is-done', wantDone);
         UI.success(wantDone ? 'המשימה סומנה כהושלמה' : 'הסימון בוטל');
         refreshQuietly();
       } catch (err) {
@@ -195,25 +195,43 @@ const HomeView = (() => {
     return box;
   }
 
+  /**
+   * שורה אחת למשימה. כרטיס בן ארבע שורות נראה טוב כשיש שלוש משימות, אבל
+   * כשיש עשרים אי אפשר לסרוק אותו — ולכן כל המידע נדחס לשורה: פרויקט,
+   * כותרת, סטטוס ויעד, וסימני הדחיפות דווקא בקצה, במקום שהעין נחה בו.
+   */
   function taskRow(task) {
     const due = UI.dueLabel(task.dueDate);
-    return el(`div.task-card${task.isFinal ? '.is-done' : ''}`, { onclick: () => TaskCardView.open(task.id) }, [
-      el('div.tc-head', {}, [
-        completeBox(task),
-        el('div', { style: { flex: '1', minWidth: '0' } }, [
-          task.projectName ? el('div.tc-project', { text: task.projectName }) : null,
-          el('div.tc-title', { text: task.title })
-        ])
-      ]),
-      el('div.tc-tags', {}, [UI.statusTag(task), ...UI.taskTags(task)]),
-      el('div.tc-foot', {}, [
-        el('span', {
-          text: due.text,
-          class: due.tone === 'danger' ? 'text-danger' : due.tone === 'warn' ? 'text-warn' : ''
-        }),
-        el('div.spacer'),
-        task.assigneeName ? UI.avatar(task.assigneeName, { small: true, vendor: task.assigneeType === 'vendor' }) : null
-      ])
+    const flags = [
+      task.overdue ? el('span', { title: `באיחור — יעד ${UI.formatDate(task.dueDate)}`, text: '⏰' }) : null,
+      task.priority === 'urgent' ? el('span', { title: 'עדיפות דחוף', text: '🔥' }) : null,
+      task.escalated ? el('span', { title: 'הוקפצה לתשומת לב ההנהלה', text: '↑' }) : null
+    ].filter(Boolean);
+
+    return el(`div.task-line${task.isFinal ? '.is-done' : ''}`, {
+      onclick: () => TaskCardView.open(task.id),
+      title: task.title
+    }, [
+      // הפס בצבע הפרויקט — אותו סימן שמופיע בטבלה ובקנבן
+      el('span.tk-bar', { style: { background: task.projectColor ?? 'transparent' } }),
+      completeBox(task),
+      task.projectName ? el('span.tk-project', { text: task.projectName }) : null,
+      task.projectName ? el('span.tk-sep', { text: '־' }) : null,
+      el('span.tk-title', { text: task.title }),
+      el('span.tk-sep', { text: '|' }),
+      UI.statusTag(task),
+      task.dueDate
+        ? el('span.tk-due', {
+            text: due.text,
+            class: due.tone === 'danger' ? 'text-danger' : due.tone === 'warn' ? 'text-warn' : ''
+          })
+        : null,
+      el('span.spacer'),
+      // האחראי מוצג רק כשהוא אינו המשתמש עצמו — ברשימה "שלי" זה תמיד הוא
+      task.assigneeName && task.assigneeId !== App.state.actor.id
+        ? UI.avatar(task.assigneeName, { small: true, vendor: task.assigneeType === 'vendor' })
+        : null,
+      flags.length ? el('span.tk-flags', {}, flags) : null
     ]);
   }
 
@@ -241,9 +259,8 @@ const HomeView = (() => {
         sorted.length ? el('button.btn.btn-sm', { onclick: onAll }, ['לכל המשימות']) : null
       ]),
       sorted.length
-        // כרטיס משימה גבוה פי כמה משורת פיד, ולכן תקרה נדיבה מזו שב-CSS —
-        // אחרת נראה כרטיס אחד וחצי והרשימה מרגישה קטועה ולא נגללת
-        ? el('div.card-pad', {}, [scrollBox(shown.map(taskRow), { maxHeight: '420px', extraClass: '.flex-col' })])
+        // שורה בגובה אחיד, ולכן תקרה שמראה כעשר שורות שלמות ורומזת להמשך
+        ? el('div.card-pad', {}, [scrollBox(shown.map(taskRow), { maxHeight: '380px', extraClass: '.flex-col' })])
         : el('div.card-pad', {}, [el('div.mute-sm', { text: emptyText })])
     ]);
   }

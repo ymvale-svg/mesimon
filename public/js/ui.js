@@ -537,6 +537,9 @@ const UI = (() => {
    * שבשרת — כאן היא רק כדי לא להציע כפתור שייכשל. SVG אינו ברשימה בכוונה:
    * הוא מסמך שאפשר לשתול בו סקריפט.
    */
+  // פלטת הפרויקטים — זהה לזו שבשרת, שממנה נגזר צבע ברירת המחדל לפי המזהה
+  const PROJECT_COLORS = ['#0f766e', '#c2410c', '#2563eb', '#7c3aed', '#be123c', '#0891b2', '#65a30d', '#a16207'];
+
   const PREVIEW_MIMES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/bmp', 'application/pdf'];
   const canPreview = (file) => PREVIEW_MIMES.includes(String(file?.mime ?? '').toLowerCase());
   const isPdf = (file) => String(file?.mime ?? '').toLowerCase() === 'application/pdf';
@@ -618,7 +621,7 @@ const UI = (() => {
     initials, avatar, priorityTag, statusTag, taskTags,
     modal, confirm, prompt, toast, error, success, notifyPop, clearNotifyPops,
     empty, spinner, field, select, renderMentions, fileSize, fileIcon,
-    preview, canPreview,
+    preview, canPreview, PROJECT_COLORS,
     logo, logoMark, companyLogo, refitLogos
   };
 })();

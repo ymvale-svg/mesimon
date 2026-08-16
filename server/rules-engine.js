@@ -28,8 +28,42 @@ function paramValue(params, directKey, settingKey, fallback) {
   return Number(fallback);
 }
 
-const managers = () =>
-  D.all("SELECT id, full_name FROM users WHERE role IN ('admin','manager') AND status = 'active'");
+/**
+ * מי מקבל התראה על משימה.
+ *
+ * עד כה נשלחה ההתראה לכל מנהל וכל אדמין בארגון, בלי קשר למשימה — ולכן
+ * מנהלת השיווק קיבלה התראות על משימות של מחלקה אחרת, ורשימת ההתראות שלה
+ * התמלאה ברעש שאינו שלה. ההתראה נשלחת עכשיו רק למי שהמשימה בתחומו:
+ * האחראי עליה, מנהל הפרויקט, ומנהל המחלקה שאליה היא משויכת. מי שרואה את
+ * כל הארגון (הנהלה ומנהלי מערכת) מקבל את התמונה מהדוחות ומהלוח, ואינו
+ * צריך התראה על כל משימה של כל מחלקה.
+ */
+function alertTargets(task) {
+  const ids = new Set();
+  const add = (id) => { if (id) ids.add(id); };
+
+  if (task.assignee_type === 'user') add(task.assignee_id);
+  if (task.project_id) add(D.get('SELECT manager_id FROM projects WHERE id = ?', task.project_id)?.manager_id);
+
+  // המחלקה של המשימה, ואם אין לה שיוך — המחלקה של האחראי עליה
+  const departmentId = task.department_id
+    ?? (task.assignee_type === 'user' && task.assignee_id
+      ? D.get('SELECT department_id FROM users WHERE id = ?', task.assignee_id)?.department_id
+      : null);
+
+  if (departmentId) {
+    add(D.get('SELECT manager_user_id FROM departments WHERE id = ?', departmentId)?.manager_user_id);
+    // גם מנהל שמשויך למחלקה בלי שהוגדר כמנהל הרשמי שלה
+    for (const m of D.all(
+      "SELECT id FROM users WHERE role = 'manager' AND status = 'active' AND department_id = ?", departmentId
+    )) add(m.id);
+  }
+
+  return D.all(
+    `SELECT id, full_name FROM users WHERE status = 'active' AND id IN (${[...ids].map(() => '?').join(',') || 'NULL'})`,
+    ...ids
+  );
+}
 
 const isFinalStatus = (task) => {
   const col = D.get('SELECT is_final FROM board_columns WHERE board_id = ? AND key = ?', task.board_id, task.status);
@@ -226,11 +260,11 @@ const ACTIONS = {
   },
 
   notify_managers: {
-    label: 'התראה למנהל המחלקה ולמנהל המערכת',
+    label: 'התראה לאחראי ולמנהל המחלקה',
     run(rule, event) {
       const { task } = event;
       const overdue = task.due_date && new Date(task.due_date).getTime() < Date.now();
-      for (const m of managers()) {
+      for (const m of alertTargets(task)) {
         D.notify({
           targetType: 'user',
           targetId: m.id,
@@ -240,7 +274,7 @@ const ACTIONS = {
           taskId: task.id
         });
       }
-      D.audit(task.id, null, 'automation', `${rule.name}: נשלחה התראה למנהלים`);
+      D.audit(task.id, null, 'automation', `${rule.name}: נשלחה התראה לאחראי ולמנהל המחלקה`);
       return true;
     }
   },
@@ -250,7 +284,7 @@ const ACTIONS = {
     run(rule, event) {
       const { task, meta } = event;
       D.run('UPDATE tasks SET escalated = 1 WHERE id = ?', task.id);
-      for (const m of managers()) {
+      for (const m of alertTargets(task)) {
         D.notify({
           targetType: 'user',
           targetId: m.id,

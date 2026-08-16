@@ -296,6 +296,8 @@ const BoardView = (() => {
     const node = el('div.task-card', {
       class: [task.overdue ? 'is-overdue' : '', task.priority === 'urgent' ? 'is-urgent' : '', task.escalated ? 'is-escalated' : ''].filter(Boolean).join(' '),
       draggable: !App.isVendor() || true,
+      // פס בצבע הפרויקט בקצה הכרטיס — זיהוי ויזואלי בלי לקרוא את שם הפרויקט
+      style: task.projectColor ? { borderInlineStartColor: task.projectColor, borderInlineStartWidth: '3px' } : {},
       onclick: (e) => { if (!e.target.closest('.select-box')) TaskCardView.open(task.id); }
     }, [
       selectable ? el('label.select-box', {}, [
@@ -310,7 +312,9 @@ const BoardView = (() => {
           }
         })
       ]) : null,
-      task.projectName ? el('div.tc-project', { text: task.projectName }) : null,
+      task.projectName
+        ? el('div.tc-project', {}, [el('span.project-dot', { style: { background: task.projectColor } }), task.projectName])
+        : null,
       el('div.tc-title', { text: task.title, style: selectable ? { paddingInlineEnd: '18px' } : {} }),
       el('div.tc-tags', {}, UI.taskTags(task)),
       el('div.tc-foot', {}, [
@@ -518,7 +522,10 @@ const BoardView = (() => {
     const body = el('div', {}, [
       UI.field('כותרת המשימה', titleInput),
       UI.field('תיאור', descInput),
-      el('div.row', {}, [UI.field('פרויקט', projectSelect), UI.field('אחראי', assigneeSelect)]),
+      el('div.row', {}, [
+        UI.field('פרויקט', projectSelect, 'משימה ללא פרויקט תופיע בלוח בקבוצת "ללא פרויקט"'),
+        UI.field('אחראי', assigneeSelect, 'משימה ללא אחראי לא תופיע ב"המשימות שלי" של אף אחד')
+      ]),
       el('div.row', {}, [UI.field('עדיפות', prioritySelect), UI.field('תאריך יעד', dueInput)]),
       el('div.row', {}, [
         UI.field('תלות במשימה אחרת', dependsSelect, 'המשימה לא תיסגר לפני שהמשימה החוסמת תושלם'),
@@ -561,14 +568,21 @@ const BoardView = (() => {
 
       saveBtn.disabled = true;
       try {
+        let created = null;
         if (isEdit) await API.updateTask(task.id, payload);
-        else await API.createTask(payload);
+        else created = await API.createTask(payload);
         m.close();
         UI.success(isEdit ? 'המשימה עודכנה' : 'המשימה נוצרה');
         await App.reloadReference();
         // הדיאלוג נפתח גם מהסרגל העליון, כשהמסך שמאחוריו אינו הלוח
         await App.refreshView();
         App.refreshNotifications();
+        /**
+         * משימה חדשה נפתחת מיד. בלי זה היא "נעלמת": משימה בלי אחראי אינה
+         * מופיעה בדף הבית, ומשימה בלי פרויקט נופלת לקבוצת "ללא פרויקט"
+         * בתחתית הלוח — והיוצר נשאר בלי שום סימן לאן הלכה.
+         */
+        if (created?.task?.id) TaskCardView.open(created.task.id);
       } catch (err) {
         saveBtn.disabled = false;
         UI.error(err);
@@ -593,6 +607,18 @@ const BoardView = (() => {
       { value: 'active', label: 'פעיל' }, { value: 'frozen', label: 'מוקפא' }, { value: 'done', label: 'הושלם' }
     ], project?.status ?? 'active');
 
+    /**
+     * צבע הפרויקט. לכל פרויקט יש כבר צבע — נגזר ממזההו — ולכן הבורר נפתח על
+     * הצבע שרואים בפועל, ולא על ריק שהיה מרמז שאין צבע.
+     */
+    const colorInput = el('input', { type: 'color', value: project?.color ?? '#0f766e' });
+    const colorSwatches = el('div.color-swatches', {}, UI.PROJECT_COLORS.map((c) =>
+      el('button.color-swatch', {
+        type: 'button', title: c, style: { background: c },
+        onclick: () => { colorInput.value = c; }
+      })
+    ));
+
     const templateSelect = UI.select([{ value: '', label: 'ללא תבנית' }], '');
     if (!isEdit) {
       API.templates().then((data) => {
@@ -607,6 +633,8 @@ const BoardView = (() => {
       UI.field('תיאור', descInput),
       el('div.row', {}, [UI.field('מנהל הפרויקט', managerSelect), UI.field('סטטוס', statusSelect)]),
       el('div.row', {}, [UI.field('תאריך התחלה', startInput), UI.field('תאריך יעד', dueInput)]),
+      UI.field('צבע הפרויקט', el('div.flex', {}, [colorInput, colorSwatches]),
+        'הצבע מסמן את שורות המשימות של הפרויקט, לזיהוי במבט'),
       !isEdit ? UI.field('יצירה מתבנית', templateSelect, 'התבנית תיצור אוטומטית את משימות הבסיס של הפרויקט') : null
     ]);
 
@@ -638,6 +666,7 @@ const BoardView = (() => {
         startDate: UI.fromInputDate(startInput.value),
         dueDate: UI.fromInputDate(dueInput.value),
         status: statusSelect.value,
+        color: colorInput.value,
         templateId: templateSelect.value || null
       };
       saveBtn.disabled = true;
