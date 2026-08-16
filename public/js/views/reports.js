@@ -165,14 +165,7 @@ const ReportsView = (() => {
               el('div.spacer'),
               el('span.mute-sm', { text: `${d.people} עובדים` })
             ]),
-            el('div.flex', { style: { gap: '18px', marginTop: '5px', alignItems: 'flex-end' } }, [
-              figure(d.open, 'משימות פתוחות'),
-              // משימות שהוטלו ברמה הארגונית נספרות למחלקה של האחראי עליהן
-              figure(d.orgTasks, 'משימות ארגוניות', {
-                secondary: true,
-                hint: 'משימות שהוטלו ברמה הארגונית ויושבות על אנשי המחלקה'
-              })
-            ]),
+            figure(d.open, 'משימות פתוחות'),
             el('div.bar-track', { style: { marginTop: '8px' } }, [
               el('div', {
                 style: {

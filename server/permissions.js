@@ -6,7 +6,7 @@
  * היררכיית התפקידים, מלמעלה למטה:
  *   אדמין על      — שליטה מלאה, ובעתיד יוכל להקים חברות נוספות
  *   מנהל מערכת    — ניהול המערכת ברמת הארגון: משתמשים, מחלקות, אוטומציות
- *   הנהלה         — ניהול עסקי: מטיל משימות ברמה הארגונית, רואה את כל הארגון
+ *   הנהלה         — ניהול עסקי: רואה ומנהל את כל הארגון
  *   מנהל מחלקה    — ניהול המחלקה שלו: משימות, עובדים וספקים של המחלקה
  *   עובד פנימי    — המשימות שהוא חלק מהן
  *   ספק חיצוני    — רק המשימות שהוקצו לו, בבורד הייעודי שלו
@@ -42,7 +42,6 @@ const MATRIX = {
   view_vendor_boards:       { superadmin: true, admin: true,  executive: true,  manager: true,        employee: false, vendor: 'self_board' },
   create_project:           { superadmin: true, admin: true,  executive: true,  manager: true,        employee: false, vendor: false },
   create_task:              { superadmin: true, admin: true,  executive: true,  manager: true,        employee: true,  vendor: false },
-  assign_org_wide_task:     { superadmin: true, admin: true,  executive: true,  manager: false,       employee: false, vendor: false },
   assign_department_task:   { superadmin: true, admin: true,  executive: true,  manager: true,        employee: false, vendor: false },
   edit_delete_task:         { superadmin: true, admin: true,  executive: true,  manager: 'department', employee: 'own', vendor: false },
   change_task_status:       { superadmin: true, admin: true,  executive: true,  manager: 'department', employee: 'own', vendor: 'assigned' },
@@ -63,7 +62,6 @@ const MATRIX_LABELS = {
   view_vendor_boards:       'צפייה בבורדי הספקים (תצוגת-על)',
   create_project:           'יצירת פרויקט',
   create_task:              'יצירת משימה',
-  assign_org_wide_task:     'הטלת משימה ברמה הארגונית',
   assign_department_task:   'הקצאת משימה לעובד אחר',
   edit_delete_task:         'עריכה / מחיקה של משימה',
   change_task_status:       'שינוי סטטוס משימה',
@@ -80,7 +78,7 @@ const MATRIX_LABELS = {
 };
 
 const MATRIX_NOTES = {
-  'view_internal_board.manager': 'המחלקה שלו, ומשימות ארגוניות של אנשיה',
+  'view_internal_board.manager': 'המחלקה שלו',
   'view_vendor_boards.vendor': 'רואה רק את הבורד שלו',
   'edit_delete_task.manager': 'משימות המחלקה שלו',
   'edit_delete_task.employee': 'רק משימות בבעלותו',
@@ -148,14 +146,12 @@ function isTaskParticipant(actor, task, project) {
   return false;
 }
 
-/**
- * האם המשימה בתחום המחלקה של השחקן.
- * משימה ארגונית נחשבת בתחום המחלקה אם היא הוקצתה למי מאנשי המחלקה.
- */
+/** האם המשימה בתחום המחלקה של השחקן */
 function isInActorDepartment(actor, task, assigneeDepartmentId = undefined) {
   if (!actor.departmentId) return false;
   if (task.department_id && task.department_id === actor.departmentId) return true;
-  if (task.level === 'organization' && assigneeDepartmentId === actor.departmentId) return true;
+  // משימה ללא שיוך מחלקתי — נקבעת לפי המחלקה של האחראי עליה
+  if (!task.department_id && assigneeDepartmentId === actor.departmentId) return true;
   return false;
 }
 

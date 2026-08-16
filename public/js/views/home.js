@@ -1,9 +1,8 @@
 'use strict';
 /**
  * מסך 1 — דף הבית האישי.
- * כל עובד — מנהל מחלקה כמו עובד פנימי — רואה כאן את המשימות שלו בשתי הרמות:
- * המשימות המחלקתיות והמשימות שהוטלו ברמה הארגונית. מי שרואה את כל הארגון
- * מקבל בנוסף חתך מחלקתי מרוכז.
+ * כל עובד רואה כאן את המשימות שלו, ומי שרואה את כל הארגון מקבל בנוסף
+ * חתך מחלקתי מרוכז.
  */
 
 const HomeView = (() => {
@@ -110,20 +109,18 @@ const HomeView = (() => {
     ]);
   }
 
-  const isOrgTask = (task) => task.level === 'organization';
 
   /**
    * משימה ארגונית מסומנת בתגית משלה, גם כשהיא מופיעה בתוך רשימה מעורבת
    * (כרטיסי האישור), כדי שהרמה תהיה מובחנת במבט אחד ולא רק לפי הכותרת שמעליה.
    */
-  const levelTag = (task) => (isOrgTask(task) ? el('span.tag.tag-internal', {}, ['🏢 ארגונית']) : null);
 
   function taskRow(task) {
     const due = UI.dueLabel(task.dueDate);
     return el('div.task-card', { onclick: () => TaskCardView.open(task.id) }, [
       task.projectName ? el('div.tc-project', { text: task.projectName }) : null,
       el('div.tc-title', { text: task.title }),
-      el('div.tc-tags', {}, [UI.statusTag(task), levelTag(task), ...UI.taskTags(task)]),
+      el('div.tc-tags', {}, [UI.statusTag(task), ...UI.taskTags(task)]),
       el('div.tc-foot', {}, [
         el('span', {
           text: due.text,
@@ -181,25 +178,13 @@ const HomeView = (() => {
       })];
     }
 
-    const orgTasks = tasks.filter(isOrgTask);
-    const deptTasks = tasks.filter((t) => !isOrgTask(t));
-
-    return [
-      taskListCard({
-        title: 'המשימות שלי במחלקה',
-        note: App.state.actor.department || null,
-        tasks: deptTasks,
-        emptyText: 'אין משימות מחלקתיות פתוחות',
-        onAll: () => App.navigate('board', { mine: true, level: 'department' })
-      }),
-      taskListCard({
-        title: 'משימות ברמה הארגונית',
-        note: 'משימות שהוטלו על פני כל הארגון',
-        tasks: orgTasks,
-        emptyText: 'לא הוטלו עליך משימות ברמה הארגונית',
-        onAll: () => App.navigate('board', { mine: true, level: 'organization' })
-      })
-    ];
+    return [taskListCard({
+      title: 'המשימות שלי',
+      note: App.state.actor.department || null,
+      tasks,
+      emptyText: 'אין משימות פתוחות המשויכות אליך',
+      onAll: () => App.navigate('board', { mine: true })
+    })];
   }
 
   /**
@@ -232,8 +217,7 @@ const HomeView = (() => {
               el('th', { text: 'עובדים' }),
               el('th', { text: 'פתוחות' }),
               el('th', { text: 'באיחור' }),
-              el('th', { text: 'דחופות' }),
-              el('th', { text: 'ארגוניות' })
+              el('th', { text: 'דחופות' })
             ])
           ]),
           el('tbody', {}, list.map((d) => el('tr', {
@@ -246,8 +230,7 @@ const HomeView = (() => {
             el('td', { text: String(d.people) }),
             el('td', { text: String(d.open) }),
             cell(d.overdue, 'tag-overdue'),
-            cell(d.urgent, 'tag-urgent'),
-            cell(d.orgTasks, 'tag-internal')
+            cell(d.urgent, 'tag-urgent')
           ])))
         ])
       ])
@@ -261,7 +244,6 @@ const HomeView = (() => {
       el('div.tc-tags', {}, [
         UI.statusTag(t),
         t.assigneeName ? el('span.tag.tag-vendor', {}, [t.assigneeName]) : null,
-        levelTag(t),
         ...UI.taskTags(t)
       ])
     ]));
@@ -331,13 +313,12 @@ const HomeView = (() => {
           el('div', { style: { flex: '1' } }, d.items.length
             ? d.items.map((t) => el('div', {
                 style: { cursor: 'pointer', fontSize: '13px', padding: '2px 0' },
-                onclick: () => TaskCardView.open(t.id),
-                title: isOrgTask(t) ? 'משימה ברמה הארגונית' : null
+                onclick: () => TaskCardView.open(t.id)
               }, [
-                // הצבע מסמן איחור בפועל, והסמל מסמן שהמשימה ארגונית — שני מצבים נפרדים
+                // הצבע מסמן איחור בפועל
                 el('span', {
                   style: { color: t.overdue ? 'var(--danger)' : 'inherit' },
-                  text: `• ${isOrgTask(t) ? '🏢 ' : ''}${t.title}`
+                  text: `• ${t.title}`
                 })
               ]))
             : [el('div.mute-sm', { text: '—' })])

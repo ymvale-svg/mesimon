@@ -58,7 +58,6 @@ const GridView = (() => {
         const key = t.assigneeId ? `${t.assigneeType}:${t.assigneeId}` : 'none';
         push(key, t.assigneeName ?? 'ללא אחראי', { assignee: t.assigneeId ? key : null }, t);
       } else if (groupBy === 'department') {
-        // משימה ארגונית אינה משויכת למחלקה — היא נופלת לקבוצת "ללא שיוך" שבסוף
         push(t.departmentId ?? 'none', t.departmentName ?? 'ללא שיוך', { departmentId: t.departmentId }, t);
       } else if (groupBy === 'status') {
         push(`${t.boardId}:${t.status}`, t.statusLabel, { status: t.status, boardId: t.boardId, color: t.statusColor }, t);
@@ -328,14 +327,7 @@ const GridView = (() => {
 
     cell.appendChild(el('div.title-box', {}, [
       text,
-      // הרמה הארגונית מסומנת בשורה עצמה — בטבלה מעורבת זה ההבדל היחיד שנראה
-      // לעין בין משימה שבאחריות המחלקה לבין משימה שהוטלה על כל הארגון
-      el('div.title-tags', {}, [
-        task.level === 'organization'
-          ? el('span.tag.tag-internal', { title: 'משימה ארגונית — חוצה מחלקות' }, ['🏛 ארגונית'])
-          : null,
-        ...UI.taskTags(task)
-      ]),
+      el('div.title-tags', {}, UI.taskTags(task)),
       el('button.open-card', {
         title: 'פתיחת כרטיס המשימה',
         onclick: (e) => { e.stopPropagation(); TaskCardView.open(task.id); }

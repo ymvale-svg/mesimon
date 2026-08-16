@@ -160,8 +160,6 @@ function shapeTask(task, actor, { withDetails = false } = {}) {
     checklistDone,
     dependsOnTaskId: task.depends_on_task_id,
     dependency: dependency ? { id: dependency.id, title: dependency.title, blocking: dependencyBlocking } : null,
-    level: task.level ?? 'department',
-    levelLabel: (task.level ?? 'department') === 'organization' ? 'ארגונית' : 'מחלקתית',
     departmentId: task.department_id ?? null,
     departmentName: task.department_id
       ? D.get('SELECT name FROM departments WHERE id = ?', task.department_id)?.name ?? null
@@ -549,13 +547,11 @@ router.get('/api/tasks', async (req, res, ctx) => {
       // הרשאה אישית: כל משימות המחלקה, ומשימות ארגוניות של אנשיה
       where.push(`(
         t.department_id IS ?
-        OR (t.level = 'organization' AND t.assignee_type = 'user'
-            AND t.assignee_id IN (SELECT id FROM users WHERE department_id IS ?))
         OR (t.assignee_type = 'user' AND t.assignee_id = ?)
         OR t.created_by = ?
         OR p.manager_id = ?
       )`);
-      params.push(actor.departmentId, actor.departmentId, actor.id, actor.id, actor.id);
+      params.push(actor.departmentId, actor.id, actor.id, actor.id);
     } else if (actor.role === 'employee') {
       where.push("(t.assignee_id = ? AND t.assignee_type = 'user' OR t.created_by = ? OR p.manager_id = ?)");
       params.push(actor.id, actor.id, actor.id);
@@ -563,27 +559,17 @@ router.get('/api/tasks', async (req, res, ctx) => {
       // מנהל מחלקה: המחלקה שלו, משימות ארגוניות של אנשיה, ומה שהוא עצמו חלק ממנו
       where.push(`(
         t.department_id = ?
-        OR (t.level = 'organization' AND t.assignee_type = 'user'
-            AND t.assignee_id IN (SELECT id FROM users WHERE department_id = ?))
         OR (t.assignee_type = 'user' AND t.assignee_id = ?)
         OR t.created_by = ?
         OR p.manager_id = ?
       )`);
-      params.push(actor.departmentId, actor.departmentId, actor.id, actor.id, actor.id);
-    }
-
-    // סינון לפי רמת המשימה — הדשבורד מפריד בין מחלקתי לארגוני
-    const taskLevel = q.get('level');
-    if (taskLevel === 'department' || taskLevel === 'organization') {
-      where.push('t.level = ?');
-      params.push(taskLevel);
+      params.push(actor.departmentId, actor.id, actor.id, actor.id);
     }
 
     // חתך מחלקתי — למי שרואה יותר ממחלקה אחת
     const deptFilter = q.get('departmentId');
     if (deptFilter && P.isOrgWide(actor)) {
-      where.push(`(t.department_id = ? OR (t.assignee_type = 'user'
-        AND t.assignee_id IN (SELECT id FROM users WHERE department_id = ?)))`);
+      where.push("(t.department_id = ? OR (t.assignee_type = 'user' AND t.assignee_id IN (SELECT id FROM users WHERE department_id = ?)))");
       params.push(Number(deptFilter), Number(deptFilter));
     }
   }
@@ -695,31 +681,24 @@ router.post('/api/tasks', async (req, res, ctx) => {
     }
   }
 
-  // רמת המשימה: ארגונית מוטלת בידי הנהלה ומעלה, אחרת מחלקתית.
-  // משימה מחלקתית משויכת למחלקת האחראי, ואם אין אחראי — למחלקת היוצר.
-  const wantsOrgLevel = body.level === 'organization';
-  if (wantsOrgLevel) requirePerm(actor, 'assign_org_wide_task');
-  const taskLevel = wantsOrgLevel ? 'organization' : 'department';
-
+  // המשימה משויכת למחלקת האחראי, ואם אין אחראי — למחלקת היוצר
   let taskDepartmentId = null;
-  if (!wantsOrgLevel) {
-    if (assigneeType === 'user' && assigneeId) {
-      taskDepartmentId = D.get('SELECT department_id FROM users WHERE id = ?', assigneeId)?.department_id ?? null;
-    }
-    if (!taskDepartmentId && body.departmentId) taskDepartmentId = Number(body.departmentId);
-    if (!taskDepartmentId && actor.type === 'user') taskDepartmentId = actor.departmentId ?? null;
-    // מנהל מחלקה אינו יוצר משימות למחלקה אחרת
-    if (isDeptManager(actor) && taskDepartmentId !== actor.departmentId) {
-      taskDepartmentId = actor.departmentId ?? null;
-    }
+  if (assigneeType === 'user' && assigneeId) {
+    taskDepartmentId = D.get('SELECT department_id FROM users WHERE id = ?', assigneeId)?.department_id ?? null;
+  }
+  if (!taskDepartmentId && body.departmentId) taskDepartmentId = Number(body.departmentId);
+  if (!taskDepartmentId && actor.type === 'user') taskDepartmentId = actor.departmentId ?? null;
+  // מנהל מחלקה אינו יוצר משימות למחלקה אחרת
+  if (isDeptManager(actor) && taskDepartmentId !== actor.departmentId) {
+    taskDepartmentId = actor.departmentId ?? null;
   }
 
   const res1 = D.run(
     `INSERT INTO tasks
       (title, description, project_id, board_id, assignee_type, assignee_id, status, priority,
        due_date, created_at, created_by, status_changed_at, activate_at, depends_on_task_id,
-       is_recurring, recurrence_freq, recurrence_policy, level, department_id)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+       is_recurring, recurrence_freq, recurrence_policy, department_id)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     title,
     String(body.description ?? ''),
     body.projectId ? Number(body.projectId) : null,
@@ -737,7 +716,6 @@ router.post('/api/tasks', async (req, res, ctx) => {
     body.isRecurring ? 1 : 0,
     body.isRecurring ? (body.recurrenceFreq ?? 'weekly') : null,
     body.recurrencePolicy ?? 'inherit',
-    taskLevel,
     taskDepartmentId
   );
   const id = Number(res1.lastInsertRowid);
@@ -816,17 +794,6 @@ router.patch('/api/tasks/:id', async (req, res, ctx) => {
       changes.push('עודכנה מדיניות המופע החוזר');
     }
 
-    // רמת המשימה — מחלקתית או ארגונית
-    if (body.level !== undefined && body.level !== (task.level ?? 'department')) {
-      if (body.level !== 'department' && body.level !== 'organization') throw badRequest('רמת משימה לא תקינה');
-      if (body.level === 'organization') requirePerm(actor, 'assign_org_wide_task');
-      const nextDept = body.level === 'organization'
-        ? null
-        : (assigneeDepartmentId(task) ?? (actor.type === 'user' ? actor.departmentId : null));
-      D.run('UPDATE tasks SET level = ?, department_id = ? WHERE id = ?', body.level, nextDept, task.id);
-      changes.push(`רמת המשימה: ${body.level === 'organization' ? 'ארגונית' : 'מחלקתית'}`);
-    }
-
     // שינוי אחראי — כולל מעבר בין בורדים
     if (body.assigneeType !== undefined || body.assigneeId !== undefined) {
       const newType = body.assigneeType ?? task.assignee_type;
@@ -844,8 +811,8 @@ router.patch('/api/tasks/:id', async (req, res, ctx) => {
         const prevName = assigneeName(task) ?? '—';
         let status = task.status;
         if (boardId !== task.board_id) status = Rules.firstColumnKey(boardId);
-        // משימה מחלקתית עוברת עם האחראי למחלקה שלו
-        if ((task.level ?? 'department') === 'department' && newType === 'user' && newId) {
+        // המשימה עוברת עם האחראי למחלקה שלו
+        if (newType === 'user' && newId) {
           const dept = D.get('SELECT department_id FROM users WHERE id = ?', newId)?.department_id ?? null;
           D.run('UPDATE tasks SET department_id = ? WHERE id = ?', dept, task.id);
         }
@@ -1413,7 +1380,7 @@ router.get('/api/reports', async (req, res, ctx) => {
   const bucket = (id, name) => {
     const key = id ?? 'none';
     if (!byDept.has(key)) {
-      byDept.set(key, { id: id ?? null, name, people: 0, open: 0, overdue: 0, urgent: 0, done: 0, orgTasks: 0 });
+      byDept.set(key, { id: id ?? null, name, people: 0, open: 0, overdue: 0, urgent: 0, done: 0 });
     }
     return byDept.get(key);
   };
@@ -1427,14 +1394,6 @@ router.get('/api/reports', async (req, res, ctx) => {
     entry.overdue += row.overdue;
     entry.urgent += row.urgent;
     entry.done += row.done;
-  }
-  // משימות ארגוניות נספרות לפי המחלקה של האחראי עליהן
-  for (const row of D.all(`SELECT u.department_id AS did, COUNT(*) AS c
-                           FROM tasks t JOIN users u ON u.id = t.assignee_id
-                           WHERE t.level = 'organization' AND t.assignee_type = 'user' AND t.archived = 0
-                           GROUP BY u.department_id`)) {
-    const entry = byDept.get(row.did ?? 'none');
-    if (entry) entry.orgTasks = row.c;
   }
   const departments = [...byDept.values()]
     .filter((d) => d.people > 0 || d.id !== null)

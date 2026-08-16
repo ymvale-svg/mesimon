@@ -41,7 +41,6 @@ const BoardView = (() => {
       priority: params.priority ?? '',
       status: params.status ?? '',
       boardId: params.boardId ?? '',
-      level: params.level ?? '',
       departmentId: params.departmentId ?? '',
       q: '',
       archived: params.archived ? '1' : '',
@@ -189,16 +188,6 @@ const BoardView = (() => {
       UI.select(priorityOptions, filters.priority, { onchange: (e) => set('priority', e.target.value) })
     ];
 
-    // רמת המשימה — הפרדה בין מה שבאחריות המחלקה לבין מה שהוטל על כל הארגון.
-    // לספק אין מחלקה ולכן השרת מתעלם מהפרמטר עבורו.
-    if (!App.isVendor()) {
-      items.push(UI.select([
-        { value: '', label: 'כל הרמות' },
-        { value: 'department', label: 'מחלקתיות' },
-        { value: 'organization', label: 'ארגוניות' }
-      ], filters.level, { onchange: (e) => set('level', e.target.value) }));
-    }
-
     if (isOrgWide() && departments.length) {
       const departmentOptions = [{ value: '', label: 'כל המחלקות' },
         ...departments.map((d) => ({ value: d.id, label: d.name }))];
@@ -234,7 +223,7 @@ const BoardView = (() => {
               const saved = App.state.savedFilters.find((f) => String(f.id) === e.target.value);
               // מסנן שנשמר לפני שנוספו רמת המשימה והחתך המחלקתי אינו נושא את
               // המפתחות האלה — מאפסים אותם ל"הכול" כדי שהמסנן יטען כפי שנשמר
-              if (saved) { filters = { ...filters, level: '', departmentId: '', ...saved.payload }; load(); }
+              if (saved) { filters = { ...filters, departmentId: '', ...saved.payload }; load(); }
             }
           }
         ));
@@ -249,8 +238,8 @@ const BoardView = (() => {
     const name = await UI.prompt('שם המסנן', { title: 'שמירת מסנן אישי' });
     if (!name) return;
     try {
-      const { projectId, assignee, priority, status, boardId, level, departmentId, q, onlyOverdue } = filters;
-      const data = await API.saveFilter(name, { projectId, assignee, priority, status, boardId, level, departmentId, q, onlyOverdue });
+      const { projectId, assignee, priority, status, boardId, departmentId, q, onlyOverdue } = filters;
+      const data = await API.saveFilter(name, { projectId, assignee, priority, status, boardId, departmentId, q, onlyOverdue });
       App.state.savedFilters = data.savedFilters;
       UI.success('המסנן נשמר');
       draw();
@@ -496,15 +485,6 @@ const BoardView = (() => {
     const assigneeSelect = UI.select(assigneeOptions,
       task?.assigneeId ? `${task.assigneeType}:${task.assigneeId}` : '');
 
-    // רמת המשימה מוצעת רק למי שרשאי להטיל משימה ארגונית. לכל השאר המשימה
-    // נשארת מחלקתית, וברירת המחדל היא מחלקתית גם עבורם.
-    const levelSelect = App.may('assign_org_wide_task')
-      ? UI.select([
-          { value: 'department', label: 'מחלקתית' },
-          { value: 'organization', label: 'ארגונית' }
-        ], task?.level ?? 'department')
-      : null;
-
     const prioritySelect = UI.select(App.state.priorities.map((p) => ({ value: p.key, label: p.label })), task?.priority ?? 'normal');
     const dueInput = el('input', { type: 'date', value: UI.toInputDate(task?.dueDate) });
     const activateInput = el('input', { type: 'date', value: UI.toInputDate(task?.activateAt) });
@@ -537,9 +517,6 @@ const BoardView = (() => {
       UI.field('כותרת המשימה', titleInput),
       UI.field('תיאור', descInput),
       el('div.row', {}, [UI.field('פרויקט', projectSelect), UI.field('אחראי', assigneeSelect)]),
-      levelSelect
-        ? UI.field('רמת המשימה', levelSelect, 'משימה ארגונית חוצה מחלקות ואינה משויכת למחלקה אחת')
-        : null,
       el('div.row', {}, [UI.field('עדיפות', prioritySelect), UI.field('תאריך יעד', dueInput)]),
       el('div.row', {}, [
         UI.field('תלות במשימה אחרת', dependsSelect, 'המשימה לא תיסגר לפני שהמשימה החוסמת תושלם'),
@@ -576,7 +553,6 @@ const BoardView = (() => {
       };
       // בלי הרשאה להטיל משימה ארגונית לא שולחים את השדה כלל, כדי שעריכה של
       // משימה ארגונית קיימת לא תוריד אותה בשוגג לרמה המחלקתית
-      if (levelSelect) payload.level = levelSelect.value;
       if (!isEdit) {
         payload.checklist = checklistInput.value.split('\n').map((s) => s.trim()).filter(Boolean);
       }
