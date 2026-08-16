@@ -300,6 +300,7 @@ const UI = (() => {
       card.classList.add('leaving');
       setTimeout(() => card.remove(), POP_FADE_MS);
     };
+
     /**
      * ‎closing‎ נבדק גם כאן: מי שמזיז את העכבר מהכרטיס בזמן ההיעלמות מפעיל
      * ‎mouseleave‎ על כרטיס שגמר את דרכו, ובלי הבדיקה היה נשאר שעון תלוי אחריו.

@@ -123,7 +123,6 @@ const App = (() => {
   const seenNotifIds = new Set();
   let notifPrimed = false;
   let notifTimer = null;
-  const taskTitles = new Map();  // מזהה משימה ← כותרת, כדי לא לשאול את השרת שוב על אותה משימה
 
   async function refreshNotifications() {
     try {
@@ -161,7 +160,6 @@ const App = (() => {
   function resetNotifSession() {
     stopNotifPolling();
     seenNotifIds.clear();
-    taskTitles.clear();
     notifPrimed = false;
     state.notifications = [];
     state.unread = 0;
@@ -172,7 +170,7 @@ const App = (() => {
    * הקפצת החדשות בלבד, מהישן לחדש: הכרטיסים נוספים בתחתית הערימה, וכך
    * החדשה ביותר יושבת למטה ואף כרטיס שנקרא כרגע אינו זז ממקומו.
    */
-  async function popNewNotifications(list) {
+  function popNewNotifications(list) {
     const fresh = [];
     for (const n of list) {          // השרת מחזיר מהחדש לישן
       if (seenNotifIds.has(n.id)) continue;
@@ -180,23 +178,7 @@ const App = (() => {
       if (notifPrimed && !n.isRead) fresh.push(n);
     }
     notifPrimed = true;              // נקבע לפני ההמתנות, כדי שהבאה מקבילה לא תקפיץ הכול מחדש
-    for (const n of fresh.slice(0, NOTIF_POP_MAX).reverse()) await popNotification(n);
-  }
-
-  /**
-   * כותרת המשימה אינה חלק מאובייקט ההתראה, ולכן מביאים אותה מהשרת פעם אחת
-   * לכל משימה. גם כישלון נשמר במפה: משימה שנמחקה או שאין אליה הרשאה לא
-   * תיבדק שוב בכל התראה נוספת עליה.
-   */
-  async function taskTitleFor(taskId) {
-    if (taskTitles.has(taskId)) return taskTitles.get(taskId);
-    let title = null;
-    try {
-      const data = await API.task(taskId);
-      title = data?.task?.title ?? null;
-    } catch { /* נשמר כ-null */ }
-    taskTitles.set(taskId, title);
-    return title;
+    for (const n of fresh.slice(0, NOTIF_POP_MAX).reverse()) popNotification(n);
   }
 
   /**
@@ -229,9 +211,10 @@ const App = (() => {
     return { author: SYSTEM_AUTHOR, headline, body };
   }
 
-  async function popNotification(n) {
+  function popNotification(n) {
     const style = NOTIF_STYLE[n.kind] ?? NOTIF_STYLE.status_change;
-    const taskTitle = n.taskId ? await taskTitleFor(n.taskId) : null;
+    // שם המשימה מגיע מהשרת יחד עם ההתראה; קודם נשלחה בקשה נפרדת לכל משימה
+    const taskTitle = n.taskTitle ?? null;
     const parts = notifParts(n);
 
     UI.notifyPop({

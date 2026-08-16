@@ -1255,10 +1255,20 @@ router.get('/api/notifications', async (req, res, ctx) => {
     'SELECT * FROM notifications WHERE target_type = ? AND target_id = ? ORDER BY created_at DESC LIMIT 100',
     actor.type === 'vendor' ? 'vendor' : 'user', actor.id
   );
+  // שם המשימה נשלח עם ההתראה. בלעדיו הממשק נאלץ לשלוח בקשה נפרדת לכל
+  // משימה כדי להציג את שמה בכרטיס המוקפץ — בקשה לכל התראה.
+  const titles = new Map();
+  const taskTitle = (id) => {
+    if (id === null || id === undefined) return null;
+    if (!titles.has(id)) titles.set(id, D.get('SELECT title FROM tasks WHERE id = ?', id)?.title ?? null);
+    return titles.get(id);
+  };
+
   sendJson(res, 200, {
     notifications: rows.map((n) => ({
       id: n.id, kind: n.kind, title: n.title, body: n.body,
-      taskId: n.task_id, isRead: !!n.is_read, createdAt: n.created_at
+      taskId: n.task_id, taskTitle: taskTitle(n.task_id),
+      isRead: !!n.is_read, createdAt: n.created_at
     })),
     unread: rows.filter((n) => !n.is_read).length
   });
