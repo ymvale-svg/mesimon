@@ -532,6 +532,74 @@ const UI = (() => {
     return el(`div.company-logo${className ? `.${className}` : ''}`, {}, [img, fallback]);
   }
 
+  /**
+   * הסוגים שהשרת מסכים להגיש לצפייה בתוך הדפדפן. הרשימה זהה ל-INLINE_MIMES
+   * שבשרת — כאן היא רק כדי לא להציע כפתור שייכשל. SVG אינו ברשימה בכוונה:
+   * הוא מסמך שאפשר לשתול בו סקריפט.
+   */
+  const PREVIEW_MIMES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/bmp', 'application/pdf'];
+  const canPreview = (file) => PREVIEW_MIMES.includes(String(file?.mime ?? '').toLowerCase());
+  const isPdf = (file) => String(file?.mime ?? '').toLowerCase() === 'application/pdf';
+
+  /**
+   * תצוגה מקדימה בתוך המערכת. ‎files‎ היא רשימת הקבצים שאפשר לדפדף ביניהם,
+   * כדי שלא צריך לסגור ולפתוח חלון לכל קובץ; ‎index‎ הוא הקובץ שנפתח.
+   */
+  function preview(files, index = 0) {
+    const list = (Array.isArray(files) ? files : [files]).filter(canPreview);
+    if (!list.length) return;
+    let at = Math.max(0, Math.min(index, list.length - 1));
+
+    const stage = el('div.preview-stage');
+    const caption = el('div.preview-caption');
+    const counter = el('div.mute-sm');
+    const prev = el('button.btn.btn-sm', { title: 'הקודם' }, ['›']);
+    const next = el('button.btn.btn-sm', { title: 'הבא' }, ['‹']);
+
+    const show = () => {
+      const f = list[at];
+      // מקור אחד לשני סוגי הקבצים: אותה כתובת, והדפדפן מציג לפי סוג התוכן
+      const src = `/api/attachments/${f.id}/view`;
+      mount(stage, isPdf(f)
+        // הכותרת הפנימית של הצופה מוסתרת (‎#toolbar=0‎) כדי שלא יופיע כפתור
+        // הורדה שני מעל זה שכבר יש בחלון
+        ? el('iframe.preview-pdf', { src: `${src}#toolbar=0&navpanes=0`, title: f.filename })
+        : el('img.preview-img', { src, alt: f.filename }));
+      mount(caption, el('b', { text: f.filename }), el('span.mute-sm', { text: ` · ${fileSize(f.size)}` }));
+      counter.textContent = list.length > 1 ? `${at + 1} מתוך ${list.length}` : '';
+      dl.href = `/api/attachments/${f.id}/download`;
+    };
+
+    const step = (d) => { at = (at + d + list.length) % list.length; show(); };
+    prev.addEventListener('click', () => step(1));   // RTL — "הקודם" יושב מימין
+    next.addEventListener('click', () => step(-1));
+
+    const dl = el('a.btn.btn-sm', { download: '' }, ['⬇ הורדה']);
+    const onKey = (e) => {
+      if (e.key === 'ArrowRight') step(1);
+      if (e.key === 'ArrowLeft') step(-1);
+    };
+    document.addEventListener('keydown', onKey);
+
+    show();
+    return modal({
+      title: 'תצוגה מקדימה',
+      size: 'xwide',
+      body: el('div.preview-wrap', {}, [
+        stage,
+        el('div.preview-bar', {}, [
+          caption,
+          el('div.spacer'),
+          counter,
+          list.length > 1 ? prev : null,
+          list.length > 1 ? next : null,
+          dl
+        ])
+      ]),
+      onClose: () => document.removeEventListener('keydown', onKey)
+    });
+  }
+
   const fileIcon = (name) => {
     const ext = String(name).split('.').pop().toLowerCase();
     if (['png', 'jpg', 'jpeg', 'gif', 'svg', 'psd', 'ai'].includes(ext)) return '🖼️';
@@ -550,6 +618,7 @@ const UI = (() => {
     initials, avatar, priorityTag, statusTag, taskTags,
     modal, confirm, prompt, toast, error, success, notifyPop, clearNotifyPops,
     empty, spinner, field, select, renderMentions, fileSize, fileIcon,
+    preview, canPreview,
     logo, logoMark, companyLogo, refitLogos
   };
 })();

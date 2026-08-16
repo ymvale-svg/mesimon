@@ -1176,21 +1176,47 @@ router.post('/api/tasks/:id/attachments', async (req, res, ctx) => {
   sendJson(res, 200, { task: shapeTask(getTaskOr404(task.id), actor, { withDetails: true }) });
 });
 
-router.get('/api/attachments/:id/download', async (req, res, ctx) => {
-  const actor = ctx.requireActor();
-  const att = D.get('SELECT * FROM attachments WHERE id = ?', Number(ctx.params.id));
-  if (!att) throw notFound('הקובץ לא נמצא');
-  assertVisible(actor, getTaskOr404(att.task_id));
+/**
+ * הסוגים היחידים שמותר להגיש לצפייה בתוך הדפדפן. זו רשימה סגורה ולא סינון
+ * שלילי, כי הגשה בתוך המקור של המערכת פירושה שהקובץ רץ עם הרשאותיה: קובץ
+ * HTML — ו-SVG, שהוא מסמך שאפשר לשתול בו סקריפט — היו יכולים לקרוא את
+ * הסשן של מי שפותח אותם. הם נשארים בהורדה בלבד.
+ */
+const INLINE_MIMES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/bmp', 'application/pdf']);
+const isPreviewable = (mime) => INLINE_MIMES.has(String(mime ?? '').toLowerCase());
 
+function sendAttachment(res, att, { inline = false } = {}) {
   const filePath = path.join(D.UPLOADS_DIR, att.stored_name);
   if (!fs.existsSync(filePath)) throw notFound('הקובץ אינו קיים בשרת');
   const buf = fs.readFileSync(filePath);
   res.writeHead(200, {
     'content-type': att.mime,
     'content-length': buf.length,
-    'content-disposition': `attachment; filename*=UTF-8''${encodeURIComponent(att.filename)}`
+    'content-disposition': `${inline ? 'inline' : 'attachment'}; filename*=UTF-8''${encodeURIComponent(att.filename)}`,
+    // הדפדפן לא ינחש סוג תוכן אחר מזה שהוצהר — בלי זה קובץ HTML שהועלה
+    // בתחפושת של תמונה עדיין היה מתפרש כדף
+    'x-content-type-options': 'nosniff'
   });
   res.end(buf);
+}
+
+function attachmentFor(ctx) {
+  const actor = ctx.requireActor();
+  const att = D.get('SELECT * FROM attachments WHERE id = ?', Number(ctx.params.id));
+  if (!att) throw notFound('הקובץ לא נמצא');
+  assertVisible(actor, getTaskOr404(att.task_id));
+  return att;
+}
+
+router.get('/api/attachments/:id/download', async (req, res, ctx) => {
+  sendAttachment(res, attachmentFor(ctx));
+});
+
+/** צפייה בתוך המערכת — תמונות ו-PDF בלבד, בלי הורדה למחשב */
+router.get('/api/attachments/:id/view', async (req, res, ctx) => {
+  const att = attachmentFor(ctx);
+  if (!isPreviewable(att.mime)) throw badRequest('סוג הקובץ אינו נתמך לתצוגה מקדימה');
+  sendAttachment(res, att, { inline: true });
 });
 
 // ---------------------------------------------------------------------------

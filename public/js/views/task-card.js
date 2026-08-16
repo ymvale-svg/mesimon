@@ -352,15 +352,24 @@ const TaskCardView = (() => {
                 c.body ? el('div.c-text', {}, [UI.renderMentions(c.body, names)]) : null,
                 // הקובץ מוצג בתוך ההודעה שבה נשלח — שם הוא נמצא בהקשר שלו
                 c.attachments?.length
-                  ? el('div.file-chips', { style: { marginTop: '6px' } }, c.attachments.map((a) =>
-                      el('a.file-chip', {
-                        href: `/api/attachments/${a.id}/download`,
-                        title: `${a.filename} · ${UI.fileSize(a.size)}`
-                      }, [
+                  ? el('div.file-chips', { style: { marginTop: '6px' } }, c.attachments.map((a) => {
+                      const shown = c.attachments.filter(UI.canPreview);
+                      const label = [
                         el('span', { text: UI.fileIcon(a.filename) }),
                         el('span.fc-name', { text: a.filename }),
                         el('span.mute-sm', { text: UI.fileSize(a.size) })
-                      ])))
+                      ];
+                      // קובץ שאפשר לראות נפתח בתוך המערכת; שאר הסוגים יורדים למחשב
+                      return UI.canPreview(a)
+                        ? el('button.file-chip', {
+                            title: `${a.filename} · ${UI.fileSize(a.size)} — לחיצה לתצוגה`,
+                            onclick: () => UI.preview(shown, shown.indexOf(a))
+                          }, label)
+                        : el('a.file-chip', {
+                            href: `/api/attachments/${a.id}/download`,
+                            title: `${a.filename} · ${UI.fileSize(a.size)}`
+                          }, label);
+                    }))
                   : null
               ])
             ])))
@@ -427,6 +436,9 @@ const TaskCardView = (() => {
       uploadFiles([...e.dataTransfer.files]);
     });
 
+    // כל הקבצים הניתנים לצפייה, כדי שהחלון יאפשר לדפדף ביניהם ולא רק לראות אחד
+    const previewable = task.attachments.filter(UI.canPreview);
+
     // קיבוץ לפי שם קובץ — הגרסה האחרונה בראש וגרסאות היסטוריות מתחתיה
     const groups = new Map();
     for (const a of task.attachments) {
@@ -445,6 +457,10 @@ const TaskCardView = (() => {
                   el('b', { text: name }),
                   el('small', { text: `גרסה ${a.version}${i === 0 ? ' (עדכנית)' : ''} · ${UI.fileSize(a.size)} · ${a.uploaderName} · ${UI.formatDateTime(a.createdAt)}` })
                 ]),
+                // תמונות ו-PDF נפתחים בתוך המערכת; שאר הסוגים בהורדה בלבד
+                UI.canPreview(a)
+                  ? el('button.btn.btn-sm', { onclick: () => UI.preview(previewable, previewable.indexOf(a)) }, ['👁 תצוגה'])
+                  : null,
                 el('a.btn.btn-sm', { href: `/api/attachments/${a.id}/download` }, ['⬇ הורדה'])
               ])
             ))))
