@@ -405,7 +405,6 @@ const App = (() => {
     if (may('view_vendor_boards')) add('vendorBoards');
 
     // הבלוק הזה כולו לא נבנה לספק — מסלול הספק חזר כבר למעלה עם רשימת הניווט שלו
-    items.push(el('div.nav-group', { text: 'פרויקטים' }));
     const projectItem = (p) =>
       el(`button.nav-item${state.route.name === 'board' && state.route.params.projectId === p.id ? '.active' : ''}`, {
         onclick: () => navigate('board', { projectId: p.id })
@@ -426,6 +425,12 @@ const App = (() => {
     const openProjects = state.projects.filter((p) => p.status !== 'done');
     const pinnedProjects = openProjects.filter((p) => p.pinned);
     const otherProjects = openProjects.filter((p) => !p.pinned);
+    /**
+     * הרשימה מכילה רק את הפרויקטים של המשתמש, ולכן היא עשויה להיות ריקה
+     * לגמרי — ואז גם הכותרת "פרויקטים" מיותרת ולא נבנית, כדי שלא תישאר
+     * כותרת תלויה באוויר בלי דבר תחתיה.
+     */
+    if (openProjects.length || may('create_project')) items.push(el('div.nav-group', { text: 'פרויקטים' }));
     items.push(...pinnedProjects.map(projectItem));
     // חוצץ רק כששתי הקבוצות מאוכלסות — אחרת היה נראה כקו תלוש בראש הרשימה או בסופה
     if (pinnedProjects.length && otherProjects.length) items.push(el('div.nav-pinned-sep'));

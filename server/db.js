@@ -123,7 +123,8 @@ CREATE TABLE IF NOT EXISTS projects (
   start_date  TEXT,
   due_date    TEXT,
   status      TEXT    NOT NULL DEFAULT 'active' CHECK (status IN ('active','frozen','done')),
-  created_at  TEXT    NOT NULL
+  created_at  TEXT    NOT NULL,
+  created_by  INTEGER REFERENCES users(id)
 );
 
 CREATE TABLE IF NOT EXISTS tasks (
@@ -620,6 +621,8 @@ function migrate() {
   // הארגונית שבוטלה. היא נותרת ריקה ואינה נקראת; מחיקת עמודה ב-SQLite
   // דורשת בניית טבלה מחדש, וזה סיכון מיותר עבור עמודה שאינה מפריעה.
   addColumn('tasks', 'department_id', 'INTEGER REFERENCES departments(id) ON DELETE SET NULL');
+  // מי פתח את הפרויקט — הפרויקט נשאר ברשימה שלו גם אם מונה לו מנהל אחר
+  addColumn('projects', 'created_by', 'INTEGER REFERENCES users(id)');
 
   // המחלקות היו עד כה טקסט חופשי בכל משתמש. הופכים אותן לישויות ומקשרים.
   const legacy = all(

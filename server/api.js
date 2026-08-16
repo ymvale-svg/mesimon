@@ -75,9 +75,12 @@ function canSeeTask(actor, task) {
       || P.isTaskParticipant(actor, task, projectOf(task));
   }
 
-  // עובד פנימי: רק בבורד הפנימי, ורק משימות שהוא חלק מהן
+  // עובד פנימי: רק בבורד הפנימי, ורק משימות שהוא חלק מהן — אלא אם הוענקה לו
+  // הרשאה אישית לראות את כל המחלקה, ואז אותו היקף כמו למנהל המחלקה
   if (board.type !== 'internal') return false;
-  return P.isTaskParticipant(actor, task, projectOf(task));
+  if (P.isTaskParticipant(actor, task, projectOf(task))) return true;
+  return P.level(actor, 'view_internal_board') === 'department'
+    && P.isInActorDepartment(actor, task, assigneeDepartmentId(task));
 }
 
 /**
@@ -470,13 +473,50 @@ router.get('/api/bootstrap', async (req, res, ctx) => {
   sendJson(res, 200, payload);
 });
 
+/**
+ * אילו פרויקטים שייכים למשתמש. ‎null‎ פירושו "הכול" — הנהלה ומעלה רואים את
+ * כל הארגון. לשאר, פרויקט הוא שלהם אם פתחו אותו, אם הם מנהליו, או אם יש בו
+ * משימה שהם רואים. זהו בדיוק היקף הראייה של המשימות, רק בהיטל של פרויקטים,
+ * כדי שלא ייווצר מצב שברשימה מופיע פרויקט שכל תוכנו חסום.
+ */
+function visibleProjectIds(actor) {
+  if (isVendor(actor)) return new Set();
+  if (P.isOrgWide(actor)) return null;
+
+  const mine = ['p.created_by = ?', 'p.manager_id = ?'];
+  const params = [actor.id, actor.id];
+
+  // היקף מחלקתי — מנהל מחלקה, או עובד שקיבל הרשאה אישית לראות את המחלקה
+  if (P.level(actor, 'view_internal_board') === 'department' && actor.departmentId) {
+    mine.push('t.department_id = ?');
+    params.push(actor.departmentId);
+    // משימה ללא שיוך מחלקתי נחשבת למחלקת האחראי עליה
+    mine.push(`(t.department_id IS NULL AND t.assignee_type = 'user'
+                AND t.assignee_id IN (SELECT id FROM users WHERE department_id = ?))`);
+    params.push(actor.departmentId);
+  }
+
+  mine.push("(t.assignee_type = 'user' AND t.assignee_id = ?)", 't.created_by = ?');
+  params.push(actor.id, actor.id);
+
+  const rows = D.all(
+    `SELECT DISTINCT p.id FROM projects p
+       LEFT JOIN tasks t ON t.project_id = p.id
+      WHERE ${mine.join(' OR ')}`,
+    ...params
+  );
+  return new Set(rows.map((r) => r.id));
+}
+
 function listProjectsFor(actor) {
   const pinned = new Set(
     actor.type === 'user'
       ? D.all('SELECT project_id FROM project_pins WHERE user_id = ?', actor.id).map((r) => r.project_id)
       : []
   );
-  const rows = D.all('SELECT * FROM projects ORDER BY status, name');
+  const visible = visibleProjectIds(actor);
+  const rows = D.all('SELECT * FROM projects ORDER BY status, name')
+    .filter((p) => visible === null || visible.has(p.id));
   const shaped = rows.map((p) => {
     const stats = D.get(
       `SELECT COUNT(*) total,
@@ -1170,9 +1210,10 @@ router.post('/api/projects', async (req, res, ctx) => {
   const name = String(b.name ?? '').trim();
   if (!name) throw badRequest('נדרש שם פרויקט');
   const r = D.run(
-    'INSERT INTO projects (name, description, manager_id, start_date, due_date, status, created_at) VALUES (?,?,?,?,?,?,?)',
+    `INSERT INTO projects (name, description, manager_id, start_date, due_date, status, created_at, created_by)
+     VALUES (?,?,?,?,?,?,?,?)`,
     name, String(b.description ?? ''), b.managerId ? Number(b.managerId) : null,
-    b.startDate || null, b.dueDate || null, b.status ?? 'active', D.nowIso()
+    b.startDate || null, b.dueDate || null, b.status ?? 'active', D.nowIso(), actor.id
   );
   const id = Number(r.lastInsertRowid);
 
@@ -2071,9 +2112,11 @@ router.get('/api/search', async (req, res, ctx) => {
     `%${q}%`, `%${q}%`
   ).filter((t) => canSeeTask(actor, t)).slice(0, 25).map((t) => shapeTask(t, actor));
 
-  const projects = isVendor(actor)
-    ? []
-    : D.all('SELECT id, name FROM projects WHERE name LIKE ? LIMIT 10', `%${q}%`);
+  // החיפוש אינו עוקף את היקף הראייה — פרויקט שאינו של המשתמש לא יופיע בו
+  const visibleProjects = visibleProjectIds(actor);
+  const projects = D.all('SELECT id, name FROM projects WHERE name LIKE ? LIMIT 30', `%${q}%`)
+    .filter((p) => visibleProjects === null || visibleProjects.has(p.id))
+    .slice(0, 10);
 
   sendJson(res, 200, { tasks, projects });
 });
