@@ -8,6 +8,15 @@
 const HomeView = (() => {
   const { el } = UI;
 
+  let containerRef = null;
+
+  /**
+   * משימות שסומנו כהושלמו בביקור הנוכחי במסך. השרת מחזיר ל"המשימות שלי" רק
+   * משימות פתוחות, ובלי הזיכרון הזה השורה הייתה נעלמת באותו רגע שסומנה —
+   * המשתמש לא היה רואה את הקו החוצה שביקש. ביציאה מהמסך הן נושרות.
+   */
+  const keepCompleted = new Map();
+
   /** התפקידים שרואים את כל הארגון ולא מחלקה אחת — רק להם יש טעם בחתך מחלקתי */
   const ORG_WIDE_ROLES = ['superadmin', 'admin', 'executive'];
 
@@ -45,8 +54,16 @@ const HomeView = (() => {
   const shownLabel = (shown, total, one, many) =>
     (shown < total ? `${shown} מתוך ${total} ${many}` : countLabel(total, one, many));
 
-  async function render(container) {
-    UI.mount(container, UI.spinner());
+  /**
+   * ‎silent‎ — טעינה מחדש ברקע: בלי ספינר, ותוך שמירת מיקום הגלילה. המסך
+   * הקיים נשאר לנגד העיניים עד שהתוכן החדש מוכן, וכך עדכון משימה אינו נראה
+   * כרענון של כל הדף.
+   */
+  async function render(container, { silent = false } = {}) {
+    containerRef = container;
+    const scrollTop = silent ? container.scrollTop : 0;
+    // כניסה חדשה למסך מתחילה מדף נקי — המשימות שהושלמו בביקור הקודם כבר סגורות
+    if (!silent) { keepCompleted.clear(); UI.mount(container, UI.spinner()); }
     let data;
     let reports = null;
     try {
@@ -56,9 +73,17 @@ const HomeView = (() => {
         showsDepartmentCut() ? API.reports().catch(() => null) : Promise.resolve(null)
       ]);
     } catch (err) {
+      // בטעינת רקע כשל רגעי לא ימחק את מה שכבר על המסך
+      if (silent) return;
       return UI.mount(container, UI.empty(err.message, '⚠️'));
     }
     App.state.homeData = data;
+
+    // המשימות שסומנו כהושלמו כאן חוזרות לרשימה, בסופה, עם הקו החוצה
+    if (keepCompleted.size) {
+      const ids = new Set(data.tasks.mine.map((t) => t.id));
+      data.tasks.mine = [...data.tasks.mine, ...[...keepCompleted.values()].filter((t) => !ids.has(t.id))];
+    }
 
     const hour = new Date().getHours();
     const greeting = hour < 12 ? 'בוקר טוב' : hour < 18 ? 'צהריים טובים' : 'ערב טוב';
@@ -85,6 +110,16 @@ const HomeView = (() => {
         ])
       ])
     );
+    if (scrollTop) container.scrollTop = scrollTop;
+  }
+
+  /** טעינה מחדש ברקע — לשימוש אחרי עדכון משימה, בלי לבנות מחדש את האתר */
+  const reload = () => (containerRef ? render(containerRef, { silent: true }) : Promise.resolve());
+
+  /** עדכון המונים והרשימות אחרי סימון בשורה, בלי הבהוב ובלי לאבד גלילה */
+  function refreshQuietly() {
+    reload();
+    App.refreshNotifications();
   }
 
   /** ווידג'טים עם ספירה ומעבר ישיר לרשימה המסוננת */
@@ -115,11 +150,61 @@ const HomeView = (() => {
    * (כרטיסי האישור), כדי שהרמה תהיה מובחנת במבט אחד ולא רק לפי הכותרת שמעליה.
    */
 
+  /**
+   * הסטטוס הסופי של הבורד שהמשימה יושבת בו. אין קביעה קשיחה של מפתח סטטוס —
+   * לכל בורד עמודות משלו, והסימון "בוצע" הוא מעבר לעמודה המסומנת כסופית.
+   */
+  const finalStatusOf = (task) =>
+    App.state.boards.find((b) => b.id === task.boardId)?.columns.find((c) => c.isFinal)?.key ?? null;
+
+  const firstStatusOf = (task) =>
+    App.state.boards.find((b) => b.id === task.boardId)?.columns.find((c) => !c.isFinal)?.key ?? null;
+
+  function completeBox(task) {
+    const finalKey = finalStatusOf(task);
+    if (!task.canChangeStatus || !finalKey) return null;
+
+    const box = el('input.tc-done-box', {
+      type: 'checkbox',
+      checked: !!task.isFinal,
+      title: task.isFinal ? 'ביטול הסימון' : 'סימון כהושלמה'
+    });
+    // הלחיצה על התיבה אינה אמורה לפתוח גם את כרטיס המשימה
+    box.addEventListener('click', (e) => e.stopPropagation());
+    box.addEventListener('change', async () => {
+      const wantDone = box.checked;
+      const target = wantDone ? finalKey : firstStatusOf(task);
+      box.disabled = true;
+      try {
+        await API.updateTask(task.id, { status: target });
+        task.isFinal = wantDone;
+        // המשימה נשארת ברשימה עם קו חוצה עד היציאה מהמסך, אף שהשרת כבר אינו
+        // מחזיר אותה — אחרת הסימון היה נעלם ברגע שנעשה, ולא היה נראה כלל
+        if (wantDone) keepCompleted.set(task.id, task);
+        else keepCompleted.delete(task.id);
+        box.closest('.task-card')?.classList.toggle('is-done', wantDone);
+        UI.success(wantDone ? 'המשימה סומנה כהושלמה' : 'הסימון בוטל');
+        refreshQuietly();
+      } catch (err) {
+        box.checked = !wantDone;
+        UI.error(err);
+      } finally {
+        box.disabled = false;
+      }
+    });
+    return box;
+  }
+
   function taskRow(task) {
     const due = UI.dueLabel(task.dueDate);
-    return el('div.task-card', { onclick: () => TaskCardView.open(task.id) }, [
-      task.projectName ? el('div.tc-project', { text: task.projectName }) : null,
-      el('div.tc-title', { text: task.title }),
+    return el(`div.task-card${task.isFinal ? '.is-done' : ''}`, { onclick: () => TaskCardView.open(task.id) }, [
+      el('div.tc-head', {}, [
+        completeBox(task),
+        el('div', { style: { flex: '1', minWidth: '0' } }, [
+          task.projectName ? el('div.tc-project', { text: task.projectName }) : null,
+          el('div.tc-title', { text: task.title })
+        ])
+      ]),
       el('div.tc-tags', {}, [UI.statusTag(task), ...UI.taskTags(task)]),
       el('div.tc-foot', {}, [
         el('span', {
@@ -378,5 +463,5 @@ const HomeView = (() => {
     ]);
   }
 
-  return { render };
+  return { render, reload };
 })();

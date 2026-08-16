@@ -404,6 +404,15 @@ textarea { resize: vertical; min-height: 76px; }
 .task-card .tc-foot .spacer { flex: 1; }
 .task-card .tc-project { font-size: 11.5px; color: var(--text-mute); margin-bottom: 5px; }
 .task-card .tc-check { display: flex; align-items: center; gap: 5px; }
+
+/* סימון "בוצע" ישירות משורת המשימה */
+.task-card .tc-head { display: flex; align-items: flex-start; gap: 9px; }
+.task-card .tc-done-box {
+  width: 16px; height: 16px; flex: none; margin-top: 2px;
+  accent-color: var(--ok); cursor: pointer;
+}
+.task-card.is-done { opacity: .62; }
+.task-card.is-done .tc-title { text-decoration: line-through; text-decoration-thickness: 1.5px; }
 .progress-mini { width: 44px; height: 4px; border-radius: 3px; background: var(--border); overflow: hidden; }
 .progress-mini > div { height: 100%; background: var(--ok); }
 .task-card .select-box { position: absolute; top: 9px; left: 9px; }
@@ -540,6 +549,8 @@ th.cell-bar { background: var(--border) !important; }
 
 .grid-row { transition: background .1s; }
 .grid-row:hover { background: var(--surface-2); }
+/* השורה כולה פותחת את המשימה — התאים הנערכים במקום מחזירים סמן משלהם */
+.grid-row.is-clickable { cursor: pointer; }
 .grid-row.selected { background: var(--brand-light); }
 .grid-row.is-overdue .due-box { font-weight: 700; }
 .grid-row.is-escalated { box-shadow: inset 3px 0 0 #b91c1c; }
@@ -553,20 +564,7 @@ th.cell-bar { background: var(--border) !important; }
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   flex: 1 1 auto; min-width: 0;
 }
-.title-text.editable { cursor: text; }
-.title-text.editable:hover { background: #eef2f6; box-shadow: inset 0 0 0 1px var(--border-strong); }
-.inline-title-input {
-  font-weight: 600; padding: 3px 6px; border-radius: 5px;
-  border: 1px solid var(--brand); max-width: 340px;
-}
 .title-tags { display: flex; gap: 4px; flex: none; }
-.open-card {
-  border: 0; background: none; color: var(--brand); cursor: pointer;
-  font-size: 11.5px; font-weight: 700; opacity: 0; flex: none;
-  padding: 2px 6px; border-radius: 5px; white-space: nowrap;
-}
-.grid-row:hover .open-card { opacity: 1; }
-.open-card:hover { background: var(--brand-light); }
 
 /* --- תאי סטטוס ועדיפות: התא עצמו הוא הפקד --- */
 

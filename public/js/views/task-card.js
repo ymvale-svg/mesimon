@@ -38,15 +38,12 @@ const TaskCardView = (() => {
     App.refreshNotifications();
   }
 
-  /** רענון התצוגה שמאחורי המודל, אם רלוונטי */
+  /**
+   * רענון התצוגה שמאחורי המודל. הכול ברקע ובלי ספינר: המשתמש עדיין עומד
+   * בתוך כרטיס המשימה, ובנייה מחדש של המסך מאחוריו נראית כרענון של כל האתר.
+   */
   function refreshBackground() {
-    if (App.state.route.name === 'board' || App.state.route.name === 'vendorBoards' || App.state.route.name === 'archive') {
-      BoardView.reload();
-    } else if (App.state.route.name === 'home') {
-      App.render();
-    } else if (App.state.route.name === 'vendor') {
-      VendorPortalView.reload();
-    }
+    App.refreshView();
   }
 
   function draw(container) {
@@ -58,12 +55,23 @@ const TaskCardView = (() => {
   function mainPane() {
     const canEdit = task.permissions.edit;
 
-    const titleNode = el('h2', {
-      text: task.title,
-      style: { fontSize: '20px', marginBottom: '4px', cursor: canEdit ? 'text' : 'default' },
-      title: canEdit ? 'לחיצה לעריכה' : ''
+    /**
+     * שם המשימה נערך מכאן בלבד, ובכפתור מפורש. ברשימה לחיצה על השורה פותחת
+     * את המשימה, ולכן אין שם עוד עריכה במקום — וכפתור עדיף על "לחיצה על
+     * הכותרת" גם כאן, כדי שההתנהגות תהיה אחת בכל המערכת.
+     */
+    const titleNode = el('h2', { text: task.title, style: { fontSize: '20px' } });
+    const editTitleBtn = canEdit
+      // "שינוי שם" ולא "עריכה" — בכרטיס יש כבר כפתור "עריכה מלאה" לכל השדות
+      ? el('button.btn.btn-sm', { title: 'עריכת שם המשימה' }, ['✎ שינוי שם'])
+      : null;
+    // הכפתור נעלם בזמן ההקלדה — לחיצה שנייה עליו הייתה מנסה להחליף צומת
+    // שכבר הוחלף בתיבת הקלט, ולא הייתה עושה דבר
+    editTitleBtn?.addEventListener('click', () => {
+      editTitleBtn.style.display = 'none';
+      inlineEdit('title', titleNode);
     });
-    if (canEdit) titleNode.addEventListener('click', () => inlineEdit('title', titleNode));
+    const titleRow = el('div.flex', { style: { marginBottom: '4px', gap: '8px' } }, [titleNode, editTitleBtn]);
 
     const alerts = [];
 
@@ -118,7 +126,7 @@ const TaskCardView = (() => {
         el('div.spacer'),
         el('button.icon-btn', { onclick: () => modalRef.close(), title: 'סגירה' }, ['✕'])
       ]),
-      titleNode,
+      titleRow,
       el('div.flex', { style: { marginBottom: '14px', flexWrap: 'wrap' } }, [UI.statusTag(task), ...UI.taskTags(task)]),
       ...alerts,
       vendorWorkflowBar(),

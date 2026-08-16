@@ -535,8 +535,45 @@ const App = (() => {
     render();
   }
 
+  /**
+   * ריענון המסגרת בלבד — הסרגל העליון ותפריט הצד — בלי לגעת בתוכן המסך.
+   * ‎render()‎ בונה מחדש גם את ‎main‎, וכל הרצתו אחרי שינוי קטן נראית למשתמש
+   * כרענון של כל האתר: המסך מהבהב, הגלילה קופצת לראש והמיקוד אובד.
+   */
+  function refreshChrome() {
+    const shell = root().querySelector('.shell');
+    if (!shell) return;
+    shell.querySelector('.topbar')?.replaceWith(topbar());
+    shell.querySelector('#sidebar')?.replaceWith(sidebar());
+    UI.refitLogos(); // הסמל נבנה מחדש — מיישרים שוב את הכיתוב לרוחב השם
+  }
+
+  /**
+   * ריענון תוכן המסך הנוכחי ברקע. כל מסך יודע לטעון את עצמו מחדש בלי ספינר
+   * ובלי לאבד גלילה, ולכן עדכון משימה כבר אינו מחייב בנייה מחדש של האתר.
+   */
+  const RELOADABLE = {
+    home: () => HomeView.reload(),
+    board: () => BoardView.reload({ silent: true }),
+    vendorBoards: () => BoardView.reload({ silent: true }),
+    archive: () => BoardView.reload({ silent: true }),
+    vendor: () => VendorPortalView.reload({ silent: true })
+  };
+
+  async function refreshView() {
+    const reload = RELOADABLE[state.route.name];
+    // מסך שאין לו טעינה נקודתית (ניהול, דוחות) נבנה מחדש כרגיל
+    if (!reload) return render();
+    try {
+      await reload();
+    } catch {
+      /* כשל בריענון ברקע אינו מפיל את המסך — התוכן הקיים נשאר על המסך */
+    }
+  }
+
   return {
     state, boot, navigate, refresh, refreshNotifications, logout, render,
+    refreshChrome, refreshView,
     may, can, isVendor, userName, vendorName, project, internalBoard, vendorBoards,
     reloadReference
   };

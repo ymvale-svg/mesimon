@@ -77,7 +77,8 @@ const BoardView = (() => {
       draw();
       if (opts.keepFocus) GridView.restoreFocus(opts.keepFocus);
     } catch (err) {
-      UI.mount(containerRef, header(), UI.empty(err.message, '⚠️'));
+      // כשל רגעי בטעינת רקע לא ימחק את מה שכבר על המסך
+      if (!opts.silent) UI.mount(containerRef, header(), UI.empty(err.message, '⚠️'));
     }
   }
 
@@ -261,7 +262,7 @@ const BoardView = (() => {
         view.selection.clear();
         UI.success(`עודכנו ${res.affected} משימות`);
         if (res.errors.length) UI.toast(`${res.errors.length} משימות לא עודכנו (הרשאות או חוקי זרימה)`, 'error');
-        await load();
+        await load({ silent: true });
         App.refreshNotifications();
       } catch (err) { UI.error(err); }
     };
@@ -375,7 +376,7 @@ const BoardView = (() => {
           try {
             await API.updateTask(id, { status: col.key });
             UI.success(`המשימה הועברה ל"${col.label}"`);
-            await load();
+            await load({ silent: true });
             App.refreshNotifications();
           } catch (err) { UI.error(err); }
         });
@@ -565,7 +566,8 @@ const BoardView = (() => {
         m.close();
         UI.success(isEdit ? 'המשימה עודכנה' : 'המשימה נוצרה');
         await App.reloadReference();
-        if (containerRef) await load();
+        // הדיאלוג נפתח גם מהסרגל העליון, כשהמסך שמאחוריו אינו הלוח
+        await App.refreshView();
         App.refreshNotifications();
       } catch (err) {
         saveBtn.disabled = false;
@@ -644,7 +646,10 @@ const BoardView = (() => {
         else await API.createProject(payload);
         m.close();
         UI.success(isEdit ? 'הפרויקט עודכן' : 'הפרויקט נוצר');
-        await App.refresh({ reference: true });
+        // רשימת הפרויקטים בתפריט הצד משתנה, אך אין סיבה לבנות מחדש את המסך
+        await App.reloadReference();
+        App.refreshChrome();
+        await App.refreshView();
       } catch (err) {
         saveBtn.disabled = false;
         UI.error(err);

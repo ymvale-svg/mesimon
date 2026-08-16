@@ -17,14 +17,21 @@ const VendorPortalView = (() => {
     await load();
   }
 
-  async function load() {
-    UI.mount(containerRef, banner(), UI.spinner());
+  /**
+   * ‎silent‎ — טעינה מחדש ברקע: בלי ספינר ותוך שמירת הגלילה, כדי שעדכון
+   * משימה לא ייראה כרענון של כל הדף.
+   */
+  async function load({ silent = false } = {}) {
+    const scrollTop = silent ? containerRef?.scrollTop ?? 0 : 0;
+    if (!silent) UI.mount(containerRef, banner(), UI.spinner());
     try {
       const data = await API.tasks({});
       tasks = data.tasks;
       draw();
+      if (scrollTop) containerRef.scrollTop = scrollTop;
     } catch (err) {
-      UI.mount(containerRef, banner(), UI.empty(err.message, '⚠️'));
+      // כשל רגעי בטעינת רקע לא ימחק את מה שכבר על המסך
+      if (!silent) UI.mount(containerRef, banner(), UI.empty(err.message, '⚠️'));
     }
   }
 

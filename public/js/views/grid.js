@@ -16,8 +16,7 @@ const GridView = (() => {
   // מצב שנשמר בין רינדורים כדי שקיפול קבוצות לא יאבד בכל רענון
   const state = {
     collapsed: new Set(),
-    groupBy: null,
-    editing: null
+    groupBy: null
   };
 
   const GROUP_COLORS = ['#0f766e', '#c2410c', '#2563eb', '#7c3aed', '#be123c', '#0891b2', '#65a30d', '#a16207'];
@@ -296,44 +295,17 @@ const GridView = (() => {
     return cell;
   }
 
-  function titleCell(task, group) {
+  /**
+   * הכותרת היא טקסט בלבד. שינוי שם נעשה מתוך כרטיס המשימה, בכפתור עריכה
+   * מפורש: לחיצה על השורה פותחת את המשימה, ועריכה במקום הייתה מתנגשת בכך —
+   * אותה לחיצה עצמה לא יכולה גם לפתוח וגם להיכנס למצב הקלדה.
+   */
+  function titleCell(task) {
     const cell = el('td.cell-title', {});
-    const text = el('span.title-text', { text: task.title });
-
-    if (task.canEdit) {
-      text.classList.add('editable');
-      text.addEventListener('click', (e) => {
-        e.stopPropagation();
-        const input = el('input', { type: 'text', class: 'inline-title-input' });
-        input.value = task.title;
-        text.replaceWith(input);
-        input.focus();
-        input.select();
-        let done = false;
-        const commit = (save) => {
-          if (done) return;
-          done = true;
-          const value = input.value.trim();
-          if (save && value && value !== task.title) patch(task, { title: value });
-          else ctx.onRedraw(); // ביטול — החזרת השורה למצבה בלי פנייה לשרת
-        };
-        input.addEventListener('blur', () => commit(true));
-        input.addEventListener('keydown', (ev) => {
-          if (ev.key === 'Enter') { ev.preventDefault(); commit(true); }
-          if (ev.key === 'Escape') { ev.preventDefault(); commit(false); }
-        });
-      });
-    }
-
     cell.appendChild(el('div.title-box', {}, [
-      text,
-      el('div.title-tags', {}, UI.taskTags(task)),
-      el('button.open-card', {
-        title: 'פתיחת כרטיס המשימה',
-        onclick: (e) => { e.stopPropagation(); TaskCardView.open(task.id); }
-      }, ['פתיחה ↗'])
+      el('span.title-text', { text: task.title }),
+      el('div.title-tags', {}, UI.taskTags(task))
     ]));
-
     return cell;
   }
 
@@ -366,9 +338,13 @@ const GridView = (() => {
 
   function taskRow(task, group, showBoard) {
     const selected = ctx.selection.has(task.id);
-    const row = el('tr.grid-row', {
+    const row = el('tr.grid-row.is-clickable', {
       class: [selected ? 'selected' : '', task.overdue ? 'is-overdue' : '', task.escalated ? 'is-escalated' : ''].filter(Boolean).join(' '),
-      dataset: { taskId: String(task.id) }
+      dataset: { taskId: String(task.id) },
+      title: 'לחיצה לפתיחת המשימה',
+      // התאים הניתנים לעריכה מהירה עוצרים את הבועה בעצמם, ולכן לחיצה עליהם
+      // אינה פותחת את הכרטיס — רק לחיצה על שאר השורה
+      onclick: () => TaskCardView.open(task.id)
     }, [
       el('td.cell-bar', { style: { background: group.color } }),
       ctx.selectable
@@ -385,7 +361,7 @@ const GridView = (() => {
             })
           ])
         : null,
-      titleCell(task, group),
+      titleCell(task),
       showBoard ? el('td.cell-board', {}, [
         el(`span.tag.${task.boardType === 'vendor' ? 'tag-vendor' : 'tag-internal'}`, {}, [task.boardName ?? '—'])
       ]) : null,
