@@ -10,6 +10,7 @@ const Auth = require('./auth');
 const Rules = require('./rules-engine');
 const Google = require('./google-auth');
 const Invites = require('./invites');
+const Mailer = require('./mailer');
 const {
   Router, badRequest, forbidden, notFound,
   readJson, sendJson, sendText, parseUrl
@@ -1878,6 +1879,19 @@ router.get('/api/admin/settings', async (req, res, ctx) => {
   sendJson(res, 200, {
     settings: D.allSettings(),
     defaults: D.DEFAULT_SETTINGS,
+    // מצב החיבורים החיצוניים. בלי התצוגה הזו, מפתח שנמחק בשרת מבטל תכונה
+    // שלמה בלי שום סימן בממשק — בדיוק מה שקרה לכניסה עם Google.
+    integrations: {
+      google: {
+        enabled: Google.isEnabled(),
+        missing: ['GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET'].filter((k) => !process.env[k])
+      },
+      mail: {
+        ...Mailer.status(),
+        missing: ['SMTP_HOST', 'SMTP_USER', 'SMTP_PASS'].filter((k) => !process.env[k])
+      },
+      publicUrl: D.getSetting('public_url', '') || process.env.PUBLIC_URL || null
+    },
     storage: {
       ...D.STORAGE,
       dbSizeKb,

@@ -17,6 +17,30 @@ services:
         value: /var/mesimon/data
       - key: UPLOADS_DIR
         value: /var/mesimon/uploads
+
+      # הערכים של אלה נקבעים בלוח הבקרה ולא כאן — הם סודות ואין להם מקום בקוד.
+      # sync: false אומר ל-Render לא לנהל אותם: בלעדיו סנכרון של הקובץ הזה
+      # עלול למחוק משתנה שהוגדר ידנית, והתכונה שהוא מפעיל נעלמת בלי הודעה.
+      - key: GOOGLE_CLIENT_ID      # כניסה עם Google — בלעדיו הכפתור פשוט לא מוצג
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: SMTP_HOST             # שליחת הזמנות ותזכורות בדואר
+        sync: false
+      - key: SMTP_PORT
+        sync: false
+      - key: SMTP_USER
+        sync: false
+      - key: SMTP_PASS
+        sync: false
+      - key: SMTP_FROM
+        sync: false
+      - key: SMTP_FROM_NAME
+        sync: false
+      - key: SMTP_REPLY_TO         # ברירת מחדל לכתובת התשובה, אם לא של המזמין
+        sync: false
+      - key: PUBLIC_URL            # נדרס על ידי ההגדרה "כתובת המערכת" במסך הניהול
+        sync: false
     disk:
       name: mesimon-data   # הדיסק שורד עדכוני גרסה — כאן נשמרים מסד הנתונים והקבצים
       mountPath: /var/mesimon

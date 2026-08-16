@@ -644,6 +644,44 @@ const AdminView = (() => {
     public_url: ['כתובת המערכת באינטרנט', 'הכתובת שממנה משתמשים נכנסים — קישורי ההזמנות במייל נבנים ממנה. לדוגמה https://mesimon.co.il. אם משאירים ריק, הקישור נבנה מהכתובת שדרכה נכנסתם.']
   };
 
+  /**
+   * מצב החיבורים החיצוניים. תכונה שתלויה במפתח בשרת נעלמת בשקט כשהמפתח
+   * חסר, ואין שום סימן לכך בממשק — הכרטיס הזה הופך את זה לגלוי.
+   */
+  function integrationsCard(x) {
+    if (!x) return null;
+
+    const row = (title, ok, okText, missing, hint) =>
+      el('div', { style: { padding: '11px 0', borderBottom: '1px solid var(--border)' } }, [
+        el('div.flex', {}, [
+          el('span', { text: ok ? '✅' : '○', style: { fontSize: '15px' } }),
+          el('b', { text: title }),
+          el('div.spacer'),
+          el('span', {
+            class: ok ? 'text-ok' : 'text-danger',
+            style: { fontSize: '12.5px', fontWeight: '700' },
+            text: ok ? okText : 'לא מוגדר'
+          })
+        ]),
+        !ok && missing.length
+          ? el('div.mute-sm', { style: { marginTop: '3px' }, text: `חסרים בשרת: ${missing.join(', ')}` })
+          : null,
+        hint ? el('div.mute-sm', { style: { marginTop: '3px' }, text: hint }) : null
+      ]);
+
+    return el('div.card.mb', {}, [
+      el('div.card-head', {}, [el('h3', { text: 'חיבורים חיצוניים' })]),
+      el('div.card-pad', { style: { paddingTop: '0' } }, [
+        row('כניסה עם חשבון Google', x.google.enabled, 'פעיל', x.google.missing,
+          x.google.enabled ? 'הכפתור מוצג במסך הכניסה.' : 'כל עוד המפתחות חסרים, הכפתור אינו מוצג כלל במסך הכניסה.'),
+        row('שליחת דואר', x.mail.enabled, `דרך ${x.mail.host}`, x.mail.missing,
+          x.mail.enabled ? `נשלח מהכתובת ${x.mail.from}` : 'ההזמנות נוצרות אך אינן נשלחות; הקישור מוצג להעברה ידנית.'),
+        row('כתובת המערכת', !!x.publicUrl, x.publicUrl ?? '', [],
+          x.publicUrl ? 'קישורי ההזמנות נבנים מכתובת זו.' : 'קישורי ההזמנות נבנים מהכתובת שדרכה נכנסתם.')
+      ])
+    ]);
+  }
+
   /** מצב אחסון הנתונים — התשובה לשאלה "האם הנתונים שלי נשמרים" */
   function storageCard(s) {
     if (!s) return null;
@@ -740,6 +778,7 @@ const AdminView = (() => {
     });
 
     UI.mount(body,
+      integrationsCard(settingsData.integrations),
       storageCard(settingsData.storage),
       el('div.alert.alert-info.mb', {}, [
         el('span', { text: '🔧' }),
