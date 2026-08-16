@@ -41,10 +41,20 @@ const App = (() => {
     const inviteToken = InviteView.tokenFromUrl();
     if (inviteToken) return InviteView.render(root(), inviteToken, boot);
 
+    /**
+     * כל כניסה למערכת פותחת סשן התראות חדש. האיפוס דווקא כאן, ולא רק
+     * בהתנתקות, כי מי שנכנס עכשיו אינו בהכרח מי שיצא: סשן שפג באמצע העבודה
+     * עוצר את הסקר אך מותיר בזיכרון את מזהי ההתראות של הקודם ואת הדגל
+     * "כבר הוקפץ" — וכך המשתמש הבא באותה לשונית היה מוצף בכל ההתראות
+     * שלא נקראו שלו בבת אחת, בדיוק מה שההשהיה הראשונה באה למנוע.
+     */
+    resetNotifSession();
+
     try {
       const data = await API.bootstrap();
       Object.assign(state, data);
       await refreshNotifications();
+      startNotifPolling();
       navigate(isVendor() ? 'vendor' : 'home');
     } catch (err) {
       if (err.status === 401) LoginView.render(root(), boot);
@@ -64,6 +74,8 @@ const App = (() => {
   }
 
   async function logout() {
+    // לפני הבקשה ולא אחריה: אם השרת אינו זמין הבקשה נכשלת, והסקר היה נשאר חי
+    resetNotifSession();
     await API.logout();
     state.actor = null;
     LoginView.render(root(), boot);
@@ -88,22 +100,11 @@ const App = (() => {
 
   // ------------------------------------------------------------- התראות
 
-  async function refreshNotifications() {
-    try {
-      const data = await API.notifications();
-      state.notifications = data.notifications;
-      state.unread = data.unread;
-      updateBell();
-    } catch { /* שקט — לא מפריע לעבודה */ }
-  }
+  const NOTIF_POLL_MS = 30000;
+  const NOTIF_POP_MAX = 3;      // כמה כרטיסים מקפיצים ממחזור אחד, גם אם הגיעו עשר התראות
+  const SYSTEM_AUTHOR = 'המערכת';
 
-  function updateBell() {
-    const badge = document.getElementById('notif-badge');
-    if (!badge) return;
-    badge.style.display = state.unread ? 'grid' : 'none';
-    badge.textContent = state.unread > 99 ? '99+' : String(state.unread);
-  }
-
+  // פלטה אחת לסוגי ההתראות, משותפת למגירת ההתראות ולכרטיס המוקפץ
   const NOTIF_STYLE = {
     vendor_reminder: { icon: '⏳', bg: '#fffbeb', color: '#d97706' },
     manager_alert: { icon: '📣', bg: '#eff6ff', color: '#2563eb' },
@@ -114,9 +115,164 @@ const App = (() => {
     assignment: { icon: '📌', bg: '#f5f3ff', color: '#7c3aed' }
   };
 
+  /**
+   * מה כבר ראינו בסשן הזה. ההבאה הראשונה רק ממלאת את הקבוצה ואינה מקפיצה דבר:
+   * למי שנכנס בבוקר מחכות לפעמים עשרים התראות שלא נקראו, ועשרים כרטיסים
+   * שנפתחים יחד מכסים את המסך במקום להודיע על חדש.
+   */
+  const seenNotifIds = new Set();
+  let notifPrimed = false;
+  let notifTimer = null;
+  const taskTitles = new Map();  // מזהה משימה ← כותרת, כדי לא לשאול את השרת שוב על אותה משימה
+
+  async function refreshNotifications() {
+    try {
+      const data = await API.notifications();
+      state.notifications = data.notifications;
+      state.unread = data.unread;
+      updateBell();
+      // בלי await: הבאת כותרות המשימות להקפצה לא תעכב את עדכון הפעמון
+      popNewNotifications(data.notifications);
+    } catch (err) {
+      // סשן שפג — עוצרים את הסקר, אחרת הוא ממשיך לדפוק בשרת כל חצי דקה לשווא
+      if (err?.status === 401) stopNotifPolling();
+      /* שאר השגיאות בשקט — לא מפריע לעבודה */
+    }
+  }
+
+  /**
+   * סקר יחיד. ‎boot()‎ נקרא שוב אחרי כל התחברות, ושני טיימרים היו מכפילים
+   * גם את הבקשות לשרת וגם את ההקפצות.
+   */
+  function startNotifPolling() {
+    if (notifTimer) return;
+    notifTimer = setInterval(refreshNotifications, NOTIF_POLL_MS);
+  }
+
+  function stopNotifPolling() {
+    clearInterval(notifTimer);
+    notifTimer = null;
+  }
+
+  /**
+   * ניקוי בין סשנים — נקרא בכל כניסה למערכת ובכל התנתקות. המשתמש הבא לא צריך
+   * לראות את ההתראות של קודמו, ואינו צריך שההתראות שלו ייחשבו כמי שכבר הוקפצו.
+   */
+  function resetNotifSession() {
+    stopNotifPolling();
+    seenNotifIds.clear();
+    taskTitles.clear();
+    notifPrimed = false;
+    state.notifications = [];
+    state.unread = 0;
+    UI.clearNotifyPops();
+  }
+
+  /**
+   * הקפצת החדשות בלבד, מהישן לחדש: הכרטיסים נוספים בתחתית הערימה, וכך
+   * החדשה ביותר יושבת למטה ואף כרטיס שנקרא כרגע אינו זז ממקומו.
+   */
+  async function popNewNotifications(list) {
+    const fresh = [];
+    for (const n of list) {          // השרת מחזיר מהחדש לישן
+      if (seenNotifIds.has(n.id)) continue;
+      seenNotifIds.add(n.id);
+      if (notifPrimed && !n.isRead) fresh.push(n);
+    }
+    notifPrimed = true;              // נקבע לפני ההמתנות, כדי שהבאה מקבילה לא תקפיץ הכול מחדש
+    for (const n of fresh.slice(0, NOTIF_POP_MAX).reverse()) await popNotification(n);
+  }
+
+  /**
+   * כותרת המשימה אינה חלק מאובייקט ההתראה, ולכן מביאים אותה מהשרת פעם אחת
+   * לכל משימה. גם כישלון נשמר במפה: משימה שנמחקה או שאין אליה הרשאה לא
+   * תיבדק שוב בכל התראה נוספת עליה.
+   */
+  async function taskTitleFor(taskId) {
+    if (taskTitles.has(taskId)) return taskTitles.get(taskId);
+    let title = null;
+    try {
+      const data = await API.task(taskId);
+      title = data?.task?.title ?? null;
+    } catch { /* נשמר כ-null */ }
+    taskTitles.set(taskId, title);
+    return title;
+  }
+
+  /**
+   * פירוק ההתראה לחלקי הכרטיס: מי כתב, מה קרה ומה תוכן ההודעה.
+   *
+   * באובייקט ההתראה אין שדה כותב. כשיש כותב הוא יושב בתוך הכותרת
+   * ("דנה לוי תייג/ה אותך בתגובה") או בזנב הגוף בתבנית "משימה — שם", ולכן
+   * מזהים אותו מול המשתמשים והספקים שכבר בזיכרון — מהשם הארוך לקצר, כדי
+   * ש"דנה" לא תיתפס בתוך "דנה לוי". התראות האוטומציות נכתבות ללא אדם.
+   * את השם מקצצים מהטקסט שיוצג, כדי שלא יופיע פעמיים באותו כרטיס.
+   */
+  function notifParts(n) {
+    const names = [...state.users, ...state.vendors]
+      .map((p) => p.name).filter(Boolean)
+      .sort((a, b) => b.length - a.length);
+    const headline = String(n.title ?? '').trim();
+    const body = String(n.body ?? '').trim();
+
+    const prefix = names.find((name) => headline.startsWith(name));
+    if (prefix) return { author: prefix, headline: headline.slice(prefix.length).trim() || headline, body };
+
+    const inTitle = names.find((name) => headline.includes(name));
+    if (inTitle) return { author: inTitle, headline, body };
+
+    // התאמה מלאה בלבד לזנב הגוף: "שם המשימה — הושלם" הוא תווית סטטוס, לא אדם
+    const cut = body.lastIndexOf(' — ');
+    const tail = cut === -1 ? '' : body.slice(cut + 3).trim();
+    if (names.includes(tail)) return { author: tail, headline, body: body.slice(0, cut).trim() };
+
+    return { author: SYSTEM_AUTHOR, headline, body };
+  }
+
+  async function popNotification(n) {
+    const style = NOTIF_STYLE[n.kind] ?? NOTIF_STYLE.status_change;
+    const taskTitle = n.taskId ? await taskTitleFor(n.taskId) : null;
+    const parts = notifParts(n);
+
+    UI.notifyPop({
+      icon: style.icon,
+      bg: style.bg,
+      color: style.color,
+      author: parts.author,
+      headline: parts.headline,
+      // בהתראות כמו הקצאה הגוף הוא בדיוק שם המשימה — שורה כפולה באותו כרטיס
+      body: parts.body === taskTitle ? '' : parts.body,
+      task: n.taskId ? (taskTitle ?? 'פתיחת המשימה') : null,
+      onOpen: n.taskId
+        ? () => {
+            TaskCardView.open(n.taskId); // קודם נפתחת המשימה — הסימון כנקרא יכול להמתין לרשת
+            if (!n.isRead) markNotifRead(n);
+          }
+        : null
+    });
+  }
+
+  async function markNotifRead(n) {
+    try {
+      await API.markRead(n.id);
+      n.isRead = true;
+      await refreshNotifications();  // המונה על הפעמון יורד
+    } catch { /* יסומן בפתיחת מגירת ההתראות */ }
+  }
+
+  function updateBell() {
+    const badge = document.getElementById('notif-badge');
+    if (!badge) return;
+    badge.style.display = state.unread ? 'grid' : 'none';
+    badge.textContent = state.unread > 99 ? '99+' : String(state.unread);
+  }
+
   function toggleNotifPanel(anchor) {
     const existing = document.getElementById('notif-panel');
     if (existing) { existing.remove(); return; }
+
+    // המגירה נפתחת באותה פינה ומציגה את אותן התראות — הכרטיסים המוקפצים מיותרים כאן
+    UI.clearNotifyPops();
 
     const panel = el('div.notif-panel#notif-panel', {}, [
       el('div.np-head', {}, [
@@ -387,8 +543,6 @@ const App = (() => {
     await refreshNotifications();
     render();
   }
-
-  setInterval(refreshNotifications, 60000);
 
   return {
     state, boot, navigate, refresh, refreshNotifications, logout, render,

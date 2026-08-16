@@ -80,6 +80,7 @@ const API = (() => {
     updateDepartment: (id, body) => call('PATCH', `/api/departments/${id}`, body),
     deleteDepartment: (id) => call('DELETE', `/api/departments/${id}`),
     updateUser: (id, body) => call('PATCH', `/api/admin/users/${id}`, body),
+    setUserGrants: (id, grants) => call('PUT', `/api/admin/users/${id}/grants`, { grants }),
 
     createVendor: (body) => call('POST', '/api/vendors', body),
     updateVendor: (id, body) => call('PATCH', `/api/vendors/${id}`, body),

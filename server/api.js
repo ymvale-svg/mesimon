@@ -544,8 +544,19 @@ router.get('/api/tasks', async (req, res, ctx) => {
       where.push("b.type = 'internal'");
     }
 
-    if (actor.role === 'employee') {
-      where.push('(t.assignee_id = ? AND t.assignee_type = \'user\' OR t.created_by = ? OR p.manager_id = ?)');
+    if (actor.role === 'employee' && P.hasGrant(actor, 'view_department_tasks')) {
+      // הרשאה אישית: כל משימות המחלקה, ומשימות ארגוניות של אנשיה
+      where.push(`(
+        t.department_id IS ?
+        OR (t.level = 'organization' AND t.assignee_type = 'user'
+            AND t.assignee_id IN (SELECT id FROM users WHERE department_id IS ?))
+        OR (t.assignee_type = 'user' AND t.assignee_id = ?)
+        OR t.created_by = ?
+        OR p.manager_id = ?
+      )`);
+      params.push(actor.departmentId, actor.departmentId, actor.id, actor.id, actor.id);
+    } else if (actor.role === 'employee') {
+      where.push("(t.assignee_id = ? AND t.assignee_type = 'user' OR t.created_by = ? OR p.manager_id = ?)");
       params.push(actor.id, actor.id, actor.id);
     } else if (actor.role === 'manager' && scope !== 'vendors') {
       // מנהל מחלקה: המחלקה שלו, משימות ארגוניות של אנשיה, ומה שהוא עצמו חלק ממנו
@@ -668,6 +679,20 @@ router.post('/api/tasks', async (req, res, ctx) => {
 
   const status = String(body.status ?? '') || Rules.firstColumnKey(boardId);
   if (!columnMeta(boardId, status)) throw badRequest('סטטוס לא קיים בבורד זה');
+
+  // הקצאה לאדם אחר אינה מובנת מאליה: עובד פנימי יוצר משימות לעצמו, ורק אם
+  // הוענקה לו הרשאה אישית (או שהוא מנהל ומעלה) הוא מקצה לאחרים במחלקתו.
+  if (assigneeType === 'user' && assigneeId && actor.type === 'user' && assigneeId !== actor.id) {
+    const lvl = P.level(actor, 'assign_department_task');
+    if (lvl === false) throw forbidden('אין לך הרשאה להקצות משימה לאדם אחר');
+    if (lvl === 'department') {
+      const target = D.get('SELECT department_id FROM users WHERE id = ?', assigneeId);
+      if (!target) throw badRequest('המשתמש שנבחר אינו קיים');
+      if ((target.department_id ?? null) !== (actor.departmentId ?? null)) {
+        throw forbidden('ניתן להקצות משימה לחברי המחלקה שלך בלבד');
+      }
+    }
+  }
 
   // רמת המשימה: ארגונית מוטלת בידי הנהלה ומעלה, אחרת מחלקתית.
   // משימה מחלקתית משויכת למחלקת האחראי, ואם אין אחראי — למחלקת היוצר.
@@ -1620,11 +1645,13 @@ router.get('/api/admin/users', async (req, res, ctx) => {
     departmentId: actor.departmentId,
     departments,
     assignableRoles: P.assignableRoles(actor).map((role) => ({ value: role, label: P.ROLE_LABELS[role] })),
+    grantCatalog: P.GRANT_KEYS.map((key) => ({ key, ...P.GRANTS[key] })),
     mayManageDepartments: P.may(actor, 'manage_departments'),
     users: rows.map((u) => ({
       id: u.id, name: u.full_name, email: u.email, role: u.role,
       roleLabel: P.ROLE_LABELS[u.role], department: u.department,
-      departmentId: u.department_id, status: u.status
+      departmentId: u.department_id, status: u.status,
+      grants: D.all('SELECT grant_key FROM user_grants WHERE user_id = ?', u.id).map((g) => g.grant_key)
     }))
   });
 });
@@ -1676,7 +1703,33 @@ router.post('/api/admin/users', async (req, res, ctx) => {
     baseUrl: Google.publicBase(req)
   });
 
-  sendJson(res, 201, { ok: true, invite });
+  sendJson(res, 201, { ok: true, userId: newUserId, invite });
+});
+
+/**
+ * ההרשאות האישיות של משתמש. מנהל מחלקה מעניק אותן לעובדים שלו, ומנהל
+ * מערכת ומעלה לכל אחד. ההגבלה זהה לזו של עריכת המשתמש עצמו.
+ */
+router.put('/api/admin/users/:id/grants', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  requirePerm(actor, 'manage_users');
+  const user = D.get('SELECT * FROM users WHERE id = ?', Number(ctx.params.id));
+  if (!user) throw notFound('המשתמש לא נמצא');
+  assertMayManageUser(actor, user);
+
+  // הרשאות אישיות נועדו להרחיב עובד פנימי; לתפקידים גבוהים הן חסרות משמעות
+  if (user.role !== 'employee') throw badRequest('הרשאות אישיות ניתנות לעובד פנימי בלבד');
+
+  const { grants } = await readJson(req);
+  const wanted = Array.isArray(grants) ? grants.filter((g) => P.GRANT_KEYS.includes(g)) : [];
+
+  D.run('DELETE FROM user_grants WHERE user_id = ?', user.id);
+  for (const key of wanted) {
+    D.run('INSERT INTO user_grants (user_id, grant_key, granted_by, created_at) VALUES (?,?,?,?)',
+      user.id, key, actor.id, D.nowIso());
+  }
+
+  sendJson(res, 200, { grants: wanted });
 });
 
 /** שליחה חוזרת של הזמנה למשתמש או לספק קיים */

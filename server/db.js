@@ -278,6 +278,16 @@ CREATE TABLE IF NOT EXISTS templates (
   created_at TEXT    NOT NULL
 );
 
+-- הרשאות אישיות מעל התפקיד. מנהל מחלקה מעניק אותן לעובד שלו — למשל מזכירה
+-- שצריכה לראות את כל משימות המחלקה ולהקצות משימות לחברי הצוות.
+CREATE TABLE IF NOT EXISTS user_grants (
+  user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  grant_key  TEXT    NOT NULL,
+  granted_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT    NOT NULL,
+  PRIMARY KEY (user_id, grant_key)
+);
+
 -- מחלקות הארגון. לכל מחלקה מנהל אחד, וכל עובד משויך למחלקה אחת.
 CREATE TABLE IF NOT EXISTS departments (
   id              INTEGER PRIMARY KEY AUTOINCREMENT,

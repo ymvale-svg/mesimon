@@ -825,3 +825,69 @@ th.cell-bar { background: var(--border) !important; }
   .sidebar.open { transform: translateX(0); }
   .main { padding: 14px; }
 }
+
+/* ------------------------------------------------- הקפצת התראות (שפת המסך השמאלית) */
+
+/*
+ * המסמך הוא dir="rtl", ולכן inline-end הוא הצד השמאלי הפיזי — בדיוק הצד
+ * שבו מתבקשת ההקפצה, ובו גם נפתחת מגירת ההתראות (‎.notif-panel‎).
+ * המכל יושב מתחת לסרגל העליון ולא בתחתית, כדי לא להתנגש בערימת הטוסטים
+ * שיושבת בפינה השמאלית התחתונה.
+ *
+ * pointer-events: none על המכל — הוא פרוש על פינת המסך גם כשהוא ריק, ובלעדיו
+ * היה חוטף לחיצות מהתוכן שמתחתיו. הכרטיסים עצמם מחזירים לעצמם auto.
+ */
+.notif-pop-root {
+  position: fixed; top: calc(var(--header-h) + 14px); inset-inline-end: 18px;
+  width: min(340px, calc(100vw - 36px));
+  display: flex; flex-direction: column; gap: 9px;
+  z-index: 190;            /* מעל המודל (100) ומתחת לטוסטים (200) */
+  pointer-events: none;
+}
+
+.notif-pop {
+  pointer-events: auto;
+  display: flex; align-items: flex-start; gap: 10px;
+  padding: 11px 12px;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius-lg); box-shadow: var(--shadow-lg);
+  animation: notif-pop-in .22s ease;
+}
+/* רק התראה שיש לה משימה נראית — ומתנהגת — כניתנת ללחיצה */
+.notif-pop.is-linked { cursor: pointer; }
+.notif-pop.is-linked:hover { border-color: var(--border-strong); }
+
+/*
+ * translateX הוא פיזי ואינו מתהפך ב-RTL: הכרטיס נכנס ויוצא לכיוון שפת המסך
+ * השמאלית שאליה הוא צמוד. ‎animation: none‎ נחוץ כדי שהמעבר יוכל לפעול גם
+ * על כרטיס שנסגר לפני שאנימציית הכניסה שלו הסתיימה.
+ */
+.notif-pop.leaving {
+  animation: none;
+  opacity: 0; transform: translateX(-14px);
+  transition: opacity .2s ease, transform .2s ease;
+}
+@keyframes notif-pop-in { from { opacity: 0; transform: translateX(-16px); } }
+
+.notif-pop .pop-icon { width: 30px; height: 30px; border-radius: 8px; display: grid; place-items: center; flex: none; font-size: 14px; }
+.notif-pop .pop-text { flex: 1; min-width: 0; }
+.notif-pop .pop-who { font-size: 13px; font-weight: 800; }
+.notif-pop .pop-headline { font-size: 12.5px; font-weight: 600; color: var(--text-soft); margin-top: 1px; }
+/* תוכן ההודעה נחתך לשלוש שורות — תגובה ארוכה לא תמתח את הכרטיס על חצי מסך */
+.notif-pop .pop-msg {
+  font-size: 12.5px; color: var(--text-soft); margin-top: 3px; line-height: 1.45;
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
+}
+.notif-pop .pop-task {
+  font-size: 11.5px; color: var(--text-mute); margin-top: 6px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.notif-pop .pop-x {
+  border: 0; background: none; cursor: pointer; flex: none;
+  color: var(--text-mute); font-size: 13px; line-height: 1; padding: 2px 3px;
+}
+.notif-pop .pop-x:hover { color: var(--text); }
+
+@media (max-width: 900px) {
+  .notif-pop-root { top: calc(var(--header-h) + 8px); inset-inline-end: 10px; }
+}

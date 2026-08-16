@@ -170,6 +170,29 @@ const AdminView = (() => {
       scoped ? { disabled: true } : {}
     );
 
+    /**
+     * הרשאות אישיות — רלוונטיות לעובד פנימי בלבד, ולכן האזור מוצג ומוסתר
+     * לפי רמת הגישה שנבחרה ולא לפי מה שהיה בפתיחת החלון.
+     */
+    const grantChecks = new Map();
+    const grantsBox = el('div', { style: { display: 'none' } }, [
+      el('div.field', {}, [
+        el('label', { text: 'הרשאות נוספות לעובד' }),
+        el('div.hint', { text: 'מעל רמת הגישה — למשל מזכירה שצריכה לראות את כל משימות המחלקה ולהקצות משימות לחברי הצוות.' }),
+        ...(listData.grantCatalog ?? []).map((g) => {
+          const box = el('input', { type: 'checkbox', checked: (user?.grants ?? []).includes(g.key) });
+          grantChecks.set(g.key, box);
+          return el('label.checkbox', { title: g.hint, style: { marginTop: '6px' } }, [box, g.label]);
+        })
+      ])
+    ]);
+
+    const syncGrantsVisibility = () => {
+      grantsBox.style.display = roleSelect.value === 'employee' && grantChecks.size ? 'block' : 'none';
+    };
+    roleSelect.addEventListener('change', syncGrantsVisibility);
+    syncGrantsVisibility();
+
     const newDeptInput = el('input', { type: 'text', placeholder: 'שם המחלקה החדשה' });
     const newDeptField = UI.field('שם המחלקה החדשה', newDeptInput, 'המחלקה תיווצר עם שמירת המשתמש');
 
@@ -204,6 +227,7 @@ const AdminView = (() => {
           UI.field('סיסמה', passInput, isEdit ? null : 'מומלץ להשאיר ריק — תישלח הזמנה לקביעת סיסמה')
         ]),
         newDeptField,
+        grantsBox,
         managerNote,
         !isEdit
           ? el('div.alert.alert-info', {}, [
@@ -235,9 +259,26 @@ const AdminView = (() => {
       }
       saveBtn.disabled = true;
       try {
+        // ההרשאות האישיות נשמרות בנקודת קצה נפרדת, כי הן חלות רק על עובד
+        // פנימי והשרת דוחה אותן לתפקידים אחרים
+        const wantedGrants = payload.role === 'employee'
+          ? [...grantChecks.entries()].filter(([, box]) => box.checked).map(([key]) => key)
+          : [];
+
         let created = null;
+        let savedId = user?.id ?? null;
         if (isEdit) await API.updateUser(user.id, payload);
-        else created = await API.createUser(payload);
+        else {
+          created = await API.createUser(payload);
+          savedId = created?.userId ?? null;
+        }
+
+        if (savedId && grantChecks.size) {
+          const before = (user?.grants ?? []).slice().sort().join(',');
+          if (before !== wantedGrants.slice().sort().join(',')) {
+            await API.setUserGrants(savedId, wantedGrants);
+          }
+        }
         m.close();
         if (created?.invite) showInviteResult(created.invite, payload.name);
         else UI.success('נשמר');

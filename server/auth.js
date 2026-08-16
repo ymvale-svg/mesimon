@@ -51,6 +51,9 @@ function loadActor(type, id, token = null) {
       role: u.role,
       department: u.department,
       departmentId: u.department_id ?? null,
+      // הרשאות אישיות שהוענקו לו מעל התפקיד — נטענות עם השחקן כדי שכל
+      // בדיקת הרשאה תראה אותן בלי פנייה נוספת למסד
+      grants: D.all('SELECT grant_key FROM user_grants WHERE user_id = ?', u.id).map((g) => g.grant_key),
       token
     };
   }

@@ -238,6 +238,113 @@ const UI = (() => {
   const error = (err) => toast(err?.message ?? String(err), 'error');
   const success = (msg) => toast(msg, 'ok');
 
+  // --- הקפצת התראות ---
+
+  /**
+   * כרטיס התראה שמוקפץ בשפת המסך. זהו אח של toast ולא הרחבה שלו:
+   * toast הוא שורת טקסט חולפת שמאשרת פעולה ("נשמר"), ואילו כאן יש מבנה
+   * (כותב, תוכן, משימה), לחיצה שמובילה למשימה, השהיה כשהעכבר על הכרטיס
+   * וכפתור סגירה. דחיסת כל אלה ל-toast הייתה מעמיסה חתימת אפשרויות על
+   * פונקציה שנקראת מעשרות מקומות — ולכן שני מנגנונים, כל אחד פשוט לעצמו.
+   */
+  const POP_MAX = 3;      // יותר מזה מכסה את המסך במקום להודיע
+  const POP_MS = 3000;
+  const POP_FADE_MS = 220; // חייב להתאים למשך המעבר של ‎.notif-pop.leaving‎
+
+  /**
+   * המכל נוצר בפעם הראשונה שצריך אותו — ‎index.html‎ מכיל רק את שורש הטוסטים.
+   * ‎dir‎ נקבע במפורש כדי ש-‎inset-inline-end‎ שב-CSS יישאר השפה השמאלית
+   * הפיזית של המסך, גם אם הכרטיס ייבנה בעתיד מתוך הקשר שאינו RTL.
+   */
+  function notifyPopRoot() {
+    let node = document.getElementById('notif-pop-root');
+    if (!node) {
+      node = el('div.notif-pop-root#notif-pop-root', { dir: 'rtl' });
+      document.body.appendChild(node);
+    }
+    return node;
+  }
+
+  // הכרטיסים שעל המסך כרגע, כדי שהפינוי יבטל גם את השעון של כל אחד מהם
+  const livePops = [];
+
+  /** סגירת כל הכרטיסים בבת אחת — למשל כשנפתחת מגירת ההתראות עצמה */
+  function clearNotifyPops() {
+    while (livePops.length) livePops.pop().kill();
+    const node = document.getElementById('notif-pop-root');
+    if (node) clear(node); // גם כרטיס שנמצא באמצע היעלמות אינו נשאר תלוי
+  }
+
+  /**
+   * ‎author‎ מי כתב, ‎headline‎ מה קרה, ‎body‎ תוכן ההודעה, ‎task‎ שם המשימה.
+   * ‎onOpen‎ — בלעדיו הכרטיס אינו נראה כניתן ללחיצה ואינו מגיב לה, כי התראה
+   * שאינה קשורה למשימה אין לאן להוביל.
+   */
+  function notifyPop({ icon = '🔔', bg = '', color = '', author = '', headline = '', body = '', task = null, onOpen = null }) {
+    let timer = null;
+    let closing = false;
+
+    const forget = () => {
+      const i = livePops.findIndex((p) => p.card === card);
+      if (i >= 0) livePops.splice(i, 1);
+    };
+
+    /** סגירה מיידית בלי הנפשה — לפינוי מרוכז ולפינוי מקום לכרטיס חדש */
+    const kill = () => { closing = true; clearTimeout(timer); forget(); card.remove(); };
+
+    const dismiss = () => {
+      if (closing) return; // גם לחיצה וגם השעון מסיימים את הכרטיס — הראשון קובע
+      closing = true;
+      clearTimeout(timer);
+      forget();
+      card.classList.add('leaving');
+      setTimeout(() => card.remove(), POP_FADE_MS);
+    };
+    /**
+     * ‎closing‎ נבדק גם כאן: מי שמזיז את העכבר מהכרטיס בזמן ההיעלמות מפעיל
+     * ‎mouseleave‎ על כרטיס שגמר את דרכו, ובלי הבדיקה היה נשאר שעון תלוי אחריו.
+     */
+    const arm = () => {
+      if (closing) return;
+      clearTimeout(timer);
+      timer = setTimeout(dismiss, POP_MS);
+    };
+
+    const card = el(`div.notif-pop${onOpen ? '.is-linked' : ''}`, { role: 'status' }, [
+      el('div.pop-icon', {
+        style: { background: bg || 'var(--surface-2)', color: color || 'var(--text-soft)' },
+        text: icon
+      }),
+      el('div.pop-text', {}, [
+        author ? el('div.pop-who', { text: author }) : null,
+        headline ? el('div.pop-headline', { text: headline }) : null,
+        body ? el('div.pop-msg', { text: body }) : null,
+        task ? el('div.pop-task', { text: `📋 ${task}` }) : null
+      ]),
+      el('button.pop-x', {
+        type: 'button',
+        title: 'סגירה',
+        onclick: (e) => { e.stopPropagation(); dismiss(); } // אחרת הסגירה הייתה גם פותחת את המשימה
+      }, ['✕'])
+    ]);
+
+    // קריאה לוקחת זמן: כרטיס שנעלם תוך כדי קריאה גרוע מכרטיס שלא הוקפץ כלל
+    card.addEventListener('mouseenter', () => clearTimeout(timer));
+    card.addEventListener('mouseleave', arm);
+    if (onOpen) card.addEventListener('click', () => { dismiss(); onOpen(); });
+
+    // נוסף בתחתית הערימה: כך כרטיס שהמשתמש קורא בו אינו נדחף ממקומו
+    notifyPopRoot().appendChild(card);
+
+    // הישן ביותר מתפנה מיד ולא בהנפשה: המתנה להיעלמותו הייתה מותירה את
+    // הערימה מעל התקרה בדיוק ברגע שבו מגיעות התראות בזו אחר זו
+    livePops.push({ card, kill });
+    while (livePops.length > POP_MAX) livePops.shift().kill();
+    arm();
+
+    return { card, dismiss };
+  }
+
   const empty = (message, icon = '📭') =>
     el('div.empty', {}, [el('div.e-icon', { text: icon }), el('div', { text: message })]);
 
@@ -440,7 +547,7 @@ const UI = (() => {
     el, clear, mount,
     formatDate, formatDateTime, relative, dueLabel, toInputDate, fromInputDate,
     initials, avatar, priorityTag, statusTag, taskTags,
-    modal, confirm, prompt, toast, error, success,
+    modal, confirm, prompt, toast, error, success, notifyPop, clearNotifyPops,
     empty, spinner, field, select, renderMentions, fileSize, fileIcon,
     logo, logoMark, companyLogo, refitLogos
   };
