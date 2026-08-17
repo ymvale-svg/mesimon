@@ -56,6 +56,7 @@ const App = (() => {
       await refreshNotifications();
       startNotifPolling();
       navigate(isVendor() ? 'vendor' : 'home');
+      openTaskFromUrl();
     } catch (err) {
       if (err.status === 401) LoginView.render(root(), boot);
       else {
@@ -66,6 +67,17 @@ const App = (() => {
         ]));
       }
     }
+  }
+
+  /**
+   * ‎?task=12‎ — קישור ישיר למשימה, כמו זה שנשלח בדואר ההקצאה. הפרמטר נמחק
+   * מהכתובת אחרי הפתיחה, כדי שרענון הדף לא יפתח את הכרטיס שוב ושוב.
+   */
+  function openTaskFromUrl() {
+    const id = Number(new URLSearchParams(location.search).get('task'));
+    if (!id) return;
+    history.replaceState(null, '', location.pathname);
+    TaskCardView.open(id);
   }
 
   async function reloadReference() {

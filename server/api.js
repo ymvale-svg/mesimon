@@ -11,6 +11,7 @@ const Rules = require('./rules-engine');
 const Google = require('./google-auth');
 const Invites = require('./invites');
 const Mailer = require('./mailer');
+const TaskMail = require('./task-mail');
 const {
   Router, badRequest, forbidden, notFound,
   readJson, sendJson, sendText, parseUrl
@@ -796,12 +797,19 @@ router.post('/api/tasks', async (req, res, ctx) => {
   }
 
   D.audit(id, actorRef(actor), 'created', 'המשימה נוצרה');
-  if (assigneeId) notifyAssignment(id, assigneeType, assigneeId, title);
+  if (assigneeId) notifyAssignment(id, assigneeType, assigneeId, title, actor);
 
   sendJson(res, 201, { task: shapeTask(getTaskOr404(id), actor, { withDetails: true }) });
 });
 
-function notifyAssignment(taskId, assigneeType, assigneeId, title) {
+/**
+ * מי שהוגדר אחראי מקבל התראה בתוך המערכת וגם דואר.
+ *
+ * ההתראה לבדה אינה מספיקה: מי שאינו מחובר באותו רגע לא ידע שהוקצתה לו משימה
+ * עד שייכנס. הדואר נשלח בלי ‎await‎ במכוון — יצירת משימה לא תמתין לשרת דואר,
+ * ולא תיכשל בגללו. השליחה עצמה אינה זורקת ורק רושמת ליומן.
+ */
+function notifyAssignment(taskId, assigneeType, assigneeId, title, assigner = null) {
   D.notify({
     targetType: assigneeType === 'vendor' ? 'vendor' : 'user',
     targetId: assigneeId,
@@ -810,6 +818,8 @@ function notifyAssignment(taskId, assigneeType, assigneeId, title) {
     body: title,
     taskId
   });
+  const task = D.get('SELECT * FROM tasks WHERE id = ?', taskId);
+  if (task) TaskMail.sendAssignment({ task, assigneeType, assigneeId, assigner });
 }
 
 router.patch('/api/tasks/:id', async (req, res, ctx) => {
@@ -890,7 +900,7 @@ router.patch('/api/tasks/:id', async (req, res, ctx) => {
           newType, newId, boardId, status, D.nowIso(), task.id);
         const updated = getTaskOr404(task.id);
         changes.push(`אחראי: ${prevName} ← ${assigneeName(updated) ?? '—'}`);
-        if (newId) notifyAssignment(task.id, newType, newId, task.title);
+        if (newId) notifyAssignment(task.id, newType, newId, task.title, actor);
       }
     }
 
@@ -1024,7 +1034,7 @@ router.post('/api/tasks/bulk', async (req, res, ctx) => {
         D.run('UPDATE tasks SET assignee_type = ?, assignee_id = ?, board_id = ?, status = ?, status_changed_at = ? WHERE id = ?',
           type, Number(rawId), boardId, status, D.nowIso(), task.id);
         D.audit(task.id, actorRef(actor), 'updated', `שינוי אחראי (פעולת אצווה)`);
-        notifyAssignment(task.id, type, Number(rawId), task.title);
+        notifyAssignment(task.id, type, Number(rawId), task.title, actor);
       } else if (action === 'priority') {
         if (!mayOnTask(actor, 'edit_delete_task', task, project)) throw forbidden();
         D.run('UPDATE tasks SET priority = ? WHERE id = ?', value, task.id);
