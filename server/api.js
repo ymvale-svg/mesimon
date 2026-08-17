@@ -12,6 +12,7 @@ const Google = require('./google-auth');
 const Invites = require('./invites');
 const Mailer = require('./mailer');
 const TaskMail = require('./task-mail');
+const Spreadsheet = require('./spreadsheet');
 const {
   Router, badRequest, forbidden, notFound,
   readJson, sendJson, sendText, parseUrl
@@ -1870,6 +1871,184 @@ router.get('/api/admin/users', async (req, res, ctx) => {
       grants: D.all('SELECT grant_key FROM user_grants WHERE user_id = ?', u.id).map((g) => g.grant_key)
     }))
   });
+});
+
+// --- ייבוא משתמשים מגיליון ---
+
+/**
+ * שמות העמודות שהמערכת מזהה. השם בגיליון אינו חייב להיות זהה — הוא מנוקה
+ * מרווחים, מנקודתיים ומסימני שאלה, כי כותרת אמיתית באקסל כתובה בחופשיות
+ * ("שם מלא:", "כתובת מייל", "Email").
+ */
+const IMPORT_COLUMNS = {
+  name: { label: 'שם מלא', required: true, aliases: ['שם מלא', 'שם', 'שםמלא', 'name', 'fullname', 'full name'] },
+  email: { label: 'אימייל', required: true, aliases: ['אימייל', 'מייל', 'אימייל', 'דואראלקטרוני', 'דואר אלקטרוני', 'כתובתמייל', 'כתובת מייל', 'email', 'mail', 'e-mail'] },
+  department: { label: 'מחלקה', required: false, aliases: ['מחלקה', 'department', 'dept'] },
+  role: { label: 'רמת גישה', required: false, aliases: ['רמת גישה', 'רמתגישה', 'הרשאה', 'תפקיד', 'role'] }
+};
+
+const normaliseHeader = (value) =>
+  String(value ?? '').trim().toLowerCase().replace(/[\s:?"']/g, '');
+
+/** מזהה איזו עמודה בגיליון היא איזה שדה. מחזיר ‎{ name: 0, email: 2, … }‎ */
+function mapHeaders(headerRow) {
+  const map = {};
+  headerRow.forEach((cell, index) => {
+    const key = normaliseHeader(cell);
+    if (!key) return;
+    for (const [field, spec] of Object.entries(IMPORT_COLUMNS)) {
+      if (map[field] !== undefined) continue;
+      if (spec.aliases.some((a) => normaliseHeader(a) === key)) map[field] = index;
+    }
+  });
+  return map;
+}
+
+/** תווית רמת גישה מהגיליון חזרה למפתח הפנימי — בעברית או באנגלית */
+function roleFromLabel(value) {
+  const key = normaliseHeader(value);
+  if (!key) return null;
+  for (const role of P.INTERNAL_ROLES) {
+    if (normaliseHeader(P.ROLE_LABELS[role]) === key || normaliseHeader(role) === key) return role;
+  }
+  return undefined;   // הוזן משהו, אך אינו רמה מוכרת
+}
+
+const EMAIL_SHAPE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
+
+/**
+ * בודק את הגיליון שורה-שורה ומחזיר תמונת מצב. אינו כותב דבר — הייבוא הוא
+ * שני שלבים במכוון: קודם רואים מה עומד להיכנס ומה נפסל, ורק אחר כך מאשרים.
+ * קובץ של חמישים אנשים שנכתב חצי הוא בלגן שאין ממנו חזרה.
+ */
+function analyseImport(actor, rows) {
+  if (!rows.length) throw badRequest('הקובץ ריק');
+  const headers = mapHeaders(rows[0]);
+
+  const missing = Object.entries(IMPORT_COLUMNS)
+    .filter(([field, spec]) => spec.required && headers[field] === undefined)
+    .map(([, spec]) => spec.label);
+  if (missing.length) {
+    throw badRequest(`בקובץ חסרות עמודות חובה: ${missing.join(', ')}. השורה הראשונה חייבת להיות שורת כותרות.`);
+  }
+
+  const departments = D.all("SELECT id, name FROM departments WHERE status = 'active'");
+  const byName = new Map(departments.map((d) => [normaliseHeader(d.name), d]));
+  const assignable = P.assignableRoles(actor);
+  const scoped = !P.isOrgWide(actor);
+
+  // כתובות שכבר קיימות, וגם כאלה שחוזרות פעמיים בתוך הקובץ עצמו
+  const seen = new Set();
+  const out = [];
+
+  rows.slice(1).forEach((row, i) => {
+    const cell = (field) => String(row[headers[field]] ?? '').trim();
+    const line = i + 2;   // מספר השורה בגיליון, כולל הכותרת
+    const name = cell('name');
+    const email = cell('email').toLowerCase();
+    if (!name && !email) return;   // שורה ריקה אינה שגיאה
+
+    const errors = [];
+    if (!name) errors.push('חסר שם');
+    if (!email) errors.push('חסר אימייל');
+    else if (!EMAIL_SHAPE.test(email)) errors.push('כתובת אימייל אינה תקינה');
+    else if (seen.has(email)) errors.push('הכתובת חוזרת פעמיים בקובץ');
+    else if (D.get('SELECT 1 FROM users WHERE lower(email)=?', email)) errors.push('משתמש עם הכתובת הזו כבר קיים');
+    else if (D.get('SELECT 1 FROM vendors WHERE lower(email)=?', email)) errors.push('הכתובת שייכת לספק במערכת');
+    if (email) seen.add(email);
+
+    // רמת גישה: ברירת המחדל היא עובד פנימי, וזו גם היחידה שמנהל מחלקה מעניק
+    let role = 'employee';
+    if (headers.role !== undefined && cell('role')) {
+      const parsed = roleFromLabel(cell('role'));
+      if (parsed === undefined) errors.push(`רמת גישה "${cell('role')}" אינה מוכרת`);
+      else if (!assignable.includes(parsed)) errors.push(`אין לך הרשאה להעניק רמת גישה ${P.ROLE_LABELS[parsed]}`);
+      else role = parsed;
+    }
+
+    // מחלקה: מנהל מחלקה מייבא למחלקה שלו בלבד, והשרת כופה זאת
+    let departmentId = scoped ? actor.departmentId : null;
+    let departmentLabel = scoped ? actor.department : null;
+    if (!scoped && headers.department !== undefined && cell('department')) {
+      const found = byName.get(normaliseHeader(cell('department')));
+      if (!found) errors.push(`המחלקה "${cell('department')}" אינה קיימת במערכת`);
+      else { departmentId = found.id; departmentLabel = found.name; }
+    }
+    // מנהל מחלקה חייב שיוך, בדיוק כמו בהוספה ידנית
+    if (role === 'manager' && !departmentId) errors.push('מנהל מחלקה חייב שיוך למחלקה — יש למלא עמודת מחלקה');
+
+    out.push({ line, name, email, role, roleLabel: P.ROLE_LABELS[role], departmentId, department: departmentLabel, errors });
+  });
+
+  if (!out.length) throw badRequest('לא נמצאו שורות נתונים בקובץ');
+  return {
+    columns: Object.fromEntries(Object.entries(IMPORT_COLUMNS).map(([f, s]) => [f, { label: s.label, found: headers[f] !== undefined }])),
+    rows: out,
+    validCount: out.filter((r) => !r.errors.length).length,
+    errorCount: out.filter((r) => r.errors.length).length
+  };
+}
+
+/**
+ * ‎commit=false‎ (ברירת המחדל) — בדיקה בלבד, ואין כתיבה.
+ * ‎commit=true‎ — יצירת השורות התקינות. שורות פסולות מדולגות ומדווחות, ולא
+ * מפילות את כל הייבוא: מי שהעלה קובץ של חמישים אנשים לא צריך להתחיל מחדש
+ * בגלל כתובת שגויה אחת.
+ */
+router.post('/api/admin/users/import', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  requirePerm(actor, 'manage_users');
+  const b = await readJson(req);
+
+  const raw = String(b.data ?? '');
+  const base64 = raw.includes(',') ? raw.slice(raw.indexOf(',') + 1) : raw;
+  const buffer = Buffer.from(base64, 'base64');
+  if (!buffer.length) throw badRequest('לא נשלח קובץ');
+  const maxMb = Number(D.getSetting('max_upload_mb', 25));
+  if (buffer.length > maxMb * 1024 * 1024) throw badRequest(`הקובץ גדול מ-${maxMb}MB`);
+
+  let rows;
+  try {
+    rows = Spreadsheet.parse(buffer, String(b.filename ?? ''));
+  } catch (err) {
+    throw badRequest(`לא ניתן לקרוא את הקובץ: ${err.message}`);
+  }
+
+  const analysis = analyseImport(actor, rows);
+  if (!b.commit) return sendJson(res, 200, { ...analysis, committed: false });
+
+  const created = [];
+  const failed = [];
+  for (const row of analysis.rows) {
+    if (row.errors.length) { failed.push({ line: row.line, email: row.email, reason: row.errors[0] }); continue; }
+    try {
+      // סיסמה אקראית שאיש אינו יודע — הכניסה דרך קישור ההזמנה
+      const password = crypto.randomBytes(24).toString('base64url');
+      const result = D.run(
+        'INSERT INTO users (full_name, email, password_hash, role, department, status, created_at) VALUES (?,?,?,?,?,?,?)',
+        row.name, row.email, D.hashPassword(password), row.role, departmentName(row.departmentId), 'active', D.nowIso()
+      );
+      const userId = Number(result.lastInsertRowid);
+      D.run('UPDATE users SET department_id = ? WHERE id = ?', row.departmentId, userId);
+      if (row.role === 'manager' && row.departmentId) {
+        D.run('UPDATE departments SET manager_user_id = ? WHERE id = ?', userId, row.departmentId);
+      }
+
+      const invite = b.invite === false ? null : await Invites.createAndSend({
+        targetType: 'user',
+        targetId: userId,
+        email: row.email,
+        recipientName: row.name,
+        inviter: { id: actor.id, name: actor.name, email: actor.email },
+        baseUrl: Google.publicBase(req)
+      });
+      created.push({ line: row.line, userId, name: row.name, email: row.email, emailSent: !!invite?.emailSent, link: invite?.link ?? null });
+    } catch (err) {
+      failed.push({ line: row.line, email: row.email, reason: err.message });
+    }
+  }
+
+  sendJson(res, 200, { committed: true, created, failed, createdCount: created.length, failedCount: failed.length });
 });
 
 router.post('/api/admin/users', async (req, res, ctx) => {

@@ -101,6 +101,7 @@ const AdminView = (() => {
         : null,
       el('div.flex.mb', {}, [
         el('div.spacer'),
+        el('button.btn', { onclick: () => importDialog(data) }, ['⇪ ייבוא מאקסל']),
         el('button.btn.btn-primary', { onclick: () => userDialog(null, data) }, ['＋ משתמש חדש'])
       ]),
       el('div.table-wrap', {}, [
@@ -140,6 +141,153 @@ const AdminView = (() => {
         ])
       ])
     );
+  }
+
+  // ------------------------------------------------------------- ייבוא מגיליון
+
+  /**
+   * ייבוא משתמשים מקובץ. שני שלבים במכוון: קודם רואים בטבלה מה עומד להיכנס
+   * ומה נפסל ולמה, ורק אחר כך מאשרים. קובץ של חמישים אנשים שנכתב חצי הוא
+   * בלגן שאין ממנו חזרה, וטבלת תצוגה מקדימה עולה פחות מלנקות אותו.
+   */
+  function importDialog(listData) {
+    const scoped = listData.scope === 'department';
+    const fileInput = el('input', { type: 'file', accept: '.xlsx,.csv,.txt' });
+    const inviteCheck = el('input', { type: 'checkbox', checked: true });
+    const resultBox = el('div');
+    const actionBtn = el('button.btn.btn-primary', { disabled: true }, ['בדיקת הקובץ']);
+
+    let analysis = null;
+    let payload = null;
+
+    const columnsNote = el('div.alert.alert-info', {}, [
+      el('span', { text: '📋' }),
+      el('div', {}, [
+        el('b', { text: 'מה צריך להיות בקובץ' }),
+        el('div', { text: 'השורה הראשונה היא שורת כותרות. עמודות חובה: שם מלא, אימייל. עמודות אופציונליות: מחלקה, רמת גישה (ברירת המחדל — עובד פנימי).' }),
+        scoped
+          ? el('div', { text: `כמנהל/ת מחלקה, כל המיובאים ישויכו למחלקת ${listData.department} כעובדים פנימיים.` })
+          : el('div', { text: 'מחלקה שאינה קיימת במערכת תיפסל — יש להגדיר אותה קודם במסך המחלקות.' })
+      ])
+    ]);
+
+    const previewTable = (a) =>
+      el('div.table-wrap', { style: { maxHeight: '340px', overflowY: 'auto' } }, [
+        el('table.data', {}, [
+          el('thead', {}, [el('tr', {}, [
+            el('th', { text: 'שורה' }), el('th', { text: 'שם' }), el('th', { text: 'אימייל' }),
+            el('th', { text: 'מחלקה' }), el('th', { text: 'רמת גישה' }), el('th', { text: 'מצב' })
+          ])]),
+          el('tbody', {}, a.rows.map((r) =>
+            el('tr', { style: r.errors.length ? { background: 'var(--danger-bg)' } : {} }, [
+              el('td', { text: String(r.line) }),
+              el('td', { text: r.name || '—' }),
+              el('td', { text: r.email || '—', style: { direction: 'ltr', textAlign: 'right' } }),
+              el('td', { text: r.department || '—' }),
+              el('td', { text: r.roleLabel }),
+              el('td', {}, [r.errors.length
+                ? el('span.text-danger', { text: r.errors.join('; ') })
+                : el('span.text-ok', { text: '✓ תקין' })])
+            ])
+          ))
+        ])
+      ]);
+
+    const resultsTable = (r) =>
+      el('div', {}, [
+        el('div.alert.alert-ok', {}, [
+          el('span', { text: '✅' }),
+          el('div', { text: `נוצרו ${r.createdCount} משתמשים${r.failedCount ? `, ${r.failedCount} נכשלו` : ''}.` })
+        ]),
+        // מי שהדואר לא יצא אליו צריך את הקישור, אחרת הוא נשאר בלי דרך להיכנס
+        r.created.some((c) => !c.emailSent)
+          ? el('div', {}, [
+              el('div.alert.alert-warn', {}, [
+                el('span', { text: '✉️' }),
+                el('div', { text: 'לחלק מהמשתמשים לא נשלח דואר. יש להעביר להם את הקישור האישי ידנית.' })
+              ]),
+              el('div.table-wrap', { style: { maxHeight: '240px', overflowY: 'auto' } }, [
+                el('table.data', {}, [
+                  el('thead', {}, [el('tr', {}, [el('th', { text: 'שם' }), el('th', { text: 'קישור אישי' })])]),
+                  el('tbody', {}, r.created.filter((c) => !c.emailSent).map((c) =>
+                    el('tr', {}, [
+                      el('td', { text: c.name }),
+                      el('td', {}, [el('code', { text: c.link ?? '—', style: { direction: 'ltr', fontSize: '11px', wordBreak: 'break-all' } })])
+                    ])
+                  ))
+                ])
+              ])
+            ])
+          : null,
+        r.failed.length
+          ? el('div.table-wrap.mt', {}, [
+              el('table.data', {}, [
+                el('thead', {}, [el('tr', {}, [el('th', { text: 'שורה' }), el('th', { text: 'אימייל' }), el('th', { text: 'סיבה' })])]),
+                el('tbody', {}, r.failed.map((f) =>
+                  el('tr', {}, [el('td', { text: String(f.line) }), el('td', { text: f.email }), el('td.text-danger', { text: f.reason })])
+                ))
+              ])
+            ])
+          : null
+      ]);
+
+    fileInput.addEventListener('change', async () => {
+      analysis = null;
+      UI.mount(resultBox);
+      const file = fileInput.files[0];
+      actionBtn.disabled = !file;
+      actionBtn.textContent = 'בדיקת הקובץ';
+      if (!file) return;
+      payload = {
+        filename: file.name,
+        data: await new Promise((resolve) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result);
+          reader.readAsDataURL(file);
+        })
+      };
+    });
+
+    actionBtn.addEventListener('click', async () => {
+      if (!payload) return;
+      actionBtn.disabled = true;
+      try {
+        if (!analysis) {
+          // שלב הבדיקה — השרת אינו כותב דבר
+          analysis = await API.importUsers({ ...payload, commit: false });
+          UI.mount(resultBox,
+            el('div.flex.mb', { style: { gap: '10px' } }, [
+              el('b', { text: `${analysis.validCount} שורות תקינות` }),
+              analysis.errorCount ? el('span.text-danger', { text: `${analysis.errorCount} שורות ייפסלו` }) : null
+            ]),
+            previewTable(analysis));
+          actionBtn.textContent = analysis.validCount
+            ? `ייבוא ${analysis.validCount} משתמשים`
+            : 'אין שורות תקינות לייבוא';
+          actionBtn.disabled = !analysis.validCount;
+        } else {
+          const r = await API.importUsers({ ...payload, commit: true, invite: inviteCheck.checked });
+          UI.mount(resultBox, resultsTable(r));
+          actionBtn.remove();
+          await reload();
+        }
+      } catch (err) {
+        actionBtn.disabled = false;
+        UI.error(err);
+      }
+    });
+
+    UI.modal({
+      title: 'ייבוא משתמשים מקובץ',
+      size: 'wide',
+      body: el('div', {}, [
+        columnsNote,
+        UI.field('קובץ', fileInput, 'xlsx או CSV. אם נשמר מאקסל בעברית, מומלץ "CSV UTF-8" — אך גם הקידוד הרגיל נקרא.'),
+        el('label.checkbox', {}, [inviteCheck, 'לשלוח לכל מיובא הזמנה במייל לקביעת סיסמה']),
+        el('div', { style: { marginTop: '14px' } }, [resultBox])
+      ]),
+      footer: [actionBtn, el('div.spacer')]
+    });
   }
 
   /** בחירת "מחלקה חדשה" בתוך הרשימה הנפתחת — נשלח כ-newDepartmentName ולא כמזהה */
