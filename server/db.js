@@ -159,12 +159,18 @@ CREATE TABLE IF NOT EXISTS checklist_items (
   task_id  INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
   text     TEXT    NOT NULL,
   done     INTEGER NOT NULL DEFAULT 0,
-  position INTEGER NOT NULL DEFAULT 0
+  position INTEGER NOT NULL DEFAULT 0,
+  -- לפעמים לסעיף יש תהליך משל עצמו: הערה חופשית, ולצדה שרשור תגובות
+  -- (טבלת comments, דרך checklist_item_id)
+  note     TEXT    NOT NULL DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS comments (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
   task_id     INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  -- תגובה על סעיף בצ'קליסט ולא על המשימה כולה. השרשור יושב באותה טבלה
+  -- כדי שכל מה שכבר עובד בתגובות — תיוגים, קבצים והערות פנימיות — יעבוד גם שם.
+  checklist_item_id INTEGER REFERENCES checklist_items(id) ON DELETE CASCADE,
   author_type TEXT    NOT NULL CHECK (author_type IN ('user','vendor','system')),
   author_id   INTEGER,
   body        TEXT    NOT NULL,
@@ -628,6 +634,9 @@ function migrate() {
   addColumn('projects', 'created_by', 'INTEGER REFERENCES users(id)');
   // צבע הפרויקט — צובע את שורות המשימות שלו, לזיהוי במבט ולא בקריאה
   addColumn('projects', 'color', "TEXT NOT NULL DEFAULT ''");
+  // סעיף צ'קליסט שיש בו תהליך: הערה חופשית ושרשור תגובות משלו
+  addColumn('checklist_items', 'note', "TEXT NOT NULL DEFAULT ''");
+  addColumn('comments', 'checklist_item_id', 'INTEGER REFERENCES checklist_items(id) ON DELETE CASCADE');
 
   /**
    * סדר העמודות הוא סדר הזרימה, ולכן העמודה הסופית חייבת להיות אחרונה.

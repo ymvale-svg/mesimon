@@ -54,6 +54,9 @@ const API = (() => {
     addChecklist: (id, text) => call('POST', `/api/tasks/${id}/checklist`, { text }),
     toggleChecklist: (id, done) => call('PATCH', `/api/checklist/${id}`, { done }),
     deleteChecklist: (id) => call('DELETE', `/api/checklist/${id}`),
+    checklistItem: (id) => call('GET', `/api/checklist/${id}`),
+    updateChecklist: (id, body) => call('PATCH', `/api/checklist/${id}`, body),
+    addChecklistComment: (id, body) => call('POST', `/api/checklist/${id}/comments`, body),
 
     addComment: (id, body, internal, files) => call('POST', `/api/tasks/${id}/comments`, { body, internal, files }),
     upload: (id, filename, mime, data) => call('POST', `/api/tasks/${id}/attachments`, { filename, mime, data }),

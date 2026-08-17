@@ -440,4 +440,4 @@ const catalog = () => ({
   actions: Object.entries(ACTIONS).map(([key, a]) => ({ key, label: a.label }))
 });
 
-module.exports = { TRIGGERS, ACTIONS, runOnce, start, stop, catalog, firstColumnKey, isFinalStatus, statusLabel, formatDate };
+module.exports = { TRIGGERS, ACTIONS, runOnce, start, stop, catalog, firstColumnKey, isFinalStatus, statusLabel, formatDate, alertTargets };

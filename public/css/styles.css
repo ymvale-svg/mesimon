@@ -769,10 +769,21 @@ input[type="color"] { width: 46px; height: 30px; padding: 2px; cursor: pointer; 
 .checklist-item { display: flex; align-items: center; gap: 9px; padding: 6px 8px; border-radius: 7px; }
 .checklist-item:hover { background: var(--surface-2); }
 .checklist-item input { width: 16px; height: 16px; accent-color: var(--ok); cursor: pointer; flex: none; }
-.checklist-item .txt { flex: 1; }
+.checklist-item .txt { flex: 0 1 auto; min-width: 0; text-align: start; }
 .checklist-item.done .txt { text-decoration: line-through; color: var(--text-mute); }
 .checklist-item .del { opacity: 0; }
 .checklist-item:hover .del { opacity: 1; }
+.checklist-item .spacer { flex: 1 0 6px; }
+/* שם הסעיף הוא כפתור: הוא פותח את מסך הסעיף */
+.checklist-item .txt-open {
+  border: 0; background: none; padding: 0; cursor: pointer;
+  font: inherit; color: inherit; border-bottom: 1px dashed transparent;
+}
+.checklist-item .txt-open:hover { color: var(--brand); border-bottom-color: var(--brand); }
+/* סימון שיש תוכן בתוך הסעיף — הערה או תגובות */
+.checklist-item .item-badge { font-size: 11px; color: var(--text-mute); flex: none; }
+/* תיבת הסימון במסך הסעיף */
+.item-done-box { width: 17px; height: 17px; accent-color: var(--ok); cursor: pointer; flex: none; }
 
 .progress-bar { height: 7px; border-radius: 5px; background: var(--border); overflow: hidden; margin: 8px 0 12px; }
 .progress-bar > div { height: 100%; background: var(--ok); transition: width .25s; }

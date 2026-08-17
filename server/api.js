@@ -192,7 +192,8 @@ function shapeTask(task, actor, { withDetails = false } = {}) {
         ORDER BY created_at DESC LIMIT 4`, task.id
     ).map((a) => ({ id: a.id, filename: a.filename, mime: a.mime, size: a.size, version: a.version })),
     commentsCount: D.get(
-      `SELECT COUNT(*) c FROM comments WHERE task_id = ?${isVendor(actor) ? ' AND internal = 0' : ''}`,
+      `SELECT COUNT(*) c FROM comments
+        WHERE task_id = ? AND checklist_item_id IS NULL${isVendor(actor) ? ' AND internal = 0' : ''}`,
       task.id
     ).c
   };
@@ -201,7 +202,9 @@ function shapeTask(task, actor, { withDetails = false } = {}) {
 
   const hideInternal = isVendor(actor);
   const comments = D.all(
-    `SELECT * FROM comments WHERE task_id = ?${hideInternal ? ' AND internal = 0' : ''} ORDER BY created_at`,
+    `SELECT * FROM comments
+      WHERE task_id = ? AND checklist_item_id IS NULL${hideInternal ? ' AND internal = 0' : ''}
+      ORDER BY created_at`,
     task.id
   ).map((c) => ({
     id: c.id,
@@ -242,7 +245,13 @@ function shapeTask(task, actor, { withDetails = false } = {}) {
 
   return {
     ...base,
-    checklist: checklist.map((c) => ({ id: c.id, text: c.text, done: !!c.done })),
+    checklist: checklist.map((c) => ({
+      id: c.id, text: c.text, done: !!c.done, note: c.note ?? '',
+      commentsCount: D.get(
+        `SELECT COUNT(*) c FROM comments
+          WHERE checklist_item_id = ?${isVendor(actor) ? ' AND internal = 0' : ''}`, c.id
+      ).c
+    })),
     comments,
     attachments,
     history: history.map((h) => ({
@@ -950,7 +959,8 @@ function changeStatus(task, newStatus, actor, note = '') {
         title: 'התוצר אושר סופית', body: task.title, taskId: task.id
       });
     } else if (isVendor(actor)) {
-      for (const m of D.all("SELECT id FROM users WHERE role IN ('admin','manager') AND status='active'")) {
+      // רק מי שהמשימה בתחומו, ולא כל מנהל בארגון
+      for (const m of Rules.alertTargets(task)) {
         D.notify({
           targetType: 'user', targetId: m.id, kind: 'status_change',
           title: newStatus === 'pending_team_review' ? 'ספק סיים משימה — ממתין לבדיקה' : 'ספק העלה תוצרים',
@@ -1060,17 +1070,140 @@ router.post('/api/tasks/:id/checklist', async (req, res, ctx) => {
   sendJson(res, 200, { task: shapeTask(getTaskOr404(task.id), actor, { withDetails: true }) });
 });
 
-router.patch('/api/checklist/:id', async (req, res, ctx) => {
-  const actor = ctx.requireActor();
-  const item = D.get('SELECT * FROM checklist_items WHERE id = ?', Number(ctx.params.id));
-  if (!item) throw notFound();
+/** סעיף עם המשימה שהוא שייך לה — נקודת הכניסה לכל פעולה על סעיף */
+function checklistItemOr404(actor, id) {
+  const item = D.get('SELECT * FROM checklist_items WHERE id = ?', Number(id));
+  if (!item) throw notFound('הסעיף לא נמצא');
   const task = getTaskOr404(item.task_id);
   assertVisible(actor, task);
-  if (!mayOnTask(actor, 'change_task_status', task, projectOf(task))) throw forbidden();
-  const { done } = await readJson(req);
-  D.run('UPDATE checklist_items SET done = ? WHERE id = ?', done ? 1 : 0, item.id);
-  D.audit(task.id, actorRef(actor), 'checklist', `${done ? 'הושלם' : 'בוטל'} סעיף: ${item.text}`);
-  sendJson(res, 200, { task: shapeTask(getTaskOr404(task.id), actor, { withDetails: true }) });
+  return { item, task };
+}
+
+/** תוכן הסעיף עצמו: ההערה שבו והשרשור שלו */
+function shapeChecklistItem(item, actor) {
+  const hideInternal = isVendor(actor);
+  return {
+    id: item.id,
+    taskId: item.task_id,
+    text: item.text,
+    note: item.note ?? '',
+    done: !!item.done,
+    comments: D.all(
+      `SELECT * FROM comments
+        WHERE checklist_item_id = ?${hideInternal ? ' AND internal = 0' : ''}
+        ORDER BY created_at`,
+      item.id
+    ).map((c) => ({
+      id: c.id,
+      body: c.body,
+      internal: !!c.internal,
+      createdAt: c.created_at,
+      authorType: c.author_type,
+      authorName:
+        c.author_type === 'vendor'
+          ? D.get('SELECT name FROM vendors WHERE id = ?', c.author_id)?.name ?? 'ספק'
+          : c.author_type === 'user'
+            ? D.get('SELECT full_name FROM users WHERE id = ?', c.author_id)?.full_name ?? 'משתמש'
+            : 'המערכת',
+      attachments: D.all(
+        'SELECT id, filename, size, mime, version FROM attachments WHERE comment_id = ? ORDER BY id', c.id
+      )
+    }))
+  };
+}
+
+/**
+ * מסך הסעיף. סעיף בצ'קליסט אינו תמיד שורה אחת — לפעמים יש בו תהליך משל
+ * עצמו, ואז הוא נפתח לעצמו עם הערה ושרשור תגובות.
+ */
+router.get('/api/checklist/:id', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  const { item, task } = checklistItemOr404(actor, ctx.params.id);
+  sendJson(res, 200, {
+    item: shapeChecklistItem(item, actor),
+    taskTitle: task.title,
+    permissions: {
+      edit: mayOnTask(actor, 'edit_delete_task', task, projectOf(task)) && !isVendor(actor),
+      changeStatus: mayOnTask(actor, 'change_task_status', task, projectOf(task)) && !(isVendor(actor) && actor.readOnly),
+      comment: !(isVendor(actor) && actor.readOnly),
+      seeInternal: !isVendor(actor)
+    }
+  });
+});
+
+router.patch('/api/checklist/:id', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  const { item, task } = checklistItemOr404(actor, ctx.params.id);
+  const b = await readJson(req);
+  const project = projectOf(task);
+
+  // סימון "בוצע" הוא שינוי סטטוס; שינוי הטקסט או ההערה הוא עריכת תוכן המשימה
+  if (b.done !== undefined) {
+    if (!mayOnTask(actor, 'change_task_status', task, project)) throw forbidden();
+    D.run('UPDATE checklist_items SET done = ? WHERE id = ?', b.done ? 1 : 0, item.id);
+    D.audit(task.id, actorRef(actor), 'checklist', `${b.done ? 'הושלם' : 'בוטל'} סעיף: ${item.text}`);
+  }
+
+  if (b.text !== undefined || b.note !== undefined) {
+    if (isVendor(actor) || !mayOnTask(actor, 'edit_delete_task', task, project)) throw forbidden();
+    const text = b.text !== undefined ? String(b.text).trim() : item.text;
+    if (!text) throw badRequest('נדרש טקסט לסעיף');
+    const note = b.note !== undefined ? String(b.note) : item.note;
+    D.run('UPDATE checklist_items SET text = ?, note = ? WHERE id = ?', text, note, item.id);
+    if (b.text !== undefined && text !== item.text) {
+      D.audit(task.id, actorRef(actor), 'checklist', `שם הסעיף שונה ל"${text}"`);
+    }
+    if (b.note !== undefined && note !== item.note) {
+      D.audit(task.id, actorRef(actor), 'checklist', `עודכנה ההערה בסעיף "${text}"`);
+    }
+  }
+
+  const fresh = D.get('SELECT * FROM checklist_items WHERE id = ?', item.id);
+  sendJson(res, 200, {
+    item: shapeChecklistItem(fresh, actor),
+    task: shapeTask(getTaskOr404(task.id), actor, { withDetails: true })
+  });
+});
+
+/** תגובה על סעיף — אותו שרשור כמו במשימה, כולל תיוגים וקבצים */
+router.post('/api/checklist/:id/comments', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  const { item, task } = checklistItemOr404(actor, ctx.params.id);
+  if (isVendor(actor) && actor.readOnly) throw forbidden('לחשבון שלך הוגדרה הרשאת צפייה בלבד');
+  const { body, internal, files } = await readJson(req);
+  const text = String(body ?? '').trim();
+  const attached = Array.isArray(files) ? files.filter((f) => f && f.filename && f.data) : [];
+  if (!text && !attached.length) throw badRequest('נדרש תוכן לתגובה או קובץ מצורף');
+
+  const isInternal = !isVendor(actor) && !!internal;
+  const result = D.run(
+    `INSERT INTO comments (task_id, checklist_item_id, author_type, author_id, body, internal, created_at)
+     VALUES (?,?,?,?,?,?,?)`,
+    task.id, item.id, isVendor(actor) ? 'vendor' : 'user', actor.id, text, isInternal ? 1 : 0, D.nowIso()
+  );
+  const commentId = Number(result.lastInsertRowid);
+
+  // הקבצים נקשרים לתגובה, ולכן נשמרים אחריה
+  for (const f of attached.map((f) => saveAttachment(task, actor, f, commentId))) {
+    D.audit(task.id, actorRef(actor), 'attachment', `צורף קובץ "${f.name}" לסעיף "${item.text}"`);
+  }
+
+  for (const uid of extractMentions(text)) {
+    D.run('INSERT OR IGNORE INTO comment_mentions (comment_id, user_id) VALUES (?,?)', commentId, uid);
+    if (uid !== actor.id || isVendor(actor)) {
+      D.notify({
+        targetType: 'user', targetId: uid, kind: 'mention',
+        title: `${actor.name} תייג/ה אותך בסעיף`, body: `${item.text} — ${text.slice(0, 100)}`, taskId: task.id
+      });
+    }
+  }
+
+  D.audit(task.id, actorRef(actor), 'comment', `תגובה בסעיף "${item.text}"`);
+  const fresh = D.get('SELECT * FROM checklist_items WHERE id = ?', item.id);
+  sendJson(res, 200, {
+    item: shapeChecklistItem(fresh, actor),
+    task: shapeTask(getTaskOr404(task.id), actor, { withDetails: true })
+  });
 });
 
 router.delete('/api/checklist/:id', async (req, res, ctx) => {
@@ -1126,7 +1259,8 @@ router.post('/api/tasks/:id/comments', async (req, res, ctx) => {
 
   // עדכון הצד השני
   if (isVendor(actor)) {
-    for (const m of D.all("SELECT id FROM users WHERE role IN ('admin','manager') AND status='active'")) {
+    // רק מי שהמשימה בתחומו, ולא כל מנהל בארגון
+    for (const m of Rules.alertTargets(task)) {
       D.notify({ targetType: 'user', targetId: m.id, kind: 'status_change', title: 'תגובה חדשה מספק', body: `${task.title} — ${actor.name}`, taskId: task.id });
     }
   } else if (!isInternal && task.assignee_type === 'vendor' && task.assignee_id) {

@@ -603,6 +603,134 @@ const UI = (() => {
     });
   }
 
+  /**
+   * שרשור תגובות — מימוש אחד לכל השרשורים במערכת: של המשימה ושל סעיף
+   * בצ'קליסט. כולל תיוג עמיתים, הערה פנימית, צירוף קבצים ותצוגה מקדימה.
+   *
+   * ‎onSend(body, internal, files)‎ הוא זה שיודע לאן ההודעה נשלחת ומה נטען
+   * מחדש אחריה; כאן רק האיסוף והתצוגה.
+   */
+  function commentThread({ comments = [], canComment = false, seeInternal = false, onSend }) {
+    const names = App.state.users.map((u) => u.name);
+    const input = el('textarea', { placeholder: 'הוספת תגובה… ניתן לתייג עמיתים באמצעות @שם' });
+    const internalCheck = el('input', { type: 'checkbox' });
+
+    // קבצים שנבחרו ועדיין לא נשלחו. נשמרים כאן ולא ב-DOM כדי שהתצוגה
+    // תיבנה מהמצב ולא להיפך.
+    let pending = [];
+    const pendingBox = el('div.file-chips', { style: { margin: '8px 0 0' } });
+
+    const drawPending = () => {
+      mount(pendingBox, ...pending.map((f, i) =>
+        el('span.file-chip', {}, [
+          el('span', { text: fileIcon(f.filename) }),
+          el('span.fc-name', { text: f.filename }),
+          el('span.mute-sm', { text: fileSize(f.size) }),
+          el('button.chip-x', {
+            title: 'הסרה',
+            onclick: () => { pending.splice(i, 1); drawPending(); }
+          }, ['✕'])
+        ])));
+      pendingBox.style.display = pending.length ? 'flex' : 'none';
+    };
+    drawPending();
+
+    const fileInput = el('input', { type: 'file', multiple: true, style: { display: 'none' } });
+    fileInput.addEventListener('change', async () => {
+      for (const file of [...fileInput.files]) {
+        pending.push({
+          filename: file.name,
+          mime: file.type || 'application/octet-stream',
+          size: file.size,
+          data: await new Promise((resolve) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(reader.result);
+            reader.readAsDataURL(file);
+          })
+        });
+      }
+      fileInput.value = '';
+      drawPending();
+    });
+
+    const send = async () => {
+      const body = input.value.trim();
+      // הודעה עם קובץ בלבד היא שימוש לגיטימי, ולכן לא דורשים טקסט כשיש צירוף
+      if (!body && !pending.length) return;
+      try {
+        await onSend(body, internalCheck.checked, pending);
+        input.value = '';
+        pending = [];
+      } catch (err) { error(err); }
+    };
+    input.addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) send(); });
+
+    // רשימת תיוג מהירה
+    const mentionBar = seeInternal
+      ? el('div.flex', { style: { flexWrap: 'wrap', marginBottom: '6px' } },
+          App.state.users.slice(0, 6).map((u) =>
+            el('button.btn.btn-sm.btn-ghost', {
+              onclick: () => { input.value += `${input.value && !input.value.endsWith(' ') ? ' ' : ''}@${u.name} `; input.focus(); }
+            }, [`@${u.name}`])))
+      : null;
+
+    const fileChips = (list) => el('div.file-chips', { style: { marginTop: '6px' } }, list.map((a) => {
+      const shown = list.filter(canPreview);
+      const label = [
+        el('span', { text: fileIcon(a.filename) }),
+        el('span.fc-name', { text: a.filename }),
+        el('span.mute-sm', { text: fileSize(a.size) })
+      ];
+      // קובץ שאפשר לראות נפתח בתוך המערכת; שאר הסוגים יורדים למחשב
+      return canPreview(a)
+        ? el('button.file-chip', {
+            title: `${a.filename} · ${fileSize(a.size)} — לחיצה לתצוגה`,
+            onclick: () => preview(shown, shown.indexOf(a))
+          }, label)
+        : el('a.file-chip', {
+            href: `/api/attachments/${a.id}/download`,
+            title: `${a.filename} · ${fileSize(a.size)}`
+          }, label);
+    }));
+
+    return el('div', {}, [
+      comments.length
+        ? el('div', {}, comments.map((c) =>
+            el(`div.comment${c.internal ? '.internal' : ''}`, {}, [
+              avatar(c.authorName, { small: true, vendor: c.authorType === 'vendor' }),
+              el('div.c-body', {}, [
+                el('div.c-head', {}, [
+                  el('b', { text: c.authorName }),
+                  c.authorType === 'vendor' ? el('span.tag.tag-vendor', {}, ['ספק']) : null,
+                  c.internal ? el('span.tag.tag-high', {}, ['🔒 הערה פנימית']) : null,
+                  el('time', { text: formatDateTime(c.createdAt) })
+                ]),
+                c.body ? el('div.c-text', {}, [renderMentions(c.body, names)]) : null,
+                // הקובץ מוצג בתוך ההודעה שבה נשלח — שם הוא נמצא בהקשר שלו
+                c.attachments?.length ? fileChips(c.attachments) : null
+              ])
+            ])))
+        : empty('אין תגובות עדיין', '💬'),
+      canComment
+        ? el('div', { style: { marginTop: '12px' } }, [
+            mentionBar,
+            input,
+            pendingBox,
+            fileInput,
+            el('div.flex', { style: { marginTop: '8px' } }, [
+              el('button.btn.btn-primary', { onclick: send }, ['שליחת תגובה']),
+              el('button.btn', { title: 'צירוף קובץ להודעה', onclick: () => fileInput.click() }, ['📎 צירוף קובץ']),
+              seeInternal
+                ? el('label.checkbox', { title: 'הערות פנימיות מוסתרות לחלוטין מהספק' }, [internalCheck, '🔒 הערה פנימית (מוסתרת מהספק)'])
+                : null,
+              el('div.spacer'),
+              el('span.mute-sm', { text: 'Ctrl+Enter לשליחה' })
+            ])
+          ])
+        : null
+    ]);
+  }
+
   const fileIcon = (name) => {
     const ext = String(name).split('.').pop().toLowerCase();
     if (['png', 'jpg', 'jpeg', 'gif', 'svg', 'psd', 'ai'].includes(ext)) return '🖼️';
@@ -621,7 +749,7 @@ const UI = (() => {
     initials, avatar, priorityTag, statusTag, taskTags,
     modal, confirm, prompt, toast, error, success, notifyPop, clearNotifyPops,
     empty, spinner, field, select, renderMentions, fileSize, fileIcon,
-    preview, canPreview, PROJECT_COLORS,
+    preview, canPreview, PROJECT_COLORS, commentThread,
     logo, logoMark, companyLogo, refitLogos
   };
 })();
