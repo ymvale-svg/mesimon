@@ -16,7 +16,7 @@ const AdminView = (() => {
     { key: 'automations', label: 'אוטומציות וכללים', perm: 'manage_automations' },
     { key: 'settings', label: 'הגדרות מערכת', perm: 'manage_automations' },
     { key: 'matrix', label: 'מטריצת הרשאות', perm: 'manage_users' },
-    { key: 'templates', label: 'תבניות', perm: 'create_project' }
+    { key: 'templates', label: 'תבניות', perm: 'create_project', full: true }
   ];
 
   async function render(container, params = {}) {
@@ -24,7 +24,8 @@ const AdminView = (() => {
     if (params.tab) tab = params.tab;
     // מטריצת ההרשאות פורשת את כל היררכיית הרמות, ולכן היא סגורה בפני מי
     // שאינו רשאי לראות רמות גישה — גם אם הוא מנהל משתמשים במחלקתו
-    const allowed = TABS.filter((t) => App.may(t.perm) && (t.key !== 'matrix' || App.state.actor.seesRoles));
+    const allowed = TABS.filter((t) =>
+      (t.full ? App.can(t.perm) : App.may(t.perm)) && (t.key !== 'matrix' || App.state.actor.seesRoles));
     if (!allowed.some((t) => t.key === tab)) tab = allowed[0]?.key;
 
     UI.mount(container,

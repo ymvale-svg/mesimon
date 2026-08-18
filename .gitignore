@@ -10,3 +10,7 @@ desktop.ini
 
 # הגדרות מקומיות של כלי הפיתוח
 .claude/
+
+# Windows מייצר את הקובץ הזה בכל תיקיית תמונות
+Thumbs.db
+**/Thumbs.db

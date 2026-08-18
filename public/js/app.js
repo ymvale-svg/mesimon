@@ -458,7 +458,9 @@ const App = (() => {
     add('archive');
     if (may('view_reports')) add('reports');
     // מנהל מחלקה מגיע לניהול ספקים ותבניות; מנהל מערכת מקבל גם משתמשים ואוטומציות
-    if (may('manage_users') || may('manage_automations') || may('assign_task_to_vendor') || may('create_project')) {
+    // עובד פנימי פותח פרויקטים ברמת 'own' ואין לו מה לעשות במסך הניהול,
+    // ולכן כאן נדרשת הרשאה מלאה לפרויקטים ולא עצם היכולת לפתוח אחד
+    if (may('manage_users') || may('manage_automations') || may('assign_task_to_vendor') || can('create_project')) {
       add('admin');
     }
 

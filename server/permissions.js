@@ -40,7 +40,7 @@ const INTERNAL_ROLES = ROLES.filter((r) => r !== 'vendor');
 const MATRIX = {
   view_internal_board:      { superadmin: true, admin: true,  executive: true,  manager: 'department', employee: 'own', vendor: false },
   view_vendor_boards:       { superadmin: true, admin: true,  executive: true,  manager: true,        employee: false, vendor: 'self_board' },
-  create_project:           { superadmin: true, admin: true,  executive: true,  manager: true,        employee: false, vendor: false },
+  create_project:           { superadmin: true, admin: true,  executive: true,  manager: true,        employee: 'own',  vendor: false },
   create_task:              { superadmin: true, admin: true,  executive: true,  manager: true,        employee: true,  vendor: false },
   assign_department_task:   { superadmin: true, admin: true,  executive: true,  manager: true,        employee: false, vendor: false },
   edit_delete_task:         { superadmin: true, admin: true,  executive: true,  manager: 'department', employee: 'own', vendor: false },
@@ -88,6 +88,7 @@ const MATRIX_NOTES = {
   'manage_users.manager': 'עובדים פנימיים במחלקה שלו',
   'assign_department_task.employee': 'רק אם הוענקה לו הרשאה אישית',
   'view_internal_board.employee': 'רק משימות שהוא חלק מהן, או כל המחלקה אם הוענקה לו הרשאה',
+  'create_project.employee': 'פותח פרויקטים, ועורך את אלה שפתח או שהוא מנהלם',
   'view_reports.manager': 'חתך המחלקה שלו',
   'manage_organizations.superadmin': 'הקמת חברות — יופעל בהמשך'
 };

@@ -1427,6 +1427,17 @@ router.patch('/api/projects/:id', async (req, res, ctx) => {
   requirePerm(actor, 'create_project');
   const project = D.get('SELECT * FROM projects WHERE id = ?', Number(ctx.params.id));
   if (!project) throw notFound();
+
+  /**
+   * עובד פנימי פותח פרויקטים ברמת 'own', ולכן עורך רק את אלה שפתח או שהוא
+   * מנהלם. בלי הבדיקה הזו ההרשאה לפתוח פרויקט הייתה גם הרשאה לשנות את שמו
+   * ואת מנהלו של כל פרויקט אחר בארגון.
+   */
+  if (P.level(actor, 'create_project') === 'own'
+      && project.created_by !== actor.id && project.manager_id !== actor.id) {
+    throw forbidden('אפשר לערוך רק פרויקט שפתחת או שאתה מנהלו');
+  }
+
   const b = await readJson(req);
   D.run(
     'UPDATE projects SET name = ?, description = ?, manager_id = ?, start_date = ?, due_date = ?, status = ?, color = ? WHERE id = ?',
@@ -2523,7 +2534,8 @@ router.get('/api/templates', async (req, res, ctx) => {
 
 router.post('/api/templates', async (req, res, ctx) => {
   const actor = ctx.requireActor();
-  requirePerm(actor, 'create_project');
+  // תבנית היא נכס של כל הארגון ולא של מי שיצר אותה, ולכן נדרשת הרשאה מלאה
+  requireFullPerm(actor, 'create_project');
   const b = await readJson(req);
   if (!['task', 'project'].includes(b.kind)) throw badRequest('סוג תבנית לא תקין');
   D.run('INSERT INTO templates (kind, name, payload, created_at) VALUES (?,?,?,?)',
@@ -2533,7 +2545,7 @@ router.post('/api/templates', async (req, res, ctx) => {
 
 router.delete('/api/templates/:id', async (req, res, ctx) => {
   const actor = ctx.requireActor();
-  requirePerm(actor, 'create_project');
+  requireFullPerm(actor, 'create_project');
   D.run('DELETE FROM templates WHERE id = ?', Number(ctx.params.id));
   sendJson(res, 200, { ok: true });
 });
