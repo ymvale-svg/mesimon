@@ -502,9 +502,9 @@ router.get('/api/bootstrap', async (req, res, ctx) => {
  * משימה שהם רואים. זהו בדיוק היקף הראייה של המשימות, רק בהיטל של פרויקטים,
  * כדי שלא ייווצר מצב שברשימה מופיע פרויקט שכל תוכנו חסום.
  */
-function visibleProjectIds(actor) {
+function visibleProjectIds(actor, { ignoreOrgWide = false } = {}) {
   if (isVendor(actor)) return new Set();
-  if (P.isOrgWide(actor)) return null;
+  if (P.isOrgWide(actor) && !ignoreOrgWide) return null;
 
   const mine = ['p.created_by = ?', 'p.manager_id = ?'];
   const params = [actor.id, actor.id];
@@ -538,6 +538,15 @@ function listProjectsFor(actor) {
       : []
   );
   const visible = visibleProjectIds(actor);
+
+  /**
+   * מנהל מערכת רואה את כל הפרויקטים בארגון, אבל יש לו גם עבודה משלו — ורשימה
+   * שמערבבת את השתיים אינה שימושית לאף אחד מהתפקידים. לכן כל פרויקט מסומן
+   * אם הוא שלו, והממשק מציג כברירת מחדל את שלו בלבד עם מעבר לכל הארגון.
+   * למי שאינו רואה את כל הארגון ממילא כל מה שהוא רואה הוא שלו.
+   */
+  const mineIds = visible === null ? visibleProjectIds(actor, { ignoreOrgWide: true }) : visible;
+
   const rows = D.all('SELECT * FROM projects ORDER BY status, name')
     .filter((p) => visible === null || visible.has(p.id));
   const shaped = rows.map((p) => {
@@ -560,6 +569,7 @@ function listProjectsFor(actor) {
       color: projectColor(p),
       // הצבע שנבחר בפועל, להבדיל מהנגזר — כדי שבורר הצבע יידע אם יש בחירה
       colorChosen: p.color || null,
+      mine: mineIds.has(p.id),
       tasksTotal: stats.total ?? 0,
       tasksDone: stats.done ?? 0,
       pinned: pinned.has(p.id)

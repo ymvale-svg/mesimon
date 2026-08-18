@@ -127,10 +127,10 @@ const UI = (() => {
    */
   function taskTags(task) {
     const tags = [];
-    if (task.overdue) tags.push(el('span.tag.tag-overdue', {}, ['⏰ באיחור']));
-    if (task.priority === 'urgent') tags.push(el('span.tag.tag-urgent', {}, ['🔥 דחוף']));
+    if (task.overdue) tags.push(el('span.tag.tag-overdue', {}, [icon('overdue'), 'באיחור']));
+    if (task.priority === 'urgent') tags.push(el('span.tag.tag-urgent', {}, [icon('urgent'), 'דחוף']));
     else if (task.priority === 'high') tags.push(el('span.tag.tag-high', {}, ['גבוהה']));
-    if (task.escalated) tags.push(el('span.tag.tag-escalated', {}, ['↑ הוקפצה']));
+    if (task.escalated) tags.push(el('span.tag.tag-escalated', {}, [icon('urgent'), 'הוקפצה']));
     if (task.scheduled) tags.push(el('span.tag.tag-scheduled', {}, ['🗓 מתוזמנת']));
     if (task.isRecurring) tags.push(el('span.tag.tag-recurring', {}, ['⟳ חוזרת']));
     if (task.dependency?.blocking) tags.push(el('span.tag.tag-high', {}, ['🔗 חסומה']));
@@ -312,10 +312,10 @@ const UI = (() => {
     };
 
     const card = el(`div.notif-pop${onOpen ? '.is-linked' : ''}`, { role: 'status' }, [
+      // ‎icon‎ הוא או צומת (מסכת אייקון) או טקסט — שני המצבים מטופלים כאן
       el('div.pop-icon', {
-        style: { background: bg || 'var(--surface-2)', color: color || 'var(--text-soft)' },
-        text: icon
-      }),
+        style: { background: bg || 'var(--surface-2)', color: color || 'var(--text-soft)' }
+      }, [icon]),
       el('div.pop-text', {}, [
         author ? el('div.pop-who', { text: author }) : null,
         headline ? el('div.pop-headline', { text: headline }) : null,
@@ -537,6 +537,29 @@ const UI = (() => {
    * שבשרת — כאן היא רק כדי לא להציע כפתור שייכשל. SVG אינו ברשימה בכוונה:
    * הוא מסמך שאפשר לשתול בו סקריפט.
    */
+  /**
+   * אייקון ממשק. הקבצים ב-‎/icons/ui‎ הם מסכות: התמונה נושאת צורה בלבד, והצבע
+   * בא מ-‎currentColor‎ דרך ‎background-color‎. לכן אותו קובץ מופיע בצבע המותג
+   * בתפריט, לבן על הסרגל הירוק, ואדום בתגית איחור — בלי גרסה נפרדת לכל הקשר.
+   *
+   * הרשימה כאן היא כל השמות הקיימים, כדי ששם שגוי ייתפס מיד ולא יופיע כריק.
+   */
+  const ICONS = ['home', 'board', 'my-tasks', 'vendors', 'archive', 'reports',
+    'admin', 'bell', 'pin', 'overdue', 'urgent', 'waiting'];
+
+  function icon(name, { size = null, title = null } = {}) {
+    if (!ICONS.includes(name)) {
+      console.warn(`[משימון] אין אייקון בשם "${name}"`);
+      return el('span.ic');
+    }
+    const node = el('span.ic', title ? { title } : {});
+    // שני הכתיבים — ‎-webkit-‎ נדרש לספארי, שהוא הדפדפן של כל אייפון
+    node.style.webkitMaskImage = `url(/icons/ui/${name}.png)`;
+    node.style.maskImage = `url(/icons/ui/${name}.png)`;
+    if (size) { node.style.width = `${size}px`; node.style.height = `${size}px`; }
+    return node;
+  }
+
   // פלטת הפרויקטים — זהה לזו שבשרת, שממנה נגזר צבע ברירת המחדל לפי המזהה
   const PROJECT_COLORS = ['#0f766e', '#c2410c', '#2563eb', '#7c3aed', '#be123c', '#0891b2', '#65a30d', '#a16207'];
 
@@ -749,7 +772,7 @@ const UI = (() => {
     initials, avatar, priorityTag, statusTag, taskTags,
     modal, confirm, prompt, toast, error, success, notifyPop, clearNotifyPops,
     empty, spinner, field, select, renderMentions, fileSize, fileIcon,
-    preview, canPreview, PROJECT_COLORS, commentThread,
+    preview, canPreview, PROJECT_COLORS, commentThread, icon,
     logo, logoMark, companyLogo, refitLogos
   };
 })();

@@ -22,6 +22,9 @@ const App = (() => {
 
   const root = () => document.getElementById('app');
 
+  // חתך רשימת הפרויקטים בתפריט — 'mine' או 'all'. נשמר במכשיר, לא בשרת.
+  const PROJECT_SCOPE_KEY = 'mesimon.projectScope';
+
   const may = (action) => state.permissions[action] && state.permissions[action] !== false;
   const can = (action) => state.permissions[action] === true;
   const isVendor = () => state.actor?.type === 'vendor';
@@ -96,13 +99,13 @@ const App = (() => {
   // ------------------------------------------------------------- ניווט
 
   const ROUTES = {
-    home: { label: 'דף הבית', icon: '🏠', render: (c) => HomeView.render(c) },
-    board: { label: 'לוח המשימות', icon: '📋', render: (c, p) => BoardView.render(c, { ...p, scope: 'internal' }) },
-    vendorBoards: { label: 'כל משימות הספקים', icon: '🤝', render: (c, p) => BoardView.render(c, { ...p, scope: 'vendors' }) },
-    archive: { label: 'ארכיון', icon: '🗄️', render: (c, p) => BoardView.render(c, { ...p, scope: 'internal', archived: true }) },
-    reports: { label: 'דוחות', icon: '📈', render: (c) => ReportsView.render(c) },
-    admin: { label: 'ניהול המערכת', icon: '⚙️', render: (c, p) => AdminView.render(c, p) },
-    vendor: { label: 'המשימות שלי', icon: '📦', render: (c) => VendorPortalView.render(c) }
+    home: { label: 'דף הבית', icon: 'home', render: (c) => HomeView.render(c) },
+    board: { label: 'לוח המשימות', icon: 'board', render: (c, p) => BoardView.render(c, { ...p, scope: 'internal' }) },
+    vendorBoards: { label: 'כל משימות הספקים', icon: 'vendors', render: (c, p) => BoardView.render(c, { ...p, scope: 'vendors' }) },
+    archive: { label: 'ארכיון', icon: 'archive', render: (c, p) => BoardView.render(c, { ...p, scope: 'internal', archived: true }) },
+    reports: { label: 'דוחות', icon: 'reports', render: (c) => ReportsView.render(c) },
+    admin: { label: 'ניהול המערכת', icon: 'admin', render: (c, p) => AdminView.render(c, p) },
+    vendor: { label: 'המשימות שלי', icon: 'my-tasks', render: (c) => VendorPortalView.render(c) }
   };
 
   function navigate(name, params = {}) {
@@ -118,13 +121,13 @@ const App = (() => {
 
   // פלטה אחת לסוגי ההתראות, משותפת למגירת ההתראות ולכרטיס המוקפץ
   const NOTIF_STYLE = {
-    vendor_reminder: { icon: '⏳', bg: '#fffbeb', color: '#d97706' },
-    manager_alert: { icon: '📣', bg: '#eff6ff', color: '#2563eb' },
-    overdue: { icon: '⏰', bg: '#fef2f2', color: '#dc2626' },
-    escalation: { icon: '↑', bg: '#fef2f2', color: '#7c2d12' },
+    vendor_reminder: { mask: 'waiting', bg: '#fffbeb', color: '#d97706' },
+    manager_alert: { mask: 'bell', bg: '#eff6ff', color: '#2563eb' },
+    overdue: { mask: 'overdue', bg: '#fef2f2', color: '#dc2626' },
+    escalation: { mask: 'urgent', bg: '#fef2f2', color: '#7c2d12' },
     mention: { icon: '@', bg: '#f0fdfa', color: '#0f766e' },
     status_change: { icon: '🔄', bg: '#f8fafc', color: '#475569' },
-    assignment: { icon: '📌', bg: '#f5f3ff', color: '#7c3aed' }
+    assignment: { mask: 'my-tasks', bg: '#f5f3ff', color: '#7c3aed' }
   };
 
   /**
@@ -230,7 +233,7 @@ const App = (() => {
     const parts = notifParts(n);
 
     UI.notifyPop({
-      icon: style.icon,
+      icon: style.mask ? UI.icon(style.mask, { size: 15 }) : style.icon,
       bg: style.bg,
       color: style.color,
       author: parts.author,
@@ -292,7 +295,8 @@ const App = (() => {
                 if (n.taskId) TaskCardView.open(n.taskId);
               }
             }, [
-              el('div.n-icon', { style: { background: style.bg, color: style.color }, text: style.icon }),
+              el('div.n-icon', { style: { background: style.bg, color: style.color } },
+                [style.mask ? UI.icon(style.mask, { size: 15 }) : style.icon]),
               el('div.n-body', {}, [
                 el('b', { text: n.title }),
                 n.body ? el('div', { text: n.body, style: { fontSize: '12.5px' } }) : null,
@@ -376,7 +380,7 @@ const App = (() => {
     const btn = el(`button.nav-pin${p.pinned ? '.is-pinned' : ''}`, {
       type: 'button',
       title: p.pinned ? 'שחרור הנעיצה' : 'נעיצה לראש הרשימה'
-    }, ['📌']);
+    }, [UI.icon('pin')]);
 
     btn.addEventListener('click', async (e) => {
       e.stopPropagation();
@@ -401,7 +405,7 @@ const App = (() => {
       items.push(el(`button.nav-item${state.route.name === name && !extra.matchParam ? '.active' : ''}`, {
         onclick: () => navigate(name, params ?? {})
       }, [
-        el('span.ico', { text: extra.icon ?? route.icon }),
+        el('span.ico', {}, [extra.icon ? extra.icon : UI.icon(route.icon)]),
         el('span', { text: extra.label ?? route.label }),
         extra.count !== undefined ? el('span.count', { text: String(extra.count) }) : null
       ]));
@@ -435,19 +439,56 @@ const App = (() => {
      * השרת כבר מחזיר את הנעוצים בראש, אך את החלוקה מחשבים כאן מחדש כדי שהחוצץ
      * יישאר במקום הנכון גם אחרי סינון הפרויקטים שהושלמו.
      */
-    const openProjects = state.projects.filter((p) => p.status !== 'done');
+    const live = state.projects.filter((p) => p.status !== 'done');
+
+    /**
+     * למנהל מערכת יש גם עבודה משלו, ורשימה שמערבבת את הפרויקטים שלו עם כל
+     * פרויקט בארגון אינה משרתת אף אחד מהשניים. לכן כשיש פרויקטים שאינם שלו
+     * מוצג מעבר, וברירת המחדל היא שלו. הבחירה נשמרת במכשיר — מי שעובד תמיד
+     * בחתך אחד לא יבחר אותו מחדש בכל טעינה.
+     */
+    const mineCount = live.filter((p) => p.mine).length;
+    const foreign = live.length - mineCount;
+    const saved = localStorage.getItem(PROJECT_SCOPE_KEY);
+    /**
+     * ברירת המחדל היא "שלי", אבל רק כשיש כאלה: מנהל מערכת שלא פתח פרויקט
+     * ואינו מנהל אף אחד היה מקבל רשימה ריקה, וזה גרוע יותר מרשימה מעורבת.
+     */
+    const showAll = foreign > 0 && (saved === 'all' || (!saved && mineCount === 0));
+    const openProjects = foreign > 0 && !showAll ? live.filter((p) => p.mine) : live;
+
     const pinnedProjects = openProjects.filter((p) => p.pinned);
     const otherProjects = openProjects.filter((p) => !p.pinned);
+
     /**
      * הרשימה מכילה רק את הפרויקטים של המשתמש, ולכן היא עשויה להיות ריקה
      * לגמרי — ואז גם הכותרת "פרויקטים" מיותרת ולא נבנית, כדי שלא תישאר
      * כותרת תלויה באוויר בלי דבר תחתיה.
      */
-    if (openProjects.length || may('create_project')) items.push(el('div.nav-group', { text: 'פרויקטים' }));
+    if (openProjects.length || foreign || may('create_project')) {
+      items.push(el('div.nav-group.with-action', {}, [
+        el('span', { text: 'פרויקטים' }),
+        foreign
+          ? el('button.nav-scope', {
+              title: showAll
+                ? `מוצגים כל ${live.length} הפרויקטים בארגון — מעבר לשלי בלבד`
+                : `מוצגים הפרויקטים שלי — מעבר לכל ${live.length} שבארגון`,
+              onclick: () => {
+                localStorage.setItem(PROJECT_SCOPE_KEY, showAll ? 'mine' : 'all');
+                refreshChrome();
+              }
+            }, [showAll ? `כל הארגון · ${live.length}` : `שלי · ${openProjects.length}`])
+          : null
+      ]));
+    }
     items.push(...pinnedProjects.map(projectItem));
     // חוצץ רק כששתי הקבוצות מאוכלסות — אחרת היה נראה כקו תלוש בראש הרשימה או בסופה
     if (pinnedProjects.length && otherProjects.length) items.push(el('div.nav-pinned-sep'));
     items.push(...otherProjects.map(projectItem));
+    // הסבר קצר כשהרשימה ריקה רק מפני שהחתך מצומצם, ולא מפני שאין פרויקטים
+    if (!openProjects.length && foreign) {
+      items.push(el('div.nav-note', { text: 'אין פרויקטים שאתה חלק מהם' }));
+    }
     if (may('create_project')) {
       items.push(el('button.nav-item', { onclick: () => BoardView.openProjectDialog() }, [
         el('span.ico', { text: '＋' }), el('span', { text: 'פרויקט חדש' })
@@ -469,7 +510,7 @@ const App = (() => {
 
   function topbar() {
     const bell = el('button.icon-btn', { title: 'התראות' }, [
-      '🔔',
+      UI.icon('bell', { size: 19 }),
       el('span.badge-dot#notif-badge', { style: { display: state.unread ? 'grid' : 'none' } }, [String(state.unread)])
     ]);
     bell.addEventListener('click', () => toggleNotifPanel(bell));
