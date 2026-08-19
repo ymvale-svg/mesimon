@@ -500,6 +500,51 @@ const TaskCardView = (() => {
             el('button.btn.btn-block', {
               onclick: () => { modalRef.close(); BoardView.openTaskDialog(task); }
             }, ['✎ עריכה מלאה']),
+
+            /**
+             * שכפול ושמירה כתבנית — שתי דרכים לחסוך בנייה מחדש של אותה עבודה.
+             * שכפול הוא לפעם אחת נוספת באותו פרויקט; תבנית היא לכל פעם מכאן
+             * והלאה, גם בפרויקט אחר.
+             */
+            App.may('create_task')
+              ? el('button.btn.btn-block', {
+                  onclick: async () => {
+                    const name = await UI.prompt('שם המשימה החדשה', {
+                      title: 'שכפול משימה',
+                      value: `${task.title} — עותק`,
+                      okText: 'שכפול'
+                    });
+                    if (name === null) return;
+                    try {
+                      const r = await API.duplicateTask(task.id, { title: name });
+                      UI.success('המשימה שוכפלה');
+                      refreshBackground();
+                      // נפתחת מיד, כדי שיהיה ברור מה נוצר ואיפה
+                      open(r.task.id);
+                    } catch (err) { UI.error(err); }
+                  }
+                }, ['⧉ שכפול המשימה'])
+              : null,
+
+            App.may('create_task')
+              ? el('button.btn.btn-block', {
+                  onclick: async () => {
+                    const name = await UI.prompt('שם התבנית', {
+                      title: 'שמירה כתבנית',
+                      value: task.title,
+                      hint: `נשמרים הכותרת, התיאור, העדיפות והצ׳קליסט (${task.checklist.length} סעיפים) עם ההערות שבו. השיחה והקבצים אינם חלק מהתבנית.`,
+                      okText: 'שמירת התבנית'
+                    });
+                    if (name === null) return;
+                    try {
+                      const r = await API.saveTaskTemplate(task.id, name);
+                      UI.success(r.checklistCount
+                        ? `התבנית "${name}" נשמרה, כולל ${r.checklistCount} סעיפי צ׳קליסט`
+                        : `התבנית "${name}" נשמרה`);
+                    } catch (err) { UI.error(err); }
+                  }
+                }, ['💾 שמירה כתבנית'])
+              : null,
             el('button.btn.btn-block', {
               onclick: async () => {
                 try {

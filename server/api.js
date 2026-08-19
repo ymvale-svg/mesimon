@@ -475,11 +475,15 @@ router.get('/api/bootstrap', async (req, res, ctx) => {
     projects: isVendor(actor) ? [] : listProjectsFor(actor),
     users: isVendor(actor)
       ? []
-      : D.all("SELECT id, full_name, email, role, department, status FROM users WHERE status='active' ORDER BY full_name")
+      : D.all("SELECT id, full_name, email, role, department, department_id, status FROM users WHERE status='active' ORDER BY full_name")
           .map((u) => ({
             id: u.id, name: u.full_name, email: u.email,
             role: P.seesRoles(actor) ? u.role : null,
-            roleLabel: P.seesRoles(actor) ? P.ROLE_LABELS[u.role] : null
+            roleLabel: P.seesRoles(actor) ? P.ROLE_LABELS[u.role] : null,
+            // המחלקה אינה רמת הרשאה אלא שיוך ארגוני, ולכן היא גלויה לכולם —
+            // רשימת התיוג מקדימה בעזרתה את חברי המחלקה של הכותב
+            department: u.department ?? null,
+            departmentId: u.department_id ?? null
           })),
     vendors: P.may(actor, 'view_vendor_boards') && !isVendor(actor)
       ? D.all('SELECT id, name, contact_name, email, phone, status, read_only FROM vendors ORDER BY name')
@@ -803,9 +807,16 @@ router.post('/api/tasks', async (req, res, ctx) => {
   );
   const id = Number(res1.lastInsertRowid);
 
-  for (const [i, text] of (body.checklist ?? []).entries()) {
-    const t = String(text).trim();
-    if (t) D.run('INSERT INTO checklist_items (task_id, text, position) VALUES (?,?,?)', id, t, i);
+  /**
+   * הצ'קליסט מתקבל כרשימת מחרוזות (הקלדה חופשית בדיאלוג) או כרשימת אובייקטים
+   * ‎{ text, note }‎ (מתבנית שנשמרה ממשימה קיימת) — שני המקורות נתמכים כאן,
+   * כדי שהתבנית תשחזר גם את ההערות שבסעיפים ולא רק את שמותיהם.
+   */
+  for (const [i, entry] of (body.checklist ?? []).entries()) {
+    const text = String(typeof entry === 'string' ? entry : entry?.text ?? '').trim();
+    if (!text) continue;
+    const note = typeof entry === 'object' && entry ? String(entry.note ?? '') : '';
+    D.run('INSERT INTO checklist_items (task_id, text, position, note) VALUES (?,?,?,?)', id, text, i, note);
   }
 
   D.audit(id, actorRef(actor), 'created', 'המשימה נוצרה');
@@ -1063,6 +1074,14 @@ router.post('/api/tasks/bulk', async (req, res, ctx) => {
         if (!mayOnTask(actor, 'edit_delete_task', task, project)) throw forbidden();
         D.run('UPDATE tasks SET archived = ? WHERE id = ?', value ? 1 : 0, task.id);
         D.audit(task.id, actorRef(actor), 'updated', value ? 'הועברה לארכיון' : 'הוחזרה מהארכיון');
+      } else if (action === 'delete') {
+        /**
+         * מחיקה היא הפעולה היחידה כאן שאינה ניתנת לביטול, ולכן היא נבדקת לכל
+         * משימה בנפרד: מי שבחר עשר משימות ורשאי למחוק שמונה מהן ימחק שמונה,
+         * והשתיים האחרות יחזרו כשגיאה ולא יימחקו בשקט.
+         */
+        if (!mayOnTask(actor, 'edit_delete_task', task, project)) throw forbidden();
+        D.run('DELETE FROM tasks WHERE id = ?', task.id);
       } else {
         throw badRequest('פעולת אצווה לא מוכרת');
       }
@@ -1246,6 +1265,86 @@ router.delete('/api/checklist/:id', async (req, res, ctx) => {
   if (isVendor(actor) || !mayOnTask(actor, 'edit_delete_task', task, projectOf(task))) throw forbidden();
   D.run('DELETE FROM checklist_items WHERE id = ?', item.id);
   sendJson(res, 200, { task: shapeTask(getTaskOr404(task.id), actor, { withDetails: true }) });
+});
+
+/**
+ * שכפול משימה בתוך אותו פרויקט. מועתקים המבנה והתוכן שמגדירים "מה צריך
+ * לעשות" — כותרת, תיאור, עדיפות, פרויקט, אחראי והצ'קליסט על הערותיו.
+ * לא מועתקים ההיסטוריה של המקור: השיחה, הקבצים, הסטטוס ותאריך ההשלמה.
+ * משימה משוכפלת מתחילה בעמודה הראשונה של הבורד, כי היא טרם נעשתה.
+ */
+router.post('/api/tasks/:id/duplicate', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  requirePerm(actor, 'create_task');
+  const source = getTaskOr404(ctx.params.id);
+  assertVisible(actor, source);
+  if (isVendor(actor)) throw forbidden();
+
+  const b = await readJson(req).catch(() => ({}));
+  const title = String(b.title ?? '').trim() || `${source.title} — עותק`;
+
+  // האחראי נשמר רק אם למשכפל יש הרשאה להקצות לאחרים; אחרת המשימה נשארת ללא אחראי
+  const keepAssignee = source.assignee_type === 'user' && source.assignee_id
+    && (source.assignee_id === actor.id || P.may(actor, 'assign_department_task'));
+
+  const result = D.run(
+    `INSERT INTO tasks (title, description, project_id, board_id, assignee_type, assignee_id,
+                        status, priority, due_date, created_at, created_by, status_changed_at,
+                        department_id)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+    title, source.description, source.project_id, source.board_id,
+    keepAssignee ? 'user' : null, keepAssignee ? source.assignee_id : null,
+    Rules.firstColumnKey(source.board_id), source.priority,
+    b.dueDate !== undefined ? (b.dueDate || null) : source.due_date,
+    D.nowIso(), actor.id, D.nowIso(), source.department_id
+  );
+  const id = Number(result.lastInsertRowid);
+
+  // הצ'קליסט מועתק כשלא-בוצע, עם ההערות שבו — הן חלק מהגדרת העבודה
+  for (const item of D.all('SELECT * FROM checklist_items WHERE task_id = ? ORDER BY position, id', source.id)) {
+    D.run('INSERT INTO checklist_items (task_id, text, position, note) VALUES (?,?,?,?)',
+      id, item.text, item.position, item.note ?? '');
+  }
+
+  D.audit(id, actorRef(actor), 'created', `שוכפלה ממשימה #${source.id}`);
+  if (keepAssignee) notifyAssignment(id, 'user', source.assignee_id, title, actor);
+
+  sendJson(res, 201, { task: shapeTask(getTaskOr404(id), actor, { withDetails: true }) });
+});
+
+/**
+ * שמירת המשימה כתבנית. המקרה שבגללו זה קיים: נבנתה משימה עם צ'קליסט מלא
+ * ("קליטת רכב חדש"), והיא חוזרת שוב ושוב — ואין סיבה לבנות אותה מחדש בכל פעם.
+ *
+ * דורש create_task ולא הרשאה מלאה: שמירת תבנית היא פעולה מוסיפה, ומי שרשאי
+ * לפתוח משימה רשאי גם לשמור את הצורה שלה. המחיקה נשארה בהרשאה מלאה.
+ */
+router.post('/api/tasks/:id/template', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  requirePerm(actor, 'create_task');
+  const task = getTaskOr404(ctx.params.id);
+  assertVisible(actor, task);
+  if (isVendor(actor)) throw forbidden();
+
+  const b = await readJson(req).catch(() => ({}));
+  const name = String(b.name ?? '').trim() || task.title;
+
+  const payload = {
+    title: task.title,
+    description: task.description,
+    priority: task.priority,
+    checklist: D.all('SELECT text, note FROM checklist_items WHERE task_id = ? ORDER BY position, id', task.id)
+      .map((c) => ({ text: c.text, note: c.note ?? '' }))
+  };
+
+  const result = D.run('INSERT INTO templates (kind, name, payload, created_at) VALUES (?,?,?,?)',
+    'task', name, JSON.stringify(payload), D.nowIso());
+
+  D.audit(task.id, actorRef(actor), 'updated', `נשמרה כתבנית "${name}"`);
+  sendJson(res, 201, {
+    template: { id: Number(result.lastInsertRowid), kind: 'task', name, payload },
+    checklistCount: payload.checklist.length
+  });
 });
 
 // --- תגובות ---
@@ -1546,6 +1645,16 @@ router.get('/api/home', async (req, res, ctx) => {
 
   const openMine = mine.filter((t) => !t.isFinal);
 
+  /**
+   * משימות שהושלמו ועדיין לא ירדו לארכיון. משימה שסומנה כהושלמה נעלמה עד כה
+   * מהמסך באותו רגע, ולא היה שום מקום לראות מה נסגר או לחזור אליו — ומכאן
+   * התחושה שהמשימה נמחקה. הן נשארות כאן עד שהאוטומציה מעבירה אותן לארכיון
+   * (ברירת המחדל: שלושה ימים מההשלמה).
+   */
+  const recentlyDone = mine
+    .filter((t) => t.isFinal && t.completedAt)
+    .sort((a, b) => new Date(b.completedAt) - new Date(a.completedAt));
+
   let awaitingApproval = [];
   if (P.may(actor, 'approve_vendor_output')) {
     awaitingApproval = D.all(
@@ -1584,7 +1693,9 @@ router.get('/api/home', async (req, res, ctx) => {
       urgent: openMine.filter((t) => t.priority === 'urgent').length,
       awaitingApproval: awaitingApproval.length
     },
-    tasks: { mine: openMine, awaitingApproval },
+    tasks: { mine: openMine, awaitingApproval, recentlyDone },
+    // כמה ימים משימה שהושלמה נשארת כאן — הממשק אומר זאת למשתמש במקום להסתיר
+    archiveAfterDays: Number(D.getSetting('archive_done_after_days', 3)),
     feed,
     weekAhead
   });

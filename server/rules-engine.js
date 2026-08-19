@@ -210,6 +210,28 @@ const TRIGGERS = {
     }
   },
 
+  /**
+   * משימה שהושלמה ושהו עליה N ימים. הכוונה היא שהמשימות שהושלמו יישארו
+   * לנגד העיניים כמה ימים — כדי שאפשר יהיה לראות מה נסגר ולחזור אם צריך —
+   * ורק אחר כך ירדו מהתצוגה השוטפת אל הארכיון.
+   */
+  completed_stale: {
+    label: 'משימה שהושלמה לפני N ימים',
+    paramsSchema: [{ key: 'days', label: 'ימים מאז ההשלמה', type: 'number', settingKey: 'archive_done_after_days' }],
+    evaluate(rule, params, now) {
+      const days = paramValue(params, 'days', 'days_setting', 3);
+      const events = [];
+      for (const task of D.all('SELECT * FROM tasks WHERE archived = 0 AND completed_at IS NOT NULL')) {
+        // הבדיקה נשענת על העמודה is_final ולא על מפתח סטטוס: לכל בורד עמודות משלו
+        if (!isFinalStatus(task)) continue;
+        if (now - new Date(task.completed_at).getTime() >= days * DAY) {
+          events.push({ task, marker: `arch:${task.completed_at}`, meta: { days } });
+        }
+      }
+      return events;
+    }
+  },
+
   /** דוגמה לכלל שניתן להוסיף ללא שינוי מבני: משימה ללא אחראי */
   unassigned_task: {
     label: 'משימה ללא אחראי מעל N שעות',
@@ -347,6 +369,17 @@ const ACTIONS = {
           title: 'נוצרה משימה חוזרת חדשה', body: task.title, taskId: newId
         });
       }
+      return true;
+    }
+  },
+
+  archive_task: {
+    label: 'העברה לארכיון',
+    run(rule, event) {
+      const { task, meta } = event;
+      D.run('UPDATE tasks SET archived = 1 WHERE id = ?', task.id);
+      D.audit(task.id, null, 'automation',
+        `${rule.name}: המשימה הועברה לארכיון (${meta.days} ימים מאז ההשלמה)`);
       return true;
     }
   },

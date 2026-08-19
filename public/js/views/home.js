@@ -79,11 +79,11 @@ const HomeView = (() => {
     }
     App.state.homeData = data;
 
-    // המשימות שסומנו כהושלמו כאן חוזרות לרשימה, בסופה, עם הקו החוצה
-    if (keepCompleted.size) {
-      const ids = new Set(data.tasks.mine.map((t) => t.id));
-      data.tasks.mine = [...data.tasks.mine, ...[...keepCompleted.values()].filter((t) => !ids.has(t.id))];
-    }
+    /**
+     * זיכרון הביקור אינו נדרש עוד: משימה שהושלמה חוזרת מהשרת בכרטיס
+     * "הושלמו לאחרונה", ולכן היא עוברת לשם במקום להישאר ברשימת הפתוחות עם
+     * קו חוצה. הסימון עצמו נשאר מיידי — הקו מופיע לפני הטעינה מחדש.
+     */
 
     const hour = new Date().getHours();
     const greeting = hour < 12 ? 'בוקר טוב' : hour < 18 ? 'צהריים טובים' : 'ערב טוב';
@@ -100,6 +100,7 @@ const HomeView = (() => {
       el('div.grid.grid-2.mt', { style: { alignItems: 'start' } }, [
         el('div.flex-col', { style: { gap: '14px' } }, [
           ...myTasksCards(data.tasks.mine),
+          doneCard(data.tasks.recentlyDone ?? [], data.archiveAfterDays ?? 3),
           App.may('approve_vendor_output') || App.isVendor()
             ? approvalCard(data.tasks.awaitingApproval)
             : null
@@ -232,6 +233,34 @@ const HomeView = (() => {
           ? UI.avatar(task.assigneeName, { small: true, vendor: task.assigneeType === 'vendor' })
           : null,
         ...flags
+      ])
+    ]);
+  }
+
+  /**
+   * "הושלמו לאחרונה" — התשובה לשאלה "לאן המשימה הלכה".
+   *
+   * משימה שסומנה כהושלמה יורדת מ"המשימות שלי", כי הרשימה ההיא היא מה שנותר
+   * לעשות. בלי הכרטיס הזה היא נעלמה מהמסך באותו רגע ולא היה שום מקום לראות
+   * מה נסגר או לחזור אליו. היא נשארת כאן עד שהאוטומציה מעבירה אותה לארכיון.
+   */
+  function doneCard(tasks, afterDays) {
+    if (!tasks.length) return null;
+    const shown = tasks.slice(0, LIST_MAX);
+
+    return el('div.card', {}, [
+      el('div.card-head', {}, [
+        el('h3', { text: 'הושלמו לאחרונה' }),
+        el('span.mute-sm', { text: shownLabel(shown.length, tasks.length, 'משימה אחת', 'משימות') }),
+        el('div.spacer'),
+        el('button.btn.btn-sm', { onclick: () => App.navigate('archive') }, ['לארכיון'])
+      ]),
+      el('div.card-pad', {}, [
+        el('div.mute-sm', { style: { marginBottom: '8px' },
+          text: `לאחר ${afterDays} ימים מההשלמה הן עוברות אוטומטית לארכיון, ושם אפשר למצוא אותן לפי פרויקט.` }),
+        el('div.task-table', {}, [
+          scrollBox(shown.map(taskRow), { maxHeight: '220px', extraClass: '.flex-col' })
+        ])
       ])
     ]);
   }

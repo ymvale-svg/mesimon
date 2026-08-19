@@ -422,6 +422,7 @@ const DEFAULT_SETTINGS = {
   vendor_reminder_days_before: 3,          // X — תזכורת ראשונה לספק
   manager_alert_hours_before: 24,          // Y — התראה מקדימה למנהל
   escalation_hours_urgent: 24,             // הקפצה למשימת 'דחוף' שלא זזה
+  archive_done_after_days: 3,              // כמה ימים משימה שהושלמה נשארת בתצוגה השוטפת
   scheduler_interval_minutes: 5,           // תדירות הרצת מנוע הכללים
   max_upload_mb: 25,
   allowed_extensions: ['pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'png', 'jpg', 'jpeg', 'gif', 'svg', 'zip', 'ai', 'psd', 'mp4', 'txt', 'csv'],
@@ -456,6 +457,14 @@ const BUILT_IN_RULES = [
     trigger_key: 'vendor_due_soon',
     action_key: 'notify_vendor',
     params: { days_before_setting: 'vendor_reminder_days_before' }
+  },
+  {
+    // משימה שהושלמה נשארת בתצוגה השוטפת כמה ימים, כדי שאפשר יהיה לראות
+    // מה נסגר ולחזור אם צריך, ורק אחר כך יורדת לארכיון
+    name: 'העברה לארכיון של משימה שהושלמה',
+    trigger_key: 'completed_stale',
+    action_key: 'archive_task',
+    params: { days_setting: 'archive_done_after_days' }
   },
   {
     name: 'התראה מקדימה למנהל המחלקה',

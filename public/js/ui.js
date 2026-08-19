@@ -201,7 +201,7 @@ const UI = (() => {
     });
   }
 
-  function prompt(label, { title = 'הזנת ערך', value = '', multiline = false, okText = 'אישור' } = {}) {
+  function prompt(label, { title = 'הזנת ערך', value = '', multiline = false, okText = 'אישור', hint = null } = {}) {
     return new Promise((resolve) => {
       const finish = settler(resolve);
       const input = multiline
@@ -212,7 +212,11 @@ const UI = (() => {
       input.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !multiline) submit(); });
       const m = modal({
         title,
-        body: el('div.field', {}, [el('label', { text: label }), input]),
+        // ההסבר מתחת לשדה, כדי לומר מה בדיוק נשמר בלי להאריך את התווית
+        body: el('div.field', {}, [
+          el('label', { text: label }), input,
+          hint ? el('div.hint', { text: hint }) : null
+        ]),
         footer: [
           el('button.btn.btn-primary', { onclick: submit }, [okText]),
           el('button.btn', { onclick: () => { finish(null); m.close(); } }, ['ביטול'])
@@ -699,28 +703,83 @@ const UI = (() => {
       input.focus();
     };
 
-    const mentionPicker = () => {
-      const search = el('input', { type: 'text', placeholder: 'חיפוש שם…' });
-      const list = el('div.mention-list');
-      let m = null;
+    /**
+     * רשימת התיוג נפתחת מעל תיבת הכתיבה ולא כחלון נפרד. חלון מעל חלון —
+     * הרשימה מעל כרטיס המשימה — נראה כמשהו אחר ולא כרשימה שנפתחה מהכפתור,
+     * וגם מכסה את מה שכותבים. כאן היא צמודה לכפתור, ונסגרת בבחירה, בלחיצה
+     * בחוץ או ב-Escape.
+     */
+    const pop = el('div.mention-pop', { style: { display: 'none' } });
+    let popOpen = false;
 
-      const draw = () => {
-        const q = search.value.trim().toLowerCase();
-        const found = App.state.users.filter((u) => u.name.toLowerCase().includes(q));
-        mount(list, ...(found.length
-          ? found.map((u) => el('button.mention-option', {
-              onclick: () => { insertMention(u.name); m.close(); }
-            }, [avatar(u.name, { small: true }), u.name]))
-          : [el('div.mute-sm', { style: { padding: '8px' }, text: 'אין שם מתאים' })]));
-      };
+    const closePop = () => {
+      popOpen = false;
+      pop.style.display = 'none';
+      document.removeEventListener('mousedown', onOutside, true);
+      document.removeEventListener('keydown', onPopKey, true);
+    };
+    const onOutside = (e) => { if (!pop.contains(e.target) && e.target !== mentionBtn) closePop(); };
+    const onPopKey = (e) => { if (e.key === 'Escape') { e.stopPropagation(); closePop(); } };
 
-      search.addEventListener('input', draw);
-      draw();
-      m = modal({ title: 'תיוג בשיחה', body: el('div', {}, [search, list]) });
+    /**
+     * חברי המחלקה של הכותב בראש הרשימה. בארגון של חמישים אנשים מי שמתייג
+     * מחפש כמעט תמיד את מי שיושב איתו, ורשימה אלפביתית מציבה אותם באמצע.
+     */
+    const orderedUsers = (query) => {
+      const q = query.trim().toLowerCase();
+      const myDept = App.state.actor?.departmentId ?? null;
+      const me = App.state.actor?.id;
+      const found = App.state.users.filter((u) => u.id !== me && u.name.toLowerCase().includes(q));
+      const near = myDept ? found.filter((u) => u.departmentId === myDept) : [];
+      const far = found.filter((u) => !near.includes(u));
+      return { near, far };
+    };
+
+    const drawPop = (query = '') => {
+      const { near, far } = orderedUsers(query);
+      const option = (u) => el('button.mention-option', {
+        type: 'button',
+        onclick: () => { insertMention(u.name); closePop(); }
+      }, [
+        avatar(u.name, { small: true }),
+        el('span.mo-name', { text: u.name }),
+        u.department ? el('span.mo-dept', { text: u.department }) : null
+      ]);
+
+      mount(popList,
+        near.length ? el('div.mention-group', { text: App.state.actor.department || 'המחלקה שלי' }) : null,
+        ...near.map(option),
+        near.length && far.length ? el('div.mention-group', { text: 'שאר הארגון' }) : null,
+        ...far.map(option),
+        !near.length && !far.length ? el('div.mute-sm', { style: { padding: '10px 8px' }, text: 'אין שם מתאים' }) : null
+      );
+    };
+
+    const popSearch = el('input', { type: 'text', placeholder: 'חיפוש שם…' });
+    const popList = el('div.mention-list');
+    popSearch.addEventListener('input', () => drawPop(popSearch.value));
+    popSearch.addEventListener('keydown', (e) => {
+      // Enter בוחר את הראשון ברשימה — הדרך המהירה כשיודעים את מי מחפשים
+      if (e.key !== 'Enter') return;
+      e.preventDefault();
+      popList.querySelector('.mention-option')?.click();
+    });
+    mount(pop, popSearch, popList);
+
+    const openPop = () => {
+      if (popOpen) return closePop();
+      popOpen = true;
+      popSearch.value = '';
+      drawPop('');
+      pop.style.display = 'block';
+      popSearch.focus();
+      // ההאזנה בשלב הלכידה, כדי שלחיצה על פקד אחר תסגור לפני שהוא מגיב
+      document.addEventListener('mousedown', onOutside, true);
+      document.addEventListener('keydown', onPopKey, true);
     };
 
     const mentionBtn = seeInternal
-      ? el('button.btn.mention-btn', { type: 'button', title: 'תיוג עמית בשיחה', onclick: mentionPicker }, ['@'])
+      ? el('button.btn.mention-btn', { type: 'button', title: 'תיוג עמית בשיחה', onclick: openPop }, ['@'])
       : null;
 
     const isImage = (f) => String(f?.mime ?? '').toLowerCase().startsWith('image/') && canPreview(f);
@@ -795,6 +854,7 @@ const UI = (() => {
         : empty('אין תגובות עדיין', '💬'),
       canComment
         ? el('div.composer', {}, [
+            pop,
             input,
             pendingBox,
             fileInput,

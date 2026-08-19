@@ -926,17 +926,34 @@ input[type="color"] { width: 46px; height: 30px; padding: 2px; cursor: pointer; 
 
 /* --- תיבת הכתיבה --- */
 
-.composer { margin-top: 12px; }
+.composer { margin-top: 12px; position: relative; }
 .composer-bar { margin-top: 8px; gap: 7px; flex-wrap: wrap; }
 /* כפתור התיוג — מחליף את שורת השמות שהייתה פורשת את כל המשתמשים */
 .mention-btn { font-weight: 800; font-size: 15px; padding: 7px 13px; line-height: 1; }
-.mention-list { display: flex; flex-direction: column; gap: 2px; margin-top: 10px; max-height: 320px; overflow-y: auto; }
+
+/*
+ * רשימת התיוג נפתחת מעל תיבת הכתיבה, צמודה אליה. חלון נפרד היה נפתח מעל
+ * כרטיס המשימה ומכסה את מה שכותבים, ולא נראה כרשימה שנפתחה מהכפתור.
+ */
+.mention-pop {
+  position: absolute; bottom: calc(100% + 6px); inset-inline-start: 0;
+  width: min(320px, 100%); z-index: 5;
+  background: var(--surface); border: 1px solid var(--border-strong);
+  border-radius: 12px; box-shadow: var(--shadow-lg); padding: 9px;
+}
+.mention-list { display: flex; flex-direction: column; gap: 1px; margin-top: 8px; max-height: 260px; overflow-y: auto; }
+.mention-group {
+  font-size: 10px; font-weight: 700; letter-spacing: .07em; color: var(--text-mute);
+  padding: 7px 8px 3px;
+}
 .mention-option {
   display: flex; align-items: center; gap: 9px; width: 100%; text-align: start;
-  border: 0; background: none; cursor: pointer; padding: 7px 8px; border-radius: 8px;
+  border: 0; background: none; cursor: pointer; padding: 6px 8px; border-radius: 8px;
   font: inherit; color: inherit;
 }
-.mention-option:hover { background: var(--brand-light); color: var(--brand-dark); }
+.mention-option:hover, .mention-option:focus-visible { background: var(--brand-light); color: var(--brand-dark); }
+.mention-option .mo-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mention-option .mo-dept { font-size: 10.5px; color: var(--text-mute); flex: none; }
 
 .file-row { display: flex; align-items: center; gap: 10px; padding: 8px; border: 1px solid var(--border); border-radius: var(--radius); margin-bottom: 7px; background: var(--surface); }
 .file-row .f-icon { width: 32px; height: 32px; border-radius: 8px; background: var(--surface-2); display: grid; place-items: center; flex: none; }

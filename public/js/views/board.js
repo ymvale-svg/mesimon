@@ -260,8 +260,9 @@ const BoardView = (() => {
       try {
         const res = await API.bulk([...view.selection], action, value);
         view.selection.clear();
-        UI.success(`עודכנו ${res.affected} משימות`);
-        if (res.errors.length) UI.toast(`${res.errors.length} משימות לא עודכנו (הרשאות או חוקי זרימה)`, 'error');
+        const verb = action === 'delete' ? 'נמחקו' : 'עודכנו';
+        UI.success(`${verb} ${res.affected} משימות`);
+        if (res.errors.length) UI.toast(`${res.errors.length} משימות לא ${verb} (הרשאות או חוקי זרימה)`, 'error');
         await load({ silent: true });
         App.refreshNotifications();
       } catch (err) { UI.error(err); }
@@ -282,6 +283,25 @@ const BoardView = (() => {
       }),
       el('button.btn.btn-sm', { onclick: () => run('archive', filters.archived === '1' ? 0 : 1) },
         [filters.archived === '1' ? '↩ החזרה מארכיון' : '🗄 העברה לארכיון']),
+      /**
+       * מחיקה מחייבת אישור מפורש שנוקב במספר. זו הפעולה היחידה בסרגל שאין
+       * ממנה חזרה — ארכיון אפשר לבטל, מחיקה לא — ולכן היא גם נפרדת חזותית
+       * ולא נמצאת לצד שאר הפעולות בטעות.
+       */
+      App.may('edit_delete_task')
+        ? el('button.btn.btn-sm.btn-danger', {
+            onclick: async () => {
+              const n = view.selection.size;
+              const ok = await UI.confirm(
+                n === 1
+                  ? 'למחוק את המשימה שנבחרה? המחיקה כוללת את השיחה, הצ׳קליסט והקבצים שבה, ואינה ניתנת לביטול.'
+                  : `למחוק ${n} משימות? המחיקה כוללת את השיחה, הצ׳קליסט והקבצים שבהן, ואינה ניתנת לביטול.`,
+                { title: 'מחיקת משימות', danger: true, okText: n === 1 ? 'מחיקה' : `מחיקת ${n} משימות` }
+              );
+              if (ok) run('delete');
+            }
+          }, ['🗑 מחיקה'])
+        : null,
       el('div.spacer'),
       el('button.btn.btn-sm', { onclick: () => { view.selection.clear(); draw(); } }, ['ביטול בחירה'])
     ]);
@@ -519,6 +539,41 @@ const BoardView = (() => {
 
     const checklistInput = el('textarea', { placeholder: 'סעיף בכל שורה (אופציונלי)', style: { minHeight: '62px' } });
 
+    /**
+     * תבנית משימה. עד כה אפשר היה לשמור תבניות מסוג 'task' ומעולם לא היה
+     * מקום להשתמש בהן. בחירת תבנית ממלאת את הכותרת, התיאור, העדיפות
+     * והצ'קליסט — ומכאן אפשר לשנות כל שדה לפני היצירה.
+     */
+    let taskTemplates = [];
+    const taskTemplateSelect = UI.select([{ value: '', label: 'ללא תבנית' }], '');
+    const taskTemplateField = UI.field('יצירה מתבנית', taskTemplateSelect,
+      'ממלא את הכותרת, התיאור, העדיפות והצ׳קליסט. אפשר לשנות הכול לאחר מכן.');
+    taskTemplateField.style.display = 'none';
+
+    if (!isEdit) {
+      API.templates().then((data) => {
+        taskTemplates = (data.templates ?? []).filter((t) => t.kind === 'task');
+        if (!taskTemplates.length) return;
+        for (const t of taskTemplates) {
+          taskTemplateSelect.appendChild(el('option', { value: String(t.id) }, [t.name]));
+        }
+        taskTemplateField.style.display = '';
+      }).catch(() => { /* תבניות אינן תנאי ליצירת משימה */ });
+
+      taskTemplateSelect.addEventListener('change', () => {
+        const tpl = taskTemplates.find((t) => String(t.id) === taskTemplateSelect.value);
+        if (!tpl) return;
+        const p = tpl.payload ?? {};
+        if (p.title) titleInput.value = p.title;
+        if (p.description) descInput.value = p.description;
+        if (p.priority) prioritySelect.value = p.priority;
+        // הסעיפים נכתבים לתיבת הטקסט, כדי שיהיו ניתנים לעריכה לפני השמירה
+        checklistInput.value = (p.checklist ?? [])
+          .map((c) => (typeof c === 'string' ? c : c?.text ?? '')).filter(Boolean).join('\n');
+        titleInput.focus();
+      });
+    }
+
     const body = el('div', {}, [
       UI.field('כותרת המשימה', titleInput),
       UI.field('תיאור', descInput),
@@ -531,6 +586,7 @@ const BoardView = (() => {
         UI.field('תלות במשימה אחרת', dependsSelect, 'המשימה לא תיסגר לפני שהמשימה החוסמת תושלם'),
         UI.field('תאריך הפעלה (משימה עתידית)', activateInput, 'עד למועד זה המשימה לא תופיע ברשימות הפעילות')
       ]),
+      !isEdit ? taskTemplateField : null,
       !isEdit ? UI.field('צ׳קליסט', checklistInput) : null,
       el('div.field', {}, [
         el('label.checkbox', {}, [recurringCheck, 'משימה חוזרת']),
