@@ -6,11 +6,16 @@
   --brand-light: #ccfbf1;
   --accent: #c2410c;
 
-  --bg: #f1f5f9;
+  /*
+   * הרקע נושא גוון של צבע המותג ולא אפור נייטרלי. הכרטיסים נשארים לבנים,
+   * ולכן הם בולטים מעל הרקע במקום להיטמע בו — וזה גם מה שמקשר את המסך
+   * לסרגל הירוק שמעליו.
+   */
+  --bg: #e9f1ef;
   --surface: #ffffff;
-  --surface-2: #f8fafc;
-  --border: #e2e8f0;
-  --border-strong: #cbd5e1;
+  --surface-2: #f4f9f8;
+  --border: #dae5e3;
+  --border-strong: #bccdc9;
 
   --text: #0f172a;
   --text-soft: #475569;
@@ -57,7 +62,7 @@ a { color: var(--brand); text-decoration: none; }
 h1, h2, h3, h4 { margin: 0; font-weight: 700; letter-spacing: -.01em; }
 
 ::-webkit-scrollbar { width: 10px; height: 10px; }
-::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 8px; border: 2px solid var(--bg); }
+::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 8px; border: 2px solid var(--bg); }
 ::-webkit-scrollbar-track { background: transparent; }
 
 /* ---------------------------------------------------------------- כפתורים */
@@ -723,25 +728,68 @@ th.cell-bar { background: var(--border) !important; }
 
 /* --- שורת משימה מרוכזת (רשימת "המשימות שלי") --- */
 
+/*
+ * טבלה ולא שורות גמישות. ב-flex רוחב כל תא נגזר מתוכנו, ולכן תגית הסטטוס
+ * נחה במקום אחר בכל שורה והרשימה נראתה מבולגנת דווקא כשיש בה הרבה משימות.
+ * העמודות מוגדרות פעם אחת במשתנה, ושורת הכותרות והשורות משתמשות באותו
+ * משתנה — כך הן מיושרות בהגדרה ולא במקרה.
+ */
+/*
+ * העמודה האחרונה ברוחב קבוע ולא ‎auto‎: שורה עם סימני דחיפות ושורה בלעדיהם
+ * נתנו לה רוחב שונה, ועמודות ה-fr שלפניה בלעו את ההפרש — כך שם הפרויקט
+ * והכותרת לא התיישרו בין שורות אף שהסטטוס כן.
+ */
+.task-table { --task-cols: 3px 17px minmax(0, 1.1fr) minmax(0, 1.85fr) 94px 78px 56px; }
+.task-table-head, .task-line {
+  display: grid; grid-template-columns: var(--task-cols);
+  align-items: center; gap: 8px; padding: 7px 8px;
+}
+.task-table-head {
+  font-size: 10.5px; font-weight: 700; letter-spacing: .06em;
+  color: var(--text-mute); border-bottom: 1px solid var(--border-strong);
+  /* גבול שקוף בצדדים, בעובי הגבול של השורות — בלעדיו הכותרת רחבה בשני
+     פיקסלים והעמודות מוסטות ביחס לשורות */
+  border-inline: 1px solid transparent;
+  padding-bottom: 5px; position: sticky; top: 0; background: var(--surface); z-index: 1;
+}
 .task-line {
-  display: flex; align-items: center; gap: 7px; min-width: 0;
-  padding: 7px 8px; border-radius: 8px; cursor: pointer;
-  border: 1px solid transparent; font-size: 12.5px;
+  border-radius: 8px; cursor: pointer; border: 1px solid transparent; font-size: 13px;
   transition: background .12s, border-color .12s;
 }
 .task-line:hover { background: var(--surface-2); border-color: var(--border); }
 .task-line + .task-line { border-top: 1px solid var(--border); border-radius: 0; }
-.task-line .tk-bar { width: 3px; align-self: stretch; border-radius: 2px; flex: none; }
-/* שם הפרויקט מתקצר לפני הכותרת: הכותרת היא המידע, הפרויקט הוא ההקשר */
-.task-line .tk-project { color: var(--text-mute); flex: 0 1 auto; min-width: 40px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.task-line .tk-title { font-weight: 600; flex: 1 1 auto; min-width: 60px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.task-line .tk-sep { color: var(--border-strong); flex: none; }
-.task-line .tk-due { color: var(--text-mute); white-space: nowrap; flex: none; }
-.task-line .spacer { flex: 1 0 6px; }
-.task-line .tk-flags { display: flex; gap: 3px; flex: none; font-size: 13px; }
-.task-line .tag { flex: none; }
+.task-line .tk-bar { width: 3px; align-self: stretch; border-radius: 2px; }
+/* שם הפרויקט הוגדל — הוא ההקשר שמאפשר לזהות את השורה לפני קריאת הכותרת */
+.task-line .tk-project {
+  font-size: 16px; font-weight: 600; color: var(--text-soft);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.task-line .tk-title { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.task-line .tk-due { color: var(--text-mute); white-space: nowrap; font-variant-numeric: tabular-nums; }
+/* תגית הסטטוס ממלאת את עמודתה, וכך כל התגיות באותו רוחב ובאותו קו */
+.task-line .tag-status { width: 100%; text-align: center; }
+.task-line .tk-flags { display: flex; gap: 3px; justify-content: flex-end; font-size: 13px; }
 .task-line.is-done { opacity: .58; }
-.task-line.is-done .tk-title { text-decoration: line-through; text-decoration-thickness: 1.5px; }
+.task-line.is-done .tk-title, .task-line.is-done .tk-project { text-decoration: line-through; text-decoration-thickness: 1.5px; }
+
+/* --- "השבוע הקרוב": שורה אחת ליום, ולא שתיים --- */
+
+.week-row {
+  display: grid; grid-template-columns: 92px minmax(0, 1fr);
+  gap: 10px; align-items: baseline; padding: 4px 0;
+  border-bottom: 1px dashed var(--border); font-size: 13px;
+}
+.week-row:last-child { border-bottom: 0; }
+/* שם היום ותאריכו זה לצד זה — שם היום מיושר, התאריך נצמד אליו */
+.wk-day { display: flex; gap: 6px; align-items: baseline; white-space: nowrap; }
+.wk-day b { font-weight: 700; }
+.wk-items { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.wk-item {
+  cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  line-height: 1.5;
+}
+.wk-item:hover { color: var(--brand); text-decoration: underline; }
+.wk-item::before { content: '• '; color: var(--text-mute); }
 
 /* שורת סטטוס במסך ניהול הסטטוסים */
 .status-row { display: flex; align-items: center; gap: 9px; padding: 7px 0; }
@@ -778,10 +826,16 @@ input[type="color"] { width: 46px; height: 30px; padding: 2px; cursor: pointer; 
 
 /* ---------------------------------------------------------------- כרטיס משימה */
 
-.task-detail { display: grid; grid-template-columns: 1fr 290px; gap: 0; }
+/*
+ * ‎min-height: 0‎ הוא מה שמאפשר לכרטיס להיכנס לגובה החלון. הכרטיס הוא פריט
+ * flex בתוך ‎.modal‎, וגודלו המינימלי האוטומטי הוא גובה התוכן — ולכן הוא לא
+ * הצטמצם לתקרת ה-92vh, ה-overflow של ‎.td-main‎ מעולם לא נכנס לפעולה, ותחתית
+ * הפאנל — כלומר תיבת התגובה וכפתור "שליחת תגובה" — נחתכה מחוץ למסך.
+ */
+.task-detail { display: grid; grid-template-columns: 1fr 290px; gap: 0; flex: 1 1 auto; min-height: 0; }
 @media (max-width: 900px) { .task-detail { grid-template-columns: 1fr; } }
-.td-main { padding: 20px; overflow-y: auto; }
-.td-side { padding: 20px; background: var(--surface-2); border-inline-start: 1px solid var(--border); overflow-y: auto; }
+.td-main { padding: 20px; overflow-y: auto; min-height: 0; }
+.td-side { padding: 20px; background: var(--surface-2); border-inline-start: 1px solid var(--border); overflow-y: auto; min-height: 0; }
 .td-side .sec { margin-bottom: 16px; }
 .td-side .sec > label { display: block; font-size: 11px; font-weight: 700; color: var(--text-mute); letter-spacing: .05em; margin-bottom: 5px; }
 
@@ -818,15 +872,71 @@ input[type="color"] { width: 46px; height: 30px; padding: 2px; cursor: pointer; 
 .progress-bar { height: 7px; border-radius: 5px; background: var(--border); overflow: hidden; margin: 8px 0 12px; }
 .progress-bar > div { height: 100%; background: var(--ok); transition: width .25s; }
 
-.comment { display: flex; gap: 10px; padding: 11px 0; border-bottom: 1px solid var(--border); }
-.comment:last-child { border-bottom: 0; }
-.comment.internal { background: var(--warn-bg); margin: 0 -10px; padding: 11px 10px; border-radius: 8px; border-bottom: 0; }
-.comment .c-body { flex: 1; min-width: 0; }
-.comment .c-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 3px; }
-.comment .c-head b { font-size: 13px; }
-.comment .c-head time { font-size: 11px; color: var(--text-mute); }
-.comment .c-text { white-space: pre-wrap; word-break: break-word; }
-.comment .mention { background: var(--brand-light); color: var(--brand-dark); border-radius: 4px; padding: 0 3px; font-weight: 600; }
+/* --- שיחה --- */
+
+.chat {
+  display: flex; flex-direction: column; gap: 9px;
+  padding: 4px 0 10px;
+}
+/*
+ * המסמך RTL, ולכן קצה הציר הראשי הוא הצד השמאלי הפיזי: ההודעות שלי נדחפות
+ * שמאלה והאחרות נשארות מימין, כמו בכל יישומון הודעות.
+ */
+.msg { display: flex; gap: 8px; align-items: flex-end; max-width: 100%; }
+.msg.is-mine { justify-content: flex-end; }
+
+.bubble {
+  max-width: min(78%, 460px); min-width: 0;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 12px 12px 12px 3px;      /* הזנב פונה אל האווטאר שמימין */
+  padding: 8px 11px 6px; box-shadow: var(--shadow-sm);
+}
+/* ההודעה שלי בגוון המותג, והזנב מתהפך לצד השני */
+.msg.is-mine .bubble {
+  background: var(--brand-light); border-color: #a7e8dd;
+  border-radius: 12px 12px 3px 12px;
+}
+.msg.is-internal .bubble { background: var(--warn-bg); border-color: #f4d9a8; }
+
+.bubble .b-who { display: flex; align-items: baseline; gap: 6px; margin-bottom: 3px; }
+.bubble .b-who b { font-size: 12.5px; color: var(--brand-dark); }
+.bubble .b-flag { font-size: 11px; color: var(--warn); font-weight: 700; margin-bottom: 4px; }
+.bubble .c-text { white-space: pre-wrap; word-break: break-word; font-size: 13.5px; line-height: 1.55; }
+.bubble .mention { background: #fff; color: var(--brand-dark); border-radius: 4px; padding: 0 3px; font-weight: 600; }
+.msg.is-mine .bubble .mention { background: rgba(255, 255, 255, .75); }
+/* השעה נצמדת לקצה התחתון של הבועה, ולא תופסת שורה לעצמה */
+.bubble .b-time {
+  display: block; font-size: 10.5px; color: var(--text-mute);
+  text-align: left; margin-top: 2px;
+}
+
+/* תמונות בתוך ההודעה — בפרופורציה, ובלי צורך לפתוח */
+.b-media { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 5px; }
+.b-photo {
+  border: 0; padding: 0; background: none; cursor: pointer; line-height: 0;
+  border-radius: 8px; overflow: hidden; flex: 0 1 auto;
+}
+.b-photo img {
+  display: block; max-width: 100%; max-height: 220px; width: auto; height: auto;
+  border-radius: 8px; object-fit: contain;
+}
+/* תמונה בודדת מקבלת את כל רוחב הבועה; כמה תמונות מתחלקות ביניהן */
+.b-media:has(> :only-child) .b-photo img { max-height: 260px; }
+.b-photo:hover img { opacity: .92; }
+
+/* --- תיבת הכתיבה --- */
+
+.composer { margin-top: 12px; }
+.composer-bar { margin-top: 8px; gap: 7px; flex-wrap: wrap; }
+/* כפתור התיוג — מחליף את שורת השמות שהייתה פורשת את כל המשתמשים */
+.mention-btn { font-weight: 800; font-size: 15px; padding: 7px 13px; line-height: 1; }
+.mention-list { display: flex; flex-direction: column; gap: 2px; margin-top: 10px; max-height: 320px; overflow-y: auto; }
+.mention-option {
+  display: flex; align-items: center; gap: 9px; width: 100%; text-align: start;
+  border: 0; background: none; cursor: pointer; padding: 7px 8px; border-radius: 8px;
+  font: inherit; color: inherit;
+}
+.mention-option:hover { background: var(--brand-light); color: var(--brand-dark); }
 
 .file-row { display: flex; align-items: center; gap: 10px; padding: 8px; border: 1px solid var(--border); border-radius: var(--radius); margin-bottom: 7px; background: var(--surface); }
 .file-row .f-icon { width: 32px; height: 32px; border-radius: 8px; background: var(--surface-2); display: grid; place-items: center; flex: none; }

@@ -214,6 +214,7 @@ function shapeTask(task, actor, { withDetails = false } = {}) {
     internal: !!c.internal,
     createdAt: c.created_at,
     authorType: c.author_type,
+    authorId: c.author_id,
     authorName:
       c.author_type === 'vendor'
         ? D.get('SELECT name FROM vendors WHERE id = ?', c.author_id)?.name ?? 'ספק'
@@ -821,6 +822,14 @@ router.post('/api/tasks', async (req, res, ctx) => {
  * ולא תיכשל בגללו. השליחה עצמה אינה זורקת ורק רושמת ליומן.
  */
 function notifyAssignment(taskId, assigneeType, assigneeId, title, assigner = null) {
+  /**
+   * מי שהקצה משימה לעצמו יודע עליה — הוא בדיוק כתב אותה. התראה על כך היא
+   * רעש שמכשיר את המשתמש להתעלם מהפעמון, ובדיוק בגללו הוא יפספס את המקרה
+   * שחשוב: מישהו אחר, מזכירה או מנהל, הכניס לו משימה.
+   */
+  const selfAssigned = assigner && assigneeType !== 'vendor' && assigner.id === assigneeId;
+  if (selfAssigned) return;
+
   D.notify({
     targetType: assigneeType === 'vendor' ? 'vendor' : 'user',
     targetId: assigneeId,
@@ -1120,6 +1129,7 @@ function shapeChecklistItem(item, actor) {
       internal: !!c.internal,
       createdAt: c.created_at,
       authorType: c.author_type,
+      authorId: c.author_id,
       authorName:
         c.author_type === 'vendor'
           ? D.get('SELECT name FROM vendors WHERE id = ?', c.author_id)?.name ?? 'ספק'

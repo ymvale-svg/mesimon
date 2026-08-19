@@ -688,14 +688,54 @@ const UI = (() => {
     };
     input.addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) send(); });
 
-    // רשימת תיוג מהירה
-    const mentionBar = seeInternal
-      ? el('div.flex', { style: { flexWrap: 'wrap', marginBottom: '6px' } },
-          App.state.users.slice(0, 6).map((u) =>
-            el('button.btn.btn-sm.btn-ghost', {
-              onclick: () => { input.value += `${input.value && !input.value.endsWith(' ') ? ' ' : ''}@${u.name} `; input.focus(); }
-            }, [`@${u.name}`])))
+    /**
+     * תיוג נפתח בכפתור ולא בשורת שמות. רשימה פרושה של כל המשתמשים הציפה את
+     * תיבת התגובה עוד בעשרה אנשים, ומתפוצצת לגמרי בחמישים — ובכל מקרה תיוג
+     * הוא פעולה שנעשית לעיתים, ולא כל פעם שכותבים הודעה.
+     */
+    const insertMention = (name) => {
+      const gap = input.value && !input.value.endsWith(' ') ? ' ' : '';
+      input.value += `${gap}@${name} `;
+      input.focus();
+    };
+
+    const mentionPicker = () => {
+      const search = el('input', { type: 'text', placeholder: 'חיפוש שם…' });
+      const list = el('div.mention-list');
+      let m = null;
+
+      const draw = () => {
+        const q = search.value.trim().toLowerCase();
+        const found = App.state.users.filter((u) => u.name.toLowerCase().includes(q));
+        mount(list, ...(found.length
+          ? found.map((u) => el('button.mention-option', {
+              onclick: () => { insertMention(u.name); m.close(); }
+            }, [avatar(u.name, { small: true }), u.name]))
+          : [el('div.mute-sm', { style: { padding: '8px' }, text: 'אין שם מתאים' })]));
+      };
+
+      search.addEventListener('input', draw);
+      draw();
+      m = modal({ title: 'תיוג בשיחה', body: el('div', {}, [search, list]) });
+    };
+
+    const mentionBtn = seeInternal
+      ? el('button.btn.mention-btn', { type: 'button', title: 'תיוג עמית בשיחה', onclick: mentionPicker }, ['@'])
       : null;
+
+    const isImage = (f) => String(f?.mime ?? '').toLowerCase().startsWith('image/') && canPreview(f);
+
+    /**
+     * תמונה מוצגת בתוך ההודעה עצמה, בגודל שנכנס לבועה — כמו בכל יישומון
+     * הודעות. עד כה גם תמונה הופיעה כשבב עם שם קובץ, ואי אפשר היה לדעת מה
+     * נשלח בלי לפתוח אותה. לחיצה עדיין פותחת בגודל מלא.
+     */
+    const mediaGrid = (images, all) => el('div.b-media', {}, images.map((a) =>
+      el('button.b-photo', {
+        title: `${a.filename} · ${fileSize(a.size)}`,
+        onclick: () => preview(all, all.indexOf(a))
+      }, [el('img', { src: `/api/attachments/${a.id}/view`, alt: a.filename, loading: 'lazy' })])
+    ));
 
     const fileChips = (list) => el('div.file-chips', { style: { marginTop: '6px' } }, list.map((a) => {
       const shown = list.filter(canPreview);
@@ -716,35 +756,54 @@ const UI = (() => {
           }, label);
     }));
 
+    /** האם ההודעה נכתבה על ידי מי שצופה בה כרגע */
+    const isMine = (c) => {
+      const actor = App.state.actor;
+      if (!actor || c.authorType === 'system') return false;
+      const myType = actor.type === 'vendor' ? 'vendor' : 'user';
+      return c.authorType === myType && c.authorId === actor.id;
+    };
+
+    const bubble = (c) => {
+      const mine = isMine(c);
+      const files = c.attachments ?? [];
+      const images = files.filter(isImage);
+      const rest = files.filter((f) => !isImage(f));
+      const previewable = files.filter(canPreview);
+
+      return el(`div.msg${mine ? '.is-mine' : ''}${c.internal ? '.is-internal' : ''}`, {}, [
+        // האווטאר מופיע רק אצל האחרים — בהודעה שלי הוא רק גוזל רוחב
+        mine ? null : avatar(c.authorName, { small: true, vendor: c.authorType === 'vendor' }),
+        el('div.bubble', {}, [
+          // שם הכותב מיותר בהודעה שלי: אני יודע מי אני
+          mine ? null : el('div.b-who', {}, [
+            el('b', { text: c.authorName }),
+            c.authorType === 'vendor' ? el('span.tag.tag-vendor', {}, ['ספק']) : null
+          ]),
+          c.internal ? el('div.b-flag', { text: '🔒 הערה פנימית — מוסתרת מהספק' }) : null,
+          images.length ? mediaGrid(images, previewable) : null,
+          c.body ? el('div.c-text', {}, [renderMentions(c.body, names)]) : null,
+          rest.length ? fileChips(rest) : null,
+          el('time.b-time', { text: formatDateTime(c.createdAt) })
+        ])
+      ]);
+    };
+
     return el('div', {}, [
       comments.length
-        ? el('div', {}, comments.map((c) =>
-            el(`div.comment${c.internal ? '.internal' : ''}`, {}, [
-              avatar(c.authorName, { small: true, vendor: c.authorType === 'vendor' }),
-              el('div.c-body', {}, [
-                el('div.c-head', {}, [
-                  el('b', { text: c.authorName }),
-                  c.authorType === 'vendor' ? el('span.tag.tag-vendor', {}, ['ספק']) : null,
-                  c.internal ? el('span.tag.tag-high', {}, ['🔒 הערה פנימית']) : null,
-                  el('time', { text: formatDateTime(c.createdAt) })
-                ]),
-                c.body ? el('div.c-text', {}, [renderMentions(c.body, names)]) : null,
-                // הקובץ מוצג בתוך ההודעה שבה נשלח — שם הוא נמצא בהקשר שלו
-                c.attachments?.length ? fileChips(c.attachments) : null
-              ])
-            ])))
+        ? el('div.chat', {}, comments.map(bubble))
         : empty('אין תגובות עדיין', '💬'),
       canComment
-        ? el('div', { style: { marginTop: '12px' } }, [
-            mentionBar,
+        ? el('div.composer', {}, [
             input,
             pendingBox,
             fileInput,
-            el('div.flex', { style: { marginTop: '8px' } }, [
+            el('div.flex.composer-bar', {}, [
               el('button.btn.btn-primary', { onclick: send }, ['שליחת תגובה']),
-              el('button.btn', { title: 'צירוף קובץ להודעה', onclick: () => fileInput.click() }, ['📎 צירוף קובץ']),
+              mentionBtn,
+              el('button.btn', { title: 'צירוף קובץ להודעה', onclick: () => fileInput.click() }, ['📎']),
               seeInternal
-                ? el('label.checkbox', { title: 'הערות פנימיות מוסתרות לחלוטין מהספק' }, [internalCheck, '🔒 הערה פנימית (מוסתרת מהספק)'])
+                ? el('label.checkbox', { title: 'הערות פנימיות מוסתרות לחלוטין מהספק' }, [internalCheck, '🔒 פנימית'])
                 : null,
               el('div.spacer'),
               el('span.mute-sm', { text: 'Ctrl+Enter לשליחה' })

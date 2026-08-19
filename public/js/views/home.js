@@ -208,30 +208,31 @@ const HomeView = (() => {
       task.escalated ? el('span', { title: 'הוקפצה לתשומת לב ההנהלה', text: '↑' }) : null
     ].filter(Boolean);
 
+    /**
+     * כל תא הוא עמודה בטבלה ולכן נכתב תמיד, גם כשהוא ריק — תא שנשמט היה מזיז
+     * את כל מה שאחריו עמודה אחת שמאלה, וכל השורות היו מפסיקות להתיישר.
+     */
     return el(`div.task-line${task.isFinal ? '.is-done' : ''}`, {
       onclick: () => TaskCardView.open(task.id),
       title: task.title
     }, [
       // הפס בצבע הפרויקט — אותו סימן שמופיע בטבלה ובקנבן
       el('span.tk-bar', { style: { background: task.projectColor ?? 'transparent' } }),
-      completeBox(task),
-      task.projectName ? el('span.tk-project', { text: task.projectName }) : null,
-      task.projectName ? el('span.tk-sep', { text: '־' }) : null,
+      el('span', {}, [completeBox(task)]),
+      el('span.tk-project', { text: task.projectName ?? '—' }),
       el('span.tk-title', { text: task.title }),
-      el('span.tk-sep', { text: '|' }),
       UI.statusTag(task),
-      task.dueDate
-        ? el('span.tk-due', {
-            text: due.text,
-            class: due.tone === 'danger' ? 'text-danger' : due.tone === 'warn' ? 'text-warn' : ''
-          })
-        : null,
-      el('span.spacer'),
-      // האחראי מוצג רק כשהוא אינו המשתמש עצמו — ברשימה "שלי" זה תמיד הוא
-      task.assigneeName && task.assigneeId !== App.state.actor.id
-        ? UI.avatar(task.assigneeName, { small: true, vendor: task.assigneeType === 'vendor' })
-        : null,
-      flags.length ? el('span.tk-flags', {}, flags) : null
+      el('span.tk-due', {
+        text: task.dueDate ? due.text : '—',
+        class: due.tone === 'danger' ? 'text-danger' : due.tone === 'warn' ? 'text-warn' : ''
+      }),
+      el('span.tk-flags', {}, [
+        // האחראי מוצג רק כשהוא אינו המשתמש עצמו — ברשימה "שלי" זה תמיד הוא
+        task.assigneeName && task.assigneeId !== App.state.actor.id
+          ? UI.avatar(task.assigneeName, { small: true, vendor: task.assigneeType === 'vendor' })
+          : null,
+        ...flags
+      ])
     ]);
   }
 
@@ -260,7 +261,26 @@ const HomeView = (() => {
       ]),
       sorted.length
         // שורה בגובה אחיד, ולכן תקרה שמראה כעשר שורות שלמות ורומזת להמשך
-        ? el('div.card-pad', {}, [scrollBox(shown.map(taskRow), { maxHeight: '380px', extraClass: '.flex-col' })])
+        ? el('div.card-pad', {}, [
+            el('div.task-table', {}, [
+              /**
+               * הכותרת יושבת בתוך תיבת הגלילה ולא מעליה, ודביקה בראשה. מחוץ
+               * לתיבה היא הייתה רחבה ממנה בעובי פס הגלילה, וכל העמודות היו
+               * מוסטות ביחס לשורות — כלומר בדיוק הבלגן שהטבלה באה לפתור.
+               */
+              scrollBox([
+                el('div.task-table-head', {}, [
+                  el('span'), el('span'),
+                  el('span', { text: 'פרויקט' }),
+                  el('span', { text: 'משימה' }),
+                  el('span', { text: 'סטטוס' }),
+                  el('span', { text: 'יעד' }),
+                  el('span')
+                ]),
+                ...shown.map(taskRow)
+              ], { maxHeight: '360px', extraClass: '.flex-col' })
+            ])
+          ])
         : el('div.card-pad', {}, [el('div.mute-sm', { text: emptyText })])
     ]);
   }
@@ -404,28 +424,28 @@ const HomeView = (() => {
           ? el('span.mute-sm', { text: countLabel(shownCount, 'משימה אחת', 'משימות') })
           : null
       ]),
-      // שבע השורות קבועות, אך יום עמוס מותח אותן — אותה תיבה, בגובה שמראה שבוע רגיל שלם
+      /**
+       * שם היום ותאריכו באותה שורה, ולא זה מעל זה: כך כל יום הוא שורה אחת
+       * במקום שתיים, והתיבה תופסת כמחצית ממה שתפסה. יום עמוס עוד מותח את
+       * שורתו, אך רוב הימים בשבוע ריקים ואין סיבה לשלם עליהם גובה כפול.
+       */
       el('div.card-pad', {}, [scrollBox(days.map((d) =>
-        el('div', { style: { display: 'flex', gap: '10px', padding: '6px 0', borderBottom: '1px dashed var(--border)' } }, [
-          el('div', { style: { width: '86px', flex: 'none' } }, [
-            el('div', { style: { fontWeight: d.isToday ? '800' : '600', color: d.isToday ? 'var(--brand)' : 'inherit' },
+        el('div.week-row', {}, [
+          el('div.wk-day', {}, [
+            el('b', { style: { color: d.isToday ? 'var(--brand)' : 'inherit' },
               text: d.isToday ? 'היום' : dayNames[d.date.getDay()] }),
-            el('div.mute-sm', { text: UI.formatDate(d.date.toISOString()).slice(0, 5) })
+            el('span.mute-sm', { text: UI.formatDate(d.date.toISOString()).slice(0, 5) })
           ]),
-          el('div', { style: { flex: '1' } }, d.items.length
-            ? d.items.map((t) => el('div', {
-                style: { cursor: 'pointer', fontSize: '13px', padding: '2px 0' },
-                onclick: () => TaskCardView.open(t.id)
-              }, [
+          el('div.wk-items', {}, d.items.length
+            ? d.items.map((t) => el('div.wk-item', {
+                title: t.title,
                 // הצבע מסמן איחור בפועל
-                el('span', {
-                  style: { color: t.overdue ? 'var(--danger)' : 'inherit' },
-                  text: `• ${t.title}`
-                })
-              ]))
-            : [el('div.mute-sm', { text: '—' })])
+                style: { color: t.overdue ? 'var(--danger)' : 'inherit' },
+                onclick: () => TaskCardView.open(t.id)
+              }, [t.title]))
+            : [el('span.mute-sm', { text: '—' })])
         ])
-      ), { maxHeight: '380px' })])
+      ), { maxHeight: '210px' })])
     ]);
   }
 
