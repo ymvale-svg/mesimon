@@ -130,17 +130,17 @@ const HomeView = (() => {
       else App.navigate('board', { scope: 'internal', ...filters });
     };
 
-    const make = (cls, icon, num, label, onclick) =>
+    const make = (cls, iconName, num, label, onclick) =>
       el(`button.widget.${cls}`, { onclick }, [
-        el('div.w-icon', { text: icon }),
+        el('div.w-icon', {}, [UI.icon(iconName)]),
         el('div', {}, [el('div.w-num', { text: String(num) }), el('div.w-label', { text: label })])
       ]);
 
     return el('div.grid.grid-4', {}, [
-      make('w-mine', '📋', w.mine, 'המשימות שלי', () => go({ mine: true })),
-      make('w-over', '⏰', w.overdue, 'באיחור', () => go({ mine: true, overdue: true })),
-      make('w-urgent', '🔥', w.urgent, 'דחוף', () => go({ mine: true, priority: 'urgent' })),
-      make('w-approve', '✅', w.awaitingApproval, App.isVendor() ? 'ממתין לבדיקת הצוות' : 'ממתין לאישור',
+      make('w-mine', 'my-tasks', w.mine, 'המשימות שלי', () => go({ mine: true })),
+      make('w-over', 'overdue', w.overdue, 'באיחור', () => go({ mine: true, overdue: true })),
+      make('w-urgent', 'urgent', w.urgent, 'דחוף', () => go({ mine: true, priority: 'urgent' })),
+      make('w-approve', 'waiting', w.awaitingApproval, App.isVendor() ? 'ממתין לבדיקת הצוות' : 'ממתין לאישור',
         () => (App.isVendor() ? App.navigate('vendor') : App.navigate('vendorBoards', { pendingReview: true })))
     ]);
   }
@@ -204,8 +204,8 @@ const HomeView = (() => {
   function taskRow(task) {
     const due = UI.dueLabel(task.dueDate);
     const flags = [
-      task.overdue ? el('span', { title: `באיחור — יעד ${UI.formatDate(task.dueDate)}`, text: '⏰' }) : null,
-      task.priority === 'urgent' ? el('span', { title: 'עדיפות דחוף', text: '🔥' }) : null,
+      task.overdue ? el('span.text-danger', { title: `באיחור — יעד ${UI.formatDate(task.dueDate)}` }, [UI.icon('overdue')]) : null,
+      task.priority === 'urgent' ? el('span.text-warn', { title: 'עדיפות דחוף' }, [UI.icon('urgent')]) : null,
       task.escalated ? el('span', { title: 'הוקפצה לתשומת לב ההנהלה', text: '↑' }) : null
     ].filter(Boolean);
 

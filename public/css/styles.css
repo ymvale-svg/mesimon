@@ -492,7 +492,12 @@ table.data td.wrap { white-space: normal; min-width: 240px; }
 .feed-scroll {
   max-height: 320px;
   overflow-y: auto;
-  overscroll-behavior: contain;
+  /*
+   * בכוונה בלי ‎overscroll-behavior: contain‎. עם contain הגלגלת נעצרת בתוך
+   * התיבה ואינה ממשיכה לעמוד, ובדף הבית כמעט כל שטח המסך מכוסה בתיבות כאלה —
+   * כך שהעמוד לא נגלל כלל, חוץ מבאזור היחיד שאין בו תיבה. ברירת המחדל
+   * מעבירה את הגלילה לעמוד ברגע שהתיבה מגיעה לסופה, וזו ההתנהגות הנכונה.
+   */
   padding-inline-end: 4px;
 }
 .feed-scroll::-webkit-scrollbar { width: 8px; }
@@ -800,6 +805,40 @@ th.cell-bar { background: var(--border) !important; }
   font-size: 12px; padding: 4px 10px; border-radius: 6px; flex: none;
 }
 
+/* --- לוגו וגלריית תמונות של פרויקט --- */
+
+.proj-images { border-top: 1px solid var(--border); padding-top: 14px; margin-bottom: 4px; }
+.proj-logo-box {
+  width: 82px; height: 82px; flex: none; position: relative;
+  border: 1px solid var(--border); border-radius: 10px; background: var(--surface-2);
+  display: grid; place-items: center; overflow: hidden;
+}
+.proj-logo-box img { max-width: 100%; max-height: 100%; object-fit: contain; display: block; }
+.proj-logo-box.is-empty { font-size: 11px; color: var(--text-mute); }
+.proj-gallery {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(88px, 1fr));
+  gap: 7px; margin-top: 8px;
+}
+.proj-thumb {
+  position: relative; aspect-ratio: 1; border-radius: 9px; overflow: hidden;
+  border: 1px solid var(--border); background: var(--surface-2);
+}
+.proj-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; cursor: pointer; }
+.proj-thumb img:hover { opacity: .88; }
+/* כפתור ההסרה מופיע בריחוף, כדי שלא יילחץ בטעות בזמן דפדוף */
+.proj-logo-box .chip-x, .proj-thumb .chip-x {
+  position: absolute; top: 3px; inset-inline-start: 3px; opacity: 0;
+  background: rgba(15, 23, 42, .72); color: #fff; border-radius: 6px;
+}
+.proj-logo-box:hover .chip-x, .proj-thumb:hover .chip-x { opacity: 1; }
+@media (hover: none) {
+  .proj-logo-box .chip-x, .proj-thumb .chip-x { opacity: 1; }
+}
+
+/* הלוגו לצד שם הפרויקט בכותרת ובתפריט */
+.head-logo { width: 34px; height: 34px; border-radius: 8px; object-fit: contain; background: var(--surface); flex: none; }
+.nav-item .nav-logo { width: 17px; height: 17px; border-radius: 4px; object-fit: contain; }
+
 /* בורר צבע הפרויקט */
 .color-swatches { display: flex; gap: 5px; flex-wrap: wrap; }
 .color-swatch {
@@ -874,9 +913,17 @@ input[type="color"] { width: 46px; height: 30px; padding: 2px; cursor: pointer; 
 
 /* --- שיחה --- */
 
+/*
+ * השיחה נגללת בתוך עצמה, ותיבת הכתיבה נעוצה מתחתיה. עד כה נגללו שתיהן יחד
+ * עם כל הפאנל: בשרשור ארוך היה צריך לגלול עד הסוף כדי להגיע לכפתור השליחה,
+ * ותוך כדי כך הטקסט שנכתב יצא מהמסך.
+ */
 .chat {
   display: flex; flex-direction: column; gap: 9px;
-  padding: 4px 0 10px;
+  padding: 4px 2px 10px;
+  overflow-y: auto;
+  /* גובה לפי החלון ולא קבוע — כך התיבה מתאימה את עצמה למסך נמוך ולגבוה */
+  max-height: min(46vh, 420px);
 }
 /*
  * המסמך RTL, ולכן קצה הציר הראשי הוא הצד השמאלי הפיזי: ההודעות שלי נדחפות
@@ -926,7 +973,13 @@ input[type="color"] { width: 46px; height: 30px; padding: 2px; cursor: pointer; 
 
 /* --- תיבת הכתיבה --- */
 
-.composer { margin-top: 12px; position: relative; }
+.composer {
+  margin-top: 10px; position: relative;
+  /* דביקה לתחתית הפאנל הנגלל, כדי שהכתיבה והשליחה יישארו במקומן */
+  position: sticky; bottom: 0; z-index: 4;
+  background: var(--surface);
+  padding-top: 10px; border-top: 1px solid var(--border);
+}
 .composer-bar { margin-top: 8px; gap: 7px; flex-wrap: wrap; }
 /* כפתור התיוג — מחליף את שורת השמות שהייתה פורשת את כל המשתמשים */
 .mention-btn { font-weight: 800; font-size: 15px; padding: 7px 13px; line-height: 1; }
@@ -1116,3 +1169,9 @@ input[type="color"] { width: 46px; height: 30px; padding: 2px; cursor: pointer; 
 @media (max-width: 900px) {
   .notif-pop-root { top: calc(var(--header-h) + 8px); inset-inline-end: 10px; }
 }
+
+/* מסכת אייקון בתוך ווידג'ט ובאזור ריק — הגודל נקבע במידות ולא בגופן */
+.w-icon .ic { width: 22px; height: 22px; }
+.e-icon .ic { width: 34px; height: 34px; opacity: .55; }
+.tk-flags .ic { width: 15px; height: 15px; }
+.pop-icon .ic, .n-icon .ic { width: 15px; height: 15px; }

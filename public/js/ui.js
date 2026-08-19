@@ -350,8 +350,9 @@ const UI = (() => {
     return { card, dismiss };
   }
 
+  // ‎icon‎ הוא או צומת (מסכת אייקון) או טקסט — שני המצבים מטופלים כאן
   const empty = (message, icon = '📭') =>
-    el('div.empty', {}, [el('div.e-icon', { text: icon }), el('div', { text: message })]);
+    el('div.empty', {}, [el('div.e-icon', {}, [icon]), el('div', { text: message })]);
 
   const spinner = () => el('div.spinner');
 
@@ -575,8 +576,18 @@ const UI = (() => {
    * תצוגה מקדימה בתוך המערכת. ‎files‎ היא רשימת הקבצים שאפשר לדפדף ביניהם,
    * כדי שלא צריך לסגור ולפתוח חלון לכל קובץ; ‎index‎ הוא הקובץ שנפתח.
    */
+  /**
+   * ‎previewUrls‎ הוא החלון עצמו: הוא מקבל פריטים שיש להם ‎url‎ מוכן, ולכן
+   * הוא משרת גם קבצים מצורפים למשימה וגם תמונות של פרויקט — שני מקורות עם
+   * נקודות קצה שונות. ‎preview‎ הוא העטיפה למהדקים, שבונה את הכתובות מהמזהה.
+   */
   function preview(files, index = 0) {
     const list = (Array.isArray(files) ? files : [files]).filter(canPreview);
+    return previewUrls(list.map((f) => ({ ...f, url: `/api/attachments/${f.id}/view`, downloadUrl: `/api/attachments/${f.id}/download` })), index);
+  }
+
+  function previewUrls(files, index = 0) {
+    const list = (Array.isArray(files) ? files : [files]).filter((f) => f && f.url);
     if (!list.length) return;
     let at = Math.max(0, Math.min(index, list.length - 1));
 
@@ -588,16 +599,17 @@ const UI = (() => {
 
     const show = () => {
       const f = list[at];
-      // מקור אחד לשני סוגי הקבצים: אותה כתובת, והדפדפן מציג לפי סוג התוכן
-      const src = `/api/attachments/${f.id}/view`;
       mount(stage, isPdf(f)
         // הכותרת הפנימית של הצופה מוסתרת (‎#toolbar=0‎) כדי שלא יופיע כפתור
         // הורדה שני מעל זה שכבר יש בחלון
-        ? el('iframe.preview-pdf', { src: `${src}#toolbar=0&navpanes=0`, title: f.filename })
-        : el('img.preview-img', { src, alt: f.filename }));
-      mount(caption, el('b', { text: f.filename }), el('span.mute-sm', { text: ` · ${fileSize(f.size)}` }));
+        ? el('iframe.preview-pdf', { src: `${f.url}#toolbar=0&navpanes=0`, title: f.filename })
+        : el('img.preview-img', { src: f.url, alt: f.filename }));
+      mount(caption, el('b', { text: f.filename }),
+        f.size ? el('span.mute-sm', { text: ` · ${fileSize(f.size)}` }) : null);
       counter.textContent = list.length > 1 ? `${at + 1} מתוך ${list.length}` : '';
-      dl.href = `/api/attachments/${f.id}/download`;
+      // תמונת פרויקט מוגשת לצפייה בלבד; כשאין כתובת הורדה הכפתור מוסתר
+      dl.href = f.downloadUrl ?? f.url;
+      dl.style.display = f.downloadUrl ? '' : 'none';
     };
 
     const step = (d) => { at = (at + d + list.length) % list.length; show(); };
@@ -891,7 +903,7 @@ const UI = (() => {
     initials, avatar, priorityTag, statusTag, taskTags,
     modal, confirm, prompt, toast, error, success, notifyPop, clearNotifyPops,
     empty, spinner, field, select, renderMentions, fileSize, fileIcon,
-    preview, canPreview, PROJECT_COLORS, commentThread, icon,
+    preview, previewUrls, canPreview, PROJECT_COLORS, commentThread, icon,
     logo, logoMark, companyLogo, refitLogos
   };
 })();

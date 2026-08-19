@@ -198,6 +198,24 @@ CREATE TABLE IF NOT EXISTS attachments (
   created_at    TEXT    NOT NULL
 );
 
+/*
+ * תמונות של פרויקט: לוגו אחד, ולצדו גלריה להדמיות ולחומרים חזותיים.
+ * טבלה נפרדת ולא attachments, כי שם task_id הוא NOT NULL — תמונה של פרויקט
+ * אינה תלויה בשום משימה, ואמורה לשרוד גם כשכל משימותיו נמחקות.
+ */
+CREATE TABLE IF NOT EXISTS project_images (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  project_id  INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  kind        TEXT    NOT NULL CHECK (kind IN ('logo','gallery')),
+  filename    TEXT    NOT NULL,
+  stored_name TEXT    NOT NULL,
+  size        INTEGER NOT NULL DEFAULT 0,
+  mime        TEXT    NOT NULL,
+  caption     TEXT    NOT NULL DEFAULT '',
+  uploaded_by INTEGER REFERENCES users(id),
+  created_at  TEXT    NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS notifications (
   id           INTEGER PRIMARY KEY AUTOINCREMENT,
   target_type  TEXT    NOT NULL CHECK (target_type IN ('user','vendor')),

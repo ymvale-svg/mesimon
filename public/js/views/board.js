@@ -132,6 +132,10 @@ const BoardView = (() => {
     }
 
     return el('div.page-head', {}, [
+      // הלוגו של הפרויקט לצד שמו, כשהוגדר לו אחד
+      project?.logoId
+        ? el('img.head-logo', { src: `/api/project-images/${project.logoId}/view`, alt: project.name })
+        : null,
       el('div', {}, [el('h2', { text: title }), el('div.sub', { text: sub })]),
       el('div.spacer'),
       project && App.may('create_project')
@@ -675,6 +679,104 @@ const BoardView = (() => {
       })
     ));
 
+    /**
+     * לוגו וגלריית תמונות. זמינים רק בעריכה ולא ביצירה: התמונות נשמרות מול
+     * מזהה הפרויקט, ובזמן היצירה עדיין אין מזהה. אין טעם לצבור קבצים בזיכרון
+     * ולשלוח אותם אחר כך — עדיף לומר זאת במשפט אחד.
+     */
+    const imagesBox = el('div.proj-images');
+    let images = [];
+
+    const uploadImage = async (file, kind) => {
+      const data = await new Promise((resolve) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.readAsDataURL(file);
+      });
+      const r = await API.uploadProjectImage(project.id, {
+        kind, filename: file.name, mime: file.type || 'image/png', data
+      });
+      images = r.images;
+      drawImages();
+      await App.reloadReference();
+      App.refreshChrome();
+    };
+
+    const pickFile = (kind, multiple) => {
+      const input = el('input', { type: 'file', accept: 'image/png,image/jpeg,image/gif,image/webp', multiple, style: { display: 'none' } });
+      input.addEventListener('change', async () => {
+        for (const file of [...input.files]) {
+          try { await uploadImage(file, kind); UI.success(`"${file.name}" הועלה`); }
+          catch (err) { UI.error(err); }
+        }
+      });
+      document.body.appendChild(input);
+      input.click();
+      setTimeout(() => input.remove(), 0);
+    };
+
+    const removeImage = async (image) => {
+      if (!await UI.confirm(`למחוק את "${image.filename}"?`, { danger: true, okText: 'מחיקה' })) return;
+      try {
+        const r = await API.deleteProjectImage(image.id);
+        images = r.images;
+        drawImages();
+        await App.reloadReference();
+        App.refreshChrome();
+      } catch (err) { UI.error(err); }
+    };
+
+    function drawImages() {
+      const logo = images.find((i) => i.kind === 'logo') ?? null;
+      const gallery = images.filter((i) => i.kind === 'gallery');
+      // אותה רשימה שנפתחת בתצוגה המקדימה, כדי שאפשר לדפדף בין ההדמיות
+      const previewable = gallery.map((i) => ({ id: i.id, filename: i.filename, size: i.size, mime: i.mime, url: `/api/project-images/${i.id}/view` }));
+
+      UI.mount(imagesBox,
+        el('div.field', {}, [
+          el('label', { text: 'לוגו הפרויקט' }),
+          el('div.flex', { style: { gap: '10px', alignItems: 'flex-start' } }, [
+            logo
+              ? el('div.proj-logo-box', {}, [
+                  el('img', { src: `/api/project-images/${logo.id}/view`, alt: logo.filename }),
+                  el('button.chip-x', { title: 'הסרת הלוגו', onclick: () => removeImage(logo) }, ['✕'])
+                ])
+              : el('div.proj-logo-box.is-empty', { text: 'ללא לוגו' }),
+            el('div', {}, [
+              el('button.btn.btn-sm', { onclick: () => pickFile('logo', false) }, [logo ? 'החלפת הלוגו' : '＋ העלאת לוגו']),
+              el('div.hint', { style: { marginTop: '4px' }, text: 'מופיע לצד שם הפרויקט בכותרת ובתפריט' })
+            ])
+          ])
+        ]),
+        el('div.field', {}, [
+          el('label', { text: `תמונות והדמיות${gallery.length ? ` (${gallery.length})` : ''}` }),
+          el('div.hint', { text: 'חומר חזותי של הפרויקט — הדמיות, סקיצות, צילומי מצב. לחיצה פותחת בגודל מלא.' }),
+          gallery.length
+            ? el('div.proj-gallery', {}, gallery.map((img, i) =>
+                el('div.proj-thumb', {}, [
+                  el('img', {
+                    src: `/api/project-images/${img.id}/view`, alt: img.filename, title: img.filename,
+                    onclick: () => UI.previewUrls(previewable, i)
+                  }),
+                  el('button.chip-x', { title: 'מחיקה', onclick: () => removeImage(img) }, ['✕'])
+                ])))
+            : null,
+          el('button.btn.btn-sm', { style: { marginTop: '8px' }, onclick: () => pickFile('gallery', true) }, ['＋ העלאת תמונות'])
+        ])
+      );
+    }
+
+    if (isEdit) {
+      drawImages();
+      API.projectImages(project.id)
+        .then((d) => { images = d.images; drawImages(); })
+        .catch(() => { /* כשל בטעינת תמונות אינו מונע עריכת הפרויקט */ });
+    } else {
+      UI.mount(imagesBox, el('div.hint', {
+        text: 'לוגו ותמונות אפשר להוסיף מיד לאחר יצירת הפרויקט, מתוך "עריכת פרויקט".'
+      }));
+    }
+
     const templateSelect = UI.select([{ value: '', label: 'ללא תבנית' }], '');
     if (!isEdit) {
       API.templates().then((data) => {
@@ -687,10 +789,16 @@ const BoardView = (() => {
     const body = el('div', {}, [
       UI.field('שם הפרויקט', nameInput),
       UI.field('תיאור', descInput),
-      el('div.row', {}, [UI.field('מנהל הפרויקט', managerSelect), UI.field('סטטוס', statusSelect)]),
+      el('div.row', {}, [
+        // "מנהל הפרויקט" לא היה ברור. זהו מי שאחראי על התקדמות המשימות שבו,
+        // והוא גם רואה את הפרויקט ברשימה שלו גם בלי משימה משלו בתוכו.
+        UI.field('מנהל המשימות בפרויקט', managerSelect, 'אחראי על התקדמות המשימות בפרויקט'),
+        UI.field('סטטוס', statusSelect)
+      ]),
       el('div.row', {}, [UI.field('תאריך התחלה', startInput), UI.field('תאריך יעד', dueInput)]),
       UI.field('צבע הפרויקט', el('div.flex', {}, [colorInput, colorSwatches]),
         'הצבע מסמן את שורות המשימות של הפרויקט, לזיהוי במבט'),
+      imagesBox,
       !isEdit ? UI.field('יצירה מתבנית', templateSelect, 'התבנית תיצור אוטומטית את משימות הבסיס של הפרויקט') : null
     ]);
 

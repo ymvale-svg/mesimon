@@ -575,6 +575,8 @@ function listProjectsFor(actor) {
       // הצבע שנבחר בפועל, להבדיל מהנגזר — כדי שבורר הצבע יידע אם יש בחירה
       colorChosen: p.color || null,
       mine: mineIds.has(p.id),
+      logoId: D.get("SELECT id FROM project_images WHERE project_id = ? AND kind = 'logo'", p.id)?.id ?? null,
+      imagesCount: D.get("SELECT COUNT(*) c FROM project_images WHERE project_id = ? AND kind = 'gallery'", p.id).c,
       tasksTotal: stats.total ?? 0,
       tasksDone: stats.done ?? 0,
       pinned: pinned.has(p.id)
@@ -1547,16 +1549,7 @@ router.patch('/api/projects/:id', async (req, res, ctx) => {
   const project = D.get('SELECT * FROM projects WHERE id = ?', Number(ctx.params.id));
   if (!project) throw notFound();
 
-  /**
-   * עובד פנימי פותח פרויקטים ברמת 'own', ולכן עורך רק את אלה שפתח או שהוא
-   * מנהלם. בלי הבדיקה הזו ההרשאה לפתוח פרויקט הייתה גם הרשאה לשנות את שמו
-   * ואת מנהלו של כל פרויקט אחר בארגון.
-   */
-  if (P.level(actor, 'create_project') === 'own'
-      && project.created_by !== actor.id && project.manager_id !== actor.id) {
-    throw forbidden('אפשר לערוך רק פרויקט שפתחת או שאתה מנהלו');
-  }
-
+  assertMayEditProject(actor, project);
   const b = await readJson(req);
   D.run(
     'UPDATE projects SET name = ?, description = ?, manager_id = ?, start_date = ?, due_date = ?, status = ?, color = ? WHERE id = ?',
@@ -1985,6 +1978,124 @@ function resolveDepartment(actor, body) {
 }
 
 const departmentName = (id) => (id ? D.get('SELECT name FROM departments WHERE id = ?', id)?.name ?? '' : '');
+
+/**
+ * עובד פנימי פותח פרויקטים ברמת 'own', ולכן עורך רק את אלה שפתח או שהוא
+ * מנהלם. בלי הבדיקה הזו ההרשאה לפתוח פרויקט הייתה גם הרשאה לשנות את שמו,
+ * את מנהלו ואת תמונותיו של כל פרויקט אחר בארגון.
+ */
+function assertMayEditProject(actor, project) {
+  requirePerm(actor, 'create_project');
+  if (P.level(actor, 'create_project') === 'own'
+      && project.created_by !== actor.id && project.manager_id !== actor.id) {
+    throw forbidden('אפשר לערוך רק פרויקט שפתחת או שאתה מנהלו');
+  }
+}
+
+// ---------------------------------------------------------------------------
+// תמונות של פרויקט — לוגו וגלריית הדמיות
+// ---------------------------------------------------------------------------
+
+const shapeProjectImage = (r) => ({
+  id: r.id, kind: r.kind, filename: r.filename, mime: r.mime, size: r.size,
+  caption: r.caption ?? '', createdAt: r.created_at
+});
+
+const projectImages = (projectId) =>
+  D.all('SELECT * FROM project_images WHERE project_id = ? ORDER BY kind, id', projectId).map(shapeProjectImage);
+
+router.get('/api/projects/:id/images', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  if (isVendor(actor)) throw forbidden();
+  const project = D.get('SELECT * FROM projects WHERE id = ?', Number(ctx.params.id));
+  if (!project) throw notFound('הפרויקט לא נמצא');
+  // הרשאת הצפייה זהה לזו של רשימת הפרויקטים — פרויקט שאינו נראה, גם תמונותיו לא
+  const visible = visibleProjectIds(actor);
+  if (visible !== null && !visible.has(project.id)) throw forbidden();
+  sendJson(res, 200, { images: projectImages(project.id) });
+});
+
+/**
+ * העלאת תמונה. רק תמונות — הגלריה נועדה להדמיות ולחומר חזותי, וקובץ שאינו
+ * תמונה אינו ניתן להצגה בה. לוגו הוא יחיד: העלאה חדשה מחליפה את הקודם.
+ */
+router.post('/api/projects/:id/images', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  if (isVendor(actor)) throw forbidden();
+  const project = D.get('SELECT * FROM projects WHERE id = ?', Number(ctx.params.id));
+  if (!project) throw notFound('הפרויקט לא נמצא');
+  assertMayEditProject(actor, project);
+
+  const b = await readJson(req);
+  const kind = b.kind === 'logo' ? 'logo' : 'gallery';
+  const name = String(b.filename ?? '').trim();
+  if (!name || !b.data) throw badRequest('חסר קובץ');
+  const mime = String(b.mime ?? '').toLowerCase();
+  if (!isPreviewable(mime) || !mime.startsWith('image/')) {
+    throw badRequest('נדרשת תמונה (PNG, JPG, GIF או WEBP)');
+  }
+
+  const buffer = Buffer.from(String(b.data).split(',').pop(), 'base64');
+  const maxMb = Number(D.getSetting('max_upload_mb', 25));
+  if (!buffer.length) throw badRequest('הקובץ ריק');
+  if (buffer.length > maxMb * 1024 * 1024) throw badRequest(`הקובץ חורג מהמגבלה (${maxMb}MB)`);
+
+  const stored = `proj${project.id}_${crypto.randomBytes(8).toString('hex')}${path.extname(name)}`;
+  fs.writeFileSync(path.join(D.UPLOADS_DIR, stored), buffer);
+
+  // לוגו יחיד: הקודם נמחק מהדיסק ומהטבלה, אחרת נערמים קבצים שאין להם דרך תצוגה
+  if (kind === 'logo') {
+    for (const old of D.all("SELECT * FROM project_images WHERE project_id = ? AND kind = 'logo'", project.id)) {
+      try { fs.unlinkSync(path.join(D.UPLOADS_DIR, old.stored_name)); } catch { /* אולי כבר נמחק */ }
+      D.run('DELETE FROM project_images WHERE id = ?', old.id);
+    }
+  }
+
+  const r = D.run(
+    `INSERT INTO project_images (project_id, kind, filename, stored_name, size, mime, caption, uploaded_by, created_at)
+     VALUES (?,?,?,?,?,?,?,?,?)`,
+    project.id, kind, name, stored, buffer.length, mime, String(b.caption ?? ''), actor.id, D.nowIso()
+  );
+
+  sendJson(res, 201, {
+    image: shapeProjectImage(D.get('SELECT * FROM project_images WHERE id = ?', Number(r.lastInsertRowid))),
+    images: projectImages(project.id),
+    projects: listProjectsFor(actor)
+  });
+});
+
+router.delete('/api/project-images/:id', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  if (isVendor(actor)) throw forbidden();
+  const image = D.get('SELECT * FROM project_images WHERE id = ?', Number(ctx.params.id));
+  if (!image) throw notFound('התמונה לא נמצאה');
+  const project = D.get('SELECT * FROM projects WHERE id = ?', image.project_id);
+  assertMayEditProject(actor, project);
+
+  try { fs.unlinkSync(path.join(D.UPLOADS_DIR, image.stored_name)); } catch { /* אולי כבר נמחק */ }
+  D.run('DELETE FROM project_images WHERE id = ?', image.id);
+  sendJson(res, 200, { images: projectImages(project.id), projects: listProjectsFor(actor) });
+});
+
+/** הגשת התמונה עצמה. תמונות בלבד, ולכן תמיד inline ובלי הורדה כפויה. */
+router.get('/api/project-images/:id/view', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  const image = D.get('SELECT * FROM project_images WHERE id = ?', Number(ctx.params.id));
+  if (!image) throw notFound('התמונה לא נמצאה');
+  const visible = visibleProjectIds(actor);
+  if (visible !== null && !visible.has(image.project_id)) throw forbidden();
+
+  const filePath = path.join(D.UPLOADS_DIR, image.stored_name);
+  if (!fs.existsSync(filePath)) throw notFound('הקובץ אינו קיים בשרת');
+  const buf = fs.readFileSync(filePath);
+  res.writeHead(200, {
+    'content-type': image.mime,
+    'content-length': buf.length,
+    'content-disposition': `inline; filename*=UTF-8''${encodeURIComponent(image.filename)}`,
+    'x-content-type-options': 'nosniff'
+  });
+  res.end(buf);
+});
 
 router.get('/api/admin/users', async (req, res, ctx) => {
   const actor = ctx.requireActor();

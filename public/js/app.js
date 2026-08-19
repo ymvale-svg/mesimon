@@ -304,7 +304,7 @@ const App = (() => {
               ])
             ]);
           })
-        : [UI.empty('אין התראות חדשות', '🔔')])
+        : [UI.empty('אין התראות חדשות', UI.icon('bell'))])
     ]);
 
     document.body.appendChild(panel);
@@ -425,8 +425,12 @@ const App = (() => {
       el(`button.nav-item${state.route.name === 'board' && state.route.params.projectId === p.id ? '.active' : ''}`, {
         onclick: () => navigate('board', { projectId: p.id })
       }, [
-        // הנקודה נושאת את צבע הפרויקט — אותו סימן שמופיע בשורות המשימות שלו
-        el('span.ico', {}, [el('span.project-dot', { style: { background: p.color, margin: '0' } })]),
+        // הלוגו כשיש, ואחרת נקודה בצבע הפרויקט — אותו סימן שבשורות המשימות שלו
+        el('span.ico', {}, [
+          p.logoId
+            ? el('img.nav-logo', { src: `/api/project-images/${p.logoId}/view`, alt: '' })
+            : el('span.project-dot', { style: { background: p.color, margin: '0' } })
+        ]),
         // minWidth: 0 הוא מה שמאפשר לשלוש הנקודות לעבוד בכלל: בלעדיו פריט בתוך flex
         // לא מתכווץ מתחת לרוחב הטקסט, ושם ארוך היה דוחף את המונה ואת כפתור הנעיצה
         // מחוץ לרוחב התפריט — כלומר הנעיצה הייתה נחתכת ולא ניתנת ללחיצה

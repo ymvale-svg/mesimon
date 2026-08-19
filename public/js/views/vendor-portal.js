@@ -57,10 +57,10 @@ const VendorPortalView = (() => {
     UI.mount(containerRef,
       banner(),
       el('div.grid.grid-4', {}, [
-        stat('w-mine', '📦', open.length, 'משימות פתוחות'),
+        stat('w-mine', UI.icon('my-tasks'), open.length, 'משימות פתוחות'),
         stat('w-urgent', '✍️', needsAction.length, 'ממתינות לפעולה שלך'),
-        stat('w-approve', '⏳', waiting.length, 'ממתינות לבדיקת הצוות'),
-        stat('w-over', '⏰', overdue.length, 'באיחור')
+        stat('w-approve', UI.icon('waiting'), waiting.length, 'ממתינות לבדיקת הצוות'),
+        stat('w-over', UI.icon('overdue'), overdue.length, 'באיחור')
       ]),
       el('div.toolbar.mt', {}, [
         el('div.view-switch', {}, [['board', 'לפי שלב'], ['list', 'רשימה']].map(([m, label]) =>
@@ -72,9 +72,10 @@ const VendorPortalView = (() => {
     );
   }
 
+  /** ‎icon‎ הוא או צומת (מסכת אייקון) או טקסט — שני המצבים מטופלים כאן */
   function stat(cls, icon, num, label) {
     return el(`div.widget.${cls}`, { style: { cursor: 'default' } }, [
-      el('div.w-icon', { text: icon }),
+      el('div.w-icon', {}, [icon]),
       el('div', {}, [el('div.w-num', { text: String(num) }), el('div.w-label', { text: label })])
     ]);
   }

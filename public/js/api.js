@@ -69,6 +69,9 @@ const API = (() => {
     updateProject: (id, body) => call('PATCH', `/api/projects/${id}`, body),
     deleteProject: (id) => call('DELETE', `/api/projects/${id}`),
     pinProject: (id, pinned) => call(pinned ? 'POST' : 'DELETE', `/api/projects/${id}/pin`),
+    projectImages: (id) => call('GET', `/api/projects/${id}/images`),
+    uploadProjectImage: (id, body) => call('POST', `/api/projects/${id}/images`, body),
+    deleteProjectImage: (imageId) => call('DELETE', `/api/project-images/${imageId}`),
 
     reports: () => call('GET', '/api/reports'),
     search: (q) => call('GET', `/api/search?q=${encodeURIComponent(q)}`),
