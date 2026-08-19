@@ -25,6 +25,28 @@ const App = (() => {
   // חתך רשימת הפרויקטים בתפריט — 'mine' או 'all'. נשמר במכשיר, לא בשרת.
   const PROJECT_SCOPE_KEY = 'mesimon.projectScope';
 
+  /**
+   * הרוחב שממנו המערכת עוברת לפריסת נייד. אותו מספר שב-mobile.css, ולכן הוא
+   * נקרא משם דרך matchMedia ולא נכתב כאן שוב — שני מקומות היו נפרדים בשקט
+   * ברגע שאחד מהם משתנה.
+   */
+  const PHONE_QUERY = window.matchMedia('(max-width: 820px)');
+  const isPhone = () => PHONE_QUERY.matches;
+
+  /**
+   * מעבר בין פריסות בסיבוב המכשיר או בשינוי גודל החלון. בלי זה נשארו מצבים
+   * שבורים: כפתור התפריט חושב פעם אחת לפי הרוחב, וסיבוב הטלפון השאיר את
+   * הניווט בלתי נגיש או את המגירה פתוחה מעל פריסת מחשב.
+   */
+  let lastPhone = isPhone();
+  const onViewportChange = () => {
+    if (isPhone() === lastPhone) return;
+    lastPhone = isPhone();
+    closeDrawer();
+    if (state.actor) render();
+  };
+  PHONE_QUERY.addEventListener('change', onViewportChange);
+
   const may = (action) => state.permissions[action] && state.permissions[action] !== false;
   const can = (action) => state.permissions[action] === true;
   const isVendor = () => state.actor?.type === 'vendor';
@@ -60,6 +82,7 @@ const App = (() => {
       startNotifPolling();
       navigate(isVendor() ? 'vendor' : 'home');
       openTaskFromUrl();
+      registerServiceWorker();
     } catch (err) {
       if (err.status === 401) LoginView.render(root(), boot);
       else {
@@ -81,6 +104,18 @@ const App = (() => {
     if (!id) return;
     history.replaceState(null, '', location.pathname);
     TaskCardView.open(id);
+  }
+
+  /**
+   * רישום ה-Service Worker. אינו תנאי לעבודה — בלעדיו האפליקציה פשוט דורשת
+   * רשת בכל פתיחה — ולכן כשל בו נרשם ליומן ואינו מפריע לטעינה. הוא גם אינו
+   * נרשם ב-http, כי הדפדפן ממילא אינו מאפשר זאת מחוץ ל-localhost.
+   */
+  function registerServiceWorker() {
+    if (!('serviceWorker' in navigator)) return;
+    navigator.serviceWorker.register('/sw.js').catch((err) => {
+      console.warn('[משימון] רישום ה-Service Worker נכשל:', err.message);
+    });
   }
 
   async function reloadReference() {
@@ -110,6 +145,7 @@ const App = (() => {
 
   function navigate(name, params = {}) {
     state.route = { name, params };
+    closeDrawer();
     render();
   }
 
@@ -520,10 +556,9 @@ const App = (() => {
     bell.addEventListener('click', () => toggleNotifPanel(bell));
 
     return el('header.topbar', {}, [
-      el('button.icon-btn', {
-        style: { display: window.innerWidth <= 900 ? 'grid' : 'none' },
-        onclick: () => document.getElementById('sidebar')?.classList.toggle('open')
-      }, ['☰']),
+      // הנראות נקבעת ב-CSS ולא כאן: חישוב רוחב חד-פעמי ב-JS השאיר את הכפתור
+      // מוסתר אחרי סיבוב המכשיר, ואז לא הייתה דרך להגיע לניווט
+      el('button.icon-btn.drawer-btn', { onclick: toggleDrawer }, ['☰']),
       el('div.brand', {}, [UI.logo({ size: 'sm', tagline: true, variant: 'brand' })]),
       globalSearch(),
       el('div.topbar-spacer'),
@@ -577,15 +612,86 @@ const App = (() => {
     });
   }
 
+  /** סגירת מגירת הניווט. נקראת גם בניווט, גם בלחיצה על הרקע וגם ב-Escape. */
+  function closeDrawer() {
+    document.getElementById('sidebar')?.classList.remove('open');
+    document.querySelector('.sidebar-veil')?.classList.remove('open');
+  }
+
+  function toggleDrawer() {
+    const bar = document.getElementById('sidebar');
+    const veil = document.querySelector('.sidebar-veil');
+    const open = !bar?.classList.contains('open');
+    bar?.classList.toggle('open', open);
+    veil?.classList.toggle('open', open);
+  }
+
+  /**
+   * הניווט התחתון. ארבעה יעדים בלבד — אלה שנעשים מהטלפון. השאר (ניהול,
+   * דוחות, ארכיון, בורדי ספקים) נשארים במגירה, כי הם מסכים של מחשב.
+   */
+  function tabbar() {
+    const tab = (routeName, iconName, label, extra = {}) => {
+      const active = state.route.name === routeName;
+      return el(`button${active ? '.active' : ''}`, {
+        onclick: () => { closeDrawer(); navigate(routeName, extra.params ?? {}); }
+      }, [
+        el('span.ic-wrap', {}, [
+          UI.icon(iconName),
+          extra.badge ? el('span.tab-dot', { text: String(extra.badge) }) : null
+        ]),
+        el('span.lbl', { text: label })
+      ]);
+    };
+
+    if (isVendor()) {
+      return el('nav.tabbar', {}, [
+        tab('vendor', 'my-tasks', 'המשימות שלי'),
+        el('button', { onclick: () => toggleNotifPanel(null) }, [
+          el('span.ic-wrap', {}, [UI.icon('bell'), state.unread ? el('span.tab-dot', { text: String(state.unread) }) : null]),
+          el('span.lbl', { text: 'התראות' })
+        ])
+      ]);
+    }
+
+    return el('nav.tabbar', {}, [
+      tab('home', 'my-tasks', 'המשימות שלי'),
+      tab('board', 'board', 'הלוח'),
+      el('button', { onclick: () => toggleNotifPanel(null) }, [
+        el('span.ic-wrap', {}, [UI.icon('bell'), state.unread ? el('span.tab-dot', { text: String(state.unread) }) : null]),
+        el('span.lbl', { text: 'התראות' })
+      ]),
+      el(`button${state.route.name === 'admin' ? '.active' : ''}`, { onclick: toggleDrawer }, [
+        el('span.ic-wrap', {}, [UI.icon('admin')]),
+        el('span.lbl', { text: 'עוד' })
+      ])
+    ]);
+  }
+
   function render() {
     const content = el('main.main#main');
+    const phone = isPhone();
+
     UI.mount(root(), el('div.shell', {}, [
       topbar(),
-      el('div.body', {}, [sidebar(), content])
+      el('div.body', {}, [sidebar(), content]),
+      // הרקע והניווט התחתון נבנים תמיד; ב-CSS הם מוצגים רק בפריסת נייד
+      el('div.sidebar-veil', { onclick: closeDrawer }),
+      phone ? tabbar() : null,
+      phone && !isVendor() && may('create_task')
+        ? el('button.fab', { title: 'משימה חדשה', onclick: () => BoardView.openTaskDialog() }, ['＋'])
+        : null
     ]));
     UI.refitLogos(); // הסמל נבנה מחדש בכל רינדור — מיישרים את הכיתוב לרוחב השם
+
     const route = ROUTES[state.route.name] ?? ROUTES.home;
-    route.render(content, state.route.params);
+    /**
+     * בטלפון מסך הבית הוא דשבורד אחר לגמרי, ולא הדשבורד של המחשב בפריסה צרה:
+     * שם יש טבלה ברוחב מינימלי של 920 פיקסלים וסרגל של שש רשימות נפתחות, ואין
+     * דרך לכווץ אותם למשהו שאפשר לעבוד בו על 390 פיקסלים.
+     */
+    if (phone && state.route.name === 'home' && !isVendor()) MobileView.render(content);
+    else route.render(content, state.route.params);
   }
 
   /** רענון התצוגה הנוכחית לאחר שינוי נתונים */
@@ -613,7 +719,7 @@ const App = (() => {
    * ובלי לאבד גלילה, ולכן עדכון משימה כבר אינו מחייב בנייה מחדש של האתר.
    */
   const RELOADABLE = {
-    home: () => HomeView.reload(),
+    home: () => (isPhone() && !isVendor() ? MobileView.reload() : HomeView.reload()),
     board: () => BoardView.reload({ silent: true }),
     vendorBoards: () => BoardView.reload({ silent: true }),
     archive: () => BoardView.reload({ silent: true }),
@@ -633,7 +739,7 @@ const App = (() => {
 
   return {
     state, boot, navigate, refresh, refreshNotifications, logout, render,
-    refreshChrome, refreshView,
+    refreshChrome, refreshView, isPhone, closeDrawer,
     may, can, isVendor, userName, vendorName, project, internalBoard, vendorBoards,
     reloadReference
   };

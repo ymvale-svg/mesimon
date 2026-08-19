@@ -1,0 +1,266 @@
+/*
+ * משימון בטלפון.
+ *
+ * גיליון נפרד ולא תוספת ל-styles.css, כדי שכל מה שכאן יהיה בתוך שאילתת מדיה
+ * אחת ואי אפשר יהיה לשבור בטעות את המחשב בעריכה של הנייד. כל הכללים כאן
+ * חלים רק מתחת ל-820 פיקסלים.
+ *
+ * מה נפתר כאן, לפי סדר החומרה:
+ *  1. הסרגל העליון דרש כ-630 פיקסלים ויצר גלילה אופקית של כל המסמך — הפעמון
+ *     וכרטיס המשתמש יצאו מהמסך. בנייד הוא נבנה מחדש: לוגו, כותרת, פעמון.
+ *  2. ‎height: 100vh‎ על השלד — ‎100vh‎ בנייד הוא החלון *בלי* שורת הכתובת,
+ *     ולכן תחתית האפליקציה נמצאה מתחתיה ולא היה אפשר להגיע אליה. ‎100dvh‎
+ *     מודד את מה שנראה בפועל.
+ *  3. גופן קטן מ-16 פיקסלים בשדה קלט — ספארי מזגזג את כל הדף בכל לחיצה על
+ *     שדה, וכל השכבות הצפות מאבדות את מקומן. כל שדה כאן הוא 16 פיקסלים.
+ *  4. אזורי בטיחות — במסך עם מגרעת חצי הסרגל נחתך, והסרגל התחתון נופל על
+ *     פס המחוות. ‎env(safe-area-inset-*)‎ מטפל בשניהם.
+ *  5. מטרות נגיעה — כפתור של 24 פיקסלים אינו נלחץ באצבע. המינימום כאן 40.
+ */
+
+@media (max-width: 820px) {
+
+  /* ---------------------------------------------------------------- שלד */
+
+  :root {
+    --header-h: 52px;
+    --nav-h: 58px;   /* גובה הניווט התחתון */
+  }
+
+  /*
+   * ‎dvh‎ ולא ‎vh‎. בנייד ‎vh‎ נמדד לפי החלון הגדול (בלי שורת הכתובת), ולכן
+   * השלד היה גבוה מהשטח הנראה והתחתית נשארה מתחת לדפדפן.
+   */
+  html, body { height: 100dvh; overflow: hidden; }
+  .shell { height: 100dvh; }
+
+  /* הגלילה כולה במסך התוכן, וכך הסרגלים נשארים במקומם */
+  .main {
+    padding: 12px 12px calc(var(--nav-h) + env(safe-area-inset-bottom, 0px) + 14px);
+    -webkit-overflow-scrolling: touch;
+  }
+
+  /* ---------------------------------------------------------------- סרגל עליון */
+
+  .topbar {
+    padding: 0 10px;
+    padding-top: env(safe-area-inset-top, 0px);
+    height: calc(var(--header-h) + env(safe-area-inset-top, 0px));
+    gap: 8px;
+  }
+  /* החיפוש והכפתור "משימה חדשה" עברו לניווט התחתון ולכפתור הצף */
+  .topbar .global-search,
+  .topbar > .btn-primary { display: none; }
+  /* הכיתוב שמתחת ל-MESIMON נופל — הוא לבד רחב יותר מחצי המסך */
+  .topbar .app-logo-tagline { display: none; }
+  .topbar .app-logo-name { font-size: 16px; letter-spacing: .1em; margin-inline-end: -.1em; }
+  .topbar .user-chip .name, .topbar .user-chip .role { display: none; }
+  .topbar .user-chip { padding: 4px; }
+
+  /* ---------------------------------------------------------------- תפריט צד */
+
+  /*
+   * המגירה נשארת למסכי הניהול שאינם בניווט התחתון. נוסף לה רקע כהה שנלחץ
+   * לסגירה — עד כה הדרך היחידה לסגור הייתה הכפתור עצמו, בגודל 38 פיקסלים.
+   */
+  .sidebar {
+    position: fixed;
+    inset: calc(var(--header-h) + env(safe-area-inset-top, 0px)) 0 0 auto;
+    width: min(280px, 84vw);
+    z-index: 60;
+    transform: translateX(100%);
+    transition: transform .22s cubic-bezier(.3, .8, .3, 1);
+    box-shadow: var(--shadow-lg);
+    padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 20px);
+    overscroll-behavior: contain;
+  }
+  .sidebar.open { transform: translateX(0); }
+  .sidebar-veil {
+    position: fixed; inset: 0; z-index: 55;
+    background: rgba(15, 23, 42, .42);
+    opacity: 0; pointer-events: none; transition: opacity .22s;
+  }
+  .sidebar-veil.open { opacity: 1; pointer-events: auto; }
+  .sidebar .nav-item { min-height: 44px; }
+  /* כפתור הנעיצה היה 26 פיקסלים — לא נלחץ באצבע, ובטלפון הוא תמיד גלוי */
+  .sidebar .nav-pin { width: 40px; height: 40px; opacity: .8; visibility: visible; }
+
+  /* ---------------------------------------------------------------- ניווט תחתון */
+
+  .tabbar {
+    position: fixed; inset-inline: 0; bottom: 0; z-index: 50;
+    height: calc(var(--nav-h) + env(safe-area-inset-bottom, 0px));
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+    background: var(--surface); border-top: 1px solid var(--border);
+    display: flex; align-items: stretch;
+  }
+  .tabbar button {
+    flex: 1; border: 0; background: none; cursor: pointer;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 3px; font-size: 10.5px; color: var(--text-mute); font-family: inherit;
+    padding: 0; min-width: 0;
+  }
+  .tabbar button .ic { width: 21px; height: 21px; }
+  /* עוטף האייקון — נקודת העיגון של מונה ההתראות שמעליו */
+  .tabbar button .ic-wrap { display: grid; place-items: center; position: relative; }
+  .tabbar button.active { color: var(--brand); font-weight: 700; }
+  .tabbar button span.lbl { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+  /* מונה על אייקון ההתראות */
+  .tabbar .tab-dot {
+    position: absolute; transform: translate(-10px, -8px);
+    min-width: 15px; height: 15px; border-radius: 999px; background: var(--danger);
+    color: #fff; font-size: 9.5px; font-weight: 800; display: grid; place-items: center;
+    padding: 0 3px;
+  }
+
+  /* כפתור צף ליצירה — הפעולה שנעשית מהטלפון יותר מכל אחרת */
+  .fab {
+    position: fixed; z-index: 51;
+    inset-inline-start: 16px;
+    bottom: calc(var(--nav-h) + env(safe-area-inset-bottom, 0px) + 14px);
+    width: 52px; height: 52px; border-radius: 50%; border: 0;
+    background: var(--brand); color: #fff; font-size: 27px; font-weight: 300;
+    box-shadow: 0 6px 18px rgba(15, 118, 110, .38); cursor: pointer;
+    display: grid; place-items: center; line-height: 1;
+  }
+  .fab:active { transform: scale(.94); }
+
+  /* ---------------------------------------------------------------- שדות ומגע */
+
+  /*
+   * 16 פיקסלים בכל שדה. מתחת לזה ספארי מזגזג את הדף בלחיצה על השדה, והדף
+   * נשאר מוגדל גם אחרי היציאה ממנו — ואז כל השכבות הצפות מחושבות מול חלון
+   * שאינו מה שנראה.
+   */
+  input[type=text], input[type=email], input[type=password], input[type=date],
+  input[type=datetime-local], input[type=number], input[type=search], select, textarea {
+    font-size: 16px; padding: 10px 12px;
+  }
+  .btn { min-height: 40px; padding: 9px 14px; }
+  .btn-sm { min-height: 34px; padding: 6px 11px; font-size: 13px; }
+  .icon-btn { min-width: 40px; min-height: 40px; }
+  input[type=checkbox], input[type=radio] { width: 20px; height: 20px; }
+
+  /* ---------------------------------------------------------------- כרטיסים ומודלים */
+
+  .page-head { margin-bottom: 12px; gap: 10px; }
+  .page-head h2 { font-size: 19px; }
+  .page-head .sub { display: none; }
+  .grid.grid-2, .grid.grid-3, .grid.grid-4 { grid-template-columns: 1fr; }
+
+  /* המודל תופס את המסך: חלון צף עם שוליים על טלפון הוא בזבוז שטח */
+  .modal-backdrop { padding: 0; place-items: stretch; }
+  .modal {
+    max-width: none; max-height: none; width: 100%;
+    height: 100dvh; border-radius: 0;
+    padding-top: env(safe-area-inset-top, 0px);
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+  .modal-head { padding: 12px 14px; }
+  .modal-body { padding: 14px; }
+  .modal-foot { border-radius: 0; padding: 12px 14px; flex-wrap: wrap; }
+  .row { flex-direction: column; gap: 0; }
+
+  /* כרטיס המשימה — טור אחד, והפאנל הצדדי מתחתיו */
+  .task-detail { grid-template-columns: 1fr; }
+  .td-side { border-inline-start: 0; border-top: 1px solid var(--border); }
+  .chat { max-height: none; overflow: visible; }
+  .composer { position: static; }
+
+  /* התראות וטוסטים מעל הניווט התחתון, ובתוך אזור הבטיחות */
+  .toast-root { bottom: calc(var(--nav-h) + env(safe-area-inset-bottom, 0px) + 12px); inset-inline: 12px; }
+  .notif-pop-root {
+    top: calc(var(--header-h) + env(safe-area-inset-top, 0px) + 8px);
+    inset-inline: 10px; max-width: none;
+  }
+  .notif-panel {
+    top: calc(var(--header-h) + env(safe-area-inset-top, 0px));
+    inset-inline: 8px; width: auto; max-height: 70dvh;
+  }
+
+  /* ---------------------------------------------------------------- דשבורד הנייד */
+
+  .m-counts { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+  .m-count {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 11px;
+    padding: 9px 10px; text-align: start; cursor: pointer; min-height: 60px;
+  }
+  .m-count b { display: block; font-size: 21px; line-height: 1.15; font-variant-numeric: tabular-nums; }
+  .m-count span { font-size: 11px; color: var(--text-mute); }
+  .m-count.is-danger b { color: var(--danger); }
+  .m-count.is-warn b { color: var(--warn); }
+  .m-count.active { border-color: var(--brand); box-shadow: 0 0 0 1px var(--brand); }
+
+  /* שבבי הסינון — גלילה אופקית בתוך רצועה, ולא שבירה לשתי שורות */
+  .m-chips {
+    display: flex; gap: 6px; overflow-x: auto; padding: 2px 0 4px;
+    scrollbar-width: none;
+  }
+  .m-chips::-webkit-scrollbar { display: none; }
+  .m-chip {
+    flex: none; border: 1px solid var(--border-strong); background: var(--surface);
+    color: var(--text-soft); border-radius: 999px; padding: 7px 13px;
+    font-size: 13px; font-weight: 600; cursor: pointer; white-space: nowrap;
+    min-height: 36px; font-family: inherit;
+  }
+  .m-chip.on { background: var(--brand); border-color: var(--brand); color: #fff; }
+  .m-chip .n { opacity: .7; font-weight: 700; margin-inline-start: 3px; }
+
+  /* שורת משימה בנייד — שתי שורות, כל המידע, בלי גלילה אופקית */
+  .m-list { display: flex; flex-direction: column; gap: 7px; }
+  .m-task {
+    display: grid; grid-template-columns: 3px 22px minmax(0, 1fr) auto;
+    gap: 9px; align-items: center;
+    background: var(--surface); border: 1px solid var(--border); border-radius: 11px;
+    padding: 10px 11px; cursor: pointer; box-shadow: var(--shadow-sm);
+  }
+  .m-task .m-bar { align-self: stretch; border-radius: 2px; }
+  /*
+   * התיבה נראית 21 פיקסלים אבל נלחצת ב-43: ‎::before‎ שקוף מרחיב את שטח
+   * הלחיצה בלי להגדיל את הסימון עצמו. תיבה בגודל אצבע הייתה משתלטת על השורה.
+   */
+  .m-task .m-check {
+    width: 21px; height: 21px; accent-color: var(--ok); position: relative;
+  }
+  .m-task .m-check::before { content: ''; position: absolute; inset: -11px; }
+  .m-task .m-body { min-width: 0; }
+  .m-task .m-title {
+    font-weight: 600; font-size: 14.5px; line-height: 1.35;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .m-task .m-meta {
+    display: flex; align-items: center; gap: 6px; margin-top: 3px;
+    font-size: 11.5px; color: var(--text-mute); min-width: 0;
+  }
+  .m-task .m-meta .m-proj { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .m-task .m-side { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
+  .m-task .m-side .ic { width: 16px; height: 16px; }
+  .m-task.is-done { opacity: .58; }
+  .m-task.is-done .m-title { text-decoration: line-through; }
+
+  /* מגירת הסינון המלא */
+  .m-sheet-veil {
+    position: fixed; inset: 0; z-index: 70; background: rgba(15, 23, 42, .45);
+    display: flex; align-items: flex-end;
+  }
+  .m-sheet {
+    width: 100%; background: var(--surface);
+    border-radius: 16px 16px 0 0; padding: 12px 14px;
+    padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 14px);
+    max-height: 82dvh; overflow-y: auto;
+  }
+  .m-grab { width: 38px; height: 4px; border-radius: 3px; background: var(--border-strong); margin: 0 auto 10px; }
+
+  /* המסכים שאינם מיועדים לטלפון */
+  .m-desktop-only {
+    background: var(--warn-bg); border: 1px solid #f4d9a8; border-radius: 11px;
+    padding: 14px; color: #92400e; font-size: 13.5px; line-height: 1.6;
+  }
+}
+
+/* מסך צר במיוחד — שלוש קופסאות המונים לא נכנסות בנוחות */
+@media (max-width: 360px) {
+  .m-count b { font-size: 18px; }
+  .m-count span { font-size: 10px; }
+  .tabbar button { font-size: 9.5px; }
+}

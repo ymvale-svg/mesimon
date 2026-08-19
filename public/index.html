@@ -2,10 +2,29 @@
 <html lang="he" dir="rtl">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <!--
+    viewport-fit=cover נדרש כדי ש-env(safe-area-inset-*) יחזיר ערכים אמיתיים
+    במסך עם מגרעת; בלעדיו הדפדפן מרפד לבד והסרגלים נחתכים.
+    בלי maximum-scale ובלי user-scalable=no — חסימת הגדלה היא כשל נגישות,
+    והזום שספארי עושה מעצמו נמנע בדרך אחרת: שדות בגודל 16 פיקסלים.
+  -->
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>MESIMON</title>
+
+  <!-- התקנה כאפליקציה -->
+  <link rel="manifest" href="/manifest.webmanifest">
+  <meta name="theme-color" content="#115e59">
+  <meta name="application-name" content="משימון">
+  <meta name="description" content="ניהול המשימות והפרויקטים של הארגון — הדשבורד שלך, סינון מהיר, ופתיחת משימות מהטלפון.">
+  <!-- iOS אינו קורא את המניפסט למסך הבית, ולכן שלושת התגים האלה נדרשים בנפרד -->
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="משימון">
+  <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect width='64' height='64' rx='17' fill='%230f766e'/><rect x='15' y='17' width='24' height='5' rx='2.5' fill='white' opacity='.45'/><rect x='15' y='28' width='16' height='5' rx='2.5' fill='white' opacity='.45'/><path d='M16 44.5L25 53 48 26' fill='none' stroke='white' stroke-width='7' stroke-linecap='round' stroke-linejoin='round'/></svg>">
   <link rel="stylesheet" href="/css/styles.css">
+  <!-- אחרי הראשי: כל מה שבו נמצא בשאילתת מדיה ומכריע רק בפריסת נייד -->
+  <link rel="stylesheet" href="/css/mobile.css">
 </head>
 <body>
   <div id="app"></div>
@@ -18,6 +37,7 @@
   <script src="/js/views/login.js"></script>
   <script src="/js/views/invite.js"></script>
   <script src="/js/views/home.js"></script>
+  <script src="/js/views/mobile.js"></script>
   <script src="/js/views/grid.js"></script>
   <script src="/js/views/board.js"></script>
   <script src="/js/views/task-card.js"></script>
