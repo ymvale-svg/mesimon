@@ -333,7 +333,8 @@ textarea { resize: vertical; min-height: 76px; }
 }
 .nav-item .ic { width: 19px; height: 19px; vertical-align: 0; }
 /* בתוך תגית האייקון קטן ביחס לטקסט, אחרת הוא גובר על המילה שלצדו */
-.tag .ic { width: 1em; height: 1em; margin-inline-end: 3px; }
+/* בתגית האייקון גדול מהטקסט ולא שווה לו: בגודל הטקסט הוא נבלע ברקע הצבעוני */
+.tag .ic { width: 1.35em; height: 1.35em; margin-inline-end: 2px; }
 .nav-item .count { margin-inline-start: auto; font-size: 11.5px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 999px; padding: 0 7px; font-weight: 700; color: var(--text-soft); }
 .nav-item.active .count { background: #fff; border-color: transparent; }
 
@@ -378,13 +379,13 @@ textarea { resize: vertical; min-height: 76px; }
 
 .tag {
   display: inline-flex; align-items: center; gap: 4px;
-  padding: 1px 8px; border-radius: 999px; font-size: 11.5px; font-weight: 700;
+  padding: 1px 8px; border-radius: 999px; font-size: 11.5px; font-weight: 800;
   border: 1px solid transparent; white-space: nowrap;
 }
 .tag-low { background: #f1f5f9; color: #64748b; }
 .tag-normal { background: var(--info-bg); color: var(--info); }
-.tag-high { background: var(--warn-bg); color: var(--warn); }
-.tag-urgent { background: #fee2e2; color: var(--danger); }
+.tag-high { background: #fde9c8; color: #92400e; }
+.tag-urgent { background: #fecaca; color: #991b1b; }
 .tag-overdue { background: var(--danger); color: #fff; }
 .tag-scheduled { background: #f5f3ff; color: #7c3aed; }
 .tag-recurring { background: #ecfeff; color: #0e7490; }
@@ -1173,5 +1174,5 @@ input[type="color"] { width: 46px; height: 30px; padding: 2px; cursor: pointer; 
 /* מסכת אייקון בתוך ווידג'ט ובאזור ריק — הגודל נקבע במידות ולא בגופן */
 .w-icon .ic { width: 22px; height: 22px; }
 .e-icon .ic { width: 34px; height: 34px; opacity: .55; }
-.tk-flags .ic { width: 15px; height: 15px; }
+.tk-flags .ic { width: 17px; height: 17px; }
 .pop-icon .ic, .n-icon .ic { width: 15px; height: 15px; }

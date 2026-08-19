@@ -78,6 +78,150 @@ function inkField({ width, height, rgba }) {
   return ink;
 }
 
+/**
+ * מסיר את הטבעת החיצונית, אם יש כזו.
+ *
+ * למה: רוב האייקונים שסופקו מצוירים בתוך עיגול. בגודל 22 פיקסלים העיגול
+ * נראה מכובד, אבל בתגית בגודל 11 פיקסלים נותרים ממנו קו דק ובתוכו מקום
+ * לשלושה פיקסלים — והסמל עצמו הופך לכתם. בלי הטבעת הסמל ממלא את כל השטח
+ * וקריא גם קטן.
+ *
+ * הזיהוי אינו "העיגול הגדול ביותר": פעמון ונעץ צוירו בלי עיגול, וקו חיצוני
+ * שלהם היה נמחק בטעות. לכן נדרשות שלוש תכונות יחד — הרכיב תופס כמעט את כל
+ * התיבה, הוא דק ביחס לה, ומרחקי הפיקסלים שלו מהמרכז כמעט קבועים. התנאי
+ * השלישי הוא שמבדיל טבעת מקו של פעמון.
+ */
+function stripOuterRing(ink, width, height) {
+  /*
+   * סף נמוך בכוונה. בסף גבוה נתפס רק ליבת הקו, ושפת ההחלקה שסביבו — ערכי
+   * אלפא חלשים — נשארה במקומה; העיבוי שאחר כך הגביר אותה בחזרה לטבעת חיוורת
+   * אך נראית. בסף הזה הרכיב כולל גם את השפה, ולכן הוא נמחק שלם.
+   */
+  const THRESHOLD = 0.04;
+  const labels = new Int32Array(width * height).fill(-1);
+  const comps = [];
+
+  // סימון רכיבי קשירות (8 שכנים), בסריקה איטרטיבית ולא רקורסיבית
+  for (let start = 0; start < ink.length; start++) {
+    if (ink[start] < THRESHOLD || labels[start] !== -1) continue;
+    const id = comps.length;
+    const pixels = [];
+    let minX = width; let maxX = -1; let minY = height; let maxY = -1;
+    const stack = [start];
+    labels[start] = id;
+
+    while (stack.length) {
+      const at = stack.pop();
+      const x = at % width;
+      const y = (at - x) / width;
+      pixels.push(at);
+      if (x < minX) minX = x;
+      if (x > maxX) maxX = x;
+      if (y < minY) minY = y;
+      if (y > maxY) maxY = y;
+
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          const nx = x + dx;
+          const ny = y + dy;
+          if (nx < 0 || ny < 0 || nx >= width || ny >= height) continue;
+          const n = ny * width + nx;
+          if (labels[n] !== -1 || ink[n] < THRESHOLD) continue;
+          labels[n] = id;
+          stack.push(n);
+        }
+      }
+    }
+    comps.push({ id, pixels, minX, maxX, minY, maxY });
+  }
+
+  if (comps.length < 2) return { ink, ringRemoved: false };
+
+  // המועמד: הרכיב שתיבתו הגדולה ביותר
+  const candidate = comps.reduce((a, b) =>
+    ((b.maxX - b.minX) * (b.maxY - b.minY) > (a.maxX - a.minX) * (a.maxY - a.minY) ? b : a));
+
+  const boxW = candidate.maxX - candidate.minX;
+  const boxH = candidate.maxY - candidate.minY;
+  const fills = boxW > width * 0.8 && boxH > height * 0.8;
+  const thin = candidate.pixels.length < boxW * boxH * 0.2;
+  const square = Math.abs(boxW - boxH) < Math.max(boxW, boxH) * 0.1;
+
+  let circular = false;
+  if (fills && thin && square) {
+    const cx = (candidate.minX + candidate.maxX) / 2;
+    const cy = (candidate.minY + candidate.maxY) / 2;
+    let sum = 0;
+    for (const at of candidate.pixels) {
+      const x = at % width;
+      sum += Math.hypot(x - cx, ((at - x) / width) - cy);
+    }
+    const mean = sum / candidate.pixels.length;
+    let varSum = 0;
+    for (const at of candidate.pixels) {
+      const x = at % width;
+      varSum += (Math.hypot(x - cx, ((at - x) / width) - cy) - mean) ** 2;
+    }
+    // מרחק כמעט קבוע מהמרכז = טבעת. קו של פעמון ייתן פיזור גדול בהרבה.
+    circular = Math.sqrt(varSum / candidate.pixels.length) / (mean || 1) < 0.12;
+  }
+
+  if (!circular) return { ink, ringRemoved: false };
+
+  /*
+   * לא רק מחיקת הרכיב עצמו, אלא כל דיו שמחוץ לרדיוס הטבעת. מחיקת הרכיב לבדה
+   * הותירה בשני אייקונים קשת חיוורת — שפת ההחלקה שנפלה מתחת לסף, או קטע
+   * שנקשר לסמל דרך גשר חלש ולכן נחשב לחלק ממנו. חיתוך לפי רדיוס אינו תלוי
+   * בספים ומנקה את השאריות בוודאות.
+   */
+  const cx = (candidate.minX + candidate.maxX) / 2;
+  const cy = (candidate.minY + candidate.maxY) / 2;
+  let radiusSum = 0;
+  for (const at of candidate.pixels) {
+    const x = at % width;
+    radiusSum += Math.hypot(x - cx, ((at - x) / width) - cy);
+  }
+  const cutoff = (radiusSum / candidate.pixels.length) * 0.9;
+
+  const out = Float32Array.from(ink);
+  for (let at = 0; at < out.length; at++) {
+    if (out[at] === 0) continue;
+    const x = at % width;
+    if (Math.hypot(x - cx, ((at - x) / width) - cy) > cutoff) out[at] = 0;
+  }
+  return { ink: out, ringRemoved: true };
+}
+
+/**
+ * מעבה את הקווים. האיור שסופק מצויר בקו דק, ואחרי הקטנה לגודל של תגית הוא
+ * נראה חיוור. הרחבה של הדיו בכמה פיקסלים במקור מתורגמת לקו מלא יותר בפלט,
+ * בלי לשנות את צורת הסמל.
+ *
+ * מסננת מקסימום מופרדת — קודם אופקית ואז אנכית. כך העלות היא ‎O(n)‎ לכל ציר
+ * ולא ריבוע הרדיוס, וזה מה שמאפשר להריץ אותה על תמונה של מיליון וחצי פיקסלים.
+ */
+function thicken(ink, width, height, radius) {
+  if (radius < 1) return ink;
+  const pass = (src, w, h, horizontal) => {
+    const out = new Float32Array(src.length);
+    for (let a = 0; a < (horizontal ? h : w); a++) {
+      const len = horizontal ? w : h;
+      for (let b = 0; b < len; b++) {
+        let max = 0;
+        for (let d = -radius; d <= radius; d++) {
+          const c = b + d;
+          if (c < 0 || c >= len) continue;
+          const at = horizontal ? a * w + c : c * w + a;
+          if (src[at] > max) max = src[at];
+        }
+        out[horizontal ? a * w + b : b * w + a] = max;
+      }
+    }
+    return out;
+  };
+  return pass(pass(ink, width, height, true), width, height, false);
+}
+
 /** תיבת התוכן: הפיקסלים שיש בהם דיו, בתוספת שוליים, ומרובעת סביב מרכזה */
 function contentBox(ink, width, height, threshold = 0.06) {
   let minX = width;
@@ -168,7 +312,10 @@ for (const file of files) {
   if (!slug) { unmapped.push(file); continue; }
 
   const src = PNG.decode(fs.readFileSync(path.join(SRC, file)));
-  const ink = inkField(src);
+  const raw = inkField(src);
+  const { ink: unringed, ringRemoved } = stripOuterRing(raw, src.width, src.height);
+  // עיבוי יחסי לרוחב המקור, כדי שכל האייקונים ייצאו באותו משקל קו
+  const ink = thicken(unringed, src.width, src.height, Math.round(src.width * 0.005));
   const box = contentBox(ink, src.width, src.height);
   const scaled = downscale(ink, src.width, src.height, box, SIZE);
   const buf = PNG.encode(SIZE, SIZE, scaled, 4);
@@ -177,7 +324,8 @@ for (const file of files) {
   const before = fs.statSync(path.join(SRC, file)).size;
   console.log(
     `  ${slug.padEnd(9)} ${String(src.width).padStart(4)}px → ${SIZE}px   ` +
-    `${(before / 1024).toFixed(0).padStart(4)}KB → ${(buf.length / 1024).toFixed(1).padStart(5)}KB   ${base}`
+    `${(before / 1024).toFixed(0).padStart(4)}KB → ${(buf.length / 1024).toFixed(1).padStart(5)}KB   ` +
+    `${ringRemoved ? 'הטבעת הוסרה' : 'בלי טבעת'}   ${base}`
   );
   done++;
 }
