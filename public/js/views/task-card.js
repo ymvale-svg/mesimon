@@ -299,6 +299,13 @@ const TaskCardView = (() => {
         task = data.task;
         draw(modalRef.box.querySelector('.task-detail'));
         refreshBackground();
+      },
+      onDelete: async (comment) => {
+        const data = await API.deleteComment(comment.id);
+        task = data.task;
+        draw(modalRef.box.querySelector('.task-detail'));
+        refreshBackground();
+        UI.success('ההודעה נמחקה');
       }
     });
   }
@@ -483,7 +490,33 @@ const TaskCardView = (() => {
           style: { marginTop: '4px' }
         })
       ])),
-      sec('פרויקט', el('div', { text: task.projectName ?? '—' })),
+      /**
+       * הפרויקט נבחר כאן, וכך משימה עוברת מפרויקט לפרויקט — וגם משימה שנפתחה
+       * ללא פרויקט מקבלת אחד. עד כה זו הייתה שורת טקסט, והדרך היחידה לשנות
+       * הייתה "עריכה מלאה".
+       */
+      sec('פרויקט', (() => {
+        if (!task.permissions.edit) return el('div', { text: task.projectName ?? 'ללא פרויקט' });
+        const select = UI.select(
+          [{ value: '', label: 'ללא פרויקט' },
+            ...App.state.projects.map((p) => ({ value: String(p.id), label: p.name }))],
+          String(task.projectId ?? '')
+        );
+        select.addEventListener('change', async () => {
+          try {
+            await API.updateTask(task.id, { projectId: select.value || null });
+            UI.success(select.value
+              ? `המשימה הועברה ל"${App.project(Number(select.value))?.name}"`
+              : 'המשימה הוסרה מהפרויקט');
+            await reload();
+            refreshBackground();
+          } catch (err) {
+            UI.error(err);
+            select.value = String(task.projectId ?? '');
+          }
+        });
+        return select;
+      })()),
       sec('מחלקה', el('div', { text: task.departmentName ?? 'ללא שיוך' })),
       task.dependency
         ? sec('תלות במשימה', el('a', { onclick: () => open(task.dependency.id), style: { cursor: 'pointer' } },

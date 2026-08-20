@@ -100,6 +100,7 @@ const HomeView = (() => {
       el('div.grid.grid-2.mt', { style: { alignItems: 'start' } }, [
         el('div.flex-col', { style: { gap: '14px' } }, [
           ...myTasksCards(data.tasks.mine),
+          departmentTasksCard(data.tasks.department ?? []),
           doneCard(data.tasks.recentlyDone ?? [], data.archiveAfterDays ?? 3),
           App.may('approve_vendor_output') || App.isVendor()
             ? approvalCard(data.tasks.awaitingApproval)
@@ -201,7 +202,7 @@ const HomeView = (() => {
    * כשיש עשרים אי אפשר לסרוק אותו — ולכן כל המידע נדחס לשורה: פרויקט,
    * כותרת, סטטוס ויעד, וסימני הדחיפות דווקא בקצה, במקום שהעין נחה בו.
    */
-  function taskRow(task) {
+  function taskRow(task, { showAssignee = false } = {}) {
     const due = UI.dueLabel(task.dueDate);
     const flags = [
       task.overdue ? el('span.text-danger', { title: `באיחור — יעד ${UI.formatDate(task.dueDate)}` }, [UI.icon('overdue')]) : null,
@@ -220,7 +221,7 @@ const HomeView = (() => {
       // הפס בצבע הפרויקט — אותו סימן שמופיע בטבלה ובקנבן
       el('span.tk-bar', { style: { background: task.projectColor ?? 'transparent' } }),
       el('span', {}, [completeBox(task)]),
-      el('span.tk-project', { text: task.projectName ?? '—' }),
+      el('span.tk-project', { text: (showAssignee ? task.assigneeName : task.projectName) ?? '—' }),
       el('span.tk-title', { text: task.title }),
       UI.statusTag(task),
       el('span.tk-due', {
@@ -318,6 +319,44 @@ const HomeView = (() => {
    * רשימת המשימות האישית מפוצלת לשתי קבוצות מופרדות — מחלקתי וארגוני.
    * רמת המשימה מגיעה כבר בנתוני דף הבית (level), ולכן אין צורך בטעינה נוספת.
    */
+  /**
+   * משימות המחלקה שאינן שלי. מנהל מחלקה צריך לראות במה הצוות עסוק בלי לעבור
+   * ללוח ולסנן, ולכן זהו כרטיס נפרד ולא ערבוב לתוך "המשימות שלי" — הרשימה
+   * האישית היא מה שעליי לעשות, וזו תמונת מצב של אחרים.
+   */
+  function departmentTasksCard(tasks) {
+    if (!tasks.length) return null;
+    const sorted = byUrgency(tasks);
+    const shown = sorted.slice(0, LIST_MAX);
+
+    return el('div.card', {}, [
+      el('div.card-head', {}, [
+        el('h3', { text: 'המשימות במחלקה' }),
+        el('span.mute-sm', { text: [App.state.actor.department, shownLabel(shown.length, sorted.length, 'משימה אחת', 'משימות')].filter(Boolean).join(' · ') }),
+        el('div.spacer'),
+        el('button.btn.btn-sm', {
+          onclick: () => App.navigate('board', { departmentId: App.state.actor.departmentId })
+        }, ['לכל המשימות'])
+      ]),
+      el('div.card-pad', {}, [
+        el('div.task-table', {}, [
+          scrollBox([
+            el('div.task-table-head', {}, [
+              el('span'), el('span'),
+              el('span', { text: 'אחראי' }),
+              el('span', { text: 'משימה' }),
+              el('span', { text: 'סטטוס' }),
+              el('span', { text: 'יעד' }),
+              el('span')
+            ]),
+            // שורת המחלקה מציגה את האחראי במקום הפרויקט — זה המידע שחסר כאן
+            ...shown.map((t) => taskRow(t, { showAssignee: true }))
+          ], { maxHeight: '300px', extraClass: '.flex-col' })
+        ])
+      ])
+    ]);
+  }
+
   function myTasksCards(tasks) {
     // ספק אינו משויך למחלקה ואינו מקבל משימות ארגוניות — עבורו נשארת רשימה אחת
     if (App.isVendor()) {
@@ -342,12 +381,29 @@ const HomeView = (() => {
    * חתך מחלקתי מרוכז — שורה למחלקה, ולחיצה עליה פותחת את הלוח מסונן לאותה מחלקה.
    * 'באיחור' ו'דחוף' נשארים שני מצבים נפרדים גם כאן, בשתי עמודות.
    */
+  /**
+   * החתך המחלקתי מקופל כברירת מחדל. הוא כלי בקרה שמסתכלים בו מדי פעם, ולא
+   * מה שההנהלה צריכה לראות בפתיחת המסך — ופרוש הוא דוחק את המשימות עצמן
+   * מטה. מצב הקיפול נשמר במכשיר.
+   */
+  const DEPT_CUT_KEY = 'mesimon.deptCutOpen';
+
   function departmentCutCard(rows) {
     const list = (rows ?? []).filter((d) => d.people || d.open || d.overdue);
     if (!list.length) return null;
+    const open = localStorage.getItem(DEPT_CUT_KEY) === '1';
 
     const cell = (value, tagClass) =>
       el('td', {}, [value ? el(`span.tag.${tagClass}`, {}, [String(value)]) : el('span.mute-sm', { text: '—' })]);
+
+    const body = el('div', { style: { display: open ? '' : 'none' } });
+    const toggle = el('button.btn.btn-sm', {}, [open ? 'הסתרה' : 'הצגה']);
+    toggle.addEventListener('click', () => {
+      const nowOpen = body.style.display === 'none';
+      body.style.display = nowOpen ? '' : 'none';
+      toggle.textContent = nowOpen ? 'הסתרה' : 'הצגה';
+      localStorage.setItem(DEPT_CUT_KEY, nowOpen ? '1' : '0');
+    });
 
     return el('div.card.mt', {}, [
       el('div.card-head', {}, [
@@ -356,8 +412,10 @@ const HomeView = (() => {
           text: `${countLabel(list.length, 'מחלקה אחת', 'מחלקות')} · לחיצה על מחלקה פותחת את הלוח שלה`
         }),
         el('div.spacer'),
+        toggle,
         el('button.btn.btn-sm', { onclick: () => App.navigate('reports') }, ['לדוחות המלאים'])
       ]),
+      UI.mount(body,
       // התיבה על ‎.table-wrap‎ עצמו ולא סביבו: הוא כבר אזור הגלילה של הטבלה,
       // ורק כך כותרת העמודות הדביקה (‎th sticky‎) נשארת גלויה בזמן הגלילה
       el('div.table-wrap.feed-scroll', { style: { border: '0' } }, [
@@ -384,7 +442,7 @@ const HomeView = (() => {
             cell(d.urgent, 'tag-urgent')
           ])))
         ])
-      ])
+      ]))
     ]);
   }
 

@@ -649,7 +649,7 @@ const UI = (() => {
    * ‎onSend(body, internal, files)‎ הוא זה שיודע לאן ההודעה נשלחת ומה נטען
    * מחדש אחריה; כאן רק האיסוף והתצוגה.
    */
-  function commentThread({ comments = [], canComment = false, seeInternal = false, onSend }) {
+  function commentThread({ comments = [], canComment = false, seeInternal = false, onSend, onDelete = null }) {
     const names = App.state.users.map((u) => u.name);
     const input = el('textarea', { placeholder: 'הוספת תגובה… ניתן לתייג עמיתים באמצעות @שם' });
     const internalCheck = el('input', { type: 'checkbox' });
@@ -855,7 +855,22 @@ const UI = (() => {
           images.length ? mediaGrid(images, previewable) : null,
           c.body ? el('div.c-text', {}, [renderMentions(c.body, names)]) : null,
           rest.length ? fileChips(rest) : null,
-          el('time.b-time', { text: formatDateTime(c.createdAt) })
+          el('div.b-foot', {}, [
+            el('time.b-time', { text: formatDateTime(c.createdAt) }),
+            // מחיקה רק בהודעה שלי — הכפתור מופיע בריחוף כדי שלא יילחץ בטעות
+            mine && onDelete
+              ? el('button.b-del', {
+                  title: 'מחיקת ההודעה',
+                  onclick: async () => {
+                    const what = files.length
+                      ? 'למחוק את ההודעה? הקבצים שצורפו אליה יימחקו איתה.'
+                      : 'למחוק את ההודעה?';
+                    if (!await confirm(what, { title: 'מחיקת הודעה', danger: true, okText: 'מחיקה' })) return;
+                    try { await onDelete(c); } catch (err) { error(err); }
+                  }
+                }, ['🗑'])
+              : null
+          ])
         ])
       ]);
     };

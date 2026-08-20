@@ -34,24 +34,62 @@ const BoardView = (() => {
     view.selection.clear();
     if (scopeChanged) GridView.resetGrouping();
 
+    /**
+     * סדר העדיפות: מה שהועבר בניווט (למשל לחיצה על ווידג'ט "באיחור") גובר,
+     * ואחריו מה שנשמר מהפעם הקודמת. כך קיצור דרך מהדשבורד עדיין עובד, אבל
+     * פתיחה רגילה של הלוח מחזירה את החתך שהמשתמש עבד בו.
+     */
+    const saved = readSaved(params.archived ? 'archive' : currentScope);
+    const pick = (key, fromParams) => (fromParams !== undefined && fromParams !== null && fromParams !== ''
+      ? fromParams
+      : (saved[key] ?? ''));
+
     filters = {
       scope: currentScope,
-      projectId: params.projectId ?? filtersKeep('projectId', params),
-      assignee: params.mine ? `${App.isVendor() ? 'vendor' : 'user'}:${App.state.actor.id}` : (params.assignee ?? ''),
-      priority: params.priority ?? '',
-      status: params.status ?? '',
-      boardId: params.boardId ?? '',
-      departmentId: params.departmentId ?? '',
+      projectId: params.projectId ?? (params.keepFilters ? filtersKeep('projectId', params) : pick('projectId')),
+      assignee: params.mine
+        ? `${App.isVendor() ? 'vendor' : 'user'}:${App.state.actor.id}`
+        : pick('assignee', params.assignee),
+      priority: pick('priority', params.priority),
+      status: pick('status', params.status),
+      boardId: pick('boardId', params.boardId),
+      departmentId: pick('departmentId', params.departmentId),
+      // חיפוש טקסט לא נשמר בכוונה
       q: '',
       archived: params.archived ? '1' : '',
-      onlyOverdue: !!params.overdue,
-      pendingReview: !!params.pendingReview
+      onlyOverdue: params.overdue !== undefined ? !!params.overdue : !!saved.onlyOverdue,
+      pendingReview: params.pendingReview !== undefined ? !!params.pendingReview : !!saved.pendingReview
     };
 
     await load();
   }
 
   const filtersKeep = (key, params) => (params.keepFilters ? filters[key] : '');
+
+  /**
+   * החתך נשמר במכשיר, בנפרד לכל תצוגה (פנימי / ספקים / ארכיון) — מי שעובד
+   * תמיד בחתך אחד לא יבחר אותו מחדש בכל פתיחה.
+   *
+   * ‎q‎ אינו נשמר: מחרוזת חיפוש היא חיפוש חד-פעמי, ולא הגדרת עבודה. לוח
+   * שנפתח עם חיפוש ישן נראה כאילו חסרות בו משימות.
+   */
+  const FILTER_KEY = 'mesimon.boardFilters';
+  const PERSISTED = ['projectId', 'assignee', 'priority', 'status', 'boardId', 'departmentId', 'onlyOverdue', 'pendingReview'];
+
+  const readSaved = (scope) => {
+    try {
+      return JSON.parse(localStorage.getItem(FILTER_KEY) ?? '{}')?.[scope] ?? {};
+    } catch { return {}; }
+  };
+
+  function saveFilters() {
+    try {
+      const all = JSON.parse(localStorage.getItem(FILTER_KEY) ?? '{}');
+      const key = filters.archived === '1' ? 'archive' : currentScope;
+      all[key] = Object.fromEntries(PERSISTED.map((k) => [k, filters[k]]));
+      localStorage.setItem(FILTER_KEY, JSON.stringify(all));
+    } catch { /* מצב פרטי — החתך פשוט לא ייזכר */ }
+  }
 
   async function ensureDepartments() {
     if (!isOrgWide() || departments.length) return;
@@ -153,7 +191,7 @@ const BoardView = (() => {
   }
 
   function toolbar() {
-    const set = (key, value) => { filters[key] = value; load(); };
+    const set = (key, value) => { filters[key] = value; saveFilters(); load(); };
 
     const projectOptions = [{ value: '', label: 'כל הפרויקטים' },
       ...App.state.projects.map((p) => ({ value: p.id, label: p.name }))];
@@ -284,6 +322,18 @@ const BoardView = (() => {
       ], '', { onchange: (e) => e.target.value && run('assignee', e.target.value) }),
       UI.select([{ value: '', label: 'שינוי עדיפות…' }, ...App.state.priorities.map((p) => ({ value: p.key, label: p.label }))], '', {
         onchange: (e) => e.target.value && run('priority', e.target.value)
+      }),
+      /**
+       * העברה בין פרויקטים. כאן ולא רק בתא הפרויקט, כי בקיבוץ לפי פרויקט —
+       * שהוא ברירת המחדל — אין בכלל עמודת פרויקט, ואז לא הייתה דרך להעביר.
+       * ‎__none__‎ ולא ערך ריק, כי ריק הוא הכיתוב "העברה לפרויקט…" עצמו.
+       */
+      UI.select([
+        { value: '', label: 'העברה לפרויקט…' },
+        { value: '__none__', label: 'ללא פרויקט' },
+        ...App.state.projects.map((p) => ({ value: String(p.id), label: p.name }))
+      ], '', {
+        onchange: (e) => e.target.value && run('project', e.target.value === '__none__' ? '' : e.target.value)
       }),
       el('button.btn.btn-sm', { onclick: () => run('archive', filters.archived === '1' ? 0 : 1) },
         [filters.archived === '1' ? '↩ החזרה מארכיון' : '🗄 העברה לארכיון']),

@@ -1068,6 +1068,18 @@ router.post('/api/tasks/bulk', async (req, res, ctx) => {
           type, Number(rawId), boardId, status, D.nowIso(), task.id);
         D.audit(task.id, actorRef(actor), 'updated', `שינוי אחראי (פעולת אצווה)`);
         notifyAssignment(task.id, type, Number(rawId), task.title, actor);
+      } else if (action === 'project') {
+        /**
+         * העברה בין פרויקטים. ‎value‎ ריק פירושו הסרה מפרויקט, ולכן נבדק
+         * במפורש ולא דרך ‎if (value)‎ — אחרת לא הייתה דרך להוציא משימה
+         * מפרויקט בפעולת אצווה.
+         */
+        if (!mayOnTask(actor, 'edit_delete_task', task, project)) throw forbidden();
+        const target = value ? Number(value) : null;
+        if (target && !D.get('SELECT 1 FROM projects WHERE id = ?', target)) throw badRequest('הפרויקט לא נמצא');
+        D.run('UPDATE tasks SET project_id = ? WHERE id = ?', target, task.id);
+        D.audit(task.id, actorRef(actor), 'updated',
+          target ? `הועברה לפרויקט "${D.get('SELECT name FROM projects WHERE id = ?', target).name}"` : 'הוסרה מהפרויקט');
       } else if (action === 'priority') {
         if (!mayOnTask(actor, 'edit_delete_task', task, project)) throw forbidden();
         D.run('UPDATE tasks SET priority = ? WHERE id = ?', value, task.id);
@@ -1648,6 +1660,32 @@ router.get('/api/home', async (req, res, ctx) => {
     .filter((t) => t.isFinal && t.completedAt)
     .sort((a, b) => new Date(b.completedAt) - new Date(a.completedAt));
 
+  /**
+   * משימות המחלקה שאינן שלי. מנהל מחלקה צריך לראות במה הצוות שלו עסוק בלי
+   * לעבור ללוח ולסנן — זה מה שהופך את דף הבית שלו לכלי ניהול ולא רק לרשימה
+   * אישית. ההיקף נגזר מאותה הרשאה שקובעת מה הוא רואה בכל מקום אחר, ולכן גם
+   * עובד שקיבל הרשאה אישית לראות את המחלקה מקבל את הכרטיס.
+   */
+  const seesDepartment = !isVendor(actor)
+    && P.level(actor, 'view_internal_board') === 'department'
+    && actor.departmentId;
+
+  const departmentTasks = seesDepartment
+    ? D.all(
+        `SELECT t.* FROM tasks t
+           JOIN boards b ON b.id = t.board_id
+          WHERE b.type = 'internal' AND t.archived = 0
+            AND (t.activate_at IS NULL OR t.activate_at <= ?)
+            AND NOT (t.assignee_type = 'user' AND t.assignee_id = ?)
+            AND (
+              t.department_id = ?
+              OR (t.department_id IS NULL AND t.assignee_type = 'user'
+                  AND t.assignee_id IN (SELECT id FROM users WHERE department_id = ?))
+            )`,
+        D.nowIso(), actor.id, actor.departmentId, actor.departmentId
+      ).map((t) => shapeTask(t, actor)).filter((t) => !t.isFinal)
+    : [];
+
   let awaitingApproval = [];
   if (P.may(actor, 'approve_vendor_output')) {
     awaitingApproval = D.all(
@@ -1686,7 +1724,7 @@ router.get('/api/home', async (req, res, ctx) => {
       urgent: openMine.filter((t) => t.priority === 'urgent').length,
       awaitingApproval: awaitingApproval.length
     },
-    tasks: { mine: openMine, awaitingApproval, recentlyDone },
+    tasks: { mine: openMine, awaitingApproval, recentlyDone, department: departmentTasks },
     // כמה ימים משימה שהושלמה נשארת כאן — הממשק אומר זאת למשתמש במקום להסתיר
     archiveAfterDays: Number(D.getSetting('archive_done_after_days', 3)),
     feed,
@@ -2790,6 +2828,41 @@ router.delete('/api/templates/:id', async (req, res, ctx) => {
   requireFullPerm(actor, 'create_project');
   D.run('DELETE FROM templates WHERE id = ?', Number(ctx.params.id));
   sendJson(res, 200, { ok: true });
+});
+
+/**
+ * מחיקת תגובה. רק הכותב שלה, ובלי חלון זמן: הודעה שנשלחה בטעות או עם טעות
+ * צריכה להיות ניתנת להסרה גם כמה שעות אחר כך.
+ *
+ * מנהל מערכת אינו מוחק תגובות של אחרים — שיחה שמנהל יכול לערוך בדיעבד אינה
+ * תיעוד שאפשר להסתמך עליו, וכל המערכת נשענת על כך שהשרשור הוא מה שנאמר.
+ * מי שצריך להסיר תוכן פוגעני יכול למחוק את המשימה כולה.
+ */
+router.delete('/api/comments/:id', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  const comment = D.get('SELECT * FROM comments WHERE id = ?', Number(ctx.params.id));
+  if (!comment) throw notFound('התגובה לא נמצאה');
+  const task = getTaskOr404(comment.task_id);
+  assertVisible(actor, task);
+
+  const myType = isVendor(actor) ? 'vendor' : 'user';
+  if (comment.author_type !== myType || comment.author_id !== actor.id) {
+    throw forbidden('אפשר למחוק רק תגובות שכתבת');
+  }
+
+  // הקבצים שצורפו להודעה נמחקים איתה — הם היו חלק ממנה ולא של המשימה
+  for (const att of D.all('SELECT * FROM attachments WHERE comment_id = ?', comment.id)) {
+    try { fs.unlinkSync(path.join(D.UPLOADS_DIR, att.stored_name)); } catch { /* אולי כבר נמחק */ }
+    D.run('DELETE FROM attachments WHERE id = ?', att.id);
+  }
+  D.run('DELETE FROM comments WHERE id = ?', comment.id);
+  D.audit(task.id, actorRef(actor), 'comment', 'תגובה נמחקה על ידי כותבה');
+
+  // אותה תשובה שמחזירה הוספת תגובה, כדי שהקורא יצייר מחדש באותה דרך
+  const item = comment.checklist_item_id
+    ? shapeChecklistItem(D.get('SELECT * FROM checklist_items WHERE id = ?', comment.checklist_item_id), actor)
+    : null;
+  sendJson(res, 200, { task: shapeTask(getTaskOr404(task.id), actor, { withDetails: true }), item });
 });
 
 // --- חיפוש גלובלי (כולל ארכיון) ---

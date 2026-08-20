@@ -147,6 +147,12 @@ const ChecklistItemView = (() => {
         onSend: async (body, internal, files) => {
           const r = await API.addChecklistComment(item.id, { body, internal, files });
           refresh(r.item);
+        },
+        onDelete: async (comment) => {
+          const r = await API.deleteComment(comment.id);
+          if (r.item) refresh(r.item);
+          onClosed?.();
+          UI.success('ההודעה נמחקה');
         }
       })
     );

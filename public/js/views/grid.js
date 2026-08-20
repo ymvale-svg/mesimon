@@ -37,6 +37,15 @@ const GridView = (() => {
 
   const defaultGroupBy = (scope) => (scope === 'vendors' ? 'board' : 'project');
 
+  /**
+   * בטלפון העמודות שאינן הכרחיות אינן נבנות כלל, ולא רק מוסתרות ב-CSS:
+   * בפריסת טבלה קבועה רוחבי ה-colgroup מחייבים גם כשהתא מוסתר, ולכן הסתרה
+   * לבדה השאירה את הטבלה רחבה מהמסך ואילצה גלילה אופקית. מה שנשאר בטלפון:
+   * שם המשימה, נקודת הסטטוס, נקודת העדיפות והיעד.
+   */
+  const phone = () => (typeof App !== 'undefined' && App.isPhone ? App.isPhone() : false);
+  const slim = () => phone();
+
   // ------------------------------------------------------------- קיבוץ
 
   function buildGroups(tasks, groupBy) {
@@ -173,13 +182,22 @@ const GridView = (() => {
   // ------------------------------------------------------------- תאים
 
   /** תא סטטוס — צבוע במלוא רוחב התא, לחיצה פותחת בחירה */
+  /**
+   * סטטוס ועדיפות כנקודת צבע וטקסט, ולא כתגית צבועה במלוא רוחב התא.
+   *
+   * התגית הצבועה אכלה 270 פיקסלים משתי עמודות, ובלוח צר זה בא על חשבון שם
+   * המשימה — שהוא המידע העיקרי בשורה. נקודה בצבע הסטטוס שומרת על הזיהוי
+   * במבט, והטקסט לצדה שומר על השם: אייקון לבדו לא היה עובד כאן, כי לסטטוס
+   * שהמשתמש מוסיף בעצמו אין אייקון מוגדר.
+   */
   function statusCell(task) {
     const cell = el('td.cell-status', {});
-    const chip = el('div.status-chip', {
-      style: { background: task.statusColor },
-      text: task.statusLabel,
-      title: task.canChangeStatus ? 'לחיצה לשינוי סטטוס' : task.statusLabel
-    });
+    const chip = el('div.dot-chip', {
+      title: task.canChangeStatus ? `${task.statusLabel} — לחיצה לשינוי` : task.statusLabel
+    }, [
+      el('span.dc-dot', { style: { background: task.statusColor } }),
+      el('span.dc-text', { text: task.statusLabel })
+    ]);
     if (task.canChangeStatus) {
       chip.classList.add('editable');
       chip.addEventListener('click', (e) => {
@@ -203,10 +221,18 @@ const GridView = (() => {
   function priorityCell(task) {
     const colors = Object.fromEntries(App.state.priorities.map((p) => [p.key, p.color]));
     const cell = el('td.cell-status', {});
-    const chip = el('div.status-chip', {
-      style: { background: colors[task.priority] ?? '#94a3b8' },
-      text: task.priorityLabel
-    });
+    /**
+     * בעדיפות "רגיל" — שהיא ברירת המחדל של רוב המשימות — מוצגת נקודה בלבד.
+     * המילה "רגיל" בכל שורה היא רעש שאינו מוסיף דבר; מה שצריך לבלוט הוא
+     * החריג, ולכן דחוף וגבוה מקבלים גם טקסט.
+     */
+    const quiet = task.priority === 'normal' || task.priority === 'low';
+    const chip = el(`div.dot-chip${quiet ? '.is-quiet' : ''}`, {
+      title: task.canEdit ? `${task.priorityLabel} — לחיצה לשינוי` : task.priorityLabel
+    }, [
+      el('span.dc-dot', { style: { background: colors[task.priority] ?? '#94a3b8' } }),
+      quiet ? null : el('span.dc-text', { text: task.priorityLabel })
+    ]);
     if (task.canEdit) {
       chip.classList.add('editable');
       chip.addEventListener('click', (e) => {
@@ -223,6 +249,38 @@ const GridView = (() => {
       });
     }
     cell.appendChild(chip);
+    return cell;
+  }
+
+  /**
+   * תא הפרויקט הוא גם הדרך להעביר משימה מפרויקט לפרויקט: לחיצה פותחת רשימה,
+   * ובה גם "ללא פרויקט". זו הפעולה שהתבקשה, והמקום הטבעי לה הוא התא שמציג
+   * את הפרויקט — ולא טופס עריכה מלא.
+   */
+  function projectCell(task) {
+    const cell = el('td.cell-project', {});
+    const inner = el('div.proj-box', {}, task.projectName
+      ? [el('span.project-dot', { style: { background: task.projectColor } }), el('span.pb-name', { text: task.projectName })]
+      : [el('span.mute-sm', { text: 'ללא פרויקט' })]);
+
+    if (task.canEdit) {
+      inner.classList.add('editable');
+      inner.title = 'לחיצה להעברה לפרויקט אחר';
+      inner.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const options = [{ id: '', name: 'ללא פרויקט', color: null }, ...App.state.projects];
+        popover(inner, el('div.popover-list', {}, options.map((p) =>
+          el('button.popover-option', {
+            onclick: () => patch(task, { projectId: p.id === '' ? null : p.id })
+          }, [
+            el('span.swatch', { style: { background: p.color ?? '#e2e8f0' } }),
+            p.name,
+            String(p.id) === String(task.projectId ?? '') ? el('span.check', { text: '✓' }) : null
+          ])
+        )));
+      });
+    }
+    cell.appendChild(inner);
     return cell;
   }
 
@@ -367,19 +425,15 @@ const GridView = (() => {
           ])
         : null,
       titleCell(task),
-      showBoard ? el('td.cell-board', {}, [
+      showBoard && !slim() ? el('td.cell-board', {}, [
         el(`span.tag.${task.boardType === 'vendor' ? 'tag-vendor' : 'tag-internal'}`, {}, [task.boardName ?? '—'])
       ]) : null,
-      state.groupBy !== 'project'
-        ? el('td.cell-project', {}, task.projectName
-            ? [el('span.project-dot', { style: { background: task.projectColor } }), task.projectName]
-            : ['—'])
-        : null,
-      assigneeCell(task),
+      state.groupBy !== 'project' && !slim() ? projectCell(task) : null,
+      slim() ? null : assigneeCell(task),
       statusCell(task),
       priorityCell(task),
       dueCell(task),
-      progressCell(task)
+      slim() ? null : progressCell(task)
     ]);
     return row;
   }
@@ -533,14 +587,20 @@ const GridView = (() => {
           el('colgroup', {}, [
             el('col', { style: { width: '5px' } }),
             ctx.selectable ? el('col', { style: { width: '34px' } }) : null,
-            el('col'), // כותרת — תופסת את השאר
-            showBoard ? el('col', { style: { width: '150px' } }) : null,
-            state.groupBy !== 'project' ? el('col', { style: { width: '150px' } }) : null,
-            el('col', { style: { width: '180px' } }),
-            el('col', { style: { width: '150px' } }),
-            el('col', { style: { width: '120px' } }),
-            el('col', { style: { width: '140px' } }),
-            el('col', { style: { width: '175px' } })
+            /*
+             * בטלפון רוחב הכותרת נקבע באחוזים ולא כ-auto. בפריסה קבועה חלוקת
+             * השארית לעמודות ה-auto לא נתנה לכותרת את מה שהתפנה, והיא יצאה
+             * צרה מכל השאר — בדיוק ההפוך ממה שנדרש. אחוז הוא חד-משמעי.
+             */
+            slim() ? el('col', { style: { width: '56%' } }) : el('col'),
+            showBoard && !slim() ? el('col', { style: { width: '150px' } }) : null,
+            state.groupBy !== 'project' && !slim() ? el('col', { style: { width: '150px' } }) : null,
+            slim() ? null : el('col', { style: { width: '180px' } }),
+            // סטטוס ועדיפות התכווצו מ-150 ומ-120 — הרוחב שהתפנה עובר לכותרת
+            el('col', { style: { width: slim() ? '34px' : '104px' } }),
+            el('col', { style: { width: slim() ? '30px' : '74px' } }),
+            el('col', { style: { width: slim() ? '76px' : '140px' } }),
+            slim() ? null : el('col', { style: { width: '175px' } })
           ]),
           el('thead', {}, [
             el('tr', {}, [
@@ -559,13 +619,13 @@ const GridView = (() => {
                 })
               ]) : null,
               el('th', { text: 'משימה' }),
-              showBoard ? el('th', { text: 'בורד' }) : null,
-              state.groupBy !== 'project' ? el('th', { text: 'פרויקט' }) : null,
-              el('th', { text: 'אחראי' }),
-              el('th', { text: 'סטטוס' }),
-              el('th', { text: 'עדיפות' }),
-              el('th', { text: 'תאריך יעד' }),
-              el('th', { text: 'התקדמות' })
+              showBoard && !slim() ? el('th.cell-board', { text: 'בורד' }) : null,
+              state.groupBy !== 'project' && !slim() ? el('th.cell-project', { text: 'פרויקט' }) : null,
+              slim() ? null : el('th.cell-assignee', { text: 'אחראי' }),
+              el('th', { text: slim() ? '' : 'סטטוס' }),
+              el('th', { text: slim() ? '' : 'עדיפות' }),
+              el('th.cell-due', { text: slim() ? 'יעד' : 'תאריך יעד' }),
+              slim() ? null : el('th.cell-progress', { text: 'התקדמות' })
             ])
           ]),
           el('tbody', {}, [

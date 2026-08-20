@@ -75,6 +75,8 @@
     overscroll-behavior: contain;
   }
   .sidebar.open { transform: translateX(0); }
+  /* בנייד התפריט הוא מגירה מלאה ולא רצועה — ביטול כללי הרצועה של המחשב */
+  .main { margin-inline-start: 0; }
   .sidebar-veil {
     position: fixed; inset: 0; z-index: 55;
     background: rgba(15, 23, 42, .42);
@@ -250,6 +252,28 @@
     max-height: 82dvh; overflow-y: auto;
   }
   .m-grab { width: 38px; height: 4px; border-radius: 3px; background: var(--border-strong); margin: 0 auto 10px; }
+
+  /*
+   * סעיף 3 — בלוח בטלפון: הסטטוס והעדיפות מצטמצמים לנקודת צבע בלבד, בלי
+   * טקסט. השם הוא מה שמזהה את המשימה, וכל פיקסל שהולך לתווית גנרית נגרע
+   * ממנו ומאלץ גלילה אופקית.
+   */
+  .dot-chip .dc-text { display: none; }
+  .dot-chip { padding: 4px; }
+  .dot-chip .dc-dot { width: 11px; height: 11px; }
+
+  /*
+   * הטבלה נכנסת לרוחב המסך בלי גלילה אופקית. שתי פעולות נדרשות לזה יחד:
+   * ביטול הרוחב המינימלי ומעבר לפריסה אוטומטית (עם ‎table-layout: fixed‎
+   * רוחבי ה-colgroup נשארים מחייבים גם כשהתא מוסתר), והסתרת העמודות שאינן
+   * הכרחיות בטלפון — פרויקט, אחראי, בורד והתקדמות. מה שנשאר: שם המשימה,
+   * נקודת הסטטוס, נקודת העדיפות והיעד.
+   */
+  /* העמודות שנשארו נכנסות לרוחב המסך; מה שהוסר לא נבנה כלל (grid.js) */
+  table.grid-table { min-width: 0; }
+  .grid-table th, .grid-table td { padding: 7px 5px; }
+  .grid-table .cell-due { font-size: 11px; }
+  .grid-table .title-tags { display: none; }   /* התגיות חוזרות בכרטיס המשימה */
 
   /* המסכים שאינם מיועדים לטלפון */
   .m-desktop-only {
