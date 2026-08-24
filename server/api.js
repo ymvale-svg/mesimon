@@ -459,6 +459,11 @@ router.get('/api/bootstrap', async (req, res, ctx) => {
     permissions: P.permissionsFor(actor),
     priorities: PRIORITIES,
     roleLabels: P.ROLE_LABELS,
+    /*
+     * העדפות התצוגה נשלחות כאן ולא בקריאה נפרדת, כדי שהלוח ייפתח ישר בחתך
+     * הנכון. קריאה נוספת הייתה מציגה קודם לוח ריק ואז מקפיצה אותו.
+     */
+    prefs: isVendor(actor) ? {} : D.userPrefs(actor.id),
     settings: {
       orgName: D.getSetting('org_name', 'MESIMON'),
       maxUploadMb: D.getSetting('max_upload_mb', 25),
@@ -2139,10 +2144,17 @@ router.get('/api/admin/users', async (req, res, ctx) => {
   const actor = ctx.requireActor();
   requirePerm(actor, 'manage_users');
 
+  /*
+   * בקשות הרשמה שממתינות לאישור אינן משתמשים — הן מוצגות בפאנל נפרד עם
+   * אישור ודחייה. בטבלה הראשית הן נראו כ"לא פעיל" בלי הקשר, ומי שהיה עורך
+   * אותן שם היה מאשר חשבון בלי לקבוע לו מחלקה ורמת גישה.
+   */
   const rows = P.isOrgWide(actor)
-    ? D.all('SELECT id, full_name, email, role, department, department_id, status FROM users ORDER BY full_name')
+    ? D.all(`SELECT id, full_name, email, role, department, department_id, status FROM users
+             WHERE signup_at IS NULL ORDER BY full_name`)
     : D.all(`SELECT id, full_name, email, role, department, department_id, status FROM users
-             WHERE department_id IS ? AND role = 'employee' ORDER BY full_name`, actor.departmentId);
+             WHERE department_id IS ? AND role = 'employee' AND signup_at IS NULL ORDER BY full_name`,
+      actor.departmentId);
 
   const departments = D.all("SELECT * FROM departments WHERE status = 'active' ORDER BY name").map(shapeDepartment);
 
@@ -2162,6 +2174,159 @@ router.get('/api/admin/users', async (req, res, ctx) => {
       grants: D.all('SELECT grant_key FROM user_grants WHERE user_id = ?', u.id).map((g) => g.grant_key)
     }))
   });
+});
+
+// ---------------------------------------------------------------------------
+// הרשמה עצמית בלינק, בכפוף לאישור
+// ---------------------------------------------------------------------------
+
+/*
+ * הזרימה: מנהל מייצר לינק ומפיץ אותו בחברה. מי שנרשם בו נכנס כ"ממתין
+ * לאישור" — ‎status='inactive'‎ עם ‎signup_at‎ — ולכן אינו יכול להיכנס ואינו
+ * מופיע באף רשימה, כי כל השאילתות במערכת מסננות ל-‎status='active'‎. רק אחרי
+ * שהמנהל מאשר, קובע לו רמת גישה ומחלקה, החשבון נפתח.
+ *
+ * למה בכלל לינק פתוח: הוספה ידנית של חמישים עובדים אינה מעשית. למה בכפוף
+ * לאישור: לינק שמסתובב בוואטסאפ מגיע גם למי שעזב ולמי שאינו בחברה.
+ */
+
+const signupToken = () => String(D.getSetting('signup_token', '') ?? '').trim();
+
+/** האם הבקשה נושאת את האסימון הנוכחי. השוואה באורך קבוע, נגד ניחוש בזמן. */
+function signupTokenMatches(candidate) {
+  const real = signupToken();
+  if (!real) return false;
+  const a = Buffer.from(String(candidate ?? ''));
+  const b = Buffer.from(real);
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
+/** מסך ההרשמה — ציבורי, ולכן מחזיר את המינימום: שם הארגון בלבד */
+router.get('/api/signup/:token', async (req, res, ctx) => {
+  if (!signupTokenMatches(ctx.params.token)) throw notFound('קישור ההרשמה אינו תקף');
+  sendJson(res, 200, { orgName: D.getSetting('org_name', 'הארגון') });
+});
+
+router.post('/api/signup/:token', async (req, res, ctx) => {
+  if (!signupTokenMatches(ctx.params.token)) throw notFound('קישור ההרשמה אינו תקף');
+  // אותה הגנה מפני הצפה שיש בכניסה — נקודת קצה ציבורית שכותבת שורות
+  Auth.checkLoginRate(req);
+
+  const b = await readJson(req);
+  const name = String(b.name ?? '').trim();
+  const email = String(b.email ?? '').trim().toLowerCase();
+  const password = String(b.password ?? '');
+
+  if (!name || !email) throw badRequest('נדרשים שם מלא וכתובת אימייל');
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email)) throw badRequest('כתובת האימייל אינה תקינה');
+  if (password.length < 6) throw badRequest('הסיסמה חייבת להיות באורך 6 תווים לפחות');
+
+  /*
+   * כתובת שכבר קיימת מקבלת את אותה תשובה כמו הרשמה מוצלחת. תשובה שאומרת
+   * "הכתובת קיימת" הופכת את הלינק לכלי לבדוק מי עובד בחברה.
+   */
+  const exists = D.get('SELECT 1 FROM users WHERE lower(email)=?', email)
+    || D.get('SELECT 1 FROM vendors WHERE lower(email)=?', email);
+
+  if (!exists) {
+    const result = D.run(
+      `INSERT INTO users (full_name, email, password_hash, role, department, status, created_at, signup_at)
+       VALUES (?,?,?,?,?,?,?,?)`,
+      name, email, D.hashPassword(password), 'employee', '', 'inactive', D.nowIso(), D.nowIso()
+    );
+    const userId = Number(result.lastInsertRowid);
+
+    // מי שמנהל משתמשים צריך לדעת שיש בקשה, אחרת היא תשכב עד שייכנס למסך
+    for (const admin of D.all("SELECT id FROM users WHERE status='active' AND role IN ('superadmin','admin')")) {
+      D.notify({
+        targetType: 'user', targetId: admin.id, kind: 'manager_alert',
+        title: 'בקשת הרשמה חדשה', body: `${name} (${email}) ממתין לאישור`
+      });
+    }
+    console.log(`[משימון] בקשת הרשמה חדשה: ${name} <${email}> (#${userId})`);
+  }
+
+  sendJson(res, 201, { ok: true });
+});
+
+/** ניהול הלינק — מנהל מערכת בלבד */
+router.get('/api/admin/signup-link', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  requireFullPerm(actor, 'manage_users');
+  const token = signupToken();
+  const base = Google.publicBase(req);
+  sendJson(res, 200, {
+    open: !!token,
+    link: token ? `${base}/signup/${token}` : null,
+    pending: D.all(
+      `SELECT id, full_name, email, signup_at FROM users
+        WHERE status = 'inactive' AND signup_at IS NOT NULL ORDER BY signup_at`
+    ).map((u) => ({ id: u.id, name: u.full_name, email: u.email, signupAt: u.signup_at })),
+    // רמת הגישה והמחלקה נקבעות באישור, ולכן נשלחות יחד עם הבקשות
+    assignableRoles: P.assignableRoles(actor).map((role) => ({ value: role, label: P.ROLE_LABELS[role] })),
+    departments: D.all("SELECT id, name FROM departments WHERE status = 'active' ORDER BY name")
+  });
+});
+
+router.post('/api/admin/signup-link', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  requireFullPerm(actor, 'manage_users');
+  // אסימון חדש מבטל את הקודם — זו גם הדרך לנטרל לינק שדלף
+  const token = crypto.randomBytes(18).toString('base64url');
+  D.setSetting('signup_token', token);
+  sendJson(res, 200, { open: true, link: `${Google.publicBase(req)}/signup/${token}` });
+});
+
+router.delete('/api/admin/signup-link', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  requireFullPerm(actor, 'manage_users');
+  D.setSetting('signup_token', '');
+  sendJson(res, 200, { open: false, link: null });
+});
+
+/**
+ * אישור בקשה — כאן נקבעות רמת הגישה והמחלקה, ורק אז החשבון נפתח.
+ *
+ * דורש הרשאה מלאה, לא מחלקתית: הנרשם עדיין ללא שיוך, ולכן מנהל מחלקה אינו
+ * יכול לדעת אם הוא שלו. סינון הכניסה לחברה נשאר אצל מי שרואה את כל הארגון.
+ */
+router.post('/api/admin/pending/:id/approve', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  requireFullPerm(actor, 'manage_users');
+  const user = D.get("SELECT * FROM users WHERE id = ? AND status = 'inactive' AND signup_at IS NOT NULL", Number(ctx.params.id));
+  if (!user) throw notFound('הבקשה לא נמצאה');
+
+  const b = await readJson(req).catch(() => ({}));
+  const role = P.INTERNAL_ROLES.includes(b.role) ? b.role : 'employee';
+  if (!P.mayManageRole(actor, role)) throw forbidden(`אין לך הרשאה להעניק רמת גישה ${P.ROLE_LABELS[role]}`);
+
+  const departmentId = resolveDepartment(actor, b);
+  if (role === 'manager' && !departmentId) throw badRequest('מנהל מחלקה חייב שיוך למחלקה');
+
+  D.run(
+    "UPDATE users SET status = 'active', role = ?, department = ?, department_id = ?, signup_at = NULL WHERE id = ?",
+    role, departmentName(departmentId), departmentId, user.id
+  );
+  if (role === 'manager' && departmentId) {
+    D.run('UPDATE departments SET manager_user_id = ? WHERE id = ?', user.id, departmentId);
+  }
+
+  D.notify({
+    targetType: 'user', targetId: user.id, kind: 'manager_alert',
+    title: 'החשבון שלך אושר', body: 'אפשר להיכנס למשימון עם האימייל והסיסמה שקבעת בהרשמה.'
+  });
+  console.log(`[משימון] אושרה בקשת הרשמה: ${user.full_name} <${user.email}>`);
+  sendJson(res, 200, { ok: true });
+});
+
+router.delete('/api/admin/pending/:id', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  requireFullPerm(actor, 'manage_users');
+  const user = D.get("SELECT * FROM users WHERE id = ? AND status = 'inactive' AND signup_at IS NOT NULL", Number(ctx.params.id));
+  if (!user) throw notFound('הבקשה לא נמצאה');
+  // דחייה מוחקת את השורה — חשבון שלא אושר אינו אמור להישאר במסד
+  D.run('DELETE FROM users WHERE id = ?', user.id);
+  sendJson(res, 200, { ok: true });
 });
 
 // --- ייבוא משתמשים מגיליון ---
@@ -2776,6 +2941,36 @@ router.delete('/api/boards/:boardId/columns/:id', async (req, res, ctx) => {
   }
   D.run('DELETE FROM board_columns WHERE id = ?', col.id);
   sendJson(res, 200, { columns: columnsOf(col.board_id), moved: inUse });
+});
+
+// --- העדפות תצוגה אישיות ---
+
+/*
+ * העדפות ממשק, לא נתונים: חתך הלוח שהמשתמש עבד בו, מצב התצוגה וכדומה.
+ * נשמרות בשרת כדי שיילכו אחריו בין מכשירים ובין דפדפנים — ‎localStorage‎
+ * לבדו נשאר במכשיר אחד, וזו הייתה הסיבה שההעדפה "לא נשמרה".
+ *
+ * המפתחות מוגבלים לרשימה סגורה כדי שנקודת הקצה לא תהפוך לאחסון חופשי
+ * שכל אחד יכול למלא, והערך מוגבל בגודל מאותה סיבה.
+ */
+const PREF_KEYS = ['boardFilters', 'boardView', 'projectScope', 'sidebar', 'mobileFilter'];
+const PREF_MAX_BYTES = 4096;
+
+router.put('/api/prefs', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  // לספק אין העדפות בשרת — הוא נשאר עם מה שנשמר במכשיר שלו
+  if (isVendor(actor)) return sendJson(res, 200, { prefs: {} });
+
+  const b = await readJson(req);
+  const patch = b && typeof b === 'object' ? (b.prefs ?? b) : {};
+  for (const [key, value] of Object.entries(patch)) {
+    if (!PREF_KEYS.includes(key)) throw badRequest(`העדפה לא מוכרת: ${key}`);
+    if (value !== null && Buffer.byteLength(JSON.stringify(value)) > PREF_MAX_BYTES) {
+      throw badRequest('ההעדפה גדולה מדי');
+    }
+    D.setUserPref(actor.id, key, value);
+  }
+  sendJson(res, 200, { prefs: D.userPrefs(actor.id) });
 });
 
 // --- מסננים שמורים ותבניות ---

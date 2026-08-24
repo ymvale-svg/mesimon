@@ -1325,16 +1325,46 @@ input[type="color"] { width: 46px; height: 30px; padding: 2px; cursor: pointer; 
 @media (min-width: 821px) {
   /*
    * הידית יושבת על השפה הפנימית של התפריט — במסמך RTL זו השפה השמאלית.
-   * רחבה 5 פיקסלים בלבד אך שטח הלחיצה שלה גדול יותר, כי רצועה של 5 פיקסלים
-   * אי אפשר לתפוס בעכבר בלי לכוון.
+   *
+   * הגרסה הראשונה הייתה רצועה שקופה ברוחב 5 פיקסלים, והיא נכשלה בשני דברים:
+   * אי אפשר היה לדעת שהיא קיימת, ואי אפשר היה לתפוס אותה בלי לכוון. גרוע
+   * מכך — ‎overflow-x: hidden‎ על התפריט חתך את הרחבת שטח הלחיצה שנעשתה
+   * ב-‎::before‎ החוצה, כך שנשארו שבעה פיקסלים בפועל.
+   *
+   * לכן: 12 פיקסלים שכולם *בתוך* התפריט (שום דבר לא נחתך), קו הפרדה שנראה
+   * תמיד, ושלוש נקודות אחיזה במרכז הגובה — הסימון המקובל לשפה שאפשר לגרור.
    */
   .sidebar-resize {
     position: absolute; inset-block: 0; inset-inline-end: 0;
-    width: 5px; cursor: col-resize; z-index: 3;
-    background: transparent; transition: background .12s;
+    width: 12px; cursor: col-resize; z-index: 4;
+    background: transparent; border: 0; padding: 0;
+    display: flex; align-items: center; justify-content: center;
   }
-  .sidebar-resize::before { content: ''; position: absolute; inset: 0 -4px; }
-  .sidebar-resize:hover, .sidebar-resize.dragging { background: var(--brand); }
+  /* קו השפה — נראה תמיד, ומתחזק במגע */
+  .sidebar-resize::before {
+    content: ''; position: absolute; inset-block: 0; inset-inline-end: 0;
+    width: 2px; background: var(--border); transition: background .12s;
+  }
+  /* שלוש נקודות אחיזה */
+  .sidebar-resize::after {
+    content: ''; width: 3px; height: 26px; border-radius: 3px;
+    background:
+      radial-gradient(circle, var(--text-mute) 1.4px, transparent 1.5px) center 3px / 3px 3px no-repeat,
+      radial-gradient(circle, var(--text-mute) 1.4px, transparent 1.5px) center     / 3px 3px no-repeat,
+      radial-gradient(circle, var(--text-mute) 1.4px, transparent 1.5px) center calc(100% - 3px) / 3px 3px no-repeat;
+    opacity: .55; transition: opacity .12s;
+  }
+  .sidebar-resize:hover::before,
+  .sidebar-resize:focus-visible::before,
+  .sidebar-resize.dragging::before { background: var(--brand); width: 3px; }
+  .sidebar-resize:hover::after,
+  .sidebar-resize:focus-visible::after,
+  .sidebar-resize.dragging::after { opacity: 1; }
+  .sidebar-resize:focus-visible { outline: none; }
+
+  /* הידית תופסת מקום משלה בשפה הפנימית, אחרת היא יושבת על טקסט הפריטים */
+  .sidebar.pinned, .sidebar:hover, .sidebar:focus-within { padding-inline-end: 16px; }
+
   /* ברצועה המצומצמת אין מה לשנות — הרוחב שם קבוע */
   .sidebar:not(.pinned):not(:hover):not(:focus-within) .sidebar-resize,
   .sidebar:not(.pinned):not(:hover):not(:focus-within) .nav-search-wrap { display: none; }

@@ -79,7 +79,16 @@ function login(email, password) {
 
   const user = D.get('SELECT * FROM users WHERE lower(email) = ?', mail);
   if (user) {
-    if (user.status !== 'active') throw unauthorized('המשתמש אינו פעיל. פנה למנהל המערכת.');
+    if (user.status !== 'active') {
+      /*
+       * מי שנרשם דרך הלינק וממתין לאישור מקבל הודעה אחרת: "אינו פעיל" נשמע
+       * כמו תקלה או כמו חשבון שנחסם, והוא היה פונה למנהל בלי להבין שהבקשה
+       * שלו פשוט טרם אושרה.
+       */
+      throw unauthorized(user.signup_at
+        ? 'ההרשמה נרשמה וממתינה לאישור מנהל המערכת. תישלח הודעה כשהחשבון יאושר.'
+        : 'המשתמש אינו פעיל. פנה למנהל המערכת.');
+    }
     if (!D.verifyPassword(password, user.password_hash)) throw unauthorized('אימייל או סיסמה שגויים');
     return { actorType: 'user', actor: loadActor('user', user.id) };
   }

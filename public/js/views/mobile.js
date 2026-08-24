@@ -20,8 +20,11 @@ const MobileView = (() => {
   let loading = false;
 
   /**
-   * החתך הנוכחי. נשמר במכשיר: מי שעובד תמיד באותו חתך — "רק הפרויקט הזה,
-   * רק באיחור" — לא יבחר אותו מחדש בכל פתיחה של האפליקציה.
+   * החתך הנוכחי. מי שעובד תמיד באותו חתך — "רק הפרויקט הזה, רק באיחור" —
+   * לא יבחר אותו מחדש בכל פתיחה של האפליקציה.
+   *
+   * נשמר גם במכשיר וגם בשרת: המכשיר זמין כבר בטעינת הקובץ, לפני שהשרת ענה,
+   * והשרת הוא זה שגורם לחתך להיות זהה בטלפון ובמחשב.
    */
   const FILTER_KEY = 'mesimon.mobileFilter';
   const DEFAULTS = { mode: 'open', projectId: '', status: '', priority: '', q: '' };
@@ -32,7 +35,33 @@ const MobileView = (() => {
     if (saved && typeof saved === 'object') filter = { ...DEFAULTS, ...saved };
   } catch { /* חתך פגום בזיכרון אינו סיבה לא לפתוח את המסך */ }
 
+  /*
+   * החתך מהשרת נקרא בפתיחת המסך ולא בטעינת הקובץ, כי בטעינה עוד אין
+   * ‎App.state‎. נקרא פעם אחת לכל משתמש — אחרת כל רענון מסך היה מבטל את
+   * החתך שהמשתמש בחר לפני רגע.
+   *
+   * הזיהוי הוא לפי מזהה המשתמש ולא דגל בוליאני: התנתקות וכניסה מחדש באותה
+   * לשונית אינן טוענות את הדף מחדש, ודגל היה משאיר את המשתמש הבא עם החתך
+   * של קודמו.
+   */
+  let filterOwner = null;
+  function adoptServerFilter() {
+    const me = App.state.actor?.id ?? null;
+    if (me === null || filterOwner === me) return;
+    const first = filterOwner === null;
+    filterOwner = me;
+    const fromServer = App.getPref('mobileFilter');
+    if (fromServer && typeof fromServer === 'object') {
+      filter = { ...DEFAULTS, ...fromServer };
+    } else if (!first) {
+      // משתמש אחר נכנס באותה לשונית — החתך שנשמר במכשיר אינו שלו
+      filter = { ...DEFAULTS };
+    }
+    // ובכניסה הראשונה, כשלשרת אין עדיין העדפה, נשאר מה שנקרא מהמכשיר
+  }
+
   const saveFilter = () => {
+    App.setPref('mobileFilter', filter);
     try { localStorage.setItem(FILTER_KEY, JSON.stringify(filter)); } catch { /* מצב פרטי */ }
   };
 
@@ -97,6 +126,7 @@ const MobileView = (() => {
 
   async function render(container, { silent = false } = {}) {
     containerRef = container;
+    adoptServerFilter();
     if (!silent) UI.mount(container, UI.spinner());
     loading = true;
     try {

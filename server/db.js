@@ -79,7 +79,10 @@ CREATE TABLE IF NOT EXISTS users (
   role          TEXT    NOT NULL,
   department    TEXT    NOT NULL DEFAULT '',
   status        TEXT    NOT NULL DEFAULT 'active' CHECK (status IN ('active','inactive')),
-  created_at    TEXT    NOT NULL
+  created_at    TEXT    NOT NULL,
+  -- מתי נרשם דרך לינק ההרשמה. מי שיש לו תאריך כאן ואינו פעיל — ממתין
+  -- לאישור, ולא עובד שהושבת. אותו סטטוס, שתי משמעויות שונות לגמרי.
+  signup_at     TEXT
 );
 
 CREATE TABLE IF NOT EXISTS vendors (
@@ -288,6 +291,24 @@ CREATE TABLE IF NOT EXISTS project_pins (
   PRIMARY KEY (user_id, project_id)
 );
 
+/*
+ * העדפות תצוגה אישיות — חתך הלוח, מצב התצוגה וכדומה.
+ *
+ * נשמרות בשרת ולא רק ב-‎localStorage‎ מפני ש-‎localStorage‎ הוא לכל דפדפן
+ * בנפרד: מי שעובד במשרד ובנייד, או שהתחבר מדפדפן אחר, חזר בכל פעם לחתך
+ * ריק והרגיש שההעדפה לא נשמרה. כאן היא הולכת אחרי המשתמש.
+ *
+ * ‎value‎ הוא JSON חופשי — אין כאן סכימה לכל מפתח, כי אלה העדפות ממשק
+ * שמשתנות עם המסכים ולא נתונים שמישהו שואל עליהם שאילתות.
+ */
+CREATE TABLE IF NOT EXISTS user_prefs (
+  user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  key        TEXT    NOT NULL,
+  value      TEXT    NOT NULL,
+  updated_at TEXT    NOT NULL,
+  PRIMARY KEY (user_id, key)
+);
+
 CREATE TABLE IF NOT EXISTS saved_filters (
   id         INTEGER PRIMARY KEY AUTOINCREMENT,
   user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -393,6 +414,34 @@ function setSetting(key, value) {
   );
 }
 
+/**
+ * העדפות אישיות. ספקים אינם משתמשים ואין להם שורה בטבלה, ולכן הם מקבלים
+ * אובייקט ריק ונשארים עם ההעדפות שנשמרות במכשיר — אין להם מסכים שמצדיקים
+ * יותר מזה.
+ */
+function userPrefs(userId) {
+  const out = {};
+  if (!userId) return out;
+  for (const row of all('SELECT key, value FROM user_prefs WHERE user_id = ?', userId)) {
+    try { out[row.key] = JSON.parse(row.value); } catch { out[row.key] = row.value; }
+  }
+  return out;
+}
+
+function setUserPref(userId, key, value) {
+  if (!userId) return;
+  // ‎null‎ מוחק את ההעדפה — כך "איפוס לברירת מחדל" אינו משאיר שורה מטעה
+  if (value === null || value === undefined) {
+    run('DELETE FROM user_prefs WHERE user_id = ? AND key = ?', userId, key);
+    return;
+  }
+  run(
+    `INSERT INTO user_prefs (user_id, key, value, updated_at) VALUES (?,?,?,?)
+     ON CONFLICT(user_id, key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+    userId, key, JSON.stringify(value), nowIso()
+  );
+}
+
 function allSettings() {
   const out = {};
   for (const row of all('SELECT key, value FROM settings')) {
@@ -448,7 +497,12 @@ const DEFAULT_SETTINGS = {
   org_name: 'MESIMON',
   // כתובת המערכת כפי שמשתמשים מגיעים אליה — קישורי ההזמנות נבנים ממנה
   public_url: '',
-  org_logo_note: ''
+  org_logo_note: '',
+  /*
+   * אסימון לינק ההרשמה. ריק = ההרשמה סגורה, וזו ברירת המחדל: מערכת שנפתחת
+   * עם לינק הרשמה פעיל היא מערכת שכל מי שינחש את הכתובת ייכנס אליה.
+   */
+  signup_token: ''
 };
 
 const INTERNAL_COLUMNS = [
@@ -663,6 +717,8 @@ function migrate() {
   addColumn('projects', 'color', "TEXT NOT NULL DEFAULT ''");
   // סעיף צ'קליסט שיש בו תהליך: הערה חופשית ושרשור תגובות משלו
   addColumn('checklist_items', 'note', "TEXT NOT NULL DEFAULT ''");
+  // מי שנרשם דרך הלינק וממתין לאישור — להבדיל מעובד שהושבת
+  addColumn('users', 'signup_at', 'TEXT');
   addColumn('comments', 'checklist_item_id', 'INTEGER REFERENCES checklist_items(id) ON DELETE CASCADE');
 
   /**
@@ -980,6 +1036,7 @@ module.exports = {
   all, get, run,
   nowIso, hashPassword, verifyPassword,
   getSetting, setSetting, allSettings,
+  userPrefs, setUserPref,
   audit, notify,
   internalBoard, createVendorBoard, boardColumns, ensureBoardColumns,
   INTERNAL_COLUMNS, VENDOR_COLUMNS, DEFAULT_SETTINGS,

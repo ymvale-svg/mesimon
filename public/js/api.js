@@ -77,9 +77,18 @@ const API = (() => {
     reports: () => call('GET', '/api/reports'),
     search: (q) => call('GET', `/api/search?q=${encodeURIComponent(q)}`),
 
+    savePrefs: (prefs) => call('PUT', '/api/prefs', { prefs }),
+
     adminUsers: () => call('GET', '/api/admin/users'),
     createUser: (body) => call('POST', '/api/admin/users', body),
     resendInvite: (targetType, id) => call('POST', '/api/admin/invite', { targetType, id }),
+
+    // קישור ההרשמה העצמית ובקשות הממתינות לאישור
+    signupLink: () => call('GET', '/api/admin/signup-link'),
+    createSignupLink: () => call('POST', '/api/admin/signup-link', {}),
+    closeSignupLink: () => call('DELETE', '/api/admin/signup-link'),
+    approvePending: (id, body) => call('POST', `/api/admin/pending/${id}/approve`, body),
+    rejectPending: (id) => call('DELETE', `/api/admin/pending/${id}`),
 
     departments: ({ includeInactive } = {}) =>
       call('GET', `/api/departments${includeInactive ? '?includeInactive=1' : ''}`),

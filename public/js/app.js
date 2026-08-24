@@ -16,9 +16,31 @@ const App = (() => {
     savedFilters: [],
     notifications: [],
     unread: 0,
+    // העדפות תצוגה של המשתמש, כפי שהגיעו מהשרת ב-bootstrap
+    prefs: {},
     route: { name: 'home', params: {} },
     homeData: null
   };
+
+  /**
+   * שמירת העדפת תצוגה. נכתבת מיד ל-‎state‎ כדי שהמסך יגיב בלי המתנה לרשת,
+   * ונשלחת לשרת בהשהיה — בחירת חתך היא לחיצה אחת אחרי השנייה, ולא צריך
+   * בקשה על כל אחת. ‎localStorage‎ נשאר במקביל כמטמון מקומי: הוא זמין
+   * מיידית בטעינה, לפני שהשרת ענה.
+   *
+   * כשל ברשת אינו מוצג למשתמש — העדפת תצוגה שלא נשמרה אינה שווה הודעת
+   * שגיאה, והמטמון המקומי ממילא זוכר אותה במכשיר הזה.
+   */
+  const prefTimers = {};
+  function setPref(key, value) {
+    state.prefs[key] = value;
+    clearTimeout(prefTimers[key]);
+    prefTimers[key] = setTimeout(() => {
+      API.savePrefs({ [key]: value }).catch(() => {});
+    }, 600);
+  }
+
+  const getPref = (key, fallback = null) => state.prefs?.[key] ?? fallback;
 
   const root = () => document.getElementById('app');
 
@@ -97,6 +119,10 @@ const App = (() => {
     // קישור הזמנה — קביעת סיסמה לפני שיש בכלל סשן
     const inviteToken = InviteView.tokenFromUrl();
     if (inviteToken) return InviteView.render(root(), inviteToken, boot);
+
+    // קישור הרשמה עצמית — נשלח לאישור מנהל, ולכן אינו מסתיים בכניסה למערכת
+    const signupToken = SignupView.tokenFromUrl();
+    if (signupToken) return SignupView.render(root(), signupToken);
 
     /**
      * כל כניסה למערכת פותחת סשן התראות חדש. האיפוס דווקא כאן, ולא רק
@@ -652,8 +678,40 @@ const App = (() => {
    * גרירה מהירה "נשמטת" באמצע.
    */
   function resizeHandle() {
-    const handle = el('div.sidebar-resize', {
-      title: 'גרירה לשינוי הרוחב · לחיצה כפולה לאיפוס'
+    /*
+     * ‎button‎ ולא ‎div‎: כך הידית מגיעה בטאב ואפשר להרחיב את התפריט בחצים,
+     * בלי לתפוס רצועה של 12 פיקסלים בעכבר. גרירה בעכבר עדיין הדרך המהירה,
+     * אבל היא כבר לא הדרך *היחידה*.
+     */
+    const handle = el('button.sidebar-resize', {
+      type: 'button',
+      title: 'גרירה לשינוי הרוחב · חצים ← → · לחיצה כפולה לאיפוס',
+      'aria-label': 'רוחב התפריט',
+      role: 'separator',
+      'aria-orientation': 'vertical'
+    });
+
+    const setWidth = (px) => {
+      const w = Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, Math.round(px)));
+      applySidebarWidth(w);
+      handle.setAttribute('aria-valuenow', String(w));
+      return w;
+    };
+    setWidth(savedSidebarWidth() ?? SIDEBAR_DEFAULT);
+    handle.setAttribute('aria-valuemin', String(SIDEBAR_MIN));
+    handle.setAttribute('aria-valuemax', String(SIDEBAR_MAX));
+
+    // במסמך RTL התפריט בימין: חץ שמאלה מרחיב, חץ ימינה מצמצם
+    handle.addEventListener('keydown', (e) => {
+      const step = e.shiftKey ? 48 : 16;
+      const current = savedSidebarWidth() ?? SIDEBAR_DEFAULT;
+      let next = null;
+      if (e.key === 'ArrowLeft') next = current + step;
+      else if (e.key === 'ArrowRight') next = current - step;
+      else if (e.key === 'Home') next = SIDEBAR_DEFAULT;
+      if (next === null) return;
+      e.preventDefault();
+      localStorage.setItem(SIDEBAR_WIDTH_KEY, String(setWidth(next)));
     });
 
     handle.addEventListener('pointerdown', (e) => {
@@ -666,11 +724,8 @@ const App = (() => {
       const bar = document.getElementById('sidebar');
       const startRight = bar.getBoundingClientRect().right;
 
-      const onMove = (ev) => {
-        // המסמך RTL והתפריט בצד ימין — הרוחב הוא המרחק מקצהו הימני שמאלה
-        const next = Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, Math.round(startRight - ev.clientX)));
-        applySidebarWidth(next);
-      };
+      // המסמך RTL והתפריט בצד ימין — הרוחב הוא המרחק מקצהו הימני שמאלה
+      const onMove = (ev) => setWidth(startRight - ev.clientX);
       const onUp = () => {
         handle.classList.remove('dragging');
         document.body.style.userSelect = '';
@@ -688,7 +743,7 @@ const App = (() => {
 
     handle.addEventListener('dblclick', () => {
       localStorage.removeItem(SIDEBAR_WIDTH_KEY);
-      applySidebarWidth(SIDEBAR_DEFAULT);
+      setWidth(SIDEBAR_DEFAULT);
       UI.toast('רוחב התפריט אופס');
     });
 
@@ -888,7 +943,7 @@ const App = (() => {
 
   return {
     state, boot, navigate, refresh, refreshNotifications, logout, render,
-    refreshChrome, refreshView, isPhone, closeDrawer,
+    refreshChrome, refreshView, isPhone, closeDrawer, setPref, getPref,
     may, can, isVendor, userName, vendorName, project, internalBoard, vendorBoards,
     reloadReference
   };

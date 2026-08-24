@@ -34,6 +34,10 @@ const BoardView = (() => {
     view.selection.clear();
     if (scopeChanged) GridView.resetGrouping();
 
+    // מצב התצוגה שהמשתמש עבד בו, אם נשמר
+    const savedView = App.getPref('boardView');
+    if (['table', 'kanban', 'timeline'].includes(savedView)) view.mode = savedView;
+
     /**
      * סדר העדיפות: מה שהועבר בניווט (למשל לחיצה על ווידג'ט "באיחור") גובר,
      * ואחריו מה שנשמר מהפעם הקודמת. כך קיצור דרך מהדשבורד עדיין עובד, אבל
@@ -67,8 +71,13 @@ const BoardView = (() => {
   const filtersKeep = (key, params) => (params.keepFilters ? filters[key] : '');
 
   /**
-   * החתך נשמר במכשיר, בנפרד לכל תצוגה (פנימי / ספקים / ארכיון) — מי שעובד
-   * תמיד בחתך אחד לא יבחר אותו מחדש בכל פתיחה.
+   * החתך נשמר בנפרד לכל תצוגה (פנימי / ספקים / ארכיון) — מי שעובד תמיד
+   * בחתך אחד לא יבחר אותו מחדש בכל פתיחה.
+   *
+   * נשמר בשני מקומות בכוונה: בשרת, כדי שההעדפה תלך אחרי המשתמש בין
+   * מכשירים ובין דפדפנים (זו הייתה הסיבה שהחתך "לא נשמר" — ‎localStorage‎
+   * לבדו נשאר במכשיר שנבחר בו), וגם במכשיר, כי הוא זמין מיידית בטעינה
+   * ראשונה וממשיך לעבוד גם כשהרשת נופלת.
    *
    * ‎q‎ אינו נשמר: מחרוזת חיפוש היא חיפוש חד-פעמי, ולא הגדרת עבודה. לוח
    * שנפתח עם חיפוש ישן נראה כאילו חסרות בו משימות.
@@ -76,19 +85,23 @@ const BoardView = (() => {
   const FILTER_KEY = 'mesimon.boardFilters';
   const PERSISTED = ['projectId', 'assignee', 'priority', 'status', 'boardId', 'departmentId', 'onlyOverdue', 'pendingReview'];
 
-  const readSaved = (scope) => {
-    try {
-      return JSON.parse(localStorage.getItem(FILTER_KEY) ?? '{}')?.[scope] ?? {};
-    } catch { return {}; }
+  const localFilters = () => {
+    try { return JSON.parse(localStorage.getItem(FILTER_KEY) ?? '{}'); } catch { return {}; }
   };
 
+  /* השרת קודם — הוא המקור שמשותף לכל המכשירים, והמכשיר הוא רק גיבוי */
+  const readSaved = (scope) =>
+    App.getPref('boardFilters', {})?.[scope] ?? localFilters()[scope] ?? {};
+
   function saveFilters() {
+    const key = filters.archived === '1' ? 'archive' : currentScope;
+    const mine = Object.fromEntries(PERSISTED.map((k) => [k, filters[k]]));
+
+    const merged = { ...App.getPref('boardFilters', {}), ...localFilters(), [key]: mine };
+    App.setPref('boardFilters', merged);
     try {
-      const all = JSON.parse(localStorage.getItem(FILTER_KEY) ?? '{}');
-      const key = filters.archived === '1' ? 'archive' : currentScope;
-      all[key] = Object.fromEntries(PERSISTED.map((k) => [k, filters[k]]));
-      localStorage.setItem(FILTER_KEY, JSON.stringify(all));
-    } catch { /* מצב פרטי — החתך פשוט לא ייזכר */ }
+      localStorage.setItem(FILTER_KEY, JSON.stringify(merged));
+    } catch { /* מצב פרטי — נשאר רק מה שנשמר בשרת */ }
   }
 
   async function ensureDepartments() {
@@ -221,7 +234,8 @@ const BoardView = (() => {
         ['table', '☰ טבלה'], ['kanban', '▦ כרטיסיות'], ['timeline', '▤ ציר זמן']
       ].map(([mode, label]) =>
         el(`button${view.mode === mode ? '.active' : ''}`, {
-          onclick: () => { view.mode = mode; draw(); }
+          // גם מצב התצוגה הוא העדפה — מי שעובד בכרטיסיות לא רוצה לחזור לטבלה בכל כניסה
+          onclick: () => { view.mode = mode; App.setPref('boardView', mode); draw(); }
         }, [label])
       )),
       el('div.sep'),
@@ -248,7 +262,8 @@ const BoardView = (() => {
       el('input', {
         type: 'checkbox',
         checked: filters.onlyOverdue,
-        onchange: (e) => { filters.onlyOverdue = e.target.checked; load(); }
+        // דרך set, כמו כל שאר החתכים — אחרת "רק באיחור" היה החתך היחיד שאינו נשמר
+        onchange: (e) => set('onlyOverdue', e.target.checked)
       }),
       'רק באיחור'
     ]));

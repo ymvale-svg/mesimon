@@ -89,6 +89,171 @@ const AdminView = (() => {
     });
   }
 
+  // ------------------------------------------------------- קישור הרשמה לחברה
+
+  /**
+   * הוספה ידנית של עובד-עובד אינה מעשית בחברה שלמה, ולכן יש קישור אחד שמופץ
+   * פנימית וכל אחד נרשם בו בעצמו. הקישור אינו פותח חשבון: הוא יוצר בקשה
+   * ממתינה, והמנהל הוא שקובע רמת גישה ומחלקה. כך קישור שהועבר הלאה בוואטסאפ
+   * אינו הופך למישהו במערכת.
+   *
+   * הפאנל טוען את הנתונים בעצמו ולא דרך usersTab, כדי שטבלת המשתמשים תוצג
+   * מיד גם אם הקריאה הזו מתעכבת.
+   */
+  function signupPanel() {
+    const box = el('div.card.mb');
+
+    async function load() {
+      UI.mount(box, el('div.card-pad', {}, [UI.spinner()]));
+      let data;
+      try {
+        data = await API.signupLink();
+      } catch (err) {
+        return UI.mount(box, el('div.card-pad', {}, [
+          el('div.alert.alert-danger', {}, [el('span', { text: '⚠️' }), el('div', { text: err.message })])
+        ]));
+      }
+      draw(data);
+    }
+
+    const act = async (fn) => {
+      try { await fn(); await load(); } catch (err) { UI.error(err); }
+    };
+
+    function linkRow(link) {
+      // readonly ולא disabled: כך אפשר לסמן ולהעתיק ידנית גם בדפדפן ללא clipboard
+      const input = el('input', { type: 'text', value: link, readonly: true, style: { direction: 'ltr' } });
+      input.value = link;
+      return el('div.flex', { style: { gap: '8px' } }, [
+        input,
+        el('button.btn.btn-primary', {
+          onclick: () => {
+            input.select();
+            navigator.clipboard?.writeText(link);
+            UI.success('הקישור הועתק');
+          }
+        }, ['העתקה'])
+      ]);
+    }
+
+    function draw(data) {
+      const pending = data.pending ?? [];
+
+      UI.mount(box,
+        el('div.card-head', {}, [
+          UI.icon('admin', { size: 18 }),
+          el('h3', { text: 'קישור הרשמה לעובדים' }),
+          el('div.spacer'),
+          pending.length
+            ? el('span.tag.tag-high', {}, [`${pending.length} ממתינות לאישור`])
+            : null
+        ]),
+        el('div.card-pad', {}, [
+          data.open
+            ? el('div', {}, [
+                el('p.hint', { text: 'מי שנרשם בקישור ממתין לאישורך ואינו רואה דבר במערכת עד שתאשר אותו.' }),
+                linkRow(data.link),
+                el('div.flex.mt', { style: { gap: '8px' } }, [
+                  el('button.btn', {
+                    title: 'מבטל את הקישור הקיים ומייצר חדש במקומו',
+                    onclick: async () => {
+                      const ok = await UI.confirm(
+                        'הקישור הנוכחי יפסיק לעבוד מיד, וכל מי שקיבל אותו יצטרך את החדש. בקשות שכבר נשלחו נשארות.',
+                        { title: 'החלפת הקישור', okText: 'החלפה' }
+                      );
+                      if (ok) act(() => API.createSignupLink());
+                    }
+                  }, ['החלפת הקישור']),
+                  el('button.btn.btn-danger', {
+                    onclick: async () => {
+                      const ok = await UI.confirm(
+                        'הקישור יפסיק לעבוד ולא תתאפשר הרשמה חדשה. תמיד אפשר לפתוח קישור חדש.',
+                        { title: 'סגירת ההרשמה', danger: true, okText: 'סגירה' }
+                      );
+                      if (ok) act(() => API.closeSignupLink());
+                    }
+                  }, ['סגירת ההרשמה'])
+                ])
+              ])
+            : el('div', {}, [
+                el('p.hint', { text: 'ההרשמה סגורה. יצירת קישור מאפשרת לעובדים להירשם בעצמם — כל הרשמה תמתין לאישורך.' }),
+                el('button.btn.btn-primary.mt', { onclick: () => act(() => API.createSignupLink()) }, ['＋ יצירת קישור הרשמה'])
+              ]),
+
+          pending.length
+            ? el('div.mt', {}, [
+                el('h4', { text: 'בקשות ממתינות', style: { marginBottom: '8px' } }),
+                el('div.table-wrap', {}, [
+                  el('table.data', {}, [
+                    el('thead', {}, [el('tr', {}, [
+                      el('th', { text: 'שם' }), el('th', { text: 'אימייל' }), el('th', { text: 'נרשם' }),
+                      el('th', { text: 'רמת גישה' }), el('th', { text: 'מחלקה' }), el('th', { text: '' })
+                    ])]),
+                    el('tbody', {}, pending.map((p) => pendingRow(p, data)))
+                  ])
+                ])
+              ])
+            : null
+        ])
+      );
+    }
+
+    function pendingRow(p, data) {
+      const roleSelect = UI.select(data.assignableRoles ?? [{ value: 'employee', label: 'עובד פנימי' }], 'employee');
+      const deptSelect = UI.select([
+        { value: '', label: 'ללא שיוך' },
+        ...(data.departments ?? []).map((d) => ({ value: String(d.id), label: d.name }))
+      ], '');
+
+      const approve = el('button.btn.btn-sm.btn-primary', {
+        onclick: async () => {
+          // מנהל מחלקה חייב שיוך, והשרת דוחה בלעדיו — עדיף להסביר כאן
+          if (roleSelect.value === 'manager' && !deptSelect.value) {
+            return UI.error('מנהל מחלקה חייב שיוך למחלקה');
+          }
+          approve.disabled = true;
+          try {
+            await API.approvePending(p.id, {
+              role: roleSelect.value,
+              departmentId: deptSelect.value || null
+            });
+            UI.success(`${p.name} אושר ויכול להיכנס`);
+            await load();
+            // הטבלה הראשית כבר אינה מעודכנת — המשתמש החדש שייך לה מעכשיו
+            App.refreshView?.();
+          } catch (err) {
+            approve.disabled = false;
+            UI.error(err);
+          }
+        }
+      }, ['✓ אישור']);
+
+      return el('tr', {}, [
+        el('td', {}, [el('div.flex', {}, [UI.avatar(p.name, { small: true }), el('b', { text: p.name })])]),
+        el('td', { text: p.email, style: { direction: 'ltr', textAlign: 'right' } }),
+        el('td', { text: UI.formatDate(p.signupAt) }),
+        el('td', {}, [roleSelect]),
+        el('td', {}, [deptSelect]),
+        el('td', {}, [el('div.flex', {}, [
+          approve,
+          el('button.btn.btn-sm', {
+            title: 'מוחק את הבקשה. הנרשם יוכל להירשם שוב אם הקישור פעיל.',
+            onclick: async () => {
+              const ok = await UI.confirm(
+                `הבקשה של ${p.name} תימחק, ולא תישלח על כך הודעה.`,
+                { title: 'דחיית הבקשה', danger: true, okText: 'דחייה' }
+              );
+              if (ok) act(() => API.rejectPending(p.id));
+            }
+          }, ['דחייה'])
+        ])])
+      ]);
+    }
+
+    load();
+    return box;
+  }
+
   async function usersTab(body) {
     const data = await API.adminUsers();
     const scoped = data.scope === 'department';
@@ -100,6 +265,8 @@ const AdminView = (() => {
             el('div', { text: `כמנהל/ת מחלקה אפשר להוסיף ולנהל עובדים פנימיים במחלקת ${data.department} בלבד. להוספת מנהלים או מחלקות אחרות יש לפנות למנהל המערכת.` })
           ])
         : null,
+      // הקישור הוא ארגוני ולא מחלקתי, ולכן מוצג למי שרואה את כל הארגון בלבד
+      scoped ? null : signupPanel(),
       el('div.flex.mb', {}, [
         el('div.spacer'),
         el('button.btn', { onclick: () => importDialog(data) }, ['⇪ ייבוא מאקסל']),
