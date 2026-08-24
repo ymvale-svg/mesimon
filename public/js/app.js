@@ -33,6 +33,30 @@ const App = (() => {
   const SIDEBAR_PIN_KEY = 'mesimon.sidebarPinned';
   const sidebarPinned = () => localStorage.getItem(SIDEBAR_PIN_KEY) === '1';
 
+  // מכמה פרויקטים תיבת החיפוש בתפריט מתחילה להופיע
+  const PROJECT_SEARCH_MIN = 6;
+
+  /**
+   * רוחב התפריט הפרוש, בפיקסלים. נשמר במכשיר ונקבע כמשתנה CSS על השורש —
+   * וכך הוא חל גם על הפרוש בריחוף, גם על הנעוץ וגם על השוליים של התוכן,
+   * בלי לשכפל את המספר בשלושה מקומות.
+   */
+  const SIDEBAR_WIDTH_KEY = 'mesimon.sidebarWidth';
+  const SIDEBAR_MIN = 210;
+  const SIDEBAR_MAX = 520;
+  const SIDEBAR_DEFAULT = 292;
+
+  const savedSidebarWidth = () => {
+    const raw = Number(localStorage.getItem(SIDEBAR_WIDTH_KEY));
+    if (!raw || Number.isNaN(raw)) return null;
+    return Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, raw));
+  };
+
+  function applySidebarWidth(px) {
+    const w = px ?? savedSidebarWidth();
+    document.documentElement.style.setProperty('--sidebar-w', `${w ?? SIDEBAR_DEFAULT}px`);
+  }
+
   /**
    * הרוחב שממנו המערכת עוברת לפריסת נייד. אותו מספר שב-mobile.css, ולכן הוא
    * נקרא משם דרך matchMedia ולא נכתב כאן שוב — שני מקומות היו נפרדים בשקט
@@ -82,6 +106,7 @@ const App = (() => {
      * שלא נקראו שלו בבת אחת, בדיוק מה שההשהיה הראשונה באה למנוע.
      */
     resetNotifSession();
+    applySidebarWidth();
 
     try {
       const data = await API.bootstrap();
@@ -546,10 +571,54 @@ const App = (() => {
           : null
       ]));
     }
-    items.push(...pinnedProjects.map(projectItem));
-    // חוצץ רק כששתי הקבוצות מאוכלסות — אחרת היה נראה כקו תלוש בראש הרשימה או בסופה
-    if (pinnedProjects.length && otherProjects.length) items.push(el('div.nav-pinned-sep'));
-    items.push(...otherProjects.map(projectItem));
+    /**
+     * חיפוש פרויקט. מופיע רק מ-‎PROJECT_SEARCH_MIN‎ פרויקטים ומעלה — בחמישה
+     * פרויקטים תיבת חיפוש היא רעש, ובעשרים היא הדרך המהירה היחידה.
+     *
+     * הסינון מתבצע על הצמתים שכבר בנויים ולא בבנייה מחדש של התפריט: בנייה
+     * מחדש בכל הקשה הייתה מחליפה את תיבת החיפוש עצמה ומאבדת את המיקוד
+     * והטקסט שהוקלד.
+     */
+    const projectNodes = [
+      ...pinnedProjects.map((p) => ({ p, node: projectItem(p) })),
+      ...otherProjects.map((p) => ({ p, node: projectItem(p) }))
+    ];
+    const separator = pinnedProjects.length && otherProjects.length ? el('div.nav-pinned-sep') : null;
+
+    if (openProjects.length >= PROJECT_SEARCH_MIN) {
+      const search = el('input.nav-search', { type: 'search', placeholder: 'חיפוש פרויקט…' });
+      const noMatch = el('div.nav-note', { text: 'אין פרויקט מתאים', style: { display: 'none' } });
+
+      search.addEventListener('input', () => {
+        const q = search.value.trim().toLowerCase();
+        let shown = 0;
+        for (const { p, node } of projectNodes) {
+          const hit = !q || p.name.toLowerCase().includes(q);
+          node.style.display = hit ? '' : 'none';
+          if (hit) shown++;
+        }
+        // החוצץ בין הנעוצים לשאר מאבד משמעות בזמן סינון
+        if (separator) separator.style.display = q ? 'none' : '';
+        noMatch.style.display = shown ? 'none' : '';
+      });
+      // Escape מנקה ומחזיר את הרשימה המלאה, בלי לצאת מהתפריט
+      search.addEventListener('keydown', (e) => {
+        if (e.key !== 'Escape') return;
+        e.stopPropagation();
+        search.value = '';
+        search.dispatchEvent(new Event('input'));
+      });
+
+      items.push(el('div.nav-search-wrap', {}, [search]));
+      items.push(...projectNodes.map((x) => x.node));
+      if (separator) items.splice(items.length - otherProjects.length, 0, separator);
+      items.push(noMatch);
+    } else {
+      items.push(...projectNodes.filter((x) => x.p.pinned).map((x) => x.node));
+      // חוצץ רק כששתי הקבוצות מאוכלסות — אחרת היה נראה כקו תלוש בראש או בסוף
+      if (separator) items.push(separator);
+      items.push(...projectNodes.filter((x) => !x.p.pinned).map((x) => x.node));
+    }
     // הסבר קצר כשהרשימה ריקה רק מפני שהחתך מצומצם, ולא מפני שאין פרויקטים
     if (!openProjects.length && foreign) {
       items.push(el('div.nav-note', { text: 'אין פרויקטים שאתה חלק מהם' }));
@@ -570,7 +639,60 @@ const App = (() => {
       add('admin');
     }
 
-    return el(`aside.sidebar#sidebar${sidebarPinned() ? '.pinned' : ''}`, {}, [...items, UI.companyLogo('in-sidebar')]);
+    return el(`aside.sidebar#sidebar${sidebarPinned() ? '.pinned' : ''}`, {},
+      [...items, UI.companyLogo('in-sidebar'), resizeHandle()]);
+  }
+
+  /**
+   * ידית לשינוי רוחב התפריט. גרירה קובעת רוחב, לחיצה כפולה מחזירה לברירת
+   * המחדל. מוצגת רק בפריסת מחשב (ב-CSS) — בטלפון התפריט הוא מגירה ברוחב קבוע.
+   *
+   * ‎pointer‎ ולא ‎mouse‎: אותו קוד מטפל גם בעכבר וגם במסך מגע של מחשב נייד,
+   * ו-‎setPointerCapture‎ מבטיח שהגרירה נמשכת גם כשהסמן יוצא מהידית — בלעדיו
+   * גרירה מהירה "נשמטת" באמצע.
+   */
+  function resizeHandle() {
+    const handle = el('div.sidebar-resize', {
+      title: 'גרירה לשינוי הרוחב · לחיצה כפולה לאיפוס'
+    });
+
+    handle.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      handle.setPointerCapture(e.pointerId);
+      handle.classList.add('dragging');
+      // בזמן גרירה אין בחירת טקסט, אחרת כל המסך נצבע בכחול
+      document.body.style.userSelect = 'none';
+
+      const bar = document.getElementById('sidebar');
+      const startRight = bar.getBoundingClientRect().right;
+
+      const onMove = (ev) => {
+        // המסמך RTL והתפריט בצד ימין — הרוחב הוא המרחק מקצהו הימני שמאלה
+        const next = Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, Math.round(startRight - ev.clientX)));
+        applySidebarWidth(next);
+      };
+      const onUp = () => {
+        handle.classList.remove('dragging');
+        document.body.style.userSelect = '';
+        handle.removeEventListener('pointermove', onMove);
+        handle.removeEventListener('pointerup', onUp);
+        handle.removeEventListener('pointercancel', onUp);
+        const now = parseInt(getComputedStyle(document.documentElement).getPropertyValue('--sidebar-w'), 10);
+        if (now) localStorage.setItem(SIDEBAR_WIDTH_KEY, String(now));
+      };
+
+      handle.addEventListener('pointermove', onMove);
+      handle.addEventListener('pointerup', onUp);
+      handle.addEventListener('pointercancel', onUp);
+    });
+
+    handle.addEventListener('dblclick', () => {
+      localStorage.removeItem(SIDEBAR_WIDTH_KEY);
+      applySidebarWidth(SIDEBAR_DEFAULT);
+      UI.toast('רוחב התפריט אופס');
+    });
+
+    return handle;
   }
 
   function topbar() {
