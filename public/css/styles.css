@@ -1193,7 +1193,9 @@ input[type="color"] { width: 46px; height: 30px; padding: 2px; cursor: pointer; 
  * מיושם רק מעל 820 פיקסלים — בנייד התפריט הוא מגירה, ומוגדר ב-mobile.css.
  */
 @media (min-width: 821px) {
-  :root { --rail-w: 58px; }
+  /* הפרוש הורחב מ-232 ל-292: בשורה יש נקודת צבע, מונה וכפתור נעיצה, ולשם
+     הפרויקט נשארו כ-110 פיקסלים — פחות מדי לשמות אמיתיים */
+  :root { --rail-w: 58px; --sidebar-w: 292px; }
 
   .body { position: relative; }
 
@@ -1215,13 +1217,23 @@ input[type="color"] { width: 46px; height: 30px; padding: 2px; cursor: pointer; 
   /* התוכן מפנה מקום לרצועה בלבד, ולא לתפריט הפרוש */
   .main { margin-inline-start: var(--rail-w); }
 
+  /*
+   * נעוץ: התפריט נשאר פרוש, והתוכן מפנה לו את מלוא הרוחב — כאן כן נכון
+   * שהתוכן יצטמצם, כי זו בחירה מפורשת של המשתמש ולא תופעת לוואי של ריחוף.
+   */
+  .sidebar.pinned { width: var(--sidebar-w); padding: 14px 10px; box-shadow: none; }
+  .rail-pinned .main { margin-inline-start: var(--sidebar-w); }
+  .sidebar.pinned .nav-item > *:not(.ico) { display: initial; }
+  .sidebar.pinned .nav-group, .sidebar.pinned .nav-note, .sidebar.pinned .company-logo { opacity: 1; pointer-events: auto; }
+  .sidebar.pinned .nav-group { height: auto; overflow: visible; }
+
   /* במצב מצומצם נשאר האייקון בלבד */
-  .sidebar:not(:hover):not(:focus-within) .nav-item > *:not(.ico) { display: none; }
-  .sidebar:not(:hover):not(:focus-within) .nav-item { justify-content: center; padding: 9px 0; }
-  .sidebar:not(:hover):not(:focus-within) .nav-group,
-  .sidebar:not(:hover):not(:focus-within) .nav-note,
-  .sidebar:not(:hover):not(:focus-within) .company-logo { opacity: 0; pointer-events: none; }
-  .sidebar:not(:hover):not(:focus-within) .nav-group { height: 8px; margin: 6px 0 0; overflow: hidden; }
+  .sidebar:not(.pinned):not(:hover):not(:focus-within) .nav-item > *:not(.ico) { display: none; }
+  .sidebar:not(.pinned):not(:hover):not(:focus-within) .nav-item { justify-content: center; padding: 9px 0; }
+  .sidebar:not(.pinned):not(:hover):not(:focus-within) .nav-group,
+  .sidebar:not(.pinned):not(:hover):not(:focus-within) .nav-note,
+  .sidebar:not(.pinned):not(:hover):not(:focus-within) .company-logo { opacity: 0; pointer-events: none; }
+  .sidebar:not(.pinned):not(:hover):not(:focus-within) .nav-group { height: 8px; margin: 6px 0 0; overflow: hidden; }
   .sidebar .nav-group, .sidebar .company-logo { transition: opacity .12s; }
 
   /* הפריטים לא נדחסים לגובה כשהתפריט ארוך מהמסך */
@@ -1264,3 +1276,32 @@ input[type="color"] { width: 46px; height: 30px; padding: 2px; cursor: pointer; 
 .msg:hover .b-del, .b-del:focus-visible { opacity: .7; }
 .b-del:hover { opacity: 1; }
 @media (hover: none) { .b-del { opacity: .6; } }
+
+/* ---- שם הפרויקט בתפריט ---- */
+
+/*
+ * שתי שורות במקום חיתוך בשלוש נקודות. "2 מגדל הרקיע" נחתך ל"2 מגדל ה…",
+ * וזה בדיוק המידע שמזהה את הפרויקט. שתי שורות מציגות כמעט כל שם אמיתי,
+ * ולשמות ארוכים במיוחד יש ‎title‎ מלא בריחוף.
+ */
+.nav-item .nav-name {
+  flex: 1 1 auto; min-width: 0;
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
+  overflow: hidden; line-height: 1.32; text-align: start;
+  word-break: break-word;
+}
+/* השורה מתיישרת לראש כשהשם נשבר לשתי שורות */
+.nav-item { align-items: center; }
+.nav-item:has(.nav-name) { align-items: flex-start; }
+.nav-item:has(.nav-name) .ico, .nav-item:has(.nav-name) .count { margin-top: 1px; }
+/* המונה מתכווץ ואינו גוזל מהשם */
+.nav-item .count { flex: none; padding: 0 6px; font-size: 11px; }
+
+/* כפתור הנעיצה בראש התפריט — נבדל משאר הפריטים */
+.nav-pin-toggle {
+  color: var(--text-mute) !important; font-size: 12px;
+  border-bottom: 1px solid var(--border); border-radius: 0;
+  margin-bottom: 6px; padding-bottom: 10px;
+}
+.nav-pin-toggle:hover { color: var(--brand) !important; background: none !important; }
+.nav-pin-toggle .ico { font-size: 14px; }

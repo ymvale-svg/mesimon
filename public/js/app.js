@@ -26,6 +26,14 @@ const App = (() => {
   const PROJECT_SCOPE_KEY = 'mesimon.projectScope';
 
   /**
+   * האם התפריט נעוץ פתוח. ברצועה מצומצמת צריך להעביר את העכבר בכל פעם כדי
+   * לקרוא שם של פרויקט, ומי שעובד עם רשימת פרויקטים ארוכה רוצה אותה פרושה
+   * כל הזמן. נעוץ — התוכן מפנה לו מקום ולא נדחף מתחתיו.
+   */
+  const SIDEBAR_PIN_KEY = 'mesimon.sidebarPinned';
+  const sidebarPinned = () => localStorage.getItem(SIDEBAR_PIN_KEY) === '1';
+
+  /**
    * הרוחב שממנו המערכת עוברת לפריסת נייד. אותו מספר שב-mobile.css, ולכן הוא
    * נקרא משם דרך matchMedia ולא נכתב כאן שוב — שני מקומות היו נפרדים בשקט
    * ברגע שאחד מהם משתנה.
@@ -436,6 +444,22 @@ const App = (() => {
 
   function sidebar() {
     const items = [];
+
+    /**
+     * נעיצה. הכפתור בראש התפריט ולא בהגדרות: זו החלטה שמשנים תוך עבודה,
+     * לפי מה שעושים כרגע, ולא פעם אחת בחיים.
+     */
+    const pinned = sidebarPinned();
+    items.push(el('button.nav-item.nav-pin-toggle', {
+      title: pinned ? 'שחרור הנעיצה — התפריט יתכנס לרצועת אייקונים' : 'נעיצת התפריט פתוח',
+      onclick: () => {
+        localStorage.setItem(SIDEBAR_PIN_KEY, pinned ? '0' : '1');
+        refreshChrome();
+      }
+    }, [
+      el('span.ico', { text: pinned ? '⇥' : '⇤' }),
+      el('span', { text: pinned ? 'כיווץ התפריט' : 'נעיצת התפריט' })
+    ]));
     const add = (name, params, extra = {}) => {
       const route = ROUTES[name];
       items.push(el(`button.nav-item${state.route.name === name && !extra.matchParam ? '.active' : ''}`, {
@@ -449,7 +473,7 @@ const App = (() => {
 
     if (isVendor()) {
       add('vendor');
-      return el('aside.sidebar#sidebar', {}, [...items, UI.companyLogo('in-sidebar')]);
+      return el(`aside.sidebar#sidebar${sidebarPinned() ? '.pinned' : ''}`, {}, [...items, UI.companyLogo('in-sidebar')]);
     }
 
     add('home');
@@ -470,7 +494,8 @@ const App = (() => {
         // minWidth: 0 הוא מה שמאפשר לשלוש הנקודות לעבוד בכלל: בלעדיו פריט בתוך flex
         // לא מתכווץ מתחת לרוחב הטקסט, ושם ארוך היה דוחף את המונה ואת כפתור הנעיצה
         // מחוץ לרוחב התפריט — כלומר הנעיצה הייתה נחתכת ולא ניתנת ללחיצה
-        el('span', { text: p.name, style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: '0' } }),
+        // ‎title‎ מלא, כי גם בשתי שורות שם ארוך במיוחד עוד עשוי להיחתך
+        el('span.nav-name', { text: p.name, title: p.name }),
         el('span.count', { text: `${p.tasksDone}/${p.tasksTotal}` }),
         pinButton(p)
       ]);
@@ -545,7 +570,7 @@ const App = (() => {
       add('admin');
     }
 
-    return el('aside.sidebar#sidebar', {}, [...items, UI.companyLogo('in-sidebar')]);
+    return el(`aside.sidebar#sidebar${sidebarPinned() ? '.pinned' : ''}`, {}, [...items, UI.companyLogo('in-sidebar')]);
   }
 
   function topbar() {
@@ -672,7 +697,7 @@ const App = (() => {
     const content = el('main.main#main');
     const phone = isPhone();
 
-    UI.mount(root(), el('div.shell', {}, [
+    UI.mount(root(), el(`div.shell${!phone && sidebarPinned() ? '.rail-pinned' : ''}`, {}, [
       topbar(),
       el('div.body', {}, [sidebar(), content]),
       // הרקע והניווט התחתון נבנים תמיד; ב-CSS הם מוצגים רק בפריסת נייד
@@ -711,6 +736,8 @@ const App = (() => {
     if (!shell) return;
     shell.querySelector('.topbar')?.replaceWith(topbar());
     shell.querySelector('#sidebar')?.replaceWith(sidebar());
+    // מצב הנעיצה יושב על השלד — הוא מה שקובע כמה מקום התוכן מפנה לתפריט
+    shell.classList.toggle('rail-pinned', !isPhone() && sidebarPinned());
     UI.refitLogos(); // הסמל נבנה מחדש — מיישרים שוב את הכיתוב לרוחב השם
   }
 
