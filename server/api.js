@@ -3081,7 +3081,7 @@ router.delete('/api/boards/:boardId/columns/:id', async (req, res, ctx) => {
  * המפתחות מוגבלים לרשימה סגורה כדי שנקודת הקצה לא תהפוך לאחסון חופשי
  * שכל אחד יכול למלא, והערך מוגבל בגודל מאותה סיבה.
  */
-const PREF_KEYS = ['boardFilters', 'boardView', 'projectScope', 'sidebar', 'mobileFilter'];
+const PREF_KEYS = ['boardFilters', 'boardView', 'projectScope', 'sidebar', 'mobileFilter', 'projectOrder'];
 const PREF_MAX_BYTES = 4096;
 
 router.put('/api/prefs', async (req, res, ctx) => {

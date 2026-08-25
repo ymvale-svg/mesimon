@@ -714,6 +714,84 @@ const App = (() => {
     return btn;
   }
 
+  /**
+   * סדר הפרויקטים בתפריט, כפי שהמשתמש סידר אותם בגרירה.
+   *
+   * העדפה אישית ולא הגדרה של הפרויקט: לכל אחד סדר עבודה משלו, ומי שגורר את
+   * "רכבים" לראש הרשימה אינו מחליט זאת בשביל כל החברה. נשמר בשרת כמו שאר
+   * העדפות התצוגה, ולכן הסדר זהה במחשב ובטלפון.
+   *
+   * נשמרים מזהים בלבד, וכל מה שאינו ברשימה נופל לסופה בסדר המקורי — כך
+   * פרויקט חדש אינו נעלם ואינו קופץ לראש, ופרויקט שנמחק אינו משאיר חור.
+   */
+  function orderProjects(list) {
+    const saved = getPref('projectOrder');
+    if (!Array.isArray(saved) || !saved.length) return list;
+    const rank = new Map(saved.map((id, i) => [Number(id), i]));
+    const at = (p) => (rank.has(p.id) ? rank.get(p.id) : Number.MAX_SAFE_INTEGER);
+    // סדר מקורי כשובר שוויון — ‎sort‎ יציב, ולכן די בהשוואת הדירוג
+    return [...list].sort((a, b) => at(a) - at(b));
+  }
+
+  /**
+   * גרירת שורות בתוך קבוצה אחת. HTML5 drag-and-drop ולא מצביע גולמי: הוא נותן
+   * בחינם את סמן הגרירה, את התמונה הנגררת ואת התנהגות הגלילה בקצה הרשימה.
+   *
+   * הגרירה מוגבלת לקבוצה — נעוצים בין נעוצים, שאר בין שאר. משיכת פרויקט לא
+   * נעוץ מעל נעוץ הייתה מבטלת בשקט את משמעות הנעיצה ("לראש הרשימה"), וזה
+   * מבלבל יותר ממה שהוא פותר.
+   */
+  function makeReorderable(entries, onOrder) {
+    if (entries.length < 2) return;
+    let dragged = null;
+
+    for (const { p, node } of entries) {
+      node.draggable = true;
+      node.classList.add('nav-draggable');
+
+      node.addEventListener('dragstart', (e) => {
+        dragged = { p, node };
+        node.classList.add('dragging');
+        e.dataTransfer.effectAllowed = 'move';
+        // נדרש ב-Firefox, שאינו מתחיל גרירה בלי מטען
+        e.dataTransfer.setData('text/plain', String(p.id));
+      });
+
+      node.addEventListener('dragend', () => {
+        node.classList.remove('dragging');
+        for (const x of entries) x.node.classList.remove('drop-before', 'drop-after');
+        dragged = null;
+      });
+
+      node.addEventListener('dragover', (e) => {
+        if (!dragged || dragged.node === node) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+        // חצי עליון = לפני, חצי תחתון = אחרי. סימון ויזואלי לאן זה ייפול
+        const box = node.getBoundingClientRect();
+        const after = e.clientY > box.top + box.height / 2;
+        node.classList.toggle('drop-before', !after);
+        node.classList.toggle('drop-after', after);
+      });
+
+      node.addEventListener('dragleave', () => {
+        node.classList.remove('drop-before', 'drop-after');
+      });
+
+      node.addEventListener('drop', (e) => {
+        if (!dragged || dragged.node === node) return;
+        e.preventDefault();
+        const box = node.getBoundingClientRect();
+        const after = e.clientY > box.top + box.height / 2;
+
+        const ids = entries.map((x) => x.p.id).filter((id) => id !== dragged.p.id);
+        const target = ids.indexOf(p.id);
+        ids.splice(after ? target + 1 : target, 0, dragged.p.id);
+        onOrder(ids);
+      });
+    }
+  }
+
   function sidebar() {
     const items = [];
 
@@ -794,8 +872,9 @@ const App = (() => {
     const showAll = foreign > 0 && (saved === 'all' || (!saved && mineCount === 0));
     const openProjects = foreign > 0 && !showAll ? live.filter((p) => p.mine) : live;
 
-    const pinnedProjects = openProjects.filter((p) => p.pinned);
-    const otherProjects = openProjects.filter((p) => !p.pinned);
+    const ordered = orderProjects(openProjects);
+    const pinnedProjects = ordered.filter((p) => p.pinned);
+    const otherProjects = ordered.filter((p) => !p.pinned);
 
     /**
      * הרשימה מכילה רק את הפרויקטים של המשתמש, ולכן היא עשויה להיות ריקה
@@ -826,11 +905,24 @@ const App = (() => {
      * מחדש בכל הקשה הייתה מחליפה את תיבת החיפוש עצמה ומאבדת את המיקוד
      * והטקסט שהוקלד.
      */
-    const projectNodes = [
-      ...pinnedProjects.map((p) => ({ p, node: projectItem(p) })),
-      ...otherProjects.map((p) => ({ p, node: projectItem(p) }))
-    ];
+    const pinnedNodes = pinnedProjects.map((p) => ({ p, node: projectItem(p) }));
+    const otherNodes = otherProjects.map((p) => ({ p, node: projectItem(p) }));
+    const projectNodes = [...pinnedNodes, ...otherNodes];
     const separator = pinnedProjects.length && otherProjects.length ? el('div.nav-pinned-sep') : null;
+
+    /*
+     * הסדר החדש נשמר כרשימה של *כל* הפרויקטים הגלויים, ולא של הקבוצה שנגררה
+     * בלבד: אחרת גרירה בתוך הנעוצים הייתה מוחקת את הסדר של השאר.
+     */
+    const commitOrder = (groupIds, groupKey) => {
+      const full = groupKey === 'pinned'
+        ? [...groupIds, ...otherProjects.map((p) => p.id)]
+        : [...pinnedProjects.map((p) => p.id), ...groupIds];
+      setPref('projectOrder', full);
+      refreshChrome();
+    };
+    makeReorderable(pinnedNodes, (ids) => commitOrder(ids, 'pinned'));
+    makeReorderable(otherNodes, (ids) => commitOrder(ids, 'other'));
 
     if (openProjects.length >= PROJECT_SEARCH_MIN) {
       const search = el('input.nav-search', { type: 'search', placeholder: 'חיפוש פרויקט…' });
