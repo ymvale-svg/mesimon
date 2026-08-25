@@ -327,6 +327,13 @@ const App = (() => {
       dir: 'rtl',
       // ‎tag‎ לפי מזהה ההתראה — אותה התראה לא תוצג פעמיים אם הסקר חזר עליה
       tag: `mesimon-${n.id}`,
+      /*
+       * ההתראה נשארת על המסך עד שנוגעים בה, ואינה נעלמת אחרי כמה שניות.
+       * זו כל הנקודה בהתראה שמגיעה כשלא מסתכלים: התראה שמופיעה ונעלמת בזמן
+       * שאדם בפגישה או בחדר אחר לא הודיעה לו דבר. היא גם ממילא נשמרת במרכז
+       * ההתראות של Windows, אך שם צריך לפתוח אותו כדי לדעת שיש בו משהו.
+       */
+      requireInteraction: true,
       data: { taskId: n.taskId ?? null, notificationId: n.id }
     };
 
@@ -434,6 +441,8 @@ const App = (() => {
   const seenNotifIds = new Set();
   let notifPrimed = false;
   let notifTimer = null;
+  // מאזיני החזרה לחלון נרשמים פעם אחת לכל חיי הדף, ולא בכל התחברות מחדש
+  let visibilityHooked = false;
 
   async function refreshNotifications() {
     try {
@@ -453,10 +462,23 @@ const App = (() => {
   /**
    * סקר יחיד. ‎boot()‎ נקרא שוב אחרי כל התחברות, ושני טיימרים היו מכפילים
    * גם את הבקשות לשרת וגם את ההקפצות.
+   *
+   * חלון ממוזער או מוסתר ממשיך לסקור, אבל הדפדפן מאט טיימרים בלשונית שאינה
+   * נראית — ב-Chrome עד פעם בדקה. לכן נוסף סקר מיד כשחוזרים לחלון: מי שהיה
+   * בפגישה ופתח את המסך מקבל את התמונה העדכנית באותו רגע, ולא ממתין למחזור
+   * המואט הבא.
    */
   function startNotifPolling() {
     if (notifTimer) return;
     notifTimer = setInterval(refreshNotifications, NOTIF_POLL_MS);
+    if (!visibilityHooked) {
+      visibilityHooked = true;
+      document.addEventListener('visibilitychange', () => {
+        if (!document.hidden && notifTimer) refreshNotifications();
+      });
+      // חלון שהיה פתוח אך לא ממוקד אינו ‎hidden‎, ולכן ‎focus‎ הוא אירוע נפרד
+      window.addEventListener('focus', () => { if (notifTimer) refreshNotifications(); });
+    }
   }
 
   function stopNotifPolling() {
@@ -632,7 +654,8 @@ const App = (() => {
     const options = {
       body: 'אם אתה רואה את זה — התראות המחשב עובדות. כך תיראה הודעה שנכתבת לך במשימה.',
       icon: '/icons/icon-192.png', badge: '/icons/icon-192.png',
-      lang: 'he', dir: 'rtl', tag: 'mesimon-test', data: { taskId: null }
+      lang: 'he', dir: 'rtl', tag: 'mesimon-test',
+      requireInteraction: true, data: { taskId: null }
     };
     try {
       const reg = await navigator.serviceWorker?.ready;
