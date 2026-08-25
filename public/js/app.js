@@ -206,10 +206,19 @@ const App = (() => {
    * שלא באה ממחווה של המשתמש, ובקשה שקופצת בכניסה הראשונה נדחית כמעט תמיד.
    */
   const DESKTOP_NOTIF_KEY = 'mesimon.desktopNotify';
+  const DESKTOP_ASK_KEY = 'mesimon.desktopNotifyAsked';
   const supportsDesktopNotif = () => 'Notification' in window;
 
-  /** 'unsupported' | 'default' | 'granted' | 'denied' | 'muted' */
+  /**
+   * ‎'insecure'‎ הוא המצב שאי אפשר לנחש ממנו שמשהו לא בסדר: ב-HTTP רגיל
+   * (למשל כניסה לשרת דרך כתובת ה-IP ברשת הפנימית) הדפדפן אינו חושף את
+   * ‎Notification‎ כלל — הוא לא מבקש אישור ולא מודיע על שגיאה, פשוט שקט.
+   * בלי המצב הזה הכפתור היה נראה שבור ולא היה שום הסבר למה.
+   *
+   * 'unsupported' | 'insecure' | 'default' | 'granted' | 'denied' | 'muted'
+   */
   function desktopNotifState() {
+    if (!window.isSecureContext) return 'insecure';
     if (!supportsDesktopNotif()) return 'unsupported';
     if (Notification.permission === 'granted') {
       return localStorage.getItem(DESKTOP_NOTIF_KEY) === '0' ? 'muted' : 'granted';
@@ -234,6 +243,44 @@ const App = (() => {
   }
 
   const muteDesktopNotifications = () => localStorage.setItem(DESKTOP_NOTIF_KEY, '0');
+
+  /**
+   * שורת ההצעה בראש המסך, כמו בוואטסאפ ווב.
+   *
+   * הכפתור במגירת ההתראות לבדו לא הספיק: מי שלא חשב לפתוח את המגירה לא ידע
+   * שיש בכלל מה להפעיל, ולכן נראה כאילו הדפדפן אינו מבקש אישור. הבקשה עצמה
+   * *חייבת* לצאת מלחיצה — דפדפן חוסם ‎requestPermission‎ שלא בא ממחווה של
+   * המשתמש, ו-Chrome מעניש אתרים שמבקשים מיד בטעינה. לכן שורה שמזמינה
+   * ללחוץ, ולא בקשה שקופצת מעצמה.
+   *
+   * נדחית לתמיד בלחיצה על "לא עכשיו": הצעה שחוזרת בכל כניסה היא נודניק,
+   * והכפתור במגירת ההתראות נשאר שם למי שיתחרט.
+   */
+  function desktopNotifBanner() {
+    if (desktopNotifState() !== 'default') return null;
+    if (localStorage.getItem(DESKTOP_ASK_KEY) === '0') return null;
+    if (isVendor()) return null;   // לספק אין שרשורים פנימיים שממתינים לו
+
+    const bar = el('div.notif-invite', {}, [
+      el('span', { text: '🔔' }),
+      el('div', { text: 'להפעיל התראות במחשב? הודעה שנכתבת לך בתוך משימה תופיע בפינת המסך גם כשמשימון מוסתר.' }),
+      el('button.btn.btn-sm.btn-primary', {
+        onclick: async () => {
+          const result = await enableDesktopNotifications();
+          bar.remove();
+          if (result === 'granted') UI.success('התראות במחשב הופעלו');
+          else if (result === 'denied') {
+            localStorage.setItem(DESKTOP_ASK_KEY, '0');
+            UI.error('הדפדפן חסם את ההתראות. אפשר לאשר אותן בהגדרות האתר');
+          }
+        }
+      }, ['הפעלה']),
+      el('button.btn.btn-sm', {
+        onclick: () => { localStorage.setItem(DESKTOP_ASK_KEY, '0'); bar.remove(); }
+      }, ['לא עכשיו'])
+    ]);
+    return bar;
+  }
 
   /**
    * ההתראה מוצגת רק כשהחלון אינו מול העיניים. כשהוא כן — הכרטיס המוקפץ
@@ -494,6 +541,12 @@ const App = (() => {
 
     const row = (children) => el('div.np-desktop', {}, children);
 
+    if (mode === 'insecure') {
+      return row([
+        el('span', { text: '🔒' }),
+        el('div', { text: `התראות במחשב זמינות רק בכתובת מאובטחת (https). הכתובת הנוכחית היא ${location.protocol}//${location.host}` })
+      ]);
+    }
     if (mode === 'denied') {
       return row([
         el('span', { text: '🔕' }),
@@ -1044,6 +1097,7 @@ const App = (() => {
 
     UI.mount(root(), el(`div.shell${!phone && sidebarPinned() ? '.rail-pinned' : ''}`, {}, [
       topbar(),
+      desktopNotifBanner(),
       el('div.body', {}, [sidebar(), content]),
       // הרקע והניווט התחתון נבנים תמיד; ב-CSS הם מוצגים רק בפריסת נייד
       el('div.sidebar-veil', { onclick: closeDrawer }),

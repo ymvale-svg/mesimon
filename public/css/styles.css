@@ -229,6 +229,23 @@ textarea { resize: vertical; min-height: 76px; }
 
 .shell { display: flex; flex-direction: column; height: 100vh; }
 
+/*
+ * שורת ההצעה להפעיל התראות במחשב. ‎flex: none‎ כמו הכותרת — היא לוקחת את
+ * הגובה שלה מהמסך ואינה נגללת עם התוכן, אחרת היא נעלמת ברגע שגוללים.
+ */
+.notif-invite {
+  flex: none; display: flex; align-items: center; gap: 10px;
+  padding: 9px 16px; font-size: 13px; line-height: 1.35;
+  background: var(--info-bg); color: #1e40af;
+  border-bottom: 1px solid #bfdbfe;
+}
+.notif-invite > div { flex: 1; min-width: 0; }
+.notif-invite .btn { flex: none; }
+@media (max-width: 820px) {
+  /* בטלפון אין מקום לשתי שורות טקסט וגם שני כפתורים — הטקסט מתקצר */
+  .notif-invite { padding: 8px 12px; font-size: 12.5px; gap: 7px; }
+}
+
 .topbar {
   height: var(--header-h);
   flex: none;
