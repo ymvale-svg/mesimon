@@ -45,6 +45,17 @@ function alertTargets(task) {
   if (task.assignee_type === 'user') add(task.assignee_id);
   if (task.project_id) add(D.get('SELECT manager_id FROM projects WHERE id = ?', task.project_id)?.manager_id);
 
+  /*
+   * משימת ספק אינה שייכת לאיש בארגון: האחראי עליה הוא הספק, ולכן אין לה גם
+   * שיוך מחלקתי. התוצאה הייתה שכל מה שספק עשה — העלה תוצר, הגיב, סיים —
+   * לא הודיע לאף אחד, אלא אם במקרה הוגדר לפרויקט מנהל.
+   *
+   * מי שפתח את המשימה הוא מי שהזמין את העבודה מהספק, וזה מי שממתין לה.
+   * רק במשימת ספק: במשימה פנימית הפותח מקבל ממילא הודעה על סגירתה, ואין
+   * צורך להחזיר אותו לכל התראה על כל שינוי.
+   */
+  if (task.assignee_type === 'vendor') add(task.created_by);
+
   // המחלקה של המשימה, ואם אין לה שיוך — המחלקה של האחראי עליה
   const departmentId = task.department_id
     ?? (task.assignee_type === 'user' && task.assignee_id

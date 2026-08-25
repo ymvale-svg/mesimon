@@ -291,6 +291,7 @@ const App = (() => {
 
   async function showDesktopNotification(n) {
     if (desktopNotifState() !== 'granted' || windowIsWatched()) return;
+    if (!DESKTOP_NOTIF_KINDS.has(n.kind)) return;
 
     const parts = notifParts(n);
 
@@ -308,9 +309,18 @@ const App = (() => {
     const title = parts.author === SYSTEM_AUTHOR
       ? (n.title || 'משימון')
       : [parts.author, taskTitle].filter(Boolean).join(' · ');
+
+    /*
+     * כשיש משימה בכותרת, הגוף הוא ההודעה עצמה. כשאין — למשל מינוי לאחראי
+     * משימות בפרויקט, שאינו תלוי במשימה — ההסבר מה קרה חייב להיכנס לגוף,
+     * אחרת ההתראה מציגה שם של אדם ושם של פרויקט בלי שום פועל שמקשר ביניהם.
+     */
+    const body = taskTitle
+      ? (message || parts.headline)
+      : [parts.headline, message].filter(Boolean).join(' — ');
+
     const options = {
-      // כשאין תוכן הודעה, שורת ההסבר ("שינוי סטטוס במשימה שלך") היא הגוף
-      body: (message || parts.headline || taskTitle).slice(0, 300),
+      body: String(body || taskTitle).slice(0, 300),
       icon: '/icons/icon-192.png',
       badge: '/icons/icon-192.png',
       lang: 'he',
@@ -381,8 +391,30 @@ const App = (() => {
     status_change: { icon: '🔄', bg: '#f8fafc', color: '#475569' },
     assignment: { mask: 'my-tasks', bg: '#f5f3ff', color: '#7c3aed' },
     // הודעה בשרשור של משימה — הסוג היחיד שהוא שיחה בין אנשים ולא דיווח
-    comment: { icon: '💬', bg: '#f0fdf4', color: '#15803d' }
+    comment: { icon: '💬', bg: '#f0fdf4', color: '#15803d' },
+    // משימה שפתחתי ומישהו אחר סגר
+    completed: { icon: '✅', bg: '#f0fdf4', color: '#15803d' }
   };
+
+  /**
+   * אילו התראות יוצאות גם כהתראת מערכת ההפעלה, ולא רק כרטיס בתוך הדף.
+   *
+   * הרשימה סגורה ולא "הכול": התראה שקופצת מעל כל חלון אחר קוטעת את מה
+   * שהמשתמש עושה, וזכות כזו יש רק לדבר שאדם אחר עשה עכשיו וממתין לתגובה —
+   * שיוך משימה, מינוי לאחראי פרויקט, הודעה בשרשור, סגירת משימה שפתחתי,
+   * תוצר שספק העלה, ותיוג בשמי.
+   *
+   * מה שנשאר בתוך הדף בכוונה: התראות מנוע האוטומציות (איחור, הקפצה,
+   * תזכורת לספק, התראה מקדימה למנהל). הן מצב מתמשך ולא אירוע — המנוע רץ
+   * כל חמש דקות, וקפיצה שלהן על המסך הייתה רעש שמלמד להתעלם מהתראות.
+   */
+  const DESKTOP_NOTIF_KINDS = new Set([
+    'assignment',     // משימה ששוייכה לי · מינוי לאחראי משימות בפרויקט
+    'comment',        // הודעה פנימית בשרשור של משימה
+    'completed',      // משימה שפתחתי והושלמה בידי אחר
+    'status_change',  // ספק העלה תוצר או סיים מצדו
+    'mention'         // תויגתי בשמי
+  ]);
 
   /**
    * מה כבר ראינו בסשן הזה. ההבאה הראשונה רק ממלאת את הקבוצה ואינה מקפיצה דבר:

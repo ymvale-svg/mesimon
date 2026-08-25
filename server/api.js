@@ -1052,6 +1052,25 @@ function changeStatus(task, newStatus, actor, note = '') {
       title: 'שינוי סטטוס במשימה שלך', body: `${task.title} — ${target.label}`, taskId: task.id
     });
   }
+
+  /*
+   * מי שפתח את המשימה צריך לדעת שהיא נסגרה. הוא ביקש שמשהו ייעשה, ובלי
+   * ההודעה הזאת הוא נשאר שואל "מה קרה עם זה" או בודק ידנית בלוח.
+   *
+   * רק בסגירה ורק כשמישהו אחר סגר: פותח שסוגר בעצמו יודע, והאחראי כבר קיבל
+   * את התראת שינוי הסטטוס שלמעלה ואינו צריך שנייה עליה.
+   */
+  if (target.is_final && task.created_by
+      && task.created_by !== actor.id
+      && !(task.assignee_type === 'user' && task.assignee_id === task.created_by)) {
+    if (D.get("SELECT 1 FROM users WHERE id = ? AND status = 'active'", task.created_by)) {
+      D.notify({
+        targetType: 'user', targetId: task.created_by, kind: 'completed',
+        title: `${actor.name} השלים/ה משימה שפתחת`,
+        body: task.title, taskId: task.id
+      });
+    }
+  }
 }
 
 /** 5ב — דחייה והחזרה לספק עם הערות */
@@ -1625,8 +1644,22 @@ router.post('/api/tasks/:id/attachments', async (req, res, ctx) => {
   D.audit(task.id, actorRef(actor), 'attachment', `הועלה קובץ "${name}" (גרסה ${version})`);
 
   // העלאת תוצרים מקדמת את הסטטוס אוטומטית
-  if (isVendor(actor) && task.status === 'awaiting_upload') {
+  const advanced = isVendor(actor) && task.status === 'awaiting_upload';
+  if (advanced) {
     changeStatus(getTaskOr404(task.id), 'uploaded', actor, 'עודכן אוטומטית בעקבות העלאת תוצר');
+  } else if (isVendor(actor)) {
+    /*
+     * ספק שהעלה קובץ נוסף לא הודיע לאף אחד: ההתראה הייתה תלויה בקידום
+     * הסטטוס, וזה קורה רק בהעלאה הראשונה. גרסה מתוקנת של תוצר, או קובץ
+     * שנשלח אחרי בקשת תיקון, נכנסו בשקט — ומי שחיכה להם לא ידע.
+     */
+    for (const m of Rules.alertTargets(task)) {
+      D.notify({
+        targetType: 'user', targetId: m.id, kind: 'status_change',
+        title: 'ספק העלה קובץ',
+        body: `${task.title} — ${actor.name}: ${name}`, taskId: task.id
+      });
+    }
   }
 
   sendJson(res, 200, { task: shapeTask(getTaskOr404(task.id), actor, { withDetails: true }) });
@@ -1685,6 +1718,25 @@ router.get('/api/projects', async (req, res, ctx) => {
   sendJson(res, 200, { projects: listProjectsFor(actor) });
 });
 
+/**
+ * הודעה למי שמונה אחראי המשימות בפרויקט.
+ *
+ * זו מינוי לתפקיד, לא שורה בטבלה: הפרויקט נכנס לרשימה "שלי" שלו, והוא זה
+ * שיישאלו אותו על ההתקדמות. עד כה זה קרה בשקט לגמרי — מישהו בחר שם ברשימה
+ * נפתחת, והממונה גילה זאת אם וכאשר הבחין בפרויקט חדש בתפריט.
+ *
+ * מי שמינה את עצמו אינו מקבל הודעה, כמו בכל שאר ההתראות במערכת.
+ */
+function notifyProjectManager(projectId, managerId, projectName, actor) {
+  if (!managerId || managerId === actor.id) return;
+  if (D.get("SELECT 1 FROM users WHERE id = ? AND status = 'active'", managerId) === undefined) return;
+  D.notify({
+    targetType: 'user', targetId: managerId, kind: 'assignment',
+    title: `${actor.name} מינה/תה אותך לאחראי משימות בפרויקט`,
+    body: projectName
+  });
+}
+
 router.post('/api/projects', async (req, res, ctx) => {
   const actor = ctx.requireActor();
   requirePerm(actor, 'create_project');
@@ -1715,6 +1767,7 @@ router.post('/api/projects', async (req, res, ctx) => {
       }
     }
   }
+  notifyProjectManager(id, b.managerId ? Number(b.managerId) : null, name, actor);
   sendJson(res, 201, { projects: listProjectsFor(actor) });
 });
 
@@ -1726,16 +1779,23 @@ router.patch('/api/projects/:id', async (req, res, ctx) => {
 
   assertMayEditProject(actor, project);
   const b = await readJson(req);
+  const nextManager = b.managerId !== undefined
+    ? (b.managerId ? Number(b.managerId) : null)
+    : project.manager_id;
   D.run(
     'UPDATE projects SET name = ?, description = ?, manager_id = ?, start_date = ?, due_date = ?, status = ?, color = ? WHERE id = ?',
     b.name ?? project.name, b.description ?? project.description,
-    b.managerId !== undefined ? (b.managerId ? Number(b.managerId) : null) : project.manager_id,
+    nextManager,
     b.startDate !== undefined ? (b.startDate || null) : project.start_date,
     b.dueDate !== undefined ? (b.dueDate || null) : project.due_date,
     b.status ?? project.status,
     b.color !== undefined ? hexColor(b.color) : (project.color ?? ''),
     project.id
   );
+  // רק כשהאחראי באמת התחלף — שמירת הפרויקט בלי לגעת בו אינה מינוי מחדש
+  if (nextManager !== project.manager_id) {
+    notifyProjectManager(project.id, nextManager, b.name ?? project.name, actor);
+  }
   sendJson(res, 200, { projects: listProjectsFor(actor) });
 });
 
