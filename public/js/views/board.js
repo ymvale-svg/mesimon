@@ -577,8 +577,19 @@ const BoardView = (() => {
         ? App.state.vendors.filter((v) => v.status === 'active').map((v) => ({ value: `vendor:${v.id}`, label: `${v.name} (ספק חיצוני)` }))
         : [])
     ];
+    /*
+     * במשימה חדשה האחראי הוא מי שפותח אותה. רוב המשימות נפתחות בשביל עצמי,
+     * ו"ללא אחראי" כברירת מחדל יצר משימות יתומות שאינן מופיעות אצל אף אחד
+     * בדף הבית — כלומר בדיוק המשימות שנשכחות. מי שפותח בשביל אחר משנה שורה
+     * אחת; מי שפותח לעצמו אינו צריך לעשות דבר.
+     *
+     * ספק אינו ברירת מחדל לעצמו: הוא ממילא אינו פותח משימות.
+     */
+    const meAsAssignee = App.state.actor && !App.isVendor()
+      ? `user:${App.state.actor.id}`
+      : '';
     const assigneeSelect = UI.select(assigneeOptions,
-      task?.assigneeId ? `${task.assigneeType}:${task.assigneeId}` : '');
+      task?.assigneeId ? `${task.assigneeType}:${task.assigneeId}` : (isEdit ? '' : meAsAssignee));
 
     const prioritySelect = UI.select(App.state.priorities.map((p) => ({ value: p.key, label: p.label })), task?.priority ?? 'normal');
     const dueInput = el('input', { type: 'date', value: UI.toInputDate(task?.dueDate) });
@@ -722,9 +733,13 @@ const BoardView = (() => {
     const nameInput = el('input', { type: 'text', value: project?.name ?? '' });
     const descInput = el('textarea');
     descInput.value = project?.description ?? '';
+    /*
+     * בפרויקט חדש המנהל הוא מי שפותח אותו, כמו האחראי במשימה חדשה. מי שפותח
+     * פרויקט בשביל מישהו אחר משנה שורה אחת, ומי שפותח לעצמו אינו נדרש לדבר.
+     */
     const managerSelect = UI.select(
       [{ value: '', label: 'ללא מנהל' }, ...App.state.users.map((u) => ({ value: u.id, label: u.name }))],
-      project?.managerId ?? ''
+      project?.managerId ?? (isEdit || App.isVendor() ? '' : App.state.actor?.id ?? '')
     );
     const startInput = el('input', { type: 'date', value: UI.toInputDate(project?.startDate) });
     const dueInput = el('input', { type: 'date', value: UI.toInputDate(project?.dueDate) });
