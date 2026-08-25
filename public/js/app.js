@@ -291,7 +291,7 @@ const App = (() => {
 
   async function showDesktopNotification(n) {
     if (desktopNotifState() !== 'granted' || windowIsWatched()) return;
-    if (!DESKTOP_NOTIF_KINDS.has(n.kind)) return;
+    if (!desktopKindEnabled(n.kind)) return;
 
     const parts = notifParts(n);
 
@@ -397,24 +397,34 @@ const App = (() => {
   };
 
   /**
-   * אילו התראות יוצאות גם כהתראת מערכת ההפעלה, ולא רק כרטיס בתוך הדף.
+   * קטלוג ההתראות, לבחירה במסך ניהול ההתראות.
    *
-   * הרשימה סגורה ולא "הכול": התראה שקופצת מעל כל חלון אחר קוטעת את מה
-   * שהמשתמש עושה, וזכות כזו יש רק לדבר שאדם אחר עשה עכשיו וממתין לתגובה —
-   * שיוך משימה, מינוי לאחראי פרויקט, הודעה בשרשור, סגירת משימה שפתחתי,
-   * תוצר שספק העלה, ותיוג בשמי.
-   *
-   * מה שנשאר בתוך הדף בכוונה: התראות מנוע האוטומציות (איחור, הקפצה,
-   * תזכורת לספק, התראה מקדימה למנהל). הן מצב מתמשך ולא אירוע — המנוע רץ
-   * כל חמש דקות, וקפיצה שלהן על המסך הייתה רעש שמלמד להתעלם מהתראות.
+   * ‎desktop‎ הוא ברירת המחדל, לא נעילה: כל שורה כאן ניתנת לשינוי בידי
+   * המשתמש. ברירת המחדל דולקת לכל מה שאדם אחר עשה ולמשימה שאיחרה, וכבויה
+   * להתראות שמנוע האוטומציות מפיק *על* מישהו אחר (תזכורת שנשלחה לספק,
+   * התראה מקדימה למנהל) — אלה מעניינות לקריאה ולא להקפצה מעל כל חלון.
    */
-  const DESKTOP_NOTIF_KINDS = new Set([
-    'assignment',     // משימה ששוייכה לי · מינוי לאחראי משימות בפרויקט
-    'comment',        // הודעה פנימית בשרשור של משימה
-    'completed',      // משימה שפתחתי והושלמה בידי אחר
-    'status_change',  // ספק העלה תוצר או סיים מצדו
-    'mention'         // תויגתי בשמי
-  ]);
+  const NOTIF_CATALOG = [
+    { key: 'assignment', label: 'משימה ששוייכה לי, ומינוי לאחראי משימות בפרויקט', desktop: true },
+    { key: 'comment', label: 'הודעה בשרשור של משימה שאני חלק ממנה', desktop: true },
+    { key: 'mention', label: 'תיוג שלי (@) בתגובה', desktop: true },
+    { key: 'completed', label: 'משימה שפתחתי והושלמה בידי אחר', desktop: true },
+    { key: 'status_change', label: 'שינוי סטטוס, וחומר שספק הזין', desktop: true },
+    { key: 'overdue', label: 'משימה שעברה את תאריך היעד', desktop: true },
+    { key: 'escalation', label: 'הקפצת משימה דחופה שאינה זזה', desktop: false },
+    { key: 'manager_alert', label: 'התראה מקדימה לפני תאריך היעד', desktop: false },
+    { key: 'vendor_reminder', label: 'תזכורת שנשלחה לספק', desktop: false }
+  ];
+
+  const NOTIF_DESKTOP_DEFAULTS = Object.fromEntries(NOTIF_CATALOG.map((k) => [k.key, k.desktop]));
+
+  /*
+   * בחירה מפורשת של המשתמש גוברת; מה שלא נבחר נופל לברירת המחדל. שמירת
+   * הבחירות בלבד, ולא העתק של כל הקטלוג, כדי שסוג התראה שיתווסף בעתיד יקבל
+   * את ברירת המחדל שלו ולא ייחשב "כבוי" רק מפני שלא היה קיים בזמן השמירה.
+   */
+  const desktopKindEnabled = (kind) =>
+    getPref('notifyKinds', {})?.[kind] ?? NOTIF_DESKTOP_DEFAULTS[kind] ?? false;
 
   /**
    * מה כבר ראינו בסשן הזה. ההבאה הראשונה רק ממלאת את הקבוצה ואינה מקפיצה דבר:
@@ -612,6 +622,136 @@ const App = (() => {
     ]);
   }
 
+  /**
+   * התראת בדיקה. נשלחת בלחיצה, ולכן החלון דווקא כן מול העיניים — ומשום כך
+   * היא עוקפת את הבדיקה הרגילה שמונעת הקפצה בחלון פעיל. בדיקה שאינה מציגה
+   * דבר אינה בדיקה.
+   */
+  async function sendTestNotification() {
+    if (desktopNotifState() !== 'granted') return UI.error('ההתראות במחשב אינן פעילות');
+    const options = {
+      body: 'אם אתה רואה את זה — התראות המחשב עובדות. כך תיראה הודעה שנכתבת לך במשימה.',
+      icon: '/icons/icon-192.png', badge: '/icons/icon-192.png',
+      lang: 'he', dir: 'rtl', tag: 'mesimon-test', data: { taskId: null }
+    };
+    try {
+      const reg = await navigator.serviceWorker?.ready;
+      if (reg) {
+        await reg.showNotification('משימון · בדיקה', options);
+        return UI.success('נשלחה התראת בדיקה — חפש אותה בפינת המסך');
+      }
+    } catch { /* גיבוי למטה */ }
+    try {
+      new Notification('משימון · בדיקה', options);
+      UI.success('נשלחה התראת בדיקה');
+    } catch (err) {
+      UI.error(`לא ניתן להציג התראה: ${err.message}`);
+    }
+  }
+
+  /**
+   * ניהול התראות. מסך אישי ולא הגדרת מערכת — לכל אחד תפקיד אחר, ומה שחיוני
+   * לאחד הוא רעש לאחר.
+   *
+   * הבחירה היא על ההקפצה בווינדוס בלבד, ולא על עצם קיום ההתראה: התראה
+   * שנעלמת לגמרי פירושה שמשימה שהוקצתה לי לא תופיע בשום מקום, וזו תקלה ולא
+   * העדפה. הרשימה במגירת ההתראות נשארת מלאה תמיד.
+   */
+  function notifSettingsDialog() {
+    const body = el('div');
+
+    const draw = () => {
+      const mode = desktopNotifState();
+
+      const header = mode === 'insecure'
+        ? el('div.alert.alert-danger', {}, [
+            el('span', { text: '🔒' }),
+            el('div', { text: `התראות במחשב זמינות רק בכתובת מאובטחת (https). הכתובת הנוכחית היא ${location.protocol}//${location.host}` })
+          ])
+        : mode === 'unsupported'
+          ? el('div.alert.alert-danger', {}, [
+              el('span', { text: '🚫' }),
+              el('div', { text: 'הדפדפן הזה אינו תומך בהתראות מערכת.' })
+            ])
+          : mode === 'denied'
+            ? el('div.alert.alert-danger', {}, [
+                el('span', { text: '🔕' }),
+                el('div', { text: 'ההתראות חסומות בדפדפן. לפתיחה: סמל המנעול שליד הכתובת ← התראות ← אפשר. אחרי השינוי יש לרענן את הדף.' })
+              ])
+            : mode === 'granted'
+              ? el('div.alert.alert-ok', {}, [
+                  el('span', { text: '🔔' }),
+                  el('div', { text: 'התראות במחשב פעילות. הן מוצגות כשחלון משימון אינו מול העיניים.' }),
+                  el('div.flex', { style: { gap: '6px', flex: 'none' } }, [
+                    el('button.btn.btn-sm', { onclick: () => sendTestNotification() }, ['בדיקה']),
+                    el('button.btn.btn-sm', {
+                      onclick: () => { muteDesktopNotifications(); draw(); }
+                    }, ['השתקה'])
+                  ])
+                ])
+              : el('div.alert.alert-info', {}, [
+                  el('span', { text: '🔔' }),
+                  el('div', { text: mode === 'muted'
+                    ? 'ההתראות מושתקות במכשיר הזה. ההגדרות שלמטה יחזרו לפעול עם ביטול ההשתקה.'
+                    : 'ההתראות במחשב עדיין לא הופעלו. ההגדרות שלמטה ייכנסו לתוקף לאחר ההפעלה.' }),
+                  el('button.btn.btn-sm.btn-primary', {
+                    style: { flex: 'none' },
+                    onclick: async () => {
+                      const r = await enableDesktopNotifications();
+                      if (r === 'denied') UI.error('הדפדפן חסם את ההתראות');
+                      draw();
+                    }
+                  }, [mode === 'muted' ? 'ביטול ההשתקה' : 'הפעלה'])
+                ]);
+
+      const rows = NOTIF_CATALOG.map((k) => {
+        const box = el('input', { type: 'checkbox', checked: desktopKindEnabled(k.key) });
+        box.addEventListener('change', () => {
+          // נשמרות הבחירות בלבד — ראה ההערה ליד NOTIF_DESKTOP_DEFAULTS
+          setPref('notifyKinds', { ...(getPref('notifyKinds', {}) ?? {}), [k.key]: box.checked });
+        });
+        const style = NOTIF_STYLE[k.key] ?? NOTIF_STYLE.status_change;
+        return el('tr', {}, [
+          el('td', {}, [
+            el('div.flex', {}, [
+              el('span.n-icon', { style: { background: style.bg, color: style.color } },
+                [style.mask ? UI.icon(style.mask, { size: 14 }) : style.icon]),
+              el('span', { text: k.label })
+            ])
+          ]),
+          el('td', { style: { textAlign: 'center', width: '110px' } }, [el('label.checkbox', {}, [box])])
+        ]);
+      });
+
+      UI.mount(body,
+        header,
+        el('div.table-wrap.mt', {}, [
+          el('table.data', {}, [
+            el('thead', {}, [el('tr', {}, [
+              el('th', { text: 'סוג ההתראה' }),
+              el('th', { text: 'קפיצה במחשב', style: { textAlign: 'center' } })
+            ])]),
+            el('tbody', {}, rows)
+          ])
+        ]),
+        el('div.alert.alert-info.mt', {}, [
+          el('span', { text: 'ℹ️' }),
+          el('div', { text: 'הכיבוי חל על הקפיצה בפינת המסך בלבד. כל ההתראות ממשיכות להופיע ברשימה שמתחת לפעמון, כדי שדבר לא ייעלם.' })
+        ])
+      );
+    };
+
+    draw();
+    UI.modal({
+      title: 'ניהול התראות',
+      body,
+      footer: [
+        el('div.spacer'),
+        el('button.btn', { onclick: () => document.querySelector('.modal-backdrop')?.remove() }, ['סגירה'])
+      ]
+    });
+  }
+
   function toggleNotifPanel(anchor) {
     const existing = document.getElementById('notif-panel');
     if (existing) { existing.remove(); return; }
@@ -630,7 +770,11 @@ const App = (() => {
                 panel.remove();
               }
             }, ['סמן הכל כנקרא'])
-          : null
+          : null,
+        el('button.btn.btn-sm', {
+          title: 'ניהול התראות — מה קופץ בפינת המסך',
+          onclick: () => { panel.remove(); notifSettingsDialog(); }
+        }, ['⚙'])
       ]),
       desktopNotifRow(() => { panel.remove(); toggleNotifPanel(anchor); }),
       el('div.np-list', {}, state.notifications.length
