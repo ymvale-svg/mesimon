@@ -512,9 +512,9 @@ router.get('/api/bootstrap', async (req, res, ctx) => {
  * משימה שהם רואים. זהו בדיוק היקף הראייה של המשימות, רק בהיטל של פרויקטים,
  * כדי שלא ייווצר מצב שברשימה מופיע פרויקט שכל תוכנו חסום.
  */
-function visibleProjectIds(actor, { ignoreOrgWide = false } = {}) {
+function visibleProjectIds(actor) {
   if (isVendor(actor)) return new Set();
-  if (P.isOrgWide(actor) && !ignoreOrgWide) return null;
+  if (P.isOrgWide(actor)) return null;
 
   const mine = ['p.created_by = ?', 'p.manager_id = ?'];
   const params = [actor.id, actor.id];
@@ -541,6 +541,34 @@ function visibleProjectIds(actor, { ignoreOrgWide = false } = {}) {
   return new Set(rows.map((r) => r.id));
 }
 
+/**
+ * אילו פרויקטים הם "שלי" בתפריט — להבדיל מאילו מותר לי לראות.
+ *
+ * שתי שאלות שונות, ופעם אחת הן נענו באותה פונקציה: מי שפתח פרויקט נחשב
+ * בעליו לתמיד. זה עבד עד שהתברר שמנהל המערכת הוא זה שפותח את כל הפרויקטים
+ * בחברה — וכך *כל* פרויקט היה "שלו", והמעבר "שלי / כל הארגון" איבד את
+ * תוכנו.
+ *
+ * לכן "שלי" הוא אחראיות בפועל: פרויקט שאני מנהל, או שיש בו משימה שהוקצתה
+ * לי. פתיחת הפרויקט אינה נחשבת, וגם לא פתיחת משימה בשביל מישהו אחר —
+ * להעביר עבודה למישהו זה לא להחזיק בה. פרויקט חדש נשאר שלי בלי מאמץ, כי
+ * ברירת המחדל של מנהל המשימות היא מי שפתח.
+ *
+ * ההפרדה מהראייה היא קריטית: ‎visibleProjectIds‎ הוא גבול הרשאה, וצמצום שלו
+ * היה מסתיר מעובד ומנהל מחלקה פרויקטים שהם כן רשאים לראות.
+ */
+function ownedProjectIds(actor) {
+  if (isVendor(actor)) return new Set();
+  const rows = D.all(
+    `SELECT DISTINCT p.id FROM projects p
+       LEFT JOIN tasks t ON t.project_id = p.id AND t.archived = 0
+      WHERE p.manager_id = ?
+         OR (t.assignee_type = 'user' AND t.assignee_id = ?)`,
+    actor.id, actor.id
+  );
+  return new Set(rows.map((r) => r.id));
+}
+
 function listProjectsFor(actor) {
   const pinned = new Set(
     actor.type === 'user'
@@ -553,9 +581,11 @@ function listProjectsFor(actor) {
    * מנהל מערכת רואה את כל הפרויקטים בארגון, אבל יש לו גם עבודה משלו — ורשימה
    * שמערבבת את השתיים אינה שימושית לאף אחד מהתפקידים. לכן כל פרויקט מסומן
    * אם הוא שלו, והממשק מציג כברירת מחדל את שלו בלבד עם מעבר לכל הארגון.
-   * למי שאינו רואה את כל הארגון ממילא כל מה שהוא רואה הוא שלו.
+   *
+   * אותה הגדרה לכל התפקידים: "שלי" הוא מה שאני אחראי עליו, ולא מה שמותר לי
+   * לראות. עובד שרואה שלושה פרויקטים אך אחראי על אחד יקבל גם הוא את המעבר.
    */
-  const mineIds = visible === null ? visibleProjectIds(actor, { ignoreOrgWide: true }) : visible;
+  const mineIds = ownedProjectIds(actor);
 
   const rows = D.all('SELECT * FROM projects ORDER BY status, name')
     .filter((p) => visible === null || visible.has(p.id));
