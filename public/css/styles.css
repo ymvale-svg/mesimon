@@ -1038,6 +1038,15 @@ input[type="color"] { width: 46px; height: 30px; padding: 2px; cursor: pointer; 
 }
 .notif-panel .np-head { padding: 12px 15px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 10px; }
 .notif-panel .np-list { overflow-y: auto; }
+/* שורת ההתראות במחשב — נבדלת מהרשימה כדי שלא תיראה כהתראה בעצמה */
+.notif-panel .np-desktop {
+  display: flex; align-items: center; gap: 9px;
+  padding: 10px 15px; background: var(--surface-2);
+  border-bottom: 1px solid var(--border);
+  font-size: 12.5px; color: var(--text-mute); line-height: 1.4;
+}
+.notif-panel .np-desktop > div { flex: 1; min-width: 0; }
+.notif-panel .np-desktop .btn { flex: none; }
 .notif {
   display: flex; gap: 10px; padding: 11px 15px; border-bottom: 1px solid var(--border); cursor: pointer;
 }

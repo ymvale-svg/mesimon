@@ -175,6 +175,116 @@ const App = (() => {
     navigator.serviceWorker.register('/sw.js').catch((err) => {
       console.warn('[משימון] רישום ה-Service Worker נכשל:', err.message);
     });
+    /*
+     * לחיצה על התראת מערכת ההפעלה מגיעה לכאן מה-Service Worker: הוא ממקד את
+     * הלשונית ושולח את מזהה המשימה, ואנחנו פותחים את הכרטיס בלי לטעון מחדש.
+     */
+    navigator.serviceWorker.addEventListener('message', (event) => {
+      if (event.data?.type === 'open-task' && event.data.taskId) {
+        TaskCardView.open(Number(event.data.taskId));
+      }
+    });
+  }
+
+  // -------------------------------------------- התראות במחשב (מחוץ לדפדפן)
+
+  /**
+   * התראות מערכת ההפעלה — מה שרואים בפינת המסך בוואטסאפ ווב.
+   *
+   * למה זה נדרש: הכרטיס המוקפץ בתוך הדף עובד רק כשמסתכלים על הדף. מי שכותב
+   * לעובד הודעה בתוך משימה מצפה שהיא תגיע אליו גם כשהוא עובד באקסל — ובלי
+   * זה השרשור בתוך המשימה הוא תיבת דואר שנפתחת רק במקרה.
+   *
+   * מוצגות דרך ה-Service Worker ולא דרך ‎new Notification‎: כך הן נכנסות
+   * למרכז ההתראות של Windows ונשארות בו, ולא נעלמות עם הלשונית. ‎new
+   * Notification‎ נשאר כגיבוי לדפדפן שאין בו Service Worker.
+   *
+   * מקום ההתראה על המסך אינו בשליטת האפליקציה — Windows מציב אותו בפינה
+   * שנקבעה בהגדרות המערכת (בממשק בעברית זו הפינה השמאלית).
+   *
+   * ההרשאה נדרשת מהמשתמש בלחיצה מפורשת ולא מעצמה: דפדפן חוסם בקשת הרשאה
+   * שלא באה ממחווה של המשתמש, ובקשה שקופצת בכניסה הראשונה נדחית כמעט תמיד.
+   */
+  const DESKTOP_NOTIF_KEY = 'mesimon.desktopNotify';
+  const supportsDesktopNotif = () => 'Notification' in window;
+
+  /** 'unsupported' | 'default' | 'granted' | 'denied' | 'muted' */
+  function desktopNotifState() {
+    if (!supportsDesktopNotif()) return 'unsupported';
+    if (Notification.permission === 'granted') {
+      return localStorage.getItem(DESKTOP_NOTIF_KEY) === '0' ? 'muted' : 'granted';
+    }
+    return Notification.permission;
+  }
+
+  async function enableDesktopNotifications() {
+    if (!supportsDesktopNotif()) return 'unsupported';
+    // הושתק במכשיר הזה בלבד — אין צורך לבקש הרשאה שוב, רק להסיר את ההשתקה
+    if (Notification.permission === 'granted') {
+      localStorage.setItem(DESKTOP_NOTIF_KEY, '1');
+      return 'granted';
+    }
+    try {
+      const result = await Notification.requestPermission();
+      if (result === 'granted') localStorage.setItem(DESKTOP_NOTIF_KEY, '1');
+      return result;
+    } catch {
+      return Notification.permission;
+    }
+  }
+
+  const muteDesktopNotifications = () => localStorage.setItem(DESKTOP_NOTIF_KEY, '0');
+
+  /**
+   * ההתראה מוצגת רק כשהחלון אינו מול העיניים. כשהוא כן — הכרטיס המוקפץ
+   * בתוך הדף כבר אמר את אותו דבר, והתראת מערכת נוספת עליו היא כפל רעש.
+   * זו גם ההתנהגות בוואטסאפ ווב.
+   */
+  const windowIsWatched = () => !document.hidden && document.hasFocus();
+
+  async function showDesktopNotification(n) {
+    if (desktopNotifState() !== 'granted' || windowIsWatched()) return;
+
+    const parts = notifParts(n);
+
+    /*
+     * מבנה של הודעה בצ'אט: מי כתב ואיפה בכותרת, ומה הוא כתב בגוף. הגוף
+     * שנשמר בשרת בנוי "שם המשימה — ההודעה", ושם המשימה כבר בכותרת — ולכן
+     * הוא נחתך כאן. בלי זה שם המשימה מופיע פעמיים באותה התראה קטנה.
+     */
+    const taskTitle = n.taskTitle ?? '';
+    const prefix = taskTitle ? `${taskTitle} — ` : '';
+    const message = prefix && parts.body.startsWith(prefix)
+      ? parts.body.slice(prefix.length)
+      : parts.body;
+
+    const title = parts.author === SYSTEM_AUTHOR
+      ? (n.title || 'משימון')
+      : [parts.author, taskTitle].filter(Boolean).join(' · ');
+    const options = {
+      // כשאין תוכן הודעה, שורת ההסבר ("שינוי סטטוס במשימה שלך") היא הגוף
+      body: (message || parts.headline || taskTitle).slice(0, 300),
+      icon: '/icons/icon-192.png',
+      badge: '/icons/icon-192.png',
+      lang: 'he',
+      dir: 'rtl',
+      // ‎tag‎ לפי מזהה ההתראה — אותה התראה לא תוצג פעמיים אם הסקר חזר עליה
+      tag: `mesimon-${n.id}`,
+      data: { taskId: n.taskId ?? null, notificationId: n.id }
+    };
+
+    try {
+      const reg = await navigator.serviceWorker?.ready;
+      if (reg) return await reg.showNotification(title, options);
+    } catch { /* נופלים לגיבוי שלמטה */ }
+    try {
+      const note = new Notification(title, options);
+      note.onclick = () => {
+        window.focus();
+        if (n.taskId) TaskCardView.open(n.taskId);
+        note.close();
+      };
+    } catch { /* הדפדפן סירב — אין מה לעשות, הכרטיס בדף עדיין מוצג */ }
   }
 
   async function reloadReference() {
@@ -222,7 +332,9 @@ const App = (() => {
     escalation: { mask: 'urgent', bg: '#fef2f2', color: '#7c2d12' },
     mention: { icon: '@', bg: '#f0fdfa', color: '#0f766e' },
     status_change: { icon: '🔄', bg: '#f8fafc', color: '#475569' },
-    assignment: { mask: 'my-tasks', bg: '#f5f3ff', color: '#7c3aed' }
+    assignment: { mask: 'my-tasks', bg: '#f5f3ff', color: '#7c3aed' },
+    // הודעה בשרשור של משימה — הסוג היחיד שהוא שיחה בין אנשים ולא דיווח
+    comment: { icon: '💬', bg: '#f0fdf4', color: '#15803d' }
   };
 
   /**
@@ -289,6 +401,13 @@ const App = (() => {
     }
     notifPrimed = true;              // נקבע לפני ההמתנות, כדי שהבאה מקבילה לא תקפיץ הכול מחדש
     for (const n of fresh.slice(0, NOTIF_POP_MAX).reverse()) popNotification(n);
+
+    /*
+     * התראת מערכת ההפעלה לכל אחת מהחדשות — גם לאלה שלא נכנסו למגבלת
+     * הכרטיסים בדף. שם המגבלה קיימת כדי לא לכסות את המסך, וכאן ממילא
+     * Windows הוא שמנהל את התור ומקבץ אותן.
+     */
+    for (const n of fresh) showDesktopNotification(n);
   }
 
   /**
@@ -360,6 +479,54 @@ const App = (() => {
     badge.textContent = state.unread > 99 ? '99+' : String(state.unread);
   }
 
+  /**
+   * שורת ההתראות במחשב, בראש מגירת ההתראות. זה המקום הטבעי לשאול עליה —
+   * מי שפתח את רשימת ההתראות הוא מי שחושב עליהן כרגע.
+   *
+   * המצב "נדחה" אינו ניתן לתיקון מתוך הדף: דפדפן שנדחתה בו בקשת ההרשאה לא
+   * ישאל שוב, וההחזרה נעשית רק בהגדרות האתר. לכן במצב הזה מוצג הסבר ולא
+   * כפתור שלא יעשה כלום.
+   */
+  function desktopNotifRow(onChanged) {
+    // ‎mode‎ ולא ‎state‎: ‎state‎ הוא מצב האפליקציה כולה, והצללה שלו כאן היא באג ממתין
+    const mode = desktopNotifState();
+    if (mode === 'unsupported') return null;
+
+    const row = (children) => el('div.np-desktop', {}, children);
+
+    if (mode === 'denied') {
+      return row([
+        el('span', { text: '🔕' }),
+        el('div', { text: 'התראות במחשב חסומות בדפדפן. לפתיחה: סמל המנעול שליד הכתובת ← התראות ← אפשר' })
+      ]);
+    }
+    if (mode === 'granted') {
+      return row([
+        el('span', { text: '🔔' }),
+        el('div', { text: 'התראות במחשב פעילות — הודעה במשימה תופיע גם כשהחלון מוסתר' }),
+        el('button.btn.btn-sm', {
+          onclick: () => { muteDesktopNotifications(); onChanged?.(); }
+        }, ['השתקה'])
+      ]);
+    }
+
+    // 'default' (טרם נשאל) או 'muted' (הושתק במכשיר הזה)
+    return row([
+      el('span', { text: '🔔' }),
+      el('div', { text: mode === 'muted'
+        ? 'התראות במחשב מושתקות במכשיר הזה'
+        : 'להפעיל התראות במחשב? הודעה שנכתבת לך במשימה תופיע בפינת המסך גם כשמשימון מוסתר' }),
+      el('button.btn.btn-sm.btn-primary', {
+        onclick: async () => {
+          const result = await enableDesktopNotifications();
+          if (result === 'granted') UI.success('התראות במחשב הופעלו');
+          else if (result === 'denied') UI.error('הדפדפן חסם את ההתראות. אפשר לאשר אותן בהגדרות האתר');
+          onChanged?.();
+        }
+      }, [mode === 'muted' ? 'ביטול ההשתקה' : 'הפעלה'])
+    ]);
+  }
+
   function toggleNotifPanel(anchor) {
     const existing = document.getElementById('notif-panel');
     if (existing) { existing.remove(); return; }
@@ -380,6 +547,7 @@ const App = (() => {
             }, ['סמן הכל כנקרא'])
           : null
       ]),
+      desktopNotifRow(() => { panel.remove(); toggleNotifPanel(anchor); }),
       el('div.np-list', {}, state.notifications.length
         ? state.notifications.map((n) => {
             const style = NOTIF_STYLE[n.kind] ?? NOTIF_STYLE.status_change;

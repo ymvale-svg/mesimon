@@ -1123,6 +1123,84 @@ router.delete('/api/tasks/:id', async (req, res, ctx) => {
 
 // --- צ'קליסט ---
 
+/**
+ * צ'קליסט מלא סוגר את המשימה מעצמו.
+ *
+ * מי שמסמן את הסעיף האחרון סיים את העבודה — ולדרוש ממנו לחזור לדף הבית
+ * ולסמן שוב "הושלמה" זו אותה הצהרה פעמיים. וההפך גם נכון: סעיף שנפתח מחדש
+ * במשימה סגורה אומר שהעבודה לא נגמרה, ומשימה שנשארת "הושלם" עם סעיף פתוח
+ * היא שקר בלוח.
+ *
+ * הכלל אחד: המשימה סגורה אם ורק אם כל סעיפי הצ'קליסט שלה מסומנים. לכן הוא
+ * נאכף אחרי כל שינוי בצ'קליסט — סימון, ביטול סימון, הוספת סעיף ומחיקתו —
+ * ולא רק בסימון. סעיף חדש במשימה שנסגרה פותח אותה מחדש, ומחיקת הסעיף
+ * הפתוח האחרון סוגרת אותה.
+ *
+ * מה במכוון *אינו* נכלל:
+ *
+ * • משימה בלי צ'קליסט. אפס סעיפים אינם "כל הסעיפים הושלמו" — הם משימה
+ *   שלא הוגדר לה צ'קליסט, והיא נסגרת ביד כמו קודם.
+ *
+ * • בורד ספקים. שם הסטטוס הסופי הוא "הושלם ואושר", והוא שער אישור שדורש
+ *   ‎approve_vendor_output‎: ספק שסיים את הצ'קליסט שלו לא אישר את התוצר
+ *   של עצמו. הזרימה מול ספק נשארת ידנית.
+ *
+ * • משימה בארכיון. שינוי בצ'קליסט של משימה שהורדה מהלוח אינו אמור להחזיר
+ *   אותה אליו.
+ *
+ * ההרשאה אינה נעקפת ואינה נדרשת בנפרד: ‎PATCH /api/checklist/:id‎ ממילא
+ * דורש ‎change_task_status‎ כדי לסמן סעיף, ולכן מי שהגיע לכאן רשאי לשנות
+ * את הסטטוס בעצמו. אין כאן הרחבת הרשאה, רק חיסכון בלחיצה.
+ */
+function syncChecklistCompletion(taskId, actor) {
+  if (D.getSetting('auto_done_on_checklist', true) === false) return null;
+
+  const task = getTaskOr404(taskId);
+  if (task.archived) return null;
+  if (boardOf(task).type !== 'internal') return null;
+
+  const stats = D.get(
+    'SELECT COUNT(*) total, SUM(CASE WHEN done = 1 THEN 1 ELSE 0 END) done FROM checklist_items WHERE task_id = ?',
+    task.id
+  );
+  const total = Number(stats?.total ?? 0);
+  if (!total) return null;
+  const allDone = Number(stats?.done ?? 0) === total;
+
+  const columns = columnsOf(task.board_id);
+  const current = columns.find((c) => c.key === task.status);
+  const isFinal = !!current?.is_final;
+  if (allDone === isFinal) return null;   // הסטטוס כבר תואם — אין מה לעשות
+
+  let target;
+  if (allDone) {
+    target = columns.find((c) => c.is_final);
+  } else {
+    /*
+     * פתיחה מחדש חוזרת ל"בטיפול" ולא ל"חדש": המשימה הזו כבר עבדו עליה, ורוב
+     * הסעיפים בה מסומנים. אין בטבלה שדה שזוכר מה היה הסטטוס לפני הסגירה,
+     * ומבין העמודות הקיימות "בטיפול" היא התיאור הנכון. אם הבורד שונה ואין
+     * בו עמודה כזו — העמודה הראשונה שאינה סופית.
+     */
+    target = columns.find((c) => c.key === 'in_progress' && !c.is_final)
+      ?? columns.find((c) => !c.is_final);
+  }
+  if (!target || target.key === task.status) return null;
+
+  const note = allDone ? 'הצ׳קליסט הושלם במלואו' : 'סעיף בצ׳קליסט נפתח מחדש';
+  try {
+    changeStatus(task, target.key, actor, note);
+  } catch (err) {
+    /*
+     * ‎changeStatus‎ חוסם סגירת משימה שתלויה במשימה שטרם הושלמה. הסימון
+     * עצמו תקף ואין להפיל אותו בגלל זה — הסעיף סומן, המשימה פשוט לא נסגרה,
+     * והסיבה חוזרת ללקוח כדי שתוצג למי שסימן.
+     */
+    return { changed: false, reason: err?.message ?? 'הסטטוס לא עודכן' };
+  }
+  return { changed: true, done: allDone, status: target.key, label: target.label };
+}
+
 router.post('/api/tasks/:id/checklist', async (req, res, ctx) => {
   const actor = ctx.requireActor();
   const task = getTaskOr404(ctx.params.id);
@@ -1135,7 +1213,9 @@ router.post('/api/tasks/:id/checklist', async (req, res, ctx) => {
   const pos = D.get('SELECT COALESCE(MAX(position), -1) + 1 p FROM checklist_items WHERE task_id = ?', task.id).p;
   D.run('INSERT INTO checklist_items (task_id, text, position) VALUES (?,?,?)', task.id, clean, pos);
   D.audit(task.id, actorRef(actor), 'checklist', `נוסף סעיף: ${clean}`);
-  sendJson(res, 200, { task: shapeTask(getTaskOr404(task.id), actor, { withDetails: true }) });
+  // סעיף חדש הוא עבודה שנוספה — במשימה שנסגרה הוא פותח אותה מחדש
+  const autoStatus = syncChecklistCompletion(task.id, actor);
+  sendJson(res, 200, { task: shapeTask(getTaskOr404(task.id), actor, { withDetails: true }), autoStatus });
 });
 
 /** סעיף עם המשימה שהוא שייך לה — נקודת הכניסה לכל פעולה על סעיף */
@@ -1227,10 +1307,14 @@ router.patch('/api/checklist/:id', async (req, res, ctx) => {
     }
   }
 
+  // רק סימון משנה את שלמות הצ'קליסט; שינוי טקסט או הערה אינו נוגע בזה
+  const autoStatus = b.done !== undefined ? syncChecklistCompletion(task.id, actor) : null;
+
   const fresh = D.get('SELECT * FROM checklist_items WHERE id = ?', item.id);
   sendJson(res, 200, {
     item: shapeChecklistItem(fresh, actor),
-    task: shapeTask(getTaskOr404(task.id), actor, { withDetails: true })
+    task: shapeTask(getTaskOr404(task.id), actor, { withDetails: true }),
+    autoStatus
   });
 });
 
@@ -1283,7 +1367,13 @@ router.delete('/api/checklist/:id', async (req, res, ctx) => {
   assertVisible(actor, task);
   if (isVendor(actor) || !mayOnTask(actor, 'edit_delete_task', task, projectOf(task))) throw forbidden();
   D.run('DELETE FROM checklist_items WHERE id = ?', item.id);
-  sendJson(res, 200, { task: shapeTask(getTaskOr404(task.id), actor, { withDetails: true }) });
+  /*
+   * מחיקת הסעיף הפתוח האחרון משאירה צ'קליסט שכולו מסומן, וזה סוגר את
+   * המשימה — אותו כלל, בלי חור שדרכו נשארת משימה פתוחה בלי סעיף פתוח.
+   * מחיקת הסעיף היחיד מותירה אפס סעיפים, ואז הכלל אינו חל כלל.
+   */
+  const autoStatus = syncChecklistCompletion(task.id, actor);
+  sendJson(res, 200, { task: shapeTask(getTaskOr404(task.id), actor, { withDetails: true }), autoStatus });
 });
 
 /**
@@ -1394,8 +1484,10 @@ router.post('/api/tasks/:id/comments', async (req, res, ctx) => {
     D.audit(task.id, actorRef(actor), 'attachment', `צורף קובץ "${f.name}" לתגובה (גרסה ${f.version})`);
   }
 
+  const mentioned = new Set();
   for (const uid of extractMentions(text)) {
     D.run('INSERT OR IGNORE INTO comment_mentions (comment_id, user_id) VALUES (?,?)', commentId, uid);
+    mentioned.add(uid);
     if (uid !== actor.id || isVendor(actor)) {
       D.notify({
         targetType: 'user', targetId: uid, kind: 'mention',
@@ -1414,6 +1506,42 @@ router.post('/api/tasks/:id/comments', async (req, res, ctx) => {
     }
   } else if (!isInternal && task.assignee_type === 'vendor' && task.assignee_id) {
     D.notify({ targetType: 'vendor', targetId: task.assignee_id, kind: 'status_change', title: 'תגובה חדשה מהצוות', body: task.title, taskId: task.id });
+  }
+
+  /*
+   * הודעה פנימית בין אנשי הצוות לא יצרה עד כה שום התראה, אלא אם היה בה תיוג
+   * ‎@‎. כלומר מי שנכתב לו בתוך משימה לא ידע על כך עד שנכנס אליה במקרה —
+   * וזה הופך את השרשור לתיבת דואר שאף אחד לא פותח.
+   *
+   * למי כן: לאחראי המשימה, ולמי שכבר כתב בשרשור. אלה בדיוק המשתתפים
+   * בשיחה. במכוון לא לכל מנהל בארגון — הצפה של התראות לא רלוונטיות היא
+   * הדרך הבטוחה לגרום לאנשים להפסיק להסתכל עליהן.
+   *
+   * המתייגים כבר קיבלו התראת תיוג, ולכן הם מוחרגים כאן: שתי התראות על
+   * אותה הודעה הן באג, לא הדגשה.
+   */
+  if (!isVendor(actor)) {
+    const audience = new Set();
+    if (task.assignee_type === 'user' && task.assignee_id) audience.add(task.assignee_id);
+    for (const row of D.all(
+      "SELECT DISTINCT author_id FROM comments WHERE task_id = ? AND author_type = 'user'", task.id
+    )) {
+      audience.add(row.author_id);
+    }
+    audience.delete(actor.id);          // הכותב אינו מקבל התראה על עצמו
+    for (const uid of mentioned) audience.delete(uid);
+
+    for (const uid of audience) {
+      // עובד שהושבת או ממתין לאישור אינו נמען. הסינון לפי מה שמותר לו לראות
+      // נעשה בכל מקרה בהצגת רשימת ההתראות, דרך canSeeTask
+      if (D.get("SELECT 1 FROM users WHERE id = ? AND status = 'active'", uid) === undefined) continue;
+      D.notify({
+        targetType: 'user', targetId: uid, kind: 'comment',
+        title: `${actor.name} כתב/ה במשימה`,
+        body: `${task.title} — ${text.slice(0, 120) || 'צורף קובץ'}`,
+        taskId: task.id
+      });
+    }
   }
 
   sendJson(res, 200, { task: shapeTask(getTaskOr404(task.id), actor, { withDetails: true }) });

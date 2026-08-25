@@ -242,6 +242,22 @@ const UI = (() => {
   const error = (err) => toast(err?.message ?? String(err), 'error');
   const success = (msg) => toast(msg, 'ok');
 
+  /**
+   * הודעה על סטטוס שהשתנה מעצמו בעקבות הצ'קליסט.
+   *
+   * שינוי שהמערכת עשתה ולא המשתמש חייב להיאמר: אחרת המשימה נעלמת מהרשימה
+   * הפתוחה והמשתמש אינו יודע למה. וכשהסגירה *לא* קרתה בגלל תלות במשימה
+   * אחרת — זו בדיוק ההודעה שמונעת את "סימנתי הכול והמשימה עוד פתוחה".
+   */
+  function announceAutoStatus(autoStatus) {
+    if (!autoStatus) return;
+    if (autoStatus.changed === false) return toast(autoStatus.reason, 'error');
+    toast(autoStatus.done
+      ? `הצ׳קליסט הושלם — המשימה סומנה כ"${autoStatus.label}"`
+      : `סעיף נפתח מחדש — המשימה חזרה ל"${autoStatus.label}"`,
+    autoStatus.done ? 'ok' : '');
+  }
+
   // --- הקפצת התראות ---
 
   /**
@@ -917,7 +933,7 @@ const UI = (() => {
     formatDate, formatDateTime, relative, dueLabel, toInputDate, fromInputDate,
     initials, avatar, priorityTag, statusTag, taskTags,
     modal, confirm, prompt, toast, error, success, notifyPop, clearNotifyPops,
-    empty, spinner, field, select, renderMentions, fileSize, fileIcon,
+    empty, spinner, field, select, renderMentions, fileSize, fileIcon, announceAutoStatus,
     preview, previewUrls, canPreview, PROJECT_COLORS, commentThread, icon,
     logo, logoMark, companyLogo, refitLogos
   };

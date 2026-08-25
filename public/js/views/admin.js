@@ -956,6 +956,8 @@ const AdminView = (() => {
 
   /** כל הגדרה והסבר קצר מה היא עושה בפועל */
   const SETTING_LABELS = {
+    auto_done_on_checklist: ['צ׳קליסט מלא סוגר את המשימה',
+      'סימון הסעיף האחרון מעביר את המשימה ל"הושלם" בלי לסמן אותה שוב בדף הבית, וסעיף שנפתח מחדש מחזיר אותה ל"בטיפול". חל על משימות פנימיות שיש בהן צ׳קליסט; זרימת הספקים נשארת ידנית'],
     archive_done_after_days: ['ימים עד שמשימה שהושלמה עוברת לארכיון',
       'עד אז היא נשארת בכרטיס "הושלמו לאחרונה" בדף הבית, כדי שאפשר יהיה לראות מה נסגר ולחזור אם צריך'],
     vendor_reminder_days_before: ['X — ימים לפני היעד לתזכורת ראשונה לספק', 'הערך שמנוע הכללים משתמש בו לתזכורת האוטומטית לספק'],
@@ -1195,6 +1197,9 @@ const AdminView = (() => {
         ], s[key]);
       } else if (key === 'allowed_extensions') {
         control = el('input', { type: 'text', value: (s[key] ?? []).join(', ') });
+      } else if (typeof s[key] === 'boolean') {
+        // תיבת סימון ולא טקסט "true": הגדרה בוליאנית שנכתבת ביד היא הגדרה שנשברת
+        control = el('input', { type: 'checkbox', checked: s[key] });
       } else if (typeof s[key] === 'number') {
         control = el('input', { type: 'number', value: s[key] });
       } else {
@@ -1210,6 +1215,8 @@ const AdminView = (() => {
       for (const [key, input] of Object.entries(inputs)) {
         if (key === 'allowed_extensions') {
           payload[key] = input.value.split(',').map((x) => x.trim().replace('.', '').toLowerCase()).filter(Boolean);
+        } else if (input.type === 'checkbox') {
+          payload[key] = input.checked;
         } else if (input.type === 'number') {
           payload[key] = Number(input.value);
         } else {

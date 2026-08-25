@@ -12,7 +12,7 @@
  */
 
 // שינוי המספר מפסל את המטמון הקודם ומאלץ טעינה מחדש של קבצי המערכת
-const VERSION = 'mesimon-v1';
+const VERSION = 'mesimon-v2';
 
 /**
  * מה נשמר מראש. רק מה שנדרש כדי שהמסך ייבנה: אם אחד מהם חסר, האפליקציה לא
@@ -28,6 +28,7 @@ const SHELL = [
   '/js/app.js',
   '/js/views/login.js',
   '/js/views/invite.js',
+  '/js/views/signup.js',
   '/js/views/home.js',
   '/js/views/mobile.js',
   '/js/views/grid.js',
@@ -61,6 +62,35 @@ self.addEventListener('activate', (event) => {
       if (key !== VERSION) await caches.delete(key);
     }
     await self.clients.claim();
+  })());
+});
+
+/*
+ * לחיצה על התראת מערכת ההפעלה.
+ *
+ * ההתראה מוצגת דרך ה-Service Worker ולא דרך ‎new Notification‎ מהדף, וזו
+ * הסיבה שהמטפל יושב כאן: כך היא מגיעה למרכז ההתראות של Windows, נשארת בו
+ * אחרי שנעלמה מהמסך, ועובדת גם כשהאפליקציה מותקנת ואין לשונית פתוחה.
+ *
+ * הלחיצה אינה פותחת לשונית חדשה כשיש כבר אחת: ממקדים את הקיימת ושולחים לה
+ * הודעה לפתוח את המשימה. פתיחת לשונית שנייה לאותה מערכת היא בדיוק מה
+ * שמעצבן ב"התראה שלחצתי עליה".
+ */
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  const taskId = event.notification.data?.taskId ?? null;
+
+  event.waitUntil((async () => {
+    const clientList = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+    for (const client of clientList) {
+      if (new URL(client.url).origin !== self.location.origin) continue;
+      await client.focus();
+      // הדף פתוח וטעון — אין צורך לנווט, רק לפתוח את הכרטיס
+      client.postMessage({ type: 'open-task', taskId });
+      return;
+    }
+    // אין לשונית פתוחה: נפתחת אחת, והפרמטר ‎?task=‎ הוא זה שפותח את הכרטיס
+    await self.clients.openWindow(taskId ? `/?task=${taskId}` : '/');
   })());
 });
 

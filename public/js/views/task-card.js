@@ -247,6 +247,7 @@ const TaskCardView = (() => {
                 const data = await API.toggleChecklist(item.id, e.target.checked);
                 task = data.task;
                 draw(modalRef.box.querySelector('.task-detail'));
+                UI.announceAutoStatus(data.autoStatus);
               } catch (err) { UI.error(err); }
             }
           }),

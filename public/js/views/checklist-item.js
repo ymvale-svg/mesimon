@@ -59,6 +59,7 @@ const ChecklistItemView = (() => {
       try {
         const r = await API.updateChecklist(item.id, { done: doneBox.checked });
         refresh(r.item);
+        UI.announceAutoStatus(r.autoStatus);
       } catch (err) {
         doneBox.checked = item.done;
         UI.error(err);
