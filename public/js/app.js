@@ -213,6 +213,46 @@ const App = (() => {
    */
   const DESKTOP_NOTIF_KEY = 'mesimon.desktopNotify';
   const DESKTOP_ASK_KEY = 'mesimon.desktopNotifyAsked';
+
+  /**
+   * התקנת משימון כאפליקציה.
+   *
+   * זה מה שקובע *בשם מי* ההתראה מופיעה במרכז ההתראות של Windows. התראה
+   * שיצאה מלשונית בדפדפן נרשמת שם על שם הדפדפן — "Google Chrome" — ולא על
+   * שם משימון. WhatsApp ו-Outlook מופיעים שם בשמם ובאייקון שלהם מפני שהם
+   * אפליקציות מותקנות, ומשימון מותקן מתנהג בדיוק כמותם: שורה נפרדת, שם
+   * ואייקון משלו, וקיבוץ ההתראות תחתיו.
+   *
+   * הדפדפן מציע התקנה פעם אחת דרך ‎beforeinstallprompt‎, והאירוע הזה נורה
+   * לפני שיש למי להציג אותו — לכן הוא נשמר, ולא נאבד.
+   */
+  let installPrompt = null;
+  const installedAsApp = () =>
+    window.matchMedia('(display-mode: standalone)').matches
+    || window.matchMedia('(display-mode: window-controls-overlay)').matches
+    || window.navigator.standalone === true;
+
+  window.addEventListener('beforeinstallprompt', (e) => {
+    // מונע את הרצועה של הדפדפן, כדי שההצעה תופיע במקום ובהקשר שאנחנו בוחרים
+    e.preventDefault();
+    installPrompt = e;
+  });
+  window.addEventListener('appinstalled', () => { installPrompt = null; });
+
+  async function promptInstall() {
+    if (installedAsApp()) return 'already';
+    if (!installPrompt) return 'unavailable';
+    try {
+      installPrompt.prompt();
+      const { outcome } = await installPrompt.userChoice;
+      // אירוע חד-פעמי: לאחר שימוש אינו תקף שוב
+      installPrompt = null;
+      return outcome === 'accepted' ? 'installed' : 'dismissed';
+    } catch {
+      installPrompt = null;
+      return 'unavailable';
+    }
+  }
   const supportsDesktopNotif = () => 'Notification' in window;
 
   /**
@@ -779,6 +819,9 @@ const App = (() => {
     add('הרשמה לדחיפה מהשרת', !!sub,
       sub ? new URL(sub.endpoint).host : 'אין — התראות יגיעו רק כשמשימון פתוח');
 
+    add('מותקן כאפליקציה', installedAsApp(),
+      installedAsApp() ? 'ההתראות מופיעות בשם משימון' : 'ההתראות מופיעות בשם הדפדפן');
+
     return rows;
   }
 
@@ -848,8 +891,36 @@ const App = (() => {
         ]);
       });
 
+      /*
+       * שורת ההתקנה. זו התשובה ל"ההתראות מופיעות בדפדפן ולא ברמת Windows":
+       * לא חסר קוד, חסרה התקנה. מוצגת רק כשעוד לא מותקן, וכשהדפדפן בכלל
+       * מציע להתקין — ב-Firefox ובספארי במחשב אין התקנה כזו.
+       */
+      const installRow = installedAsApp()
+        ? el('div.alert.alert-ok.mt', {}, [
+            el('span', { text: '📌' }),
+            el('div', { text: 'משימון מותקן כאפליקציה. ההתראות מופיעות במרכז ההתראות של Windows בשם משימון, כמו וואטסאפ ואאוטלוק.' })
+          ])
+        : el('div.alert.alert-info.mt', {}, [
+            el('span', { text: '📌' }),
+            el('div', { text: 'משימון אינו מותקן כאפליקציה, ולכן ההתראות נרשמות ב-Windows על שם הדפדפן. התקנה נותנת לו שורה משלו במרכז ההתראות, עם השם והאייקון שלו — בדיוק כמו וואטסאפ ואאוטלוק.' }),
+            installPrompt
+              ? el('button.btn.btn-sm.btn-primary', {
+                  style: { flex: 'none' },
+                  onclick: async () => {
+                    const r = await promptInstall();
+                    if (r === 'installed') UI.success('משימון הותקן. כדאי לפתוח אותו מהאפליקציה מעתה.');
+                    else if (r === 'unavailable') UI.error('הדפדפן אינו מציע התקנה כרגע');
+                    draw();
+                  }
+                }, ['התקנה'])
+              : el('span.mute-sm', { style: { flex: 'none' },
+                  text: 'התקנה מסמל ההתקנה שליד הכתובת' })
+          ]);
+
       UI.mount(body,
         header,
+        installRow,
         el('div.table-wrap.mt', {}, [
           el('table.data', {}, [
             el('thead', {}, [el('tr', {}, [
