@@ -3321,8 +3321,8 @@ const PREF_KEYS = [
   'boardFilters', 'boardView', 'projectScope', 'sidebar', 'mobileFilter', 'projectOrder',
   // אילו סוגי התראות קופצים כהתראת מערכת ההפעלה — בחירה אישית לכל משתמש
   'notifyKinds',
-  // חתך הפרויקט במסך בקרת המשימות
-  'trackerProject'
+  // חתך הפרויקט וההיקף במסך בקרת המשימות
+  'trackerProject', 'trackerScope'
 ];
 const PREF_MAX_BYTES = 4096;
 

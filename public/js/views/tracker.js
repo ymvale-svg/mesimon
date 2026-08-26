@@ -20,10 +20,12 @@ const TrackerView = (() => {
 
   let containerRef = null;
   let rows = [];
+  let allOpen = 0;
   let expanded = new Set();
 
-  // הסינון נשמר למשתמש, כמו בלוח — ראה server/api.js, PREF_KEYS
+  // הסינונים נשמרים למשתמש, כמו בלוח — ראה server/api.js, PREF_KEYS
   const savedProject = () => App.getPref('trackerProject', '') ?? '';
+  const savedScope = () => App.getPref('trackerScope', 'mine') ?? 'mine';
 
   async function render(container, params = {}) {
     containerRef = container;
@@ -32,11 +34,32 @@ const TrackerView = (() => {
     await load();
   }
 
+  /** הפרויקטים שהמשתמש אחראי עליהם — אותו דגל ‎mine‎ שמסנן את תפריט הצד */
+  const myProjectIds = () =>
+    new Set(App.state.projects.filter((p) => p.mine).map((p) => p.id));
+
   async function load() {
     const projectId = savedProject();
     try {
       const data = await API.tasks({ scope: 'internal', parent: 'none', projectId: projectId || undefined });
-      rows = data.tasks;
+
+      /*
+       * שני סינונים שנעשים כאן ולא בשרת.
+       *
+       * הושלמו: מסך בקרה עוסק במה שפתוח. משימה שנסגרה אינה דורשת החלטה,
+       * והצגתה דוחקת מהמסך את מה שכן. היא נשארת בלוח ובארכיון.
+       *
+       * "שלי": ברירת המחדל היא הפרויקטים שאני אחראי עליהם, כמו בתפריט הצד —
+       * מנהל מערכת רואה את כל הפרויקטים בחברה, וטבלה שמערבבת אותם עם שלו
+       * אינה כלי בקרה אלא רשימה. מעבר ל"כל הארגון" זמין ליד הסינון.
+       */
+      const mine = myProjectIds();
+      const scoped = savedScope() === 'mine';
+      rows = data.tasks
+        .filter((t) => !t.isFinal)
+        .filter((t) => !scoped || mine.has(t.projectId));
+      // סך הכול לפני הסינון, כדי שהמעבר יוכל לומר כמה מוסתרות
+      allOpen = data.tasks.filter((t) => !t.isFinal).length;
       draw();
     } catch (err) {
       UI.mount(containerRef, UI.empty(`לא ניתן לטעון: ${err.message}`, '⚠️'));
@@ -145,6 +168,18 @@ const TrackerView = (() => {
     }, ['▸']);
 
     return el(`tr.tr-parent${isOpen ? '.is-open' : ''}`, {}, [
+      // עמודת הפרויקט: נקודת הצבע שלו ושמו, אותו סימון שבשורות המשימות בלוח
+      el('td', {}, [
+        task.projectId
+          ? el('button.txt.tr-project', {
+              title: `מעבר ללוח של ${task.projectName}`,
+              onclick: () => App.navigate('board', { projectId: task.projectId })
+            }, [
+              el('span.project-dot', { style: { background: task.projectColor, margin: '0' } }),
+              el('span', { text: task.projectName })
+            ])
+          : el('span.mute-sm', { text: 'ללא פרויקט' })
+      ]),
       el('td', {}, [
         el('div.tr-title', {}, [
           toggle,
@@ -179,9 +214,12 @@ const TrackerView = (() => {
     ]);
   }
 
-  /** שורת תת-משימה, כשהאב פרוש. מוזחת פנימה ובלי חזרה על שם האב */
+  /**
+   * שורת תת-משימה, כשהאב פרוש. מוזחת פנימה ובלי חזרה על שם האב ועל הפרויקט —
+   * הם באותה שורה ממש מעליה.
+   */
   const subRow = (sub) => el(`tr.tr-sub${sub.isFinal ? '.is-done' : ''}`, {}, [
-    el('td', { colspan: '3' }, [
+    el('td', { colspan: '4' }, [
       el('div.tr-subtitle', {}, [
         el('span.tr-branch', { text: '↳' }),
         el('span.dot-chip', { title: sub.statusLabel, style: { background: sub.statusColor } }),
@@ -198,15 +236,40 @@ const TrackerView = (() => {
   // ------------------------------------------------------------- ציור
 
   function toolbar() {
+    const scoped = savedScope() === 'mine';
+    const mine = myProjectIds();
+    /*
+     * רשימת הפרויקטים מצטמצמת לחתך הנבחר: הצעת פרויקט שאינו בחתך הייתה
+     * מייצרת טבלה ריקה בלי הסבר.
+     */
+    const live = App.state.projects.filter((p) => p.status !== 'done' && (!scoped || mine.has(p.id)));
     const projectOptions = [{ value: '', label: 'כל הפרויקטים' },
-      ...App.state.projects.filter((p) => p.status !== 'done').map((p) => ({ value: p.id, label: p.name }))];
+      ...live.map((p) => ({ value: p.id, label: p.name }))];
+
+    const hidden = allOpen - rows.length;
 
     return el('div.toolbar', {}, [
       UI.select(projectOptions, savedProject(), {
         onchange: (e) => { App.setPref('trackerProject', e.target.value); load(); }
       }),
+      // אותו מעבר שיש בתפריט הצד, ובאותה ברירת מחדל
+      el('div.view-switch', {}, [['mine', 'שלי'], ['all', 'כל הארגון']].map(([key, label]) =>
+        el(`button${scoped === (key === 'mine') ? '.active' : ''}`, {
+          onclick: () => {
+            App.setPref('trackerScope', key);
+            // פרויקט שנבחר עלול לא להיות בחתך החדש
+            App.setPref('trackerProject', '');
+            load();
+          }
+        }, [label])
+      )),
       el('div.spacer'),
-      el('span.mute-sm', { text: `${rows.length} משימות` })
+      el('span.mute-sm', {
+        title: 'משימות שהושלמו אינן מוצגות במסך הבקרה',
+        text: hidden > 0 && scoped
+          ? `${rows.length} משימות · ${hidden} בפרויקטים אחרים`
+          : `${rows.length} משימות`
+      })
     ]);
   }
 
@@ -222,7 +285,7 @@ const TrackerView = (() => {
         const cached = task.__subs;
         if (cached) body.push(...cached.map(subRow));
         else {
-          body.push(el('tr.tr-sub', {}, [el('td', { colspan: '7' }, [UI.spinner()])]));
+          body.push(el('tr.tr-sub', {}, [el('td', { colspan: '8' }, [UI.spinner()])]));
           API.task(task.id).then((d) => { task.__subs = d.task.subtasks ?? []; draw(); }).catch(() => {});
         }
       }
@@ -238,17 +301,20 @@ const TrackerView = (() => {
         el('div.table-wrap', {}, [
           el('table.data.tracker', {}, [
             el('thead', {}, [el('tr', {}, [
+              el('th', { text: 'פרויקט', style: { width: '150px' } }),
               el('th', { text: 'משימה' }),
               el('th', { text: 'תאריך יעד', style: { width: '128px' } }),
-              el('th', { text: 'סטטוס מקוצר', style: { width: '20%' } }),
+              el('th', { text: 'סטטוס מקוצר', style: { width: '18%' } }),
               el('th', { text: 'תת-משימה' }),
               el('th', { text: 'אחראי', style: { width: '150px' } }),
               el('th', { text: 'תאריך יעד', style: { width: '128px' } }),
               el('th', { text: '', style: { width: '120px' } })
             ])]),
             el('tbody', {}, body.length ? body : [
-              el('tr', {}, [el('td', { colspan: '7' }, [
-                UI.empty('אין משימות בחתך הזה', UI.icon('board'))
+              el('tr', {}, [el('td', { colspan: '8' }, [
+                UI.empty(savedScope() === 'mine' && allOpen > 0
+                  ? 'אין משימות פתוחות בפרויקטים שלך — נסה "כל הארגון"'
+                  : 'אין משימות פתוחות בחתך הזה', UI.icon('board'))
               ])])
             ])
           ])
