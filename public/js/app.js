@@ -333,15 +333,14 @@ const App = (() => {
   }
 
   /**
-   * ההתראה מוצגת רק כשהחלון אינו מול העיניים. כשהוא כן — הכרטיס המוקפץ
-   * בתוך הדף כבר אמר את אותו דבר, והתראת מערכת נוספת עליו היא כפל רעש.
-   * זו גם ההתנהגות בוואטסאפ ווב.
+   * מציגה התראת מערכת ההפעלה. מחזירה ‎true‎ אם היא באמת יצאה — ואז הכרטיס
+   * בתוך הדף אינו מוצג, כדי שלא תהיה כפילות על אותה הודעה.
+   *
+   * אין כאן בדיקה אם החלון מול העיניים, בכוונה. ראה ההסבר ב-‎popNewNotifications‎.
    */
-  const windowIsWatched = () => !document.hidden && document.hasFocus();
-
   async function showDesktopNotification(n) {
-    if (desktopNotifState() !== 'granted' || windowIsWatched()) return;
-    if (!desktopKindEnabled(n.kind)) return;
+    if (desktopNotifState() !== 'granted') return false;
+    if (!desktopKindEnabled(n.kind)) return false;
 
     const parts = notifParts(n);
 
@@ -387,9 +386,17 @@ const App = (() => {
       data: { taskId: n.taskId ?? null, notificationId: n.id }
     };
 
+    /*
+     * דרך ה-Service Worker ולא ‎new Notification‎: כך ההתראה נכנסת למרכז
+     * ההתראות של Windows ונשארת בו, ולא נעלמת עם הלשונית. ‎showNotification‎
+     * מחזירה ‎undefined‎ בהצלחה, ולכן ההצלחה נמדדת בכך שלא נזרקה שגיאה.
+     */
     try {
       const reg = await navigator.serviceWorker?.ready;
-      if (reg) return await reg.showNotification(title, options);
+      if (reg) {
+        await reg.showNotification(title, options);
+        return true;
+      }
     } catch { /* נופלים לגיבוי שלמטה */ }
     try {
       const note = new Notification(title, options);
@@ -398,7 +405,11 @@ const App = (() => {
         if (n.taskId) TaskCardView.open(n.taskId);
         note.close();
       };
-    } catch { /* הדפדפן סירב — אין מה לעשות, הכרטיס בדף עדיין מוצג */ }
+      return true;
+    } catch {
+      // הדפדפן סירב — הכרטיס בתוך הדף יוצג במקום, ולא ייעלם דבר
+      return false;
+    }
   }
 
   async function reloadReference() {
@@ -553,7 +564,7 @@ const App = (() => {
    * הקפצת החדשות בלבד, מהישן לחדש: הכרטיסים נוספים בתחתית הערימה, וכך
    * החדשה ביותר יושבת למטה ואף כרטיס שנקרא כרגע אינו זז ממקומו.
    */
-  function popNewNotifications(list) {
+  async function popNewNotifications(list) {
     const fresh = [];
     for (const n of list) {          // השרת מחזיר מהחדש לישן
       if (seenNotifIds.has(n.id)) continue;
@@ -561,14 +572,22 @@ const App = (() => {
       if (notifPrimed && !n.isRead) fresh.push(n);
     }
     notifPrimed = true;              // נקבע לפני ההמתנות, כדי שהבאה מקבילה לא תקפיץ הכול מחדש
-    for (const n of fresh.slice(0, NOTIF_POP_MAX).reverse()) popNotification(n);
 
     /*
-     * התראת מערכת ההפעלה לכל אחת מהחדשות — גם לאלה שלא נכנסו למגבלת
-     * הכרטיסים בדף. שם המגבלה קיימת כדי לא לכסות את המסך, וכאן ממילא
-     * Windows הוא שמנהל את התור ומקבץ אותן.
+     * התראת Windows קודמת, והכרטיס בתוך הדף הוא רק מה שנשאר כשהיא לא יצאה.
+     *
+     * בתחילה ההתראה נחסמה כשחלון משימון היה מול העיניים, בהנחה שהכרטיס בדף
+     * אומר את אותו דבר. זו הייתה טעות: מי שבדק את התכונה עשה זאת בדיוק כשהוא
+     * מסתכל על משימון, ולכן ראה רק חלונית בדפדפן והסיק שהיא אינה עובדת ברמת
+     * מערכת ההפעלה. התראה שמתנהגת אחרת כשמסתכלים עליה היא התראה שאי אפשר
+     * לבדוק — וההתנהגות המצופה היא של תוכנת דואר: toast של Windows, תמיד.
+     *
+     * ‎NOTIF_POP_MAX‎ מוגבל כדי לא לכסות את המסך בכרטיסים; ב-Windows אין
+     * צורך במגבלה כזו, הוא עצמו מקבץ ומנהל את התור.
      */
-    for (const n of fresh) showDesktopNotification(n);
+    const shown = await Promise.all(fresh.map((n) => showDesktopNotification(n)));
+    const leftover = fresh.filter((n, i) => !shown[i]);
+    for (const n of leftover.slice(0, NOTIF_POP_MAX).reverse()) popNotification(n);
   }
 
   /**
@@ -730,6 +749,38 @@ const App = (() => {
    * שנעלמת לגמרי פירושה שמשימה שהוקצתה לי לא תופיע בשום מקום, וזו תקלה ולא
    * העדפה. הרשימה במגירת ההתראות נשארת מלאה תמיד.
    */
+  /**
+   * אבחון. כל שלב בשרשרת שיכול להיכשל בשקט, ומה מצבו כרגע.
+   *
+   * נדרש מפני ש"ההתראות לא עובדות" הוא תסמין של חמישה דברים שונים לפחות:
+   * כתובת שאינה מאובטחת, הרשאה שלא ניתנה או נחסמה, Service Worker שלא נרשם,
+   * הרשמת דחיפה שלא נוצרה, או סוג התראה שכובה. בלי לראות אותם צריך לנחש.
+   */
+  async function notifDiagnostics() {
+    const rows = [];
+    const add = (label, ok, detail) => rows.push({ label, ok, detail });
+
+    add('כתובת מאובטחת (https)', !!window.isSecureContext,
+      `${location.protocol}//${location.host}`);
+    add('הדפדפן תומך בהתראות', supportsDesktopNotif(),
+      supportsDesktopNotif() ? '' : 'אין Notification API');
+    add('הרשאת התראות', supportsDesktopNotif() && Notification.permission === 'granted',
+      supportsDesktopNotif() ? Notification.permission : '—');
+    add('לא הושתק במכשיר הזה', localStorage.getItem(DESKTOP_NOTIF_KEY) !== '0',
+      localStorage.getItem(DESKTOP_NOTIF_KEY) === '0' ? 'מושתק' : '');
+
+    let reg = null;
+    try { reg = await navigator.serviceWorker?.getRegistration(); } catch { /* אין */ }
+    add('Service Worker רשום', !!reg, reg ? (reg.active ? 'פעיל' : 'ממתין') : 'לא נרשם');
+
+    let sub = null;
+    try { sub = reg ? await reg.pushManager.getSubscription() : null; } catch { /* אין */ }
+    add('הרשמה לדחיפה מהשרת', !!sub,
+      sub ? new URL(sub.endpoint).host : 'אין — התראות יגיעו רק כשמשימון פתוח');
+
+    return rows;
+  }
+
   function notifSettingsDialog() {
     const body = el('div');
 
@@ -810,9 +861,27 @@ const App = (() => {
         el('div.alert.alert-info.mt', {}, [
           el('span', { text: 'ℹ️' }),
           el('div', { text: 'הכיבוי חל על הקפיצה בפינת המסך בלבד. כל ההתראות ממשיכות להופיע ברשימה שמתחת לפעמון, כדי שדבר לא ייעלם.' })
-        ])
+        ]),
+        diagBox
       );
+
+      // האבחון נטען אחרי הציור, כדי שהמסך ייפתח מיד
+      notifDiagnostics().then((rows) => UI.mount(diagBox,
+        el('h4', { text: 'אבחון', style: { margin: '16px 0 8px', fontSize: '13px' } }),
+        el('div.table-wrap', {}, [
+          el('table.data', {}, [
+            el('tbody', {}, rows.map((r) => el('tr', {}, [
+              el('td', { style: { width: '28px' }, text: r.ok ? '✅' : '⚠️' }),
+              el('td', { text: r.label }),
+              el('td', { class: r.ok ? 'text-ok' : 'text-danger',
+                style: { fontSize: '12px', direction: 'ltr', textAlign: 'right' }, text: r.detail || '' })
+            ])))
+          ])
+        ])
+      )).catch(() => {});
     };
+
+    const diagBox = el('div');
 
     draw();
     UI.modal({
