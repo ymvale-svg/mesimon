@@ -22,6 +22,7 @@ try {
 const D = require('./db');
 const Auth = require('./auth');
 const Rules = require('./rules-engine');
+const Push = require('./push');
 const { router } = require('./api');
 const { HttpError, sendJson, serveStatic, parseUrl, unauthorized } = require('./http-kit');
 
@@ -87,6 +88,7 @@ server.on('error', (err) => {
 
 server.listen(PORT, HOST, () => {
   Rules.start();
+  Push.start();
   const nets = os.networkInterfaces();
   const lan = Object.values(nets).flat().find((n) => n && n.family === 'IPv4' && !n.internal);
   console.log('');

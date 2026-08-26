@@ -12,7 +12,7 @@
  */
 
 // שינוי המספר מפסל את המטמון הקודם ומאלץ טעינה מחדש של קבצי המערכת
-const VERSION = 'mesimon-v2';
+const VERSION = 'mesimon-v3';
 
 /**
  * מה נשמר מראש. רק מה שנדרש כדי שהמסך ייבנה: אם אחד מהם חסר, האפליקציה לא
@@ -63,6 +63,35 @@ self.addEventListener('activate', (event) => {
     }
     await self.clients.claim();
   })());
+});
+
+/**
+ * התראה שנדחפה מהשרת.
+ *
+ * זה המסלול היחיד שעובד כשאין שום חלון פתוח: שירות הדחיפה של הדפדפן מעיר
+ * את ה-Service Worker, והוא מציג את ההתראה. בטלפון זה המצב הרגיל — מערכת
+ * ההפעלה הורגת אפליקציות ברקע — ולכן בלי זה לא הייתה מגיעה התראה לנייד.
+ *
+ * ‎userVisibleOnly‎ בהרשמה מחייב אותנו להציג התראה על כל דחיפה. דחיפה
+ * שמטענה לא נקרא מוצגת בנוסח כללי ולא נבלעת בשקט, אחרת הדפדפן מציג במקומה
+ * "הודעה ברקע" מטעמו.
+ */
+self.addEventListener('push', (event) => {
+  let data = {};
+  try { data = event.data ? event.data.json() : {}; } catch { /* מטען שאינו JSON */ }
+
+  const title = data.title || 'משימון';
+  event.waitUntil(self.registration.showNotification(title, {
+    body: data.body || 'יש עדכון חדש במשימון',
+    icon: '/icons/icon-192.png',
+    badge: '/icons/icon-192.png',
+    lang: 'he',
+    dir: 'rtl',
+    // נשארת עד שנוגעים בה — התראה שהגיעה כשלא הסתכלת ונעלמה אינה התראה
+    requireInteraction: true,
+    tag: data.taskId ? `mesimon-task-${data.taskId}` : 'mesimon-push',
+    data: { taskId: data.taskId ?? null }
+  }));
 });
 
 /*

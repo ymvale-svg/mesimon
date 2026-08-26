@@ -375,10 +375,16 @@ const UI = (() => {
   const field = (label, control, hint) =>
     el('div.field', {}, [el('label', { text: label }), control, hint ? el('span.hint', { text: hint }) : null]);
 
+  /**
+   * רשימה נפתחת. פריט שיש בו ‎options‎ הוא קבוצה ומתורגם ל-‎optgroup‎ — כך
+   * אפשר להציב את חברי המחלקה בראש רשימה של חמישים אנשים תחת כותרת, ולא
+   * סתם למעלה בלי הסבר למה הסדר אינו אלפביתי.
+   */
   function select(options, value, props = {}) {
-    const node = el('select', props, options.map((o) =>
-      el('option', { value: o.value, selected: String(o.value) === String(value) }, [o.label])
-    ));
+    const build = (o) => (Array.isArray(o.options)
+      ? el('optgroup', { label: o.label }, o.options.map(build))
+      : el('option', { value: o.value, selected: String(o.value) === String(value) }, [o.label]));
+    const node = el('select', props, options.map(build));
     node.value = value ?? '';
     return node;
   }

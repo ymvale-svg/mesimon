@@ -301,6 +301,21 @@ CREATE TABLE IF NOT EXISTS project_pins (
  * ‎value‎ הוא JSON חופשי — אין כאן סכימה לכל מפתח, כי אלה העדפות ממשק
  * שמשתנות עם המסכים ולא נתונים שמישהו שואל עליהם שאילתות.
  */
+/*
+ * הרשמות להתראות דחיפה. שורה לכל מכשיר ולא לכל משתמש — לאדם אחד יש מחשב
+ * וטלפון, ולכל אחד מהם endpoint משלו אצל שירות הדחיפה.
+ *
+ * ‎endpoint‎ ייחודי: אותו מכשיר שנרשם מחדש מעדכן את שורתו ואינו מוסיף שורה.
+ */
+CREATE TABLE IF NOT EXISTS push_subscriptions (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  endpoint   TEXT    NOT NULL UNIQUE,
+  p256dh     TEXT    NOT NULL,
+  auth       TEXT    NOT NULL,
+  created_at TEXT    NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS user_prefs (
   user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   key        TEXT    NOT NULL,
@@ -467,6 +482,17 @@ function audit(taskId, actor, action, details = '') {
   );
 }
 
+/**
+ * מאזינים ליצירת התראה. קיים בשביל דחיפת ההתראות (server/push.js): כל התראה
+ * במערכת נוצרת דרך ‎notify‎, וזו הנקודה היחידה שמכסה את כולן — אחרת כל
+ * נקודת קצה שמתווספת הייתה צריכה לזכור לדחוף בנפרד, ולשכוח.
+ *
+ * כאן ולא ב-push.js בגלל כיוון התלות: ‎push‎ נזקק ל-‎db‎, ואם ‎db‎ היה
+ * נזקק ל-‎push‎ הייתה נוצרת תלות מעגלית.
+ */
+const notifyListeners = [];
+const onNotify = (fn) => { if (typeof fn === 'function') notifyListeners.push(fn); };
+
 function notify({ targetType, targetId, kind, title, body = '', taskId = null }) {
   run(
     'INSERT INTO notifications (target_type, target_id, kind, title, body, task_id, is_read, created_at) VALUES (?,?,?,?,?,?,0,?)',
@@ -478,6 +504,10 @@ function notify({ targetType, targetId, kind, title, body = '', taskId = null })
     taskId,
     nowIso()
   );
+  // כשל אצל מאזין אינו מבטל את ההתראה עצמה — היא כבר נשמרה
+  for (const fn of notifyListeners) {
+    try { fn({ targetType, targetId, kind, title, body, taskId }); } catch { /* בשקט */ }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1043,7 +1073,7 @@ module.exports = {
   nowIso, hashPassword, verifyPassword,
   getSetting, setSetting, allSettings,
   userPrefs, setUserPref,
-  audit, notify,
+  audit, notify, onNotify,
   internalBoard, createVendorBoard, boardColumns, ensureBoardColumns,
   INTERNAL_COLUMNS, VENDOR_COLUMNS, DEFAULT_SETTINGS,
   bootstrap, seedDemoData, ensureFirstAdmin

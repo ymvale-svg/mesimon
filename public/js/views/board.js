@@ -569,12 +569,39 @@ const BoardView = (() => {
       task?.projectId ?? opts.projectId ?? ''
     );
 
+    /*
+     * חברי המחלקה של הפותח בראש הרשימה, תחת כותרת. בארגון של חמישים אנשים
+     * רשימה אלפביתית מציבה את מי שיושב איתי באמצע, וכמעט תמיד אליו אני
+     * מקצה — בעיקר כשהשם ארוך והרשימה נגללת. אותו סדר שכבר קיים בתיוג ‎@‎.
+     *
+     * ‎optgroup‎ ולא סתם סדר: כותרת מסבירה למה הסדר אינו אלפביתי, ובלעדיה
+     * זה נראה כמו רשימה מבולגנת.
+     */
+    const userOption = (u) => ({
+      value: `user:${u.id}`,
+      // רמת הגישה מצורפת לשם רק כשהצופה רשאי לראות רמות
+      label: u.roleLabel ? `${u.name} — ${u.roleLabel}` : u.name
+    });
+    const myDept = App.state.actor?.departmentId ?? null;
+    const near = myDept ? App.state.users.filter((u) => u.departmentId === myDept) : [];
+    const far = App.state.users.filter((u) => !near.includes(u));
+
+    const vendorOptions = App.may('assign_task_to_vendor')
+      ? App.state.vendors.filter((v) => v.status === 'active')
+        .map((v) => ({ value: `vendor:${v.id}`, label: `${v.name} (ספק חיצוני)` }))
+      : [];
+
     const assigneeOptions = [
       { value: '', label: 'ללא אחראי' },
-      // רמת הגישה מצורפת לשם רק כשהצופה רשאי לראות רמות
-      ...App.state.users.map((u) => ({ value: `user:${u.id}`, label: u.roleLabel ? `${u.name} — ${u.roleLabel}` : u.name })),
-      ...(App.may('assign_task_to_vendor')
-        ? App.state.vendors.filter((v) => v.status === 'active').map((v) => ({ value: `vendor:${v.id}`, label: `${v.name} (ספק חיצוני)` }))
+      // קבוצות רק כשיש בהן טעם — במחלקה אחת בלבד הכותרות היו רעש
+      ...(near.length && far.length
+        ? [
+            { label: App.state.actor.department || 'המחלקה שלי', options: near.map(userOption) },
+            { label: 'שאר הארגון', options: far.map(userOption) }
+          ]
+        : [...near, ...far].map(userOption)),
+      ...(vendorOptions.length
+        ? [{ label: 'ספקים חיצוניים', options: vendorOptions }]
         : [])
     ];
     /*
@@ -737,8 +764,22 @@ const BoardView = (() => {
      * בפרויקט חדש המנהל הוא מי שפותח אותו, כמו האחראי במשימה חדשה. מי שפותח
      * פרויקט בשביל מישהו אחר משנה שורה אחת, ומי שפותח לעצמו אינו נדרש לדבר.
      */
+    // אותה קבוצה בראש הרשימה כמו באחראי משימה — ראה ההסבר שם
+    const pMyDept = App.state.actor?.departmentId ?? null;
+    const pNear = pMyDept ? App.state.users.filter((u) => u.departmentId === pMyDept) : [];
+    const pFar = App.state.users.filter((u) => !pNear.includes(u));
+    const pOption = (u) => ({ value: u.id, label: u.name });
+
     const managerSelect = UI.select(
-      [{ value: '', label: 'ללא מנהל' }, ...App.state.users.map((u) => ({ value: u.id, label: u.name }))],
+      [
+        { value: '', label: 'ללא מנהל' },
+        ...(pNear.length && pFar.length
+          ? [
+              { label: App.state.actor.department || 'המחלקה שלי', options: pNear.map(pOption) },
+              { label: 'שאר הארגון', options: pFar.map(pOption) }
+            ]
+          : [...pNear, ...pFar].map(pOption))
+      ],
       project?.managerId ?? (isEdit || App.isVendor() ? '' : App.state.actor?.id ?? '')
     );
     const startInput = el('input', { type: 'date', value: UI.toInputDate(project?.startDate) });

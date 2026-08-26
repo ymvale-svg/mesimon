@@ -12,6 +12,7 @@ const Google = require('./google-auth');
 const Invites = require('./invites');
 const Mailer = require('./mailer');
 const TaskMail = require('./task-mail');
+const Push = require('./push');
 const Spreadsheet = require('./spreadsheet');
 const {
   Router, badRequest, forbidden, notFound,
@@ -3159,6 +3160,41 @@ router.delete('/api/boards/:boardId/columns/:id', async (req, res, ctx) => {
   }
   D.run('DELETE FROM board_columns WHERE id = ?', col.id);
   sendJson(res, 200, { columns: columnsOf(col.board_id), moved: inUse });
+});
+
+// --- הרשמה להתראות דחיפה ---
+
+/*
+ * המפתח הציבורי גלוי בכוונה — הוא נמסר לדפדפן בהרשמה, וזה תפקידו. הפרטי
+ * לעולם אינו יוצא מהשרת.
+ */
+router.get('/api/push/key', async (req, res, ctx) => {
+  ctx.requireActor();
+  sendJson(res, 200, { key: Push.publicKey() });
+});
+
+router.post('/api/push/subscribe', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  // לספק אין אפליקציה מותקנת, ואין לו מסכים שמצדיקים דחיפה
+  if (isVendor(actor)) throw forbidden();
+  const b = await readJson(req);
+  if (!Push.saveSubscription(actor.id, b.subscription ?? b)) {
+    throw badRequest('פרטי ההרשמה להתראות אינם תקינים');
+  }
+  sendJson(res, 200, { ok: true });
+});
+
+router.delete('/api/push/subscribe', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  const b = await readJson(req).catch(() => ({}));
+  const endpoint = String(b.endpoint ?? '').trim();
+  if (!endpoint) throw badRequest('נדרש מזהה ההרשמה');
+  /*
+   * מוגבל להרשמות של המבקש: ‎endpoint‎ הוא כתובת ציבורית, ובלי התנאי הזה
+   * מי שהשיג אחת היה יכול לבטל התראות של אדם אחר.
+   */
+  D.run('DELETE FROM push_subscriptions WHERE endpoint = ? AND user_id = ?', endpoint, actor.id);
+  sendJson(res, 200, { ok: true });
 });
 
 // --- העדפות תצוגה אישיות ---

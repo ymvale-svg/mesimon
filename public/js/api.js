@@ -79,6 +79,10 @@ const API = (() => {
 
     savePrefs: (prefs) => call('PUT', '/api/prefs', { prefs }),
 
+    pushKey: () => call('GET', '/api/push/key'),
+    pushSubscribe: (subscription) => call('POST', '/api/push/subscribe', { subscription }),
+    pushUnsubscribe: (endpoint) => call('DELETE', '/api/push/subscribe', { endpoint }),
+
     adminUsers: () => call('GET', '/api/admin/users'),
     createUser: (body) => call('POST', '/api/admin/users', body),
     resendInvite: (targetType, id) => call('POST', '/api/admin/invite', { targetType, id }),

@@ -142,6 +142,12 @@ const App = (() => {
       navigate(isVendor() ? 'vendor' : 'home');
       openTaskFromUrl();
       registerServiceWorker();
+      /*
+       * רישום מחדש בכל כניסה, ולא רק בהפעלה הראשונה: ההרשמה נשמרת בשרת לפי
+       * המשתמש, וכשאדם אחר נכנס מאותו מכשיר יש לקשור את המכשיר אליו. גם
+       * הדפדפן עשוי להחליף את ההרשמה מצדו.
+       */
+      subscribeToPush();
     } catch (err) {
       if (err.status === 401) LoginView.render(root(), boot);
       else {
@@ -231,15 +237,59 @@ const App = (() => {
     // הושתק במכשיר הזה בלבד — אין צורך לבקש הרשאה שוב, רק להסיר את ההשתקה
     if (Notification.permission === 'granted') {
       localStorage.setItem(DESKTOP_NOTIF_KEY, '1');
+      subscribeToPush();
       return 'granted';
     }
     try {
       const result = await Notification.requestPermission();
-      if (result === 'granted') localStorage.setItem(DESKTOP_NOTIF_KEY, '1');
+      if (result === 'granted') {
+        localStorage.setItem(DESKTOP_NOTIF_KEY, '1');
+        subscribeToPush();
+      }
       return result;
     } catch {
       return Notification.permission;
     }
+  }
+
+  /**
+   * הרשמת המכשיר להתראות דחיפה מהשרת.
+   *
+   * זה מה שמאפשר להתראה להגיע כשמשימון סגור לגמרי — במיוחד בטלפון, שבו
+   * מערכת ההפעלה הורגת אפליקציות ברקע ולכן הסקר מהדף כמעט לא רץ. שירות
+   * הדחיפה של הדפדפן מעיר את ה-Service Worker, והוא מציג את ההתראה.
+   *
+   * נקראת בכל כניסה ולא רק בהפעלה הראשונה: ההרשמה יכולה להתחלף מצד הדפדפן
+   * (‎pushsubscriptionchange‎), והשרת שומר לפי endpoint — ולכן רישום חוזר
+   * מעדכן ואינו מכפיל. נכשלת בשקט: התראות דחיפה הן שיפור, לא תנאי לעבודה.
+   */
+  async function subscribeToPush() {
+    if (!('serviceWorker' in navigator) || !('PushManager' in window)) return;
+    if (Notification.permission !== 'granted') return;
+    try {
+      const reg = await navigator.serviceWorker.ready;
+      const existing = await reg.pushManager.getSubscription();
+      let sub = existing;
+      if (!sub) {
+        const { key } = await API.pushKey();
+        if (!key) return;
+        sub = await reg.pushManager.subscribe({
+          // חובה: הדפדפן אינו מתיר דחיפה שקטה שאינה מוצגת למשתמש
+          userVisibleOnly: true,
+          applicationServerKey: base64UrlToBytes(key)
+        });
+      }
+      await API.pushSubscribe(sub.toJSON());
+    } catch (err) {
+      console.warn('[משימון] הרשמה להתראות דחיפה נכשלה:', err.message);
+    }
+  }
+
+  /** המפתח מגיע כ-base64url, ו-‎applicationServerKey‎ דורש בתים */
+  function base64UrlToBytes(value) {
+    const padded = value.replace(/-/g, '+').replace(/_/g, '/');
+    const raw = atob(padded + '='.repeat((4 - (padded.length % 4)) % 4));
+    return Uint8Array.from(raw, (c) => c.charCodeAt(0));
   }
 
   const muteDesktopNotifications = () => localStorage.setItem(DESKTOP_NOTIF_KEY, '0');
