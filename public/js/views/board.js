@@ -702,7 +702,13 @@ const BoardView = (() => {
     ]);
 
     const saveBtn = el('button.btn.btn-primary', {}, [isEdit ? 'שמירת שינויים' : 'יצירת משימה']);
-    const m = UI.modal({ title: isEdit ? `עריכת משימה #${task.id}` : 'משימה חדשה', body, footer: [saveBtn, el('div.spacer')] });
+    const m = UI.modal({
+      title: isEdit
+        ? `עריכת משימה #${task.id}`
+        : (opts.parentTitle ? `תת-משימה בתוך "${opts.parentTitle}"` : 'משימה חדשה'),
+      body,
+      footer: [saveBtn, el('div.spacer')]
+    });
 
     saveBtn.addEventListener('click', async () => {
       const title = titleInput.value.trim();
@@ -727,6 +733,8 @@ const BoardView = (() => {
       // משימה ארגונית קיימת לא תוריד אותה בשוגג לרמה המחלקתית
       if (!isEdit) {
         payload.checklist = checklistInput.value.split('\n').map((s) => s.trim()).filter(Boolean);
+        // תת-משימה: נשלח רק ביצירה, כי העברת משימה קיימת תחת אב היא פעולה אחרת
+        if (opts.parentTaskId) payload.parentTaskId = opts.parentTaskId;
       }
 
       saveBtn.disabled = true;

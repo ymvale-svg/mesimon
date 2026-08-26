@@ -33,6 +33,7 @@ const SHELL = [
   '/js/views/mobile.js',
   '/js/views/grid.js',
   '/js/views/board.js',
+  '/js/views/tracker.js',
   '/js/views/task-card.js',
   '/js/views/checklist-item.js',
   '/js/views/vendor-portal.js',

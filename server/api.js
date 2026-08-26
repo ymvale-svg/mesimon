@@ -124,6 +124,32 @@ function assigneeName(task) {
 const isOverdue = (task, final) =>
   !!task.due_date && !final && !task.archived && new Date(task.due_date).getTime() < Date.now();
 
+/**
+ * ייצוג מקוצר של תת-משימה — רק מה שנדרש לשורה בטבלה ולרשימה בכרטיס האב.
+ *
+ * לא ‎shapeTask‎ המלא: הוא מריץ כתריסר שאילתות לכל משימה (קבצים, תגובות,
+ * צ'קליסט, תלות), ובטבלת בקרה עם חמישים שורות זה מאות שאילתות למסך אחד.
+ */
+function shapeSubtask(task) {
+  const col = columnMeta(task.board_id, task.status);
+  const final = col ? !!col.is_final : false;
+  return {
+    id: task.id,
+    title: task.title,
+    assigneeType: task.assignee_type,
+    assigneeId: task.assignee_id,
+    assigneeName: assigneeName(task),
+    status: task.status,
+    statusLabel: col ? col.label : task.status,
+    statusColor: col ? col.color : '#94a3b8',
+    statusShort: task.status_short ?? '',
+    isFinal: final,
+    priority: task.priority,
+    dueDate: task.due_date,
+    overdue: isOverdue(task, final)
+  };
+}
+
 /** ייצוג משימה לממשק, כולל שדות נגזרים */
 function shapeTask(task, actor, { withDetails = false } = {}) {
   const board = boardOf(task);
@@ -177,6 +203,37 @@ function shapeTask(task, actor, { withDetails = false } = {}) {
     checklistDone,
     dependsOnTaskId: task.depends_on_task_id,
     dependency: dependency ? { id: dependency.id, title: dependency.title, blocking: dependencyBlocking } : null,
+    statusShort: task.status_short ?? '',
+    parentTaskId: task.parent_task_id ?? null,
+    parentTitle: task.parent_task_id
+      ? D.get('SELECT title FROM tasks WHERE id = ?', task.parent_task_id)?.title ?? null
+      : null,
+    // מונה בלבד בתצוגה המקוצרת; הרשימה עצמה נשלחת רק ב-withDetails
+    subtasksTotal: D.get('SELECT COUNT(*) c FROM tasks WHERE parent_task_id = ?', task.id).c,
+    subtasksOpen: D.get(
+      `SELECT COUNT(*) c FROM tasks t
+         LEFT JOIN board_columns bc ON bc.board_id = t.board_id AND bc.key = t.status
+        WHERE t.parent_task_id = ? AND t.archived = 0 AND COALESCE(bc.is_final, 0) = 0`,
+      task.id
+    ).c,
+    /*
+     * "הפעולה הבאה" — תת-המשימה הפתוחה עם היעד הקרוב. זו השורה שמופיעה
+     * בטבלת הבקרה לצד משימת-האב, וזה מה שהמשתמש ביקש: משימה מתמשכת שהסטטוס
+     * של הפעולה הבאה בה מתעדכן כל הזמן.
+     *
+     * משימה בלי יעד נופלת לסוף ולא לראש, אחרת היא הייתה מסתירה תת-משימה
+     * דחופה עם תאריך.
+     */
+    activeSubtask: (() => {
+      const row = D.get(
+        `SELECT t.* FROM tasks t
+           LEFT JOIN board_columns bc ON bc.board_id = t.board_id AND bc.key = t.status
+          WHERE t.parent_task_id = ? AND t.archived = 0 AND COALESCE(bc.is_final, 0) = 0
+          ORDER BY COALESCE(t.due_date, '9999-12-31'), t.id LIMIT 1`,
+        task.id
+      );
+      return row ? shapeSubtask(row) : null;
+    })(),
     departmentId: task.department_id ?? null,
     departmentName: task.department_id
       ? D.get('SELECT name FROM departments WHERE id = ?', task.department_id)?.name ?? null
@@ -267,6 +324,18 @@ function shapeTask(task, actor, { withDetails = false } = {}) {
       createdAt: h.created_at
     })),
     columns: columnsOf(task.board_id).map((c) => ({ key: c.key, label: c.label, color: c.color, isFinal: !!c.is_final })),
+    /*
+     * תתי-המשימות, בסדר שבו הן נקראות: הפתוחות לפי יעד ואחריהן הסגורות.
+     * מסוננות לפי מה שהצופה רשאי לראות — תת-משימה היא משימה, וייתכן שהיא
+     * הוקצתה למחלקה אחרת שאינה בתחומו.
+     */
+    subtasks: D.all(
+      `SELECT t.*, COALESCE(bc.is_final, 0) fin FROM tasks t
+         LEFT JOIN board_columns bc ON bc.board_id = t.board_id AND bc.key = t.status
+        WHERE t.parent_task_id = ?
+        ORDER BY fin, COALESCE(t.due_date, '9999'), t.id`,
+      task.id
+    ).filter((s) => canSeeTask(actor, s)).map((s) => shapeSubtask(s)),
     permissions: {
       edit: mayOnTask(actor, 'edit_delete_task', task, project),
       changeStatus: mayOnTask(actor, 'change_task_status', task, project) && !(isVendor(actor) && actor.readOnly),
@@ -719,6 +788,15 @@ router.get('/api/tasks', async (req, res, ctx) => {
     if (v) { where.push(clause); params.push(cast(v)); }
   }
 
+  /*
+   * סינון לפי היררכיה. ‎none‎ מחזיר משימות-אב בלבד — זה מה שטבלת הבקרה
+   * צריכה, שורה לכל משימה. בלי הפרמטר הרשימה מוחזרת כמו קודם, כולל
+   * תתי-משימות, כדי שמי שקיבל תת-משימה יראה אותה בלוח ובדף הבית כרגיל.
+   */
+  const parent = q.get('parent');
+  if (parent === 'none') where.push('t.parent_task_id IS NULL');
+  else if (parent) { where.push('t.parent_task_id = ?'); params.push(Number(parent)); }
+
   const assignee = q.get('assignee'); // "user:3" / "vendor:1"
   if (assignee) {
     const [type, id] = assignee.split(':');
@@ -818,12 +896,28 @@ router.post('/api/tasks', async (req, res, ctx) => {
     taskDepartmentId = actor.departmentId ?? null;
   }
 
+  /*
+   * תת-משימה. הבדיקה היא על הראייה בלבד ולא על הרשאה נוספת: כדי להגיע לכאן
+   * נדרש ‎create_task‎ ממילא, וזה בדיוק מה שמאפשר גם למי שקיבל תת-משימה
+   * לפתוח את הבאה בשרשרת — הזרימה שביקש המשתמש.
+   *
+   * שתי רמות בלבד: תת-משימה של תת-משימה נתלית באב המקורי. עץ עמוק היה
+   * מחייב תצוגה רקורסיבית וטבלת בקרה שאי אפשר לקרוא, ובפועל מה שנדרש הוא
+   * "המשימה והפעולה הבאה שלה".
+   */
+  let parentTaskId = null;
+  if (body.parentTaskId) {
+    const parent = getTaskOr404(body.parentTaskId);
+    assertVisible(actor, parent);
+    parentTaskId = parent.parent_task_id ?? parent.id;
+  }
+
   const res1 = D.run(
     `INSERT INTO tasks
       (title, description, project_id, board_id, assignee_type, assignee_id, status, priority,
        due_date, created_at, created_by, status_changed_at, activate_at, depends_on_task_id,
-       is_recurring, recurrence_freq, recurrence_policy, department_id)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+       is_recurring, recurrence_freq, recurrence_policy, department_id, parent_task_id, status_short)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     title,
     String(body.description ?? ''),
     body.projectId ? Number(body.projectId) : null,
@@ -841,7 +935,9 @@ router.post('/api/tasks', async (req, res, ctx) => {
     body.isRecurring ? 1 : 0,
     body.isRecurring ? (body.recurrenceFreq ?? 'weekly') : null,
     body.recurrencePolicy ?? 'inherit',
-    taskDepartmentId
+    taskDepartmentId,
+    parentTaskId,
+    String(body.statusShort ?? '').slice(0, 200)
   );
   const id = Number(res1.lastInsertRowid);
 
@@ -926,6 +1022,20 @@ router.patch('/api/tasks/:id', async (req, res, ctx) => {
     setField('description', 'description', body.description !== undefined ? String(body.description) : undefined, 'תיאור');
     setField('priority', 'priority', body.priority, 'עדיפות', (v) => PRIORITIES.find((p) => p.key === v)?.label ?? v);
     setField('dueDate', 'due_date', body.dueDate, 'תאריך יעד', Rules.formatDate);
+    /*
+     * הסטטוס המקוצר לא עובר ב-‎setField‎: הוא הופך מחרוזת ריקה ל-NULL, והעמודה
+     * מוגדרת NOT NULL — ניקוי השדה היה נכשל. הוא כן נרשם בלוג הבקרה כמו כל
+     * שדה אחר, וזה מה שהופך את הטבלה לכלי מעקב: אפשר לראות בכרטיס מה היה
+     * הסטטוס קודם ומתי השתנה, גם כשהשדה מחזיק רק את הנוכחי.
+     */
+    if (body.statusShort !== undefined) {
+      const next = String(body.statusShort).trim().slice(0, 200);
+      const current = task.status_short ?? '';
+      if (next !== current) {
+        D.run('UPDATE tasks SET status_short = ? WHERE id = ?', next, task.id);
+        changes.push(`סטטוס מקוצר: ${current || '—'} ← ${next || '—'}`);
+      }
+    }
     setField('projectId', 'project_id', body.projectId !== undefined ? (body.projectId ? Number(body.projectId) : null) : undefined, 'פרויקט',
       (v) => (v ? D.get('SELECT name FROM projects WHERE id = ?', v)?.name ?? '' : ''));
     setField('activateAt', 'activate_at', body.activateAt, 'תאריך הפעלה', Rules.formatDate);
@@ -3210,7 +3320,9 @@ router.delete('/api/push/subscribe', async (req, res, ctx) => {
 const PREF_KEYS = [
   'boardFilters', 'boardView', 'projectScope', 'sidebar', 'mobileFilter', 'projectOrder',
   // אילו סוגי התראות קופצים כהתראת מערכת ההפעלה — בחירה אישית לכל משתמש
-  'notifyKinds'
+  'notifyKinds',
+  // חתך הפרויקט במסך בקרת המשימות
+  'trackerProject'
 ];
 const PREF_MAX_BYTES = 4096;
 

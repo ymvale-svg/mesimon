@@ -154,7 +154,21 @@ CREATE TABLE IF NOT EXISTS tasks (
   recurrence_parent  INTEGER REFERENCES tasks(id) ON DELETE SET NULL,
   last_spawned_at    TEXT,
   archived           INTEGER NOT NULL DEFAULT 0,
-  escalated          INTEGER NOT NULL DEFAULT 0
+  escalated          INTEGER NOT NULL DEFAULT 0,
+  /*
+   * תת-משימה. שדה על ‎tasks‎ ולא טבלה נפרדת, מפני שתת-משימה *היא* משימה:
+   * אצל מי שקיבל אותה היא מופיעה בלוח ובדף הבית כמו כל משימה, עם סטטוס,
+   * יעד, שרשור, קבצים והתראות. טבלה נפרדת הייתה מחייבת לשכפל את כל אלה,
+   * ולבנות כל תכונה עתידית פעמיים.
+   */
+  parent_task_id     INTEGER REFERENCES tasks(id) ON DELETE CASCADE,
+  /*
+   * סטטוס בטקסט חופשי, שורה אחת: "ממתין לטופס 360", "אושר מחיר". זה מה
+   * שמופיע בטבלת הבקרה, ולכן הוא שדה ולא תגובה. העדכון המפורט נשאר בשרשור
+   * התגובות — שם יש לו היסטוריה, מחבר, זמן וקבצים, ושדה שנדרס בכל עדכון
+   * היה מוחק בדיוק את מה שמעניין בבקרה.
+   */
+  status_short       TEXT    NOT NULL DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS checklist_items (
@@ -747,6 +761,9 @@ function migrate() {
   // הארגונית שבוטלה. היא נותרת ריקה ואינה נקראת; מחיקת עמודה ב-SQLite
   // דורשת בניית טבלה מחדש, וזה סיכון מיותר עבור עמודה שאינה מפריעה.
   addColumn('tasks', 'department_id', 'INTEGER REFERENCES departments(id) ON DELETE SET NULL');
+  // תת-משימה והסטטוס המקוצר שלה — ראה ההסבר בהגדרת הטבלה
+  addColumn('tasks', 'parent_task_id', 'INTEGER REFERENCES tasks(id) ON DELETE CASCADE');
+  addColumn('tasks', 'status_short', "TEXT NOT NULL DEFAULT ''");
   // מי פתח את הפרויקט — הפרויקט נשאר ברשימה שלו גם אם מונה לו מנהל אחר
   addColumn('projects', 'created_by', 'INTEGER REFERENCES users(id)');
   // צבע הפרויקט — צובע את שורות המשימות שלו, לזיהוי במבט ולא בקריאה

@@ -1,0 +1,261 @@
+'use strict';
+/**
+ * מסך בקרה — משימה והפעולה הבאה שלה, שורה אחת לכל משימה.
+ *
+ * נבנה בשביל משימות מתמשכות: משימה שאינה נגמרת, ובכל רגע יש בה "פעולה
+ * הבאה" עם אחראי ותאריך יעד שמתחלפים. הלוח הרגיל אינו מתאים לזה — הוא מציג
+ * משימות זו לצד זו בלי לומר מה תלוי במה ומי הכדור אצלו כרגע.
+ *
+ * שורה אחת לכל משימת-אב, ובה תת-המשימה הפתוחה עם היעד הקרוב. חץ פותח את
+ * שאר תתי-המשימות. הבחירה הזו נעשתה במכוון על פני שורה לכל תת-משימה: כאן
+ * אפשר לראות את מצב הפרויקט במבט אחד, ובשורה-לכל-תת-משימה שם האב חוזר
+ * בעשרות שורות והטבלה הופכת לרשימה ארוכה שאי אפשר לסרוק.
+ *
+ * עריכה נעשית בתא עצמו. מסך בקרה שדורש לפתוח כרטיס כדי לשנות תאריך הוא
+ * מסך שמסתכלים בו ולא עובדים בו.
+ */
+
+const TrackerView = (() => {
+  const { el } = UI;
+
+  let containerRef = null;
+  let rows = [];
+  let expanded = new Set();
+
+  // הסינון נשמר למשתמש, כמו בלוח — ראה server/api.js, PREF_KEYS
+  const savedProject = () => App.getPref('trackerProject', '') ?? '';
+
+  async function render(container, params = {}) {
+    containerRef = container;
+    if (params.projectId !== undefined) App.setPref('trackerProject', String(params.projectId ?? ''));
+    UI.mount(container, UI.spinner());
+    await load();
+  }
+
+  async function load() {
+    const projectId = savedProject();
+    try {
+      const data = await API.tasks({ scope: 'internal', parent: 'none', projectId: projectId || undefined });
+      rows = data.tasks;
+      draw();
+    } catch (err) {
+      UI.mount(containerRef, UI.empty(`לא ניתן לטעון: ${err.message}`, '⚠️'));
+    }
+  }
+
+  const reload = () => load();
+
+  /** עדכון שדה בודד, בלי לרענן את כל הטבלה — הפוקוס לא ייקח מהמשתמש באמצע */
+  async function patch(taskId, body, { redraw = false } = {}) {
+    try {
+      await API.updateTask(taskId, body);
+      if (redraw) await reload();
+      return true;
+    } catch (err) {
+      UI.error(err);
+      await reload();      // הערך שנכשל אינו נשאר על המסך כאילו נשמר
+      return false;
+    }
+  }
+
+  // ------------------------------------------------------------- תאים
+
+  /**
+   * שדה טקסט שנשמר ביציאה מהתא או ב-Enter, ולא בכל הקשה. שמירה בכל הקשה
+   * הייתה שולחת עשרים בקשות על משפט אחד.
+   */
+  function shortStatusCell(task) {
+    const input = el('input.tr-short', {
+      type: 'text',
+      value: task.statusShort ?? '',
+      placeholder: task.canEdit ? 'סטטוס בשורה אחת…' : '',
+      readonly: !task.canEdit,
+      title: task.statusShort || ''
+    });
+    input.value = task.statusShort ?? '';
+    if (!task.canEdit) return input;
+
+    let last = input.value;
+    const save = async () => {
+      const next = input.value.trim();
+      if (next === last) return;
+      last = next;
+      if (await patch(task.id, { statusShort: next })) task.statusShort = next;
+    };
+    input.addEventListener('blur', save);
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); input.blur(); }
+      if (e.key === 'Escape') { input.value = last; input.blur(); }
+    });
+    return input;
+  }
+
+  function assigneeCell(sub) {
+    if (!sub) return el('span.mute-sm', { text: '—' });
+    const options = [
+      { value: '', label: 'ללא אחראי' },
+      ...App.state.users.map((u) => ({ value: `user:${u.id}`, label: u.name }))
+    ];
+    const current = sub.assigneeId ? `${sub.assigneeType}:${sub.assigneeId}` : '';
+    return UI.select(options, current, {
+      class: 'tr-inline',
+      onchange: async (e) => {
+        const [type, id] = e.target.value ? e.target.value.split(':') : ['user', ''];
+        await patch(sub.id, { assigneeType: id ? type : null, assigneeId: id ? Number(id) : null }, { redraw: true });
+      }
+    });
+  }
+
+  function dueCell(task, { muted = false } = {}) {
+    if (!task) return el('span.mute-sm', { text: '—' });
+    const input = el('input.tr-inline', {
+      type: 'date',
+      value: UI.toInputDate(task.dueDate),
+      // צבע האזהרה מגיע מהשרת ולא מחישוב מקומי, כדי שיהיה זהה לכל המסכים
+      class: task.overdue ? 'is-overdue' : (muted ? 'is-muted' : '')
+    });
+    input.addEventListener('change', async () => {
+      await patch(task.id, { dueDate: UI.fromInputDate(input.value) }, { redraw: true });
+    });
+    return input;
+  }
+
+  /** אייקוני הסטטוס והעדיפות, אותם שנמצאים בכל מקום אחר במערכת */
+  const statusIcons = (task) => el('span.tr-icons', {}, [
+    el('span.dot-chip', { title: task.statusLabel, style: { background: task.statusColor } }),
+    task.priority === 'urgent' ? UI.icon('urgent', { size: 13, title: 'דחוף' }) : null,
+    task.overdue ? UI.icon('overdue', { size: 13, title: 'באיחור' }) : null,
+    task.escalated ? el('span', { title: 'הוקפצה', text: '⚡' }) : null
+  ]);
+
+  // ------------------------------------------------------------- שורות
+
+  function parentRow(task) {
+    const sub = task.activeSubtask;
+    const isOpen = expanded.has(task.id);
+    const more = task.subtasksTotal - (sub ? 1 : 0);
+
+    const toggle = el(`button.tr-toggle${isOpen ? '.open' : ''}`, {
+      title: task.subtasksTotal ? 'הצגת כל תתי-המשימות' : 'אין תתי-משימות',
+      disabled: !task.subtasksTotal,
+      onclick: () => {
+        if (isOpen) expanded.delete(task.id); else expanded.add(task.id);
+        draw();
+      }
+    }, ['▸']);
+
+    return el(`tr.tr-parent${isOpen ? '.is-open' : ''}`, {}, [
+      el('td', {}, [
+        el('div.tr-title', {}, [
+          toggle,
+          statusIcons(task),
+          el('button.txt.txt-open', {
+            title: 'פתיחת המשימה',
+            onclick: () => TaskCardView.open(task.id)
+          }, [task.title]),
+          more > 0 ? el('span.tr-count', { title: `${task.subtasksTotal} תתי-משימות`, text: `+${more}` }) : null
+        ])
+      ]),
+      el('td', {}, [dueCell(task)]),
+      el('td', {}, [shortStatusCell(task)]),
+      el('td', {}, [
+        sub
+          ? el('button.txt.txt-open', { onclick: () => TaskCardView.open(sub.id) }, [sub.title])
+          : el('span.mute-sm', { text: 'אין פעולה פתוחה' })
+      ]),
+      el('td', {}, [assigneeCell(sub)]),
+      el('td', {}, [dueCell(sub, { muted: true })]),
+      el('td', {}, [
+        App.may('create_task')
+          ? el('button.btn.btn-sm', {
+              title: 'הוספת תת-משימה',
+              // אין צורך ברענון יזום: שמירת משימה קוראת ל-App.refreshView
+              onclick: () => BoardView.openTaskDialog(null, {
+                projectId: task.projectId, parentTaskId: task.id, parentTitle: task.title
+              })
+            }, ['＋ תת-משימה'])
+          : null
+      ])
+    ]);
+  }
+
+  /** שורת תת-משימה, כשהאב פרוש. מוזחת פנימה ובלי חזרה על שם האב */
+  const subRow = (sub) => el(`tr.tr-sub${sub.isFinal ? '.is-done' : ''}`, {}, [
+    el('td', { colspan: '3' }, [
+      el('div.tr-subtitle', {}, [
+        el('span.tr-branch', { text: '↳' }),
+        el('span.dot-chip', { title: sub.statusLabel, style: { background: sub.statusColor } }),
+        el('button.txt.txt-open', { onclick: () => TaskCardView.open(sub.id) }, [sub.title]),
+        sub.statusShort ? el('span.tr-substatus', { text: sub.statusShort, title: sub.statusShort }) : null
+      ])
+    ]),
+    el('td', { text: sub.statusLabel }),
+    el('td', {}, [assigneeCell(sub)]),
+    el('td', {}, [dueCell(sub, { muted: true })]),
+    el('td', {})
+  ]);
+
+  // ------------------------------------------------------------- ציור
+
+  function toolbar() {
+    const projectOptions = [{ value: '', label: 'כל הפרויקטים' },
+      ...App.state.projects.filter((p) => p.status !== 'done').map((p) => ({ value: p.id, label: p.name }))];
+
+    return el('div.toolbar', {}, [
+      UI.select(projectOptions, savedProject(), {
+        onchange: (e) => { App.setPref('trackerProject', e.target.value); load(); }
+      }),
+      el('div.spacer'),
+      el('span.mute-sm', { text: `${rows.length} משימות` })
+    ]);
+  }
+
+  function draw() {
+    const body = [];
+    for (const task of rows) {
+      body.push(parentRow(task));
+      if (expanded.has(task.id)) {
+        /*
+         * הרשימה המלאה נטענת לפי דרישה ולא מראש: בטבלה של חמישים משימות היא
+         * הייתה מאות שאילתות שכמעט תמיד אינן נצפות.
+         */
+        const cached = task.__subs;
+        if (cached) body.push(...cached.map(subRow));
+        else {
+          body.push(el('tr.tr-sub', {}, [el('td', { colspan: '7' }, [UI.spinner()])]));
+          API.task(task.id).then((d) => { task.__subs = d.task.subtasks ?? []; draw(); }).catch(() => {});
+        }
+      }
+    }
+
+    UI.mount(containerRef,
+      el('div.view-head', {}, [
+        el('h2', { text: 'בקרת משימות' }),
+        el('p.hint', { text: 'משימה והפעולה הבאה שלה. עריכה נעשית ישירות בטבלה.' })
+      ]),
+      toolbar(),
+      el('div.card', {}, [
+        el('div.table-wrap', {}, [
+          el('table.data.tracker', {}, [
+            el('thead', {}, [el('tr', {}, [
+              el('th', { text: 'משימה' }),
+              el('th', { text: 'תאריך יעד', style: { width: '128px' } }),
+              el('th', { text: 'סטטוס מקוצר', style: { width: '20%' } }),
+              el('th', { text: 'תת-משימה' }),
+              el('th', { text: 'אחראי', style: { width: '150px' } }),
+              el('th', { text: 'תאריך יעד', style: { width: '128px' } }),
+              el('th', { text: '', style: { width: '120px' } })
+            ])]),
+            el('tbody', {}, body.length ? body : [
+              el('tr', {}, [el('td', { colspan: '7' }, [
+                UI.empty('אין משימות בחתך הזה', UI.icon('board'))
+              ])])
+            ])
+          ])
+        ])
+      ])
+    );
+  }
+
+  return { render };
+})();

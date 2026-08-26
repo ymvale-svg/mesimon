@@ -1417,3 +1417,90 @@ input[type="color"] { width: 46px; height: 30px; padding: 2px; cursor: pointer; 
 
 /* בטלפון התפריט הוא מגירה ברוחב קבוע — אין ידית */
 @media (max-width: 820px) { .sidebar-resize { display: none; } }
+
+/* ---- מסך בקרת המשימות ---- */
+
+/*
+ * טבלה שעורכים בה, ולא רק מסתכלים. הפקדים בתאים נראים כטקסט עד שנוגעים
+ * בהם: טבלה שכל תא בה מסוגר במסגרת נראית כטופס ואי אפשר לסרוק אותה בעין.
+ */
+.table-wrap table.tracker { min-width: 1040px; }
+.tracker .tr-inline,
+.tracker .tr-short {
+  width: 100%; border: 1px solid transparent; background: transparent;
+  border-radius: 6px; padding: 4px 6px; font-size: 12.5px; color: inherit;
+}
+.tracker .tr-inline:hover, .tracker .tr-short:hover { border-color: var(--border); }
+.tracker .tr-inline:focus, .tracker .tr-short:focus {
+  border-color: var(--brand); background: var(--surface); outline: none;
+}
+.tracker .tr-short::placeholder { color: var(--text-mute); opacity: .65; }
+.tracker .tr-short[readonly] { cursor: default; }
+.tracker .tr-inline.is-overdue { color: var(--danger); font-weight: 700; }
+.tracker .tr-inline.is-muted { color: var(--text-mute); }
+
+.tracker .tr-title { display: flex; align-items: center; gap: 7px; min-width: 0; }
+.tracker .tr-title .txt-open { font-weight: 700; }
+.tracker .tr-icons { display: inline-flex; align-items: center; gap: 4px; flex: none; }
+
+/* חץ הפרישה — סובב ב-90 מעלות כשפתוח */
+.tracker .tr-toggle {
+  flex: none; border: 0; background: none; cursor: pointer; padding: 0 2px;
+  font-size: 12px; color: var(--text-mute); transition: transform .12s;
+}
+.tracker .tr-toggle.open { transform: rotate(-90deg); color: var(--brand); }
+.tracker .tr-toggle:disabled { opacity: .25; cursor: default; }
+
+/* מונה תתי-המשימות שאינן מוצגות בשורה */
+.tracker .tr-count {
+  flex: none; font-size: 11px; font-weight: 700; padding: 1px 6px;
+  border-radius: 10px; background: var(--surface-2); color: var(--text-mute);
+}
+
+/* שורות תתי-המשימות — מוזחות, ועל רקע אחר כדי שההיררכיה תיראה בלי קווים */
+.tracker tr.tr-sub > td { background: var(--surface-2); }
+.tracker tr.tr-sub.is-done .txt-open { text-decoration: line-through; opacity: .6; }
+.tracker .tr-subtitle { display: flex; align-items: center; gap: 7px; padding-inline-start: 26px; min-width: 0; }
+.tracker .tr-branch { color: var(--text-mute); flex: none; }
+.tracker .tr-substatus {
+  font-size: 11.5px; color: var(--text-mute);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 260px;
+}
+
+/* בטלפון הטבלה נגללת לרוחב ואינה מנסה להתכווץ — שבע עמודות לא נכנסות ל-390 */
+@media (max-width: 820px) {
+  .table-wrap table.tracker { min-width: 900px; }
+}
+
+/* ---- תתי-משימות בכרטיס המשימה ---- */
+
+.short-status { display: flex; align-items: center; gap: 9px; margin: 0 0 14px; }
+.short-status .ss-label {
+  flex: none; font-size: 11.5px; font-weight: 700; color: var(--text-mute);
+  padding: 3px 8px; border-radius: 6px; background: var(--surface-2);
+}
+.short-status input {
+  flex: 1; min-width: 0; font-size: 13px; padding: 6px 9px;
+  border: 1px solid var(--border); border-radius: 8px; background: var(--surface-2);
+}
+.short-status input:focus { background: var(--surface); border-color: var(--brand); outline: none; }
+
+/* קישור מתת-משימה אל האב */
+.subtask-parent {
+  display: flex; align-items: center; gap: 7px; margin-bottom: 14px;
+  padding: 8px 11px; border-radius: var(--radius); background: var(--surface-2);
+  font-size: 12.5px; color: var(--text-mute);
+}
+
+.subtask-list { display: flex; flex-direction: column; gap: 2px; margin-top: 6px; }
+.subtask-row {
+  display: flex; align-items: center; gap: 8px; min-width: 0;
+  padding: 7px 9px; border-radius: 8px; font-size: 13px;
+}
+.subtask-row:hover { background: var(--surface-2); }
+.subtask-row.is-done .txt-open { text-decoration: line-through; opacity: .6; }
+/* הסטטוס המקוצר נחתך ואינו דוחף את התאריך והאחראי מחוץ לשורה */
+.subtask-row .st-short {
+  font-size: 11.5px; color: var(--text-mute); min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}

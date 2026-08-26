@@ -131,6 +131,8 @@ const TaskCardView = (() => {
       ...alerts,
       vendorWorkflowBar(),
       descNode,
+      shortStatusRow(),
+      subtasksSection(),
       checklistSection(),
       el('div.tabs', {}, [
         el(`button${activeTab === 'comments' ? '.active' : ''}`, { onclick: () => { activeTab = 'comments'; draw(modalRef.box.querySelector('.task-detail')); } },
@@ -216,6 +218,103 @@ const TaskCardView = (() => {
   }
 
   // ------------------------------------------------------------- צ'קליסט
+
+  /**
+   * הסטטוס המקוצר — שורה אחת שמופיעה בטבלת הבקרה. נשמר ביציאה מהשדה ולא
+   * בכל הקשה, כדי לא לשלוח בקשה על כל אות.
+   *
+   * מוצג רק כשיש בו טעם: משימה שהיא חלק מהיררכיה, או שכבר יש בה ערך. אחרת
+   * זה שדה נוסף בכל משימה בלי סיבה.
+   */
+  function shortStatusRow() {
+    const relevant = task.subtasksTotal > 0 || task.parentTaskId || task.statusShort;
+    if (!relevant || !task.permissions.edit) {
+      return task.statusShort
+        ? el('div.short-status.is-readonly', {}, [
+            el('span.ss-label', { text: 'סטטוס' }),
+            el('span', { text: task.statusShort })
+          ])
+        : null;
+    }
+
+    const input = el('input', {
+      type: 'text', value: task.statusShort ?? '',
+      placeholder: 'סטטוס בשורה אחת — זה מה שמופיע בטבלת הבקרה'
+    });
+    input.value = task.statusShort ?? '';
+    let last = input.value;
+    const save = async () => {
+      const next = input.value.trim();
+      if (next === last) return;
+      last = next;
+      try {
+        const d = await API.updateTask(task.id, { statusShort: next });
+        task = d.task;
+      } catch (err) { UI.error(err); input.value = task.statusShort ?? ''; }
+    };
+    input.addEventListener('blur', save);
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); input.blur(); }
+      if (e.key === 'Escape') { input.value = last; input.blur(); }
+    });
+
+    return el('div.short-status', {}, [el('span.ss-label', { text: 'סטטוס' }), input]);
+  }
+
+  /**
+   * תתי-משימות. תת-משימה היא משימה לכל דבר — לכן כל שורה כאן היא קישור
+   * לכרטיס שלה, ולא עוד סעיף שנערך במקום.
+   *
+   * ההבדל מצ'קליסט: סעיף צ'קליסט הוא שלב שאני עושה בעצמי, ותת-משימה היא
+   * עבודה שמועברת למישהו — עם שם, תאריך יעד ומקום בלוח שלו. ההסבר הזה מוצג
+   * למשתמש כשאין עוד תתי-משימות, כי זו בדיוק השאלה שנשאלת בפעם הראשונה.
+   */
+  function subtasksSection() {
+    const subs = task.subtasks ?? [];
+    if (task.parentTaskId) {
+      // בתוך תת-משימה מוצג קישור למעלה, ולא רשימה — אין רמה שלישית
+      return el('div.subtask-parent', {}, [
+        el('span', { text: '↰' }),
+        el('span.mute-sm', { text: 'תת-משימה בתוך' }),
+        el('button.txt.txt-open', {
+          onclick: () => open(task.parentTaskId)
+        }, [task.parentTitle || `#${task.parentTaskId}`])
+      ]);
+    }
+    if (!subs.length && !App.may('create_task')) return null;
+
+    const addBtn = App.may('create_task')
+      ? el('button.btn.btn-sm', {
+          onclick: () => BoardView.openTaskDialog(null, {
+            projectId: task.projectId, parentTaskId: task.id, parentTitle: task.title
+          })
+        }, ['＋ תת-משימה'])
+      : null;
+
+    return el('div', { style: { margin: '16px 0' } }, [
+      el('div.flex', {}, [
+        el('h4', { text: 'תתי-משימות', style: { fontSize: '13.5px' } }),
+        subs.length
+          ? el('span.mute-sm', { text: `${subs.filter((s) => s.isFinal).length}/${subs.length}` })
+          : null,
+        el('div.spacer'),
+        addBtn
+      ]),
+      subs.length
+        ? el('div.subtask-list', {}, subs.map((s) => el(`div.subtask-row${s.isFinal ? '.is-done' : ''}`, {}, [
+            el('span.dot-chip', { title: s.statusLabel, style: { background: s.statusColor } }),
+            el('button.txt.txt-open', { onclick: () => open(s.id) }, [s.title]),
+            s.statusShort ? el('span.st-short', { text: s.statusShort, title: s.statusShort }) : null,
+            el('div.spacer'),
+            s.assigneeName ? el('span.mute-sm', { text: s.assigneeName }) : null,
+            s.dueDate
+              ? el('span.mute-sm', { class: s.overdue ? 'text-danger' : '', text: UI.formatDate(s.dueDate) })
+              : null
+          ])))
+        : el('div.hint', { style: { marginTop: '6px' },
+            text: 'תת-משימה היא עבודה שמועברת למישהו אחר — עם אחראי ותאריך יעד, והיא מופיעה בלוח שלו כמשימה. לשלבים שאתה עושה בעצמך יש צ׳קליסט.' })
+    ]);
+  }
 
   function checklistSection() {
     const pct = task.checklistTotal ? Math.round((task.checklistDone / task.checklistTotal) * 100) : 0;
