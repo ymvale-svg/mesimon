@@ -264,6 +264,19 @@ const TrackerView = (() => {
         }, [label])
       )),
       el('div.spacer'),
+      /*
+       * הורדה בניווט ולא ב-fetch: כך הדפדפן מטפל בקובץ כהורדה רגילה, עם שם
+       * הקובץ שהשרת קבע. בנייה של blob בלקוח הייתה מחייבת לקרוא את הקובץ
+       * לזיכרון ולהמציא שם, בלי שום יתרון.
+       */
+      el('button.btn.btn-sm', {
+        title: 'הורדת הטבלה כקובץ אקסל, באותו חתך שמוצג',
+        onclick: () => {
+          const p = new URLSearchParams({ scope: savedScope() });
+          if (savedProject()) p.set('projectId', savedProject());
+          window.location.assign(`/api/tracker/export?${p}`);
+        }
+      }, ['⤓ אקסל']),
       el('span.mute-sm', {
         title: 'משימות שהושלמו אינן מוצגות במסך הבקרה',
         text: hidden > 0 && scoped

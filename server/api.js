@@ -13,6 +13,7 @@ const Invites = require('./invites');
 const Mailer = require('./mailer');
 const TaskMail = require('./task-mail');
 const Push = require('./push');
+const Xlsx = require('./xlsx-write');
 const Spreadsheet = require('./spreadsheet');
 const {
   Router, badRequest, forbidden, notFound,
@@ -3270,6 +3271,68 @@ router.delete('/api/boards/:boardId/columns/:id', async (req, res, ctx) => {
   }
   D.run('DELETE FROM board_columns WHERE id = ?', col.id);
   sendJson(res, 200, { columns: columnsOf(col.board_id), moved: inUse });
+});
+
+// --- ייצוא מסך הבקרה לאקסל ---
+
+/**
+ * אותה טבלה שעל המסך, כקובץ.
+ *
+ * נבנה בשרת ולא בדפדפן: הסינון לפי מה שהמשתמש רשאי לראות חייב להיאכף במקום
+ * שבו הוא נאכף בכל מקום אחר, וקובץ שנבנה בלקוח מכיל בהכרח רק את מה שכבר
+ * הגיע אליו — כלומר גם את מגבלות התצוגה, וגם אין בו ערובה לנכונות.
+ *
+ * החתכים זהים למסך במכוון: משימות-אב בלבד, בלי מה שהושלם, ולפי היקף
+ * "שלי" או כל הארגון. קובץ שמכיל משהו אחר ממה שנראה על המסך הוא מלכודת.
+ */
+router.get('/api/tracker/export', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  if (isVendor(actor)) throw forbidden();
+  const q = parseUrl(req).searchParams;
+  const projectId = q.get('projectId') ? Number(q.get('projectId')) : null;
+  const scoped = q.get('scope') !== 'all';
+
+  const owned = scoped ? ownedProjectIds(actor) : null;
+  const rows = D.all(
+    `SELECT t.* FROM tasks t
+       JOIN boards b ON b.id = t.board_id
+      WHERE b.type = 'internal' AND t.archived = 0 AND t.parent_task_id IS NULL
+        ${projectId ? 'AND t.project_id = ?' : ''}
+      ORDER BY t.due_date IS NULL, t.due_date, t.id`,
+    ...(projectId ? [projectId] : [])
+  ).filter((t) => canSeeTask(actor, t))
+    .filter((t) => !columnMeta(t.board_id, t.status)?.is_final)
+    .filter((t) => !owned || owned.has(t.project_id));
+
+  const header = ['פרויקט', 'משימה', 'תאריך יעד', 'סטטוס מקוצר', 'סטטוס', 'תת-משימה', 'אחראי', 'תאריך יעד של תת-המשימה'];
+  const body = rows.map((t) => {
+    const shaped = shapeTask(t, actor);
+    const sub = shaped.activeSubtask;
+    return [
+      shaped.projectName ?? 'ללא פרויקט',
+      shaped.title,
+      Rules.formatDate(t.due_date),
+      shaped.statusShort,
+      shaped.statusLabel,
+      sub ? sub.title : '',
+      sub ? (sub.assigneeName ?? '') : '',
+      sub ? Rules.formatDate(sub.dueDate) : ''
+    ];
+  });
+
+  const file = Xlsx.build([header, ...body], {
+    sheetName: 'בקרת משימות',
+    widths: [20, 38, 14, 32, 16, 34, 20, 16]
+  });
+  // התאריך בשם הקובץ, כדי ששני דוחות בתיקיית ההורדות לא יידרסו זה על זה
+  const stamp = D.nowIso().slice(0, 10);
+  res.writeHead(200, {
+    'content-type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    'content-length': file.length,
+    'content-disposition': `attachment; filename*=UTF-8''${encodeURIComponent(`בקרת משימות ${stamp}.xlsx`)}`,
+    'x-content-type-options': 'nosniff'
+  });
+  res.end(file);
 });
 
 // --- הרשמה להתראות דחיפה ---
