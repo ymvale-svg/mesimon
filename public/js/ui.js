@@ -684,7 +684,14 @@ const UI = (() => {
     const drawPending = () => {
       mount(pendingBox, ...pending.map((f, i) =>
         el('span.file-chip', {}, [
-          el('span', { text: fileIcon(f.filename) }),
+          /*
+           * תמונה מוצגת כתמונה קטנה ולא כאייקון גנרי. זה נדרש במיוחד להדבקה:
+           * מי שהדביק צילום מסך אינו יודע מה בדיוק היה בלוח, ושם קובץ שנוצר
+           * אוטומטית אינו אומר לו דבר.
+           */
+          f.mime?.startsWith('image/')
+            ? el('img.fc-thumb', { src: f.data, alt: '' })
+            : el('span', { text: fileIcon(f.filename) }),
           el('span.fc-name', { text: f.filename }),
           el('span.mute-sm', { text: fileSize(f.size) }),
           el('button.chip-x', {
@@ -696,22 +703,92 @@ const UI = (() => {
     };
     drawPending();
 
+    const readAsDataUrl = (file) => new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = () => reject(new Error('הקובץ לא נקרא'));
+      reader.readAsDataURL(file);
+    });
+
+    /**
+     * שם לקובץ שהודבק. בהדבקה מלוח הגזירים אין שם אמיתי — הדפדפן מוסר
+     * ‎image.png‎ לכולם, וכך שתי הדבקות באותה הודעה מתנגשות. חותמת השעה
+     * הופכת כל אחת לשם משלה, וגם מאפשרת לזהות אחר כך מה הודבק ומתי.
+     */
+    const pastedName = (file, index) => {
+      const ext = (file.type.split('/')[1] || 'png').replace('jpeg', 'jpg');
+      const now = new Date();
+      const pad = (n) => String(n).padStart(2, '0');
+      const stamp = `${pad(now.getHours())}-${pad(now.getMinutes())}-${pad(now.getSeconds())}`;
+      return `תמונה ${stamp}${index ? `-${index + 1}` : ''}.${ext}`;
+    };
+
+    /**
+     * הוספת קבצים לתור השליחה — מכל שלושת המסלולים: בחירה, הדבקה וגרירה.
+     *
+     * מגבלת הגודל נבדקת כאן ולא רק בשרת: צילום מסך של מסך גדול עובר בקלות
+     * את המגבלה, ולגלות זאת רק בלחיצה על "שליחה" פירושו לאבד את מה שנכתב.
+     */
+    async function addFiles(files, { pasted = false } = {}) {
+      const maxMb = Number(App.state.settings?.maxUploadMb ?? 25);
+      let index = 0;
+      for (const file of files) {
+        if (!file) continue;
+        if (file.size > maxMb * 1024 * 1024) {
+          error(new Error(`הקובץ גדול מ-${maxMb}MB ולכן לא צורף`));
+          continue;
+        }
+        try {
+          pending.push({
+            filename: pasted ? pastedName(file, index) : file.name,
+            mime: file.type || 'application/octet-stream',
+            size: file.size,
+            data: await readAsDataUrl(file)
+          });
+          index++;
+        } catch (err) { error(err); }
+      }
+      drawPending();
+    }
+
     const fileInput = el('input', { type: 'file', multiple: true, style: { display: 'none' } });
     fileInput.addEventListener('change', async () => {
-      for (const file of [...fileInput.files]) {
-        pending.push({
-          filename: file.name,
-          mime: file.type || 'application/octet-stream',
-          size: file.size,
-          data: await new Promise((resolve) => {
-            const reader = new FileReader();
-            reader.onload = () => resolve(reader.result);
-            reader.readAsDataURL(file);
-          })
-        });
-      }
+      await addFiles([...fileInput.files]);
       fileInput.value = '';
-      drawPending();
+    });
+
+    /**
+     * הדבקה. ‎clipboardData.files‎ מכיל את התמונה גם כשמדביקים צילום מסך
+     * ישר מ-Win+Shift+S, וגם כשמעתיקים קובץ מסייר הקבצים.
+     *
+     * ‎preventDefault‎ רק כשבאמת נמצא קובץ: הדבקת טקסט רגילה חייבת להמשיך
+     * לעבוד כרגיל, וחסימה גורפת הייתה שוברת אותה.
+     */
+    input.addEventListener('paste', (e) => {
+      const files = [...(e.clipboardData?.files ?? [])];
+      if (!files.length) return;
+      e.preventDefault();
+      addFiles(files, { pasted: true });
+    });
+
+    // גרירת קובץ אל תיבת התגובה — אותו מסלול, וזו הציפייה הטבעית לצד הדבקה
+    const dropZone = el('div.comment-drop');
+    for (const evt of ['dragenter', 'dragover']) {
+      dropZone.addEventListener(evt, (e) => {
+        if (!e.dataTransfer?.types?.includes('Files')) return;
+        e.preventDefault();
+        dropZone.classList.add('is-over');
+      });
+    }
+    for (const evt of ['dragleave', 'dragend']) {
+      dropZone.addEventListener(evt, () => dropZone.classList.remove('is-over'));
+    }
+    dropZone.addEventListener('drop', (e) => {
+      const files = [...(e.dataTransfer?.files ?? [])];
+      dropZone.classList.remove('is-over');
+      if (!files.length) return;
+      e.preventDefault();
+      addFiles(files);
     });
 
     const send = async () => {
@@ -904,18 +981,21 @@ const UI = (() => {
       canComment
         ? el('div.composer', {}, [
             pop,
-            input,
-            pendingBox,
+            // אזור הגרירה עוטף את תיבת הכתיבה, כדי שגרירה לכל שטחה תיתפס
+            mount(dropZone, input, pendingBox),
             fileInput,
             el('div.flex.composer-bar', {}, [
               el('button.btn.btn-primary', { onclick: send }, ['שליחת תגובה']),
               mentionBtn,
-              el('button.btn', { title: 'צירוף קובץ להודעה', onclick: () => fileInput.click() }, ['📎']),
+              el('button.btn', {
+                title: 'צירוף קובץ — אפשר גם להדביק תמונה או לגרור קובץ לתיבה',
+                onclick: () => fileInput.click()
+              }, ['📎']),
               seeInternal
                 ? el('label.checkbox', { title: 'הערות פנימיות מוסתרות לחלוטין מהספק' }, [internalCheck, '🔒 פנימית'])
                 : null,
               el('div.spacer'),
-              el('span.mute-sm', { text: 'Ctrl+Enter לשליחה' })
+              el('span.mute-sm', { text: 'Ctrl+Enter לשליחה · אפשר להדביק תמונה' })
             ])
           ])
         : null

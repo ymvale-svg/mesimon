@@ -1514,3 +1514,21 @@ input[type="color"] { width: 46px; height: 30px; padding: 2px; cursor: pointer; 
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .tracker .tr-project:hover { color: var(--brand); }
+
+/* ---- הדבקה וגרירה של קבצים לתיבת התגובה ---- */
+
+.comment-drop { position: relative; border-radius: var(--radius); transition: box-shadow .12s; }
+/* מסגרת מקווקוות בזמן גרירה — הסימן המקובל ל"אפשר לשחרר כאן" */
+.comment-drop.is-over { box-shadow: 0 0 0 2px var(--brand) inset; }
+.comment-drop.is-over::after {
+  content: 'שחרר כדי לצרף'; position: absolute; inset: 0;
+  display: grid; place-items: center; pointer-events: none;
+  background: color-mix(in srgb, var(--brand) 8%, transparent);
+  border-radius: var(--radius); font-size: 13px; font-weight: 700; color: var(--brand);
+}
+
+/* תמונה מצורפת מוצגת כתמונה קטנה, ולא כאייקון גנרי */
+.file-chip .fc-thumb {
+  width: 26px; height: 26px; object-fit: cover; border-radius: 5px;
+  flex: none; border: 1px solid var(--border);
+}
