@@ -779,6 +779,24 @@ const BoardView = (() => {
     ];
     const parentSelect = UI.select(parentOptions,
       String(project?.parentProjectId ?? opts.parentProjectId ?? ''));
+
+    /*
+     * רשימת סטטוסי הבקרה שתחול על הפרויקט. הרשימות אישיות — כל אחד בונה את
+     * שלו — והבחירה כאן היא מה שמפעיל את צביעת השורות במסך הבקרה. בלי בחירה
+     * הפרויקט אינו נצבע בכלל, וזו ברירת המחדל.
+     *
+     * הרשימות נטענות בפתיחת הדיאלוג ולא מגיעות ב-bootstrap: הן משתנות לעיתים
+     * רחוקות, ורוב פתיחות הדיאלוג אינן נוגעות בשדה הזה.
+     */
+    const statusOwnerSelect = UI.select([{ value: '', label: 'ללא צביעה' }], String(project?.statusOwnerId ?? ''));
+    API.statusList().then((d) => {
+      for (const l of d.lists ?? []) {
+        const mine = l.ownerId === App.state.actor?.id;
+        statusOwnerSelect.appendChild(el('option', { value: l.ownerId },
+          [`${mine ? 'הרשימה שלי' : `הרשימה של ${l.ownerName}`} (${l.count} סטטוסים)`]));
+      }
+      statusOwnerSelect.value = String(project?.statusOwnerId ?? '');
+    }).catch(() => {});
     const descInput = el('textarea');
     descInput.value = project?.description ?? '';
     /*
@@ -937,8 +955,12 @@ const BoardView = (() => {
         UI.field('מנהל המשימות בפרויקט', managerSelect, 'אחראי על התקדמות המשימות בפרויקט'),
         UI.field('סטטוס', statusSelect)
       ]),
-      UI.field('פרויקט אב', parentSelect,
-        'בחירת פרויקט אב הופכת את הפרויקט לתת-פרויקט, והוא יוצג מתחתיו בתפריט'),
+      el('div.row', {}, [
+        UI.field('פרויקט אב', parentSelect,
+          'בחירת פרויקט אב הופכת את הפרויקט לתת-פרויקט, והוא יוצג מתחתיו בתפריט'),
+        UI.field('סטטוסי בקרה', statusOwnerSelect,
+          'איזו רשימת סטטוסים תצבע את שורות הפרויקט במסך הבקרה')
+      ]),
       el('div.row', {}, [UI.field('תאריך התחלה', startInput), UI.field('תאריך יעד', dueInput)]),
       UI.field('צבע הפרויקט', el('div.flex', {}, [colorInput, colorSwatches]),
         'הצבע מסמן את שורות המשימות של הפרויקט, לזיהוי במבט'),
@@ -976,6 +998,7 @@ const BoardView = (() => {
         status: statusSelect.value,
         color: colorInput.value,
         parentProjectId: parentSelect.value || null,
+        statusOwnerId: statusOwnerSelect.value || null,
         templateId: templateSelect.value || null
       };
       saveBtn.disabled = true;

@@ -1549,7 +1549,6 @@ input[type="color"] { width: 46px; height: 30px; padding: 2px; cursor: pointer; 
 .tracker tr.is-tinted .tr-inline:focus,
 .tracker tr.is-tinted .tr-short:focus { background: #fff; }
 .tracker tr.is-tinted .mute-sm { color: #4b5563; }
-.tracker .tr-track { font-weight: 700; }
 
 /* ---- תת-פרויקט בתפריט הצד ---- */
 
@@ -1563,3 +1562,59 @@ input[type="color"] { width: 46px; height: 30px; padding: 2px; cursor: pointer; 
   color: var(--text-mute); font-size: 11px;
 }
 .sidebar .nav-item.is-subproject .ico { position: relative; }
+
+/* ---- נקודת סטטוס הבקרה ובורר הסטטוסים ---- */
+
+/*
+ * נקודה ולא תווית: השורה כולה נצבעת בצבע הסטטוס, ותווית כמו "הצהרה אפשר
+ * במיידי" גוזלת בטבלה של תשע עמודות רוחב שנחוץ לשם המשימה.
+ */
+.tracker .tr-dot {
+  width: 20px; height: 20px; border-radius: 50%; padding: 0;
+  border: 1px solid rgba(0, 0, 0, .22); cursor: pointer; display: block; margin: 0 auto;
+  background: transparent; font-size: 12px; line-height: 1; color: var(--text-mute);
+  transition: transform .1s;
+}
+.tracker .tr-dot:hover:not(:disabled) { transform: scale(1.18); }
+.tracker .tr-dot:disabled { cursor: default; opacity: .6; }
+/* פרויקט בלי רשימת סטטוסים — מקף שקט, ולא כפתור שאינו עושה דבר */
+.tracker .tr-nodot { display: block; text-align: center; color: var(--border-strong); }
+.tracker .tr-nodot::before { content: '–'; }
+
+.track-pop {
+  position: fixed; z-index: 120; min-width: 190px; padding: 5px;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); box-shadow: var(--shadow-lg);
+  max-height: 60vh; overflow-y: auto;
+}
+.track-opt {
+  display: flex; align-items: center; gap: 9px; width: 100%;
+  padding: 7px 9px; border: 0; background: none; cursor: pointer;
+  font-size: 13px; font-family: inherit; color: inherit; text-align: start; border-radius: 7px;
+}
+.track-opt:hover { background: var(--surface-2); }
+.track-opt.is-clear { border-top: 1px solid var(--border); margin-top: 3px; color: var(--text-mute); }
+.track-swatch {
+  width: 16px; height: 16px; border-radius: 4px; flex: none;
+  border: 1px solid rgba(0, 0, 0, .2);
+}
+.track-swatch.is-empty { background: repeating-linear-gradient(45deg, #eee 0 3px, #fff 3px 6px); }
+
+/* ---- ניהול רשימת הסטטוסים ---- */
+
+.sm-list { display: flex; flex-direction: column; gap: 4px; }
+.sm-row { display: flex; align-items: center; gap: 8px; }
+.sm-row > input[type="text"] { flex: 1; min-width: 90px; }
+.sm-row.sm-new { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border); }
+.sm-color {
+  width: 34px; height: 30px; padding: 2px; flex: none; cursor: pointer;
+  border: 1px solid var(--border); border-radius: 7px; background: var(--surface);
+}
+.sm-palette { display: flex; gap: 3px; flex: none; }
+.sm-swatch {
+  width: 17px; height: 24px; border-radius: 4px; cursor: pointer;
+  border: 1px solid rgba(0, 0, 0, .18); padding: 0;
+}
+.sm-swatch:hover { transform: scale(1.12); }
+/* בטלפון לוח הצבעים המלא אינו נכנס לשורה — בורר הצבעים של המערכת מספיק */
+@media (max-width: 820px) { .sm-palette { display: none; } }

@@ -79,6 +79,12 @@ const API = (() => {
 
     savePrefs: (prefs) => call('PUT', '/api/prefs', { prefs }),
 
+    statusList: () => call('GET', '/api/status-list'),
+    addStatus: (body) => call('POST', '/api/status-list', body),
+    seedStatuses: () => call('POST', '/api/status-list', { seed: true }),
+    updateStatus: (id, body) => call('PATCH', `/api/status-list/${id}`, body),
+    deleteStatus: (id) => call('DELETE', `/api/status-list/${id}`),
+
     pushKey: () => call('GET', '/api/push/key'),
     pushSubscribe: (subscription) => call('POST', '/api/push/subscribe', { subscription }),
     pushUnsubscribe: (endpoint) => call('DELETE', '/api/push/subscribe', { endpoint }),

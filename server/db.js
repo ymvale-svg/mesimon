@@ -130,6 +130,11 @@ CREATE TABLE IF NOT EXISTS projects (
   created_by  INTEGER REFERENCES users(id),
   color       TEXT    NOT NULL DEFAULT '',
   /*
+   * איזו רשימת סטטוסי בקרה חלה על הפרויקט — המשתמש שבנה אותה. ‎NULL‎ פירושו
+   * שלא נבחרה רשימה, ואז שורות הפרויקט אינן נצבעות כלל.
+   */
+  status_owner_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  /*
    * תת-פרויקט. ‎SET NULL‎ ולא ‎CASCADE‎ בכוונה, להבדיל מתת-משימה: מחיקת
    * פרויקט אב אינה אמורה למחוק את הפרויקטים שתחתיו ואת כל המשימות שבהם —
    * הם עולים לרמה הראשית ונשארים.
@@ -176,11 +181,17 @@ CREATE TABLE IF NOT EXISTS tasks (
    */
   status_short       TEXT    NOT NULL DEFAULT '',
   /*
-   * סטטוס הבקרה — מפתח מרשימה סגורה (ראה TRACK_STATUSES ב-api.js), שצובע את
-   * השורה במסך הבקרה. נבדל מ-‎status‎ שהוא מקום הכרטיס בזרימת העבודה, ומ-
-   * ‎status_short‎ שהוא טקסט חופשי. ריק = לא סווג.
+   * הופקד ואינו בשימוש: בגרסה הראשונה סטטוס הבקרה היה מפתח מרשימה סגורה
+   * בקוד. הרשימה עברה לטבלה ‎task_statuses‎ שהמשתמש בונה, והשיוך עובר דרך
+   * ‎track_status_id‎. העמודה נשארת כי הסרת עמודה ב-SQLite מחייבת בניית
+   * הטבלה מחדש, וזה מחיר גבוה מדי עבור שדה ריק.
    */
-  track_status       TEXT    NOT NULL DEFAULT ''
+  track_status       TEXT    NOT NULL DEFAULT '',
+  /*
+   * סטטוס הבקרה שנבחר למשימה. ‎SET NULL‎ — מחיקת סטטוס מהרשימה אינה מוחקת
+   * את המשימות שסומנו בו, הן חוזרות ללא סטטוס.
+   */
+  track_status_id    INTEGER REFERENCES task_statuses(id) ON DELETE SET NULL
 );
 
 CREATE TABLE IF NOT EXISTS checklist_items (
@@ -339,6 +350,25 @@ CREATE TABLE IF NOT EXISTS push_subscriptions (
   endpoint   TEXT    NOT NULL UNIQUE,
   p256dh     TEXT    NOT NULL,
   auth       TEXT    NOT NULL,
+  created_at TEXT    NOT NULL
+);
+
+/*
+ * סטטוסי בקרה — רשימה שכל משתמש בונה לעצמו, ומוחלת על פרויקט.
+ *
+ * טבלה ולא רשימה בקוד, כי המשתמש מוסיף, עורך, מוחק ובוחר צבעים. ‎user_id‎
+ * הוא מי שבנה את הרשימה: הבנייה אישית, אבל השימוש הוא ברמת הפרויקט — פרויקט
+ * מצביע על רשימה אחת, וכל מי שרואה את הפרויקט רואה את אותם צבעים. אחרת אותה
+ * טבלת בקרה הייתה נראית שונה לכל אדם, ובקרה משותפת דורשת שפה משותפת.
+ *
+ * ‎position‎ קובע את הסדר בבורר; אין משמעות סמנטית לסדר.
+ */
+CREATE TABLE IF NOT EXISTS task_statuses (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  label      TEXT    NOT NULL,
+  color      TEXT    NOT NULL,
+  position   INTEGER NOT NULL DEFAULT 0,
   created_at TEXT    NOT NULL
 );
 
@@ -784,8 +814,10 @@ function migrate() {
   addColumn('tasks', 'status_short', "TEXT NOT NULL DEFAULT ''");
   // סטטוס הבקרה, שצובע את השורה במסך הבקרה
   addColumn('tasks', 'track_status', "TEXT NOT NULL DEFAULT ''");
-  // תת-פרויקט
+  addColumn('tasks', 'track_status_id', 'INTEGER REFERENCES task_statuses(id) ON DELETE SET NULL');
+  // תת-פרויקט, ורשימת הסטטוסים שחלה על הפרויקט
   addColumn('projects', 'parent_project_id', 'INTEGER REFERENCES projects(id) ON DELETE SET NULL');
+  addColumn('projects', 'status_owner_id', 'INTEGER REFERENCES users(id) ON DELETE SET NULL');
   // מי פתח את הפרויקט — הפרויקט נשאר ברשימה שלו גם אם מונה לו מנהל אחר
   addColumn('projects', 'created_by', 'INTEGER REFERENCES users(id)');
   // צבע הפרויקט — צובע את שורות המשימות שלו, לזיהוי במבט ולא בקריאה

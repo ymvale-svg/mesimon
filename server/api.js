@@ -30,31 +30,50 @@ const PRIORITIES = [
 ];
 
 /**
- * סטטוס הבקרה — רשימה סגורה שצובעת את השורה במסך הבקרה.
+ * סטטוסי בקרה.
  *
- * נבדל מהסטטוס של הבורד (חדש / בטיפול / הושלם), שהוא מקומו של הכרטיס בזרימת
- * העבודה. זה מצב הבקרה של הנושא עצמו — האם קיים, האם לבחינה, האם לא רלוונטי —
- * וזו השאלה שנשאלת במבט מאקרו על פרויקט.
+ * נבדלים מהסטטוס של הבורד (חדש / בטיפול / הושלם), שהוא מקומו של הכרטיס
+ * בזרימת העבודה. זה מצב הבקרה של הנושא — האם קיים, האם לבחינה, האם לא
+ * רלוונטי — וזו השאלה שנשאלת במבט מאקרו על פרויקט.
  *
- * נבדל גם מ-‎status_short‎, שהוא טקסט חופשי שמסביר. כאן סיווג סגור, וזה מה
- * שמאפשר לצבוע לפיו שורה ולסנן לפיו.
- *
- * הרשימה במקום אחד, ולכן שינוי תווית או צבע הוא שינוי בשורה אחת. הצבעים
- * נגזרו מהרשימה שהמשתמש מסר, והמפתחות באנגלית כדי שהתווית תוכל להשתנות בלי
- * לגעת בנתונים שנשמרו.
+ * הרשימה אינה בקוד אלא בטבלה שהמשתמש בונה. מה שנשאר כאן: לוח הצבעים שמוצע
+ * בבורר, והרשימה שממנה נזרעת רשימה חדשה — כדי שמי שמתחיל לא יתחיל מדף חלק.
  */
-const TRACK_STATUSES = [
-  { key: 'approved', label: 'אישור', color: '#a9d08e' },
-  { key: 'exists_to_upload', label: 'קיים להעלות', color: '#e2efda' },
-  { key: 'ignore', label: 'לא להתייחס', color: '#bfbfbf' },
-  { key: 'review', label: 'לבחינה', color: '#cc7a7a' },
-  { key: 'almost', label: 'כמעט קיים', color: '#d9e1f2' },
-  { key: 'active', label: 'בפעילות', color: '#f8cbad' },
-  { key: 'declarable', label: 'הצהרה אפשר במיידי', color: '#fff2cc' },
-  { key: 'control_lab', label: 'מכון בקרה', color: '#b4a7d6' }
+const STATUS_PALETTE = [
+  '#a9d08e', '#e2efda', '#bfbfbf', '#cc7a7a',
+  '#d9e1f2', '#f8cbad', '#fff2cc', '#b4a7d6'
 ];
 
-const trackStatus = (key) => TRACK_STATUSES.find((s) => s.key === key) ?? null;
+const DEFAULT_STATUS_LIST = [
+  { label: 'אישור', color: '#a9d08e' },
+  { label: 'קיים להעלות', color: '#e2efda' },
+  { label: 'לא להתייחס', color: '#bfbfbf' },
+  { label: 'לבחינה', color: '#cc7a7a' },
+  { label: 'כמעט קיים', color: '#d9e1f2' },
+  { label: 'בפעילות', color: '#f8cbad' },
+  { label: 'הצהרה אפשר במיידי', color: '#fff2cc' },
+  { label: 'מכון בקרה', color: '#b4a7d6' }
+];
+
+const statusList = (userId) => (userId
+  ? D.all('SELECT * FROM task_statuses WHERE user_id = ? ORDER BY position, id', userId)
+    .map((s) => ({ id: s.id, label: s.label, color: s.color, position: s.position }))
+  : []);
+
+/**
+ * הסטטוס שיוצג למשימה — ורק אם הוא שייך לרשימה שהוחלה על הפרויקט שלה.
+ *
+ * זו האכיפה של "השימוש ברמת פרויקט": משימה שסומנה בסטטוס, ואחר כך הפרויקט
+ * שלה עבר לרשימה אחרת או שהרשימה בוטלה, לא תיצבע בצבע שאינו קיים יותר
+ * בהקשר שלה. הסימון נשמר במסד ויחזור אם הרשימה תוחל שוב.
+ */
+function taskTrackStatus(task) {
+  if (!task.track_status_id || !task.project_id) return null;
+  const owner = D.get('SELECT status_owner_id FROM projects WHERE id = ?', task.project_id)?.status_owner_id;
+  if (!owner) return null;
+  const row = D.get('SELECT * FROM task_statuses WHERE id = ? AND user_id = ?', task.track_status_id, owner);
+  return row ? { id: row.id, label: row.label, color: row.color } : null;
+}
 
 // ---------------------------------------------------------------------------
 // עזרים
@@ -187,6 +206,7 @@ function shapeTask(task, actor, { withDetails = false } = {}) {
 
   const checklist = D.all('SELECT * FROM checklist_items WHERE task_id = ? ORDER BY position, id', task.id);
   const checklistDone = checklist.filter((c) => c.done).length;
+  const track = taskTrackStatus(task);
 
   const dependency = task.depends_on_task_id
     ? D.get('SELECT id, title, status, board_id FROM tasks WHERE id = ?', task.depends_on_task_id)
@@ -232,9 +252,11 @@ function shapeTask(task, actor, { withDetails = false } = {}) {
     dependsOnTaskId: task.depends_on_task_id,
     dependency: dependency ? { id: dependency.id, title: dependency.title, blocking: dependencyBlocking } : null,
     statusShort: task.status_short ?? '',
-    trackStatus: task.track_status || '',
-    trackStatusLabel: trackStatus(task.track_status)?.label ?? null,
-    trackStatusColor: trackStatus(task.track_status)?.color ?? null,
+    trackStatusId: track?.id ?? null,
+    trackStatusLabel: track?.label ?? null,
+    trackStatusColor: track?.color ?? null,
+    // אילו סטטוסים אפשר לבחור למשימה הזו — נגזר מהרשימה שהוחלה על הפרויקט
+    trackOptions: project?.status_owner_id ? statusList(project.status_owner_id) : [],
     parentTaskId: task.parent_task_id ?? null,
     parentTitle: task.parent_task_id
       ? D.get('SELECT title FROM tasks WHERE id = ?', task.parent_task_id)?.title ?? null
@@ -559,7 +581,9 @@ router.get('/api/bootstrap', async (req, res, ctx) => {
     actor: publicActor(actor),
     permissions: P.permissionsFor(actor),
     priorities: PRIORITIES,
-    trackStatuses: TRACK_STATUSES,
+    // הרשימה האישית של המשתמש ולוח הצבעים — הבורר בטבלה נבנה מהפרויקט עצמו
+    myStatuses: isVendor(actor) ? [] : statusList(actor.id),
+    statusPalette: STATUS_PALETTE,
     roleLabels: P.ROLE_LABELS,
     /*
      * העדפות התצוגה נשלחות כאן ולא בקריאה נפרדת, כדי שהלוח ייפתח ישר בחתך
@@ -713,6 +737,11 @@ function listProjectsFor(actor) {
       colorChosen: p.color || null,
       mine: mineIds.has(p.id),
       parentProjectId: p.parent_project_id ?? null,
+      statusOwnerId: p.status_owner_id ?? null,
+      statusOwnerName: p.status_owner_id
+        ? D.get('SELECT full_name FROM users WHERE id = ?', p.status_owner_id)?.full_name ?? null
+        : null,
+      trackOptions: p.status_owner_id ? statusList(p.status_owner_id) : [],
       parentProjectName: p.parent_project_id
         ? D.get('SELECT name FROM projects WHERE id = ?', p.parent_project_id)?.name ?? null
         : null,
@@ -1075,16 +1104,24 @@ router.patch('/api/tasks/:id', async (req, res, ctx) => {
     }
 
     /*
-     * סטטוס הבקרה. מפתח שאינו ברשימה נדחה ואינו נשמר בשקט — ערך שאינו קיים
-     * היה מתורגם לשורה בלי צבע ובלי תווית, ונראה כתקלה בתצוגה.
+     * סטטוס הבקרה. מאומת מול הרשימה שהוחלה על הפרויקט של המשימה ולא מול
+     * רשימה גלובלית: סטטוס מרשימה של פרויקט אחר היה נשמר ואז לא מוצג, וזה
+     * נראה כתקלה. פרויקט בלי רשימה אינו מקבל סטטוס בכלל.
      */
-    if (body.trackStatus !== undefined) {
-      const next = String(body.trackStatus ?? '').trim();
-      if (next && !trackStatus(next)) throw badRequest('סטטוס בקרה שאינו קיים ברשימה');
-      const current = task.track_status ?? '';
+    if (body.trackStatusId !== undefined) {
+      const next = body.trackStatusId ? Number(body.trackStatusId) : null;
+      if (next) {
+        const owner = project?.status_owner_id;
+        if (!owner) throw badRequest('לפרויקט לא הוחלה רשימת סטטוסים');
+        if (!D.get('SELECT 1 FROM task_statuses WHERE id = ? AND user_id = ?', next, owner)) {
+          throw badRequest('הסטטוס אינו שייך לרשימה של הפרויקט');
+        }
+      }
+      const current = task.track_status_id ?? null;
       if (next !== current) {
-        D.run('UPDATE tasks SET track_status = ? WHERE id = ?', next, task.id);
-        changes.push(`סטטוס בקרה: ${trackStatus(current)?.label ?? '—'} ← ${trackStatus(next)?.label ?? '—'}`);
+        D.run('UPDATE tasks SET track_status_id = ? WHERE id = ?', next, task.id);
+        const nameOf = (id) => (id ? D.get('SELECT label FROM task_statuses WHERE id = ?', id)?.label ?? '—' : '—');
+        changes.push(`סטטוס בקרה: ${nameOf(current)} ← ${nameOf(next)}`);
       }
     }
     setField('projectId', 'project_id', body.projectId !== undefined ? (body.projectId ? Number(body.projectId) : null) : undefined, 'פרויקט',
@@ -1933,11 +1970,12 @@ router.post('/api/projects', async (req, res, ctx) => {
   const parentProjectId = resolveParentProject(actor, b.parentProjectId);
 
   const r = D.run(
-    `INSERT INTO projects (name, description, manager_id, start_date, due_date, status, created_at, created_by, color, parent_project_id)
-     VALUES (?,?,?,?,?,?,?,?,?,?)`,
+    `INSERT INTO projects (name, description, manager_id, start_date, due_date, status, created_at, created_by, color, parent_project_id, status_owner_id)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
     name, String(b.description ?? ''), b.managerId ? Number(b.managerId) : null,
     b.startDate || null, b.dueDate || null, b.status ?? 'active', D.nowIso(), actor.id, hexColor(b.color),
-    parentProjectId
+    parentProjectId,
+    b.statusOwnerId ? Number(b.statusOwnerId) : null
   );
   const id = Number(r.lastInsertRowid);
 
@@ -1978,7 +2016,7 @@ router.patch('/api/projects/:id', async (req, res, ctx) => {
 
   D.run(
     `UPDATE projects SET name = ?, description = ?, manager_id = ?, start_date = ?, due_date = ?,
-                         status = ?, color = ?, parent_project_id = ? WHERE id = ?`,
+                         status = ?, color = ?, parent_project_id = ?, status_owner_id = ? WHERE id = ?`,
     b.name ?? project.name, b.description ?? project.description,
     nextManager,
     b.startDate !== undefined ? (b.startDate || null) : project.start_date,
@@ -1986,6 +2024,9 @@ router.patch('/api/projects/:id', async (req, res, ctx) => {
     b.status ?? project.status,
     b.color !== undefined ? hexColor(b.color) : (project.color ?? ''),
     nextParent,
+    b.statusOwnerId !== undefined
+      ? (b.statusOwnerId ? Number(b.statusOwnerId) : null)
+      : (project.status_owner_id ?? null),
     project.id
   );
   // רק כשהאחראי באמת התחלף — שמירת הפרויקט בלי לגעת בו אינה מינוי מחדש
@@ -3355,6 +3396,83 @@ router.delete('/api/boards/:boardId/columns/:id', async (req, res, ctx) => {
   }
   D.run('DELETE FROM board_columns WHERE id = ?', col.id);
   sendJson(res, 200, { columns: columnsOf(col.board_id), moved: inUse });
+});
+
+// --- רשימת סטטוסי הבקרה ---
+
+/*
+ * הרשימה אישית: כל אחד בונה את שלו, ומחיל אותה על פרויקטים. אין כאן הרשאת
+ * ניהול — משתמש עורך את הרשימה שלו ואינו נוגע באחרת, וזה נאכף בכל שאילתה
+ * דרך ‎user_id‎.
+ */
+const hexOk = (v) => /^#[0-9a-fA-F]{6}$/.test(String(v ?? ''));
+
+router.get('/api/status-list', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  if (isVendor(actor)) throw forbidden();
+  sendJson(res, 200, {
+    statuses: statusList(actor.id),
+    palette: STATUS_PALETTE,
+    // הרשימות הקיימות בארגון, לבחירה בפרויקט
+    lists: D.all(
+      `SELECT u.id, u.full_name, COUNT(s.id) c
+         FROM users u JOIN task_statuses s ON s.user_id = u.id
+        WHERE u.status = 'active'
+        GROUP BY u.id ORDER BY u.full_name`
+    ).map((r) => ({ ownerId: r.id, ownerName: r.full_name, count: r.c }))
+  });
+});
+
+router.post('/api/status-list', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  if (isVendor(actor)) throw forbidden();
+  const b = await readJson(req);
+
+  // זריעה מהרשימה המוצעת, כדי שלא להתחיל מדף חלק
+  if (b.seed) {
+    if (statusList(actor.id).length) throw badRequest('לרשימה שלך יש כבר סטטוסים');
+    DEFAULT_STATUS_LIST.forEach((s, i) => D.run(
+      'INSERT INTO task_statuses (user_id, label, color, position, created_at) VALUES (?,?,?,?,?)',
+      actor.id, s.label, s.color, i, D.nowIso()
+    ));
+    return sendJson(res, 201, { statuses: statusList(actor.id) });
+  }
+
+  const label = String(b.label ?? '').trim();
+  if (!label) throw badRequest('נדרש שם לסטטוס');
+  if (!hexOk(b.color)) throw badRequest('נדרש צבע תקין');
+  const pos = D.get('SELECT COALESCE(MAX(position), -1) + 1 p FROM task_statuses WHERE user_id = ?', actor.id).p;
+  D.run('INSERT INTO task_statuses (user_id, label, color, position, created_at) VALUES (?,?,?,?,?)',
+    actor.id, label.slice(0, 60), String(b.color), pos, D.nowIso());
+  sendJson(res, 201, { statuses: statusList(actor.id) });
+});
+
+router.patch('/api/status-list/:id', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  const row = D.get('SELECT * FROM task_statuses WHERE id = ? AND user_id = ?', Number(ctx.params.id), actor.id);
+  if (!row) throw notFound('הסטטוס לא נמצא');
+  const b = await readJson(req);
+  const label = b.label !== undefined ? String(b.label).trim().slice(0, 60) : row.label;
+  if (!label) throw badRequest('נדרש שם לסטטוס');
+  const color = b.color !== undefined ? String(b.color) : row.color;
+  if (!hexOk(color)) throw badRequest('נדרש צבע תקין');
+  D.run('UPDATE task_statuses SET label = ?, color = ?, position = ? WHERE id = ?',
+    label, color, b.position !== undefined ? Number(b.position) : row.position, row.id);
+  sendJson(res, 200, { statuses: statusList(actor.id) });
+});
+
+router.delete('/api/status-list/:id', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  const row = D.get('SELECT * FROM task_statuses WHERE id = ? AND user_id = ?', Number(ctx.params.id), actor.id);
+  if (!row) throw notFound('הסטטוס לא נמצא');
+  /*
+   * מחיקה מותרת גם כשהסטטוס בשימוש. ‎ON DELETE SET NULL‎ מחזיר את המשימות
+   * ללא סטטוס במקום למנוע את המחיקה — חסימה הייתה מכריחה לעבור משימה-משימה
+   * כדי לתקן טעות בשם של סטטוס.
+   */
+  const inUse = D.get('SELECT COUNT(*) c FROM tasks WHERE track_status_id = ?', row.id).c;
+  D.run('DELETE FROM task_statuses WHERE id = ?', row.id);
+  sendJson(res, 200, { statuses: statusList(actor.id), cleared: inUse });
 });
 
 // --- ייצוא מסך הבקרה לאקסל ---

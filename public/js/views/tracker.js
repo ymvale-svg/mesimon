@@ -114,25 +114,79 @@ const TrackerView = (() => {
   }
 
   /**
-   * סטטוס הבקרה — רשימה סגורה שצובעת את השורה כולה.
+   * סטטוס הבקרה — נקודת צבע בלבד, בלי טקסט.
    *
-   * הרשימה מגיעה מהשרת ולא מקובעת כאן, כדי שתווית או צבע ישונו במקום אחד.
-   * העריכה מיידית ולא ביציאה מהתא: בחירה מרשימה היא החלטה שהושלמה, ולא
-   * הקלדה שעוד עשויה להימשך.
+   * הטקסט מיותר כאן פעמיים: השורה כולה נצבעת בצבע הסטטוס, ובטבלה של תשע
+   * עמודות תווית כמו "הצהרה אפשר במיידי" גוזלת רוחב שנחוץ לשם המשימה. השם
+   * זמין בריחוף ובבורר.
+   *
+   * האפשרויות מגיעות מהפרויקט של המשימה ולא מרשימה גלובלית: פרויקט שלא
+   * הוחלה עליו רשימה אינו מציג בורר כלל, וזה מה שהופך את השימוש לרמת
+   * פרויקט.
    */
   function trackCell(task) {
-    const list = App.state.trackStatuses ?? [];
-    if (!list.length) return null;
-    const options = [{ value: '', label: '— ללא —' }, ...list.map((s) => ({ value: s.key, label: s.label }))];
-    const sel = UI.select(options, task.trackStatus ?? '', {
-      class: 'tr-inline tr-track',
+    const options = task.trackOptions ?? [];
+    if (!options.length) {
+      return el('span.tr-nodot', { title: 'לפרויקט לא הוחלה רשימת סטטוסים' });
+    }
+
+    const dot = el('button.tr-dot', {
+      type: 'button',
+      title: task.trackStatusLabel ? `${task.trackStatusLabel} — לחיצה לשינוי` : 'בחירת סטטוס בקרה',
       disabled: !task.canEdit,
-      onchange: async (e) => {
-        // רענון מלא: הצבע נמצא על השורה כולה ולא על התא
-        await patch(task.id, { trackStatus: e.target.value || '' }, { redraw: true });
-      }
+      style: task.trackStatusColor ? `background: ${task.trackStatusColor}` : ''
+    }, [task.trackStatusColor ? '' : '+']);
+
+    if (!task.canEdit) return dot;
+
+    dot.addEventListener('click', (e) => {
+      e.stopPropagation();
+      openStatusPicker(dot, task, options);
     });
-    return sel;
+    return dot;
+  }
+
+  /**
+   * בורר קטן שנפתח מהנקודה. מוצמד למקום הלחיצה ולא במרכז המסך: בטבלה ארוכה
+   * חלון שנפתח במרכז מנתק את הבחירה מהשורה שעליה מדובר.
+   */
+  function openStatusPicker(anchor, task, options) {
+    document.getElementById('track-pop')?.remove();
+    const box = anchor.getBoundingClientRect();
+
+    const choose = async (id) => {
+      pop.remove();
+      await patch(task.id, { trackStatusId: id }, { redraw: true });
+    };
+
+    const pop = el('div.track-pop#track-pop', {}, [
+      ...options.map((s) => el('button.track-opt', {
+        onclick: () => choose(s.id)
+      }, [
+        el('span.track-swatch', { style: `background: ${s.color}` }),
+        el('span', { text: s.label }),
+        task.trackStatusId === s.id ? el('span.mute-sm', { text: '✓' }) : null
+      ])),
+      task.trackStatusId
+        ? el('button.track-opt.is-clear', { onclick: () => choose(null) }, [
+            el('span.track-swatch.is-empty'),
+            el('span', { text: 'ללא סטטוס' })
+          ])
+        : null
+    ]);
+
+    document.body.appendChild(pop);
+    // מוצמד מתחת לנקודה, ונדחק פנימה אם הוא חורג מהמסך
+    const w = pop.offsetWidth;
+    pop.style.top = `${Math.min(box.bottom + 4, window.innerHeight - pop.offsetHeight - 8)}px`;
+    pop.style.left = `${Math.max(8, Math.min(box.left, window.innerWidth - w - 8))}px`;
+
+    const close = (ev) => {
+      if (pop.contains(ev.target) || ev.target === anchor) return;
+      pop.remove();
+      document.removeEventListener('mousedown', close);
+    };
+    setTimeout(() => document.addEventListener('mousedown', close), 0);
   }
 
   function assigneeCell(sub) {
@@ -270,6 +324,108 @@ const TrackerView = (() => {
 
   // ------------------------------------------------------------- ציור
 
+  /**
+   * ניהול רשימת הסטטוסים האישית — הוספה, שינוי שם וצבע, מחיקה.
+   *
+   * אישית ולא ארגונית: כל אחד בונה את שלו, ומחיל אותה על פרויקטים שהוא
+   * מנהל. לכן המסך נפתח מכאן ולא ממסך הניהול, שאינו נגיש לעובד.
+   *
+   * העריכה נשמרת ביציאה מהשדה, כמו בשאר הטבלה. מחיקה מותרת גם כשהסטטוס
+   * בשימוש — המשימות חוזרות ללא סטטוס, וכך אין צורך לעבור משימה-משימה כדי
+   * לתקן טעות בשם.
+   */
+  async function openStatusManager() {
+    let data;
+    try { data = await API.statusList(); } catch (err) { return UI.error(err); }
+
+    const body = el('div');
+    const draw = () => {
+      const rowsEl = data.statuses.map((s) => {
+        const label = el('input', { type: 'text', value: s.label });
+        label.value = s.label;
+        const color = el('input.sm-color', { type: 'color', value: s.color });
+
+        const save = async (patchBody) => {
+          try { data = await API.updateStatus(s.id, patchBody); draw(); }
+          catch (err) { UI.error(err); draw(); }
+        };
+        label.addEventListener('blur', () => {
+          if (label.value.trim() && label.value.trim() !== s.label) save({ label: label.value.trim() });
+        });
+        label.addEventListener('keydown', (e) => { if (e.key === 'Enter') label.blur(); });
+        color.addEventListener('change', () => save({ color: color.value }));
+
+        return el('div.sm-row', {}, [
+          color,
+          label,
+          // לחיצה על צבע מהלוח קובעת אותו מיד — מהיר מבורר הצבעים של המערכת
+          el('div.sm-palette', {}, (data.palette ?? []).map((c) =>
+            el('button.sm-swatch', {
+              title: c, style: `background: ${c}`,
+              onclick: () => save({ color: c })
+            })
+          )),
+          el('button.btn.btn-sm.btn-ghost.del', {
+            title: 'מחיקת הסטטוס',
+            onclick: async () => {
+              const ok = await UI.confirm(
+                `הסטטוס "${s.label}" יימחק. משימות שסומנו בו יחזרו ללא סטטוס.`,
+                { title: 'מחיקת סטטוס', danger: true, okText: 'מחיקה' }
+              );
+              if (!ok) return;
+              try {
+                const r = await API.deleteStatus(s.id);
+                data = r;
+                if (r.cleared) UI.toast(`${r.cleared} משימות חזרו ללא סטטוס`);
+                draw();
+                reload();
+              } catch (err) { UI.error(err); }
+            }
+          }, ['🗑'])
+        ]);
+      });
+
+      const newLabel = el('input', { type: 'text', placeholder: 'שם הסטטוס' });
+      const newColor = el('input.sm-color', { type: 'color', value: data.palette?.[0] ?? '#a9d08e' });
+      const add = async () => {
+        const label = newLabel.value.trim();
+        if (!label) return;
+        try { data = await API.addStatus({ label, color: newColor.value }); draw(); }
+        catch (err) { UI.error(err); }
+      };
+      newLabel.addEventListener('keydown', (e) => { if (e.key === 'Enter') add(); });
+
+      UI.mount(body,
+        data.statuses.length
+          ? el('div.sm-list', {}, rowsEl)
+          : el('div.alert.alert-info', {}, [
+              el('span', { text: 'ℹ️' }),
+              el('div', { text: 'אין לך עוד סטטוסים. אפשר להתחיל מרשימה מוצעת ולערוך אותה, או לבנות משלך.' }),
+              el('button.btn.btn-sm.btn-primary', {
+                style: { flex: 'none' },
+                onclick: async () => {
+                  try { data = await API.seedStatuses(); draw(); } catch (err) { UI.error(err); }
+                }
+              }, ['רשימה מוצעת'])
+            ]),
+        el('div.sm-row.sm-new', {}, [newColor, newLabel,
+          el('button.btn.btn-sm', { onclick: add }, ['＋ הוספה'])]),
+        el('div.hint.mt', {
+          text: 'הרשימה שלך. כדי שהצבעים יחולו על פרויקט, יש לבחור אותה בשדה "סטטוסי בקרה" בעריכת הפרויקט.'
+        })
+      );
+    };
+    draw();
+
+    UI.modal({
+      title: 'רשימת סטטוסי הבקרה שלי',
+      body,
+      footer: [el('div.spacer'), el('button.btn', {
+        onclick: () => { document.querySelector('.modal-backdrop')?.remove(); reload(); }
+      }, ['סגירה'])]
+    });
+  }
+
   function toolbar() {
     const scoped = savedScope() === 'mine';
     const mine = myProjectIds();
@@ -304,6 +460,10 @@ const TrackerView = (() => {
        * הקובץ שהשרת קבע. בנייה של blob בלקוח הייתה מחייבת לקרוא את הקובץ
        * לזיכרון ולהמציא שם, בלי שום יתרון.
        */
+      el('button.btn.btn-sm', {
+        title: 'ניהול רשימת סטטוסי הבקרה שלי',
+        onclick: () => openStatusManager()
+      }, ['⬤ סטטוסים']),
       el('button.btn.btn-sm', {
         title: 'הורדת הטבלה כקובץ אקסל, באותו חתך שמוצג',
         onclick: () => {
@@ -352,7 +512,7 @@ const TrackerView = (() => {
               el('th', { text: 'פרויקט', style: { width: '150px' } }),
               el('th', { text: 'משימה' }),
               el('th', { text: 'תאריך יעד', style: { width: '128px' } }),
-              el('th', { text: 'סטטוס בקרה', style: { width: '150px' } }),
+              el('th', { text: 'סטטוס', title: 'סטטוס בקרה — נקודת צבע', style: { width: '58px' } }),
               el('th', { text: 'סטטוס מקוצר', style: { width: '16%' } }),
               el('th', { text: 'תת-משימה' }),
               el('th', { text: 'אחראי', style: { width: '150px' } }),
