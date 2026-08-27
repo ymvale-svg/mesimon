@@ -549,7 +549,12 @@ function audit(taskId, actor, action, details = '') {
 const notifyListeners = [];
 const onNotify = (fn) => { if (typeof fn === 'function') notifyListeners.push(fn); };
 
-function notify({ targetType, targetId, kind, title, body = '', taskId = null }) {
+/**
+ * ‎push‎ הוא מידע נוסף שנוסע רק בהתראת הדחיפה ואינו נשמר במסד — למשל האם
+ * אפשר להשיב מההתראה, ואם כן אם התשובה פנימית. שמירתו בטבלת ההתראות הייתה
+ * מוסיפה עמודות שאין להן שום שימוש אחר.
+ */
+function notify({ targetType, targetId, kind, title, body = '', taskId = null, push = null }) {
   const res = run(
     'INSERT INTO notifications (target_type, target_id, kind, title, body, task_id, is_read, created_at) VALUES (?,?,?,?,?,?,0,?)',
     targetType,
@@ -568,7 +573,7 @@ function notify({ targetType, targetId, kind, title, body = '', taskId = null })
   const id = Number(res.lastInsertRowid);
   // כשל אצל מאזין אינו מבטל את ההתראה עצמה — היא כבר נשמרה
   for (const fn of notifyListeners) {
-    try { fn({ id, targetType, targetId, kind, title, body, taskId }); } catch { /* בשקט */ }
+    try { fn({ id, targetType, targetId, kind, title, body, taskId, push }); } catch { /* בשקט */ }
   }
 }
 

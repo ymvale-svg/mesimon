@@ -194,7 +194,7 @@ function kindEnabled(userId, kind) {
  * שהמכשיר לא קיים. במקרה כזה השורה נמחקת, אחרת הטבלה מתמלאת בהרשמות מתות
  * שכל התראה מנסה לפנות אליהן שוב.
  */
-async function deliver({ id, targetType, targetId, kind, title, body, taskId }) {
+async function deliver({ id, targetType, targetId, kind, title, body, taskId, push }) {
   if (targetType !== 'user') return;                 // לספק אין אפליקציה מותקנת
   if (!kindEnabled(targetId, kind)) return;
 
@@ -207,7 +207,17 @@ async function deliver({ id, targetType, targetId, kind, title, body, taskId }) 
     title: title ?? 'משימון',
     body: body ?? '',
     taskId: taskId ?? null,
-    kind: kind ?? null
+    kind: kind ?? null,
+    /*
+     * מאפשר תשובה מתוך ההתראה. רק על הודעה בשרשור — התראה על שינוי סטטוס
+     * או על איחור אינה שיחה, ושדה תשובה עליה מציע פעולה שאין לה משמעות.
+     *
+     * ‎internal‎ נוסע איתה כדי שהתשובה תישאר באותה רמת חשיפה כמו ההודעה
+     * שהיא עונה לה: תשובה פנימית להודעה שספק רואה הייתה נעלמת ממנו, ותשובה
+     * גלויה לשרשור פנימי הייתה מדליפה החוצה.
+     */
+    canReply: !!(push?.canReply && taskId),
+    internal: !!push?.internal
   });
 
   await Promise.all(rows.map(async (row) => {

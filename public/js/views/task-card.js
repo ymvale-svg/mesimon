@@ -731,5 +731,14 @@ const TaskCardView = (() => {
     });
   }
 
-  return { open };
+  /**
+   * רענון הכרטיס אם הוא פתוח בדיוק על המשימה הזו. נדרש כשתגובה נשלחה מחוץ
+   * לדף — מתוך התראת מערכת — ולא עברה דרך תיבת התגובה שבכרטיס.
+   */
+  async function refreshIfOpen(taskId) {
+    if (!modalRef || !task || task.id !== Number(taskId)) return;
+    try { await reload(); } catch { /* הכרטיס נסגר בינתיים */ }
+  }
+
+  return { open, refreshIfOpen };
 })();

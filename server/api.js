@@ -1739,7 +1739,8 @@ router.post('/api/tasks/:id/comments', async (req, res, ctx) => {
     if (uid !== actor.id || isVendor(actor)) {
       D.notify({
         targetType: 'user', targetId: uid, kind: 'mention',
-        title: `${actor.name} תייג/ה אותך בתגובה`, body: text.slice(0, 120), taskId: task.id
+        title: `${actor.name} תייג/ה אותך בתגובה`, body: text.slice(0, 120), taskId: task.id,
+        push: { canReply: true, internal: isInternal }
       });
     }
   }
@@ -1787,7 +1788,9 @@ router.post('/api/tasks/:id/comments', async (req, res, ctx) => {
         targetType: 'user', targetId: uid, kind: 'comment',
         title: `${actor.name} כתב/ה במשימה`,
         body: `${task.title} — ${text.slice(0, 120) || 'צורף קובץ'}`,
-        taskId: task.id
+        taskId: task.id,
+        // מאפשר להשיב מתוך ההתראה, באותה רמת חשיפה כמו ההודעה עצמה
+        push: { canReply: true, internal: isInternal }
       });
     }
   }

@@ -12,7 +12,7 @@
  */
 
 // שינוי המספר מפסל את המטמון הקודם ומאלץ טעינה מחדש של קבצי המערכת
-const VERSION = 'mesimon-v4';
+const VERSION = 'mesimon-v5';
 
 /**
  * מה נשמר מראש. רק מה שנדרש כדי שהמסך ייבנה: אם אחד מהם חסר, האפליקציה לא
@@ -82,6 +82,22 @@ self.addEventListener('push', (event) => {
   try { data = event.data ? event.data.json() : {}; } catch { /* מטען שאינו JSON */ }
 
   const title = data.title || 'משימון';
+
+  /*
+   * תשובה מתוך ההתראה, כמו בוואטסאפ. ‎type: 'text'‎ הופך את הפעולה לשדה
+   * הקלדה במקום כפתור, והטקסט מגיע ב-‎event.reply‎ ב-notificationclick.
+   *
+   * מוצע רק על הודעה בשרשור: התראה על איחור או על שינוי סטטוס אינה שיחה,
+   * ושדה תשובה עליה מציע פעולה שאין לה למי לענות.
+   *
+   * דפדפן שאינו תומך בשדה הקלדה יציג את הפעולה ככפתור, ולחיצה עליו תיפול
+   * למסלול הרגיל — פתיחת המשימה. לכן אין כאן זיהוי יכולות: הנפילה היא
+   * בדיוק ההתנהגות הנכונה.
+   */
+  const actions = data.canReply
+    ? [{ action: 'reply', type: 'text', title: 'תשובה', placeholder: 'כאן מקלידים תגובה' }]
+    : [];
+
   event.waitUntil(self.registration.showNotification(title, {
     body: data.body || 'יש עדכון חדש במשימון',
     icon: '/icons/icon-192.png',
@@ -96,9 +112,58 @@ self.addEventListener('push', (event) => {
      * להופיע לצדה — וזה בדיוק מה שגרם לכפילות.
      */
     tag: data.id ? `mesimon-${data.id}` : (data.taskId ? `mesimon-task-${data.taskId}` : 'mesimon-push'),
-    data: { taskId: data.taskId ?? null }
+    actions,
+    data: {
+      taskId: data.taskId ?? null,
+      canReply: !!data.canReply,
+      internal: !!data.internal
+    }
   }));
 });
+
+/**
+ * שליחת תשובה שהוקלדה בהתראה.
+ *
+ * נשלחת מכאן ולא מהדף, וזו כל הנקודה: כשההתראה מגיעה בדרך כלל אין שום חלון
+ * פתוח. בקשה מתוך ה-Service Worker לאותו מקור נושאת את קוקי הסשן, ולכן
+ * התשובה נשלחת בשם המשתמש בלי לפתוח את האפליקציה.
+ *
+ * כשל אינו נבלע: אם הסשן פג או הרשת נפלה, מוצגת התראה שאומרת זאת ושומרת את
+ * הטקסט לפתיחת המשימה — אחרת המשתמש חושב שענה, והתשובה נעלמה.
+ */
+async function sendReply(taskId, text, internal) {
+  const body = String(text ?? '').trim();
+  if (!taskId || !body) return;
+
+  try {
+    const res = await fetch(`/api/tasks/${taskId}/comments`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      credentials: 'same-origin',
+      body: JSON.stringify({ body, internal })
+    });
+    if (!res.ok) throw new Error(res.status === 401 ? 'הסשן פג' : `שגיאה ${res.status}`);
+
+    // אישור קצר שנעלם מעצמו — התראה שדורשת סגירה על "נשלח" היא טרחה
+    await self.registration.showNotification('התשובה נשלחה', {
+      body, icon: '/icons/icon-192.png', badge: '/icons/icon-192.png',
+      lang: 'he', dir: 'rtl', tag: `mesimon-sent-${taskId}`,
+      data: { taskId }
+    });
+    // חלון פתוח יראה את התגובה מיד, בלי להמתין למחזור הסקר
+    for (const client of await self.clients.matchAll({ type: 'window' })) {
+      client.postMessage({ type: 'comment-added', taskId });
+    }
+  } catch (err) {
+    await self.registration.showNotification('התשובה לא נשלחה', {
+      body: `${err.message}. לחיצה כאן תפתח את המשימה.`,
+      icon: '/icons/icon-192.png', badge: '/icons/icon-192.png',
+      lang: 'he', dir: 'rtl', requireInteraction: true,
+      tag: `mesimon-failed-${taskId}`,
+      data: { taskId }
+    });
+  }
+}
 
 /*
  * לחיצה על התראת מערכת ההפעלה.
@@ -114,6 +179,18 @@ self.addEventListener('push', (event) => {
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
   const taskId = event.notification.data?.taskId ?? null;
+
+  /*
+   * תשובה שהוקלדה בהתראה. נשלחת ונגמר — בלי לפתוח חלון, וזו כל התכלית:
+   * לענות בשתי שניות מבלי לעזוב את מה שעושים.
+   *
+   * ‎event.reply‎ ריק פירושו שהדפדפן הציג את הפעולה ככפתור ולא כשדה הקלדה.
+   * במקרה כזה נופלים למסלול הרגיל של פתיחת המשימה, שם יש תיבת תגובה.
+   */
+  if (event.action === 'reply' && event.reply) {
+    event.waitUntil(sendReply(taskId, event.reply, !!event.notification.data?.internal));
+    return;
+  }
 
   event.waitUntil((async () => {
     const clientList = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });

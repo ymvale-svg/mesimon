@@ -189,6 +189,15 @@ const App = (() => {
       if (event.data?.type === 'open-task' && event.data.taskId) {
         TaskCardView.open(Number(event.data.taskId));
       }
+      /*
+       * תגובה נשלחה מתוך התראה, בלי שהדף היה מעורב. המסך מתרענן כדי שהיא
+       * תופיע מיד — אחרת המשתמש עונה מההתראה, עובר לאפליקציה, ולא רואה שם
+       * את מה שכתב.
+       */
+      if (event.data?.type === 'comment-added') {
+        TaskCardView.refreshIfOpen?.(Number(event.data.taskId));
+        refreshNotifications();
+      }
     });
   }
 
