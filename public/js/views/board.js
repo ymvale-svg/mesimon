@@ -763,9 +763,22 @@ const BoardView = (() => {
 
   // ------------------------------------------------------------- דיאלוג פרויקט
 
-  function openProjectDialog(project = null) {
+  function openProjectDialog(project = null, opts = {}) {
     const isEdit = !!project;
     const nameInput = el('input', { type: 'text', value: project?.name ?? '' });
+
+    /*
+     * פרויקט אב. מוצעים רק פרויקטים ראשיים — שתי רמות בלבד, והשרת כופה זאת
+     * בכל מקרה. הפרויקט הנערך עצמו מוחרג, כדי שלא ייבחר כאב של עצמו.
+     */
+    const parentOptions = [
+      { value: '', label: 'פרויקט ראשי (ללא אב)' },
+      ...App.state.projects
+        .filter((p) => !p.parentProjectId && p.status !== 'done' && (!project || p.id !== project.id))
+        .map((p) => ({ value: p.id, label: p.name }))
+    ];
+    const parentSelect = UI.select(parentOptions,
+      String(project?.parentProjectId ?? opts.parentProjectId ?? ''));
     const descInput = el('textarea');
     descInput.value = project?.description ?? '';
     /*
@@ -924,6 +937,8 @@ const BoardView = (() => {
         UI.field('מנהל המשימות בפרויקט', managerSelect, 'אחראי על התקדמות המשימות בפרויקט'),
         UI.field('סטטוס', statusSelect)
       ]),
+      UI.field('פרויקט אב', parentSelect,
+        'בחירת פרויקט אב הופכת את הפרויקט לתת-פרויקט, והוא יוצג מתחתיו בתפריט'),
       el('div.row', {}, [UI.field('תאריך התחלה', startInput), UI.field('תאריך יעד', dueInput)]),
       UI.field('צבע הפרויקט', el('div.flex', {}, [colorInput, colorSwatches]),
         'הצבע מסמן את שורות המשימות של הפרויקט, לזיהוי במבט'),
@@ -960,6 +975,7 @@ const BoardView = (() => {
         dueDate: UI.fromInputDate(dueInput.value),
         status: statusSelect.value,
         color: colorInput.value,
+        parentProjectId: parentSelect.value || null,
         templateId: templateSelect.value || null
       };
       saveBtn.disabled = true;

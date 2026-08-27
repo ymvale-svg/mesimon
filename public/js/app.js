@@ -1138,11 +1138,34 @@ const App = (() => {
    */
   function orderProjects(list) {
     const saved = getPref('projectOrder');
-    if (!Array.isArray(saved) || !saved.length) return list;
-    const rank = new Map(saved.map((id, i) => [Number(id), i]));
+    const rank = new Map((Array.isArray(saved) ? saved : []).map((id, i) => [Number(id), i]));
     const at = (p) => (rank.has(p.id) ? rank.get(p.id) : Number.MAX_SAFE_INTEGER);
     // סדר מקורי כשובר שוויון — ‎sort‎ יציב, ולכן די בהשוואת הדירוג
-    return [...list].sort((a, b) => at(a) - at(b));
+    const ordered = rank.size ? [...list].sort((a, b) => at(a) - at(b)) : [...list];
+
+    /*
+     * תת-פרויקט יושב מתחת לאב שלו, ולא במקומו לפי הסדר הכללי. בלי זה גרירה
+     * אחת הייתה מפזרת את חלקי הפרויקט על כל התפריט, וההיררכיה שנראית בהזחה
+     * הייתה משקרת.
+     *
+     * תת-פרויקט שהאב שלו אינו ברשימה (מחוץ לחתך, או שהושלם) מוצג כפריט
+     * עצמאי — עדיף מלהיעלם.
+     */
+    const byId = new Map(ordered.map((p) => [p.id, p]));
+    const children = new Map();
+    for (const p of ordered) {
+      if (p.parentProjectId && byId.has(p.parentProjectId)) {
+        if (!children.has(p.parentProjectId)) children.set(p.parentProjectId, []);
+        children.get(p.parentProjectId).push(p);
+      }
+    }
+    const out = [];
+    for (const p of ordered) {
+      if (p.parentProjectId && byId.has(p.parentProjectId)) continue;   // ייכנס עם האב
+      out.push(p);
+      for (const child of children.get(p.id) ?? []) out.push(child);
+    }
+    return out;
   }
 
   /**
@@ -1245,7 +1268,8 @@ const App = (() => {
 
     // הבלוק הזה כולו לא נבנה לספק — מסלול הספק חזר כבר למעלה עם רשימת הניווט שלו
     const projectItem = (p) =>
-      el(`button.nav-item${state.route.name === 'board' && state.route.params.projectId === p.id ? '.active' : ''}`, {
+      el(`button.nav-item${state.route.name === 'board' && state.route.params.projectId === p.id ? '.active' : ''}${p.parentProjectId ? '.is-subproject' : ''}`, {
+        title: p.parentProjectName ? `${p.parentProjectName} ← ${p.name}` : p.name,
         onclick: () => navigate('board', { projectId: p.id })
       }, [
         // הלוגו כשיש, ואחרת נקודה בצבע הפרויקט — אותו סימן שבשורות המשימות שלו

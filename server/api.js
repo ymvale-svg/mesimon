@@ -29,6 +29,33 @@ const PRIORITIES = [
   { key: 'urgent', label: 'דחוף', color: '#dc2626' }
 ];
 
+/**
+ * סטטוס הבקרה — רשימה סגורה שצובעת את השורה במסך הבקרה.
+ *
+ * נבדל מהסטטוס של הבורד (חדש / בטיפול / הושלם), שהוא מקומו של הכרטיס בזרימת
+ * העבודה. זה מצב הבקרה של הנושא עצמו — האם קיים, האם לבחינה, האם לא רלוונטי —
+ * וזו השאלה שנשאלת במבט מאקרו על פרויקט.
+ *
+ * נבדל גם מ-‎status_short‎, שהוא טקסט חופשי שמסביר. כאן סיווג סגור, וזה מה
+ * שמאפשר לצבוע לפיו שורה ולסנן לפיו.
+ *
+ * הרשימה במקום אחד, ולכן שינוי תווית או צבע הוא שינוי בשורה אחת. הצבעים
+ * נגזרו מהרשימה שהמשתמש מסר, והמפתחות באנגלית כדי שהתווית תוכל להשתנות בלי
+ * לגעת בנתונים שנשמרו.
+ */
+const TRACK_STATUSES = [
+  { key: 'approved', label: 'אישור', color: '#a9d08e' },
+  { key: 'exists_to_upload', label: 'קיים להעלות', color: '#e2efda' },
+  { key: 'ignore', label: 'לא להתייחס', color: '#bfbfbf' },
+  { key: 'review', label: 'לבחינה', color: '#cc7a7a' },
+  { key: 'almost', label: 'כמעט קיים', color: '#d9e1f2' },
+  { key: 'active', label: 'בפעילות', color: '#f8cbad' },
+  { key: 'declarable', label: 'הצהרה אפשר במיידי', color: '#fff2cc' },
+  { key: 'control_lab', label: 'מכון בקרה', color: '#b4a7d6' }
+];
+
+const trackStatus = (key) => TRACK_STATUSES.find((s) => s.key === key) ?? null;
+
 // ---------------------------------------------------------------------------
 // עזרים
 // ---------------------------------------------------------------------------
@@ -205,6 +232,9 @@ function shapeTask(task, actor, { withDetails = false } = {}) {
     dependsOnTaskId: task.depends_on_task_id,
     dependency: dependency ? { id: dependency.id, title: dependency.title, blocking: dependencyBlocking } : null,
     statusShort: task.status_short ?? '',
+    trackStatus: task.track_status || '',
+    trackStatusLabel: trackStatus(task.track_status)?.label ?? null,
+    trackStatusColor: trackStatus(task.track_status)?.color ?? null,
     parentTaskId: task.parent_task_id ?? null,
     parentTitle: task.parent_task_id
       ? D.get('SELECT title FROM tasks WHERE id = ?', task.parent_task_id)?.title ?? null
@@ -529,6 +559,7 @@ router.get('/api/bootstrap', async (req, res, ctx) => {
     actor: publicActor(actor),
     permissions: P.permissionsFor(actor),
     priorities: PRIORITIES,
+    trackStatuses: TRACK_STATUSES,
     roleLabels: P.ROLE_LABELS,
     /*
      * העדפות התצוגה נשלחות כאן ולא בקריאה נפרדת, כדי שהלוח ייפתח ישר בחתך
@@ -681,6 +712,11 @@ function listProjectsFor(actor) {
       // הצבע שנבחר בפועל, להבדיל מהנגזר — כדי שבורר הצבע יידע אם יש בחירה
       colorChosen: p.color || null,
       mine: mineIds.has(p.id),
+      parentProjectId: p.parent_project_id ?? null,
+      parentProjectName: p.parent_project_id
+        ? D.get('SELECT name FROM projects WHERE id = ?', p.parent_project_id)?.name ?? null
+        : null,
+      subProjectsCount: D.get('SELECT COUNT(*) c FROM projects WHERE parent_project_id = ?', p.id).c,
       logoId: D.get("SELECT id FROM project_images WHERE project_id = ? AND kind = 'logo'", p.id)?.id ?? null,
       imagesCount: D.get("SELECT COUNT(*) c FROM project_images WHERE project_id = ? AND kind = 'gallery'", p.id).c,
       tasksTotal: stats.total ?? 0,
@@ -1035,6 +1071,20 @@ router.patch('/api/tasks/:id', async (req, res, ctx) => {
       if (next !== current) {
         D.run('UPDATE tasks SET status_short = ? WHERE id = ?', next, task.id);
         changes.push(`סטטוס מקוצר: ${current || '—'} ← ${next || '—'}`);
+      }
+    }
+
+    /*
+     * סטטוס הבקרה. מפתח שאינו ברשימה נדחה ואינו נשמר בשקט — ערך שאינו קיים
+     * היה מתורגם לשורה בלי צבע ובלי תווית, ונראה כתקלה בתצוגה.
+     */
+    if (body.trackStatus !== undefined) {
+      const next = String(body.trackStatus ?? '').trim();
+      if (next && !trackStatus(next)) throw badRequest('סטטוס בקרה שאינו קיים ברשימה');
+      const current = task.track_status ?? '';
+      if (next !== current) {
+        D.run('UPDATE tasks SET track_status = ? WHERE id = ?', next, task.id);
+        changes.push(`סטטוס בקרה: ${trackStatus(current)?.label ?? '—'} ← ${trackStatus(next)?.label ?? '—'}`);
       }
     }
     setField('projectId', 'project_id', body.projectId !== undefined ? (body.projectId ? Number(body.projectId) : null) : undefined, 'פרויקט',
@@ -1839,6 +1889,26 @@ router.get('/api/projects', async (req, res, ctx) => {
  *
  * מי שמינה את עצמו אינו מקבל הודעה, כמו בכל שאר ההתראות במערכת.
  */
+/**
+ * מתרגם בחירת פרויקט אב למזהה תקף, או ‎null‎.
+ *
+ * שומר על שתי רמות ומונע מעגל: פרויקט אינו יכול להיות אב של עצמו, ותת-פרויקט
+ * שנבחר כאב מתורגם לאב שלו. בלי זה אפשר היה לבנות שרשרת שהצגתה בתפריט נכנסת
+ * ללופ אינסופי.
+ */
+function resolveParentProject(actor, raw, selfId = null) {
+  if (!raw) return null;
+  const parent = D.get('SELECT * FROM projects WHERE id = ?', Number(raw));
+  if (!parent) throw badRequest('פרויקט האב אינו קיים');
+  if (selfId && parent.id === selfId) throw badRequest('פרויקט אינו יכול להיות אב של עצמו');
+  const rootId = parent.parent_project_id ?? parent.id;
+  if (selfId && rootId === selfId) throw badRequest('לא ניתן לשייך פרויקט תחת תת-פרויקט שלו');
+  // מי שרשאי לראות את האב רשאי לתלות תחתיו; ההרשאה ליצור פרויקט נבדקה ממילא
+  const visible = visibleProjectIds(actor);
+  if (visible !== null && !visible.has(rootId)) throw forbidden('אין לך גישה לפרויקט האב');
+  return rootId;
+}
+
 function notifyProjectManager(projectId, managerId, projectName, actor) {
   if (!managerId || managerId === actor.id) return;
   if (D.get("SELECT 1 FROM users WHERE id = ? AND status = 'active'", managerId) === undefined) return;
@@ -1855,11 +1925,19 @@ router.post('/api/projects', async (req, res, ctx) => {
   const b = await readJson(req);
   const name = String(b.name ?? '').trim();
   if (!name) throw badRequest('נדרש שם פרויקט');
+  /*
+   * תת-פרויקט. שתי רמות בלבד, כמו בתתי-משימות: תת-פרויקט של תת-פרויקט נתלה
+   * בפרויקט האב המקורי. עץ עמוק היה מחייב תפריט צד רקורסיבי, ובפועל מה
+   * שנדרש הוא פרויקט וחלקיו.
+   */
+  const parentProjectId = resolveParentProject(actor, b.parentProjectId);
+
   const r = D.run(
-    `INSERT INTO projects (name, description, manager_id, start_date, due_date, status, created_at, created_by, color)
-     VALUES (?,?,?,?,?,?,?,?,?)`,
+    `INSERT INTO projects (name, description, manager_id, start_date, due_date, status, created_at, created_by, color, parent_project_id)
+     VALUES (?,?,?,?,?,?,?,?,?,?)`,
     name, String(b.description ?? ''), b.managerId ? Number(b.managerId) : null,
-    b.startDate || null, b.dueDate || null, b.status ?? 'active', D.nowIso(), actor.id, hexColor(b.color)
+    b.startDate || null, b.dueDate || null, b.status ?? 'active', D.nowIso(), actor.id, hexColor(b.color),
+    parentProjectId
   );
   const id = Number(r.lastInsertRowid);
 
@@ -1894,14 +1972,20 @@ router.patch('/api/projects/:id', async (req, res, ctx) => {
   const nextManager = b.managerId !== undefined
     ? (b.managerId ? Number(b.managerId) : null)
     : project.manager_id;
+  const nextParent = b.parentProjectId !== undefined
+    ? resolveParentProject(actor, b.parentProjectId, project.id)
+    : (project.parent_project_id ?? null);
+
   D.run(
-    'UPDATE projects SET name = ?, description = ?, manager_id = ?, start_date = ?, due_date = ?, status = ?, color = ? WHERE id = ?',
+    `UPDATE projects SET name = ?, description = ?, manager_id = ?, start_date = ?, due_date = ?,
+                         status = ?, color = ?, parent_project_id = ? WHERE id = ?`,
     b.name ?? project.name, b.description ?? project.description,
     nextManager,
     b.startDate !== undefined ? (b.startDate || null) : project.start_date,
     b.dueDate !== undefined ? (b.dueDate || null) : project.due_date,
     b.status ?? project.status,
     b.color !== undefined ? hexColor(b.color) : (project.color ?? ''),
+    nextParent,
     project.id
   );
   // רק כשהאחראי באמת התחלף — שמירת הפרויקט בלי לגעת בו אינה מינוי מחדש
@@ -3304,7 +3388,7 @@ router.get('/api/tracker/export', async (req, res, ctx) => {
     .filter((t) => !columnMeta(t.board_id, t.status)?.is_final)
     .filter((t) => !owned || owned.has(t.project_id));
 
-  const header = ['פרויקט', 'משימה', 'תאריך יעד', 'סטטוס מקוצר', 'סטטוס', 'תת-משימה', 'אחראי', 'תאריך יעד של תת-המשימה'];
+  const header = ['פרויקט', 'משימה', 'תאריך יעד', 'סטטוס בקרה', 'סטטוס מקוצר', 'סטטוס', 'תת-משימה', 'אחראי', 'תאריך יעד של תת-המשימה'];
   const body = rows.map((t) => {
     const shaped = shapeTask(t, actor);
     const sub = shaped.activeSubtask;
@@ -3312,6 +3396,7 @@ router.get('/api/tracker/export', async (req, res, ctx) => {
       shaped.projectName ?? 'ללא פרויקט',
       shaped.title,
       Rules.formatDate(t.due_date),
+      shaped.trackStatusLabel ?? '',
       shaped.statusShort,
       shaped.statusLabel,
       sub ? sub.title : '',
@@ -3322,7 +3407,7 @@ router.get('/api/tracker/export', async (req, res, ctx) => {
 
   const file = Xlsx.build([header, ...body], {
     sheetName: 'בקרת משימות',
-    widths: [20, 38, 14, 32, 16, 34, 20, 16]
+    widths: [20, 38, 14, 18, 30, 16, 34, 20, 16]
   });
   // התאריך בשם הקובץ, כדי ששני דוחות בתיקיית ההורדות לא יידרסו זה על זה
   const stamp = D.nowIso().slice(0, 10);

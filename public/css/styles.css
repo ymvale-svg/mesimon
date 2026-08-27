@@ -1532,3 +1532,34 @@ input[type="color"] { width: 46px; height: 30px; padding: 2px; cursor: pointer; 
   width: 26px; height: 26px; object-fit: cover; border-radius: 5px;
   flex: none; border: 1px solid var(--border);
 }
+
+/* ---- צביעת שורה לפי סטטוס הבקרה ---- */
+
+/*
+ * הרקע מוחל על התאים ולא על ה-tr: רקע על שורה בטבלה נחתך בחלק מהדפדפנים,
+ * ובעמודה דביקה הוא נעלם לגמרי. הצבעים בהירים ונועדו לרקע, ולכן הטקסט נשאר
+ * בצבעו הרגיל ולא הופך ללבן.
+ */
+.tracker tr.is-tinted > td { background: var(--row-tint); }
+/* הפקדים בתוך שורה צבועה חייבים להישאר קריאים על הרקע */
+.tracker tr.is-tinted .tr-inline,
+.tracker tr.is-tinted .tr-short { color: #1f2937; }
+.tracker tr.is-tinted .tr-inline:hover,
+.tracker tr.is-tinted .tr-short:hover { border-color: rgba(31, 41, 55, .35); }
+.tracker tr.is-tinted .tr-inline:focus,
+.tracker tr.is-tinted .tr-short:focus { background: #fff; }
+.tracker tr.is-tinted .mute-sm { color: #4b5563; }
+.tracker .tr-track { font-weight: 700; }
+
+/* ---- תת-פרויקט בתפריט הצד ---- */
+
+/*
+ * הזחה וקו מקשר, ולא כותרת קבוצה: תת-פרויקט הוא פריט ניווט רגיל לכל דבר,
+ * והוא נשאר לחיץ ונעיץ כמו כל פרויקט אחר.
+ */
+.sidebar .nav-item.is-subproject { padding-inline-start: 22px; }
+.sidebar .nav-item.is-subproject .ico::before {
+  content: '↳'; position: absolute; inset-inline-start: 6px;
+  color: var(--text-mute); font-size: 11px;
+}
+.sidebar .nav-item.is-subproject .ico { position: relative; }

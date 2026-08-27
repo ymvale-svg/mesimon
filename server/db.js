@@ -128,7 +128,13 @@ CREATE TABLE IF NOT EXISTS projects (
   status      TEXT    NOT NULL DEFAULT 'active' CHECK (status IN ('active','frozen','done')),
   created_at  TEXT    NOT NULL,
   created_by  INTEGER REFERENCES users(id),
-  color       TEXT    NOT NULL DEFAULT ''
+  color       TEXT    NOT NULL DEFAULT '',
+  /*
+   * תת-פרויקט. ‎SET NULL‎ ולא ‎CASCADE‎ בכוונה, להבדיל מתת-משימה: מחיקת
+   * פרויקט אב אינה אמורה למחוק את הפרויקטים שתחתיו ואת כל המשימות שבהם —
+   * הם עולים לרמה הראשית ונשארים.
+   */
+  parent_project_id INTEGER REFERENCES projects(id) ON DELETE SET NULL
 );
 
 CREATE TABLE IF NOT EXISTS tasks (
@@ -168,7 +174,13 @@ CREATE TABLE IF NOT EXISTS tasks (
    * התגובות — שם יש לו היסטוריה, מחבר, זמן וקבצים, ושדה שנדרס בכל עדכון
    * היה מוחק בדיוק את מה שמעניין בבקרה.
    */
-  status_short       TEXT    NOT NULL DEFAULT ''
+  status_short       TEXT    NOT NULL DEFAULT '',
+  /*
+   * סטטוס הבקרה — מפתח מרשימה סגורה (ראה TRACK_STATUSES ב-api.js), שצובע את
+   * השורה במסך הבקרה. נבדל מ-‎status‎ שהוא מקום הכרטיס בזרימת העבודה, ומ-
+   * ‎status_short‎ שהוא טקסט חופשי. ריק = לא סווג.
+   */
+  track_status       TEXT    NOT NULL DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS checklist_items (
@@ -770,6 +782,10 @@ function migrate() {
   // תת-משימה והסטטוס המקוצר שלה — ראה ההסבר בהגדרת הטבלה
   addColumn('tasks', 'parent_task_id', 'INTEGER REFERENCES tasks(id) ON DELETE CASCADE');
   addColumn('tasks', 'status_short', "TEXT NOT NULL DEFAULT ''");
+  // סטטוס הבקרה, שצובע את השורה במסך הבקרה
+  addColumn('tasks', 'track_status', "TEXT NOT NULL DEFAULT ''");
+  // תת-פרויקט
+  addColumn('projects', 'parent_project_id', 'INTEGER REFERENCES projects(id) ON DELETE SET NULL');
   // מי פתח את הפרויקט — הפרויקט נשאר ברשימה שלו גם אם מונה לו מנהל אחר
   addColumn('projects', 'created_by', 'INTEGER REFERENCES users(id)');
   // צבע הפרויקט — צובע את שורות המשימות שלו, לזיהוי במבט ולא בקריאה

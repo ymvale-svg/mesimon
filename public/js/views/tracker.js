@@ -113,6 +113,28 @@ const TrackerView = (() => {
     return input;
   }
 
+  /**
+   * סטטוס הבקרה — רשימה סגורה שצובעת את השורה כולה.
+   *
+   * הרשימה מגיעה מהשרת ולא מקובעת כאן, כדי שתווית או צבע ישונו במקום אחד.
+   * העריכה מיידית ולא ביציאה מהתא: בחירה מרשימה היא החלטה שהושלמה, ולא
+   * הקלדה שעוד עשויה להימשך.
+   */
+  function trackCell(task) {
+    const list = App.state.trackStatuses ?? [];
+    if (!list.length) return null;
+    const options = [{ value: '', label: '— ללא —' }, ...list.map((s) => ({ value: s.key, label: s.label }))];
+    const sel = UI.select(options, task.trackStatus ?? '', {
+      class: 'tr-inline tr-track',
+      disabled: !task.canEdit,
+      onchange: async (e) => {
+        // רענון מלא: הצבע נמצא על השורה כולה ולא על התא
+        await patch(task.id, { trackStatus: e.target.value || '' }, { redraw: true });
+      }
+    });
+    return sel;
+  }
+
   function assigneeCell(sub) {
     if (!sub) return el('span.mute-sm', { text: '—' });
     const options = [
@@ -167,7 +189,19 @@ const TrackerView = (() => {
       }
     }, ['▸']);
 
-    return el(`tr.tr-parent${isOpen ? '.is-open' : ''}`, {}, [
+    /*
+     * צבע השורה בא מסטטוס הבקרה. נמסר כמשתנה CSS ונצרך ב-CSS על התאים ולא
+     * על ה-‎tr‎, מפני שרקע על שורה בטבלה נחתך בחלק מהדפדפנים.
+     *
+     * ‎style‎ כמחרוזת ולא כאובייקט: ‎el‎ מחיל אובייקט סגנון דרך
+     * ‎Object.assign‎, וזה מתעלם בשקט ממשתני CSS. הצבע מאומת כ-hex אף
+     * שמקורו ברשימה סגורה בשרת — ערך שנכנס לתוך תכונת ‎style‎ אינו מקום
+     * להסתמך על מקור אמין.
+     */
+    const tinted = /^#[0-9a-f]{6}$/i.test(task.trackStatusColor ?? '');
+    const tint = tinted ? { style: `--row-tint: ${task.trackStatusColor}` } : {};
+
+    return el(`tr.tr-parent${isOpen ? '.is-open' : ''}${tinted ? '.is-tinted' : ''}`, tint, [
       // עמודת הפרויקט: נקודת הצבע שלו ושמו, אותו סימון שבשורות המשימות בלוח
       el('td', {}, [
         task.projectId
@@ -192,6 +226,7 @@ const TrackerView = (() => {
         ])
       ]),
       el('td', {}, [dueCell(task)]),
+      el('td', {}, [trackCell(task)]),
       el('td', {}, [shortStatusCell(task)]),
       el('td', {}, [
         sub
@@ -219,7 +254,7 @@ const TrackerView = (() => {
    * הם באותה שורה ממש מעליה.
    */
   const subRow = (sub) => el(`tr.tr-sub${sub.isFinal ? '.is-done' : ''}`, {}, [
-    el('td', { colspan: '4' }, [
+    el('td', { colspan: '5' }, [
       el('div.tr-subtitle', {}, [
         el('span.tr-branch', { text: '↳' }),
         el('span.dot-chip', { title: sub.statusLabel, style: { background: sub.statusColor } }),
@@ -298,7 +333,7 @@ const TrackerView = (() => {
         const cached = task.__subs;
         if (cached) body.push(...cached.map(subRow));
         else {
-          body.push(el('tr.tr-sub', {}, [el('td', { colspan: '8' }, [UI.spinner()])]));
+          body.push(el('tr.tr-sub', {}, [el('td', { colspan: '9' }, [UI.spinner()])]));
           API.task(task.id).then((d) => { task.__subs = d.task.subtasks ?? []; draw(); }).catch(() => {});
         }
       }
@@ -317,14 +352,15 @@ const TrackerView = (() => {
               el('th', { text: 'פרויקט', style: { width: '150px' } }),
               el('th', { text: 'משימה' }),
               el('th', { text: 'תאריך יעד', style: { width: '128px' } }),
-              el('th', { text: 'סטטוס מקוצר', style: { width: '18%' } }),
+              el('th', { text: 'סטטוס בקרה', style: { width: '150px' } }),
+              el('th', { text: 'סטטוס מקוצר', style: { width: '16%' } }),
               el('th', { text: 'תת-משימה' }),
               el('th', { text: 'אחראי', style: { width: '150px' } }),
               el('th', { text: 'תאריך יעד', style: { width: '128px' } }),
               el('th', { text: '', style: { width: '120px' } })
             ])]),
             el('tbody', {}, body.length ? body : [
-              el('tr', {}, [el('td', { colspan: '8' }, [
+              el('tr', {}, [el('td', { colspan: '9' }, [
                 UI.empty(savedScope() === 'mine' && allOpen > 0
                   ? 'אין משימות פתוחות בפרויקטים שלך — נסה "כל הארגון"'
                   : 'אין משימות פתוחות בחתך הזה', UI.icon('board'))
