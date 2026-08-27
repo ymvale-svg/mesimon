@@ -108,6 +108,8 @@ const HomeView = (() => {
         ]),
         el('div.flex-col', { style: { gap: '14px' } }, [
           calendarCard(data.weekAhead),
+          // לפני הפיד: תיוג הוא בקשה שממתינה לי, והפיד הוא רקע
+          mentionsCard(data.mentions),
           feedCard(data.feed)
         ])
       ])
@@ -594,8 +596,48 @@ const HomeView = (() => {
           : null
       ]),
       el('div.card-pad', {}, [
-        items.length ? scrollBox(items.map(feedRow)) : UI.empty('אין עדכונים אחרונים', '📰')
+        items.length
+          ? scrollBox(items.map(feedRow))
+          : UI.empty('אין עדכונים במשימות ובפרויקטים שלך', '📰')
       ])
+    ]);
+  }
+
+  /**
+   * הודעות שתויגתי בהן.
+   *
+   * כרטיס נפרד ולא שורות בפיד: תיוג הוא בקשה מפורשת שאדם הפנה אליי, וזה
+   * הדבר שהכי לא צריך להיעלם. בפיד הכללי הוא נבלע בין עדכוני סטטוס ותאריכים.
+   *
+   * הכרטיס אינו נבנה כשאין תיוגים — מסך הבית עמוס דיו בלי כרטיס ריק.
+   */
+  function mentionsCard(mentions) {
+    if (!mentions?.length) return null;
+
+    const row = (m) => el('div.mention-item', {
+      title: 'פתיחת המשימה',
+      onclick: () => TaskCardView.open(m.taskId)
+    }, [
+      el('div.flex', { style: { gap: '7px' } }, [
+        UI.avatar(m.authorName, { small: true }),
+        el('b', { text: m.authorName, style: { fontSize: '12.5px' } }),
+        m.internal ? el('span.mute-sm', { title: 'הערה פנימית', text: '🔒' }) : null,
+        el('div.spacer'),
+        el('small.mute-sm', { text: UI.relative(m.createdAt) })
+      ]),
+      // התיוג מוצג מודגש בתוך ההודעה, כמו בשרשור עצמו — לכן נדרשת רשימת השמות
+      el('div.mi-body', {}, [UI.renderMentions(m.body, App.state.users.map((u) => u.name))]),
+      el('div.mi-task', { text: m.taskTitle })
+    ]);
+
+    return el('div.card', {}, [
+      el('div.card-head', {}, [
+        el('span', { text: '@', style: { fontWeight: '800', color: 'var(--brand)' } }),
+        el('h3', { text: 'תויגת בהודעות' }),
+        el('div.spacer'),
+        el('span.mute-sm', { text: countLabel(mentions.length, 'הודעה אחת', 'הודעות') })
+      ]),
+      el('div.card-pad', {}, [scrollBox(mentions.map(row), { maxHeight: '300px' })])
     ]);
   }
 

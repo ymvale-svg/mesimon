@@ -2160,11 +2160,34 @@ router.get('/api/home', async (req, res, ctx) => {
     awaitingApproval = mine.filter((t) => ['pending_team_review', 'in_team_review', 'uploaded'].includes(t.status));
   }
 
+  /**
+   * פיד העדכונים — בהקשר של המשתמש בלבד.
+   *
+   * עד כה הפיד הראה כל מה שמותר לראות, ולמנהל מערכת זה כל הארגון: מסך הבית
+   * שלו התמלא בעדכונים על משימות של מחלקות אחרות, ובתוכם נעלמו העדכונים
+   * שנוגעים אליו. פיד שאי אפשר לסרוק אינו פיד.
+   *
+   * ההיקף: משימות שהוקצו לי, ומשימות בפרויקטים שאני אחראי עליהם — אותה
+   * הגדרת בעלות שקובעת את "שלי" בתפריט (ownedProjectIds).
+   *
+   * הסינון ב-SQL ולא בקוד: הגרסה הקודמת שלפה 200 שורות ואז הריצה שאילתה
+   * לכל אחת מהן, וכשרובן נפלו בסינון היא נשארה עם רשימה קצרה מדי.
+   */
+  const ownedForFeed = isVendor(actor) ? new Set() : ownedProjectIds(actor);
+  const feedParams = [actor.type === 'vendor' ? 'vendor' : 'user', actor.id];
+  const projectClause = ownedForFeed.size
+    ? ` OR t.project_id IN (${[...ownedForFeed].map(() => '?').join(',')})`
+    : '';
+  feedParams.push(...ownedForFeed);
+
   const feed = D.all(
     `SELECT a.*, t.title AS task_title FROM audit_log a
        JOIN tasks t ON t.id = a.task_id
-      ORDER BY a.created_at DESC, a.id DESC LIMIT 200`
+      WHERE (t.assignee_type = ? AND t.assignee_id = ?)${projectClause}
+      ORDER BY a.created_at DESC, a.id DESC LIMIT 120`,
+    ...feedParams
   ).filter((row) => {
+    // שכבת הגנה שנייה: ההיקף אינו תחליף להרשאה
     const task = D.get('SELECT * FROM tasks WHERE id = ?', row.task_id);
     return task && canSeeTask(actor, task);
   }).slice(0, 60).map((row) => ({
@@ -2174,6 +2197,36 @@ router.get('/api/home', async (req, res, ctx) => {
     actorType: row.actor_type ?? 'system',
     taskId: row.task_id,
     taskTitle: row.task_title, createdAt: row.created_at
+  }));
+
+  /**
+   * הודעות שתויגתי בהן. זה מה שאדם אחר ביקש ממני במפורש, ולכן הוא הדבר
+   * שהכי לא צריך להיעלם — ובפיד הכללי הוא נבלע בין עדכוני סטטוס.
+   *
+   * הערה פנימית אינה נשלחת לספק, גם אם תויג בה בטעות.
+   */
+  const mentions = isVendor(actor) ? [] : D.all(
+    `SELECT c.id, c.body, c.internal, c.created_at, c.author_type, c.author_id,
+            c.task_id, t.title AS task_title
+       FROM comment_mentions m
+       JOIN comments c ON c.id = m.comment_id
+       JOIN tasks t ON t.id = c.task_id
+      WHERE m.user_id = ?
+      ORDER BY c.created_at DESC, c.id DESC LIMIT 40`,
+    actor.id
+  ).filter((row) => {
+    const task = D.get('SELECT * FROM tasks WHERE id = ?', row.task_id);
+    return task && canSeeTask(actor, task);
+  }).slice(0, 8).map((row) => ({
+    id: row.id,
+    body: row.body,
+    internal: !!row.internal,
+    createdAt: row.created_at,
+    taskId: row.task_id,
+    taskTitle: row.task_title,
+    authorName: row.author_type === 'vendor'
+      ? D.get('SELECT name FROM vendors WHERE id = ?', row.author_id)?.name ?? 'ספק'
+      : D.get('SELECT full_name FROM users WHERE id = ?', row.author_id)?.full_name ?? 'משתמש'
   }));
 
   const weekAhead = openMine
@@ -2191,6 +2244,7 @@ router.get('/api/home', async (req, res, ctx) => {
     // כמה ימים משימה שהושלמה נשארת כאן — הממשק אומר זאת למשתמש במקום להסתיר
     archiveAfterDays: Number(D.getSetting('archive_done_after_days', 3)),
     feed,
+    mentions,
     weekAhead
   });
 });
