@@ -508,7 +508,7 @@ const notifyListeners = [];
 const onNotify = (fn) => { if (typeof fn === 'function') notifyListeners.push(fn); };
 
 function notify({ targetType, targetId, kind, title, body = '', taskId = null }) {
-  run(
+  const res = run(
     'INSERT INTO notifications (target_type, target_id, kind, title, body, task_id, is_read, created_at) VALUES (?,?,?,?,?,?,0,?)',
     targetType,
     targetId,
@@ -518,9 +518,15 @@ function notify({ targetType, targetId, kind, title, body = '', taskId = null })
     taskId,
     nowIso()
   );
+  /*
+   * המזהה נמסר למאזינים כדי שההתראה שנדחפת למכשיר תישא את אותו ‎tag‎ שנושאת
+   * ההתראה שהלקוח מציג בעצמו. תגיות שונות פירושן שתי התראות נפרדות על אותו
+   * דבר, ואותה תגית פירושה שהשנייה מחליפה את הראשונה.
+   */
+  const id = Number(res.lastInsertRowid);
   // כשל אצל מאזין אינו מבטל את ההתראה עצמה — היא כבר נשמרה
   for (const fn of notifyListeners) {
-    try { fn({ targetType, targetId, kind, title, body, taskId }); } catch { /* בשקט */ }
+    try { fn({ id, targetType, targetId, kind, title, body, taskId }); } catch { /* בשקט */ }
   }
 }
 

@@ -12,7 +12,7 @@
  */
 
 // שינוי המספר מפסל את המטמון הקודם ומאלץ טעינה מחדש של קבצי המערכת
-const VERSION = 'mesimon-v3';
+const VERSION = 'mesimon-v4';
 
 /**
  * מה נשמר מראש. רק מה שנדרש כדי שהמסך ייבנה: אם אחד מהם חסר, האפליקציה לא
@@ -90,7 +90,12 @@ self.addEventListener('push', (event) => {
     dir: 'rtl',
     // נשארת עד שנוגעים בה — התראה שהגיעה כשלא הסתכלת ונעלמה אינה התראה
     requireInteraction: true,
-    tag: data.taskId ? `mesimon-task-${data.taskId}` : 'mesimon-push',
+    /*
+     * אותה תגית שהדף משתמש בה להתראה מקומית, ולפי מזהה ההתראה. אם שני
+     * המסלולים בכל זאת ירוצו על אותה התראה, השנייה תחליף את הראשונה במקום
+     * להופיע לצדה — וזה בדיוק מה שגרם לכפילות.
+     */
+    tag: data.id ? `mesimon-${data.id}` : (data.taskId ? `mesimon-task-${data.taskId}` : 'mesimon-push'),
     data: { taskId: data.taskId ?? null }
   }));
 });

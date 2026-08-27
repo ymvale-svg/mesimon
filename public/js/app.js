@@ -303,6 +303,12 @@ const App = (() => {
    * (‎pushsubscriptionchange‎), והשרת שומר לפי endpoint — ולכן רישום חוזר
    * מעדכן ואינו מכפיל. נכשלת בשקט: התראות דחיפה הן שיפור, לא תנאי לעבודה.
    */
+  /*
+   * האם המכשיר הזה רשום לדחיפה. נשמר כאן ולא נשאל בכל התראה: הוא קובע אם
+   * הלקוח מציג התראת מערכת בעצמו, וזו הכרעה שנדרשת בכל התראה שמגיעה.
+   */
+  let pushActive = false;
+
   async function subscribeToPush() {
     if (!('serviceWorker' in navigator) || !('PushManager' in window)) return;
     if (Notification.permission !== 'granted') return;
@@ -320,7 +326,9 @@ const App = (() => {
         });
       }
       await API.pushSubscribe(sub.toJSON());
+      pushActive = true;
     } catch (err) {
+      pushActive = false;
       console.warn('[משימון] הרשמה להתראות דחיפה נכשלה:', err.message);
     }
   }
@@ -381,6 +389,20 @@ const App = (() => {
   async function showDesktopNotification(n) {
     if (desktopNotifState() !== 'granted') return false;
     if (!desktopKindEnabled(n.kind)) return false;
+
+    /*
+     * כשהמכשיר רשום לדחיפה, השרת הוא שמציג את ההתראה — ואין להציג אותה גם
+     * מכאן. שני המסלולים יחד הם מה שגרם לכל התראה לקפוץ פעמיים: הסקר כל
+     * חצי דקה מצא את ההתראה והציג, והדחיפה הציגה את אותה התראה שוב.
+     *
+     * הדחיפה היא המסלול המועדף מפני שהוא עובד גם כשמשימון סגור לגמרי, ולכן
+     * הוא נשאר והמסלול המקומי מפנה לו את הדרך. המקומי נשאר כגיבוי למכשיר
+     * שאינו רשום לדחיפה — דפדפן בלי Push API, או הרשמה שנכשלה.
+     *
+     * ‎true‎ מוחזר בכל זאת, כדי שהכרטיס בתוך הדף לא יוצג: ההתראה כן תגיע,
+     * רק דרך הדחיפה.
+     */
+    if (pushActive) return true;
 
     const parts = notifParts(n);
 

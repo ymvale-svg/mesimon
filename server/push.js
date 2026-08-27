@@ -194,7 +194,7 @@ function kindEnabled(userId, kind) {
  * שהמכשיר לא קיים. במקרה כזה השורה נמחקת, אחרת הטבלה מתמלאת בהרשמות מתות
  * שכל התראה מנסה לפנות אליהן שוב.
  */
-async function deliver({ targetType, targetId, kind, title, body, taskId }) {
+async function deliver({ id, targetType, targetId, kind, title, body, taskId }) {
   if (targetType !== 'user') return;                 // לספק אין אפליקציה מותקנת
   if (!kindEnabled(targetId, kind)) return;
 
@@ -202,6 +202,8 @@ async function deliver({ targetType, targetId, kind, title, body, taskId }) {
   if (!rows.length) return;
 
   const payload = JSON.stringify({
+    // המזהה נדרש ל-tag: אותה תגית שהלקוח משתמש בה, כדי שלא תוצגנה שתי התראות
+    id: id ?? null,
     title: title ?? 'משימון',
     body: body ?? '',
     taskId: taskId ?? null,
