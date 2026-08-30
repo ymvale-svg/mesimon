@@ -736,6 +736,14 @@ function listProjectsFor(actor) {
       // הצבע שנבחר בפועל, להבדיל מהנגזר — כדי שבורר הצבע יידע אם יש בחירה
       colorChosen: p.color || null,
       mine: mineIds.has(p.id),
+      /*
+       * המחלקה של הפרויקט נגזרת ממנהל המשימות שלו — אין לפרויקט שדה מחלקה
+       * משלו, וזו ההשתייכות היחידה שקיימת בפועל. פרויקט בלי מנהל אינו שייך
+       * לאיש, ולכן הוא מוצע לכולם ולא נעלם מאף אחד.
+       */
+      departmentId: p.manager_id
+        ? D.get('SELECT department_id FROM users WHERE id = ?', p.manager_id)?.department_id ?? null
+        : null,
       parentProjectId: p.parent_project_id ?? null,
       statusOwnerId: p.status_owner_id ?? null,
       statusOwnerName: p.status_owner_id
@@ -2039,11 +2047,36 @@ router.patch('/api/projects/:id', async (req, res, ctx) => {
   sendJson(res, 200, { projects: listProjectsFor(actor) });
 });
 
+/**
+ * מחיקת פרויקט.
+ *
+ * מה שקורה בפועל, ולמה זה בטוח יחסית: המשימות אינן נמחקות — ‎project_id‎
+ * מוגדר ‎ON DELETE SET NULL‎, והן עוברות ל"ללא פרויקט" בלוח. תתי-פרויקטים
+ * עולים לרמה הראשית. מה שכן נמחק לצמיתות: הנעיצות והתמונות של הפרויקט.
+ *
+ * המספרים נספרים לפני המחיקה ומוחזרים ללקוח, כדי שההודעה תאמר מה קרה
+ * בפועל ולא נוסח כללי. מחיקה שקטה של פרויקט עם ארבעים משימות היא בדיוק
+ * הפעולה שאסור שתיראה כמו הצלחה חלקה.
+ */
 router.delete('/api/projects/:id', async (req, res, ctx) => {
   const actor = ctx.requireActor();
   requireFullPerm(actor, 'create_project');
-  D.run('DELETE FROM projects WHERE id = ?', Number(ctx.params.id));
-  sendJson(res, 200, { projects: listProjectsFor(actor) });
+  const id = Number(ctx.params.id);
+  const project = D.get('SELECT * FROM projects WHERE id = ?', id);
+  if (!project) throw notFound('הפרויקט לא נמצא');
+
+  const tasks = D.get('SELECT COUNT(*) c FROM tasks WHERE project_id = ?', id).c;
+  const subs = D.get('SELECT COUNT(*) c FROM projects WHERE parent_project_id = ?', id).c;
+
+  D.run('DELETE FROM projects WHERE id = ?', id);
+  console.log(`[משימון] נמחק פרויקט "${project.name}" (#${id}) — ${tasks} משימות נותקו`);
+
+  sendJson(res, 200, {
+    projects: listProjectsFor(actor),
+    name: project.name,
+    tasksDetached: tasks,
+    subProjectsDetached: subs
+  });
 });
 
 // ---------------------------------------------------------------------------

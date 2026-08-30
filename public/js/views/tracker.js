@@ -455,6 +455,14 @@ const TrackerView = (() => {
         }, [label])
       )),
       el('div.spacer'),
+      App.may('create_task')
+        ? el('button.btn.btn-sm.btn-primary', {
+            onclick: () => BoardView.openTaskDialog(null, { projectId: savedProject() || undefined })
+          }, ['＋ משימה חדשה'])
+        : null,
+      App.may('create_project')
+        ? el('button.btn.btn-sm', { onclick: () => BoardView.openProjectDialog() }, ['＋ פרויקט חדש'])
+        : null,
       /*
        * הורדה בניווט ולא ב-fetch: כך הדפדפן מטפל בקובץ כהורדה רגילה, עם שם
        * הקובץ שהשרת קבע. בנייה של blob בלקוח הייתה מחייבת לקרוא את הקובץ

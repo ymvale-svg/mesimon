@@ -195,6 +195,11 @@ const BoardView = (() => {
       App.may('export_data')
         ? el('a.btn', { href: '/api/export/tasks.csv' }, ['⬇ ייצוא CSV'])
         : null,
+      // פרויקט חדש לצד משימה חדשה: פתיחת פרויקט היא פעולה שנעשית מאותו מקום
+      // ובאותו רגע — כשמתברר שהמשימה החדשה אינה שייכת לשום פרויקט קיים
+      App.may('create_project') && filters.archived !== '1'
+        ? el('button.btn', { onclick: () => openProjectDialog() }, ['＋ פרויקט חדש'])
+        : null,
       App.may('create_task') && filters.archived !== '1'
         ? el('button.btn.btn-primary', {
             onclick: () => openTaskDialog(null, { projectId: filters.projectId, scope: currentScope })
@@ -564,9 +569,26 @@ const BoardView = (() => {
     const descInput = el('textarea', { placeholder: 'תיאור מפורט (אופציונלי)' });
     descInput.value = task?.description ?? '';
 
+    /**
+     * הפרויקטים של המחלקה שלי בלבד. בארגון עם עשרים פרויקטים רשימה מלאה
+     * מכריחה לחפש בין פרויקטים של מחלקות אחרות שלעולם לא אקצה אליהם.
+     *
+     * מחלקת הפרויקט נגזרת ממנהל המשימות שלו. פרויקט בלי מנהל אינו שייך
+     * לאיש ולכן הוא מוצג לכולם, ומי שאין לו מחלקה (הנהלה, מנהל מערכת) רואה
+     * את הכול — סינון לפי מחלקה ריקה היה משאיר אותו עם רשימה ריקה.
+     *
+     * הפרויקט הנוכחי של המשימה מוצג תמיד, גם אם אינו במחלקה שלי: עריכת
+     * משימה לא תזיז אותה בשקט מהפרויקט שהיא נמצאת בו.
+     */
+    const deptForProjects = App.state.actor?.departmentId ?? null;
+    const current = task?.projectId ?? opts.projectId ?? '';
+    const visibleProjects = App.state.projects.filter((p) =>
+      !deptForProjects || !p.departmentId
+      || p.departmentId === deptForProjects || String(p.id) === String(current));
+
     const projectSelect = UI.select(
-      [{ value: '', label: 'ללא פרויקט' }, ...App.state.projects.map((p) => ({ value: p.id, label: p.name }))],
-      task?.projectId ?? opts.projectId ?? ''
+      [{ value: '', label: 'ללא פרויקט' }, ...visibleProjects.map((p) => ({ value: p.id, label: p.name }))],
+      current
     );
 
     /*
@@ -970,18 +992,45 @@ const BoardView = (() => {
 
     const saveBtn = el('button.btn.btn-primary', {}, [isEdit ? 'שמירה' : 'יצירת פרויקט']);
     const footer = [saveBtn, el('div.spacer')];
-    if (isEdit) {
+
+    /*
+     * המחיקה דורשת הרשאה מלאה, כמו בשרת. הכפתור הוצג קודם לכל מי שערך
+     * פרויקט, כולל עובד שפתח אותו בעצמו — והלחיצה הסתיימה ב-403. כפתור
+     * שנראה זמין ואינו עובד גרוע מכפתור שאינו קיים.
+     */
+    if (isEdit && App.can('create_project')) {
       footer.push(el('button.btn.btn-danger', {
         onclick: async () => {
-          if (!await UI.confirm(`למחוק את הפרויקט "${project.name}"? המשימות יישארו במערכת ללא שיוך.`, { danger: true, okText: 'מחיקה' })) return;
+          /*
+           * האישור אומר בדיוק מה יקרה, עם המספרים האמיתיים של הפרויקט הזה.
+           * המשימות אינן נמחקות — הן עוברות ל"ללא פרויקט" — וזה ההבדל בין
+           * פעולה שאפשר להתאושש ממנה לבין מחיקה של עבודה, והמשתמש צריך
+           * לדעת אותו לפני הלחיצה ולא אחריה.
+           */
+          const parts = [`הפרויקט "${project.name}" יימחק.`];
+          if (project.tasksTotal) {
+            parts.push(`${project.tasksTotal} המשימות שבו לא יימחקו — הן יעברו ל"ללא פרויקט" ויישארו בלוח.`);
+          }
+          if (project.subProjectsCount) {
+            parts.push(`${project.subProjectsCount} תתי-פרויקטים יעלו לרמה הראשית.`);
+          }
+          parts.push('הלוגו והתמונות של הפרויקט יימחקו לצמיתות.');
+
+          if (!await UI.confirm(parts.join(' '), {
+            title: 'מחיקת פרויקט', danger: true, okText: 'מחיקת הפרויקט'
+          })) return;
+
           try {
-            await API.deleteProject(project.id);
+            const r = await API.deleteProject(project.id);
             m.close();
             await App.reloadReference();
             App.navigate('board');
+            UI.success(r.tasksDetached
+              ? `הפרויקט נמחק · ${r.tasksDetached} משימות עברו ל"ללא פרויקט"`
+              : 'הפרויקט נמחק');
           } catch (err) { UI.error(err); }
         }
-      }, ['מחיקה']));
+      }, ['מחיקת פרויקט']));
     }
 
     const m = UI.modal({ title: isEdit ? 'עריכת פרויקט' : 'פרויקט חדש', body, footer });
