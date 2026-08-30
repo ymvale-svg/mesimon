@@ -1636,3 +1636,12 @@ input[type="color"] { width: 46px; height: 30px; padding: 2px; cursor: pointer; 
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .mention-item .mi-task::before { content: '📋 '; }
+
+/* כותרת קבוצה ברשימת בחירה נפתחת — אותו תפקיד שיש ל-optgroup ברשימה רגילה */
+.popover-list .popover-group {
+  padding: 7px 10px 3px; font-size: 11px; font-weight: 700;
+  color: var(--text-mute); letter-spacing: .02em;
+}
+.popover-list .popover-group:not(:first-child) {
+  border-top: 1px solid var(--border); margin-top: 4px;
+}

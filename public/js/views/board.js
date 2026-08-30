@@ -604,9 +604,7 @@ const BoardView = (() => {
       // רמת הגישה מצורפת לשם רק כשהצופה רשאי לראות רמות
       label: u.roleLabel ? `${u.name} — ${u.roleLabel}` : u.name
     });
-    const myDept = App.state.actor?.departmentId ?? null;
-    const near = myDept ? App.state.users.filter((u) => u.departmentId === myDept) : [];
-    const far = App.state.users.filter((u) => !near.includes(u));
+    const { near, far, deptName } = UI.usersByDepartment();
 
     const vendorOptions = App.may('assign_task_to_vendor')
       ? App.state.vendors.filter((v) => v.status === 'active')
@@ -618,7 +616,7 @@ const BoardView = (() => {
       // קבוצות רק כשיש בהן טעם — במחלקה אחת בלבד הכותרות היו רעש
       ...(near.length && far.length
         ? [
-            { label: App.state.actor.department || 'המחלקה שלי', options: near.map(userOption) },
+            { label: deptName, options: near.map(userOption) },
             { label: 'שאר הארגון', options: far.map(userOption) }
           ]
         : [...near, ...far].map(userOption)),

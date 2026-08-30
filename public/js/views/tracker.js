@@ -191,9 +191,14 @@ const TrackerView = (() => {
 
   function assigneeCell(sub) {
     if (!sub) return el('span.mute-sm', { text: '—' });
+    // אותו סדר כמו בכל שאר בוררי האחראי במערכת
+    const { near, far, deptName } = UI.usersByDepartment();
+    const opt = (u) => ({ value: `user:${u.id}`, label: u.name });
     const options = [
       { value: '', label: 'ללא אחראי' },
-      ...App.state.users.map((u) => ({ value: `user:${u.id}`, label: u.name }))
+      ...(near.length && far.length
+        ? [{ label: deptName, options: near.map(opt) }, { label: 'שאר הארגון', options: far.map(opt) }]
+        : [...near, ...far].map(opt))
     ];
     const current = sub.assigneeId ? `${sub.assigneeType}:${sub.assigneeId}` : '';
     return UI.select(options, current, {

@@ -529,11 +529,21 @@ const TaskCardView = (() => {
         })
       : el('div', {}, [UI.statusTag(task)]);
 
+    // חברי המחלקה בראש הרשימה — אותו סדר בכל מקום שבו בוחרים אחראי
+    const { near: nearUsers, far: farUsers, deptName } = UI.usersByDepartment();
+    const asOption = (u) => ({ value: `user:${u.id}`, label: u.name });
+    const vendorOpts = App.may('assign_task_to_vendor')
+      ? App.state.vendors.map((v) => ({ value: `vendor:${v.id}`, label: `${v.name} (ספק)` }))
+      : [];
+
     const assigneeControl = task.permissions.edit
       ? UI.select([
           { value: '', label: 'ללא אחראי' },
-          ...App.state.users.map((u) => ({ value: `user:${u.id}`, label: u.name })),
-          ...(App.may('assign_task_to_vendor') ? App.state.vendors.map((v) => ({ value: `vendor:${v.id}`, label: `${v.name} (ספק)` })) : [])
+          ...(nearUsers.length && farUsers.length
+            ? [{ label: deptName, options: nearUsers.map(asOption) },
+               { label: 'שאר הארגון', options: farUsers.map(asOption) }]
+            : [...nearUsers, ...farUsers].map(asOption)),
+          ...(vendorOpts.length ? [{ label: 'ספקים חיצוניים', options: vendorOpts }] : [])
         ], task.assigneeId ? `${task.assigneeType}:${task.assigneeId}` : '', {
           onchange: async (e) => {
             const [type, id] = e.target.value ? e.target.value.split(':') : [null, null];

@@ -295,27 +295,42 @@ const GridView = (() => {
       inner.classList.add('editable');
       inner.addEventListener('click', (e) => {
         e.stopPropagation();
-        const options = [
-          { value: '', label: 'ללא אחראי', vendor: false },
-          ...App.state.users.map((u) => ({ value: `user:${u.id}`, label: u.name, vendor: false })),
-          ...(App.may('assign_task_to_vendor')
-            ? App.state.vendors.filter((v) => v.status === 'active').map((v) => ({ value: `vendor:${v.id}`, label: v.name, vendor: true }))
-            : [])
-        ];
+        /*
+         * חברי המחלקה שלי בראש הרשימה, תחת כותרת — אותו סדר שקיים בחלון
+         * המשימה, בכרטיס ובתיוג ‎@‎. ברשימה של חמישים אנשים מי שיושב איתי
+         * נופל בדיוק באמצע, והוא זה שאליו מקצים כמעט תמיד.
+         */
+        const { near, far, deptName } = UI.usersByDepartment();
+        const userOpt = (u) => ({ value: `user:${u.id}`, label: u.name, vendor: false });
+        const vendors = App.may('assign_task_to_vendor')
+          ? App.state.vendors.filter((v) => v.status === 'active')
+            .map((v) => ({ value: `vendor:${v.id}`, label: v.name, vendor: true }))
+          : [];
+
         const current = task.assigneeId ? `${task.assigneeType}:${task.assigneeId}` : '';
-        popover(inner, el('div.popover-list', {}, options.map((o) =>
-          el('button.popover-option', {
-            onclick: () => {
-              const [type, id] = o.value ? o.value.split(':') : [null, null];
-              patch(task, { assigneeType: type, assigneeId: id ? Number(id) : null });
-            }
-          }, [
-            o.value ? UI.avatar(o.label, { small: true, vendor: o.vendor }) : el('span.swatch', { style: { background: '#e2e8f0' } }),
-            o.label,
-            o.vendor ? el('span.tag.tag-vendor', {}, ['ספק']) : null,
-            o.value === current ? el('span.check', { text: '✓' }) : null
-          ])
-        )));
+        const option = (o) => el('button.popover-option', {
+          onclick: () => {
+            const [type, id] = o.value ? o.value.split(':') : [null, null];
+            patch(task, { assigneeType: type, assigneeId: id ? Number(id) : null });
+          }
+        }, [
+          o.value ? UI.avatar(o.label, { small: true, vendor: o.vendor }) : el('span.swatch', { style: { background: '#e2e8f0' } }),
+          o.label,
+          o.vendor ? el('span.tag.tag-vendor', {}, ['ספק']) : null,
+          o.value === current ? el('span.check', { text: '✓' }) : null
+        ]);
+
+        // כותרות רק כשיש שתי קבוצות — במחלקה אחת הן רעש
+        const grouped = near.length && far.length;
+        popover(inner, el('div.popover-list', {}, [
+          option({ value: '', label: 'ללא אחראי', vendor: false }),
+          grouped ? el('div.popover-group', { text: deptName }) : null,
+          ...near.map((u) => option(userOpt(u))),
+          grouped ? el('div.popover-group', { text: 'שאר הארגון' }) : null,
+          ...far.map((u) => option(userOpt(u))),
+          vendors.length ? el('div.popover-group', { text: 'ספקים חיצוניים' }) : null,
+          ...vendors.map(option)
+        ]));
       });
     }
     cell.appendChild(inner);

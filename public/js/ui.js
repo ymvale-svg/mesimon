@@ -380,6 +380,28 @@ const UI = (() => {
    * אפשר להציב את חברי המחלקה בראש רשימה של חמישים אנשים תחת כותרת, ולא
    * סתם למעלה בלי הסבר למה הסדר אינו אלפביתי.
    */
+  /**
+   * חלוקת המשתמשים לשתי קבוצות: המחלקה שלי, ואחריה שאר הארגון.
+   *
+   * בארגון של חמישים אנשים רשימה אלפביתית מציבה את מי שיושב איתי באמצע,
+   * וכמעט תמיד אליו אני מקצה. מרוכז כאן ולא בכל מסך בנפרד, כי אותה רשימה
+   * מופיעה בארבעה מקומות — חלון המשימה, הטבלה, כרטיס המשימה ומסך הבקרה —
+   * וסדר שונה בין מסך למסך מבלבל יותר מסדר אלפביתי.
+   *
+   * מי שאין לו מחלקה מקבל רשימה אחת ללא חלוקה, כי אין למה להשוות.
+   */
+  function usersByDepartment(users) {
+    const list = users ?? App.state.users ?? [];
+    const myDept = App.state.actor?.departmentId ?? null;
+    const near = myDept ? list.filter((u) => u.departmentId === myDept) : [];
+    const nearIds = new Set(near.map((u) => u.id));
+    return {
+      near,
+      far: list.filter((u) => !nearIds.has(u.id)),
+      deptName: App.state.actor?.department || 'המחלקה שלי'
+    };
+  }
+
   function select(options, value, props = {}) {
     const build = (o) => (Array.isArray(o.options)
       ? el('optgroup', { label: o.label }, o.options.map(build))
@@ -1020,6 +1042,7 @@ const UI = (() => {
     initials, avatar, priorityTag, statusTag, taskTags,
     modal, confirm, prompt, toast, error, success, notifyPop, clearNotifyPops,
     empty, spinner, field, select, renderMentions, fileSize, fileIcon, announceAutoStatus,
+    usersByDepartment,
     preview, previewUrls, canPreview, PROJECT_COLORS, commentThread, icon,
     logo, logoMark, companyLogo, refitLogos
   };
