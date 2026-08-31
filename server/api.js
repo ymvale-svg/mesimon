@@ -2060,10 +2060,22 @@ router.patch('/api/projects/:id', async (req, res, ctx) => {
  */
 router.delete('/api/projects/:id', async (req, res, ctx) => {
   const actor = ctx.requireActor();
-  requireFullPerm(actor, 'create_project');
   const id = Number(ctx.params.id);
   const project = D.get('SELECT * FROM projects WHERE id = ?', id);
   if (!project) throw notFound('הפרויקט לא נמצא');
+
+  /*
+   * שתי בדיקות נפרדות, ושתיהן נדרשות.
+   *
+   * ‎requireFullPerm‎ קובע *מי* מוחק בכלל — מחיקה אינה ברמת 'own', ולכן עובד
+   * פנימי אינו מוחק גם את מה שפתח.
+   *
+   * ‎assertMayEditProject‎ קובע *מה* מותר לו למחוק. בלעדיו מנהל מחלקה מחק
+   * פרויקטים של מחלקות אחרות, שלא הופיעו אצלו ברשימה כלל — בדיקת ההרשאה
+   * לבדה עברה, כי היא אינה יודעת על איזה פרויקט מדובר.
+   */
+  requireFullPerm(actor, 'create_project');
+  assertMayEditProject(actor, project);
 
   const tasks = D.get('SELECT COUNT(*) c FROM tasks WHERE project_id = ?', id).c;
   const subs = D.get('SELECT COUNT(*) c FROM projects WHERE parent_project_id = ?', id).c;
@@ -2572,8 +2584,26 @@ const departmentName = (id) => (id ? D.get('SELECT name FROM departments WHERE i
  * מנהלם. בלי הבדיקה הזו ההרשאה לפתוח פרויקט הייתה גם הרשאה לשנות את שמו,
  * את מנהלו ואת תמונותיו של כל פרויקט אחר בארגון.
  */
+/**
+ * האם ‎actor‎ רשאי לגעת בפרויקט הזה.
+ *
+ * שתי בדיקות, ולא אחת:
+ *
+ * 1. ראייה. מי שאינו רשאי לראות את הפרויקט אינו רשאי לגעת בו. בלי זה נפער
+ *    חור אמיתי: מנהל מחלקה מחזיק ‎create_project: true‎, ולכן עבר את בדיקת
+ *    ההרשאה וערך ומחק פרויקטים של מחלקות אחרות — פרויקטים שלא הופיעו אצלו
+ *    ברשימה בכלל. רמת הרשאה אומרת *מה* מותר לעשות, לא *על מה*.
+ *
+ * 2. בעלות, לרמה ‎'own'‎ בלבד. עובד פנימי עורך את מה שפתח או שהוא מנהלו.
+ */
 function assertMayEditProject(actor, project) {
   requirePerm(actor, 'create_project');
+
+  const visible = visibleProjectIds(actor);
+  if (visible !== null && !visible.has(project.id)) {
+    throw forbidden('אין לך גישה לפרויקט הזה');
+  }
+
   if (P.level(actor, 'create_project') === 'own'
       && project.created_by !== actor.id && project.manager_id !== actor.id) {
     throw forbidden('אפשר לערוך רק פרויקט שפתחת או שאתה מנהלו');
