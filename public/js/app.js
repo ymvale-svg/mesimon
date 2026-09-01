@@ -1056,47 +1056,99 @@ const App = (() => {
 
   // ------------------------------------------------------------- חיפוש גלובלי
 
+  /**
+   * חיפוש כללי.
+   *
+   * מהתו הראשון ולא משניים, ובהשהיה קצרה — התוצאה צריכה להופיע תוך כדי
+   * ההקלדה. ‎120‎ מילישניות ולא אפס: הקלדה מהירה של מילה בת שש אותיות הייתה
+   * שולחת שש בקשות שכולן נזרקות מלבד האחרונה.
+   *
+   * כל שורה נושאת תיוג של סוג הפריט ואת המקום שבו נמצאה ההתאמה. בלי המקום,
+   * משימה שצצה בגלל מילה שקבורה בתגובה נראית כתוצאה מוטעית.
+   */
+  const SEARCH_DEBOUNCE_MS = 120;
+
   function globalSearch() {
-    const input = el('input', { type: 'search', placeholder: 'חיפוש משימות ופרויקטים (כולל ארכיון)…' });
+    const input = el('input', {
+      type: 'search',
+      placeholder: 'חיפוש בכל המערכת — משימות, פרויקטים, תגובות, צ׳קליסט…'
+    });
     const results = el('div.search-results', { style: { display: 'none' } });
     let timer = null;
+    // מזהה הבקשה האחרונה: תשובה של הקלדה קודמת שהגיעה באיחור לא תדרוס את החדשה
+    let seq = 0;
 
     const hide = () => { results.style.display = 'none'; };
+
+    /** הדגשת המילה שנמצאה בתוך הטקסט — כך רואים למה השורה הזו הוחזרה */
+    const highlight = (text, q) => {
+      const frag = document.createDocumentFragment();
+      const src = String(text ?? '');
+      const lower = src.toLowerCase();
+      const needle = q.toLowerCase();
+      let from = 0;
+      for (;;) {
+        const at = needle ? lower.indexOf(needle, from) : -1;
+        if (at === -1) break;
+        if (at > from) frag.appendChild(document.createTextNode(src.slice(from, at)));
+        frag.appendChild(el('mark', { text: src.slice(at, at + needle.length) }));
+        from = at + needle.length;
+      }
+      frag.appendChild(document.createTextNode(src.slice(from)));
+      return frag;
+    };
+
+    const row = (item, q) => el(`button.sr-item${item.archived ? '.is-archived' : ''}`, {
+      onclick: () => {
+        hide();
+        input.value = '';
+        if (item.type === 'project') navigate('board', { projectId: item.id });
+        else TaskCardView.open(item.id);
+      }
+    }, [
+      el(`span.sr-tag.sr-${item.type}`, { text: item.type === 'project' ? 'פרויקט' : 'משימה' }),
+      el('div.sr-body', {}, [
+        el('div.sr-title', {}, [highlight(item.title, q)]),
+        el('div.sr-meta', {}, [
+          item.matchIn ? el('span.sr-where', { text: item.matchIn }) : null,
+          item.subtitle ? el('span', { text: item.subtitle }) : null
+        ])
+      ])
+    ]);
 
     input.addEventListener('input', () => {
       clearTimeout(timer);
       const q = input.value.trim();
-      if (q.length < 2) return hide();
+      if (!q) return hide();
+      const mine = ++seq;
+
       timer = setTimeout(async () => {
         try {
           const data = await API.search(q);
+          if (mine !== seq) return;      // הקלדה חדשה עקפה את הבקשה הזו
           UI.clear(results);
-          if (!data.tasks.length && !data.projects.length) {
-            results.appendChild(el('div', { style: { padding: '14px', color: 'var(--text-mute)' }, text: 'לא נמצאו תוצאות' }));
+
+          if (!data.results.length) {
+            results.appendChild(el('div.sr-empty', { text: `לא נמצא איזכור ל"${q}"` }));
           } else {
-            if (data.projects.length) {
-              results.appendChild(el('div.sr-group', { text: 'פרויקטים' }));
-              for (const p of data.projects) {
-                results.appendChild(el('button', {
-                  onclick: () => { hide(); input.value = ''; navigate('board', { projectId: p.id }); }
-                }, [el('div.sr-title', { text: p.name })]));
-              }
-            }
-            if (data.tasks.length) {
-              results.appendChild(el('div.sr-group', { text: 'משימות' }));
-              for (const t of data.tasks) {
-                results.appendChild(el('button', {
-                  onclick: () => { hide(); input.value = ''; TaskCardView.open(t.id); }
-                }, [
-                  el('div.sr-title', { text: t.title }),
-                  el('div.sr-meta', { text: `${t.statusLabel} · ${t.projectName ?? 'ללא פרויקט'}${t.archived ? ' · בארכיון' : ''}` })
-                ]));
-              }
+            for (const item of data.results) results.appendChild(row(item, data.query));
+            // כשיש יותר ממה שמוצג — נאמר, ולא נשתוק
+            if (data.total > data.results.length) {
+              results.appendChild(el('div.sr-more', {
+                text: `מוצגות ${data.results.length} מתוך ${data.total} — כדאי לצמצם את החיפוש`
+              }));
             }
           }
           results.style.display = 'block';
-        } catch { /* התעלמות */ }
-      }, 260);
+        } catch { /* התעלמות — חיפוש שנכשל לא יפיל את המסך */ }
+      }, SEARCH_DEBOUNCE_MS);
+    });
+
+    // Escape מנקה וסוגר, בלי לצאת מהשדה
+    input.addEventListener('keydown', (e) => {
+      if (e.key !== 'Escape') return;
+      input.value = '';
+      hide();
     });
 
     document.addEventListener('mousedown', (e) => {

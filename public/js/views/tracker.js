@@ -234,36 +234,56 @@ const TrackerView = (() => {
 
   // ------------------------------------------------------------- שורות
 
-  function parentRow(task) {
+  /**
+   * הגדרת העמודות — מקור אחד לכותרת, לרוחב, לתא ולמפתח המיון.
+   *
+   * טבלה שהעמודות שלה בנויות בקוד קשיח אינה יכולה להסתיר, להזיז או למיין:
+   * כל אחת מהיכולות האלה דורשת שהעמודות יהיו נתון ולא קוד.
+   *
+   * ‎fixed‎ — אינה נבחרת ואינה מוזזת (טור הפעולות נשאר בקצה).
+   * ‎always‎ — ניתנת להזזה אך לא להסתרה: טבלה בלי עמודת המשימה אינה טבלה.
+   */
+  const COLUMNS = [
+    { key: 'project', label: 'פרויקט', width: '150px', sort: (t) => t.projectName ?? '' },
+    { key: 'title', label: 'משימה', width: null, always: true, sort: (t) => t.title },
+    { key: 'due', label: 'תאריך יעד', width: '128px', sort: (t) => t.dueDate ?? '9999-99-99' },
+    { key: 'track', label: 'סטטוס', width: '58px', title: 'סטטוס בקרה — נקודת צבע', sort: (t) => t.trackStatusLabel ?? '' },
+    { key: 'short', label: 'סטטוס מקוצר', width: '16%', sort: (t) => t.statusShort ?? '' },
+    { key: 'subtask', label: 'תת-משימה', width: null, sort: (t) => t.activeSubtask?.title ?? '' },
+    { key: 'assignee', label: 'אחראי', width: '150px', sort: (t) => t.activeSubtask?.assigneeName ?? '' },
+    { key: 'subDue', label: 'יעד תת-משימה', width: '128px', sort: (t) => t.activeSubtask?.dueDate ?? '9999-99-99' },
+    { key: 'actions', label: '', width: '120px', fixed: true }
+  ];
+
+  const colByKey = new Map(COLUMNS.map((c) => [c.key, c]));
+  const colPref = () => App.getPref('trackerColumns', {}) ?? {};
+
+  /**
+   * העמודות בסדר שהמשתמש קבע. מפתח שאינו מוכר מסונן, ועמודה שתתווסף בעתיד
+   * נכנסת לסוף — כך העדפה שנשמרה לפני שהעמודה נולדה אינה מסתירה אותה לנצח.
+   */
+  function orderedColumns() {
+    const order = (colPref().order ?? []).filter((k) => colByKey.has(k));
+    const rest = COLUMNS.filter((c) => !order.includes(c.key)).map((c) => c.key);
+    return [...order, ...rest].map((k) => colByKey.get(k));
+  }
+
+  const shownColumns = () => {
+    const hidden = new Set(colPref().hidden ?? []);
+    return orderedColumns().filter((c) => c.fixed || c.always || !hidden.has(c.key));
+  };
+
+  const saveColumns = (patch) => {
+    App.setPref('trackerColumns', { ...colPref(), ...patch });
+    draw();
+  };
+
+  /** תוכן התא לפי מפתח העמודה */
+  function cellFor(key, task) {
     const sub = task.activeSubtask;
-    const isOpen = expanded.has(task.id);
-    const more = task.subtasksTotal - (sub ? 1 : 0);
-
-    const toggle = el(`button.tr-toggle${isOpen ? '.open' : ''}`, {
-      title: task.subtasksTotal ? 'הצגת כל תתי-המשימות' : 'אין תתי-משימות',
-      disabled: !task.subtasksTotal,
-      onclick: () => {
-        if (isOpen) expanded.delete(task.id); else expanded.add(task.id);
-        draw();
-      }
-    }, ['▸']);
-
-    /*
-     * צבע השורה בא מסטטוס הבקרה. נמסר כמשתנה CSS ונצרך ב-CSS על התאים ולא
-     * על ה-‎tr‎, מפני שרקע על שורה בטבלה נחתך בחלק מהדפדפנים.
-     *
-     * ‎style‎ כמחרוזת ולא כאובייקט: ‎el‎ מחיל אובייקט סגנון דרך
-     * ‎Object.assign‎, וזה מתעלם בשקט ממשתני CSS. הצבע מאומת כ-hex אף
-     * שמקורו ברשימה סגורה בשרת — ערך שנכנס לתוך תכונת ‎style‎ אינו מקום
-     * להסתמך על מקור אמין.
-     */
-    const tinted = /^#[0-9a-f]{6}$/i.test(task.trackStatusColor ?? '');
-    const tint = tinted ? { style: `--row-tint: ${task.trackStatusColor}` } : {};
-
-    return el(`tr.tr-parent${isOpen ? '.is-open' : ''}${tinted ? '.is-tinted' : ''}`, tint, [
-      // עמודת הפרויקט: נקודת הצבע שלו ושמו, אותו סימון שבשורות המשימות בלוח
-      el('td', {}, [
-        task.projectId
+    switch (key) {
+      case 'project':
+        return task.projectId
           ? el('button.txt.tr-project', {
               title: `מעבר ללוח של ${task.projectName}`,
               onclick: () => App.navigate('board', { projectId: task.projectId })
@@ -271,31 +291,19 @@ const TrackerView = (() => {
               el('span.project-dot', { style: { background: task.projectColor, margin: '0' } }),
               el('span', { text: task.projectName })
             ])
-          : el('span.mute-sm', { text: 'ללא פרויקט' })
-      ]),
-      el('td', {}, [
-        el('div.tr-title', {}, [
-          toggle,
-          statusIcons(task),
-          el('button.txt.txt-open', {
-            title: 'פתיחת המשימה',
-            onclick: () => TaskCardView.open(task.id)
-          }, [task.title]),
-          more > 0 ? el('span.tr-count', { title: `${task.subtasksTotal} תתי-משימות`, text: `+${more}` }) : null
-        ])
-      ]),
-      el('td', {}, [dueCell(task)]),
-      el('td', {}, [trackCell(task)]),
-      el('td', {}, [shortStatusCell(task)]),
-      el('td', {}, [
-        sub
+          : el('span.mute-sm', { text: 'ללא פרויקט' });
+      case 'title': return titleCell(task);
+      case 'due': return dueCell(task);
+      case 'track': return trackCell(task);
+      case 'short': return shortStatusCell(task);
+      case 'subtask':
+        return sub
           ? el('button.txt.txt-open', { onclick: () => TaskCardView.open(sub.id) }, [sub.title])
-          : el('span.mute-sm', { text: 'אין פעולה פתוחה' })
-      ]),
-      el('td', {}, [assigneeCell(sub)]),
-      el('td', {}, [dueCell(sub, { muted: true })]),
-      el('td', {}, [
-        App.may('create_task')
+          : el('span.mute-sm', { text: 'אין פעולה פתוחה' });
+      case 'assignee': return assigneeCell(sub);
+      case 'subDue': return dueCell(sub, { muted: true });
+      case 'actions':
+        return App.may('create_task')
           ? el('button.btn.btn-sm', {
               title: 'הוספת תת-משימה',
               // אין צורך ברענון יזום: שמירת משימה קוראת ל-App.refreshView
@@ -303,9 +311,56 @@ const TrackerView = (() => {
                 projectId: task.projectId, parentTaskId: task.id, parentTitle: task.title
               })
             }, ['＋ תת-משימה'])
-          : null
-      ])
+          : null;
+      default: return null;
+    }
+  }
+
+  /**
+   * שם המשימה עם פותח העץ.
+   *
+   * פותח העץ בולט במכוון. קודם היה כאן חץ זעיר וחיוור שאיש לא הבחין בו,
+   * ומשימה עם חמש תתי-משימות נראתה כמשימה בודדת. עכשיו זה כפתור עם מסגרת
+   * ועם מספר תתי-המשימות בתוכו — המספר הוא מה שאומר שיש בכלל מה לפתוח,
+   * ובלעדיו הכפתור נראה דקורטיבי.
+   *
+   * משימה בלי תתי-משימות אינה מקבלת כפתור מושבת אלא רווח בגודלו: כפתור
+   * שאינו עושה דבר מזמין לחיצה, ורווח שומר על יישור הכותרות בטור.
+   */
+  function titleCell(task) {
+    const isOpen = expanded.has(task.id);
+    const toggle = task.subtasksTotal
+      ? el(`button.tr-expand${isOpen ? '.open' : ''}`, {
+          title: isOpen ? 'סגירת תתי-המשימות' : `הצגת ${task.subtasksTotal} תתי-המשימות`,
+          onclick: (e) => {
+            e.stopPropagation();
+            if (isOpen) expanded.delete(task.id); else expanded.add(task.id);
+            draw();
+          }
+        }, [
+          el('span.tx-arrow', { text: '▸' }),
+          el('span.tx-count', { text: String(task.subtasksTotal) })
+        ])
+      : el('span.tr-expand-empty');
+
+    return el('div.tr-title', {}, [
+      toggle,
+      statusIcons(task),
+      el('button.txt.txt-open', {
+        title: 'פתיחת המשימה',
+        onclick: () => TaskCardView.open(task.id)
+      }, [task.title])
     ]);
+  }
+
+  function parentRow(task) {
+    const isOpen = expanded.has(task.id);
+
+    const tinted = /^#[0-9a-f]{6}$/i.test(task.trackStatusColor ?? '');
+    const tint = tinted ? { style: `--row-tint: ${task.trackStatusColor}` } : {};
+
+    return el(`tr.tr-parent${isOpen ? '.is-open' : ''}${tinted ? '.is-tinted' : ''}`, tint,
+      shownColumns().map((c) => el(`td.td-${c.key}`, {}, [cellFor(c.key, task)])));
   }
 
   /**
@@ -313,18 +368,23 @@ const TrackerView = (() => {
    * הם באותה שורה ממש מעליה.
    */
   const subRow = (sub) => el(`tr.tr-sub${sub.isFinal ? '.is-done' : ''}`, {}, [
-    el('td', { colspan: '5' }, [
+    /*
+     * תא אחד לרוחב כל הטבלה, ולא תא לכל עמודה: העמודות ניתנות להסתרה
+     * ולהזזה, ותת-משימה אינה נושאת את אותם שדות כמו האב (אין לה פרויקט משלה
+     * ואין לה תת-משימה). יישור לעמודות היה דורש מפה שנייה שנשברת בכל שינוי
+     * בבחירת העמודות.
+     */
+    el('td', { colspan: String(shownColumns().length) }, [
       el('div.tr-subtitle', {}, [
         el('span.tr-branch', { text: '↳' }),
         el('span.dot-chip', { title: sub.statusLabel, style: { background: sub.statusColor } }),
         el('button.txt.txt-open', { onclick: () => TaskCardView.open(sub.id) }, [sub.title]),
-        sub.statusShort ? el('span.tr-substatus', { text: sub.statusShort, title: sub.statusShort }) : null
+        sub.statusShort ? el('span.tr-substatus', { text: sub.statusShort, title: sub.statusShort }) : null,
+        el('div.spacer'),
+        el('span.sub-field', {}, [assigneeCell(sub)]),
+        el('span.sub-field', {}, [dueCell(sub, { muted: true })])
       ])
-    ]),
-    el('td', { text: sub.statusLabel }),
-    el('td', {}, [assigneeCell(sub)]),
-    el('td', {}, [dueCell(sub, { muted: true })]),
-    el('td', {})
+    ])
   ]);
 
   // ------------------------------------------------------------- ציור
@@ -474,6 +534,10 @@ const TrackerView = (() => {
        * לזיכרון ולהמציא שם, בלי שום יתרון.
        */
       el('button.btn.btn-sm', {
+        title: 'בחירת עמודות, הסתרה והזזה',
+        onclick: (e) => openColumnPicker(e.currentTarget)
+      }, ['▦ עמודות']),
+      el('button.btn.btn-sm', {
         title: 'ניהול רשימת סטטוסי הבקרה שלי',
         onclick: () => openStatusManager()
       }, ['⬤ סטטוסים']),
@@ -494,9 +558,117 @@ const TrackerView = (() => {
     ]);
   }
 
+  /**
+   * בורר העמודות — בחירה, הסתרה, הזזה ואיפוס.
+   *
+   * חצים ולא גרירה: גרירת כותרות טבלה נראית אלגנטית ונשברת במסך צר ובמגע,
+   * וכאן די בשתי לחיצות כדי להזיז עמודה למקומה. הבורר נבנה מחדש אחרי כל
+   * שינוי, כדי שהסדר שבו יראה בדיוק את מה שקרה בטבלה.
+   */
+  function openColumnPicker(anchor) {
+    document.getElementById('col-pop')?.remove();
+    const hidden = new Set(colPref().hidden ?? []);
+    // טור הפעולות אינו נבחר ואינו מוזז — הוא חייב להישאר בקצה
+    const list = orderedColumns().filter((c) => !c.fixed);
+
+    const move = (key, delta) => {
+      const keys = list.map((c) => c.key);
+      const at = keys.indexOf(key);
+      if (at + delta < 0 || at + delta >= keys.length) return;
+      [keys[at], keys[at + delta]] = [keys[at + delta], keys[at]];
+      // ‎actions‎ נשמר בסוף הסדר, אחרת הוא היה נודד לראש בטעינה הבאה
+      saveColumns({ order: [...keys, 'actions'] });
+      openColumnPicker(anchor);
+    };
+
+    const pop = el('div.col-pop#col-pop', {}, [
+      el('div.col-head', { text: 'עמודות בטבלה' }),
+      ...list.map((c, i) => {
+        const box = el('input', {
+          type: 'checkbox',
+          checked: !hidden.has(c.key),
+          disabled: !!c.always
+        });
+        box.addEventListener('change', () => {
+          const next = new Set(hidden);
+          if (box.checked) next.delete(c.key); else next.add(c.key);
+          saveColumns({ hidden: [...next] });
+          openColumnPicker(anchor);
+        });
+        return el('div.col-row', {}, [
+          el('label.checkbox', { title: c.always ? 'עמודה שאינה ניתנת להסתרה' : '' }, [box, c.label]),
+          el('div.spacer'),
+          el('button.col-move', { title: 'הזזה למעלה', disabled: i === 0, onclick: () => move(c.key, -1) }, ['▲']),
+          el('button.col-move', { title: 'הזזה למטה', disabled: i === list.length - 1, onclick: () => move(c.key, 1) }, ['▼'])
+        ]);
+      }),
+      el('button.btn.btn-sm.col-reset', {
+        onclick: () => {
+          // ‎null‎ מוחק את ההעדפה בשרת ומחזיר את ברירת המחדל, ולא שומר אובייקט ריק
+          App.setPref('trackerColumns', null);
+          pop.remove();
+          draw();
+        }
+      }, ['איפוס לברירת המחדל'])
+    ]);
+
+    document.body.appendChild(pop);
+    const box = anchor.getBoundingClientRect();
+    pop.style.top = `${Math.min(box.bottom + 4, window.innerHeight - pop.offsetHeight - 8)}px`;
+    pop.style.left = `${Math.max(8, Math.min(box.left, window.innerWidth - pop.offsetWidth - 8))}px`;
+
+    const close = (ev) => {
+      if (pop.contains(ev.target) || ev.target === anchor) return;
+      pop.remove();
+      document.removeEventListener('mousedown', close);
+    };
+    setTimeout(() => document.addEventListener('mousedown', close), 0);
+  }
+
+  /**
+   * מיון בלחיצה על הכותרת. שלושה מצבים: עולה, יורד, וחזרה לסדר ברירת המחדל
+   * שהשרת מחזיר (יעד קרוב קודם). מצב שלישי נדרש כדי שאפשר יהיה לבטל מיון
+   * בלי לנחש איזו עמודה הייתה המקורית.
+   */
+  function toggleSort(key) {
+    const cur = colPref().sort;
+    if (!cur || cur.key !== key) return saveColumns({ sort: { key, dir: 'asc' } });
+    if (cur.dir === 'asc') return saveColumns({ sort: { key, dir: 'desc' } });
+    return saveColumns({ sort: null });
+  }
+
+  /** השורות בסדר התצוגה — מיון המשתמש, או הסדר שהשרת קבע */
+  function sortedRows() {
+    const s = colPref().sort;
+    const col = s && colByKey.get(s.key);
+    if (!col?.sort) return rows;
+    const dir = s.dir === 'desc' ? -1 : 1;
+    // localeCompare בעברית: סדר אלפביתי נכון, ומספרים ותאריכים כמחרוזות ISO
+    return [...rows].sort((a, b) =>
+      dir * String(col.sort(a) ?? '').localeCompare(String(col.sort(b) ?? ''), 'he', { numeric: true }));
+  }
+
+  function headerRow(cols) {
+    const s = colPref().sort;
+    return el('tr', {}, cols.map((c) => {
+      const active = s?.key === c.key;
+      const sortable = !!c.sort;
+      const th = el(`th.th-${c.key}${sortable ? '.is-sortable' : ''}${active ? '.is-sorted' : ''}`, {
+        style: c.width ? { width: c.width } : {},
+        title: c.title ?? (sortable ? `מיון לפי ${c.label}` : '')
+      }, [
+        el('span', { text: c.label }),
+        active ? el('span.th-arrow', { text: s.dir === 'desc' ? '▼' : '▲' }) : null
+      ]);
+      if (sortable) th.addEventListener('click', () => toggleSort(c.key));
+      return th;
+    }));
+  }
+
   function draw() {
+    const cols = shownColumns();
     const body = [];
-    for (const task of rows) {
+    for (const task of sortedRows()) {
       body.push(parentRow(task));
       if (expanded.has(task.id)) {
         /*
@@ -506,7 +678,7 @@ const TrackerView = (() => {
         const cached = task.__subs;
         if (cached) body.push(...cached.map(subRow));
         else {
-          body.push(el('tr.tr-sub', {}, [el('td', { colspan: '9' }, [UI.spinner()])]));
+          body.push(el('tr.tr-sub', {}, [el('td', { colspan: String(cols.length) }, [UI.spinner()])]));
           API.task(task.id).then((d) => { task.__subs = d.task.subtasks ?? []; draw(); }).catch(() => {});
         }
       }
@@ -515,25 +687,15 @@ const TrackerView = (() => {
     UI.mount(containerRef,
       el('div.view-head', {}, [
         el('h2', { text: 'בקרת משימות' }),
-        el('p.hint', { text: 'משימה והפעולה הבאה שלה. עריכה נעשית ישירות בטבלה.' })
+        el('p.hint', { text: 'משימה והפעולה הבאה שלה. עריכה נעשית ישירות בטבלה, ולחיצה על כותרת ממיינת.' })
       ]),
       toolbar(),
       el('div.card', {}, [
         el('div.table-wrap', {}, [
           el('table.data.tracker', {}, [
-            el('thead', {}, [el('tr', {}, [
-              el('th', { text: 'פרויקט', style: { width: '150px' } }),
-              el('th', { text: 'משימה' }),
-              el('th', { text: 'תאריך יעד', style: { width: '128px' } }),
-              el('th', { text: 'סטטוס', title: 'סטטוס בקרה — נקודת צבע', style: { width: '58px' } }),
-              el('th', { text: 'סטטוס מקוצר', style: { width: '16%' } }),
-              el('th', { text: 'תת-משימה' }),
-              el('th', { text: 'אחראי', style: { width: '150px' } }),
-              el('th', { text: 'תאריך יעד', style: { width: '128px' } }),
-              el('th', { text: '', style: { width: '120px' } })
-            ])]),
+            el('thead', {}, [headerRow(cols)]),
             el('tbody', {}, body.length ? body : [
-              el('tr', {}, [el('td', { colspan: '9' }, [
+              el('tr', {}, [el('td', { colspan: String(cols.length) }, [
                 UI.empty(savedScope() === 'mine' && allOpen > 0
                   ? 'אין משימות פתוחות בפרויקטים שלך — נסה "כל הארגון"'
                   : 'אין משימות פתוחות בחתך הזה', UI.icon('board'))
@@ -544,6 +706,7 @@ const TrackerView = (() => {
       ])
     );
   }
+
 
   return { render };
 })();

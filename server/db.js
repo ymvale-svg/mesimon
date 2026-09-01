@@ -554,6 +554,21 @@ const onNotify = (fn) => { if (typeof fn === 'function') notifyListeners.push(fn
  * אפשר להשיב מההתראה, ואם כן אם התשובה פנימית. שמירתו בטבלת ההתראות הייתה
  * מוסיפה עמודות שאין להן שום שימוש אחר.
  */
+/**
+ * האם המשתמש הזה מקבל התראות בזכות היותו *פותח* של משימה או פרויקט.
+ *
+ * מנהל מערכת ואדמין-על פותחים משימות ופרויקטים בשביל כל החברה — הם מקימים
+ * את המערכת ולא עושים את העבודה. אם פתיחה נחשבת להם כהחזקה, תיבת ההתראות
+ * שלהם מתמלאת בכל מה שקורה בארגון, ובתוכה נעלם מה שכן מיועד להם.
+ *
+ * הנהלה, מנהל מחלקה ועובד פנימי כן נחשבים: כשהם פותחים משימה זו העבודה שלהם.
+ */
+function countsAsOpener(userId) {
+  if (!userId) return false;
+  const role = get('SELECT role FROM users WHERE id = ?', userId)?.role;
+  return !!role && !['superadmin', 'admin'].includes(role);
+}
+
 function notify({ targetType, targetId, kind, title, body = '', taskId = null, push = null }) {
   const res = run(
     'INSERT INTO notifications (target_type, target_id, kind, title, body, task_id, is_read, created_at) VALUES (?,?,?,?,?,?,0,?)',
@@ -1149,7 +1164,7 @@ module.exports = {
   nowIso, hashPassword, verifyPassword,
   getSetting, setSetting, allSettings,
   userPrefs, setUserPref,
-  audit, notify, onNotify,
+  audit, notify, onNotify, countsAsOpener,
   internalBoard, createVendorBoard, boardColumns, ensureBoardColumns,
   INTERNAL_COLUMNS, VENDOR_COLUMNS, DEFAULT_SETTINGS,
   bootstrap, seedDemoData, ensureFirstAdmin

@@ -737,6 +737,15 @@ function listProjectsFor(actor) {
       colorChosen: p.color || null,
       mine: mineIds.has(p.id),
       /*
+       * האם מותר למחוק — מחושב בשרת ולא נגזר בלקוח. הלקוח שמנחש הרשאות
+       * מציג כפתור שנכשל ב-403, וזה גרוע מכפתור שאינו קיים. אותו כלל בדיוק
+       * שנאכף ב-DELETE.
+       */
+      canDelete: !isVendor(actor)
+        && P.may(actor, 'create_project')
+        && (visible === null || visible.has(p.id))
+        && (P.level(actor, 'create_project') === true || p.created_by === actor.id),
+      /*
        * המחלקה של הפרויקט נגזרת ממנהל המשימות שלו — אין לפרויקט שדה מחלקה
        * משלו, וזו ההשתייכות היחידה שקיימת בפועל. פרויקט בלי מנהל אינו שייך
        * לאיש, ולכן הוא מוצע לכולם ולא נעלם מאף אחד.
@@ -1269,6 +1278,7 @@ function changeStatus(task, newStatus, actor, note = '') {
    */
   if (target.is_final && task.created_by
       && task.created_by !== actor.id
+      && D.countsAsOpener(task.created_by)
       && !(task.assignee_type === 'user' && task.assignee_id === task.created_by)) {
     if (D.get("SELECT 1 FROM users WHERE id = ? AND status = 'active'", task.created_by)) {
       D.notify({
@@ -2067,15 +2077,21 @@ router.delete('/api/projects/:id', async (req, res, ctx) => {
   /*
    * שתי בדיקות נפרדות, ושתיהן נדרשות.
    *
-   * ‎requireFullPerm‎ קובע *מי* מוחק בכלל — מחיקה אינה ברמת 'own', ולכן עובד
-   * פנימי אינו מוחק גם את מה שפתח.
+   * ‎assertMayEditProject‎ קובע על *מה* מותר לגעת: ראייה, ובעלות לרמת 'own'.
+   * בלעדיו מנהל מחלקה מחק פרויקטים של מחלקות אחרות, שלא הופיעו אצלו ברשימה
+   * כלל — בדיקת ההרשאה לבדה עברה, כי היא אינה יודעת על איזה פרויקט מדובר.
    *
-   * ‎assertMayEditProject‎ קובע *מה* מותר לו למחוק. בלעדיו מנהל מחלקה מחק
-   * פרויקטים של מחלקות אחרות, שלא הופיעו אצלו ברשימה כלל — בדיקת ההרשאה
-   * לבדה עברה, כי היא אינה יודעת על איזה פרויקט מדובר.
+   * ואחריה כלל המחיקה עצמו: עובד פנימי מוחק פרויקט שהוא פתח. מי שפתח פרויקט
+   * ואינו יכול להסירו נזקק לאדמין כדי לנקות שם שהוקלד בטעות, ואז נשארות
+   * במערכת שורות שאיש אינו מוחק.
+   *
+   * צר יותר מהעריכה במכוון: עריכה מותרת גם למי שמונה מנהל הפרויקט, ומחיקה
+   * רק למי שפתח אותו. מינוי לתפקיד אינו רשות למחוק את מה שאחר הקים.
    */
-  requireFullPerm(actor, 'create_project');
   assertMayEditProject(actor, project);
+  if (P.level(actor, 'create_project') !== true && project.created_by !== actor.id) {
+    throw forbidden('אפשר למחוק רק פרויקט שפתחת');
+  }
 
   const tasks = D.get('SELECT COUNT(*) c FROM tasks WHERE project_id = ?', id).c;
   const subs = D.get('SELECT COUNT(*) c FROM projects WHERE parent_project_id = ?', id).c;
@@ -3708,7 +3724,9 @@ const PREF_KEYS = [
   // אילו סוגי התראות קופצים כהתראת מערכת ההפעלה — בחירה אישית לכל משתמש
   'notifyKinds',
   // חתך הפרויקט וההיקף במסך בקרת המשימות
-  'trackerProject', 'trackerScope'
+  'trackerProject', 'trackerScope',
+  // בחירת העמודות, סדרן והמיון בטבלת הבקרה
+  'trackerColumns'
 ];
 const PREF_MAX_BYTES = 4096;
 
@@ -3818,23 +3836,108 @@ router.delete('/api/comments/:id', async (req, res, ctx) => {
 
 // --- חיפוש גלובלי (כולל ארכיון) ---
 
+/**
+ * חיפוש כללי — כל איזכור של המילה, מהתו הראשון.
+ *
+ * הגרסה הראשונה חיפשה בכותרת ובתיאור של משימה ובשם של פרויקט בלבד, ודרשה
+ * שני תווים. התוצאה: מי שחיפש מילה שנאמרה בתגובה או שנכתבה בסעיף צ'קליסט לא
+ * מצא אותה, והסיק שהיא אינה במערכת.
+ *
+ * מחפש עכשיו בשישה מקומות, וכל תוצאה אומרת *איפה* נמצאה ההתאמה — בלעדיו
+ * משימה שצצה בגלל מילה שקבורה בתגובה נראית כתוצאה מוטעית.
+ *
+ * מגבלה לכל מקור בנפרד ולא רק על הסך: בחיפוש של תו אחד ‎LIKE '%א%'‎ על
+ * טבלת התגובות מחזיר הכול, ובלי תקרה מקומית מקור אחד היה גורף את כל
+ * התוצאות ומשאיר את השאר בחוץ.
+ */
+const SEARCH_PER_SOURCE = 40;
+const SEARCH_TOTAL = 30;
+
 router.get('/api/search', async (req, res, ctx) => {
   const actor = ctx.requireActor();
   const q = String(parseUrl(req).searchParams.get('q') ?? '').trim();
-  if (q.length < 2) return sendJson(res, 200, { tasks: [], projects: [] });
+  if (!q) return sendJson(res, 200, { results: [], query: '' });
 
-  const tasks = D.all(
-    'SELECT * FROM tasks WHERE title LIKE ? OR description LIKE ? ORDER BY archived, id DESC LIMIT 60',
-    `%${q}%`, `%${q}%`
-  ).filter((t) => canSeeTask(actor, t)).slice(0, 25).map((t) => shapeTask(t, actor));
+  const like = `%${q}%`;
+  /*
+   * ‎matchIn‎ לכל משימה, לפי סדר חשיבות: התאמה בכותרת חזקה מהתאמה בתגובה,
+   * ולכן היא אינה נדרסת. ‎Map‎ שומר גם על ייחוד — משימה שנמצאה בשני מקורות
+   * מופיעה פעם אחת.
+   */
+  const taskHits = new Map();
+  const addTask = (id, label, rank) => {
+    const prev = taskHits.get(id);
+    if (!prev || rank < prev.rank) taskHits.set(id, { label, rank });
+  };
+
+  // ‎likes‎ הוא מספר הפעמים שהמחרוזת מופיעה בשאילתה — יש שאילתות עם שני שדות
+  const collect = (sql, label, rank, likes = 1) => {
+    const params = [...Array(likes).fill(like), SEARCH_PER_SOURCE];
+    for (const row of D.all(sql, ...params)) addTask(row.id, label, rank);
+  };
+
+  collect('SELECT id FROM tasks WHERE title LIKE ? LIMIT ?', 'בכותרת', 0);
+  collect('SELECT id FROM tasks WHERE description LIKE ? LIMIT ?', 'בתיאור', 1);
+  collect("SELECT id FROM tasks WHERE status_short <> '' AND status_short LIKE ? LIMIT ?", 'בסטטוס', 2);
+  collect(
+    `SELECT DISTINCT t.id FROM tasks t JOIN checklist_items c ON c.task_id = t.id
+      WHERE c.text LIKE ? OR c.note LIKE ? LIMIT ?`,
+    'בצ׳קליסט', 3, 2
+  );
+  collect(
+    `SELECT DISTINCT t.id FROM tasks t JOIN comments cm ON cm.task_id = t.id
+      WHERE cm.body LIKE ?${isVendor(actor) ? ' AND cm.internal = 0' : ''} LIMIT ?`,
+    'בתגובה', 4
+  );
+
+  const tasks = [...taskHits.entries()]
+    .map(([id, hit]) => ({ row: D.get('SELECT * FROM tasks WHERE id = ?', id), hit }))
+    .filter((x) => x.row && canSeeTask(actor, x.row));
 
   // החיפוש אינו עוקף את היקף הראייה — פרויקט שאינו של המשתמש לא יופיע בו
   const visibleProjects = visibleProjectIds(actor);
-  const projects = D.all('SELECT id, name FROM projects WHERE name LIKE ? LIMIT 30', `%${q}%`)
-    .filter((p) => visibleProjects === null || visibleProjects.has(p.id))
-    .slice(0, 10);
+  const projects = D.all(
+    'SELECT id, name, description, status FROM projects WHERE name LIKE ? OR description LIKE ? LIMIT ?',
+    like, like, SEARCH_PER_SOURCE
+  ).filter((p) => visibleProjects === null || visibleProjects.has(p.id));
 
-  sendJson(res, 200, { tasks, projects });
+  /*
+   * דירוג: התאמה בתחילת השם קודמת להתאמה באמצעו, ופרויקט קודם למשימה בדירוג
+   * שווה — פרויקט הוא ההקשר הרחב, ומי שהקליד את שמו כנראה מחפש אותו ולא
+   * אחת מארבעים המשימות שבתוכו.
+   */
+  const lower = q.toLowerCase();
+  const startsRank = (text) => (String(text ?? '').toLowerCase().startsWith(lower) ? 0 : 1);
+
+  const results = [
+    ...projects.map((p) => ({
+      type: 'project',
+      id: p.id,
+      title: p.name,
+      subtitle: p.status === 'done' ? 'פרויקט שהושלם' : (p.description || ''),
+      matchIn: String(p.name ?? '').toLowerCase().includes(lower) ? 'בשם' : 'בתיאור',
+      sort: [startsRank(p.name), 0]
+    })),
+    ...tasks.map(({ row, hit }) => {
+      const shaped = shapeTask(row, actor);
+      return {
+        type: 'task',
+        id: row.id,
+        title: shaped.title,
+        subtitle: [shaped.statusLabel, shaped.projectName ?? 'ללא פרויקט', shaped.archived ? 'בארכיון' : null]
+          .filter(Boolean).join(' · '),
+        matchIn: hit.label,
+        archived: shaped.archived,
+        sort: [startsRank(shaped.title), 1 + hit.rank]
+      };
+    })
+  ].sort((a, b) => (a.sort[0] - b.sort[0]) || (a.sort[1] - b.sort[1]) || a.title.localeCompare(b.title, 'he'));
+
+  sendJson(res, 200, {
+    query: q,
+    total: results.length,
+    results: results.slice(0, SEARCH_TOTAL).map(({ sort, ...rest }) => rest)
+  });
 });
 
 module.exports = { router, PRIORITIES, shapeTask, canSeeTask };

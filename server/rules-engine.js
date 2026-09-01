@@ -54,7 +54,7 @@ function alertTargets(task) {
    * רק במשימת ספק: במשימה פנימית הפותח מקבל ממילא הודעה על סגירתה, ואין
    * צורך להחזיר אותו לכל התראה על כל שינוי.
    */
-  if (task.assignee_type === 'vendor') add(task.created_by);
+  if (task.assignee_type === 'vendor' && D.countsAsOpener(task.created_by)) add(task.created_by);
 
   // המחלקה של המשימה, ואם אין לה שיוך — המחלקה של האחראי עליה
   const departmentId = task.department_id

@@ -1444,12 +1444,6 @@ input[type="color"] { width: 46px; height: 30px; padding: 2px; cursor: pointer; 
 .tracker .tr-icons { display: inline-flex; align-items: center; gap: 4px; flex: none; }
 
 /* חץ הפרישה — סובב ב-90 מעלות כשפתוח */
-.tracker .tr-toggle {
-  flex: none; border: 0; background: none; cursor: pointer; padding: 0 2px;
-  font-size: 12px; color: var(--text-mute); transition: transform .12s;
-}
-.tracker .tr-toggle.open { transform: rotate(-90deg); color: var(--brand); }
-.tracker .tr-toggle:disabled { opacity: .25; cursor: default; }
 
 /* מונה תתי-המשימות שאינן מוצגות בשורה */
 .tracker .tr-count {
@@ -1461,7 +1455,6 @@ input[type="color"] { width: 46px; height: 30px; padding: 2px; cursor: pointer; 
 .tracker tr.tr-sub > td { background: var(--surface-2); }
 .tracker tr.tr-sub.is-done .txt-open { text-decoration: line-through; opacity: .6; }
 .tracker .tr-subtitle { display: flex; align-items: center; gap: 7px; padding-inline-start: 26px; min-width: 0; }
-.tracker .tr-branch { color: var(--text-mute); flex: none; }
 .tracker .tr-substatus {
   font-size: 11.5px; color: var(--text-mute);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 260px;
@@ -1645,3 +1638,98 @@ input[type="color"] { width: 46px; height: 30px; padding: 2px; cursor: pointer; 
 .popover-list .popover-group:not(:first-child) {
   border-top: 1px solid var(--border); margin-top: 4px;
 }
+
+/* ---- תוצאות החיפוש: תיוג סוג לכל שורה והדגשת ההתאמה ---- */
+
+.search-results .sr-item {
+  display: flex; align-items: flex-start; gap: 9px;
+}
+/* התיוג ברוחב קבוע, כדי שכל הכותרות יתחילו באותו קו ואפשר יהיה לסרוק אותן */
+.search-results .sr-tag {
+  flex: none; width: 52px; text-align: center;
+  font-size: 10.5px; font-weight: 700; padding: 2px 0; border-radius: 5px;
+  margin-top: 1px;
+}
+.search-results .sr-tag.sr-project { background: #ede9fe; color: #6d28d9; }
+.search-results .sr-tag.sr-task { background: var(--info-bg); color: #1e40af; }
+.search-results .sr-body { flex: 1; min-width: 0; }
+/* הכותרת נחתכת בשורה אחת — תוצאה ארוכה לא תמתח את הרשימה */
+.search-results .sr-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.search-results .sr-meta { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.search-results .sr-meta > span:last-child {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+/* איפה נמצאה ההתאמה — הסבר למה השורה הזו כאן */
+.search-results .sr-where {
+  flex: none; font-weight: 700; color: var(--brand);
+  background: var(--surface-2); border-radius: 4px; padding: 1px 5px; font-size: 10.5px;
+}
+.search-results mark { background: #fef08a; color: inherit; border-radius: 3px; padding: 0 1px; }
+.search-results .sr-item.is-archived .sr-title { color: var(--text-mute); }
+.search-results .sr-empty,
+.search-results .sr-more {
+  padding: 12px 14px; font-size: 12.5px; color: var(--text-mute);
+}
+.search-results .sr-more { border-top: 1px solid var(--border); }
+
+/* ---- פותח העץ בטבלת הבקרה ---- */
+
+/*
+ * בולט במכוון: החץ הקודם היה 12 פיקסלים בצבע אפור, ומשימה עם תתי-משימות
+ * נראתה כמשימה בודדת. כאן כפתור עם מסגרת, עם מספר תתי-המשימות, ובצבע המערכת.
+ */
+.tracker .tr-expand {
+  flex: none; display: inline-flex; align-items: center; gap: 3px;
+  height: 22px; padding: 0 6px 0 4px; cursor: pointer;
+  border: 1px solid var(--brand); border-radius: 11px;
+  background: var(--surface); color: var(--brand);
+  font-size: 11px; font-weight: 800; font-family: inherit;
+  transition: background .12s, color .12s;
+}
+.tracker .tr-expand:hover { background: var(--brand); color: #fff; }
+.tracker .tr-expand .tx-arrow { display: inline-block; transition: transform .12s; font-size: 9px; }
+.tracker .tr-expand.open { background: var(--brand); color: #fff; }
+.tracker .tr-expand.open .tx-arrow { transform: rotate(-90deg); }
+.tracker .tr-expand .tx-count { line-height: 1; }
+/* רווח בגודל הכפתור, כדי שכל הכותרות יתחילו באותו קו */
+.tracker .tr-expand-empty { flex: none; width: 30px; }
+
+/* שורת תת-משימה — הענף בולט גם הוא, אחרת ההיררכיה אינה נראית */
+.tracker .tr-branch {
+  flex: none; color: var(--brand); font-weight: 800; font-size: 15px;
+  margin-inline-end: 2px;
+}
+
+/* ---- בורר העמודות ומיון הכותרות ---- */
+
+.tracker thead th.is-sortable { cursor: pointer; user-select: none; }
+.tracker thead th.is-sortable:hover { color: var(--brand); }
+.tracker thead th.is-sorted { color: var(--brand); }
+.tracker thead .th-arrow { font-size: 9px; margin-inline-start: 4px; }
+
+.col-pop {
+  position: fixed; z-index: 120; min-width: 235px; padding: 6px;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); box-shadow: var(--shadow-lg);
+  max-height: 70vh; overflow-y: auto;
+}
+.col-pop .col-head {
+  padding: 5px 8px 8px; font-size: 11px; font-weight: 700; color: var(--text-mute);
+}
+.col-pop .col-row {
+  display: flex; align-items: center; gap: 4px;
+  padding: 3px 6px; border-radius: 7px;
+}
+.col-pop .col-row:hover { background: var(--surface-2); }
+.col-pop .col-row .checkbox { flex: 1; min-width: 0; font-size: 12.5px; }
+.col-pop .col-move {
+  flex: none; width: 22px; height: 22px; padding: 0; cursor: pointer;
+  border: 1px solid var(--border); border-radius: 6px;
+  background: var(--surface); color: var(--text-mute); font-size: 9px;
+}
+.col-pop .col-move:hover:not(:disabled) { border-color: var(--brand); color: var(--brand); }
+.col-pop .col-move:disabled { opacity: .3; cursor: default; }
+.col-pop .col-reset { width: 100%; margin-top: 6px; }
+
+/* שדות תת-המשימה בשורה הפרושה, כשהיא תא אחד לרוחב הטבלה */
+.tracker .tr-subtitle .sub-field { flex: none; width: 140px; }

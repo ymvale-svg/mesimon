@@ -991,12 +991,9 @@ const BoardView = (() => {
     const saveBtn = el('button.btn.btn-primary', {}, [isEdit ? 'שמירה' : 'יצירת פרויקט']);
     const footer = [saveBtn, el('div.spacer')];
 
-    /*
-     * המחיקה דורשת הרשאה מלאה, כמו בשרת. הכפתור הוצג קודם לכל מי שערך
-     * פרויקט, כולל עובד שפתח אותו בעצמו — והלחיצה הסתיימה ב-403. כפתור
-     * שנראה זמין ואינו עובד גרוע מכפתור שאינו קיים.
-     */
-    if (isEdit && App.can('create_project')) {
+    // ‎canDelete‎ מחושב בשרת לפי אותו כלל שנאכף ב-DELETE, ולא נגזר כאן מחדש:
+    // לקוח שמנחש הרשאות מציג כפתור שנכשל ב-403
+    if (isEdit && project.canDelete) {
       footer.push(el('button.btn.btn-danger', {
         onclick: async () => {
           /*
