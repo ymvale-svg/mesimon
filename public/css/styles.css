@@ -1694,6 +1694,28 @@ input[type="color"] { width: 46px; height: 30px; padding: 2px; cursor: pointer; 
 /* רווח בגודל הכפתור, כדי שכל הכותרות יתחילו באותו קו */
 .tracker .tr-expand-empty { flex: none; width: 30px; }
 
+/*
+ * שורת פרויקט האב — פס מפריד ולא עוד שורת נתונים, אחרת העין אינה תופסת
+ * שכאן מתחילה קבוצה. הפס הצדדי בצבע המערכת הוא מה שקושר אליה את השורות
+ * שמתחתיה.
+ */
+.tracker tr.tr-group > td {
+  background: var(--brand-light);
+  border-top: 2px solid var(--brand);
+  padding: 7px 12px;
+  cursor: pointer;
+}
+.tracker tr.tr-group:hover > td { background: #b8f5ea; }
+.tracker .tr-grouphead { display: flex; align-items: center; gap: 9px; min-width: 0; }
+.tracker .tr-groupname {
+  font-weight: 800; font-size: 13.5px; color: var(--brand-dark);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.tracker tr.tr-group .mute-sm { color: #4b7d78; flex: none; }
+/* הכפתור יושב על רקע צבוע, ולכן רקע לבן מלא ולא שקוף */
+.tracker tr.tr-group .tr-expand { background: var(--surface); }
+.tracker tr.tr-group .tr-expand.open { background: var(--brand); color: #fff; }
+
 /* שורת תת-משימה — הענף בולט גם הוא, אחרת ההיררכיה אינה נראית */
 .tracker .tr-branch {
   flex: none; color: var(--brand); font-weight: 800; font-size: 15px;

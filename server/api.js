@@ -3726,7 +3726,9 @@ const PREF_KEYS = [
   // חתך הפרויקט וההיקף במסך בקרת המשימות
   'trackerProject', 'trackerScope',
   // בחירת העמודות, סדרן והמיון בטבלת הבקרה
-  'trackerColumns'
+  'trackerColumns',
+  // אילו קבוצות פרויקט-אב מקופלות בטבלת הבקרה
+  'trackerCollapsed'
 ];
 const PREF_MAX_BYTES = 4096;
 

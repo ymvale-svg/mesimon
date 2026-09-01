@@ -26,6 +26,12 @@ const TrackerView = (() => {
   // הסינונים נשמרים למשתמש, כמו בלוח — ראה server/api.js, PREF_KEYS
   const savedProject = () => App.getPref('trackerProject', '') ?? '';
   const savedScope = () => App.getPref('trackerScope', 'mine') ?? 'mine';
+  /*
+   * קיבוץ מקופל נשמר למשתמש ולא בזיכרון, בשונה מפרישת תתי-המשימות: פרישה
+   * היא מבט רגעי על משימה אחת, וקיפול פרויקט אב הוא החלטה על מבנה המסך —
+   * מי שסגר פרויקט שאינו מטפל בו כרגע אינו רוצה לסגור אותו שוב בכל כניסה.
+   */
+  const collapsedGroups = () => new Set(App.getPref('trackerCollapsed', []) ?? []);
 
   async function render(container, params = {}) {
     containerRef = container;
@@ -533,6 +539,23 @@ const TrackerView = (() => {
        * הקובץ שהשרת קבע. בנייה של blob בלקוח הייתה מחייבת לקרוא את הקובץ
        * לזיכרון ולהמציא שם, בלי שום יתרון.
        */
+      /*
+       * קיפול הכול בלחיצה אחת. הקיפול נשמר למשתמש, ובלעדי הכפתור הזה מי
+       * שסגר עשרים פרויקטים היה נדרש לעשרים לחיצות כדי לחזור.
+       */
+      (() => {
+        const groups = groupedRows();
+        const collapsed = collapsedGroups();
+        const anyOpen = groups.some((g) => !collapsed.has(g.id));
+        if (groups.length < 2) return null;
+        return el('button.btn.btn-sm', {
+          title: anyOpen ? 'סגירת כל הפרויקטים' : 'פתיחת כל הפרויקטים',
+          onclick: () => {
+            App.setPref('trackerCollapsed', anyOpen ? groups.map((g) => g.id) : []);
+            draw();
+          }
+        }, [anyOpen ? '⊟ קיפול הכול' : '⊞ פרישת הכול']);
+      })(),
       el('button.btn.btn-sm', {
         title: 'בחירת עמודות, הסתרה והזזה',
         onclick: (e) => openColumnPicker(e.currentTarget)
@@ -648,6 +671,87 @@ const TrackerView = (() => {
       dir * String(col.sort(a) ?? '').localeCompare(String(col.sort(b) ?? ''), 'he', { numeric: true }));
   }
 
+  // ------------------------------------------------------------- קיבוץ
+
+  /**
+   * הקיבוץ הוא ברמת פרויקט האב: משימה בתת-פרויקט נכנסת לקבוצה של האב שלו.
+   *
+   * זו כל הנקודה — פרויקט שפוצל לחמישה תתי-פרויקטים התפזר בטבלה לחמש
+   * רשימות נפרדות, ולא הייתה שום נקודה שממנה אפשר לראות אותו כמכלול או
+   * להסתיר אותו כמכלול.
+   */
+  function groupOf(task) {
+    const projects = App.state.projects ?? [];
+    const own = projects.find((p) => p.id === task.projectId);
+    const parent = own?.parentProjectId
+      ? projects.find((p) => p.id === own.parentProjectId)
+      : null;
+    const root = parent ?? own;
+    return {
+      id: root?.id ?? 0,
+      name: root?.name ?? (task.projectName ?? 'ללא פרויקט'),
+      color: root?.color ?? task.projectColor,
+      // תת-פרויקט נספר רק כשהמשימה אכן יושבת בו, ולא לפי מבנה הפרויקט
+      subId: parent ? own.id : null
+    };
+  }
+
+  /**
+   * הקבוצות בסדר שבו הן מופיעות בשורות הממוינות, ולא בסדר אלפביתי קבוע:
+   * כשהמשתמש ממיין לפי תאריך יעד, קבוצה עם משימה דחופה חייבת לעלות לראש —
+   * סדר אלפביתי היה מבטל בשקט את המיון שהוא ביקש.
+   */
+  function groupedRows() {
+    const groups = new Map();
+    for (const task of sortedRows()) {
+      const g = groupOf(task);
+      if (!groups.has(g.id)) groups.set(g.id, { ...g, tasks: [], subs: new Set() });
+      const bucket = groups.get(g.id);
+      bucket.tasks.push(task);
+      if (g.subId) bucket.subs.add(g.subId);
+    }
+    return [...groups.values()];
+  }
+
+  /**
+   * שורת פרויקט האב. אותה תגית פתיחה כמו במשימה, כדי שיהיה ברור שמדובר
+   * באותה פעולה ברמה אחת מעל, ולחיצה בכל מקום בשורה פותחת וסוגרת — שורה
+   * שלמה היא מטרה גדולה בהרבה מכפתור.
+   */
+  function groupRow(group, colCount) {
+    const isOpen = !collapsedGroups().has(group.id);
+    const toggle = () => {
+      const next = collapsedGroups();
+      if (isOpen) next.add(group.id); else next.delete(group.id);
+      App.setPref('trackerCollapsed', [...next]);
+      draw();
+    };
+
+    const summary = [group.tasks.length === 1 ? 'משימה אחת' : `${group.tasks.length} משימות`];
+    if (group.subs.size) {
+      summary.push(group.subs.size === 1 ? 'תת-פרויקט אחד' : `${group.subs.size} תתי-פרויקטים`);
+    }
+
+    const row = el(`tr.tr-group${isOpen ? '.is-open' : ''}`, {}, [
+      el('td', { colspan: String(colCount) }, [
+        el('div.tr-grouphead', {}, [
+          el(`button.tr-expand${isOpen ? '.open' : ''}`, {
+            title: isOpen ? `סגירת ${group.name}` : `פתיחת ${group.name}`,
+            onclick: (e) => { e.stopPropagation(); toggle(); }
+          }, [
+            el('span.tx-arrow', { text: '▸' }),
+            el('span.tx-count', { text: String(group.tasks.length) })
+          ]),
+          group.color ? el('span.project-dot', { style: { background: group.color, margin: '0' } }) : null,
+          el('span.tr-groupname', { text: group.name }),
+          el('span.mute-sm', { text: summary.join(' · ') })
+        ])
+      ])
+    ]);
+    row.addEventListener('click', toggle);
+    return row;
+  }
+
   function headerRow(cols) {
     const s = colPref().sort;
     return el('tr', {}, cols.map((c) => {
@@ -668,9 +772,15 @@ const TrackerView = (() => {
   function draw() {
     const cols = shownColumns();
     const body = [];
-    for (const task of sortedRows()) {
-      body.push(parentRow(task));
-      if (expanded.has(task.id)) {
+    const collapsed = collapsedGroups();
+
+    for (const group of groupedRows()) {
+      body.push(groupRow(group, cols.length));
+      if (collapsed.has(group.id)) continue;
+
+      for (const task of group.tasks) {
+        body.push(parentRow(task));
+        if (!expanded.has(task.id)) continue;
         /*
          * הרשימה המלאה נטענת לפי דרישה ולא מראש: בטבלה של חמישים משימות היא
          * הייתה מאות שאילתות שכמעט תמיד אינן נצפות.
