@@ -115,13 +115,117 @@ function assigneeDepartmentId(task) {
   return D.get('SELECT department_id FROM users WHERE id = ?', task.assignee_id)?.department_id ?? null;
 }
 
+/**
+ * מי מותר לי להטיל עליו אחריות על משימה.
+ *
+ * הבדיקה הייתה מוטבעת ב-POST בלבד, ו-PATCH ופעולת האצווה שינו אחראי בלי
+ * לבדוק אותה כלל: עובד שאין לו ‎assign_department_task‎ יכול היה לפתוח
+ * משימה לעצמו — מה שמותר — ומיד אחר כך להעביר אותה בעריכה לכל אדם בארגון.
+ * חילוץ לפונקציה אחת סוגר את הפער ומחיל אותו גם על האחראים הנוספים.
+ *
+ * הקצאה לספק נבדקת גם היא כאן, וכך אין מסלול כתיבה שמדלג עליה.
+ */
+function assertMayAssignTo(actor, type, id) {
+  if (!id) return;
+  if (type === 'vendor') {
+    requirePerm(actor, 'assign_task_to_vendor');
+    if (!D.get('SELECT id FROM vendors WHERE id = ?', id)) throw badRequest('הספק שנבחר אינו קיים');
+    return;
+  }
+  if (type !== 'user' || actor.type !== 'user' || id === actor.id) return;
+
+  // הקצאה לאדם אחר אינה מובנת מאליה: עובד פנימי יוצר משימות לעצמו, ורק אם
+  // הוענקה לו הרשאה אישית (או שהוא מנהל ומעלה) הוא מקצה לאחרים במחלקתו.
+  const lvl = P.level(actor, 'assign_department_task');
+  if (lvl === false) throw forbidden('אין לך הרשאה להקצות משימה לאדם אחר');
+  if (lvl === 'department') {
+    const target = D.get('SELECT department_id FROM users WHERE id = ?', id);
+    if (!target) throw badRequest('המשתמש שנבחר אינו קיים');
+    if ((target.department_id ?? null) !== (actor.departmentId ?? null)) {
+      throw forbidden('ניתן להקצות משימה לחברי המחלקה שלך בלבד');
+    }
+  }
+}
+
+/**
+ * קליטת רשימת האחראים הנוספים מהבקשה.
+ *
+ * מתקבלת גם כמערך אובייקטים וגם כמערך מחרוזות בתבנית ‎'user:3'‎ — זו התבנית
+ * שהבוררים בממשק עובדים בה ממילא, ותרגום בלקוח היה מזמין אי-התאמה.
+ *
+ * האחראי הראשי מסונן מהרשימה: אותו אדם פעמיים אינו שתי אחריויות, והוא היה
+ * מייצר גם התראה כפולה.
+ */
+function parseExtraAssignees(raw, primaryType, primaryId) {
+  if (!Array.isArray(raw)) return null;   // ‎null‎ = השדה לא נשלח, אין לגעת
+  const seen = new Set();
+  const out = [];
+  for (const entry of raw) {
+    let type; let id;
+    if (typeof entry === 'string') {
+      const [t, i] = entry.split(':');
+      type = t; id = Number(i);
+    } else {
+      type = entry?.type ?? entry?.assigneeType;
+      id = Number(entry?.id ?? entry?.assigneeId);
+    }
+    if (!['user', 'vendor'].includes(type) || !Number.isInteger(id) || id <= 0) continue;
+    if (type === primaryType && id === Number(primaryId)) continue;
+    const key = `${type}:${id}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({ type, id });
+  }
+  return out;
+}
+
+/** כתיבת האחראים הנוספים — החלפה מלאה, ולא מיזוג */
+function setExtraAssignees(taskId, list, actor) {
+  for (const e of list) assertMayAssignTo(actor, e.type, e.id);
+  D.run('DELETE FROM task_assignees WHERE task_id = ?', taskId);
+  for (const e of list) {
+    D.run(
+      `INSERT INTO task_assignees (task_id, assignee_type, assignee_id, added_at, added_by)
+       VALUES (?, ?, ?, ?, ?)`,
+      taskId, e.type, e.id, D.nowIso(), actor.type === 'user' ? actor.id : null
+    );
+  }
+}
+
+/** האחראים הנוספים על המשימה, מעבר לאחראי הראשי שיושב על השורה עצמה */
+const extraAssigneesOf = (task) => (task?.id
+  ? D.all('SELECT assignee_type, assignee_id FROM task_assignees WHERE task_id = ?', task.id)
+  : []);
+
+/**
+ * "אני אחראי נוסף על המשימה הזו", כפרדיקט SQL.
+ *
+ * תת-שאילתת ‎EXISTS‎ ולא ‎JOIN‎, וזה לא עניין של טעם: ‎/api/tasks‎ אינה
+ * ‎SELECT DISTINCT‎, ו-JOIN לטבלת הקישור היה משכפל כל משימה לפי מספר
+ * האחראים עליה — משימה עם שני אחראים הייתה מופיעה פעמיים בלוח, בטבלת
+ * הבקרה ובייצוא.
+ *
+ * שני סימני שאלה: הסוג והמזהה.
+ */
+const EXTRA_ASSIGNEE_SQL = `EXISTS (
+  SELECT 1 FROM task_assignees ta
+   WHERE ta.task_id = t.id AND ta.assignee_type = ? AND ta.assignee_id = ?
+)`;
+
 /** מה כל שחקן רשאי לראות — הבורדים נפרדים, וההיקף נקבע לפי התפקיד */
 function canSeeTask(actor, task) {
   const board = boardOf(task);
   if (!board) return false;
+  const extras = extraAssigneesOf(task);
 
   if (isVendor(actor)) {
-    // ספק רואה אך ורק את הבורד שלו ואת המשימות שהוקצו לו
+    /*
+     * ספק רואה את הבורד שלו ואת המשימות שהוקצו לו — או משימה בבורד הפנימי
+     * שהוא אחראי נוסף עליה. השנייה היא מה שמאפשר "עובד פנימי אחראי, וספק
+     * אחראי איתו": המשימה נשארת בבורד הפנימי, ולכן היא אינה מגיעה לספק דרך
+     * הבורד שלו אלא דרך השיוך בלבד.
+     */
+    if (extras.some((e) => e.assignee_type === 'vendor' && e.assignee_id === actor.id)) return true;
     return board.type === 'vendor' && board.vendor_id === actor.id && task.assignee_id === actor.id;
   }
 
@@ -132,13 +236,13 @@ function canSeeTask(actor, task) {
     // מנהל מחלקה: משימות המחלקה שלו, ומשימות ארגוניות של אנשיה
     if (board.type === 'vendor') return P.may(actor, 'view_vendor_boards');
     return P.isInActorDepartment(actor, task, assigneeDepartmentId(task))
-      || P.isTaskParticipant(actor, task, projectOf(task));
+      || P.isTaskParticipant(actor, task, projectOf(task), extras);
   }
 
   // עובד פנימי: רק בבורד הפנימי, ורק משימות שהוא חלק מהן — אלא אם הוענקה לו
   // הרשאה אישית לראות את כל המחלקה, ואז אותו היקף כמו למנהל המחלקה
   if (board.type !== 'internal') return false;
-  if (P.isTaskParticipant(actor, task, projectOf(task))) return true;
+  if (P.isTaskParticipant(actor, task, projectOf(task), extras)) return true;
   return P.level(actor, 'view_internal_board') === 'department'
     && P.isInActorDepartment(actor, task, assigneeDepartmentId(task));
 }
@@ -148,7 +252,7 @@ function canSeeTask(actor, task) {
  * ארגוניות. עוטף את P.canOnTask כדי שאף קורא לא ישכח את הפרמטר הזה.
  */
 function mayOnTask(actor, action, task, project = null) {
-  return P.canOnTask(actor, action, task, project, assigneeDepartmentId(task));
+  return P.canOnTask(actor, action, task, project, assigneeDepartmentId(task), extraAssigneesOf(task));
 }
 
 function assertVisible(actor, task) {
@@ -168,6 +272,25 @@ function assigneeName(task) {
   return u ? u.full_name : null;
 }
 
+/** שם של אחראי לפי סוג ומזהה — אותה גזירה כמו assigneeName, בלי שורת משימה */
+function partyName(type, id) {
+  if (!id) return null;
+  const row = type === 'vendor'
+    ? D.get('SELECT name AS n FROM vendors WHERE id = ?', id)
+    : D.get('SELECT full_name AS n FROM users WHERE id = ?', id);
+  return row ? row.n : null;
+}
+
+/** האחראים הנוספים בצורה שהלקוח מציג — סוג, מזהה ושם */
+const shapeExtraAssignees = (taskId) => D.all(
+  `SELECT assignee_type, assignee_id FROM task_assignees
+    WHERE task_id = ? ORDER BY assignee_type, assignee_id`, taskId
+).map((r) => ({
+  type: r.assignee_type,
+  id: r.assignee_id,
+  name: partyName(r.assignee_type, r.assignee_id)
+})).filter((r) => r.name);   // אחראי שנמחק מהמערכת אינו מוצג כשורה ריקה
+
 const isOverdue = (task, final) =>
   !!task.due_date && !final && !task.archived && new Date(task.due_date).getTime() < Date.now();
 
@@ -186,6 +309,7 @@ function shapeSubtask(task) {
     assigneeType: task.assignee_type,
     assigneeId: task.assignee_id,
     assigneeName: assigneeName(task),
+    extraAssignees: shapeExtraAssignees(task.id),
     status: task.status,
     statusLabel: col ? col.label : task.status,
     statusColor: col ? col.color : '#94a3b8',
@@ -230,6 +354,7 @@ function shapeTask(task, actor, { withDetails = false } = {}) {
     assigneeType: task.assignee_type,
     assigneeId: task.assignee_id,
     assigneeName: assigneeName(task),
+    extraAssignees: shapeExtraAssignees(task.id),
     status: task.status,
     statusLabel: col ? col.label : task.status,
     statusColor: col ? col.color : '#94a3b8',
@@ -657,6 +782,9 @@ function visibleProjectIds(actor) {
 
   mine.push("(t.assignee_type = 'user' AND t.assignee_id = ?)", 't.created_by = ?');
   params.push(actor.id, actor.id);
+  // גם משימה שאני אחראי נוסף עליה פותחת את הפרויקט שלה לראייה
+  mine.push(EXTRA_ASSIGNEE_SQL);
+  params.push('user', actor.id);
 
   const rows = D.all(
     `SELECT DISTINCT p.id FROM projects p
@@ -675,22 +803,34 @@ function visibleProjectIds(actor) {
  * בחברה — וכך *כל* פרויקט היה "שלו", והמעבר "שלי / כל הארגון" איבד את
  * תוכנו.
  *
- * לכן "שלי" הוא אחראיות בפועל: פרויקט שאני מנהל, או שיש בו משימה שהוקצתה
- * לי. פתיחת הפרויקט אינה נחשבת, וגם לא פתיחת משימה בשביל מישהו אחר —
- * להעביר עבודה למישהו זה לא להחזיק בה. פרויקט חדש נשאר שלי בלי מאמץ, כי
- * ברירת המחדל של מנהל המשימות היא מי שפתח.
+ * לכן "שלי" הוא אחראיות בפועל: פרויקט שאני מנהל, שיש בו משימה שהוקצתה לי,
+ * או שפתחתי אותו. פתיחת משימה בשביל מישהו אחר אינה נחשבת — להעביר עבודה
+ * למישהו זה לא להחזיק בה.
+ *
+ * הפותח נכלל, ובגרסה קודמת לא — בהנחה שפרויקט חדש נשאר שלי בלי מאמץ, כי
+ * ברירת המחדל של מנהל המשימות היא מי שפתח. ההנחה אינה נכונה: אפשר לפתוח
+ * פרויקט בלי מנהל, וזה מה שעובד עושה. התוצאה הייתה שפרויקט שעובד פתח נעדר
+ * מרשימת "שלי" שלו — ומכיוון שזו ברירת המחדל של הסרגל, הוא לא מצא אותו כדי
+ * למחוק אותו. ההרשאה למחיקה הייתה תקינה כל העת; הפרויקט פשוט לא היה על המסך.
+ *
+ * אדמין-על ומנהל מערכת נשארים מחוץ לכלל הזה, לפי אותה הגדרה שקובעת מי נחשב
+ * פותח לצורך התראות: הם פותחים פרויקטים בשביל אחרים, ורשימת "שלי" שלהם
+ * הייתה מתמלאת בפרויקטים שאינם שלהם — וזו הבעיה שהחריגה נועדה למנוע.
  *
  * ההפרדה מהראייה היא קריטית: ‎visibleProjectIds‎ הוא גבול הרשאה, וצמצום שלו
  * היה מסתיר מעובד ומנהל מחלקה פרויקטים שהם כן רשאים לראות.
  */
 function ownedProjectIds(actor) {
   if (isVendor(actor)) return new Set();
+  const opener = D.countsAsOpener(actor.id) ? 1 : 0;
   const rows = D.all(
     `SELECT DISTINCT p.id FROM projects p
        LEFT JOIN tasks t ON t.project_id = p.id AND t.archived = 0
       WHERE p.manager_id = ?
-         OR (t.assignee_type = 'user' AND t.assignee_id = ?)`,
-    actor.id, actor.id
+         OR (t.assignee_type = 'user' AND t.assignee_id = ?)
+         OR (? = 1 AND p.created_by = ?)
+         OR ${EXTRA_ASSIGNEE_SQL}`,
+    actor.id, actor.id, opener, actor.id, 'user', actor.id
   );
   return new Set(rows.map((r) => r.id));
 }
@@ -805,8 +945,13 @@ router.get('/api/tasks', async (req, res, ctx) => {
 
   // הפרדת הבורדים — הבורד הפנימי ובורדי הספקים אינם נחשפים זה לזה
   if (isVendor(actor)) {
-    where.push("b.type = 'vendor'", 'b.vendor_id = ?', 't.assignee_id = ?');
-    params.push(actor.id, actor.id);
+    /*
+     * הספק רואה את הבורד שלו, או משימה כלשהי שהוא אחראי נוסף עליה. השנייה
+     * חיונית: משימה שבה עובד פנימי הוא האחראי הראשי נשארת בבורד הפנימי,
+     * ולכן בלי התנאי הזה הספק לא היה רואה אותה כלל.
+     */
+    where.push(`((b.type = 'vendor' AND b.vendor_id = ? AND t.assignee_id = ?) OR ${EXTRA_ASSIGNEE_SQL})`);
+    params.push(actor.id, actor.id, 'vendor', actor.id);
   } else {
     const scope = q.get('scope') ?? 'internal'; // internal | vendors | all
     if (scope === 'internal') {
@@ -820,6 +965,12 @@ router.get('/api/tasks', async (req, res, ctx) => {
       where.push("b.type = 'internal'");
     }
 
+    /*
+     * בכל שלושת החתכים נוסף אותו תנאי: משימה שאני אחראי נוסף עליה היא שלי.
+     * בלי זה אחראי נוסף היה מקבל התראה ויכול לפתוח את המשימה מקישור, אבל
+     * היא לא הייתה מופיעה לו בלוח ובדף הבית — כלומר בדיוק במקום שבו הוא
+     * אמור לעבוד איתה.
+     */
     if (actor.role === 'employee' && P.hasGrant(actor, 'view_department_tasks')) {
       // הרשאה אישית: כל משימות המחלקה, ומשימות ארגוניות של אנשיה
       where.push(`(
@@ -827,11 +978,13 @@ router.get('/api/tasks', async (req, res, ctx) => {
         OR (t.assignee_type = 'user' AND t.assignee_id = ?)
         OR t.created_by = ?
         OR p.manager_id = ?
+        OR ${EXTRA_ASSIGNEE_SQL}
       )`);
-      params.push(actor.departmentId, actor.id, actor.id, actor.id);
+      params.push(actor.departmentId, actor.id, actor.id, actor.id, 'user', actor.id);
     } else if (actor.role === 'employee') {
-      where.push("(t.assignee_id = ? AND t.assignee_type = 'user' OR t.created_by = ? OR p.manager_id = ?)");
-      params.push(actor.id, actor.id, actor.id);
+      where.push(`((t.assignee_id = ? AND t.assignee_type = 'user') OR t.created_by = ? OR p.manager_id = ?
+        OR ${EXTRA_ASSIGNEE_SQL})`);
+      params.push(actor.id, actor.id, actor.id, 'user', actor.id);
     } else if (actor.role === 'manager' && scope !== 'vendors') {
       // מנהל מחלקה: המחלקה שלו, משימות ארגוניות של אנשיה, ומה שהוא עצמו חלק ממנו
       where.push(`(
@@ -839,8 +992,9 @@ router.get('/api/tasks', async (req, res, ctx) => {
         OR (t.assignee_type = 'user' AND t.assignee_id = ?)
         OR t.created_by = ?
         OR p.manager_id = ?
+        OR ${EXTRA_ASSIGNEE_SQL}
       )`);
-      params.push(actor.departmentId, actor.id, actor.id, actor.id);
+      params.push(actor.departmentId, actor.id, actor.id, actor.id, 'user', actor.id);
     }
 
     // חתך מחלקתי — למי שרואה יותר ממחלקה אחת
@@ -953,19 +1107,7 @@ router.post('/api/tasks', async (req, res, ctx) => {
   const status = String(body.status ?? '') || Rules.firstColumnKey(boardId);
   if (!columnMeta(boardId, status)) throw badRequest('סטטוס לא קיים בבורד זה');
 
-  // הקצאה לאדם אחר אינה מובנת מאליה: עובד פנימי יוצר משימות לעצמו, ורק אם
-  // הוענקה לו הרשאה אישית (או שהוא מנהל ומעלה) הוא מקצה לאחרים במחלקתו.
-  if (assigneeType === 'user' && assigneeId && actor.type === 'user' && assigneeId !== actor.id) {
-    const lvl = P.level(actor, 'assign_department_task');
-    if (lvl === false) throw forbidden('אין לך הרשאה להקצות משימה לאדם אחר');
-    if (lvl === 'department') {
-      const target = D.get('SELECT department_id FROM users WHERE id = ?', assigneeId);
-      if (!target) throw badRequest('המשתמש שנבחר אינו קיים');
-      if ((target.department_id ?? null) !== (actor.departmentId ?? null)) {
-        throw forbidden('ניתן להקצות משימה לחברי המחלקה שלך בלבד');
-      }
-    }
-  }
+  assertMayAssignTo(actor, assigneeType, assigneeId);
 
   // המשימה משויכת למחלקת האחראי, ואם אין אחראי — למחלקת היוצר
   let taskDepartmentId = null;
@@ -1036,8 +1178,19 @@ router.post('/api/tasks', async (req, res, ctx) => {
     D.run('INSERT INTO checklist_items (task_id, text, position, note) VALUES (?,?,?,?)', id, text, i, note);
   }
 
+  /*
+   * אחראים נוספים. נכתבים אחרי יצירת המשימה ולא לפניה — הם תלויים במזהה
+   * שלה — ומאומתים באותו כלל שחל על האחראי הראשי.
+   */
+  const extras = parseExtraAssignees(body.extraAssignees, assigneeType, assigneeId) ?? [];
+  if (extras.length) {
+    setExtraAssignees(id, extras, actor);
+    D.audit(id, actorRef(actor), 'assignees', `אחראים נוספים: ${extras.map((e) => partyName(e.type, e.id)).filter(Boolean).join(', ')}`);
+  }
+
   D.audit(id, actorRef(actor), 'created', 'המשימה נוצרה');
   if (assigneeId) notifyAssignment(id, assigneeType, assigneeId, title, actor);
+  for (const e of extras) notifyAssignment(id, e.type, e.id, title, actor, { extra: true });
 
   sendJson(res, 201, { task: shapeTask(getTaskOr404(id), actor, { withDetails: true }) });
 });
@@ -1049,7 +1202,7 @@ router.post('/api/tasks', async (req, res, ctx) => {
  * עד שייכנס. הדואר נשלח בלי ‎await‎ במכוון — יצירת משימה לא תמתין לשרת דואר,
  * ולא תיכשל בגללו. השליחה עצמה אינה זורקת ורק רושמת ליומן.
  */
-function notifyAssignment(taskId, assigneeType, assigneeId, title, assigner = null) {
+function notifyAssignment(taskId, assigneeType, assigneeId, title, assigner = null, { extra = false } = {}) {
   /**
    * מי שהקצה משימה לעצמו יודע עליה — הוא בדיוק כתב אותה. התראה על כך היא
    * רעש שמכשיר את המשתמש להתעלם מהפעמון, ובדיוק בגללו הוא יפספס את המקרה
@@ -1062,7 +1215,8 @@ function notifyAssignment(taskId, assigneeType, assigneeId, title, assigner = nu
     targetType: assigneeType === 'vendor' ? 'vendor' : 'user',
     targetId: assigneeId,
     kind: 'assignment',
-    title: 'הוקצתה לך משימה חדשה',
+    // הנוסח מבחין, כי המשמעות שונה: אחראי נוסף אינו לבד על המשימה
+    title: extra ? 'הוגדרת אחראי נוסף על משימה' : 'הוקצתה לך משימה חדשה',
     body: title,
     taskId
   });
@@ -1163,9 +1317,15 @@ router.patch('/api/tasks/:id', async (req, res, ctx) => {
       const newType = body.assigneeType ?? task.assignee_type;
       const newId = body.assigneeId === null || body.assigneeId === '' ? null : Number(body.assigneeId ?? task.assignee_id);
       if (newType !== task.assignee_type || newId !== task.assignee_id) {
+        /*
+         * אותה בדיקה שחלה ביצירה. כאן היא נעדרה, והפער היה אמיתי: השער
+         * לעריכה הוא ‎edit_delete_task‎, שלעובד הוא 'own' ומסתפק בהיותו
+         * משויך למשימה — ולכן עובד ללא הרשאת הקצאה יכול היה לפתוח משימה
+         * לעצמו ומיד להעביר אותה בעריכה לכל אדם בארגון.
+         */
+        assertMayAssignTo(actor, newType, newId);
         let boardId = task.board_id;
         if (newType === 'vendor' && newId) {
-          requirePerm(actor, 'assign_task_to_vendor');
           const vb = D.get("SELECT id FROM boards WHERE type='vendor' AND vendor_id = ?", newId);
           if (!vb) throw badRequest('לספק אין בורד ייעודי');
           boardId = vb.id;
@@ -1186,6 +1346,25 @@ router.patch('/api/tasks/:id', async (req, res, ctx) => {
         changes.push(`אחראי: ${prevName} ← ${assigneeName(updated) ?? '—'}`);
         if (newId) notifyAssignment(task.id, newType, newId, task.title, actor);
       }
+    }
+
+    /*
+     * אחראים נוספים בעריכה. החלפה מלאה של הרשימה ולא מיזוג, כי זה מה
+     * שהממשק שולח — הרשימה שעל המסך היא הרשימה. התראה נשלחת רק למי שנוסף
+     * עכשיו, ולא לכל הרשימה: שמירה של שינוי בתאריך היעד לא תפציץ בהתראות
+     * את מי שהיה אחראי כבר קודם.
+     */
+    if (body.extraAssignees !== undefined) {
+      const fresh = getTaskOr404(task.id);
+      const next = parseExtraAssignees(body.extraAssignees, fresh.assignee_type, fresh.assignee_id) ?? [];
+      const before = new Set(extraAssigneesOf(task).map((e) => `${e.assignee_type}:${e.assignee_id}`));
+      setExtraAssignees(task.id, next, actor);
+      const added = next.filter((e) => !before.has(`${e.type}:${e.id}`));
+      const names = next.map((e) => partyName(e.type, e.id)).filter(Boolean);
+      if (added.length || before.size !== next.length) {
+        changes.push(names.length ? `אחראים נוספים: ${names.join(', ')}` : 'הוסרו האחראים הנוספים');
+      }
+      for (const e of added) notifyAssignment(task.id, e.type, e.id, task.title, actor, { extra: true });
     }
 
     if (body.archived !== undefined) {
@@ -1329,7 +1508,8 @@ router.post('/api/tasks/bulk', async (req, res, ctx) => {
       } else if (action === 'assignee') {
         if (!mayOnTask(actor, 'edit_delete_task', task, project)) throw forbidden();
         const [type, rawId] = String(value).split(':');
-        if (type === 'vendor') requirePerm(actor, 'assign_task_to_vendor');
+        // אותה בדיקה שביצירה ובעריכה — כאן היא נעדרה כמו ב-PATCH
+        assertMayAssignTo(actor, type, Number(rawId));
         const boardId = type === 'vendor'
           ? D.get("SELECT id FROM boards WHERE type='vendor' AND vendor_id = ?", Number(rawId))?.id
           : D.internalBoard().id;
@@ -2162,14 +2342,17 @@ router.get('/api/home', async (req, res, ctx) => {
   const actor = ctx.requireActor();
   const now = Date.now();
 
+  // "המשימות שלי" בדף הבית — גם אלה שאני אחראי נוסף עליהן. אחראי שאינו רואה
+  // את המשימה במסך שהוא פותח בבוקר אינו אחראי בפועל.
+  const actorParty = actor.type === 'vendor' ? 'vendor' : 'user';
   const mine = D.all(
     `SELECT t.* FROM tasks t
        JOIN boards b ON b.id = t.board_id
        LEFT JOIN board_columns c ON c.board_id = t.board_id AND c.key = t.status
       WHERE t.archived = 0
         AND (t.activate_at IS NULL OR t.activate_at <= ?)
-        AND t.assignee_type = ? AND t.assignee_id = ?`,
-    D.nowIso(), actor.type === 'vendor' ? 'vendor' : 'user', actor.id
+        AND ((t.assignee_type = ? AND t.assignee_id = ?) OR ${EXTRA_ASSIGNEE_SQL})`,
+    D.nowIso(), actorParty, actor.id, actorParty, actor.id
   ).map((t) => shapeTask(t, actor));
 
   const openMine = mine.filter((t) => !t.isFinal);
@@ -3642,10 +3825,20 @@ router.get('/api/tracker/export', async (req, res, ctx) => {
     .filter((t) => !columnMeta(t.board_id, t.status)?.is_final)
     .filter((t) => !owned || owned.has(t.project_id));
 
-  const header = ['פרויקט', 'משימה', 'תאריך יעד', 'סטטוס בקרה', 'סטטוס מקוצר', 'סטטוס', 'תת-משימה', 'אחראי', 'תאריך יעד של תת-המשימה'];
+  const header = ['פרויקט', 'משימה', 'תאריך יעד', 'סטטוס בקרה', 'סטטוס מקוצר', 'סטטוס',
+    'תת-משימה', 'אחראי', 'אחראים נוספים', 'ספק', 'תאריך יעד של תת-המשימה'];
   const body = rows.map((t) => {
     const shaped = shapeTask(t, actor);
     const sub = shaped.activeSubtask;
+    /*
+     * הספק, משני מקורות: אחראי נוסף על המשימה (המשימה נשארת בבורד הפנימי),
+     * או האחראי על תת-המשימה הפעילה. אותה גזירה שהעמודה במסך עושה.
+     */
+    const vendors = [
+      ...(shaped.extraAssignees ?? []).filter((e) => e.type === 'vendor').map((e) => e.name),
+      ...(sub?.assigneeType === 'vendor' ? [sub.assigneeName] : []),
+      ...(sub?.extraAssignees ?? []).filter((e) => e.type === 'vendor').map((e) => e.name)
+    ].filter(Boolean);
     return [
       shaped.projectName ?? 'ללא פרויקט',
       shaped.title,
@@ -3655,13 +3848,16 @@ router.get('/api/tracker/export', async (req, res, ctx) => {
       shaped.statusLabel,
       sub ? sub.title : '',
       sub ? (sub.assigneeName ?? '') : '',
+      (shaped.extraAssignees ?? []).filter((e) => e.type === 'user').map((e) => e.name).join(', '),
+      [...new Set(vendors)].join(', '),
       sub ? Rules.formatDate(sub.dueDate) : ''
     ];
   });
 
   const file = Xlsx.build([header, ...body], {
+    // מספר הרוחבים חייב להישאר זהה למספר הכותרות
     sheetName: 'בקרת משימות',
-    widths: [20, 38, 14, 18, 30, 16, 34, 20, 16]
+    widths: [20, 38, 14, 18, 30, 16, 34, 20, 24, 22, 16]
   });
   // התאריך בשם הקובץ, כדי ששני דוחות בתיקיית ההורדות לא יידרסו זה על זה
   const stamp = D.nowIso().slice(0, 10);

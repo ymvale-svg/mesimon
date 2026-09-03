@@ -143,11 +143,22 @@ const seesRoles = (actor) =>
 const isOrgWide = (actor) =>
   actor.type === 'user' && ['superadmin', 'admin', 'executive'].includes(actor.role);
 
-/** האם השחקן משויך למשימה (אחראי / יוצר / מנהל הפרויקט) */
-function isTaskParticipant(actor, task, project) {
+/**
+ * האם השחקן משויך למשימה (אחראי / אחראי נוסף / יוצר / מנהל הפרויקט).
+ *
+ * ‎extras‎ הם האחראים הנוספים מטבלת ‎task_assignees‎, ומגיעים כפרמטר ולא
+ * בשליפה מכאן — המודול הזה טהור ממסד נתונים בכוונה, כמו ש-‎assigneeDepartmentId‎
+ * מגיע מבחוץ. ברירת המחדל היא רשימה ריקה, ולכן קורא שלא העביר אותם מקבל
+ * בדיוק את ההתנהגות שהייתה לפני הפיצ'ר — נכשל לכיוון הסגור ולא הפתוח.
+ */
+function isTaskParticipant(actor, task, project, extras = []) {
+  const type = actor.type === 'vendor' ? 'vendor' : 'user';
+  const isExtra = extras.some((e) => e.assignee_type === type && e.assignee_id === actor.id);
+
   if (actor.type === 'vendor') {
-    return task.assignee_type === 'vendor' && task.assignee_id === actor.id;
+    return isExtra || (task.assignee_type === 'vendor' && task.assignee_id === actor.id);
   }
+  if (isExtra) return true;
   if (task.assignee_type === 'user' && task.assignee_id === actor.id) return true;
   if (task.created_by === actor.id) return true;
   if (project && project.manager_id === actor.id) return true;
@@ -165,17 +176,20 @@ function isInActorDepartment(actor, task, assigneeDepartmentId = undefined) {
 
 /**
  * בדיקת הרשאה על משימה ספציפית, לאחר יישום הסייגים.
- * assigneeDepartmentId נדרש כדי להכריע על משימות ארגוניות.
+ * assigneeDepartmentId נדרש כדי להכריע על משימות ארגוניות, ו-extras הם
+ * האחראים הנוספים. שניהם מגיעים מבחוץ — ‎mayOnTask‎ ב-api.js עוטף את
+ * הפונקציה הזו כדי שאף קורא לא ישכח אותם.
  */
-function canOnTask(actor, action, task, project = null, assigneeDepartmentId = undefined) {
+function canOnTask(actor, action, task, project = null, assigneeDepartmentId = undefined, extras = []) {
   const lvl = level(actor, action);
   if (lvl === true) return true;
   if (lvl === false) return false;
   if (lvl === 'department') {
-    return isInActorDepartment(actor, task, assigneeDepartmentId) || isTaskParticipant(actor, task, project);
+    return isInActorDepartment(actor, task, assigneeDepartmentId)
+      || isTaskParticipant(actor, task, project, extras);
   }
   if (lvl === 'own' || lvl === 'assigned' || lvl === 'self_board') {
-    return isTaskParticipant(actor, task, project);
+    return isTaskParticipant(actor, task, project, extras);
   }
   return false;
 }

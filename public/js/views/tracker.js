@@ -197,16 +197,38 @@ const TrackerView = (() => {
 
   function assigneeCell(sub) {
     if (!sub) return el('span.mute-sm', { text: '—' });
+    const current = sub.assigneeId ? `${sub.assigneeType}:${sub.assigneeId}` : '';
+
+    /*
+     * ספקים נכללים בבורר, ולא רק משתמשים פנימיים.
+     *
+     * בלעדיהם תת-משימה שהוקצתה לספק הציגה בורר ריק — ‎UI.select‎ אינו מוסיף
+     * אופציה שאינה ברשימה — ונראתה כמשימה בלי אחראי. גרוע מכך: מי שלחץ על
+     * הבורר "הריק" ובחר אדם העביר את המשימה מבורד הספק לבורד הפנימי בלי
+     * להתכוון.
+     *
+     * למי שאין הרשאת ספקים מוצג השם כטקסט ולא בורר: בורר שאינו מכיל את
+     * הערך הנוכחי גרוע מאין בורר.
+     */
+    const mayVendors = App.may('assign_task_to_vendor');
+    if (sub.assigneeType === 'vendor' && !mayVendors) {
+      return el('span.tag.tag-vendor', { title: sub.assigneeName ?? '' }, [sub.assigneeName ?? 'ספק']);
+    }
+
     // אותו סדר כמו בכל שאר בוררי האחראי במערכת
     const { near, far, deptName } = UI.usersByDepartment();
     const opt = (u) => ({ value: `user:${u.id}`, label: u.name });
+    const vendors = mayVendors
+      ? (App.state.vendors ?? []).filter((v) => v.status === 'active')
+        .map((v) => ({ value: `vendor:${v.id}`, label: `${v.name} (ספק חיצוני)` }))
+      : [];
     const options = [
       { value: '', label: 'ללא אחראי' },
       ...(near.length && far.length
         ? [{ label: deptName, options: near.map(opt) }, { label: 'שאר הארגון', options: far.map(opt) }]
-        : [...near, ...far].map(opt))
+        : [...near, ...far].map(opt)),
+      ...(vendors.length ? [{ label: 'ספקים חיצוניים', options: vendors }] : [])
     ];
-    const current = sub.assigneeId ? `${sub.assigneeType}:${sub.assigneeId}` : '';
     return UI.select(options, current, {
       class: 'tr-inline',
       onchange: async (e) => {
@@ -251,15 +273,48 @@ const TrackerView = (() => {
    */
   const COLUMNS = [
     { key: 'project', label: 'פרויקט', width: '150px', sort: (t) => t.projectName ?? '' },
-    { key: 'title', label: 'משימה', width: null, always: true, sort: (t) => t.title },
+    /*
+     * רוחב מפורש ולא ‎null‎: ב-‎table-layout: fixed‎ אין למי לחשב רוחב לפי
+     * התוכן, ועמודה בלי רוחב הייתה מקבלת את מה שנשאר — כלומר נדחסת לכלום
+     * בדיוק כשמדליקים עוד עמודה. עד שהמשתמש גורר, המספרים האלה הם יחסים.
+     */
+    { key: 'title', label: 'משימה', width: '240px', always: true, sort: (t) => t.title },
     { key: 'due', label: 'תאריך יעד', width: '128px', sort: (t) => t.dueDate ?? '9999-99-99' },
     { key: 'track', label: 'סטטוס', width: '58px', title: 'סטטוס בקרה — נקודת צבע', sort: (t) => t.trackStatusLabel ?? '' },
-    { key: 'short', label: 'סטטוס מקוצר', width: '16%', sort: (t) => t.statusShort ?? '' },
-    { key: 'subtask', label: 'תת-משימה', width: null, sort: (t) => t.activeSubtask?.title ?? '' },
+    { key: 'short', label: 'סטטוס מקוצר', width: '180px', sort: (t) => t.statusShort ?? '' },
+    { key: 'subtask', label: 'תת-משימה', width: '190px', sort: (t) => t.activeSubtask?.title ?? '' },
     { key: 'assignee', label: 'אחראי', width: '150px', sort: (t) => t.activeSubtask?.assigneeName ?? '' },
+    /*
+     * עמודת הספק כבויה כברירת מחדל, כפי שנתבקש — "אופציה להוסיף עמודת
+     * ספק". רוב הפרויקטים אינם מול ספקים, ועמודה עשירית קבועה הייתה דוחסת
+     * את שם המשימה אצל כולם בשביל מי שצריך אותה.
+     */
+    { key: 'vendor', label: 'ספק', width: '140px', defaultHidden: true, sort: (t) => vendorNames(t).join(', ') },
     { key: 'subDue', label: 'יעד תת-משימה', width: '128px', sort: (t) => t.activeSubtask?.dueDate ?? '9999-99-99' },
     { key: 'actions', label: '', width: '120px', fixed: true }
   ];
+
+  /**
+   * הספקים שאחראים על השורה, משני מקורות.
+   *
+   * אחראי נוסף על משימת האב — זו הדרך שבה ספק נושא באחריות בלי שהמשימה
+   * תעבור לבורד שלו — ואחראי של תת-המשימה הפעילה, שהוא המצב הישן שבו
+   * הקצאה לספק העבירה את תת-המשימה לבורד הספק.
+   *
+   * השם נלקח מהמשימה ולא מ-‎App.state.vendors‎: לעובד פנימי רשימת הספקים
+   * אינה נשלחת כלל, והעמודה הייתה נשארת ריקה אצלו.
+   */
+  function vendorNames(task) {
+    const names = (task.extraAssignees ?? [])
+      .filter((e) => e.type === 'vendor' && e.name)
+      .map((e) => e.name);
+    const sub = task.activeSubtask;
+    if (sub?.assigneeType === 'vendor' && sub.assigneeName) names.push(sub.assigneeName);
+    for (const e of sub?.extraAssignees ?? []) {
+      if (e.type === 'vendor' && e.name) names.push(e.name);
+    }
+    return [...new Set(names)];
+  }
 
   const colByKey = new Map(COLUMNS.map((c) => [c.key, c]));
   const colPref = () => App.getPref('trackerColumns', {}) ?? {};
@@ -274,15 +329,163 @@ const TrackerView = (() => {
     return [...order, ...rest].map((k) => colByKey.get(k));
   }
 
-  const shownColumns = () => {
-    const hidden = new Set(colPref().hidden ?? []);
-    return orderedColumns().filter((c) => c.fixed || c.always || !hidden.has(c.key));
+  /**
+   * האם העמודה מוצגת.
+   *
+   * שתי רשימות ולא אחת: ‎hidden‎ למה שהמשתמש כיבה, ו-‎shown‎ למה שהדליק
+   * במפורש. עמודה שברירת המחדל שלה כבויה נדרשת ל-‎shown‎, ולכן היעדר העדפה
+   * משמעו "כבויה" עבורה ו"דלוקה" עבור כל השאר — בלי לזרוע ברירות מחדל
+   * בהעדפה, ובלי שעמודה שתתווסף בעתיד תדלק לכולם מעצמה.
+   */
+  const isShown = (c) => {
+    if (c.fixed || c.always) return true;
+    const pref = colPref();
+    if (c.defaultHidden) return (pref.shown ?? []).includes(c.key);
+    return !(pref.hidden ?? []).includes(c.key);
   };
+
+  const shownColumns = () => orderedColumns().filter(isShown);
 
   const saveColumns = (patch) => {
     App.setPref('trackerColumns', { ...colPref(), ...patch });
     draw();
   };
+
+  // ------------------------------------------------------- רוחב העמודות
+
+  /*
+   * גבולות הרוחב. המינימום אינו אחיד: בעמודת תאריך יושב ‎input[type=date]‎
+   * שיש לו רוחב מינימלי משלו בדפדפן, וצמצום מתחתיו חותך את הפקד עצמו.
+   */
+  const COL_MIN = 56;
+  const COL_MIN_BY_KEY = { due: 112, subDue: 112, track: 44 };
+  const COL_MAX = 720;
+  const minOf = (key) => COL_MIN_BY_KEY[key] ?? COL_MIN;
+
+  const widthPrefs = () => colPref().widths ?? {};
+  /** הרוחב לתצוגה: מה שהמשתמש קבע, ואם לא — ברירת המחדל שבהגדרת העמודה */
+  const widthOf = (col) => {
+    const w = widthPrefs()[col.key];
+    return Number.isFinite(w) ? `${w}px` : (col.width ?? 'auto');
+  };
+
+  /** האם המשתמש קבע רוחב לעמודה כלשהי — קובע אם רוחב הטבלה הוא סכום מפורש */
+  const hasWidths = () => Object.keys(widthPrefs()).length > 0;
+
+  /**
+   * "החומרה" של הרוחבים בגרירה הראשונה.
+   *
+   * בלי זה הרחבת עמודה אחת נראית כאילו כל השאר זזו: כל עוד רוחב הטבלה הוא
+   * ‎100%‎, הדפדפן מצמצם את שאר העמודות בפרופורציה כדי להכניס את החדש.
+   * מדידה חד-פעמית של כל הכותרות הופכת את כולן למספר מפורש, ומאותו רגע
+   * גרירה משנה עמודה אחת והטבלה גדלה.
+   */
+  function materializeWidths(table, cols) {
+    const widths = { ...widthPrefs() };
+    const ths = table.querySelectorAll('thead th');
+    cols.forEach((c, i) => {
+      if (Number.isFinite(widths[c.key])) return;
+      const measured = Math.round(ths[i]?.getBoundingClientRect().width ?? 0);
+      widths[c.key] = Math.max(minOf(c.key), measured || parseInt(c.width, 10) || 140);
+    });
+    return widths;
+  }
+
+  // חוסם את קליק המיון שנולד מסיום גרירה
+  let resizedAt = 0;
+  let resizing = false;
+
+  /**
+   * ידית שינוי הרוחב, על הגבול השמאלי של הכותרת (הקצה ה"הבא" ב-RTL).
+   *
+   * הידית היא צאצא של ה-th שעליו יושב מאזין המיון, ולכן נדרשות כאן שלוש
+   * שכבות הגנה ולא אחת: עצירת ה-click שלה, ‎setPointerCapture‎ כדי שכל
+   * התזוזות יגיעו אליה, וחסם זמן ב-th עצמו — גרירה מהירה גורמת לדפדפן לכוון
+   * את הקליק לאב המשותף, וללא החסם כל שינוי רוחב היה גם ממיין.
+   */
+  function widthHandle(col, index, cols) {
+    const h = el('button.th-resize', {
+      type: 'button',
+      role: 'separator',
+      'aria-label': `רוחב עמודת ${col.label || 'פעולות'}`,
+      title: 'גרירה לשינוי רוחב · חצים ← → · לחיצה כפולה לאיפוס'
+    });
+
+    h.addEventListener('click', (e) => { e.stopPropagation(); e.preventDefault(); });
+
+    const commit = (widths) => { resizedAt = Date.now(); saveColumns({ widths }); };
+
+    h.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const th = h.closest('th');
+      const table = th.closest('table');
+      const colEls = table.querySelectorAll('colgroup col');
+      const widths = materializeWidths(table, cols);
+      const rtl = getComputedStyle(table).direction === 'rtl';
+
+      h.setPointerCapture(e.pointerId);
+      h.classList.add('dragging');
+      document.body.style.userSelect = 'none';
+      resizing = true;
+
+      /*
+       * הרוחב נמדד בכל תזוזה מהקצה המוביל של הכותרת, ולא כדלתא מצטברת:
+       * כך אין הצטברות שגיאה, וגלילה אופקית באמצע הגרירה מתקנת את עצמה.
+       * ‎scrollLeft‎ ב-RTL אינו אחיד בין דפדפנים, וגרסת הדלתא הייתה סוחפת
+       * את הידית מהסמן.
+       */
+      const onMove = (ev) => {
+        if (!th.isConnected) return;
+        const r = th.getBoundingClientRect();
+        const raw = rtl ? r.right - ev.clientX : ev.clientX - r.left;
+        const w = Math.round(Math.min(COL_MAX, Math.max(minOf(col.key), raw)));
+        widths[col.key] = w;
+        // כתיבה ישירה ל-DOM ולא שמירה: שמירה מציירת מחדש, וה-th שהידית
+        // תלויה עליו היה מתנתק אחרי הפיקסל הראשון
+        if (colEls[index]) colEls[index].style.width = `${w}px`;
+        table.style.width = `${cols.reduce((sum, c) => sum + (widths[c.key] ?? 0), 0)}px`;
+      };
+
+      const onUp = () => {
+        h.classList.remove('dragging');
+        document.body.style.userSelect = '';
+        resizing = false;
+        h.removeEventListener('pointermove', onMove);
+        h.removeEventListener('pointerup', onUp);
+        h.removeEventListener('pointercancel', onUp);
+        commit(widths);
+      };
+
+      h.addEventListener('pointermove', onMove);
+      h.addEventListener('pointerup', onUp);
+      h.addEventListener('pointercancel', onUp);
+    });
+
+    // לחיצה כפולה מחזירה את העמודה הזו לברירת המחדל
+    h.addEventListener('dblclick', (e) => {
+      e.stopPropagation();
+      const widths = { ...widthPrefs() };
+      delete widths[col.key];
+      commit(widths);
+    });
+
+    // מקלדת, כמו בידית התפריט. ב-RTL חץ שמאלה מרחיב
+    h.addEventListener('keydown', (e) => {
+      const step = e.shiftKey ? 48 : 16;
+      const dir = e.key === 'ArrowLeft' ? 1 : e.key === 'ArrowRight' ? -1 : 0;
+      if (!dir && e.key !== 'Home') return;
+      e.preventDefault();
+      e.stopPropagation();
+      const table = h.closest('table');
+      const widths = materializeWidths(table, cols);
+      if (e.key === 'Home') delete widths[col.key];
+      else widths[col.key] = Math.round(Math.min(COL_MAX, Math.max(minOf(col.key), widths[col.key] + dir * step)));
+      commit(widths);
+    });
+
+    return h;
+  }
 
   /** תוכן התא לפי מפתח העמודה */
   function cellFor(key, task) {
@@ -307,6 +510,12 @@ const TrackerView = (() => {
           ? el('button.txt.txt-open', { onclick: () => TaskCardView.open(sub.id) }, [sub.title])
           : el('span.mute-sm', { text: 'אין פעולה פתוחה' });
       case 'assignee': return assigneeCell(sub);
+      case 'vendor': {
+        const names = vendorNames(task);
+        return names.length
+          ? el('div.tr-vendors', {}, names.map((n) => el('span.tag.tag-vendor', { title: n }, [n])))
+          : el('span.mute-sm', { text: '—' });
+      }
       case 'subDue': return dueCell(sub, { muted: true });
       case 'actions':
         return App.may('create_task')
@@ -609,13 +818,15 @@ const TrackerView = (() => {
       ...list.map((c, i) => {
         const box = el('input', {
           type: 'checkbox',
-          checked: !hidden.has(c.key),
+          checked: isShown(c),
           disabled: !!c.always
         });
         box.addEventListener('change', () => {
-          const next = new Set(hidden);
-          if (box.checked) next.delete(c.key); else next.add(c.key);
-          saveColumns({ hidden: [...next] });
+          const nextHidden = new Set(hidden);
+          const nextShown = new Set(colPref().shown ?? []);
+          if (box.checked) { nextHidden.delete(c.key); nextShown.add(c.key); }
+          else { nextHidden.add(c.key); nextShown.delete(c.key); }
+          saveColumns({ hidden: [...nextHidden], shown: [...nextShown] });
           openColumnPicker(anchor);
         });
         return el('div.col-row', {}, [
@@ -625,6 +836,13 @@ const TrackerView = (() => {
           el('button.col-move', { title: 'הזזה למטה', disabled: i === list.length - 1, onclick: () => move(c.key, 1) }, ['▼'])
         ]);
       }),
+      el('div.col-hint', { text: 'רוחב עמודה נגרר מהגבול שבין הכותרות. לחיצה כפולה על הגבול מאפסת אותה.' }),
+      hasWidths()
+        ? el('button.btn.btn-sm.col-reset', {
+            // ‎{}‎ ולא ‎null‎: saveColumns עושה spread, ו-null היה נשמר כמפתח
+            onclick: () => { pop.remove(); saveColumns({ widths: {} }); }
+          }, ['איפוס רוחב העמודות'])
+        : null,
       el('button.btn.btn-sm.col-reset', {
         onclick: () => {
           // ‎null‎ מוחק את ההעדפה בשרת ומחזיר את ברירת המחדל, ולא שומר אובייקט ריק
@@ -754,22 +972,34 @@ const TrackerView = (() => {
 
   function headerRow(cols) {
     const s = colPref().sort;
-    return el('tr', {}, cols.map((c) => {
+    return el('tr', {}, cols.map((c, i) => {
       const active = s?.key === c.key;
       const sortable = !!c.sort;
+      // הרוחב מוחל ב-colgroup ולא כאן: שני מקורות אמת לרוחב אותה עמודה
+      // הם בדיוק מה שגורם לגרירה "לא לעשות כלום"
       const th = el(`th.th-${c.key}${sortable ? '.is-sortable' : ''}${active ? '.is-sorted' : ''}`, {
-        style: c.width ? { width: c.width } : {},
         title: c.title ?? (sortable ? `מיון לפי ${c.label}` : '')
       }, [
-        el('span', { text: c.label }),
-        active ? el('span.th-arrow', { text: s.dir === 'desc' ? '▼' : '▲' }) : null
+        el('span.th-label', { text: c.label }),
+        active ? el('span.th-arrow', { text: s.dir === 'desc' ? '▼' : '▲' }) : null,
+        // לעמודה האחרונה אין גבול עם הבאה אחריה, ולכן אין לה ידית
+        i < cols.length - 1 ? widthHandle(c, i, cols) : null
       ]);
-      if (sortable) th.addEventListener('click', () => toggleSort(c.key));
+      if (sortable) {
+        th.addEventListener('click', (e) => {
+          if (e.target.closest('.th-resize')) return;    // הידית, לא התווית
+          if (Date.now() - resizedAt < 300) return;       // קליק שנולד מסיום גרירה
+          toggleSort(c.key);
+        });
+      }
       return th;
     }));
   }
 
   function draw() {
+    // ציור מחדש באמצע גרירת רוחב מנתק את הכותרת שהידית תלויה עליה
+    if (resizing) return;
+
     const cols = shownColumns();
     const body = [];
     const collapsed = collapsedGroups();
@@ -794,6 +1024,16 @@ const TrackerView = (() => {
       }
     }
 
+    /*
+     * רוחב הטבלה הוא סכום העמודות ברגע שהמשתמש קבע רוחב, ולא ‎100%‎:
+     * ב-‎table-layout: fixed‎ עם רוחב ‎100%‎ הדפדפן מצמצם את כל העמודות
+     * בפרופורציה כדי להכניס אותן למסך, והרחבת עמודה אחת הייתה מכווצת בשקט
+     * את כל השאר. עם סכום מפורש הטבלה גדלה, והעוטף נגלל אופקית.
+     */
+    const total = hasWidths()
+      ? cols.reduce((sum, c) => sum + (widthPrefs()[c.key] ?? parseInt(c.width, 10) ?? 140), 0)
+      : 0;
+
     UI.mount(containerRef,
       el('div.view-head', {}, [
         el('h2', { text: 'בקרת משימות' }),
@@ -802,7 +1042,8 @@ const TrackerView = (() => {
       toolbar(),
       el('div.card', {}, [
         el('div.table-wrap', {}, [
-          el('table.data.tracker', {}, [
+          el('table.data.tracker', { style: total ? { width: `${total}px` } : {} }, [
+            el('colgroup', {}, cols.map((c) => el('col', { style: { width: widthOf(c) } }))),
             el('thead', {}, [headerRow(cols)]),
             el('tbody', {}, body.length ? body : [
               el('tr', {}, [el('td', { colspan: String(cols.length) }, [

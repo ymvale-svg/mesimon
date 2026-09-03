@@ -1128,19 +1128,38 @@ const App = (() => {
           if (mine !== seq) return;      // הקלדה חדשה עקפה את הבקשה הזו
           UI.clear(results);
 
-          if (!data.results.length) {
+          /*
+           * ‎?? []‎ ולא ‎data.results‎ ישירות: תשובה בצורה שאינה מוכרת אינה
+           * מפילה כאן חריגה שתיבלע. זה מה שקרה בפועל כשלקוח מגרסה קודמת
+           * פגש שרת מעודכן — התשובה הגיעה, המבנה השתנה, וההצגה נשברה בשקט
+           * בלי שדבר על המסך רמז שהחיפוש בכלל רץ.
+           */
+          const items = Array.isArray(data?.results) ? data.results : [];
+          if (!items.length) {
             results.appendChild(el('div.sr-empty', { text: `לא נמצא איזכור ל"${q}"` }));
           } else {
-            for (const item of data.results) results.appendChild(row(item, data.query));
+            for (const item of items) results.appendChild(row(item, data.query ?? q));
             // כשיש יותר ממה שמוצג — נאמר, ולא נשתוק
-            if (data.total > data.results.length) {
+            if (data.total > items.length) {
               results.appendChild(el('div.sr-more', {
-                text: `מוצגות ${data.results.length} מתוך ${data.total} — כדאי לצמצם את החיפוש`
+                text: `מוצגות ${items.length} מתוך ${data.total} — כדאי לצמצם את החיפוש`
               }));
             }
           }
           results.style.display = 'block';
-        } catch { /* התעלמות — חיפוש שנכשל לא יפיל את המסך */ }
+        } catch (err) {
+          /*
+           * כשל נאמר ואינו נבלע. חיפוש שאינו מציג דבר נראה למשתמש כחיפוש
+           * שאינו פעיל, והוא מנסה שוב ושוב באותה מילה — אין שום דבר על
+           * המסך שיאמר לו שהבקשה נשלחה ונכשלה.
+           */
+          if (mine !== seq) return;
+          UI.clear(results);
+          results.appendChild(el('div.sr-empty', {
+            text: `החיפוש נכשל: ${err?.message ?? 'שגיאה לא ידועה'}`
+          }));
+          results.style.display = 'block';
+        }
       }, SEARCH_DEBOUNCE_MS);
     });
 

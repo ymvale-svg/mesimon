@@ -224,6 +224,25 @@ CREATE TABLE IF NOT EXISTS comment_mentions (
   PRIMARY KEY (comment_id, user_id)
 );
 
+-- אחראים נוספים על משימה, מעבר לאחראי הראשי שיושב על tasks.assignee_id.
+--
+-- טבלה נפרדת ולא עמודה שנייה: לא כל משימה מתחלקת בין שניים בדיוק, ועמודה
+-- שנייה הייתה מחייבת שלישית ורביעית בכל פעם שמישהו מבקש עוד אחד.
+--
+-- האחראי הראשי נשאר על tasks ואינו עובר לכאן, וזו החלטה מכוונת: הוא לא רק
+-- שיוך אלא גם ניתוב — סוג האחראי קובע באיזה בורד המשימה יושבת, לאיזו מחלקה
+-- היא נספרת ואיזו זרימת סטטוסים חלה עליה. אחראי נוסף אינו מזיז דבר מאלה,
+-- ובדיוק לכן הוא יכול להיות ספק בזמן שהאחראי הראשי הוא עובד פנימי — שני
+-- בורדים לאותה משימה אינם אפשריים, ושתי אחריויות כן.
+CREATE TABLE IF NOT EXISTS task_assignees (
+  task_id       INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  assignee_type TEXT    NOT NULL CHECK (assignee_type IN ('user','vendor')),
+  assignee_id   INTEGER NOT NULL,
+  added_at      TEXT    NOT NULL,
+  added_by      INTEGER REFERENCES users(id),
+  PRIMARY KEY (task_id, assignee_type, assignee_id)
+);
+
 -- קבצים מצורפים עם שמירת גרסאות היסטוריות (לא דריסה)
 CREATE TABLE IF NOT EXISTS attachments (
   id            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -439,6 +458,9 @@ CREATE TABLE IF NOT EXISTS sessions (
 CREATE INDEX IF NOT EXISTS idx_tasks_board    ON tasks(board_id);
 CREATE INDEX IF NOT EXISTS idx_tasks_project  ON tasks(project_id);
 CREATE INDEX IF NOT EXISTS idx_tasks_assignee ON tasks(assignee_type, assignee_id);
+-- האינדקס ההופכי: המפתח הראשי נפתח ב-task_id, אבל השאילתה השכיחה היא
+-- ההפוכה — "אילו משימות אני אחראי עליהן" — והיא זו שרצה בכל רשימת משימות
+CREATE INDEX IF NOT EXISTS idx_task_assignees_who ON task_assignees(assignee_type, assignee_id);
 CREATE INDEX IF NOT EXISTS idx_notif_target   ON notifications(target_type, target_id, is_read);
 CREATE INDEX IF NOT EXISTS idx_audit_task     ON audit_log(task_id);
 `);

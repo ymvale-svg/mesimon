@@ -46,6 +46,15 @@ function alertTargets(task) {
   if (task.project_id) add(D.get('SELECT manager_id FROM projects WHERE id = ?', task.project_id)?.manager_id);
 
   /*
+   * אחראים נוספים. רק המשתמשים הפנימיים מתוכם: הפונקציה מחזירה מזהי
+   * משתמשים בלבד, וספק שהוגדר אחראי נוסף מקבל את ההתראות שלו במסלול הספק.
+   * ‎Set‎ מבטיח שמי שהוא גם האחראי הראשי לא יקבל פעמיים.
+   */
+  for (const e of D.all(
+    "SELECT assignee_id FROM task_assignees WHERE task_id = ? AND assignee_type = 'user'", task.id
+  )) add(e.assignee_id);
+
+  /*
    * משימת ספק אינה שייכת לאיש בארגון: האחראי עליה הוא הספק, ולכן אין לה גם
    * שיוך מחלקתי. התוצאה הייתה שכל מה שספק עשה — העלה תוצר, הגיב, סיים —
    * לא הודיע לאף אחד, אלא אם במקרה הוגדר לפרויקט מנהל.

@@ -589,6 +589,19 @@ const TaskCardView = (() => {
     return el('div.td-side', {}, [
       sec('סטטוס', statusControl),
       sec('אחראי', assigneeControl),
+      /*
+       * אחראים נוספים מוצגים ואינם נערכים כאן: העריכה נעשית בדיאלוג המשימה,
+       * שם יושב הבורר המלא. שני מקומות עריכה לאותו שדה היו דורשים שני
+       * מימושים של אותו סינון "מי כבר נבחר".
+       */
+      (task.extraAssignees ?? []).length
+        ? sec('אחראים נוספים', el('div.flex-wrap', {}, task.extraAssignees.map((e) =>
+            el('div.flex', { style: { gap: '5px' } }, [
+              UI.avatar(e.name, { small: true, vendor: e.type === 'vendor' }),
+              el('span', { text: e.name })
+            ])
+          )))
+        : null,
       sec('עדיפות', priorityControl),
       sec('תאריך יעד', el('div', {}, [
         dueControl,

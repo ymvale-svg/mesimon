@@ -638,6 +638,67 @@ const BoardView = (() => {
     const assigneeSelect = UI.select(assigneeOptions,
       task?.assigneeId ? `${task.assigneeType}:${task.assigneeId}` : (isEdit ? '' : meAsAssignee));
 
+    /*
+     * אחראים נוספים.
+     *
+     * רשימה ולא שדה בודד: משימה שמתחלקת בין שניים מתחלקת לפעמים בין שלושה,
+     * ושדה "אחראי שני" היה מזמין מיד את הבקשה לשלישי.
+     *
+     * מאותה רשימת אפשרויות של האחראי הראשי, ולכן ספק יכול להיות אחראי נוסף
+     * בזמן שהאחראי הראשי הוא עובד פנימי — האחראי הראשי הוא זה שקובע באיזה
+     * בורד המשימה יושבת, ואחראי נוסף אינו מזיז אותה.
+     */
+    const extraAssignees = (task?.extraAssignees ?? []).map((e) => `${e.type}:${e.id}`);
+    const extraList = el('div.extra-assignees');
+
+    const drawExtras = () => {
+      const taken = new Set([assigneeSelect.value, ...extraAssignees].filter(Boolean));
+      // מי שכבר נבחר אינו מוצע שוב — אותו אדם פעמיים אינו שתי אחריויות
+      const free = assigneeOptions
+        .map((o) => (o.options ? { ...o, options: o.options.filter((x) => !taken.has(x.value)) } : o))
+        .filter((o) => (o.options ? o.options.length : o.value && !taken.has(o.value)));
+
+      const labelOf = (value) => {
+        for (const o of assigneeOptions) {
+          if (o.options) { const hit = o.options.find((x) => x.value === value); if (hit) return hit.label; }
+          else if (o.value === value) return o.label;
+        }
+        // אחראי שאינו ברשימה (ספק למי שאין לו הרשאת ספקים) — לפי מה שהשרת שלח
+        const known = (task?.extraAssignees ?? []).find((e) => `${e.type}:${e.id}` === value);
+        return known?.name ?? value;
+      };
+
+      UI.mount(extraList,
+        ...extraAssignees.map((value) => el('span.chip.chip-assignee', {}, [
+          el('span', { text: labelOf(value) }),
+          el('button.chip-x', {
+            type: 'button', title: 'הסרה',
+            onclick: () => {
+              extraAssignees.splice(extraAssignees.indexOf(value), 1);
+              drawExtras();
+            }
+          }, ['✕'])
+        ])),
+        free.length
+          ? UI.select([{ value: '', label: '＋ הוספת אחראי נוסף…' }, ...free], '', {
+              class: 'extra-add',
+              onchange: (e) => {
+                if (!e.target.value) return;
+                extraAssignees.push(e.target.value);
+                drawExtras();
+              }
+            })
+          : el('span.mute-sm', { text: 'אין עוד למי להוסיף' })
+      );
+    };
+    drawExtras();
+    // החלפת האחראי הראשי מוציאה אותו מרשימת האחראים הנוספים אם הוא בה
+    assigneeSelect.addEventListener('change', () => {
+      const at = extraAssignees.indexOf(assigneeSelect.value);
+      if (at !== -1) extraAssignees.splice(at, 1);
+      drawExtras();
+    });
+
     const prioritySelect = UI.select(App.state.priorities.map((p) => ({ value: p.key, label: p.label })), task?.priority ?? 'normal');
     const dueInput = el('input', { type: 'date', value: UI.toInputDate(task?.dueDate) });
     const activateInput = el('input', { type: 'date', value: UI.toInputDate(task?.activateAt) });
@@ -708,6 +769,8 @@ const BoardView = (() => {
         UI.field('פרויקט', projectSelect, 'משימה ללא פרויקט תופיע בלוח בקבוצת "ללא פרויקט"'),
         UI.field('אחראי', assigneeSelect, 'משימה ללא אחראי לא תופיע ב"המשימות שלי" של אף אחד')
       ]),
+      UI.field('אחראים נוספים', extraList,
+        'המשימה תופיע גם אצלם, והם יקבלו את ההתראות. אפשר לצרף גם ספק חיצוני — המשימה נשארת בלוח הפנימי'),
       el('div.row', {}, [UI.field('עדיפות', prioritySelect), UI.field('תאריך יעד', dueInput)]),
       el('div.row', {}, [
         UI.field('תלות במשימה אחרת', dependsSelect, 'המשימה לא תיסגר לפני שהמשימה החוסמת תושלם'),
@@ -741,6 +804,8 @@ const BoardView = (() => {
         projectId: projectSelect.value || null,
         assigneeType: aType,
         assigneeId: aId ? Number(aId) : null,
+        // תמיד נשלח, גם כשריק: רשימה ריקה היא הסרת כל האחראים הנוספים
+        extraAssignees,
         priority: prioritySelect.value,
         dueDate: UI.fromInputDate(dueInput.value),
         activateAt: UI.fromInputDate(activateInput.value),
