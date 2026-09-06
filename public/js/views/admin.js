@@ -1362,53 +1362,169 @@ const AdminView = (() => {
 
   // ------------------------------------------------------------- תבניות
 
-  async function templatesTab(body) {
-    const data = await API.templates();
+  /**
+   * ניהול התבניות.
+   *
+   * המסך נבנה מחדש משלוש סיבות. ראשית, פריטי התבנית הוצגו כ-‎[object Object]‎:
+   * תבנית שנשמרה ממשימה שומרת כל סעיף כ-‎{ text, note }‎ כדי לשמר את ההערות,
+   * וההצגה שרשרה אותו כמחרוזת. שנית, אפשר היה רק ליצור ולמחוק — תיקון שם או
+   * סעיף חייב מחיקה ובנייה מחדש, ולכן בפועל נוצרו כפילויות במקום עריכות.
+   * שלישית, התבניות הן כעת פר מחלקה, ומסך שאינו מציג את המחלקה אינו מאפשר
+   * לנהל אותן.
+   */
+  const templateItems = (t) => (t.payload?.checklist ?? t.payload?.tasks ?? [])
+    // סעיף שנשמר ממשימה הוא אובייקט עם הערה; סעיף שהוקלד כאן הוא מחרוזת
+    .map((item) => (typeof item === 'string'
+      ? { text: item, note: '' }
+      : { text: String(item?.text ?? ''), note: String(item?.note ?? '') }))
+    .filter((i) => i.text);
 
-    const dialog = () => {
-      const kindSelect = UI.select([{ value: 'task', label: 'תבנית משימה' }, { value: 'project', label: 'תבנית פרויקט' }], 'task');
-      const nameInput = el('input', { type: 'text' });
-      const itemsInput = el('textarea', { placeholder: 'פריט בכל שורה — סעיפי צ׳קליסט (למשימה) או משימות (לפרויקט)' });
-      const saveBtn = el('button.btn.btn-primary', {}, ['שמירה']);
+  /** הפריטים כטקסט לעריכה. הערה נכתבת אחרי ‎|‎ באותה שורה */
+  const itemsToText = (items) =>
+    items.map((i) => (i.note ? `${i.text} | ${i.note}` : i.text)).join('\n');
+
+  const textToItems = (text) => text.split('\n').map((line) => {
+    const at = line.indexOf('|');
+    const item = at === -1
+      ? { text: line.trim(), note: '' }
+      : { text: line.slice(0, at).trim(), note: line.slice(at + 1).trim() };
+    return item;
+  }).filter((i) => i.text);
+
+  async function templatesTab(body) {
+    // רשימת המחלקות אינה חלק מנתוני הטעינה הכלליים, ונטענת כאן כמו בשאר
+    // הלשוניות. כשל בה אינו מפיל את המסך — נשארת בחירת "כל הארגון" בלבד
+    const [data, deptData] = await Promise.all([
+      API.templates(),
+      API.departments().catch(() => ({ departments: [] }))
+    ]);
+    const departments = deptData.departments ?? [];
+    const deptOptions = [
+      { value: '', label: 'כל הארגון — נראית לכולם' },
+      ...departments.map((d) => ({ value: String(d.id), label: d.name }))
+    ];
+
+    /** דיאלוג אחד ליצירה ולעריכה — אותם שדות, ולכן אין סיבה לשני מסכים */
+    const dialog = (tpl = null) => {
+      const isEdit = !!tpl;
+      const kindSelect = UI.select(
+        [{ value: 'task', label: 'תבנית משימה' }, { value: 'project', label: 'תבנית פרויקט' }],
+        tpl?.kind ?? 'task'
+      );
+      // סוג התבנית קובע את מבנה המטען, ושינויו בדיעבד היה הופך צ'קליסט לרשימת משימות
+      kindSelect.disabled = isEdit;
+      const nameInput = el('input', { type: 'text', value: tpl?.name ?? '' });
+      nameInput.value = tpl?.name ?? '';
+      const deptSelect = UI.select(deptOptions, tpl ? String(tpl.departmentId ?? '') : '');
+      const itemsInput = el('textarea', {
+        rows: '10',
+        placeholder: 'פריט בכל שורה. הערה נכתבת אחרי | באותה שורה'
+      });
+      itemsInput.value = tpl ? itemsToText(templateItems(tpl)) : '';
+
+      const saveBtn = el('button.btn.btn-primary', {}, [isEdit ? 'שמירת השינויים' : 'יצירת התבנית']);
       const m = UI.modal({
-        title: 'תבנית חדשה',
-        body: el('div', {}, [UI.field('סוג', kindSelect), UI.field('שם התבנית', nameInput), UI.field('פריטים', itemsInput)]),
+        title: isEdit ? `עריכת "${tpl.name}"` : 'תבנית חדשה',
+        body: el('div', {}, [
+          el('div.row', {}, [UI.field('סוג', kindSelect), UI.field('מחלקה', deptSelect,
+            'עובדי מחלקה אחרת לא יראו את התבנית')]),
+          UI.field('שם התבנית', nameInput),
+          UI.field('פריטים', itemsInput,
+            'שורה לכל סעיף. טקסט אחרי | נשמר כהערה על הסעיף')
+        ]),
         footer: [saveBtn, el('div.spacer')]
       });
+
       saveBtn.addEventListener('click', async () => {
-        const items = itemsInput.value.split('\n').map((s) => s.trim()).filter(Boolean);
-        const payload = kindSelect.value === 'task' ? { checklist: items } : { tasks: items };
+        const name = nameInput.value.trim();
+        if (!name) return UI.toast('נדרש שם לתבנית', 'error');
+        const items = textToItems(itemsInput.value);
+        /*
+         * תבנית משימה שומרת אובייקטים כדי לשמר את ההערות; תבנית פרויקט
+         * שומרת שמות משימה בלבד, כי אין לה למה לתלות הערה.
+         */
+        const payload = kindSelect.value === 'task'
+          ? { checklist: items }
+          : { tasks: items.map((i) => i.text) };
+        const departmentId = deptSelect.value || null;
+        saveBtn.disabled = true;
         try {
-          await API.createTemplate({ kind: kindSelect.value, name: nameInput.value.trim(), payload });
+          if (isEdit) await API.updateTemplate(tpl.id, { name, payload, departmentId });
+          else await API.createTemplate({ kind: kindSelect.value, name, payload, departmentId });
           m.close();
           reload();
-        } catch (err) { UI.error(err); }
+        } catch (err) { saveBtn.disabled = false; UI.error(err); }
       });
     };
+
+    const card = (t) => {
+      const items = templateItems(t);
+      return el('div.card', {}, [
+        el('div.card-head', {}, [
+          el('h3', { text: t.name }),
+          el('span.tag', { class: t.kind === 'task' ? 'tag-internal' : 'tag-vendor' },
+            [t.kind === 'task' ? 'משימה' : 'פרויקט']),
+          // המחלקה על הכרטיס: בלעדיה אי אפשר לדעת מי בכלל רואה את התבנית
+          el('span.tag', { class: t.departmentId ? '' : 'tag-org' },
+            [t.departmentName ?? 'כל הארגון']),
+          el('div.spacer'),
+          el('button.btn.btn-sm', { onclick: () => dialog(t) }, ['✎ עריכה']),
+          el('button.btn.btn-sm.btn-danger', {
+            onclick: async () => {
+              if (!await UI.confirm(
+                `התבנית "${t.name}" תימחק. משימות ופרויקטים שכבר נוצרו ממנה אינם משתנים.`,
+                { title: 'מחיקת תבנית', danger: true, okText: 'מחיקה' })) return;
+              try { await API.deleteTemplate(t.id); reload(); } catch (err) { UI.error(err); }
+            }
+          }, ['מחיקה'])
+        ]),
+        el('div.card-pad', {}, [
+          items.length
+            ? el('ol.tpl-items', {}, items.map((i) => el('li', {}, [
+                el('span', { text: i.text }),
+                i.note ? el('div.tpl-note', { text: i.note }) : null
+              ])))
+            : el('div.mute-sm', { text: 'אין פריטים בתבנית' }),
+          el('div.tpl-meta', {
+            text: t.updatedAt
+              ? `עודכנה ${UI.relative(t.updatedAt)}${t.updatedBy ? ` · ${t.updatedBy}` : ''}`
+              : `נוצרה ${UI.relative(t.createdAt)}`
+          })
+        ])
+      ]);
+    };
+
+    // קיבוץ לפי מחלקה, כי זו יחידת הראייה — ורשימה מעורבת אינה ניתנת לסריקה
+    const groups = new Map();
+    for (const t of data.templates) {
+      const key = t.departmentName ?? 'כל הארגון';
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(t);
+    }
 
     UI.mount(body,
       el('div.alert.alert-info.mb', {}, [
         el('span', { text: '📑' }),
-        el('div', { text: 'תבניות למשימות ולפרויקטים שחוזרים על עצמם. תבנית פרויקט יוצרת אוטומטית את משימות הבסיס שלו.' })
+        el('div', { text: 'תבניות למשימות ולפרויקטים שחוזרים על עצמם. תבנית שייכת למחלקה, ועובדי מחלקה אחרת אינם רואים אותה — תבנית של "כל הארגון" נראית לכולם. תבנית פרויקט יוצרת אוטומטית את משימות הבסיס שלו.' })
       ]),
-      el('div.flex.mb', {}, [el('div.spacer'), el('button.btn.btn-primary', { onclick: dialog }, ['＋ תבנית חדשה'])]),
-      el('div.grid.grid-2', {}, data.templates.length ? data.templates.map((t) =>
-        el('div.card', {}, [
-          el('div.card-head', {}, [
-            el('h3', { text: t.name }),
-            el('span.tag', { class: t.kind === 'task' ? 'tag-internal' : 'tag-vendor' }, [t.kind === 'task' ? 'משימה' : 'פרויקט']),
-            el('div.spacer'),
-            el('button.btn.btn-sm.btn-danger', {
-              onclick: async () => {
-                if (!await UI.confirm(`למחוק את התבנית "${t.name}"?`, { danger: true, okText: 'מחיקה' })) return;
-                try { await API.deleteTemplate(t.id); reload(); } catch (err) { UI.error(err); }
-              }
-            }, ['מחיקה'])
-          ]),
-          el('div.card-pad', {}, (t.payload.checklist ?? t.payload.tasks ?? []).map((item) =>
-            el('div', { text: `• ${item}`, style: { padding: '2px 0', fontSize: '13px' } })))
-        ])
-      ) : [UI.empty('אין תבניות', '📑')])
+      el('div.flex.mb', {}, [
+        el('span.mute-sm', {
+          text: data.templates.length
+            ? `${data.templates.length} תבניות ב-${groups.size} קבוצות`
+            : ''
+        }),
+        el('div.spacer'),
+        el('button.btn.btn-primary', { onclick: () => dialog() }, ['＋ תבנית חדשה'])
+      ]),
+      ...(data.templates.length
+        ? [...groups.entries()].flatMap(([name, list]) => [
+            el('h4.tpl-group', {}, [
+              el('span', { text: name }),
+              el('span.mute-sm', { text: `${list.length}` })
+            ]),
+            el('div.grid.grid-2.mb', {}, list.map(card))
+          ])
+        : [UI.empty('אין תבניות', '📑')])
     );
   }
 

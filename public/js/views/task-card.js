@@ -682,21 +682,7 @@ const TaskCardView = (() => {
 
             App.may('create_task')
               ? el('button.btn.btn-block', {
-                  onclick: async () => {
-                    const name = await UI.prompt('שם התבנית', {
-                      title: 'שמירה כתבנית',
-                      value: task.title,
-                      hint: `נשמרים הכותרת, התיאור, העדיפות והצ׳קליסט (${task.checklist.length} סעיפים) עם ההערות שבו. השיחה והקבצים אינם חלק מהתבנית.`,
-                      okText: 'שמירת התבנית'
-                    });
-                    if (name === null) return;
-                    try {
-                      const r = await API.saveTaskTemplate(task.id, name);
-                      UI.success(r.checklistCount
-                        ? `התבנית "${name}" נשמרה, כולל ${r.checklistCount} סעיפי צ׳קליסט`
-                        : `התבנית "${name}" נשמרה`);
-                    } catch (err) { UI.error(err); }
-                  }
+                  onclick: () => saveAsTemplateDialog(task)
                 }, ['💾 שמירה כתבנית'])
               : null,
             el('button.btn.btn-block', {
@@ -758,6 +744,92 @@ const TaskCardView = (() => {
    * רענון הכרטיס אם הוא פתוח בדיוק על המשימה הזו. נדרש כשתגובה נשלחה מחוץ
    * לדף — מתוך התראת מערכת — ולא עברה דרך תיבת התגובה שבכרטיס.
    */
+  /**
+   * שמירה כתבנית — חדשה, או החלפה של תבנית קיימת.
+   *
+   * ההחלפה היא העיקר כאן. בלעדיה כל תיקון בצ'קליסט הוליד "בקרת תכן",
+   * "בקרת תכן חדש" ו"בקרת תכן סופי", והבורר התמלא בגרסאות של אותה תבנית
+   * שאיש אינו יודע איזו מהן העדכנית.
+   *
+   * הרשימה לבחירה היא התבניות שהמשתמש רואה — כלומר של מחלקתו — ולכן אי
+   * אפשר לדרוס בטעות תבנית של מחלקה אחרת.
+   */
+  async function saveAsTemplateDialog(task) {
+    let existing = [];
+    try {
+      existing = ((await API.templates()).templates ?? []).filter((t) => t.kind === 'task');
+    } catch { /* בלי רשימה נשארת שמירה כחדשה בלבד */ }
+
+    const modeNew = el('input', { type: 'radio', name: 'tpl-mode', value: 'new', checked: true });
+    const modeReplace = el('input', { type: 'radio', name: 'tpl-mode', value: 'replace' });
+    const nameInput = el('input', { type: 'text', value: task.title });
+    nameInput.value = task.title;
+    const pickSelect = UI.select(
+      existing.map((t) => ({ value: String(t.id), label: t.departmentName ? `${t.name} · ${t.departmentName}` : t.name })),
+      existing.length ? String(existing[0].id) : ''
+    );
+
+    const sync = () => {
+      const replacing = modeReplace.checked;
+      pickSelect.disabled = !replacing;
+      // בהחלפה השם מגיע מהתבנית שנבחרה, אלא אם המשתמש משנה אותו במפורש
+      if (replacing) {
+        const hit = existing.find((t) => String(t.id) === pickSelect.value);
+        if (hit) nameInput.value = hit.name;
+      } else {
+        nameInput.value = task.title;
+      }
+    };
+    modeNew.addEventListener('change', sync);
+    modeReplace.addEventListener('change', sync);
+    pickSelect.addEventListener('change', sync);
+    sync();
+
+    const saveBtn = el('button.btn.btn-primary', {}, ['שמירת התבנית']);
+    const m = UI.modal({
+      title: 'שמירה כתבנית',
+      body: el('div', {}, [
+        el('div.hint.mb', {
+          text: `נשמרים הכותרת, התיאור, העדיפות והצ׳קליסט (${task.checklist.length} סעיפים) עם ההערות שבו. השיחה והקבצים אינם חלק מהתבנית.`
+        }),
+        el('div.field', {}, [
+          el('label.checkbox', {}, [modeNew, 'תבנית חדשה']),
+          existing.length
+            ? el('label.checkbox', {}, [modeReplace, 'החלפת תבנית קיימת'])
+            // בלי תבניות אין מה להחליף, ורדיו מושבת רק מבלבל
+            : el('div.mute-sm', { text: 'אין עדיין תבניות משימה להחלפה' })
+        ]),
+        existing.length ? UI.field('התבנית שתוחלף', pickSelect) : null,
+        UI.field('שם התבנית', nameInput)
+      ]),
+      footer: [saveBtn, el('div.spacer')]
+    });
+
+    saveBtn.addEventListener('click', async () => {
+      const name = nameInput.value.trim();
+      if (!name) return UI.toast('נדרש שם לתבנית', 'error');
+      const replaceId = modeReplace.checked && pickSelect.value ? Number(pickSelect.value) : null;
+      if (replaceId) {
+        const hit = existing.find((t) => t.id === replaceId);
+        const ok = await UI.confirm(
+          `התוכן של "${hit?.name ?? ''}" יוחלף בתוכן המשימה הזו. משימות שכבר נוצרו מהתבנית אינן משתנות.`,
+          { title: 'החלפת תבנית', danger: true, okText: 'החלפה' }
+        );
+        if (!ok) return;
+      }
+      saveBtn.disabled = true;
+      try {
+        const r = await API.saveTaskTemplate(task.id, name, replaceId);
+        m.close();
+        const items = r.checklistCount ? `, כולל ${r.checklistCount} סעיפי צ׳קליסט` : '';
+        UI.success(r.replaced ? `התבנית "${name}" הוחלפה${items}` : `התבנית "${name}" נשמרה${items}`);
+      } catch (err) {
+        saveBtn.disabled = false;
+        UI.error(err);
+      }
+    });
+  }
+
   async function refreshIfOpen(taskId) {
     if (!modalRef || !task || task.id !== Number(taskId)) return;
     try { await reload(); } catch { /* הכרטיס נסגר בינתיים */ }

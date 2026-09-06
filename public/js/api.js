@@ -119,7 +119,9 @@ const API = (() => {
     runRules: () => call('POST', '/api/admin/rules/run', {}),
     wipeSystem: (confirm) => call('POST', '/api/admin/wipe', { confirm }),
     duplicateTask: (id, body = {}) => call('POST', `/api/tasks/${id}/duplicate`, body),
-    saveTaskTemplate: (id, name) => call('POST', `/api/tasks/${id}/template`, { name }),
+    // ‎replaceId‎ מחליף תבנית קיימת במקום ליצור עוד אחת בשם דומה
+    saveTaskTemplate: (id, name, replaceId = null) =>
+      call('POST', `/api/tasks/${id}/template`, { name, replaceId }),
     importUsers: (body) => call('POST', '/api/admin/users/import', body),
     addColumn: (boardId, body) => call('POST', `/api/boards/${boardId}/columns`, body),
     updateColumn: (boardId, id, body) => call('PATCH', `/api/boards/${boardId}/columns/${id}`, body),
@@ -130,6 +132,7 @@ const API = (() => {
     deleteFilter: (id) => call('DELETE', `/api/saved-filters/${id}`),
     templates: () => call('GET', '/api/templates'),
     createTemplate: (body) => call('POST', '/api/templates', body),
+    updateTemplate: (id, body) => call('PATCH', `/api/templates/${id}`, body),
     deleteTemplate: (id) => call('DELETE', `/api/templates/${id}`)
   };
 })();

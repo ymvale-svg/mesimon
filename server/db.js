@@ -407,12 +407,24 @@ CREATE TABLE IF NOT EXISTS saved_filters (
   created_at TEXT    NOT NULL
 );
 
+/*
+ * תבניות משימה ופרויקט.
+ *
+ * ‎department_id‎ הוא היקף הראייה: תבנית שייכת למחלקה שיצרה אותה, ועובדי
+ * מחלקה אחת אינם רואים את התבניות של השנייה — "רישום רכב גישור" של התפעול
+ * אינו רלוונטי לשיווק, ורשימה מעורבת הופכת את הבורר לבלתי שמיש.
+ * ‎NULL‎ פירושו תבנית ארגונית שרואים כולם, וזה גם המצב של תבניות שנוצרו
+ * לפני ההפרדה.
+ */
 CREATE TABLE IF NOT EXISTS templates (
-  id         INTEGER PRIMARY KEY AUTOINCREMENT,
-  kind       TEXT    NOT NULL CHECK (kind IN ('task','project')),
-  name       TEXT    NOT NULL,
-  payload    TEXT    NOT NULL,
-  created_at TEXT    NOT NULL
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  kind          TEXT    NOT NULL CHECK (kind IN ('task','project')),
+  name          TEXT    NOT NULL,
+  payload       TEXT    NOT NULL,
+  department_id INTEGER REFERENCES departments(id) ON DELETE SET NULL,
+  updated_at    TEXT,
+  updated_by    INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at    TEXT    NOT NULL
 );
 
 -- הרשאות אישיות מעל התפקיד. מנהל מחלקה מעניק אותן לעובד שלו — למשל מזכירה
@@ -869,6 +881,11 @@ function migrate() {
   // מי שנרשם דרך הלינק וממתין לאישור — להבדיל מעובד שהושבת
   addColumn('users', 'signup_at', 'TEXT');
   addColumn('comments', 'checklist_item_id', 'INTEGER REFERENCES checklist_items(id) ON DELETE CASCADE');
+  // תבניות פר מחלקה. תבנית קיימת נשארת ללא מחלקה, כלומר ארגונית — מי שכבר
+  // הסתמך עליה לא יגלה אותה נעלמת בעלייה לגרסה
+  addColumn('templates', 'department_id', 'INTEGER REFERENCES departments(id) ON DELETE SET NULL');
+  addColumn('templates', 'updated_at', 'TEXT');
+  addColumn('templates', 'updated_by', 'INTEGER REFERENCES users(id) ON DELETE SET NULL');
 
   /**
    * סדר העמודות הוא סדר הזרימה, ולכן העמודה הסופית חייבת להיות אחרונה.

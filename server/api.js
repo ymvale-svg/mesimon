@@ -192,6 +192,55 @@ function setExtraAssignees(taskId, list, actor) {
   }
 }
 
+// --- תבניות ---
+
+/**
+ * אילו תבניות השחקן רואה.
+ *
+ * תבנית שייכת למחלקה, ועובדי מחלקה אחת אינם רואים את של השנייה: בורר
+ * תבניות שמערבב את כל הארגון הוא רשימה שאי אפשר למצוא בה דבר, ותבנית של
+ * מחלקה אחרת גם אינה רלוונטית למי שאינו בה.
+ *
+ * מנהל מערכת ואדמין רואים הכול — הם אלה שמנהלים את התבניות במסך ההגדרות.
+ * תבנית ללא מחלקה היא ארגונית ונראית לכולם, וזה גם מצבן של תבניות שנוצרו
+ * לפני ההפרדה.
+ */
+function visibleTemplates(actor) {
+  if (P.isOrgWide(actor)) return D.all('SELECT * FROM templates ORDER BY kind, name');
+  return D.all(
+    `SELECT * FROM templates
+      WHERE department_id IS NULL OR department_id = ?
+      ORDER BY kind, name`,
+    actor.departmentId ?? -1
+  );
+}
+
+const shapeTemplate = (t) => ({
+  id: t.id,
+  kind: t.kind,
+  name: t.name,
+  payload: JSON.parse(t.payload),
+  departmentId: t.department_id ?? null,
+  departmentName: t.department_id
+    ? (D.get('SELECT name FROM departments WHERE id = ?', t.department_id)?.name ?? null)
+    : null,
+  updatedAt: t.updated_at ?? null,
+  updatedBy: t.updated_by ? (D.get('SELECT full_name FROM users WHERE id = ?', t.updated_by)?.full_name ?? null) : null,
+  createdAt: t.created_at
+});
+
+/** תבנית לפי מזהה, בגבול הראייה של השחקן — 404 ולא 403, כדי לא לאשר קיום */
+function templateOr404(actor, id) {
+  const tpl = D.get('SELECT * FROM templates WHERE id = ?', Number(id));
+  if (!tpl) throw notFound('התבנית לא נמצאה');
+  if (!P.isOrgWide(actor)
+      && tpl.department_id !== null
+      && tpl.department_id !== (actor.departmentId ?? null)) {
+    throw notFound('התבנית לא נמצאה');
+  }
+  return tpl;
+}
+
 /** האחראים הנוספים על המשימה, מעבר לאחראי הראשי שיושב על השורה עצמה */
 const extraAssigneesOf = (task) => (task?.id
   ? D.all('SELECT assignee_type, assignee_id FROM task_assignees WHERE task_id = ?', task.id)
@@ -1892,13 +1941,47 @@ router.post('/api/tasks/:id/template', async (req, res, ctx) => {
       .map((c) => ({ text: c.text, note: c.note ?? '' }))
   };
 
-  const result = D.run('INSERT INTO templates (kind, name, payload, created_at) VALUES (?,?,?,?)',
-    'task', name, JSON.stringify(payload), D.nowIso());
+  /*
+   * המחלקה של התבנית היא זו של המשימה, ואם אין לה — של מי ששומר. כך תבנית
+   * שנולדה מעבודה של התפעול נשארת אצל התפעול.
+   */
+  const departmentId = task.department_id ?? (actor.type === 'user' ? actor.departmentId ?? null : null);
+
+  /*
+   * החלפת תבנית קיימת במקום יצירת עוד אחת בשם דומה.
+   *
+   * בלי זה כל תיקון בצ'קליסט הוליד "בקרת תכן", "בקרת תכן חדש", "בקרת תכן
+   * סופי", והבורר התמלא בגרסאות של אותה תבנית שאיש אינו יודע איזו מהן
+   * העדכנית. ההחלפה מוגבלת לתבניות שהשומר רואה — אי אפשר לדרוס תבנית של
+   * מחלקה אחרת.
+   */
+  if (b.replaceId) {
+    const target = templateOr404(actor, b.replaceId);
+    if (target.kind !== 'task') throw badRequest('אפשר להחליף רק תבנית משימה');
+    D.run(
+      `UPDATE templates SET name = ?, payload = ?, department_id = ?, updated_at = ?, updated_by = ?
+        WHERE id = ?`,
+      name, JSON.stringify(payload), target.department_id ?? departmentId,
+      D.nowIso(), actor.type === 'user' ? actor.id : null, target.id
+    );
+    D.audit(task.id, actorRef(actor), 'updated', `התבנית "${name}" עודכנה מהמשימה`);
+    return sendJson(res, 200, {
+      template: shapeTemplate(D.get('SELECT * FROM templates WHERE id = ?', target.id)),
+      checklistCount: payload.checklist.length,
+      replaced: true
+    });
+  }
+
+  const result = D.run(
+    'INSERT INTO templates (kind, name, payload, department_id, created_at) VALUES (?,?,?,?,?)',
+    'task', name, JSON.stringify(payload), departmentId, D.nowIso()
+  );
 
   D.audit(task.id, actorRef(actor), 'updated', `נשמרה כתבנית "${name}"`);
   sendJson(res, 201, {
-    template: { id: Number(result.lastInsertRowid), kind: 'task', name, payload },
-    checklistCount: payload.checklist.length
+    template: shapeTemplate(D.get('SELECT * FROM templates WHERE id = ?', Number(result.lastInsertRowid))),
+    checklistCount: payload.checklist.length,
+    replaced: false
   });
 });
 
@@ -2182,7 +2265,8 @@ router.post('/api/projects', async (req, res, ctx) => {
 
   // יצירה מתבנית
   if (b.templateId) {
-    const tpl = D.get("SELECT * FROM templates WHERE id = ? AND kind = 'project'", Number(b.templateId));
+    // בגבול הראייה: תבנית של מחלקה אחרת אינה זמינה גם אם המזהה שלה נשלח ידנית
+    const tpl = visibleTemplates(actor).find((t) => t.id === Number(b.templateId) && t.kind === 'project');
     if (tpl) {
       const payload = JSON.parse(tpl.payload);
       const boardId = D.internalBoard().id;
@@ -3987,26 +4071,62 @@ router.get('/api/templates', async (req, res, ctx) => {
   const actor = ctx.requireActor();
   if (isVendor(actor)) throw forbidden();
   sendJson(res, 200, {
-    templates: D.all('SELECT * FROM templates ORDER BY kind, name')
-      .map((t) => ({ id: t.id, kind: t.kind, name: t.name, payload: JSON.parse(t.payload) }))
+    templates: visibleTemplates(actor).map(shapeTemplate),
+    // האם המשתמש רואה תבניות של יותר ממחלקה אחת — הממשק מציג תווית מחלקה רק אז
+    seesAllDepartments: P.isOrgWide(actor)
   });
 });
 
 router.post('/api/templates', async (req, res, ctx) => {
   const actor = ctx.requireActor();
-  // תבנית היא נכס של כל הארגון ולא של מי שיצר אותה, ולכן נדרשת הרשאה מלאה
+  // תבנית היא נכס משותף ולא של מי שיצר אותה, ולכן נדרשת הרשאה מלאה
   requireFullPerm(actor, 'create_project');
   const b = await readJson(req);
   if (!['task', 'project'].includes(b.kind)) throw badRequest('סוג תבנית לא תקין');
-  D.run('INSERT INTO templates (kind, name, payload, created_at) VALUES (?,?,?,?)',
-    b.kind, String(b.name ?? '').trim() || 'תבנית', JSON.stringify(b.payload ?? {}), D.nowIso());
+  /*
+   * המחלקה נבחרת מפורשות בידי מנהל המערכת, כי הוא זה שרואה את כולן. ריק
+   * פירושו תבנית ארגונית — זו הבחירה, ולא היעדר בחירה.
+   */
+  const departmentId = b.departmentId === '' || b.departmentId === null || b.departmentId === undefined
+    ? null : Number(b.departmentId);
+  D.run(
+    'INSERT INTO templates (kind, name, payload, department_id, created_at) VALUES (?,?,?,?,?)',
+    b.kind, String(b.name ?? '').trim() || 'תבנית', JSON.stringify(b.payload ?? {}),
+    departmentId, D.nowIso()
+  );
   sendJson(res, 201, { ok: true });
+});
+
+/** עריכת תבנית — שם, מחלקה ותוכן. עד כה אפשר היה רק ליצור ולמחוק */
+router.patch('/api/templates/:id', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  requireFullPerm(actor, 'create_project');
+  const tpl = templateOr404(actor, ctx.params.id);
+  const b = await readJson(req);
+
+  if (b.name !== undefined) {
+    const name = String(b.name).trim();
+    if (!name) throw badRequest('נדרש שם לתבנית');
+    D.run('UPDATE templates SET name = ? WHERE id = ?', name, tpl.id);
+  }
+  if (b.departmentId !== undefined) {
+    const dep = b.departmentId === '' || b.departmentId === null ? null : Number(b.departmentId);
+    D.run('UPDATE templates SET department_id = ? WHERE id = ?', dep, tpl.id);
+  }
+  if (b.payload !== undefined) {
+    D.run('UPDATE templates SET payload = ? WHERE id = ?', JSON.stringify(b.payload ?? {}), tpl.id);
+  }
+  D.run('UPDATE templates SET updated_at = ?, updated_by = ? WHERE id = ?',
+    D.nowIso(), actor.type === 'user' ? actor.id : null, tpl.id);
+
+  sendJson(res, 200, { template: shapeTemplate(D.get('SELECT * FROM templates WHERE id = ?', tpl.id)) });
 });
 
 router.delete('/api/templates/:id', async (req, res, ctx) => {
   const actor = ctx.requireActor();
   requireFullPerm(actor, 'create_project');
-  D.run('DELETE FROM templates WHERE id = ?', Number(ctx.params.id));
+  const tpl = templateOr404(actor, ctx.params.id);
+  D.run('DELETE FROM templates WHERE id = ?', tpl.id);
   sendJson(res, 200, { ok: true });
 });
 
