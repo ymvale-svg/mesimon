@@ -370,6 +370,95 @@ textarea { resize: vertical; min-height: 76px; }
 .card-head h3 { font-size: 15px; }
 .card-head .spacer { flex: 1; }
 
+/* ---- לוח החלונות בדף הבית ---- */
+
+/*
+ * רשימה אחת עם עטיפת שורות, ולא שתי עמודות. "מיקום" הוא מקום בסדר,
+ * ו"רוחב" הוא חצי שורה או שורה שלמה — שני מושגים שנותנים את אותה שליטה
+ * שנותנות שתי עמודות עם גרירה ביניהן, בלי לנהל עמודה שמתרוקנת.
+ *
+ * ‎min-width‎ הוא מה שהופך את זה לרספונסיבי בלי שאילתת מדיה: חלון שאין לו
+ * מקום ל-330 פיקסלים עובר לשורה שלמה מעצמו.
+ */
+.home-board {
+  display: flex; flex-wrap: wrap; gap: 14px; align-items: flex-start;
+  margin-top: 14px;
+}
+/* ‎flex-grow: 0‎ במכוון: עם התרחבות חלון בודד בשורה נמתח לרוחב מלא, וכך
+   בחירת "חצי רוחב" של המשתמש התבטלה בשקט בכל פעם שמספר החלונות אי-זוגי */
+.home-slot { flex: 0 1 calc(50% - 7px); min-width: 330px; position: relative; }
+.home-slot.is-wide { flex-basis: 100%; }
+/*
+ * הגובה שנגרר מוחל על הרשימה הנגללת שבתוך הכרטיס, ולא על הכרטיס עצמו —
+ * מתיחת הכרטיס הייתה משאירה בתוכו חלל ריק במקום להאריך את הרשימה.
+ *
+ * ‎height‎ ולא רק ‎max-height‎: תקרה בלבד אינה מגדילה תיבה שתוכנה קצר ממנה,
+ * וגרירה כלפי מטה ברשימה של שלוש שורות לא הייתה עושה דבר. גובה מפורש הוא
+ * מה שהמשתמש ביקש — חלון שומר על גודלו — ולחיצה כפולה מחזירה לאוטומטי.
+ */
+.home-slot[style*='--slot-h'] .feed-scroll { height: var(--slot-h); max-height: var(--slot-h); }
+
+/* כלי החלון יושבים בכותרת הקיימת, ומתגלים בריחוף — שמונה שורות כלים
+   קבועות היו חונקות דף שכל תכליתו תמונת מצב במבט אחד */
+.card-head.has-slot-tools { padding-inline-end: 10px; }
+.slot-tools { display: flex; align-items: center; gap: 2px; flex: none; opacity: 0; transition: opacity .12s; }
+.home-slot:hover .slot-tools,
+.home-slot:focus-within .slot-tools { opacity: 1; }
+.slot-btn {
+  border: 0; background: transparent; cursor: pointer; font-family: inherit;
+  width: 22px; height: 22px; border-radius: 6px; padding: 0;
+  color: var(--text-mute); font-size: 12px; line-height: 1;
+}
+.slot-btn:hover { background: var(--surface-2); color: var(--brand); }
+.slot-grip { cursor: grab; font-size: 13px; }
+.slot-grip:active { cursor: grabbing; }
+.slot-hide:hover { background: var(--danger); color: #fff; }
+
+.home-slot.dragging { opacity: .45; }
+/* הסימון על הצד שאליו ייפול: לחלון ברוחב מלא מעל/מתחת, ולחצי שורה לצדו */
+.home-slot.drop-before::after,
+.home-slot.drop-after::after {
+  content: ''; position: absolute; background: var(--brand); border-radius: 2px; z-index: 5;
+}
+.home-slot.drop-before::after { inset-block: 0; inset-inline-start: -8px; width: 3px; }
+.home-slot.drop-after::after { inset-block: 0; inset-inline-end: -8px; width: 3px; }
+.home-slot.is-wide.drop-before::after { inset: -8px 0 auto; width: auto; height: 3px; }
+.home-slot.is-wide.drop-after::after { inset: auto 0 -8px; width: auto; height: 3px; }
+
+/* ידית הגובה — פס דק בתחתית החלון, מתגלה בריחוף כמו הכלים */
+.slot-resize {
+  position: absolute; inset-inline: 26px; bottom: -5px; height: 11px;
+  border: 0; padding: 0; background: transparent; cursor: ns-resize;
+  touch-action: none; z-index: 4;
+}
+.slot-resize::before {
+  content: ''; position: absolute; inset-inline: 0; top: 4px; height: 3px;
+  border-radius: 2px; background: transparent; transition: background .12s;
+}
+.home-slot:hover .slot-resize::before { background: var(--border-strong); }
+.slot-resize:hover::before,
+.slot-resize:focus-visible::before,
+.slot-resize.dragging::before { background: var(--brand); }
+
+.layout-footer {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  margin-top: 14px; padding-top: 11px; border-top: 1px dashed var(--border);
+}
+/* בורר הסינון בכותרת הכרטיס — צר, שלא ידחוק את 'לכל המשימות' */
+.card-head .home-filter { flex: none; width: auto; max-width: 190px; font-size: 12px; padding: 4px 8px; }
+
+/*
+ * במגע אין גרירה ואין שינוי גודל: חלון אחד לשורה ממילא, ורצועות של עשרה
+ * פיקסלים באצבע הן מיס-טאפ. ההסתרה נשארת — היא הדבר היחיד מהשלושה שיש
+ * לו טעם על מסך צר.
+ */
+@media (max-width: 820px) {
+  .home-slot { flex-basis: 100%; min-width: 0; }
+  .slot-grip, .slot-resize { display: none; }
+  .slot-tools { opacity: 1; }
+  .card-head .home-filter { max-width: 140px; }
+}
+
 .grid { display: grid; gap: 14px; }
 .grid-4 { grid-template-columns: repeat(4, 1fr); }
 .grid-3 { grid-template-columns: repeat(3, 1fr); }

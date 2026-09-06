@@ -2424,12 +2424,21 @@ router.get('/api/home', async (req, res, ctx) => {
     : '';
   feedParams.push(...ownedForFeed);
 
+  /*
+   * מה שאני עצמי עשיתי אינו עדכון בשבילי.
+   *
+   * הפיד נועד לומר מה קרה בלי שהסתכלתי, ועד כה כל שינוי סטטוס וכל תגובה
+   * שלי חזרו אליי כשורה — כך שהפיד היה בעיקר הד של הפעולות שלי, ובתוכו
+   * נבלע מה שאחרים עשו. אותה הבחנה בדיוק כמו בהתראות: אין מודיעים לאדם על
+   * מה שהוא בדיוק כתב.
+   */
   const feed = D.all(
     `SELECT a.*, t.title AS task_title FROM audit_log a
        JOIN tasks t ON t.id = a.task_id
-      WHERE (t.assignee_type = ? AND t.assignee_id = ?)${projectClause}
+      WHERE ((t.assignee_type = ? AND t.assignee_id = ?)${projectClause})
+        AND NOT (a.actor_type = ? AND a.actor_id = ?)
       ORDER BY a.created_at DESC, a.id DESC LIMIT 120`,
-    ...feedParams
+    ...feedParams, actor.type === 'vendor' ? 'vendor' : 'user', actor.id
   ).filter((row) => {
     // שכבת הגנה שנייה: ההיקף אינו תחליף להרשאה
     const task = D.get('SELECT * FROM tasks WHERE id = ?', row.task_id);
@@ -3924,7 +3933,11 @@ const PREF_KEYS = [
   // בחירת העמודות, סדרן והמיון בטבלת הבקרה
   'trackerColumns',
   // אילו קבוצות פרויקט-אב מקופלות בטבלת הבקרה
-  'trackerCollapsed'
+  'trackerCollapsed',
+  // סידור החלונות בדף הבית — סדר, רוחב, גובה ומה מוסתר
+  'homeLayout',
+  // חתך הפרויקט ברשימת "המשימות שלי" בדף הבית
+  'homeProject'
 ];
 const PREF_MAX_BYTES = 4096;
 

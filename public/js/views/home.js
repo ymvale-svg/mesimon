@@ -54,6 +54,310 @@ const HomeView = (() => {
   const shownLabel = (shown, total, one, many) =>
     (shown < total ? `${shown} מתוך ${total} ${many}` : countLabel(total, one, many));
 
+  // ------------------------------------------------------- סידור החלונות
+
+  /**
+   * הכרטיסים בדף הבית הם חלונות שהמשתמש מסדר: מזיז, מרחיב לרוחב, משנה גובה
+   * ומסתיר. הסידור נשמר בהעדפות בשרת, ולכן הוא הולך אחריו בין מכשירים.
+   *
+   * רשימה אחת עם עטיפת שורות, ולא שתי עמודות עם גרירה ביניהן. שתי עמודות
+   * דורשות להחליט לאיזו עמודה כל כרטיס שייך ומה קורה כשעמודה מתרוקנת;
+   * ברשימה אחת "מיקום" הוא מקום בסדר, ו"רוחב" הוא האם הכרטיס תופס חצי שורה
+   * או שורה שלמה. שני מושגים במקום ארבעה, ואותה שליטה בפועל.
+   *
+   * הסדר שכאן הוא ברירת המחדל, וכל מפתח שאינו מוכר מסונן — כך העדפה שנשמרה
+   * לפני שכרטיס נולד אינה מסתירה אותו לנצח.
+   */
+  const CARD_ORDER = ['deptCut', 'myTasks', 'calendar', 'department', 'mentions', 'done', 'approval', 'feed'];
+  const CARD_LABEL = {
+    deptCut: 'חתך מחלקתי',
+    myTasks: 'המשימות שלי',
+    calendar: 'השבוע הקרוב',
+    department: 'המשימות במחלקה',
+    mentions: 'תויגת בהודעות',
+    done: 'הושלמו לאחרונה',
+    approval: 'ממתין לאישור',
+    feed: 'פיד עדכונים אחרון'
+  };
+  // כרטיסים שברירת המחדל שלהם היא שורה שלמה — טבלת חתך רחבה מדי לחצי שורה
+  const WIDE_BY_DEFAULT = new Set(['deptCut']);
+
+  const SLOT_MIN_H = 120;
+  const SLOT_MAX_H = 900;
+
+  const layout = () => App.getPref('homeLayout', {}) ?? {};
+  const saveLayout = (patch) => {
+    App.setPref('homeLayout', { ...layout(), ...patch });
+    reload();
+  };
+
+  const isWide = (key) => {
+    const l = layout();
+    if ((l.wide ?? []).includes(key)) return true;
+    if ((l.narrow ?? []).includes(key)) return false;
+    return WIDE_BY_DEFAULT.has(key);
+  };
+  const isHidden = (key) => (layout().hidden ?? []).includes(key);
+
+  /** הסדר שהמשתמש קבע, וכרטיס חדש נופל לסופו */
+  function orderedKeys() {
+    const saved = (layout().order ?? []).filter((k) => CARD_ORDER.includes(k));
+    return [...saved, ...CARD_ORDER.filter((k) => !saved.includes(k))];
+  }
+
+  const toggleWide = (key) => {
+    const l = layout();
+    const wide = new Set(l.wide ?? []);
+    const narrow = new Set(l.narrow ?? []);
+    // שתי רשימות, כי לכל כרטיס יש ברירת מחדל משלו ו"לא ברשימה" אינו תשובה
+    if (isWide(key)) { wide.delete(key); narrow.add(key); }
+    else { narrow.delete(key); wide.add(key); }
+    saveLayout({ wide: [...wide], narrow: [...narrow] });
+  };
+
+  const hideCard = (key) => {
+    saveLayout({ hidden: [...new Set([...(layout().hidden ?? []), key])] });
+    UI.toast(`"${CARD_LABEL[key]}" הוסתר — אפשר להחזיר מלמטה`);
+  };
+
+  const showCard = (key) =>
+    saveLayout({ hidden: (layout().hidden ?? []).filter((k) => k !== key) });
+
+  /**
+   * ידית שינוי הגובה, בתחתית החלון.
+   *
+   * הגובה מוחל כמשתנה CSS על החלון, ולא כגובה קבוע על הכרטיס: כל כרטיס
+   * שיש בו רשימה עוטף אותה ב-‎.feed-scroll‎, וה-CSS מחיל את המשתנה עליה.
+   * כך הגרירה מאריכה ומקצרת את הרשימה עצמה — שזו המשמעות של "גודל" כאן —
+   * במקום למתוח כרטיס ולהשאיר בתוכו חלל ריק.
+   */
+  function heightHandle(key, slot) {
+    const h = el('button.slot-resize', {
+      type: 'button',
+      role: 'separator',
+      'aria-label': `גובה החלון ${CARD_LABEL[key]}`,
+      title: 'גרירה לשינוי הגובה · חצים ↑ ↓ · לחיצה כפולה לאיפוס'
+    });
+
+    const apply = (px) => slot.style.setProperty('--slot-h', `${px}px`);
+    const commit = (px) => saveLayout({ heights: { ...(layout().heights ?? {}), [key]: px } });
+
+    h.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      const box = slot.querySelector('.feed-scroll');
+      if (!box) return;
+      const startY = e.clientY;
+      const startH = box.getBoundingClientRect().height;
+      h.setPointerCapture(e.pointerId);
+      h.classList.add('dragging');
+      document.body.style.userSelect = 'none';
+      let last = Math.round(startH);
+
+      const onMove = (ev) => {
+        last = Math.round(Math.min(SLOT_MAX_H, Math.max(SLOT_MIN_H, startH + (ev.clientY - startY))));
+        apply(last);
+      };
+      const onUp = () => {
+        h.classList.remove('dragging');
+        document.body.style.userSelect = '';
+        h.removeEventListener('pointermove', onMove);
+        h.removeEventListener('pointerup', onUp);
+        h.removeEventListener('pointercancel', onUp);
+        commit(last);        // שמירה אחת בסוף — שמירה בכל תזוזה מציירת מחדש
+      };
+      h.addEventListener('pointermove', onMove);
+      h.addEventListener('pointerup', onUp);
+      h.addEventListener('pointercancel', onUp);
+    });
+
+    h.addEventListener('dblclick', (e) => {
+      e.preventDefault();
+      const heights = { ...(layout().heights ?? {}) };
+      delete heights[key];
+      saveLayout({ heights });
+    });
+
+    h.addEventListener('keydown', (e) => {
+      const dir = e.key === 'ArrowDown' ? 1 : e.key === 'ArrowUp' ? -1 : 0;
+      if (!dir) return;
+      e.preventDefault();
+      const box = slot.querySelector('.feed-scroll');
+      if (!box) return;
+      const next = Math.round(Math.min(SLOT_MAX_H, Math.max(SLOT_MIN_H,
+        box.getBoundingClientRect().height + dir * (e.shiftKey ? 60 : 24))));
+      apply(next);
+      commit(next);
+    });
+
+    return h;
+  }
+
+  /**
+   * גרירת חלונות לשינוי המיקום. HTML5 drag-and-drop, כמו בסידור הפרויקטים
+   * בתפריט — הוא נותן בחינם את הסמן, את התמונה הנגררת ואת הגלילה בקצה.
+   *
+   * נקודת האחיזה היא כותרת החלון ולא כל שטחו: הכרטיסים מכילים כפתורים,
+   * שדות ורשימות נגללות, וחלון שנגרר מכל נקודה היה הופך כל לחיצה על שורה
+   * לגרירה בטעות.
+   */
+  function makeSlotsDraggable(slots) {
+    if (slots.length < 2) return;
+    let dragged = null;
+    const clearMarks = () => slots.forEach(({ node }) =>
+      node.classList.remove('drop-before', 'drop-after'));
+
+    for (const entry of slots) {
+      const { key, node } = entry;
+      const grip = node.querySelector('.slot-grip');
+      if (!grip) continue;
+
+      // ‎draggable‎ נדלק רק כשתופסים את הידית, אחרת בחירת טקסט בכרטיס נשברת
+      grip.addEventListener('pointerdown', () => { node.draggable = true; });
+      grip.addEventListener('pointerup', () => { node.draggable = false; });
+
+      node.addEventListener('dragstart', (e) => {
+        dragged = entry;
+        node.classList.add('dragging');
+        e.dataTransfer.effectAllowed = 'move';
+        e.dataTransfer.setData('text/plain', key);   // נדרש ב-Firefox
+      });
+
+      node.addEventListener('dragend', () => {
+        node.classList.remove('dragging');
+        node.draggable = false;
+        clearMarks();
+        dragged = null;
+      });
+
+      /*
+       * הצד שאליו ייפול נקבע לפי הציר שבו החלונות באמת שכנים: חלון ברוחב
+       * שורה שלמה נמצא מעל או מתחת, וחלון בחצי שורה נמצא לצדו. שימוש בציר
+       * אחד לשניהם היה הופך חצי מהגרירות לניחוש.
+       */
+      const sideOf = (e) => {
+        const box = node.getBoundingClientRect();
+        if (node.classList.contains('is-wide')) return e.clientY > box.top + box.height / 2;
+        // RTL: הצד הימני הוא הקודם בסדר
+        return e.clientX < box.left + box.width / 2;
+      };
+
+      node.addEventListener('dragover', (e) => {
+        if (!dragged || dragged.node === node) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+        const after = sideOf(e);
+        node.classList.toggle('drop-before', !after);
+        node.classList.toggle('drop-after', after);
+      });
+
+      node.addEventListener('dragleave', () => node.classList.remove('drop-before', 'drop-after'));
+
+      node.addEventListener('drop', (e) => {
+        if (!dragged || dragged.node === node) return;
+        e.preventDefault();
+        const after = sideOf(e);
+        const keys = orderedKeys().filter((k) => k !== dragged.key);
+        const at = keys.indexOf(key);
+        keys.splice(after ? at + 1 : at, 0, dragged.key);
+        clearMarks();
+        saveLayout({ order: keys });
+      });
+    }
+  }
+
+  /**
+   * עטיפת כרטיס לחלון: כותרת נגררת, כפתורי רוחב והסתרה, וידית גובה.
+   *
+   * הכפתורים נדחפים לתוך ‎.card-head‎ הקיים של הכרטיס ולא לשורה נוספת מעליו:
+   * שורת כלים לכל חלון הייתה מוסיפה שמונה שורות לדף שכל תכליתו תמונת מצב
+   * במבט אחד.
+   */
+  function slotFor(key, card) {
+    const wide = isWide(key);
+    const height = (layout().heights ?? {})[key];
+    const slot = el(`div.home-slot${wide ? '.is-wide' : ''}`, {
+      'data-key': key,
+      style: Number.isFinite(height) ? `--slot-h: ${height}px` : ''
+    }, [card]);
+
+    /*
+     * הגובה שהמשתמש קבע גובר על התקרה שהכרטיס קבע לעצמו. חלק מהכרטיסים
+     * מוסרים ‎max-height‎ כסגנון inline משלהם, והוא גובר על גיליון הסגנונות —
+     * כלומר הגרירה הייתה נשמרת ולא נראית.
+     */
+    if (Number.isFinite(height)) {
+      for (const box of slot.querySelectorAll('.feed-scroll')) {
+        box.style.maxHeight = '';
+        box.style.height = '';
+      }
+    }
+
+    const head = card.querySelector('.card-head');
+    if (head) {
+      head.classList.add('has-slot-tools');
+      head.appendChild(el('div.slot-tools', {}, [
+        el('button.slot-btn.slot-grip', {
+          type: 'button', title: 'גרירה לשינוי המיקום', 'aria-label': 'הזזת החלון'
+        }, ['⠿']),
+        el('button.slot-btn', {
+          type: 'button',
+          title: wide ? 'צמצום לחצי רוחב' : 'הרחבה לרוחב מלא',
+          onclick: () => toggleWide(key)
+        }, [wide ? '⇥⇤' : '⇤⇥']),
+        el('button.slot-btn.slot-hide', {
+          type: 'button', title: 'הסתרת החלון', onclick: () => hideCard(key)
+        }, ['✕'])
+      ]));
+    }
+
+    // ידית גובה רק לחלון שיש בו רשימה נגללת — לשאר אין מה למתוח
+    if (card.querySelector('.feed-scroll')) slot.appendChild(heightHandle(key, slot));
+    return slot;
+  }
+
+  /** שורת החלונות המוסתרים, ואיפוס הסידור */
+  function layoutFooter(available) {
+    const hidden = (layout().hidden ?? []).filter((k) => available.has(k));
+    const l = layout();
+    const touched = (l.order ?? []).length || (l.wide ?? []).length
+      || (l.narrow ?? []).length || Object.keys(l.heights ?? {}).length || hidden.length;
+    if (!touched) return null;
+
+    return el('div.layout-footer', {}, [
+      hidden.length
+        ? el('div.flex', { style: { gap: '7px', flexWrap: 'wrap', alignItems: 'center' } }, [
+            el('span.mute-sm', { text: 'חלונות מוסתרים:' }),
+            ...hidden.map((k) => el('button.btn.btn-sm.btn-ghost', {
+              title: 'החזרה לדף', onclick: () => showCard(k)
+            }, [`＋ ${CARD_LABEL[k]}`]))
+          ])
+        : null,
+      el('div.spacer'),
+      el('button.btn.btn-sm.btn-ghost', {
+        title: 'החזרת כל החלונות לסידור המקורי',
+        // ‎null‎ מוחק את ההעדפה בשרת ומחזיר את ברירת המחדל
+        onclick: () => { App.setPref('homeLayout', null); reload(); }
+      }, ['איפוס הסידור'])
+    ]);
+  }
+
+  /** לוח החלונות — מקבל מפה של כרטיסים שנבנו, ומסדר אותם לפי ההעדפה */
+  function homeBoard(cards) {
+    const available = new Set(Object.keys(cards).filter((k) => cards[k]));
+    const slots = [];
+    const board = el('div.home-board', {},
+      orderedKeys()
+        .filter((k) => available.has(k) && !isHidden(k))
+        .map((k) => {
+          const slot = slotFor(k, cards[k]);
+          slots.push({ key: k, node: slot });
+          return slot;
+        }));
+
+    makeSlotsDraggable(slots);
+    return [board, layoutFooter(available)];
+  }
+
   /**
    * ‎silent‎ — טעינה מחדש ברקע: בלי ספינר, ותוך שמירת מיקום הגלילה. המסך
    * הקיים נשאר לנגד העיניים עד שהתוכן החדש מוכן, וכך עדכון משימה אינו נראה
@@ -88,31 +392,33 @@ const HomeView = (() => {
     const hour = new Date().getHours();
     const greeting = hour < 12 ? 'בוקר טוב' : hour < 18 ? 'צהריים טובים' : 'ערב טוב';
 
+    /*
+     * הכרטיסים נבנים למפה ולא ישירות לעץ, כי הסדר, הרוחב וההסתרה שלהם הם
+     * העדפה של המשתמש. כרטיס שאין לו תוכן מחזיר ‎null‎, ולוח החלונות מדלג
+     * עליו — וגם אינו מציע להחזיר חלון שאין בו דבר.
+     */
+    const cards = {
+      deptCut: reports ? departmentCutCard(reports.departments) : null,
+      myTasks: myTasksCard(data.tasks.mine),
+      calendar: calendarCard(data.weekAhead),
+      department: departmentTasksCard(data.tasks.department ?? []),
+      mentions: mentionsCard(data.mentions),
+      done: doneCard(data.tasks.recentlyDone ?? [], data.archiveAfterDays ?? 3),
+      approval: App.may('approve_vendor_output') || App.isVendor()
+        ? approvalCard(data.tasks.awaitingApproval)
+        : null,
+      feed: feedCard(data.feed)
+    };
+
     UI.mount(container,
       el('div.page-head', {}, [
         el('div', {}, [
           el('h2', { text: `${greeting}, ${App.state.actor.name.split(' ')[0]}` }),
-          el('div.sub', { text: 'תמונת מצב אישית — המשימות, החריגות והעדכונים שלך.' })
+          el('div.sub', { text: 'תמונת מצב אישית. אפשר לגרור את החלונות, לשנות את גודלם ולהסתיר את מה שאינו נחוץ.' })
         ])
       ]),
       widgets(data.widgets),
-      reports ? departmentCutCard(reports.departments) : null,
-      el('div.grid.grid-2.mt', { style: { alignItems: 'start' } }, [
-        el('div.flex-col', { style: { gap: '14px' } }, [
-          ...myTasksCards(data.tasks.mine),
-          departmentTasksCard(data.tasks.department ?? []),
-          doneCard(data.tasks.recentlyDone ?? [], data.archiveAfterDays ?? 3),
-          App.may('approve_vendor_output') || App.isVendor()
-            ? approvalCard(data.tasks.awaitingApproval)
-            : null
-        ]),
-        el('div.flex-col', { style: { gap: '14px' } }, [
-          calendarCard(data.weekAhead),
-          // לפני הפיד: תיוג הוא בקשה שממתינה לי, והפיד הוא רקע
-          mentionsCard(data.mentions),
-          feedCard(data.feed)
-        ])
-      ])
+      ...homeBoard(cards)
     );
     if (scrollTop) container.scrollTop = scrollTop;
   }
@@ -277,7 +583,7 @@ const HomeView = (() => {
   });
 
   /** כרטיס רשימה אחד. קבוצה ריקה מסתפקת בשורה שקטה ולא במסגרת ריקה עם איור. */
-  function taskListCard({ title, note, tasks, emptyText, onAll }) {
+  function taskListCard({ title, note, tasks, emptyText, onAll, filter = null }) {
     const sorted = byUrgency(tasks);
     const shown = sorted.slice(0, LIST_MAX);
     // המחלקה והמספר בכותרת אחת ולא בשני שדות — כדי לא לדחוק את כפתור 'לכל המשימות'
@@ -289,6 +595,7 @@ const HomeView = (() => {
         el('h3', { text: title }),
         subtitle ? el('span.mute-sm', { text: subtitle }) : null,
         el('div.spacer'),
+        filter,
         sorted.length ? el('button.btn.btn-sm', { onclick: onAll }, ['לכל המשימות']) : null
       ]),
       sorted.length
@@ -359,24 +666,68 @@ const HomeView = (() => {
     ]);
   }
 
-  function myTasksCards(tasks) {
-    // ספק אינו משויך למחלקה ואינו מקבל משימות ארגוניות — עבורו נשארת רשימה אחת
-    if (App.isVendor()) {
-      return [taskListCard({
-        title: 'המשימות שלי',
-        tasks,
-        emptyText: 'אין משימות פתוחות המשויכות אליך',
-        onAll: () => App.navigate('vendor')
-      })];
-    }
+  /**
+   * חתך הפרויקט ברשימה האישית.
+   *
+   * נשמר בהעדפות בשרת ולא במכשיר, כמו שאר החתכים במערכת. הרשימה הנפתחת
+   * נבנית מהפרויקטים שיש בהם משימות שלי בפועל, ולא מכל הפרויקטים בארגון:
+   * בחירה בפרויקט שאין לי בו משימה הייתה מייצרת רשימה ריקה בלי הסבר.
+   *
+   * הסינון קודם, המיון אחריו — ‎byUrgency‎ ממשיך לסדר לפי איחור, דחיפות
+   * ותאריך יעד בתוך הפרויקט שנבחר.
+   */
+  const savedHomeProject = () => String(App.getPref('homeProject', '') ?? '');
 
-    return [taskListCard({
+  function projectFilterSelect(tasks, onPick) {
+    const seen = new Map();
+    for (const t of tasks) {
+      const key = t.projectId ? String(t.projectId) : '';
+      if (!seen.has(key)) seen.set(key, { label: t.projectName ?? 'ללא פרויקט', n: 0 });
+      seen.get(key).n += 1;
+    }
+    // פחות משני פרויקטים — אין מה לסנן, ובורר עם אפשרות אחת הוא רעש
+    if (seen.size < 2) return null;
+
+    const options = [
+      { value: '', label: `כל הפרויקטים (${tasks.length})` },
+      ...[...seen.entries()]
+        .sort((a, b) => a[1].label.localeCompare(b[1].label, 'he'))
+        .map(([value, v]) => ({ value, label: `${v.label} (${v.n})` }))
+    ];
+    return UI.select(options, savedHomeProject(), {
+      class: 'home-filter',
+      title: 'סינון לפי פרויקט',
+      onchange: (e) => onPick(e.target.value)
+    });
+  }
+
+  function myTasksCard(tasks) {
+    const all = tasks ?? [];
+    const picked = savedHomeProject();
+    // חתך שנשמר על פרויקט שאין בו עוד משימות אינו מרוקן את הרשימה בשקט
+    const stillThere = !picked || all.some((t) => String(t.projectId ?? '') === picked);
+    const shown = stillThere && picked
+      ? all.filter((t) => String(t.projectId ?? '') === picked)
+      : all;
+
+    const filter = projectFilterSelect(all, (value) => {
+      App.setPref('homeProject', value);
+      reload();
+    });
+
+    return taskListCard({
       title: 'המשימות שלי',
-      note: App.state.actor.department || null,
-      tasks,
-      emptyText: 'אין משימות פתוחות המשויכות אליך',
-      onAll: () => App.navigate('board', { mine: true })
-    })];
+      // ספק אינו משויך למחלקה ואינו מקבל משימות ארגוניות
+      note: App.isVendor() ? null : (App.state.actor.department || null),
+      tasks: shown,
+      filter,
+      emptyText: picked && stillThere
+        ? 'אין משימות פתוחות שלך בפרויקט הזה'
+        : 'אין משימות פתוחות המשויכות אליך',
+      onAll: () => (App.isVendor()
+        ? App.navigate('vendor')
+        : App.navigate('board', picked ? { projectId: Number(picked) } : { mine: true }))
+    });
   }
 
   /**
@@ -407,7 +758,8 @@ const HomeView = (() => {
       localStorage.setItem(DEPT_CUT_KEY, nowOpen ? '1' : '0');
     });
 
-    return el('div.card.mt', {}, [
+    // ‎.mt‎ הוסר: הכרטיס יושב בלוח החלונות, והמרווח בא מ-‎gap‎ שלו
+    return el('div.card', {}, [
       el('div.card-head', {}, [
         el('h3', { text: 'חתך מחלקתי' }),
         el('span.mute-sm', {
