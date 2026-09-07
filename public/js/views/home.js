@@ -379,30 +379,68 @@ const HomeView = (() => {
         return { after: vertical ? dy > 0 : (rtl ? dx < 0 : dx > 0), vertical };
       };
 
+      /** החלונות שיושבים באותה שורה עם היעד, לפי מדידה בפועל */
+      const rowOf = () => slots.filter(({ node: n }) =>
+        Math.round(n.offsetTop) === Math.round(node.offsetTop));
+
       node.addEventListener('dragover', (e) => {
         if (!dragged || dragged.node === node) return;
         e.preventDefault();
         e.dataTransfer.dropEffect = 'move';
         const { after, vertical } = sideOf(e);
-        node.classList.toggle('drop-before', !after);
-        node.classList.toggle('drop-after', after);
-        // הסימון על הקצה שבו זה יקרה בפועל — למעלה/למטה או לצד
-        node.classList.toggle('drop-v', vertical);
+        clearMarks();
+        /*
+         * בנפילה אנכית מסומנת השורה כולה ולא רק היעד: החלון הנגרר עומד
+         * לקבל שורה לעצמו *בין* השורות, וסימון של חצי שורה היה מרמז שהוא
+         * נכנס לתוך הזוג הקיים.
+         */
+        const marked = vertical ? rowOf().map((x) => x.node) : [node];
+        for (const n of marked) {
+          n.classList.add(after ? 'drop-after' : 'drop-before');
+          n.classList.toggle('drop-v', vertical);
+        }
       });
 
       node.addEventListener('dragleave', () =>
         node.classList.remove('drop-before', 'drop-after', 'drop-v'));
 
+      /*
+       * הנפילה קובעת גם את הרוחב, ולא רק את הסדר.
+       *
+       * זה מה שהיה חסר: הגרירה שינתה מקום בלבד, ולכן חלון שהופל בין שורות
+       * נדחס לזוג במקום לקבל שורה — ההיפך ממה שהמחווה אומרת.
+       *
+       * נפילה אנכית = "שורה לעצמך": הנגרר מסומן ברוחב מלא ונכנס בגבול
+       * השורה — לפני החלון הראשון בה או אחרי האחרון — ולכן זוג קיים נשאר
+       * זוג ואינו נחצה.
+       *
+       * נפילה לצד = "תחלקו את השורה": שני החלונות מסומנים כחצי רוחב ומקבלים
+       * חלוקה שווה.
+       */
       node.addEventListener('drop', (e) => {
         if (!dragged || dragged.node === node) return;
         e.preventDefault();
-        const { after } = sideOf(e);
+        const { after, vertical } = sideOf(e);
         const keys = orderedKeys().filter((k) => k !== dragged.key);
-        const at = keys.indexOf(key);
-        keys.splice(after ? at + 1 : at, 0, dragged.key);
+        const wide = new Set(layout().wide ?? []);
+        const narrow = new Set(layout().narrow ?? []);
+
+        let at;
+        if (vertical) {
+          const row = rowOf().map((x) => x.key).filter((k) => k !== dragged.key);
+          const edge = after ? row[row.length - 1] : row[0];
+          at = keys.indexOf(edge ?? key) + (after ? 1 : 0);
+          narrow.delete(dragged.key);
+          wide.add(dragged.key);
+        } else {
+          at = keys.indexOf(key) + (after ? 1 : 0);
+          for (const k of [dragged.key, key]) { wide.delete(k); narrow.add(k); }
+        }
+
+        keys.splice(Math.max(0, at), 0, dragged.key);
         clearMarks();
-        // חלון שהוזז לצד חלון אחר מתחיל איתו בחלוקה שווה — ראה evenShares
-        saveLayout({ order: keys, ...evenShares() });
+        // זוג חדש מתחיל בחלוקה שווה — ראה evenShares
+        saveLayout({ order: keys, wide: [...wide], narrow: [...narrow], ...evenShares() });
       });
     }
   }
@@ -765,7 +803,7 @@ const HomeView = (() => {
       el('div.page-head', {}, [
         el('div', {}, [
           el('h2', { text: `${greeting}, ${App.state.actor.name.split(' ')[0]}` }),
-          el('div.sub', { text: 'תמונת מצב אישית. אפשר לגרור את החלונות, לשנות את גודלם ולהסתיר את מה שאינו נחוץ.' })
+          el('div.sub', { text: 'תמונת מצב אישית. גרירת חלון בין שורות תיתן לו שורה שלמה, גרירה לצד חלון תחלק את השורה בין השניים, ואת הגבולות אפשר למשוך.' })
         ])
       ]),
       widgets(data.widgets),
