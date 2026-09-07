@@ -262,13 +262,19 @@ textarea { resize: vertical; min-height: 76px; }
 
 .global-search { flex: 1; max-width: 420px; position: relative; }
 .global-search input { padding-right: 34px; background: var(--surface-2); }
-.global-search .icon { position: absolute; right: 11px; top: 50%; transform: translateY(-50%); color: var(--text-mute); pointer-events: none; }
+/* ‎pointer-events‎ הוחזר: הזכוכית נראית כלחיצה, וכעת היא ממקדת את השדה */
+.global-search .icon { position: absolute; right: 11px; top: 50%; transform: translateY(-50%); color: var(--text-mute); cursor: text; }
 .search-results {
   position: absolute; top: calc(100% + 6px); right: 0; left: 0;
   background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
   box-shadow: var(--shadow-lg); max-height: 420px; overflow: auto; z-index: 60;
 }
-.search-results .sr-group { padding: 7px 12px 4px; font-size: 11px; color: var(--text-mute); font-weight: 700; }
+/* כותרת קבוצה — "פרויקטים" / "משימות". דביקה, כדי שבגלילה ברשימה ארוכה
+   יישאר ברור באיזה סוג מסתכלים */
+.search-results .sr-group {
+  padding: 7px 12px 4px; font-size: 11px; color: var(--text-mute); font-weight: 700;
+  position: sticky; top: 0; background: var(--surface); z-index: 1;
+}
 .search-results button {
   display: block; width: 100%; text-align: right; padding: 8px 12px;
   border: 0; background: none; cursor: pointer; border-top: 1px solid var(--border);
@@ -1883,6 +1889,8 @@ input[type="color"] { width: 46px; height: 30px; padding: 2px; cursor: pointer; 
 }
 .search-results mark { background: #fef08a; color: inherit; border-radius: 3px; padding: 0 1px; }
 .search-results .sr-item.is-archived .sr-title { color: var(--text-mute); }
+/* השורה הפעילה בניווט מקלדת — אותו רקע של ריחוף, כדי שלא יהיו שני "נבחר" */
+.search-results .sr-item.is-active { background: var(--surface-2); box-shadow: inset 2px 0 0 0 var(--brand); }
 .search-results .sr-empty,
 .search-results .sr-more {
   padding: 12px 14px; font-size: 12.5px; color: var(--text-mute);

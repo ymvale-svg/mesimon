@@ -1071,14 +1071,43 @@ const App = (() => {
   function globalSearch() {
     const input = el('input', {
       type: 'search',
-      placeholder: 'חיפוש בכל המערכת — משימות, פרויקטים, תגובות, צ׳קליסט…'
+      role: 'combobox',
+      'aria-expanded': 'false',
+      'aria-autocomplete': 'list',
+      autocomplete: 'off',
+      placeholder: 'חיפוש משימות ופרויקטים…'
     });
-    const results = el('div.search-results', { style: { display: 'none' } });
+    const results = el('div.search-results', { role: 'listbox', style: { display: 'none' } });
     let timer = null;
     // מזהה הבקשה האחרונה: תשובה של הקלדה קודמת שהגיעה באיחור לא תדרוס את החדשה
     let seq = 0;
+    /* השורות שעל המסח כרגע, לצורך ניווט במקלדת, והשורה המסומנת */
+    let rows = [];
+    let cursor = -1;
 
-    const hide = () => { results.style.display = 'none'; };
+    const show = () => {
+      results.style.display = 'block';
+      input.setAttribute('aria-expanded', 'true');
+    };
+    const hide = () => {
+      results.style.display = 'none';
+      input.setAttribute('aria-expanded', 'false');
+      rows = [];
+      cursor = -1;
+    };
+
+    /**
+     * סימון השורה הפעילה בניווט מקלדת.
+     *
+     * ‎scrollIntoView‎ עם ‎nearest‎ ולא ‎center‎: הרשימה נגללת בתוך תיבה, ומרכוז
+     * היה מקפיץ אותה בכל חץ גם כשהשורה הבאה ממילא נראית.
+     */
+    const setCursor = (next) => {
+      if (!rows.length) return;
+      cursor = (next + rows.length) % rows.length;
+      rows.forEach((node, i) => node.classList.toggle('is-active', i === cursor));
+      rows[cursor].scrollIntoView({ block: 'nearest' });
+    };
 
     /** הדגשת המילה שנמצאה בתוך הטקסט — כך רואים למה השורה הזו הוחזרה */
     const highlight = (text, q) => {
@@ -1098,13 +1127,18 @@ const App = (() => {
       return frag;
     };
 
+    /** פתיחת פריט — פרויקט פותח את הלוח שלו, משימה פותחת את הכרטיס */
+    const openItem = (item) => {
+      hide();
+      input.value = '';
+      if (item.type === 'project') navigate('board', { projectId: item.id });
+      else TaskCardView.open(item.id);
+    };
+
     const row = (item, q) => el(`button.sr-item${item.archived ? '.is-archived' : ''}`, {
-      onclick: () => {
-        hide();
-        input.value = '';
-        if (item.type === 'project') navigate('board', { projectId: item.id });
-        else TaskCardView.open(item.id);
-      }
+      type: 'button',
+      role: 'option',
+      onclick: () => openItem(item)
     }, [
       el(`span.sr-tag.sr-${item.type}`, { text: item.type === 'project' ? 'פרויקט' : 'משימה' }),
       el('div.sr-body', {}, [
@@ -1116,17 +1150,63 @@ const App = (() => {
       ])
     ]);
 
-    input.addEventListener('input', () => {
+    /**
+     * ציור התוצאות, מקובצות לפי סוג.
+     *
+     * כותרות "פרויקטים" ו"משימות" ולא רשימה אחת מעורבת: השאלה הראשונה של
+     * מי שמחפש היא איזה סוג פריט מצא, והתיוג שעל כל שורה עונה עליה רק
+     * אחרי שקוראים אותה. הקיבוץ עונה עליה במבט.
+     */
+    const draw = (items, data, q) => {
+      UI.clear(results);
+      rows = [];
+      cursor = -1;
+
+      const groups = [
+        ['project', 'פרויקטים'],
+        ['task', 'משימות']
+      ];
+      for (const [type, label] of groups) {
+        const list = items.filter((x) => x.type === type);
+        if (!list.length) continue;
+        results.appendChild(el('div.sr-group', { text: `${label} · ${list.length}` }));
+        for (const item of list) {
+          const node = row(item, data?.query ?? q);
+          rows.push(node);
+          results.appendChild(node);
+        }
+      }
+
+      // כשיש יותר ממה שמוצג — נאמר, ולא נשתוק
+      if (data && data.total > items.length) {
+        results.appendChild(el('div.sr-more', {
+          text: `מוצגות ${items.length} מתוך ${data.total} — כדאי לצמצם את החיפוש`
+        }));
+      }
+      // השורה הראשונה מסומנת מיד, כדי ש-Enter יפתח אותה בלי חץ מקדים
+      if (rows.length) setCursor(0);
+      show();
+    };
+
+    const runSearch = () => {
       clearTimeout(timer);
       const q = input.value.trim();
       if (!q) return hide();
       const mine = ++seq;
 
       timer = setTimeout(async () => {
+        /*
+         * מצב "מחפש" מוצג לפני הבקשה. בלעדיו רשת איטית נראית כחיפוש
+         * שאינו פעיל, והמשתמש מקליד שוב את אותה מילה במקום להמתין.
+         */
+        if (!rows.length) {
+          UI.clear(results);
+          results.appendChild(el('div.sr-empty', { text: `מחפש "${q}"…` }));
+          show();
+        }
         try {
           const data = await API.search(q);
           if (mine !== seq) return;      // הקלדה חדשה עקפה את הבקשה הזו
-          UI.clear(results);
 
           /*
            * ‎?? []‎ ולא ‎data.results‎ ישירות: תשובה בצורה שאינה מוכרת אינה
@@ -1136,17 +1216,13 @@ const App = (() => {
            */
           const items = Array.isArray(data?.results) ? data.results : [];
           if (!items.length) {
+            UI.clear(results);
+            rows = [];
             results.appendChild(el('div.sr-empty', { text: `לא נמצא איזכור ל"${q}"` }));
-          } else {
-            for (const item of items) results.appendChild(row(item, data.query ?? q));
-            // כשיש יותר ממה שמוצג — נאמר, ולא נשתוק
-            if (data.total > items.length) {
-              results.appendChild(el('div.sr-more', {
-                text: `מוצגות ${items.length} מתוך ${data.total} — כדאי לצמצם את החיפוש`
-              }));
-            }
+            show();
+            return;
           }
-          results.style.display = 'block';
+          draw(items, data, q);
         } catch (err) {
           /*
            * כשל נאמר ואינו נבלע. חיפוש שאינו מציג דבר נראה למשתמש כחיפוש
@@ -1155,26 +1231,55 @@ const App = (() => {
            */
           if (mine !== seq) return;
           UI.clear(results);
+          rows = [];
           results.appendChild(el('div.sr-empty', {
             text: `החיפוש נכשל: ${err?.message ?? 'שגיאה לא ידועה'}`
           }));
-          results.style.display = 'block';
+          show();
         }
       }, SEARCH_DEBOUNCE_MS);
-    });
+    };
 
-    // Escape מנקה וסוגר, בלי לצאת מהשדה
+    input.addEventListener('input', runSearch);
+    // חזרה לשדה שכבר יש בו טקסט פותחת מחדש את התוצאות במקום להשאיר שדה מת
+    input.addEventListener('focus', () => { if (input.value.trim() && !rows.length) runSearch(); });
+
+    /**
+     * מקלדת: Enter פותח, חצים מנווטים, Escape סוגר.
+     *
+     * Enter הוא העיקר כאן — עד כה הוא לא עשה דבר. מי שהקליד מילה והקיש
+     * Enter, כמו בכל שדה חיפוש, קיבל מסך שאינו מגיב והסיק שהחיפוש אינו
+     * עובד. השורה הראשונה מסומנת מראש, ולכן Enter פותח את ההתאמה הטובה
+     * ביותר בלי צורך בחץ מקדים.
+     */
     input.addEventListener('keydown', (e) => {
-      if (e.key !== 'Escape') return;
-      input.value = '';
-      hide();
+      if (e.key === 'Escape') {
+        input.value = '';
+        hide();
+        return;
+      }
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        if (!rows.length) return;
+        e.preventDefault();
+        setCursor(cursor + (e.key === 'ArrowDown' ? 1 : -1));
+        return;
+      }
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        // Enter לפני שהתוצאות הגיעו מריץ את החיפוש מיד, בלי להמתין להשהיה
+        if (!rows.length) return runSearch();
+        rows[Math.max(0, cursor)].click();
+      }
     });
 
     document.addEventListener('mousedown', (e) => {
       if (!results.contains(e.target) && e.target !== input) hide();
     });
 
-    return el('div.global-search', {}, [input, el('span.icon', { text: '🔍' }), results]);
+    // הזכוכית ממקדת את השדה — היא נראית כלחיצה, וכדאי שתהיה כזו
+    const icon = el('span.icon', { title: 'חיפוש', text: '🔍', onclick: () => input.focus() });
+
+    return el('div.global-search', {}, [input, icon, results]);
   }
 
   // ------------------------------------------------------------- תצוגה
