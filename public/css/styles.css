@@ -400,11 +400,23 @@ textarea { resize: vertical; min-height: 76px; }
  * שנראה כקפיצה מאוחרת. התרחבות פותרת זאת בפריסה עצמה: שני חלונות בשורה
  * מתחלקים בה שווה בשווה, וחלון שנשאר לבד ממלא אותה מיד ובלי JS.
  */
+/*
+ * ‎--share‎ הוא היחס של החלון בשורתו, וברירת המחדל 1 פירושה חלוקה שווה.
+ *
+ * המשקל מוכפל גם בבסיס וגם בהתרחבות, ולא באחד מהם — וזה מה שהופך את היחס
+ * למדויק. רוחב סופי של חלון בפריסת flex הוא ‎basis + free * grow/Σgrow‎;
+ * כששניהם פרופורציוניים ל-‎share‎ הביטוי מצטמצם ל-‎share * רוחב_השורה / Σshare‎.
+ * כלומר: הרוחבים תמיד ביחס המבוקש, סכומם תמיד רוחב השורה המלא, ושינוי של
+ * אחד גורע בהכרח מהשני — בלי חישוב ב-JS ובלי שאריות.
+ *
+ * נגזרות שיוצאות מכאן בחינם: חלון שנשאר לבד בשורה ממלא אותה ללא תלות
+ * ביחס שלו, ובשלושה חלונות בשורה שינוי יחס בין שניים אינו נוגע בשלישי.
+ */
 .home-slot {
-  flex: 1 1 clamp(300px, calc(50% - 7px), 500px);
+  flex: var(--share, 1) 1 calc(var(--share, 1) * clamp(300px, 50% - 7px, 500px));
   min-width: 0; position: relative; display: flex;
 }
-.home-slot.is-wide { flex-basis: 100%; }
+.home-slot.is-wide { flex: 1 1 100%; }
 
 /*
  * חלון עם רשימה: תקרה אחת לכולם, והרשימה ממלאה את מה שהשורה נתנה.
@@ -493,6 +505,27 @@ textarea { resize: vertical; min-height: 76px; }
   touch-action: none; z-index: 4;
 }
 .slot-resize.at-top { top: -5px; bottom: auto; }
+
+/*
+ * ידית היחס בין שני חלונות באותה שורה, על הגבול שביניהם.
+ *
+ * ‎inset-inline-end‎ ולא ‎left‎: ב-RTL זה נפתר לצד השמאלי מעצמו, וזה גם הצד
+ * הנכון — הגבול עם החלון הבא בשורה. יושבת על החלון המוביל ונתלית רק כשיש
+ * לצדו חלון באותה שורה, אחרת אין למה למשוך את הרוחב.
+ */
+.slot-wresize {
+  position: absolute; inset-block: 24px; inset-inline-end: -8px; width: 11px;
+  border: 0; padding: 0; background: transparent; cursor: col-resize;
+  touch-action: none; z-index: 4;
+}
+.slot-wresize::before {
+  content: ''; position: absolute; inset-block: 0; inset-inline-start: 4px;
+  width: 3px; border-radius: 2px; background: transparent; transition: background .12s;
+}
+.home-slot:hover .slot-wresize::before { background: var(--border-strong); }
+.slot-wresize:hover::before,
+.slot-wresize:focus-visible::before,
+.slot-wresize.dragging::before { background: var(--brand); }
 .slot-resize::before {
   content: ''; position: absolute; inset-inline: 0; top: 4px; height: 3px;
   border-radius: 2px; background: transparent; transition: background .12s;
@@ -515,8 +548,9 @@ textarea { resize: vertical; min-height: 76px; }
  * לו טעם על מסך צר.
  */
 @media (max-width: 820px) {
-  .home-slot { flex-basis: 100%; min-width: 0; }
-  .slot-grip, .slot-resize { display: none; }
+  /* חלון אחד לשורה, ולכן גם היחס בין שניים חסר משמעות כאן */
+  .home-slot { flex: 1 1 100%; min-width: 0; }
+  .slot-grip, .slot-resize, .slot-wresize { display: none; }
   .slot-tools { opacity: 1; }
   .card-head .home-filter { max-width: 140px; }
 }

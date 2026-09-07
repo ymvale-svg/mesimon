@@ -95,6 +95,12 @@ const HomeView = (() => {
    */
   const SLOT_MIN_H = 170;
   const SLOT_MAX_H = 900;
+  /*
+   * רוחב מינימלי לחלון בגרירת היחס. 250 ולא רצפת הבסיס (300): כשמצמצמים
+   * במפורש חלון אחד לטובת שכנו הגיוני לרדת מתחת לרוחב שהפריסה בוחרת מעצמה,
+   * אבל לא עד כדי חלון שאי אפשר לקרוא בו שורה.
+   */
+  const SHARE_MIN_PX = 250;
 
   const layout = () => App.getPref('homeLayout', {}) ?? {};
   const saveLayout = (patch) => {
@@ -116,6 +122,14 @@ const HomeView = (() => {
     return [...saved, ...CARD_ORDER.filter((k) => !saved.includes(k))];
   }
 
+  /*
+   * היחס בין רוחבי החלונות שייך ל**זוג**, ולא לחלון בודד. לכן כל פעולה
+   * שמשנה מי שכן של מי מאפסת אותו לחלוקה שווה: הזזה, הרחבה לרוחב מלא,
+   * הסתרה והחזרה. יחס שנקבע בין שני חלונות והוחל אחר כך על זוג אחר הוא
+   * מספר שהמשתמש לא בחר.
+   */
+  const evenShares = () => ({ shares: {} });
+
   const toggleWide = (key) => {
     const l = layout();
     const wide = new Set(l.wide ?? []);
@@ -123,16 +137,16 @@ const HomeView = (() => {
     // שתי רשימות, כי לכל כרטיס יש ברירת מחדל משלו ו"לא ברשימה" אינו תשובה
     if (isWide(key)) { wide.delete(key); narrow.add(key); }
     else { narrow.delete(key); wide.add(key); }
-    saveLayout({ wide: [...wide], narrow: [...narrow] });
+    saveLayout({ wide: [...wide], narrow: [...narrow], ...evenShares() });
   };
 
   const hideCard = (key) => {
-    saveLayout({ hidden: [...new Set([...(layout().hidden ?? []), key])] });
+    saveLayout({ hidden: [...new Set([...(layout().hidden ?? []), key])], ...evenShares() });
     UI.toast(`"${CARD_LABEL[key]}" הוסתר — אפשר להחזיר מלמטה`);
   };
 
   const showCard = (key) =>
-    saveLayout({ hidden: (layout().hidden ?? []).filter((k) => k !== key) });
+    saveLayout({ hidden: (layout().hidden ?? []).filter((k) => k !== key), ...evenShares() });
 
   /**
    * ידית שינוי הגובה. אחת בתחתית החלון ואחת בראשו.
@@ -336,7 +350,8 @@ const HomeView = (() => {
         const at = keys.indexOf(key);
         keys.splice(after ? at + 1 : at, 0, dragged.key);
         clearMarks();
-        saveLayout({ order: keys });
+        // חלון שהוזז לצד חלון אחר מתחיל איתו בחלוקה שווה — ראה evenShares
+        saveLayout({ order: keys, ...evenShares() });
       });
     }
   }
@@ -357,9 +372,16 @@ const HomeView = (() => {
      * דרך להגיע אליו.
      */
     const hasList = !!card.querySelector('.feed-scroll');
+    const share = Number((layout().shares ?? {})[key]);
+    // שני משתני CSS על אותו אלמנט, ולכן מחרוזת אחת — ‎el‎ אינו מעביר
+    // משתני CSS כאובייקט סגנון
+    const vars = [
+      Number.isFinite(height) ? `--slot-h: ${height}px` : null,
+      Number.isFinite(share) && share > 0 ? `--share: ${share}` : null
+    ].filter(Boolean).join('; ');
     const slot = el(`div.home-slot${wide ? '.is-wide' : ''}${hasList ? '.has-list' : ''}`, {
       'data-key': key,
-      style: Number.isFinite(height) ? `--slot-h: ${height}px` : ''
+      style: vars
     }, [card]);
 
     const head = card.querySelector('.card-head');
@@ -389,7 +411,8 @@ const HomeView = (() => {
     const hidden = (layout().hidden ?? []).filter((k) => available.has(k));
     const l = layout();
     const touched = (l.order ?? []).length || (l.wide ?? []).length
-      || (l.narrow ?? []).length || Object.keys(l.heights ?? {}).length || hidden.length;
+      || (l.narrow ?? []).length || Object.keys(l.heights ?? {}).length
+      || Object.keys(l.shares ?? {}).length || hidden.length;
     if (!touched) return null;
 
     return el('div.layout-footer', {}, [
@@ -430,6 +453,143 @@ const HomeView = (() => {
   }
 
   /**
+   * ידית היחס בין שני חלונות שכנים באותה שורה.
+   *
+   * שני החלונות משתנים יחד ובכיוון הפוך: מה שאחד מוותר עליו עובר לשני,
+   * וסכום הרוחבים נשאר רוחב השורה. זו אינה החלטה של הקוד אלא של הפריסה —
+   * הידית משנה רק את שני המשקלים ומשמרת את סכומם, וה-CSS גוזר מכך את
+   * הרוחבים (ראה ההסבר על ‎--share‎ בגיליון).
+   *
+   * המשקל נשמר ולא הרוחב: רוחב בפיקסלים היה נשבר בכל שינוי גודל של החלון,
+   * והיחס נשאר נכון בכל רוחב מסך.
+   */
+  function widthHandle(slot, next) {
+    const h = el('button.slot-wresize', {
+      type: 'button',
+      role: 'separator',
+      'aria-orientation': 'vertical',
+      'aria-label': `היחס בין ${CARD_LABEL[slot.dataset.key]} ל${CARD_LABEL[next.dataset.key]}`,
+      title: 'גרירה לשינוי היחס בין שני החלונות · חצים ← → · לחיצה כפולה לחלוקה שווה'
+    });
+
+    const round = (n) => Math.round(n * 1000) / 1000;
+
+    /**
+     * שמירה של הזוג. כששניהם חזרו לחלוקה שווה המפתחות נמחקים ולא נשמרים
+     * כ-1 — כך העדפה נקייה נשארת נקייה, ואיפוס מזוהה כאיפוס.
+     */
+    const store = (s1, s2) => {
+      const shares = { ...(layout().shares ?? {}) };
+      const even = Math.abs(s1 - 1) < 0.02 && Math.abs(s2 - 1) < 0.02;
+      if (even) {
+        delete shares[slot.dataset.key];
+        delete shares[next.dataset.key];
+      } else {
+        shares[slot.dataset.key] = round(s1);
+        shares[next.dataset.key] = round(s2);
+      }
+      saveLayout({ shares });
+    };
+
+    /** המצב ההתחלתי של הזוג — רוחבים בפועל, ומשקלים שסכומם נשמר */
+    const pair = () => {
+      const shares = layout().shares ?? {};
+      const s1 = Number(shares[slot.dataset.key]) || 1;
+      const s2 = Number(shares[next.dataset.key]) || 1;
+      const w1 = slot.getBoundingClientRect().width;
+      const w2 = next.getBoundingClientRect().width;
+      return { s1, s2, sum: s1 + s2, w1, w2, total: w1 + w2 };
+    };
+
+    /** רוחב חדש לחלון המוביל → משקלים לשניהם, בגבול המינימום לכל אחד */
+    const sharesFor = (nextW1, p) => {
+      const w1 = Math.min(p.total - SHARE_MIN_PX, Math.max(SHARE_MIN_PX, nextW1));
+      const s1 = p.sum * w1 / p.total;
+      return [s1, p.sum - s1];
+    };
+
+    const apply = (s1, s2) => {
+      slot.style.setProperty('--share', String(round(s1)));
+      next.style.setProperty('--share', String(round(s2)));
+    };
+
+    h.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const rtl = getComputedStyle(slot.parentElement).direction === 'rtl';
+      const startX = e.clientX;
+      const p = pair();
+      // שני החלונות צריכים מקום למינימום, אחרת אין מה לגרור
+      if (p.total < SHARE_MIN_PX * 2) return;
+
+      h.setPointerCapture(e.pointerId);
+      h.classList.add('dragging');
+      document.body.style.userSelect = 'none';
+      let last = [p.s1, p.s2];
+
+      const onMove = (ev) => {
+        // ב-RTL החלון המוביל הוא הימני, ולכן משיכה שמאלה מרחיבה אותו
+        const delta = rtl ? startX - ev.clientX : ev.clientX - startX;
+        last = sharesFor(p.w1 + delta, p);
+        apply(last[0], last[1]);
+      };
+      const onUp = () => {
+        h.classList.remove('dragging');
+        document.body.style.userSelect = '';
+        h.removeEventListener('pointermove', onMove);
+        h.removeEventListener('pointerup', onUp);
+        h.removeEventListener('pointercancel', onUp);
+        store(last[0], last[1]);
+      };
+      h.addEventListener('pointermove', onMove);
+      h.addEventListener('pointerup', onUp);
+      h.addEventListener('pointercancel', onUp);
+    });
+
+    // לחיצה כפולה — חזרה לחלוקה שווה בין השניים
+    h.addEventListener('dblclick', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      store(1, 1);
+    });
+
+    h.addEventListener('keydown', (e) => {
+      const raw = e.key === 'ArrowLeft' ? 1 : e.key === 'ArrowRight' ? -1 : 0;
+      if (!raw) return;
+      e.preventDefault();
+      const rtl = getComputedStyle(slot.parentElement).direction === 'rtl';
+      const p = pair();
+      if (p.total < SHARE_MIN_PX * 2) return;
+      const step = (e.shiftKey ? 60 : 20) * (rtl ? raw : -raw);
+      const [s1, s2] = sharesFor(p.w1 + step, p);
+      apply(s1, s2);
+      store(s1, s2);
+    });
+
+    return h;
+  }
+
+  /**
+   * תליית ידיות היחס. נדרשת מדידה: "שכן באותה שורה" תלוי בעטיפה, והיא
+   * משתנה עם רוחב המסך. חלון שנשאר לבד בשורה אינו מקבל ידית — אין ממי
+   * לקחת רוחב.
+   */
+  function attachWidthHandles(board) {
+    const slots = [...board.querySelectorAll('.home-slot')];
+    for (const s of slots) {
+      for (const old of s.querySelectorAll(':scope > .slot-wresize')) old.remove();
+    }
+    slots.forEach((slot, i) => {
+      const next = slots[i + 1];
+      if (!next) return;
+      if (slot.classList.contains('is-wide') || next.classList.contains('is-wide')) return;
+      // אותה שורה בפועל, ולא לפי הנחה על מספר החלונות בשורה
+      if (Math.round(slot.offsetTop) !== Math.round(next.offsetTop)) return;
+      slot.appendChild(widthHandle(slot, next));
+    });
+  }
+
+  /**
    * התאמה שדורשת מדידה, ולכן רצה אחרי ההרכבה: לאיזה חלון יש בכלל מה למתוח.
    *
    * מה שהיה כאן קודם ואינו עוד: סיווג "מי נשאר לבד בשורה" כדי להרחיב אותו.
@@ -442,6 +602,7 @@ const HomeView = (() => {
   function tuneBoard() {
     if (!boardRef?.isConnected) return;
     attachHeightHandles(boardRef);
+    attachWidthHandles(boardRef);
   }
 
   let tuneTimer = null;
