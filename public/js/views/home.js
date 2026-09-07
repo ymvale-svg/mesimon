@@ -89,7 +89,11 @@ const HomeView = (() => {
   // כרטיסים שברירת המחדל שלהם היא שורה שלמה — טבלת חתך רחבה מדי לחצי שורה
   const WIDE_BY_DEFAULT = new Set(['deptCut']);
 
-  const SLOT_MIN_H = 120;
+  /*
+   * גבולות גובה החלון — לא של הרשימה שבתוכו. בכותרת ובריפוד יושבים כ-84
+   * פיקסלים, ולכן חלון של 120 היה מציג שורה אחת וחצי; 170 משאיר שתיים-שלוש.
+   */
+  const SLOT_MIN_H = 170;
   const SLOT_MAX_H = 900;
 
   const layout = () => App.getPref('homeLayout', {}) ?? {};
@@ -131,7 +135,16 @@ const HomeView = (() => {
     saveLayout({ hidden: (layout().hidden ?? []).filter((k) => k !== key) });
 
   /**
-   * ידית שינוי הגובה, בתחתית החלון.
+   * ידית שינוי הגובה. אחת בתחתית החלון ואחת בראשו.
+   *
+   * שתי הידיות משנות את אותו גובה, אך בכיוון הפוך: מלמטה גרירה כלפי מטה
+   * מגדילה, ומלמעלה גרירה כלפי מעלה מגדילה. זה ההרגל מכל חלון שאפשר למתוח,
+   * ולכן הכיוון נגזר מהקצה שנתפס ולא מכיוון התנועה בלבד.
+   *
+   * הערה על מה שאי אפשר: החלונות יושבים בזרימה ולא בקואורדינטות, ולכן
+   * ראש החלון אינו זז מעלה כשמותחים אותו — הוא נשאר במקומו והחלון נפתח
+   * כלפי מטה. חלופה שהייתה מזיזה את הראש דורשת מיקום מוחלט, וכל שאר
+   * החלונות היו זזים תחתיו בכל גרירה.
    *
    * הגובה שנקבע הוא **תקרה** ולא גובה קבוע, וזה תיקון של החלטה קודמת:
    * גובה קבוע אכן שמר על גודל החלון, אבל ברשימה קצרה ממנו הוא הותיר חלל
@@ -140,26 +153,49 @@ const HomeView = (() => {
    * הגרירה חסומה בגובה התוכן: אי אפשר למתוח מעבר לשורה האחרונה, ולכן
    * הידית "נעצרת" בסוף הרשימה במקום להימשך אל תוך שטח שלא יתמלא לעולם.
    */
-  function heightHandle(key, slot) {
-    const h = el('button.slot-resize', {
+  function heightHandle(key, slot, edge = 'bottom') {
+    const top = edge === 'top';
+    const h = el(`button.slot-resize${top ? '.at-top' : ''}`, {
       type: 'button',
       role: 'separator',
-      'aria-label': `גובה החלון ${CARD_LABEL[key]}`,
+      'aria-label': `גובה החלון ${CARD_LABEL[key]} — ${top ? 'מהקצה העליון' : 'מהקצה התחתון'}`,
       title: 'גרירה לשינוי הגובה · חצים ↑ ↓ · לחיצה כפולה לאיפוס'
     });
 
     const apply = (px) => slot.style.setProperty('--slot-h', `${px}px`);
+    const clear = () => {
+      const heights = { ...(layout().heights ?? {}) };
+      delete heights[key];
+      saveLayout({ heights });
+    };
     const commit = (px) => saveLayout({ heights: { ...(layout().heights ?? {}), [key]: px } });
 
-    /** התקרה השימושית: גובה התוכן, ולא יותר ממנו */
-    const ceiling = (box) => Math.min(SLOT_MAX_H, Math.max(SLOT_MIN_H, box.scrollHeight));
+    /**
+     * התקרה השימושית: הגובה שבו כל התוכן נראה, ולא יותר ממנו.
+     *
+     * נמדד ביחידות של **החלון** ולא של תיבת הרשימה, כי ‎--slot-h‎ מוחל על
+     * החלון. מדידה בתיבה והחלה על החלון נבדלות בגובה הכותרת, וכל גרירה
+     * הייתה "קופצת" בהפרש הזה.
+     *
+     * ‎scrollHeight - clientHeight‎ הוא בדיוק מה שחסר כדי להציג את הכול,
+     * ולכן הוא נוסף לגובה הנוכחי. ‎slot.scrollHeight‎ לא היה עובד כאן: הגולל
+     * הוא התיבה הפנימית, ולא החלון.
+     */
+    const ceiling = (box) => {
+      const now = slot.getBoundingClientRect().height;
+      const hidden = Math.max(0, box.scrollHeight - box.clientHeight);
+      return Math.min(SLOT_MAX_H, Math.max(SLOT_MIN_H, Math.round(now + hidden)));
+    };
+    // גובה שהגיע לתקרת התוכן אינו העדפה אלא "כמו שזה" — נמחק ולא נשמר,
+    // אחרת רשימה שתתקצר מאוחר יותר תגרור מחדש חלל ריק
+    const store = (px, max) => (px >= max ? clear() : commit(px));
 
     h.addEventListener('pointerdown', (e) => {
       e.preventDefault();
       const box = slot.querySelector('.feed-scroll');
       if (!box) return;
       const startY = e.clientY;
-      const startH = box.getBoundingClientRect().height;
+      const startH = slot.getBoundingClientRect().height;
       const max = ceiling(box);
       h.setPointerCapture(e.pointerId);
       h.classList.add('dragging');
@@ -167,7 +203,9 @@ const HomeView = (() => {
       let last = Math.round(startH);
 
       const onMove = (ev) => {
-        last = Math.round(Math.min(max, Math.max(SLOT_MIN_H, startH + (ev.clientY - startY))));
+        // הקצה העליון הופך את הסימן: משיכה מעלה מגדילה
+        const delta = top ? startY - ev.clientY : ev.clientY - startY;
+        last = Math.round(Math.min(max, Math.max(SLOT_MIN_H, startH + delta)));
         apply(last);
       };
       const onUp = () => {
@@ -176,43 +214,28 @@ const HomeView = (() => {
         h.removeEventListener('pointermove', onMove);
         h.removeEventListener('pointerup', onUp);
         h.removeEventListener('pointercancel', onUp);
-        // גובה שהגיע לתקרת התוכן אינו העדפה אלא "כמו שזה" — נמחק ולא נשמר,
-        // אחרת רשימה שתתקצר מאוחר יותר תגרור מחדש חלל ריק
-        if (last >= max) {
-          const heights = { ...(layout().heights ?? {}) };
-          delete heights[key];
-          saveLayout({ heights });
-        } else {
-          commit(last);      // שמירה אחת בסוף — שמירה בכל תזוזה מציירת מחדש
-        }
+        store(last, max);    // שמירה אחת בסוף — שמירה בכל תזוזה מציירת מחדש
       };
       h.addEventListener('pointermove', onMove);
       h.addEventListener('pointerup', onUp);
       h.addEventListener('pointercancel', onUp);
     });
 
-    h.addEventListener('dblclick', (e) => {
-      e.preventDefault();
-      const heights = { ...(layout().heights ?? {}) };
-      delete heights[key];
-      saveLayout({ heights });
-    });
+    h.addEventListener('dblclick', (e) => { e.preventDefault(); clear(); });
 
     h.addEventListener('keydown', (e) => {
-      const dir = e.key === 'ArrowDown' ? 1 : e.key === 'ArrowUp' ? -1 : 0;
-      if (!dir) return;
+      const raw = e.key === 'ArrowDown' ? 1 : e.key === 'ArrowUp' ? -1 : 0;
+      if (!raw) return;
       e.preventDefault();
       const box = slot.querySelector('.feed-scroll');
       if (!box) return;
+      // אותה היפוך כמו בגרירה: בידית העליונה חץ מעלה מגדיל
+      const dir = top ? -raw : raw;
       const max = ceiling(box);
       const next = Math.round(Math.min(max, Math.max(SLOT_MIN_H,
-        box.getBoundingClientRect().height + dir * (e.shiftKey ? 60 : 24))));
+        slot.getBoundingClientRect().height + dir * (e.shiftKey ? 60 : 24))));
       apply(next);
-      if (next >= max) {
-        const heights = { ...(layout().heights ?? {}) };
-        delete heights[key];
-        saveLayout({ heights });
-      } else commit(next);
+      store(next, max);
     });
 
     return h;
@@ -226,12 +249,19 @@ const HomeView = (() => {
    */
   function attachHeightHandles(board) {
     for (const slot of board.querySelectorAll('.home-slot')) {
+      // ניקוי לפני תלייה מחדש — ‎tuneBoard‎ רץ גם בשינוי רוחב החלון,
+      // ובלעדיו כל שינוי גודל היה מוסיף עוד זוג ידיות על אותו חלון
+      for (const old of slot.querySelectorAll(':scope > .slot-resize')) old.remove();
+
       const box = slot.querySelector('.feed-scroll');
       if (!box) continue;
       const overflows = box.scrollHeight > box.clientHeight + 4;
       // חלון שהמשתמש כבר קיצר חייב להישאר עם ידית, אחרת אין דרך להחזירו
       const pinned = Number.isFinite((layout().heights ?? {})[slot.dataset.key]);
-      if (overflows || pinned) slot.appendChild(heightHandle(slot.dataset.key, slot));
+      if (!overflows && !pinned) continue;
+      // שני הקצוות, כדי שלא יידרש לגלול לתחתית החלון כדי לקצר אותו
+      slot.appendChild(heightHandle(slot.dataset.key, slot, 'top'));
+      slot.appendChild(heightHandle(slot.dataset.key, slot, 'bottom'));
     }
   }
 

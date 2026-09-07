@@ -452,12 +452,22 @@ textarea { resize: vertical; min-height: 76px; }
 .home-slot.is-wide.drop-before::after { inset: -8px 0 auto; width: auto; height: 3px; }
 .home-slot.is-wide.drop-after::after { inset: auto 0 -8px; width: auto; height: 3px; }
 
-/* ידית הגובה — פס דק בתחתית החלון, מתגלה בריחוף כמו הכלים */
+/*
+ * ידיות הגובה — פס דק בשני קצות החלון, מתגלה בריחוף כמו הכלים.
+ *
+ * גם מלמעלה ולא רק מלמטה: כדי לקצר חלון גבוה היה צריך לגלול עד תחתיתו,
+ * ובחלון שגובהו כמעט כגובה המסך זה אומר לאבד מהעין את מה שמכווצים.
+ *
+ * הידית העליונה נכנסת ל-5 פיקסלים שמעל הכרטיס ומסתיימת 6 פיקסלים לתוכו,
+ * ולכן היא אינה נוגעת בכפתורי הכותרת שמתחילים 11 פיקסלים פנימה. ברווח של
+ * 14 פיקסלים בין השורות היא גם אינה מתנגשת בידית התחתונה של השורה שמעליה.
+ */
 .slot-resize {
   position: absolute; inset-inline: 26px; bottom: -5px; height: 11px;
   border: 0; padding: 0; background: transparent; cursor: ns-resize;
   touch-action: none; z-index: 4;
 }
+.slot-resize.at-top { top: -5px; bottom: auto; }
 .slot-resize::before {
   content: ''; position: absolute; inset-inline: 0; top: 4px; height: 3px;
   border-radius: 2px; background: transparent; transition: background .12s;
