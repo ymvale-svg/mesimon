@@ -260,10 +260,57 @@ textarea { resize: vertical; min-height: 76px; }
 .brand { display: flex; align-items: center; color: var(--brand-dark); }
 .brand .app-logo-tagline { color: var(--text-mute); opacity: 1; font-weight: 500; }
 
-.global-search { flex: 1; max-width: 420px; position: relative; }
-.global-search input { padding-right: 34px; background: var(--surface-2); }
+/*
+ * שדה החיפוש.
+ *
+ * ‎input[type=search]‎ אינו נכלל בסלקטור השדות הכללי (שורה 102), ולכן לא
+ * הייתה לו מסגרת ולא פינות — הוא נראה כמו כתם רקע בסרגל ולא כמו שדה שאפשר
+ * להקליד בו. כאן הוא מוגדר במלואו: גבוה יותר, פינות עגולות לגמרי, ורקע רך
+ * שמתבהר למגן בהיר בעת מיקוד.
+ */
+.global-search { flex: 0 1 520px; min-width: 180px; position: relative; }
+.global-search input {
+  height: 40px; width: 100%;
+  padding: 0 40px 0 16px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface-2);
+  font-size: 14px;
+  transition: background .15s, border-color .15s, box-shadow .15s;
+}
+.global-search input::placeholder { color: var(--text-mute); }
+.global-search input:hover { background: #eaf6f3; border-color: var(--border-strong); }
+.global-search input:focus {
+  outline: none;
+  background: var(--surface);
+  border-color: var(--brand);
+  /* מגן רך ולא מסגרת עבה: הוא מסמן מיקוד בלי לקפוץ בגובה השדה */
+  box-shadow: 0 0 0 3px rgba(15, 118, 110, .13);
+}
+/* הסרת ה-X המקורי של הדפדפן — יש לנו Escape, והוא נראה זר בשדה מעוגל */
+.global-search input::-webkit-search-cancel-button { -webkit-appearance: none; appearance: none; }
 /* ‎pointer-events‎ הוחזר: הזכוכית נראית כלחיצה, וכעת היא ממקדת את השדה */
-.global-search .icon { position: absolute; right: 11px; top: 50%; transform: translateY(-50%); color: var(--text-mute); cursor: text; }
+.global-search .icon {
+  position: absolute; right: 14px; top: 50%; transform: translateY(-50%);
+  color: var(--text-mute); cursor: text; font-size: 14px;
+}
+
+/*
+ * מרכוז אמיתי בסרגל, ולא רק בין שתי הקבוצות שלצדדיו: רוחב הסמל ורוחב
+ * הפעולות אינם שווים, ולכן חלוקת החלל הפנוי לשניים משאירה את השדה מוסט
+ * בעשרות פיקסלים מהמרכז.
+ *
+ * ‎left/translateX‎ פיזיים ולא לוגיים במכוון — מרכוז זהה בשני כיווני הכתיבה.
+ * הרוחב מוגן ב-‎min‎ כדי שהשדה לא ידרוך על הסמל או על הפעולות; מתחת לרוחב
+ * הזה הוא חוזר לזרימה הרגילה בין המרווחים.
+ */
+@media (min-width: 1120px) {
+  .topbar { position: relative; }
+  .global-search {
+    position: absolute; left: 50%; transform: translateX(-50%);
+    flex: none; width: min(520px, calc(100% - 680px));
+  }
+}
 .search-results {
   position: absolute; top: calc(100% + 6px); right: 0; left: 0;
   background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);

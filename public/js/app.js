@@ -1697,6 +1697,12 @@ const App = (() => {
       // מוסתר אחרי סיבוב המכשיר, ואז לא הייתה דרך להגיע לניווט
       el('button.icon-btn.drawer-btn', { onclick: toggleDrawer }, ['☰']),
       el('div.brand', {}, [UI.logo({ size: 'sm', tagline: true, variant: 'brand' })]),
+      /*
+       * מרווח משני צדי החיפוש. במסך רחב הוא ממורכז בכל מקרה במיקום מוחלט
+       * (ראה ‎.global-search‎ בגיליון), והמרווחים הם מה שמשאיר אותו מאוזן
+       * במסכים צרים יותר, שם המיקום המוחלט היה מדריך אותו על הסמל.
+       */
+      el('div.topbar-spacer'),
       globalSearch(),
       el('div.topbar-spacer'),
       !isVendor() && may('create_task')

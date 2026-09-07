@@ -150,21 +150,46 @@
   .page-head .sub { display: none; }
   .grid.grid-2, .grid.grid-3, .grid.grid-4 { grid-template-columns: 1fr; }
 
-  /* המודל תופס את המסך: חלון צף עם שוליים על טלפון הוא בזבוז שטח */
+  /*
+   * המודל תופס את המסך: חלון צף עם שוליים על טלפון הוא בזבוז שטח.
+   *
+   * ונפתח מלמטה. ההנפשה של המחשב היא הופעה במקום עם קפיצה קטנה, וזו
+   * שפה של חלון צף. על טלפון הציפייה היא גלישה מלמטה — זה מה שאומר
+   * "נפתח שכבה מעל מה שהיה", והוא גם הכיוון שממנו האצבע באה.
+   */
   .modal-backdrop { padding: 0; place-items: stretch; }
   .modal {
     max-width: none; max-height: none; width: 100%;
     height: 100dvh; border-radius: 0;
     padding-top: env(safe-area-inset-top, 0px);
     padding-bottom: env(safe-area-inset-bottom, 0px);
+    animation: sheet-up .24s cubic-bezier(.2, .8, .2, 1);
+  }
+  @keyframes sheet-up { from { transform: translateY(100%); } }
+  @media (prefers-reduced-motion: reduce) {
+    .modal { animation: none; }
   }
   .modal-head { padding: 12px 14px; }
   .modal-body { padding: 14px; }
   .modal-foot { border-radius: 0; padding: 12px 14px; flex-wrap: wrap; }
   .row { flex-direction: column; gap: 0; }
 
-  /* כרטיס המשימה — טור אחד, והפאנל הצדדי מתחתיו */
-  .task-detail { grid-template-columns: 1fr; }
+  /*
+   * כרטיס המשימה — משטח גלילה **אחד**.
+   *
+   * כאן היה הבאג: ‎.task-detail‎ הוא grid, ובטור אחד הוא חילק את גובה המסך
+   * לשתי שורות שוות — ולכל אחת יש ‎overflow-y: auto‎ משלה מהמחשב. התוצאה
+   * הייתה שני חלונות קטנים זה מעל זה: גוף המשימה נגלל בתוך 406 פיקסלים עם
+   * 1000 פיקסלים של תוכן, ופאנל האפשרויות נראה נעוץ בחלון נפרד מתחתיו.
+   *
+   * ‎flex‎ בטור עם גלילה על ההורה בלבד: הכל זורם רצף אחד מכותרת המשימה עד
+   * תיבת התגובה, בגלילה אחת של האצבע.
+   */
+  .task-detail {
+    display: flex; flex-direction: column;
+    overflow-y: auto; -webkit-overflow-scrolling: touch;
+  }
+  .td-main, .td-side { overflow: visible; min-height: auto; flex: none; }
   .td-side { border-inline-start: 0; border-top: 1px solid var(--border); }
   .chat { max-height: none; overflow: visible; }
   .composer { position: static; }
