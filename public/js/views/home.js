@@ -9,6 +9,7 @@ const HomeView = (() => {
   const { el } = UI;
 
   let containerRef = null;
+  let boardRef = null;
 
   /**
    * משימות שסומנו כהושלמו בביקור הנוכחי במסך. השרת מחזיר ל"המשימות שלי" רק
@@ -36,13 +37,19 @@ const HomeView = (() => {
   const APPROVAL_MAX = 15;
 
   /**
-   * ‎.feed-scroll‎ מגדיר max-height ולא height, ולכן רשימה קצרה אינה נכנסת
-   * לתיבה קטועה — היא פשוט נשארת בגובהה הטבעי. מכאן שאין צורך בתנאי על
-   * מספר הפריטים: התיבה נכנסת לפעולה רק כשהרשימה באמת מתחילה למתוח את העמוד.
-   * הגובה עצמו ב-CSS; inline נמסר רק היכן שפריט גבוה בהרבה משורת פיד.
+   * תיבת הגלילה של כל חלון.
+   *
+   * ‎max-height‎ ולא ‎height‎: רשימה קצרה נשארת בגובהה הטבעי, ולכן חלון עם
+   * שלוש שורות אינו מציג מתחתן חלל ריק. התקרה נכנסת לפעולה רק כשהרשימה
+   * באמת מתחילה למתוח את העמוד.
+   *
+   * תקרה אחת לכולם, ב-CSS בלבד. קודם לכן כל כרטיס מסר גובה משלו — 210,
+   * 220, 300, 360 — וכל חלון נחתך במקום אחר, כך שהלוח נראה משורבב במקום
+   * מסודר. חלון שרשימתו קצרה מהתקרה מתכווץ אליה מעצמו, ולכן תקרה משותפת
+   * אינה גוררת חלל: היא רק קובעת היכן מתחילה גלילה.
    */
-  const scrollBox = (children, { maxHeight = null, extraClass = '' } = {}) =>
-    el(`div.feed-scroll${extraClass}`, maxHeight ? { style: { maxHeight } } : {}, children);
+  const scrollBox = (children, { extraClass = '' } = {}) =>
+    el(`div.feed-scroll${extraClass}`, {}, children);
 
   /** ניסוח מספר בעברית — יחיד מקבל מילה ולא ספרה בודדת */
   const countLabel = (n, one, many) => (n === 1 ? one : `${n} ${many}`);
@@ -126,10 +133,12 @@ const HomeView = (() => {
   /**
    * ידית שינוי הגובה, בתחתית החלון.
    *
-   * הגובה מוחל כמשתנה CSS על החלון, ולא כגובה קבוע על הכרטיס: כל כרטיס
-   * שיש בו רשימה עוטף אותה ב-‎.feed-scroll‎, וה-CSS מחיל את המשתנה עליה.
-   * כך הגרירה מאריכה ומקצרת את הרשימה עצמה — שזו המשמעות של "גודל" כאן —
-   * במקום למתוח כרטיס ולהשאיר בתוכו חלל ריק.
+   * הגובה שנקבע הוא **תקרה** ולא גובה קבוע, וזה תיקון של החלטה קודמת:
+   * גובה קבוע אכן שמר על גודל החלון, אבל ברשימה קצרה ממנו הוא הותיר חלל
+   * ריק מתחת לשורות. חלון ריק למחצה גרוע יותר מחלון שגובהו נקבע לפי תוכנו.
+   *
+   * הגרירה חסומה בגובה התוכן: אי אפשר למתוח מעבר לשורה האחרונה, ולכן
+   * הידית "נעצרת" בסוף הרשימה במקום להימשך אל תוך שטח שלא יתמלא לעולם.
    */
   function heightHandle(key, slot) {
     const h = el('button.slot-resize', {
@@ -142,19 +151,23 @@ const HomeView = (() => {
     const apply = (px) => slot.style.setProperty('--slot-h', `${px}px`);
     const commit = (px) => saveLayout({ heights: { ...(layout().heights ?? {}), [key]: px } });
 
+    /** התקרה השימושית: גובה התוכן, ולא יותר ממנו */
+    const ceiling = (box) => Math.min(SLOT_MAX_H, Math.max(SLOT_MIN_H, box.scrollHeight));
+
     h.addEventListener('pointerdown', (e) => {
       e.preventDefault();
       const box = slot.querySelector('.feed-scroll');
       if (!box) return;
       const startY = e.clientY;
       const startH = box.getBoundingClientRect().height;
+      const max = ceiling(box);
       h.setPointerCapture(e.pointerId);
       h.classList.add('dragging');
       document.body.style.userSelect = 'none';
       let last = Math.round(startH);
 
       const onMove = (ev) => {
-        last = Math.round(Math.min(SLOT_MAX_H, Math.max(SLOT_MIN_H, startH + (ev.clientY - startY))));
+        last = Math.round(Math.min(max, Math.max(SLOT_MIN_H, startH + (ev.clientY - startY))));
         apply(last);
       };
       const onUp = () => {
@@ -163,7 +176,15 @@ const HomeView = (() => {
         h.removeEventListener('pointermove', onMove);
         h.removeEventListener('pointerup', onUp);
         h.removeEventListener('pointercancel', onUp);
-        commit(last);        // שמירה אחת בסוף — שמירה בכל תזוזה מציירת מחדש
+        // גובה שהגיע לתקרת התוכן אינו העדפה אלא "כמו שזה" — נמחק ולא נשמר,
+        // אחרת רשימה שתתקצר מאוחר יותר תגרור מחדש חלל ריק
+        if (last >= max) {
+          const heights = { ...(layout().heights ?? {}) };
+          delete heights[key];
+          saveLayout({ heights });
+        } else {
+          commit(last);      // שמירה אחת בסוף — שמירה בכל תזוזה מציירת מחדש
+        }
       };
       h.addEventListener('pointermove', onMove);
       h.addEventListener('pointerup', onUp);
@@ -183,13 +204,35 @@ const HomeView = (() => {
       e.preventDefault();
       const box = slot.querySelector('.feed-scroll');
       if (!box) return;
-      const next = Math.round(Math.min(SLOT_MAX_H, Math.max(SLOT_MIN_H,
+      const max = ceiling(box);
+      const next = Math.round(Math.min(max, Math.max(SLOT_MIN_H,
         box.getBoundingClientRect().height + dir * (e.shiftKey ? 60 : 24))));
       apply(next);
-      commit(next);
+      if (next >= max) {
+        const heights = { ...(layout().heights ?? {}) };
+        delete heights[key];
+        saveLayout({ heights });
+      } else commit(next);
     });
 
     return h;
+  }
+
+  /**
+   * ידיות הגובה נתלות אחרי ההרכבה ולא בזמנה, כי הן תלויות במדידה: לחלון
+   * שרשימתו נכנסת בשלמותה אין מה למתוח, וידית שאינה עושה דבר מזמינה גרירה
+   * ומלמדת שהתכונה שבורה. נדרשת בדיקה אחרי שהאלמנטים במסמך — לפני כן כל
+   * הגבהים אפס.
+   */
+  function attachHeightHandles(board) {
+    for (const slot of board.querySelectorAll('.home-slot')) {
+      const box = slot.querySelector('.feed-scroll');
+      if (!box) continue;
+      const overflows = box.scrollHeight > box.clientHeight + 4;
+      // חלון שהמשתמש כבר קיצר חייב להישאר עם ידית, אחרת אין דרך להחזירו
+      const pinned = Number.isFinite((layout().heights ?? {})[slot.dataset.key]);
+      if (overflows || pinned) slot.appendChild(heightHandle(slot.dataset.key, slot));
+    }
   }
 
   /**
@@ -275,22 +318,16 @@ const HomeView = (() => {
   function slotFor(key, card) {
     const wide = isWide(key);
     const height = (layout().heights ?? {})[key];
-    const slot = el(`div.home-slot${wide ? '.is-wide' : ''}`, {
+    /*
+     * ‎has-list‎ הוא מה שמחיל את תקרת הגובה המשותפת. חלון בלי רשימה נגללת
+     * (טבלת חתך פרושה, טקסט) אינו נחתך — תקרה עליו הייתה מסתירה תוכן שאין
+     * דרך להגיע אליו.
+     */
+    const hasList = !!card.querySelector('.feed-scroll');
+    const slot = el(`div.home-slot${wide ? '.is-wide' : ''}${hasList ? '.has-list' : ''}`, {
       'data-key': key,
       style: Number.isFinite(height) ? `--slot-h: ${height}px` : ''
     }, [card]);
-
-    /*
-     * הגובה שהמשתמש קבע גובר על התקרה שהכרטיס קבע לעצמו. חלק מהכרטיסים
-     * מוסרים ‎max-height‎ כסגנון inline משלהם, והוא גובר על גיליון הסגנונות —
-     * כלומר הגרירה הייתה נשמרת ולא נראית.
-     */
-    if (Number.isFinite(height)) {
-      for (const box of slot.querySelectorAll('.feed-scroll')) {
-        box.style.maxHeight = '';
-        box.style.height = '';
-      }
-    }
 
     const head = card.querySelector('.card-head');
     if (head) {
@@ -310,8 +347,7 @@ const HomeView = (() => {
       ]));
     }
 
-    // ידית גובה רק לחלון שיש בו רשימה נגללת — לשאר אין מה למתוח
-    if (card.querySelector('.feed-scroll')) slot.appendChild(heightHandle(key, slot));
+    // ידית הגובה נתלית אחרי ההרכבה, כי היא תלויה במדידה — ראה attachHeightHandles
     return slot;
   }
 
@@ -355,8 +391,59 @@ const HomeView = (() => {
         }));
 
     makeSlotsDraggable(slots);
+    boardRef = board;
     return [board, layoutFooter(available)];
   }
+
+  /**
+   * חלון שנשאר לבד בשורה נמתח לרוחב מלא.
+   *
+   * זו שארית החללים: כשמספר החלונות הצרים אי-זוגי, האחרון תפס חצי שורה
+   * והחצי השני נשאר ריק.
+   *
+   * השורות **נמדדות** ולא מחושבות. גרסה קודמת הניחה שני חלונות בשורה
+   * וספרה לפי הסדר, ובמסך של 1000 פיקסלים היא טעתה: הרוחב המינימלי גרם
+   * לעטיפה אחרי חלון אחד, שני חלונות ירדו כל אחד לשורה משלו, ולצד כל אחד
+   * נשארו 300 פיקסלים ריקים שהחישוב לא ידע עליהם. ‎offsetTop‎ אומר מה קרה
+   * בפועל בכל רוחב מסך.
+   *
+   * הבחירה "חצי רוחב" נשמרת בהעדפה ואינה משתנה: זו התאמה לתצוגה בלבד,
+   * ואם ייווסף חלון לאותה שורה הוא יחזור לחצי מעצמו.
+   */
+  function markLonely(board) {
+    const slots = [...board.querySelectorAll('.home-slot')];
+    // איפוס לפני המדידה, אחרת סימון מהציור הקודם מזהם אותה
+    for (const s of slots) s.classList.remove('is-lonely');
+
+    const rows = new Map();
+    for (const s of slots) {
+      const top = Math.round(s.offsetTop);
+      if (!rows.has(top)) rows.set(top, []);
+      rows.get(top).push(s);
+    }
+    // מעבר אחד די: הרחבת חלון לרוחב מלא אינה מצרפת אליו שכן, ולכן אין נדנוד
+    for (const list of rows.values()) {
+      if (list.length === 1 && !list[0].classList.contains('is-wide')) {
+        list[0].classList.add('is-lonely');
+      }
+    }
+  }
+
+  /**
+   * התאמות שדורשות מדידה, ולכן רצות אחרי ההרכבה: מי נשאר לבד בשורה, ולאיזה
+   * חלון יש בכלל מה למתוח. גם בשינוי רוחב החלון — העטיפה משתנה, ואיתה מי לבד.
+   */
+  function tuneBoard() {
+    if (!boardRef?.isConnected) return;
+    markLonely(boardRef);
+    attachHeightHandles(boardRef);
+  }
+
+  let tuneTimer = null;
+  window.addEventListener('resize', () => {
+    clearTimeout(tuneTimer);
+    tuneTimer = setTimeout(tuneBoard, 120);
+  });
 
   /**
    * ‎silent‎ — טעינה מחדש ברקע: בלי ספינר, ותוך שמירת מיקום הגלילה. המסך
@@ -420,6 +507,7 @@ const HomeView = (() => {
       widgets(data.widgets),
       ...homeBoard(cards)
     );
+    tuneBoard();
     if (scrollTop) container.scrollTop = scrollTop;
   }
 
@@ -562,13 +650,19 @@ const HomeView = (() => {
         el('h3', { text: 'הושלמו לאחרונה' }),
         el('span.mute-sm', { text: shownLabel(shown.length, tasks.length, 'משימה אחת', 'משימות') }),
         el('div.spacer'),
-        el('button.btn.btn-sm', { onclick: () => App.navigate('archive') }, ['לארכיון'])
+        /*
+         * ההסבר על הארכיון עבר לכפתור. כפסקה בתוך הכרטיס הוא גזל שורה שלמה
+         * בכל טעינה של הדף — הוא נחוץ פעם אחת, ואחריה הוא רעש שדוחק את
+         * המשימות עצמן מטה.
+         */
+        el('button.btn.btn-sm', {
+          title: `לאחר ${afterDays} ימים מההשלמה המשימות עוברות אוטומטית לארכיון, ושם אפשר למצוא אותן לפי פרויקט`,
+          onclick: () => App.navigate('archive')
+        }, ['לארכיון'])
       ]),
       el('div.card-pad', {}, [
-        el('div.mute-sm', { style: { marginBottom: '8px' },
-          text: `לאחר ${afterDays} ימים מההשלמה הן עוברות אוטומטית לארכיון, ושם אפשר למצוא אותן לפי פרויקט.` }),
         el('div.task-table', {}, [
-          scrollBox(shown.map(taskRow), { maxHeight: '220px', extraClass: '.flex-col' })
+          scrollBox(shown.map(taskRow), { extraClass: '.flex-col' })
         ])
       ])
     ]);
@@ -617,7 +711,7 @@ const HomeView = (() => {
                   el('span')
                 ]),
                 ...shown.map(taskRow)
-              ], { maxHeight: '360px', extraClass: '.flex-col' })
+              ], { extraClass: '.flex-col' })
             ])
           ])
         : el('div.card-pad', {}, [el('div.mute-sm', { text: emptyText })])
@@ -660,7 +754,7 @@ const HomeView = (() => {
             ]),
             // שורת המחלקה מציגה את האחראי במקום הפרויקט — זה המידע שחסר כאן
             ...shown.map((t) => taskRow(t, { showAssignee: true }))
-          ], { maxHeight: '300px', extraClass: '.flex-col' })
+          ], { extraClass: '.flex-col' })
         ])
       ])
     ]);
@@ -823,7 +917,7 @@ const HomeView = (() => {
       el('div.card-pad', {}, [
         // כרטיס כאן נמוך מזה שברשימה האישית (בלי שורת תחתית), ולכן תקרה נמוכה יותר
         rows.length
-          ? scrollBox(rows, { maxHeight: '360px', extraClass: '.flex-col' })
+          ? scrollBox(rows, { extraClass: '.flex-col' })
           : UI.empty('אין פריטים הממתינים לבדיקה', '✅')
       ])
     ]);
@@ -898,7 +992,7 @@ const HomeView = (() => {
               }, [t.title]))
             : [el('span.mute-sm', { text: '—' })])
         ])
-      ), { maxHeight: '210px' })])
+      ))])
     ]);
   }
 
@@ -989,7 +1083,7 @@ const HomeView = (() => {
         el('div.spacer'),
         el('span.mute-sm', { text: countLabel(mentions.length, 'הודעה אחת', 'הודעות') })
       ]),
-      el('div.card-pad', {}, [scrollBox(mentions.map(row), { maxHeight: '300px' })])
+      el('div.card-pad', {}, [scrollBox(mentions.map(row))])
     ]);
   }
 
