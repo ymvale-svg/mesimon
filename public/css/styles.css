@@ -462,10 +462,17 @@ textarea { resize: vertical; min-height: 76px; }
  * אפשר בכלל להגיע למצב שנוצר חלל.
  */
 
-/* כלי החלון יושבים בכותרת הקיימת, ומתגלים בריחוף — שמונה שורות כלים
-   קבועות היו חונקות דף שכל תכליתו תמונת מצב במבט אחד */
+/*
+ * כלי החלון יושבים בכותרת הקיימת, ולא בשורה נוספת: שמונה שורות כלים
+ * קבועות היו חונקות דף שכל תכליתו תמונת מצב במבט אחד.
+ *
+ * ‎opacity: .4‎ ולא 0. קודם לכן הם היו שקופים לחלוטין עד ריחוף, כלומר מי
+ * שלא ריחף במקרה מעל כותרת לא ידע שהחלונות ניתנים לסידור, לשינוי גודל
+ * ולהסתרה — הפיצ'ר היה קיים ובלתי נגיש. נוכחות חיוורת מגלה שיש כאן משהו
+ * בלי להתחרות בתוכן, וריחוף או מיקוד מביאים אותם לחוזק מלא.
+ */
 .card-head.has-slot-tools { padding-inline-end: 10px; }
-.slot-tools { display: flex; align-items: center; gap: 2px; flex: none; opacity: 0; transition: opacity .12s; }
+.slot-tools { display: flex; align-items: center; gap: 2px; flex: none; opacity: .4; transition: opacity .12s; }
 .home-slot:hover .slot-tools,
 .home-slot:focus-within .slot-tools { opacity: 1; }
 .slot-btn {
@@ -477,6 +484,15 @@ textarea { resize: vertical; min-height: 76px; }
 .slot-grip { cursor: grab; font-size: 13px; }
 .slot-grip:active { cursor: grabbing; }
 .slot-hide:hover { background: var(--danger); color: #fff; }
+/* מצב מסומן — הבחירה נרשמה גם כשהמסך לא השתנה כתוצאה ממנה */
+.slot-btn[aria-pressed='true'] { background: var(--brand-light); color: var(--brand-dark); }
+
+/* מיקוד נראה על כל הפקדים, אחרת ניווט במקלדת הוא ניחוש */
+.slot-btn:focus-visible,
+.slot-resize:focus-visible,
+.slot-wresize:focus-visible {
+  outline: 2px solid var(--brand); outline-offset: 1px; border-radius: 4px;
+}
 
 .home-slot.dragging { opacity: .45; }
 /* הסימון על הצד שאליו ייפול: לחלון ברוחב מלא מעל/מתחת, ולחצי שורה לצדו */
@@ -486,8 +502,10 @@ textarea { resize: vertical; min-height: 76px; }
 }
 .home-slot.drop-before::after { inset-block: 0; inset-inline-start: -8px; width: 3px; }
 .home-slot.drop-after::after { inset-block: 0; inset-inline-end: -8px; width: 3px; }
-.home-slot.is-wide.drop-before::after { inset: -8px 0 auto; width: auto; height: 3px; }
-.home-slot.is-wide.drop-after::after { inset: auto 0 -8px; width: auto; height: 3px; }
+/* ‎drop-v‎ נקבע בגרירה לפי הציר שהכריע, ולא לפי רוחב היעד: גם חלון בחצי
+   שורה יכול לקבל שכן מעליו או מתחתיו, וזה מה שלא היה אפשרי קודם */
+.home-slot.drop-v.drop-before::after { inset: -8px 0 auto; width: auto; height: 3px; }
+.home-slot.drop-v.drop-after::after { inset: auto 0 -8px; width: auto; height: 3px; }
 
 /*
  * ידיות הגובה — פס דק בשני קצות החלון, מתגלה בריחוף כמו הכלים.

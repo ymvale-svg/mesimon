@@ -149,6 +149,34 @@ const HomeView = (() => {
     saveLayout({ hidden: (layout().hidden ?? []).filter((k) => k !== key), ...evenShares() });
 
   /**
+   * הזזת חלון במקלדת, מהידית.
+   *
+   * הגרירה במצביע הייתה הדרך היחידה לסדר את הלוח, כלומר מי שאינו יכול
+   * לגרור לא יכול היה לסדר אותו כלל. ההחלפה נעשית עם השכן **הנראה** ולא
+   * עם הפריט הבא בסדר: בסדר יושבים גם חלונות מוסתרים וחלונות שאין להם
+   * תוכן כרגע, והחלפה איתם הייתה נראית כלחיצה שלא עשתה דבר.
+   */
+  function moveCard(key, delta) {
+    if (!boardRef) return;
+    const visible = [...boardRef.querySelectorAll('.home-slot')].map((s) => s.dataset.key);
+    const at = visible.indexOf(key);
+    const to = at + delta;
+    if (at < 0 || to < 0 || to >= visible.length) return;
+
+    const keys = orderedKeys();
+    const i = keys.indexOf(key);
+    const j = keys.indexOf(visible[to]);
+    if (i < 0 || j < 0) return;
+    [keys[i], keys[j]] = [keys[j], keys[i]];
+    // המיקוד יחזור לאותה ידית אחרי הציור מחדש — ראה tuneBoard
+    pendingFocus = key;
+    saveLayout({ order: keys, ...evenShares() });
+  }
+
+  /* מפתח החלון שידית הגרירה שלו תקבל מיקוד מחדש אחרי הציור */
+  let pendingFocus = null;
+
+  /**
    * ידית שינוי הגובה. אחת בתחתית החלון ואחת בראשו.
    *
    * שתי הידיות משנות את אותו גובה, אך בכיוון הפוך: מלמטה גרירה כלפי מטה
@@ -200,9 +228,18 @@ const HomeView = (() => {
       const hidden = Math.max(0, box.scrollHeight - box.clientHeight);
       return Math.min(SLOT_MAX_H, Math.max(SLOT_MIN_H, Math.round(now + hidden)));
     };
-    // גובה שהגיע לתקרת התוכן אינו העדפה אלא "כמו שזה" — נמחק ולא נשמר,
-    // אחרת רשימה שתתקצר מאוחר יותר תגרור מחדש חלל ריק
-    const store = (px, max) => (px >= max ? clear() : commit(px));
+    /*
+     * הגובה נשמר תמיד, גם כשהוא שווה לתקרת התוכן.
+     *
+     * כאן היה באג שהשבית את ההגדלה לגמרי: קודם לכן ערך שהגיע לתקרה נמחק
+     * מההעדפה, כדי שרשימה שתתקצר לא תותיר חלל ריק. הכלל הזה נכון לגובה
+     * קבוע, אבל ‎--slot-h‎ הוא ‎max-height‎ — ותקרה אינה יכולה ליצור חלל,
+     * היא רק קובעת היכן מתחילה גלילה. התוצאה הייתה שכל גרירה כלפי הגדלה
+     * חזרה לתקרת ברירת המחדל, מלמעלה ומלמטה כאחד.
+     *
+     * איפוס נשאר מפורש: לחיצה כפולה על הידית.
+     */
+    const store = (px) => commit(px);
 
     h.addEventListener('pointerdown', (e) => {
       e.preventDefault();
@@ -231,7 +268,7 @@ const HomeView = (() => {
         h.removeEventListener('pointermove', onMove);
         h.removeEventListener('pointerup', onUp);
         h.removeEventListener('pointercancel', onUp);
-        store(last, max);    // שמירה אחת בסוף — שמירה בכל תזוזה מציירת מחדש
+        store(last);         // שמירה אחת בסוף — שמירה בכל תזוזה מציירת מחדש
       };
       h.addEventListener('pointermove', onMove);
       h.addEventListener('pointerup', onUp);
@@ -252,7 +289,7 @@ const HomeView = (() => {
       const next = Math.round(Math.min(max, Math.max(SLOT_MIN_H,
         slot.getBoundingClientRect().height + dir * (e.shiftKey ? 60 : 24))));
       apply(next);
-      store(next, max);
+      store(next);
     });
 
     return h;
@@ -294,7 +331,7 @@ const HomeView = (() => {
     if (slots.length < 2) return;
     let dragged = null;
     const clearMarks = () => slots.forEach(({ node }) =>
-      node.classList.remove('drop-before', 'drop-after'));
+      node.classList.remove('drop-before', 'drop-after', 'drop-v'));
 
     for (const entry of slots) {
       const { key, node } = entry;
@@ -320,32 +357,46 @@ const HomeView = (() => {
       });
 
       /*
-       * הצד שאליו ייפול נקבע לפי הציר שבו החלונות באמת שכנים: חלון ברוחב
-       * שורה שלמה נמצא מעל או מתחת, וחלון בחצי שורה נמצא לצדו. שימוש בציר
-       * אחד לשניהם היה הופך חצי מהגרירות לניחוש.
+       * לאיזה צד ייפול — בשני הצירים.
+       *
+       * קודם לכן חלון בחצי רוחב הוכרע לפי ציר ה-X בלבד, ולכן לא היה בכלל
+       * מושג של "מתחת": גרירה כלפי מטה אל חלון בשורה נמוכה יותר הכריעה לפי
+       * המרחק האופקי, ותמיד הכניסה את הנגרר *לפני* היעד. כלומר אפשר היה
+       * להעלות חלון מעל חלון אך לא להוריד אותו מתחתיו.
+       *
+       * המרחקים מנורמלים לגודל היעד, ולא בפיקסלים: חלון גבוה וצר היה מטה
+       * את ההכרעה לציר האנכי בכל גרירה. הציר שבו התרחקנו יותר מהמרכז הוא
+       * הציר שמכריע, וחלון ברוחב שורה שלמה נופל אוטומטית לציר האנכי — הרוחב
+       * הגדול מקטין את המרחק המנורמל בו.
        */
       const sideOf = (e) => {
         const box = node.getBoundingClientRect();
-        if (node.classList.contains('is-wide')) return e.clientY > box.top + box.height / 2;
+        const dx = (e.clientX - (box.left + box.width / 2)) / Math.max(1, box.width);
+        const dy = (e.clientY - (box.top + box.height / 2)) / Math.max(1, box.height);
+        const vertical = Math.abs(dy) > Math.abs(dx);
+        const rtl = getComputedStyle(node.parentElement).direction === 'rtl';
         // RTL: הצד הימני הוא הקודם בסדר
-        return e.clientX < box.left + box.width / 2;
+        return { after: vertical ? dy > 0 : (rtl ? dx < 0 : dx > 0), vertical };
       };
 
       node.addEventListener('dragover', (e) => {
         if (!dragged || dragged.node === node) return;
         e.preventDefault();
         e.dataTransfer.dropEffect = 'move';
-        const after = sideOf(e);
+        const { after, vertical } = sideOf(e);
         node.classList.toggle('drop-before', !after);
         node.classList.toggle('drop-after', after);
+        // הסימון על הקצה שבו זה יקרה בפועל — למעלה/למטה או לצד
+        node.classList.toggle('drop-v', vertical);
       });
 
-      node.addEventListener('dragleave', () => node.classList.remove('drop-before', 'drop-after'));
+      node.addEventListener('dragleave', () =>
+        node.classList.remove('drop-before', 'drop-after', 'drop-v'));
 
       node.addEventListener('drop', (e) => {
         if (!dragged || dragged.node === node) return;
         e.preventDefault();
-        const after = sideOf(e);
+        const { after } = sideOf(e);
         const keys = orderedKeys().filter((k) => k !== dragged.key);
         const at = keys.indexOf(key);
         keys.splice(after ? at + 1 : at, 0, dragged.key);
@@ -387,17 +438,49 @@ const HomeView = (() => {
     const head = card.querySelector('.card-head');
     if (head) {
       head.classList.add('has-slot-tools');
+
+      const grip = el('button.slot-btn.slot-grip', {
+        type: 'button',
+        title: 'גרירה לשינוי המיקום · חצים להזזה במקלדת',
+        'aria-label': `הזזת החלון ${CARD_LABEL[key]}`
+      }, ['⠿']);
+      /*
+       * חצים במקלדת, כדי שסידור הלוח לא יהיה תלוי ביכולת לגרור. ‎↑‎ ו-‎→‎
+       * מקדימים ב-RTL, ‎↓‎ ו-‎←‎ מאחרים — הכיוון החזותי, ולא סדר המערך.
+       */
+      grip.addEventListener('keydown', (e) => {
+        const rtl = getComputedStyle(document.documentElement).direction === 'rtl';
+        const back = e.key === 'ArrowUp' || e.key === (rtl ? 'ArrowRight' : 'ArrowLeft');
+        const fwd = e.key === 'ArrowDown' || e.key === (rtl ? 'ArrowLeft' : 'ArrowRight');
+        if (!back && !fwd) return;
+        e.preventDefault();
+        moveCard(key, back ? -1 : 1);
+      });
+
+      /*
+       * ‎aria-pressed‎ ומצב מודגש, ולא רק אייקון מתחלף. זו הייתה תלונת
+       * "פעם עובד פעם לא": חלון שנשאר לבד בשורה ממלא אותה ממילא מכוח
+       * ההתרחבות, ולכן סימונו כרוחב מלא אינו משנה דבר במסך — הלחיצה עבדה
+       * אך לא נראתה. מצב הכפתור מראה שהבחירה נרשמה, והיא כן משפיעה ברגע
+       * שמתפנה מקום לשכן באותה שורה.
+       */
+      const wideBtn = el('button.slot-btn.slot-wide', {
+        type: 'button',
+        'aria-pressed': wide ? 'true' : 'false',
+        title: wide
+          ? 'מסומן כרוחב מלא — לחיצה מחזירה לחצי שורה'
+          : 'הרחבה לרוחב מלא — החלון יקבל שורה לעצמו',
+        onclick: () => toggleWide(key)
+      }, [wide ? '⇥⇤' : '⇤⇥']);
+
       head.appendChild(el('div.slot-tools', {}, [
-        el('button.slot-btn.slot-grip', {
-          type: 'button', title: 'גרירה לשינוי המיקום', 'aria-label': 'הזזת החלון'
-        }, ['⠿']),
-        el('button.slot-btn', {
-          type: 'button',
-          title: wide ? 'צמצום לחצי רוחב' : 'הרחבה לרוחב מלא',
-          onclick: () => toggleWide(key)
-        }, [wide ? '⇥⇤' : '⇤⇥']),
+        grip,
+        wideBtn,
         el('button.slot-btn.slot-hide', {
-          type: 'button', title: 'הסתרת החלון', onclick: () => hideCard(key)
+          type: 'button',
+          title: 'הסתרת החלון',
+          'aria-label': `הסתרת החלון ${CARD_LABEL[key]}`,
+          onclick: () => hideCard(key)
         }, ['✕'])
       ]));
     }
@@ -603,6 +686,12 @@ const HomeView = (() => {
     if (!boardRef?.isConnected) return;
     attachHeightHandles(boardRef);
     attachWidthHandles(boardRef);
+
+    // אחרי הזזה במקלדת המיקוד היה נופל לגוף המסמך, והחץ הבא לא היה עושה דבר
+    if (pendingFocus) {
+      boardRef.querySelector(`.home-slot[data-key="${pendingFocus}"] .slot-grip`)?.focus();
+      pendingFocus = null;
+    }
   }
 
   let tuneTimer = null;
