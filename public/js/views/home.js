@@ -199,6 +199,8 @@ const HomeView = (() => {
       const max = ceiling(box);
       h.setPointerCapture(e.pointerId);
       h.classList.add('dragging');
+      // מנטרל את המעבר החלק לזמן הגרירה, אחרת החלון נסחב אחרי הסמן
+      slot.classList.add('is-resizing');
       document.body.style.userSelect = 'none';
       let last = Math.round(startH);
 
@@ -210,6 +212,7 @@ const HomeView = (() => {
       };
       const onUp = () => {
         h.classList.remove('dragging');
+        slot.classList.remove('is-resizing');
         document.body.style.userSelect = '';
         h.removeEventListener('pointermove', onMove);
         h.removeEventListener('pointerup', onUp);
@@ -422,58 +425,39 @@ const HomeView = (() => {
 
     makeSlotsDraggable(slots);
     boardRef = board;
+    if (boardWatcher) { boardWatcher.disconnect(); boardWatcher.observe(board); }
     return [board, layoutFooter(available)];
   }
 
   /**
-   * חלון שנשאר לבד בשורה נמתח לרוחב מלא.
+   * התאמה שדורשת מדידה, ולכן רצה אחרי ההרכבה: לאיזה חלון יש בכלל מה למתוח.
    *
-   * זו שארית החללים: כשמספר החלונות הצרים אי-זוגי, האחרון תפס חצי שורה
-   * והחצי השני נשאר ריק.
+   * מה שהיה כאן קודם ואינו עוד: סיווג "מי נשאר לבד בשורה" כדי להרחיב אותו.
+   * הפריסה עושה זאת בעצמה מאז ש-‎flex-grow‎ הוא 1, ולכן זה נמחק — חישוב
+   * שרץ בהשהיה אחרי כל שינוי גודל הוא בדיוק מה שנראה כקפיצה מאוחרת.
    *
-   * השורות **נמדדות** ולא מחושבות. גרסה קודמת הניחה שני חלונות בשורה
-   * וספרה לפי הסדר, ובמסך של 1000 פיקסלים היא טעתה: הרוחב המינימלי גרם
-   * לעטיפה אחרי חלון אחד, שני חלונות ירדו כל אחד לשורה משלו, ולצד כל אחד
-   * נשארו 300 פיקסלים ריקים שהחישוב לא ידע עליהם. ‎offsetTop‎ אומר מה קרה
-   * בפועל בכל רוחב מסך.
-   *
-   * הבחירה "חצי רוחב" נשמרת בהעדפה ואינה משתנה: זו התאמה לתצוגה בלבד,
-   * ואם ייווסף חלון לאותה שורה הוא יחזור לחצי מעצמו.
-   */
-  function markLonely(board) {
-    const slots = [...board.querySelectorAll('.home-slot')];
-    // איפוס לפני המדידה, אחרת סימון מהציור הקודם מזהם אותה
-    for (const s of slots) s.classList.remove('is-lonely');
-
-    const rows = new Map();
-    for (const s of slots) {
-      const top = Math.round(s.offsetTop);
-      if (!rows.has(top)) rows.set(top, []);
-      rows.get(top).push(s);
-    }
-    // מעבר אחד די: הרחבת חלון לרוחב מלא אינה מצרפת אליו שכן, ולכן אין נדנוד
-    for (const list of rows.values()) {
-      if (list.length === 1 && !list[0].classList.contains('is-wide')) {
-        list[0].classList.add('is-lonely');
-      }
-    }
-  }
-
-  /**
-   * התאמות שדורשות מדידה, ולכן רצות אחרי ההרכבה: מי נשאר לבד בשורה, ולאיזה
-   * חלון יש בכלל מה למתוח. גם בשינוי רוחב החלון — העטיפה משתנה, ואיתה מי לבד.
+   * ‎ResizeObserver‎ ולא ‎window.resize‎: רוחב הלוח משתנה גם בלי שגודל החלון
+   * משתנה — קיפול תפריט הצד, למשל — ואירוע החלון אינו נורה אז כלל.
    */
   function tuneBoard() {
     if (!boardRef?.isConnected) return;
-    markLonely(boardRef);
     attachHeightHandles(boardRef);
   }
 
   let tuneTimer = null;
-  window.addEventListener('resize', () => {
+  const scheduleTune = () => {
     clearTimeout(tuneTimer);
     tuneTimer = setTimeout(tuneBoard, 120);
-  });
+  };
+
+  /*
+   * המשקיף נוצר פעם אחת ומחובר מחדש בכל ציור, כדי שלא יצטבר משקיף לכל
+   * טעינה של המסך.
+   */
+  const boardWatcher = typeof ResizeObserver === 'function'
+    ? new ResizeObserver(scheduleTune)
+    : null;
+  if (!boardWatcher) window.addEventListener('resize', scheduleTune);
 
   /**
    * ‎silent‎ — טעינה מחדש ברקע: בלי ספינר, ותוך שמירת מיקום הגלילה. המסך
