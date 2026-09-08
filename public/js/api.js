@@ -61,6 +61,7 @@ const API = (() => {
     addComment: (id, body, internal, files) => call('POST', `/api/tasks/${id}/comments`, { body, internal, files }),
     deleteComment: (commentId) => call('DELETE', `/api/comments/${commentId}`),
     upload: (id, filename, mime, data) => call('POST', `/api/tasks/${id}/attachments`, { filename, mime, data }),
+    deleteAttachment: (id) => call('DELETE', `/api/attachments/${id}`),
 
     notifications: () => call('GET', '/api/notifications'),
     markRead: (id) => call('POST', '/api/notifications/read', id ? { id } : {}),

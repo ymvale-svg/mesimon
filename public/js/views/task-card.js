@@ -412,6 +412,35 @@ const TaskCardView = (() => {
 
   const filesTab = () => { activeTab = 'files'; draw(modalRef.box.querySelector('.task-detail')); };
 
+  /**
+   * מחיקת קובץ מהמשימה.
+   *
+   * האישור אומר מה בדיוק נמחק, כי בקבצים יש שתי הפתעות אפשריות: לקובץ יש
+   * גרסאות, ומחיקת הגרסה העדכנית מחזירה את הקודמת להיות העדכנית — זה מה
+   * שהמשתמש רוצה כשהעלה גרסה שגויה, אבל רק אם הוא יודע שזה מה שיקרה.
+   * וקובץ שצורף להודעה בשרשור ייעלם גם משם.
+   */
+  async function deleteFile(att, versionCount) {
+    const lines = [`הקובץ "${att.filename}" (גרסה ${att.version}) יימחק לצמיתות.`];
+    if (versionCount > 1 && att.version === Math.max(...task.attachments
+      .filter((x) => x.filename === att.filename).map((x) => x.version))) {
+      lines.push('הגרסה הקודמת תחזור להיות העדכנית.');
+    }
+    if (att.commentId) lines.push('הקובץ צורף להודעה בשרשור, ויוסר גם ממנה.');
+
+    const ok = await UI.confirm(lines.join(' '), {
+      title: 'מחיקת קובץ', danger: true, okText: 'מחיקה'
+    });
+    if (!ok) return;
+    try {
+      const data = await API.deleteAttachment(att.id);
+      task = data.task;
+      UI.success(`הקובץ "${att.filename}" נמחק`);
+      draw(modalRef.box.querySelector('.task-detail'));
+      refreshBackground();
+    } catch (err) { UI.error(err); }
+  }
+
   function filesSection() {
     const fileInput = el('input', { type: 'file', style: { display: 'none' }, multiple: true });
 
@@ -472,7 +501,13 @@ const TaskCardView = (() => {
                 UI.canPreview(a)
                   ? el('button.btn.btn-sm', { onclick: () => UI.preview(previewable, previewable.indexOf(a)) }, ['👁 תצוגה'])
                   : null,
-                el('a.btn.btn-sm', { href: `/api/attachments/${a.id}/download` }, ['⬇ הורדה'])
+                el('a.btn.btn-sm', { href: `/api/attachments/${a.id}/download` }, ['⬇ הורדה']),
+                a.canDelete
+                  ? el('button.btn.btn-sm.btn-ghost.f-del', {
+                      title: 'מחיקת הקובץ',
+                      onclick: () => deleteFile(a, versions.length)
+                    }, ['🗑'])
+                  : null
               ])
             ))))
         : UI.empty('לא הועלו קבצים למשימה זו', '📁')

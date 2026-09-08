@@ -523,7 +523,11 @@ function shapeTask(task, actor, { withDetails = false } = {}) {
     uploaderName:
       a.uploader_type === 'vendor'
         ? D.get('SELECT name FROM vendors WHERE id = ?', a.uploader_id)?.name ?? 'ספק'
-        : D.get('SELECT full_name FROM users WHERE id = ?', a.uploader_id)?.full_name ?? 'משתמש'
+        : D.get('SELECT full_name FROM users WHERE id = ?', a.uploader_id)?.full_name ?? 'משתמש',
+    // ההרשאה נגזרת בשרת ולא בלקוח, אחרת כל מסך היה מחשב אותה מחדש אחרת
+    canDelete: mayDeleteAttachment(actor, a, task),
+    // קובץ שצורף להודעה בשרשור — המחיקה תסיר אותו גם משם, ויש לומר זאת
+    commentId: a.comment_id ?? null
   }));
 
   // הספק אינו רואה את לוג הבקרה הפנימי
@@ -2189,6 +2193,58 @@ router.get('/api/attachments/:id/view', async (req, res, ctx) => {
   const att = attachmentFor(ctx);
   if (!isPreviewable(att.mime)) throw badRequest('סוג הקובץ אינו נתמך לתצוגה מקדימה');
   sendAttachment(res, att, { inline: true });
+});
+
+/**
+ * מי רשאי למחוק קובץ מהמשימה.
+ *
+ * מי שהעלה אותו — קובץ שהועלה בטעות, בשם שגוי או בגרסה לא נכונה, צריך
+ * להיות בר-הסרה בידי מי שעשה את הטעות. ובנוסף מי שרשאי לערוך את המשימה:
+ * הוא האחראי על תוכנה, וקובץ שגוי שנתקע בה הוא בעיה שלו.
+ *
+ * ספק מוחק את שלו בלבד, ואינו נוגע בקבצים של הצוות.
+ *
+ * בשונה מתגובה, שמנהל מערכת אינו מוחק בכוונה — שיחה שאפשר לערוך בדיעבד
+ * אינה תיעוד — קובץ הוא תוצר עבודה ולא אמירה, ותיקונו אינו שינוי של מה
+ * שנאמר. המחיקה עצמה נרשמת ביומן ואינה נעלמת.
+ */
+function mayDeleteAttachment(actor, att, task) {
+  const myType = isVendor(actor) ? 'vendor' : 'user';
+  if (att.uploader_type === myType && att.uploader_id === actor.id) return true;
+  if (isVendor(actor)) return false;
+  return mayOnTask(actor, 'edit_delete_task', task, projectOf(task));
+}
+
+router.delete('/api/attachments/:id', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  const att = D.get('SELECT * FROM attachments WHERE id = ?', Number(ctx.params.id));
+  if (!att) throw notFound('הקובץ לא נמצא');
+  const task = getTaskOr404(att.task_id);
+  assertVisible(actor, task);
+  if (isVendor(actor) && actor.readOnly) throw forbidden('לחשבון שלך הוגדרה הרשאת צפייה בלבד');
+  if (!mayDeleteAttachment(actor, att, task)) {
+    throw forbidden('אפשר למחוק קובץ שהעלית, או קובץ במשימה שאתה רשאי לערוך');
+  }
+
+  /*
+   * הקובץ עצמו נמחק מהדיסק ולא רק השורה. שורה שנמחקת בלי הקובץ משאירה
+   * אחריה תיקיית העלאות שגדלה בלי גבול ובלי שאיש יודע מה בתוכה.
+   *
+   * ‎stored_name‎ ייחודי לכל העלאה (מזהה מקרי), ולכן אין סיכון למחוק קובץ
+   * שגרסה אחרת עוד מפנה אליו.
+   */
+  try { fs.unlinkSync(path.join(D.UPLOADS_DIR, att.stored_name)); } catch { /* אולי כבר נמחק */ }
+  D.run('DELETE FROM attachments WHERE id = ?', att.id);
+
+  /*
+   * הסטטוס אינו מוחזר לאחור. העלאת תוצר בידי ספק מקדמת את הסטטוס
+   * אוטומטית, אבל החזרתו בעקבות מחיקה הייתה עלולה לבטל אישור שהצוות
+   * כבר נתן. המחיקה נרשמת ביומן, ורשימת הקבצים הריקה מדברת בעד עצמה.
+   */
+  D.audit(task.id, actorRef(actor), 'attachment',
+    `הקובץ "${att.filename}" (גרסה ${att.version}) נמחק`);
+
+  sendJson(res, 200, { task: shapeTask(getTaskOr404(task.id), actor, { withDetails: true }) });
 });
 
 // ---------------------------------------------------------------------------

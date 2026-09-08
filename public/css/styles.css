@@ -1288,6 +1288,9 @@ input[type="color"] { width: 46px; height: 30px; padding: 2px; cursor: pointer; 
 .file-row .f-name b { display: block; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .file-row .f-name small { color: var(--text-mute); font-size: 11px; }
 .file-row.old-version { opacity: .68; background: var(--surface-2); }
+/* מחיקת קובץ — חיוור עד ריחוף, כמו שאר הפעולות ההרסניות במערכת */
+.file-row .f-del { flex: none; color: var(--text-mute); padding-inline: 8px; }
+.file-row .f-del:hover { background: var(--danger); color: #fff; border-color: var(--danger); }
 
 .dropzone {
   border: 2px dashed var(--border-strong); border-radius: var(--radius); padding: 18px;
