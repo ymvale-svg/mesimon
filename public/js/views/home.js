@@ -900,7 +900,18 @@ const HomeView = (() => {
    * כשיש עשרים אי אפשר לסרוק אותו — ולכן כל המידע נדחס לשורה: פרויקט,
    * כותרת, סטטוס ויעד, וסימני הדחיפות דווקא בקצה, במקום שהעין נחה בו.
    */
-  function taskRow(task, { showAssignee = false } = {}) {
+  /**
+   * שורת משימה. שבע עמודות קבועות, ושתיים מהן מתחלפות לפי ההקשר:
+   *
+   * ‎lead‎  — העמודה השלישית: שם הפרויקט או שם האחראי.
+   * ‎trail‎ — העמודה החמישית: תג הסטטוס או שם האחראי.
+   *
+   * שני שמות ולא שני דגלים בוליאניים, כי בחלון המחלקה נדרשות **שתי**
+   * העמודות יחד — פרויקט וגם אחראי — ודגל "הצג אחראי" לא היה יכול לומר
+   * באיזו מהן.
+   */
+  function taskRow(task, { lead = 'project', trail = 'status' } = {}) {
+    const leadText = (lead === 'assignee' ? task.assigneeName : task.projectName) ?? '—';
     const due = UI.dueLabel(task.dueDate);
     const flags = [
       task.overdue ? el('span.text-danger', { title: `באיחור — יעד ${UI.formatDate(task.dueDate)}` }, [UI.icon('overdue')]) : null,
@@ -919,9 +930,11 @@ const HomeView = (() => {
       // הפס בצבע הפרויקט — אותו סימן שמופיע בטבלה ובקנבן
       el('span.tk-bar', { style: { background: task.projectColor ?? 'transparent' } }),
       el('span', {}, [completeBox(task)]),
-      el('span.tk-project', { text: (showAssignee ? task.assigneeName : task.projectName) ?? '—' }),
+      el('span.tk-project', { text: leadText }),
       el('span.tk-title', { text: task.title }),
-      UI.statusTag(task),
+      trail === 'assignee'
+        ? el('span.tk-owner', { text: task.assigneeName ?? 'ללא אחראי', title: task.assigneeName ?? '' })
+        : UI.statusTag(task),
       el('span.tk-due', {
         text: task.dueDate ? due.text : '—',
         class: due.tone === 'danger' ? 'text-danger' : due.tone === 'warn' ? 'text-warn' : ''
@@ -1048,14 +1061,19 @@ const HomeView = (() => {
           scrollBox([
             el('div.task-table-head', {}, [
               el('span'), el('span'),
-              el('span', { text: 'אחראי' }),
+              el('span', { text: 'פרויקט' }),
               el('span', { text: 'משימה' }),
-              el('span', { text: 'סטטוס' }),
-              el('span', { text: 'יעד' }),
+              el('span', { text: 'אחראי' }),
+              el('span', { text: 'תאריך יעד' }),
               el('span')
             ]),
-            // שורת המחלקה מציגה את האחראי במקום הפרויקט — זה המידע שחסר כאן
-            ...shown.map((t) => taskRow(t, { showAssignee: true }))
+            /*
+             * ארבע העמודות שנדרשו לחלון הזה: פרויקט, משימה, אחראי ותאריך
+             * יעד. הסטטוס יצא — בחלון שמציג רק משימות פתוחות הוא כמעט תמיד
+             * אותו ערך, ובמקומו נכנס האחראי, שהוא השאלה האמיתית של מנהל
+             * מחלקה שמסתכל על עבודת הצוות.
+             */
+            ...shown.map((t) => taskRow(t, { lead: 'project', trail: 'assignee' }))
           ], { extraClass: '.flex-col' })
         ])
       ])

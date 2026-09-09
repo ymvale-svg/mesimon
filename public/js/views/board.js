@@ -25,6 +25,13 @@ const BoardView = (() => {
    */
   const isOrgWide = () => ['superadmin', 'admin', 'executive'].includes(App.state.actor?.role);
 
+  /*
+   * ערך המסנן "פתוחות בלבד". אינו מפתח סטטוס אמיתי, ולכן הוא נבחר כמחרוזת
+   * שלא תתנגש עם מפתח עמודה — עמודות נוצרות מקוד ומקבלות מפתחות כמו
+   * ‎in_progress‎, והקו התחתון הכפול מבטיח שאין התנגשות גם אם יתווספו עוד.
+   */
+  const OPEN_ONLY = '__open';
+
   // ------------------------------------------------------------- טעינה
 
   async function render(container, params = {}) {
@@ -55,7 +62,17 @@ const BoardView = (() => {
         ? `${App.isVendor() ? 'vendor' : 'user'}:${App.state.actor.id}`
         : pick('assignee', params.assignee),
       priority: pick('priority', params.priority),
-      status: pick('status', params.status),
+      /*
+       * ברירת המחדל היא "פתוחות בלבד", ולא "כל הסטטוסים".
+       *
+       * ‎pick‎ מחזיר מחרוזת ריקה כשאין העדפה שמורה, וריק פירושו כל
+       * הסטטוסים — כלומר הלוח נפתח מלא במשימות שהושלמו. הברירה חלה רק
+       * כשהמשתמש לא בחר דבר, ורק מחוץ לארכיון: הארכיון כולו הושלמו,
+       * וברירת מחדל שמסתירה אותם הייתה פותחת אותו ריק.
+       */
+      status: params.archived
+        ? pick('status', params.status)
+        : (pick('status', params.status) || (saved.status === undefined ? OPEN_ONLY : '')),
       boardId: pick('boardId', params.boardId),
       departmentId: pick('departmentId', params.departmentId),
       // חיפוש טקסט לא נשמר בכוונה
@@ -121,8 +138,16 @@ const BoardView = (() => {
       const query = { ...filters };
       delete query.onlyOverdue;
       delete query.pendingReview;
+      /*
+       * "פתוחות בלבד" אינו מפתח סטטוס אמיתי ואינו נשלח לשרת. הסינון נעשה
+       * על ‎isFinal‎, שהשרת מחשב לפי העמודה — כך הוא נכון גם לבורד הפנימי
+       * וגם לבורדי הספקים, שהסטטוס הסופי בהם נקרא אחרת.
+       */
+      const openOnly = filters.status === OPEN_ONLY;
+      if (openOnly) delete query.status;
       const data = await API.tasks(query);
       currentTasks = data.tasks;
+      if (openOnly) currentTasks = currentTasks.filter((t) => !t.isFinal);
       if (filters.onlyOverdue) currentTasks = currentTasks.filter((t) => t.overdue);
       if (filters.pendingReview) currentTasks = currentTasks.filter((t) => ['uploaded', 'pending_team_review', 'in_team_review'].includes(t.status));
       draw();
@@ -224,8 +249,22 @@ const BoardView = (() => {
     const statusSource = currentScope === 'vendors'
       ? App.vendorBoards()[0]?.columns ?? []
       : App.internalBoard()?.columns ?? [];
-    const statusOptions = [{ value: '', label: 'כל הסטטוסים' },
-      ...statusSource.map((c) => ({ value: c.key, label: c.label }))];
+    /*
+     * "פתוחות בלבד" הוא ערך בבורר עצמו, ולא תיבת סימון נפרדת לצדו.
+     *
+     * זו ברירת המחדל של הלוח: מי שפותח אותו רוצה לראות מה נשאר לעשות, ולא
+     * את כל מה שנעשה מאז ומעולם. הסטטוס הסופי זמין בבחירה מפורשת, ומסך
+     * הארכיון ממילא נפתח על מה שהושלם.
+     *
+     * ערך בבורר ולא דגל, כי הבורר הוא מה שהמשתמש קורא כדי לדעת מה מוצג —
+     * דגל נפרד היה מאפשר "כל הסטטוסים" מסומן יחד עם הסתרת ההושלמו, כלומר
+     * כיתוב שמשקר.
+     */
+    const statusOptions = [
+      { value: OPEN_ONLY, label: 'פתוחות בלבד' },
+      { value: '', label: 'כל הסטטוסים' },
+      ...statusSource.map((c) => ({ value: c.key, label: c.label }))
+    ];
 
     const searchInput = el('input', { type: 'search', placeholder: 'סינון לפי טקסט…', value: filters.q });
     let timer;

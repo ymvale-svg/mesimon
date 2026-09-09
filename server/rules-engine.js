@@ -109,6 +109,27 @@ function activeTasks() {
   );
 }
 
+/**
+ * התאריך הקלנדרי של הארגון, בתבנית YYYY-MM-DD.
+ *
+ * ‎nowIso‎ הוא UTC, ולכן השוואת תאריכים נאיבית שוגה בהיסט אזור הזמן: משימה
+ * שנפתחה ב-01:00 בישראל נשמרת עם תאריך UTC של היום הקודם, והכלל "עבר יום
+ * הפתיחה" היה מזיז אותה מיד באותו בוקר שנפתחה.
+ *
+ * ‎en-CA‎ במכוון — הוא היחיד שמחזיר YYYY-MM-DD, שנשווה נכון כמחרוזת.
+ * אזור הזמן נקרא מההגדרות כדי שלא יהיה מקובע בקוד, וברירת המחדל היא
+ * ישראל, שם הארגון יושב.
+ */
+const orgDay = (date) => {
+  const tz = D.getSetting('timezone', 'Asia/Jerusalem');
+  try {
+    return date.toLocaleDateString('en-CA', { timeZone: tz });
+  } catch {
+    // אזור זמן שאינו מוכר לסביבה — עדיף תאריך המערכת על קריסה
+    return date.toLocaleDateString('en-CA');
+  }
+};
+
 function alreadyFired(ruleId, taskId, marker) {
   return D.get('SELECT 1 FROM rule_fires WHERE rule_id = ? AND task_id = ? AND marker = ?', ruleId, taskId, marker) !== undefined;
 }
@@ -216,6 +237,37 @@ const TRIGGERS = {
   },
 
   /** הגיע תאריך ההפעלה של משימה עתידית */
+  /**
+   * משימה שעדיין מסומנת 'חדש' אף שיום הפתיחה שלה חלף.
+   *
+   * 'חדש' הוא יום הפתיחה בלבד — מהיום השני ואילך המשימה בטיפול, עד שתיסגר.
+   * כך הסטטוס אינו שאלה שמישהו נדרש לענות עליה, אלא עובדה על גיל המשימה;
+   * מה שנשאר להחליט הוא רק מתי היא הושלמה.
+   *
+   * הסימון הוא היום שבו הכלל פעל, ולא סימון חד-פעמי לכל משימה. משמעות:
+   * הכלל מתקן לכל היותר פעם ביום, ואם מישהו החזיר משימה ל'חדש' ביום אחר
+   * היא תתוקן שוב — זה מה שהופך את הכלל לכלל ולא להמלצה חד-פעמית.
+   *
+   * בורדי הספקים מוחרגים: שם הזרימה היא ממתין להעלאה → הועלה → בבדיקה,
+   * ואין בה 'חדש' ואין בה 'בטיפול'.
+   */
+  new_task_aged: {
+    label: "משימה בסטטוס 'חדש' שיום הפתיחה שלה חלף",
+    paramsSchema: [],
+    evaluate(rule, params, now) {
+      const today = orgDay(new Date(now));
+      const events = [];
+      for (const task of activeTasks()) {
+        if (task.board_type !== 'internal') continue;
+        if (task.status !== 'new') continue;
+        // עוד יום הפתיחה — אין מה לעשות
+        if (orgDay(new Date(task.created_at)) >= today) continue;
+        events.push({ task, marker: `aged:${today}`, meta: {} });
+      }
+      return events;
+    }
+  },
+
   scheduled_activation: {
     label: 'הגיע תאריך ההפעלה של משימה עתידית',
     paramsSchema: [],
@@ -400,6 +452,34 @@ const ACTIONS = {
       D.run('UPDATE tasks SET archived = 1 WHERE id = ?', task.id);
       D.audit(task.id, null, 'automation',
         `${rule.name}: המשימה הועברה לארכיון (${meta.days} ימים מאז ההשלמה)`);
+      return true;
+    }
+  },
+
+  /**
+   * העברת משימה שהזדקנה ל'בטיפול'.
+   *
+   * ‎status_changed_at‎ אינו מעודכן, וזו החלטה מכוונת. הוא מודד "כמה זמן
+   * המשימה לא זזה", ועליו נשענת ההקפצה של משימה דחופה שנתקעה
+   * (‎urgent_stale‎). מעבר אוטומטי אינו התקדמות אמיתית, ועדכון החותמת היה
+   * מאפס את שעון ההקפצה בדיוק על המשימות שאיש לא נגע בהן — כלומר מבטל את
+   * ההקפצה על המקרים שהיא נועדה להם.
+   *
+   * ואין התראה: אף אדם לא עשה את הפעולה, ואין בה החלטה שממתינה למישהו.
+   * התראה יומית על "הסטטוס השתנה" בכל משימה חדשה בארגון הייתה מכשירה את
+   * המשתמשים להתעלם מהפעמון.
+   */
+  age_to_in_progress: {
+    label: "העברה ל'בטיפול'",
+    run(rule, event) {
+      const { task } = event;
+      const target = D.get(
+        "SELECT key FROM board_columns WHERE board_id = ? AND key = 'in_progress'", task.board_id
+      );
+      // בורד שאין בו את העמודה — אין לאן להעביר, ועדיף לא לגעת
+      if (!target) return false;
+      D.run('UPDATE tasks SET status = ? WHERE id = ?', 'in_progress', task.id);
+      D.audit(task.id, null, 'automation', `${rule.name}: יום הפתיחה חלף — המשימה עברה ל"בטיפול"`);
       return true;
     }
   },

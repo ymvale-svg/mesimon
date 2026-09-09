@@ -657,13 +657,27 @@ const DEFAULT_SETTINGS = {
   auto_done_on_checklist: true
 };
 
+/*
+ * שלושה סטטוסים בבורד הפנימי, ולא יותר.
+ *
+ * 'חדש' הוא יום הפתיחה בלבד, ומהיום השני המשימה עוברת אוטומטית ל'בטיפול'
+ * (הכלל ‎new_ages_to_in_progress‎ ב-BUILT_IN_RULES). כלומר הסטטוס אינו
+ * שאלה שהמשתמש נדרש לענות עליה אלא עובדה על גיל המשימה, ומה שנשאר להחליט
+ * הוא רק מתי היא הושלמה.
+ *
+ * 'ממתין לתשובה' הוסר. הוא נראה מדויק — משימה שהכדור בה אצל מישהו אחר —
+ * אבל בפועל הוא הפך לחניה: משימות נכנסו אליו ולא יצאו, ואי אפשר היה לדעת
+ * אם מחכים לתשובה שלושה ימים או שלושה שבועות. המידע הזה קיים כיום בשדות
+ * שנועדו לו — תת-משימה עם אחראי, סטטוס מקוצר, ותאריך יעד.
+ */
 const INTERNAL_COLUMNS = [
   { key: 'new', label: 'חדש', position: 0, is_final: 0, color: '#64748b' },
   { key: 'in_progress', label: 'בטיפול', position: 1, is_final: 0, color: '#2563eb' },
-  // משימה שהכדור בה אצל מישהו אחר — היא אינה "בטיפול" ואינה תקועה סתם
-  { key: 'waiting_reply', label: 'ממתין לתשובה', position: 2, is_final: 0, color: '#d97706' },
-  { key: 'done', label: 'הושלם', position: 3, is_final: 1, color: '#16a34a' }
+  { key: 'done', label: 'הושלם', position: 2, is_final: 1, color: '#16a34a' }
 ];
+
+/* הסטטוס שאליו עוברות משימות מסטטוס שהוסר, וגם מטרת ההזדקנות של 'חדש' */
+const RETIRED_INTERNAL_STATUSES = { waiting_reply: 'in_progress' };
 
 // מצבי המשימה בזרימת העבודה מול ספק
 const VENDOR_COLUMNS = [
@@ -718,6 +732,13 @@ const BUILT_IN_RULES = [
     name: 'הפעלת משימות עתידיות שהגיע מועדן',
     trigger_key: 'scheduled_activation',
     action_key: 'activate_task',
+    params: {}
+  },
+  {
+    // 'חדש' הוא יום הפתיחה בלבד — ראה ההסבר ב-INTERNAL_COLUMNS
+    name: 'מעבר מ״חדש״ ל״בטיפול״ מהיום השני',
+    trigger_key: 'new_task_aged',
+    action_key: 'age_to_in_progress',
     params: {}
   }
 ];
@@ -894,6 +915,42 @@ function migrate() {
    * על אותו מספר כמו "הושלם". הסדר נבנה כאן מחדש בכל עלייה: הלא-סופיות לפי
    * סדרן הקיים, והסופית אחריהן.
    */
+  /*
+   * הסרת סטטוס שיצא משימוש מהבורד הפנימי.
+   *
+   * ‎ensureBoardColumns‎ עובד ב-INSERT OR IGNORE, ולכן הוצאת עמודה מהמערך
+   * אינה מוחקת אותה ממסד קיים — היא רק מפסיקה להיווצר במסד חדש. בלי המחיקה
+   * הזו הבורד הפנימי היה נשאר עם ארבעה סטטוסים אצל כל מי שהמערכת שלו כבר
+   * רצה, וההגדרה בקוד הייתה משקרת.
+   *
+   * הסדר חשוב: קודם מזיזים את המשימות ואחר כך מוחקים את העמודה. ההפוך היה
+   * משאיר משימות עם ‎status‎ שאין לו עמודה — ואז אין להן לא תווית, לא צבע
+   * ולא מקום בלוח, והן נעלמות מהמסך בלי להיעלם מהמסד.
+   *
+   * בטוח להרצה חוזרת: אחרי המעבר הראשון אין עוד משימות בסטטוס הישן ואין
+   * עמודה למחוק, ושתי הפעולות אינן עושות דבר.
+   */
+  const internal = get("SELECT id FROM boards WHERE type = 'internal' LIMIT 1");
+  if (internal) {
+    for (const [from, to] of Object.entries(RETIRED_INTERNAL_STATUSES)) {
+      const moved = all('SELECT id FROM tasks WHERE board_id = ? AND status = ?', internal.id, from);
+      if (moved.length) {
+        run('UPDATE tasks SET status = ?, status_changed_at = ? WHERE board_id = ? AND status = ?',
+          to, nowIso(), internal.id, from);
+        // נרשם ביומן כדי שלא ייראה כאילו מישהו הזיז אותן ביד
+        const label = get('SELECT label FROM board_columns WHERE board_id = ? AND key = ?', internal.id, from)?.label ?? from;
+        for (const t of moved) {
+          run(
+            'INSERT INTO audit_log (task_id, actor_type, actor_id, actor_name, action, details, created_at) VALUES (?,?,?,?,?,?,?)',
+            t.id, 'system', null, 'המערכת', 'status_changed',
+            `הסטטוס "${label}" בוטל — המשימה הועברה לטיפול`, nowIso()
+          );
+        }
+      }
+      run('DELETE FROM board_columns WHERE board_id = ? AND key = ?', internal.id, from);
+    }
+  }
+
   for (const board of all('SELECT id FROM boards')) {
     const cols = all(
       'SELECT id, position FROM board_columns WHERE board_id = ? ORDER BY is_final, position, id', board.id

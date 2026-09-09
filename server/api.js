@@ -2517,13 +2517,26 @@ router.get('/api/home', async (req, res, ctx) => {
     && P.level(actor, 'view_internal_board') === 'department'
     && actor.departmentId;
 
+  /*
+   * משימות המחלקה — עבודת הצוות, ולא שלי.
+   *
+   * המשימות האישיות שלי מסוננות: הן יושבות ב"המשימות שלי", וחזרתן לכאן
+   * הופכת את החלון מתמונת מצב של הצוות לרשימה שאני מופיע בה פעמיים.
+   *
+   * החריג הוא משימה שיש עליה אחראי נוסף. שם אני לא לבד — זו עבודה משותפת
+   * שהצוות שותף לה, וההסתרה הייתה מעלימה ממנהל המחלקה בדיוק את המשימות
+   * שיש בהן יותר מאדם אחד, כלומר את אלה שהתיאום בהן חשוב מכול.
+   */
   const departmentTasks = seesDepartment
     ? D.all(
         `SELECT t.* FROM tasks t
            JOIN boards b ON b.id = t.board_id
           WHERE b.type = 'internal' AND t.archived = 0
             AND (t.activate_at IS NULL OR t.activate_at <= ?)
-            AND NOT (t.assignee_type = 'user' AND t.assignee_id = ?)
+            AND NOT (
+              t.assignee_type = 'user' AND t.assignee_id = ?
+              AND NOT EXISTS (SELECT 1 FROM task_assignees ta WHERE ta.task_id = t.id)
+            )
             AND (
               t.department_id = ?
               OR (t.department_id IS NULL AND t.assignee_type = 'user'
