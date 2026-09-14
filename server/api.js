@@ -3973,9 +3973,22 @@ router.get('/api/tracker/export', async (req, res, ctx) => {
   if (isVendor(actor)) throw forbidden();
   const q = parseUrl(req).searchParams;
   const projectId = q.get('projectId') ? Number(q.get('projectId')) : null;
-  const scoped = q.get('scope') !== 'all';
+  /*
+   * שלושה חתכים, כמו במסך: שלי, המחלקה שלי, וכל הארגון. הקובץ חייב לצאת
+   * זהה למה שמוצג — אחרת מי שמוריד אקסל מקבל טבלה אחרת מזו שהסתכל עליה.
+   */
+  const scope = q.get('scope') === 'all' ? 'all'
+    : q.get('scope') === 'department' ? 'department' : 'mine';
 
-  const owned = scoped ? ownedProjectIds(actor) : null;
+  const owned = scope === 'mine' ? ownedProjectIds(actor) : null;
+  // חתך המחלקה נמדד לפי האחראי, בדיוק כמו בלקוח
+  const team = scope === 'department'
+    ? new Set(D.all('SELECT id FROM users WHERE department_id IS ?', actor.departmentId ?? null).map((u) => u.id))
+    : null;
+  const forTeam = (t) => team.has(t.assignee_id)
+    || D.all('SELECT assignee_id FROM task_assignees WHERE task_id = ? AND assignee_type = ?', t.id, 'user')
+      .some((e) => team.has(e.assignee_id));
+
   const rows = D.all(
     `SELECT t.* FROM tasks t
        JOIN boards b ON b.id = t.board_id
@@ -3985,7 +3998,8 @@ router.get('/api/tracker/export', async (req, res, ctx) => {
     ...(projectId ? [projectId] : [])
   ).filter((t) => canSeeTask(actor, t))
     .filter((t) => !columnMeta(t.board_id, t.status)?.is_final)
-    .filter((t) => !owned || owned.has(t.project_id));
+    .filter((t) => !owned || owned.has(t.project_id))
+    .filter((t) => !team || forTeam(t));
 
   const header = ['פרויקט', 'משימה', 'תאריך יעד', 'סטטוס בקרה', 'סטטוס מקוצר', 'סטטוס',
     'תת-משימה', 'אחראי', 'אחראים נוספים', 'ספק', 'תאריך יעד של תת-המשימה'];

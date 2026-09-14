@@ -44,6 +44,27 @@ const TrackerView = (() => {
   const myProjectIds = () =>
     new Set(App.state.projects.filter((p) => p.mine).map((p) => p.id));
 
+  /**
+   * האם להציע את חתך המחלקה.
+   *
+   * אותה הגדרה בדיוק שפותחת את חלון "המשימות במחלקה" בדף הבית: מנהל מחלקה,
+   * ועובד שקיבל הרשאה אישית לראות את משימות הקולגות. לא מוצע למי שרואה את
+   * כל הארגון ממילא — עבורו "המחלקה שלי" ו"כל הארגון" כמעט חופפים, והבחירה
+   * השלישית רק מבלבלת.
+   */
+  const seesDepartment = () =>
+    !App.isVendor()
+    && !!App.state.actor?.departmentId
+    && App.state.permissions?.view_internal_board === 'department';
+
+  /** מזהי חברי המחלקה שלי, כולל אני — הבסיס לחתך "המחלקה שלי" */
+  const myDepartmentUserIds = () => {
+    const dept = App.state.actor?.departmentId ?? null;
+    return new Set((App.state.users ?? [])
+      .filter((u) => u.departmentId === dept)
+      .map((u) => u.id));
+  };
+
   async function load() {
     const projectId = savedProject();
     try {
@@ -59,11 +80,27 @@ const TrackerView = (() => {
        * מנהל מערכת רואה את כל הפרויקטים בחברה, וטבלה שמערבבת אותם עם שלו
        * אינה כלי בקרה אלא רשימה. מעבר ל"כל הארגון" זמין ליד הסינון.
        */
+      /*
+       * שלושה חתכים: "שלי" — הפרויקטים שאני אחראי עליהם; "המחלקה שלי" —
+       * כל מה שמוקצה לחברי המחלקה, שזו בדיוק השאלה של מנהל מחלקה שרוצה
+       * לראות במה הצוות עסוק; ו"כל הארגון".
+       *
+       * חתך המחלקה נמדד לפי **האחראי** ולא לפי הפרויקט: פרויקט אינו שייך
+       * למחלקה אחת, ומשימה של עובד שלי בפרויקט משותף היא עדיין העבודה של
+       * המחלקה שלי. גם אחראי נוסף נספר — משימה שהצוות שלי שותף לה היא
+       * עניינו של המנהל גם כשהאחראי הראשי מבחוץ.
+       */
+      const scope = savedScope();
       const mine = myProjectIds();
-      const scoped = savedScope() === 'mine';
+      const team = scope === 'department' ? myDepartmentUserIds() : null;
+      const forTeam = (t) => team.has(t.assigneeId)
+        || (t.extraAssignees ?? []).some((e) => e.type === 'user' && team.has(e.id));
+
       rows = data.tasks
         .filter((t) => !t.isFinal)
-        .filter((t) => !scoped || mine.has(t.projectId));
+        .filter((t) => (scope === 'all' ? true
+          : scope === 'department' ? forTeam(t)
+            : mine.has(t.projectId)));
       // סך הכול לפני הסינון, כדי שהמעבר יוכל לומר כמה מוסתרות
       allOpen = data.tasks.filter((t) => !t.isFinal).length;
       draw();
@@ -707,11 +744,13 @@ const TrackerView = (() => {
   }
 
   function toolbar() {
-    const scoped = savedScope() === 'mine';
+    const scope = savedScope();
+    const scoped = scope === 'mine';
     const mine = myProjectIds();
     /*
      * רשימת הפרויקטים מצטמצמת לחתך הנבחר: הצעת פרויקט שאינו בחתך הייתה
-     * מייצרת טבלה ריקה בלי הסבר.
+     * מייצרת טבלה ריקה בלי הסבר. בחתך המחלקה הרשימה אינה מצטמצמת — הוא
+     * נמדד לפי האחראי ולא לפי הפרויקט, ולכן כל פרויקט עשוי להופיע בו.
      */
     const live = App.state.projects.filter((p) => p.status !== 'done' && (!scoped || mine.has(p.id)));
     const projectOptions = [{ value: '', label: 'כל הפרויקטים' },
@@ -723,9 +762,17 @@ const TrackerView = (() => {
       UI.select(projectOptions, savedProject(), {
         onchange: (e) => { App.setPref('trackerProject', e.target.value); load(); }
       }),
-      // אותו מעבר שיש בתפריט הצד, ובאותה ברירת מחדל
-      el('div.view-switch', {}, [['mine', 'שלי'], ['all', 'כל הארגון']].map(([key, label]) =>
-        el(`button${scoped === (key === 'mine') ? '.active' : ''}`, {
+      /*
+       * אותו מעבר שיש בתפריט הצד, ובאותה ברירת מחדל. "המחלקה שלי" נוסף
+       * באמצע — בין העבודה שלי לבין כל הארגון — ומוצע רק למי שרשאי לראות
+       * את משימות המחלקה.
+       */
+      el('div.view-switch', {}, [
+        ['mine', 'שלי'],
+        ...(seesDepartment() ? [['department', 'המחלקה שלי']] : []),
+        ['all', 'כל הארגון']
+      ].map(([key, label]) =>
+        el(`button${scope === key ? '.active' : ''}`, {
           onclick: () => {
             App.setPref('trackerScope', key);
             // פרויקט שנבחר עלול לא להיות בחתך החדש
@@ -783,8 +830,10 @@ const TrackerView = (() => {
       }, ['⤓ אקסל']),
       el('span.mute-sm', {
         title: 'משימות שהושלמו אינן מוצגות במסך הבקרה',
-        text: hidden > 0 && scoped
-          ? `${rows.length} משימות · ${hidden} בפרויקטים אחרים`
+        // מה שמוסתר נאמר, ובניסוח שמתאים לחתך — "בפרויקטים אחרים" אינו
+        // נכון בחתך המחלקה, שנמדד לפי האחראי ולא לפי הפרויקט
+        text: hidden > 0 && scope !== 'all'
+          ? `${rows.length} משימות · ${hidden} ${scoped ? 'בפרויקטים אחרים' : 'מחוץ למחלקה'}`
           : `${rows.length} משימות`
       })
     ]);
@@ -1047,8 +1096,10 @@ const TrackerView = (() => {
             el('thead', {}, [headerRow(cols)]),
             el('tbody', {}, body.length ? body : [
               el('tr', {}, [el('td', { colspan: String(cols.length) }, [
-                UI.empty(savedScope() === 'mine' && allOpen > 0
-                  ? 'אין משימות פתוחות בפרויקטים שלך — נסה "כל הארגון"'
+                UI.empty(savedScope() !== 'all' && allOpen > 0
+                  ? (savedScope() === 'department'
+                      ? 'אין משימות פתוחות אצל חברי המחלקה — נסה "כל הארגון"'
+                      : 'אין משימות פתוחות בפרויקטים שלך — נסה "המחלקה שלי" או "כל הארגון"')
                   : 'אין משימות פתוחות בחתך הזה', UI.icon('board'))
               ])])
             ])
