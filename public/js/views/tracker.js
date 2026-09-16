@@ -93,8 +93,23 @@ const TrackerView = (() => {
       const scope = savedScope();
       const mine = myProjectIds();
       const team = scope === 'department' ? myDepartmentUserIds() : null;
-      const forTeam = (t) => team.has(t.assigneeId)
-        || (t.extraAssignees ?? []).some((e) => e.type === 'user' && team.has(e.id));
+      /*
+       * חתך המחלקה הוא העבודה של הצוות, **בנפרד** מהעבודה שלי.
+       *
+       * משימה שאני האחראי היחיד עליה אינה נכללת: היא כבר בחתך "שלי", ומנהל
+       * שמסתכל על המחלקה שואל במה הצוות עסוק — לא לראות את עצמו שוב ברשימה.
+       * החריג הוא משימה שיש עליה אחראי נוסף מהצוות: שם אני לא לבד, וזו
+       * עבודה משותפת שהתיאום בה חשוב מכול.
+       *
+       * אותו כלל בדיוק חל על חלון "המשימות במחלקה" בדף הבית, כדי ששני
+       * המסכים יענו על אותה שאלה באותה צורה.
+       */
+      const meId = App.state.actor?.id ?? null;
+      const forTeam = (t) => {
+        const others = (t.extraAssignees ?? []).filter((e) => e.type === 'user' && team.has(e.id) && e.id !== meId);
+        if (t.assigneeId === meId && t.assigneeType === 'user') return others.length > 0;
+        return team.has(t.assigneeId) || others.length > 0;
+      };
 
       rows = data.tasks
         .filter((t) => !t.isFinal)

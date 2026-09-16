@@ -12,7 +12,7 @@
  */
 
 // שינוי המספר מפסל את המטמון הקודם ומאלץ טעינה מחדש של קבצי המערכת
-const VERSION = 'mesimon-v6';
+const VERSION = 'mesimon-v7';
 
 /**
  * מה נשמר מראש. רק מה שנדרש כדי שהמסך ייבנה: אם אחד מהם חסר, האפליקציה לא
@@ -104,8 +104,12 @@ self.addEventListener('push', (event) => {
     badge: '/icons/icon-192.png',
     lang: 'he',
     dir: 'rtl',
-    // נשארת עד שנוגעים בה — התראה שהגיעה כשלא הסתכלת ונעלמה אינה התראה
-    requireInteraction: true,
+    /*
+     * נעלמת מעצמה. המשך מוכתב בהגדרת Windows ("ביטול התראות לאחר", ברירת
+     * מחדל חמש שניות) ואינו ניתן לקביעה מהדפדפן. ההתראה נשמרת ממילא במרכז
+     * ההתראות — ראה ההסבר המלא ב-app.js, בבניית ההתראה המקומית.
+     */
+    requireInteraction: false,
     /*
      * אותה תגית שהדף משתמש בה להתראה מקומית, ולפי מזהה ההתראה. אם שני
      * המסלולים בכל זאת ירוצו על אותה התראה, השנייה תחליף את הראשונה במקום
@@ -158,6 +162,8 @@ async function sendReply(taskId, text, internal) {
     await self.registration.showNotification('התשובה לא נשלחה', {
       body: `${err.message}. לחיצה כאן תפתח את המשימה.`,
       icon: '/icons/icon-192.png', badge: '/icons/icon-192.png',
+      // זו נשארת: כשל בשליחת תשובה דורש פעולה, ותשובה שאבדה בשקט גרועה
+      // מהתראה שממתינה. היחידה מהשלוש שנשארת מוצמדת, ובכוונה.
       lang: 'he', dir: 'rtl', requireInteraction: true,
       tag: `mesimon-failed-${taskId}`,
       data: { taskId }

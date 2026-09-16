@@ -3985,9 +3985,18 @@ router.get('/api/tracker/export', async (req, res, ctx) => {
   const team = scope === 'department'
     ? new Set(D.all('SELECT id FROM users WHERE department_id IS ?', actor.departmentId ?? null).map((u) => u.id))
     : null;
-  const forTeam = (t) => team.has(t.assignee_id)
-    || D.all('SELECT assignee_id FROM task_assignees WHERE task_id = ? AND assignee_type = ?', t.id, 'user')
-      .some((e) => team.has(e.assignee_id));
+  /*
+   * אותו כלל שבמסך: המחלקה היא העבודה של הצוות, בנפרד מהעבודה שלי. משימה
+   * שאני האחראי היחיד עליה כבר נמצאת בחתך "שלי", ומקומה אינו כאן — אלא אם
+   * יש עליה אחראי נוסף מהצוות, ואז זו עבודה משותפת.
+   */
+  const forTeam = (t) => {
+    const others = D.all(
+      'SELECT assignee_id FROM task_assignees WHERE task_id = ? AND assignee_type = ?', t.id, 'user'
+    ).filter((e) => team.has(e.assignee_id) && e.assignee_id !== actor.id);
+    if (t.assignee_type === 'user' && t.assignee_id === actor.id) return others.length > 0;
+    return team.has(t.assignee_id) || others.length > 0;
+  };
 
   const rows = D.all(
     `SELECT t.* FROM tasks t
