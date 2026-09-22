@@ -55,7 +55,9 @@ const TrackerView = (() => {
   const seesDepartment = () =>
     !App.isVendor()
     && !!App.state.actor?.departmentId
-    && App.state.permissions?.view_internal_board === 'department';
+    // ראה ההסבר בשרת, ליד seesDepartment: ההרשאה היא true למנהל מערכת
+    // ולהנהלה, ובדיקה ל-'department' בלבד נעלה אותם החוצה
+    && ['department', true].includes(App.state.permissions?.view_internal_board);
 
   /** מזהי חברי המחלקה שלי, כולל אני — הבסיס לחתך "המחלקה שלי" */
   const myDepartmentUserIds = () => {
