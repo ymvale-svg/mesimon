@@ -617,9 +617,14 @@ const UI = (() => {
   // פלטת הפרויקטים — זהה לזו שבשרת, שממנה נגזר צבע ברירת המחדל לפי המזהה
   const PROJECT_COLORS = ['#0f766e', '#c2410c', '#2563eb', '#7c3aed', '#be123c', '#0891b2', '#65a30d', '#a16207'];
 
-  const PREVIEW_MIMES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/bmp', 'application/pdf'];
+  const PREVIEW_MIMES = [
+    'image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/bmp', 'application/pdf',
+    // הקלטת קול מתנגנת בתוך המערכת, ולא נדרשת הורדה כדי לשמוע אותה
+    'audio/wav'
+  ];
   const canPreview = (file) => PREVIEW_MIMES.includes(String(file?.mime ?? '').toLowerCase());
   const isPdf = (file) => String(file?.mime ?? '').toLowerCase() === 'application/pdf';
+  const isAudio = (file) => String(file?.mime ?? '').toLowerCase().startsWith('audio/');
 
   /**
    * תצוגה מקדימה בתוך המערכת. ‎files‎ היא רשימת הקבצים שאפשר לדפדף ביניהם,
@@ -648,11 +653,19 @@ const UI = (() => {
 
     const show = () => {
       const f = list[at];
-      mount(stage, isPdf(f)
-        // הכותרת הפנימית של הצופה מוסתרת (‎#toolbar=0‎) כדי שלא יופיע כפתור
-        // הורדה שני מעל זה שכבר יש בחלון
-        ? el('iframe.preview-pdf', { src: `${f.url}#toolbar=0&navpanes=0`, title: f.filename })
-        : el('img.preview-img', { src: f.url, alt: f.filename }));
+      mount(stage,
+        isPdf(f)
+          // הכותרת הפנימית של הצופה מוסתרת (‎#toolbar=0‎) כדי שלא יופיע כפתור
+          // הורדה שני מעל זה שכבר יש בחלון
+          ? el('iframe.preview-pdf', { src: `${f.url}#toolbar=0&navpanes=0`, title: f.filename })
+          : isAudio(f)
+            // ‎controls‎ של הדפדפן ולא נגן משלנו: הוא מביא הפעלה, סרגל
+            // התקדמות, עוצמה ומהירות — והוא נגיש במקלדת בלי שנכתוב דבר
+            ? el('div.preview-audio', {}, [
+                el('div.pa-icon', { text: '🎧' }),
+                el('audio', { src: f.url, controls: true, preload: 'metadata' })
+              ])
+            : el('img.preview-img', { src: f.url, alt: f.filename }));
       mount(caption, el('b', { text: f.filename }),
         f.size ? el('span.mute-sm', { text: ` · ${fileSize(f.size)}` }) : null);
       counter.textContent = list.length > 1 ? `${at + 1} מתוך ${list.length}` : '';
@@ -1038,6 +1051,7 @@ const UI = (() => {
     if (['ppt', 'pptx'].includes(ext)) return '📙';
     if (['zip', 'rar'].includes(ext)) return '🗜️';
     if (['mp4', 'mov'].includes(ext)) return '🎬';
+    if (['wav', 'mp3', 'm4a', 'ogg'].includes(ext)) return '🎧';
     return '📄';
   };
 

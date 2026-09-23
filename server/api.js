@@ -2086,6 +2086,24 @@ router.post('/api/tasks/:id/comments', async (req, res, ctx) => {
 // --- קבצים מצורפים ---
 
 /**
+ * סוג התוכן לפי הסיומת, כשהדפדפן לא אמר אותו או אמר משהו כללי.
+ *
+ * הסוג מגיע מהלקוח (‎file.type‎), ובהקלטות קול הוא אינו אמין: דפדפנים
+ * שונים מדווחים ‎audio/wav‎, ‎audio/wave‎, ‎audio/x-wav‎, ולעיתים מחרוזת
+ * ריקה. הסיומת היא הנתון היציב, והנרמול כאן חוסך את הבדיקה הכפולה בכל
+ * מקום שמציג או מגיש את הקובץ.
+ */
+const MIME_BY_EXT = { wav: 'audio/wav' };
+const normalizeMime = (name, mime) => {
+  const ext = path.extname(String(name ?? '')).replace('.', '').toLowerCase();
+  const known = MIME_BY_EXT[ext];
+  if (!known) return mime || 'application/octet-stream';
+  const given = String(mime ?? '').toLowerCase();
+  // סוג שהדפדפן נתן ואינו מזוהה כאותו סוג מדיה — הסיומת גוברת
+  return given.startsWith('audio/') && given === known ? given : known;
+};
+
+/**
  * שומר קובץ מצורף למשימה ומחזיר את מזהה הרשומה.
  * משותף להעלאה מלשונית הקבצים ולצירוף קובץ לתגובה בשיחה — כך המגבלות
  * (סוגי קבצים, גודל, ניהול גרסאות) נאכפות במקום אחד בלבד.
@@ -2114,7 +2132,7 @@ function saveAttachment(task, actor, { filename, mime, data }, commentId = null)
   const inserted = D.run(
     `INSERT INTO attachments (task_id, comment_id, filename, stored_name, version, size, mime, uploader_type, uploader_id, created_at)
      VALUES (?,?,?,?,?,?,?,?,?,?)`,
-    task.id, commentId, name, stored, version, buffer.length, mime || 'application/octet-stream',
+    task.id, commentId, name, stored, version, buffer.length, normalizeMime(name, mime),
     isVendor(actor) ? 'vendor' : 'user', actor.id, D.nowIso()
   );
   return { id: Number(inserted.lastInsertRowid), name, version };
@@ -2158,7 +2176,14 @@ router.post('/api/tasks/:id/attachments', async (req, res, ctx) => {
  * HTML — ו-SVG, שהוא מסמך שאפשר לשתול בו סקריפט — היו יכולים לקרוא את
  * הסשן של מי שפותח אותם. הם נשארים בהורדה בלבד.
  */
-const INLINE_MIMES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/bmp', 'application/pdf']);
+/*
+ * מה מוגש לצפייה בתוך המערכת ולא כהורדה. אודיו נכלל כדי שהקלטת קול
+ * תתנגן בתוך המשימה — קובץ שחייבים להוריד כדי לשמוע אותו הוא חצי פיצ'ר.
+ */
+const INLINE_MIMES = new Set([
+  'image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/bmp', 'application/pdf',
+  'audio/wav'
+]);
 const isPreviewable = (mime) => INLINE_MIMES.has(String(mime ?? '').toLowerCase());
 
 function sendAttachment(res, att, { inline = false } = {}) {

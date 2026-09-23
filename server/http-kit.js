@@ -22,6 +22,9 @@ const MIME = {
   '.jpeg': 'image/jpeg',
   '.gif': 'image/gif',
   '.ico': 'image/x-icon',
+  // הקלטת קול. בלי הסוג הנכון הקובץ מוגש כזרם בתים, והדפדפן מוריד אותו
+  // במקום לנגן — כלומר הודעה קולית שאי אפשר לשמוע בלי לצאת מהמערכת
+  '.wav': 'audio/wav',
   '.woff2': 'font/woff2',
   '.pdf': 'application/pdf',
   '.txt': 'text/plain; charset=utf-8',

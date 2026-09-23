@@ -638,7 +638,8 @@ const DEFAULT_SETTINGS = {
   archive_done_after_days: 3,              // כמה ימים משימה שהושלמה נשארת בתצוגה השוטפת
   scheduler_interval_minutes: 5,           // תדירות הרצת מנוע הכללים
   max_upload_mb: 25,
-  allowed_extensions: ['pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'png', 'jpg', 'jpeg', 'gif', 'svg', 'zip', 'ai', 'psd', 'mp4', 'txt', 'csv'],
+  // ‎wav‎ הוא הקלטת קול — הודעה קולית בתגובה או תיעוד שיחה מצורף למשימה
+  allowed_extensions: ['pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'png', 'jpg', 'jpeg', 'gif', 'svg', 'zip', 'ai', 'psd', 'mp4', 'wav', 'txt', 'csv'],
   recurring_default_policy: 'skip_if_open', // לא נוצר מופע כפול עד לסגירת הקודם
   org_name: 'MESIMON',
   // כתובת המערכת כפי שמשתמשים מגיעים אליה — קישורי ההזמנות נבנים ממנה
@@ -904,6 +905,23 @@ function migrate() {
   addColumn('comments', 'checklist_item_id', 'INTEGER REFERENCES checklist_items(id) ON DELETE CASCADE');
   // תבניות פר מחלקה. תבנית קיימת נשארת ללא מחלקה, כלומר ארגונית — מי שכבר
   // הסתמך עליה לא יגלה אותה נעלמת בעלייה לגרסה
+  /*
+   * סוגי קבצים שנוספו לרשימת המותרים אחרי שהמערכת כבר עלתה.
+   *
+   * ‎DEFAULT_SETTINGS‎ נכתב רק כשההגדרה אינה קיימת, ולכן הוספה לברירת
+   * המחדל אינה מגיעה למערכת שכבר רצה — שם ההגדרה שמורה מזמן. בלי השורות
+   * האלה השינוי היה עובד רק במסד חדש, וזה בדיוק מה שנראה כפיצ'ר שלא עובד.
+   *
+   * רק מה שחסר נוסף, והסדר נשמר — משתמש שהוסיף או הסיר סוגים בעצמו
+   * במסך ההגדרות לא יאבד את הבחירה שלו.
+   */
+  const ADDED_EXTENSIONS = ['wav'];
+  const currentExt = getSetting('allowed_extensions', null);
+  if (Array.isArray(currentExt)) {
+    const missing = ADDED_EXTENSIONS.filter((e) => !currentExt.includes(e));
+    if (missing.length) setSetting('allowed_extensions', [...currentExt, ...missing]);
+  }
+
   addColumn('templates', 'department_id', 'INTEGER REFERENCES departments(id) ON DELETE SET NULL');
   addColumn('templates', 'updated_at', 'TEXT');
   addColumn('templates', 'updated_by', 'INTEGER REFERENCES users(id) ON DELETE SET NULL');
