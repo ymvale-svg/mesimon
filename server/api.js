@@ -4332,8 +4332,26 @@ const SEARCH_TOTAL = 30;
 
 router.get('/api/search', async (req, res, ctx) => {
   const actor = ctx.requireActor();
-  const q = String(parseUrl(req).searchParams.get('q') ?? '').trim();
+  const params0 = parseUrl(req).searchParams;
+  const q = String(params0.get('q') ?? '').trim();
   if (!q) return sendJson(res, 200, { results: [], query: '' });
+
+  /*
+   * היקף החיפוש — "שלי" או "כל הארגון".
+   *
+   * ההרשאה לבדה אינה תשובה מספקת כאן. מנהל מערכת *רשאי* לראות את כל הארגון,
+   * ולכן חיפוש שמסתמך על ההרשאה בלבד החזיר לו את העבודה של כל המחלקות
+   * מעורבבת בשלו — וזו בדיוק התלונה. אותה הבחנה שכבר נעשית בתפריט הצד
+   * ובבורר הפרויקטים: "מותר לי לראות" ו"זה שלי" הן שתי שאלות שונות.
+   *
+   * ברירת המחדל היא שלי, והמעבר לכל הארגון מוצע בתחתית התוצאות עם מספר
+   * ההתאמות שנשארו בחוץ — הסתרה שקטה הייתה גרועה מהערבוב, כי מי שמחפש
+   * משהו שהוא יודע שקיים היה מקבל "לא נמצא".
+   *
+   * ספק מוחרג: היקף הראייה שלו ממילא מצומצם למשימות שלו, ו"שלי" לפי
+   * ‎ownedProjectIds‎ ריק עבורו — כלומר הסינון היה מרוקן לו את החיפוש.
+   */
+  const scopeAll = params0.get('scope') === 'all' || isVendor(actor);
 
   const like = `%${q}%`;
   /*
@@ -4347,23 +4365,43 @@ router.get('/api/search', async (req, res, ctx) => {
     if (!prev || rank < prev.rank) taskHits.set(id, { label, rank });
   };
 
+  /*
+   * התקרה לכל מקור חתכה את המועמדים *לפני* סינון ההרשאות, ולכן ארבעים
+   * המשימות הראשונות שהתאימו בטבלה — של מי שלא יהיו — דחקו החוצה את אלה
+   * של המחפש עצמו. עובד שחיפש מילה נפוצה קיבל "לא נמצא" בזמן שהייתה לו
+   * משימה מתאימה, והכשל הזה שקט: הוא נראה כמו היעדר תוצאה ולא כמו קיצוץ.
+   *
+   * המיון מקדים את השורות של המחפש בתוך אותה תקרה, ולכן שלו לעולם אינן
+   * נדחקות. אינו מחליף את סינון ההרשאות שאחריו — רק קובע מי נכנס לתור.
+   */
+  const MINE_FIRST = `ORDER BY (
+       (t.assignee_type = 'user' AND t.assignee_id = ?)
+    OR t.created_by = ?
+  ) DESC, t.id DESC`;
+
   // ‎likes‎ הוא מספר הפעמים שהמחרוזת מופיעה בשאילתה — יש שאילתות עם שני שדות
   const collect = (sql, label, rank, likes = 1) => {
-    const params = [...Array(likes).fill(like), SEARCH_PER_SOURCE];
-    for (const row of D.all(sql, ...params)) addTask(row.id, label, rank);
+    const params = [...Array(likes).fill(like), actor.id, actor.id, SEARCH_PER_SOURCE];
+    for (const row of D.all(`${sql} ${MINE_FIRST} LIMIT ?`, ...params)) addTask(row.id, label, rank);
   };
 
-  collect('SELECT id FROM tasks WHERE title LIKE ? LIMIT ?', 'בכותרת', 0);
-  collect('SELECT id FROM tasks WHERE description LIKE ? LIMIT ?', 'בתיאור', 1);
-  collect("SELECT id FROM tasks WHERE status_short <> '' AND status_short LIKE ? LIMIT ?", 'בסטטוס', 2);
+  collect('SELECT t.id, t.assignee_type, t.assignee_id, t.created_by FROM tasks t WHERE t.title LIKE ?', 'בכותרת', 0);
+  collect('SELECT t.id, t.assignee_type, t.assignee_id, t.created_by FROM tasks t WHERE t.description LIKE ?', 'בתיאור', 1);
   collect(
-    `SELECT DISTINCT t.id FROM tasks t JOIN checklist_items c ON c.task_id = t.id
-      WHERE c.text LIKE ? OR c.note LIKE ? LIMIT ?`,
+    `SELECT t.id, t.assignee_type, t.assignee_id, t.created_by FROM tasks t
+      WHERE t.status_short <> '' AND t.status_short LIKE ?`,
+    'בסטטוס', 2
+  );
+  collect(
+    `SELECT DISTINCT t.id, t.assignee_type, t.assignee_id, t.created_by
+       FROM tasks t JOIN checklist_items c ON c.task_id = t.id
+      WHERE c.text LIKE ? OR c.note LIKE ?`,
     'בצ׳קליסט', 3, 2
   );
   collect(
-    `SELECT DISTINCT t.id FROM tasks t JOIN comments cm ON cm.task_id = t.id
-      WHERE cm.body LIKE ?${isVendor(actor) ? ' AND cm.internal = 0' : ''} LIMIT ?`,
+    `SELECT DISTINCT t.id, t.assignee_type, t.assignee_id, t.created_by
+       FROM tasks t JOIN comments cm ON cm.task_id = t.id
+      WHERE cm.body LIKE ?${isVendor(actor) ? ' AND cm.internal = 0' : ''}`,
     'בתגובה', 4
   );
 
@@ -4371,11 +4409,17 @@ router.get('/api/search', async (req, res, ctx) => {
     .map(([id, hit]) => ({ row: D.get('SELECT * FROM tasks WHERE id = ?', id), hit }))
     .filter((x) => x.row && canSeeTask(actor, x.row));
 
-  // החיפוש אינו עוקף את היקף הראייה — פרויקט שאינו של המשתמש לא יופיע בו
+  /*
+   * החיפוש אינו עוקף את היקף הראייה — פרויקט שאינו של המשתמש לא יופיע בו.
+   *
+   * בלי תקרה בשאילתה: טבלת הפרויקטים קטנה בסדרי גודל מטבלת המשימות, ותקרה
+   * שחותכת לפני סינון ההרשאות הייתה מסתירה פרויקט שמותר לראות רק מפני
+   * שפרויקטים של אחרים קדמו לו בטבלה.
+   */
   const visibleProjects = visibleProjectIds(actor);
   const projects = D.all(
-    'SELECT id, name, description, status FROM projects WHERE name LIKE ? OR description LIKE ? LIMIT ?',
-    like, like, SEARCH_PER_SOURCE
+    'SELECT id, name, description, status FROM projects WHERE name LIKE ? OR description LIKE ?',
+    like, like
   ).filter((p) => visibleProjects === null || visibleProjects.has(p.id));
 
   /*
@@ -4386,6 +4430,22 @@ router.get('/api/search', async (req, res, ctx) => {
   const lower = q.toLowerCase();
   const startsRank = (text) => (String(text ?? '').toLowerCase().startsWith(lower) ? 0 : 1);
 
+  /*
+   * "שלי" — אותה הגדרה בדיוק שקובעת את חתך הסרגל, ולא הגדרה שנייה שתיפרד
+   * ממנה עם הזמן: פרויקט שאני מנהל, שיש בו משימה שלי, או שפתחתי אותו.
+   * משימה היא שלי אם אני האחראי עליה, אחראי נוסף, או שהיא בפרויקט שלי.
+   *
+   * הפותח נספר רק למי שנחשב פותח — מנהל מערכת פותח משימות בשביל אחרים,
+   * וספירתן כשלו הייתה מחזירה בדיוק את הערבוב שהחתך בא למנוע.
+   */
+  const mineProjects = ownedProjectIds(actor);
+  const opener = D.countsAsOpener(actor.id);
+  const taskIsMine = (row) =>
+    (row.assignee_type === 'user' && row.assignee_id === actor.id)
+    || (opener && row.created_by === actor.id)
+    || extraAssigneesOf(row).some((a) => a.assignee_type === 'user' && a.assignee_id === actor.id)
+    || (!!row.project_id && mineProjects.has(row.project_id));
+
   const results = [
     ...projects.map((p) => ({
       type: 'project',
@@ -4393,6 +4453,7 @@ router.get('/api/search', async (req, res, ctx) => {
       title: p.name,
       subtitle: p.status === 'done' ? 'פרויקט שהושלם' : (p.description || ''),
       matchIn: String(p.name ?? '').toLowerCase().includes(lower) ? 'בשם' : 'בתיאור',
+      mine: mineProjects.has(p.id),
       sort: [startsRank(p.name), 0]
     })),
     ...tasks.map(({ row, hit }) => {
@@ -4405,15 +4466,22 @@ router.get('/api/search', async (req, res, ctx) => {
           .filter(Boolean).join(' · '),
         matchIn: hit.label,
         archived: shaped.archived,
+        mine: taskIsMine(row),
         sort: [startsRank(shaped.title), 1 + hit.rank]
       };
     })
   ].sort((a, b) => (a.sort[0] - b.sort[0]) || (a.sort[1] - b.sort[1]) || a.title.localeCompare(b.title, 'he'));
 
+  // בחתך "שלי" השאר אינו נמחק אלא נספר, והלקוח מציע לפתוח אליו את החיפוש
+  const shown = scopeAll ? results : results.filter((r) => r.mine);
+  const others = scopeAll ? 0 : results.length - shown.length;
+
   sendJson(res, 200, {
     query: q,
-    total: results.length,
-    results: results.slice(0, SEARCH_TOTAL).map(({ sort, ...rest }) => rest)
+    scope: scopeAll ? 'all' : 'mine',
+    total: shown.length,
+    othersCount: others,
+    results: shown.slice(0, SEARCH_TOTAL).map(({ sort, ...rest }) => rest)
   });
 });
 

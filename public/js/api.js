@@ -76,7 +76,9 @@ const API = (() => {
     deleteProjectImage: (imageId) => call('DELETE', `/api/project-images/${imageId}`),
 
     reports: () => call('GET', '/api/reports'),
-    search: (q) => call('GET', `/api/search?q=${encodeURIComponent(q)}`),
+    // ‎scope‎ ריק הוא "שלי" — ברירת המחדל נקבעת בשרת ולא נשכפלת לכאן
+    search: (q, scope) => call('GET',
+      `/api/search?q=${encodeURIComponent(q)}${scope ? `&scope=${encodeURIComponent(scope)}` : ''}`),
 
     savePrefs: (prefs) => call('PUT', '/api/prefs', { prefs }),
 

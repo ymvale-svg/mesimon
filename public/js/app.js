@@ -1170,6 +1170,24 @@ const App = (() => {
       rows = [];
       cursor = -1;
 
+      // בחתך הרחב נאמר זאת במפורש — אחרת לא ברור למה הופיעו פתאום פריטים זרים
+      if (data?.scope === 'all') {
+        results.appendChild(el('div.sr-scope', { text: 'תוצאות מכל הארגון' }));
+      }
+
+      /*
+       * אין תוצאות בחתך "שלי" — אבל יש מחוצה לו. זה המצב שבו דווקא *חייבים*
+       * להציע את ההרחבה: הודעת "לא נמצא" לבדה הייתה אומרת למשתמש שהדבר אינו
+       * קיים, בזמן שהוא קיים ורק אינו שלו.
+       */
+      if (!items.length) {
+        results.appendChild(el('div.sr-empty', {
+          text: data?.othersCount > 0
+            ? `לא נמצא "${q}" במשימות ובפרויקטים שלך`
+            : `לא נמצא איזכור ל"${q}"`
+        }));
+      }
+
       const groups = [
         ['project', 'פרויקטים'],
         ['task', 'משימות']
@@ -1191,12 +1209,32 @@ const App = (() => {
           text: `מוצגות ${items.length} מתוך ${data.total} — כדאי לצמצם את החיפוש`
         }));
       }
+
+      /*
+       * התאמות שמחוץ לחתך "שלי" נספרות ומוצעות, ולא נמחקות בשקט. מי שמחפש
+       * משהו שהוא יודע שקיים במחלקה אחרת היה מקבל "לא נמצא" ומסיק שהחיפוש
+       * שבור — וזה גרוע יותר מרשימה מעורבבת.
+       */
+      if (data?.othersCount > 0) {
+        const more = el('button.sr-widen', {
+          type: 'button',
+          onclick: () => runSearch({ scope: 'all', now: true })
+        }, [`עוד ${data.othersCount} בכל הארגון`]);
+        results.appendChild(more);
+        rows.push(more);
+      }
       // השורה הראשונה מסומנת מיד, כדי ש-Enter יפתח אותה בלי חץ מקדים
       if (rows.length) setCursor(0);
       show();
     };
 
-    const runSearch = () => {
+    /*
+     * ‎scope‎ אינו נדבק: כל הקלדה חדשה חוזרת לחתך "שלי". מי שפתח פעם אחת את
+     * החיפוש לכל הארגון לא ביקש בכך שכל חיפוש הבא יהיה רחב.
+     * ‎now‎ מדלג על ההשהיה — לחיצה על "עוד בכל הארגון" היא כוונה מפורשת
+     * ואין סיבה להמתין אחריה.
+     */
+    const runSearch = ({ scope = '', now = false } = {}) => {
       clearTimeout(timer);
       const q = input.value.trim();
       if (!q) return hide();
@@ -1213,7 +1251,7 @@ const App = (() => {
           show();
         }
         try {
-          const data = await API.search(q);
+          const data = await API.search(q, scope);
           if (mine !== seq) return;      // הקלדה חדשה עקפה את הבקשה הזו
 
           /*
@@ -1223,13 +1261,8 @@ const App = (() => {
            * בלי שדבר על המסך רמז שהחיפוש בכלל רץ.
            */
           const items = Array.isArray(data?.results) ? data.results : [];
-          if (!items.length) {
-            UI.clear(results);
-            rows = [];
-            results.appendChild(el('div.sr-empty', { text: `לא נמצא איזכור ל"${q}"` }));
-            show();
-            return;
-          }
+          // גם רשימה ריקה עוברת דרך ‎draw‎: שם יושבת ההצעה להרחיב לכל הארגון,
+          // והיא נחוצה בדיוק כשאין תוצאות בחתך שלי
           draw(items, data, q);
         } catch (err) {
           /*
@@ -1245,10 +1278,10 @@ const App = (() => {
           }));
           show();
         }
-      }, SEARCH_DEBOUNCE_MS);
+      }, now ? 0 : SEARCH_DEBOUNCE_MS);
     };
 
-    input.addEventListener('input', runSearch);
+    input.addEventListener('input', () => runSearch());
     // חזרה לשדה שכבר יש בו טקסט פותחת מחדש את התוצאות במקום להשאיר שדה מת
     input.addEventListener('focus', () => { if (input.value.trim() && !rows.length) runSearch(); });
 
