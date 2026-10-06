@@ -916,6 +916,14 @@ function listProjectsFor(actor) {
         WHERE t.project_id = ? AND t.archived = 0`,
       p.id
     );
+    /*
+     * משימות בארכיון נספרות בנפרד ואינן נכנסות למונה שבתפריט — הוא מתאר
+     * עבודה פעילה. אבל מחיקת פרויקט מנתקת גם אותן, ולכן אישור המחיקה חייב
+     * לדעת עליהן: בלי זה הוא מבטיח "4 משימות יעברו" ומדווח אחריו על 5.
+     */
+    const archived = D.get(
+      'SELECT COUNT(*) c FROM tasks WHERE project_id = ? AND archived = 1', p.id
+    ).c;
     return {
       id: p.id,
       name: p.name,
@@ -939,6 +947,16 @@ function listProjectsFor(actor) {
         && (visible === null || visible.has(p.id))
         && (P.level(actor, 'create_project') === true || p.created_by === actor.id),
       /*
+       * האם מותר לערוך — אותו כלל בדיוק ש-‎assertMayEditProject‎ אוכף, מאותה
+       * סיבה. רחב מ-‎canDelete‎ במכוון: גם מנהל הפרויקט עורך אותו, אבל מוחק
+       * אותו רק מי שפתח אותו.
+       */
+      canEdit: !isVendor(actor)
+        && P.may(actor, 'create_project')
+        && (visible === null || visible.has(p.id))
+        && (P.level(actor, 'create_project') === true
+            || p.created_by === actor.id || p.manager_id === actor.id),
+      /*
        * המחלקה של הפרויקט נגזרת ממנהל המשימות שלו — אין לפרויקט שדה מחלקה
        * משלו, וזו ההשתייכות היחידה שקיימת בפועל. פרויקט בלי מנהל אינו שייך
        * לאיש, ולכן הוא מוצע לכולם ולא נעלם מאף אחד.
@@ -960,6 +978,7 @@ function listProjectsFor(actor) {
       imagesCount: D.get("SELECT COUNT(*) c FROM project_images WHERE project_id = ? AND kind = 'gallery'", p.id).c,
       tasksTotal: stats.total ?? 0,
       tasksDone: stats.done ?? 0,
+      tasksArchived: archived,
       pinned: pinned.has(p.id)
     };
   });

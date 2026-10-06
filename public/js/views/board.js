@@ -214,7 +214,9 @@ const BoardView = (() => {
         : null,
       el('div', {}, [el('h2', { text: title }), el('div.sub', { text: sub })]),
       el('div.spacer'),
-      project && App.may('create_project')
+      // ‎canEdit‎ מגיע מהשרת ולא נגזר כאן: ל"יש הרשאת פרויקטים" ול"מותר לערוך
+      // את הפרויקט הזה" אין אותה תשובה, ומי שמנחש מציג כפתור שנכשל ב-403
+      project?.canEdit
         ? el('button.btn', { onclick: () => openProjectDialog(project) }, ['✎ עריכת פרויקט'])
         : null,
       App.may('export_data')
@@ -918,6 +920,63 @@ const BoardView = (() => {
 
   // ------------------------------------------------------------- דיאלוג פרויקט
 
+  /**
+   * מחיקת פרויקט, כולל האישור. זרימה אחת שמשרתת גם את דיאלוג העריכה וגם את
+   * תפריט ההקלקה הימנית בתפריט הצד — שני אישורים נפרדים היו מתפצלים ברגע
+   * שהכללים בשרת ישתנו, ואז מסך אחד היה מבטיח משהו שהשני אינו מקיים.
+   *
+   * האישור אומר בדיוק מה יקרה, עם המספרים האמיתיים של הפרויקט הזה. המשימות
+   * אינן נמחקות — הן עוברות ל"ללא פרויקט" — וזה ההבדל בין פעולה שאפשר
+   * להתאושש ממנה לבין מחיקה של עבודה, והמשתמש צריך לדעת אותו לפני הלחיצה
+   * ולא אחריה.
+   */
+  async function deleteProjectFlow(project, { onDeleted } = {}) {
+    const parts = [`הפרויקט "${project.name}" יימחק.`];
+    /*
+     * המונה שבתפריט סופר עבודה פעילה בלבד, אך המחיקה מנתקת גם את הארכיון —
+     * ולכן הספירה כאן היא של שניהם יחד. המספר באישור חייב להיות אותו מספר
+     * שיוחזר אחרי המחיקה, אחרת האישור מבטיח דבר אחד והדיווח אומר אחר.
+     */
+    const archived = project.tasksArchived ?? 0;
+    const moving = (project.tasksTotal ?? 0) + archived;
+    if (moving) {
+      parts.push(`${moving} המשימות שבו לא יימחקו — הן יעברו ל"ללא פרויקט"${
+        archived ? ` (${archived} מהן בארכיון).` : ' ויישארו בלוח.'}`);
+    }
+    if (project.subProjectsCount) {
+      parts.push(`${project.subProjectsCount} תתי-פרויקטים יעלו לרמה הראשית.`);
+    }
+    parts.push('הלוגו והתמונות של הפרויקט יימחקו לצמיתות.');
+
+    if (!await UI.confirm(parts.join(' '), {
+      title: 'מחיקת פרויקט', danger: true, okText: 'מחיקת הפרויקט'
+    })) return false;
+
+    try {
+      const r = await API.deleteProject(project.id);
+      onDeleted?.();
+      await App.reloadReference();
+      /*
+       * רק מי שעומד על הלוח של הפרויקט שנמחק חייב לזוז ממנו. מי שמחק פרויקט
+       * מתפריט הצד תוך כדי עבודה במסך אחר נשאר במקומו — הזזתו הייתה מאבדת לו
+       * את ההקשר בלי סיבה.
+       */
+      if (String(App.state.route.params?.projectId ?? '') === String(project.id)) {
+        App.navigate('board');
+      } else {
+        App.refreshChrome();
+        await App.refreshView();
+      }
+      UI.success(r.tasksDetached
+        ? `הפרויקט נמחק · ${r.tasksDetached} משימות עברו ל"ללא פרויקט"`
+        : 'הפרויקט נמחק');
+      return true;
+    } catch (err) {
+      UI.error(err);
+      return false;
+    }
+  }
+
   function openProjectDialog(project = null, opts = {}) {
     const isEdit = !!project;
     const nameInput = el('input', { type: 'text', value: project?.name ?? '' });
@@ -1130,36 +1189,7 @@ const BoardView = (() => {
     // לקוח שמנחש הרשאות מציג כפתור שנכשל ב-403
     if (isEdit && project.canDelete) {
       footer.push(el('button.btn.btn-danger', {
-        onclick: async () => {
-          /*
-           * האישור אומר בדיוק מה יקרה, עם המספרים האמיתיים של הפרויקט הזה.
-           * המשימות אינן נמחקות — הן עוברות ל"ללא פרויקט" — וזה ההבדל בין
-           * פעולה שאפשר להתאושש ממנה לבין מחיקה של עבודה, והמשתמש צריך
-           * לדעת אותו לפני הלחיצה ולא אחריה.
-           */
-          const parts = [`הפרויקט "${project.name}" יימחק.`];
-          if (project.tasksTotal) {
-            parts.push(`${project.tasksTotal} המשימות שבו לא יימחקו — הן יעברו ל"ללא פרויקט" ויישארו בלוח.`);
-          }
-          if (project.subProjectsCount) {
-            parts.push(`${project.subProjectsCount} תתי-פרויקטים יעלו לרמה הראשית.`);
-          }
-          parts.push('הלוגו והתמונות של הפרויקט יימחקו לצמיתות.');
-
-          if (!await UI.confirm(parts.join(' '), {
-            title: 'מחיקת פרויקט', danger: true, okText: 'מחיקת הפרויקט'
-          })) return;
-
-          try {
-            const r = await API.deleteProject(project.id);
-            m.close();
-            await App.reloadReference();
-            App.navigate('board');
-            UI.success(r.tasksDetached
-              ? `הפרויקט נמחק · ${r.tasksDetached} משימות עברו ל"ללא פרויקט"`
-              : 'הפרויקט נמחק');
-          } catch (err) { UI.error(err); }
-        }
+        onclick: () => deleteProjectFlow(project, { onDeleted: () => m.close() })
       }, ['מחיקת פרויקט']));
     }
 
@@ -1197,5 +1227,5 @@ const BoardView = (() => {
     });
   }
 
-  return { render, openTaskDialog, openProjectDialog, reload: load };
+  return { render, openTaskDialog, openProjectDialog, deleteProjectFlow, reload: load };
 })();

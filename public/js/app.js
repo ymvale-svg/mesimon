@@ -1297,6 +1297,18 @@ const App = (() => {
    * השורה עצמה היא כפתור שמנווט ללוח, ולכן חייבים לעצור את בעבוע האירוע —
    * אחרת כל נעיצה הייתה גם מחליפה מסך תחת ידיו של המשתמש.
    */
+  async function togglePin(p) {
+    try {
+      await API.pinProject(p.id, !p.pinned);
+      await reloadReference();
+      render(); // התפריט נבנה מחדש ומסדר את הנעוצים בראש הרשימה
+      return true;
+    } catch (err) {
+      UI.error(err);
+      return false;
+    }
+  }
+
   function pinButton(p) {
     const btn = el(`button.nav-pin${p.pinned ? '.is-pinned' : ''}`, {
       type: 'button',
@@ -1307,16 +1319,95 @@ const App = (() => {
       e.stopPropagation();
       e.preventDefault();
       btn.disabled = true; // לחיצה כפולה בזמן הבקשה הייתה שולחת נעיצה וביטול זה אחר זה
-      try {
-        await API.pinProject(p.id, !p.pinned);
-        await reloadReference();
-        render(); // התפריט נבנה מחדש ומסדר את הנעוצים בראש הרשימה
-      } catch (err) {
-        btn.disabled = false;
-        UI.error(err);
-      }
+      if (!await togglePin(p)) btn.disabled = false;
     });
     return btn;
+  }
+
+  /**
+   * תפריט הפעולות של פרויקט, בהקלקה ימנית על שורתו בתפריט הצד.
+   *
+   * מוצגות רק הפעולות שהמשתמש רשאי לבצע בפועל: ‎canEdit‎ ו-‎canDelete‎ מחושבים
+   * בשרת לפי אותם כללים שנאכפים ב-API, ופעולה אסורה פשוט אינה בתפריט — במקום
+   * להופיע ולהיכשל ב-403 אחרי שהמשתמש כבר אישר אותה. הנעיצה אישית ואינה
+   * נוגעת בפרויקט עצמו, ולכן היא פתוחה לכל מי שרואה אותו.
+   *
+   * האירוע ‎contextmenu‎ נורה גם ממקש התפריט ומ-Shift+F10, ולכן התפריט נגיש
+   * גם מהמקלדת; כשאין מיקום עכבר הוא נצמד לשורה עצמה.
+   */
+  function openProjectMenu(p, ev, anchor) {
+    document.querySelector('.proj-pop')?.remove();
+
+    const close = () => {
+      pop.remove();
+      document.removeEventListener('mousedown', onOutside);
+      document.removeEventListener('keydown', onKey);
+      anchor.focus();
+    };
+    // כל פעולה סוגרת קודם ורק אז פועלת — דיאלוג שנפתח מאחורי תפריט פתוח
+    const act = (fn) => () => { close(); fn(); };
+
+    const swatch = (c) => el('button.proj-swatch', {
+      type: 'button',
+      title: c,
+      style: { background: c },
+      'aria-label': `צביעת הפרויקט ב-${c}`,
+      onclick: act(async () => {
+        try {
+          await API.updateProject(p.id, { color: c });
+          await reloadReference();
+          refreshChrome();
+          // הצבע מסמן גם את שורות המשימות של הפרויקט, לא רק את הנקודה בתפריט
+          await refreshView();
+        } catch (err) { UI.error(err); }
+      })
+    }, p.colorChosen === c ? ['✓'] : []);
+
+    const pop = el('div.track-pop.proj-pop', { role: 'menu' }, [
+      el('div.proj-pop-head', { text: p.name, title: p.name }),
+      may('create_task')
+        ? el('button.track-opt', {
+            onclick: act(() => BoardView.openTaskDialog(null, { projectId: p.id }))
+          }, ['＋ משימה חדשה בפרויקט'])
+        : null,
+      p.canEdit
+        ? el('button.track-opt', {
+            onclick: act(() => BoardView.openProjectDialog(p))
+          }, ['✎ עריכת פרויקט'])
+        : null,
+      el('button.track-opt', { onclick: act(() => togglePin(p)) },
+        [p.pinned ? '📌 שחרור הנעיצה' : '📌 נעיצה לראש הרשימה']),
+      p.canEdit
+        ? el('div.proj-pop-colors', { role: 'group', 'aria-label': 'צבע הפרויקט' }, [
+            el('span.proj-pop-label', { text: 'צבע' }),
+            ...UI.PROJECT_COLORS.map(swatch)
+          ])
+        : null,
+      p.canDelete
+        ? el('button.track-opt.is-danger', {
+            onclick: act(() => BoardView.deleteProjectFlow(p))
+          }, ['🗑 מחיקת פרויקט'])
+        : null
+    ]);
+
+    document.body.appendChild(pop);
+
+    /*
+     * RTL: תפריט הקשר נפתח שמאלה מנקודת הלחיצה, כמו בכל יישום בעברית. בלי זה
+     * הוא היה נפתח מהתפריט לתוך התוכן ומכסה אותו.
+     */
+    const rect = anchor.getBoundingClientRect();
+    const px = ev.clientX || rect.left;
+    const py = ev.clientY || rect.bottom;
+    const w = pop.offsetWidth;
+    pop.style.left = `${Math.max(8, Math.min(px - w, window.innerWidth - w - 8))}px`;
+    pop.style.top = `${Math.max(8, Math.min(py + 2, window.innerHeight - pop.offsetHeight - 8))}px`;
+
+    const onOutside = (e) => { if (!pop.contains(e.target)) close(); };
+    const onKey = (e) => { if (e.key === 'Escape') { e.preventDefault(); close(); } };
+    setTimeout(() => document.addEventListener('mousedown', onOutside), 0);
+    document.addEventListener('keydown', onKey);
+    pop.querySelector('button')?.focus(); // כניסה ישירה מהמקלדת, בלי לדלג על התפריט
   }
 
   /**
@@ -1463,7 +1554,9 @@ const App = (() => {
     const projectItem = (p) =>
       el(`button.nav-item${state.route.name === 'board' && state.route.params.projectId === p.id ? '.active' : ''}${p.parentProjectId ? '.is-subproject' : ''}`, {
         title: p.parentProjectName ? `${p.parentProjectName} ← ${p.name}` : p.name,
-        onclick: () => navigate('board', { projectId: p.id })
+        onclick: () => navigate('board', { projectId: p.id }),
+        // הקלקה ימנית פותחת את תפריט הפעולות במקום את תפריט הדפדפן
+        oncontextmenu: (e) => { e.preventDefault(); openProjectMenu(p, e, e.currentTarget); }
       }, [
         // הלוגו כשיש, ואחרת נקודה בצבע הפרויקט — אותו סימן שבשורות המשימות שלו
         el('span.ico', {}, [

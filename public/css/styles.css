@@ -1872,6 +1872,33 @@ input[type="color"] { width: 46px; height: 30px; padding: 2px; cursor: pointer; 
   border: 1px solid rgba(0, 0, 0, .2);
 }
 .track-swatch.is-empty { background: repeating-linear-gradient(45deg, #eee 0 3px, #fff 3px 6px); }
+.track-opt.is-danger { color: var(--danger); }
+.track-opt.is-danger:hover { background: var(--danger-bg); }
+
+/* ---- תפריט הקלקה ימנית על פרויקט בתפריט הצד ---- */
+
+.proj-pop { min-width: 232px; }
+/* שם הפרויקט בראש התפריט — אחרי הקלקה ימנית צריך לדעת על מה לחצת */
+.proj-pop-head {
+  padding: 6px 9px 8px; margin-bottom: 3px; border-bottom: 1px solid var(--border);
+  font-size: 12px; font-weight: 600; color: var(--text-mute);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.proj-pop-colors {
+  display: flex; align-items: center; gap: 4px; flex-wrap: wrap;
+  padding: 7px 9px; margin-top: 3px; border-top: 1px solid var(--border);
+}
+.proj-pop-label { font-size: 12px; color: var(--text-mute); margin-inline-end: 3px; }
+.proj-swatch {
+  width: 20px; height: 20px; border-radius: 5px; cursor: pointer; padding: 0;
+  border: 1px solid rgba(0, 0, 0, .18);
+  display: flex; align-items: center; justify-content: center;
+  color: #fff; font-size: 11px; line-height: 1;
+  /* הצל נותן ל-✓ ניגודיות גם מעל הצבעים הבהירים שבפלטה */
+  text-shadow: 0 1px 2px rgba(0, 0, 0, .55);
+}
+.proj-swatch:hover { transform: scale(1.12); }
+.proj-swatch:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
 
 /* ---- ניהול רשימת הסטטוסים ---- */
 
