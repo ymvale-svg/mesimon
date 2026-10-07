@@ -756,14 +756,6 @@ table.data td.wrap { white-space: normal; min-width: 240px; }
 @media (hover: none) {
   .nav-pin { opacity: .75; visibility: visible; }
 }
-/*
- * כפתור פעולות הפרויקט — בפריסת נייד בלבד, ומוצג שם ב-mobile.css.
- *
- * במחשב ההקלקה הימנית עושה את העבודה, וכפתור נוסף בכל שורה היה רעש. בטלפון
- * אין הקלקה ימנית, ולחיצה ארוכה לבדה בלתי נראית ובלתי נגישה לקורא מסך.
- */
-.nav-more { display: none; }
-
 .nav-pinned-sep {
   height: 1px; background: var(--border); margin: 6px 10px 7px;
 }

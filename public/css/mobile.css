@@ -88,21 +88,6 @@
   .sidebar .nav-pin { width: 40px; height: 40px; opacity: .8; visibility: visible; }
 
   /*
-   * כפתור פעולות הפרויקט — הדרך הראשית לתפריט בטלפון.
-   *
-   * המונה ‎0/4‎ מפנה לו את מקומו ואינו נעלם מהמערכת: הוא מופיע ממילא בראש
-   * הלוח שהשורה מובילה אליו. בלעדיו השם היה מתכווץ לכ-60 פיקסלים, כלומר
-   * שתי מילים חתוכות — וזיהוי הפרויקט הוא כל תפקידה של השורה.
-   */
-  .sidebar .nav-item .count { display: none; }
-  .sidebar .nav-more {
-    display: grid; place-items: center; flex: none;
-    width: 40px; height: 40px; padding: 0; border: 0; border-radius: 8px;
-    background: none; cursor: pointer; color: var(--text-soft);
-    font-size: 19px; line-height: 1;
-  }
-  .sidebar .nav-more:active { background: rgba(15, 23, 42, .1); }
-  /*
    * הלוגו אינו יעד מגע. לחיצה ארוכה על תמונה מעלה את תפריט השמירה של
    * הדפדפן ובולעת את המחווה — וזה היה נראה כבאג מקרי, כי רק לחלק
    * מהפרויקטים יש לוגו. הוא דקורטיבי (‎alt=""‎) והשורה כולה היא היעד.

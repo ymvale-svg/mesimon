@@ -1362,36 +1362,12 @@ const App = (() => {
     return btn;
   }
 
-  /**
-   * כפתור הפעולות של הפרויקט. ב-CSS הוא מוצג רק בפריסת נייד.
-   *
-   * במחשב ההקלקה הימנית מספיקה, ובטלפון אין כזו. לחיצה ארוכה לבדה אינה
-   * תשובה: היא בלתי נראית, ומקורא מסך היא נחסמת לגמרי — VoiceOver ו-TalkBack
-   * בולעים את המחווה לעצמם. לכן הכפתור הוא הדרך הראשית בטלפון, והלחיצה
-   * הארוכה היא קיצור דרך שמתווסף עליה.
-   */
-  function moreButton(p) {
-    const btn = el('button.nav-more', {
-      type: 'button',
-      'aria-haspopup': 'dialog',
-      'aria-label': `פעולות בפרויקט ${p.name}`,
-      title: 'פעולות בפרויקט'
-    }, ['⋯']);
-
-    btn.addEventListener('click', (e) => {
-      // השורה עצמה מנווטת, ולכן חייבים לעצור את בעבוע האירוע
-      e.stopPropagation();
-      e.preventDefault();
-      openProjectMenu(p, null, btn.closest('.nav-item'));
-    });
-    return btn;
-  }
-
   const LONG_PRESS_MS = 500;
   const LONG_PRESS_SLOP = 10; // פיקסלים — מעבר לזה זו גלילה, לא לחיצה ארוכה
 
   /**
-   * לחיצה ארוכה על שורת פרויקט, כמקבילה למגע של ההקלקה הימנית.
+   * לחיצה ארוכה על שורת פרויקט — זו ההקלקה הימנית, במחווה של מסך מגע. אין
+   * כפתור נוסף בשורה: התפריט נפתח מהשורה עצמה, כמו במחשב.
    *
    * ‎contextmenu‎ אינו מחליף אותה: בדפדפני מגע הוא אינו נורה באופן אחיד, וה-CSS
    * שמשתיק את בועת ההעתקה של iOS הוא גם זה שמונע ממנו להיירות.
@@ -1412,7 +1388,7 @@ const App = (() => {
 
     node.addEventListener('touchstart', (e) => {
       if (e.touches.length !== 1) return cancel();
-      if (e.target.closest('.nav-pin, .nav-more')) return; // לכפתורים יש פעולה משלהם
+      if (e.target.closest('.nav-pin')) return; // לכפתור הנעיצה יש פעולה משלו
       sx = e.touches[0].clientX;
       sy = e.touches[0].clientY;
       timer = setTimeout(() => {
@@ -1768,8 +1744,7 @@ const App = (() => {
         // ‎title‎ מלא, כי גם בשתי שורות שם ארוך במיוחד עוד עשוי להיחתך
         el('span.nav-name', { text: p.name, title: p.name }),
         el('span.count', { text: `${p.tasksDone}/${p.tasksTotal}` }),
-        pinButton(p),
-        moreButton(p)
+        pinButton(p)
       ]);
       attachLongPress(node, p);
       return node;
