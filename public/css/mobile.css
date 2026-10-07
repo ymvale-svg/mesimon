@@ -296,7 +296,15 @@
    * הפרויקטים, אבל אישור המחיקה שנפתח ממנו חייב לכסות אותו.
    */
   .proj-sheet-veil { z-index: 70; }
+  /*
+   * רקע אחד ולא שניים. המגירה התחתונה נפתחת מעל המגירה הצדדית, ושני
+   * הרקעים הכהים מצטברים (‎.42‎ מתחת ל-‎.45‎ ≈ ‎.68‎) — כהה בהרבה מכל מגירה
+   * אחרת במערכת. הרקע של המגירה הצדדית מתעמעם כל עוד התפריט פתוח.
+   */
+  body:has(.proj-sheet-veil) .sidebar-veil { opacity: 0; }
   .proj-sheet { padding-top: 10px; }
+  /* בטאבלט מגירה ברוחב 768 פיקסלים היא שורות ארוכות וריקות — נשארת קריאה */
+  .proj-sheet { max-width: 520px; margin-inline: auto; border-radius: 16px 16px 0 0; }
   .proj-sheet .proj-pop-head {
     border-bottom: 1px solid var(--border); margin-bottom: 6px;
     padding: 0 2px 10px; font-size: 15px; color: var(--text);

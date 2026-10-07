@@ -1574,7 +1574,12 @@ const App = (() => {
     if (!phone) setTimeout(() => document.addEventListener('mousedown', onOutside), 0);
     document.addEventListener('keydown', onKey);
     closeProjectMenu = close;
-    shell.querySelector('button')?.focus(); // כניסה ישירה מהמקלדת, בלי לדלג על התפריט
+    /*
+     * מיקוד רק במחשב. במגירה התחתונה הוא מצייר טבעת מיקוד על הפריט הראשון,
+     * וזה נקרא כאילו הוא כבר נבחר; ב-iOS מיקוד יזום לתוך צומת ‎fixed‎ שזה
+     * עתה נוסף, בזמן שהאצבע עוד על המסך, גם מקפיץ את הגלילה.
+     */
+    if (!phone) shell.querySelector('button')?.focus();
   }
 
   /**
@@ -1729,8 +1734,18 @@ const App = (() => {
       const node = el(`button.nav-item${state.route.name === 'board' && state.route.params.projectId === p.id ? '.active' : ''}${p.parentProjectId ? '.is-subproject' : ''}`, {
         title: p.parentProjectName ? `${p.parentProjectName} ← ${p.name}` : p.name,
         onclick: () => navigate('board', { projectId: p.id }),
-        // הקלקה ימנית פותחת את תפריט הפעולות במקום את תפריט הדפדפן
-        oncontextmenu: (e) => { e.preventDefault(); openProjectMenu(p, e, e.currentTarget); }
+        /*
+         * הקלקה ימנית פותחת את תפריט הפעולות במקום את תפריט הדפדפן.
+         *
+         * באנדרואיד הלחיצה הארוכה יורה גם ‎contextmenu‎, מילישניות אחרי שהטיימר
+         * שלנו כבר פתח את המגירה — ובלי הבדיקה הזו היא הייתה נסגרת ונבנית
+         * מחדש באמצע ההנפשה.
+         */
+        oncontextmenu: (e) => {
+          e.preventDefault();
+          if (closeProjectMenu) return;
+          openProjectMenu(p, e, e.currentTarget);
+        }
       }, [
         // הלוגו כשיש, ואחרת נקודה בצבע הפרויקט — אותו סימן שבשורות המשימות שלו
         el('span.ico', {}, [
