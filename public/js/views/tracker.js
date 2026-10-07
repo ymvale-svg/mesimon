@@ -210,12 +210,46 @@ const TrackerView = (() => {
    * בורר קטן שנפתח מהנקודה. מוצמד למקום הלחיצה ולא במרכז המסך: בטבלה ארוכה
    * חלון שנפתח במרכז מנתק את הבחירה מהשורה שעליה מדובר.
    */
-  function openStatusPicker(anchor, task, options) {
-    document.getElementById('track-pop')?.remove();
+  /*
+   * הסוגר של הבורר הצף הפתוח, אם יש אחד.
+   *
+   * עד כה כל פתיחה הסירה את הצומת הקודם ב-‎remove()‎ ותו לא, והמאזין שלו על
+   * ה-document נשאר רשום לנצח — אחד נוסף בכל פתיחה. מכאן ואילך הסגירה עוברת
+   * דרך ‎dismiss()‎, שמפרק גם את המאזין.
+   */
+  let closePop = null;
+
+  /**
+   * הצמדת בורר צף לעוגן, כולל סגירה בלחיצה בחוץ. משותף לבורר הסטטוסים
+   * ולבורר העמודות — שניהם עשו את אותו דבר, ושניהם דלפו באותו אופן.
+   */
+  function anchoredPop(pop, anchor) {
+    document.body.appendChild(pop);
+    // מוצמד מתחת לעוגן, ונדחק פנימה אם הוא חורג מהמסך
     const box = anchor.getBoundingClientRect();
+    pop.style.top = `${Math.min(box.bottom + 4, window.innerHeight - pop.offsetHeight - 8)}px`;
+    pop.style.left = `${Math.max(8, Math.min(box.left, window.innerWidth - pop.offsetWidth - 8))}px`;
+
+    const dismiss = () => {
+      if (closePop === dismiss) closePop = null;
+      pop.remove();
+      document.removeEventListener('mousedown', onOutside);
+    };
+    const onOutside = (ev) => {
+      if (pop.contains(ev.target) || ev.target === anchor) return;
+      dismiss();
+    };
+    setTimeout(() => document.addEventListener('mousedown', onOutside), 0);
+    closePop = dismiss;
+    return dismiss;
+  }
+
+  function openStatusPicker(anchor, task, options) {
+    closePop?.();
+    let dismiss = () => {};
 
     const choose = async (id) => {
-      pop.remove();
+      dismiss();
       await patch(task.id, { trackStatusId: id }, { redraw: true });
     };
 
@@ -235,18 +269,7 @@ const TrackerView = (() => {
         : null
     ]);
 
-    document.body.appendChild(pop);
-    // מוצמד מתחת לנקודה, ונדחק פנימה אם הוא חורג מהמסך
-    const w = pop.offsetWidth;
-    pop.style.top = `${Math.min(box.bottom + 4, window.innerHeight - pop.offsetHeight - 8)}px`;
-    pop.style.left = `${Math.max(8, Math.min(box.left, window.innerWidth - w - 8))}px`;
-
-    const close = (ev) => {
-      if (pop.contains(ev.target) || ev.target === anchor) return;
-      pop.remove();
-      document.removeEventListener('mousedown', close);
-    };
-    setTimeout(() => document.addEventListener('mousedown', close), 0);
+    dismiss = anchoredPop(pop, anchor);
   }
 
   function assigneeCell(sub) {
@@ -864,7 +887,7 @@ const TrackerView = (() => {
    * שינוי, כדי שהסדר שבו יראה בדיוק את מה שקרה בטבלה.
    */
   function openColumnPicker(anchor) {
-    document.getElementById('col-pop')?.remove();
+    closePop?.();
     const hidden = new Set(colPref().hidden ?? []);
     // טור הפעולות אינו נבחר ואינו מוזז — הוא חייב להישאר בקצה
     const list = orderedColumns().filter((c) => !c.fixed);
@@ -906,30 +929,20 @@ const TrackerView = (() => {
       hasWidths()
         ? el('button.btn.btn-sm.col-reset', {
             // ‎{}‎ ולא ‎null‎: saveColumns עושה spread, ו-null היה נשמר כמפתח
-            onclick: () => { pop.remove(); saveColumns({ widths: {} }); }
+            onclick: () => { closePop?.(); saveColumns({ widths: {} }); }
           }, ['איפוס רוחב העמודות'])
         : null,
       el('button.btn.btn-sm.col-reset', {
         onclick: () => {
           // ‎null‎ מוחק את ההעדפה בשרת ומחזיר את ברירת המחדל, ולא שומר אובייקט ריק
           App.setPref('trackerColumns', null);
-          pop.remove();
+          closePop?.();
           draw();
         }
       }, ['איפוס לברירת המחדל'])
     ]);
 
-    document.body.appendChild(pop);
-    const box = anchor.getBoundingClientRect();
-    pop.style.top = `${Math.min(box.bottom + 4, window.innerHeight - pop.offsetHeight - 8)}px`;
-    pop.style.left = `${Math.max(8, Math.min(box.left, window.innerWidth - pop.offsetWidth - 8))}px`;
-
-    const close = (ev) => {
-      if (pop.contains(ev.target) || ev.target === anchor) return;
-      pop.remove();
-      document.removeEventListener('mousedown', close);
-    };
-    setTimeout(() => document.addEventListener('mousedown', close), 0);
+    anchoredPop(pop, anchor);
   }
 
   /**

@@ -97,6 +97,9 @@ const App = (() => {
     if (isPhone() === lastPhone) return;
     lastPhone = isPhone();
     closeDrawer();
+    // התפריט הצף והמגירה התחתונה הם שתי צורות שונות של אותו דבר, ואין מה
+    // להמיר ביניהן באמצע — נסגר, והמשתמש יפתח מחדש בפריסה החדשה
+    closeProjectMenu?.();
     if (state.actor) render();
   };
   PHONE_QUERY.addEventListener('change', onViewportChange);
@@ -1334,7 +1337,9 @@ const App = (() => {
     try {
       await API.pinProject(p.id, !p.pinned);
       await reloadReference();
-      render(); // התפריט נבנה מחדש ומסדר את הנעוצים בראש הרשימה
+      // רק המסגרת: הנעיצה משנה את סדר התפריט ולא את תוכן המסך, ו-‎render()‎
+      // מלא היה בונה מחדש גם את המסך שמתחת ומאבד גלילה ומיקוד בלי סיבה
+      refreshChrome();
       return true;
     } catch (err) {
       UI.error(err);
@@ -1358,6 +1363,90 @@ const App = (() => {
   }
 
   /**
+   * כפתור הפעולות של הפרויקט. ב-CSS הוא מוצג רק בפריסת נייד.
+   *
+   * במחשב ההקלקה הימנית מספיקה, ובטלפון אין כזו. לחיצה ארוכה לבדה אינה
+   * תשובה: היא בלתי נראית, ומקורא מסך היא נחסמת לגמרי — VoiceOver ו-TalkBack
+   * בולעים את המחווה לעצמם. לכן הכפתור הוא הדרך הראשית בטלפון, והלחיצה
+   * הארוכה היא קיצור דרך שמתווסף עליה.
+   */
+  function moreButton(p) {
+    const btn = el('button.nav-more', {
+      type: 'button',
+      'aria-haspopup': 'dialog',
+      'aria-label': `פעולות בפרויקט ${p.name}`,
+      title: 'פעולות בפרויקט'
+    }, ['⋯']);
+
+    btn.addEventListener('click', (e) => {
+      // השורה עצמה מנווטת, ולכן חייבים לעצור את בעבוע האירוע
+      e.stopPropagation();
+      e.preventDefault();
+      openProjectMenu(p, null, btn.closest('.nav-item'));
+    });
+    return btn;
+  }
+
+  const LONG_PRESS_MS = 500;
+  const LONG_PRESS_SLOP = 10; // פיקסלים — מעבר לזה זו גלילה, לא לחיצה ארוכה
+
+  /**
+   * לחיצה ארוכה על שורת פרויקט, כמקבילה למגע של ההקלקה הימנית.
+   *
+   * ‎contextmenu‎ אינו מחליף אותה: בדפדפני מגע הוא אינו נורה באופן אחיד, וה-CSS
+   * שמשתיק את בועת ההעתקה של iOS הוא גם זה שמונע ממנו להיירות.
+   *
+   * שלוש מלכודות שחייבות טיפול, אחרת התוצאה גרועה מכלום:
+   *  · המגירה נגללת. בלי סף תזוזה וביטול ב-‎touchcancel‎ (שאותו iOS שולח
+   *    כשהוא לוקח את המחווה לגלילה) כל גלילה הייתה פותחת את התפריט.
+   *  · בשחרור האצבע הדפדפן מסנתז לחיצה, והיא הייתה מנווטת ללוח הפרויקט
+   *    מתחת לתפריט שזה עתה נפתח. נבלעת בדיוק אחת, בשלב הלכידה.
+   *  · כפתורי הנעיצה והפעולות יושבים בתוך השורה; לחיצה ארוכה עליהם אינה
+   *    לחיצה ארוכה על השורה.
+   */
+  function attachLongPress(node, p) {
+    let timer = null;
+    let sx = 0, sy = 0;
+
+    const cancel = () => { clearTimeout(timer); timer = null; };
+
+    node.addEventListener('touchstart', (e) => {
+      if (e.touches.length !== 1) return cancel();
+      if (e.target.closest('.nav-pin, .nav-more')) return; // לכפתורים יש פעולה משלהם
+      sx = e.touches[0].clientX;
+      sy = e.touches[0].clientY;
+      timer = setTimeout(() => {
+        timer = null;
+        navigator.vibrate?.(10); // נכשל בשקט היכן שאינו נתמך, ובראשם iOS
+        openProjectMenu(p, null, node);
+        killNextClick();
+      }, LONG_PRESS_MS);
+    }, { passive: true });
+
+    node.addEventListener('touchmove', (e) => {
+      if (!timer) return;
+      const t = e.touches[0];
+      if (Math.hypot(t.clientX - sx, t.clientY - sy) > LONG_PRESS_SLOP) cancel();
+    }, { passive: true });
+
+    node.addEventListener('touchend', cancel);
+    node.addEventListener('touchcancel', cancel);
+  }
+
+  /**
+   * בליעת הלחיצה המסונתזת שתגיע בשחרור האצבע.
+   *
+   * הפוגה קצובה ולא ‎once‎ לבדו: כשהמחווה מסתיימת בלי לחיצה מסונתזת — וזה
+   * קורה ב-iOS אחרי גלילה או בועת העתקה — מאזין ‎once‎ שנשאר דרוך היה בולע
+   * את הלחיצה האמיתית *הבאה* של המשתמש, בכל מקום במערכת.
+   */
+  function killNextClick() {
+    const kill = (e) => { e.stopPropagation(); e.preventDefault(); };
+    document.addEventListener('click', kill, { capture: true, once: true });
+    setTimeout(() => document.removeEventListener('click', kill, true), 700);
+  }
+
+  /**
    * תפריט הפעולות של פרויקט, בהקלקה ימנית על שורתו בתפריט הצד.
    *
    * מוצגות רק הפעולות שהמשתמש רשאי לבצע בפועל: ‎canEdit‎ ו-‎canDelete‎ מחושבים
@@ -1367,18 +1456,46 @@ const App = (() => {
    *
    * האירוע ‎contextmenu‎ נורה גם ממקש התפריט ומ-Shift+F10, ולכן התפריט נגיש
    * גם מהמקלדת; כשאין מיקום עכבר הוא נצמד לשורה עצמה.
+   *
+   * בטלפון אותן פעולות בדיוק, במגירה תחתונה — ראה את בניית ‎shell‎ למטה.
    */
+  // הסוגר של התפריט הפתוח, אם יש אחד. מחזיק אותו כדי שאפשר יהיה לסגור
+  // אותו *כראוי* — עם המאזינים — מפתיחה חדשה או ממעבר בין פריסות
+  let closeProjectMenu = null;
+
   function openProjectMenu(p, ev, anchor) {
-    document.querySelector('.proj-pop')?.remove();
+    /*
+     * סגירה דרך ‎close()‎ של המופע הקודם ולא ‎remove()‎ על הצומת: הסרת הצומת
+     * לבדה משאירה את מאזיני ה-document של אותו מופע רשומים לנצח, וכל פתיחה
+     * נוספת מוסיפה עוד זוג. אחרי כמה פתיחות כל לחיצה במסמך מריצה שרשרת של
+     * סוגרים מתים.
+     */
+    closeProjectMenu?.();
+
+    const phone = isPhone();
 
     const close = () => {
-      pop.remove();
+      if (closeProjectMenu === close) closeProjectMenu = null;
+      shell.remove();
       document.removeEventListener('mousedown', onOutside);
       document.removeEventListener('keydown', onKey);
-      anchor.focus();
+      // ‎focus()‎ על צומת שנותק הוא no-op שקט, ולכן רק כשהשורה עדיין במסמך
+      if (anchor.isConnected) anchor.focus();
     };
-    // כל פעולה סוגרת קודם ורק אז פועלת — דיאלוג שנפתח מאחורי תפריט פתוח
-    const act = (fn) => () => { close(); fn(); };
+    /*
+     * כל פעולה סוגרת קודם ורק אז פועלת — דיאלוג שנפתח מאחורי תפריט פתוח.
+     *
+     * ‎modal‎ מבדיל בין שני סוגי פעולות, ורק בטלפון: פעולה שפותחת חלון מלא
+     * מסך סוגרת גם את המגירה, אחרת היא נשארת פתוחה מתחתיו כשכבה שלישית
+     * שאי אפשר לראות ואי אפשר לסגור. לעומת זאת נעיצה ושינוי צבע משנים את
+     * השורה במקום — והמגירה נשארת פתוחה כדי שאפשר יהיה לראות את התוצאה
+     * ולהמשיך לפרויקט הבא.
+     */
+    const act = (fn, { modal = false } = {}) => () => {
+      close();
+      if (phone && modal) closeDrawer();
+      fn();
+    };
 
     const swatch = (c) => el('button.proj-swatch', {
       type: 'button',
@@ -1396,16 +1513,16 @@ const App = (() => {
       })
     }, p.colorChosen === c ? ['✓'] : []);
 
-    const pop = el('div.track-pop.proj-pop', { role: 'menu' }, [
-      el('div.proj-pop-head', { text: p.name, title: p.name }),
+    // תוכן אחד לשני המקרים — מה שמשתנה בין מחשב לטלפון הוא המעטפת, לא הפעולות
+    const items = [
       may('create_task')
         ? el('button.track-opt', {
-            onclick: act(() => BoardView.openTaskDialog(null, { projectId: p.id }))
+            onclick: act(() => BoardView.openTaskDialog(null, { projectId: p.id }), { modal: true })
           }, ['＋ משימה חדשה בפרויקט'])
         : null,
       p.canEdit
         ? el('button.track-opt', {
-            onclick: act(() => BoardView.openProjectDialog(p))
+            onclick: act(() => BoardView.openProjectDialog(p), { modal: true })
           }, ['✎ עריכת פרויקט'])
         : null,
       el('button.track-opt', { onclick: act(() => togglePin(p)) },
@@ -1418,29 +1535,70 @@ const App = (() => {
         : null,
       p.canDelete
         ? el('button.track-opt.is-danger', {
-            onclick: act(() => BoardView.deleteProjectFlow(p))
+            onclick: act(() => BoardView.deleteProjectFlow(p), { modal: true })
           }, ['🗑 מחיקת פרויקט'])
         : null
-    ]);
-
-    document.body.appendChild(pop);
+    ];
 
     /*
-     * RTL: תפריט הקשר נפתח שמאלה מנקודת הלחיצה, כמו בכל יישום בעברית. בלי זה
-     * הוא היה נפתח מהתפריט לתוך התוכן ומכסה אותו.
+     * בטלפון — מגירה תחתונה, ולא תפריט ממוקם.
+     *
+     * תפריט של 232 פיקסלים שנפתח שמאלה מנקודת נגיעה בתוך מגירה שצמודה לימין
+     * נדחק אל הקצה הנגדי של המסך ומתנתק מהשורה שפתחה אותו. מלבד זאת ‎60vh‎
+     * ו-‎window.innerHeight‎ מודדים בנייד את החלון בלי שורת הכתובת.
+     *
+     * המבנה ‎m-sheet-veil / m-sheet / m-grab‎ כבר קיים ומשמש את מגירת הסינון
+     * בטלפון, והוא גם פותר את הסגירה: הרקע המלא בולע את הנגיעה ואין צורך
+     * במאזין על ה-document — שבמגע ממילא לא עבד, כי ה-‎mousedown‎ המסונתז
+     * מגיע רק כשהאצבע מתרוממת וסגר את המגירה ברגע השחרור.
      */
-    const rect = anchor.getBoundingClientRect();
-    const px = ev.clientX || rect.left;
-    const py = ev.clientY || rect.bottom;
-    const w = pop.offsetWidth;
-    pop.style.left = `${Math.max(8, Math.min(px - w, window.innerWidth - w - 8))}px`;
-    pop.style.top = `${Math.max(8, Math.min(py + 2, window.innerHeight - pop.offsetHeight - 8))}px`;
+    const shell = phone
+      ? el('div.m-sheet-veil.proj-sheet-veil', {}, [
+          el('div.m-sheet.proj-sheet', {
+            role: 'dialog', 'aria-modal': 'true', 'aria-label': `פעולות בפרויקט ${p.name}`
+          }, [
+            el('div.m-grab'),
+            el('div.proj-pop-head', { text: p.name, title: p.name }),
+            ...items,
+            el('button.track-opt.is-cancel', { onclick: () => close() }, ['ביטול'])
+          ])
+        ])
+      : el('div.track-pop.proj-pop', { role: 'menu' }, [
+          el('div.proj-pop-head', { text: p.name, title: p.name }),
+          ...items
+        ]);
 
-    const onOutside = (e) => { if (!pop.contains(e.target)) close(); };
+    document.body.appendChild(shell);
+
+    if (phone) {
+      /*
+       * הנגיעה שפתחה את המגירה עדיין בעיצומה: הלחיצה המסונתזת שתגיע בשחרור
+       * האצבע תנחת על הרקע שזה עתה נפרש תחתיה ותסגור אותו מיד. לכן הסוגר
+       * מחובר רק אחרי שהמחווה הנוכחית הסתיימה.
+       */
+      setTimeout(() => {
+        shell.addEventListener('click', (e) => { if (e.target === shell) close(); });
+      }, 120);
+    } else {
+      /*
+       * RTL: תפריט הקשר נפתח שמאלה מנקודת הלחיצה, כמו בכל יישום בעברית. בלי
+       * זה הוא היה נפתח מהתפריט לתוך התוכן ומכסה אותו.
+       */
+      const rect = anchor.getBoundingClientRect();
+      const px = ev?.clientX || rect.left;
+      const py = ev?.clientY || rect.bottom;
+      const w = shell.offsetWidth;
+      shell.style.left = `${Math.max(8, Math.min(px - w, window.innerWidth - w - 8))}px`;
+      shell.style.top = `${Math.max(8, Math.min(py + 2, window.innerHeight - shell.offsetHeight - 8))}px`;
+    }
+
+    const onOutside = (e) => { if (!shell.contains(e.target)) close(); };
     const onKey = (e) => { if (e.key === 'Escape') { e.preventDefault(); close(); } };
-    setTimeout(() => document.addEventListener('mousedown', onOutside), 0);
+    // ברקע מלא אין צורך במאזין על המסמך, והוא גם לא עבד נכון במגע
+    if (!phone) setTimeout(() => document.addEventListener('mousedown', onOutside), 0);
     document.addEventListener('keydown', onKey);
-    pop.querySelector('button')?.focus(); // כניסה ישירה מהמקלדת, בלי לדלג על התפריט
+    closeProjectMenu = close;
+    shell.querySelector('button')?.focus(); // כניסה ישירה מהמקלדת, בלי לדלג על התפריט
   }
 
   /**
@@ -1495,6 +1653,13 @@ const App = (() => {
    */
   function makeReorderable(entries, onOrder) {
     if (entries.length < 2) return;
+    /*
+     * לא בטלפון. אין כאן שום מימוש למגע — רק ‎dragstart/dragover/drop‎ — ולכן
+     * ‎draggable‎ לא קנה שם דבר מלכתחילה, אבל כן גזל: בדפדפני מגע לחיצה ארוכה
+     * על אלמנט ‎draggable‎ מתחילה גרירה מקורית ובולעת את המחווה, כלומר היא
+     * הייתה מתחרה בדיוק בלחיצה הארוכה שפותחת את תפריט הפעולות.
+     */
+    if (isPhone()) return;
     let dragged = null;
 
     for (const { p, node } of entries) {
@@ -1584,8 +1749,8 @@ const App = (() => {
     if (may('view_vendor_boards')) add('vendorBoards');
 
     // הבלוק הזה כולו לא נבנה לספק — מסלול הספק חזר כבר למעלה עם רשימת הניווט שלו
-    const projectItem = (p) =>
-      el(`button.nav-item${state.route.name === 'board' && state.route.params.projectId === p.id ? '.active' : ''}${p.parentProjectId ? '.is-subproject' : ''}`, {
+    const projectItem = (p) => {
+      const node = el(`button.nav-item${state.route.name === 'board' && state.route.params.projectId === p.id ? '.active' : ''}${p.parentProjectId ? '.is-subproject' : ''}`, {
         title: p.parentProjectName ? `${p.parentProjectName} ← ${p.name}` : p.name,
         onclick: () => navigate('board', { projectId: p.id }),
         // הקלקה ימנית פותחת את תפריט הפעולות במקום את תפריט הדפדפן
@@ -1603,8 +1768,12 @@ const App = (() => {
         // ‎title‎ מלא, כי גם בשתי שורות שם ארוך במיוחד עוד עשוי להיחתך
         el('span.nav-name', { text: p.name, title: p.name }),
         el('span.count', { text: `${p.tasksDone}/${p.tasksTotal}` }),
-        pinButton(p)
+        pinButton(p),
+        moreButton(p)
       ]);
+      attachLongPress(node, p);
+      return node;
+    };
 
     /**
      * השרת כבר מחזיר את הנעוצים בראש, אך את החלוקה מחשבים כאן מחדש כדי שהחוצץ
@@ -1890,17 +2059,28 @@ const App = (() => {
   }
 
   /** סגירת מגירת הניווט. נקראת גם בניווט, גם בלחיצה על הרקע וגם ב-Escape. */
+  /**
+   * מצב המגירה חי ב-‎state‎ ולא רק כמחלקה על ה-DOM.
+   *
+   * כמחלקה בלבד הוא לא שרד בנייה מחדש: ‎sidebar()‎ מחזיר אלמנט חדש בלי
+   * ‎.open‎, ולכן כל פעולה שקראה ל-‎render()‎ סגרה את המגירה תחת ידיו של
+   * המשתמש — ו-‎refreshChrome()‎ היה גרוע יותר, כי הוא מחליף את התפריט אך לא
+   * את הרקע הכהה שמעליו, ומשאיר מסך מוחשך בלי מגירה מאחוריו. זה בדיוק מה
+   * שקורה כשמשנים צבע פרויקט או נועצים אותו מתוך המגירה עצמה.
+   */
+  function applyDrawer() {
+    document.getElementById('sidebar')?.classList.toggle('open', !!state.drawerOpen);
+    document.querySelector('.sidebar-veil')?.classList.toggle('open', !!state.drawerOpen);
+  }
+
   function closeDrawer() {
-    document.getElementById('sidebar')?.classList.remove('open');
-    document.querySelector('.sidebar-veil')?.classList.remove('open');
+    state.drawerOpen = false;
+    applyDrawer();
   }
 
   function toggleDrawer() {
-    const bar = document.getElementById('sidebar');
-    const veil = document.querySelector('.sidebar-veil');
-    const open = !bar?.classList.contains('open');
-    bar?.classList.toggle('open', open);
-    veil?.classList.toggle('open', open);
+    state.drawerOpen = !state.drawerOpen;
+    applyDrawer();
   }
 
   /**
@@ -1961,6 +2141,7 @@ const App = (() => {
         : null
     ]));
     UI.refitLogos(); // הסמל נבנה מחדש בכל רינדור — מיישרים את הכיתוב לרוחב השם
+    applyDrawer();   // וגם כאן: בנייה מחדש אינה אמורה לסגור מגירה פתוחה
 
     const route = ROUTES[state.route.name] ?? ROUTES.home;
     /**
@@ -1991,6 +2172,7 @@ const App = (() => {
     shell.querySelector('#sidebar')?.replaceWith(sidebar());
     // מצב הנעיצה יושב על השלד — הוא מה שקובע כמה מקום התוכן מפנה לתפריט
     shell.classList.toggle('rail-pinned', !isPhone() && sidebarPinned());
+    applyDrawer(); // התפריט נבנה מחדש — מחזירים לו את מצב הפתיחה שהיה
     UI.refitLogos(); // הסמל נבנה מחדש — מיישרים שוב את הכיתוב לרוחב השם
   }
 

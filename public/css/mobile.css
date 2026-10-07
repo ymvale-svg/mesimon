@@ -87,6 +87,30 @@
   /* כפתור הנעיצה היה 26 פיקסלים — לא נלחץ באצבע, ובטלפון הוא תמיד גלוי */
   .sidebar .nav-pin { width: 40px; height: 40px; opacity: .8; visibility: visible; }
 
+  /*
+   * כפתור פעולות הפרויקט — הדרך הראשית לתפריט בטלפון.
+   *
+   * המונה ‎0/4‎ מפנה לו את מקומו ואינו נעלם מהמערכת: הוא מופיע ממילא בראש
+   * הלוח שהשורה מובילה אליו. בלעדיו השם היה מתכווץ לכ-60 פיקסלים, כלומר
+   * שתי מילים חתוכות — וזיהוי הפרויקט הוא כל תפקידה של השורה.
+   */
+  .sidebar .nav-item .count { display: none; }
+  .sidebar .nav-more {
+    display: grid; place-items: center; flex: none;
+    width: 40px; height: 40px; padding: 0; border: 0; border-radius: 8px;
+    background: none; cursor: pointer; color: var(--text-soft);
+    font-size: 19px; line-height: 1;
+  }
+  .sidebar .nav-more:active { background: rgba(15, 23, 42, .1); }
+  /*
+   * הלוגו אינו יעד מגע. לחיצה ארוכה על תמונה מעלה את תפריט השמירה של
+   * הדפדפן ובולעת את המחווה — וזה היה נראה כבאג מקרי, כי רק לחלק
+   * מהפרויקטים יש לוגו. הוא דקורטיבי (‎alt=""‎) והשורה כולה היא היעד.
+   */
+  .sidebar .nav-item .nav-logo {
+    -webkit-touch-callout: none; -webkit-user-drag: none; pointer-events: none;
+  }
+
   /* ---------------------------------------------------------------- ניווט תחתון */
 
   .tabbar {
@@ -167,7 +191,7 @@
   }
   @keyframes sheet-up { from { transform: translateY(100%); } }
   @media (prefers-reduced-motion: reduce) {
-    .modal { animation: none; }
+    .modal, .m-sheet { animation: none; }
   }
   .modal-head { padding: 12px 14px; }
   .modal-body { padding: 14px; }
@@ -277,6 +301,43 @@
     max-height: 82dvh; overflow-y: auto;
   }
   .m-grab { width: 38px; height: 4px; border-radius: 3px; background: var(--border-strong); margin: 0 auto 10px; }
+  /* ההנפשה הייתה מחוברת ל-‎.modal‎ בלבד; המגירה התחתונה נגלשת באותה שפה */
+  .m-sheet { animation: sheet-up .24s cubic-bezier(.2, .8, .2, 1); }
+
+  /* ---- מגירת הפעולות של פרויקט ---- */
+
+  /*
+   * מעל המגירה הצדדית (60) ומתחת למודל (100): התפריט נפתח מעל רשימת
+   * הפרויקטים, אבל אישור המחיקה שנפתח ממנו חייב לכסות אותו.
+   */
+  .proj-sheet-veil { z-index: 70; }
+  .proj-sheet { padding-top: 10px; }
+  .proj-sheet .proj-pop-head {
+    border-bottom: 1px solid var(--border); margin-bottom: 6px;
+    padding: 0 2px 10px; font-size: 15px; color: var(--text);
+  }
+  /* ביטול נפרד בראש הטווח של האגודל — במחשב סוגרים בלחיצה בחוץ או ב-Escape */
+  .proj-sheet .track-opt.is-cancel {
+    justify-content: center; margin-top: 6px;
+    border-top: 1px solid var(--border); color: var(--text-soft);
+  }
+
+  /*
+   * מטרות מגע בתוך התפריט. חל גם על בורר הסטטוסים שבמסך הבקרה, שמשתמש
+   * באותן מחלקות ונגיש גם הוא מהטלפון — שם הן קטנות באותה מידה.
+   */
+  .track-opt { min-height: 46px; padding: 12px 14px; font-size: 15px; border-radius: 9px; }
+  .track-opt:active { background: var(--surface-2); }
+  .track-opt.is-danger:active { background: var(--danger-bg); }
+
+  /*
+   * שמונה מדגמי צבע ברוחב 20 פיקסלים אינם נלחצים באצבע. 36 נכנסים בשורה
+   * אחת גם במסך של 360 פיקסלים (‎8×36 + 7×4 = 316‎), והתווית עולה לשורה
+   * משלה כדי לא לגזול מהם רוחב.
+   */
+  .proj-pop-colors { flex-wrap: wrap; padding: 10px 2px 2px; }
+  .proj-pop-label { width: 100%; margin: 0 0 6px; }
+  .proj-swatch { width: 36px; height: 36px; border-radius: 9px; font-size: 15px; }
 
   /*
    * סעיף 3 — בלוח בטלפון: הסטטוס והעדיפות מצטמצמים לנקודת צבע בלבד, בלי
