@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<title>MESIMON — הגדרת Gmail ו-AI</title>
+<style>
+  body { font-family: "Segoe UI", Arial, sans-serif; background: #f1f5f9; color: #0f172a;
+         line-height: 1.75; margin: 0; padding: 30px 20px; }
+  .page { max-width: 820px; margin: 0 auto; background: #fff; border-radius: 16px;
+          padding: 38px 46px; box-shadow: 0 4px 20px rgba(15,23,42,.08); }
+  h1 { font-size: 28px; margin: 0 0 4px; color: #115e59; }
+  .sub { color: #64748b; margin-bottom: 26px; }
+  h2 { font-size: 20px; margin: 34px 0 12px; padding-bottom: 7px; border-bottom: 2px solid #ccfbf1; }
+  ol > li { margin-bottom: 14px; }
+  code { background: #f1f5f9; padding: 2px 7px; border-radius: 5px;
+         font-family: Consolas, monospace; direction: ltr; display: inline-block; }
+  .box { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px; padding: 12px 16px; margin: 10px 0; }
+  .warn { background: #fffbeb; border: 1px solid #fde68a; border-radius: 10px; padding: 13px 17px; margin: 16px 0; }
+  .ok   { background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 10px; padding: 13px 17px; margin: 16px 0; }
+  .stop { background: #fef2f2; border: 1px solid #fecaca; border-radius: 10px; padding: 13px 17px; margin: 16px 0; }
+  table { width: 100%; border-collapse: collapse; margin: 14px 0; }
+  th, td { text-align: right; padding: 9px 11px; border-bottom: 1px solid #e2e8f0; font-size: 14px; vertical-align: top; }
+  th { background: #f8fafc; font-size: 13px; color: #475569; }
+  .mono td:first-child { font-family: Consolas, monospace; direction: ltr; white-space: nowrap; }
+  @media print { body { background:#fff; padding:0 } .page { box-shadow:none } }
+</style>
+</head>
+<body>
+<div class="page">
+
+<h1>הגדרת Gmail ועוזר ה-AI</h1>
+<div class="sub">כ-15 דקות · פעם אחת בלבד · מניח שהכניסה עם Google כבר מוגדרת</div>
+
+<div class="ok">
+  <b>מה זה נותן:</b> כל עובד מחבר את תיבת ה-Gmail שלו פעם אחת, ומשימון:
+  <ul>
+    <li>סורק כל בוקר את המיילים שלא נקראו ומציע מהם משימות — עם צ'קליסט, יעד ושיוך לעמיתים;</li>
+    <li>מזהה תשובות לבקשות AI גם כשהנמען ענה ישירות לעובד;</li>
+    <li>עוצר תזכורות כשהעובד כתב לנמען בעצמו — ושואל מה המצב.</li>
+  </ul>
+  <b>הרשאה:</b> קריאה בלבד (<code>gmail.readonly</code>). משימון לא שולח, לא מוחק ולא מסמן כנקרא.
+</div>
+
+<h2>1. מפתח ה-AI (Claude)</h2>
+<ol>
+  <li>נכנסים ל-<code>console.anthropic.com</code> ← API Keys ← Create Key.</li>
+  <li>ב-Render: השירות ← Environment ← מוסיפים <code>ANTHROPIC_API_KEY</code> עם המפתח.</li>
+  <li>מומלץ להוסיף גם <code>TOKEN_ENCRYPTION_KEY</code> — מחרוזת אקראית ארוכה כלשהי. בעזרתה
+      מוצפנים אסימוני ה-Gmail במסד הנתונים. בלעדיה נוצר קובץ מפתח ליד מסד הנתונים.</li>
+</ol>
+<div class="warn"><b>אל תחליפו את <code>TOKEN_ENCRYPTION_KEY</code> אחרי שעובדים חיברו את התיבות</b> —
+  החיבורים הקיימים יפסיקו לעבוד, וכל אחד יצטרך לחבר מחדש.</div>
+
+<h2>2. הפעלת Gmail API ב-Google Cloud</h2>
+<p>באותו פרויקט שבו הוגדרה הכניסה עם Google:</p>
+<ol>
+  <li><code>console.cloud.google.com</code> ← APIs &amp; Services ← Library ← מחפשים <b>Gmail API</b> ← Enable.</li>
+  <li>APIs &amp; Services ← <b>OAuth consent screen</b>:
+    <ul>
+      <li><b>User type: Internal</b>. זה החשוב ביותר — רק משתמשי <code>eshelltd.co.il</code> יוכלו לאשר,
+          ו-Google לא ידרוש אימות וביקורת אבטחה (שאחרת נמשכים שבועות).</li>
+      <li>Data access / Scopes ← Add or remove scopes ← מסמנים <code>.../auth/gmail.readonly</code> ← Save.</li>
+    </ul>
+  </li>
+  <li>אין צורך בכתובת חזרה נוספת — החיבור משתמש באותה כתובת של הכניסה
+      (<code>/api/auth/google/callback</code>).</li>
+</ol>
+
+<h2>3. הגדרות במסך הניהול</h2>
+<table>
+  <tr><th>הגדרה</th><th>ברירת מחדל</th><th>מה היא קובעת</th></tr>
+  <tr><td>סריקת מיילים: פעילה</td><td>כן</td><td>כיבוי עוצר את כל הסריקות בארגון</td></tr>
+  <tr><td>שעת ריצת הבוקר</td><td>07:00</td><td>סריקה לכל מי שחיבר תיבה, והודעת "היום יוצאים" על הנדנודים של היום</td></tr>
+  <tr><td>תקרה יומית למשתמש</td><td>100</td><td>כל מייל הוא קריאה ל-AI. מה שמעבר לתקרה נסרק למחרת</td></tr>
+  <tr><td>כל תזכורת באישור</td><td>לא</td><td>ברירת המחדל לכולם; כל משתמש וכל משימה משנים לעצמם</td></tr>
+  <tr><td>תזכורות לעובד לפני עצירה</td><td>3</td><td>במשימת AI שהנמען שלה עובד בארגון</td></tr>
+</table>
+
+<h2>4. מה כל עובד עושה</h2>
+<ol>
+  <li>"החשבון שלי" ← <b>📧 Gmail ועוזר ה-AI</b> ← <b>חיבור Gmail</b>.</li>
+  <li>מאשרים ב-Google את הרשאת הקריאה (לסמן את התיבה אם מופיעה).</li>
+  <li>חוזרים למשימון, בוחרים טווח לסריקה ראשונה — וההצעות מופיעות בדף הבית תחת <b>✨ ממתין לאישורך</b>.</li>
+</ol>
+
+<h2>מה יוצא לבד ומה באישור</h2>
+<table>
+  <tr><th>מה</th><th>איך</th></tr>
+  <tr><td>משימה מהמייל — כולה שלי</td><td>הצעה לאישור. לבד רק משולח שסומן "צור ישר", או אם המשתמש ביקש "צור בלי אישור" — ותמיד עם ביטול</td></tr>
+  <tr><td>משימה מהמייל שמערבת עמית</td><td>תמיד באישור</td></tr>
+  <tr><td>פנייה ראשונה של משימת AI</td><td>תמיד באישור</td></tr>
+  <tr><td>תזכורות ותודה</td><td>לבד, לפי המדיניות — וניתנות לעצירה ב"היום יוצאים"</td></tr>
+  <tr><td>תשובה עניינית לנמען</td><td>טיוטה לאישור</td></tr>
+  <tr><td>פנייה חדשה שנולדה ממייל שהגיע</td><td>תמיד באישור — מייל נכנס לעולם אינו גורם לשליחה</td></tr>
+</table>
+
+<h2>תקלות נפוצות</h2>
+<table>
+  <tr><th>מה רואים</th><th>מה עושים</th></tr>
+  <tr><td>"לא אושרה הרשאת קריאת הדואר"</td><td>במסך של Google לא סומנה התיבה. מחברים שוב ומסמנים</td></tr>
+  <tr><td>"Access blocked" / "This app is blocked"</td><td>מסך ההסכמה אינו Internal, או ש-Gmail API לא הופעל (שלב 2)</td></tr>
+  <tr><td>"החיבור ל-Gmail בוטל"</td><td>העובד ביטל את ההרשאה בחשבון Google, או שהוחלף מפתח ההצפנה. מחברים מחדש</td></tr>
+  <tr><td>הכפתור "חיבור Gmail" אינו פעיל</td><td>הכניסה עם Google אינה מוגדרת בשרת — ראו "הגדרת כניסה עם Google"</td></tr>
+</table>
+
+</div>
+</body>
+</html>

@@ -139,4 +139,4 @@ function matchAccount(profile) {
   throw new Error(`הכתובת ${email} אינה רשומה במערכת. יש לפנות למנהל המערכת כדי שיוסיף אותה.`);
 }
 
-module.exports = { isEnabled, authorizeUrl, exchangeCodeForProfile, matchAccount, consumeState, publicBase };
+module.exports = { isEnabled, authorizeUrl, exchangeCodeForProfile, matchAccount, consumeState, publicBase, redirectUri, CLIENT_ID, CLIENT_SECRET, TOKEN_ENDPOINT };

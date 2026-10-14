@@ -2250,3 +2250,34 @@ input[type="color"] { width: 46px; height: 30px; padding: 2px; cursor: pointer; 
 
 .tag-ai { background: #ede9fe; color: #5b21b6; }
 .tag-ai-attn { background: #7c3aed; color: #fff; }
+
+/* ---- עוזר ה-AI: "ממתין לאישורך", דיברתי איתו, ציר זמן ---- */
+.ai-event { font-size: 12px; color: var(--text-soft); text-align: center; padding: 2px 0; }
+.ai-msg-note { background: #fefce8; border: 1px dashed #facc15; justify-self: center; max-width: 96%; }
+.ai-count { background: #7c3aed; color: #fff; font-weight: 800; font-size: 11.5px; min-width: 20px; text-align: center; padding: 1px 7px; border-radius: 999px; }
+.ai-inbox .card-head { gap: 8px; }
+.ai-sec { margin-bottom: 12px; }
+.ai-sec:last-child { margin-bottom: 0; }
+.ai-sec-head { display: flex; align-items: center; gap: 6px; font-size: 13px; margin-bottom: 6px; }
+.ai-row { display: flex; gap: 10px; align-items: flex-start; padding: 9px 10px; border: 1px solid var(--border); border-radius: var(--radius); margin-bottom: 6px; background: var(--surface); }
+.ai-row-main { flex: 1; min-width: 0; cursor: pointer; font-size: 13.5px; display: grid; gap: 3px; }
+.ai-row-actions { display: flex; gap: 5px; flex-wrap: wrap; justify-content: flex-end; align-items: center; flex-shrink: 0; max-width: 55%; }
+.ai-sum { color: var(--text-soft); font-size: 13px; line-height: 1.5; }
+.ai-quote { white-space: pre-wrap; background: var(--surface-2); border-inline-start: 3px solid #c4b5fd; padding: 6px 9px; border-radius: 6px; margin-top: 4px; font-size: 13px; }
+.ai-chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.ai-chip { font-size: 11.5px; padding: 1px 8px; border-radius: 999px; background: #f1f5f9; color: var(--text-soft); }
+.ai-chip-warn { background: var(--warn-bg); color: #92400e; }
+.ai-chip-ai { background: #ede9fe; color: #5b21b6; }
+.ai-mini { padding: 6px 9px; font-size: 12.5px; margin: 2px 0; }
+.ai-scan-progress { font-size: 13px; color: #5b21b6; padding: 4px 2px 10px; display: flex; align-items: center; gap: 4px; }
+.spinner-sm { width: 13px; height: 13px; border: 2px solid #ddd6fe; border-top-color: #7c3aed; border-radius: 50%; display: inline-block; animation: ai-spin .8s linear infinite; }
+@keyframes ai-spin { to { transform: rotate(360deg); } }
+.ai-people { display: grid; gap: 6px; }
+.ai-person { display: flex; align-items: center; gap: 8px; font-size: 13.5px; }
+.ai-person select { width: auto; }
+.ai-pref { margin-bottom: 10px; }
+.ai-pref .mute-sm { margin-inline-start: 24px; }
+@media (max-width: 640px) {
+  .ai-row { flex-direction: column; }
+  .ai-row-actions { max-width: none; justify-content: flex-start; }
+}

@@ -52,7 +52,7 @@ const STATE_LABELS = {
  * פעולות שתלויות בקוד של נקודות הקצה (שמירת קובץ למשימה עם כל הבדיקות).
  * מוזרקות משם ולא נדרשות מכאן — אחרת הייתה נוצרת תלות מעגלית.
  */
-const hooks = { saveFile: null };
+const hooks = { saveFile: null, pollMailbox: null, afterTick: null };
 const setHooks = (h) => Object.assign(hooks, h);
 
 const skill = () => fs.readFileSync(SKILL_PATH, 'utf8');
@@ -66,8 +66,14 @@ const clampInt = (v, min, max, fallback) => {
 // מדיניות ושעות שליחה
 // ---------------------------------------------------------------------------
 
-function defaultPolicy() {
+/**
+ * ברירת המחדל של המדיניות. ‎approveReminders‎ — האם כל תזכורת מחכה לאישור
+ * ולא יוצאת לבד — היא גם העדפה אישית: יש מי שרוצה לראות כל נדנוד לפני שיוצא.
+ */
+function defaultPolicy(ownerId = null) {
+  const personal = ownerId ? D.userPrefs(ownerId).aiApproveReminders : undefined;
   return {
+    approveReminders: typeof personal === 'boolean' ? personal : Boolean(D.getSetting('ai_approve_reminders', false)),
     firstChannel: 'email',
     emailAttempts: Number(D.getSetting('ai_email_attempts', 2)),
     daysBetweenEmails: Number(D.getSetting('ai_days_between_emails', 2)),
@@ -78,9 +84,10 @@ function defaultPolicy() {
 }
 
 /** מדיניות שהגיעה מהלקוח — כל ערך נבדק, ומה שחסר נלקח מברירת המחדל */
-function cleanPolicy(input = {}) {
-  const d = defaultPolicy();
+function cleanPolicy(input = {}, ownerId = null) {
+  const d = defaultPolicy(ownerId);
   return {
+    approveReminders: input.approveReminders === undefined ? d.approveReminders : Boolean(input.approveReminders),
     firstChannel: input.firstChannel === 'whatsapp' ? 'whatsapp' : 'email',
     emailAttempts: clampInt(input.emailAttempts, 0, 10, d.emailAttempts),
     daysBetweenEmails: clampInt(input.daysBetweenEmails, 1, 30, d.daysBetweenEmails),
@@ -90,7 +97,7 @@ function cleanPolicy(input = {}) {
   };
 }
 
-const policyOf = (req) => cleanPolicy(parseJson(req.policy, {}));
+const policyOf = (req) => cleanPolicy(parseJson(req.policy, {}), req.owner_id);
 
 /** היום בשבוע והשעה בישראל — לא בשעון של השרת, שבענן הוא UTC */
 function localParts(date) {
@@ -161,6 +168,9 @@ function setShortStatus(req, text) {
   D.run('UPDATE tasks SET status_short = ? WHERE id = ?', String(text).slice(0, 200), req.task_id);
 }
 
+/** הנמען הוא עובד בארגון — המעקב עובר דרך משימון, בלי מייל ובלי וואטסאפ מבחוץ */
+const isInternal = (req) => req.contact_type === 'user' && Boolean(req.contact_ref_id);
+
 const firstName = (name) => String(name ?? '').trim().split(/\s+/)[0] ?? '';
 
 function notifyOwner(req, title, body = '') {
@@ -213,9 +223,17 @@ function contextText(req, { withHistory = true } = {}) {
     if (history.length) {
       lines.push('', 'ההתכתבות עד כה (מהישן לחדש):');
       for (const m of history.slice(-12)) {
+        const at = (m.sent_at ?? m.created_at).slice(0, 16).replace('T', ' ');
+        if (m.channel === 'note') {
+          // עדכון שלא עבר בהתכתבות — מה שסוכם בטלפון גובר על מה שנכתב לפניו
+          const label = m.kind === 'owner_contact' ? `${owner?.full_name ?? 'המשתמש'} כתב/ה לנמען בעצמו/ה` : `עדכון של ${owner?.full_name ?? 'המשתמש'} (מחוץ להתכתבות)`;
+          lines.push(`--- [${at}] ${label}:`);
+          lines.push(m.body.slice(0, 2500));
+          continue;
+        }
         const who = m.direction === 'out' ? `${owner?.full_name ?? 'המשתמש'} ←` : `→ ${req.contact_name || 'הנמען'}`;
         const files = parseJson(m.attachment_ids, []).length;
-        lines.push(`--- [${(m.sent_at ?? m.created_at).slice(0, 16).replace('T', ' ')}] ${m.channel === 'email' ? 'מייל' : 'וואטסאפ'} ${who}${m.subject ? ` · נושא: ${m.subject}` : ''}${files ? ` · ${files} קבצים מצורפים` : ''}`);
+        lines.push(`--- [${at}] ${m.channel === 'email' ? 'מייל' : 'וואטסאפ'} ${who}${m.subject ? ` · נושא: ${m.subject}` : ''}${files ? ` · ${files} קבצים מצורפים` : ''}`);
         lines.push(m.body.slice(0, 2500));
       }
     }
@@ -253,7 +271,7 @@ const DRAFT_SCHEMA = {
 const EVAL_SCHEMA = {
   type: 'object',
   properties: {
-    verdict: { type: 'string', enum: ['satisfied', 'partial', 'promised', 'question', 'declined', 'auto_reply', 'unrelated'] },
+    verdict: { type: 'string', enum: ['satisfied', 'partial', 'promised', 'question', 'declined', 'handled_elsewhere', 'auto_reply', 'unrelated'] },
     summary: { type: 'string', description: 'סיכום של משפט-שניים למשתמש: מה הנמען ענה' },
     missing: { type: 'string', description: 'מה עדיין חסר כדי שהבקשה תתמלא. ריק אם לא חסר דבר' },
     follow_up_date: { type: 'string', description: 'YYYY-MM-DD — המועד שהנמען הבטיח, או תאריך החזרה במענה אוטומטי. ריק אם לא צוין' },
@@ -262,6 +280,23 @@ const EVAL_SCHEMA = {
     draft_body: { type: 'string', description: 'טיוטת תשובה לנמען כשצריך להבהיר מה חסר. ריק כשאין צורך או כשצריך קודם תשובה מהמשתמש' }
   },
   required: ['verdict', 'summary', 'missing', 'follow_up_date', 'question_for_owner', 'draft_subject', 'draft_body'],
+  additionalProperties: false
+};
+
+const NOTE_SCHEMA = {
+  type: 'object',
+  properties: {
+    action: {
+      type: 'string',
+      enum: ['complete', 'reschedule', 'update_request', 'pause', 'continue', 'stop'],
+      description: 'complete — הבקשה התקבלה או אינה נחוצה עוד; reschedule — סוכם מועד, ממתינים עד אליו; update_request — הבקשה עצמה השתנתה; pause — להמתין בלי מועד; continue — להמשיך במעקב כרגיל; stop — לעצור את המעקב בלי שהתקבל'
+    },
+    date: { type: 'string', description: 'YYYY-MM-DD — המועד שסוכם, ב-reschedule. ריק אחרת' },
+    goal: { type: 'string', description: 'הבקשה המעודכנת במשפט אחד, ב-update_request. ריק אחרת' },
+    success_criteria: { type: 'string', description: 'קריטריון ההצלחה המעודכן, ב-update_request. ריק אחרת' },
+    explanation: { type: 'string', description: 'משפט אחד למשתמש: מה הבנת ומה יקרה עכשיו. לדוגמה: "דני ישלח ביום ראשון — המעקב ימתין עד שני בבוקר."' }
+  },
+  required: ['action', 'date', 'goal', 'success_criteria', 'explanation'],
   additionalProperties: false
 };
 
@@ -401,7 +436,7 @@ async function deliver(req, msgId) {
   const counter = msg.channel === 'email' ? 'unanswered_email' : 'unanswered_whatsapp';
   const fresh = requestById(req.id);
   const policy = policyOf(fresh);
-  const fields = { last_outbound_at: D.nowIso(), error: '' };
+  const fields = { last_outbound_at: D.nowIso(), error: '', attention: '' };
   if (expectsAnswer) {
     fields[counter] = fresh[counter] + 1;
     fields.state = 'waiting';
@@ -438,9 +473,12 @@ async function launch({ taskId, owner, instruction, draft, contact, policy, chan
     taskId, owner.id, instruction, draft.goal ?? '', draft.success_criteria ?? '',
     contact.name ?? '', String(contact.email ?? '').trim().toLowerCase(), contact.phone ?? '',
     ['vendor', 'user'].includes(contact.type) ? contact.type : 'external', contact.refId ?? null,
-    'draft', JSON.stringify(cleanPolicy({ ...policy, firstChannel: channel })), now, now
+    'draft', JSON.stringify(cleanPolicy({ ...policy, firstChannel: channel }, owner.id)), now, now
   );
   const req = requestById(Number(r.lastInsertRowid));
+
+  if (isInternal(req)) return launchInternal(req, { owner, draft, instruction });
+
   const msgId = insertMessage(req, {
     direction: 'out', channel, kind: 'initial', status: 'pending_approval',
     subject: channel === 'email' ? draft.subject : '', body: draft.body
@@ -457,6 +495,73 @@ async function launch({ taskId, owner, instruction, draft, contact, policy, chan
   return requestById(req.id);
 }
 
+/**
+ * משימת AI לעובד בארגון. לא שולחים לו מייל מבחוץ: המשימה כבר משויכת אליו
+ * במשימון (נקודת הקצה דואגת לכך, עם ההתראה הרגילה על שיוך), והמעקב הוא
+ * תזכורות בתוך המערכת עד שהוא מסמן אותה כבוצעה.
+ */
+function launchInternal(req, { owner, draft, instruction }) {
+  insertMessage(req, {
+    direction: 'out', channel: 'note', kind: 'internal', status: 'sent',
+    subject: '', body: draft.body || draft.goal || instruction, sentAt: D.nowIso()
+  });
+  update(req.id, {
+    state: 'waiting',
+    last_outbound_at: D.nowIso(),
+    next_action_at: afterDays(new Date(), policyOf(req).daysBetweenEmails)
+  });
+  D.audit(req.task_id, AI_ACTOR, 'ai_created', `משימת AI לעובד: ${draft.goal || instruction}`.slice(0, 300));
+  setShortStatus(req, `👤 אצל ${firstName(req.contact_name) || 'העובד'} · ממתין לסימון "בוצע"`);
+  return requestById(req.id);
+}
+
+/** תזכורת לעובד — התראה בתוך משימון (וגם בטלפון, אם הפעיל התראות) */
+function followUpInternal(req) {
+  const limit = clampInt(D.getSetting('ai_internal_attempts', 3), 0, 10, 3);
+  if (req.unanswered_email >= limit) {
+    update(req.id, { state: 'stalled', next_action_at: null });
+    setShortStatus(req, `⏸ ${firstName(req.contact_name) || 'העובד'} עוד לא סימן/ה "בוצע"`);
+    notifyOwner(req, `${req.contact_name || 'העובד'} עוד לא סיים/ה`, `נשלחו ${req.unanswered_email} תזכורות במערכת. אפשר לחדש את המעקב או לדבר איתו/ה ישירות.`);
+    D.audit(req.task_id, AI_ACTOR, 'ai_stalled', 'המעקב נעצר: העובד לא סימן את המשימה כבוצעה');
+    return;
+  }
+  const owner = ownerOf(req);
+  D.notify({
+    targetType: 'user', targetId: req.contact_ref_id, kind: 'ai',
+    title: `תזכורת: ${owner?.full_name ?? 'עמית'} מחכה למשימה`,
+    body: (req.goal || taskOf(req)?.title || '').slice(0, 300),
+    taskId: req.task_id
+  });
+  insertMessage(req, {
+    direction: 'out', channel: 'note', kind: 'reminder', status: 'sent',
+    body: `נשלחה תזכורת בתוך המערכת ל${req.contact_name || 'עובד'}`, sentAt: D.nowIso()
+  });
+  update(req.id, {
+    unanswered_email: req.unanswered_email + 1,
+    last_outbound_at: D.nowIso(),
+    next_action_at: afterDays(new Date(), policyOf(req).daysBetweenEmails)
+  });
+  D.audit(req.task_id, AI_ACTOR, 'ai_sent', `נשלחה תזכורת בתוך המערכת ל${req.contact_name}`);
+  setShortStatus(req, `🔔 תזכורת ${req.unanswered_email + 1} · ממתין ל${firstName(req.contact_name) || 'עובד'}`);
+}
+
+/** העובד סגר את המשימה — המעקב נסגר איתה */
+function syncInternal() {
+  const open = D.all(
+    `SELECT r.* FROM ai_requests r JOIN tasks t ON t.id = r.task_id
+       JOIN board_columns c ON c.board_id = t.board_id AND c.key = t.status
+      WHERE r.contact_type = 'user' AND r.contact_ref_id IS NOT NULL AND c.is_final = 1
+        AND r.state IN (${OPEN_STATES.map(() => '?').join(',')})`,
+    ...OPEN_STATES
+  );
+  for (const req of open) {
+    update(req.id, { state: 'completed', closed_at: D.nowIso(), next_action_at: null, attention: '', owner_question: '' });
+    setShortStatus(req, `✅ ${firstName(req.contact_name) || 'העובד'} סיים/ה`);
+    notifyOwner(req, `✅ ${req.contact_name || 'העובד'} סימן/ה את המשימה כבוצעה`, taskOf(req)?.title ?? '');
+    D.audit(req.task_id, AI_ACTOR, 'ai_completed', 'העובד סימן את המשימה כבוצעה — המעקב נסגר');
+  }
+}
+
 // ---------------------------------------------------------------------------
 // מעקב: תזכורות לפי המדיניות
 // ---------------------------------------------------------------------------
@@ -470,6 +575,7 @@ function ladder(req) {
 }
 
 async function followUp(req) {
+  if (isInternal(req)) return followUpInternal(req);
   const step = ladder(req).find((s) => s.used < s.limit && channelAvailable(req, s.channel));
   if (!step) {
     // מה מנע את המשך המעקב — כדי שהמשתמש יידע מה לתקן, ולא רק ש"זה נעצר"
@@ -491,6 +597,14 @@ async function followUp(req) {
     direction: 'out', channel: step.channel, kind: 'reminder', status: 'pending_approval',
     subject: draft.subject, body: draft.body
   });
+
+  // "כל תזכורת באישור" — הטיוטה מחכה, והמעקב לא ממשיך עד שהמשתמש מחליט
+  if (policyOf(req).approveReminders) {
+    update(req.id, { state: 'needs_user', attention: 'approve_reminder', next_action_at: null });
+    setShortStatus(req, '✋ תזכורת ממתינה לאישורך');
+    notifyOwner(req, `תזכורת ל${req.contact_name || 'נמען'} ממתינה לאישורך`, draft.body.slice(0, 200));
+    return;
+  }
   await deliver(req, msgId);
 }
 
@@ -584,6 +698,12 @@ function dateToFollowUp(value) {
 }
 
 async function handleInbound(req, { channel, text, files, fromAddress, messageId = null, externalId = null, autoSubmitted = false }) {
+  /*
+   * אותה תשובה יכולה להגיע משני מקורות — תיבת המערכת וה-Gmail של המשתמש —
+   * ושתי סריקות יכולות לרוץ במקביל. הבדיקה וההכנסה סינכרוניות, לפני ה-await
+   * הראשון, ולכן השנייה תמיד רואה את ההודעה שהראשונה כבר רשמה.
+   */
+  if (messageId && D.get("SELECT 1 FROM ai_messages WHERE request_id = ? AND message_id = ? AND direction = 'in'", req.id, messageId)) return;
   const { saved, skipped } = storeFiles(req, files);
   const inId = insertMessage(req, {
     direction: 'in', channel, kind: 'inbound', status: 'received',
@@ -647,6 +767,15 @@ async function handleInbound(req, { channel, text, files, fromAddress, messageId
       update(req.id, base);
       return;
 
+    case 'handled_elsewhere': {
+      // "סגרנו בטלפון" — הנדנודים נעצרים מיד. לא נסגר לבד: ייתכן שהמסמך עוד לא הגיע
+      D.run("UPDATE ai_messages SET status = 'discarded' WHERE request_id = ? AND status = 'pending_approval'", req.id);
+      update(req.id, { ...base, state: 'needs_user', attention: 'handled_elsewhere', next_action_at: null, owner_question: '' });
+      setShortStatus(req, `📞 ${firstName(who)} כתב/ה שזה סוכם · ממתין לך`);
+      notifyOwner(req, `${who} כתב/ה שזה טופל מחוץ להתכתבות`, `${ev.summary} — הנדנודים נעצרו. מה המצב?`);
+      return;
+    }
+
     default: {
       // חלקי, שאלה או סירוב — המשתמש מכריע. אם יש טיוטה, היא מחכה לאישורו.
       if (ev.draft_body && !ev.question_for_owner) {
@@ -686,6 +815,7 @@ function matchEmail(mail) {
   }
   const candidates = D.all(
     `SELECT * FROM ai_requests WHERE contact_email = ? AND state IN (${OPEN_STATES.map(() => '?').join(',')})
+        AND NOT (contact_type = 'user' AND contact_ref_id IS NOT NULL)
       ORDER BY id DESC`,
     mail.from.address, ...OPEN_STATES
   ).filter((r) => !mail.date || mail.date.getTime() >= new Date(r.created_at).getTime() - 60000);
@@ -733,6 +863,34 @@ async function pollEmail() {
   }
 }
 
+/**
+ * המשתמש עצמו כתב לנמען — במייל מהתיבה שלו או בוואטסאפ מהטלפון. ייתכן
+ * שסוכם משהו שהמעקב אינו יודע עליו, ולכן עוצרים ושואלים. העוזר לא מכריע
+ * לבד מתוך ההתכתבות של המשתמש.
+ */
+function contactDetected(req, { channel, text, at = new Date(), ref = null }) {
+  if (!['waiting', 'stalled', 'paused'].includes(req.state)) return false;
+  // הודעה מלפני הפנייה האחרונה שלנו אינה חדשה
+  if (req.last_outbound_at && at.getTime() <= new Date(req.last_outbound_at).getTime()) return false;
+  if (ref && D.get('SELECT 1 FROM ai_messages WHERE request_id = ? AND (message_id = ? OR external_id = ?)', req.id, ref, ref)) return false;
+  const where = channel === 'email' ? 'במייל' : 'בוואטסאפ';
+  insertMessage(req, {
+    direction: 'out', channel: 'note', kind: 'owner_contact', status: 'received',
+    body: `(${where}) ${String(text ?? '').trim().slice(0, 1500) || 'ללא טקסט'}`,
+    messageId: channel === 'email' ? ref : null, externalId: channel === 'whatsapp' ? ref : null,
+    sentAt: at.toISOString()
+  });
+  D.run("UPDATE ai_messages SET status = 'discarded' WHERE request_id = ? AND status = 'pending_approval' AND kind = 'reminder'", req.id);
+  update(req.id, {
+    state: 'needs_user', attention: 'contact_detected', next_action_at: null,
+    owner_question: `ראיתי שהתכתבת עם ${req.contact_name || 'הנמען'} ${where}. מה המצב?`
+  });
+  setShortStatus(req, `👀 התכתבת עם ${firstName(req.contact_name) || 'הנמען'} · המעקב ממתין לך`);
+  notifyOwner(req, `ראיתי שהתכתבת עם ${req.contact_name || 'הנמען'} ${where}`, 'התזכורות נעצרו עד שתעדכן/י מה המצב.');
+  D.audit(req.task_id, AI_ACTOR, 'ai_paused', `המעקב נעצר: זוהתה התכתבות שלך עם הנמען ${where}`);
+  return true;
+}
+
 async function pollWhatsApp() {
   const owners = D.all(
     `SELECT DISTINCT owner_id FROM ai_requests WHERE contact_phone <> '' AND state IN (${OPEN_STATES.map(() => '?').join(',')})`,
@@ -759,6 +917,11 @@ async function pollWhatsApp() {
     for (const m of incoming) {
       const req = open.find((r) => WhatsApp.normalizePhone(r.contact_phone) === m.from);
       if (!req) continue;
+      // הודעה שהמשתמש כתב בעצמו מהטלפון לנמען
+      if (m.outgoing) {
+        contactDetected(requestById(req.id), { channel: 'whatsapp', text: m.text, at: m.at, ref: m.id });
+        continue;
+      }
       if (!byRequest.has(req.id)) byRequest.set(req.id, { req, items: [] });
       byRequest.get(req.id).items.push(m);
     }
@@ -789,6 +952,7 @@ async function pollWhatsApp() {
 }
 
 async function runDue() {
+  syncInternal();
   const due = D.all(
     "SELECT * FROM ai_requests WHERE state = 'waiting' AND next_action_at IS NOT NULL AND next_action_at <= ? ORDER BY next_action_at LIMIT 20",
     D.nowIso()
@@ -821,7 +985,10 @@ async function tick() {
   try {
     await pollEmail().catch((err) => console.error('[משימון] סריקת הדואר הנכנס נכשלה:', err.message));
     await pollWhatsApp();
+    await hooks.pollMailbox?.().catch((err) => console.error('[משימון] בדיקת תיבות ה-Gmail נכשלה:', err.message));
     await runDue();
+    // ריצת הבוקר עשויה להימשך דקות — היא לא מעכבת את סבב התזכורות הבא
+    Promise.resolve(hooks.afterTick?.()).catch((err) => console.error('[משימון] סריקת המיילים נכשלה:', err.message));
   } finally {
     running = false;
   }
@@ -858,7 +1025,9 @@ function discard(req, msgId) {
   // בלי טיוטה ובלי שאלה פתוחה — המעקב חוזר לחכות לתשובה
   const pending = D.get("SELECT 1 FROM ai_messages WHERE request_id = ? AND status = 'pending_approval'", req.id);
   if (!pending && req.state === 'needs_user' && !req.owner_question) {
-    update(req.id, { state: 'waiting', next_action_at: afterDays(new Date(), policyOf(req).daysBetweenEmails) });
+    // תזכורת שנמחקה = דילוג עליה: המעקב ממשיך, מהמועד הבא לפי המדיניות
+    update(req.id, { state: 'waiting', attention: '', next_action_at: afterDays(new Date(), policyOf(req).daysBetweenEmails) });
+    setShortStatus(req, `🔁 ממתין ל${firstName(req.contact_name) || 'תשובה'}`);
   }
 }
 
@@ -881,9 +1050,20 @@ async function answerQuestion(req, answer) {
   update(req.id, { owner_question: '' });
 }
 
-function setState(req, action, actor) {
+function setState(req, action, actor, { days = 1 } = {}) {
   const who = { type: 'user', id: actor.id, name: actor.name };
+  if (action !== 'postpone') update(req.id, { attention: '' });
   switch (action) {
+    case 'postpone': {
+      // "דחה" מ"היום יוצאים": הנדנוד הבא זז, והספירה אינה משתנה
+      const from = req.next_action_at && new Date(req.next_action_at) > new Date() ? new Date(req.next_action_at) : new Date();
+      const next = afterDays(from, clampInt(days, 1, 30, 1));
+      update(req.id, { next_action_at: next });
+      const when = new Date(next).toLocaleDateString('he-IL', { timeZone: TZ });
+      setShortStatus(req, `⏭ נדחה · מעקב ב-${when}`);
+      D.audit(req.task_id, who, 'ai_postponed', `הנדנוד הבא נדחה ל-${when}`);
+      break;
+    }
     case 'pause':
       update(req.id, { state: 'paused' });
       setShortStatus(req, '⏸ המעקב מושהה');
@@ -933,6 +1113,132 @@ function updateDetails(req, { contact, policy }) {
 }
 
 // ---------------------------------------------------------------------------
+// "דיברתי איתו" — עדכון ממה שקרה מחוץ להתכתבות
+// ---------------------------------------------------------------------------
+
+/**
+ * ה-AI מפרש את מה שהמשתמש כתב ומציע פעולה. לא מבוצע כלום: ההצעה חוזרת
+ * למשתמש, שמאשר או בוחר אחרת (‎applyNote‎).
+ */
+async function interpretNote(req, note) {
+  const text = [
+    contextText(req), '',
+    'המשתמש מעדכן על משהו שקרה מחוץ להתכתבות (שיחת טלפון, פגישה, הודעה אחרת):',
+    '<<<', String(note).slice(0, 3000), '>>>',
+    '', 'מה המשמעות למעקב? בחר פעולה אחת לפי ההגדרות בסכמה.'
+  ].join('\n');
+  const out = await Claude.json({ system: skill(), content: [{ type: 'text', text }], schema: NOTE_SCHEMA, effort: 'low' });
+  if (out.action === 'reschedule' && !/^\d{4}-\d{2}-\d{2}$/.test(out.date)) out.action = 'pause';
+  return out;
+}
+
+const NOTE_ACTIONS = ['complete', 'reschedule', 'update_request', 'pause', 'continue', 'stop'];
+
+/**
+ * מבצע את העדכון שהמשתמש אישר. העדכון נשמר בהתכתבות (ערוץ ‎note‎), כך
+ * שהתזכורת הבאה נכתבת מתוך מה שסוכם ולא מתעלמת ממנו.
+ */
+function applyNote(req, actor, { note, action, date, goal, successCriteria }) {
+  if (!NOTE_ACTIONS.includes(action)) throw new Error('פעולה לא מוכרת');
+  const who = { type: 'user', id: actor.id, name: actor.name };
+  const text = String(note ?? '').trim();
+  if (text) {
+    insertMessage(req, { direction: 'in', channel: 'note', kind: 'manual', status: 'received', body: text.slice(0, 3000), sentAt: D.nowIso() });
+    D.audit(req.task_id, who, 'ai_note', `עדכון: ${text}`.slice(0, 400));
+  }
+  // מה שסוכם הוא תשובה לכל דבר — הספירה מתאפסת והתזכורות הממתינות כבר לא רלוונטיות
+  D.run("UPDATE ai_messages SET status = 'discarded' WHERE request_id = ? AND status = 'pending_approval'", req.id);
+  const reset = { attention: '', owner_question: '', error: '', unanswered_email: 0, unanswered_whatsapp: 0, last_inbound_at: D.nowIso() };
+  const name = firstName(req.contact_name) || 'הנמען';
+
+  switch (action) {
+    case 'complete':
+      return setState(requestById(req.id), 'complete', actor);
+    case 'stop':
+      return setState(requestById(req.id), 'stop', actor);
+    case 'pause':
+      update(req.id, { ...reset, state: 'paused', next_action_at: null });
+      setShortStatus(req, '⏸ המעקב מושהה (עודכן ידנית)');
+      return;
+    case 'reschedule': {
+      const at = dateToFollowUp(date);
+      if (!at) throw new Error('נדרש תאריך');
+      update(req.id, { ...reset, state: 'waiting', next_action_at: at });
+      setShortStatus(req, `📞 סוכם עם ${name} · מעקב ב-${new Date(at).toLocaleDateString('he-IL', { timeZone: TZ })}`);
+      return;
+    }
+    case 'update_request': {
+      const fields = { ...reset, state: 'waiting', next_action_at: afterDays(new Date(), policyOf(req).daysBetweenEmails) };
+      if (String(goal ?? '').trim()) fields.goal = String(goal).trim().slice(0, 500);
+      if (String(successCriteria ?? '').trim()) fields.success_criteria = String(successCriteria).trim().slice(0, 500);
+      update(req.id, fields);
+      setShortStatus(req, `✎ הבקשה עודכנה · ממתין ל${name}`);
+      D.audit(req.task_id, who, 'ai_updated', `הבקשה עודכנה: ${fields.goal ?? req.goal}`.slice(0, 400));
+      return;
+    }
+    default: { // continue
+      const keep = req.next_action_at && new Date(req.next_action_at) > new Date();
+      update(req.id, { ...reset, state: 'waiting', next_action_at: keep ? req.next_action_at : afterDays(new Date(), policyOf(req).daysBetweenEmails) });
+      setShortStatus(req, `🔁 ממתין ל${name}`);
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// "היום יוצאים" — הנדנודים המתוכננים
+// ---------------------------------------------------------------------------
+
+/** סוף היום בישראל, כרגע UTC */
+function endOfLocalDay(date = new Date()) {
+  const day = localParts(date).date;
+  // 23:59 בישראל — ההפרש מ-UTC הוא 2 או 3 שעות; לוקחים את המוקדם מביניהם כדי לא לגלוש למחר
+  return new Date(`${day}T23:59:00+03:00`);
+}
+
+/**
+ * מה העוזר מתכנן לשלוח היום בשם המשתמש — כדי שאפשר יהיה לעצור לפני שיצא.
+ * רק בקשות שיש להן צעד הבא בפועל: בקשה שתיעצר במקום לשלוח אינה "נדנוד".
+ */
+function upcomingFor(userId) {
+  const until = endOfLocalDay().toISOString();
+  return D.all(
+    `SELECT r.*, t.title FROM ai_requests r JOIN tasks t ON t.id = r.task_id
+      WHERE r.owner_id = ? AND r.state = 'waiting' AND r.next_action_at IS NOT NULL AND r.next_action_at <= ?
+      ORDER BY r.next_action_at`,
+    userId, until
+  ).map((req) => {
+    if (isInternal(req)) {
+      return { taskId: req.task_id, title: req.title, contactName: req.contact_name, channel: 'system', at: req.next_action_at, internal: true };
+    }
+    const step = ladder(req).find((x) => x.used < x.limit && channelAvailable(req, x.channel));
+    if (!step) return null;
+    return { taskId: req.task_id, title: req.title, contactName: req.contact_name || req.contact_email || req.contact_phone, channel: step.channel, at: req.next_action_at, attempt: step.used + 1 };
+  }).filter(Boolean);
+}
+
+/** בקשות שמחכות להחלטה של המשתמש — לחלון "ממתין לאישורך" */
+function waitingOnUser(userId) {
+  return D.all(
+    `SELECT r.*, t.title FROM ai_requests r JOIN tasks t ON t.id = r.task_id
+      WHERE r.owner_id = ? AND r.state IN ('needs_user','stalled') ORDER BY r.updated_at DESC LIMIT 50`,
+    userId
+  ).map((req) => {
+    const pending = D.get("SELECT id, kind, channel, subject, body FROM ai_messages WHERE request_id = ? AND status IN ('pending_approval','failed') AND direction = 'out' ORDER BY id DESC LIMIT 1", req.id);
+    return {
+      taskId: req.task_id,
+      title: req.title,
+      state: req.state,
+      attention: req.attention,
+      contactName: req.contact_name || req.contact_email || req.contact_phone,
+      question: req.owner_question,
+      summary: req.last_summary,
+      error: req.error,
+      draft: pending ? { id: pending.id, kind: pending.kind, channel: pending.channel, subject: pending.subject, body: pending.body } : null
+    };
+  });
+}
+
+// ---------------------------------------------------------------------------
 // תצוגה
 // ---------------------------------------------------------------------------
 
@@ -970,12 +1276,22 @@ function detailFor(taskId) {
     lastOutboundAt: req.last_outbound_at,
     lastInboundAt: req.last_inbound_at,
     ownerQuestion: req.owner_question,
+    attention: req.attention,
+    internal: isInternal(req),
     lastSummary: req.last_summary,
     error: req.error,
+    // אירועים במעקב שאינם הודעות — השהיה, דחייה, עצירה — לציר הזמן בכרטיס
+    events: D.all(
+      `SELECT action, actor_name, details, created_at FROM audit_log
+        WHERE task_id = ? AND action IN ('ai_paused','ai_resumed','ai_stopped','ai_postponed','ai_completed','ai_stalled','ai_updated','ai_nudge')
+        ORDER BY id`,
+      req.task_id
+    ).map((e) => ({ action: e.action, actor: e.actor_name, details: e.details, at: e.created_at })),
     channels: {
       email: channelAvailable(req, 'email'),
       whatsapp: channelAvailable(req, 'whatsapp'),
-      inbox: Imap.isEnabled()
+      // תשובות נקלטות מתיבת המערכת, או מתיבת ה-Gmail של מי שפתח את הבקשה
+      inbox: Imap.isEnabled() || Boolean(D.get("SELECT 1 FROM mail_connections WHERE user_id = ? AND state = 'ok'", req.owner_id))
     },
     messages: messagesOf(req.id)
       .filter((m) => m.status !== 'discarded')
@@ -1007,7 +1323,9 @@ const status = () => ({
 module.exports = {
   setHooks, start, stop, tick,
   draftInitial, launch, approve, discard, reviseMessage, answerQuestion, setState, updateDetails,
+  interpretNote, applyNote, upcomingFor, waitingOnUser, contactDetected, handleInbound, matchEmail,
+  requestById, ownAddresses,
   requestByTask, summaryFor, detailFor, defaultPolicy, cleanPolicy, status, STATE_LABELS, OPEN_STATES,
   // לבדיקות
-  _internal: { nextWindow, inWindow, afterDays, ladder, matchEmail, handleInbound, dateToFollowUp }
+  _internal: { nextWindow, inWindow, afterDays, ladder, dateToFollowUp, endOfLocalDay }
 };

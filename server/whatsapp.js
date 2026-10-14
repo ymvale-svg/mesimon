@@ -111,7 +111,12 @@ async function download(url) {
  * על ההתראה הראשונה ושום הודעה אחריה לא תגיע. מה שאינו הודעה נכנסת (אישורי
  * מסירה, שינויי מצב) פשוט מדולג.
  *
- * @returns {Promise<Array<{from: string, text: string, file: ?{url, filename, mime}, id: string, at: Date}>>}
+ * גם הודעות שהמשתמש כתב בעצמו מהטלפון (‎outgoingMessageReceived‎) מוחזרות,
+ * מסומנות ‎outgoing‎ — כך המעקב יודע שהמשתמש דיבר עם הנמען ועוצר לשאול.
+ * ‎from‎ בהן הוא המספר של מי שקיבל את ההודעה. הודעות שמשימון עצמו שלח
+ * (‎outgoingAPIMessageReceived‎) מדולגות: הן כבר רשומות אצלנו.
+ *
+ * @returns {Promise<Array<{from: string, text: string, file: ?{url, filename, mime}, id: string, at: Date, outgoing: boolean}>>}
  */
 async function receive(userId, { max = 20 } = {}) {
   const channel = channelOf(userId);
@@ -122,7 +127,8 @@ async function receive(userId, { max = 20 } = {}) {
     if (!note?.receiptId) break;
     try {
       const b = note.body ?? {};
-      if (b.typeWebhook === 'incomingMessageReceived' && /@c\.us$/.test(b.senderData?.chatId ?? '')) {
+      const outgoing = b.typeWebhook === 'outgoingMessageReceived';
+      if ((b.typeWebhook === 'incomingMessageReceived' || outgoing) && /@c\.us$/.test(b.senderData?.chatId ?? '')) {
         const m = b.messageData ?? {};
         const file = m.fileMessageData?.downloadUrl
           ? { url: m.fileMessageData.downloadUrl, filename: m.fileMessageData.fileName || 'whatsapp-file', mime: m.fileMessageData.mimeType || 'application/octet-stream' }
@@ -135,7 +141,8 @@ async function receive(userId, { max = 20 } = {}) {
             ?? '',
           file,
           id: b.idMessage ?? String(note.receiptId),
-          at: b.timestamp ? new Date(b.timestamp * 1000) : new Date()
+          at: b.timestamp ? new Date(b.timestamp * 1000) : new Date(),
+          outgoing
         });
       } else if (b.typeWebhook === 'stateInstanceChanged' && b.stateInstance) {
         D.run('UPDATE user_channels SET state = ?, checked_at = ? WHERE user_id = ?', b.stateInstance, D.nowIso(), userId);
@@ -165,6 +172,21 @@ function save(userId, { apiUrl, instanceId, apiToken, phone }) {
   );
 }
 
+/**
+ * מבקש מ-Green API לדווח גם על הודעות שנשלחו מהטלפון. בלי זה המעקב לא
+ * יודע שהמשתמש כבר התכתב עם הנמען. ניסיון בלבד — חשבון שאינו מאפשר את
+ * ההגדרה ממשיך לעבוד, רק בלי הזיהוי הזה.
+ */
+async function enableOutgoingNotifications(userId) {
+  const channel = channelOf(userId);
+  if (!channel) return;
+  try {
+    await call(channel, 'setSettings', { http: 'POST', body: { incomingWebhook: 'yes', outgoingMessageWebhook: 'yes' } });
+  } catch (err) {
+    console.error('[משימון] הפעלת הדיווח על הודעות יוצאות בוואטסאפ נכשלה:', err.message);
+  }
+}
+
 const remove = (userId) => D.run("DELETE FROM user_channels WHERE user_id = ? AND provider = 'green_api'", userId);
 
 /** משתמשים שיש להם חיבור — רק אצלם יש תור לסרוק */
@@ -173,6 +195,6 @@ const connectedUsers = () => D.all(
 ).map((r) => r.user_id);
 
 module.exports = {
-  send, receive, download, checkState, isReady, save, remove, publicChannel, connectedUsers,
+  send, receive, download, checkState, isReady, save, remove, publicChannel, connectedUsers, enableOutgoingNotifications,
   normalizePhone, chatIdOf, DEFAULT_API_URL
 };

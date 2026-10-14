@@ -43,6 +43,8 @@ services:
         sync: false
       - key: ANTHROPIC_API_KEY     # משימות AI — בלעדיו האפשרות אינה מוצגת כזמינה
         sync: false
+      - key: TOKEN_ENCRYPTION_KEY  # הצפנת חיבורי ה-Gmail במסד. נוצר פעם אחת — לא להחליף אחרי שחוברו תיבות
+        generateValue: true
       - key: IMAP_HOST             # קריאת תשובות למשימות AI. ריק = נגזר משרת ה-SMTP
         sync: false
       - key: IMAP_USER             # ריק = כמו SMTP_USER

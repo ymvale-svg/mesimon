@@ -8,14 +8,21 @@
  *   openDialog   — פתיחת משימה: הוראה → טיוטה → אישור ושליחה
  *   panel        — הפאנל בכרטיס המשימה: מצב, טיוטות לאישור, ההתכתבות
  *   openWhatsApp — חיבור הוואטסאפ האישי (מ"החשבון שלי")
+ *   talked       — "דיברתי איתו": עדכון ממה שקרה מחוץ להתכתבות
  */
 
 const AiTaskView = (() => {
   const { el } = UI;
 
-  const CHANNEL_ICON = { email: '📧', whatsapp: '💬' };
+  const CHANNEL_ICON = { email: '📧', whatsapp: '💬', note: '📝', system: '🔔' };
   const KIND_LABEL = {
-    initial: 'פנייה', reminder: 'תזכורת', reply: 'תשובה', thanks: 'תודה', inbound: 'תשובה התקבלה'
+    initial: 'פנייה', reminder: 'תזכורת', reply: 'תשובה', thanks: 'תודה', inbound: 'תשובה התקבלה',
+    manual: 'עדכון שלך', owner_contact: 'כתבת לנמען בעצמך', internal: 'הועבר במשימון'
+  };
+  const EVENT_LABEL = {
+    ai_paused: '⏸ המעקב הושהה', ai_resumed: '▶ המעקב חודש', ai_stopped: '⏹ המעקב הופסק',
+    ai_postponed: '⏭ נדנוד נדחה', ai_completed: '✅ סומן שהתקבל', ai_stalled: '⏸ המעקב נעצר',
+    ai_updated: '✎ עודכנו פרטי המעקב', ai_nudge: '🔔 בוקשה תזכורת מיידית'
   };
   const VERDICT = {
     satisfied: ['התקבל', 'ok'],
@@ -23,6 +30,7 @@ const AiTaskView = (() => {
     promised: ['הבטחה', 'info'],
     question: ['שאלה', 'warn'],
     declined: ['סירוב / הפניה', 'danger'],
+    handled_elsewhere: ['סוכם מחוץ להתכתבות', 'info'],
     auto_reply: ['מענה אוטומטי', 'mute'],
     unrelated: ['לא קשור', 'mute']
   };
@@ -54,8 +62,11 @@ const AiTaskView = (() => {
 
     const state = {
       step: 'compose',
-      instruction: '',
-      contact: { name: '', email: '', phone: '', type: 'external', refId: null },
+      instruction: opts.instruction ?? '',
+      contact: { name: '', email: '', phone: '', type: 'external', refId: null, ...(opts.contact ?? {}) },
+      // נפתח מהצעה שהגיעה מהמייל — פרטי הנמען חולצו מתוכן שלא אנחנו כתבנו
+      suggestionId: opts.suggestionId ?? null,
+      fromEmail: Boolean(opts.suggestionId),
       channel: status.mail ? 'email' : 'whatsapp',
       projectId: opts.projectId ?? '',
       dueDate: '',
@@ -83,14 +94,23 @@ const AiTaskView = (() => {
       const nameInput = el('input', { type: 'text', list: listId, value: state.contact.name, placeholder: 'שם, או חיפוש ברשימה' });
       const emailInput = el('input', { type: 'email', value: state.contact.email, placeholder: 'name@example.com', dir: 'ltr' });
       const phoneInput = el('input', { type: 'tel', value: state.contact.phone, placeholder: '050-0000000', dir: 'ltr' });
+      const colleagueNote = el('div');
+      const showColleague = () => UI.mount(colleagueNote, state.contact.type === 'user'
+        ? el('div.alert.alert-info', {}, [
+            el('span', { text: '👤' }),
+            el('div', { text: 'זה עובד בארגון — לא יישלח אליו מייל מבחוץ. המשימה תיכנס אליו במשימון, והעוזר יזכיר לו בתוך המערכת עד שיסמן "בוצע".' })
+          ])
+        : null);
       nameInput.addEventListener('change', () => {
         const hit = status.contacts.find((c) => c.name === nameInput.value);
-        if (!hit) { state.contact.type = 'external'; state.contact.refId = null; return; }
+        if (!hit) { state.contact.type = 'external'; state.contact.refId = null; showColleague(); return; }
         emailInput.value = hit.email || emailInput.value;
         phoneInput.value = hit.phone || phoneInput.value;
         state.contact.type = hit.type;
         state.contact.refId = hit.refId;
+        showColleague();
       });
+      showColleague();
 
       const waReady = status.whatsapp?.state === 'authorized';
       const channelSeg = el('div.seg', {}, [
@@ -139,12 +159,16 @@ const AiTaskView = (() => {
         UI.field('מה המשימה?', instruction,
           'כתבו בחופשיות: למי לפנות, מה לבקש, ואם יש — עד מתי ולמה. ה-AI ינסח, ואתם תאשרו לפני שליחה.'),
         el('div.ai-section-title', { text: 'הנמען' }),
+        state.fromEmail
+          ? el('div.alert.alert-warn', {}, [el('span', { text: '📧' }), el('div', { text: 'פרטי הנמען חולצו מתוך המייל שהתקבל. בדקו שהם נכונים — הפנייה תצא אליהם בשמך.' })])
+          : null,
         datalist,
         el('div.row', {}, [
           UI.field('שם', nameInput),
           UI.field('מייל', emailInput),
           UI.field('טלפון (לוואטסאפ)', phoneInput)
         ]),
+        colleagueNote,
         el('div.row', {}, [
           UI.field('ערוץ ראשון', channelSeg),
           UI.field('פרויקט', projectSelect),
@@ -183,7 +207,8 @@ const AiTaskView = (() => {
 
     function previewStep() {
       const d = state.draft;
-      const isEmail = state.channel === 'email';
+      const internal = state.contact.type === 'user' && state.contact.refId;
+      const isEmail = state.channel === 'email' && !internal;
       const titleInput = el('input', { type: 'text', value: d.title });
       const toEmail = el('input', { type: 'email', value: state.contact.email, dir: 'ltr' });
       const toPhone = el('input', { type: 'tel', value: state.contact.phone, dir: 'ltr' });
@@ -222,7 +247,7 @@ const AiTaskView = (() => {
       redo.addEventListener('click', doRedo);
       feedback.addEventListener('keydown', (e) => { if (e.key === 'Enter') doRedo(); });
 
-      const send = el('button.btn.btn-primary', {}, [isEmail ? '📧 אישור ושליחה' : '💬 אישור ושליחה']);
+      const send = el('button.btn.btn-primary', {}, [internal ? `👤 העברה ל${state.contact.name || 'עובד'}` : isEmail ? '📧 אישור ושליחה' : '💬 אישור ושליחה']);
       send.addEventListener('click', async () => {
         read();
         send.disabled = true;
@@ -234,11 +259,13 @@ const AiTaskView = (() => {
             channel: state.channel,
             projectId: state.projectId || null,
             dueDate: UI.fromInputDate(state.dueDate),
-            policy: state.policy
+            policy: state.policy,
+            suggestionId: state.suggestionId
           });
           m.close();
           if (res.sendError) UI.toast(`המשימה נוצרה, אבל השליחה נכשלה: ${res.sendError}`, 'error');
-          else UI.success(isEmail ? 'המייל נשלח — ה-AI עוקב מכאן' : 'ההודעה נשלחה — ה-AI עוקב מכאן');
+          else UI.success(internal ? 'המשימה הועברה — העוזר יזכיר עד שתסומן כבוצעה' : isEmail ? 'המייל נשלח — ה-AI עוקב מכאן' : 'ההודעה נשלחה — ה-AI עוקב מכאן');
+          opts.onCreated?.(res.task);
           await App.reloadReference();
           await App.refreshView();
           App.refreshNotifications();
@@ -255,11 +282,12 @@ const AiTaskView = (() => {
         el('div.ai-letter', {}, [
           el('div.row', {}, [
             UI.field('אל', toName),
-            isEmail ? UI.field('מייל', toEmail) : UI.field('טלפון', toPhone)
+            internal ? null : isEmail ? UI.field('מייל', toEmail) : UI.field('טלפון', toPhone)
           ]),
           isEmail ? UI.field('נושא', subject) : null,
-          UI.field(isEmail ? 'המייל' : 'ההודעה', text,
-            isEmail ? 'יישלח בשמך. תקבל/י עותק, ותשובות ייקלטו אוטומטית.' : 'יישלח מהוואטסאפ שלך.')
+          UI.field(internal ? 'הבקשה (תופיע בתיאור המשימה)' : isEmail ? 'המייל' : 'ההודעה', text,
+            internal ? 'המשימה תשויך אליו במשימון, עם התראה רגילה על משימה חדשה.'
+              : isEmail ? 'יישלח בשמך. תקבל/י עותק, ותשובות ייקלטו אוטומטית.' : 'יישלח מהוואטסאפ שלך.')
         ]),
         el('div.ai-revise', {}, [feedback, redo]),
         UI.field('מתי זה נחשב שהתקבל?', criteria, 'לפי זה ה-AI יכריע אם התשובה שחזרה מספיקה וסוגר את המשימה'),
@@ -282,10 +310,11 @@ const AiTaskView = (() => {
     const wa = el('input', { type: 'checkbox', checked: policy.whatsapp });
     const waAttempts = num(policy.whatsappAttempts, 0, 10);
     const daysWa = num(policy.daysBetweenWhatsapp, 1, 30);
+    const approveAll = el('input', { type: 'checkbox', checked: Boolean(policy.approveReminders) });
 
-    const summary = () => `עד ${emailAttempts.value} מיילים כל ${daysEmail.value} ימים${wa.checked ? `, ואז עד ${waAttempts.value} הודעות וואטסאפ כל ${daysWa.value} ימים` : ''}`;
+    const summary = () => `עד ${emailAttempts.value} מיילים כל ${daysEmail.value} ימים${wa.checked ? `, ואז עד ${waAttempts.value} הודעות וואטסאפ כל ${daysWa.value} ימים` : ''}${approveAll.checked ? ' · כל תזכורת באישור' : ' · תזכורות יוצאות לבד'}`;
     const sumNode = el('span', { text: summary() });
-    for (const i of [emailAttempts, daysEmail, wa, waAttempts, daysWa]) i.addEventListener('input', () => { sumNode.textContent = summary(); });
+    for (const i of [emailAttempts, daysEmail, wa, waAttempts, daysWa, approveAll]) i.addEventListener('input', () => { sumNode.textContent = summary(); });
 
     const node = el('details.ai-policy', {}, [
       el('summary', {}, ['🔁 מדיניות מעקב: ', sumNode]),
@@ -294,10 +323,11 @@ const AiTaskView = (() => {
         el('label', {}, ['ימי עבודה בין מיילים ', daysEmail]),
         el('label.checkbox', {}, [wa, ' להמשיך בוואטסאפ מהמספר שלי']),
         el('label', {}, ['הודעות וואטסאפ שלא נענו לפני עצירה ', waAttempts]),
-        el('label', {}, ['ימי עבודה בין הודעות וואטסאפ ', daysWa])
+        el('label', {}, ['ימי עבודה בין הודעות וואטסאפ ', daysWa]),
+        el('label.checkbox', {}, [approveAll, ' כל תזכורת מחכה לאישור שלי (במקום לצאת לבד)'])
       ]),
       !waReady ? el('div.mute-sm', { text: 'הוואטסאפ שלך עוד לא מחובר. בלי חיבור, המעקב ייעצר אחרי המיילים ותקבל/י התראה. מחברים מ"החשבון שלי".' }) : null,
-      el('div.mute-sm', { text: 'שליחה רק בשעות העבודה ובימים א׳–ה׳. כל תשובה של הנמען מאפסת את הספירה.' })
+      el('div.mute-sm', { text: 'שליחה רק בשעות העבודה ובימים א׳–ה׳. כל תשובה של הנמען מאפסת את הספירה. בכל בוקר מופיע "היום יוצאים", ואפשר לעצור או לדחות כל נדנוד לפני שיוצא.' })
     ]);
 
     return {
@@ -307,7 +337,8 @@ const AiTaskView = (() => {
         daysBetweenEmails: Number(daysEmail.value),
         whatsapp: wa.checked,
         whatsappAttempts: Number(waAttempts.value),
-        daysBetweenWhatsapp: Number(daysWa.value)
+        daysBetweenWhatsapp: Number(daysWa.value),
+        approveReminders: approveAll.checked
       })
     };
   }
@@ -340,11 +371,15 @@ const AiTaskView = (() => {
     };
 
     const open = ['waiting', 'needs_user', 'paused', 'stalled'].includes(a.state);
-    const contactLine = [a.contact.name, a.contact.email, a.contact.phone].filter(Boolean).join(' · ');
-    const progress = [
-      a.policy.emailAttempts ? `📧 ${a.unansweredEmail}/${a.policy.emailAttempts}` : null,
-      a.policy.whatsapp && a.policy.whatsappAttempts ? `💬 ${a.unansweredWhatsapp}/${a.policy.whatsappAttempts}` : null
-    ].filter(Boolean).join(' · ');
+    const contactLine = a.internal
+      ? `👤 ${a.contact.name} (עובד/ת בארגון)`
+      : [a.contact.name, a.contact.email, a.contact.phone].filter(Boolean).join(' · ');
+    const progress = a.internal
+      ? `🔔 ${a.unansweredEmail} תזכורות במערכת`
+      : [
+          a.policy.emailAttempts ? `📧 ${a.unansweredEmail}/${a.policy.emailAttempts}` : null,
+          a.policy.whatsapp && a.policy.whatsappAttempts ? `💬 ${a.unansweredWhatsapp}/${a.policy.whatsappAttempts}` : null
+        ].filter(Boolean).join(' · ');
 
     const head = el('div.ai-head', {}, [
       el('span.ai-badge', { text: '✨ AI' }),
@@ -368,8 +403,22 @@ const AiTaskView = (() => {
       lines.push(el('div.mute-sm', { text: 'תשובות במייל אינן נקלטות אוטומטית (קריאת הדואר אינה מוגדרת). כשתגיע תשובה — סמנו כאן שהתקבל.' }));
     }
 
+    // המעקב נעצר כי ייתכן שסוכם משהו מחוץ להתכתבות — "דיברתי איתו" הוא התשובה
+    if (a.attention === 'contact_detected' || a.attention === 'handled_elsewhere') {
+      const b = el('button.btn.btn-primary.btn-sm', { onclick: () => talked(task, onChange) }, ['📞 עדכון: מה המצב?']);
+      lines.push(el('div.ai-question', {}, [
+        el('div', {}, [
+          el('b', { text: a.attention === 'contact_detected' ? '👀 ' : '📞 ' }),
+          a.attention === 'contact_detected'
+            ? (a.ownerQuestion || 'זוהתה התכתבות שלך עם הנמען. מה המצב?')
+            : `${a.contact.name || 'הנמען'} כתב/ה שהעניין סוכם מחוץ להתכתבות. התזכורות נעצרו — מה המצב?`
+        ]),
+        el('div', {}, [b])
+      ]));
+    }
+
     // שאלה פתוחה של ה-AI
-    if (a.ownerQuestion) {
+    if (a.ownerQuestion && a.attention !== 'contact_detected') {
       const answer = el('textarea', { placeholder: 'התשובה שלך — ה-AI ינסח ממנה תשובה לנמען, לאישורך' });
       const send = el('button.btn.btn-primary.btn-sm', {}, ['✨ נסח תשובה']);
       send.addEventListener('click', () => {
@@ -411,8 +460,28 @@ const AiTaskView = (() => {
       ]);
     });
 
-    // ההתכתבות
-    const timeline = a.messages.filter((x) => x.status === 'sent' || x.status === 'received').map((msg) => {
+    // ההתכתבות, ולצדה העדכונים שלך והאירועים במעקב — ציר זמן אחד, מהישן לחדש
+    const items = [
+      ...a.messages.filter((x) => x.status === 'sent' || x.status === 'received').map((m) => ({ at: m.sentAt ?? m.createdAt, msg: m })),
+      ...(a.events ?? []).map((e) => ({ at: e.at, event: e }))
+    ].sort((x, y) => String(x.at).localeCompare(String(y.at)));
+    const timeline = items.map(({ msg, event }) => {
+      if (event) {
+        return el('div.ai-event', {}, [
+          el('span', { text: EVENT_LABEL[event.action] ?? event.action }),
+          event.details ? el('span.mute-sm', { text: ` · ${event.details}` }) : null,
+          el('span.mute-sm', { text: ` · ${event.actor} · ${UI.formatDateTime(event.at)}` })
+        ]);
+      }
+      if (msg.channel === 'note') {
+        return el('div.ai-msg.ai-msg-note', {}, [
+          el('div.ai-msg-meta', {}, [
+            `${CHANNEL_ICON.note} ${KIND_LABEL[msg.kind] ?? 'עדכון'}`,
+            el('span.mute-sm', { text: ` · ${UI.formatDateTime(msg.sentAt ?? msg.createdAt)}` })
+          ]),
+          el('div.ai-msg-body', { text: msg.body })
+        ]);
+      }
       const verdict = msg.verdict ? VERDICT[msg.verdict] : null;
       return el(`div.ai-msg.ai-msg-${msg.direction}`, {}, [
         el('div.ai-msg-meta', {}, [
@@ -434,7 +503,9 @@ const AiTaskView = (() => {
     });
 
     const actions = el('div.ai-actions', {}, [
+      open ? el('button.btn.btn-sm', { title: 'סוכם משהו בטלפון, בפגישה או בהודעה אחרת', onclick: () => talked(task, onChange) }, ['📞 דיברתי איתו']) : null,
       a.state === 'waiting' ? action('nudge', '🔔 תזכורת עכשיו') : null,
+      a.state === 'waiting' && a.nextActionAt ? postponeButton(task, onChange) : null,
       a.state === 'waiting' || a.state === 'needs_user' ? action('pause', '⏸ השהיה') : null,
       a.state === 'paused' || a.state === 'stalled' ? action('resume', a.state === 'stalled' ? '🔁 סבב מעקב נוסף' : '▶ חידוש') : null,
       open ? action('complete', '✅ התקבל') : null,
@@ -455,6 +526,108 @@ const AiTaskView = (() => {
         a.successCriteria ? el('div.mute-sm', { text: `נחשב שהתקבל כאשר: ${a.successCriteria}` }) : null
       ])
     ]);
+  }
+
+  /** "דחה" — הנדנוד הבא זז בכמה ימי עבודה, והספירה אינה משתנה */
+  function postponeButton(task, onChange) {
+    const b = el('button.btn.btn-sm', {}, ['⏭ דחייה']);
+    b.addEventListener('click', async () => {
+      const days = await UI.prompt('בכמה ימי עבודה לדחות את הנדנוד הבא?', { title: 'דחיית נדנוד', value: '1' });
+      if (!days) return;
+      b.disabled = true;
+      try {
+        const res = await API.post(`/api/ai/tasks/${task.id}/action`, { action: 'postpone', days: Number(days) || 1 });
+        onChange?.(res.task);
+      } catch (err) {
+        b.disabled = false;
+        UI.error(err);
+      }
+    });
+    return b;
+  }
+
+  const NOTE_ACTIONS = [
+    ['complete', '✅ התקבל / לא צריך יותר — לסגור'],
+    ['reschedule', '📅 סוכם מועד — להמתין עד אליו'],
+    ['update_request', '✎ הבקשה השתנתה'],
+    ['pause', '⏸ להשהות בלי מועד'],
+    ['continue', '🔁 להמשיך במעקב כרגיל'],
+    ['stop', '⏹ לעצור את המעקב']
+  ];
+
+  /**
+   * "דיברתי איתו" — המשתמש כותב שורה חופשית על מה שקרה מחוץ להתכתבות,
+   * העוזר מציע מה זה אומר למעקב, והמשתמש מאשר או בוחר אחרת. דבר אינו
+   * מתבצע לפני האישור.
+   *
+   * @param {{id:number, title?:string}} task
+   */
+  function talked(task, onChange) {
+    const base = `/api/ai/tasks/${task.id}`;
+    const note = el('textarea', { placeholder: 'לדוגמה: "דיברתי איתו, ישלח ביום ראשון" · "סיכמנו טופס 2 במקום 4" · "לא צריך יותר"' });
+    const proposalBox = el('div');
+    const actionSel = UI.select(NOTE_ACTIONS.map(([value, label]) => ({ value, label })), 'continue');
+    const date = el('input', { type: 'date' });
+    const goal = el('input', { type: 'text', placeholder: 'מה מבקשים עכשיו' });
+    const criteria = el('input', { type: 'text', placeholder: 'מתי זה נחשב שהתקבל' });
+    const extra = el('div');
+    const drawExtra = () => UI.mount(extra,
+      actionSel.value === 'reschedule' ? UI.field('המועד שסוכם', date, 'המעקב ימתין, ויחזור למחרת המועד אם לא יגיע')
+        : actionSel.value === 'update_request' ? el('div', {}, [UI.field('הבקשה המעודכנת', goal), UI.field('נחשב שהתקבל כאשר', criteria)])
+          : null);
+    actionSel.addEventListener('change', drawExtra);
+
+    const understand = el('button.btn', {}, ['✨ מה זה אומר?']);
+    const save = el('button.btn.btn-primary', {}, ['שמירה']);
+    understand.addEventListener('click', async () => {
+      if (!note.value.trim()) return note.focus();
+      understand.disabled = true;
+      understand.textContent = 'קורא…';
+      try {
+        const { proposal } = await API.post(`${base}/note/interpret`, { note: note.value.trim() });
+        actionSel.value = proposal.action;
+        if (proposal.date) date.value = proposal.date;
+        if (proposal.goal) goal.value = proposal.goal;
+        if (proposal.success_criteria) criteria.value = proposal.success_criteria;
+        drawExtra();
+        UI.mount(proposalBox, el('div.alert.alert-info', {}, [el('span', { text: '✨' }), el('div', { text: proposal.explanation })]));
+      } catch (err) {
+        UI.error(err);
+      }
+      understand.disabled = false;
+      understand.textContent = '✨ מה זה אומר?';
+    });
+    save.addEventListener('click', async () => {
+      if (actionSel.value === 'reschedule' && !date.value) return date.focus();
+      save.disabled = true;
+      try {
+        const res = await API.post(`${base}/note`, {
+          note: note.value.trim(), action: actionSel.value, date: date.value,
+          goal: goal.value.trim(), successCriteria: criteria.value.trim()
+        });
+        m.close();
+        UI.success('עודכן — העוזר ימשיך מכאן לפי מה שסוכם');
+        onChange?.(res.task);
+      } catch (err) {
+        save.disabled = false;
+        UI.error(err);
+      }
+    });
+
+    drawExtra();
+    const m = UI.modal({
+      title: '📞 דיברתי איתו',
+      body: el('div', {}, [
+        task.title ? el('div.mute-sm', { text: task.title, style: { marginBottom: '8px' } }) : null,
+        UI.field('מה קרה?', note, 'נשמר בהתכתבות של המשימה, והתזכורות הבאות ייכתבו לפיו'),
+        el('div', { style: { marginBottom: '10px' } }, [understand]),
+        proposalBox,
+        UI.field('מה עכשיו?', actionSel),
+        extra
+      ]),
+      footer: [save, el('div.spacer'), el('button.btn', { onclick: () => m.close() }, ['ביטול'])]
+    });
+    setTimeout(() => note.focus(), 50);
   }
 
   function editDetails(task, a, onChange) {
@@ -568,5 +741,5 @@ const AiTaskView = (() => {
     });
   }
 
-  return { openDialog, panel, openWhatsApp };
+  return { openDialog, panel, openWhatsApp, talked, postponeButton };
 })();

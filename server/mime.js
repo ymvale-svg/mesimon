@@ -228,6 +228,7 @@ function parse(raw) {
   return {
     from: parseAddress(headers.from),
     to: String(headers.to ?? ''),
+    cc: String(headers.cc ?? ''),
     subject: decodeWords(headers.subject ?? ''),
     date: headers.date ? new Date(headers.date) : null,
     messageId: messageIds(headers['message-id'])[0] ?? null,

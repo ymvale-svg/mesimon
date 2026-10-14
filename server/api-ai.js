@@ -8,18 +8,20 @@
  */
 const D = require('./db');
 const P = require('./permissions');
-const Rules = require('./rules-engine');
 const AiTasks = require('./ai-tasks');
 const Claude = require('./ai/claude');
 const Imap = require('./imap');
 const Mailer = require('./mailer');
 const WhatsApp = require('./whatsapp');
+const Gmail = require('./gmail');
+const MailScan = require('./ai/mail-scan');
 const { badRequest, forbidden, notFound, readJson, sendJson } = require('./http-kit');
 
 function register(router, h) {
-  const { getTaskOr404, assertVisible, mayOnTask, shapeTask, actorRef, saveAttachment } = h;
+  const { getTaskOr404, assertVisible, mayOnTask, shapeTask, actorRef, saveAttachment, createTask, assertMayAssignTo } = h;
 
   AiTasks.setHooks({ saveFile: saveAttachment });
+  MailScan.init({ createTask });
 
   const internalOnly = (actor) => {
     if (actor.type === 'vendor') throw forbidden();
@@ -79,9 +81,9 @@ function register(router, h) {
     sendJson(res, 200, {
       enabled: Claude.isEnabled(),
       mail: Mailer.isEnabled(),
-      inbox: Imap.isEnabled(),
+      inbox: Imap.isEnabled() || Gmail.isConnected(actor.id),
       whatsapp: WhatsApp.publicChannel(actor.id),
-      defaults: AiTasks.defaultPolicy(),
+      defaults: AiTasks.defaultPolicy(actor.id),
       contacts: contactsFor(actor)
     });
   });
@@ -130,7 +132,21 @@ function register(router, h) {
     };
     if (!instruction) throw badRequest('נדרש לכתוב מה המשימה');
     if (!String(draft.body ?? '').trim()) throw badRequest('אין נוסח לשליחה');
-    if (channel === 'email') {
+
+    /*
+     * הנמען עובד בארגון: אין מייל מבחוץ. המשימה משויכת אליו במשימון — עם
+     * אותה בדיקת הרשאה של כל שיוך — והמעקב הוא תזכורות בתוך המערכת.
+     */
+    const colleague = contact.type === 'user' && contact.refId
+      ? D.get("SELECT id, full_name, email FROM users WHERE id = ? AND status = 'active'", contact.refId)
+      : null;
+    if (contact.type === 'user' && contact.refId && !colleague) throw badRequest('העובד שנבחר אינו פעיל');
+    if (colleague && colleague.id === actor.id) throw badRequest('אי אפשר לפתוח משימת AI לעצמך');
+    if (colleague) {
+      assertMayAssignTo(actor, 'user', colleague.id);
+      contact.name = contact.name || colleague.full_name;
+      contact.email = colleague.email;
+    } else if (channel === 'email') {
       if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(contact.email)) throw badRequest('נדרשת כתובת מייל תקינה לנמען');
       if (!String(draft.subject ?? '').trim()) throw badRequest('נדרש נושא למייל');
       if (!Mailer.isEnabled()) throw badRequest('שליחת דואר אינה מוגדרת בשרת — אפשר לפתוח בוואטסאפ, או לפנות למנהל המערכת');
@@ -139,27 +155,35 @@ function register(router, h) {
       if (!WhatsApp.isReady(actor.id)) throw badRequest('הוואטסאפ שלך אינו מחובר. מחברים אותו מ"החשבון שלי"');
     }
 
+    // נפתחה מהצעה שהגיעה מהמייל ("הפוך למשימת AI") — רק הצעה של המשתמש עצמו
+    const suggestion = b.suggestionId ? MailScan.suggestionById(Number(b.suggestionId)) : null;
+    if (suggestion && (suggestion.user_id !== actor.id || suggestion.status !== 'pending')) throw badRequest('ההצעה כבר טופלה');
+
     const projectId = b.projectId ? Number(b.projectId) : null;
     if (projectId && !D.get('SELECT 1 FROM projects WHERE id = ?', projectId)) throw badRequest('הפרויקט לא נמצא');
 
-    const boardId = D.internalBoard().id;
     const title = String(draft.title || draft.goal || instruction).trim().slice(0, 120);
     const description = [
-      draft.goal,
+      colleague ? draft.body : draft.goal,
       draft.success_criteria ? `נחשב כהתקבל כאשר: ${draft.success_criteria}` : null,
-      `נמען: ${[contact.name, contact.email, contact.phone].filter(Boolean).join(' · ')}`
+      colleague ? `ביקש/ה: ${actor.name}` : `נמען: ${[contact.name, contact.email, contact.phone].filter(Boolean).join(' · ')}`
     ].filter(Boolean).join('\n');
 
-    const inserted = D.run(
-      `INSERT INTO tasks (title, description, project_id, board_id, assignee_type, assignee_id, status, priority,
-         due_date, created_at, created_by, status_changed_at, department_id)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-      title, description, projectId, boardId, 'user', actor.id, Rules.firstColumnKey(boardId),
-      ['low', 'normal', 'high', 'urgent'].includes(b.priority) ? b.priority : 'normal',
-      b.dueDate || null, D.nowIso(), actor.id, D.nowIso(), actor.departmentId ?? null
-    );
-    const taskId = Number(inserted.lastInsertRowid);
-    D.audit(taskId, actorRef(actor), 'created', 'המשימה נוצרה כמשימת AI');
+    const taskId = createTask(actor, {
+      title,
+      description,
+      projectId,
+      // משימה לעובד אצלו בלוח; משימה מול גורם חיצוני — אצל מי שפתח אותה
+      assigneeType: 'user',
+      assigneeId: colleague ? colleague.id : actor.id,
+      priority: ['low', 'normal', 'high', 'urgent'].includes(b.priority) ? b.priority : 'normal',
+      dueDate: b.dueDate || null,
+      source: suggestion ? 'email' : '',
+      sourceRef: suggestion?.header_id ?? null,
+      sourceUserId: suggestion ? actor.id : null,
+      auditNote: suggestion ? `המשימה נוצרה כמשימת AI ממייל של ${suggestion.from_name}` : 'המשימה נוצרה כמשימת AI'
+    });
+    if (suggestion) MailScan.markConverted(suggestion.id, actor.id, taskId);
 
     let sendError = null;
     try {
@@ -216,11 +240,37 @@ function register(router, h) {
 
   router.post('/api/ai/tasks/:taskId/action', async (req, res, ctx) => {
     const { actor, task, req: aiReq } = requestFor(ctx, { act: true });
-    const { action } = await readJson(req);
-    if (!['pause', 'resume', 'nudge', 'stop', 'complete'].includes(action)) throw badRequest('פעולה לא מוכרת');
-    AiTasks.setState(aiReq, action, actor);
+    const b = await readJson(req);
+    const { action, days } = b;
+    if (!['pause', 'resume', 'nudge', 'stop', 'complete', 'postpone'].includes(action)) throw badRequest('פעולה לא מוכרת');
+    AiTasks.setState(aiReq, action, actor, { days });
     // "תזכורת עכשיו" לא מחכה לסבב הבא של המנוע
     if (action === 'nudge') await AiTasks.tick();
+    reply(res, actor, task);
+  });
+
+  // --- "דיברתי איתו": עדכון ממה שקרה מחוץ להתכתבות ---
+
+  router.post('/api/ai/tasks/:taskId/note/interpret', async (req, res, ctx) => {
+    const { req: aiReq } = requestFor(ctx, { act: true });
+    const { note } = await readJson(req);
+    if (!String(note ?? '').trim()) throw badRequest('מה קרה? כתבו שורה אחת');
+    try {
+      sendJson(res, 200, { proposal: await AiTasks.interpretNote(aiReq, String(note).trim()) });
+    } catch (err) {
+      throw userError(err);
+    }
+  });
+
+  router.post('/api/ai/tasks/:taskId/note', async (req, res, ctx) => {
+    const { actor, task, req: aiReq } = requestFor(ctx, { act: true });
+    const b = await readJson(req);
+    if (b.action === 'reschedule' && !/^\d{4}-\d{2}-\d{2}$/.test(String(b.date ?? ''))) throw badRequest('נדרש תאריך');
+    try {
+      AiTasks.applyNote(aiReq, actor, b);
+    } catch (err) {
+      throw userError(err);
+    }
     reply(res, actor, task);
   });
 
@@ -253,6 +303,7 @@ function register(router, h) {
     if (b.apiUrl && !/^https:\/\/[^\s/]+/.test(String(b.apiUrl).trim())) throw badRequest('כתובת ה-API חייבת להתחיל ב-https://');
     WhatsApp.save(actor.id, b);
     const state = await WhatsApp.checkState(actor.id);
+    if (state.state === 'authorized') await WhatsApp.enableOutgoingNotifications(actor.id);
     sendJson(res, 200, { channel: WhatsApp.publicChannel(actor.id), ...state });
   });
 
@@ -268,6 +319,108 @@ function register(router, h) {
     internalOnly(actor);
     WhatsApp.remove(actor.id);
     sendJson(res, 200, { channel: null });
+  });
+
+  // --- Gmail אישי ---
+
+  const userOnly = (ctx) => {
+    const actor = ctx.requireActor();
+    if (actor.type !== 'user') throw forbidden();
+    return actor;
+  };
+
+  const gmailInfo = (actor) => ({
+    enabled: Gmail.isEnabled(),
+    ai: Claude.isEnabled(),
+    scanEnabled: Boolean(D.getSetting('ai_mail_scan_enabled', true)),
+    scanTime: D.getSetting('ai_scan_time', '07:00'),
+    dailyLimit: Number(D.getSetting('ai_scan_daily_limit', 100)),
+    connection: Gmail.publicStatus(actor.id),
+    senders: MailScan.senders(actor.id),
+    prefs: {
+      approveReminders: AiTasks.defaultPolicy(actor.id).approveReminders,
+      mailAutoCreate: D.userPrefs(actor.id).mailAutoCreate === true
+    }
+  });
+
+  router.get('/api/me/gmail', async (req, res, ctx) => {
+    sendJson(res, 200, gmailInfo(userOnly(ctx)));
+  });
+
+  router.get('/api/me/gmail/connect', async (req, res, ctx) => {
+    const actor = userOnly(ctx);
+    if (!Gmail.isEnabled()) throw badRequest('חיבור Google אינו מוגדר בשרת');
+    const user = D.get('SELECT id, email FROM users WHERE id = ?', actor.id);
+    res.writeHead(302, { location: Gmail.authorizeUrl(req, user), 'cache-control': 'no-store' });
+    res.end();
+  });
+
+  router.delete('/api/me/gmail', async (req, res, ctx) => {
+    const actor = userOnly(ctx);
+    await Gmail.disconnect(actor.id);
+    sendJson(res, 200, gmailInfo(actor));
+  });
+
+  router.post('/api/me/gmail/scan', async (req, res, ctx) => {
+    const actor = userOnly(ctx);
+    if (!Claude.isEnabled()) throw badRequest('חיבור ה-AI אינו מוגדר בשרת');
+    if (!D.getSetting('ai_mail_scan_enabled', true)) throw badRequest('סריקת המיילים כבויה במסך הניהול');
+    const b = await readJson(req);
+    try {
+      MailScan.startScan(actor.id, { range: b.range, from: b.from, to: b.to });
+    } catch (err) {
+      throw userError(err);
+    }
+    sendJson(res, 202, gmailInfo(actor));
+  });
+
+  router.put('/api/me/ai-prefs', async (req, res, ctx) => {
+    const actor = userOnly(ctx);
+    const b = await readJson(req);
+    if (typeof b.approveReminders === 'boolean') D.setUserPref(actor.id, 'aiApproveReminders', b.approveReminders);
+    if (typeof b.mailAutoCreate === 'boolean') D.setUserPref(actor.id, 'mailAutoCreate', b.mailAutoCreate);
+    sendJson(res, 200, gmailInfo(actor));
+  });
+
+  router.put('/api/me/mail-senders', async (req, res, ctx) => {
+    const actor = userOnly(ctx);
+    const b = await readJson(req);
+    if (!/^[^\s@]+@[^\s@]+$/.test(String(b.email ?? '').trim())) throw badRequest('כתובת לא תקינה');
+    MailScan.setSender(actor.id, b.email, ['trust', 'ignore'].includes(b.mode) ? b.mode : null);
+    sendJson(res, 200, gmailInfo(actor));
+  });
+
+  // --- "ממתין לאישורך" — כל מה שהעוזר מחכה בו למשתמש ---
+
+  router.get('/api/ai/inbox', async (req, res, ctx) => {
+    const actor = userOnly(ctx);
+    sendJson(res, 200, {
+      upcoming: AiTasks.upcomingFor(actor.id),
+      waiting: AiTasks.waitingOnUser(actor.id),
+      suggestions: MailScan.listFor(actor.id),
+      gmail: gmailInfo(actor)
+    });
+  });
+
+  const suggestionAction = (name, fn) => router.post(`/api/ai/suggestions/:id/${name}`, async (req, res, ctx) => {
+    const actor = userOnly(ctx);
+    const b = await readJson(req);
+    try {
+      const taskId = fn(Number(ctx.params.id), actor, b);
+      sendJson(res, 200, { ok: true, taskId: typeof taskId === 'number' ? taskId : null });
+    } catch (err) {
+      throw userError(err);
+    }
+  });
+  suggestionAction('approve', (id, actor, b) => MailScan.approve(id, actor, b ?? {}));
+  suggestionAction('reject', (id, actor, b) => MailScan.reject(id, actor, { ignoreSender: Boolean(b?.ignoreSender) }));
+  suggestionAction('join', (id, actor) => MailScan.join(id, actor));
+  suggestionAction('skip', (id, actor) => MailScan.skip(id, actor));
+  suggestionAction('undo', (id, actor) => MailScan.undo(id, actor));
+
+  router.post('/api/ai/suggestions/approve-all', async (req, res, ctx) => {
+    const actor = userOnly(ctx);
+    sendJson(res, 200, MailScan.approveAll(actor));
   });
 
   // --- ניהול ---

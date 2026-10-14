@@ -75,8 +75,9 @@ const HomeView = (() => {
    * הסדר שכאן הוא ברירת המחדל, וכל מפתח שאינו מוכר מסונן — כך העדפה שנשמרה
    * לפני שכרטיס נולד אינה מסתירה אותו לנצח.
    */
-  const CARD_ORDER = ['deptCut', 'myTasks', 'calendar', 'department', 'mentions', 'done', 'approval', 'feed'];
+  const CARD_ORDER = ['aiInbox', 'deptCut', 'myTasks', 'calendar', 'department', 'mentions', 'done', 'approval', 'feed'];
   const CARD_LABEL = {
+    aiInbox: 'ממתין לאישורך',
     deptCut: 'חתך מחלקתי',
     myTasks: 'המשימות שלי',
     calendar: 'השבוע הקרוב',
@@ -87,7 +88,7 @@ const HomeView = (() => {
     feed: 'פיד עדכונים אחרון'
   };
   // כרטיסים שברירת המחדל שלהם היא שורה שלמה — טבלת חתך רחבה מדי לחצי שורה
-  const WIDE_BY_DEFAULT = new Set(['deptCut']);
+  const WIDE_BY_DEFAULT = new Set(['deptCut', 'aiInbox']);
 
   /*
    * גבולות גובה החלון — לא של הרשימה שבתוכו. בכותרת ובריפוד יושבים כ-84
@@ -759,11 +760,14 @@ const HomeView = (() => {
     if (!silent) { keepCompleted.clear(); UI.mount(container, UI.spinner()); }
     let data;
     let reports = null;
+    let inbox = null;
     try {
       // החתך המחלקתי נשען על דוח הארגון. נטען במקביל, וכשל בו לא מפיל את הדשבורד.
-      [data, reports] = await Promise.all([
+      // כך גם "ממתין לאישורך" של עוזר ה-AI.
+      [data, reports, inbox] = await Promise.all([
         API.home(),
-        showsDepartmentCut() ? API.reports().catch(() => null) : Promise.resolve(null)
+        showsDepartmentCut() ? API.reports().catch(() => null) : Promise.resolve(null),
+        App.isVendor() ? Promise.resolve(null) : AiInboxView.load().catch(() => null)
       ]);
     } catch (err) {
       // בטעינת רקע כשל רגעי לא ימחק את מה שכבר על המסך
@@ -787,6 +791,7 @@ const HomeView = (() => {
      * עליו — וגם אינו מציע להחזיר חלון שאין בו דבר.
      */
     const cards = {
+      aiInbox: inbox ? AiInboxView.card(inbox, { reload }) : null,
       deptCut: reports ? departmentCutCard(reports.departments) : null,
       myTasks: myTasksCard(data.tasks.mine),
       calendar: calendarCard(data.weekAhead),

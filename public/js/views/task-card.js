@@ -135,6 +135,13 @@ const TaskCardView = (() => {
         refreshBackground();
         App.refreshNotifications();
       }),
+      // משימה שנולדה ממייל — הקישור למייל עצמו רק אצל מי שהוא בתיבה שלו
+      task.source?.type === 'email'
+        ? el('div.mute-sm', { style: { marginBottom: '10px' } }, [
+            '📧 נוצרה ממייל',
+            task.source.link ? el('a', { href: task.source.link, target: '_blank', rel: 'noopener' }, [' · פתיחת המייל המקורי ↗']) : null
+          ])
+        : null,
       vendorWorkflowBar(),
       descNode,
       shortStatusRow(),

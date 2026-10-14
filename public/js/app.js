@@ -144,6 +144,7 @@ const App = (() => {
       startNotifPolling();
       navigate(isVendor() ? 'vendor' : 'home');
       openTaskFromUrl();
+      if (!isVendor()) AiInboxView.handleReturn();
       registerServiceWorker();
       /*
        * רישום מחדש בכל כניסה, ולא רק בהפעלה הראשונה: ההרשמה נשמרת בשרת לפי
@@ -2038,6 +2039,8 @@ const App = (() => {
         ]),
         // הוואטסאפ האישי משמש את משימות ה-AI להמשך מעקב מהמספר של המשתמש
         isVendor() ? null : el('button.btn.mt', { onclick: () => AiTaskView.openWhatsApp() }, ['💬 חיבור הוואטסאפ שלי']),
+        // Gmail אישי: סריקת מיילים למשימות, וזיהוי תשובות וקשר ישיר בבקשות AI
+        isVendor() ? null : el('button.btn.mt', { style: { marginInlineStart: '8px' }, onclick: () => AiInboxView.openGmail(() => HomeView.reload()) }, ['📧 Gmail ועוזר ה-AI']),
         el('div.alert.alert-info.mt', {}, [
           el('div', {}, [
             el('b', { text: 'מה מותר לי במערכת?' }),

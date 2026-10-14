@@ -17,6 +17,8 @@ const Xlsx = require('./xlsx-write');
 const Spreadsheet = require('./spreadsheet');
 const AiTasks = require('./ai-tasks');
 const AiApi = require('./api-ai');
+const Gmail = require('./gmail');
+const MailScan = require('./ai/mail-scan');
 const Imap = require('./imap');
 const Claude = require('./ai/claude');
 const {
@@ -545,6 +547,11 @@ function shapeTask(task, actor, { withDetails = false } = {}) {
     ...base,
     // ההתכתבות המלאה של משימת AI, לפאנל בכרטיס המשימה
     aiDetail: isVendor(actor) ? null : AiTasks.detailFor(task.id),
+    // משימה שנולדה ממייל: הקישור אליו — רק למי שהמייל בתיבה שלו
+    source: isVendor(actor) || !task.source ? null : {
+      type: task.source,
+      link: actor.type === 'user' ? MailScan.sourceLink(task, actor.id) : null
+    },
     checklist: checklist.map((c) => ({
       id: c.id, text: c.text, done: !!c.done, note: c.note ?? '',
       commentsCount: D.get(
@@ -638,9 +645,27 @@ router.get('/api/auth/google/start', async (req, res) => {
   redirectTo(res, Google.authorizeUrl(req));
 });
 
-router.get('/api/auth/google/callback', async (req, res) => {
+router.get('/api/auth/google/callback', async (req, res, ctx) => {
   const params = parseUrl(req).searchParams;
   const fail = (message) => redirectTo(res, `/?googleError=${encodeURIComponent(message)}`);
+
+  /*
+   * חיבור תיבת Gmail חוזר לאותה כתובת כמו הכניסה — כך אין צורך לרשום ב-Google
+   * כתובת חזרה נוספת. ה-state מבחין ביניהם, והוא קשור למשתמש שהתחיל את החיבור.
+   */
+  if (Gmail.isGmailState(params.get('state'))) {
+    const back = (key, value) => redirectTo(res, `/?${key}=${encodeURIComponent(value)}`);
+    const userId = Gmail.consumeState(params.get('state'));
+    if (params.get('error')) return back('gmailError', 'החיבור בוטל');
+    if (!userId || (ctx.actor && (ctx.actor.type !== 'user' || ctx.actor.id !== userId))) return back('gmailError', 'הבקשה פגה או אינה תקינה. נסו לחבר שוב.');
+    try {
+      await Gmail.connect(userId, params.get('code'), req);
+      return back('gmail', 'connected');
+    } catch (err) {
+      console.error('[משימון] חיבור Gmail נכשל:', err.message);
+      return back('gmailError', err.message);
+    }
+  }
 
   if (!Google.isEnabled()) return fail('כניסה עם Google אינה מוגדרת במערכת');
   if (params.get('error')) return fail('הכניסה בוטלה');
@@ -1154,9 +1179,23 @@ router.get('/api/tasks/:id', async (req, res, ctx) => {
 
 router.post('/api/tasks', async (req, res, ctx) => {
   const actor = ctx.requireActor();
-  requirePerm(actor, 'create_task');
   const body = await readJson(req);
+  const id = createTask(actor, body);
+  sendJson(res, 201, { task: shapeTask(getTaskOr404(id), actor, { withDetails: true }) });
+});
 
+/**
+ * יצירת משימה — כל הכללים במקום אחד: הרשאה, בורד, שיוך, מחלקה, צ'קליסט,
+ * אחראים נוספים והתראות. משמש גם את משימות ה-AI ואת ההצעות מהמייל, כדי
+ * שמשימה שנוצרה משם לא תעקוף בדיקה שחלה על משימה רגילה.
+ *
+ * ‎body.source‎ — מאיפה המשימה הגיעה (‎email‎), ‎sourceRef‎ — מזהה המייל,
+ * ‎sourceUserId‎ — בתיבה של מי. ‎auditNote‎ — הנוסח ביומן הפעולות.
+ *
+ * @returns {number} מזהה המשימה
+ */
+function createTask(actor, body) {
+  requirePerm(actor, 'create_task');
   const title = String(body.title ?? '').trim();
   if (!title) throw badRequest('נדרשת כותרת למשימה');
 
@@ -1245,6 +1284,10 @@ router.post('/api/tasks', async (req, res, ctx) => {
     String(body.statusShort ?? '').slice(0, 200)
   );
   const id = Number(res1.lastInsertRowid);
+  if (body.source) {
+    D.run('UPDATE tasks SET source = ?, source_ref = ?, source_user_id = ? WHERE id = ?',
+      String(body.source), body.sourceRef ?? null, body.sourceUserId ?? null, id);
+  }
 
   /**
    * הצ'קליסט מתקבל כרשימת מחרוזות (הקלדה חופשית בדיאלוג) או כרשימת אובייקטים
@@ -1268,12 +1311,11 @@ router.post('/api/tasks', async (req, res, ctx) => {
     D.audit(id, actorRef(actor), 'assignees', `אחראים נוספים: ${extras.map((e) => partyName(e.type, e.id)).filter(Boolean).join(', ')}`);
   }
 
-  D.audit(id, actorRef(actor), 'created', 'המשימה נוצרה');
+  D.audit(id, actorRef(actor), 'created', body.auditNote || 'המשימה נוצרה');
   if (assigneeId) notifyAssignment(id, assigneeType, assigneeId, title, actor);
   for (const e of extras) notifyAssignment(id, e.type, e.id, title, actor, { extra: true });
-
-  sendJson(res, 201, { task: shapeTask(getTaskOr404(id), actor, { withDetails: true }) });
-});
+  return id;
+}
 
 /**
  * מי שהוגדר אחראי מקבל התראה בתוך המערכת וגם דואר.
@@ -3734,6 +3776,10 @@ router.get('/api/admin/settings', async (req, res, ctx) => {
         ...Claude.status(),
         missing: ['ANTHROPIC_API_KEY'].filter((k) => !process.env[k])
       },
+      gmail: {
+        enabled: Gmail.isEnabled(),
+        connected: D.get("SELECT COUNT(*) c FROM mail_connections WHERE state = 'ok'").c
+      },
       inbox: {
         ...Imap.status(),
         missing: Imap.isEnabled() ? [] : ['IMAP_HOST', 'IMAP_USER', 'IMAP_PASS'].filter((k) => !process.env[k])
@@ -4503,6 +4549,6 @@ router.get('/api/search', async (req, res, ctx) => {
   });
 });
 
-AiApi.register(router, { getTaskOr404, assertVisible, mayOnTask, shapeTask, actorRef, saveAttachment });
+AiApi.register(router, { getTaskOr404, assertVisible, mayOnTask, shapeTask, actorRef, saveAttachment, createTask, assertMayAssignTo });
 
 module.exports = { router, PRIORITIES, shapeTask, canSeeTask };
