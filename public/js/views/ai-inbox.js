@@ -427,21 +427,28 @@ const AiInboxView = (() => {
           ? el('div', {}, [
               c?.state === 'revoked' ? el('div.alert.alert-warn', {}, [el('span', { text: '📭' }), el('div', { text: c.error || 'החיבור בוטל — יש לחבר מחדש' })]) : null,
               el('p', { style: { marginTop: 0 } }, [
-                'משימון יקרא את המיילים שלא נקראו ויציע מהם משימות. ',
-                el('b', { text: 'קריאה בלבד' }),
-                ' — הוא לא שולח, לא מוחק ולא מסמן כנקרא. מאותה תיבה הוא גם יזהה תשובות לבקשות AI, ויעצור תזכורות כשתכתבו לנמען בעצמכם.'
+                'אישור אחד ב-Google, ל',
+                el('b', { text: 'קריאה ושליחה' }),
+                ': מיילים של משימות AI ייצאו מהתיבה שלך (רק מה שאישרת, ותזכורות לפי המדיניות) ויישארו אצלך ב"דואר יוצא"; התשובות יחזרו אליך וייקלטו; המיילים שלא נקראו יהפכו להצעות משימה; ותזכורות ייעצרו כשתכתבו לנמען בעצמכם. משימון לא מוחק ולא מסמן כנקרא.'
               ]),
               el('a.btn.btn-primary', { href: '/api/me/gmail/connect' }, ['חיבור Gmail'])
             ])
           : el('div', {}, [
+              !c.canSend
+                ? el('div.alert.alert-warn', {}, [el('span', { text: '✉️' }), el('div', {}, [
+                    'התיבה מחוברת לקריאה בלבד, ולכן מיילים של משימות AI לא יוצאים ממנה. ',
+                    el('a', { href: '/api/me/gmail/connect' }, ['חיבור מחדש עם הרשאת שליחה'])
+                  ])])
+                : null,
               el('div.flex', { style: { gap: '8px', alignItems: 'center' } }, [
                 el('span', { text: '✅' }), el('b', { text: c.email }),
+                el('span.mute-sm', { text: c.canSend ? 'קריאה ושליחה' : 'קריאה בלבד' }),
                 el('span.mute-sm', { text: c.lastScanAt ? `סריקה אחרונה ${UI.relative(c.lastScanAt)}` : 'עוד לא נסרקה' }),
                 el('div.spacer'),
                 (() => {
                   const b = el('button.btn.btn-sm.btn-ghost', {}, ['ניתוק']);
                   b.addEventListener('click', async () => {
-                    if (!await UI.confirm('לנתק את Gmail? הסריקה תיפסק וההרשאה תבוטל גם ב-Google.', { danger: true, okText: 'ניתוק' })) return;
+                    if (!await UI.confirm('לנתק את Gmail? הסריקה תיפסק, תזכורות במייל לא ייצאו, וההרשאה תבוטל גם ב-Google.', { danger: true, okText: 'ניתוק' })) return;
                     try { refresh(await API.del('/api/me/gmail')); } catch (err) { UI.error(err); }
                   });
                   return b;

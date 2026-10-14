@@ -1021,32 +1021,12 @@ const AdminView = (() => {
           x.mail.enabled ? `נשלח מהכתובת ${x.mail.from}` : 'ההזמנות נוצרות אך אינן נשלחות; הקישור מוצג להעברה ידנית.'),
         row('כתובת המערכת', !!x.publicUrl, x.publicUrl ?? '', [],
           x.publicUrl ? 'קישורי ההזמנות נבנים מכתובת זו.' : 'קישורי ההזמנות נבנים מהכתובת שדרכה נכנסתם.'),
-        x.gmail ? row('Gmail אישי (סריקת מיילים)', x.gmail.enabled, `${x.gmail.connected} תיבות מחוברות`, x.gmail.enabled ? [] : ['GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET'],
-          x.gmail.enabled ? 'כל משתמש מחבר את התיבה שלו מ"החשבון שלי". נדרשת הפעלת Gmail API ב-Google Cloud — ראו "הגדרת Gmail ו-AI".' : 'על אותו חיבור Google שמשמש לכניסה.') : null,
+        x.gmail ? row('Gmail אישי (שליחה וסריקה)', x.gmail.enabled, `${x.gmail.connected} תיבות מחוברות`, x.gmail.enabled ? [] : ['GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET'],
+          x.gmail.enabled ? 'כל משתמש מחבר את התיבה שלו מ"החשבון שלי" — קריאה ושליחה. מיילים של משימות AI יוצאים רק משם. נדרשת הפעלת Gmail API ב-Google Cloud — ראו "הגדרת Gmail ו-AI".' : 'על אותו חיבור Google שמשמש לכניסה. בלעדיו משימות AI עובדות רק בוואטסאפ ובתוך המערכת.') : null,
         x.ai ? row('משימות AI', x.ai.enabled, x.ai.model, x.ai.missing,
           x.ai.enabled ? 'ניסוח פניות, מעקב והכרעה אם התשובה מספקת.' : 'בלי המפתח האפשרות "משימת AI" אינה זמינה.') : null,
-        x.inbox ? row('קריאת תשובות מהדואר', x.inbox.enabled, `${x.inbox.user} @ ${x.inbox.host}`, x.inbox.missing,
-          x.inbox.enabled
-            ? `${x.inbox.hostDerived ? 'השרת נגזר אוטומטית משרת ה-SMTP. ' : ''}תשובות למשימות AI נקלטות מתיבה זו.`
-            : 'בלי קריאת דואר, ה-AI אינו רואה תשובות במייל — רק בוואטסאפ.') : null,
-        x.inbox?.enabled ? el('div', { style: { paddingTop: '10px' } }, [inboxTestButton()]) : null
       ])
     ]);
-  }
-
-  /** בדיקת הכניסה לתיבת הדואר — סיסמה שגויה מתגלה כאן ולא בתשובה שלא נקלטה */
-  function inboxTestButton() {
-    const b = el('button.btn.btn-sm', {}, ['בדיקת חיבור לתיבת הדואר']);
-    b.addEventListener('click', async () => {
-      b.disabled = true;
-      try {
-        const r = await API.post('/api/admin/ai/test-inbox');
-        if (r.ok) UI.success('החיבור לתיבת הדואר תקין');
-        else UI.toast(`החיבור נכשל: ${r.error}`, 'error');
-      } catch (err) { UI.error(err); }
-      b.disabled = false;
-    });
-    return b;
   }
 
   /** מצב אחסון הנתונים — התשובה לשאלה "האם הנתונים שלי נשמרים" */

@@ -531,7 +531,8 @@ CREATE TABLE IF NOT EXISTS ai_messages (
   subject      TEXT    NOT NULL DEFAULT '',
   body         TEXT    NOT NULL DEFAULT '',
   message_id   TEXT,                    -- Message-ID של המייל, לשרשור ולזיהוי תשובה
-  external_id  TEXT,                    -- מזהה ההודעה אצל ספק הוואטסאפ
+  external_id  TEXT,                    -- וואטסאפ: מזהה ההודעה אצל הספק. מייל: השרשור ב-Gmail של השולח
+  gmail_id     TEXT,                    -- מייל שיצא מתיבת המשתמש: המזהה שלו ב-Gmail, כדי לא לזהות אותו כ"כתבת בעצמך"
   from_address TEXT    NOT NULL DEFAULT '',
   verdict      TEXT,                    -- הכרעת ה-AI על הודעה נכנסת
   analysis     TEXT    NOT NULL DEFAULT '',
@@ -1101,6 +1102,7 @@ function migrate() {
   db.exec('CREATE INDEX IF NOT EXISTS idx_tasks_source_ref ON tasks(source_ref)');
   addColumn('ai_requests', 'attention', "TEXT NOT NULL DEFAULT ''");
   addColumn('ai_requests', 'contact_checked_at', 'TEXT');
+  addColumn('ai_messages', 'gmail_id', 'TEXT');
   // סטטוס הבקרה, שצובע את השורה במסך הבקרה
   addColumn('tasks', 'track_status', "TEXT NOT NULL DEFAULT ''");
   addColumn('tasks', 'track_status_id', 'INTEGER REFERENCES task_statuses(id) ON DELETE SET NULL');

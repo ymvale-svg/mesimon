@@ -31,7 +31,8 @@ const SKILL_PATH = path.join(__dirname, 'skills', 'email-to-tasks.md');
 const TZ = 'Asia/Jerusalem';
 const DAY = 24 * 60 * 60 * 1000;
 const CONCURRENCY = 3;
-const CONTACT_CHECK_MINUTES = 15;
+// התשובות חוזרות לתיבה של המשתמש, ולכן זה גם קצב קליטת התשובות
+const CONTACT_CHECK_MINUTES = 5;
 
 const skill = () => fs.readFileSync(SKILL_PATH, 'utf8');
 const parseJson = (text, fallback) => { try { return JSON.parse(text); } catch { return fallback; } };
@@ -510,15 +511,15 @@ async function morningRun() {
 
 /**
  * לכל בקשת AI פתוחה מול גורם חיצוני, אצל מי שחיבר Gmail:
- *   • הנמען ענה ישירות למשתמש (ולא לתיבת המערכת) — התשובה עוברת למעקב.
+ *   • הנמען ענה — התשובה עוברת למעקב (המייל יצא מהתיבה הזו, ולכן התשובה חוזרת אליה).
  *   • המשתמש כתב לנמען בעצמו — המעקב עוצר ושואל מה המצב.
- * פעם ברבע שעה לכל בקשה — זה מספיק כדי שתזכורת לא תצא אחרי שיחה, ולא מעמיס.
+ * פעם בחמש דקות לכל בקשה — זה גם קצב קליטת התשובות, כי הן חוזרות לתיבה הזו.
  */
 async function pollMailbox() {
   const cutoff = new Date(Date.now() - CONTACT_CHECK_MINUTES * 60000).toISOString();
   const open = D.all(
     `SELECT r.* FROM ai_requests r JOIN mail_connections c ON c.user_id = r.owner_id AND c.state = 'ok'
-      WHERE r.contact_email <> '' AND r.state IN ('waiting','stalled','paused')
+      WHERE r.contact_email <> '' AND r.state IN ('waiting','needs_user','stalled','paused')
         AND NOT (r.contact_type = 'user' AND r.contact_ref_id IS NOT NULL)
         AND (r.contact_checked_at IS NULL OR r.contact_checked_at < ?)
       ORDER BY r.contact_checked_at LIMIT 20`,
@@ -546,6 +547,8 @@ async function pollMailbox() {
       if (!['waiting', 'stalled', 'paused'].includes(fresh.state)) continue;
       const sent = await Gmail.search(req.owner_id, `in:sent to:${req.contact_email} after:${after}`, { max: 3 });
       for (const id of sent) {
+        // מה שמשימון עצמו שלח מהתיבה — תזכורת, תודה — אינו "כתבת בעצמך"
+        if (D.get('SELECT 1 FROM ai_messages WHERE gmail_id = ?', id)) continue;
         const msg = await Gmail.raw(req.owner_id, id);
         const mail = Mime.parse(msg.raw);
         if (mail.messageId && D.get('SELECT 1 FROM ai_messages WHERE message_id = ?', mail.messageId)) continue;

@@ -26,7 +26,7 @@ const path = require('node:path');
 const D = require('./db');
 const Claude = require('./ai/claude');
 const Mailer = require('./mailer');
-const Imap = require('./imap');
+const Gmail = require('./gmail');
 const Mime = require('./mime');
 const WhatsApp = require('./whatsapp');
 
@@ -191,12 +191,11 @@ function emailHtml(body) {
     + '</body></html>';
 }
 
-/** כתובת התשובה: תיבת המערכת שנסרקת. בלעדיה התשובה מגיעה למשתמש בלבד */
-const replyAddress = () => (Imap.isEnabled() ? Imap.config().user : null);
 
 /** האם אפשר לשלוח בערוץ הזה עבור הבקשה הזו עכשיו */
 function channelAvailable(req, channel) {
-  if (channel === 'email') return Mailer.isEnabled() && Boolean(req.contact_email);
+  // מייל יוצא רק מתיבת ה-Gmail של מי שפתח את הבקשה — אין שליחה מתיבת מערכת
+  if (channel === 'email') return Gmail.canSend(req.owner_id) && Boolean(req.contact_email);
   return Boolean(req.contact_phone) && WhatsApp.isReady(req.owner_id);
 }
 
@@ -395,32 +394,37 @@ async function deliver(req, msgId) {
   const owner = ownerOf(req);
   try {
     if (msg.channel === 'email') {
-      if (!Mailer.isEnabled()) throw new Error('שליחת דואר אינה מוגדרת בשרת');
+      if (!Gmail.canSend(req.owner_id)) throw new Error('תיבת ה-Gmail שלך אינה מחוברת עם הרשאת שליחה. מחברים מ"החשבון שלי"');
       if (!req.contact_email) throw new Error('לנמען אין כתובת מייל');
+      const sender = Gmail.connectionOf(req.owner_id);
       const thread = D.all(
         "SELECT message_id FROM ai_messages WHERE request_id = ? AND channel = 'email' AND message_id IS NOT NULL ORDER BY id",
         req.id
       ).map((m) => m.message_id);
+      // השרשור ב-Gmail של השולח — כדי שהתזכורת תופיע אצלו באותה שיחה
+      const gmailThread = D.get(
+        "SELECT external_id FROM ai_messages WHERE request_id = ? AND channel = 'email' AND direction = 'out' AND status = 'sent' AND external_id IS NOT NULL ORDER BY id DESC LIMIT 1",
+        req.id
+      )?.external_id ?? null;
       const base = threadSubject(req);
       const subject = msg.kind === 'initial' || !base
         ? msg.subject
         : (/^(re|תשובה)\s*:/i.test(base) ? base : `Re: ${base}`);
-      const messageId = await Mailer.send({
+      // מהכתובת של המשתמש עצמו: הנמען רואה אותו, התשובה חוזרת אליו, והמייל נשאר אצלו ב"דואר יוצא"
+      const built = Mailer.buildMessage({
+        from: sender.email,
+        fromName: owner.full_name,
         to: req.contact_email,
         toName: req.contact_name || undefined,
-        personalName: owner.full_name,
-        // התשובה מגיעה לתיבה שנסרקת; המשתמש מקבל עותק ורואה הכול גם אצלו
-        replyTo: replyAddress() ?? owner.email,
-        replyToName: owner.full_name,
-        cc: [owner.email],
         inReplyTo: thread[thread.length - 1],
         references: thread.slice(-10),
         subject,
         text: msg.body,
         html: emailHtml(msg.body)
       });
-      D.run('UPDATE ai_messages SET status = ?, subject = ?, message_id = ?, sent_at = ?, error = ? WHERE id = ?',
-        'sent', subject, messageId, D.nowIso(), '', msg.id);
+      const out = await Gmail.send(req.owner_id, built.raw, { threadId: gmailThread });
+      D.run('UPDATE ai_messages SET status = ?, subject = ?, message_id = ?, external_id = ?, gmail_id = ?, sent_at = ?, error = ? WHERE id = ?',
+        'sent', subject, out.messageId ?? built.messageId, out.threadId ?? null, out.gmailId ?? null, D.nowIso(), '', msg.id);
     } else {
       const { externalId } = await WhatsApp.send(req.owner_id, req.contact_phone, msg.body);
       D.run('UPDATE ai_messages SET status = ?, external_id = ?, sent_at = ?, error = ? WHERE id = ?',
@@ -581,9 +585,11 @@ async function followUp(req) {
     // מה מנע את המשך המעקב — כדי שהמשתמש יידע מה לתקן, ולא רק ש"זה נעצר"
     const p = policyOf(req);
     const waBlocked = p.whatsapp && req.unanswered_whatsapp < p.whatsappAttempts;
-    const reason = waBlocked && !req.contact_phone ? 'אין מספר טלפון לנמען כדי לעבור לוואטסאפ.'
-      : waBlocked && !WhatsApp.isReady(req.owner_id) ? 'הוואטסאפ שלך אינו מחובר למערכת, ולכן לא נשלחה הודעת וואטסאפ.'
-        : '';
+    const mailBlocked = req.contact_email && req.unanswered_email < p.emailAttempts && !Gmail.canSend(req.owner_id);
+    const reason = mailBlocked ? 'תיבת ה-Gmail שלך אינה מחוברת עם הרשאת שליחה, ולכן לא יצאה תזכורת במייל.'
+      : waBlocked && !req.contact_phone ? 'אין מספר טלפון לנמען כדי לעבור לוואטסאפ.'
+        : waBlocked && !WhatsApp.isReady(req.owner_id) ? 'הוואטסאפ שלך אינו מחובר למערכת, ולכן לא נשלחה הודעת וואטסאפ.'
+          : '';
     update(req.id, { state: 'stalled', next_action_at: null, error: reason });
     setShortStatus(req, `⏸ אין תשובה מ${firstName(req.contact_name) || 'הנמען'}`);
     notifyOwner(req, `לא התקבלה תשובה מ${req.contact_name || 'הנמען'}`,
@@ -796,10 +802,6 @@ async function handleInbound(req, { channel, text, files, fromAddress, messageId
 // סריקת ערוצים
 // ---------------------------------------------------------------------------
 
-const ownAddresses = () => new Set([
-  Imap.config().user, Mailer.CONFIG.from, Mailer.CONFIG.user
-].filter(Boolean).map((a) => String(a).toLowerCase()));
-
 const normSubject = (s) => String(s ?? '').replace(/^\s*((re|fw|fwd|תשובה|השב|הועבר)\s*:\s*)+/i, '').trim().toLowerCase();
 
 /** לאיזו בקשה שייכת הודעת הדואר — קודם לפי השרשור, ואחר כך לפי השולח */
@@ -823,44 +825,6 @@ function matchEmail(mail) {
   // כמה בקשות פתוחות לאותו אדם — הנושא מכריע
   const subject = normSubject(mail.subject);
   return candidates.find((r) => normSubject(threadSubject(r)) === subject) ?? candidates[0];
-}
-
-async function pollEmail() {
-  if (!Imap.isEnabled()) return;
-  const open = D.get(`SELECT COUNT(*) c FROM ai_requests WHERE contact_email <> '' AND state IN (${OPEN_STATES.map(() => '?').join(',')})`, ...OPEN_STATES).c;
-  if (!open) return;
-
-  const { state, messages } = await Imap.fetchNew(D.getSetting('ai_imap_state', {}) ?? {});
-  D.setSetting('ai_imap_state', state);
-  const mine = ownAddresses();
-
-  for (const { raw } of messages) {
-    let mail;
-    try { mail = Mime.parse(raw); } catch (err) { console.error('[משימון] הודעה נכנסת לא פוענחה:', err.message); continue; }
-    if (!mail.from.address || mine.has(mail.from.address)) continue;
-    if (mail.messageId && D.get("SELECT 1 FROM ai_messages WHERE message_id = ? AND direction = 'in'", mail.messageId)) continue;
-
-    const req = matchEmail(mail);
-    if (!req || !OPEN_STATES.includes(req.state)) continue;
-    /*
-     * המשתמש עצמו בשרשור (הוא מקבל עותק, ולפעמים עונה לכולם) אינו "הנמען
-     * ענה". מישהו אחר מהצד של הנמען — עמית שענה במקומו — כן נבדק כתשובה.
-     */
-    if (mail.from.address === ownerOf(req)?.email?.toLowerCase()) continue;
-
-    try {
-      await handleInbound(req, {
-        channel: 'email',
-        text: mail.newText || mail.text,
-        files: mail.attachments,
-        fromAddress: mail.from.address,
-        messageId: mail.messageId,
-        autoSubmitted: mail.autoSubmitted
-      });
-    } catch (err) {
-      console.error('[משימון] טיפול בתשובה נכנסת נכשל:', err.message);
-    }
-  }
 }
 
 /**
@@ -983,7 +947,6 @@ async function tick() {
   if (running || !Claude.isEnabled()) return;
   running = true;
   try {
-    await pollEmail().catch((err) => console.error('[משימון] סריקת הדואר הנכנס נכשלה:', err.message));
     await pollWhatsApp();
     await hooks.pollMailbox?.().catch((err) => console.error('[משימון] בדיקת תיבות ה-Gmail נכשלה:', err.message));
     await runDue();
@@ -1290,8 +1253,8 @@ function detailFor(taskId) {
     channels: {
       email: channelAvailable(req, 'email'),
       whatsapp: channelAvailable(req, 'whatsapp'),
-      // תשובות נקלטות מתיבת המערכת, או מתיבת ה-Gmail של מי שפתח את הבקשה
-      inbox: Imap.isEnabled() || Boolean(D.get("SELECT 1 FROM mail_connections WHERE user_id = ? AND state = 'ok'", req.owner_id))
+      // תשובות חוזרות לתיבת ה-Gmail של מי שפתח את הבקשה, ונקלטות משם
+      inbox: Gmail.isConnected(req.owner_id)
     },
     messages: messagesOf(req.id)
       .filter((m) => m.status !== 'discarded')
@@ -1316,15 +1279,14 @@ function detailFor(taskId) {
 
 const status = () => ({
   ai: Claude.status(),
-  inbox: Imap.status(),
-  mail: Mailer.isEnabled()
+  gmailUsers: Gmail.connectedUsers().length
 });
 
 module.exports = {
   setHooks, start, stop, tick,
   draftInitial, launch, approve, discard, reviseMessage, answerQuestion, setState, updateDetails,
   interpretNote, applyNote, upcomingFor, waitingOnUser, contactDetected, handleInbound, matchEmail,
-  requestById, ownAddresses,
+  requestById,
   requestByTask, summaryFor, detailFor, defaultPolicy, cleanPolicy, status, STATE_LABELS, OPEN_STATES,
   // לבדיקות
   _internal: { nextWindow, inWindow, afterDays, ladder, dateToFollowUp, endOfLocalDay }

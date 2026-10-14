@@ -1,17 +1,20 @@
 'use strict';
 /**
- * חיבור Gmail אישי — קריאה בלבד (‎gmail.readonly‎).
+ * חיבור Gmail אישי — קריאה ושליחה (‎gmail.readonly‎ + ‎gmail.send‎).
  *
  * על אותו לקוח Google שמשמש לכניסה, ועם אותה כתובת חזרה — כך אין צורך
  * לרשום ב-Google Cloud כתובת נוספת. ההבחנה בין "כניסה" ל"חיבור תיבה" היא
  * לפי ה-state: מצב שנוצר כאן שייך לחיבור תיבה של משתמש מסוים.
  *
- * משימון לא שולח, לא מוחק ולא מסמן כנקרא — ההרשאה עצמה אינה מאפשרת זאת.
- *
  * מה עושים עם התיבה:
+ *   • שליחה — כל מייל של משימת AI יוצא מכאן, מהכתובת של המשתמש עצמו, ונשאר
+ *     אצלו ב"דואר יוצא". רק מה שאושר או מה שהמדיניות מתירה (תזכורת, תודה).
+ *     אין שליחה מתיבת מערכת: מי שלא חיבר — משימת AI במייל אינה זמינה לו.
+ *   • תשובות — הנמען עונה ישירות למשתמש, והן נקלטות מכאן
  *   • סריקה — מיילים שלא נקראו הופכים להצעות משימה (‎ai/mail-scan.js‎)
- *   • זיהוי תשובות — נמען שענה ישירות למשתמש ולא לתיבת המערכת
  *   • זיהוי קשר — המשתמש כתב לנמען בעצמו, והמעקב עוצר לשאול
+ *
+ * משימון לא מוחק ולא מסמן כנקרא — ההרשאות אינן מאפשרות זאת.
  */
 const crypto = require('node:crypto');
 const D = require('./db');
@@ -19,6 +22,7 @@ const Google = require('./google-auth');
 const Secrets = require('./secrets');
 
 const SCOPE = 'https://www.googleapis.com/auth/gmail.readonly';
+const SEND_SCOPE = 'https://www.googleapis.com/auth/gmail.send';
 const API = 'https://gmail.googleapis.com/gmail/v1/users/me';
 const REVOKE = 'https://oauth2.googleapis.com/revoke';
 
@@ -36,7 +40,7 @@ function authorizeUrl(req, user) {
     client_id: Google.CLIENT_ID,
     redirect_uri: Google.redirectUri(req),
     response_type: 'code',
-    scope: `openid email ${SCOPE}`,
+    scope: `openid email ${SCOPE} ${SEND_SCOPE}`,
     state,
     // ‎offline‎ + ‎consent‎ — כדי לקבל אסימון רענון גם ממי שכבר אישר בעבר
     access_type: 'offline',
@@ -84,7 +88,10 @@ async function tokenRequest(params) {
 
 async function connect(userId, code, req) {
   const data = await tokenRequest({ code, redirect_uri: Google.redirectUri(req), grant_type: 'authorization_code' });
-  if (!String(data.scope ?? '').includes(SCOPE)) throw new Error('לא אושרה הרשאת קריאת הדואר. יש לסמן את התיבה במסך האישור של Google.');
+  const granted = String(data.scope ?? '');
+  if (!granted.includes(SCOPE) || !granted.includes(SEND_SCOPE)) {
+    throw new Error('לא אושרו כל ההרשאות. יש לסמן במסך של Google גם את קריאת הדואר וגם את שליחתו.');
+  }
   if (!data.refresh_token) throw new Error('Google לא החזיר אסימון רענון. נסו לנתק את משימון בהגדרות חשבון ה-Google ולחבר שוב.');
   tokens.set(userId, { access: data.access_token, expires: Date.now() + (Number(data.expires_in ?? 3000) - 60) * 1000 });
   const profile = await call(userId, '/profile');
@@ -121,11 +128,13 @@ async function accessToken(userId) {
   }
 }
 
-async function call(userId, path, params = {}) {
+async function call(userId, path, params = {}, { method = 'GET', body = null } = {}) {
   const qs = new URLSearchParams(Object.entries(params).filter(([, v]) => v !== undefined && v !== null && v !== ''));
   const url = `${API}${path}${qs.toString() ? `?${qs}` : ''}`;
   const res = await fetch(url, {
-    headers: { authorization: `Bearer ${await accessToken(userId)}` },
+    method,
+    headers: { authorization: `Bearer ${await accessToken(userId)}`, ...(body ? { 'content-type': 'application/json' } : {}) },
+    body: body ? JSON.stringify(body) : undefined,
     signal: AbortSignal.timeout(60000)
   });
   const text = await res.text();
@@ -160,6 +169,26 @@ async function raw(userId, id) {
   };
 }
 
+/**
+ * שליחה מהתיבה של המשתמש. ‎raw‎ — ההודעה המלאה (‎Mailer.buildMessage‎).
+ * ‎threadId‎ — השרשור ב-Gmail, כדי שתזכורת תיכנס לאותה שיחה גם אצל השולח.
+ *
+ * מחזיר את ה-Message-ID כפי שנשמר בפועל ב-Gmail — הוא זה שהנמען יצטט
+ * בתשובה, ולפיו התשובה מזוהה. Gmail עשוי להחליף את זה ששלחנו, ולכן נקרא שוב.
+ */
+async function send(userId, raw, { threadId = null } = {}) {
+  const sent = await call(userId, '/messages/send', {}, {
+    method: 'POST',
+    body: { raw: Buffer.from(raw, 'utf8').toString('base64url'), ...(threadId ? { threadId } : {}) }
+  });
+  let messageId = null;
+  try {
+    const meta = await call(userId, `/messages/${encodeURIComponent(sent.id)}`, { format: 'metadata', metadataHeaders: 'Message-ID' });
+    messageId = (meta.payload?.headers ?? []).find((h) => /^message-id$/i.test(h.name))?.value ?? null;
+  } catch { /* ההודעה יצאה; בלי המזהה התשובה תזוהה לפי השולח */ }
+  return { gmailId: sent.id, threadId: sent.threadId, messageId };
+}
+
 async function disconnect(userId) {
   const conn = connectionOf(userId);
   tokens.delete(userId);
@@ -178,6 +207,12 @@ const connectedUsers = () => D.all(
 
 const isConnected = (userId) => connectionOf(userId)?.state === 'ok';
 
+/** חיבור שאושרה בו גם שליחה. חיבור ישן (קריאה בלבד) צריך להתחבר מחדש */
+const canSend = (userId) => {
+  const c = connectionOf(userId);
+  return c?.state === 'ok' && String(c.scope).includes(SEND_SCOPE);
+};
+
 /** תצוגה ללקוח — בלי האסימון */
 function publicStatus(userId) {
   const c = connectionOf(userId);
@@ -185,6 +220,7 @@ function publicStatus(userId) {
   return {
     email: c.email,
     state: c.state,
+    canSend: String(c.scope).includes(SEND_SCOPE),
     error: c.error,
     scanning: Boolean(c.scan_running),
     progress: (() => { try { return JSON.parse(c.scan_progress); } catch { return {}; } })(),
@@ -198,5 +234,5 @@ const webLink = (email, gmailId) => `https://mail.google.com/mail/u/?authuser=${
 
 module.exports = {
   isEnabled, authorizeUrl, isGmailState, consumeState, connect, disconnect,
-  search, raw, connectedUsers, isConnected, connectionOf, publicStatus, webLink, SCOPE
+  search, raw, send, connectedUsers, isConnected, canSend, connectionOf, publicStatus, webLink, SCOPE, SEND_SCOPE
 };

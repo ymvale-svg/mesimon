@@ -114,7 +114,7 @@ const AiTaskView = (() => {
 
       const waReady = status.whatsapp?.state === 'authorized';
       const channelSeg = el('div.seg', {}, [
-        ['email', '📧 מייל', status.mail, 'שליחת דואר אינה מוגדרת בשרת'],
+        ['email', '📧 מייל', status.mail, 'מייל יוצא מתיבת ה-Gmail שלך — מחברים מ"החשבון שלי ← Gmail ועוזר ה-AI"'],
         ['whatsapp', '💬 וואטסאפ', waReady, 'הוואטסאפ שלך אינו מחובר — מחברים מ"החשבון שלי"']
       ].map(([key, label, ok, why]) => el(`button${state.channel === key ? '.active' : ''}`, {
         type: 'button', disabled: !ok, title: ok ? '' : why,
@@ -175,10 +175,16 @@ const AiTaskView = (() => {
           UI.field('תאריך יעד', dueInput)
         ]),
         policyBox.node,
-        !status.inbox && state.channel === 'email'
+        // מייל יוצא רק מהתיבה האישית — מי שלא חיבר אותה רואה כאן איך לחבר
+        !status.mail && state.contact.type !== 'user'
           ? el('div.alert.alert-warn', {}, [
               el('span', { text: '📭' }),
-              el('div', { text: 'קריאת תשובות מהדואר אינה מוגדרת בשרת, ולכן ה-AI לא יראה תשובות במייל — רק בוואטסאפ. התשובות יגיעו אליך בעותק, ואפשר לסמן ידנית שהתקבל.' })
+              el('div', {}, [
+                status.gmail?.state === 'ok' && !status.gmail.canSend
+                  ? 'תיבת ה-Gmail שלך מחוברת לקריאה בלבד. כדי לשלוח ממנה צריך לחבר אותה מחדש ולאשר גם שליחה. '
+                  : 'כדי שהעוזר ישלח מייל בשמך, צריך לחבר את תיבת ה-Gmail שלך — המייל ייצא ממנה וישאר אצלך ב"דואר יוצא". ',
+                status.gmailEnabled ? el('a', { href: '/api/me/gmail/connect' }, ['לחיבור Gmail']) : 'חיבור Google עדיין לא הוגדר בשרת.'
+              ])
             ])
           : null,
         el('div.ai-foot', {}, [go, el('div.spacer'), el('button.btn', { onclick: () => m.close() }, ['ביטול'])])
@@ -287,7 +293,7 @@ const AiTaskView = (() => {
           isEmail ? UI.field('נושא', subject) : null,
           UI.field(internal ? 'הבקשה (תופיע בתיאור המשימה)' : isEmail ? 'המייל' : 'ההודעה', text,
             internal ? 'המשימה תשויך אליו במשימון, עם התראה רגילה על משימה חדשה.'
-              : isEmail ? 'יישלח בשמך. תקבל/י עותק, ותשובות ייקלטו אוטומטית.' : 'יישלח מהוואטסאפ שלך.')
+              : isEmail ? 'יישלח מתיבת ה-Gmail שלך ויישאר אצלך ב"דואר יוצא". התשובה תחזור אליך ותיקלט אוטומטית.' : 'יישלח מהוואטסאפ שלך.')
         ]),
         el('div.ai-revise', {}, [feedback, redo]),
         UI.field('מתי זה נחשב שהתקבל?', criteria, 'לפי זה ה-AI יכריע אם התשובה שחזרה מספיקה וסוגר את המשימה'),
@@ -400,7 +406,7 @@ const AiTaskView = (() => {
       lines.push(el('div.alert.alert-warn', {}, [el('span', { text: '⚠️' }), el('div', { text: a.error })]));
     }
     if (!a.channels.inbox && a.contact.email) {
-      lines.push(el('div.mute-sm', { text: 'תשובות במייל אינן נקלטות אוטומטית (קריאת הדואר אינה מוגדרת). כשתגיע תשובה — סמנו כאן שהתקבל.' }));
+      lines.push(el('div.mute-sm', { text: 'תיבת ה-Gmail של מי שפתח את הבקשה אינה מחוברת, ולכן תשובות במייל אינן נקלטות ותזכורות במייל לא יוצאות. כשתגיע תשובה — סמנו כאן שהתקבל.' }));
     }
 
     // המעקב נעצר כי ייתכן שסוכם משהו מחוץ להתכתבות — "דיברתי איתו" הוא התשובה

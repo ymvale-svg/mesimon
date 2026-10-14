@@ -19,7 +19,6 @@ const AiTasks = require('./ai-tasks');
 const AiApi = require('./api-ai');
 const Gmail = require('./gmail');
 const MailScan = require('./ai/mail-scan');
-const Imap = require('./imap');
 const Claude = require('./ai/claude');
 const {
   Router, badRequest, forbidden, notFound,
@@ -3771,7 +3770,7 @@ router.get('/api/admin/settings', async (req, res, ctx) => {
         missing: ['SMTP_HOST', 'SMTP_USER', 'SMTP_PASS'].filter((k) => !process.env[k])
       },
       publicUrl: D.getSetting('public_url', '') || process.env.PUBLIC_URL || null,
-      // משימות AI: המודל, ותיבת הדואר שממנה נקראות התשובות
+      // משימות AI: המודל
       ai: {
         ...Claude.status(),
         missing: ['ANTHROPIC_API_KEY'].filter((k) => !process.env[k])
@@ -3779,10 +3778,6 @@ router.get('/api/admin/settings', async (req, res, ctx) => {
       gmail: {
         enabled: Gmail.isEnabled(),
         connected: D.get("SELECT COUNT(*) c FROM mail_connections WHERE state = 'ok'").c
-      },
-      inbox: {
-        ...Imap.status(),
-        missing: Imap.isEnabled() ? [] : ['IMAP_HOST', 'IMAP_USER', 'IMAP_PASS'].filter((k) => !process.env[k])
       }
     },
     storage: {

@@ -10,8 +10,6 @@ const D = require('./db');
 const P = require('./permissions');
 const AiTasks = require('./ai-tasks');
 const Claude = require('./ai/claude');
-const Imap = require('./imap');
-const Mailer = require('./mailer');
 const WhatsApp = require('./whatsapp');
 const Gmail = require('./gmail');
 const MailScan = require('./ai/mail-scan');
@@ -80,8 +78,11 @@ function register(router, h) {
     internalOnly(actor);
     sendJson(res, 200, {
       enabled: Claude.isEnabled(),
-      mail: Mailer.isEnabled(),
-      inbox: Imap.isEnabled() || Gmail.isConnected(actor.id),
+      // מייל יוצא רק מתיבת ה-Gmail של המשתמש; תשובות חוזרות אליה ונקלטות משם
+      mail: Gmail.canSend(actor.id),
+      inbox: Gmail.isConnected(actor.id),
+      gmail: Gmail.publicStatus(actor.id),
+      gmailEnabled: Gmail.isEnabled(),
       whatsapp: WhatsApp.publicChannel(actor.id),
       defaults: AiTasks.defaultPolicy(actor.id),
       contacts: contactsFor(actor)
@@ -149,7 +150,7 @@ function register(router, h) {
     } else if (channel === 'email') {
       if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(contact.email)) throw badRequest('נדרשת כתובת מייל תקינה לנמען');
       if (!String(draft.subject ?? '').trim()) throw badRequest('נדרש נושא למייל');
-      if (!Mailer.isEnabled()) throw badRequest('שליחת דואר אינה מוגדרת בשרת — אפשר לפתוח בוואטסאפ, או לפנות למנהל המערכת');
+      if (!Gmail.canSend(actor.id)) throw badRequest('כדי לשלוח מייל צריך לחבר את תיבת ה-Gmail שלך ("החשבון שלי ← Gmail ועוזר ה-AI"). אפשר גם לפתוח בוואטסאפ');
     } else {
       if (!WhatsApp.normalizePhone(contact.phone)) throw badRequest('נדרש מספר טלפון תקין לנמען');
       if (!WhatsApp.isReady(actor.id)) throw badRequest('הוואטסאפ שלך אינו מחובר. מחברים אותו מ"החשבון שלי"');
@@ -423,18 +424,6 @@ function register(router, h) {
     sendJson(res, 200, MailScan.approveAll(actor));
   });
 
-  // --- ניהול ---
-
-  router.post('/api/admin/ai/test-inbox', async (req, res, ctx) => {
-    const actor = ctx.requireActor();
-    if (!P.can(actor, 'manage_automations')) throw forbidden();
-    try {
-      await Imap.test();
-      sendJson(res, 200, { ok: true });
-    } catch (err) {
-      sendJson(res, 200, { ok: false, error: err.message });
-    }
-  });
 }
 
 module.exports = { register };
