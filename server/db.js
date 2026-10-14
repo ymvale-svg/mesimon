@@ -475,6 +475,157 @@ CREATE INDEX IF NOT EXISTS idx_tasks_assignee ON tasks(assignee_type, assignee_i
 CREATE INDEX IF NOT EXISTS idx_task_assignees_who ON task_assignees(assignee_type, assignee_id);
 CREATE INDEX IF NOT EXISTS idx_notif_target   ON notifications(target_type, target_id, is_read);
 CREATE INDEX IF NOT EXISTS idx_audit_task     ON audit_log(task_id);
+
+/*
+ * משימת AI — בקשה מאדם מסוים, שה-AI מנסח, שולח ועוקב אחריה עד שהיא מתקבלת.
+ *
+ * טבלה נלווית ולא עמודות על ‎tasks‎: משימת AI *היא* משימה — היא מופיעה בלוח,
+ * בדף הבית ובבקרה כמו כל משימה — וכאן נשמר רק מה שייחודי למעקב. כך כל מה
+ * שכבר עובד על משימות (פרויקט, יעד, קבצים, שרשור, היסטוריה) עובד גם עליה.
+ */
+CREATE TABLE IF NOT EXISTS ai_requests (
+  id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+  task_id             INTEGER NOT NULL UNIQUE REFERENCES tasks(id) ON DELETE CASCADE,
+  owner_id            INTEGER NOT NULL REFERENCES users(id),
+  instruction         TEXT    NOT NULL,             -- מה שהמשתמש כתב, כלשונו
+  goal                TEXT    NOT NULL DEFAULT '',  -- הבקשה בניסוח של ה-AI
+  success_criteria    TEXT    NOT NULL DEFAULT '',  -- מתי נחשב שהתקבל
+  contact_name        TEXT    NOT NULL DEFAULT '',
+  contact_email       TEXT    NOT NULL DEFAULT '',
+  contact_phone       TEXT    NOT NULL DEFAULT '',
+  contact_type        TEXT    NOT NULL DEFAULT 'external' CHECK (contact_type IN ('external','vendor','user')),
+  contact_ref_id      INTEGER,
+  -- draft | waiting | needs_user | paused | stalled | completed | stopped
+  state               TEXT    NOT NULL DEFAULT 'draft',
+  policy              TEXT    NOT NULL DEFAULT '{}',
+  -- ניסיונות רצופים שלא נענו — מתאפס בכל תשובה של הנמען
+  unanswered_email    INTEGER NOT NULL DEFAULT 0,
+  unanswered_whatsapp INTEGER NOT NULL DEFAULT 0,
+  next_action_at      TEXT,
+  last_outbound_at    TEXT,
+  last_inbound_at     TEXT,
+  owner_question      TEXT    NOT NULL DEFAULT '',  -- שאלה פתוחה שה-AI מחכה שהמשתמש יענה עליה
+  -- למה המעקב מחכה למשתמש: approve_reminder | contact_detected | handled_elsewhere. ריק = אין עצירה מיוחדת
+  attention           TEXT    NOT NULL DEFAULT '',
+  contact_checked_at  TEXT,                         -- הבדיקה האחרונה בתיבת ה-Gmail: כתבתי לנמען / הוא ענה ישירות אליי
+  last_summary        TEXT    NOT NULL DEFAULT '',
+  error               TEXT    NOT NULL DEFAULT '',
+  created_at          TEXT    NOT NULL,
+  updated_at          TEXT    NOT NULL,
+  closed_at           TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_ai_requests_due ON ai_requests(state, next_action_at);
+
+/* כל הודעה שיצאה או נכנסה במסגרת המעקב, בכל ערוץ */
+CREATE TABLE IF NOT EXISTS ai_messages (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  request_id   INTEGER NOT NULL REFERENCES ai_requests(id) ON DELETE CASCADE,
+  direction    TEXT    NOT NULL CHECK (direction IN ('out','in')),
+  -- ‎note‎ — עדכון שהמשתמש רשם ("דיברתי איתו") או קשר שזוהה בערוץ אחר. אינו נשלח לאיש
+  channel      TEXT    NOT NULL CHECK (channel IN ('email','whatsapp','note')),
+  -- initial | reminder | reply | thanks | inbound | manual (עדכון ידני) | owner_contact (המשתמש כתב לנמען בעצמו)
+  kind         TEXT    NOT NULL,
+  -- pending_approval | sent | failed | received | discarded
+  status       TEXT    NOT NULL,
+  subject      TEXT    NOT NULL DEFAULT '',
+  body         TEXT    NOT NULL DEFAULT '',
+  message_id   TEXT,                    -- Message-ID של המייל, לשרשור ולזיהוי תשובה
+  external_id  TEXT,                    -- וואטסאפ: מזהה ההודעה אצל הספק. מייל: השרשור ב-Gmail של השולח
+  gmail_id     TEXT,                    -- מייל שיצא מתיבת המשתמש: המזהה שלו ב-Gmail, כדי לא לזהות אותו כ"כתבת בעצמך"
+  from_address TEXT    NOT NULL DEFAULT '',
+  verdict      TEXT,                    -- הכרעת ה-AI על הודעה נכנסת
+  analysis     TEXT    NOT NULL DEFAULT '',
+  attachment_ids TEXT  NOT NULL DEFAULT '[]',
+  error        TEXT    NOT NULL DEFAULT '',
+  created_at   TEXT    NOT NULL,
+  sent_at      TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_ai_messages_req ON ai_messages(request_id);
+CREATE INDEX IF NOT EXISTS idx_ai_messages_mid ON ai_messages(message_id);
+
+/*
+ * ערוצי שליחה אישיים — כרגע וואטסאפ מהמספר של המשתמש. האסימון יושב כאן
+ * ולא בהעדפות המשתמש, כי ההעדפות נשלחות ללקוח ב-bootstrap.
+ */
+CREATE TABLE IF NOT EXISTS user_channels (
+  user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  provider    TEXT    NOT NULL,
+  api_url     TEXT    NOT NULL DEFAULT '',
+  instance_id TEXT    NOT NULL DEFAULT '',
+  api_token   TEXT    NOT NULL DEFAULT '',
+  phone       TEXT    NOT NULL DEFAULT '',
+  state       TEXT    NOT NULL DEFAULT 'unknown',
+  checked_at  TEXT,
+  created_at  TEXT    NOT NULL,
+  PRIMARY KEY (user_id, provider)
+);
+
+/*
+ * חיבור Gmail אישי — קריאה בלבד. אסימון הרענון מוצפן (‎server/secrets.js‎),
+ * כדי שהסריקה של הבוקר תעבוד גם כשהמשתמש אינו מחובר למערכת.
+ */
+CREATE TABLE IF NOT EXISTS mail_connections (
+  user_id        INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  email          TEXT    NOT NULL DEFAULT '',
+  refresh_token  TEXT    NOT NULL DEFAULT '',   -- מוצפן
+  scope          TEXT    NOT NULL DEFAULT '',
+  state          TEXT    NOT NULL DEFAULT 'ok', -- ok | revoked | error
+  error          TEXT    NOT NULL DEFAULT '',
+  scan_running   INTEGER NOT NULL DEFAULT 0,
+  scan_progress  TEXT    NOT NULL DEFAULT '{}',
+  last_scan_at   TEXT,
+  created_at     TEXT    NOT NULL
+);
+
+/*
+ * כל מייל שנסרק, פעם אחת לכל תיבה. ‎header_id‎ הוא ה-Message-ID של המייל —
+ * זהה בכל התיבות שקיבלו אותו — ועליו נשענת מניעת הכפילויות בין עובדים.
+ */
+CREATE TABLE IF NOT EXISTS mail_scanned (
+  user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  gmail_id    TEXT    NOT NULL,
+  header_id   TEXT,
+  outcome     TEXT    NOT NULL,   -- suggested | skipped | reply | duplicate | not_mine | error
+  scanned_at  TEXT    NOT NULL,
+  PRIMARY KEY (user_id, gmail_id)
+);
+CREATE INDEX IF NOT EXISTS idx_mail_scanned_header ON mail_scanned(header_id);
+
+/*
+ * הצעות שה-AI הכין מהמייל וממתינות להחלטה. ‎data‎ — ההצעה עצמה: כותרת,
+ * תיאור, צ'קליסט, יעד, אנשים ובקשת AI אם יש.
+ */
+CREATE TABLE IF NOT EXISTS ai_suggestions (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id       INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  -- task | duplicate (המייל כבר הפך למשימה אצל מישהו אחר)
+  kind          TEXT    NOT NULL DEFAULT 'task',
+  -- pending | approved | rejected | auto (נוצרה בלי אישור) | undone | joined | skipped
+  status        TEXT    NOT NULL DEFAULT 'pending',
+  gmail_id      TEXT    NOT NULL DEFAULT '',
+  header_id     TEXT,
+  from_name     TEXT    NOT NULL DEFAULT '',
+  from_email    TEXT    NOT NULL DEFAULT '',
+  subject       TEXT    NOT NULL DEFAULT '',
+  received_at   TEXT,
+  data          TEXT    NOT NULL DEFAULT '{}',
+  task_id       INTEGER REFERENCES tasks(id) ON DELETE SET NULL,
+  created_at    TEXT    NOT NULL,
+  decided_at    TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_ai_suggestions_user ON ai_suggestions(user_id, status);
+CREATE INDEX IF NOT EXISTS idx_ai_suggestions_header ON ai_suggestions(header_id);
+
+/* שולחים מיוחדים לכל משתמש: ‎trust‎ — משימות נוצרות ישר, בלי אישור; ‎ignore‎ — לא מציעים מהם משימות */
+CREATE TABLE IF NOT EXISTS mail_trusted_senders (
+  user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  email       TEXT    NOT NULL,
+  mode        TEXT    NOT NULL DEFAULT 'trust' CHECK (mode IN ('trust','ignore')),
+  created_at  TEXT    NOT NULL,
+  PRIMARY KEY (user_id, email)
+);
 `);
 
 // ---------------------------------------------------------------------------
@@ -655,7 +806,32 @@ const DEFAULT_SETTINGS = {
    * וההגדרה קיימת בשביל צוות שמשתמש בצ'קליסט כרשימת מעקב במשימה ארוכה
    * שאינה נגמרת כשהרשימה נגמרת.
    */
-  auto_done_on_checklist: true
+  auto_done_on_checklist: true,
+
+  /*
+   * משימות AI — מדיניות המעקב. אלה ברירות המחדל; כל משימה יכולה לשנות
+   * אותן לעצמה בזמן הפתיחה.
+   */
+  ai_model: 'claude-opus-5-5',
+  ai_email_attempts: 2,                    // כמה מיילים שלא נענו לפני מעבר לוואטסאפ
+  ai_days_between_emails: 2,
+  ai_whatsapp_enabled: true,
+  ai_whatsapp_attempts: 3,                 // כמה הודעות וואטסאפ שלא נענו לפני שעוצרים ומדווחים
+  ai_days_between_whatsapp: 1,
+  ai_send_window: '08:30-18:00',           // שעות שליחה, שעון ישראל
+  ai_work_days_only: true,                 // בלי שישי ושבת
+  ai_auto_thanks: true,                    // הודעת תודה קצרה כשהבקשה התקבלה
+  ai_poll_minutes: 2,                      // תדירות בדיקת תשובות ושליחת תזכורות
+  ai_approve_reminders: false,             // ברירת מחדל: תזכורות יוצאות לבד. כל משתמש וכל משימה יכולים לדרוש אישור
+  ai_internal_attempts: 3,                 // משימת AI לעובד: תזכורות בתוך המערכת לפני עצירה
+
+  /*
+   * סריקת מיילים → משימות. נסרקים רק מיילים שלא נקראו, ורק אצל מי שחיבר
+   * את תיבת ה-Gmail שלו.
+   */
+  ai_mail_scan_enabled: true,
+  ai_scan_time: '07:00',                   // ריצת הבוקר, שעון ישראל
+  ai_scan_daily_limit: 100                 // תקרת מיילים לסריקה ביום, לכל משתמש
 };
 
 /*
@@ -866,6 +1042,36 @@ function relaxUserRoleConstraint() {
 }
 
 /**
+ * ‎ai_messages‎ נוצרה בגרסה ראשונה עם שני ערוצים בלבד (מייל, וואטסאפ).
+ * עדכון ידני ("דיברתי איתו") נשמר כערוץ שלישי, ו-SQLite אינו משנה CHECK —
+ * לכן הטבלה נבנית מחדש. רץ פעם אחת: אחרי הבנייה התנאי כבר כולל את ‎note‎.
+ */
+function relaxAiMessagesChannel() {
+  const schema = get("SELECT sql FROM sqlite_master WHERE type='table' AND name='ai_messages'")?.sql ?? '';
+  if (!schema || schema.includes("'note'")) return;
+  const fresh = schema
+    .replace(/CREATE TABLE (IF NOT EXISTS )?"?ai_messages"?/, 'CREATE TABLE ai_messages_migrated')
+    .replace("CHECK (channel IN ('email','whatsapp'))", "CHECK (channel IN ('email','whatsapp','note'))");
+  const cols = db.prepare('PRAGMA table_info(ai_messages)').all().map((c) => c.name).join(', ');
+  db.exec('PRAGMA foreign_keys = OFF');
+  try {
+    db.exec('BEGIN');
+    db.exec(fresh);
+    db.exec(`INSERT INTO ai_messages_migrated (${cols}) SELECT ${cols} FROM ai_messages`);
+    db.exec('DROP TABLE ai_messages');
+    db.exec('ALTER TABLE ai_messages_migrated RENAME TO ai_messages');
+    db.exec('CREATE INDEX IF NOT EXISTS idx_ai_messages_req ON ai_messages(request_id)');
+    db.exec('CREATE INDEX IF NOT EXISTS idx_ai_messages_mid ON ai_messages(message_id)');
+    db.exec('COMMIT');
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  } finally {
+    db.exec('PRAGMA foreign_keys = ON');
+  }
+}
+
+/**
  * הרחבות סכמה על מסד נתונים קיים.
  * חייב להיות בטוח להרצה חוזרת, ובלי לאבד נתונים — הוא רץ על המערכת החיה.
  */
@@ -877,6 +1083,7 @@ function migrate() {
   };
 
   relaxUserRoleConstraint();
+  relaxAiMessagesChannel();
 
   addColumn('users', 'department_id', 'INTEGER REFERENCES departments(id) ON DELETE SET NULL');
   // קובץ שצורף לתגובה בשיחה — כדי שיוצג בתוך ההודעה שבה נשלח, ולא רק ברשימה
@@ -888,6 +1095,14 @@ function migrate() {
   // תת-משימה והסטטוס המקוצר שלה — ראה ההסבר בהגדרת הטבלה
   addColumn('tasks', 'parent_task_id', 'INTEGER REFERENCES tasks(id) ON DELETE CASCADE');
   addColumn('tasks', 'status_short', "TEXT NOT NULL DEFAULT ''");
+  // משימה שנולדה ממייל: מאיזו תיבה ואיזה מייל. הקישור למייל מוצג רק לבעל התיבה
+  addColumn('tasks', 'source', "TEXT NOT NULL DEFAULT ''");
+  addColumn('tasks', 'source_ref', 'TEXT');
+  addColumn('tasks', 'source_user_id', 'INTEGER REFERENCES users(id) ON DELETE SET NULL');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_tasks_source_ref ON tasks(source_ref)');
+  addColumn('ai_requests', 'attention', "TEXT NOT NULL DEFAULT ''");
+  addColumn('ai_requests', 'contact_checked_at', 'TEXT');
+  addColumn('ai_messages', 'gmail_id', 'TEXT');
   // סטטוס הבקרה, שצובע את השורה במסך הבקרה
   addColumn('tasks', 'track_status', "TEXT NOT NULL DEFAULT ''");
   addColumn('tasks', 'track_status_id', 'INTEGER REFERENCES task_statuses(id) ON DELETE SET NULL');

@@ -134,6 +134,12 @@ const UI = (() => {
     if (task.scheduled) tags.push(el('span.tag.tag-scheduled', {}, ['🗓 מתוזמנת']));
     if (task.isRecurring) tags.push(el('span.tag.tag-recurring', {}, ['⟳ חוזרת']));
     if (task.dependency?.blocking) tags.push(el('span.tag.tag-high', {}, ['🔗 חסומה']));
+    // משימת AI — מצב המעקב, ובראש ובראשונה "ממתין לאישורך"
+    if (task.ai) {
+      const waiting = task.ai.pending || task.ai.state === 'needs_user';
+      tags.push(el(`span.tag.tag-ai${waiting ? '.tag-ai-attn' : ''}`, { title: 'משימת AI' },
+        [`✨ ${task.ai.pending ? 'ממתין לאישורך' : task.ai.stateLabel}`]));
+    }
     return tags;
   }
 

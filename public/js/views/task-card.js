@@ -129,6 +129,19 @@ const TaskCardView = (() => {
       titleRow,
       el('div.flex', { style: { marginBottom: '14px', flexWrap: 'wrap' } }, [UI.statusTag(task), ...UI.taskTags(task)]),
       ...alerts,
+      AiTaskView.panel(task, (updated) => {
+        task = updated;
+        draw(modalRef.box.querySelector('.task-detail'));
+        refreshBackground();
+        App.refreshNotifications();
+      }),
+      // משימה שנולדה ממייל — הקישור למייל עצמו רק אצל מי שהוא בתיבה שלו
+      task.source?.type === 'email'
+        ? el('div.mute-sm', { style: { marginBottom: '10px' } }, [
+            '📧 נוצרה ממייל',
+            task.source.link ? el('a', { href: task.source.link, target: '_blank', rel: 'noopener' }, [' · פתיחת המייל המקורי ↗']) : null
+          ])
+        : null,
       vendorWorkflowBar(),
       descNode,
       shortStatusRow(),
@@ -523,7 +536,17 @@ const TaskCardView = (() => {
     comment: 'תגובה',
     attachment: 'קובץ מצורף',
     checklist: 'צ׳קליסט',
-    automation: 'אוטומציה'
+    automation: 'אוטומציה',
+    ai_created: 'משימת AI נפתחה',
+    ai_sent: 'AI: נשלחה הודעה',
+    ai_inbound: 'AI: התקבלה תשובה',
+    ai_stalled: 'AI: המעקב נעצר',
+    ai_paused: 'AI: השהיה',
+    ai_resumed: 'AI: חידוש',
+    ai_nudge: 'AI: תזכורת מיידית',
+    ai_stopped: 'AI: המעקב הופסק',
+    ai_completed: 'AI: סומן שהתקבל',
+    ai_updated: 'AI: עדכון פרטים'
   };
 
   function historySection() {

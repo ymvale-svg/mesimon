@@ -144,7 +144,7 @@
    * שאינו מה שנראה.
    */
   input[type=text], input[type=email], input[type=password], input[type=date],
-  input[type=datetime-local], input[type=number], input[type=search], select, textarea {
+  input[type=datetime-local], input[type=number], input[type=search], input[type=tel], input[type=url], select, textarea {
     font-size: 16px; padding: 10px 12px;
   }
   .btn { min-height: 40px; padding: 9px 14px; }
@@ -366,4 +366,11 @@
   .m-count b { font-size: 18px; }
   .m-count span { font-size: 10px; }
   .tabbar button { font-size: 9.5px; }
+}
+
+/* משימות AI — בטלפון שדות הנמען אחד מתחת לשני, וההודעות ברוחב מלא */
+@media (max-width: 820px) {
+  .ai-dialog .row { flex-direction: column; gap: 0; }
+  .ai-msg { max-width: 100%; }
+  .ai-revise { flex-direction: column; }
 }

@@ -18,6 +18,8 @@ const MobileView = (() => {
   let containerRef = null;
   let tasks = [];
   let loading = false;
+  // "ממתין לאישורך" של עוזר ה-AI — אותו חלון כמו במחשב, מעל הרשימה
+  let inbox = null;
 
   /**
    * החתך הנוכחי. מי שעובד תמיד באותו חתך — "רק הפרויקט הזה, רק באיחור" —
@@ -130,7 +132,7 @@ const MobileView = (() => {
     if (!silent) UI.mount(container, UI.spinner());
     loading = true;
     try {
-      tasks = await fetchTasks();
+      [tasks, inbox] = await Promise.all([fetchTasks(), AiInboxView.load().catch(() => null)]);
     } catch (err) {
       loading = false;
       // כשל בטעינת רקע לא ימחק את מה שכבר על המסך
@@ -169,6 +171,8 @@ const MobileView = (() => {
         countBox('overdue', c.overdue, 'באיחור', 'is-danger'),
         countBox('urgent', c.urgent, 'דחוף', 'is-warn')
       ]),
+
+      inbox ? AiInboxView.card(inbox, { reload }) : null,
 
       el('div.m-chips', { style: { marginTop: '10px' } }, [
         ...MODES.map((m) =>

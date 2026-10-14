@@ -41,6 +41,10 @@ services:
         sync: false
       - key: PUBLIC_URL            # נדרס על ידי ההגדרה "כתובת המערכת" במסך הניהול
         sync: false
+      - key: ANTHROPIC_API_KEY     # משימות AI — בלעדיו האפשרות אינה מוצגת כזמינה
+        sync: false
+      - key: TOKEN_ENCRYPTION_KEY  # הצפנת חיבורי ה-Gmail במסד. נוצר פעם אחת — לא להחליף אחרי שחוברו תיבות
+        generateValue: true
     disk:
       name: mesimon-data   # הדיסק שורד עדכוני גרסה — כאן נשמרים מסד הנתונים והקבצים
       mountPath: /var/mesimon
