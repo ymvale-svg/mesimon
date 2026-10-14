@@ -475,6 +475,87 @@ CREATE INDEX IF NOT EXISTS idx_tasks_assignee ON tasks(assignee_type, assignee_i
 CREATE INDEX IF NOT EXISTS idx_task_assignees_who ON task_assignees(assignee_type, assignee_id);
 CREATE INDEX IF NOT EXISTS idx_notif_target   ON notifications(target_type, target_id, is_read);
 CREATE INDEX IF NOT EXISTS idx_audit_task     ON audit_log(task_id);
+
+/*
+ * משימת AI — בקשה מאדם מסוים, שה-AI מנסח, שולח ועוקב אחריה עד שהיא מתקבלת.
+ *
+ * טבלה נלווית ולא עמודות על ‎tasks‎: משימת AI *היא* משימה — היא מופיעה בלוח,
+ * בדף הבית ובבקרה כמו כל משימה — וכאן נשמר רק מה שייחודי למעקב. כך כל מה
+ * שכבר עובד על משימות (פרויקט, יעד, קבצים, שרשור, היסטוריה) עובד גם עליה.
+ */
+CREATE TABLE IF NOT EXISTS ai_requests (
+  id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+  task_id             INTEGER NOT NULL UNIQUE REFERENCES tasks(id) ON DELETE CASCADE,
+  owner_id            INTEGER NOT NULL REFERENCES users(id),
+  instruction         TEXT    NOT NULL,             -- מה שהמשתמש כתב, כלשונו
+  goal                TEXT    NOT NULL DEFAULT '',  -- הבקשה בניסוח של ה-AI
+  success_criteria    TEXT    NOT NULL DEFAULT '',  -- מתי נחשב שהתקבל
+  contact_name        TEXT    NOT NULL DEFAULT '',
+  contact_email       TEXT    NOT NULL DEFAULT '',
+  contact_phone       TEXT    NOT NULL DEFAULT '',
+  contact_type        TEXT    NOT NULL DEFAULT 'external' CHECK (contact_type IN ('external','vendor','user')),
+  contact_ref_id      INTEGER,
+  -- draft | waiting | needs_user | paused | stalled | completed | stopped
+  state               TEXT    NOT NULL DEFAULT 'draft',
+  policy              TEXT    NOT NULL DEFAULT '{}',
+  -- ניסיונות רצופים שלא נענו — מתאפס בכל תשובה של הנמען
+  unanswered_email    INTEGER NOT NULL DEFAULT 0,
+  unanswered_whatsapp INTEGER NOT NULL DEFAULT 0,
+  next_action_at      TEXT,
+  last_outbound_at    TEXT,
+  last_inbound_at     TEXT,
+  owner_question      TEXT    NOT NULL DEFAULT '',  -- שאלה פתוחה שה-AI מחכה שהמשתמש יענה עליה
+  last_summary        TEXT    NOT NULL DEFAULT '',
+  error               TEXT    NOT NULL DEFAULT '',
+  created_at          TEXT    NOT NULL,
+  updated_at          TEXT    NOT NULL,
+  closed_at           TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_ai_requests_due ON ai_requests(state, next_action_at);
+
+/* כל הודעה שיצאה או נכנסה במסגרת המעקב, בכל ערוץ */
+CREATE TABLE IF NOT EXISTS ai_messages (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  request_id   INTEGER NOT NULL REFERENCES ai_requests(id) ON DELETE CASCADE,
+  direction    TEXT    NOT NULL CHECK (direction IN ('out','in')),
+  channel      TEXT    NOT NULL CHECK (channel IN ('email','whatsapp')),
+  -- initial | reminder | reply | thanks | inbound
+  kind         TEXT    NOT NULL,
+  -- pending_approval | sent | failed | received | discarded
+  status       TEXT    NOT NULL,
+  subject      TEXT    NOT NULL DEFAULT '',
+  body         TEXT    NOT NULL DEFAULT '',
+  message_id   TEXT,                    -- Message-ID של המייל, לשרשור ולזיהוי תשובה
+  external_id  TEXT,                    -- מזהה ההודעה אצל ספק הוואטסאפ
+  from_address TEXT    NOT NULL DEFAULT '',
+  verdict      TEXT,                    -- הכרעת ה-AI על הודעה נכנסת
+  analysis     TEXT    NOT NULL DEFAULT '',
+  attachment_ids TEXT  NOT NULL DEFAULT '[]',
+  error        TEXT    NOT NULL DEFAULT '',
+  created_at   TEXT    NOT NULL,
+  sent_at      TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_ai_messages_req ON ai_messages(request_id);
+CREATE INDEX IF NOT EXISTS idx_ai_messages_mid ON ai_messages(message_id);
+
+/*
+ * ערוצי שליחה אישיים — כרגע וואטסאפ מהמספר של המשתמש. האסימון יושב כאן
+ * ולא בהעדפות המשתמש, כי ההעדפות נשלחות ללקוח ב-bootstrap.
+ */
+CREATE TABLE IF NOT EXISTS user_channels (
+  user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  provider    TEXT    NOT NULL,
+  api_url     TEXT    NOT NULL DEFAULT '',
+  instance_id TEXT    NOT NULL DEFAULT '',
+  api_token   TEXT    NOT NULL DEFAULT '',
+  phone       TEXT    NOT NULL DEFAULT '',
+  state       TEXT    NOT NULL DEFAULT 'unknown',
+  checked_at  TEXT,
+  created_at  TEXT    NOT NULL,
+  PRIMARY KEY (user_id, provider)
+);
 `);
 
 // ---------------------------------------------------------------------------
@@ -655,7 +736,22 @@ const DEFAULT_SETTINGS = {
    * וההגדרה קיימת בשביל צוות שמשתמש בצ'קליסט כרשימת מעקב במשימה ארוכה
    * שאינה נגמרת כשהרשימה נגמרת.
    */
-  auto_done_on_checklist: true
+  auto_done_on_checklist: true,
+
+  /*
+   * משימות AI — מדיניות המעקב. אלה ברירות המחדל; כל משימה יכולה לשנות
+   * אותן לעצמה בזמן הפתיחה.
+   */
+  ai_model: 'claude-opus-5-5',
+  ai_email_attempts: 2,                    // כמה מיילים שלא נענו לפני מעבר לוואטסאפ
+  ai_days_between_emails: 2,
+  ai_whatsapp_enabled: true,
+  ai_whatsapp_attempts: 3,                 // כמה הודעות וואטסאפ שלא נענו לפני שעוצרים ומדווחים
+  ai_days_between_whatsapp: 1,
+  ai_send_window: '08:30-18:00',           // שעות שליחה, שעון ישראל
+  ai_work_days_only: true,                 // בלי שישי ושבת
+  ai_auto_thanks: true,                    // הודעת תודה קצרה כשהבקשה התקבלה
+  ai_poll_minutes: 2                       // תדירות בדיקת תשובות ושליחת תזכורות
 };
 
 /*

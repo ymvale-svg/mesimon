@@ -543,7 +543,9 @@ const App = (() => {
     // הודעה בשרשור של משימה — הסוג היחיד שהוא שיחה בין אנשים ולא דיווח
     comment: { icon: '💬', bg: '#f0fdf4', color: '#15803d' },
     // משימה שפתחתי ומישהו אחר סגר
-    completed: { icon: '✅', bg: '#f0fdf4', color: '#15803d' }
+    completed: { icon: '✅', bg: '#f0fdf4', color: '#15803d' },
+    // משימת AI: תשובה התקבלה, נדרשת החלטה, או שהמעקב נעצר
+    ai: { icon: '✨', bg: '#faf5ff', color: '#7c3aed' }
   };
 
   /**
@@ -559,6 +561,7 @@ const App = (() => {
     { key: 'comment', label: 'הודעה בשרשור של משימה שאני חלק ממנה', desktop: true },
     { key: 'mention', label: 'תיוג שלי (@) בתגובה', desktop: true },
     { key: 'completed', label: 'משימה שפתחתי והושלמה בידי אחר', desktop: true },
+    { key: 'ai', label: 'משימת AI: תשובה שהתקבלה, או החלטה שמחכה לי', desktop: true },
     { key: 'status_change', label: 'שינוי סטטוס, וחומר שספק הזין', desktop: true },
     { key: 'overdue', label: 'משימה שעברה את תאריך היעד', desktop: true },
     { key: 'escalation', label: 'הקפצת משימה דחופה שאינה זזה', desktop: false },
@@ -2033,6 +2036,8 @@ const App = (() => {
             isVendor() ? el('tr', {}, [el('th', { text: 'הרשאת עדכון' }), el('td', { text: state.actor.readOnly ? 'צפייה בלבד' : 'מלאה' })]) : null
           ])
         ]),
+        // הוואטסאפ האישי משמש את משימות ה-AI להמשך מעקב מהמספר של המשתמש
+        isVendor() ? null : el('button.btn.mt', { onclick: () => AiTaskView.openWhatsApp() }, ['💬 חיבור הוואטסאפ שלי']),
         el('div.alert.alert-info.mt', {}, [
           el('div', {}, [
             el('b', { text: 'מה מותר לי במערכת?' }),
