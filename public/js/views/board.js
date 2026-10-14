@@ -834,7 +834,23 @@ const BoardView = (() => {
       });
     }
 
+    /*
+     * משימה רגילה או משימת AI. רק ביצירה ורק ברמה הראשית: משימת AI היא
+     * פנייה לאדם מחוץ למשימה, ואין לה משמעות כתת-משימה או כעריכה.
+     */
+    const modeToggle = !isEdit && !opts.parentTaskId && !App.isVendor()
+      ? el('div.seg.task-mode', {}, [
+          el('button.active', { type: 'button' }, ['משימה רגילה']),
+          el('button', {
+            type: 'button',
+            title: 'ה-AI ינסח פנייה, ישלח אחרי אישורך, ויעקוב עד שתתקבל תשובה',
+            onclick: () => { m.close(); AiTaskView.openDialog({ projectId: opts.projectId ?? '' }); }
+          }, ['✨ משימת AI'])
+        ])
+      : null;
+
     const body = el('div', {}, [
+      modeToggle,
       UI.field('כותרת המשימה', titleInput),
       UI.field('תיאור', descInput),
       el('div.row', {}, [

@@ -129,6 +129,12 @@ const TaskCardView = (() => {
       titleRow,
       el('div.flex', { style: { marginBottom: '14px', flexWrap: 'wrap' } }, [UI.statusTag(task), ...UI.taskTags(task)]),
       ...alerts,
+      AiTaskView.panel(task, (updated) => {
+        task = updated;
+        draw(modalRef.box.querySelector('.task-detail'));
+        refreshBackground();
+        App.refreshNotifications();
+      }),
       vendorWorkflowBar(),
       descNode,
       shortStatusRow(),
@@ -523,7 +529,17 @@ const TaskCardView = (() => {
     comment: 'תגובה',
     attachment: 'קובץ מצורף',
     checklist: 'צ׳קליסט',
-    automation: 'אוטומציה'
+    automation: 'אוטומציה',
+    ai_created: 'משימת AI נפתחה',
+    ai_sent: 'AI: נשלחה הודעה',
+    ai_inbound: 'AI: התקבלה תשובה',
+    ai_stalled: 'AI: המעקב נעצר',
+    ai_paused: 'AI: השהיה',
+    ai_resumed: 'AI: חידוש',
+    ai_nudge: 'AI: תזכורת מיידית',
+    ai_stopped: 'AI: המעקב הופסק',
+    ai_completed: 'AI: סומן שהתקבל',
+    ai_updated: 'AI: עדכון פרטים'
   };
 
   function historySection() {

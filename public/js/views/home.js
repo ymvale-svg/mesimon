@@ -1323,7 +1323,17 @@ const HomeView = (() => {
     comment: 'הגיב/ה',
     attachment: 'העלה/תה קובץ',
     checklist: 'עדכן/ה צ׳קליסט',
-    automation: 'אוטומציה'
+    automation: 'אוטומציה',
+    ai_created: 'פתח/ה משימת AI',
+    ai_sent: 'שלח',
+    ai_inbound: 'קלט תשובה',
+    ai_stalled: 'עצר את המעקב',
+    ai_paused: 'השהה/תה מעקב AI',
+    ai_resumed: 'חידש/ה מעקב AI',
+    ai_nudge: 'ביקש/ה תזכורת',
+    ai_stopped: 'הפסיק/ה מעקב AI',
+    ai_completed: 'סימן/ה שהתקבל',
+    ai_updated: 'עדכן/ה פרטי מעקב'
   };
 
   function feedRow(f) {

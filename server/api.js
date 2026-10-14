@@ -15,6 +15,10 @@ const TaskMail = require('./task-mail');
 const Push = require('./push');
 const Xlsx = require('./xlsx-write');
 const Spreadsheet = require('./spreadsheet');
+const AiTasks = require('./ai-tasks');
+const AiApi = require('./api-ai');
+const Imap = require('./imap');
+const Claude = require('./ai/claude');
 const {
   Router, badRequest, forbidden, notFound,
   readJson, sendJson, sendText, parseUrl
@@ -482,7 +486,9 @@ function shapeTask(task, actor, { withDetails = false } = {}) {
       `SELECT COUNT(*) c FROM comments
         WHERE task_id = ? AND checklist_item_id IS NULL${isVendor(actor) ? ' AND internal = 0' : ''}`,
       task.id
-    ).c
+    ).c,
+    // משימת AI — מצב המעקב בקצרה, לתגית בשורה. ‎null‎ במשימה רגילה
+    ai: isVendor(actor) ? null : AiTasks.summaryFor(task.id)
   };
 
   if (!withDetails) return base;
@@ -537,6 +543,8 @@ function shapeTask(task, actor, { withDetails = false } = {}) {
 
   return {
     ...base,
+    // ההתכתבות המלאה של משימת AI, לפאנל בכרטיס המשימה
+    aiDetail: isVendor(actor) ? null : AiTasks.detailFor(task.id),
     checklist: checklist.map((c) => ({
       id: c.id, text: c.text, done: !!c.done, note: c.note ?? '',
       commentsCount: D.get(
@@ -3720,7 +3728,16 @@ router.get('/api/admin/settings', async (req, res, ctx) => {
         ...Mailer.status(),
         missing: ['SMTP_HOST', 'SMTP_USER', 'SMTP_PASS'].filter((k) => !process.env[k])
       },
-      publicUrl: D.getSetting('public_url', '') || process.env.PUBLIC_URL || null
+      publicUrl: D.getSetting('public_url', '') || process.env.PUBLIC_URL || null,
+      // משימות AI: המודל, ותיבת הדואר שממנה נקראות התשובות
+      ai: {
+        ...Claude.status(),
+        missing: ['ANTHROPIC_API_KEY'].filter((k) => !process.env[k])
+      },
+      inbox: {
+        ...Imap.status(),
+        missing: Imap.isEnabled() ? [] : ['IMAP_HOST', 'IMAP_USER', 'IMAP_PASS'].filter((k) => !process.env[k])
+      }
     },
     storage: {
       ...D.STORAGE,
@@ -3758,6 +3775,7 @@ router.put('/api/admin/settings', async (req, res, ctx) => {
     D.setSetting(key, value);
   }
   if (b.settings?.scheduler_interval_minutes) Rules.start();
+  if (b.settings?.ai_poll_minutes) AiTasks.start();
   sendJson(res, 200, { settings: D.allSettings() });
 });
 
@@ -4484,5 +4502,7 @@ router.get('/api/search', async (req, res, ctx) => {
     results: shown.slice(0, SEARCH_TOTAL).map(({ sort, ...rest }) => rest)
   });
 });
+
+AiApi.register(router, { getTaskOr404, assertVisible, mayOnTask, shapeTask, actorRef, saveAttachment });
 
 module.exports = { router, PRIORITIES, shapeTask, canSeeTask };
