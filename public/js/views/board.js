@@ -371,7 +371,9 @@ const BoardView = (() => {
       } catch (err) { UI.error(err); }
     };
 
-    return el('div.toolbar.bulk-bar', [
+    // ‎{}‎ מפורש: הארגומנט השני הוא תכונות, ורשימת הילדים שהועברה במקומו
+    // הפכה כל כפתור לתכונה ‎0="[object HTMLElement]"‎ — סרגל ריק לגמרי
+    return el('div.toolbar.bulk-bar', {}, [
       el('b', { text: `${view.selection.size} משימות נבחרו` }),
       el('div.sep'),
       UI.select([{ value: '', label: 'שינוי סטטוס…' }, ...columns.map((c) => ({ value: c.key, label: c.label }))], '', {
