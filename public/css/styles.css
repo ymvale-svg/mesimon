@@ -677,6 +677,12 @@ textarea { resize: vertical; min-height: 76px; }
 .toolbar select, .toolbar input { width: auto; min-width: 130px; padding: 6px 10px; font-size: 13px; }
 .toolbar .sep { width: 1px; height: 24px; background: var(--border); }
 .toolbar .spacer { flex: 1; }
+/* באנר הפעולות על משימות נבחרות — נשאר קפוא בראש האזור הנגלל.
+ * ה-top השלילי מבטל את הריפוד העליון של ‎.main‎, כדי שתוכן לא ייראה מעליו. */
+.toolbar.bulk-bar {
+  background: var(--brand-light); border-color: var(--brand);
+  position: sticky; top: -20px; z-index: 5; box-shadow: var(--shadow-lg);
+}
 
 .view-switch { display: flex; border: 1px solid var(--border-strong); border-radius: var(--radius); overflow: hidden; }
 .view-switch button { border: 0; background: var(--surface); padding: 6px 13px; cursor: pointer; font-weight: 600; font-size: 13px; border-inline-start: 1px solid var(--border); }
@@ -1305,6 +1311,55 @@ input[type="color"] { width: 46px; height: 30px; padding: 2px; cursor: pointer; 
 }
 .dropzone:hover, .dropzone.over { border-color: var(--brand); background: var(--brand-light); color: var(--brand-dark); }
 
+/* ---------------------------------------------- פתיחת משימה מהירה */
+
+/*
+ * לשונית צפה בשפה השמאלית, באמצע גובה המסך. שמאל ולא ימין: בפריסה עברית
+ * הצד הימני תפוס בתפריט הניווט, והלשונית הייתה מתנגשת בו.
+ *
+ * ‎writing-mode‎ אנכי — לשונית אופקית ברוחב "משימה מהירה" הייתה בולטת
+ * לתוך התוכן לאורך כל הזמן.
+ */
+/*
+ * ‎left‎ פיזי ולא ‎inset-inline-start‎: בפריסה עברית ה"התחלה" היא ימין, ושם
+ * יושב תפריט הניווט. "מצד שמאל" כאן הוא הצד השמאלי של המסך, תמיד.
+ * מאותה סיבה גם המילוי והפינות פיזיים — ב-‎writing-mode‎ אנכי הציר הלוגי
+ * מסתובב, ו-‎padding-inline‎ היה מרפד למעלה ולמטה במקום לצדדים.
+ */
+.qt-tab {
+  position: fixed; left: 0; top: 50%; transform: translateY(-50%);
+  z-index: 40; display: flex; align-items: center; gap: 7px;
+  writing-mode: vertical-rl; padding: 15px 7px;
+  border: 0; border-radius: 0 12px 12px 0; cursor: pointer;
+  background: var(--brand); color: #fff; font-family: inherit;
+  font-size: 13px; font-weight: 700; letter-spacing: .2px;
+  box-shadow: var(--shadow); transition: background .15s, padding-right .15s;
+}
+.qt-tab:hover, .qt-tab.is-open { background: var(--brand-dark); padding-right: 11px; }
+.qt-tab:focus-visible { outline: 2px solid var(--brand); outline-offset: 3px; }
+.qt-tab .qt-plus { writing-mode: horizontal-tb; font-size: 16px; line-height: 1; }
+
+.qt-panel {
+  position: fixed; left: 46px; top: 50%; transform: translateY(-50%);
+  z-index: 95; width: 310px; max-height: 86vh; overflow-y: auto;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius-lg); box-shadow: var(--shadow-lg);
+  animation: qt-in .16s ease-out;
+}
+@keyframes qt-in { from { opacity: 0; transform: translateY(-50%) translateX(-8px); } }
+@media (prefers-reduced-motion: reduce) { .qt-panel { animation: none; } }
+.qt-head {
+  display: flex; align-items: center; gap: 8px; padding: 11px 13px;
+  border-bottom: 1px solid var(--border);
+}
+.qt-body { padding: 13px; display: flex; flex-direction: column; gap: 10px; }
+.qt-body .field { margin: 0; }
+.qt-drop {
+  border: 2px dashed var(--border-strong); border-radius: var(--radius); padding: 11px;
+  text-align: center; cursor: pointer; transition: border-color .15s, background .15s;
+}
+.qt-drop:hover, .qt-drop.over { border-color: var(--brand); background: var(--brand-light); }
+
 .history-item { display: flex; gap: 10px; padding: 8px 0; border-bottom: 1px dashed var(--border); font-size: 12.5px; }
 .history-item:last-child { border-bottom: 0; }
 .history-item .h-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--border-strong); margin-top: 7px; flex: none; }
@@ -1394,6 +1449,7 @@ input[type="color"] { width: 46px; height: 30px; padding: 2px; cursor: pointer; 
   .login-page { grid-template-columns: 1fr; }
   .login-hero { display: none; }
   .main { padding: 14px; }
+  .toolbar.bulk-bar { top: -14px; }
 }
 
 /*

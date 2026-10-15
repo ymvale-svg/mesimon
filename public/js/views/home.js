@@ -815,6 +815,7 @@ const HomeView = (() => {
       ...homeBoard(cards)
     );
     tuneBoard();
+    ensureQuickTab();
     if (scrollTop) container.scrollTop = scrollTop;
   }
 
@@ -1422,5 +1423,226 @@ const HomeView = (() => {
     ]);
   }
 
-  return { render, reload };
+  // ------------------------------------------------- פתיחת משימה מהירה
+
+  /*
+   * באנר צף בשפה השמאלית של המסך, לפתיחת משימה בלי לעבור מסך ובלי הדיאלוג
+   * המלא. חמישה שדות בלבד — נושא, פרויקט, אחראי, תאריך יעד וקבצים — כי זה
+   * מה שנדרש כדי לרשום משימה לפני ששוכחים אותה; השאר נערך אחר כך בכרטיס.
+   *
+   * יושב על ‎document.body‎ ולא בתוך מסך הבית, וזה מכוון: דף הבית נבנה מחדש
+   * בכל רענון רקע — אחרי כל שינוי במשימה — וטופס שיושב בתוכו היה נמחק תחת
+   * ידיו של הכותב באמצע ההקלדה.
+   */
+  let quickPanel = null;   // הטופס הפתוח, אם יש
+  let quickTab = null;     // הלשונית הצפה
+
+  function closeQuick({ all = false } = {}) {
+    quickPanel?.remove();
+    quickPanel = null;
+    quickTab?.classList.remove('is-open');
+    if (all) { quickTab?.remove(); quickTab = null; }
+  }
+
+  function quickForm() {
+    const titleInput = el('input', { type: 'text', placeholder: 'מה צריך לעשות?' });
+
+    /*
+     * אותו צמצום בדיוק שבדיאלוג המלא: הפרויקטים של המשתמש, עם מוצא לכל
+     * הארגון. רשימה של כל פרויקטי החברה בטופס מהיר היא בדיוק מה שהופך
+     * אותו ללא מהיר.
+     */
+    const relevant = App.state.projects.filter((p) => p.mine && p.status !== 'done');
+    let showAll = relevant.length === 0;
+    const SHOW_ALL = '__all';
+    const projectOptions = () => {
+      const list = showAll ? App.state.projects.filter((p) => p.status !== 'done') : relevant;
+      const rest = App.state.projects.filter((p) => p.status !== 'done').length - relevant.length;
+      return [
+        { value: '', label: 'ללא פרויקט' },
+        ...list.map((p) => ({ value: p.id, label: p.name })),
+        ...(!showAll && rest > 0 ? [{ value: SHOW_ALL, label: `— הצגת כל הפרויקטים —` }] : [])
+      ];
+    };
+    const projectSelect = UI.select(projectOptions(), '');
+    projectSelect.addEventListener('change', () => {
+      if (projectSelect.value !== SHOW_ALL) return;
+      showAll = true;
+      UI.mount(projectSelect, ...projectOptions().map((o) =>
+        el('option', { value: o.value }, [o.label])));
+      projectSelect.value = '';
+      projectSelect.focus();
+    });
+
+    // אותה רשימה מקובצת של הדיאלוג — חברי המחלקה בראש
+    const userOption = (u) => ({
+      value: `user:${u.id}`,
+      label: u.roleLabel ? `${u.name} — ${u.roleLabel}` : u.name
+    });
+    const { near, far, deptName } = UI.usersByDepartment();
+    const vendorOptions = App.may('assign_task_to_vendor')
+      ? App.state.vendors.filter((v) => v.status === 'active')
+        .map((v) => ({ value: `vendor:${v.id}`, label: `${v.name} (ספק חיצוני)` }))
+      : [];
+    const assigneeSelect = UI.select([
+      { value: '', label: 'ללא אחראי' },
+      ...(near.length && far.length
+        ? [{ label: deptName, options: near.map(userOption) },
+           { label: 'שאר הארגון', options: far.map(userOption) }]
+        : [...near, ...far].map(userOption)),
+      ...(vendorOptions.length ? [{ label: 'ספקים חיצוניים', options: vendorOptions }] : [])
+    ], `user:${App.state.actor.id}`);  // ברירת מחדל: אני, כמו בדיאלוג המלא
+
+    const dueInput = el('input', { type: 'date' });
+
+    /*
+     * קבצים. השרת מקבל צירוף רק למשימה קיימת, ולכן הם נאספים כאן ונשלחים
+     * אחרי היצירה. הגודל נבדק עוד לפני: אחרת המשימה כבר נוצרה, ההעלאה
+     * נכשלת, והמשתמש נשאר עם משימה חלקית בלי להבין מה קרה.
+     */
+    let files = [];
+    const fileInput = el('input', { type: 'file', multiple: true, style: { display: 'none' } });
+    const chips = el('div.file-chips');
+    const drawChips = () => {
+      UI.mount(chips, ...files.map((f, i) => el('span.file-chip', {}, [
+        el('span', { text: UI.fileIcon(f.name) }),
+        el('span.fc-name', { text: f.name, title: f.name }),
+        el('span.mute-sm', { text: UI.fileSize(f.size) }),
+        el('button.chip-x', {
+          title: 'הסרה', onclick: () => { files.splice(i, 1); drawChips(); }
+        }, ['✕'])
+      ])));
+      chips.style.display = files.length ? 'flex' : 'none';
+    };
+    drawChips();
+
+    const addFiles = (list) => {
+      const maxMb = Number(App.state.settings?.maxUploadMb ?? 25);
+      for (const f of list) {
+        if (f.size > maxMb * 1024 * 1024) { UI.error(new Error(`"${f.name}" גדול מ-${maxMb}MB ולכן לא צורף`)); continue; }
+        files.push(f);
+      }
+      drawChips();
+    };
+    fileInput.addEventListener('change', () => { addFiles([...fileInput.files]); fileInput.value = ''; });
+
+    const drop = el('div.qt-drop', { onclick: () => fileInput.click() },
+      [el('span.mute-sm', { text: '📎 צירוף קבצים — לחיצה או גרירה' })]);
+    drop.addEventListener('dragover', (e) => { e.preventDefault(); drop.classList.add('over'); });
+    drop.addEventListener('dragleave', () => drop.classList.remove('over'));
+    drop.addEventListener('drop', (e) => {
+      e.preventDefault(); drop.classList.remove('over');
+      addFiles([...e.dataTransfer.files]);
+    });
+
+    const saveBtn = el('button.btn.btn-primary.btn-block', {}, ['יצירת המשימה']);
+
+    const submit = async () => {
+      const title = titleInput.value.trim();
+      if (!title) { UI.toast('נדרשת כותרת למשימה', 'error'); titleInput.focus(); return; }
+      const [aType, aId] = assigneeSelect.value ? assigneeSelect.value.split(':') : [null, null];
+
+      saveBtn.disabled = true;
+      saveBtn.textContent = 'יוצר…';
+      try {
+        const created = await API.createTask({
+          title,
+          projectId: projectSelect.value && projectSelect.value !== SHOW_ALL ? projectSelect.value : null,
+          assigneeType: aType,
+          assigneeId: aId ? Number(aId) : null,
+          dueDate: UI.fromInputDate(dueInput.value)
+        });
+        const id = created?.task?.id;
+
+        /*
+         * הקבצים נשלחים אחרי היצירה, וכישלון בהם אינו מבטל את המשימה —
+         * היא כבר קיימת. לכן נאמר במדויק מה לא עלה, במקום הודעת הצלחה
+         * גורפת שמשאירה את המשתמש בטוח שהקובץ מצורף.
+         */
+        const failed = [];
+        for (const f of files) {
+          try {
+            const data = await new Promise((resolve, reject) => {
+              const reader = new FileReader();
+              reader.onload = () => resolve(reader.result);
+              reader.onerror = () => reject(new Error('הקובץ לא נקרא'));
+              reader.readAsDataURL(f);
+            });
+            await API.upload(id, f.name, f.type, data);
+          } catch { failed.push(f.name); }
+        }
+
+        closeQuick();
+        const sent = files.length - failed.length;
+        if (failed.length) {
+          UI.toast(`המשימה נוצרה, אך ${failed.length === 1 ? `הקובץ "${failed[0]}" לא צורף` : `${failed.length} קבצים לא צורפו: ${failed.join(', ')}`}`, 'error');
+        } else {
+          UI.success(sent ? `המשימה נוצרה עם ${countLabel(sent, 'קובץ אחד', 'קבצים')}` : 'המשימה נוצרה');
+        }
+        await App.reloadReference();
+        await App.refreshView();
+        App.refreshNotifications();
+      } catch (err) {
+        saveBtn.disabled = false;
+        saveBtn.textContent = 'יצירת המשימה';
+        UI.error(err);
+      }
+    };
+
+    saveBtn.addEventListener('click', submit);
+    // Enter בשורת הנושא שולח — זה טופס של שדה אחד חובה, ומי שהקליד נושא סיים
+    titleInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); submit(); } });
+
+    return el('div.qt-panel', { role: 'dialog', 'aria-label': 'פתיחת משימה מהירה' }, [
+      el('div.qt-head', {}, [
+        el('b', { text: 'משימה מהירה' }),
+        el('div.spacer'),
+        el('button.chip-x', { title: 'סגירה', onclick: () => closeQuick() }, ['✕'])
+      ]),
+      el('div.qt-body', {}, [
+        UI.field('נושא', titleInput),
+        UI.field('שם פרויקט', projectSelect),
+        UI.field('אחראי', assigneeSelect),
+        UI.field('תאריך יעד', dueInput),
+        // בורר הקבצים חייב להיות במסמך — לחיצה על ‎input‎ מנותק אינה פותחת
+        // את חלון הבחירה בכל הדפדפנים
+        fileInput,
+        drop,
+        chips,
+        saveBtn
+      ])
+    ]);
+  }
+
+  function toggleQuick() {
+    if (quickPanel) return closeQuick();
+    quickPanel = quickForm();
+    document.body.appendChild(quickPanel);
+    quickTab?.classList.add('is-open');
+    quickPanel.querySelector('input')?.focus();
+  }
+
+  /**
+   * הלשונית נבנית פעם אחת ושורדת את רענוני הרקע של דף הבית. היא נבנית רק
+   * כאן, ולכן אינה מופיעה במסכים אחרים — הפתיחה המהירה היא חלק מהדשבורד.
+   */
+  function ensureQuickTab() {
+    // אותו תנאי בדיוק של "＋ משימה חדשה" בכל שאר המסכים — מי שאינו רשאי
+    // לפתוח משימה לא יראה כאן קיצור דרך שייכשל ב-403
+    if (!App.may('create_task') || App.isVendor()) return;
+    if (quickTab?.isConnected) return;
+    quickTab = el('button.qt-tab', {
+      type: 'button',
+      'aria-haspopup': 'dialog',
+      title: 'פתיחת משימה מהירה',
+      onclick: toggleQuick
+    }, [el('span.qt-plus', { text: '＋' }), el('span.qt-label', { text: 'משימה מהירה' })]);
+    document.body.appendChild(quickTab);
+
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && quickPanel) { e.preventDefault(); closeQuick(); }
+    });
+  }
+
+  return { render, reload, closeQuick };
 })();

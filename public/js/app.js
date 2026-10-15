@@ -523,6 +523,9 @@ const App = (() => {
   function navigate(name, params = {}) {
     state.route = { name, params };
     closeDrawer();
+    // הפתיחה המהירה צפה על ה-body ולכן אינה נמחקת עם המסך — היא שייכת
+    // לדשבורד, ויציאה ממנו מסירה אותה
+    HomeView.closeQuick?.({ all: true });
     render();
   }
 
