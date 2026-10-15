@@ -1314,79 +1314,77 @@ input[type="color"] { width: 46px; height: 30px; padding: 2px; cursor: pointer; 
 /* ---------------------------------------------- פתיחת משימה מהירה */
 
 /*
- * לשונית צפה בשפה השמאלית, באמצע גובה המסך. שמאל ולא ימין: בפריסה עברית
- * הצד הימני תפוס בתפריט הניווט, והלשונית הייתה מתנגשת בו.
+ * לשונית נסתרת בשפה השמאלית, בשליש התחתון של המסך.
  *
- * ‎writing-mode‎ אנכי — לשונית אופקית ברוחב "משימה מהירה" הייתה בולטת
- * לתוך התוכן לאורך כל הזמן.
- */
-/*
- * אייקון עגול בשליש התחתון של המסך, בצד שמאל.
+ * רוב הזמן היא שקועה מחוץ למסך ורק בליטה קטנה מציצה ממנה; ריחוף העכבר
+ * מוציא אותה, ולחיצה פותחת את הטופס. כפתור עגול שעמד על התוכן היה מכסה
+ * טקסט כל הזמן, וזו בדיוק הסיבה לצורה הזו.
  *
  * ‎left‎ פיזי ולא ‎inset-inline-start‎: בפריסה עברית ה"התחלה" היא ימין, ושם
  * יושב תפריט הניווט. "מצד שמאל" כאן הוא הצד השמאלי של המסך, תמיד.
  *
- * ‎bottom‎ ולא ‎top‎ באחוזים: עיגון לתחתית משאיר אותו בשליש התחתון גם במסך
+ * ‎bottom‎ ולא ‎top‎ באחוזים: עיגון לתחתית משאיר אותה בשליש התחתון גם במסך
  * נמוך, בעוד אחוז מלמעלה היה מטפס מעלה ככל שהחלון מתקצר.
  *
- * אותה שפה של כפתור המשימה המהירה בטלפון — עיגול בצבע המותג עם ‎＋‎, שהוא
- * הסימן שכבר מציין "משימה חדשה" בכל המערכת.
+ * הצבע סגול ולא ירוק, כבקשה: כל הגריד של המערכת ירוק, והכפתור נבלע בו.
+ * סגול גם פנוי מבחינת משמעות — הכתום של ‎--accent‎ כבר מסמן ספקים.
  */
 .qt-tab {
-  position: fixed; left: 18px; bottom: 24%;
-  z-index: 40; width: 56px; height: 56px; border-radius: 50%; border: 0;
-  padding: 0; cursor: pointer;
-  /*
-   * מילוי מדורג וכהה. רקע המערכת עצמו נושא גוון טורקיז (‎--bg‎), ולכן עיגול
-   * בצבע המותג השטוח נבלע בו; המעבר אל גוון כהה מהמותג נותן ניגוד אמיתי
-   * מול הרקע ולא רק נפח.
-   */
-  background: linear-gradient(145deg, var(--brand) 0%, var(--brand-dark) 55%, #0b4a45 100%);
-  /*
-   * ארבע שכבות, והראשונה היא העיקר: טבעת לבנה שחוצצת בין העיגול לרקע
-   * המגוון. בלעדיה שני הטורקיזים נוגעים זה בזה והכפתור נקרא ככתם. אחריה
-   * הילה בגוון המותג, צל קצר שמעגן אותו, וקו אור פנימי בקצה העליון.
-   */
+  position: fixed; left: 0; bottom: 24%;
+  z-index: 40; width: 54px; height: 58px;
+  border: 0; padding: 0; cursor: pointer;
+  border-radius: 0 29px 29px 0;
+  background: linear-gradient(135deg, #7c3aed 0%, #6d28d9 55%, #5b21b6 100%);
   box-shadow:
-    0 0 0 3px #fff,
-    0 12px 26px -6px rgba(11, 74, 69, .5),
-    0 4px 10px rgba(15, 23, 42, .22),
-    inset 0 1px 0 rgba(255, 255, 255, .3);
-  transition: transform .18s cubic-bezier(.2, .8, .2, 1), box-shadow .18s;
+    0 6px 16px -4px rgba(91, 33, 182, .45),
+    0 2px 6px rgba(15, 23, 42, .16),
+    inset 0 1px 0 rgba(255, 255, 255, .26);
+  /* שקועה: רק 15 פיקסלים מציצים, והשאר מחוץ לשפת המסך */
+  transform: translateX(-39px);
+  transition: transform .22s cubic-bezier(.2, .8, .2, 1), box-shadow .22s;
 }
+/* ריחוף, מיקוד מקלדת, או טופס פתוח — יוצאת החוצה במלואה */
+.qt-tab:hover, .qt-tab:focus-visible, .qt-tab.is-open { transform: translateX(0); }
+.qt-tab:hover, .qt-tab.is-open {
+  box-shadow:
+    0 10px 24px -4px rgba(91, 33, 182, .5),
+    0 3px 8px rgba(15, 23, 42, .2),
+    inset 0 1px 0 rgba(255, 255, 255, .3);
+}
+.qt-tab:focus-visible { outline: 2px solid #6d28d9; outline-offset: 3px; }
+
 /*
  * הפלוס מצויר בשני פסים ולא בתו ‎＋‎: התו תלוי בגופן, יושב מעט מתחת למרכז
- * האופטי ועוביו משתנה בין מערכות הפעלה. שני פסים הם תמיד חדים, ממורכזים
- * בדיוק, ומסתובבים ל-‎✕‎ נקי.
+ * האופטי ועוביו משתנה בין מערכות הפעלה. שני פסים הם תמיד חדים וממורכזים.
  */
 .qt-tab::before, .qt-tab::after {
   content: ''; position: absolute; top: 50%; left: 50%;
-  background: #fff; border-radius: 2px; transform: translate(-50%, -50%);
+  background: #fff; border-radius: 2px;
+  transform: translate(-50%, -50%);
+  transition: transform .22s cubic-bezier(.2, .8, .2, 1), opacity .15s;
 }
-.qt-tab::before { width: 21px; height: 2.5px; }
-.qt-tab::after { width: 2.5px; height: 21px; }
+.qt-tab::before { width: 20px; height: 2.5px; }
+.qt-tab::after { width: 2.5px; height: 20px; }
+/*
+ * במצב השקוע הפלוס יושב מחוץ לחלק הנראה, ולכן הוא מוסתר ובמקומו נראה
+ * קו אחיזה קטן בבליטה — אחרת הבליטה היא פס צבע בלי שום רמז שאפשר ללחוץ.
+ */
+.qt-tab::before { opacity: 0; }
+.qt-tab::after { transform: translate(-50%, -50%) translateX(19px); }
+.qt-tab:hover::before, .qt-tab:focus-visible::before, .qt-tab.is-open::before { opacity: 1; }
+.qt-tab:hover::after, .qt-tab:focus-visible::after, .qt-tab.is-open::after {
+  transform: translate(-50%, -50%);
+}
+/* פתוח — שני הפסים מסתובבים ל-‎✕‎, בלי לסובב את הלשונית עצמה */
+.qt-tab.is-open::before { transform: translate(-50%, -50%) rotate(45deg); }
+.qt-tab.is-open::after { transform: translate(-50%, -50%) rotate(45deg); }
 
-.qt-tab:hover {
-  transform: translateY(-2px) scale(1.04);
-  box-shadow:
-    0 0 0 3px #fff,
-    0 0 0 9px rgba(15, 118, 110, .14),
-    0 16px 32px -6px rgba(11, 74, 69, .55),
-    0 4px 10px rgba(15, 23, 42, .22),
-    inset 0 1px 0 rgba(255, 255, 255, .34);
-}
-.qt-tab:active { transform: translateY(0) scale(.95); }
-/* פתוח — מסתובב ל-‎✕‎, כך שאותו כפתור גם סוגר ורואים שהוא המקור */
-.qt-tab.is-open { transform: rotate(45deg); }
-.qt-tab.is-open:hover { transform: rotate(45deg) scale(1.04); }
-.qt-tab:focus-visible { outline: 2px solid var(--brand); outline-offset: 4px; }
 @media (prefers-reduced-motion: reduce) {
-  .qt-tab, .qt-tab:hover, .qt-tab:active { transition: box-shadow .18s; transform: none; }
-  .qt-tab.is-open, .qt-tab.is-open:hover { transform: rotate(45deg); }
+  .qt-tab, .qt-tab::before, .qt-tab::after { transition: box-shadow .2s, opacity .15s; }
 }
 
 .qt-panel {
-  position: fixed; left: 76px; bottom: 12%;
+  position: fixed; left: 66px; bottom: 12%;
   z-index: 95; width: 310px; max-height: 80vh; overflow-y: auto;
   background: var(--surface); border: 1px solid var(--border);
   border-radius: var(--radius-lg); box-shadow: var(--shadow-lg);
