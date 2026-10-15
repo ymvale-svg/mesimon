@@ -1632,8 +1632,9 @@ const HomeView = (() => {
     if (!App.may('create_task') || App.isVendor()) return;
     if (quickTab?.isConnected) return;
     /*
-     * אייקון בלבד. השם נשאר ב-‎aria-label‎ וב-‎title‎ — אייקון בלי שם נגיש
-     * הוא כפתור אילם לקורא מסך, ו-‎＋‎ לבדו אינו אומר במה מדובר.
+     * אייקון בלבד, והפלוס עצמו מצויר ב-CSS בשני פסים — ראה ‎.qt-tab::before‎.
+     * השם נשאר ב-‎aria-label‎ וב-‎title‎: אייקון בלי שם נגיש הוא כפתור אילם
+     * לקורא מסך, וסימן פלוס לבדו אינו אומר במה מדובר.
      */
     quickTab = el('button.qt-tab', {
       type: 'button',
@@ -1641,7 +1642,7 @@ const HomeView = (() => {
       'aria-label': 'פתיחת משימה מהירה',
       title: 'פתיחת משימה מהירה',
       onclick: toggleQuick
-    }, ['＋']);
+    });
     document.body.appendChild(quickTab);
 
     document.addEventListener('keydown', (e) => {

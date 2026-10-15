@@ -1333,20 +1333,57 @@ input[type="color"] { width: 46px; height: 30px; padding: 2px; cursor: pointer; 
  * הסימן שכבר מציין "משימה חדשה" בכל המערכת.
  */
 .qt-tab {
-  position: fixed; left: 16px; bottom: 24%;
-  z-index: 40; width: 50px; height: 50px; border-radius: 50%; border: 0;
-  display: grid; place-items: center; cursor: pointer;
-  background: var(--brand); color: #fff; font-family: inherit;
-  font-size: 26px; font-weight: 300; line-height: 1;
-  box-shadow: 0 6px 18px rgba(15, 118, 110, .38);
-  transition: background .15s, transform .14s;
+  position: fixed; left: 18px; bottom: 24%;
+  z-index: 40; width: 56px; height: 56px; border-radius: 50%; border: 0;
+  padding: 0; cursor: pointer;
+  /*
+   * מילוי מדורג וכהה. רקע המערכת עצמו נושא גוון טורקיז (‎--bg‎), ולכן עיגול
+   * בצבע המותג השטוח נבלע בו; המעבר אל גוון כהה מהמותג נותן ניגוד אמיתי
+   * מול הרקע ולא רק נפח.
+   */
+  background: linear-gradient(145deg, var(--brand) 0%, var(--brand-dark) 55%, #0b4a45 100%);
+  /*
+   * ארבע שכבות, והראשונה היא העיקר: טבעת לבנה שחוצצת בין העיגול לרקע
+   * המגוון. בלעדיה שני הטורקיזים נוגעים זה בזה והכפתור נקרא ככתם. אחריה
+   * הילה בגוון המותג, צל קצר שמעגן אותו, וקו אור פנימי בקצה העליון.
+   */
+  box-shadow:
+    0 0 0 3px #fff,
+    0 12px 26px -6px rgba(11, 74, 69, .5),
+    0 4px 10px rgba(15, 23, 42, .22),
+    inset 0 1px 0 rgba(255, 255, 255, .3);
+  transition: transform .18s cubic-bezier(.2, .8, .2, 1), box-shadow .18s;
 }
-.qt-tab:hover { background: var(--brand-dark); transform: scale(1.06); }
-.qt-tab:active { transform: scale(.94); }
+/*
+ * הפלוס מצויר בשני פסים ולא בתו ‎＋‎: התו תלוי בגופן, יושב מעט מתחת למרכז
+ * האופטי ועוביו משתנה בין מערכות הפעלה. שני פסים הם תמיד חדים, ממורכזים
+ * בדיוק, ומסתובבים ל-‎✕‎ נקי.
+ */
+.qt-tab::before, .qt-tab::after {
+  content: ''; position: absolute; top: 50%; left: 50%;
+  background: #fff; border-radius: 2px; transform: translate(-50%, -50%);
+}
+.qt-tab::before { width: 21px; height: 2.5px; }
+.qt-tab::after { width: 2.5px; height: 21px; }
+
+.qt-tab:hover {
+  transform: translateY(-2px) scale(1.04);
+  box-shadow:
+    0 0 0 3px #fff,
+    0 0 0 9px rgba(15, 118, 110, .14),
+    0 16px 32px -6px rgba(11, 74, 69, .55),
+    0 4px 10px rgba(15, 23, 42, .22),
+    inset 0 1px 0 rgba(255, 255, 255, .34);
+}
+.qt-tab:active { transform: translateY(0) scale(.95); }
 /* פתוח — מסתובב ל-‎✕‎, כך שאותו כפתור גם סוגר ורואים שהוא המקור */
-.qt-tab.is-open { background: var(--brand-dark); transform: rotate(45deg); }
-.qt-tab:focus-visible { outline: 2px solid var(--brand); outline-offset: 3px; }
-@media (prefers-reduced-motion: reduce) { .qt-tab { transition: background .15s; } }
+.qt-tab.is-open { transform: rotate(45deg); }
+.qt-tab.is-open:hover { transform: rotate(45deg) scale(1.04); }
+.qt-tab:focus-visible { outline: 2px solid var(--brand); outline-offset: 4px; }
+@media (prefers-reduced-motion: reduce) {
+  .qt-tab, .qt-tab:hover, .qt-tab:active { transition: box-shadow .18s; transform: none; }
+  .qt-tab.is-open, .qt-tab.is-open:hover { transform: rotate(45deg); }
+}
 
 .qt-panel {
   position: fixed; left: 76px; bottom: 12%;
