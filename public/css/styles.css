@@ -1321,32 +1321,41 @@ input[type="color"] { width: 46px; height: 30px; padding: 2px; cursor: pointer; 
  * לתוך התוכן לאורך כל הזמן.
  */
 /*
+ * אייקון עגול בשליש התחתון של המסך, בצד שמאל.
+ *
  * ‎left‎ פיזי ולא ‎inset-inline-start‎: בפריסה עברית ה"התחלה" היא ימין, ושם
  * יושב תפריט הניווט. "מצד שמאל" כאן הוא הצד השמאלי של המסך, תמיד.
- * מאותה סיבה גם המילוי והפינות פיזיים — ב-‎writing-mode‎ אנכי הציר הלוגי
- * מסתובב, ו-‎padding-inline‎ היה מרפד למעלה ולמטה במקום לצדדים.
+ *
+ * ‎bottom‎ ולא ‎top‎ באחוזים: עיגון לתחתית משאיר אותו בשליש התחתון גם במסך
+ * נמוך, בעוד אחוז מלמעלה היה מטפס מעלה ככל שהחלון מתקצר.
+ *
+ * אותה שפה של כפתור המשימה המהירה בטלפון — עיגול בצבע המותג עם ‎＋‎, שהוא
+ * הסימן שכבר מציין "משימה חדשה" בכל המערכת.
  */
 .qt-tab {
-  position: fixed; left: 0; top: 50%; transform: translateY(-50%);
-  z-index: 40; display: flex; align-items: center; gap: 7px;
-  writing-mode: vertical-rl; padding: 15px 7px;
-  border: 0; border-radius: 0 12px 12px 0; cursor: pointer;
+  position: fixed; left: 16px; bottom: 24%;
+  z-index: 40; width: 50px; height: 50px; border-radius: 50%; border: 0;
+  display: grid; place-items: center; cursor: pointer;
   background: var(--brand); color: #fff; font-family: inherit;
-  font-size: 13px; font-weight: 700; letter-spacing: .2px;
-  box-shadow: var(--shadow); transition: background .15s, padding-right .15s;
+  font-size: 26px; font-weight: 300; line-height: 1;
+  box-shadow: 0 6px 18px rgba(15, 118, 110, .38);
+  transition: background .15s, transform .14s;
 }
-.qt-tab:hover, .qt-tab.is-open { background: var(--brand-dark); padding-right: 11px; }
+.qt-tab:hover { background: var(--brand-dark); transform: scale(1.06); }
+.qt-tab:active { transform: scale(.94); }
+/* פתוח — מסתובב ל-‎✕‎, כך שאותו כפתור גם סוגר ורואים שהוא המקור */
+.qt-tab.is-open { background: var(--brand-dark); transform: rotate(45deg); }
 .qt-tab:focus-visible { outline: 2px solid var(--brand); outline-offset: 3px; }
-.qt-tab .qt-plus { writing-mode: horizontal-tb; font-size: 16px; line-height: 1; }
+@media (prefers-reduced-motion: reduce) { .qt-tab { transition: background .15s; } }
 
 .qt-panel {
-  position: fixed; left: 46px; top: 50%; transform: translateY(-50%);
-  z-index: 95; width: 310px; max-height: 86vh; overflow-y: auto;
+  position: fixed; left: 76px; bottom: 12%;
+  z-index: 95; width: 310px; max-height: 80vh; overflow-y: auto;
   background: var(--surface); border: 1px solid var(--border);
   border-radius: var(--radius-lg); box-shadow: var(--shadow-lg);
   animation: qt-in .16s ease-out;
 }
-@keyframes qt-in { from { opacity: 0; transform: translateY(-50%) translateX(-8px); } }
+@keyframes qt-in { from { opacity: 0; transform: translateX(-8px); } }
 @media (prefers-reduced-motion: reduce) { .qt-panel { animation: none; } }
 .qt-head {
   display: flex; align-items: center; gap: 8px; padding: 11px 13px;

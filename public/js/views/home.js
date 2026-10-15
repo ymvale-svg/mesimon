@@ -1631,12 +1631,17 @@ const HomeView = (() => {
     // לפתוח משימה לא יראה כאן קיצור דרך שייכשל ב-403
     if (!App.may('create_task') || App.isVendor()) return;
     if (quickTab?.isConnected) return;
+    /*
+     * אייקון בלבד. השם נשאר ב-‎aria-label‎ וב-‎title‎ — אייקון בלי שם נגיש
+     * הוא כפתור אילם לקורא מסך, ו-‎＋‎ לבדו אינו אומר במה מדובר.
+     */
     quickTab = el('button.qt-tab', {
       type: 'button',
       'aria-haspopup': 'dialog',
+      'aria-label': 'פתיחת משימה מהירה',
       title: 'פתיחת משימה מהירה',
       onclick: toggleQuick
-    }, [el('span.qt-plus', { text: '＋' }), el('span.qt-label', { text: 'משימה מהירה' })]);
+    }, ['＋']);
     document.body.appendChild(quickTab);
 
     document.addEventListener('keydown', (e) => {
