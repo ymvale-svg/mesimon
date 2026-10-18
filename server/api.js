@@ -2174,14 +2174,23 @@ router.post('/api/tasks/:id/comments', async (req, res, ctx) => {
  * ריקה. הסיומת היא הנתון היציב, והנרמול כאן חוסך את הבדיקה הכפולה בכל
  * מקום שמציג או מגיש את הקובץ.
  */
-const MIME_BY_EXT = { wav: 'audio/wav' };
+/*
+ * סוגים שהדפדפן אינו מזהה בעקביות, ולכן הסיומת היא שקובעת.
+ *
+ * קובצי מייל הם המקרה המובהק: גרירת הודעה מ-Outlook מוסרת סוג ריק או
+ * ‎application/octet-stream‎, ואז הקובץ נשמר כזרם בתים אנונימי ואי אפשר
+ * לדעת מהרשומה שמדובר במייל.
+ */
+const MIME_BY_EXT = {
+  wav: 'audio/wav',
+  eml: 'message/rfc822',
+  msg: 'application/vnd.ms-outlook'
+};
 const normalizeMime = (name, mime) => {
   const ext = path.extname(String(name ?? '')).replace('.', '').toLowerCase();
   const known = MIME_BY_EXT[ext];
-  if (!known) return mime || 'application/octet-stream';
-  const given = String(mime ?? '').toLowerCase();
-  // סוג שהדפדפן נתן ואינו מזוהה כאותו סוג מדיה — הסיומת גוברת
-  return given.startsWith('audio/') && given === known ? given : known;
+  // סיומת מוכרת גוברת על מה שהדפדפן הצהיר; אחרת מה שהגיע, ואם כלום — זרם בתים
+  return known ?? (mime || 'application/octet-stream');
 };
 
 /**

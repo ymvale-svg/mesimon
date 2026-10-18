@@ -1058,6 +1058,7 @@ const UI = (() => {
     if (['zip', 'rar'].includes(ext)) return '🗜️';
     if (['mp4', 'mov'].includes(ext)) return '🎬';
     if (['wav', 'mp3', 'm4a', 'ogg'].includes(ext)) return '🎧';
+    if (['eml', 'msg'].includes(ext)) return '✉️';
     return '📄';
   };
 

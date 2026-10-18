@@ -790,7 +790,8 @@ const DEFAULT_SETTINGS = {
   scheduler_interval_minutes: 5,           // תדירות הרצת מנוע הכללים
   max_upload_mb: 25,
   // ‎wav‎ הוא הקלטת קול — הודעה קולית בתגובה או תיעוד שיחה מצורף למשימה
-  allowed_extensions: ['pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'png', 'jpg', 'jpeg', 'gif', 'svg', 'zip', 'ai', 'psd', 'mp4', 'wav', 'txt', 'csv'],
+  // ‎eml‎ ו-‎msg‎ הם קובצי מייל שמורים — ‎eml‎ תקן פתוח, ‎msg‎ של Outlook
+  allowed_extensions: ['pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'png', 'jpg', 'jpeg', 'gif', 'svg', 'zip', 'ai', 'psd', 'mp4', 'wav', 'eml', 'msg', 'txt', 'csv'],
   recurring_default_policy: 'skip_if_open', // לא נוצר מופע כפול עד לסגירת הקודם
   org_name: 'MESIMON',
   // כתובת המערכת כפי שמשתמשים מגיעים אליה — קישורי ההזמנות נבנים ממנה
@@ -1130,7 +1131,7 @@ function migrate() {
    * רק מה שחסר נוסף, והסדר נשמר — משתמש שהוסיף או הסיר סוגים בעצמו
    * במסך ההגדרות לא יאבד את הבחירה שלו.
    */
-  const ADDED_EXTENSIONS = ['wav'];
+  const ADDED_EXTENSIONS = ['wav', 'eml', 'msg'];
   const currentExt = getSetting('allowed_extensions', null);
   if (Array.isArray(currentExt)) {
     const missing = ADDED_EXTENSIONS.filter((e) => !currentExt.includes(e));
