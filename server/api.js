@@ -1156,13 +1156,26 @@ router.get('/api/tasks', async (req, res, ctx) => {
     params.push(`%${search}%`, `%${search}%`);
   }
 
+  /*
+   * סדר ברירת המחדל שונה בארכיון.
+   *
+   * בלוח החי הסדר הוא עדיפות ואז תאריך יעד — מה דחוף לעשות עכשיו. בארכיון
+   * שתי השאלות האלה כבר נענו: הכול הושלם, ועדיפות של משימה סגורה אינה
+   * אומרת דבר. מה שמחפשים שם הוא מה נסגר לאחרונה, ולכן הסדר הוא לפי מועד
+   * ההשלמה מהחדש לישן. משימה שהועברה לארכיון בלי מועד השלמה נופלת לסוף
+   * לפי מזהה, ולא לראש הרשימה.
+   */
+  const order = archived
+    ? `t.completed_at IS NULL, t.completed_at DESC, t.id DESC`
+    : `CASE t.priority WHEN 'urgent' THEN 0 WHEN 'high' THEN 1 WHEN 'normal' THEN 2 ELSE 3 END,
+       t.due_date IS NULL, t.due_date, t.id DESC`;
+
   const rows = D.all(
     `SELECT t.* FROM tasks t
        JOIN boards b ON b.id = t.board_id
        LEFT JOIN projects p ON p.id = t.project_id
       WHERE ${where.join(' AND ')}
-      ORDER BY CASE t.priority WHEN 'urgent' THEN 0 WHEN 'high' THEN 1 WHEN 'normal' THEN 2 ELSE 3 END,
-               t.due_date IS NULL, t.due_date, t.id DESC`,
+      ORDER BY ${order}`,
     ...params
   );
 

@@ -16,7 +16,8 @@ const GridView = (() => {
   // מצב שנשמר בין רינדורים כדי שקיפול קבוצות לא יאבד בכל רענון
   const state = {
     collapsed: new Set(),
-    groupBy: null
+    groupBy: null,
+    sortBy: null
   };
 
   const GROUP_COLORS = ['#0f766e', '#c2410c', '#2563eb', '#7c3aed', '#be123c', '#0891b2', '#65a30d', '#a16207'];
@@ -31,11 +32,76 @@ const GridView = (() => {
     { value: 'none', label: 'ללא קיבוץ' }
   ];
 
+  const SORT_OPTIONS = [
+    { value: 'completed', label: 'הושלמו לאחרונה' },
+    { value: 'priority', label: 'עדיפות' },
+    { value: 'due', label: 'תאריך יעד' },
+    { value: 'created', label: 'נוצרו לאחרונה' },
+    { value: 'title', label: 'שם המשימה' },
+    { value: 'assignee', label: 'אחראי' }
+  ];
+
+  const PRIORITY_ORDER = ['urgent', 'high', 'normal', 'low'];
+
   let ctx = null;
+  let lastContext = null;   // חתך+ארכיון, כדי לאפס את המיון במעבר ביניהם
 
   const columnsOfBoard = (boardId) => App.state.boards.find((b) => b.id === boardId)?.columns ?? [];
 
   const defaultGroupBy = (scope) => (scope === 'vendors' ? 'board' : 'project');
+
+  /*
+   * בלוח החי ברירת המחדל היא עדיפות — מה דחוף עכשיו. בארכיון השאלה הזו כבר
+   * נענתה: הכול הושלם, ועדיפות של משימה סגורה אינה אומרת דבר. שם מחפשים מה
+   * נסגר לאחרונה.
+   */
+  const defaultSortBy = (archived) => (archived ? 'completed' : 'priority');
+
+  // ------------------------------------------------------------- מיון
+
+  /**
+   * מיון המשימות בתוך כל קבוצה.
+   *
+   * ערך חסר תמיד בסוף, בכל מיון: משימה בלי מועד השלמה אינה "האחרונה
+   * שהסתיימה", ומשימה בלי יעד אינה הדחופה ביותר. ‎id‎ שובר שוויון — בלעדיו
+   * הסדר של שתי שורות זהות משתנה בין רינדורים, והשורות קופצות תחת היד.
+   */
+  function sortTasks(tasks, sortBy) {
+    const newestFirst = (pick) => (a, b) => {
+      const x = pick(a), y = pick(b);
+      if (!x && !y) return 0;
+      if (!x) return 1;
+      if (!y) return -1;
+      return new Date(y) - new Date(x);
+    };
+    const he = (pick) => (a, b) =>
+      String(pick(a) ?? '').localeCompare(String(pick(b) ?? ''), 'he');
+
+    const comparators = {
+      completed: newestFirst((t) => t.completedAt),
+      created: newestFirst((t) => t.createdAt),
+      due: (a, b) => {
+        if (!a.dueDate && !b.dueDate) return 0;
+        if (!a.dueDate) return 1;
+        if (!b.dueDate) return -1;
+        return new Date(a.dueDate) - new Date(b.dueDate);
+      },
+      priority: (a, b) => {
+        // עדיפות שאינה ברשימה נופלת לסוף ולא לראש, כפי ש-‎indexOf‎ היה עושה
+        const rank = (t) => {
+          const i = PRIORITY_ORDER.indexOf(t.priority);
+          return i === -1 ? PRIORITY_ORDER.length : i;
+        };
+        return rank(a) - rank(b);
+      },
+      title: he((t) => t.title),
+      assignee: he((t) => t.assigneeName)
+    };
+
+    const cmp = comparators[sortBy];
+    if (!cmp) return tasks;
+    return [...tasks].sort((a, b) => cmp(a, b) || (b.id - a.id));
+  }
 
   /**
    * בטלפון העמודות שאינן הכרחיות אינן נבנות כלל, ולא רק מוסתרות ב-CSS:
@@ -48,9 +114,9 @@ const GridView = (() => {
 
   // ------------------------------------------------------------- קיבוץ
 
-  function buildGroups(tasks, groupBy) {
+  function buildGroups(tasks, groupBy, sortBy) {
     if (groupBy === 'none') {
-      return [{ key: 'all', label: 'כל המשימות', tasks, meta: {} }];
+      return [{ key: 'all', label: 'כל המשימות', tasks: sortTasks(tasks, sortBy), meta: {} }];
     }
 
     const map = new Map();
@@ -77,10 +143,34 @@ const GridView = (() => {
     }
 
     const groups = [...map.values()];
+    for (const g of groups) g.tasks = sortTasks(g.tasks, sortBy);
 
     if (groupBy === 'priority') {
       const order = ['urgent', 'high', 'normal', 'low'];
       groups.sort((a, b) => order.indexOf(a.key) - order.indexOf(b.key));
+    } else if (sortBy === 'completed' || sortBy === 'created') {
+      /*
+       * במיון כרונולוגי גם סדר הקבוצות כרונולוגי, לפי הפריט החדש שבכל אחת.
+       * בלי זה "האחרון שהסתיים" היה ראשון רק בתוך הקבוצה שלו, ובראש הטבלה
+       * הייתה יושבת הקבוצה הראשונה אלפביתית — כלומר השורה העליונה לא הייתה
+       * המשימה האחרונה שנסגרה.
+       */
+      const newest = (g) => {
+        const field = sortBy === 'completed' ? 'completedAt' : 'createdAt';
+        const times = g.tasks.map((t) => (t[field] ? new Date(t[field]).getTime() : null))
+          .filter((v) => v !== null);
+        return times.length ? Math.max(...times) : -Infinity;
+      };
+      /*
+       * כאן אין כלל "קבוצת ללא בסוף". הכלל הזה נכון לסדר קטגוריאלי, שבו
+       * "ללא פרויקט" הוא סל שאריות — אבל בסדר כרונולוגי הוא היה קובר את
+       * המשימה האחרונה שנסגרה רק מפני שלא שויכה לפרויקט, וזו בדיוק השורה
+       * שאמורה לשבת בראש. קבוצה בלי חותמות נופלת לסוף ממילא לפי ‎-Infinity‎.
+       */
+      groups.sort((a, b) => {
+        const x = newest(a), y = newest(b);
+        return x === y ? 0 : y - x;   // ‎===‎ מכסה גם שני ‎-Infinity‎, שההפרש ביניהם NaN
+      });
     } else {
       // קבוצת "ללא" תמיד בסוף
       groups.sort((a, b) => (a.key === 'none' ? 1 : b.key === 'none' ? -1 : 0));
@@ -666,8 +756,17 @@ const GridView = (() => {
 
     if (!state.groupBy) state.groupBy = defaultGroupBy(ctx.scope);
 
+    /*
+     * המעבר בין הלוח לארכיון אינו מחליף חתך (שניהם ‎internal‎), ולכן
+     * ‎resetGrouping‎ אינו נקרא שם והמיון היה נגרר מהלוח אל הארכיון. כאן
+     * הוא חוזר לברירת המחדל של ההקשר שאליו נכנסים, ונשמר כל עוד נשארים בו.
+     */
+    const contextKey = `${ctx.scope}:${ctx.archived ? 'archive' : 'live'}`;
+    if (contextKey !== lastContext) { lastContext = contextKey; state.sortBy = null; }
+    if (!state.sortBy) state.sortBy = defaultSortBy(ctx.archived);
+
     const showBoard = ctx.scope === 'vendors' && state.groupBy !== 'board';
-    const groups = buildGroups(ctx.tasks, state.groupBy);
+    const groups = buildGroups(ctx.tasks, state.groupBy, state.sortBy);
 
     const groupSelector = el('div.group-control', {}, [
       el('span.mute-sm', { text: 'קיבוץ לפי' }),
@@ -677,6 +776,10 @@ const GridView = (() => {
           state.collapsed.clear();
           ctx.onRedraw();
         }
+      }),
+      el('span.mute-sm', { text: 'מיון לפי' }),
+      UI.select(SORT_OPTIONS, state.sortBy, {
+        onchange: (e) => { state.sortBy = e.target.value; ctx.onRedraw(); }
       }),
       el('div.spacer'),
       el('button.btn.btn-sm', {
@@ -702,7 +805,7 @@ const GridView = (() => {
     input?.focus();
   }
 
-  const resetGrouping = () => { state.groupBy = null; state.collapsed.clear(); };
+  const resetGrouping = () => { state.groupBy = null; state.sortBy = null; state.collapsed.clear(); };
 
   return { render, restoreFocus, resetGrouping, closePopover, state };
 })();
