@@ -55,7 +55,8 @@ node server/index.js
 | `DATA_DIR` · `UPLOADS_DIR` | מיקום מסד הנתונים והקבצים המצורפים. חובה בהרצה בענן |
 | `PUBLIC_URL` | הכתובת הציבורית של המערכת — ממנה נבנים קישורי ההזמנה וכתובת החזרה מ-Google |
 | `SMTP_HOST` · `SMTP_PORT` · `SMTP_USER` · `SMTP_PASS` · `SMTP_FROM` · `SMTP_SECURE` | דואר המערכת (הזמנות, התראות). ללא ההגדרות האלה אין שליחה, וקישור ההזמנה מוצג למנהל להעתקה. מיילים של משימות AI אינם יוצאים מכאן — רק מתיבת ה-Gmail של המשתמש |
-| `GOOGLE_CLIENT_ID` · `GOOGLE_CLIENT_SECRET` | כניסה עם חשבון Google. בלעדיהם הכפתור פשוט אינו מוצג |
+| `GOOGLE_CLIENT_ID` · `GOOGLE_CLIENT_SECRET` | חיבור Gmail, וגם כניסה עם חשבון Google אם לא הוגדר לה לקוח נפרד. בלעדיהם הכפתור פשוט אינו מוצג |
+| `GOOGLE_LOGIN_CLIENT_ID` · `GOOGLE_LOGIN_CLIENT_SECRET` | אופציונלי: לקוח נפרד לכניסה עם Google, מפרויקט External — כדי שחשבונות מכל דומיין יוכלו להיכנס גם כשחיבור Gmail על פרויקט Internal |
 | `ANTHROPIC_API_KEY` | משימות AI וסריקת מיילים (Claude). בלעדיו האפשרויות אינן זמינות |
 | `TOKEN_ENCRYPTION_KEY` | הצפנת חיבורי ה-Gmail האישיים במסד. בלעדיו נוצר קובץ מפתח ליד מסד הנתונים. לא להחליף אחרי שחוברו תיבות |
 

@@ -2,8 +2,14 @@
 /**
  * כניסה למערכת דרך חשבון Google (OAuth 2.0).
  *
- * מופעל רק אם הוגדרו משתני הסביבה GOOGLE_CLIENT_ID ו-GOOGLE_CLIENT_SECRET.
- * בלעדיהם הכפתור פשוט לא מוצג, והכניסה עם סיסמה ממשיכה לעבוד כרגיל.
+ * מופעל רק אם הוגדרו משתני הסביבה GOOGLE_CLIENT_ID ו-GOOGLE_CLIENT_SECRET
+ * (או GOOGLE_LOGIN_CLIENT_ID ו-GOOGLE_LOGIN_CLIENT_SECRET). בלעדיהם הכפתור
+ * פשוט לא מוצג, והכניסה עם סיסמה ממשיכה לעבוד כרגיל.
+ *
+ * לקוח נפרד לכניסה: חיבור Gmail דורש לרוב פרויקט Google "פנימי" (Internal),
+ * שחוסם כל חשבון מחוץ לארגון (שגיאה ‎403 org_internal‎). כשמוגדר
+ * GOOGLE_LOGIN_CLIENT_ID — הכניסה עוברת דרכו (פרויקט חיצוני, עם הרשאות
+ * בסיסיות בלבד), ו-Gmail נשאר על GOOGLE_CLIENT_ID. בלעדיו שניהם על אותו לקוח.
  *
  * עיקרון אבטחה מרכזי: הכניסה מותרת אך ורק לכתובת אימייל שכבר קיימת במערכת
  * כמשתמש פעיל או כספק פעיל. חשבון Google אינו יוצר משתמש חדש — אחרת כל אדם
@@ -17,10 +23,17 @@ const AUTH_ENDPOINT = 'https://accounts.google.com/o/oauth2/v2/auth';
 const TOKEN_ENDPOINT = 'https://oauth2.googleapis.com/token';
 const USERINFO_ENDPOINT = 'https://openidconnect.googleapis.com/v1/userinfo';
 
+// הלקוח של חיבור Gmail
 const CLIENT_ID = process.env.GOOGLE_CLIENT_ID ?? '';
 const CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET ?? '';
 
-const isEnabled = () => Boolean(CLIENT_ID && CLIENT_SECRET);
+// הלקוח של הכניסה — נפרד אם הוגדר, אחרת אותו לקוח
+const separateLogin = Boolean(process.env.GOOGLE_LOGIN_CLIENT_ID);
+const LOGIN_CLIENT_ID = separateLogin ? process.env.GOOGLE_LOGIN_CLIENT_ID : CLIENT_ID;
+const LOGIN_CLIENT_SECRET = separateLogin ? (process.env.GOOGLE_LOGIN_CLIENT_SECRET ?? '') : CLIENT_SECRET;
+
+const isEnabled = () => Boolean(LOGIN_CLIENT_ID && LOGIN_CLIENT_SECRET);
+const isGmailClientEnabled = () => Boolean(CLIENT_ID && CLIENT_SECRET);
 
 /**
  * כתובת הבסיס הציבורית של המערכת — לקישורי ההזמנות ולכתובת החזרה מ-Google.
@@ -74,7 +87,7 @@ setInterval(() => {
 
 function authorizeUrl(req) {
   const params = new URLSearchParams({
-    client_id: CLIENT_ID,
+    client_id: LOGIN_CLIENT_ID,
     redirect_uri: redirectUri(req),
     response_type: 'code',
     scope: 'openid email profile',
@@ -91,8 +104,8 @@ async function exchangeCodeForProfile(code, req) {
     headers: { 'content-type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams({
       code,
-      client_id: CLIENT_ID,
-      client_secret: CLIENT_SECRET,
+      client_id: LOGIN_CLIENT_ID,
+      client_secret: LOGIN_CLIENT_SECRET,
       redirect_uri: redirectUri(req),
       grant_type: 'authorization_code'
     })
@@ -139,4 +152,4 @@ function matchAccount(profile) {
   throw new Error(`הכתובת ${email} אינה רשומה במערכת. יש לפנות למנהל המערכת כדי שיוסיף אותה.`);
 }
 
-module.exports = { isEnabled, authorizeUrl, exchangeCodeForProfile, matchAccount, consumeState, publicBase, redirectUri, CLIENT_ID, CLIENT_SECRET, TOKEN_ENDPOINT };
+module.exports = { isEnabled, isGmailClientEnabled, authorizeUrl, exchangeCodeForProfile, matchAccount, consumeState, publicBase, redirectUri, CLIENT_ID, CLIENT_SECRET, TOKEN_ENDPOINT };

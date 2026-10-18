@@ -3763,7 +3763,9 @@ router.get('/api/admin/settings', async (req, res, ctx) => {
     integrations: {
       google: {
         enabled: Google.isEnabled(),
-        missing: ['GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET'].filter((k) => !process.env[k])
+        missing: (process.env.GOOGLE_LOGIN_CLIENT_ID
+          ? ['GOOGLE_LOGIN_CLIENT_ID', 'GOOGLE_LOGIN_CLIENT_SECRET']
+          : ['GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET']).filter((k) => !process.env[k])
       },
       mail: {
         ...Mailer.status(),

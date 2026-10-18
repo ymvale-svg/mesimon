@@ -2,8 +2,8 @@
 /**
  * חיבור Gmail אישי — קריאה ושליחה (‎gmail.readonly‎ + ‎gmail.send‎).
  *
- * על אותו לקוח Google שמשמש לכניסה, ועם אותה כתובת חזרה — כך אין צורך
- * לרשום ב-Google Cloud כתובת נוספת. ההבחנה בין "כניסה" ל"חיבור תיבה" היא
+ * על הלקוח GOOGLE_CLIENT_ID (שמשמש גם לכניסה, אלא אם הוגדר לה לקוח נפרד),
+ * ועם אותה כתובת חזרה — כך אין צורך לרשום ב-Google Cloud כתובת נוספת. ההבחנה בין "כניסה" ל"חיבור תיבה" היא
  * לפי ה-state: מצב שנוצר כאן שייך לחיבור תיבה של משתמש מסוים.
  *
  * מה עושים עם התיבה:
@@ -26,7 +26,7 @@ const SEND_SCOPE = 'https://www.googleapis.com/auth/gmail.send';
 const API = 'https://gmail.googleapis.com/gmail/v1/users/me';
 const REVOKE = 'https://oauth2.googleapis.com/revoke';
 
-const isEnabled = () => Google.isEnabled();
+const isEnabled = () => Google.isGmailClientEnabled();
 
 // --- מצב זמני בין הפנייה ל-Google לחזרה ממנו, לכל משתמש ---
 

@@ -25,6 +25,10 @@ services:
         sync: false
       - key: GOOGLE_CLIENT_SECRET
         sync: false
+      - key: GOOGLE_LOGIN_CLIENT_ID      # לקוח נפרד לכניסה (פרויקט External) — כשחיבור Gmail על פרויקט Internal
+        sync: false
+      - key: GOOGLE_LOGIN_CLIENT_SECRET
+        sync: false
       - key: SMTP_HOST             # שליחת הזמנות ותזכורות בדואר
         sync: false
       - key: SMTP_PORT
