@@ -20,6 +20,7 @@ const AiApi = require('./api-ai');
 const Gmail = require('./gmail');
 const MailScan = require('./ai/mail-scan');
 const Claude = require('./ai/claude');
+const Tiful360 = require('./tiful360');
 const {
   Router, badRequest, forbidden, notFound,
   readJson, sendJson, sendText, parseUrl
@@ -1544,6 +1545,8 @@ function changeStatus(task, newStatus, actor, note = '') {
   D.run('UPDATE tasks SET status = ?, status_changed_at = ?, escalated = 0 WHERE id = ?', newStatus, D.nowIso(), task.id);
   if (target.is_final) {
     D.run('UPDATE tasks SET completed_at = ? WHERE id = ?', D.nowIso(), task.id);
+    // משימה מקריאת שירות — הקריאה נסגרת בתפעול 360 (רק במעבר לסיום, לא בין שני סטטוסי סיום)
+    if (!current?.is_final) Tiful360.onTaskCompleted(task, actor);
   } else if (current?.is_final) {
     D.run('UPDATE tasks SET completed_at = NULL WHERE id = ?', task.id);
   }
@@ -4569,5 +4572,6 @@ router.get('/api/search', async (req, res, ctx) => {
 });
 
 AiApi.register(router, { getTaskOr404, assertVisible, mayOnTask, shapeTask, actorRef, saveAttachment, createTask, assertMayAssignTo });
+Tiful360.register(router, { createTask });
 
 module.exports = { router, PRIORITIES, shapeTask, canSeeTask };
