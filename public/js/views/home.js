@@ -1339,7 +1339,8 @@ const HomeView = (() => {
     ai_nudge: 'ביקש/ה תזכורת',
     ai_stopped: 'הפסיק/ה מעקב AI',
     ai_completed: 'סימן/ה שהתקבל',
-    ai_updated: 'עדכן/ה פרטי מעקב'
+    ai_updated: 'עדכן/ה פרטי מעקב',
+    tiful360: 'עדכן/ה'
   };
 
   function feedRow(f) {
