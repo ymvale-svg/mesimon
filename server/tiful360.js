@@ -137,9 +137,16 @@ function register(router, { createTask }) {
     const dept = department();
     const actor = systemActor(dept);
 
-    // אחראי רק מתוך המחלקה — אחרת המשימה הייתה עוברת למחלקתו
+    /*
+     * האחראי הוא מי ששלח את הקריאה מתפעול 360, לפי כתובת הדואר. מי שאינו
+     * משתמש פעיל כאן — המשימה נוצרת בלי אחראי, ותפעול 360 מציג על כך הודעה.
+     * ‎assigneeId‎ נשאר לבחירה מפורשת מתוך המחלקה.
+     */
     let assigneeId = null;
-    if (body.assigneeId) {
+    const email = clean(body.assigneeEmail, 200).toLowerCase();
+    if (email) {
+      assigneeId = D.get("SELECT id FROM users WHERE lower(email) = ? AND status = 'active'", email)?.id ?? null;
+    } else if (body.assigneeId) {
       const u = D.get("SELECT id FROM users WHERE id = ? AND department_id = ? AND status = 'active'", Number(body.assigneeId), dept.id);
       if (!u) throw badRequest('האחראי שנבחר אינו חבר פעיל במחלקה');
       assigneeId = u.id;
@@ -159,7 +166,7 @@ function register(router, { createTask }) {
       sourceRef: ticketCode,
       auditNote: `נוצרה מקריאת שירות ${ticketCode} בתפעול 360`
     });
-    sendJson(res, 201, { taskId: id, url: taskLink(id), existing: false });
+    sendJson(res, 201, { taskId: id, url: taskLink(id), existing: false, assigned: !!assigneeId });
   });
 }
 
