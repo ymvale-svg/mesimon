@@ -13,8 +13,7 @@
  *   TIFUL360_API_KEY          — מפתח API שהונפק בתפעול 360 עבור משימון
  *   TIFUL360_ACTOR_EMAIL      — בשם מי נוצרות המשימות. ברירת מחדל: מנהל המחלקה
  *   TIFUL360_DEPARTMENT       — שם המחלקה. ברירת מחדל: תפעול
- *   TIFUL360_PROJECT          — פרויקט ברירת המחדל. ברירת מחדל: משרד שוטף
- *   TIFUL360_PRIORITY_PROJECT — פרויקט לפניות "פריוריטי". ברירת מחדל: פריוריטי
+ *   TIFUL360_PROJECT          — פרויקט לקריאה שאין לה נושא. ברירת מחדל: משרד שוטף
  */
 const crypto = require('node:crypto');
 const D = require('./db');
@@ -22,13 +21,11 @@ const Auth = require('./auth');
 const { badRequest, unauthorized, readJson, sendJson } = require('./http-kit');
 
 const SOURCE = 'tiful360';
-const PRIORITY_SUBJECT = 'priority';
 
 const env = (key, fallback = '') => String(process.env[key] ?? '').trim() || fallback;
 const departmentName = () => env('TIFUL360_DEPARTMENT', 'תפעול');
-const projectName = (subject) => subject === PRIORITY_SUBJECT
-  ? env('TIFUL360_PRIORITY_PROJECT', 'פריוריטי')
-  : env('TIFUL360_PROJECT', 'משרד שוטף');
+// לכל נושא קריאה פרויקט משלו, בשם הנושא: "מיחשוב", "פריוריטי", "ריהוט משרדי"...
+const projectName = (subjectLabel) => clean(subjectLabel, 100) || env('TIFUL360_PROJECT', 'משרד שוטף');
 
 // דחוף בתפעול 360 הוא דחוף כאן; כל השאר — רגיל
 const PRIORITY_MAP = { critical: 'urgent', high: 'high', medium: 'normal', low: 'low' };
@@ -77,11 +74,11 @@ function systemActor(dept) {
 }
 
 /**
- * הפרויקט לפי סוג הפנייה. פרויקט שאינו קיים נוצר — כך פנייה ראשונה מסוג
- * חדש אינה נכשלת רק משום שאיש עוד לא פתח לה פרויקט.
+ * הפרויקט לפי נושא הקריאה. נושא שעוד אין לו פרויקט — הפרויקט נוצר עם
+ * הקריאה הראשונה שלו, והקריאות הבאות באותו נושא נכנסות אליו.
  */
-function projectFor(subject, actor) {
-  const name = projectName(subject);
+function projectFor(subjectLabel, actor) {
+  const name = projectName(subjectLabel);
   const existing = D.get(
     "SELECT id FROM projects WHERE name = ? AND status != 'done' ORDER BY status = 'active' DESC, id LIMIT 1", name);
   if (existing) return existing.id;
@@ -156,7 +153,7 @@ function register(router, { createTask }) {
     const id = createTask(actor, {
       title: clean(body.title, 200) || `קריאת שירות ${ticketCode}`,
       description: buildDescription({ ...body, ticketCode }),
-      projectId: projectFor(body.subject, actor),
+      projectId: projectFor(body.subjectLabel, actor),
       departmentId: dept.id,
       assigneeType: assigneeId ? 'user' : null,
       assigneeId,
