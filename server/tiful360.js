@@ -16,6 +16,8 @@
  *   TIFUL360_PROJECT          — פרויקט לקריאה שאין לה נושא. ברירת מחדל: משרד שוטף
  */
 const crypto = require('node:crypto');
+const path = require('node:path');
+const P = require('./permissions');
 const D = require('./db');
 const Auth = require('./auth');
 const { badRequest, unauthorized, readJson, sendJson } = require('./http-kit');
@@ -111,14 +113,68 @@ const taskLink = (id) => {
   return root ? `${root}/?task=${id}` : null;
 };
 
-function register(router, { createTask }) {
-  /** חברי המחלקה, לבחירת אחראי בתפעול 360 */
+const MAX_FILES = 5;
+
+/**
+ * בדיקת הקבצים לפני יצירת המשימה, באותם כללים של העלאה רגילה (סוג וגודל) —
+ * כדי שקובץ פסול לא ישאיר משימה חצי-שמורה בלי הקבצים שלה.
+ */
+function checkFiles(files) {
+  if (files == null) return [];
+  if (!Array.isArray(files)) throw badRequest('רשימת הקבצים אינה תקינה');
+  if (files.length > MAX_FILES) throw badRequest(`ניתן לצרף עד ${MAX_FILES} קבצים`);
+  const allowed = D.getSetting('allowed_extensions', []);
+  const maxMb = Number(D.getSetting('max_upload_mb', 25));
+  return files.map((f) => {
+    const filename = clean(f?.name, 200);
+    const data = String(f?.data ?? '');
+    if (!filename || !data) throw badRequest('אחד הקבצים ריק');
+    const ext = path.extname(filename).replace('.', '').toLowerCase();
+    if (allowed.length && !allowed.includes(ext)) {
+      throw badRequest(`סוג הקובץ .${ext} אינו מורשה במשימון. מותרים: ${allowed.join(', ')}`);
+    }
+    const bytes = Math.floor(data.split(',').pop().length * 3 / 4);
+    if (bytes > maxMb * 1024 * 1024) throw badRequest(`הקובץ "${filename}" חורג מהמגבלה (${maxMb}MB)`);
+    return { filename, mime: clean(f?.mime, 100), data };
+  });
+}
+
+/**
+ * מי שבשמו נוצרת המשימה. מנהל מחלקה רשאי להקצות רק בתוך המחלקה שלו, ולכן
+ * כשנבחר אחראי ממחלקה אחרת — המשימה נוצרת בשם מנהל המערכת.
+ */
+function actorFor(dept, assigneeId) {
+  const actor = systemActor(dept);
+  if (!assigneeId || P.level(actor, 'assign_department_task') !== 'department') return actor;
+  const target = D.get('SELECT department_id FROM users WHERE id = ?', assigneeId);
+  if ((target?.department_id ?? null) === (actor.departmentId ?? null)) return actor;
+  const admin = D.get("SELECT id FROM users WHERE role IN ('superadmin','admin') AND status = 'active' ORDER BY id LIMIT 1");
+  return (admin && Auth.loadActor('user', admin.id)) || actor;
+}
+
+function register(router, { createTask, saveAttachment, getTaskOr404 }) {
+  /**
+   * מה שתפעול 360 מציג בחלון השליחה: המשתמשים הפעילים לבחירת אחראי, הפרויקטים
+   * הפעילים, הפרויקט שיוצע לנושא הקריאה, ומגבלות הקבצים.
+   */
   router.get('/api/integrations/tiful360/options', async (req, res) => {
     authenticate(req);
     const dept = department();
+    const url = new URL(req.url, 'http://local');
     const users = D.all(
-      "SELECT id, full_name AS name FROM users WHERE department_id = ? AND status = 'active' ORDER BY full_name", dept.id);
-    sendJson(res, 200, { department: dept.name, users });
+      `SELECT u.id, u.full_name AS name, u.email, COALESCE(d.name, '') AS department
+         FROM users u LEFT JOIN departments d ON d.id = u.department_id
+        WHERE u.status = 'active' ORDER BY u.full_name`);
+    const projects = D.all("SELECT id, name FROM projects WHERE status = 'active' ORDER BY name");
+    sendJson(res, 200, {
+      department: dept.name,
+      users,
+      projects,
+      defaultProject: projectName(url.searchParams.get('subjectLabel')),
+      maxFiles: MAX_FILES,
+      maxUploadMb: Number(D.getSetting('max_upload_mb', 25)),
+      allowedExtensions: D.getSetting('allowed_extensions', [])
+    });
   });
 
   router.post('/api/integrations/tiful360/tasks', async (req, res) => {
@@ -131,29 +187,40 @@ function register(router, { createTask }) {
     const existing = D.get('SELECT id FROM tasks WHERE source = ? AND source_ref = ? ORDER BY id LIMIT 1', SOURCE, ticketCode);
     if (existing) return sendJson(res, 200, { taskId: existing.id, url: taskLink(existing.id), existing: true });
 
+    const files = checkFiles(body.files);
     const dept = department();
-    const actor = systemActor(dept);
 
     /*
-     * האחראי הוא מי ששלח את הקריאה מתפעול 360, לפי כתובת הדואר. מי שאינו
-     * משתמש פעיל כאן — המשימה נוצרת בלי אחראי, ותפעול 360 מציג על כך הודעה.
-     * ‎assigneeId‎ נשאר לבחירה מפורשת מתוך המחלקה.
+     * אחראי: מי שנבחר בחלון (‎assigneeId‎), ואם לא נבחר — מי ששלח את הקריאה,
+     * לפי כתובת הדואר. מי שאינו משתמש פעיל כאן — המשימה נוצרת בלי אחראי,
+     * ותפעול 360 מציג על כך הודעה.
      */
     let assigneeId = null;
-    const email = clean(body.assigneeEmail, 200).toLowerCase();
-    if (email) {
-      assigneeId = D.get("SELECT id FROM users WHERE lower(email) = ? AND status = 'active'", email)?.id ?? null;
-    } else if (body.assigneeId) {
-      const u = D.get("SELECT id FROM users WHERE id = ? AND department_id = ? AND status = 'active'", Number(body.assigneeId), dept.id);
-      if (!u) throw badRequest('האחראי שנבחר אינו חבר פעיל במחלקה');
+    if (body.assigneeId) {
+      const u = D.get("SELECT id FROM users WHERE id = ? AND status = 'active'", Number(body.assigneeId));
+      if (!u) throw badRequest('האחראי שנבחר אינו משתמש פעיל במשימון');
       assigneeId = u.id;
+    } else {
+      const email = clean(body.assigneeEmail, 200).toLowerCase();
+      if (email) assigneeId = D.get("SELECT id FROM users WHERE lower(email) = ? AND status = 'active'", email)?.id ?? null;
+    }
+    const actor = actorFor(dept, assigneeId);
+
+    // פרויקט: מה שנבחר בחלון, ואם לא נבחר — הפרויקט של נושא הקריאה
+    let projectId;
+    if (body.projectId) {
+      const p = D.get("SELECT id FROM projects WHERE id = ? AND status != 'done'", Number(body.projectId));
+      if (!p) throw badRequest('הפרויקט שנבחר אינו קיים או שהסתיים');
+      projectId = p.id;
+    } else {
+      projectId = projectFor(body.subjectLabel, actor);
     }
 
     const dueDate = /^\d{4}-\d{2}-\d{2}/.test(String(body.dueDate ?? '')) ? String(body.dueDate).slice(0, 10) : null;
     const id = createTask(actor, {
       title: clean(body.title, 200) || `קריאת שירות ${ticketCode}`,
       description: buildDescription({ ...body, ticketCode }),
-      projectId: projectFor(body.subjectLabel, actor),
+      projectId,
       departmentId: dept.id,
       assigneeType: assigneeId ? 'user' : null,
       assigneeId,
@@ -163,7 +230,13 @@ function register(router, { createTask }) {
       sourceRef: ticketCode,
       auditNote: `נוצרה מקריאת שירות ${ticketCode} בתפעול 360`
     });
-    sendJson(res, 201, { taskId: id, url: taskLink(id), existing: false, assigned: !!assigneeId });
+
+    const task = getTaskOr404(id);
+    for (const f of files) {
+      const { name, version } = saveAttachment(task, actor, f);
+      D.audit(id, { type: 'user', id: actor.id, name: actor.name }, 'attachment', `הועלה קובץ "${name}" (גרסה ${version}) מתפעול 360`);
+    }
+    sendJson(res, 201, { taskId: id, url: taskLink(id), existing: false, assigned: !!assigneeId, files: files.length });
   });
 }
 
