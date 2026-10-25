@@ -4572,6 +4572,6 @@ router.get('/api/search', async (req, res, ctx) => {
 });
 
 AiApi.register(router, { getTaskOr404, assertVisible, mayOnTask, shapeTask, actorRef, saveAttachment, createTask, assertMayAssignTo });
-Tiful360.register(router, { createTask });
+Tiful360.register(router, { createTask, saveAttachment, getTaskOr404 });
 
 module.exports = { router, PRIORITIES, shapeTask, canSeeTask };
