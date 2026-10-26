@@ -1448,30 +1448,11 @@ const HomeView = (() => {
     const titleInput = el('input', { type: 'text', placeholder: 'מה צריך לעשות?' });
 
     /*
-     * אותו צמצום בדיוק שבדיאלוג המלא: הפרויקטים של המשתמש, עם מוצא לכל
-     * הארגון. רשימה של כל פרויקטי החברה בטופס מהיר היא בדיוק מה שהופך
-     * אותו ללא מהיר.
+     * אותו בורר של הדיאלוג המלא: חיפוש ודירוג לפי כמה עובדים בכל פרויקט.
+     * פרויקטים שהושלמו אינם מוצעים — אין טעם לפתוח בהם משימה חדשה.
      */
-    const relevant = App.state.projects.filter((p) => p.mine && p.status !== 'done');
-    let showAll = relevant.length === 0;
-    const SHOW_ALL = '__all';
-    const projectOptions = () => {
-      const list = showAll ? App.state.projects.filter((p) => p.status !== 'done') : relevant;
-      const rest = App.state.projects.filter((p) => p.status !== 'done').length - relevant.length;
-      return [
-        { value: '', label: 'ללא פרויקט' },
-        ...list.map((p) => ({ value: p.id, label: p.name })),
-        ...(!showAll && rest > 0 ? [{ value: SHOW_ALL, label: `— הצגת כל הפרויקטים —` }] : [])
-      ];
-    };
-    const projectSelect = UI.select(projectOptions(), '');
-    projectSelect.addEventListener('change', () => {
-      if (projectSelect.value !== SHOW_ALL) return;
-      showAll = true;
-      UI.mount(projectSelect, ...projectOptions().map((o) =>
-        el('option', { value: o.value }, [o.label])));
-      projectSelect.value = '';
-      projectSelect.focus();
+    const projectPicker = UI.projectPicker({
+      projects: App.state.projects.filter((p) => p.status !== 'done')
     });
 
     // אותה רשימה מקובצת של הדיאלוג — חברי המחלקה בראש
@@ -1547,7 +1528,7 @@ const HomeView = (() => {
       try {
         const created = await API.createTask({
           title,
-          projectId: projectSelect.value && projectSelect.value !== SHOW_ALL ? projectSelect.value : null,
+          projectId: projectPicker.value() || null,
           assigneeType: aType,
           assigneeId: aId ? Number(aId) : null,
           dueDate: UI.fromInputDate(dueInput.value)
@@ -1601,7 +1582,7 @@ const HomeView = (() => {
       ]),
       el('div.qt-body', {}, [
         UI.field('נושא', titleInput),
-        UI.field('שם פרויקט', projectSelect),
+        UI.field('שם פרויקט', projectPicker),
         UI.field('אחראי', assigneeSelect),
         UI.field('תאריך יעד', dueInput),
         // בורר הקבצים חייב להיות במסמך — לחיצה על ‎input‎ מנותק אינה פותחת

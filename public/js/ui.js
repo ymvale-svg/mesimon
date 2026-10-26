@@ -628,6 +628,181 @@ const UI = (() => {
     // הקלטת קול מתנגנת בתוך המערכת, ולא נדרשת הורדה כדי לשמוע אותה
     'audio/wav'
   ];
+  // ------------------------------------------------- בורר פרויקטים
+
+  /**
+   * דירוג הפרויקטים בבורר, מהרלוונטי לרחוק.
+   *
+   * ‎mine‎ לבדו אינו מספיק: בארגון שבו מנהל המערכת מוגדר מנהל של כמעט כל
+   * פרויקט הדגל דולק אצל כולם, והרשימה נשארת באורך מלא. תדירות היא שאלה
+   * אחרת — באילו פרויקטים יש לי עבודה פתוחה וכמה — והיא מדרגת גם אז.
+   *
+   * הסדר: קודם הנעוצים, אחריהם לפי מספר המשימות הפתוחות שלי, אחריהם
+   * פרויקטים של המחלקה שלי, ולבסוף השאר לפי א״ב.
+   */
+  function rankProjects(projects, { actor = App.state.actor } = {}) {
+    const deptId = actor?.departmentId ?? null;
+    const tier = (p) => {
+      if (p.pinned) return 0;
+      if (p.myTaskCount > 0) return 1;
+      if (deptId && p.departmentId === deptId) return 2;
+      if (p.mine) return 3;
+      return 4;
+    };
+    return [...projects].sort((a, b) =>
+      tier(a) - tier(b)
+      || (b.myTaskCount ?? 0) - (a.myTaskCount ?? 0)
+      || String(a.name ?? '').localeCompare(String(b.name ?? ''), 'he'));
+  }
+
+  const TIER_LABEL = ['נעוצים', 'העבודה שלי', 'המחלקה שלי', 'פרויקטים שלי', 'שאר הארגון'];
+
+  /**
+   * בורר פרויקטים עם חיפוש.
+   *
+   * ‎select‎ רגיל אינו מתאים כאן: ברשימה של עשרות פרויקטים אין בו חיפוש, אין
+   * דירוג ואין כותרות — ומי שמחפש "מרכזייה" גולל עד שהוא מוצא. כאן ההקלדה
+   * מסננת, הפרויקטים שעובדים בהם באמת יושבים בראש, וכל קבוצה מוכרזת כדי
+   * שיהיה ברור למה הסדר אינו אלפביתי.
+   *
+   * ‎onChange(id)‎ מקבל מזהה או מחרוזת ריקה. ‎value()‎ מחזיר את הבחירה — כך
+   * הקורא אינו צריך להחזיק אותה בעצמו.
+   */
+  function projectPicker({
+    value = '',
+    projects = App.state.projects,
+    noneLabel = 'ללא פרויקט',
+    allowNone = true,
+    onChange = null
+  } = {}) {
+    let current = value ? String(value) : '';
+    const byId = (id) => projects.find((p) => String(p.id) === String(id));
+
+    const face = el('span.pp-face');
+    const trigger = el('button.pp-trigger', {
+      type: 'button', 'aria-haspopup': 'listbox', 'aria-expanded': 'false'
+    }, [face, el('span.pp-caret', { text: '▾' })]);
+
+    const paint = () => {
+      const p = byId(current);
+      clear(face);
+      if (p) {
+        face.appendChild(el('span.pp-dot', { style: { background: p.color } }));
+        face.appendChild(el('span', { text: p.name }));
+      } else {
+        face.appendChild(el('span.mute-sm', { text: noneLabel }));
+      }
+    };
+    paint();
+
+    let pop = null;
+    const close = () => {
+      if (!pop) return;
+      pop.remove();
+      pop = null;
+      trigger.setAttribute('aria-expanded', 'false');
+      document.removeEventListener('mousedown', onOutside);
+    };
+    const onOutside = (e) => {
+      if (pop && !pop.contains(e.target) && e.target !== trigger && !trigger.contains(e.target)) close();
+    };
+
+    const pick = (id) => {
+      current = id ? String(id) : '';
+      paint();
+      close();
+      trigger.focus();
+      onChange?.(current);
+    };
+
+    function open() {
+      if (pop) return close();
+      const search = el('input.pp-search', { type: 'search', placeholder: 'חיפוש פרויקט…', 'aria-label': 'חיפוש פרויקט' });
+      const list = el('div.pp-list', { role: 'listbox' });
+      pop = el('div.pp-pop', {}, [search, list]);
+
+      let rows = [];
+      let cursor = -1;
+      const setCursor = (next) => {
+        if (!rows.length) return;
+        cursor = (next + rows.length) % rows.length;
+        rows.forEach((r, i) => r.classList.toggle('is-active', i === cursor));
+        rows[cursor].scrollIntoView({ block: 'nearest' });
+      };
+
+      const draw = () => {
+        const q = search.value.trim().toLowerCase();
+        clear(list);
+        rows = [];
+        cursor = -1;
+
+        if (allowNone && !q) {
+          const none = el(`button.pp-opt${current ? '' : '.is-chosen'}`, {
+            type: 'button', role: 'option', onclick: () => pick('')
+          }, [el('span.pp-dot.is-empty'), el('span', { text: noneLabel })]);
+          rows.push(none);
+          list.appendChild(none);
+        }
+
+        const matches = rankProjects(projects).filter((p) =>
+          !q || String(p.name ?? '').toLowerCase().includes(q));
+
+        if (!matches.length) {
+          list.appendChild(el('div.pp-empty', { text: `לא נמצא פרויקט בשם "${search.value.trim()}"` }));
+        }
+
+        const deptId = App.state.actor?.departmentId ?? null;
+        const tierOf = (p) => (p.pinned ? 0 : p.myTaskCount > 0 ? 1
+          : (deptId && p.departmentId === deptId) ? 2 : p.mine ? 3 : 4);
+
+        let shownTier = -1;
+        for (const p of matches) {
+          // כותרות קבוצה רק כשאין חיפוש — בתוצאות חיפוש הן רעש
+          const t = tierOf(p);
+          if (!q && t !== shownTier) {
+            shownTier = t;
+            list.appendChild(el('div.pp-group', { text: TIER_LABEL[t] }));
+          }
+          const row = el(`button.pp-opt${String(p.id) === current ? '.is-chosen' : ''}`, {
+            type: 'button', role: 'option', title: p.name, onclick: () => pick(p.id)
+          }, [
+            el('span.pp-dot', { style: { background: p.color } }),
+            el('span.pp-name', { text: p.name }),
+            // המספר מסביר את הדירוג: זה מה שהופך "העבודה שלי" למדיד ולא לתחושה
+            p.myTaskCount ? el('span.pp-count', { text: String(p.myTaskCount) }) : null
+          ]);
+          rows.push(row);
+          list.appendChild(row);
+        }
+        if (rows.length) setCursor(0);
+      };
+
+      search.addEventListener('input', draw);
+      search.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') { e.preventDefault(); close(); trigger.focus(); return; }
+        if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+          e.preventDefault();
+          setCursor(cursor + (e.key === 'ArrowDown' ? 1 : -1));
+          return;
+        }
+        if (e.key === 'Enter') { e.preventDefault(); rows[Math.max(0, cursor)]?.click(); }
+      });
+
+      draw();
+      trigger.setAttribute('aria-expanded', 'true');
+      trigger.parentNode.appendChild(pop);
+      search.focus();
+      setTimeout(() => document.addEventListener('mousedown', onOutside), 0);
+    }
+
+    trigger.addEventListener('click', open);
+
+    const wrap = el('div.pp-wrap', {}, [trigger]);
+    wrap.value = () => current;
+    wrap.setValue = (id) => { current = id ? String(id) : ''; paint(); };
+    return wrap;
+  }
+
   const canPreview = (file) => PREVIEW_MIMES.includes(String(file?.mime ?? '').toLowerCase());
   const isPdf = (file) => String(file?.mime ?? '').toLowerCase() === 'application/pdf';
   const isAudio = (file) => String(file?.mime ?? '').toLowerCase().startsWith('audio/');
@@ -1067,7 +1242,8 @@ const UI = (() => {
     formatDate, formatDateTime, relative, dueLabel, toInputDate, fromInputDate,
     initials, avatar, priorityTag, statusTag, taskTags,
     modal, confirm, prompt, toast, error, success, notifyPop, clearNotifyPops,
-    empty, spinner, field, select, renderMentions, fileSize, fileIcon, announceAutoStatus,
+    empty, spinner, field, select, projectPicker, rankProjects,
+    renderMentions, fileSize, fileIcon, announceAutoStatus,
     usersByDepartment,
     preview, previewUrls, canPreview, PROJECT_COLORS, commentThread, icon,
     logo, logoMark, companyLogo, refitLogos

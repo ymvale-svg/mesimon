@@ -1406,6 +1406,58 @@ input[type="color"] { width: 46px; height: 30px; padding: 2px; cursor: pointer; 
 }
 .qt-drop:hover, .qt-drop.over { border-color: var(--brand); background: var(--brand-light); }
 
+/* ---------------------------------------------- בורר פרויקטים עם חיפוש */
+
+.pp-wrap { position: relative; }
+.pp-trigger {
+  display: flex; align-items: center; gap: 8px; width: 100%;
+  padding: 8px 11px; min-height: 38px; cursor: pointer;
+  border: 1px solid var(--border); border-radius: var(--radius);
+  background: var(--surface); color: inherit; font: inherit; text-align: start;
+}
+.pp-trigger:hover { border-color: var(--border-strong); }
+.pp-trigger[aria-expanded="true"] { border-color: var(--brand); }
+.pp-face { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; }
+.pp-face > span:not(.pp-dot) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pp-caret { color: var(--text-mute); font-size: 11px; flex: none; }
+.pp-dot { width: 10px; height: 10px; border-radius: 50%; flex: none; background: var(--border-strong); }
+.pp-dot.is-empty { background: repeating-linear-gradient(45deg, #e2e8f0 0 3px, #fff 3px 6px); }
+
+.pp-pop {
+  position: absolute; z-index: 120; inset-inline: 0; top: calc(100% + 4px);
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); box-shadow: var(--shadow-lg);
+  display: flex; flex-direction: column; max-height: 320px; overflow: hidden;
+}
+.pp-search {
+  margin: 7px; width: calc(100% - 14px); flex: none;
+  padding: 7px 10px; font-size: 13px;
+}
+.pp-list { overflow-y: auto; padding-bottom: 5px; }
+/* כותרת קבוצה — היא שמסבירה למה הסדר אינו אלפביתי */
+.pp-group {
+  padding: 7px 11px 3px; font-size: 11px; font-weight: 700; color: var(--text-mute);
+  position: sticky; top: 0; background: var(--surface);
+}
+.pp-opt {
+  display: flex; align-items: center; gap: 9px; width: 100%;
+  padding: 8px 11px; border: 0; background: none; cursor: pointer;
+  font: inherit; color: inherit; text-align: start;
+}
+.pp-opt:hover, .pp-opt.is-active { background: var(--surface-2); }
+.pp-opt.is-chosen { font-weight: 700; }
+.pp-opt.is-chosen::after { content: '✓'; color: var(--brand); margin-inline-start: auto; }
+.pp-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* מספר המשימות הפתוחות שלי — מה שמסביר את מקומו של הפרויקט בדירוג */
+.pp-count {
+  margin-inline-start: auto; flex: none;
+  font-size: 11px; font-weight: 700; color: var(--text-soft);
+  background: var(--surface-2); border: 1px solid var(--border);
+  border-radius: 999px; padding: 0 7px;
+}
+.pp-opt.is-chosen .pp-count { margin-inline-start: auto; }
+.pp-empty { padding: 14px 12px; font-size: 12.5px; color: var(--text-mute); }
+
 .history-item { display: flex; gap: 10px; padding: 8px 0; border-bottom: 1px dashed var(--border); font-size: 12.5px; }
 .history-item:last-child { border-bottom: 0; }
 .history-item .h-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--border-strong); margin-top: 7px; flex: none; }

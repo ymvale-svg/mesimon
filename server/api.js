@@ -928,6 +928,29 @@ function listProjectsFor(actor) {
   );
   const visible = visibleProjectIds(actor);
 
+  /*
+   * כמה אני עובד בפועל בכל פרויקט — המספר שמדרג את בורר הפרויקטים.
+   *
+   * "שלי" הוא דגל כן/לא, ובארגון שבו מנהל המערכת מוגדר מנהל של כמעט כל
+   * פרויקט הוא אינו מצמצם דבר. תדירות היא שאלה אחרת: באילו פרויקטים יש לי
+   * עבודה פתוחה, וכמה. היא מדרגת גם כשהדגל דולק אצל כולם.
+   *
+   * שאילתה מקובצת אחת ולא תת-שאילתה לכל פרויקט: זו הספירה היחידה כאן
+   * שסורקת את טבלת המשימות כולה.
+   */
+  const myTaskCounts = new Map(
+    (actor.type === 'user'
+      ? D.all(
+          `SELECT t.project_id AS pid, COUNT(*) AS c
+             FROM tasks t
+            WHERE t.archived = 0 AND t.project_id IS NOT NULL
+              AND ((t.assignee_type = 'user' AND t.assignee_id = ?) OR ${EXTRA_ASSIGNEE_SQL})
+            GROUP BY t.project_id`,
+          actor.id, 'user', actor.id
+        )
+      : []).map((r) => [r.pid, r.c])
+  );
+
   /**
    * מנהל מערכת רואה את כל הפרויקטים בארגון, אבל יש לו גם עבודה משלו — ורשימה
    * שמערבבת את השתיים אינה שימושית לאף אחד מהתפקידים. לכן כל פרויקט מסומן
@@ -1011,6 +1034,8 @@ function listProjectsFor(actor) {
       tasksTotal: stats.total ?? 0,
       tasksDone: stats.done ?? 0,
       tasksArchived: archived,
+      // כמה משימות פתוחות שלי יש בפרויקט — הדירוג של בורר הפרויקטים
+      myTaskCount: myTaskCounts.get(p.id) ?? 0,
       pinned: pinned.has(p.id)
     };
   });
