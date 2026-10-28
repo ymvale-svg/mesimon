@@ -15,6 +15,7 @@ const AdminView = (() => {
     { key: 'statuses', label: 'סטטוסים', perm: 'manage_automations' },
     { key: 'automations', label: 'אוטומציות וכללים', perm: 'manage_automations' },
     { key: 'settings', label: 'הגדרות מערכת', perm: 'manage_automations' },
+    { key: 'whatsapp', label: 'בוט וואטסאפ', perm: 'manage_automations', full: true },
     { key: 'matrix', label: 'מטריצת הרשאות', perm: 'manage_users' },
     { key: 'templates', label: 'תבניות', perm: 'create_project', full: true }
   ];
@@ -49,6 +50,7 @@ const AdminView = (() => {
       else if (tab === 'statuses') await statusesTab(body);
       else if (tab === 'automations') await automationsTab(body);
       else if (tab === 'settings') await settingsTab(body);
+      else if (tab === 'whatsapp') await whatsappTab(body);
       else if (tab === 'matrix') await matrixTab(body);
       else if (tab === 'templates') await templatesTab(body);
     } catch (err) {
@@ -281,7 +283,11 @@ const AdminView = (() => {
           ])]),
           el('tbody', {}, data.users.map((u) =>
             el('tr', {}, [
-              el('td', {}, [el('div.flex', {}, [UI.avatar(u.name, { small: true }), el('b', { text: u.name })])]),
+              el('td', {}, [el('div.flex', {}, [UI.avatar(u.name, { small: true }), el('div', {}, [
+                el('b', { text: u.name }),
+                // הטלפון מתחת לשם — כך רואים במבט מי עוד חסר לבוט הוואטסאפ
+                el('div.mute-sm', { dir: 'ltr', style: { textAlign: 'right' }, text: u.phone ? UI.phone(u.phone) : '📱 אין טלפון' })
+              ])])]),
               el('td', { text: u.email }),
               data.seesRoles ? el('td', {}, [el('span.tag.tag-internal', {}, [u.roleLabel])]) : null,
               // משתמש יכול להיות ללא שיוך למחלקה (הנהלה, מנהל מערכת) — מסומן במקף ולא בתא ריק
@@ -466,6 +472,7 @@ const AdminView = (() => {
     const scoped = listData.scope === 'department';
     const nameInput = el('input', { type: 'text', value: user?.name ?? '' });
     const emailInput = el('input', { type: 'email', value: user?.email ?? '' });
+    const phoneInput = el('input', { type: 'tel', dir: 'ltr', value: user?.phone ? UI.phone(user.phone) : '', placeholder: '050-0000000' });
 
     // רמות הגישה מגיעות מהשרת כשהן מסוננות לפי מה שהמשתמש המחובר רשאי להעניק —
     // מנהל מחלקה יקבל כך רק 'עובד פנימי', בלי החלטה בקוד הממשק.
@@ -545,6 +552,7 @@ const AdminView = (() => {
       body: el('div', {}, [
         UI.field('שם מלא', nameInput),
         UI.field('אימייל', emailInput, 'משמש גם לכניסה למערכת'),
+        UI.field('טלפון נייד', phoneInput, 'כך בוט הוואטסאפ מזהה מי כתב בקבוצה, ומאפשר לפתוח משימות בהודעה אליו'),
         el('div.row', {}, [UI.field('רמת גישה', roleSelect), UI.field('סטטוס', statusSelect)]),
         el('div.row', {}, [
           UI.field('מחלקה', deptSelect, scoped ? 'נקבע לפי המחלקה שלך' : 'ברירת המחדל היא ללא שיוך למחלקה'),
@@ -572,6 +580,7 @@ const AdminView = (() => {
       const payload = {
         name: nameInput.value.trim(),
         email: emailInput.value.trim(),
+        phone: phoneInput.value.trim(),
         role: roleSelect.value,
         status: statusSelect.value,
         fieldWorker: fieldWorkerCheck.checked
@@ -1008,7 +1017,7 @@ const AdminView = (() => {
     ai_internal_attempts: ['משימות AI לעובד: תזכורות במערכת לפני עצירה', 'כשהנמען הוא עובד בארגון, המעקב הוא התראות במשימון — בלי מייל ובלי וואטסאפ'],
     ai_mail_scan_enabled: ['סריקת מיילים: פעילה', 'מיילים שלא נקראו בתיבת ה-Gmail של כל משתמש שחיבר אותה הופכים להצעות משימה'],
     ai_scan_time: ['סריקת מיילים: שעת ריצת הבוקר', 'שעון ישראל, בפורמט 07:00. באותה שעה נשלחת גם ההודעה "היום יוצאים"'],
-    ai_scan_daily_limit: ['סריקת מיילים: תקרה יומית למשתמש', 'כל מייל הוא קריאה ל-AI. מה שמעבר לתקרה נסרק למחרת']
+    ai_scan_daily_limit: ['סריקת מיילים: תקרה יומית למשתמש', 'כל מייל הוא קריאה ל-AI. מה שמעבר לתקרה נסרק למחרת'],
   };
 
   /**
@@ -1293,6 +1302,472 @@ const AdminView = (() => {
     );
   }
 
+  // ------------------------------------------------------------- בוט וואטסאפ
+
+  const BOT_STATES = {
+    authorized: ['מחובר ✅', 'ok'],
+    notAuthorized: ['ממתין לסריקת QR', 'warn'],
+    starting: ['מתחבר…', 'warn'],
+    blocked: ['חסום', 'danger'],
+    error: ['שגיאת חיבור', 'danger'],
+    unknown: ['לא נבדק', 'warn']
+  };
+
+  /**
+   * מסך הניהול של הבוט: מה הוא עושה (פעולות), איפה (קבוצות), מה עשה בפועל
+   * (יומן), בדיקה בלי וואטסאפ, הגדרות זמנים — והחיבור עצמו.
+   */
+  const WA_SECTIONS = [
+    { key: 'actions', label: 'פעולות' },
+    { key: 'groups', label: 'קבוצות' },
+    { key: 'log', label: 'יומן' },
+    { key: 'test', label: 'בדיקה' },
+    { key: 'settings', label: 'הגדרות' },
+    { key: 'connection', label: 'חיבור' }
+  ];
+  let waSection = null;
+  let logFilter = {};
+  let testMode = 'private';
+  let testUser = null;
+
+  const WA_CHANNELS = { private: 'פרטי', group: 'קבוצה', summary: 'סיכום בוקר', proactive: 'הבוט יוזם', test: 'בדיקה' };
+  const WA_STATUS = {
+    ok: ['תקין', ''],
+    unclear: ['לא הובן', 'ai-chip-warn'],
+    denied: ['נחסם', 'ai-chip-warn'],
+    error: ['שגיאה', 'wa-chip-danger'],
+    skipped: ['דולג', '']
+  };
+  const WA_EXTRA_ACTIONS = {
+    group_task: 'הצעה מקבוצה', group_scan: 'ניתוח קבוצה', approved: 'אושרה ✅', unknown: 'מספר לא מוכר',
+    other: 'לא זוהתה פעולה', cancel: 'ביטול', warning: 'אזהרת אבטחה'
+  };
+
+  async function whatsappTab(body) {
+    let info = await API.get('/api/admin/wa-bot');
+    // בפעם הראשונה, בלי חיבור, אין טעם להתחיל ממסך הפעולות
+    if (!waSection) waSection = info.connection ? 'actions' : 'connection';
+    const host = el('div');
+
+    const actionLabel = (key) => info.actions.find((a) => a.key === key)?.label ?? WA_EXTRA_ACTIONS[key] ?? key;
+
+    const draw = (next) => {
+      if (next) info = next;
+      UI.mount(body, headerCard(), el('div.seg.mb', {}, WA_SECTIONS.map((s) =>
+        el(`button${waSection === s.key ? '.active' : ''}`, { onclick: () => { waSection = s.key; draw(); } }, [s.label])
+      )), host);
+      const sections = { actions: actionsSection, groups: groupsSection, log: logSection, test: testSection, settings: settingsSection, connection: connectionSection };
+      Promise.resolve(sections[waSection]()).catch((err) => UI.mount(host, UI.empty(err.message, '⚠️')));
+    };
+
+    // ---- כותרת: מצב ומה קרה ביממה האחרונה
+
+    function headerCard() {
+      const c = info.connection;
+      const [stateLabel, kind] = c ? (BOT_STATES[c.state] ?? [c.state, 'warn']) : ['לא מחובר', 'danger'];
+      const status = [
+        el(`span.ai-chip${kind === 'ok' ? '.wa-chip-ok' : kind === 'danger' ? '.wa-chip-danger' : '.ai-chip-warn'}`, { text: `🤖 ${stateLabel}` }),
+        !info.settings.enabled ? el('span.ai-chip.ai-chip-warn', { text: '⏸ כבוי' })
+          : c?.state !== 'authorized' ? null
+          : !info.sendingNow ? el('span.ai-chip.ai-chip-warn', { text: '🌙 בהפסקה — עונה כשהחלון ייפתח' })
+          : el('span.ai-chip.wa-chip-ok', { text: 'פעיל ועונה' }),
+        !info.ai ? el('span.ai-chip.wa-chip-danger', { text: 'אין חיבור AI' }) : null,
+        c?.phone ? el('span.mute-sm', { dir: 'ltr', text: UI.phone(c.phone) }) : null
+      ];
+      const stat = (n, label, onclick) => el(`div.wa-stat${onclick ? '.wa-stat-link' : ''}`, { onclick }, [el('b', { text: String(n) }), el('span', { text: label })]);
+      const t = info.today;
+      return el('div.card.mb', {}, [
+        el('div.card-pad', {}, [
+          el('div.flex', { style: { flexWrap: 'wrap', marginBottom: '12px' } }, status),
+          el('div.wa-stats', {}, [
+            stat(t.privateMessages, 'הודעות בפרטי', () => { waSection = 'log'; logFilter = { channel: 'private' }; draw(); }),
+            stat(t.tasksOpened, 'משימות נפתחו'),
+            stat(t.suggestions, 'הצעות מקבוצות', () => { waSection = 'log'; logFilter = { channel: 'group' }; draw(); }),
+            stat(t.unclear, 'לא הובנו / שגיאות', () => { waSection = 'log'; logFilter = { status: 'unclear' }; draw(); })
+          ]),
+          el('div.mute-sm', { style: { marginTop: '6px' }, text: 'ב-24 השעות האחרונות' })
+        ])
+      ]);
+    }
+
+    // ---- פעולות
+
+    function actionsSection() {
+      const state = info.actions.map((a) => ({ ...a, examples: [...a.examples] }));
+      const CHANNEL_CHIP = { group: 'בקבוצות', private: 'בפרטי', proactive: 'הבוט יוזם' };
+
+      const row = (a) => {
+        const toggle = el('input', { type: 'checkbox', checked: a.enabled, onchange: (e) => { a.enabled = e.target.checked; card.classList.toggle('wa-off', !a.enabled); } });
+        const audience = a.channel === 'group' ? null : UI.select([
+          { value: 'all', label: 'כל העובדים' },
+          { value: 'managers', label: 'מנהלים בלבד' }
+        ], a.audience, { onchange: (e) => { a.audience = e.target.value; } });
+        // בקבוצות ה-AI עובד לפי הסקיל של הקבוצה, ובסיכום הבוקר אין מה לבקש — דוגמאות רק לשיחה הפרטית
+        const examples = a.channel !== 'private' ? null : el('textarea', {
+          rows: Math.max(2, a.examples.length), dir: 'rtl',
+          oninput: (e) => { a.examples = e.target.value.split('\n'); }
+        });
+        if (examples) examples.value = a.examples.join('\n');
+        const card = el(`div.ai-row${a.enabled ? '' : '.wa-off'}`, {}, [
+          el('label.wa-toggle', { title: a.enabled ? 'מופעלת' : 'כבויה' }, [toggle]),
+          el('div.ai-row-main', { style: { cursor: 'default' } }, [
+            el('div', {}, [el('span', { text: `${a.icon} ` }), el('b', { text: a.label }), ' ', el('span.ai-chip', { text: CHANNEL_CHIP[a.channel] })]),
+            el('div.mute-sm', { text: a.description }),
+            examples ? UI.field('דוגמאות — שורה לכל דוגמה. מוצגות ב"עזרה" ומכוונות את הבוט', examples) : null,
+            a.key === 'summary' ? el('div.mute-sm', { text: `נשלח בשעה ${info.settings.summaryTime} — משנים בלשונית "הגדרות".` }) : null
+          ]),
+          audience ? el('div.ai-row-actions', {}, [UI.field('מי רשאי', audience)]) : null
+        ]);
+        return card;
+      };
+
+      const save = el('button.btn.btn-primary', {}, ['שמירת הפעולות']);
+      save.addEventListener('click', async () => {
+        save.disabled = true;
+        try {
+          draw(await API.put('/api/admin/wa-bot/actions', { actions: state.map((a) => ({ key: a.key, enabled: a.enabled, audience: a.audience, examples: a.examples })) }));
+          UI.success('הפעולות נשמרו');
+        } catch (err) { save.disabled = false; UI.error(err); }
+      });
+
+      UI.mount(host,
+        el('div.alert.alert-info.mb', {}, [
+          el('span', { text: '🛡️' }),
+          el('div', {}, [
+            el('div', { text: 'ה-AI רק מזהה מה העובד ביקש. את הפעולה עצמה מבצע משימון עם ההרשאות של העובד, בדיוק כמו באפליקציה: אף אחד לא יראה בוואטסאפ משימה שאינו רואה במערכת. פעולה שמשנה משהו (פתיחה, סגירה, הערה) מתבצעת רק אחרי "כן".' }),
+            el('div.mute-sm', { text: 'פעולה כבויה — הבוט עונה שאינה זמינה. פעולה חדשה מחייבת פיתוח; כאן מפעילים, מכבים ומכוונים.' })
+          ])
+        ]),
+        el('div', {}, state.map(row)),
+        el('div.mt', {}, [save])
+      );
+    }
+
+    // ---- קבוצות
+
+    function groupsSection() {
+      const STATUS = { pending: ['ממתינה לשיוך', 'ai-chip-warn'], active: ['פעילה', 'wa-chip-ok'], ignored: ['מתעלמים', ''] };
+      const row = (g) => {
+        const pick = UI.select([{ value: '', label: 'בחירת פרויקט…' }, ...info.projects.map((p) => ({ value: p.id, label: p.name }))], g.projectId ?? '');
+        const bind = el('button.btn.btn-sm.btn-primary', {}, [g.status === 'active' ? 'שמירה' : 'שיוך']);
+        bind.addEventListener('click', async () => {
+          if (!pick.value) return UI.toast('יש לבחור פרויקט', 'error');
+          if (g.status === 'active' && String(g.projectId) !== pick.value
+            && !await UI.confirm(`להעביר את הקבוצה "${g.name}" לפרויקט אחר? משימות שכבר נפתחו נשארות בפרויקט הקודם.`, { okText: 'העברה' })) return;
+          bind.disabled = true;
+          try { draw(await API.put(`/api/admin/wa-groups/${encodeURIComponent(g.chatId)}`, { projectId: Number(pick.value) })); UI.success('נשמר'); } catch (err) { bind.disabled = false; UI.error(err); }
+        });
+        const ignore = g.status !== 'ignored' ? el('button.btn.btn-sm.btn-ghost', {}, ['להתעלם']) : null;
+        ignore?.addEventListener('click', async () => {
+          if (!await UI.confirm(`הבוט יפסיק לקרוא את "${g.name}". מומלץ גם להוציא אותו מהקבוצה.`, { okText: 'התעלמות' })) return;
+          try { draw(await API.put(`/api/admin/wa-groups/${encodeURIComponent(g.chatId)}`, { ignore: true })); } catch (err) { UI.error(err); }
+        });
+        const history = el('button.btn.btn-sm.btn-ghost', { onclick: () => { waSection = 'log'; logFilter = { chatId: g.chatId }; draw(); } }, ['ביומן']);
+        const [statusLabel, statusClass] = STATUS[g.status] ?? [g.status, ''];
+        const s = g.suggestions;
+        return el('div.ai-row', {}, [
+          el('div.ai-row-main', { style: { cursor: 'default' } }, [
+            el('div', {}, [el('b', { text: g.name || g.chatId }), ' ', el(`span.ai-chip${statusClass ? `.${statusClass}` : ''}`, { text: statusLabel })]),
+            el('div.mute-sm', { text: [
+              g.status === 'active' && g.projectName ? `📁 ${g.projectName}` : null,
+              g.boundBy ? `שויכה ע"י ${g.boundBy}` : null,
+              g.lastMessageAt ? `הודעה אחרונה ${UI.relative(g.lastMessageAt)}` : null,
+              g.status === 'pending' && g.waiting ? `${g.waiting} הודעות ממתינות` : null
+            ].filter(Boolean).join(' · ') }),
+            g.status !== 'ignored' ? el('div.mute-sm', { text: s.total
+              ? `💡 ${s.total} הצעות · ${s.approved} אושרו · ${s.rejected} נדחו · ${s.pending} ממתינות`
+              : '💡 עדיין אין הצעות מהקבוצה' }) : null,
+            g.status !== 'ignored' ? el('div.mute-sm', { text: g.registered === null
+              ? '👤 רשימת החברים תיטען בניתוח הראשון'
+              : g.registered.length
+                ? `👤 מקבלים הצעות (${g.registered.length} מתוך ${g.members} חברים): ${g.registered.join(', ')}`
+                : `👤 אף אחד מ-${g.members} החברים אינו רשום עם טלפון — הקבוצה אינה מנותחת` }) : null
+          ]),
+          el('div.ai-row-actions', {}, [pick, bind, ignore, history])
+        ]);
+      };
+
+      const phones = info.usersWithoutPhone.length ? el('div.alert.alert-info.mt', {}, [
+        el('span', { text: '📱' }),
+        el('div', {}, [
+          el('b', { text: 'לעובדים האלה אין טלפון בפרופיל: ' }),
+          info.usersWithoutPhone.join(', '),
+          el('div.mute-sm', { text: 'בלי טלפון הבוט לא יודע מי מהם כתב בקבוצה, לא מציע להם משימות ואינו עונה להם בפרטי. מוסיפים בלשונית "משתמשים והרשאות", או שהעובד מוסיף בעצמו ב"החשבון שלי".' })
+        ])
+      ]) : null;
+
+      UI.mount(host,
+        el('div.mute-sm.mb', { text: 'קבוצה מופיעה כאן אחרי ההודעה הראשונה שנכתבת בה מאז שהבוט צורף. כל קבוצה שייכת לפרויקט אחד: כל משימה שנולדת בה נפתחת רק תחתיו. בשיוך ראשון ננתחות רק הודעות מ-3 הימים האחרונים.' }),
+        info.groups.length ? el('div', {}, info.groups.map(row)) : UI.empty('הבוט עדיין לא נמצא באף קבוצה', '👥'),
+        phones
+      );
+    }
+
+    // ---- יומן
+
+    async function logSection() {
+      const f = logFilter;
+      const channel = UI.select([{ value: '', label: 'כל הערוצים' }, { value: 'private', label: 'פרטי' }, { value: 'group', label: 'קבוצות' }, { value: 'summary', label: 'סיכום בוקר' }], f.channel ?? '');
+      const status = UI.select([{ value: '', label: 'כל המצבים' }, ...Object.entries(WA_STATUS).map(([value, [label]]) => ({ value, label }))], f.status ?? '');
+      const user = UI.select([{ value: '', label: 'כל העובדים' }, ...info.users.map((u) => ({ value: u.id, label: u.name }))], f.userId ?? '');
+      const group = UI.select([{ value: '', label: 'כל הקבוצות' }, ...info.groups.map((g) => ({ value: g.chatId, label: g.name || g.chatId }))], f.chatId ?? '');
+      const q = el('input', { type: 'search', placeholder: 'חיפוש בטקסט…', value: f.q ?? '' });
+      const apply = () => { logFilter = { channel: channel.value, status: status.value, userId: user.value, chatId: group.value, q: q.value.trim() }; logSection(); };
+      for (const s of [channel, status, user, group]) s.addEventListener('change', apply);
+      q.addEventListener('keydown', (e) => { if (e.key === 'Enter') apply(); });
+
+      const tbody = el('tbody');
+      const more = el('button.btn.btn-ghost', {}, ['עוד']);
+      const params = (before) => new URLSearchParams(Object.entries({ ...logFilter, before: before || '' }).filter(([, v]) => v)).toString();
+      let last = 0;
+      const load = async () => {
+        more.disabled = true;
+        const { entries } = await API.get(`/api/admin/wa-bot/log?${params(last)}`);
+        for (const e of entries) tbody.append(logRow(e));
+        last = entries.at(-1)?.id ?? last;
+        more.style.display = entries.length < 100 ? 'none' : '';
+        more.disabled = false;
+        if (!tbody.children.length) tbody.append(el('tr', {}, [el('td', { colspan: 6 }, [UI.empty('אין רשומות', '📜')])]));
+      };
+      more.addEventListener('click', () => load().catch(UI.error));
+
+      function logRow(e) {
+        const [statusLabel, statusClass] = WA_STATUS[e.status] ?? [e.status, ''];
+        return el('tr', { onclick: e.taskId ? () => TaskCardView.open(e.taskId) : null, style: { cursor: e.taskId ? 'pointer' : 'default' } }, [
+          el('td', { title: UI.formatDateTime(e.at), text: UI.relative(e.at) }),
+          el('td', {}, [WA_CHANNELS[e.channel] ?? e.channel, e.chatName ? el('div.mute-sm', { text: e.chatName }) : null]),
+          el('td', { text: e.who || '—' }),
+          el('td.wrap', { text: e.text || '—' }),
+          el('td', {}, [actionLabel(e.action), ' ', el(`span.ai-chip${statusClass ? `.${statusClass}` : ''}`, { text: statusLabel })]),
+          el('td.wrap', {}, [e.result, e.taskId ? el('span.mute-sm', { text: ` · #${e.taskId}` }) : null])
+        ]);
+      }
+
+      UI.mount(host,
+        el('div.wa-filters.mb', {}, [channel, status, user, group, q]),
+        el('div.table-wrap', {}, [
+          el('table.data', {}, [
+            el('thead', {}, [el('tr', {}, ['מתי', 'ערוץ', 'מי', 'הודעה', 'פעולה', 'תוצאה'].map((h) => el('th', { text: h })))]),
+            tbody
+          ])
+        ]),
+        el('div.mt', {}, [more]),
+        el('div.mute-sm.mt', { text: 'היומן נשמר 90 יום. לחיצה על שורה עם משימה פותחת אותה.' })
+      );
+      await load();
+    }
+
+    // ---- בדיקה
+
+    function testSection() {
+      const mode = el('div.seg.mb', {}, [
+        el(`button${testMode === 'private' ? '.active' : ''}`, { onclick: () => { testMode = 'private'; testSection(); } }, ['שיחה פרטית']),
+        el(`button${testMode === 'group' ? '.active' : ''}`, { onclick: () => { testMode = 'group'; testSection(); } }, ['הודעה בקבוצה'])
+      ]);
+      UI.mount(host,
+        el('div.alert.alert-info.mb', {}, [el('span', { text: '🧪' }), el('div', { text: 'כאן רואים מה הבוט היה עונה ועושה, בלי וואטסאפ. שום הודעה לא נשלחת ושום משימה לא נפתחת, נסגרת או משתנה. רשימות המשימות הן אמיתיות — כפי שהעובד שנבחר רואה אותן.' })]),
+        mode,
+        testMode === 'private' ? privateTest() : groupTest()
+      );
+    }
+
+    function privateTest() {
+      const user = UI.select(info.users.map((u) => ({ value: u.id, label: `${u.name}${u.hasPhone ? '' : ' (אין טלפון)'}` })), testUser ?? App.state.actor.id);
+      const chat = el('div.wa-chat');
+      const input = el('input', { type: 'text', placeholder: 'למשל: מה המשימות שלי היום?' });
+      const send = el('button.btn.btn-primary', {}, ['שליחה']);
+      const reset = el('button.btn.btn-ghost', {}, ['שיחה חדשה']);
+
+      const bubble = (who, text, meta) => {
+        chat.append(el(`div.wa-bubble.wa-${who}`, {}, [
+          el('div', { text }),
+          meta ? el('div.wa-meta', {}, [actionLabel(meta.action), ' · ', (WA_STATUS[meta.status] ?? [meta.status])[0], meta.result ? ` · ${meta.result}` : '']) : null
+        ]));
+        chat.scrollTop = chat.scrollHeight;
+      };
+      const restart = async () => {
+        testUser = Number(user.value);
+        UI.clear(chat);
+        await API.post('/api/admin/wa-bot/simulate', { userId: testUser, reset: true }).catch(UI.error);
+        bubble('note', 'שיחה חדשה. כתבו כמו העובד בוואטסאפ, כולל "כן" לאישור.');
+      };
+      const go = async () => {
+        const text = input.value.trim();
+        if (!text) return;
+        input.value = '';
+        bubble('me', text);
+        send.disabled = true;
+        try {
+          const r = await API.post('/api/admin/wa-bot/simulate', { userId: Number(user.value), text });
+          bubble('bot', r.reply, r);
+        } catch (err) { bubble('note', `⚠️ ${err.message}`); }
+        send.disabled = false;
+        input.focus();
+      };
+      send.addEventListener('click', go);
+      input.addEventListener('keydown', (e) => { if (e.key === 'Enter') go(); });
+      reset.addEventListener('click', restart);
+      user.addEventListener('change', restart);
+      restart();
+
+      return el('div.card', {}, [el('div.card-pad', {}, [
+        UI.field('כותב בשם', user),
+        chat,
+        el('div.flex.mt', {}, [input, send, reset])
+      ])]);
+    }
+
+    function groupTest() {
+      const active = info.groups.filter((g) => g.status === 'active');
+      if (!active.length) return UI.empty('אין עדיין קבוצה ששויכה לפרויקט', '👥');
+      const group = UI.select(active.map((g) => ({ value: g.chatId, label: `${g.name} · ${g.projectName}` })));
+      const sender = UI.select([{ value: '', label: 'משתתף שאינו עובד' }, ...info.users.map((u) => ({ value: u.id, label: u.name }))], App.state.actor.id);
+      const text = el('textarea', { rows: 3, placeholder: 'שושנה בבקשה לפנות ליועץ הסניטרי ולבקש תסריט מעודכן עד יום חמישי' });
+      const go = el('button.btn.btn-primary', {}, ['מה הבוט היה מציע?']);
+      const out = el('div.mt');
+      go.addEventListener('click', async () => {
+        if (!text.value.trim()) return;
+        go.disabled = true;
+        UI.mount(out, UI.spinner());
+        try {
+          const r = await API.post('/api/admin/wa-bot/simulate', { chatId: group.value, userId: Number(sender.value) || 0, text: text.value });
+          UI.mount(out,
+            r.note ? el('div.alert.alert-warn', {}, [el('span', { text: '⚠️' }), el('div', { text: r.note })]) : null,
+            r.warning ? el('div.alert.alert-danger', {}, [el('span', { text: '🛡️' }), el('div', { text: r.warning })]) : null,
+            r.candidates?.length ? el('div.mute-sm.mb', { text: `מי יכול לקבל הצעות: ${r.candidates.join(', ')}` }) : null,
+            r.tasks?.length ? el('div', {}, r.tasks.map((t) => el('div.ai-row', {}, [
+              el('div.ai-row-main', { style: { cursor: 'default' } }, [
+                el('b', { text: t.title }),
+                t.summary ? el('div.mute-sm', { text: t.summary }) : null,
+                el('div.mute-sm', { text: [
+                  t.recipient ? `👤 ההצעה תגיע ל${t.recipient}${t.routedAsManager ? ' (כמנהל הפרויקט — לא ברור למי)' : ''}` : '🚫 אין למי להציע — לא תיווצר הצעה',
+                  t.dueDate ? `📅 ${UI.formatDate(t.dueDate)}` : null,
+                  t.priority !== 'normal' ? `⚡ ${t.priority === 'urgent' ? 'דחוף' : 'גבוהה'}` : null,
+                  t.ambiguous?.length ? `❓ ${t.ambiguous.join(', ')}` : null
+                ].filter(Boolean).join(' · ') })
+              ])
+            ]))) : (!r.note ? UI.empty('הבוט לא היה מציע כאן משימה', '💬') : null)
+          );
+        } catch (err) { UI.mount(out, el('div.alert.alert-danger', {}, [el('span', { text: '⚠️' }), el('div', { text: err.message })])); }
+        go.disabled = false;
+      });
+      return el('div.card', {}, [el('div.card-pad', {}, [
+        el('div.row', {}, [UI.field('קבוצה', group), UI.field('נכתב על ידי', sender)]),
+        UI.field('ההודעה', text),
+        go,
+        out
+      ])]);
+    }
+
+    // ---- הגדרות
+
+    function settingsSection() {
+      const s = info.settings;
+      const enabled = el('input', { type: 'checkbox', checked: s.enabled });
+      const quiet = el('input', { type: 'number', min: 0, max: 60, value: s.quietMinutes });
+      const summary = el('input', { type: 'time', value: s.summaryTime });
+      const [from, to] = s.hours ? s.hours.split('-') : ['07:00', '22:00'];
+      const always = el('input', { type: 'checkbox', checked: !s.hours });
+      const hFrom = el('input', { type: 'time', value: from, disabled: !s.hours });
+      const hTo = el('input', { type: 'time', value: to, disabled: !s.hours });
+      always.addEventListener('change', () => { hFrom.disabled = hTo.disabled = always.checked; });
+      const shabbat = el('input', { type: 'checkbox', checked: s.shabbat });
+      const check = (input, label, hint) => el('label.wa-check', {}, [input, el('div', {}, [el('b', { text: label }), hint ? el('div.mute-sm', { text: hint }) : null])]);
+
+      const save = el('button.btn.btn-primary', {}, ['שמירת ההגדרות']);
+      save.addEventListener('click', async () => {
+        save.disabled = true;
+        try {
+          draw(await API.put('/api/admin/wa-bot/settings', {
+            enabled: enabled.checked, quietMinutes: Number(quiet.value), summaryTime: summary.value,
+            hours: always.checked ? '' : `${hFrom.value}-${hTo.value}`, shabbat: shabbat.checked
+          }));
+          UI.success('ההגדרות נשמרו');
+        } catch (err) { save.disabled = false; UI.error(err); }
+      });
+
+      UI.mount(host, el('div.card', {}, [el('div.card-pad', {}, [
+        check(enabled, 'הבוט פעיל', 'כבוי — הבוט לא קורא קבוצות ולא עונה בפרטי. ההודעות נשמרות אצל Green API כ-24 שעות.'),
+        el('div.grid.grid-2.mt', {}, [
+          UI.field('דקות שקט לפני ניתוח קבוצה', quiet, 'רצף הודעות נקרא יחד, אחרי הפסקה בשיחה — כך "וגם את זה עד חמישי" מובן בהקשר'),
+          UI.field('שעת סיכום הבוקר', summary, 'בימים א׳–ה׳. הפעלה וכיבוי — בלשונית "פעולות"')
+        ]),
+        el('h4.mt', { text: 'מתי הבוט שולח הודעות' }),
+        check(always, 'כל שעות היום'),
+        el('div.row', {}, [UI.field('מהשעה', hFrom), UI.field('עד השעה', hTo)]),
+        check(shabbat, 'לא בשבת', 'משישי ב-15:00 עד מוצאי שבת ב-20:30.'),
+        el('div.mute-sm', { text: 'מחוץ לחלון הבוט לא שולח דבר. הודעות שנכתבו לו בפרטי נשמרות ונענות כשהחלון נפתח. הקבוצות ממשיכות להיקרא, וההצעות מחכות באפליקציה.' }),
+        el('div.mt', {}, [save])
+      ])]));
+    }
+
+    // ---- חיבור
+
+    function connectionSection() {
+      const c = info.connection;
+      const apiUrl = el('input', { type: 'url', dir: 'ltr', value: c?.apiUrl ?? 'https://api.green-api.com' });
+      const instanceId = el('input', { type: 'text', dir: 'ltr', value: c?.instanceId ?? '', placeholder: '1101000001' });
+      const token = el('input', { type: 'password', dir: 'ltr', placeholder: c?.hasToken ? '•••••••• (שמור — להשאיר ריק)' : 'apiTokenInstance' });
+      const phone = el('input', { type: 'tel', dir: 'ltr', value: c?.phone ?? '', placeholder: '050-0000000' });
+      const qrBox = el('div');
+
+      const save = el('button.btn.btn-primary', {}, ['שמירה ובדיקה']);
+      save.addEventListener('click', async () => {
+        save.disabled = true;
+        try {
+          const res = await API.put('/api/admin/wa-bot', { apiUrl: apiUrl.value.trim(), instanceId: instanceId.value.trim(), apiToken: token.value.trim(), phone: phone.value.trim() });
+          if (res.state === 'authorized') UI.success('הבוט מחובר');
+          else if (res.error) UI.toast(res.error, 'error');
+          draw(res);
+        } catch (err) { save.disabled = false; UI.error(err); }
+      });
+      const test = c ? el('button.btn', {}, ['בדיקת חיבור']) : null;
+      test?.addEventListener('click', async () => {
+        test.disabled = true;
+        try { draw(await API.post('/api/admin/wa-bot/test')); } catch (err) { test.disabled = false; UI.error(err); }
+      });
+      const showQr = c && c.state !== 'authorized' ? el('button.btn', {}, ['הצגת QR לקישור']) : null;
+      showQr?.addEventListener('click', async () => {
+        showQr.disabled = true;
+        try {
+          const r = await API.get('/api/admin/wa-bot/qr');
+          UI.mount(qrBox, r.linked
+            ? el('div.alert.alert-ok', {}, [el('span', { text: '✅' }), el('div', { text: 'הטלפון כבר מקושר. לחצו "בדיקת חיבור".' })])
+            : el('div', { style: { textAlign: 'center', margin: '12px 0' } }, [
+                el('img', { src: r.image, alt: 'קוד QR', style: { width: '240px', height: '240px' } }),
+                el('div.mute-sm', { text: 'הקוד מתחלף כל כמה שניות. אם פג — לחצו שוב.' })
+              ]));
+        } catch (err) { UI.error(err); }
+        showQr.disabled = false;
+      });
+      const remove = c ? el('button.btn.btn-ghost', {}, ['ניתוק']) : null;
+      remove?.addEventListener('click', async () => {
+        if (!await UI.confirm('לנתק את הבוט? הוא יפסיק לקרוא את הקבוצות ולענות בפרטי. שיוך הקבוצות לפרויקטים נשמר.', { danger: true, okText: 'ניתוק' })) return;
+        try { draw(await API.del('/api/admin/wa-bot')); } catch (err) { UI.error(err); }
+      });
+
+      UI.mount(host, el('div.card', {}, [
+        el('div.card-head', {}, [el('span', { text: '🤖' }), el('h3', { text: 'מספר הבוט' })]),
+        el('div.card-pad', {}, [
+          el('p', { style: { marginTop: 0 }, text: 'מספר וואטסאפ ייעודי של הארגון. מצרפים אותו לקבוצות הפרויקטים כמשתתף, והוא קורא בהן בקשות ומציע אותן כמשימות. הוא לא כותב בקבוצות. בפרטי עובדים כותבים לו — הפעולות שמותרות מוגדרות בלשונית "פעולות".' }),
+          !info.ai ? el('div.alert.alert-warn', {}, [el('span', { text: '⚠️' }), el('div', { text: 'חיבור ה-AI אינו מוגדר בשרת (ANTHROPIC_API_KEY). בלעדיו הבוט אינו מנתח הודעות.' })]) : null,
+          el('ol.ai-steps', {}, [
+            el('li', { text: 'מכשיר עם כרטיס SIM ייעודי ווואטסאפ מותקן (מומלץ WhatsApp Business). לא מספר אישי של עובד.' }),
+            el('li', {}, ['נרשמים ב-', el('a', { href: 'https://green-api.com', target: '_blank', rel: 'noopener' }, ['green-api.com']), ', יוצרים Instance ומעתיקים לכאן את הפרטים.']),
+            el('li', { text: 'שומרים, ואז "הצגת QR לקישור" וסורקים מהטלפון של הבוט.' })
+          ]),
+          c?.state === 'notAuthorized' ? el('div.alert.alert-warn', {}, [el('span', { text: '📱' }), el('div', { text: 'יש לסרוק את קוד ה-QR מהטלפון של הבוט: וואטסאפ ← מכשירים מקושרים ← קישור מכשיר.' })]) : null,
+          el('div.row', {}, [UI.field('apiUrl', apiUrl), UI.field('idInstance', instanceId)]),
+          el('div.row', {}, [UI.field('apiTokenInstance', token), UI.field('מספר הבוט', phone, 'לתצוגה בלבד — כדי שיהיה ברור לאיזה מספר מצרפים')]),
+          qrBox,
+          el('div.flex.mt', {}, [save, test, showQr, el('div.spacer'), remove]),
+          c?.checkedAt ? el('div.mute-sm.mt', { text: `נבדק ${UI.relative(c.checkedAt)}` }) : null
+        ])
+      ]));
+    }
+
+    draw();
+  }
   /** ניקוי נתוני ההדגמה לפני תחילת עבודה אמיתית */
   function wipeCard() {
     return el('div.card.mt', { style: { borderColor: '#fecaca' } }, [

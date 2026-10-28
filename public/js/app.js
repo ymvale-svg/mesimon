@@ -2078,6 +2078,30 @@ const App = (() => {
     ]);
   }
 
+  /** הטלפון שלי — כך בוט הוואטסאפ של הארגון מזהה אותי בקבוצות ובפרטי */
+  function phoneRow() {
+    const cell = el('td');
+    const draw = () => UI.mount(cell, el('div.flex', {}, [
+      el('span', { dir: 'ltr', text: state.actor.phone ? UI.phone(state.actor.phone) : 'לא הוזן' }),
+      el('button.btn.btn-sm', { onclick: edit }, [state.actor.phone ? 'שינוי' : 'הוספה'])
+    ]));
+    async function edit() {
+      const value = await UI.prompt('טלפון נייד', {
+        title: '📱 הטלפון שלי',
+        value: UI.phone(state.actor.phone),
+        hint: 'המספר שאיתו את/ה בקבוצות הוואטסאפ. כך הבוט של משימון יודע מתי בקשה בקבוצה מופנית אלייך, ומאפשר לך לפתוח משימות בהודעה אליו.'
+      });
+      if (value === null) return;
+      try {
+        state.actor.phone = (await API.put('/api/me/phone', { phone: value })).phone;
+        UI.success('נשמר');
+        draw();
+      } catch (err) { UI.error(err); }
+    }
+    draw();
+    return el('tr', {}, [el('th', { text: 'טלפון נייד' }), cell]);
+  }
+
   function userMenu() {
     UI.modal({
       title: 'החשבון שלי',
@@ -2095,6 +2119,7 @@ const App = (() => {
               ? el('tr', {}, [el('th', { text: 'רמת גישה' }), el('td', { text: state.actor.roleLabel })])
               : null,
             state.actor.department ? el('tr', {}, [el('th', { text: 'מחלקה' }), el('td', { text: state.actor.department })]) : null,
+            isVendor() ? null : phoneRow(),
             isVendor() ? el('tr', {}, [el('th', { text: 'הרשאת עדכון' }), el('td', { text: state.actor.readOnly ? 'צפייה בלבד' : 'מלאה' })]) : null
           ])
         ]),

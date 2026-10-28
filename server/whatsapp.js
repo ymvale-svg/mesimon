@@ -196,5 +196,7 @@ const connectedUsers = () => D.all(
 
 module.exports = {
   send, receive, download, checkState, isReady, save, remove, publicChannel, connectedUsers, enableOutgoingNotifications,
-  normalizePhone, chatIdOf, DEFAULT_API_URL
+  normalizePhone, chatIdOf, DEFAULT_API_URL,
+  // לבוט הארגוני (‎server/ai/wa-bot.js‎), שמחזיק חיבור משלו ולא של משתמש
+  call
 };

@@ -15,13 +15,16 @@ const Gmail = require('./gmail');
 const MailScan = require('./ai/mail-scan');
 const GContacts = require('./google-contacts');
 const Calendar = require('./calendar');
+const WaBot = require('./ai/wa-bot');
+const WaActions = require('./ai/wa-actions');
 const { badRequest, forbidden, notFound, readJson, sendJson, parseUrl } = require('./http-kit');
 
 function register(router, h) {
-  const { getTaskOr404, assertVisible, mayOnTask, shapeTask, actorRef, saveAttachment, createTask, assertMayAssignTo } = h;
+  const { getTaskOr404, assertVisible, mayOnTask, shapeTask, actorRef, saveAttachment, createTask, assertMayAssignTo, listProjectsFor, botTaskOps } = h;
 
   AiTasks.setHooks({ saveFile: saveAttachment });
   MailScan.init({ createTask });
+  WaBot.init({ createTask, listProjectsFor, tasks: botTaskOps });
 
   const internalOnly = (actor) => {
     if (actor.type === 'vendor') throw forbidden();
@@ -526,6 +529,129 @@ function register(router, h) {
   router.post('/api/ai/suggestions/approve-all', async (req, res, ctx) => {
     const actor = userOnly(ctx);
     sendJson(res, 200, MailScan.approveAll(actor));
+  });
+
+  // --- בוט הוואטסאפ של הארגון — מנהל המערכת בלבד ---
+
+  const botAdmin = (ctx) => {
+    const actor = userOnly(ctx);
+    if (!P.can(actor, 'manage_automations')) throw forbidden();
+    return actor;
+  };
+
+  const botSettings = () => ({
+    enabled: Boolean(D.getSetting('wa_bot_enabled', true)),
+    quietMinutes: Number(D.getSetting('wa_quiet_minutes', 3)) || 0,
+    summaryTime: String(D.getSetting('wa_summary_time', '08:00')),
+    hours: String(D.getSetting('wa_hours', '') ?? ''),
+    shabbat: Boolean(D.getSetting('wa_shabbat', true))
+  });
+
+  const botInfo = () => ({
+    ...WaBot.publicStatus(),
+    groups: WaBot.listGroups(),
+    projects: D.all("SELECT id, name FROM projects WHERE status <> 'done' ORDER BY name"),
+    users: D.all("SELECT id, full_name AS name, role, phone <> '' AS hasPhone FROM users WHERE status = 'active' AND role <> 'vendor' ORDER BY full_name"),
+    usersWithoutPhone: D.all("SELECT full_name FROM users WHERE status = 'active' AND role <> 'vendor' AND phone = '' ORDER BY full_name").map((u) => u.full_name),
+    actions: WaActions.list().map(({ key, icon, label, channel, description, enabled, audience, examples, defaultExamples }) =>
+      ({ key, icon, label, channel, description, enabled, audience, examples, defaultExamples })),
+    settings: botSettings(),
+    sendingNow: WaBot.inHours(),
+    today: WaBot.todayStats()
+  });
+
+  router.get('/api/admin/wa-bot', async (req, res, ctx) => {
+    botAdmin(ctx);
+    sendJson(res, 200, botInfo());
+  });
+
+  router.put('/api/admin/wa-bot', async (req, res, ctx) => {
+    botAdmin(ctx);
+    const b = await readJson(req);
+    if (!/^\d{6,15}$/.test(String(b.instanceId ?? '').trim())) throw badRequest('מזהה המכשיר (idInstance) אינו תקין');
+    if (!String(b.apiToken ?? '').trim() && !WaBot.publicStatus().connection?.hasToken) throw badRequest('נדרש האסימון (apiTokenInstance)');
+    if (b.apiUrl && !/^https:\/\/[^\s/]+/.test(String(b.apiUrl).trim())) throw badRequest('כתובת ה-API חייבת להתחיל ב-https://');
+    WaBot.save(b);
+    const state = await WaBot.checkState();
+    sendJson(res, 200, { ...botInfo(), ...state });
+  });
+
+  router.post('/api/admin/wa-bot/test', async (req, res, ctx) => {
+    botAdmin(ctx);
+    const state = await WaBot.checkState();
+    sendJson(res, 200, { ...botInfo(), ...state });
+  });
+
+  router.get('/api/admin/wa-bot/qr', async (req, res, ctx) => {
+    botAdmin(ctx);
+    try {
+      sendJson(res, 200, await WaBot.qr());
+    } catch (err) {
+      throw userError(err);
+    }
+  });
+
+  router.delete('/api/admin/wa-bot', async (req, res, ctx) => {
+    botAdmin(ctx);
+    WaBot.remove();
+    sendJson(res, 200, botInfo());
+  });
+
+  router.put('/api/admin/wa-bot/actions', async (req, res, ctx) => {
+    botAdmin(ctx);
+    const b = await readJson(req);
+    WaActions.save(b.actions);
+    sendJson(res, 200, botInfo());
+  });
+
+  router.put('/api/admin/wa-bot/settings', async (req, res, ctx) => {
+    botAdmin(ctx);
+    const b = await readJson(req);
+    const time = /^([01]\d|2[0-3]):[0-5]\d$/;
+    if (b.summaryTime !== undefined && !time.test(String(b.summaryTime))) throw badRequest('שעת הסיכום אינה תקינה (HH:MM)');
+    const hours = String(b.hours ?? '').trim();
+    if (hours && !/^([01]\d|2[0-3]):[0-5]\d-([01]\d|2[0-3]):[0-5]\d$/.test(hours)) throw badRequest('שעות הפעילות בפורמט 07:00-22:00, או ריק לכל היום');
+    if (b.enabled !== undefined) D.setSetting('wa_bot_enabled', Boolean(b.enabled));
+    if (b.quietMinutes !== undefined) D.setSetting('wa_quiet_minutes', Math.max(0, Math.min(60, Number(b.quietMinutes) || 0)));
+    if (b.summaryTime !== undefined) D.setSetting('wa_summary_time', String(b.summaryTime));
+    if (b.hours !== undefined) D.setSetting('wa_hours', hours);
+    if (b.shabbat !== undefined) D.setSetting('wa_shabbat', Boolean(b.shabbat));
+    sendJson(res, 200, botInfo());
+  });
+
+  router.get('/api/admin/wa-bot/log', async (req, res, ctx) => {
+    botAdmin(ctx);
+    const q = new URL(req.url, 'http://x').searchParams;
+    sendJson(res, 200, {
+      entries: WaBot.readLog({
+        channel: q.get('channel') ?? '', status: q.get('status') ?? '', userId: Number(q.get('userId')) || 0,
+        chatId: q.get('chatId') ?? '', q: (q.get('q') ?? '').trim().slice(0, 100), before: Number(q.get('before')) || 0
+      })
+    });
+  });
+
+  // בדיקה בלי וואטסאפ: מה הבוט היה עונה ועושה. לא נשלח ולא מבוצע דבר
+  router.post('/api/admin/wa-bot/simulate', async (req, res, ctx) => {
+    const actor = botAdmin(ctx);
+    const b = await readJson(req);
+    try {
+      sendJson(res, 200, b.chatId
+        ? await WaBot.simulateGroup({ chatId: String(b.chatId), userId: b.userId, text: b.text })
+        : await WaBot.simulate(actor, { userId: b.userId, text: b.text, reset: b.reset === true }));
+    } catch (err) {
+      throw userError(err);
+    }
+  });
+
+  router.put('/api/admin/wa-groups/:chatId', async (req, res, ctx) => {
+    const actor = botAdmin(ctx);
+    const b = await readJson(req);
+    try {
+      WaBot.bindGroup(ctx.params.chatId, actor, { projectId: b.projectId, ignore: b.ignore === true });
+    } catch (err) {
+      throw userError(err);
+    }
+    sendJson(res, 200, botInfo());
   });
 
 }

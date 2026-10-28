@@ -622,57 +622,21 @@ const BoardView = (() => {
     descInput.value = task?.description ?? pre.description ?? '';
 
     /**
-     * הפרויקטים הרלוונטיים למשתמש, ולא כל הפרויקטים בחברה.
+     * בורר הפרויקטים — חיפוש ודירוג, ולא רשימה מסוננת.
      *
-     * הסינון הקודם נשען על מחלקת הפרויקט, שנגזרת ממנהל המשימות שלו, והחריג
-     * בו היה שפרויקט בלי מנהל מוצג לכולם — כדי שלא ייעלם מאיש. בארגון שבו
-     * לרוב הפרויקטים לא הוגדר מנהל, החריג בלע את הכלל וכל הפרויקטים הוצגו
-     * לכל אחד. זו בדיוק התלונה.
+     * שתי גרסאות קודמות ניסו לצמצם את הרשימה ונכשלו, כל אחת מסיבה אחרת.
+     * הראשונה סיננה לפי מחלקת הפרויקט, שנגזרת ממנהל המשימות שלו — ומכיוון
+     * שלרוב הפרויקטים אין מנהל, החריג "פרויקט בלי מנהל מוצג לכולם" בלע את
+     * הכלל. השנייה סיננה לפי ‎mine‎, אבל בארגון שבו מנהל המערכת מוגדר מנהל
+     * של כמעט כל פרויקט הדגל דולק אצל כולם והרשימה נשארה באורך מלא.
      *
-     * הבסיס כאן הוא ‎mine‎ שהשרת מחשב — פרויקט שאני מנהל, שפתחתי, או שיש לי
-     * בו משימה פעילה. בדיוק אותה הגדרה שקובעת את "שלי" בתפריט הצד, ולכן
-     * הבורר מכיל את אותם פרויקטים שהמשתמש רואה ממילא בצד המסך: אם בסרגל
-     * כתוב "שלי · 10", יהיו בבורר עשרה.
-     *
-     * גרסה קודמת צירפה גם את הפרויקטים של מחלקתי. זה נשמע מתון יותר, אבל
-     * במחלקה פעילה כמעט כל פרויקט שייך לה — ולכן הסעיף הזה החזיר לרשימה
-     * פרויקטים שהמשתמש אינו עובד בהם, והצמצום כמעט לא הורגש.
-     *
-     * שני שסתומי ביטחון, כדי שהצמצום לא יחסום עבודה לגיטימית:
-     * הפרויקט הנוכחי של המשימה תמיד ברשימה — עריכה לא תזיז משימה בשקט
-     * מהפרויקט שהיא בו; וכשאין אף פרויקט רלוונטי מוצגים כולם, כי רשימה
-     * ריקה גרועה מרשימה ארוכה.
+     * המסקנה: סינון בינארי אינו הכלי. הרשימה נשארת מלאה — פרויקט לעולם
+     * אינו "נעלם" — אבל היא ניתנת לחיפוש ומדורגת לפי כמה אני עובד בפועל בכל
+     * פרויקט (‎myTaskCount‎ מהשרת), ואחריו המחלקה שלי. מי שמחפש מקליד, ומי
+     * שלא — מוצא בראש את מה שהוא נוגע בו כל יום.
      */
     const current = task?.projectId ?? (pre.projectId || opts.projectId) ?? '';
-    const relevant = App.state.projects.filter((p) =>
-      p.mine || String(p.id) === String(current));
-    /* ‎showAllProjects‎ נשאר דלוק אחרי בחירה מפורשת, עד לסגירת הדיאלוג */
-    let showAllProjects = relevant.length === 0;
-
-    const SHOW_ALL = '__all';
-    const projectOptionsFor = () => {
-      const list = showAllProjects ? App.state.projects : relevant;
-      const rest = App.state.projects.length - relevant.length;
-      return [
-        { value: '', label: 'ללא פרויקט' },
-        ...list.map((p) => ({ value: p.id, label: p.name })),
-        // מוצא לפרויקט של מחלקה אחרת, בלי להציף את הרשימה בברירת המחדל
-        ...(!showAllProjects && rest > 0
-          ? [{ value: SHOW_ALL, label: `— הצגת כל ${App.state.projects.length} הפרויקטים בארגון —` }]
-          : [])
-      ];
-    };
-
-    const projectSelect = UI.select(projectOptionsFor(), current);
-    projectSelect.addEventListener('change', () => {
-      if (projectSelect.value !== SHOW_ALL) return;
-      showAllProjects = true;
-      const keep = current;
-      UI.mount(projectSelect, ...projectOptionsFor().map((o) =>
-        el('option', { value: o.value, selected: String(o.value) === String(keep) }, [o.label])));
-      projectSelect.value = keep;
-      projectSelect.focus();
-    });
+    const projectPicker = UI.projectPicker({ value: current });
 
     /*
      * חברי המחלקה של הפותח בראש הרשימה, תחת כותרת. בארגון של חמישים אנשים
@@ -901,7 +865,7 @@ const BoardView = (() => {
       fieldOf('title', 'כותרת המשימה', titleInput),
       UI.field('תיאור', descInput),
       el('div.row', {}, [
-        fieldOf('projectId', 'פרויקט', projectSelect, 'משימה ללא פרויקט תופיע בלוח בקבוצת "ללא פרויקט"'),
+        fieldOf('projectId', 'פרויקט', projectPicker, 'משימה ללא פרויקט תופיע בלוח בקבוצת "ללא פרויקט"'),
         fieldOf('assignee', 'אחראי', assigneeSelect, 'משימה ללא אחראי לא תופיע ב"המשימות שלי" של אף אחד')
       ]),
       UI.field('אחראים נוספים', extraList,
@@ -936,7 +900,7 @@ const BoardView = (() => {
       const payload = {
         title,
         description: descInput.value,
-        projectId: projectSelect.value || null,
+        projectId: projectPicker.value() || null,
         assigneeType: aType,
         assigneeId: aId ? Number(aId) : null,
         // תמיד נשלח, גם כשריק: רשימה ריקה היא הסרת כל האחראים הנוספים

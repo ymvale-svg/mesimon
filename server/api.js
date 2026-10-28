@@ -24,6 +24,7 @@ const Calendar = require('./calendar');
 const Gmail = require('./gmail');
 const MailScan = require('./ai/mail-scan');
 const Claude = require('./ai/claude');
+const WhatsApp = require('./whatsapp');
 const Tiful360 = require('./tiful360');
 const {
   Router, badRequest, forbidden, notFound,
@@ -744,9 +745,20 @@ function publicActor(actor) {
     department: actor.department ?? null,
     departmentId: actor.departmentId ?? null,
     boardId: actor.boardId ?? null,
-    readOnly: !!actor.readOnly
+    readOnly: !!actor.readOnly,
+    phone: actor.type === 'user' ? D.get('SELECT phone FROM users WHERE id = ?', actor.id)?.phone ?? '' : ''
   };
 }
+
+/** הטלפון של עצמי — מ"החשבון שלי", כדי שבוט הוואטסאפ יזהה אותי */
+router.put('/api/me/phone', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  if (actor.type !== 'user') throw forbidden();
+  const b = await readJson(req);
+  const phone = userPhone(b.phone, actor.id);
+  D.run('UPDATE users SET phone = ? WHERE id = ?', phone, actor.id);
+  sendJson(res, 200, { phone });
+});
 
 // ---------------------------------------------------------------------------
 // מימוש הזמנה — פתוח ללא התחברות, מוגן באמצעות האסימון שבקישור
@@ -936,6 +948,29 @@ function listProjectsFor(actor) {
   );
   const visible = visibleProjectIds(actor);
 
+  /*
+   * כמה אני עובד בפועל בכל פרויקט — המספר שמדרג את בורר הפרויקטים.
+   *
+   * "שלי" הוא דגל כן/לא, ובארגון שבו מנהל המערכת מוגדר מנהל של כמעט כל
+   * פרויקט הוא אינו מצמצם דבר. תדירות היא שאלה אחרת: באילו פרויקטים יש לי
+   * עבודה פתוחה, וכמה. היא מדרגת גם כשהדגל דולק אצל כולם.
+   *
+   * שאילתה מקובצת אחת ולא תת-שאילתה לכל פרויקט: זו הספירה היחידה כאן
+   * שסורקת את טבלת המשימות כולה.
+   */
+  const myTaskCounts = new Map(
+    (actor.type === 'user'
+      ? D.all(
+          `SELECT t.project_id AS pid, COUNT(*) AS c
+             FROM tasks t
+            WHERE t.archived = 0 AND t.project_id IS NOT NULL
+              AND ((t.assignee_type = 'user' AND t.assignee_id = ?) OR ${EXTRA_ASSIGNEE_SQL})
+            GROUP BY t.project_id`,
+          actor.id, 'user', actor.id
+        )
+      : []).map((r) => [r.pid, r.c])
+  );
+
   /**
    * מנהל מערכת רואה את כל הפרויקטים בארגון, אבל יש לו גם עבודה משלו — ורשימה
    * שמערבבת את השתיים אינה שימושית לאף אחד מהתפקידים. לכן כל פרויקט מסומן
@@ -1019,6 +1054,8 @@ function listProjectsFor(actor) {
       tasksTotal: stats.total ?? 0,
       tasksDone: stats.done ?? 0,
       tasksArchived: archived,
+      // כמה משימות פתוחות שלי יש בפרויקט — הדירוג של בורר הפרויקטים
+      myTaskCount: myTaskCounts.get(p.id) ?? 0,
       pinned: pinned.has(p.id)
     };
   });
@@ -3227,9 +3264,9 @@ router.get('/api/admin/users', async (req, res, ctx) => {
    * אותן שם היה מאשר חשבון בלי לקבוע לו מחלקה ורמת גישה.
    */
   const rows = P.isOrgWide(actor)
-    ? D.all(`SELECT id, full_name, email, role, department, department_id, status, field_worker FROM users
+    ? D.all(`SELECT id, full_name, email, phone, role, department, department_id, status, field_worker FROM users
              WHERE signup_at IS NULL ORDER BY full_name`)
-    : D.all(`SELECT id, full_name, email, role, department, department_id, status, field_worker FROM users
+    : D.all(`SELECT id, full_name, email, phone, role, department, department_id, status, field_worker FROM users
              WHERE department_id IS ? AND role = 'employee' AND signup_at IS NULL ORDER BY full_name`,
       actor.departmentId);
 
@@ -3245,7 +3282,7 @@ router.get('/api/admin/users', async (req, res, ctx) => {
     grantCatalog: P.GRANT_KEYS.map((key) => ({ key, ...P.GRANTS[key] })),
     mayManageDepartments: P.may(actor, 'manage_departments'),
     users: rows.map((u) => ({
-      id: u.id, name: u.full_name, email: u.email, role: u.role,
+      id: u.id, name: u.full_name, email: u.email, phone: u.phone, role: u.role,
       roleLabel: P.seesRoles(actor) ? P.ROLE_LABELS[u.role] : null, department: u.department,
       departmentId: u.department_id, status: u.status,
       // עובד שטח — עובד גם בשישי (‎server/workdays.js‎)
@@ -3609,6 +3646,9 @@ router.post('/api/admin/users', async (req, res, ctx) => {
     throw badRequest('משתמש ברמת מנהל מחלקה חייב להיות משויך למחלקה. יש לבחור מחלקה קיימת או להגדיר מחלקה חדשה.');
   }
 
+  // נבדק לפני היצירה — מספר שגוי לא אמור להשאיר משתמש חצי-שמור
+  const phone = userPhone(b.phone, 0);
+
   // בלי סיסמה מפורשת נקבעת סיסמה אקראית שאיש אינו יודע —
   // הכניסה נעשית דרך קישור ההזמנה, שבו המשתמש קובע סיסמה בעצמו
   const password = b.password || crypto.randomBytes(24).toString('base64url');
@@ -3617,7 +3657,7 @@ router.post('/api/admin/users', async (req, res, ctx) => {
     name, email, D.hashPassword(password), b.role, departmentName(departmentId), 'active', D.nowIso()
   );
   const newUserId = Number(result.lastInsertRowid);
-  D.run('UPDATE users SET department_id = ? WHERE id = ?', departmentId, newUserId);
+  D.run('UPDATE users SET department_id = ?, phone = ? WHERE id = ?', departmentId, phone, newUserId);
   if (b.fieldWorker === true) D.run('UPDATE users SET field_worker = 1 WHERE id = ?', newUserId);
 
   // מנהל מחלקה נרשם כמנהל של אותה מחלקה
@@ -3727,8 +3767,22 @@ router.patch('/api/admin/users/:id', async (req, res, ctx) => {
   }
   if (b.password) D.run('UPDATE users SET password_hash = ? WHERE id = ?', D.hashPassword(b.password), user.id);
   if (typeof b.fieldWorker === 'boolean') D.run('UPDATE users SET field_worker = ? WHERE id = ?', b.fieldWorker ? 1 : 0, user.id);
+  if (b.phone !== undefined) D.run('UPDATE users SET phone = ? WHERE id = ?', userPhone(b.phone, user.id), user.id);
   sendJson(res, 200, { ok: true });
 });
+
+/**
+ * הטלפון של עובד נשמר מנורמל (‎972541234567‎), כי כך בוט הוואטסאפ מקבל אותו.
+ * אותו מספר אצל שני עובדים היה מערבב ביניהם — הבוט לא היה יודע מי כתב.
+ */
+function userPhone(raw, userId) {
+  if (!String(raw ?? '').trim()) return '';
+  const phone = WhatsApp.normalizePhone(raw);
+  if (!phone) throw badRequest(`מספר הטלפון "${raw}" אינו תקין`);
+  const other = D.get('SELECT full_name FROM users WHERE phone = ? AND id <> ?', phone, userId);
+  if (other) throw badRequest(`המספר כבר רשום אצל ${other.full_name}`);
+  return phone;
+}
 
 // ---------------------------------------------------------------------------
 // ניהול ספקים
@@ -4588,7 +4642,80 @@ router.get('/api/search', async (req, res, ctx) => {
   });
 });
 
-AiApi.register(router, { getTaskOr404, assertVisible, mayOnTask, shapeTask, actorRef, saveAttachment, createTask, assertMayAssignTo });
+// ---------------------------------------------------------------------------
+// פעולות על משימות עבור בוט הוואטסאפ — אותן הרשאות כמו באפליקציה
+// ---------------------------------------------------------------------------
+
+const BOT_LIST_MAX = 50; // הבוט מציג עד 15 — השאר נספרים
+
+/** משימות פתוחות בבורד הפנימי, עם ‎where‎ נוסף, רק מה שהעובד רשאי לראות */
+function openTasksWhere(actor, extra, params) {
+  return D.all(
+    `SELECT t.* FROM tasks t
+       JOIN boards b ON b.id = t.board_id
+       LEFT JOIN board_columns bc ON bc.board_id = t.board_id AND bc.key = t.status
+      WHERE b.type = 'internal' AND t.archived = 0 AND COALESCE(bc.is_final, 0) = 0
+        AND (t.activate_at IS NULL OR t.activate_at <= ?)
+        AND ${extra}
+      ORDER BY t.due_date IS NULL, t.due_date, CASE t.priority WHEN 'urgent' THEN 0 WHEN 'high' THEN 1 ELSE 2 END, t.id`,
+    D.nowIso(), ...params
+  ).filter((t) => canSeeTask(actor, t));
+}
+
+const botTask = (t) => ({
+  id: t.id,
+  title: t.title,
+  dueDate: t.due_date,
+  priority: t.priority,
+  projectName: projectOf(t)?.name ?? null,
+  assignee: assigneeName(t),
+  overdue:Boolean(t.due_date && t.due_date < D.nowIso())
+});
+
+const botTaskOps = {
+  /** המשימות הפתוחות שהעובד אחראי עליהן, ראשי או נוסף — לפי יעד. הסינון לפי יום נעשה בבוט */
+  myTasks(actor) {
+    return openTasksWhere(actor, `((t.assignee_type = 'user' AND t.assignee_id = ?) OR ${EXTRA_ASSIGNEE_SQL})`, [actor.id, 'user', actor.id])
+      .slice(0, BOT_LIST_MAX).map(botTask);
+  },
+
+  projectTasks(actor, projectId) {
+    return openTasksWhere(actor, 't.project_id = ?', [projectId]).slice(0, BOT_LIST_MAX).map(botTask);
+  },
+
+  /** מה העובד רשאי לסגור — ממנו בוחר הבוט כשכותבים "סיימתי את היועץ" */
+  complete(actor, taskId) {
+    const task = getTaskOr404(taskId);
+    assertVisible(actor, task);
+    if (!mayOnTask(actor, 'change_task_status', task, projectOf(task))) throw forbidden('אין לך הרשאה לשנות את סטטוס המשימה');
+    const final = D.get('SELECT key FROM board_columns WHERE board_id = ? AND is_final = 1 ORDER BY position LIMIT 1', task.board_id);
+    if (!final) throw badRequest('אין בבורד סטטוס סגירה');
+    if (task.status === final.key) throw badRequest('המשימה כבר סגורה');
+    changeStatus(task, final.key, actor, 'סומן כבוצע מוואטסאפ');
+    return botTask(task);
+  },
+
+  comment(actor, taskId, text) {
+    const task = getTaskOr404(taskId);
+    assertVisible(actor, task);
+    const body = String(text ?? '').trim().slice(0, 2000);
+    if (!body) throw badRequest('נדרש תוכן להערה');
+    D.run('INSERT INTO comments (task_id, author_type, author_id, body, internal, created_at) VALUES (?,?,?,?,1,?)',
+      task.id, 'user', actor.id, `${body}\n💬 מוואטסאפ`, D.nowIso());
+    D.audit(task.id, actorRef(actor), 'comment', 'נוספה הערה מוואטסאפ');
+    if (task.assignee_type === 'user' && task.assignee_id && task.assignee_id !== actor.id) {
+      D.notify({ targetType: 'user', targetId: task.assignee_id, kind: 'comment', title: `${actor.name} כתב/ה במשימה`, body: `${task.title} — ${body.slice(0, 120)}`, taskId: task.id });
+    }
+    return botTask(task);
+  },
+
+  canSee: (actor, taskId) => {
+    const task = D.get('SELECT * FROM tasks WHERE id = ?', taskId);
+    return Boolean(task && canSeeTask(actor, task));
+  }
+};
+
+AiApi.register(router, { getTaskOr404, assertVisible, mayOnTask, shapeTask, actorRef, saveAttachment, createTask, assertMayAssignTo, listProjectsFor, botTaskOps });
 TodayApi.register(router, { shapeTask, createTask, getTaskOr404, listProjectsFor, assertMayAssignTo });
 Tiful360.register(router, { createTask, saveAttachment, getTaskOr404 });
 

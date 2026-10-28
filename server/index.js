@@ -24,6 +24,7 @@ const Auth = require('./auth');
 const Rules = require('./rules-engine');
 const Push = require('./push');
 const AiTasks = require('./ai-tasks');
+const WaBot = require('./ai/wa-bot');
 const { router } = require('./api');
 const Today = require('./today');
 const GContacts = require('./google-contacts');
@@ -95,6 +96,7 @@ server.listen(PORT, HOST, () => {
   AiTasks.start();
   Today.start();
   GContacts.start();
+  WaBot.start();
   const nets = os.networkInterfaces();
   const lan = Object.values(nets).flat().find((n) => n && n.family === 'IPv4' && !n.internal);
   console.log('');
