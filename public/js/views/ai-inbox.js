@@ -79,7 +79,13 @@ const AiInboxView = (() => {
     if (data.waiting.length) {
       sections.push(section('✋ מחכה להחלטה שלך', null, data.waiting.map((w) => waitingRow(w, reload))));
     }
-    if (pending.length) {
+    // מוואטסאפ ומהמייל — שני מקורות, אותה הצעה ואותן פעולות
+    const fromChat = pending.filter((s) => s.data.source === 'whatsapp');
+    const fromMail = pending.filter((s) => s.data.source !== 'whatsapp');
+    if (fromChat.length) {
+      sections.push(section('💬 מקבוצות הוואטסאפ', null, fromChat.map((s) => suggestionRow(s, reload))));
+    }
+    if (fromMail.length) {
       const all = el('button.btn.btn-sm', {}, ['✓ אשר הכול']);
       all.title = 'מאשר את ההצעות שכולן שלך. הצעות עם אנשים נוספים או פנייה החוצה נשארות לבדיקה';
       all.addEventListener('click', run(all, async () => {
@@ -87,7 +93,7 @@ const AiInboxView = (() => {
         UI.success(`${r.approved} משימות נוצרו${r.left ? ` · ${r.left} נשארו לבדיקה שלך` : ''}`);
         App.refreshNotifications();
       }, reload));
-      sections.push(section('📧 מהמייל', null, pending.map((s) => suggestionRow(s, reload)), all));
+      sections.push(section('📧 מהמייל', null, fromMail.map((s) => suggestionRow(s, reload)), all));
     }
     if (auto.length) {
       sections.push(section('➕ נוספו לבד', 'משולחים שסימנת כמהימנים', auto.map((s) => autoRow(s, reload))));
@@ -183,6 +189,13 @@ const AiInboxView = (() => {
   }
 
   function fromLine(s) {
+    if (s.data?.source === 'whatsapp') {
+      return el('div.mute-sm', {}, [
+        `💬 ${s.data.groupName} · ${s.from.name}`,
+        s.receivedAt ? ` · ${UI.relative(s.receivedAt)}` : '',
+        ` · 📁 ${s.data.projectName}`
+      ]);
+    }
     return el('div.mute-sm', {}, [
       `מאת ${s.from.name}`,
       s.receivedAt ? ` · ${UI.relative(s.receivedAt)}` : '',
@@ -237,13 +250,15 @@ const AiInboxView = (() => {
         d.warning ? el('div.alert.alert-warn.ai-mini', {}, [el('span', { text: '⚠️' }), el('div', { text: `שימו לב: ${d.warning}` })]) : null,
         d.ambiguous?.length ? el('div.mute-sm', { text: `❓ לא ברור למי הכוונה: ${d.ambiguous.join(', ')} — בחרו בעריכה` }) : null,
         d.alsoSuggestedTo?.length ? el('div.mute-sm', { text: `👥 הוצע גם ל${d.alsoSuggestedTo.join(', ')}` }) : null,
+        d.routedAsManager ? el('div.mute-sm', { text: '👤 לא היה ברור למי הבקשה — הגיעה אליך כמנהל/ת הפרויקט. אפשר להעביר בעריכה' }) : null,
         fromLine(s)
       ]),
       el('div.ai-row-actions', {}, [
         // הצעה עם אנשים נוספים או ספק מחייבת מבט — האישור המהיר עובר דרך העריכה
         (d.people?.length || d.ambiguous?.length || d.warning) ? el('button.btn.btn-sm.btn-primary', { onclick: () => editSuggestion(s, reload) }, ['בדיקה ואישור']) : approve,
         el('button.btn.btn-sm', { onclick: () => editSuggestion(s, reload) }, ['✎']),
-        toAi,
+        // משימת AI נפתחת בדיאלוג משלה, בלי הפרויקט של הקבוצה — לכן רק ממייל
+        d.source === 'whatsapp' ? null : toAi,
         reject
       ])
     ]);
@@ -265,7 +280,7 @@ const AiInboxView = (() => {
       title: 'דחיית ההצעה',
       body: el('div', {}, [
         el('p', { text: `"${s.data.title}" לא תיווצר, ולא תוצע שוב.` }),
-        el('label.checkbox', {}, [ignore, ` לא להציע יותר משימות מ-${s.from.email}`])
+        s.from.email ? el('label.checkbox', {}, [ignore, ` לא להציע יותר משימות מ-${s.from.email}`]) : null
       ]),
       footer: [ok, el('div.spacer'), el('button.btn', { onclick: () => m.close() }, ['ביטול'])]
     });
@@ -288,7 +303,11 @@ const AiInboxView = (() => {
     const priority = UI.select([
       { value: 'normal', label: 'רגילה' }, { value: 'high', label: 'גבוהה' }, { value: 'urgent', label: 'דחופה' }, { value: 'low', label: 'נמוכה' }
     ], d.priority ?? 'normal');
-    const project = UI.select([{ value: '', label: 'ללא פרויקט' }, ...App.state.projects.filter((p) => p.mine).map((p) => ({ value: p.id, label: p.name }))], '');
+    // מקבוצת וואטסאפ — הפרויקט של הקבוצה, נעול: אין ערבוב בין פרויקטים
+    const chat = d.source === 'whatsapp';
+    const project = chat
+      ? UI.select([{ value: d.projectId, label: d.projectName }], d.projectId, { disabled: true })
+      : UI.select([{ value: '', label: 'ללא פרויקט' }, ...App.state.projects.filter((p) => p.mine).map((p) => ({ value: p.id, label: p.name }))], '');
 
     // אנשים — שורה לכל אחד, עם תפקיד שאפשר לשנות או להסיר
     const people = (d.people ?? []).map((p) => ({ ...p }));
@@ -322,23 +341,23 @@ const AiInboxView = (() => {
 
     const ok = el('button.btn.btn-primary', {}, ['✓ יצירת המשימה']);
     const m = UI.modal({
-      title: '📧 משימה מהמייל',
+      title: chat ? '💬 משימה מקבוצת וואטסאפ' : '📧 משימה מהמייל',
       size: 'wide',
       body: el('div', {}, [
         el('div.ai-letter', {}, [
-          el('div', {}, [el('b', { text: s.subject || '(ללא נושא)' })]),
+          el('div', {}, [el('b', { text: chat ? d.groupName : (s.subject || '(ללא נושא)') })]),
           fromLine(s)
         ]),
         d.warning ? el('div.alert.alert-warn', {}, [el('span', { text: '⚠️' }), el('div', { text: d.warning })]) : null,
         UI.field('כותרת', title),
-        UI.field('תקציר', summary, 'יופיע בתיאור המשימה. עמיתים שישויכו יראו את התקציר והכותרת — לא את המייל עצמו'),
+        UI.field('תקציר', summary, chat ? 'יופיע בתיאור המשימה' : 'יופיע בתיאור המשימה. עמיתים שישויכו יראו את התקציר והכותרת — לא את המייל עצמו'),
         el('div.row', {}, [UI.field('תאריך יעד', due), UI.field('עדיפות', priority), UI.field('פרויקט', project)]),
         UI.field('צ׳קליסט', checklist),
         el('div.ai-section-title', { text: 'מי עוד מעורב' }),
         d.ambiguous?.length ? el('div.mute-sm', { text: `❓ לא ברור למי הכוונה: ${d.ambiguous.join(', ')} — הוסיפו ידנית אם צריך`, style: { marginBottom: '6px' } }) : null,
         peopleBox,
         el('div.mute-sm', { text: 'אחראי/ת — המשימה אצלו/ה, ואת/ה נשאר/ת שותף/ה. שותף/ה — אחראי/ת נוסף/ת. לידיעה — מתויג/ת בהערה ומקבל/ת עדכונים.', style: { margin: '6px 0 10px' } }),
-        el('label.checkbox', {}, [trust, ` מ-${s.from.email} — ליצור ישר בפעם הבאה (רק משימות שכולן שלך)`])
+        chat ? null : el('label.checkbox', {}, [trust, ` מ-${s.from.email} — ליצור ישר בפעם הבאה (רק משימות שכולן שלך)`])
       ]),
       footer: [ok, el('div.spacer'), el('button.btn', { onclick: () => m.close() }, ['ביטול'])]
     });

@@ -13,13 +13,15 @@ const Claude = require('./ai/claude');
 const WhatsApp = require('./whatsapp');
 const Gmail = require('./gmail');
 const MailScan = require('./ai/mail-scan');
+const WaBot = require('./ai/wa-bot');
 const { badRequest, forbidden, notFound, readJson, sendJson } = require('./http-kit');
 
 function register(router, h) {
-  const { getTaskOr404, assertVisible, mayOnTask, shapeTask, actorRef, saveAttachment, createTask, assertMayAssignTo } = h;
+  const { getTaskOr404, assertVisible, mayOnTask, shapeTask, actorRef, saveAttachment, createTask, assertMayAssignTo, listProjectsFor } = h;
 
   AiTasks.setHooks({ saveFile: saveAttachment });
   MailScan.init({ createTask });
+  WaBot.init({ createTask, listProjectsFor });
 
   const internalOnly = (actor) => {
     if (actor.type === 'vendor') throw forbidden();
@@ -422,6 +424,69 @@ function register(router, h) {
   router.post('/api/ai/suggestions/approve-all', async (req, res, ctx) => {
     const actor = userOnly(ctx);
     sendJson(res, 200, MailScan.approveAll(actor));
+  });
+
+  // --- בוט הוואטסאפ של הארגון — מנהל המערכת בלבד ---
+
+  const botAdmin = (ctx) => {
+    const actor = userOnly(ctx);
+    if (!P.can(actor, 'manage_automations')) throw forbidden();
+    return actor;
+  };
+
+  const botInfo = () => ({
+    ...WaBot.publicStatus(),
+    groups: WaBot.listGroups(),
+    projects: D.all("SELECT id, name FROM projects WHERE status <> 'done' ORDER BY name"),
+    usersWithoutPhone: D.all("SELECT full_name FROM users WHERE status = 'active' AND role <> 'vendor' AND phone = '' ORDER BY full_name").map((u) => u.full_name)
+  });
+
+  router.get('/api/admin/wa-bot', async (req, res, ctx) => {
+    botAdmin(ctx);
+    sendJson(res, 200, botInfo());
+  });
+
+  router.put('/api/admin/wa-bot', async (req, res, ctx) => {
+    botAdmin(ctx);
+    const b = await readJson(req);
+    if (!/^\d{6,15}$/.test(String(b.instanceId ?? '').trim())) throw badRequest('מזהה המכשיר (idInstance) אינו תקין');
+    if (!String(b.apiToken ?? '').trim() && !WaBot.publicStatus().connection?.hasToken) throw badRequest('נדרש האסימון (apiTokenInstance)');
+    if (b.apiUrl && !/^https:\/\/[^\s/]+/.test(String(b.apiUrl).trim())) throw badRequest('כתובת ה-API חייבת להתחיל ב-https://');
+    WaBot.save(b);
+    const state = await WaBot.checkState();
+    sendJson(res, 200, { ...botInfo(), ...state });
+  });
+
+  router.post('/api/admin/wa-bot/test', async (req, res, ctx) => {
+    botAdmin(ctx);
+    const state = await WaBot.checkState();
+    sendJson(res, 200, { ...botInfo(), ...state });
+  });
+
+  router.get('/api/admin/wa-bot/qr', async (req, res, ctx) => {
+    botAdmin(ctx);
+    try {
+      sendJson(res, 200, await WaBot.qr());
+    } catch (err) {
+      throw userError(err);
+    }
+  });
+
+  router.delete('/api/admin/wa-bot', async (req, res, ctx) => {
+    botAdmin(ctx);
+    WaBot.remove();
+    sendJson(res, 200, botInfo());
+  });
+
+  router.put('/api/admin/wa-groups/:chatId', async (req, res, ctx) => {
+    const actor = botAdmin(ctx);
+    const b = await readJson(req);
+    try {
+      WaBot.bindGroup(ctx.params.chatId, actor, { projectId: b.projectId, ignore: b.ignore === true });
+    } catch (err) {
+      throw userError(err);
+    }
+    sendJson(res, 200, botInfo());
   });
 
 }
