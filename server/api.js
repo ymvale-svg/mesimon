@@ -4622,6 +4622,79 @@ router.get('/api/search', async (req, res, ctx) => {
   });
 });
 
-AiApi.register(router, { getTaskOr404, assertVisible, mayOnTask, shapeTask, actorRef, saveAttachment, createTask, assertMayAssignTo, listProjectsFor });
+// ---------------------------------------------------------------------------
+// פעולות על משימות עבור בוט הוואטסאפ — אותן הרשאות כמו באפליקציה
+// ---------------------------------------------------------------------------
+
+const BOT_LIST_MAX = 50; // הבוט מציג עד 15 — השאר נספרים
+
+/** משימות פתוחות בבורד הפנימי, עם ‎where‎ נוסף, רק מה שהעובד רשאי לראות */
+function openTasksWhere(actor, extra, params) {
+  return D.all(
+    `SELECT t.* FROM tasks t
+       JOIN boards b ON b.id = t.board_id
+       LEFT JOIN board_columns bc ON bc.board_id = t.board_id AND bc.key = t.status
+      WHERE b.type = 'internal' AND t.archived = 0 AND COALESCE(bc.is_final, 0) = 0
+        AND (t.activate_at IS NULL OR t.activate_at <= ?)
+        AND ${extra}
+      ORDER BY t.due_date IS NULL, t.due_date, CASE t.priority WHEN 'urgent' THEN 0 WHEN 'high' THEN 1 ELSE 2 END, t.id`,
+    D.nowIso(), ...params
+  ).filter((t) => canSeeTask(actor, t));
+}
+
+const botTask = (t) => ({
+  id: t.id,
+  title: t.title,
+  dueDate: t.due_date,
+  priority: t.priority,
+  projectName: projectOf(t)?.name ?? null,
+  assignee: assigneeName(t),
+  overdue:Boolean(t.due_date && t.due_date < D.nowIso())
+});
+
+const botTaskOps = {
+  /** המשימות הפתוחות שהעובד אחראי עליהן, ראשי או נוסף — לפי יעד. הסינון לפי יום נעשה בבוט */
+  myTasks(actor) {
+    return openTasksWhere(actor, `((t.assignee_type = 'user' AND t.assignee_id = ?) OR ${EXTRA_ASSIGNEE_SQL})`, [actor.id, 'user', actor.id])
+      .slice(0, BOT_LIST_MAX).map(botTask);
+  },
+
+  projectTasks(actor, projectId) {
+    return openTasksWhere(actor, 't.project_id = ?', [projectId]).slice(0, BOT_LIST_MAX).map(botTask);
+  },
+
+  /** מה העובד רשאי לסגור — ממנו בוחר הבוט כשכותבים "סיימתי את היועץ" */
+  complete(actor, taskId) {
+    const task = getTaskOr404(taskId);
+    assertVisible(actor, task);
+    if (!mayOnTask(actor, 'change_task_status', task, projectOf(task))) throw forbidden('אין לך הרשאה לשנות את סטטוס המשימה');
+    const final = D.get('SELECT key FROM board_columns WHERE board_id = ? AND is_final = 1 ORDER BY position LIMIT 1', task.board_id);
+    if (!final) throw badRequest('אין בבורד סטטוס סגירה');
+    if (task.status === final.key) throw badRequest('המשימה כבר סגורה');
+    changeStatus(task, final.key, actor, 'סומן כבוצע מוואטסאפ');
+    return botTask(task);
+  },
+
+  comment(actor, taskId, text) {
+    const task = getTaskOr404(taskId);
+    assertVisible(actor, task);
+    const body = String(text ?? '').trim().slice(0, 2000);
+    if (!body) throw badRequest('נדרש תוכן להערה');
+    D.run('INSERT INTO comments (task_id, author_type, author_id, body, internal, created_at) VALUES (?,?,?,?,1,?)',
+      task.id, 'user', actor.id, `${body}\n💬 מוואטסאפ`, D.nowIso());
+    D.audit(task.id, actorRef(actor), 'comment', 'נוספה הערה מוואטסאפ');
+    if (task.assignee_type === 'user' && task.assignee_id && task.assignee_id !== actor.id) {
+      D.notify({ targetType: 'user', targetId: task.assignee_id, kind: 'comment', title: `${actor.name} כתב/ה במשימה`, body: `${task.title} — ${body.slice(0, 120)}`, taskId: task.id });
+    }
+    return botTask(task);
+  },
+
+  canSee: (actor, taskId) => {
+    const task = D.get('SELECT * FROM tasks WHERE id = ?', taskId);
+    return Boolean(task && canSeeTask(actor, task));
+  }
+};
+
+AiApi.register(router, { getTaskOr404, assertVisible, mayOnTask, shapeTask, actorRef, saveAttachment, createTask, assertMayAssignTo, listProjectsFor, botTaskOps });
 
 module.exports = { router, PRIORITIES, shapeTask, canSeeTask };

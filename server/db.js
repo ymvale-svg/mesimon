@@ -653,6 +653,26 @@ CREATE TABLE IF NOT EXISTS wa_chats (
 );
 
 /*
+ * יומן הבוט: כל מה שקיבל ומה עשה עם זה — כדי שמנהל המערכת יראה איפה הוא
+ * מבין ואיפה טועה. נשמר 90 יום.
+ */
+CREATE TABLE IF NOT EXISTS wa_log (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  at          TEXT    NOT NULL,
+  channel     TEXT    NOT NULL,              -- group | private | summary | test
+  chat_id     TEXT    NOT NULL DEFAULT '',
+  chat_name   TEXT    NOT NULL DEFAULT '',
+  user_id     INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  who         TEXT    NOT NULL DEFAULT '',   -- שם או מספר, כפי שנראה בזמן ההודעה
+  text        TEXT    NOT NULL DEFAULT '',
+  action      TEXT    NOT NULL DEFAULT '',
+  result      TEXT    NOT NULL DEFAULT '',
+  status      TEXT    NOT NULL DEFAULT 'ok', -- ok | unclear | denied | error
+  task_id     INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_wa_log_at ON wa_log(at);
+
+/*
  * הצעות שה-AI הכין מהמייל וממתינות להחלטה. ‎data‎ — ההצעה עצמה: כותרת,
  * תיאור, צ'קליסט, יעד, אנשים ובקשת AI אם יש.
  */
@@ -898,7 +918,11 @@ const DEFAULT_SETTINGS = {
    * קריאה אחת ל-AI לרצף הודעות ולא לכל הודעה.
    */
   wa_bot_enabled: true,
-  wa_quiet_minutes: 3                      // כמה דקות שקט בקבוצה לפני ניתוח
+  wa_quiet_minutes: 3,                     // כמה דקות שקט בקבוצה לפני ניתוח
+  wa_actions: {},                          // מה הבוט עושה בפרטי: { key: { enabled, audience, examples } }
+  wa_summary_time: '08:00',                // סיכום הבוקר בפרטי, שעון ישראל
+  wa_hours: '',                            // שעות שבהן הבוט שולח הודעות ("07:00-22:00"). ריק = תמיד
+  wa_shabbat: true                         // בשישי מהערב ובשבת הבוט אינו שולח, ועונה במוצאי שבת
 };
 
 /*
@@ -1189,6 +1213,8 @@ function migrate() {
   // חברי קבוצת הוואטסאפ (מספרים), שמורים לכמה שעות — הצעות רק לעובדים שבקבוצה
   addColumn('wa_groups', 'participants', "TEXT NOT NULL DEFAULT '[]'");
   addColumn('wa_groups', 'participants_at', 'TEXT');
+  // הרשימה האחרונה שהבוט שלח בפרטי — כדי ש"סיימתי את 2" יידע מה זה 2
+  addColumn('wa_chats', 'last_list', "TEXT NOT NULL DEFAULT '[]'");
   addColumn('comments', 'checklist_item_id', 'INTEGER REFERENCES checklist_items(id) ON DELETE CASCADE');
   // תבניות פר מחלקה. תבנית קיימת נשארת ללא מחלקה, כלומר ארגונית — מי שכבר
   // הסתמך עליה לא יגלה אותה נעלמת בעלייה לגרסה
