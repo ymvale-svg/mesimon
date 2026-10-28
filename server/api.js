@@ -737,9 +737,20 @@ function publicActor(actor) {
     department: actor.department ?? null,
     departmentId: actor.departmentId ?? null,
     boardId: actor.boardId ?? null,
-    readOnly: !!actor.readOnly
+    readOnly: !!actor.readOnly,
+    phone: actor.type === 'user' ? D.get('SELECT phone FROM users WHERE id = ?', actor.id)?.phone ?? '' : ''
   };
 }
+
+/** הטלפון של עצמי — מ"החשבון שלי", כדי שבוט הוואטסאפ יזהה אותי */
+router.put('/api/me/phone', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  if (actor.type !== 'user') throw forbidden();
+  const b = await readJson(req);
+  const phone = userPhone(b.phone, actor.id);
+  D.run('UPDATE users SET phone = ? WHERE id = ?', phone, actor.id);
+  sendJson(res, 200, { phone });
+});
 
 // ---------------------------------------------------------------------------
 // מימוש הזמנה — פתוח ללא התחברות, מוגן באמצעות האסימון שבקישור

@@ -631,6 +631,8 @@ function createFromSuggestion(sug, actor, edits = {}) {
   if (fromWhatsApp && data.requester?.id && data.requester.id !== actor.id) {
     D.notify({ targetType: 'user', targetId: data.requester.id, kind: 'assignment', title: `${actor.name} פתח/ה משימה ממה שביקשת בקבוצה`, body: data.title, taskId });
   }
+  // ✅ על ההודעה בקבוצה. נטען כאן ולא בראש הקובץ: הבוט אינו חלק מסריקת המייל
+  if (fromWhatsApp) require('./wa-bot').markDone(String(sug.header_id).replace(/^wa:/, ''), data.chatId);
 
   // מי שרק צריך לדעת — תיוג בהערה פנימית, ומשם ההתראה הרגילה של תיוג
   const watchers = people.filter((p) => p.role === 'watcher').map((p) => p.userId).filter((id) => id !== actor.id);

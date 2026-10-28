@@ -1186,6 +1186,9 @@ function migrate() {
   addColumn('users', 'signup_at', 'TEXT');
   // הטלפון של העובד — כך בוט הוואטסאפ יודע מי כתב בקבוצה ומי שולח לו הודעה
   addColumn('users', 'phone', "TEXT NOT NULL DEFAULT ''");
+  // חברי קבוצת הוואטסאפ (מספרים), שמורים לכמה שעות — הצעות רק לעובדים שבקבוצה
+  addColumn('wa_groups', 'participants', "TEXT NOT NULL DEFAULT '[]'");
+  addColumn('wa_groups', 'participants_at', 'TEXT');
   addColumn('comments', 'checklist_item_id', 'INTEGER REFERENCES checklist_items(id) ON DELETE CASCADE');
   // תבניות פר מחלקה. תבנית קיימת נשארת ללא מחלקה, כלומר ארגונית — מי שכבר
   // הסתמך עליה לא יגלה אותה נעלמת בעלייה לגרסה

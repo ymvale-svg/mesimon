@@ -283,7 +283,11 @@ const AdminView = (() => {
           ])]),
           el('tbody', {}, data.users.map((u) =>
             el('tr', {}, [
-              el('td', {}, [el('div.flex', {}, [UI.avatar(u.name, { small: true }), el('b', { text: u.name })])]),
+              el('td', {}, [el('div.flex', {}, [UI.avatar(u.name, { small: true }), el('div', {}, [
+                el('b', { text: u.name }),
+                // הטלפון מתחת לשם — כך רואים במבט מי עוד חסר לבוט הוואטסאפ
+                el('div.mute-sm', { dir: 'ltr', style: { textAlign: 'right' }, text: u.phone ? UI.phone(u.phone) : '📱 אין טלפון' })
+              ])])]),
               el('td', { text: u.email }),
               data.seesRoles ? el('td', {}, [el('span.tag.tag-internal', {}, [u.roleLabel])]) : null,
               // משתמש יכול להיות ללא שיוך למחלקה (הנהלה, מנהל מערכת) — מסומן במקף ולא בתא ריק
@@ -468,7 +472,7 @@ const AdminView = (() => {
     const scoped = listData.scope === 'department';
     const nameInput = el('input', { type: 'text', value: user?.name ?? '' });
     const emailInput = el('input', { type: 'email', value: user?.email ?? '' });
-    const phoneInput = el('input', { type: 'tel', dir: 'ltr', value: user?.phone ? `+${user.phone}` : '', placeholder: '050-0000000' });
+    const phoneInput = el('input', { type: 'tel', dir: 'ltr', value: user?.phone ? UI.phone(user.phone) : '', placeholder: '050-0000000' });
 
     // רמות הגישה מגיעות מהשרת כשהן מסוננות לפי מה שהמשתמש המחובר רשאי להעניק —
     // מנהל מחלקה יקבל כך רק 'עובד פנימי', בלי החלטה בקוד הממשק.

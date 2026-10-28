@@ -413,6 +413,16 @@ const UI = (() => {
     };
   }
 
+  /** טלפון שנשמר מנורמל (‎972541234567‎) בתצוגה ישראלית: ‎054-1234567‎ */
+  function phone(stored) {
+    const s = String(stored ?? '');
+    if (/^972\d{8,9}$/.test(s)) {
+      const local = `0${s.slice(3)}`;
+      return `${local.slice(0, 3)}-${local.slice(3)}`;
+    }
+    return s ? `+${s}` : '';
+  }
+
   function select(options, value, props = {}) {
     const build = (o) => (Array.isArray(o.options)
       ? el('optgroup', { label: o.label }, o.options.map(build))
@@ -1242,7 +1252,7 @@ const UI = (() => {
     formatDate, formatDateTime, relative, dueLabel, toInputDate, fromInputDate,
     initials, avatar, priorityTag, statusTag, taskTags,
     modal, confirm, prompt, toast, error, success, notifyPop, clearNotifyPops,
-    empty, spinner, field, select, projectPicker, rankProjects,
+    empty, spinner, field, select, phone, projectPicker, rankProjects,
     renderMentions, fileSize, fileIcon, announceAutoStatus,
     usersByDepartment,
     preview, previewUrls, canPreview, PROJECT_COLORS, commentThread, icon,

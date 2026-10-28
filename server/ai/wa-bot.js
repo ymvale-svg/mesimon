@@ -132,6 +132,22 @@ async function sendText(chatId, message) {
   await WhatsApp.call(ch, 'sendMessage', { http: 'POST', body: { chatId, message } });
 }
 
+/**
+ * ✅ על ההודעה בקבוצה שהפכה למשימה — סימן לכולם שהבקשה נקלטה, בלי לכתוב
+ * בקבוצה. ניסיון בלבד: תגובה שנכשלה אינה מבטלת את המשימה.
+ */
+async function markDone(messageId, chatId = null) {
+  const ch = channel();
+  if (!ch || !messageId) return;
+  const chat = chatId ?? D.get('SELECT chat_id FROM wa_messages WHERE message_id = ?', messageId)?.chat_id;
+  if (!chat) return;
+  try {
+    await WhatsApp.call(ch, 'sendReaction', { http: 'POST', body: { chatId: chat, idMessage: messageId, reaction: '✅' } });
+  } catch (err) {
+    console.error('[משימון] סימון ✅ בקבוצה נכשל:', err.message);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // מי זה
 // ---------------------------------------------------------------------------
@@ -141,6 +157,36 @@ const orgUsers = () => D.all(
      LEFT JOIN departments d ON d.id = u.department_id
     WHERE u.status = 'active' AND u.role <> 'vendor' ORDER BY u.full_name`
 );
+
+const PARTICIPANTS_TTL = 6 * 60 * 60 * 1000;
+
+/** מספרי חברי הקבוצה, מ-Green API — נשמרים לכמה שעות. ‎null‎ כשאין דרך לדעת */
+async function participantsOf(group) {
+  const fresh = group.participants_at && Date.now() - new Date(group.participants_at).getTime() < PARTICIPANTS_TTL;
+  if (fresh) return parseJson(group.participants, null);
+  const ch = channel();
+  try {
+    const out = ch ? await WhatsApp.call(ch, 'getGroupData', { http: 'POST', body: { groupId: group.chat_id } }) : null;
+    const phones = (out?.participants ?? []).map((p) => String(p.id ?? '').replace(/@c\.us$/, '')).filter(Boolean);
+    if (!phones.length) throw new Error('לא התקבלה רשימת משתתפים');
+    D.run('UPDATE wa_groups SET participants = ?, participants_at = ? WHERE chat_id = ?', JSON.stringify(phones), D.nowIso(), group.chat_id);
+    return phones;
+  } catch (err) {
+    console.error(`[משימון] רשימת המשתתפים של "${group.name}" לא נטענה:`, err.message);
+    // הרשימה הקודמת עדיפה על כלום, גם אם ישנה
+    return group.participants_at ? parseJson(group.participants, null) : null;
+  }
+}
+
+/**
+ * מי יכול לקבל הצעה מהקבוצה: רק עובד שהטלפון שלו רשום במשימון — ואם רשימת
+ * החברים ידועה, רק מי שחבר בקבוצה. בקשה לאדם שאינו כאן אינה משימה במשימון.
+ */
+async function candidatesOf(group) {
+  const withPhone = orgUsers().filter((u) => u.phone);
+  const members = await participantsOf(group);
+  return members ? withPhone.filter((u) => members.includes(u.phone)) : withPhone;
+}
 
 /** עובד לפי מספר וואטסאפ (‎972…‎) — הטלפון בפרופיל נשמר מנורמל */
 function userByPhone(phone) {
@@ -277,12 +323,11 @@ const line = (m, i) => {
   return `[${i}] ${t.date} ${t.time} · ${m.sender_name}${m.user_id ? ` (עובד #${m.user_id})` : ''}: ${m.text}`;
 };
 
-async function analyzeGroup(group, project, fresh) {
+async function analyzeGroup(group, project, fresh, users) {
   const context = D.all(
     'SELECT * FROM wa_messages WHERE chat_id = ? AND processed = 1 AND at >= ? ORDER BY at DESC LIMIT ?',
     group.chat_id, new Date(Date.now() - BACKLOG_DAYS * DAY).toISOString(), CONTEXT_MESSAGES
   ).reverse();
-  const users = orgUsers();
   const today = localDate();
   const text = [
     `תאריך היום: ${today.date} (${today.weekday})`,
@@ -334,13 +379,14 @@ function sanitizeGroup(out, users, count) {
 
 /**
  * למי ההצעה מגיעה: למי שהבקשה מופנית אליו. כשלא ברור — למנהל הפרויקט, ואם
- * אין — למי שקשר את הקבוצה. כך שום בקשה לא נופלת בין הכיסאות.
+ * אין — למי שקשר את הקבוצה. תמיד רק מי שברשימת המועמדים: עובד עם טלפון
+ * רשום שחבר בקבוצה. אחרת — אין הצעה.
  */
-function recipientOf(t, project, group) {
-  const active = (id) => id && D.get("SELECT 1 FROM users WHERE id = ? AND status = 'active'", id);
-  if (active(t.assignee)) return t.assignee;
-  if (active(project.manager_id)) return project.manager_id;
-  if (active(group.bound_by)) return group.bound_by;
+function recipientOf(t, project, group, candidates) {
+  const ok = (id) => id && candidates.some((u) => u.id === id);
+  if (ok(t.assignee)) return t.assignee;
+  if (ok(project.manager_id)) return project.manager_id;
+  if (ok(group.bound_by)) return group.bound_by;
   return null;
 }
 
@@ -354,12 +400,18 @@ async function processGroup(group) {
   const fresh = D.all('SELECT * FROM wa_messages WHERE chat_id = ? AND processed = 0 ORDER BY at LIMIT ?', group.chat_id, BATCH_MAX);
   if (!fresh.length) return 0;
 
-  const result = await analyzeGroup(group, project, fresh);
+  const candidates = await candidatesOf(group);
+  if (!candidates.length) {
+    // אף עובד בקבוצה אינו רשום עם טלפון — אין למי להציע, ולא שולחים ל-AI לשווא
+    D.run(`UPDATE wa_messages SET processed = 1 WHERE id IN (${fresh.map(() => '?').join(',')})`, ...fresh.map((m) => m.id));
+    return 0;
+  }
+  const result = await analyzeGroup(group, project, fresh, candidates);
   const perUser = new Map();
   for (const t of result.tasks) {
     const msg = fresh[t.index - 1];
     const headerId = `wa:${msg.message_id}`;
-    const target = recipientOf(t, project, group);
+    const target = recipientOf(t, project, group, candidates);
     if (!target) continue;
     // אותה בקשה לא מוצעת פעמיים לאותו אדם (למשל אחרי ניתוח חוזר)
     if (D.get('SELECT 1 FROM ai_suggestions WHERE header_id = ? AND user_id = ? AND subject = ?', headerId, target, t.title)) continue;
@@ -378,6 +430,7 @@ async function processGroup(group) {
       aiRequest: null,
       warning: result.warning,
       groupName: group.name,
+      chatId: group.chat_id,
       projectId: project.id,
       projectName: project.name,
       requester: t.requester,
@@ -720,6 +773,6 @@ function start() {
 
 module.exports = {
   init, start, tick, publicStatus, save, remove, checkState, qr, isConfigured,
-  listGroups, bindGroup, userByPhone,
-  _internal: { storeGroupMessage, processGroup, handleDirect, sanitizeGroup, resolveMentions, YES }
+  listGroups, bindGroup, userByPhone, markDone,
+  _internal: { storeGroupMessage, processGroup, handleDirect, sanitizeGroup, resolveMentions, candidatesOf, YES }
 };
