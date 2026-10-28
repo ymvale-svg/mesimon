@@ -653,6 +653,20 @@ CREATE TABLE IF NOT EXISTS wa_chats (
 );
 
 /*
+ * הודעות יזומות של הבוט (קיבלת משימה) שנוצרו מחוץ לשעות הפעילות או בשבת —
+ * נשלחות כשהחלון נפתח.
+ */
+CREATE TABLE IF NOT EXISTS wa_outbox (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id     INTEGER REFERENCES users(id) ON DELETE CASCADE,
+  chat_id     TEXT    NOT NULL,
+  text        TEXT    NOT NULL,
+  task_id     INTEGER,
+  action      TEXT    NOT NULL DEFAULT '',
+  created_at  TEXT    NOT NULL
+);
+
+/*
  * יומן הבוט: כל מה שקיבל ומה עשה עם זה — כדי שמנהל המערכת יראה איפה הוא
  * מבין ואיפה טועה. נשמר 90 יום.
  */
@@ -1303,6 +1317,8 @@ function migrate() {
   addColumn('wa_groups', 'participants_at', 'TEXT');
   // הרשימה האחרונה שהבוט שלח בפרטי — כדי ש"סיימתי את 2" יידע מה זה 2
   addColumn('wa_chats', 'last_list', "TEXT NOT NULL DEFAULT '[]'");
+  // היום שבו הבוט כבר פתח את השיחה ב-Today ובתפריט — הודעה ראשונה ביום פותחת בהם
+  addColumn('wa_chats', 'greeted_on', "TEXT NOT NULL DEFAULT ''");
   addColumn('comments', 'checklist_item_id', 'INTEGER REFERENCES checklist_items(id) ON DELETE CASCADE');
   // תבניות פר מחלקה. תבנית קיימת נשארת ללא מחלקה, כלומר ארגונית — מי שכבר
   // הסתמך עליה לא יגלה אותה נעלמת בעלייה לגרסה

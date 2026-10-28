@@ -12,6 +12,7 @@ const Google = require('./google-auth');
 const Invites = require('./invites');
 const Mailer = require('./mailer');
 const TaskMail = require('./task-mail');
+const WaBot = require('./ai/wa-bot');
 const Push = require('./push');
 const Xlsx = require('./xlsx-write');
 const Spreadsheet = require('./spreadsheet');
@@ -1417,6 +1418,8 @@ function notifyAssignment(taskId, assigneeType, assigneeId, title, assigner = nu
   });
   const task = D.get('SELECT * FROM tasks WHERE id = ?', taskId);
   if (task) TaskMail.sendAssignment({ task, assigneeType, assigneeId, assigner });
+  // ועוד הודעה מבוט הוואטסאפ — לעובד עם טלפון, לפי ההגדרות שלו
+  if (task && assigneeType === 'user') WaBot.notifyAssignment({ taskId, userId: assigneeId, assigner, extra });
 }
 
 router.patch('/api/tasks/:id', async (req, res, ctx) => {
@@ -4349,6 +4352,8 @@ const PREF_KEYS = [
   'boardFilters', 'boardView', 'projectScope', 'sidebar', 'mobileFilter', 'projectOrder',
   // אילו סוגי התראות קופצים כהתראת מערכת ההפעלה — בחירה אישית לכל משתמש
   'notifyKinds',
+  // משימה ששויכה לי: גם במייל, גם מבוט הוואטסאפ — ‎{ email, whatsapp }‎
+  'assignChannels',
   // חתך הפרויקט וההיקף במסך בקרת המשימות
   'trackerProject', 'trackerScope',
   // בחירת העמודות, סדרן והמיון בטבלת הבקרה

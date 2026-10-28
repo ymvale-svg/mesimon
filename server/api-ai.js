@@ -25,7 +25,7 @@ function register(router, h) {
 
   AiTasks.setHooks({ saveFile: saveAttachment, scanWhatsApp: WaScan.handle, scanningUsers: WaScan.scanningUsers });
   MailScan.init({ createTask });
-  WaBot.init({ createTask, listProjectsFor, tasks: botTaskOps });
+  WaBot.init({ createTask, listProjectsFor, tasks: botTaskOps, mail: { searchContacts, createAiTask } });
 
   const internalOnly = (actor) => {
     if (actor.type === 'vendor') throw forbidden();
@@ -213,7 +213,8 @@ function register(router, h) {
         projectName: project?.name ?? null,
         channel: b.channel === 'whatsapp' ? 'whatsapp' : 'email',
         feedback: String(b.feedback ?? '').trim(),
-        previous: b.previous ?? null
+        previous: b.previous ?? null,
+        context: b.channel === 'whatsapp' ? '' : await AiTasks.mailContext(actor.id, b.contact?.email)
       });
       sendJson(res, 200, { draft });
     } catch (err) {
@@ -221,12 +222,12 @@ function register(router, h) {
     }
   });
 
-  router.post('/api/ai/tasks', async (req, res, ctx) => {
-    const actor = ctx.requireActor();
-    internalOnly(actor);
-    if (!P.may(actor, 'create_task')) throw forbidden();
-    const b = await readJson(req);
-
+  /**
+   * פתיחת משימת AI מטיוטה שאושרה — מהאשף באפליקציה ומבוט הוואטסאפ, באותן
+   * בדיקות בדיוק. מחזיר את מזהה המשימה, ושגיאת שליחה אם הייתה (המשימה
+   * והטיוטה נשמרות גם אז, ואפשר לשלוח שוב מהכרטיס).
+   */
+  async function createAiTask(actor, b) {
     const instruction = String(b.instruction ?? '').trim();
     const draft = b.draft ?? {};
     const channel = b.channel === 'whatsapp' ? 'whatsapp' : 'email';
@@ -301,6 +302,14 @@ function register(router, h) {
       sendError = err.message;
     }
 
+    return { taskId, sendError };
+  }
+
+  router.post('/api/ai/tasks', async (req, res, ctx) => {
+    const actor = ctx.requireActor();
+    internalOnly(actor);
+    if (!P.may(actor, 'create_task')) throw forbidden();
+    const { taskId, sendError } = await createAiTask(actor, await readJson(req));
     sendJson(res, 201, { task: shapeTask(getTaskOr404(taskId), actor, { withDetails: true }), sendError });
   });
 

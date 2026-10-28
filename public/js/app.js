@@ -1035,6 +1035,7 @@ const App = (() => {
           el('span', { text: 'ℹ️' }),
           el('div', { text: 'הכיבוי חל על הקפיצה בפינת המסך בלבד. כל ההתראות ממשיכות להופיע ברשימה שמתחת לפעמון, כדי שדבר לא ייעלם.' })
         ]),
+        isVendor() ? null : assignChannelsBox(),
         diagBox
       );
 
@@ -1055,6 +1056,35 @@ const App = (() => {
     };
 
     const diagBox = el('div');
+
+    /*
+     * משימה ששויכה לי — בנוסף לפעמון: מייל, והודעה מבוט הוואטסאפ של הארגון
+     * (למי שהטלפון שלו רשום בפרופיל). שניהם דלוקים כברירת מחדל.
+     */
+    function assignChannelsBox() {
+      const chosen = getPref('assignChannels', {}) ?? {};
+      const toggle = (key, label, hint) => {
+        const box = el('input', { type: 'checkbox', checked: chosen[key] !== false });
+        box.addEventListener('change', () => {
+          setPref('assignChannels', { ...(getPref('assignChannels', {}) ?? {}), [key]: box.checked });
+        });
+        return el('tr', {}, [
+          el('td', {}, [el('div', { text: label }), hint ? el('div.mute-sm', { text: hint }) : null]),
+          el('td', { style: { textAlign: 'center', width: '110px' } }, [el('label.checkbox', {}, [box])])
+        ]);
+      };
+      return el('div', {}, [
+        el('h4', { text: 'כשמשייכים לי משימה', style: { margin: '16px 0 8px', fontSize: '13px' } }),
+        el('div.table-wrap', {}, [
+          el('table.data', {}, [
+            el('tbody', {}, [
+              toggle('email', '📧 מייל עם פרטי המשימה'),
+              toggle('whatsapp', '💬 הודעה מבוט הוואטסאפ', state.actor?.phone ? null : 'נשלחת רק כשהטלפון שלך רשום ב"החשבון שלי"')
+            ])
+          ])
+        ])
+      ]);
+    }
 
     draw();
     UI.modal({

@@ -305,6 +305,17 @@ const AiTaskView = (() => {
 
       return el('div', {}, [
         d.notes ? el('div.alert.alert-info', {}, [el('span', { text: '💡' }), el('div', { text: d.notes })]) : null,
+        // מההתכתבות האחרונה עם הנמען: מה כדאי להוסיף. לחיצה — ה-AI מוסיף למייל
+        d.suggestions?.length && !internal
+          ? el('div.alert.alert-info', {}, [
+              el('span', { text: '📨' }),
+              el('div', {}, [
+                el('div', { text: 'מההתכתבות האחרונה איתו — אולי להוסיף:' }),
+                el('div.flex', { style: { gap: '6px', flexWrap: 'wrap', marginTop: '6px' } }, d.suggestions.map((x) =>
+                  el('button.btn.btn-sm', { onclick: () => { feedback.value = `הוסף למייל: ${x}`; doRedo(); } }, [`＋ ${x}`])))
+              ])
+            ])
+          : null,
         UI.field('שם המשימה במערכת', titleInput),
         el('div.ai-letter', {}, [
           el('div.row', {}, [
