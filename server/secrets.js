@@ -33,7 +33,7 @@ function key() {
 function encrypt(plain) {
   if (!plain) return '';
   const iv = crypto.randomBytes(12);
-  const cipher = crypto.createCipheriv('aes-256-gcm', key(), iv);
+  const cipher = crypto.createCipheriv('aes-256-gcm', key(), iv, { authTagLength: 16 });
   const data = Buffer.concat([cipher.update(String(plain), 'utf8'), cipher.final()]);
   return `v1:${iv.toString('base64')}:${cipher.getAuthTag().toString('base64')}:${data.toString('base64')}`;
 }
@@ -43,7 +43,7 @@ function decrypt(stored) {
   const parts = String(stored ?? '').split(':');
   if (parts.length !== 4 || parts[0] !== 'v1') return null;
   try {
-    const decipher = crypto.createDecipheriv('aes-256-gcm', key(), Buffer.from(parts[1], 'base64'));
+    const decipher = crypto.createDecipheriv('aes-256-gcm', key(), Buffer.from(parts[1], 'base64'), { authTagLength: 16 });
     decipher.setAuthTag(Buffer.from(parts[2], 'base64'));
     return Buffer.concat([decipher.update(Buffer.from(parts[3], 'base64')), decipher.final()]).toString('utf8');
   } catch {

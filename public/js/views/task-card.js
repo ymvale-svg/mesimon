@@ -546,7 +546,8 @@ const TaskCardView = (() => {
     ai_nudge: 'AI: תזכורת מיידית',
     ai_stopped: 'AI: המעקב הופסק',
     ai_completed: 'AI: סומן שהתקבל',
-    ai_updated: 'AI: עדכון פרטים'
+    ai_updated: 'AI: עדכון פרטים',
+    tiful360: 'תפעול 360'
   };
 
   function historySection() {

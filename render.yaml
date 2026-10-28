@@ -49,6 +49,12 @@ services:
         sync: false
       - key: TOKEN_ENCRYPTION_KEY  # הצפנת חיבורי ה-Gmail במסד. נוצר פעם אחת — לא להחליף אחרי שחוברו תיבות
         generateValue: true
+      - key: TIFUL360_INBOUND_KEY  # חיבור לתפעול 360 — המפתח שתפעול 360 שולח. בלעדיו החיבור כבוי
+        sync: false
+      - key: TIFUL360_API_URL      # כתובת it-api של תפעול 360 — לסגירת הקריאה כשהמשימה מסתיימת
+        sync: false
+      - key: TIFUL360_API_KEY
+        sync: false
     disk:
       name: mesimon-data   # הדיסק שורד עדכוני גרסה — כאן נשמרים מסד הנתונים והקבצים
       mountPath: /var/mesimon
