@@ -168,8 +168,20 @@ const HomeView = (() => {
     const i = keys.indexOf(key);
     const j = keys.indexOf(visible[to]);
     if (i < 0 || j < 0) return;
-    [keys[i], keys[j]] = [keys[j], keys[i]];
-    // המיקוד יחזור לאותה ידית אחרי הציור מחדש — ראה tuneBoard
+
+    /*
+     * הזזה ולא החלפה.
+     *
+     * קודם לכן החלון התחלף עם שכנו, וזה נראה כקפיצה שרירותית: כשהשכן הוא
+     * חלון ברוחב שורה שלמה, החלפה איתו מעבירה את הנגרר שורה שלמה וגוררת את
+     * השכן למקומו — שתי תזוזות בלחיצה אחת, ואף אחת מהן אינה "צעד אחד".
+     * הוצאה והכנסה במקום החדש היא מה שעושה כל רשימה עם חצים, והיא הצעד
+     * היחיד שאפשר לחזות מראש.
+     */
+    keys.splice(i, 1);
+    keys.splice(j, 0, key);
+
+    // המיקוד יחזור לאותו כפתור אחרי הציור מחדש — ראה tuneBoard
     pendingFocus = key;
     saveLayout({ order: keys, ...evenShares() });
   }
@@ -478,23 +490,27 @@ const HomeView = (() => {
     if (head) {
       head.classList.add('has-slot-tools');
 
+      /*
+       * חצים גלויים, ולא רק גרירה.
+       *
+       * עד כה הסידור נעשה בגרירה, והחצים היו קיימים רק כמקשים על הידית —
+       * כלומר בלתי נראים לחלוטין למי שאינו מנסה אותם במקרה. גרירה בפריסה
+       * שנשברת לשורות היא גם המחווה הקשה ביותר להצלחה: היעד זז תוך כדי,
+       * ולחלון ברוחב שורה שלמה אין בכלל "צד" ברור. לחיצה על חץ היא צעד אחד
+       * צפוי, והידית נשארה למי שמעדיף לגרור.
+       */
+      const arrow = (glyph, delta, label) => el('button.slot-btn.slot-move', {
+        type: 'button',
+        title: label,
+        'aria-label': `${label} — ${CARD_LABEL[key]}`,
+        onclick: () => moveCard(key, delta)
+      }, [glyph]);
+
       const grip = el('button.slot-btn.slot-grip', {
         type: 'button',
-        title: 'גרירה לשינוי המיקום · חצים להזזה במקלדת',
-        'aria-label': `הזזת החלון ${CARD_LABEL[key]}`
+        title: 'גרירה לשינוי המיקום',
+        'aria-label': `גרירת החלון ${CARD_LABEL[key]}`
       }, ['⠿']);
-      /*
-       * חצים במקלדת, כדי שסידור הלוח לא יהיה תלוי ביכולת לגרור. ‎↑‎ ו-‎→‎
-       * מקדימים ב-RTL, ‎↓‎ ו-‎←‎ מאחרים — הכיוון החזותי, ולא סדר המערך.
-       */
-      grip.addEventListener('keydown', (e) => {
-        const rtl = getComputedStyle(document.documentElement).direction === 'rtl';
-        const back = e.key === 'ArrowUp' || e.key === (rtl ? 'ArrowRight' : 'ArrowLeft');
-        const fwd = e.key === 'ArrowDown' || e.key === (rtl ? 'ArrowLeft' : 'ArrowRight');
-        if (!back && !fwd) return;
-        e.preventDefault();
-        moveCard(key, back ? -1 : 1);
-      });
 
       /*
        * ‎aria-pressed‎ ומצב מודגש, ולא רק אייקון מתחלף. זו הייתה תלונת
@@ -513,6 +529,8 @@ const HomeView = (() => {
       }, [wide ? '⇥⇤' : '⇤⇥']);
 
       head.appendChild(el('div.slot-tools', {}, [
+        arrow('▲', -1, 'העלאת החלון'),
+        arrow('▼', 1, 'הורדת החלון'),
         grip,
         wideBtn,
         el('button.slot-btn.slot-hide', {
