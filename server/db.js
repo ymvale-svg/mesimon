@@ -594,6 +594,65 @@ CREATE TABLE IF NOT EXISTS mail_scanned (
 CREATE INDEX IF NOT EXISTS idx_mail_scanned_header ON mail_scanned(header_id);
 
 /*
+ * בוט הוואטסאפ של הארגון — מספר אחד, מחובר דרך Green API, שמצורף לקבוצות
+ * הפרויקטים ומקבל גם הודעות פרטיות מעובדים. שורה אחת בלבד (‎id = 1‎).
+ * האסימון מוצפן (‎server/secrets.js‎) ואינו נשלח לעולם ללקוח.
+ */
+CREATE TABLE IF NOT EXISTS wa_bot (
+  id          INTEGER PRIMARY KEY CHECK (id = 1),
+  api_url     TEXT    NOT NULL DEFAULT '',
+  instance_id TEXT    NOT NULL DEFAULT '',
+  api_token   TEXT    NOT NULL DEFAULT '',   -- מוצפן
+  phone       TEXT    NOT NULL DEFAULT '',
+  state       TEXT    NOT NULL DEFAULT 'unknown',
+  checked_at  TEXT,
+  created_at  TEXT    NOT NULL
+);
+
+/*
+ * קבוצה שהבוט נמצא בה. קבוצה נקשרת לפרויקט אחד, פעם אחת — וכל משימה שנולדת
+ * בה נפתחת תחת אותו פרויקט בלבד, כדי שלא יהיה ערבוב בין פרויקטים.
+ * ‎pending‎ — הבוט צורף ועוד לא נבחר פרויקט; ההודעות ממתינות. ‎ignored‎ — לא לקרוא.
+ */
+CREATE TABLE IF NOT EXISTS wa_groups (
+  chat_id         TEXT    PRIMARY KEY,
+  name            TEXT    NOT NULL DEFAULT '',
+  status          TEXT    NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','active','ignored')),
+  project_id      INTEGER REFERENCES projects(id) ON DELETE SET NULL,
+  bound_by        INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  bound_at        TEXT,
+  first_seen_at   TEXT    NOT NULL,
+  last_message_at TEXT
+);
+
+/*
+ * הודעות קבוצה שממתינות לניתוח, וההקשר של ההודעות האחרונות. נשמרות ימים
+ * ספורים בלבד ונמחקות — משימון אינו ארכיון של הקבוצה.
+ */
+CREATE TABLE IF NOT EXISTS wa_messages (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  chat_id      TEXT    NOT NULL,
+  message_id   TEXT    NOT NULL UNIQUE,
+  sender_phone TEXT    NOT NULL DEFAULT '',
+  sender_name  TEXT    NOT NULL DEFAULT '',
+  user_id      INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  text         TEXT    NOT NULL DEFAULT '',
+  at           TEXT    NOT NULL,
+  -- 0 ממתינה לניתוח · 1 נותחה
+  processed    INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_wa_messages_chat ON wa_messages(chat_id, processed, at);
+
+/* שיחה פרטית של עובד עם הבוט: טיוטת המשימה שנבנית ושורות אחרונות להקשר */
+CREATE TABLE IF NOT EXISTS wa_chats (
+  user_id     INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  draft       TEXT    NOT NULL DEFAULT '',
+  awaiting    INTEGER NOT NULL DEFAULT 0,   -- 1 = הטיוטה הוצגה ומחכה ל"כן"
+  history     TEXT    NOT NULL DEFAULT '[]',
+  updated_at  TEXT    NOT NULL
+);
+
+/*
  * הצעות שה-AI הכין מהמייל וממתינות להחלטה. ‎data‎ — ההצעה עצמה: כותרת,
  * תיאור, צ'קליסט, יעד, אנשים ובקשת AI אם יש.
  */
@@ -832,7 +891,14 @@ const DEFAULT_SETTINGS = {
    */
   ai_mail_scan_enabled: true,
   ai_scan_time: '07:00',                   // ריצת הבוקר, שעון ישראל
-  ai_scan_daily_limit: 100                 // תקרת מיילים לסריקה ביום, לכל משתמש
+  ai_scan_daily_limit: 100,                // תקרת מיילים לסריקה ביום, לכל משתמש
+
+  /*
+   * בוט הוואטסאפ: הודעות קבוצה נאספות עד שיש הפסקה בשיחה, ונותחות יחד —
+   * קריאה אחת ל-AI לרצף הודעות ולא לכל הודעה.
+   */
+  wa_bot_enabled: true,
+  wa_quiet_minutes: 3                      // כמה דקות שקט בקבוצה לפני ניתוח
 };
 
 /*
@@ -1118,6 +1184,8 @@ function migrate() {
   addColumn('checklist_items', 'note', "TEXT NOT NULL DEFAULT ''");
   // מי שנרשם דרך הלינק וממתין לאישור — להבדיל מעובד שהושבת
   addColumn('users', 'signup_at', 'TEXT');
+  // הטלפון של העובד — כך בוט הוואטסאפ יודע מי כתב בקבוצה ומי שולח לו הודעה
+  addColumn('users', 'phone', "TEXT NOT NULL DEFAULT ''");
   addColumn('comments', 'checklist_item_id', 'INTEGER REFERENCES checklist_items(id) ON DELETE CASCADE');
   // תבניות פר מחלקה. תבנית קיימת נשארת ללא מחלקה, כלומר ארגונית — מי שכבר
   // הסתמך עליה לא יגלה אותה נעלמת בעלייה לגרסה

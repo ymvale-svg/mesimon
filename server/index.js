@@ -24,6 +24,7 @@ const Auth = require('./auth');
 const Rules = require('./rules-engine');
 const Push = require('./push');
 const AiTasks = require('./ai-tasks');
+const WaBot = require('./ai/wa-bot');
 const { router } = require('./api');
 const { HttpError, sendJson, serveStatic, parseUrl, unauthorized } = require('./http-kit');
 
@@ -91,6 +92,7 @@ server.listen(PORT, HOST, () => {
   Rules.start();
   Push.start();
   AiTasks.start();
+  WaBot.start();
   const nets = os.networkInterfaces();
   const lan = Object.values(nets).flat().find((n) => n && n.family === 'IPv4' && !n.internal);
   console.log('');

@@ -596,17 +596,21 @@ function createFromSuggestion(sug, actor, edits = {}) {
   if (assignee !== actor.id && !extras.some((e) => e.id === actor.id) && edits.keepMe !== false) extras.push({ type: 'user', id: actor.id });
 
   const summary = String(edits.summary ?? data.summary ?? '').trim();
+  const fromWhatsApp = data.source === 'whatsapp';
   const description = [
     summary,
     '',
-    `📧 מהמייל של ${sug.from_name}${sug.from_email && sug.from_email !== sug.from_name ? ` · ${sug.from_email}` : ''} · ${shortDate(sug.received_at)}`,
-    sug.subject ? `נושא: ${sug.subject}` : null
+    fromWhatsApp
+      ? `💬 מקבוצת הוואטסאפ "${data.groupName}" · ${sug.from_name} · ${shortDate(sug.received_at)}`
+      : `📧 מהמייל של ${sug.from_name}${sug.from_email && sug.from_email !== sug.from_name ? ` · ${sug.from_email}` : ''} · ${shortDate(sug.received_at)}`,
+    !fromWhatsApp && sug.subject ? `נושא: ${sug.subject}` : null
   ].filter((l) => l !== null).join('\n').trim();
 
   const taskId = hooks.createTask(actor, {
     title: String(edits.title ?? data.title ?? sug.subject).trim().slice(0, 120) || 'משימה מהמייל',
     description,
-    projectId: edits.projectId || null,
+    // מקבוצה — תמיד הפרויקט שהקבוצה קשורה אליו, גם אם נשלח אחר: אין ערבוב בין פרויקטים
+    projectId: fromWhatsApp ? data.projectId : (edits.projectId || null),
     assigneeType: 'user',
     assigneeId: assignee,
     extraAssignees: extras,
@@ -617,11 +621,16 @@ function createFromSuggestion(sug, actor, edits = {}) {
       const owner = people.find((p) => p.role === 'checklist' && p.checklistIndex === i + 1);
       return { text, note: owner ? `באחריות: ${nameOf(owner.userId)}` : '' };
     }),
-    source: 'email',
+    source: fromWhatsApp ? 'whatsapp' : 'email',
     sourceRef: sug.header_id,
     sourceUserId: sug.user_id,
-    auditNote: `המשימה נוצרה ממייל של ${sug.from_name}`
+    auditNote: fromWhatsApp ? `המשימה נוצרה מבקשה של ${sug.from_name} בקבוצת "${data.groupName}"` : `המשימה נוצרה ממייל של ${sug.from_name}`
   });
+
+  // מי שביקש בקבוצה — יודע שהבקשה התקבלה ונפתחה
+  if (fromWhatsApp && data.requester?.id && data.requester.id !== actor.id) {
+    D.notify({ targetType: 'user', targetId: data.requester.id, kind: 'assignment', title: `${actor.name} פתח/ה משימה ממה שביקשת בקבוצה`, body: data.title, taskId });
+  }
 
   // מי שרק צריך לדעת — תיוג בהערה פנימית, ומשם ההתראה הרגילה של תיוג
   const watchers = people.filter((p) => p.role === 'watcher').map((p) => p.userId).filter((id) => id !== actor.id);

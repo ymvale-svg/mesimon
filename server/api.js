@@ -20,6 +20,7 @@ const AiApi = require('./api-ai');
 const Gmail = require('./gmail');
 const MailScan = require('./ai/mail-scan');
 const Claude = require('./ai/claude');
+const WhatsApp = require('./whatsapp');
 const {
   Router, badRequest, forbidden, notFound,
   readJson, sendJson, sendText, parseUrl
@@ -3236,9 +3237,9 @@ router.get('/api/admin/users', async (req, res, ctx) => {
    * אותן שם היה מאשר חשבון בלי לקבוע לו מחלקה ורמת גישה.
    */
   const rows = P.isOrgWide(actor)
-    ? D.all(`SELECT id, full_name, email, role, department, department_id, status FROM users
+    ? D.all(`SELECT id, full_name, email, phone, role, department, department_id, status FROM users
              WHERE signup_at IS NULL ORDER BY full_name`)
-    : D.all(`SELECT id, full_name, email, role, department, department_id, status FROM users
+    : D.all(`SELECT id, full_name, email, phone, role, department, department_id, status FROM users
              WHERE department_id IS ? AND role = 'employee' AND signup_at IS NULL ORDER BY full_name`,
       actor.departmentId);
 
@@ -3254,7 +3255,7 @@ router.get('/api/admin/users', async (req, res, ctx) => {
     grantCatalog: P.GRANT_KEYS.map((key) => ({ key, ...P.GRANTS[key] })),
     mayManageDepartments: P.may(actor, 'manage_departments'),
     users: rows.map((u) => ({
-      id: u.id, name: u.full_name, email: u.email, role: u.role,
+      id: u.id, name: u.full_name, email: u.email, phone: u.phone, role: u.role,
       roleLabel: P.seesRoles(actor) ? P.ROLE_LABELS[u.role] : null, department: u.department,
       departmentId: u.department_id, status: u.status,
       grants: D.all('SELECT grant_key FROM user_grants WHERE user_id = ?', u.id).map((g) => g.grant_key)
@@ -3616,6 +3617,9 @@ router.post('/api/admin/users', async (req, res, ctx) => {
     throw badRequest('משתמש ברמת מנהל מחלקה חייב להיות משויך למחלקה. יש לבחור מחלקה קיימת או להגדיר מחלקה חדשה.');
   }
 
+  // נבדק לפני היצירה — מספר שגוי לא אמור להשאיר משתמש חצי-שמור
+  const phone = userPhone(b.phone, 0);
+
   // בלי סיסמה מפורשת נקבעת סיסמה אקראית שאיש אינו יודע —
   // הכניסה נעשית דרך קישור ההזמנה, שבו המשתמש קובע סיסמה בעצמו
   const password = b.password || crypto.randomBytes(24).toString('base64url');
@@ -3624,7 +3628,7 @@ router.post('/api/admin/users', async (req, res, ctx) => {
     name, email, D.hashPassword(password), b.role, departmentName(departmentId), 'active', D.nowIso()
   );
   const newUserId = Number(result.lastInsertRowid);
-  D.run('UPDATE users SET department_id = ? WHERE id = ?', departmentId, newUserId);
+  D.run('UPDATE users SET department_id = ?, phone = ? WHERE id = ?', departmentId, phone, newUserId);
 
   // מנהל מחלקה נרשם כמנהל של אותה מחלקה
   if (b.role === 'manager' && departmentId) {
@@ -3732,8 +3736,22 @@ router.patch('/api/admin/users/:id', async (req, res, ctx) => {
     D.run('UPDATE departments SET manager_user_id = NULL WHERE manager_user_id = ?', user.id);
   }
   if (b.password) D.run('UPDATE users SET password_hash = ? WHERE id = ?', D.hashPassword(b.password), user.id);
+  if (b.phone !== undefined) D.run('UPDATE users SET phone = ? WHERE id = ?', userPhone(b.phone, user.id), user.id);
   sendJson(res, 200, { ok: true });
 });
+
+/**
+ * הטלפון של עובד נשמר מנורמל (‎972541234567‎), כי כך בוט הוואטסאפ מקבל אותו.
+ * אותו מספר אצל שני עובדים היה מערבב ביניהם — הבוט לא היה יודע מי כתב.
+ */
+function userPhone(raw, userId) {
+  if (!String(raw ?? '').trim()) return '';
+  const phone = WhatsApp.normalizePhone(raw);
+  if (!phone) throw badRequest(`מספר הטלפון "${raw}" אינו תקין`);
+  const other = D.get('SELECT full_name FROM users WHERE phone = ? AND id <> ?', phone, userId);
+  if (other) throw badRequest(`המספר כבר רשום אצל ${other.full_name}`);
+  return phone;
+}
 
 // ---------------------------------------------------------------------------
 // ניהול ספקים
@@ -4593,6 +4611,6 @@ router.get('/api/search', async (req, res, ctx) => {
   });
 });
 
-AiApi.register(router, { getTaskOr404, assertVisible, mayOnTask, shapeTask, actorRef, saveAttachment, createTask, assertMayAssignTo });
+AiApi.register(router, { getTaskOr404, assertVisible, mayOnTask, shapeTask, actorRef, saveAttachment, createTask, assertMayAssignTo, listProjectsFor });
 
 module.exports = { router, PRIORITIES, shapeTask, canSeeTask };
