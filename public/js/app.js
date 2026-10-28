@@ -19,7 +19,9 @@ const App = (() => {
     // העדפות תצוגה של המשתמש, כפי שהגיעו מהשרת ב-bootstrap
     prefs: {},
     route: { name: 'home', params: {} },
-    homeData: null
+    homeData: null,
+    // המונה שעל כפתור Today — משימות של היום, באיחור, ומיילים שמחכים להחלטה
+    todayCount: 0
   };
 
   /**
@@ -142,9 +144,20 @@ const App = (() => {
       Object.assign(state, data);
       await refreshNotifications();
       startNotifPolling();
-      navigate(isVendor() ? 'vendor' : 'home');
+      const params = new URLSearchParams(location.search);
+      /*
+       * בטלפון מסך הפתיחה הוא Today. במחשב — דף הבית, אלא אם הגיעו מקישור
+       * (מייל הבוקר) או מקיצור באפליקציה המותקנת.
+       */
+      navigate(isVendor() ? 'vendor' : (isPhone() || params.get('view') === 'today') ? 'today' : 'home');
       openTaskFromUrl();
-      if (!isVendor()) AiInboxView.handleReturn();
+      if (!isVendor()) {
+        AiInboxView.handleReturn();
+        openFromUrl(params);
+        refreshTodayCount();
+        clearInterval(todayTimer);
+        todayTimer = setInterval(refreshTodayCount, 5 * 60000);
+      }
       registerServiceWorker();
       /*
        * רישום מחדש בכל כניסה, ולא רק בהפעלה הראשונה: ההרשמה נשמרת בשרת לפי
@@ -163,6 +176,41 @@ const App = (() => {
       }
     }
   }
+
+  /**
+   * קישורים וקיצורים שפותחים פעולה ולא מסך:
+   *   ‎?voice=1‎  — "היי Siri, משימון" / "משימה בקול": ההקלטה נפתחת, שואלת ומאזינה
+   *   ‎?new=task‎ — "משימה חדשה" מהקיצור של האפליקציה המותקנת
+   * הפרמטרים נמחקים מהכתובת, כדי שרענון לא יפתח שוב.
+   */
+  function openFromUrl(params) {
+    const voice = params.get('voice') === '1';
+    const newTask = params.get('new') === 'task';
+    if (params.has('voice') || params.has('new') || params.has('view')) history.replaceState(null, '', location.pathname);
+    if (voice && may('create_task')) setTimeout(() => VoiceView.open({ ask: true, handsFree: true }), 300);
+    else if (newTask && may('create_task')) setTimeout(() => BoardView.openTaskDialog(), 300);
+  }
+
+  // ------------------------------------------------------------- מונה Today
+
+  let todayTimer = null;
+
+  function setTodayCount(n) {
+    state.todayCount = Number(n) || 0;
+    for (const node of document.querySelectorAll('.today-badge')) {
+      node.textContent = String(state.todayCount);
+      node.style.display = state.todayCount ? '' : 'none';
+    }
+  }
+
+  async function refreshTodayCount() {
+    if (!state.actor || isVendor()) return;
+    try {
+      setTodayCount((await API.get('/api/today/count')).count);
+    } catch { /* המונה אינו תנאי לשום דבר */ }
+  }
+
+  const todayBadge = () => el('span.today-badge', { text: String(state.todayCount), style: { display: state.todayCount ? '' : 'none' } });
 
   /**
    * ‎?task=12‎ — קישור ישיר למשימה, כמו זה שנשלח בדואר ההקצאה. הפרמטר נמחק
@@ -502,6 +550,8 @@ const App = (() => {
   async function logout() {
     // לפני הבקשה ולא אחריה: אם השרת אינו זמין הבקשה נכשלת, והסקר היה נשאר חי
     resetNotifSession();
+    clearInterval(todayTimer);
+    VoiceWake.stop();
     await API.logout();
     state.actor = null;
     LoginView.render(root(), boot);
@@ -510,6 +560,7 @@ const App = (() => {
   // ------------------------------------------------------------- ניווט
 
   const ROUTES = {
+    today: { label: 'Today', icon: 'my-tasks', render: (c) => TodayView.render(c) },
     home: { label: 'דף הבית', icon: 'home', render: (c) => HomeView.render(c) },
     board: { label: 'לוח המשימות', icon: 'board', render: (c, p) => BoardView.render(c, { ...p, scope: 'internal' }) },
     vendorBoards: { label: 'כל משימות הספקים', icon: 'vendors', render: (c, p) => BoardView.render(c, { ...p, scope: 'vendors' }) },
@@ -1731,6 +1782,7 @@ const App = (() => {
       return el(`aside.sidebar#sidebar${sidebarPinned() ? '.pinned' : ''}`, {}, [...items, UI.companyLogo('in-sidebar')]);
     }
 
+    add('today', {}, { icon: el('span.nav-emoji', { text: '☀' }), count: state.todayCount || undefined });
     add('home');
     add('board');
     add('tracker');
@@ -2005,6 +2057,12 @@ const App = (() => {
       el('div.topbar-spacer'),
       globalSearch(),
       el('div.topbar-spacer'),
+      !isVendor()
+        ? el(`button.btn.today-btn${state.route.name === 'today' ? '.active' : ''}`, { title: 'מה צריך לעשות היום', onclick: () => navigate('today') }, ['☀ Today', todayBadge()])
+        : null,
+      !isVendor() && may('create_task')
+        ? el('button.btn.mic-btn', { title: 'משימה מהקלטה', onclick: () => VoiceView.open() }, ['🎙'])
+        : null,
       !isVendor() && may('create_task')
         ? el('button.btn.btn-primary', { onclick: () => BoardView.openTaskDialog() }, ['＋ משימה חדשה'])
         : null,
@@ -2042,8 +2100,9 @@ const App = (() => {
         ]),
         // הוואטסאפ האישי משמש את משימות ה-AI להמשך מעקב מהמספר של המשתמש
         isVendor() ? null : el('button.btn.mt', { onclick: () => AiTaskView.openWhatsApp() }, ['💬 חיבור הוואטסאפ שלי']),
-        // Gmail אישי: סריקת מיילים למשימות, וזיהוי תשובות וקשר ישיר בבקשות AI
-        isVendor() ? null : el('button.btn.mt', { style: { marginInlineStart: '8px' }, onclick: () => AiInboxView.openGmail(() => HomeView.reload()) }, ['📧 Gmail ועוזר ה-AI']),
+        // חיבור Google: Gmail (סריקה ותשובות), יומן ל-Today, ואנשי קשר למשימת AI
+        isVendor() ? null : el('button.btn.mt', { style: { marginInlineStart: '8px' }, onclick: () => AiInboxView.openGmail(() => refreshView()) }, ['🔗 חיבור Google ועוזר ה-AI']),
+        isVendor() ? null : el('button.btn.mt', { style: { marginInlineStart: '8px' }, onclick: () => TodayView.openSettings() }, ['☀ Today והקלטה']),
         el('div.alert.alert-info.mt', {}, [
           el('div', {}, [
             el('b', { text: 'מה מותר לי במערכת?' }),
@@ -2095,7 +2154,7 @@ const App = (() => {
         onclick: () => { closeDrawer(); navigate(routeName, extra.params ?? {}); }
       }, [
         el('span.ic-wrap', {}, [
-          UI.icon(iconName),
+          extra.emoji ? el('span.tab-emoji', { text: extra.emoji }) : UI.icon(iconName),
           extra.badge ? el('span.tab-dot', { text: String(extra.badge) }) : null
         ]),
         el('span.lbl', { text: label })
@@ -2113,6 +2172,7 @@ const App = (() => {
     }
 
     return el('nav.tabbar', {}, [
+      tab('today', 'my-tasks', 'Today', { emoji: '☀' }),
       tab('home', 'my-tasks', 'המשימות שלי'),
       tab('board', 'board', 'הלוח'),
       el('button', { onclick: () => toggleNotifPanel(null) }, [
@@ -2123,6 +2183,28 @@ const App = (() => {
         el('span.ic-wrap', {}, [UI.icon('admin')]),
         el('span.lbl', { text: 'עוד' })
       ])
+    ]);
+  }
+
+  /**
+   * פס הפעולה בטלפון, מעל הניווט התחתון: ☀ Today ו-🎙 הקלטה בגודל שווה —
+   * שתי הפעולות שנעשות מהטלפון יותר מכל — ומתג 👂 ההאזנה למי שהפעיל אותו.
+   */
+  function actionBar() {
+    const wake = VoiceWake.enabledInPrefs() && VoiceWake.supported() && may('create_task');
+    return el(`div.m-actionbar${wake ? '.has-wake' : ''}`, {}, [
+      el(`button.m-action.m-action-today${state.route.name === 'today' ? '.active' : ''}`, { onclick: () => navigate('today') }, [
+        el('span', { text: '☀' }), el('span', { text: 'Today' }), todayBadge()
+      ]),
+      may('create_task')
+        ? el('button.m-action.m-action-mic', { onclick: () => VoiceView.open() }, [el('span', { text: '🎙' }), el('span', { text: 'הקלטה' })])
+        : null,
+      wake
+        ? el(`button.m-action.m-action-wake${VoiceWake.isOn() ? '.on' : ''}`, {
+            title: VoiceWake.isOn() ? 'כיבוי ההאזנה' : 'האזנה — אמרו "משימון"',
+            onclick: () => VoiceWake.toggle()
+          }, [el('span', { text: '👂' }), el('span', { text: VoiceWake.isOn() ? 'מאזין' : 'האזנה' })])
+        : null
     ]);
   }
 
@@ -2137,6 +2219,7 @@ const App = (() => {
       // הרקע והניווט התחתון נבנים תמיד; ב-CSS הם מוצגים רק בפריסת נייד
       el('div.sidebar-veil', { onclick: closeDrawer }),
       phone ? tabbar() : null,
+      phone && !isVendor() ? actionBar() : null,
       phone && !isVendor() && may('create_task')
         ? el('button.fab', { title: 'משימה חדשה', onclick: () => BoardView.openTaskDialog() }, ['＋'])
         : null
@@ -2171,6 +2254,7 @@ const App = (() => {
     if (!shell) return;
     shell.querySelector('.topbar')?.replaceWith(topbar());
     shell.querySelector('#sidebar')?.replaceWith(sidebar());
+    if (isPhone() && !isVendor()) shell.querySelector('.m-actionbar')?.replaceWith(actionBar());
     // מצב הנעיצה יושב על השלד — הוא מה שקובע כמה מקום התוכן מפנה לתפריט
     shell.classList.toggle('rail-pinned', !isPhone() && sidebarPinned());
     applyDrawer(); // התפריט נבנה מחדש — מחזירים לו את מצב הפתיחה שהיה
@@ -2182,6 +2266,7 @@ const App = (() => {
    * ובלי לאבד גלילה, ולכן עדכון משימה כבר אינו מחייב בנייה מחדש של האתר.
    */
   const RELOADABLE = {
+    today: () => TodayView.reload(),
     home: () => (isPhone() && !isVendor() ? MobileView.reload() : HomeView.reload()),
     board: () => BoardView.reload({ silent: true }),
     vendorBoards: () => BoardView.reload({ silent: true }),
@@ -2190,6 +2275,8 @@ const App = (() => {
   };
 
   async function refreshView() {
+    // משימה נוצרה, הושלמה או הוזזה — המונה של Today מתעדכן בכל מסך
+    refreshTodayCount();
     const reload = RELOADABLE[state.route.name];
     // מסך שאין לו טעינה נקודתית (ניהול, דוחות) נבנה מחדש כרגיל
     if (!reload) return render();
@@ -2202,7 +2289,7 @@ const App = (() => {
 
   return {
     state, boot, navigate, refresh, refreshNotifications, logout, render,
-    refreshChrome, refreshView, isPhone, closeDrawer, setPref, getPref,
+    refreshChrome, refreshView, isPhone, closeDrawer, setPref, getPref, setTodayCount, refreshTodayCount,
     may, can, isVendor, userName, vendorName, project, internalBoard, vendorBoards,
     reloadReference
   };

@@ -618,6 +618,42 @@ CREATE TABLE IF NOT EXISTS ai_suggestions (
 CREATE INDEX IF NOT EXISTS idx_ai_suggestions_user ON ai_suggestions(user_id, status);
 CREATE INDEX IF NOT EXISTS idx_ai_suggestions_header ON ai_suggestions(header_id);
 
+/*
+ * אנשי הקשר של Google — עותק מקומי לכל משתמש, כדי שהחיפוש באשף משימת AI
+ * יהיה מיידי ובעברית, בלי שאילתה ל-Google בכל הקלדה. ‎source‎:
+ * ‎contacts‎ (שמורים) · ‎other‎ (התכתבתי ולא שמרתי) · ‎directory‎ (ספריית הארגון).
+ * נראים רק לבעליהם, ונמחקים בניתוק החיבור.
+ */
+CREATE TABLE IF NOT EXISTS google_contacts (
+  user_id        INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  resource_name  TEXT    NOT NULL,
+  source         TEXT    NOT NULL,
+  name           TEXT    NOT NULL DEFAULT '',
+  emails         TEXT    NOT NULL DEFAULT '[]',
+  phones         TEXT    NOT NULL DEFAULT '[]',
+  organization   TEXT    NOT NULL DEFAULT '',
+  title          TEXT    NOT NULL DEFAULT '',
+  photo_url      TEXT    NOT NULL DEFAULT '',
+  updated_at     TEXT    NOT NULL,
+  PRIMARY KEY (user_id, resource_name)
+);
+
+CREATE TABLE IF NOT EXISTS google_contact_sync (
+  user_id      INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  running      INTEGER NOT NULL DEFAULT 0,
+  last_sync_at TEXT,
+  counts       TEXT    NOT NULL DEFAULT '{}',
+  error        TEXT    NOT NULL DEFAULT ''
+);
+
+/* כתובות שעליהן המשתמש אמר "לא, תודה" להצעה לשמור באנשי הקשר — לא שואלים שוב */
+CREATE TABLE IF NOT EXISTS contact_save_dismissed (
+  user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  address     TEXT    NOT NULL,
+  created_at  TEXT    NOT NULL,
+  PRIMARY KEY (user_id, address)
+);
+
 /* שולחים מיוחדים לכל משתמש: ‎trust‎ — משימות נוצרות ישר, בלי אישור; ‎ignore‎ — לא מציעים מהם משימות */
 CREATE TABLE IF NOT EXISTS mail_trusted_senders (
   user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -1138,6 +1174,19 @@ function migrate() {
     if (missing.length) setSetting('allowed_extensions', [...currentExt, ...missing]);
   }
 
+  /*
+   * ימי עבודה. ‎departments.work_days‎ — ימי השבוע (0 = ראשון) מופרדים בפסיק;
+   * ריק = ברירת המחדל א׳–ה׳. ‎users.field_worker‎ — עובד שטח, שעובד גם בשישי
+   * בלי שכל המחלקה שלו תעבוד בשישי. שבת לעולם אינה יום עבודה (‎server/workdays.js‎).
+   *
+   * מחלקת הנדסה מקבלת א׳–ו׳ פעם אחת, כשהעמודה נוצרת — ולא בכל עלייה, כדי
+   * ששינוי שמנהל עשה במסך המחלקות לא יידרס.
+   */
+  if (!columns('departments').includes('work_days')) {
+    addColumn('departments', 'work_days', "TEXT NOT NULL DEFAULT ''");
+    run("UPDATE departments SET work_days = '0,1,2,3,4,5' WHERE name LIKE '%הנדסה%'");
+  }
+  addColumn('users', 'field_worker', 'INTEGER NOT NULL DEFAULT 0');
   addColumn('templates', 'department_id', 'INTEGER REFERENCES departments(id) ON DELETE SET NULL');
   addColumn('templates', 'updated_at', 'TEXT');
   addColumn('templates', 'updated_by', 'INTEGER REFERENCES users(id) ON DELETE SET NULL');

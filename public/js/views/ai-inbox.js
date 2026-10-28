@@ -408,7 +408,7 @@ const AiInboxView = (() => {
       return UI.error(err);
     }
     const body = el('div');
-    const m = UI.modal({ title: '📧 Gmail ועוזר ה-AI', body, size: 'wide' });
+    const m = UI.modal({ title: '🔗 חיבור Google ועוזר ה-AI', body, size: 'wide' });
 
     const refresh = (next) => { info = next; draw(); onChange(); };
     const pref = (key, label, hint) => {
@@ -428,12 +428,26 @@ const AiInboxView = (() => {
               c?.state === 'revoked' ? el('div.alert.alert-warn', {}, [el('span', { text: '📭' }), el('div', { text: c.error || 'החיבור בוטל — יש לחבר מחדש' })]) : null,
               el('p', { style: { marginTop: 0 } }, [
                 'אישור אחד ב-Google, ל',
-                el('b', { text: 'קריאה ושליחה' }),
-                ': מיילים של משימות AI ייצאו מהתיבה שלך (רק מה שאישרת, ותזכורות לפי המדיניות) ויישארו אצלך ב"דואר יוצא"; התשובות יחזרו אליך וייקלטו; המיילים שלא נקראו יהפכו להצעות משימה; ותזכורות ייעצרו כשתכתבו לנמען בעצמכם. משימון לא מוחק ולא מסמן כנקרא.'
+                el('b', { text: 'דואר, יומן ואנשי קשר' }),
+                ':'
               ]),
-              el('a.btn.btn-primary', { href: '/api/me/gmail/connect' }, ['חיבור Gmail'])
+              el('ul.google-what', {}, [
+                el('li', { text: '📧 Gmail — מיילים של משימות AI ייצאו מהתיבה שלך (רק מה שאישרת) ויישארו אצלך ב"דואר יוצא"; התשובות ייקלטו; מיילים שלא נקראו יהפכו להצעות משימה. משימון לא מוחק ולא מסמן כנקרא.' }),
+                el('li', { text: '📅 יומן — הפגישות של היום ב-Today. ההרשאה כוללת כתיבה לפיצ\'רים עתידיים; כרגע משימון רק קורא.' }),
+                el('li', { text: '👥 אנשי קשר — בחירת נמען במשימת AI בלי להקליד מייל וטלפון, ושמירת איש קשר חדש בלחיצה.' })
+              ]),
+              el('div.mute-sm', { style: { marginBottom: '10px' }, text: 'במסך של Google — סמנו את כל התיבות.' }),
+              el('a.btn.btn-primary', { href: '/api/me/gmail/connect' }, ['חיבור Google'])
             ])
           : el('div', {}, [
+              // חיבור מלפני היומן ואנשי הקשר — אישור אחד נוסף משלים אותו
+              c.missing?.some((k) => ['calendar', 'contacts'].includes(k))
+                ? el('div.alert.alert-warn', {}, [el('span', { text: '🔄' }), el('div', {}, [
+                    `חסר בחיבור: ${[c.missing.includes('calendar') ? 'יומן' : null, c.missing.includes('contacts') ? 'אנשי קשר' : null].filter(Boolean).join(' ו')}. `,
+                    el('a', { href: '/api/me/gmail/connect' }, ['חיבור מחדש']),
+                    ' — אותו מסך של Google, לסמן את כל התיבות.'
+                  ])])
+                : null,
               !c.canSend
                 ? el('div.alert.alert-warn', {}, [el('span', { text: '✉️' }), el('div', {}, [
                     'התיבה מחוברת לקריאה בלבד, ולכן מיילים של משימות AI לא יוצאים ממנה. ',
@@ -442,13 +456,13 @@ const AiInboxView = (() => {
                 : null,
               el('div.flex', { style: { gap: '8px', alignItems: 'center' } }, [
                 el('span', { text: '✅' }), el('b', { text: c.email }),
-                el('span.mute-sm', { text: c.canSend ? 'קריאה ושליחה' : 'קריאה בלבד' }),
+                el('span.mute-sm', { text: [c.scopes?.mail ? (c.canSend ? '📧 קריאה ושליחה' : '📧 קריאה') : null, c.scopes?.calendar ? '📅 יומן' : null, c.scopes?.contacts ? '👥 אנשי קשר' : null].filter(Boolean).join(' · ') }),
                 el('span.mute-sm', { text: c.lastScanAt ? `סריקה אחרונה ${UI.relative(c.lastScanAt)}` : 'עוד לא נסרקה' }),
                 el('div.spacer'),
                 (() => {
                   const b = el('button.btn.btn-sm.btn-ghost', {}, ['ניתוק']);
                   b.addEventListener('click', async () => {
-                    if (!await UI.confirm('לנתק את Gmail? הסריקה תיפסק, תזכורות במייל לא ייצאו, וההרשאה תבוטל גם ב-Google.', { danger: true, okText: 'ניתוק' })) return;
+                    if (!await UI.confirm('לנתק את Google? הסריקה תיפסק, תזכורות במייל לא ייצאו, היומן ייעלם מ-Today, אנשי הקשר יימחקו ממשימון, וההרשאה תבוטל גם ב-Google.', { danger: true, okText: 'ניתוק' })) return;
                     try { refresh(await API.del('/api/me/gmail')); } catch (err) { UI.error(err); }
                   });
                   return b;
@@ -457,8 +471,39 @@ const AiInboxView = (() => {
               info.scanEnabled
                 ? el('div.mute-sm', { style: { marginTop: '6px' }, text: `סריקה אוטומטית כל בוקר ב-${info.scanTime}, עד ${info.dailyLimit} מיילים ביום.` })
                 : el('div.mute-sm', { style: { marginTop: '6px' }, text: 'סריקת המיילים כבויה כרגע במסך הניהול.' }),
-              info.scanEnabled ? el('button.btn.btn-sm.mt', { onclick: () => { m.close(); scanDialog(onChange); } }, ['🔍 סרוק עכשיו']) : null
+              info.scanEnabled ? el('button.btn.btn-sm.mt', { onclick: () => { m.close(); scanDialog(onChange); } }, ['🔍 סרוק עכשיו']) : null,
+              contactsLine()
             ]);
+
+      /** אנשי הקשר: כמה סונכרנו, מתי, ורענון */
+      function contactsLine() {
+        const g = info.contacts;
+        if (!g?.available) return null;
+        const counts = g.counts ?? {};
+        const parts = [
+          counts.contacts !== undefined ? `${counts.contacts} שמורים` : null,
+          counts.directory !== undefined ? `${counts.directory} בספריית הארגון` : null,
+          counts.other !== undefined ? `${counts.other} שהתכתבת איתם` : null
+        ].filter(Boolean);
+        const sync = el('button.btn.btn-sm', { disabled: g.running }, [g.running ? 'מסתנכרן…' : '🔄 רענון']);
+        sync.addEventListener('click', async () => {
+          sync.disabled = true;
+          try {
+            await API.post('/api/me/google/contacts/sync');
+            UI.success('אנשי הקשר מסתנכרנים ברקע');
+            setTimeout(async () => { try { info = await API.get('/api/me/gmail'); draw(); } catch { /* נשאר */ } }, 4000);
+          } catch (err) {
+            sync.disabled = false;
+            UI.error(err);
+          }
+        });
+        return el('div.flex.mt', { style: { gap: '8px', flexWrap: 'wrap' } }, [
+          el('span', { text: '👥' }),
+          el('span.mute-sm', { text: g.lastSyncAt ? `אנשי קשר: ${parts.join(' · ') || g.total} · עודכן ${UI.relative(g.lastSyncAt)}` : 'אנשי הקשר עוד לא סונכרנו' }),
+          sync,
+          g.error ? el('span.mute-sm.text-warn', { text: g.error }) : null
+        ]);
+      }
 
       const senderRows = info.senders.map((x) => {
         const b = el('button.btn.btn-sm.btn-ghost', {}, ['הסרה']);
@@ -467,7 +512,7 @@ const AiInboxView = (() => {
       });
 
       UI.mount(body,
-        el('div.ai-section-title', { text: 'תיבת Gmail' }),
+        el('div.ai-section-title', { text: 'חשבון Google' }),
         connectBox,
         el('div.ai-section-title', { text: 'העדפות', style: { marginTop: '16px' } }),
         pref('approveReminders', 'כל תזכורת שלי מחכה לאישור לפני שיוצאת',
@@ -488,12 +533,12 @@ const AiInboxView = (() => {
     const error = q.get('gmailError');
     history.replaceState(null, '', location.pathname);
     if (error) {
-      UI.toast(`חיבור Gmail נכשל: ${error}`, 'error');
+      UI.toast(`חיבור Google נכשל: ${error}`, 'error');
       return;
     }
-    UI.success('תיבת ה-Gmail חוברה');
+    UI.success('חשבון Google חובר — דואר, יומן ואנשי קשר');
     setTimeout(() => scanDialog(() => HomeView.reload()), 300);
   }
 
-  return { load, card, openGmail, scanDialog, handleReturn };
+  return { load, card, openGmail, scanDialog, handleReturn, editSuggestion, rejectDialog };
 })();

@@ -606,11 +606,20 @@ const BoardView = (() => {
 
   // ------------------------------------------------------------- דיאלוג משימה
 
+  /**
+   * ‎opts.prefill‎ — ערכים התחלתיים למשימה חדשה (מהקלטה, מפגישה ביומן):
+   * ‎title, description, projectId, assignee ('user:12'), priority, dueDate
+   * ('YYYY-MM-DD'), checklist[], statusShort, recurrence, activateDate‎.
+   * ‎opts.voice‎ — נפתח מהקלטה: ‎{ transcript, warnings, uncertain[] }‎ — מה שלא
+   * ודאי מסומן לבדיקה, ו"🎙 הוסף עוד" ממשיך את אותה הקלטה.
+   * ‎opts.onSaved‎ — נקרא אחרי שמירה.
+   */
   function openTaskDialog(task = null, opts = {}) {
     const isEdit = !!task;
-    const titleInput = el('input', { type: 'text', value: task?.title ?? '', placeholder: 'מה צריך לעשות?' });
+    const pre = (!isEdit && opts.prefill) || {};
+    const titleInput = el('input', { type: 'text', value: task?.title ?? pre.title ?? '', placeholder: 'מה צריך לעשות?' });
     const descInput = el('textarea', { placeholder: 'תיאור מפורט (אופציונלי)' });
-    descInput.value = task?.description ?? '';
+    descInput.value = task?.description ?? pre.description ?? '';
 
     /**
      * הפרויקטים הרלוונטיים למשתמש, ולא כל הפרויקטים בחברה.
@@ -634,7 +643,7 @@ const BoardView = (() => {
      * מהפרויקט שהיא בו; וכשאין אף פרויקט רלוונטי מוצגים כולם, כי רשימה
      * ריקה גרועה מרשימה ארוכה.
      */
-    const current = task?.projectId ?? opts.projectId ?? '';
+    const current = task?.projectId ?? (pre.projectId || opts.projectId) ?? '';
     const relevant = App.state.projects.filter((p) =>
       p.mine || String(p.id) === String(current));
     /* ‎showAllProjects‎ נשאר דלוק אחרי בחירה מפורשת, עד לסגירת הדיאלוג */
@@ -710,7 +719,7 @@ const BoardView = (() => {
       ? `user:${App.state.actor.id}`
       : '';
     const assigneeSelect = UI.select(assigneeOptions,
-      task?.assigneeId ? `${task.assigneeType}:${task.assigneeId}` : (isEdit ? '' : meAsAssignee));
+      task?.assigneeId ? `${task.assigneeType}:${task.assigneeId}` : (isEdit ? '' : pre.assignee || meAsAssignee));
 
     /*
      * אחראים נוספים.
@@ -773,18 +782,18 @@ const BoardView = (() => {
       drawExtras();
     });
 
-    const prioritySelect = UI.select(App.state.priorities.map((p) => ({ value: p.key, label: p.label })), task?.priority ?? 'normal');
-    const dueInput = el('input', { type: 'date', value: UI.toInputDate(task?.dueDate) });
-    const activateInput = el('input', { type: 'date', value: UI.toInputDate(task?.activateAt) });
+    const prioritySelect = UI.select(App.state.priorities.map((p) => ({ value: p.key, label: p.label })), task?.priority ?? pre.priority ?? 'normal');
+    const dueInput = el('input', { type: 'date', value: isEdit ? UI.toInputDate(task?.dueDate) : pre.dueDate ?? '' });
+    const activateInput = el('input', { type: 'date', value: isEdit ? UI.toInputDate(task?.activateAt) : pre.activateDate ?? '' });
 
     const dependencyOptions = [{ value: '', label: 'ללא תלות' },
       ...currentTasks.filter((t) => !task || t.id !== task.id).map((t) => ({ value: t.id, label: `#${t.id} — ${t.title}` }))];
     const dependsSelect = UI.select(dependencyOptions, task?.dependsOnTaskId ?? '');
 
-    const recurringCheck = el('input', { type: 'checkbox', checked: !!task?.isRecurring });
+    const recurringCheck = el('input', { type: 'checkbox', checked: !!task?.isRecurring || Boolean(pre.recurrence) });
     const freqSelect = UI.select(
       [{ value: 'daily', label: 'יומי' }, { value: 'weekly', label: 'שבועי' }, { value: 'monthly', label: 'חודשי' }],
-      task?.recurrenceFreq ?? 'weekly'
+      task?.recurrenceFreq ?? (pre.recurrence || 'weekly')
     );
     const policySelect = UI.select([
       { value: 'inherit', label: 'לפי ברירת המחדל של המערכת' },
@@ -792,7 +801,7 @@ const BoardView = (() => {
       { value: 'always', label: 'ליצור מופע חדש בכל מקרה' }
     ], task?.recurrencePolicy ?? 'inherit');
 
-    const recurringBox = el('div', { style: { display: task?.isRecurring ? 'block' : 'none' } }, [
+    const recurringBox = el('div', { style: { display: recurringCheck.checked ? 'block' : 'none' } }, [
       el('div.row', {}, [UI.field('תדירות', freqSelect), UI.field('מדיניות חפיפה', policySelect)])
     ]);
     recurringCheck.addEventListener('change', () => {
@@ -800,6 +809,7 @@ const BoardView = (() => {
     });
 
     const checklistInput = el('textarea', { placeholder: 'סעיף בכל שורה (אופציונלי)', style: { minHeight: '62px' } });
+    checklistInput.value = (pre.checklist ?? []).join('\n');
 
     /**
      * תבנית משימה. עד כה אפשר היה לשמור תבניות מסוג 'task' ומעולם לא היה
@@ -841,27 +851,62 @@ const BoardView = (() => {
      * פנייה לאדם מחוץ למשימה, ואין לה משמעות כתת-משימה או כעריכה.
      */
     const modeToggle = !isEdit && !opts.parentTaskId && !App.isVendor()
-      ? el('div.seg.task-mode', {}, [
-          el('button.active', { type: 'button' }, ['משימה רגילה']),
-          el('button', {
+      ? el('div.task-mode-row', {}, [
+          el('div.seg.task-mode', {}, [
+            el('button.active', { type: 'button' }, ['משימה רגילה']),
+            el('button', {
+              type: 'button',
+              title: 'ה-AI ינסח פנייה, ישלח אחרי אישורך, ויעקוב עד שתתקבל תשובה',
+              onclick: () => { m.close(); AiTaskView.openDialog({ projectId: opts.projectId ?? '' }); }
+            }, ['✨ משימת AI'])
+          ]),
+          el('div.spacer'),
+          // הכתבה — אומרים את המשימה, והדיאלוג נפתח שוב ממולא
+          el('button.btn.btn-sm', {
             type: 'button',
-            title: 'ה-AI ינסח פנייה, ישלח אחרי אישורך, ויעקוב עד שתתקבל תשובה',
-            onclick: () => { m.close(); AiTaskView.openDialog({ projectId: opts.projectId ?? '' }); }
-          }, ['✨ משימת AI'])
+            title: 'לומר את המשימה במקום להקליד',
+            onclick: () => {
+              m.close();
+              opts.voice
+                ? VoiceView.open({ baseText: opts.voice.transcript, forcePreview: true })
+                : VoiceView.open({ forcePreview: true });
+            }
+          }, [opts.voice ? '🎙 הוסף עוד' : '🎙 הכתבה'])
+        ])
+      : null;
+
+    /*
+     * מהקלטה: מה שלא ודאי מסומן בצהוב, והאזהרות למעלה — כדי שהבדיקה תהיה של
+     * שדה אחד ולא של כל הטופס.
+     */
+    const voice = !isEdit ? opts.voice : null;
+    const fieldOf = (key, label, control, hint) => {
+      const node = UI.field(label, control, hint);
+      if (voice?.uncertain?.includes(key)) node.classList.add('field-warn');
+      return node;
+    };
+    const voiceBox = voice
+      ? el('div.alert.alert-info.voice-from', {}, [
+          el('span', { text: '🎙' }),
+          el('div', {}, [
+            el('div.mute-sm', { text: `נשמע: "${voice.transcript}"` }),
+            ...(voice.warnings ?? []).map((w) => el('div.voice-warn', { text: `⚠ ${w.text}` }))
+          ])
         ])
       : null;
 
     const body = el('div', {}, [
       modeToggle,
-      UI.field('כותרת המשימה', titleInput),
+      voiceBox,
+      fieldOf('title', 'כותרת המשימה', titleInput),
       UI.field('תיאור', descInput),
       el('div.row', {}, [
-        UI.field('פרויקט', projectSelect, 'משימה ללא פרויקט תופיע בלוח בקבוצת "ללא פרויקט"'),
-        UI.field('אחראי', assigneeSelect, 'משימה ללא אחראי לא תופיע ב"המשימות שלי" של אף אחד')
+        fieldOf('projectId', 'פרויקט', projectSelect, 'משימה ללא פרויקט תופיע בלוח בקבוצת "ללא פרויקט"'),
+        fieldOf('assignee', 'אחראי', assigneeSelect, 'משימה ללא אחראי לא תופיע ב"המשימות שלי" של אף אחד')
       ]),
       UI.field('אחראים נוספים', extraList,
         'המשימה תופיע גם אצלם, והם יקבלו את ההתראות. אפשר לצרף גם ספק חיצוני — המשימה נשארת בלוח הפנימי'),
-      el('div.row', {}, [UI.field('עדיפות', prioritySelect), UI.field('תאריך יעד', dueInput)]),
+      el('div.row', {}, [UI.field('עדיפות', prioritySelect), fieldOf('dueDate', 'תאריך יעד', dueInput)]),
       el('div.row', {}, [
         UI.field('תלות במשימה אחרת', dependsSelect, 'המשימה לא תיסגר לפני שהמשימה החוסמת תושלם'),
         UI.field('תאריך הפעלה (משימה עתידית)', activateInput, 'עד למועד זה המשימה לא תופיע ברשימות הפעילות')
@@ -908,6 +953,7 @@ const BoardView = (() => {
       // משימה ארגונית קיימת לא תוריד אותה בשוגג לרמה המחלקתית
       if (!isEdit) {
         payload.checklist = checklistInput.value.split('\n').map((s) => s.trim()).filter(Boolean);
+        if (pre.statusShort) payload.statusShort = pre.statusShort;
         // תת-משימה: נשלח רק ביצירה, כי העברת משימה קיימת תחת אב היא פעולה אחרת
         if (opts.parentTaskId) payload.parentTaskId = opts.parentTaskId;
       }
@@ -928,6 +974,7 @@ const BoardView = (() => {
          * מופיעה בדף הבית, ומשימה בלי פרויקט נופלת לקבוצת "ללא פרויקט"
          * בתחתית הלוח — והיוצר נשאר בלי שום סימן לאן הלכה.
          */
+        opts.onSaved?.(created?.task ?? null);
         if (created?.task?.id) TaskCardView.open(created.task.id);
       } catch (err) {
         saveBtn.disabled = false;

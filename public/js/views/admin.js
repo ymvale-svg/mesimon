@@ -536,6 +536,8 @@ const AdminView = (() => {
 
     const statusSelect = UI.select([{ value: 'active', label: 'פעיל' }, { value: 'inactive', label: 'לא פעיל' }], user?.status ?? 'active');
     const passInput = el('input', { type: 'text', placeholder: isEdit ? 'השאר ריק כדי לא לשנות' : 'ריק = תישלח הזמנה' });
+    // עובד שטח עובד גם בשישי, גם כשהמחלקה שלו לא — משפיע על "מחר" ועל מייל הבוקר
+    const fieldWorkerCheck = el('input', { type: 'checkbox', checked: Boolean(user?.fieldWorker) });
 
     const saveBtn = el('button.btn.btn-primary', {}, ['שמירה']);
     const m = UI.modal({
@@ -549,6 +551,10 @@ const AdminView = (() => {
           UI.field('סיסמה', passInput, isEdit ? null : 'מומלץ להשאיר ריק — תישלח הזמנה לקביעת סיסמה')
         ]),
         newDeptField,
+        el('div.field', {}, [
+          el('label.checkbox', {}, [fieldWorkerCheck, ' עובד/ת שטח — עובד/ת גם ביום ו׳']),
+          el('div.hint', { text: 'ימי העבודה נקבעים לפי המחלקה. עובד שטח מוסיף את יום ו׳ — "מחר" של יום חמישי הוא שישי, ומייל הבוקר נשלח גם בשישי.' })
+        ]),
         grantsBox,
         managerNote,
         !isEdit
@@ -567,7 +573,8 @@ const AdminView = (() => {
         name: nameInput.value.trim(),
         email: emailInput.value.trim(),
         role: roleSelect.value,
-        status: statusSelect.value
+        status: statusSelect.value,
+        fieldWorker: fieldWorkerCheck.checked
       };
       // או מזהה מחלקה קיימת, או שם למחלקה חדשה — השרת אינו מקבל שם מחלקה חופשי
       if (wantsNewDept) payload.newDepartmentName = newDeptInput.value.trim();
@@ -631,7 +638,7 @@ const AdminView = (() => {
         el('table.data', {}, [
           el('thead', {}, [el('tr', {}, [
             el('th', { text: 'מחלקה' }), el('th', { text: 'מנהל/ת' }), el('th', { text: 'אנשים' }),
-            el('th', { text: 'סטטוס' }), el('th', { text: '' })
+            el('th', { text: 'ימי עבודה' }), el('th', { text: 'סטטוס' }), el('th', { text: '' })
           ])]),
           el('tbody', {}, data.departments.length ? data.departments.map((d) =>
             el('tr', {}, [
@@ -640,6 +647,7 @@ const AdminView = (() => {
                 ? el('div.flex', {}, [UI.avatar(d.managerName, { small: true }), el('span', { text: d.managerName })])
                 : el('span.mute-sm', { text: 'לא הוגדר' })]),
               el('td', { text: String(d.peopleCount) }),
+              el('td', { text: d.workDaysLabel ?? 'א׳–ה׳' }),
               el('td', {}, [el('span', {
                 class: d.status === 'active' ? 'text-ok' : 'text-danger',
                 text: d.status === 'active' ? '● פעילה' : '○ לא פעילה'
@@ -663,7 +671,7 @@ const AdminView = (() => {
                 ])
               ])
             ])
-          ) : [el('tr', {}, [el('td', { colspan: '5' }, [UI.empty('אין מחלקות מוגדרות', '🏢')])])])
+          ) : [el('tr', {}, [el('td', { colspan: '6' }, [UI.empty('אין מחלקות מוגדרות', '🏢')])])])
         ])
       ])
     );
@@ -686,12 +694,26 @@ const AdminView = (() => {
       dept?.status ?? 'active'
     );
 
+    /*
+     * ימי העבודה של המחלקה. שבת אינה בחירה — היא יום מנוחה לכולם, וגם השרת
+     * מסיר אותה. ברירת המחדל א׳–ה׳; הנדסה ושטח — א׳–ו׳.
+     */
+    const DAY_LETTERS = ['א׳', 'ב׳', 'ג׳', 'ד׳', 'ה׳', 'ו׳'];
+    const days = new Set(dept?.workDays ?? [0, 1, 2, 3, 4]);
+    const daysBox = el('div.day-chips');
+    const drawDays = () => UI.mount(daysBox, ...DAY_LETTERS.map((label, d) => el(`button.day-chip${days.has(d) ? '.on' : ''}`, {
+      type: 'button',
+      onclick: () => { if (days.has(d)) days.delete(d); else days.add(d); drawDays(); }
+    }, [label])), el('span.day-chip.is-rest', { title: 'יום מנוחה' }, ['ש׳']));
+    drawDays();
+
     const saveBtn = el('button.btn.btn-primary', {}, ['שמירה']);
     const m = UI.modal({
       title: isEdit ? `עריכת מחלקה — ${dept.name}` : 'מחלקה חדשה',
       body: el('div', {}, [
         UI.field('שם המחלקה', nameInput, isEdit ? 'שינוי השם מתעדכן בכל המשתמשים המשויכים למחלקה' : null),
         UI.field('מנהל/ת המחלקה', managerSelect, 'מי שייבחר ישויך למחלקה הזו ויקבל עליה אחריות ניהולית'),
+        UI.field('ימי עבודה', daysBox, 'קובע את "מחר" בהקלטה וב-Today, ואת ימי מייל הבוקר. שבת — יום מנוחה. עובד שטח מוסיף לעצמו את יום ו׳ (בכרטיס המשתמש).'),
         isEdit ? UI.field('סטטוס', statusSelect) : null
       ]),
       footer: [saveBtn, el('div.spacer')]
@@ -704,8 +726,10 @@ const AdminView = (() => {
       const managerUserId = managerSelect.value ? Number(managerSelect.value) : null;
       saveBtn.disabled = true;
       try {
-        if (isEdit) await API.updateDepartment(dept.id, { name, managerUserId, status: statusSelect.value });
-        else await API.createDepartment({ name, managerUserId });
+        if (!days.size) { saveBtn.disabled = false; return UI.toast('נדרש לפחות יום עבודה אחד', 'error'); }
+        const workDays = [...days].sort();
+        if (isEdit) await API.updateDepartment(dept.id, { name, managerUserId, status: statusSelect.value, workDays });
+        else await API.createDepartment({ name, managerUserId, workDays });
         m.close();
         UI.success('נשמר');
         // מינוי מנהל משייך אותו למחלקה — כולל את המשתמש המחובר עצמו,

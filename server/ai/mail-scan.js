@@ -22,6 +22,7 @@ const path = require('node:path');
 
 const D = require('../db');
 const Claude = require('./claude');
+const W = require('../workdays');
 const Gmail = require('../gmail');
 const Mime = require('../mime');
 const AiTasks = require('../ai-tasks');
@@ -360,7 +361,8 @@ async function processMessage(user, conn, gmailId) {
       const id = insertSuggestion(user, meta, 'task', data);
       try {
         const actor = Auth.loadActor('user', user.id);
-        const taskId = createFromSuggestion(suggestionById(id), actor, {});
+        // משימה מהמייל בלי יעד — להיום, כדי שתופיע ב-Today ולא תישכח בלוח
+        const taskId = createFromSuggestion(suggestionById(id), actor, t.dueDate ? {} : { dueDate: W.todayIL() });
         D.run("UPDATE ai_suggestions SET status = 'auto', task_id = ?, decided_at = ? WHERE id = ?", taskId, D.nowIso(), id);
         created++;
       } catch (err) {

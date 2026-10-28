@@ -25,6 +25,8 @@ const Rules = require('./rules-engine');
 const Push = require('./push');
 const AiTasks = require('./ai-tasks');
 const { router } = require('./api');
+const Today = require('./today');
+const GContacts = require('./google-contacts');
 const { HttpError, sendJson, serveStatic, parseUrl, unauthorized } = require('./http-kit');
 
 const PORT = Number(process.env.PORT ?? 3000);
@@ -91,6 +93,8 @@ server.listen(PORT, HOST, () => {
   Rules.start();
   Push.start();
   AiTasks.start();
+  Today.start();
+  GContacts.start();
   const nets = os.networkInterfaces();
   const lan = Object.values(nets).flat().find((n) => n && n.family === 'IPv4' && !n.internal);
   console.log('');
@@ -131,6 +135,8 @@ server.listen(PORT, HOST, () => {
 const shutdown = () => {
   Rules.stop();
   AiTasks.stop();
+  Today.stop();
+  GContacts.stop();
   server.close(() => process.exit(0));
   setTimeout(() => process.exit(0), 2000).unref();
 };

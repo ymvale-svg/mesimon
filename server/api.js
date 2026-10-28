@@ -17,6 +17,10 @@ const Xlsx = require('./xlsx-write');
 const Spreadsheet = require('./spreadsheet');
 const AiTasks = require('./ai-tasks');
 const AiApi = require('./api-ai');
+const TodayApi = require('./api-today');
+const W = require('./workdays');
+const GContacts = require('./google-contacts');
+const Calendar = require('./calendar');
 const Gmail = require('./gmail');
 const MailScan = require('./ai/mail-scan');
 const Claude = require('./ai/claude');
@@ -660,6 +664,9 @@ router.get('/api/auth/google/callback', async (req, res, ctx) => {
     if (!userId || (ctx.actor && (ctx.actor.type !== 'user' || ctx.actor.id !== userId))) return back('gmailError', 'הבקשה פגה או אינה תקינה. נסו לחבר שוב.');
     try {
       await Gmail.connect(userId, params.get('code'), req);
+      // החיבור כולל עכשיו גם יומן ואנשי קשר — סנכרון ראשון ברקע, ומטמון יומן נקי
+      Calendar.forget(userId);
+      GContacts.syncSoon(userId);
       return back('gmail', 'connected');
     } catch (err) {
       console.error('[משימון] חיבור Gmail נכשל:', err.message);
@@ -2945,7 +2952,10 @@ const shapeDepartment = (d) => ({
   managerName: d.manager_user_id
     ? D.get('SELECT full_name FROM users WHERE id = ?', d.manager_user_id)?.full_name ?? null
     : null,
-  peopleCount: D.get('SELECT COUNT(*) c FROM users WHERE department_id = ? AND status = ?', d.id, 'active').c
+  peopleCount: D.get('SELECT COUNT(*) c FROM users WHERE department_id = ? AND status = ?', d.id, 'active').c,
+  // ימי העבודה — ‎server/workdays.js‎. ריק בשמירה = ברירת המחדל א׳–ה׳
+  workDays: W.parseDays(d.work_days),
+  workDaysLabel: W.daysLabel(W.parseDays(d.work_days))
 });
 
 /** רשימת המחלקות — נדרשת לכל מי שממלא טופס משתמש או מסנן לפי מחלקה */
@@ -2968,7 +2978,8 @@ router.post('/api/departments', async (req, res, ctx) => {
   if (!name) throw badRequest('נדרש שם מחלקה');
   if (D.get('SELECT 1 FROM departments WHERE name = ?', name)) throw badRequest('מחלקה בשם זה כבר קיימת');
 
-  const r = D.run('INSERT INTO departments (name, created_at) VALUES (?,?)', name, D.nowIso());
+  const r = D.run('INSERT INTO departments (name, created_at, work_days) VALUES (?,?,?)', name, D.nowIso(),
+    Array.isArray(b.workDays) ? W.serializeDays(b.workDays) : '');
   const id = Number(r.lastInsertRowid);
   if (b.managerUserId) setDepartmentManager(id, Number(b.managerUserId));
 
@@ -2998,6 +3009,8 @@ router.patch('/api/departments/:id', async (req, res, ctx) => {
   if (b.managerUserId !== undefined) {
     setDepartmentManager(dept.id, b.managerUserId ? Number(b.managerUserId) : null);
   }
+  // שבת לעולם אינה נשמרת כיום עבודה — ‎serializeDays‎ מסיר אותה
+  if (Array.isArray(b.workDays)) D.run('UPDATE departments SET work_days = ? WHERE id = ?', W.serializeDays(b.workDays), dept.id);
 
   sendJson(res, 200, { department: shapeDepartment(D.get('SELECT * FROM departments WHERE id = ?', dept.id)) });
 });
@@ -3214,9 +3227,9 @@ router.get('/api/admin/users', async (req, res, ctx) => {
    * אותן שם היה מאשר חשבון בלי לקבוע לו מחלקה ורמת גישה.
    */
   const rows = P.isOrgWide(actor)
-    ? D.all(`SELECT id, full_name, email, role, department, department_id, status FROM users
+    ? D.all(`SELECT id, full_name, email, role, department, department_id, status, field_worker FROM users
              WHERE signup_at IS NULL ORDER BY full_name`)
-    : D.all(`SELECT id, full_name, email, role, department, department_id, status FROM users
+    : D.all(`SELECT id, full_name, email, role, department, department_id, status, field_worker FROM users
              WHERE department_id IS ? AND role = 'employee' AND signup_at IS NULL ORDER BY full_name`,
       actor.departmentId);
 
@@ -3235,6 +3248,8 @@ router.get('/api/admin/users', async (req, res, ctx) => {
       id: u.id, name: u.full_name, email: u.email, role: u.role,
       roleLabel: P.seesRoles(actor) ? P.ROLE_LABELS[u.role] : null, department: u.department,
       departmentId: u.department_id, status: u.status,
+      // עובד שטח — עובד גם בשישי (‎server/workdays.js‎)
+      fieldWorker: Boolean(u.field_worker),
       grants: D.all('SELECT grant_key FROM user_grants WHERE user_id = ?', u.id).map((g) => g.grant_key)
     }))
   });
@@ -3603,6 +3618,7 @@ router.post('/api/admin/users', async (req, res, ctx) => {
   );
   const newUserId = Number(result.lastInsertRowid);
   D.run('UPDATE users SET department_id = ? WHERE id = ?', departmentId, newUserId);
+  if (b.fieldWorker === true) D.run('UPDATE users SET field_worker = 1 WHERE id = ?', newUserId);
 
   // מנהל מחלקה נרשם כמנהל של אותה מחלקה
   if (b.role === 'manager' && departmentId) {
@@ -3710,6 +3726,7 @@ router.patch('/api/admin/users/:id', async (req, res, ctx) => {
     D.run('UPDATE departments SET manager_user_id = NULL WHERE manager_user_id = ?', user.id);
   }
   if (b.password) D.run('UPDATE users SET password_hash = ? WHERE id = ?', D.hashPassword(b.password), user.id);
+  if (typeof b.fieldWorker === 'boolean') D.run('UPDATE users SET field_worker = ? WHERE id = ?', b.fieldWorker ? 1 : 0, user.id);
   sendJson(res, 200, { ok: true });
 });
 
@@ -4572,6 +4589,7 @@ router.get('/api/search', async (req, res, ctx) => {
 });
 
 AiApi.register(router, { getTaskOr404, assertVisible, mayOnTask, shapeTask, actorRef, saveAttachment, createTask, assertMayAssignTo });
+TodayApi.register(router, { shapeTask, createTask, getTaskOr404, listProjectsFor, assertMayAssignTo });
 Tiful360.register(router, { createTask, saveAttachment, getTaskOr404 });
 
 module.exports = { router, PRIORITIES, shapeTask, canSeeTask };
