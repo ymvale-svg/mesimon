@@ -667,6 +667,19 @@ CREATE TABLE IF NOT EXISTS wa_outbox (
 );
 
 /*
+ * תובנות מהמיילים: שורה אחת לכל מייל, כדי שבקשה חוזרת לא תנתח שוב את אותו
+ * מייל. גוף המייל אינו נשמר — רק השולח, הנושא והתובנה. נמחק אחרי 7 ימים.
+ */
+CREATE TABLE IF NOT EXISTS mail_insights (
+  user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  gmail_id    TEXT    NOT NULL,
+  data        TEXT    NOT NULL,
+  received_at TEXT    NOT NULL,
+  created_at  TEXT    NOT NULL,
+  PRIMARY KEY (user_id, gmail_id)
+);
+
+/*
  * יומן הבוט: כל מה שקיבל ומה עשה עם זה — כדי שמנהל המערכת יראה איפה הוא
  * מבין ואיפה טועה. נשמר 90 יום.
  */
@@ -1319,6 +1332,8 @@ function migrate() {
   addColumn('wa_chats', 'last_list', "TEXT NOT NULL DEFAULT '[]'");
   // היום שבו הבוט כבר פתח את השיחה ב-Today ובתפריט — הודעה ראשונה ביום פותחת בהם
   addColumn('wa_chats', 'greeted_on', "TEXT NOT NULL DEFAULT ''");
+  // רשימת התובנות מהמיילים שנשלחה לו, ובקשות מאותה הקלטה שממתינות בתור
+  addColumn('wa_chats', 'extra', "TEXT NOT NULL DEFAULT '{}'");
   addColumn('comments', 'checklist_item_id', 'INTEGER REFERENCES checklist_items(id) ON DELETE CASCADE');
   // תבניות פר מחלקה. תבנית קיימת נשארת ללא מחלקה, כלומר ארגונית — מי שכבר
   // הסתמך עליה לא יגלה אותה נעלמת בעלייה לגרסה

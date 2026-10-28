@@ -6,8 +6,10 @@
  * דיבור, ולשרת נשלח רק הטקסט — לא הקלטה. הדפדפן עצמו (כרום) מעביר את הקול
  * ל-Google לזיהוי; זה חלק מהדפדפן ולא ממשימון.
  *
- * לחיצה — מתחילים להאזין. לחיצה שנייה — עוצרים (לא לחיצה ארוכה). ההבנה
- * בשרת (‎POST /api/voice/task‎), ומשם:
+ * לחיצה — מתחילים להאזין. לחיצה שנייה — עוצרים (לא לחיצה ארוכה). קודם
+ * ‎POST /api/voice/route‎: בקשה אחת לפתוח משימה — למסלול המשימה כאן; כל
+ * השאר (מייל, Today, תובנות, כמה בקשות יחד) — לעוזר (‎assistant.js‎), באותה
+ * שיחה של בוט הוואטסאפ. מסלול המשימה (‎POST /api/voice/task‎):
  *   • נוצרה ישר (העדפה "יצירה ישירה" + "פתח משימה") — הודעה עם עריכה וביטול
  *   • טיוטה — דיאלוג המשימה הרגיל נפתח ממולא, ומה שלא ודאי מסומן
  *   • משימת AI — אשף משימת AI, עם ההוראה ממולאת
@@ -25,7 +27,7 @@ const VoiceView = (() => {
   const supported = () => Boolean(Recognition);
   const MAX_MS = 3 * 60 * 1000;
   const SILENCE_MS = 3000;
-  const QUESTION = 'איזו משימה תרצה לפתוח היום?';
+  const QUESTION = 'במה אפשר לעזור?';
   const STOP_WORDS = /[\s,.]*(?:סיום|זהו|זה הכל|זה הכול|סוף)[\s,.!]*$/;
 
   let current = null; // המסך הפתוח, אם יש
@@ -118,19 +120,21 @@ const VoiceView = (() => {
     const live = el('div.voice-live');
     const input = el('textarea.voice-input', { placeholder: 'לדוגמה: פתח משימה לסדר את המעליות, אחראי דני, עד יום חמישי. צ׳קליסט: אחת להזמין טכנאי, שתיים לבדוק את הלוח.' });
     const mic = el('button.voice-mic', { type: 'button', title: 'הקלטה' }, [el('span.voice-mic-ic', { text: '🎙' })]);
-    const sendBtn = el('button.btn.btn-primary.voice-send', { type: 'button' }, ['✓ יצירת משימה']);
+    const sendBtn = el('button.btn.btn-primary.voice-send', { type: 'button' }, [o.forcePreview ? '✓ יצירת משימה' : '✓ המשך']);
     const typeBtn = el('button.btn.btn-ghost', { type: 'button' }, ['⌨ הקלדה']);
     const closeBtn = el('button.icon-btn.voice-close', { type: 'button', title: 'סגירה' }, ['✕']);
     const hint = el('div.voice-hint', {}, [
-      el('div', { text: 'אמרו את המשימה. למשל:' }),
+      el('div', { text: o.forcePreview ? 'אמרו את המשימה. למשל:' : 'אמרו מה לעשות. למשל:' }),
       el('div.voice-example', { text: '"פתח משימה לסדר את המעליות"' }),
+      o.forcePreview ? null : el('div.voice-example', { text: '"שלח מייל לאורן ממשרד עורכי הדין כהן שיביא את טיוטת ההסכם"' }),
+      o.forcePreview ? null : el('div.voice-example', { text: '"מה חדש במייל?" · "מה יש לי היום?" · "שלח לי את Today"' }),
       el('div.voice-example', { text: '"פתח משימה. הנושא: השגת טופס ממשה. אחראי: דני. עד יום חמישי. צ׳קליסט: אחת… שתיים… שלוש…"' }),
       el('div.mute-sm', { text: 'אחראי — אתם, יעד — יום העבודה הבא ועדיפות רגילה, אלא אם נאמר אחרת.' })
     ]);
 
     const overlay = el('div.voice-overlay', { role: 'dialog', 'aria-label': 'משימה מהקלטה' }, [
       el('div.voice-panel', {}, [
-        el('div.voice-top', {}, [el('b', { text: '🎙 משימה מהקלטה' }), el('div.spacer'), closeBtn]),
+        el('div.voice-top', {}, [el('b', { text: o.forcePreview ? '🎙 משימה מהקלטה' : '🎙 הקלטה' }), el('div.spacer'), closeBtn]),
         o.baseText ? el('div.voice-base', {}, [el('span.mute-sm', { text: 'עד עכשיו: ' }), o.baseText]) : null,
         mic,
         status,
@@ -278,8 +282,20 @@ const VoiceView = (() => {
       if (!said) return;
       const full = [o.baseText, said].filter(Boolean).join(' ');
       busy = true;
-      setStatus('מבין את המשימה…', 'busy');
+      setStatus('מבין…', 'busy');
       drawState();
+
+      // משימה אחת — המסלול הרגיל. כל השאר — לעוזר
+      if (!o.forcePreview) {
+        const route = await API.post('/api/voice/route', { text: full }).catch(() => null);
+        if (route?.route === 'assistant') {
+          close({ keepCallback: true });
+          AssistantView.open({ text: full, requests: route.requests.length > 1 ? route.requests : null, voice: true, handsFree: o.handsFree });
+          o.onClose?.();
+          return;
+        }
+      }
+
       let res;
       try {
         res = await API.post('/api/voice/task', { text: full, forcePreview: o.forcePreview });
@@ -458,7 +474,7 @@ const VoiceView = (() => {
           el('li', { text: 'פותחים את האפליקציה "קיצורים" (Shortcuts) ← ＋ קיצור חדש.' }),
           el('li', { text: 'הוספת פעולה ← "פתח כתובת URL" (Open URLs) ← מדביקים את הכתובת שלמעלה.' }),
           el('li', { text: 'שם הקיצור: משימון. שומרים.' }),
-          el('li', { text: 'מעכשיו: "היי Siri, משימון" — משימון נפתח, שואל "איזו משימה תרצה לפתוח היום?" ומאזין.' })
+          el('li', { text: 'מעכשיו: "היי Siri, משימון" — משימון נפתח, שואל "במה אפשר לעזור?" ומאזין.' })
         ]),
         el('div.ai-section-title', { text: '🤖 אנדרואיד — "Hey Google, פתח משימון"' }),
         el('ol.ai-steps', {}, [

@@ -1345,7 +1345,7 @@ const status = () => ({
 
 module.exports = {
   setHooks, start, stop, tick,
-  draftInitial, mailContext, launch, approve, discard, reviseMessage, answerQuestion, setState, updateDetails,
+  draftInitial, mailContext, emailHtml, launch, approve, discard, reviseMessage, answerQuestion, setState, updateDetails,
   interpretNote, applyNote, upcomingFor, waitingOnUser, contactDetected, handleInbound, matchEmail,
   requestById,
   requestByTask, summaryFor, detailFor, defaultPolicy, cleanPolicy, status, STATE_LABELS, OPEN_STATES,

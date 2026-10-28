@@ -4354,6 +4354,8 @@ const PREF_KEYS = [
   'notifyKinds',
   // משימה ששויכה לי: גם במייל, גם מבוט הוואטסאפ — ‎{ email, whatsapp }‎
   'assignChannels',
+  // בוט הוואטסאפ: שורת תובנות מהמייל בהודעה הראשונה של היום — ‎{ insightsInToday }‎
+  'botPrefs',
   // חתך הפרויקט וההיקף במסך בקרת המשימות
   'trackerProject', 'trackerScope',
   // בחירת העמודות, סדרן והמיון בטבלת הבקרה

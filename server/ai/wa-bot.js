@@ -12,7 +12,9 @@
  *   • פרטי — עובד כותב לבוט: לפתוח משימה, מה המשימות שלו, לסגור משימה, להוסיף
  *     הערה, מה פתוח בפרויקט, מה יש לו היום, ולשלוח מייל לאיש קשר מ-Google —
  *     הבוט מוצא את הנמען (ושואל איזה, כשיש כמה), מנסח ושולח רק אחרי "כן".
- *     על "היי" או הודעה ראשונה ביום — מה יש היום ותפריט ממוספר. מה מותר — לפי מסך הניהול (‎wa-actions.js‎). ה-AI
+ *     על "היי" או הודעה ראשונה ביום — מה יש היום ותפריט ממוספר. תובנות מהמיילים
+ *     של 24 השעות האחרונות, ותשובה למייל מתוכן. הודעה קולית מתומללת (Google)
+ *     ומטופלת כמו כתובה; כמה בקשות בהודעה אחת — אחת-אחת, בתור. מה מותר — לפי מסך הניהול (‎wa-actions.js‎). ה-AI
  *     רק מזהה את הבקשה; הביצוע עובר דרך ‎hooks.tasks‎ עם ההרשאות של העובד, וכל
  *     שינוי מחכה ל"כן". העובד מזוהה לפי הטלפון שבפרופיל; מספר שאינו מוכר אינו
  *     יכול לעשות דבר.
@@ -39,7 +41,10 @@ const P = require('../permissions');
 const Gmail = require('../gmail');
 const AiTasks = require('../ai-tasks');
 const GContacts = require('../google-contacts');
+const Speech = require('../speech');
 const WaActions = require('./wa-actions');
+const MailInsights = require('./mail-insights');
+const VoiceRouter = require('./voice-router');
 
 const GROUP_SKILL = path.join(__dirname, 'skills', 'whatsapp-group-to-tasks.md');
 const CHAT_SKILL = path.join(__dirname, 'skills', 'whatsapp-chat.md');
@@ -81,6 +86,8 @@ function publicStatus() {
   return {
     enabled: Boolean(D.getSetting('wa_bot_enabled', true)),
     ai: Claude.isEnabled(),
+    // תמלול הודעות קוליות (Google Speech-to-Text)
+    speech: Speech.isEnabled(),
     connection: row ? {
       apiUrl: row.api_url,
       instanceId: row.instance_id,
@@ -284,6 +291,10 @@ async function poll(ch, { max = 60 } = {}) {
           phone: chatId.replace(/@c\.us$/, ''),
           text: textOf(m).trim(),
           kind: m.typeMessage ?? '',
+          // הודעה קולית: הכתובת שממנה מורידים אותה לתמלול
+          audio: m.typeMessage === 'audioMessage' && m.fileMessageData?.downloadUrl
+            ? { url: m.fileMessageData.downloadUrl, mime: m.fileMessageData.mimeType ?? '' }
+            : null,
           id: String(b.idMessage ?? note.receiptId)
         });
       } else if (b.typeWebhook === 'stateInstanceChanged' && b.stateInstance) {
@@ -525,6 +536,7 @@ async function processGroups() {
 }
 
 function prune() {
+  MailInsights.prune();
   D.run('DELETE FROM wa_messages WHERE at < ?', new Date(Date.now() - KEEP_DAYS * DAY).toISOString());
   D.run("DELETE FROM wa_messages WHERE chat_id IN (SELECT chat_id FROM wa_groups WHERE status = 'ignored')");
   D.run('DELETE FROM wa_log WHERE at < ?', new Date(Date.now() - LOG_DAYS * DAY).toISOString());
@@ -674,7 +686,8 @@ function inHours(date = new Date()) {
 // שיחה פרטית — הפעולות
 // ---------------------------------------------------------------------------
 
-const INTENTS = ['create_task', 'my_tasks', 'complete', 'comment', 'project_tasks', 'send_email', 'today', 'today_email', 'menu', 'help', 'cancel', 'other'];
+const INTENTS = ['create_task', 'my_tasks', 'complete', 'comment', 'project_tasks', 'send_email', 'mail_insights', 'today', 'today_email', 'menu', 'help', 'cancel', 'other'];
+const INSIGHT_ACTIONS = ['list', 'detail', 'reply', 'task', 'follow'];
 
 /** הכוונה ← הפעולה במסך הניהול שמפעילה אותה */
 const ACTION_OF = { menu: 'today', today_email: 'today' };
@@ -693,7 +706,10 @@ const CHAT_SCHEMA = {
     recipient_name: { type: 'string', description: 'במייל: שם הנמען כפי שנכתב ("אורן", "שושנה חן"). אחרת ריק' },
     recipient_org: { type: 'string', description: 'במייל: רק השם המזהה של החברה או המשרד ("כהן" מתוך "משרד עורכי הדין כהן"). אחרת ריק' },
     recipient_email: { type: 'string', description: 'במייל: כתובת אם נכתבה במפורש. אחרת ריק' },
-    request: { type: 'string', description: 'במייל: מה לבקש או לכתוב לנמען, במילים של הכותב. אחרת ריק' },
+    request: { type: 'string', description: 'במייל: מה לבקש או לכתוב לנמען, במילים של הכותב. בתשובה למייל: מה לענות. אחרת ריק' },
+    insight_action: { type: 'string', enum: INSIGHT_ACTIONS, description: 'בתובנות מהמיילים: מה לעשות. אחרת list' },
+    insight_n: { type: 'integer', description: 'בתובנות: מספר המייל ברשימת התובנות האחרונה, או 0' },
+    insight_from: { type: 'string', description: 'בתובנות: רק משולח מסוים ("בנק לאומי"), אחרת ריק' },
     draft: {
       type: 'object',
       properties: {
@@ -709,7 +725,7 @@ const CHAT_SCHEMA = {
       additionalProperties: false
     }
   },
-  required: ['intent', 'ready', 'reply', 'range', 'task_id', 'comment', 'project_id', 'recipient_name', 'recipient_org', 'recipient_email', 'request', 'draft'],
+  required: ['intent', 'ready', 'reply', 'range', 'task_id', 'comment', 'project_id', 'recipient_name', 'recipient_org', 'recipient_email', 'request', 'insight_action', 'insight_n', 'insight_from', 'draft'],
   additionalProperties: false
 };
 
@@ -719,25 +735,31 @@ const CANCEL = /^(ביטול|בטל|עזוב|לא צריך)([\s,.!]|$)/;
 const PLAIN_LIST = /^(המשימות שלי|משימות|מה יש לי)/;
 const PLAIN_HELP = /^(עזרה|help|\?|מה אתה יודע)/i;
 
-// ‎greetedOn‎ — היום שבו כבר הוצגו לו ה-Today והתפריט, כדי שהודעה ראשונה ביום תפתח בהם
-const emptyChat = { draft: null, awaiting: false, history: [], lastList: [], greetedOn: '' };
+/*
+ * ‎greetedOn‎ — היום שבו כבר הוצגו לו ה-Today והתפריט, כדי שהודעה ראשונה ביום תפתח בהם.
+ * ‎insights‎ — מזהי המיילים ברשימת התובנות האחרונה ("פרט על 2").
+ * ‎queue‎ — בקשות שנאמרו באותה הקלטה ועוד לא טופלו.
+ */
+const emptyChat = { draft: null, awaiting: false, history: [], lastList: [], greetedOn: '', insights: [], queue: [] };
 
 function chatOf(userId) {
   const row = D.get('SELECT * FROM wa_chats WHERE user_id = ?', userId);
   if (!row) return { ...emptyChat };
+  const extra = parseJson(row.extra, {});
   return {
     draft: parseJson(row.draft, null), awaiting: Boolean(row.awaiting), history: parseJson(row.history, []),
-    lastList: parseJson(row.last_list, []), greetedOn: row.greeted_on ?? ''
+    lastList: parseJson(row.last_list, []), greetedOn: row.greeted_on ?? '',
+    insights: Array.isArray(extra.insights) ? extra.insights : [], queue: Array.isArray(extra.queue) ? extra.queue : []
   };
 }
 
-function saveChat(userId, { draft, awaiting, history, lastList, greetedOn = '' }) {
+function saveChat(userId, { draft, awaiting, history, lastList, greetedOn = '', insights = [], queue = [] }) {
   D.run(
-    `INSERT INTO wa_chats (user_id, draft, awaiting, history, last_list, greeted_on, updated_at) VALUES (?,?,?,?,?,?,?)
+    `INSERT INTO wa_chats (user_id, draft, awaiting, history, last_list, greeted_on, extra, updated_at) VALUES (?,?,?,?,?,?,?,?)
      ON CONFLICT(user_id) DO UPDATE SET draft = excluded.draft, awaiting = excluded.awaiting, history = excluded.history,
-       last_list = excluded.last_list, greeted_on = excluded.greeted_on, updated_at = excluded.updated_at`,
+       last_list = excluded.last_list, greeted_on = excluded.greeted_on, extra = excluded.extra, updated_at = excluded.updated_at`,
     userId, draft ? JSON.stringify(draft) : '', awaiting ? 1 : 0, JSON.stringify(history.slice(-HISTORY_TURNS)),
-    JSON.stringify(lastList ?? []), greetedOn ?? '', D.nowIso()
+    JSON.stringify(lastList ?? []), greetedOn ?? '', JSON.stringify({ insights, queue }), D.nowIso()
   );
 }
 
@@ -813,6 +835,10 @@ async function understand(user, actor, state, text, projects, myOpen) {
   const lastList = state.lastList
     .map((id, i) => ({ n: i + 1, id, title: D.get('SELECT title FROM tasks WHERE id = ?', id)?.title }))
     .filter((x) => x.title);
+  const insightList = (state.insights ?? [])
+    .map((id, i) => ({ n: i + 1, item: MailInsights.itemOf(user.id, id) }))
+    .filter((x) => x.item)
+    .map((x) => ({ n: x.n, who: MailInsights.label(x.item), insight: x.item.insight }));
   const today = localDate();
   const prompt = [
     `תאריך היום: ${today.date} (${today.weekday})`,
@@ -832,6 +858,9 @@ async function understand(user, actor, state, text, projects, myOpen) {
     '',
     'הרשימה האחרונה שנשלחה לו (מספר ברשימה → מזהה · כותרת):',
     ...(lastList.length ? lastList.map((x) => `${x.n} → ${x.id} · ${x.title}`) : ['(אין)']),
+    '',
+    'רשימת התובנות מהמיילים האחרונה שנשלחה לו (מספר · שולח · תובנה):',
+    ...(insightList.length ? insightList.map((x) => `${x.n} · ${x.who} · ${x.insight}`) : ['(אין)']),
     '',
     `הטיוטה הנוכחית: ${state.draft && (state.draft.kind ?? 'task') === 'task' ? JSON.stringify(state.draft) : '(אין)'}`,
     '',
@@ -862,6 +891,11 @@ async function understand(user, actor, state, text, projects, myOpen) {
       email: /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(out.recipient_email ?? '').trim()) ? String(out.recipient_email).trim().toLowerCase() : ''
     },
     request: String(out.request ?? '').trim().slice(0, 2000),
+    insight: {
+      action: INSIGHT_ACTIONS.includes(out.insight_action) ? out.insight_action : 'list',
+      n: Number(out.insight_n) || 0,
+      from: String(out.insight_from ?? '').trim().slice(0, 60)
+    },
     draft: {
       kind: 'task',
       title: String(d.title ?? '').trim().slice(0, 120),
@@ -881,17 +915,21 @@ async function understand(user, actor, state, text, projects, myOpen) {
 
 const KEYCAPS = ['1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣', '9️⃣'];
 
+const MENU = [
+  ['today', 'today', '☀️ מה יש לי היום'],
+  ['insights', 'mail_insights', '📬 תובנות מהמיילים (24 שעות)'],
+  ['send_email', 'send_email', '✉️ לשלוח מייל לאיש קשר'],
+  ['create_task', 'create_task', '📝 לפתוח משימה'],
+  ['my_tasks', 'my_tasks', '📋 כל המשימות הפתוחות שלי'],
+  ['overdue', 'my_tasks', '⚠️ מה באיחור'],
+  ['project_tasks', 'project_tasks', '📁 מה פתוח בפרויקט'],
+  ['today_email', 'today', '📧 לשלוח לי את Today במייל']
+];
+
 /** מה אפשר לבחור בתפריט — רק פעולות שמופעלות לכותב */
 function menuOptions(actor) {
-  return [
-    ['today', 'today', '☀️ מה יש לי היום'],
-    ['send_email', 'send_email', '✉️ לשלוח מייל לאיש קשר'],
-    ['create_task', 'create_task', '📝 לפתוח משימה'],
-    ['my_tasks', 'my_tasks', '📋 כל המשימות הפתוחות שלי'],
-    ['overdue', 'my_tasks', '⚠️ מה באיחור'],
-    ['project_tasks', 'project_tasks', '📁 מה פתוח בפרויקט'],
-    ['today_email', 'today', '📧 לשלוח לי את Today במייל']
-  ].filter(([, action]) => WaActions.allowed(actor, action)).map(([key, , label]) => ({ key, label }));
+  return MENU.filter(([key, action]) => WaActions.allowed(actor, action) && (key !== 'insights' || MailInsights.available(actor.id)))
+    .map(([key, , label]) => ({ key, label }));
 }
 
 const menuText = (options) => [
@@ -1042,7 +1080,7 @@ const taskLink = (id) => {
 /** ביצוע מה שהעובד אישר ב"כן". בבדיקה ממסך הניהול (‎dry‎) — רק מתארים */
 async function confirmPending(actor, pending, dry) {
   const kind = pending.kind ?? 'task';
-  const action = { task: 'create_task', email: 'send_email' }[kind] ?? kind;
+  const action = { task: 'create_task', email: 'send_email', mail_reply: 'mail_insights' }[kind] ?? kind;
   if (!WaActions.allowed(actor, action)) {
     return { reply: 'הפעולה הזו כבר אינה זמינה לך בוואטסאפ.', action, status: 'denied', result: 'הפעולה כובתה' };
   }
@@ -1060,6 +1098,11 @@ async function confirmPending(actor, pending, dry) {
     if (kind === 'comment') {
       if (!dry) hooks.tasks.comment(actor, pending.taskId, pending.text);
       return { reply: `💬 ההערה נוספה ל: ${pending.title}${test}`, action, status: 'ok', result: `הערה ל"${pending.title}": ${pending.text}`, taskId: pending.taskId };
+    }
+    if (kind === 'mail_reply') {
+      const r = pending.reply;
+      if (!dry) await MailInsights.sendReply(actor.id, r);
+      return { reply: `📧 התשובה נשלחה ל${r.toName || r.to}.${test}`, action, status: 'ok', result: `תשובה ל${r.toName || r.to}: ${r.subject}` };
     }
     if (kind === 'email') {
       const who = pending.contact.name || pending.contact.email;
@@ -1080,7 +1123,7 @@ async function confirmPending(actor, pending, dry) {
     }
   } catch (err) {
     // הרשאה, תלות שלא הושלמה, משימה שנסגרה בינתיים — העובד שומע למה
-    return { reply: `❌ לא הצלחתי: ${err.message}`, action, status: 'error', result: err.message, keep: kind === 'task' || kind === 'email' };
+    return { reply: `❌ לא הצלחתי: ${err.message}`, action, status: 'error', result: err.message, keep: ['task', 'email', 'mail_reply'].includes(kind) };
   }
   return { reply: 'לא ברור מה לאשר.', action, status: 'unclear', result: '' };
 }
@@ -1091,7 +1134,7 @@ async function confirmPending(actor, pending, dry) {
  */
 async function converse(user, actor, text, state, { dry = false } = {}) {
   const t = text.trim();
-  const keep = { draft: state.draft, awaiting: false, lastList: state.lastList, greetedOn: state.greetedOn ?? '' };
+  const keep = { draft: state.draft, awaiting: false, lastList: state.lastList, greetedOn: state.greetedOn ?? '', insights: state.insights ?? [], queue: state.queue ?? [] };
   const out = (reply, next, meta) => ({ reply, next: { ...keep, ...next }, ...meta });
 
   if (state.awaiting && state.draft && YES.test(t)) {
@@ -1117,8 +1160,13 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
     return { ...r, next: { ...r.next, draft: null } };
   }
 
-  /** ה-Today, ואחריו התפריט כשמבקשים. המשימות בו הן "הרשימה האחרונה" */
-  const todayReply = async ({ withMenu = true, prefix = '' } = {}) => {
+  const insightsOn = () => WaActions.allowed(actor, 'mail_insights') && MailInsights.available(actor.id);
+
+  /**
+   * ה-Today, ואחריו התפריט כשמבקשים. המשימות בו הן "הרשימה האחרונה".
+   * ‎withInsights‎ — בהודעה הראשונה של היום: שורת תובנות מהמייל (לפי ההעדפה).
+   */
+  const todayReply = async ({ withMenu = true, prefix = '', withInsights = false } = {}) => {
     const options = menuOptions(actor);
     let today = null;
     if (WaActions.allowed(actor, 'today')) {
@@ -1128,13 +1176,60 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
         console.error('[משימון] ה-Today לבוט נכשל:', err.message);
       }
     }
-    const parts = [prefix || null, today?.text ?? null, withMenu && options.length ? menuText(options) : null].filter(Boolean);
+    let insightLine = null;
+    if (withInsights && insightsOn() && D.userPrefs(actor.id)?.botPrefs?.insightsInToday !== false) {
+      try {
+        const line = MailInsights.summaryLine(await MailInsights.collect(actor.id));
+        const n = options.findIndex((o) => o.key === 'insights');
+        insightLine = n >= 0 && withMenu ? `${line}\n   לפירוט — ${n + 1}` : line;
+      } catch (err) {
+        console.error('[משימון] תובנות המייל ל-Today נכשלו:', err.message);
+      }
+    }
+    const parts = [prefix || null, today?.text ?? null, insightLine, withMenu && options.length ? menuText(options) : null].filter(Boolean);
     if (!parts.length) return out(helpText(actor), {}, { action: 'help', status: 'ok', result: 'עזרה' });
     return out(parts.join('\n\n'), {
       ...(today ? { lastList: today.ids } : {}),
       ...(withMenu && options.length ? { draft: { kind: 'menu', options: options.map((o) => o.key) } } : {}),
       greetedOn: localDay(0)
     }, { action: 'today', status: 'ok', result: `Today${withMenu ? ' ותפריט' : ''}: ${today?.ids.length ?? 0} משימות` });
+  };
+
+  /** רשימת התובנות. המספרים בה הם מה ש"פרט על 2" מתייחס אליו */
+  const insightsReply = async ({ from = '' } = {}) => {
+    if (!insightsOn()) {
+      return out(Gmail.has(actor.id, 'mail') ? 'התובנות מהמיילים אינן זמינות כרגע.' : 'כדי לקבל תובנות מהמיילים צריך לחבר את תיבת ה-Gmail שלך באפליקציה: "החשבון שלי ← Gmail ועוזר ה-AI".',
+        {}, { action: 'mail_insights', status: 'error', result: 'לא זמין' });
+    }
+    const result = await MailInsights.collect(actor.id, { from });
+    const f = MailInsights.format(result);
+    return out(f.text, { insights: f.ids, draft: null }, { action: 'mail_insights', status: 'ok', result: `תובנות${from ? ` מ${from}` : ''}: ${result.items.length} מיילים` });
+  };
+
+  /** המייל שמספרו ‎n‎ ברשימת התובנות האחרונה */
+  const insightAt = (n) => {
+    const id = (state.insights ?? [])[n - 1];
+    return id ? MailInsights.itemOf(actor.id, id) : null;
+  };
+
+  const replyText = (r) => [
+    `↩️ *תשובה ל${r.toName || r.to}*`,
+    `*נושא:* ${r.subject}`,
+    '',
+    r.body.slice(0, 2500),
+    '',
+    'לשלוח? השיבו *כן*, או כתבו מה לתקן. *ביטול* — לא לשלוח.'
+  ].join('\n');
+
+  const startReply = async (item, request) => {
+    if (!Gmail.canSend(actor.id)) {
+      return out('כדי לענות מהבוט צריך לחבר את תיבת ה-Gmail שלך עם הרשאת שליחה ("החשבון שלי ← Gmail ועוזר ה-AI").', { draft: null }, { action: 'mail_insights', status: 'error', result: 'אין הרשאת שליחה' });
+    }
+    if (!request) {
+      return out(`מה לענות ל${MailInsights.label(item)}?`, { draft: { kind: 'reply_ask', gmailId: item.gmailId } }, { action: 'mail_insights', status: 'unclear', result: 'חסר תוכן לתשובה' });
+    }
+    const reply = await MailInsights.draftReply(actor.id, item.gmailId, request);
+    return out(replyText(reply), { draft: { kind: 'mail_reply', reply }, awaiting: true }, { action: 'mail_insights', status: 'ok', result: `טיוטת תשובה ל${reply.toName || reply.to}` });
   };
 
   const sendTodayEmail = async () => {
@@ -1185,6 +1280,18 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
     return out(emailText(pending), { draft: pending, awaiting: true }, { action: 'send_email', status: 'ok', result: `תיקון טיוטה: ${feedback.slice(0, 200)}` });
   }
 
+  // טיוטת תשובה למייל שממתינה: כל הודעה שאינה "כן" או "ביטול" היא תיקון
+  if (kind === 'mail_reply' && state.awaiting && Claude.isEnabled() && WaActions.allowed(actor, 'mail_insights')) {
+    const prev = state.draft.reply;
+    const reply = await MailInsights.draftReply(actor.id, prev.gmailId, prev.request, { feedback: t, previous: prev });
+    return out(replyText(reply), { draft: { kind: 'mail_reply', reply }, awaiting: true }, { action: 'mail_insights', status: 'ok', result: `תיקון תשובה: ${t.slice(0, 200)}` });
+  }
+  // "תענה ל-2" בלי תוכן — ההודעה הבאה היא מה לענות
+  if (kind === 'reply_ask' && Claude.isEnabled() && WaActions.allowed(actor, 'mail_insights')) {
+    const item = MailInsights.itemOf(actor.id, state.draft.gmailId);
+    if (item) return startReply(item, t);
+  }
+
   // בחירת הנמען מהרשימה: מספר, כתובת מייל, או שם מלא יותר
   if (kind === 'email_pick' && Claude.isEnabled() && WaActions.allowed(actor, 'send_email')) {
     const pick = state.draft;
@@ -1210,6 +1317,7 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
     const go = (reply) => out(reply, { draft: null }, { action: 'menu', status: 'ok', result: `תפריט: ${key}` });
     switch (key) {
       case 'today': return todayReply({ withMenu: false });
+      case 'insights': return insightsReply();
       case 'today_email': return sendTodayEmail();
       case 'send_email': return go('למי לשלוח, ומה לבקש?\nלמשל: "לאורן ממשרד עורכי הדין כהן — שיעביר לי את טיוטת ההסכם"');
       case 'create_task': return go('מה המשימה? אפשר לציין למי ועד מתי.\nלמשל: "לשושנה לפנות ליועץ הסניטרי, עד חמישי"');
@@ -1232,7 +1340,7 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
   if (u.intent === 'menu' || (u.intent === 'other' && firstToday)) {
     if (WaActions.allowed(actor, 'today') || menuOptions(actor).length) {
       const hello = firstToday ? `${localDate().time < '12:00' ? 'בוקר טוב' : 'שלום'} ${firstName(user.full_name)} 👋` : '';
-      return todayReply({ prefix: u.intent === 'other' && u.reply ? u.reply : hello });
+      return todayReply({ prefix: u.intent === 'other' && u.reply ? u.reply : hello, withInsights: firstToday });
     }
   }
   if (u.intent === 'other') {
@@ -1251,7 +1359,40 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
   switch (u.intent) {
     case 'menu':
     case 'today':
-      return todayReply({ withMenu: u.intent === 'menu' || firstToday });
+      return todayReply({ withMenu: u.intent === 'menu' || firstToday, withInsights: firstToday });
+
+    case 'mail_insights': {
+      const { action, n, from } = u.insight;
+      if (action === 'list' || (!n && !(state.insights ?? []).length)) return insightsReply({ from });
+      if (!n) return out(u.reply || 'על איזה מייל? כתבו את המספר מרשימת התובנות.', {}, { action: 'mail_insights', status: 'unclear', result: 'המייל לא זוהה' });
+      const item = insightAt(n);
+      if (!item) return out('לא מצאתי את המייל הזה. כתבו "מה חדש במייל" לרשימה מעודכנת.', {}, { action: 'mail_insights', status: 'unclear', result: `אין מייל ${n} ברשימה` });
+      if (action === 'detail') {
+        const d = await MailInsights.detail(actor.id, item.gmailId);
+        return out(d.text, {}, { action: 'mail_insights', status: 'ok', result: `פירוט: ${item.subject}` });
+      }
+      if (action === 'reply') return startReply(item, u.request);
+      if (action === 'task') {
+        if (!WaActions.allowed(actor, 'create_task')) return out('פתיחת משימה אינה זמינה לך בוואטסאפ.', {}, { action: 'mail_insights', status: 'denied', result: 'פתיחת משימה כבויה' });
+        const draft = {
+          kind: 'task',
+          title: (u.draft.title || item.insight).slice(0, 120),
+          summary: `ממייל של ${MailInsights.label(item)}: ${item.subject}`.slice(0, 1500),
+          assigneeId: u.draft.assigneeId || 0,
+          dueDate: u.draft.dueDate || item.dueDate || '',
+          priority: u.draft.priority || (item.importance === 3 ? 'high' : 'normal'),
+          projectId: u.draft.projectId || 0,
+          checklist: u.draft.checklist ?? []
+        };
+        return out(draftText(draft, user), { draft, awaiting: true }, { action: 'mail_insights', status: 'ok', result: `טיוטת משימה ממייל: ${draft.title}` });
+      }
+      // follow — מייל לשולח, ומשימת AI שעוקבת אחרי התשובה
+      if (!WaActions.allowed(actor, 'send_email') || !P.may(actor, 'create_task')) {
+        return out('מעקב במייל אינו זמין לך בוואטסאפ.', {}, { action: 'mail_insights', status: 'denied', result: 'שליחת מייל כבויה' });
+      }
+      return composeTo({ name: MailInsights.label(item), email: item.fromEmail, phone: '', type: 'external', refId: null },
+        u.request || `לגבי "${item.subject}" (${item.insight}) — לבקש עדכון ומה הצעד הבא`);
+    }
 
     case 'today_email':
       return sendTodayEmail();
@@ -1302,6 +1443,44 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
   }
 }
 
+const CANCEL_ALL = /^ביטול\s+(?:הכו?ל|כל)/;
+/** האם מחכים לתשובה של העובד — אז הבקשה הבאה בתור מחכה */
+const isPending = (next) => Boolean(next.awaiting || ['email_pick', 'reply_ask'].includes(next.draft?.kind));
+
+/**
+ * תור סביב ‎converse‎: הקלטה עם כמה בקשות מפורקת, והבקשות מטופלות אחת-אחת.
+ * בקשה שמחכה ל"כן" עוצרת את התור; אחרי האישור (או הביטול) — ממשיכים לבאה.
+ */
+async function turn(user, actor, text, state, { dry = false, voice = false, requests = null } = {}) {
+  if (CANCEL_ALL.test(text.trim())) {
+    return { reply: 'בוטל הכול 👍', next: { ...state, draft: null, awaiting: false, queue: [] }, action: 'cancel', status: 'ok', result: 'בוטל הכול' };
+  }
+  let st = state;
+  let said = text;
+  const parts = [];
+  // ‎requests‎ — כבר פורקו (בהקלטה באפליקציה), ולא מפרקים שוב
+  const split = requests?.length ? requests : voice ? (await VoiceRouter.split(text)).map((r) => r.text) : [text];
+  if (split.length > 1) {
+    said = split[0];
+    st = { ...st, queue: [...split.slice(1), ...(st.queue ?? [])] };
+    parts.push(`יש כאן ${split.length} בקשות — נעבור עליהן אחת-אחת.`);
+  } else if (split.length === 1) {
+    said = split[0];
+  }
+  let r = await converse(user, actor, said, st, { dry });
+  parts.push(r.reply);
+  const results = [r.result];
+  for (let i = 0; i < 5 && (r.next.queue ?? []).length && !isPending(r.next); i++) {
+    const [nextText, ...rest] = r.next.queue;
+    r = await converse(user, actor, nextText, { ...r.next, queue: rest, history: st.history }, { dry });
+    parts.push(`➡️ *הבקשה הבאה:* "${nextText}"\n${r.reply}`);
+    results.push(r.result);
+  }
+  const left = (r.next.queue ?? []).length;
+  if (left && isPending(r.next)) parts.push(`(עוד ${left === 1 ? 'בקשה אחת' : `${left} בקשות`} בתור. "ביטול הכול" — לעצור)`);
+  return { ...r, reply: parts.join('\n\n'), result: results.filter(Boolean).join(' | ') };
+}
+
 /** למספר שאינו מוכר עונים פעם ביום — לא יותר, כדי לא לנהל שיחה עם זרים */
 const unknownReplied = new Map();
 
@@ -1320,26 +1499,103 @@ async function handleDirect(msg) {
   if (!actor) return;
   const base = { channel: 'private', chatId: msg.chatId, userId: user.id, who: user.full_name, text: msg.text };
 
-  if (!msg.text) {
+  // הודעה קולית — מתומללת, ומשם בדיוק כמו הודעה כתובה
+  let text = msg.text;
+  const voice = !text && Boolean(msg.audio);
+  if (voice) {
+    if (!Speech.isEnabled() || !WaActions.allowed(actor, 'voice_notes')) {
+      log({ ...base, text: '[הודעה קולית]', action: 'voice', status: 'unclear', result: Speech.isEnabled() ? 'הודעות קוליות כבויות' : 'התמלול אינו מוגדר' });
+      await sendText(msg.chatId, 'עדיין אינני מבין הודעות קוליות. כתבו לי בטקסט 🙏');
+      return;
+    }
+    try {
+      text = await Speech.transcribeUrl(msg.audio.url, msg.audio.mime);
+    } catch (err) {
+      console.error('[משימון] תמלול הודעה קולית נכשל:', err.message);
+      log({ ...base, text: '[הודעה קולית]', action: 'voice', status: 'error', result: err.message });
+      await sendText(msg.chatId, 'לא הצלחתי לתמלל את ההודעה הקולית. נסו שוב, או כתבו לי 🙏');
+      return;
+    }
+    if (!text) {
+      log({ ...base, text: '[הודעה קולית]', action: 'voice', status: 'unclear', result: 'לא נשמע דיבור' });
+      await sendText(msg.chatId, 'לא שמעתי דיבור בהודעה. נסו שוב, או כתבו לי.');
+      return;
+    }
+  }
+  if (!text) {
     log({ ...base, text: `[${msg.kind || 'הודעה ללא טקסט'}]`, action: 'other', status: 'unclear', result: 'לא טקסט' });
-    await sendText(msg.chatId, msg.kind === 'audioMessage' ? 'עדיין אינני מבין הודעות קוליות. כתבו לי בטקסט 🙏' : 'כתבו לי בטקסט 🙏');
+    await sendText(msg.chatId, 'כתבו לי בטקסט 🙏');
     return;
   }
 
   const state = chatOf(user.id);
   let r;
   try {
-    r = await converse(user, actor, msg.text, state);
+    r = await turn(user, actor, text, state, { voice });
   } catch (err) {
     console.error('[משימון] בוט הוואטסאפ לא הבין הודעה:', err.message);
-    log({ ...base, action: 'other', status: 'error', result: err.message });
+    log({ ...base, text: voice ? `🎙 ${text}` : text, action: 'other', status: 'error', result: err.message });
     await sendText(msg.chatId, 'משהו השתבש אצלי. נסו שוב בעוד רגע.');
     return;
   }
-  const history = [...state.history, { role: 'user', text: msg.text.slice(0, 500) }, { role: 'bot', text: r.reply.slice(0, 500) }];
+  // מה שנשמע חוזר בשורה אחת — כך רואים מיד אם התמלול טעה
+  const reply = voice ? `🎙 *שמעתי:* "${text}"\n\n${r.reply}` : r.reply;
+  const history = [...state.history, { role: 'user', text: text.slice(0, 500) }, { role: 'bot', text: r.reply.slice(0, 500) }];
   saveChat(user.id, { ...r.next, history });
-  log({ ...base, action: r.action, status: r.status, result: r.result, taskId: r.taskId ?? null });
-  await sendText(msg.chatId, r.reply);
+  log({ ...base, text: voice ? `🎙 ${text}` : text, action: r.action, status: r.status, result: r.result, taskId: r.taskId ?? null });
+  await sendText(msg.chatId, reply);
+}
+
+// ---------------------------------------------------------------------------
+// העוזר באפליקציה — ההקלטה באפליקציה עוברת באותה שיחה
+// ---------------------------------------------------------------------------
+
+const APP_TTL = 30 * 60000;
+const appChats = new Map(); // userId → { state, at }
+
+/** הכפתורים שמתחת לתשובה באפליקציה — כל כפתור "אומר" את מה שהיה נכתב בוואטסאפ */
+function choicesOf(next) {
+  const d = next.draft;
+  const out = [];
+  if (next.awaiting && d) {
+    const yes = { task: '✓ פתח משימה', complete: '✓ סמן כבוצע', comment: '✓ הוסף הערה', mail_reply: '📧 שלח', email: d.contact?.type === 'user' ? '👤 העבר' : '📧 שלח' }[d.kind] ?? '✓ אישור';
+    out.push({ label: yes, say: 'כן', primary: true });
+    if (d.kind === 'email') (d.suggestions ?? []).forEach((x, i) => out.push({ label: `＋ ${x}`, say: `תוסיף את ${i + 1}` }));
+    out.push({ label: 'ביטול', say: 'ביטול' });
+  } else if (d?.kind === 'email_pick') {
+    d.candidates.forEach((c, i) => out.push({ label: [c.name, c.organization, c.type === 'user' ? 'עובד/ת בארגון' : c.email].filter(Boolean).join(' · '), say: String(i + 1) }));
+  } else if (d?.kind === 'menu') {
+    (d.options ?? []).forEach((key, i) => out.push({ label: MENU.find((m) => m[0] === key)?.[2] ?? key, say: String(i + 1) }));
+  }
+  if ((next.queue ?? []).length) out.push({ label: 'ביטול הכול', say: 'ביטול הכול' });
+  return out;
+}
+
+/**
+ * פנייה לעוזר מהאפליקציה (הקלטה או הקלדה). אותה שיחה בדיוק כמו בוואטסאפ —
+ * אותן פעולות, אותן הרשאות ואותו "כן" לפני כל שינוי — עם מצב משלה, בזיכרון,
+ * כדי לא להתערבב בשיחת הוואטסאפ. ‎open‎ — מסך שכדאי לפתוח (Today).
+ */
+async function assistant(userId, text, { voice = false, reset = false, requests = null } = {}) {
+  const user = D.get("SELECT id, full_name FROM users WHERE id = ? AND status = 'active'", userId);
+  const actor = user ? Auth.loadActor('user', user.id) : null;
+  if (!actor) throw new Error('המשתמש אינו פעיל');
+  let entry = appChats.get(userId);
+  if (reset || !entry || Date.now() - entry.at > APP_TTL) {
+    // באפליקציה אין "בוקר טוב" — ה-Today פתוח ממילא בכפתור משלו
+    entry = { state: { ...emptyChat, greetedOn: localDay(0), lastList: chatOf(userId).lastList } };
+  }
+  const r = await turn(user, actor, String(text ?? '').trim(), entry.state, { voice, requests });
+  const history = [...entry.state.history, { role: 'user', text: String(text).slice(0, 500) }, { role: 'bot', text: r.reply.slice(0, 500) }].slice(-HISTORY_TURNS);
+  appChats.set(userId, { state: { ...r.next, history }, at: Date.now() });
+  log({ channel: 'app', userId, who: user.full_name, text: voice ? `🎙 ${text}` : text, action: r.action, status: r.status, result: r.result, taskId: r.taskId ?? null });
+  return {
+    reply: r.reply,
+    choices: choicesOf(r.next),
+    open: r.action === 'today' && !r.next.draft ? 'today' : null,
+    taskId: r.taskId ?? null,
+    done: !isPending(r.next) && !(r.next.queue ?? []).length && r.next.draft?.kind !== 'menu'
+  };
 }
 
 /** הודעות פרטיות שהגיעו מחוץ לשעות — נשמרות עד שהחלון נפתח */
@@ -1468,7 +1724,7 @@ async function simulate(admin, { userId, text, reset = false }) {
   if (reset) sims.delete(key);
   if (!String(text ?? '').trim()) return { reply: '', reset: true };
   const state = sims.get(key) ?? { ...emptyChat, lastList: chatOf(user.id).lastList };
-  const r = await converse(user, actor, String(text), state, { dry: true });
+  const r = await turn(user, actor, String(text), state, { dry: true });
   sims.set(key, { ...r.next, history: [...state.history, { role: 'user', text: String(text).slice(0, 500) }, { role: 'bot', text: r.reply.slice(0, 500) }].slice(-HISTORY_TURNS) });
   return { reply: r.reply, action: r.action, status: r.status, result: r.result };
 }
@@ -1550,6 +1806,6 @@ module.exports = {
   init, start, tick, publicStatus, save, remove, checkState, qr, isConfigured,
   listGroups, bindGroup, userByPhone, markDone, readLog, todayStats, simulate, simulateGroup, inHours,
   // לשליחה ממודולים אחרים — התראה לפני פגישה (‎meetings.js‎), עם רישום ביומן הבוט
-  sendText, log, notifyAssignment,
+  sendText, log, notifyAssignment, assistant,
   _internal: { storeGroupMessage, processGroup, handleDirect, sanitizeGroup, resolveMentions, candidatesOf, converse, sendSummaries, YES, findRecipients, suggestionFeedback, flushOutbox }
 };

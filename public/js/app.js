@@ -1082,6 +1082,31 @@ const App = (() => {
               toggle('whatsapp', '💬 הודעה מבוט הוואטסאפ', state.actor?.phone ? null : 'נשלחת רק כשהטלפון שלך רשום ב"החשבון שלי"')
             ])
           ])
+        ]),
+        botPrefsBox()
+      ]);
+    }
+
+    /** הבוט: האם ההודעה הראשונה של היום כוללת שורת תובנות מהמייל. דלוק כברירת מחדל */
+    function botPrefsBox() {
+      const box = el('input', { type: 'checkbox', checked: getPref('botPrefs', {})?.insightsInToday !== false });
+      box.addEventListener('change', () => {
+        setPref('botPrefs', { ...(getPref('botPrefs', {}) ?? {}), insightsInToday: box.checked });
+      });
+      return el('div', {}, [
+        el('h4', { text: 'בוט הוואטסאפ', style: { margin: '16px 0 8px', fontSize: '13px' } }),
+        el('div.table-wrap', {}, [
+          el('table.data', {}, [
+            el('tbody', {}, [
+              el('tr', {}, [
+                el('td', {}, [
+                  el('div', { text: '📬 שורת תובנות מהמייל (24 שעות) בהודעה הראשונה של היום' }),
+                  el('div.mute-sm', { text: 'את הרשימה המלאה מקבלים תמיד לפי בקשה: "מה חדש במייל?"' })
+                ]),
+                el('td', { style: { textAlign: 'center', width: '110px' } }, [el('label.checkbox', {}, [box])])
+              ])
+            ])
+          ])
         ])
       ]);
     }
