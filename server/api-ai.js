@@ -14,6 +14,7 @@ const WhatsApp = require('./whatsapp');
 const Gmail = require('./gmail');
 const MailScan = require('./ai/mail-scan');
 const GContacts = require('./google-contacts');
+const WaScan = require('./ai/whatsapp-scan');
 const Calendar = require('./calendar');
 const WaBot = require('./ai/wa-bot');
 const WaActions = require('./ai/wa-actions');
@@ -22,7 +23,7 @@ const { badRequest, forbidden, notFound, readJson, sendJson, parseUrl } = requir
 function register(router, h) {
   const { getTaskOr404, assertVisible, mayOnTask, shapeTask, actorRef, saveAttachment, createTask, assertMayAssignTo, listProjectsFor, botTaskOps } = h;
 
-  AiTasks.setHooks({ saveFile: saveAttachment });
+  AiTasks.setHooks({ saveFile: saveAttachment, scanWhatsApp: WaScan.handle, scanningUsers: WaScan.scanningUsers });
   MailScan.init({ createTask });
   WaBot.init({ createTask, listProjectsFor, tasks: botTaskOps });
 
@@ -418,6 +419,20 @@ function register(router, h) {
     internalOnly(actor);
     const state = await WhatsApp.checkState(actor.id);
     sendJson(res, 200, { channel: WhatsApp.publicChannel(actor.id), ...state });
+  });
+
+  /** "להציע משימות ופגישות מהוואטסאפ שלי" — שיחות פרטיות, ורשימת "לא לסרוק" */
+  router.get('/api/me/wa-scan', async (req, res, ctx) => {
+    const actor = ctx.requireActor();
+    internalOnly(actor);
+    sendJson(res, 200, { ...WaScan.prefs(actor.id), ai: Claude.isEnabled() });
+  });
+
+  router.put('/api/me/wa-scan', async (req, res, ctx) => {
+    const actor = ctx.requireActor();
+    internalOnly(actor);
+    const b = await readJson(req);
+    sendJson(res, 200, { ...WaScan.setPrefs(actor.id, b), ai: Claude.isEnabled() });
   });
 
   router.delete('/api/me/whatsapp', async (req, res, ctx) => {

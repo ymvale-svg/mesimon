@@ -92,6 +92,7 @@ const TodayView = (() => {
       nextUp(),
       empty ? el('div.today-clear', {}, [el('div.e-icon', { text: '🌤' }), el('b', { text: 'יום נקי' }), el('div.mute-sm', { text: 'אין פגישות, אין משימות להיום ואין מיילים שמחכים להחלטה.' })]) : null,
       calendarSection(),
+      meetingsSection(),
       tasksSection('⚠ באיחור', data.tasks.overdue, { late: true }),
       tasksSection('✅ היום', data.tasks.today, { late: false }),
       mailSection()
@@ -168,6 +169,13 @@ const TodayView = (() => {
         ])
       ]);
     }));
+  }
+
+  /** פגישה שבוטלה ביומן, או בקשה להזיז — אותן שורות של "ממתין לאישורך" */
+  function meetingsSection() {
+    const items = data.meetings ?? [];
+    if (!items.length) return null;
+    return section('📅 פגישות — מחכה להחלטה', items.length, items.map((s) => AiInboxView.meetingRow(s, () => reload())));
   }
 
   // ------------------------------------------------------------- משימות

@@ -725,6 +725,51 @@ CREATE TABLE IF NOT EXISTS google_contact_sync (
   error        TEXT    NOT NULL DEFAULT ''
 );
 
+/*
+ * פגישות שנקבעו ממשימון. מקור האמת הוא היומן של Google — כאן נשמר מה שנדרש
+ * כדי לקשר את האירוע למשימה, לשלוח התראה לפני, ולזהות שינוי מבחוץ.
+ *
+ * ‎owner_id‎ — העובד שהפגישה ביומן שלו (המארגן). ‎via_user_id‎ — דרך החיבור של
+ * מי פועלים ביומן: העובד עצמו, או מזכירה שהעובד שיתף איתה את היומן.
+ */
+CREATE TABLE IF NOT EXISTS meetings (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  task_id         INTEGER REFERENCES tasks(id) ON DELETE SET NULL,
+  created_by      INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  owner_id        INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  via_user_id     INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  calendar_id     TEXT    NOT NULL,
+  google_event_id TEXT,
+  title           TEXT    NOT NULL,
+  notes           TEXT    NOT NULL DEFAULT '',
+  location_type   TEXT    NOT NULL DEFAULT 'none',   -- zoom | place | link | none
+  location        TEXT    NOT NULL DEFAULT '',
+  start_at        TEXT    NOT NULL,
+  end_at          TEXT    NOT NULL,
+  attendees       TEXT    NOT NULL DEFAULT '[]',     -- [{ email, name, response }]
+  zoom_user_id    TEXT,
+  zoom_meeting_id TEXT,
+  zoom_join_url   TEXT,
+  status          TEXT    NOT NULL DEFAULT 'scheduled', -- scheduled | cancelled | done
+  reminded_at     TEXT,
+  etag            TEXT,
+  sync_error      TEXT    NOT NULL DEFAULT '',
+  synced_at       TEXT,
+  created_at      TEXT    NOT NULL,
+  updated_at      TEXT    NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_meetings_task ON meetings(task_id);
+CREATE INDEX IF NOT EXISTS idx_meetings_start ON meetings(status, start_at);
+
+/* משתמשי ה-Zoom בחשבון החברה — מסונכרנים מ-Zoom, לשיוך לעובדים */
+CREATE TABLE IF NOT EXISTS zoom_users (
+  id         TEXT PRIMARY KEY,
+  email      TEXT NOT NULL DEFAULT '',
+  name       TEXT NOT NULL DEFAULT '',
+  license    TEXT NOT NULL DEFAULT 'basic',
+  synced_at  TEXT
+);
+
 /* כתובות שעליהן המשתמש אמר "לא, תודה" להצעה לשמור באנשי הקשר — לא שואלים שוב */
 CREATE TABLE IF NOT EXISTS contact_save_dismissed (
   user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -945,6 +990,13 @@ const DEFAULT_SETTINGS = {
    * סריקת מיילים → משימות. נסרקים רק מיילים שלא נקראו, ורק אצל מי שחיבר
    * את תיבת ה-Gmail שלו.
    */
+  /* קביעת פגישות */
+  meeting_hours: '08:30-18:00',            // שעות לפגישות — הצעת מועדים ושורת הזמינות, שעון ישראל
+  meeting_default_minutes: 30,             // משך ברירת מחדל
+  meeting_buffer_minutes: 10,              // מרווח מפגישה צמודה בהצעת מועדים
+  meeting_reminder_minutes: 10,            // כמה דקות לפני — התראה ובוט הוואטסאפ
+  meeting_ai_alternatives: true,           // הצעות AI להזזת פגישות חופפות
+
   ai_mail_scan_enabled: true,
   ai_scan_time: '07:00',                   // ריצת הבוקר, שעון ישראל
   ai_scan_daily_limit: 100,                // תקרת מיילים לסריקה ביום, לכל משתמש
@@ -1284,6 +1336,12 @@ function migrate() {
     run("UPDATE departments SET work_days = '0,1,2,3,4,5' WHERE name LIKE '%הנדסה%'");
   }
   addColumn('users', 'field_worker', 'INTEGER NOT NULL DEFAULT 0');
+  // מזכירות — מנהלות את היומנים שהעובדים שיתפו איתן, ורואות את מסך היומן
+  addColumn('users', 'is_secretary', 'INTEGER NOT NULL DEFAULT 0');
+  // משתמש ה-Zoom בחשבון החברה שמארח את הפגישות של העובד (‎zoom_users.id‎)
+  addColumn('users', 'zoom_user_id', 'TEXT');
+  // "📅 פגישה לקביעה" — מחכה שתיקבע לה פגישה
+  addColumn('tasks', 'meeting_pending', 'INTEGER NOT NULL DEFAULT 0');
   addColumn('templates', 'department_id', 'INTEGER REFERENCES departments(id) ON DELETE SET NULL');
   addColumn('templates', 'updated_at', 'TEXT');
   addColumn('templates', 'updated_by', 'INTEGER REFERENCES users(id) ON DELETE SET NULL');

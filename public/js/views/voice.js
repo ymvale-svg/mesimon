@@ -338,6 +338,25 @@ const VoiceView = (() => {
 
   async function handleResult(res, o) {
     const d = res.draft;
+    // "קבע פגישה עם…" — המשימה נוצרה, ודיאלוג הפגישה נפתח ממולא
+    if (res.created && d.meeting) {
+      if (o.handsFree) speak('המשימה נפתחה. אשר את הפגישה במסך.');
+      await App.reloadReference();
+      App.refreshView();
+      const attendees = [];
+      for (const name of d.meeting.with ?? []) {
+        try {
+          const { contacts } = await API.get(`/api/ai/contacts?q=${encodeURIComponent(name)}`);
+          const hit = contacts.find((c) => c.email && !(c.type === 'user' && c.refId === App.state.actor.id));
+          if (hit && !attendees.some((a) => a.email === hit.email)) attendees.push({ email: hit.email, name: hit.name });
+        } catch { /* מוסיפים ידנית בדיאלוג */ }
+      }
+      const start = d.meeting.date && d.meeting.time ? new Date(`${d.meeting.date}T${d.meeting.time}:00`).toISOString() : null;
+      const { task } = await API.task(res.created.id);
+      MeetingView.openDialog({ task, prefill: { attendees, ...(start ? { start } : {}), ...(d.meeting.minutes ? { minutes: d.meeting.minutes } : {}) } });
+      if ((d.meeting.with ?? []).length > attendees.length) UI.toast('חלק מהמשתתפים לא נמצאו באנשי הקשר — הוסיפו אותם בדיאלוג');
+      return;
+    }
     if (res.created) {
       const t = res.created;
       const who = d.assigneeName && d.assignee !== `user:${App.state.actor.id}` ? d.assigneeName : 'אני';

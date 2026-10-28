@@ -439,3 +439,12 @@
   body:has(.wake-banner) .shell { padding-top: 30px; }
   .cp-list { min-width: 0; }
 }
+
+/* פגישות ויומן — בטלפון */
+@media (max-width: 820px) {
+  .mt-who { width: 72px; }
+  .mt-alt { flex-wrap: wrap; }
+  .mt-card-head .btn { min-height: 36px; }
+  .cal-people-row { flex-direction: column; }
+  .cal-hours, .cal-col { height: 640px; }
+}

@@ -79,9 +79,13 @@ const AiInboxView = (() => {
     if (data.waiting.length) {
       sections.push(section('✋ מחכה להחלטה שלך', null, data.waiting.map((w) => waitingRow(w, reload))));
     }
+    // פגישות שמחכות להחלטה — לפני הכול: ביטול ביומן, ובקשה להזיז
+    const meetings = pending.filter((s) => String(s.kind).startsWith('meeting_'));
+    if (meetings.length) sections.push(section('📅 פגישות', null, meetings.map((s) => meetingRow(s, reload))));
     // מוואטסאפ ומהמייל — שני מקורות, אותה הצעה ואותן פעולות
-    const fromChat = pending.filter((s) => s.data.source === 'whatsapp');
-    const fromMail = pending.filter((s) => s.data.source !== 'whatsapp');
+    const rest = pending.filter((s) => !String(s.kind).startsWith('meeting_'));
+    const fromChat = rest.filter((s) => s.data.source === 'whatsapp');
+    const fromMail = rest.filter((s) => s.data.source !== 'whatsapp');
     if (fromChat.length) {
       sections.push(section('💬 מקבוצות הוואטסאפ', null, fromChat.map((s) => suggestionRow(s, reload))));
     }
@@ -203,7 +207,58 @@ const AiInboxView = (() => {
     ]);
   }
 
+  /**
+   * פגישות שמחכות להחלטה: פגישה שבוטלה ביומן (לקבוע מחדש או לדחות), ובקשה
+   * של מזכירה להזיז פגישה שלי כדי לפנות זמן.
+   */
+  function meetingRow(s, reload) {
+    const d = s.data ?? {};
+    const when = (iso) => (iso ? new Date(iso).toLocaleString('he-IL', { weekday: 'short', day: 'numeric', month: 'numeric', hour: '2-digit', minute: '2-digit' }) : '');
+    if (s.kind === 'meeting_cancelled') {
+      const again = el('button.btn.btn-sm.btn-primary', {}, ['📅 לקבוע מחדש']);
+      again.addEventListener('click', async () => {
+        try {
+          const { task } = await API.task(d.taskId);
+          MeetingView.openDialog({ task, onDone: () => reload() });
+        } catch (err) { UI.error(err); }
+      });
+      const decline = el('button.btn.btn-sm.btn-ghost', {}, ['✕ לדחות']);
+      decline.addEventListener('click', async () => {
+        if (!await UI.confirm(`לא לקבוע מחדש את "${d.title}"? המשימה תיסגר.`, { okText: 'סגירת המשימה' })) return;
+        run(decline, async () => {
+          await API.post(`/api/meetings/cancelled/${s.id}/decline`);
+          const { task } = await API.task(d.taskId);
+          await MeetingView.closeTask(task, () => {});
+        }, reload)();
+      });
+      return el('div.ai-row', {}, [
+        el('div.ai-row-main', { onclick: () => d.taskId && TaskCardView.open(d.taskId) }, [
+          el('div', {}, [el('b', { text: `📅 הפגישה בוטלה ביומן: ${d.title}` })]),
+          el('div.mute-sm', { text: [when(d.start), d.owner ? `ביומן של ${d.owner}` : null].filter(Boolean).join(' · ') })
+        ]),
+        el('div.ai-row-actions', {}, [again, decline])
+      ]);
+    }
+    // meeting_move
+    const ok = el('button.btn.btn-sm.btn-primary', {}, ['✓ אשר הזזה']);
+    ok.addEventListener('click', run(ok, async () => {
+      await API.post(`/api/meetings/move-requests/${s.id}/approve`);
+      UI.success('הפגישה הוזזה — המשתתפים קיבלו עדכון');
+    }, reload));
+    const no = el('button.btn.btn-sm.btn-ghost', {}, ['✕']);
+    no.title = 'לא להזיז';
+    no.addEventListener('click', run(no, () => API.post(`/api/meetings/move-requests/${s.id}/reject`), reload));
+    return el('div.ai-row', {}, [
+      el('div.ai-row-main', {}, [
+        el('div', {}, [el('b', { text: `📅 ${d.requestedBy ?? s.from.name} מבקש/ת להזיז את "${d.title}"` })]),
+        el('div.mute-sm', { text: `מ-${when(d.from?.start)} ל-${when(d.to?.start)} — כדי לפנות זמן לפגישה אחרת` })
+      ]),
+      el('div.ai-row-actions', {}, [ok, no])
+    ]);
+  }
+
   function suggestionRow(s, reload) {
+    if (s.kind === 'meeting_cancelled' || s.kind === 'meeting_move') return meetingRow(s, reload);
     if (s.kind === 'duplicate') {
       const join = el('button.btn.btn-sm.btn-primary', {}, ['צרף אותי']);
       join.addEventListener('click', run(join, () => API.post(`/api/ai/suggestions/${s.id}/join`), reload));
@@ -559,5 +614,5 @@ const AiInboxView = (() => {
     setTimeout(() => scanDialog(() => HomeView.reload()), 300);
   }
 
-  return { load, card, openGmail, scanDialog, handleReturn, editSuggestion, rejectDialog };
+  return { load, card, openGmail, scanDialog, handleReturn, editSuggestion, rejectDialog, meetingRow };
 })();

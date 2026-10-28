@@ -132,6 +132,7 @@ const UI = (() => {
     else if (task.priority === 'high') tags.push(el('span.tag.tag-high', {}, ['גבוהה']));
     if (task.escalated) tags.push(el('span.tag.tag-escalated', {}, [icon('urgent'), 'הוקפצה']));
     if (task.scheduled) tags.push(el('span.tag.tag-scheduled', {}, ['🗓 מתוזמנת']));
+    if (task.meetingPending) tags.push(el('span.tag.tag-meeting', { title: 'מחכה שתיקבע לה פגישה' }, ['📅 פגישה לקביעה']));
     if (task.isRecurring) tags.push(el('span.tag.tag-recurring', {}, ['⟳ חוזרת']));
     if (task.dependency?.blocking) tags.push(el('span.tag.tag-high', {}, ['🔗 חסומה']));
     // משימת AI — מצב המעקב, ובראש ובראשונה "ממתין לאישורך"

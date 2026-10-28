@@ -2634,3 +2634,78 @@ input[type="color"] { width: 46px; height: 30px; padding: 2px; cursor: pointer; 
   .wa-stats { grid-template-columns: repeat(2, 1fr); }
   .wa-bubble { max-width: 92%; }
 }
+
+/* ================================================================ פגישות */
+
+.tag-meeting { background: #ede9fe; color: #5b21b6; }
+
+/* הדיאלוג */
+.mt-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.mt-slots { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 8px; }
+.mt-slot { border: 1px solid var(--border-strong); background: var(--surface); border-radius: 999px; padding: 4px 11px; font: inherit; font-size: 12.5px; cursor: pointer; }
+.mt-slot:hover { border-color: var(--brand); }
+.mt-slot.on { background: var(--brand); border-color: var(--brand); color: #fff; }
+.mt-loc { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
+.mt-loc .today-radio { margin: 0; padding: 6px 10px; align-items: center; }
+
+/* שורת הזמינות */
+.mt-avail { margin-top: 10px; border: 1px solid var(--border); border-radius: var(--radius); padding: 8px 10px; background: var(--surface-2); }
+.mt-row { display: flex; align-items: center; gap: 8px; min-height: 24px; }
+.mt-who { width: 110px; flex: none; font-size: 12px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mt-track { position: relative; flex: 1; height: 16px; background: var(--surface); border-radius: 4px; }
+.mt-head .mt-track { background: transparent; height: 14px; }
+.mt-tick { position: absolute; top: 0; font-size: 10px; color: var(--text-mute); transform: translateX(50%); }
+.mt-busy { position: absolute; top: 2px; bottom: 2px; background: #94a3b8; border-radius: 3px; }
+.mt-busy.is-clash { background: var(--danger); }
+.mt-note { position: absolute; inset-inline-start: 6px; top: 0; font-size: 11px; color: var(--text-mute); line-height: 16px; }
+.mt-sel-row .mt-track { background: transparent; height: 10px; }
+.mt-sel { position: absolute; top: 0; bottom: 0; background: var(--brand); opacity: .35; border-radius: 3px; }
+.mt-conflicts { margin-top: 8px; font-size: 13px; display: flex; flex-direction: column; gap: 2px; align-items: flex-start; }
+.mt-alts { margin-top: 10px; border: 1px solid #ddd6fe; background: #faf5ff; border-radius: var(--radius); padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; }
+.mt-alt { display: flex; align-items: center; gap: 10px; }
+.mt-alt-n { width: 22px; height: 22px; border-radius: 50%; background: #7c3aed; color: #fff; display: grid; place-items: center; font-size: 12px; font-weight: 800; flex: none; }
+.mt-alt-main { flex: 1; font-size: 13px; }
+
+/* הכרטיס במשימה */
+.mt-panel:empty { display: none; }
+.mt-panel { margin-bottom: 12px; }
+.mt-empty { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border: 1px dashed var(--border-strong); border-radius: var(--radius); }
+.mt-empty.is-pending { border: 1px solid #c4b5fd; background: #f5f3ff; }
+.mt-card { border: 1px solid #c4b5fd; background: #f5f3ff; border-radius: var(--radius-lg); padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; }
+.mt-card.is-past { background: var(--surface-2); border-color: var(--border); }
+.mt-card-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.mt-card-ic { font-size: 22px; }
+.mt-people { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 4px; }
+.mt-person { font-size: 12px; padding: 2px 8px; border-radius: 999px; background: var(--surface); border: 1px solid var(--border); }
+.mt-person.is-accepted { border-color: #86efac; background: var(--ok-bg); }
+.mt-person.is-declined { border-color: #fecaca; background: var(--danger-bg); text-decoration: line-through; }
+.mt-person.is-tentative { border-color: #fde68a; background: var(--warn-bg); }
+.mt-after { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-weight: 600; }
+
+/* ================================================================ מסך היומן */
+
+.cal { display: flex; flex-direction: column; gap: 10px; }
+.cal-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.cal-head h2 { margin: 0 6px 0 0; font-size: 20px; }
+.cal-title { min-width: 120px; text-align: center; }
+.cal-access { font-size: 12.5px; color: var(--text-soft); }
+.cal-people-row { display: flex; gap: 8px; align-items: flex-start; }
+.cal-people { display: flex; flex-wrap: wrap; gap: 5px; }
+.cal-chip { border: 1px solid var(--border-strong); background: var(--surface); border-radius: 999px; padding: 3px 10px; font: inherit; font-size: 12.5px; cursor: pointer; }
+.cal-chip.on { color: #fff; font-weight: 700; }
+.cal-chip.is-limited:not(.on) { color: var(--text-mute); border-style: dashed; }
+.cal-grid { display: grid; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); overflow-x: auto; }
+.cal-corner, .cal-colhead { position: sticky; top: 0; background: var(--surface-2); border-bottom: 1px solid var(--border); padding: 8px 6px; font-weight: 700; font-size: 13px; text-align: center; z-index: 2; }
+.cal-hours { grid-column: 1; height: 780px; display: flex; flex-direction: column; border-inline-end: 1px solid var(--border); }
+.cal-hour { flex: 1; font-size: 11px; color: var(--text-mute); padding: 2px 6px; }
+.cal-col { position: relative; height: 780px; border-inline-end: 1px solid var(--border); cursor: copy; }
+.cal-line { position: absolute; inset-inline: 0; border-top: 1px solid var(--border); pointer-events: none; }
+.cal-now { position: absolute; inset-inline: 0; border-top: 2px solid var(--danger); pointer-events: none; z-index: 3; }
+.cal-ev {
+  position: absolute; border-radius: 6px; padding: 2px 5px; color: #fff; font-size: 11.5px; overflow: hidden;
+  cursor: pointer; border: 1px solid rgba(255, 255, 255, .6); line-height: 1.3; z-index: 1;
+}
+.cal-ev b { font-weight: 700; }
+.cal-ev.is-busy { background: repeating-linear-gradient(45deg, #cbd5e1, #cbd5e1 6px, #e2e8f0 6px, #e2e8f0 12px); color: var(--text-soft); }
+.cal-ev.is-ours { box-shadow: inset 3px 0 0 #fbbf24; }
+.cal-allday { position: absolute; inset-inline: 2px; height: 18px; border-radius: 4px; color: #fff; font-size: 11px; padding: 0 5px; overflow: hidden; z-index: 2; cursor: pointer; }

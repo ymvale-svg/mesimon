@@ -53,6 +53,12 @@ const ACTIONS = [
     enabled: false
   },
   {
+    key: 'meeting_reminder', icon: '📅', label: 'התראה לפני פגישה', channel: 'proactive',
+    description: 'כמה דקות לפני פגישה שנקבעה ממשימון (ההגדרה "קביעת פגישות" בהגדרות): הודעה לבעל היומן, למי שקבע ולכל משתתף מהארגון שיש לו טלפון — עם קישור ה-Zoom. פגישה שבוטלה ביומן — בלי הודעה.',
+    examples: [],
+    enabled: true
+  },
+  {
     key: 'help', icon: '❓', label: 'עזרה', channel: 'private',
     description: 'מה הבוט יודע לעשות — הפעולות שמופעלות לכותב, עם הדוגמאות שכאן.',
     examples: ['מה אתה יודע לעשות?'],

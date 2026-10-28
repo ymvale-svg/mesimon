@@ -141,6 +141,8 @@ async function receive(userId, { max = 20 } = {}) {
             ?? '',
           file,
           id: b.idMessage ?? String(note.receiptId),
+          // השם כפי שהוא שמור בטלפון של המשתמש — לתצוגה בהצעה
+          name: b.senderData.senderName || b.senderData.chatName || '',
           at: b.timestamp ? new Date(b.timestamp * 1000) : new Date(),
           outgoing
         });

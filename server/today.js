@@ -69,6 +69,9 @@ async function build(actor, { fresh = false } = {}) {
       .map((s) => ({ ...s, older: W.ilDateOf(s.createdAt) < date }))
     : [];
 
+  // פגישות שמחכות להחלטה — בוטלה ביומן, או בקשה להזיז. לא תלוי בחיבור המייל
+  const meetingDecisions = MailScan.listFor(actor.id).pending.filter((s) => String(s.kind).startsWith('meeting_'));
+
   let calendar;
   try {
     calendar = await Calendar.eventsForDay(actor.id, date, { fresh });
@@ -95,6 +98,7 @@ async function build(actor, { fresh = false } = {}) {
     workDays: W.workDaysOf(actor.id),
     tasks: { overdue, today },
     mail: { connected: mailConnected, items: mail },
+    meetings: meetingDecisions,
     calendar,
     google: {
       enabled: Gmail.isEnabled(),
@@ -106,10 +110,11 @@ async function build(actor, { fresh = false } = {}) {
       overdue: overdue.length,
       today: today.length,
       mail: mail.length,
+      meetings: meetingDecisions.length,
       events: calendar.events.length,
       upcomingEvents: upcoming.length,
       doneToday,
-      total: overdue.length + today.length + mail.length + upcoming.length
+      total: overdue.length + today.length + mail.length + meetingDecisions.length + upcoming.length
     }
   };
 }

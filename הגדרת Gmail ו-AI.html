@@ -71,7 +71,8 @@
           <tr><th>הרשאה</th><th>בשביל מה</th></tr>
           <tr><td>.../auth/gmail.readonly</td><td>סריקת מיילים, קליטת תשובות</td></tr>
           <tr><td>.../auth/gmail.send</td><td>שליחת משימות AI (ומייל הבוקר, אם אין שרת דואר)</td></tr>
-          <tr><td>.../auth/calendar.events</td><td><b>יומן — קריאה וכתיבה של אירועים.</b> כרגע משימון רק קורא; הכתיבה פתוחה לפיצ'רים עתידיים, כדי שלא יצטרכו לחבר שוב</td></tr>
+          <tr><td>.../auth/calendar.events</td><td><b>יומן — קריאה וכתיבה של אירועים.</b> הפגישות ב-Today, וקביעת פגישות מתוך משימה (ההזמנה יוצאת מהיומן של העובד)</td></tr>
+          <tr><td>.../auth/calendar.freebusy</td><td>זמינות — "פנוי / תפוס" של עמיתים, להצעת מועדים ולזיהוי התנגשויות</td></tr>
           <tr><td>.../auth/calendar.calendarlist.readonly</td><td>רשימת היומנים — לבחירת יומנים נוספים ל-Today</td></tr>
           <tr><td>.../auth/contacts</td><td>אנשי הקשר — קריאה, ושמירת איש קשר חדש רק כשהעובד לוחץ "⭐ שמור"</td></tr>
           <tr><td>.../auth/contacts.other.readonly</td><td>"אנשי קשר אחרים" — מי שהתכתבו איתו ולא שמרו</td></tr>
@@ -109,6 +110,28 @@
       (תצוגה מקדימה, או יצירה ישירה כשאומרים "פתח משימה"), ומתג <b>👂 האזנה</b> ("משימון!").</li>
 </ol>
 
+<h2>5. פגישות: Zoom ויומנים למזכירות</h2>
+<p><b>Zoom</b> — חשבון החברה, אפליקציית Server-to-Server OAuth (פעם אחת, על ידי מנהל חשבון ה-Zoom):</p>
+<ol>
+  <li><code>marketplace.zoom.us</code> ← Develop ← Build App ← <b>Server-to-Server OAuth</b>.</li>
+  <li>Scopes: <code>meeting:write:admin</code>, <code>meeting:read:admin</code>, <code>user:read:admin</code> ← Activate.</li>
+  <li>את <b>Account ID</b>, <b>Client ID</b> ו-<b>Client Secret</b> מעבירים למחשוב, למשתני הסביבה
+      <code>ZOOM_ACCOUNT_ID</code>, <code>ZOOM_CLIENT_ID</code>, <code>ZOOM_CLIENT_SECRET</code>.</li>
+  <li>ניהול ← הגדרות ← חיבורים ← Zoom ← <b>🔄 משיכת משתמשים</b>. בכרטיס כל עובד (ניהול ← משתמשים ← עריכה)
+      בוחרים את <b>משתמש ה-Zoom שלו</b>. כשהוא תפוס בשעת הפגישה — משימון לוקח משתמש Zoom פנוי מהחשבון,
+      והזימון עדיין יוצא מהמייל של העובד.</li>
+</ol>
+<p><b>מזכירות</b> — בכרטיס העובדת מסמנים <b>📅 מזכירות</b>. מה שהיא רואה ועורכת נקבע <b>רק</b> לפי מה שכל עובד
+   שיתף איתה ב-Google Calendar:</p>
+<ol>
+  <li>העובד: Google Calendar ← ⚙ ← היומן שלו ← <b>Share with specific people</b> ← כתובת המזכירה.</li>
+  <li>הרשאה: <b>Make changes to events</b> — המזכירה קובעת ומזיזה ביומן שלו; <b>See all event details</b> — רואה;
+      <b>See only free/busy</b> — רק "תפוס".</li>
+  <li>במסך 📅 יומן של המזכירה ← ⟳ — היומן מופיע (מתעדכן לבד תוך 10 דקות).</li>
+</ol>
+<p><b>התראה לפני פגישה</b> — יוצאת מבוט הוואטסאפ הארגוני (ניהול ← בוט וואטסאפ), עם קישור ה-Zoom, למי שיש לו
+   טלפון בכרטיס. אפשר לכבות אותה שם ("תזכורת לפני פגישה"). הזמן — בהגדרות ("כמה דקות לפני פגישה").</p>
+
 <h2>מה יוצא לבד ומה באישור</h2>
 <table>
   <tr><th>מה</th><th>איך</th></tr>
@@ -128,6 +151,9 @@
   <tr><td>אין אנשי קשר באשף משימת AI</td><td>People API לא הופעל (שלב 2), או שלא סומנה תיבת אנשי הקשר. ב"חיבור Google" ← "🔄 רענון"</td></tr>
   <tr><td>"מחוברת לקריאה בלבד"</td><td>חיבור ישן, מלפני הרשאת השליחה. "חיבור מחדש עם הרשאת שליחה"</td></tr>
   <tr><td>"Access blocked" / "This app is blocked"</td><td>מסך ההסכמה אינו Internal, או ש-Gmail API לא הופעל (שלב 2)</td></tr>
+  <tr><td>"חסר בחיבור: זמינות" בקביעת פגישה</td><td>חיבור מלפני הרשאת ה-freebusy. "חיבור מחדש" ומסמנים את כל התיבות</td></tr>
+  <tr><td>המזכירה לא רואה יומן של עובד</td><td>העובד לא שיתף איתה ב-Google Calendar (סעיף 5), או ששיתף "free/busy" בלבד. אחרי שיתוף — ⟳ במסך היומן</td></tr>
+  <tr><td>"אין משתמש Zoom פנוי"</td><td>כל משתמשי ה-Zoom בחשבון תפוסים באותה שעה. מועד אחר, או משתמש Zoom נוסף</td></tr>
   <tr><td>"החיבור ל-Gmail בוטל"</td><td>העובד ביטל את ההרשאה בחשבון Google, או שהוחלף מפתח ההצפנה. מחברים מחדש</td></tr>
   <tr><td>הכפתור "חיבור Gmail" אינו פעיל</td><td>הכניסה עם Google אינה מוגדרת בשרת — ראו "הגדרת כניסה עם Google"</td></tr>
 </table>

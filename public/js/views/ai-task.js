@@ -768,10 +768,40 @@ const AiTaskView = (() => {
         stateBox,
         UI.field('apiUrl', apiUrl),
         el('div.row', {}, [UI.field('idInstance', instanceId), UI.field('apiTokenInstance', token)]),
-        UI.field('המספר שלי', phone, 'לתצוגה בלבד — ההודעות יוצאות מהמספר שמקושר ב-Green API')
+        UI.field('המספר שלי', phone, 'לתצוגה בלבד — ההודעות יוצאות מהמספר שמקושר ב-Green API'),
+        channel ? scanBox() : null
       ]),
       footer: [save, el('div.spacer'), remove]
     });
+
+    /**
+     * "להציע משימות ופגישות מהוואטסאפ שלי" — שיחות פרטיות בלבד (קבוצות נסרקות
+     * דרך הבוט הארגוני). מספרים שלא לסרוק — אחד בשורה.
+     */
+    function scanBox() {
+      const box = el('div', { style: { marginTop: '14px' } });
+      API.get('/api/me/wa-scan').then((p) => {
+        const on = el('input', { type: 'checkbox', checked: p.enabled });
+        const ignore = el('textarea', { dir: 'ltr', placeholder: '050-0000000', style: { minHeight: '56px' } });
+        ignore.value = (p.ignore ?? []).map((n) => (n.startsWith('972') ? `0${n.slice(3)}` : n)).join('\n');
+        const savePrefs = async () => {
+          try {
+            await API.put('/api/me/wa-scan', { enabled: on.checked, ignore: ignore.value.split(/[\n,]+/).map((x) => x.trim()).filter(Boolean) });
+            UI.success('נשמר');
+          } catch (err) { UI.error(err); }
+        };
+        on.addEventListener('change', savePrefs);
+        ignore.addEventListener('change', savePrefs);
+        UI.mount(box,
+          el('div.ai-section-title', { text: '💬 הצעות מהוואטסאפ שלי' }),
+          el('label.checkbox', {}, [on, ' להציע משימות ופגישות מהודעות שמגיעות אליי בוואטסאפ']),
+          el('div.mute-sm', { text: 'רק שיחות פרטיות, ורק עניינים של עבודה — ההצעות מגיעות ל"ממתין לאישורך", ושום דבר לא נוצר בלי אישור. תוכן ההודעות לא נשמר במשימון.' }),
+          !p.ai ? el('div.mute-sm.text-warn', { text: 'חיבור ה-AI עוד לא מוגדר בשרת — ההצעות יתחילו כשיוגדר.' }) : null,
+          UI.field('מספרים שלא לסרוק (משפחה, חברים)', ignore, 'אחד בשורה')
+        );
+      }).catch(() => {});
+      return box;
+    }
   }
 
   return { openDialog, panel, openWhatsApp, talked, postponeButton };

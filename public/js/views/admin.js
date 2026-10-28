@@ -545,6 +545,21 @@ const AdminView = (() => {
     const passInput = el('input', { type: 'text', placeholder: isEdit ? 'השאר ריק כדי לא לשנות' : 'ריק = תישלח הזמנה' });
     // עובד שטח עובד גם בשישי, גם כשהמחלקה שלו לא — משפיע על "מחר" ועל מייל הבוקר
     const fieldWorkerCheck = el('input', { type: 'checkbox', checked: Boolean(user?.fieldWorker) });
+    // מזכירות — קובעות פגישות ביומנים שהעובדים שיתפו איתן, ורואות את מסך היומן
+    const secretaryCheck = el('input', { type: 'checkbox', checked: Boolean(user?.secretary) });
+    /*
+     * משתמש ה-Zoom שמארח את הפגישות של העובד — מחשבון ה-Zoom של החברה, לא
+     * בהכרח המייל שלו. הרשימה נטענת מהשרת; בלי חיבור Zoom השדה מוסתר.
+     */
+    const zoomSelect = UI.select([{ value: '', label: 'ללא — משתמש Zoom פנוי בכל פגישה' }], user?.zoomUserId ?? '');
+    const zoomField = UI.field('משתמש Zoom', zoomSelect, 'הפגישות שהעובד קובע ייפתחו אצל משתמש ה-Zoom הזה. אם הוא תפוס באותה שעה — אצל משתמש פנוי אחר מהחשבון');
+    zoomField.style.display = 'none';
+    API.get('/api/admin/zoom/users').then((z) => {
+      if (!z.enabled || !z.users.length) return;
+      for (const u of z.users) zoomSelect.appendChild(el('option', { value: u.id }, [`${u.name} · ${u.email}${u.license === 'basic' ? ' (חינמי — 40 דק׳)' : ''}`]));
+      zoomSelect.value = user?.zoomUserId ?? '';
+      zoomField.style.display = '';
+    }).catch(() => {});
 
     const saveBtn = el('button.btn.btn-primary', {}, ['שמירה']);
     const m = UI.modal({
@@ -563,6 +578,11 @@ const AdminView = (() => {
           el('label.checkbox', {}, [fieldWorkerCheck, ' עובד/ת שטח — עובד/ת גם ביום ו׳']),
           el('div.hint', { text: 'ימי העבודה נקבעים לפי המחלקה. עובד שטח מוסיף את יום ו׳ — "מחר" של יום חמישי הוא שישי, ומייל הבוקר נשלח גם בשישי.' })
         ]),
+        el('div.field', {}, [
+          el('label.checkbox', {}, [secretaryCheck, ' 📅 מזכירות — קובעת פגישות ורואה את מסך היומן']),
+          el('div.hint', { text: 'הגישה ליומן של כל עובד — רק לפי מה שהוא שיתף איתה ב-Google. כדי לראות את המשימות שמחכות לקביעה של כולם — גם "צפייה בכל משימות המחלקה".' })
+        ]),
+        zoomField,
         grantsBox,
         managerNote,
         !isEdit
@@ -583,8 +603,10 @@ const AdminView = (() => {
         phone: phoneInput.value.trim(),
         role: roleSelect.value,
         status: statusSelect.value,
-        fieldWorker: fieldWorkerCheck.checked
+        fieldWorker: fieldWorkerCheck.checked,
+        secretary: secretaryCheck.checked
       };
+      if (zoomField.style.display !== 'none') payload.zoomUserId = zoomSelect.value || null;
       // או מזהה מחלקה קיימת, או שם למחלקה חדשה — השרת אינו מקבל שם מחלקה חופשי
       if (wantsNewDept) payload.newDepartmentName = newDeptInput.value.trim();
       else payload.departmentId = deptSelect.value ? Number(deptSelect.value) : null;
@@ -1018,6 +1040,11 @@ const AdminView = (() => {
     ai_mail_scan_enabled: ['סריקת מיילים: פעילה', 'מיילים שלא נקראו בתיבת ה-Gmail של כל משתמש שחיבר אותה הופכים להצעות משימה'],
     ai_scan_time: ['סריקת מיילים: שעת ריצת הבוקר', 'שעון ישראל, בפורמט 07:00. באותה שעה נשלחת גם ההודעה "היום יוצאים"'],
     ai_scan_daily_limit: ['סריקת מיילים: תקרה יומית למשתמש', 'כל מייל הוא קריאה ל-AI. מה שמעבר לתקרה נסרק למחרת'],
+    meeting_hours: ['פגישות: שעות לפגישות', 'שעון ישראל, בפורמט 08:30-18:00. הצעת מועדים ושורת הזמינות — רק בתוך השעות האלה'],
+    meeting_default_minutes: ['פגישות: משך ברירת מחדל (דקות)', ''],
+    meeting_buffer_minutes: ['פגישות: מרווח מפגישה צמודה (דקות)', 'בהצעת מועדים — לא צמוד לפגישה אחרת'],
+    meeting_reminder_minutes: ['פגישות: התראה לפני (דקות)', 'במשימון ובבוט הוואטסאפ, עם קישור ה-Zoom'],
+    meeting_ai_alternatives: ['פגישות: הצעות AI להזזת פגישות חופפות', 'כבוי = החלופות מסודרות לפי כללים קבועים, בלי AI'],
   };
 
   /**
@@ -1058,8 +1085,36 @@ const AdminView = (() => {
           x.gmail.enabled ? 'כל משתמש מחבר את התיבה שלו מ"החשבון שלי" — קריאה ושליחה. מיילים של משימות AI יוצאים רק משם. נדרשת הפעלת Gmail API ב-Google Cloud — ראו "הגדרת Gmail ו-AI".' : 'על אותו חיבור Google שמשמש לכניסה. בלעדיו משימות AI עובדות רק בוואטסאפ ובתוך המערכת.') : null,
         x.ai ? row('משימות AI', x.ai.enabled, x.ai.model, x.ai.missing,
           x.ai.enabled ? 'ניסוח פניות, מעקב והכרעה אם התשובה מספקת.' : 'בלי המפתח האפשרות "משימת AI" אינה זמינה.') : null,
+        x.zoom ? row('Zoom של החברה', x.zoom.enabled, `${x.zoom.users} משתמשי Zoom · ${x.zoom.linked} עובדים משויכים`, x.zoom.missing,
+          x.zoom.enabled ? 'קישורי Zoom לפגישות שנקבעות ממשימון. שיוך עובד למשתמש Zoom — בכרטיס העובד.' : 'Server-to-Server OAuth ב-Zoom Marketplace — שלושה ערכים לשרת. בלעדיו הפגישות נקבעות בלי Zoom.') : null,
+        x.zoom?.enabled ? zoomUsersBox() : null
       ])
     ]);
+  }
+
+  /** משתמשי ה-Zoom של החברה — רענון מ-Zoom, ומי משויך לכל אחד */
+  function zoomUsersBox() {
+    const box = el('div', { style: { padding: '10px 0' } });
+    const draw = (z) => UI.mount(box,
+      el('div.flex', {}, [
+        el('b', { text: 'משתמשי Zoom' }),
+        el('div.spacer'),
+        (() => {
+          const b = el('button.btn.btn-sm', {}, ['⟳ רענון מ-Zoom']);
+          b.addEventListener('click', async () => {
+            b.disabled = true;
+            try { draw(await API.post('/api/admin/zoom/sync')); UI.success('הרשימה עודכנה'); } catch (err) { b.disabled = false; UI.error(err); }
+          });
+          return b;
+        })()
+      ]),
+      z.users.length
+        ? el('div', {}, z.users.map((u) => el('div.mute-sm', {
+            text: `${u.name} · ${u.email}${u.license === 'basic' ? ' · חינמי (40 דק׳)' : ''} — ${u.linked.length ? u.linked.map((x) => x.name).join(', ') : 'לא משויך'}`
+          })))
+        : el('div.mute-sm', { text: 'עוד לא נטענו משתמשים — "רענון מ-Zoom".' }));
+    API.get('/api/admin/zoom/users').then(draw).catch(() => {});
+    return box;
   }
 
   /** מצב אחסון הנתונים — התשובה לשאלה "האם הנתונים שלי נשמרים" */

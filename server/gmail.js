@@ -39,6 +39,8 @@ const SCOPES = {
   send: SEND_SCOPE,
   calendar: 'https://www.googleapis.com/auth/calendar.events',
   calendarList: 'https://www.googleapis.com/auth/calendar.calendarlist.readonly',
+  // זמינות עמיתים — התנגשויות והצעת מועדים בקביעת פגישה
+  freebusy: 'https://www.googleapis.com/auth/calendar.freebusy',
   contacts: 'https://www.googleapis.com/auth/contacts',
   otherContacts: 'https://www.googleapis.com/auth/contacts.other.readonly',
   directory: 'https://www.googleapis.com/auth/directory.readonly'

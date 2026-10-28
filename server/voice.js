@@ -83,7 +83,7 @@ const SCHEMA = {
   type: 'object',
   additionalProperties: false,
   required: ['kind', 'title', 'description', 'ai_instruction', 'assignee', 'due_date', 'due_heard', 'checklist',
-    'priority', 'project', 'status_short', 'recurrence', 'activate_date', 'unclear'],
+    'priority', 'project', 'status_short', 'recurrence', 'activate_date', 'meeting', 'unclear'],
   properties: {
     kind: { type: 'string', enum: ['task', 'ai_task'] },
     title: { type: 'string' },
@@ -104,6 +104,16 @@ const SCHEMA = {
     status_short: { type: 'string' },
     recurrence: { type: 'string', enum: ['', 'daily', 'weekly', 'monthly'] },
     activate_date: { type: 'string' },
+    meeting: {
+      type: 'object', additionalProperties: false, required: ['is', 'with', 'date', 'time', 'minutes'],
+      properties: {
+        is: { type: 'boolean' },
+        with: { type: 'array', items: { type: 'string' } },
+        date: { type: 'string' },
+        time: { type: 'string' },
+        minutes: { type: 'integer' }
+      }
+    },
     unclear: { type: 'array', items: { type: 'string' } }
   }
 };
@@ -228,7 +238,16 @@ function resolve(actor, out, ctx) {
       checklist: (out.checklist ?? []).map((c) => clip(c, 200)).filter(Boolean).slice(0, 15),
       statusShort: clip(out.status_short, 200),
       recurrence: ['daily', 'weekly', 'monthly'].includes(out.recurrence) ? out.recurrence : '',
-      activateDate: activate
+      activateDate: activate,
+      // "קבע פגישה עם…" — מה שנשמע על הפגישה, לדיאלוג קביעת הפגישה
+      meeting: out.meeting?.is
+        ? {
+            with: (out.meeting.with ?? []).map((x) => clip(x, 80)).filter(Boolean).slice(0, 10),
+            date: W.isDate(out.meeting.date) ? out.meeting.date : null,
+            time: /^\d{1,2}:\d{2}$/.test(String(out.meeting.time ?? '')) ? out.meeting.time.padStart(5, '0') : null,
+            minutes: Number(out.meeting.minutes) > 0 ? Math.min(600, Number(out.meeting.minutes)) : null
+          }
+        : null
     },
     warnings
   };
@@ -251,6 +270,7 @@ function taskBody(draft, transcript) {
     isRecurring: Boolean(draft.recurrence),
     recurrenceFreq: draft.recurrence || null,
     source: 'voice',
+    meetingPending: draft.meeting ? true : undefined,
     auditNote: `המשימה נוצרה מהקלטה: "${clip(transcript, 300)}"`
   };
 }
@@ -297,7 +317,12 @@ async function handle(actor, { text, forcePreview = false }, { projects, createT
   }
 
   const mode = prefs(actor.id).mode;
-  const direct = !forcePreview && mode === 'direct' && trigger && draft.kind === 'task' && Boolean(draft.title);
+  /*
+   * קביעת פגישה בקול: המשימה "פגישה לקביעה" נוצרת מיד, ודיאלוג הפגישה נפתח
+   * ממולא — הוא עצמו התצוגה המקדימה, כי הוא שולח הזמנות רק אחרי לחיצה.
+   */
+  const meeting = draft.kind === 'task' && Boolean(draft.meeting) && Boolean(draft.title) && !forcePreview;
+  const direct = meeting || (!forcePreview && mode === 'direct' && trigger && draft.kind === 'task' && Boolean(draft.title));
 
   if (!draft.title && draft.kind === 'task') warnings.unshift({ field: 'title', text: 'לא זוהה נושא למשימה' });
 
