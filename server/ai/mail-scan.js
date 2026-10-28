@@ -22,6 +22,7 @@ const path = require('node:path');
 
 const D = require('../db');
 const Claude = require('./claude');
+const W = require('../workdays');
 const Gmail = require('../gmail');
 const Mime = require('../mime');
 const AiTasks = require('../ai-tasks');
@@ -120,6 +121,7 @@ const ANALYSIS_SCHEMA = {
         properties: {
           title: { type: 'string' },
           summary: { type: 'string' },
+          meeting: { type: 'boolean', description: 'האם הבקשה היא לקבוע פגישה' },
           checklist: { type: 'array', items: { type: 'string' } },
           due_date: { type: 'string', description: 'YYYY-MM-DD או ריק' },
           priority: { type: 'string', enum: ['normal', 'high', 'urgent'] },
@@ -151,7 +153,7 @@ const ANALYSIS_SCHEMA = {
             additionalProperties: false
           }
         },
-        required: ['title', 'summary', 'checklist', 'due_date', 'priority', 'people', 'ambiguous', 'ai_request'],
+        required: ['title', 'summary', 'meeting', 'checklist', 'due_date', 'priority', 'people', 'ambiguous', 'ai_request'],
         additionalProperties: false
       }
     }
@@ -220,6 +222,8 @@ function sanitize(out, user, users) {
     return {
       title: String(t.title ?? '').trim().slice(0, 120) || 'משימה מהמייל',
       summary: String(t.summary ?? '').trim().slice(0, 1500),
+      // בקשה לקבוע פגישה — המשימה תסומן "📅 פגישה לקביעה"
+      meeting: t.meeting === true,
       checklist,
       dueDate: /^\d{4}-\d{2}-\d{2}$/.test(String(t.due_date ?? '')) ? t.due_date : '',
       priority: ['normal', 'high', 'urgent'].includes(t.priority) ? t.priority : 'normal',
@@ -360,7 +364,8 @@ async function processMessage(user, conn, gmailId) {
       const id = insertSuggestion(user, meta, 'task', data);
       try {
         const actor = Auth.loadActor('user', user.id);
-        const taskId = createFromSuggestion(suggestionById(id), actor, {});
+        // משימה מהמייל בלי יעד — להיום, כדי שתופיע ב-Today ולא תישכח בלוח
+        const taskId = createFromSuggestion(suggestionById(id), actor, t.dueDate ? {} : { dueDate: W.todayIL() });
         D.run("UPDATE ai_suggestions SET status = 'auto', task_id = ?, decided_at = ? WHERE id = ?", taskId, D.nowIso(), id);
         created++;
       } catch (err) {
@@ -624,8 +629,12 @@ function createFromSuggestion(sug, actor, edits = {}) {
     source: fromWhatsApp ? 'whatsapp' : 'email',
     sourceRef: sug.header_id,
     sourceUserId: sug.user_id,
-    auditNote: fromWhatsApp ? `המשימה נוצרה מבקשה של ${sug.from_name} בקבוצת "${data.groupName}"` : `המשימה נוצרה ממייל של ${sug.from_name}`
+    auditNote: fromWhatsApp
+      ? (data.personal ? `המשימה נוצרה מהודעת וואטסאפ של ${sug.from_name}` : `המשימה נוצרה מבקשה של ${sug.from_name} בקבוצת "${data.groupName}"`)
+      : `המשימה נוצרה ממייל של ${sug.from_name}`
   });
+  // בקשה לפגישה — מהמייל, מקבוצה או מהוואטסאפ האישי: "📅 פגישה לקביעה"
+  if (data.meeting) D.run('UPDATE tasks SET meeting_pending = 1 WHERE id = ?', taskId);
 
   // מי שביקש בקבוצה — יודע שהבקשה התקבלה ונפתחה
   if (fromWhatsApp && data.requester?.id && data.requester.id !== actor.id) {

@@ -135,6 +135,11 @@ const TaskCardView = (() => {
         refreshBackground();
         App.refreshNotifications();
       }),
+      // הפגישה של המשימה — נקבעה, בוטלה, או "📅 קביעת פגישה"
+      MeetingView.panel(task, async () => {
+        await reload();
+        refreshBackground();
+      }),
       // משימה שנולדה ממייל — הקישור למייל עצמו רק אצל מי שהוא בתיבה שלו
       task.source?.type === 'email'
         ? el('div.mute-sm', { style: { marginBottom: '10px' } }, [

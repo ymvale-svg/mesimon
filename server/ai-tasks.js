@@ -52,7 +52,7 @@ const STATE_LABELS = {
  * פעולות שתלויות בקוד של נקודות הקצה (שמירת קובץ למשימה עם כל הבדיקות).
  * מוזרקות משם ולא נדרשות מכאן — אחרת הייתה נוצרת תלות מעגלית.
  */
-const hooks = { saveFile: null, pollMailbox: null, afterTick: null };
+const hooks = { saveFile: null, pollMailbox: null, afterTick: null, scanWhatsApp: null, scanningUsers: () => [] };
 const setHooks = (h) => Object.assign(hooks, h);
 
 const skill = () => fs.readFileSync(SKILL_PATH, 'utf8');
@@ -856,10 +856,19 @@ function contactDetected(req, { channel, text, at = new Date(), ref = null }) {
 }
 
 async function pollWhatsApp() {
-  const owners = D.all(
-    `SELECT DISTINCT owner_id FROM ai_requests WHERE contact_phone <> '' AND state IN (${OPEN_STATES.map(() => '?').join(',')})`,
-    ...OPEN_STATES
-  ).map((r) => r.owner_id);
+  /*
+   * הוואטסאפ האישי נקרא אצל מי שיש לו משימת AI פתוחה בוואטסאפ, ואצל מי
+   * שהפעיל "להציע משימות מהוואטסאפ שלי". קריאה מוחקת את ההודעה מהתור של
+   * Green API, ולכן היא נעשית במקום אחד בלבד — כאן — ומה שלא שייך למשימת AI
+   * עובר לסריקה (‎ai/whatsapp-scan.js‎).
+   */
+  const owners = [...new Set([
+    ...D.all(
+      `SELECT DISTINCT owner_id FROM ai_requests WHERE contact_phone <> '' AND state IN (${OPEN_STATES.map(() => '?').join(',')})`,
+      ...OPEN_STATES
+    ).map((r) => r.owner_id),
+    ...hooks.scanningUsers()
+  ])];
 
   for (const ownerId of owners) {
     if (!WhatsApp.connectedUsers().includes(ownerId)) continue;
@@ -878,9 +887,13 @@ async function pollWhatsApp() {
     );
     // כמה הודעות קצרות ברצף הן תשובה אחת — מוערכות יחד ולא אחת-אחת
     const byRequest = new Map();
+    const unmatched = [];
     for (const m of incoming) {
       const req = open.find((r) => WhatsApp.normalizePhone(r.contact_phone) === m.from);
-      if (!req) continue;
+      if (!req) {
+        if (!m.outgoing) unmatched.push(m);
+        continue;
+      }
       // הודעה שהמשתמש כתב בעצמו מהטלפון לנמען
       if (m.outgoing) {
         contactDetected(requestById(req.id), { channel: 'whatsapp', text: m.text, at: m.at, ref: m.id });
@@ -911,6 +924,11 @@ async function pollWhatsApp() {
       } catch (err) {
         console.error('[משימון] טיפול בהודעת וואטסאפ נכשל:', err.message);
       }
+    }
+
+    // הודעות שאינן תשובה למשימת AI — הצעות למשימות ולפגישות, למי שהפעיל
+    if (unmatched.length && hooks.scanWhatsApp && hooks.scanningUsers().includes(ownerId)) {
+      await hooks.scanWhatsApp(ownerId, unmatched).catch((err) => console.error('[משימון] סריקת הוואטסאפ נכשלה:', err.message));
     }
   }
 }

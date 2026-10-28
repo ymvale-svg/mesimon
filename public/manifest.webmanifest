@@ -20,6 +20,18 @@
   ],
   "shortcuts": [
     {
+      "name": "Today — מה עושים היום",
+      "short_name": "Today",
+      "url": "/?view=today",
+      "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "משימה בקול",
+      "short_name": "משימה בקול",
+      "url": "/?voice=1",
+      "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192" }]
+    },
+    {
       "name": "משימה חדשה",
       "short_name": "משימה חדשה",
       "url": "/?new=task",

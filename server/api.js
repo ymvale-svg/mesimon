@@ -17,6 +17,12 @@ const Xlsx = require('./xlsx-write');
 const Spreadsheet = require('./spreadsheet');
 const AiTasks = require('./ai-tasks');
 const AiApi = require('./api-ai');
+const TodayApi = require('./api-today');
+const MeetingsApi = require('./api-meetings');
+const Zoom = require('./zoom');
+const W = require('./workdays');
+const GContacts = require('./google-contacts');
+const Calendar = require('./calendar');
 const Gmail = require('./gmail');
 const MailScan = require('./ai/mail-scan');
 const Claude = require('./ai/claude');
@@ -433,6 +439,8 @@ function shapeTask(task, actor, { withDetails = false } = {}) {
     dependsOnTaskId: task.depends_on_task_id,
     dependency: dependency ? { id: dependency.id, title: dependency.title, blocking: dependencyBlocking } : null,
     statusShort: task.status_short ?? '',
+    // "📅 פגישה לקביעה" — מחכה שתיקבע לה פגישה (‎meetings.js‎)
+    meetingPending: Boolean(task.meeting_pending),
     trackStatusId: track?.id ?? null,
     trackStatusLabel: track?.label ?? null,
     trackStatusColor: track?.color ?? null,
@@ -661,6 +669,9 @@ router.get('/api/auth/google/callback', async (req, res, ctx) => {
     if (!userId || (ctx.actor && (ctx.actor.type !== 'user' || ctx.actor.id !== userId))) return back('gmailError', 'הבקשה פגה או אינה תקינה. נסו לחבר שוב.');
     try {
       await Gmail.connect(userId, params.get('code'), req);
+      // החיבור כולל עכשיו גם יומן ואנשי קשר — סנכרון ראשון ברקע, ומטמון יומן נקי
+      Calendar.forget(userId);
+      GContacts.syncSoon(userId);
       return back('gmail', 'connected');
     } catch (err) {
       console.error('[משימון] חיבור Gmail נכשל:', err.message);
@@ -739,7 +750,9 @@ function publicActor(actor) {
     departmentId: actor.departmentId ?? null,
     boardId: actor.boardId ?? null,
     readOnly: !!actor.readOnly,
-    phone: actor.type === 'user' ? D.get('SELECT phone FROM users WHERE id = ?', actor.id)?.phone ?? '' : ''
+    phone: actor.type === 'user' ? D.get('SELECT phone FROM users WHERE id = ?', actor.id)?.phone ?? '' : '',
+    // מזכירה — רואה את מסך היומן וקובעת ביומנים שהעובדים שיתפו איתה
+    secretary: actor.type === 'user' && Boolean(D.get('SELECT is_secretary FROM users WHERE id = ?', actor.id)?.is_secretary)
   };
 }
 
@@ -1244,6 +1257,9 @@ router.post('/api/tasks', async (req, res, ctx) => {
  *
  * @returns {number} מזהה המשימה
  */
+// ‎\b‎ אינו עובד עם אותיות עבריות ב-JavaScript — הגבול הוא רווח, פיסוק או סוף
+const MEETING_TITLE = /^\s*(?:פגישה|פגישת|קביעת\s+פגישה|לקבוע\s+פגישה|לתאם\s+פגישה|תיאום\s+פגישה|ישיבה\s+עם)(?=$|[\s,.:;!?-])/;
+
 function createTask(actor, body) {
   requirePerm(actor, 'create_task');
   const title = String(body.title ?? '').trim();
@@ -1334,6 +1350,13 @@ function createTask(actor, body) {
     String(body.statusShort ?? '').slice(0, 200)
   );
   const id = Number(res1.lastInsertRowid);
+  /*
+   * "📅 פגישה לקביעה" — משימה שהכותרת שלה היא בקשה לפגישה, מכל מקור (ידני,
+   * הקלטה, בוט, מייל). אפשר להסיר את הסימון מהכרטיס.
+   */
+  if (body.meetingPending === true || (body.meetingPending !== false && MEETING_TITLE.test(title))) {
+    D.run('UPDATE tasks SET meeting_pending = 1 WHERE id = ?', id);
+  }
   if (body.source) {
     D.run('UPDATE tasks SET source = ?, source_ref = ?, source_user_id = ? WHERE id = ?',
       String(body.source), body.sourceRef ?? null, body.sourceUserId ?? null, id);
@@ -2982,7 +3005,10 @@ const shapeDepartment = (d) => ({
   managerName: d.manager_user_id
     ? D.get('SELECT full_name FROM users WHERE id = ?', d.manager_user_id)?.full_name ?? null
     : null,
-  peopleCount: D.get('SELECT COUNT(*) c FROM users WHERE department_id = ? AND status = ?', d.id, 'active').c
+  peopleCount: D.get('SELECT COUNT(*) c FROM users WHERE department_id = ? AND status = ?', d.id, 'active').c,
+  // ימי העבודה — ‎server/workdays.js‎. ריק בשמירה = ברירת המחדל א׳–ה׳
+  workDays: W.parseDays(d.work_days),
+  workDaysLabel: W.daysLabel(W.parseDays(d.work_days))
 });
 
 /** רשימת המחלקות — נדרשת לכל מי שממלא טופס משתמש או מסנן לפי מחלקה */
@@ -3005,7 +3031,8 @@ router.post('/api/departments', async (req, res, ctx) => {
   if (!name) throw badRequest('נדרש שם מחלקה');
   if (D.get('SELECT 1 FROM departments WHERE name = ?', name)) throw badRequest('מחלקה בשם זה כבר קיימת');
 
-  const r = D.run('INSERT INTO departments (name, created_at) VALUES (?,?)', name, D.nowIso());
+  const r = D.run('INSERT INTO departments (name, created_at, work_days) VALUES (?,?,?)', name, D.nowIso(),
+    Array.isArray(b.workDays) ? W.serializeDays(b.workDays) : '');
   const id = Number(r.lastInsertRowid);
   if (b.managerUserId) setDepartmentManager(id, Number(b.managerUserId));
 
@@ -3035,6 +3062,8 @@ router.patch('/api/departments/:id', async (req, res, ctx) => {
   if (b.managerUserId !== undefined) {
     setDepartmentManager(dept.id, b.managerUserId ? Number(b.managerUserId) : null);
   }
+  // שבת לעולם אינה נשמרת כיום עבודה — ‎serializeDays‎ מסיר אותה
+  if (Array.isArray(b.workDays)) D.run('UPDATE departments SET work_days = ? WHERE id = ?', W.serializeDays(b.workDays), dept.id);
 
   sendJson(res, 200, { department: shapeDepartment(D.get('SELECT * FROM departments WHERE id = ?', dept.id)) });
 });
@@ -3251,9 +3280,9 @@ router.get('/api/admin/users', async (req, res, ctx) => {
    * אותן שם היה מאשר חשבון בלי לקבוע לו מחלקה ורמת גישה.
    */
   const rows = P.isOrgWide(actor)
-    ? D.all(`SELECT id, full_name, email, phone, role, department, department_id, status FROM users
+    ? D.all(`SELECT id, full_name, email, phone, role, department, department_id, status, field_worker, is_secretary, zoom_user_id FROM users
              WHERE signup_at IS NULL ORDER BY full_name`)
-    : D.all(`SELECT id, full_name, email, phone, role, department, department_id, status FROM users
+    : D.all(`SELECT id, full_name, email, phone, role, department, department_id, status, field_worker, is_secretary, zoom_user_id FROM users
              WHERE department_id IS ? AND role = 'employee' AND signup_at IS NULL ORDER BY full_name`,
       actor.departmentId);
 
@@ -3272,6 +3301,11 @@ router.get('/api/admin/users', async (req, res, ctx) => {
       id: u.id, name: u.full_name, email: u.email, phone: u.phone, role: u.role,
       roleLabel: P.seesRoles(actor) ? P.ROLE_LABELS[u.role] : null, department: u.department,
       departmentId: u.department_id, status: u.status,
+      // עובד שטח — עובד גם בשישי (‎server/workdays.js‎)
+      fieldWorker: Boolean(u.field_worker),
+      // מזכירות — קובעות פגישות ביומנים שהעובדים שיתפו איתן, ורואות את מסך היומן
+      secretary: Boolean(u.is_secretary),
+      zoomUserId: u.zoom_user_id ?? null,
       grants: D.all('SELECT grant_key FROM user_grants WHERE user_id = ?', u.id).map((g) => g.grant_key)
     }))
   });
@@ -3643,6 +3677,9 @@ router.post('/api/admin/users', async (req, res, ctx) => {
   );
   const newUserId = Number(result.lastInsertRowid);
   D.run('UPDATE users SET department_id = ?, phone = ? WHERE id = ?', departmentId, phone, newUserId);
+  if (b.fieldWorker === true) D.run('UPDATE users SET field_worker = 1 WHERE id = ?', newUserId);
+  if (b.secretary === true) D.run('UPDATE users SET is_secretary = 1 WHERE id = ?', newUserId);
+  if (b.zoomUserId && D.get('SELECT 1 FROM zoom_users WHERE id = ?', String(b.zoomUserId))) D.run('UPDATE users SET zoom_user_id = ? WHERE id = ?', String(b.zoomUserId), newUserId);
 
   // מנהל מחלקה נרשם כמנהל של אותה מחלקה
   if (b.role === 'manager' && departmentId) {
@@ -3750,6 +3787,13 @@ router.patch('/api/admin/users/:id', async (req, res, ctx) => {
     D.run('UPDATE departments SET manager_user_id = NULL WHERE manager_user_id = ?', user.id);
   }
   if (b.password) D.run('UPDATE users SET password_hash = ? WHERE id = ?', D.hashPassword(b.password), user.id);
+  if (typeof b.fieldWorker === 'boolean') D.run('UPDATE users SET field_worker = ? WHERE id = ?', b.fieldWorker ? 1 : 0, user.id);
+  if (typeof b.secretary === 'boolean') D.run('UPDATE users SET is_secretary = ? WHERE id = ?', b.secretary ? 1 : 0, user.id);
+  if (b.zoomUserId !== undefined) {
+    const z = b.zoomUserId ? D.get('SELECT id FROM zoom_users WHERE id = ?', String(b.zoomUserId)) : null;
+    if (b.zoomUserId && !z) throw badRequest('משתמש ה-Zoom שנבחר אינו קיים — רעננו את רשימת משתמשי ה-Zoom');
+    D.run('UPDATE users SET zoom_user_id = ? WHERE id = ?', z?.id ?? null, user.id);
+  }
   if (b.phone !== undefined) D.run('UPDATE users SET phone = ? WHERE id = ?', userPhone(b.phone, user.id), user.id);
   sendJson(res, 200, { ok: true });
 });
@@ -3859,6 +3903,13 @@ router.get('/api/admin/settings', async (req, res, ctx) => {
       gmail: {
         enabled: Gmail.isEnabled(),
         connected: D.get("SELECT COUNT(*) c FROM mail_connections WHERE state = 'ok'").c
+      },
+      // Zoom של החברה — קישורים לפגישות שנקבעות ממשימון
+      zoom: {
+        enabled: Zoom.isEnabled(),
+        missing: Zoom.missing(),
+        users: D.get('SELECT COUNT(*) c FROM zoom_users').c,
+        linked: D.get("SELECT COUNT(*) c FROM users WHERE zoom_user_id IS NOT NULL AND status = 'active'").c
       }
     },
     storage: {
@@ -4307,7 +4358,9 @@ const PREF_KEYS = [
   // סידור החלונות בדף הבית — סדר, רוחב, גובה ומה מוסתר
   'homeLayout',
   // חתך הפרויקט ברשימת "המשימות שלי" בדף הבית
-  'homeProject'
+  'homeProject',
+  // אילו עובדים מוצגים במסך היומן של המזכירה
+  'calendarUsers'
 ];
 const PREF_MAX_BYTES = 4096;
 
@@ -4699,6 +4752,8 @@ const botTaskOps = {
 };
 
 AiApi.register(router, { getTaskOr404, assertVisible, mayOnTask, shapeTask, actorRef, saveAttachment, createTask, assertMayAssignTo, listProjectsFor, botTaskOps });
+TodayApi.register(router, { shapeTask, createTask, getTaskOr404, listProjectsFor, assertMayAssignTo });
+MeetingsApi.register(router, { getTaskOr404, assertVisible, shapeTask, canSeeTask });
 Tiful360.register(router, { createTask, saveAttachment, getTaskOr404 });
 
 module.exports = { router, PRIORITIES, shapeTask, canSeeTask };

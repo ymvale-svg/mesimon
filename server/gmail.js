@@ -15,6 +15,8 @@
  *   • זיהוי קשר — המשתמש כתב לנמען בעצמו, והמעקב עוצר לשאול
  *
  * משימון לא מוחק ולא מסמן כנקרא — ההרשאות אינן מאפשרות זאת.
+ *
+ * אותו חיבור — "חיבור Google" בממשק — משמש גם את היומן ואת אנשי הקשר (‎SCOPES‎).
  */
 const crypto = require('node:crypto');
 const D = require('./db');
@@ -23,6 +25,26 @@ const Secrets = require('./secrets');
 
 const SCOPE = 'https://www.googleapis.com/auth/gmail.readonly';
 const SEND_SCOPE = 'https://www.googleapis.com/auth/gmail.send';
+
+/*
+ * חיבור Google אחד, ולא חיבור לכל שירות: אותו אסימון משמש גם את היומן
+ * (‎calendar.js‎) וגם את אנשי הקשר (‎google-contacts.js‎).
+ *
+ * היומן בקריאה וכתיבה של אירועים (‎calendar.events‎) — כדי שפיצ'ר עתידי שכותב
+ * ליומן לא יחייב את כולם לחבר שוב. כרגע משימון רק קורא ממנו.
+ * אנשי הקשר בקריאה וכתיבה (‎contacts‎) — לשמירת איש קשר חדש בלחיצה, ותו לא.
+ */
+const SCOPES = {
+  mail: SCOPE,
+  send: SEND_SCOPE,
+  calendar: 'https://www.googleapis.com/auth/calendar.events',
+  calendarList: 'https://www.googleapis.com/auth/calendar.calendarlist.readonly',
+  // זמינות עמיתים — התנגשויות והצעת מועדים בקביעת פגישה
+  freebusy: 'https://www.googleapis.com/auth/calendar.freebusy',
+  contacts: 'https://www.googleapis.com/auth/contacts',
+  otherContacts: 'https://www.googleapis.com/auth/contacts.other.readonly',
+  directory: 'https://www.googleapis.com/auth/directory.readonly'
+};
 const API = 'https://gmail.googleapis.com/gmail/v1/users/me';
 const REVOKE = 'https://oauth2.googleapis.com/revoke';
 
@@ -40,7 +62,7 @@ function authorizeUrl(req, user) {
     client_id: Google.CLIENT_ID,
     redirect_uri: Google.redirectUri(req),
     response_type: 'code',
-    scope: `openid email ${SCOPE} ${SEND_SCOPE}`,
+    scope: `openid email ${Object.values(SCOPES).join(' ')}`,
     state,
     // ‎offline‎ + ‎consent‎ — כדי לקבל אסימון רענון גם ממי שכבר אישר בעבר
     access_type: 'offline',
@@ -88,9 +110,14 @@ async function tokenRequest(params) {
 
 async function connect(userId, code, req) {
   const data = await tokenRequest({ code, redirect_uri: Google.redirectUri(req), grant_type: 'authorization_code' });
-  const granted = String(data.scope ?? '');
-  if (!granted.includes(SCOPE) || !granted.includes(SEND_SCOPE)) {
-    throw new Error('לא אושרו כל ההרשאות. יש לסמן במסך של Google גם את קריאת הדואר וגם את שליחתו.');
+  /*
+   * מה שאושר נשמר כמו שהוא, וכל פיצ'ר בודק את ההרשאה שלו (‎has‎). מי שלא סימן
+   * את היומן — מקבל דואר ואנשי קשר, והיומן מציע לו לחבר מחדש. חיבור בלי שום
+   * הרשאה שימושית אינו חיבור.
+   */
+  const granted = new Set(String(data.scope ?? '').split(/\s+/));
+  if (!Object.values(SCOPES).some((s) => granted.has(s))) {
+    throw new Error('לא אושרה אף הרשאה. יש לסמן במסך של Google את התיבות של הדואר, היומן ואנשי הקשר.');
   }
   if (!data.refresh_token) throw new Error('Google לא החזיר אסימון רענון. נסו לנתק את משימון בהגדרות חשבון ה-Google ולחבר שוב.');
   tokens.set(userId, { access: data.access_token, expires: Date.now() + (Number(data.expires_in ?? 3000) - 60) * 1000 });
@@ -126,6 +153,34 @@ async function accessToken(userId) {
     if (err.revoked) D.run("UPDATE mail_connections SET state = 'revoked', error = ? WHERE user_id = ?", 'ההרשאה בוטלה ב-Google — יש לחבר מחדש', userId);
     throw err;
   }
+}
+
+/**
+ * קריאה לכל API של Google בשם המשתמש — Gmail, יומן, אנשי קשר. ‎url‎ מלא.
+ * שגיאה נושאת ‎status‎, כדי שהקורא יבדיל בין "אין הרשאה" לתקלה זמנית.
+ */
+async function googleCall(userId, url, params = {}, { method = 'GET', body = null } = {}) {
+  const qs = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) {
+    if (v === undefined || v === null || v === '') continue;
+    // פרמטר שחוזר על עצמו (‎sources=…&sources=…‎) מגיע כמערך
+    for (const one of [v].flat()) qs.append(k, one);
+  }
+  const full = `${url}${qs.toString() ? `${url.includes('?') ? '&' : '?'}${qs}` : ''}`;
+  const res = await fetch(full, {
+    method,
+    headers: { authorization: `Bearer ${await accessToken(userId)}`, ...(body ? { 'content-type': 'application/json' } : {}) },
+    body: body ? JSON.stringify(body) : undefined,
+    signal: AbortSignal.timeout(60000)
+  });
+  const text = await res.text();
+  if (!res.ok) {
+    if (res.status === 401) tokens.delete(userId);
+    const err = new Error(`Google החזיר ${res.status}: ${text.slice(0, 200)}`);
+    err.status = res.status;
+    throw err;
+  }
+  return text ? JSON.parse(text) : {};
 }
 
 async function call(userId, path, params = {}, { method = 'GET', body = null } = {}) {
@@ -199,13 +254,30 @@ async function disconnect(userId) {
     await fetch(`${REVOKE}?token=${encodeURIComponent(refresh)}`, { method: 'POST', signal: AbortSignal.timeout(15000) }).catch(() => {});
   }
   D.run('DELETE FROM mail_connections WHERE user_id = ?', userId);
+  // אנשי הקשר שסונכרנו שייכים לחיבור — בלעדיו אין להם מקום אצלנו
+  D.run('DELETE FROM google_contacts WHERE user_id = ?', userId);
+  D.run('DELETE FROM google_contact_sync WHERE user_id = ?', userId);
 }
 
-const connectedUsers = () => D.all(
-  "SELECT c.user_id FROM mail_connections c JOIN users u ON u.id = c.user_id WHERE c.state = 'ok' AND u.status = 'active'"
-).map((r) => r.user_id);
+/*
+ * ההרשאות שאושרו, כמילים שלמות. לא ‎includes‎ על המחרוזת: ‎.../auth/contacts‎
+ * הוא תת-מחרוזת של ‎.../auth/contacts.other.readonly‎, וכך מי שאישר רק את
+ * "אנשי קשר אחרים" היה נראה כמי שאישר שמירת אנשי קשר.
+ */
+const grantedScopes = (c) => new Set(String(c?.scope ?? '').split(/\s+/).filter(Boolean));
 
-const isConnected = (userId) => connectionOf(userId)?.state === 'ok';
+/** האם החיבור תקין ואושרה בו ההרשאה של הפיצ'ר: ‎mail · send · calendar · contacts · …‎ */
+function has(userId, feature) {
+  const c = connectionOf(userId);
+  return c?.state === 'ok' && Boolean(SCOPES[feature]) && grantedScopes(c).has(SCOPES[feature]);
+}
+
+/** משתמשים שהתיבה שלהם מחוברת לקריאה — לסריקה ולקליטת תשובות */
+const connectedUsers = (feature = 'mail') => D.all(
+  "SELECT c.user_id FROM mail_connections c JOIN users u ON u.id = c.user_id WHERE c.state = 'ok' AND u.status = 'active'"
+).map((r) => r.user_id).filter((id) => has(id, feature));
+
+const isConnected = (userId) => has(userId, 'mail');
 
 /** חיבור שאושרה בו גם שליחה. חיבור ישן (קריאה בלבד) צריך להתחבר מחדש */
 const canSend = (userId) => {
@@ -217,10 +289,15 @@ const canSend = (userId) => {
 function publicStatus(userId) {
   const c = connectionOf(userId);
   if (!c) return null;
+  const granted = grantedScopes(c);
+  const scopes = Object.fromEntries(Object.entries(SCOPES).map(([k, v]) => [k, granted.has(v)]));
   return {
     email: c.email,
     state: c.state,
     canSend: String(c.scope).includes(SEND_SCOPE),
+    scopes,
+    // מה שעוד לא אושר — לפס "חברו מחדש" (חיבור ישן מלפני היומן ואנשי הקשר)
+    missing: Object.keys(SCOPES).filter((k) => !scopes[k]),
     error: c.error,
     scanning: Boolean(c.scan_running),
     progress: (() => { try { return JSON.parse(c.scan_progress); } catch { return {}; } })(),
@@ -234,5 +311,6 @@ const webLink = (email, gmailId) => `https://mail.google.com/mail/u/?authuser=${
 
 module.exports = {
   isEnabled, authorizeUrl, isGmailState, consumeState, connect, disconnect,
-  search, raw, send, connectedUsers, isConnected, canSend, connectionOf, publicStatus, webLink, SCOPE, SEND_SCOPE
+  search, raw, send, connectedUsers, isConnected, canSend, connectionOf, publicStatus, webLink, SCOPE, SEND_SCOPE,
+  SCOPES, has, googleCall
 };

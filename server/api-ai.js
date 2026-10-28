@@ -13,14 +13,17 @@ const Claude = require('./ai/claude');
 const WhatsApp = require('./whatsapp');
 const Gmail = require('./gmail');
 const MailScan = require('./ai/mail-scan');
+const GContacts = require('./google-contacts');
+const WaScan = require('./ai/whatsapp-scan');
+const Calendar = require('./calendar');
 const WaBot = require('./ai/wa-bot');
 const WaActions = require('./ai/wa-actions');
-const { badRequest, forbidden, notFound, readJson, sendJson } = require('./http-kit');
+const { badRequest, forbidden, notFound, readJson, sendJson, parseUrl } = require('./http-kit');
 
 function register(router, h) {
   const { getTaskOr404, assertVisible, mayOnTask, shapeTask, actorRef, saveAttachment, createTask, assertMayAssignTo, listProjectsFor, botTaskOps } = h;
 
-  AiTasks.setHooks({ saveFile: saveAttachment });
+  AiTasks.setHooks({ saveFile: saveAttachment, scanWhatsApp: WaScan.handle, scanningUsers: WaScan.scanningUsers });
   MailScan.init({ createTask });
   WaBot.init({ createTask, listProjectsFor, tasks: botTaskOps });
 
@@ -75,6 +78,106 @@ function register(router, h) {
     }
     return out;
   }
+
+  /**
+   * חיפוש נמען — מאחד את המקורות של משימון (עובדים, ספקים, נמענים קודמים)
+   * עם אנשי הקשר של Google (שמורים, ספריית הארגון, ומי שהתכתבתי איתו ולא
+   * שמרתי). אותו אדם מופיע פעם אחת: לפי מייל או טלפון, והמקור של משימון
+   * גובר — לספק או לעובד יש משמעות במשימון. טלפון שחסר לספק נלקח מ-Google.
+   *
+   * ‎unsaved‎ — לא שמור באנשי הקשר של Google, ולכן מוצע "⭐ שמור".
+   */
+  function searchContacts(actor, q) {
+    const { tokens, digits } = GContacts.matcher(q);
+    const canSave = Gmail.has(actor.id, 'contacts');
+    const local = contactsFor(actor).filter((c) => {
+      if (!tokens.length && !digits) return c.type !== 'user';
+      const hay = GContacts.fold([c.name, c.email].join(' '));
+      if (digits.length >= 3 && GContacts.phoneKey(c.phone).includes(digits)) return true;
+      return tokens.length && tokens.every((t) => hay.includes(t));
+    });
+
+    const out = [];
+    const seen = new Set();
+    const keysOf = (emails, phones) => [
+      ...emails.map((e) => `e:${String(e).toLowerCase()}`),
+      ...phones.map((p) => GContacts.phoneKey(p)).filter((p) => p.length >= 9).map((p) => `p:${p}`)
+    ];
+    const add = (entry, keys) => {
+      if (keys.some((k) => seen.has(k))) return;
+      keys.forEach((k) => seen.add(k));
+      out.push(entry);
+    };
+
+    for (const c of local.slice(0, 30)) {
+      const g = GContacts.lookup(actor.id, { email: c.email, phone: c.phone });
+      const phone = c.phone || g?.phones[0]?.value || '';
+      add({
+        type: c.type, refId: c.refId, source: c.recent ? 'recent' : c.type,
+        name: c.name, email: c.email ?? '', phone,
+        emails: c.email ? [{ value: c.email, label: '' }] : [],
+        phones: phone ? [{ value: phone, label: '' }] : [],
+        organization: '',
+        unsaved: canSave && c.type !== 'user' && !GContacts.isSaved(actor.id, { email: c.email, phone })
+      }, keysOf([c.email].filter(Boolean), [phone].filter(Boolean)));
+    }
+    for (const g of GContacts.search(actor.id, q, 30)) {
+      // עובד בארגון שנמצא בספריית Google — כבר מופיע כעובד במשימון
+      const colleague = g.emails.map((e) => D.get("SELECT id, full_name FROM users WHERE lower(email) = ? AND status = 'active'", e.value)).find(Boolean);
+      if (colleague && colleague.id === actor.id) continue;
+      add({
+        type: colleague ? 'user' : 'external', refId: colleague?.id ?? null, source: g.source,
+        resourceName: g.resourceName,
+        name: colleague?.full_name ?? g.name, email: g.emails[0]?.value ?? '', phone: g.phones[0]?.value ?? '',
+        emails: g.emails, phones: g.phones, organization: g.organization, title: g.title,
+        unsaved: canSave && g.source === 'other'
+      }, keysOf(g.emails.map((e) => e.value), g.phones.map((p) => p.value)));
+    }
+    return out.slice(0, 20);
+  }
+
+  router.get('/api/ai/contacts', async (req, res, ctx) => {
+    const actor = ctx.requireActor();
+    internalOnly(actor);
+    const q = String(parseUrl(req).searchParams.get('q') ?? '').trim().slice(0, 100);
+    sendJson(res, 200, { contacts: searchContacts(actor, q), google: GContacts.status(actor.id) });
+  });
+
+  /** האם להציע לשמור את הנמען באנשי הקשר — אחרי שליחה, בכרטיס המשימה */
+  router.get('/api/ai/contacts/check', async (req, res, ctx) => {
+    const actor = ctx.requireActor();
+    internalOnly(actor);
+    const q = parseUrl(req).searchParams;
+    const contact = { email: q.get('email') ?? '', phone: q.get('phone') ?? '' };
+    sendJson(res, 200, { suggest: GContacts.shouldSuggest(actor.id, contact) });
+  });
+
+  router.post('/api/ai/contacts/save', async (req, res, ctx) => {
+    const actor = ctx.requireActor();
+    internalOnly(actor);
+    const b = await readJson(req);
+    if (b.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(b.email).trim())) throw badRequest('כתובת המייל אינה תקינה');
+    try {
+      sendJson(res, 200, { contact: await GContacts.save(actor.id, b) });
+    } catch (err) {
+      throw userError(err);
+    }
+  });
+
+  router.post('/api/ai/contacts/dismiss', async (req, res, ctx) => {
+    const actor = ctx.requireActor();
+    internalOnly(actor);
+    const b = await readJson(req);
+    GContacts.dismiss(actor.id, { email: b.email, phone: b.phone });
+    sendJson(res, 200, { ok: true });
+  });
+
+  router.post('/api/me/google/contacts/sync', async (req, res, ctx) => {
+    const actor = ctx.requireActor();
+    internalOnly(actor);
+    GContacts.syncSoon(actor.id);
+    sendJson(res, 202, { google: { ...GContacts.status(actor.id), running: true } });
+  });
 
   router.get('/api/ai/status', async (req, res, ctx) => {
     const actor = ctx.requireActor();
@@ -318,6 +421,20 @@ function register(router, h) {
     sendJson(res, 200, { channel: WhatsApp.publicChannel(actor.id), ...state });
   });
 
+  /** "להציע משימות ופגישות מהוואטסאפ שלי" — שיחות פרטיות, ורשימת "לא לסרוק" */
+  router.get('/api/me/wa-scan', async (req, res, ctx) => {
+    const actor = ctx.requireActor();
+    internalOnly(actor);
+    sendJson(res, 200, { ...WaScan.prefs(actor.id), ai: Claude.isEnabled() });
+  });
+
+  router.put('/api/me/wa-scan', async (req, res, ctx) => {
+    const actor = ctx.requireActor();
+    internalOnly(actor);
+    const b = await readJson(req);
+    sendJson(res, 200, { ...WaScan.setPrefs(actor.id, b), ai: Claude.isEnabled() });
+  });
+
   router.delete('/api/me/whatsapp', async (req, res, ctx) => {
     const actor = ctx.requireActor();
     internalOnly(actor);
@@ -340,6 +457,8 @@ function register(router, h) {
     scanTime: D.getSetting('ai_scan_time', '07:00'),
     dailyLimit: Number(D.getSetting('ai_scan_daily_limit', 100)),
     connection: Gmail.publicStatus(actor.id),
+    contacts: GContacts.status(actor.id),
+    calendar: { connected: Calendar.isConnected(actor.id) },
     senders: MailScan.senders(actor.id),
     prefs: {
       approveReminders: AiTasks.defaultPolicy(actor.id).approveReminders,

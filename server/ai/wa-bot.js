@@ -311,6 +311,7 @@ const GROUP_SCHEMA = {
           message_index: { type: 'integer' },
           title: { type: 'string' },
           summary: { type: 'string' },
+          meeting: { type: 'boolean', description: 'האם הבקשה היא לקבוע פגישה' },
           checklist: { type: 'array', items: { type: 'string' } },
           due_date: { type: 'string', description: 'YYYY-MM-DD או ריק' },
           priority: { type: 'string', enum: ['normal', 'high', 'urgent'] },
@@ -319,7 +320,7 @@ const GROUP_SCHEMA = {
           requester_user_id: { type: 'integer' },
           ambiguous: { type: 'array', items: { type: 'string' } }
         },
-        required: ['message_index', 'title', 'summary', 'checklist', 'due_date', 'priority', 'assignee_user_id', 'co_assignee_ids', 'requester_user_id', 'ambiguous'],
+        required: ['message_index', 'title', 'summary', 'meeting', 'checklist', 'due_date', 'priority', 'assignee_user_id', 'co_assignee_ids', 'requester_user_id', 'ambiguous'],
         additionalProperties: false
       }
     }
@@ -375,6 +376,7 @@ function sanitizeGroup(out, users, count) {
       index: Number(t.message_index),
       title: String(t.title ?? '').trim().slice(0, 120),
       summary: String(t.summary ?? '').trim().slice(0, 1500),
+      meeting: t.meeting === true,
       checklist: (t.checklist ?? []).map((x) => String(x).trim()).filter(Boolean).slice(0, 8),
       dueDate: /^\d{4}-\d{2}-\d{2}$/.test(String(t.due_date ?? '')) ? t.due_date : '',
       priority: ['normal', 'high', 'urgent'].includes(t.priority) ? t.priority : 'normal',
@@ -424,44 +426,53 @@ async function processGroup(group) {
   for (const t of result.tasks) {
     const msg = fresh[t.index - 1];
     const headerId = `wa:${msg.message_id}`;
-    const target = recipientOf(t, project, group, candidates);
-    if (!target) continue;
-    // אותה בקשה לא מוצעת פעמיים לאותו אדם (למשל אחרי ניתוח חוזר)
-    if (D.get('SELECT 1 FROM ai_suggestions WHERE header_id = ? AND user_id = ? AND subject = ?', headerId, target, t.title)) continue;
-    const people = t.people.filter((p) => p.userId !== target);
-    // מי שהיה האחראי המיועד אבל ההצעה הגיעה למנהל — נכנס כשותף מוצע
-    if (t.assignee && t.assignee !== target) people.unshift({ userId: t.assignee, name: D.get('SELECT full_name FROM users WHERE id = ?', t.assignee)?.full_name ?? '', role: 'assignee', checklistIndex: 0 });
-    const data = {
-      source: 'whatsapp',
-      title: t.title,
-      summary: t.summary,
-      checklist: t.checklist,
-      dueDate: t.dueDate,
-      priority: t.priority,
-      people,
-      ambiguous: t.ambiguous,
-      aiRequest: null,
-      warning: result.warning,
-      groupName: group.name,
-      chatId: group.chat_id,
-      projectId: project.id,
-      projectName: project.name,
-      requester: t.requester,
-      // ההצעה הגיעה כי לא היה ברור למי — אומרים את זה במפורש
-      routedAsManager: !t.assignee,
-      receivedAt: msg.at
-    };
-    D.run(
-      `INSERT INTO ai_suggestions (user_id, kind, status, gmail_id, header_id, from_name, from_email, subject, received_at, data, created_at)
-       VALUES (?, 'task', 'pending', '', ?, ?, '', ?, ?, ?, ?)`,
-      target, headerId, msg.sender_name, t.title, msg.at, JSON.stringify(data), D.nowIso()
-    );
-    perUser.set(target, (perUser.get(target) ?? 0) + 1);
-    log({
-      channel: 'group', chatId: group.chat_id, chatName: group.name, userId: msg.user_id, who: msg.sender_name, text: msg.text,
-      action: 'group_task', status: t.ambiguous.length ? 'unclear' : 'ok',
-      result: `הצעה ל${nameOf(target)}${!t.assignee ? ' (כמנהל הפרויקט — לא ברור למי)' : ''}: ${t.title}`
-    });
+    /*
+     * בקשה לפגישה שאין למי לנתב אותה — למזכירות (כולן; מי שתאשר ראשונה,
+     * אצל השאר ההצעה הופכת ל"כבר קיימת").
+     */
+    const direct = recipientOf(t, project, group, candidates);
+    const targets = direct ? [direct] : t.meeting
+      ? D.all("SELECT id FROM users WHERE is_secretary = 1 AND status = 'active'").map((u) => u.id)
+      : [];
+    for (const target of targets) {
+      // אותה בקשה לא מוצעת פעמיים לאותו אדם (למשל אחרי ניתוח חוזר)
+      if (D.get('SELECT 1 FROM ai_suggestions WHERE header_id = ? AND user_id = ? AND subject = ?', headerId, target, t.title)) continue;
+      const people = t.people.filter((p) => p.userId !== target);
+      // מי שהיה האחראי המיועד אבל ההצעה הגיעה למנהל — נכנס כשותף מוצע
+      if (t.assignee && t.assignee !== target) people.unshift({ userId: t.assignee, name: D.get('SELECT full_name FROM users WHERE id = ?', t.assignee)?.full_name ?? '', role: 'assignee', checklistIndex: 0 });
+      const data = {
+        source: 'whatsapp',
+        title: t.title,
+        summary: t.summary,
+        meeting: t.meeting,
+        checklist: t.checklist,
+        dueDate: t.dueDate,
+        priority: t.priority,
+        people,
+        ambiguous: t.ambiguous,
+        aiRequest: null,
+        warning: result.warning,
+        groupName: group.name,
+        chatId: group.chat_id,
+        projectId: project.id,
+        projectName: project.name,
+        requester: t.requester,
+        // ההצעה הגיעה כי לא היה ברור למי — אומרים את זה במפורש
+        routedAsManager: !t.assignee,
+        receivedAt: msg.at
+      };
+      D.run(
+        `INSERT INTO ai_suggestions (user_id, kind, status, gmail_id, header_id, from_name, from_email, subject, received_at, data, created_at)
+         VALUES (?, 'task', 'pending', '', ?, ?, '', ?, ?, ?, ?)`,
+        target, headerId, msg.sender_name, t.title, msg.at, JSON.stringify(data), D.nowIso()
+      );
+      perUser.set(target, (perUser.get(target) ?? 0) + 1);
+      log({
+        channel: 'group', chatId: group.chat_id, chatName: group.name, userId: msg.user_id, who: msg.sender_name, text: msg.text,
+        action: 'group_task', status: t.ambiguous.length ? 'unclear' : 'ok',
+        result: `הצעה ל${nameOf(target)}${!direct ? ' (מזכירות — בקשה לפגישה)' : !t.assignee ? ' (כמנהל הפרויקט — לא ברור למי)' : ''}: ${t.title}`
+      });
+    }
   }
   if (!result.tasks.length) {
     log({ channel: 'group', chatId: group.chat_id, chatName: group.name, action: 'group_scan', status: 'ok', result: `נותחו ${fresh.length} הודעות — אין בקשות` });
@@ -1148,5 +1159,7 @@ function start() {
 module.exports = {
   init, start, tick, publicStatus, save, remove, checkState, qr, isConfigured,
   listGroups, bindGroup, userByPhone, markDone, readLog, todayStats, simulate, simulateGroup, inHours,
+  // לשליחה ממודולים אחרים — התראה לפני פגישה (‎meetings.js‎), עם רישום ביומן הבוט
+  sendText, log,
   _internal: { storeGroupMessage, processGroup, handleDirect, sanitizeGroup, resolveMentions, candidatesOf, converse, sendSummaries, YES }
 };
