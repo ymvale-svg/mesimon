@@ -1249,6 +1249,12 @@ router.get('/api/tasks', async (req, res, ctx) => {
       where.push(`(t.department_id ${DEPT_IN} OR (t.assignee_type = 'user' AND t.assignee_id IN (SELECT id FROM users WHERE department_id ${DEPT_IN})))`);
       params.push(subtreeParam(Number(deptFilter)), subtreeParam(Number(deptFilter)));
     }
+    // "משימות שנתתי" — ברירת המחדל של מנהל מחלקה בלוח: מה שהוא פתח, מתוך
+    // כל מה שהוא רשאי לראות. צמצום בלבד, ולכן אינו דורש בדיקת הרשאה.
+    if (q.get('reach') === 'given') {
+      where.push('t.created_by = ?');
+      params.push(actor.id);
+    }
   }
 
   const archived = q.get('archived') === '1';
