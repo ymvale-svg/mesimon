@@ -29,6 +29,7 @@ const HOURS = 24;
 const MAX_MAILS = 40;
 const BODY_CHARS = 1500;
 const KEEP_DAYS = 7;
+const READ_PARALLEL = 6;
 const NEWSLETTER = '(category:promotions OR category:social OR category:forums)';
 
 const KINDS = ['action', 'approval', 'document', 'money', 'deadline', 'meeting', 'info', 'newsletter'];
@@ -135,9 +136,15 @@ async function collect(userId, { hours = HOURS, from = '' } = {}) {
     const row = D.get('SELECT data FROM mail_insights WHERE user_id = ? AND gmail_id = ?', userId, id);
     if (row) cached.set(id, parseJson(row.data, null));
   }
+  // מיילים חדשים נקראים כמה במקביל — בזה אחר זה, 40 מיילים היו לוקחים דקה.
+  // האסימון כבר חודש בחיפושים שלמעלה, ולכן אין כאן מרוץ על חידושו
+  const toRead = ids.filter((x) => !cached.get(x));
+  const fetched = [];
+  for (let i = 0; i < toRead.length; i += READ_PARALLEL) {
+    fetched.push(...await Promise.all(toRead.slice(i, i + READ_PARALLEL).map(async (id) => ({ id, msg: await Gmail.raw(userId, id) }))));
+  }
   const fresh = [];
-  for (const id of ids.filter((x) => !cached.get(x))) {
-    const msg = await Gmail.raw(userId, id);
+  for (const { id, msg } of fetched) {
     const mail = Mime.parse(msg.raw);
     if (mine.has(mail.from.address)) {
       // מה ששלחתי לעצמי אינו חדשות — נרשם כדי שלא ייקרא שוב בכל בקשה
