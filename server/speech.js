@@ -11,7 +11,7 @@
  * הקובץ אינו נשמר: הוא נמשך מ-Green API, נשלח לתמלול, ונזרק. רק הטקסט נשאר.
  *
  * עד דקה — תמלול מיידי (‎speech:recognize‎). ארוך מזה — ‎longrunningrecognize‎,
- * עם המתנה לתוצאה. ‎v1p1beta1‎ ולא ‎v1‎: רק בה יש MP3 ושפה חלופית (אנגלית).
+ * עם המתנה לתוצאה. ‎v1p1beta1‎ ולא ‎v1‎: רק בה יש MP3.
  */
 const API = 'https://speech.googleapis.com/v1p1beta1';
 const MAX_BYTES = 10 * 1024 * 1024; // המגבלה של Google לתוכן שנשלח בבקשה עצמה
@@ -31,7 +31,9 @@ function opusRate(buf) {
 
 function configFor(mime, buf) {
   const m = String(mime ?? '').toLowerCase();
-  const base = { languageCode: 'he-IL', alternativeLanguageCodes: ['en-US'], enableAutomaticPunctuation: true, model: 'default' };
+  // הגדרה מינימלית: פיסוק אוטומטי ושפה חלופית אינם נתמכים בכל שפה ובכל מודל,
+  // ובקשה עם שדה שאינו נתמך לעברית נכשלת כולה — עדיף תמלול בלי פיסוק
+  const base = { languageCode: 'he-IL' };
   if (m.includes('mpeg') || m.includes('mp3')) return { ...base, encoding: 'MP3', sampleRateHertz: 44100 };
   if (m.includes('wav')) return { ...base, encoding: 'LINEAR16' };
   if (m.includes('webm')) return { ...base, encoding: 'WEBM_OPUS', sampleRateHertz: 48000 };

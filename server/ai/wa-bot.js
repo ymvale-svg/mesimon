@@ -271,42 +271,44 @@ function storeGroupMessage(b) {
 }
 
 /**
- * מושך את כל מה שבתור. כל התראה נמחקת אחרי הקריאה, גם כשאינה רלוונטית —
- * אחרת התור נתקע על הראשונה. הודעות פרטיות מוחזרות לטיפול מיידי.
+ * התראה אחת מהתור של Green API, בהמתנה ארוכה (long polling): הבקשה נשארת
+ * פתוחה עד ‎timeout‎ שניות וחוזרת ברגע שמגיעה הודעה — כך הודעה פרטית נענית
+ * תוך שניות, ולא בסבב הבא. כל התראה נמחקת אחרי הקריאה, גם כשאינה רלוונטית —
+ * אחרת התור נתקע על הראשונה. הודעת קבוצה נשמרת לניתוח; הודעה פרטית מוחזרת.
+ *
+ * @returns {Promise<{received: boolean, direct: object|null}>}
  */
-async function poll(ch, { max = 60 } = {}) {
-  const direct = [];
-  for (let i = 0; i < max; i++) {
-    const note = await WhatsApp.call(ch, 'receiveNotification', { suffix: '?receiveTimeout=5' });
-    if (!note?.receiptId) break;
-    try {
-      const b = note.body ?? {};
-      const chatId = b.senderData?.chatId ?? '';
-      if (b.typeWebhook === 'incomingMessageReceived' && chatId.endsWith('@g.us')) {
-        storeGroupMessage(b);
-      } else if (b.typeWebhook === 'incomingMessageReceived' && chatId.endsWith('@c.us')) {
-        const m = b.messageData ?? {};
-        direct.push({
-          chatId,
-          phone: chatId.replace(/@c\.us$/, ''),
-          text: textOf(m).trim(),
-          kind: m.typeMessage ?? '',
-          // הודעה קולית: הכתובת שממנה מורידים אותה לתמלול
-          audio: m.typeMessage === 'audioMessage' && m.fileMessageData?.downloadUrl
-            ? { url: m.fileMessageData.downloadUrl, mime: m.fileMessageData.mimeType ?? '' }
-            : null,
-          id: String(b.idMessage ?? note.receiptId)
-        });
-      } else if (b.typeWebhook === 'stateInstanceChanged' && b.stateInstance) {
-        setState(b.stateInstance);
-      }
-    } catch (err) {
-      console.error('[משימון] הודעת וואטסאפ לבוט לא נקלטה:', err.message);
-    } finally {
-      await WhatsApp.call(ch, 'deleteNotification', { http: 'DELETE', suffix: `/${note.receiptId}` }).catch(() => {});
+async function receiveOne(ch, timeout = LISTEN_TIMEOUT) {
+  const note = await WhatsApp.call(ch, 'receiveNotification', { suffix: `?receiveTimeout=${timeout}` });
+  if (!note?.receiptId) return { received: false, direct: null };
+  let direct = null;
+  try {
+    const b = note.body ?? {};
+    const chatId = b.senderData?.chatId ?? '';
+    if (b.typeWebhook === 'incomingMessageReceived' && chatId.endsWith('@g.us')) {
+      storeGroupMessage(b);
+    } else if (b.typeWebhook === 'incomingMessageReceived' && chatId.endsWith('@c.us')) {
+      const m = b.messageData ?? {};
+      direct = {
+        chatId,
+        phone: chatId.replace(/@c\.us$/, ''),
+        text: textOf(m).trim(),
+        kind: m.typeMessage ?? '',
+        // הודעה קולית: הכתובת שממנה מורידים אותה לתמלול
+        audio: m.typeMessage === 'audioMessage' && m.fileMessageData?.downloadUrl
+          ? { url: m.fileMessageData.downloadUrl, mime: m.fileMessageData.mimeType ?? '' }
+          : null,
+        id: String(b.idMessage ?? note.receiptId)
+      };
+    } else if (b.typeWebhook === 'stateInstanceChanged' && b.stateInstance) {
+      setState(b.stateInstance);
     }
+  } catch (err) {
+    console.error('[משימון] הודעת וואטסאפ לבוט לא נקלטה:', err.message);
+  } finally {
+    await WhatsApp.call(ch, 'deleteNotification', { http: 'DELETE', suffix: `/${note.receiptId}` }).catch(() => {});
   }
-  return direct;
+  return { received: true, direct };
 }
 
 // ---------------------------------------------------------------------------
@@ -1506,10 +1508,16 @@ async function handleDirect(msg) {
   // הודעה קולית — מתומללת, ומשם בדיוק כמו הודעה כתובה
   let text = msg.text;
   const voice = !text && Boolean(msg.audio);
+  if (voice && Speech.isEnabled() && WaActions.allowed(actor, 'voice_notes')) {
+    // התמלול לבדו לוקח כמה שניות — מודיעים מיד שההקלטה התקבלה
+    await sendText(msg.chatId, '🎧 קיבלתי את ההקלטה, מתמלל…').catch(() => {});
+  }
   if (voice) {
     if (!Speech.isEnabled() || !WaActions.allowed(actor, 'voice_notes')) {
-      log({ ...base, text: '[הודעה קולית]', action: 'voice', status: 'unclear', result: Speech.isEnabled() ? 'הודעות קוליות כבויות' : 'התמלול אינו מוגדר' });
-      await sendText(msg.chatId, 'עדיין אינני מבין הודעות קוליות. כתבו לי בטקסט 🙏');
+      log({ ...base, text: '[הודעה קולית]', action: 'voice', status: 'unclear', result: Speech.isEnabled() ? 'הודעות קוליות כבויות במסך הניהול' : 'התמלול אינו מוגדר בשרת (GOOGLE_SPEECH_API_KEY)' });
+      await sendText(msg.chatId, Speech.isEnabled()
+        ? 'הודעות קוליות כבויות כרגע. כתבו לי בטקסט 🙏'
+        : 'תמלול הודעות קוליות עוד לא הוגדר במשימון (מנהל המערכת: GOOGLE_SPEECH_API_KEY). בינתיים כתבו לי בטקסט 🙏');
       return;
     }
     try {
@@ -1534,14 +1542,20 @@ async function handleDirect(msg) {
 
   const state = chatOf(user.id);
   let r;
+  // תשובה שמתעכבת (תמלול, Today ראשון של היום, ניסוח מייל) — קודם "רגע", כדי שלא ייראה שהבוט לא שמע
+  const slow = setTimeout(() => {
+    if (!voice) sendText(msg.chatId, '⏳ רגע, בודק…').catch(() => {});
+  }, SLOW_NOTICE_MS);
   try {
     r = await turn(user, actor, text, state, { voice });
   } catch (err) {
+    clearTimeout(slow);
     console.error('[משימון] בוט הוואטסאפ לא הבין הודעה:', err.message);
     log({ ...base, text: voice ? `🎙 ${text}` : text, action: 'other', status: 'error', result: err.message });
     await sendText(msg.chatId, 'משהו השתבש אצלי. נסו שוב בעוד רגע.');
     return;
   }
+  clearTimeout(slow);
   // מה שנשמע חוזר בשורה אחת — כך רואים מיד אם התמלול טעה
   const reply = voice ? `🎙 *שמעתי:* "${text}"\n\n${r.reply}` : r.reply;
   const history = [...state.history, { role: 'user', text: text.slice(0, 500) }, { role: 'bot', text: r.reply.slice(0, 500) }];
@@ -1766,6 +1780,73 @@ async function simulateGroup({ chatId, userId, text }) {
 
 let busy = false;
 let timer = null;
+let listening = false;
+let stopped = false;
+
+const LISTEN_TIMEOUT = 20;      // שניות שבקשת ההמתנה ל-Green API נשארת פתוחה
+const SLOW_NOTICE_MS = 6000;    // תשובה שלוקחת יותר מזה — קודם "רגע, בודק…"
+const WARM_EVERY_MS = 30 * 60000;
+const sleep = (ms) => new Promise((r) => { setTimeout(r, ms).unref?.(); });
+
+/*
+ * הודעות פרטיות מטופלות מיד, בשרשרת נפרדת לכל עובד: הודעות של אותו עובד —
+ * לפי הסדר; של עובדים שונים — במקביל, כך שתשובה ארוכה לאחד אינה מעכבת אחר.
+ */
+const chains = new Map(); // phone → Promise
+
+function dispatch(m) {
+  if (!inHours()) {
+    defer([m]);
+    return;
+  }
+  const prev = chains.get(m.phone) ?? Promise.resolve();
+  const next = prev.then(() => handleDirect(m))
+    .catch((err) => console.error('[משימון] הודעה פרטית לבוט נכשלה:', err.message))
+    .finally(() => { if (chains.get(m.phone) === next) chains.delete(m.phone); });
+  chains.set(m.phone, next);
+}
+
+/**
+ * מאזין רציף: בקשת המתנה ארוכה אחת אחרי השנייה. מנותק מהסבב של הקבוצות —
+ * ניתוח קבוצה ארוך אינו מעכב תשובה בפרטי.
+ */
+async function listen() {
+  if (listening) return;
+  listening = true;
+  while (!stopped) {
+    const ch = D.getSetting('wa_bot_enabled', true) ? channel() : null;
+    if (!ch) {
+      await sleep(15000);
+      continue;
+    }
+    try {
+      const r = await receiveOne(ch);
+      if (r.direct) dispatch(r.direct);
+    } catch (err) {
+      // רשת, אסימון שגוי (401) — לא להציף את Green API בניסיונות
+      console.error('[משימון] האזנה לבוט הוואטסאפ נכשלה:', err.message);
+      await sleep(15000);
+    }
+  }
+  listening = false;
+}
+
+/**
+ * תובנות המייל מחושבות מראש, ברקע: כך ה-Today של הבוקר אינו ממתין לקריאת
+ * עשרות מיילים ולניתוח שלהם. כל מייל מנותח פעם אחת ממילא (מטמון לשבוע) —
+ * החישוב מראש אינו מוסיף עלות, רק מקדים אותה.
+ */
+const warmedAt = new Map(); // userId → ms
+async function warmInsights() {
+  if (!Claude.isEnabled()) return;
+  for (const u of orgUsers().filter((x) => x.phone)) {
+    if (Date.now() - (warmedAt.get(u.id) ?? 0) < WARM_EVERY_MS) continue;
+    const actor = Auth.loadActor('user', u.id);
+    if (!actor || !WaActions.allowed(actor, 'mail_insights') || !MailInsights.available(u.id)) continue;
+    warmedAt.set(u.id, Date.now());
+    await MailInsights.collect(u.id).catch((err) => console.error(`[משימון] חישוב תובנות מראש ל-${u.full_name} נכשל:`, err.message));
+  }
+}
 
 /**
  * סבב משלו ולא של משימות ה-AI (כל 2 דקות): בשיחה פרטית מצפים לתשובה תוך
@@ -1777,15 +1858,12 @@ async function tick() {
   if (!ch) return;
   busy = true;
   try {
-    const direct = await poll(ch);
+    // ההודעות עצמן מגיעות דרך המאזין (‎listen‎); כאן — מה שנדחה לשעות הפעילות
     if (inHours()) {
-      for (const m of [...takeDeferred(), ...direct]) {
-        await handleDirect(m).catch((err) => console.error('[משימון] הודעה פרטית לבוט נכשלה:', err.message));
-      }
+      for (const m of takeDeferred()) dispatch(m);
       await sendSummaries();
       await flushOutbox();
-    } else {
-      defer(direct);
+      await warmInsights();
     }
     if (Claude.isEnabled() && WaActions.byKey('group_tasks')?.enabled) await processGroups();
     prune();
@@ -1804,6 +1882,8 @@ function start() {
   if (timer) clearInterval(timer);
   timer = setInterval(tick, 15000);
   timer.unref?.();
+  stopped = false;
+  void listen();
 }
 
 module.exports = {
