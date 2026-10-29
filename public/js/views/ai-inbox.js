@@ -242,6 +242,9 @@ const AiInboxView = (() => {
     // meeting_move
     const ok = el('button.btn.btn-sm.btn-primary', {}, ['✓ אשר הזזה']);
     ok.addEventListener('click', run(ok, async () => {
+      // מה יזוז בפועל — כפי שהפגישה רשומה עכשיו ביומן, לא הטקסט שנשמר בבקשה
+      const p = await API.get(`/api/meetings/move-requests/${s.id}`);
+      if (!await UI.confirm(`להזיז את "${p.title}" מ-${when(p.from.start)} ל-${when(p.to.start)}? המשתתפים יקבלו עדכון.`, { okText: 'הזזה' })) return;
       await API.post(`/api/meetings/move-requests/${s.id}/approve`);
       UI.success('הפגישה הוזזה — המשתתפים קיבלו עדכון');
     }, reload));

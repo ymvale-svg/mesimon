@@ -28,6 +28,7 @@ const Gmail = require('./gmail');
 const MailScan = require('./ai/mail-scan');
 const Claude = require('./ai/claude');
 const WhatsApp = require('./whatsapp');
+const WaBot = require('./ai/wa-bot');
 const Tiful360 = require('./tiful360');
 const {
   Router, badRequest, forbidden, notFound,
@@ -757,12 +758,64 @@ function publicActor(actor) {
   };
 }
 
-/** הטלפון של עצמי — מ"החשבון שלי", כדי שבוט הוואטסאפ יזהה אותי */
+/**
+ * הטלפון של עצמי — מ"החשבון שלי", כדי שבוט הוואטסאפ יזהה אותי. הבוט מזהה
+ * עובד לפי המספר בלבד, ולכן מספר נשמר רק אחרי שהעובד הוכיח שהוא שלו: הבוט
+ * שולח קוד למספר, והקוד מוקלד כאן. מחיקה — בלי קוד. מנהל קובע במסך המשתמשים.
+ */
+const phoneCodes = new Map(); // userId → { phone, hash, expires, tries, sentAt }
+const PHONE_CODE_TTL = 10 * 60000;
+const hashCode = (code) => crypto.createHash('sha256').update(String(code)).digest('hex');
+
 router.put('/api/me/phone', async (req, res, ctx) => {
   const actor = ctx.requireActor();
   if (actor.type !== 'user') throw forbidden();
   const b = await readJson(req);
   const phone = userPhone(b.phone, actor.id);
+  if (!phone) {
+    phoneCodes.delete(actor.id);
+    D.run("UPDATE users SET phone = '' WHERE id = ?", actor.id);
+    sendJson(res, 200, { phone: '' });
+    return;
+  }
+  if (phone === D.get('SELECT phone FROM users WHERE id = ?', actor.id)?.phone) {
+    sendJson(res, 200, { phone });
+    return;
+  }
+  if (!WaBot.isConfigured() || !D.getSetting('wa_bot_enabled', true)) {
+    throw badRequest('בוט הוואטסאפ אינו פעיל, ולכן אי אפשר לאמת את המספר. בקשו ממנהל המערכת להזין אותו במסך המשתמשים');
+  }
+  const prev = phoneCodes.get(actor.id);
+  if (prev && Date.now() - prev.sentAt < 60000) throw badRequest('קוד נשלח לפני רגע — המתינו דקה לפני שליחה נוספת');
+  const code = String(crypto.randomInt(100000, 1000000));
+  try {
+    await WaBot.sendText(`${phone}@c.us`, `קוד האימות שלך במשימון: ${code}\nהקוד תקף ל-10 דקות. אם לא ביקשת — התעלם/י מההודעה.`);
+  } catch (err) {
+    throw badRequest(`שליחת הקוד בוואטסאפ נכשלה: ${err.message}`);
+  }
+  phoneCodes.set(actor.id, { phone, hash: hashCode(code), expires: Date.now() + PHONE_CODE_TTL, tries: 0, sentAt: Date.now() });
+  sendJson(res, 200, { pending: true, phone });
+});
+
+/** הקוד שהבוט שלח — רק אז המספר נשמר */
+router.post('/api/me/phone/verify', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  if (actor.type !== 'user') throw forbidden();
+  const b = await readJson(req);
+  const p = phoneCodes.get(actor.id);
+  if (!p || Date.now() > p.expires) {
+    phoneCodes.delete(actor.id);
+    throw badRequest('תוקף הקוד פג — בקשו קוד חדש');
+  }
+  if (++p.tries > 5) {
+    phoneCodes.delete(actor.id);
+    throw badRequest('יותר מדי ניסיונות — בקשו קוד חדש');
+  }
+  const given = Buffer.from(hashCode(String(b.code ?? '').replace(/\D/g, '')));
+  if (!crypto.timingSafeEqual(given, Buffer.from(p.hash))) throw badRequest('הקוד שגוי');
+  phoneCodes.delete(actor.id);
+  // ייתכן שמישהו אחר קיבל את המספר בינתיים
+  const phone = userPhone(p.phone, actor.id);
   D.run('UPDATE users SET phone = ? WHERE id = ?', phone, actor.id);
   sendJson(res, 200, { phone });
 });

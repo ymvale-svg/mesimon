@@ -347,8 +347,7 @@ const MeetingView = (() => {
             btn.disabled = true;
             try {
               const r = await API.post('/api/meetings/request-move', {
-                organizerId: o.requestTo, eventId: c.eventId, calendarEmail: c.calendarEmail, title: c.title,
-                from: { start: c.start, end: c.end }, to: o.to
+                organizerId: o.requestTo, eventId: c.eventId, calendarEmail: c.calendarEmail, to: { start: o.to.start }
               });
               UI.toast(`נשלחה בקשה ל${r.organizer} להזיז את "${c.title}"`);
               await save();
