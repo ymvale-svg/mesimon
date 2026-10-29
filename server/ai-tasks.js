@@ -308,6 +308,16 @@ const channelNote = (channel) => (channel === 'whatsapp'
   ? 'הערוץ: וואטסאפ מהמספר האישי של המשתמש. בלי נושא (subject ריק).'
   : 'הערוץ: מייל.');
 
+/**
+ * מייל שיוצא מהתיבה מסתיים בחתימה של המשתמש מ-Gmail (‎Gmail.signed‎) — ולכן
+ * כשיש חתימה, ה-AI אינו חותם בעצמו, אחרת השם היה מופיע פעמיים.
+ */
+const SIGNATURE_NOTE = 'למשתמש יש חתימה ב-Gmail, והיא תתווסף אוטומטית בסוף המייל: סיים במילת סיום בלבד ("תודה,", "בברכה,") — בלי שם, תפקיד, ארגון או פרטי קשר.';
+async function signatureNote(userId, channel) {
+  if (channel !== 'email' || !userId) return null;
+  return (await Gmail.signature(userId)) ? SIGNATURE_NOTE : null;
+}
+
 // ---------------------------------------------------------------------------
 // ניסוח
 // ---------------------------------------------------------------------------
@@ -365,6 +375,7 @@ async function draftInitial({ owner, instruction, contact = {}, dueDate = null, 
     dueDate ? `מועד יעד: ${String(dueDate).slice(0, 10)}` : null,
     projectName ? `פרויקט: ${projectName}` : null,
     channelNote(channel),
+    await signatureNote(owner.id, channel),
     context ? `\n${context}\n\nאם מההתכתבות עולה שמשהו חסר, שלא נענה, או שכדאי להזכיר — הצע זאת ב-suggestions. הכנס לגוף המייל רק מה שהמשתמש ביקש.` : null
   ].filter(Boolean);
 
@@ -392,14 +403,14 @@ async function compose(req, kind, channel, extra = '') {
     thanks: 'הבקשה התקבלה. כתוב תודה קצרה.',
     reply: 'כתוב תשובה לנמען.'
   }[kind];
-  const text = [contextText(req), '', channelNote(channel), what, extra].filter(Boolean).join('\n');
+  const text = [contextText(req), '', channelNote(channel), await signatureNote(req.owner_id, channel), what, extra].filter(Boolean).join('\n');
   return Claude.json({ system: skill(), content: [{ type: 'text', text }], schema: MESSAGE_SCHEMA, effort: 'low' });
 }
 
 /** כתיבה מחדש של טיוטה ממתינה לפי הערה של המשתמש */
 async function revise(req, msg, feedback) {
   const text = [
-    contextText(req), '', channelNote(msg.channel),
+    contextText(req), '', channelNote(msg.channel), await signatureNote(req.owner_id, msg.channel),
     'הטיוטה הנוכחית:', msg.subject ? `נושא: ${msg.subject}` : null, msg.body,
     '', `המשתמש ביקש לתקן כך: ${feedback}`, 'כתוב את הטיוטה מחדש.'
   ].filter((l) => l !== null).join('\n');
@@ -453,7 +464,9 @@ async function deliver(req, msgId) {
       const subject = msg.kind === 'initial' || !base
         ? msg.subject
         : (/^(re|תשובה)\s*:/i.test(base) ? base : `Re: ${base}`);
-      // מהכתובת של המשתמש עצמו: הנמען רואה אותו, התשובה חוזרת אליו, והמייל נשאר אצלו ב"דואר יוצא"
+      // מהכתובת של המשתמש עצמו: הנמען רואה אותו, התשובה חוזרת אליו, והמייל נשאר אצלו ב"דואר יוצא".
+      // בסוף — החתימה שלו מ-Gmail, כמו כל מייל שהוא שולח משם
+      const body = await Gmail.signed(req.owner_id, { text: msg.body, html: emailHtml(msg.body) });
       const built = Mailer.buildMessage({
         from: sender.email,
         fromName: owner.full_name,
@@ -462,8 +475,8 @@ async function deliver(req, msgId) {
         inReplyTo: thread[thread.length - 1],
         references: thread.slice(-10),
         subject,
-        text: msg.body,
-        html: emailHtml(msg.body)
+        text: body.text,
+        html: body.html
       });
       const out = await Gmail.send(req.owner_id, built.raw, { threadId: gmailThread });
       D.run('UPDATE ai_messages SET status = ?, subject = ?, message_id = ?, external_id = ?, gmail_id = ?, sent_at = ?, error = ? WHERE id = ?',

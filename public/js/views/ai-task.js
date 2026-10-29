@@ -213,7 +213,7 @@ const AiTaskView = (() => {
     }
 
     async function makeDraft(feedback = '') {
-      const { draft } = await API.post('/api/ai/draft', {
+      const { draft, signature } = await API.post('/api/ai/draft', {
         instruction: state.instruction,
         contact: state.contact,
         channel: state.channel,
@@ -228,6 +228,23 @@ const AiTaskView = (() => {
       if (!state.contact.phone && draft.contact_phone) state.contact.phone = draft.contact_phone;
       // תיקון טיוטה אינו דורס כותרת שהמשתמש כבר ערך
       state.draft = feedback && state.draft ? { ...draft, title: state.draft.title } : draft;
+      state.signature = signature ?? null;
+    }
+
+    /**
+     * החתימה מ-Gmail, כפי שתצורף — לקריאה בלבד: עורכים אותה רק ב-Gmail.
+     * ב-iframe בלי הרשאת סקריפטים — HTML שמגיע מבחוץ (תמונות וקישורים בלבד).
+     */
+    function signaturePreview(html) {
+      const frame = el('iframe.ai-signature', { sandbox: 'allow-same-origin', title: 'החתימה מ-Gmail' });
+      frame.srcdoc = `<!DOCTYPE html><html dir="auto"><body style="margin:0;font-family:Arial,sans-serif;font-size:13px;color:#374151">${html}</body></html>`;
+      frame.addEventListener('load', () => {
+        try { frame.style.height = `${Math.min(220, frame.contentDocument.body.scrollHeight + 8)}px`; } catch { /* נשאר בגובה ברירת המחדל */ }
+      });
+      return el('div.ai-signature-box', {}, [
+        el('div.mute-sm', { text: '✍️ החתימה שלך מ-Gmail תצורף בסוף המייל (משנים אותה ב-Gmail ← הגדרות ← חתימה)' }),
+        frame
+      ]);
     }
 
     // --- שלב 2: הטיוטה לאישור
@@ -327,6 +344,7 @@ const AiTaskView = (() => {
             internal ? 'המשימה תשויך אליו במשימון, עם התראה רגילה על משימה חדשה.'
               : isEmail ? 'יישלח מתיבת ה-Gmail שלך ויישאר אצלך ב"דואר יוצא". התשובה תחזור אליך ותיקלט אוטומטית.' : 'יישלח מהוואטסאפ שלך.')
         ]),
+        isEmail && state.signature ? signaturePreview(state.signature) : null,
         el('div.ai-revise', {}, [feedback, redo]),
         UI.field('מתי זה נחשב שהתקבל?', criteria, 'לפי זה ה-AI יכריע אם התשובה שחזרה מספיקה וסוגר את המשימה'),
         el('div.ai-foot', {}, [

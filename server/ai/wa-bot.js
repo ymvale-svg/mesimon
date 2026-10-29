@@ -1009,8 +1009,10 @@ function emailText(p) {
     `✉️ *טיוטה ל${p.contact.name || p.contact.email}*${!internal && p.contact.email ? ` <${p.contact.email}>` : ''}`,
     internal ? '👤 עובד/ת בארגון — לא יישלח מייל: המשימה תשויך במשימון, עם התראה.' : `*נושא:* ${p.draft.subject}`,
     '',
-    p.draft.body.slice(0, 2500)
-  ];
+    p.draft.body.slice(0, 2500),
+    // החתימה עצמה מ-Gmail — לא מוצגת כאן במלואה, רק שהיא תצורף
+    !internal && p.signature ? '✍️ _+ החתימה שלך מ-Gmail_' : null
+  ].filter((l) => l !== null);
   if (p.suggestions.length) {
     lines.push('', '💡 *מההתכתבות האחרונה — אולי להוסיף:*', ...p.suggestions.map((x, i) => `${i + 1}. ${x}`));
   }
@@ -1041,7 +1043,8 @@ async function draftEmail(actor, contact, instruction, { feedback = '', previous
     },
     // בתיקון ההתכתבות אינה נקראת שוב — ההצעות שעוד לא נוספו נשארות
     suggestions: previous ? (suggestions.length ? suggestions : previous.suggestions.filter((x) => !feedback.includes(x))) : suggestions,
-    notes: String(d.notes ?? '').trim().slice(0, 300)
+    notes: String(d.notes ?? '').trim().slice(0, 300),
+    signature: contact.type !== 'user' && Boolean(await Gmail.signature(actor.id))
   };
 }
 
@@ -1217,9 +1220,10 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
     `*נושא:* ${r.subject}`,
     '',
     r.body.slice(0, 2500),
+    r.signature ? '✍️ _+ החתימה שלך מ-Gmail_' : null,
     '',
     'לשלוח? השיבו *כן*, או כתבו מה לתקן. *ביטול* — לא לשלוח.'
-  ].join('\n');
+  ].filter((l) => l !== null).join('\n');
 
   const startReply = async (item, request) => {
     if (!Gmail.canSend(actor.id)) {
@@ -1228,7 +1232,7 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
     if (!request) {
       return out(`מה לענות ל${MailInsights.label(item)}?`, { draft: { kind: 'reply_ask', gmailId: item.gmailId } }, { action: 'mail_insights', status: 'unclear', result: 'חסר תוכן לתשובה' });
     }
-    const reply = await MailInsights.draftReply(actor.id, item.gmailId, request);
+    const reply = { ...await MailInsights.draftReply(actor.id, item.gmailId, request), signature: Boolean(await Gmail.signature(actor.id)) };
     return out(replyText(reply), { draft: { kind: 'mail_reply', reply }, awaiting: true }, { action: 'mail_insights', status: 'ok', result: `טיוטת תשובה ל${reply.toName || reply.to}` });
   };
 
@@ -1283,7 +1287,7 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
   // טיוטת תשובה למייל שממתינה: כל הודעה שאינה "כן" או "ביטול" היא תיקון
   if (kind === 'mail_reply' && state.awaiting && Claude.isEnabled() && WaActions.allowed(actor, 'mail_insights')) {
     const prev = state.draft.reply;
-    const reply = await MailInsights.draftReply(actor.id, prev.gmailId, prev.request, { feedback: t, previous: prev });
+    const reply = { ...await MailInsights.draftReply(actor.id, prev.gmailId, prev.request, { feedback: t, previous: prev }), signature: prev.signature };
     return out(replyText(reply), { draft: { kind: 'mail_reply', reply }, awaiting: true }, { action: 'mail_insights', status: 'ok', result: `תיקון תשובה: ${t.slice(0, 200)}` });
   }
   // "תענה ל-2" בלי תוכן — ההודעה הבאה היא מה לענות

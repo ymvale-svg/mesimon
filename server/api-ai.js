@@ -216,7 +216,9 @@ function register(router, h) {
         previous: b.previous ?? null,
         context: b.channel === 'whatsapp' ? '' : await AiTasks.mailContext(actor.id, b.contact?.email)
       });
-      sendJson(res, 200, { draft });
+      // החתימה מ-Gmail — לתצוגה מתחת לנוסח בלבד; נערכת רק ב-Gmail עצמו
+      const signature = b.channel === 'whatsapp' ? null : await Gmail.signature(actor.id);
+      sendJson(res, 200, { draft, signature: signature ? signature.html : null });
     } catch (err) {
       throw userError(err);
     }
