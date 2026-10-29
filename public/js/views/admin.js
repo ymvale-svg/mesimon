@@ -435,6 +435,13 @@ const AdminView = (() => {
               el('b', { text: `${analysis.validCount} שורות תקינות` }),
               analysis.errorCount ? el('span.text-danger', { text: `${analysis.errorCount} שורות ייפסלו` }) : null
             ]),
+            // עמודה אופציונלית שלא זוהתה פשוט אינה נקלטת — עדיף לומר זאת לפני האישור
+            analysis.columns?.phone && !analysis.columns.phone.found
+              ? el('div.alert.alert-warn.mb', {}, [
+                  el('span', { text: '📱' }),
+                  el('div', { text: 'לא זוהתה בקובץ עמודת טלפון, ולכן המשתמשים ייובאו בלי מספר. כדי לייבא טלפונים יש לקרוא לכותרת העמודה "טלפון".' })
+                ])
+              : null,
             previewTable(analysis));
           actionBtn.textContent = analysis.validCount
             ? `ייבוא ${analysis.validCount} משתמשים`

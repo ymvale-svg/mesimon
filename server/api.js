@@ -3616,13 +3616,15 @@ router.delete('/api/admin/pending/:id', async (req, res, ctx) => {
 const IMPORT_COLUMNS = {
   name: { label: 'שם מלא', required: true, aliases: ['שם מלא', 'שם', 'שםמלא', 'name', 'fullname', 'full name'] },
   email: { label: 'אימייל', required: true, aliases: ['אימייל', 'מייל', 'אימייל', 'דואראלקטרוני', 'דואר אלקטרוני', 'כתובתמייל', 'כתובת מייל', 'email', 'mail', 'e-mail'] },
-  phone: { label: 'טלפון', required: false, aliases: ['טלפון', 'נייד', 'טלפון נייד', 'מספר טלפון', 'פלאפון', 'סלולרי', 'phone', 'mobile', 'cell'] },
+  // לטלפון יש אינספור ניסוחים ("מס' טלפון", "טל'", "נייד עבודה", "Phone Number"),
+  // ולכן מספיק שהכותרת תכיל אחת המילים — ולא רק תהיה זהה לה
+  phone: { label: 'טלפון', required: false, aliases: ['טל', 'מסטל', 'phone', 'mobile', 'cell', 'tel'], contains: ['טלפון', 'נייד', 'פלאפון', 'סלולר', 'phone', 'mobile'] },
   department: { label: 'מחלקה', required: false, aliases: ['מחלקה', 'department', 'dept'] },
   role: { label: 'רמת גישה', required: false, aliases: ['רמת גישה', 'רמתגישה', 'הרשאה', 'תפקיד', 'role'] }
 };
 
 const normaliseHeader = (value) =>
-  String(value ?? '').trim().toLowerCase().replace(/[\s:?"']/g, '');
+  String(value ?? '').trim().toLowerCase().replace(/[\s:?"'׳״.\-_]/g, '');
 
 /** מזהה איזו עמודה בגיליון היא איזה שדה. מחזיר ‎{ name: 0, email: 2, … }‎ */
 function mapHeaders(headerRow) {
@@ -3632,7 +3634,8 @@ function mapHeaders(headerRow) {
     if (!key) return;
     for (const [field, spec] of Object.entries(IMPORT_COLUMNS)) {
       if (map[field] !== undefined) continue;
-      if (spec.aliases.some((a) => normaliseHeader(a) === key)) map[field] = index;
+      if (spec.aliases.some((a) => normaliseHeader(a) === key)
+        || spec.contains?.some((c) => key.includes(normaliseHeader(c)))) map[field] = index;
     }
   });
   return map;
