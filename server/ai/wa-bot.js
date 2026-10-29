@@ -1005,28 +1005,38 @@ function pickText(name, candidates) {
   ].filter((l) => l !== null).join('\n');
 }
 
+/*
+ * עובד בארגון — בבוט שתי דרכים: מייל מהתיבה שלי (ברירת המחדל, "כן"), או
+ * משימה במשימון ("במשימון"), שמשויכת אליו עם ההתראות הרגילות. באפליקציה
+ * שליחה לעובד היא תמיד משימה במשימון — שם אין מייל לעובד.
+ */
+const VIA_MESIMON = /^(?:(?:ת?שלח|תעביר|תפתח)\s+(?:ל[והם]\s+)?(?:את\s+זה\s+)?)?(?:ב|דרך\s+(?:ה)?)משימון[\s.!]*$/;
+const VIA_EMAIL = /^(?:(?:כן\s*,?\s*)?(?:ת?שלח\s+(?:ל[והם]\s+)?)?(?:ב|דרך\s+(?:ה)?)מייל)[\s.!]*$/;
+
 function emailText(p) {
-  const internal = p.contact.type === 'user';
+  const colleague = p.contact.type === 'user';
   const lines = [
-    `✉️ *טיוטה ל${p.contact.name || p.contact.email}*${!internal && p.contact.email ? ` <${p.contact.email}>` : ''}`,
-    internal ? '👤 עובד/ת בארגון — לא יישלח מייל: המשימה תשויך במשימון, עם התראה.' : `*נושא:* ${p.draft.subject}`,
+    `✉️ *טיוטה ל${p.contact.name || p.contact.email}*${p.contact.email ? ` <${p.contact.email}>` : ''}${colleague ? ' · 👤 עובד/ת בארגון' : ''}`,
+    `*נושא:* ${p.draft.subject}`,
     '',
     p.draft.body.slice(0, 2500),
     // החתימה עצמה מ-Gmail — לא מוצגת כאן במלואה, רק שהיא תצורף
-    !internal && p.signature ? '✍️ _+ החתימה שלך מ-Gmail_' : null
+    p.signature ? '✍️ _+ החתימה שלך מ-Gmail_' : null
   ].filter((l) => l !== null);
   if (p.suggestions.length) {
     lines.push('', '💡 *מההתכתבות האחרונה — אולי להוסיף:*', ...p.suggestions.map((x, i) => `${i + 1}. ${x}`));
   }
   if (p.notes) lines.push('', `ℹ️ ${p.notes}`);
-  lines.push('', `${internal ? 'להעביר' : 'לשלוח'}? השיבו *כן*, כתבו מה לתקן${p.suggestions.length ? ', או "תוסיף את 1"' : ''}. *ביטול* — לא ${internal ? 'להעביר' : 'לשלוח'}.`);
+  lines.push('', colleague
+    ? `לשלוח במייל? השיבו *כן*. *במשימון* — במקום מייל, משימה שתשויך ל${firstName(p.contact.name) || 'עובד'} במשימון. אפשר גם לכתוב מה לתקן, או *ביטול*.`
+    : `לשלוח? השיבו *כן*, כתבו מה לתקן${p.suggestions.length ? ', או "תוסיף את 1"' : ''}. *ביטול* — לא לשלוח.`);
   return lines.join('\n');
 }
 
 /** טיוטה (או תיקון שלה) — עם ההתכתבות האחרונה עם הנמען, להצעות מה להוסיף */
 async function draftEmail(actor, contact, instruction, { feedback = '', previous = null } = {}) {
   const owner = D.get('SELECT id, full_name, email FROM users WHERE id = ?', actor.id);
-  const context = contact.type === 'user' || previous ? '' : await AiTasks.mailContext(actor.id, contact.email);
+  const context = previous ? '' : await AiTasks.mailContext(actor.id, contact.email);
   const d = await AiTasks.draftInitial({
     owner, instruction, contact, channel: 'email', context,
     feedback, previous: previous ? previous.draft : null
@@ -1046,7 +1056,7 @@ async function draftEmail(actor, contact, instruction, { feedback = '', previous
     // בתיקון ההתכתבות אינה נקראת שוב — ההצעות שעוד לא נוספו נשארות
     suggestions: previous ? (suggestions.length ? suggestions : previous.suggestions.filter((x) => !feedback.includes(x))) : suggestions,
     notes: String(d.notes ?? '').trim().slice(0, 300),
-    signature: contact.type !== 'user' && Boolean(await Gmail.signature(actor.id))
+    signature: Boolean(await Gmail.signature(actor.id))
   };
 }
 
@@ -1111,11 +1121,15 @@ async function confirmPending(actor, pending, dry) {
     }
     if (kind === 'email') {
       const who = pending.contact.name || pending.contact.email;
-      const internal = pending.contact.type === 'user';
+      // עובד בארגון: "במשימון" — משימה משויכת אליו; אחרת — מייל, כמו לכל נמען
+      const internal = pending.contact.type === 'user' && pending.via === 'mesimon';
       if (!P.may(actor, 'create_task')) throw new Error('אין לך הרשאה לפתוח משימות');
+      const contact = pending.contact.type === 'user' && !internal
+        ? { name: pending.contact.name, email: pending.contact.email, phone: '', type: 'external', refId: null }
+        : pending.contact;
       // אותה פתיחה של האשף באפליקציה: משימת AI שעוקבת אחרי התשובה
       const r = dry ? { taskId: null, sendError: null } : await hooks.mail.createAiTask(actor, {
-        instruction: pending.instruction, draft: pending.draft, contact: pending.contact, channel: 'email'
+        instruction: pending.instruction, draft: pending.draft, contact, channel: 'email'
       });
       const link = r.taskId ? taskLink(r.taskId) : null;
       if (r.sendError) {
@@ -1128,7 +1142,9 @@ async function confirmPending(actor, pending, dry) {
     }
   } catch (err) {
     // הרשאה, תלות שלא הושלמה, משימה שנסגרה בינתיים — העובד שומע למה
-    return { reply: `❌ לא הצלחתי: ${err.message}`, action, status: 'error', result: err.message, keep: ['task', 'email', 'mail_reply'].includes(kind) };
+    // עובד שאין הרשאה לשייך אליו במשימון — מייל עדיין אפשרי
+    const viaEmail = kind === 'email' && pending.contact?.type === 'user' && pending.via === 'mesimon' ? '\nאפשר לשלוח לו במייל במקום: השיבו *כן*.' : '';
+    return { reply: `❌ לא הצלחתי: ${err.message}${viaEmail}`, action, status: 'error', result: err.message, keep: ['task', 'email', 'mail_reply'].includes(kind) };
   }
   return { reply: 'לא ברור מה לאשר.', action, status: 'unclear', result: '' };
 }
@@ -1278,6 +1294,13 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
     return out(emailText(pending), { draft: pending, awaiting: true },
       { action: 'send_email', status: 'ok', result: `טיוטת מייל ל${contact.name || contact.email}: ${pending.draft.subject}${pending.suggestions.length ? ` · ${pending.suggestions.length} הצעות` : ''}` });
   };
+
+  // עובד בארגון: "במשימון" / "במייל" — אישור, בדרך שנבחרה
+  if (kind === 'email' && state.awaiting && state.draft.contact?.type === 'user' && (VIA_MESIMON.test(t) || VIA_EMAIL.test(t))) {
+    const pending = { ...state.draft, via: VIA_MESIMON.test(t) ? 'mesimon' : 'email' };
+    const r = await confirmPending(actor, pending, dry);
+    return out(r.reply, { draft: r.keep ? state.draft : null, awaiting: Boolean(r.keep) }, r);
+  }
 
   // טיוטת מייל שממתינה: כל הודעה שאינה "כן" או "ביטול" היא תיקון
   if (kind === 'email' && state.awaiting && Claude.isEnabled() && WaActions.allowed(actor, 'send_email')) {
@@ -1576,8 +1599,9 @@ function choicesOf(next) {
   const d = next.draft;
   const out = [];
   if (next.awaiting && d) {
-    const yes = { task: '✓ פתח משימה', complete: '✓ סמן כבוצע', comment: '✓ הוסף הערה', mail_reply: '📧 שלח', email: d.contact?.type === 'user' ? '👤 העבר' : '📧 שלח' }[d.kind] ?? '✓ אישור';
+    const yes = { task: '✓ פתח משימה', complete: '✓ סמן כבוצע', comment: '✓ הוסף הערה', mail_reply: '📧 שלח', email: d.contact?.type === 'user' ? '📧 שלח במייל' : '📧 שלח' }[d.kind] ?? '✓ אישור';
     out.push({ label: yes, say: 'כן', primary: true });
+    if (d.kind === 'email' && d.contact?.type === 'user') out.push({ label: '📌 במשימון במקום', say: 'במשימון' });
     if (d.kind === 'email') (d.suggestions ?? []).forEach((x, i) => out.push({ label: `＋ ${x}`, say: `תוסיף את ${i + 1}` }));
     out.push({ label: 'ביטול', say: 'ביטול' });
   } else if (d?.kind === 'email_pick') {
