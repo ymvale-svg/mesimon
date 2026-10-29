@@ -30,6 +30,59 @@ const VoiceView = (() => {
 
   let current = null; // המסך הפתוח, אם יש
 
+  // ------------------------------------------------------------- תמלול נקי
+
+  /*
+   * למה זה נחוץ: כרום באנדרואיד מחזיר במצב ‎continuous‎ כל תוצאה "סופית"
+   * יחד עם כל מה שנאמר לפניה, ולפעמים אותה תוצאה שוב אחרי שההאזנה מתחדשת
+   * מעצמה. הקוד הקודם צירף כל תוצאה לטקסט — ואותן מילים הופיעו פעמיים,
+   * ארבע ועשר. כאן כל קטע חדש *ממוזג* במה שכבר נקלט, ולא מצורף אליו.
+   */
+  const norm = (x) => String(x ?? '').replace(/\s+/g, ' ').trim();
+
+  /** מיזוג קטע תמלול חדש במה שכבר נקלט */
+  function mergeSegment(acc, seg) {
+    acc = norm(acc);
+    seg = norm(seg);
+    if (!seg) return acc;
+    if (!acc) return seg;
+    // אנדרואיד: התוצאה החדשה מכילה את כל מה שנקלט ועוד
+    if (seg.startsWith(acc)) return seg;
+    const a = acc.split(' ');
+    const b = seg.split(' ');
+    // אותו משפט שוב — כבר נקלט
+    if (b.length >= 2 && acc.endsWith(seg)) return acc;
+    // חפיפה: סוף מה שנקלט הוא תחילת הקטע החדש (שתי מילים לפחות, כדי לא
+    // לבלוע מילה קצרה שחוזרת במקרה)
+    for (let k = Math.min(a.length, b.length); k >= 2; k--) {
+      if (a.slice(-k).join(' ') === b.slice(0, k).join(' ')) return [...a, ...b.slice(k)].join(' ');
+    }
+    return `${acc} ${seg}`;
+  }
+
+  /**
+   * חזרות רצופות שנשארו: רצף של 2–8 מילים שמופיע פעמיים ברצף, ומילה בודדת
+   * שחוזרת שלוש פעמים ומעלה. "מאוד מאוד" נשאר — שתי חזרות של מילה אחת הן
+   * לפעמים דיבור אמיתי.
+   */
+  function cleanRepeats(text) {
+    const w = norm(text).split(' ').filter(Boolean);
+    let changed = true;
+    while (changed) {
+      changed = false;
+      for (let n = Math.min(8, Math.floor(w.length / 2)); n >= 2 && !changed; n--) {
+        for (let i = 0; i + 2 * n <= w.length; i++) {
+          if (w.slice(i, i + n).join(' ') === w.slice(i + n, i + 2 * n).join(' ')) {
+            w.splice(i + n, n);
+            changed = true;
+            break;
+          }
+        }
+      }
+    }
+    return w.filter((x, i) => !(i >= 2 && x === w[i - 1] && x === w[i - 2])).join(' ');
+  }
+
   // ------------------------------------------------------------- קול
 
   /** הקראה בקול עברי. נפתר בסוף ההקראה, או אחרי זמן סביר אם אין קול עברי */
@@ -102,6 +155,7 @@ const VoiceView = (() => {
 
     let finals = o.initialText ? `${o.initialText} ` : '';
     let interim = '';
+    let sessionBase = '';   // מה שנקלט לפני סבב ההאזנה הנוכחי
     let rec = null;
     let listening = false;
     let wantListen = false;
@@ -112,7 +166,7 @@ const VoiceView = (() => {
     let maxTimer = null;
     let closed = false;
 
-    const text = () => `${finals}${interim}`.replace(/\s+/g, ' ').trim();
+    const text = () => cleanRepeats(mergeSegment(finals, interim));
 
     const status = el('div.voice-status');
     const live = el('div.voice-live');
@@ -169,14 +223,24 @@ const VoiceView = (() => {
         rec.continuous = true;
         rec.interimResults = true;
         rec.maxAlternatives = 1;
-        rec.onstart = () => { listening = true; setStatus('מקשיב… לחצו שוב כדי לעצור', 'live'); drawState(); };
+        rec.onstart = () => {
+          // כל סבב (גם התחדשות אחרי שתיקה) מתחיל רשימת תוצאות חדשה
+          sessionBase = finals;
+          listening = true;
+          setStatus('מקשיב… לחצו שוב כדי לעצור', 'live');
+          drawState();
+        };
         rec.onresult = (e) => {
-          interim = '';
-          for (let i = e.resultIndex; i < e.results.length; i++) {
+          // בונים מחדש מכל התוצאות של הסבב, ולא מוסיפים — ראה ‎mergeSegment‎
+          let merged = sessionBase;
+          let pending = '';
+          for (let i = 0; i < e.results.length; i++) {
             const r = e.results[i];
-            if (r.isFinal) finals += `${r[0].transcript} `;
-            else interim += r[0].transcript;
+            if (r.isFinal) merged = mergeSegment(merged, r[0].transcript);
+            else pending = mergeSegment(pending, r[0].transcript);
           }
+          finals = merged ? `${cleanRepeats(merged)} ` : '';
+          interim = pending;
           drawState();
           if (o.handsFree) {
             clearTimeout(silenceTimer);
@@ -229,7 +293,7 @@ const VoiceView = (() => {
       wantListen = false;
       clearTimeout(silenceTimer);
       clearTimeout(maxTimer);
-      if (interim) { finals += `${interim} `; interim = ''; }
+      if (interim) { finals = `${text()} `; interim = ''; }
       try { rec?.stop(); } catch { /* כבר עצר */ }
       listening = false;
       // אחרי העצירה הטקסט פתוח לתיקון — זיהוי דיבור טועה בשמות
@@ -470,5 +534,5 @@ const VoiceView = (() => {
     });
   }
 
-  return { open, speak, chime, supported, shortcutHelp, createdToast, QUESTION };
+  return { open, speak, chime, supported, shortcutHelp, createdToast, QUESTION, _text: { mergeSegment, cleanRepeats } };
 })();
