@@ -3735,11 +3735,13 @@ router.put('/api/admin/users/:id/grants', async (req, res, ctx) => {
   if (!user) throw notFound('המשתמש לא נמצא');
   assertMayManageUser(actor, user);
 
-  // הרשאות אישיות נועדו להרחיב עובד פנימי; לתפקידים גבוהים הן חסרות משמעות
-  if (user.role !== 'employee') throw badRequest('הרשאות אישיות ניתנות לעובד פנימי בלבד');
-
   const { grants } = await readJson(req);
   const wanted = Array.isArray(grants) ? grants.filter((g) => P.GRANT_KEYS.includes(g)) : [];
+
+  // הרשאות אישיות נועדו להרחיב עובד פנימי; לתפקידים גבוהים הן חסרות משמעות.
+  // ניקוי מותר תמיד — עובד שהועלה לתפקיד גבוה נשאר אחרת עם הרשאות ישנות,
+  // והשמירה בכרטיס שלו נכשלת
+  if (user.role !== 'employee' && wanted.length) throw badRequest('הרשאות אישיות ניתנות לעובד פנימי בלבד');
 
   D.run('DELETE FROM user_grants WHERE user_id = ?', user.id);
   for (const key of wanted) {
