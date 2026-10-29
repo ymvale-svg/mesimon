@@ -1443,7 +1443,8 @@ const App = (() => {
     });
 
     // הזכוכית ממקדת את השדה — היא נראית כלחיצה, וכדאי שתהיה כזו
-    const icon = el('span.icon', { title: 'חיפוש', text: '🔍', onclick: () => input.focus() });
+    // הזכוכית עצמה מצוירת ברקע השדה (ראה "קרן אור" בגיליון) — כאן רק משטח הלחיצה
+    const icon = el('span.icon', { title: 'חיפוש', 'aria-hidden': 'true', onclick: () => input.focus() });
 
     return el('div.global-search', {}, [input, icon, results]);
   }

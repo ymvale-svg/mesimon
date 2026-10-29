@@ -117,7 +117,7 @@ const CalendarView = (() => {
 
   /** מי מוצג — שבבים לבחירה, עם חיפוש */
   function peoplePicker() {
-    const search = el('input', { type: 'search', placeholder: '🔍 עובד…', value: view.filter, style: { width: '150px' } });
+    const search = el('input', { type: 'search', placeholder: 'עובד…', value: view.filter, style: { width: '150px' } });
     search.addEventListener('input', () => { view.filter = search.value; drawChips(); });
     const chips = el('div.cal-people');
     const drawChips = () => {

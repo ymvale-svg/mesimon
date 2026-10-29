@@ -147,6 +147,8 @@
   input[type=datetime-local], input[type=number], input[type=search], input[type=tel], input[type=url], select, textarea {
     font-size: 16px; padding: 10px 12px;
   }
+  /* מקום לזכוכית המגדלת שבתחילת שורת החיפוש */
+  input[type=search] { padding-inline-start: calc(var(--sg-x) + var(--sg-size) + 10px); }
   .btn { min-height: 40px; padding: 9px 14px; }
   .btn-sm { min-height: 34px; padding: 6px 11px; font-size: 13px; }
   .icon-btn { min-width: 40px; min-height: 40px; }
