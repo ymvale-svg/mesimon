@@ -113,7 +113,7 @@ const TaskCardView = (() => {
 
     const descNode = el('p', {
       text: task.description || (canEdit ? 'לחיצה להוספת תיאור…' : 'ללא תיאור'),
-      style: { color: task.description ? 'var(--text)' : 'var(--text-mute)', whiteSpace: 'pre-wrap', cursor: canEdit ? 'text' : 'default' }
+      style: { color: task.description ? 'var(--text)' : 'var(--text-faint)', whiteSpace: 'pre-wrap', cursor: canEdit ? 'text' : 'default' }
     });
     if (canEdit) descNode.addEventListener('click', () => inlineEdit('description', descNode, true));
 

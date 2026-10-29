@@ -128,7 +128,7 @@ const ChecklistItemView = (() => {
           el('label', { text: 'הערה' }),
           el('p', {
             text: item.note || 'ללא הערה',
-            style: { whiteSpace: 'pre-wrap', color: item.note ? 'var(--text)' : 'var(--text-mute)', margin: '0' }
+            style: { whiteSpace: 'pre-wrap', color: item.note ? 'var(--text)' : 'var(--text-faint)', margin: '0' }
           })
         ]);
 

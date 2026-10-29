@@ -19,7 +19,13 @@
 
   --text: #0f172a;
   --text-soft: #475569;
+  /*
+   * ‎--text-mute‎ בניגודיות 2.56:1 על לבן — לעיטור בלבד: placeholder, תבליטים,
+   * מסגרות. כל טקסט שקוראים אותו עובר ל-‎--text-faint‎ (5.46:1 על לבן,
+   * 4.76:1 על ‎--bg‎).
+   */
   --text-mute: #94a3b8;
+  --text-faint: #5b6b7d;
 
   --danger: #dc2626;
   --danger-bg: #fef2f2;
@@ -29,6 +35,13 @@
   --ok-bg: #f0fdf4;
   --info: #2563eb;
   --info-bg: #eff6ff;
+
+  --violet: #7c3aed;
+  --violet-mid: #6d28d9;
+  --violet-dark: #5b21b6;
+  --violet-bg: #f5f3ff;
+  --violet-light: #ede9fe;
+  --violet-border: #ddd6fe;
 
   --radius: 10px;
   --radius-lg: 14px;
@@ -59,6 +72,15 @@ body {
 
 button, input, select, textarea { font-family: inherit; font-size: inherit; color: inherit; }
 a { color: var(--brand); text-decoration: none; }
+
+/*
+ * טבעת מיקוד לכל פקד, למקלדת בלבד. שדות טקסט מקבלים מיקוד משלהם (מסגרת והילה)
+ * בכלל ‎input:focus‎, שגובר על זה בזכות הספציפיות.
+ */
+:where(a, button, select, summary, [role='button'], [tabindex]:not([tabindex='-1'])):focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
+}
 h1, h2, h3, h4 { margin: 0; font-weight: 700; letter-spacing: -.01em; }
 
 ::-webkit-scrollbar { width: 10px; height: 10px; }
@@ -97,7 +119,7 @@ h1, h2, h3, h4 { margin: 0; font-weight: 700; letter-spacing: -.01em; }
 
 .field { display: flex; flex-direction: column; gap: 5px; margin-bottom: 14px; }
 .field > label { font-weight: 600; font-size: 12.5px; color: var(--text-soft); }
-.field .hint { font-size: 11.5px; color: var(--text-mute); }
+.field .hint { font-size: 11.5px; color: var(--text-faint); }
 
 input[type=text], input[type=email], input[type=password], input[type=date],
 input[type=datetime-local], input[type=number], input[type=tel], input[type=url], select, textarea {
@@ -150,7 +172,7 @@ textarea { resize: vertical; min-height: 76px; }
 .company-img { max-width: 100%; height: auto; display: block; object-fit: contain; }
 .company-fallback { line-height: 1.3; }
 .company-name { font-size: 21px; font-weight: 800; color: #2f6cb5; letter-spacing: -.01em; }
-.company-tag { font-size: 11.5px; color: var(--text-mute); letter-spacing: .02em; }
+.company-tag { font-size: 11.5px; color: var(--text-faint); letter-spacing: .02em; }
 
 .company-logo.on-panel { margin-bottom: 30px; }
 .company-logo.on-panel .company-img { max-height: 112px; width: auto; }
@@ -200,7 +222,7 @@ textarea { resize: vertical; min-height: 76px; }
 /* כניסה עם Google */
 .or-divider {
   display: flex; align-items: center; gap: 12px;
-  margin: 20px 0 16px; color: var(--text-mute); font-size: 12.5px;
+  margin: 20px 0 16px; color: var(--text-faint); font-size: 12.5px;
 }
 .or-divider::before, .or-divider::after {
   content: ''; flex: 1; height: 1px; background: var(--border);
@@ -213,7 +235,7 @@ textarea { resize: vertical; min-height: 76px; }
 .google-mark { display: inline-flex; line-height: 0; flex: none; }
 
 .demo-users { margin-top: 26px; border-top: 1px solid var(--border); padding-top: 18px; }
-.demo-users h4 { font-size: 12px; color: var(--text-mute); text-transform: uppercase; letter-spacing: .06em; margin-bottom: 10px; }
+.demo-users h4 { font-size: 12px; color: var(--text-faint); text-transform: uppercase; letter-spacing: .06em; margin-bottom: 10px; }
 .demo-user {
   display: flex; align-items: center; gap: 10px; width: 100%;
   padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius);
@@ -223,7 +245,7 @@ textarea { resize: vertical; min-height: 76px; }
 .demo-user:hover { border-color: var(--brand); background: var(--brand-light); }
 .demo-user .who { flex: 1; min-width: 0; }
 .demo-user .who b { display: block; font-size: 13px; }
-.demo-user .who small { color: var(--text-mute); font-size: 11.5px; }
+.demo-user .who small { color: var(--text-faint); font-size: 11.5px; }
 
 /* ---------------------------------------------------------------- מבנה */
 
@@ -258,7 +280,7 @@ textarea { resize: vertical; min-height: 76px; }
   z-index: 30;
 }
 .brand { display: flex; align-items: center; color: var(--brand-dark); }
-.brand .app-logo-tagline { color: var(--text-mute); opacity: 1; font-weight: 500; }
+.brand .app-logo-tagline { color: var(--text-faint); opacity: 1; font-weight: 500; }
 
 /*
  * שדה החיפוש.
@@ -292,7 +314,7 @@ textarea { resize: vertical; min-height: 76px; }
 /* ‎pointer-events‎ הוחזר: הזכוכית נראית כלחיצה, וכעת היא ממקדת את השדה */
 .global-search .icon {
   position: absolute; right: 14px; top: 50%; transform: translateY(-50%);
-  color: var(--text-mute); cursor: text; font-size: 14px;
+  color: var(--text-faint); cursor: text; font-size: 14px;
 }
 
 /*
@@ -319,7 +341,7 @@ textarea { resize: vertical; min-height: 76px; }
 /* כותרת קבוצה — "פרויקטים" / "משימות". דביקה, כדי שבגלילה ברשימה ארוכה
    יישאר ברור באיזה סוג מסתכלים */
 .search-results .sr-group {
-  padding: 7px 12px 4px; font-size: 11px; color: var(--text-mute); font-weight: 700;
+  padding: 7px 12px 4px; font-size: 11px; color: var(--text-faint); font-weight: 700;
   position: sticky; top: 0; background: var(--surface); z-index: 1;
 }
 .search-results button {
@@ -328,7 +350,7 @@ textarea { resize: vertical; min-height: 76px; }
 }
 .search-results button:hover { background: var(--surface-2); }
 .search-results .sr-title { font-weight: 600; }
-.search-results .sr-meta { font-size: 11.5px; color: var(--text-mute); }
+.search-results .sr-meta { font-size: 11.5px; color: var(--text-faint); }
 
 .topbar-spacer { flex: 1; }
 
@@ -347,7 +369,7 @@ textarea { resize: vertical; min-height: 76px; }
 .user-chip { display: flex; align-items: center; gap: 9px; padding: 5px 8px 5px 12px; border-radius: 999px; border: 1px solid var(--border); background: var(--surface-2); cursor: pointer; }
 .user-chip:hover { border-color: var(--border-strong); }
 .user-chip .name { font-weight: 600; font-size: 13px; line-height: 1.15; }
-.user-chip .role { font-size: 11px; color: var(--text-mute); line-height: 1.15; }
+.user-chip .role { font-size: 11px; color: var(--text-faint); line-height: 1.15; }
 
 .avatar {
   width: 30px; height: 30px; border-radius: 50%; flex: none;
@@ -364,7 +386,7 @@ textarea { resize: vertical; min-height: 76px; }
   border-left: 1px solid var(--border); padding: 14px 10px;
   overflow-y: auto; display: flex; flex-direction: column; gap: 3px;
 }
-.nav-group { margin: 14px 0 4px; padding: 0 10px; font-size: 10.5px; font-weight: 700; color: var(--text-mute); letter-spacing: .07em; }
+.nav-group { margin: 14px 0 4px; padding: 0 10px; font-size: 10.5px; font-weight: 700; color: var(--text-faint); letter-spacing: .07em; }
 
 /* כותרת קבוצה שיש בה גם פקד — הכותרת מימין והמעבר בקצה */
 .nav-group.with-action { display: flex; align-items: baseline; gap: 8px; }
@@ -377,7 +399,7 @@ textarea { resize: vertical; min-height: 76px; }
   padding: 1px 8px; white-space: nowrap; text-transform: none;
 }
 .nav-scope:hover { border-color: var(--brand); color: var(--brand); background: var(--brand-light); }
-.nav-note { font-size: 11.5px; color: var(--text-mute); padding: 2px 12px 6px; }
+.nav-note { font-size: 11.5px; color: var(--text-faint); padding: 2px 12px 6px; }
 .nav-item {
   display: flex; align-items: center; gap: 10px; padding: 8px 11px;
   border-radius: var(--radius); cursor: pointer; border: 0; background: none;
@@ -531,7 +553,7 @@ textarea { resize: vertical; min-height: 76px; }
 .slot-btn {
   border: 0; background: transparent; cursor: pointer; font-family: inherit;
   width: 22px; height: 22px; border-radius: 6px; padding: 0;
-  color: var(--text-mute); font-size: 12px; line-height: 1;
+  color: var(--text-faint); font-size: 12px; line-height: 1;
 }
 .slot-btn:hover { background: var(--surface-2); color: var(--brand); }
 .slot-grip { cursor: grab; font-size: 13px; }
@@ -646,7 +668,7 @@ textarea { resize: vertical; min-height: 76px; }
 .w-mine .w-icon { background: var(--info-bg); color: var(--info); }
 .w-over .w-icon { background: var(--danger-bg); color: var(--danger); }
 .w-urgent .w-icon { background: var(--warn-bg); color: var(--warn); }
-.w-approve .w-icon { background: #f5f3ff; color: #7c3aed; }
+.w-approve .w-icon { background: var(--violet-bg); color: var(--violet); }
 
 /* ---------------------------------------------------------------- תגיות */
 
@@ -660,7 +682,7 @@ textarea { resize: vertical; min-height: 76px; }
 .tag-high { background: #fde9c8; color: #92400e; }
 .tag-urgent { background: #fecaca; color: #991b1b; }
 .tag-overdue { background: var(--danger); color: #fff; }
-.tag-scheduled { background: #f5f3ff; color: #7c3aed; }
+.tag-scheduled { background: var(--violet-bg); color: var(--violet); }
 .tag-recurring { background: #ecfeff; color: #0e7490; }
 .tag-escalated { background: #7c2d12; color: #fff; }
 .tag-vendor { background: #fff7ed; color: var(--accent); border-color: #fed7aa; }
@@ -715,9 +737,9 @@ textarea { resize: vertical; min-height: 76px; }
 .task-card.is-escalated { box-shadow: 0 0 0 2px #fca5a5; }
 .task-card .tc-title { font-weight: 600; margin-bottom: 7px; line-height: 1.4; }
 .task-card .tc-tags { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 8px; }
-.task-card .tc-foot { display: flex; align-items: center; gap: 8px; font-size: 11.5px; color: var(--text-mute); }
+.task-card .tc-foot { display: flex; align-items: center; gap: 8px; font-size: 11.5px; color: var(--text-faint); }
 .task-card .tc-foot .spacer { flex: 1; }
-.task-card .tc-project { font-size: 11.5px; color: var(--text-mute); margin-bottom: 5px; }
+.task-card .tc-project { font-size: 11.5px; color: var(--text-faint); margin-bottom: 5px; }
 .task-card .tc-check { display: flex; align-items: center; gap: 5px; }
 
 /* סימון "בוצע" ישירות משורת המשימה */
@@ -798,14 +820,14 @@ button.file-chip { cursor: pointer; font-family: inherit; }
 .file-chip:hover { border-color: var(--brand); background: var(--brand-light); color: var(--text); }
 .file-chip .fc-name { overflow: hidden; text-overflow: ellipsis; }
 .file-chip .fc-ver {
-  flex: none; font-size: 10px; font-weight: 700; color: var(--text-mute);
+  flex: none; font-size: 10px; font-weight: 700; color: var(--text-faint);
   background: var(--surface); border-radius: 4px; padding: 0 4px;
 }
-.file-chip-more { font-size: 11.5px; color: var(--text-mute); flex: none; }
+.file-chip-more { font-size: 11.5px; color: var(--text-faint); flex: none; }
 /* הסרת קובץ שנבחר לצירוף ועדיין לא נשלח */
 .chip-x {
   border: 0; background: none; cursor: pointer; padding: 0 2px;
-  color: var(--text-mute); font-size: 12px; line-height: 1; flex: none;
+  color: var(--text-faint); font-size: 12px; line-height: 1; flex: none;
 }
 .chip-x:hover { color: var(--danger); }
 
@@ -917,7 +939,7 @@ th.cell-bar { background: var(--border) !important; }
   display: flex; flex-direction: column; line-height: 1.25;
   padding: 3px 6px; margin: -3px -6px; border-radius: 6px;
 }
-.due-box small { font-size: 10.5px; color: var(--text-mute); }
+.due-box small { font-size: 10.5px; color: var(--text-faint); }
 .due-box.is-danger { color: var(--danger); }
 .due-box.is-danger small { color: var(--danger); }
 .due-box.is-warn { color: var(--warn); }
@@ -980,7 +1002,7 @@ th.cell-bar { background: var(--border) !important; }
 .tl-head .tl-day { position: absolute; top: 0; bottom: -6px; border-inline-start: 1px solid var(--border); }
 .tl-head .tl-day-label {
   position: absolute; inset-inline-start: 4px; top: -1px;
-  font-size: 10.5px; color: var(--text-mute); white-space: nowrap;
+  font-size: 10.5px; color: var(--text-faint); white-space: nowrap;
 }
 .tl-head .tl-day.today { border-inline-start: 2px solid var(--danger); }
 .tl-head .tl-day.today .tl-day-label { color: var(--danger); font-weight: 800; }
@@ -1033,7 +1055,7 @@ th.cell-bar { background: var(--border) !important; }
 }
 .task-table-head {
   font-size: 10.5px; font-weight: 700; letter-spacing: .06em;
-  color: var(--text-mute); border-bottom: 1px solid var(--border-strong);
+  color: var(--text-faint); border-bottom: 1px solid var(--border-strong);
   /* גבול שקוף בצדדים, בעובי הגבול של השורות — בלעדיו הכותרת רחבה בשני
      פיקסלים והעמודות מוסטות ביחס לשורות */
   border-inline: 1px solid transparent;
@@ -1052,7 +1074,7 @@ th.cell-bar { background: var(--border) !important; }
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .task-line .tk-title { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.task-line .tk-due { color: var(--text-mute); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.task-line .tk-due { color: var(--text-faint); white-space: nowrap; font-variant-numeric: tabular-nums; }
 /* תגית הסטטוס ממלאת את עמודתה, וכך כל התגיות באותו רוחב ובאותו קו */
 .task-line .tag-status { width: 100%; text-align: center; }
 .task-line .tk-flags { display: flex; gap: 3px; justify-content: flex-end; font-size: 13px; }
@@ -1096,7 +1118,7 @@ th.cell-bar { background: var(--border) !important; }
   display: grid; place-items: center; overflow: hidden;
 }
 .proj-logo-box img { max-width: 100%; max-height: 100%; object-fit: contain; display: block; }
-.proj-logo-box.is-empty { font-size: 11px; color: var(--text-mute); }
+.proj-logo-box.is-empty { font-size: 11px; color: var(--text-faint); }
 .proj-gallery {
   display: grid; grid-template-columns: repeat(auto-fill, minmax(88px, 1fr));
   gap: 7px; margin-top: 8px;
@@ -1165,7 +1187,7 @@ input[type="color"] { width: 46px; height: 30px; padding: 2px; cursor: pointer; 
 .td-main { padding: 20px; overflow-y: auto; min-height: 0; }
 .td-side { padding: 20px; background: var(--surface-2); border-inline-start: 1px solid var(--border); overflow-y: auto; min-height: 0; }
 .td-side .sec { margin-bottom: 16px; }
-.td-side .sec > label { display: block; font-size: 11px; font-weight: 700; color: var(--text-mute); letter-spacing: .05em; margin-bottom: 5px; }
+.td-side .sec > label { display: block; font-size: 11px; font-weight: 700; color: var(--text-faint); letter-spacing: .05em; margin-bottom: 5px; }
 
 .alert { padding: 10px 13px; border-radius: var(--radius); margin-bottom: 14px; display: flex; gap: 9px; align-items: flex-start; font-size: 13px; }
 .alert-danger { background: var(--danger-bg); color: #991b1b; border: 1px solid #fecaca; }
@@ -1182,7 +1204,7 @@ input[type="color"] { width: 46px; height: 30px; padding: 2px; cursor: pointer; 
 .checklist-item:hover { background: var(--surface-2); }
 .checklist-item input { width: 16px; height: 16px; accent-color: var(--ok); cursor: pointer; flex: none; }
 .checklist-item .txt { flex: 0 1 auto; min-width: 0; text-align: start; }
-.checklist-item.done .txt { text-decoration: line-through; color: var(--text-mute); }
+.checklist-item.done .txt { text-decoration: line-through; color: var(--text-faint); }
 .checklist-item .del { opacity: 0; }
 .checklist-item:hover .del { opacity: 1; }
 .checklist-item .spacer { flex: 1 0 6px; }
@@ -1193,7 +1215,7 @@ input[type="color"] { width: 46px; height: 30px; padding: 2px; cursor: pointer; 
 }
 .checklist-item .txt-open:hover { color: var(--brand); border-bottom-color: var(--brand); }
 /* סימון שיש תוכן בתוך הסעיף — הערה או תגובות */
-.checklist-item .item-badge { font-size: 11px; color: var(--text-mute); flex: none; }
+.checklist-item .item-badge { font-size: 11px; color: var(--text-faint); flex: none; }
 /* תיבת הסימון במסך הסעיף */
 .item-done-box { width: 17px; height: 17px; accent-color: var(--ok); cursor: pointer; flex: none; }
 
@@ -1242,7 +1264,7 @@ input[type="color"] { width: 46px; height: 30px; padding: 2px; cursor: pointer; 
 .msg.is-mine .bubble .mention { background: rgba(255, 255, 255, .75); }
 /* השעה נצמדת לקצה התחתון של הבועה, ולא תופסת שורה לעצמה */
 .bubble .b-time {
-  display: block; font-size: 10.5px; color: var(--text-mute);
+  display: block; font-size: 10.5px; color: var(--text-faint);
   text-align: left; margin-top: 2px;
 }
 
@@ -1285,7 +1307,7 @@ input[type="color"] { width: 46px; height: 30px; padding: 2px; cursor: pointer; 
 }
 .mention-list { display: flex; flex-direction: column; gap: 1px; margin-top: 8px; max-height: 260px; overflow-y: auto; }
 .mention-group {
-  font-size: 10px; font-weight: 700; letter-spacing: .07em; color: var(--text-mute);
+  font-size: 10px; font-weight: 700; letter-spacing: .07em; color: var(--text-faint);
   padding: 7px 8px 3px;
 }
 .mention-option {
@@ -1295,21 +1317,21 @@ input[type="color"] { width: 46px; height: 30px; padding: 2px; cursor: pointer; 
 }
 .mention-option:hover, .mention-option:focus-visible { background: var(--brand-light); color: var(--brand-dark); }
 .mention-option .mo-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.mention-option .mo-dept { font-size: 10.5px; color: var(--text-mute); flex: none; }
+.mention-option .mo-dept { font-size: 10.5px; color: var(--text-faint); flex: none; }
 
 .file-row { display: flex; align-items: center; gap: 10px; padding: 8px; border: 1px solid var(--border); border-radius: var(--radius); margin-bottom: 7px; background: var(--surface); }
 .file-row .f-icon { width: 32px; height: 32px; border-radius: 8px; background: var(--surface-2); display: grid; place-items: center; flex: none; }
 .file-row .f-name { flex: 1; min-width: 0; }
 .file-row .f-name b { display: block; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.file-row .f-name small { color: var(--text-mute); font-size: 11px; }
+.file-row .f-name small { color: var(--text-faint); font-size: 11px; }
 .file-row.old-version { opacity: .68; background: var(--surface-2); }
 /* מחיקת קובץ — חיוור עד ריחוף, כמו שאר הפעולות ההרסניות במערכת */
-.file-row .f-del { flex: none; color: var(--text-mute); padding-inline: 8px; }
+.file-row .f-del { flex: none; color: var(--text-faint); padding-inline: 8px; }
 .file-row .f-del:hover { background: var(--danger); color: #fff; border-color: var(--danger); }
 
 .dropzone {
   border: 2px dashed var(--border-strong); border-radius: var(--radius); padding: 18px;
-  text-align: center; color: var(--text-mute); cursor: pointer; transition: border-color .15s, background .15s;
+  text-align: center; color: var(--text-faint); cursor: pointer; transition: border-color .15s, background .15s;
 }
 .dropzone:hover, .dropzone.over { border-color: var(--brand); background: var(--brand-light); color: var(--brand-dark); }
 
@@ -1336,7 +1358,7 @@ input[type="color"] { width: 46px; height: 30px; padding: 2px; cursor: pointer; 
   z-index: 40; width: 54px; height: 58px;
   border: 0; padding: 0; cursor: pointer;
   border-radius: 0 29px 29px 0;
-  background: linear-gradient(135deg, #7c3aed 0%, #6d28d9 55%, #5b21b6 100%);
+  background: linear-gradient(135deg, var(--violet) 0%, var(--violet-mid) 55%, var(--violet-dark) 100%);
   box-shadow:
     0 6px 16px -4px rgba(91, 33, 182, .45),
     0 2px 6px rgba(15, 23, 42, .16),
@@ -1353,7 +1375,7 @@ input[type="color"] { width: 46px; height: 30px; padding: 2px; cursor: pointer; 
     0 3px 8px rgba(15, 23, 42, .2),
     inset 0 1px 0 rgba(255, 255, 255, .3);
 }
-.qt-tab:focus-visible { outline: 2px solid #6d28d9; outline-offset: 3px; }
+.qt-tab:focus-visible { outline: 2px solid var(--violet-mid); outline-offset: 3px; }
 
 /*
  * הפלוס מצויר בשני פסים ולא בתו ‎＋‎: התו תלוי בגופן, יושב מעט מתחת למרכז
@@ -1419,7 +1441,7 @@ input[type="color"] { width: 46px; height: 30px; padding: 2px; cursor: pointer; 
 .pp-trigger[aria-expanded="true"] { border-color: var(--brand); }
 .pp-face { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; }
 .pp-face > span:not(.pp-dot) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.pp-caret { color: var(--text-mute); font-size: 11px; flex: none; }
+.pp-caret { color: var(--text-faint); font-size: 11px; flex: none; }
 .pp-dot { width: 10px; height: 10px; border-radius: 50%; flex: none; background: var(--border-strong); }
 .pp-dot.is-empty { background: repeating-linear-gradient(45deg, #e2e8f0 0 3px, #fff 3px 6px); }
 
@@ -1436,7 +1458,7 @@ input[type="color"] { width: 46px; height: 30px; padding: 2px; cursor: pointer; 
 .pp-list { overflow-y: auto; padding-bottom: 5px; }
 /* כותרת קבוצה — היא שמסבירה למה הסדר אינו אלפביתי */
 .pp-group {
-  padding: 7px 11px 3px; font-size: 11px; font-weight: 700; color: var(--text-mute);
+  padding: 7px 11px 3px; font-size: 11px; font-weight: 700; color: var(--text-faint);
   position: sticky; top: 0; background: var(--surface);
 }
 .pp-opt {
@@ -1456,13 +1478,13 @@ input[type="color"] { width: 46px; height: 30px; padding: 2px; cursor: pointer; 
   border-radius: 999px; padding: 0 7px;
 }
 .pp-opt.is-chosen .pp-count { margin-inline-start: auto; }
-.pp-empty { padding: 14px 12px; font-size: 12.5px; color: var(--text-mute); }
+.pp-empty { padding: 14px 12px; font-size: 12.5px; color: var(--text-faint); }
 
 .history-item { display: flex; gap: 10px; padding: 8px 0; border-bottom: 1px dashed var(--border); font-size: 12.5px; }
 .history-item:last-child { border-bottom: 0; }
 .history-item .h-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--border-strong); margin-top: 7px; flex: none; }
 .history-item .h-body { flex: 1; }
-.history-item .h-meta { color: var(--text-mute); font-size: 11px; }
+.history-item .h-meta { color: var(--text-faint); font-size: 11px; }
 .history-item.system .h-dot { background: var(--info); }
 
 /* ---------------------------------------------------------------- התראות */
@@ -1479,7 +1501,7 @@ input[type="color"] { width: 46px; height: 30px; padding: 2px; cursor: pointer; 
   display: flex; align-items: center; gap: 9px;
   padding: 10px 15px; background: var(--surface-2);
   border-bottom: 1px solid var(--border);
-  font-size: 12.5px; color: var(--text-mute); line-height: 1.4;
+  font-size: 12.5px; color: var(--text-faint); line-height: 1.4;
 }
 .notif-panel .np-desktop > div { flex: 1; min-width: 0; }
 .notif-panel .np-desktop .btn { flex: none; }
@@ -1491,7 +1513,7 @@ input[type="color"] { width: 46px; height: 30px; padding: 2px; cursor: pointer; 
 /* לא ‎.notif .n-icon‎: אותו סמל מופיע גם במסך ניהול ההתראות, מחוץ לרשימה */
 .n-icon { width: 30px; height: 30px; border-radius: 8px; display: grid; place-items: center; flex: none; font-size: 14px; }
 .notif b { display: block; font-size: 13px; }
-.notif small { color: var(--text-mute); font-size: 11.5px; }
+.notif small { color: var(--text-faint); font-size: 11.5px; }
 .notif .n-body { flex: 1; min-width: 0; }
 
 /* ---------------------------------------------------------------- טוסט */
@@ -1508,10 +1530,10 @@ input[type="color"] { width: 46px; height: 30px; padding: 2px; cursor: pointer; 
 
 /* ---------------------------------------------------------------- שונות */
 
-.empty { text-align: center; padding: 44px 20px; color: var(--text-mute); }
+.empty { text-align: center; padding: 44px 20px; color: var(--text-faint); }
 .empty .e-icon { font-size: 40px; opacity: .5; margin-bottom: 10px; }
 .muted { color: var(--text-soft); }
-.mute-sm { color: var(--text-mute); font-size: 12px; }
+.mute-sm { color: var(--text-faint); font-size: 12px; }
 .flex { display: flex; align-items: center; gap: 8px; }
 .flex-col { display: flex; flex-direction: column; gap: 8px; }
 .spacer { flex: 1; }
@@ -1619,12 +1641,12 @@ input[type="color"] { width: 46px; height: 30px; padding: 2px; cursor: pointer; 
   display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
 }
 .notif-pop .pop-task {
-  font-size: 11.5px; color: var(--text-mute); margin-top: 6px;
+  font-size: 11.5px; color: var(--text-faint); margin-top: 6px;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .notif-pop .pop-x {
   border: 0; background: none; cursor: pointer; flex: none;
-  color: var(--text-mute); font-size: 13px; line-height: 1; padding: 2px 3px;
+  color: var(--text-faint); font-size: 13px; line-height: 1; padding: 2px 3px;
 }
 .notif-pop .pop-x:hover { color: var(--text); }
 
@@ -1773,7 +1795,7 @@ input[type="color"] { width: 46px; height: 30px; padding: 2px; cursor: pointer; 
 .nav-item.nav-draggable { position: relative; }
 .nav-item.nav-draggable::after {
   content: '⋮'; position: absolute; inset-inline-start: 3px;
-  font-size: 13px; line-height: 1; color: var(--text-mute);
+  font-size: 13px; line-height: 1; color: var(--text-faint);
   opacity: 0; transition: opacity .12s; cursor: grab; pointer-events: none;
 }
 .nav-item.nav-draggable:hover::after { opacity: .5; }
@@ -1784,7 +1806,7 @@ input[type="color"] { width: 46px; height: 30px; padding: 2px; cursor: pointer; 
 
 /* כפתור הנעיצה בראש התפריט — נבדל משאר הפריטים */
 .nav-pin-toggle {
-  color: var(--text-mute) !important; font-size: 12px;
+  color: var(--text-faint) !important; font-size: 12px;
   border-bottom: 1px solid var(--border); border-radius: 0;
   margin-bottom: 6px; padding-bottom: 10px;
 }
@@ -1885,7 +1907,7 @@ input[type="color"] { width: 46px; height: 30px; padding: 2px; cursor: pointer; 
 .tracker .tr-short::placeholder { color: var(--text-mute); opacity: .65; }
 .tracker .tr-short[readonly] { cursor: default; }
 .tracker .tr-inline.is-overdue { color: var(--danger); font-weight: 700; }
-.tracker .tr-inline.is-muted { color: var(--text-mute); }
+.tracker .tr-inline.is-muted { color: var(--text-faint); }
 
 .tracker .tr-title { display: flex; align-items: center; gap: 7px; min-width: 0; }
 .tracker .tr-title .txt-open { font-weight: 700; }
@@ -1896,7 +1918,7 @@ input[type="color"] { width: 46px; height: 30px; padding: 2px; cursor: pointer; 
 /* מונה תתי-המשימות שאינן מוצגות בשורה */
 .tracker .tr-count {
   flex: none; font-size: 11px; font-weight: 700; padding: 1px 6px;
-  border-radius: 10px; background: var(--surface-2); color: var(--text-mute);
+  border-radius: 10px; background: var(--surface-2); color: var(--text-faint);
 }
 
 /* שורות תתי-המשימות — מוזחות, ועל רקע אחר כדי שההיררכיה תיראה בלי קווים */
@@ -1904,7 +1926,7 @@ input[type="color"] { width: 46px; height: 30px; padding: 2px; cursor: pointer; 
 .tracker tr.tr-sub.is-done .txt-open { text-decoration: line-through; opacity: .6; }
 .tracker .tr-subtitle { display: flex; align-items: center; gap: 7px; padding-inline-start: 26px; min-width: 0; }
 .tracker .tr-substatus {
-  font-size: 11.5px; color: var(--text-mute);
+  font-size: 11.5px; color: var(--text-faint);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 260px;
 }
 
@@ -1917,7 +1939,7 @@ input[type="color"] { width: 46px; height: 30px; padding: 2px; cursor: pointer; 
 
 .short-status { display: flex; align-items: center; gap: 9px; margin: 0 0 14px; }
 .short-status .ss-label {
-  flex: none; font-size: 11.5px; font-weight: 700; color: var(--text-mute);
+  flex: none; font-size: 11.5px; font-weight: 700; color: var(--text-faint);
   padding: 3px 8px; border-radius: 6px; background: var(--surface-2);
 }
 .short-status input {
@@ -1930,7 +1952,7 @@ input[type="color"] { width: 46px; height: 30px; padding: 2px; cursor: pointer; 
 .subtask-parent {
   display: flex; align-items: center; gap: 7px; margin-bottom: 14px;
   padding: 8px 11px; border-radius: var(--radius); background: var(--surface-2);
-  font-size: 12.5px; color: var(--text-mute);
+  font-size: 12.5px; color: var(--text-faint);
 }
 
 .subtask-list { display: flex; flex-direction: column; gap: 2px; margin-top: 6px; }
@@ -1942,7 +1964,7 @@ input[type="color"] { width: 46px; height: 30px; padding: 2px; cursor: pointer; 
 .subtask-row.is-done .txt-open { text-decoration: line-through; opacity: .6; }
 /* הסטטוס המקוצר נחתך ואינו דוחף את התאריך והאחראי מחוץ לשורה */
 .subtask-row .st-short {
-  font-size: 11.5px; color: var(--text-mute); min-width: 0;
+  font-size: 11.5px; color: var(--text-faint); min-width: 0;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 
@@ -2000,7 +2022,7 @@ input[type="color"] { width: 46px; height: 30px; padding: 2px; cursor: pointer; 
 .sidebar .nav-item.is-subproject { padding-inline-start: 22px; }
 .sidebar .nav-item.is-subproject .ico::before {
   content: '↳'; position: absolute; inset-inline-start: 6px;
-  color: var(--text-mute); font-size: 11px;
+  color: var(--text-faint); font-size: 11px;
 }
 .sidebar .nav-item.is-subproject .ico { position: relative; }
 
@@ -2013,7 +2035,7 @@ input[type="color"] { width: 46px; height: 30px; padding: 2px; cursor: pointer; 
 .tracker .tr-dot {
   width: 20px; height: 20px; border-radius: 50%; padding: 0;
   border: 1px solid rgba(0, 0, 0, .22); cursor: pointer; display: block; margin: 0 auto;
-  background: transparent; font-size: 12px; line-height: 1; color: var(--text-mute);
+  background: transparent; font-size: 12px; line-height: 1; color: var(--text-faint);
   transition: transform .1s;
 }
 .tracker .tr-dot:hover:not(:disabled) { transform: scale(1.18); }
@@ -2034,7 +2056,7 @@ input[type="color"] { width: 46px; height: 30px; padding: 2px; cursor: pointer; 
   font-size: 13px; font-family: inherit; color: inherit; text-align: start; border-radius: 7px;
 }
 .track-opt:hover { background: var(--surface-2); }
-.track-opt.is-clear { border-top: 1px solid var(--border); margin-top: 3px; color: var(--text-mute); }
+.track-opt.is-clear { border-top: 1px solid var(--border); margin-top: 3px; color: var(--text-faint); }
 .track-swatch {
   width: 16px; height: 16px; border-radius: 4px; flex: none;
   border: 1px solid rgba(0, 0, 0, .2);
@@ -2049,14 +2071,14 @@ input[type="color"] { width: 46px; height: 30px; padding: 2px; cursor: pointer; 
 /* שם הפרויקט בראש התפריט — אחרי הקלקה ימנית צריך לדעת על מה לחצת */
 .proj-pop-head {
   padding: 6px 9px 8px; margin-bottom: 3px; border-bottom: 1px solid var(--border);
-  font-size: 12px; font-weight: 600; color: var(--text-mute);
+  font-size: 12px; font-weight: 600; color: var(--text-faint);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .proj-pop-colors {
   display: flex; align-items: center; gap: 4px; flex-wrap: wrap;
   padding: 7px 9px; margin-top: 3px; border-top: 1px solid var(--border);
 }
-.proj-pop-label { font-size: 12px; color: var(--text-mute); margin-inline-end: 3px; }
+.proj-pop-label { font-size: 12px; color: var(--text-faint); margin-inline-end: 3px; }
 .proj-swatch {
   width: 20px; height: 20px; border-radius: 5px; cursor: pointer; padding: 0;
   border: 1px solid rgba(0, 0, 0, .18);
@@ -2102,7 +2124,7 @@ input[type="color"] { width: 46px; height: 30px; padding: 2px; cursor: pointer; 
   display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden;
 }
 .mention-item .mi-task {
-  font-size: 11.5px; color: var(--text-mute);
+  font-size: 11.5px; color: var(--text-faint);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .mention-item .mi-task::before { content: '📋 '; }
@@ -2110,7 +2132,7 @@ input[type="color"] { width: 46px; height: 30px; padding: 2px; cursor: pointer; 
 /* כותרת קבוצה ברשימת בחירה נפתחת — אותו תפקיד שיש ל-optgroup ברשימה רגילה */
 .popover-list .popover-group {
   padding: 7px 10px 3px; font-size: 11px; font-weight: 700;
-  color: var(--text-mute); letter-spacing: .02em;
+  color: var(--text-faint); letter-spacing: .02em;
 }
 .popover-list .popover-group:not(:first-child) {
   border-top: 1px solid var(--border); margin-top: 4px;
@@ -2127,7 +2149,7 @@ input[type="color"] { width: 46px; height: 30px; padding: 2px; cursor: pointer; 
   font-size: 10.5px; font-weight: 700; padding: 2px 0; border-radius: 5px;
   margin-top: 1px;
 }
-.search-results .sr-tag.sr-project { background: #ede9fe; color: #6d28d9; }
+.search-results .sr-tag.sr-project { background: var(--violet-light); color: var(--violet-mid); }
 .search-results .sr-tag.sr-task { background: var(--info-bg); color: #1e40af; }
 .search-results .sr-body { flex: 1; min-width: 0; }
 /* הכותרת נחתכת בשורה אחת — תוצאה ארוכה לא תמתח את הרשימה */
@@ -2142,12 +2164,12 @@ input[type="color"] { width: 46px; height: 30px; padding: 2px; cursor: pointer; 
   background: var(--surface-2); border-radius: 4px; padding: 1px 5px; font-size: 10.5px;
 }
 .search-results mark { background: #fef08a; color: inherit; border-radius: 3px; padding: 0 1px; }
-.search-results .sr-item.is-archived .sr-title { color: var(--text-mute); }
+.search-results .sr-item.is-archived .sr-title { color: var(--text-faint); }
 /* השורה הפעילה בניווט מקלדת — אותו רקע של ריחוף, כדי שלא יהיו שני "נבחר" */
 .search-results .sr-item.is-active { background: var(--surface-2); box-shadow: inset 2px 0 0 0 var(--brand); }
 .search-results .sr-empty,
 .search-results .sr-more {
-  padding: 12px 14px; font-size: 12.5px; color: var(--text-mute);
+  padding: 12px 14px; font-size: 12.5px; color: var(--text-faint);
 }
 .search-results .sr-more { border-top: 1px solid var(--border); }
 
@@ -2285,7 +2307,7 @@ input[type="color"] { width: 46px; height: 30px; padding: 2px; cursor: pointer; 
   max-height: 70vh; overflow-y: auto;
 }
 .col-pop .col-head {
-  padding: 5px 8px 8px; font-size: 11px; font-weight: 700; color: var(--text-mute);
+  padding: 5px 8px 8px; font-size: 11px; font-weight: 700; color: var(--text-faint);
 }
 .col-pop .col-row {
   display: flex; align-items: center; gap: 4px;
@@ -2296,7 +2318,7 @@ input[type="color"] { width: 46px; height: 30px; padding: 2px; cursor: pointer; 
 .col-pop .col-move {
   flex: none; width: 22px; height: 22px; padding: 0; cursor: pointer;
   border: 1px solid var(--border); border-radius: 6px;
-  background: var(--surface); color: var(--text-mute); font-size: 9px;
+  background: var(--surface); color: var(--text-faint); font-size: 9px;
 }
 .col-pop .col-move:hover:not(:disabled) { border-color: var(--brand); color: var(--brand); }
 .col-pop .col-move:disabled { opacity: .3; cursor: default; }
@@ -2319,16 +2341,16 @@ input[type="color"] { width: 46px; height: 30px; padding: 2px; cursor: pointer; 
 .tpl-items { margin: 0; padding-inline-start: 20px; font-size: 13px; line-height: 1.75; }
 .tpl-items li { padding: 1px 0; }
 .tpl-note {
-  font-size: 11.5px; color: var(--text-mute); line-height: 1.5;
+  font-size: 11.5px; color: var(--text-faint); line-height: 1.5;
   padding-inline-start: 2px; border-inline-start: 2px solid var(--border); margin: 1px 0 3px;
   padding-block: 1px;
 }
-.tpl-meta { margin-top: 10px; font-size: 11px; color: var(--text-mute); }
+.tpl-meta { margin-top: 10px; font-size: 11px; color: var(--text-faint); }
 .tag-org { background: var(--brand-light); color: var(--brand-dark); }
 
 .col-pop .col-hint {
   margin-top: 8px; padding-top: 7px; border-top: 1px solid var(--border);
-  font-size: 11.5px; line-height: 1.5; color: var(--text-mute);
+  font-size: 11.5px; line-height: 1.5; color: var(--text-faint);
 }
 
 /* שדות תת-המשימה בשורה הפרושה, כשהיא תא אחד לרוחב הטבלה */
@@ -2345,7 +2367,7 @@ input[type="color"] { width: 46px; height: 30px; padding: 2px; cursor: pointer; 
 .seg button.active { background: var(--brand); color: #fff; font-weight: 700; }
 .seg button:disabled { opacity: .45; cursor: not-allowed; }
 .task-mode { margin-bottom: 14px; }
-.task-mode button:last-child:not(.active) { color: #7c3aed; font-weight: 700; }
+.task-mode button:last-child:not(.active) { color: var(--violet); font-weight: 700; }
 
 .ai-instruction { min-height: 96px; font-size: 15px; }
 .ai-section-title { font-weight: 700; font-size: 13px; color: var(--text-soft); margin: 4px 0 6px; }
@@ -2363,10 +2385,10 @@ input[type="color"] { width: 46px; height: 30px; padding: 2px; cursor: pointer; 
 .ai-policy-grid label { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 
 /* הפאנל בכרטיס המשימה */
-.ai-panel { border: 1px solid #ddd6fe; background: linear-gradient(180deg, #faf5ff, var(--surface) 70px); border-radius: var(--radius-lg); padding: 12px 14px; margin-bottom: 14px; }
+.ai-panel { border: 1px solid var(--violet-border); background: linear-gradient(180deg, #faf5ff, var(--surface) 70px); border-radius: var(--radius-lg); padding: 12px 14px; margin-bottom: 14px; }
 .ai-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 6px; }
-.ai-badge { background: #7c3aed; color: #fff; font-weight: 800; font-size: 11.5px; padding: 2px 8px; border-radius: 999px; }
-.ai-state { font-weight: 700; font-size: 12.5px; padding: 2px 9px; border-radius: 999px; background: #ede9fe; color: #5b21b6; }
+.ai-badge { background: var(--violet); color: #fff; font-weight: 800; font-size: 11.5px; padding: 2px 8px; border-radius: 999px; }
+.ai-state { font-weight: 700; font-size: 12.5px; padding: 2px 9px; border-radius: 999px; background: var(--violet-light); color: var(--violet-dark); }
 .ai-state-needs_user, .ai-state-stalled { background: var(--warn-bg); color: #92400e; }
 .ai-state-completed { background: var(--ok-bg); color: #166534; }
 .ai-state-stopped, .ai-state-paused { background: #f1f5f9; color: var(--text-soft); }
@@ -2377,7 +2399,7 @@ input[type="color"] { width: 46px; height: 30px; padding: 2px; cursor: pointer; 
 .ai-question textarea { min-height: 60px; }
 
 .ai-draft { border: 1px solid #c4b5fd; background: var(--surface); border-radius: var(--radius); padding: 10px 12px; margin: 8px 0; display: grid; gap: 8px; }
-.ai-draft-head { font-size: 13px; color: #5b21b6; }
+.ai-draft-head { font-size: 13px; color: var(--violet-dark); }
 .ai-draft .ai-body { min-height: 130px; }
 
 .ai-timeline { display: grid; gap: 8px; margin: 10px 0; max-height: 420px; overflow-y: auto; padding-inline-end: 2px; }
@@ -2388,7 +2410,7 @@ input[type="color"] { width: 46px; height: 30px; padding: 2px; cursor: pointer; 
 .ai-msg-subject { font-weight: 700; margin-top: 3px; }
 .ai-msg-body { white-space: pre-wrap; margin-top: 3px; line-height: 1.55; }
 .ai-msg-files { display: flex; flex-wrap: wrap; gap: 6px 12px; margin-top: 6px; font-size: 12.5px; }
-.ai-msg-analysis { margin-top: 6px; padding-top: 6px; border-top: 1px dashed var(--border-strong); font-size: 12.5px; color: #5b21b6; }
+.ai-msg-analysis { margin-top: 6px; padding-top: 6px; border-top: 1px dashed var(--border-strong); font-size: 12.5px; color: var(--violet-dark); }
 .ai-verdict { font-size: 11px; padding: 1px 7px; border-radius: 999px; margin-inline-start: 4px; }
 .ai-verdict-ok { background: var(--ok-bg); color: #166534; }
 .ai-verdict-warn { background: var(--warn-bg); color: #92400e; }
@@ -2402,13 +2424,13 @@ input[type="color"] { width: 46px; height: 30px; padding: 2px; cursor: pointer; 
 .ai-origin > div { margin-top: 4px; white-space: pre-wrap; }
 .ai-steps { padding-inline-start: 20px; font-size: 13.5px; line-height: 1.7; }
 
-.tag-ai { background: #ede9fe; color: #5b21b6; }
-.tag-ai-attn { background: #7c3aed; color: #fff; }
+.tag-ai { background: var(--violet-light); color: var(--violet-dark); }
+.tag-ai-attn { background: var(--violet); color: #fff; }
 
 /* ---- עוזר ה-AI: "ממתין לאישורך", דיברתי איתו, ציר זמן ---- */
 .ai-event { font-size: 12px; color: var(--text-soft); text-align: center; padding: 2px 0; }
 .ai-msg-note { background: #fefce8; border: 1px dashed #facc15; justify-self: center; max-width: 96%; }
-.ai-count { background: #7c3aed; color: #fff; font-weight: 800; font-size: 11.5px; min-width: 20px; text-align: center; padding: 1px 7px; border-radius: 999px; }
+.ai-count { background: var(--violet); color: #fff; font-weight: 800; font-size: 11.5px; min-width: 20px; text-align: center; padding: 1px 7px; border-radius: 999px; }
 .ai-inbox .card-head { gap: 8px; }
 .ai-sec { margin-bottom: 12px; }
 .ai-sec:last-child { margin-bottom: 0; }
@@ -2421,10 +2443,10 @@ input[type="color"] { width: 46px; height: 30px; padding: 2px; cursor: pointer; 
 .ai-chips { display: flex; flex-wrap: wrap; gap: 4px; }
 .ai-chip { font-size: 11.5px; padding: 1px 8px; border-radius: 999px; background: #f1f5f9; color: var(--text-soft); }
 .ai-chip-warn { background: var(--warn-bg); color: #92400e; }
-.ai-chip-ai { background: #ede9fe; color: #5b21b6; }
+.ai-chip-ai { background: var(--violet-light); color: var(--violet-dark); }
 .ai-mini { padding: 6px 9px; font-size: 12.5px; margin: 2px 0; }
-.ai-scan-progress { font-size: 13px; color: #5b21b6; padding: 4px 2px 10px; display: flex; align-items: center; gap: 4px; }
-.spinner-sm { width: 13px; height: 13px; border: 2px solid #ddd6fe; border-top-color: #7c3aed; border-radius: 50%; display: inline-block; animation: ai-spin .8s linear infinite; }
+.ai-scan-progress { font-size: 13px; color: var(--violet-dark); padding: 4px 2px 10px; display: flex; align-items: center; gap: 4px; }
+.spinner-sm { width: 13px; height: 13px; border: 2px solid var(--violet-border); border-top-color: var(--violet); border-radius: 50%; display: inline-block; animation: ai-spin .8s linear infinite; }
 @keyframes ai-spin { to { transform: rotate(360deg); } }
 .ai-people { display: grid; gap: 6px; }
 .ai-person { display: flex; align-items: center; gap: 8px; font-size: 13.5px; }
@@ -2455,7 +2477,7 @@ input[type="color"] { width: 46px; height: 30px; padding: 2px; cursor: pointer; 
 .wa-me { align-self: flex-start; background: #d9fdd3; }
 .wa-bot { align-self: flex-end; background: #fff; }
 .wa-note { align-self: center; background: #fff8c5; font-size: 12px; color: var(--text-soft); }
-.wa-meta { margin-top: 5px; padding-top: 4px; border-top: 1px dashed var(--border); font-size: 11.5px; color: var(--text-mute); white-space: normal; }
+.wa-meta { margin-top: 5px; padding-top: 4px; border-top: 1px dashed var(--border); font-size: 11.5px; color: var(--text-faint); white-space: normal; }
 @media (max-width: 640px) {
   .wa-stats { grid-template-columns: repeat(2, 1fr); }
   .wa-bubble { max-width: 92%; }
