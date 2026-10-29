@@ -2567,6 +2567,27 @@ input[type="color"] { width: 46px; height: 30px; padding: 2px; cursor: pointer; 
 .voice-help .voice-url { display: flex; gap: 8px; align-items: center; background: var(--surface-2); border-radius: var(--radius); padding: 8px 10px; margin-bottom: 12px; }
 .voice-help code { flex: 1; overflow-wrap: anywhere; }
 
+/* ================================================================ העוזר */
+
+.asst { display: flex; flex-direction: column; gap: 10px; }
+.asst-said { background: var(--surface-2); border-radius: var(--radius); padding: 8px 10px; font-size: 13px; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.asst-logo { width: 22px; height: 22px; flex: none; }
+.asst-log { display: flex; flex-direction: column; gap: 8px; max-height: 52vh; overflow-y: auto; }
+.asst-msg { border-radius: 14px; padding: 10px 12px; line-height: 1.55; max-width: 92%; }
+.asst-bot { background: var(--surface-2); align-self: flex-start; }
+.asst-me { background: var(--brand); color: #fff; align-self: flex-end; }
+.asst-text .asst-gap { height: 8px; }
+.asst-text a { overflow-wrap: anywhere; }
+.asst-extras { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
+.asst-extras:empty { display: none; }
+.asst-choices { display: flex; gap: 6px; flex-wrap: wrap; }
+.asst-foot { display: flex; gap: 6px; align-items: center; }
+.asst-input { flex: 1; min-width: 0; }
+.asst-foot .is-live { background: var(--danger); color: #fff; }
+
+.ai-signature-box { display: flex; flex-direction: column; gap: 4px; margin: 4px 0 8px; }
+.ai-signature { width: 100%; height: 90px; border: 1px dashed var(--border); border-radius: var(--radius); background: #fff; }
+
 /* דיאלוג המשימה כשנפתח מהקלטה — מה שלא ודאי מסומן לבדיקה */
 .voice-from { margin-bottom: 12px; }
 .voice-warn { color: #92400e; font-weight: 600; margin-top: 2px; }

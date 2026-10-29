@@ -26,7 +26,7 @@ function register(router, h) {
 
   AiTasks.setHooks({ saveFile: saveAttachment, scanWhatsApp: WaScan.handle, scanningUsers: WaScan.scanningUsers });
   MailScan.init({ createTask });
-  WaBot.init({ createTask, listProjectsFor, tasks: botTaskOps });
+  WaBot.init({ createTask, listProjectsFor, tasks: botTaskOps, mail: { searchContacts, createAiTask } });
 
   const internalOnly = (actor) => {
     if (actor.type === 'vendor') throw forbidden();
@@ -231,20 +231,23 @@ function register(router, h) {
         // וואטסאפ רק למי שחיבר אותו — אחרת הנוסח נכתב למייל
         channel: b.channel === 'whatsapp' && WhatsApp.isReady(actor.id) ? 'whatsapp' : 'email',
         feedback: String(b.feedback ?? '').trim(),
-        previous: b.previous ?? null
+        previous: b.previous ?? null,
+        context: b.channel === 'whatsapp' ? '' : await AiTasks.mailContext(actor.id, b.contact?.email)
       });
-      sendJson(res, 200, { draft });
+      // החתימה מ-Gmail — לתצוגה מתחת לנוסח בלבד; נערכת רק ב-Gmail עצמו
+      const signature = b.channel === 'whatsapp' ? null : await Gmail.signature(actor.id);
+      sendJson(res, 200, { draft, signature: signature ? signature.html : null });
     } catch (err) {
       throw userError(err);
     }
   });
 
-  router.post('/api/ai/tasks', async (req, res, ctx) => {
-    const actor = ctx.requireActor();
-    internalOnly(actor);
-    if (!P.may(actor, 'create_task')) throw forbidden();
-    const b = await readJson(req);
-
+  /**
+   * פתיחת משימת AI מטיוטה שאושרה — מהאשף באפליקציה ומבוט הוואטסאפ, באותן
+   * בדיקות בדיוק. מחזיר את מזהה המשימה, ושגיאת שליחה אם הייתה (המשימה
+   * והטיוטה נשמרות גם אז, ואפשר לשלוח שוב מהכרטיס).
+   */
+  async function createAiTask(actor, b) {
     const instruction = String(b.instruction ?? '').trim();
     const draft = b.draft ?? {};
     /*
@@ -325,6 +328,14 @@ function register(router, h) {
       sendError = err.message;
     }
 
+    return { taskId, sendError };
+  }
+
+  router.post('/api/ai/tasks', async (req, res, ctx) => {
+    const actor = ctx.requireActor();
+    internalOnly(actor);
+    if (!P.may(actor, 'create_task')) throw forbidden();
+    const { taskId, sendError } = await createAiTask(actor, await readJson(req));
     sendJson(res, 201, { task: shapeTask(getTaskOr404(taskId), actor, { withDetails: true }), sendError });
   });
 

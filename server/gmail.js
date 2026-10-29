@@ -129,6 +129,8 @@ async function connect(userId, code, req) {
        scope = excluded.scope, state = 'ok', error = ''`,
     userId, String(profile.emailAddress ?? '').toLowerCase(), Secrets.encrypt(data.refresh_token), String(data.scope), D.nowIso()
   );
+  // חיבור מחדש הוא גם הדרך לרענן מיד חתימה ששונתה ב-Gmail
+  signatures.delete(userId);
 }
 
 const connectionOf = (userId) => D.get('SELECT * FROM mail_connections WHERE user_id = ?', userId);
@@ -254,6 +256,7 @@ async function disconnect(userId) {
     await fetch(`${REVOKE}?token=${encodeURIComponent(refresh)}`, { method: 'POST', signal: AbortSignal.timeout(15000) }).catch(() => {});
   }
   D.run('DELETE FROM mail_connections WHERE user_id = ?', userId);
+  signatures.delete(userId);
   // אנשי הקשר שסונכרנו שייכים לחיבור — בלעדיו אין להם מקום אצלנו
   D.run('DELETE FROM google_contacts WHERE user_id = ?', userId);
   D.run('DELETE FROM google_contact_sync WHERE user_id = ?', userId);
@@ -306,11 +309,62 @@ function publicStatus(userId) {
   };
 }
 
+// ---------------------------------------------------------------------------
+// החתימה
+// ---------------------------------------------------------------------------
+
+const SIGNATURE_TTL = 3 * 60 * 60 * 1000;
+const signatures = new Map(); // userId → { at, value }
+
+/**
+ * החתימה האישית כפי שהוגדרה ב-Gmail (הגדרות ← כללי ← חתימה) — של כתובת
+ * השליחה של החיבור. נקראת מ-Gmail בלבד ואינה נערכת במשימון: מה שמשתנה שם
+ * מגיע לכאן בעדכון הבא (עד 3 שעות, או מיד אחרי חיבור מחדש).
+ *
+ * ‎null‎ — אין חתימה ב-Gmail, ואז לא מוסיפים כלום, בדיוק כמו ב-Gmail.
+ * תקלה בקריאה אינה עוצרת שליחה: המייל יוצא בלי חתימה, והתקלה נרשמת.
+ * ההרשאה — קריאת הדואר (‎gmail.readonly‎) שכבר אושרה; אין צורך להתחבר מחדש.
+ *
+ * @returns {Promise<{html: string, text: string}|null>}
+ */
+async function signature(userId) {
+  const hit = signatures.get(userId);
+  if (hit && Date.now() - hit.at < SIGNATURE_TTL) return hit.value;
+  const conn = connectionOf(userId);
+  if (!conn || conn.state !== 'ok' || !has(userId, 'mail')) return null;
+  try {
+    const list = (await call(userId, '/settings/sendAs')).sendAs ?? [];
+    const mine = list.find((x) => String(x.sendAsEmail).toLowerCase() === conn.email)
+      ?? list.find((x) => x.isPrimary) ?? list.find((x) => x.isDefault);
+    const html = String(mine?.signature ?? '').trim();
+    // בלי ‎require‎ בראש הקובץ: ‎mime.js‎ עצמאי, וכך אין סיכוי לתלות מעגלית
+    const text = html ? require('./mime').htmlToText(html).trim() : '';
+    const value = html && text ? { html, text } : null;
+    signatures.set(userId, { at: Date.now(), value });
+    return value;
+  } catch (err) {
+    console.error(`[משימון] קריאת החתימה מ-Gmail למשתמש ${userId} נכשלה:`, err.message);
+    return hit?.value ?? null;
+  }
+}
+
+/** מייל שיוצא מהתיבה של המשתמש, עם החתימה שלו מ-Gmail בסוף — אם יש */
+async function signed(userId, { text, html }) {
+  const sig = await signature(userId);
+  if (!sig) return { text, html, signature: null };
+  const block = `<br><div dir="auto" class="gmail_signature" data-smartmail="gmail_signature">${sig.html}</div>`;
+  return {
+    text: `${String(text).replace(/\s+$/, '')}\n\n${sig.text}`,
+    html: /<\/body>/i.test(html) ? html.replace(/<\/body>/i, `${block}</body>`) : `${html}${block}`,
+    signature: sig
+  };
+}
+
 /** קישור למייל בתוך Gmail — נפתח רק אצל בעל התיבה */
 const webLink = (email, gmailId) => `https://mail.google.com/mail/u/?authuser=${encodeURIComponent(email)}#all/${encodeURIComponent(gmailId)}`;
 
 module.exports = {
   isEnabled, authorizeUrl, isGmailState, consumeState, connect, disconnect,
   search, raw, send, connectedUsers, isConnected, canSend, connectionOf, publicStatus, webLink, SCOPE, SEND_SCOPE,
-  SCOPES, has, googleCall
+  SCOPES, has, googleCall, signature, signed
 };

@@ -14,6 +14,8 @@ const Calendar = require('./calendar');
 const Gmail = require('./gmail');
 const Mailer = require('./mailer');
 const Claude = require('./ai/claude');
+const VoiceRouter = require('./ai/voice-router');
+const WaBot = require('./ai/wa-bot');
 const { badRequest, forbidden, notFound, readJson, sendJson, parseUrl } = require('./http-kit');
 
 function register(router, h) {
@@ -137,6 +139,43 @@ function register(router, h) {
       ...rest,
       created: taskId ? shapeTask(getTaskOr404(taskId), actor, { withDetails: true }) : null
     });
+  });
+
+  /**
+   * הקלטה — לאן היא הולכת. בקשה אחת לפתוח משימה: למסלול המשימה מהקלטה (עם
+   * הדיאלוג המלא). כל השאר — מייל, Today, תובנות, כמה בקשות יחד — לעוזר,
+   * באותה שיחה של בוט הוואטסאפ.
+   */
+  router.post('/api/voice/route', async (req, res, ctx) => {
+    const actor = userOnly(ctx);
+    const b = await readJson(req);
+    const text = String(b.text ?? '').trim().slice(0, 4000);
+    if (!text) throw badRequest('לא נקלט טקסט');
+    const trigger = Voice.detectTrigger(text).trigger;
+    const requests = await VoiceRouter.split(text, { classify: !trigger });
+    // לא סווג (בלי AI, או "פתח משימה" מפורש) — משימה, כמו שההקלטה עבדה תמיד
+    const shaped = requests.map((r) => ({ kind: r.kind ?? (trigger || !Claude.isEnabled() ? 'task' : 'other'), text: r.text }));
+    sendJson(res, 200, {
+      requests: shaped,
+      route: shaped.length === 1 && shaped[0].kind === 'task' ? 'task' : 'assistant'
+    });
+  });
+
+  /** העוזר — הקלטה או הקלדה, ותשובות לכפתורים שמתחת לתשובה */
+  router.post('/api/assistant', async (req, res, ctx) => {
+    const actor = userOnly(ctx);
+    const b = await readJson(req);
+    const text = String(b.text ?? '').trim().slice(0, 4000);
+    if (!text) throw badRequest('לא נקלט טקסט');
+    try {
+      sendJson(res, 200, await WaBot.assistant(actor.id, text, {
+        voice: Boolean(b.voice),
+        reset: Boolean(b.reset),
+        requests: Array.isArray(b.requests) ? b.requests.map((r) => String(r?.text ?? r ?? '').trim()).filter(Boolean).slice(0, 5) : null
+      }));
+    } catch (err) {
+      throw userError(err);
+    }
   });
 
   /**

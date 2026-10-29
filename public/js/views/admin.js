@@ -1385,7 +1385,7 @@ const AdminView = (() => {
   let testMode = 'private';
   let testUser = null;
 
-  const WA_CHANNELS = { private: 'פרטי', group: 'קבוצה', summary: 'סיכום בוקר', proactive: 'הבוט יוזם', test: 'בדיקה' };
+  const WA_CHANNELS = { private: 'פרטי', group: 'קבוצה', summary: 'סיכום בוקר', proactive: 'הבוט יוזם', test: 'בדיקה', app: 'הקלטה באפליקציה' };
   const WA_STATUS = {
     ok: ['תקין', ''],
     unclear: ['לא הובן', 'ai-chip-warn'],
@@ -1469,7 +1469,8 @@ const AdminView = (() => {
             el('div', {}, [el('span', { text: `${a.icon} ` }), el('b', { text: a.label }), ' ', el('span.ai-chip', { text: CHANNEL_CHIP[a.channel] })]),
             el('div.mute-sm', { text: a.description }),
             examples ? UI.field('דוגמאות — שורה לכל דוגמה. מוצגות ב"עזרה" ומכוונות את הבוט', examples) : null,
-            a.key === 'summary' ? el('div.mute-sm', { text: `נשלח בשעה ${info.settings.summaryTime} — משנים בלשונית "הגדרות".` }) : null
+            a.key === 'summary' ? el('div.mute-sm', { text: `נשלח בשעה ${info.settings.summaryTime} — משנים בלשונית "הגדרות".` }) : null,
+            a.key === 'voice_notes' && !info.speech ? el('div.mute-sm.text-danger', { text: 'התמלול אינו מוגדר בשרת (GOOGLE_SPEECH_API_KEY) — עד אז הבוט מבקש לכתוב בטקסט.' }) : null
           ]),
           audience ? el('div.ai-row-actions', {}, [UI.field('מי רשאי', audience)]) : null
         ]);
@@ -1802,7 +1803,7 @@ const AdminView = (() => {
       });
 
       UI.mount(host, el('div.card', {}, [
-        el('div.card-head', {}, [el('span', { text: '🤖' }), el('h3', { text: 'מספר הבוט' })]),
+        el('div.card-head', {}, [el('img', { src: '/icons/bot.svg', alt: '', width: 22, height: 22 }), el('h3', { text: 'מספר הבוט' })]),
         el('div.card-pad', {}, [
           el('p', { style: { marginTop: 0 }, text: 'מספר וואטסאפ ייעודי של הארגון. מצרפים אותו לקבוצות הפרויקטים כמשתתף, והוא קורא בהן בקשות ומציע אותן כמשימות. הוא לא כותב בקבוצות. בפרטי עובדים כותבים לו — הפעולות שמותרות מוגדרות בלשונית "פעולות".' }),
           !info.ai ? el('div.alert.alert-warn', {}, [el('span', { text: '⚠️' }), el('div', { text: 'חיבור ה-AI אינו מוגדר בשרת (ANTHROPIC_API_KEY). בלעדיו הבוט אינו מנתח הודעות.' })]) : null,
@@ -1816,7 +1817,13 @@ const AdminView = (() => {
           el('div.row', {}, [UI.field('apiTokenInstance', token), UI.field('מספר הבוט', phone, 'לתצוגה בלבד — כדי שיהיה ברור לאיזה מספר מצרפים')]),
           qrBox,
           el('div.flex.mt', {}, [save, test, showQr, el('div.spacer'), remove]),
-          c?.checkedAt ? el('div.mute-sm.mt', { text: `נבדק ${UI.relative(c.checkedAt)}` }) : null
+          c?.checkedAt ? el('div.mute-sm.mt', { text: `נבדק ${UI.relative(c.checkedAt)}` }) : null,
+          // תמונת הפרופיל של הבוט — בנויה לעיגול של וואטסאפ. מגדירים אותה בטלפון של הבוט
+          el('div.alert.alert-info.mt', {}, [
+            el('img', { src: '/icons/bot-profile.png', alt: '', width: 40, height: 40, style: { borderRadius: '50%', flex: 'none' } }),
+            el('div', { text: 'תמונת הפרופיל של הבוט: מורידים, ובטלפון של הבוט — וואטסאפ ← הגדרות ← לחיצה על התמונה ← החלפה.' }),
+            el('a.btn.btn-sm', { href: '/icons/bot-profile.png', download: 'mesimon-bot.png', style: { flex: 'none' } }, ['⬇ הורדה'])
+          ])
         ])
       ]));
     }

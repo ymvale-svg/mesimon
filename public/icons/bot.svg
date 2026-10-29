@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="40 55 520 520">
+  <!-- הלוגו של בוט הוואטסאפ: בועת שיחה, ובתוכה שלוש השכבות של לוגו אשל הירדן -->
+  <path fill="none" stroke="#4174BA" stroke-width="34" stroke-linejoin="round" d="M300 70c-140 0-245 92-245 212 0 58 25 110 68 149l-30 104 118-52c28 8 58 12 89 12 140 0 245-92 245-213S440 70 300 70z"/>
+  <path fill="#A3DDF7" d="M175 190h70v54h-70z"/><path fill="#4174BA" d="M245 190h185l-10 54H245z"/>
+  <path fill="#A3DDF7" d="M175 262h70v54h-70z"/><path fill="#4174BA" d="M245 262h155v54H245z"/>
+  <path fill="#A3DDF7" d="M175 334h70v54h-70z"/><path fill="#4174BA" d="M245 334h110l-8 54H245z"/>
+</svg>

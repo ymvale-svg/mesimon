@@ -105,6 +105,8 @@ async function sendAssignment({ task, assigneeType, assigneeId, assigner }) {
 
   // מי שהקצה לעצמו יודע — אין טעם לשלוח לו דואר על מה שהוא בדיוק עשה
   if (assigner && assigneeType !== 'vendor' && assigner.id === assigneeId) return false;
+  // עובד שכיבה לעצמו את המייל בהגדרות ההתראות
+  if (assigneeType !== 'vendor' && D.userPrefs(assigneeId)?.assignChannels?.email === false) return false;
 
   try {
     const orgName = D.getSetting('org_name', 'הארגון');
