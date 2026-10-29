@@ -3616,6 +3616,7 @@ router.delete('/api/admin/pending/:id', async (req, res, ctx) => {
 const IMPORT_COLUMNS = {
   name: { label: 'שם מלא', required: true, aliases: ['שם מלא', 'שם', 'שםמלא', 'name', 'fullname', 'full name'] },
   email: { label: 'אימייל', required: true, aliases: ['אימייל', 'מייל', 'אימייל', 'דואראלקטרוני', 'דואר אלקטרוני', 'כתובתמייל', 'כתובת מייל', 'email', 'mail', 'e-mail'] },
+  phone: { label: 'טלפון', required: false, aliases: ['טלפון', 'נייד', 'טלפון נייד', 'מספר טלפון', 'פלאפון', 'סלולרי', 'phone', 'mobile', 'cell'] },
   department: { label: 'מחלקה', required: false, aliases: ['מחלקה', 'department', 'dept'] },
   role: { label: 'רמת גישה', required: false, aliases: ['רמת גישה', 'רמתגישה', 'הרשאה', 'תפקיד', 'role'] }
 };
@@ -3672,6 +3673,7 @@ function analyseImport(actor, rows) {
 
   // כתובות שכבר קיימות, וגם כאלה שחוזרות פעמיים בתוך הקובץ עצמו
   const seen = new Set();
+  const seenPhones = new Set();
   const out = [];
 
   rows.slice(1).forEach((row, i) => {
@@ -3689,6 +3691,22 @@ function analyseImport(actor, rows) {
     else if (D.get('SELECT 1 FROM users WHERE lower(email)=?', email)) errors.push('משתמש עם הכתובת הזו כבר קיים');
     else if (D.get('SELECT 1 FROM vendors WHERE lower(email)=?', email)) errors.push('הכתובת שייכת לספק במערכת');
     if (email) seen.add(email);
+
+    // טלפון: אופציונלי. אקסל שומר מספר כמספר ומשמיט את האפס המוביל
+    // (‎0501234567 ← 501234567‎), ולכן תשע ספרות שמתחילות ב-5 מקבלות אפס בחזרה
+    let phone = '';
+    const rawPhone = headers.phone !== undefined ? cell('phone') : '';
+    if (rawPhone) {
+      const digits = rawPhone.replace(/\D/g, '');
+      phone = WhatsApp.normalizePhone(/^5\d{8}$/.test(digits) ? `0${digits}` : rawPhone) ?? '';
+      if (!phone) errors.push(`מספר הטלפון "${rawPhone}" אינו תקין`);
+      else if (seenPhones.has(phone)) errors.push('מספר הטלפון חוזר פעמיים בקובץ');
+      else {
+        const other = D.get('SELECT full_name FROM users WHERE phone = ?', phone);
+        if (other) errors.push(`מספר הטלפון כבר רשום אצל ${other.full_name}`);
+      }
+      if (phone) seenPhones.add(phone);
+    }
 
     // רמת גישה: ברירת המחדל היא עובד פנימי, וזו גם היחידה שמנהל מחלקה מעניק
     let role = 'employee';
@@ -3710,7 +3728,7 @@ function analyseImport(actor, rows) {
     // מנהל מחלקה חייב שיוך, בדיוק כמו בהוספה ידנית
     if (role === 'manager' && !departmentId) errors.push('מנהל מחלקה חייב שיוך למחלקה — יש למלא עמודת מחלקה');
 
-    out.push({ line, name, email, role, roleLabel: P.ROLE_LABELS[role], departmentId, department: departmentLabel, errors });
+    out.push({ line, name, email, phone, role, roleLabel: P.ROLE_LABELS[role], departmentId, department: departmentLabel, errors });
   });
 
   if (!out.length) throw badRequest('לא נמצאו שורות נתונים בקובץ');
@@ -3762,7 +3780,7 @@ router.post('/api/admin/users/import', async (req, res, ctx) => {
         row.name, row.email, D.hashPassword(password), row.role, departmentName(row.departmentId), 'active', D.nowIso()
       );
       const userId = Number(result.lastInsertRowid);
-      D.run('UPDATE users SET department_id = ? WHERE id = ?', row.departmentId, userId);
+      D.run('UPDATE users SET department_id = ?, phone = ? WHERE id = ?', row.departmentId, row.phone, userId);
       if (row.role === 'manager' && row.departmentId) {
         D.run('UPDATE departments SET manager_user_id = ? WHERE id = ?', userId, row.departmentId);
       }
