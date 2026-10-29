@@ -9,6 +9,7 @@ const D = require('./db');
 const W = require('./workdays');
 const Today = require('./today');
 const Voice = require('./voice');
+const VoiceDialog = require('./voice-dialog');
 const Calendar = require('./calendar');
 const Gmail = require('./gmail');
 const Mailer = require('./mailer');
@@ -136,6 +137,60 @@ function register(router, h) {
       ...rest,
       created: taskId ? shapeTask(getTaskOr404(taskId), actor, { withDetails: true }) : null
     });
+  });
+
+  /**
+   * תשובה בשיחת ההשלמה: "מי אחראי?" — "דני"; "עד מתי?" — "יום חמישי";
+   * "לאיזה פרויקט?" — "הגפן". מחזיר ‎{value,label}‎, ‎{candidates}‎ או ‎{none}‎.
+   */
+  router.post('/api/voice/answer', async (req, res, ctx) => {
+    const actor = userOnly(ctx);
+    const b = await readJson(req);
+    const text = String(b.text ?? '').slice(0, 300);
+    if (b.field === 'assignee') {
+      return sendJson(res, 200, VoiceDialog.matchPerson(text, VoiceDialog.assignablePeople(actor, assertMayAssignTo), `user:${actor.id}`));
+    }
+    if (b.field === 'dueDate') {
+      const [type, id] = String(b.assignee ?? '').split(':');
+      const date = VoiceDialog.parseDate(text, { ownerId: type === 'user' ? Number(id) : actor.id });
+      return sendJson(res, 200, date ? { value: date, label: W.hebrewDate(date) } : { none: true });
+    }
+    if (b.field === 'projectId') return sendJson(res, 200, VoiceDialog.matchProject(text, voiceProjects(actor)));
+    throw badRequest('שדה לא מוכר');
+  });
+
+  /** יצירת המשימה בסוף שיחת ההשלמה — מהטיוטה שהמשתמש אישר */
+  router.post('/api/voice/commit', async (req, res, ctx) => {
+    const actor = userOnly(ctx);
+    const b = await readJson(req);
+    const d = b.draft ?? {};
+    const title = String(d.title ?? '').trim();
+    if (!title) throw badRequest('לא זוהה נושא למשימה');
+    const [aType, aId] = String(d.assignee ?? `user:${actor.id}`).split(':');
+    if (!['user', 'vendor'].includes(aType) || !Number(aId)) throw badRequest('אחראי לא תקין');
+    if (!(aType === 'user' && Number(aId) === actor.id)) assertMayAssignTo(actor, aType, Number(aId));
+    const projectId = d.projectId ? Number(d.projectId) : null;
+    if (projectId && !voiceProjects(actor).some((p) => p.id === projectId)) throw badRequest('הפרויקט לא נמצא');
+    const draft = {
+      ...d,
+      title,
+      assignee: `${aType}:${Number(aId)}`,
+      projectId,
+      dueDate: W.isDate(d.dueDate) ? d.dueDate : W.nextWorkDay(aType === 'user' ? Number(aId) : actor.id),
+      checklist: Array.isArray(d.checklist) ? d.checklist.map((c) => String(c).slice(0, 200)).slice(0, 15) : [],
+      recurrence: ['daily', 'weekly', 'monthly'].includes(d.recurrence) ? d.recurrence : '',
+      activateDate: W.isDate(d.activateDate) ? d.activateDate : null,
+      priority: ['low', 'normal', 'high', 'urgent'].includes(d.priority) ? d.priority : 'normal',
+      description: String(d.description ?? '').slice(0, 4000),
+      statusShort: String(d.statusShort ?? '').slice(0, 200)
+    };
+    let taskId;
+    try {
+      taskId = createTask(actor, Voice.taskBody(draft, String(b.transcript ?? '')));
+    } catch (err) {
+      throw userError(err);
+    }
+    sendJson(res, 200, { created: shapeTask(getTaskOr404(taskId), actor, { withDetails: true }), draft });
   });
 
   /**
