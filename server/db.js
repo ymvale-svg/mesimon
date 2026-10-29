@@ -1394,6 +1394,8 @@ function migrate() {
   // "📅 פגישה לקביעה" — מחכה שתיקבע לה פגישה
   addColumn('tasks', 'meeting_pending', 'INTEGER NOT NULL DEFAULT 0');
   addColumn('templates', 'department_id', 'INTEGER REFERENCES departments(id) ON DELETE SET NULL');
+  // תת-מחלקה — "הנדסה וביצוע › אתר אלעד". ריק = מחלקה ראשית
+  addColumn('departments', 'parent_id', 'INTEGER REFERENCES departments(id) ON DELETE SET NULL');
   addColumn('templates', 'updated_at', 'TEXT');
   addColumn('templates', 'updated_by', 'INTEGER REFERENCES users(id) ON DELETE SET NULL');
 
@@ -1743,7 +1745,36 @@ function seedDemoData() {
   console.log('[משימון] נוצרו נתוני דמו התחלתיים.');
 }
 
+/**
+ * המחלקה ותתי-המחלקות שלה, בכל עומק. מנהל של "הנדסה וביצוע" אחראי גם על
+ * "אתר אלעד" שתחתיה, ולכן כל בדיקת היקף מחלקתי עוברת דרך הרשימה הזו ולא
+ * דרך מזהה יחיד. ‎UNION‎ ולא ‎UNION ALL‎ — כך גם מעגל שנוצר בטעות במסד נעצר.
+ */
+function departmentSubtree(id) {
+  if (!id) return [];
+  return all(`WITH RECURSIVE sub(id) AS (
+                SELECT ?
+                UNION
+                SELECT d.id FROM departments d JOIN sub ON d.parent_id = sub.id
+              ) SELECT id FROM sub`, id).map((r) => r.id);
+}
+
+/** שם המחלקה עם שרשרת ההורים שלה: "הנדסה וביצוע › אתר אלעד" */
+function departmentPath(id) {
+  const names = [];
+  const seen = new Set();
+  for (let cur = id; cur && !seen.has(cur);) {
+    seen.add(cur);
+    const d = get('SELECT name, parent_id FROM departments WHERE id = ?', cur);
+    if (!d) break;
+    names.unshift(d.name);
+    cur = d.parent_id;
+  }
+  return names.join(' › ');
+}
+
 module.exports = {
+  departmentSubtree, departmentPath,
   db, DB_PATH, UPLOADS_DIR, ROOT, STORAGE,
   all, get, run,
   nowIso, hashPassword, verifyPassword,

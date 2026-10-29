@@ -434,14 +434,16 @@ const UI = (() => {
   function usersByDepartment({ keep = [] } = {}) {
     const all = App.state.users ?? [];
     const me = App.state.actor?.id ?? null;
-    const myDept = App.state.actor?.departmentId ?? null;
+    // המחלקה שלי ותתי-המחלקות שלה — מנהל "הנדסה וביצוע" רואה גם את "אתר אלעד"
+    const actor = App.state.actor;
+    const myDepts = new Set(actor?.departmentIds ?? (actor?.departmentId ? [actor.departmentId] : []));
+    const inMine = (u) => myDepts.has(u.departmentId);
     const scope = App.state.permissions?.assign_department_task ?? false;
     const kept = new Set(keep.map(Number));
     const list = scope === true
       ? all
-      : all.filter((u) => u.id === me || kept.has(u.id)
-          || (scope === 'department' && myDept && u.departmentId === myDept));
-    const near = myDept ? list.filter((u) => u.departmentId === myDept) : [];
+      : all.filter((u) => u.id === me || kept.has(u.id) || (scope === 'department' && inMine(u)));
+    const near = list.filter(inMine);
     const nearIds = new Set(near.map((u) => u.id));
     return {
       near,

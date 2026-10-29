@@ -147,7 +147,7 @@ function actorFor(dept, assigneeId) {
   const actor = systemActor(dept);
   if (!assigneeId || P.level(actor, 'assign_department_task') !== 'department') return actor;
   const target = D.get('SELECT department_id FROM users WHERE id = ?', assigneeId);
-  if ((target?.department_id ?? null) === (actor.departmentId ?? null)) return actor;
+  if (P.inActorDepartments(actor, target?.department_id ?? null)) return actor;
   const admin = D.get("SELECT id FROM users WHERE role IN ('superadmin','admin') AND status = 'active' ORDER BY id LIMIT 1");
   return (admin && Auth.loadActor('user', admin.id)) || actor;
 }

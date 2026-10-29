@@ -166,13 +166,20 @@ function isTaskParticipant(actor, task, project, extras = []) {
   return false;
 }
 
+/** המחלקה של השחקן ותתי-המחלקות שלה — ‎loadActor‎ מחשב אותן מראש */
+const actorDepartmentIds = (actor) =>
+  actor.departmentIds ?? (actor.departmentId ? [actor.departmentId] : []);
+
+/** האם מחלקה מסוימת בתחום השחקן: המחלקה שלו או אחת מתתי-המחלקות שלה */
+const inActorDepartments = (actor, departmentId) =>
+  !!departmentId && actorDepartmentIds(actor).includes(departmentId);
+
 /** האם המשימה בתחום המחלקה של השחקן */
 function isInActorDepartment(actor, task, assigneeDepartmentId = undefined) {
   if (!actor.departmentId) return false;
-  if (task.department_id && task.department_id === actor.departmentId) return true;
+  if (task.department_id) return inActorDepartments(actor, task.department_id);
   // משימה ללא שיוך מחלקתי — נקבעת לפי המחלקה של האחראי עליה
-  if (!task.department_id && assigneeDepartmentId === actor.departmentId) return true;
-  return false;
+  return inActorDepartments(actor, assigneeDepartmentId ?? null);
 }
 
 /**
@@ -230,5 +237,6 @@ module.exports = {
   ROLES, INTERNAL_ROLES, ROLE_LABELS, ROLE_RANK, MATRIX, MATRIX_LABELS, MATRIX_NOTES,
   GRANTS, GRANT_KEYS, hasGrant,
   level, may, can, canOnTask, isTaskParticipant, isInActorDepartment, isOrgWide, seesRoles,
+  actorDepartmentIds, inActorDepartments,
   mayManageRole, assignableRoles, permissionsFor, matrixForDisplay
 };

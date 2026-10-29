@@ -293,7 +293,7 @@ const BoardView = (() => {
 
     if (isOrgWide() && departments.length) {
       const departmentOptions = [{ value: '', label: 'כל המחלקות' },
-        ...departments.map((d) => ({ value: d.id, label: d.name }))];
+        ...departments.map((d) => ({ value: d.id, label: d.label ?? d.name }))];
       items.push(UI.select(departmentOptions, filters.departmentId, { onchange: (e) => set('departmentId', e.target.value) }));
     }
 

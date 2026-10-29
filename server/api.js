@@ -124,6 +124,15 @@ const projectColor = (project) => (project ? project.color || PROJECT_COLORS[pro
 const hexColor = (value) => (/^#[0-9a-fA-F]{6}$/.test(String(value ?? '')) ? String(value) : '');
 const boardOf = (task) => D.get('SELECT * FROM boards WHERE id = ?', task.board_id);
 
+/**
+ * "המחלקה שלי" בשאילתה: המחלקה ותתי-המחלקות שלה, כפרמטר אחד בתבנית JSON —
+ * ‎`t.department_id ${DEPT_IN}`‎ עם ‎deptsParam(actor)‎. כך מנהל של מחלקה
+ * ראשית רואה גם את תתי-המחלקות שלה, בלי לבנות רשימת סימני שאלה משתנה.
+ */
+const DEPT_IN = 'IN (SELECT value FROM json_each(?))';
+const deptsParam = (actor) => JSON.stringify(P.actorDepartmentIds(actor));
+const subtreeParam = (id) => JSON.stringify(D.departmentSubtree(id));
+
 /** המחלקה של האחראי על המשימה — נדרש להכרעה על משימות ארגוניות */
 function assigneeDepartmentId(task) {
   if (task.assignee_type !== 'user' || !task.assignee_id) return null;
@@ -156,7 +165,7 @@ function assertMayAssignTo(actor, type, id) {
   if (lvl === 'department') {
     const target = D.get('SELECT department_id FROM users WHERE id = ?', id);
     if (!target) throw badRequest('המשתמש שנבחר אינו קיים');
-    if ((target.department_id ?? null) !== (actor.departmentId ?? null)) {
+    if (!P.inActorDepartments(actor, target.department_id ?? null)) {
       throw forbidden('ניתן להקצות משימה לחברי המחלקה שלך בלבד');
     }
   }
@@ -750,6 +759,8 @@ function publicActor(actor) {
     seesRoles: P.seesRoles(actor),
     department: actor.department ?? null,
     departmentId: actor.departmentId ?? null,
+    // המחלקה ותתי-המחלקות שלה — הלקוח מסנן לפיהן את בוררי האחראי
+    departmentIds: P.actorDepartmentIds(actor),
     boardId: actor.boardId ?? null,
     readOnly: !!actor.readOnly,
     phone: actor.type === 'user' ? D.get('SELECT phone FROM users WHERE id = ?', actor.id)?.phone ?? '' : '',
@@ -962,12 +973,12 @@ function visibleProjectIds(actor) {
 
   // היקף מחלקתי — מנהל מחלקה, או עובד שקיבל הרשאה אישית לראות את המחלקה
   if (P.level(actor, 'view_internal_board') === 'department' && actor.departmentId) {
-    mine.push('t.department_id = ?');
-    params.push(actor.departmentId);
+    mine.push(`t.department_id ${DEPT_IN}`);
+    params.push(deptsParam(actor));
     // משימה ללא שיוך מחלקתי נחשבת למחלקת האחראי עליה
     mine.push(`(t.department_id IS NULL AND t.assignee_type = 'user'
-                AND t.assignee_id IN (SELECT id FROM users WHERE department_id = ?))`);
-    params.push(actor.departmentId);
+                AND t.assignee_id IN (SELECT id FROM users WHERE department_id ${DEPT_IN}))`);
+    params.push(deptsParam(actor));
   }
 
   mine.push("(t.assignee_type = 'user' AND t.assignee_id = ?)", 't.created_by = ?');
@@ -1208,13 +1219,13 @@ router.get('/api/tasks', async (req, res, ctx) => {
     if (actor.role === 'employee' && P.hasGrant(actor, 'view_department_tasks')) {
       // הרשאה אישית: כל משימות המחלקה, ומשימות ארגוניות של אנשיה
       where.push(`(
-        t.department_id IS ?
+        t.department_id ${DEPT_IN}
         OR (t.assignee_type = 'user' AND t.assignee_id = ?)
         OR t.created_by = ?
         OR p.manager_id = ?
         OR ${EXTRA_ASSIGNEE_SQL}
       )`);
-      params.push(actor.departmentId, actor.id, actor.id, actor.id, 'user', actor.id);
+      params.push(deptsParam(actor), actor.id, actor.id, actor.id, 'user', actor.id);
     } else if (actor.role === 'employee') {
       where.push(`((t.assignee_id = ? AND t.assignee_type = 'user') OR t.created_by = ? OR p.manager_id = ?
         OR ${EXTRA_ASSIGNEE_SQL})`);
@@ -1222,20 +1233,21 @@ router.get('/api/tasks', async (req, res, ctx) => {
     } else if (actor.role === 'manager' && scope !== 'vendors') {
       // מנהל מחלקה: המחלקה שלו, משימות ארגוניות של אנשיה, ומה שהוא עצמו חלק ממנו
       where.push(`(
-        t.department_id = ?
+        t.department_id ${DEPT_IN}
         OR (t.assignee_type = 'user' AND t.assignee_id = ?)
         OR t.created_by = ?
         OR p.manager_id = ?
         OR ${EXTRA_ASSIGNEE_SQL}
       )`);
-      params.push(actor.departmentId, actor.id, actor.id, actor.id, 'user', actor.id);
+      params.push(deptsParam(actor), actor.id, actor.id, actor.id, 'user', actor.id);
     }
 
     // חתך מחלקתי — למי שרואה יותר ממחלקה אחת
     const deptFilter = q.get('departmentId');
     if (deptFilter && P.isOrgWide(actor)) {
-      where.push("(t.department_id = ? OR (t.assignee_type = 'user' AND t.assignee_id IN (SELECT id FROM users WHERE department_id = ?)))");
-      params.push(Number(deptFilter), Number(deptFilter));
+      // מחלקה ראשית כוללת את תתי-המחלקות שלה
+      where.push(`(t.department_id ${DEPT_IN} OR (t.assignee_type = 'user' AND t.assignee_id IN (SELECT id FROM users WHERE department_id ${DEPT_IN})))`);
+      params.push(subtreeParam(Number(deptFilter)), subtreeParam(Number(deptFilter)));
     }
   }
 
@@ -1380,8 +1392,8 @@ function createTask(actor, body) {
   }
   if (!taskDepartmentId && body.departmentId) taskDepartmentId = Number(body.departmentId);
   if (!taskDepartmentId && actor.type === 'user') taskDepartmentId = actor.departmentId ?? null;
-  // מנהל מחלקה אינו יוצר משימות למחלקה אחרת
-  if (isDeptManager(actor) && taskDepartmentId !== actor.departmentId) {
+  // מנהל מחלקה אינו יוצר משימות מחוץ למחלקה שלו ולתתי-המחלקות שלה
+  if (isDeptManager(actor) && !P.inActorDepartments(actor, taskDepartmentId)) {
     taskDepartmentId = actor.departmentId ?? null;
   }
 
@@ -2940,10 +2952,10 @@ router.get('/api/reports', async (req, res, ctx) => {
   const workload = D.all(
     scoped
       ? `SELECT id, full_name, department, department_id, role
-         FROM users WHERE status='active' AND department_id IS ? ORDER BY full_name`
+         FROM users WHERE status='active' AND department_id ${DEPT_IN} ORDER BY full_name`
       : `SELECT id, full_name, department, department_id, role
          FROM users WHERE status='active' ORDER BY full_name`,
-    ...(scoped ? [scopeId] : [])
+    ...(scoped ? [deptsParam(actor)] : [])
   ).map((u) => {
     const rows = D.all(
       `SELECT t.*, c.is_final FROM tasks t
@@ -2996,7 +3008,7 @@ router.get('/api/reports', async (req, res, ctx) => {
     return byDept.get(key);
   };
   for (const d of D.all("SELECT id, name FROM departments WHERE status = 'active' ORDER BY name")) {
-    bucket(d.id, d.name);
+    bucket(d.id, D.departmentPath(d.id));
   }
   for (const row of workload) {
     const entry = bucket(row.departmentId, row.department);
@@ -3029,9 +3041,9 @@ router.get('/api/reports', async (req, res, ctx) => {
        JOIN board_columns c ON c.board_id = t.board_id AND c.key = t.status
        LEFT JOIN users u ON u.id = t.assignee_id AND t.assignee_type = 'user'
       WHERE t.archived = 0
-        AND (? IS NULL OR t.department_id IS ? OR u.department_id IS ?)
+        AND (? IS NULL OR t.department_id ${DEPT_IN} OR u.department_id ${DEPT_IN})
       GROUP BY b.type, c.key ORDER BY b.type, c.position`,
-    scoped ? 1 : null, scopeId, scopeId
+    scoped ? 1 : null, deptsParam(actor), deptsParam(actor)
   );
 
   sendJson(res, 200, {
@@ -3081,6 +3093,9 @@ router.get('/api/export/tasks.csv', async (req, res, ctx) => {
 const shapeDepartment = (d) => ({
   id: d.id,
   name: d.name,
+  // תת-מחלקה: ההורה, והשם המלא לתצוגה — "הנדסה וביצוע › אתר אלעד"
+  parentId: d.parent_id ?? null,
+  label: D.departmentPath(d.id),
   status: d.status,
   managerUserId: d.manager_user_id,
   managerName: d.manager_user_id
@@ -3101,8 +3116,27 @@ router.get('/api/departments', async (req, res, ctx) => {
   const rows = all
     ? D.all('SELECT * FROM departments ORDER BY name')
     : D.all("SELECT * FROM departments WHERE status = 'active' ORDER BY name");
-  sendJson(res, 200, { departments: rows.map(shapeDepartment) });
+  sendJson(res, 200, { departments: sortedDepartments(rows.map(shapeDepartment)) });
 });
+
+/** סדר לפי השם המלא — כל תת-מחלקה מיד אחרי ההורה שלה */
+const sortedDepartments = (list) => list.sort((a, b) => a.label.localeCompare(b.label, 'he'));
+
+/**
+ * מחלקת-אם שנבחרה. ‎undefined‎ = לא נשלח; ‎null‎ = מחלקה ראשית. מחלקה אינה
+ * יכולה להיות תת-מחלקה של עצמה או של אחת מתתי-המחלקות שלה — זה היה יוצר
+ * מעגל, והמחלקה הייתה נעלמת מהעץ.
+ */
+function parseParentDepartment(raw, selfId = null) {
+  if (raw === undefined) return undefined;
+  if (raw === null || raw === '') return null;
+  const id = Number(raw);
+  if (!D.get('SELECT 1 FROM departments WHERE id = ?', id)) throw badRequest('מחלקת האם שנבחרה אינה קיימת');
+  if (selfId && D.departmentSubtree(selfId).includes(id)) {
+    throw badRequest('מחלקה אינה יכולה להיות תת-מחלקה של עצמה או של תת-מחלקה שלה');
+  }
+  return id;
+}
 
 router.post('/api/departments', async (req, res, ctx) => {
   const actor = ctx.requireActor();
@@ -3112,8 +3146,9 @@ router.post('/api/departments', async (req, res, ctx) => {
   if (!name) throw badRequest('נדרש שם מחלקה');
   if (D.get('SELECT 1 FROM departments WHERE name = ?', name)) throw badRequest('מחלקה בשם זה כבר קיימת');
 
-  const r = D.run('INSERT INTO departments (name, created_at, work_days) VALUES (?,?,?)', name, D.nowIso(),
-    Array.isArray(b.workDays) ? W.serializeDays(b.workDays) : '');
+  const parentId = parseParentDepartment(b.parentId) ?? null;
+  const r = D.run('INSERT INTO departments (name, created_at, work_days, parent_id) VALUES (?,?,?,?)', name, D.nowIso(),
+    Array.isArray(b.workDays) ? W.serializeDays(b.workDays) : '', parentId);
   const id = Number(r.lastInsertRowid);
   if (b.managerUserId) setDepartmentManager(id, Number(b.managerUserId));
 
@@ -3136,6 +3171,8 @@ router.patch('/api/departments/:id', async (req, res, ctx) => {
     // המחלקה נשמרת גם כטקסט על המשתמש, לתצוגה ולייצוא
     D.run('UPDATE users SET department = ? WHERE department_id = ?', name, dept.id);
   }
+  const parentId = parseParentDepartment(b.parentId, dept.id);
+  if (parentId !== undefined) D.run('UPDATE departments SET parent_id = ? WHERE id = ?', parentId, dept.id);
   if (b.status !== undefined) {
     if (!['active', 'inactive'].includes(b.status)) throw badRequest('סטטוס לא תקין');
     D.run('UPDATE departments SET status = ? WHERE id = ?', b.status, dept.id);
@@ -3157,6 +3194,8 @@ router.delete('/api/departments/:id', async (req, res, ctx) => {
 
   const people = D.get('SELECT COUNT(*) c FROM users WHERE department_id = ?', dept.id).c;
   if (people > 0) throw badRequest(`למחלקה משויכים ${people} משתמשים. יש להעביר אותם למחלקה אחרת קודם.`);
+  const children = D.get('SELECT COUNT(*) c FROM departments WHERE parent_id = ?', dept.id).c;
+  if (children > 0) throw badRequest(`למחלקה ${children} תתי-מחלקות. יש להעביר או למחוק אותן קודם.`);
 
   D.run('DELETE FROM departments WHERE id = ?', dept.id);
   sendJson(res, 200, { ok: true });
@@ -3188,7 +3227,7 @@ function assertMayManageUser(actor, target) {
   if (!P.mayManageRole(actor, target.role)) {
     throw forbidden(`אין לך הרשאה לנהל חשבון ברמת ${P.ROLE_LABELS[target.role] ?? target.role}`);
   }
-  if (isDeptManager(actor) && (target.department_id ?? null) !== (actor.departmentId ?? null)) {
+  if (isDeptManager(actor) && !P.inActorDepartments(actor, target.department_id ?? null)) {
     throw forbidden('מנהל מחלקה רשאי לנהל משתמשים במחלקה שלו בלבד');
   }
 }
@@ -3211,6 +3250,20 @@ function resolveDepartment(actor, body) {
     return id;
   }
   return null;
+}
+
+/**
+ * המחלקה שמנהל מחלקה משייך אליה עובד: המבוקשת אם היא בתחומו (המחלקה שלו
+ * או תת-מחלקה שלה), אחרת ‎fallback‎ אם הוא בתחומו, ואחרת המחלקה שלו.
+ */
+function managerDepartmentChoice(actor, requested, fallback) {
+  const id = requested ? Number(requested) : null;
+  if (id && P.inActorDepartments(actor, id)) {
+    const dept = D.get('SELECT status FROM departments WHERE id = ?', id);
+    if (dept?.status === 'active') return id;
+  }
+  if (fallback && P.inActorDepartments(actor, fallback)) return fallback;
+  return actor.departmentId;
 }
 
 const departmentName = (id) => (id ? D.get('SELECT name FROM departments WHERE id = ?', id)?.name ?? '' : '');
@@ -3364,10 +3417,10 @@ router.get('/api/admin/users', async (req, res, ctx) => {
     ? D.all(`SELECT id, full_name, email, phone, role, department, department_id, status, field_worker, is_secretary, zoom_user_id FROM users
              WHERE signup_at IS NULL ORDER BY full_name`)
     : D.all(`SELECT id, full_name, email, phone, role, department, department_id, status, field_worker, is_secretary, zoom_user_id FROM users
-             WHERE department_id IS ? AND role = 'employee' AND signup_at IS NULL ORDER BY full_name`,
-      actor.departmentId);
+             WHERE department_id ${DEPT_IN} AND role = 'employee' AND signup_at IS NULL ORDER BY full_name`,
+      deptsParam(actor));
 
-  const departments = D.all("SELECT * FROM departments WHERE status = 'active' ORDER BY name").map(shapeDepartment);
+  const departments = sortedDepartments(D.all("SELECT * FROM departments WHERE status = 'active' ORDER BY name").map(shapeDepartment));
 
   sendJson(res, 200, {
     scope: P.isOrgWide(actor) ? 'all' : 'department',
@@ -3480,7 +3533,9 @@ router.get('/api/admin/signup-link', async (req, res, ctx) => {
     ).map((u) => ({ id: u.id, name: u.full_name, email: u.email, signupAt: u.signup_at })),
     // רמת הגישה והמחלקה נקבעות באישור, ולכן נשלחות יחד עם הבקשות
     assignableRoles: P.assignableRoles(actor).map((role) => ({ value: role, label: P.ROLE_LABELS[role] })),
-    departments: D.all("SELECT id, name FROM departments WHERE status = 'active' ORDER BY name")
+    departments: D.all("SELECT id FROM departments WHERE status = 'active'")
+      .map((d) => ({ id: d.id, name: D.departmentPath(d.id) }))
+      .sort((a, b) => a.name.localeCompare(b.name, 'he'))
   });
 });
 
@@ -3738,8 +3793,10 @@ router.post('/api/admin/users', async (req, res, ctx) => {
     throw forbidden(`אין לך הרשאה להעניק רמת גישה ${P.ROLE_LABELS[b.role]}`);
   }
 
-  // מנהל מחלקה — רק במחלקה שלו. נכפה ולא רק נבדק.
-  let departmentId = isDeptManager(actor) ? actor.departmentId : resolveDepartment(actor, b);
+  // מנהל מחלקה — רק במחלקה שלו או בתת-מחלקה שלה. נכפה ולא רק נבדק.
+  let departmentId = isDeptManager(actor)
+    ? managerDepartmentChoice(actor, b.departmentId, actor.departmentId)
+    : resolveDepartment(actor, b);
 
   // מנהל מחלקה חייב מחלקה: או קיימת שנבחרה, או חדשה שהוא יהיה המנהל שלה
   if (b.role === 'manager' && !departmentId) {
@@ -3849,7 +3906,7 @@ router.patch('/api/admin/users/:id', async (req, res, ctx) => {
 
   // מנהל מחלקה אינו משנה תפקיד ואינו מעביר בין מחלקות
   let targetDepartmentId = isDeptManager(actor)
-    ? actor.departmentId
+    ? managerDepartmentChoice(actor, b.departmentId, user.department_id)
     : (b.departmentId !== undefined || b.newDepartmentName ? resolveDepartment(actor, b) : user.department_id);
   if (isDeptManager(actor)) b.role = 'employee';
 
@@ -4311,7 +4368,7 @@ router.get('/api/tracker/export', async (req, res, ctx) => {
   const owned = scope === 'mine' ? ownedProjectIds(actor) : null;
   // חתך המחלקה נמדד לפי האחראי, בדיוק כמו בלקוח
   const team = scope === 'department'
-    ? new Set(D.all('SELECT id FROM users WHERE department_id IS ?', actor.departmentId ?? null).map((u) => u.id))
+    ? new Set(D.all(`SELECT id FROM users WHERE department_id ${DEPT_IN}`, deptsParam(actor)).map((u) => u.id))
     : null;
   /*
    * אותו כלל שבמסך: המחלקה היא העבודה של הצוות, בנפרד מהעבודה שלי. משימה
