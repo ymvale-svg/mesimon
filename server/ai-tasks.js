@@ -145,6 +145,37 @@ function afterDays(from, days) {
   return nextWindow(new Date(t)).toISOString();
 }
 
+/** ימי עבודה מהיום עד התאריך (‎YYYY-MM-DD‎). שלילי — התאריך עבר */
+function workdaysUntil(dateStr) {
+  const DAY_MS = 86400000;
+  const from = Date.parse(`${todayLocal()}T12:00:00Z`);
+  const to = Date.parse(`${String(dateStr).slice(0, 10)}T12:00:00Z`);
+  if (!Number.isFinite(to)) return null;
+  if (to <= from) return Math.round((to - from) / DAY_MS);
+  let n = 0;
+  for (let t = from + DAY_MS; t <= to; t += DAY_MS) {
+    const wd = new Date(t).getUTCDay();
+    if (!(workDaysOnly() && (wd === 5 || wd === 6))) n += 1;
+  }
+  return n;
+}
+
+/**
+ * מתי הנדנוד הבא.
+ *
+ * תאריך היעד של המשימה הוא שעון פנימי בלבד — הנמען אינו שומע עליו, כי
+ * לרוב הוא אינו עובד שלנו ואי אפשר לקבוע לו מועדים — והוא קובע את הקצב:
+ * הנדנוד הראשון בחצי הדרך ליעד, וכשהיעד קרוב או עבר — כל יום עבודה.
+ * בלי יעד — לפי מדיניות המעקב.
+ */
+function nextNudgeAt(req, days, { first = false } = {}) {
+  const due = taskOf(req)?.due_date;
+  const left = due ? workdaysUntil(due) : null;
+  if (left === null) return afterDays(new Date(), days);
+  if (first) return afterDays(new Date(), Math.max(1, Math.floor(left / 2)));
+  return afterDays(new Date(), left <= days ? 1 : days);
+}
+
 // ---------------------------------------------------------------------------
 // עזרים
 // ---------------------------------------------------------------------------
@@ -205,7 +236,6 @@ function channelAvailable(req, channel) {
 
 function contextText(req, { withHistory = true } = {}) {
   const owner = ownerOf(req);
-  const task = taskOf(req);
   const lines = [
     `תאריך היום: ${todayLocal()}`,
     `הארגון: ${D.getSetting('org_name', '')}`,
@@ -213,8 +243,9 @@ function contextText(req, { withHistory = true } = {}) {
     `הנמען: ${req.contact_name || 'לא ידוע'}${req.contact_email ? ` · ${req.contact_email}` : ''}${req.contact_phone ? ` · ${req.contact_phone}` : ''}`,
     `ההוראה של המשתמש: ${req.instruction}`,
     req.goal ? `הבקשה: ${req.goal}` : null,
-    req.success_criteria ? `קריטריון הצלחה: ${req.success_criteria}` : null,
-    task?.due_date ? `מועד יעד: ${String(task.due_date).slice(0, 10)}` : null
+    req.success_criteria ? `קריטריון הצלחה: ${req.success_criteria}` : null
+    // תאריך היעד אינו נמסר ל-AI: הוא קובע את קצב הנדנודים (‎nextNudgeAt‎),
+    // והנמען לא אמור לשמוע עליו
   ].filter(Boolean);
 
   if (withHistory) {
@@ -311,7 +342,7 @@ const channelNote = (channel) => (channel === 'whatsapp'
  * הטיוטה הראשונה — מתוך ההוראה החופשית של המשתמש. לא נשמר כלום: הטיוטה
  * חוזרת לדיאלוג, והמשתמש מאשר או מתקן לפני שנוצרת משימה.
  */
-async function draftInitial({ owner, instruction, contact = {}, dueDate = null, projectName = null, channel = 'email', feedback = '', previous = null }) {
+async function draftInitial({ owner, instruction, contact = {}, projectName = null, channel = 'email', feedback = '', previous = null }) {
   const lines = [
     `תאריך היום: ${todayLocal()}`,
     `הארגון: ${D.getSetting('org_name', '')}`,
@@ -320,7 +351,7 @@ async function draftInitial({ owner, instruction, contact = {}, dueDate = null, 
     contact.name || contact.email || contact.phone
       ? `הנמען שנבחר: ${contact.name || ''}${contact.email ? ` · ${contact.email}` : ''}${contact.phone ? ` · ${contact.phone}` : ''}`
       : 'הנמען לא נבחר בנפרד — חלץ אותו מההוראה אם אפשר.',
-    dueDate ? `מועד יעד: ${String(dueDate).slice(0, 10)}` : null,
+    // תאריך היעד אינו נמסר ל-AI — ראה ‎contextText‎
     projectName ? `פרויקט: ${projectName}` : null,
     channelNote(channel)
   ].filter(Boolean);
@@ -332,12 +363,61 @@ async function draftInitial({ owner, instruction, contact = {}, dueDate = null, 
     lines.push('', 'נסח את הפנייה הראשונה.');
   }
 
-  return Claude.json({
+  const out = await Claude.json({
     system: skill(),
     content: [{ type: 'text', text: lines.join('\n') }],
     schema: DRAFT_SCHEMA
   });
+  return tidied(out, owner.full_name, { skip: Boolean(previous && feedback) });
 }
+
+/**
+ * ניקוי מה שהסקיל אוסר ובכל זאת חומק לפעמים: הצגה עצמית בפתיחה ("כאן ישראל
+ * מאשל הירדן") וחתימה בסוף. הנמען רואה ממילא מי שלח, וחתימת ה-Gmail של
+ * המשתמש מתווספת לבד בתחתית המייל.
+ *
+ * רק על נוסח שה-AI כתב מעצמו. כשהמשתמש ביקש תיקון ("תוסיף חתימה") — מה
+ * שביקש נשאר.
+ */
+function tidyBody(body, ownerName) {
+  const esc = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const full = String(ownerName ?? '').trim();
+  const first = full.split(/\s+/)[0] ?? '';
+  const org = String(D.getSetting('org_name', '') ?? '').trim();
+  const names = [full, first].filter(Boolean).map(esc);
+  let lines = String(body ?? '').replace(/\r\n/g, '\n').split('\n');
+
+  if (names.length) {
+    const from = org ? `(?:${esc(org)}|\\S+)` : '\\S+';
+    const intro = new RegExp(`(?:כאן|שמי|אני)\\s+(?:${names.join('|')})(?:\\s*,?\\s*(?:מ|מטעם\\s+)${from})?\\s*[.,!]?\\s*`);
+    // שורה שכולה הצגה עצמית יורדת; "שלום רב, כאן ישראל…" נשאר "שלום רב,"
+    lines = lines.flatMap((l, i) => {
+      if (i >= 3 || !intro.test(l)) return [l];
+      const rest = l.replace(intro, '').trimEnd();
+      return rest.trim() ? [rest] : [];
+    });
+  }
+
+  const signatureOnly = (l) => {
+    let rest = l;
+    for (const w of [full, org, first].filter(Boolean)) rest = rest.split(w).join('');
+    return rest !== l && !rest.replace(/[\s,|.·\-–—]/g, '');
+  };
+  const closing = /^(?:בברכה|בכבוד רב|בתודה|שלך|ברכה)[\s,.!]*$/;
+  while (lines.length) {
+    const last = lines[lines.length - 1].trim();
+    if (!last || closing.test(last) || signatureOnly(last)) lines.pop();
+    else if (/^תודה(?:\s+ו(?:ב)?ברכה)?[\s,]*$/.test(last)) { lines[lines.length - 1] = 'תודה.'; break; }
+    else break;
+  }
+  return lines.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+}
+
+const tidied = (out, ownerName, { skip = false } = {}) => {
+  if (!skip && out && typeof out.body === 'string') out.body = tidyBody(out.body, ownerName);
+  if (!skip && out && typeof out.draft_body === 'string' && out.draft_body) out.draft_body = tidyBody(out.draft_body, ownerName);
+  return out;
+};
 
 /** הודעת המשך: תזכורת, וואטסאפ, תודה או תשובה */
 async function compose(req, kind, channel, extra = '') {
@@ -350,7 +430,8 @@ async function compose(req, kind, channel, extra = '') {
     reply: 'כתוב תשובה לנמען.'
   }[kind];
   const text = [contextText(req), '', channelNote(channel), what, extra].filter(Boolean).join('\n');
-  return Claude.json({ system: skill(), content: [{ type: 'text', text }], schema: MESSAGE_SCHEMA, effort: 'low' });
+  const out = await Claude.json({ system: skill(), content: [{ type: 'text', text }], schema: MESSAGE_SCHEMA, effort: 'low' });
+  return tidied(out, ownerOf(req)?.full_name);
 }
 
 /** כתיבה מחדש של טיוטה ממתינה לפי הערה של המשתמש */
@@ -445,8 +526,9 @@ async function deliver(req, msgId) {
     fields[counter] = fresh[counter] + 1;
     fields.state = 'waiting';
     fields.owner_question = '';
-    fields.next_action_at = afterDays(new Date(),
-      msg.channel === 'email' ? policy.daysBetweenEmails : policy.daysBetweenWhatsapp);
+    fields.next_action_at = nextNudgeAt(fresh,
+      msg.channel === 'email' ? policy.daysBetweenEmails : policy.daysBetweenWhatsapp,
+      { first: msg.kind === 'initial' });
   }
   update(req.id, fields);
 
@@ -512,7 +594,7 @@ function launchInternal(req, { owner, draft, instruction }) {
   update(req.id, {
     state: 'waiting',
     last_outbound_at: D.nowIso(),
-    next_action_at: afterDays(new Date(), policyOf(req).daysBetweenEmails)
+    next_action_at: nextNudgeAt(req, policyOf(req).daysBetweenEmails, { first: true })
   });
   D.audit(req.task_id, AI_ACTOR, 'ai_created', `משימת AI לעובד: ${draft.goal || instruction}`.slice(0, 300));
   setShortStatus(req, `👤 אצל ${firstName(req.contact_name) || 'העובד'} · ממתין לסימון "בוצע"`);
@@ -543,7 +625,7 @@ function followUpInternal(req) {
   update(req.id, {
     unanswered_email: req.unanswered_email + 1,
     last_outbound_at: D.nowIso(),
-    next_action_at: afterDays(new Date(), policyOf(req).daysBetweenEmails)
+    next_action_at: nextNudgeAt(req, policyOf(req).daysBetweenEmails)
   });
   D.audit(req.task_id, AI_ACTOR, 'ai_sent', `נשלחה תזכורת בתוך המערכת ל${req.contact_name}`);
   setShortStatus(req, `🔔 תזכורת ${req.unanswered_email + 1} · ממתין ל${firstName(req.contact_name) || 'עובד'}`);
@@ -675,11 +757,12 @@ async function evaluate(req, { channel, text, saved, skipped, autoSubmitted }) {
     '', 'הכרע האם הבקשה מולאה, לפי ההנחיות. אם יש קבצים שתוכנם מצורף כאן — בדוק את התוכן עצמו.'
   ].filter((l) => l !== null).join('\n');
 
-  return Claude.json({
+  const out = await Claude.json({
     system: skill(),
     content: [...fileBlocks(saved), { type: 'text', text: intro }],
     schema: EVAL_SCHEMA
   });
+  return tidied(out, ownerOf(req)?.full_name);
 }
 
 /** סגירת המשימה כשהבקשה התקבלה — לסטטוס הסופי של הבורד שלה */
@@ -1271,6 +1354,8 @@ function detailFor(taskId) {
     channels: {
       email: channelAvailable(req, 'email'),
       whatsapp: channelAvailable(req, 'whatsapp'),
+      // הוואטסאפ של מי שפתח את הבקשה מחובר — גם אם לנמען עוד אין טלפון
+      waConnected: WhatsApp.isReady(req.owner_id),
       // תשובות חוזרות לתיבת ה-Gmail של מי שפתח את הבקשה, ונקלטות משם
       inbox: Gmail.isConnected(req.owner_id)
     },
@@ -1307,5 +1392,5 @@ module.exports = {
   requestById,
   requestByTask, summaryFor, detailFor, defaultPolicy, cleanPolicy, status, STATE_LABELS, OPEN_STATES,
   // לבדיקות
-  _internal: { nextWindow, inWindow, afterDays, ladder, dateToFollowUp, endOfLocalDay }
+  _internal: { nextWindow, inWindow, afterDays, ladder, dateToFollowUp, endOfLocalDay, tidyBody, workdaysUntil }
 };

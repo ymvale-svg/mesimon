@@ -20,6 +20,7 @@ const D = require('./db');
 const P = require('./permissions');
 const W = require('./workdays');
 const Claude = require('./ai/claude');
+const Dialog = require('./voice-dialog');
 
 const SKILL_PATH = path.join(__dirname, 'ai', 'skills', 'voice-to-task.md');
 const MAX_TEXT = 4000;
@@ -317,6 +318,20 @@ async function handle(actor, { text, forcePreview = false }, { projects, createT
   }
 
   const mode = prefs(actor.id).mode;
+
+  /*
+   * שיחת השלמה: במשימה רגילה, כשלא נאמר (או לא זוהה) אחראי, תאריך או
+   * פרויקט — שואלים עליהם בקול לפני שיוצרים (‎voice-dialog.js‎). הסיכום
+   * בסוף השיחה הוא התצוגה המקדימה, ולכן במקרה הזה אין יצירה ישירה כאן.
+   * לא בהכתבה מתוך דיאלוג המשימה (‎forcePreview‎) — שם השדות כבר על המסך.
+   */
+  const ask = draft.kind === 'task' && !draft.meeting && !forcePreview && draft.title
+    ? Dialog.missingFields(out, draft)
+    : [];
+  if (ask.length) {
+    const questions = Object.fromEntries(ask.map((f) => [f, Dialog.QUESTIONS[f]]));
+    return { transcript, trigger, mode, draft, warnings: warnings.filter((w) => !ask.includes(w.field)), ask, questions };
+  }
   /*
    * קביעת פגישה בקול: המשימה "פגישה לקביעה" נוצרת מיד, ודיאלוג הפגישה נפתח
    * ממולא — הוא עצמו התצוגה המקדימה, כי הוא שולח הזמנות רק אחרי לחיצה.

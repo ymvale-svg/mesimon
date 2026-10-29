@@ -565,14 +565,22 @@ const App = (() => {
     home: { label: 'דף הבית', icon: 'home', render: (c) => HomeView.render(c) },
     board: { label: 'לוח המשימות', icon: 'board', render: (c, p) => BoardView.render(c, { ...p, scope: 'internal' }) },
     vendorBoards: { label: 'כל משימות הספקים', icon: 'vendors', render: (c, p) => BoardView.render(c, { ...p, scope: 'vendors' }) },
-    tracker: { label: 'בקרת משימות', icon: 'reports', render: (c, p) => TrackerView.render(c, p) },
+    /*
+     * מוסתר מכולם, גם ממנהל המערכת, עד שישופר: אינו בתפריט, וניווט אליו
+     * (קישור שנשמר) מגיע לדף הבית. הקוד נשאר — ‎TrackerView‎.
+     */
+    tracker: { label: 'בקרת משימות', icon: 'reports', hidden: true, render: (c, p) => TrackerView.render(c, p) },
     archive: { label: 'ארכיון', icon: 'archive', render: (c, p) => BoardView.render(c, { ...p, scope: 'internal', archived: true }) },
     reports: { label: 'דוחות', icon: 'reports', render: (c) => ReportsView.render(c) },
+    // אלפון ארגוני — מ"החשבון שלי" ומהחלון בדשבורד, לכל העובדים
+    phonebook: { label: 'אלפון', icon: 'my-tasks', render: (c) => PhonebookView.render(c) },
     admin: { label: 'ניהול המערכת', icon: 'admin', render: (c, p) => AdminView.render(c, p) },
     vendor: { label: 'המשימות שלי', icon: 'my-tasks', render: (c) => VendorPortalView.render(c) }
   };
 
   function navigate(name, params = {}) {
+    if (ROUTES[name]?.hidden) name = 'home';
+    if (name === 'phonebook' && isVendor()) name = 'vendor';
     state.route = { name, params };
     closeDrawer();
     // הפתיחה המהירה צפה על ה-body ולכן אינה נמחקת עם המסך — היא שייכת
@@ -1788,7 +1796,6 @@ const App = (() => {
     // יומן — למזכירות בלבד (הסימון בכרטיס העובד)
     if (state.actor.secretary) add('calendar', {}, { icon: el('span.nav-emoji', { text: '📅' }) });
     add('board');
-    add('tracker');
     if (may('view_vendor_boards')) add('vendorBoards');
 
     // הבלוק הזה כולו לא נבנה לספק — מסלול הספק חזר כבר למעלה עם רשימת הניווט שלו
@@ -2131,6 +2138,10 @@ const App = (() => {
         // חיבור Google: Gmail (סריקה ותשובות), יומן ל-Today, ואנשי קשר למשימת AI
         isVendor() ? null : el('button.btn.mt', { style: { marginInlineStart: '8px' }, onclick: () => AiInboxView.openGmail(() => refreshView()) }, ['🔗 חיבור Google ועוזר ה-AI']),
         isVendor() ? null : el('button.btn.mt', { style: { marginInlineStart: '8px' }, onclick: () => TodayView.openSettings() }, ['☀ Today והקלטה']),
+        isVendor() ? null : el('button.btn.mt', {
+          style: { marginInlineStart: '8px' },
+          onclick: () => { document.querySelector('.modal-backdrop')?.remove(); navigate('phonebook'); }
+        }, ['📒 אלפון ארגוני']),
         el('div.alert.alert-info.mt', {}, [
           el('div', {}, [
             el('b', { text: 'מה מותר לי במערכת?' }),

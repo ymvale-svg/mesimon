@@ -18,6 +18,7 @@ const Spreadsheet = require('./spreadsheet');
 const AiTasks = require('./ai-tasks');
 const AiApi = require('./api-ai');
 const TodayApi = require('./api-today');
+const PhonebookApi = require('./api-phonebook');
 const MeetingsApi = require('./api-meetings');
 const Zoom = require('./zoom');
 const W = require('./workdays');
@@ -764,6 +765,31 @@ router.put('/api/me/phone', async (req, res, ctx) => {
   const phone = userPhone(b.phone, actor.id);
   D.run('UPDATE users SET phone = ? WHERE id = ?', phone, actor.id);
   sendJson(res, 200, { phone });
+});
+
+/**
+ * למי אני מטיל משימות — לעיגולי האחראי בדיאלוג המשימה. משימות שפתחתי ב-90
+ * הימים האחרונים, לפי האחראי הראשי, ומשימה מהשבועיים האחרונים שווה כפול:
+ * כך עובד חדש שאני עובד איתו עכשיו עולה מהר, ומי שעבדתי איתו לפני חודשיים
+ * יורד. ההרשאה לשבץ נבדקת בדפדפן מול רשימת האפשרויות, ובשמירה — בשרת.
+ */
+router.get('/api/me/frequent-assignees', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  if (actor.type !== 'user') throw forbidden();
+  const day = 86400000;
+  const since = new Date(Date.now() - 90 * day).toISOString();
+  const recent = new Date(Date.now() - 14 * day).toISOString();
+  const rows = D.all(
+    `SELECT assignee_type AS type, assignee_id AS id,
+            SUM(CASE WHEN created_at >= ? THEN 2 ELSE 1 END) AS score, MAX(created_at) AS last
+       FROM tasks
+      WHERE created_by = ? AND created_at >= ? AND assignee_id IS NOT NULL
+      GROUP BY assignee_type, assignee_id
+      ORDER BY score DESC, last DESC
+      LIMIT 12`,
+    recent, actor.id, since
+  );
+  sendJson(res, 200, { items: rows.map((r) => ({ value: `${r.type}:${r.id}`, score: r.score })) });
 });
 
 // ---------------------------------------------------------------------------
@@ -4753,6 +4779,7 @@ const botTaskOps = {
 
 AiApi.register(router, { getTaskOr404, assertVisible, mayOnTask, shapeTask, actorRef, saveAttachment, createTask, assertMayAssignTo, listProjectsFor, botTaskOps });
 TodayApi.register(router, { shapeTask, createTask, getTaskOr404, listProjectsFor, assertMayAssignTo });
+PhonebookApi.register(router);
 MeetingsApi.register(router, { getTaskOr404, assertVisible, shapeTask, canSeeTask });
 Tiful360.register(router, { createTask, saveAttachment, getTaskOr404 });
 

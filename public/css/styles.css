@@ -2709,3 +2709,133 @@ input[type="color"] { width: 46px; height: 30px; padding: 2px; cursor: pointer; 
 .cal-ev.is-busy { background: repeating-linear-gradient(45deg, #cbd5e1, #cbd5e1 6px, #e2e8f0 6px, #e2e8f0 12px); color: var(--text-soft); }
 .cal-ev.is-ours { box-shadow: inset 3px 0 0 #fbbf24; }
 .cal-allday { position: absolute; inset-inline: 2px; height: 18px; border-radius: 4px; color: #fff; font-size: 11px; padding: 0 5px; overflow: hidden; z-index: 2; cursor: pointer; }
+
+/* ---------------------------------------------- 📒 אלפון ארגוני */
+
+.cp-phonebook { background: #fef3c7; }
+.pb-search { width: 100%; }
+.pb-card .card-pad { display: flex; flex-direction: column; gap: 8px; }
+.pb-list { display: flex; flex-direction: column; }
+.pb-row {
+  display: flex; align-items: center; gap: 10px; padding: 8px 6px;
+  border-bottom: 1px solid var(--border); cursor: pointer; border-radius: var(--radius);
+}
+.pb-row:last-child { border-bottom: 0; }
+.pb-row:hover { background: var(--surface-2); }
+/* ‎width: 0‎ — שורה עם מייל ארוך לא תרחיב את החלון; הטקסט נחתך בשלוש נקודות */
+.pb-main { flex: 1 1 0; width: 0; min-width: 0; }
+.pb-main .pb-note, .pb-main .pb-detail { color: var(--text-soft); }
+.pb-main > * { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pb-detail { text-align: right; }
+.pb-acts, .pb-row-acts { display: flex; gap: 2px; flex: none; }
+.pb-row-acts { justify-content: flex-end; white-space: nowrap; }
+.pb-act { text-decoration: none; border-radius: 50%; width: 36px; height: 36px; display: inline-grid; place-items: center; }
+.pb-act:hover { background: var(--brand-light); }
+.pb-act-gap { display: inline-block; width: 36px; flex: none; }
+.pb-row mark, .pb-table mark { background: #fef08a; color: inherit; border-radius: 2px; padding: 0 1px; }
+.pb-empty { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; padding: 6px 2px; }
+.pb-hint { padding: 6px 2px 0; }
+.pb-tools { gap: 12px; align-items: center; margin-bottom: 12px; }
+.pb-tools .pb-search { max-width: 380px; }
+.pb-table td { vertical-align: middle; }
+.pb-table .pb-editing input { width: 100%; min-width: 90px; }
+.pb-import { max-height: 50vh; overflow-y: auto; margin-top: 10px; }
+.pb-import tr.pb-bad td { color: var(--danger); }
+.pb-import tr.pb-dup td { color: var(--text-mute); }
+
+/* ---------------------------------------------- בחירת אחראי בעיגולים */
+
+.ap { position: relative; }
+.ap-row { display: flex; gap: 6px; flex-wrap: wrap; align-items: flex-start; }
+.ap-circle {
+  position: relative; display: flex; flex-direction: column; align-items: center; gap: 4px;
+  width: 58px; padding: 4px 0 2px; border: 0; background: none; cursor: pointer;
+  border-radius: var(--radius); color: var(--text-soft);
+  -webkit-touch-callout: none; user-select: none; touch-action: manipulation;
+}
+.ap-circle:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+.ap-avatar {
+  width: 44px; height: 44px; border-radius: 50%; display: grid; place-items: center;
+  background: var(--surface-2); color: var(--text); font-weight: 800; font-size: 14px;
+  border: 1px solid var(--border);
+  box-shadow: 0 0 0 0 transparent;
+  transition: box-shadow .16s, transform .16s, background .16s;
+}
+.ap-avatar.is-vendor { background: #fff7ed; color: #c2410c; }
+.ap-avatar.is-me { border-style: dashed; border-color: var(--brand); }
+.ap-avatar.sm { width: 26px; height: 26px; font-size: 11px; flex: none; }
+.ap-circle:hover .ap-avatar { transform: translateY(-1px); background: var(--brand-light); }
+.ap-name {
+  font-size: 11.5px; font-weight: 600; max-width: 58px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+/* הנבחר — טבעת בצבע המותג ושם מודגש */
+.ap-circle.is-primary .ap-avatar {
+  background: var(--brand); color: #fff; border-color: var(--brand);
+  box-shadow: 0 0 0 3px var(--surface), 0 0 0 5px var(--brand);
+}
+.ap-circle.is-primary .ap-name { color: var(--brand-dark); font-weight: 800; }
+/* אחראי נוסף — טבעת מקווקוות וסימן ＋ */
+.ap-circle.is-extra .ap-avatar { box-shadow: 0 0 0 3px var(--surface), 0 0 0 5px var(--brand-light); border-style: dashed; border-color: var(--brand); }
+.ap-badge, .ap-check {
+  position: absolute; top: 0; inset-inline-start: 6px;
+  width: 18px; height: 18px; border-radius: 50%; display: grid; place-items: center;
+  font-size: 11px; font-weight: 800; line-height: 1;
+  border: 2px solid var(--surface);
+}
+.ap-check { background: var(--brand-dark); color: #fff; }
+.ap-badge { background: var(--brand-light); color: var(--brand-dark); }
+.ap-more .ap-avatar { background: none; border: 1.5px dashed var(--border-strong); color: var(--text-mute); font-size: 18px; }
+.ap-hint { margin-top: 2px; color: var(--text-soft); }
+.ap-pop {
+  position: absolute; z-index: 30; inset-inline-start: 0; top: 74px;
+  width: min(320px, 100%); background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius-lg); box-shadow: var(--shadow-lg); padding: 8px;
+}
+.ap-pop input { width: 100%; }
+.ap-pop-list { max-height: 240px; overflow-y: auto; margin-top: 6px; }
+.ap-pop-row { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: var(--radius); cursor: pointer; }
+.ap-pop-row:hover, .ap-pop-row.active { background: var(--surface-2); }
+.ap-pop-row.is-current { font-weight: 700; color: var(--brand-dark); }
+@media (prefers-reduced-motion: reduce) { .ap-avatar { transition: none; } }
+/* בפאנל המשימה המהירה (310px) — עיגולים קטנים יותר */
+.qt-body .ap-circle { width: 50px; }
+.qt-body .ap-avatar { width: 38px; height: 38px; font-size: 13px; }
+.qt-body .ap-name { max-width: 50px; }
+
+/* ---------------------------------------------- שיחת השלמה בהקלטה */
+
+.voice-qa { display: none; flex-direction: column; gap: 10px; }
+.voice-overlay.is-asking .voice-qa { display: flex; }
+.voice-overlay.is-asking .voice-input,
+.voice-overlay.is-asking .voice-hint,
+.voice-overlay.is-asking .voice-foot { display: none; }
+.voice-q { font-size: 19px; font-weight: 800; text-align: center; color: var(--brand-dark); }
+.voice-chips { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
+.voice-chip {
+  border: 1px solid var(--border); background: var(--surface); color: var(--text);
+  border-radius: 999px; padding: 8px 14px; font-weight: 700; cursor: pointer; min-height: 40px;
+  max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.voice-chip:hover, .voice-chip:focus-visible { border-color: var(--brand); background: var(--brand-light); }
+.voice-heard { text-align: center; color: var(--text-soft); min-height: 18px; }
+.voice-qa-foot { display: flex; gap: 8px; align-items: center; justify-content: center; }
+.voice-typed { flex: 1; max-width: 300px; }
+.voice-summary {
+  background: var(--surface-2); border-radius: var(--radius); padding: 12px 14px;
+  display: flex; flex-direction: column; gap: 4px; font-size: 15px;
+}
+.voice-summary b { font-size: 16px; }
+.voice-summary .mute-sm { color: var(--text-soft); }
+/*
+ * בזמן השאלות — השאלה בראש, והמיקרופון קטן מתחתיה: העין צריכה לפגוש קודם
+ * את מה שנשאל, ורק אחר כך את הדרך לענות.
+ */
+.voice-overlay.is-asking .voice-panel > * { order: 5; }
+.voice-overlay.is-asking .voice-top { order: 0; }
+.voice-overlay.is-asking .voice-qa { order: 1; }
+.voice-overlay.is-asking .voice-mic { order: 2; width: 68px; height: 68px; font-size: 28px; margin: 2px 0; }
+.voice-overlay.is-asking .voice-status { order: 3; font-weight: 600; font-size: 13.5px; }
+.voice-overlay.is-asking .voice-live { order: 4; font-size: 15px; }
+.voice-said { text-align: center; color: var(--text-soft); font-size: 14px; margin-top: 4px; }
+.pb-head-acts { display: flex; gap: 8px; flex-wrap: wrap; }

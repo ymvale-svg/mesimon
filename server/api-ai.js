@@ -11,6 +11,7 @@ const P = require('./permissions');
 const AiTasks = require('./ai-tasks');
 const Claude = require('./ai/claude');
 const WhatsApp = require('./whatsapp');
+const Phonebook = require('./phonebook');
 const Gmail = require('./gmail');
 const MailScan = require('./ai/mail-scan');
 const GContacts = require('./google-contacts');
@@ -108,6 +109,22 @@ function register(router, h) {
       keys.forEach((k) => seen.add(k));
       out.push(entry);
     };
+
+    // האלפון הארגוני ראשון: מי שהוזן שם הוזן בשביל זה בדיוק
+    if (q) {
+      for (const e of Phonebook.search(q, { limit: 10 })) {
+        const colleague = e.email ? D.get("SELECT id FROM users WHERE lower(email) = ? AND status = 'active'", e.email) : null;
+        if (colleague) continue;  // עובד — מופיע כעובד, עם המשמעות שלו במשימון
+        add({
+          type: 'external', refId: null, source: 'phonebook',
+          name: e.name, email: e.email, phone: e.phone,
+          emails: e.email ? [{ value: e.email, label: '' }] : [],
+          phones: e.phone ? [{ value: e.phone, label: '' }] : [],
+          organization: e.note,
+          unsaved: canSave && !GContacts.isSaved(actor.id, { email: e.email, phone: e.phone })
+        }, keysOf([e.email].filter(Boolean), [e.phone].filter(Boolean)));
+      }
+    }
 
     for (const c of local.slice(0, 30)) {
       const g = GContacts.lookup(actor.id, { email: c.email, phone: c.phone });
@@ -211,7 +228,8 @@ function register(router, h) {
         contact: b.contact ?? {},
         dueDate: b.dueDate ?? null,
         projectName: project?.name ?? null,
-        channel: b.channel === 'whatsapp' ? 'whatsapp' : 'email',
+        // וואטסאפ רק למי שחיבר אותו — אחרת הנוסח נכתב למייל
+        channel: b.channel === 'whatsapp' && WhatsApp.isReady(actor.id) ? 'whatsapp' : 'email',
         feedback: String(b.feedback ?? '').trim(),
         previous: b.previous ?? null
       });
@@ -229,7 +247,13 @@ function register(router, h) {
 
     const instruction = String(b.instruction ?? '').trim();
     const draft = b.draft ?? {};
-    const channel = b.channel === 'whatsapp' ? 'whatsapp' : 'email';
+    /*
+     * וואטסאפ רק למי שחיבר אותו. בקשה ישנה, או משימה מהקלטה, שביקשה וואטסאפ
+     * בלי חיבור יוצאת במייל — ולא נתקעת על ערוץ שאינו קיים.
+     */
+    const waReady = WhatsApp.isReady(actor.id);
+    const channel = b.channel === 'whatsapp' && waReady ? 'whatsapp' : 'email';
+    const policy = { ...(b.policy ?? {}), ...(waReady ? {} : { whatsapp: false }) };
     const contact = {
       name: String(b.contact?.name ?? '').trim(),
       email: String(b.contact?.email ?? '').trim(),
@@ -256,7 +280,7 @@ function register(router, h) {
     } else if (channel === 'email') {
       if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(contact.email)) throw badRequest('נדרשת כתובת מייל תקינה לנמען');
       if (!String(draft.subject ?? '').trim()) throw badRequest('נדרש נושא למייל');
-      if (!Gmail.canSend(actor.id)) throw badRequest('כדי לשלוח מייל צריך לחבר את תיבת ה-Gmail שלך ("החשבון שלי ← Gmail ועוזר ה-AI"). אפשר גם לפתוח בוואטסאפ');
+      if (!Gmail.canSend(actor.id)) throw badRequest(`כדי לשלוח מייל צריך לחבר את תיבת ה-Gmail שלך ("החשבון שלי ← Gmail ועוזר ה-AI").${waReady ? ' אפשר גם לפתוח בוואטסאפ' : ''}`);
     } else {
       if (!WhatsApp.normalizePhone(contact.phone)) throw badRequest('נדרש מספר טלפון תקין לנמען');
       if (!WhatsApp.isReady(actor.id)) throw badRequest('הוואטסאפ שלך אינו מחובר. מחברים אותו מ"החשבון שלי"');
@@ -295,7 +319,7 @@ function register(router, h) {
     let sendError = null;
     try {
       const owner = D.get('SELECT id, full_name, email FROM users WHERE id = ?', actor.id);
-      await AiTasks.launch({ taskId, owner, instruction, draft, contact, policy: b.policy ?? {}, channel });
+      await AiTasks.launch({ taskId, owner, instruction, draft, contact, policy, channel });
     } catch (err) {
       // המשימה והטיוטה נשמרו; אפשר לנסות לשלוח שוב מהכרטיס אחרי תיקון התקלה
       sendError = err.message;

@@ -75,7 +75,7 @@ const HomeView = (() => {
    * הסדר שכאן הוא ברירת המחדל, וכל מפתח שאינו מוכר מסונן — כך העדפה שנשמרה
    * לפני שכרטיס נולד אינה מסתירה אותו לנצח.
    */
-  const CARD_ORDER = ['aiInbox', 'deptCut', 'myTasks', 'calendar', 'department', 'mentions', 'done', 'approval', 'feed'];
+  const CARD_ORDER = ['aiInbox', 'deptCut', 'myTasks', 'calendar', 'department', 'mentions', 'done', 'phonebook', 'approval', 'feed'];
   const CARD_LABEL = {
     aiInbox: 'ממתין לאישורך',
     deptCut: 'חתך מחלקתי',
@@ -85,7 +85,8 @@ const HomeView = (() => {
     mentions: 'תויגת בהודעות',
     done: 'הושלמו לאחרונה',
     approval: 'ממתין לאישור',
-    feed: 'פיד עדכונים אחרון'
+    feed: 'פיד עדכונים אחרון',
+    phonebook: 'אלפון'
   };
   // כרטיסים שברירת המחדל שלהם היא שורה שלמה — טבלת חתך רחבה מדי לחצי שורה
   const WIDE_BY_DEFAULT = new Set(['deptCut', 'aiInbox']);
@@ -819,7 +820,9 @@ const HomeView = (() => {
       approval: App.may('approve_vendor_output') || App.isVendor()
         ? approvalCard(data.tasks.awaitingApproval)
         : null,
-      feed: feedCard(data.feed)
+      feed: feedCard(data.feed),
+      // אלפון ארגוני — לעובדים בלבד
+      phonebook: App.isVendor() ? null : PhonebookView.card()
     };
 
     UI.mount(container,
@@ -1484,14 +1487,17 @@ const HomeView = (() => {
       ? App.state.vendors.filter((v) => v.status === 'active')
         .map((v) => ({ value: `vendor:${v.id}`, label: `${v.name} (ספק חיצוני)` }))
       : [];
-    const assigneeSelect = UI.select([
+    const assigneeOptions = [
       { value: '', label: 'ללא אחראי' },
       ...(near.length && far.length
         ? [{ label: deptName, options: near.map(userOption) },
            { label: 'שאר הארגון', options: far.map(userOption) }]
         : [...near, ...far].map(userOption)),
       ...(vendorOptions.length ? [{ label: 'ספקים חיצוניים', options: vendorOptions }] : [])
-    ], `user:${App.state.actor.id}`);  // ברירת מחדל: אני, כמו בדיאלוג המלא
+    ];
+    const assigneeSelect = UI.select(assigneeOptions, `user:${App.state.actor.id}`);  // ברירת מחדל: אני, כמו בדיאלוג המלא
+    // עיגולים, כמו בדיאלוג המלא — הראשון ונבחר: מי שאני הכי הרבה מטיל עליו
+    const assigneePicker = AssigneePicker.create({ select: assigneeSelect, options: assigneeOptions, autoPick: true, max: 4 });
 
     const dueInput = el('input', { type: 'date' });
 
@@ -1535,14 +1541,16 @@ const HomeView = (() => {
       addFiles([...e.dataTransfer.files]);
     });
 
-    const saveBtn = el('button.btn.btn-primary.btn-block', {}, ['יצירת המשימה']);
+    const saveBtn = el('button.btn.btn-primary.btn-block', {}, ['שמירה']);
+    const saveOpenBtn = el('button.btn.btn-block', { type: 'button' }, ['שמירה ופתיחה בהרחבה']);
 
-    const submit = async () => {
+    const submit = async ({ openAfter = false } = {}) => {
       const title = titleInput.value.trim();
       if (!title) { UI.toast('נדרשת כותרת למשימה', 'error'); titleInput.focus(); return; }
       const [aType, aId] = assigneeSelect.value ? assigneeSelect.value.split(':') : [null, null];
 
       saveBtn.disabled = true;
+      saveOpenBtn.disabled = true;
       saveBtn.textContent = 'יוצר…';
       try {
         const created = await API.createTask({
@@ -1573,23 +1581,27 @@ const HomeView = (() => {
         }
 
         closeQuick();
+        AssigneePicker.refresh();
         const sent = files.length - failed.length;
         if (failed.length) {
           UI.toast(`המשימה נוצרה, אך ${failed.length === 1 ? `הקובץ "${failed[0]}" לא צורף` : `${failed.length} קבצים לא צורפו: ${failed.join(', ')}`}`, 'error');
-        } else {
-          UI.success(sent ? `המשימה נוצרה עם ${countLabel(sent, 'קובץ אחד', 'קבצים')}` : 'המשימה נוצרה');
+        } else if (!openAfter) {
+          UI.taskCreated(created?.task, { prefix: sent ? `המשימה נוצרה עם ${countLabel(sent, 'קובץ אחד', 'קבצים')}` : 'המשימה נוצרה' });
         }
         await App.reloadReference();
         await App.refreshView();
         App.refreshNotifications();
+        if (openAfter && id) TaskCardView.open(id);
       } catch (err) {
         saveBtn.disabled = false;
-        saveBtn.textContent = 'יצירת המשימה';
+        saveOpenBtn.disabled = false;
+        saveBtn.textContent = 'שמירה';
         UI.error(err);
       }
     };
 
-    saveBtn.addEventListener('click', submit);
+    saveBtn.addEventListener('click', () => submit());
+    saveOpenBtn.addEventListener('click', () => submit({ openAfter: true }));
     // Enter בשורת הנושא שולח — זה טופס של שדה אחד חובה, ומי שהקליד נושא סיים
     titleInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); submit(); } });
 
@@ -1602,14 +1614,15 @@ const HomeView = (() => {
       el('div.qt-body', {}, [
         UI.field('נושא', titleInput),
         UI.field('שם פרויקט', projectPicker),
-        UI.field('אחראי', assigneeSelect),
+        UI.field('אחראי', assigneePicker.node),
         UI.field('תאריך יעד', dueInput),
         // בורר הקבצים חייב להיות במסמך — לחיצה על ‎input‎ מנותק אינה פותחת
         // את חלון הבחירה בכל הדפדפנים
         fileInput,
         drop,
         chips,
-        saveBtn
+        saveBtn,
+        saveOpenBtn
       ])
     ]);
   }

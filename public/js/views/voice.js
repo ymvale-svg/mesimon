@@ -30,6 +30,59 @@ const VoiceView = (() => {
 
   let current = null; // המסך הפתוח, אם יש
 
+  // ------------------------------------------------------------- תמלול נקי
+
+  /*
+   * למה זה נחוץ: כרום באנדרואיד מחזיר במצב ‎continuous‎ כל תוצאה "סופית"
+   * יחד עם כל מה שנאמר לפניה, ולפעמים אותה תוצאה שוב אחרי שההאזנה מתחדשת
+   * מעצמה. הקוד הקודם צירף כל תוצאה לטקסט — ואותן מילים הופיעו פעמיים,
+   * ארבע ועשר. כאן כל קטע חדש *ממוזג* במה שכבר נקלט, ולא מצורף אליו.
+   */
+  const norm = (x) => String(x ?? '').replace(/\s+/g, ' ').trim();
+
+  /** מיזוג קטע תמלול חדש במה שכבר נקלט */
+  function mergeSegment(acc, seg) {
+    acc = norm(acc);
+    seg = norm(seg);
+    if (!seg) return acc;
+    if (!acc) return seg;
+    // אנדרואיד: התוצאה החדשה מכילה את כל מה שנקלט ועוד
+    if (seg.startsWith(acc)) return seg;
+    const a = acc.split(' ');
+    const b = seg.split(' ');
+    // אותו משפט שוב — כבר נקלט
+    if (b.length >= 2 && acc.endsWith(seg)) return acc;
+    // חפיפה: סוף מה שנקלט הוא תחילת הקטע החדש (שתי מילים לפחות, כדי לא
+    // לבלוע מילה קצרה שחוזרת במקרה)
+    for (let k = Math.min(a.length, b.length); k >= 2; k--) {
+      if (a.slice(-k).join(' ') === b.slice(0, k).join(' ')) return [...a, ...b.slice(k)].join(' ');
+    }
+    return `${acc} ${seg}`;
+  }
+
+  /**
+   * חזרות רצופות שנשארו: רצף של 2–8 מילים שמופיע פעמיים ברצף, ומילה בודדת
+   * שחוזרת שלוש פעמים ומעלה. "מאוד מאוד" נשאר — שתי חזרות של מילה אחת הן
+   * לפעמים דיבור אמיתי.
+   */
+  function cleanRepeats(text) {
+    const w = norm(text).split(' ').filter(Boolean);
+    let changed = true;
+    while (changed) {
+      changed = false;
+      for (let n = Math.min(8, Math.floor(w.length / 2)); n >= 2 && !changed; n--) {
+        for (let i = 0; i + 2 * n <= w.length; i++) {
+          if (w.slice(i, i + n).join(' ') === w.slice(i + n, i + 2 * n).join(' ')) {
+            w.splice(i + n, n);
+            changed = true;
+            break;
+          }
+        }
+      }
+    }
+    return w.filter((x, i) => !(i >= 2 && x === w[i - 1] && x === w[i - 2])).join(' ');
+  }
+
   // ------------------------------------------------------------- קול
 
   /** הקראה בקול עברי. נפתר בסוף ההקראה, או אחרי זמן סביר אם אין קול עברי */
@@ -102,6 +155,7 @@ const VoiceView = (() => {
 
     let finals = o.initialText ? `${o.initialText} ` : '';
     let interim = '';
+    let sessionBase = '';   // מה שנקלט לפני סבב ההאזנה הנוכחי
     let rec = null;
     let listening = false;
     let wantListen = false;
@@ -112,10 +166,14 @@ const VoiceView = (() => {
     let maxTimer = null;
     let closed = false;
 
-    const text = () => `${finals}${interim}`.replace(/\s+/g, ' ').trim();
+    const text = () => cleanRepeats(mergeSegment(finals, interim));
 
     const status = el('div.voice-status');
     const live = el('div.voice-live');
+    const qa = el('div.voice-qa');           // שיחת ההשלמה — שאלה, הצעות ותשובה
+    let conversing = false;
+    let answerMic = null;                    // המיקרופון בזמן שאלה: מאזין לתשובה
+    let answerRec = null;                    // ההאזנה לתשובה הנוכחית — נעצרת בסגירה
     const input = el('textarea.voice-input', { placeholder: 'לדוגמה: פתח משימה לסדר את המעליות, אחראי דני, עד יום חמישי. צ׳קליסט: אחת להזמין טכנאי, שתיים לבדוק את הלוח.' });
     const mic = el('button.voice-mic', { type: 'button', title: 'הקלטה' }, [el('span.voice-mic-ic', { text: '🎙' })]);
     const sendBtn = el('button.btn.btn-primary.voice-send', { type: 'button' }, ['✓ יצירת משימה']);
@@ -135,6 +193,7 @@ const VoiceView = (() => {
         mic,
         status,
         live,
+        qa,
         input,
         hint,
         el('div.voice-foot', {}, [sendBtn, el('div.spacer'), supported() ? typeBtn : null])
@@ -169,25 +228,40 @@ const VoiceView = (() => {
         rec.continuous = true;
         rec.interimResults = true;
         rec.maxAlternatives = 1;
-        rec.onstart = () => { listening = true; setStatus('מקשיב… לחצו שוב כדי לעצור', 'live'); drawState(); };
-        rec.onresult = (e) => {
-          interim = '';
-          for (let i = e.resultIndex; i < e.results.length; i++) {
-            const r = e.results[i];
-            if (r.isFinal) finals += `${r[0].transcript} `;
-            else interim += r[0].transcript;
-          }
+        rec.onstart = () => {
+          // כל סבב (גם התחדשות אחרי שתיקה) מתחיל רשימת תוצאות חדשה
+          sessionBase = finals;
+          listening = true;
+          setStatus('מקשיב… לחצו שוב כדי לעצור', 'live');
           drawState();
-          if (o.handsFree) {
-            clearTimeout(silenceTimer);
-            // "סיום" / "זהו" בסוף המשפט — סוף ההקלטה
-            if (STOP_WORDS.test(finals.trim())) {
-              finals = finals.trim().replace(STOP_WORDS, '');
-              interim = '';
-              stopListening({ send: true });
-              return;
-            }
-            silenceTimer = setTimeout(() => { if (text()) stopListening({ send: true }); }, SILENCE_MS);
+        };
+        rec.onresult = (e) => {
+          // בונים מחדש מכל התוצאות של הסבב, ולא מוסיפים — ראה ‎mergeSegment‎
+          let merged = sessionBase;
+          let pending = '';
+          for (let i = 0; i < e.results.length; i++) {
+            const r = e.results[i];
+            if (r.isFinal) merged = mergeSegment(merged, r[0].transcript);
+            else pending = mergeSegment(pending, r[0].transcript);
+          }
+          finals = merged ? `${cleanRepeats(merged)} ` : '';
+          interim = pending;
+          drawState();
+          clearTimeout(silenceTimer);
+          // "סיום" / "זהו" בסוף המשפט — סוף ההקלטה
+          if (o.handsFree && STOP_WORDS.test(finals.trim())) {
+            finals = finals.trim().replace(STOP_WORDS, '');
+            interim = '';
+            stopListening({ send: true });
+            return;
+          }
+          /*
+           * שתיקה אחרי שנאמר משהו — סוף ההקלטה, והמערכת ממשיכה לבד: מבינה,
+           * ושואלת על מה שחסר. בהכתבה מתוך דיאלוג המשימה (‎forcePreview‎)
+           * לא — שם עוצרים בלחיצה וממשיכים לערוך על המסך.
+           */
+          if (o.handsFree || !o.forcePreview) {
+            silenceTimer = setTimeout(() => { if (text() && !closed) stopListening({ send: true }); }, SILENCE_MS);
           }
         };
         rec.onerror = (e) => {
@@ -229,7 +303,7 @@ const VoiceView = (() => {
       wantListen = false;
       clearTimeout(silenceTimer);
       clearTimeout(maxTimer);
-      if (interim) { finals += `${interim} `; interim = ''; }
+      if (interim) { finals = `${text()} `; interim = ''; }
       try { rec?.stop(); } catch { /* כבר עצר */ }
       listening = false;
       // אחרי העצירה הטקסט פתוח לתיקון — זיהוי דיבור טועה בשמות
@@ -243,6 +317,7 @@ const VoiceView = (() => {
     }
 
     mic.addEventListener('click', () => {
+      if (conversing) return answerMic?.();
       if (listening || wantListen) return stopListening();
       // המשך הקלטה אחרי תיקון — ממשיך מהטקסט שעל המסך
       if (typing) {
@@ -292,11 +367,258 @@ const VoiceView = (() => {
         if (o.handsFree) speak('לא הצלחתי להבין. נסו שוב.');
         return;
       }
+      // חסרים אחראי, תאריך או פרויקט — שואלים עליהם כאן, במסך הזה
+      if (res.ask?.length && !res.created) {
+        busy = false;
+        return converse(res);
+      }
       close({ keepCallback: true });
       await handleResult(res, o);
       o.onClose?.();
     }
     sendBtn.addEventListener('click', submit);
+
+    // --- שיחת השלמה: "מי אחראי?", "עד מתי?", "לאיזה פרויקט?"
+
+    /**
+     * האזנה לתשובה אחת קצרה. ‎onText‎ — מה שנאמר; ‎onNothing‎ — נגמר בלי
+     * תשובה (שתיקה, או שהמשתמש לחץ על הצעה).
+     */
+    function listenOnce(onText, onNothing) {
+      if (!supported() || closed) { onNothing(); return { stop() {} }; }
+      let got = false;
+      let r = null;
+      try {
+        r = new Recognition();
+        r.lang = 'he-IL';
+        r.continuous = false;
+        r.interimResults = true;
+        r.onstart = () => { listening = true; overlay.classList.add('is-listening'); setStatus('מקשיב לתשובה…', 'live'); };
+        r.onresult = (e) => {
+          if (closed) return;
+          let said = '';
+          let final = false;
+          for (let i = 0; i < e.results.length; i++) {
+            said = mergeSegment(said, e.results[i][0].transcript);
+            if (e.results[i].isFinal) final = true;
+          }
+          live.textContent = cleanRepeats(said);
+          if (final && !got) {
+            got = true;
+            try { r.stop(); } catch { /* כבר עצר */ }
+            onText(cleanRepeats(said));
+          }
+        };
+        r.onerror = () => {};
+        r.onend = () => {
+          listening = false;
+          overlay.classList.remove('is-listening');
+          if (!got) { got = true; onNothing(); }
+        };
+        r.start();
+      } catch {
+        onNothing();
+      }
+      answerRec = { stop: () => { got = true; try { r?.abort(); } catch { /* כבר עצר */ } } };
+      return answerRec;
+    }
+
+    /** הצעות ללחיצה, לפי השאלה */
+    function suggestions(field, d) {
+      if (field === 'assignee') {
+        const me = `user:${App.state.actor.id}`;
+        const { near, far } = UI.usersByDepartment();
+        const names = new Map([...near, ...far].map((u) => [`user:${u.id}`, u.name]));
+        const top = frequentCache.filter((v) => names.has(v) && v !== me).slice(0, 4);
+        return [{ value: me, label: 'אני', full: App.state.actor.name }, ...top.map((v) => ({ value: v, label: names.get(v).split(' ')[0], full: names.get(v) }))];
+      }
+      if (field === 'dueDate') return ['היום', 'מחר', 'מחרתיים', 'סוף השבוע', 'שבוע הבא'].map((t) => ({ say: t, label: t }));
+      // שלי קודם, ואחריהם שאר הפעילים — למי שעוד לא מנהל פרויקט משלו
+      const open = App.state.projects.filter((p) => p.status !== 'done');
+      const ordered = [...open.filter((p) => p.mine), ...open.filter((p) => !p.mine)];
+      return [
+        ...ordered.slice(0, 5).map((p) => ({ value: p.id, label: p.name })),
+        { value: null, label: 'ללא פרויקט' }
+      ];
+    }
+    let frequentCache = [];
+    let saidText = '';   // מה שנאמר בהקלטה — נשאר על המסך בזמן השאלות
+
+    /** שאלה אחת, עד שתי חזרות. נפתר ב-‎{value,label}‎ או ‎{skip:true}‎ */
+    function askField(field, question, d) {
+      return new Promise((resolve) => {
+        let done = false;
+        let tries = 0;
+        let listener = null;
+        let candidates = null;
+        const heard = el('div.voice-heard');
+        const chips = el('div.voice-chips');
+        const typed = el('input.voice-typed', { type: 'text', placeholder: 'או הקלידו כאן ו-Enter' });
+
+        const finish = (r) => {
+          if (done) return;
+          done = true;
+          listener?.stop();
+          answerMic = null;
+          resolve(r);
+        };
+
+        const drawChips = (items) => UI.mount(chips, ...items.map((c) => el('button.voice-chip', {
+          type: 'button',
+          title: c.full ?? c.label,
+          onclick: () => (c.say ? handle(c.say) : finish({ value: c.value, label: c.full ?? c.label }))
+        }, [c.label])));
+
+        const listen = () => {
+          listener?.stop();
+          listener = listenOnce(handle, () => {
+            if (!done) setStatus('לחצו על המיקרופון כדי לענות, או בחרו', '');
+          });
+        };
+        answerMic = listen;
+
+        const ask = async (prefix = '') => {
+          const say = `${prefix}${question}`;
+          setStatus(say, 'busy');
+          await speak(say);
+          if (!done && !closed) listen();
+        };
+
+        async function handle(text) {
+          if (done) return;
+          const t = String(text ?? '').trim();
+          if (!t) return;
+          listener?.stop();
+          heard.textContent = `"${t}"`;
+          if (/^(דלג|תדלג|לא משנה|הלאה|תמשיך)$/.test(t)) return finish({ skip: true });
+          // בחירה מתוך כמה התאמות: "השני", או שם שמופיע באחת מהן
+          if (candidates) {
+            const ord = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי'].findIndex((w) => t.includes(w));
+            const hit = ord >= 0 ? candidates[ord] : candidates.find((c) => t.split(/\s+/).some((w) => w.length > 1 && c.label.includes(w)));
+            if (hit) return finish(hit);
+          }
+          let r;
+          try {
+            r = await API.post('/api/voice/answer', { field, text: t, assignee: d.assignee });
+          } catch (err) {
+            setStatus(err.message, 'error');
+            return;
+          }
+          if (done) return;
+          if (r.value !== undefined) return finish(r);
+          if (r.candidates?.length) {
+            candidates = r.candidates;
+            drawChips(candidates.map((c) => ({ value: c.value, label: c.label })));
+            return ask(`יש כמה: ${candidates.map((c) => c.label).join(', או ')}. `).then(() => {});
+          }
+          tries += 1;
+          if (tries > 2) return finish({ skip: true });
+          ask('לא הבנתי. ');
+        }
+
+        typed.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); handle(typed.value); typed.value = ''; } });
+        drawChips(suggestions(field, d));
+        UI.mount(qa,
+          saidText ? el('div.voice-said', { text: `"${saidText}"` }) : null,
+          el('div.voice-q', { text: question }),
+          chips,
+          heard,
+          el('div.voice-qa-foot', {}, [typed, el('button.btn.btn-sm', { type: 'button', title: 'להשאיר את ברירת המחדל', onclick: () => finish({ skip: true }) }, ['דלג ←'])])
+        );
+        live.textContent = '';
+        ask();
+      });
+    }
+
+    async function converse(res) {
+      conversing = true;
+      overlay.classList.add('is-asking');
+      typing = false;
+      drawState();
+      try { frequentCache = (await AssigneePicker.prefetch()).map((i) => i.value); } catch { frequentCache = []; }
+      const d = { ...res.draft };
+      const me = `user:${App.state.actor.id}`;
+      saidText = res.transcript ?? '';
+      for (const field of res.ask) {
+        if (closed) return;
+        const r = await askField(field, res.questions?.[field] ?? '', d);
+        if (closed) return;
+        if (r.skip) {
+          if (field === 'projectId') d.projectId = null;
+          continue;
+        }
+        if (field === 'assignee') { d.assignee = r.value; d.assigneeGuess = r.value; d.assigneeName = r.label; }
+        if (field === 'dueDate') d.dueDate = r.value;
+        if (field === 'projectId') d.projectId = r.value;
+      }
+      if (!closed) confirmStep(d, res, me);
+    }
+
+    /** הסיכום — "לפתוח?" בקול, וגם כפתורים */
+    function confirmStep(d, res, me) {
+      const who = d.assignee === me ? 'אני' : (d.assigneeName || 'אני');
+      const project = d.projectId ? (App.project(Number(d.projectId))?.name ?? '') : 'ללא פרויקט';
+      const line = `${d.title} · ${who} · ${dayLabel(d.dueDate)} · ${project}`;
+      const ok = el('button.btn.btn-primary', { type: 'button' }, ['✓ פתיחת המשימה']);
+      const editBtn = el('button.btn', { type: 'button' }, ['✏ עריכה מלאה']);
+      let listener = null;
+
+      const commit = async () => {
+        listener?.stop();
+        ok.disabled = true;
+        setStatus('פותח את המשימה…', 'busy');
+        try {
+          const out = await API.post('/api/voice/commit', { draft: d, transcript: res.transcript });
+          close({ keepCallback: true });
+          createdToast(out.created, line, res.warnings ?? []);
+          if (o.handsFree) speak('המשימה נפתחה.');
+          await App.reloadReference();
+          await App.refreshView();
+          App.refreshNotifications();
+          o.onClose?.();
+        } catch (err) {
+          ok.disabled = false;
+          setStatus(err.message, 'error');
+        }
+      };
+      const edit = () => {
+        listener?.stop();
+        close({ keepCallback: true });
+        handleResult({ ...res, draft: d, ask: null }, { ...o, handsFree: false });
+        o.onClose?.();
+      };
+      ok.addEventListener('click', commit);
+      editBtn.addEventListener('click', edit);
+
+      UI.mount(qa,
+        el('div.voice-q', { text: 'לפתוח את המשימה?' }),
+        el('div.voice-summary', {}, [
+          el('b', { text: d.title }),
+          el('div', {}, [el('span.mute-sm', { text: 'אחראי: ' }), who]),
+          el('div', {}, [el('span.mute-sm', { text: 'עד: ' }), dayLabel(d.dueDate)]),
+          el('div', {}, [el('span.mute-sm', { text: 'פרויקט: ' }), project])
+        ]),
+        el('div.voice-qa-foot', {}, [ok, editBtn])
+      );
+      live.textContent = '';
+
+      const listen = () => {
+        listener?.stop();
+        listener = listenOnce((t) => {
+          if (/(^|\s)(כן|פתח|תפתח|אישור|מאשר|מאשרת|נכון|יאללה|סבבה|בסדר|אוקיי)(\s|$)/.test(t)) commit();
+          else if (/(עריכה|ערוך|תערוך|לשנות|שנה)/.test(t)) edit();
+          else if (/(^|\s)(לא|ביטול|בטל|תבטל)(\s|$)/.test(t)) close();
+          else setStatus('אמרו "כן" כדי לפתוח, או לחצו', '');
+        }, () => setStatus('אמרו "כן" או לחצו "פתיחת המשימה"', ''));
+      };
+      answerMic = listen;
+      (async () => {
+        const say = `${d.title}. ${who === 'אני' ? 'אצלך' : `אחראי ${who}`}, ${dayLabel(d.dueDate).replace(/ \d.*$/, '')}${d.projectId ? `, ${project}` : ''}. לפתוח?`;
+        setStatus('לפתוח את המשימה?', 'busy');
+        await speak(say);
+        if (!closed) listen();
+      })();
+    }
 
     function close({ keepCallback = false } = {}) {
       if (closed) return;
@@ -305,6 +627,8 @@ const VoiceView = (() => {
       clearTimeout(silenceTimer);
       clearTimeout(maxTimer);
       try { rec?.abort(); } catch { /* כבר עצר */ }
+      answerRec?.stop();
+      try { window.speechSynthesis?.cancel(); } catch { /* אין הקראה */ }
       overlay.remove();
       document.removeEventListener('keydown', onKey);
       if (current?.overlay === overlay) current = null;
@@ -470,5 +794,5 @@ const VoiceView = (() => {
     });
   }
 
-  return { open, speak, chime, supported, shortcutHelp, createdToast, QUESTION };
+  return { open, speak, chime, supported, shortcutHelp, createdToast, QUESTION, _text: { mergeSegment, cleanRepeats } };
 })();
