@@ -338,7 +338,7 @@ const AdminView = (() => {
       el('span', { text: '📋' }),
       el('div', {}, [
         el('b', { text: 'מה צריך להיות בקובץ' }),
-        el('div', { text: 'השורה הראשונה היא שורת כותרות. עמודות חובה: שם מלא, אימייל. עמודות אופציונליות: מחלקה, רמת גישה (ברירת המחדל — עובד פנימי).' }),
+        el('div', { text: 'השורה הראשונה היא שורת כותרות. עמודות חובה: שם מלא, אימייל. עמודות אופציונליות: טלפון, מחלקה, רמת גישה (ברירת המחדל — עובד פנימי).' }),
         scoped
           ? el('div', { text: `כמנהל/ת מחלקה, כל המיובאים ישויכו למחלקת ${listData.department} כעובדים פנימיים.` })
           : el('div', { text: 'מחלקה שאינה קיימת במערכת תיפסל — יש להגדיר אותה קודם במסך המחלקות.' })
@@ -350,13 +350,14 @@ const AdminView = (() => {
         el('table.data', {}, [
           el('thead', {}, [el('tr', {}, [
             el('th', { text: 'שורה' }), el('th', { text: 'שם' }), el('th', { text: 'אימייל' }),
-            el('th', { text: 'מחלקה' }), el('th', { text: 'רמת גישה' }), el('th', { text: 'מצב' })
+            el('th', { text: 'טלפון' }), el('th', { text: 'מחלקה' }), el('th', { text: 'רמת גישה' }), el('th', { text: 'מצב' })
           ])]),
           el('tbody', {}, a.rows.map((r) =>
             el('tr', { style: r.errors.length ? { background: 'var(--danger-bg)' } : {} }, [
               el('td', { text: String(r.line) }),
               el('td', { text: r.name || '—' }),
               el('td', { text: r.email || '—', style: { direction: 'ltr', textAlign: 'right' } }),
+              el('td', { text: r.phone ? UI.phone(r.phone) : '—', style: { direction: 'ltr', textAlign: 'right' } }),
               el('td', { text: r.department || '—' }),
               el('td', { text: r.roleLabel }),
               el('td', {}, [r.errors.length
