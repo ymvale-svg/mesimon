@@ -14,6 +14,7 @@ const ContactPicker = (() => {
   const { el } = UI;
 
   const SOURCE = {
+    phonebook: { icon: '📒', label: 'אלפון ארגוני' },
     user: { icon: '👤', label: 'עובד/ת' },
     vendor: { icon: '🏢', label: 'ספק' },
     recent: { icon: '🕘', label: 'פנית בעבר' },

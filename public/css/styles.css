@@ -2709,3 +2709,32 @@ input[type="color"] { width: 46px; height: 30px; padding: 2px; cursor: pointer; 
 .cal-ev.is-busy { background: repeating-linear-gradient(45deg, #cbd5e1, #cbd5e1 6px, #e2e8f0 6px, #e2e8f0 12px); color: var(--text-soft); }
 .cal-ev.is-ours { box-shadow: inset 3px 0 0 #fbbf24; }
 .cal-allday { position: absolute; inset-inline: 2px; height: 18px; border-radius: 4px; color: #fff; font-size: 11px; padding: 0 5px; overflow: hidden; z-index: 2; cursor: pointer; }
+
+/* ---------------------------------------------- 📒 אלפון ארגוני */
+
+.cp-phonebook { background: #fef3c7; }
+.pb-search { width: 100%; }
+.pb-card .card-pad { display: flex; flex-direction: column; gap: 8px; }
+.pb-list { display: flex; flex-direction: column; }
+.pb-row {
+  display: flex; align-items: center; gap: 10px; padding: 8px 6px;
+  border-bottom: 1px solid var(--border); cursor: pointer; border-radius: var(--radius);
+}
+.pb-row:last-child { border-bottom: 0; }
+.pb-row:hover { background: var(--surface-2); }
+.pb-main { flex: 1; min-width: 0; }
+.pb-main > * { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pb-detail { text-align: right; }
+.pb-acts, .pb-row-acts { display: flex; gap: 2px; flex: none; }
+.pb-row-acts { justify-content: flex-end; white-space: nowrap; }
+.pb-act { text-decoration: none; }
+.pb-row mark, .pb-table mark { background: #fef08a; color: inherit; border-radius: 2px; padding: 0 1px; }
+.pb-empty { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; padding: 6px 2px; }
+.pb-hint { padding: 6px 2px 0; }
+.pb-tools { gap: 12px; align-items: center; margin-bottom: 12px; }
+.pb-tools .pb-search { max-width: 380px; }
+.pb-table td { vertical-align: middle; }
+.pb-table .pb-editing input { width: 100%; min-width: 90px; }
+.pb-import { max-height: 50vh; overflow-y: auto; margin-top: 10px; }
+.pb-import tr.pb-bad td { color: var(--danger); }
+.pb-import tr.pb-dup td { color: var(--text-mute); }

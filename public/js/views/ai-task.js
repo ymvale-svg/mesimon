@@ -113,6 +113,7 @@ const AiTaskView = (() => {
           showColleague();
         },
         onPick: (c) => {
+          state.contact.source = c.source;
           emailInput.value = c.email || '';
           phoneInput.value = c.phone || '';
           state.contact.type = c.type === 'user' ? 'user' : c.type === 'vendor' ? 'vendor' : 'external';
@@ -129,10 +130,40 @@ const AiTaskView = (() => {
                 ])
               : null);
           showColleague();
+          fromPhonebook = c.source === 'phonebook';
+          showPbSave();
         }
       });
       const nameInput = picker.input;
       showColleague();
+
+      /*
+       * נמען מבחוץ שאינו באלפון הארגוני — הצעה קטנה לשמור אותו שם, כדי
+       * שהעמיתים ימצאו אותו בפעם הבאה. נבחר מהאלפון, או עובד — אין הצעה.
+       */
+      const pbBox = el('div');
+      let fromPhonebook = state.contact.source === 'phonebook';
+      const showPbSave = () => {
+        const name = nameInput.value.trim();
+        const email = emailInput.value.trim();
+        const phone = phoneInput.value.trim();
+        const show = !fromPhonebook && state.contact.type !== 'user' && name && (email || phone);
+        UI.mount(pbBox, show
+          ? el('div.cp-save-line', {}, [
+              el('span.mute-sm', { text: 'לא באלפון הארגוני. ' }),
+              el('button.btn.btn-sm', {
+                type: 'button',
+                onclick: () => PhonebookView.editDialog({ name, email, phone }, {
+                  onSaved: (entry) => { if (entry) { fromPhonebook = true; showPbSave(); } }
+                })
+              }, ['📒 שמירה באלפון'])
+            ])
+          : null);
+      };
+      picker.input.addEventListener('input', () => { fromPhonebook = false; showPbSave(); });
+      emailInput.addEventListener('change', showPbSave);
+      phoneInput.addEventListener('change', showPbSave);
+      showPbSave();
 
       /*
        * בחירת ערוץ רק למי שחיבר וואטסאפ. מי שלא חיבר אינו רואה כפתור אפור
@@ -196,6 +227,7 @@ const AiTaskView = (() => {
           waReady ? UI.field('טלפון', phoneInput) : null
         ]),
         extrasBox,
+        pbBox,
         colleagueNote,
         el('div.row', {}, [
           channelSeg ? UI.field('ערוץ ראשון', channelSeg) : null,

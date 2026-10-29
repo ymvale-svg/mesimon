@@ -183,7 +183,9 @@ const MobileView = (() => {
         el(`button.m-chip${activeExtras() ? '.on' : ''}`, { onclick: openSheet }, [
           '⚙ סינון',
           activeExtras() ? el('span.n', { text: String(activeExtras()) }) : null
-        ])
+        ]),
+        // האלפון הארגוני — חיפוש וחיוג מהטלפון
+        App.isVendor() ? null : el('button.m-chip', { onclick: () => PhonebookView.openSearch() }, ['📒 אלפון'])
       ]),
 
       project

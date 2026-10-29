@@ -572,12 +572,15 @@ const App = (() => {
     tracker: { label: 'בקרת משימות', icon: 'reports', hidden: true, render: (c, p) => TrackerView.render(c, p) },
     archive: { label: 'ארכיון', icon: 'archive', render: (c, p) => BoardView.render(c, { ...p, scope: 'internal', archived: true }) },
     reports: { label: 'דוחות', icon: 'reports', render: (c) => ReportsView.render(c) },
+    // אלפון ארגוני — מ"החשבון שלי" ומהחלון בדשבורד, לכל העובדים
+    phonebook: { label: 'אלפון', icon: 'my-tasks', render: (c) => PhonebookView.render(c) },
     admin: { label: 'ניהול המערכת', icon: 'admin', render: (c, p) => AdminView.render(c, p) },
     vendor: { label: 'המשימות שלי', icon: 'my-tasks', render: (c) => VendorPortalView.render(c) }
   };
 
   function navigate(name, params = {}) {
     if (ROUTES[name]?.hidden) name = 'home';
+    if (name === 'phonebook' && isVendor()) name = 'vendor';
     state.route = { name, params };
     closeDrawer();
     // הפתיחה המהירה צפה על ה-body ולכן אינה נמחקת עם המסך — היא שייכת
@@ -2135,6 +2138,10 @@ const App = (() => {
         // חיבור Google: Gmail (סריקה ותשובות), יומן ל-Today, ואנשי קשר למשימת AI
         isVendor() ? null : el('button.btn.mt', { style: { marginInlineStart: '8px' }, onclick: () => AiInboxView.openGmail(() => refreshView()) }, ['🔗 חיבור Google ועוזר ה-AI']),
         isVendor() ? null : el('button.btn.mt', { style: { marginInlineStart: '8px' }, onclick: () => TodayView.openSettings() }, ['☀ Today והקלטה']),
+        isVendor() ? null : el('button.btn.mt', {
+          style: { marginInlineStart: '8px' },
+          onclick: () => { document.querySelector('.modal-backdrop')?.remove(); navigate('phonebook'); }
+        }, ['📒 אלפון ארגוני']),
         el('div.alert.alert-info.mt', {}, [
           el('div', {}, [
             el('b', { text: 'מה מותר לי במערכת?' }),

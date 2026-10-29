@@ -18,6 +18,7 @@ const Spreadsheet = require('./spreadsheet');
 const AiTasks = require('./ai-tasks');
 const AiApi = require('./api-ai');
 const TodayApi = require('./api-today');
+const PhonebookApi = require('./api-phonebook');
 const MeetingsApi = require('./api-meetings');
 const Zoom = require('./zoom');
 const W = require('./workdays');
@@ -4753,6 +4754,7 @@ const botTaskOps = {
 
 AiApi.register(router, { getTaskOr404, assertVisible, mayOnTask, shapeTask, actorRef, saveAttachment, createTask, assertMayAssignTo, listProjectsFor, botTaskOps });
 TodayApi.register(router, { shapeTask, createTask, getTaskOr404, listProjectsFor, assertMayAssignTo });
+PhonebookApi.register(router);
 MeetingsApi.register(router, { getTaskOr404, assertVisible, shapeTask, canSeeTask });
 Tiful360.register(router, { createTask, saveAttachment, getTaskOr404 });
 

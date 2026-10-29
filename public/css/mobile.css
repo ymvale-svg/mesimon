@@ -448,3 +448,10 @@
   .cal-people-row { flex-direction: column; }
   .cal-hours, .cal-col { height: 640px; }
 }
+
+/* אלפון — בטלפון בלי עמודת "עודכן", והחיפוש ברוחב מלא */
+@media (max-width: 820px) {
+  .pb-table th:nth-child(5), .pb-table td:nth-child(5) { display: none; }
+  .pb-tools { flex-wrap: wrap; }
+  .pb-tools .pb-search { max-width: none; }
+}
