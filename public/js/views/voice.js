@@ -523,7 +523,7 @@ const VoiceView = (() => {
           el('div.voice-q', { text: question }),
           chips,
           heard,
-          el('div.voice-qa-foot', {}, [typed, el('button.btn.btn-sm.btn-ghost', { type: 'button', onclick: () => finish({ skip: true }) }, ['דלג'])])
+          el('div.voice-qa-foot', {}, [typed, el('button.btn.btn-sm', { type: 'button', title: 'להשאיר את ברירת המחדל', onclick: () => finish({ skip: true }) }, ['דלג ←'])])
         );
         live.textContent = '';
         ask();

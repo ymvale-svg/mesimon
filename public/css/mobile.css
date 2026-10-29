@@ -449,9 +449,39 @@
   .cal-hours, .cal-col { height: 640px; }
 }
 
-/* אלפון — בטלפון בלי עמודת "עודכן", והחיפוש ברוחב מלא */
+/*
+ * אלפון בטלפון — כל איש קשר ככרטיס, ולא טבלה: טבלה של שש עמודות גלשה
+ * הצידה, וכפתורי החיוג והעריכה נשארו מחוץ למסך.
+ *   שם
+ *   טלפון · מייל
+ *   הערה
+ *   📞 ✉ ✨ ✏ 🗑
+ */
 @media (max-width: 820px) {
-  .pb-table th:nth-child(5), .pb-table td:nth-child(5) { display: none; }
   .pb-tools { flex-wrap: wrap; }
   .pb-tools .pb-search { max-width: none; }
+  .pb-head-acts { width: 100%; }
+  .pb-head-acts > * { flex: 1; justify-content: center; text-align: center; }
+  .pb-card .table-wrap, .pb-table-wrap { border: 0; }
+  /* ‎table.data.pb-table‎ — חזק מ-‎table.data td‎ (מסגרת וריפוד של טבלה רגילה) */
+  table.data.pb-table thead { display: none; }
+  table.data.pb-table, table.data.pb-table tbody { display: block; white-space: normal; }
+  table.data.pb-table tr {
+    display: grid; grid-template-columns: auto 1fr;
+    grid-template-areas: "name name" "phone email" "note note" "acts acts";
+    gap: 2px 12px; padding: 12px 4px; border-bottom: 1px solid var(--border);
+  }
+  table.data.pb-table tr:last-child { border-bottom: 0; }
+  table.data.pb-table td { display: block; padding: 0; border: 0; min-width: 0; }
+  table.data.pb-table td:empty { display: none; }
+  table.data.pb-table td:nth-child(1) { grid-area: name; font-size: 15.5px; }
+  table.data.pb-table td:nth-child(2) { grid-area: phone; text-align: right; }
+  table.data.pb-table td:nth-child(3) { grid-area: email; overflow-wrap: anywhere; color: var(--text-soft); }
+  table.data.pb-table td:nth-child(4) { grid-area: note; color: var(--text-soft); }
+  table.data.pb-table td:nth-child(5) { display: none; }
+  table.data.pb-table td.pb-row-acts { grid-area: acts; display: flex; justify-content: flex-start; margin-top: 6px; gap: 4px; }
+  table.data.pb-table td[colspan] { grid-column: 1 / -1; }
+  table.data.pb-table .pb-editing { grid-template-areas: "name name" "phone phone" "email email" "note note" "acts acts"; }
+  table.data.pb-table .pb-editing td { margin-bottom: 6px; }
+  .pb-act, .pb-row-acts .icon-btn, .pb-act-gap { width: 42px; height: 42px; }
 }

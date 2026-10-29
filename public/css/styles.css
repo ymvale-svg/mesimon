@@ -2722,12 +2722,16 @@ input[type="color"] { width: 46px; height: 30px; padding: 2px; cursor: pointer; 
 }
 .pb-row:last-child { border-bottom: 0; }
 .pb-row:hover { background: var(--surface-2); }
-.pb-main { flex: 1; min-width: 0; }
+/* ‎width: 0‎ — שורה עם מייל ארוך לא תרחיב את החלון; הטקסט נחתך בשלוש נקודות */
+.pb-main { flex: 1 1 0; width: 0; min-width: 0; }
+.pb-main .pb-note, .pb-main .pb-detail { color: var(--text-soft); }
 .pb-main > * { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pb-detail { text-align: right; }
 .pb-acts, .pb-row-acts { display: flex; gap: 2px; flex: none; }
 .pb-row-acts { justify-content: flex-end; white-space: nowrap; }
-.pb-act { text-decoration: none; }
+.pb-act { text-decoration: none; border-radius: 50%; width: 36px; height: 36px; display: inline-grid; place-items: center; }
+.pb-act:hover { background: var(--brand-light); }
+.pb-act-gap { display: inline-block; width: 36px; flex: none; }
 .pb-row mark, .pb-table mark { background: #fef08a; color: inherit; border-radius: 2px; padding: 0 1px; }
 .pb-empty { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; padding: 6px 2px; }
 .pb-hint { padding: 6px 2px 0; }
@@ -2758,7 +2762,7 @@ input[type="color"] { width: 46px; height: 30px; padding: 2px; cursor: pointer; 
   transition: box-shadow .16s, transform .16s, background .16s;
 }
 .ap-avatar.is-vendor { background: #fff7ed; color: #c2410c; }
-.ap-avatar.is-me { font-size: 18px; }
+.ap-avatar.is-me { border-style: dashed; border-color: var(--brand); }
 .ap-avatar.sm { width: 26px; height: 26px; font-size: 11px; flex: none; }
 .ap-circle:hover .ap-avatar { transform: translateY(-1px); background: var(--brand-light); }
 .ap-name {
@@ -2782,7 +2786,7 @@ input[type="color"] { width: 46px; height: 30px; padding: 2px; cursor: pointer; 
 .ap-check { background: var(--brand-dark); color: #fff; }
 .ap-badge { background: var(--brand-light); color: var(--brand-dark); }
 .ap-more .ap-avatar { background: none; border: 1.5px dashed var(--border-strong); color: var(--text-mute); font-size: 18px; }
-.ap-hint { margin-top: 2px; }
+.ap-hint { margin-top: 2px; color: var(--text-soft); }
 .ap-pop {
   position: absolute; z-index: 30; inset-inline-start: 0; top: 74px;
   width: min(320px, 100%); background: var(--surface); border: 1px solid var(--border);
@@ -2806,7 +2810,6 @@ input[type="color"] { width: 46px; height: 30px; padding: 2px; cursor: pointer; 
 .voice-overlay.is-asking .voice-input,
 .voice-overlay.is-asking .voice-hint,
 .voice-overlay.is-asking .voice-foot { display: none; }
-.voice-overlay.is-asking .voice-mic { width: 84px; height: 84px; font-size: 34px; }
 .voice-q { font-size: 19px; font-weight: 800; text-align: center; color: var(--brand-dark); }
 .voice-chips { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
 .voice-chip {
@@ -2823,4 +2826,16 @@ input[type="color"] { width: 46px; height: 30px; padding: 2px; cursor: pointer; 
   display: flex; flex-direction: column; gap: 4px; font-size: 15px;
 }
 .voice-summary b { font-size: 16px; }
-.voice-said { text-align: center; color: var(--text-soft); font-size: 14px; }
+.voice-summary .mute-sm { color: var(--text-soft); }
+/*
+ * בזמן השאלות — השאלה בראש, והמיקרופון קטן מתחתיה: העין צריכה לפגוש קודם
+ * את מה שנשאל, ורק אחר כך את הדרך לענות.
+ */
+.voice-overlay.is-asking .voice-panel > * { order: 5; }
+.voice-overlay.is-asking .voice-top { order: 0; }
+.voice-overlay.is-asking .voice-qa { order: 1; }
+.voice-overlay.is-asking .voice-mic { order: 2; width: 68px; height: 68px; font-size: 28px; margin: 2px 0; }
+.voice-overlay.is-asking .voice-status { order: 3; font-weight: 600; font-size: 13.5px; }
+.voice-overlay.is-asking .voice-live { order: 4; font-size: 15px; }
+.voice-said { text-align: center; color: var(--text-soft); font-size: 14px; margin-top: 4px; }
+.pb-head-acts { display: flex; gap: 8px; flex-wrap: wrap; }

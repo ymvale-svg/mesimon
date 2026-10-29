@@ -55,7 +55,7 @@ const AssigneePicker = (() => {
     let touched = false;
 
     const row = el('div.ap-row', { role: 'group', 'aria-label': 'בחירת אחראי' });
-    const hint = el('div.ap-hint.mute-sm', { text: extras ? 'לחיצה — אחראי · לחיצה ארוכה — אחראי נוסף' : '' });
+    const hint = el('div.ap-hint.mute-sm', { text: extras ? 'לחיצה ארוכה על עיגול — הוספה כאחראי נוסף' : '' });
     select.style.display = 'none';
     const node = el('div.ap', {}, [row, hint, select]);
 
@@ -105,7 +105,7 @@ const AssigneePicker = (() => {
         title: `${shortName(o.label)}${vendor ? ' (ספק)' : ''}${extras ? ' · לחיצה ארוכה — אחראי נוסף' : ''}`,
         'data-value': value
       }, [
-        el(`span.ap-avatar${vendor ? '.is-vendor' : ''}${isMe ? '.is-me' : ''}`, {}, [isMe ? '👤' : UI.initials(shortName(o.label))]),
+        el(`span.ap-avatar${vendor ? '.is-vendor' : ''}${isMe ? '.is-me' : ''}`, {}, [UI.initials(shortName(o.label))]),
         extra ? el('span.ap-badge', { text: '＋' }) : null,
         primary ? el('span.ap-check', { text: '✓' }) : null,
         el('span.ap-name', { text: label })

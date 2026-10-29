@@ -17,6 +17,8 @@ const PhonebookView = (() => {
   const { el } = UI;
 
   const isPhone = () => window.matchMedia?.('(pointer: coarse)').matches;
+  // מקום ריק במקום כפתור חסר — כך 📞 ✉ ✨ באותו טור בכל השורות
+  const gap = () => el('span.pb-act-gap', { 'aria-hidden': 'true' });
 
   /** טקסט עם הדגשה של מה שהוקלד */
   function marked(text, q) {
@@ -31,10 +33,11 @@ const PhonebookView = (() => {
   /** 📞 — בטלפון מחייג; במחשב מעתיק את המספר, כי ‎tel:‎ במחשב פותח אפליקציה זרה */
   function callButton(phone) {
     if (!phone) return null;
-    if (isPhone()) return el('a.icon-btn.pb-act', { href: `tel:${phone.replace(/[^\d+]/g, '')}`, title: `חיוג ל-${phone}` }, ['📞']);
+    if (isPhone()) return el('a.icon-btn.pb-act', { href: `tel:${phone.replace(/[^\d+]/g, '')}`, title: `חיוג ל-${phone}`, 'aria-label': `חיוג ל-${phone}` }, ['📞']);
     return el('button.icon-btn.pb-act', {
       type: 'button',
       title: `העתקת ${phone}`,
+      'aria-label': `העתקת המספר ${phone}`,
       onclick: async (e) => {
         e.stopPropagation();
         try { await navigator.clipboard.writeText(phone); UI.success(`${phone} הועתק`); } catch { UI.toast(phone); }
@@ -43,7 +46,7 @@ const PhonebookView = (() => {
   }
 
   const mailButton = (email) => (email
-    ? el('a.icon-btn.pb-act', { href: `mailto:${email}`, title: `מייל ל-${email}`, onclick: (e) => e.stopPropagation() }, ['✉'])
+    ? el('a.icon-btn.pb-act', { href: `mailto:${email}`, title: `מייל ל-${email}`, 'aria-label': `מייל ל-${email}`, onclick: (e) => e.stopPropagation() }, ['✉'])
     : null);
 
   /** ✨ משימת AI לאיש הזה — השם, המייל והטלפון כבר ממולאים */
@@ -52,6 +55,7 @@ const PhonebookView = (() => {
     return el('button.icon-btn.pb-act.pb-ai', {
       type: 'button',
       title: `משימת AI ל${entry.name}`,
+      'aria-label': `משימת AI ל${entry.name}`,
       onclick: (e) => {
         e.stopPropagation();
         AiTaskView.openDialog({ contact: { name: entry.name, email: entry.email, phone: entry.phone, type: 'external', refId: null, source: 'phonebook' } });
@@ -131,7 +135,7 @@ const PhonebookView = (() => {
             entry.email ? marked(entry.email, entry.match === 'email' ? q : '') : null
           ])
         ]),
-        el('div.pb-acts', {}, [callButton(entry.phone), mailButton(entry.email), aiButton(entry)])
+        el('div.pb-acts', {}, [callButton(entry.phone) ?? gap(), mailButton(entry.email) ?? gap(), aiButton(entry)])
       ]);
     }
 
@@ -283,10 +287,10 @@ const PhonebookView = (() => {
         el('td', { text: e.note }),
         el('td.mute-sm', { text: e.updatedBy ? `${e.updatedBy} · ${UI.formatDate(e.updatedAt)}` : '' }),
         el('td.pb-row-acts', {}, [
-          callButton(e.phone), mailButton(e.email), aiButton(e),
-          el('button.icon-btn', { type: 'button', title: 'עריכה', onclick: () => { editing = e.id; draw(); } }, ['✏']),
+          callButton(e.phone) ?? gap(), mailButton(e.email) ?? gap(), aiButton(e),
+          el('button.icon-btn', { type: 'button', title: 'עריכה', 'aria-label': `עריכת ${e.name}`, onclick: () => { editing = e.id; draw(); } }, ['✏']),
           el('button.icon-btn', {
-            type: 'button', title: 'מחיקה',
+            type: 'button', title: 'מחיקה', 'aria-label': `מחיקת ${e.name}`,
             onclick: async () => {
               if (!await UI.confirm(`למחוק את ${e.name} מהאלפון? הרשומה תימחק לכל העובדים.`, { danger: true, okText: 'מחיקה' })) return;
               try { await API.del(`/api/phonebook/${e.id}`); UI.success('נמחק'); load(); } catch (err) { UI.error(err); }
@@ -347,15 +351,17 @@ const PhonebookView = (() => {
           el('div.sub', { text: 'טלפונים ומיילים משותפים לכל העובדים. כל אחד יכול להוסיף, לעדכן ולמחוק.' })
         ]),
         el('div.spacer'),
-        el('button.btn.btn-primary', { onclick: () => editDialog({}, { onSaved: load }) }, ['＋ הוספה']),
-        el('button.btn', { onclick: () => fileInput.click() }, ['⬆ ייבוא מאקסל']),
-        el('a.btn', { href: '/api/phonebook/export', download: '' }, ['⬇ ייצוא לאקסל']),
+        el('div.pb-head-acts', {}, [
+          el('button.btn.btn-primary', { onclick: () => editDialog({}, { onSaved: load }) }, ['＋ הוספה']),
+          el('button.btn', { onclick: () => fileInput.click() }, ['⬆ ייבוא מאקסל']),
+          el('a.btn', { href: '/api/phonebook/export', download: '' }, ['⬇ ייצוא'])
+        ]),
         fileInput
       ]),
       el('div.card', {}, [
         el('div.card-pad', {}, [
           el('div.flex.pb-tools', {}, [search, summary]),
-          el('div.table-wrap', {}, [
+          el('div.table-wrap.pb-table-wrap', {}, [
             el('table.data.pb-table', {}, [
               el('thead', {}, [el('tr', {}, ['שם', 'טלפון', 'מייל', 'הערה', 'עודכן', ''].map((h) => el('th', { text: h })))]),
               tbody
