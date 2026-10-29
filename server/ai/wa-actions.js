@@ -42,7 +42,7 @@ const ACTIONS = [
   },
   {
     key: 'voice_notes', icon: '🎙', label: 'הודעות קוליות', channel: 'private',
-    description: 'הודעה קולית לבוט מתומללת (Google Speech-to-Text) ומטופלת כמו הודעה כתובה — הבוט חוזר בשורה על מה ששמע. כמה בקשות בהודעה אחת — אחת-אחת. דורש GOOGLE_SPEECH_API_KEY בשרת.',
+    description: 'הודעה קולית לבוט מתומללת (OpenAI או Google) ומטופלת כמו הודעה כתובה — הבוט חוזר בשורה על מה ששמע. כמה בקשות בהודעה אחת — אחת-אחת. דורש בשרת OPENAI_API_KEY (מומלץ) או GOOGLE_SPEECH_API_KEY.',
     examples: [],
     enabled: true
   },
