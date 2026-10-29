@@ -67,7 +67,8 @@ const AiTaskView = (() => {
       // נפתח מהצעה שהגיעה מהמייל — פרטי הנמען חולצו מתוכן שלא אנחנו כתבנו
       suggestionId: opts.suggestionId ?? null,
       fromEmail: Boolean(opts.suggestionId),
-      channel: status.mail ? 'email' : 'whatsapp',
+      // וואטסאפ קיים כאן רק למי שחיבר אותו; מי שלא — הכול במייל
+      channel: status.mail || status.whatsapp?.state !== 'authorized' ? 'email' : 'whatsapp',
       projectId: opts.projectId ?? '',
       // מהקלטה — היעד שנאמר כבר מולא
       dueDate: opts.dueDate ?? '',
@@ -133,14 +134,20 @@ const AiTaskView = (() => {
       const nameInput = picker.input;
       showColleague();
 
+      /*
+       * בחירת ערוץ רק למי שחיבר וואטסאפ. מי שלא חיבר אינו רואה כפתור אפור
+       * של ערוץ שאינו קיים אצלו, וגם לא שדה טלפון — הפנייה יוצאת במייל.
+       */
       const waReady = status.whatsapp?.state === 'authorized';
-      const channelSeg = el('div.seg', {}, [
-        ['email', '📧 מייל', status.mail, 'מייל יוצא מתיבת ה-Gmail שלך — מחברים מ"החשבון שלי ← Gmail ועוזר ה-AI"'],
-        ['whatsapp', '💬 וואטסאפ', waReady, 'הוואטסאפ שלך אינו מחובר — מחברים מ"החשבון שלי"']
-      ].map(([key, label, ok, why]) => el(`button${state.channel === key ? '.active' : ''}`, {
-        type: 'button', disabled: !ok, title: ok ? '' : why,
-        onclick: () => { read(); state.channel = key; draw(); }
-      }, [label])));
+      const channelSeg = waReady
+        ? el('div.seg', {}, [
+            ['email', '📧 מייל', status.mail, 'מייל יוצא מתיבת ה-Gmail שלך — מחברים מ"החשבון שלי ← Gmail ועוזר ה-AI"'],
+            ['whatsapp', '💬 וואטסאפ', true, '']
+          ].map(([key, label, ok, why]) => el(`button${state.channel === key ? '.active' : ''}`, {
+            type: 'button', disabled: !ok, title: ok ? '' : why,
+            onclick: () => { read(); state.channel = key; draw(); }
+          }, [label])))
+        : null;
 
       const projectSelect = UI.select([{ value: '', label: 'ללא פרויקט' },
         ...App.state.projects.filter((p) => p.mine || String(p.id) === String(state.projectId))
@@ -186,12 +193,12 @@ const AiTaskView = (() => {
         el('div.row', {}, [
           UI.field('שם', picker.node),
           UI.field('מייל', emailInput),
-          UI.field('טלפון (לוואטסאפ)', phoneInput)
+          waReady ? UI.field('טלפון', phoneInput) : null
         ]),
         extrasBox,
         colleagueNote,
         el('div.row', {}, [
-          UI.field('ערוץ ראשון', channelSeg),
+          channelSeg ? UI.field('ערוץ ראשון', channelSeg) : null,
           UI.field('פרויקט', projectSelect),
           UI.field('תאריך יעד', dueInput)
         ]),
@@ -339,6 +346,9 @@ const AiTaskView = (() => {
     const daysWa = num(policy.daysBetweenWhatsapp, 1, 30);
     const approveAll = el('input', { type: 'checkbox', checked: Boolean(policy.approveReminders) });
 
+    // בלי וואטסאפ מחובר — אין מעקב בוואטסאפ, ושורותיו אינן מוצגות
+    if (!waReady) wa.checked = false;
+
     const summary = () => `עד ${emailAttempts.value} מיילים כל ${daysEmail.value} ימים${wa.checked ? `, ואז עד ${waAttempts.value} הודעות וואטסאפ כל ${daysWa.value} ימים` : ''}${approveAll.checked ? ' · כל תזכורת באישור' : ' · תזכורות יוצאות לבד'}`;
     const sumNode = el('span', { text: summary() });
     for (const i of [emailAttempts, daysEmail, wa, waAttempts, daysWa, approveAll]) i.addEventListener('input', () => { sumNode.textContent = summary(); });
@@ -346,14 +356,14 @@ const AiTaskView = (() => {
     const node = el('details.ai-policy', {}, [
       el('summary', {}, ['🔁 מדיניות מעקב: ', sumNode]),
       el('div.ai-policy-grid', {}, [
-        el('label', {}, ['מיילים שלא נענו לפני מעבר לוואטסאפ ', emailAttempts]),
+        el('label', {}, [waReady ? 'מיילים שלא נענו לפני מעבר לוואטסאפ ' : 'מיילים שלא נענו לפני עצירה ', emailAttempts]),
         el('label', {}, ['ימי עבודה בין מיילים ', daysEmail]),
-        el('label.checkbox', {}, [wa, ' להמשיך בוואטסאפ מהמספר שלי']),
-        el('label', {}, ['הודעות וואטסאפ שלא נענו לפני עצירה ', waAttempts]),
-        el('label', {}, ['ימי עבודה בין הודעות וואטסאפ ', daysWa]),
+        waReady ? el('label.checkbox', {}, [wa, ' להמשיך בוואטסאפ מהמספר שלי']) : null,
+        waReady ? el('label', {}, ['הודעות וואטסאפ שלא נענו לפני עצירה ', waAttempts]) : null,
+        waReady ? el('label', {}, ['ימי עבודה בין הודעות וואטסאפ ', daysWa]) : null,
         el('label.checkbox', {}, [approveAll, ' כל תזכורת מחכה לאישור שלי (במקום לצאת לבד)'])
       ]),
-      !waReady ? el('div.mute-sm', { text: 'הוואטסאפ שלך עוד לא מחובר. בלי חיבור, המעקב ייעצר אחרי המיילים ותקבל/י התראה. מחברים מ"החשבון שלי".' }) : null,
+      !waReady ? el('div.mute-sm', { text: 'רוצים גם מעקב בוואטסאפ? מחברים מ"החשבון שלי".' }) : null,
       el('div.mute-sm', { text: 'שליחה רק בשעות העבודה ובימים א׳–ה׳. כל תשובה של הנמען מאפסת את הספירה. בכל בוקר מופיע "היום יוצאים", ואפשר לעצור או לדחות כל נדנוד לפני שיוצא.' })
     ]);
 
@@ -667,13 +677,14 @@ const AiTaskView = (() => {
       onPick: (c) => { email.value = c.email || email.value; phone.value = c.phone || phone.value; }
     });
     const name = picker.input;
-    const policy = policyEditor(a.policy);
+    const waReady = Boolean(a.channels?.waConnected);
+    const policy = policyEditor(a.policy, { waReady });
     policy.node.open = true;
     const save = el('button.btn.btn-primary', {}, ['שמירה']);
     const m = UI.modal({
       title: 'פרטי המעקב',
       body: el('div', {}, [
-        el('div.row', {}, [UI.field('שם', picker.node), UI.field('מייל', email), UI.field('טלפון', phone)]),
+        el('div.row', {}, [UI.field('שם', picker.node), UI.field('מייל', email), waReady ? UI.field('טלפון', phone) : null]),
         policy.node
       ]),
       footer: [save, el('div.spacer'), el('button.btn', { onclick: () => m.close() }, ['ביטול'])]

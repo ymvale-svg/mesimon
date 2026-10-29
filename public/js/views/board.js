@@ -883,16 +883,18 @@ const BoardView = (() => {
       ])
     ]);
 
-    const saveBtn = el('button.btn.btn-primary', {}, [isEdit ? 'שמירת שינויים' : 'יצירת משימה']);
+    const saveBtn = el('button.btn.btn-primary', {}, [isEdit ? 'שמירת שינויים' : 'שמירה']);
+    // יצירה אינה פותחת את הכרטיס המלא מעצמה — מי שרוצה להמשיך לערוך בוחר בזה
+    const saveOpenBtn = isEdit ? null : el('button.btn', {}, ['שמירה ופתיחה בהרחבה']);
     const m = UI.modal({
       title: isEdit
         ? `עריכת משימה #${task.id}`
         : (opts.parentTitle ? `תת-משימה בתוך "${opts.parentTitle}"` : 'משימה חדשה'),
       body,
-      footer: [saveBtn, el('div.spacer')]
+      footer: [saveBtn, saveOpenBtn, el('div.spacer')]
     });
 
-    saveBtn.addEventListener('click', async () => {
+    const save = async ({ openAfter = false } = {}) => {
       const title = titleInput.value.trim();
       if (!title) return UI.toast('נדרשת כותרת למשימה', 'error');
       const [aType, aId] = assigneeSelect.value ? assigneeSelect.value.split(':') : [null, null];
@@ -923,28 +925,35 @@ const BoardView = (() => {
       }
 
       saveBtn.disabled = true;
+      if (saveOpenBtn) saveOpenBtn.disabled = true;
       try {
         let created = null;
         if (isEdit) await API.updateTask(task.id, payload);
         else created = await API.createTask(payload);
         m.close();
-        UI.success(isEdit ? 'המשימה עודכנה' : 'המשימה נוצרה');
+        /**
+         * משימה חדשה אינה נפתחת מעצמה — הכרטיס המלא קפץ גם למי שרק רצה
+         * לרשום משימה ולהמשיך. כדי שלא "תיעלם" (משימה בלי אחראי אינה בדף
+         * הבית, ובלי פרויקט היא בתחתית הלוח), ההודעה אומרת אצל מי ובאיזה
+         * פרויקט היא יושבת, עם "פתיחה". מי שרוצה להמשיך לערוך — "שמירה
+         * ופתיחה בהרחבה".
+         */
+        if (isEdit) UI.success('המשימה עודכנה');
+        else if (!openAfter) UI.taskCreated(created?.task);
         await App.reloadReference();
         // הדיאלוג נפתח גם מהסרגל העליון, כשהמסך שמאחוריו אינו הלוח
         await App.refreshView();
         App.refreshNotifications();
-        /**
-         * משימה חדשה נפתחת מיד. בלי זה היא "נעלמת": משימה בלי אחראי אינה
-         * מופיעה בדף הבית, ומשימה בלי פרויקט נופלת לקבוצת "ללא פרויקט"
-         * בתחתית הלוח — והיוצר נשאר בלי שום סימן לאן הלכה.
-         */
         opts.onSaved?.(created?.task ?? null);
-        if (created?.task?.id) TaskCardView.open(created.task.id);
+        if (openAfter && created?.task?.id) TaskCardView.open(created.task.id);
       } catch (err) {
         saveBtn.disabled = false;
+        if (saveOpenBtn) saveOpenBtn.disabled = false;
         UI.error(err);
       }
-    });
+    };
+    saveBtn.addEventListener('click', () => save());
+    saveOpenBtn?.addEventListener('click', () => save({ openAfter: true }));
   }
 
   // ------------------------------------------------------------- דיאלוג פרויקט

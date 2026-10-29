@@ -565,7 +565,11 @@ const App = (() => {
     home: { label: 'דף הבית', icon: 'home', render: (c) => HomeView.render(c) },
     board: { label: 'לוח המשימות', icon: 'board', render: (c, p) => BoardView.render(c, { ...p, scope: 'internal' }) },
     vendorBoards: { label: 'כל משימות הספקים', icon: 'vendors', render: (c, p) => BoardView.render(c, { ...p, scope: 'vendors' }) },
-    tracker: { label: 'בקרת משימות', icon: 'reports', render: (c, p) => TrackerView.render(c, p) },
+    /*
+     * מוסתר מכולם, גם ממנהל המערכת, עד שישופר: אינו בתפריט, וניווט אליו
+     * (קישור שנשמר) מגיע לדף הבית. הקוד נשאר — ‎TrackerView‎.
+     */
+    tracker: { label: 'בקרת משימות', icon: 'reports', hidden: true, render: (c, p) => TrackerView.render(c, p) },
     archive: { label: 'ארכיון', icon: 'archive', render: (c, p) => BoardView.render(c, { ...p, scope: 'internal', archived: true }) },
     reports: { label: 'דוחות', icon: 'reports', render: (c) => ReportsView.render(c) },
     admin: { label: 'ניהול המערכת', icon: 'admin', render: (c, p) => AdminView.render(c, p) },
@@ -573,6 +577,7 @@ const App = (() => {
   };
 
   function navigate(name, params = {}) {
+    if (ROUTES[name]?.hidden) name = 'home';
     state.route = { name, params };
     closeDrawer();
     // הפתיחה המהירה צפה על ה-body ולכן אינה נמחקת עם המסך — היא שייכת
@@ -1788,7 +1793,6 @@ const App = (() => {
     // יומן — למזכירות בלבד (הסימון בכרטיס העובד)
     if (state.actor.secretary) add('calendar', {}, { icon: el('span.nav-emoji', { text: '📅' }) });
     add('board');
-    add('tracker');
     if (may('view_vendor_boards')) add('vendorBoards');
 
     // הבלוק הזה כולו לא נבנה לספק — מסלול הספק חזר כבר למעלה עם רשימת הניווט שלו

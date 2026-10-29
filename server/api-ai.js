@@ -211,7 +211,8 @@ function register(router, h) {
         contact: b.contact ?? {},
         dueDate: b.dueDate ?? null,
         projectName: project?.name ?? null,
-        channel: b.channel === 'whatsapp' ? 'whatsapp' : 'email',
+        // וואטסאפ רק למי שחיבר אותו — אחרת הנוסח נכתב למייל
+        channel: b.channel === 'whatsapp' && WhatsApp.isReady(actor.id) ? 'whatsapp' : 'email',
         feedback: String(b.feedback ?? '').trim(),
         previous: b.previous ?? null
       });
@@ -229,7 +230,13 @@ function register(router, h) {
 
     const instruction = String(b.instruction ?? '').trim();
     const draft = b.draft ?? {};
-    const channel = b.channel === 'whatsapp' ? 'whatsapp' : 'email';
+    /*
+     * וואטסאפ רק למי שחיבר אותו. בקשה ישנה, או משימה מהקלטה, שביקשה וואטסאפ
+     * בלי חיבור יוצאת במייל — ולא נתקעת על ערוץ שאינו קיים.
+     */
+    const waReady = WhatsApp.isReady(actor.id);
+    const channel = b.channel === 'whatsapp' && waReady ? 'whatsapp' : 'email';
+    const policy = { ...(b.policy ?? {}), ...(waReady ? {} : { whatsapp: false }) };
     const contact = {
       name: String(b.contact?.name ?? '').trim(),
       email: String(b.contact?.email ?? '').trim(),
@@ -256,7 +263,7 @@ function register(router, h) {
     } else if (channel === 'email') {
       if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(contact.email)) throw badRequest('נדרשת כתובת מייל תקינה לנמען');
       if (!String(draft.subject ?? '').trim()) throw badRequest('נדרש נושא למייל');
-      if (!Gmail.canSend(actor.id)) throw badRequest('כדי לשלוח מייל צריך לחבר את תיבת ה-Gmail שלך ("החשבון שלי ← Gmail ועוזר ה-AI"). אפשר גם לפתוח בוואטסאפ');
+      if (!Gmail.canSend(actor.id)) throw badRequest(`כדי לשלוח מייל צריך לחבר את תיבת ה-Gmail שלך ("החשבון שלי ← Gmail ועוזר ה-AI").${waReady ? ' אפשר גם לפתוח בוואטסאפ' : ''}`);
     } else {
       if (!WhatsApp.normalizePhone(contact.phone)) throw badRequest('נדרש מספר טלפון תקין לנמען');
       if (!WhatsApp.isReady(actor.id)) throw badRequest('הוואטסאפ שלך אינו מחובר. מחברים אותו מ"החשבון שלי"');
@@ -295,7 +302,7 @@ function register(router, h) {
     let sendError = null;
     try {
       const owner = D.get('SELECT id, full_name, email FROM users WHERE id = ?', actor.id);
-      await AiTasks.launch({ taskId, owner, instruction, draft, contact, policy: b.policy ?? {}, channel });
+      await AiTasks.launch({ taskId, owner, instruction, draft, contact, policy, channel });
     } catch (err) {
       // המשימה והטיוטה נשמרו; אפשר לנסות לשלוח שוב מהכרטיס אחרי תיקון התקלה
       sendError = err.message;
