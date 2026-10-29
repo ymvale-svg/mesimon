@@ -59,11 +59,11 @@ const TrackerView = (() => {
     // ולהנהלה, ובדיקה ל-'department' בלבד נעלה אותם החוצה
     && ['department', true].includes(App.state.permissions?.view_internal_board);
 
-  /** מזהי חברי המחלקה שלי, כולל אני — הבסיס לחתך "המחלקה שלי" */
+  /** מזהי חברי המחלקה שלי ותתי-המחלקות שלה, כולל אני — הבסיס לחתך "המחלקה שלי" */
   const myDepartmentUserIds = () => {
-    const dept = App.state.actor?.departmentId ?? null;
+    const depts = new Set(App.state.actor?.departmentIds ?? [App.state.actor?.departmentId ?? null]);
     return new Set((App.state.users ?? [])
-      .filter((u) => u.departmentId === dept)
+      .filter((u) => depts.has(u.departmentId))
       .map((u) => u.id));
   };
 

@@ -25,6 +25,17 @@ const BoardView = (() => {
    */
   const isOrgWide = () => ['superadmin', 'admin', 'executive'].includes(App.state.actor?.role);
 
+  /**
+   * מנהל מחלקה נפתח על "משימות שנתתי" — המשימות שהוא פתח — ובבחירה אחת
+   * עובר ל"כל משימות המחלקה". כל המחלקה היא רשימה ארוכה מדי כברירת מחדל,
+   * ומה שמנהל בודק ביום-יום הוא מה שהוא הטיל על אחרים.
+   */
+  const isDeptManager = () => App.state.actor?.role === 'manager';
+  const REACH_OPTIONS = [
+    { value: 'given', label: 'משימות שנתתי' },
+    { value: 'department', label: 'כל משימות המחלקה' }
+  ];
+
   /*
    * ערך המסנן "פתוחות בלבד". אינו מפתח סטטוס אמיתי, ולכן הוא נבחר כמחרוזת
    * שלא תתנגש עם מפתח עמודה — עמודות נוצרות מקוד ומקבלות מפתחות כמו
@@ -75,6 +86,14 @@ const BoardView = (() => {
         : (pick('status', params.status) || (saved.status === undefined ? OPEN_ONLY : '')),
       boardId: pick('boardId', params.boardId),
       departmentId: pick('departmentId', params.departmentId),
+      /*
+       * קיצור דרך (פרויקט, מחלקה, "שלי") מבקש תמונה שלמה, ולכן פותח את כל
+       * המחלקה; פתיחה רגילה חוזרת למה שנבחר בפעם הקודמת, ובראשונה — שנתתי.
+       */
+      reach: !isDeptManager() ? ''
+        : params.reach ?? (params.projectId || params.departmentId || params.mine
+          ? 'department'
+          : (saved.reach || 'given')),
       // חיפוש טקסט לא נשמר בכוונה
       q: '',
       archived: params.archived ? '1' : '',
@@ -100,7 +119,7 @@ const BoardView = (() => {
    * שנפתח עם חיפוש ישן נראה כאילו חסרות בו משימות.
    */
   const FILTER_KEY = 'mesimon.boardFilters';
-  const PERSISTED = ['projectId', 'assignee', 'priority', 'status', 'boardId', 'departmentId', 'onlyOverdue', 'pendingReview'];
+  const PERSISTED = ['projectId', 'assignee', 'priority', 'status', 'boardId', 'departmentId', 'reach', 'onlyOverdue', 'pendingReview'];
 
   const localFilters = () => {
     try { return JSON.parse(localStorage.getItem(FILTER_KEY) ?? '{}'); } catch { return {}; }
@@ -285,6 +304,9 @@ const BoardView = (() => {
         }, [label])
       )),
       el('div.sep'),
+      ...(isDeptManager()
+        ? [UI.select(REACH_OPTIONS, filters.reach || 'given', { onchange: (e) => set('reach', e.target.value) })]
+        : []),
       UI.select(projectOptions, filters.projectId, { onchange: (e) => set('projectId', e.target.value) }),
       UI.select(assigneeOptions, filters.assignee, { onchange: (e) => set('assignee', e.target.value) }),
       UI.select(statusOptions, filters.status, { onchange: (e) => set('status', e.target.value) }),
@@ -293,7 +315,7 @@ const BoardView = (() => {
 
     if (isOrgWide() && departments.length) {
       const departmentOptions = [{ value: '', label: 'כל המחלקות' },
-        ...departments.map((d) => ({ value: d.id, label: d.name }))];
+        ...departments.map((d) => ({ value: d.id, label: d.label ?? d.name }))];
       items.push(UI.select(departmentOptions, filters.departmentId, { onchange: (e) => set('departmentId', e.target.value) }));
     }
 

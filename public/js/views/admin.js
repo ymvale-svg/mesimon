@@ -204,7 +204,7 @@ const AdminView = (() => {
       const roleSelect = UI.select(data.assignableRoles ?? [{ value: 'employee', label: 'עובד פנימי' }], 'employee');
       const deptSelect = UI.select([
         { value: '', label: 'ללא שיוך' },
-        ...(data.departments ?? []).map((d) => ({ value: String(d.id), label: d.name }))
+        ...(data.departments ?? []).map((d) => ({ value: String(d.id), label: d.label ?? d.name }))
       ], '');
 
       const approve = el('button.btn.btn-sm.btn-primary', {
@@ -487,16 +487,19 @@ const AdminView = (() => {
 
     // המחלקות הן ישויות במערכת — בחירה מרשימה סגורה ולא הקלדה חופשית,
     // כדי שלא ייווצרו מחלקות כפולות בגלל הבדל באיות.
+    // מנהל מחלקה בוחר רק בין המחלקה שלו לתתי-המחלקות שלה — השרת כופה זאת בכל מקרה
+    const myDepts = new Set(App.state.actor?.departmentIds ?? []);
+    const pickable = (listData.departments ?? []).filter((d) => !scoped || myDepts.has(d.id));
     const deptOptions = [
-      { value: '', label: 'ללא שיוך' },
-      ...(listData.departments ?? []).map((d) => ({ value: String(d.id), label: d.name }))
+      ...(scoped ? [] : [{ value: '', label: 'ללא שיוך' }]),
+      ...pickable.map((d) => ({ value: String(d.id), label: d.label ?? d.name }))
     ];
     if (listData.mayManageDepartments) deptOptions.push({ value: NEW_DEPT, label: '＋ הגדרת מחלקה חדשה…' });
     const deptSelect = UI.select(
       deptOptions,
       String(user?.departmentId ?? (scoped ? listData.departmentId : '') ?? ''),
-      // מנהל מחלקה מוסיף עובדים למחלקה שלו בלבד, והשרת כופה זאת בכל מקרה
-      scoped ? { disabled: true } : {}
+      // מנהל של מחלקה בלי תתי-מחלקות — אין מה לבחור
+      scoped && pickable.length < 2 ? { disabled: true } : {}
     );
 
     /**
@@ -659,11 +662,11 @@ const AdminView = (() => {
     UI.mount(body,
       el('div.alert.alert-info.mb', {}, [
         el('span', { text: '🏢' }),
-        el('div', { text: 'המחלקה היא היחידה שלפיה נחתכות ההרשאות: מנהל מחלקה רואה ומנהל את המשימות והעובדים של המחלקה שלו. משימה יכולה להיות מחלקתית או ארגונית.' })
+        el('div', { text: 'המחלקה היא היחידה שלפיה נחתכות ההרשאות: מנהל מחלקה רואה ומנהל את המשימות והעובדים של המחלקה שלו ושל תתי-המחלקות שלה (למשל הנדסה וביצוע › אתר אלעד). משימה יכולה להיות מחלקתית או ארגונית.' })
       ]),
       el('div.flex.mb', {}, [
         el('div.spacer'),
-        el('button.btn.btn-primary', { onclick: () => departmentDialog() }, ['＋ מחלקה חדשה'])
+        el('button.btn.btn-primary', { onclick: () => departmentDialog(null, data.departments) }, ['＋ מחלקה חדשה'])
       ]),
       el('div.table-wrap', {}, [
         el('table.data', {}, [
@@ -673,7 +676,10 @@ const AdminView = (() => {
           ])]),
           el('tbody', {}, data.departments.length ? data.departments.map((d) =>
             el('tr', {}, [
-              el('td', {}, [el('b', { text: d.name })]),
+              // תת-מחלקה מוזחת ומוצגת עם שרשרת ההורים, כדי שהעץ ייקרא מהטבלה
+              el('td', {}, d.parentId
+                ? [el('span.mute-sm', { text: `${d.label.slice(0, -d.name.length)}` }), el('b', { text: d.name })]
+                : [el('b', { text: d.name })]),
               el('td', {}, [d.managerName
                 ? el('div.flex', {}, [UI.avatar(d.managerName, { small: true }), el('span', { text: d.managerName })])
                 : el('span.mute-sm', { text: 'לא הוגדר' })]),
@@ -685,7 +691,11 @@ const AdminView = (() => {
               })]),
               el('td', {}, [
                 el('div.flex', {}, [
-                  el('button.btn.btn-sm', { onclick: () => departmentDialog(d) }, ['עריכה']),
+                  el('button.btn.btn-sm', { onclick: () => departmentDialog(d, data.departments) }, ['עריכה']),
+                  el('button.btn.btn-sm', {
+                    title: `תת-מחלקה תחת ${d.label}`,
+                    onclick: () => departmentDialog(null, data.departments, d.id)
+                  }, ['＋ תת-מחלקה']),
                   el('button.btn.btn-sm.btn-danger', {
                     onclick: async () => {
                       if (!await UI.confirm(`למחוק את המחלקה "${d.name}"?`, { danger: true, okText: 'מחיקה' })) return;
@@ -708,9 +718,23 @@ const AdminView = (() => {
     );
   }
 
-  function departmentDialog(dept = null) {
+  function departmentDialog(dept = null, all = [], parentId = null) {
     const isEdit = !!dept;
     const nameInput = el('input', { type: 'text', value: dept?.name ?? '' });
+
+    /*
+     * מחלקת אם. מחלקה אינה יכולה להיות תחת עצמה או תחת אחת מתתי-המחלקות
+     * שלה, ולכן הן אינן מוצעות; השרת בודק את אותו כלל.
+     */
+    const below = new Set(dept ? [dept.id] : []);
+    for (let grew = true; grew;) {
+      grew = false;
+      for (const d of all) if (d.parentId && below.has(d.parentId) && !below.has(d.id)) { below.add(d.id); grew = true; }
+    }
+    const parentSelect = UI.select([
+      { value: '', label: '— מחלקה ראשית —' },
+      ...all.filter((d) => !below.has(d.id)).map((d) => ({ value: String(d.id), label: d.label ?? d.name }))
+    ], String(dept?.parentId ?? parentId ?? ''));
 
     // כל המשתמשים הפעילים מוצעים כמנהלים — מי מהם באמת מתאים נקבע בשרת,
     // ולכן רמת הגישה מוצגת לצד השם כדי שהבחירה תהיה מושכלת
@@ -743,6 +767,7 @@ const AdminView = (() => {
       title: isEdit ? `עריכת מחלקה — ${dept.name}` : 'מחלקה חדשה',
       body: el('div', {}, [
         UI.field('שם המחלקה', nameInput, isEdit ? 'שינוי השם מתעדכן בכל המשתמשים המשויכים למחלקה' : null),
+        UI.field('תת-מחלקה של', parentSelect, 'מנהל מחלקת האם רואה ומנהל גם את תתי-המחלקות שלה'),
         UI.field('מנהל/ת המחלקה', managerSelect, 'מי שייבחר ישויך למחלקה הזו ויקבל עליה אחריות ניהולית'),
         UI.field('ימי עבודה', daysBox, 'קובע את "מחר" בהקלטה וב-Today, ואת ימי מייל הבוקר. שבת — יום מנוחה. עובד שטח מוסיף לעצמו את יום ו׳ (בכרטיס המשתמש).'),
         isEdit ? UI.field('סטטוס', statusSelect) : null
@@ -759,8 +784,9 @@ const AdminView = (() => {
       try {
         if (!days.size) { saveBtn.disabled = false; return UI.toast('נדרש לפחות יום עבודה אחד', 'error'); }
         const workDays = [...days].sort();
-        if (isEdit) await API.updateDepartment(dept.id, { name, managerUserId, status: statusSelect.value, workDays });
-        else await API.createDepartment({ name, managerUserId, workDays });
+        const parentId = parentSelect.value ? Number(parentSelect.value) : null;
+        if (isEdit) await API.updateDepartment(dept.id, { name, parentId, managerUserId, status: statusSelect.value, workDays });
+        else await API.createDepartment({ name, parentId, managerUserId, workDays });
         m.close();
         UI.success('נשמר');
         // מינוי מנהל משייך אותו למחלקה — כולל את המשתמש המחובר עצמו,
@@ -1982,7 +2008,7 @@ const AdminView = (() => {
     const departments = deptData.departments ?? [];
     const deptOptions = [
       { value: '', label: 'כל הארגון — נראית לכולם' },
-      ...departments.map((d) => ({ value: String(d.id), label: d.name }))
+      ...departments.map((d) => ({ value: String(d.id), label: d.label ?? d.name }))
     ];
 
     /** דיאלוג אחד ליצירה ולעריכה — אותם שדות, ולכן אין סיבה לשני מסכים */
