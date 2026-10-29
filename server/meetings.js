@@ -691,31 +691,119 @@ async function moveEvent(actor, { ownerId, eventId, start, end }) {
   return { title: ev.summary ?? '', start, end };
 }
 
+/** טקסט מהיומן להודעה: שורה אחת, קצר, בלי סימני עיצוב של וואטסאפ */
+const cleanTitle = (t) => String(t ?? '').replace(/[\u0000-\u001f\u007f\u200b-\u200f\u202a-\u202e*_~`]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 60) || 'פגישה';
+
+const validDate = (v) => typeof v === 'string' && Number.isFinite(Date.parse(v));
+
+// עד 10 בקשות הזזה לשעה מכל משתמש — כדי שהבוט לא יהפוך לערוץ הצפה
+const MOVE_LIMIT = 10;
+const moveSent = new Map(); // actorId → [timestamps]
+function moveRateOk(actorId) {
+  const recent = (moveSent.get(actorId) ?? []).filter((t) => Date.now() - t < 60 * MIN);
+  if (recent.length >= MOVE_LIMIT) return false;
+  recent.push(Date.now());
+  moveSent.set(actorId, recent);
+  return true;
+}
+
 /**
  * בקשה מהמארגן להזיז — כשאין גישה ליומן שלו. מגיעה אליו ל"ממתין לאישורך"
  * ובבוט; "אשר" מזיז מהחיבור שלו עצמו.
+ *
+ * רק על פגישה אמיתית שהמבקש רואה ביומן (שלו, או יומן ששותף עם המזכירה)
+ * ושהמארגן שלה הוא הנמען. הכותרת והמועד נקראים מהיומן — לא ממה שהדפדפן שלח.
  */
-async function requestMove(actor, { organizerId, eventId, calendarEmail, title, from, to }) {
+async function requestMove(actor, { organizerId, eventId, calendarEmail, to }) {
   const organizer = userById(organizerId);
   if (!organizer) throw new MeetingError('המארגן אינו משתמש במשימון — אפשר רק לפנות אליו ישירות');
+  if (organizer.id === actor.id) throw new MeetingError('זו פגישה שלך — אפשר להזיז אותה ישירות');
+  if (!eventId) throw new MeetingError('לא נבחרה פגישה');
+  if (!validDate(to?.start)) throw new MeetingError('המועד החדש אינו תקין');
+  const newStart = new Date(to.start);
+  if (newStart.getTime() < Date.now()) throw new MeetingError('המועד החדש כבר עבר');
+  if (newStart.getTime() > Date.now() + 90 * 24 * 60 * MIN) throw new MeetingError('המועד החדש רחוק מדי');
+
+  // היומן שבו המבקש רואה את הפגישה — שלו, או של עובד ששיתף איתו לקריאה
+  const calUser = userByEmail(calendarEmail);
+  if (!calUser) throw new MeetingError('היומן אינו של עובד במשימון', 403);
+  const level = calUser.id === actor.id ? (Gmail.has(actor.id, 'calendar') ? 'owner' : 'none') : (await accessMap(actor)).get(calUser.id) ?? 'none';
+  if (ACCESS_RANK[level] < ACCESS_RANK.read) throw new MeetingError('אין לך גישה ליומן שבו הפגישה הזו', 403);
+  let ev;
+  try {
+    ev = await Gmail.googleCall(actor.id, eventUrl(calUser.id === actor.id ? 'primary' : calUser.email, eventId));
+  } catch {
+    throw new MeetingError('הפגישה לא נמצאה ביומן', 404);
+  }
+  if (ev.status === 'cancelled' || !ev.start?.dateTime || !ev.end?.dateTime) throw new MeetingError('הפגישה לא נמצאה ביומן', 404);
+  if (String(ev.organizer?.email ?? '').toLowerCase() !== String(organizer.email).toLowerCase()) {
+    throw new MeetingError(`${organizer.full_name} אינו/ה המארגן/ת של הפגישה הזו`, 403);
+  }
+  if (ev.visibility === 'private' || ev.visibility === 'confidential') throw new MeetingError('זו פגישה פרטית — אפשר רק לפנות למארגן ישירות');
+  const from = { start: new Date(ev.start.dateTime).toISOString(), end: new Date(ev.end.dateTime).toISOString() };
+  // אותו אורך כמו הפגישה המקורית
+  const target = { start: newStart.toISOString(), end: new Date(newStart.getTime() + (Date.parse(from.end) - Date.parse(from.start))).toISOString() };
+  const title = cleanTitle(ev.summary);
+
+  // אותה בקשה שכבר ממתינה — לא שולחים שוב
+  const headerId = `move:${eventId}:${target.start}`;
+  if (D.get("SELECT id FROM ai_suggestions WHERE user_id = ? AND kind = 'meeting_move' AND status = 'pending' AND header_id = ?", organizer.id, headerId)) {
+    return { requested: true, organizer: organizer.full_name, duplicate: true };
+  }
+  if (!moveRateOk(actor.id)) throw new MeetingError('נשלחו יותר מדי בקשות הזזה בשעה האחרונה. נסו שוב מאוחר יותר', 429);
+
   D.run(
     `INSERT INTO ai_suggestions (user_id, kind, status, gmail_id, header_id, from_name, from_email, subject, received_at, data, created_at)
      VALUES (?, 'meeting_move', 'pending', '', ?, ?, ?, ?, ?, ?, ?)`,
-    organizer.id, `move:${eventId}:${to.start}`, actor.name, actor.email ?? '', String(title ?? 'פגישה'), D.nowIso(),
-    JSON.stringify({ title: title ?? 'פגישה', eventId, calendarEmail, from, to, requestedBy: actor.name }), D.nowIso()
+    organizer.id, headerId, actor.name, actor.email ?? '', title, D.nowIso(),
+    JSON.stringify({ title, eventId, from, to: target, requestedBy: actor.name, requestedById: actor.id }), D.nowIso()
   );
-  const text = `${actor.name} מבקש/ת להזיז את "${title ?? 'הפגישה'}" מ-${fmtWhen(from.start)} ל-${fmtWhen(to.start)}, כדי לפנות זמן לפגישה אחרת. לאישור — "ממתין לאישורך" במשימון.`;
+  const text = `${actor.name} מבקש/ת להזיז את "${title}" מ-${fmtWhen(from.start)} ל-${fmtWhen(target.start)}, כדי לפנות זמן לפגישה אחרת.`;
   D.notify({ targetType: 'user', targetId: organizer.id, kind: 'meeting', title: '📅 בקשה להזיז פגישה', body: text });
-  if (organizer.phone && hooks.botReady()) hooks.sendWhatsApp?.(`${organizer.phone}@c.us`, `📅 ${text}`).catch(() => {});
+  // בוואטסאפ — בלי כותרת הפגישה ובלי טקסט חופשי: רק מי ביקש ומתי. הפרטים במשימון
+  if (organizer.phone && hooks.botReady()) {
+    hooks.sendWhatsApp?.(`${organizer.phone}@c.us`, `📅 ${actor.name} מבקש/ת להזיז פגישה שלך מ-${fmtWhen(from.start)} ל-${fmtWhen(target.start)}. לפרטים ולאישור — "ממתין לאישורך" במשימון.`).catch(() => {});
+  }
   return { requested: true, organizer: organizer.full_name };
 }
 
-/** המארגן אישר — הזזה מהחיבור שלו */
-async function approveMove(actor, suggestionId) {
+/** הבקשה, והפגישה כפי שהיא עכשיו ביומן של המארגן */
+async function loadMove(actor, suggestionId) {
   const s = D.get("SELECT * FROM ai_suggestions WHERE id = ? AND user_id = ? AND kind = 'meeting_move' AND status = 'pending'", suggestionId, actor.id);
   if (!s) throw new MeetingError('הבקשה לא נמצאה או שטופלה', 404);
   if (!Gmail.has(actor.id, 'calendar')) throw new MeetingError('כדי לאשר צריך לחבר את היומן של Google ("החשבון שלי ← חיבור Google")');
   const d = parseJson(s.data, {});
+  if (!d.eventId || !validDate(d.to?.start) || !validDate(d.to?.end)) throw new MeetingError('הבקשה פגומה');
+  let ev;
+  try {
+    ev = await Gmail.googleCall(actor.id, eventUrl('primary', d.eventId));
+  } catch {
+    throw new MeetingError('הפגישה לא נמצאה ביומן שלך', 404);
+  }
+  if (ev.status === 'cancelled' || !ev.start?.dateTime || !ev.end?.dateTime) throw new MeetingError('הפגישה לא נמצאה ביומן שלך', 404);
+  if (!ev.organizer?.self) throw new MeetingError('אינך המארגן/ת של הפגישה הזו', 403);
+  return { s, d, ev };
+}
+
+/** לפני האישור — הכותרת והמועד האמיתיים מהיומן, לא מה שנשמר בבקשה */
+async function previewMove(actor, suggestionId) {
+  const { d, ev } = await loadMove(actor, suggestionId);
+  return {
+    title: String(ev.summary ?? '(ללא כותרת)'),
+    from: { start: new Date(ev.start.dateTime).toISOString(), end: new Date(ev.end.dateTime).toISOString() },
+    to: d.to,
+    requestedBy: d.requestedBy ?? ''
+  };
+}
+
+/** המארגן אישר — הזזה מהחיבור שלו */
+async function approveMove(actor, suggestionId) {
+  const { s, d, ev } = await loadMove(actor, suggestionId);
+  // הפגישה זזה מאז הבקשה — המועד שבבקשה כבר לא מתאר אותה
+  if (d.from?.start && Date.parse(ev.start.dateTime) !== Date.parse(d.from.start)) {
+    D.run("UPDATE ai_suggestions SET status = 'rejected', decided_at = ? WHERE id = ?", D.nowIso(), s.id);
+    throw new MeetingError('הפגישה הוזזה מאז שנשלחה הבקשה — הבקשה בוטלה');
+  }
   const r = await moveEvent(actor, { ownerId: actor.id, eventId: d.eventId, start: d.to.start, end: d.to.end });
   D.run("UPDATE ai_suggestions SET status = 'approved', decided_at = ? WHERE id = ?", D.nowIso(), s.id);
   return r;
@@ -893,7 +981,7 @@ function stop() {
 module.exports = {
   init, MeetingError, isSecretary, accessMap, forgetAccess, calendarsFor, resolveCalendar, canWrite,
   freeBusy, availability, suggest, alternatives, create, update, cancel, declineReschedule, markRescheduled,
-  moveEvent, requestMove, approveMove, forTask, joinLink, shape, meetingById, syncOne, syncAll, sendReminders,
+  moveEvent, requestMove, previewMove, approveMove, forTask, joinLink, shape, meetingById, syncOne, syncAll, sendReminders,
   recipientsOf, reminderText, start, stop, tick,
   _internal: { splitPeople, cleanAttendees, eventBody, shapeEvent, ruleScore, rank, meetingHours }
 };

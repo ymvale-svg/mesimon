@@ -14,7 +14,7 @@ const Zoom = require('./zoom');
 const Gmail = require('./gmail');
 const WaBot = require('./ai/wa-bot');
 const WaActions = require('./ai/wa-actions');
-const { badRequest, forbidden, notFound, readJson, sendJson, parseUrl } = require('./http-kit');
+const { HttpError, badRequest, forbidden, notFound, readJson, sendJson, parseUrl } = require('./http-kit');
 
 function register(router, h) {
   const { getTaskOr404, assertVisible, shapeTask, canSeeTask } = h;
@@ -33,7 +33,10 @@ function register(router, h) {
     if (actor.type !== 'user') throw forbidden();
     return actor;
   };
-  const userError = (err) => (err?.status ? err : badRequest(err.message));
+  // שגיאה של הפגישות — ההודעה בעברית מגיעה למשתמש עם הסטטוס שלה, ולא כ"שגיאה פנימית"
+  const userError = (err) => (err instanceof HttpError ? err
+    : err instanceof Meetings.MeetingError ? new HttpError(err.status, err.message)
+    : badRequest(err.message));
   const run = async (res, fn, status = 200) => {
     try {
       sendJson(res, status, await fn());
@@ -145,9 +148,14 @@ function register(router, h) {
     const actor = userOnly(ctx);
     const b = await readJson(req);
     await run(res, () => Meetings.requestMove(actor, {
-      organizerId: Number(b.organizerId), eventId: b.eventId ? String(b.eventId) : null, calendarEmail: b.calendarEmail,
-      title: b.title, from: b.from, to: b.to
+      organizerId: Number(b.organizerId), eventId: b.eventId ? String(b.eventId) : null, calendarEmail: String(b.calendarEmail ?? ''),
+      to: b.to && typeof b.to === 'object' ? { start: b.to.start } : null
     }));
+  });
+
+  router.get('/api/meetings/move-requests/:id', async (req, res, ctx) => {
+    const actor = userOnly(ctx);
+    await run(res, () => Meetings.previewMove(actor, Number(ctx.params.id)));
   });
 
   router.post('/api/meetings/move-requests/:id/approve', async (req, res, ctx) => {

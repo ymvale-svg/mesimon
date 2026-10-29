@@ -2103,7 +2103,26 @@ const App = (() => {
       });
       if (value === null) return;
       try {
-        state.actor.phone = (await API.put('/api/me/phone', { phone: value })).phone;
+        const r = await API.put('/api/me/phone', { phone: value });
+        if (r.pending) {
+          // המספר נשמר רק אחרי שהקוד שהבוט שלח אליו מוקלד כאן
+          for (;;) {
+            const code = await UI.prompt('קוד אימות', {
+              title: '📱 אימות הטלפון',
+              hint: `בוט הוואטסאפ של משימון שלח קוד בן 6 ספרות ל-${UI.phone(r.phone)}. הקלידו אותו כאן.`
+            });
+            if (code === null) return;
+            try {
+              state.actor.phone = (await API.post('/api/me/phone/verify', { code })).phone;
+              break;
+            } catch (err) {
+              UI.error(err);
+              if (!/שגוי/.test(err.message ?? '')) return;
+            }
+          }
+        } else {
+          state.actor.phone = r.phone;
+        }
         UI.success('נשמר');
         draw();
       } catch (err) { UI.error(err); }
