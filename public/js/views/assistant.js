@@ -119,10 +119,13 @@ const AssistantView = (() => {
     });
 
     const m = UI.modal({
-      title: '🎙 העוזר',
+      title: 'העוזר של משימון',
       size: 'wide',
       body: el('div.asst', {}, [
-        el('div.asst-said', {}, [el('span.mute-sm', { text: voice ? 'אמרת: ' : 'כתבת: ' }), text]),
+        el('div.asst-said', {}, [
+          el('img.asst-logo', { src: '/icons/bot.svg', alt: '' }),
+          el('span.mute-sm', { text: voice ? 'אמרת: ' : 'כתבת: ' }), text
+        ]),
         log,
         choices,
         el('div.asst-foot', {}, [input, mic, send].filter(Boolean))

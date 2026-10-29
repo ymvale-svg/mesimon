@@ -12,7 +12,7 @@
  */
 
 // שינוי המספר מפסל את המטמון הקודם ומאלץ טעינה מחדש של קבצי המערכת
-const VERSION = 'mesimon-v25';
+const VERSION = 'mesimon-v26';
 
 /**
  * מה נשמר מראש. רק מה שנדרש כדי שהמסך ייבנה: אם אחד מהם חסר, האפליקציה לא
@@ -49,6 +49,7 @@ const SHELL = [
   '/js/views/contact-picker.js',
   '/js/voice-wake.js',
   '/icons/icon-192.png',
+  '/icons/bot.svg',
   '/icons/icon-512.png'
 ];
 

@@ -2562,7 +2562,8 @@ input[type="color"] { width: 46px; height: 30px; padding: 2px; cursor: pointer; 
 /* ================================================================ העוזר */
 
 .asst { display: flex; flex-direction: column; gap: 10px; }
-.asst-said { background: var(--surface-2); border-radius: var(--radius); padding: 8px 10px; font-size: 13px; }
+.asst-said { background: var(--surface-2); border-radius: var(--radius); padding: 8px 10px; font-size: 13px; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.asst-logo { width: 22px; height: 22px; flex: none; }
 .asst-log { display: flex; flex-direction: column; gap: 8px; max-height: 52vh; overflow-y: auto; }
 .asst-msg { border-radius: 14px; padding: 10px 12px; line-height: 1.55; max-width: 92%; }
 .asst-bot { background: var(--surface-2); align-self: flex-start; }
