@@ -277,18 +277,18 @@ const AdminView = (() => {
       el('div.table-wrap', {}, [
         el('table.data', {}, [
           el('thead', {}, [el('tr', {}, [
-            el('th', { text: 'שם' }), el('th', { text: 'אימייל' }),
+            el('th', { text: 'שם' }), el('th', { text: 'אימייל' }), el('th', { text: 'טלפון' }),
             data.seesRoles ? el('th', { text: 'רמת גישה' }) : null,
             el('th', { text: 'מחלקה' }), el('th', { text: 'סטטוס' }), el('th', { text: '' })
           ])]),
           el('tbody', {}, data.users.map((u) =>
             el('tr', {}, [
-              el('td', {}, [el('div.flex', {}, [UI.avatar(u.name, { small: true }), el('div', {}, [
-                el('b', { text: u.name }),
-                // הטלפון מתחת לשם — כך רואים במבט מי עוד חסר לבוט הוואטסאפ
-                el('div.mute-sm', { dir: 'ltr', style: { textAlign: 'right' }, text: u.phone ? UI.phone(u.phone) : '📱 אין טלפון' })
-              ])])]),
+              el('td', {}, [el('div.flex', {}, [UI.avatar(u.name, { small: true }), el('b', { text: u.name })])]),
               el('td', { text: u.email }),
+              // עמודת טלפון — כך רואים במבט מי עוד חסר לבוט הוואטסאפ
+              u.phone
+                ? el('td', { dir: 'ltr', style: { textAlign: 'right' }, text: UI.phone(u.phone) })
+                : el('td.mute-sm', { text: '📱 אין טלפון' }),
               data.seesRoles ? el('td', {}, [el('span.tag.tag-internal', {}, [u.roleLabel])]) : null,
               // משתמש יכול להיות ללא שיוך למחלקה (הנהלה, מנהל מערכת) — מסומן במקף ולא בתא ריק
               el('td', { text: u.department || '—' }),
