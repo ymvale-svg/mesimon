@@ -180,7 +180,7 @@ function register(router, h) {
       `SELECT t.* FROM tasks t LEFT JOIN board_columns c ON c.board_id = t.board_id AND c.key = t.status
         WHERE t.meeting_pending = 1 AND t.archived = 0 AND COALESCE(c.is_final, 0) = 0
         ORDER BY t.created_at DESC LIMIT 200`
-    ).filter((t) => (secretary ? canSeeTask(actor, t) : t.assignee_id === actor.id || t.created_by === actor.id));
+    ).filter((t) => (secretary ? canSeeTask(actor, t) : (t.assignee_type === 'user' && t.assignee_id === actor.id) || t.created_by === actor.id));
     sendJson(res, 200, { tasks: rows.map((t) => shapeTask(t, actor)) });
   });
 
