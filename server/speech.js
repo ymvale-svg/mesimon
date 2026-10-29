@@ -1,24 +1,77 @@
 'use strict';
 /**
- * תמלול הודעות קוליות — Google Cloud Speech-to-Text, בעברית.
+ * תמלול הודעות קוליות, בעברית.
  *
  * משמש את בוט הוואטסאפ: הודעה קולית לבוט מתומללת ומטופלת בדיוק כמו הודעה
  * כתובה. ההקלטה באפליקציה אינה עוברת כאן — שם הדפדפן מתמלל בעצמו.
  *
- * ההגדרה: מפתח API של פרויקט Google Cloud שבו מופעל Speech-to-Text
- * (‎GOOGLE_SPEECH_API_KEY‎). בלעדיו הבוט ממשיך לבקש טקסט.
+ * שני ספקים, לפי מה שמוגדר בשרת (OpenAI קודם, אם שניהם מוגדרים):
+ *   • OpenAI (‎OPENAI_API_KEY‎) — ההגדרה הפשוטה: מפתח API אחד, בלי פרויקט ענן.
+ *     מקבל את קובץ ה-ogg של וואטסאפ כמו שהוא, עם סימני פיסוק. המודל ניתן
+ *     לשינוי ב-‎OPENAI_TRANSCRIBE_MODEL‎ (ברירת מחדל: ‎gpt-4o-transcribe‎).
+ *   • Google Cloud Speech-to-Text (‎GOOGLE_SPEECH_API_KEY‎).
+ * בלי אף אחד מהם — הבוט ממשיך לבקש טקסט.
  *
  * הקובץ אינו נשמר: הוא נמשך מ-Green API, נשלח לתמלול, ונזרק. רק הטקסט נשאר.
- *
- * עד דקה — תמלול מיידי (‎speech:recognize‎). ארוך מזה — ‎longrunningrecognize‎,
- * עם המתנה לתוצאה. ‎v1p1beta1‎ ולא ‎v1‎: רק בה יש MP3.
  */
+
+// ---------------------------------------------------------------------------
+// OpenAI
+// ---------------------------------------------------------------------------
+
+const OPENAI_URL = 'https://api.openai.com/v1/audio/transcriptions';
+const OPENAI_MAX_BYTES = 25 * 1024 * 1024; // המגבלה של OpenAI לקובץ
+const openaiKey = () => String(process.env.OPENAI_API_KEY ?? '').trim();
+const openaiModel = () => String(process.env.OPENAI_TRANSCRIBE_MODEL ?? '').trim() || 'gpt-4o-transcribe';
+
+/** סיומת לפי סוג הקובץ — OpenAI מזהה את הפורמט לפי שם הקובץ */
+function extOf(mime) {
+  const m = String(mime ?? '').toLowerCase();
+  if (m.includes('mpeg') || m.includes('mp3')) return 'mp3';
+  if (m.includes('mp4') || m.includes('m4a') || m.includes('aac')) return 'm4a';
+  if (m.includes('wav')) return 'wav';
+  if (m.includes('webm')) return 'webm';
+  return 'ogg'; // הודעה קולית של וואטסאפ: ‎audio/ogg; codecs=opus‎
+}
+
+async function transcribeOpenAI(buf, mime) {
+  if (buf.length > OPENAI_MAX_BYTES) throw new Error('ההודעה הקולית ארוכה מדי לתמלול');
+  const form = new FormData();
+  form.append('file', new Blob([buf], { type: String(mime || 'audio/ogg').split(';')[0] }), `voice.${extOf(mime)}`);
+  form.append('model', openaiModel());
+  form.append('language', 'he');
+  form.append('response_format', 'json');
+  const res = await fetch(OPENAI_URL, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${openaiKey()}` },
+    body: form,
+    signal: AbortSignal.timeout(120000)
+  });
+  const text = await res.text();
+  if (!res.ok) throw new Error(`OpenAI החזיר ${res.status}: ${text.slice(0, 200)}`);
+  try {
+    return String(JSON.parse(text).text ?? '').replace(/\s+/g, ' ').trim();
+  } catch {
+    return '';
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Google Cloud Speech-to-Text
+//
+// עד דקה — תמלול מיידי (‎speech:recognize‎). ארוך מזה — ‎longrunningrecognize‎,
+// עם המתנה לתוצאה. ‎v1p1beta1‎ ולא ‎v1‎: רק בה יש MP3.
+// ---------------------------------------------------------------------------
+
 const API = 'https://speech.googleapis.com/v1p1beta1';
 const MAX_BYTES = 10 * 1024 * 1024; // המגבלה של Google לתוכן שנשלח בבקשה עצמה
 const LONG_WAIT_MS = 120000;
 
 const apiKey = () => String(process.env.GOOGLE_SPEECH_API_KEY ?? '').trim();
-const isEnabled = () => Boolean(apiKey());
+
+/** איזה ספק מוגדר: ‎'openai'‎ · ‎'google'‎ · ‎null‎ */
+const provider = () => (openaiKey() ? 'openai' : apiKey() ? 'google' : null);
+const isEnabled = () => Boolean(provider());
 
 /** תדר הדגימה ממה שבכותרת ‎OpusHead‎. ‎Google‎ מקבל רק תדרים מסוימים לאופוס */
 const OPUS_RATES = [8000, 12000, 16000, 24000, 48000];
@@ -78,7 +131,9 @@ async function longRecognize(body) {
 
 /** תמלול של קובץ שמע. מחזיר טקסט, או מחרוזת ריקה כשלא נשמע דיבור */
 async function transcribe(buf, mime) {
-  if (!isEnabled()) throw new Error('תמלול הודעות קוליות אינו מוגדר (GOOGLE_SPEECH_API_KEY)');
+  const p = provider();
+  if (!p) throw new Error('תמלול הודעות קוליות אינו מוגדר (OPENAI_API_KEY או GOOGLE_SPEECH_API_KEY)');
+  if (p === 'openai') return transcribeOpenAI(buf, mime);
   if (buf.length > MAX_BYTES) throw new Error('ההודעה הקולית ארוכה מדי לתמלול');
   const body = { config: configFor(mime, buf), audio: { content: buf.toString('base64') } };
   try {
@@ -97,4 +152,4 @@ async function transcribeUrl(url, mime) {
   return transcribe(buf, mime || res.headers.get('content-type'));
 }
 
-module.exports = { isEnabled, transcribe, transcribeUrl, _internal: { configFor, opusRate } };
+module.exports = { isEnabled, provider, transcribe, transcribeUrl, _internal: { configFor, opusRate, extOf } };

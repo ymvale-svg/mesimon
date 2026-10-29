@@ -86,8 +86,8 @@ function publicStatus() {
   return {
     enabled: Boolean(D.getSetting('wa_bot_enabled', true)),
     ai: Claude.isEnabled(),
-    // תמלול הודעות קוליות (Google Speech-to-Text)
-    speech: Speech.isEnabled(),
+    // תמלול הודעות קוליות: ‎'openai'‎ · ‎'google'‎ · ‎null‎
+    speech: Speech.provider(),
     connection: row ? {
       apiUrl: row.api_url,
       instanceId: row.instance_id,
@@ -1514,10 +1514,10 @@ async function handleDirect(msg) {
   }
   if (voice) {
     if (!Speech.isEnabled() || !WaActions.allowed(actor, 'voice_notes')) {
-      log({ ...base, text: '[הודעה קולית]', action: 'voice', status: 'unclear', result: Speech.isEnabled() ? 'הודעות קוליות כבויות במסך הניהול' : 'התמלול אינו מוגדר בשרת (GOOGLE_SPEECH_API_KEY)' });
+      log({ ...base, text: '[הודעה קולית]', action: 'voice', status: 'unclear', result: Speech.isEnabled() ? 'הודעות קוליות כבויות במסך הניהול' : 'התמלול אינו מוגדר בשרת (OPENAI_API_KEY או GOOGLE_SPEECH_API_KEY)' });
       await sendText(msg.chatId, Speech.isEnabled()
         ? 'הודעות קוליות כבויות כרגע. כתבו לי בטקסט 🙏'
-        : 'תמלול הודעות קוליות עוד לא הוגדר במשימון (מנהל המערכת: GOOGLE_SPEECH_API_KEY). בינתיים כתבו לי בטקסט 🙏');
+        : 'תמלול הודעות קוליות עוד לא הוגדר במשימון (מנהל המערכת: OPENAI_API_KEY). בינתיים כתבו לי בטקסט 🙏');
       return;
     }
     try {

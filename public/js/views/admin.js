@@ -1496,7 +1496,8 @@ const AdminView = (() => {
             el('div.mute-sm', { text: a.description }),
             examples ? UI.field('דוגמאות — שורה לכל דוגמה. מוצגות ב"עזרה" ומכוונות את הבוט', examples) : null,
             a.key === 'summary' ? el('div.mute-sm', { text: `נשלח בשעה ${info.settings.summaryTime} — משנים בלשונית "הגדרות".` }) : null,
-            a.key === 'voice_notes' && !info.speech ? el('div.mute-sm.text-danger', { text: 'התמלול אינו מוגדר בשרת (GOOGLE_SPEECH_API_KEY) — עד אז הבוט מבקש לכתוב בטקסט.' }) : null
+            a.key === 'voice_notes' && !info.speech ? el('div.mute-sm.text-danger', { text: 'התמלול אינו מוגדר בשרת — מגדירים OPENAI_API_KEY (מומלץ) או GOOGLE_SPEECH_API_KEY. עד אז הבוט מבקש לכתוב בטקסט.' }) : null,
+            a.key === 'voice_notes' && info.speech ? el('div.mute-sm', { text: `התמלול דרך ${info.speech === 'openai' ? 'OpenAI' : 'Google'}.` }) : null
           ]),
           audience ? el('div.ai-row-actions', {}, [UI.field('מי רשאי', audience)]) : null
         ]);
