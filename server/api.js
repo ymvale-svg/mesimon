@@ -668,7 +668,7 @@ router.get('/api/auth/google/callback', async (req, res, ctx) => {
     const back = (key, value) => redirectTo(res, `/?${key}=${encodeURIComponent(value)}`);
     const userId = Gmail.consumeState(params.get('state'));
     if (params.get('error')) return back('gmailError', 'החיבור בוטל');
-    if (!userId || (ctx.actor && (ctx.actor.type !== 'user' || ctx.actor.id !== userId))) return back('gmailError', 'הבקשה פגה או אינה תקינה. נסו לחבר שוב.');
+    if (!userId || !ctx.actor || ctx.actor.type !== 'user' || ctx.actor.id !== userId) return back('gmailError', 'הבקשה פגה או אינה תקינה. נסו לחבר שוב.');
     try {
       await Gmail.connect(userId, params.get('code'), req);
       // החיבור כולל עכשיו גם יומן ואנשי קשר — סנכרון ראשון ברקע, ומטמון יומן נקי
