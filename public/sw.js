@@ -47,6 +47,8 @@ const SHELL = [
   '/js/views/voice.js',
   '/js/views/assistant.js',
   '/js/views/contact-picker.js',
+  '/js/views/phonebook.js',
+  '/js/views/assignee-picker.js',
   '/js/voice-wake.js',
   '/icons/icon-192.png',
   '/icons/bot.svg',

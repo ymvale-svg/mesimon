@@ -12,13 +12,13 @@ const Google = require('./google-auth');
 const Invites = require('./invites');
 const Mailer = require('./mailer');
 const TaskMail = require('./task-mail');
-const WaBot = require('./ai/wa-bot');
 const Push = require('./push');
 const Xlsx = require('./xlsx-write');
 const Spreadsheet = require('./spreadsheet');
 const AiTasks = require('./ai-tasks');
 const AiApi = require('./api-ai');
 const TodayApi = require('./api-today');
+const PhonebookApi = require('./api-phonebook');
 const MeetingsApi = require('./api-meetings');
 const Zoom = require('./zoom');
 const W = require('./workdays');
@@ -28,6 +28,7 @@ const Gmail = require('./gmail');
 const MailScan = require('./ai/mail-scan');
 const Claude = require('./ai/claude');
 const WhatsApp = require('./whatsapp');
+const WaBot = require('./ai/wa-bot');
 const Tiful360 = require('./tiful360');
 const {
   Router, badRequest, forbidden, notFound,
@@ -757,14 +758,91 @@ function publicActor(actor) {
   };
 }
 
-/** הטלפון של עצמי — מ"החשבון שלי", כדי שבוט הוואטסאפ יזהה אותי */
+/**
+ * הטלפון של עצמי — מ"החשבון שלי", כדי שבוט הוואטסאפ יזהה אותי. הבוט מזהה
+ * עובד לפי המספר בלבד, ולכן מספר נשמר רק אחרי שהעובד הוכיח שהוא שלו: הבוט
+ * שולח קוד למספר, והקוד מוקלד כאן. מחיקה — בלי קוד. מנהל קובע במסך המשתמשים.
+ */
+const phoneCodes = new Map(); // userId → { phone, hash, expires, tries, sentAt }
+const PHONE_CODE_TTL = 10 * 60000;
+const hashCode = (code) => crypto.createHash('sha256').update(String(code)).digest('hex');
+
 router.put('/api/me/phone', async (req, res, ctx) => {
   const actor = ctx.requireActor();
   if (actor.type !== 'user') throw forbidden();
   const b = await readJson(req);
   const phone = userPhone(b.phone, actor.id);
+  if (!phone) {
+    phoneCodes.delete(actor.id);
+    D.run("UPDATE users SET phone = '' WHERE id = ?", actor.id);
+    sendJson(res, 200, { phone: '' });
+    return;
+  }
+  if (phone === D.get('SELECT phone FROM users WHERE id = ?', actor.id)?.phone) {
+    sendJson(res, 200, { phone });
+    return;
+  }
+  if (!WaBot.isConfigured() || !D.getSetting('wa_bot_enabled', true)) {
+    throw badRequest('בוט הוואטסאפ אינו פעיל, ולכן אי אפשר לאמת את המספר. בקשו ממנהל המערכת להזין אותו במסך המשתמשים');
+  }
+  const prev = phoneCodes.get(actor.id);
+  if (prev && Date.now() - prev.sentAt < 60000) throw badRequest('קוד נשלח לפני רגע — המתינו דקה לפני שליחה נוספת');
+  const code = String(crypto.randomInt(100000, 1000000));
+  try {
+    await WaBot.sendText(`${phone}@c.us`, `קוד האימות שלך במשימון: ${code}\nהקוד תקף ל-10 דקות. אם לא ביקשת — התעלם/י מההודעה.`);
+  } catch (err) {
+    throw badRequest(`שליחת הקוד בוואטסאפ נכשלה: ${err.message}`);
+  }
+  phoneCodes.set(actor.id, { phone, hash: hashCode(code), expires: Date.now() + PHONE_CODE_TTL, tries: 0, sentAt: Date.now() });
+  sendJson(res, 200, { pending: true, phone });
+});
+
+/** הקוד שהבוט שלח — רק אז המספר נשמר */
+router.post('/api/me/phone/verify', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  if (actor.type !== 'user') throw forbidden();
+  const b = await readJson(req);
+  const p = phoneCodes.get(actor.id);
+  if (!p || Date.now() > p.expires) {
+    phoneCodes.delete(actor.id);
+    throw badRequest('תוקף הקוד פג — בקשו קוד חדש');
+  }
+  if (++p.tries > 5) {
+    phoneCodes.delete(actor.id);
+    throw badRequest('יותר מדי ניסיונות — בקשו קוד חדש');
+  }
+  const given = Buffer.from(hashCode(String(b.code ?? '').replace(/\D/g, '')));
+  if (!crypto.timingSafeEqual(given, Buffer.from(p.hash))) throw badRequest('הקוד שגוי');
+  phoneCodes.delete(actor.id);
+  // ייתכן שמישהו אחר קיבל את המספר בינתיים
+  const phone = userPhone(p.phone, actor.id);
   D.run('UPDATE users SET phone = ? WHERE id = ?', phone, actor.id);
   sendJson(res, 200, { phone });
+});
+
+/**
+ * למי אני מטיל משימות — לעיגולי האחראי בדיאלוג המשימה. משימות שפתחתי ב-90
+ * הימים האחרונים, לפי האחראי הראשי, ומשימה מהשבועיים האחרונים שווה כפול:
+ * כך עובד חדש שאני עובד איתו עכשיו עולה מהר, ומי שעבדתי איתו לפני חודשיים
+ * יורד. ההרשאה לשבץ נבדקת בדפדפן מול רשימת האפשרויות, ובשמירה — בשרת.
+ */
+router.get('/api/me/frequent-assignees', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  if (actor.type !== 'user') throw forbidden();
+  const day = 86400000;
+  const since = new Date(Date.now() - 90 * day).toISOString();
+  const recent = new Date(Date.now() - 14 * day).toISOString();
+  const rows = D.all(
+    `SELECT assignee_type AS type, assignee_id AS id,
+            SUM(CASE WHEN created_at >= ? THEN 2 ELSE 1 END) AS score, MAX(created_at) AS last
+       FROM tasks
+      WHERE created_by = ? AND created_at >= ? AND assignee_id IS NOT NULL
+      GROUP BY assignee_type, assignee_id
+      ORDER BY score DESC, last DESC
+      LIMIT 12`,
+    recent, actor.id, since
+  );
+  sendJson(res, 200, { items: rows.map((r) => ({ value: `${r.type}:${r.id}`, score: r.score })) });
 });
 
 // ---------------------------------------------------------------------------
@@ -3712,11 +3790,13 @@ router.put('/api/admin/users/:id/grants', async (req, res, ctx) => {
   if (!user) throw notFound('המשתמש לא נמצא');
   assertMayManageUser(actor, user);
 
-  // הרשאות אישיות נועדו להרחיב עובד פנימי; לתפקידים גבוהים הן חסרות משמעות
-  if (user.role !== 'employee') throw badRequest('הרשאות אישיות ניתנות לעובד פנימי בלבד');
-
   const { grants } = await readJson(req);
   const wanted = Array.isArray(grants) ? grants.filter((g) => P.GRANT_KEYS.includes(g)) : [];
+
+  // הרשאות אישיות נועדו להרחיב עובד פנימי; לתפקידים גבוהים הן חסרות משמעות.
+  // ניקוי מותר תמיד — עובד שהועלה לתפקיד גבוה נשאר אחרת עם הרשאות ישנות,
+  // והשמירה בכרטיס שלו נכשלת
+  if (user.role !== 'employee' && wanted.length) throw badRequest('הרשאות אישיות ניתנות לעובד פנימי בלבד');
 
   D.run('DELETE FROM user_grants WHERE user_id = ?', user.id);
   for (const key of wanted) {
@@ -4760,6 +4840,7 @@ const botTaskOps = {
 
 AiApi.register(router, { getTaskOr404, assertVisible, mayOnTask, shapeTask, actorRef, saveAttachment, createTask, assertMayAssignTo, listProjectsFor, botTaskOps });
 TodayApi.register(router, { shapeTask, createTask, getTaskOr404, listProjectsFor, assertMayAssignTo });
+PhonebookApi.register(router);
 MeetingsApi.register(router, { getTaskOr404, assertVisible, shapeTask, canSeeTask });
 Tiful360.register(router, { createTask, saveAttachment, getTaskOr404 });
 

@@ -250,6 +250,27 @@ const UI = (() => {
   const success = (msg) => toast(msg, 'ok');
 
   /**
+   * "המשימה נוצרה" עם לאן נכנסה וכפתור "פתיחה". יצירה רגילה כבר אינה
+   * פותחת את הכרטיס המלא מעצמה — ולכן ההודעה אומרת אצל מי ובאיזה פרויקט
+   * המשימה יושבת, כדי שלא "תיעלם", ומאפשרת לפתוח אותה בלחיצה.
+   */
+  function taskCreated(task, { prefix = 'המשימה נוצרה', extra = '' } = {}) {
+    if (!task?.id) return success(prefix);
+    const where = [
+      task.assigneeName ? `אצל ${task.assigneeName}` : 'ללא אחראי',
+      task.projectName || 'ללא פרויקט'
+    ].join(' · ');
+    const open = el('button.btn.btn-sm', {}, ['פתיחה']);
+    const node = el('div.toast.ok.toast-action', {}, [
+      el('div', {}, [el('b', { text: `✓ ${prefix}` }), ` — ${where}`, extra ? el('div.toast-warn', { text: extra }) : null]),
+      el('div.toast-buttons', {}, [open])
+    ]);
+    const timer = setTimeout(() => node.remove(), 7000);
+    open.addEventListener('click', () => { clearTimeout(timer); node.remove(); TaskCardView.open(task.id); });
+    document.getElementById('toast-root').appendChild(node);
+  }
+
+  /**
    * הודעה על סטטוס שהשתנה מעצמו בעקבות הצ'קליסט.
    *
    * שינוי שהמערכת עשתה ולא המשתמש חייב להיאמר: אחרת המשימה נעלמת מהרשימה
@@ -1252,7 +1273,7 @@ const UI = (() => {
     el, clear, mount,
     formatDate, formatDateTime, relative, dueLabel, toInputDate, fromInputDate,
     initials, avatar, priorityTag, statusTag, taskTags,
-    modal, confirm, prompt, toast, error, success, notifyPop, clearNotifyPops,
+    modal, confirm, prompt, toast, error, success, taskCreated, notifyPop, clearNotifyPops,
     empty, spinner, field, select, phone, projectPicker, rankProjects,
     renderMentions, fileSize, fileIcon, announceAutoStatus,
     usersByDepartment,

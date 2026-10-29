@@ -805,6 +805,26 @@ CREATE TABLE IF NOT EXISTS contact_save_dismissed (
   PRIMARY KEY (user_id, address)
 );
 
+/*
+ * אלפון ארגוני — טלפונים ומיילים משותפים לכל העובדים. כל עובד רואה, מוסיף,
+ * משנה ומוחק; נשמר מי יצר ומי שינה לאחרונה. ‎phone_digits‎ — הטלפון בספרות
+ * בלבד ובקידומת ישראלית מקומית (0…), לחיפוש ולזיהוי כפילויות.
+ */
+CREATE TABLE IF NOT EXISTS phonebook (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  name          TEXT    NOT NULL,
+  phone         TEXT    NOT NULL DEFAULT '',
+  phone_digits  TEXT    NOT NULL DEFAULT '',
+  email         TEXT    NOT NULL DEFAULT '',
+  note          TEXT    NOT NULL DEFAULT '',
+  created_at    TEXT    NOT NULL,
+  created_by    INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  updated_at    TEXT    NOT NULL,
+  updated_by    INTEGER REFERENCES users(id) ON DELETE SET NULL
+);
+CREATE INDEX IF NOT EXISTS idx_phonebook_digits ON phonebook(phone_digits);
+CREATE INDEX IF NOT EXISTS idx_phonebook_email ON phonebook(email);
+
 /* שולחים מיוחדים לכל משתמש: ‎trust‎ — משימות נוצרות ישר, בלי אישור; ‎ignore‎ — לא מציעים מהם משימות */
 CREATE TABLE IF NOT EXISTS mail_trusted_senders (
   user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
