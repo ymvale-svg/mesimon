@@ -547,18 +547,26 @@ textarea { resize: vertical; min-height: 76px; }
   outline: 2px solid var(--brand); outline-offset: 1px; border-radius: 4px;
 }
 
-.home-slot.dragging { opacity: .45; }
-/* הסימון על הצד שאליו ייפול: לחלון ברוחב מלא מעל/מתחת, ולחצי שורה לצדו */
-.home-slot.drop-before::after,
-.home-slot.drop-after::after {
-  content: ''; position: absolute; background: var(--brand); border-radius: 2px; z-index: 5;
+/*
+ * גרירה חיה (ראה liftSlot ב-home.js): החלון מורם — הגדלה קלה וצל עמוק —
+ * ושאר הלוח מתפנה לו תוך כדי. בשחרור הוא נוחת ומסומן לרגע במסגרת.
+ */
+.home-board { position: relative; }   /* בסיס ל-offsetTop של החלונות במדידה */
+.slot-grip { touch-action: none; }   /* מגע: הלחיצה הארוכה על הידית אינה גוללת */
+.home-slot > .card { transition: box-shadow .3s ease, transform .2s ease; }
+.home-slot.is-holding > .card { transform: scale(.97); }
+.home-slot.is-lifted { z-index: 20; cursor: grabbing; will-change: transform; }
+.home-slot.is-lifted > .card {
+  box-shadow: 0 28px 60px -16px rgba(0,0,0,.45), 0 10px 24px -8px rgba(0,0,0,.3);
 }
-.home-slot.drop-before::after { inset-block: 0; inset-inline-start: -8px; width: 3px; }
-.home-slot.drop-after::after { inset-block: 0; inset-inline-end: -8px; width: 3px; }
-/* ‎drop-v‎ נקבע בגרירה לפי הציר שהכריע, ולא לפי רוחב היעד: גם חלון בחצי
-   שורה יכול לקבל שכן מעליו או מתחתיו, וזה מה שלא היה אפשרי קודם */
-.home-slot.drop-v.drop-before::after { inset: -8px 0 auto; width: auto; height: 3px; }
-.home-slot.drop-v.drop-after::after { inset: auto 0 -8px; width: auto; height: 3px; }
+.home-slot.is-landed { z-index: 10; }
+.home-slot.is-landed > .card { box-shadow: 0 0 0 2px var(--brand), var(--shadow-sm); }
+.home-board.is-arranging .home-slot:not(.is-lifted) { pointer-events: none; }
+body.is-dragging-slot, body.is-dragging-slot * { cursor: grabbing !important; }
+@media (prefers-reduced-motion: reduce) {
+  .home-slot > .card { transition: none; }
+  .home-slot.is-holding > .card { transform: none; }
+}
 
 /*
  * ידיות הגובה — פס דק בשני קצות החלון, מתגלה בריחוף כמו הכלים.
@@ -614,14 +622,14 @@ textarea { resize: vertical; min-height: 76px; }
 .card-head .home-filter { flex: none; width: auto; max-width: 190px; font-size: 12px; padding: 4px 8px; }
 
 /*
- * במגע אין גרירה ואין שינוי גודל: חלון אחד לשורה ממילא, ורצועות של עשרה
- * פיקסלים באצבע הן מיס-טאפ. ההסתרה נשארת — היא הדבר היחיד מהשלושה שיש
- * לו טעם על מסך צר.
+ * במסך צר אין שינוי גודל: חלון אחד לשורה ממילא, ורצועות של עשרה פיקסלים
+ * באצבע הן מיס-טאפ. ההסתרה וסידור הסדר נשארים — הידית נגררת בלחיצה ארוכה.
  */
 @media (max-width: 820px) {
   /* חלון אחד לשורה, ולכן גם היחס בין שניים חסר משמעות כאן */
   .home-slot { flex: 1 1 100%; min-width: 0; }
-  .slot-grip, .slot-resize, .slot-wresize { display: none; }
+  /* הידית נשארת: במגע היא נגררת בלחיצה ארוכה */
+  .slot-resize, .slot-wresize { display: none; }
   .slot-tools { opacity: 1; }
   .card-head .home-filter { max-width: 140px; }
 }

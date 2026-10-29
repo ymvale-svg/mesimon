@@ -334,129 +334,262 @@ const HomeView = (() => {
   }
 
   /**
-   * גרירת חלונות לשינוי המיקום. HTML5 drag-and-drop, כמו בסידור הפרויקטים
-   * בתפריט — הוא נותן בחינם את הסמן, את התמונה הנגררת ואת הגלילה בקצה.
+   * גרירת חלונות לשינוי המיקום — לוח חי, ברוח Draggable Widget Grid.
    *
-   * נקודת האחיזה היא כותרת החלון ולא כל שטחו: הכרטיסים מכילים כפתורים,
-   * שדות ורשימות נגללות, וחלון שנגרר מכל נקודה היה הופך כל לחיצה על שורה
-   * לגרירה בטעות.
+   * החלון "מורם" מהלוח (הגדלה קלה וצל עמוק), עוקב אחרי הסמן, ושאר החלונות
+   * מתפנים לו **בזמן הגרירה** בתנועה רכה — במקום קו סימון וקפיצה אחרי
+   * השחרור. בשחרור הוא נוחת במקומו החדש ומסומן לרגע במסגרת.
+   *
+   * מצביע ולא HTML5 drag-and-drop: באחרון הדפדפן מצייר תמונת רפאים שקופה
+   * ואין שליטה על שאר הלוח תוך כדי, ובמגע הוא אינו עובד כלל.
+   *
+   * - עכבר ועט: גרירה מהידית מתחילה אחרי תזוזה קטנה, כדי שלחיצה לא תיחשב.
+   * - מגע: לחיצה ארוכה על הידית, כדי שהדף עדיין יגלול.
+   * - מקלדת: מיקוד בחלון, Alt וחצים (וגם כפתורי ▲ ▼ בכותרת).
+   *
+   * הגרירה משנה סדר בלבד. הרוחב נשאר של החלון — כפתור ⇤⇥ קובע אותו.
    */
+  const DRAG = {
+    ENTER: 0.18,        // כמה עמוק מרכז הנגרר צריך להיכנס לחלון כדי לתפוס את מקומו
+    SETTLE_MS: 40,      // מרווח מינימלי בין שתי הזזות בזמן גרירה
+    LANDED_MS: 620,     // משך מסגרת הנחיתה
+    LONG_PRESS_MS: 350, // מגע: זמן לחיצה עד שהחלון מורם
+    PRESS_SLOP: 8,      // מגע: תזוזה מותרת בזמן הלחיצה לפני שזו גלילה
+    START_SLOP: 4,      // עכבר: תזוזה שהופכת לחיצה לגרירה
+    EDGE: 70            // גלילה אוטומטית ליד קצה המסך
+  };
+  // קפיץ קליל עם מעט קפיצה — המקבילה ב-CSS ל-spring של Motion
+  const SPRING_EASE = 'cubic-bezier(.22, 1.18, .36, 1)';
+  const reducedMotion = () => window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+
+  /** המיקום של חלון בלוח בלי ההזזות הזמניות — offset אינו מושפע מ-transform */
+  const layoutRect = (board, node) => {
+    const b = board.getBoundingClientRect();
+    const left = b.left + board.clientLeft + node.offsetLeft;
+    const top = b.top + board.clientTop + node.offsetTop;
+    return { left, top, right: left + node.offsetWidth, bottom: top + node.offsetHeight };
+  };
+
+  /** האב הראשון שנגלל, לגלילה אוטומטית ליד הקצה */
+  const scrollerOf = (node) => {
+    for (let n = node.parentElement; n; n = n.parentElement) {
+      const o = getComputedStyle(n).overflowY;
+      if ((o === 'auto' || o === 'scroll') && n.scrollHeight > n.clientHeight) return n;
+    }
+    return document.scrollingElement;
+  };
+
   function makeSlotsDraggable(slots) {
     if (slots.length < 2) return;
-    let dragged = null;
-    const clearMarks = () => slots.forEach(({ node }) =>
-      node.classList.remove('drop-before', 'drop-after', 'drop-v'));
 
     for (const entry of slots) {
       const { key, node } = entry;
       const grip = node.querySelector('.slot-grip');
       if (!grip) continue;
 
-      // ‎draggable‎ נדלק רק כשתופסים את הידית, אחרת בחירת טקסט בכרטיס נשברת
-      grip.addEventListener('pointerdown', () => { node.draggable = true; });
-      grip.addEventListener('pointerup', () => { node.draggable = false; });
-
-      node.addEventListener('dragstart', (e) => {
-        dragged = entry;
-        node.classList.add('dragging');
-        e.dataTransfer.effectAllowed = 'move';
-        e.dataTransfer.setData('text/plain', key);   // נדרש ב-Firefox
-      });
-
-      node.addEventListener('dragend', () => {
-        node.classList.remove('dragging');
-        node.draggable = false;
-        clearMarks();
-        dragged = null;
-      });
-
-      /*
-       * לאיזה צד ייפול — בשני הצירים.
-       *
-       * קודם לכן חלון בחצי רוחב הוכרע לפי ציר ה-X בלבד, ולכן לא היה בכלל
-       * מושג של "מתחת": גרירה כלפי מטה אל חלון בשורה נמוכה יותר הכריעה לפי
-       * המרחק האופקי, ותמיד הכניסה את הנגרר *לפני* היעד. כלומר אפשר היה
-       * להעלות חלון מעל חלון אך לא להוריד אותו מתחתיו.
-       *
-       * המרחקים מנורמלים לגודל היעד, ולא בפיקסלים: חלון גבוה וצר היה מטה
-       * את ההכרעה לציר האנכי בכל גרירה. הציר שבו התרחקנו יותר מהמרכז הוא
-       * הציר שמכריע, וחלון ברוחב שורה שלמה נופל אוטומטית לציר האנכי — הרוחב
-       * הגדול מקטין את המרחק המנורמל בו.
-       */
-      const sideOf = (e) => {
-        const box = node.getBoundingClientRect();
-        const dx = (e.clientX - (box.left + box.width / 2)) / Math.max(1, box.width);
-        const dy = (e.clientY - (box.top + box.height / 2)) / Math.max(1, box.height);
-        const vertical = Math.abs(dy) > Math.abs(dx);
-        const rtl = getComputedStyle(node.parentElement).direction === 'rtl';
-        // RTL: הצד הימני הוא הקודם בסדר
-        return { after: vertical ? dy > 0 : (rtl ? dx < 0 : dx > 0), vertical };
-      };
-
-      /** החלונות שיושבים באותה שורה עם היעד, לפי מדידה בפועל */
-      const rowOf = () => slots.filter(({ node: n }) =>
-        Math.round(n.offsetTop) === Math.round(node.offsetTop));
-
-      node.addEventListener('dragover', (e) => {
-        if (!dragged || dragged.node === node) return;
+      // מקלדת: Alt + חצים מכל מקום בחלון, חוץ משדות קלט
+      node.addEventListener('keydown', (e) => {
+        if (!e.altKey || e.target.closest('input, textarea, select')) return;
+        const delta = e.key === 'ArrowDown' ? 1 : e.key === 'ArrowUp' ? -1
+          : e.key === 'ArrowLeft' ? 1 : e.key === 'ArrowRight' ? -1 : 0;   // RTL: שמאלה = הבא
+        if (!delta) return;
         e.preventDefault();
-        e.dataTransfer.dropEffect = 'move';
-        const { after, vertical } = sideOf(e);
-        clearMarks();
-        /*
-         * בנפילה אנכית מסומנת השורה כולה ולא רק היעד: החלון הנגרר עומד
-         * לקבל שורה לעצמו *בין* השורות, וסימון של חצי שורה היה מרמז שהוא
-         * נכנס לתוך הזוג הקיים.
-         */
-        const marked = vertical ? rowOf().map((x) => x.node) : [node];
-        for (const n of marked) {
-          n.classList.add(after ? 'drop-after' : 'drop-before');
-          n.classList.toggle('drop-v', vertical);
-        }
+        moveCard(key, delta);
       });
 
-      node.addEventListener('dragleave', () =>
-        node.classList.remove('drop-before', 'drop-after', 'drop-v'));
-
-      /*
-       * הנפילה קובעת גם את הרוחב, ולא רק את הסדר.
-       *
-       * זה מה שהיה חסר: הגרירה שינתה מקום בלבד, ולכן חלון שהופל בין שורות
-       * נדחס לזוג במקום לקבל שורה — ההיפך ממה שהמחווה אומרת.
-       *
-       * נפילה אנכית = "שורה לעצמך": הנגרר מסומן ברוחב מלא ונכנס בגבול
-       * השורה — לפני החלון הראשון בה או אחרי האחרון — ולכן זוג קיים נשאר
-       * זוג ואינו נחצה.
-       *
-       * נפילה לצד = "תחלקו את השורה": שני החלונות מסומנים כחצי רוחב ומקבלים
-       * חלוקה שווה.
-       */
-      node.addEventListener('drop', (e) => {
-        if (!dragged || dragged.node === node) return;
+      grip.addEventListener('contextmenu', (e) => e.preventDefault());
+      grip.addEventListener('pointerdown', (e) => {
+        if (e.button !== 0 || !e.isPrimary) return;
+        const board = node.parentElement;
+        if (!board) return;
         e.preventDefault();
-        const { after, vertical } = sideOf(e);
-        const keys = orderedKeys().filter((k) => k !== dragged.key);
-        const wide = new Set(layout().wide ?? []);
-        const narrow = new Set(layout().narrow ?? []);
+        const pointerId = e.pointerId;
+        const origin = { x: e.clientX, y: e.clientY };
+        let session = null;
+        let timer = 0;
 
-        let at;
-        if (vertical) {
-          const row = rowOf().map((x) => x.key).filter((k) => k !== dragged.key);
-          const edge = after ? row[row.length - 1] : row[0];
-          at = keys.indexOf(edge ?? key) + (after ? 1 : 0);
-          narrow.delete(dragged.key);
-          wide.add(dragged.key);
-        } else {
-          at = keys.indexOf(key) + (after ? 1 : 0);
-          for (const k of [dragged.key, key]) { wide.delete(k); narrow.add(k); }
+        const begin = () => {
+          timer = 0;
+          node.classList.remove('is-holding');
+          navigator.vibrate?.(10);
+          session = liftSlot(board, node, origin);
+          session.move(origin.x, origin.y);
+        };
+
+        const onMove = (ev) => {
+          if (ev.pointerId !== pointerId) return;
+          if (session) { ev.preventDefault(); session.move(ev.clientX, ev.clientY); return; }
+          const dist = Math.hypot(ev.clientX - origin.x, ev.clientY - origin.y);
+          if (e.pointerType === 'touch') {
+            if (dist > DRAG.PRESS_SLOP) finish(ev, true);   // זו גלילה, לא גרירה
+          } else if (dist > DRAG.START_SLOP) {
+            begin();
+            session.move(ev.clientX, ev.clientY);
+          }
+        };
+        // חסימת גלילת הדף רק אחרי שהחלון הורם
+        const blockTouch = (ev) => { if (session) ev.preventDefault(); };
+
+        const finish = (ev, cancelled = false) => {
+          if (ev && ev.pointerId !== pointerId) return;
+          clearTimeout(timer);
+          node.classList.remove('is-holding');
+          window.removeEventListener('pointermove', onMove);
+          window.removeEventListener('pointerup', finish);
+          window.removeEventListener('pointercancel', onCancel);
+          window.removeEventListener('touchmove', blockTouch);
+          if (session) session.drop(cancelled);
+        };
+        const onCancel = (ev) => finish(ev, false);
+
+        window.addEventListener('pointermove', onMove, { passive: false });
+        window.addEventListener('pointerup', finish);
+        window.addEventListener('pointercancel', onCancel);
+        window.addEventListener('touchmove', blockTouch, { passive: false });
+
+        if (e.pointerType === 'touch') {
+          node.classList.add('is-holding');
+          timer = setTimeout(begin, DRAG.LONG_PRESS_MS);
         }
-
-        keys.splice(Math.max(0, at), 0, dragged.key);
-        clearMarks();
-        // זוג חדש מתחיל בחלוקה שווה — ראה evenShares
-        saveLayout({ order: keys, wide: [...wide], narrow: [...narrow], ...evenShares() });
       });
     }
+  }
+
+  /**
+   * גרירה אחת. מחזיר ‎move‎ ו-‎drop‎; כל השאר — מעקב, סידור חי, גלילה
+   * ונחיתה — קורה כאן.
+   */
+  function liftSlot(board, node, origin) {
+    const still = reducedMotion();
+    const home0 = layoutRect(board, node);
+    // היכן בתוך החלון נתפס — כדי שהחלון לא "יקפוץ" אל הסמן
+    const grab = { x: origin.x - home0.left, y: origin.y - home0.top };
+    const scroller = scrollerOf(board);
+    const before = [...board.querySelectorAll('.home-slot')].map((s) => s.dataset.key);
+    let pointer = { ...origin };
+    let lastMove = 0;
+    let frame = 0;
+
+    node.classList.add('is-lifted');
+    board.classList.add('is-arranging');
+    document.body.style.userSelect = 'none';
+    document.body.classList.add('is-dragging-slot');
+
+    /** החלון הנגרר נצמד לסמן, ביחס למקומו הנוכחי בלוח */
+    const follow = () => {
+      const home = layoutRect(board, node);
+      const dx = pointer.x - grab.x - home.left;
+      const dy = pointer.y - grab.y - home.top;
+      node.style.transform = `translate(${dx}px, ${dy}px) scale(1.03)`;
+    };
+
+    /**
+     * הנגרר תופס מקום של שכן כשמרכזו נכנס לחלק הפנימי של השכן. אם המרכז
+     * עדיין בתוך המקום שלו עצמו — לא זזים, וכך אין ריצוד בין שני מקומות.
+     */
+    const reorder = () => {
+      const now = performance.now();
+      if (now - lastMove < DRAG.SETTLE_MS) return;
+      const home = layoutRect(board, node);
+      const cx = pointer.x - grab.x + (home.right - home.left) / 2;
+      const cy = pointer.y - grab.y + (home.bottom - home.top) / 2;
+      const inside = (r, inset) => {
+        const ix = (r.right - r.left) * inset;
+        const iy = (r.bottom - r.top) * inset;
+        return cx > r.left + ix && cx < r.right - ix && cy > r.top + iy && cy < r.bottom - iy;
+      };
+      if (inside(home, 0)) return;
+
+      const all = [...board.querySelectorAll('.home-slot')];
+      const target = all.find((s) => s !== node && inside(layoutRect(board, s), DRAG.ENTER));
+      if (!target) return;
+
+      // FLIP: מדידה לפני, הזזה ב-DOM, ואז כל שכן מונפש מהמקום הישן לחדש
+      const first = new Map(all.map((s) => [s, s.getBoundingClientRect()]));
+      const forward = all.indexOf(target) > all.indexOf(node);
+      board.insertBefore(node, forward ? target.nextSibling : target);
+      lastMove = now;
+      if (still) return;
+      for (const s of all) {
+        if (s === node) continue;
+        const a = first.get(s);
+        const b = s.getBoundingClientRect();
+        const dx = a.left - b.left;
+        const dy = a.top - b.top;
+        if (Math.abs(dx) < 1 && Math.abs(dy) < 1) continue;
+        s.animate(
+          [{ transform: `translate(${dx}px, ${dy}px)` }, { transform: 'none' }],
+          { duration: 380, easing: SPRING_EASE }
+        );
+      }
+    };
+
+    /** גלילה אוטומטית כשהסמן קרוב לקצה המסך */
+    const autoscroll = () => {
+      const h = window.innerHeight;
+      const speed = pointer.y < DRAG.EDGE ? -(DRAG.EDGE - pointer.y)
+        : pointer.y > h - DRAG.EDGE ? pointer.y - (h - DRAG.EDGE) : 0;
+      if (speed) scroller.scrollTop += speed * 0.35;
+    };
+
+    // לולאה אחת לכל פריים: גם כשהסמן עומד, הגלילה והסידור ממשיכים
+    const tick = () => {
+      autoscroll();
+      reorder();
+      follow();
+      frame = requestAnimationFrame(tick);
+    };
+    frame = requestAnimationFrame(tick);
+
+    return {
+      move(x, y) { pointer = { x, y }; },
+
+      drop(cancelled) {
+        cancelAnimationFrame(frame);
+        document.body.style.userSelect = '';
+        document.body.classList.remove('is-dragging-slot');
+        board.classList.remove('is-arranging');
+        node.classList.remove('is-lifted');
+
+        if (cancelled) {
+          // ביטול — חזרה לסדר שהיה
+          const byKey = new Map([...board.querySelectorAll('.home-slot')].map((s) => [s.dataset.key, s]));
+          for (const k of before) if (byKey.get(k)) board.appendChild(byKey.get(k));
+        }
+
+        // נחיתה: מהמקום שבו שוחרר אל המקום בלוח
+        const from = node.style.transform;
+        node.style.transform = '';
+        if (!still && from) {
+          node.animate([{ transform: from }, { transform: 'none' }],
+            { duration: 420, easing: SPRING_EASE });
+        }
+        node.classList.add('is-landed');
+        setTimeout(() => node.classList.remove('is-landed'), DRAG.LANDED_MS);
+
+        const after = [...board.querySelectorAll('.home-slot')].map((s) => s.dataset.key);
+        if (after.join() === before.join()) return;
+        commitOrder(board, after);
+      }
+    };
+  }
+
+  /**
+   * שמירת הסדר אחרי גרירה, בלי לצייר את המסך מחדש: ה-DOM כבר בסדר הנכון,
+   * וציור מחדש היה מוחק את אנימציית הנחיתה.
+   *
+   * הסדר השמור כולל גם חלונות מוסתרים וחלונות שאין להם תוכן כרגע, ולכן
+   * רק המקומות של החלונות הנראים מתמלאים מחדש — השאר נשארים במקומם.
+   */
+  function commitOrder(board, visible) {
+    const keys = orderedKeys();
+    const seen = new Set(visible);
+    const queue = [...visible];
+    const order = keys.map((k) => (seen.has(k) ? queue.shift() : k));
+    // יחס הרוחבים שייך לזוג, והזוגות השתנו — חזרה לחלוקה שווה (ראה evenShares)
+    App.setPref('homeLayout', { ...layout(), order, ...evenShares() });
+    for (const s of board.querySelectorAll('.home-slot')) s.style.removeProperty('--share');
+    tuneBoard();
   }
 
   /**
@@ -509,7 +642,7 @@ const HomeView = (() => {
 
       const grip = el('button.slot-btn.slot-grip', {
         type: 'button',
-        title: 'גרירה לשינוי המיקום',
+        title: 'גרירה לשינוי המיקום · במגע: לחיצה ארוכה · במקלדת: Alt וחצים',
         'aria-label': `גרירת החלון ${CARD_LABEL[key]}`
       }, ['⠿']);
 
@@ -829,7 +962,7 @@ const HomeView = (() => {
       el('div.page-head', {}, [
         el('div', {}, [
           el('h2', { text: `${greeting}, ${App.state.actor.name.split(' ')[0]}` }),
-          el('div.sub', { text: 'תמונת מצב אישית. גרירת חלון בין שורות תיתן לו שורה שלמה, גרירה לצד חלון תחלק את השורה בין השניים, ואת הגבולות אפשר למשוך.' })
+          el('div.sub', { text: 'תמונת מצב אישית. גררו חלון מהידית ⠿ והלוח יתפנה לו תוך כדי (במגע — לחיצה ארוכה, במקלדת — Alt וחצים). ⇤⇥ קובע רוחב, ואת הגבולות אפשר למשוך.' })
         ])
       ]),
       widgets(data.widgets),
