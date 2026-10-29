@@ -651,7 +651,9 @@ const BoardView = (() => {
       // רמת הגישה מצורפת לשם רק כשהצופה רשאי לראות רמות
       label: u.roleLabel ? `${u.name} — ${u.roleLabel}` : u.name
     });
-    const { near, far, deptName } = UI.usersByDepartment();
+    const { near, far, deptName } = UI.usersByDepartment({
+      keep: [task?.assigneeType === 'user' ? task.assigneeId : null, ...(task?.extraAssignees ?? []).filter((e) => e.type === 'user').map((e) => e.id)].filter(Boolean)
+    });
 
     const vendorOptions = App.may('assign_task_to_vendor')
       ? App.state.vendors.filter((v) => v.status === 'active')

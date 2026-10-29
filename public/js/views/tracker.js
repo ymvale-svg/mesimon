@@ -293,7 +293,9 @@ const TrackerView = (() => {
     }
 
     // אותו סדר כמו בכל שאר בוררי האחראי במערכת
-    const { near, far, deptName } = UI.usersByDepartment();
+    const { near, far, deptName } = UI.usersByDepartment({
+      keep: sub.assigneeType === 'user' && sub.assigneeId ? [sub.assigneeId] : []
+    });
     const opt = (u) => ({ value: `user:${u.id}`, label: u.name });
     const vendors = mayVendors
       ? (App.state.vendors ?? []).filter((v) => v.status === 'active')

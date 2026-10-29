@@ -422,10 +422,25 @@ const UI = (() => {
    * וסדר שונה בין מסך למסך מבלבל יותר מסדר אלפביתי.
    *
    * מי שאין לו מחלקה מקבל רשימה אחת ללא חלוקה, כי אין למה להשוות.
+   *
+   * הרשימה מוגבלת למי שמותר לי להקצות לו: מנהל מחלקה רואה את עובדי
+   * המחלקה שלו, ועובד עם הרשאה אישית את חברי המחלקה שלו — רק הנהלה
+   * ומעלה רואים את כל הארגון. מי שאינו רשאי להקצות לאחרים רואה רק את עצמו.
+   * השרת אוכף את אותו כלל; הסינון כאן חוסך בחירה שתידחה.
+   *
+   * ‎keep‎ — מזהים שנשארים ברשימה גם מחוץ לתחום: האחראים הקיימים של משימה
+   * בעריכה, כדי שפתיחתה לא תאפס בשקט אחראי שמישהו אחר קבע.
    */
-  function usersByDepartment(users) {
-    const list = users ?? App.state.users ?? [];
+  function usersByDepartment({ keep = [] } = {}) {
+    const all = App.state.users ?? [];
+    const me = App.state.actor?.id ?? null;
     const myDept = App.state.actor?.departmentId ?? null;
+    const scope = App.state.permissions?.assign_department_task ?? false;
+    const kept = new Set(keep.map(Number));
+    const list = scope === true
+      ? all
+      : all.filter((u) => u.id === me || kept.has(u.id)
+          || (scope === 'department' && myDept && u.departmentId === myDept));
     const near = myDept ? list.filter((u) => u.departmentId === myDept) : [];
     const nearIds = new Set(near.map((u) => u.id));
     return {

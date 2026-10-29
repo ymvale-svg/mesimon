@@ -2117,8 +2117,8 @@ router.post('/api/tasks/:id/duplicate', async (req, res, ctx) => {
   const title = String(b.title ?? '').trim() || `${source.title} — עותק`;
 
   // האחראי נשמר רק אם למשכפל יש הרשאה להקצות לאחרים; אחרת המשימה נשארת ללא אחראי
-  const keepAssignee = source.assignee_type === 'user' && source.assignee_id
-    && (source.assignee_id === actor.id || P.may(actor, 'assign_department_task'));
+  let keepAssignee = source.assignee_type === 'user' && !!source.assignee_id;
+  try { if (keepAssignee) assertMayAssignTo(actor, 'user', source.assignee_id); } catch { keepAssignee = false; }
 
   const result = D.run(
     `INSERT INTO tasks (title, description, project_id, board_id, assignee_type, assignee_id,
