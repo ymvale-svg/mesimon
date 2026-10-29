@@ -697,6 +697,7 @@ const BoardView = (() => {
      */
     const extraAssignees = (task?.extraAssignees ?? []).map((e) => `${e.type}:${e.id}`);
     const extraList = el('div.extra-assignees');
+    let assigneePicker = null;  // העיגולים — נבנים אחרי ‎drawExtras‎, שמרענן אותם
 
     const drawExtras = () => {
       const taken = new Set([assigneeSelect.value, ...extraAssignees].filter(Boolean));
@@ -737,8 +738,20 @@ const BoardView = (() => {
             })
           : el('span.mute-sm', { text: 'אין עוד למי להוסיף' })
       );
+      assigneePicker?.redraw();
     };
     drawExtras();
+    /*
+     * עיגולים במקום הרשימה הנפתחת — הראשון הוא מי שאני הכי הרבה מטיל עליו.
+     * במשימה חדשה בלי אחראי שנקבע מראש (הקלטה, תת-משימה) הוא גם נבחר מעצמו.
+     */
+    assigneePicker = AssigneePicker.create({
+      select: assigneeSelect,
+      options: assigneeOptions,
+      extras: extraAssignees,
+      onExtras: drawExtras,
+      autoPick: !isEdit && !pre.assignee
+    });
     // החלפת האחראי הראשי מוציאה אותו מרשימת האחראים הנוספים אם הוא בה
     assigneeSelect.addEventListener('change', () => {
       const at = extraAssignees.indexOf(assigneeSelect.value);
@@ -864,10 +877,9 @@ const BoardView = (() => {
       voiceBox,
       fieldOf('title', 'כותרת המשימה', titleInput),
       UI.field('תיאור', descInput),
-      el('div.row', {}, [
-        fieldOf('projectId', 'פרויקט', projectPicker, 'משימה ללא פרויקט תופיע בלוח בקבוצת "ללא פרויקט"'),
-        fieldOf('assignee', 'אחראי', assigneeSelect, 'משימה ללא אחראי לא תופיע ב"המשימות שלי" של אף אחד')
-      ]),
+      // האחראי בשורה משלו — העיגולים צריכים רוחב
+      fieldOf('assignee', 'אחראי', assigneePicker.node, 'משימה ללא אחראי לא תופיע ב"המשימות שלי" של אף אחד'),
+      fieldOf('projectId', 'פרויקט', projectPicker, 'משימה ללא פרויקט תופיע בלוח בקבוצת "ללא פרויקט"'),
       UI.field('אחראים נוספים', extraList,
         'המשימה תופיע גם אצלם, והם יקבלו את ההתראות. אפשר לצרף גם ספק חיצוני — המשימה נשארת בלוח הפנימי'),
       el('div.row', {}, [UI.field('עדיפות', prioritySelect), fieldOf('dueDate', 'תאריך יעד', dueInput)]),
@@ -938,6 +950,7 @@ const BoardView = (() => {
          * פרויקט היא יושבת, עם "פתיחה". מי שרוצה להמשיך לערוך — "שמירה
          * ופתיחה בהרחבה".
          */
+        if (!isEdit) AssigneePicker.refresh();
         if (isEdit) UI.success('המשימה עודכנה');
         else if (!openAfter) UI.taskCreated(created?.task);
         await App.reloadReference();

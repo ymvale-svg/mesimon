@@ -767,6 +767,31 @@ router.put('/api/me/phone', async (req, res, ctx) => {
   sendJson(res, 200, { phone });
 });
 
+/**
+ * למי אני מטיל משימות — לעיגולי האחראי בדיאלוג המשימה. משימות שפתחתי ב-90
+ * הימים האחרונים, לפי האחראי הראשי, ומשימה מהשבועיים האחרונים שווה כפול:
+ * כך עובד חדש שאני עובד איתו עכשיו עולה מהר, ומי שעבדתי איתו לפני חודשיים
+ * יורד. ההרשאה לשבץ נבדקת בדפדפן מול רשימת האפשרויות, ובשמירה — בשרת.
+ */
+router.get('/api/me/frequent-assignees', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  if (actor.type !== 'user') throw forbidden();
+  const day = 86400000;
+  const since = new Date(Date.now() - 90 * day).toISOString();
+  const recent = new Date(Date.now() - 14 * day).toISOString();
+  const rows = D.all(
+    `SELECT assignee_type AS type, assignee_id AS id,
+            SUM(CASE WHEN created_at >= ? THEN 2 ELSE 1 END) AS score, MAX(created_at) AS last
+       FROM tasks
+      WHERE created_by = ? AND created_at >= ? AND assignee_id IS NOT NULL
+      GROUP BY assignee_type, assignee_id
+      ORDER BY score DESC, last DESC
+      LIMIT 12`,
+    recent, actor.id, since
+  );
+  sendJson(res, 200, { items: rows.map((r) => ({ value: `${r.type}:${r.id}`, score: r.score })) });
+});
+
 // ---------------------------------------------------------------------------
 // מימוש הזמנה — פתוח ללא התחברות, מוגן באמצעות האסימון שבקישור
 // ---------------------------------------------------------------------------

@@ -1487,14 +1487,17 @@ const HomeView = (() => {
       ? App.state.vendors.filter((v) => v.status === 'active')
         .map((v) => ({ value: `vendor:${v.id}`, label: `${v.name} (ספק חיצוני)` }))
       : [];
-    const assigneeSelect = UI.select([
+    const assigneeOptions = [
       { value: '', label: 'ללא אחראי' },
       ...(near.length && far.length
         ? [{ label: deptName, options: near.map(userOption) },
            { label: 'שאר הארגון', options: far.map(userOption) }]
         : [...near, ...far].map(userOption)),
       ...(vendorOptions.length ? [{ label: 'ספקים חיצוניים', options: vendorOptions }] : [])
-    ], `user:${App.state.actor.id}`);  // ברירת מחדל: אני, כמו בדיאלוג המלא
+    ];
+    const assigneeSelect = UI.select(assigneeOptions, `user:${App.state.actor.id}`);  // ברירת מחדל: אני, כמו בדיאלוג המלא
+    // עיגולים, כמו בדיאלוג המלא — הראשון ונבחר: מי שאני הכי הרבה מטיל עליו
+    const assigneePicker = AssigneePicker.create({ select: assigneeSelect, options: assigneeOptions, autoPick: true, max: 4 });
 
     const dueInput = el('input', { type: 'date' });
 
@@ -1578,6 +1581,7 @@ const HomeView = (() => {
         }
 
         closeQuick();
+        AssigneePicker.refresh();
         const sent = files.length - failed.length;
         if (failed.length) {
           UI.toast(`המשימה נוצרה, אך ${failed.length === 1 ? `הקובץ "${failed[0]}" לא צורף` : `${failed.length} קבצים לא צורפו: ${failed.join(', ')}`}`, 'error');
@@ -1610,7 +1614,7 @@ const HomeView = (() => {
       el('div.qt-body', {}, [
         UI.field('נושא', titleInput),
         UI.field('שם פרויקט', projectPicker),
-        UI.field('אחראי', assigneeSelect),
+        UI.field('אחראי', assigneePicker.node),
         UI.field('תאריך יעד', dueInput),
         // בורר הקבצים חייב להיות במסמך — לחיצה על ‎input‎ מנותק אינה פותחת
         // את חלון הבחירה בכל הדפדפנים
