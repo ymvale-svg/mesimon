@@ -2868,3 +2868,5 @@ input[type="color"] { width: 46px; height: 30px; padding: 2px; cursor: pointer; 
 .voice-overlay.is-asking .voice-live { order: 4; font-size: 15px; }
 .voice-said { text-align: center; color: var(--text-soft); font-size: 14px; margin-top: 4px; }
 .pb-head-acts { display: flex; gap: 8px; flex-wrap: wrap; }
+.dept-suggest { margin-top: 8px; display: grid; gap: 8px; }
+.dept-suggest:empty { display: none; }

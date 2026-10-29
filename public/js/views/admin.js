@@ -762,21 +762,88 @@ const AdminView = (() => {
     }, [label])), el('span.day-chip.is-rest', { title: 'יום מנוחה' }, ['ש׳']));
     drawDays();
 
+    /*
+     * מחלקות קיימות שיעברו אל תחת מחלקת האם. בבניית עץ ("הנהלה" ומתחתיה כל
+     * המחלקות) רוב המחלקות כבר קיימות, ופתיחת כל אחת בנפרד לעריכה הייתה
+     * מייגעת — לכן שדה השם מציע אותן, ואפשר לבחור כמה בבת אחת. שם שאינו
+     * ברשימה הוא מחלקה חדשה, כמו קודם.
+     *
+     * מוצעות רק מחלקות שהעברתן אפשרית: לא מחלקת האם עצמה, לא אחת ממחלקות
+     * האם שמעליה (זה היה יוצר מעגל), ולא מי שכבר יושבת תחתיה.
+     */
+    const picked = new Set();
+    const suggestBox = el('div.dept-suggest');
+    const ancestorsOf = (id) => {
+      const out = new Set();
+      for (let cur = id; cur && !out.has(cur);) { out.add(cur); cur = all.find((d) => d.id === cur)?.parentId ?? null; }
+      return out;
+    };
+    const movable = () => {
+      const pid = parentSelect.value ? Number(parentSelect.value) : null;
+      const blocked = ancestorsOf(pid);
+      return all.filter((d) => !blocked.has(d.id) && (d.parentId ?? null) !== pid);
+    };
+    const drawSuggest = () => {
+      if (isEdit) return;
+      const ok = new Set(movable().map((d) => d.id));
+      for (const id of [...picked]) if (!ok.has(id)) picked.delete(id);
+      const q = nameInput.value.trim();
+      const matches = movable().filter((d) => !picked.has(d.id) && (!q || (d.label ?? d.name).includes(q)));
+      UI.mount(suggestBox,
+        picked.size
+          ? el('div.flex-wrap.mb', {}, [...picked].map((id) => {
+              const d = all.find((x) => x.id === id);
+              return el('span.chip.chip-assignee', {}, [
+                el('span', { text: d.label ?? d.name }),
+                el('button.chip-x', { type: 'button', title: 'הסרה', onclick: () => { picked.delete(id); drawSuggest(); } }, ['✕'])
+              ]);
+            }))
+          : null,
+        matches.length
+          ? el('div.flex-wrap', {}, [
+              el('span.mute-sm', { text: 'מחלקות קיימות:' }),
+              ...matches.map((d) => el('button.btn.btn-sm', {
+                type: 'button',
+                onclick: () => {
+                  picked.add(d.id);
+                  if (nameInput.value.trim() === d.name || (q && (d.label ?? d.name).includes(q))) nameInput.value = '';
+                  drawSuggest();
+                }
+              }, [d.label ?? d.name]))
+            ])
+          : null
+      );
+      newOnly.style.display = picked.size && !nameInput.value.trim() ? 'none' : '';
+    };
+    nameInput.addEventListener('input', drawSuggest);
+    parentSelect.addEventListener('change', drawSuggest);
+
+    const newOnly = el('div', {}, [
+      UI.field('מנהל/ת המחלקה', managerSelect, 'מי שייבחר ישויך למחלקה הזו ויקבל עליה אחריות ניהולית'),
+      UI.field('ימי עבודה', daysBox, 'קובע את "מחר" בהקלטה וב-Today, ואת ימי מייל הבוקר. שבת — יום מנוחה. עובד שטח מוסיף לעצמו את יום ו׳ (בכרטיס המשתמש).')
+    ]);
+
     const saveBtn = el('button.btn.btn-primary', {}, ['שמירה']);
     const m = UI.modal({
-      title: isEdit ? `עריכת מחלקה — ${dept.name}` : 'מחלקה חדשה',
+      title: isEdit ? `עריכת מחלקה — ${dept.name}` : parentId ? 'תת-מחלקה' : 'מחלקה חדשה',
       body: el('div', {}, [
-        UI.field('שם המחלקה', nameInput, isEdit ? 'שינוי השם מתעדכן בכל המשתמשים המשויכים למחלקה' : null),
         UI.field('תת-מחלקה של', parentSelect, 'מנהל מחלקת האם רואה ומנהל גם את תתי-המחלקות שלה'),
-        UI.field('מנהל/ת המחלקה', managerSelect, 'מי שייבחר ישויך למחלקה הזו ויקבל עליה אחריות ניהולית'),
-        UI.field('ימי עבודה', daysBox, 'קובע את "מחר" בהקלטה וב-Today, ואת ימי מייל הבוקר. שבת — יום מנוחה. עובד שטח מוסיף לעצמו את יום ו׳ (בכרטיס המשתמש).'),
+        UI.field('שם המחלקה', el('div', {}, [nameInput, suggestBox]), isEdit
+          ? 'שינוי השם מתעדכן בכל המשתמשים המשויכים למחלקה'
+          : 'שם חדש יוצר מחלקה חדשה; בחירת מחלקות קיימות מעבירה אותן אל תחת מחלקת האם'),
+        newOnly,
         isEdit ? UI.field('סטטוס', statusSelect) : null
       ]),
       footer: [saveBtn, el('div.spacer')]
     });
+    drawSuggest();
 
     saveBtn.addEventListener('click', async () => {
       const name = nameInput.value.trim();
+      // שם שזהה למחלקה קיימת — היא נבחרת, ולא נוצרת כפולה (השרת היה דוחה)
+      const same = !isEdit && all.find((d) => d.name === name);
+      if (same && movable().some((d) => d.id === same.id)) { picked.add(same.id); nameInput.value = ''; drawSuggest(); return saveMoves(); }
+      if (!isEdit && !name && picked.size) return saveMoves();
       if (!name) return UI.toast('נדרש שם מחלקה', 'error');
       // ריק נשלח כ-null במפורש, כדי שאפשר יהיה גם לבטל מנהל קיים
       const managerUserId = managerSelect.value ? Number(managerSelect.value) : null;
@@ -787,6 +854,7 @@ const AdminView = (() => {
         const parentId = parentSelect.value ? Number(parentSelect.value) : null;
         if (isEdit) await API.updateDepartment(dept.id, { name, parentId, managerUserId, status: statusSelect.value, workDays });
         else await API.createDepartment({ name, parentId, managerUserId, workDays });
+        for (const id of picked) await API.updateDepartment(id, { parentId });
         m.close();
         UI.success('נשמר');
         // מינוי מנהל משייך אותו למחלקה — כולל את המשתמש המחובר עצמו,
@@ -795,6 +863,19 @@ const AdminView = (() => {
         reload();
       } catch (err) { saveBtn.disabled = false; UI.error(err); }
     });
+
+    /** רק העברת מחלקות קיימות, בלי ליצור חדשה */
+    async function saveMoves() {
+      const target = parentSelect.value ? Number(parentSelect.value) : null;
+      saveBtn.disabled = true;
+      try {
+        for (const id of picked) await API.updateDepartment(id, { parentId: target });
+        m.close();
+        UI.success(picked.size === 1 ? 'המחלקה הועברה' : `${picked.size} מחלקות הועברו`);
+        await App.reloadReference();
+        reload();
+      } catch (err) { saveBtn.disabled = false; UI.error(err); }
+    }
   }
 
   // ------------------------------------------------------------- ספקים
