@@ -369,7 +369,9 @@ const AiInboxView = (() => {
 
     // אנשים — שורה לכל אחד, עם תפקיד שאפשר לשנות או להסיר
     const people = (d.people ?? []).map((p) => ({ ...p }));
-    const users = App.state.users.filter((u) => u.id !== App.state.actor.id);
+    // רק מי שמותר לי להקצות לו — אותו סינון של כל בוררי האחראי
+    const { near, far } = UI.usersByDepartment();
+    const users = [...near, ...far].filter((u) => u.id !== App.state.actor.id);
     const peopleBox = el('div');
     const drawPeople = () => UI.mount(peopleBox, el('div.ai-people', {}, [
       ...people.map((p, i) => {

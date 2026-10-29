@@ -390,7 +390,9 @@ const GridView = (() => {
          * המשימה, בכרטיס ובתיוג ‎@‎. ברשימה של חמישים אנשים מי שיושב איתי
          * נופל בדיוק באמצע, והוא זה שאליו מקצים כמעט תמיד.
          */
-        const { near, far, deptName } = UI.usersByDepartment();
+        const { near, far, deptName } = UI.usersByDepartment({
+          keep: task.assigneeType === 'user' && task.assigneeId ? [task.assigneeId] : []
+        });
         const userOpt = (u) => ({ value: `user:${u.id}`, label: u.name, vendor: false });
         const vendors = App.may('assign_task_to_vendor')
           ? App.state.vendors.filter((v) => v.status === 'active')

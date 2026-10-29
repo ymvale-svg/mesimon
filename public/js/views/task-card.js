@@ -594,7 +594,9 @@ const TaskCardView = (() => {
       : el('div', {}, [UI.statusTag(task)]);
 
     // חברי המחלקה בראש הרשימה — אותו סדר בכל מקום שבו בוחרים אחראי
-    const { near: nearUsers, far: farUsers, deptName } = UI.usersByDepartment();
+    const { near: nearUsers, far: farUsers, deptName } = UI.usersByDepartment({
+      keep: [task?.assigneeType === 'user' ? task.assigneeId : null, ...(task?.extraAssignees ?? []).filter((e) => e.type === 'user').map((e) => e.id)].filter(Boolean)
+    });
     const asOption = (u) => ({ value: `user:${u.id}`, label: u.name });
     const vendorOpts = App.may('assign_task_to_vendor')
       ? App.state.vendors.map((v) => ({ value: `vendor:${v.id}`, label: `${v.name} (ספק)` }))
