@@ -108,7 +108,7 @@
   .tabbar button {
     flex: 1; border: 0; background: none; cursor: pointer;
     display: flex; flex-direction: column; align-items: center; justify-content: center;
-    gap: 3px; font-size: 10.5px; color: var(--text-faint); font-family: inherit;
+    gap: 3px; font-size: var(--fs-xs); color: var(--text-faint); font-family: inherit;
     padding: 0; min-width: 0;
   }
   .tabbar button .ic { width: 21px; height: 21px; }
@@ -148,14 +148,14 @@
     font-size: 16px; padding: 10px 12px;
   }
   .btn { min-height: 40px; padding: 9px 14px; }
-  .btn-sm { min-height: 34px; padding: 6px 11px; font-size: 13px; }
+  .btn-sm { min-height: 34px; padding: 6px 11px; font-size: var(--fs-md); }
   .icon-btn { min-width: 40px; min-height: 40px; }
   input[type=checkbox], input[type=radio] { width: 20px; height: 20px; }
 
   /* ---------------------------------------------------------------- כרטיסים ומודלים */
 
   .page-head { margin-bottom: 12px; gap: 10px; }
-  .page-head h2 { font-size: 19px; }
+  .page-head h2 { font-size: var(--fs-xl); }
   .page-head .sub { display: none; }
   .grid.grid-2, .grid.grid-3, .grid.grid-4 { grid-template-columns: 1fr; }
 
@@ -222,7 +222,7 @@
     padding: 9px 10px; text-align: start; cursor: pointer; min-height: 60px;
   }
   .m-count b { display: block; font-size: 21px; line-height: 1.15; font-variant-numeric: tabular-nums; }
-  .m-count span { font-size: 11px; color: var(--text-faint); }
+  .m-count span { font-size: var(--fs-xs); color: var(--text-faint); }
   .m-count.is-danger b { color: var(--danger); }
   .m-count.is-warn b { color: var(--warn); }
   .m-count.active { border-color: var(--brand); box-shadow: 0 0 0 1px var(--brand); }
@@ -236,7 +236,7 @@
   .m-chip {
     flex: none; border: 1px solid var(--border-strong); background: var(--surface);
     color: var(--text-soft); border-radius: 999px; padding: 7px 13px;
-    font-size: 13px; font-weight: 600; cursor: pointer; white-space: nowrap;
+    font-size: var(--fs-md); font-weight: 600; cursor: pointer; white-space: nowrap;
     min-height: 36px; font-family: inherit;
   }
   .m-chip.on { background: var(--brand); border-color: var(--brand); color: #fff; }
@@ -261,12 +261,12 @@
   .m-task .m-check::before { content: ''; position: absolute; inset: -11px; }
   .m-task .m-body { min-width: 0; }
   .m-task .m-title {
-    font-weight: 600; font-size: 14.5px; line-height: 1.35;
+    font-weight: 600; font-size: var(--fs-lg); line-height: 1.35;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
   .m-task .m-meta {
     display: flex; align-items: center; gap: 6px; margin-top: 3px;
-    font-size: 11.5px; color: var(--text-faint); min-width: 0;
+    font-size: var(--fs-xs); color: var(--text-faint); min-width: 0;
   }
   .m-task .m-meta .m-proj { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .m-task .m-side { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
@@ -307,7 +307,7 @@
   .proj-sheet { max-width: 520px; margin-inline: auto; border-radius: 16px 16px 0 0; }
   .proj-sheet .proj-pop-head {
     border-bottom: 1px solid var(--border); margin-bottom: 6px;
-    padding: 0 2px 10px; font-size: 15px; color: var(--text);
+    padding: 0 2px 10px; font-size: var(--fs-lg); color: var(--text);
   }
   /* ביטול נפרד בראש הטווח של האגודל — במחשב סוגרים בלחיצה בחוץ או ב-Escape */
   .proj-sheet .track-opt.is-cancel {
@@ -319,7 +319,7 @@
    * מטרות מגע בתוך התפריט. חל גם על בורר הסטטוסים שבמסך הבקרה, שמשתמש
    * באותן מחלקות ונגיש גם הוא מהטלפון — שם הן קטנות באותה מידה.
    */
-  .track-opt { min-height: 46px; padding: 12px 14px; font-size: 15px; border-radius: 9px; }
+  .track-opt { min-height: 46px; padding: 12px 14px; font-size: var(--fs-lg); border-radius: 9px; }
   .track-opt:active { background: var(--surface-2); }
   .track-opt.is-danger:active { background: var(--danger-bg); }
 
@@ -330,7 +330,7 @@
    */
   .proj-pop-colors { flex-wrap: wrap; padding: 10px 2px 2px; }
   .proj-pop-label { width: 100%; margin: 0 0 6px; }
-  .proj-swatch { width: 36px; height: 36px; border-radius: 9px; font-size: 15px; }
+  .proj-swatch { width: 36px; height: 36px; border-radius: 9px; font-size: var(--fs-lg); }
 
   /*
    * סעיף 3 — בלוח בטלפון: הסטטוס והעדיפות מצטמצמים לנקודת צבע בלבד, בלי
@@ -351,21 +351,21 @@
   /* העמודות שנשארו נכנסות לרוחב המסך; מה שהוסר לא נבנה כלל (grid.js) */
   table.grid-table { min-width: 0; }
   .grid-table th, .grid-table td { padding: 7px 5px; }
-  .grid-table .cell-due { font-size: 11px; }
+  .grid-table .cell-due { font-size: var(--fs-xs); }
   .grid-table .title-tags { display: none; }   /* התגיות חוזרות בכרטיס המשימה */
 
   /* המסכים שאינם מיועדים לטלפון */
   .m-desktop-only {
     background: var(--warn-bg); border: 1px solid #f4d9a8; border-radius: 11px;
-    padding: 14px; color: #92400e; font-size: 13.5px; line-height: 1.6;
+    padding: 14px; color: #92400e; font-size: var(--fs-base); line-height: 1.6;
   }
 }
 
 /* מסך צר במיוחד — שלוש קופסאות המונים לא נכנסות בנוחות */
 @media (max-width: 360px) {
   .m-count b { font-size: 18px; }
-  .m-count span { font-size: 10px; }
-  .tabbar button { font-size: 9.5px; }
+  .m-count span { font-size: var(--fs-xs); }
+  .tabbar button { font-size: var(--fs-xs); }
 }
 
 /* משימות AI — בטלפון שדות הנמען אחד מתחת לשני, וההודעות ברוחב מלא */

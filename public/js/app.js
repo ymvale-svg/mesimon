@@ -988,14 +988,14 @@ const App = (() => {
 
       // האבחון נטען אחרי הציור, כדי שהמסך ייפתח מיד
       notifDiagnostics().then((rows) => UI.mount(diagBox,
-        el('h4', { text: 'אבחון', style: { margin: '16px 0 8px', fontSize: '13px' } }),
+        el('h4', { text: 'אבחון', style: { margin: '16px 0 8px', fontSize: 'var(--fs-md)' } }),
         el('div.table-wrap', {}, [
           el('table.data', {}, [
             el('tbody', {}, rows.map((r) => el('tr', {}, [
               el('td', { style: { width: '28px' }, text: r.ok ? '✅' : '⚠️' }),
               el('td', { text: r.label }),
               el('td', { class: r.ok ? 'text-ok' : 'text-danger',
-                style: { fontSize: '12px', direction: 'ltr', textAlign: 'right' }, text: r.detail || '' })
+                style: { fontSize: 'var(--fs-sm)', direction: 'ltr', textAlign: 'right' }, text: r.detail || '' })
             ])))
           ])
         ])
@@ -1024,7 +1024,7 @@ const App = (() => {
 
     const panel = el('div.notif-panel#notif-panel', {}, [
       el('div.np-head', {}, [
-        el('h3', { text: 'התראות', style: { flex: '1', fontSize: '15px' } }),
+        el('h3', { text: 'התראות', style: { flex: '1', fontSize: 'var(--fs-lg)' } }),
         state.unread
           ? el('button.btn.btn-sm', {
               onclick: async () => {
@@ -1054,7 +1054,7 @@ const App = (() => {
                 [style.mask ? UI.icon(style.mask, { size: 15 }) : style.icon]),
               el('div.n-body', {}, [
                 el('b', { text: n.title }),
-                n.body ? el('div', { text: n.body, style: { fontSize: '12.5px' } }) : null,
+                n.body ? el('div', { text: n.body, style: { fontSize: 'var(--fs-sm)' } }) : null,
                 el('small', { text: UI.relative(n.createdAt) })
               ])
             ]);

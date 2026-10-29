@@ -140,7 +140,7 @@ const ChecklistItemView = (() => {
         renameBtn
       ]),
       noteBlock,
-      el('h4', { text: `תגובות בסעיף (${item.comments.length})`, style: { fontSize: '13.5px', margin: '16px 0 8px' } }),
+      el('h4', { text: `תגובות בסעיף (${item.comments.length})`, style: { fontSize: 'var(--fs-base)', margin: '16px 0 8px' } }),
       UI.commentThread({
         comments: item.comments,
         canComment: permissions.comment,
