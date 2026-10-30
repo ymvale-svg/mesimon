@@ -248,7 +248,7 @@ const PhonebookView = (() => {
   async function render(container) {
     UI.mount(container, UI.spinner());
     let items = [];
-    const search = el('input.pb-search', { type: 'search', placeholder: 'חיפוש לפי שם, טלפון, מייל או הערה…', autocomplete: 'off' });
+    const search = el('input.pb-search', { type: 'search', placeholder: 'חיפוש לפי שם, טלפון, מייל או הערה…', autocomplete: 'off', 'aria-label': 'חיפוש באלפון' });
     const tbody = el('tbody');
     const summary = el('span.mute-sm');
     let editing = null;

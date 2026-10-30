@@ -600,7 +600,8 @@ const GridView = (() => {
   function quickAddRow(group, colspan) {
     const input = el('input.quick-add-input', {
       type: 'text',
-      placeholder: '＋ הוספת משימה — כתיבה ו-Enter'
+      placeholder: '＋ הוספת משימה — כתיבה ו-Enter',
+      'aria-label': 'הוספת משימה מהירה'
     });
 
     // Enter מנטרל את השדה, וניטרול שדה ממוקד מפעיל blur — בלי הדגל הזה

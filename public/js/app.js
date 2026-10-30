@@ -2573,7 +2573,7 @@ const App = (() => {
     return el('header.topbar', {}, [
       // הנראות נקבעת ב-CSS ולא כאן: חישוב רוחב חד-פעמי ב-JS השאיר את הכפתור
       // מוסתר אחרי סיבוב המכשיר, ואז לא הייתה דרך להגיע לניווט
-      el('button.icon-btn.drawer-btn', { onclick: toggleDrawer }, ['☰']),
+      el('button.icon-btn.drawer-btn', { onclick: toggleDrawer, 'aria-label': 'תפריט', title: 'תפריט' }, ['☰']),
       el('div.brand', {}, [UI.logo({ size: 'sm', tagline: true, variant: 'brand' })]),
       /*
        * מרווח משני צדי החיפוש. במסך רחב הוא ממורכז בכל מקרה במיקום מוחלט
