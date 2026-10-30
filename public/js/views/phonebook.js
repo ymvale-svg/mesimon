@@ -3,8 +3,10 @@
  * 📒 אלפון ארגוני — שם מלא, טל' 1, טל' 2, פקס, מייל והערות (ההקשר לפרויקט),
  * משותף לכל העובדים.
  *
- *   sidebarSearch — שורת החיפוש בבאנר הימני, מעל "פרויקטים". התוצאות נפתחות
- *                   בחלון צף לידה; בטלפון — מתחתיה, בתוך התפריט
+ *   sidebarSearch — שורת החיפוש בבאנר הימני, מעל "פרויקטים". לחיצה עליה אינה
+ *                   פותחת דבר; התוצאות מופיעות רק כשמקלידים, בחלון צף לידה
+ *                   (בטלפון — מתחתיה, בתוך התפריט). הוספה וניהול — שני
+ *                   סמלים בתוך השורה
  *   openSearch    — אותו חיפוש בחלון, מהכפתור "אלפון" בדשבורד הנייד
  *   contactCard   — כרטיס איש קשר: רק השדות שהוזנו, וליד כל אחד הפעולה שלו
  *   render        — מסך הניהול: עריכה בשורה, הוספה, מחיקה, ייבוא וייצוא
@@ -12,7 +14,7 @@
  *
  * שורת החיפוש בנויה לפי דפוס ה-autocomplete של 21st.dev (ReUI / coss
  * Async Autocomplete): תוצאות תוך כדי הקלדה בקבוצות, הדגשת מה שהוקלד, סמן
- * טעינה בתוך השדה, ניקוי, ניווט במקלדת, ו"אחרונים" כשהשדה ריק.
+ * טעינה בתוך השדה, וניווט במקלדת.
  *
  * סדר התוצאות נקבע בשרת (‎server/phonebook.js‎): קודם שמות שמתחילים במה
  * שהוקלד, אחר כך שמות שמכילים, אחר כך מספרים ומייל, ואחר כך הערות.
@@ -70,16 +72,6 @@ const PhonebookView = (() => {
     }, '.pb-ai');
   }
 
-  // ------------------------------------------------------------- אחרונים
-
-  const RECENT_KEY = 'mesimon.phonebookRecent';
-  const recentIds = () => {
-    try { return (JSON.parse(localStorage.getItem(RECENT_KEY) ?? '[]') || []).filter(Number.isInteger).slice(0, 5); } catch { return []; }
-  };
-  function remember(id) {
-    try { localStorage.setItem(RECENT_KEY, JSON.stringify([id, ...recentIds().filter((x) => x !== id)].slice(0, 5))); } catch { /* בלי זיכרון */ }
-  }
-
   // ------------------------------------------------------------- כרטיס איש קשר
 
   /**
@@ -130,13 +122,30 @@ const PhonebookView = (() => {
    *
    * כל תוצאה היא שורה קצרה (שם, הערה, מספר ראשון); לחיצה או Enter פותחים
    * אותה לכרטיס המלא במקום. ↑↓ בין השורות, Esc מנקה ואחר כך סוגר.
+   *
+   * בשדה ריק אין תוצאות ואין חלון — ‎onChange(false)‎; מההקלדה הראשונה —
+   * ‎onChange(true)‎. בתוך השדה שני סמלים: הוספה (עם מה שהוקלד) וניהול.
    */
-  function searchPanel({ onEscape = () => {} } = {}) {
+  function searchPanel({ onEscape = () => {}, onChange = () => {} } = {}) {
     const input = el('input.pb-search', {
-      type: 'search', placeholder: 'חיפוש באלפון…', autocomplete: 'off',
+      type: 'text', placeholder: 'חיפוש באלפון…', autocomplete: 'off',
       role: 'combobox', 'aria-expanded': 'false', 'aria-label': 'חיפוש באלפון — שם, טלפון או הערה'
     });
-    const field = el('div.pb-field', {}, [UI.lineIcon('contacts'), input, el('span.pb-spin', { 'aria-hidden': 'true' })]);
+    const add = el('button.pb-field-btn', {
+      type: 'button', title: 'הוספה לאלפון', 'aria-label': 'הוספה לאלפון',
+      onclick: () => {
+        const q = input.value.trim();
+        editDialog(/@/.test(q) ? { email: q } : /^[\d\s+\-()]{5,}$/.test(q) ? { phone: q } : { name: q }, { onSaved: search });
+      }
+    }, [UI.lineIcon('plus')]);
+    const manage = el('button.pb-field-btn', {
+      type: 'button', title: 'ניהול האלפון', 'aria-label': 'ניהול האלפון',
+      onclick: () => { onEscape(); App.navigate('phonebook'); }
+    }, [UI.lineIcon('list')]);
+    const field = el('div.pb-field', {}, [
+      UI.lineIcon('contacts'), input,
+      el('div.pb-field-acts', {}, [el('span.pb-spin', { 'aria-hidden': 'true' }), add, manage])
+    ]);
     const list = el('div.pb-list', { role: 'listbox' });
     const count = el('span.mute-sm');
     let timer = null;
@@ -171,15 +180,7 @@ const PhonebookView = (() => {
       if (!e) return;
       active = i;
       open = open === e.id ? null : e.id;
-      if (open) remember(e.id);
       draw();
-    }
-
-    /** "להוסיף את 'דני' לאלפון" — מה שהוקלד נכנס לשדה המתאים */
-    function addLine(q) {
-      const prefill = /@/.test(q) ? { email: q } : /^[\d\s+\-()]{5,}$/.test(q) ? { phone: q } : { name: q };
-      return el('button.btn.btn-sm.pb-add', { type: 'button', onclick: () => editDialog(prefill, { onSaved: search }) },
-        [UI.lineIcon('plus'), q ? `להוסיף את "${q}" לאלפון` : 'הוספה לאלפון']);
     }
 
     function draw(emptyNote = null) {
@@ -188,16 +189,7 @@ const PhonebookView = (() => {
       const group = (title, arr) => (arr.length
         ? [el('div.pb-group', { text: title }), ...arr.map((e) => row(e, items.indexOf(e)))]
         : []);
-      UI.mount(list,
-        ...(query
-          ? [...group('אנשי קשר', names), ...group('מופיע בהערות', notes)]
-          : group('אחרונים', items)),
-        emptyNote,
-        el('div.pb-foot', {}, [
-          addLine(items.length ? '' : query),
-          el('div.spacer'),
-          el('button.btn.btn-sm.btn-ghost', { type: 'button', onclick: () => App.navigate('phonebook') }, ['ניהול האלפון'])
-        ]));
+      UI.mount(list, ...group('אנשי קשר', names), ...group('מופיע בהערות', notes), emptyNote);
       input.setAttribute('aria-expanded', 'true');
       list.querySelector('.pb-row.active')?.scrollIntoView({ block: 'nearest' });
     }
@@ -205,25 +197,24 @@ const PhonebookView = (() => {
     async function search() {
       const mine = ++seq;
       query = input.value.trim();
+      if (!query) {
+        items = [];
+        open = null;
+        UI.mount(list);
+        input.setAttribute('aria-expanded', 'false');
+        onChange(false);
+        return;
+      }
       field.classList.add('is-loading');
       try {
-        const ids = recentIds();
-        const url = query
-          ? `/api/phonebook?q=${encodeURIComponent(query)}&limit=20`
-          : `/api/phonebook?ids=${ids.join(',')}`;
-        const data = await API.get(url);
+        const data = await API.get(`/api/phonebook?q=${encodeURIComponent(query)}&limit=20`);
         if (mine !== seq) return;
-        items = query ? data.items : ids.map((id) => data.items.find((e) => e.id === id)).filter(Boolean);
+        items = data.items;
         count.textContent = data.total ? `${data.total} אנשי קשר` : '';
         active = items.length ? 0 : -1;
         if (!items.some((e) => e.id === open)) open = null;
-        draw(!data.total
-          ? el('div.pb-empty.mute-sm', { text: 'האלפון עוד ריק. מוסיפים כאן, או מייבאים מאקסל ב"ניהול האלפון".' })
-          : query && !items.length
-            ? el('div.pb-empty.mute-sm', { text: `לא נמצא "${query}"` })
-            : !query && !items.length
-              ? el('div.pb-empty.mute-sm', { text: 'מקלידים שם, טלפון או מילה מההערה.' })
-              : null);
+        draw(items.length ? null : el('div.pb-empty.mute-sm', { text: `לא נמצא "${query}" — ＋ בשורת החיפוש מוסיף אותו לאלפון` }));
+        onChange(true);
       } catch (err) {
         if (mine === seq) UI.mount(list, el('div.pb-empty.mute-sm', { text: err.message }));
       } finally {
@@ -266,7 +257,11 @@ const PhonebookView = (() => {
     }
     const pop = el('div.pb-pop', { hidden: true });
     const close = () => { pop.hidden = true; side.panel.input.setAttribute('aria-expanded', 'false'); };
-    const panel = searchPanel({ onEscape: () => { close(); panel.input.blur(); } });
+    // החלון נפתח רק כשיש מה להראות — כשמקלידים, ולא בלחיצה על השדה
+    const panel = searchPanel({
+      onEscape: () => { close(); panel.input.blur(); },
+      onChange: (has) => { if (has) { place(); pop.hidden = false; } else close(); }
+    });
     pop.appendChild(panel.list);
 
     const place = () => {
@@ -276,10 +271,6 @@ const PhonebookView = (() => {
       // התפריט מימין — החלון נפתח משמאלו
       pop.style.right = `${window.innerWidth - r.left + 10}px`;
     };
-    const show = () => { place(); pop.hidden = false; panel.search(); };
-
-    panel.input.addEventListener('focus', show);
-    panel.input.addEventListener('input', () => { if (pop.hidden) show(); });
     window.addEventListener('resize', () => { if (!pop.hidden) place(); });
 
     const node = el('div.pb-side', { title: 'אלפון' }, [panel.field, pop]);
@@ -299,7 +290,6 @@ const PhonebookView = (() => {
       title: 'אלפון',
       body: el('div.pb-modal', {}, [panel.field, panel.list])
     });
-    panel.search();
     setTimeout(() => panel.input.focus(), 50);
   }
 
@@ -421,11 +411,11 @@ const PhonebookView = (() => {
     function viewRow(e) {
       return el('tr', {}, [
         el('td', {}, [el('b', { text: e.name })]),
-        el('td', {}, [e.phone, e.phone2].filter(Boolean).map((p) => cell(p, callButton(p)))),
+        el('td', {}, e.phone ? [cell(e.phone, callButton(e.phone))] : []),
+        el('td', {}, e.phone2 ? [cell(e.phone2, callButton(e.phone2))] : []),
         el('td', {}, e.fax ? [cell(e.fax, iconBtn('copy', `העתקת הפקס ${e.fax}`, () => copy(e.fax)))] : []),
         el('td', {}, e.email ? [cell(e.email, mailButton(e.email))] : []),
         el('td', { text: e.note }),
-        el('td.mute-sm', { text: e.updatedBy ? `${e.updatedBy} · ${UI.formatDate(e.updatedAt)}` : '' }),
         el('td.pb-row-acts', {}, [
           aiButton(e),
           iconBtn('pencil', `עריכת ${e.name}`, () => { editing = e.id; draw(); }),
@@ -463,7 +453,7 @@ const PhonebookView = (() => {
       }
       setTimeout(() => f.name.focus(), 0);
       return el('tr.pb-editing', {}, [
-        el('td', {}, [f.name]), el('td', {}, [f.phone, f.phone2]), el('td', {}, [f.fax]), el('td', {}, [f.email]), el('td', {}, [f.note]), el('td'),
+        el('td', {}, [f.name]), el('td', {}, [f.phone]), el('td', {}, [f.phone2]), el('td', {}, [f.fax]), el('td', {}, [f.email]), el('td', {}, [f.note]),
         el('td.pb-row-acts', {}, [
           el('button.btn.btn-sm.btn-primary', { type: 'button', onclick: save }, ['שמירה']),
           el('button.btn.btn-sm', { type: 'button', onclick: () => { editing = null; draw(); } }, ['ביטול'])
@@ -502,7 +492,8 @@ const PhonebookView = (() => {
           el('div.flex.pb-tools', {}, [search, summary]),
           el('div.table-wrap.pb-table-wrap', {}, [
             el('table.data.pb-table', {}, [
-              el('thead', {}, [el('tr', {}, ['שם מלא', 'טלפון', 'פקס', 'מייל', 'הערות', 'עודכן', ''].map((h) => el('th', { text: h })))]),
+              // העמודות כמו בכרטיס: שם מלא, טל' 1, טל' 2, פקס, מייל, הערות
+              el('thead', {}, [el('tr', {}, ['שם מלא', "טל' 1", "טל' 2", 'פקס', 'מייל', 'הערות', ''].map((h) => el('th', { text: h })))]),
               tbody
             ])
           ])

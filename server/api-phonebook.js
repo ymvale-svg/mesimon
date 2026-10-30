@@ -24,11 +24,9 @@ function register(router) {
     const url = parseUrl(req);
     const q = url.searchParams.get('q') ?? '';
     const all = url.searchParams.get('all') === '1';
-    // "אחרונים" — הכרטיסים שנפתחו לאחרונה, לפי מזהה
-    const ids = (url.searchParams.get('ids') ?? '').split(',').map(Number).filter((n) => Number.isInteger(n) && n > 0).slice(0, 10);
     const limit = Math.min(50, Math.max(1, Number(url.searchParams.get('limit')) || 12));
     sendJson(res, 200, {
-      items: all ? Phonebook.all() : url.searchParams.has('ids') ? ids.map(Phonebook.byId).filter(Boolean) : Phonebook.search(q, { limit }),
+      items: all ? Phonebook.all() : Phonebook.search(q, { limit }),
       total: Phonebook.count()
     });
   });
