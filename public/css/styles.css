@@ -202,7 +202,126 @@ textarea { resize: vertical; min-height: 76px; }
   border-radius: 50%;
   background: rgba(255, 255, 255, .07);
 }
-.hero-center { position: relative; z-index: 1; }
+.hero-center {
+  position: relative; z-index: 1;
+  display: flex; flex-direction: column; align-items: center; gap: 6px;
+}
+/* הלוחות הם הסמל באזור הזה; האריח הרגיל מעל השם היה כפילות */
+.login-hero .logo-mark { display: none; }
+
+/*
+ * רשת הנקודות (‎bindHero‎ ב-login.js) — מתחת לתוכן ומעל הרקע. האינטראקציה
+ * נקלטת על ‎.login-hero‎ עצמו ולא על הקנבס, כדי שגם מעל הלוחות והשם הנקודות
+ * ימשיכו להגיב.
+ */
+.hero-dots {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  pointer-events: none;
+  animation: hero-fade .9s ease-out both;
+}
+/*
+ * הנשימה של הרקע כשאין עכבר: זוהר רך שנודד לאט. ב-CSS ולא בלולאת הקנבס —
+ * ‎transform‎ בלבד רץ על המאיץ הגרפי, וה-JS נשאר כבוי כשאיש לא נוגע במסך.
+ */
+.hero-glow {
+  position: absolute; inset-block-start: 8%; inset-inline-start: 12%;
+  width: 70%; aspect-ratio: 1; border-radius: 50%;
+  background: radial-gradient(circle, rgba(204, 251, 241, .13) 0%, rgba(204, 251, 241, 0) 62%);
+  pointer-events: none;
+  animation: hero-breathe 26s ease-in-out infinite alternate;
+}
+@keyframes hero-fade { from { opacity: 0; } }
+@keyframes hero-breathe {
+  from { transform: translate(-6%, -4%) scale(1); }
+  to { transform: translate(10%, 12%) scale(1.18); }
+}
+
+/*
+ * הערימה האיזומטרית — שלושה לוחות, הד ללוגו של אשל הירדן בגווני משימון.
+ * CSS תלת־ממדי ולא ציור: לוח הוא ריבוע ושתי פאות צד אמיתיות, ולכן הטיה
+ * והרמה הן רק ‎transform‎ על אותם אלמנטים — בלי לחשב הטלה בכל פריים.
+ * הממדים כאן חייבים להתאים ל-SLAB ו-THICK שב-login.js.
+ */
+.mark-scene {
+  position: relative; width: 230px; height: 196px;
+  perspective: 900px;
+  pointer-events: none;
+  /* מוגדל ב-transform ולא בממדים — אלה חייבים להתאים ל-login.js; השוליים מפנים לו מקום */
+  transform: scale(1.2); margin-block: 16px 22px;
+}
+.mark-tilt { position: absolute; inset: 0; transform-style: preserve-3d; }
+/* ‎translateY‎ מוריד את הבסיס: הערימה גדלה כלפי מעלה, ובלעדיו היא לא ממורכזת */
+.mark-iso {
+  position: absolute; inset-block-start: 50%; inset-inline-start: 50%;
+  width: 112px; height: 112px; margin: -56px;
+  transform: translateY(34px) rotateX(60deg) rotateZ(45deg);
+  transform-style: preserve-3d;
+}
+.slab { position: absolute; inset: 0; transform-style: preserve-3d; }
+.slab-face {
+  position: absolute;
+  /* כניסה: כל לוח מופיע 90ms אחרי הקודם, יחד עם הנפילה שב-JS */
+  animation: hero-fade .45s ease-out both;
+  animation-delay: calc(120ms + var(--i, 0) * 90ms);
+}
+/* direction: ltr — הגאומטריה כאן היא של המרחב ולא של הטקסט; ב-RTL ‎left‎ לא מתהפך ממילא, אבל ‎inset-inline‎ היה מתהפך */
+.slab { direction: ltr; }
+.slab-top {
+  inset: 0; border-radius: 3px;
+  transform: translateZ(20px);
+  background: linear-gradient(135deg, #ccfbf1 0%, #99f6e4 42%, #5eead4 100%);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .55);
+}
+/*
+ * שתי הפאות שפונות לצופה — כמו בסמל המערכת (‎UI.logoMark‎): פאה בהירה
+ * משמאל (‎#2dd4bf‎, גוון הפאה בגרסה הבהירה של הסמל) ופאה מלאה וכהה מימין.
+ */
+.slab-front {
+  left: 0; top: 100%; width: 100%; height: 20px;
+  transform-origin: top; transform: translateZ(20px) rotateX(-90deg);
+  background: linear-gradient(90deg, #2dd4bf, #14b8a6);
+}
+.slab-side {
+  left: 100%; top: 0; width: 20px; height: 100%;
+  transform-origin: left; transform: translateZ(20px) rotateY(90deg);
+  background: linear-gradient(180deg, #134e4a, #0b3532);
+}
+/* הצל שהלוח העליון מטיל — כשהלוחות צמודים זה הפס הכהה של הלוגו, וכשהם נפרדים הוא מתרכך */
+.slab-shade {
+  position: absolute; inset: 0; border-radius: 3px;
+  background: #04211f; opacity: .75;
+}
+.slab-check {
+  position: absolute; inset: 20%;
+  color: var(--brand);
+  /* סיבוב נגדי ל-rotateZ של הערימה: הווי נקרא ישר, רק משוטח בזווית ההסתכלות */
+  transform: rotate(-45deg);
+}
+.slab-check svg { display: block; width: 100%; height: 100%; }
+/* צל קרקע רך מתחת לערימה, מוזז אל הצד הרחוק מהאור */
+.mark-ground {
+  position: absolute; inset: 6%;
+  background: rgba(3, 30, 28, .5); border-radius: 12px;
+  filter: blur(12px);
+  transform: translate(10px, 10px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hero-dots, .hero-glow, .slab-face { animation: none; }
+}
+
+/* כפתור הצגת הסיסמה — בתוך השדה, בקצה ההתחלתי של הקריאה (שמאל ב-RTL) */
+.pw-wrap { position: relative; }
+.pw-wrap input { padding-inline-end: 42px; }
+.pw-toggle {
+  position: absolute; inset-block: 0; inset-inline-end: 4px; margin-block: auto;
+  width: 34px; height: 34px; display: grid; place-items: center;
+  border: 0; border-radius: 8px; background: transparent;
+  color: var(--text-mute); cursor: pointer;
+}
+.pw-toggle:hover { color: var(--brand); background: var(--surface-2); }
+.pw-toggle:focus-visible { outline: 2px solid var(--brand); outline-offset: 1px; }
+.pw-toggle[aria-pressed="true"] { color: var(--brand); }
 
 .login-panel { padding: 52px 46px; display: flex; flex-direction: column; justify-content: center; }
 .login-panel h2 { font-size: 24px; margin-bottom: 4px; }
@@ -1918,8 +2037,26 @@ input[type="color"] { width: 46px; height: 30px; padding: 2px; cursor: pointer; 
 @keyframes spin { to { transform: rotate(360deg); } }
 
 @media (max-width: 900px) {
-  .login-page { grid-template-columns: 1fr; }
-  .login-hero { display: none; }
+  .login-page { grid-template-columns: 1fr; align-content: start; }
+  /*
+   * בטלפון אזור המיתוג לא נעלם אלא הופך לרצועה בראש המסך: הלוחות הקטנים
+   * והשם, והטופס מתחתיה. ‎pan-y‎ — גלילה אנכית נשארת של הדפדפן, ותנועה
+   * אופקית של האצבע מטה את הערימה.
+   */
+  .login-hero {
+    order: -1; height: 150px; padding: 0 20px;
+    touch-action: pan-y;
+  }
+  .login-hero::after { inset: auto -60px -220px auto; width: 300px; height: 300px; }
+  .login-hero .hero-center { flex-direction: row; gap: 4px; }
+  /* הקטנה ב-transform ושוליים שליליים שמקזזים את התיבה — כך אין צורך בסט ממדים שני שיתאים ל-JS */
+  .login-hero .mark-scene { transform: scale(.56); margin: -43px -46px -43px -54px; }
+  .login-hero .app-logo-lg { gap: 0; }
+  .login-hero .app-logo-lg .app-logo-name { font-size: 27px; letter-spacing: .16em; margin-inline-end: -.16em; }
+  .login-hero .app-logo-lg .app-logo-tagline { font-size: 13px; margin-top: 4px; }
+  .login-panel { padding: 26px 22px 40px; justify-content: flex-start; }
+  .company-logo.on-panel { margin-bottom: 18px; }
+  .company-logo.on-panel .company-img { max-height: 80px; }
   .main { padding: 14px; }
   .toolbar.bulk-bar { top: -14px; }
 }
