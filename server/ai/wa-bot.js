@@ -63,7 +63,7 @@ const parseJson = (text, fallback) => { try { return JSON.parse(text); } catch {
  * פעולות שתלויות ב-api.js — מוזרקות משם. ‎tasks‎: רשימות, סגירה והערה עם
  * הרשאות העובד. ‎mail‎: חיפוש נמען ופתיחת משימת AI — אותן פונקציות של האשף.
  */
-const hooks = { createTask: null, listProjectsFor: null, newTaskProjects: null, assignableUserIds: null, tasks: null, mail: null };
+const hooks = { createTask: null, listProjectsFor: null, newTaskProjects: null, assignableUserIds: null, assignBlockReason: null, tasks: null, mail: null };
 
 // ---------------------------------------------------------------------------
 // החיבור
@@ -943,7 +943,8 @@ function checkDraft(actor, draft) {
   const { assignable, allowedProjects } = newTaskScope(actor);
   const warnings = [];
   if (draft.assigneeId && draft.assigneeId !== actor.id && !assignable.has(draft.assigneeId)) {
-    warnings.push(`אין לך הרשאה לשייך משימה ל${nameOf(draft.assigneeId) || 'עובד זה'} — המשימה תיפתח אצלך`);
+    const reason = hooks.assignBlockReason?.(actor, draft.assigneeId) || `אין לך הרשאה לשייך משימה ל${nameOf(draft.assigneeId) || 'עובד זה'}`;
+    warnings.push(`${reason} — המשימה תיפתח אצלך`);
     draft = { ...draft, assigneeId: 0 };
   }
   if (draft.projectId && !allowedProjects.has(draft.projectId)) {
@@ -1963,8 +1964,8 @@ async function tick() {
   }
 }
 
-function init({ createTask, listProjectsFor, newTaskProjects, assignableUserIds, tasks, mail }) {
-  Object.assign(hooks, { createTask, listProjectsFor, newTaskProjects, assignableUserIds, tasks, mail });
+function init({ createTask, listProjectsFor, newTaskProjects, assignableUserIds, assignBlockReason, tasks, mail }) {
+  Object.assign(hooks, { createTask, listProjectsFor, newTaskProjects, assignableUserIds, assignBlockReason, tasks, mail });
 }
 
 function start() {

@@ -1058,10 +1058,31 @@ function newTaskProjects(actor) {
 function assertMayAssignInTeam(actor, type, id) {
   assertMayAssignTo(actor, type, id);
   if (type !== 'user' || !id || actor.type !== 'user' || Number(id) === actor.id) return;
-  const target = D.get('SELECT department_id FROM users WHERE id = ?', Number(id));
-  if (!P.inActorDepartments(actor, target?.department_id ?? null)) {
-    throw forbidden('מהבוט ומההקלטה אפשר לשייך משימה רק לעובדים שמתחתיך (המחלקה שלך)');
+  const target = D.get('SELECT id, full_name, role, department_id FROM users WHERE id = ?', Number(id));
+  if (!target) throw badRequest('המשתמש שנבחר אינו קיים');
+
+  /*
+   * הנהלה מטילה משימות על המנהלים שמתחתיה, והם מחליטים אם להעביר הלאה —
+   * לא ישירות על עובד מן השורה. "מתחתיה": מנהלי המחלקה שלה ותתי-המחלקות;
+   * חבר הנהלה בלי מחלקה — מנהלי כל המחלקות.
+   */
+  if (actor.role === 'executive') {
+    const isManager = target.role === 'manager'
+      || Boolean(D.get('SELECT 1 FROM departments WHERE manager_user_id = ?', target.id));
+    if (!isManager) throw forbidden(`הנהלה משייכת משימות רק למנהלים שמתחתיה, והם מעבירים הלאה — ל${target.full_name} אין תפקיד ניהולי`);
+    if (actor.departmentId && !P.inActorDepartments(actor, target.department_id ?? null)) {
+      throw forbidden(`${target.full_name} לא מהמנהלים שמתחתיך`);
+    }
+    return;
   }
+  if (!P.inActorDepartments(actor, target.department_id ?? null)) {
+    throw forbidden(`${target.full_name} לא בצוות שלך — מהבוט ומההקלטה משייכים רק לעובדים שמתחתיך`);
+  }
+}
+
+/** למה אסור לשייך — הסיבה לתצוגה, או ‎null‎ כשמותר (‎assertMayAssignInTeam‎) */
+function assignBlockReason(actor, id) {
+  try { assertMayAssignInTeam(actor, 'user', id); return null; } catch (err) { return err.message; }
 }
 
 /** מי מותר לי לשייך אליו משימה מהבוט ומההקלטה (‎assertMayAssignInTeam‎) */
@@ -4959,7 +4980,7 @@ const botTaskOps = {
   }
 };
 
-AiApi.register(router, { getTaskOr404, assertVisible, mayOnTask, shapeTask, actorRef, saveAttachment, createTask, assertMayAssignTo, listProjectsFor, newTaskProjects, assignableUserIds, botTaskOps });
+AiApi.register(router, { getTaskOr404, assertVisible, mayOnTask, shapeTask, actorRef, saveAttachment, createTask, assertMayAssignTo, listProjectsFor, newTaskProjects, assignableUserIds, assignBlockReason, botTaskOps });
 TodayApi.register(router, { shapeTask, createTask, getTaskOr404, listProjectsFor, newTaskProjects, assertMayAssignTo: assertMayAssignInTeam });
 PhonebookApi.register(router);
 MeetingsApi.register(router, { getTaskOr404, assertVisible, shapeTask, canSeeTask });

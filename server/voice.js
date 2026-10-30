@@ -313,10 +313,11 @@ async function handle(actor, { text, forcePreview = false }, { projects, createT
     const [type, id] = ref.split(':');
     try {
       assertMayAssignTo(actor, type, Number(id));
-    } catch {
+    } catch (err) {
       const name = key === 'assignee' ? draft.assigneeName : draft.assigneeGuessName;
-      if (!warnings.some((w) => w.field === 'assignee' && w.text.includes('הרשאה'))) {
-        warnings.push({ field: 'assignee', text: `אין לך הרשאה לשייך משימה ל${name || 'אדם אחר'} — המשימה שויכה אליך` });
+      if (!warnings.some((w) => w.field === 'assignee' && w.text.includes('שויכה אליך'))) {
+        // הסיבה מהבדיקה עצמה — "אינו/ה בצוות שלך", "הנהלה משייכת רק למנהלים…"
+        warnings.push({ field: 'assignee', text: `${err.message || `אין לך הרשאה לשייך משימה ל${name || 'אדם אחר'}`} — המשימה שויכה אליך` });
       }
       draft[key] = key === 'assignee' ? me : null;
       if (key === 'assignee') draft.assigneeName = actor.name;

@@ -22,11 +22,11 @@ const WaActions = require('./ai/wa-actions');
 const { badRequest, forbidden, notFound, readJson, sendJson, parseUrl } = require('./http-kit');
 
 function register(router, h) {
-  const { getTaskOr404, assertVisible, mayOnTask, shapeTask, actorRef, saveAttachment, createTask, assertMayAssignTo, listProjectsFor, newTaskProjects, assignableUserIds, botTaskOps } = h;
+  const { getTaskOr404, assertVisible, mayOnTask, shapeTask, actorRef, saveAttachment, createTask, assertMayAssignTo, listProjectsFor, newTaskProjects, assignableUserIds, assignBlockReason, botTaskOps } = h;
 
   AiTasks.setHooks({ saveFile: saveAttachment, scanWhatsApp: WaScan.handle, scanningUsers: WaScan.scanningUsers });
   MailScan.init({ createTask });
-  WaBot.init({ createTask, listProjectsFor, newTaskProjects, assignableUserIds, tasks: botTaskOps, mail: { searchContacts, createAiTask } });
+  WaBot.init({ createTask, listProjectsFor, newTaskProjects, assignableUserIds, assignBlockReason, tasks: botTaskOps, mail: { searchContacts, createAiTask } });
 
   const internalOnly = (actor) => {
     if (actor.type === 'vendor') throw forbidden();
