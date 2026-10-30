@@ -697,6 +697,55 @@ body.is-dragging-slot, body.is-dragging-slot * { cursor: grabbing !important; }
 .view-switch button:first-child { border-inline-start: 0; }
 .view-switch button.active { background: var(--brand); color: #fff; }
 
+/* טקסט לקורא מסך בלבד — הכרזות הגרירה והסינון */
+.sr-only {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap; border: 0;
+}
+
+/*
+ * שבבי סינון במקום שבעה בוררים. כל שבב הוא שני כפתורים: הגוף פותח את
+ * ערכי השדה, וה-✕ מסיר. כפתור אחד עם ✕ בתוכו היה מכריח לבחור מה לחיצה
+ * עושה — ומשתמש מקלדת לא היה יכול להגיע להסרה בכלל.
+ */
+.board-toolbar input[type="search"] { min-width: 170px; }
+.fchip-add .fa-phone { display: none; }
+.fchips { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.fchips:empty { display: none; }
+.fchip {
+  display: inline-flex; align-items: center; border: 1px solid var(--brand);
+  background: var(--brand-light); color: var(--brand-dark); border-radius: 999px;
+  font-size: 12.5px; font-weight: 600; max-width: 260px;
+}
+.fchip-body {
+  border: 0; background: none; color: inherit; font: inherit; cursor: pointer;
+  padding: 4px 10px; padding-inline-end: 4px; border-radius: 999px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0;
+}
+.fchip .chip-x { color: inherit; opacity: .7; padding: 4px 8px; padding-inline-start: 4px; border-radius: 999px; font-size: 11px; }
+.fchip .chip-x:hover, .fchip .chip-x:focus-visible { opacity: 1; color: var(--danger); }
+/* ברירת מחדל שמסתירה נתונים — נראית כמצב ולא כמסנן שהמשתמש הוסיף */
+.fchip.is-implicit { border-style: dashed; border-color: var(--border-strong); background: var(--surface-2); color: var(--text-soft); }
+.fchip.is-implicit .fchip-body { padding-inline-end: 10px; }
+.fchip-caret { margin-inline-start: 4px; font-size: 10px; }
+.fchip-clear {
+  border: 0; background: none; cursor: pointer; font: inherit; font-size: 12.5px;
+  color: var(--text-soft); text-decoration: underline; padding: 4px 6px;
+}
+.fchip-clear:hover { color: var(--danger); }
+
+/* תפריט השדה ← ערך */
+.fmenu-pop { min-width: 210px; }
+.fmenu { padding: 4px; display: flex; flex-direction: column; }
+.fmenu .popover-option:focus-visible, .fmenu .popover-option:focus { background: var(--brand-light); outline: none; }
+.fmenu .popover-option[aria-checked="true"] { font-weight: 700; }
+.fmenu .fm-current { margin-inline-start: auto; color: var(--text-mute); font-size: 12px; max-width: 120px; overflow: hidden; text-overflow: ellipsis; }
+.fmenu .fm-arrow { color: var(--text-mute); font-weight: 700; }
+.fmenu .popover-option:not(.fm-back) .fm-arrow { margin-inline-start: auto; }
+.fmenu .fm-current + .fm-arrow { margin-inline-start: 6px; }
+.fmenu .fm-back { color: var(--text-soft); font-size: 12.5px; }
+.fm-sep { height: 1px; background: var(--border); margin: 3px 4px; }
+
 .kanban { display: flex; gap: 13px; align-items: flex-start; overflow-x: auto; padding-bottom: 14px; }
 .kanban-col {
   flex: 1 0 265px; max-width: 340px; background: #eef2f6;
@@ -717,7 +766,41 @@ body.is-dragging-slot, body.is-dragging-slot * { cursor: grabbing !important; }
   position: relative;
 }
 .task-card:hover { box-shadow: var(--shadow); border-color: var(--border-strong); }
-.task-card.dragging { opacity: .45; transform: rotate(1.2deg); }
+/*
+ * גרירה בסמן ובמגע (board.js). הכרטיס המקורי נשאר במקומו כ"רוח" חיוורת,
+ * והעותק הצף הוא שזז. ‎user-select‎ ו-‎touch-callout‎ כבויים בכרטיס הנגרר
+ * כדי שלחיצה ארוכה במגע לא תסמן טקסט או תפתח את תפריט התמונה של iOS.
+ */
+.task-card.is-movable { user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
+.task-card:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+.task-card.is-ghost { opacity: .4; }
+.task-card.is-lifted { outline: 2px dashed var(--brand); outline-offset: 2px; box-shadow: var(--shadow); }
+.kanban-drag-overlay {
+  position: fixed; z-index: 1000; pointer-events: none; margin: 0;
+  box-shadow: var(--shadow-lg); border-color: var(--brand);
+  rotate: 2deg; cursor: grabbing; will-change: transform;
+}
+.kanban-drag-overlay.no-tilt { rotate: none; }
+body.kanban-dragging, body.kanban-dragging * { cursor: grabbing !important; user-select: none; }
+.kanban-placeholder {
+  border: 2px dashed var(--brand); border-radius: var(--radius);
+  background: color-mix(in srgb, var(--brand-light) 55%, transparent);
+  display: flex; align-items: center; justify-content: center; flex: none;
+  font-size: 12px; font-weight: 700; color: var(--brand-dark); min-height: 44px;
+}
+.kanban-empty-hint { display: none; }
+/* עמודה ריקה בזמן גרירה — "לא מקום" נראה כמו מקום רק כשמסמנים אותו */
+.kanban.is-dragging .kanban-empty-hint {
+  display: flex; align-items: center; justify-content: center; min-height: 64px;
+  border: 2px dashed var(--border-strong); border-radius: var(--radius);
+  font-size: 12px; font-weight: 600; color: var(--text-mute);
+}
+/* כשהמציין כבר בעמודה הריקה — הוא עצמו הרמז, ושניים זה כפילות */
+.kanban.is-dragging .kanban-empty-hint:has(+ .kanban-placeholder) { display: none; }
+@media (prefers-reduced-motion: reduce) {
+  .kanban-drag-overlay { rotate: none; }
+  .task-card { transition: none; }
+}
 .task-card.is-overdue { border-inline-start: 3px solid var(--danger); }
 .task-card.is-urgent { border-inline-start: 3px solid var(--warn); }
 .task-card.is-escalated { box-shadow: 0 0 0 2px #fca5a5; }
@@ -887,13 +970,19 @@ th.cell-bar { background: var(--border) !important; }
 /* --- תא הכותרת --- */
 
 .cell-title { overflow: hidden; }
-.title-box { display: flex; align-items: center; gap: 8px; min-width: 0; }
+/*
+ * לכותרת קדימות על התגיות. הכותרת מבקשת לפחות 9em, וכשאין מקום לשתיהן
+ * בשורה התגיות יורדות מתחתיה — במקום שהכותרת תימחץ לאות אחת (1024px).
+ */
+.title-box { display: flex; align-items: center; flex-wrap: wrap; gap: 3px 8px; min-width: 0; }
 .title-text {
   font-weight: 600; border-radius: 5px; padding: 2px 5px; margin: -2px -5px;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  flex: 1 1 auto; min-width: 0;
+  flex: 1 1 9em; min-width: 0;
 }
-.title-tags { display: flex; gap: 4px; flex: none; }
+.title-tags { display: flex; gap: 4px; flex: 0 1 auto; min-width: 0; overflow: hidden; }
+.title-tags .tag { flex: none; }
+.tag-more { background: var(--surface-2); color: var(--text-soft); border: 1px solid var(--border); cursor: help; }
 
 /* --- תאי סטטוס ועדיפות: התא עצמו הוא הפקד --- */
 
@@ -979,25 +1068,73 @@ th.cell-bar { background: var(--border) !important; }
 
 /* ---------------------------------------------------------------- ציר זמן */
 
-.timeline { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 14px; overflow-x: auto; }
-.tl-grid { position: relative; min-width: 760px; }
-.tl-head { display: flex; border-bottom: 1px solid var(--border); padding-bottom: 6px; margin-bottom: 10px; }
-.tl-head .tl-label { width: 230px; flex: none; font-size: 12px; font-weight: 700; color: var(--text-soft); }
-/* מיקום מוחלט באחוזים — אותה מערכת קואורדינטות של הפסים, אחרת הציר משקר */
-.tl-head .tl-days { flex: 1; position: relative; height: 15px; }
-.tl-head .tl-day { position: absolute; top: 0; bottom: -6px; border-inline-start: 1px solid var(--border); }
-.tl-head .tl-day-label {
-  position: absolute; inset-inline-start: 4px; top: -1px;
-  font-size: 10.5px; color: var(--text-mute); white-space: nowrap;
+.tl-zoom button { padding: 6px 12px; }
+
+/*
+ * הציר נגלל אופקית בתוך הכרטיס, ועמודת השמות דבוקה לקצה ההתחלה
+ * (‎inset-inline-start‎ — הימני ב-RTL). המיקומים בפיקסלים ליום ובמאפיינים
+ * לוגיים, ולכן הזמן זורם מימין לשמאל בלי חישוב היפוך.
+ */
+.timeline {
+  --tl-label-w: 230px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); overflow: hidden;
 }
-.tl-head .tl-day.today { border-inline-start: 2px solid var(--danger); }
-.tl-head .tl-day.today .tl-day-label { color: var(--danger); font-weight: 800; }
-.tl-row { display: flex; align-items: center; margin-bottom: 7px; }
-.tl-row .tl-label { width: 230px; flex: none; font-size: 12.5px; padding-inline-end: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+.tl-scroll { overflow-x: auto; overscroll-behavior-x: contain; padding-bottom: 8px; }
+.tl-scroll:focus-visible { outline: 2px solid var(--brand); outline-offset: -2px; }
+.tl-grid { position: relative; min-width: 100%; }
+.tl-label {
+  position: sticky; inset-inline-start: 0; z-index: 3;
+  width: var(--tl-label-w); flex: none; background: var(--surface);
+  border-inline-end: 1px solid var(--border);
+}
+.tl-head { display: flex; background: var(--surface); border-bottom: 1px solid var(--border); }
+.tl-head .tl-label { font-size: 12px; font-weight: 700; color: var(--text-soft); padding: 12px 14px; }
+.tl-days { position: relative; height: 40px; flex: none; }
+.tl-tick { position: absolute; top: 0; bottom: 0; border-inline-start: 1px solid var(--border); }
+.tl-tick.is-month { border-inline-start-color: var(--border-strong); }
+.tl-tick-label { position: absolute; inset-inline-start: 4px; bottom: 6px; font-size: 10.5px; color: var(--text-mute); white-space: nowrap; }
+.tl-tick.is-month .tl-tick-label { color: var(--text-soft); font-weight: 700; }
+.tl-tick.is-weekend .tl-tick-label { color: var(--border-strong); }
+.tl-today-mark { position: absolute; top: 0; bottom: 0; border-inline-start: 2px solid var(--danger); z-index: 1; }
+.tl-today-mark span {
+  position: absolute; inset-inline-start: 4px; top: 4px; font-size: 10.5px; font-weight: 800;
+  color: var(--danger); white-space: nowrap; background: var(--surface); padding-inline: 2px;
+}
+/* קו היום לכל גובה הציר, מתחת לעמודת השמות הדבוקה */
+.tl-today-line { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--danger); opacity: .35; z-index: 2; pointer-events: none; }
+
+/* רצועת פרויקט: הכותרת דבוקה לקצה ההתחלה כמו עמודת השמות */
+.tl-lane-head {
+  position: sticky; inset-inline-start: 0; z-index: 3;
+  display: inline-flex; align-items: center; min-width: var(--tl-label-w);
+  padding: 6px 12px; margin-top: 8px; border-inline-start: 4px solid var(--text-mute);
+  border-start-end-radius: 6px; border-end-end-radius: 6px;
+  font-size: 12.5px; font-weight: 700;
+}
+.tl-lane-name { display: inline-flex; align-items: center; gap: 7px; white-space: nowrap; }
+.tl-lane-num {
+  font-size: 11px; color: var(--text-soft); background: var(--surface);
+  border: 1px solid var(--border); border-radius: 999px; padding: 0 7px;
+}
+.tl-row { display: flex; align-items: stretch; }
+.tl-row:hover .tl-track { background: var(--surface-2); }
+.tl-row .tl-label {
+  font: inherit; font-size: 12.5px; text-align: start; border: 0; border-inline-end: 1px solid var(--border);
+  padding: 6px 14px; padding-inline-start: 20px; color: var(--text); cursor: pointer;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
 .tl-row .tl-label:hover { color: var(--brand); }
-.tl-track { flex: 1; position: relative; height: 24px; background: var(--surface-2); border-radius: 6px; }
-.tl-bar { position: absolute; top: 4px; height: 16px; border-radius: 5px; cursor: pointer; display: flex; align-items: center; padding: 0 6px; font-size: 10.5px; color: #fff; font-weight: 700; overflow: hidden; }
-.tl-today-line { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--danger); opacity: .45; }
+.tl-track { position: relative; height: 30px; flex: none; }
+.tl-bar {
+  position: absolute; top: 7px; height: 16px; border-radius: 5px; cursor: pointer; z-index: 1;
+  display: flex; align-items: center; padding: 0 7px; font-size: 10.5px; color: #fff; font-weight: 700; overflow: hidden;
+}
+.tl-bar-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* התווית של פס צר — אחרי סוף הפס, בצבע טקסט רגיל ולא לבן על רקע שאינו קיים */
+.tl-bar-out {
+  position: absolute; top: 7px; line-height: 16px; z-index: 1; pointer-events: none;
+  font-size: 10.5px; font-weight: 700; color: var(--text-soft); white-space: nowrap;
+}
 
 /* ---------------------------------------------------------------- מודל */
 

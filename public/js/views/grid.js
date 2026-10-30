@@ -465,11 +465,26 @@ const GridView = (() => {
    * מפורש: לחיצה על השורה פותחת את המשימה, ועריכה במקום הייתה מתנגשת בכך —
    * אותה לחיצה עצמה לא יכולה גם לפתוח וגם להיכנס למצב הקלדה.
    */
+  /*
+   * לכל היותר שתי תגיות, והשאר בשבב "‎+N‎" שמפרט אותן בריחוף ולקורא מסך.
+   * משימה שהיא גם באיחור, גם דחופה, גם הוקפצה וגם חסומה מילאה את כל התא
+   * בתגיות, ובמסך של 1024 נשארה מהכותרת אות אחת — והכותרת היא מה שמזהה
+   * את המשימה. התגיות כולן מופיעות בכרטיס המשימה.
+   */
+  const TITLE_TAGS_MAX = 2;
+
   function titleCell(task) {
     const cell = el('td.cell-title', {});
+    const tags = UI.taskTags(task);
+    const rest = tags.slice(TITLE_TAGS_MAX).map((t) => t.textContent.trim());
     cell.appendChild(el('div.title-box', {}, [
-      el('span.title-text', { text: task.title }),
-      el('div.title-tags', {}, UI.taskTags(task))
+      el('span.title-text', { text: task.title, title: task.title }),
+      el('div.title-tags', {}, [
+        ...tags.slice(0, TITLE_TAGS_MAX),
+        rest.length
+          ? el('span.tag.tag-more', { title: rest.join(' · '), 'aria-label': `ועוד: ${rest.join(', ')}` }, [`+${rest.length}`])
+          : null
+      ])
     ]));
     return cell;
   }
@@ -771,16 +786,19 @@ const GridView = (() => {
     const groups = buildGroups(ctx.tasks, state.groupBy, state.sortBy);
 
     const groupSelector = el('div.group-control', {}, [
-      el('span.mute-sm', { text: 'קיבוץ לפי' }),
+      // הכיתוב הגלוי הוא ‎span‎ ולא ‎label‎, ולכן הבורר נושא את שמו בעצמו
+      el('span.mute-sm', { text: 'קיבוץ לפי', 'aria-hidden': 'true' }),
       UI.select(GROUP_OPTIONS, state.groupBy, {
+        'aria-label': 'קיבוץ לפי',
         onchange: (e) => {
           state.groupBy = e.target.value;
           state.collapsed.clear();
           ctx.onRedraw();
         }
       }),
-      el('span.mute-sm', { text: 'מיון לפי' }),
+      el('span.mute-sm', { text: 'מיון לפי', 'aria-hidden': 'true' }),
       UI.select(SORT_OPTIONS, state.sortBy, {
+        'aria-label': 'מיון לפי',
         onchange: (e) => { state.sortBy = e.target.value; ctx.onRedraw(); }
       }),
       el('div.spacer'),

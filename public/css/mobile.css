@@ -354,6 +354,33 @@
   .grid-table .cell-due { font-size: 11px; }
   .grid-table .title-tags { display: none; }   /* התגיות חוזרות בכרטיס המשימה */
 
+  /*
+   * סרגל הלוח בטלפון: מתג התצוגה, חיפוש, כפתור "סינון (n)" ושורת שבבים
+   * אחת שנגללת לרוחב. שבעת הבוררים מילאו קודם את כל המסך הראשון, והמשימות
+   * עצמן התחילו רק אחרי גלילה. המסננים השמורים נשארים למחשב.
+   */
+  .board-toolbar { gap: 8px; padding: 9px; }
+  .board-toolbar .view-switch { flex: 1 1 100%; }
+  .board-toolbar .view-switch button { flex: 1; padding: 8px 6px; }
+  .board-toolbar .tl-zoom { flex: 1 1 100%; }
+  .board-toolbar .tl-zoom button { flex: 1; }
+  .board-toolbar input[type="search"] { flex: 1 1 0; min-width: 0; font-size: 16px; }   /* 16px — אחרת iOS מגדיל את הדף במיקוד */
+  .board-toolbar .fchip-add { flex: none; min-height: 40px; }
+  .board-toolbar .fchip-add .fa-desk { display: none; }
+  .board-toolbar .fchip-add .fa-phone { display: inline; }
+  .board-toolbar .fchips {
+    flex: 1 1 100%; flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none;
+    padding-bottom: 2px; margin-inline: -2px; padding-inline: 2px;
+  }
+  .board-toolbar .fchip { flex: none; }
+  .board-toolbar .fchip-body, .board-toolbar .fchip .chip-x { min-height: 34px; }
+  .board-toolbar .spacer, .board-toolbar .tb-saved { display: none; }
+  /* תפריט הסינון בגיליון: שורות גבוהות לאגודל */
+  .fmenu .popover-option { padding: 12px 10px; font-size: 15px; }
+
+  /* ציר הזמן: עמודת שמות צרה יותר, כדי שיישאר מקום לפסים עצמם */
+  .tl-row .tl-label { padding-inline: 10px 8px; font-size: 12px; }
+
   /* המסכים שאינם מיועדים לטלפון */
   .m-desktop-only {
     background: var(--warn-bg); border: 1px solid #f4d9a8; border-radius: 11px;
