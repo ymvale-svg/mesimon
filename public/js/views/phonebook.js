@@ -17,7 +17,7 @@ const PhonebookView = (() => {
   const { el } = UI;
 
   const isPhone = () => window.matchMedia?.('(pointer: coarse)').matches;
-  // מקום ריק במקום כפתור חסר — כך 📞 ✉ ✨ באותו טור בכל השורות
+  // מקום ריק במקום כפתור חסר — כך חיוג, מייל ו-AI באותו טור בכל השורות
   const gap = () => el('span.pb-act-gap', { 'aria-hidden': 'true' });
 
   /** טקסט עם הדגשה של מה שהוקלד */
@@ -30,10 +30,10 @@ const PhonebookView = (() => {
     return el('span', {}, [value.slice(0, at), el('mark', { text: value.slice(at, at + query.length) }), value.slice(at + query.length)]);
   }
 
-  /** 📞 — בטלפון מחייג; במחשב מעתיק את המספר, כי ‎tel:‎ במחשב פותח אפליקציה זרה */
+  /** חיוג — בטלפון מחייג; במחשב מעתיק את המספר, כי ‎tel:‎ במחשב פותח אפליקציה זרה */
   function callButton(phone) {
     if (!phone) return null;
-    if (isPhone()) return el('a.icon-btn.pb-act', { href: `tel:${phone.replace(/[^\d+]/g, '')}`, title: `חיוג ל-${phone}`, 'aria-label': `חיוג ל-${phone}` }, ['📞']);
+    if (isPhone()) return el('a.icon-btn.pb-act', { href: `tel:${phone.replace(/[^\d+]/g, '')}`, title: `חיוג ל-${phone}`, 'aria-label': `חיוג ל-${phone}` }, [UI.lineIcon('phone')]);
     return el('button.icon-btn.pb-act', {
       type: 'button',
       title: `העתקת ${phone}`,
@@ -42,14 +42,14 @@ const PhonebookView = (() => {
         e.stopPropagation();
         try { await navigator.clipboard.writeText(phone); UI.success(`${phone} הועתק`); } catch { UI.toast(phone); }
       }
-    }, ['📞']);
+    }, [UI.lineIcon('phone')]);
   }
 
   const mailButton = (email) => (email
-    ? el('a.icon-btn.pb-act', { href: `mailto:${email}`, title: `מייל ל-${email}`, 'aria-label': `מייל ל-${email}`, onclick: (e) => e.stopPropagation() }, ['✉'])
+    ? el('a.icon-btn.pb-act', { href: `mailto:${email}`, title: `מייל ל-${email}`, 'aria-label': `מייל ל-${email}`, onclick: (e) => e.stopPropagation() }, [UI.lineIcon('mail')])
     : null);
 
-  /** ✨ משימת AI לאיש הזה — השם, המייל והטלפון כבר ממולאים */
+  /** משימת AI לאיש הזה — השם, המייל והטלפון כבר ממולאים */
   function aiButton(entry) {
     if (!App.may('create_task')) return null;
     return el('button.icon-btn.pb-act.pb-ai', {
@@ -60,7 +60,7 @@ const PhonebookView = (() => {
         e.stopPropagation();
         AiTaskView.openDialog({ contact: { name: entry.name, email: entry.email, phone: entry.phone, type: 'external', refId: null, source: 'phonebook' } });
       }
-    }, ['✨']);
+    }, [UI.lineIcon('sparkles')]);
   }
 
   // ------------------------------------------------------------- חלון בדשבורד
@@ -87,10 +87,10 @@ const PhonebookView = (() => {
     cardInput = panel.input;
     cardNode = el('div.card.pb-card', {}, [
       el('div.card-head', {}, [
-        el('h3', { text: '📒 אלפון' }),
+        el('h3.pb-title', {}, [UI.lineIcon('contacts'), 'אלפון']),
         panel.count,
         el('div.spacer'),
-        el('button.btn.btn-sm.btn-ghost', { type: 'button', title: 'הוספה לאלפון', onclick: () => editDialog({}, { onSaved: panel.search }) }, ['＋']),
+        el('button.btn.btn-sm.btn-ghost', { type: 'button', title: 'הוספה לאלפון', 'aria-label': 'הוספה לאלפון', onclick: () => editDialog({}, { onSaved: panel.search }) }, [UI.lineIcon('plus')]),
         el('button.btn.btn-sm.btn-ghost', { type: 'button', onclick: () => App.navigate('phonebook') }, ['ניהול'])
       ]),
       el('div.card-pad', {}, [panel.input, panel.list])
@@ -102,10 +102,10 @@ const PhonebookView = (() => {
   function openSearch() {
     const panel = searchPanel();
     const m = UI.modal({
-      title: '📒 אלפון',
+      title: 'אלפון',
       body: el('div.pb-card', {}, [panel.input, panel.list]),
       footer: [
-        el('button.btn', { onclick: () => editDialog({}, { onSaved: panel.search }) }, ['＋ הוספה']),
+        el('button.btn', { onclick: () => editDialog({}, { onSaved: panel.search }) }, [UI.lineIcon('plus'), 'הוספה']),
         el('div.spacer'),
         el('button.btn', { onclick: () => { m.close(); App.navigate('phonebook'); } }, ['ניהול'])
       ]
@@ -139,11 +139,11 @@ const PhonebookView = (() => {
       ]);
     }
 
-    /** "＋ להוסיף את 'דני' לאלפון" — מה שהוקלד נכנס לשדה המתאים */
+    /** "להוסיף את 'דני' לאלפון" — מה שהוקלד נכנס לשדה המתאים */
     function addLine(q) {
       const prefill = /@/.test(q) ? { email: q } : /^[\d\s+\-()]{5,}$/.test(q) ? { phone: q } : { name: q };
       return el('button.btn.btn-sm.pb-add', { type: 'button', onclick: () => editDialog(prefill, { onSaved: search }) },
-        [q ? `＋ להוסיף את "${q}" לאלפון` : '＋ הוספה לאלפון']);
+        [UI.lineIcon('plus'), q ? `להוסיף את "${q}" לאלפון` : 'הוספה לאלפון']);
     }
 
     async function search() {
@@ -206,7 +206,7 @@ const PhonebookView = (() => {
     const save = el('button.btn.btn-primary', {}, [isEdit ? 'שמירה' : 'הוספה לאלפון']);
     const del = isEdit ? el('button.btn.btn-danger.btn-ghost', {}, ['מחיקה']) : null;
     const m = UI.modal({
-      title: isEdit ? `📒 ${entry.name}` : '📒 הוספה לאלפון',
+      title: isEdit ? entry.name : 'הוספה לאלפון',
       body: el('div', {}, [
         UI.field('שם', name),
         el('div.row', {}, [UI.field('טלפון', phone), UI.field('מייל', email)]),
@@ -288,14 +288,14 @@ const PhonebookView = (() => {
         el('td.mute-sm', { text: e.updatedBy ? `${e.updatedBy} · ${UI.formatDate(e.updatedAt)}` : '' }),
         el('td.pb-row-acts', {}, [
           callButton(e.phone) ?? gap(), mailButton(e.email) ?? gap(), aiButton(e),
-          el('button.icon-btn', { type: 'button', title: 'עריכה', 'aria-label': `עריכת ${e.name}`, onclick: () => { editing = e.id; draw(); } }, ['✏']),
+          el('button.icon-btn', { type: 'button', title: 'עריכה', 'aria-label': `עריכת ${e.name}`, onclick: () => { editing = e.id; draw(); } }, [UI.lineIcon('pencil')]),
           el('button.icon-btn', {
             type: 'button', title: 'מחיקה', 'aria-label': `מחיקת ${e.name}`,
             onclick: async () => {
               if (!await UI.confirm(`למחוק את ${e.name} מהאלפון? הרשומה תימחק לכל העובדים.`, { danger: true, okText: 'מחיקה' })) return;
               try { await API.del(`/api/phonebook/${e.id}`); UI.success('נמחק'); load(); } catch (err) { UI.error(err); }
             }
-          }, ['🗑'])
+          }, [UI.lineIcon('trash')])
         ])
       ]);
     }
@@ -337,7 +337,7 @@ const PhonebookView = (() => {
       summary.textContent = search.value.trim() ? `${shown.length} מתוך ${items.length}` : `${items.length} אנשי קשר`;
       UI.mount(tbody, ...(shown.length
         ? shown.map((e) => (e.id === editing ? editRow(e) : viewRow(e)))
-        : [el('tr', {}, [el('td', { colspan: 6 }, [UI.empty(items.length ? 'לא נמצא' : 'האלפון עוד ריק', '📒')])])]));
+        : [el('tr', {}, [el('td', { colspan: 6 }, [UI.empty(items.length ? 'לא נמצא' : 'האלפון עוד ריק', UI.lineIcon('contacts', { size: 34 }))])])]));
     }
     search.addEventListener('input', draw);
 
@@ -347,14 +347,14 @@ const PhonebookView = (() => {
     UI.mount(container,
       el('div.page-head', {}, [
         el('div', {}, [
-          el('h2', { text: '📒 אלפון ארגוני' }),
+          el('h2.pb-title', {}, [UI.lineIcon('contacts'), 'אלפון ארגוני']),
           el('div.sub', { text: 'טלפונים ומיילים משותפים לכל העובדים. כל אחד יכול להוסיף, לעדכן ולמחוק.' })
         ]),
         el('div.spacer'),
         el('div.pb-head-acts', {}, [
-          el('button.btn.btn-primary', { onclick: () => editDialog({}, { onSaved: load }) }, ['＋ הוספה']),
-          el('button.btn', { onclick: () => fileInput.click() }, ['⬆ ייבוא מאקסל']),
-          el('a.btn', { href: '/api/phonebook/export', download: '' }, ['⬇ ייצוא'])
+          el('button.btn.btn-primary', { onclick: () => editDialog({}, { onSaved: load }) }, [UI.lineIcon('plus'), 'הוספה']),
+          el('button.btn', { onclick: () => fileInput.click() }, [UI.lineIcon('upload'), 'ייבוא מאקסל']),
+          el('a.btn', { href: '/api/phonebook/export', download: '' }, [UI.lineIcon('download'), 'ייצוא'])
         ]),
         fileInput
       ]),
@@ -405,7 +405,7 @@ const PhonebookView = (() => {
     withDups.addEventListener('change', () => { go.textContent = `ייבוא ${ok + (withDups.checked ? dups : 0)} אנשי קשר`; });
 
     const m = UI.modal({
-      title: `⬆ ייבוא לאלפון — ${file.name}`,
+      title: `ייבוא לאלפון — ${file.name}`,
       size: 'wide',
       body: el('div', {}, [
         el('p', { style: { marginTop: 0 } }, [

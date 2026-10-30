@@ -2870,3 +2870,19 @@ input[type="color"] { width: 46px; height: 30px; padding: 2px; cursor: pointer; 
 .pb-head-acts { display: flex; gap: 8px; flex-wrap: wrap; }
 .dept-suggest { margin-top: 8px; display: grid; gap: 8px; }
 .dept-suggest:empty { display: none; }
+
+/* ---------------------------------------------- סמלי קו (‎UI.lineIcon‎) */
+
+.li { display: inline-grid; place-items: center; width: 1.15em; height: 1.15em; flex: none; line-height: 0; }
+.li svg { width: 100%; height: 100%; display: block; }
+.btn .li { width: 16px; height: 16px; }
+.btn-primary .li { color: inherit; }
+/* כפתורי הפעולה באלפון — אותו קו, אותו גודל, בצבע המותג */
+.pb-act, .pb-row-acts .icon-btn { color: var(--brand); }
+.pb-act .li, .pb-row-acts .icon-btn .li { width: 18px; height: 18px; }
+/* מחיקה — באותו צבע, ואדום רק בריחוף, כשהיד כבר עליה */
+.pb-row-acts .icon-btn:last-child:hover { color: var(--danger); background: #fef2f2; }
+.pb-title { display: flex; align-items: center; gap: 8px; }
+.pb-title .li { color: var(--brand); width: 1em; height: 1em; }
+.pb-add { gap: 4px; }
+.e-icon .li { width: 34px; height: 34px; color: var(--brand); opacity: .6; }
