@@ -1866,6 +1866,7 @@ input[type="color"] { width: 46px; height: 30px; padding: 2px; cursor: pointer; 
   }
   .sidebar:not(.pinned):not(:hover):not(:focus-within) .pb-side .pb-search::placeholder { color: transparent; }
   .sidebar:not(.pinned):not(:hover):not(:focus-within) .pb-side .pb-field > .li { inset-inline-start: calc(50% - 9px); width: 18px; height: 18px; }
+  .sidebar:not(.pinned):not(:hover):not(:focus-within) .pb-side .pb-field-acts { display: none; }
 }
 
 /* בטלפון התפריט הוא מגירה ברוחב קבוע — אין ידית */
@@ -2755,16 +2756,24 @@ input[type="color"] { width: 46px; height: 30px; padding: 2px; cursor: pointer; 
 .cp-phonebook { background: #fef3c7; }
 .pb-search { width: 100%; }
 
-/* שדה החיפוש — סמל מימין, סמן טעינה משמאל (בתוך השדה) */
+/* שדה החיפוש — סמל האלפון מימין; משמאל, בתוך השדה: סמן טעינה, הוספה וניהול */
 .pb-field { position: relative; display: flex; align-items: center; }
 .pb-field > .li { position: absolute; inset-inline-start: 10px; color: var(--brand); width: 16px; height: 16px; pointer-events: none; }
-.pb-field .pb-search { padding-inline-start: 34px; padding-inline-end: 30px; }
-.pb-spin {
-  position: absolute; inset-inline-end: 10px; width: 14px; height: 14px; border-radius: 50%;
-  border: 2px solid var(--brand-light); border-top-color: var(--brand);
-  opacity: 0; transition: opacity .12s;
+.pb-field .pb-search { padding-inline-start: 34px; padding-inline-end: 64px; }
+.pb-field-acts { position: absolute; inset-inline-end: 4px; display: flex; align-items: center; gap: 0; }
+.pb-field-btn {
+  width: 28px; height: 28px; border: 0; background: none; border-radius: 8px; cursor: pointer;
+  display: grid; place-items: center; color: var(--brand);
 }
-.pb-field.is-loading .pb-spin { opacity: 1; animation: pb-spin .7s linear infinite; }
+.pb-field-btn:hover, .pb-field-btn:focus-visible { background: var(--brand-light); }
+.pb-field-btn .li { width: 16px; height: 16px; }
+.pb-spin {
+  width: 14px; height: 14px; border-radius: 50%; margin-inline-end: 4px;
+  border: 2px solid var(--brand-light); border-top-color: var(--brand);
+  display: none;
+}
+.pb-field.is-loading .pb-spin { display: block; animation: pb-spin .7s linear infinite; }
+.pb-search::-webkit-search-cancel-button { display: none; }
 @keyframes pb-spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .pb-field.is-loading .pb-spin { animation: none; } }
 
@@ -2797,8 +2806,6 @@ input[type="color"] { width: 46px; height: 30px; padding: 2px; cursor: pointer; 
 .pb-note { color: var(--text-soft); font-size: 12.5px; }
 .pb-first { flex: none; color: var(--text-soft); font-size: 12.5px; }
 .pb-empty { padding: 10px; }
-.pb-foot { display: flex; align-items: center; gap: 6px; padding: 8px 4px 2px; border-top: 1px solid var(--border); margin-top: 4px; }
-.pb-add { gap: 4px; }
 .pb-row mark, .pb-table mark, .pbc mark { background: #fef08a; color: inherit; border-radius: 2px; padding: 0 1px; }
 
 /* כרטיס איש קשר — רק השדות שהוזנו */
