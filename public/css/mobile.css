@@ -108,9 +108,14 @@
   .tabbar button {
     flex: 1; border: 0; background: none; cursor: pointer;
     display: flex; flex-direction: column; align-items: center; justify-content: center;
-    gap: 3px; font-size: 10.5px; color: var(--text-mute); font-family: inherit;
+    gap: 3px; font-size: 12px; color: var(--text-mute); font-family: inherit;
     padding: 0; min-width: 0;
   }
+  /*
+   * 12 ולא 10.5: מתחת לזה התווית אינה קריאה בטלפון באור יום. חמש לשוניות
+   * ב-390 פיקסלים הן 78 פיקסלים כל אחת, והתווית הארוכה ("התראות") נכנסת
+   * גם ב-12 — ואם לא, ‎.lbl‎ מתקצר בשלוש נקודות ולא גולש.
+   */
   .tabbar button .ic { width: 21px; height: 21px; }
   /* עוטף האייקון — נקודת העיגון של מונה ההתראות שמעליו */
   .tabbar button .ic-wrap { display: grid; place-items: center; position: relative; }
@@ -155,7 +160,7 @@
   /* ---------------------------------------------------------------- כרטיסים ומודלים */
 
   .page-head { margin-bottom: 12px; gap: 10px; }
-  .page-head h2 { font-size: 19px; }
+  .page-head h1, .page-head h2 { font-size: 19px; }
   .page-head .sub { display: none; }
   .grid.grid-2, .grid.grid-3, .grid.grid-4 { grid-template-columns: 1fr; }
 
@@ -295,20 +300,16 @@
    * מעל המגירה הצדדית (60) ומתחת למודל (100): התפריט נפתח מעל רשימת
    * הפרויקטים, אבל אישור המחיקה שנפתח ממנו חייב לכסות אותו.
    */
-  .proj-sheet-veil { z-index: 70; }
   /*
    * רקע אחד ולא שניים. המגירה התחתונה נפתחת מעל המגירה הצדדית, ושני
    * הרקעים הכהים מצטברים (‎.42‎ מתחת ל-‎.45‎ ≈ ‎.68‎) — כהה בהרבה מכל מגירה
    * אחרת במערכת. הרקע של המגירה הצדדית מתעמעם כל עוד התפריט פתוח.
+   * (השכבה עצמה — מעל המגירה הצדדית ומתחת לאישור שנפתח ממנה — נקבעת
+   * בערימת השכבות של ‎UI.sheet‎.)
    */
-  body:has(.proj-sheet-veil) .sidebar-veil { opacity: 0; }
-  .proj-sheet { padding-top: 10px; }
+  body:has(.proj-sheet) .sidebar-veil { opacity: 0; }
   /* בטאבלט מגירה ברוחב 768 פיקסלים היא שורות ארוכות וריקות — נשארת קריאה */
   .proj-sheet { max-width: 520px; margin-inline: auto; border-radius: 16px 16px 0 0; }
-  .proj-sheet .proj-pop-head {
-    border-bottom: 1px solid var(--border); margin-bottom: 6px;
-    padding: 0 2px 10px; font-size: 15px; color: var(--text);
-  }
   /* ביטול נפרד בראש הטווח של האגודל — במחשב סוגרים בלחיצה בחוץ או ב-Escape */
   .proj-sheet .track-opt.is-cancel {
     justify-content: center; margin-top: 6px;
@@ -353,6 +354,33 @@
   .grid-table th, .grid-table td { padding: 7px 5px; }
   .grid-table .cell-due { font-size: 11px; }
   .grid-table .title-tags { display: none; }   /* התגיות חוזרות בכרטיס המשימה */
+
+  /*
+   * סרגל הלוח בטלפון: מתג התצוגה, חיפוש, כפתור "סינון (n)" ושורת שבבים
+   * אחת שנגללת לרוחב. שבעת הבוררים מילאו קודם את כל המסך הראשון, והמשימות
+   * עצמן התחילו רק אחרי גלילה. המסננים השמורים נשארים למחשב.
+   */
+  .board-toolbar { gap: 8px; padding: 9px; }
+  .board-toolbar .view-switch { flex: 1 1 100%; }
+  .board-toolbar .view-switch button { flex: 1; padding: 8px 6px; }
+  .board-toolbar .tl-zoom { flex: 1 1 100%; }
+  .board-toolbar .tl-zoom button { flex: 1; }
+  .board-toolbar input[type="search"] { flex: 1 1 0; min-width: 0; font-size: 16px; }   /* 16px — אחרת iOS מגדיל את הדף במיקוד */
+  .board-toolbar .fchip-add { flex: none; min-height: 40px; }
+  .board-toolbar .fchip-add .fa-desk { display: none; }
+  .board-toolbar .fchip-add .fa-phone { display: inline; }
+  .board-toolbar .fchips {
+    flex: 1 1 100%; flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none;
+    padding-bottom: 2px; margin-inline: -2px; padding-inline: 2px;
+  }
+  .board-toolbar .fchip { flex: none; }
+  .board-toolbar .fchip-body, .board-toolbar .fchip .chip-x { min-height: 34px; }
+  .board-toolbar .spacer, .board-toolbar .tb-saved { display: none; }
+  /* תפריט הסינון בגיליון: שורות גבוהות לאגודל */
+  .fmenu .popover-option { padding: 12px 10px; font-size: 15px; }
+
+  /* ציר הזמן: עמודת שמות צרה יותר, כדי שיישאר מקום לפסים עצמם */
+  .tl-row .tl-label { padding-inline: 10px 8px; font-size: 12px; }
 
   /* המסכים שאינם מיועדים לטלפון */
   .m-desktop-only {
@@ -485,4 +513,68 @@
   .pb-act, .pb-row-acts .icon-btn, .pb-cell .pb-act { width: 42px; height: 42px; }
   /* האלפון בתפריט הנפתח — שורת החיפוש, והתוצאות מתחתיה ולא בחלון צף */
   .pb-pop { position: static; width: auto; max-height: none; box-shadow: none; border: 0; padding: 4px 0 0; animation: none; }
+/*
+ * ‎UI.sheet‎ — מגירה תחתונה שנגררת. אותו מבנה ‎m-sheet-veil / m-sheet / m-grab‎,
+ * עם כותרת, גוף נגלל ותחתית קבועה.
+ *
+ * ‎touch-action: none‎ על הידית והכותרת: שם כל תנועה היא גרירה של המגירה,
+ * והדפדפן לא צריך לנסות לגלול. על הגוף ‎pan-y‎ — הגלילה שלו נשארת טבעית,
+ * ו-JS מחליט רק כשהגוף בראש הגלילה. ‎overscroll-behavior: contain‎ — גלילה
+ * שהגיעה לסוף הרשימה אינה ממשיכה אל הדף שמאחורי המגירה.
+ */
+@media (max-width: 820px) {
+  .ui-sheet-veil { background: rgba(15, 23, 42, calc(.45 * var(--veil, 1))); }
+  .ui-sheet-veil.leaving { pointer-events: none; }
+  .m-sheet.ui-sheet {
+    display: flex; flex-direction: column; padding: 0; overflow: hidden;
+    /* התנועה בשליטת JS (גרירה והיצמדות), ולכן לא ההנפשה של ‎.m-sheet‎ */
+    animation: none; will-change: transform;
+  }
+  .m-sheet.ui-sheet:focus { outline: none; }
+  .ui-sheet .m-grab {
+    flex: none; margin: 10px auto 6px; position: relative; touch-action: none; cursor: grab;
+  }
+  /* הפס נראה 38×4 ונתפס ב-‎~100×28‎ — אצבע אינה מכוונת לפס של ארבעה פיקסלים */
+  .ui-sheet .m-grab::before { content: ''; position: absolute; inset: -12px -30px; }
+  .ui-sheet .m-sheet-head {
+    flex: none; padding: 0 16px 10px; border-bottom: 1px solid var(--border);
+    touch-action: none; cursor: grab;
+  }
+  .ui-sheet .m-sheet-head h3 { font-size: 16px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ui-sheet .m-sheet-body {
+    flex: 1 1 auto; min-height: 0; overflow-y: auto;
+    overscroll-behavior: contain; touch-action: pan-y; -webkit-overflow-scrolling: touch;
+    padding: 12px 14px calc(env(safe-area-inset-bottom, 0px) + 14px);
+  }
+  .ui-sheet .m-sheet-foot {
+    flex: none; display: flex; gap: 8px; border-top: 1px solid var(--border);
+    padding: 10px 14px calc(env(safe-area-inset-bottom, 0px) + 12px);
+  }
+  /* כשיש תחתית, היא שנושאת את אזור הבטיחות — לא הגוף שמעליה */
+  .ui-sheet .m-sheet-body:has(+ .m-sheet-foot) { padding-bottom: 12px; }
+
+  /* מגירת הפעולות של פרויקט — הפריטים צמודים, כמו בתפריט */
+  .proj-sheet .m-sheet-body { padding-inline: 10px; padding-top: 6px; }
+  .proj-sheet-items { display: flex; flex-direction: column; }
+
+  /* מגירת ההתראות — הרשימה עד הקצוות, כמו במחשב */
+  .notif-sheet .m-sheet-body { padding: 0 0 env(safe-area-inset-bottom, 0px); }
+  .notif-sheet .np-head {
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+    padding: 10px 14px; border-bottom: 1px solid var(--border);
+  }
+  /* שורת ההתראות במכשיר — אותו עיצוב כמו במגירה של המחשב, שם הוא תחת ‎.notif-panel‎ */
+  .notif-sheet .np-desktop {
+    display: flex; align-items: center; gap: 9px;
+    padding: 10px 14px; background: var(--surface-2);
+    border-bottom: 1px solid var(--border);
+    font-size: 12.5px; color: var(--text-mute); line-height: 1.4;
+  }
+  .notif-sheet .np-desktop > div { flex: 1; min-width: 0; }
+  .notif-sheet .np-desktop .btn { flex: none; }
+  .notif .n-read { width: 46px; }
+
+  /* כפתור החיפוש בסרגל העליון — כאן השדה עצמו מוסתר */
+  .topbar .m-search-btn { display: grid; }
+  .toast-undo-btn { min-height: 40px; }
 }

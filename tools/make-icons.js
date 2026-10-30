@@ -99,12 +99,45 @@ function sdSegment(x, y, ax, ay, bx, by) {
   return Math.hypot(pax - bax * t, pay - bay * t);
 }
 
+/**
+ * האם הנקודה בתוך מצולע קמור שקודקודיו נתונים בסדר אחד (עם או נגד השעון).
+ * הלוחות הם מקביליות, ולכן אין צורך בפונקציית מרחק אמיתית — ההחלקה של
+ * הקצוות מגיעה מהדגימה הצפופה בכל פיקסל, כמו בשאר הצורות.
+ */
+function inConvex(x, y, pts) {
+  let sign = 0;
+  for (let i = 0; i < pts.length; i++) {
+    const [ax, ay] = pts[i];
+    const [bx, by] = pts[(i + 1) % pts.length];
+    const cross = (bx - ax) * (y - ay) - (by - ay) * (x - ax);
+    if (cross !== 0) {
+      if (sign === 0) sign = Math.sign(cross);
+      else if (Math.sign(cross) !== sign) return false;
+    }
+  }
+  return true;
+}
+
 const BRAND = [0x0f, 0x76, 0x6e];
 const INK = [0xff, 0xff, 0xff];
+const FACE = [0x5e, 0xea, 0xd4];
+
+/*
+ * שני הלוחות — אותן נקודות כמו ב-‎UI.logoMark‎. לכל לוח פאה בהירה (שמאלית)
+ * ופאה מלאה (ימנית) שנפגשות בקו x=27, בהשראת הלוחות שבלוגו אשל הירדן.
+ */
+const FACES = [
+  [[15, 16.5], [27, 14], [27, 20], [15, 22.5]],
+  [[15, 27.5], [27, 25], [27, 31], [15, 33.5]]
+];
+const INKS = [
+  [[27, 14], [40, 15.5], [40, 21.5], [27, 20]],
+  [[27, 25], [33, 26.5], [33, 32.5], [27, 31]]
+];
 
 /**
- * הסמל בתוך ריבוע 64×64, בדיוק כמו ‎UI.logoMark‎: אריח בצבע המותג, שתי שורות
- * רשימה חיוורות, ומעליהן סימן וי במשיכה אחת.
+ * הסמל בתוך ריבוע 64×64, בדיוק כמו ‎UI.logoMark‎: אריח בצבע המותג, שני לוחות
+ * מוטים בצורת הלוגו של אשל הירדן, ומתחתם סימן וי במשיכה אחת.
  *
  * ‎squared‎ — אריח בלי פינות מעוגלות. נדרש לסמל של iOS, שמעגל את הפינות בעצמו,
  * וסמל שכבר מעוגל היה מותיר אצלו רצועות שקופות בפינות.
@@ -120,7 +153,8 @@ function iconAt(size, { squared = false } = {}) {
   for (let py = 0; py < size; py++) {
     for (let px = 0; px < size; px++) {
       let tile = 0;
-      let lines = 0;
+      let faces = 0;
+      let inks = 0;
       let check = 0;
 
       for (let sy = 0; sy < S; sy++) {
@@ -130,8 +164,8 @@ function iconAt(size, { squared = false } = {}) {
           const y = (py + (sy + 0.5) / S) / scale;
 
           if (sdRoundRect(x, y, 32, 32, 32, 32, tileRadius) < 0) tile++;
-          if (sdRoundRect(x, y, 27, 19.5, 12, 2.5, 2.5) < 0) lines++;
-          if (sdRoundRect(x, y, 23, 30.5, 8, 2.5, 2.5) < 0) lines++;
+          if (FACES.some((p) => inConvex(x, y, p))) faces++;
+          if (INKS.some((p) => inConvex(x, y, p))) inks++;
 
           // הווי הוא שני קטעים; המינימום ביניהם נותן חיבור מעוגל ביניהם
           const d = Math.min(
@@ -146,16 +180,17 @@ function iconAt(size, { squared = false } = {}) {
       const tileA = tile / total;
       if (tileA <= 0) continue;   // מחוץ לאריח — נשאר שקוף
 
-      // הרכבה: אריח, מעליו השורות בשקיפות, ומעליהן הווי
+      // הרכבה: אריח, מעליו הפאות של הלוחות, ומעליהן הווי
       let r = BRAND[0];
       let g = BRAND[1];
       let b = BRAND[2];
 
-      const lineA = Math.min(1, lines / total) * 0.45;
-      if (lineA > 0) {
-        r = r + (INK[0] - r) * lineA;
-        g = g + (INK[1] - g) * lineA;
-        b = b + (INK[2] - b) * lineA;
+      for (const [count, color] of [[faces, FACE], [inks, INK]]) {
+        const a = count / total;
+        if (a <= 0) continue;
+        r = r + (color[0] - r) * a;
+        g = g + (color[1] - g) * a;
+        b = b + (color[2] - b) * a;
       }
 
       const checkA = check / total;
