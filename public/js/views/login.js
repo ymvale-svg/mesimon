@@ -7,30 +7,26 @@ const LoginView = (() => {
   /*
    * ---------------------------------------------------------- אזור המיתוג
    *
-   * שלושה לוחות מוערמים איזומטרית — הד ללוגו של אשל הירדן (שלוש שכבות
-   * תכלת/כחול ורווח שחור ביניהן), בגווני הטורקיז של משימון. זה הקשר בין
-   * החברה לאפליקציה, ולכן הוא במרכז ולא סמל המערכת הרגיל.
+   * המרכז הוא הלוגו של משימון עצמו — האריח, השם והסלוגן — ולא סמל אחר
+   * לצדו. כל האינטראקציה יושבת על הלוגו: שני הלוחות שבאריח (הצורה מהלוגו
+   * של אשל הירדן) מתרוממים זה מעל זה כשהסמן מתקרב, האריח והשם נוטים אליו
+   * בעומקים שונים, וברק עובר על האריח במקום שהסמן מצביע עליו.
    *
    * המכניקה מועתקת לונילה משלושה רכיבים ב-21st.dev:
    * - Tilt — הטיה תלת־ממדית אחרי הסמן עם קפיץ (‎useSpring‎ שם, ‎spring()‎ כאן).
-   * - Isometric Cube — השכבות מתרוממות ומסתובבות קלות עם הסמן; העליונה הכי
-   *   הרבה, וכל שכבה נושאת איתה את מה שמעליה. ביציאה הכול שוקע חזרה.
+   * - Isometric Cube — שכבות שמתרוממות עם הסמן ושוקעות חזרה ביציאה; כאן
+   *   אלה שני הלוחות שבסמל, העליון יותר מהתחתון.
    * - Tweenly Hero Background (סגנון dots) — רשת נקודות על canvas שנדחפות
    *   מהסמן, גדלות ומתבהרות ברדיוס ~140px, עם קפיץ ודעיכה לכל נקודה.
    *
-   * ביצועים: לולאת rAF אחת לשני החלקים, והיא נעצרת ברגע שהכול נח — גם
-   * הקפיצים וגם הנקודות. הנשימה האיטית ברקע היא אנימציית CSS על שכבת
-   * זוהר (‎transform‎ בלבד, על המאיץ הגרפי), כדי שהמסך לא ייראה מת בלי
-   * עכבר — בלי להחזיק את ה-JS ער 60 פעמים בשנייה על מסך שאיש לא נוגע בו.
+   * ביצועים: לולאת rAF אחת לכל החלקים, והיא נעצרת ברגע שהכול נח. הנשימה
+   * האיטית ברקע היא אנימציית CSS על שכבת זוהר (‎transform‎ בלבד), כדי שהמסך
+   * לא ייראה מת בלי עכבר — בלי להחזיק את ה-JS ער כשאיש לא נוגע במסך.
    */
 
-  // ממדי הלוח ביחידות CSS של הסצנה. הקנה הכולל נקבע ב-CSS (‎--mark-scale‎)
-  const SLAB = 112;          // צלע הריבוע
-  const THICK = 20;          // עובי לוח
-  const GAP = 7;             // רווח במנוחה — הפס הכהה שבין השכבות, כמו בלוגו החברה
-  const LIFT = 9;            // הרמה מרבית של השכבה האמצעית; העליונה ×2.4
-  const TILT = 12;           // הטיה מרבית במעלות
-  const TWIST = 5;           // סיבוב מרבי של השכבה העליונה סביב הציר האנכי
+  const LIFT = 3.2;          // הרמה מרבית של הלוח העליון, ביחידות של הסמל (64); התחתון ×0.45
+  const DROP = 16;           // מאיפה הלוחות נוחתים בכניסה, באותן יחידות
+  const TILT = 10;           // הטיה מרבית במעלות
   const DOT_GAP = 26;        // מרווח רשת הנקודות
   const DOT_R = 1.25;        // רדיוס נקודה במנוחה
   const REACH = 140;         // רדיוס ההשפעה של הסמן על הנקודות
@@ -48,33 +44,42 @@ const LoginView = (() => {
     return true;
   }
 
-  /** לוח אחד: פאה עליונה ושתי פאות צד — רק השתיים שפונות לצופה בזווית הזו */
-  function buildSlab(index) {
-    const top = el('div.slab-face.slab-top', {}, [
-      // הצל של השכבה שמעליה. על הלוח העליון אין צל — יש סימן וי
-      index < 2 ? el('div.slab-shade') : null,
-      index === 2 ? el('div.slab-check', {
-        html: `<svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg">
-          <path d="M17 33 L28 44 L48 21" fill="none" stroke="currentColor"
-                stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/></svg>`
-      }) : null
-    ]);
-    const slab = el('div.slab', {}, [
-      top,
-      el('div.slab-face.slab-front'),
-      el('div.slab-face.slab-side')
-    ]);
-    // משתנה CSS לא נקבע דרך ‎Object.assign(style)‎ — רק דרך ‎setProperty‎
-    slab.style.setProperty('--i', index);
-    return slab;
-  }
+  /**
+   * הלוגו של אזור המיתוג וההפניות לחלקים שזזים בו. הלוגו הוא ‎UI.logo‎ כמו
+   * בכל מקום אחר — לא עותק — כדי שסמל שישתנה שם ישתנה גם כאן.
+   *
+   * ‎UI.logoMark‎ מצייר את הסמל כ: אריח, ואז ארבעה מצולעים (פאה ופאה לכל
+   * לוח, העליון קודם), ואז הווי. אם הסדר שם משתנה — גם כאן.
+   */
+  function heroLogo() {
+    const logo = UI.logo({ size: 'lg', tagline: true, variant: 'light' });
+    const tile = logo.querySelector('.logo-mark');
+    const svg = tile.querySelector('svg');
+    const polys = [...svg.querySelectorAll('polygon')];
+    const check = svg.querySelector('path');
+    // אורך נורמלי של 1, כדי שציור הווי יהיה פשוט ‎dashoffset‎ מ-1 ל-0
+    check.setAttribute('pathLength', '1');
+    check.style.strokeDasharray = '1';
 
-  function heroMark() {
-    const slabs = [0, 1, 2].map(buildSlab);
-    const iso = el('div.mark-iso', {}, [el('div.mark-ground'), slabs]);
-    const tilt = el('div.mark-tilt', {}, [iso]);
-    const shades = slabs.map((s) => s.querySelector('.slab-shade'));
-    return { node: el('div.mark-scene', { 'aria-hidden': 'true' }, [tilt]), tilt, slabs, shades };
+    // השם מתפרק לאותיות כדי שייכנסו אחת-אחת. ‎aria-label‎ על המכל — קורא
+    // מסך שמקריא אות-אות "M E S I M O N" גרוע מהשם עצמו (האזור מוסתר ממילא)
+    const name = logo.querySelector('.app-logo-name');
+    const word = name.textContent;
+    name.textContent = '';
+    [...word].forEach((ch, i) => {
+      const letter = el('span.hero-letter', { text: ch });
+      letter.style.setProperty('--n', i);
+      name.appendChild(letter);
+    });
+
+    const sheen = el('span.hero-sheen');
+    tile.appendChild(sheen);
+    return {
+      node: el('div.hero-logo', { 'aria-hidden': 'true' }, [logo]),
+      logo, tile,
+      slabs: [polys.slice(0, 2), polys.slice(2, 4)],
+      check
+    };
   }
 
   /**
@@ -85,13 +90,17 @@ const LoginView = (() => {
     const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
     const ctx = canvas.getContext('2d');
 
-    // --- מצב הלוחות
-    const tiltX = spring(0), tiltY = spring(0), twist = spring(0);
-    const lift = spring(0, 160, 18);       // 0..1 — כמה השכבות נפרדות
-    const gap = spring(1, 220, 22);        // 1 = רווח מנוחה, 0 = צמודים
-    // ירידה בכניסה: כל לוח מתחיל גבוה ונוחת 90ms אחרי הקודם, מלמטה למעלה
-    const drop = [0, 1, 2].map(() => spring(reduced ? 0 : 1, 170, 17));
-    const dropAt = [0, 1, 2].map((i) => performance.now() + 120 + i * 90);
+    // --- מצב הלוגו
+    const tiltX = spring(0), tiltY = spring(0);
+    const lift = spring(0, 160, 18);       // 0..1 — כמה הלוחות נפרדים
+    const gap = spring(1, 220, 22);        // 1 = רווח מנוחה, 0 = צמודים (בכניסה מוצלחת)
+    // ציור הווי: 1 = לא צויר, 0 = מלא. מתחיל אחרי שהלוחות נחתו
+    const draw = spring(reduced ? 0 : 1, 90, 16);
+    // ירידה בכניסה: התחתון נוחת קודם והעליון 110ms אחריו — כמו ערימה שנבנית
+    const drop = [0, 1].map(() => spring(reduced ? 0 : 1, 170, 17));
+    const t0 = performance.now();
+    const dropAt = [t0 + 260, t0 + 150];   // לפי סדר הלוחות: העליון, התחתון
+    const drawAt = t0 + 520;
 
     // --- מצב הנקודות (מערכים שטוחים — אלף נקודות בלי אלף אובייקטים)
     let W = 0, H = 0, n = 0, cols = 0;
@@ -193,19 +202,20 @@ const LoginView = (() => {
     }
 
     function applyMark(now) {
-      const g = gap.x, l = lift.x;
-      // הרמה מצטברת: האמצעית עולה LIFT, העליונה ×2.4 — "כל שכבה נושאת את שמעליה"
-      const lifts = [0, LIFT * l, LIFT * 2.4 * l];
-      mark.slabs.forEach((s, i) => {
+      if (!reduced && now >= drawAt) draw.to = 0;
+      // הרמה מצטברת: העליון עולה LIFT, התחתון פחות מחצי — "כל לוח נושא את שמעליו".
+      // ‎gap‎ סוגר את הרווח בכניסה מוצלחת: העליון יורד אל התחתון
+      const ups = [LIFT * lift.x - 2.5 * (1 - gap.x), LIFT * 0.45 * lift.x];
+      mark.slabs.forEach((faces, i) => {
         if (!reduced && now >= dropAt[i]) drop[i].to = 0;
-        const z = i * (THICK + GAP * g) + lifts[i] + drop[i].x * 90;
-        const rot = twist.x * (i / 2);
-        s.style.transform = `translateZ(${z.toFixed(2)}px) rotateZ(${rot.toFixed(2)}deg)`;
-        // צל השכבה שמעל: חזק כשהן צמודות (הפס השחור של הלוגו), מתפוגג כשהן נפרדות
-        const shade = mark.shades[i];
-        if (shade) shade.style.opacity = (0.75 - 0.4 * l).toFixed(3);
+        const y = drop[i].x * DROP - ups[i];
+        const t = `translateY(${y.toFixed(2)}px)`;
+        // ‎opacity‎ יחד עם הנפילה — לוח שנופל מעבר לשפת האריח היה נחתך באמצע
+        for (const f of faces) { f.style.transform = t; f.style.opacity = (1 - drop[i].x).toFixed(3); }
       });
-      mark.tilt.style.transform = `rotateX(${tiltX.x.toFixed(2)}deg) rotateY(${tiltY.x.toFixed(2)}deg)`;
+      mark.check.style.strokeDashoffset = draw.x.toFixed(4);
+      // האריח נוטה יותר מהשם (עומק שונה ב-CSS), ולכן הם זזים זה מול זה — פרלקסה
+      mark.logo.style.transform = `rotateX(${tiltX.x.toFixed(2)}deg) rotateY(${tiltY.x.toFixed(2)}deg)`;
     }
 
     function frame(now) {
@@ -217,9 +227,9 @@ const LoginView = (() => {
       last = now;
 
       let moving = false;
-      for (const s of [tiltX, tiltY, twist, lift, gap, ...drop]) if (stepSpring(s, dt)) moving = true;
-      // לוח שעוד לא "שוחרר" לנפילה הוא תנועה ממתינה, לא מנוחה
-      if (dropAt.some((t, i) => now < t && drop[i].x > 0)) moving = true;
+      for (const s of [tiltX, tiltY, lift, gap, draw, ...drop]) if (stepSpring(s, dt)) moving = true;
+      // לוח שעוד לא "שוחרר" לנפילה, או וי שעוד לא התחיל, הם תנועה ממתינה ולא מנוחה
+      if (dropAt.some((t, i) => now < t && drop[i].x > 0) || (now < drawAt && draw.x > 0)) moving = true;
       applyMark(now);
       if (W && stepDots(dt)) moving = true;
       if (W) drawDots();
@@ -241,19 +251,27 @@ const LoginView = (() => {
       if (!ptr.inside && ptr.presence < 0.02) { ptr.x = x; ptr.y = y; }
       ptr.tx = x; ptr.ty = y; ptr.inside = true;
 
-      // ההטיה יחסית למרכז הסצנה ולא למרכז האזור: הסמן שמימין לערימה מטה אותה ימינה
+      // ההטיה יחסית למרכז הלוגו ולא למרכז האזור: הסמן שמימין ללוגו מטה אותו ימינה
       const m = mark.node.getBoundingClientRect();
-      const nx = Math.max(-1, Math.min(1, (e.clientX - (m.left + m.width / 2)) / (r.width / 2)));
-      const ny = Math.max(-1, Math.min(1, (e.clientY - (m.top + m.height / 2)) / (r.height / 2)));
+      const cx = m.left + m.width / 2, cy = m.top + m.height / 2;
+      const nx = Math.max(-1, Math.min(1, (e.clientX - cx) / (r.width / 2)));
+      const ny = Math.max(-1, Math.min(1, (e.clientY - cy) / (r.height / 2)));
       tiltY.to = nx * TILT;           // פונה אל הסמן
       tiltX.to = -ny * TILT;
-      twist.to = nx * TWIST;
-      lift.to = 1;
+      // הלוחות נפרדים ככל שהסמן קרוב יותר לאריח — לא מתג של "בפנים/בחוץ"
+      const t = mark.tile.getBoundingClientRect();
+      const d = Math.hypot(e.clientX - (t.left + t.width / 2), e.clientY - (t.top + t.height / 2));
+      lift.to = Math.max(0.25, 1 - d / 420);
+      // הברק על האריח — מיקום הסמן ביחס לאריח, באחוזים (CSS קורא אותו)
+      mark.tile.style.setProperty('--sx', `${((e.clientX - t.left) / t.width * 100).toFixed(1)}%`);
+      mark.tile.style.setProperty('--sy', `${((e.clientY - t.top) / t.height * 100).toFixed(1)}%`);
+      mark.tile.classList.add('is-lit');
       wake();
     }
     function onLeave() {
       ptr.inside = false;
-      tiltX.to = tiltY.to = twist.to = lift.to = 0;
+      tiltX.to = tiltY.to = lift.to = 0;
+      mark.tile.classList.remove('is-lit');
       wake();
     }
     // במגע ‎pointermove‎ מגיע רק כשהאצבע על המסך, וביציאה מגיע ‎pointerup‎/‎cancel‎
@@ -297,16 +315,20 @@ const LoginView = (() => {
     }
 
     /**
-     * "נסגר" אחרי כניסה מוצלחת: הלוחות נצמדים זה לזה. לעולם לא מעכב יותר
+     * "נסגר" אחרי כניסה מוצלחת: הלוחות נצמדים זה לזה והווי מצויר מחדש —
+     * "המשימה סומנה". לעולם לא מעכב יותר
      * מ-420ms, ואם אין מה להראות (תנועה מופחתת, האזור מוסתר, לשונית ברקע)
      * חוזר מיד — הכניסה עצמה היא העיקר.
      */
     function settle() {
       if (reduced || destroyed || document.hidden || !hero.offsetParent) return Promise.resolve();
       ptr.inside = false;
-      tiltX.to = tiltY.to = twist.to = lift.to = 0;
+      tiltX.to = tiltY.to = lift.to = 0;
+      mark.tile.classList.remove('is-lit');
       gap.to = 0;
       lift.k = 260;
+      // הווי נמחק ונצבע מחדש, מהיר מהציור של הכניסה
+      draw.x = 1; draw.to = 0; draw.k = 260; draw.c = 30;
       wake();
       return new Promise((resolve) => setTimeout(resolve, 420));
     }
@@ -396,15 +418,12 @@ const LoginView = (() => {
     }
 
     // אזור המיתוג הוא קישוט בלבד — מוסתר מקוראי מסך ואין בו שום דבר שמקבל פוקוס
-    const mark = heroMark();
+    const mark = heroLogo();
     const canvas = el('canvas.hero-dots', { 'aria-hidden': 'true' });
     const heroEl = el('div.login-hero', {}, [
       canvas,
       el('div.hero-glow', { 'aria-hidden': 'true' }),
-      el('div.hero-center', {}, [
-        mark.node,
-        UI.logo({ size: 'lg', tagline: true, variant: 'light' })
-      ])
+      el('div.hero-center', {}, [mark.node])
     ]);
 
     const page = el('div.login-page', {}, [

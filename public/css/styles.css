@@ -206,8 +206,6 @@ textarea { resize: vertical; min-height: 76px; }
   position: relative; z-index: 1;
   display: flex; flex-direction: column; align-items: center; gap: 6px;
 }
-/* הלוחות הם הסמל באזור הזה; האריח הרגיל מעל השם היה כפילות */
-.login-hero .logo-mark { display: none; }
 
 /*
  * רשת הנקודות (‎bindHero‎ ב-login.js) — מתחת לתוכן ומעל הרקע. האינטראקציה
@@ -237,77 +235,51 @@ textarea { resize: vertical; min-height: 76px; }
 }
 
 /*
- * הערימה האיזומטרית — שלושה לוחות, הד ללוגו של אשל הירדן בגווני משימון.
- * CSS תלת־ממדי ולא ציור: לוח הוא ריבוע ושתי פאות צד אמיתיות, ולכן הטיה
- * והרמה הן רק ‎transform‎ על אותם אלמנטים — בלי לחשב הטלה בכל פריים.
- * הממדים כאן חייבים להתאים ל-SLAB ו-THICK שב-login.js.
+ * הלוגו כאובייקט בעומק (‎heroLogo‎ ב-login.js). ‎perspective‎ על העטיפה,
+ * וההטיה על ‎.app-logo‎ עצמו — JS כותב לו ‎rotateX/Y‎. האריח יושב "קדימה"
+ * יותר מהשם והסלוגן, ולכן בהטיה הם זזים זה מול זה: פרלקסה בלי חישוב.
  */
-.mark-scene {
-  position: relative; width: 230px; height: 196px;
-  perspective: 900px;
-  pointer-events: none;
-  /* מוגדל ב-transform ולא בממדים — אלה חייבים להתאים ל-login.js; השוליים מפנים לו מקום */
-  transform: scale(1.2); margin-block: 16px 22px;
+.hero-logo { perspective: 800px; }
+.hero-logo .app-logo { transform-style: preserve-3d; will-change: transform; }
+.hero-logo .logo-mark {
+  position: relative; transform: translateZ(36px);
+  border-radius: 22%; overflow: hidden;
+  box-shadow: 0 18px 40px -14px rgba(3, 30, 28, .55);
+  animation: hero-tile-in .5s cubic-bezier(.2, .8, .2, 1) both;
 }
-.mark-tilt { position: absolute; inset: 0; transform-style: preserve-3d; }
-/* ‎translateY‎ מוריד את הבסיס: הערימה גדלה כלפי מעלה, ובלעדיו היא לא ממורכזת */
-.mark-iso {
-  position: absolute; inset-block-start: 50%; inset-inline-start: 50%;
-  width: 112px; height: 112px; margin: -56px;
-  transform: translateY(34px) rotateX(60deg) rotateZ(45deg);
-  transform-style: preserve-3d;
-}
-.slab { position: absolute; inset: 0; transform-style: preserve-3d; }
-.slab-face {
-  position: absolute;
-  /* כניסה: כל לוח מופיע 90ms אחרי הקודם, יחד עם הנפילה שב-JS */
-  animation: hero-fade .45s ease-out both;
-  animation-delay: calc(120ms + var(--i, 0) * 90ms);
-}
-/* direction: ltr — הגאומטריה כאן היא של המרחב ולא של הטקסט; ב-RTL ‎left‎ לא מתהפך ממילא, אבל ‎inset-inline‎ היה מתהפך */
-.slab { direction: ltr; }
-.slab-top {
-  inset: 0; border-radius: 3px;
-  transform: translateZ(20px);
-  background: linear-gradient(135deg, #ccfbf1 0%, #99f6e4 42%, #5eead4 100%);
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .55);
-}
+.hero-logo .app-logo-text { transform: translateZ(12px); }
+/* הלוחות זזים בתוך ה-SVG ביחידות שלו; בלי זה ‎transform‎ של CSS היה יחסי לקופסה */
+.hero-logo .logo-mark polygon { transform-box: view-box; }
 /*
- * שתי הפאות שפונות לצופה — כמו בסמל המערכת (‎UI.logoMark‎): פאה בהירה
- * משמאל (‎#2dd4bf‎, גוון הפאה בגרסה הבהירה של הסמל) ופאה מלאה וכהה מימין.
+ * הברק שעובר על האריח במקום שהסמן מצביע עליו — ‎--sx/--sy‎ מגיעים מ-JS.
+ * רק ‎opacity‎ מונפש; המיקום מתעדכן ישירות, כי הוא כבר מוחלק בקפיץ של ההטיה.
  */
-.slab-front {
-  left: 0; top: 100%; width: 100%; height: 20px;
-  transform-origin: top; transform: translateZ(20px) rotateX(-90deg);
-  background: linear-gradient(90deg, #2dd4bf, #14b8a6);
+.hero-sheen {
+  position: absolute; inset: 0; pointer-events: none;
+  background: radial-gradient(circle at var(--sx, 30%) var(--sy, 20%), rgba(255, 255, 255, .55), rgba(255, 255, 255, 0) 55%);
+  mix-blend-mode: soft-light;
+  opacity: 0; transition: opacity .35s ease;
 }
-.slab-side {
-  left: 100%; top: 0; width: 20px; height: 100%;
-  transform-origin: left; transform: translateZ(20px) rotateY(90deg);
-  background: linear-gradient(180deg, #134e4a, #0b3532);
+.logo-mark.is-lit .hero-sheen { opacity: 1; }
+
+/*
+ * השם נכנס אות אחר אות אחרי שהסמל נבנה, והסלוגן אחריו.
+ * ‎direction: ltr‎ חובה: כל אות היא קופסה נפרדת, ובדף RTL הקופסאות מסודרות
+ * מימין לשמאל — MESIMON היה נקרא NOMISEM.
+ */
+.hero-logo .app-logo-name { direction: ltr; unicode-bidi: isolate; }
+.hero-letter {
+  display: inline-block;
+  animation: hero-letter-in .5s cubic-bezier(.2, .8, .2, 1) both;
+  animation-delay: calc(620ms + var(--n, 0) * 45ms);
 }
-/* הצל שהלוח העליון מטיל — כשהלוחות צמודים זה הפס הכהה של הלוגו, וכשהם נפרדים הוא מתרכך */
-.slab-shade {
-  position: absolute; inset: 0; border-radius: 3px;
-  background: #04211f; opacity: .75;
-}
-.slab-check {
-  position: absolute; inset: 20%;
-  color: var(--brand);
-  /* סיבוב נגדי ל-rotateZ של הערימה: הווי נקרא ישר, רק משוטח בזווית ההסתכלות */
-  transform: rotate(-45deg);
-}
-.slab-check svg { display: block; width: 100%; height: 100%; }
-/* צל קרקע רך מתחת לערימה, מוזז אל הצד הרחוק מהאור */
-.mark-ground {
-  position: absolute; inset: 6%;
-  background: rgba(3, 30, 28, .5); border-radius: 12px;
-  filter: blur(12px);
-  transform: translate(10px, 10px);
-}
+.hero-logo .app-logo-tagline { animation: hero-fade .6s ease-out 1s both; }
+@keyframes hero-tile-in { from { opacity: 0; transform: translateZ(36px) scale(.86); } }
+@keyframes hero-letter-in { from { opacity: 0; transform: translateY(10px); } }
 
 @media (prefers-reduced-motion: reduce) {
-  .hero-dots, .hero-glow, .slab-face { animation: none; }
+  .hero-dots, .hero-glow, .hero-logo .logo-mark, .hero-letter, .hero-logo .app-logo-tagline { animation: none; }
+  .hero-sheen { display: none; }
 }
 
 /* כפתור הצגת הסיסמה — בתוך השדה, בקצה ההתחלתי של הקריאה (שמאל ב-RTL) */
@@ -2039,9 +2011,9 @@ input[type="color"] { width: 46px; height: 30px; padding: 2px; cursor: pointer; 
 @media (max-width: 900px) {
   .login-page { grid-template-columns: 1fr; align-content: start; }
   /*
-   * בטלפון אזור המיתוג לא נעלם אלא הופך לרצועה בראש המסך: הלוחות הקטנים
-   * והשם, והטופס מתחתיה. ‎pan-y‎ — גלילה אנכית נשארת של הדפדפן, ותנועה
-   * אופקית של האצבע מטה את הערימה.
+   * בטלפון אזור המיתוג לא נעלם אלא הופך לרצועה בראש המסך: הלוגו בשורה
+   * אחת, והטופס מתחתיה. ‎pan-y‎ — גלילה אנכית נשארת של הדפדפן, ותנועה
+   * אופקית של האצבע מטה את הלוגו.
    */
   .login-hero {
     order: -1; height: 150px; padding: 0 20px;
@@ -2049,9 +2021,10 @@ input[type="color"] { width: 46px; height: 30px; padding: 2px; cursor: pointer; 
   }
   .login-hero::after { inset: auto -60px -220px auto; width: 300px; height: 300px; }
   .login-hero .hero-center { flex-direction: row; gap: 4px; }
-  /* הקטנה ב-transform ושוליים שליליים שמקזזים את התיבה — כך אין צורך בסט ממדים שני שיתאים ל-JS */
-  .login-hero .mark-scene { transform: scale(.56); margin: -43px -46px -43px -54px; }
-  .login-hero .app-logo-lg { gap: 0; }
+  /* האריח מוקטן ב-CSS: ‎UI.logoMark‎ קובע לו ממדים ב-style, ולכן ‎!important‎ */
+  .login-hero .logo-mark { width: 54px !important; height: 54px !important; }
+  .login-hero .logo-mark svg { width: 100%; height: 100%; }
+  .login-hero .app-logo-lg { flex-direction: row; gap: 14px; }
   .login-hero .app-logo-lg .app-logo-name { font-size: 27px; letter-spacing: .16em; margin-inline-end: -.16em; }
   .login-hero .app-logo-lg .app-logo-tagline { font-size: 13px; margin-top: 4px; }
   .login-panel { padding: 26px 22px 40px; justify-content: flex-start; }
