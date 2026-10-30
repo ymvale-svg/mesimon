@@ -575,8 +575,8 @@ const VoiceView = (() => {
       const who = d.assignee === me ? 'אני' : (d.assigneeName || 'אני');
       const project = d.projectId ? (App.project(Number(d.projectId))?.name ?? '') : 'ללא פרויקט';
       const line = `${d.title} · ${who} · ${dayLabel(d.dueDate)} · ${project}`;
-      const ok = el('button.btn.btn-primary', { type: 'button' }, ['✓ פתיחת המשימה']);
-      const editBtn = el('button.btn', { type: 'button' }, ['✏ עריכה מלאה']);
+      const ok = el('button.btn.btn-primary', { type: 'button' }, [UI.lineIcon('check'), 'פתיחת המשימה']);
+      const editBtn = el('button.btn', { type: 'button' }, [UI.lineIcon('pencil'), 'עריכה מלאה']);
       let listener = null;
 
       const commit = async () => {

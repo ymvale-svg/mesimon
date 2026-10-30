@@ -666,6 +666,40 @@ const UI = (() => {
     return node;
   }
 
+  /*
+   * סמלי קו — לכפתורי פעולה (חיוג, מייל, משימת AI, עריכה, מחיקה) ולאלפון.
+   *
+   * ‎icon()‎ שלמעלה מגיש את סט האייקונים שעוצב לתפריט, כמסכות PNG. לפעולות
+   * האלה אין בו סמלים, והאימוג'י שהיו כאן נראו כל אחד בצבע אחר ובגודל אחר
+   * בכל מערכת הפעלה. כאן — SVG בקו אחיד של 2px על רשת 24, בצבע ‎currentColor‎:
+   * הצבע נקבע ב-CSS (צבע המותג כברירת מחדל), ואותו סמל משרת כל הקשר.
+   *
+   * הצורות מבוססות על Lucide (‎lucide.dev‎, רישיון ISC).
+   */
+  const LINE_ICONS = {
+    phone: '<path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/>',
+    mail: '<rect width="20" height="16" x="2" y="4" rx="2"/><path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"/>',
+    sparkles: '<path d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3Z"/><path d="M5 3v4"/><path d="M19 17v4"/><path d="M3 5h4"/><path d="M17 19h4"/>',
+    pencil: '<path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/><path d="m15 5 4 4"/>',
+    trash: '<path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/><path d="M10 11v6"/><path d="M14 11v6"/>',
+    contacts: '<path d="M15 13a3 3 0 1 0-6 0"/><path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1 0-5H20"/><circle cx="12" cy="8" r="2"/>',
+    plus: '<path d="M5 12h14"/><path d="M12 5v14"/>',
+    upload: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m17 8-5-5-5 5"/><path d="M12 3v12"/>',
+    download: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/><path d="M12 15V3"/>',
+    check: '<path d="M20 6 9 17l-5-5"/>',
+    copy: '<rect width="14" height="14" x="8" y="8" rx="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/>'
+  };
+
+  /** סמל קו בגודל הטקסט שסביבו (‎1.15em‎), או ב-‎size‎ פיקסלים */
+  function lineIcon(name, { size = null } = {}) {
+    const body = LINE_ICONS[name];
+    if (!body) { console.warn(`[משימון] אין סמל קו בשם "${name}"`); return el('span.li'); }
+    const node = el('span.li', { 'aria-hidden': 'true' });
+    node.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${body}</svg>`;
+    if (size) { node.style.width = `${size}px`; node.style.height = `${size}px`; }
+    return node;
+  }
+
   // פלטת הפרויקטים — זהה לזו שבשרת, שממנה נגזר צבע ברירת המחדל לפי המזהה
   const PROJECT_COLORS = ['#0f766e', '#c2410c', '#2563eb', '#7c3aed', '#be123c', '#0891b2', '#65a30d', '#a16207'];
 
@@ -1291,7 +1325,7 @@ const UI = (() => {
     empty, spinner, field, select, phone, projectPicker, rankProjects,
     renderMentions, fileSize, fileIcon, announceAutoStatus,
     usersByDepartment,
-    preview, previewUrls, canPreview, PROJECT_COLORS, commentThread, icon,
+    preview, previewUrls, canPreview, PROJECT_COLORS, commentThread, icon, lineIcon,
     logo, logoMark, companyLogo, refitLogos
   };
 })();
