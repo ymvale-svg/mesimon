@@ -45,6 +45,7 @@ const Speech = require('../speech');
 const WaActions = require('./wa-actions');
 const MailInsights = require('./mail-insights');
 const VoiceRouter = require('./voice-router');
+const ProjectHints = require('../project-hints');
 
 const GROUP_SKILL = path.join(__dirname, 'skills', 'whatsapp-group-to-tasks.md');
 const CHAT_SKILL = path.join(__dirname, 'skills', 'whatsapp-chat.md');
@@ -722,9 +723,10 @@ const CHAT_SCHEMA = {
         due_date: { type: 'string' },
         priority: { type: 'string', enum: ['normal', 'high', 'urgent'] },
         project_id: { type: 'integer' },
+        project_suggested: { type: 'boolean', description: 'true כשהפרויקט לא נאמר, וה-AI בחר אותו לפי התוכן' },
         checklist: { type: 'array', items: { type: 'string' } }
       },
-      required: ['title', 'summary', 'assignee_user_id', 'due_date', 'priority', 'project_id', 'checklist'],
+      required: ['title', 'summary', 'assignee_user_id', 'due_date', 'priority', 'project_id', 'project_suggested', 'checklist'],
       additionalProperties: false
     }
   },
@@ -782,7 +784,7 @@ function draftText(draft, user) {
     draft.summary || null,
     `👤 אחראי/ת: ${draft.assigneeId && draft.assigneeId !== user.id ? nameOf(draft.assigneeId) : 'את/ה'}`,
     `📅 יעד: ${draft.dueDate ? shortDate(draft.dueDate) : 'ללא'}`,
-    `📁 פרויקט: ${project ?? 'ללא'}`,
+    `📁 פרויקט: ${project ?? 'ללא'}${project && draft.projectSuggested ? ' _(לפי התוכן — "בלי פרויקט" או שם אחר לשינוי)_' : ''}`,
     draft.priority !== 'normal' ? `⚡ עדיפות: ${PRIORITY[draft.priority]}` : null,
     draft.checklist.length ? `☑ ${draft.checklist.map((c, i) => `${i + 1}. ${c}`).join('\n')}` : null,
     ...(draft.warnings ?? []).map((w) => `⚠️ ${w}`),
@@ -835,7 +837,9 @@ function helpText(actor) {
 
 async function understand(user, actor, state, text, projects, myOpen) {
   const users = orgUsers();
-  const { allowedProjects, assignable } = newTaskScope(actor);
+  const { allowedProjects } = newTaskScope(actor);
+  const allowedList = projects.filter((p) => allowedProjects.has(p.id));
+  const otherList = projects.filter((p) => !allowedProjects.has(p.id));
   const actions = WaActions.forActor(actor);
   const lastList = state.lastList
     .map((id, i) => ({ n: i + 1, id, title: D.get('SELECT title FROM tasks WHERE id = ?', id)?.title }))
@@ -855,8 +859,11 @@ async function understand(user, actor, state, text, projects, myOpen) {
     'העובדים (מזהה · שם · מחלקה):',
     ...users.map((u) => `${u.id} · ${u.full_name} · ${u.department ?? ''}`),
     '',
-    'הפרויקטים (מזהה · שם). ✱ = פרויקט שלו או של המחלקה שלו — רק בהם אפשר לפתוח משימה:',
-    ...(projects.length ? projects.map((p) => `${p.id} · ${p.name}${allowedProjects.has(p.id) ? ' ✱' : ''}`) : ['(אין)']),
+    'הפרויקטים שבהם אפשר לפתוח משימה (מזהה · שם — מנהל ומשימות פתוחות, לבחירת הפרויקט המתאים):',
+    ...(allowedList.length ? ProjectHints.lines(allowedList.slice(0, 60)) : ['(אין)']),
+    '',
+    'פרויקטים נוספים שהוא רואה — לשאלות בלבד, לא לפתיחת משימה:',
+    ...(otherList.length ? otherList.map((p) => `${p.id} · ${p.name}`) : ['(אין)']),
     '',
     'המשימות הפתוחות של הכותב (מזהה · כותרת):',
     ...(myOpen.length ? myOpen.map((t) => `${t.id} · ${t.title}`) : ['(אין)']),
@@ -910,6 +917,7 @@ async function understand(user, actor, state, text, projects, myOpen) {
       dueDate: /^\d{4}-\d{2}-\d{2}$/.test(String(d.due_date ?? '')) ? d.due_date : '',
       priority: ['normal', 'high', 'urgent'].includes(d.priority) ? d.priority : 'normal',
       projectId: projectIds.has(Number(d.project_id)) ? Number(d.project_id) : 0,
+      projectSuggested: d.project_suggested === true,
       checklist: (d.checklist ?? []).map((x) => String(x).trim()).filter(Boolean).slice(0, 8)
     }
   };

@@ -1049,11 +1049,26 @@ function newTaskProjects(actor) {
     && (p.mine || p.pinned || p.myTaskCount > 0 || P.inActorDepartments(actor, p.departmentId)));
 }
 
-/** מי מותר לי לשייך אליו משימה — אותה בדיקה של ‎assertMayAssignTo‎, לכל עובד פעיל */
+/**
+ * שיוך מהבוט ומההקלטה: ‎assertMayAssignTo‎, ובנוסף — רק לעובדים שמתחתיי:
+ * המחלקה שלי ותתי-המחלקות שלה. גם למנהל מערכת ולאדמין-על, שההרשאה שלהם
+ * בדיאלוג באפליקציה רחבה לכל הארגון: בקול ובוואטסאפ שם שנשמע בקירוב נופל
+ * בקלות על עובד ממחלקה אחרת. לעצמי — תמיד. לספק — לפי ההרשאה בלבד.
+ */
+function assertMayAssignInTeam(actor, type, id) {
+  assertMayAssignTo(actor, type, id);
+  if (type !== 'user' || !id || actor.type !== 'user' || Number(id) === actor.id) return;
+  const target = D.get('SELECT department_id FROM users WHERE id = ?', Number(id));
+  if (!P.inActorDepartments(actor, target?.department_id ?? null)) {
+    throw forbidden('מהבוט ומההקלטה אפשר לשייך משימה רק לעובדים שמתחתיך (המחלקה שלך)');
+  }
+}
+
+/** מי מותר לי לשייך אליו משימה מהבוט ומההקלטה (‎assertMayAssignInTeam‎) */
 function assignableUserIds(actor) {
   const ids = new Set([actor.id]);
   for (const u of D.all("SELECT id FROM users WHERE status = 'active' AND role <> 'vendor'")) {
-    try { assertMayAssignTo(actor, 'user', u.id); ids.add(u.id); } catch { /* אין הרשאה */ }
+    try { assertMayAssignInTeam(actor, 'user', u.id); ids.add(u.id); } catch { /* אין הרשאה */ }
   }
   return ids;
 }
@@ -4945,7 +4960,7 @@ const botTaskOps = {
 };
 
 AiApi.register(router, { getTaskOr404, assertVisible, mayOnTask, shapeTask, actorRef, saveAttachment, createTask, assertMayAssignTo, listProjectsFor, newTaskProjects, assignableUserIds, botTaskOps });
-TodayApi.register(router, { shapeTask, createTask, getTaskOr404, listProjectsFor, newTaskProjects, assertMayAssignTo });
+TodayApi.register(router, { shapeTask, createTask, getTaskOr404, listProjectsFor, newTaskProjects, assertMayAssignTo: assertMayAssignInTeam });
 PhonebookApi.register(router);
 MeetingsApi.register(router, { getTaskOr404, assertVisible, shapeTask, canSeeTask });
 Tiful360.register(router, { createTask, saveAttachment, getTaskOr404 });

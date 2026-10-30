@@ -121,7 +121,7 @@ function register(router, h) {
   const voiceProjects = (actor) => newTaskProjects(actor)
     .sort((a, b) => Number(b.mine) - Number(a.mine))
     .slice(0, 300)
-    .map((p) => ({ id: p.id, name: p.name }));
+    .map((p) => ({ id: p.id, name: p.name, managerName: p.managerName }));
 
   router.post('/api/voice/task', async (req, res, ctx) => {
     const actor = userOnly(ctx);

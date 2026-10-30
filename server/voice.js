@@ -20,6 +20,7 @@ const D = require('./db');
 const P = require('./permissions');
 const W = require('./workdays');
 const Claude = require('./ai/claude');
+const ProjectHints = require('./project-hints');
 const Dialog = require('./voice-dialog');
 
 const SKILL_PATH = path.join(__dirname, 'ai', 'skills', 'voice-to-task.md');
@@ -141,8 +142,8 @@ function contextText(actor, ctx, { aiRequested }) {
     ...ctx.users.map((u) => `user:${u.id} — ${u.full_name}${u.department ? ` · ${u.department}` : ''}`),
     ...(ctx.vendors.length ? ['', 'ספקים חיצוניים:', ...ctx.vendors.map((v) => `vendor:${v.id} — ${v.name}${v.contact_name ? ` (${v.contact_name})` : ''}`)] : []),
     '',
-    'פרויקטים (מזהה — שם):',
-    ...(ctx.projects.length ? ctx.projects.map((p) => `${p.id} — ${p.name}`) : ['(אין)'])
+    'פרויקטים — רק אלה מותרים (מזהה — שם — מנהל ומשימות פתוחות, לבחירת הפרויקט המתאים):',
+    ...(ctx.projects.length ? ProjectHints.lines(ctx.projects.slice(0, 60), { sep: ' — ' }) : ['(אין)'])
   ].filter((l) => l !== null);
   return lines.join('\n');
 }
@@ -216,6 +217,12 @@ function resolve(actor, out, ctx) {
   let projectId = null;
   if (out.project?.match && projectIds.has(Number(out.project.match)) && out.project.confident) projectId = Number(out.project.match);
   else if (heardProject) warnings.push({ field: 'projectId', text: `הפרויקט "${heardProject}" לא זוהה — המשימה בלי פרויקט` });
+  else if (out.project?.match && projectIds.has(Number(out.project.match))) {
+    // פרויקט לא נאמר — ה-AI הציע את המתאים ביותר לפי התוכן. ממולא, ומסומן לבדיקה
+    projectId = Number(out.project.match);
+    const name = ctx.projects.find((p) => p.id === projectId)?.name ?? '';
+    warnings.push({ field: 'projectId', text: `שויך לפרויקט "${name}" לפי התוכן — אפשר לשנות` });
+  }
   const projectGuess = out.project?.match && projectIds.has(Number(out.project.match)) ? Number(out.project.match) : null;
 
   const activate = W.isDate(out.activate_date) && out.activate_date > today ? out.activate_date : null;
