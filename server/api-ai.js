@@ -22,11 +22,11 @@ const WaActions = require('./ai/wa-actions');
 const { badRequest, forbidden, notFound, readJson, sendJson, parseUrl } = require('./http-kit');
 
 function register(router, h) {
-  const { getTaskOr404, assertVisible, mayOnTask, shapeTask, actorRef, saveAttachment, createTask, assertMayAssignTo, listProjectsFor, botTaskOps } = h;
+  const { getTaskOr404, assertVisible, mayOnTask, shapeTask, actorRef, saveAttachment, createTask, assertMayAssignTo, assertMayUseProject, listProjectsFor, newTaskProjects, assignableUserIds, assignBlockReason, botTaskOps } = h;
 
   AiTasks.setHooks({ saveFile: saveAttachment, scanWhatsApp: WaScan.handle, scanningUsers: WaScan.scanningUsers });
   MailScan.init({ createTask });
-  WaBot.init({ createTask, listProjectsFor, tasks: botTaskOps, mail: { searchContacts, createAiTask } });
+  WaBot.init({ createTask, listProjectsFor, newTaskProjects, assignableUserIds, assignBlockReason, tasks: botTaskOps, mail: { searchContacts, createAiTask } });
 
   const internalOnly = (actor) => {
     if (actor.type === 'vendor') throw forbidden();
@@ -295,6 +295,7 @@ function register(router, h) {
 
     const projectId = b.projectId ? Number(b.projectId) : null;
     if (projectId && !D.get('SELECT 1 FROM projects WHERE id = ?', projectId)) throw badRequest('הפרויקט לא נמצא');
+    assertMayUseProject(actor, projectId);
 
     const title = String(draft.title || draft.goal || instruction).trim().slice(0, 120);
     const description = [

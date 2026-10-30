@@ -1607,7 +1607,7 @@ const HomeView = (() => {
      * פרויקטים שהושלמו אינם מוצעים — אין טעם לפתוח בהם משימה חדשה.
      */
     const projectPicker = UI.projectPicker({
-      projects: App.state.projects.filter((p) => p.status !== 'done')
+      projects: App.state.projects.filter((p) => p.status !== 'done' && p.canAddTask)
     });
 
     // אותה רשימה מקובצת של הדיאלוג — חברי המחלקה בראש
