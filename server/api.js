@@ -162,12 +162,28 @@ function assertMayAssignTo(actor, type, id) {
   // הוענקה לו הרשאה אישית (או שהוא מנהל ומעלה) הוא מקצה לאחרים במחלקתו.
   const lvl = P.level(actor, 'assign_department_task');
   if (lvl === false) throw forbidden('אין לך הרשאה להקצות משימה לאדם אחר');
-  if (lvl === 'department') {
-    const target = D.get('SELECT department_id FROM users WHERE id = ?', id);
-    if (!target) throw badRequest('המשתמש שנבחר אינו קיים');
-    if (!P.inActorDepartments(actor, target.department_id ?? null)) {
-      throw forbidden('ניתן להקצות משימה לחברי המחלקה שלך בלבד');
+  const target = D.get('SELECT id, full_name, role, department_id FROM users WHERE id = ?', Number(id));
+  if (!target) throw badRequest('המשתמש שנבחר אינו קיים');
+
+  /*
+   * היררכיה, בכל המערכת — גם לתפקידים שההרשאה שלהם רחבה לכל הארגון:
+   *   • הנהלה מטילה משימות רק על המנהלים שמתחתיה, והם מחליטים אם להעביר
+   *     הלאה — לא ישירות על עובד מן השורה. "מתחתיה": מנהלי המחלקה שלה
+   *     ותתי-המחלקות; חבר הנהלה בלי מחלקה — מנהלי כל המחלקות.
+   *   • כל השאר (כולל מנהל מערכת ואדמין-על) — רק לעובדים שמתחתיהם: המחלקה
+   *     שלהם ותתי-המחלקות שלה.
+   */
+  if (actor.role === 'executive') {
+    const isManager = target.role === 'manager'
+      || Boolean(D.get('SELECT 1 FROM departments WHERE manager_user_id = ?', target.id));
+    if (!isManager) throw forbidden(`הנהלה משייכת משימות רק למנהלים שמתחתיה, והם מעבירים הלאה — ל${target.full_name} אין תפקיד ניהולי`);
+    if (actor.departmentId && !P.inActorDepartments(actor, target.department_id ?? null)) {
+      throw forbidden(`${target.full_name} לא מהמנהלים שמתחתיך`);
     }
+    return;
+  }
+  if (!P.inActorDepartments(actor, target.department_id ?? null)) {
+    throw forbidden(`${target.full_name} לא בצוות שלך — אפשר לשייך משימה רק לעובדים שמתחתיך`);
   }
 }
 
@@ -903,6 +919,7 @@ router.get('/api/bootstrap', async (req, res, ctx) => {
       ? D.all('SELECT * FROM boards ORDER BY type DESC, id')
       : D.all("SELECT * FROM boards WHERE type='internal'");
 
+  const assignableIds = isVendor(actor) ? new Set() : assignableUserIds(actor);
   const payload = {
     actor: publicActor(actor),
     permissions: P.permissionsFor(actor),
@@ -935,6 +952,8 @@ router.get('/api/bootstrap', async (req, res, ctx) => {
       : D.all("SELECT id, full_name, email, role, department, department_id, status FROM users WHERE status='active' ORDER BY full_name")
           .map((u) => ({
             id: u.id, name: u.full_name, email: u.email,
+            // האם מותר לי לשייך אליו משימה — בוררי האחראי מציגים רק את אלה (‎assertMayAssignTo‎)
+            assignable: assignableIds.has(u.id),
             role: P.seesRoles(actor) ? u.role : null,
             roleLabel: P.seesRoles(actor) ? P.ROLE_LABELS[u.role] : null,
             // המחלקה אינה רמת הרשאה אלא שיוך ארגוני, ולכן היא גלויה לכולם —
@@ -1034,6 +1053,43 @@ function ownedProjectIds(actor) {
     actor.id, actor.id, opener, actor.id, 'user', actor.id
   );
   return new Set(rows.map((r) => r.id));
+}
+
+/**
+ * הפרויקטים שאפשר לפתוח בהם משימה מהבוט ומההקלטה — רק פעילים, ורק "שלי":
+ * פרויקט שאני מנהל, פתחתי, נעצתי או שיש לי בו עבודה, או פרויקט של המחלקה
+ * שלי (המחלקה של מנהל הפרויקט, כולל תתי-מחלקות). לא כל מה שמותר לי לראות:
+ * מנהל מערכת רואה את כל הארגון, ומשימה שנפתחת בקול או בוואטסאפ בפרויקט של
+ * מחלקה אחרת היא כמעט תמיד טעות בזיהוי השם. בדיאלוג המשימה באפליקציה —
+ * שם הבחירה גלויה על המסך — נשארת הרשימה המלאה.
+ */
+function newTaskProjects(actor) {
+  return listProjectsFor(actor).filter((p) => p.status === 'active' && p.canAddTask);
+}
+
+/**
+ * אפשר לפתוח משימה (או להעביר משימה) רק בפרויקט שלי או של המחלקה שלי — בכל
+ * המערכת, גם לתפקידים שרואים את כל הארגון. ‎projectId‎ ריק — בלי פרויקט, מותר.
+ */
+function assertMayUseProject(actor, projectId) {
+  if (!projectId || actor.type !== 'user') return;
+  const p = listProjectsFor(actor).find((x) => x.id === Number(projectId));
+  if (!p) throw badRequest('הפרויקט לא נמצא');
+  if (!p.canAddTask) throw forbidden(`הפרויקט "${p.name}" אינו שלך או של המחלקה שלך — משימה בו פותח רק מי שעובד בו או במחלקה שלו`);
+}
+
+/** למה אסור לשייך — הסיבה לתצוגה, או ‎null‎ כשמותר (‎assertMayAssignTo‎) */
+function assignBlockReason(actor, id) {
+  try { assertMayAssignTo(actor, 'user', id); return null; } catch (err) { return err.message; }
+}
+
+/** מי מותר לי לשייך אליו משימה (‎assertMayAssignTo‎) — לבוררי האחראי, לבוט ולהקלטה */
+function assignableUserIds(actor) {
+  const ids = new Set([actor.id]);
+  for (const u of D.all("SELECT id FROM users WHERE status = 'active' AND role <> 'vendor'")) {
+    try { assertMayAssignTo(actor, 'user', u.id); ids.add(u.id); } catch { /* אין הרשאה */ }
+  }
+  return ids;
 }
 
 function listProjectsFor(actor) {
@@ -1137,6 +1193,13 @@ function listProjectsFor(actor) {
         : null,
       parentProjectId: p.parent_project_id ?? null,
       statusOwnerId: p.status_owner_id ?? null,
+      /*
+       * האם אפשר לפתוח בו משימה: פרויקט שלי (מנהל, פתחתי, נעצתי, יש לי בו
+       * עבודה) או של המחלקה שלי. גם למי שרואה את כל הארגון — בורר הפרויקט
+       * במשימה מציג רק את אלה, והשרת אוכף (‎assertMayUseProject‎).
+       */
+      canAddTask: !isVendor(actor) && (mineIds.has(p.id) || pinned.has(p.id) || (myTaskCounts.get(p.id) ?? 0) > 0
+        || P.inActorDepartments(actor, p.manager_id ? D.get('SELECT department_id FROM users WHERE id = ?', p.manager_id)?.department_id ?? null : null)),
       statusOwnerName: p.status_owner_id
         ? D.get('SELECT full_name FROM users WHERE id = ?', p.status_owner_id)?.full_name ?? null
         : null,
@@ -1340,6 +1403,7 @@ router.get('/api/tasks/:id', async (req, res, ctx) => {
 router.post('/api/tasks', async (req, res, ctx) => {
   const actor = ctx.requireActor();
   const body = await readJson(req);
+  assertMayUseProject(actor, body.projectId);
   const id = createTask(actor, body);
   sendJson(res, 201, { task: shapeTask(getTaskOr404(id), actor, { withDetails: true }) });
 });
@@ -1589,6 +1653,8 @@ router.patch('/api/tasks/:id', async (req, res, ctx) => {
         changes.push(`סטטוס בקרה: ${nameOf(current)} ← ${nameOf(next)}`);
       }
     }
+    // העברה לפרויקט אחר — רק לפרויקט שלי או של המחלקה שלי
+    if (body.projectId && Number(body.projectId) !== task.project_id) assertMayUseProject(actor, body.projectId);
     setField('projectId', 'project_id', body.projectId !== undefined ? (body.projectId ? Number(body.projectId) : null) : undefined, 'פרויקט',
       (v) => (v ? D.get('SELECT name FROM projects WHERE id = ?', v)?.name ?? '' : ''));
     setField('activateAt', 'activate_at', body.activateAt, 'תאריך הפעלה', Rules.formatDate);
@@ -1824,6 +1890,7 @@ router.post('/api/tasks/bulk', async (req, res, ctx) => {
         if (!mayOnTask(actor, 'edit_delete_task', task, project)) throw forbidden();
         const target = value ? Number(value) : null;
         if (target && !D.get('SELECT 1 FROM projects WHERE id = ?', target)) throw badRequest('הפרויקט לא נמצא');
+        if (target && target !== task.project_id) assertMayUseProject(actor, target);
         D.run('UPDATE tasks SET project_id = ? WHERE id = ?', target, task.id);
         D.audit(task.id, actorRef(actor), 'updated',
           target ? `הועברה לפרויקט "${D.get('SELECT name FROM projects WHERE id = ?', target).name}"` : 'הוסרה מהפרויקט');
@@ -4922,8 +4989,8 @@ const botTaskOps = {
   }
 };
 
-AiApi.register(router, { getTaskOr404, assertVisible, mayOnTask, shapeTask, actorRef, saveAttachment, createTask, assertMayAssignTo, listProjectsFor, botTaskOps });
-TodayApi.register(router, { shapeTask, createTask, getTaskOr404, listProjectsFor, assertMayAssignTo });
+AiApi.register(router, { getTaskOr404, assertVisible, mayOnTask, shapeTask, actorRef, saveAttachment, createTask, assertMayAssignTo, assertMayUseProject, listProjectsFor, newTaskProjects, assignableUserIds, assignBlockReason, botTaskOps });
+TodayApi.register(router, { shapeTask, createTask, getTaskOr404, listProjectsFor, newTaskProjects, assertMayAssignTo });
 PhonebookApi.register(router);
 MeetingsApi.register(router, { getTaskOr404, assertVisible, shapeTask, canSeeTask });
 Tiful360.register(router, { createTask, saveAttachment, getTaskOr404 });

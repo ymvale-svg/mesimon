@@ -423,10 +423,10 @@ const UI = (() => {
    *
    * מי שאין לו מחלקה מקבל רשימה אחת ללא חלוקה, כי אין למה להשוות.
    *
-   * הרשימה מוגבלת למי שמותר לי להקצות לו: מנהל מחלקה רואה את עובדי
-   * המחלקה שלו, ועובד עם הרשאה אישית את חברי המחלקה שלו — רק הנהלה
-   * ומעלה רואים את כל הארגון. מי שאינו רשאי להקצות לאחרים רואה רק את עצמו.
-   * השרת אוכף את אותו כלל; הסינון כאן חוסך בחירה שתידחה.
+   * הרשימה מוגבלת למי שמותר לי להקצות לו — השרת מסמן כל משתמש
+   * (‎assignable‎) לפי אותה בדיקה שהוא אוכף: עובדים שמתחתיי (המחלקה שלי
+   * ותתי-המחלקות שלה), ולהנהלה — המנהלים שמתחתיה. הסינון כאן חוסך בחירה
+   * שתידחה; ההכרעה נשארת בשרת.
    *
    * ‎keep‎ — מזהים שנשארים ברשימה גם מחוץ לתחום: האחראים הקיימים של משימה
    * בעריכה, כדי שפתיחתה לא תאפס בשקט אחראי שמישהו אחר קבע.
@@ -438,11 +438,8 @@ const UI = (() => {
     const actor = App.state.actor;
     const myDepts = new Set(actor?.departmentIds ?? (actor?.departmentId ? [actor.departmentId] : []));
     const inMine = (u) => myDepts.has(u.departmentId);
-    const scope = App.state.permissions?.assign_department_task ?? false;
     const kept = new Set(keep.map(Number));
-    const list = scope === true
-      ? all
-      : all.filter((u) => u.id === me || kept.has(u.id) || (scope === 'department' && inMine(u)));
+    const list = all.filter((u) => u.id === me || kept.has(u.id) || u.assignable);
     const near = list.filter(inMine);
     const nearIds = new Set(near.map((u) => u.id));
     return {

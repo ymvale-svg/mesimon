@@ -5,6 +5,8 @@ const AdminView = (() => {
   const { el } = UI;
 
   let tab = 'users';
+  // סינון טבלת המשתמשים לפי סטטוס — נשמר בין מעברי לשוניות
+  let userStatusFilter = 'active';
   let containerRef = null;
   let settingsData = null;
 
@@ -260,6 +262,21 @@ const AdminView = (() => {
     const data = await API.adminUsers();
     const scoped = data.scope === 'department';
 
+    const tbody = el('tbody');
+    const statusFilter = UI.select([
+      { value: 'active', label: 'פעילים' },
+      { value: 'inactive', label: 'לא פעילים' },
+      { value: '', label: 'כל הסטטוסים' }
+    ], userStatusFilter);
+    function drawRows() {
+      const rows = data.users.filter((u) => !userStatusFilter || u.status === userStatusFilter);
+      UI.mount(tbody, rows.length
+        ? rows.map(userRow)
+        : el('tr', {}, [el('td.mute-sm', { colspan: data.seesRoles ? 7 : 6, text: 'אין משתמשים להצגה' })]));
+    }
+    statusFilter.addEventListener('change', () => { userStatusFilter = statusFilter.value; drawRows(); });
+    drawRows();
+
     UI.mount(body,
       scoped
         ? el('div.alert.alert-info.mb', {}, [
@@ -270,6 +287,7 @@ const AdminView = (() => {
       // הקישור הוא ארגוני ולא מחלקתי, ולכן מוצג למי שרואה את כל הארגון בלבד
       scoped ? null : signupPanel(),
       el('div.flex.mb', {}, [
+        statusFilter,
         el('div.spacer'),
         el('button.btn', { onclick: () => importDialog(data) }, ['⇪ ייבוא מאקסל']),
         el('button.btn.btn-primary', { onclick: () => userDialog(null, data) }, ['＋ משתמש חדש'])
@@ -281,40 +299,42 @@ const AdminView = (() => {
             data.seesRoles ? el('th', { text: 'רמת גישה' }) : null,
             el('th', { text: 'מחלקה' }), el('th', { text: 'סטטוס' }), el('th', { text: '' })
           ])]),
-          el('tbody', {}, data.users.map((u) =>
-            el('tr', {}, [
-              el('td', {}, [el('div.flex', {}, [UI.avatar(u.name, { small: true }), el('b', { text: u.name })])]),
-              el('td', { text: u.email }),
-              // עמודת טלפון — כך רואים במבט מי עוד חסר לבוט הוואטסאפ
-              u.phone
-                ? el('td', { dir: 'ltr', style: { textAlign: 'right' }, text: UI.phone(u.phone) })
-                : el('td.mute-sm', { text: '📱 אין טלפון' }),
-              data.seesRoles ? el('td', {}, [el('span.tag.tag-internal', {}, [u.roleLabel])]) : null,
-              // משתמש יכול להיות ללא שיוך למחלקה (הנהלה, מנהל מערכת) — מסומן במקף ולא בתא ריק
-              el('td', { text: u.department || '—' }),
-              el('td', {}, [el('span', {
-                class: u.status === 'active' ? 'text-ok' : 'text-danger',
-                text: u.status === 'active' ? '● פעיל' : '○ לא פעיל'
-              })]),
-              el('td', {}, [
-                el('div.flex', {}, [
-                  el('button.btn.btn-sm', { onclick: () => userDialog(u, data) }, ['עריכה']),
-                  el('button.btn.btn-sm', {
-                    title: 'שליחה חוזרת של הזמנה לקביעת סיסמה',
-                    onclick: async () => {
-                      try {
-                        const r = await API.resendInvite('user', u.id);
-                        showInviteResult(r.invite, u.name);
-                      } catch (err) { UI.error(err); }
-                    }
-                  }, ['✉ הזמנה'])
-                ])
-              ])
-            ])
-          ))
+          tbody
         ])
       ])
     );
+
+    function userRow(u) {
+      return el('tr', {}, [
+          el('td', {}, [el('div.flex', {}, [UI.avatar(u.name, { small: true }), el('b', { text: u.name })])]),
+          el('td', { text: u.email }),
+          // עמודת טלפון — כך רואים במבט מי עוד חסר לבוט הוואטסאפ
+          u.phone
+            ? el('td', { dir: 'ltr', style: { textAlign: 'right' }, text: UI.phone(u.phone) })
+            : el('td.mute-sm', { text: '📱 אין טלפון' }),
+          data.seesRoles ? el('td', {}, [el('span.tag.tag-internal', {}, [u.roleLabel])]) : null,
+          // משתמש יכול להיות ללא שיוך למחלקה (הנהלה, מנהל מערכת) — מסומן במקף ולא בתא ריק
+          el('td', { text: u.department || '—' }),
+          el('td', {}, [el('span', {
+            class: u.status === 'active' ? 'text-ok' : 'text-danger',
+            text: u.status === 'active' ? '● פעיל' : '○ לא פעיל'
+          })]),
+          el('td', {}, [
+            el('div.flex', {}, [
+              el('button.btn.btn-sm', { onclick: () => userDialog(u, data) }, ['עריכה']),
+              el('button.btn.btn-sm', {
+                title: 'שליחה חוזרת של הזמנה לקביעת סיסמה',
+                onclick: async () => {
+                  try {
+                    const r = await API.resendInvite('user', u.id);
+                    showInviteResult(r.invite, u.name);
+                  } catch (err) { UI.error(err); }
+                }
+              }, ['✉ הזמנה'])
+            ])
+          ])
+      ]);
+    }
   }
 
   // ------------------------------------------------------------- ייבוא מגיליון
