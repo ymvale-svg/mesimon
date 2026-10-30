@@ -1034,9 +1034,10 @@ function emailText(p) {
 }
 
 /** טיוטה (או תיקון שלה) — עם ההתכתבות האחרונה עם הנמען, להצעות מה להוסיף */
-async function draftEmail(actor, contact, instruction, { feedback = '', previous = null } = {}) {
+async function draftEmail(actor, contact, instruction, { feedback = '', previous = null, dry = false } = {}) {
   const owner = D.get('SELECT id, full_name, email FROM users WHERE id = ?', actor.id);
-  const context = previous ? '' : await AiTasks.mailContext(actor.id, contact.email);
+  // בבדיקה ממסך הניהול (‎dry‎) לא קוראים את התיבה של העובד
+  const context = previous || dry ? '' : await AiTasks.mailContext(actor.id, contact.email);
   const d = await AiTasks.draftInitial({
     owner, instruction, contact, channel: 'email', context,
     feedback, previous: previous ? previous.draft : null
@@ -1181,7 +1182,8 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
     return { ...r, next: { ...r.next, draft: null } };
   }
 
-  const insightsOn = () => WaActions.allowed(actor, 'mail_insights') && MailInsights.available(actor.id);
+  // בדיקה ממסך הניהול רצה בשם עובד אחר — אין גישה לתיבת המייל שלו
+  const insightsOn = () => !dry && WaActions.allowed(actor, 'mail_insights') && MailInsights.available(actor.id);
 
   /**
    * ה-Today, ואחריו התפריט כשמבקשים. המשימות בו הן "הרשימה האחרונה".
@@ -1290,7 +1292,7 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
       return out(`מה לכתוב ל${contact.name || contact.email}?`, { draft: { kind: 'email_pick', name: contact.name, request: '', candidates: [contact] } },
         { action: 'send_email', status: 'unclear', result: 'חסר תוכן' });
     }
-    const pending = await draftEmail(actor, contact, request);
+    const pending = await draftEmail(actor, contact, request, { dry });
     return out(emailText(pending), { draft: pending, awaiting: true },
       { action: 'send_email', status: 'ok', result: `טיוטת מייל ל${contact.name || contact.email}: ${pending.draft.subject}${pending.suggestions.length ? ` · ${pending.suggestions.length} הצעות` : ''}` });
   };
@@ -1305,18 +1307,18 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
   // טיוטת מייל שממתינה: כל הודעה שאינה "כן" או "ביטול" היא תיקון
   if (kind === 'email' && state.awaiting && Claude.isEnabled() && WaActions.allowed(actor, 'send_email')) {
     const feedback = suggestionFeedback(t, state.draft.suggestions ?? []) ?? t;
-    const pending = await draftEmail(actor, state.draft.contact, state.draft.instruction, { feedback, previous: state.draft });
+    const pending = await draftEmail(actor, state.draft.contact, state.draft.instruction, { feedback, previous: state.draft, dry });
     return out(emailText(pending), { draft: pending, awaiting: true }, { action: 'send_email', status: 'ok', result: `תיקון טיוטה: ${feedback.slice(0, 200)}` });
   }
 
   // טיוטת תשובה למייל שממתינה: כל הודעה שאינה "כן" או "ביטול" היא תיקון
-  if (kind === 'mail_reply' && state.awaiting && Claude.isEnabled() && WaActions.allowed(actor, 'mail_insights')) {
+  if (kind === 'mail_reply' && !dry && state.awaiting && Claude.isEnabled() && WaActions.allowed(actor, 'mail_insights')) {
     const prev = state.draft.reply;
     const reply = { ...await MailInsights.draftReply(actor.id, prev.gmailId, prev.request, { feedback: t, previous: prev }), signature: prev.signature };
     return out(replyText(reply), { draft: { kind: 'mail_reply', reply }, awaiting: true }, { action: 'mail_insights', status: 'ok', result: `תיקון תשובה: ${t.slice(0, 200)}` });
   }
   // "תענה ל-2" בלי תוכן — ההודעה הבאה היא מה לענות
-  if (kind === 'reply_ask' && Claude.isEnabled() && WaActions.allowed(actor, 'mail_insights')) {
+  if (kind === 'reply_ask' && !dry && Claude.isEnabled() && WaActions.allowed(actor, 'mail_insights')) {
     const item = MailInsights.itemOf(actor.id, state.draft.gmailId);
     if (item) return startReply(item, t);
   }
@@ -1392,6 +1394,7 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
 
     case 'mail_insights': {
       const { action, n, from } = u.insight;
+      if (dry) return insightsReply({ from });
       if (action === 'list' || (!n && !(state.insights ?? []).length)) return insightsReply({ from });
       if (!n) return out(u.reply || 'על איזה מייל? כתבו את המספר מרשימת התובנות.', {}, { action: 'mail_insights', status: 'unclear', result: 'המייל לא זוהה' });
       const item = insightAt(n);
