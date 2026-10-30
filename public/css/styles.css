@@ -3252,3 +3252,164 @@ input[type="color"] { width: 46px; height: 30px; padding: 2px; cursor: pointer; 
 .pb-title .li { color: var(--brand); width: 1em; height: 1em; }
 .pb-add { gap: 4px; }
 .e-icon .li { width: 34px; height: 34px; color: var(--brand); opacity: .6; }
+/* ================================================================ שכבות: פאנל צד, ביטול, Ctrl+K, התראות */
+
+/*
+ * כרטיס המשימה כפאנל צד במחשב.
+ *
+ * הפאנל נצמד לקצה ה-inline-end — בעברית זה השמאל הפיזי — ולא לימין: הרשימה
+ * והתפריט יושבים מימין, והפאנל מכסה רק את מה שממילא רחוק מהעין. ‎flex-end‎
+ * ולא ‎left: 0‎, כדי שהעיגון יתהפך מעצמו אם הממשק ייבנה פעם משמאל לימין.
+ *
+ * הרקע בהיר ושקוף ללחיצות (‎pointer-events: none‎): הוא רק מסמן שיש שכבה,
+ * והרשימה מאחוריו נשארת לחיצה — לחיצה על שורה אחרת מחליפה את המשימה בפאנל.
+ * הסגירה בלחיצה בחוץ נעשית ב-JS (‎UI.modal‎, ‎side‎), שם יודעים להבדיל בין
+ * "בחרתי משימה אחרת" ל"סיימתי".
+ */
+.modal-backdrop.is-side {
+  display: flex; justify-content: flex-end; align-items: stretch;
+  padding: 0; background: rgba(15, 23, 42, .1);
+  pointer-events: none;
+}
+.modal-backdrop.is-side > .modal { pointer-events: auto; }
+.modal.is-side {
+  width: min(760px, 92vw); max-width: none;
+  height: 100%; max-height: none;
+  /* פינות מעוגלות רק בצד שפונה אל התוכן — הצד השני צמוד לשפת המסך */
+  border-radius: 0;
+  border-start-start-radius: 16px; border-end-start-radius: 16px;
+  box-shadow: 0 0 0 1px var(--border), 0 24px 60px rgba(15, 23, 42, .22);
+  /* ‎translateX‎ פיזי: אין לו גרסה לוגית, והפאנל נכנס מהשמאל הפיזי */
+  animation: side-in .26s cubic-bezier(.2, .8, .2, 1);
+}
+@keyframes side-in { from { transform: translateX(-100%); } }
+.modal-backdrop.is-side.leaving { opacity: 0; transition: opacity .18s; }
+.modal-backdrop.is-side.leaving > .modal { transform: translateX(-100%); transition: transform .18s ease-in; }
+.modal:focus { outline: none; }
+
+/*
+ * ברוחב 760 שני הטורים נשארים: 500 פיקסלים לגוף ו-260 לפרטים. מתחת ל-900
+ * פיקסלים (טאבלט לרוחב) הם נערמים — וכאן חוזר הבאג שתועד ב-mobile.css:
+ * ‎grid‎ בטור אחד מחלק את הגובה לשני חלונות גלילה קטנים. לכן ‎flex‎ בטור,
+ * וגלילה אחת על הכרטיס כולו.
+ */
+.modal.is-side .task-detail { grid-template-columns: minmax(0, 1fr) 260px; }
+@media (max-width: 900px) {
+  .modal.is-side .task-detail { display: flex; flex-direction: column; overflow-y: auto; }
+  .modal.is-side .td-main,
+  .modal.is-side .td-side { overflow: visible; min-height: auto; flex: none; }
+  .modal.is-side .td-side { border-inline-start: 0; border-top: 1px solid var(--border); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .modal.is-side { animation: none; }
+  .modal-backdrop.is-side.leaving,
+  .modal-backdrop.is-side.leaving > .modal { transition: none; }
+}
+
+/* ---- הודעה עם "ביטול" ---- */
+
+/*
+ * כשפאנל המשימה פתוח הטוסטים עוברים לפינה הימנית: בפינה השמאלית הם ישבו
+ * על תחתית הפאנל — בדיוק על "העברה לארכיון" ו"מחיקה" — וה"ביטול" של
+ * הארכיון הסתיר את הכפתור שממנו הגיע.
+ */
+body:has(.modal-backdrop.is-side:not(.leaving)) .toast-root { left: auto; right: 18px; }
+
+.toast.toast-undo {
+  display: flex; align-items: center; gap: 10px;
+  padding-block: 7px; padding-inline: 12px 7px;
+}
+.toast-undo .tu-text { flex: 1; min-width: 0; }
+/* טבעת הזמן שנותר — מתרוקנת עם השעון, ונעצרת יחד איתו */
+.undo-ring { flex: none; display: grid; place-items: center; }
+.undo-ring svg { display: block; transform: rotate(-90deg); }
+.undo-ring circle { fill: none; stroke-width: 2.5; }
+.undo-ring .ur-track { stroke: rgba(255, 255, 255, .2); }
+.undo-ring .ur-fill { stroke: #fff; stroke-linecap: round; }
+.toast-undo-btn {
+  flex: none; border: 1px solid rgba(255, 255, 255, .28); border-radius: 8px;
+  background: rgba(255, 255, 255, .1); color: #fff; cursor: pointer;
+  font-weight: 700; padding: 5px 13px; min-height: 32px;
+}
+.toast-undo-btn:hover { background: rgba(255, 255, 255, .2); }
+.toast-undo-btn:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+.toast-undo-btn:disabled { opacity: .6; cursor: default; }
+
+/* ---- Ctrl+K: רמז בשדה, ופעולות בראש התוצאות ---- */
+
+.global-search:not(.is-inline) input { padding-inline-end: 64px; }
+/*
+ * ‎ltr‎ — "Ctrl K" נקרא משמאל לימין גם בתוך ממשק עברי. ולכן ‎left‎ פיזי ולא
+ * ‎inset-inline-end‎: היסט לוגי נפתר לפי הכיוון של האלמנט *עצמו*, וב-‎ltr‎
+ * ה-end הוא ימין — הרמז ישב על הזכוכית ועל תחילת הטקסט. כמו ‎.icon‎ שמימין.
+ */
+.global-search .gs-kbd {
+  position: absolute; left: 12px; top: 50%; transform: translateY(-50%);
+  direction: ltr; pointer-events: none;
+  font-family: inherit; font-size: 11px; font-weight: 600; line-height: 1;
+  color: var(--text-mute); background: var(--surface);
+  border: 1px solid var(--border-strong); border-bottom-width: 2px; border-radius: 6px;
+  padding: 3px 6px;
+}
+/* הרמז נחוץ רק למי שעוד לא בשדה — בתוכו הוא רק מסתיר את סוף הטקסט */
+.global-search input:focus ~ .gs-kbd,
+.global-search input:not(:placeholder-shown) ~ .gs-kbd { display: none; }
+.search-results .sr-tag.sr-route { background: var(--brand-light); color: var(--brand-dark); }
+.search-results .sr-tag.sr-action { background: #fff7ed; color: #9a3412; }
+.search-results .sr-action-item .sr-title { line-height: 1.6; }
+
+/* חלון החיפוש (בטלפון, וב-Ctrl+K כשאין שדה בסרגל) — התוצאות זורמות בגוף החלון */
+.modal.palette { max-width: 560px; }
+.global-search.is-inline { flex: none; width: 100%; min-width: 0; }
+.global-search.is-inline input { padding-inline-end: 16px; }
+/* מול השדה ולא מול כל המכל: כאן הרשימה זורמת מתחתיו, ו-50% נחת באמצעה */
+.global-search.is-inline .icon { top: 20px; }
+.search-results.is-inline {
+  position: static; margin-top: 10px; max-height: none; overflow: visible;
+  box-shadow: none; border-radius: var(--radius);
+}
+/* כפתור החיפוש בסרגל העליון — רק בטלפון, שם השדה עצמו מוסתר (mobile.css) */
+.m-search-btn { display: none; }
+
+/* ---- מגירת ההתראות: ימים, סינון, קיבוץ וסימון כנקרא ---- */
+
+.notif-panel:focus { outline: none; }
+.notif-panel .np-content,
+.notif-sheet .np-content { display: flex; flex-direction: column; min-height: 0; flex: 1; }
+.notif-panel .np-head { flex-wrap: wrap; row-gap: 8px; }
+.np-seg {
+  display: flex; width: 100%; padding: 2px; gap: 2px;
+  background: var(--surface-2); border: 1px solid var(--border); border-radius: 999px;
+}
+.np-seg-btn {
+  flex: 1; border: 0; background: none; cursor: pointer; border-radius: 999px;
+  padding: 3px 11px; font-size: 12px; font-weight: 600; color: var(--text-soft);
+}
+.np-seg-btn[aria-pressed="true"] { background: var(--surface); color: var(--text); box-shadow: var(--shadow-sm); }
+.np-seg-btn:focus-visible { outline: 2px solid var(--brand); outline-offset: 1px; }
+/* כותרת היום דביקה — בגלילה ארוכה נשאר ברור מאיזה יום ההתראות שמול העין */
+.np-day {
+  position: sticky; top: 0; z-index: 1;
+  padding: 7px 15px 5px; font-size: 11px; font-weight: 700; color: var(--text-mute);
+  background: var(--surface); border-bottom: 1px solid var(--border);
+}
+/* השורה היא שני כפתורים — פתיחה וסימון כנקרא — ולא כפתור אחד שעוטף כפתור */
+.notif { padding: 0; gap: 0; cursor: default; align-items: stretch; }
+.notif .n-main {
+  flex: 1; min-width: 0; display: flex; gap: 10px; padding: 11px 15px;
+  border: 0; background: none; color: inherit; text-align: start; cursor: pointer;
+}
+.notif .n-main:focus-visible,
+.notif .n-read:focus-visible { outline: 2px solid var(--brand); outline-offset: -2px; }
+.notif .n-text { font-size: 12.5px; }
+.notif .n-count {
+  margin-inline-start: 8px; padding: 0 7px; border-radius: 999px;
+  background: var(--surface-2); border: 1px solid var(--border);
+  font-weight: 700; color: var(--text-soft);
+}
+.notif .n-read {
+  flex: none; width: 40px; border: 0; background: none; cursor: pointer;
+  display: grid; place-items: center;
+}
+.notif .n-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--brand); transition: box-shadow .15s; }
+.notif .n-read:hover .n-dot { box-shadow: 0 0 0 4px var(--brand-light); }

@@ -300,20 +300,16 @@
    * מעל המגירה הצדדית (60) ומתחת למודל (100): התפריט נפתח מעל רשימת
    * הפרויקטים, אבל אישור המחיקה שנפתח ממנו חייב לכסות אותו.
    */
-  .proj-sheet-veil { z-index: 70; }
   /*
    * רקע אחד ולא שניים. המגירה התחתונה נפתחת מעל המגירה הצדדית, ושני
    * הרקעים הכהים מצטברים (‎.42‎ מתחת ל-‎.45‎ ≈ ‎.68‎) — כהה בהרבה מכל מגירה
    * אחרת במערכת. הרקע של המגירה הצדדית מתעמעם כל עוד התפריט פתוח.
+   * (השכבה עצמה — מעל המגירה הצדדית ומתחת לאישור שנפתח ממנה — נקבעת
+   * בערימת השכבות של ‎UI.sheet‎.)
    */
-  body:has(.proj-sheet-veil) .sidebar-veil { opacity: 0; }
-  .proj-sheet { padding-top: 10px; }
+  body:has(.proj-sheet) .sidebar-veil { opacity: 0; }
   /* בטאבלט מגירה ברוחב 768 פיקסלים היא שורות ארוכות וריקות — נשארת קריאה */
   .proj-sheet { max-width: 520px; margin-inline: auto; border-radius: 16px 16px 0 0; }
-  .proj-sheet .proj-pop-head {
-    border-bottom: 1px solid var(--border); margin-bottom: 6px;
-    padding: 0 2px 10px; font-size: 15px; color: var(--text);
-  }
   /* ביטול נפרד בראש הטווח של האגודל — במחשב סוגרים בלחיצה בחוץ או ב-Escape */
   .proj-sheet .track-opt.is-cancel {
     justify-content: center; margin-top: 6px;
@@ -516,4 +512,68 @@
   table.data.pb-table .pb-editing { grid-template-areas: "name name" "phone phone" "email email" "note note" "acts acts"; }
   table.data.pb-table .pb-editing td { margin-bottom: 6px; }
   .pb-act, .pb-row-acts .icon-btn, .pb-act-gap { width: 42px; height: 42px; }
+/*
+ * ‎UI.sheet‎ — מגירה תחתונה שנגררת. אותו מבנה ‎m-sheet-veil / m-sheet / m-grab‎,
+ * עם כותרת, גוף נגלל ותחתית קבועה.
+ *
+ * ‎touch-action: none‎ על הידית והכותרת: שם כל תנועה היא גרירה של המגירה,
+ * והדפדפן לא צריך לנסות לגלול. על הגוף ‎pan-y‎ — הגלילה שלו נשארת טבעית,
+ * ו-JS מחליט רק כשהגוף בראש הגלילה. ‎overscroll-behavior: contain‎ — גלילה
+ * שהגיעה לסוף הרשימה אינה ממשיכה אל הדף שמאחורי המגירה.
+ */
+@media (max-width: 820px) {
+  .ui-sheet-veil { background: rgba(15, 23, 42, calc(.45 * var(--veil, 1))); }
+  .ui-sheet-veil.leaving { pointer-events: none; }
+  .m-sheet.ui-sheet {
+    display: flex; flex-direction: column; padding: 0; overflow: hidden;
+    /* התנועה בשליטת JS (גרירה והיצמדות), ולכן לא ההנפשה של ‎.m-sheet‎ */
+    animation: none; will-change: transform;
+  }
+  .m-sheet.ui-sheet:focus { outline: none; }
+  .ui-sheet .m-grab {
+    flex: none; margin: 10px auto 6px; position: relative; touch-action: none; cursor: grab;
+  }
+  /* הפס נראה 38×4 ונתפס ב-‎~100×28‎ — אצבע אינה מכוונת לפס של ארבעה פיקסלים */
+  .ui-sheet .m-grab::before { content: ''; position: absolute; inset: -12px -30px; }
+  .ui-sheet .m-sheet-head {
+    flex: none; padding: 0 16px 10px; border-bottom: 1px solid var(--border);
+    touch-action: none; cursor: grab;
+  }
+  .ui-sheet .m-sheet-head h3 { font-size: 16px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ui-sheet .m-sheet-body {
+    flex: 1 1 auto; min-height: 0; overflow-y: auto;
+    overscroll-behavior: contain; touch-action: pan-y; -webkit-overflow-scrolling: touch;
+    padding: 12px 14px calc(env(safe-area-inset-bottom, 0px) + 14px);
+  }
+  .ui-sheet .m-sheet-foot {
+    flex: none; display: flex; gap: 8px; border-top: 1px solid var(--border);
+    padding: 10px 14px calc(env(safe-area-inset-bottom, 0px) + 12px);
+  }
+  /* כשיש תחתית, היא שנושאת את אזור הבטיחות — לא הגוף שמעליה */
+  .ui-sheet .m-sheet-body:has(+ .m-sheet-foot) { padding-bottom: 12px; }
+
+  /* מגירת הפעולות של פרויקט — הפריטים צמודים, כמו בתפריט */
+  .proj-sheet .m-sheet-body { padding-inline: 10px; padding-top: 6px; }
+  .proj-sheet-items { display: flex; flex-direction: column; }
+
+  /* מגירת ההתראות — הרשימה עד הקצוות, כמו במחשב */
+  .notif-sheet .m-sheet-body { padding: 0 0 env(safe-area-inset-bottom, 0px); }
+  .notif-sheet .np-head {
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+    padding: 10px 14px; border-bottom: 1px solid var(--border);
+  }
+  /* שורת ההתראות במכשיר — אותו עיצוב כמו במגירה של המחשב, שם הוא תחת ‎.notif-panel‎ */
+  .notif-sheet .np-desktop {
+    display: flex; align-items: center; gap: 9px;
+    padding: 10px 14px; background: var(--surface-2);
+    border-bottom: 1px solid var(--border);
+    font-size: 12.5px; color: var(--text-mute); line-height: 1.4;
+  }
+  .notif-sheet .np-desktop > div { flex: 1; min-width: 0; }
+  .notif-sheet .np-desktop .btn { flex: none; }
+  .notif .n-read { width: 46px; }
+
+  /* כפתור החיפוש בסרגל העליון — כאן השדה עצמו מוסתר */
+  .topbar .m-search-btn { display: grid; }
+  .toast-undo-btn { min-height: 40px; }
 }

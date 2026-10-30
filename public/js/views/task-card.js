@@ -10,24 +10,61 @@ const TaskCardView = (() => {
   let modalRef = null;
   let task = null;
   let activeTab = 'comments';
+  /*
+   * כמה פתיחות נמצאות כרגע בדרך (בהמתנה לשרת). פאנל הצד נסגר בלחיצה מחוצה
+   * לו — אבל לחיצה על שורה אחרת ברשימה היא בקשה להחליף משימה, לא לסגור.
+   * הדגל נדלק כבר בתוך מטפל הלחיצה של השורה, ולכן הוא דולק כשהפאנל שואל.
+   */
+  let opening = 0;
 
+  /**
+   * פתיחת הכרטיס. במחשב — פאנל צד בגובה המסך שגולש מהשמאל (inline-end),
+   * כך שהרשימה נשארת גלויה ואפשר לעבור ממשימה למשימה בלחיצה עליה. בטלפון —
+   * החלון המלא כמו קודם.
+   *
+   * כרטיס שכבר פתוח מקבל את המשימה החדשה *במקומו*, ולא נסגר ונפתח מחדש:
+   * בפאנל צד סגירה ופתיחה הן שתי הנפשות מנוגדות זו אחר זו — הבהוב — והמיקוד
+   * היה חוזר לשורה הקודמת באמצע.
+   *
+   * בלי מיקוד אוטומטי של השדה הראשון: בכרטיס השדה הראשון הוא הסטטוס המקוצר
+   * או הוספת סעיף, ומי שפתח משימה כדי לקרוא אותה לא ביקש להקליד בהם.
+   */
   async function open(taskId) {
-    activeTab = 'comments';
+    opening += 1;
     try {
-      const data = await API.task(taskId);
+      let data;
+      try {
+        data = await API.task(taskId);
+      } catch (err) {
+        return UI.error(err);
+      }
+      activeTab = 'comments';
       task = data.task;
-    } catch (err) {
-      return UI.error(err);
+
+      if (modalRef?.box.isConnected) {
+        const body = modalRef.box.querySelector('.task-detail');
+        modalRef.box.setAttribute('aria-label', task.title);
+        draw(body);
+        body.scrollTop = 0;
+        body.querySelector('.td-main')?.scrollTo?.(0, 0);
+        return;
+      }
+      if (modalRef) modalRef.close();
+      const body = el('div.task-detail');
+      modalRef = UI.modal({
+        title: null,
+        label: task.title,
+        body,
+        size: 'xwide',
+        side: true,
+        autofocus: false,
+        ignoreOutside: () => opening > 0,
+        onClose: () => { modalRef = null; }
+      });
+      draw(body);
+    } finally {
+      opening -= 1;
     }
-    if (modalRef) modalRef.close();
-    const body = el('div.task-detail');
-    modalRef = UI.modal({
-      title: null,
-      body,
-      size: 'xwide',
-      onClose: () => { modalRef = null; }
-    });
-    draw(body);
   }
 
   async function reload() {
@@ -273,7 +310,8 @@ const TaskCardView = (() => {
     input.addEventListener('blur', save);
     input.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') { e.preventDefault(); input.blur(); }
-      if (e.key === 'Escape') { input.value = last; input.blur(); }
+      // ‎preventDefault‎ — ה-Escape מבטל את העריכה, ולא סוגר גם את הכרטיס כולו
+      if (e.key === 'Escape') { e.preventDefault(); input.value = last; input.blur(); }
     });
 
     return el('div.short-status', {}, [el('span.ss-label', { text: 'סטטוס' }), input]);
@@ -581,8 +619,15 @@ const TaskCardView = (() => {
     const statusControl = task.permissions.changeStatus && !(App.isVendor() && task.boardType === 'vendor')
       ? UI.select(task.columns.map((c) => ({ value: c.key, label: c.label })), task.status, {
           onchange: async (e) => {
+            const id = task.id;
+            const prev = task.columns.find((c) => c.key === task.status);
+            const next = task.columns.find((c) => c.key === e.target.value);
             try {
-              await API.updateTask(task.id, { status: e.target.value });
+              await API.updateTask(id, { status: e.target.value });
+              // סגירת משימה היא הפעולה שהכי קל לעשות בטעות ברשימה נפתחת — ולכן ביטול
+              if (next?.isFinal && prev && !prev.isFinal) {
+                offerUndo(`המשימה סומנה כ"${next.label}"`, id, { status: prev.key });
+              }
               await reload();
               refreshBackground();
             } catch (err) {
@@ -754,9 +799,12 @@ const TaskCardView = (() => {
               : null,
             el('button.btn.btn-block', {
               onclick: async () => {
+                const id = task.id;
+                const archiving = !task.archived;
                 try {
-                  await API.updateTask(task.id, { archived: !task.archived });
-                  UI.success(task.archived ? 'הוחזרה מהארכיון' : 'הועברה לארכיון');
+                  await API.updateTask(id, { archived: archiving });
+                  if (archiving) offerUndo('המשימה הועברה לארכיון', id, { archived: false });
+                  else UI.success('הוחזרה מהארכיון');
                   await reload();
                   refreshBackground();
                 } catch (err) { UI.error(err); }
@@ -803,7 +851,7 @@ const TaskCardView = (() => {
     input.addEventListener('blur', commit);
     input.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' && !multiline) { e.preventDefault(); input.blur(); }
-      if (e.key === 'Escape') { input.value = current; input.blur(); }
+      if (e.key === 'Escape') { e.preventDefault(); input.value = current; input.blur(); }
     });
   }
 
@@ -893,6 +941,23 @@ const TaskCardView = (() => {
       } catch (err) {
         saveBtn.disabled = false;
         UI.error(err);
+      }
+    });
+  }
+
+  /**
+   * הצעת ביטול לפעולה שכבר נשמרה. ‎inverse‎ הוא העדכון שמחזיר את המצב
+   * הקודם — הוא נשלח לשרת כמו כל עדכון, ולכן עובר את אותן בדיקות הרשאה.
+   *
+   * המזהה נלכד כאן ולא נקרא מ-‎task‎ בזמן הביטול: עד אז הכרטיס יכול כבר
+   * להציג משימה אחרת, וביטול היה מחזיר לארכיון את המשימה הלא נכונה.
+   */
+  function offerUndo(message, id, inverse) {
+    UI.undoToast(message, {
+      onUndo: async () => {
+        await API.updateTask(id, inverse);
+        await refreshIfOpen(id);
+        refreshBackground();
       }
     });
   }

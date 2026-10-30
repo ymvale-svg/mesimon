@@ -660,6 +660,7 @@ const App = (() => {
       state.notifications = data.notifications;
       state.unread = data.unread;
       updateBell();
+      notifPanel?.redraw();
       // בלי await: הבאת כותרות המשימות להקפצה לא תעכב את עדכון הפעמון
       popNewNotifications(data.notifications);
     } catch (err) {
@@ -1120,71 +1121,262 @@ const App = (() => {
     }
 
     draw();
-    UI.modal({
+    // סגירה דרך ‎m.close()‎ ולא הסרת ‎.modal-backdrop‎ הראשון במסמך: כשנפתחים
+    // שני חלונות זה מעל זה, "הראשון" הוא דווקא זה שמתחת
+    const m = UI.modal({
       title: 'ניהול התראות',
       body,
       footer: [
         el('div.spacer'),
-        el('button.btn', { onclick: () => document.querySelector('.modal-backdrop')?.remove() }, ['סגירה'])
+        el('button.btn', { onclick: () => m.close() }, ['סגירה'])
       ]
     });
   }
 
+  /**
+   * מגירת ההתראות.
+   *
+   * מצב יחיד ומסלול סגירה יחיד (‎closeNotifPanel‎). עד כה המאזין ללחיצה
+   * בחוץ הוסר רק כשהלחיצה בחוץ היא שסגרה: סגירה בכפתור הפעמון, ב"סמן הכל
+   * כנקרא" או במעבר להגדרות השאירה אותו רשום, וכל פתיחה הוסיפה עוד אחד.
+   * בנוסף הבדיקה הייתה ‎e.target !== anchor‎ — לחיצה על אייקון הפעמון, שהוא
+   * צומת *בתוך* הכפתור, נחשבה "בחוץ": המגירה נסגרה בלחיצה ונפתחה מחדש מיד.
+   *
+   * בטלפון — מגירה תחתונה (‎UI.sheet‎) במקום הרשימה הנפתחת מהפעמון.
+   */
+  let notifPanel = null;              // { close, redraw }
+  let notifFilter = 'all';            // 'all' | 'unread' — נזכר לאורך הסשן
+
+  function closeNotifPanel() {
+    notifPanel?.close();
+  }
+
+  /** "היום", "אתמול", או יום בשבוע ותאריך — כותרת לכל יום ברשימה */
+  function notifDayLabel(iso) {
+    const d = new Date(iso);
+    d.setHours(0, 0, 0, 0);
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const days = Math.round((today - d) / 86400000);
+    if (days === 0) return 'היום';
+    if (days === 1) return 'אתמול';
+    const weekday = d.toLocaleDateString('he-IL', { weekday: 'long' });
+    return days < 7 ? weekday : `${weekday} · ${UI.formatDate(iso)}`;
+  }
+
+  /**
+   * קיבוץ: התראות רצופות על אותה משימה ומאותו סוג הופכות לשורה אחת עם
+   * "N עדכונים". עשר הודעות בשרשור אחד של משימה אחת דחקו עד כה את כל
+   * השאר מחוץ למגירה. רק רצופות — קיבוץ על פני כל הרשימה היה מזיז התראה
+   * ישנה אל ראש הרשימה רק משום שיש לה אחות חדשה.
+   *
+   * וקיבוץ בתוך היום בלבד: שורה אחת שחוצה את "היום" ו"אתמול" אינה שייכת
+   * לאף אחת משתי הכותרות.
+   */
+  function groupNotifs(list) {
+    const groups = [];
+    for (const n of list) {
+      const prev = groups.at(-1);
+      const day = notifDayLabel(n.createdAt);
+      if (prev && n.taskId && prev.taskId === n.taskId && prev.kind === n.kind && prev.day === day) {
+        prev.items.push(n);
+      } else {
+        groups.push({ taskId: n.taskId, kind: n.kind, day, items: [n] });
+      }
+    }
+    return groups;
+  }
+
+  async function markNotifsRead(items) {
+    const ids = items.filter((n) => !n.isRead).map((n) => n.id);
+    if (!ids.length) return;
+    await Promise.all(ids.map((id) => API.markRead(id)));
+    for (const n of items) n.isRead = true;
+    await refreshNotifications();
+  }
+
+  function notifPanelContent({ withTitle, onClose }) {
+    const listBox = el('div.np-list');
+    const toggleBtns = {};
+
+    const drawList = () => {
+      const source = notifFilter === 'unread'
+        ? state.notifications.filter((n) => !n.isRead)
+        : state.notifications;
+      for (const [key, btn] of Object.entries(toggleBtns)) btn.setAttribute('aria-pressed', String(notifFilter === key));
+
+      if (!source.length) {
+        UI.mount(listBox, UI.empty(notifFilter === 'unread' ? 'אין התראות שלא נקראו' : 'אין התראות חדשות', UI.icon('bell')));
+        return;
+      }
+
+      const nodes = [];
+      let lastDay = null;
+      for (const g of groupNotifs(source)) {
+        if (g.day !== lastDay) {
+          lastDay = g.day;
+          nodes.push(el('div.np-day', { role: 'presentation', text: g.day }));
+        }
+        nodes.push(notifRow(g));
+      }
+      UI.mount(listBox, nodes);
+    };
+
+    const notifRow = (g) => {
+      const n = g.items[0];                       // החדשה בקבוצה — היא שמוצגת
+      const unread = g.items.some((x) => !x.isRead);
+      const style = NOTIF_STYLE[n.kind] ?? NOTIF_STYLE.status_change;
+      const count = g.items.length;
+
+      const main = el('button.n-main', {
+        type: 'button',
+        onclick: async () => {
+          onClose();
+          if (n.taskId) TaskCardView.open(n.taskId);
+          try { await markNotifsRead(g.items); } catch { /* יסומן בפתיחה הבאה */ }
+        }
+      }, [
+        el('div.n-icon', { style: { background: style.bg, color: style.color } },
+          [style.mask ? UI.icon(style.mask, { size: 15 }) : style.icon]),
+        el('div.n-body', {}, [
+          el('b', { text: n.title }),
+          n.body ? el('div.n-text', { text: n.body }) : null,
+          el('small', {}, [
+            UI.relative(n.createdAt),
+            count > 1 ? el('span.n-count', { text: `${count} עדכונים` }) : null
+          ])
+        ])
+      ]);
+
+      // כפתור נפרד ולא לחיצה על השורה: השורה פותחת את המשימה, וכאן רק מסמנים
+      const readBtn = unread
+        ? el('button.n-read', {
+            type: 'button',
+            title: 'סימון כנקרא',
+            'aria-label': count > 1 ? `סימון ${count} עדכונים כנקראו` : 'סימון כנקרא',
+            onclick: async (e) => {
+              e.stopPropagation();
+              readBtn.disabled = true;
+              try {
+                await markNotifsRead(g.items);
+              } catch (err) {
+                readBtn.disabled = false;
+                UI.error(err);
+              }
+            }
+          }, [el('span.n-dot', { 'aria-hidden': 'true' })])
+        : null;
+
+      return el(`div.notif${unread ? '.unread' : ''}`, {}, [main, readBtn]);
+    };
+
+    const segBtn = (key, label) => {
+      toggleBtns[key] = el('button.np-seg-btn', {
+        type: 'button',
+        'aria-pressed': String(notifFilter === key),
+        onclick: () => { notifFilter = key; drawList(); }
+      }, [label]);
+      return toggleBtns[key];
+    };
+
+    const markAll = el('button.btn.btn-sm', {
+      type: 'button',
+      onclick: async () => {
+        markAll.disabled = true;
+        try {
+          await API.markRead(null);
+          await refreshNotifications();
+        } catch (err) { UI.error(err); }
+        markAll.disabled = false;
+      }
+    }, ['סמן הכל כנקרא']);
+
+    const head = el('div.np-head', {}, [
+      withTitle ? el('h3', { text: 'התראות', style: { fontSize: '15px' } }) : null,
+      el('div.spacer'),
+      markAll,
+      el('button.btn.btn-sm', {
+        type: 'button',
+        title: 'ניהול התראות — מה קופץ בפינת המסך',
+        'aria-label': 'ניהול התראות',
+        onclick: () => { onClose(); notifSettingsDialog(); }
+      }, ['⚙']),
+      // בשורה משלו, ברוחב מלא — לצד הכותרת והפעולות הוא דחק את ⚙ לשורה שבורה
+      el('div.np-seg', { role: 'group', 'aria-label': 'אילו התראות להציג' }, [
+        segBtn('unread', 'לא נקראו'),
+        segBtn('all', 'הכול')
+      ])
+    ]);
+
+    const desktopSlot = el('div');
+    const drawDesktopRow = () => UI.mount(desktopSlot, desktopNotifRow(drawDesktopRow));
+
+    // ציור מחדש כשהסקר מביא התראות חדשות, או אחרי סימון — בלי לסגור את המגירה
+    const redraw = () => {
+      markAll.style.display = state.unread ? '' : 'none';
+      drawList();
+    };
+    drawDesktopRow();
+    redraw();
+    return { node: el('div.np-content', {}, [head, desktopSlot, listBox]), redraw };
+  }
+
   function toggleNotifPanel(anchor) {
-    const existing = document.getElementById('notif-panel');
-    if (existing) { existing.remove(); return; }
+    if (notifPanel) { closeNotifPanel(); return; }
 
     // המגירה נפתחת באותה פינה ומציגה את אותן התראות — הכרטיסים המוקפצים מיותרים כאן
     UI.clearNotifyPops();
 
-    const panel = el('div.notif-panel#notif-panel', {}, [
-      el('div.np-head', {}, [
-        el('h3', { text: 'התראות', style: { flex: '1', fontSize: '15px' } }),
-        state.unread
-          ? el('button.btn.btn-sm', {
-              onclick: async () => {
-                await API.markRead(null);
-                await refreshNotifications();
-                panel.remove();
-              }
-            }, ['סמן הכל כנקרא'])
-          : null,
-        el('button.btn.btn-sm', {
-          title: 'ניהול התראות — מה קופץ בפינת המסך',
-          onclick: () => { panel.remove(); notifSettingsDialog(); }
-        }, ['⚙'])
-      ]),
-      desktopNotifRow(() => { panel.remove(); toggleNotifPanel(anchor); }),
-      el('div.np-list', {}, state.notifications.length
-        ? state.notifications.map((n) => {
-            const style = NOTIF_STYLE[n.kind] ?? NOTIF_STYLE.status_change;
-            return el(`div.notif${n.isRead ? '' : '.unread'}`, {
-              onclick: async () => {
-                if (!n.isRead) { await API.markRead(n.id); await refreshNotifications(); }
-                panel.remove();
-                if (n.taskId) TaskCardView.open(n.taskId);
-              }
-            }, [
-              el('div.n-icon', { style: { background: style.bg, color: style.color } },
-                [style.mask ? UI.icon(style.mask, { size: 15 }) : style.icon]),
-              el('div.n-body', {}, [
-                el('b', { text: n.title }),
-                n.body ? el('div', { text: n.body, style: { fontSize: '12.5px' } }) : null,
-                el('small', { text: UI.relative(n.createdAt) })
-              ])
-            ]);
-          })
-        : [UI.empty('אין התראות חדשות', UI.icon('bell'))])
-    ]);
+    if (isPhone()) {
+      let ref = null;
+      const content = notifPanelContent({ withTitle: false, onClose: () => ref?.close() });
+      ref = UI.sheet({
+        title: 'התראות',
+        body: content.node,
+        className: 'notif-sheet',
+        snap: [0.62, 0.92],
+        onClose: () => { if (notifPanel?.ref === ref) notifPanel = null; }
+      });
+      notifPanel = { ref, close: () => ref.close(), redraw: content.redraw };
+      return;
+    }
+
+    let panel = null;
+    const close = () => {
+      if (!notifPanel || notifPanel.panel !== panel) return;
+      notifPanel = null;
+      panel.remove();
+      anchor?.setAttribute('aria-expanded', 'false');
+      document.removeEventListener('pointerdown', onOutside, true);
+      document.removeEventListener('keydown', onKey);
+      // המיקוד חוזר לפעמון רק אם הוא היה בתוך המגירה — לא נגזול לחיצה במקום אחר
+      if ((!document.activeElement || document.activeElement === document.body) && anchor?.isConnected) anchor.focus();
+    };
+    const content = notifPanelContent({ withTitle: true, onClose: close });
+    panel = el('div.notif-panel#notif-panel', { role: 'dialog', 'aria-label': 'התראות', tabindex: '-1' }, [content.node]);
+
+    const onOutside = (e) => {
+      if (panel.contains(e.target) || anchor?.contains(e.target)) return;
+      // חלון שנפתח מתוך המגירה, או טוסט "ביטול" — אינם לחיצה בחוץ
+      if (e.target.closest?.('#modal-root, .toast-root')) return;
+      close();
+    };
+    const onKey = (e) => {
+      if (e.key !== 'Escape' || e.defaultPrevented) return;
+      // מחוץ למגירה ובתוך חלון אחר — ה-Escape שייך לחלון
+      if (UI.openLayers().length) return;
+      e.preventDefault();
+      close();
+      if (anchor?.isConnected) anchor.focus();
+    };
 
     document.body.appendChild(panel);
-    const closeOnOutside = (e) => {
-      if (!panel.contains(e.target) && e.target !== anchor) {
-        panel.remove();
-        document.removeEventListener('mousedown', closeOnOutside);
-      }
-    };
-    setTimeout(() => document.addEventListener('mousedown', closeOnOutside), 0);
+    // ‎pointerdown‎ בשלב הלכידה — גם במגע, וגם כשרכיב אחר עוצר את הבעבוע
+    document.addEventListener('pointerdown', onOutside, true);
+    document.addEventListener('keydown', onKey);
+    if (anchor) anchor.setAttribute('aria-expanded', 'true');
+    notifPanel = { panel, close, redraw: content.redraw };
+    panel.focus({ preventScroll: true });
   }
 
   // ------------------------------------------------------------- חיפוש גלובלי
@@ -1201,32 +1393,157 @@ const App = (() => {
    */
   const SEARCH_DEBOUNCE_MS = 120;
 
+  /**
+   * השוואה עברית סלחנית: בלי ניקוד וטעמים, בלי גרש וגרשיים (גם בכתיב
+   * האנגלי שלהם), ואותיות סופיות כרגילות — "דוח", "דו״ח" ו"דו"ח" הם אותה
+   * מילה, וכך גם "סיכום" שהוקלד עד "סיכו" (המ"ם עוד לא נעשתה סופית).
+   */
+  const FINALS = { 'ך': 'כ', 'ם': 'מ', 'ן': 'נ', 'ף': 'פ', 'ץ': 'צ' };
+  const normSearch = (text) => String(text ?? '')
+    .toLowerCase()
+    .replace(/[֑-ׇ]/g, '')
+    .replace(/[׳״'"`]/g, '')
+    .replace(/[ךםןףץ]/g, (c) => FINALS[c])
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  /** האם כל אותיות ‎needle‎ מופיעות ב-‎hay‎ לפי הסדר — "לחמש" מוצא "לוח המשימות" */
+  const isSubsequence = (needle, hay) => {
+    let i = 0;
+    for (const ch of hay) if (ch === needle[i]) i++;
+    return i === needle.length;
+  };
+
+  /**
+   * ניקוד התאמה לפעולה מקומית. התחלת השם גוברת על הכלה, השם גובר על מילת
+   * מפתח, והתאמה מפוזרת (תת-רצף) היא המוצא האחרון — כך "דו" מעלה את
+   * "דוחות" לפני "לוח המשימות", ו"משימה" את "משימה חדשה" לפני כל השאר.
+   */
+  function actionScore(q, action) {
+    const title = normSearch(action.title);
+    const keys = (action.keys ?? []).map(normSearch);
+    if (title.startsWith(q)) return 100;
+    if (title.includes(q)) return 80;
+    if (keys.some((k) => k.startsWith(q))) return 70;
+    if (keys.some((k) => k.includes(q))) return 60;
+    const compact = q.replace(/ /g, '');
+    if (compact.length > 1 && isSubsequence(compact, title.replace(/ /g, ''))) return 30;
+    if (compact.length > 1 && keys.some((k) => isSubsequence(compact, k.replace(/ /g, '')))) return 20;
+    return 0;
+  }
+
+  /**
+   * פעולות ומעברים שהחיפוש מציע לפני תוצאות השרת — לב תפריט Ctrl+K.
+   *
+   * רק מה שהמשתמש רשאי לעשות בפועל: אותם תנאים שקובעים מה מופיע בתפריט
+   * הצד ומה מופיע בסרגל העליון. פעולה שמוצעת כאן ונכשלת ב-403 גרועה
+   * מפעולה שלא הוצעה.
+   *
+   * מסך "בקרת משימות" אינו כאן — הוא מוסתר מכולם (‎hidden‎ ב-‎ROUTES‎), וניווט
+   * אליו מגיע ממילא לדף הבית.
+   */
+  function paletteActions() {
+    const route = (name, keys) => ({ kind: 'route', title: ROUTES[name].label, keys, run: () => navigate(name, {}) });
+    const notifications = {
+      kind: 'action', title: 'התראות', keys: ['פעמון', 'עדכונים', 'notifications'],
+      run: () => toggleNotifPanel(document.querySelector('.topbar .notif-bell'))
+    };
+
+    if (isVendor()) return [route('vendor', ['משימות', 'שלי', 'בית', 'tasks']), notifications];
+    return [
+      may('create_task')
+        ? { kind: 'action', title: 'משימה חדשה', keys: ['הוספה', 'יצירה', 'חדש', 'פתיחת משימה', 'new task', 'add'], run: () => BoardView.openTaskDialog() }
+        : null,
+      route('today', ['היום', 'מה להיום', 'יומי', 'today']),
+      route('home', ['בית', 'המשימות שלי', 'דשבורד', 'ראשי', 'home']),
+      // יומן — למזכירות בלבד, כמו בתפריט הצד
+      state.actor?.secretary ? route('calendar', ['יומן', 'פגישות', 'לוח שנה', 'calendar']) : null,
+      route('board', ['לוח', 'משימות', 'רשימה', 'בורד', 'board']),
+      may('view_vendor_boards') ? route('vendorBoards', ['ספקים', 'ספק', 'vendors']) : null,
+      route('archive', ['ארכיון', 'שהושלמו', 'archive']),
+      route('phonebook', ['אלפון', 'טלפונים', 'אנשי קשר', 'עובדים', 'phonebook', 'contacts']),
+      may('view_reports') ? route('reports', ['דוח', 'דוחות', 'סטטיסטיקה', 'עומס', 'reports']) : null,
+      // אותו תנאי בדיוק כמו פריט "ניהול המערכת" בתפריט הצד
+      may('manage_users') || may('manage_automations') || may('assign_task_to_vendor') || can('create_project')
+        ? route('admin', ['ניהול', 'הגדרות', 'משתמשים', 'הרשאות', 'אוטומציות', 'admin', 'settings'])
+        : null,
+      notifications
+    ].filter(Boolean);
+  }
+
+  /** הפעולות שמתאימות לשאילתה, מהטובה לפחות טובה. בלי שאילתה — כולן, בסדר הקבוע */
+  function matchActions(query) {
+    const all = paletteActions();
+    const q = normSearch(query);
+    if (!q) return all;
+    return all
+      .map((a, i) => ({ a, i, score: actionScore(q, a) }))
+      .filter((x) => x.score > 0)
+      .sort((x, y) => y.score - x.score || x.i - y.i)
+      .slice(0, 5)
+      .map((x) => x.a);
+  }
+
+  // מופע החיפוש שבסרגל העליון — אליו מכוון Ctrl+K במחשב. מתחלף בכל בנייה של הסרגל
+  let headerSearch = null;
+  let searchSeq = 0;
+  const IS_MAC = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
+
   function globalSearch() {
+    headerSearch = buildSearch();
+    return headerSearch.node;
+  }
+
+  /**
+   * חיפוש + תפריט פקודות. ‎inline‎ — הגרסה שבתוך חלון החיפוש בטלפון: התוצאות
+   * זורמות מתחת לשדה ואינן רשימה נפתחת. ‎onPick‎ — נקרא אחרי בחירה, כדי
+   * שהחלון ההוא ייסגר. שתי הגרסאות בונות את התוצאות באותו קוד.
+   */
+  function buildSearch({ inline = false, onPick = null } = {}) {
+    const listId = `gs-list-${++searchSeq}`;
     const input = el('input', {
       type: 'search',
       role: 'combobox',
       'aria-expanded': 'false',
       'aria-autocomplete': 'list',
+      'aria-controls': listId,
+      'aria-keyshortcuts': IS_MAC ? 'Meta+K' : 'Control+K',
+      'aria-label': 'חיפוש משימות ופרויקטים, ומעבר מהיר',
       autocomplete: 'off',
-      placeholder: 'חיפוש משימות ופרויקטים…'
+      placeholder: inline ? 'חיפוש, או שם של מסך או פעולה…' : 'חיפוש משימות ופרויקטים…'
     });
-    const results = el('div.search-results', { role: 'listbox', style: { display: 'none' } });
+    const results = el(`div.search-results${inline ? '.is-inline' : ''}#${listId}`, {
+      role: 'listbox', 'aria-label': 'תוצאות', style: { display: 'none' }
+    });
     let timer = null;
     // מזהה הבקשה האחרונה: תשובה של הקלדה קודמת שהגיעה באיחור לא תדרוס את החדשה
     let seq = 0;
-    /* השורות שעל המסח כרגע, לצורך ניווט במקלדת, והשורה המסומנת */
+    /* השורות שעל המסך כרגע, לצורך ניווט במקלדת, והשורה המסומנת */
     let rows = [];
     let cursor = -1;
+    /*
+     * מצב "תפריט פקודות" — נפתח ב-Ctrl+K. רק בו מוצגות הפעולות גם כשהשדה
+     * ריק; לחיצה רגילה בשדה החיפוש נשארת חיפוש, בלי רשימה שקופצת בפנים.
+     * ‎returnTo‎ — מה היה ממוקד לפני Ctrl+K, כדי ש-Escape יחזיר אליו.
+     */
+    let palette = inline;
+    let returnTo = null;
+    // תוצאות השרת האחרונות: נשארות על המסך עד שהבאות מגיעות, במקום להבהב
+    let lastServer = null;
 
     const show = () => {
       results.style.display = 'block';
       input.setAttribute('aria-expanded', 'true');
     };
     const hide = () => {
+      // בגרסה שבחלון הרשימה היא התוכן עצמו — היא חוזרת לפעולות ולא נעלמת
+      if (inline) { drawActionsOnly(); return; }
       results.style.display = 'none';
       input.setAttribute('aria-expanded', 'false');
+      input.removeAttribute('aria-activedescendant');
       rows = [];
       cursor = -1;
+      palette = false;
     };
 
     /**
@@ -1234,11 +1551,18 @@ const App = (() => {
      *
      * ‎scrollIntoView‎ עם ‎nearest‎ ולא ‎center‎: הרשימה נגללת בתוך תיבה, ומרכוז
      * היה מקפיץ אותה בכל חץ גם כשהשורה הבאה ממילא נראית.
+     *
+     * ‎aria-activedescendant‎ — המיקוד נשאר בשדה, ומחלקה בלבד אינה נשמעת
+     * בקורא מסך: הוא צריך לדעת איזו אפשרות "עומדת" עכשיו.
      */
     const setCursor = (next) => {
       if (!rows.length) return;
       cursor = (next + rows.length) % rows.length;
-      rows.forEach((node, i) => node.classList.toggle('is-active', i === cursor));
+      rows.forEach((node, i) => {
+        node.classList.toggle('is-active', i === cursor);
+        node.setAttribute('aria-selected', String(i === cursor));
+      });
+      input.setAttribute('aria-activedescendant', rows[cursor].id);
       rows[cursor].scrollIntoView({ block: 'nearest' });
     };
 
@@ -1260,17 +1584,42 @@ const App = (() => {
       return frag;
     };
 
+    const reset = () => {
+      clearTimeout(timer);
+      seq++;                 // תשובה שעוד בדרך לא תפתח מחדש רשימה שנסגרה
+      input.value = '';
+      lastServer = null;
+      returnTo = null;
+      hide();
+    };
+
     /** פתיחת פריט — פרויקט פותח את הלוח שלו, משימה פותחת את הכרטיס */
     const openItem = (item) => {
-      hide();
-      input.value = '';
+      reset();
+      onPick?.();
       if (item.type === 'project') navigate('board', { projectId: item.id });
       else TaskCardView.open(item.id);
     };
 
+    const runAction = (action) => {
+      reset();
+      if (!inline) input.blur();
+      onPick?.();
+      action.run();
+    };
+
+    const addRow = (node) => {
+      node.id = `${listId}-opt-${rows.length}`;
+      node.setAttribute('aria-selected', 'false');
+      rows.push(node);
+      results.appendChild(node);
+    };
+
+    // ‎tabindex=-1‎: המיקוד נשאר בשדה והחצים מנווטים; Tab אינו עובר דרך כל שורה
     const row = (item, q) => el(`button.sr-item${item.archived ? '.is-archived' : ''}`, {
       type: 'button',
       role: 'option',
+      tabindex: '-1',
       onclick: () => openItem(item)
     }, [
       el(`span.sr-tag.sr-${item.type}`, { text: item.type === 'project' ? 'פרויקט' : 'משימה' }),
@@ -1283,17 +1632,52 @@ const App = (() => {
       ])
     ]);
 
+    const actionRow = (action) => el('button.sr-item.sr-action-item', {
+      type: 'button',
+      role: 'option',
+      tabindex: '-1',
+      onclick: () => runAction(action)
+    }, [
+      el(`span.sr-tag.sr-${action.kind}`, { text: action.kind === 'route' ? 'מעבר' : 'פעולה' }),
+      el('div.sr-body', {}, [el('div.sr-title', { text: action.title })])
+    ]);
+
+    const drawActions = (acts) => {
+      if (!acts.length) return;
+      results.appendChild(el('div.sr-group', { role: 'presentation', text: 'פעולות ומעבר' }));
+      acts.forEach((a) => addRow(actionRow(a)));
+    };
+
+    /** רק הפעולות — Ctrl+K עם שדה ריק */
+    function drawActionsOnly() {
+      UI.clear(results);
+      rows = [];
+      cursor = -1;
+      input.removeAttribute('aria-activedescendant');
+      drawActions(matchActions(''));
+      if (rows.length) setCursor(0);
+      show();
+    }
+
     /**
      * ציור התוצאות, מקובצות לפי סוג.
      *
      * כותרות "פרויקטים" ו"משימות" ולא רשימה אחת מעורבת: השאלה הראשונה של
      * מי שמחפש היא איזה סוג פריט מצא, והתיוג שעל כל שורה עונה עליה רק
      * אחרי שקוראים אותה. הקיבוץ עונה עליה במבט.
+     *
+     * הפעולות המקומיות קודמות לכולן: הן מחושבות כאן בלי רשת ולכן מופיעות
+     * מיד, ומי שהקליד "דוחות" רוצה כמעט תמיד את המסך ולא משימה ששמה מכיל
+     * את המילה. ‎pending‎ — תוצאות השרת עוד בדרך.
      */
-    const draw = (items, data, q) => {
+    const draw = (items, data, q, { pending = false } = {}) => {
       UI.clear(results);
       rows = [];
       cursor = -1;
+      input.removeAttribute('aria-activedescendant');
+
+      const acts = matchActions(q);
+      drawActions(acts);
 
       // בחתך הרחב נאמר זאת במפורש — אחרת לא ברור למה הופיעו פתאום פריטים זרים
       if (data?.scope === 'all') {
@@ -1304,12 +1688,17 @@ const App = (() => {
        * אין תוצאות בחתך "שלי" — אבל יש מחוצה לו. זה המצב שבו דווקא *חייבים*
        * להציע את ההרחבה: הודעת "לא נמצא" לבדה הייתה אומרת למשתמש שהדבר אינו
        * קיים, בזמן שהוא קיים ורק אינו שלו.
+       *
+       * מצב "מחפש" מוצג לפני תשובת השרת. בלעדיו רשת איטית נראית כחיפוש
+       * שאינו פעיל, והמשתמש מקליד שוב את אותה מילה במקום להמתין.
        */
-      if (!items.length) {
+      if (pending && !items.length) {
+        results.appendChild(el('div.sr-empty', { text: `מחפש "${q}"…` }));
+      } else if (!items.length) {
         results.appendChild(el('div.sr-empty', {
           text: data?.othersCount > 0
             ? `לא נמצא "${q}" במשימות ובפרויקטים שלך`
-            : `לא נמצא איזכור ל"${q}"`
+            : `לא נמצא איזכור ל"${q}" במשימות ובפרויקטים`
         }));
       }
 
@@ -1320,12 +1709,8 @@ const App = (() => {
       for (const [type, label] of groups) {
         const list = items.filter((x) => x.type === type);
         if (!list.length) continue;
-        results.appendChild(el('div.sr-group', { text: `${label} · ${list.length}` }));
-        for (const item of list) {
-          const node = row(item, data?.query ?? q);
-          rows.push(node);
-          results.appendChild(node);
-        }
+        results.appendChild(el('div.sr-group', { role: 'presentation', text: `${label} · ${list.length}` }));
+        for (const item of list) addRow(row(item, data?.query ?? q));
       }
 
       // כשיש יותר ממה שמוצג — נאמר, ולא נשתוק
@@ -1341,12 +1726,12 @@ const App = (() => {
        * שבור — וזה גרוע יותר מרשימה מעורבבת.
        */
       if (data?.othersCount > 0) {
-        const more = el('button.sr-widen', {
+        addRow(el('button.sr-widen', {
           type: 'button',
+          role: 'option',
+          tabindex: '-1',
           onclick: () => runSearch({ scope: 'all', now: true })
-        }, [`עוד ${data.othersCount} בכל הארגון`]);
-        results.appendChild(more);
-        rows.push(more);
+        }, [`עוד ${data.othersCount} בכל הארגון`]));
       }
       // השורה הראשונה מסומנת מיד, כדי ש-Enter יפתח אותה בלי חץ מקדים
       if (rows.length) setCursor(0);
@@ -1362,19 +1747,16 @@ const App = (() => {
     const runSearch = ({ scope = '', now = false } = {}) => {
       clearTimeout(timer);
       const q = input.value.trim();
-      if (!q) return hide();
       const mine = ++seq;
+      if (!q) {
+        lastServer = null;
+        return palette ? drawActionsOnly() : hide();
+      }
+
+      // הפעולות המקומיות מיד, ותוצאות השרת הקודמות עד שהחדשות מגיעות
+      draw(lastServer?.items ?? [], lastServer?.data ?? null, q, { pending: true });
 
       timer = setTimeout(async () => {
-        /*
-         * מצב "מחפש" מוצג לפני הבקשה. בלעדיו רשת איטית נראית כחיפוש
-         * שאינו פעיל, והמשתמש מקליד שוב את אותה מילה במקום להמתין.
-         */
-        if (!rows.length) {
-          UI.clear(results);
-          results.appendChild(el('div.sr-empty', { text: `מחפש "${q}"…` }));
-          show();
-        }
         try {
           const data = await API.search(q, scope);
           if (mine !== seq) return;      // הקלדה חדשה עקפה את הבקשה הזו
@@ -1386,6 +1768,7 @@ const App = (() => {
            * בלי שדבר על המסך רמז שהחיפוש בכלל רץ.
            */
           const items = Array.isArray(data?.results) ? data.results : [];
+          lastServer = { items, data };
           // גם רשימה ריקה עוברת דרך ‎draw‎: שם יושבת ההצעה להרחיב לכל הארגון,
           // והיא נחוצה בדיוק כשאין תוצאות בחתך שלי
           draw(items, data, q);
@@ -1393,11 +1776,12 @@ const App = (() => {
           /*
            * כשל נאמר ואינו נבלע. חיפוש שאינו מציג דבר נראה למשתמש כחיפוש
            * שאינו פעיל, והוא מנסה שוב ושוב באותה מילה — אין שום דבר על
-           * המסך שיאמר לו שהבקשה נשלחה ונכשלה.
+           * המסך שיאמר לו שהבקשה נשלחה ונכשלה. הפעולות המקומיות נשארות.
            */
           if (mine !== seq) return;
-          UI.clear(results);
-          rows = [];
+          lastServer = null;
+          draw([], null, q, { pending: true });
+          results.querySelector('.sr-empty')?.remove();
           results.appendChild(el('div.sr-empty', {
             text: `החיפוש נכשל: ${err?.message ?? 'שגיאה לא ידועה'}`
           }));
@@ -1420,8 +1804,12 @@ const App = (() => {
      */
     input.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') {
-        input.value = '';
-        hide();
+        // בחלון החיפוש בטלפון — Escape שייך לחלון, והוא שסוגר
+        if (inline) return;
+        const back = returnTo;
+        reset();
+        // מי שהגיע ב-Ctrl+K חוזר למקום שבו היה, ולא נשאר תקוע בשדה
+        if (back?.isConnected && back !== document.body) back.focus({ preventScroll: true });
         return;
       }
       if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
@@ -1433,20 +1821,77 @@ const App = (() => {
       if (e.key === 'Enter') {
         e.preventDefault();
         // Enter לפני שהתוצאות הגיעו מריץ את החיפוש מיד, בלי להמתין להשהיה
-        if (!rows.length) return runSearch();
+        if (!rows.length) return runSearch({ now: true });
         rows[Math.max(0, cursor)].click();
       }
     });
 
-    document.addEventListener('mousedown', (e) => {
-      if (!results.contains(e.target) && e.target !== input) hide();
-    });
-
     // הזכוכית ממקדת את השדה — היא נראית כלחיצה, וכדאי שתהיה כזו
     const icon = el('span.icon', { title: 'חיפוש', text: '🔍', onclick: () => input.focus() });
+    // רמז לקיצור — רק במחשב, ונעלם כשמקלידים או כשהשדה ממוקד (ב-CSS)
+    const kbd = inline ? null : el('kbd.gs-kbd', { 'aria-hidden': 'true', text: IS_MAC ? '⌘K' : 'Ctrl K' });
 
-    return el('div.global-search', {}, [input, icon, results]);
+    const wrap = el(`div.global-search${inline ? '.is-inline' : ''}`, {}, [input, icon, kbd, results]);
+
+    /*
+     * סגירה בלחיצה בחוץ. המאזין מסיר את עצמו כשהשדה כבר אינו במסמך: הסרגל
+     * העליון נבנה מחדש בכל ‎render()‎, ועד כה כל בנייה הוסיפה מאזין שלא הוסר
+     * לעולם — אחרי יום עבודה כל לחיצה במסמך הריצה עשרות סוגרים של שדות מתים.
+     */
+    const onOutsideDown = (e) => {
+      if (!wrap.isConnected) { document.removeEventListener('mousedown', onOutsideDown); return; }
+      if (!inline && !wrap.contains(e.target)) hide();
+    };
+    document.addEventListener('mousedown', onOutsideDown);
+
+    /** Ctrl+K: מיקוד השדה ופתיחת הפעולות, גם כשהוא ריק */
+    const openPalette = () => {
+      if (document.activeElement !== input) returnTo = document.activeElement;
+      palette = true;
+      input.focus();
+      input.select();
+      if (input.value.trim()) runSearch({ now: true });
+      else drawActionsOnly();
+    };
+
+    if (inline) drawActionsOnly();
+    return { node: wrap, input, openPalette };
   }
+
+  /**
+   * חיפוש ופעולות בטלפון — חלון מלא ולא רשימה נפתחת: בסרגל העליון של
+   * הטלפון אין מקום לשדה, והמקלדת הווירטואלית ממילא תופסת חצי מסך.
+   */
+  function openSearchOverlay() {
+    let m = null;
+    const search = buildSearch({ inline: true, onPick: () => m?.close() });
+    m = UI.modal({ title: 'חיפוש ומעבר מהיר', body: search.node, size: 'palette' });
+  }
+
+  /**
+   * Ctrl+K (⌘K במק) — מכל מקום שאינו שדה כתיבה.
+   *
+   * ‎e.code‎ ולא ‎e.key‎: במקלדת עברית ‎e.key‎ הוא "ל", והקיצור היה עובד
+   * רק למי שבמקרה כתב באנגלית.
+   *
+   * בתוך שדה אחר — לא נוגעים: שם המקש שייך לעורך. ומעל חלון פתוח — לא
+   * נפתח חיפוש שיישב מאחוריו; פאנל צד של משימה, שאינו חוסם, נסגר לטובתו.
+   */
+  document.addEventListener('keydown', (e) => {
+    if (e.code !== 'KeyK' || !(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey) return;
+    if (!state.actor || e.defaultPrevented) return;
+    const t = e.target;
+    const inSearch = !!t?.closest?.('.global-search');
+    const editing = !inSearch && (t?.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(t?.tagName));
+    if (editing) return;
+    const open = UI.openLayers();
+    if (open.some((l) => !l.side)) return;
+    e.preventDefault();
+    open.forEach((l) => l.close());
+    closeNotifPanel();
+    if (isPhone() || !headerSearch?.node.isConnected) openSearchOverlay();
+    else headerSearch.openPalette();
+  });
 
   // ------------------------------------------------------------- תצוגה
 
@@ -1572,8 +2017,23 @@ const App = (() => {
 
     const phone = isPhone();
 
+    // המגירה התחתונה בטלפון — ‎UI.sheet‎ מחזיר אותה, ובמחשב היא נשארת ‎null‎
+    let sheetRef = null;
+    let closed = false;
+    /*
+     * מסלול סגירה אחד לשתי הפריסות. בטלפון ‎UI.sheet‎ סוגר גם מעצמו — גרירה
+     * למטה, Escape, נגיעה ברקע — ומשם הוא קורא ל-‎close‎ דרך ‎onClose‎;
+     * הדגל מונע סגירה כפולה כשהסגירה התחילה כאן.
+     */
     const close = () => {
+      if (closed) return;
+      closed = true;
       if (closeProjectMenu === close) closeProjectMenu = null;
+      if (sheetRef) {
+        // המגירה מחזירה את המיקוד בעצמה, למה שהיה ממוקד כשנפתחה
+        sheetRef.close();
+        return;
+      }
       shell.remove();
       document.removeEventListener('mousedown', onOutside);
       document.removeEventListener('keydown', onKey);
@@ -1645,63 +2105,50 @@ const App = (() => {
      * נדחק אל הקצה הנגדי של המסך ומתנתק מהשורה שפתחה אותו. מלבד זאת ‎60vh‎
      * ו-‎window.innerHeight‎ מודדים בנייד את החלון בלי שורת הכתובת.
      *
-     * המבנה ‎m-sheet-veil / m-sheet / m-grab‎ כבר קיים ומשמש את מגירת הסינון
-     * בטלפון, והוא גם פותר את הסגירה: הרקע המלא בולע את הנגיעה ואין צורך
-     * במאזין על ה-document — שבמגע ממילא לא עבד, כי ה-‎mousedown‎ המסונתז
-     * מגיע רק כשהאצבע מתרוממת וסגר את המגירה ברגע השחרור.
+     * ‎UI.sheet‎ פותר את כל השאר: הרקע המלא בולע את הנגיעה ואין צורך במאזין
+     * על ה-document — שבמגע ממילא לא עבד, כי ה-‎mousedown‎ המסונתז מגיע רק
+     * כשהאצבע מתרוממת וסגר את המגירה ברגע השחרור — וגם ההשהיה לפני שהרקע
+     * נעשה לחיץ, נגד הלחיצה המסונתזת של הנגיעה שפתחה, נמצאת שם.
      */
-    const shell = phone
-      ? el('div.m-sheet-veil.proj-sheet-veil', {}, [
-          el('div.m-sheet.proj-sheet', {
-            role: 'dialog', 'aria-modal': 'true', 'aria-label': `פעולות בפרויקט ${p.name}`
-          }, [
-            el('div.m-grab'),
-            el('div.proj-pop-head', { text: p.name, title: p.name }),
-            ...items,
-            el('button.track-opt.is-cancel', { onclick: () => close() }, ['ביטול'])
-          ])
-        ])
-      : el('div.track-pop.proj-pop', { role: 'menu' }, [
-          el('div.proj-pop-head', { text: p.name, title: p.name }),
-          ...items
-        ]);
+    if (phone) {
+      sheetRef = UI.sheet({
+        title: p.name,
+        label: `פעולות בפרויקט ${p.name}`,
+        className: 'proj-sheet',
+        snap: [0.9],
+        body: el('div.proj-sheet-items', {}, [
+          ...items,
+          el('button.track-opt.is-cancel', { onclick: () => close() }, ['ביטול'])
+        ]),
+        onClose: close
+      });
+      closeProjectMenu = close;
+      return;
+    }
 
+    const shell = el('div.track-pop.proj-pop', { role: 'menu' }, [
+      el('div.proj-pop-head', { text: p.name, title: p.name }),
+      ...items
+    ]);
     document.body.appendChild(shell);
 
-    if (phone) {
-      /*
-       * הנגיעה שפתחה את המגירה עדיין בעיצומה: הלחיצה המסונתזת שתגיע בשחרור
-       * האצבע תנחת על הרקע שזה עתה נפרש תחתיה ותסגור אותו מיד. לכן הסוגר
-       * מחובר רק אחרי שהמחווה הנוכחית הסתיימה.
-       */
-      setTimeout(() => {
-        shell.addEventListener('click', (e) => { if (e.target === shell) close(); });
-      }, 120);
-    } else {
-      /*
-       * RTL: תפריט הקשר נפתח שמאלה מנקודת הלחיצה, כמו בכל יישום בעברית. בלי
-       * זה הוא היה נפתח מהתפריט לתוך התוכן ומכסה אותו.
-       */
-      const rect = anchor.getBoundingClientRect();
-      const px = ev?.clientX || rect.left;
-      const py = ev?.clientY || rect.bottom;
-      const w = shell.offsetWidth;
-      shell.style.left = `${Math.max(8, Math.min(px - w, window.innerWidth - w - 8))}px`;
-      shell.style.top = `${Math.max(8, Math.min(py + 2, window.innerHeight - shell.offsetHeight - 8))}px`;
-    }
+    /*
+     * RTL: תפריט הקשר נפתח שמאלה מנקודת הלחיצה, כמו בכל יישום בעברית. בלי
+     * זה הוא היה נפתח מהתפריט לתוך התוכן ומכסה אותו.
+     */
+    const rect = anchor.getBoundingClientRect();
+    const px = ev?.clientX || rect.left;
+    const py = ev?.clientY || rect.bottom;
+    const w = shell.offsetWidth;
+    shell.style.left = `${Math.max(8, Math.min(px - w, window.innerWidth - w - 8))}px`;
+    shell.style.top = `${Math.max(8, Math.min(py + 2, window.innerHeight - shell.offsetHeight - 8))}px`;
 
     const onOutside = (e) => { if (!shell.contains(e.target)) close(); };
     const onKey = (e) => { if (e.key === 'Escape') { e.preventDefault(); close(); } };
-    // ברקע מלא אין צורך במאזין על המסמך, והוא גם לא עבד נכון במגע
-    if (!phone) setTimeout(() => document.addEventListener('mousedown', onOutside), 0);
+    setTimeout(() => document.addEventListener('mousedown', onOutside), 0);
     document.addEventListener('keydown', onKey);
     closeProjectMenu = close;
-    /*
-     * מיקוד רק במחשב. במגירה התחתונה הוא מצייר טבעת מיקוד על הפריט הראשון,
-     * וזה נקרא כאילו הוא כבר נבחר; ב-iOS מיקוד יזום לתוך צומת ‎fixed‎ שזה
-     * עתה נוסף, בזמן שהאצבע עוד על המסך, גם מקפיץ את הגלילה.
-     */
-    if (!phone) shell.querySelector('button')?.focus();
+    shell.querySelector('button')?.focus();
   }
 
   /**
@@ -2117,7 +2564,7 @@ const App = (() => {
   }
 
   function topbar() {
-    const bell = el('button.icon-btn', { title: 'התראות' }, [
+    const bell = el('button.icon-btn.notif-bell', { title: 'התראות', 'aria-haspopup': 'dialog', 'aria-expanded': 'false' }, [
       UI.icon('bell', { size: 19 }),
       el('span.badge-dot#notif-badge', { style: { display: state.unread ? 'grid' : 'none' } }, [String(state.unread)])
     ]);
@@ -2145,6 +2592,8 @@ const App = (() => {
       !isVendor() && may('create_task')
         ? el('button.btn.btn-primary', { onclick: () => BoardView.openTaskDialog() }, ['＋ משימה חדשה'])
         : null,
+      // בטלפון שדה החיפוש מוסתר — הזכוכית פותחת אותו כחלון מלא (מוצגת רק שם, ב-CSS)
+      el('button.icon-btn.m-search-btn', { title: 'חיפוש ומעבר מהיר', 'aria-label': 'חיפוש', onclick: () => openSearchOverlay() }, ['🔍']),
       bell,
       (() => {
         // רמת הגישה מוצגת רק למי שרשאי לראות רמות; לשאר מוצגת המחלקה
@@ -2213,7 +2662,7 @@ const App = (() => {
   }
 
   function userMenu() {
-    UI.modal({
+    const m = UI.modal({
       title: 'החשבון שלי',
       body: el('div', {}, [
         el('div.flex', { style: { gap: '12px', marginBottom: '16px' } }, [
@@ -2240,7 +2689,7 @@ const App = (() => {
         isVendor() ? null : el('button.btn.mt', { style: { marginInlineStart: '8px' }, onclick: () => TodayView.openSettings() }, ['☀ Today והקלטה']),
         isVendor() ? null : el('button.btn.mt', {
           style: { marginInlineStart: '8px' },
-          onclick: () => { document.querySelector('.modal-backdrop')?.remove(); navigate('phonebook'); }
+          onclick: () => { m.close(); navigate('phonebook'); }
         }, ['📒 אלפון ארגוני']),
         el('div.alert.alert-info.mt', {}, [
           el('div', {}, [
@@ -2250,9 +2699,9 @@ const App = (() => {
         ])
       ]),
       footer: [
-        el('button.btn.btn-danger', { onclick: () => logout() }, ['התנתקות']),
+        el('button.btn.btn-danger', { onclick: () => { m.close(); logout(); } }, ['התנתקות']),
         el('div.spacer'),
-        el('button.btn', { onclick: () => document.querySelector('.modal-backdrop')?.remove() }, ['סגירה'])
+        el('button.btn', { onclick: () => m.close() }, ['סגירה'])
       ]
     });
   }
@@ -2267,19 +2716,41 @@ const App = (() => {
    * את הרקע הכהה שמעליו, ומשאיר מסך מוחשך בלי מגירה מאחוריו. זה בדיוק מה
    * שקורה כשמשנים צבע פרויקט או נועצים אותו מתוך המגירה עצמה.
    */
+  /*
+   * מגירה סגורה היא ‎inert‎. היא רק מוזזת אל מחוץ למסך ב-‎transform‎, ולכן
+   * בלי זה Tab עבר דרך כל פריטי הניווט והפרויקטים הבלתי נראים לפני שהגיע
+   * לתוכן, וקורא מסך הקריא אותם כאילו הם על המסך. במחשב התפריט תמיד גלוי —
+   * שם התכונה מוסרת.
+   */
   function applyDrawer() {
-    document.getElementById('sidebar')?.classList.toggle('open', !!state.drawerOpen);
+    const sidebarNode = document.getElementById('sidebar');
+    sidebarNode?.classList.toggle('open', !!state.drawerOpen);
     document.querySelector('.sidebar-veil')?.classList.toggle('open', !!state.drawerOpen);
+    if (!sidebarNode) return;
+    const hidden = isPhone() && !state.drawerOpen;
+    sidebarNode.inert = hidden;
+    if (hidden) sidebarNode.setAttribute('aria-hidden', 'true');
+    else sidebarNode.removeAttribute('aria-hidden');
   }
 
   function closeDrawer() {
+    const wasOpen = !!state.drawerOpen;
+    const sidebarNode = document.getElementById('sidebar');
+    // מיקוד שנשאר בתוך מגירה שנעשית ‎inert‎ נופל ל-body; מחזירים אותו לכפתור שפתח
+    const focusInside = sidebarNode?.contains(document.activeElement);
     state.drawerOpen = false;
     applyDrawer();
+    if (wasOpen && focusInside) document.querySelector('.drawer-btn')?.focus({ preventScroll: true });
   }
 
   function toggleDrawer() {
     state.drawerOpen = !state.drawerOpen;
     applyDrawer();
+    // נפתחה — המיקוד נכנס אליה, אחרת משתמש מקלדת נשאר מאחורי הרקע הכהה
+    if (state.drawerOpen && isPhone()) {
+      const sidebarNode = document.getElementById('sidebar');
+      (sidebarNode?.querySelector('.nav-item.active') ?? sidebarNode?.querySelector('.nav-item'))?.focus({ preventScroll: true });
+    }
   }
 
   /**

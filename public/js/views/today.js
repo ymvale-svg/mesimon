@@ -195,10 +195,22 @@ const TodayView = (() => {
     });
     box.addEventListener('click', (e) => e.stopPropagation());
     box.addEventListener('change', async () => {
+      // הסטטוס שממנו יצאנו — "ביטול" מחזיר אליו, ולא לעמודה הראשונה בלוח
+      const prevStatus = task.status ?? board?.columns.find((x) => !x.isFinal)?.key;
       box.disabled = true;
       try {
         await API.updateTask(task.id, { status: finalKey });
-        UI.success('המשימה סומנה כהושלמה');
+        /*
+         * סימון ב-Today מעלים את השורה מהרשימה מיד, ולכן טעות כאן היא
+         * משימה שנעלמה — "ביטול" מחזיר אותה, והיא חוזרת למקומה ברענון.
+         */
+        UI.undoToast('המשימה סומנה כהושלמה', {
+          onUndo: async () => {
+            await API.updateTask(task.id, { status: prevStatus });
+            await reload();
+            App.refreshNotifications();
+          }
+        });
         await reload();
         App.refreshNotifications();
       } catch (err) {
