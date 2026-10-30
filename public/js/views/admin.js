@@ -1578,8 +1578,8 @@ const AdminView = (() => {
             el('div.mute-sm', { text: a.description }),
             examples ? UI.field('דוגמאות — שורה לכל דוגמה. מוצגות ב"עזרה" ומכוונות את הבוט', examples) : null,
             a.key === 'summary' ? el('div.mute-sm', { text: `נשלח בשעה ${info.settings.summaryTime} — משנים בלשונית "הגדרות".` }) : null,
-            a.key === 'voice_notes' && !info.speech ? el('div.mute-sm.text-danger', { text: 'התמלול אינו מוגדר בשרת — מגדירים OPENAI_API_KEY (מומלץ) או GOOGLE_SPEECH_API_KEY. עד אז הבוט מבקש לכתוב בטקסט.' }) : null,
-            a.key === 'voice_notes' && info.speech ? el('div.mute-sm', { text: `התמלול דרך ${info.speech === 'openai' ? 'OpenAI' : 'Google'}.` }) : null
+            a.key === 'voice_notes' && !info.speech?.length ? el('div.mute-sm.text-danger', { text: 'התמלול אינו מוגדר בשרת — מגדירים RUNPOD_API_KEY + RUNPOD_ENDPOINT_ID (ivrit.ai), OPENAI_API_KEY או GOOGLE_SPEECH_API_KEY. עד אז הבוט מבקש לכתוב בטקסט.' }) : null,
+            a.key === 'voice_notes' && info.speech?.length ? el('div.mute-sm', { text: `סדר התמלול: ${info.speech.map((p) => p.name).join(' ← ')}${info.speech.length > 1 ? ' (כל אחד גיבוי לקודם)' : ''}${info.speechCompare ? ' · מצב השוואה פעיל' : ''}.` }) : null
           ]),
           audience ? el('div.ai-row-actions', {}, [UI.field('מי רשאי', audience)]) : null
         ]);
@@ -1837,6 +1837,7 @@ const AdminView = (() => {
       const hTo = el('input', { type: 'time', value: to, disabled: !s.hours });
       always.addEventListener('change', () => { hFrom.disabled = hTo.disabled = always.checked; });
       const shabbat = el('input', { type: 'checkbox', checked: s.shabbat });
+      const speechCompare = el('input', { type: 'checkbox', checked: s.speechCompare });
       const check = (input, label, hint) => el('label.wa-check', {}, [input, el('div', {}, [el('b', { text: label }), hint ? el('div.mute-sm', { text: hint }) : null])]);
 
       const save = el('button.btn.btn-primary', {}, ['שמירת ההגדרות']);
@@ -1845,7 +1846,8 @@ const AdminView = (() => {
         try {
           draw(await API.put('/api/admin/wa-bot/settings', {
             enabled: enabled.checked, quietMinutes: Number(quiet.value), summaryTime: summary.value,
-            hours: always.checked ? '' : `${hFrom.value}-${hTo.value}`, shabbat: shabbat.checked
+            hours: always.checked ? '' : `${hFrom.value}-${hTo.value}`, shabbat: shabbat.checked,
+            speechCompare: speechCompare.checked
           }));
           UI.success('ההגדרות נשמרו');
         } catch (err) { save.disabled = false; UI.error(err); }
@@ -1862,6 +1864,10 @@ const AdminView = (() => {
         el('div.row', {}, [UI.field('מהשעה', hFrom), UI.field('עד השעה', hTo)]),
         check(shabbat, 'לא בשבת', 'משישי ב-15:00 עד מוצאי שבת ב-20:30.'),
         el('div.mute-sm', { text: 'מחוץ לחלון הבוט לא שולח דבר. הודעות שנכתבו לו בפרטי נשמרות ונענות כשהחלון נפתח. הקבוצות ממשיכות להיקרא, וההצעות מחכות באפליקציה.' }),
+        el('h4.mt', { text: 'תמלול הודעות קוליות' }),
+        el('div.mute-sm', { text: info.speech?.length ? `הסדר: ${info.speech.map((p) => p.name).join(' ← ')} — כל אחד גיבוי לקודם.` : 'אין ספק תמלול מוגדר בשרת.' }),
+        check(speechCompare, 'השוואה בין ספקי התמלול',
+          'כל הודעה קולית מתומללת בכל הספקים המוגדרים במקביל, וביומן מופיעה שורה "השוואת תמלול" עם הטקסט והזמן של כל אחד. התשובה לעובד — מהראשון בסדר שהצליח. עולה לפי מספר הספקים; לכבות אחרי הבדיקה.'),
         el('div.mt', {}, [save])
       ])]));
     }

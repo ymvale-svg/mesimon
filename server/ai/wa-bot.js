@@ -86,8 +86,9 @@ function publicStatus() {
   return {
     enabled: Boolean(D.getSetting('wa_bot_enabled', true)),
     ai: Claude.isEnabled(),
-    // תמלול הודעות קוליות: ‎'openai'‎ · ‎'google'‎ · ‎null‎
-    speech: Speech.provider(),
+    // תמלול הודעות קוליות: הספקים המוגדרים לפי הסדר, ומצב ההשוואה
+    speech: Speech.providers(),
+    speechCompare: Boolean(D.getSetting('speech_compare', false)),
     connection: row ? {
       apiUrl: row.api_url,
       instanceId: row.instance_id,
@@ -1537,14 +1538,26 @@ async function handleDirect(msg) {
   }
   if (voice) {
     if (!Speech.isEnabled() || !WaActions.allowed(actor, 'voice_notes')) {
-      log({ ...base, text: '[הודעה קולית]', action: 'voice', status: 'unclear', result: Speech.isEnabled() ? 'הודעות קוליות כבויות במסך הניהול' : 'התמלול אינו מוגדר בשרת (OPENAI_API_KEY או GOOGLE_SPEECH_API_KEY)' });
+      log({ ...base, text: '[הודעה קולית]', action: 'voice', status: 'unclear', result: Speech.isEnabled() ? 'הודעות קוליות כבויות במסך הניהול' : 'התמלול אינו מוגדר בשרת (RUNPOD_API_KEY, OPENAI_API_KEY או GOOGLE_SPEECH_API_KEY)' });
       await sendText(msg.chatId, Speech.isEnabled()
         ? 'הודעות קוליות כבויות כרגע. כתבו לי בטקסט 🙏'
-        : 'תמלול הודעות קוליות עוד לא הוגדר במשימון (מנהל המערכת: OPENAI_API_KEY). בינתיים כתבו לי בטקסט 🙏');
+        : 'תמלול הודעות קוליות עוד לא הוגדר במשימון. בינתיים כתבו לי בטקסט 🙏');
       return;
     }
     try {
-      text = await Speech.transcribeUrl(msg.audio.url, msg.audio.mime);
+      const file = await Speech.download(msg.audio.url, msg.audio.mime);
+      const compare = Boolean(D.getSetting('speech_compare', false));
+      const r = await Speech.transcribeDetailed(file.buf, file.mime, { compare });
+      text = r.text;
+      // איזה ספק תמלל, ותוך כמה זמן — ומי נכשל לפניו (הגיבוי נכנס לפעולה)
+      const failed = r.attempts.filter((a) => a.error && a !== r.used).map((a) => `${a.name} נכשל (${a.error.slice(0, 120)})`);
+      log({ ...base, text: `🎙 ${text || '[ריק]'}`, action: 'voice', status: r.used ? 'ok' : 'unclear',
+        result: [r.used ? `תומלל ב-${r.used.name} · ${(r.used.ms / 1000).toFixed(1)} שנ׳` : 'לא נשמע דיבור', ...failed].join(' · ') });
+      // מצב השוואה: כשכל הספקים מסיימים — שורה ביומן עם התמלול והזמן של כל אחד
+      r.all?.then((all) => log({
+        ...base, text: '[השוואת תמלול]', action: 'voice_compare', status: 'ok',
+        result: all.map((a) => `${a.name} (${(a.ms / 1000).toFixed(1)} שנ׳): ${a.error ? `❌ ${a.error.slice(0, 100)}` : `"${a.text.slice(0, 300)}"`}`).join(' ‖ ')
+      })).catch(() => {});
     } catch (err) {
       console.error('[משימון] תמלול הודעה קולית נכשל:', err.message);
       log({ ...base, text: '[הודעה קולית]', action: 'voice', status: 'error', result: err.message });

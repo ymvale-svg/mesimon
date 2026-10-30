@@ -594,7 +594,9 @@ function register(router, h) {
     quietMinutes: Number(D.getSetting('wa_quiet_minutes', 3)) || 0,
     summaryTime: String(D.getSetting('wa_summary_time', '08:00')),
     hours: String(D.getSetting('wa_hours', '') ?? ''),
-    shabbat: Boolean(D.getSetting('wa_shabbat', true))
+    shabbat: Boolean(D.getSetting('wa_shabbat', true)),
+    // השוואת ספקי התמלול: כולם רצים על כל הודעה קולית, והתוצאות ביומן
+    speechCompare: Boolean(D.getSetting('speech_compare', false))
   });
 
   const botInfo = () => ({
@@ -666,6 +668,7 @@ function register(router, h) {
     if (b.summaryTime !== undefined) D.setSetting('wa_summary_time', String(b.summaryTime));
     if (b.hours !== undefined) D.setSetting('wa_hours', hours);
     if (b.shabbat !== undefined) D.setSetting('wa_shabbat', Boolean(b.shabbat));
+    if (b.speechCompare !== undefined) D.setSetting('speech_compare', Boolean(b.speechCompare));
     sendJson(res, 200, botInfo());
   });
 

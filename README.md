@@ -59,6 +59,7 @@ node server/index.js
 | `GOOGLE_LOGIN_CLIENT_ID` · `GOOGLE_LOGIN_CLIENT_SECRET` | אופציונלי: לקוח נפרד לכניסה עם Google, מפרויקט External — כדי שחשבונות מכל דומיין יוכלו להיכנס גם כשחיבור Gmail על פרויקט Internal |
 | `ZOOM_ACCOUNT_ID` · `ZOOM_CLIENT_ID` · `ZOOM_CLIENT_SECRET` | אפליקציית Server-to-Server OAuth של חשבון ה-Zoom של החברה — קישור Zoom אוטומטי לפגישות. בלעדיהם הפגישות נקבעות בלי Zoom (מקום / קישור משלי) |
 | `ANTHROPIC_API_KEY` | משימות AI וסריקת מיילים (Claude). בלעדיו האפשרויות אינן זמינות |
+| `RUNPOD_API_KEY` · `RUNPOD_ENDPOINT_ID` | תמלול הודעות קוליות במודל העברית של ivrit.ai, ב-endpoint בחשבון ה-RunPod של הארגון (Hub ← `ivrit-ai/runpod-serverless` ← Deploy). **ראשון בסדר**; OpenAI ו-Google — גיבוי לפי הסדר. אופציונלי: `RUNPOD_TRANSCRIBE_MODEL` (ברירת מחדל `ivrit-ai/whisper-large-v3-turbo-ct2`), `RUNPOD_TIMEOUT_SECONDS` (ברירת מחדל 90 — כולל "התעוררות" של endpoint, ואחריו עוברים לגיבוי) |
 | `OPENAI_API_KEY` | תמלול הודעות קוליות לבוט הוואטסאפ (מומלץ — מפתח אחד מ-platform.openai.com, בלי פרויקט ענן). המודל: `OPENAI_TRANSCRIBE_MODEL`, ברירת מחדל `gpt-4o-transcribe`. ההקלטה באפליקציה אינה צריכה אותו (הדפדפן מתמלל) |
 | `GOOGLE_SPEECH_API_KEY` | חלופה ל-OpenAI: מפתח API מפרויקט Google Cloud שבו מופעל Cloud Speech-to-Text. כששניהם מוגדרים — OpenAI. בלי אף אחד מהם הבוט מבקש לכתוב בטקסט |
 | `TOKEN_ENCRYPTION_KEY` | הצפנת חיבורי ה-Gmail האישיים במסד. בלעדיו נוצר קובץ מפתח ליד מסד הנתונים. לא להחליף אחרי שחוברו תיבות |
@@ -123,7 +124,7 @@ node server/reset.js --demo    # כולל נתוני הדגמה
 │  ├─ ai/mail-insights.js תובנות מהמיילים — שורה לכל מייל מ-24 השעות האחרונות, ותשובה למייל
 │  ├─ ai/wa-bot.js      בוט הוואטסאפ — קבוצות, שיחה פרטית, ההודעות היזומות, והעוזר באפליקציה
 │  ├─ ai/voice-router.js הקלטה עם כמה בקשות → בקשות נפרדות
-│  ├─ speech.js         תמלול הודעות קוליות (OpenAI או Google Speech-to-Text)
+│  ├─ speech.js         תמלול הודעות קוליות — ivrit.ai (RunPod) ← OpenAI ← Google, והשוואה ביניהם
 │  ├─ gmail.js          חיבור Google אישי — Gmail, יומן ואנשי קשר (OAuth על לקוח ה-Google של הכניסה)
 │  ├─ calendar.js       היומן של Google — האירועים של היום ל-Today
 │  ├─ google-contacts.js אנשי הקשר של Google — סנכרון, חיפוש ושמירה
@@ -428,7 +429,7 @@ node server/reset.js --demo    # כולל נתוני הדגמה
   (מייל לשולח ומשימת AI שעוקבת). בהודעה הראשונה של היום — שורת סיכום, שאפשר לכבות בניהול ההתראות.
   המיילים אינם מסומנים כנקראו; גוף המייל אינו נשמר — רק השולח, הנושא והתובנה, לשבוע. מספרי חשבון
   וכרטיס מוסתרים (‎***1234‎). הסקיל: `server/ai/skills/email-insights.md`.
-- **🎙 הודעות קוליות** — הודעה קולית לבוט מתומללת (OpenAI, או Google Speech-to-Text) ומטופלת כמו כתובה; הבוט
+- **🎙 הודעות קוליות** — הודעה קולית לבוט מתומללת (ivrit.ai על RunPod, ואחריו OpenAI ו-Google כגיבוי) ומטופלת כמו כתובה. ביומן — באיזה ספק תומלל ותוך כמה זמן; **מצב השוואה** בהגדרות הבוט מריץ את כולם במקביל ורושם את התמלולים זה לצד זה; הבוט
   חוזר בשורה על מה ששמע. הקובץ אינו נשמר.
 - **כמה בקשות בהקלטה אחת** — "פתח משימה לשושנה, ושלח מייל לאורן שיביא את ההסכם" מתפרקת לבקשות,
   וכל אחת מקבלת אישור משלה, בתור. "ביטול הכול" עוצר את התור. הסקיל: `server/ai/skills/voice-router.md`.
