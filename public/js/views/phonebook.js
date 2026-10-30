@@ -1,24 +1,28 @@
 'use strict';
 /**
- * 📒 אלפון ארגוני — שם, טלפון, מייל והערה, משותף לכל העובדים.
+ * 📒 אלפון ארגוני — שם מלא, טל' 1, טל' 2, פקס, מייל והערות (ההקשר לפרויקט),
+ * משותף לכל העובדים.
  *
- *   card        — חלון החיפוש בדשבורד: מקלידים שם, טלפון או מילה מההערה,
- *                 ומכל שורה אפשר לחייג, לשלוח מייל, או לפתוח משימת AI עם
- *                 פרטי האיש כבר ממולאים
- *   render      — מסך הניהול (מ"החשבון שלי" ומהחלון בדשבורד): עריכה בשורה,
- *                 הוספה, מחיקה, ייבוא מאקסל וייצוא
- *   editDialog  — הוספה או עריכה של רשומה אחת
+ *   sidebarSearch — שורת החיפוש בבאנר הימני, מעל "פרויקטים". התוצאות נפתחות
+ *                   בחלון צף לידה; בטלפון — מתחתיה, בתוך התפריט
+ *   openSearch    — אותו חיפוש בחלון, מהכפתור "אלפון" בדשבורד הנייד
+ *   contactCard   — כרטיס איש קשר: רק השדות שהוזנו, וליד כל אחד הפעולה שלו
+ *   render        — מסך הניהול: עריכה בשורה, הוספה, מחיקה, ייבוא וייצוא
+ *   editDialog    — הוספה או עריכה של רשומה אחת
+ *
+ * שורת החיפוש בנויה לפי דפוס ה-autocomplete של 21st.dev (ReUI / coss
+ * Async Autocomplete): תוצאות תוך כדי הקלדה בקבוצות, הדגשת מה שהוקלד, סמן
+ * טעינה בתוך השדה, ניקוי, ניווט במקלדת, ו"אחרונים" כשהשדה ריק.
  *
  * סדר התוצאות נקבע בשרת (‎server/phonebook.js‎): קודם שמות שמתחילים במה
- * שהוקלד, אחר כך שמות שמכילים, אחר כך טלפון ומייל, ואחר כך הערות.
+ * שהוקלד, אחר כך שמות שמכילים, אחר כך מספרים ומייל, ואחר כך הערות.
  */
 
 const PhonebookView = (() => {
   const { el } = UI;
 
   const isPhone = () => window.matchMedia?.('(pointer: coarse)').matches;
-  // מקום ריק במקום כפתור חסר — כך חיוג, מייל ו-AI באותו טור בכל השורות
-  const gap = () => el('span.pb-act-gap', { 'aria-hidden': 'true' });
+  const narrow = () => window.matchMedia?.('(max-width: 820px)').matches;
 
   /** טקסט עם הדגשה של מה שהוקלד */
   function marked(text, q) {
@@ -30,113 +34,145 @@ const PhonebookView = (() => {
     return el('span', {}, [value.slice(0, at), el('mark', { text: value.slice(at, at + query.length) }), value.slice(at + query.length)]);
   }
 
-  /** חיוג — בטלפון מחייג; במחשב מעתיק את המספר, כי ‎tel:‎ במחשב פותח אפליקציה זרה */
+  async function copy(text) {
+    try { await navigator.clipboard.writeText(text); UI.success(`${text} הועתק`); } catch { UI.toast(text); }
+  }
+
+  const iconBtn = (icon, label, onclick, cls = '') => el(`button.icon-btn.pb-act${cls}`, {
+    type: 'button', title: label, 'aria-label': label,
+    onclick: (e) => { e.stopPropagation(); onclick(e); }
+  }, [UI.lineIcon(icon)]);
+
+  /** חיוג — בטלפון מחייג; במחשב מעתיק, כי ‎tel:‎ במחשב פותח אפליקציה זרה */
   function callButton(phone) {
     if (!phone) return null;
-    if (isPhone()) return el('a.icon-btn.pb-act', { href: `tel:${phone.replace(/[^\d+]/g, '')}`, title: `חיוג ל-${phone}`, 'aria-label': `חיוג ל-${phone}` }, [UI.lineIcon('phone')]);
-    return el('button.icon-btn.pb-act', {
-      type: 'button',
-      title: `העתקת ${phone}`,
-      'aria-label': `העתקת המספר ${phone}`,
-      onclick: async (e) => {
-        e.stopPropagation();
-        try { await navigator.clipboard.writeText(phone); UI.success(`${phone} הועתק`); } catch { UI.toast(phone); }
-      }
-    }, [UI.lineIcon('phone')]);
+    if (isPhone()) {
+      return el('a.icon-btn.pb-act', {
+        href: `tel:${phone.replace(/[^\d+]/g, '')}`, title: `חיוג ל-${phone}`, 'aria-label': `חיוג ל-${phone}`,
+        onclick: (e) => e.stopPropagation()
+      }, [UI.lineIcon('phone')]);
+    }
+    return iconBtn('phone', `העתקת ${phone}`, () => copy(phone));
   }
 
   const mailButton = (email) => (email
     ? el('a.icon-btn.pb-act', { href: `mailto:${email}`, title: `מייל ל-${email}`, 'aria-label': `מייל ל-${email}`, onclick: (e) => e.stopPropagation() }, [UI.lineIcon('mail')])
     : null);
 
-  /** משימת AI לאיש הזה — השם, המייל והטלפון כבר ממולאים */
+  /**
+   * משימת AI לאיש הזה — השם והמייל ממולאים. הטלפון שם הוא לוואטסאפ, ולכן
+   * נמסר רק נייד (05X); לאיש קשר עם טלפון משרד בלבד — השדה נשאר ריק.
+   */
   function aiButton(entry) {
     if (!App.may('create_task')) return null;
-    return el('button.icon-btn.pb-act.pb-ai', {
-      type: 'button',
-      title: `משימת AI ל${entry.name}`,
-      'aria-label': `משימת AI ל${entry.name}`,
-      onclick: (e) => {
-        e.stopPropagation();
-        AiTaskView.openDialog({ contact: { name: entry.name, email: entry.email, phone: entry.phone, type: 'external', refId: null, source: 'phonebook' } });
-      }
-    }, [UI.lineIcon('sparkles')]);
+    return iconBtn('sparkles', `משימת AI ל${entry.name}`, () => {
+      AiTaskView.openDialog({ contact: { name: entry.name, email: entry.email, phone: entry.mobile ?? '', type: 'external', refId: null, source: 'phonebook' } });
+    }, '.pb-ai');
   }
 
-  // ------------------------------------------------------------- חלון בדשבורד
+  // ------------------------------------------------------------- אחרונים
 
-  /*
-   * החלון נבנה פעם אחת ונשמר: דף הבית נבנה מחדש בכל רענון רקע, וחלון שנבנה
-   * מחדש היה מוחק את החיפוש תחת ידיו של מי שמקליד. אותו אלמנט עובר לחלון
-   * החדש, והמיקוד חוזר אליו.
+  const RECENT_KEY = 'mesimon.phonebookRecent';
+  const recentIds = () => {
+    try { return (JSON.parse(localStorage.getItem(RECENT_KEY) ?? '[]') || []).filter(Number.isInteger).slice(0, 5); } catch { return []; }
+  };
+  function remember(id) {
+    try { localStorage.setItem(RECENT_KEY, JSON.stringify([id, ...recentIds().filter((x) => x !== id)].slice(0, 5))); } catch { /* בלי זיכרון */ }
+  }
+
+  // ------------------------------------------------------------- כרטיס איש קשר
+
+  /**
+   * השורות שבכרטיס — רק מה שהוזן. כשיש טלפון אחד הוא "טלפון", בלי מספור;
+   * רק כשיש שניים — "טל' 1" ו"טל' 2".
    */
-  let cardNode = null;
-  let cardInput = null;
+  function lines(e) {
+    const two = e.phone && e.phone2;
+    return [
+      e.phone ? { key: 'phone', icon: 'phone', label: two ? "טל' 1" : 'טלפון', value: e.phone } : null,
+      e.phone2 ? { key: 'phone2', icon: 'phone', label: "טל' 2", value: e.phone2 } : null,
+      e.fax ? { key: 'fax', icon: 'copy', label: 'פקס', value: e.fax } : null,
+      e.email ? { key: 'email', icon: 'mail', label: 'מייל', value: e.email } : null
+    ].filter(Boolean);
+  }
 
-  function card() {
-    if (cardNode) {
-      // כלי הסידור של לוח החלונות נוספים לכותרת בכל בנייה — מסירים את הקודמים
-      cardNode.querySelectorAll('.slot-tools').forEach((n) => n.remove());
-      if (document.activeElement === cardInput) {
-        const pos = cardInput.selectionStart;
-        setTimeout(() => { cardInput.focus(); cardInput.setSelectionRange(pos, pos); }, 0);
-      }
-      return cardNode;
-    }
-    const panel = searchPanel();
-    cardInput = panel.input;
-    cardNode = el('div.card.pb-card', {}, [
-      el('div.card-head', {}, [
-        el('h3.pb-title', {}, [UI.lineIcon('contacts'), 'אלפון']),
-        panel.count,
-        el('div.spacer'),
-        el('button.btn.btn-sm.btn-ghost', { type: 'button', title: 'הוספה לאלפון', 'aria-label': 'הוספה לאלפון', onclick: () => editDialog({}, { onSaved: panel.search }) }, [UI.lineIcon('plus')]),
-        el('button.btn.btn-sm.btn-ghost', { type: 'button', onclick: () => App.navigate('phonebook') }, ['ניהול'])
+  /**
+   * @param {object} entry
+   * @param {{q?: string, onEdit?: Function}} opts
+   */
+  function contactCard(entry, { q = '', onEdit = null } = {}) {
+    const action = (l) => {
+      if (l.key === 'email') return mailButton(l.value);
+      if (l.key === 'fax') return iconBtn('copy', `העתקת הפקס ${l.value}`, () => copy(l.value));
+      return callButton(l.value);
+    };
+    return el('div.pbc', {}, [
+      el('div.pbc-head', {}, [
+        el('b.pbc-name', {}, [marked(entry.name, entry.match === 'name' ? q : '')]),
+        el('div.pbc-head-acts', {}, [
+          aiButton(entry),
+          onEdit ? iconBtn('pencil', `עריכת ${entry.name}`, () => onEdit(entry)) : null
+        ])
       ]),
-      el('div.card-pad', {}, [panel.input, panel.list])
+      entry.note ? el('div.pbc-note', {}, [marked(entry.note, entry.match === 'note' ? q : '')]) : null,
+      el('div.pbc-lines', {}, lines(entry).map((l) => el('div.pbc-line', {}, [
+        el('span.pbc-label', { text: l.label }),
+        el('span.pbc-value', { dir: 'ltr' }, [marked(l.value, ['phone', 'email'].includes(entry.match) ? q : '')]),
+        action(l)
+      ])))
     ]);
-    return cardNode;
   }
 
-  /** בטלפון — אותו חיפוש בחלון, מכפתור בדשבורד הנייד */
-  function openSearch() {
-    const panel = searchPanel();
-    const m = UI.modal({
-      title: 'אלפון',
-      body: el('div.pb-card', {}, [panel.input, panel.list]),
-      footer: [
-        el('button.btn', { onclick: () => editDialog({}, { onSaved: panel.search }) }, [UI.lineIcon('plus'), 'הוספה']),
-        el('div.spacer'),
-        el('button.btn', { onclick: () => { m.close(); App.navigate('phonebook'); } }, ['ניהול'])
-      ]
+  // ------------------------------------------------------------- חיפוש
+
+  /**
+   * שדה החיפוש והתוצאות — משותף לבאנר הימני ולחלון בטלפון.
+   *
+   * כל תוצאה היא שורה קצרה (שם, הערה, מספר ראשון); לחיצה או Enter פותחים
+   * אותה לכרטיס המלא במקום. ↑↓ בין השורות, Esc מנקה ואחר כך סוגר.
+   */
+  function searchPanel({ onEscape = () => {} } = {}) {
+    const input = el('input.pb-search', {
+      type: 'search', placeholder: 'חיפוש באלפון…', autocomplete: 'off',
+      role: 'combobox', 'aria-expanded': 'false', 'aria-label': 'חיפוש באלפון — שם, טלפון או הערה'
     });
-    setTimeout(() => panel.input.focus(), 50);
-  }
-
-  /** שדה החיפוש והתוצאות — משותף לחלון בדשבורד ולחלון בטלפון */
-  function searchPanel() {
-    const input = el('input.pb-search', { type: 'search', placeholder: 'שם, טלפון או הערה…', autocomplete: 'off', 'aria-label': 'חיפוש באלפון' });
-    const list = el('div.pb-list.feed-scroll');
+    const field = el('div.pb-field', {}, [UI.lineIcon('contacts'), input, el('span.pb-spin', { 'aria-hidden': 'true' })]);
+    const list = el('div.pb-list', { role: 'listbox' });
     const count = el('span.mute-sm');
     let timer = null;
     let seq = 0;
+    let items = [];
+    let active = -1;
+    let open = null;     // מזהה הכרטיס הפתוח
+    let query = '';
 
-    function row(entry, q) {
-      return el('div.pb-row', {
-        title: 'עריכה',
-        onclick: () => editDialog(entry, { onSaved: search })
-      }, [
-        el('div.pb-main', {}, [
-          el('b', {}, [marked(entry.name, entry.match === 'name' ? q : '')]),
-          entry.note ? el('div.mute-sm.pb-note', {}, [marked(entry.note, entry.match === 'note' ? q : '')]) : null,
-          el('div.mute-sm.pb-detail', { dir: 'ltr' }, [
-            entry.phone ? marked(entry.phone, entry.match === 'phone' ? q : '') : null,
-            entry.phone && entry.email ? ' · ' : null,
-            entry.email ? marked(entry.email, entry.match === 'email' ? q : '') : null
-          ])
-        ]),
-        el('div.pb-acts', {}, [callButton(entry.phone) ?? gap(), mailButton(entry.email) ?? gap(), aiButton(entry)])
-      ]);
+    const edit = (entry) => editDialog(entry, { onSaved: search });
+
+    function row(entry, i) {
+      const first = lines(entry)[0];
+      const isOpen = open === entry.id;
+      const node = el(`div.pb-row${i === active ? '.active' : ''}${isOpen ? '.open' : ''}`, {
+        role: 'option', 'aria-selected': i === active ? 'true' : 'false',
+        onclick: () => toggle(i)
+      }, isOpen
+        ? [contactCard(entry, { q: query, onEdit: edit })]
+        : [
+            el('div.pb-main', {}, [
+              el('b', {}, [marked(entry.name, entry.match === 'name' ? query : '')]),
+              entry.note ? el('div.pb-note', {}, [marked(entry.note, entry.match === 'note' ? query : '')]) : null
+            ]),
+            first ? el('span.pb-first', { dir: 'ltr' }, [first.value]) : null
+          ]);
+      return node;
+    }
+
+    function toggle(i) {
+      const e = items[i];
+      if (!e) return;
+      active = i;
+      open = open === e.id ? null : e.id;
+      if (open) remember(e.id);
+      draw();
     }
 
     /** "להוסיף את 'דני' לאלפון" — מה שהוקלד נכנס לשדה המתאים */
@@ -146,34 +182,125 @@ const PhonebookView = (() => {
         [UI.lineIcon('plus'), q ? `להוסיף את "${q}" לאלפון` : 'הוספה לאלפון']);
     }
 
+    function draw(emptyNote = null) {
+      const names = items.filter((e) => e.match !== 'note');
+      const notes = items.filter((e) => e.match === 'note');
+      const group = (title, arr) => (arr.length
+        ? [el('div.pb-group', { text: title }), ...arr.map((e) => row(e, items.indexOf(e)))]
+        : []);
+      UI.mount(list,
+        ...(query
+          ? [...group('אנשי קשר', names), ...group('מופיע בהערות', notes)]
+          : group('אחרונים', items)),
+        emptyNote,
+        el('div.pb-foot', {}, [
+          addLine(items.length ? '' : query),
+          el('div.spacer'),
+          el('button.btn.btn-sm.btn-ghost', { type: 'button', onclick: () => App.navigate('phonebook') }, ['ניהול האלפון'])
+        ]));
+      input.setAttribute('aria-expanded', 'true');
+      list.querySelector('.pb-row.active')?.scrollIntoView({ block: 'nearest' });
+    }
+
     async function search() {
       const mine = ++seq;
-      const q = input.value.trim();
+      query = input.value.trim();
+      field.classList.add('is-loading');
       try {
-        const data = await API.get(`/api/phonebook?q=${encodeURIComponent(q)}&limit=${q ? 12 : 6}`);
+        const ids = recentIds();
+        const url = query
+          ? `/api/phonebook?q=${encodeURIComponent(query)}&limit=20`
+          : `/api/phonebook?ids=${ids.join(',')}`;
+        const data = await API.get(url);
         if (mine !== seq) return;
+        items = query ? data.items : ids.map((id) => data.items.find((e) => e.id === id)).filter(Boolean);
         count.textContent = data.total ? `${data.total} אנשי קשר` : '';
-        if (!data.total) {
-          UI.mount(list, el('div.pb-empty', {}, [
-            el('div.mute-sm', { text: 'האלפון עוד ריק. מוסיפים כאן אחד-אחד, או מייבאים מאקסל במסך הניהול.' }),
-            addLine('')
-          ]));
-          return;
-        }
-        if (q && !data.items.length) {
-          UI.mount(list, el('div.pb-empty', {}, [el('div.mute-sm', { text: `לא נמצא "${q}"` }), addLine(q)]));
-          return;
-        }
-        UI.mount(list, ...data.items.map((e) => row(e, q)), q ? null : el('div.mute-sm.pb-hint', { text: 'מקלידים שם, טלפון או מילה מההערה' }));
+        active = items.length ? 0 : -1;
+        if (!items.some((e) => e.id === open)) open = null;
+        draw(!data.total
+          ? el('div.pb-empty.mute-sm', { text: 'האלפון עוד ריק. מוסיפים כאן, או מייבאים מאקסל ב"ניהול האלפון".' })
+          : query && !items.length
+            ? el('div.pb-empty.mute-sm', { text: `לא נמצא "${query}"` })
+            : !query && !items.length
+              ? el('div.pb-empty.mute-sm', { text: 'מקלידים שם, טלפון או מילה מההערה.' })
+              : null);
       } catch (err) {
-        if (mine === seq) UI.mount(list, el('div.mute-sm', { text: err.message }));
+        if (mine === seq) UI.mount(list, el('div.pb-empty.mute-sm', { text: err.message }));
+      } finally {
+        if (mine === seq) field.classList.remove('is-loading');
       }
     }
 
-    input.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(search, 140); });
-    input.addEventListener('keydown', (e) => { if (e.key === 'Escape' && input.value) { e.stopPropagation(); input.value = ''; search(); } });
-    search();
-    return { input, list, count, search };
+    input.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(search, 120); });
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'ArrowDown' && items.length) { e.preventDefault(); active = (active + 1) % items.length; draw(); }
+      else if (e.key === 'ArrowUp' && items.length) { e.preventDefault(); active = (active - 1 + items.length) % items.length; draw(); }
+      else if (e.key === 'Enter' && active >= 0) { e.preventDefault(); toggle(active); }
+      else if (e.key === 'Escape') {
+        e.stopPropagation();
+        if (input.value) { input.value = ''; search(); } else onEscape();
+      }
+    });
+    return { input, field, list, count, search };
+  }
+
+  /*
+   * הבאנר הימני — מעל "פרויקטים".
+   *
+   * התפריט נבנה מחדש בכל רענון, ולכן הרכיב נבנה פעם אחת ונשמר — אחרת
+   * החיפוש היה נמחק תחת ידיו של מי שמקליד.
+   *
+   * חלון התוצאות יושב בתוך התפריט עצמו, במיקום ‎fixed‎: כך הוא אינו נחתך
+   * ברוחב התפריט, ובכל זאת נחשב חלק ממנו — התפריט המכווץ נשאר פתוח כל עוד
+   * העכבר או המיקוד בתוצאות. בטלפון התוצאות נפתחות מתחת לשדה.
+   */
+  let side = null;
+
+  function sidebarSearch() {
+    if (side) {
+      if (document.activeElement === side.panel.input) {
+        const pos = side.panel.input.selectionStart;
+        setTimeout(() => { side.panel.input.focus(); side.panel.input.setSelectionRange(pos, pos); }, 0);
+      }
+      return side.node;
+    }
+    const pop = el('div.pb-pop', { hidden: true });
+    const close = () => { pop.hidden = true; side.panel.input.setAttribute('aria-expanded', 'false'); };
+    const panel = searchPanel({ onEscape: () => { close(); panel.input.blur(); } });
+    pop.appendChild(panel.list);
+
+    const place = () => {
+      if (narrow()) { pop.style.cssText = ''; return; }
+      const r = panel.field.getBoundingClientRect();
+      pop.style.top = `${Math.max(8, Math.min(r.top, window.innerHeight - 160))}px`;
+      // התפריט מימין — החלון נפתח משמאלו
+      pop.style.right = `${window.innerWidth - r.left + 10}px`;
+    };
+    const show = () => { place(); pop.hidden = false; panel.search(); };
+
+    panel.input.addEventListener('focus', show);
+    panel.input.addEventListener('input', () => { if (pop.hidden) show(); });
+    window.addEventListener('resize', () => { if (!pop.hidden) place(); });
+
+    const node = el('div.pb-side', { title: 'אלפון' }, [panel.field, pop]);
+    // לחיצה מחוץ לאלפון סוגרת את חלון התוצאות (לא בתוך חלון עריכה שנפתח ממנו)
+    document.addEventListener('pointerdown', (e) => {
+      if (pop.hidden || node.contains(e.target) || e.target.closest?.('.modal-backdrop')) return;
+      close();
+    });
+    side = { node, panel };
+    return node;
+  }
+
+  /** בטלפון — אותו חיפוש בחלון, מהכפתור "אלפון" בדשבורד הנייד */
+  function openSearch() {
+    const panel = searchPanel({ onEscape: () => m.close() });
+    const m = UI.modal({
+      title: 'אלפון',
+      body: el('div.pb-modal', {}, [panel.field, panel.list])
+    });
+    panel.search();
+    setTimeout(() => panel.input.focus(), 50);
   }
 
   // ------------------------------------------------------------- הוספה ועריכה
@@ -184,44 +311,52 @@ const PhonebookView = (() => {
    */
   function editDialog(entry = {}, { onSaved = () => {} } = {}) {
     const isEdit = Boolean(entry.id);
-    const name = el('input', { type: 'text', value: entry.name ?? '', placeholder: 'דני כהן' });
-    const phone = el('input', { type: 'tel', dir: 'ltr', value: entry.phone ?? '', placeholder: '050-0000000' });
-    const email = el('input', { type: 'email', dir: 'ltr', value: entry.email ?? '', placeholder: 'name@example.com' });
-    const note = el('input', { type: 'text', value: entry.note ?? '', placeholder: 'למשל: יועץ תסריט, פרויקט הגפן' });
+    const input = (type, value, placeholder, ltr = true) => el('input', { type, value: value ?? '', placeholder, ...(ltr ? { dir: 'ltr' } : {}) });
+    const f = {
+      name: input('text', entry.name, 'דני כהן', false),
+      phone: input('tel', entry.phone, '050-0000000'),
+      phone2: input('tel', entry.phone2, '03-0000000'),
+      fax: input('tel', entry.fax, '03-0000000'),
+      email: input('email', entry.email, 'name@example.com'),
+      note: input('text', entry.note, 'למשל: יועץ תסריט, פרויקט הגפן', false)
+    };
     const dupBox = el('div');
 
     // "כבר באלפון: דני כהן" — אזהרה, לא חסימה: לשני אנשים יכול להיות מספר משרד משותף
     const check = async () => {
-      if (!phone.value.trim() && !email.value.trim()) return UI.mount(dupBox);
+      if (!['phone', 'phone2', 'fax', 'email'].some((k) => f[k].value.trim())) return UI.mount(dupBox);
       try {
-        const { duplicates } = await API.post('/api/phonebook/check', { id: entry.id ?? null, phone: phone.value, email: email.value });
+        const { duplicates } = await API.post('/api/phonebook/check', {
+          id: entry.id ?? null, phone: f.phone.value, phone2: f.phone2.value, fax: f.fax.value, email: f.email.value
+        });
         UI.mount(dupBox, duplicates.length
           ? el('div.alert.alert-warn', {}, [el('span', { text: '⚠️' }), el('div', { text: `כבר באלפון: ${duplicates.map((d) => d.name).join(', ')}` })])
           : null);
       } catch { /* הבדיקה אינה תנאי לשמירה */ }
     };
-    phone.addEventListener('change', check);
-    email.addEventListener('change', check);
+    for (const k of ['phone', 'phone2', 'fax', 'email']) f[k].addEventListener('change', check);
 
     const save = el('button.btn.btn-primary', {}, [isEdit ? 'שמירה' : 'הוספה לאלפון']);
-    const del = isEdit ? el('button.btn.btn-danger.btn-ghost', {}, ['מחיקה']) : null;
+    const del = isEdit ? el('button.btn.btn-danger.btn-ghost', {}, [UI.lineIcon('trash'), 'מחיקה']) : null;
     const m = UI.modal({
       title: isEdit ? entry.name : 'הוספה לאלפון',
       body: el('div', {}, [
-        UI.field('שם', name),
-        el('div.row', {}, [UI.field('טלפון', phone), UI.field('מייל', email)]),
-        UI.field('הערה', note, 'תפקיד, חברה או פרויקט — גם לפי זה אפשר לחפש'),
+        UI.field('שם מלא', f.name),
+        el('div.row', {}, [UI.field("טל' 1", f.phone), UI.field("טל' 2", f.phone2)]),
+        el('div.row', {}, [UI.field('פקס', f.fax), UI.field('מייל', f.email)]),
+        UI.field('הערות', f.note, 'ההקשר לפרויקט: תפקיד, חברה, באיזה פרויקט — גם לפי זה אפשר לחפש'),
+        el('div.mute-sm', { text: 'אפשר למלא רק חלק — בכרטיס יופיעו רק השדות שמולאו.' }),
         dupBox,
         isEdit && entry.updatedBy ? el('div.mute-sm', { text: `עודכן לאחרונה בידי ${entry.updatedBy} · ${UI.formatDateTime(entry.updatedAt)}` }) : null
       ]),
       footer: [save, el('div.spacer'), del, el('button.btn', { onclick: () => m.close() }, ['ביטול'])]
     });
-    setTimeout(() => (entry.name ? phone : name).focus(), 50);
+    setTimeout(() => (entry.name ? f.phone : f.name).focus(), 50);
     if (entry.phone || entry.email) check();
 
     save.addEventListener('click', async () => {
       save.disabled = true;
-      const body = { name: name.value, phone: phone.value, email: email.value, note: note.value };
+      const body = Object.fromEntries(Object.entries(f).map(([k, i]) => [k, i.value]));
       try {
         const res = isEdit ? await API.put(`/api/phonebook/${entry.id}`, body) : await API.post('/api/phonebook', body);
         m.close();
@@ -248,7 +383,7 @@ const PhonebookView = (() => {
   async function render(container) {
     UI.mount(container, UI.spinner());
     let items = [];
-    const search = el('input.pb-search', { type: 'search', placeholder: 'חיפוש לפי שם, טלפון, מייל או הערה…', autocomplete: 'off' });
+    const search = el('input.pb-search', { type: 'search', placeholder: 'חיפוש לפי שם, טלפון, פקס, מייל או הערה…', autocomplete: 'off' });
     const tbody = el('tbody');
     const summary = el('span.mute-sm');
     let editing = null;
@@ -264,13 +399,14 @@ const PhonebookView = (() => {
     function filtered() {
       const q = search.value.trim().toLowerCase();
       if (!q) return items;
-      const digits = q.replace(/\D/g, '').replace(/^972/, '0');
+      const digitsOf = (x) => String(x ?? '').replace(/\D/g, '').replace(/^972/, '0');
+      const digits = digitsOf(q);
       const rank = (e) => {
         const name = e.name.toLowerCase();
         if (name.startsWith(q)) return 0;
         if (name.split(/[\s\-'"׳״.,()]+/).some((w) => w.startsWith(q))) return 1;
         if (name.includes(q)) return 2;
-        if (digits.length >= 2 && e.phone.replace(/\D/g, '').replace(/^972/, '0').includes(digits)) return 3;
+        if (digits.length >= 2 && [e.phone, e.phone2, e.fax].some((p) => digitsOf(p).includes(digits))) return 3;
         if (e.email.toLowerCase().includes(q)) return 4;
         if (e.note.toLowerCase().includes(q)) return 5;
         return null;
@@ -279,23 +415,24 @@ const PhonebookView = (() => {
         .sort((a, b) => a.r - b.r || a.e.name.localeCompare(b.e.name, 'he')).map((x) => x.e);
     }
 
+    // ערך וליד הפעולה שלו — חיוג, העתקת פקס, מייל. תא ריק נשאר ריק, ובטלפון אינו מוצג
+    const cell = (value, action) => el('div.pb-cell', {}, [el('span', { dir: 'ltr', text: value }), action]);
+
     function viewRow(e) {
       return el('tr', {}, [
         el('td', {}, [el('b', { text: e.name })]),
-        el('td', { dir: 'ltr', text: e.phone }),
-        el('td', { dir: 'ltr', text: e.email }),
+        el('td', {}, [e.phone, e.phone2].filter(Boolean).map((p) => cell(p, callButton(p)))),
+        el('td', {}, e.fax ? [cell(e.fax, iconBtn('copy', `העתקת הפקס ${e.fax}`, () => copy(e.fax)))] : []),
+        el('td', {}, e.email ? [cell(e.email, mailButton(e.email))] : []),
         el('td', { text: e.note }),
         el('td.mute-sm', { text: e.updatedBy ? `${e.updatedBy} · ${UI.formatDate(e.updatedAt)}` : '' }),
         el('td.pb-row-acts', {}, [
-          callButton(e.phone) ?? gap(), mailButton(e.email) ?? gap(), aiButton(e),
-          el('button.icon-btn', { type: 'button', title: 'עריכה', 'aria-label': `עריכת ${e.name}`, onclick: () => { editing = e.id; draw(); } }, [UI.lineIcon('pencil')]),
-          el('button.icon-btn', {
-            type: 'button', title: 'מחיקה', 'aria-label': `מחיקת ${e.name}`,
-            onclick: async () => {
-              if (!await UI.confirm(`למחוק את ${e.name} מהאלפון? הרשומה תימחק לכל העובדים.`, { danger: true, okText: 'מחיקה' })) return;
-              try { await API.del(`/api/phonebook/${e.id}`); UI.success('נמחק'); load(); } catch (err) { UI.error(err); }
-            }
-          }, [UI.lineIcon('trash')])
+          aiButton(e),
+          iconBtn('pencil', `עריכת ${e.name}`, () => { editing = e.id; draw(); }),
+          iconBtn('trash', `מחיקת ${e.name}`, async () => {
+            if (!await UI.confirm(`למחוק את ${e.name} מהאלפון? הרשומה תימחק לכל העובדים.`, { danger: true, okText: 'מחיקה' })) return;
+            try { await API.del(`/api/phonebook/${e.id}`); UI.success('נמחק'); load(); } catch (err) { UI.error(err); }
+          }, '.pb-del')
         ])
       ]);
     }
@@ -303,10 +440,12 @@ const PhonebookView = (() => {
     /** עריכה בשורה עצמה: Enter שומר, Escape מבטל */
     function editRow(e) {
       const f = {
-        name: el('input', { type: 'text', value: e.name }),
-        phone: el('input', { type: 'tel', dir: 'ltr', value: e.phone }),
-        email: el('input', { type: 'email', dir: 'ltr', value: e.email }),
-        note: el('input', { type: 'text', value: e.note })
+        name: el('input', { type: 'text', value: e.name, 'aria-label': 'שם מלא' }),
+        phone: el('input', { type: 'tel', dir: 'ltr', value: e.phone, placeholder: "טל' 1", 'aria-label': "טל' 1" }),
+        phone2: el('input', { type: 'tel', dir: 'ltr', value: e.phone2, placeholder: "טל' 2", 'aria-label': "טל' 2" }),
+        fax: el('input', { type: 'tel', dir: 'ltr', value: e.fax, 'aria-label': 'פקס' }),
+        email: el('input', { type: 'email', dir: 'ltr', value: e.email, 'aria-label': 'מייל' }),
+        note: el('input', { type: 'text', value: e.note, 'aria-label': 'הערות' })
       };
       const save = async () => {
         try {
@@ -324,7 +463,7 @@ const PhonebookView = (() => {
       }
       setTimeout(() => f.name.focus(), 0);
       return el('tr.pb-editing', {}, [
-        el('td', {}, [f.name]), el('td', {}, [f.phone]), el('td', {}, [f.email]), el('td', {}, [f.note]), el('td'),
+        el('td', {}, [f.name]), el('td', {}, [f.phone, f.phone2]), el('td', {}, [f.fax]), el('td', {}, [f.email]), el('td', {}, [f.note]), el('td'),
         el('td.pb-row-acts', {}, [
           el('button.btn.btn-sm.btn-primary', { type: 'button', onclick: save }, ['שמירה']),
           el('button.btn.btn-sm', { type: 'button', onclick: () => { editing = null; draw(); } }, ['ביטול'])
@@ -337,7 +476,7 @@ const PhonebookView = (() => {
       summary.textContent = search.value.trim() ? `${shown.length} מתוך ${items.length}` : `${items.length} אנשי קשר`;
       UI.mount(tbody, ...(shown.length
         ? shown.map((e) => (e.id === editing ? editRow(e) : viewRow(e)))
-        : [el('tr', {}, [el('td', { colspan: 6 }, [UI.empty(items.length ? 'לא נמצא' : 'האלפון עוד ריק', UI.lineIcon('contacts', { size: 34 }))])])]));
+        : [el('tr', {}, [el('td', { colspan: 7 }, [UI.empty(items.length ? 'לא נמצא' : 'האלפון עוד ריק', UI.lineIcon('contacts', { size: 34 }))])])]));
     }
     search.addEventListener('input', draw);
 
@@ -348,7 +487,7 @@ const PhonebookView = (() => {
       el('div.page-head', {}, [
         el('div', {}, [
           el('h2.pb-title', {}, [UI.lineIcon('contacts'), 'אלפון ארגוני']),
-          el('div.sub', { text: 'טלפונים ומיילים משותפים לכל העובדים. כל אחד יכול להוסיף, לעדכן ולמחוק.' })
+          el('div.sub', { text: 'טלפונים, פקס ומיילים משותפים לכל העובדים. כל אחד יכול להוסיף, לעדכן ולמחוק.' })
         ]),
         el('div.spacer'),
         el('div.pb-head-acts', {}, [
@@ -363,7 +502,7 @@ const PhonebookView = (() => {
           el('div.flex.pb-tools', {}, [search, summary]),
           el('div.table-wrap.pb-table-wrap', {}, [
             el('table.data.pb-table', {}, [
-              el('thead', {}, [el('tr', {}, ['שם', 'טלפון', 'מייל', 'הערה', 'עודכן', ''].map((h) => el('th', { text: h })))]),
+              el('thead', {}, [el('tr', {}, ['שם מלא', 'טלפון', 'פקס', 'מייל', 'הערות', 'עודכן', ''].map((h) => el('th', { text: h })))]),
               tbody
             ])
           ])
@@ -412,15 +551,17 @@ const PhonebookView = (() => {
           `${rows.length} שורות: ${ok} חדשות`,
           dups ? `, ${dups} כבר קיימות` : '',
           bad ? `, ${bad} עם שגיאה (יידלגו)` : '',
-          preview.header ? '' : '. לא זוהו כותרות — הסדר נלקח כשם · טלפון · מייל · הערה.'
+          preview.header ? '' : ". לא זוהו כותרות — הסדר נלקח כשם · טל' 1 · טל' 2 · פקס · מייל · הערות."
         ]),
         dups ? el('label.checkbox', {}, [withDups, ' לייבא גם את הכפולות']) : null,
         el('div.table-wrap.pb-import', {}, [
           el('table.data', {}, [
-            el('thead', {}, [el('tr', {}, ['שורה', 'שם', 'טלפון', 'מייל', 'הערה', ''].map((h) => el('th', { text: h })))]),
+            el('thead', {}, [el('tr', {}, ['שורה', 'שם מלא', "טל' 1", "טל' 2", 'פקס', 'מייל', 'הערות', ''].map((h) => el('th', { text: h })))]),
             el('tbody', {}, rows.map((r) => el(`tr${r.error ? '.pb-bad' : r.duplicate ? '.pb-dup' : ''}`, {}, [
               el('td.mute-sm', { text: String(r.line) }),
-              el('td', { text: r.name }), el('td', { dir: 'ltr', text: r.phone }), el('td', { dir: 'ltr', text: r.email }), el('td', { text: r.note }),
+              el('td', { text: r.name }),
+              el('td', { dir: 'ltr', text: r.phone }), el('td', { dir: 'ltr', text: r.phone2 ?? '' }), el('td', { dir: 'ltr', text: r.fax ?? '' }),
+              el('td', { dir: 'ltr', text: r.email }), el('td', { text: r.note }),
               el('td.mute-sm', { text: r.error || r.duplicate || '✓' })
             ])))
           ])
@@ -444,5 +585,5 @@ const PhonebookView = (() => {
     });
   }
 
-  return { card, openSearch, render, editDialog };
+  return { sidebarSearch, openSearch, contactCard, render, editDialog };
 })();

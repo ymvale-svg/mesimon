@@ -467,21 +467,21 @@
   table.data.pb-table thead { display: none; }
   table.data.pb-table, table.data.pb-table tbody { display: block; white-space: normal; }
   table.data.pb-table tr {
-    display: grid; grid-template-columns: auto 1fr;
-    grid-template-areas: "name name" "phone email" "note note" "acts acts";
-    gap: 2px 12px; padding: 12px 4px; border-bottom: 1px solid var(--border);
+    display: grid; grid-template-columns: 1fr;
+    gap: 3px; padding: 12px 4px; border-bottom: 1px solid var(--border);
   }
   table.data.pb-table tr:last-child { border-bottom: 0; }
-  table.data.pb-table td { display: block; padding: 0; border: 0; min-width: 0; }
+  table.data.pb-table td { display: block; padding: 0; border: 0; min-width: 0; text-align: right; }
+  /* כרטיס בטלפון — רק מה שהוזן: תא ריק אינו תופס שורה */
   table.data.pb-table td:empty { display: none; }
-  table.data.pb-table td:nth-child(1) { grid-area: name; font-size: 15.5px; }
-  table.data.pb-table td:nth-child(2) { grid-area: phone; text-align: right; }
-  table.data.pb-table td:nth-child(3) { grid-area: email; overflow-wrap: anywhere; color: var(--text-soft); }
-  table.data.pb-table td:nth-child(4) { grid-area: note; color: var(--text-soft); }
-  table.data.pb-table td:nth-child(5) { display: none; }
-  table.data.pb-table td.pb-row-acts { grid-area: acts; display: flex; justify-content: flex-start; margin-top: 6px; gap: 4px; }
-  table.data.pb-table td[colspan] { grid-column: 1 / -1; }
-  table.data.pb-table .pb-editing { grid-template-areas: "name name" "phone phone" "email email" "note note" "acts acts"; }
+  table.data.pb-table td:nth-child(1) { font-size: 15.5px; }
+  table.data.pb-table td:nth-child(3) .pb-cell::before { content: 'פקס'; color: var(--text-soft); margin-inline-end: 8px; }
+  table.data.pb-table td:nth-child(4) { overflow-wrap: anywhere; color: var(--text-soft); }
+  table.data.pb-table td:nth-child(5) { color: var(--text-soft); }
+  table.data.pb-table td:nth-child(6) { display: none; }
+  table.data.pb-table td.pb-row-acts { display: flex; justify-content: flex-start; margin-top: 6px; gap: 4px; }
   table.data.pb-table .pb-editing td { margin-bottom: 6px; }
-  .pb-act, .pb-row-acts .icon-btn, .pb-act-gap { width: 42px; height: 42px; }
+  .pb-act, .pb-row-acts .icon-btn, .pb-cell .pb-act { width: 42px; height: 42px; }
+  /* האלפון בתפריט הנפתח — שורת החיפוש, והתוצאות מתחתיה ולא בחלון צף */
+  .pb-pop { position: static; width: auto; max-height: none; box-shadow: none; border: 0; padding: 4px 0 0; animation: none; }
 }

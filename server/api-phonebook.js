@@ -24,9 +24,11 @@ function register(router) {
     const url = parseUrl(req);
     const q = url.searchParams.get('q') ?? '';
     const all = url.searchParams.get('all') === '1';
+    // "אחרונים" — הכרטיסים שנפתחו לאחרונה, לפי מזהה
+    const ids = (url.searchParams.get('ids') ?? '').split(',').map(Number).filter((n) => Number.isInteger(n) && n > 0).slice(0, 10);
     const limit = Math.min(50, Math.max(1, Number(url.searchParams.get('limit')) || 12));
     sendJson(res, 200, {
-      items: all ? Phonebook.all() : Phonebook.search(q, { limit }),
+      items: all ? Phonebook.all() : url.searchParams.has('ids') ? ids.map(Phonebook.byId).filter(Boolean) : Phonebook.search(q, { limit }),
       total: Phonebook.count()
     });
   });
@@ -42,7 +44,7 @@ function register(router) {
   router.post('/api/phonebook/check', async (req, res, ctx) => {
     userOnly(ctx);
     const b = await readJson(req);
-    sendJson(res, 200, { duplicates: Phonebook.duplicatesOf({ phone: b.phone, email: String(b.email ?? '').trim().toLowerCase() }, b.id ? Number(b.id) : null) });
+    sendJson(res, 200, { duplicates: Phonebook.duplicatesOf({ phone: b.phone, phone2: b.phone2, fax: b.fax, email: b.email }, b.id ? Number(b.id) : null) });
   });
 
   router.put('/api/phonebook/:id', async (req, res, ctx) => {
@@ -84,8 +86,8 @@ function register(router) {
 
   router.get('/api/phonebook/export', async (req, res, ctx) => {
     userOnly(ctx);
-    const rows = Phonebook.all().map((e) => [e.name, e.phone, e.email, e.note]);
-    const file = Xlsx.build([['שם', 'טלפון', 'מייל', 'הערה'], ...rows], { sheetName: 'אלפון', widths: [26, 16, 30, 40] });
+    const rows = Phonebook.all().map((e) => [e.name, e.phone, e.phone2, e.fax, e.email, e.note]);
+    const file = Xlsx.build([['שם מלא', "טל' 1", "טל' 2", 'פקס', 'מייל', 'הערות'], ...rows], { sheetName: 'אלפון', widths: [26, 16, 16, 16, 30, 40] });
     const stamp = D.nowIso().slice(0, 10);
     res.writeHead(200, {
       'content-type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
