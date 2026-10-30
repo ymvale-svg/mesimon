@@ -45,6 +45,7 @@ const Speech = require('../speech');
 const WaActions = require('./wa-actions');
 const MailInsights = require('./mail-insights');
 const VoiceRouter = require('./voice-router');
+const Phonebook = require('../phonebook');
 
 const GROUP_SKILL = path.join(__dirname, 'skills', 'whatsapp-group-to-tasks.md');
 const CHAT_SKILL = path.join(__dirname, 'skills', 'whatsapp-chat.md');
@@ -689,11 +690,11 @@ function inHours(date = new Date()) {
 // שיחה פרטית — הפעולות
 // ---------------------------------------------------------------------------
 
-const INTENTS = ['create_task', 'my_tasks', 'complete', 'comment', 'project_tasks', 'send_email', 'mail_insights', 'today', 'today_email', 'menu', 'help', 'cancel', 'other'];
+const INTENTS = ['create_task', 'my_tasks', 'complete', 'comment', 'project_tasks', 'send_email', 'mail_insights', 'contact', 'today', 'today_email', 'menu', 'help', 'cancel', 'other'];
 const INSIGHT_ACTIONS = ['list', 'detail', 'reply', 'task', 'follow'];
 
 /** הכוונה ← הפעולה במסך הניהול שמפעילה אותה */
-const ACTION_OF = { menu: 'today', today_email: 'today' };
+const ACTION_OF = { menu: 'today', today_email: 'today', contact: 'phonebook' };
 const actionOf = (intent) => ACTION_OF[intent] ?? intent;
 
 const CHAT_SCHEMA = {
@@ -713,6 +714,7 @@ const CHAT_SCHEMA = {
     insight_action: { type: 'string', enum: INSIGHT_ACTIONS, description: 'בתובנות מהמיילים: מה לעשות. אחרת list' },
     insight_n: { type: 'integer', description: 'בתובנות: מספר המייל ברשימת התובנות האחרונה, או 0' },
     insight_from: { type: 'string', description: 'בתובנות: רק משולח מסוים ("בנק לאומי"), אחרת ריק' },
+    contact_query: { type: 'string', description: 'באיש קשר מהאלפון: את מי לחפש — שם, טלפון או מילה מההערה ("דני כהן", "היועץ הסניטרי"), בלי אותיות שימוש. אחרת ריק' },
     draft: {
       type: 'object',
       properties: {
@@ -728,7 +730,7 @@ const CHAT_SCHEMA = {
       additionalProperties: false
     }
   },
-  required: ['intent', 'ready', 'reply', 'range', 'task_id', 'comment', 'project_id', 'recipient_name', 'recipient_org', 'recipient_email', 'request', 'insight_action', 'insight_n', 'insight_from', 'draft'],
+  required: ['intent', 'ready', 'reply', 'range', 'task_id', 'comment', 'project_id', 'recipient_name', 'recipient_org', 'recipient_email', 'request', 'insight_action', 'insight_n', 'insight_from', 'contact_query', 'draft'],
   additionalProperties: false
 };
 
@@ -887,6 +889,7 @@ async function understand(user, actor, state, text, projects, myOpen) {
     range: RANGES[out.range] ? out.range : 'today',
     taskId: Number(out.task_id) || 0,
     comment: String(out.comment ?? '').trim().slice(0, 2000),
+    contactQuery: String(out.contact_query ?? '').trim().slice(0, 80),
     projectId: projectIds.has(Number(out.project_id)) ? Number(out.project_id) : 0,
     recipient: {
       name: String(out.recipient_name ?? '').trim().slice(0, 80),
@@ -1439,6 +1442,27 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
 
     case 'help':
       return out(helpText(actor), {}, { action: 'help', status: 'ok', result: 'עזרה' });
+
+    /*
+     * איש קשר מהאלפון — הכרטיס המלא, רק השדות שהוזנו. כמה התאמות: עד שלושה
+     * כרטיסים, לפי אותו סדר של החיפוש באפליקציה (שמות קודם, הערות בסוף).
+     */
+    case 'contact': {
+      if (actor.type !== 'user') return out('האלפון הארגוני זמין לעובדים בלבד.', {}, { action: 'phonebook', status: 'denied', result: 'לא עובד' });
+      const q = u.contactQuery;
+      if (!q) return out(u.reply || 'את מי לחפש באלפון?', {}, { action: 'phonebook', status: 'unclear', result: 'לא נאמר את מי' });
+      const found = Phonebook.search(q, { limit: 20 });
+      if (!found.length) {
+        return out(`לא מצאתי באלפון את "${q}". אפשר לחפש לפי שם, טלפון או מילה מההערה.`, {}, { action: 'phonebook', status: 'ok', result: `"${q}": לא נמצא` });
+      }
+      const shown = found.slice(0, 3);
+      const text = [
+        found.length > 1 ? `מצאתי ${found.length} באלפון עבור "${q}":` : null,
+        ...shown.map(Phonebook.cardText),
+        found.length > shown.length ? `ועוד ${found.length - shown.length} — כתבו שם מלא או מילה מההערה.` : null
+      ].filter(Boolean).join('\n\n');
+      return out(text, {}, { action: 'phonebook', status: 'ok', result: `"${q}": ${found.length} בכרטיסים` });
+    }
 
     case 'my_tasks':
       return listReply(u.range);
