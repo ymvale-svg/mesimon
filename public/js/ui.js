@@ -971,17 +971,30 @@ const UI = (() => {
 
   /**
    * סמל המערכת — אריח מעוגל ובתוכו רשימת משימות שהשורה האחרונה בה סומנה.
-   * המוטיב הוא שכבות מוערמות.
+   *
+   * שתי השורות העליונות הן רצועות מוטות בצורת הלוחות שבלוגו של אשל הירדן:
+   * פאה בהירה ופאה מלאה שנפגשות בקו אמצעי, כמו קופסה שרואים מהפינה. זה
+   * הקשר בין המוצר לחברה, בלי להחליף את הטורקיז של המערכת בכחולים שלה —
+   * והצורה פשוטה מספיק כדי להיקרא גם בפאביקון של 16 פיקסלים.
+   *
+   * הגאומטריה זהה לזו שב-tools/make-icons.js ובפאביקון שב-index.html;
+   * שינוי כאן מחייב שינוי גם שם.
+   *
    * variant: 'light' (אריח לבן על רקע כהה) או 'brand' (אריח בצבע המותג על רקע בהיר)
    */
   function logoMark(size = 40, variant = 'brand') {
-    const tile = variant === 'light' ? '#ffffff' : '#0f766e';
-    const ink = variant === 'light' ? '#0f766e' : '#ffffff';
+    const light = variant === 'light';
+    const tile = light ? '#ffffff' : '#0f766e';
+    const ink = light ? '#0f766e' : '#ffffff';
+    // הפאה הבהירה של כל לוח — טורקיז בהיר על האריח הכהה, וגוון ביניים על הלבן
+    const face = light ? '#2dd4bf' : '#5eead4';
     const svg = `
       <svg viewBox="0 0 64 64" width="${size}" height="${size}" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
         <rect x="0" y="0" width="64" height="64" rx="17" fill="${tile}"/>
-        <rect x="15" y="17" width="24" height="5" rx="2.5" fill="${ink}" opacity=".45"/>
-        <rect x="15" y="28" width="16" height="5" rx="2.5" fill="${ink}" opacity=".45"/>
+        <polygon points="15,16.5 27,14 27,20 15,22.5" fill="${face}"/>
+        <polygon points="27,14 40,15.5 40,21.5 27,20" fill="${ink}"/>
+        <polygon points="15,27.5 27,25 27,31 15,33.5" fill="${face}"/>
+        <polygon points="27,25 33,26.5 33,32.5 27,31" fill="${ink}"/>
         <path d="M16 44.5 L25 53 L48 26" fill="none" stroke="${ink}"
               stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
       </svg>`;
