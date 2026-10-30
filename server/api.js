@@ -1036,6 +1036,28 @@ function ownedProjectIds(actor) {
   return new Set(rows.map((r) => r.id));
 }
 
+/**
+ * הפרויקטים שאפשר לפתוח בהם משימה מהבוט ומההקלטה — רק פעילים, ורק "שלי":
+ * פרויקט שאני מנהל, פתחתי, נעצתי או שיש לי בו עבודה, או פרויקט של המחלקה
+ * שלי (המחלקה של מנהל הפרויקט, כולל תתי-מחלקות). לא כל מה שמותר לי לראות:
+ * מנהל מערכת רואה את כל הארגון, ומשימה שנפתחת בקול או בוואטסאפ בפרויקט של
+ * מחלקה אחרת היא כמעט תמיד טעות בזיהוי השם. בדיאלוג המשימה באפליקציה —
+ * שם הבחירה גלויה על המסך — נשארת הרשימה המלאה.
+ */
+function newTaskProjects(actor) {
+  return listProjectsFor(actor).filter((p) => p.status === 'active'
+    && (p.mine || p.pinned || p.myTaskCount > 0 || P.inActorDepartments(actor, p.departmentId)));
+}
+
+/** מי מותר לי לשייך אליו משימה — אותה בדיקה של ‎assertMayAssignTo‎, לכל עובד פעיל */
+function assignableUserIds(actor) {
+  const ids = new Set([actor.id]);
+  for (const u of D.all("SELECT id FROM users WHERE status = 'active' AND role <> 'vendor'")) {
+    try { assertMayAssignTo(actor, 'user', u.id); ids.add(u.id); } catch { /* אין הרשאה */ }
+  }
+  return ids;
+}
+
 function listProjectsFor(actor) {
   const pinned = new Set(
     actor.type === 'user'
@@ -4922,8 +4944,8 @@ const botTaskOps = {
   }
 };
 
-AiApi.register(router, { getTaskOr404, assertVisible, mayOnTask, shapeTask, actorRef, saveAttachment, createTask, assertMayAssignTo, listProjectsFor, botTaskOps });
-TodayApi.register(router, { shapeTask, createTask, getTaskOr404, listProjectsFor, assertMayAssignTo });
+AiApi.register(router, { getTaskOr404, assertVisible, mayOnTask, shapeTask, actorRef, saveAttachment, createTask, assertMayAssignTo, listProjectsFor, newTaskProjects, assignableUserIds, botTaskOps });
+TodayApi.register(router, { shapeTask, createTask, getTaskOr404, listProjectsFor, newTaskProjects, assertMayAssignTo });
 PhonebookApi.register(router);
 MeetingsApi.register(router, { getTaskOr404, assertVisible, shapeTask, canSeeTask });
 Tiful360.register(router, { createTask, saveAttachment, getTaskOr404 });

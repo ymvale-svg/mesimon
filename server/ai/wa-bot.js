@@ -62,7 +62,7 @@ const parseJson = (text, fallback) => { try { return JSON.parse(text); } catch {
  * פעולות שתלויות ב-api.js — מוזרקות משם. ‎tasks‎: רשימות, סגירה והערה עם
  * הרשאות העובד. ‎mail‎: חיפוש נמען ופתיחת משימת AI — אותן פונקציות של האשף.
  */
-const hooks = { createTask: null, listProjectsFor: null, tasks: null, mail: null };
+const hooks = { createTask: null, listProjectsFor: null, newTaskProjects: null, assignableUserIds: null, tasks: null, mail: null };
 
 // ---------------------------------------------------------------------------
 // החיבור
@@ -785,6 +785,7 @@ function draftText(draft, user) {
     `📁 פרויקט: ${project ?? 'ללא'}`,
     draft.priority !== 'normal' ? `⚡ עדיפות: ${PRIORITY[draft.priority]}` : null,
     draft.checklist.length ? `☑ ${draft.checklist.map((c, i) => `${i + 1}. ${c}`).join('\n')}` : null,
+    ...(draft.warnings ?? []).map((w) => `⚠️ ${w}`),
     '',
     'לפתוח? השיבו *כן*, או כתבו מה לתקן.'
   ].filter((l) => l !== null).join('\n');
@@ -834,6 +835,7 @@ function helpText(actor) {
 
 async function understand(user, actor, state, text, projects, myOpen) {
   const users = orgUsers();
+  const { allowedProjects, assignable } = newTaskScope(actor);
   const actions = WaActions.forActor(actor);
   const lastList = state.lastList
     .map((id, i) => ({ n: i + 1, id, title: D.get('SELECT title FROM tasks WHERE id = ?', id)?.title }))
@@ -853,8 +855,8 @@ async function understand(user, actor, state, text, projects, myOpen) {
     'העובדים (מזהה · שם · מחלקה):',
     ...users.map((u) => `${u.id} · ${u.full_name} · ${u.department ?? ''}`),
     '',
-    'הפרויקטים (מזהה · שם):',
-    ...(projects.length ? projects.map((p) => `${p.id} · ${p.name}`) : ['(אין)']),
+    'הפרויקטים (מזהה · שם). ✱ = פרויקט שלו או של המחלקה שלו — רק בהם אפשר לפתוח משימה:',
+    ...(projects.length ? projects.map((p) => `${p.id} · ${p.name}${allowedProjects.has(p.id) ? ' ✱' : ''}`) : ['(אין)']),
     '',
     'המשימות הפתוחות של הכותב (מזהה · כותרת):',
     ...(myOpen.length ? myOpen.map((t) => `${t.id} · ${t.title}`) : ['(אין)']),
@@ -904,12 +906,44 @@ async function understand(user, actor, state, text, projects, myOpen) {
       title: String(d.title ?? '').trim().slice(0, 120),
       summary: String(d.summary ?? '').trim().slice(0, 1500),
       assigneeId: ids.has(Number(d.assignee_user_id)) ? Number(d.assignee_user_id) : 0,
+      // נבדק מול ההרשאות ב-‎checkDraft‎ — כאן רק מה שה-AI הבין
       dueDate: /^\d{4}-\d{2}-\d{2}$/.test(String(d.due_date ?? '')) ? d.due_date : '',
       priority: ['normal', 'high', 'urgent'].includes(d.priority) ? d.priority : 'normal',
       projectId: projectIds.has(Number(d.project_id)) ? Number(d.project_id) : 0,
       checklist: (d.checklist ?? []).map((x) => String(x).trim()).filter(Boolean).slice(0, 8)
     }
   };
+}
+
+/**
+ * מה מותר לכותב בפתיחת משימה: למי לשייך (‎assertMayAssignTo‎ — המחלקה שלו,
+ * אלא אם ההרשאה רחבה יותר) ובאיזה פרויקט (שלו או של המחלקה שלו).
+ */
+function newTaskScope(actor) {
+  return {
+    assignable: hooks.assignableUserIds?.(actor) ?? new Set([actor.id]),
+    allowedProjects: new Set((hooks.newTaskProjects?.(actor) ?? []).map((p) => p.id))
+  };
+}
+
+/**
+ * טיוטת משימה מול ההרשאות, מיד כשהיא נבנית — ולא רק ב"כן": אחראי שאסור
+ * לשייך אליו, או פרויקט שאינו של הכותב, יוצאים מהטיוטה עם הסבר גלוי. לא
+ * מחליפים בשקט: המשימה נשארת אצל הכותב ובלי פרויקט, והוא רואה למה.
+ */
+function checkDraft(actor, draft) {
+  const { assignable, allowedProjects } = newTaskScope(actor);
+  const warnings = [];
+  if (draft.assigneeId && draft.assigneeId !== actor.id && !assignable.has(draft.assigneeId)) {
+    warnings.push(`אין לך הרשאה לשייך משימה ל${nameOf(draft.assigneeId) || 'עובד זה'} — המשימה תיפתח אצלך`);
+    draft = { ...draft, assigneeId: 0 };
+  }
+  if (draft.projectId && !allowedProjects.has(draft.projectId)) {
+    const name = D.get('SELECT name FROM projects WHERE id = ?', draft.projectId)?.name;
+    warnings.push(`הפרויקט ${name ? `"${name}" ` : ''}אינו שלך או של המחלקה שלך — המשימה תיפתח בלי פרויקט`);
+    draft = { ...draft, projectId: 0 };
+  }
+  return { ...draft, warnings };
 }
 
 // ---------------------------------------------------------------------------
@@ -1070,7 +1104,9 @@ function suggestionFeedback(text, suggestions) {
   return picked.length ? `הוסף למייל: ${picked.join('; ')}` : null;
 }
 
-function createFromDraft(actor, draft) {
+function createFromDraft(actor, original) {
+  // בדיקה אחרונה לפני הפתיחה — הרשאות יכולות להשתנות בין הטיוטה ל"כן"
+  const draft = checkDraft(actor, original);
   const assignee = draft.assigneeId || actor.id;
   return hooks.createTask(actor, {
     title: draft.title,
@@ -1417,7 +1453,8 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
           projectId: u.draft.projectId || 0,
           checklist: u.draft.checklist ?? []
         };
-        return out(draftText(draft, user), { draft, awaiting: true }, { action: 'mail_insights', status: 'ok', result: `טיוטת משימה ממייל: ${draft.title}` });
+        const checked = checkDraft(actor, draft);
+        return out(draftText(checked, user), { draft: checked, awaiting: true }, { action: 'mail_insights', status: 'ok', result: `טיוטת משימה ממייל: ${checked.title}` });
       }
       // follow — מייל לשולח, ומשימת AI שעוקבת אחרי התשובה
       if (!WaActions.allowed(actor, 'send_email') || !P.may(actor, 'create_task')) {
@@ -1470,7 +1507,11 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
 
     case 'create_task':
     default:
-      if (u.ready && u.draft.title) return out(draftText(u.draft, user), { draft: u.draft, awaiting: true }, { action: 'create_task', status: 'ok', result: `טיוטה: ${u.draft.title}` });
+      if (u.ready && u.draft.title) {
+        const draft = checkDraft(actor, u.draft);
+        return out(draftText(draft, user), { draft, awaiting: true },
+          { action: 'create_task', status: draft.warnings.length ? 'denied' : 'ok', result: `טיוטה: ${draft.title}${draft.warnings.length ? ` · ${draft.warnings.join(' · ')}` : ''}` });
+      }
       return out(u.reply || 'מה לכתוב בכותרת המשימה?', { draft: u.draft.title ? u.draft : null },
         { action: 'create_task', status: 'unclear', result: 'חסרים פרטים' });
   }
@@ -1914,8 +1955,8 @@ async function tick() {
   }
 }
 
-function init({ createTask, listProjectsFor, tasks, mail }) {
-  Object.assign(hooks, { createTask, listProjectsFor, tasks, mail });
+function init({ createTask, listProjectsFor, newTaskProjects, assignableUserIds, tasks, mail }) {
+  Object.assign(hooks, { createTask, listProjectsFor, newTaskProjects, assignableUserIds, tasks, mail });
 }
 
 function start() {

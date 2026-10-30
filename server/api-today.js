@@ -19,7 +19,7 @@ const WaBot = require('./ai/wa-bot');
 const { badRequest, forbidden, notFound, readJson, sendJson, parseUrl } = require('./http-kit');
 
 function register(router, h) {
-  const { shapeTask, createTask, getTaskOr404, listProjectsFor, assertMayAssignTo } = h;
+  const { shapeTask, createTask, getTaskOr404, newTaskProjects, assertMayAssignTo } = h;
   Today.init({ shapeTask });
 
   const userOnly = (ctx) => {
@@ -114,9 +114,11 @@ function register(router, h) {
 
   // --- משימה מהקלטה ---
 
-  /** הפרויקטים שאפשר לשייך אליהם בקול — שלי קודם, ורק פעילים */
-  const voiceProjects = (actor) => listProjectsFor(actor)
-    .filter((p) => p.mine || p.status === 'active')
+  /**
+   * הפרויקטים שאפשר לשייך אליהם בקול — רק פעילים, ורק שלי או של המחלקה שלי
+   * (‎newTaskProjects‎). שלי קודם.
+   */
+  const voiceProjects = (actor) => newTaskProjects(actor)
     .sort((a, b) => Number(b.mine) - Number(a.mine))
     .slice(0, 300)
     .map((p) => ({ id: p.id, name: p.name }));
@@ -209,7 +211,7 @@ function register(router, h) {
     if (!['user', 'vendor'].includes(aType) || !Number(aId)) throw badRequest('אחראי לא תקין');
     if (!(aType === 'user' && Number(aId) === actor.id)) assertMayAssignTo(actor, aType, Number(aId));
     const projectId = d.projectId ? Number(d.projectId) : null;
-    if (projectId && !voiceProjects(actor).some((p) => p.id === projectId)) throw badRequest('הפרויקט לא נמצא');
+    if (projectId && !voiceProjects(actor).some((p) => p.id === projectId)) throw badRequest('בהקלטה אפשר לפתוח משימה רק בפרויקט שלך או של המחלקה שלך');
     const draft = {
       ...d,
       title,
