@@ -29,6 +29,7 @@ const { router } = require('./api');
 const Today = require('./today');
 const GContacts = require('./google-contacts');
 const Meetings = require('./meetings');
+const Recordings = require('./recordings');
 const { HttpError, sendJson, serveStatic, parseUrl, unauthorized } = require('./http-kit');
 
 const PORT = Number(process.env.PORT ?? 3000);
@@ -98,6 +99,7 @@ server.listen(PORT, HOST, () => {
   Today.start();
   GContacts.start();
   Meetings.start();
+  Recordings.start();
   WaBot.start();
   const nets = os.networkInterfaces();
   const lan = Object.values(nets).flat().find((n) => n && n.family === 'IPv4' && !n.internal);
@@ -142,6 +144,7 @@ const shutdown = () => {
   Today.stop();
   GContacts.stop();
   Meetings.stop();
+  Recordings.stop();
   server.close(() => process.exit(0));
   setTimeout(() => process.exit(0), 2000).unref();
 };

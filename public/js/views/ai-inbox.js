@@ -85,7 +85,11 @@ const AiInboxView = (() => {
     // מוואטסאפ ומהמייל — שני מקורות, אותה הצעה ואותן פעולות
     const rest = pending.filter((s) => !String(s.kind).startsWith('meeting_'));
     const fromChat = rest.filter((s) => s.data.source === 'whatsapp');
-    const fromMail = rest.filter((s) => s.data.source !== 'whatsapp');
+    const fromMeetings = rest.filter((s) => s.data.source === 'meeting');
+    const fromMail = rest.filter((s) => s.data.source !== 'whatsapp' && s.data.source !== 'meeting');
+    if (fromMeetings.length) {
+      sections.push(section('🎥 מהפגישות', 'מה שסוכם בפגישות שהוקלטו — להוסיף למשימות שלך?', fromMeetings.map((s) => suggestionRow(s, reload))));
+    }
     if (fromChat.length) {
       sections.push(section('💬 מקבוצות הוואטסאפ', null, fromChat.map((s) => suggestionRow(s, reload))));
     }
@@ -193,6 +197,14 @@ const AiInboxView = (() => {
   }
 
   function fromLine(s) {
+    if (s.data?.source === 'meeting') {
+      return el('div.mute-sm', {}, [
+        `🎥 מהפגישה "${s.data.meetingTitle}"`,
+        s.receivedAt ? ` · ${UI.relative(s.receivedAt)}` : '',
+        ' · ',
+        el('a', { href: '#', onclick: (e) => { e.preventDefault(); e.stopPropagation(); RecordingsView.open(s.data.recordingId); } }, ['לסיכום ולהקלטה'])
+      ]);
+    }
     if (s.data?.source === 'whatsapp') {
       return el('div.mute-sm', {}, [
         `💬 ${s.data.groupName} · ${s.from.name}`,
@@ -401,7 +413,7 @@ const AiInboxView = (() => {
 
     const ok = el('button.btn.btn-primary', {}, ['✓ יצירת המשימה']);
     const m = UI.modal({
-      title: chat ? '💬 משימה מקבוצת וואטסאפ' : '📧 משימה מהמייל',
+      title: chat ? '💬 משימה מקבוצת וואטסאפ' : d.source === 'meeting' ? '🎥 משימה מהפגישה' : '📧 משימה מהמייל',
       size: 'wide',
       body: el('div', {}, [
         el('div.ai-letter', {}, [

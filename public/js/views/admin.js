@@ -1153,6 +1153,13 @@ const AdminView = (() => {
     meeting_buffer_minutes: ['פגישות: מרווח מפגישה צמודה (דקות)', 'בהצעת מועדים — לא צמוד לפגישה אחרת'],
     meeting_reminder_minutes: ['פגישות: התראה לפני (דקות)', 'במשימון ובבוט הוואטסאפ, עם קישור ה-Zoom'],
     meeting_ai_alternatives: ['פגישות: הצעות AI להזזת פגישות חופפות', 'כבוי = החלופות מסודרות לפי כללים קבועים, בלי AI'],
+    recorder_enabled: ['הקלטת פגישות: פעילה', 'מקליט וירטואלי נכנס לכל פגישת Zoom ביומן של העובדים, והסיכום והמשימות מגיעים אליהם. כבוי = אף פגישה אינה מוקלטת'],
+    recorder_default_on: ['הקלטת פגישות: ברירת המחדל לעובד', 'דלוק = כל העובדים מוקלטים, וכל אחד יכול לבטל לעצמו ב"🎥 הפגישות שלי". כבוי = רק מי שהפעיל לעצמו'],
+    recorder_external_meetings: ['הקלטת פגישות: גם פגישות שמארגן חיצוני קבע', 'Zoom של לקוח או ספק. המקליט נכנס כאורח, וייתכן שהמארח יצטרך לאשר אותו'],
+    recorder_bot_name: ['הקלטת פגישות: שם המקליט בשיחה', 'השם שכל המשתתפים רואים ברשימת המשתתפים של ה-Zoom'],
+    recorder_join_message: ['הקלטת פגישות: הודעה בצ׳אט כשהמקליט נכנס', 'שקיפות כלפי המשתתפים — במיוחד אורחים מחוץ לחברה'],
+    recorder_language: ['הקלטת פגישות: שפת התמלול', 'קוד שפה: he לעברית, en לאנגלית'],
+    recorder_drive_folder: ['הקלטת פגישות: תיקייה בדרייב', 'הקישור לתיקייה ב-Shared Drive הייעודי של החברה. חשבון השירות של משימון צריך להיות חבר בו כ"מנהל תוכן"'],
   };
 
   /**
@@ -1195,9 +1202,46 @@ const AdminView = (() => {
           x.ai.enabled ? 'ניסוח פניות, מעקב והכרעה אם התשובה מספקת.' : 'בלי המפתח האפשרות "משימת AI" אינה זמינה.') : null,
         x.zoom ? row('Zoom של החברה', x.zoom.enabled, `${x.zoom.users} משתמשי Zoom · ${x.zoom.linked} עובדים משויכים`, x.zoom.missing,
           x.zoom.enabled ? 'קישורי Zoom לפגישות שנקבעות ממשימון. שיוך עובד למשתמש Zoom — בכרטיס העובד.' : 'Server-to-Server OAuth ב-Zoom Marketplace — שלושה ערכים לשרת. בלעדיו הפגישות נקבעות בלי Zoom.') : null,
-        x.zoom?.enabled ? zoomUsersBox() : null
+        x.zoom?.enabled ? zoomUsersBox() : null,
+        x.recorder ? row('הקלטת פגישות Zoom', x.recorder.enabled, 'מוגדר', x.recorder.missing,
+          x.recorder.enabled ? 'מקליט וירטואלי נכנס לכל פגישת Zoom ביומנים, הווידאו נשמר בדרייב של החברה וה-AI מסכם ומציע משימות.' : 'חשבון ב-Recall.ai — מפתח API אחד לשרת. בלעדיו הפגישות אינן מוקלטות.') : null,
+        x.recorder?.enabled ? recorderBox() : null
       ])
     ]);
+  }
+
+  /** המקליט: הדרייב, כמה יומנים נקראים, והקלטות שנכשלו */
+  function recorderBox() {
+    const box = el('div', { style: { padding: '10px 0' } }, [el('div.mute-sm', { text: 'בודק את החיבור לדרייב…' })]);
+    const draw = (r) => {
+      const d = r.drive;
+      const driveLine = !d.enabled ? '○ דרייב: חשבון השירות אינו מוגדר (GOOGLE_SERVICE_ACCOUNT_JSON) — ההקלטות נשמרות בשרת בלבד'
+        : !d.folderId ? `○ דרייב: לא נבחרה תיקייה — "הקלטת פגישות: תיקייה בדרייב" למטה. לשתף אותה עם ${d.serviceEmail}`
+          : d.ok ? `✅ דרייב: "${d.name}"${d.shared ? ' (Shared Drive)' : ''}`
+            : `⚠️ דרייב: ${d.error || 'לא נבדק'} — לשתף את התיקייה עם ${d.serviceEmail} כ"מנהל תוכן"`;
+      const c = r.calendars;
+      const scan = el('button.btn.btn-sm', {}, ['⟳ סריקת היומנים עכשיו']);
+      scan.addEventListener('click', async () => {
+        scan.disabled = true;
+        try {
+          const { scan: s } = await API.post('/api/admin/recorder/scan');
+          UI.success(`נסרקו ${s.scanned} יומנים · ${s.found} פגישות Zoom חדשות`);
+          draw(await API.get('/api/admin/recorder'));
+        } catch (err) { scan.disabled = false; UI.error(err); }
+      });
+      UI.mount(box, el('div', {}, [
+        el('div.mute-sm', { text: driveLine }),
+        el('div.mute-sm', {
+          text: c.delegation ? `✅ יומנים: כל ${c.users} העובדים (Domain-Wide Delegation)`
+            : `יומנים: ${c.own} מתוך ${c.users} עובדים חיברו את Google. השאר — לא ייקלטו, אלא אם הם משתתפים בפגישה שנמצאה ביומן של עמית. לכיסוי מלא: GOOGLE_WORKSPACE_DELEGATION`
+        }),
+        r.ai ? null : el('div.mute-sm', { text: '⚠️ בלי ANTHROPIC_API_KEY — הפגישות מוקלטות ומתומללות, אבל לא מסוכמות' }),
+        el('div.mute-sm', { text: `מתוזמנות: ${r.counts.scheduled} · מוכנות: ${r.counts.done} · נכשלו: ${r.counts.failed}${r.lastScan ? ` · סריקה אחרונה: ${UI.relative(r.lastScan.at)}` : ''}` }),
+        r.active ? el('div', { style: { marginTop: '6px' } }, [scan]) : el('div.mute-sm', { text: 'המקליט כבוי — "הקלטת פגישות: פעילה" בהגדרות למטה.' })
+      ]));
+    };
+    API.get('/api/admin/recorder?check=1').then(draw).catch((err) => UI.mount(box, el('div.mute-sm', { text: err.message })));
+    return box;
   }
 
   /** משתמשי ה-Zoom של החברה — רענון מ-Zoom, ומי משויך לכל אחד */

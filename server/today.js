@@ -18,6 +18,7 @@ const W = require('./workdays');
 const Auth = require('./auth');
 const Gmail = require('./gmail');
 const Calendar = require('./calendar');
+const Recordings = require('./recordings');
 const Mailer = require('./mailer');
 const MailScan = require('./ai/mail-scan');
 const { BRAND, escape, shell, button } = require('./mail-templates');
@@ -79,6 +80,10 @@ async function build(actor, { fresh = false } = {}) {
     calendar = { connected: true, events: [], error: 'היומן אינו זמין כרגע' };
     console.error('[משימון] קריאת היומן נכשלה:', err.message);
   }
+
+  // פגישה שהוקלטה — "📝 סיכום" על השורה. אחרי המטמון של היומן: ההקלטה מתעדכנת מהר ממנו
+  const recs = Recordings.forEvents(actor.id, calendar.events.map((e) => e.id));
+  if (recs.size) calendar = { ...calendar, events: calendar.events.map((e) => (recs.has(e.id) ? { ...e, recording: recs.get(e.id) } : e)) };
 
   const now = new Date();
   const upcoming = calendar.events.filter((e) => e.allDay || new Date(e.end) > now);

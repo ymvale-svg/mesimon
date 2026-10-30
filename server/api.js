@@ -20,6 +20,8 @@ const AiApi = require('./api-ai');
 const TodayApi = require('./api-today');
 const PhonebookApi = require('./api-phonebook');
 const MeetingsApi = require('./api-meetings');
+const RecordingsApi = require('./api-recordings');
+const Recordings = require('./recordings');
 const Zoom = require('./zoom');
 const W = require('./workdays');
 const GContacts = require('./google-contacts');
@@ -4074,6 +4076,11 @@ router.get('/api/admin/settings', async (req, res, ctx) => {
         missing: Zoom.missing(),
         users: D.get('SELECT COUNT(*) c FROM zoom_users').c,
         linked: D.get("SELECT COUNT(*) c FROM users WHERE zoom_user_id IS NOT NULL AND status = 'active'").c
+      },
+      // המקליט של פגישות ה-Zoom — הפרטים המלאים ב-‎/api/admin/recorder‎
+      recorder: {
+        enabled: Recordings.isConfigured(),
+        missing: ['RECALL_API_KEY'].filter((k) => !process.env[k])
       }
     },
     storage: {
@@ -4923,6 +4930,7 @@ AiApi.register(router, { getTaskOr404, assertVisible, mayOnTask, shapeTask, acto
 TodayApi.register(router, { shapeTask, createTask, getTaskOr404, listProjectsFor, assertMayAssignTo });
 PhonebookApi.register(router);
 MeetingsApi.register(router, { getTaskOr404, assertVisible, shapeTask, canSeeTask });
+RecordingsApi.register(router);
 Tiful360.register(router, { createTask, saveAttachment, getTaskOr404 });
 
 module.exports = { router, PRIORITIES, shapeTask, canSeeTask };

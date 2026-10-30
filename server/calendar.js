@@ -28,6 +28,8 @@ function selectedCalendars(userId) {
  * קישור מאירוע ביומן — רק https. אירוע יכול להגיע מהזמנה של כל אדם בעולם,
  * וקישור ‎javascript:‎ בתוכו היה רץ בלחיצה בתוך משימון.
  */
+const ZOOM_RE = /https:\/\/(?:[\w-]+\.)*zoom\.(?:us|com)\/(?:j|my|w|s)\/[^\s"'<>)\]\\]+/i;
+
 const safeLink = (url) => (/^https:\/\//i.test(String(url ?? '')) ? String(url) : null);
 
 function shapeEvent(e, calendar) {
@@ -42,7 +44,9 @@ function shapeEvent(e, calendar) {
     end: allDay ? e.end?.date : e.end?.dateTime,
     allDay,
     location: String(e.location ?? ''),
-    meetLink: safeLink(e.hangoutLink ?? e.conferenceData?.entryPoints?.find((p) => p.entryPointType === 'video')?.uri),
+    // Meet, או Zoom — גם כשהקישור רק במיקום או בתיאור של האירוע
+    meetLink: safeLink(e.hangoutLink ?? e.conferenceData?.entryPoints?.find((p) => p.entryPointType === 'video')?.uri
+      ?? String(`${e.location ?? ''} ${e.description ?? ''}`).replace(/&amp;/g, '&').match(ZOOM_RE)?.[0]),
     link: safeLink(e.htmlLink),
     declined: self?.responseStatus === 'declined',
     // נוצר על ידי משימון — מסומן לפיצ'רים שכותבים ליומן

@@ -562,6 +562,8 @@ const App = (() => {
   const ROUTES = {
     today: { label: 'Today', icon: 'my-tasks', render: (c) => TodayView.render(c) },
     calendar: { label: 'יומן', icon: 'my-tasks', render: (c) => CalendarView.render(c) },
+    // הקלטות פגישות ה-Zoom, הסיכומים והמשימות שעלו בהן — לכל עובד
+    recordings: { label: 'הפגישות שלי', icon: 'my-tasks', render: (c) => RecordingsView.render(c) },
     home: { label: 'דף הבית', icon: 'home', render: (c) => HomeView.render(c) },
     board: { label: 'לוח המשימות', icon: 'board', render: (c, p) => BoardView.render(c, { ...p, scope: 'internal' }) },
     vendorBoards: { label: 'כל משימות הספקים', icon: 'vendors', render: (c, p) => BoardView.render(c, { ...p, scope: 'vendors' }) },
@@ -1850,6 +1852,7 @@ const App = (() => {
     add('home');
     // יומן — למזכירות בלבד (הסימון בכרטיס העובד)
     if (state.actor.secretary) add('calendar', {}, { icon: el('span.nav-emoji', { text: '📅' }) });
+    add('recordings', {}, { icon: el('span.nav-emoji', { text: '🎥' }) });
     add('board');
     if (may('view_vendor_boards')) add('vendorBoards');
 
@@ -2381,6 +2384,7 @@ const App = (() => {
   const RELOADABLE = {
     today: () => TodayView.reload(),
     calendar: () => CalendarView.reload(),
+    recordings: () => RecordingsView.reload(),
     home: () => (isPhone() && !isVendor() ? MobileView.reload() : HomeView.reload()),
     board: () => BoardView.reload({ silent: true }),
     vendorBoards: () => BoardView.reload({ silent: true }),

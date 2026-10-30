@@ -161,6 +161,12 @@ const TodayView = (() => {
         ]),
         el('div.today-actions', {}, [
           e.meetLink && !past ? el('a.btn.btn-sm', { href: e.meetLink, target: '_blank', rel: 'noopener', title: 'הצטרפות לשיחה' }, ['🎥']) : null,
+          // פגישה שהמקליט היה בה — ההקלטה, הסיכום והמשימות שעלו בה
+          e.recording && past ? el(`button.btn.btn-sm${e.recording.hasSummary ? '.btn-primary' : ''}`, {
+            title: e.recording.hasSummary ? 'ההקלטה, הסיכום והמשימות שעלו בפגישה' : `ההקלטה: ${e.recording.statusLabel}`,
+            onclick: () => RecordingsView.open(e.recording.id)
+          }, [e.recording.hasSummary ? '📝 סיכום' : `🎥 ${e.recording.statusLabel}`]) : null,
+          e.recording && !past && e.recording.status === 'recording' ? el('span.rec-badge.rec-live', { text: '🔴 מוקלטת' }) : null,
           e.link ? el('a.btn.btn-sm.btn-ghost', { href: e.link, target: '_blank', rel: 'noopener', title: 'פתיחה ב-Google Calendar' }, ['↗']) : null,
           el('button.btn.btn-sm', {
             title: 'משימה חדשה מהפגישה — מעקב, סיכום, מה שסוכם',

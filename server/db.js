@@ -797,6 +797,53 @@ CREATE TABLE IF NOT EXISTS zoom_users (
   synced_at  TEXT
 );
 
+/*
+ * הקלטות פגישות Zoom. כל קישור Zoom שנמצא ביומן של עובד הופך לשורה אחת —
+ * גם כשהפגישה מופיעה ביומנים של כמה עובדים (‎dedupe_key‎: מספר הפגישה + המועד).
+ * המקליט הווירטואלי (‎recall.js‎) נכנס לשיחה, הווידאו עובר לדרייב הייעודי של
+ * החברה, וה-AI מוציא סיכום אופרטיבי והצעות משימה לכל אחד מהמשתתפים.
+ *
+ * ‎status‎: scheduled | joining | recording | processing | done | failed | cancelled | skipped
+ */
+CREATE TABLE IF NOT EXISTS recordings (
+  id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+  dedupe_key         TEXT    NOT NULL UNIQUE,
+  title              TEXT    NOT NULL DEFAULT '',
+  join_url           TEXT    NOT NULL,
+  start_at           TEXT    NOT NULL,
+  end_at             TEXT    NOT NULL,
+  organizer_email    TEXT    NOT NULL DEFAULT '',
+  attendees          TEXT    NOT NULL DEFAULT '[]',     -- [{ email, name }]
+  status             TEXT    NOT NULL DEFAULT 'scheduled',
+  skipped_by         INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  bot_id             TEXT,
+  bot_status         TEXT    NOT NULL DEFAULT '',
+  error              TEXT    NOT NULL DEFAULT '',
+  attempts           INTEGER NOT NULL DEFAULT 0,
+  drive_folder_id    TEXT,
+  drive_video_id     TEXT,
+  drive_video_link   TEXT,
+  drive_transcript_id TEXT,
+  local_video        TEXT,
+  video_size         INTEGER,
+  transcript         TEXT    NOT NULL DEFAULT '',
+  summary            TEXT,                              -- JSON: סיכום, החלטות, משימות, שאלות פתוחות
+  seen_at            TEXT,                              -- הפעם האחרונה שנמצאה ביומן כלשהו
+  finished_at        TEXT,
+  created_at         TEXT    NOT NULL,
+  updated_at         TEXT    NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_recordings_status ON recordings(status, start_at);
+
+/* מי רואה את ההקלטה: מי שהפגישה ביומן שלו, ומשתתף מהארגון לפי המייל */
+CREATE TABLE IF NOT EXISTS recording_access (
+  recording_id  INTEGER NOT NULL REFERENCES recordings(id) ON DELETE CASCADE,
+  user_id       INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  event_id      TEXT,                                   -- האירוע ביומן של העובד, לקישור ממסך Today
+  PRIMARY KEY (recording_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_recording_access_user ON recording_access(user_id, event_id);
+
 /* כתובות שעליהן המשתמש אמר "לא, תודה" להצעה לשמור באנשי הקשר — לא שואלים שוב */
 CREATE TABLE IF NOT EXISTS contact_save_dismissed (
   user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -1043,6 +1090,15 @@ const DEFAULT_SETTINGS = {
   meeting_buffer_minutes: 10,              // מרווח מפגישה צמודה בהצעת מועדים
   meeting_reminder_minutes: 10,            // כמה דקות לפני — התראה ובוט הוואטסאפ
   meeting_ai_alternatives: true,           // הצעות AI להזזת פגישות חופפות
+
+  /* הקלטת פגישות Zoom — המקליט של משימון (‎recordings.js‎) */
+  recorder_enabled: true,                  // כבוי = אף פגישה אינה מוקלטת
+  recorder_default_on: true,               // ברירת המחדל לעובד; כל אחד יכול לבטל לעצמו
+  recorder_external_meetings: true,        // גם פגישות Zoom שהמארגן שלהן מחוץ לחברה
+  recorder_bot_name: 'משימון — מקליט הפגישה',
+  recorder_join_message: 'שלום, אני המקליט של משימון. הפגישה מוקלטת, והסיכום יישלח למשתתפים מהחברה.',
+  recorder_language: 'he',                 // שפת התמלול
+  recorder_drive_folder: '',               // התיקייה בדרייב הייעודי — מזהה או קישור
 
   ai_mail_scan_enabled: true,
   ai_scan_time: '07:00',                   // ריצת הבוקר, שעון ישראל
