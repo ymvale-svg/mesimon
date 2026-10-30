@@ -382,22 +382,55 @@ const LoginView = (() => {
       }
     }
 
-    const form = el('form', { onsubmit: submit }, [
+    const form = el('form.login-form', { onsubmit: submit, id: 'login-email-form' }, [
       UI.field('כתובת אימייל', emailInput),
       UI.field('סיסמה', passwordField(passInput)),
-      errorBox,
       button
     ]);
 
-    // כניסה עם Google מוצגת רק אם הוגדרה בשרת
-    const googleSlot = el('div');
+    /*
+     * Google היא הדרך הראשית להתחבר, ואימייל וסיסמה הם הדרך המשנית.
+     *
+     * לכן כשהכניסה עם Google מוגדרת בשרת היא כפתור גדול בראש, והטופס מקופל
+     * מאחורי כפתור טקסט קטן — מי שצריך אותו (ספק, חשבון ללא Google) פותח
+     * אותו בלחיצה. כשהיא לא מוגדרת אין שום דבר לקפל: הטופס מוצג כרגיל והוא
+     * הכפתור הראשי, אחרת המסך היה מציג דרך כניסה ראשית שאינה קיימת.
+     *
+     * עד שהשרת עונה לא מוצג אף אחד מהשניים (‎is-pending‎), כדי שהטופס לא
+     * יהבהב ואז ייעלם. אם התשובה מתעכבת או נכשלת — הטופס מוצג; הכניסה
+     * עצמה לא תלויה ב-Google.
+     */
+    const googleSlot = el('div.google-slot');
+    const methods = el('div.login-methods.is-pending', {}, [googleSlot, form]);
+
+    const showFormOnly = () => {
+      methods.classList.remove('is-pending');
+      emailInput.focus();
+    };
+    const fallback = setTimeout(showFormOnly, 1500);
+
     fetch('/api/branding').then((r) => r.json()).then((b) => {
-      if (!b.googleLogin) return;
+      clearTimeout(fallback);
+      if (!b.googleLogin) { showFormOnly(); return; }
+
+      const toggle = el('button.email-toggle', {
+        type: 'button', 'aria-expanded': 'false', 'aria-controls': 'login-email-form'
+      }, ['כניסה עם אימייל וסיסמה']);
+      toggle.addEventListener('click', () => {
+        form.hidden = false;
+        toggle.setAttribute('aria-expanded', 'true');
+        toggle.hidden = true;
+        emailInput.focus();
+      });
+
+      form.hidden = true;
+      // הכפתור של הטופס כבר אינו הראשי — Google היא הראשית, ושני כפתורים
+      // מלאים זה מתחת לזה היו מתחרים על העין
+      button.classList.remove('btn-primary');
       UI.mount(googleSlot,
-        el('div.or-divider', {}, [el('span', { text: 'או' })]),
-        el('a.btn.btn-block.google-btn', { href: '/api/auth/google/start' }, [
+        el('a.btn.btn-block.google-btn.google-btn-lg', { href: '/api/auth/google/start' }, [
           el('span.google-mark', {
-            html: `<svg viewBox="0 0 48 48" width="18" height="18" xmlns="http://www.w3.org/2000/svg">
+            html: `<svg viewBox="0 0 48 48" width="22" height="22" xmlns="http://www.w3.org/2000/svg">
               <path fill="#4285F4" d="M45.1 24.5c0-1.6-.1-3.2-.4-4.7H24v8.9h11.8c-.5 2.7-2 5-4.4 6.6v5.5h7.1c4.2-3.8 6.6-9.5 6.6-16.3z"/>
               <path fill="#34A853" d="M24 46c6 0 11-2 14.5-5.2l-7.1-5.5c-2 1.3-4.5 2.1-7.4 2.1-5.7 0-10.5-3.8-12.2-9H4.5v5.7C8 41.3 15.4 46 24 46z"/>
               <path fill="#FBBC05" d="M11.8 28.4c-.4-1.3-.7-2.7-.7-4.4s.3-3.1.7-4.4v-5.7H4.5C2.9 17.1 2 20.4 2 24s.9 6.9 2.5 10.1l7.3-5.7z"/>
@@ -405,9 +438,11 @@ const LoginView = (() => {
             </svg>`
           }),
           'כניסה עם חשבון Google'
-        ])
+        ]),
+        toggle
       );
-    }).catch(() => {});
+      methods.classList.remove('is-pending');
+    }).catch(showFormOnly);
 
     // הודעת שגיאה שחוזרת מזרימת Google
     const googleError = new URLSearchParams(location.search).get('googleError');
@@ -431,8 +466,9 @@ const LoginView = (() => {
         UI.companyLogo('on-panel'),
         el('h2', { text: 'ברוכים הבאים' }),
         el('p.muted', { text: 'התחברו כדי להמשיך לניהול המשימות והפרויקטים.' }),
-        form,
-        googleSlot
+        // השגיאה מחוץ לטופס: שגיאה שחוזרת מ-Google צריכה להיראות גם כשהטופס מקופל
+        errorBox,
+        methods
       ]),
       heroEl
     ]);
@@ -441,7 +477,6 @@ const LoginView = (() => {
     UI.refitLogos();
     hero = bindHero(heroEl, canvas, mark);
     hero.start();
-    emailInput.focus();
   }
 
   return { render };
