@@ -1055,9 +1055,20 @@ const AdminView = (() => {
   function vendorDialog(vendor = null) {
     const isEdit = !!vendor;
     const nameInput = el('input', { type: 'text', value: vendor?.name ?? '' });
-    const contactInput = el('input', { type: 'text', value: vendor?.contactName ?? '' });
     const emailInput = el('input', { type: 'email', value: vendor?.email ?? '' });
     const phoneInput = el('input', { type: 'text', value: vendor?.phone ?? '' });
+    /*
+     * איש הקשר — עם השלמה מהאלפון הארגוני ומשאר אנשי הקשר: בחירה ממלאת גם
+     * טלפון ומייל, רק לשדות שעוד ריקים, כדי לא לדרוס פרטים שכבר הוזנו לספק.
+     */
+    const contactPicker = ContactPicker.create({
+      value: vendor?.contactName ?? '',
+      onPick: (c) => {
+        if (!phoneInput.value.trim() && c.phone) phoneInput.value = c.phone;
+        if (!emailInput.value.trim() && c.email) emailInput.value = c.email;
+      }
+    });
+    const contactInput = contactPicker.input;
     const statusSelect = UI.select([{ value: 'active', label: 'פעיל' }, { value: 'suspended', label: 'מושהה' }], vendor?.status ?? 'active');
     const readOnlyCheck = el('input', { type: 'checkbox', checked: !!vendor?.readOnly });
     const passInput = el('input', { type: 'text', placeholder: isEdit ? 'השאר ריק כדי לא לשנות' : '1234' });
@@ -1067,7 +1078,7 @@ const AdminView = (() => {
       title: isEdit ? `עריכת ספק — ${vendor.name}` : 'ספק חדש',
       body: el('div', {}, [
         UI.field('שם ספק / חברה', nameInput),
-        el('div.row', {}, [UI.field('איש קשר', contactInput), UI.field('טלפון', phoneInput)]),
+        el('div.row', {}, [UI.field('איש קשר', contactPicker.node), UI.field('טלפון', phoneInput)]),
         UI.field('אימייל', emailInput, 'משמש לכניסה לפורטל הספקים'),
         el('div.row', {}, [UI.field('סטטוס', statusSelect), UI.field('סיסמה', passInput)]),
         el('div.field', {}, [el('label.checkbox', {}, [readOnlyCheck, 'הרשאת צפייה בלבד (ללא יכולת עדכון)'])]),

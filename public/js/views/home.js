@@ -75,7 +75,7 @@ const HomeView = (() => {
    * הסדר שכאן הוא ברירת המחדל, וכל מפתח שאינו מוכר מסונן — כך העדפה שנשמרה
    * לפני שכרטיס נולד אינה מסתירה אותו לנצח.
    */
-  const CARD_ORDER = ['aiInbox', 'deptCut', 'myTasks', 'calendar', 'department', 'mentions', 'done', 'phonebook', 'approval', 'feed'];
+  const CARD_ORDER = ['aiInbox', 'deptCut', 'myTasks', 'calendar', 'department', 'mentions', 'done', 'approval', 'feed'];
   const CARD_LABEL = {
     aiInbox: 'ממתין לאישורך',
     deptCut: 'חתך מחלקתי',
@@ -85,8 +85,7 @@ const HomeView = (() => {
     mentions: 'תויגת בהודעות',
     done: 'הושלמו לאחרונה',
     approval: 'ממתין לאישור',
-    feed: 'פיד עדכונים אחרון',
-    phonebook: 'אלפון'
+    feed: 'פיד עדכונים אחרון'
   };
   /*
    * שורת הסבר לכל חלון, לדיאלוג "אילו חלונות להציג". שם החלון לבדו אינו
@@ -1261,9 +1260,7 @@ const HomeView = (() => {
       approval: App.may('approve_vendor_output') || App.isVendor()
         ? approvalCard(data.tasks.awaitingApproval)
         : null,
-      feed: feedCard(data.feed),
-      // אלפון ארגוני — לעובדים בלבד
-      phonebook: App.isVendor() ? null : PhonebookView.card()
+      feed: feedCard(data.feed)
     };
 
     /*

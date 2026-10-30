@@ -2378,6 +2378,9 @@ const App = (() => {
      * לגמרי — ואז גם הכותרת "פרויקטים" מיותרת ולא נבנית, כדי שלא תישאר
      * כותרת תלויה באוויר בלי דבר תחתיה.
      */
+    // האלפון הארגוני — שורת חיפוש מעל "פרויקטים", בכל המסכים
+    items.push(PhonebookView.sidebarSearch());
+
     if (openProjects.length || foreign || may('create_project')) {
       items.push(el('div.nav-group.with-action', {}, [
         el('span', { text: 'פרויקטים' }),

@@ -108,6 +108,18 @@ const ContactPicker = (() => {
     return { node, input };
   }
 
+  /** נייד ישראלי (05X) — רק אליו יוצא וואטסאפ */
+  const isMobile = (p) => /^05\d{8}$/.test(String(p ?? '').replace(/\D/g, '').replace(/^972/, '0'));
+
+  /**
+   * הטלפון לשדה וואטסאפ: הנייד של איש הקשר, ואם אין לו נייד — ריק. טלפון
+   * משרד או פקס אינם מקבלים וואטסאפ, ועדיף שדה ריק ממספר שלא יגיע אליו כלום.
+   */
+  const mobileOf = (c) => c?.mobile ?? [c?.phone, ...(c?.phones ?? []).map((p) => p.value)].find((p) => p && isMobile(p)) ?? '';
+
+  /** אותו איש קשר, רק עם הניידים שלו — לבחירה בין מספרים בשדה וואטסאפ */
+  const mobilesOnly = (c) => ({ ...c, phone: mobileOf(c), phones: (c?.phones ?? []).filter((p) => isMobile(p.value)) });
+
   /**
    * לאיש קשר כמה מיילים או טלפונים — בחירה קטנה ("עבודה / נייד"). מחזיר ‎null‎
    * כשיש אחד בלבד מכל סוג.
@@ -188,5 +200,5 @@ const ContactPicker = (() => {
     return box;
   }
 
-  return { create, variants, saveDialog, suggestion, SOURCE };
+  return { create, variants, saveDialog, suggestion, SOURCE, isMobile, mobileOf, mobilesOnly };
 })();

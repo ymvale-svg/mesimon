@@ -806,7 +806,7 @@ CREATE TABLE IF NOT EXISTS contact_save_dismissed (
 );
 
 /*
- * אלפון ארגוני — טלפונים ומיילים משותפים לכל העובדים. כל עובד רואה, מוסיף,
+ * אלפון ארגוני — טלפונים, פקס ומיילים משותפים לכל העובדים. כל עובד רואה, מוסיף,
  * משנה ומוחק; נשמר מי יצר ומי שינה לאחרונה. ‎phone_digits‎ — הטלפון בספרות
  * בלבד ובקידומת ישראלית מקומית (0…), לחיפוש ולזיהוי כפילויות.
  */
@@ -1350,6 +1350,9 @@ function migrate() {
   addColumn('wa_groups', 'participants_at', 'TEXT');
   // הרשימה האחרונה שהבוט שלח בפרטי — כדי ש"סיימתי את 2" יידע מה זה 2
   addColumn('wa_chats', 'last_list', "TEXT NOT NULL DEFAULT '[]'");
+  // אלפון: טל' 2 ופקס (הטלפון הקיים הוא טל' 1)
+  addColumn('phonebook', 'phone2', "TEXT NOT NULL DEFAULT ''");
+  addColumn('phonebook', 'fax', "TEXT NOT NULL DEFAULT ''");
   // היום שבו הבוט כבר פתח את השיחה ב-Today ובתפריט — הודעה ראשונה ביום פותחת בהם
   addColumn('wa_chats', 'greeted_on', "TEXT NOT NULL DEFAULT ''");
   // רשימת התובנות מהמיילים שנשלחה לו, ובקשות מאותה הקלטה שממתינות בתור

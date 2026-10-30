@@ -115,14 +115,15 @@ function register(router, h) {
       for (const e of Phonebook.search(q, { limit: 10 })) {
         const colleague = e.email ? D.get("SELECT id FROM users WHERE lower(email) = ? AND status = 'active'", e.email) : null;
         if (colleague) continue;  // עובד — מופיע כעובד, עם המשמעות שלו במשימון
+        const two = e.phone && e.phone2;
         add({
           type: 'external', refId: null, source: 'phonebook',
-          name: e.name, email: e.email, phone: e.phone,
+          name: e.name, email: e.email, phone: e.phone || e.phone2,
           emails: e.email ? [{ value: e.email, label: '' }] : [],
-          phones: e.phone ? [{ value: e.phone, label: '' }] : [],
+          phones: [[e.phone, two ? "טל' 1" : ''], [e.phone2, "טל' 2"]].filter(([v]) => v).map(([value, label]) => ({ value, label })),
           organization: e.note,
           unsaved: canSave && !GContacts.isSaved(actor.id, { email: e.email, phone: e.phone })
-        }, keysOf([e.email].filter(Boolean), [e.phone].filter(Boolean)));
+        }, keysOf([e.email].filter(Boolean), [e.phone, e.phone2].filter(Boolean)));
       }
     }
 
@@ -150,7 +151,15 @@ function register(router, h) {
         unsaved: canSave && g.source === 'other'
       }, keysOf(g.emails.map((e) => e.value), g.phones.map((p) => p.value)));
     }
-    return out.slice(0, 20);
+    /*
+     * ‎mobile‎ — הנייד (05X) מבין המספרים, לכל מקור. שדה וואטסאפ מתמלא רק
+     * ממנו: טלפון משרד או פקס אינם מקבלים וואטסאפ, ועדיף שדה ריק משליחה
+     * למספר שלא יגיע אליו כלום.
+     */
+    return out.slice(0, 20).map((c) => ({
+      ...c,
+      mobile: [c.phone, ...(c.phones ?? []).map((p) => p.value)].find((p) => p && Phonebook.isMobile(p)) ?? ''
+    }));
   }
 
   router.get('/api/ai/contacts', async (req, res, ctx) => {
