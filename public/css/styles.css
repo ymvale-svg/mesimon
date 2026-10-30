@@ -19,12 +19,22 @@
 
   --text: #0f172a;
   --text-soft: #475569;
-  --text-mute: #94a3b8;
+  /*
+   * הטקסט המושתק נמדד, לא נוחש. הערך הקודם (‎#94a3b8‎) עמד על 2.56:1 על
+   * לבן ו-2.23:1 על הרקע — כלומר כל ‎.mute-sm‎, כל תאריך יעד וכל כותרת
+   * עמודה היו מתחת לסף הקריאות. ‎#5b6b80‎: ‏5.44 על לבן, 5.12 על
+   * ‎--surface-2‎, 4.74 על ‎--bg‎ ו-4.83 על ‎--brand-light‎ — מעל 4.5 בכולם,
+   * ועדיין בהיר מ-‎--text-soft‎ (7.58) כך שההיררכיה נשמרת.
+   */
+  --text-mute: #5b6b80;
 
   --danger: #dc2626;
   --danger-bg: #fef2f2;
   --warn: #d97706;
   --warn-bg: #fffbeb;
+  /* ‎--warn‎ ו-‎--ok‎ כטקסט על לבן הם 3.2:1 ו-3.3:1 — לאייקונים ולרקעים בלבד. לטקסט: 5.0:1 */
+  --warn-text: #b45309;
+  --ok-text: #15803d;
   --ok: #16a34a;
   --ok-bg: #f0fdf4;
   --info: #2563eb;
@@ -133,8 +143,9 @@ textarea { resize: vertical; min-height: 76px; }
   line-height: 1.12; text-transform: uppercase; white-space: nowrap;
 }
 /* הרוחב מחושב ב-JS כך שיהיה זהה לרוחב MESIMON שמעליו */
+/* 12 ולא 11 — רצפת הקריאות של המערכת כולה; הריווח בין האותיות נמתח ב-JS ממילא */
 .app-logo-tagline {
-  font-size: 11px; opacity: .82; line-height: 1.3;
+  font-size: 12px; opacity: .82; line-height: 1.3;
   white-space: nowrap; margin-top: 1px;
 }
 
@@ -259,6 +270,14 @@ textarea { resize: vertical; min-height: 76px; }
 }
 .brand { display: flex; align-items: center; color: var(--brand-dark); }
 .brand .app-logo-tagline { color: var(--text-mute); opacity: 1; font-weight: 500; }
+/*
+ * בסרגל הכיתוב נשאר 12 גם כשהוא רחב מעט מ-MESIMON שמעליו. ההתאמה ב-ui.js
+ * (fitTaglineToName) מקטינה אותו עד שרוחבו שווה לשם — וכאן זה הוריד אותו
+ * ל-10 פיקסלים, אפור, בראש כל מסך. התאמת רוחב היא קישוט, וקריאות אינה:
+ * ‎!important‎ גובר על הגודל שההתאמה כותבת בשורה, והריווח בין האותיות
+ * שהיא מוסיפה ממילא אינו חל כשהכיתוב רחב מהשם.
+ */
+.brand .app-logo-tagline { font-size: 12px !important; }
 
 /*
  * שדה החיפוש.
@@ -304,11 +323,17 @@ textarea { resize: vertical; min-height: 76px; }
  * הרוחב מוגן ב-‎min‎ כדי שהשדה לא ידרוך על הסמל או על הפעולות; מתחת לרוחב
  * הזה הוא חוזר לזרימה הרגילה בין המרווחים.
  */
-@media (min-width: 1120px) {
+/*
+ * השמורה היא 1010 ולא 680, והסף 1400 ולא 1120: 680 הניחו שקבוצת הפעולות
+ * צרה מ-340 פיקסלים, אבל Today, הקלטה, "משימה חדשה", הפעמון וכפתור המשתמש
+ * תופסים כ-490 — ובין 1120 ל-1400 השדה הממורכז ישב על כפתור Today. מתחת
+ * ל-1400 השדה בזרימה בין המרווחים, ושם הוא מתכווץ ואינו יכול לחפוף.
+ */
+@media (min-width: 1400px) {
   .topbar { position: relative; }
   .global-search {
     position: absolute; left: 50%; transform: translateX(-50%);
-    flex: none; width: min(520px, calc(100% - 680px));
+    flex: none; width: min(520px, calc(100% - 1010px));
   }
 }
 .search-results {
@@ -344,10 +369,32 @@ textarea { resize: vertical; min-height: 76px; }
   font-size: 10.5px; font-weight: 700; display: grid; place-items: center;
 }
 
-.user-chip { display: flex; align-items: center; gap: 9px; padding: 5px 8px 5px 12px; border-radius: 999px; border: 1px solid var(--border); background: var(--surface-2); cursor: pointer; }
+/*
+ * ‎flex: none‎ ותקרת רוחב: קודם לכן הסרגל דחס את הכפתור, והשם נשבר לשלוש
+ * שורות ("אבי / כהן / אדמין על"). עכשיו כל שורה נשארת שורה, ושם ארוך
+ * מתקצר בשלוש נקודות ונשאר מלא ב-‎title‎. הריפוד בתכונות לוגיות — העיגול
+ * בצד ההתחלה, הטקסט בצד הסוף, בכל כיוון כתיבה.
+ */
+.user-chip {
+  display: flex; align-items: center; gap: 9px; flex: none; max-width: 220px;
+  padding-block: 5px; padding-inline: 6px 12px;
+  border-radius: 999px; border: 1px solid var(--border); background: var(--surface-2); cursor: pointer;
+  text-align: start;
+}
 .user-chip:hover { border-color: var(--border-strong); }
+.user-chip .uc-text { min-width: 0; }
+.user-chip .name, .user-chip .role { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .user-chip .name { font-weight: 600; font-size: 13px; line-height: 1.15; }
-.user-chip .role { font-size: 11px; color: var(--text-mute); line-height: 1.15; }
+.user-chip .role { font-size: 12px; color: var(--text-mute); line-height: 1.15; }
+/*
+ * מתחת ל-1100 פיקסלים הסרגל מחזיק חיפוש, Today, הקלטה, משימה חדשה
+ * ופעמון — ואין מקום לשם. העיגול לבדו, והשם עבר ל-‎aria-label‎ ול-‎title‎
+ * (ראה app.js). אותו כלל שהטלפון כבר מחיל ב-mobile.css.
+ */
+@media (max-width: 1100px) {
+  .user-chip { padding: 4px; }
+  .user-chip .uc-text { display: none; }
+}
 
 .avatar {
   width: 30px; height: 30px; border-radius: 50%; flex: none;
@@ -411,7 +458,12 @@ textarea { resize: vertical; min-height: 76px; }
 .main { flex: 1; min-width: 0; overflow: auto; padding: 20px 22px 40px; }
 
 .page-head { display: flex; align-items: flex-start; gap: 14px; margin-bottom: 18px; flex-wrap: wrap; }
-.page-head h2 { font-size: 22px; }
+/*
+ * כותרת העמוד היא ‎h1‎ (עד כה ‎h2‎, וכך לעמוד לא הייתה כותרת ראשית כלל).
+ * שתיהן מעוצבות זהה, כי לא כל המסכים עברו — ‎h2‎ נשאר בעמודים שבונים את
+ * כותרתם בעצמם, ושני הגדלים היו נראים כשתי מערכות.
+ */
+.page-head h1, .page-head h2 { font-size: 22px; }
 .page-head .sub { color: var(--text-soft); font-size: 13px; margin-top: 2px; }
 .page-head .spacer { flex: 1; }
 
@@ -419,8 +471,15 @@ textarea { resize: vertical; min-height: 76px; }
 
 .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); box-shadow: var(--shadow-sm); }
 .card-pad { padding: 16px; }
-.card-head { padding: 13px 16px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 10px; }
-.card-head h3 { font-size: 15px; }
+.card-head { padding: 13px 16px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 10px; flex-wrap: wrap; row-gap: 8px; }
+/*
+ * הכותרת אינה מתכווצת מתחת לטקסט שלה, וזה התיקון לכל כותרות הכרטיסים
+ * (גם בדוחות): בשורה צפופה ה-‎h3‎ היה הפריט היחיד שיכול לשבור שורות, ולכן
+ * הוא זה שהתכווץ — לעמודה של מילה בשורה. עכשיו ‎flex-wrap‎ על השורה מעביר
+ * את הפקדים לשורה הבאה במקום לדחוס את הכותרת, והשלוש-נקודות הן מוצא אחרון
+ * רק כשהכותרת לבדה רחבה מהכרטיס.
+ */
+.card-head h3 { font-size: 15px; flex-shrink: 0; max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .card-head .spacer { flex: 1; }
 
 /* ---- לוח החלונות בדף הבית ---- */
@@ -501,6 +560,17 @@ textarea { resize: vertical; min-height: 76px; }
   .home-slot.has-list { transition: none; }
 }
 .home-slot > .card { flex: 1; min-width: 0; }
+/*
+ * כל חלון הוא מכל לשאילתות רוחב (‎@container slot‎ למטה), כי הרוחב שקובע
+ * את הפריסה בתוכו הוא רוחב החלון ולא רוחב המסך: חלון של 300 פיקסלים יושב
+ * גם במסך של 1920, ושאילתת מדיה הייתה רואה שם מסך רחב ופורסת שבע עמודות.
+ *
+ * על הכרטיס ולא על ‎.home-slot‎: הכלה של רוחב הופכת את האלמנט לבסיס של
+ * ‎z-index‎ ושל ‎position: fixed‎. על החלון זה היה נוגע בידיות הגודל
+ * שתלויות בו ובהרמה בזמן גרירה; בכרטיס אין אף אחד מהם. הגובה אינו מוכל —
+ * רק הרוחב — ולכן התקרה של ‎--slot-h‎ ומדידת הגלילה עובדות כמקודם.
+ */
+.home-slot > .card { container: slot / inline-size; }
 .home-slot.has-list > .card { display: flex; flex-direction: column; min-height: 0; }
 .home-slot.has-list > .card > .card-pad { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
 .home-slot.has-list .task-table { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
@@ -516,25 +586,59 @@ textarea { resize: vertical; min-height: 76px; }
  */
 
 /*
- * כלי החלון יושבים בכותרת הקיימת, ולא בשורה נוספת: שמונה שורות כלים
- * קבועות היו חונקות דף שכל תכליתו תמונת מצב במבט אחד.
+ * כותרת החלון: הכותרת ותת-הכותרת, ואחריהן קבוצת הפקדים (ראה headActions
+ * ב-home.js).
  *
- * ‎opacity: .4‎ ולא 0. קודם לכן הם היו שקופים לחלוטין עד ריחוף, כלומר מי
- * שלא ריחף במקרה מעל כותרת לא ידע שהחלונות ניתנים לסידור, לשינוי גודל
- * ולהסתרה — הפיצ'ר היה קיים ובלתי נגיש. נוכחות חיוורת מגלה שיש כאן משהו
- * בלי להתחרות בתוכן, וריחוף או מיקוד מביאים אותם לחוזק מלא.
+ * ‎margin-inline-start: auto‎ דוחף את הקבוצה לקצה, בשורה הראשונה כשיש בה
+ * מקום ובשורה משלה כשאין — והיא עוברת **כיחידה**, ולא כפתור-כפתור.
+ * תת-הכותרת בבסיס 0 ובהתרחבות: היא ממלאת את מה שנשאר ליד הכותרת ומתקצרת
+ * בשלוש נקודות, במקום לגלוש לשורה משלה ולמשוך את הכפתורים איתה.
  */
 .card-head.has-slot-tools { padding-inline-end: 10px; }
-.slot-tools { display: flex; align-items: center; gap: 2px; flex: none; opacity: .4; transition: opacity .12s; }
-.home-slot:hover .slot-tools,
-.home-slot:focus-within .slot-tools { opacity: 1; }
+.card-head .head-sub {
+  flex: 1 1 0; min-width: 0;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.head-actions {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  flex: none; max-width: 100%; margin-inline-start: auto;
+}
+/* קבוצה שכל תוכנה הוא כלי החלון — במצב רגיל אין בה דבר, ושורה ריקה היא רווח */
+.home-board:not(.is-editing) .head-actions.only-tools { display: none; }
+
+/*
+ * חלון צר (פחות מ-520): שתי שורות קבועות — כותרת ותת-כותרת, ומתחתן
+ * הפקדים. בלי שבירה מפורשת השורה הייתה נשברת במקום אקראי לפי אורך
+ * הכותרת, וכל חלון היה נראה אחרת. מתחת ל-380 גם תת-הכותרת יורדת לשורה
+ * משלה — לידה הכותרת הייתה נשארת עם שתי מילים ושלוש נקודות.
+ */
+@container slot (max-width: 519px) {
+  .card-head .head-actions { flex-basis: 100%; justify-content: flex-start; margin-inline-start: 0; }
+}
+@container slot (max-width: 379px) {
+  .card-head .head-sub { flex-basis: 100%; }
+}
+
+/*
+ * כלי החלון — רק במצב סידור (ראה ‎editing‎ ב-home.js).
+ *
+ * עד כה הם ישבו בכל כותרת תמיד, בשקיפות 40%: שישה כפתורים שהתחרו עם
+ * הכותרת על המקום, ובשקיפות הזו גם לא עמדו בניגודיות. עכשיו במצב הרגיל
+ * הכותרות נקיות, ובמצב סידור הכלים מלאים: 28 פיקסלים (מעל רצפת ה-24 של
+ * יעד לחיצה) ובצבע ‎--text-soft‎ — 7.6:1 על לבן.
+ */
+.slot-tools { display: flex; align-items: center; gap: 2px; flex: none; }
+.home-board:not(.is-editing) .slot-tools,
+.home-board:not(.is-editing) .slot-resize,
+.home-board:not(.is-editing) .slot-wresize { display: none; }
 .slot-btn {
   border: 0; background: transparent; cursor: pointer; font-family: inherit;
-  width: 22px; height: 22px; border-radius: 6px; padding: 0;
-  color: var(--text-mute); font-size: 12px; line-height: 1;
+  width: 28px; height: 28px; border-radius: 7px; padding: 0;
+  color: var(--text-soft); font-size: 13px; line-height: 1;
+  display: inline-grid; place-items: center;
 }
 .slot-btn:hover { background: var(--surface-2); color: var(--brand); }
-.slot-grip { cursor: grab; font-size: 13px; }
+.slot-grip { cursor: grab; font-size: 15px; }
 .slot-grip:active { cursor: grabbing; }
 .slot-hide:hover { background: var(--danger); color: #fff; }
 /* מצב מסומן — הבחירה נרשמה גם כשהמסך לא השתנה כתוצאה ממנה */
@@ -614,10 +718,58 @@ body.is-dragging-slot, body.is-dragging-slot * { cursor: grabbing !important; }
 .slot-resize:focus-visible::before,
 .slot-resize.dragging::before { background: var(--brand); }
 
-.layout-footer {
-  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
-  margin-top: 14px; padding-top: 11px; border-top: 1px dashed var(--border);
+/*
+ * מצב סידור: מסגרת מקווקוות סביב כל חלון — "אפשר להזיז את זה" — ופס
+ * הסבר מעל הלוח. המסגרת ב-‎outline‎ ולא ב-‎border‎, כדי שלא תזיז את התוכן
+ * בפיקסל אחד בכניסה וביציאה.
+ */
+.home-board.is-editing .home-slot > .card { outline: 2px dashed var(--border-strong); outline-offset: 3px; }
+.home-board.is-editing .home-slot:hover > .card,
+.home-board.is-editing .home-slot:focus-within > .card { outline-color: var(--brand); }
+.home-board.is-editing .home-slot.is-lifted > .card { outline-color: transparent; }
+/* הידיות במצב סידור גלויות תמיד בגוון עדין, ולא רק בריחוף — כדי שיימצאו */
+.home-board.is-editing .slot-wresize::before,
+.home-board.is-editing .slot-resize::before { background: var(--border-strong); }
+
+.home-editbar {
+  display: flex; align-items: center; gap: 10px 16px; flex-wrap: wrap;
+  margin-top: 14px; padding: 10px 14px;
+  border: 1px dashed var(--brand); border-radius: var(--radius-lg);
+  background: #f0fdfa; color: var(--text-soft); font-size: 13px;
 }
+.home-editbar[hidden] { display: none; }
+.home-editbar .heb-text { margin: 0; flex: 1 1 320px; min-width: 0; }
+.home-editbar .heb-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.home-editbar .btn .li, .home-edit-btn .li { width: 15px; height: 15px; }
+.home-edit-btn { align-self: center; display: inline-flex; align-items: center; gap: 6px; }
+.home-edit-btn.active { background: var(--brand-light); border-color: var(--brand); color: var(--brand-dark); }
+
+/*
+ * תווית המדידה בזמן גרירת גבול (ראה measureTip ב-home.js). בתוך הידית,
+ * ולכן זזה איתה; בצד של החלון המוביל — המספר מתאר אותו.
+ */
+.slot-measure {
+  position: absolute; z-index: 6; pointer-events: none;
+  padding: 2px 8px; border-radius: 6px; white-space: nowrap;
+  background: var(--text); color: #fff; font-size: 12px; font-weight: 700;
+  font-variant-numeric: tabular-nums; box-shadow: var(--shadow);
+}
+.slot-wresize .slot-measure { top: 50%; inset-inline-end: 100%; margin-inline-end: 6px; transform: translateY(-50%); }
+.slot-resize .slot-measure { inset-inline-start: 50%; top: 14px; transform: translateX(50%); }
+.slot-resize.at-top .slot-measure { top: auto; bottom: 14px; }
+
+/* "אילו חלונות להציג" — שורה לכל חלון, השם ומתחתיו מה יש בו */
+.win-options { display: flex; flex-direction: column; gap: 2px; }
+.win-option {
+  display: flex; align-items: flex-start; gap: 10px; padding: 8px 10px;
+  border-radius: var(--radius); cursor: pointer;
+}
+.win-option:hover { background: var(--surface-2); }
+.win-option input { margin-top: 4px; flex: none; width: 18px; height: 18px; accent-color: var(--brand); }
+.win-option .wo-text { display: flex; flex-direction: column; min-width: 0; }
+.win-option.is-unavailable { cursor: default; }
+.win-option.is-unavailable b { color: var(--text-soft); }
+.win-option.is-unavailable:hover { background: none; }
 /* בורר הסינון בכותרת הכרטיס — צר, שלא ידחוק את 'לכל המשימות' */
 .card-head .home-filter { flex: none; width: auto; max-width: 190px; font-size: 12px; padding: 4px 8px; }
 
@@ -660,7 +812,7 @@ body.is-dragging-slot, body.is-dragging-slot * { cursor: grabbing !important; }
 
 .tag {
   display: inline-flex; align-items: center; gap: 4px;
-  padding: 1px 8px; border-radius: 999px; font-size: 11.5px; font-weight: 800;
+  padding: 1px 8px; border-radius: 999px; font-size: 12px; font-weight: 800;
   border: 1px solid transparent; white-space: nowrap;
 }
 .tag-low { background: #f1f5f9; color: #64748b; }
@@ -943,7 +1095,7 @@ button.file-chip { cursor: pointer; font-family: inherit; }
    כמה טבלאות לא מיושרות; היא גם מפעילה את חיתוך הטקסט הארוך */
 table.grid-table { width: 100%; min-width: 920px; border-collapse: collapse; table-layout: fixed; }
 table.grid-table th {
-  background: var(--surface-2); font-size: 11.5px; color: var(--text-soft);
+  background: var(--surface-2); font-size: 12px; color: var(--text-soft);
   font-weight: 700; text-align: right; padding: 7px 10px;
   border-bottom: 1px solid var(--border); white-space: nowrap;
 }
@@ -1171,13 +1323,13 @@ th.cell-bar { background: var(--border) !important; }
  * נתנו לה רוחב שונה, ועמודות ה-fr שלפניה בלעו את ההפרש — כך שם הפרויקט
  * והכותרת לא התיישרו בין שורות אף שהסטטוס כן.
  */
-.task-table { --task-cols: 3px 17px minmax(0, 1.1fr) minmax(0, 1.85fr) 94px 78px 56px; }
+.task-table { --task-cols: 3px 17px minmax(0, 1.1fr) minmax(0, 1.85fr) 94px 96px 76px; }
 .task-table-head, .task-line {
   display: grid; grid-template-columns: var(--task-cols);
   align-items: center; gap: 8px; padding: 7px 8px;
 }
 .task-table-head {
-  font-size: 10.5px; font-weight: 700; letter-spacing: .06em;
+  font-size: 12px; font-weight: 700; letter-spacing: .03em;
   color: var(--text-mute); border-bottom: 1px solid var(--border-strong);
   /* גבול שקוף בצדדים, בעובי הגבול של השורות — בלעדיו הכותרת רחבה בשני
      פיקסלים והעמודות מוסטות ביחס לשורות */
@@ -1197,10 +1349,60 @@ th.cell-bar { background: var(--border) !important; }
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .task-line .tk-title { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.task-line .tk-due { color: var(--text-mute); white-space: nowrap; font-variant-numeric: tabular-nums; }
+/*
+ * היעד והסימנים לעולם אינם עולים זה על זה. קודם לכן "באיחור 2 ימים" היה
+ * רחב מעמודת ה-78 שלו וגלש לתוך עמודת הסימנים, ושם העיגול של האחראי ישב
+ * עליו. עכשיו לשתיהן רוחב שמחזיק את התוכן הנפוץ (‎96px‎ — "באיחור 12 ימים";
+ * ‎76px‎ — עיגול ושני סימנים), ומה שבכל זאת חורג נחתך בגבול התא.
+ */
+.task-line .tk-due {
+  color: var(--text-mute); white-space: nowrap; font-variant-numeric: tabular-nums;
+  overflow: hidden; text-overflow: ellipsis;
+}
+/*
+ * הטון גובר על הצבע המושתק. ‎.task-line .tk-due‎ ספציפי יותר מ-‎.text-danger‎
+ * לבדו, ולכן משימה באיחור הוצגה באפור בדיוק בדף שאמור להבליט אותה.
+ */
+.task-line .tk-due.text-danger { color: var(--danger); font-weight: 700; }
+.task-line .tk-due.text-warn { color: var(--warn-text); font-weight: 600; }
 /* תגית הסטטוס ממלאת את עמודתה, וכך כל התגיות באותו רוחב ובאותו קו */
 .task-line .tag-status { width: 100%; text-align: center; }
-.task-line .tk-flags { display: flex; gap: 3px; justify-content: flex-end; font-size: 13px; }
+.task-line .tk-flags { display: flex; gap: 3px; justify-content: flex-end; font-size: 13px; min-width: 0; overflow: hidden; }
+
+/*
+ * שורת משימה בחלון צר — עמודות נושרות לפי סדר החשיבות, ולא מתכווצות כולן.
+ *
+ * עד כה שבע העמודות התכווצו יחד, ובחלון של 300 פיקסלים שם הפרויקט והכותרת
+ * נשארו עם שתיים-שלוש אותיות כל אחד. עמודה שנעלמה עדיף על שתי עמודות שאי
+ * אפשר לקרוא: מתחת ל-620 נושר הפרויקט (והכותרת מקבלת את מקומו), מתחת ל-480
+ * הסטטוס או שם האחראי, ומתחת ל-400 השורה הופכת לכרטיס בן שתי שורות —
+ * הכותרת לבדה למעלה, והפרויקט, היעד והסימנים מתחתיה.
+ *
+ * כותרות העמודות נושרות יחד עם העמודות, באותם מספרי סדר — אחרת הכותרת
+ * "סטטוס" הייתה עומדת מעל עמודת היעד.
+ */
+@container slot (max-width: 619px) {
+  .task-table { --task-cols: 3px 17px minmax(0, 1fr) 94px 96px 76px; }
+  .task-line > .tk-project, .task-table-head > :nth-child(3) { display: none; }
+}
+@container slot (max-width: 479px) {
+  .task-table { --task-cols: 3px 17px minmax(0, 1fr) 96px 76px; }
+  .task-line > :nth-child(5), .task-table-head > :nth-child(5) { display: none; }
+}
+@container slot (max-width: 399px) {
+  .task-table-head { display: none; }
+  .task-line {
+    grid-template-columns: 3px 17px minmax(0, 1fr) auto auto;
+    grid-template-areas: "bar chk title title title" "bar chk proj due flags";
+    row-gap: 1px;
+  }
+  .task-line > .tk-bar { grid-area: bar; }
+  .task-line > :nth-child(2) { grid-area: chk; align-self: start; padding-top: 2px; }
+  .task-line > .tk-title { grid-area: title; }
+  .task-line > .tk-project { display: block; grid-area: proj; font-size: 12px; font-weight: 600; }
+  .task-line > .tk-due { grid-area: due; font-size: 12px; }
+  .task-line > .tk-flags { grid-area: flags; }
+}
 .task-line.is-done { opacity: .58; }
 .task-line.is-done .tk-title, .task-line.is-done .tk-project { text-decoration: line-through; text-decoration-thickness: 1.5px; }
 
@@ -1322,6 +1524,32 @@ input[type="color"] { width: 46px; height: 30px; padding: 2px; cursor: pointer; 
 .tabs { display: flex; gap: 3px; border-bottom: 1px solid var(--border); margin-bottom: 15px; }
 .tabs button { border: 0; background: none; padding: 8px 14px; cursor: pointer; font-weight: 600; color: var(--text-soft); border-bottom: 2px solid transparent; margin-bottom: -1px; }
 .tabs button.active { color: var(--brand-dark); border-bottom-color: var(--brand); }
+
+/*
+ * לשוניות מסך הניהול — שורה אחת שנגללת לרוחב (ראה adminTabs ב-admin.js).
+ *
+ * ‎flex: none‎ ו-‎nowrap‎ הם התיקון עצמו: בלעדיהם הכפתורים התכווצו והתוויות
+ * נשברו לשתי שורות. פס הגלילה מוסתר — בעכבר גוללים בגלגלת או בגרירה על
+ * משטח מגע, והדהייה בקצה היא שמראה שיש עוד. ‎scroll-snap‎ עוצר כל גלילה
+ * בתחילת לשונית, ולא באמצע מילה.
+ *
+ * הדהייה במסכה ולא בשכבת צבע מעל: מסכה אינה תלויה בצבע הרקע שמאחור,
+ * ואינה חוסמת לחיצה על הלשונית שבקצה.
+ */
+.admin-tabs {
+  overflow-x: auto; overflow-y: hidden; scrollbar-width: none;
+  scroll-snap-type: x proximity; scroll-padding-inline: 24px;
+  -webkit-overflow-scrolling: touch;
+}
+.admin-tabs::-webkit-scrollbar { display: none; }
+.admin-tabs button { flex: none; white-space: nowrap; scroll-snap-align: start; }
+.admin-tabs button:focus-visible { outline: 2px solid var(--brand); outline-offset: -2px; border-radius: 6px; }
+.admin-tabs.more-left { -webkit-mask-image: linear-gradient(to right, transparent 0, #000 32px); mask-image: linear-gradient(to right, transparent 0, #000 32px); }
+.admin-tabs.more-right { -webkit-mask-image: linear-gradient(to left, transparent 0, #000 32px); mask-image: linear-gradient(to left, transparent 0, #000 32px); }
+.admin-tabs.more-left.more-right {
+  -webkit-mask-image: linear-gradient(to right, transparent 0, #000 32px, #000 calc(100% - 32px), transparent 100%);
+          mask-image: linear-gradient(to right, transparent 0, #000 32px, #000 calc(100% - 32px), transparent 100%);
+}
 
 .checklist-item { display: flex; align-items: center; gap: 9px; padding: 6px 8px; border-radius: 7px; }
 .checklist-item:hover { background: var(--surface-2); }
@@ -1664,8 +1892,9 @@ input[type="color"] { width: 46px; height: 30px; padding: 2px; cursor: pointer; 
 .mb { margin-bottom: 14px; }
 .nowrap { white-space: nowrap; }
 .text-danger { color: var(--danger); }
-.text-ok { color: var(--ok); }
-.text-warn { color: var(--warn); }
+/* כיתובי הטון בגוון הטקסט שלהם — ‎--ok‎ ו-‎--warn‎ עצמם (3.3:1 ו-3.2:1) נועדו לסימנים ולרקעים */
+.text-ok { color: var(--ok-text); }
+.text-warn { color: var(--warn-text); }
 
 .bar-track { height: 8px; background: var(--border); border-radius: 5px; overflow: hidden; min-width: 90px; }
 .bar-track > div { height: 100%; }

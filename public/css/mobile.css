@@ -108,9 +108,14 @@
   .tabbar button {
     flex: 1; border: 0; background: none; cursor: pointer;
     display: flex; flex-direction: column; align-items: center; justify-content: center;
-    gap: 3px; font-size: 10.5px; color: var(--text-mute); font-family: inherit;
+    gap: 3px; font-size: 12px; color: var(--text-mute); font-family: inherit;
     padding: 0; min-width: 0;
   }
+  /*
+   * 12 ולא 10.5: מתחת לזה התווית אינה קריאה בטלפון באור יום. חמש לשוניות
+   * ב-390 פיקסלים הן 78 פיקסלים כל אחת, והתווית הארוכה ("התראות") נכנסת
+   * גם ב-12 — ואם לא, ‎.lbl‎ מתקצר בשלוש נקודות ולא גולש.
+   */
   .tabbar button .ic { width: 21px; height: 21px; }
   /* עוטף האייקון — נקודת העיגון של מונה ההתראות שמעליו */
   .tabbar button .ic-wrap { display: grid; place-items: center; position: relative; }
@@ -155,7 +160,7 @@
   /* ---------------------------------------------------------------- כרטיסים ומודלים */
 
   .page-head { margin-bottom: 12px; gap: 10px; }
-  .page-head h2 { font-size: 19px; }
+  .page-head h1, .page-head h2 { font-size: 19px; }
   .page-head .sub { display: none; }
   .grid.grid-2, .grid.grid-3, .grid.grid-4 { grid-template-columns: 1fr; }
 

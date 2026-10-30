@@ -88,8 +88,41 @@ const HomeView = (() => {
     feed: 'פיד עדכונים אחרון',
     phonebook: 'אלפון'
   };
+  /*
+   * שורת הסבר לכל חלון, לדיאלוג "אילו חלונות להציג". שם החלון לבדו אינו
+   * מספיק כדי להחליט אם להסתיר אותו: "ממתין לאישור" ו"ממתין לאישורך" הם
+   * שני חלונות שונים לגמרי, וההבדל ביניהם הוא בדיוק מה שהשורה הזו אומרת.
+   */
+  const CARD_HINT = {
+    aiInbox: 'משימות שעוזר ה-AI זיהה בדואר וממתינות לאישורך',
+    deptCut: 'פתוחות, באיחור ודחופות בכל מחלקה',
+    myTasks: 'המשימות הפתוחות שלך, באיחור ראשונות',
+    calendar: 'יעדים בשבעת הימים הקרובים',
+    department: 'משימות הצוות במחלקה שלך',
+    mentions: 'הודעות שבהן תייגו אותך',
+    done: 'מה שנסגר לאחרונה, עד שעובר לארכיון',
+    approval: 'תוצרי ספקים שמחכים לבדיקה',
+    feed: 'עדכונים אחרונים במשימות ובפרויקטים שלך',
+    phonebook: 'חיפוש מהיר באנשי הקשר של הארגון'
+  };
   // כרטיסים שברירת המחדל שלהם היא שורה שלמה — טבלת חתך רחבה מדי לחצי שורה
   const WIDE_BY_DEFAULT = new Set(['deptCut', 'aiInbox']);
+
+  /**
+   * מצב סידור. הכלים של כל חלון — חצים, ידית גרירה, רוחב, הסתרה וידיות
+   * הגודל — מוצגים רק בו, ובמצב הרגיל הכותרות נקיות.
+   *
+   * קודם לכן הכלים ישבו בכל כותרת תמיד, וזה מה ששבר את החלונות הצרים: שישה
+   * כפתורים נוספים באותה שורה עם הכותרת, תת-הכותרת ו"לכל המשימות" דחקו את
+   * הכותרת לעמודה של מילה בשורה. סידור הלוח הוא פעולה של פעם בכמה ימים, ואין
+   * סיבה שישלם עליה כל מבט בדף.
+   *
+   * המצב אינו נשמר — לא בשרת ולא במכשיר. מי שחוזר לדף מצפה לראות את העבודה
+   * שלו, ולא לוח פתוח לעריכה שנשכח כך אתמול.
+   */
+  let editing = false;
+  let editBarRef = null;
+  let editBtnRef = null;
 
   /*
    * גבולות גובה החלון — לא של הרשימה שבתוכו. בכותרת ובריפוד יושבים כ-84
@@ -144,7 +177,7 @@ const HomeView = (() => {
 
   const hideCard = (key) => {
     saveLayout({ hidden: [...new Set([...(layout().hidden ?? []), key])], ...evenShares() });
-    UI.toast(`"${CARD_LABEL[key]}" הוסתר — אפשר להחזיר מלמטה`);
+    UI.toast(`"${CARD_LABEL[key]}" הוסתר — אפשר להחזיר מ"אילו חלונות להציג"`);
   };
 
   const showCard = (key) =>
@@ -189,6 +222,37 @@ const HomeView = (() => {
 
   /* מפתח החלון שידית הגרירה שלו תקבל מיקוד מחדש אחרי הציור */
   let pendingFocus = null;
+
+  /** צעד ההצמדה של הגובה — גם בגרירה וגם בחצים */
+  const HEIGHT_STEP = 24;
+  /*
+   * טווח ההצמדה של היחס בין שני חלונות. 12 פיקסלים — מספיק כדי שהיד "תיפול"
+   * לחצי או לשליש בלי לכוון, ומעט מספיק כדי שעדיין אפשר לעצור ממש לידם.
+   */
+  const SNAP_PX = 12;
+  const SNAP_RATIOS = [
+    { r: 1 / 3, label: '⅓' },
+    { r: 1 / 2, label: '½' },
+    { r: 2 / 3, label: '⅔' }
+  ];
+
+  /**
+   * תווית מדידה צפה ליד הידית בזמן גרירה — "½ · 360px".
+   *
+   * בלי מספר הגרירה היא ניחוש: אי אפשר לדעת אם שני החלונות שווים או רק
+   * כמעט, ואם הגובה נעצר כי הגיע לסוף הרשימה או כי היד נעצרה. התווית יושבת
+   * בתוך הידית עצמה, ולכן זזה איתה ואינה דורשת חישוב מיקום.
+   */
+  function measureTip(handle) {
+    let tip = null;
+    return {
+      show(text) {
+        if (!tip) tip = handle.appendChild(el('span.slot-measure', { 'aria-hidden': 'true' }));
+        tip.textContent = text;
+      },
+      remove() { tip?.remove(); tip = null; }
+    };
+  }
 
   /**
    * ידית שינוי הגובה. אחת בתחתית החלון ואחת בראשו.
@@ -269,13 +333,24 @@ const HomeView = (() => {
       document.body.style.userSelect = 'none';
       let last = Math.round(startH);
 
+      const tip = measureTip(h);
+
       const onMove = (ev) => {
         // הקצה העליון הופך את הסימן: משיכה מעלה מגדילה
         const delta = top ? startY - ev.clientY : ev.clientY - startY;
-        last = Math.round(Math.min(max, Math.max(SLOT_MIN_H, startH + delta)));
+        /*
+         * הצמדה לצעדים של 24 — אותו צעד של החצים במקלדת. בלי זה כל חלון
+         * נעצר בגובה שרירותי (‎317‎, ‎402‎), ושני חלונות באותה שורה כמעט אף
+         * פעם לא הגיעו לאותו גובה. התקרה חלה אחרי העיגול, ולכן סוף הרשימה
+         * עדיין בר-השגה גם כשאינו כפולה של 24.
+         */
+        const snapped = Math.round((startH + delta) / HEIGHT_STEP) * HEIGHT_STEP;
+        last = Math.round(Math.min(max, Math.max(SLOT_MIN_H, snapped)));
         apply(last);
+        tip.show(last === max ? `${last}px · עד סוף הרשימה` : `${last}px`);
       };
       const onUp = () => {
+        tip.remove();
         h.classList.remove('dragging');
         slot.classList.remove('is-resizing');
         document.body.style.userSelect = '';
@@ -345,12 +420,14 @@ const HomeView = (() => {
    *
    * - עכבר ועט: גרירה מהידית מתחילה אחרי תזוזה קטנה, כדי שלחיצה לא תיחשב.
    * - מגע: לחיצה ארוכה על הידית, כדי שהדף עדיין יגלול.
-   * - מקלדת: מיקוד בחלון, Alt וחצים (וגם כפתורי ▲ ▼ בכותרת).
+   * - מקלדת: במצב סידור — מיקוד בחלון, Alt וחצים (וגם כפתורי ▲ ▼ בכותרת).
    *
    * הגרירה משנה סדר בלבד. הרוחב נשאר של החלון — כפתור ⇤⇥ קובע אותו.
    */
   const DRAG = {
     ENTER: 0.18,        // כמה עמוק מרכז הנגרר צריך להיכנס לחלון כדי לתפוס את מקומו
+    HYSTERESIS: 8,      // בכמה פיקסלים מועמד צריך להיות קרוב יותר מהמקום הנוכחי
+    SWALLOW_MS: 300,    // אחרי שחרור — חסימת הלחיצה שהדפדפן יורה מיד אחריו
     SETTLE_MS: 40,      // מרווח מינימלי בין שתי הזזות בזמן גרירה
     LANDED_MS: 620,     // משך מסגרת הנחיתה
     LONG_PRESS_MS: 350, // מגע: זמן לחיצה עד שהחלון מורם
@@ -387,8 +464,16 @@ const HomeView = (() => {
       const grip = node.querySelector('.slot-grip');
       if (!grip) continue;
 
-      // מקלדת: Alt + חצים מכל מקום בחלון, חוץ משדות קלט
+      /*
+       * מקלדת: Alt + חצים מכל מקום בחלון, חוץ משדות קלט — ורק במצב סידור.
+       *
+       * מחוץ למצב הסידור הקיצור היה מתנגש במה שהדפדפן כבר עושה בו: Alt
+       * וחץ ימינה או שמאלה הם "קדימה" ו"אחורה" בהיסטוריה, ומי שלחץ עליהם
+       * כשהמיקוד היה במקרה בתוך חלון קיבל לוח מסודר מחדש במקום הדף הקודם.
+       * מי שמנווט במקלדת מגיע למצב הסידור בכפתור "סידור הלוח", שבסדר הטאב.
+       */
       node.addEventListener('keydown', (e) => {
+        if (!editing) return;
         if (!e.altKey || e.target.closest('input, textarea, select')) return;
         const delta = e.key === 'ArrowDown' ? 1 : e.key === 'ArrowUp' ? -1
           : e.key === 'ArrowLeft' ? 1 : e.key === 'ArrowRight' ? -1 : 0;   // RTL: שמאלה = הבא
@@ -484,8 +569,17 @@ const HomeView = (() => {
     };
 
     /**
-     * הנגרר תופס מקום של שכן כשמרכזו נכנס לחלק הפנימי של השכן. אם המרכז
-     * עדיין בתוך המקום שלו עצמו — לא זזים, וכך אין ריצוד בין שני מקומות.
+     * לאן הנגרר שייך — לפי מרחק, ולא לפי "בתוך".
+     *
+     * קודם לכן הנגרר תפס מקום של שכן רק כשמרכזו נכנס לחלק הפנימי של השכן.
+     * זה עבד בתוך הלוח, אבל במרווחים בין החלונות, ומתחת לחלון האחרון, המרכז
+     * לא היה "בתוך" אף אחד — והגרירה פשוט לא הגיבה. עכשיו נמדד המרחק מהמרכז
+     * לכל חלון, והקרוב ביותר זוכה.
+     *
+     * ההיסטרזיס הוא מה שמונע ריצוד בין שני מקומות: המקום של הנגרר עצמו נמדד
+     * במלואו, והמועמדים מכווצים פנימה ב-‎DRAG.ENTER‎. מועמד מנצח רק כשהוא
+     * קרוב **יותר** מהמקום הנוכחי בהפרש ממשי, ולכן מרכז שעומד על הגבול
+     * ביניהם נשאר במקומו במקום לקפוץ הלוך ושוב.
      */
     const reorder = () => {
       const now = performance.now();
@@ -493,15 +587,24 @@ const HomeView = (() => {
       const home = layoutRect(board, node);
       const cx = pointer.x - grab.x + (home.right - home.left) / 2;
       const cy = pointer.y - grab.y + (home.bottom - home.top) / 2;
-      const inside = (r, inset) => {
+      const distance = (r, inset) => {
         const ix = (r.right - r.left) * inset;
         const iy = (r.bottom - r.top) * inset;
-        return cx > r.left + ix && cx < r.right - ix && cy > r.top + iy && cy < r.bottom - iy;
+        const dx = Math.max(r.left + ix - cx, 0, cx - (r.right - ix));
+        const dy = Math.max(r.top + iy - cy, 0, cy - (r.bottom - iy));
+        return Math.hypot(dx, dy);
       };
-      if (inside(home, 0)) return;
+      const own = distance(home, 0);
+      if (own === 0) return;
 
       const all = [...board.querySelectorAll('.home-slot')];
-      const target = all.find((s) => s !== node && inside(layoutRect(board, s), DRAG.ENTER));
+      let target = null;
+      let best = own - DRAG.HYSTERESIS;
+      for (const s of all) {
+        if (s === node) continue;
+        const d = distance(layoutRect(board, s), DRAG.ENTER);
+        if (d < best) { best = d; target = s; }
+      }
       if (!target) return;
 
       // FLIP: מדידה לפני, הזזה ב-DOM, ואז כל שכן מונפש מהמקום הישן לחדש
@@ -567,6 +670,16 @@ const HomeView = (() => {
         node.classList.add('is-landed');
         setTimeout(() => node.classList.remove('is-landed'), DRAG.LANDED_MS);
 
+        /*
+         * הדפדפן יורה ‎click‎ מיד אחרי השחרור, על האב המשותף של נקודת
+         * הלחיצה ונקודת השחרור. כשהשחרור נופל על שורת משימה זו הייתה פותחת
+         * את כרטיס המשימה — כלומר כל גרירה שהסתיימה מעל רשימה פתחה משימה
+         * שאיש לא ביקש. הלחיצה הראשונה בחלון הזמן הקצר נבלעת בשלב הלכידה.
+         */
+        const swallow = (ev) => { ev.stopPropagation(); ev.preventDefault(); };
+        window.addEventListener('click', swallow, { capture: true, once: true });
+        setTimeout(() => window.removeEventListener('click', swallow, { capture: true }), DRAG.SWALLOW_MS);
+
         const after = [...board.querySelectorAll('.home-slot')].map((s) => s.dataset.key);
         if (after.join() === before.join()) return;
         commitOrder(board, after);
@@ -590,6 +703,18 @@ const HomeView = (() => {
     App.setPref('homeLayout', { ...layout(), order, ...evenShares() });
     for (const s of board.querySelectorAll('.home-slot')) s.style.removeProperty('--share');
     tuneBoard();
+  }
+
+  /**
+   * מיקום כל חלון ברשימה, לקורא מסך: "3 מתוך 8". ה-DOM הוא הסדר, ולכן
+   * המספור נגזר ממנו מחדש אחרי כל גרירה — הגרירה מזיזה צמתים ולא מציירת.
+   */
+  function numberSlots(board) {
+    const slots = [...board.querySelectorAll(':scope > .home-slot')];
+    slots.forEach((s, i) => {
+      s.setAttribute('aria-posinset', String(i + 1));
+      s.setAttribute('aria-setsize', String(slots.length));
+    });
   }
 
   /**
@@ -617,12 +742,15 @@ const HomeView = (() => {
     ].filter(Boolean).join('; ');
     const slot = el(`div.home-slot${wide ? '.is-wide' : ''}${hasList ? '.has-list' : ''}`, {
       'data-key': key,
+      role: 'listitem',
+      'aria-label': CARD_LABEL[key],
       style: vars
     }, [card]);
 
     const head = card.querySelector('.card-head');
     if (head) {
       head.classList.add('has-slot-tools');
+      const actions = headActions(head);
 
       /*
        * חצים גלויים, ולא רק גרירה.
@@ -662,7 +790,7 @@ const HomeView = (() => {
         onclick: () => toggleWide(key)
       }, [wide ? '⇥⇤' : '⇤⇥']);
 
-      head.appendChild(el('div.slot-tools', {}, [
+      actions.appendChild(el('div.slot-tools', {}, [
         arrow('▲', -1, 'העלאת החלון'),
         arrow('▼', 1, 'הורדת החלון'),
         grip,
@@ -680,39 +808,178 @@ const HomeView = (() => {
     return slot;
   }
 
-  /** שורת החלונות המוסתרים, ואיפוס הסידור */
-  function layoutFooter(available) {
-    const hidden = (layout().hidden ?? []).filter((k) => available.has(k));
-    const l = layout();
-    const touched = (l.order ?? []).length || (l.wide ?? []).length
-      || (l.narrow ?? []).length || Object.keys(l.heights ?? {}).length
-      || Object.keys(l.shares ?? {}).length || hidden.length;
-    if (!touched) return null;
+  /**
+   * סידור כותרת החלון לשתי קבוצות: הכותרת ותת-הכותרת, והפקדים.
+   *
+   * זה התיקון לתלונה המרכזית. הכותרת הייתה שורת ‎flex‎ אחת שאינה נשברת,
+   * ובחלון צר כל פריט בה התכווץ — וה-‎h3‎, שהוא היחיד שיכול לשבור שורות,
+   * התכווץ לעמודה של מילה אחת בשורה, בעוד "לכל המשימות" נדחק אל מחוץ
+   * לכרטיס. עכשיו כל מה שאחרי ה-‎spacer‎ (הסינון, הכפתורים, ובמצב סידור
+   * גם כלי החלון) עובר לקבוצה אחת, שנשברת לשורה משלה **כיחידה** כשאין לה
+   * מקום — ולעולם לא באמצע (ראה ‎.head-actions‎ בגיליון).
+   *
+   * נעשה כאן ולא בכל כרטיס: הכרטיסים נבנים בכמה קבצים (תיבת ה-AI, האלפון),
+   * וכולם כבר מסמנים את הגבול באותו ‎spacer‎. מה שלפניו הוא הכותרת.
+   *
+   * ‎title‎ על הכותרת ועל תת-הכותרת: שתיהן עלולות להתקצר בשלוש נקודות בחלון
+   * צר מאוד, והטקסט המלא נשאר בריחוף.
+   */
+  function headActions(head) {
+    const spacer = head.querySelector(':scope > .spacer');
+    const actions = el('div.head-actions');
+    if (spacer) {
+      for (let n = spacer.nextSibling; n;) {
+        const next = n.nextSibling;
+        actions.appendChild(n);
+        n = next;
+      }
+      spacer.remove();
+    }
+    if (!actions.childElementCount) actions.classList.add('only-tools');
+    for (const child of head.children) {
+      if (child.tagName === 'H3' && !child.title) child.title = child.textContent.trim();
+      else if (child.classList.contains('mute-sm')) {
+        child.classList.add('head-sub');
+        if (!child.title) child.title = child.textContent.trim();
+      }
+    }
+    head.appendChild(actions);
+    return actions;
+  }
 
-    return el('div.layout-footer', {}, [
-      hidden.length
-        ? el('div.flex', { style: { gap: '7px', flexWrap: 'wrap', alignItems: 'center' } }, [
-            el('span.mute-sm', { text: 'חלונות מוסתרים:' }),
-            ...hidden.map((k) => el('button.btn.btn-sm.btn-ghost', {
-              title: 'החזרה לדף', onclick: () => showCard(k)
-            }, [`＋ ${CARD_LABEL[k]}`]))
-          ])
-        : null,
-      el('div.spacer'),
-      el('button.btn.btn-sm.btn-ghost', {
-        title: 'החזרת כל החלונות לסידור המקורי',
-        // ‎null‎ מוחק את ההעדפה בשרת ומחזיר את ברירת המחדל
-        onclick: () => { App.setPref('homeLayout', null); reload(); }
-      }, ['איפוס הסידור'])
+  /**
+   * פס מצב הסידור, מעל הלוח. ההוראות שישבו קודם בפסקת הפתיחה של הדף עברו
+   * לכאן: הן נחוצות רק למי שמסדר, ובפתיחת הדף הן היו שתיים-שלוש שורות של
+   * הסבר על ידיות שאינן אפילו גלויות.
+   *
+   * כאן גם יושבת ההחזרה של חלונות מוסתרים — בדיאלוג, ולא עוד בשורה בתחתית
+   * הדף. שורת התחתית הופיעה רק "אם נגעו בסידור", ומי שהסתיר חלון וחזר אחרי
+   * שבוע לא ידע לחפש אותה שם.
+   */
+  function editBar(available) {
+    const hiddenNow = (layout().hidden ?? []).filter((k) => available.has(k)).length;
+    editBarRef = el('div.home-editbar', {
+      role: 'region',
+      'aria-label': 'סידור הלוח',
+      hidden: !editing
+    }, [
+      el('p.heb-text', {
+        text: 'גררו חלון מהידית ⠿ והלוח יתפנה לו תוך כדי (במגע — לחיצה ארוכה, במקלדת — Alt וחצים). ⇤⇥ קובע רוחב, ואת הגבולות בין החלונות ובתחתיתם אפשר למשוך.'
+      }),
+      el('div.heb-actions', {}, [
+        el('button.btn.btn-sm', {
+          type: 'button',
+          'aria-haspopup': 'dialog',
+          onclick: () => windowsDialog(available)
+        }, [hiddenNow ? `אילו חלונות להציג (${hiddenNow} מוסתרים)` : 'אילו חלונות להציג']),
+        el('button.btn.btn-sm.btn-primary', {
+          type: 'button',
+          onclick: () => setEditing(false)
+        }, [UI.lineIcon('check'), 'סיום'])
+      ])
     ]);
+    return editBarRef;
+  }
+
+  /**
+   * כניסה למצב סידור ויציאה ממנו — בלי לצייר את הדף מחדש. מחלקה על הלוח
+   * מגלה ומסתירה את הכלים, ולכן המעבר מיידי ואינו מאבד גלילה או מצב של
+   * שדה פתוח באחד החלונות.
+   */
+  function setEditing(on) {
+    editing = on;
+    boardRef?.classList.toggle('is-editing', on);
+    if (editBarRef) editBarRef.hidden = !on;
+    if (editBtnRef) {
+      editBtnRef.setAttribute('aria-pressed', on ? 'true' : 'false');
+      editBtnRef.classList.toggle('active', on);
+    }
+    // הכלים שהופיעו משנים את גובה הכותרות, ולכן הידיות נמדדות מחדש
+    scheduleTune();
+    // ביציאה המיקוד חוזר לכפתור — אחרת הוא נשאר על כלי שנעלם
+    if (!on && editBtnRef && boardRef?.contains(document.activeElement)) editBtnRef.focus();
+  }
+
+  /*
+   * ‎Escape‎ יוצא ממצב הסידור. מאזין אחד לכל המסמך, שנרשם פעם אחת — המסך
+   * נבנה מחדש בכל רענון רקע, ומאזין לכל ציור היה נערם. כשדיאלוג פתוח הוא
+   * זה שנסגר, ולא מצב הסידור שמאחוריו.
+   */
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape' || !editing || !boardRef?.isConnected) return;
+    if (document.querySelector('.modal-backdrop') || quickPanel) return;
+    setEditing(false);
+  });
+
+  /**
+   * "אילו חלונות להציג" — תיבת סימון לכל חלון.
+   *
+   * שמירה אחת בסוף ולא בכל סימון: כל שמירה מציירת את הלוח מחדש, ושמונה
+   * סימונים היו שמונה ציורים מאחורי הדיאלוג.
+   *
+   * חלון שאין לו תוכן כרגע (או שאינו רלוונטי לתפקיד) מוצג אך מושבת, עם
+   * הסבר: חלון שנעלם מהרשימה לגמרי נראה כמו באג, וחלון שאפשר לסמן אך לא
+   * יופיע — עוד יותר. מצב ההסתרה שלו נשמר כמו שהוא.
+   */
+  function windowsDialog(available) {
+    const hidden = new Set(layout().hidden ?? []);
+    const boxes = new Map();
+    const rows = CARD_ORDER.map((k) => {
+      const can = available.has(k);
+      const box = el('input', { type: 'checkbox', checked: !hidden.has(k), disabled: !can });
+      boxes.set(k, box);
+      return el(`label.win-option${can ? '' : '.is-unavailable'}`, {}, [
+        box,
+        el('span.wo-text', {}, [
+          el('b', { text: CARD_LABEL[k] }),
+          el('span.mute-sm', { text: can ? CARD_HINT[k] : `${CARD_HINT[k]} — אין בו תוכן כרגע` })
+        ])
+      ]);
+    });
+
+    let m = null;
+    const save = () => {
+      const next = CARD_ORDER.filter((k) =>
+        (available.has(k) ? !boxes.get(k).checked : hidden.has(k)));
+      m.close();
+      if (next.join() === CARD_ORDER.filter((k) => hidden.has(k)).join()) return;
+      // מי שכן של מי השתנה, ולכן חלוקה שווה — ראה evenShares
+      saveLayout({ hidden: next, ...evenShares() });
+    };
+
+    m = UI.modal({
+      title: 'אילו חלונות להציג',
+      body: el('div.win-options', {}, rows),
+      footer: [
+        el('button.btn.btn-ghost', {
+          type: 'button',
+          title: 'כל החלונות גלויים, בסדר, ברוחב ובגובה המקוריים',
+          onclick: () => {
+            m.close();
+            // ‎null‎ מוחק את ההעדפה בשרת ומחזיר את ברירת המחדל
+            App.setPref('homeLayout', null);
+            reload();
+            UI.toast('הלוח חזר לסידור המקורי');
+          }
+        }, ['איפוס לברירת מחדל']),
+        el('div.spacer'),
+        el('button.btn', { type: 'button', onclick: () => m.close() }, ['ביטול']),
+        el('button.btn.btn-primary', { type: 'button', onclick: save }, ['שמירה'])
+      ]
+    });
   }
 
   /** לוח החלונות — מקבל מפה של כרטיסים שנבנו, ומסדר אותם לפי ההעדפה */
   function homeBoard(cards) {
     const available = new Set(Object.keys(cards).filter((k) => cards[k]));
     const slots = [];
-    const board = el('div.home-board', {},
-      orderedKeys()
+    /*
+     * ‎role=list‎ ולא רק ‎div‎: לקורא מסך הלוח הוא רשימה של חלונות, וכך
+     * "3 מתוך 8" (ראה numberSlots) נקרא בהקשר ולא כמספר תלוש.
+     */
+    const board = el(`div.home-board${editing ? '.is-editing' : ''}`, {
+      role: 'list', 'aria-label': 'חלונות דף הבית'
+    }, orderedKeys()
         .filter((k) => available.has(k) && !isHidden(k))
         .map((k) => {
           const slot = slotFor(k, cards[k]);
@@ -720,10 +987,16 @@ const HomeView = (() => {
           return slot;
         }));
 
+    // לוח ריק לגמרי נראה כתקלה — אומרים במפורש שהכול הוסתר ואיך מחזירים
+    const empty = slots.length ? null : el('div.card.card-pad.mute-sm.mt', {
+      text: 'כל החלונות מוסתרים. "סידור הלוח" ← "אילו חלונות להציג" מחזיר אותם.'
+    });
+
     makeSlotsDraggable(slots);
+    numberSlots(board);
     boardRef = board;
     if (boardWatcher) { boardWatcher.disconnect(); boardWatcher.observe(board); }
-    return [board, layoutFooter(available)];
+    return [editBar(available), board, empty];
   }
 
   /**
@@ -775,11 +1048,29 @@ const HomeView = (() => {
       return { s1, s2, sum: s1 + s2, w1, w2, total: w1 + w2 };
     };
 
-    /** רוחב חדש לחלון המוביל → משקלים לשניהם, בגבול המינימום לכל אחד */
-    const sharesFor = (nextW1, p) => {
-      const w1 = Math.min(p.total - SHARE_MIN_PX, Math.max(SHARE_MIN_PX, nextW1));
+    /**
+     * רוחב חדש לחלון המוביל → משקלים לשניהם, בגבול המינימום לכל אחד.
+     *
+     * ‎snap‎ — בגרירה בלבד: רוחב שנופל בטווח ‎SNAP_PX‎ משליש, מחצי או
+     * משני שלישים של הזוג נצמד אליהם. בלי זה "חצי-חצי" היה כמעט בלתי אפשרי
+     * להשגה ביד, והלוח נראה עקום בפיקסל או שניים. החצים במקלדת אינם נצמדים:
+     * הם כבר צעד מדויק, וצעד שנבלע בהצמדה נראה כלחיצה שלא עשתה דבר.
+     *
+     * היחס בין המשקלים הוא בדיוק היחס בין הרוחבים (ראה ‎--share‎ בגיליון),
+     * ולכן הצמדה של הרוחב היא הצמדה מדויקת של היחס.
+     */
+    const sharesFor = (nextW1, p, { snap = false } = {}) => {
+      let w1 = Math.min(p.total - SHARE_MIN_PX, Math.max(SHARE_MIN_PX, nextW1));
+      let mark = null;
+      if (snap) {
+        const hit = SNAP_RATIOS.find(({ r }) => Math.abs(w1 - p.total * r) <= SNAP_PX
+          && p.total * r >= SHARE_MIN_PX && p.total * (1 - r) >= SHARE_MIN_PX);
+        if (hit) { w1 = p.total * hit.r; mark = hit.label; }
+      }
       const s1 = p.sum * w1 / p.total;
-      return [s1, p.sum - s1];
+      const out = [s1, p.sum - s1];
+      out.label = `${mark ?? `${Math.round((w1 / p.total) * 100)}%`} · ${Math.round(w1)}px`;
+      return out;
     };
 
     const apply = (s1, s2) => {
@@ -800,14 +1091,17 @@ const HomeView = (() => {
       h.classList.add('dragging');
       document.body.style.userSelect = 'none';
       let last = [p.s1, p.s2];
+      const tip = measureTip(h);
 
       const onMove = (ev) => {
         // ב-RTL החלון המוביל הוא הימני, ולכן משיכה שמאלה מרחיבה אותו
         const delta = rtl ? startX - ev.clientX : ev.clientX - startX;
-        last = sharesFor(p.w1 + delta, p);
+        last = sharesFor(p.w1 + delta, p, { snap: true });
         apply(last[0], last[1]);
+        tip.show(last.label);
       };
       const onUp = () => {
+        tip.remove();
         h.classList.remove('dragging');
         document.body.style.userSelect = '';
         h.removeEventListener('pointermove', onMove);
@@ -875,8 +1169,20 @@ const HomeView = (() => {
    */
   function tuneBoard() {
     if (!boardRef?.isConnected) return;
+    /*
+     * לא באמצע גרירה. שינוי גובה מזיז את הלוח, המשקיף מזהה שינוי גודל
+     * ומתזמן התאמה — וההתאמה מחליפה את הידיות. הידית שבידי המשתמש הוסרה
+     * מהמסמך, ‎pointerup‎ שלה לא הגיע לעולם, והגובה שנגרר לא נשמר: גרירה
+     * איטית "עבדה" על המסך ונעלמה בטעינה הבאה. ההתאמה נדחית לסוף הגרירה.
+     */
+    if (boardRef.querySelector('.slot-resize.dragging, .slot-wresize.dragging')
+      || boardRef.classList.contains('is-arranging')) {
+      scheduleTune();
+      return;
+    }
     attachHeightHandles(boardRef);
     attachWidthHandles(boardRef);
+    numberSlots(boardRef);
 
     // אחרי הזזה במקלדת המיקוד היה נופל לגוף המסמך, והחץ הבא לא היה עושה דבר
     if (pendingFocus) {
@@ -910,6 +1216,8 @@ const HomeView = (() => {
     const scrollTop = silent ? container.scrollTop : 0;
     // כניסה חדשה למסך מתחילה מדף נקי — המשימות שהושלמו בביקור הקודם כבר סגורות
     if (!silent) { keepCompleted.clear(); UI.mount(container, UI.spinner()); }
+    // מצב הסידור שייך לביקור — מי שחוזר לדף מקבל לוח נקי (ראה ‎editing‎)
+    if (!silent) editing = false;
     let data;
     let reports = null;
     let inbox = null;
@@ -958,12 +1266,31 @@ const HomeView = (() => {
       phonebook: App.isVendor() ? null : PhonebookView.card()
     };
 
+    /*
+     * הכפתור בכותרת הדף ולא בתוך הלוח: הוא נוגע בלוח כולו, ובמקום הזה הוא
+     * נמצא גם כשכל החלונות הוסתרו. ‎aria-pressed‎ — זה מתג, לא פעולה חד-פעמית.
+     */
+    editBtnRef = el(`button.btn.btn-sm.home-edit-btn${editing ? '.active' : ''}`, {
+      type: 'button',
+      'aria-pressed': editing ? 'true' : 'false',
+      title: 'הזזה, שינוי גודל והסתרה של החלונות בדף',
+      onclick: () => setEditing(!editing)
+    }, [UI.lineIcon('pencil'), 'סידור הלוח']);
+
     UI.mount(container,
       el('div.page-head', {}, [
         el('div', {}, [
-          el('h2', { text: `${greeting}, ${App.state.actor.name.split(' ')[0]}` }),
-          el('div.sub', { text: 'תמונת מצב אישית. גררו חלון מהידית ⠿ והלוח יתפנה לו תוך כדי (במגע — לחיצה ארוכה, במקלדת — Alt וחצים). ⇤⇥ קובע רוחב, ואת הגבולות אפשר למשוך.' })
-        ])
+          // ‎h1‎ — הכותרת הראשית של העמוד; עד כה לא הייתה לו כזו כלל
+          el('h1', { text: `${greeting}, ${App.state.actor.name.split(' ')[0]}` }),
+          /*
+           * שורה אחת. ההוראות לסידור החלונות ישבו כאן ונמתחו לשתיים-שלוש
+           * שורות בכל פתיחה של הדף; הן עברו לפס מצב הסידור (ראה editBar),
+           * שם הן נקראות ברגע שהן רלוונטיות.
+           */
+          el('div.sub', { text: 'תמונת מצב אישית של העבודה שלך.' })
+        ]),
+        el('div.spacer'),
+        editBtnRef
       ]),
       widgets(data.widgets),
       ...homeBoard(cards)

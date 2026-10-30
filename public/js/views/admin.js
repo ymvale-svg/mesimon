@@ -31,18 +31,27 @@ const AdminView = (() => {
       (t.full ? App.can(t.perm) : App.may(t.perm)) && (t.key !== 'matrix' || App.state.actor.seesRoles));
     if (!allowed.some((t) => t.key === tab)) tab = allowed[0]?.key;
 
+    // המעבר בונה את המסך מחדש, ובלי זה המיקוד במקלדת היה נופל לגוף המסמך
+    const tabsHadFocus = !!container.querySelector('.admin-tabs')?.contains(document.activeElement);
+    const tabList = adminTabs(allowed, (key) => { tab = key; render(container); });
+
     UI.mount(container,
       el('div.page-head', {}, [
         el('div', {}, [
-          el('h2', { text: 'ניהול המערכת' }),
+          // כותרת העמוד היא ‎h1‎ — לכל עמוד כותרת ראשית אחת, וקורא מסך מנווט אליה
+          el('h1', { text: 'ניהול המערכת' }),
           el('div.sub', { text: 'משתמשים, ספקים, כללי אוטומציה והגדרות תפעוליות.' })
         ])
       ]),
-      el('div.tabs', {}, allowed.map((t) =>
-        el(`button${tab === t.key ? '.active' : ''}`, { onclick: () => { tab = t.key; render(container); } }, [t.label])
-      )),
-      el('div#admin-body', {}, [UI.spinner()])
+      tabList,
+      el('div#admin-body', {
+        role: 'tabpanel',
+        'aria-labelledby': `admin-tab-${tab}`,
+        tabindex: '-1'
+      }, [UI.spinner()])
     );
+    revealActiveTab(tabList);
+    if (tabsHadFocus) tabList.querySelector('[aria-selected="true"]')?.focus({ preventScroll: true });
 
     const body = container.querySelector('#admin-body');
     try {
@@ -61,6 +70,92 @@ const AdminView = (() => {
   }
 
   const reload = () => render(containerRef);
+
+  /**
+   * שורת הלשוניות — שורה אחת שנגללת לרוחב, ולא שתי שורות.
+   *
+   * תשע לשוניות אינן נכנסות ב-900 פיקסלים, וקודם לכן כל כפתור התכווץ עד
+   * שהתווית שלו נשברה לשתי שורות ("משתמשים / והרשאות") — כך שהשורה נראתה
+   * כמו שתי שורות של לשוניות בגבהים שונים. גלילה אופקית שומרת על כל תווית
+   * שלמה, ודהייה בקצה מראה שיש עוד מעבר לו.
+   *
+   * דפוס ‎tablist‎ מלא: חצים עוברים בין הלשוניות, ‎Home‎ ו-‎End‎ לקצוות,
+   * ורק הלשונית הפעילה בסדר הטאב — אחרת מעבר על תשע לשוניות בטאב היה
+   * תשע הקשות עד שמגיעים לתוכן. הבחירה ב-Enter או ברווח ולא בעצם המעבר,
+   * כי כל לשונית טוענת מהשרת, וחץ שטוען היה מפעיל תשע טעינות בדרך.
+   */
+  function adminTabs(allowed, onPick) {
+    const buttons = allowed.map((t) => el(`button${tab === t.key ? '.active' : ''}`, {
+      type: 'button',
+      role: 'tab',
+      id: `admin-tab-${t.key}`,
+      'aria-selected': tab === t.key ? 'true' : 'false',
+      'aria-controls': 'admin-body',
+      tabindex: tab === t.key ? '0' : '-1',
+      onclick: () => onPick(t.key)
+    }, [t.label]));
+
+    const list = el('div.tabs.admin-tabs', { role: 'tablist', 'aria-label': 'אזורי הניהול' }, buttons);
+
+    list.addEventListener('keydown', (e) => {
+      const at = buttons.indexOf(document.activeElement);
+      if (at < 0) return;
+      const rtl = getComputedStyle(list).direction === 'rtl';
+      // ב-RTL הלשונית הבאה משמאל, ולכן חץ שמאלה מתקדם
+      const step = e.key === 'ArrowLeft' ? (rtl ? 1 : -1) : e.key === 'ArrowRight' ? (rtl ? -1 : 1) : 0;
+      let to = -1;
+      if (step) to = (at + step + buttons.length) % buttons.length;
+      else if (e.key === 'Home') to = 0;
+      else if (e.key === 'End') to = buttons.length - 1;
+      if (to < 0) return;
+      e.preventDefault();
+      buttons[at].tabIndex = -1;
+      buttons[to].tabIndex = 0;
+      buttons[to].focus();
+      buttons[to].scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    });
+
+    list.addEventListener('scroll', () => markEdges(list), { passive: true });
+    // רוחב השורה משתנה גם בלי גלילה — שינוי גודל החלון או קיפול התפריט
+    if (typeof ResizeObserver === 'function') new ResizeObserver(() => markEdges(list)).observe(list);
+    return list;
+  }
+
+  /**
+   * סימון הקצה שיש מעבר לו עוד לשוניות. נמדד לפי מיקום הלשוניות עצמן ולא
+   * לפי ‎scrollLeft‎ — ב-RTL ערכו שלילי או חיובי לפי הדפדפן, והמדידה של
+   * המלבנים נכונה בכל כיוון ובכל דפדפן.
+   */
+  function markEdges(list) {
+    const box = list.getBoundingClientRect();
+    const tabs = [...list.children];
+    if (!tabs.length) return;
+    const left = Math.min(...tabs.map((b) => b.getBoundingClientRect().left));
+    const right = Math.max(...tabs.map((b) => b.getBoundingClientRect().right));
+    list.classList.toggle('more-left', left < box.left - 1);
+    list.classList.toggle('more-right', right > box.right + 1);
+  }
+
+  /**
+   * הלשונית הפעילה נגללת אל תוך השורה. בלי זה, מי שבחר את "תבניות" בקצה
+   * השורה קיבל אחרי הטעינה שורה שגלולה חזרה להתחלה, והלשונית שבחר — זו
+   * שמסבירה מה מוצג מתחת — מחוץ למסך.
+   *
+   * ‎scrollLeft‎ ישירות ולא ‎scrollIntoView‎: האחרון גולל גם את העמוד כולו
+   * כדי להביא את הלשונית למרכז, והעמוד היה קופץ בכל מעבר לשונית.
+   */
+  function revealActiveTab(list) {
+    requestAnimationFrame(() => {
+      const active = list.querySelector('[aria-selected="true"]');
+      if (active) {
+        const box = list.getBoundingClientRect();
+        const r = active.getBoundingClientRect();
+        if (r.left < box.left) list.scrollLeft -= box.left - r.left + 24;
+        else if (r.right > box.right) list.scrollLeft += r.right - box.right + 24;
+      }
+      markEdges(list);
+    });
+  }
 
   // ------------------------------------------------------------- משתמשים
 

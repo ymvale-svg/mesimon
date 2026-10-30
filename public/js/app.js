@@ -1820,7 +1820,13 @@ const App = (() => {
      * לפי מה שעושים כרגע, ולא פעם אחת בחיים.
      */
     const pinned = sidebarPinned();
+    /*
+     * ‎aria-label‎ על כל פריט ניווט, ולא רק ‎title‎: ברצועה המכווצת התווית
+     * מוסתרת ב-‎display: none‎, וטקסט מוסתר כך אינו נספר בשם הנגיש — קורא
+     * מסך שמע "כפתור" בלי לדעת לאן. ‎title‎ נשאר בשביל הריחוף בעכבר.
+     */
     items.push(el('button.nav-item.nav-pin-toggle', {
+      'aria-label': pinned ? 'כיווץ התפריט' : 'נעיצת התפריט',
       title: pinned ? 'שחרור הנעיצה — התפריט יתכנס לרצועת אייקונים' : 'נעיצת התפריט פתוח',
       onclick: () => {
         localStorage.setItem(SIDEBAR_PIN_KEY, pinned ? '0' : '1');
@@ -1832,11 +1838,15 @@ const App = (() => {
     ]));
     const add = (name, params, extra = {}) => {
       const route = ROUTES[name];
+      const label = extra.label ?? route.label;
       items.push(el(`button.nav-item${state.route.name === name && !extra.matchParam ? '.active' : ''}`, {
+        'aria-label': extra.count ? `${label} (${extra.count})` : label,
+        title: label,
+        'aria-current': state.route.name === name && !extra.matchParam ? 'page' : null,
         onclick: () => navigate(name, params ?? {})
       }, [
         el('span.ico', {}, [extra.icon ? extra.icon : UI.icon(route.icon)]),
-        el('span', { text: extra.label ?? route.label }),
+        el('span', { text: label }),
         extra.count !== undefined ? el('span.count', { text: String(extra.count) }) : null
       ]));
     };
@@ -1857,6 +1867,7 @@ const App = (() => {
     const projectItem = (p) => {
       const node = el(`button.nav-item${state.route.name === 'board' && state.route.params.projectId === p.id ? '.active' : ''}${p.parentProjectId ? '.is-subproject' : ''}`, {
         title: p.parentProjectName ? `${p.parentProjectName} ← ${p.name}` : p.name,
+        'aria-label': p.name,
         onclick: () => navigate('board', { projectId: p.id }),
         /*
          * הקלקה ימנית פותחת את תפריט הפעולות במקום את תפריט הדפדפן.
@@ -2002,7 +2013,10 @@ const App = (() => {
       items.push(el('div.nav-note', { text: 'אין פרויקטים שאתה חלק מהם' }));
     }
     if (may('create_project')) {
-      items.push(el('button.nav-item', { onclick: () => BoardView.openProjectDialog() }, [
+      items.push(el('button.nav-item', {
+        'aria-label': 'פרויקט חדש', title: 'פרויקט חדש',
+        onclick: () => BoardView.openProjectDialog()
+      }, [
         el('span.ico', { text: '＋' }), el('span', { text: 'פרויקט חדש' })
       ]));
     }
@@ -2132,14 +2146,26 @@ const App = (() => {
         ? el('button.btn.btn-primary', { onclick: () => BoardView.openTaskDialog() }, ['＋ משימה חדשה'])
         : null,
       bell,
-      el('button.user-chip', { onclick: userMenu }, [
-        UI.avatar(state.actor.name, { vendor: isVendor() }),
-        el('div', {}, [
-          el('div.name', { text: state.actor.name }),
-          // רמת הגישה מוצגת רק למי שרשאי לראות רמות; לשאר מוצגת המחלקה
-          el('div.role', { text: state.actor.roleLabel ?? state.actor.department ?? (isVendor() ? 'ספק חיצוני' : '') })
-        ])
-      ])
+      (() => {
+        // רמת הגישה מוצגת רק למי שרשאי לראות רמות; לשאר מוצגת המחלקה
+        const role = state.actor.roleLabel ?? state.actor.department ?? (isVendor() ? 'ספק חיצוני' : '');
+        /*
+         * השם והתפקיד גם ב-‎aria-label‎ וב-‎title‎: מתחת ל-1100 פיקסלים הטקסט
+         * מוסתר ונשאר רק העיגול (ראה ‎.user-chip‎ בגיליון), ובלי השם הנגיש
+         * הכפתור היה אילם — גם לקורא מסך וגם למי שמרחף ותוהה של מי החשבון.
+         */
+        const who = [state.actor.name, role].filter(Boolean).join(' · ');
+        return el('button.user-chip', {
+          type: 'button', 'aria-haspopup': 'dialog', 'aria-label': `${who} — תפריט משתמש`, title: who,
+          onclick: userMenu
+        }, [
+          UI.avatar(state.actor.name, { vendor: isVendor() }),
+          el('div.uc-text', {}, [
+            el('div.name', { text: state.actor.name }),
+            el('div.role', { text: role })
+          ])
+        ]);
+      })()
     ]);
   }
 
