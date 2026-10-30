@@ -402,7 +402,8 @@ const BoardView = (() => {
         onchange: (e) => e.target.value && run('status', e.target.value)
       }),
       UI.select([{ value: '', label: 'שינוי אחראי…' },
-        ...App.state.users.map((u) => ({ value: `user:${u.id}`, label: u.name })),
+        // רק מי שמותר לי לשייך אליו — אותו סינון של כל בוררי האחראי
+        ...(({ near, far }) => [...near, ...far])(UI.usersByDepartment()).map((u) => ({ value: `user:${u.id}`, label: u.name })),
         ...(App.may('assign_task_to_vendor') ? App.state.vendors.map((v) => ({ value: `vendor:${v.id}`, label: `${v.name} (ספק)` })) : [])
       ], '', { onchange: (e) => e.target.value && run('assignee', e.target.value) }),
       UI.select([{ value: '', label: 'שינוי עדיפות…' }, ...App.state.priorities.map((p) => ({ value: p.key, label: p.label }))], '', {
@@ -416,7 +417,7 @@ const BoardView = (() => {
       UI.select([
         { value: '', label: 'העברה לפרויקט…' },
         { value: '__none__', label: 'ללא פרויקט' },
-        ...App.state.projects.map((p) => ({ value: String(p.id), label: p.name }))
+        ...App.state.projects.filter((p) => p.canAddTask).map((p) => ({ value: String(p.id), label: p.name }))
       ], '', {
         onchange: (e) => e.target.value && run('project', e.target.value === '__none__' ? '' : e.target.value)
       }),
@@ -658,7 +659,11 @@ const BoardView = (() => {
      * שלא — מוצא בראש את מה שהוא נוגע בו כל יום.
      */
     const current = task?.projectId ?? (pre.projectId || opts.projectId) ?? '';
-    const projectPicker = UI.projectPicker({ value: current });
+    // רק פרויקטים שבהם מותר לי לפתוח משימה (‎canAddTask‎ מהשרת) — והפרויקט הנוכחי, שלא יתאפס
+    const projectPicker = UI.projectPicker({
+      value: current,
+      projects: App.state.projects.filter((p) => p.canAddTask || String(p.id) === String(current))
+    });
 
     /*
      * חברי המחלקה של הפותח בראש הרשימה, תחת כותרת. בארגון של חמישים אנשים

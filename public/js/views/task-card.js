@@ -686,7 +686,8 @@ const TaskCardView = (() => {
         if (!task.permissions.edit) return el('div', { text: task.projectName ?? 'ללא פרויקט' });
         const select = UI.select(
           [{ value: '', label: 'ללא פרויקט' },
-            ...App.state.projects.map((p) => ({ value: String(p.id), label: p.name }))],
+            // רק פרויקטים שמותר להעביר אליהם (‎canAddTask‎), והנוכחי
+            ...App.state.projects.filter((p) => p.canAddTask || p.id === task.projectId).map((p) => ({ value: String(p.id), label: p.name }))],
           String(task.projectId ?? '')
         );
         select.addEventListener('change', async () => {
