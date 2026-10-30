@@ -47,7 +47,11 @@ services:
         sync: false
       - key: ANTHROPIC_API_KEY     # משימות AI — בלעדיו האפשרות אינה מוצגת כזמינה
         sync: false
-      - key: OPENAI_API_KEY        # תמלול הודעות קוליות לבוט הוואטסאפ (OpenAI) — ההגדרה הפשוטה. בלעדיו ובלי Google הבוט מבקש טקסט
+      - key: RUNPOD_API_KEY        # תמלול הודעות קוליות במודל העברית של ivrit.ai (RunPod) — ראשון בסדר
+        sync: false
+      - key: RUNPOD_ENDPOINT_ID    # מזהה ה-endpoint של ivrit-ai/runpod-serverless בחשבון ה-RunPod
+        sync: false
+      - key: OPENAI_API_KEY        # תמלול הודעות קוליות (OpenAI) — גיבוי ל-ivrit.ai
         sync: false
       - key: GOOGLE_SPEECH_API_KEY # חלופה ל-OpenAI: תמלול ב-Google Speech-to-Text
         sync: false
