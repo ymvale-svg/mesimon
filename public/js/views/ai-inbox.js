@@ -280,9 +280,9 @@ const AiInboxView = (() => {
     const d = s.data;
     const approve = el('button.btn.btn-sm.btn-primary', {}, ['✓ אישור']);
     approve.addEventListener('click', run(approve, () => API.post(`/api/ai/suggestions/${s.id}/approve`, {}), reload));
-    const reject = el('button.btn.btn-sm.btn-ghost', {}, ['✕']);
-    reject.title = 'דחייה';
-    reject.addEventListener('click', () => rejectDialog(s, reload));
+    const reject = el('button.btn.btn-sm.btn-ghost', {}, ['✕ לא משימה']);
+    reject.title = 'לא משימה — נדחית מיד, אפשר לבטל';
+    reject.addEventListener('click', run(reject, () => rejectNow(s, reload), reload));
     const toAi = el('button.btn.btn-sm', {}, ['✨ משימת AI']);
     toAi.title = 'לבקש את זה ממישהו — העוזר ינסח פנייה לאישורך ויעקוב';
     toAi.addEventListener('click', () => AiTaskView.openDialog({
@@ -329,6 +329,27 @@ const AiInboxView = (() => {
       el('div.ai-row-main', { onclick: () => s.taskId && TaskCardView.open(s.taskId) }, [el('b', { text: s.data.title }), fromLine(s)]),
       el('div.ai-row-actions', {}, [undo])
     ]);
+  }
+
+  /**
+   * "לא משימה" בלחיצה אחת, בלי חלון — כמו ב-Today. ההודעה מאפשרת "ביטול",
+   * ולשולח שממנו הגיעה הצעה — גם "לא להציע ממנו עוד" / "לא לסרוק את השיחה"
+   * (מהדחייה השנייה מאותו שולח בוואטסאפ האישי — עם הדגשה שזו כבר הפעם השנייה).
+   */
+  async function rejectNow(s, reload = () => App.refreshView()) {
+    await API.post(`/api/ai/suggestions/${s.id}/reject`, {});
+    const personal = Boolean(s.data.personal && s.data.chatPhone);
+    const label = personal
+      ? `${s.senderRejections >= 1 ? '⚠ ' : ''}לא לסרוק את ${s.from.name}`
+      : s.from.email ? 'לא להציע ממנו עוד' : null;
+    UI.undoToast(`"${s.data.title}" — לא משימה`, {
+      ms: 8000,
+      onUndo: async () => {
+        await API.post(`/api/ai/suggestions/${s.id}/restore`, {});
+        await reload();
+      },
+      extra: label ? { label, onClick: () => API.post(`/api/ai/suggestions/${s.id}/ignore-sender`, {}) } : null
+    });
   }
 
   async function rejectDialog(s, reload) {
@@ -675,5 +696,5 @@ const AiInboxView = (() => {
     setTimeout(() => scanDialog(() => HomeView.reload()), 300);
   }
 
-  return { load, card, openGmail, scanDialog, handleReturn, editSuggestion, rejectDialog, meetingRow };
+  return { load, card, openGmail, scanDialog, handleReturn, editSuggestion, rejectDialog, rejectNow, meetingRow };
 })();

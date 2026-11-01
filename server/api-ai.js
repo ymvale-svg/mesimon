@@ -613,6 +613,8 @@ function register(router, h) {
   suggestionAction('join', (id, actor) => MailScan.join(id, actor));
   suggestionAction('skip', (id, actor) => MailScan.skip(id, actor));
   suggestionAction('undo', (id, actor) => MailScan.undo(id, actor));
+  suggestionAction('restore', (id, actor) => MailScan.restore(id, actor));
+  suggestionAction('ignore-sender', (id, actor) => MailScan.ignoreSenderOf(id, actor));
 
   router.post('/api/ai/suggestions/approve-all', async (req, res, ctx) => {
     const actor = userOnly(ctx);

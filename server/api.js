@@ -783,6 +783,8 @@ function publicActor(actor) {
     phone: actor.type === 'user' ? D.get('SELECT phone FROM users WHERE id = ?', actor.id)?.phone ?? '' : '',
     // טלפון במשרד / שלוחה — לאלפון. טקסט חופשי, בלי אימות
     officePhone: actor.type === 'user' ? D.get('SELECT office_phone FROM users WHERE id = ?', actor.id)?.office_phone ?? '' : '',
+    // ימי העבודה (0=ראשון) — "מחר" בבורר דחיית היעד הוא יום העבודה הבא שלו
+    workDays: actor.type === 'user' ? W.workDaysOf(actor.id) : [0, 1, 2, 3, 4],
     // מזכירה — רואה את מסך היומן וקובעת ביומנים שהעובדים שיתפו איתה
     secretary: actor.type === 'user' && Boolean(D.get('SELECT is_secretary FROM users WHERE id = ?', actor.id)?.is_secretary)
   };
