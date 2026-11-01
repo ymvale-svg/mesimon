@@ -177,10 +177,10 @@ const VoiceView = (() => {
     let answerMic = null;                    // המיקרופון בזמן שאלה: מאזין לתשובה
     let answerRec = null;                    // ההאזנה לתשובה הנוכחית — נעצרת בסגירה
     const input = el('textarea.voice-input', { placeholder: 'לדוגמה: פתח משימה לסדר את המעליות, אחראי דני, עד יום חמישי. צ׳קליסט: אחת להזמין טכנאי, שתיים לבדוק את הלוח.' });
-    const mic = el('button.voice-mic', { type: 'button', title: 'הקלטה', 'aria-label': 'הקלטה' }, [el('span.voice-mic-ic', {}, [UI.lineIcon('mic')])]);
-    const sendBtn = el('button.btn.btn-primary.voice-send', { type: 'button' }, [UI.lineIcon('check'), o.forcePreview ? 'יצירת משימה' : 'המשך']);
-    const typeBtn = el('button.btn.btn-ghost', { type: 'button' }, [UI.lineIcon('keyboard'), 'הקלדה']);
-    const closeBtn = el('button.icon-btn.voice-close', { type: 'button', title: 'סגירה', 'aria-label': 'סגירה' }, [UI.lineIcon('x')]);
+    const mic = el('button.voice-mic', { type: 'button', title: 'הקלטה' }, [el('span.voice-mic-ic', { text: '🎙' })]);
+    const sendBtn = el('button.btn.btn-primary.voice-send', { type: 'button' }, [o.forcePreview ? '✓ יצירת משימה' : '✓ המשך']);
+    const typeBtn = el('button.btn.btn-ghost', { type: 'button' }, ['⌨ הקלדה']);
+    const closeBtn = el('button.icon-btn.voice-close', { type: 'button', title: 'סגירה' }, ['✕']);
     const hint = el('div.voice-hint', {}, [
       el('div', { text: o.forcePreview ? 'אמרו את המשימה. למשל:' : 'אמרו מה לעשות. למשל:' }),
       el('div.voice-example', { text: '"פתח משימה לסדר את המעליות"' }),
@@ -215,7 +215,7 @@ const VoiceView = (() => {
       overlay.classList.toggle('is-busy', busy);
       mic.disabled = busy || !supported();
       sendBtn.disabled = busy || !(typing ? input.value.trim() : text());
-      UI.mount(typeBtn, typing ? [UI.lineIcon('mic'), 'חזרה להקלטה'] : [UI.lineIcon('keyboard'), 'הקלדה']);
+      typeBtn.textContent = typing ? '🎙 חזרה להקלטה' : '⌨ הקלדה';
       live.textContent = typing ? '' : text();
       hint.style.display = (typing ? input.value.trim() : text()) ? 'none' : '';
     }
@@ -539,7 +539,7 @@ const VoiceView = (() => {
           el('div.voice-q', { text: question }),
           chips,
           heard,
-          el('div.voice-qa-foot', {}, [typed, el('button.btn.btn-sm', { type: 'button', title: 'להשאיר את ברירת המחדל', onclick: () => finish({ skip: true }) }, ['דלג', UI.lineIcon('arrow-left')])])
+          el('div.voice-qa-foot', {}, [typed, el('button.btn.btn-sm', { type: 'button', title: 'להשאיר את ברירת המחדל', onclick: () => finish({ skip: true }) }, ['דלג ←'])])
         );
         live.textContent = '';
         ask();

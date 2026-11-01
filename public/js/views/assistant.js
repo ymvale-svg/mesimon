@@ -47,7 +47,7 @@ const AssistantView = (() => {
     const choices = el('div.asst-choices');
     const input = el('input.asst-input', { type: 'text', placeholder: 'לכתוב לעוזר — או לענות בקול 🎙' });
     const send = el('button.btn.btn-primary', { type: 'button' }, ['שליחה']);
-    const mic = Recognition ? el('button.btn', { type: 'button', title: 'לענות בקול', 'aria-label': 'לענות בקול' }, [UI.lineIcon('mic')]) : null;
+    const mic = Recognition ? el('button.btn', { type: 'button', title: 'לענות בקול' }, ['🎙']) : null;
     let busy = false;
 
     const bubble = (who, content) => {
@@ -58,7 +58,7 @@ const AssistantView = (() => {
     };
 
     const extras = (res) => [
-      res.open === 'today' ? el('button.btn.btn-sm', { onclick: () => { m.close(); App.navigate('today'); } }, [UI.lineIcon('sun'), 'פתיחת Today']) : null,
+      res.open === 'today' ? el('button.btn.btn-sm', { onclick: () => { m.close(); App.navigate('today'); } }, ['☀ פתיחת Today']) : null,
       res.taskId ? el('button.btn.btn-sm', { onclick: () => { m.close(); TaskCardView.open(res.taskId); } }, ['פתיחת המשימה']) : null
     ].filter(Boolean);
 

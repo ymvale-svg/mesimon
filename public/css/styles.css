@@ -1279,7 +1279,6 @@ th.cell-bar { background: var(--border) !important; }
 .popover-option:hover { background: var(--surface-2); }
 .popover-option .swatch { width: 13px; height: 13px; border-radius: 4px; flex: none; }
 .popover-option .check { margin-inline-start: auto; color: var(--brand-ink); font-weight: 800; }
-.check .li { width: 14px; height: 14px; }
 
 /* ---------------------------------------------------------------- ציר זמן */
 
@@ -2997,6 +2996,7 @@ input[type="color"] { width: 46px; height: 30px; padding: 2px; cursor: pointer; 
   font-size: 11px; font-weight: 800; display: inline-grid; place-items: center; padding: 0 5px;
 }
 .mic-btn { font-size: 16px; padding: 6px 11px; }
+.nav-emoji { font-size: 16px; line-height: 1; }
 
 /* ================================================================ הקלטה */
 
@@ -3339,7 +3339,6 @@ input[type="color"] { width: 46px; height: 30px; padding: 2px; cursor: pointer; 
   border: 2px solid var(--surface);
 }
 .ap-check { background: var(--brand-dark); color: #fff; }
-.ap-badge .li, .ap-check .li { width: 11px; height: 11px; }
 .ap-badge { background: var(--brand-light); color: var(--brand-dark); }
 .ap-more .ap-avatar { background: none; border: 1.5px dashed var(--border-strong); color: var(--text-mute); font-size: 18px; }
 .ap-hint { margin-top: 2px; color: var(--text-soft); }
@@ -3400,8 +3399,7 @@ input[type="color"] { width: 46px; height: 30px; padding: 2px; cursor: pointer; 
 
 /* ---------------------------------------------- סמלי קו (‎UI.lineIcon‎) */
 
-/* ‎vertical-align‎ — בכפתור שאינו flex הסמל יושב על קו הבסיס ונראה גבוה מהמילה שלצדו */
-.li { display: inline-grid; place-items: center; width: 1.15em; height: 1.15em; flex: none; line-height: 0; vertical-align: -.2em; }
+.li { display: inline-grid; place-items: center; width: 1.15em; height: 1.15em; flex: none; line-height: 0; }
 .li svg { width: 100%; height: 100%; display: block; }
 .btn .li { width: 16px; height: 16px; }
 .btn-primary .li { color: inherit; }
@@ -3413,23 +3411,6 @@ input[type="color"] { width: 46px; height: 30px; padding: 2px; cursor: pointer; 
 .pb-title { display: flex; align-items: center; gap: 8px; }
 .pb-title .li { color: var(--brand-ink); width: 1em; height: 1em; }
 .e-icon .li { width: 34px; height: 34px; color: var(--brand-ink); opacity: .6; }
-/* סמלי קו בכפתורים שהיו בהם אימוג'י — באותו גודל של האייקונים שלצדם */
-.icon-btn .li { width: 18px; height: 18px; }
-.topbar .icon-btn .li { width: 20px; height: 20px; }
-.mic-btn .li { width: 18px; height: 18px; }
-.nav-item .ico .li { width: 19px; height: 19px; }
-.nav-pin-toggle .ico .li { width: 15px; height: 15px; }
-.view-switch button, .seg button, .tabs button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
-.view-switch button .li, .seg button .li, .tabs button .li { width: 15px; height: 15px; }
-.track-opt .li { width: 15px; height: 15px; }
-.chip-x .li, .pop-x .li { width: 12px; height: 12px; }
-.group-toggle .li { width: 15px; height: 15px; }
-.fchip-caret .li, .pp-caret .li { width: 12px; height: 12px; }
-.tk-move .li { width: 15px; height: 15px; }
-/* ה-‎text-shadow‎ של ה-✓ לא חל על SVG — אותו צל, כ-‎filter‎ */
-.proj-swatch .li { width: 13px; height: 13px; filter: drop-shadow(0 1px 1px rgba(0, 0, 0, .55)); }
-.voice-mic .li { width: .8em; height: .8em; }
-.spot-pick-open .btn .li { width: 14px; height: 14px; }
 /* ================================================================ שכבות: פאנל צד, ביטול, Ctrl+K, התראות */
 
 /*

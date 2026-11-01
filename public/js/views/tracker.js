@@ -726,7 +726,6 @@ const TrackerView = (() => {
           )),
           el('button.btn.btn-sm.btn-ghost.del', {
             title: 'מחיקת הסטטוס',
-            'aria-label': 'מחיקת הסטטוס',
             onclick: async () => {
               const ok = await UI.confirm(
                 `הסטטוס "${s.label}" יימחק. משימות שסומנו בו יחזרו ללא סטטוס.`,
@@ -741,7 +740,7 @@ const TrackerView = (() => {
                 reload();
               } catch (err) { UI.error(err); }
             }
-          }, [UI.lineIcon('trash')])
+          }, ['🗑'])
         ]);
       });
 
@@ -853,12 +852,12 @@ const TrackerView = (() => {
             App.setPref('trackerCollapsed', anyOpen ? groups.map((g) => g.id) : []);
             draw();
           }
-        }, anyOpen ? [UI.lineIcon('chevrons-down-up'), 'קיפול הכול'] : [UI.lineIcon('chevrons-up-down'), 'פרישת הכול']);
+        }, [anyOpen ? '⊟ קיפול הכול' : '⊞ פרישת הכול']);
       })(),
       el('button.btn.btn-sm', {
         title: 'בחירת עמודות, הסתרה והזזה',
         onclick: (e) => openColumnPicker(e.currentTarget)
-      }, [UI.lineIcon('kanban'), 'עמודות']),
+      }, ['▦ עמודות']),
       el('button.btn.btn-sm', {
         title: 'ניהול רשימת סטטוסי הבקרה שלי',
         onclick: () => openStatusManager()
@@ -870,7 +869,7 @@ const TrackerView = (() => {
           if (savedProject()) p.set('projectId', savedProject());
           window.location.assign(`/api/tracker/export?${p}`);
         }
-      }, [UI.lineIcon('download'), 'אקסל']),
+      }, ['⤓ אקסל']),
       el('span.mute-sm', {
         title: 'משימות שהושלמו אינן מוצגות במסך הבקרה',
         // מה שמוסתר נאמר, ובניסוח שמתאים לחתך — "בפרויקטים אחרים" אינו
@@ -924,8 +923,8 @@ const TrackerView = (() => {
         return el('div.col-row', {}, [
           el('label.checkbox', { title: c.always ? 'עמודה שאינה ניתנת להסתרה' : '' }, [box, c.label]),
           el('div.spacer'),
-          el('button.col-move', { title: 'הזזה למעלה', 'aria-label': 'הזזה למעלה', disabled: i === 0, onclick: () => move(c.key, -1) }, [UI.lineIcon('arrow-up')]),
-          el('button.col-move', { title: 'הזזה למטה', 'aria-label': 'הזזה למטה', disabled: i === list.length - 1, onclick: () => move(c.key, 1) }, [UI.lineIcon('arrow-down')])
+          el('button.col-move', { title: 'הזזה למעלה', disabled: i === 0, onclick: () => move(c.key, -1) }, ['▲']),
+          el('button.col-move', { title: 'הזזה למטה', disabled: i === list.length - 1, onclick: () => move(c.key, 1) }, ['▼'])
         ]);
       }),
       el('div.col-hint', { text: 'רוחב עמודה נגרר מהגבול שבין הכותרות. לחיצה כפולה על הגבול מאפסת אותה.' }),

@@ -148,7 +148,7 @@ const MeetingView = (() => {
               return el('span.chip.chip-assignee', { title: a.email }, [
                 resp ? el('span', { title: RESPONSE_TITLE[resp], text: `${RESPONSE[resp]} ` }) : null,
                 el('span', { text: a.name ? `${a.name} · ${a.email}` : a.email }),
-                el('button.chip-x', { type: 'button', title: 'הסרה', 'aria-label': `הסרת ${a.email}`, onclick: () => { state.attendees = state.attendees.filter((x) => x.email !== a.email); state.alternatives = null; draw(); loadAvailability(); } }, [UI.lineIcon('x')])
+                el('button.chip-x', { type: 'button', title: 'הסרה', onclick: () => { state.attendees = state.attendees.filter((x) => x.email !== a.email); state.alternatives = null; draw(); loadAvailability(); } }, ['✕'])
               ]);
             }))
           : el('div.mute-sm', { text: 'אפשר גם בלי משתתפים — פגישה ביומן בלבד.' })
@@ -246,7 +246,7 @@ const MeetingView = (() => {
         conflicts.length
           ? el('div.mt-conflicts', {}, [
               ...conflicts.map((c) => el('div.text-danger', { text: `⚠ ${c.who} תפוס/ה ${hhmm(c.start)}–${hhmm(c.end)}${c.title ? ` (${c.title})` : ''}` })),
-              el('button.btn.btn-sm.mt', { type: 'button', onclick: loadAlternatives }, [UI.lineIcon('shuffle'), 'חלופות — מה להזיז'])
+              el('button.btn.btn-sm.mt', { type: 'button', onclick: loadAlternatives }, ['🔀 חלופות — מה להזיז'])
             ])
           : state.avail && !state.avail.error ? el('div.text-ok.mute-sm', { text: '✓ כל המשתתפים מהארגון פנויים במועד הזה' }) : null,
         alternativesBox()
@@ -387,7 +387,7 @@ const MeetingView = (() => {
     }
 
     // --- שמירה
-    const saveBtn = el('button.btn.btn-primary', {}, editing ? ['שמירת שינויים'] : [UI.lineIcon('calendar'), 'קביעה']);
+    const saveBtn = el('button.btn.btn-primary', {}, [editing ? 'שמירת שינויים' : '📅 קביעה']);
     async function save() {
       const title = titleInput.value.trim();
       if (!title) return UI.toast('נדרש נושא לפגישה', 'error');
@@ -423,7 +423,7 @@ const MeetingView = (() => {
     timeInput.addEventListener('change', () => { state.time = timeInput.value; state.alternatives = null; redrawAvail(); });
 
     function draw() {
-      const suggestBtn = el('button.btn.btn-sm', { type: 'button' }, [UI.lineIcon('lightbulb'), 'הצע מועדים']);
+      const suggestBtn = el('button.btn.btn-sm', { type: 'button' }, ['💡 הצע מועדים']);
       suggestBtn.addEventListener('click', () => loadSuggestions(suggestBtn));
       UI.mount(body,
         !info.google.freebusy && info.google.calendar
@@ -478,21 +478,21 @@ const MeetingView = (() => {
           el('div.spacer'),
           el(`button.btn.btn-sm${task.meetingPending ? '.btn-primary' : ''}`, {
             onclick: () => schedule(lastCancelled ? { attendees: lastCancelled.attendees, minutes: lastCancelled.minutes, ownerId: lastCancelled.ownerId } : null)
-          }, [UI.lineIcon('calendar'), lastCancelled ? 'לקבוע מחדש' : 'קביעת פגישה'])
+          }, [lastCancelled ? '📅 לקבוע מחדש' : '📅 קביעת פגישה'])
         ]));
         return;
       }
 
       const past = current.past;
-      const join = current.zoom ? el('button.btn.btn-sm.btn-primary', {}, [UI.lineIcon('video'), 'פתיחת Zoom']) : null;
+      const join = current.zoom ? el('button.btn.btn-sm.btn-primary', {}, ['▶ פתיחת Zoom']) : null;
       join?.addEventListener('click', async () => {
         try {
           const r = await API.get(`/api/meetings/${current.id}/join`);
           window.open(r.url, '_blank', 'noopener');
         } catch (err) { UI.error(err); }
       });
-      const edit = el('button.btn.btn-sm', { onclick: () => openDialog({ task, meeting: current, onDone: () => onChange() }) }, [UI.lineIcon('pencil'), 'שינוי']);
-      const cancel = el('button.btn.btn-sm.btn-ghost', {}, [UI.lineIcon('x'), 'ביטול']);
+      const edit = el('button.btn.btn-sm', { onclick: () => openDialog({ task, meeting: current, onDone: () => onChange() }) }, ['✎ שינוי']);
+      const cancel = el('button.btn.btn-sm.btn-ghost', {}, ['✕ ביטול']);
       cancel.addEventListener('click', async () => {
         if (!await UI.confirm(`לבטל את הפגישה של ${when(current.start)}? המשתתפים יקבלו הודעת ביטול${current.zoom ? ', וה-Zoom יימחק' : ''}.`, { danger: true, okText: 'ביטול הפגישה' })) return;
         try {
@@ -526,8 +526,8 @@ const MeetingView = (() => {
         current.syncError ? el('div.mute-sm.text-warn', { text: `⚠ ${current.syncError}` }) : null,
         past ? el('div.mt-after', {}, [
           el('span', { text: 'הפגישה התקיימה?' }),
-          el('button.btn.btn-sm.btn-primary', { onclick: () => closeTask(task, onChange) }, [UI.lineIcon('check'), 'סגירת המשימה']),
-          el('button.btn.btn-sm', { onclick: () => schedule({ attendees: current.attendees, minutes: current.minutes, ownerId: current.ownerId }) }, [UI.lineIcon('calendar'), 'פגישת המשך'])
+          el('button.btn.btn-sm.btn-primary', { onclick: () => closeTask(task, onChange) }, ['✓ סגירת המשימה']),
+          el('button.btn.btn-sm', { onclick: () => schedule({ attendees: current.attendees, minutes: current.minutes, ownerId: current.ownerId }) }, ['📅 פגישת המשך'])
         ]) : null
       ]));
     };

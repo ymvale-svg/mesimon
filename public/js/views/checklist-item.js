@@ -71,7 +71,7 @@ const ChecklistItemView = (() => {
       style: { fontSize: '17px', textDecoration: item.done ? 'line-through' : 'none' }
     });
     const renameBtn = permissions.edit
-      ? el('button.btn.btn-sm', { title: 'שינוי שם הסעיף' }, [UI.lineIcon('pencil'), 'שינוי שם'])
+      ? el('button.btn.btn-sm', { title: 'שינוי שם הסעיף' }, ['✎ שינוי שם'])
       : null;
     renameBtn?.addEventListener('click', () => {
       const input = el('input', { type: 'text', value: item.text });

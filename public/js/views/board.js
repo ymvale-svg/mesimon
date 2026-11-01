@@ -269,10 +269,10 @@ const BoardView = (() => {
       // ‎canEdit‎ מגיע מהשרת ולא נגזר כאן: ל"יש הרשאת פרויקטים" ול"מותר לערוך
       // את הפרויקט הזה" אין אותה תשובה, ומי שמנחש מציג כפתור שנכשל ב-403
       project?.canEdit
-        ? el('button.btn', { onclick: () => openProjectDialog(project) }, [UI.lineIcon('pencil'), 'עריכת פרויקט'])
+        ? el('button.btn', { onclick: () => openProjectDialog(project) }, ['✎ עריכת פרויקט'])
         : null,
       App.may('export_data')
-        ? el('a.btn', { href: '/api/export/tasks.csv' }, [UI.lineIcon('download'), 'ייצוא CSV'])
+        ? el('a.btn', { href: '/api/export/tasks.csv' }, ['⬇ ייצוא CSV'])
         : null,
       // פרויקט חדש לצד משימה חדשה: פתיחת פרויקט היא פעולה שנעשית מאותו מקום
       // ובאותו רגע — כשמתברר שהמשימה החדשה אינה שייכת לשום פרויקט קיים
@@ -456,7 +456,7 @@ const BoardView = (() => {
         'aria-haspopup': 'menu',
         title: chip.implicit ? 'ברירת המחדל של הלוח — לחיצה לבחירת סטטוס אחר' : `שינוי ${chip.field.label}`,
         onclick: (e) => openFilterMenu(e.currentTarget, fields, set, chip.field)
-      }, [chip.text, chip.implicit ? el('span.fchip-caret', { 'aria-hidden': 'true' }, [UI.lineIcon('chevron-down')]) : null]);
+      }, [chip.text, chip.implicit ? el('span.fchip-caret', { 'aria-hidden': 'true', text: '▾' }) : null]);
 
       return el(`div.fchip${chip.implicit ? '.is-implicit' : ''}`, { role: 'listitem' }, [
         body,
@@ -465,7 +465,7 @@ const BoardView = (() => {
           'aria-label': `הסרת הסינון ${chip.text}`,
           title: 'הסרה',
           onclick: () => removeChip(chip)
-        }, [UI.lineIcon('x')])
+        }, ['✕'])
       ]);
     });
 
@@ -493,14 +493,14 @@ const BoardView = (() => {
 
     const items = [
       el('div.view-switch', { role: 'group', 'aria-label': 'תצוגת הלוח' }, [
-        ['table', 'טבלה', 'table'], ['kanban', 'כרטיסיות', 'kanban'], ['timeline', 'ציר זמן', 'gantt']
-      ].map(([mode, label, icon]) =>
+        ['table', '☰ טבלה'], ['kanban', '▦ כרטיסיות'], ['timeline', '▤ ציר זמן']
+      ].map(([mode, label]) =>
         el(`button${view.mode === mode ? '.active' : ''}`, {
           type: 'button',
           'aria-pressed': String(view.mode === mode),
           // גם מצב התצוגה הוא העדפה — מי שעובד בכרטיסיות לא רוצה לחזור לטבלה בכל כניסה
           onclick: () => { view.mode = mode; App.setPref('boardView', mode); draw(); }
-        }, [UI.lineIcon(icon), label])
+        }, [label])
       )),
       view.mode === 'timeline' ? zoomSwitch() : null,
       searchInput,
@@ -528,7 +528,7 @@ const BoardView = (() => {
           }
         ));
       }
-      items.push(el('button.btn.btn-sm.tb-saved', { onclick: saveCurrentFilter, title: 'שמירת המסננים הנוכחיים' }, [UI.lineIcon('save'), 'שמור מסנן']));
+      items.push(el('button.btn.btn-sm.tb-saved', { onclick: saveCurrentFilter, title: 'שמירת המסננים הנוכחיים' }, ['💾 שמור מסנן']));
     }
 
     return el('div.toolbar.board-toolbar', {}, items);
@@ -614,7 +614,7 @@ const BoardView = (() => {
           type: 'button', role: 'menuitemradio', tabIndex: -1,
           'aria-checked': String(o === checked),
           onclick: () => pick(field, o)
-        }, [el('span', { text: o.label }), o === checked ? el('span.check', { 'aria-hidden': 'true' }, [UI.lineIcon('check')]) : null]))
+        }, [el('span', { text: o.label }), o === checked ? el('span.check', { 'aria-hidden': 'true', text: '✓' }) : null]))
       );
       focusItem(list.querySelector('[aria-checked="true"]') ?? items()[1]);
     }
@@ -743,7 +743,7 @@ const BoardView = (() => {
         onchange: (e) => e.target.value && run('project', e.target.value === '__none__' ? '' : e.target.value)
       }),
       el('button.btn.btn-sm', { onclick: () => run('archive', filters.archived === '1' ? 0 : 1) },
-        filters.archived === '1' ? [UI.lineIcon('undo-2'), 'החזרה מארכיון'] : [UI.lineIcon('archive'), 'העברה לארכיון']),
+        [filters.archived === '1' ? '↩ החזרה מארכיון' : '🗄 העברה לארכיון']),
       /**
        * מחיקה מחייבת אישור מפורש שנוקב במספר. זו הפעולה היחידה בסרגל שאין
        * ממנה חזרה — ארכיון אפשר לבטל, מחיקה לא — ולכן היא גם נפרדת חזותית
@@ -761,7 +761,7 @@ const BoardView = (() => {
               );
               if (ok) run('delete');
             }
-          }, [UI.lineIcon('trash'), 'מחיקה'])
+          }, ['🗑 מחיקה'])
         : null,
       el('div.spacer'),
       el('button.btn.btn-sm', { onclick: () => { view.selection.clear(); draw(); } }, ['ביטול בחירה'])
@@ -1527,12 +1527,12 @@ const BoardView = (() => {
         ...extraAssignees.map((value) => el('span.chip.chip-assignee', {}, [
           el('span', { text: labelOf(value) }),
           el('button.chip-x', {
-            type: 'button', title: 'הסרה', 'aria-label': `הסרת ${labelOf(value)}`,
+            type: 'button', title: 'הסרה',
             onclick: () => {
               extraAssignees.splice(extraAssignees.indexOf(value), 1);
               drawExtras();
             }
-          }, [UI.lineIcon('x')])
+          }, ['✕'])
         ])),
         free.length
           ? UI.select([{ value: '', label: '＋ הוספת אחראי נוסף…' }, ...free], '', {
@@ -1642,7 +1642,7 @@ const BoardView = (() => {
               type: 'button',
               title: 'ה-AI ינסח פנייה, ישלח אחרי אישורך, ויעקוב עד שתתקבל תשובה',
               onclick: () => { m.close(); AiTaskView.openDialog({ projectId: opts.projectId ?? '' }); }
-            }, [UI.lineIcon('sparkles'), 'משימת AI'])
+            }, ['✨ משימת AI'])
           ]),
           el('div.spacer'),
           // הכתבה — אומרים את המשימה, והדיאלוג נפתח שוב ממולא
@@ -1655,7 +1655,7 @@ const BoardView = (() => {
                 ? VoiceView.open({ baseText: opts.voice.transcript, forcePreview: true })
                 : VoiceView.open({ forcePreview: true });
             }
-          }, [UI.lineIcon('mic'), opts.voice ? 'הוסף עוד' : 'הכתבה'])
+          }, [opts.voice ? '🎙 הוסף עוד' : '🎙 הכתבה'])
         ])
       : null;
 
@@ -1988,7 +1988,7 @@ const BoardView = (() => {
             logo
               ? el('div.proj-logo-box', {}, [
                   el('img', { src: `/api/project-images/${logo.id}/view`, alt: logo.filename }),
-                  el('button.chip-x', { title: 'הסרת הלוגו', 'aria-label': 'הסרת הלוגו', onclick: () => removeImage(logo) }, [UI.lineIcon('x')])
+                  el('button.chip-x', { title: 'הסרת הלוגו', onclick: () => removeImage(logo) }, ['✕'])
                 ])
               : el('div.proj-logo-box.is-empty', { text: 'ללא לוגו' }),
             el('div', {}, [
@@ -2007,7 +2007,7 @@ const BoardView = (() => {
                     src: `/api/project-images/${img.id}/view`, alt: img.filename, title: img.filename,
                     onclick: () => UI.previewUrls(previewable, i)
                   }),
-                  el('button.chip-x', { title: 'מחיקה', 'aria-label': `מחיקת ${img.filename}`, onclick: () => removeImage(img) }, [UI.lineIcon('x')])
+                  el('button.chip-x', { title: 'מחיקה', onclick: () => removeImage(img) }, ['✕'])
                 ])))
             : null,
           el('button.btn.btn-sm', { style: { marginTop: '8px' }, onclick: () => pickFile('gallery', true) }, ['＋ העלאת תמונות'])

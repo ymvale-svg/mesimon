@@ -108,8 +108,8 @@ const TodayView = (() => {
           c.doneToday ? el('div.today-done', { text: `✓ ${c.doneToday} הושלמו היום` }) : null
         ]),
         el('div.spacer'),
-        el('button.btn.btn-sm', { title: 'רענון, כולל היומן', 'aria-label': 'רענון, כולל היומן', onclick: (e) => { e.currentTarget.disabled = true; reload({ fresh: true }); } }, [UI.lineIcon('refresh-cw')]),
-        el('button.btn.btn-sm', { title: 'Today במייל והקלטה', 'aria-label': 'Today במייל והקלטה', onclick: () => openSettings() }, [UI.lineIcon('settings')])
+        el('button.btn.btn-sm', { title: 'רענון, כולל היומן', onclick: (e) => { e.currentTarget.disabled = true; reload({ fresh: true }); } }, ['⟳']),
+        el('button.btn.btn-sm', { title: 'Today במייל והקלטה', onclick: () => openSettings() }, ['⚙'])
       ]),
       !data.isWorkDay ? el('div.alert.alert-info.today-note', {}, [el('span', { text: '🌿' }), el('div', { text: 'היום אינו יום עבודה שלך. מה שמופיע כאן מחכה ליום העבודה הבא.' })]) : null,
       googleBanner(),
@@ -185,8 +185,8 @@ const TodayView = (() => {
           el('div.mute-sm', { text: [e.allDay ? null : `עד ${hhmm(e.end)}`, e.location, e.calendarName].filter(Boolean).join(' · ') })
         ]),
         el('div.today-actions', {}, [
-          e.meetLink && !past ? el('a.btn.btn-sm', { href: e.meetLink, target: '_blank', rel: 'noopener', title: 'הצטרפות לשיחה', 'aria-label': 'הצטרפות לשיחה' }, [UI.lineIcon('video')]) : null,
-          e.link ? el('a.btn.btn-sm.btn-ghost', { href: e.link, target: '_blank', rel: 'noopener', title: 'פתיחה ב-Google Calendar', 'aria-label': 'פתיחה ב-Google Calendar' }, [UI.lineIcon('external-link')]) : null,
+          e.meetLink && !past ? el('a.btn.btn-sm', { href: e.meetLink, target: '_blank', rel: 'noopener', title: 'הצטרפות לשיחה' }, ['🎥']) : null,
+          e.link ? el('a.btn.btn-sm.btn-ghost', { href: e.link, target: '_blank', rel: 'noopener', title: 'פתיחה ב-Google Calendar' }, ['↗']) : null,
           el('button.btn.btn-sm', {
             title: 'משימה חדשה מהפגישה — מעקב, סיכום, מה שסוכם',
             onclick: () => BoardView.openTaskDialog(null, { prefill: { title: e.title, dueDate: data.date }, onSaved: () => reload() })
@@ -248,7 +248,7 @@ const TodayView = (() => {
     const due = UI.dueLabel(task.dueDate);
     const toToday = late && task.canEdit ? el('button.btn.btn-sm', { title: 'להעביר את היעד להיום' }, ['להיום']) : null;
     toToday?.addEventListener('click', run(toToday, () => API.updateTask(task.id, { dueDate: UI.fromInputDate(data.date) })));
-    const move = task.canEdit ? el('button.btn.btn-sm', { title: 'להזיז את היעד', 'aria-label': 'להזיז את היעד', onclick: (e) => { e.stopPropagation(); moveDialog(task); } }, [UI.lineIcon('calendar')]) : null;
+    const move = task.canEdit ? el('button.btn.btn-sm', { title: 'להזיז את היעד', onclick: (e) => { e.stopPropagation(); moveDialog(task); } }, ['📅']) : null;
 
     return el(`div.today-row.today-task${late ? '.is-late' : ''}`, { onclick: () => TaskCardView.open(task.id) }, [
       el('span.m-bar', { style: { background: task.projectColor ?? 'transparent' } }),
@@ -340,7 +340,7 @@ const TodayView = (() => {
     const needsLook = Boolean(d.people?.length || d.ambiguous?.length || d.warning);
     const dueToday = d.dueDate && d.dueDate !== data.date ? null : data.date;
 
-    const approve = el('button.btn.btn-sm.btn-primary', {}, [UI.lineIcon('check'), d.dueDate && d.dueDate !== data.date ? `משימה ל-${shortDay(d.dueDate)}` : 'משימה להיום']);
+    const approve = el('button.btn.btn-sm.btn-primary', {}, [d.dueDate && d.dueDate !== data.date ? `✓ משימה ל-${shortDay(d.dueDate)}` : '✓ משימה להיום']);
     approve.addEventListener('click', needsLook
       ? (e) => { e.stopPropagation(); AiInboxView.editSuggestion(s, () => reload()); }
       : run(approve, async () => {
@@ -349,7 +349,7 @@ const TodayView = (() => {
         }));
     if (needsLook) approve.textContent = 'בדיקה ואישור';
 
-    const later = el('button.btn.btn-sm', { title: 'משימה עם תאריך יעד אחר' }, [UI.lineIcon('calendar'), 'תאריך אחר']);
+    const later = el('button.btn.btn-sm', { title: 'משימה עם תאריך יעד אחר' }, ['📅 תאריך אחר']);
     later.addEventListener('click', (e) => {
       e.stopPropagation();
       pickDate(`תאריך יעד: ${d.title ?? s.subject}`, {
@@ -367,7 +367,7 @@ const TodayView = (() => {
       });
     });
 
-    const toAi = el('button.btn.btn-sm', { title: 'לבקש את זה ממישהו — העוזר ינסח פנייה לאישורך ויעקוב' }, [UI.lineIcon('sparkles'), 'משימת AI']);
+    const toAi = el('button.btn.btn-sm', { title: 'לבקש את זה ממישהו — העוזר ינסח פנייה לאישורך ויעקוב' }, ['✨ משימת AI']);
     toAi.addEventListener('click', (e) => {
       e.stopPropagation();
       AiTaskView.openDialog({
@@ -378,7 +378,7 @@ const TodayView = (() => {
       });
     });
 
-    const reject = el('button.btn.btn-sm.btn-ghost', { title: 'לא משימה' }, [UI.lineIcon('x'), 'לא משימה']);
+    const reject = el('button.btn.btn-sm.btn-ghost', { title: 'לא משימה' }, ['✕ לא משימה']);
     reject.addEventListener('click', async (e) => {
       e.stopPropagation();
       reject.disabled = true;
@@ -396,7 +396,7 @@ const TodayView = (() => {
           el('span.today-origin', { text: originText(s) }),
           s.receivedAt ? ` · ${UI.relative(s.receivedAt)}` : '',
           s.older ? el('span.today-older', { text: ' · מחכה מלפני כן' }) : null,
-          s.link ? el('a', { href: s.link, target: '_blank', rel: 'noopener', onclick: (e) => e.stopPropagation() }, [' · פתיחת המייל ', UI.lineIcon('external-link')]) : null
+          s.link ? el('a', { href: s.link, target: '_blank', rel: 'noopener', onclick: (e) => e.stopPropagation() }, [' · פתיחת המייל ↗']) : null
         ]),
         el('div.today-mail-actions', {}, [approve, later, toAi, reject])
       ])
@@ -440,7 +440,7 @@ const TodayView = (() => {
     const open = x.link ? el('a.btn.btn-sm.btn-ghost', {
       href: x.link, target: '_blank', rel: 'noopener',
       title: x.source === 'mail' ? 'פתיחה ב-Gmail' : 'פתיחה בוואטסאפ'
-    }, [x.source === 'mail' ? 'Gmail' : 'וואטסאפ', UI.lineIcon('external-link')]) : null;
+    }, [x.source === 'mail' ? 'Gmail ↗' : 'וואטסאפ ↗']) : null;
     const task = el('button.btn.btn-sm', {
       title: 'משימה חדשה מהתובנה',
       onclick: () => BoardView.openTaskDialog(null, {
@@ -516,7 +516,7 @@ const TodayView = (() => {
         }
       }, [DAY_LETTERS[d]]));
 
-      const test = el('button.btn.btn-sm', {}, [UI.lineIcon('send'), 'שלח לי עכשיו לבדיקה']);
+      const test = el('button.btn.btn-sm', {}, ['📨 שלח לי עכשיו לבדיקה']);
       test.addEventListener('click', async () => {
         test.disabled = true;
         try {

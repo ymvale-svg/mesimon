@@ -58,8 +58,8 @@ const App = (() => {
    */
   const THEME_KEY = 'mesimon.theme';
   const THEMES = [
-    { key: 'light', label: 'בהיר', glyph: 'sun' },
-    { key: 'dark', label: 'לילה', glyph: 'moon' },
+    { key: 'light', label: 'בהיר', glyph: '☀' },
+    { key: 'dark', label: 'לילה', glyph: '☾' },
     // בלי סימן: אין תו "חצי ירח" שמופיע זהה בכל הגופנים, ומילים מספיקות
     { key: 'system', label: 'לפי המערכת', glyph: '' }
   ];
@@ -1362,7 +1362,7 @@ const App = (() => {
         title: 'ניהול התראות — מה קופץ בפינת המסך',
         'aria-label': 'ניהול התראות',
         onclick: () => { onClose(); notifSettingsDialog(); }
-      }, [UI.lineIcon('settings')]),
+      }, ['⚙']),
       // בשורה משלו, ברוחב מלא — לצד הכותרת והפעולות הוא דחק את ⚙ לשורה שבורה
       el('div.np-seg', { role: 'group', 'aria-label': 'אילו התראות להציג' }, [
         segBtn('unread', 'לא נקראו'),
@@ -2132,7 +2132,7 @@ const App = (() => {
           await refreshView();
         } catch (err) { UI.error(err); }
       })
-    }, p.colorChosen === c ? [UI.lineIcon('check')] : []);
+    }, p.colorChosen === c ? ['✓'] : []);
 
     // תוכן אחד לשני המקרים — מה שמשתנה בין מחשב לטלפון הוא המעטפת, לא הפעולות
     const items = [
@@ -2144,10 +2144,10 @@ const App = (() => {
       p.canEdit
         ? el('button.track-opt', {
             onclick: act(() => BoardView.openProjectDialog(p), { modal: true })
-          }, [UI.lineIcon('pencil'), 'עריכת פרויקט'])
+          }, ['✎ עריכת פרויקט'])
         : null,
       el('button.track-opt', { onclick: act(() => togglePin(p)) },
-        [UI.lineIcon('pin'), p.pinned ? 'שחרור הנעיצה' : 'נעיצה לראש הרשימה']),
+        [p.pinned ? '📌 שחרור הנעיצה' : '📌 נעיצה לראש הרשימה']),
       p.canEdit
         ? el('div.proj-pop-colors', { role: 'group', 'aria-label': 'צבע הפרויקט' }, [
             el('span.proj-pop-label', { text: 'צבע' }),
@@ -2157,7 +2157,7 @@ const App = (() => {
       p.canDelete
         ? el('button.track-opt.is-danger', {
             onclick: act(() => BoardView.deleteProjectFlow(p), { modal: true })
-          }, [UI.lineIcon('trash'), 'מחיקת פרויקט'])
+          }, ['🗑 מחיקת פרויקט'])
         : null
     ];
 
@@ -2343,7 +2343,7 @@ const App = (() => {
         refreshChrome();
       }
     }, [
-      el('span.ico', {}, [UI.lineIcon(pinned ? 'pin-off' : 'pin')]),
+      el('span.ico', { text: pinned ? '⇥' : '⇤' }),
       el('span', { text: pinned ? 'כיווץ התפריט' : 'נעיצת התפריט' })
     ]));
     const add = (name, params, extra = {}) => {
@@ -2366,10 +2366,10 @@ const App = (() => {
       return el(`aside.sidebar#sidebar${sidebarPinned() ? '.pinned' : ''}`, {}, [...items, UI.companyLogo('in-sidebar')]);
     }
 
-    add('today', {}, { icon: UI.lineIcon('sun'), count: state.todayCount || undefined });
+    add('today', {}, { icon: el('span.nav-emoji', { text: '☀' }), count: state.todayCount || undefined });
     add('home');
     // יומן — למזכירות בלבד (הסימון בכרטיס העובד)
-    if (state.actor.secretary) add('calendar', {}, { icon: UI.lineIcon('calendar') });
+    if (state.actor.secretary) add('calendar', {}, { icon: el('span.nav-emoji', { text: '📅' }) });
     add('board');
     if (may('view_vendor_boards')) add('vendorBoards');
 
@@ -2639,7 +2639,7 @@ const App = (() => {
     return el('header.topbar', {}, [
       // הנראות נקבעת ב-CSS ולא כאן: חישוב רוחב חד-פעמי ב-JS השאיר את הכפתור
       // מוסתר אחרי סיבוב המכשיר, ואז לא הייתה דרך להגיע לניווט
-      el('button.icon-btn.drawer-btn', { onclick: toggleDrawer, 'aria-label': 'תפריט', title: 'תפריט' }, [UI.lineIcon('menu')]),
+      el('button.icon-btn.drawer-btn', { onclick: toggleDrawer, 'aria-label': 'תפריט', title: 'תפריט' }, ['☰']),
       el('div.brand', {}, [UI.logo({ size: 'sm', tagline: true, variant: 'brand' })]),
       /*
        * מרווח משני צדי החיפוש. במסך רחב הוא ממורכז בכל מקרה במיקום מוחלט
@@ -2650,16 +2650,16 @@ const App = (() => {
       globalSearch(),
       el('div.topbar-spacer'),
       !isVendor()
-        ? el(`button.btn.today-btn${state.route.name === 'today' ? '.active' : ''}`, { title: 'מה צריך לעשות היום', onclick: () => navigate('today') }, [UI.lineIcon('sun'), 'Today', todayBadge()])
+        ? el(`button.btn.today-btn${state.route.name === 'today' ? '.active' : ''}`, { title: 'מה צריך לעשות היום', onclick: () => navigate('today') }, ['☀ Today', todayBadge()])
         : null,
       !isVendor() && may('create_task')
-        ? el('button.btn.mic-btn', { title: 'משימה מהקלטה', 'aria-label': 'משימה מהקלטה', onclick: () => VoiceView.open() }, [UI.lineIcon('mic')])
+        ? el('button.btn.mic-btn', { title: 'משימה מהקלטה', onclick: () => VoiceView.open() }, ['🎙'])
         : null,
       !isVendor() && may('create_task')
         ? el('button.btn.btn-primary', { onclick: () => BoardView.openTaskDialog() }, ['＋ משימה חדשה'])
         : null,
       // בטלפון שדה החיפוש מוסתר — הזכוכית פותחת אותו כחלון מלא (מוצגת רק שם, ב-CSS)
-      el('button.icon-btn.m-search-btn', { title: 'חיפוש ומעבר מהיר', 'aria-label': 'חיפוש', onclick: () => openSearchOverlay() }, [UI.lineIcon('search')]),
+      el('button.icon-btn.m-search-btn', { title: 'חיפוש ומעבר מהיר', 'aria-label': 'חיפוש', onclick: () => openSearchOverlay() }, ['🔍']),
       bell,
       (() => {
         // רמת הגישה מוצגת רק למי שרשאי לראות רמות; לשאר מוצגת המחלקה
@@ -2769,7 +2769,7 @@ const App = (() => {
           b.setAttribute('aria-checked', String(on));
         }
       }
-    }, [t.glyph ? UI.lineIcon(t.glyph) : null, t.label]));
+    }, [t.glyph ? el('span', { 'aria-hidden': 'true', text: `${t.glyph} ` }) : null, t.label]));
     return el('tr', {}, [
       el('th', { text: 'מראה' }),
       el('td', {}, [el('div.view-switch.theme-switch', { role: 'radiogroup', 'aria-label': 'מראה המערכת' }, buttons)])
@@ -2800,19 +2800,19 @@ const App = (() => {
           ])
         ]),
         // הוואטסאפ האישי משמש את משימות ה-AI להמשך מעקב מהמספר של המשתמש
-        isVendor() ? null : el('button.btn.mt', { onclick: () => AiTaskView.openWhatsApp() }, [UI.lineIcon('message'), 'חיבור הוואטסאפ שלי']),
+        isVendor() ? null : el('button.btn.mt', { onclick: () => AiTaskView.openWhatsApp() }, ['💬 חיבור הוואטסאפ שלי']),
         // חיבור Google: Gmail (סריקה ותשובות), יומן ל-Today, ואנשי קשר למשימת AI
-        isVendor() ? null : el('button.btn.mt', { style: { marginInlineStart: '8px' }, 'data-anchor': 'account.google', onclick: () => AiInboxView.openGmail(() => refreshView()) }, [UI.lineIcon('link'), 'חיבור Google ועוזר ה-AI']),
-        isVendor() ? null : el('button.btn.mt', { style: { marginInlineStart: '8px' }, onclick: () => TodayView.openSettings() }, [UI.lineIcon('sun'), 'Today והקלטה']),
+        isVendor() ? null : el('button.btn.mt', { style: { marginInlineStart: '8px' }, 'data-anchor': 'account.google', onclick: () => AiInboxView.openGmail(() => refreshView()) }, ['🔗 חיבור Google ועוזר ה-AI']),
+        isVendor() ? null : el('button.btn.mt', { style: { marginInlineStart: '8px' }, onclick: () => TodayView.openSettings() }, ['☀ Today והקלטה']),
         isVendor() ? null : el('button.btn.mt', {
           style: { marginInlineStart: '8px' },
           onclick: () => { m.close(); navigate('phonebook'); }
-        }, [UI.lineIcon('contacts'), 'אלפון ארגוני']),
+        }, ['📒 אלפון ארגוני']),
         isVendor() ? null : el('button.btn.mt', {
           style: { marginInlineStart: '8px' },
           'data-anchor': 'account.whats-new',
           onclick: () => { m.close(); WhatsNewView.open({ force: true }); }
-        }, [UI.lineIcon('sparkles'), 'מה חדש במערכת']),
+        }, ['✨ מה חדש במערכת']),
         el('div.alert.alert-info.mt', {}, [
           el('div', {}, [
             el('b', { text: 'מה מותר לי במערכת?' }),
@@ -2886,7 +2886,7 @@ const App = (() => {
         onclick: () => { closeDrawer(); navigate(routeName, extra.params ?? {}); }
       }, [
         el('span.ic-wrap', {}, [
-          extra.line ? UI.lineIcon(extra.line) : UI.icon(iconName),
+          extra.emoji ? el('span.tab-emoji', { text: extra.emoji }) : UI.icon(iconName),
           extra.badge ? el('span.tab-dot', { text: String(extra.badge) }) : null
         ]),
         el('span.lbl', { text: label })
@@ -2904,7 +2904,7 @@ const App = (() => {
     }
 
     return el('nav.tabbar', {}, [
-      tab('today', 'my-tasks', 'Today', { line: 'sun' }),
+      tab('today', 'my-tasks', 'Today', { emoji: '☀' }),
       tab('home', 'my-tasks', 'המשימות שלי'),
       tab('board', 'board', 'הלוח'),
       el('button', { onclick: () => toggleNotifPanel(null) }, [
@@ -2926,16 +2926,16 @@ const App = (() => {
     const wake = VoiceWake.enabledInPrefs() && VoiceWake.supported() && may('create_task');
     return el(`div.m-actionbar${wake ? '.has-wake' : ''}`, {}, [
       el(`button.m-action.m-action-today${state.route.name === 'today' ? '.active' : ''}`, { onclick: () => navigate('today') }, [
-        UI.lineIcon('sun'), el('span', { text: 'Today' }), todayBadge()
+        el('span', { text: '☀' }), el('span', { text: 'Today' }), todayBadge()
       ]),
       may('create_task')
-        ? el('button.m-action.m-action-mic', { onclick: () => VoiceView.open() }, [UI.lineIcon('mic'), el('span', { text: 'הקלטה' })])
+        ? el('button.m-action.m-action-mic', { onclick: () => VoiceView.open() }, [el('span', { text: '🎙' }), el('span', { text: 'הקלטה' })])
         : null,
       wake
         ? el(`button.m-action.m-action-wake${VoiceWake.isOn() ? '.on' : ''}`, {
             title: VoiceWake.isOn() ? 'כיבוי ההאזנה' : 'האזנה — אמרו "משימון"',
             onclick: () => VoiceWake.toggle()
-          }, [UI.lineIcon('ear'), el('span', { text: VoiceWake.isOn() ? 'מאזין' : 'האזנה' })])
+          }, [el('span', { text: '👂' }), el('span', { text: VoiceWake.isOn() ? 'מאזין' : 'האזנה' })])
         : null
     ]);
   }

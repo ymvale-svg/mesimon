@@ -98,7 +98,7 @@ const AiInboxView = (() => {
       sections.push(section('💬 מקבוצות הוואטסאפ', null, fromChat.map((s) => suggestionRow(s, reload))));
     }
     if (fromMail.length) {
-      const all = el('button.btn.btn-sm', {}, [UI.lineIcon('check'), 'אשר הכול']);
+      const all = el('button.btn.btn-sm', {}, ['✓ אשר הכול']);
       all.title = 'מאשר את ההצעות שכולן שלך. הצעות עם אנשים נוספים או פנייה החוצה נשארות לבדיקה';
       all.addEventListener('click', run(all, async () => {
         const r = await API.post('/api/ai/suggestions/approve-all');
@@ -121,9 +121,9 @@ const AiInboxView = (() => {
         total ? el('span.ai-count', { text: String(total) }) : null,
         el('div.spacer'),
         g.connection?.state === 'ok' && g.scanEnabled
-          ? el('button.btn.btn-sm', { disabled: g.connection.scanning, onclick: () => scanDialog(reload) }, [UI.lineIcon('search'), 'סרוק עכשיו'])
+          ? el('button.btn.btn-sm', { disabled: g.connection.scanning, onclick: () => scanDialog(reload) }, ['🔍 סרוק עכשיו'])
           : null,
-        el('button.btn.btn-sm.btn-ghost', { title: 'חיבור Gmail והעדפות', 'aria-label': 'חיבור Gmail והעדפות', onclick: () => openGmail(reload) }, [UI.lineIcon('settings')])
+        el('button.btn.btn-sm.btn-ghost', { title: 'חיבור Gmail והעדפות', onclick: () => openGmail(reload) }, ['⚙'])
       ]),
       el('div.card-pad', {}, [el('div.feed-scroll', {}, sections)])
     ]);
@@ -147,7 +147,7 @@ const AiInboxView = (() => {
     });
     const later = el('button.btn.btn-sm', {}, ['דחה ליום']);
     later.addEventListener('click', run(later, () => API.post(`/api/ai/tasks/${u.taskId}/action`, { action: 'postpone', days: 1 }), reload));
-    const talk = el('button.btn.btn-sm', { onclick: () => AiTaskView.talked({ id: u.taskId, title: u.title }, () => reload()) }, [UI.lineIcon('phone'), 'דיברתי איתו']);
+    const talk = el('button.btn.btn-sm', { onclick: () => AiTaskView.talked({ id: u.taskId, title: u.title }, () => reload()) }, ['📞 דיברתי איתו']);
     return el('div.ai-row', {}, [
       el('div.ai-row-main', { onclick: () => TaskCardView.open(u.taskId) }, [
         el('div', {}, [el('b', { text: u.contactName }), el('span.mute-sm', { text: ` · ${CHANNEL_LABEL[u.channel] ?? ''}${u.attempt ? ` · ניסיון ${u.attempt}` : ''} · ${new Date(u.at) < new Date() ? 'בסבב הקרוב' : `מ-${time(u.at)}`}` })]),
@@ -165,24 +165,24 @@ const AiInboxView = (() => {
     let actions = [];
     if (w.attention === 'approve_reminder' && w.draft) {
       what = el('div', {}, [el('div', { text: `תזכורת ל${w.contactName} ממתינה לאישורך:` }), el('div.ai-quote', { text: w.draft.body })]);
-      const send = el('button.btn.btn-sm.btn-primary', {}, [UI.lineIcon('check'), 'שלח']);
+      const send = el('button.btn.btn-sm.btn-primary', {}, ['✓ שלח']);
       send.addEventListener('click', run(send, () => API.post(`/api/ai/tasks/${w.taskId}/messages/${w.draft.id}/approve`, {}), reload));
       const skip = el('button.btn.btn-sm', {}, ['דלג על התזכורת']);
       skip.addEventListener('click', run(skip, () => API.post(`/api/ai/tasks/${w.taskId}/messages/${w.draft.id}/discard`), reload));
-      actions = [send, el('button.btn.btn-sm', { onclick: open }, [UI.lineIcon('pencil'), 'עריכה']), skip,
-        el('button.btn.btn-sm', { onclick: () => AiTaskView.talked({ id: w.taskId, title: w.title }, () => reload()) }, [UI.lineIcon('phone'), 'דיברתי איתו'])];
+      actions = [send, el('button.btn.btn-sm', { onclick: open }, ['✎ עריכה']), skip,
+        el('button.btn.btn-sm', { onclick: () => AiTaskView.talked({ id: w.taskId, title: w.title }, () => reload()) }, ['📞 דיברתי איתו'])];
     } else if (w.attention === 'contact_detected' || w.attention === 'handled_elsewhere') {
       what = el('div', { text: w.attention === 'contact_detected'
         ? (w.question || `ראיתי שהתכתבת עם ${w.contactName}. מה המצב?`)
         : `${w.contactName} כתב/ה שזה סוכם מחוץ להתכתבות${w.summary ? ` — ${w.summary}` : ''}. מה המצב?` });
-      actions = [el('button.btn.btn-sm.btn-primary', { onclick: () => AiTaskView.talked({ id: w.taskId, title: w.title }, () => reload()) }, [UI.lineIcon('phone'), 'עדכון'])];
+      actions = [el('button.btn.btn-sm.btn-primary', { onclick: () => AiTaskView.talked({ id: w.taskId, title: w.title }, () => reload()) }, ['📞 עדכון'])];
     } else if (w.state === 'stalled') {
       what = el('div', { text: `לא התקבלה תשובה מ${w.contactName}. ${w.error || ''}`.trim() });
-      const again = el('button.btn.btn-sm', {}, [UI.lineIcon('repeat'), 'סבב נוסף']);
+      const again = el('button.btn.btn-sm', {}, ['🔁 סבב נוסף']);
       again.addEventListener('click', run(again, () => API.post(`/api/ai/tasks/${w.taskId}/action`, { action: 'resume' }), reload));
       const stop = el('button.btn.btn-sm.btn-ghost', {}, ['עצירה']);
       stop.addEventListener('click', run(stop, () => API.post(`/api/ai/tasks/${w.taskId}/action`, { action: 'stop' }), reload));
-      actions = [again, el('button.btn.btn-sm', { onclick: () => AiTaskView.talked({ id: w.taskId, title: w.title }, () => reload()) }, [UI.lineIcon('phone'), 'דיברתי איתו']), stop];
+      actions = [again, el('button.btn.btn-sm', { onclick: () => AiTaskView.talked({ id: w.taskId, title: w.title }, () => reload()) }, ['📞 דיברתי איתו']), stop];
     } else {
       // טיוטת תשובה, שאלה מהנמען — ההקשר המלא בכרטיס
       what = el('div', { text: w.question || (w.draft ? `טיוטה ל${w.contactName} ממתינה לאישורך` : w.summary || 'נדרשת החלטה שלך') });
@@ -211,7 +211,7 @@ const AiInboxView = (() => {
     return el('div.mute-sm', {}, [
       `מאת ${s.from.name}`,
       s.receivedAt ? ` · ${UI.relative(s.receivedAt)}` : '',
-      s.link ? el('a', { href: s.link, target: '_blank', rel: 'noopener', onclick: (e) => e.stopPropagation() }, [' · פתיחת המייל ', UI.lineIcon('external-link')]) : null
+      s.link ? el('a', { href: s.link, target: '_blank', rel: 'noopener', onclick: (e) => e.stopPropagation() }, [' · פתיחת המייל ↗']) : null
     ]);
   }
 
@@ -223,14 +223,14 @@ const AiInboxView = (() => {
     const d = s.data ?? {};
     const when = (iso) => (iso ? new Date(iso).toLocaleString('he-IL', { weekday: 'short', day: 'numeric', month: 'numeric', hour: '2-digit', minute: '2-digit' }) : '');
     if (s.kind === 'meeting_cancelled') {
-      const again = el('button.btn.btn-sm.btn-primary', {}, [UI.lineIcon('calendar'), 'לקבוע מחדש']);
+      const again = el('button.btn.btn-sm.btn-primary', {}, ['📅 לקבוע מחדש']);
       again.addEventListener('click', async () => {
         try {
           const { task } = await API.task(d.taskId);
           MeetingView.openDialog({ task, onDone: () => reload() });
         } catch (err) { UI.error(err); }
       });
-      const decline = el('button.btn.btn-sm.btn-ghost', {}, [UI.lineIcon('x'), 'לדחות']);
+      const decline = el('button.btn.btn-sm.btn-ghost', {}, ['✕ לדחות']);
       decline.addEventListener('click', async () => {
         if (!await UI.confirm(`לא לקבוע מחדש את "${d.title}"? המשימה תיסגר.`, { okText: 'סגירת המשימה' })) return;
         run(decline, async () => {
@@ -248,7 +248,7 @@ const AiInboxView = (() => {
       ]);
     }
     // meeting_move
-    const ok = el('button.btn.btn-sm.btn-primary', {}, [UI.lineIcon('check'), 'אשר הזזה']);
+    const ok = el('button.btn.btn-sm.btn-primary', {}, ['✓ אשר הזזה']);
     ok.addEventListener('click', run(ok, async () => {
       // מה יזוז בפועל — כפי שהפגישה רשומה עכשיו ביומן, לא הטקסט שנשמר בבקשה
       const p = await API.get(`/api/meetings/move-requests/${s.id}`);
@@ -256,7 +256,7 @@ const AiInboxView = (() => {
       await API.post(`/api/meetings/move-requests/${s.id}/approve`);
       UI.success('הפגישה הוזזה — המשתתפים קיבלו עדכון');
     }, reload));
-    const no = el('button.btn.btn-sm.btn-ghost', { 'aria-label': 'לא להזיז' }, [UI.lineIcon('x')]);
+    const no = el('button.btn.btn-sm.btn-ghost', {}, ['✕']);
     no.title = 'לא להזיז';
     no.addEventListener('click', run(no, () => API.post(`/api/meetings/move-requests/${s.id}/reject`), reload));
     return el('div.ai-row', {}, [
@@ -287,12 +287,12 @@ const AiInboxView = (() => {
     }
 
     const d = s.data;
-    const approve = el('button.btn.btn-sm.btn-primary', {}, [UI.lineIcon('check'), 'אישור']);
+    const approve = el('button.btn.btn-sm.btn-primary', {}, ['✓ אישור']);
     approve.addEventListener('click', run(approve, () => API.post(`/api/ai/suggestions/${s.id}/approve`, {}), reload));
-    const reject = el('button.btn.btn-sm.btn-ghost', {}, [UI.lineIcon('x'), 'לא משימה']);
+    const reject = el('button.btn.btn-sm.btn-ghost', {}, ['✕ לא משימה']);
     reject.title = 'לא משימה — נדחית מיד, אפשר לבטל';
     reject.addEventListener('click', run(reject, () => rejectNow(s, reload), reload));
-    const toAi = el('button.btn.btn-sm', {}, [UI.lineIcon('sparkles'), 'משימת AI']);
+    const toAi = el('button.btn.btn-sm', {}, ['✨ משימת AI']);
     toAi.title = 'לבקש את זה ממישהו — העוזר ינסח פנייה לאישורך ויעקוב';
     toAi.addEventListener('click', () => AiTaskView.openDialog({
       suggestionId: s.id,
@@ -323,7 +323,7 @@ const AiInboxView = (() => {
       el('div.ai-row-actions', {}, [
         // הצעה עם אנשים נוספים או ספק מחייבת מבט — האישור המהיר עובר דרך העריכה
         (d.people?.length || d.ambiguous?.length || d.warning) ? el('button.btn.btn-sm.btn-primary', { onclick: () => editSuggestion(s, reload) }, ['בדיקה ואישור']) : approve,
-        el('button.btn.btn-sm', { title: 'עריכה', 'aria-label': 'עריכה', onclick: () => editSuggestion(s, reload) }, [UI.lineIcon('pencil')]),
+        el('button.btn.btn-sm', { onclick: () => editSuggestion(s, reload) }, ['✎']),
         // משימת AI נפתחת בדיאלוג משלה, בלי הפרויקט של הקבוצה — לכן רק ממייל
         d.source === 'whatsapp' ? null : toAi,
         reject
@@ -438,7 +438,7 @@ const AiInboxView = (() => {
     checklist.value = (d.checklist ?? []).join('\n');
     const trust = el('input', { type: 'checkbox', checked: s.trusted });
 
-    const ok = el('button.btn.btn-primary', {}, [UI.lineIcon('check'), 'יצירת המשימה']);
+    const ok = el('button.btn.btn-primary', {}, ['✓ יצירת המשימה']);
     const m = UI.modal({
       title: chat ? '💬 משימה מקבוצת וואטסאפ' : '📧 משימה מהמייל',
       size: 'wide',
@@ -498,7 +498,7 @@ const AiInboxView = (() => {
       });
       return b;
     }));
-    const go = el('button.btn.btn-primary', {}, [UI.lineIcon('search'), 'סריקה']);
+    const go = el('button.btn.btn-primary', {}, ['🔍 סריקה']);
     const m = UI.modal({
       title: '🔍 סריקת המייל',
       body: el('div', {}, [
@@ -554,7 +554,7 @@ const AiInboxView = (() => {
     }
     function drawSignature() {
       const s = sigInfo;
-      const again = el('button.btn.btn-sm', { type: 'button', onclick: (e) => { e.target.disabled = true; loadSignature(true); } }, [UI.lineIcon('refresh-cw'), 'רענון חתימה']);
+      const again = el('button.btn.btn-sm', { type: 'button', onclick: (e) => { e.target.disabled = true; loadSignature(true); } }, ['🔄 רענון חתימה']);
       if (!s) return UI.mount(sigSlot, el('div.mute-sm', { text: '✍️ בודק את החתימה ב-Gmail…' }));
       if (s.state === 'ok') {
         const frame = el('iframe.ai-signature', { sandbox: 'allow-same-origin', title: 'החתימה מ-Gmail' });
@@ -636,7 +636,7 @@ const AiInboxView = (() => {
               info.scanEnabled
                 ? el('div.mute-sm', { style: { marginTop: '6px' }, text: `סריקה אוטומטית כל בוקר ב-${info.scanTime}, עד ${info.dailyLimit} מיילים ביום.` })
                 : el('div.mute-sm', { style: { marginTop: '6px' }, text: 'סריקת המיילים כבויה כרגע במסך הניהול.' }),
-              info.scanEnabled ? el('button.btn.btn-sm.mt', { onclick: () => { m.close(); scanDialog(onChange); } }, [UI.lineIcon('search'), 'סרוק עכשיו']) : null,
+              info.scanEnabled ? el('button.btn.btn-sm.mt', { onclick: () => { m.close(); scanDialog(onChange); } }, ['🔍 סרוק עכשיו']) : null,
               contactsLine()
             ]);
 
@@ -650,7 +650,7 @@ const AiInboxView = (() => {
           counts.directory !== undefined ? `${counts.directory} בספריית הארגון` : null,
           counts.other !== undefined ? `${counts.other} שהתכתבת איתם` : null
         ].filter(Boolean);
-        const sync = el('button.btn.btn-sm', { disabled: g.running }, g.running ? ['מסתנכרן…'] : [UI.lineIcon('refresh-cw'), 'רענון']);
+        const sync = el('button.btn.btn-sm', { disabled: g.running }, [g.running ? 'מסתנכרן…' : '🔄 רענון']);
         sync.addEventListener('click', async () => {
           sync.disabled = true;
           try {

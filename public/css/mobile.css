@@ -434,10 +434,7 @@
   .m-action-wake { flex: 0 0 74px; flex-direction: column; gap: 0; font-size: 11px; background: var(--surface); color: var(--text-soft); border: 1px solid var(--border-strong); }
   .m-action-wake.on { background: #7c3aed; color: #fff; border-color: #7c3aed; }
   .m-action .today-badge { position: absolute; top: 6px; inset-inline-end: 10px; }
-  .tabbar button .li { width: 21px; height: 21px; }
-  .m-action .li { width: 22px; height: 22px; }
-  .m-action-wake .li { width: 18px; height: 18px; }
-  .m-chip .li { width: 14px; height: 14px; }
+  .tabbar .tab-emoji { font-size: 19px; line-height: 21px; }
 
   /* התוכן מפנה מקום גם לפס הפעולה, והכפתור הצף עולה מעליו */
   .main { padding-bottom: calc(var(--nav-h) + var(--action-h) + env(safe-area-inset-bottom, 0px) + 14px); }

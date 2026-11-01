@@ -21,7 +21,7 @@ const AdminView = (() => {
     { key: 'matrix', label: 'מטריצת הרשאות', perm: 'manage_users' },
     { key: 'templates', label: 'תבניות', perm: 'create_project', full: true },
     // הודעה שנפתחת לכל המשתמשים — רק אדמין על (ראה ‎manage_release_notes‎)
-    { key: 'whatsnew', label: 'מה חדש', icon: 'sparkles', perm: 'manage_release_notes', full: true }
+    { key: 'whatsnew', label: '✨ מה חדש', perm: 'manage_release_notes', full: true }
   ];
 
   async function render(container, params = {}) {
@@ -96,7 +96,7 @@ const AdminView = (() => {
       'aria-controls': 'admin-body',
       tabindex: tab === t.key ? '0' : '-1',
       onclick: () => onPick(t.key)
-    }, [t.icon ? UI.lineIcon(t.icon) : null, t.label]));
+    }, [t.label]));
 
     const list = el('div.tabs.admin-tabs', { role: 'tablist', 'aria-label': 'אזורי הניהול' }, buttons);
 
@@ -328,7 +328,7 @@ const AdminView = (() => {
             UI.error(err);
           }
         }
-      }, [UI.lineIcon('check'), 'אישור']);
+      }, ['✓ אישור']);
 
       return el('tr', {}, [
         el('td', {}, [el('div.flex', {}, [UI.avatar(p.name, { small: true }), el('b', { text: p.name })])]),
@@ -387,7 +387,7 @@ const AdminView = (() => {
       el('div.flex.mb', { 'data-anchor': 'admin.users-tools' }, [
         statusFilter,
         el('div.spacer'),
-        el('button.btn', { onclick: () => importDialog(data) }, [UI.lineIcon('upload'), 'ייבוא מאקסל']),
+        el('button.btn', { onclick: () => importDialog(data) }, ['⇪ ייבוא מאקסל']),
         el('button.btn.btn-primary', { onclick: () => userDialog(null, data) }, ['＋ משתמש חדש'])
       ]),
       el('div.table-wrap', {}, [
@@ -428,7 +428,7 @@ const AdminView = (() => {
                     showInviteResult(r.invite, u.name);
                   } catch (err) { UI.error(err); }
                 }
-              }, [UI.lineIcon('mail'), 'הזמנה'])
+              }, ['✉ הזמנה'])
             ])
           ])
       ]);
@@ -927,7 +927,7 @@ const AdminView = (() => {
               const d = all.find((x) => x.id === id);
               return el('span.chip.chip-assignee', {}, [
                 el('span', { text: d.label ?? d.name }),
-                el('button.chip-x', { type: 'button', title: 'הסרה', 'aria-label': 'הסרה', onclick: () => { picked.delete(id); drawSuggest(); } }, [UI.lineIcon('x')])
+                el('button.chip-x', { type: 'button', title: 'הסרה', onclick: () => { picked.delete(id); drawSuggest(); } }, ['✕'])
               ]);
             }))
           : null,
@@ -1050,7 +1050,7 @@ const AdminView = (() => {
                         showInviteResult(r.invite, v.contactName || v.name);
                       } catch (err) { UI.error(err); }
                     }
-                  }, [UI.lineIcon('mail'), 'הזמנה']),
+                  }, ['✉ הזמנה']),
                   v.boardId ? el('button.btn.btn-sm', { onclick: () => App.navigate('vendorBoards', { boardId: v.boardId }) }, ['לבורד']) : null
                 ])
               ])
@@ -1138,7 +1138,7 @@ const AdminView = (() => {
         ])
       ]),
       el('div.flex.mb', {}, [
-        el('button.btn', { onclick: runNow }, [UI.lineIcon('play'), 'הרצת כל הכללים עכשיו']),
+        el('button.btn', { onclick: runNow }, ['▶ הרצת כל הכללים עכשיו']),
         el('div.spacer'),
         el('button.btn.btn-primary', { onclick: () => ruleDialog(null, catalog) }, ['＋ כלל חדש'])
       ]),
@@ -1350,7 +1350,7 @@ const AdminView = (() => {
         el('b', { text: 'משתמשי Zoom' }),
         el('div.spacer'),
         (() => {
-          const b = el('button.btn.btn-sm', {}, [UI.lineIcon('refresh-cw'), 'רענון מ-Zoom']);
+          const b = el('button.btn.btn-sm', {}, ['⟳ רענון מ-Zoom']);
           b.addEventListener('click', async () => {
             b.disabled = true;
             try { draw(await API.post('/api/admin/zoom/sync')); UI.success('הרשימה עודכנה'); } catch (err) { b.disabled = false; UI.error(err); }
@@ -1440,10 +1440,10 @@ const AdminView = (() => {
         el('div.spacer'),
         // הסטטוס הסופי נשאר אחרון: סדר העמודות הוא סדר הזרימה
         !col.isFinal && !first
-          ? el('button.btn.btn-sm', { title: 'הקדמה בזרימה', 'aria-label': 'הקדמה בזרימה', onclick: () => move(board, col, 'up') }, [UI.lineIcon('arrow-right')])
+          ? el('button.btn.btn-sm', { title: 'הקדמה בזרימה', onclick: () => move(board, col, 'up') }, ['→'])
           : null,
         !col.isFinal && !last
-          ? el('button.btn.btn-sm', { title: 'איחור בזרימה', 'aria-label': 'איחור בזרימה', onclick: () => move(board, col, 'down') }, [UI.lineIcon('arrow-left')])
+          ? el('button.btn.btn-sm', { title: 'איחור בזרימה', onclick: () => move(board, col, 'down') }, ['←'])
           : null,
         el('button.btn.btn-sm', { onclick: () => columnDialog(board, col) }, ['עריכה']),
         !col.isFinal
@@ -2079,7 +2079,7 @@ const AdminView = (() => {
           el('div.alert.alert-info.mt', {}, [
             el('img', { src: '/icons/bot-profile.png', alt: '', width: 40, height: 40, style: { borderRadius: '50%', flex: 'none' } }),
             el('div', { text: 'תמונת הפרופיל של הבוט: מורידים, ובטלפון של הבוט — וואטסאפ ← הגדרות ← לחיצה על התמונה ← החלפה.' }),
-            el('a.btn.btn-sm', { href: '/icons/bot-profile.png', download: 'mesimon-bot.png', style: { flex: 'none' } }, [UI.lineIcon('download'), 'הורדה'])
+            el('a.btn.btn-sm', { href: '/icons/bot-profile.png', download: 'mesimon-bot.png', style: { flex: 'none' } }, ['⬇ הורדה'])
           ])
         ])
       ]));
@@ -2306,7 +2306,7 @@ const AdminView = (() => {
           el('span.tag', { class: t.departmentId ? '' : 'tag-org' },
             [t.departmentName ?? 'כל הארגון']),
           el('div.spacer'),
-          el('button.btn.btn-sm', { onclick: () => dialog(t) }, [UI.lineIcon('pencil'), 'עריכה']),
+          el('button.btn.btn-sm', { onclick: () => dialog(t) }, ['✎ עריכה']),
           el('button.btn.btn-sm.btn-danger', {
             onclick: async () => {
               if (!await UI.confirm(

@@ -299,7 +299,7 @@ const GridView = (() => {
           }, [
             el('span.swatch', { style: { background: c.color } }),
             c.label,
-            c.key === task.status ? el('span.check', {}, [UI.lineIcon('check')]) : null
+            c.key === task.status ? el('span.check', { text: '✓' }) : null
           ])
         )));
       });
@@ -333,7 +333,7 @@ const GridView = (() => {
           }, [
             el('span.swatch', { style: { background: p.color } }),
             p.label,
-            p.key === task.priority ? el('span.check', {}, [UI.lineIcon('check')]) : null
+            p.key === task.priority ? el('span.check', { text: '✓' }) : null
           ])
         )));
       });
@@ -365,7 +365,7 @@ const GridView = (() => {
           }, [
             el('span.swatch', { style: { background: p.color ?? '#e2e8f0' } }),
             p.name,
-            String(p.id) === String(task.projectId ?? '') ? el('span.check', {}, [UI.lineIcon('check')]) : null
+            String(p.id) === String(task.projectId ?? '') ? el('span.check', { text: '✓' }) : null
           ])
         )));
       });
@@ -409,7 +409,7 @@ const GridView = (() => {
           o.value ? UI.avatar(o.label, { small: true, vendor: o.vendor }) : el('span.swatch', { style: { background: '#e2e8f0' } }),
           o.label,
           o.vendor ? el('span.tag.tag-vendor', {}, ['ספק']) : null,
-          o.value === current ? el('span.check', {}, [UI.lineIcon('check')]) : null
+          o.value === current ? el('span.check', { text: '✓' }) : null
         ]);
 
         // כותרות רק כשיש שתי קבוצות — במחלקה אחת הן רעש
@@ -674,14 +674,14 @@ const GridView = (() => {
           else state.collapsed.add(group.key);
           ctx.onRedraw();
         }
-      }, [UI.lineIcon(collapsed ? 'chevron-right' : 'chevron-down')]),
+      }, [collapsed ? '▸' : '▾']),
       el('h3.group-title', { style: { color: group.color }, text: group.label }),
       el('span.group-count', { text: `${group.tasks.length}` }),
       el('div.spacer'),
       state.groupBy === 'project' && group.meta.projectId && App.may('create_project')
         ? el('button.btn.btn-sm.btn-ghost', {
             onclick: () => BoardView.openProjectDialog(App.project(group.meta.projectId))
-          }, [UI.lineIcon('pencil'), 'פרויקט'])
+          }, ['✎ פרויקט'])
         : null
     ]);
 
@@ -809,7 +809,7 @@ const GridView = (() => {
           else groups.forEach((g) => state.collapsed.add(g.key));
           ctx.onRedraw();
         }
-      }, state.collapsed.size ? [UI.lineIcon('chevrons-up-down'), 'פתיחת הכל'] : [UI.lineIcon('chevrons-down-up'), 'קיפול הכל'])
+      }, [state.collapsed.size ? '⤢ פתיחת הכל' : '⤡ קיפול הכל'])
     ]);
 
     if (!ctx.tasks.length) {
