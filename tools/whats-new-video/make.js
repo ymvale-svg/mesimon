@@ -111,13 +111,17 @@ function encode(recFile, workDir, outBase, posterAt) {
       fs.writeFileSync(recFile, JSON.stringify(rec));
       const secs = encode(recFile, work, path.join(OUT_DIR, item.id), scene.posterAt ?? 0.55);
       const size = fs.statSync(path.join(OUT_DIR, `${item.id}.mp4`)).size;
-      item.video = `/whats-new/${release}/${item.id}.mp4`;
-      item.poster = `/whats-new/${release}/${item.id}.jpg`;
       console.log(`${secs.toFixed(1)} שניות, ${(size / 1048576).toFixed(1)}MB`);
     }
   } finally {
     await browser.close();
     child.kill();
+  }
+  // הנתיבים של כל הסרטונים שקיימים — גם מהפקה קודמת, כשהופקו רק חלק מהפריטים
+  for (const item of rel.items) {
+    if (!fs.existsSync(path.join(OUT_DIR, `${item.id}.mp4`))) continue;
+    item.video = `/whats-new/${release}/${item.id}.mp4`;
+    item.poster = `/whats-new/${release}/${item.id}.jpg`;
   }
   fs.writeFileSync(RELEASE_FILE, `${JSON.stringify(rel, null, 2)}\n`);
   fs.rmSync(tmp, { recursive: true, force: true });

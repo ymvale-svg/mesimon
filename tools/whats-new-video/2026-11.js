@@ -135,15 +135,18 @@ const scenes = {
     posterAt: 0.45,
     async run(d) {
       await d.goto('home');
-      await d.hold(600);
+      await d.hold(400);
+      await d.scroll('.home-slot[data-key="myTasks"]');
       let box = await d.spot('.home-slot[data-key="calendar"] .card-head', 'גוררים חלון מהכותרת שלו');
-      await d.focus({ cx: d.W / 2, cy: 420 }, { z: 1.15 });
-      await d.drag('.home-slot[data-key="calendar"] .card-head', { dx: 560, dy: 0, fx: 0.3 });
-      await d.hold(700);
-      box = await d.spot('.home-slot[data-key="calendar"]', 'ומשנים גודל מכל צד או פינה');
-      await d.drag('.home-slot[data-key="calendar"] .slot-rz.rz-be', { dx: -160, dy: 90, steps: 26 });
+      await d.focus({ cx: d.W / 2 - 30, cy: 430 }, { z: 1.1 });
+      await d.drag('.home-slot[data-key="calendar"] .card-head', { dx: 600, dy: 0, fx: 0.35, steps: 36 });
       await d.hold(900);
+      box = await d.spot('.home-slot[data-key="calendar"]', 'ומשנים גודל מכל צד או פינה');
+      await d.drag('.home-slot[data-key="calendar"] .slot-rz.rz-be', { dx: -150, dy: 0, steps: 26 });
+      await d.hold(1000);
       await d.off();
+      await d.wide({ ms: 700 });
+      await d.scroll('.home-add-btn');
       box = await d.spot('.home-add-btn', '＋ הוספת חלון — מחזיר חלונות מוסתרים');
       await d.focus(box, { z: 1.8 });
       await d.hold(1300);
@@ -181,7 +184,7 @@ const scenes = {
       let box = await d.spot('.today-sec:has(.today-mail)', 'הצעות למשימות מהמייל ומהוואטסאפ');
       await d.focus(box);
       await d.hold(900);
-      await d.click('.today-sec:has(.today-mail) .today-mail-actions .btn-primary');
+      await d.click('.today-sec .today-mail:not(.ts-row) .today-mail-actions .btn-primary');
       await d.hold(900);
       await d.off();
       await d.scroll('.today-sec:has(.today-insight)');
@@ -198,6 +201,7 @@ const scenes = {
     posterAt: 0.45,
     async run(d) {
       await d.goto('home');
+      await d.scroll('.home-slot[data-key="myTasks"]');
       let box = await d.spot('.home-slot[data-key="myTasks"]', '"המשימות שלי"');
       await d.focus(box, { z: 1.4 });
       await d.point('.home-slot[data-key="myTasks"] .task-line');
@@ -223,14 +227,18 @@ const scenes = {
     async run(d) {
       await d.goto('home');
       const row = '.home-slot[data-key="aiInbox"] .ai-row::text=מבצעי הספקים';
+      await d.scroll(row);
       let box = await d.spot(row, 'הצעה שאינה משימה?');
-      await d.focus(box, { z: 1.6 });
+      await d.focus(box, { z: 1.12 });
       await d.hold(600);
-      await d.click(`.home-slot[data-key="aiInbox"] .ai-row-actions button::text=לא משימה`);
+      // הכפתור של השורה הזו בדיוק — לא הראשון ברשימה
+      await d.eval(() => [...document.querySelectorAll('.home-slot[data-key="aiInbox"] .ai-row')]
+        .find((r) => r.textContent.includes('מבצעי הספקים'))?.setAttribute('id', 'dv-row'));
+      await d.click('#dv-row button::text=לא משימה');
       await d.wait(900);
       await d.off();
       box = await d.spot('.home-slot[data-key="aiInbox"]', 'ירדה מהרשימה — בלחיצה אחת, בלי חלון');
-      await d.focus(box, { z: 1.25 });
+      await d.focus(box, { z: 1.05 });
       await d.hold(1600);
       await d.off();
       await d.wide();
@@ -275,7 +283,7 @@ const scenes = {
       await d.wait(1200);
       await d.off();
       box = await d.spot('.home-slot[data-key="aiInbox"] .ts-row::text=למזג', 'ומשימות כפולות — "למזג?"');
-      await d.focus(box, { z: 1.6 });
+      await d.focus(box, { z: 1.15 });
       await d.hold(1700);
       await d.off();
       await d.wide();

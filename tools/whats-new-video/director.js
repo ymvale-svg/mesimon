@@ -131,6 +131,10 @@ async function record(browser, { base, login, framesDir, scene, setup }) {
   await page.fill('input[type=password]', login.password);
   await page.click('button[type=submit]');
   await page.waitForTimeout(2000);
+  // כל סצנה מתחילה במראה הבהיר — העדפת המראה נשמרת בשרת, וסצנה קודמת אולי שינתה אותה
+  await page.evaluate(() => { localStorage.setItem('mesimon.theme', 'light'); return API.savePrefs({ theme: 'light' }); });
+  await page.reload();
+  await page.waitForTimeout(2000);
   // חלונות שנפתחים בכניסה (מה חדש, הזמנה להתראות) אינם חלק מההדמיה
   await page.evaluate(() => document.querySelectorAll('.modal-backdrop').forEach((n) => n.remove()));
   await page.evaluate(stageScript, SLOW);
