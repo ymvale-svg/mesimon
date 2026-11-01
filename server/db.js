@@ -680,6 +680,30 @@ CREATE TABLE IF NOT EXISTS mail_insights (
 );
 
 /*
+ * תובנות מהוואטסאפ — שורה אחת לכל דבר שכדאי לדעת, בלי גוף ההודעה.
+ *   ‎group‎ — מקבוצה של הבוט. מנותחת פעם אחת לקבוצה, ונראית רק למי שהטלפון שלו
+ *            ברשימת המשתתפים. ‎owner_id‎ = 0.
+ *   ‎personal‎ — מהוואטסאפ האישי של עובד (רק אנשי קשר עסקיים). ‎owner_id‎ — העובד.
+ * ‎chat_id‎ — הקבוצה, או המספר של השולח בשיחה פרטית. נמחק אחרי 7 ימים.
+ */
+CREATE TABLE IF NOT EXISTS wa_insights (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  scope        TEXT    NOT NULL CHECK (scope IN ('group','personal')),
+  owner_id     INTEGER NOT NULL DEFAULT 0,
+  chat_id      TEXT    NOT NULL DEFAULT '',
+  message_id   TEXT    NOT NULL DEFAULT '',
+  sender_name  TEXT    NOT NULL DEFAULT '',
+  kind         TEXT    NOT NULL DEFAULT 'info',
+  importance   INTEGER NOT NULL DEFAULT 1,
+  insight      TEXT    NOT NULL DEFAULT '',
+  due_date     TEXT    NOT NULL DEFAULT '',
+  at           TEXT    NOT NULL,
+  created_at   TEXT    NOT NULL,
+  UNIQUE (scope, owner_id, message_id)
+);
+CREATE INDEX IF NOT EXISTS idx_wa_insights_at ON wa_insights(scope, at);
+
+/*
  * יומן הבוט: כל מה שקיבל ומה עשה עם זה — כדי שמנהל המערכת יראה איפה הוא
  * מבין ואיפה טועה. נשמר 90 יום.
  */

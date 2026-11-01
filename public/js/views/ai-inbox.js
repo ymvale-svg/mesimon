@@ -195,9 +195,9 @@ const AiInboxView = (() => {
   function fromLine(s) {
     if (s.data?.source === 'whatsapp') {
       return el('div.mute-sm', {}, [
-        `💬 ${s.data.groupName} · ${s.from.name}`,
+        s.data.personal ? `💬 ${s.from.name}` : `👥 ${s.data.groupName} · ${s.from.name}`,
         s.receivedAt ? ` · ${UI.relative(s.receivedAt)}` : '',
-        ` · 📁 ${s.data.projectName}`
+        s.data.projectName ? ` · 📁 ${s.data.projectName}` : ''
       ]);
     }
     return el('div.mute-sm', {}, [
@@ -332,13 +332,22 @@ const AiInboxView = (() => {
   }
 
   async function rejectDialog(s, reload) {
-    const ignore = el('input', { type: 'checkbox' });
+    /*
+     * מהוואטסאפ האישי: "לא לסרוק את X מעכשיו". מהדחייה השנייה מאותו שולח —
+     * מסומן מראש, עם הסבר למה.
+     */
+    const personal = Boolean(s.data.personal && s.data.chatPhone);
+    const again = personal && s.senderRejections >= 1;
+    const ignore = el('input', { type: 'checkbox', checked: again });
     const ok = el('button.btn.btn-primary', {}, ['דחייה']);
     const m = UI.modal({
       title: 'דחיית ההצעה',
       body: el('div', {}, [
         el('p', { text: `"${s.data.title}" לא תיווצר, ולא תוצע שוב.` }),
-        s.from.email ? el('label.checkbox', {}, [ignore, ` לא להציע יותר משימות מ-${s.from.email}`]) : null
+        personal
+          ? el('label.checkbox', {}, [ignore, ` לא לסרוק את השיחה עם ${s.from.name} מעכשיו`])
+          : s.from.email ? el('label.checkbox', {}, [ignore, ` לא להציע יותר משימות מ-${s.from.email}`]) : null,
+        again ? el('div.mute-sm', { text: `זו כבר הדחייה ה-${s.senderRejections + 1} של הצעה מ${s.from.name}.` }) : null
       ]),
       footer: [ok, el('div.spacer'), el('button.btn', { onclick: () => m.close() }, ['ביטול'])]
     });

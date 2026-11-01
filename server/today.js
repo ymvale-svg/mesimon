@@ -2,13 +2,20 @@
 /**
  * Today — "מה אני צריך לעשות היום?" במקום אחד.
  *
- * שלושה מקורות, ופונקציה אחת שבונה אותם (‎build‎) — היא משמשת גם את המסך
- * וגם את מייל הבוקר, כדי ששניהם יציגו תמיד אותו דבר:
- *   1. משימות — שלי (אחראי או אחראי נוסף), פתוחות, שהיעד שלהן היום או שעבר,
- *      ומשימות מתוזמנות שנפתחות היום.
- *   2. מהמייל — הצעות משימה שעוד לא הוחלט עליהן. כולן "להיום" כברירת מחדל,
- *      עד שהמשתמש מחליט אחרת; מה שלא טופל נשאר גם מחר, תחת "מאתמול".
- *   3. היומן — האירועים של היום מ-Google Calendar.
+ * פונקציה אחת שבונה אותו (‎build‎) — היא משמשת את המסך, את הבוט ואת מייל
+ * הבוקר, כדי שכולם יציגו תמיד אותו דבר, באותו סדר:
+ *   1. היומן — האירועים של היום מ-Google Calendar, ומיד אחריו פגישות שמחכות
+ *      להחלטה.
+ *   2. משימות — שלי (אחראי או אחראי נוסף), פתוחות, שהיעד שלהן היום או שעבר
+ *      (באיחור בראש), ומשימות מתוזמנות שנפתחות היום.
+ *   3. הצעות למשימות — מהמייל 📧, מקבוצות הוואטסאפ 👥 ומהוואטסאפ האישי 💬,
+ *      גם בלי Gmail. מה שהגיע בטווח של היום — בשורה משלו; הישנות — בקיצור.
+ *   4. תובנות — מהמייל ומהוואטסאפ (‎insights.js‎). הן לוקחות זמן (קריאת מיילים
+ *      וניתוח), ולכן אינן מעכבות את השאר: המסך טוען אותן בנפרד (‎insights‎),
+ *      הבוט שולח אותן בהודעת המשך, ומייל הבוקר מחכה להן (‎build({insights})‎).
+ *
+ * הטווח של "היום" — 24 שעות, וביום העבודה הראשון אחרי סוף שבוע — מאז תחילת
+ * יום העבודה הקודם (‎ai/insight-window.js‎).
  *
  * מייל הבוקר: מי שהפעיל אותו מקבל כל בוקר, בימי העבודה שלו, את אותו Today
  * בתיבה — בלי ללחוץ על כלום.
@@ -20,6 +27,8 @@ const Gmail = require('./gmail');
 const Calendar = require('./calendar');
 const Mailer = require('./mailer');
 const MailScan = require('./ai/mail-scan');
+const Insights = require('./ai/insights');
+const Range = require('./ai/insight-window');
 const { BRAND, escape, shell, button } = require('./mail-templates');
 
 // מוזרק מ-api.js — אותה צורת משימה שכל המסכים מקבלים
@@ -42,11 +51,48 @@ function myOpenTasks(actor) {
   ).map((t) => hooks.shapeTask(t, actor)).filter((t) => !t.isFinal);
 }
 
+/** ההעדפה "תובנות ב-Today" — דלוקה כברירת מחדל. חלה על המסך, הבוט ומייל הבוקר */
+const insightsWanted = (userId) => D.userPrefs(userId)?.botPrefs?.insightsInToday !== false;
+
+/** מה שמוצג כהצעה — לא מוצג שוב כתובנה (מזהה מייל, או ‎wamsg:‎ של הודעת וואטסאפ) */
+function suggestionRefs(items) {
+  const refs = new Set();
+  for (const s of items) {
+    if (s.gmailId) refs.add(s.gmailId);
+    const m = /^(?:wa:|wap:\d+:)(.+)$/.exec(String(s.headerId ?? ''));
+    if (m) refs.add(`wamsg:${m[1]}`);
+  }
+  return refs;
+}
+
+/**
+ * חלק התובנות של Today. ‎suggestions‎ — ההצעות שכבר מוצגות, כדי לא להציג פעמיים.
+ * @returns {Promise<object|null>}  ‎null‎ — כבוי בהעדפה, או שאין מקור רלוונטי
+ */
+async function insightsFor(actor, { window = null, suggestions = null, mail = true } = {}) {
+  if (!insightsWanted(actor.id)) return null;
+  const win = window ?? Range.forUser(actor.id);
+  const pending = suggestions ?? MailScan.listFor(actor.id).pending.filter((s) => s.kind === 'task');
+  const result = await Insights.collect(actor.id, { window: win, mail, exclude: suggestionRefs(pending) });
+  const heading = Insights.headings(result.sources);
+  if (!heading) return null;
+  return {
+    heading: heading.insights,
+    window: { label: result.window.label, span: result.window.span, unit: result.window.unit, since: result.window.sinceIso, note: result.window.note },
+    count: result.items.length,
+    groups: Insights.grouped(result.items),
+    mail: result.mail,
+    mailError: result.mailError,
+    result
+  };
+}
+
 /**
  * @param {object} actor   שחקן מסוג משתמש
- * @param {{fresh?: boolean}} opts   ‎fresh‎ — לעקוף את מטמון היומן
+ * @param {{fresh?: boolean, insights?: boolean}} opts   ‎fresh‎ — לעקוף את מטמון
+ *   היומן; ‎insights‎ — לחכות גם לתובנות (מייל הבוקר)
  */
-async function build(actor, { fresh = false } = {}) {
+async function build(actor, { fresh = false, insights = false } = {}) {
   const date = W.todayIL();
   const overdue = [];
   const today = [];
@@ -62,15 +108,25 @@ async function build(actor, { fresh = false } = {}) {
   overdue.sort((a, b) => new Date(a.dueDate) - new Date(b.dueDate));
   today.sort((a, b) => (PRIORITY_RANK[a.priority] ?? 2) - (PRIORITY_RANK[b.priority] ?? 2) || a.title.localeCompare(b.title, 'he'));
 
+  const window = Range.forUser(actor.id);
   const mailConnected = Gmail.has(actor.id, 'mail');
-  const mail = mailConnected
-    ? MailScan.listFor(actor.id).pending
-      .filter((s) => s.kind === 'task')
-      .map((s) => ({ ...s, older: W.ilDateOf(s.createdAt) < date }))
-    : [];
+  const pending = MailScan.listFor(actor.id).pending;
+  /*
+   * הצעות למשימות מכל המקורות — גם בלי Gmail (הצעות מהוואטסאפ). ‎older‎ — הוצעה
+   * לפני הטווח של היום: מוצגת בקיצור, עד שמחליטים.
+   */
+  const suggestions = pending
+    .filter((s) => s.kind === 'task')
+    .map((s) => ({ ...s, origin: Insights.suggestionSource(s), older: String(s.createdAt ?? '') < window.sinceIso }));
+  const sources = Insights.sourcesOf(actor.id);
+  const shownSources = {
+    mail: sources.mail || suggestions.some((s) => s.origin.source === 'mail'),
+    whatsapp: sources.whatsapp || suggestions.some((s) => s.origin.source !== 'mail')
+  };
+  const heading = Insights.headings(shownSources);
 
   // פגישות שמחכות להחלטה — בוטלה ביומן, או בקשה להזיז. לא תלוי בחיבור המייל
-  const meetingDecisions = MailScan.listFor(actor.id).pending.filter((s) => String(s.kind).startsWith('meeting_'));
+  const meetingDecisions = pending.filter((s) => String(s.kind).startsWith('meeting_'));
 
   let calendar;
   try {
@@ -90,14 +146,31 @@ async function build(actor, { fresh = false } = {}) {
     W.ilWallToUtc(date, 0, 0).toISOString(), actor.id, actor.id
   ).c;
 
+  const insightPart = insights ? await insightsFor(actor, { window, suggestions }).catch((err) => {
+    console.error('[משימון] התובנות ל-Today נכשלו:', err.message);
+    return null;
+  }) : undefined;
+
   return {
     date,
     dateLabel: W.hebrewDate(date),
     isWorkDay: W.isWorkDay(actor.id, date),
     tomorrow: W.nextWorkDay(actor.id, date),
     workDays: W.workDaysOf(actor.id),
+    window: { label: window.label, span: window.span, unit: window.unit, since: window.sinceIso },
     tasks: { overdue, today },
-    mail: { connected: mailConnected, items: mail },
+    suggestions: {
+      heading: heading?.suggestions ?? '📧 הצעות למשימות מהמייל',
+      sources: shownSources,
+      items: suggestions,
+      fresh: suggestions.filter((s) => !s.older).length,
+      older: suggestions.filter((s) => s.older).length
+    },
+    // השם הישן — לתאימות; אותן הצעות
+    mail: { connected: mailConnected, items: suggestions },
+    // ‎undefined‎ — לא התבקשו (נטענות בנפרד); ‎null‎ — כבויות או בלי מקור רלוונטי
+    insights: insightPart === undefined ? undefined : insightPart && { ...insightPart, result: undefined },
+    insightsHeading: insightsWanted(actor.id) ? Insights.headings(shownSources)?.insights ?? null : null,
     meetings: meetingDecisions,
     calendar,
     google: {
@@ -109,12 +182,13 @@ async function build(actor, { fresh = false } = {}) {
     counts: {
       overdue: overdue.length,
       today: today.length,
-      mail: mail.length,
+      mail: suggestions.length,
+      suggestions: suggestions.length,
       meetings: meetingDecisions.length,
       events: calendar.events.length,
       upcomingEvents: upcoming.length,
       doneToday,
-      total: overdue.length + today.length + mail.length + meetingDecisions.length + upcoming.length
+      total: overdue.length + today.length + suggestions.length + meetingDecisions.length + upcoming.length
     }
   };
 }
@@ -129,9 +203,8 @@ function quickCount(actor) {
     const due = W.ilDateOf(t.dueDate);
     if ((due && due <= date) || activates === date) n++;
   }
-  if (Gmail.has(actor.id, 'mail')) {
-    n += D.get("SELECT COUNT(*) c FROM ai_suggestions WHERE user_id = ? AND status = 'pending' AND kind = 'task'", actor.id).c;
-  }
+  // הצעות מכל המקורות — גם מהוואטסאפ, בלי Gmail (כמו ב-Today עצמו)
+  n += D.get("SELECT COUNT(*) c FROM ai_suggestions WHERE user_id = ? AND status = 'pending' AND kind = 'task'", actor.id).c;
   return n;
 }
 
@@ -193,7 +266,7 @@ function subjectOf(t) {
     c.events ? `${c.events} פגישות` : null,
     c.today ? `${c.today} משימות` : null,
     c.overdue ? `${c.overdue} באיחור` : null,
-    c.mail ? `${c.mail} מהמייל` : null
+    c.suggestions ? `${c.suggestions} הצעות` : null
   ].filter(Boolean);
   return `☀ Today · ${t.dateLabel} — ${parts.length ? parts.join(', ') : 'יום נקי'}`;
 }
@@ -207,7 +280,7 @@ function digestEmail(user, t) {
   const row = (inner, meta = '') => `
             <tr><td style="padding:7px 0;border-bottom:1px solid ${BRAND.border};font-size:14px;">${inner}${meta ? `<div style="color:${BRAND.mute};font-size:12.5px;margin-top:2px;">${meta}</div>` : ''}</td></tr>`;
   const section = (icon, title, rows) => (rows.length ? `
-          <div style="margin-top:22px;font-weight:800;font-size:15px;color:${BRAND.tealDark};">${icon} ${escape(title)}</div>
+          <div style="margin-top:22px;font-weight:800;font-size:15px;color:${BRAND.tealDark};">${icon ? `${icon} ` : ''}${escape(title)}</div>
           <table role="presentation" width="100%" cellpadding="0" cellspacing="0">${rows.join('')}
           </table>` : '');
 
@@ -222,29 +295,59 @@ function digestEmail(user, t) {
       task.priority === 'urgent' ? '<span style="color:#dc2626;">דחוף</span>' : '',
       task.checklistTotal ? `${task.checklistDone}/${task.checklistTotal} בצ׳קליסט` : ''].filter(Boolean).join(' · ')
   );
-  const mail = t.mail.items.map((s) => row(
-    a(link('/?view=today'), s.data?.title ?? s.subject),
-    `מאת ${escape(s.from.name)}${s.older ? ' · מחכה מאתמול' : ''}`
-  ));
+  const sug = t.suggestions;
+  const origin = (s) => `${s.origin.icon} ${escape(s.origin.label)}`;
+  const freshSug = sug.items.filter((s) => !s.older);
+  const olderSug = sug.items.filter((s) => s.older);
+  const suggestionRows = freshSug.map((s) => row(a(link('/?view=today'), s.data?.title ?? s.subject), origin(s)));
+  // הצעות ישנות — שורה מקוצרת אחת, לא רשימה
+  if (olderSug.length) {
+    suggestionRows.push(row(`<span style="color:${BRAND.mute};">⏳ ועוד ${olderSug.length === 1 ? 'הצעה ישנה אחת מחכה' : `${olderSug.length} הצעות ישנות מחכות`} להחלטה</span>`));
+  }
+
+  // תובנות — "דורש ממך" במלואו, השאר בקיצור (‎insights.js‎)
+  const ins = t.insights;
+  const insightRows = [];
+  const insightText = [];
+  if (ins) {
+    const mixed = t.suggestions.sources.mail && t.suggestions.sources.whatsapp;
+    for (const g of ins.groups) {
+      const shown = g.collapsed ? g.items.slice(0, 5) : g.items.slice(0, 10);
+      insightRows.push(`
+            <tr><td style="padding:10px 0 2px;font-weight:700;font-size:13px;color:${BRAND.soft};">${escape(g.title)} (${g.items.length})</td></tr>`);
+      for (const x of shown) {
+        const icon = mixed ? `${{ mail: '📧', group: '👥', personal: '💬' }[x.source]} ` : '';
+        insightRows.push(row(`${icon}<b>${escape(x.label)}:</b> ${escape(x.insight)}`, x.dueDate ? `📅 ${escape(shortDate(`${x.dueDate}T12:00:00Z`))}` : ''));
+      }
+      if (g.items.length > shown.length) insightRows.push(row(`<span style="color:${BRAND.mute};">ועוד ${g.items.length - shown.length}</span>`));
+      insightText.push(`  ${g.title} (${g.items.length}):`, ...shown.map((x) => `  • ${x.label}: ${x.insight}`));
+    }
+    if (!ins.groups.length) insightRows.push(row(`<span style="color:${BRAND.mute};">אין חדש.</span>`));
+  }
 
   const empty = !t.counts.total && !t.calendar.events.length;
   const bodyHtml = `          <div style="font-size:20px;font-weight:700;margin-bottom:4px;">בוקר טוב ${escape(String(user.full_name).split(' ')[0])},</div>
           <div style="color:${BRAND.soft};">${escape(t.dateLabel)}${empty ? ' — אין כלום ביומן ואין משימות להיום. יום נקי.' : ''}</div>
 ${!t.calendar.connected ? `          <div style="margin-top:14px;color:${BRAND.mute};font-size:13px;">היומן אינו מחובר — אפשר לחבר אותו ב"החשבון שלי ← חיבור Google".</div>` : ''}
 ${section('📅', 'היומן', events)}
+${t.counts.meetings ? `          <div style="margin-top:8px;font-size:13px;">🗓 ${t.counts.meetings === 1 ? 'פגישה אחת מחכה' : `${t.counts.meetings} פגישות מחכות`} להחלטה — במשימון.</div>` : ''}
 ${section('⚠', `באיחור (${t.tasks.overdue.length})`, t.tasks.overdue.map((x) => taskRow(x, true)))}
 ${section('✅', `היום (${t.tasks.today.length})`, t.tasks.today.map((x) => taskRow(x, false)))}
-${section('📧', `מהמייל — ממתין להחלטה (${t.mail.items.length})`, mail)}
-${t.mail.items.length ? `          <div style="color:${BRAND.mute};font-size:12.5px;margin-top:6px;">ההחלטה על כל מייל — משימה להיום, תאריך אחר או "לא משימה" — נעשית במשימון.</div>` : ''}
+${section('', `${sug.heading} (${sug.items.length})`, suggestionRows)}
+${sug.items.length ? `          <div style="color:${BRAND.mute};font-size:12.5px;margin-top:6px;">ההחלטה על כל הצעה — משימה להיום, תאריך אחר או "לא משימה" — נעשית במשימון.</div>` : ''}
+${ins ? section('', `${ins.heading} (${ins.window.span})`, insightRows) : ''}
 ${root ? button(link('/?view=today'), 'פתיחת Today במשימון') : ''}`;
 
   const text = [
     `☀ Today — ${t.dateLabel}`,
     '',
     ...(t.calendar.events.length ? ['📅 היומן', ...t.calendar.events.map((e) => `  ${e.allDay ? 'כל היום' : hhmm(e.start)}  ${e.title}`), ''] : []),
+    ...(t.counts.meetings ? [`🗓 ${t.counts.meetings} פגישות מחכות להחלטה`, ''] : []),
     ...(t.tasks.overdue.length ? ['⚠ באיחור', ...t.tasks.overdue.map((x) => `  • ${x.title} (יעד ${shortDate(x.dueDate)})`), ''] : []),
     ...(t.tasks.today.length ? ['✅ היום', ...t.tasks.today.map((x) => `  • ${x.title}`), ''] : []),
-    ...(t.mail.items.length ? ['📧 מהמייל — ממתין להחלטה', ...t.mail.items.map((s) => `  • ${s.data?.title ?? s.subject} (מאת ${s.from.name})`), ''] : []),
+    ...(sug.items.length ? [sug.heading, ...freshSug.map((s) => `  • ${s.data?.title ?? s.subject} — ${s.origin.icon} ${s.origin.label}`),
+      ...(olderSug.length ? [`  ⏳ ועוד ${olderSug.length} הצעות ישנות מחכות`] : []), ''] : []),
+    ...(ins ? [`${ins.heading} (${ins.window.span})`, ...(insightText.length ? insightText : ['  אין חדש.']), ''] : []),
     ...(root ? [`לפתיחה: ${link('/?view=today')}`] : [])
   ].join('\n');
 
@@ -271,7 +374,8 @@ async function sendDigest(userId, { force = false } = {}) {
   const actor = Auth.loadActor('user', userId);
   if (!actor) return { sent: false, reason: 'המשתמש אינו פעיל' };
 
-  const t = await build(actor);
+  // מייל הבוקר מחכה גם לתובנות — אין כאן מי שמחכה למסך
+  const t = await build(actor, { insights: true });
   const prefs = digestPrefs(userId);
   if (!force && prefs.skipEmpty && !t.counts.total && !t.calendar.events.length) return { sent: false, reason: 'empty' };
 
@@ -348,5 +452,5 @@ function stop() {
 }
 
 module.exports = {
-  init, build, quickCount, digestPrefs, cleanDigest, digestDays, sendDigest, digestEmail, start, stop, tick, DIGEST_DEFAULTS
+  init, build, insightsFor, insightsWanted, quickCount, digestPrefs, cleanDigest, digestDays, sendDigest, digestEmail, start, stop, tick, DIGEST_DEFAULTS
 };

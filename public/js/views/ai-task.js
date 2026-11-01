@@ -1051,28 +1051,41 @@ const AiTaskView = (() => {
 
     /**
      * "להציע משימות ופגישות מהוואטסאפ שלי" — שיחות פרטיות בלבד (קבוצות נסרקות
-     * דרך הבוט הארגוני). מספרים שלא לסרוק — אחד בשורה.
+     * דרך הבוט הארגוני), ורק עם אנשי קשר עסקיים. שתי רשימות, מספר בשורה:
+     * עסקיים נוספים, ו"לא לסרוק" — שגוברת על הכול.
      */
     function scanBox() {
       const box = el('div', { style: { marginTop: '14px' } });
+      const local = (n) => (n.startsWith('972') ? `0${n.slice(3)}` : n);
+      const listOf = (ta) => ta.value.split(/[\n,]+/).map((x) => x.trim()).filter(Boolean);
       API.get('/api/me/wa-scan').then((p) => {
         const on = el('input', { type: 'checkbox', checked: p.enabled });
+        const business = el('textarea', { dir: 'ltr', placeholder: '050-0000000', style: { minHeight: '56px' } });
+        business.value = (p.business ?? []).map(local).join('\n');
         const ignore = el('textarea', { dir: 'ltr', placeholder: '050-0000000', style: { minHeight: '56px' } });
-        ignore.value = (p.ignore ?? []).map((n) => (n.startsWith('972') ? `0${n.slice(3)}` : n)).join('\n');
+        ignore.value = (p.ignore ?? []).map(local).join('\n');
         const savePrefs = async () => {
           try {
-            await API.put('/api/me/wa-scan', { enabled: on.checked, ignore: ignore.value.split(/[\n,]+/).map((x) => x.trim()).filter(Boolean) });
+            await API.put('/api/me/wa-scan', { enabled: on.checked, business: listOf(business), ignore: listOf(ignore) });
             UI.success('נשמר');
           } catch (err) { UI.error(err); }
         };
         on.addEventListener('change', savePrefs);
+        business.addEventListener('change', savePrefs);
         ignore.addEventListener('change', savePrefs);
         UI.mount(box,
-          el('div.ai-section-title', { text: '💬 הצעות מהוואטסאפ שלי' }),
+          el('div.ai-section-title', { text: '💬 הצעות ותובנות מהוואטסאפ שלי' }),
           el('label.checkbox', {}, [on, ' להציע משימות ופגישות מהודעות שמגיעות אליי בוואטסאפ']),
-          el('div.mute-sm', { text: 'רק שיחות פרטיות, ורק עניינים של עבודה — ההצעות מגיעות ל"ממתין לאישורך", ושום דבר לא נוצר בלי אישור. תוכן ההודעות לא נשמר במשימון.' }),
+          el('div.mute-sm', { text: 'רק שיחות פרטיות, ורק עם אנשי קשר עסקיים — ההצעות מגיעות ל"ממתין לאישורך", ושום דבר לא נוצר בלי אישור. תוכן ההודעות לא נשמר במשימון.' }),
           !p.ai ? el('div.mute-sm.text-warn', { text: 'חיבור ה-AI עוד לא מוגדר בשרת — ההצעות יתחילו כשיוגדר.' }) : null,
-          UI.field('מספרים שלא לסרוק (משפחה, חברים)', ignore, 'אחד בשורה')
+          el('div.alert.alert-info.wa-business-note', {}, [el('span', { text: '💼' }), el('div', {}, [
+            el('b', { text: 'מי נחשב עסקי אוטומטית: ' }),
+            'עובדים בארגון, אנשי האלפון, ספקים, אנשי קשר בגוגל עם חברה או תפקיד, ומי שעבדת איתו במשימות, במשימות AI ובפגישות. ',
+            'כל שיחה אחרת לא נקראת ולא נשלחת ל-AI. ממספר לא מוכר ששלח כמה הודעות — הבוט ישאל אותך פעם אחת "עסקי או אישי?".'
+          ])]),
+          UI.field('אנשי קשר עסקיים נוספים', business, 'אחד בשורה · אפשר גם בבוט: "יוסי עסקי"'),
+          UI.field('מספרים שלא לסרוק (משפחה, חברים)', ignore, 'אחד בשורה · גובר על "עסקי" · בבוט: "אל תסרוק את דני"'),
+          p.asked?.length ? el('div.mute-sm', { text: `מחכה לתשובה שלך על ${p.asked.length === 1 ? 'מספר אחד' : `${p.asked.length} מספרים`}: ${p.asked.map(local).join(', ')} — הוסיפו לאחת הרשימות, או ענו לבוט.` }) : null
         );
       }).catch(() => {});
       return box;
