@@ -53,7 +53,7 @@
     // ----- דף הבית
     { key: 'home.add-window', label: '"＋ הוספת חלון" בלוח הבית', screen: 'home', route: 'home', selector: '.home-add-btn' },
     { key: 'home.my-tasks', label: 'החלון "המשימות שלי"', screen: 'home', route: 'home', selector: '.home-slot[data-key="myTasks"]' },
-    { key: 'home.move-due', label: '📅 דחיית יעד ב"המשימות שלי"', screen: 'home', route: 'home', selector: '.home-slot .tk-move',
+    { key: 'home.move-due', label: '📅 דחיית יעד ב"המשימות שלי"', screen: 'home', route: 'home', selector: '.home-slot[data-key="myTasks"] .tk-move',
       fallback: 'home.my-tasks' },
     { key: 'home.ai-inbox', label: 'החלון "ממתין לאישורך"', screen: 'home', route: 'home', selector: '.home-slot[data-key="aiInbox"]' },
     { key: 'home.not-task', label: '"✕ לא משימה" ב"ממתין לאישורך"', screen: 'home', route: 'home',

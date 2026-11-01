@@ -138,6 +138,23 @@ const Spotlight = (() => {
     if (document.getElementById('notif-panel')) clickFirst('.notif-bell');
   }
 
+  /**
+   * המלבן שמתקרבים אליו. שורת כפתורים ברוחב כל המסך (המסננים באלפון,
+   * בחירת המחלקה בדוחות) תופסת את כל הרוחב, אבל התוכן שלה בפינה אחת — אז
+   * מתקרבים לתוכן ולא לשורה הריקה.
+   */
+  function focusRect(node) {
+    const r = node.getBoundingClientRect();
+    const kids = [...node.children].map((c) => c.getBoundingClientRect()).filter((k) => k.width > 1 && k.height > 1);
+    if (!kids.length) return r;
+    const left = Math.min(...kids.map((k) => k.left));
+    const right = Math.max(...kids.map((k) => k.right));
+    const top = Math.min(...kids.map((k) => k.top));
+    const bottom = Math.max(...kids.map((k) => k.bottom));
+    if (right - left > r.width * 0.7) return r;
+    return { left, top, width: right - left, height: Math.max(bottom - top, 1) };
+  }
+
   // ------------------------------------------------------------- מצב מוטמע
 
   function post(msg) {
@@ -205,7 +222,7 @@ const Spotlight = (() => {
       last = now;
     }
     if (!alive()) return;
-    const r = hit.node.getBoundingClientRect();
+    const r = focusRect(hit.node);
     post({
       type: 'spot:rect', seq, found: hit.exact ? 'exact' : 'fallback',
       rect: { x: r.left, y: r.top, w: r.width, h: r.height }, vw: innerWidth, vh: innerHeight
