@@ -4015,3 +4015,53 @@ html.theme-switching, html.theme-switching * {
 .task-line:hover .tk-move, .tk-move:focus-visible { opacity: 1; }
 .tk-move:hover { background: var(--brand-light); border-color: var(--border); }
 @media (hover: none) { .tk-move { opacity: 1; } }
+
+/* ======================================================= קרן אור בחיפוש */
+
+/*
+ * שורות החיפוש — קרן אור שנעה לאורך הקצה התחתון כל עוד השדה במיקוד, בהשראת
+ * ‎Beam Search Bar‎ של 21st.dev. נבנית מרקע של השדה עצמו (שני מעברי צבע:
+ * קו דק ובוהק, והילה רכה ורחבה מעליו) ולא מאלמנט נוסף — כך היא חלה על כל
+ * שדה חיפוש במערכת בלי לגעת במבנה שלו. הכיוון מימין לשמאל, כמו כיוון הקריאה.
+ *
+ * ‎background-image‎ ולא ‎background‎: הכלל בא אחרי כללי המיקוד הקיימים של
+ * כל שדה, ומוסיף שכבה מעל צבע הרקע שלהם בלי לדרוס אותו.
+ */
+:root {
+  --beam: #2dd4bf;
+  --beam-glow: rgba(45, 212, 191, .28);
+}
+input[type="search"]:focus,
+.global-search input:focus,
+.pb-search:focus,
+.pb-side .pb-search:focus,
+.nav-search:focus,
+.pp-search:focus {
+  background-image:
+    linear-gradient(90deg, transparent, var(--beam) 45%, #ffffff 50%, var(--beam) 55%, transparent),
+    linear-gradient(90deg, transparent, var(--beam-glow), transparent);
+  background-size: 45% 2px, 60% 9px;
+  background-repeat: no-repeat;
+  background-position: 130% 100%, 140% 100%;
+  animation: search-beam 2.4s cubic-bezier(.45, .05, .55, .95) infinite;
+  box-shadow: 0 0 0 3px rgba(15, 118, 110, .12), 0 6px 18px -10px var(--beam);
+}
+@keyframes search-beam {
+  0%   { background-position: 130% 100%, 140% 100%; }
+  100% { background-position: -30% 100%, -40% 100%; }
+}
+@media (prefers-reduced-motion: reduce) {
+  input[type="search"]:focus,
+  .global-search input:focus,
+  .pb-search:focus,
+  .nav-search:focus,
+  .pp-search:focus {
+    animation: none;
+    background-size: 100% 2px, 100% 8px;
+    background-position: 0 100%, 0 100%;
+  }
+}
+[data-theme="dark"] {
+  --beam: #5eead4;
+  --beam-glow: rgba(94, 234, 212, .22);
+}
