@@ -20,6 +20,7 @@ const AiApi = require('./api-ai');
 const TodayApi = require('./api-today');
 const PhonebookApi = require('./api-phonebook');
 const MeetingsApi = require('./api-meetings');
+const WhatsNew = require('./api-whats-new');
 const Zoom = require('./zoom');
 const W = require('./workdays');
 const GContacts = require('./google-contacts');
@@ -933,6 +934,9 @@ router.get('/api/bootstrap', async (req, res, ctx) => {
      * הנכון. קריאה נוספת הייתה מציגה קודם לוח ריק ואז מקפיצה אותו.
      */
     prefs: isVendor(actor) ? {} : D.userPrefs(actor.id),
+    // כמה גרסאות "מה חדש" עוד לא נסגרו אצלו — הבאנר נפתח רק אם יש
+    whatsNewPending: WhatsNew.pendingCount(actor),
+    canManageReleases: !isVendor(actor) && P.can(actor, 'manage_automations'),
     settings: {
       orgName: D.getSetting('org_name', 'MESIMON'),
       maxUploadMb: D.getSetting('max_upload_mb', 25),
@@ -4992,6 +4996,7 @@ const botTaskOps = {
 AiApi.register(router, { getTaskOr404, assertVisible, mayOnTask, shapeTask, actorRef, saveAttachment, createTask, assertMayAssignTo, assertMayUseProject, listProjectsFor, newTaskProjects, assignableUserIds, assignBlockReason, botTaskOps });
 TodayApi.register(router, { shapeTask, createTask, getTaskOr404, listProjectsFor, newTaskProjects, assertMayAssignTo });
 PhonebookApi.register(router);
+WhatsNew.register(router);
 MeetingsApi.register(router, { getTaskOr404, assertVisible, shapeTask, canSeeTask });
 Tiful360.register(router, { createTask, saveAttachment, getTaskOr404 });
 

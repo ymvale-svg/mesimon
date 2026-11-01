@@ -825,6 +825,26 @@ CREATE TABLE IF NOT EXISTS phonebook (
 CREATE INDEX IF NOT EXISTS idx_phonebook_digits ON phonebook(phone_digits);
 CREATE INDEX IF NOT EXISTS idx_phonebook_email ON phonebook(email);
 
+/*
+ * "מה חדש" — הודעות על פיצ'רים שנוספו. כל הודעה היא גרסה אחת עם רשימת
+ * פריטים, וכל פריט משויך למסך: כך הבאנר מקבץ לפי מסכים ומציע "לנסות עכשיו".
+ * ‎items‎ הוא JSON: ‎[{screen, title, body, image}]‎, כשהתמונה (צילום מסך
+ * להמחשה) נשמרת כ-data URL דחוס. טיוטה אינה מוצגת לאף משתמש.
+ */
+CREATE TABLE IF NOT EXISTS release_notes (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  title         TEXT    NOT NULL,
+  summary       TEXT    NOT NULL DEFAULT '',
+  items         TEXT    NOT NULL DEFAULT '[]',
+  status        TEXT    NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','published')),
+  published_at  TEXT,
+  emailed_at    TEXT,
+  emailed_count INTEGER NOT NULL DEFAULT 0,
+  created_by    INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at    TEXT    NOT NULL,
+  updated_at    TEXT    NOT NULL
+);
+
 /* שולחים מיוחדים לכל משתמש: ‎trust‎ — משימות נוצרות ישר, בלי אישור; ‎ignore‎ — לא מציעים מהם משימות */
 CREATE TABLE IF NOT EXISTS mail_trusted_senders (
   user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
