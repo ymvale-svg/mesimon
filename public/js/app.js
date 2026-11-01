@@ -194,6 +194,12 @@ const App = (() => {
       Object.assign(state, data);
       // ההעדפה מהשרת גוברת על העותק במכשיר — משתמש אחר, או בחירה ממכשיר אחר
       applyTheme();
+      /*
+       * זרקור "מה חדש": המערכת נטענת בתוך הבאנר לתצוגה בלבד. בלי התראות,
+       * בלי סקרים, בלי Service Worker ובלי באנר בתוך באנר — מכאן ‎Spotlight‎
+       * מנווט ומודד לפי מה שהבאנר מבקש.
+       */
+      if (Spotlight.embedded) return Spotlight.embedBoot();
       await refreshNotifications();
       startNotifPolling();
       const params = new URLSearchParams(location.search);
@@ -220,6 +226,8 @@ const App = (() => {
        */
       subscribeToPush();
     } catch (err) {
+      // בתוך הבאנר אין מסך כניסה — הבאנר עובר לאייקון
+      if (Spotlight.embedded) return Spotlight.embedFail();
       if (err.status === 401) LoginView.render(root(), boot);
       else {
         UI.mount(root(), el('div.empty', {}, [
@@ -2715,7 +2723,7 @@ const App = (() => {
       } catch (err) { UI.error(err); }
     }
     draw();
-    return el('tr', {}, [el('th', { text: 'טלפון נייד' }), cell]);
+    return el('tr', { 'data-anchor': 'account.phone' }, [el('th', { text: 'טלפון נייד' }), cell]);
   }
 
   /** הטלפון במשרד / השלוחה שלי — מופיע באלפון. נשמר בלי קוד אימות */
@@ -2739,7 +2747,7 @@ const App = (() => {
       } catch (err) { UI.error(err); }
     }
     draw();
-    return el('tr', {}, [el('th', { text: 'טלפון במשרד / שלוחה' }), cell]);
+    return el('tr', { 'data-anchor': 'account.office-phone' }, [el('th', { text: 'טלפון במשרד / שלוחה' }), cell]);
   }
 
   /**
@@ -2793,7 +2801,7 @@ const App = (() => {
         // הוואטסאפ האישי משמש את משימות ה-AI להמשך מעקב מהמספר של המשתמש
         isVendor() ? null : el('button.btn.mt', { onclick: () => AiTaskView.openWhatsApp() }, ['💬 חיבור הוואטסאפ שלי']),
         // חיבור Google: Gmail (סריקה ותשובות), יומן ל-Today, ואנשי קשר למשימת AI
-        isVendor() ? null : el('button.btn.mt', { style: { marginInlineStart: '8px' }, onclick: () => AiInboxView.openGmail(() => refreshView()) }, ['🔗 חיבור Google ועוזר ה-AI']),
+        isVendor() ? null : el('button.btn.mt', { style: { marginInlineStart: '8px' }, 'data-anchor': 'account.google', onclick: () => AiInboxView.openGmail(() => refreshView()) }, ['🔗 חיבור Google ועוזר ה-AI']),
         isVendor() ? null : el('button.btn.mt', { style: { marginInlineStart: '8px' }, onclick: () => TodayView.openSettings() }, ['☀ Today והקלטה']),
         isVendor() ? null : el('button.btn.mt', {
           style: { marginInlineStart: '8px' },
@@ -2801,6 +2809,7 @@ const App = (() => {
         }, ['📒 אלפון ארגוני']),
         isVendor() ? null : el('button.btn.mt', {
           style: { marginInlineStart: '8px' },
+          'data-anchor': 'account.whats-new',
           onclick: () => { m.close(); WhatsNewView.open({ force: true }); }
         }, ['✨ מה חדש במערכת']),
         el('div.alert.alert-info.mt', {}, [
