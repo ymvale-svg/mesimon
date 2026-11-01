@@ -45,6 +45,8 @@ const Speech = require('../speech');
 const WaActions = require('./wa-actions');
 const MailInsights = require('./mail-insights');
 const VoiceRouter = require('./voice-router');
+const Phonebook = require('../phonebook');
+const ProjectHints = require('../project-hints');
 
 const GROUP_SKILL = path.join(__dirname, 'skills', 'whatsapp-group-to-tasks.md');
 const CHAT_SKILL = path.join(__dirname, 'skills', 'whatsapp-chat.md');
@@ -62,7 +64,7 @@ const parseJson = (text, fallback) => { try { return JSON.parse(text); } catch {
  * פעולות שתלויות ב-api.js — מוזרקות משם. ‎tasks‎: רשימות, סגירה והערה עם
  * הרשאות העובד. ‎mail‎: חיפוש נמען ופתיחת משימת AI — אותן פונקציות של האשף.
  */
-const hooks = { createTask: null, listProjectsFor: null, tasks: null, mail: null };
+const hooks = { createTask: null, listProjectsFor: null, newTaskProjects: null, assignableUserIds: null, assignBlockReason: null, tasks: null, mail: null };
 
 // ---------------------------------------------------------------------------
 // החיבור
@@ -86,8 +88,9 @@ function publicStatus() {
   return {
     enabled: Boolean(D.getSetting('wa_bot_enabled', true)),
     ai: Claude.isEnabled(),
-    // תמלול הודעות קוליות: ‎'openai'‎ · ‎'google'‎ · ‎null‎
-    speech: Speech.provider(),
+    // תמלול הודעות קוליות: הספקים המוגדרים לפי הסדר, ומצב ההשוואה
+    speech: Speech.providers(),
+    speechCompare: Boolean(D.getSetting('speech_compare', false)),
     connection: row ? {
       apiUrl: row.api_url,
       instanceId: row.instance_id,
@@ -688,11 +691,11 @@ function inHours(date = new Date()) {
 // שיחה פרטית — הפעולות
 // ---------------------------------------------------------------------------
 
-const INTENTS = ['create_task', 'my_tasks', 'complete', 'comment', 'project_tasks', 'send_email', 'mail_insights', 'today', 'today_email', 'menu', 'help', 'cancel', 'other'];
+const INTENTS = ['create_task', 'my_tasks', 'complete', 'comment', 'project_tasks', 'send_email', 'mail_insights', 'contact', 'today', 'today_email', 'menu', 'help', 'cancel', 'other'];
 const INSIGHT_ACTIONS = ['list', 'detail', 'reply', 'task', 'follow'];
 
 /** הכוונה ← הפעולה במסך הניהול שמפעילה אותה */
-const ACTION_OF = { menu: 'today', today_email: 'today' };
+const ACTION_OF = { menu: 'today', today_email: 'today', contact: 'phonebook' };
 const actionOf = (intent) => ACTION_OF[intent] ?? intent;
 
 const CHAT_SCHEMA = {
@@ -712,6 +715,7 @@ const CHAT_SCHEMA = {
     insight_action: { type: 'string', enum: INSIGHT_ACTIONS, description: 'בתובנות מהמיילים: מה לעשות. אחרת list' },
     insight_n: { type: 'integer', description: 'בתובנות: מספר המייל ברשימת התובנות האחרונה, או 0' },
     insight_from: { type: 'string', description: 'בתובנות: רק משולח מסוים ("בנק לאומי"), אחרת ריק' },
+    contact_query: { type: 'string', description: 'באיש קשר מהאלפון: את מי לחפש — שם, טלפון או מילה מההערה ("דני כהן", "היועץ הסניטרי"), בלי אותיות שימוש. אחרת ריק' },
     draft: {
       type: 'object',
       properties: {
@@ -721,13 +725,14 @@ const CHAT_SCHEMA = {
         due_date: { type: 'string' },
         priority: { type: 'string', enum: ['normal', 'high', 'urgent'] },
         project_id: { type: 'integer' },
+        project_suggested: { type: 'boolean', description: 'true כשהפרויקט לא נאמר, וה-AI בחר אותו לפי התוכן' },
         checklist: { type: 'array', items: { type: 'string' } }
       },
-      required: ['title', 'summary', 'assignee_user_id', 'due_date', 'priority', 'project_id', 'checklist'],
+      required: ['title', 'summary', 'assignee_user_id', 'due_date', 'priority', 'project_id', 'project_suggested', 'checklist'],
       additionalProperties: false
     }
   },
-  required: ['intent', 'ready', 'reply', 'range', 'task_id', 'comment', 'project_id', 'recipient_name', 'recipient_org', 'recipient_email', 'request', 'insight_action', 'insight_n', 'insight_from', 'draft'],
+  required: ['intent', 'ready', 'reply', 'range', 'task_id', 'comment', 'project_id', 'recipient_name', 'recipient_org', 'recipient_email', 'request', 'insight_action', 'insight_n', 'insight_from', 'contact_query', 'draft'],
   additionalProperties: false
 };
 
@@ -781,9 +786,10 @@ function draftText(draft, user) {
     draft.summary || null,
     `👤 אחראי/ת: ${draft.assigneeId && draft.assigneeId !== user.id ? nameOf(draft.assigneeId) : 'את/ה'}`,
     `📅 יעד: ${draft.dueDate ? shortDate(draft.dueDate) : 'ללא'}`,
-    `📁 פרויקט: ${project ?? 'ללא'}`,
+    `📁 פרויקט: ${project ?? 'ללא'}${project && draft.projectSuggested ? ' _(לפי התוכן — "בלי פרויקט" או שם אחר לשינוי)_' : ''}`,
     draft.priority !== 'normal' ? `⚡ עדיפות: ${PRIORITY[draft.priority]}` : null,
     draft.checklist.length ? `☑ ${draft.checklist.map((c, i) => `${i + 1}. ${c}`).join('\n')}` : null,
+    ...(draft.warnings ?? []).map((w) => `⚠️ ${w}`),
     '',
     'לפתוח? השיבו *כן*, או כתבו מה לתקן.'
   ].filter((l) => l !== null).join('\n');
@@ -833,6 +839,9 @@ function helpText(actor) {
 
 async function understand(user, actor, state, text, projects, myOpen) {
   const users = orgUsers();
+  const { allowedProjects } = newTaskScope(actor);
+  const allowedList = projects.filter((p) => allowedProjects.has(p.id));
+  const otherList = projects.filter((p) => !allowedProjects.has(p.id));
   const actions = WaActions.forActor(actor);
   const lastList = state.lastList
     .map((id, i) => ({ n: i + 1, id, title: D.get('SELECT title FROM tasks WHERE id = ?', id)?.title }))
@@ -852,8 +861,11 @@ async function understand(user, actor, state, text, projects, myOpen) {
     'העובדים (מזהה · שם · מחלקה):',
     ...users.map((u) => `${u.id} · ${u.full_name} · ${u.department ?? ''}`),
     '',
-    'הפרויקטים (מזהה · שם):',
-    ...(projects.length ? projects.map((p) => `${p.id} · ${p.name}`) : ['(אין)']),
+    'הפרויקטים שבהם אפשר לפתוח משימה (מזהה · שם — מנהל ומשימות פתוחות, לבחירת הפרויקט המתאים):',
+    ...(allowedList.length ? ProjectHints.lines(allowedList.slice(0, 60)) : ['(אין)']),
+    '',
+    'פרויקטים נוספים שהוא רואה — לשאלות בלבד, לא לפתיחת משימה:',
+    ...(otherList.length ? otherList.map((p) => `${p.id} · ${p.name}`) : ['(אין)']),
     '',
     'המשימות הפתוחות של הכותב (מזהה · כותרת):',
     ...(myOpen.length ? myOpen.map((t) => `${t.id} · ${t.title}`) : ['(אין)']),
@@ -886,6 +898,7 @@ async function understand(user, actor, state, text, projects, myOpen) {
     range: RANGES[out.range] ? out.range : 'today',
     taskId: Number(out.task_id) || 0,
     comment: String(out.comment ?? '').trim().slice(0, 2000),
+    contactQuery: String(out.contact_query ?? '').trim().slice(0, 80),
     projectId: projectIds.has(Number(out.project_id)) ? Number(out.project_id) : 0,
     recipient: {
       name: String(out.recipient_name ?? '').trim().slice(0, 80),
@@ -903,12 +916,46 @@ async function understand(user, actor, state, text, projects, myOpen) {
       title: String(d.title ?? '').trim().slice(0, 120),
       summary: String(d.summary ?? '').trim().slice(0, 1500),
       assigneeId: ids.has(Number(d.assignee_user_id)) ? Number(d.assignee_user_id) : 0,
+      // נבדק מול ההרשאות ב-‎checkDraft‎ — כאן רק מה שה-AI הבין
       dueDate: /^\d{4}-\d{2}-\d{2}$/.test(String(d.due_date ?? '')) ? d.due_date : '',
       priority: ['normal', 'high', 'urgent'].includes(d.priority) ? d.priority : 'normal',
       projectId: projectIds.has(Number(d.project_id)) ? Number(d.project_id) : 0,
+      projectSuggested: d.project_suggested === true,
       checklist: (d.checklist ?? []).map((x) => String(x).trim()).filter(Boolean).slice(0, 8)
     }
   };
+}
+
+/**
+ * מה מותר לכותב בפתיחת משימה: למי לשייך (‎assertMayAssignTo‎ — המחלקה שלו,
+ * אלא אם ההרשאה רחבה יותר) ובאיזה פרויקט (שלו או של המחלקה שלו).
+ */
+function newTaskScope(actor) {
+  return {
+    assignable: hooks.assignableUserIds?.(actor) ?? new Set([actor.id]),
+    allowedProjects: new Set((hooks.newTaskProjects?.(actor) ?? []).map((p) => p.id))
+  };
+}
+
+/**
+ * טיוטת משימה מול ההרשאות, מיד כשהיא נבנית — ולא רק ב"כן": אחראי שאסור
+ * לשייך אליו, או פרויקט שאינו של הכותב, יוצאים מהטיוטה עם הסבר גלוי. לא
+ * מחליפים בשקט: המשימה נשארת אצל הכותב ובלי פרויקט, והוא רואה למה.
+ */
+function checkDraft(actor, draft) {
+  const { assignable, allowedProjects } = newTaskScope(actor);
+  const warnings = [];
+  if (draft.assigneeId && draft.assigneeId !== actor.id && !assignable.has(draft.assigneeId)) {
+    const reason = hooks.assignBlockReason?.(actor, draft.assigneeId) || `אין לך הרשאה לשייך משימה ל${nameOf(draft.assigneeId) || 'עובד זה'}`;
+    warnings.push(`${reason} — המשימה תיפתח אצלך`);
+    draft = { ...draft, assigneeId: 0 };
+  }
+  if (draft.projectId && !allowedProjects.has(draft.projectId)) {
+    const name = D.get('SELECT name FROM projects WHERE id = ?', draft.projectId)?.name;
+    warnings.push(`הפרויקט ${name ? `"${name}" ` : ''}אינו שלך או של המחלקה שלך — המשימה תיפתח בלי פרויקט`);
+    draft = { ...draft, projectId: 0 };
+  }
+  return { ...draft, warnings };
 }
 
 // ---------------------------------------------------------------------------
@@ -1034,9 +1081,10 @@ function emailText(p) {
 }
 
 /** טיוטה (או תיקון שלה) — עם ההתכתבות האחרונה עם הנמען, להצעות מה להוסיף */
-async function draftEmail(actor, contact, instruction, { feedback = '', previous = null } = {}) {
+async function draftEmail(actor, contact, instruction, { feedback = '', previous = null, dry = false } = {}) {
   const owner = D.get('SELECT id, full_name, email FROM users WHERE id = ?', actor.id);
-  const context = previous ? '' : await AiTasks.mailContext(actor.id, contact.email);
+  // בבדיקה ממסך הניהול (‎dry‎) לא קוראים את התיבה של העובד
+  const context = previous || dry ? '' : await AiTasks.mailContext(actor.id, contact.email);
   const d = await AiTasks.draftInitial({
     owner, instruction, contact, channel: 'email', context,
     feedback, previous: previous ? previous.draft : null
@@ -1068,7 +1116,9 @@ function suggestionFeedback(text, suggestions) {
   return picked.length ? `הוסף למייל: ${picked.join('; ')}` : null;
 }
 
-function createFromDraft(actor, draft) {
+function createFromDraft(actor, original) {
+  // בדיקה אחרונה לפני הפתיחה — הרשאות יכולות להשתנות בין הטיוטה ל"כן"
+  const draft = checkDraft(actor, original);
   const assignee = draft.assigneeId || actor.id;
   return hooks.createTask(actor, {
     title: draft.title,
@@ -1181,7 +1231,8 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
     return { ...r, next: { ...r.next, draft: null } };
   }
 
-  const insightsOn = () => WaActions.allowed(actor, 'mail_insights') && MailInsights.available(actor.id);
+  // בדיקה ממסך הניהול רצה בשם עובד אחר — אין גישה לתיבת המייל שלו
+  const insightsOn = () => !dry && WaActions.allowed(actor, 'mail_insights') && MailInsights.available(actor.id);
 
   /**
    * ה-Today, ואחריו התפריט כשמבקשים. המשימות בו הן "הרשימה האחרונה".
@@ -1290,7 +1341,7 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
       return out(`מה לכתוב ל${contact.name || contact.email}?`, { draft: { kind: 'email_pick', name: contact.name, request: '', candidates: [contact] } },
         { action: 'send_email', status: 'unclear', result: 'חסר תוכן' });
     }
-    const pending = await draftEmail(actor, contact, request);
+    const pending = await draftEmail(actor, contact, request, { dry });
     return out(emailText(pending), { draft: pending, awaiting: true },
       { action: 'send_email', status: 'ok', result: `טיוטת מייל ל${contact.name || contact.email}: ${pending.draft.subject}${pending.suggestions.length ? ` · ${pending.suggestions.length} הצעות` : ''}` });
   };
@@ -1305,18 +1356,18 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
   // טיוטת מייל שממתינה: כל הודעה שאינה "כן" או "ביטול" היא תיקון
   if (kind === 'email' && state.awaiting && Claude.isEnabled() && WaActions.allowed(actor, 'send_email')) {
     const feedback = suggestionFeedback(t, state.draft.suggestions ?? []) ?? t;
-    const pending = await draftEmail(actor, state.draft.contact, state.draft.instruction, { feedback, previous: state.draft });
+    const pending = await draftEmail(actor, state.draft.contact, state.draft.instruction, { feedback, previous: state.draft, dry });
     return out(emailText(pending), { draft: pending, awaiting: true }, { action: 'send_email', status: 'ok', result: `תיקון טיוטה: ${feedback.slice(0, 200)}` });
   }
 
   // טיוטת תשובה למייל שממתינה: כל הודעה שאינה "כן" או "ביטול" היא תיקון
-  if (kind === 'mail_reply' && state.awaiting && Claude.isEnabled() && WaActions.allowed(actor, 'mail_insights')) {
+  if (kind === 'mail_reply' && !dry && state.awaiting && Claude.isEnabled() && WaActions.allowed(actor, 'mail_insights')) {
     const prev = state.draft.reply;
     const reply = { ...await MailInsights.draftReply(actor.id, prev.gmailId, prev.request, { feedback: t, previous: prev }), signature: prev.signature };
     return out(replyText(reply), { draft: { kind: 'mail_reply', reply }, awaiting: true }, { action: 'mail_insights', status: 'ok', result: `תיקון תשובה: ${t.slice(0, 200)}` });
   }
   // "תענה ל-2" בלי תוכן — ההודעה הבאה היא מה לענות
-  if (kind === 'reply_ask' && Claude.isEnabled() && WaActions.allowed(actor, 'mail_insights')) {
+  if (kind === 'reply_ask' && !dry && Claude.isEnabled() && WaActions.allowed(actor, 'mail_insights')) {
     const item = MailInsights.itemOf(actor.id, state.draft.gmailId);
     if (item) return startReply(item, t);
   }
@@ -1392,6 +1443,7 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
 
     case 'mail_insights': {
       const { action, n, from } = u.insight;
+      if (dry) return insightsReply({ from });
       if (action === 'list' || (!n && !(state.insights ?? []).length)) return insightsReply({ from });
       if (!n) return out(u.reply || 'על איזה מייל? כתבו את המספר מרשימת התובנות.', {}, { action: 'mail_insights', status: 'unclear', result: 'המייל לא זוהה' });
       const item = insightAt(n);
@@ -1413,7 +1465,8 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
           projectId: u.draft.projectId || 0,
           checklist: u.draft.checklist ?? []
         };
-        return out(draftText(draft, user), { draft, awaiting: true }, { action: 'mail_insights', status: 'ok', result: `טיוטת משימה ממייל: ${draft.title}` });
+        const checked = checkDraft(actor, draft);
+        return out(draftText(checked, user), { draft: checked, awaiting: true }, { action: 'mail_insights', status: 'ok', result: `טיוטת משימה ממייל: ${checked.title}` });
       }
       // follow — מייל לשולח, ומשימת AI שעוקבת אחרי התשובה
       if (!WaActions.allowed(actor, 'send_email') || !P.may(actor, 'create_task')) {
@@ -1435,6 +1488,27 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
 
     case 'help':
       return out(helpText(actor), {}, { action: 'help', status: 'ok', result: 'עזרה' });
+
+    /*
+     * איש קשר מהאלפון — הכרטיס המלא, רק השדות שהוזנו. כמה התאמות: עד שלושה
+     * כרטיסים, לפי אותו סדר של החיפוש באפליקציה (שמות קודם, הערות בסוף).
+     */
+    case 'contact': {
+      if (actor.type !== 'user') return out('האלפון הארגוני זמין לעובדים בלבד.', {}, { action: 'phonebook', status: 'denied', result: 'לא עובד' });
+      const q = u.contactQuery;
+      if (!q) return out(u.reply || 'את מי לחפש באלפון?', {}, { action: 'phonebook', status: 'unclear', result: 'לא נאמר את מי' });
+      const found = Phonebook.search(q, { limit: 20 });
+      if (!found.length) {
+        return out(`לא מצאתי באלפון את "${q}". אפשר לחפש לפי שם, טלפון או מילה מההערה.`, {}, { action: 'phonebook', status: 'ok', result: `"${q}": לא נמצא` });
+      }
+      const shown = found.slice(0, 3);
+      const text = [
+        found.length > 1 ? `מצאתי ${found.length} באלפון עבור "${q}":` : null,
+        ...shown.map(Phonebook.cardText),
+        found.length > shown.length ? `ועוד ${found.length - shown.length} — כתבו שם מלא או מילה מההערה.` : null
+      ].filter(Boolean).join('\n\n');
+      return out(text, {}, { action: 'phonebook', status: 'ok', result: `"${q}": ${found.length} בכרטיסים` });
+    }
 
     case 'my_tasks':
       return listReply(u.range);
@@ -1466,7 +1540,11 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
 
     case 'create_task':
     default:
-      if (u.ready && u.draft.title) return out(draftText(u.draft, user), { draft: u.draft, awaiting: true }, { action: 'create_task', status: 'ok', result: `טיוטה: ${u.draft.title}` });
+      if (u.ready && u.draft.title) {
+        const draft = checkDraft(actor, u.draft);
+        return out(draftText(draft, user), { draft, awaiting: true },
+          { action: 'create_task', status: draft.warnings.length ? 'denied' : 'ok', result: `טיוטה: ${draft.title}${draft.warnings.length ? ` · ${draft.warnings.join(' · ')}` : ''}` });
+      }
       return out(u.reply || 'מה לכתוב בכותרת המשימה?', { draft: u.draft.title ? u.draft : null },
         { action: 'create_task', status: 'unclear', result: 'חסרים פרטים' });
   }
@@ -1537,14 +1615,26 @@ async function handleDirect(msg) {
   }
   if (voice) {
     if (!Speech.isEnabled() || !WaActions.allowed(actor, 'voice_notes')) {
-      log({ ...base, text: '[הודעה קולית]', action: 'voice', status: 'unclear', result: Speech.isEnabled() ? 'הודעות קוליות כבויות במסך הניהול' : 'התמלול אינו מוגדר בשרת (OPENAI_API_KEY או GOOGLE_SPEECH_API_KEY)' });
+      log({ ...base, text: '[הודעה קולית]', action: 'voice', status: 'unclear', result: Speech.isEnabled() ? 'הודעות קוליות כבויות במסך הניהול' : 'התמלול אינו מוגדר בשרת (RUNPOD_API_KEY, OPENAI_API_KEY או GOOGLE_SPEECH_API_KEY)' });
       await sendText(msg.chatId, Speech.isEnabled()
         ? 'הודעות קוליות כבויות כרגע. כתבו לי בטקסט 🙏'
-        : 'תמלול הודעות קוליות עוד לא הוגדר במשימון (מנהל המערכת: OPENAI_API_KEY). בינתיים כתבו לי בטקסט 🙏');
+        : 'תמלול הודעות קוליות עוד לא הוגדר במשימון. בינתיים כתבו לי בטקסט 🙏');
       return;
     }
     try {
-      text = await Speech.transcribeUrl(msg.audio.url, msg.audio.mime);
+      const file = await Speech.download(msg.audio.url, msg.audio.mime);
+      const compare = Boolean(D.getSetting('speech_compare', false));
+      const r = await Speech.transcribeDetailed(file.buf, file.mime, { compare });
+      text = r.text;
+      // איזה ספק תמלל, ותוך כמה זמן — ומי נכשל לפניו (הגיבוי נכנס לפעולה)
+      const failed = r.attempts.filter((a) => a.error && a !== r.used).map((a) => `${a.name} נכשל (${a.error.slice(0, 120)})`);
+      log({ ...base, text: `🎙 ${text || '[ריק]'}`, action: 'voice', status: r.used ? 'ok' : 'unclear',
+        result: [r.used ? `תומלל ב-${r.used.name} · ${(r.used.ms / 1000).toFixed(1)} שנ׳` : 'לא נשמע דיבור', ...failed].join(' · ') });
+      // מצב השוואה: כשכל הספקים מסיימים — שורה ביומן עם התמלול והזמן של כל אחד
+      r.all?.then((all) => log({
+        ...base, text: '[השוואת תמלול]', action: 'voice_compare', status: 'ok',
+        result: all.map((a) => `${a.name} (${(a.ms / 1000).toFixed(1)} שנ׳): ${a.error ? `❌ ${a.error.slice(0, 100)}` : `"${a.text.slice(0, 300)}"`}`).join(' ‖ ')
+      })).catch(() => {});
     } catch (err) {
       console.error('[משימון] תמלול הודעה קולית נכשל:', err.message);
       log({ ...base, text: '[הודעה קולית]', action: 'voice', status: 'error', result: err.message });
@@ -1898,8 +1988,8 @@ async function tick() {
   }
 }
 
-function init({ createTask, listProjectsFor, tasks, mail }) {
-  Object.assign(hooks, { createTask, listProjectsFor, tasks, mail });
+function init({ createTask, listProjectsFor, newTaskProjects, assignableUserIds, assignBlockReason, tasks, mail }) {
+  Object.assign(hooks, { createTask, listProjectsFor, newTaskProjects, assignableUserIds, assignBlockReason, tasks, mail });
 }
 
 function start() {

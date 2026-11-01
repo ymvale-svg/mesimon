@@ -238,10 +238,26 @@ const MobileView = (() => {
     box.addEventListener('change', async () => {
       const wantDone = box.checked;
       const first = App.state.boards.find((b) => b.id === task.boardId)?.columns.find((c) => !c.isFinal)?.key;
+      /*
+       * הסטטוס שממנו יצאנו, ולא "העמודה הראשונה": מי שסימן בטעות משימה
+       * שהייתה "בבדיקה" ולחץ "ביטול" מצפה לחזור ל"בבדיקה", לא ל"חדשה".
+       */
+      const prevStatus = task.status;
       box.disabled = true;
       try {
         await API.updateTask(task.id, { status: wantDone ? finalKey : first });
-        UI.success(wantDone ? 'המשימה סומנה כהושלמה' : 'הסימון בוטל');
+        if (wantDone) {
+          // נגיעה בתיבה קטנה בתוך שורה שכולה לחיצה — הטעות הנפוצה ביותר בטלפון
+          UI.undoToast('המשימה סומנה כהושלמה', {
+            onUndo: async () => {
+              await API.updateTask(task.id, { status: prevStatus });
+              await reload();
+              App.refreshNotifications();
+            }
+          });
+        } else {
+          UI.success('הסימון בוטל');
+        }
         await reload();
         App.refreshNotifications();
       } catch (err) {
@@ -306,9 +322,8 @@ const MobileView = (() => {
     const searchInput = el('input', { type: 'search', placeholder: 'חיפוש בכותרת ובתיאור' });
     searchInput.value = filter.q ?? '';
 
-    const veil = el('div.m-sheet-veil');
-    const close = () => veil.remove();
-    veil.addEventListener('click', (e) => { if (e.target === veil) close(); });
+    let sheetRef = null;
+    const close = () => sheetRef?.close();
 
     const apply = () => {
       close();
@@ -320,30 +335,26 @@ const MobileView = (() => {
       }, { refetch: true });
     };
 
-    veil.appendChild(el('div.m-sheet', {}, [
-      el('div.m-grab'),
-      el('div.flex', { style: { marginBottom: '4px' } }, [
-        el('b', { text: 'סינון' }),
-        el('div.spacer'),
-        el('button.btn.btn-sm', {
+    // גרירה, Escape, לכידת מיקוד והחזרתו — כולם ב-‎UI.sheet‎, משותפים לכל המגירות
+    sheetRef = UI.sheet({
+      title: 'סינון',
+      snap: [0.9],
+      body: el('div', {}, [
+        UI.field('פרויקט', projectSelect),
+        UI.field('סטטוס', statusSelect),
+        UI.field('עדיפות', prioritySelect),
+        UI.field('חיפוש', searchInput)
+      ]),
+      footer: [
+        el('button.btn.btn-primary', { style: { flex: '1' }, onclick: apply }, ['הצגת המשימות']),
+        el('button.btn', {
           onclick: () => {
             close();
             setFilter({ projectId: '', status: '', priority: '', q: '' }, { refetch: true });
           }
         }, ['ניקוי'])
-      ]),
-      UI.field('פרויקט', projectSelect),
-      UI.field('סטטוס', statusSelect),
-      UI.field('עדיפות', prioritySelect),
-      UI.field('חיפוש', searchInput),
-      el('button.btn.btn-primary.btn-block', { onclick: apply }, ['הצגת המשימות'])
-    ]));
-
-    document.body.appendChild(veil);
-    // הרשימות הנפתחות מיישמות מיד — כך אין צורך ללחוץ "הצגה" בשינוי אחד
-    for (const s of [projectSelect, statusSelect, prioritySelect]) {
-      s.addEventListener('change', () => { /* מיושם ב"הצגת המשימות" */ });
-    }
+      ]
+    });
     searchInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') apply(); });
   }
 

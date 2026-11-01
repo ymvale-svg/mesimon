@@ -115,17 +115,18 @@ const AiTaskView = (() => {
         onPick: (c) => {
           state.contact.source = c.source;
           emailInput.value = c.email || '';
-          phoneInput.value = c.phone || '';
+          // שדה הטלפון כאן הוא לוואטסאפ — רק נייד (05X), אחרת נשאר ריק
+          phoneInput.value = ContactPicker.mobileOf(c);
           state.contact.type = c.type === 'user' ? 'user' : c.type === 'vendor' ? 'vendor' : 'external';
           state.contact.refId = c.refId ?? null;
           UI.mount(extrasBox,
-            ContactPicker.variants(c, { onEmail: (v) => { emailInput.value = v; }, onPhone: (v) => { phoneInput.value = v; } }),
+            ContactPicker.variants(ContactPicker.mobilesOnly(c), { onEmail: (v) => { emailInput.value = v; }, onPhone: (v) => { phoneInput.value = v; } }),
             c.unsaved
               ? el('div.cp-save-line', {}, [
                   el('span.mute-sm', { text: 'לא שמור באנשי הקשר שלך. ' }),
                   el('button.btn.btn-sm', {
                     type: 'button',
-                    onclick: () => ContactPicker.saveDialog({ ...c, email: emailInput.value, phone: phoneInput.value }, { onSaved: () => UI.mount(extrasBox) })
+                    onclick: () => ContactPicker.saveDialog({ ...c, email: emailInput.value, phone: phoneInput.value || c.phone }, { onSaved: () => UI.mount(extrasBox) })
                   }, ['⭐ שמור באנשי הקשר של Google'])
                 ])
               : null);
@@ -735,7 +736,8 @@ const AiTaskView = (() => {
     const phone = el('input', { type: 'tel', value: a.contact.phone, dir: 'ltr' });
     const picker = ContactPicker.create({
       value: a.contact.name,
-      onPick: (c) => { email.value = c.email || email.value; phone.value = c.phone || phone.value; }
+      // הטלפון כאן הוא לוואטסאפ — רק נייד (05X) של מי שנבחר
+      onPick: (c) => { email.value = c.email || email.value; phone.value = ContactPicker.mobileOf(c); }
     });
     const name = picker.input;
     const waReady = Boolean(a.channels?.waConnected);

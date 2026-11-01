@@ -22,11 +22,11 @@ const WaActions = require('./ai/wa-actions');
 const { badRequest, forbidden, notFound, readJson, sendJson, parseUrl } = require('./http-kit');
 
 function register(router, h) {
-  const { getTaskOr404, assertVisible, mayOnTask, shapeTask, actorRef, saveAttachment, createTask, assertMayAssignTo, listProjectsFor, botTaskOps } = h;
+  const { getTaskOr404, assertVisible, mayOnTask, shapeTask, actorRef, saveAttachment, createTask, assertMayAssignTo, assertMayUseProject, listProjectsFor, newTaskProjects, assignableUserIds, assignBlockReason, botTaskOps } = h;
 
   AiTasks.setHooks({ saveFile: saveAttachment, scanWhatsApp: WaScan.handle, scanningUsers: WaScan.scanningUsers });
   MailScan.init({ createTask });
-  WaBot.init({ createTask, listProjectsFor, tasks: botTaskOps, mail: { searchContacts, createAiTask } });
+  WaBot.init({ createTask, listProjectsFor, newTaskProjects, assignableUserIds, assignBlockReason, tasks: botTaskOps, mail: { searchContacts, createAiTask } });
 
   const internalOnly = (actor) => {
     if (actor.type === 'vendor') throw forbidden();
@@ -115,14 +115,15 @@ function register(router, h) {
       for (const e of Phonebook.search(q, { limit: 10 })) {
         const colleague = e.email ? D.get("SELECT id FROM users WHERE lower(email) = ? AND status = 'active'", e.email) : null;
         if (colleague) continue;  // עובד — מופיע כעובד, עם המשמעות שלו במשימון
+        const two = e.phone && e.phone2;
         add({
           type: 'external', refId: null, source: 'phonebook',
-          name: e.name, email: e.email, phone: e.phone,
+          name: e.name, email: e.email, phone: e.phone || e.phone2,
           emails: e.email ? [{ value: e.email, label: '' }] : [],
-          phones: e.phone ? [{ value: e.phone, label: '' }] : [],
+          phones: [[e.phone, two ? "טל' 1" : ''], [e.phone2, "טל' 2"]].filter(([v]) => v).map(([value, label]) => ({ value, label })),
           organization: e.note,
           unsaved: canSave && !GContacts.isSaved(actor.id, { email: e.email, phone: e.phone })
-        }, keysOf([e.email].filter(Boolean), [e.phone].filter(Boolean)));
+        }, keysOf([e.email].filter(Boolean), [e.phone, e.phone2].filter(Boolean)));
       }
     }
 
@@ -150,7 +151,15 @@ function register(router, h) {
         unsaved: canSave && g.source === 'other'
       }, keysOf(g.emails.map((e) => e.value), g.phones.map((p) => p.value)));
     }
-    return out.slice(0, 20);
+    /*
+     * ‎mobile‎ — הנייד (05X) מבין המספרים, לכל מקור. שדה וואטסאפ מתמלא רק
+     * ממנו: טלפון משרד או פקס אינם מקבלים וואטסאפ, ועדיף שדה ריק משליחה
+     * למספר שלא יגיע אליו כלום.
+     */
+    return out.slice(0, 20).map((c) => ({
+      ...c,
+      mobile: [c.phone, ...(c.phones ?? []).map((p) => p.value)].find((p) => p && Phonebook.isMobile(p)) ?? ''
+    }));
   }
 
   router.get('/api/ai/contacts', async (req, res, ctx) => {
@@ -295,6 +304,7 @@ function register(router, h) {
 
     const projectId = b.projectId ? Number(b.projectId) : null;
     if (projectId && !D.get('SELECT 1 FROM projects WHERE id = ?', projectId)) throw badRequest('הפרויקט לא נמצא');
+    assertMayUseProject(actor, projectId);
 
     const title = String(draft.title || draft.goal || instruction).trim().slice(0, 120);
     const description = [
@@ -594,7 +604,9 @@ function register(router, h) {
     quietMinutes: Number(D.getSetting('wa_quiet_minutes', 3)) || 0,
     summaryTime: String(D.getSetting('wa_summary_time', '08:00')),
     hours: String(D.getSetting('wa_hours', '') ?? ''),
-    shabbat: Boolean(D.getSetting('wa_shabbat', true))
+    shabbat: Boolean(D.getSetting('wa_shabbat', true)),
+    // השוואת ספקי התמלול: כולם רצים על כל הודעה קולית, והתוצאות ביומן
+    speechCompare: Boolean(D.getSetting('speech_compare', false))
   });
 
   const botInfo = () => ({
@@ -666,6 +678,7 @@ function register(router, h) {
     if (b.summaryTime !== undefined) D.setSetting('wa_summary_time', String(b.summaryTime));
     if (b.hours !== undefined) D.setSetting('wa_hours', hours);
     if (b.shabbat !== undefined) D.setSetting('wa_shabbat', Boolean(b.shabbat));
+    if (b.speechCompare !== undefined) D.setSetting('speech_compare', Boolean(b.speechCompare));
     sendJson(res, 200, botInfo());
   });
 

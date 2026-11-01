@@ -5,6 +5,8 @@ const AdminView = (() => {
   const { el } = UI;
 
   let tab = 'users';
+  // סינון טבלת המשתמשים לפי סטטוס — נשמר בין מעברי לשוניות
+  let userStatusFilter = 'active';
   let containerRef = null;
   let settingsData = null;
 
@@ -29,18 +31,27 @@ const AdminView = (() => {
       (t.full ? App.can(t.perm) : App.may(t.perm)) && (t.key !== 'matrix' || App.state.actor.seesRoles));
     if (!allowed.some((t) => t.key === tab)) tab = allowed[0]?.key;
 
+    // המעבר בונה את המסך מחדש, ובלי זה המיקוד במקלדת היה נופל לגוף המסמך
+    const tabsHadFocus = !!container.querySelector('.admin-tabs')?.contains(document.activeElement);
+    const tabList = adminTabs(allowed, (key) => { tab = key; render(container); });
+
     UI.mount(container,
       el('div.page-head', {}, [
         el('div', {}, [
-          el('h2', { text: 'ניהול המערכת' }),
+          // כותרת העמוד היא ‎h1‎ — לכל עמוד כותרת ראשית אחת, וקורא מסך מנווט אליה
+          el('h1', { text: 'ניהול המערכת' }),
           el('div.sub', { text: 'משתמשים, ספקים, כללי אוטומציה והגדרות תפעוליות.' })
         ])
       ]),
-      el('div.tabs', {}, allowed.map((t) =>
-        el(`button${tab === t.key ? '.active' : ''}`, { onclick: () => { tab = t.key; render(container); } }, [t.label])
-      )),
-      el('div#admin-body', {}, [UI.spinner()])
+      tabList,
+      el('div#admin-body', {
+        role: 'tabpanel',
+        'aria-labelledby': `admin-tab-${tab}`,
+        tabindex: '-1'
+      }, [UI.spinner()])
     );
+    revealActiveTab(tabList);
+    if (tabsHadFocus) tabList.querySelector('[aria-selected="true"]')?.focus({ preventScroll: true });
 
     const body = container.querySelector('#admin-body');
     try {
@@ -59,6 +70,92 @@ const AdminView = (() => {
   }
 
   const reload = () => render(containerRef);
+
+  /**
+   * שורת הלשוניות — שורה אחת שנגללת לרוחב, ולא שתי שורות.
+   *
+   * תשע לשוניות אינן נכנסות ב-900 פיקסלים, וקודם לכן כל כפתור התכווץ עד
+   * שהתווית שלו נשברה לשתי שורות ("משתמשים / והרשאות") — כך שהשורה נראתה
+   * כמו שתי שורות של לשוניות בגבהים שונים. גלילה אופקית שומרת על כל תווית
+   * שלמה, ודהייה בקצה מראה שיש עוד מעבר לו.
+   *
+   * דפוס ‎tablist‎ מלא: חצים עוברים בין הלשוניות, ‎Home‎ ו-‎End‎ לקצוות,
+   * ורק הלשונית הפעילה בסדר הטאב — אחרת מעבר על תשע לשוניות בטאב היה
+   * תשע הקשות עד שמגיעים לתוכן. הבחירה ב-Enter או ברווח ולא בעצם המעבר,
+   * כי כל לשונית טוענת מהשרת, וחץ שטוען היה מפעיל תשע טעינות בדרך.
+   */
+  function adminTabs(allowed, onPick) {
+    const buttons = allowed.map((t) => el(`button${tab === t.key ? '.active' : ''}`, {
+      type: 'button',
+      role: 'tab',
+      id: `admin-tab-${t.key}`,
+      'aria-selected': tab === t.key ? 'true' : 'false',
+      'aria-controls': 'admin-body',
+      tabindex: tab === t.key ? '0' : '-1',
+      onclick: () => onPick(t.key)
+    }, [t.label]));
+
+    const list = el('div.tabs.admin-tabs', { role: 'tablist', 'aria-label': 'אזורי הניהול' }, buttons);
+
+    list.addEventListener('keydown', (e) => {
+      const at = buttons.indexOf(document.activeElement);
+      if (at < 0) return;
+      const rtl = getComputedStyle(list).direction === 'rtl';
+      // ב-RTL הלשונית הבאה משמאל, ולכן חץ שמאלה מתקדם
+      const step = e.key === 'ArrowLeft' ? (rtl ? 1 : -1) : e.key === 'ArrowRight' ? (rtl ? -1 : 1) : 0;
+      let to = -1;
+      if (step) to = (at + step + buttons.length) % buttons.length;
+      else if (e.key === 'Home') to = 0;
+      else if (e.key === 'End') to = buttons.length - 1;
+      if (to < 0) return;
+      e.preventDefault();
+      buttons[at].tabIndex = -1;
+      buttons[to].tabIndex = 0;
+      buttons[to].focus();
+      buttons[to].scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    });
+
+    list.addEventListener('scroll', () => markEdges(list), { passive: true });
+    // רוחב השורה משתנה גם בלי גלילה — שינוי גודל החלון או קיפול התפריט
+    if (typeof ResizeObserver === 'function') new ResizeObserver(() => markEdges(list)).observe(list);
+    return list;
+  }
+
+  /**
+   * סימון הקצה שיש מעבר לו עוד לשוניות. נמדד לפי מיקום הלשוניות עצמן ולא
+   * לפי ‎scrollLeft‎ — ב-RTL ערכו שלילי או חיובי לפי הדפדפן, והמדידה של
+   * המלבנים נכונה בכל כיוון ובכל דפדפן.
+   */
+  function markEdges(list) {
+    const box = list.getBoundingClientRect();
+    const tabs = [...list.children];
+    if (!tabs.length) return;
+    const left = Math.min(...tabs.map((b) => b.getBoundingClientRect().left));
+    const right = Math.max(...tabs.map((b) => b.getBoundingClientRect().right));
+    list.classList.toggle('more-left', left < box.left - 1);
+    list.classList.toggle('more-right', right > box.right + 1);
+  }
+
+  /**
+   * הלשונית הפעילה נגללת אל תוך השורה. בלי זה, מי שבחר את "תבניות" בקצה
+   * השורה קיבל אחרי הטעינה שורה שגלולה חזרה להתחלה, והלשונית שבחר — זו
+   * שמסבירה מה מוצג מתחת — מחוץ למסך.
+   *
+   * ‎scrollLeft‎ ישירות ולא ‎scrollIntoView‎: האחרון גולל גם את העמוד כולו
+   * כדי להביא את הלשונית למרכז, והעמוד היה קופץ בכל מעבר לשונית.
+   */
+  function revealActiveTab(list) {
+    requestAnimationFrame(() => {
+      const active = list.querySelector('[aria-selected="true"]');
+      if (active) {
+        const box = list.getBoundingClientRect();
+        const r = active.getBoundingClientRect();
+        if (r.left < box.left) list.scrollLeft -= box.left - r.left + 24;
+        else if (r.right > box.right) list.scrollLeft += r.right - box.right + 24;
+      }
+      markEdges(list);
+    });
+  }
 
   // ------------------------------------------------------------- משתמשים
 
@@ -260,6 +357,21 @@ const AdminView = (() => {
     const data = await API.adminUsers();
     const scoped = data.scope === 'department';
 
+    const tbody = el('tbody');
+    const statusFilter = UI.select([
+      { value: 'active', label: 'פעילים' },
+      { value: 'inactive', label: 'לא פעילים' },
+      { value: '', label: 'כל הסטטוסים' }
+    ], userStatusFilter);
+    function drawRows() {
+      const rows = data.users.filter((u) => !userStatusFilter || u.status === userStatusFilter);
+      UI.mount(tbody, rows.length
+        ? rows.map(userRow)
+        : el('tr', {}, [el('td.mute-sm', { colspan: data.seesRoles ? 7 : 6, text: 'אין משתמשים להצגה' })]));
+    }
+    statusFilter.addEventListener('change', () => { userStatusFilter = statusFilter.value; drawRows(); });
+    drawRows();
+
     UI.mount(body,
       scoped
         ? el('div.alert.alert-info.mb', {}, [
@@ -270,6 +382,7 @@ const AdminView = (() => {
       // הקישור הוא ארגוני ולא מחלקתי, ולכן מוצג למי שרואה את כל הארגון בלבד
       scoped ? null : signupPanel(),
       el('div.flex.mb', {}, [
+        statusFilter,
         el('div.spacer'),
         el('button.btn', { onclick: () => importDialog(data) }, ['⇪ ייבוא מאקסל']),
         el('button.btn.btn-primary', { onclick: () => userDialog(null, data) }, ['＋ משתמש חדש'])
@@ -281,40 +394,42 @@ const AdminView = (() => {
             data.seesRoles ? el('th', { text: 'רמת גישה' }) : null,
             el('th', { text: 'מחלקה' }), el('th', { text: 'סטטוס' }), el('th', { text: '' })
           ])]),
-          el('tbody', {}, data.users.map((u) =>
-            el('tr', {}, [
-              el('td', {}, [el('div.flex', {}, [UI.avatar(u.name, { small: true }), el('b', { text: u.name })])]),
-              el('td', { text: u.email }),
-              // עמודת טלפון — כך רואים במבט מי עוד חסר לבוט הוואטסאפ
-              u.phone
-                ? el('td', { dir: 'ltr', style: { textAlign: 'right' }, text: UI.phone(u.phone) })
-                : el('td.mute-sm', { text: '📱 אין טלפון' }),
-              data.seesRoles ? el('td', {}, [el('span.tag.tag-internal', {}, [u.roleLabel])]) : null,
-              // משתמש יכול להיות ללא שיוך למחלקה (הנהלה, מנהל מערכת) — מסומן במקף ולא בתא ריק
-              el('td', { text: u.department || '—' }),
-              el('td', {}, [el('span', {
-                class: u.status === 'active' ? 'text-ok' : 'text-danger',
-                text: u.status === 'active' ? '● פעיל' : '○ לא פעיל'
-              })]),
-              el('td', {}, [
-                el('div.flex', {}, [
-                  el('button.btn.btn-sm', { onclick: () => userDialog(u, data) }, ['עריכה']),
-                  el('button.btn.btn-sm', {
-                    title: 'שליחה חוזרת של הזמנה לקביעת סיסמה',
-                    onclick: async () => {
-                      try {
-                        const r = await API.resendInvite('user', u.id);
-                        showInviteResult(r.invite, u.name);
-                      } catch (err) { UI.error(err); }
-                    }
-                  }, ['✉ הזמנה'])
-                ])
-              ])
-            ])
-          ))
+          tbody
         ])
       ])
     );
+
+    function userRow(u) {
+      return el('tr', {}, [
+          el('td', {}, [el('div.flex', {}, [UI.avatar(u.name, { small: true }), el('b', { text: u.name })])]),
+          el('td', { text: u.email }),
+          // עמודת טלפון — כך רואים במבט מי עוד חסר לבוט הוואטסאפ
+          u.phone
+            ? el('td', { dir: 'ltr', style: { textAlign: 'right' }, text: UI.phone(u.phone) })
+            : el('td.mute-sm', { text: '📱 אין טלפון' }),
+          data.seesRoles ? el('td', {}, [el('span.tag.tag-internal', {}, [u.roleLabel])]) : null,
+          // משתמש יכול להיות ללא שיוך למחלקה (הנהלה, מנהל מערכת) — מסומן במקף ולא בתא ריק
+          el('td', { text: u.department || '—' }),
+          el('td', {}, [el('span', {
+            class: u.status === 'active' ? 'text-ok' : 'text-danger',
+            text: u.status === 'active' ? '● פעיל' : '○ לא פעיל'
+          })]),
+          el('td', {}, [
+            el('div.flex', {}, [
+              el('button.btn.btn-sm', { onclick: () => userDialog(u, data) }, ['עריכה']),
+              el('button.btn.btn-sm', {
+                title: 'שליחה חוזרת של הזמנה לקביעת סיסמה',
+                onclick: async () => {
+                  try {
+                    const r = await API.resendInvite('user', u.id);
+                    showInviteResult(r.invite, u.name);
+                  } catch (err) { UI.error(err); }
+                }
+              }, ['✉ הזמנה'])
+            ])
+          ])
+      ]);
+    }
   }
 
   // ------------------------------------------------------------- ייבוא מגיליון
@@ -435,6 +550,13 @@ const AdminView = (() => {
               el('b', { text: `${analysis.validCount} שורות תקינות` }),
               analysis.errorCount ? el('span.text-danger', { text: `${analysis.errorCount} שורות ייפסלו` }) : null
             ]),
+            // עמודה אופציונלית שלא זוהתה פשוט אינה נקלטת — עדיף לומר זאת לפני האישור
+            analysis.columns?.phone && !analysis.columns.phone.found
+              ? el('div.alert.alert-warn.mb', {}, [
+                  el('span', { text: '📱' }),
+                  el('div', { text: 'לא זוהתה בקובץ עמודת טלפון, ולכן המשתמשים ייובאו בלי מספר. כדי לייבא טלפונים יש לקרוא לכותרת העמודה "טלפון".' })
+                ])
+              : null,
             previewTable(analysis));
           actionBtn.textContent = analysis.validCount
             ? `ייבוא ${analysis.validCount} משתמשים`
@@ -933,9 +1055,20 @@ const AdminView = (() => {
   function vendorDialog(vendor = null) {
     const isEdit = !!vendor;
     const nameInput = el('input', { type: 'text', value: vendor?.name ?? '' });
-    const contactInput = el('input', { type: 'text', value: vendor?.contactName ?? '' });
     const emailInput = el('input', { type: 'email', value: vendor?.email ?? '' });
     const phoneInput = el('input', { type: 'text', value: vendor?.phone ?? '' });
+    /*
+     * איש הקשר — עם השלמה מהאלפון הארגוני ומשאר אנשי הקשר: בחירה ממלאת גם
+     * טלפון ומייל, רק לשדות שעוד ריקים, כדי לא לדרוס פרטים שכבר הוזנו לספק.
+     */
+    const contactPicker = ContactPicker.create({
+      value: vendor?.contactName ?? '',
+      onPick: (c) => {
+        if (!phoneInput.value.trim() && c.phone) phoneInput.value = c.phone;
+        if (!emailInput.value.trim() && c.email) emailInput.value = c.email;
+      }
+    });
+    const contactInput = contactPicker.input;
     const statusSelect = UI.select([{ value: 'active', label: 'פעיל' }, { value: 'suspended', label: 'מושהה' }], vendor?.status ?? 'active');
     const readOnlyCheck = el('input', { type: 'checkbox', checked: !!vendor?.readOnly });
     const passInput = el('input', { type: 'text', placeholder: isEdit ? 'השאר ריק כדי לא לשנות' : '1234' });
@@ -945,7 +1078,7 @@ const AdminView = (() => {
       title: isEdit ? `עריכת ספק — ${vendor.name}` : 'ספק חדש',
       body: el('div', {}, [
         UI.field('שם ספק / חברה', nameInput),
-        el('div.row', {}, [UI.field('איש קשר', contactInput), UI.field('טלפון', phoneInput)]),
+        el('div.row', {}, [UI.field('איש קשר', contactPicker.node), UI.field('טלפון', phoneInput)]),
         UI.field('אימייל', emailInput, 'משמש לכניסה לפורטל הספקים'),
         el('div.row', {}, [UI.field('סטטוס', statusSelect), UI.field('סיסמה', passInput)]),
         el('div.field', {}, [el('label.checkbox', {}, [readOnlyCheck, 'הרשאת צפייה בלבד (ללא יכולת עדכון)'])]),
@@ -1578,8 +1711,8 @@ const AdminView = (() => {
             el('div.mute-sm', { text: a.description }),
             examples ? UI.field('דוגמאות — שורה לכל דוגמה. מוצגות ב"עזרה" ומכוונות את הבוט', examples) : null,
             a.key === 'summary' ? el('div.mute-sm', { text: `נשלח בשעה ${info.settings.summaryTime} — משנים בלשונית "הגדרות".` }) : null,
-            a.key === 'voice_notes' && !info.speech ? el('div.mute-sm.text-danger', { text: 'התמלול אינו מוגדר בשרת — מגדירים OPENAI_API_KEY (מומלץ) או GOOGLE_SPEECH_API_KEY. עד אז הבוט מבקש לכתוב בטקסט.' }) : null,
-            a.key === 'voice_notes' && info.speech ? el('div.mute-sm', { text: `התמלול דרך ${info.speech === 'openai' ? 'OpenAI' : 'Google'}.` }) : null
+            a.key === 'voice_notes' && !info.speech?.length ? el('div.mute-sm.text-danger', { text: 'התמלול אינו מוגדר בשרת — מגדירים RUNPOD_API_KEY + RUNPOD_ENDPOINT_ID (ivrit.ai), OPENAI_API_KEY או GOOGLE_SPEECH_API_KEY. עד אז הבוט מבקש לכתוב בטקסט.' }) : null,
+            a.key === 'voice_notes' && info.speech?.length ? el('div.mute-sm', { text: `סדר התמלול: ${info.speech.map((p) => p.name).join(' ← ')}${info.speech.length > 1 ? ' (כל אחד גיבוי לקודם)' : ''}${info.speechCompare ? ' · מצב השוואה פעיל' : ''}.` }) : null
           ]),
           audience ? el('div.ai-row-actions', {}, [UI.field('מי רשאי', audience)]) : null
         ]);
@@ -1837,6 +1970,7 @@ const AdminView = (() => {
       const hTo = el('input', { type: 'time', value: to, disabled: !s.hours });
       always.addEventListener('change', () => { hFrom.disabled = hTo.disabled = always.checked; });
       const shabbat = el('input', { type: 'checkbox', checked: s.shabbat });
+      const speechCompare = el('input', { type: 'checkbox', checked: s.speechCompare });
       const check = (input, label, hint) => el('label.wa-check', {}, [input, el('div', {}, [el('b', { text: label }), hint ? el('div.mute-sm', { text: hint }) : null])]);
 
       const save = el('button.btn.btn-primary', {}, ['שמירת ההגדרות']);
@@ -1845,7 +1979,8 @@ const AdminView = (() => {
         try {
           draw(await API.put('/api/admin/wa-bot/settings', {
             enabled: enabled.checked, quietMinutes: Number(quiet.value), summaryTime: summary.value,
-            hours: always.checked ? '' : `${hFrom.value}-${hTo.value}`, shabbat: shabbat.checked
+            hours: always.checked ? '' : `${hFrom.value}-${hTo.value}`, shabbat: shabbat.checked,
+            speechCompare: speechCompare.checked
           }));
           UI.success('ההגדרות נשמרו');
         } catch (err) { save.disabled = false; UI.error(err); }
@@ -1862,6 +1997,10 @@ const AdminView = (() => {
         el('div.row', {}, [UI.field('מהשעה', hFrom), UI.field('עד השעה', hTo)]),
         check(shabbat, 'לא בשבת', 'משישי ב-15:00 עד מוצאי שבת ב-20:30.'),
         el('div.mute-sm', { text: 'מחוץ לחלון הבוט לא שולח דבר. הודעות שנכתבו לו בפרטי נשמרות ונענות כשהחלון נפתח. הקבוצות ממשיכות להיקרא, וההצעות מחכות באפליקציה.' }),
+        el('h4.mt', { text: 'תמלול הודעות קוליות' }),
+        el('div.mute-sm', { text: info.speech?.length ? `הסדר: ${info.speech.map((p) => p.name).join(' ← ')} — כל אחד גיבוי לקודם.` : 'אין ספק תמלול מוגדר בשרת.' }),
+        check(speechCompare, 'השוואה בין ספקי התמלול',
+          'כל הודעה קולית מתומללת בכל הספקים המוגדרים במקביל, וביומן מופיעה שורה "השוואת תמלול" עם הטקסט והזמן של כל אחד. התשובה לעובד — מהראשון בסדר שהצליח. עולה לפי מספר הספקים; לכבות אחרי הבדיקה.'),
         el('div.mt', {}, [save])
       ])]));
     }
