@@ -3,8 +3,12 @@
  * תובנות מהמיילים — "מה חדש במייל" בשורה אחת לכל מייל: מי אמר מה, ומה זה
  * אומר בשבילי. לא סיכום של כל מייל, ולא ציטוט.
  *
- * מה נכלל: המיילים בתיבה הראשית מ-24 השעות האחרונות — שנקראו ושלא נקראו.
- * דיוור (קידומי מכירות, רשתות חברתיות, פורומים) נספר בשורה אחת ואינו מנותח.
+ * מה נכלל: המיילים בתיבה הראשית בטווח שנבחר — שנקראו ושלא נקראו. ברירת המחדל
+ * 24 שעות, וביום העבודה הראשון אחרי סוף שבוע — מאז יום העבודה הקודם (הטווח
+ * מחושב ב-‎insight-window.js‎). דיוור (קידומי מכירות, רשתות חברתיות, פורומים)
+ * נספר בשורה אחת ואינו מנותח.
+ *
+ * התצוגה — יחד עם התובנות מהוואטסאפ — ב-‎insights.js‎.
  *
  * כל מייל מנותח פעם אחת, והתובנה נשמרת ב-‎mail_insights‎ לשבוע — כך בקשה
  * חוזרת אינה משלמת שוב על אותו ניתוח. גוף המייל אינו נשמר: רק השולח, הנושא
@@ -22,11 +26,16 @@ const Gmail = require('../gmail');
 const Mime = require('../mime');
 const Mailer = require('../mailer');
 const AiTasks = require('../ai-tasks');
+const Range = require('./insight-window');
 
 const SKILL = path.join(__dirname, 'skills', 'email-insights.md');
 const TZ = 'Asia/Jerusalem';
 const HOURS = 24;
 const MAX_MAILS = 40;
+// טווח של יותר מיממה — התקרה עולה, ומעליה אומרים כמה לא נכנסו
+const MAX_MAILS_LONG = 80;
+// כמה מזהים לחפש כדי לדעת "מוצגים 80 מתוך 130" — מזהים בלבד, בלי לקרוא
+const SEARCH_MAX = 200;
 const BODY_CHARS = 1500;
 const KEEP_DAYS = 7;
 const READ_PARALLEL = 6;
@@ -115,18 +124,24 @@ async function analyze(user, mails) {
 }
 
 /**
- * התובנות של התקופה, מהחדש לישן לפי חשיבות. מה שכבר נותח — מהמטמון; מה
+ * התובנות של הטווח, מהחדש לישן לפי חשיבות. מה שכבר נותח — מהמטמון; מה
  * שחדש — נקרא מ-Gmail ומנותח בקריאה אחת.
  *
- * @returns {{items: object[], newsletters: number, unread: number, hours: number, from: string}}
+ * ‎window‎ — מ-‎insight-window.js‎; בלי — ברירת המחדל של היום לעובד.
+ *
+ * @returns {{items: object[], newsletters: number, unread: number, window: object, hours: number, from: string, total: number, analyzed: number}}
  */
-async function collect(userId, { hours = HOURS, from = '' } = {}) {
+async function collect(userId, { window = null, from = '' } = {}) {
   const user = D.get('SELECT id, full_name, email FROM users WHERE id = ?', userId);
-  const after = Math.floor((Date.now() - hours * 3600e3) / 1000);
+  const win = window ?? Range.forUser(userId);
+  const cap = win.hours > HOURS ? MAX_MAILS_LONG : MAX_MAILS;
+  const after = Math.floor(win.since.getTime() / 1000);
   const base = `in:inbox after:${after}${fromClause(from)}`;
   // בזה אחר זה ולא במקביל — שלוש בקשות על אותו אסימון ברגע שהוא מתחדש
-  const ids = await Gmail.search(userId, `${base} -${NEWSLETTER}`, { max: MAX_MAILS });
-  const unreadIds = await Gmail.search(userId, `${base} is:unread -${NEWSLETTER}`, { max: MAX_MAILS });
+  const allIds = await Gmail.search(userId, `${base} -${NEWSLETTER}`, { max: SEARCH_MAX });
+  // Gmail מחזיר מהחדש לישן — מעבר לתקרה נשארים הישנים, והם רק נספרים
+  const ids = allIds.slice(0, cap);
+  const unreadIds = await Gmail.search(userId, `${base} is:unread -${NEWSLETTER}`, { max: SEARCH_MAX });
   const newsletterIds = await Gmail.search(userId, `${base} ${NEWSLETTER}`, { max: 100 });
   const unread = new Set(unreadIds);
   const mine = new Set([user.email, Gmail.connectionOf(userId)?.email].filter(Boolean).map((a) => a.toLowerCase()));
@@ -187,7 +202,10 @@ async function collect(userId, { hours = HOURS, from = '' } = {}) {
   const items = ids.map((id) => cached.get(id)).filter((x) => x && !x.skip).map((x) => ({ ...x, unread: unread.has(x.gmailId) }));
   const newsletters = newsletterIds.length + items.filter((x) => x.kind === 'newsletter').length;
   items.sort((a, b) => b.importance - a.importance || String(b.receivedAt).localeCompare(String(a.receivedAt)));
-  return { items: items.filter((x) => x.kind !== 'newsletter'), newsletters, unread: unread.size, hours, from };
+  return {
+    items: items.filter((x) => x.kind !== 'newsletter'), newsletters, unread: unread.size,
+    window: win, hours: win.hours, from, total: allIds.length, analyzed: ids.length
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -199,52 +217,6 @@ const label = (x) => {
   if (x.org && who && !who.includes(x.org)) return `${who} (${x.org})`;
   return x.org || who;
 };
-
-/**
- * הטקסט לוואטסאפ (ולחלון בהקלטה). ‎ids‎ — מזהי המיילים לפי המספור, כדי
- * ש"פרט על 3" יידע מה זה 3.
- */
-function format(result) {
-  const { items, newsletters, hours, from } = result;
-  const scope = from ? ` מ${from}` : '';
-  const head = `📬 *מה חדש במייל${scope} (${hours === HOURS ? '24 שעות' : `${hours} שעות`} · ${items.length} מיילים${result.unread ? `, ${result.unread} לא נקראו` : ''}):*`;
-  if (!items.length) {
-    return { text: [head, '', newsletters ? `אין מיילים עניניים — רק ${newsletters} מיילי דיוור.` : 'אין מיילים חדשים 🎉'].join('\n'), ids: [] };
-  }
-  const lines = [head];
-  const ids = [];
-  for (const g of GROUPS) {
-    const group = items.filter((x) => g.kinds.includes(x.kind));
-    if (!group.length) continue;
-    const shown = group.slice(0, g.max ?? 15);
-    lines.push('', `*${g.title} (${group.length}):*`);
-    for (const x of shown) {
-      ids.push(x.gmailId);
-      const due = x.dueDate ? ` · 📅 ${Number(x.dueDate.slice(8))}.${Number(x.dueDate.slice(5, 7))}` : '';
-      lines.push(`${ids.length}. ${x.unread ? '🔵 ' : ''}${label(x)}: ${x.insight}${due}`);
-    }
-    if (group.length > shown.length) lines.push(`ועוד ${group.length - shown.length}.`);
-  }
-  if (newsletters) lines.push('', `דילגתי על ${newsletters} מיילי דיוור.`);
-  lines.push('', 'אפשר לכתוב: "פרט על 1", "תענה ל-2 ש…", "תפתח משימה מ-1", "תעקוב אחרי 2".');
-  return { text: lines.join('\n'), ids };
-}
-
-/** שורה אחת ל-Today בהודעה הראשונה של היום */
-function summaryLine(result) {
-  const count = (kinds) => result.items.filter((x) => kinds.includes(x.kind)).length;
-  const action = count(GROUPS[0].kinds);
-  const updates = count(GROUPS[1].kinds);
-  const info = count(GROUPS[2].kinds);
-  if (!action && !updates && !info) return '📬 במייל: אין חדש ב-24 השעות האחרונות.';
-  const parts = [
-    action ? `${action} דורשים ממך משהו` : null,
-    updates ? `${updates} אישורים ועדכונים` : null,
-    info ? `${info} לידיעה` : null
-  ].filter(Boolean);
-  const top = result.items.find((x) => x.kind === 'action');
-  return `📬 *במייל (24 שעות):* ${parts.join(' · ')}${top ? `\n   ↳ ${label(top)}: ${top.insight}` : ''}`;
-}
 
 const itemOf = (userId, gmailId) => parseJson(D.get('SELECT data FROM mail_insights WHERE user_id = ? AND gmail_id = ?', userId, gmailId)?.data, null);
 
@@ -343,4 +315,4 @@ function prune() {
   D.run('DELETE FROM mail_insights WHERE created_at < ?', new Date(Date.now() - KEEP_DAYS * 864e5).toISOString());
 }
 
-module.exports = { available, collect, format, summaryLine, itemOf, label, detail, draftReply, sendReply, prune, mask, HOURS };
+module.exports = { available, collect, itemOf, label, detail, draftReply, sendReply, prune, mask, HOURS, GROUPS, MAX_MAILS, MAX_MAILS_LONG };
