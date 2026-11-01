@@ -1368,6 +1368,8 @@ function migrate() {
   // חברי קבוצת הוואטסאפ (מספרים), שמורים לכמה שעות — הצעות רק לעובדים שבקבוצה
   addColumn('wa_groups', 'participants', "TEXT NOT NULL DEFAULT '[]'");
   addColumn('wa_groups', 'participants_at', 'TEXT');
+  // משימת AI — מי בהעתק (CC) של המייל: ‎[{name, email}]‎
+  addColumn('ai_requests', 'cc', "TEXT NOT NULL DEFAULT '[]'");
   // הרשימה האחרונה שהבוט שלח בפרטי — כדי ש"סיימתי את 2" יידע מה זה 2
   addColumn('wa_chats', 'last_list', "TEXT NOT NULL DEFAULT '[]'");
   // אלפון: טל' 2 ופקס (הטלפון הקיים הוא טל' 1)

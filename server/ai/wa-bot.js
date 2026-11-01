@@ -1082,6 +1082,15 @@ function emailText(p) {
     // החתימה עצמה מ-Gmail — לא מוצגת כאן במלואה, רק שהיא תצורף (או שאין)
     colleague ? null : signatureLine(p)
   ].filter((l) => l !== null);
+  if (!colleague && p.cc?.length) {
+    lines.splice(1, 0, `📎 *בהעתק:* ${p.cc.map((c) => (c.name ? `${c.name} <${c.email}>` : c.email)).join(', ')}`);
+  }
+  // שם להעתק שלא ברור למי הכוונה — שואלים, ולא שולחים עותק לאדם הלא נכון
+  for (const a of (!colleague && p.ccAsk) || []) {
+    lines.push('', a.options.length
+      ? `❓ *בהעתק — למי התכוונת ב"${a.name}"?*\n${a.options.map((o, i) => `${i + 1}. ${o.name} <${o.email}>${o.org ? ` · ${o.org}` : ''}`).join('\n')}\nכתבו למשל: *בהעתק ${a.options[0].name}*`
+      : `❓ *לא מצאתי את "${a.name}" באנשי הקשר* — כתבו את כתובת המייל שלו/ה לשים בהעתק, או *בלי ${a.name}*.`);
+  }
   if (p.suggestions.length) {
     lines.push('', '💡 *מההתכתבות האחרונה — אולי להוסיף:*', ...p.suggestions.map((x, i) => `${i + 1}. ${x}`));
   }
@@ -1099,8 +1108,10 @@ async function draftEmail(actor, contact, instruction, { feedback = '', previous
   const context = previous || dry ? '' : await AiTasks.mailContext(actor.id, contact.email);
   const d = await AiTasks.draftInitial({
     owner, instruction, contact, channel: 'email', context,
+    cc: previous?.cc ?? [],
     feedback, previous: previous ? previous.draft : null
   });
+  const { cc, ccAsk } = resolveCc(actor, d.cc_names, { previous: previous?.cc ?? [], contact });
   const suggestions = (Array.isArray(d.suggestions) ? d.suggestions : []).map((x) => String(x).trim()).filter(Boolean).slice(0, 4);
   return {
     kind: 'email',
@@ -1116,8 +1127,31 @@ async function draftEmail(actor, contact, instruction, { feedback = '', previous
     // בתיקון ההתכתבות אינה נקראת שוב — ההצעות שעוד לא נוספו נשארות
     suggestions: previous ? (suggestions.length ? suggestions : previous.suggestions.filter((x) => !feedback.includes(x))) : suggestions,
     notes: String(d.notes ?? '').trim().slice(0, 300),
+    cc,
+    ccAsk,
     ...await signatureFields(actor.id)
   };
+}
+
+/**
+ * מי בהעתק — מהשמות שה-AI הוציא מהבקשה ("תשים בכתב את דני"). כתובת שנכתבה
+ * נלקחת כמו שהיא; שם — מחפשים באנשי הקשר. התאמה אחת עם מייל נכנסת; כמה
+ * התאמות, או אף אחת — שואלים (‎ccAsk‎), ולא מנחשים על מי לשלוח העתק.
+ */
+function resolveCc(actor, names, { previous = [], contact = {} } = {}) {
+  const cc = [];
+  const ccAsk = [];
+  const known = new Map(previous.map((c) => [c.email, c]));
+  for (const raw of (Array.isArray(names) ? names : []).map((x) => String(x ?? '').trim()).filter(Boolean).slice(0, 10)) {
+    if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(raw)) { cc.push(known.get(raw.toLowerCase()) ?? { name: '', email: raw.toLowerCase() }); continue; }
+    // מי שכבר היה בהעתק בטיוטה הקודמת — נשאר בלי לחפש שוב
+    const kept = previous.find((c) => c.name && GContacts.fold(c.name) === GContacts.fold(raw));
+    if (kept) { cc.push(kept); continue; }
+    const found = findRecipients(actor, raw).filter((c) => c.email);
+    if (found.length === 1) cc.push({ name: found[0].name, email: found[0].email });
+    else ccAsk.push({ name: raw, options: found.slice(0, 5).map((c) => ({ name: c.name, email: c.email, org: c.organization || '' })) });
+  }
+  return { cc: AiTasks.cleanCc(cc, { contactEmail: contact.email }), ccAsk };
 }
 
 /** הבקשה להוסיף הצעה לפי מספר: "תוסיף את 1", "1 ו-3", "2" */
@@ -1190,8 +1224,13 @@ async function confirmPending(actor, pending, dry) {
         ? { name: pending.contact.name, email: pending.contact.email, phone: '', type: 'external', refId: null }
         : pending.contact;
       // אותה פתיחה של האשף באפליקציה: משימת AI שעוקבת אחרי התשובה
+      // שם בהעתק שעוד לא הובהר — לא שולחים עד שיהיה ברור למי
+      if (!internal && pending.ccAsk?.length) {
+        return { reply: `לפני השליחה — עוד לא ברור מי בהעתק: ${pending.ccAsk.map((x) => `"${x.name}"`).join(', ')}. כתבו *בהעתק* עם השם המלא או המייל, או *בלי* והשם.`, action, status: 'unclear', result: 'העתק לא ברור', keep: true };
+      }
       const r = dry ? { taskId: null, sendError: null } : await hooks.mail.createAiTask(actor, {
-        instruction: pending.instruction, draft: pending.draft, contact, channel: 'email'
+        instruction: pending.instruction, draft: pending.draft, contact, channel: 'email',
+        cc: internal ? [] : pending.cc ?? []
       });
       const link = r.taskId ? taskLink(r.taskId) : null;
       if (r.sendError) {

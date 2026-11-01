@@ -235,6 +235,7 @@ function register(router, h) {
         owner,
         instruction,
         contact: b.contact ?? {},
+        cc: Array.isArray(b.cc) ? b.cc : [],
         dueDate: b.dueDate ?? null,
         projectName: project?.name ?? null,
         // וואטסאפ רק למי שחיבר אותו — אחרת הנוסח נכתב למייל
@@ -311,11 +312,16 @@ function register(router, h) {
     if (projectId && !D.get('SELECT 1 FROM projects WHERE id = ?', projectId)) throw badRequest('הפרויקט לא נמצא');
     assertMayUseProject(actor, projectId);
 
+    // בהעתק — רק במייל לגורם מבחוץ; משימה פנימית לעובד אינה מייל
+    const cc = channel === 'email' && !colleague
+      ? AiTasks.cleanCc(b.cc, { contactEmail: contact.email, ownerEmail: actor.email })
+      : [];
     const title = String(draft.title || draft.goal || instruction).trim().slice(0, 120);
     const description = [
       colleague ? draft.body : draft.goal,
       draft.success_criteria ? `נחשב כהתקבל כאשר: ${draft.success_criteria}` : null,
-      colleague ? `ביקש/ה: ${actor.name}` : `נמען: ${[contact.name, contact.email, contact.phone].filter(Boolean).join(' · ')}`
+      colleague ? `ביקש/ה: ${actor.name}` : `נמען: ${[contact.name, contact.email, contact.phone].filter(Boolean).join(' · ')}`,
+      cc.length ? `בהעתק: ${cc.map((c) => (c.name ? `${c.name} <${c.email}>` : c.email)).join(', ')}` : null
     ].filter(Boolean).join('\n');
 
     const taskId = createTask(actor, {
@@ -337,7 +343,7 @@ function register(router, h) {
     let sendError = null;
     try {
       const owner = D.get('SELECT id, full_name, email FROM users WHERE id = ?', actor.id);
-      await AiTasks.launch({ taskId, owner, instruction, draft, contact, policy, channel });
+      await AiTasks.launch({ taskId, owner, instruction, draft, contact, cc, policy, channel });
     } catch (err) {
       // המשימה והטיוטה נשמרו; אפשר לנסות לשלוח שוב מהכרטיס אחרי תיקון התקלה
       sendError = err.message;

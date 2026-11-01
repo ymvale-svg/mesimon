@@ -73,6 +73,9 @@ const AiTaskView = (() => {
       // מהקלטה — היעד שנאמר כבר מולא
       dueDate: opts.dueDate ?? '',
       policy: { ...status.defaults },
+      // בהעתק (CC): ‎[{name, email}]‎ · ‎ccAsk‎ — שמות מההוראה שלא ברור למי הם
+      cc: [],
+      ccAsk: [],
       draft: null
     };
 
@@ -128,6 +131,51 @@ const AiTaskView = (() => {
      * אחרי ניסוח: שם בלי מייל (הוקלד חופשי, או שה-AI חילץ אותו מההוראה) —
      * חיפוש באנשי הקשר. התוצאה נשמרת ב-‎state.lookup‎ ומוצגת בשלב הטיוטה.
      */
+    /**
+     * שורת ההעתק — שבבים עם ✕, ושדה להוספה מאנשי הקשר. ‎onChange‎ — אחרי
+     * כל שינוי (בשלב הטיוטה: לצייר מחדש).
+     */
+    function ccEditor(onChange = () => {}) {
+      const chips = el('div.ai-cc-chips');
+      const drawChips = () => UI.mount(chips, state.cc.map((c, i) => el('span.ai-cc-chip', { title: c.email }, [
+        c.name || c.email,
+        el('button', { type: 'button', 'aria-label': `הסרה מההעתק: ${c.name || c.email}`, onclick: () => { state.cc.splice(i, 1); drawChips(); onChange(); } }, ['✕'])
+      ])));
+      const add = (c) => {
+        const email = String(c.email ?? '').trim().toLowerCase();
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return UI.toast(`ל${c.name || 'איש הקשר'} אין כתובת מייל`, 'error');
+        if (email === String(state.contact.email ?? '').toLowerCase()) return UI.toast('זה הנמען הראשי', 'error');
+        if (!state.cc.some((x) => x.email === email)) state.cc.push({ name: c.name || '', email });
+        picker.input.value = '';
+        drawChips();
+        onChange();
+      };
+      const picker = ContactPicker.create({ onPick: add });
+      picker.input.placeholder = 'הוספה להעתק — שם או מייל';
+      // כתובת שהוקלדה ידנית — Enter מוסיף אותה
+      picker.input.addEventListener('keydown', (e) => {
+        const v = picker.input.value.trim();
+        if (e.key === 'Enter' && /@/.test(v)) { e.preventDefault(); add({ email: v }); }
+      });
+      drawChips();
+      return el('div.ai-cc', {}, [chips, picker.node]);
+    }
+
+    /** השמות שה-AI הוציא מההוראה ("תשים בכתב את דני") — מחפשים כל אחד באנשי הקשר */
+    async function resolveCcNames(names) {
+      state.ccAsk = [];
+      for (const raw of (names ?? []).map((x) => String(x).trim()).filter(Boolean)) {
+        if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(raw)) {
+          if (!state.cc.some((c) => c.email === raw.toLowerCase())) state.cc.push({ name: '', email: raw.toLowerCase() });
+          continue;
+        }
+        if (state.cc.some((c) => c.name && c.name.includes(raw))) continue;
+        const found = (await findByName(raw)).filter((c) => c.email && c.email.toLowerCase() !== String(state.contact.email).toLowerCase());
+        if (found.length === 1) state.cc.push({ name: found[0].name, email: found[0].email.toLowerCase() });
+        else state.ccAsk.push({ name: raw, found });
+      }
+    }
+
     async function lookupRecipient() {
       const c = state.contact;
       if (state.channel !== 'email' || c.type === 'user' || c.email || !c.name) { state.lookup = null; return; }
@@ -322,6 +370,7 @@ const AiTaskView = (() => {
         extrasBox,
         pbBox,
         colleagueNote,
+        state.channel === 'email' ? UI.field('📎 בהעתק (CC) — לא חובה', ccEditor(), 'אפשר גם לכתוב בהוראה: "לשים בכתב את דני"') : null,
         el('div.row', {}, [
           channelSeg ? UI.field('ערוץ ראשון', channelSeg) : null,
           UI.field('פרויקט', projectSelect),
@@ -348,6 +397,7 @@ const AiTaskView = (() => {
       const { draft, signature, signatureMissing } = await API.post('/api/ai/draft', {
         instruction: state.instruction,
         contact: state.contact,
+        cc: state.cc,
         channel: state.channel,
         projectId: state.projectId || null,
         dueDate: state.dueDate || null,
@@ -359,6 +409,7 @@ const AiTaskView = (() => {
       if (!state.contact.email && draft.contact_email) state.contact.email = draft.contact_email;
       if (!state.contact.phone && draft.contact_phone) state.contact.phone = draft.contact_phone;
       if (!feedback) await lookupRecipient();
+      if (state.channel === 'email') await resolveCcNames(draft.cc_names);
       // תיקון טיוטה אינו דורס כותרת שהמשתמש כבר ערך
       state.draft = feedback && state.draft ? { ...draft, title: state.draft.title } : draft;
       state.signature = signature ?? null;
@@ -413,6 +464,19 @@ const AiTaskView = (() => {
         await lookupRecipient();
         draw();
       });
+      // שמות להעתק שלא ברור למי הם — שואלים, ולא מנחשים
+      const ccAskBox = () => (state.ccAsk.length ? el('div.ai-matches', {}, state.ccAsk.map((a) => el('div', { style: { marginBottom: '6px' } }, [
+        el('div.mute-sm', { text: a.found.length ? `בהעתק — למי התכוונת ב"${a.name}"?` : `"${a.name}" לא נמצא באנשי הקשר — הוסיפו אותו בשדה ההעתק עם כתובת מייל` }),
+        el('div.flex', { style: { gap: '6px', flexWrap: 'wrap', marginTop: '4px' } }, [
+          ...a.found.map((c) => el('button.btn.btn-sm', { type: 'button', onclick: () => {
+            read();
+            if (!state.cc.some((x) => x.email === c.email.toLowerCase())) state.cc.push({ name: c.name, email: c.email.toLowerCase() });
+            state.ccAsk = state.ccAsk.filter((x) => x !== a);
+            draw();
+          } }, [`${c.name} — ${c.email} · ${sourceLabel(c)}`])),
+          el('button.btn.btn-sm.btn-ghost', { type: 'button', onclick: () => { read(); state.ccAsk = state.ccAsk.filter((x) => x !== a); draw(); } }, ['בלי'])
+        ])
+      ]))) : null);
       const lookupBox = (() => {
         const l = state.lookup;
         if (!l || internal || !isEmail) return null;
@@ -457,9 +521,10 @@ const AiTaskView = (() => {
       const send = el('button.btn.btn-primary', {}, [internal ? `👤 העברה ל${state.contact.name || 'עובד'}` : isEmail ? '📧 אישור ושליחה' : '💬 אישור ושליחה']);
       // מייל בלי כתובת היה יוצר משימה שהשליחה שלה נכשלת — הכפתור כבוי עד שיש כתובת
       const noAddress = () => isEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(toEmail.value.trim());
+      const ccPending = () => isEmail && state.ccAsk.length > 0;
       const syncSend = () => {
-        send.disabled = noAddress();
-        send.title = send.disabled ? 'חסרה כתובת מייל תקינה לנמען' : '';
+        send.disabled = noAddress() || ccPending();
+        send.title = noAddress() ? 'חסרה כתובת מייל תקינה לנמען' : ccPending() ? 'בחרו מי בהעתק, או "בלי"' : '';
       };
       toEmail.addEventListener('input', syncSend);
       syncSend();
@@ -471,6 +536,7 @@ const AiTaskView = (() => {
             instruction: state.instruction,
             draft: d,
             contact: state.contact,
+            cc: isEmail ? state.cc : [],
             channel: state.channel,
             projectId: state.projectId || null,
             dueDate: UI.fromInputDate(state.dueDate),
@@ -511,6 +577,8 @@ const AiTaskView = (() => {
             internal ? null : isEmail ? UI.field('מייל', toEmail) : UI.field('טלפון', toPhone)
           ]),
           lookupBox,
+          isEmail ? UI.field('📎 בהעתק (CC)', ccEditor()) : null,
+          isEmail ? ccAskBox() : null,
           isEmail ? UI.field('נושא', subject) : null,
           UI.field(internal ? 'הבקשה (תופיע בתיאור המשימה)' : isEmail ? 'המייל' : 'ההודעה', text,
             internal ? 'המשימה תשויך אליו במשימון, עם התראה רגילה על משימה חדשה.'

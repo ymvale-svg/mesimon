@@ -3821,3 +3821,15 @@ body:has(.modal-backdrop.is-side:not(.leaving)) .toast-root { left: auto; right:
 
 /* משימת AI — הנמען שנמצא באנשי הקשר, או בחירה בין כמה */
 .ai-found, .ai-matches { margin: -4px 0 12px; }
+.ai-cc { display: flex; flex-direction: column; gap: 6px; }
+.ai-cc-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.ai-cc-chips:empty { display: none; }
+.ai-cc-chip {
+  display: inline-flex; align-items: center; gap: 6px; padding: 3px 4px 3px 10px;
+  border-radius: 999px; background: var(--brand-light); color: var(--brand-dark); font-size: 13px;
+}
+.ai-cc-chip button {
+  border: 0; background: transparent; color: inherit; cursor: pointer; font-size: 12px;
+  width: 20px; height: 20px; border-radius: 50%;
+}
+.ai-cc-chip button:hover { background: rgba(15, 118, 110, .15); }
