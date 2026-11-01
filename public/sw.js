@@ -12,7 +12,7 @@
  */
 
 // שינוי המספר מפסל את המטמון הקודם ומאלץ טעינה מחדש של קבצי המערכת
-const VERSION = 'mesimon-v41';
+const VERSION = 'mesimon-v42';
 
 /**
  * מה נשמר מראש. רק מה שנדרש כדי שהמסך ייבנה: אם אחד מהם חסר, האפליקציה לא
@@ -25,6 +25,8 @@ const SHELL = [
   '/css/mobile.css',
   '/js/api.js',
   '/js/ui.js',
+  '/js/feature-anchors.js',
+  '/js/spotlight.js',
   '/js/app.js',
   '/js/views/login.js',
   '/js/views/invite.js',

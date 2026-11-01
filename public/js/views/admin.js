@@ -384,7 +384,7 @@ const AdminView = (() => {
         : null,
       // הקישור הוא ארגוני ולא מחלקתי, ולכן מוצג למי שרואה את כל הארגון בלבד
       scoped ? null : signupPanel(),
-      el('div.flex.mb', {}, [
+      el('div.flex.mb', { 'data-anchor': 'admin.users-tools' }, [
         statusFilter,
         el('div.spacer'),
         el('button.btn', { onclick: () => importDialog(data) }, ['⇪ ייבוא מאקסל']),
