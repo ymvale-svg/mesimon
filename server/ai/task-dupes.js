@@ -33,7 +33,7 @@ const SKILL = path.join(__dirname, 'skills', 'task-duplicates.md');
 // מעל זה — מועמד שה-AI יבדוק
 const PREFILTER = 0.45;
 // בלי AI — רק מעל זה נחשב כפול
-const HEURISTIC_MIN = 0.7;
+const HEURISTIC_MIN = 0.85;
 // בדיאלוג מחכים ל-AI לכל היותר כך, ואחר כך מסתפקים בציון
 const DIALOG_AI_MS = 8000;
 // בסריקה היומית — כמה זוגות לכל מחלקה, לכל היותר
