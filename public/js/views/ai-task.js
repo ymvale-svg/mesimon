@@ -81,6 +81,62 @@ const AiTaskView = (() => {
 
     const draw = () => UI.mount(body, state.step === 'compose' ? composeStep() : previewStep());
 
+    // --- חיפוש הנמען לפי שם באנשי הקשר (עובדים, ספקים, אלפון, Google)
+
+    async function findByName(name) {
+      const q = String(name ?? '').trim();
+      if (q.length < 2) return [];
+      try {
+        const { contacts } = await API.get(`/api/ai/contacts?q=${encodeURIComponent(q)}`);
+        return contacts.filter((c) => c.email || c.type === 'user').slice(0, 6);
+      } catch {
+        return [];
+      }
+    }
+
+    /** ממלאים מעצמנו רק התאמה אחת, עם מייל, שאינה עובד בארגון */
+    const autoMatch = (found) => (found.length === 1 && found[0].email && found[0].type !== 'user' ? found[0] : null);
+
+    const sourceLabel = (c) => ContactPicker.SOURCE[c.source]?.label ?? 'אנשי הקשר';
+
+    const foundNote = (c) => el('div.mute-sm.ai-found', {
+      text: `📇 נמצא באנשי הקשר: ${c.email} · ${sourceLabel(c)}`
+    });
+
+    function matchChoices(found, onPick) {
+      return el('div.ai-matches', {}, [
+        el('div.mute-sm', { text: 'נמצאו כמה אנשי קשר בשם הזה — בחרו:' }),
+        el('div.flex', { style: { gap: '6px', flexWrap: 'wrap', marginTop: '4px' } }, found.map((c) =>
+          el('button.btn.btn-sm', { type: 'button', onclick: () => onPick(c) },
+            [`${c.name} — ${c.type === 'user' ? 'עובד/ת בארגון' : c.email} · ${sourceLabel(c)}`])))
+      ]);
+    }
+
+    function applyContact(c) {
+      state.contact = {
+        ...state.contact,
+        name: c.name,
+        email: c.email || '',
+        phone: state.contact.phone || ContactPicker.mobileOf(c),
+        type: c.type === 'user' ? 'user' : c.type === 'vendor' ? 'vendor' : 'external',
+        refId: c.refId ?? null,
+        source: c.source
+      };
+    }
+
+    /**
+     * אחרי ניסוח: שם בלי מייל (הוקלד חופשי, או שה-AI חילץ אותו מההוראה) —
+     * חיפוש באנשי הקשר. התוצאה נשמרת ב-‎state.lookup‎ ומוצגת בשלב הטיוטה.
+     */
+    async function lookupRecipient() {
+      const c = state.contact;
+      if (state.channel !== 'email' || c.type === 'user' || c.email || !c.name) { state.lookup = null; return; }
+      const found = await findByName(c.name);
+      const single = autoMatch(found);
+      if (single) { applyContact(single); state.lookup = { filled: single }; }
+      else state.lookup = { query: c.name, found };
+    }
+
     // --- שלב 1: מה צריך וממי
 
     function composeStep() {
@@ -109,10 +165,27 @@ const AiTaskView = (() => {
         onType: () => {
           state.contact.type = 'external';
           state.contact.refId = null;
+          /*
+           * הקלדה של שם אחר אחרי שנבחר איש קשר — המייל והטלפון שלו כבר אינם
+           * של מי שבשדה. בלי הניקוי הפנייה הייתה יוצאת לאדם הקודם.
+           */
+          if (pickedDetails) {
+            emailInput.value = '';
+            phoneInput.value = '';
+            pickedDetails = false;
+          }
           UI.mount(extrasBox);
           showColleague();
         },
-        onPick: (c) => {
+        onPick: (c) => pickContact(c)
+      });
+      // המייל והטלפון שבשדות מולאו מבחירת איש קשר (ולא הוקלדו ידנית)
+      let pickedDetails = !!state.contact.email && !!state.contact.source;
+      function pickContact(c) {
+        {
+          pickedDetails = true;
+          // בחירה מהצעת החיפוש (ולא מהרשימה של השדה) — השם מתעדכן לשם המלא
+          if (picker.input.value.trim() !== c.name) picker.input.value = c.name;
           state.contact.source = c.source;
           emailInput.value = c.email || '';
           // שדה הטלפון כאן הוא לוואטסאפ — רק נייד (05X), אחרת נשאר ריק
@@ -134,9 +207,28 @@ const AiTaskView = (() => {
           fromPhonebook = c.source === 'phonebook';
           showPbSave();
         }
-      });
+      }
       const nameInput = picker.input;
       showColleague();
+
+      /*
+       * שם שהוקלד ולא נבחר מהרשימה, בלי מייל: מחפשים אותו באנשי הקשר כשעוזבים
+       * את השדה. התאמה אחת עם מייל — ממלאים; כמה — מציעים לבחור. עובד אינו
+       * נבחר מעצמו: בחירה בו הופכת את הפנייה למשימה פנימית, וזו החלטה של המשתמש.
+       */
+      picker.input.addEventListener('change', async () => {
+        const name = picker.input.value.trim();
+        if (state.contact.type !== 'external' || emailInput.value.trim() || name.length < 2) return;
+        const found = await findByName(name);
+        if (picker.input.value.trim() !== name || emailInput.value.trim()) return;
+        const single = autoMatch(found);
+        if (single) {
+          pickContact(single);
+          extrasBox.prepend(foundNote(single));
+        } else if (found.length) {
+          UI.mount(extrasBox, matchChoices(found, pickContact));
+        }
+      });
 
       /*
        * נמען מבחוץ שאינו באלפון הארגוני — הצעה קטנה לשמור אותו שם, כדי
@@ -266,6 +358,7 @@ const AiTaskView = (() => {
       if (!state.contact.name && draft.contact_name) state.contact.name = draft.contact_name;
       if (!state.contact.email && draft.contact_email) state.contact.email = draft.contact_email;
       if (!state.contact.phone && draft.contact_phone) state.contact.phone = draft.contact_phone;
+      if (!feedback) await lookupRecipient();
       // תיקון טיוטה אינו דורס כותרת שהמשתמש כבר ערך
       state.draft = feedback && state.draft ? { ...draft, title: state.draft.title } : draft;
       state.signature = signature ?? null;
@@ -297,6 +390,23 @@ const AiTaskView = (() => {
       const toEmail = el('input', { type: 'email', value: state.contact.email, dir: 'ltr' });
       const toPhone = el('input', { type: 'tel', value: state.contact.phone, dir: 'ltr' });
       const toName = el('input', { type: 'text', value: state.contact.name });
+      // שינוי השם בטיוטה — הנמען הקודם אינו תקף; מחפשים את החדש באנשי הקשר
+      toName.addEventListener('change', async () => {
+        if (toName.value.trim() === state.contact.name) return;
+        read();
+        state.contact.email = '';
+        state.contact.type = 'external';
+        state.contact.refId = null;
+        await lookupRecipient();
+        draw();
+      });
+      const lookupBox = (() => {
+        const l = state.lookup;
+        if (!l || internal || !isEmail) return null;
+        if (l.filled) return foundNote(l.filled);
+        if (l.found?.length) return matchChoices(l.found, (c) => { read(); applyContact(c); state.lookup = { filled: c.email ? c : null }; draw(); });
+        return el('div.mute-sm.ai-found', { text: `לא נמצא "${l.query}" באנשי הקשר — הקלידו את כתובת המייל` });
+      })();
       const subject = el('input', { type: 'text', value: d.subject });
       const text = el('textarea.ai-body', {});
       text.value = d.body;
@@ -332,6 +442,14 @@ const AiTaskView = (() => {
       feedback.addEventListener('keydown', (e) => { if (e.key === 'Enter') doRedo(); });
 
       const send = el('button.btn.btn-primary', {}, [internal ? `👤 העברה ל${state.contact.name || 'עובד'}` : isEmail ? '📧 אישור ושליחה' : '💬 אישור ושליחה']);
+      // מייל בלי כתובת היה יוצר משימה שהשליחה שלה נכשלת — הכפתור כבוי עד שיש כתובת
+      const noAddress = () => isEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(toEmail.value.trim());
+      const syncSend = () => {
+        send.disabled = noAddress();
+        send.title = send.disabled ? 'חסרה כתובת מייל תקינה לנמען' : '';
+      };
+      toEmail.addEventListener('input', syncSend);
+      syncSend();
       send.addEventListener('click', async () => {
         read();
         send.disabled = true;
@@ -379,6 +497,7 @@ const AiTaskView = (() => {
             UI.field('אל', toName),
             internal ? null : isEmail ? UI.field('מייל', toEmail) : UI.field('טלפון', toPhone)
           ]),
+          lookupBox,
           isEmail ? UI.field('נושא', subject) : null,
           UI.field(internal ? 'הבקשה (תופיע בתיאור המשימה)' : isEmail ? 'המייל' : 'ההודעה', text,
             internal ? 'המשימה תשויך אליו במשימון, עם התראה רגילה על משימה חדשה.'

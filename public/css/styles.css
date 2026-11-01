@@ -3818,3 +3818,6 @@ body:has(.modal-backdrop.is-side:not(.leaving)) .toast-root { left: auto; right:
 .wn-admin-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0; }
 .wn-chip { font-size: 12px; padding: 3px 10px; border-radius: 999px; background: var(--brand-light); color: var(--brand-dark); }
 .wn-admin-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+
+/* משימת AI — הנמען שנמצא באנשי הקשר, או בחירה בין כמה */
+.ai-found, .ai-matches { margin: -4px 0 12px; }

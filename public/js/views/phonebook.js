@@ -126,6 +126,8 @@ const PhonebookView = (() => {
    * בשדה ריק אין תוצאות ואין חלון — ‎onChange(false)‎; מההקלדה הראשונה —
    * ‎onChange(true)‎. בתוך השדה שני סמלים: הוספה (עם מה שהוקלד) וניהול.
    */
+  const SEARCH_TIMEOUT_MS = 10000;
+
   function searchPanel({ onEscape = () => {}, onChange = () => {} } = {}) {
     const input = el('input.pb-search', {
       type: 'text', placeholder: 'חיפוש באלפון…', autocomplete: 'off',
@@ -198,6 +200,12 @@ const PhonebookView = (() => {
       const mine = ++seq;
       query = input.value.trim();
       if (!query) {
+        /*
+         * השדה התרוקן בזמן שחיפוש קודם עוד רץ: ‎seq‎ כבר קודם, ולכן החיפוש
+         * הקודם לא יסיר את סימן הטעינה כשיחזור — מסירים אותו כאן, אחרת
+         * העיגול מסתובב לתמיד.
+         */
+        field.classList.remove('is-loading');
         items = [];
         open = null;
         UI.mount(list);
@@ -207,7 +215,11 @@ const PhonebookView = (() => {
       }
       field.classList.add('is-loading');
       try {
-        const data = await API.get(`/api/phonebook?q=${encodeURIComponent(query)}&limit=20`);
+        // חיפוש שלא חוזר אינו משאיר עיגול מסתובב — אחרי 10 שניות הוא נכשל עם הודעה
+        const data = await Promise.race([
+          API.get(`/api/phonebook?q=${encodeURIComponent(query)}&limit=20`),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('החיפוש לא הגיב — נסו שוב')), SEARCH_TIMEOUT_MS))
+        ]);
         if (mine !== seq) return;
         items = data.items;
         count.textContent = data.total ? `${data.total} אנשי קשר` : '';
