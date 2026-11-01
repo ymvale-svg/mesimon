@@ -82,8 +82,16 @@ const AiInboxView = (() => {
     // פגישות שמחכות להחלטה — לפני הכול: ביטול ביומן, ובקשה להזיז
     const meetings = pending.filter((s) => String(s.kind).startsWith('meeting_'));
     if (meetings.length) sections.push(section('📅 פגישות', null, meetings.map((s) => meetingRow(s, reload))));
+    /*
+     * הודעה שעונה על משימה שפתחת או מעדכנת אותה, ומשימות כפולות במחלקה (פרק 11)
+     * — לפני הצעות המשימה החדשות: הן על עבודה שכבר קיימת.
+     */
+    const onTasks = pending.filter((s) => s.kind === 'task_close' || s.kind === 'task_update');
+    if (onTasks.length) sections.push(section('🔄 עדכונים למשימות שפתחת', 'מהמייל ומהוואטסאפ', onTasks.map((s) => TaskSyncView.row(s, { reload }))));
+    const merges = pending.filter((s) => s.kind === 'task_merge');
+    if (merges.length) sections.push(section('🔀 משימות כפולות', 'מספיק אישור אחד', merges.map((s) => TaskSyncView.row(s, { reload }))));
     // מוואטסאפ ומהמייל — שני מקורות, אותה הצעה ואותן פעולות
-    const rest = pending.filter((s) => !String(s.kind).startsWith('meeting_'));
+    const rest = pending.filter((s) => !String(s.kind).startsWith('meeting_') && !TaskSyncView.handles(s));
     const fromChat = rest.filter((s) => s.data.source === 'whatsapp');
     const fromMail = rest.filter((s) => s.data.source !== 'whatsapp');
     if (fromChat.length) {
@@ -262,6 +270,7 @@ const AiInboxView = (() => {
 
   function suggestionRow(s, reload) {
     if (s.kind === 'meeting_cancelled' || s.kind === 'meeting_move') return meetingRow(s, reload);
+    if (TaskSyncView.handles(s)) return TaskSyncView.row(s, { reload });
     if (s.kind === 'duplicate') {
       const join = el('button.btn.btn-sm.btn-primary', {}, ['צרף אותי']);
       join.addEventListener('click', run(join, () => API.post(`/api/ai/suggestions/${s.id}/join`), reload));
