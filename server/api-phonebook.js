@@ -2,6 +2,9 @@
 /**
  * נקודות הקצה של האלפון הארגוני (‎phonebook.js‎). פתוח לכל העובדים — צפייה,
  * הוספה, עריכה, מחיקה, ייבוא וייצוא. ספקים לא.
+ *
+ * העובדים והספקים מגיעים ברשימות עם מזהה טקסט (‎u12‎, ‎v3‎) ולקריאה בלבד:
+ * עריכה ומחיקה כאן הן רק לרשומות הידניות, שהמזהה שלהן מספר.
  */
 const D = require('./db');
 const Phonebook = require('./phonebook');
@@ -17,6 +20,12 @@ function register(router) {
   };
   const asBad = (fn) => {
     try { return fn(); } catch (err) { throw err?.status ? err : badRequest(err.message); }
+  };
+  // עובד (‎u12‎) או ספק (‎v3‎) אינם נערכים מכאן — כמו רשומה שאינה קיימת
+  const manualId = (ctx) => {
+    const id = Number(ctx.params.id);
+    if (!Number.isInteger(id) || id <= 0) throw notFound('רשומה של עובד או ספק נערכת בניהול המשתמשים או בספקים');
+    return id;
   };
 
   router.get('/api/phonebook', async (req, res, ctx) => {
@@ -48,14 +57,14 @@ function register(router) {
   router.put('/api/phonebook/:id', async (req, res, ctx) => {
     const actor = userOnly(ctx);
     const b = await readJson(req);
-    const entry = asBad(() => Phonebook.update(actor, Number(ctx.params.id), b));
+    const entry = asBad(() => Phonebook.update(actor, manualId(ctx), b));
     if (!entry) throw notFound('הרשומה לא נמצאה');
     sendJson(res, 200, { entry, duplicates: Phonebook.duplicatesOf(entry, entry.id) });
   });
 
   router.delete('/api/phonebook/:id', async (req, res, ctx) => {
     userOnly(ctx);
-    if (!Phonebook.remove(Number(ctx.params.id))) throw notFound('הרשומה לא נמצאה');
+    if (!Phonebook.remove(manualId(ctx))) throw notFound('הרשומה לא נמצאה');
     sendJson(res, 200, { ok: true });
   });
 
@@ -84,8 +93,18 @@ function register(router) {
 
   router.get('/api/phonebook/export', async (req, res, ctx) => {
     userOnly(ctx);
-    const rows = Phonebook.all().map((e) => [e.name, e.phone, e.phone2, e.fax, e.email, e.note]);
-    const file = Xlsx.build([['שם מלא', "טל' 1", "טל' 2", 'פקס', 'מייל', 'הערות'], ...rows], { sheetName: 'אלפון', widths: [26, 16, 16, 16, 30, 40] });
+    /*
+     * העובדים והספקים נכללים, עם עמודת "סוג" (החלטה 9.3). לעובד — טל' 1 הוא
+     * הנייד וטל' 2 הטלפון במשרד; המחלקה או החברה בעמודה משלהן. רשומה ידנית
+     * שהיא כפולה של עובד אינה מיוצאת — העובד עצמו כבר בקובץ.
+     */
+    const KIND = { user: 'עובד', vendor: 'ספק', manual: 'חיצוני' };
+    const rows = Phonebook.all().filter((e) => !e.duplicateOf)
+      .map((e) => [KIND[e.kind], e.name, e.phone, e.phone2, e.fax, e.email, e.department || e.org || '', e.note]);
+    const file = Xlsx.build(
+      [['סוג', 'שם מלא', "טל' 1", "טל' 2", 'פקס', 'מייל', 'מחלקה / חברה', 'הערות'], ...rows],
+      { sheetName: 'אלפון', widths: [10, 26, 16, 16, 16, 30, 22, 40] }
+    );
     const stamp = D.nowIso().slice(0, 10);
     res.writeHead(200, {
       'content-type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',

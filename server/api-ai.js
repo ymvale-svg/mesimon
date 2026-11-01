@@ -112,7 +112,14 @@ function register(router, h) {
 
     // האלפון הארגוני ראשון: מי שהוזן שם הוזן בשביל זה בדיוק
     if (q) {
-      for (const e of Phonebook.search(q, { limit: 10 })) {
+      for (const e of Phonebook.search(q, { limit: 20 })) {
+        /*
+         * עובדים וספקים נמצאים באלפון, אך כאן הם מגיעים מהמקור שלהם, עם
+         * המשמעות שלהם במשימון (‎contactsFor‎). ספק נשאר מהאלפון רק למי שאינו
+         * רואה ספקים — אצלו הוא איש קשר חיצוני רגיל.
+         */
+        if (e.kind === 'user') continue;
+        if (e.kind === 'vendor' && P.may(actor, 'view_vendor_boards')) continue;
         const colleague = e.email ? D.get("SELECT id FROM users WHERE lower(email) = ? AND status = 'active'", e.email) : null;
         if (colleague) continue;  // עובד — מופיע כעובד, עם המשמעות שלו במשימון
         const two = e.phone && e.phone2;
@@ -121,7 +128,7 @@ function register(router, h) {
           name: e.name, email: e.email, phone: e.phone || e.phone2,
           emails: e.email ? [{ value: e.email, label: '' }] : [],
           phones: [[e.phone, two ? "טל' 1" : ''], [e.phone2, "טל' 2"]].filter(([v]) => v).map(([value, label]) => ({ value, label })),
-          organization: e.note,
+          organization: e.org || e.note,
           unsaved: canSave && !GContacts.isSaved(actor.id, { email: e.email, phone: e.phone })
         }, keysOf([e.email].filter(Boolean), [e.phone, e.phone2].filter(Boolean)));
       }

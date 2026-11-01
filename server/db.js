@@ -1367,6 +1367,8 @@ function migrate() {
   addColumn('users', 'signup_at', 'TEXT');
   // הטלפון של העובד — כך בוט הוואטסאפ יודע מי כתב בקבוצה ומי שולח לו הודעה
   addColumn('users', 'phone', "TEXT NOT NULL DEFAULT ''");
+  // טלפון במשרד / שלוחה — טקסט חופשי ("03-1234567 שלוחה 12", או "212"), לאלפון
+  addColumn('users', 'office_phone', "TEXT NOT NULL DEFAULT ''");
   // חברי קבוצת הוואטסאפ (מספרים), שמורים לכמה שעות — הצעות רק לעובדים שבקבוצה
   addColumn('wa_groups', 'participants', "TEXT NOT NULL DEFAULT '[]'");
   addColumn('wa_groups', 'participants_at', 'TEXT');
