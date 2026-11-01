@@ -4,9 +4,10 @@
  * בניהול המערכת (לאדמין על בלבד).
  *
  * הבאנר מקבץ את הפריטים לפי מסך: רשימת מסכים בצד, ובמרכז פריט אחד בכל פעם
- * עם "זרקור" — המסך החי של המשתמש, מוגדל על מקום החידוש (‎Spotlight‎) — או
- * צילום המסך שצורף כשאין לפריט עוגן. פס התקדמות, "נסו עכשיו" שלוקח ישר למסך
- * ו"הראו לי" שמדגיש את החידוש במסך האמיתי. הוא
+ * עם סרטון ההדמיה שלו. פריטים של גרסאות ישנות, בלי סרטון, מוצגים ב"זרקור" —
+ * המסך החי של המשתמש, מוגדל על מקום החידוש (‎Spotlight‎) — או בצילום שצורף
+ * להם. פס התקדמות, "נסו עכשיו" שלוקח ישר למסך ו"הראו לי" שמדגיש את החידוש
+ * במסך האמיתי. הוא
  * נפתח מעצמו רק כשיש גרסה שעוד לא נראתה, ונסגר בלחיצה על "דלג" — ואז לא
  * יופיע שוב עד לגרסה הבאה. מהחשבון שלי אפשר לפתוח אותו מחדש בכל עת.
  *
@@ -147,6 +148,26 @@ const WhatsNewView = (() => {
      * גם צילום (או שהמערכת לא נטענה בזרקור — אז הצילום, ואם אין — האייקון).
      */
     function drawMedia(item, s) {
+      /*
+       * סרטון ההדמיה — מתנגן לבד, בלי קול ובלולאה. מי שביקש במערכת ההפעלה
+       * להפחית תנועה מקבל את התמונה הראשונה וכפתור ניגון, בלי ניגון אוטומטי.
+       */
+      if (item.video) {
+        if (spot) spot.node.hidden = true;
+        altMedia.hidden = false;
+        const still = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+        const video = el('video', {
+          src: item.video, poster: item.poster ?? null, muted: true, loop: true, playsinline: true,
+          preload: 'auto', autoplay: !still, controls: still, 'aria-label': `הדמיה: ${item.title}`
+        });
+        video.muted = true; // התכונה לבדה אינה מספיקה לחלק מהדפדפנים כדי לנגן לבד
+        UI.mount(altMedia, el('div.wn-shot.wn-shot-video', {}, [
+          el('div.wn-shot-bar', {}, [el('i'), el('i'), el('i'), el('span', { text: s.label })]),
+          video
+        ]));
+        if (!still) video.play().catch(() => { video.controls = true; });
+        return;
+      }
       const anchor = Spotlight.anchorOf(item.anchor);
       if (anchor && !spotDead) {
         if (!spot) {
@@ -294,344 +315,81 @@ const WhatsNewView = (() => {
 
   // ------------------------------------------------------------- ניהול
 
-  /** דחיסת צילום מסך בדפדפן — רוחב עד 1400, ‎JPEG‎ — כדי שלא יכביד על המסד */
-  function compressImage(file) {
-    return new Promise((resolve, reject) => {
-      if (!file?.type?.startsWith('image/')) return reject(new Error('יש לבחור קובץ תמונה'));
-      const reader = new FileReader();
-      reader.onerror = () => reject(new Error('קריאת התמונה נכשלה'));
-      reader.onload = () => {
-        const img = new Image();
-        img.onerror = () => reject(new Error('התמונה אינה תקינה'));
-        img.onload = () => {
-          const scale = Math.min(1, 1400 / img.width);
-          const canvas = document.createElement('canvas');
-          canvas.width = Math.round(img.width * scale);
-          canvas.height = Math.round(img.height * scale);
-          const g = canvas.getContext('2d');
-          g.fillStyle = '#ffffff';
-          g.fillRect(0, 0, canvas.width, canvas.height);
-          g.drawImage(img, 0, 0, canvas.width, canvas.height);
-          resolve(canvas.toDataURL('image/jpeg', 0.84));
-        };
-        img.src = reader.result;
-      };
-      reader.readAsDataURL(file);
-    });
-  }
-
-  /** סריקת AI — מחזירה הצעה, או זורקת שגיאה עם הסבר */
-  const runScan = (range = 'last') => API.post('/api/admin/releases/scan', { range });
-
-  /**
-   * מאיזה זמן לסרוק — לפני הסריקה. "מאז ההודעה האחרונה" היא ברירת המחדל;
-   * "24 השעות האחרונות" — כשרוצים רק את מה שנכנס היום. מחזיר את הבחירה, או
-   * ‎null‎ כשנסגר בלי לבחור.
+  /*
+   * הגרסאות אינן נכתבות כאן: כל גרסה מגיעה עם הקוד, כולל סרטון הדמיה לכל
+   * פריט, ונוצרת כטיוטה בעצמה. בעורך משתנה רק הניסוח — כותרת ותקציר, וכותרת
+   * ותיאור לכל פריט — והסרטון מוצג לידו, כדי לראות על מה מדברים.
    */
-  function pickRange() {
-    return new Promise((resolve) => {
-      let done = false;
-      const pick = (v) => { done = true; m.close(); resolve(v); };
-      const date = el('input', { type: 'date' });
-      const m = UI.modal({
-        title: '✨ מאיזה זמן לסרוק את החידושים?',
-        body: el('div.today-pick', {}, [
-          el('button.btn.btn-block.btn-primary', { type: 'button', onclick: () => pick('last') }, ['מאז ההודעה האחרונה שפורסמה']),
-          el('button.btn.btn-block', { type: 'button', onclick: () => pick('24h') }, ['24 השעות האחרונות']),
-          el('button.btn.btn-block', { type: 'button', onclick: () => pick('7d') }, ['השבוע האחרון']),
-          el('button.btn.btn-block', { type: 'button', onclick: () => pick('30d') }, ['30 הימים האחרונים']),
-          el('div.today-pick-other', {}, [
-            UI.field('מתאריך', date),
-            el('button.btn', { type: 'button', onclick: () => date.value && pick(date.value) }, ['סריקה'])
-          ])
-        ]),
-        autofocus: false,
-        onClose: () => { if (!done) resolve(null); }
-      });
-    });
-  }
-
-  /** שורת ההסבר בראש העורך: מה ה-AI עשה, או למה הוא לא רץ */
-  function scanNote(result, error) {
-    if (error) return el('div.alert.alert-warn.wn-ed-note', {}, [el('div', { text: `סריקת ה-AI נכשלה: ${error.message}. אפשר לכתוב את הפריטים ידנית.` })]);
-    if (!result) return null;
-    if (!result.enabled) {
-      return el('div.alert.alert-info.wn-ed-note', {}, [el('div', { text: 'חיבור ה-AI אינו מוגדר בשרת, ולכן הטיוטה נפתחת ריקה. אפשר לכתוב את הפריטים ידנית.' })]);
-    }
-    const since = UI.formatDate(result.since);
-    const src = { git: 'היסטוריית git', file: 'changelog.json', 'git+file': 'git ו-changelog.json' }[result.source] ?? 'אין מקור';
-    // עד מתי ההיסטוריה מגיעה — כך רואים מיד אם המקור לא מעודכן
-    const upTo = result.latest ? `, האחרון מ-${UI.formatDateTime(result.latest)}` : '';
-    if (!result.commits) return el('div.alert.alert-info.wn-ed-note', {}, [el('div', { text: `לא נמצאו שינויים במערכת מאז ${since} (${src}).` })]);
-    if (!result.items.length) {
-      return el('div.alert.alert-info.wn-ed-note', {}, [el('div', { text: `נסרקו ${result.commits} שינויים מאז ${since} (${src}${upTo}), ולא נמצא ביניהם חידוש שמשתמשים רואים.` })]);
-    }
-    return el('div.alert.alert-info.wn-ed-note', {}, [el('div', {}, [
-      el('b', { text: `✨ ה-AI הציע ${result.items.length} פריטים` }),
-      ` מתוך ${result.commits} שינויים מאז ${since} (${src}${upTo}). עברו על כל פריט, תקנו ובדקו את המקום במסך שה-AI בחר — ורק אז שמרו.`
-    ])]);
-  }
-
-  /**
-   * "גרסה חדשה" — ברירת המחדל היא סריקת AI. חלון המתנה קצר, ואז העורך
-   * נפתח עם ההצעה. בלי AI, או כשהסריקה נכשלה, העורך נפתח ריק עם הסבר.
-   */
-  async function newRelease(screens, onSaved, aiEnabled) {
-    if (!aiEnabled) return editor(null, screens, onSaved, { scan: { enabled: false } });
-    const range = await pickRange();
-    if (!range) return;
-    const wait = UI.modal({
-      title: 'סורק מה השתנה במערכת…',
-      body: el('div.wn-scan', {}, [
-        UI.spinner(),
-        el('div', { text: 'ה-AI עובר על השינויים מאז ההודעה האחרונה ומכין טיוטה. זה לוקח עד דקה.' })
-      ]),
-      autofocus: false
-    });
-    let result = null;
-    let error = null;
-    try { result = await runScan(range); } catch (err) { error = err; }
-    // סגירה ידנית של חלון ההמתנה מבטלת — לא קופצים לעורך מתחת לידיים
-    if (!wait.backdrop.isConnected) return;
-    wait.close();
-    editor(result?.items?.length
-      ? { title: result.title, summary: result.summary, items: result.items }
-      : null, screens, onSaved, { scan: result, scanError: error });
-  }
-
-  /**
-   * רשימת העוגנים לבחירה, בקבוצות לפי מסך — באותו סדר כמו המסכים בבאנר.
-   * עוגן שנשמר ואינו בקטלוג עוד (שונה שם בקוד) מוצג כ"לא מוכר", כדי שלא
-   * ייעלם מהעורך בשקט.
-   */
-  function anchorOptions(screens, current) {
-    const groups = screens.map((s) => ({
-      label: `${s.icon} ${s.label}`,
-      options: Spotlight.catalog.filter((a) => a.screen === s.key).map((a) => ({ value: a.key, label: a.label }))
-    })).filter((g) => g.options.length);
-    const unknown = current && !Spotlight.anchorOf(current) ? [{ value: current, label: `⚠ עוגן לא מוכר (${current})` }] : [];
-    return [{ value: '', label: '— בלי עוגן (צילום מסך במקום) —' }, ...unknown, ...groups];
-  }
-
-  /** פריט שאפשר לפרסם — יש לו מקום במסך, או לפחות צילום */
-  const showable = (i) => Boolean(Spotlight.anchorOf(i.anchor) || i.image || i.hasImage);
-
-  function editor(release, screens, onSaved, { scan = null, scanError = null } = {}) {
-    const isEdit = !!release?.id;
-    const items = (release?.items ?? []).map((i) => ({ audience: 'all', ...i }));
-    if (!items.length) items.push({ screen: 'general', title: '', body: '', image: null, audience: 'all' });
-    const audiences = audiencesCache ?? { all: { label: 'כולם' } };
-
-    const titleInput = el('input', { type: 'text', placeholder: 'למשל: עדכון נובמבר — יומן, אלפון ו-Today' });
-    titleInput.value = release?.title ?? '';
+  function editor(release, onSaved) {
+    const items = release.items.map((i) => ({ ...i }));
+    const titleInput = el('input', { type: 'text' });
+    titleInput.value = release.title ?? '';
     const summaryInput = el('textarea', { rows: '2', placeholder: 'משפט פתיחה קצר (לא חובה)' });
-    summaryInput.value = release?.summary ?? '';
-    const list = el('div.wn-ed-list');
-    const note = el('div', {}, [scanNote(scan, scanError)]);
+    summaryInput.value = release.summary ?? '';
 
-    function drawList() {
-      UI.mount(list, items.map((item, i) => {
-        const screenSel = UI.select(screens.map((s) => ({ value: s.key, label: `${s.icon} ${s.label}` })), item.screen);
-        screenSel.addEventListener('change', () => { item.screen = screenSel.value; });
-        const audSel = UI.select(Object.entries(audiences).map(([value, a]) => ({ value, label: a.label })), item.audience ?? 'all');
-        audSel.addEventListener('change', () => { item.audience = audSel.value; });
-        /*
-         * העוגן — המקום במסך שהבאנר יתקרב אליו. מהרשימה, או "בחירה על המסך".
-         * פריט כללי שמקבל עוגן עובר למסך של העוגן, כדי שיקובץ במקום הנכון.
-         */
-        const anchorSel = UI.select(anchorOptions(screens, item.anchor), item.anchor ?? '');
-        anchorSel.addEventListener('change', () => {
-          item.anchor = anchorSel.value || null;
-          const a = Spotlight.anchorOf(item.anchor);
-          if (a && (!item.screen || item.screen === 'general')) item.screen = a.screen;
-          drawList();
-        });
-        const pickBtn = el('button.btn.wn-ed-pick', {
-          type: 'button',
-          title: 'המסך נפתח — לוחצים על המקום שבו נמצא החידוש',
-          onclick: () => pickOnScreen(i)
-        }, ['🎯 בחירה על המסך']);
-        const t = el('input', { type: 'text', placeholder: 'מה נוסף? (כותרת)' });
-        t.value = item.title;
-        t.addEventListener('input', () => { item.title = t.value; });
-        const b = el('textarea', { rows: '3', placeholder: 'הסבר קצר: מה זה, איפה זה, ולמה זה טוב' });
-        b.value = item.body ?? '';
-        b.addEventListener('input', () => { item.body = b.value; });
-
-        const fileInput = el('input', { type: 'file', accept: 'image/*', style: { display: 'none' } });
-        const setImage = async (file) => {
-          try { item.image = await compressImage(file); drawList(); } catch (err) { UI.error(err); }
-        };
-        fileInput.addEventListener('change', () => fileInput.files[0] && setImage(fileInput.files[0]));
-
-        const shot = el('div.wn-ed-shot', {
-          tabindex: '0',
-          role: 'button',
-          'aria-label': 'צילום מסך לפריט: לחיצה לבחירת קובץ, גרירה, או הדבקה ב-Ctrl+V',
-          title: 'לחיצה לבחירת תמונה, גרירה, או הדבקה (Ctrl+V) של צילום מסך',
-          onclick: () => fileInput.click(),
-          onkeydown: (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); fileInput.click(); } },
-          onpaste: (e) => {
-            const file = [...(e.clipboardData?.files ?? [])].find((f) => f.type.startsWith('image/'));
-            if (file) { e.preventDefault(); setImage(file); }
-          },
-          ondragover: (e) => { e.preventDefault(); e.currentTarget.classList.add('over'); },
-          ondragleave: (e) => e.currentTarget.classList.remove('over'),
-          ondrop: (e) => {
-            e.preventDefault();
-            e.currentTarget.classList.remove('over');
-            const file = e.dataTransfer?.files?.[0];
-            if (file) setImage(file);
-          }
-        }, item.image
-          ? [el('img', { src: item.image, alt: '' })]
-          : [el('div', { text: '🖼️' }), el('div.mute-sm', { text: 'צילום מסך להמחשה' }), el('div.mute-sm', { text: 'לחיצה / גרירה / Ctrl+V' })]);
-
-        const ok = showable(item);
-        return el(`div.wn-ed-item${ok ? '' : '.is-bare'}`, {}, [
-          el('div.wn-ed-num', { text: String(i + 1) }),
-          el('div.wn-ed-fields', {}, [
-            el('div.row', {}, [UI.field('מסך', screenSel), UI.field('מי רואה', audSel)]),
-            UI.field('כותרת', t),
-            UI.field('תיאור', b),
-            el('div.wn-ed-anchor', {}, [
-              UI.field('איפה זה במסך — הבאנר יתקרב לשם', anchorSel),
-              pickBtn
-            ]),
-            ok ? null : el('div.wn-ed-warn', { role: 'note' }, [
-              '⚠ אין לפריט מקום במסך או צילום — לא ניתן לפרסם את הגרסה עד שיהיה אחד מהם'
-            ])
+    const list = el('div.wn-ed-list', {}, items.map((item, i) => {
+      const s = screenOf(item.screen);
+      const t = el('input', { type: 'text' });
+      t.value = item.title;
+      t.addEventListener('input', () => { item.title = t.value; });
+      const b = el('textarea', { rows: '3' });
+      b.value = item.body ?? '';
+      b.addEventListener('input', () => { item.body = b.value; });
+      return el('div.wn-ed-item', {}, [
+        el('div.wn-ed-num', { text: String(i + 1) }),
+        el('div.wn-ed-fields', {}, [
+          el('div.wn-ed-meta', {}, [
+            el('span.wn-chip', { text: `${s.icon} ${s.label}` }),
+            item.audience && item.audience !== 'all' ? el('span.wn-chip.wn-chip-aud', { text: `🔒 ${audienceLabel(item.audience)}` }) : null
           ]),
-          el('div.wn-ed-side', {}, [
-            shot, fileInput,
-            item.image ? el('button.btn.btn-sm', { type: 'button', onclick: () => { item.image = null; drawList(); } }, ['הסרת התמונה']) : null,
-            el('div.wn-ed-tools', {}, [
-              el('button.btn.btn-sm', { type: 'button', title: 'למעלה', 'aria-label': 'הזזת הפריט למעלה', disabled: i === 0,
-                onclick: () => { [items[i - 1], items[i]] = [items[i], items[i - 1]]; drawList(); } }, ['↑']),
-              el('button.btn.btn-sm', { type: 'button', title: 'למטה', 'aria-label': 'הזזת הפריט למטה', disabled: i === items.length - 1,
-                onclick: () => { [items[i + 1], items[i]] = [items[i], items[i + 1]]; drawList(); } }, ['↓']),
-              el('button.btn.btn-sm.btn-danger', { type: 'button', title: 'מחיקת הפריט', 'aria-label': 'מחיקת הפריט',
-                onclick: () => { items.splice(i, 1); drawList(); } }, ['✕'])
-            ])
-          ])
-        ]);
-      }));
-    }
-    drawList();
+          UI.field('כותרת', t),
+          UI.field('תיאור', b)
+        ]),
+        item.video
+          ? el('video.wn-ed-video', { src: item.video, poster: item.poster ?? null, muted: true, loop: true, playsinline: true, preload: 'metadata', controls: true })
+          : el('div.wn-ed-novideo.mute-sm', { text: 'פריט מגרסה קודמת, בלי סרטון' })
+      ]);
+    }));
 
+    const saveBtn = el('button.btn.btn-primary', { type: 'button' }, ['שמירת הניסוח']);
+    const previewBtn = el('button.btn', { type: 'button' }, ['👁 תצוגה מקדימה']);
     const collect = () => ({
       title: titleInput.value.trim(),
       summary: summaryInput.value.trim(),
-      items: items
-        .map((i) => ({
-          screen: i.screen, audience: i.audience ?? 'all', anchor: i.anchor || null,
-          title: String(i.title ?? '').trim(), body: String(i.body ?? '').trim(), image: i.image ?? null
-        }))
-        .filter((i) => i.title || i.body || i.image)
+      items: items.map((i) => ({ title: String(i.title ?? '').trim(), body: String(i.body ?? '').trim() }))
     });
-
-    /*
-     * סריקה נוספת מתוך העורך — מוסיפה את ההצעות לסוף הרשימה ואינה דורסת את
-     * מה שכבר נכתב. פריט שכותרתו כבר קיימת אינו נוסף פעמיים.
-     */
-    const scanBtn = el('button.btn', { type: 'button', title: 'ה-AI סורק מה השתנה מאז ההודעה האחרונה ומוסיף הצעות' }, ['✨ הצע לי חידושים עם AI']);
-    scanBtn.addEventListener('click', async () => {
-      const range = await pickRange();
-      if (!range) return;
-      scanBtn.disabled = true;
-      const label = scanBtn.textContent;
-      scanBtn.textContent = 'סורק…';
-      try {
-        const res = await runScan(range);
-        UI.mount(note, scanNote(res, null));
-        const have = new Set(items.map((i) => String(i.title ?? '').trim()));
-        // פריט ריק יחיד (עורך חדש) מפנה את מקומו להצעות
-        if (items.length === 1 && !items[0].title && !items[0].body && !items[0].image) items.length = 0;
-        for (const s of res.items ?? []) if (!have.has(s.title)) items.push({ ...s });
-        if (!items.length) items.push({ screen: 'general', title: '', body: '', image: null, audience: 'all' });
-        if (!titleInput.value.trim() && res.title) titleInput.value = res.title;
-        if (!summaryInput.value.trim() && res.summary) summaryInput.value = res.summary;
-        drawList();
-      } catch (err) {
-        UI.mount(note, scanNote(null, err));
-      } finally {
-        scanBtn.disabled = false;
-        scanBtn.textContent = label;
-      }
-    });
-
-    /**
-     * "🎯 בחירה על המסך": העורך נסגר, המסך של הפריט נפתח לבחירה, ובסוף
-     * העורך נפתח מחדש עם כל מה שנכתב בו — ועם העוגן שנבחר.
-     */
-    async function pickOnScreen(i) {
-      const snapshot = {
-        ...(release ?? {}),
-        title: titleInput.value,
-        summary: summaryInput.value,
-        items: items.map((x) => ({ ...x }))
-      };
-      const back = { name: App.state.route.name, params: { ...App.state.route.params } };
-      const item = snapshot.items[i];
-      const current = Spotlight.anchorOf(item.anchor);
-      const s = screens.find((x) => x.key === item.screen);
-      m.close();
-      const key = await Spotlight.pick({
-        route: current?.route ?? s?.route ?? null,
-        params: current?.params ?? null,
-        current: current?.key ?? null
-      });
-      App.navigate(back.name, back.params);
-      if (key) {
-        item.anchor = key;
-        const a = Spotlight.anchorOf(key);
-        if (!item.screen || item.screen === 'general') item.screen = a.screen;
-        UI.success(`נבחר: ${a.label}`);
-      }
-      editor(snapshot, screens, onSaved);
-    }
-
-    const saveBtn = el('button.btn.btn-primary', { type: 'button' }, [isEdit ? 'שמירת השינויים' : 'שמירה כטיוטה']);
-    const previewBtn = el('button.btn', { type: 'button' }, ['👁 תצוגה מקדימה']);
     const m = UI.modal({
-      title: isEdit ? `עריכת "${release.title}"` : 'גרסה חדשה — מה נוסף?',
+      title: `תיקון ניסוח — "${release.title}"`,
       size: 'wide',
       body: el('div', {}, [
-        note,
         UI.field('כותרת הגרסה', titleInput),
         UI.field('תקציר', summaryInput),
-        el('h4.wn-ed-h', { text: 'הפריטים — כל פריט משויך למסך שבו הוא נמצא, ולקהל שיראה אותו' }),
-        list,
-        el('button.btn.mt', { type: 'button', onclick: () => {
-          const last = items[items.length - 1];
-          items.push({ screen: last?.screen ?? 'general', title: '', body: '', image: null, audience: 'all' });
-          drawList();
-          list.lastElementChild?.querySelector('input[type=text]')?.focus();
-        } }, ['＋ פריט ידני'])
+        el('h4.wn-ed-h', { text: 'הפריטים — הסרטון והמסך הגיעו עם הגרסה; כאן משנים רק את הניסוח' }),
+        list
       ]),
-      footer: [saveBtn, previewBtn, el('div.spacer'), App.state.whatsNewAi ? scanBtn : null]
+      footer: [saveBtn, previewBtn]
     });
 
     previewBtn.addEventListener('click', () => {
-      const data = collect();
-      if (!data.items.length) return UI.toast('אין עדיין פריטים להצגה', 'error');
-      show([{ ...data, id: 0 }], { markSeen: false, preview: true });
+      const d = collect();
+      show([{ ...release, ...d, items: items.map((i, n) => ({ ...i, ...d.items[n] })) }], { markSeen: false, preview: true });
     });
-
     saveBtn.addEventListener('click', async () => {
       const data = collect();
       if (!data.title) return UI.toast('נדרשת כותרת לגרסה', 'error');
       if (data.items.some((i) => !i.title)) return UI.toast('לכל פריט נדרשת כותרת', 'error');
       saveBtn.disabled = true;
       try {
-        if (isEdit) await API.put(`/api/admin/releases/${release.id}`, data);
-        else await API.post('/api/admin/releases', data);
+        await API.put(`/api/admin/releases/${release.id}`, data);
         m.close();
         UI.success('נשמר');
         onSaved();
       } catch (err) { saveBtn.disabled = false; UI.error(err); }
     });
   }
+
+  /** פריט שאפשר לפרסם — יש לו סרטון, או (בגרסאות ישנות) מקום במסך או צילום */
+  const showable = (i) => Boolean(i.video || Spotlight.anchorOf(i.anchor) || i.image || i.hasImage);
 
   // המונה של משלוח שרץ ברקע מתעדכן בלי לרענן ידנית
   let pollTimer = null;
@@ -641,8 +399,6 @@ const WhatsNewView = (() => {
     const data = await API.get('/api/admin/releases');
     screensCache = data.screens;
     audiencesCache = data.audiences;
-    // העורך מציג את כפתור הסריקה רק כשיש AI
-    App.state.whatsNewAi = data.aiEnabled;
     const screens = data.screens;
 
     const card = (r) => {
@@ -650,8 +406,9 @@ const WhatsNewView = (() => {
       const counts = {};
       for (const i of r.items) counts[i.screen] = (counts[i.screen] ?? 0) + 1;
       const limited = r.items.filter((i) => i.audience && i.audience !== 'all');
-      // פריטים בלי עוגן ובלי צילום — חוסמים פרסום (וגם השרת חוסם)
+      // פריטים בלי הדמיה — חוסמים פרסום (וגם השרת חוסם)
       const bare = r.items.filter((i) => !showable(i));
+      const videos = r.items.filter((i) => i.video).length;
 
       const act = async (fn, okMsg) => {
         try { await fn(); if (okMsg) UI.success(okMsg); reload(); } catch (err) { UI.error(err); }
@@ -665,7 +422,7 @@ const WhatsNewView = (() => {
           r.emailedAt ? el('span.tag', { title: UI.formatDateTime(r.emailedAt) },
             [r.sending ? `✉ נשלח ל-${r.emailedCount} מתוך ${r.emailedTotal}…` : `✉ נשלח ל-${r.emailedCount}${r.emailedTotal && r.emailedTotal !== r.emailedCount ? ` מתוך ${r.emailedTotal}` : ''} · ${UI.formatDate(r.emailedAt)}`]) : null,
           el('div.spacer'),
-          el('button.btn.btn-sm', { onclick: () => editor(r, screens, reload) }, ['✎ עריכה']),
+          el('button.btn.btn-sm', { onclick: () => editor(r, reload) }, ['✎ ניסוח']),
           el('button.btn.btn-sm', { onclick: () => open({ preview: r }) }, ['👁 תצוגה']),
           el('button.btn.btn-sm.btn-danger', {
             onclick: async () => {
@@ -680,12 +437,13 @@ const WhatsNewView = (() => {
             const s = screens.find((x) => x.key === k) ?? { icon: '✨', label: k };
             return el('span.wn-chip', { text: `${s.icon} ${s.label} · ${n}` });
           }),
+          videos ? el('span.wn-chip', { text: `🎬 ${videos === r.items.length ? 'סרטון לכל פריט' : `${videos} סרטונים`}` }) : null,
           limited.length ? el('span.wn-chip.wn-chip-aud', {
             text: `🔒 ${limited.length} לקהל מצומצם`,
             title: limited.map((i) => `${i.title} — ${audienceLabel(i.audience)}`).join('\n')
           }) : null,
-          bare.length ? el('span.wn-chip.wn-chip-warn', {
-            text: `⚠ ${bare.length === 1 ? 'פריט אחד' : `${bare.length} פריטים`} בלי מקום במסך או צילום`,
+          bare.length ? el('span.wn-chip.wn-chip-aud', {
+            text: `⚠ ${bare.length === 1 ? 'פריט אחד' : `${bare.length} פריטים`} בלי סרטון`,
             title: bare.map((i) => i.title).join('\n')
           }) : null
         ]),
@@ -694,7 +452,7 @@ const WhatsNewView = (() => {
             ? el('button.btn.btn-sm', { onclick: () => act(() => API.post(`/api/admin/releases/${r.id}/publish`, { publish: false }), 'הוחזר לטיוטה') }, ['החזרה לטיוטה'])
             : el('button.btn.btn-sm.btn-primary', {
               disabled: bare.length > 0,
-              title: bare.length ? 'לכל פריט צריך מקום במסך (עוגן) או צילום — "✎ עריכה" כדי להשלים' : '',
+              title: bare.length ? 'לכל פריט צריך סרטון הדמיה' : '',
               onclick: async () => {
                 if (!await UI.confirm('מהרגע הזה הבאנר ייפתח לכל משתמש בכניסה הבאה שלו (עם אפשרות לדלג). כל משתמש יראה רק את הפריטים שמיועדים לו.', { title: 'פרסום הגרסה', okText: 'פרסום' })) return;
                 act(() => API.post(`/api/admin/releases/${r.id}/publish`, {}), 'פורסם — הבאנר יוצג לכולם');
@@ -727,20 +485,15 @@ const WhatsNewView = (() => {
       el('div.flex', { style: { marginBottom: '14px', gap: '10px', alignItems: 'center', flexWrap: 'wrap' } }, [
         el('div', { style: { flex: '1', minWidth: '240px' } }, [
           el('b', { text: 'הודעות "מה חדש"' }),
-          el('div.mute-sm', { text: data.aiEnabled
-            ? '"גרסה חדשה" סורקת עם AI מה השתנה במערכת מאז ההודעה האחרונה ומכינה טיוטה, כולל המקום במסך של כל חידוש. עוברים עליה, מפרסמים — וכל משתמש יראה באנר בכניסה הבאה, עם המסך שלו מוגדל על החידוש.'
-            : 'כותבים מה נוסף, ולכל פריט בוחרים את המקום במסך (או מצרפים צילום). מפרסמים — וכל משתמש יראה באנר בכניסה הבאה, עם המסך שלו מוגדל על החידוש. אפשר גם לשלוח לכולם במייל.' })
-        ]),
-        el('button.btn', { onclick: () => editor(null, screens, reload) }, ['גרסה ריקה']),
-        el('button.btn.btn-primary', { onclick: () => newRelease(screens, reload, data.aiEnabled) },
-          [data.aiEnabled ? '✨ גרסה חדשה' : '＋ גרסה חדשה'])
+          el('div.mute-sm', { text: 'כל גרסה מגיעה מוכנה עם עדכון המערכת — מלל וסרטון הדמיה לכל חידוש — ומחכה כאן כטיוטה. צופים בתצוגה המקדימה, מתקנים ניסוח אם צריך, ומפרסמים: כל משתמש יראה את הבאנר בכניסה הבאה שלו. אפשר גם לשלוח לכולם במייל.' })
+        ])
       ]),
       data.mailEnabled ? null : el('div.alert.alert-info', { style: { marginBottom: '12px' } }, [
         el('div', { text: 'שליחת דואר אינה מוגדרת (SMTP), ולכן כפתורי המייל כבויים. הבאנר עובד גם בלי.' })
       ]),
       data.releases.length
         ? el('div.wn-admin-list', {}, data.releases.map(card))
-        : UI.empty('עוד לא נכתבה אף גרסה. "גרסה חדשה" כדי להתחיל.', '✨')
+        : UI.empty('אין כרגע גרסה. הגרסה הבאה תופיע כאן עם עדכון המערכת.', '✨')
     );
 
     if (data.releases.some((r) => r.sending)) {

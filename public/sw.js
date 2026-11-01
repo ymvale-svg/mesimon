@@ -12,7 +12,7 @@
  */
 
 // שינוי המספר מפסל את המטמון הקודם ומאלץ טעינה מחדש של קבצי המערכת
-const VERSION = 'mesimon-v43';
+const VERSION = 'mesimon-v45';
 
 /**
  * מה נשמר מראש. רק מה שנדרש כדי שהמסך ייבנה: אם אחד מהם חסר, האפליקציה לא
@@ -235,6 +235,8 @@ self.addEventListener('fetch', (event) => {
   // בקשות שאינן GET, מקור אחר, או ה-API — ישר לרשת, בלי מטמון
   if (request.method !== 'GET' || url.origin !== self.location.origin) return;
   if (url.pathname.startsWith('/api/')) return;
+  // סרטונים נטענים בחלקים (Range, תשובת 206) — מטמון אינו יכול לשמור חלק, ולכן ישר לרשת
+  if (request.headers.has('range') || /\.mp4$/i.test(url.pathname)) return;
 
   /**
    * ניווט (פתיחת האפליקציה): קודם רשת, ואם אין — ה-HTML מהמטמון. הסדר הזה

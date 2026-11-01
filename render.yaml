@@ -7,9 +7,7 @@ services:
     runtime: node
     plan: starter          # נדרש תשלום — התוכנית החינמית מוחקת את הנתונים
     region: frankfurt      # אירופה — הקרוב ביותר לישראל מבחינת זמן תגובה ורגולציה
-    # אין תלויות להתקין. רק עדכון היסטוריית השינויים ל"מה חדש" — מאוחד עם הקובץ
-    # הקיים, כי השכפול בענן שטוח (ראה tools/make-changelog.js). כשל אינו עוצר פריסה
-    buildCommand: "node tools/make-changelog.js || true"
+    buildCommand: "echo אין תלויות להתקין"
     startCommand: node server/index.js
     healthCheckPath: /api/branding
     envVars:

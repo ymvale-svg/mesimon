@@ -62,7 +62,7 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    if (serveStatic(res, PUBLIC_DIR, url.pathname)) return;
+    if (serveStatic(res, PUBLIC_DIR, url.pathname, req)) return;
 
     // כל נתיב אחר מוגש כאפליקציה (ניווט צד-לקוח)
     if (serveStatic(res, PUBLIC_DIR, '/index.html')) return;

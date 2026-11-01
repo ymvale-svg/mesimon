@@ -3689,6 +3689,10 @@ body:has(.modal-backdrop.is-side:not(.leaving)) .toast-root { left: auto; right:
 .wn-shot-bar i:nth-child(3) { background: #34d399; }
 .wn-shot-bar span { margin-inline-start: 8px; }
 .wn-shot img { display: block; width: 100%; max-height: 300px; object-fit: cover; object-position: top; cursor: zoom-in; }
+/* סרטון ההדמיה — יחס 16:10 כמו המסך שהוקלט, בלי חיתוך */
+/* גובה מוגבל, כך שהכותרת וההסבר שמתחת לסרטון נראים בלי גלילה גם במסך נמוך */
+.wn-shot-video { width: min(100%, calc(min(36vh, 340px) * 1.6)); margin-inline: auto; }
+.wn-shot-video video { display: block; width: 100%; aspect-ratio: 16 / 10; background: #0f172a; object-fit: contain; }
 
 .wn-hero {
   position: relative; overflow: hidden; height: 190px; border-radius: 14px;
@@ -3865,37 +3869,6 @@ body:has(.modal-backdrop.is-side:not(.leaving)) .toast-root { left: auto; right:
 }
 
 /* "🎯 בחירה על המסך" בעורך */
-.spot-picking .spot-pickable { outline: 2px dashed rgba(20, 184, 166, .7) !important; outline-offset: 2px; cursor: crosshair !important; }
-.spot-picking .spot-pickable * { cursor: crosshair !important; }
-.spot-pick-bar {
-  /* בתחתית: הסרגל העליון מלא בעוגנים, ופס שמכסה אותם היה מסתיר בדיוק את מה שבוחרים */
-  position: fixed; z-index: 1200; bottom: 16px; left: 50%; transform: translateX(-50%);
-  display: flex; align-items: center; gap: 12px; width: max-content; max-width: calc(100vw - 24px);
-  padding: 10px 12px 10px 16px; border-radius: 14px; background: #0f172a; color: #fff;
-  box-shadow: 0 16px 40px rgba(15, 23, 42, .4); font-size: 14px;
-}
-.spot-pick-bar { flex-direction: column; align-items: stretch; gap: 8px; }
-.spot-pick-row { display: flex; align-items: center; gap: 12px; }
-.spot-pick-row > div { flex: 1; }
-.spot-pick-open { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 12px; opacity: .95; }
-.spot-pick-open .btn { background: rgba(255, 255, 255, .1); color: #fff; border-color: rgba(255, 255, 255, .25); }
-.spot-pick-open .btn:hover { background: rgba(255, 255, 255, .2); }
-.spot-pick-icon { font-size: 22px; }
-.spot-pick-sub { font-size: 12px; opacity: .78; margin-top: 2px; }
-.spot-pick-bar .btn { flex: none; }
-.spot-pick-box {
-  position: fixed; z-index: 1190; pointer-events: none; border-radius: 10px;
-  border: 3px solid #14b8a6; background: rgba(20, 184, 166, .1);
-  box-shadow: 0 0 0 4px rgba(20, 184, 166, .22); opacity: 0; transition: opacity .12s;
-}
-.spot-pick-box.on { opacity: 1; }
-.spot-pick-name {
-  position: fixed; z-index: 1191; pointer-events: none; white-space: nowrap; max-width: calc(100vw - 16px);
-  overflow: hidden; text-overflow: ellipsis;
-  padding: 4px 10px; border-radius: 8px; background: #0f766e; color: #fff; font-size: 12.5px; font-weight: 700;
-  box-shadow: 0 6px 16px rgba(15, 23, 42, .25); opacity: 0; transition: opacity .12s;
-}
-.spot-pick-name.on { opacity: 1; }
 
 /* המערכת בתוך הבאנר: בלי הנפשות (המדידה צריכה מסך יציב), בלי פסי גלילה ובלי הקפצות */
 html.spot-embed *, html.spot-embed *::before, html.spot-embed *::after {
@@ -3911,36 +3884,19 @@ html.spot-embed .wake-banner { display: none !important; }
 .wn-ed-h { margin: 18px 0 8px; font-size: 14px; color: var(--text-soft); }
 .wn-ed-list { display: flex; flex-direction: column; gap: 10px; }
 .wn-ed-item {
-  display: grid; grid-template-columns: 28px minmax(0, 1fr) 200px; gap: 12px;
+  display: grid; grid-template-columns: 28px minmax(0, 1fr) 240px; gap: 12px;
   padding: 12px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface-2);
 }
+.wn-ed-meta { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
+.wn-ed-video { width: 100%; border-radius: 8px; background: #0f172a; aspect-ratio: 16 / 10; align-self: start; }
+.wn-ed-novideo { align-self: center; text-align: center; }
 .wn-ed-num {
   width: 26px; height: 26px; border-radius: 50%; background: var(--brand); color: #fff;
   display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 700;
 }
-.wn-ed-side { display: flex; flex-direction: column; gap: 6px; }
-.wn-ed-shot {
-  height: 120px; border: 2px dashed var(--border-strong); border-radius: 10px; background: var(--surface);
-  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px;
-  cursor: pointer; overflow: hidden; text-align: center;
-}
-.wn-ed-shot:hover, .wn-ed-shot:focus-visible, .wn-ed-shot.over { border-color: var(--brand); outline: none; background: var(--brand-light); }
-.wn-ed-shot img { width: 100%; height: 100%; object-fit: cover; object-position: top; }
-.wn-ed-tools { display: flex; gap: 4px; }
-.wn-ed-anchor { display: flex; gap: 8px; align-items: flex-end; }
-.wn-ed-anchor .field { flex: 1; min-width: 0; margin-bottom: 0; }
-.wn-ed-anchor select { width: 100%; }
-.wn-ed-pick { flex: none; white-space: nowrap; }
-.wn-ed-item.is-bare { border-color: var(--warn); border-inline-start-width: 4px; }
-.wn-ed-warn {
-  margin-top: 8px; padding: 6px 10px; border-radius: 8px; font-size: 12.5px; font-weight: 600;
-  background: var(--warn-bg); color: var(--warn-text);
-}
-.wn-chip-warn { background: var(--warn-bg); color: var(--warn-text); font-weight: 700; }
 @media (max-width: 820px) {
   .wn-ed-item { grid-template-columns: 1fr; }
   .wn-ed-num { display: none; }
-  .wn-ed-anchor { flex-direction: column; align-items: stretch; }
 }
 .wn-admin-list { display: flex; flex-direction: column; gap: 12px; }
 .wn-admin-card > .mute-sm, .wn-admin-chips, .wn-admin-actions { padding-inline: 16px; }
@@ -3956,7 +3912,6 @@ html.spot-embed .wake-banner { display: none !important; }
   background: var(--warn-bg); color: var(--warn-text);
 }
 .wn-chip-aud { background: var(--warn-bg); color: var(--warn-text); }
-.wn-scan { display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 18px 8px; text-align: center; color: var(--text-soft); }
 .wn-ed-note { margin-bottom: 14px; }
 
 /* ---------------------------------------------- אלפון: עובדים, ספקים ופרטי קשר לחיצים */
