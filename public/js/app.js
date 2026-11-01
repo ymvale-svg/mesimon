@@ -2664,6 +2664,30 @@ const App = (() => {
     return el('tr', {}, [el('th', { text: 'טלפון נייד' }), cell]);
   }
 
+  /** הטלפון במשרד / השלוחה שלי — מופיע באלפון. נשמר בלי קוד אימות */
+  function officePhoneRow() {
+    const cell = el('td');
+    const draw = () => UI.mount(cell, el('div.flex', {}, [
+      el('span', { dir: 'ltr', text: state.actor.officePhone || 'לא הוזן' }),
+      el('button.btn.btn-sm', { onclick: edit }, [state.actor.officePhone ? 'שינוי' : 'הוספה'])
+    ]));
+    async function edit() {
+      const value = await UI.prompt('טלפון במשרד / שלוחה', {
+        title: '☎️ הטלפון שלי במשרד',
+        value: state.actor.officePhone ?? '',
+        hint: 'מספר מלא, שלוחה, או שניהם — למשל "03-1234567 שלוחה 12". מופיע באלפון הארגוני ליד הנייד שלך.'
+      });
+      if (value === null) return;
+      try {
+        state.actor.officePhone = (await API.put('/api/me/office-phone', { officePhone: value })).officePhone;
+        UI.success('נשמר');
+        draw();
+      } catch (err) { UI.error(err); }
+    }
+    draw();
+    return el('tr', {}, [el('th', { text: 'טלפון במשרד / שלוחה' }), cell]);
+  }
+
   function userMenu() {
     const m = UI.modal({
       title: 'החשבון שלי',
@@ -2682,6 +2706,7 @@ const App = (() => {
               : null,
             state.actor.department ? el('tr', {}, [el('th', { text: 'מחלקה' }), el('td', { text: state.actor.department })]) : null,
             isVendor() ? null : phoneRow(),
+            isVendor() ? null : officePhoneRow(),
             isVendor() ? el('tr', {}, [el('th', { text: 'הרשאת עדכון' }), el('td', { text: state.actor.readOnly ? 'צפייה בלבד' : 'מלאה' })]) : null
           ])
         ]),
