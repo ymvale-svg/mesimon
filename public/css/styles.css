@@ -3617,3 +3617,23 @@ body:has(.modal-backdrop.is-side:not(.leaving)) .toast-root { left: auto; right:
 }
 .notif .n-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--brand); transition: box-shadow .15s; }
 .notif .n-read:hover .n-dot { box-shadow: 0 0 0 4px var(--brand-light); }
+
+/* ==========================================================================
+   Today — הצעות ותובנות מהמייל ומהוואטסאפ (סבב נובמבר, פרק 6)
+   ========================================================================== */
+.today-origin { font-weight: 600; color: var(--text-soft); }
+.today-older-line {
+  display: block; width: 100%; text-align: start; padding: 9px 14px; border: 0;
+  border-top: 1px dashed var(--border); background: none; cursor: pointer;
+  font: inherit; font-size: 13px; color: var(--warn); font-weight: 700;
+}
+.today-older-line:hover { background: var(--surface-2); }
+.today-ins-group > summary { cursor: pointer; list-style-position: inside; }
+.today-insight .today-title { font-weight: 400; white-space: normal; }
+.today-insight .today-title b { font-weight: 700; }
+.today-insight.is-unread .today-title b::before { content: '● '; color: var(--info); }
+@media (max-width: 640px) {
+  .today-insight { flex-wrap: wrap; }
+  .today-insight .today-actions { flex-direction: row; width: 100%; justify-content: flex-end; }
+}
+.wa-business-note { margin: 10px 0; font-size: 13px; }

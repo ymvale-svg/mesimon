@@ -1096,7 +1096,7 @@ const App = (() => {
       ]);
     }
 
-    /** הבוט: האם ההודעה הראשונה של היום כוללת שורת תובנות מהמייל. דלוק כברירת מחדל */
+    /** האם Today כולל את התובנות (מסך, בוט ומייל הבוקר). דלוק כברירת מחדל */
     function botPrefsBox() {
       const box = el('input', { type: 'checkbox', checked: getPref('botPrefs', {})?.insightsInToday !== false });
       box.addEventListener('change', () => {
@@ -1109,8 +1109,8 @@ const App = (() => {
             el('tbody', {}, [
               el('tr', {}, [
                 el('td', {}, [
-                  el('div', { text: '📬 שורת תובנות מהמייל (24 שעות) בהודעה הראשונה של היום' }),
-                  el('div.mute-sm', { text: 'את הרשימה המלאה מקבלים תמיד לפי בקשה: "מה חדש במייל?"' })
+                  el('div', { text: '📬 תובנות ב-Today — מהמייל ומהוואטסאפ' }),
+                  el('div.mute-sm', { text: 'החלק האחרון של Today: במסך, בבוט (בהודעת המשך) ובמייל הבוקר. את הרשימה המלאה מקבלים תמיד לפי בקשה: "תובנות", "תובנות מהיומיים האחרונים".' })
                 ]),
                 el('td', { style: { textAlign: 'center', width: '110px' } }, [el('label.checkbox', {}, [box])])
               ])
