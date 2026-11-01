@@ -17,10 +17,14 @@ const Changelog = require('../server/changelog');
     process.exit(1);
   }
   // 1000 — הרבה מעבר לטווח שבין שתי הודעות "מה חדש", בלי לנפח את הקובץ
-  const commits = await Changelog.fromGit({ limit: 1000 });
+  /*
+   * איחוד עם הקובץ הקיים, לא דריסה: בשכפול שטוח (כמו בבנייה בענן) git רואה
+   * רק את הקומיט האחרון, ודריסה הייתה מוחקת את כל ההיסטוריה שכבר בקובץ.
+   */
+  const commits = Changelog.union(await Changelog.fromGit({ limit: 1000 }), Changelog.readFile()).slice(0, 1500);
   const out = {
     generatedAt: new Date().toISOString(),
-    commits: commits.map(({ date, subject, body }) => ({ date, subject, body }))
+    commits: commits.map(({ hash, date, subject, body }) => ({ hash, date, subject, body }))
   };
   fs.writeFileSync(Changelog.FILE, `${JSON.stringify(out, null, 1)}\n`);
   console.log(`changelog.json נכתב: ${commits.length} שינויים.`);
