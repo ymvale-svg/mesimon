@@ -1071,10 +1071,13 @@ async function pollWhatsApp() {
     // כמה הודעות קצרות ברצף הן תשובה אחת — מוערכות יחד ולא אחת-אחת
     const byRequest = new Map();
     const unmatched = [];
+    // מה שכתבתי בעצמי בשיחות שאינן משימת AI — הצעות מאותה שיחה כבר טופלו
+    const answered = [];
     for (const m of incoming) {
       const req = open.find((r) => WhatsApp.normalizePhone(r.contact_phone) === m.from);
       if (!req) {
         if (!m.outgoing) unmatched.push(m);
+        else answered.push(m);
         continue;
       }
       // הודעה שהמשתמש כתב בעצמו מהטלפון לנמען
@@ -1106,6 +1109,12 @@ async function pollWhatsApp() {
         });
       } catch (err) {
         console.error('[משימון] טיפול בהודעת וואטסאפ נכשל:', err.message);
+      }
+    }
+
+    if (answered.length) {
+      try { require('./ai/whatsapp-scan').markAnswered(ownerId, answered); } catch (err) {
+        console.error('[משימון] סימון שיחות שנענו נכשל:', err.message);
       }
     }
 

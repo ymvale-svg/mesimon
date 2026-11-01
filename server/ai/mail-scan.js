@@ -537,7 +537,47 @@ async function morningRun() {
  *   • המשתמש כתב לנמען בעצמו — המעקב עוצר ושואל מה המצב.
  * פעם בחמש דקות לכל בקשה — זה גם קצב קליטת התשובות, כי הן חוזרות לתיבה הזו.
  */
+/**
+ * הצעה ממייל שכבר עניתי עליו — יורדת מ"ממתין לאישורך".
+ *
+ * מי שעבר על התיבה וענה מ-Gmail או מ-Outlook כבר טיפל בעניין, וההצעה רק
+ * מעמיסה. הסימן: בשרשור של המייל יש הודעה שיצאה ממני (‎SENT‎) אחרי שהוא
+ * התקבל. ההצעה מסומנת ‎replied‎ ולא נמחקת.
+ *
+ * אם מגיעה אחר כך תשובה בשרשור — זו הודעה חדשה, שלא נקראה, והסריקה הרגילה
+ * בוחנת אותה כמו כל מייל: רק אם יש בה משימה היא חוזרת לממתינות.
+ *
+ * כל הצעה נבדקת לכל היותר פעם ב-15 דקות, ועד 30 הצעות בסבב.
+ */
+const REPLY_CHECK_MS = 15 * 60000;
+const replyChecked = new Map(); // suggestionId → זמן הבדיקה האחרונה
+
+async function dropAnswered() {
+  const rows = D.all(
+    `SELECT s.* FROM ai_suggestions s JOIN mail_connections c ON c.user_id = s.user_id AND c.state = 'ok'
+      WHERE s.status = 'pending' AND s.kind = 'task' AND s.gmail_id <> ''
+        AND COALESCE(json_extract(s.data, '$.source'), 'email') = 'email'
+      ORDER BY s.id DESC LIMIT 200`
+  ).filter((s) => Date.now() - (replyChecked.get(s.id) ?? 0) > REPLY_CHECK_MS).slice(0, 30);
+  for (const s of rows) {
+    replyChecked.set(s.id, Date.now());
+    if (!Gmail.has(s.user_id, 'mail')) continue;
+    try {
+      const received = new Date(s.received_at ?? s.created_at).getTime();
+      const thread = await Gmail.threadOf(s.user_id, s.gmail_id);
+      const answered = thread.find((m) => m.id !== s.gmail_id && m.labels.includes('SENT') && m.at && m.at.getTime() > received - 60000);
+      if (!answered) continue;
+      D.run("UPDATE ai_suggestions SET status = 'replied', decided_at = ? WHERE id = ? AND status = 'pending'", D.nowIso(), s.id);
+    } catch (err) {
+      // מייל שנמחק מהתיבה — אין מה לבדוק עוד; שאר התקלות: בסבב הבא
+      if (/ 404/.test(err.message)) replyChecked.set(s.id, Date.now() + 365 * DAY);
+      else console.error(`[משימון] בדיקת "עניתי כבר" להצעה ${s.id} נכשלה:`, err.message);
+    }
+  }
+}
+
 async function pollMailbox() {
+  await dropAnswered().catch((err) => console.error('[משימון] בדיקת הצעות שנענו נכשלה:', err.message));
   const cutoff = new Date(Date.now() - CONTACT_CHECK_MINUTES * 60000).toISOString();
   const open = D.all(
     `SELECT r.* FROM ai_requests r JOIN mail_connections c ON c.user_id = r.owner_id AND c.state = 'ok'

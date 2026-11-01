@@ -327,7 +327,25 @@ const rejectionsFrom = (userId, phone) => D.get(
      AND json_extract(data, '$.personal') = 1 AND json_extract(data, '$.chatPhone') = ?`, userId, phone
 ).n;
 
+/**
+ * עניתי בשיחה הפרטית — הצעות ממתינות מאותה שיחה יורדות מ"ממתין לאישורך"
+ * (‎replied‎). הודעה חדשה שתגיע ממנו אחר כך נבחנת מחדש כרגיל, ותחזור כהצעה
+ * רק אם יש בה משימה.
+ */
+function markAnswered(userId, outgoing) {
+  for (const m of outgoing) {
+    const at = m.at instanceof Date ? m.at.toISOString() : String(m.at ?? D.nowIso());
+    D.run(
+      `UPDATE ai_suggestions SET status = 'replied', decided_at = ?
+        WHERE user_id = ? AND status = 'pending' AND json_extract(data, '$.personal') = 1
+          AND json_extract(data, '$.chatPhone') = ? AND COALESCE(received_at, created_at) < ?`,
+      D.nowIso(), userId, m.from, at
+    );
+  }
+}
+
 module.exports = {
+  markAnswered,
   handle, prefs, setPrefs, publicPrefs, scanningUsers, setHooks, mark, lastAsked, expireQuestions, sendNotices,
   rejectionsFrom, questionText, NOTICE, ANSWER_DAYS,
   _internal: { countUnknown, ask }
