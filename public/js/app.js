@@ -1889,7 +1889,8 @@ const App = (() => {
     });
 
     // הזכוכית ממקדת את השדה — היא נראית כלחיצה, וכדאי שתהיה כזו
-    const icon = el('span.icon', { title: 'חיפוש', text: '🔍', onclick: () => input.focus() });
+    // הזכוכית עצמה מצוירת ברקע השדה (ראה "קרן אור" בגיליון) — כאן רק משטח הלחיצה
+    const icon = el('span.icon', { title: 'חיפוש', 'aria-hidden': 'true', onclick: () => input.focus() });
     // רמז לקיצור — רק במחשב, ונעלם כשמקלידים או כשהשדה ממוקד (ב-CSS)
     const kbd = inline ? null : el('kbd.gs-kbd', { 'aria-hidden': 'true', text: IS_MAC ? '⌘K' : 'Ctrl K' });
 

@@ -418,15 +418,15 @@ textarea { resize: vertical; min-height: 76px; }
   padding: 0 40px 0 16px;
   border: 1px solid var(--border);
   border-radius: 999px;
-  background: var(--surface-2);
+  background-color: var(--surface-2);
   font-size: 14px;
   transition: background .15s, border-color .15s, box-shadow .15s;
 }
 .global-search input::placeholder { color: var(--text-mute); }
-.global-search input:hover { background: #eaf6f3; border-color: var(--border-strong); }
+.global-search input:hover { background-color: #eaf6f3; border-color: var(--border-strong); }
 .global-search input:focus {
   outline: none;
-  background: var(--surface);
+  background-color: var(--surface);
   border-color: var(--brand);
   /* מגן רך ולא מסגרת עבה: הוא מסמן מיקוד בלי לקפוץ בגובה השדה */
   box-shadow: 0 0 0 3px rgba(15, 118, 110, .13);
@@ -2252,9 +2252,9 @@ input[type="color"] { width: 46px; height: 30px; padding: 2px; cursor: pointer; 
 .nav-search {
   width: 100%; font-size: 12.5px; padding: 6px 10px;
   border-radius: 8px; border: 1px solid var(--border-strong);
-  background: var(--surface-2);
+  background-color: var(--surface-2);
 }
-.nav-search:focus { background: var(--surface); }
+.nav-search:focus { background-color: var(--surface); }
 
 @media (min-width: 821px) {
   /*
@@ -3239,8 +3239,8 @@ input[type="color"] { width: 46px; height: 30px; padding: 2px; cursor: pointer; 
 
 /* בבאנר הימני, מעל "פרויקטים" */
 .pb-side { padding: 6px 4px 4px; }
-.pb-side .pb-search { height: 36px; border-radius: 10px; background: var(--surface-2); font-size: 13.5px; }
-.pb-side .pb-search:focus { background: var(--surface); }
+.pb-side .pb-search { height: 36px; border-radius: 10px; background-color: var(--surface-2); font-size: 13.5px; }
+.pb-side .pb-search:focus { background-color: var(--surface); }
 
 /* חלון התוצאות — צף משמאל לבאנר */
 .pb-pop {
@@ -4086,7 +4086,7 @@ html.spot-embed .wake-banner { display: none !important; }
   box-shadow: 0 0 0 3px rgba(45, 212, 191, .2);
 }
 [data-theme='dark'] input::placeholder, [data-theme='dark'] textarea::placeholder { color: var(--text-mute); }
-[data-theme='dark'] .global-search input:hover { background: var(--surface-2); }
+[data-theme='dark'] .global-search input:hover { background-color: var(--surface-2); }
 [data-theme='dark'] .nav-item.active .count { background: var(--surface); }
 [data-theme='dark'] .today-btn { background: #33270b; border-color: #8a6414; color: #fcd34d; }
 [data-theme='dark'] .today-btn:hover, [data-theme='dark'] .today-btn.active { background: #4a3810; border-color: #f59e0b; }
@@ -4200,16 +4200,17 @@ input[type="search"]:focus,
 .pp-search:focus {
   background-image:
     linear-gradient(90deg, transparent, var(--beam) 45%, #ffffff 50%, var(--beam) 55%, transparent),
-    linear-gradient(90deg, transparent, var(--beam-glow), transparent);
-  background-size: 45% 2px, 60% 9px;
+    linear-gradient(90deg, transparent, var(--beam-glow), transparent),
+    var(--search-glass-on, none);
+  background-size: 45% 2px, 60% 9px, var(--sg-size, 15px) var(--sg-size, 15px);
   background-repeat: no-repeat;
-  background-position: 130% 100%, 140% 100%;
+  background-position: 130% 100%, 140% 100%, right var(--sg-x, 11px) center;
   animation: search-beam 2.4s cubic-bezier(.45, .05, .55, .95) infinite;
   box-shadow: 0 0 0 3px rgba(15, 118, 110, .12), 0 6px 18px -10px var(--beam);
 }
 @keyframes search-beam {
-  0%   { background-position: 130% 100%, 140% 100%; }
-  100% { background-position: -30% 100%, -40% 100%; }
+  0%   { background-position: 130% 100%, 140% 100%, right var(--sg-x, 11px) center; }
+  100% { background-position: -30% 100%, -40% 100%, right var(--sg-x, 11px) center; }
 }
 @media (prefers-reduced-motion: reduce) {
   input[type="search"]:focus,
@@ -4218,11 +4219,74 @@ input[type="search"]:focus,
   .nav-search:focus,
   .pp-search:focus {
     animation: none;
-    background-size: 100% 2px, 100% 8px;
-    background-position: 0 100%, 0 100%;
+    background-size: 100% 2px, 100% 8px, var(--sg-size, 15px) var(--sg-size, 15px);
+    background-position: 0 100%, 0 100%, right var(--sg-x, 11px) center;
   }
 }
 [data-theme="dark"] {
   --beam: #5eead4;
   --beam-glow: rgba(94, 234, 212, .22);
 }
+
+/* ---------------------------------------------- 🔎 שורות החיפוש — זכוכית ושדה אחיד */
+
+/*
+ * משלים את קרן האור שלמעלה: עיצוב אחיד לכל ‎input[type=search]‎ — מסגרת,
+ * רקע רך, וזכוכית מגדלת ב-SVG בתחילת השדה (במקום האימוג'י 🔍). הזכוכית היא
+ * שכבת רקע, ולכן היא גם השכבה השלישית בכלל הקרן — כך היא נשארת במקומה
+ * ונצבעת בצבע המותג בזמן שהקרן נעה.
+ *
+ * ‎--sg-x / --sg-size‎ — המרחק מהקצה וגודל הזכוכית; מוגדרים על השדה, כדי
+ * שגם ה-‎keyframes‎ של הקרן ישאירו אותה במקומה.
+ */
+:root {
+  --search-glass: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%2394a3b8' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cpath d='m20 20-3.5-3.5'/%3E%3C/svg%3E");
+  --search-glass-on: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%230f766e' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cpath d='m20 20-3.5-3.5'/%3E%3C/svg%3E");
+}
+:root[data-theme='dark'] {
+  --search-glass: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%238ba09c' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cpath d='m20 20-3.5-3.5'/%3E%3C/svg%3E");
+  --search-glass-on: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%235eead4' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cpath d='m20 20-3.5-3.5'/%3E%3C/svg%3E");
+}
+
+input[type=search] {
+  --sg-x: 11px; --sg-size: 15px;
+  padding: 8px 11px;
+  padding-inline-start: calc(var(--sg-x) + var(--sg-size) + 8px);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background-color: var(--surface-2);
+  background-image: var(--search-glass);
+  background-repeat: no-repeat;
+  background-position: right var(--sg-x) center;
+  background-size: var(--sg-size) var(--sg-size);
+  color: var(--text);
+  font: inherit;
+  transition: background-color .15s, border-color .15s, box-shadow .15s;
+}
+input[type=search]::placeholder { color: var(--text-mute); }
+input[type=search]:hover {
+  background-color: color-mix(in srgb, var(--brand) 6%, var(--surface-2));
+  border-color: color-mix(in srgb, var(--brand) 35%, var(--border-strong));
+}
+input[type=search]:focus { outline: none; background-color: var(--surface); border-color: var(--brand); }
+input[type=search]::-webkit-search-cancel-button { cursor: pointer; }
+
+/* שדה החיפוש הראשי — הזכוכית מגיעה מהרקע; הסמל נשאר כמשטח לחיצה שקוף */
+.global-search input { --sg-x: 15px; padding-inline-end: 16px; border-color: var(--border); border-radius: 999px; }
+.global-search input:hover { background-color: color-mix(in srgb, var(--brand) 6%, var(--surface-2)); }
+.global-search input:focus { background-color: var(--surface); }
+.global-search .icon { right: 8px; width: 30px; height: 30px; }
+
+/* שדות קטנים — בתפריט ובבוררים */
+input.nav-search, input.pp-search { --sg-x: 9px; --sg-size: 13px; padding-block: 6px; border-radius: 8px; }
+
+/* האלפון מצייר את הסמל שלו (בצבע המותג) — כאן רק הקרן, בלי זכוכית נוספת */
+.pb-field input[type=search] { --search-glass: none; --search-glass-on: none; }
+
+/* תוצאות החיפוש — נפתחות בתנועה רכה מתחת לשדה */
+.search-results { animation: search-pop .16s ease-out; border-color: color-mix(in srgb, var(--brand) 22%, var(--border)); }
+@keyframes search-pop {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: none; }
+}
+@media (prefers-reduced-motion: reduce) { .search-results { animation: none; } }
