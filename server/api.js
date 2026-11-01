@@ -20,6 +20,7 @@ const AiApi = require('./api-ai');
 const TodayApi = require('./api-today');
 const PhonebookApi = require('./api-phonebook');
 const MeetingsApi = require('./api-meetings');
+const WhatsNew = require('./api-whats-new');
 const Zoom = require('./zoom');
 const W = require('./workdays');
 const GContacts = require('./google-contacts');
@@ -780,6 +781,8 @@ function publicActor(actor) {
     boardId: actor.boardId ?? null,
     readOnly: !!actor.readOnly,
     phone: actor.type === 'user' ? D.get('SELECT phone FROM users WHERE id = ?', actor.id)?.phone ?? '' : '',
+    // טלפון במשרד / שלוחה — לאלפון. טקסט חופשי, בלי אימות
+    officePhone: actor.type === 'user' ? D.get('SELECT office_phone FROM users WHERE id = ?', actor.id)?.office_phone ?? '' : '',
     // מזכירה — רואה את מסך היומן וקובעת ביומנים שהעובדים שיתפו איתה
     secretary: actor.type === 'user' && Boolean(D.get('SELECT is_secretary FROM users WHERE id = ?', actor.id)?.is_secretary)
   };
@@ -822,6 +825,19 @@ router.put('/api/me/phone', async (req, res, ctx) => {
   }
   phoneCodes.set(actor.id, { phone, hash: hashCode(code), expires: Date.now() + PHONE_CODE_TTL, tries: 0, sentAt: Date.now() });
   sendJson(res, 200, { pending: true, phone });
+});
+
+/**
+ * הטלפון במשרד / השלוחה של עצמי — מופיע באלפון. בלי קוד אימות: הבוט אינו
+ * מזהה לפיו איש, וקווי במשרד ממילא אינו מקבל וואטסאפ.
+ */
+router.put('/api/me/office-phone', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  if (actor.type !== 'user') throw forbidden();
+  const b = await readJson(req);
+  const officePhone = officePhoneOf(b.officePhone);
+  D.run('UPDATE users SET office_phone = ? WHERE id = ?', officePhone, actor.id);
+  sendJson(res, 200, { officePhone });
 });
 
 /** הקוד שהבוט שלח — רק אז המספר נשמר */
@@ -933,6 +949,8 @@ router.get('/api/bootstrap', async (req, res, ctx) => {
      * הנכון. קריאה נוספת הייתה מציגה קודם לוח ריק ואז מקפיצה אותו.
      */
     prefs: isVendor(actor) ? {} : D.userPrefs(actor.id),
+    // כמה גרסאות "מה חדש" עוד לא נסגרו אצלו — הבאנר נפתח רק אם יש
+    whatsNewPending: WhatsNew.pendingCount(actor),
     settings: {
       orgName: D.getSetting('org_name', 'MESIMON'),
       maxUploadMb: D.getSetting('max_upload_mb', 25),
@@ -2912,52 +2930,38 @@ router.get('/api/home', async (req, res, ctx) => {
   }
 
   /**
-   * פיד העדכונים — בהקשר של המשתמש בלבד.
+   * פיד העדכונים — כלי של מנהל המערכת, על כל הארגון.
    *
-   * עד כה הפיד הראה כל מה שמותר לראות, ולמנהל מערכת זה כל הארגון: מסך הבית
-   * שלו התמלא בעדכונים על משימות של מחלקות אחרות, ובתוכם נעלמו העדכונים
-   * שנוגעים אליו. פיד שאי אפשר לסרוק אינו פיד.
+   * בעבר הוצג לכל העובדים, מצומצם למשימות ולפרויקטים של כל אחד. בפועל רק מי
+   * שאחראי על המערכת כולה צריך לראות "מה זז בארגון" ברצף אחד; לעובד יש את
+   * ההתראות ואת ההיסטוריה בכרטיס המשימה. לכן ההרשאה היא שורה במטריצה
+   * (‎view_activity_feed‎), ומי שאין לו אותה מקבל מערך ריק — והשאילתה כלל
+   * אינה רצה, כך שאי אפשר לחלץ את המידע גם בעקיפין.
    *
-   * ההיקף: משימות שהוקצו לי, ומשימות בפרויקטים שאני אחראי עליהם — אותה
-   * הגדרת בעלות שקובעת את "שלי" בתפריט (ownedProjectIds).
-   *
-   * הסינון ב-SQL ולא בקוד: הגרסה הקודמת שלפה 200 שורות ואז הריצה שאילתה
-   * לכל אחת מהן, וכשרובן נפלו בסינון היא נשארה עם רשימה קצרה מדי.
+   * מה שאני עצמי עשיתי אינו עדכון בשבילי: הפיד נועד לומר מה קרה בלי
+   * שהסתכלתי, ושורה על כל פעולה שלי הייתה בולעת את מה שאחרים עשו.
    */
-  const ownedForFeed = isVendor(actor) ? new Set() : ownedProjectIds(actor);
-  const feedParams = [actor.type === 'vendor' ? 'vendor' : 'user', actor.id];
-  const projectClause = ownedForFeed.size
-    ? ` OR t.project_id IN (${[...ownedForFeed].map(() => '?').join(',')})`
-    : '';
-  feedParams.push(...ownedForFeed);
-
-  /*
-   * מה שאני עצמי עשיתי אינו עדכון בשבילי.
-   *
-   * הפיד נועד לומר מה קרה בלי שהסתכלתי, ועד כה כל שינוי סטטוס וכל תגובה
-   * שלי חזרו אליי כשורה — כך שהפיד היה בעיקר הד של הפעולות שלי, ובתוכו
-   * נבלע מה שאחרים עשו. אותה הבחנה בדיוק כמו בהתראות: אין מודיעים לאדם על
-   * מה שהוא בדיוק כתב.
-   */
-  const feed = D.all(
-    `SELECT a.*, t.title AS task_title FROM audit_log a
-       JOIN tasks t ON t.id = a.task_id
-      WHERE ((t.assignee_type = ? AND t.assignee_id = ?)${projectClause})
-        AND NOT (a.actor_type = ? AND a.actor_id = ?)
-      ORDER BY a.created_at DESC, a.id DESC LIMIT 120`,
-    ...feedParams, actor.type === 'vendor' ? 'vendor' : 'user', actor.id
-  ).filter((row) => {
-    // שכבת הגנה שנייה: ההיקף אינו תחליף להרשאה
-    const task = D.get('SELECT * FROM tasks WHERE id = ?', row.task_id);
-    return task && canSeeTask(actor, task);
-  }).slice(0, 60).map((row) => ({
-    id: row.id, action: row.action, details: row.details,
-    actorName: row.actor_name || 'המערכת',
-    // הממשק מבדיל חזותית בין עדכון של אדם לעדכון של המערכת
-    actorType: row.actor_type ?? 'system',
-    taskId: row.task_id,
-    taskTitle: row.task_title, createdAt: row.created_at
-  }));
+  let feed = [];
+  if (P.may(actor, 'view_activity_feed')) {
+    feed = D.all(
+      `SELECT a.*, t.title AS task_title FROM audit_log a
+         JOIN tasks t ON t.id = a.task_id
+        WHERE NOT (a.actor_type = ? AND a.actor_id = ?)
+        ORDER BY a.created_at DESC, a.id DESC LIMIT 120`,
+      'user', actor.id
+    ).filter((row) => {
+      // שכבת הגנה שנייה: ההרשאה לפיד אינה תחליף להרשאה על המשימה
+      const task = D.get('SELECT * FROM tasks WHERE id = ?', row.task_id);
+      return task && canSeeTask(actor, task);
+    }).slice(0, 60).map((row) => ({
+      id: row.id, action: row.action, details: row.details,
+      actorName: row.actor_name || 'המערכת',
+      // הממשק מבדיל חזותית בין עדכון של אדם לעדכון של המערכת
+      actorType: row.actor_type ?? 'system',
+      taskId: row.task_id,
+      taskTitle: row.task_title, createdAt: row.created_at
+    }));
+  }
 
   /**
    * הודעות שתויגתי בהן. זה מה שאדם אחר ביקש ממני במפורש, ולכן הוא הדבר
@@ -3487,9 +3491,9 @@ router.get('/api/admin/users', async (req, res, ctx) => {
    * אותן שם היה מאשר חשבון בלי לקבוע לו מחלקה ורמת גישה.
    */
   const rows = P.isOrgWide(actor)
-    ? D.all(`SELECT id, full_name, email, phone, role, department, department_id, status, field_worker, is_secretary, zoom_user_id FROM users
+    ? D.all(`SELECT id, full_name, email, phone, office_phone, role, department, department_id, status, field_worker, is_secretary, zoom_user_id FROM users
              WHERE signup_at IS NULL ORDER BY full_name`)
-    : D.all(`SELECT id, full_name, email, phone, role, department, department_id, status, field_worker, is_secretary, zoom_user_id FROM users
+    : D.all(`SELECT id, full_name, email, phone, office_phone, role, department, department_id, status, field_worker, is_secretary, zoom_user_id FROM users
              WHERE department_id ${DEPT_IN} AND role = 'employee' AND signup_at IS NULL ORDER BY full_name`,
       deptsParam(actor));
 
@@ -3505,7 +3509,7 @@ router.get('/api/admin/users', async (req, res, ctx) => {
     grantCatalog: P.GRANT_KEYS.map((key) => ({ key, ...P.GRANTS[key] })),
     mayManageDepartments: P.may(actor, 'manage_departments'),
     users: rows.map((u) => ({
-      id: u.id, name: u.full_name, email: u.email, phone: u.phone, role: u.role,
+      id: u.id, name: u.full_name, email: u.email, phone: u.phone, officePhone: u.office_phone ?? '', role: u.role,
       roleLabel: P.seesRoles(actor) ? P.ROLE_LABELS[u.role] : null, department: u.department,
       departmentId: u.department_id, status: u.status,
       // עובד שטח — עובד גם בשישי (‎server/workdays.js‎)
@@ -3685,7 +3689,9 @@ const IMPORT_COLUMNS = {
   email: { label: 'אימייל', required: true, aliases: ['אימייל', 'מייל', 'אימייל', 'דואראלקטרוני', 'דואר אלקטרוני', 'כתובתמייל', 'כתובת מייל', 'email', 'mail', 'e-mail'] },
   // לטלפון יש אינספור ניסוחים ("מס' טלפון", "טל'", "נייד עבודה", "Phone Number"),
   // ולכן מספיק שהכותרת תכיל אחת המילים — ולא רק תהיה זהה לה
-  phone: { label: 'טלפון', required: false, aliases: ['טל', 'מסטל', 'phone', 'mobile', 'cell', 'tel'], contains: ['טלפון', 'נייד', 'פלאפון', 'סלולר', 'phone', 'mobile'] },
+  phone: { label: 'טלפון', required: false, aliases: ['טל', 'מסטל', 'phone', 'mobile', 'cell', 'tel'], contains: ['טלפון', 'נייד', 'פלאפון', 'סלולר', 'phone', 'mobile'], excludes: ['משרד', 'שלוחה', 'office', 'ext'] },
+  // "טלפון במשרד" מכיל "טלפון" — ולכן לעמודת הנייד יש ‎excludes‎, וזו נבדקת לפי ‎contains‎ משלה
+  officePhone: { label: 'טלפון במשרד', required: false, aliases: ['שלוחה', 'משרד', 'office', 'ext', 'extension'], contains: ['משרד', 'שלוחה', 'office'] },
   department: { label: 'מחלקה', required: false, aliases: ['מחלקה', 'department', 'dept'] },
   role: { label: 'רמת גישה', required: false, aliases: ['רמת גישה', 'רמתגישה', 'הרשאה', 'תפקיד', 'role'] }
 };
@@ -3701,6 +3707,7 @@ function mapHeaders(headerRow) {
     if (!key) return;
     for (const [field, spec] of Object.entries(IMPORT_COLUMNS)) {
       if (map[field] !== undefined) continue;
+      if (spec.excludes?.some((x) => key.includes(normaliseHeader(x)))) continue;
       if (spec.aliases.some((a) => normaliseHeader(a) === key)
         || spec.contains?.some((c) => key.includes(normaliseHeader(c)))) map[field] = index;
     }
@@ -3778,6 +3785,11 @@ function analyseImport(actor, rows) {
       if (phone) seenPhones.add(phone);
     }
 
+    let officePhone = '';
+    if (headers.officePhone !== undefined && cell('officePhone')) {
+      try { officePhone = officePhoneOf(cell('officePhone')); } catch (err) { errors.push(err.message); }
+    }
+
     // רמת גישה: ברירת המחדל היא עובד פנימי, וזו גם היחידה שמנהל מחלקה מעניק
     let role = 'employee';
     if (headers.role !== undefined && cell('role')) {
@@ -3798,7 +3810,7 @@ function analyseImport(actor, rows) {
     // מנהל מחלקה חייב שיוך, בדיוק כמו בהוספה ידנית
     if (role === 'manager' && !departmentId) errors.push('מנהל מחלקה חייב שיוך למחלקה — יש למלא עמודת מחלקה');
 
-    out.push({ line, name, email, phone, role, roleLabel: P.ROLE_LABELS[role], departmentId, department: departmentLabel, errors });
+    out.push({ line, name, email, phone, officePhone, role, roleLabel: P.ROLE_LABELS[role], departmentId, department: departmentLabel, errors });
   });
 
   if (!out.length) throw badRequest('לא נמצאו שורות נתונים בקובץ');
@@ -3850,7 +3862,7 @@ router.post('/api/admin/users/import', async (req, res, ctx) => {
         row.name, row.email, D.hashPassword(password), row.role, departmentName(row.departmentId), 'active', D.nowIso()
       );
       const userId = Number(result.lastInsertRowid);
-      D.run('UPDATE users SET department_id = ?, phone = ? WHERE id = ?', row.departmentId, row.phone, userId);
+      D.run('UPDATE users SET department_id = ?, phone = ?, office_phone = ? WHERE id = ?', row.departmentId, row.phone, row.officePhone ?? '', userId);
       if (row.role === 'manager' && row.departmentId) {
         D.run('UPDATE departments SET manager_user_id = ? WHERE id = ?', userId, row.departmentId);
       }
@@ -3899,6 +3911,7 @@ router.post('/api/admin/users', async (req, res, ctx) => {
 
   // נבדק לפני היצירה — מספר שגוי לא אמור להשאיר משתמש חצי-שמור
   const phone = userPhone(b.phone, 0);
+  const officePhone = officePhoneOf(b.officePhone);
 
   // בלי סיסמה מפורשת נקבעת סיסמה אקראית שאיש אינו יודע —
   // הכניסה נעשית דרך קישור ההזמנה, שבו המשתמש קובע סיסמה בעצמו
@@ -3908,7 +3921,7 @@ router.post('/api/admin/users', async (req, res, ctx) => {
     name, email, D.hashPassword(password), b.role, departmentName(departmentId), 'active', D.nowIso()
   );
   const newUserId = Number(result.lastInsertRowid);
-  D.run('UPDATE users SET department_id = ?, phone = ? WHERE id = ?', departmentId, phone, newUserId);
+  D.run('UPDATE users SET department_id = ?, phone = ?, office_phone = ? WHERE id = ?', departmentId, phone, officePhone, newUserId);
   if (b.fieldWorker === true) D.run('UPDATE users SET field_worker = 1 WHERE id = ?', newUserId);
   if (b.secretary === true) D.run('UPDATE users SET is_secretary = 1 WHERE id = ?', newUserId);
   if (b.zoomUserId && D.get('SELECT 1 FROM zoom_users WHERE id = ?', String(b.zoomUserId))) D.run('UPDATE users SET zoom_user_id = ? WHERE id = ?', String(b.zoomUserId), newUserId);
@@ -4029,6 +4042,7 @@ router.patch('/api/admin/users/:id', async (req, res, ctx) => {
     D.run('UPDATE users SET zoom_user_id = ? WHERE id = ?', z?.id ?? null, user.id);
   }
   if (b.phone !== undefined) D.run('UPDATE users SET phone = ? WHERE id = ?', userPhone(b.phone, user.id), user.id);
+  if (b.officePhone !== undefined) D.run('UPDATE users SET office_phone = ? WHERE id = ?', officePhoneOf(b.officePhone), user.id);
   sendJson(res, 200, { ok: true });
 });
 
@@ -4043,6 +4057,16 @@ function userPhone(raw, userId) {
   const other = D.get('SELECT full_name FROM users WHERE phone = ? AND id <> ?', phone, userId);
   if (other) throw badRequest(`המספר כבר רשום אצל ${other.full_name}`);
   return phone;
+}
+
+/**
+ * טלפון במשרד / שלוחה — טקסט חופשי, כי כך הוא נאמר: "03-1234567 שלוחה 12",
+ * או רק "212". נשמר כפי שהוקלד; נדרשת רק ספרה אחת לפחות, שלא ייכנס "אין".
+ */
+function officePhoneOf(raw) {
+  const value = String(raw ?? '').replace(/\s+/g, ' ').trim().slice(0, 40);
+  if (value && !/\d/.test(value)) throw badRequest(`הטלפון במשרד "${value}" אינו תקין`);
+  return value;
 }
 
 // ---------------------------------------------------------------------------
@@ -4583,9 +4607,11 @@ const PREF_KEYS = [
   'boardFilters', 'boardView', 'projectScope', 'sidebar', 'mobileFilter', 'projectOrder',
   // אילו סוגי התראות קופצים כהתראת מערכת ההפעלה — בחירה אישית לכל משתמש
   'notifyKinds',
+  // לחיצה על מייל באלפון: 'gmail' או 'outlook', כשבחרו "לזכור את הבחירה"
+  'mailClient',
   // משימה ששויכה לי: גם במייל, גם מבוט הוואטסאפ — ‎{ email, whatsapp }‎
   'assignChannels',
-  // בוט הוואטסאפ: שורת תובנות מהמייל בהודעה הראשונה של היום — ‎{ insightsInToday }‎
+  // "תובנות ב-Today" — במסך, בבוט ובמייל הבוקר — ‎{ insightsInToday }‎
   'botPrefs',
   // חתך הפרויקט וההיקף במסך בקרת המשימות
   'trackerProject', 'trackerScope',
@@ -4593,12 +4619,14 @@ const PREF_KEYS = [
   'trackerColumns',
   // אילו קבוצות פרויקט-אב מקופלות בטבלת הבקרה
   'trackerCollapsed',
-  // סידור החלונות בדף הבית — סדר, רוחב, גובה ומה מוסתר
+  // לוח החלונות בדף הבית — מיקום וגודל לכל חלון (מחשב, מסך בינוני, טלפון) ומה מוסתר
   'homeLayout',
   // חתך הפרויקט ברשימת "המשימות שלי" בדף הבית
   'homeProject',
   // אילו עובדים מוצגים במסך היומן של המזכירה
-  'calendarUsers'
+  'calendarUsers',
+  // מראה המערכת — 'light', 'dark' או 'system' (מצב לילה, ב"החשבון שלי")
+  'theme'
 ];
 const PREF_MAX_BYTES = 4096;
 
@@ -4992,6 +5020,7 @@ const botTaskOps = {
 AiApi.register(router, { getTaskOr404, assertVisible, mayOnTask, shapeTask, actorRef, saveAttachment, createTask, assertMayAssignTo, assertMayUseProject, listProjectsFor, newTaskProjects, assignableUserIds, assignBlockReason, botTaskOps });
 TodayApi.register(router, { shapeTask, createTask, getTaskOr404, listProjectsFor, newTaskProjects, assertMayAssignTo });
 PhonebookApi.register(router);
+WhatsNew.register(router);
 MeetingsApi.register(router, { getTaskOr404, assertVisible, shapeTask, canSeeTask });
 Tiful360.register(router, { createTask, saveAttachment, getTaskOr404 });
 

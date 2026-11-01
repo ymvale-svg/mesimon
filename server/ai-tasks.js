@@ -241,6 +241,7 @@ function contextText(req, { withHistory = true } = {}) {
     `הארגון: ${D.getSetting('org_name', '')}`,
     `המשתמש (השולח, כותבים בשמו): ${owner?.full_name ?? ''}`,
     `הנמען: ${req.contact_name || 'לא ידוע'}${req.contact_email ? ` · ${req.contact_email}` : ''}${req.contact_phone ? ` · ${req.contact_phone}` : ''}`,
+    ccOf(req).length ? `בהעתק (CC): ${ccOf(req).map((c) => c.name || c.email).join(', ')}` : null,
     `ההוראה של המשתמש: ${req.instruction}`,
     req.goal ? `הבקשה: ${req.goal}` : null,
     req.success_criteria ? `קריטריון הצלחה: ${req.success_criteria}` : null
@@ -290,6 +291,11 @@ const DRAFT_SCHEMA = {
     contact_name: { type: 'string', description: 'שם הנמען אם הוזכר בהוראה, אחרת ריק' },
     contact_email: { type: 'string', description: 'כתובת מייל אם הופיעה בהוראה, אחרת ריק' },
     contact_phone: { type: 'string', description: 'טלפון אם הופיע בהוראה, אחרת ריק' },
+    cc_names: {
+      type: 'array',
+      items: { type: 'string' },
+      description: 'מי לשים בהעתק (CC) — רק אם המשתמש ביקש ("לשים בכתב את", "בהעתק", "CC", "לכתב את"). שם או כתובת מייל, כפי שנאמר. בתיקון — הרשימה המלאה אחרי התיקון (כולל מי שכבר היה, אלא אם ביקשו להוריד). אחרת ריק'
+    },
     subject: { type: 'string' },
     body: { type: 'string' },
     notes: { type: 'string', description: 'הערה קצרה למשתמש אם חסר משהו חשוב (למשל אין כתובת מייל), אחרת ריק' },
@@ -299,7 +305,7 @@ const DRAFT_SCHEMA = {
       description: 'מההתכתבות האחרונה עם הנמען: מה כדאי להוסיף למייל ולא נכלל בו. כל הצעה משפט קצר. ריק כשאין התכתבות או שאין מה להוסיף'
     }
   },
-  required: ['title', 'goal', 'success_criteria', 'contact_name', 'contact_email', 'contact_phone', 'subject', 'body', 'notes', 'suggestions'],
+  required: ['title', 'goal', 'success_criteria', 'contact_name', 'contact_email', 'contact_phone', 'cc_names', 'subject', 'body', 'notes', 'suggestions'],
   additionalProperties: false
 };
 
@@ -344,6 +350,21 @@ const channelNote = (channel) => (channel === 'whatsapp'
  * כשיש חתימה, ה-AI אינו חותם בעצמו, אחרת השם היה מופיע פעמיים.
  */
 const SIGNATURE_NOTE = 'למשתמש יש חתימה ב-Gmail, והיא תתווסף אוטומטית בסוף המייל: סיים במילת סיום בלבד ("תודה,", "בברכה,") — בלי שם, תפקיד, ארגון או פרטי קשר.';
+/**
+ * מייל שיצא בלי חתימה מ-Gmail: נרשם ביומן עם הסיבה, והמשתמש מקבל על זה
+ * התראה פעם אחת — עם ההסבר מה לעשות (בדרך כלל: חתימה רק ב-Outlook).
+ */
+function signatureMissing(userId, reason, what = '') {
+  console.warn(`[משימון] מייל יצא בלי חתימה מ-Gmail (משתמש ${userId}${what ? `, ${what}` : ''}): ${reason}`);
+  if (reason === 'error' || D.userPrefs(userId).signatureWarned) return;
+  D.setUserPref(userId, 'signatureWarned', D.nowIso());
+  D.notify({
+    targetType: 'user', targetId: userId, kind: 'ai',
+    title: 'המייל יצא בלי החתימה שלך',
+    body: `${Gmail.SIGNATURE_HELP[reason] ?? ''} עד אז נוסף בסוף המייל השם שלך מהפרופיל.`.trim()
+  });
+}
+
 async function signatureNote(userId, channel) {
   if (channel !== 'email' || !userId) return null;
   return (await Gmail.signature(userId)) ? SIGNATURE_NOTE : null;
@@ -394,7 +415,7 @@ async function mailContext(userId, email) {
   }
 }
 
-async function draftInitial({ owner, instruction, contact = {}, projectName = null, channel = 'email', feedback = '', previous = null, context = '' }) {
+async function draftInitial({ owner, instruction, contact = {}, cc = [], projectName = null, channel = 'email', feedback = '', previous = null, context = '' }) {
   const lines = [
     `תאריך היום: ${todayLocal()}`,
     `הארגון: ${D.getSetting('org_name', '')}`,
@@ -403,6 +424,7 @@ async function draftInitial({ owner, instruction, contact = {}, projectName = nu
     contact.name || contact.email || contact.phone
       ? `הנמען שנבחר: ${contact.name || ''}${contact.email ? ` · ${contact.email}` : ''}${contact.phone ? ` · ${contact.phone}` : ''}`
       : 'הנמען לא נבחר בנפרד — חלץ אותו מההוראה אם אפשר.',
+    cc.length ? `בהעתק (CC) כרגע: ${cc.map((c) => c.name || c.email).join(', ')}` : null,
     // תאריך היעד אינו נמסר ל-AI — ראה ‎contextText‎
     projectName ? `פרויקט: ${projectName}` : null,
     channelNote(channel),
@@ -548,11 +570,14 @@ async function deliver(req, msgId) {
       // מהכתובת של המשתמש עצמו: הנמען רואה אותו, התשובה חוזרת אליו, והמייל נשאר אצלו ב"דואר יוצא".
       // בסוף — החתימה שלו מ-Gmail, כמו כל מייל שהוא שולח משם
       const body = await Gmail.signed(req.owner_id, { text: msg.body, html: emailHtml(msg.body) });
+      if (body.missing) signatureMissing(req.owner_id, body.missing, `משימת AI #${req.task_id ?? req.id}`);
       const built = Mailer.buildMessage({
         from: sender.email,
         fromName: owner.full_name,
         to: req.contact_email,
         toName: req.contact_name || undefined,
+        // מי שבהעתק נשאר בשרשור — גם בתזכורות, שיוצאות באותה שיחה
+        cc: ccOf(req).map((c) => c.email),
         inReplyTo: thread[thread.length - 1],
         references: thread.slice(-10),
         subject,
@@ -606,16 +631,35 @@ async function deliver(req, msgId) {
  * יוצר משימת AI מטיוטה שהמשתמש אישר, ושולח את הפנייה הראשונה.
  * המשימה עצמה כבר נוצרה בנקודת הקצה — כאן נוצר המעקב.
  */
-async function launch({ taskId, owner, instruction, draft, contact, policy, channel }) {
+/**
+ * מי בהעתק — כתובות תקינות בלבד, בלי הנמען עצמו ובלי השולח (שממילא מקבל
+ * עותק ב"דואר יוצא"), בלי כפילויות, עד 10.
+ */
+function cleanCc(list, { contactEmail = '', ownerEmail = '' } = {}) {
+  const skip = new Set([contactEmail, ownerEmail].map((x) => String(x ?? '').trim().toLowerCase()).filter(Boolean));
+  const out = [];
+  for (const c of Array.isArray(list) ? list : []) {
+    const email = String(c?.email ?? '').trim().toLowerCase();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || skip.has(email)) continue;
+    skip.add(email);
+    out.push({ name: String(c?.name ?? '').trim().slice(0, 120), email });
+  }
+  return out.slice(0, 10);
+}
+
+const ccOf = (req) => { try { return JSON.parse(req.cc || '[]'); } catch { return []; } };
+
+async function launch({ taskId, owner, instruction, draft, contact, cc = [], policy, channel }) {
   const now = D.nowIso();
   const r = D.run(
     `INSERT INTO ai_requests (task_id, owner_id, instruction, goal, success_criteria, contact_name, contact_email,
-       contact_phone, contact_type, contact_ref_id, state, policy, created_at, updated_at)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+       contact_phone, contact_type, contact_ref_id, state, policy, cc, created_at, updated_at)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     taskId, owner.id, instruction, draft.goal ?? '', draft.success_criteria ?? '',
     contact.name ?? '', String(contact.email ?? '').trim().toLowerCase(), contact.phone ?? '',
     ['vendor', 'user'].includes(contact.type) ? contact.type : 'external', contact.refId ?? null,
-    'draft', JSON.stringify(cleanPolicy({ ...policy, firstChannel: channel }, owner.id)), now, now
+    'draft', JSON.stringify(cleanPolicy({ ...policy, firstChannel: channel }, owner.id)),
+    JSON.stringify(channel === 'email' ? cleanCc(cc, { contactEmail: contact.email, ownerEmail: owner.email }) : []), now, now
   );
   const req = requestById(Number(r.lastInsertRowid));
 
@@ -1445,7 +1489,7 @@ module.exports = {
   setHooks, start, stop, tick,
   draftInitial, mailContext, emailHtml, launch, approve, discard, reviseMessage, answerQuestion, setState, updateDetails,
   interpretNote, applyNote, upcomingFor, waitingOnUser, contactDetected, handleInbound, matchEmail,
-  requestById,
+  requestById, signatureMissing, cleanCc, ccOf,
   requestByTask, summaryFor, detailFor, defaultPolicy, cleanPolicy, status, STATE_LABELS, OPEN_STATES,
   // לבדיקות
   _internal: { nextWindow, inWindow, afterDays, ladder, dateToFollowUp, endOfLocalDay, tidyBody, workdaysUntil }

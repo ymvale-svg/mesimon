@@ -73,6 +73,9 @@ const AiTaskView = (() => {
       // מהקלטה — היעד שנאמר כבר מולא
       dueDate: opts.dueDate ?? '',
       policy: { ...status.defaults },
+      // בהעתק (CC): ‎[{name, email}]‎ · ‎ccAsk‎ — שמות מההוראה שלא ברור למי הם
+      cc: [],
+      ccAsk: [],
       draft: null
     };
 
@@ -80,6 +83,107 @@ const AiTaskView = (() => {
     const m = UI.modal({ title: '✨ משימת AI חדשה', body, size: 'wide' });
 
     const draw = () => UI.mount(body, state.step === 'compose' ? composeStep() : previewStep());
+
+    // --- חיפוש הנמען לפי שם באנשי הקשר (עובדים, ספקים, אלפון, Google)
+
+    async function findByName(name) {
+      const q = String(name ?? '').trim();
+      if (q.length < 2) return [];
+      try {
+        const { contacts } = await API.get(`/api/ai/contacts?q=${encodeURIComponent(q)}`);
+        return contacts.filter((c) => c.email || c.type === 'user').slice(0, 6);
+      } catch {
+        return [];
+      }
+    }
+
+    /** ממלאים מעצמנו רק התאמה אחת, עם מייל, שאינה עובד בארגון */
+    const autoMatch = (found) => (found.length === 1 && found[0].email && found[0].type !== 'user' ? found[0] : null);
+
+    const sourceLabel = (c) => ContactPicker.SOURCE[c.source]?.label ?? 'אנשי הקשר';
+
+    const foundNote = (c) => el('div.mute-sm.ai-found', {
+      text: `📇 נמצא באנשי הקשר: ${c.email} · ${sourceLabel(c)}`
+    });
+
+    function matchChoices(found, onPick) {
+      return el('div.ai-matches', {}, [
+        el('div.mute-sm', { text: 'נמצאו כמה אנשי קשר בשם הזה — בחרו:' }),
+        el('div.flex', { style: { gap: '6px', flexWrap: 'wrap', marginTop: '4px' } }, found.map((c) =>
+          el('button.btn.btn-sm', { type: 'button', onclick: () => onPick(c) },
+            [`${c.name} — ${c.type === 'user' ? 'עובד/ת בארגון' : c.email} · ${sourceLabel(c)}`])))
+      ]);
+    }
+
+    function applyContact(c) {
+      state.contact = {
+        ...state.contact,
+        name: c.name,
+        email: c.email || '',
+        phone: state.contact.phone || ContactPicker.mobileOf(c),
+        type: c.type === 'user' ? 'user' : c.type === 'vendor' ? 'vendor' : 'external',
+        refId: c.refId ?? null,
+        source: c.source
+      };
+    }
+
+    /**
+     * אחרי ניסוח: שם בלי מייל (הוקלד חופשי, או שה-AI חילץ אותו מההוראה) —
+     * חיפוש באנשי הקשר. התוצאה נשמרת ב-‎state.lookup‎ ומוצגת בשלב הטיוטה.
+     */
+    /**
+     * שורת ההעתק — שבבים עם ✕, ושדה להוספה מאנשי הקשר. ‎onChange‎ — אחרי
+     * כל שינוי (בשלב הטיוטה: לצייר מחדש).
+     */
+    function ccEditor(onChange = () => {}) {
+      const chips = el('div.ai-cc-chips');
+      const drawChips = () => UI.mount(chips, state.cc.map((c, i) => el('span.ai-cc-chip', { title: c.email }, [
+        c.name || c.email,
+        el('button', { type: 'button', 'aria-label': `הסרה מההעתק: ${c.name || c.email}`, onclick: () => { state.cc.splice(i, 1); drawChips(); onChange(); } }, ['✕'])
+      ])));
+      const add = (c) => {
+        const email = String(c.email ?? '').trim().toLowerCase();
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return UI.toast(`ל${c.name || 'איש הקשר'} אין כתובת מייל`, 'error');
+        if (email === String(state.contact.email ?? '').toLowerCase()) return UI.toast('זה הנמען הראשי', 'error');
+        if (!state.cc.some((x) => x.email === email)) state.cc.push({ name: c.name || '', email });
+        picker.input.value = '';
+        drawChips();
+        onChange();
+      };
+      const picker = ContactPicker.create({ onPick: add });
+      picker.input.placeholder = 'הוספה להעתק — שם או מייל';
+      // כתובת שהוקלדה ידנית — Enter מוסיף אותה
+      picker.input.addEventListener('keydown', (e) => {
+        const v = picker.input.value.trim();
+        if (e.key === 'Enter' && /@/.test(v)) { e.preventDefault(); add({ email: v }); }
+      });
+      drawChips();
+      return el('div.ai-cc', {}, [chips, picker.node]);
+    }
+
+    /** השמות שה-AI הוציא מההוראה ("תשים בכתב את דני") — מחפשים כל אחד באנשי הקשר */
+    async function resolveCcNames(names) {
+      state.ccAsk = [];
+      for (const raw of (names ?? []).map((x) => String(x).trim()).filter(Boolean)) {
+        if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(raw)) {
+          if (!state.cc.some((c) => c.email === raw.toLowerCase())) state.cc.push({ name: '', email: raw.toLowerCase() });
+          continue;
+        }
+        if (state.cc.some((c) => c.name && c.name.includes(raw))) continue;
+        const found = (await findByName(raw)).filter((c) => c.email && c.email.toLowerCase() !== String(state.contact.email).toLowerCase());
+        if (found.length === 1) state.cc.push({ name: found[0].name, email: found[0].email.toLowerCase() });
+        else state.ccAsk.push({ name: raw, found });
+      }
+    }
+
+    async function lookupRecipient() {
+      const c = state.contact;
+      if (state.channel !== 'email' || c.type === 'user' || c.email || !c.name) { state.lookup = null; return; }
+      const found = await findByName(c.name);
+      const single = autoMatch(found);
+      if (single) { applyContact(single); state.lookup = { filled: single }; }
+      else state.lookup = { query: c.name, found };
+    }
 
     // --- שלב 1: מה צריך וממי
 
@@ -109,10 +213,27 @@ const AiTaskView = (() => {
         onType: () => {
           state.contact.type = 'external';
           state.contact.refId = null;
+          /*
+           * הקלדה של שם אחר אחרי שנבחר איש קשר — המייל והטלפון שלו כבר אינם
+           * של מי שבשדה. בלי הניקוי הפנייה הייתה יוצאת לאדם הקודם.
+           */
+          if (pickedDetails) {
+            emailInput.value = '';
+            phoneInput.value = '';
+            pickedDetails = false;
+          }
           UI.mount(extrasBox);
           showColleague();
         },
-        onPick: (c) => {
+        onPick: (c) => pickContact(c)
+      });
+      // המייל והטלפון שבשדות מולאו מבחירת איש קשר (ולא הוקלדו ידנית)
+      let pickedDetails = !!state.contact.email && !!state.contact.source;
+      function pickContact(c) {
+        {
+          pickedDetails = true;
+          // בחירה מהצעת החיפוש (ולא מהרשימה של השדה) — השם מתעדכן לשם המלא
+          if (picker.input.value.trim() !== c.name) picker.input.value = c.name;
           state.contact.source = c.source;
           emailInput.value = c.email || '';
           // שדה הטלפון כאן הוא לוואטסאפ — רק נייד (05X), אחרת נשאר ריק
@@ -134,9 +255,28 @@ const AiTaskView = (() => {
           fromPhonebook = c.source === 'phonebook';
           showPbSave();
         }
-      });
+      }
       const nameInput = picker.input;
       showColleague();
+
+      /*
+       * שם שהוקלד ולא נבחר מהרשימה, בלי מייל: מחפשים אותו באנשי הקשר כשעוזבים
+       * את השדה. התאמה אחת עם מייל — ממלאים; כמה — מציעים לבחור. עובד אינו
+       * נבחר מעצמו: בחירה בו הופכת את הפנייה למשימה פנימית, וזו החלטה של המשתמש.
+       */
+      picker.input.addEventListener('change', async () => {
+        const name = picker.input.value.trim();
+        if (state.contact.type !== 'external' || emailInput.value.trim() || name.length < 2) return;
+        const found = await findByName(name);
+        if (picker.input.value.trim() !== name || emailInput.value.trim()) return;
+        const single = autoMatch(found);
+        if (single) {
+          pickContact(single);
+          extrasBox.prepend(foundNote(single));
+        } else if (found.length) {
+          UI.mount(extrasBox, matchChoices(found, pickContact));
+        }
+      });
 
       /*
        * נמען מבחוץ שאינו באלפון הארגוני — הצעה קטנה לשמור אותו שם, כדי
@@ -230,6 +370,7 @@ const AiTaskView = (() => {
         extrasBox,
         pbBox,
         colleagueNote,
+        state.channel === 'email' ? UI.field('📎 בהעתק (CC) — לא חובה', ccEditor(), 'אפשר גם לכתוב בהוראה: "לשים בכתב את דני"') : null,
         el('div.row', {}, [
           channelSeg ? UI.field('ערוץ ראשון', channelSeg) : null,
           UI.field('פרויקט', projectSelect),
@@ -253,9 +394,10 @@ const AiTaskView = (() => {
     }
 
     async function makeDraft(feedback = '') {
-      const { draft, signature } = await API.post('/api/ai/draft', {
+      const { draft, signature, signatureMissing } = await API.post('/api/ai/draft', {
         instruction: state.instruction,
         contact: state.contact,
+        cc: state.cc,
         channel: state.channel,
         projectId: state.projectId || null,
         dueDate: state.dueDate || null,
@@ -266,9 +408,24 @@ const AiTaskView = (() => {
       if (!state.contact.name && draft.contact_name) state.contact.name = draft.contact_name;
       if (!state.contact.email && draft.contact_email) state.contact.email = draft.contact_email;
       if (!state.contact.phone && draft.contact_phone) state.contact.phone = draft.contact_phone;
+      if (!feedback) await lookupRecipient();
+      if (state.channel === 'email') await resolveCcNames(draft.cc_names);
       // תיקון טיוטה אינו דורס כותרת שהמשתמש כבר ערך
       state.draft = feedback && state.draft ? { ...draft, title: state.draft.title } : draft;
       state.signature = signature ?? null;
+      state.signatureMissing = signatureMissing ?? null;
+    }
+
+    /** אין חתימה ב-Gmail — למה, ומה ייכתב בסוף המייל במקומה */
+    function signatureWarning(miss) {
+      return el('div.alert.alert-warn.ai-signature-warn', {}, [
+        el('span', { text: '✍️' }),
+        el('div', {}, [
+          el('b', { text: 'המייל ייצא בלי החתימה שלך. ' }),
+          el('span', { text: miss.help ?? '' }),
+          miss.fallback ? el('div.mute-sm', { style: { marginTop: '4px', whiteSpace: 'pre-line' }, text: `עד אז יתווסף בסוף המייל:\n${miss.fallback}` }) : null
+        ])
+      ]);
     }
 
     /**
@@ -297,6 +454,36 @@ const AiTaskView = (() => {
       const toEmail = el('input', { type: 'email', value: state.contact.email, dir: 'ltr' });
       const toPhone = el('input', { type: 'tel', value: state.contact.phone, dir: 'ltr' });
       const toName = el('input', { type: 'text', value: state.contact.name });
+      // שינוי השם בטיוטה — הנמען הקודם אינו תקף; מחפשים את החדש באנשי הקשר
+      toName.addEventListener('change', async () => {
+        if (toName.value.trim() === state.contact.name) return;
+        read();
+        state.contact.email = '';
+        state.contact.type = 'external';
+        state.contact.refId = null;
+        await lookupRecipient();
+        draw();
+      });
+      // שמות להעתק שלא ברור למי הם — שואלים, ולא מנחשים
+      const ccAskBox = () => (state.ccAsk.length ? el('div.ai-matches', {}, state.ccAsk.map((a) => el('div', { style: { marginBottom: '6px' } }, [
+        el('div.mute-sm', { text: a.found.length ? `בהעתק — למי התכוונת ב"${a.name}"?` : `"${a.name}" לא נמצא באנשי הקשר — הוסיפו אותו בשדה ההעתק עם כתובת מייל` }),
+        el('div.flex', { style: { gap: '6px', flexWrap: 'wrap', marginTop: '4px' } }, [
+          ...a.found.map((c) => el('button.btn.btn-sm', { type: 'button', onclick: () => {
+            read();
+            if (!state.cc.some((x) => x.email === c.email.toLowerCase())) state.cc.push({ name: c.name, email: c.email.toLowerCase() });
+            state.ccAsk = state.ccAsk.filter((x) => x !== a);
+            draw();
+          } }, [`${c.name} — ${c.email} · ${sourceLabel(c)}`])),
+          el('button.btn.btn-sm.btn-ghost', { type: 'button', onclick: () => { read(); state.ccAsk = state.ccAsk.filter((x) => x !== a); draw(); } }, ['בלי'])
+        ])
+      ]))) : null);
+      const lookupBox = (() => {
+        const l = state.lookup;
+        if (!l || internal || !isEmail) return null;
+        if (l.filled) return foundNote(l.filled);
+        if (l.found?.length) return matchChoices(l.found, (c) => { read(); applyContact(c); state.lookup = { filled: c.email ? c : null }; draw(); });
+        return el('div.mute-sm.ai-found', { text: `לא נמצא "${l.query}" באנשי הקשר — הקלידו את כתובת המייל` });
+      })();
       const subject = el('input', { type: 'text', value: d.subject });
       const text = el('textarea.ai-body', {});
       text.value = d.body;
@@ -332,6 +519,15 @@ const AiTaskView = (() => {
       feedback.addEventListener('keydown', (e) => { if (e.key === 'Enter') doRedo(); });
 
       const send = el('button.btn.btn-primary', {}, [internal ? `👤 העברה ל${state.contact.name || 'עובד'}` : isEmail ? '📧 אישור ושליחה' : '💬 אישור ושליחה']);
+      // מייל בלי כתובת היה יוצר משימה שהשליחה שלה נכשלת — הכפתור כבוי עד שיש כתובת
+      const noAddress = () => isEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(toEmail.value.trim());
+      const ccPending = () => isEmail && state.ccAsk.length > 0;
+      const syncSend = () => {
+        send.disabled = noAddress() || ccPending();
+        send.title = noAddress() ? 'חסרה כתובת מייל תקינה לנמען' : ccPending() ? 'בחרו מי בהעתק, או "בלי"' : '';
+      };
+      toEmail.addEventListener('input', syncSend);
+      syncSend();
       send.addEventListener('click', async () => {
         read();
         send.disabled = true;
@@ -340,6 +536,7 @@ const AiTaskView = (() => {
             instruction: state.instruction,
             draft: d,
             contact: state.contact,
+            cc: isEmail ? state.cc : [],
             channel: state.channel,
             projectId: state.projectId || null,
             dueDate: UI.fromInputDate(state.dueDate),
@@ -379,12 +576,16 @@ const AiTaskView = (() => {
             UI.field('אל', toName),
             internal ? null : isEmail ? UI.field('מייל', toEmail) : UI.field('טלפון', toPhone)
           ]),
+          lookupBox,
+          isEmail ? UI.field('📎 בהעתק (CC)', ccEditor()) : null,
+          isEmail ? ccAskBox() : null,
           isEmail ? UI.field('נושא', subject) : null,
           UI.field(internal ? 'הבקשה (תופיע בתיאור המשימה)' : isEmail ? 'המייל' : 'ההודעה', text,
             internal ? 'המשימה תשויך אליו במשימון, עם התראה רגילה על משימה חדשה.'
               : isEmail ? 'יישלח מתיבת ה-Gmail שלך ויישאר אצלך ב"דואר יוצא". התשובה תחזור אליך ותיקלט אוטומטית.' : 'יישלח מהוואטסאפ שלך.')
         ]),
         isEmail && state.signature ? signaturePreview(state.signature) : null,
+        isEmail && !state.signature && state.signatureMissing ? signatureWarning(state.signatureMissing) : null,
         el('div.ai-revise', {}, [feedback, redo]),
         UI.field('מתי זה נחשב שהתקבל?', criteria, 'לפי זה ה-AI יכריע אם התשובה שחזרה מספיקה וסוגר את המשימה'),
         el('div.ai-foot', {}, [
@@ -850,28 +1051,41 @@ const AiTaskView = (() => {
 
     /**
      * "להציע משימות ופגישות מהוואטסאפ שלי" — שיחות פרטיות בלבד (קבוצות נסרקות
-     * דרך הבוט הארגוני). מספרים שלא לסרוק — אחד בשורה.
+     * דרך הבוט הארגוני), ורק עם אנשי קשר עסקיים. שתי רשימות, מספר בשורה:
+     * עסקיים נוספים, ו"לא לסרוק" — שגוברת על הכול.
      */
     function scanBox() {
       const box = el('div', { style: { marginTop: '14px' } });
+      const local = (n) => (n.startsWith('972') ? `0${n.slice(3)}` : n);
+      const listOf = (ta) => ta.value.split(/[\n,]+/).map((x) => x.trim()).filter(Boolean);
       API.get('/api/me/wa-scan').then((p) => {
         const on = el('input', { type: 'checkbox', checked: p.enabled });
+        const business = el('textarea', { dir: 'ltr', placeholder: '050-0000000', style: { minHeight: '56px' } });
+        business.value = (p.business ?? []).map(local).join('\n');
         const ignore = el('textarea', { dir: 'ltr', placeholder: '050-0000000', style: { minHeight: '56px' } });
-        ignore.value = (p.ignore ?? []).map((n) => (n.startsWith('972') ? `0${n.slice(3)}` : n)).join('\n');
+        ignore.value = (p.ignore ?? []).map(local).join('\n');
         const savePrefs = async () => {
           try {
-            await API.put('/api/me/wa-scan', { enabled: on.checked, ignore: ignore.value.split(/[\n,]+/).map((x) => x.trim()).filter(Boolean) });
+            await API.put('/api/me/wa-scan', { enabled: on.checked, business: listOf(business), ignore: listOf(ignore) });
             UI.success('נשמר');
           } catch (err) { UI.error(err); }
         };
         on.addEventListener('change', savePrefs);
+        business.addEventListener('change', savePrefs);
         ignore.addEventListener('change', savePrefs);
         UI.mount(box,
-          el('div.ai-section-title', { text: '💬 הצעות מהוואטסאפ שלי' }),
+          el('div.ai-section-title', { text: '💬 הצעות ותובנות מהוואטסאפ שלי' }),
           el('label.checkbox', {}, [on, ' להציע משימות ופגישות מהודעות שמגיעות אליי בוואטסאפ']),
-          el('div.mute-sm', { text: 'רק שיחות פרטיות, ורק עניינים של עבודה — ההצעות מגיעות ל"ממתין לאישורך", ושום דבר לא נוצר בלי אישור. תוכן ההודעות לא נשמר במשימון.' }),
+          el('div.mute-sm', { text: 'רק שיחות פרטיות, ורק עם אנשי קשר עסקיים — ההצעות מגיעות ל"ממתין לאישורך", ושום דבר לא נוצר בלי אישור. תוכן ההודעות לא נשמר במשימון.' }),
           !p.ai ? el('div.mute-sm.text-warn', { text: 'חיבור ה-AI עוד לא מוגדר בשרת — ההצעות יתחילו כשיוגדר.' }) : null,
-          UI.field('מספרים שלא לסרוק (משפחה, חברים)', ignore, 'אחד בשורה')
+          el('div.alert.alert-info.wa-business-note', {}, [el('span', { text: '💼' }), el('div', {}, [
+            el('b', { text: 'מי נחשב עסקי אוטומטית: ' }),
+            'עובדים בארגון, אנשי האלפון, ספקים, אנשי קשר בגוגל עם חברה או תפקיד, ומי שעבדת איתו במשימות, במשימות AI ובפגישות. ',
+            'כל שיחה אחרת לא נקראת ולא נשלחת ל-AI. ממספר לא מוכר ששלח כמה הודעות — הבוט ישאל אותך פעם אחת "עסקי או אישי?".'
+          ])]),
+          UI.field('אנשי קשר עסקיים נוספים', business, 'אחד בשורה · אפשר גם בבוט: "יוסי עסקי"'),
+          UI.field('מספרים שלא לסרוק (משפחה, חברים)', ignore, 'אחד בשורה · גובר על "עסקי" · בבוט: "אל תסרוק את דני"'),
+          p.asked?.length ? el('div.mute-sm', { text: `מחכה לתשובה שלך על ${p.asked.length === 1 ? 'מספר אחד' : `${p.asked.length} מספרים`}: ${p.asked.map(local).join(', ')} — הוסיפו לאחת הרשימות, או ענו לבוט.` }) : null
         );
       }).catch(() => {});
       return box;

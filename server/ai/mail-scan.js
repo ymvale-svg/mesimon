@@ -695,7 +695,11 @@ function reject(id, actor, { ignoreSender = false } = {}) {
   const sug = ownSuggestion(id, actor.id);
   if (sug.status !== 'pending') return;
   D.run("UPDATE ai_suggestions SET status = 'rejected', decided_at = ? WHERE id = ?", D.nowIso(), id);
-  if (ignoreSender) setSender(actor.id, sug.from_email, 'ignore');
+  if (!ignoreSender) return;
+  const data = parseJson(sug.data, {});
+  // מהוואטסאפ האישי: "לא לסרוק את X מעכשיו" — המספר עובר ל"לא לסרוק"
+  if (data.personal && data.chatPhone) require('./whatsapp-scan').mark(actor.id, data.chatPhone, 'personal');
+  else setSender(actor.id, sug.from_email, 'ignore');
 }
 
 /** "כבר קיימת אצל…" → "צרף אותי": אחראי נוסף על המשימה הקיימת */
@@ -772,6 +776,11 @@ function shape(sug, conn) {
     subject: sug.subject,
     receivedAt: sug.received_at,
     link: conn?.email && sug.gmail_id ? Gmail.webLink(conn.email, sug.gmail_id) : null,
+    // לזיהוי מייל או הודעה שהם גם הצעה וגם תובנה — מוצגים פעם אחת, כהצעה
+    gmailId: sug.gmail_id || null,
+    headerId: sug.header_id || null,
+    // מהוואטסאפ האישי: כמה הצעות מהשולח כבר נדחו — מהשנייה מציעים "לא לסרוק אותו"
+    senderRejections: data.personal && data.chatPhone ? require('./whatsapp-scan').rejectionsFrom(sug.user_id, data.chatPhone) : 0,
     trusted: senderMode(sug.user_id, sug.from_email) === 'trust',
     taskId: sug.task_id,
     data,

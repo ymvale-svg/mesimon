@@ -44,6 +44,56 @@ const App = (() => {
 
   const getPref = (key, fallback = null) => state.prefs?.[key] ?? fallback;
 
+  // ------------------------------------------------------------- מצב לילה
+
+  /**
+   * מראה המערכת: בהיר, לילה, או לפי הגדרת מערכת ההפעלה. ההעדפה נשמרת בשרת
+   * כמו כל העדפה — כדי שתלך אחרי המשתמש בין מכשירים — ובמקביל במכשיר:
+   * הסקריפט הקטן בראש index.html קורא את העותק המקומי לפני הציור הראשון,
+   * ולכן מי שבחר לילה אינו רואה הבזק לבן בכל טעינה.
+   *
+   * "לפי המערכת" מוחל כאן ל"בהיר" או "לילה" ממש, ולא נשאר ל-CSS: כך יש
+   * בגיליון מצב אחד לכל מראה (‎data-theme‎), והמעבר של מערכת ההפעלה בערב
+   * מתעדכן חי דרך המאזין למטה.
+   */
+  const THEME_KEY = 'mesimon.theme';
+  const THEMES = [
+    { key: 'light', label: 'בהיר', glyph: '☀' },
+    { key: 'dark', label: 'לילה', glyph: '☾' },
+    // בלי סימן: אין תו "חצי ירח" שמופיע זהה בכל הגופנים, ומילים מספיקות
+    { key: 'system', label: 'לפי המערכת', glyph: '' }
+  ];
+  const DARK_QUERY = window.matchMedia('(prefers-color-scheme: dark)');
+
+  function themePref() {
+    let local = null;
+    try { local = localStorage.getItem(THEME_KEY); } catch { /* אחסון חסום — נשארים עם השרת */ }
+    const value = getPref('theme', null) ?? local;
+    return THEMES.some((t) => t.key === value) ? value : 'light';
+  }
+
+  function applyTheme(pref = themePref(), { animate = false } = {}) {
+    const html = document.documentElement;
+    const dark = pref === 'dark' || (pref === 'system' && DARK_QUERY.matches);
+    /*
+     * מעבר רך רק כשהמשתמש מחליף. בטעינה המצב כבר נכון מהסקריפט שבראש הדף,
+     * ומעבר שם היה מנפיש כל כרטיס מלבן לכהה.
+     */
+    if (animate && !window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      html.classList.add('theme-switching');
+      setTimeout(() => html.classList.remove('theme-switching'), 320);
+    }
+    html.dataset.theme = dark ? 'dark' : 'light';
+    try { localStorage.setItem(THEME_KEY, pref); } catch { /* המכשיר לא יזכור — השרת כן */ }
+  }
+
+  function setTheme(pref) {
+    setPref('theme', pref);
+    applyTheme(pref, { animate: true });
+  }
+
+  DARK_QUERY.addEventListener('change', () => { if (themePref() === 'system') applyTheme(); });
+
   const root = () => document.getElementById('app');
 
   // חתך רשימת הפרויקטים בתפריט — 'mine' או 'all'. נשמר במכשיר, לא בשרת.
@@ -142,6 +192,8 @@ const App = (() => {
     try {
       const data = await API.bootstrap();
       Object.assign(state, data);
+      // ההעדפה מהשרת גוברת על העותק במכשיר — משתמש אחר, או בחירה ממכשיר אחר
+      applyTheme();
       await refreshNotifications();
       startNotifPolling();
       const params = new URLSearchParams(location.search);
@@ -152,6 +204,8 @@ const App = (() => {
       navigate(isVendor() ? 'vendor' : (isPhone() || params.get('view') === 'today') ? 'today' : 'home');
       openTaskFromUrl();
       if (!isVendor()) {
+        // באנר "מה חדש" — רק כשיש גרסה שעוד לא נראתה, או מקישור במייל
+        WhatsNewView.maybeShow();
         AiInboxView.handleReturn();
         openFromUrl(params);
         refreshTodayCount();
@@ -1096,7 +1150,7 @@ const App = (() => {
       ]);
     }
 
-    /** הבוט: האם ההודעה הראשונה של היום כוללת שורת תובנות מהמייל. דלוק כברירת מחדל */
+    /** האם Today כולל את התובנות (מסך, בוט ומייל הבוקר). דלוק כברירת מחדל */
     function botPrefsBox() {
       const box = el('input', { type: 'checkbox', checked: getPref('botPrefs', {})?.insightsInToday !== false });
       box.addEventListener('change', () => {
@@ -1109,8 +1163,8 @@ const App = (() => {
             el('tbody', {}, [
               el('tr', {}, [
                 el('td', {}, [
-                  el('div', { text: '📬 שורת תובנות מהמייל (24 שעות) בהודעה הראשונה של היום' }),
-                  el('div.mute-sm', { text: 'את הרשימה המלאה מקבלים תמיד לפי בקשה: "מה חדש במייל?"' })
+                  el('div', { text: '📬 תובנות ב-Today — מהמייל ומהוואטסאפ' }),
+                  el('div.mute-sm', { text: 'החלק האחרון של Today: במסך, בבוט (בהודעת המשך) ובמייל הבוקר. את הרשימה המלאה מקבלים תמיד לפי בקשה: "תובנות", "תובנות מהיומיים האחרונים".' })
                 ]),
                 el('td', { style: { textAlign: 'center', width: '110px' } }, [el('label.checkbox', {}, [box])])
               ])
@@ -2664,6 +2718,55 @@ const App = (() => {
     return el('tr', {}, [el('th', { text: 'טלפון נייד' }), cell]);
   }
 
+  /** הטלפון במשרד / השלוחה שלי — מופיע באלפון. נשמר בלי קוד אימות */
+  function officePhoneRow() {
+    const cell = el('td');
+    const draw = () => UI.mount(cell, el('div.flex', {}, [
+      el('span', { dir: 'ltr', text: state.actor.officePhone || 'לא הוזן' }),
+      el('button.btn.btn-sm', { onclick: edit }, [state.actor.officePhone ? 'שינוי' : 'הוספה'])
+    ]));
+    async function edit() {
+      const value = await UI.prompt('טלפון במשרד / שלוחה', {
+        title: '☎️ הטלפון שלי במשרד',
+        value: state.actor.officePhone ?? '',
+        hint: 'מספר מלא, שלוחה, או שניהם — למשל "03-1234567 שלוחה 12". מופיע באלפון הארגוני ליד הנייד שלך.'
+      });
+      if (value === null) return;
+      try {
+        state.actor.officePhone = (await API.put('/api/me/office-phone', { officePhone: value })).officePhone;
+        UI.success('נשמר');
+        draw();
+      } catch (err) { UI.error(err); }
+    }
+    draw();
+    return el('tr', {}, [el('th', { text: 'טלפון במשרד / שלוחה' }), cell]);
+  }
+
+  /**
+   * בורר המראה בחלון "החשבון שלי" — שלוש אפשרויות במתג אחד. ההחלה מיידית,
+   * בלי "שמירה": זו העדפת תצוגה, ורואים אותה ברגע הלחיצה.
+   */
+  function themeRow() {
+    const current = themePref();
+    const buttons = THEMES.map((t) => el(`button${t.key === current ? '.active' : ''}`, {
+      type: 'button',
+      role: 'radio',
+      'aria-checked': String(t.key === current),
+      onclick: () => {
+        setTheme(t.key);
+        for (const b of buttons) {
+          const on = b === buttons[THEMES.indexOf(t)];
+          b.classList.toggle('active', on);
+          b.setAttribute('aria-checked', String(on));
+        }
+      }
+    }, [t.glyph ? el('span', { 'aria-hidden': 'true', text: `${t.glyph} ` }) : null, t.label]));
+    return el('tr', {}, [
+      el('th', { text: 'מראה' }),
+      el('td', {}, [el('div.view-switch.theme-switch', { role: 'radiogroup', 'aria-label': 'מראה המערכת' }, buttons)])
+    ]);
+  }
+
   function userMenu() {
     const m = UI.modal({
       title: 'החשבון שלי',
@@ -2682,7 +2785,9 @@ const App = (() => {
               : null,
             state.actor.department ? el('tr', {}, [el('th', { text: 'מחלקה' }), el('td', { text: state.actor.department })]) : null,
             isVendor() ? null : phoneRow(),
-            isVendor() ? el('tr', {}, [el('th', { text: 'הרשאת עדכון' }), el('td', { text: state.actor.readOnly ? 'צפייה בלבד' : 'מלאה' })]) : null
+            isVendor() ? null : officePhoneRow(),
+            isVendor() ? el('tr', {}, [el('th', { text: 'הרשאת עדכון' }), el('td', { text: state.actor.readOnly ? 'צפייה בלבד' : 'מלאה' })]) : null,
+            themeRow()
           ])
         ]),
         // הוואטסאפ האישי משמש את משימות ה-AI להמשך מעקב מהמספר של המשתמש
@@ -2694,6 +2799,10 @@ const App = (() => {
           style: { marginInlineStart: '8px' },
           onclick: () => { m.close(); navigate('phonebook'); }
         }, ['📒 אלפון ארגוני']),
+        isVendor() ? null : el('button.btn.mt', {
+          style: { marginInlineStart: '8px' },
+          onclick: () => { m.close(); WhatsNewView.open({ force: true }); }
+        }, ['✨ מה חדש במערכת']),
         el('div.alert.alert-info.mt', {}, [
           el('div', {}, [
             el('b', { text: 'מה מותר לי במערכת?' }),

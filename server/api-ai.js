@@ -112,7 +112,14 @@ function register(router, h) {
 
     // האלפון הארגוני ראשון: מי שהוזן שם הוזן בשביל זה בדיוק
     if (q) {
-      for (const e of Phonebook.search(q, { limit: 10 })) {
+      for (const e of Phonebook.search(q, { limit: 20 })) {
+        /*
+         * עובדים וספקים נמצאים באלפון, אך כאן הם מגיעים מהמקור שלהם, עם
+         * המשמעות שלהם במשימון (‎contactsFor‎). ספק נשאר מהאלפון רק למי שאינו
+         * רואה ספקים — אצלו הוא איש קשר חיצוני רגיל.
+         */
+        if (e.kind === 'user') continue;
+        if (e.kind === 'vendor' && P.may(actor, 'view_vendor_boards')) continue;
         const colleague = e.email ? D.get("SELECT id FROM users WHERE lower(email) = ? AND status = 'active'", e.email) : null;
         if (colleague) continue;  // עובד — מופיע כעובד, עם המשמעות שלו במשימון
         const two = e.phone && e.phone2;
@@ -121,7 +128,7 @@ function register(router, h) {
           name: e.name, email: e.email, phone: e.phone || e.phone2,
           emails: e.email ? [{ value: e.email, label: '' }] : [],
           phones: [[e.phone, two ? "טל' 1" : ''], [e.phone2, "טל' 2"]].filter(([v]) => v).map(([value, label]) => ({ value, label })),
-          organization: e.note,
+          organization: e.org || e.note,
           unsaved: canSave && !GContacts.isSaved(actor.id, { email: e.email, phone: e.phone })
         }, keysOf([e.email].filter(Boolean), [e.phone, e.phone2].filter(Boolean)));
       }
@@ -235,6 +242,7 @@ function register(router, h) {
         owner,
         instruction,
         contact: b.contact ?? {},
+        cc: Array.isArray(b.cc) ? b.cc : [],
         dueDate: b.dueDate ?? null,
         projectName: project?.name ?? null,
         // וואטסאפ רק למי שחיבר אותו — אחרת הנוסח נכתב למייל
@@ -244,8 +252,13 @@ function register(router, h) {
         context: b.channel === 'whatsapp' ? '' : await AiTasks.mailContext(actor.id, b.contact?.email)
       });
       // החתימה מ-Gmail — לתצוגה מתחת לנוסח בלבד; נערכת רק ב-Gmail עצמו
-      const signature = b.channel === 'whatsapp' ? null : await Gmail.signature(actor.id);
-      sendJson(res, 200, { draft, signature: signature ? signature.html : null });
+      const sig = b.channel === 'whatsapp' ? null : await Gmail.signatureInfo(actor.id);
+      sendJson(res, 200, {
+        draft,
+        signature: sig?.state === 'ok' ? sig.html : null,
+        // אין חתימה ב-Gmail — למה, ומה יופיע בסוף המייל במקומה
+        signatureMissing: sig && sig.state !== 'ok' ? { state: sig.state, help: sig.help, fallback: Gmail.fallbackSignature(actor.id)?.text ?? '' } : null
+      });
     } catch (err) {
       throw userError(err);
     }
@@ -306,11 +319,16 @@ function register(router, h) {
     if (projectId && !D.get('SELECT 1 FROM projects WHERE id = ?', projectId)) throw badRequest('הפרויקט לא נמצא');
     assertMayUseProject(actor, projectId);
 
+    // בהעתק — רק במייל לגורם מבחוץ; משימה פנימית לעובד אינה מייל
+    const cc = channel === 'email' && !colleague
+      ? AiTasks.cleanCc(b.cc, { contactEmail: contact.email, ownerEmail: actor.email })
+      : [];
     const title = String(draft.title || draft.goal || instruction).trim().slice(0, 120);
     const description = [
       colleague ? draft.body : draft.goal,
       draft.success_criteria ? `נחשב כהתקבל כאשר: ${draft.success_criteria}` : null,
-      colleague ? `ביקש/ה: ${actor.name}` : `נמען: ${[contact.name, contact.email, contact.phone].filter(Boolean).join(' · ')}`
+      colleague ? `ביקש/ה: ${actor.name}` : `נמען: ${[contact.name, contact.email, contact.phone].filter(Boolean).join(' · ')}`,
+      cc.length ? `בהעתק: ${cc.map((c) => (c.name ? `${c.name} <${c.email}>` : c.email)).join(', ')}` : null
     ].filter(Boolean).join('\n');
 
     const taskId = createTask(actor, {
@@ -332,7 +350,7 @@ function register(router, h) {
     let sendError = null;
     try {
       const owner = D.get('SELECT id, full_name, email FROM users WHERE id = ?', actor.id);
-      await AiTasks.launch({ taskId, owner, instruction, draft, contact, policy, channel });
+      await AiTasks.launch({ taskId, owner, instruction, draft, contact, cc, policy, channel });
     } catch (err) {
       // המשימה והטיוטה נשמרו; אפשר לנסות לשלוח שוב מהכרטיס אחרי תיקון התקלה
       sendError = err.message;
@@ -470,14 +488,15 @@ function register(router, h) {
   router.get('/api/me/wa-scan', async (req, res, ctx) => {
     const actor = ctx.requireActor();
     internalOnly(actor);
-    sendJson(res, 200, { ...WaScan.prefs(actor.id), ai: Claude.isEnabled() });
+    sendJson(res, 200, { ...WaScan.publicPrefs(actor.id), ai: Claude.isEnabled() });
   });
 
   router.put('/api/me/wa-scan', async (req, res, ctx) => {
     const actor = ctx.requireActor();
     internalOnly(actor);
     const b = await readJson(req);
-    sendJson(res, 200, { ...WaScan.setPrefs(actor.id, b), ai: Claude.isEnabled() });
+    WaScan.setPrefs(actor.id, b);
+    sendJson(res, 200, { ...WaScan.publicPrefs(actor.id), ai: Claude.isEnabled() });
   });
 
   router.delete('/api/me/whatsapp', async (req, res, ctx) => {
@@ -513,6 +532,15 @@ function register(router, h) {
 
   router.get('/api/me/gmail', async (req, res, ctx) => {
     sendJson(res, 200, gmailInfo(userOnly(ctx)));
+  });
+
+  /** החתימה מ-Gmail למסך החשבון — ‎?refresh=1‎ קורא אותה מחדש עכשיו */
+  router.get('/api/me/gmail/signature', async (req, res, ctx) => {
+    const actor = ctx.requireActor();
+    internalOnly(actor);
+    const fresh = parseUrl(req).searchParams.get('refresh') === '1';
+    const info = await Gmail.signatureInfo(actor.id, { fresh });
+    sendJson(res, 200, { ...info, fallback: info.state === 'ok' ? null : Gmail.fallbackSignature(actor.id)?.text ?? '' });
   });
 
   router.get('/api/me/gmail/connect', async (req, res, ctx) => {

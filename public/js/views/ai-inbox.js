@@ -195,9 +195,9 @@ const AiInboxView = (() => {
   function fromLine(s) {
     if (s.data?.source === 'whatsapp') {
       return el('div.mute-sm', {}, [
-        `💬 ${s.data.groupName} · ${s.from.name}`,
+        s.data.personal ? `💬 ${s.from.name}` : `👥 ${s.data.groupName} · ${s.from.name}`,
         s.receivedAt ? ` · ${UI.relative(s.receivedAt)}` : '',
-        ` · 📁 ${s.data.projectName}`
+        s.data.projectName ? ` · 📁 ${s.data.projectName}` : ''
       ]);
     }
     return el('div.mute-sm', {}, [
@@ -332,13 +332,22 @@ const AiInboxView = (() => {
   }
 
   async function rejectDialog(s, reload) {
-    const ignore = el('input', { type: 'checkbox' });
+    /*
+     * מהוואטסאפ האישי: "לא לסרוק את X מעכשיו". מהדחייה השנייה מאותו שולח —
+     * מסומן מראש, עם הסבר למה.
+     */
+    const personal = Boolean(s.data.personal && s.data.chatPhone);
+    const again = personal && s.senderRejections >= 1;
+    const ignore = el('input', { type: 'checkbox', checked: again });
     const ok = el('button.btn.btn-primary', {}, ['דחייה']);
     const m = UI.modal({
       title: 'דחיית ההצעה',
       body: el('div', {}, [
         el('p', { text: `"${s.data.title}" לא תיווצר, ולא תוצע שוב.` }),
-        s.from.email ? el('label.checkbox', {}, [ignore, ` לא להציע יותר משימות מ-${s.from.email}`]) : null
+        personal
+          ? el('label.checkbox', {}, [ignore, ` לא לסרוק את השיחה עם ${s.from.name} מעכשיו`])
+          : s.from.email ? el('label.checkbox', {}, [ignore, ` לא להציע יותר משימות מ-${s.from.email}`]) : null,
+        again ? el('div.mute-sm', { text: `זו כבר הדחייה ה-${s.senderRejections + 1} של הצעה מ${s.from.name}.` }) : null
       ]),
       footer: [ok, el('div.spacer'), el('button.btn', { onclick: () => m.close() }, ['ביטול'])]
     });
@@ -498,6 +507,52 @@ const AiInboxView = (() => {
       return el('div.ai-pref', {}, [el('label.checkbox', {}, [box, ` ${label}`]), hint ? el('div.mute-sm', { text: hint }) : null]);
     };
 
+    /*
+     * החתימה מ-Gmail — מה יתווסף בסוף כל מייל שיוצא ממשימון, או למה אין.
+     * נטענת בנפרד: קריאת ההגדרות מ-Gmail לוקחת רגע, והחלון לא מחכה לה.
+     */
+    let sigInfo = null;
+    let sigLoading = false;
+    const sigSlot = el('div');
+    async function loadSignature(fresh = false) {
+      try {
+        sigInfo = await API.get(`/api/me/gmail/signature${fresh ? '?refresh=1' : ''}`);
+      } catch (err) {
+        sigInfo = { state: 'error', help: err.message };
+      }
+      drawSignature();
+    }
+    function drawSignature() {
+      const s = sigInfo;
+      const again = el('button.btn.btn-sm', { type: 'button', onclick: (e) => { e.target.disabled = true; loadSignature(true); } }, ['🔄 רענון חתימה']);
+      if (!s) return UI.mount(sigSlot, el('div.mute-sm', { text: '✍️ בודק את החתימה ב-Gmail…' }));
+      if (s.state === 'ok') {
+        const frame = el('iframe.ai-signature', { sandbox: 'allow-same-origin', title: 'החתימה מ-Gmail' });
+        frame.srcdoc = `<!DOCTYPE html><html dir="auto"><body style="margin:0;font-family:Arial,sans-serif;font-size:13px;color:#374151">${s.html}</body></html>`;
+        return UI.mount(sigSlot, el('div.ai-signature-box', {}, [
+          el('div.flex', { style: { gap: '8px', alignItems: 'center' } }, [
+            el('span.mute-sm', { text: '✍️ החתימה שלך מ-Gmail — תתווסף בסוף כל מייל שיוצא ממשימון' }), el('div.spacer'), again
+          ]),
+          frame
+        ]));
+      }
+      if (s.state === 'not_connected') return UI.mount(sigSlot);
+      UI.mount(sigSlot, el('div.alert.alert-warn', {}, [
+        el('span', { text: '✍️' }),
+        el('div', {}, [
+          el('b', { text: 'אין חתימה למיילים שיוצאים ממשימון. ' }),
+          el('span', { text: s.help ?? '' }),
+          s.fallback ? el('div.mute-sm', { style: { marginTop: '4px', whiteSpace: 'pre-line' }, text: `עד אז יתווסף בסוף המייל:\n${s.fallback}` }) : null,
+          el('div', { style: { marginTop: '6px' } }, [again])
+        ])
+      ]));
+    }
+    const signatureBox = () => {
+      if (!sigInfo && !sigLoading) { sigLoading = true; loadSignature(); }
+      drawSignature();
+      return sigSlot;
+    };
+
     function draw() {
       const c = info.connection;
       const connectBox = !info.enabled
@@ -533,6 +588,7 @@ const AiInboxView = (() => {
                     el('a', { href: '/api/me/gmail/connect' }, ['חיבור מחדש עם הרשאת שליחה'])
                   ])])
                 : null,
+              signatureBox(),
               el('div.flex', { style: { gap: '8px', alignItems: 'center' } }, [
                 el('span', { text: '✅' }), el('b', { text: c.email }),
                 el('span.mute-sm', { text: [c.scopes?.mail ? (c.canSend ? '📧 קריאה ושליחה' : '📧 קריאה') : null, c.scopes?.calendar ? '📅 יומן' : null, c.scopes?.contacts ? '👥 אנשי קשר' : null].filter(Boolean).join(' · ') }),

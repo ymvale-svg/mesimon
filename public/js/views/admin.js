@@ -19,7 +19,9 @@ const AdminView = (() => {
     { key: 'settings', label: 'הגדרות מערכת', perm: 'manage_automations' },
     { key: 'whatsapp', label: 'בוט וואטסאפ', perm: 'manage_automations', full: true },
     { key: 'matrix', label: 'מטריצת הרשאות', perm: 'manage_users' },
-    { key: 'templates', label: 'תבניות', perm: 'create_project', full: true }
+    { key: 'templates', label: 'תבניות', perm: 'create_project', full: true },
+    // הודעה שנפתחת לכל המשתמשים — רק אדמין על (ראה ‎manage_release_notes‎)
+    { key: 'whatsnew', label: '✨ מה חדש', perm: 'manage_release_notes', full: true }
   ];
 
   async function render(container, params = {}) {
@@ -64,6 +66,7 @@ const AdminView = (() => {
       else if (tab === 'whatsapp') await whatsappTab(body);
       else if (tab === 'matrix') await matrixTab(body);
       else if (tab === 'templates') await templatesTab(body);
+      else if (tab === 'whatsnew') await WhatsNewView.adminTab(body, reload);
     } catch (err) {
       UI.mount(body, UI.empty(err.message, '⚠️'));
     }
@@ -596,6 +599,8 @@ const AdminView = (() => {
     const nameInput = el('input', { type: 'text', value: user?.name ?? '' });
     const emailInput = el('input', { type: 'email', value: user?.email ?? '' });
     const phoneInput = el('input', { type: 'tel', dir: 'ltr', value: user?.phone ? UI.phone(user.phone) : '', placeholder: '050-0000000' });
+    // טלפון במשרד / שלוחה — טקסט חופשי, מוצג באלפון
+    const officeInput = el('input', { type: 'text', dir: 'ltr', value: user?.officePhone ?? '', placeholder: '03-0000000 שלוחה 12', maxlength: 40 });
 
     // רמות הגישה מגיעות מהשרת כשהן מסוננות לפי מה שהמשתמש המחובר רשאי להעניק —
     // מנהל מחלקה יקבל כך רק 'עובד פנימי', בלי החלטה בקוד הממשק.
@@ -693,7 +698,10 @@ const AdminView = (() => {
       body: el('div', {}, [
         UI.field('שם מלא', nameInput),
         UI.field('אימייל', emailInput, 'משמש גם לכניסה למערכת'),
-        UI.field('טלפון נייד', phoneInput, 'כך בוט הוואטסאפ מזהה מי כתב בקבוצה, ומאפשר לפתוח משימות בהודעה אליו'),
+        el('div.row', {}, [
+          UI.field('טלפון נייד', phoneInput, 'כך בוט הוואטסאפ מזהה מי כתב בקבוצה, ומאפשר לפתוח משימות בהודעה אליו'),
+          UI.field('טלפון במשרד / שלוחה', officeInput, 'מופיע באלפון. לחיצה עליו מחייגת מהטלפון במשרד')
+        ]),
         el('div.row', {}, [UI.field('רמת גישה', roleSelect), UI.field('סטטוס', statusSelect)]),
         el('div.row', {}, [
           UI.field('מחלקה', deptSelect, scoped ? 'נקבע לפי המחלקה שלך' : 'ברירת המחדל היא ללא שיוך למחלקה'),
@@ -727,6 +735,7 @@ const AdminView = (() => {
         name: nameInput.value.trim(),
         email: emailInput.value.trim(),
         phone: phoneInput.value.trim(),
+        officePhone: officeInput.value.trim(),
         role: roleSelect.value,
         status: statusSelect.value,
         fieldWorker: fieldWorkerCheck.checked,

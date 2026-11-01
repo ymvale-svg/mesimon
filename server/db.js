@@ -680,6 +680,30 @@ CREATE TABLE IF NOT EXISTS mail_insights (
 );
 
 /*
+ * תובנות מהוואטסאפ — שורה אחת לכל דבר שכדאי לדעת, בלי גוף ההודעה.
+ *   ‎group‎ — מקבוצה של הבוט. מנותחת פעם אחת לקבוצה, ונראית רק למי שהטלפון שלו
+ *            ברשימת המשתתפים. ‎owner_id‎ = 0.
+ *   ‎personal‎ — מהוואטסאפ האישי של עובד (רק אנשי קשר עסקיים). ‎owner_id‎ — העובד.
+ * ‎chat_id‎ — הקבוצה, או המספר של השולח בשיחה פרטית. נמחק אחרי 7 ימים.
+ */
+CREATE TABLE IF NOT EXISTS wa_insights (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  scope        TEXT    NOT NULL CHECK (scope IN ('group','personal')),
+  owner_id     INTEGER NOT NULL DEFAULT 0,
+  chat_id      TEXT    NOT NULL DEFAULT '',
+  message_id   TEXT    NOT NULL DEFAULT '',
+  sender_name  TEXT    NOT NULL DEFAULT '',
+  kind         TEXT    NOT NULL DEFAULT 'info',
+  importance   INTEGER NOT NULL DEFAULT 1,
+  insight      TEXT    NOT NULL DEFAULT '',
+  due_date     TEXT    NOT NULL DEFAULT '',
+  at           TEXT    NOT NULL,
+  created_at   TEXT    NOT NULL,
+  UNIQUE (scope, owner_id, message_id)
+);
+CREATE INDEX IF NOT EXISTS idx_wa_insights_at ON wa_insights(scope, at);
+
+/*
  * יומן הבוט: כל מה שקיבל ומה עשה עם זה — כדי שמנהל המערכת יראה איפה הוא
  * מבין ואיפה טועה. נשמר 90 יום.
  */
@@ -824,6 +848,28 @@ CREATE TABLE IF NOT EXISTS phonebook (
 );
 CREATE INDEX IF NOT EXISTS idx_phonebook_digits ON phonebook(phone_digits);
 CREATE INDEX IF NOT EXISTS idx_phonebook_email ON phonebook(email);
+
+/*
+ * "מה חדש" — הודעות על פיצ'רים שנוספו. כל הודעה היא גרסה אחת עם רשימת
+ * פריטים, וכל פריט משויך למסך: כך הבאנר מקבץ לפי מסכים ומציע "לנסות עכשיו".
+ * ‎items‎ הוא JSON: ‎[{screen, title, body, image, audience}]‎. התמונה (צילום
+ * מסך להמחשה) נשמרת כ-data URL דחוס, ו-‎audience‎ קובע מי רואה את הפריט:
+ * כולם, מנהלים (מנהל מחלקה ומעלה) או מנהלי מערכת. טיוטה אינה מוצגת לאיש.
+ */
+CREATE TABLE IF NOT EXISTS release_notes (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  title         TEXT    NOT NULL,
+  summary       TEXT    NOT NULL DEFAULT '',
+  items         TEXT    NOT NULL DEFAULT '[]',
+  status        TEXT    NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','published')),
+  published_at  TEXT,
+  emailed_at    TEXT,
+  emailed_count INTEGER NOT NULL DEFAULT 0,
+  emailed_total INTEGER NOT NULL DEFAULT 0,
+  created_by    INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at    TEXT    NOT NULL,
+  updated_at    TEXT    NOT NULL
+);
 
 /* שולחים מיוחדים לכל משתמש: ‎trust‎ — משימות נוצרות ישר, בלי אישור; ‎ignore‎ — לא מציעים מהם משימות */
 CREATE TABLE IF NOT EXISTS mail_trusted_senders (
@@ -1345,9 +1391,13 @@ function migrate() {
   addColumn('users', 'signup_at', 'TEXT');
   // הטלפון של העובד — כך בוט הוואטסאפ יודע מי כתב בקבוצה ומי שולח לו הודעה
   addColumn('users', 'phone', "TEXT NOT NULL DEFAULT ''");
+  // טלפון במשרד / שלוחה — טקסט חופשי ("03-1234567 שלוחה 12", או "212"), לאלפון
+  addColumn('users', 'office_phone', "TEXT NOT NULL DEFAULT ''");
   // חברי קבוצת הוואטסאפ (מספרים), שמורים לכמה שעות — הצעות רק לעובדים שבקבוצה
   addColumn('wa_groups', 'participants', "TEXT NOT NULL DEFAULT '[]'");
   addColumn('wa_groups', 'participants_at', 'TEXT');
+  // משימת AI — מי בהעתק (CC) של המייל: ‎[{name, email}]‎
+  addColumn('ai_requests', 'cc', "TEXT NOT NULL DEFAULT '[]'");
   // הרשימה האחרונה שהבוט שלח בפרטי — כדי ש"סיימתי את 2" יידע מה זה 2
   addColumn('wa_chats', 'last_list', "TEXT NOT NULL DEFAULT '[]'");
   // אלפון: טל' 2 ופקס (הטלפון הקיים הוא טל' 1)

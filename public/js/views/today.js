@@ -2,11 +2,14 @@
 /**
  * ☀ Today — "מה אני צריך לעשות היום?" במסך אחד.
  *
- * שלושה מקורות, כפי שהשרת מאחד אותם (‎GET /api/today‎):
- *   📅 היומן          — הפגישות של היום מ-Google Calendar
+ * באותו סדר כמו בבוט ובמייל הבוקר (‎GET /api/today‎):
+ *   📅 היומן          — הפגישות של היום מ-Google Calendar, ופגישות שמחכות להחלטה
  *   ⚠ באיחור / ✅ היום — המשימות שלי שהיעד שלהן עבר או היום
- *   📧 מהמייל         — הצעות משימה שעוד לא הוחלט עליהן. "להיום" כברירת מחדל,
- *                        עד שמחליטים: משימה להיום · תאריך אחר · משימת AI · לא משימה
+ *   הצעות למשימות     — מהמייל 📧, מקבוצות הוואטסאפ 👥 ומהוואטסאפ האישי 💬.
+ *                        "להיום" כברירת מחדל, עד שמחליטים: משימה להיום · תאריך
+ *                        אחר · משימת AI · לא משימה. הצעות ישנות — בשורה מקוצרת.
+ *   תובנות            — מהמייל ומהוואטסאפ (‎GET /api/today/insights‎). נטענות
+ *                        אחרי שאר המסך, כי קריאת המיילים לוקחת זמן.
  *
  * בטלפון זה מסך הפתיחה. וגם: ההגדרות של Today במייל ושל ההקלטה (‎openSettings‎).
  */
@@ -16,6 +19,10 @@ const TodayView = (() => {
 
   let containerRef = null;
   let data = null;
+  // התובנות — ‎undefined‎ בטעינה, ‎null‎ כשאין (כבויות או בלי מקור)
+  let insights;
+  let insightsError = '';
+  let showOlder = false;
 
   const hhmm = (iso) => new Date(iso).toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit', hour12: false });
   const DAY_NAMES = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי', 'שישי', 'שבת'];
@@ -41,7 +48,23 @@ const TodayView = (() => {
       if (silent) return;
       return UI.mount(container, UI.empty(err.message, '⚠️'));
     }
-    App.setTodayCount?.(data.counts.overdue + data.counts.today + data.counts.mail);
+    App.setTodayCount?.(data.counts.overdue + data.counts.today + data.counts.suggestions);
+    draw();
+    loadInsights();
+  }
+
+  /** התובנות — אחרי שהמסך כבר מוצג, כדי שלא יעכבו אותו */
+  async function loadInsights() {
+    if (!data.insightsHeading) {
+      insights = null;
+      return;
+    }
+    try {
+      insights = (await API.get('/api/today/insights')).insights;
+      insightsError = '';
+    } catch (err) {
+      insightsError = err.message;
+    }
     draw();
   }
 
@@ -71,7 +94,7 @@ const TodayView = (() => {
       c.events ? `${c.events} פגישות` : null,
       c.today ? `${c.today} משימות` : null,
       c.overdue ? `${c.overdue} באיחור` : null,
-      c.mail ? `${c.mail} מהמייל` : null
+      c.suggestions ? `${c.suggestions} הצעות` : null
     ].filter(Boolean).join(' · ');
 
     const empty = !c.total && !data.calendar.events.length;
@@ -90,12 +113,13 @@ const TodayView = (() => {
       !data.isWorkDay ? el('div.alert.alert-info.today-note', {}, [el('span', { text: '🌿' }), el('div', { text: 'היום אינו יום עבודה שלך. מה שמופיע כאן מחכה ליום העבודה הבא.' })]) : null,
       googleBanner(),
       nextUp(),
-      empty ? el('div.today-clear', {}, [el('div.e-icon', { text: '🌤' }), el('b', { text: 'יום נקי' }), el('div.mute-sm', { text: 'אין פגישות, אין משימות להיום ואין מיילים שמחכים להחלטה.' })]) : null,
+      empty ? el('div.today-clear', {}, [el('div.e-icon', { text: '🌤' }), el('b', { text: 'יום נקי' }), el('div.mute-sm', { text: 'אין פגישות, אין משימות להיום ואין הצעות שמחכות להחלטה.' })]) : null,
       calendarSection(),
       meetingsSection(),
       tasksSection('⚠ באיחור', data.tasks.overdue, { late: true }),
       tasksSection('✅ היום', data.tasks.today, { late: false }),
-      mailSection()
+      suggestionsSection(),
+      insightsSection()
     ]));
     containerRef.scrollTop = scrollTop;
   }
@@ -280,21 +304,33 @@ const TodayView = (() => {
     });
   }
 
-  // ------------------------------------------------------------- מהמייל
+  // ------------------------------------------------------------- הצעות למשימות
 
-  function mailSection() {
-    if (!data.mail.connected || !data.mail.items.length) return null;
-    const fresh = data.mail.items.filter((s) => !s.older);
-    const older = data.mail.items.filter((s) => s.older);
-    return section('📧 מהמייל — ממתין להחלטה', data.mail.items.length, [
-      el('div.mute-sm.today-pad', { text: 'כל מייל כאן נחשב להיום, עד שתחליטו אחרת.' }),
-      ...fresh.map(mailRow),
-      older.length ? el('div.today-subhead', { text: 'מאתמול ולפני' }) : null,
-      ...older.map(mailRow)
+  /** "📧 דני כהן" / "👥 פרויקט אלעד" / "💬 יוסי" — מאיפה ההצעה */
+  const originText = (s) => `${s.origin?.icon ?? '📧'} ${s.origin?.label ?? s.from.name}`;
+
+  function suggestionsSection() {
+    const sug = data.suggestions;
+    if (!sug?.items.length) return null;
+    const fresh = sug.items.filter((s) => !s.older);
+    const older = sug.items.filter((s) => s.older);
+    // הצעות ישנות — שורה מקוצרת אחת, ונפתחות בלחיצה
+    const olderLine = older.length ? el('button.today-older-line', {
+      type: 'button',
+      onclick: () => { showOlder = !showOlder; draw(); }
+    }, [
+      `⏳ ${older.length === 1 ? 'עוד הצעה ישנה אחת מחכה' : `עוד ${older.length} הצעות ישנות מחכות`} להחלטה`,
+      el('span.mute-sm', { text: showOlder ? ' · הסתרה' : ' · הצגה' })
+    ]) : null;
+    return section(sug.heading, sug.items.length, [
+      fresh.length ? el('div.mute-sm.today-pad', { text: 'כל הצעה כאן נחשבת להיום, עד שתחליטו אחרת.' }) : null,
+      ...fresh.map(suggestionRow),
+      olderLine,
+      ...(showOlder ? older.map(suggestionRow) : [])
     ]);
   }
 
-  function mailRow(s) {
+  function suggestionRow(s) {
     const d = s.data ?? {};
     // הצעה עם אנשים נוספים, ספק או אזהרה — מחייבת מבט, ולכן עוברת דרך העריכה
     const needsLook = Boolean(d.people?.length || d.ambiguous?.length || d.warning);
@@ -346,13 +382,76 @@ const TodayView = (() => {
         el('div.today-title', { text: d.title ?? s.subject }),
         d.summary ? el('div.today-sum', { text: d.summary }) : null,
         el('div.mute-sm', {}, [
-          `מאת ${s.from.name}`,
+          el('span.today-origin', { text: originText(s) }),
           s.receivedAt ? ` · ${UI.relative(s.receivedAt)}` : '',
-          s.older ? el('span.today-older', { text: ' · מחכה מאתמול' }) : null,
+          s.older ? el('span.today-older', { text: ' · מחכה מלפני כן' }) : null,
           s.link ? el('a', { href: s.link, target: '_blank', rel: 'noopener', onclick: (e) => e.stopPropagation() }, [' · פתיחת המייל ↗']) : null
         ]),
         el('div.today-mail-actions', {}, [approve, later, toAi, reject])
       ])
+    ]);
+  }
+
+  // ------------------------------------------------------------- תובנות
+
+  const SOURCE_ICON = { mail: '📧', group: '👥', personal: '💬' };
+
+  function insightsSection() {
+    if (!data.insightsHeading) return null;
+    if (insights === undefined && !insightsError) {
+      return section(data.insightsHeading, null, [el('div.today-pad', {}, [UI.spinner()])]);
+    }
+    if (insightsError) return section(data.insightsHeading, null, [el('div.mute-sm.today-pad', { text: `התובנות אינן זמינות כרגע: ${insightsError}` })]);
+    if (!insights) return null;
+    const w = insights.window;
+    const mixed = data.suggestions.sources.mail && data.suggestions.sources.whatsapp;
+    const notes = [
+      w.unit === 'workdays' ? w.label : null,
+      insights.mail && insights.mail.total > insights.mail.analyzed ? `מוצגים ${insights.mail.analyzed} המיילים האחרונים מתוך ${insights.mail.total}` : null,
+      insights.mailError ? 'המייל אינו זמין כרגע' : null
+    ].filter(Boolean);
+    return section(`${insights.heading}`, insights.count, [
+      el('div.mute-sm.today-pad', { text: [w.span, ...notes].join(' · ') }),
+      !insights.groups.length ? el('div.mute-sm.today-pad', { text: 'אין חדש.' }) : null,
+      ...insights.groups.map((g) => {
+        const rows = g.items.map((x) => insightRow(x, mixed));
+        // "לידיעה" מקופל כברירת מחדל
+        if (g.collapsed) {
+          return el('details.today-ins-group', {}, [el('summary.today-subhead', { text: `${g.title} (${g.items.length})` }), ...rows]);
+        }
+        return el('div.today-ins-group', {}, [el('div.today-subhead', { text: `${g.title} (${g.items.length})` }), ...rows]);
+      })
+    ]);
+  }
+
+  function insightRow(x, mixed) {
+    const due = x.dueDate ? ` · 📅 ${Number(x.dueDate.slice(8))}.${Number(x.dueDate.slice(5, 7))}` : '';
+    const open = x.link ? el('a.btn.btn-sm.btn-ghost', {
+      href: x.link, target: '_blank', rel: 'noopener',
+      title: x.source === 'mail' ? 'פתיחה ב-Gmail' : 'פתיחה בוואטסאפ'
+    }, [x.source === 'mail' ? 'Gmail ↗' : 'וואטסאפ ↗']) : null;
+    const task = el('button.btn.btn-sm', {
+      title: 'משימה חדשה מהתובנה',
+      onclick: () => BoardView.openTaskDialog(null, {
+        prefill: {
+          title: x.insight.slice(0, 120),
+          dueDate: x.dueDate || data.date,
+          description: `${SOURCE_ICON[x.source]} ${x.label}${x.subject ? ` · ${x.subject}` : ''}`
+        },
+        onSaved: () => reload()
+      })
+    }, ['+ משימה']);
+    return el(`div.today-row.today-insight${x.unread ? '.is-unread' : ''}`, {}, [
+      el('div.today-main', {}, [
+        el('div.today-title', {}, [
+          mixed ? el('span.today-origin', { text: `${SOURCE_ICON[x.source]} ` }) : null,
+          el('b', { text: `${x.label}: ` }),
+          x.insight,
+          due
+        ]),
+        el('div.mute-sm', { text: x.at ? UI.relative(x.at) : '' })
+      ]),
+      el('div.today-actions', {}, [open, task])
     ]);
   }
 
@@ -431,7 +530,7 @@ const TodayView = (() => {
       UI.mount(body,
         el('div.ai-section-title', { text: '📨 Today במייל' }),
         el('label.checkbox', {}, [enabled, ' שלח לי את Today במייל כל בוקר']),
-        el('div.mute-sm', { text: 'הפגישות, המשימות של היום, מה שבאיחור והמיילים שמחכים להחלטה — בלי ללחוץ על כלום.' }),
+        el('div.mute-sm', { text: 'הפגישות, המשימות של היום ומה שבאיחור, ההצעות למשימות והתובנות מהמייל ומהוואטסאפ — בלי ללחוץ על כלום.' }),
         el('div.today-digest-grid', { style: { opacity: dg.enabled ? '1' : '.55' } }, [
           UI.field('שעה', time),
           UI.field(custom ? 'ימים' : `ימים — ימי העבודה שלך (${info.workDaysLabel})`, el('div.day-chips', {}, [
