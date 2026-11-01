@@ -530,7 +530,7 @@ const TodayView = (() => {
       UI.mount(body,
         el('div.ai-section-title', { text: '📨 Today במייל' }),
         el('label.checkbox', {}, [enabled, ' שלח לי את Today במייל כל בוקר']),
-        el('div.mute-sm', { text: 'הפגישות, המשימות של היום, מה שבאיחור והמיילים שמחכים להחלטה — בלי ללחוץ על כלום.' }),
+        el('div.mute-sm', { text: 'הפגישות, המשימות של היום ומה שבאיחור, ההצעות למשימות והתובנות מהמייל ומהוואטסאפ — בלי ללחוץ על כלום.' }),
         el('div.today-digest-grid', { style: { opacity: dg.enabled ? '1' : '.55' } }, [
           UI.field('שעה', time),
           UI.field(custom ? 'ימים' : `ימים — ימי העבודה שלך (${info.workDaysLabel})`, el('div.day-chips', {}, [
