@@ -5,7 +5,8 @@
  * באותו סדר כמו בבוט ובמייל הבוקר (‎GET /api/today‎):
  *   📅 היומן          — הפגישות של היום מ-Google Calendar, ופגישות שמחכות להחלטה
  *   ⚠ באיחור / ✅ היום — המשימות שלי שהיעד שלהן עבר או היום
- *   הצעות למשימות     — מהמייל 📧, מקבוצות הוואטסאפ 👥 ומהוואטסאפ האישי 💬.
+ *   הצעות למשימות     — מהמייל 📧, מקבוצות הוואטסאפ 👥 ומהוואטסאפ האישי 💬,
+ *                        וגם "לסגור?" / "לעדכן?" על משימות שפתחתי ו"למזג?" (‎TaskSyncView‎).
  *                        "להיום" כברירת מחדל, עד שמחליטים: משימה להיום · תאריך
  *                        אחר · משימת AI · לא משימה. הצעות ישנות — בשורה מקוצרת.
  *   תובנות            — מהמייל ומהוואטסאפ (‎GET /api/today/insights‎). נטענות
@@ -323,7 +324,8 @@ const TodayView = (() => {
       el('span.mute-sm', { text: showOlder ? ' · הסתרה' : ' · הצגה' })
     ]) : null;
     return section(sug.heading, sug.items.length, [
-      fresh.length ? el('div.mute-sm.today-pad', { text: 'כל הצעה כאן נחשבת להיום, עד שתחליטו אחרת.' }) : null,
+      // הצעות למשימות חדשות — "להיום" כברירת מחדל ("לסגור?" ו"למזג?" אינן משימה חדשה)
+      fresh.some((s) => s.kind === 'task') ? el('div.mute-sm.today-pad', { text: 'כל הצעה כאן נחשבת להיום, עד שתחליטו אחרת.' }) : null,
       ...fresh.map(suggestionRow),
       olderLine,
       ...(showOlder ? older.map(suggestionRow) : [])
@@ -331,6 +333,8 @@ const TodayView = (() => {
   }
 
   function suggestionRow(s) {
+    // "לסגור?" / "לעדכן?" על משימה שפתחתי, ו"למזג?" — שורה משלהן (פרק 11)
+    if (TaskSyncView.handles(s)) return TaskSyncView.row(s, { reload: () => reload(), variant: 'today' });
     const d = s.data ?? {};
     // הצעה עם אנשים נוספים, ספק או אזהרה — מחייבת מבט, ולכן עוברת דרך העריכה
     const needsLook = Boolean(d.people?.length || d.ambiguous?.length || d.warning);

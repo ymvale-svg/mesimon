@@ -2903,6 +2903,19 @@ input[type="color"] { width: 46px; height: 30px; padding: 2px; cursor: pointer; 
   .ai-row-actions { max-width: none; justify-content: flex-start; }
 }
 
+/* פרק 11 — "לסגור?" / "לעדכן?" / "למזג?", ו"יש כבר משימה דומה" */
+.ts-task { font-weight: 600; cursor: pointer; }
+.ts-quote { max-height: 6.5em; overflow: hidden; }
+.ts-changes { display: grid; gap: 8px; }
+.ts-change { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.ts-change input[type='date'] { width: auto; }
+.ts-dups { display: grid; gap: 6px; }
+.ts-dup { display: flex; align-items: center; gap: 10px; padding: 9px 10px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface-2); }
+.ts-dup-main { flex: 1; min-width: 0; display: grid; gap: 2px; }
+@media (max-width: 640px) {
+  .ts-dup { flex-direction: column; align-items: stretch; }
+}
+
 /* ================================================================ Today */
 
 /*

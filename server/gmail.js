@@ -214,6 +214,20 @@ async function search(userId, q, { max = 100 } = {}) {
   return ids;
 }
 
+/**
+ * ההודעות בשרשור של מייל — מזהה, תוויות ותאריך בלבד, בלי התוכן. משמש
+ * לבדיקה "האם עניתי כבר": הודעה עם התווית ‎SENT‎ אחרי המייל שהתקבל.
+ */
+async function threadOf(userId, gmailId) {
+  const m = await call(userId, `/messages/${encodeURIComponent(gmailId)}`, { format: 'minimal' });
+  const t = await call(userId, `/threads/${encodeURIComponent(m.threadId)}`, { format: 'minimal' });
+  return (t.messages ?? []).map((x) => ({
+    id: x.id,
+    labels: x.labelIds ?? [],
+    at: x.internalDate ? new Date(Number(x.internalDate)) : null
+  }));
+}
+
 /** ההודעה המלאה כ-RFC 822 — לפענוח ב-‎mime.js‎, כמו דואר שהגיע ב-IMAP */
 async function raw(userId, id) {
   const m = await call(userId, `/messages/${encodeURIComponent(id)}`, { format: 'raw' });
@@ -410,6 +424,6 @@ const webLink = (email, gmailId) => `https://mail.google.com/mail/u/?authuser=${
 
 module.exports = {
   isEnabled, authorizeUrl, isGmailState, consumeState, connect, disconnect,
-  search, raw, send, connectedUsers, isConnected, canSend, connectionOf, publicStatus, webLink, SCOPE, SEND_SCOPE,
+  search, raw, threadOf, send, connectedUsers, isConnected, canSend, connectionOf, publicStatus, webLink, SCOPE, SEND_SCOPE,
   SCOPES, has, googleCall, signature, signatureInfo, fallbackSignature, signed, SIGNATURE_HELP
 };

@@ -37,6 +37,13 @@ const init = (h) => Object.assign(hooks, h);
 
 const PRIORITY_RANK = { urgent: 0, high: 1, normal: 2, low: 3 };
 
+/*
+ * מה נכנס לחלק ההצעות: הצעות למשימות, "לסגור?" / "לעדכן?" על משימה שפתחתי
+ * (פרק 11א), והצעות למיזוג משימות כפולות (פרק 11ב). כולן עם "אשר א" בבוט.
+ */
+const SUGGESTION_KINDS = ['task', 'task_close', 'task_update', 'task_merge'];
+const isSuggestion = (s) => SUGGESTION_KINDS.includes(s.kind);
+
 // ---------------------------------------------------------------------------
 // בניית ה-Today
 // ---------------------------------------------------------------------------
@@ -72,7 +79,7 @@ function suggestionRefs(items) {
 async function insightsFor(actor, { window = null, suggestions = null, mail = true } = {}) {
   if (!insightsWanted(actor.id)) return null;
   const win = window ?? Range.forUser(actor.id);
-  const pending = suggestions ?? MailScan.listFor(actor.id).pending.filter((s) => s.kind === 'task');
+  const pending = suggestions ?? MailScan.listFor(actor.id).pending.filter(isSuggestion);
   const result = await Insights.collect(actor.id, { window: win, mail, exclude: suggestionRefs(pending) });
   const heading = Insights.headings(result.sources);
   if (!heading) return null;
@@ -116,12 +123,12 @@ async function build(actor, { fresh = false, insights = false } = {}) {
    * לפני הטווח של היום: מוצגת בקיצור, עד שמחליטים.
    */
   const suggestions = pending
-    .filter((s) => s.kind === 'task')
+    .filter(isSuggestion)
     .map((s) => ({ ...s, origin: Insights.suggestionSource(s), older: String(s.createdAt ?? '') < window.sinceIso }));
   const sources = Insights.sourcesOf(actor.id);
   const shownSources = {
     mail: sources.mail || suggestions.some((s) => s.origin.source === 'mail'),
-    whatsapp: sources.whatsapp || suggestions.some((s) => s.origin.source !== 'mail')
+    whatsapp: sources.whatsapp || suggestions.some((s) => ['group', 'personal'].includes(s.origin.source))
   };
   const heading = Insights.headings(shownSources);
 
@@ -160,7 +167,8 @@ async function build(actor, { fresh = false, insights = false } = {}) {
     window: { label: window.label, span: window.span, unit: window.unit, since: window.sinceIso },
     tasks: { overdue, today },
     suggestions: {
-      heading: heading?.suggestions ?? '📧 הצעות למשימות מהמייל',
+      // רק הצעות מיזוג, בלי מייל ובלי וואטסאפ — כותרת כללית
+      heading: heading?.suggestions ?? '💡 הצעות לאישורך',
       sources: shownSources,
       items: suggestions,
       fresh: suggestions.filter((s) => !s.older).length,
@@ -204,7 +212,7 @@ function quickCount(actor) {
     if ((due && due <= date) || activates === date) n++;
   }
   // הצעות מכל המקורות — גם מהוואטסאפ, בלי Gmail (כמו ב-Today עצמו)
-  n += D.get("SELECT COUNT(*) c FROM ai_suggestions WHERE user_id = ? AND status = 'pending' AND kind = 'task'", actor.id).c;
+  n += D.get(`SELECT COUNT(*) c FROM ai_suggestions WHERE user_id = ? AND status = 'pending' AND kind IN (${SUGGESTION_KINDS.map(() => '?').join(',')})`, actor.id, ...SUGGESTION_KINDS).c;
   return n;
 }
 
@@ -452,5 +460,5 @@ function stop() {
 }
 
 module.exports = {
-  init, build, insightsFor, insightsWanted, quickCount, digestPrefs, cleanDigest, digestDays, sendDigest, digestEmail, start, stop, tick, DIGEST_DEFAULTS
+  SUGGESTION_KINDS, init, build, insightsFor, insightsWanted, quickCount, digestPrefs, cleanDigest, digestDays, sendDigest, digestEmail, start, stop, tick, DIGEST_DEFAULTS
 };

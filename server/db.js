@@ -731,6 +731,8 @@ CREATE TABLE IF NOT EXISTS ai_suggestions (
   id            INTEGER PRIMARY KEY AUTOINCREMENT,
   user_id       INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   -- task | duplicate (המייל כבר הפך למשימה אצל מישהו אחר)
+  -- task_close | task_update — הודעה שעונה על משימה שפתחתי / מעדכנת אותה (‎ai/task-sync.js‎)
+  -- task_merge — שתי משימות במחלקה שנראות אותה עבודה (‎ai/task-dupes.js‎)
   kind          TEXT    NOT NULL DEFAULT 'task',
   -- pending | approved | rejected | auto (נוצרה בלי אישור) | undone | joined | skipped
   status        TEXT    NOT NULL DEFAULT 'pending',
@@ -747,6 +749,20 @@ CREATE TABLE IF NOT EXISTS ai_suggestions (
 );
 CREATE INDEX IF NOT EXISTS idx_ai_suggestions_user ON ai_suggestions(user_id, status);
 CREATE INDEX IF NOT EXISTS idx_ai_suggestions_header ON ai_suggestions(header_id);
+CREATE INDEX IF NOT EXISTS idx_ai_suggestions_task ON ai_suggestions(task_id, kind);
+
+/*
+ * החלטות על זוג משימות שנראו כפולות: "לא כפולות" (לא להציע שוב לעולם), או
+ * "מוזגו". ‎task_a‎ תמיד המזהה הקטן — כך לזוג יש שורה אחת, לא שתיים.
+ */
+CREATE TABLE IF NOT EXISTS task_pair_decisions (
+  task_a      INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  task_b      INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  decision    TEXT    NOT NULL,              -- not_duplicate | merged
+  decided_by  INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  decided_at  TEXT    NOT NULL,
+  PRIMARY KEY (task_a, task_b)
+);
 
 /*
  * אנשי הקשר של Google — עותק מקומי לכל משתמש, כדי שהחיפוש באשף משימת AI
@@ -1451,6 +1467,8 @@ function migrate() {
   addColumn('departments', 'parent_id', 'INTEGER REFERENCES departments(id) ON DELETE SET NULL');
   addColumn('templates', 'updated_at', 'TEXT');
   addColumn('templates', 'updated_by', 'INTEGER REFERENCES users(id) ON DELETE SET NULL');
+  // משימה שמוזגה לתוך משימה ותיקה (פרק 11ב) — נסגרת, ומצביעה על זו שנשארה
+  addColumn('tasks', 'merged_into_task_id', 'INTEGER REFERENCES tasks(id) ON DELETE SET NULL');
 
   /**
    * סדר העמודות הוא סדר הזרימה, ולכן העמודה הסופית חייבת להיות אחרונה.

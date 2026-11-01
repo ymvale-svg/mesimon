@@ -27,6 +27,8 @@ const Gmail = require('../gmail');
 const Mime = require('../mime');
 const AiTasks = require('../ai-tasks');
 const Auth = require('../auth');
+const TaskSync = require('./task-sync');
+const Dupes = require('./task-dupes');
 
 const SKILL_PATH = path.join(__dirname, 'skills', 'email-to-tasks.md');
 const TZ = 'Asia/Jerusalem';
@@ -328,6 +330,21 @@ async function processMessage(user, conn, gmailId) {
   if (await routeReply(user, mail)) return record(user.id, gmailId, headerId, 'reply'), 'reply';
   if (senderMode(user.id, mail.from.address) === 'ignore') return record(user.id, gmailId, headerId, 'skipped'), 'skipped';
 
+  /*
+   * מייל שעונה על משימה שפתחתי, או מעדכן אותה — הצעה "לסגור?" / "לעדכן?"
+   * (‎task-sync.js‎). בנוסף לבדיקה הרגילה ולא במקומה: אותו מייל יכול גם לענות
+   * על משימה וגם לבקש משהו חדש. ה-AI נקרא רק כשיש משימה מועמדת.
+   */
+  await TaskSync.checkQuietly(user.id, {
+    source: 'mail',
+    fromName: meta.fromName,
+    fromEmail: mail.from.address,
+    subject: mail.subject,
+    gmailId,
+    files: mail.attachments.map((a) => a.filename),
+    messages: [{ text: mail.newText || mail.text, at: meta.receivedAt, ref: headerId }]
+  });
+
   const existing = existingTaskFor(headerId);
   if (existing) {
     if (!involvedIn(user.id, existing)) {
@@ -520,7 +537,47 @@ async function morningRun() {
  *   • המשתמש כתב לנמען בעצמו — המעקב עוצר ושואל מה המצב.
  * פעם בחמש דקות לכל בקשה — זה גם קצב קליטת התשובות, כי הן חוזרות לתיבה הזו.
  */
+/**
+ * הצעה ממייל שכבר עניתי עליו — יורדת מ"ממתין לאישורך".
+ *
+ * מי שעבר על התיבה וענה מ-Gmail או מ-Outlook כבר טיפל בעניין, וההצעה רק
+ * מעמיסה. הסימן: בשרשור של המייל יש הודעה שיצאה ממני (‎SENT‎) אחרי שהוא
+ * התקבל. ההצעה מסומנת ‎replied‎ ולא נמחקת.
+ *
+ * אם מגיעה אחר כך תשובה בשרשור — זו הודעה חדשה, שלא נקראה, והסריקה הרגילה
+ * בוחנת אותה כמו כל מייל: רק אם יש בה משימה היא חוזרת לממתינות.
+ *
+ * כל הצעה נבדקת לכל היותר פעם ב-15 דקות, ועד 30 הצעות בסבב.
+ */
+const REPLY_CHECK_MS = 15 * 60000;
+const replyChecked = new Map(); // suggestionId → זמן הבדיקה האחרונה
+
+async function dropAnswered() {
+  const rows = D.all(
+    `SELECT s.* FROM ai_suggestions s JOIN mail_connections c ON c.user_id = s.user_id AND c.state = 'ok'
+      WHERE s.status = 'pending' AND s.kind = 'task' AND s.gmail_id <> ''
+        AND COALESCE(json_extract(s.data, '$.source'), 'email') = 'email'
+      ORDER BY s.id DESC LIMIT 200`
+  ).filter((s) => Date.now() - (replyChecked.get(s.id) ?? 0) > REPLY_CHECK_MS).slice(0, 30);
+  for (const s of rows) {
+    replyChecked.set(s.id, Date.now());
+    if (!Gmail.has(s.user_id, 'mail')) continue;
+    try {
+      const received = new Date(s.received_at ?? s.created_at).getTime();
+      const thread = await Gmail.threadOf(s.user_id, s.gmail_id);
+      const answered = thread.find((m) => m.id !== s.gmail_id && m.labels.includes('SENT') && m.at && m.at.getTime() > received - 60000);
+      if (!answered) continue;
+      D.run("UPDATE ai_suggestions SET status = 'replied', decided_at = ? WHERE id = ? AND status = 'pending'", D.nowIso(), s.id);
+    } catch (err) {
+      // מייל שנמחק מהתיבה — אין מה לבדוק עוד; שאר התקלות: בסבב הבא
+      if (/ 404/.test(err.message)) replyChecked.set(s.id, Date.now() + 365 * DAY);
+      else console.error(`[משימון] בדיקת "עניתי כבר" להצעה ${s.id} נכשלה:`, err.message);
+    }
+  }
+}
+
 async function pollMailbox() {
+  await dropAnswered().catch((err) => console.error('[משימון] בדיקת הצעות שנענו נכשלה:', err.message));
   const cutoff = new Date(Date.now() - CONTACT_CHECK_MINUTES * 60000).toISOString();
   const open = D.all(
     `SELECT r.* FROM ai_requests r JOIN mail_connections c ON c.user_id = r.owner_id AND c.state = 'ok'
@@ -666,8 +723,16 @@ function createFromSuggestion(sug, actor, edits = {}) {
   return taskId;
 }
 
-function approve(id, actor, edits) {
+/**
+ * אישור הצעה. הצעת משימה — מיד (מספר); "לסגור?" / "לעדכן?" ומיזוג משימות
+ * כפולות — דרך המודולים שלהן (‎task-sync.js‎ — אסינכרוני, כי קבצים מהמייל
+ * נקראים מחדש מ-Gmail; ‎task-dupes.js‎). הקוראים ממתינים בכל מקרה.
+ * @returns {number|Promise<number>} מזהה המשימה
+ */
+function approve(id, actor, edits = {}) {
   const sug = ownSuggestion(id, actor.id);
+  if (TaskSync.KINDS.includes(sug.kind)) return TaskSync.approve(sug, actor, edits).then((r) => r.taskId);
+  if (sug.kind === 'task_merge') return Dupes.approve(sug, actor);
   if (sug.status !== 'pending' || sug.kind !== 'task') throw new Error('ההצעה כבר טופלה');
   const taskId = createFromSuggestion(sug, actor, edits);
   D.run("UPDATE ai_suggestions SET status = 'approved', task_id = ?, decided_at = ? WHERE id = ?", taskId, D.nowIso(), id);
@@ -694,6 +759,10 @@ function approveAll(actor) {
 function reject(id, actor, { ignoreSender = false } = {}) {
   const sug = ownSuggestion(id, actor.id);
   if (sug.status !== 'pending') return;
+  // "לא כפולות" — לכל מי שקיבל את ההצעה, ולתמיד
+  if (sug.kind === 'task_merge') return Dupes.reject(sug, actor);
+  // "לא קשור" — השורה הדחויה נשארת, ולכן אותה הודעה לא תוצע שוב לאותה משימה
+  if (TaskSync.KINDS.includes(sug.kind)) ignoreSender = false;
   D.run("UPDATE ai_suggestions SET status = 'rejected', decided_at = ? WHERE id = ?", D.nowIso(), id);
   if (!ignoreSender) return;
   const data = parseJson(sug.data, {});
@@ -708,6 +777,7 @@ function reject(id, actor, { ignoreSender = false } = {}) {
  */
 function restore(id, actor) {
   const sug = ownSuggestion(id, actor.id);
+  if (sug.kind === 'task_merge') return Dupes.restore(sug);
   if (sug.status !== 'rejected') throw new Error('ההצעה אינה דחויה');
   if (sug.decided_at && Date.now() - new Date(sug.decided_at).getTime() > 3600e3) throw new Error('עבר יותר מדי זמן מהדחייה');
   D.run("UPDATE ai_suggestions SET status = 'pending', decided_at = NULL WHERE id = ?", id);

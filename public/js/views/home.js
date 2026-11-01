@@ -2100,13 +2100,27 @@ const HomeView = (() => {
       saveOpenBtn.disabled = true;
       saveBtn.textContent = 'יוצר…';
       try {
-        const created = await API.createTask({
+        const payload = {
           title,
           projectId: projectPicker.value() || null,
           assigneeType: aType,
           assigneeId: aId ? Number(aId) : null,
           dueDate: UI.fromInputDate(dueInput.value)
-        });
+        };
+        // "יש כבר משימה דומה" במחלקה (פרק 11ב) — כמו בדיאלוג המלא
+        const dup = await TaskSyncView.checkDuplicate(payload);
+        if (!dup.proceed) {
+          saveBtn.disabled = false;
+          saveOpenBtn.disabled = false;
+          saveBtn.textContent = 'שמירה';
+          if (!dup.back) {
+            closeQuick();
+            await App.refreshView();
+          }
+          return;
+        }
+        if (dup.dupChecked) payload.dupChecked = dup.dupChecked;
+        const created = await API.createTask(payload);
         const id = created?.task?.id;
 
         /*
