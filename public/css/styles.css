@@ -3575,7 +3575,7 @@ body:has(.modal-backdrop.is-side:not(.leaving)) .toast-root { left: auto; right:
  * הרקעים כהים עם נטייה קלה לטורקיז, כמו הרקע הבהיר — אותה משפחה, ולא אפור
  * מנותק מהמותג. הטורקיז של המותג נשאר כמילוי (כפתורים, סימונים); כטקסט הוא
  * מתבהר (‎--brand-ink‎), אחרת היה נבלע ברקע. הניגודיות נמדדה: טקסט רגיל
- * 14.6:1, ‎--text-soft‎ ‏8.9:1, ‎--text-mute‎ ‏5.6:1, ‎--brand-ink‎ ‏8.4:1 על ‎--surface‎.
+ * 14.1:1, ‎--text-soft‎ ‏9.1:1, ‎--text-mute‎ ‏6.1:1, ‎--brand-ink‎ ‏9.0:1 על ‎--surface‎.
  */
 :root[data-theme='dark'] {
   color-scheme: dark;
