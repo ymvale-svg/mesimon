@@ -25,6 +25,8 @@ const SHELL = [
   '/css/mobile.css',
   '/js/api.js',
   '/js/ui.js',
+  '/js/feature-anchors.js',
+  '/js/spotlight.js',
   '/js/app.js',
   '/js/views/login.js',
   '/js/views/invite.js',
