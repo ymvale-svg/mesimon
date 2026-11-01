@@ -470,14 +470,15 @@ function register(router, h) {
   router.get('/api/me/wa-scan', async (req, res, ctx) => {
     const actor = ctx.requireActor();
     internalOnly(actor);
-    sendJson(res, 200, { ...WaScan.prefs(actor.id), ai: Claude.isEnabled() });
+    sendJson(res, 200, { ...WaScan.publicPrefs(actor.id), ai: Claude.isEnabled() });
   });
 
   router.put('/api/me/wa-scan', async (req, res, ctx) => {
     const actor = ctx.requireActor();
     internalOnly(actor);
     const b = await readJson(req);
-    sendJson(res, 200, { ...WaScan.setPrefs(actor.id, b), ai: Claude.isEnabled() });
+    WaScan.setPrefs(actor.id, b);
+    sendJson(res, 200, { ...WaScan.publicPrefs(actor.id), ai: Claude.isEnabled() });
   });
 
   router.delete('/api/me/whatsapp', async (req, res, ctx) => {
