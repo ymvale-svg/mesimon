@@ -1,0 +1,94 @@
+{
+  "title": "עדכון נובמבר: לוח בית גמיש, מצב לילה ו-Today חכם יותר",
+  "summary": "החודש: לוח בית שמסתדר כמו שנוח לך, מצב לילה, Today עם הצעות ותובנות מהמייל ומהוואטסאפ, ומשימות שמתעדכנות לבד מהתשובות.",
+  "items": [
+    {
+      "id": "home-grid",
+      "screen": "home",
+      "audience": "all",
+      "anchor": "home.add-window",
+      "title": "דף הבית בסידור שלך",
+      "body": "גוררים חלון מהכותרת שלו, ומשנים גודל מכל צד או פינה. שאר החלונות מסתדרים לבד, ו-Ctrl+Z מחזיר צעד אחורה."
+    },
+    {
+      "id": "dark-mode",
+      "screen": "general",
+      "audience": "all",
+      "anchor": "account.theme",
+      "title": "מצב לילה",
+      "body": "ב\"החשבון שלי\" בוחרים בהיר, כהה, או לפי הגדרת המחשב."
+    },
+    {
+      "id": "today-insights",
+      "screen": "today",
+      "audience": "all",
+      "anchor": "today.suggestions",
+      "title": "Today עם הצעות ותובנות",
+      "body": "Today מציג גם הצעות למשימות ותובנות מהמייל ומהוואטסאפ של היממה האחרונה. מאשרים הצעה בלחיצה אחת."
+    },
+    {
+      "id": "move-due",
+      "screen": "home",
+      "audience": "all",
+      "anchor": "home.move-due",
+      "title": "דחיית יעד בלי לפתוח משימה",
+      "body": "ב\"המשימות שלי\" יש 📅 ליד כל משימה: מחר, עוד שבוע, או תאריך אחר."
+    },
+    {
+      "id": "not-task",
+      "screen": "home",
+      "audience": "all",
+      "anchor": "home.not-task",
+      "title": "\"לא משימה\" בלחיצה אחת",
+      "body": "הצעה ב\"ממתין לאישורך\" שאינה משימה יורדת בלחיצה אחת, בלי חלון."
+    },
+    {
+      "id": "similar-task",
+      "screen": "task",
+      "audience": "all",
+      "anchor": "app.new-task",
+      "title": "\"יש כבר משימה דומה\"",
+      "body": "כשפותחים משימה שכבר קיימת במחלקה, המערכת מציעה לפתוח בכל זאת או להצטרף למשימה הקיימת."
+    },
+    {
+      "id": "sync-suggestions",
+      "screen": "home",
+      "audience": "all",
+      "anchor": "home.ai-inbox",
+      "title": "משימות שמתעדכנות מהתשובות",
+      "body": "הגיע מייל או הודעה שהמשימה בוצעה או השתנתה? ב\"ממתין לאישורך\" תופיע הצעה: \"לסגור?\", \"לעדכן?\" או \"למזג?\". הצעה שכבר ענית עליה יורדת לבד."
+    },
+    {
+      "id": "phonebook-people",
+      "screen": "phonebook",
+      "audience": "all",
+      "anchor": "phonebook.filters",
+      "title": "האלפון: גם עובדים וספקים",
+      "body": "באלפון מופיעים עכשיו גם כל העובדים והספקים, עם טלפון במשרד. יש סינון לפי סוג, וחיוג, וואטסאפ או מייל בלחיצה."
+    },
+    {
+      "id": "ai-cc-signature",
+      "screen": "ai",
+      "audience": "all",
+      "anchor": "ai.cc",
+      "title": "משימת AI: העתק וחתימה",
+      "body": "אפשר להוסיף אנשים בהעתק (CC). המייל יוצא עם החתימה שלך מ-Gmail."
+    },
+    {
+      "id": "insights-range",
+      "screen": "whatsapp",
+      "audience": "all",
+      "anchor": null,
+      "title": "תובנות מהמייל לפי טווח זמן",
+      "body": "בעוזר ובבוט אפשר לבקש למשל \"מה היה במייל ב-48 שעות\" או \"ב-3 ימי עבודה\"."
+    },
+    {
+      "id": "org-feed",
+      "screen": "home",
+      "audience": "admins",
+      "anchor": null,
+      "title": "פיד העדכונים של הארגון",
+      "body": "בדף הבית מופיע חלון עם מה שקרה בכל הארגון."
+    }
+  ]
+}
