@@ -602,7 +602,8 @@ function register(router, h) {
     const actor = userOnly(ctx);
     const b = await readJson(req);
     try {
-      const taskId = fn(Number(ctx.params.id), actor, b);
+      // אישור "לסגור?" / "לעדכן?" ממתין לקבצים מ-Gmail — לכן ‎await‎ תמיד
+      const taskId = await fn(Number(ctx.params.id), actor, b);
       sendJson(res, 200, { ok: true, taskId: typeof taskId === 'number' ? taskId : null });
     } catch (err) {
       throw userError(err);

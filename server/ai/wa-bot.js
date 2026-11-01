@@ -53,6 +53,7 @@ const Insights = require('./insights');
 const Range = require('./insight-window');
 const WaScan = require('./whatsapp-scan');
 const Business = require('./wa-business');
+const TaskSync = require('./task-sync');
 
 const GROUP_SKILL = path.join(__dirname, 'skills', 'whatsapp-group-to-tasks.md');
 const CHAT_SKILL = path.join(__dirname, 'skills', 'whatsapp-chat.md');
@@ -534,6 +535,20 @@ async function processGroup(group) {
   let insightCount = 0;
   for (const x of result.insights ?? []) {
     if (Insights.storeGroup(group.chat_id, fresh[x.index - 1], x)) insightCount++;
+  }
+  /*
+   * הודעה בקבוצה שעונה על משימה שפתח אחד מחברי הקבוצה, או מעדכנת אותה
+   * (‎task-sync.js‎) — לכל חבר בנפרד, מול המשימות שהוא פתח. ה-AI נקרא רק למי
+   * שיש לו משימה מועמדת; הודעות שהוא עצמו כתב — לא נבדקות מולו.
+   */
+  for (const member of candidates) {
+    await TaskSync.checkQuietly(member.id, {
+      source: 'group',
+      groupName: group.name,
+      chatId: group.chat_id,
+      projectId: project.id,
+      messages: fresh.map((m) => ({ text: m.text, at: m.at, ref: `wa:${m.message_id}`, fromName: m.sender_name, fromUserId: m.user_id, fromPhone: m.sender_phone }))
+    });
   }
   if (!result.tasks.length) {
     log({ channel: 'group', chatId: group.chat_id, chatName: group.name, action: 'group_scan', status: 'ok', result: `נותחו ${fresh.length} הודעות — אין בקשות${insightCount ? ` · ${insightCount} תובנות` : ''}` });
@@ -1368,7 +1383,7 @@ async function confirmPending(actor, pending, dry) {
  * "לא משימה". הצעה שדורשת מבט (אנשים נוספים, ספק, פנייה החוצה) — באפליקציה.
  * מהדחייה השנייה מאותו שולח בוואטסאפ האישי — מציעים "לא לסרוק אותו".
  */
-function suggestionDecision(actor, { approve, letters }, state, { dry, out }) {
+async function suggestionDecision(actor, { approve, letters }, state, { dry, out }) {
   if (!WaActions.allowed(actor, 'today')) {
     return out('החלטה על הצעות אינה זמינה לך בוואטסאפ.', {}, { action: 'today', status: 'denied', result: 'פעולת Today כבויה' });
   }
@@ -1386,8 +1401,31 @@ function suggestionDecision(actor, { approve, letters }, state, { dry, out }) {
     }
     const d = parseJson(sug.data, {});
     const title = d.title ?? sug.subject;
-    if (sug.status !== 'pending' || sug.kind !== 'task') {
+    if (sug.status !== 'pending' || !['task', 'task_close', 'task_update', 'task_merge'].includes(sug.kind)) {
       lines.push(`${letter}. "${title}" — כבר טופלה.`);
+      continue;
+    }
+    /*
+     * "לסגור?" / "לעדכן?" על משימה שפתחתי, ומיזוג משימות כפולות. בעדכון — "אשר"
+     * מאשר בדיוק את מה שהוצג בשורה (הערה, ואם הוצעו — יעד וסטטוס).
+     */
+    if (sug.kind !== 'task') {
+      const name = sug.kind === 'task_merge' ? `"${d.dropTitle}" ו"${d.keepTitle}"` : `"${d.taskTitle}"`;
+      if (approve) {
+        try {
+          taskId = dry ? null : await MailScan.approve(id, actor, { applyDue: true, applyStatus: true });
+          lines.push(sug.kind === 'task_close' ? `✅ ${letter}. נסגרה: ${name} — ההודעה נשמרה בה כהערה${test}`
+            : sug.kind === 'task_update' ? `✅ ${letter}. עודכנה: ${name}${d.proposed?.dueDate ? ` · 📅 ${shortDate(d.proposed.dueDate)}` : ''}${d.proposed?.status ? ` · ${d.proposed.statusLabel}` : ''}${test}`
+              : `✅ ${letter}. מוזגו: ${name} — נשארה "${d.keepTitle}"${test}`);
+          done.push(`אושרה: ${title}`);
+        } catch (err) {
+          lines.push(`❌ ${letter}. לא הצלחתי: ${err.message}`);
+        }
+        continue;
+      }
+      if (!dry) MailScan.reject(id, actor);
+      lines.push(sug.kind === 'task_merge' ? `✕ ${letter}. לא כפולות — לא אציע אותן שוב: ${name}${test}` : `✕ ${letter}. לא קשור: ${name}${test}`);
+      done.push(`נדחתה: ${title}`);
       continue;
     }
     if (approve) {
@@ -1397,7 +1435,7 @@ function suggestionDecision(actor, { approve, letters }, state, { dry, out }) {
         continue;
       }
       try {
-        taskId = dry ? null : MailScan.approve(id, actor, { dueDate: d.dueDate || localDay(0) });
+        taskId = dry ? null : await MailScan.approve(id, actor, { dueDate: d.dueDate || localDay(0) });
         lines.push(`✅ ${letter}. נפתחה משימה: ${title}${d.dueDate && d.dueDate !== localDay(0) ? ` · 📅 ${shortDate(d.dueDate)}` : ''}${test}`);
         done.push(`אושרה: ${title}`);
       } catch (err) {

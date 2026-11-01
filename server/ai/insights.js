@@ -70,6 +70,8 @@ function headings({ mail, whatsapp }) {
 /** מאיפה הגיעה הצעה — לסימון ליד השורה: 📧 השולח · 👥 הקבוצה · 💬 השולח */
 function suggestionSource(s) {
   const d = s.data ?? {};
+  // משימות כפולות במחלקה — לא מהמייל ולא מהוואטסאפ
+  if (d.merge) return { source: 'merge', icon: '🔀', label: d.projectName ? `כפילות · ${d.projectName}` : 'כפילות במחלקה' };
   if (d.source === 'whatsapp' && d.personal) return { source: 'personal', icon: ICON.personal, label: s.from?.name || d.chatPhone || '' };
   if (d.source === 'whatsapp') return { source: 'group', icon: ICON.group, label: d.groupName || '' };
   return { source: 'mail', icon: ICON.mail, label: s.from?.name || s.from?.email || '' };

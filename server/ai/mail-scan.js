@@ -27,6 +27,8 @@ const Gmail = require('../gmail');
 const Mime = require('../mime');
 const AiTasks = require('../ai-tasks');
 const Auth = require('../auth');
+const TaskSync = require('./task-sync');
+const Dupes = require('./task-dupes');
 
 const SKILL_PATH = path.join(__dirname, 'skills', 'email-to-tasks.md');
 const TZ = 'Asia/Jerusalem';
@@ -327,6 +329,21 @@ async function processMessage(user, conn, gmailId) {
   if (!mail.from.address || mine.has(mail.from.address)) return record(user.id, gmailId, headerId, 'skipped'), 'skipped';
   if (await routeReply(user, mail)) return record(user.id, gmailId, headerId, 'reply'), 'reply';
   if (senderMode(user.id, mail.from.address) === 'ignore') return record(user.id, gmailId, headerId, 'skipped'), 'skipped';
+
+  /*
+   * מייל שעונה על משימה שפתחתי, או מעדכן אותה — הצעה "לסגור?" / "לעדכן?"
+   * (‎task-sync.js‎). בנוסף לבדיקה הרגילה ולא במקומה: אותו מייל יכול גם לענות
+   * על משימה וגם לבקש משהו חדש. ה-AI נקרא רק כשיש משימה מועמדת.
+   */
+  await TaskSync.checkQuietly(user.id, {
+    source: 'mail',
+    fromName: meta.fromName,
+    fromEmail: mail.from.address,
+    subject: mail.subject,
+    gmailId,
+    files: mail.attachments.map((a) => a.filename),
+    messages: [{ text: mail.newText || mail.text, at: meta.receivedAt, ref: headerId }]
+  });
 
   const existing = existingTaskFor(headerId);
   if (existing) {
@@ -666,8 +683,16 @@ function createFromSuggestion(sug, actor, edits = {}) {
   return taskId;
 }
 
-function approve(id, actor, edits) {
+/**
+ * אישור הצעה. הצעת משימה — מיד (מספר); "לסגור?" / "לעדכן?" ומיזוג משימות
+ * כפולות — דרך המודולים שלהן (‎task-sync.js‎ — אסינכרוני, כי קבצים מהמייל
+ * נקראים מחדש מ-Gmail; ‎task-dupes.js‎). הקוראים ממתינים בכל מקרה.
+ * @returns {number|Promise<number>} מזהה המשימה
+ */
+function approve(id, actor, edits = {}) {
   const sug = ownSuggestion(id, actor.id);
+  if (TaskSync.KINDS.includes(sug.kind)) return TaskSync.approve(sug, actor, edits).then((r) => r.taskId);
+  if (sug.kind === 'task_merge') return Dupes.approve(sug, actor);
   if (sug.status !== 'pending' || sug.kind !== 'task') throw new Error('ההצעה כבר טופלה');
   const taskId = createFromSuggestion(sug, actor, edits);
   D.run("UPDATE ai_suggestions SET status = 'approved', task_id = ?, decided_at = ? WHERE id = ?", taskId, D.nowIso(), id);
@@ -694,6 +719,10 @@ function approveAll(actor) {
 function reject(id, actor, { ignoreSender = false } = {}) {
   const sug = ownSuggestion(id, actor.id);
   if (sug.status !== 'pending') return;
+  // "לא כפולות" — לכל מי שקיבל את ההצעה, ולתמיד
+  if (sug.kind === 'task_merge') return Dupes.reject(sug, actor);
+  // "לא קשור" — השורה הדחויה נשארת, ולכן אותה הודעה לא תוצע שוב לאותה משימה
+  if (TaskSync.KINDS.includes(sug.kind)) ignoreSender = false;
   D.run("UPDATE ai_suggestions SET status = 'rejected', decided_at = ? WHERE id = ?", D.nowIso(), id);
   if (!ignoreSender) return;
   const data = parseJson(sug.data, {});
@@ -708,6 +737,7 @@ function reject(id, actor, { ignoreSender = false } = {}) {
  */
 function restore(id, actor) {
   const sug = ownSuggestion(id, actor.id);
+  if (sug.kind === 'task_merge') return Dupes.restore(sug);
   if (sug.status !== 'rejected') throw new Error('ההצעה אינה דחויה');
   if (sug.decided_at && Date.now() - new Date(sug.decided_at).getTime() > 3600e3) throw new Error('עבר יותר מדי זמן מהדחייה');
   D.run("UPDATE ai_suggestions SET status = 'pending', decided_at = NULL WHERE id = ?", id);

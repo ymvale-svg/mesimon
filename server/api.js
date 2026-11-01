@@ -30,6 +30,8 @@ const MailScan = require('./ai/mail-scan');
 const Claude = require('./ai/claude');
 const WhatsApp = require('./whatsapp');
 const WaBot = require('./ai/wa-bot');
+const Dupes = require('./ai/task-dupes');
+const TaskSync = require('./ai/task-sync');
 const Tiful360 = require('./tiful360');
 const {
   Router, badRequest, forbidden, notFound,
@@ -469,6 +471,10 @@ function shapeTask(task, actor, { withDetails = false } = {}) {
     statusShort: task.status_short ?? '',
     // "📅 פגישה לקביעה" — מחכה שתיקבע לה פגישה (‎meetings.js‎)
     meetingPending: Boolean(task.meeting_pending),
+    // מוזגה לתוך משימה ותיקה (פרק 11ב) — הכרטיס מפנה אליה
+    mergedInto: task.merged_into_task_id
+      ? { id: task.merged_into_task_id, title: D.get('SELECT title FROM tasks WHERE id = ?', task.merged_into_task_id)?.title ?? '' }
+      : null,
     trackStatusId: track?.id ?? null,
     trackStatusLabel: track?.label ?? null,
     trackStatusColor: track?.color ?? null,
@@ -1568,8 +1574,60 @@ function createTask(actor, body) {
   D.audit(id, actorRef(actor), 'created', body.auditNote || 'המשימה נוצרה');
   if (assigneeId) notifyAssignment(id, assigneeType, assigneeId, title, actor);
   for (const e of extras) notifyAssignment(id, e.type, e.id, title, actor, { extra: true });
+
+  /*
+   * משימה כפולה במחלקה (פרק 11ב). בדיאלוג "משימה חדשה" המשתמש כבר ראה את
+   * הדומות ובחר "לפתוח בכל זאת" (‎dupChecked‎ — המזהים שהוצגו): הזוגות האלה לא
+   * יוצעו כמיזוג. בכל מסלול אחר — הצעה, הקלטה, בוט, משימת AI — אין את מי
+   * לשאול עכשיו: הבדיקה רצה ברקע, ואם נמצאה כפולה — הצעת מיזוג לאחראים.
+   */
+  if (Array.isArray(body.dupChecked)) {
+    Dupes.keepApart(id, body.dupChecked, actor.type === 'user' ? actor.id : null);
+  } else if (actor.type === 'user' && body.dupCheck !== false) {
+    setImmediate(() => Dupes.checkCreated(id).catch((err) => console.error('[משימון] בדיקת משימה כפולה נכשלה:', err.message)));
+  }
   return id;
 }
+
+/** המחלקה שמשימה חדשה תיפתח בה — אותו כלל של ‎createTask‎ */
+function newTaskDepartment(actor, body) {
+  let dept = null;
+  if ((body.assigneeType ?? 'user') === 'user' && body.assigneeId) {
+    dept = D.get('SELECT department_id FROM users WHERE id = ?', Number(body.assigneeId))?.department_id ?? null;
+  }
+  if (!dept && actor.type === 'user') dept = actor.departmentId ?? null;
+  if (isDeptManager(actor) && !P.inActorDepartments(actor, dept)) dept = actor.departmentId ?? null;
+  return dept;
+}
+
+/**
+ * "יש כבר משימה דומה" — לפני היצירה, מהדיאלוג. רק משימות פתוחות באותה מחלקה.
+ * מוחזרים כותרת ואצל מי — גם למי שאינו רואה את המשימה עצמה: בתוך המחלקה זה
+ * בדיוק מה שצריך לדעת כדי לא לפתוח עבודה כפולה (ולהצטרף אליה).
+ */
+router.post('/api/tasks/similar', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  if (isVendor(actor)) return sendJson(res, 200, { matches: [] });
+  const body = await readJson(req);
+  if (body.assigneeType === 'vendor') return sendJson(res, 200, { matches: [] });
+  const matches = await Dupes.similarForNew(actor, {
+    title: body.title, description: body.description, projectId: body.projectId, departmentId: newTaskDepartment(actor, body)
+  });
+  sendJson(res, 200, { matches });
+});
+
+/** "להצטרף למשימה של יוסי" — אחראי נוסף על המשימה הקיימת, בלי משימה חדשה */
+router.post('/api/tasks/:id/join', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  if (isVendor(actor)) throw forbidden();
+  try {
+    const id = Dupes.join(actor, Number(ctx.params.id));
+    sendJson(res, 200, { task: shapeTask(getTaskOr404(id), actor, { withDetails: true }) });
+  } catch (err) {
+    if (err.status === 403) throw forbidden(err.message);
+    throw badRequest(err.message);
+  }
+});
 
 /**
  * מי שהוגדר אחראי מקבל התראה בתוך המערכת וגם דואר.
@@ -5018,6 +5076,79 @@ const botTaskOps = {
     return Boolean(task && canSeeTask(actor, task));
   }
 };
+
+/**
+ * פעולות על משימה עבור "לסגור?" / "לעדכן?" מהמייל ומהוואטסאפ (פרק 11א) —
+ * אותם כללים כמו באפליקציה: ההרשאות של המאשר, יומן והתראות.
+ */
+const syncOps = {
+  canSee: (actor, task) => canSeeTask(actor, task),
+
+  /** ההודעה כהערה פנימית, והקבצים מהמייל מצורפים אליה. קובץ שנכשל — לא מפיל את השאר */
+  comment(actor, task, body, files = []) {
+    const c = D.run('INSERT INTO comments (task_id, author_type, author_id, body, internal, created_at) VALUES (?,?,?,?,1,?)',
+      task.id, 'user', actor.id, String(body).slice(0, 6000), D.nowIso());
+    const commentId = Number(c.lastInsertRowid);
+    const skipped = [];
+    let saved = 0;
+    for (const f of files) {
+      try {
+        const r = saveAttachment(task, actor, f, commentId);
+        D.audit(task.id, actorRef(actor), 'attachment', `צורף קובץ "${r.name}" מההודעה (גרסה ${r.version})`);
+        saved++;
+      } catch (err) {
+        skipped.push(`${f.filename} (${err.message})`);
+      }
+    }
+    D.audit(task.id, actorRef(actor), 'comment', 'נוספה הערה מהודעה שהתקבלה');
+    if (task.assignee_type === 'user' && task.assignee_id && task.assignee_id !== actor.id) {
+      D.notify({ targetType: 'user', targetId: task.assignee_id, kind: 'comment', title: `${actor.name} הוסיף/ה עדכון למשימה`, body: `${task.title} — ${String(body).slice(0, 120)}`, taskId: task.id });
+    }
+    return { commentId, saved, skipped };
+  },
+
+  complete(actor, taskId, note) {
+    const task = getTaskOr404(taskId);
+    if (!mayOnTask(actor, 'change_task_status', task, projectOf(task))) throw forbidden('אין לך הרשאה לשנות את סטטוס המשימה');
+    const final = D.get('SELECT key FROM board_columns WHERE board_id = ? AND is_final = 1 ORDER BY position LIMIT 1', task.board_id);
+    if (!final) throw badRequest('אין בבורד סטטוס סגירה');
+    changeStatus(task, final.key, actor, note);
+  },
+
+  setStatus(actor, taskId, key) {
+    const task = getTaskOr404(taskId);
+    if (task.status === key) return;
+    if (!mayOnTask(actor, 'change_task_status', task, projectOf(task))) throw forbidden('אין לך הרשאה לשנות את סטטוס המשימה');
+    changeStatus(task, key, actor, 'לפי הודעה שהתקבלה');
+  },
+
+  /** יעד חדש — 17:00 ביום שנבחר, שעון ישראל, כמו בדיאלוג */
+  setDue(actor, taskId, ymd) {
+    const task = getTaskOr404(taskId);
+    if (!mayOnTask(actor, 'edit_delete_task', task, projectOf(task))) throw forbidden('אין לך הרשאה לשנות את תאריך היעד');
+    const next = W.dueIso(ymd);
+    if (task.due_date === next) return;
+    D.run('UPDATE tasks SET due_date = ? WHERE id = ?', next, task.id);
+    D.audit(task.id, actorRef(actor), 'updated', `תאריך יעד: ${Rules.formatDate(task.due_date) || '—'} ← ${Rules.formatDate(next)} (לפי הודעה שהתקבלה)`);
+    if (task.assignee_type === 'user' && task.assignee_id && task.assignee_id !== actor.id) {
+      D.notify({ targetType: 'user', targetId: task.assignee_id, kind: 'status_change', title: 'תאריך היעד במשימה שלך עודכן', body: `${task.title} — ${Rules.formatDate(next)}`, taskId: task.id });
+    }
+  }
+};
+TaskSync.setHooks(syncOps);
+
+/*
+ * מיזוג משימות כפולות: המשימה שמוזגה נסגרת במסלול הרגיל של שינוי סטטוס
+ * (יומן, התראה לפותח). ההרשאה כבר נבדקה — האישור של אחד האחראים הוא ההרשאה.
+ */
+Dupes.setHooks({
+  canSeeTask,
+  closeTask(actor, taskId, note) {
+    const task = getTaskOr404(taskId);
+    const final = D.get('SELECT key FROM board_columns WHERE board_id = ? AND is_final = 1 ORDER BY position LIMIT 1', task.board_id);
+    if (final && task.status !== final.key) changeStatus(task, final.key, actor ?? { type: 'system', id: null, name: 'המערכת' }, note);
+  }
+});
 
 AiApi.register(router, { getTaskOr404, assertVisible, mayOnTask, shapeTask, actorRef, saveAttachment, createTask, assertMayAssignTo, assertMayUseProject, listProjectsFor, newTaskProjects, assignableUserIds, assignBlockReason, botTaskOps });
 TodayApi.register(router, { shapeTask, createTask, getTaskOr404, listProjectsFor, newTaskProjects, assertMayAssignTo });

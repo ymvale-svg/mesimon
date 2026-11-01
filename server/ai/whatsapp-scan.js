@@ -29,6 +29,7 @@ const Claude = require('./claude');
 const WhatsApp = require('../whatsapp');
 const Business = require('./wa-business');
 const Insights = require('./insights');
+const TaskSync = require('./task-sync');
 
 const SKILL = path.join(__dirname, 'skills', 'whatsapp-personal-to-tasks.md');
 const ANSWER_DAYS = 3;
@@ -259,6 +260,14 @@ async function handle(userId, items) {
       ...msgs.map((m) => `${new Date(m.at).toISOString().slice(0, 16).replace('T', ' ')}: ${String(m.text).slice(0, 2000)}`),
       '>>>'
     ].join('\n');
+    // הודעה שעונה על משימה שפתחתי, או מעדכנת אותה — "לסגור?" / "לעדכן?" (‎task-sync.js‎)
+    await TaskSync.checkQuietly(userId, {
+      source: 'personal',
+      fromName: name,
+      fromPhone: from,
+      chatPhone: from,
+      messages: msgs.map((m) => ({ text: m.text, at: new Date(m.at).toISOString(), ref: `wap:${userId}:${m.id}` }))
+    });
     let out;
     try {
       out = await Claude.json({ system: fs.readFileSync(SKILL, 'utf8'), content: [{ type: 'text', text }], schema: SCHEMA, effort: 'low' });
