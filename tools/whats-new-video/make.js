@@ -88,16 +88,25 @@ function encode(recFile, workDir, outBase, posterAt) {
   const { child, base } = await startServer();
   const browser = await chromium.launch();
   fs.mkdirSync(OUT_DIR, { recursive: true });
+  const failed = [];
   try {
     for (const item of items) {
       const scene = SCENES.scenes[item.id];
       if (!scene) throw new Error(`אין סצנה לפריט "${item.id}"`);
       process.stdout.write(`🎬 ${item.id} — ${item.title} … `);
       const work = path.join(tmp, item.id);
-      const rec = await require('./director').record(browser, {
-        base, login: SCENES.login ?? LOGIN, framesDir: path.join(work, 'frames'),
-        scene: scene.run ?? scene, setup: scene.setup
-      });
+      let rec;
+      try {
+        rec = await require('./director').record(browser, {
+          base, login: SCENES.login ?? LOGIN, framesDir: path.join(work, 'frames'),
+          scene: scene.run ?? scene, setup: scene.setup
+        });
+      } catch (err) {
+        // סצנה שנכשלה אינה עוצרת את השאר — מדווחים וממשיכים
+        failed.push(item.id);
+        console.log(`נכשל: ${err.message}`);
+        continue;
+      }
       const recFile = path.join(work, 'recording.json');
       fs.writeFileSync(recFile, JSON.stringify(rec));
       const secs = encode(recFile, work, path.join(OUT_DIR, item.id), scene.posterAt ?? 0.55);
@@ -113,6 +122,10 @@ function encode(recFile, workDir, outBase, posterAt) {
   fs.writeFileSync(RELEASE_FILE, `${JSON.stringify(rel, null, 2)}\n`);
   fs.rmSync(tmp, { recursive: true, force: true });
   console.log(`✓ הסרטונים ב-public/whats-new/${release}/, והנתיבים נרשמו ב-server/whats-new/${release}.json`);
+  if (failed.length) {
+    console.error(`✕ נכשלו: ${failed.join(', ')}`);
+    process.exitCode = 1;
+  }
 })().catch((err) => {
   console.error('ההפקה נכשלה:', err.message);
   process.exit(1);

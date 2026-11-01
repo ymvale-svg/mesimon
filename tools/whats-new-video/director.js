@@ -49,10 +49,18 @@ function stageScript(SLOW) {
   cur.innerHTML = '<svg viewBox="0 0 24 24" width="22" height="22"><path d="M3 2l7 19 2.5-7.5L20 11z" fill="#0f172a" stroke="#fff" stroke-width="1.6" stroke-linejoin="round"/></svg>';
   document.documentElement.appendChild(cur);
 
-  const rectOf = (sel) => {
-    const n = [...document.querySelectorAll(sel)].find((x) => { const r = x.getBoundingClientRect(); return r.width > 1 && r.height > 1; });
-    return n ? n.getBoundingClientRect() : null;
+  /*
+   * בורר CSS, ואפשר גם לפי טקסט: ‎'.today-pick button::text=מחר'‎ — האלמנט
+   * הגלוי הראשון שמתאים לבורר ושהטקסט שלו מכיל את המילים.
+   */
+  const find = (sel) => {
+    const [css, text] = String(sel).split('::text=');
+    return [...document.querySelectorAll(css)].find((x) => {
+      const r = x.getBoundingClientRect();
+      return r.width > 1 && r.height > 1 && (!text || x.textContent.includes(text));
+    }) ?? null;
   };
+  const rectOf = (sel) => find(sel)?.getBoundingClientRect() ?? null;
   window.__dv = {
     spot(selectors, label) {
       const pad = 8;
@@ -89,7 +97,12 @@ function stageScript(SLOW) {
       cur.style.top = `${y}px`;
       return { x, y };
     },
-    moveTo(x, y) { cur.style.left = `${x}px`; cur.style.top = `${y}px`; },
+    moveTo(x, y, instant = false) {
+      cur.style.transition = instant ? 'none' : '';
+      cur.style.left = `${x}px`;
+      cur.style.top = `${y}px`;
+    },
+    scrollTo(sel) { find(sel)?.scrollIntoView({ block: 'center', behavior: 'smooth' }); },
     click() { cur.classList.remove('click'); void cur.offsetWidth; cur.classList.add('click'); },
     box(selectors) {
       const rs = selectors.map(rectOf).filter(Boolean);
@@ -170,6 +183,29 @@ async function record(browser, { base, login, framesDir, scene, setup }) {
       await page.mouse.click(p.x, p.y);
       await wait(450);
     },
+    /**
+     * גרירה — לחיצה על ‎from‎, תנועה רציפה של ‎dx,dy‎ פיקסלים, ושחרור. העכבר
+     * האמיתי זז בצעדים (אירועי מצביע), והסמן שעל המסך זז איתו.
+     */
+    async drag(from, { dx = 0, dy = 0, steps = 30, fx = 0.5, fy = 0.5 } = {}) {
+      const p = await d.point(from, { fx, fy });
+      await page.mouse.down();
+      await wait(250);
+      for (let i = 1; i <= steps; i++) {
+        const t = i / steps;
+        const e = t * t * (3 - 2 * t);
+        const x = p.x + dx * e;
+        const y = p.y + dy * e;
+        await page.mouse.move(x, y);
+        await page.evaluate(([a, b]) => __dv.moveTo(a, b, true), [x, y]);
+        await page.waitForTimeout(28 * SLOW);
+      }
+      await wait(250);
+      await page.mouse.up();
+      await page.evaluate(() => __dv.moveTo(parseFloat(document.getElementById('dv-cur').style.left), parseFloat(document.getElementById('dv-cur').style.top)));
+      await wait(500);
+    },
+    async scroll(sel) { await page.evaluate((s) => __dv.scrollTo(s), sel); await wait(900); },
     async type(text, { delay = 110 } = {}) {
       await page.keyboard.type(text, { delay: delay * SLOW });
       await wait(300);
