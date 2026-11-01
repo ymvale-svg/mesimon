@@ -4,6 +4,11 @@
   --brand: #0f766e;
   --brand-dark: #115e59;
   --brand-light: #ccfbf1;
+  /*
+   * המותג כצבע **טקסט**. בבהיר זה אותו צבע; במצב לילה הוא בהיר יותר, כי
+   * אותו טורקיז שעליו טקסט לבן קריא (כפתור) הוא כהה מדי לטקסט על רקע כהה.
+   */
+  --brand-ink: var(--brand);
   --accent: #c2410c;
 
   /*
@@ -68,7 +73,7 @@ body {
 }
 
 button, input, select, textarea { font-family: inherit; font-size: inherit; color: inherit; }
-a { color: var(--brand); text-decoration: none; }
+a { color: var(--brand-ink); text-decoration: none; }
 h1, h2, h3, h4 { margin: 0; font-weight: 700; letter-spacing: -.01em; }
 
 ::-webkit-scrollbar { width: 10px; height: 10px; }
@@ -291,9 +296,9 @@ textarea { resize: vertical; min-height: 76px; }
   border: 0; border-radius: 8px; background: transparent;
   color: var(--text-mute); cursor: pointer;
 }
-.pw-toggle:hover { color: var(--brand); background: var(--surface-2); }
+.pw-toggle:hover { color: var(--brand-ink); background: var(--surface-2); }
 .pw-toggle:focus-visible { outline: 2px solid var(--brand); outline-offset: 1px; }
-.pw-toggle[aria-pressed="true"] { color: var(--brand); }
+.pw-toggle[aria-pressed="true"] { color: var(--brand-ink); }
 
 .login-panel { padding: 52px 46px; display: flex; flex-direction: column; justify-content: center; }
 .login-panel h2 { font-size: 24px; margin-bottom: 4px; }
@@ -330,7 +335,7 @@ textarea { resize: vertical; min-height: 76px; }
   color: var(--text-soft); font: inherit; font-size: 13.5px; cursor: pointer;
   text-decoration: underline; text-underline-offset: 3px; text-decoration-color: var(--border-strong);
 }
-.email-toggle:hover { color: var(--brand); text-decoration-color: currentColor; }
+.email-toggle:hover { color: var(--brand-ink); text-decoration-color: currentColor; }
 .email-toggle:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
 /* הטופס נפתח מתחת לכפתור של Google, בהפרדה ובכניסה רכה */
 .google-slot:not(:empty) + .login-form:not([hidden]) {
@@ -543,7 +548,7 @@ textarea { resize: vertical; min-height: 76px; }
   font-size: 10.5px; font-weight: 700; letter-spacing: 0;
   padding: 1px 8px; white-space: nowrap; text-transform: none;
 }
-.nav-scope:hover { border-color: var(--brand); color: var(--brand); background: var(--brand-light); }
+.nav-scope:hover { border-color: var(--brand); color: var(--brand-ink); background: var(--brand-light); }
 .nav-note { font-size: 11.5px; color: var(--text-mute); padding: 2px 12px 6px; }
 .nav-item {
   display: flex; align-items: center; gap: 10px; padding: 8px 11px;
@@ -602,119 +607,93 @@ textarea { resize: vertical; min-height: 76px; }
 .card-head h3 { font-size: 15px; flex-shrink: 0; max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .card-head .spacer { flex: 1; }
 
-/* ---- לוח החלונות בדף הבית ---- */
+/* ---- לוח החלונות בדף הבית — רשת חופשית (ראה "לוח החלונות" ב-home.js) ---- */
 
 /*
- * רשימה אחת עם עטיפת שורות, ולא שתי עמודות. "מיקום" הוא מקום בסדר,
- * ו"רוחב" הוא חצי שורה או שורה שלמה — שני מושגים שנותנים את אותה שליטה
- * שנותנות שתי עמודות עם גרירה ביניהן, בלי לנהל עמודה שמתרוקנת.
+ * רשת של ‎--cols‎ עמודות ושורות של ‎--row‎, ומיקום מוחלט לכל חלון. לא
+ * ‎display: grid‎: ברשת של הדפדפן אין הנפשה בין מקומות, וכל הזזה של שכן
+ * הייתה קפיצה. במיקום מוחלט המעבר הוא ‎transition‎ רגיל על ארבעה מאפיינים.
  *
- * ‎stretch‎ ולא ‎flex-start‎: חלונות באותה שורה מסתיימים באותו קו, אחרת כל
- * חלון נגמר בגובה תוכנו והלוח נראה משורבב.
+ * ‎--unit-x‎ הוא עמודה ועוד רווח. האחוז בתוכו נפתר במקום השימוש — ב-‎width‎
+ * וב-‎inset-inline-start‎ של החלון — כלומר ביחס לרוחב הלוח, ולכן שינוי
+ * רוחב המסך אינו דורש שום חישוב ב-JS. ‎inset-inline-start‎ ולא ‎left‎:
+ * בעברית עמודה 0 היא הימנית, מעצמה.
  */
 .home-board {
-  display: flex; flex-wrap: wrap; gap: 14px; align-items: stretch;
-  margin-top: 14px;
+  --cols: 12; --rows: 0; --row: 40px; --gap: 14px;
+  --unit-x: calc((100% - (var(--cols) - 1) * var(--gap)) / var(--cols) + var(--gap));
+  --unit-y: calc(var(--row) + var(--gap));
+  --spring: cubic-bezier(.22, 1.12, .36, 1);
+  position: relative; margin-top: 14px;
+  height: max(0px, calc(var(--rows) * var(--unit-y) - var(--gap)));
+  transition: height .3s ease;
 }
-
-/*
- * הרוחב זורם, ומספר העמודות נגזר ממנו — בלי שאילתת מדיה ובלי חישוב ב-JS.
- *
- * ‎clamp‎ בבסיס הוא כל הסיפור: חצי שורה היא השאיפה, 300 פיקסלים הרצפה
- * ו-500 התקרה. מכאן מספר העמודות נקבע מעצמו — עמודה אחת בצר, שתיים
- * ברגיל, שלוש ויותר במסך רחב — וכל מסך ביניהם מתפרס בהדרגה במקום לקפוץ
- * בין שתי מדידות קבועות. התקרה חשובה במיוחד: בלעדיה, על מסך של 2560
- * פיקסלים כל חלון היה 1270 פיקסלים רחב, ושורת משימה נמתחת לרוחב כזה אינה
- * קריאה.
- *
- * ‎flex-grow: 1‎ ולא 0, וזו החלפה של מכניזם שלם: קודם לכן חלון שנשאר לבד
- * בשורה סומן ב-JS כדי להימתח, והחישוב רץ בהשהיה אחרי כל שינוי גודל — מה
- * שנראה כקפיצה מאוחרת. התרחבות פותרת זאת בפריסה עצמה: שני חלונות בשורה
- * מתחלקים בה שווה בשווה, וחלון שנשאר לבד ממלא אותה מיד ובלי JS.
- */
-/*
- * ‎--share‎ הוא היחס של החלון בשורתו, וברירת המחדל 1 פירושה חלוקה שווה.
- *
- * המשקל מוכפל גם בבסיס וגם בהתרחבות, ולא באחד מהם — וזה מה שהופך את היחס
- * למדויק. רוחב סופי של חלון בפריסת flex הוא ‎basis + free * grow/Σgrow‎;
- * כששניהם פרופורציוניים ל-‎share‎ הביטוי מצטמצם ל-‎share * רוחב_השורה / Σshare‎.
- * כלומר: הרוחבים תמיד ביחס המבוקש, סכומם תמיד רוחב השורה המלא, ושינוי של
- * אחד גורע בהכרח מהשני — בלי חישוב ב-JS ובלי שאריות.
- *
- * נגזרות שיוצאות מכאן בחינם: חלון שנשאר לבד בשורה ממלא אותה ללא תלות
- * ביחס שלו, ובשלושה חלונות בשורה שינוי יחס בין שניים אינו נוגע בשלישי.
- */
+.home-slot, .home-ph {
+  position: absolute;
+  inset-inline-start: calc(var(--x, 0) * var(--unit-x));
+  top: calc(var(--y, 0) * var(--unit-y));
+  width: calc(var(--w, 1) * var(--unit-x) - var(--gap));
+  height: calc(var(--h, 1) * var(--unit-y) - var(--gap));
+}
 .home-slot {
-  flex: var(--share, 1) 1 calc(var(--share, 1) * clamp(300px, 50% - 7px, 500px));
-  min-width: 0; position: relative; display: flex;
+  display: flex; min-width: 0;
+  transition: inset-inline-start .34s var(--spring), top .34s var(--spring),
+    width .26s ease, height .26s ease;
 }
-.home-slot.is-wide { flex: 1 1 100%; }
+/* ציור ראשון ומעבר בין נקודות שבירה — במקום, בלי "מעוף" מהפינה */
+.home-board.is-static, .home-board.is-static .home-slot { transition: none; }
 
 /*
- * חלון עם רשימה: תקרה אחת לכולם, והרשימה ממלאה את מה שהשורה נתנה.
- *
- * זה מה שהופך את ההשוואה בין החלונות להוגנת. קודם לכן כל כרטיס קבע לעצמו
- * תקרה — 210, 220, 300, 360 — וכל חלון נחתך במקום אחר. עכשיו הגובה נקבע
- * במקום אחד, והרשימה גדלה אליו: חלון גבוה מציג יותר שורות במקום להותיר
- * מתחתן חלל.
- *
- * התקרה חלה רק על חלון שיש בו רשימה. חלון עם טבלה פרושה או עם טקסט אינו
- * נגלל בפנים, ותקרה עליו הייתה חותכת תוכן שאין דרך להגיע אליו.
+ * תוכן החלון ממלא אותו, ומה שלא נכנס נגלל **בתוך** החלון. רשימה (‎.feed-scroll‎)
+ * היא שנגללת כשיש כזו — הכותרת וכותרת הטבלה נשארות במקום — וחלון בלי רשימה
+ * נגלל כולו מתחת לכותרת.
  */
-/*
- * הגובה נגזר מגובה החלון ולא ממספר קבוע. 400 פיקסלים היו נדיבים על מסך
- * נייד וקטנים על מסך 27 אינץ' — ‎42vh‎ שומר על אותו יחס בכל מסך, והרצפה
- * והתקרה מונעות ממנו להיות בלתי שמיש בקצוות.
- *
- * ‎--slot-h‎ שהמשתמש גרר גובר על החישוב הזה, ואז הוא בפיקסלים מוחלטים —
- * זו הייתה בחירה מפורשת שלו, ואין להמשיך למתוח אותה עם גובה החלון.
- */
-.home-slot.has-list { max-height: var(--slot-h, clamp(240px, 42vh, 520px)); }
-/*
- * שינוי גובה זורם. מנוטרל בזמן גרירה: מעבר של 180ms על כל תזוזת עכבר היה
- * גורם לחלון להיסחב אחרי הסמן במקום לעקוב אחריו.
- */
-.home-slot.has-list { transition: max-height .18s ease; }
-.home-slot.is-resizing { transition: none; }
-@media (prefers-reduced-motion: reduce) {
-  .home-slot.has-list { transition: none; }
+.home-slot > .card {
+  flex: 1; min-width: 0; min-height: 0; height: 100%;
+  display: flex; flex-direction: column; overflow: hidden;
 }
-.home-slot > .card { flex: 1; min-width: 0; }
-/*
- * כל חלון הוא מכל לשאילתות רוחב (‎@container slot‎ למטה), כי הרוחב שקובע
- * את הפריסה בתוכו הוא רוחב החלון ולא רוחב המסך: חלון של 300 פיקסלים יושב
- * גם במסך של 1920, ושאילתת מדיה הייתה רואה שם מסך רחב ופורסת שבע עמודות.
- *
- * על הכרטיס ולא על ‎.home-slot‎: הכלה של רוחב הופכת את האלמנט לבסיס של
- * ‎z-index‎ ושל ‎position: fixed‎. על החלון זה היה נוגע בידיות הגודל
- * שתלויות בו ובהרמה בזמן גרירה; בכרטיס אין אף אחד מהם. הגובה אינו מוכל —
- * רק הרוחב — ולכן התקרה של ‎--slot-h‎ ומדידת הגלילה עובדות כמקודם.
- */
-.home-slot > .card { container: slot / inline-size; }
-.home-slot.has-list > .card { display: flex; flex-direction: column; min-height: 0; }
-.home-slot.has-list > .card > .card-pad { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+.home-slot > .card > :not(.card-head) { flex: 1 1 auto; min-height: 0; overflow: auto; }
+.home-slot.has-list > .card > :not(.card-head) { display: flex; flex-direction: column; overflow: hidden; }
 .home-slot.has-list .task-table { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
 .home-slot.has-list .feed-scroll { flex: 1 1 auto; min-height: 0; max-height: none; }
+.home-slot > .card > .card-head { flex: none; }
 /*
- * ‎--slot-h‎ שהמשתמש גרר גובר על תקרת ברירת המחדל, דרך ‎max-height‎ על
- * החלון עצמו (ראה ‎.home-slot.has-list‎ למעלה).
- *
- * ‎max-height‎ ולא ‎height‎, וזה תיקון של החלטה קודמת: גובה מפורש אכן שמר על
- * גודל החלון, אבל ברשימה קצרה ממנו הותיר מתחת לשורות חלל ריק. תקרה מקצרת
- * רשימה ארוכה ואינה מנפחת קצרה, והגרירה חסומה ב-JS בגובה התוכן — ולכן אי
- * אפשר בכלל להגיע למצב שנוצר חלל.
+ * כל חלון הוא מכל לשאילתות רוחב (‎@container slot‎), כי הרוחב שקובע את
+ * הפריסה בתוכו הוא רוחב החלון ולא רוחב המסך. על הכרטיס ולא על החלון: הכלה
+ * הופכת אלמנט לבסיס של ‎position: fixed‎, וידיות הגודל תלויות בחלון.
  */
+.home-slot > .card { container: slot / inline-size; }
+
+/* מדידת הגובה הטבעי (ראה naturalRows) — לרגע, בלי ציור */
+.home-slot.is-measuring { height: auto; }
+.home-slot.is-measuring > .card { height: auto; }
+.home-slot.is-measuring > .card > :not(.card-head) { flex: none; overflow: visible; }
+.home-slot.is-measuring .feed-scroll, .home-slot.is-measuring .task-table { flex: none; overflow: visible; }
+
+/*
+ * הכותרת היא הידית. סמן יד, ופס קטן במרכז הקצה העליון שמופיע בריחוף — רמז
+ * שקט שהחלון נתפס מכאן, בלי כפתור נוסף בכותרת. ‎touch-action‎ נשאר: במגע
+ * הדף נגלל מהכותרת, והגרירה מתחילה רק בלחיצה ארוכה.
+ */
+.card-head.is-handle {
+  cursor: grab; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
+  position: relative; padding-inline-end: 10px;
+}
+.card-head.is-handle :is(button, a, input, select, label) { cursor: pointer; }
+.card-head.is-handle::before {
+  content: ''; position: absolute; top: 5px; inset-inline-start: 50%; translate: 50% 0;
+  width: 34px; height: 4px; border-radius: 4px; background: var(--border-strong);
+  opacity: 0; transition: opacity .15s;
+}
+.home-slot:hover .card-head.is-handle::before,
+.card-head.is-handle:focus-visible::before { opacity: 1; }
+.card-head.is-handle:focus-visible { outline: 2px solid var(--brand); outline-offset: -2px; border-radius: var(--radius-lg) var(--radius-lg) 0 0; }
 
 /*
  * כותרת החלון: הכותרת ותת-הכותרת, ואחריהן קבוצת הפקדים (ראה headActions
- * ב-home.js).
- *
- * ‎margin-inline-start: auto‎ דוחף את הקבוצה לקצה, בשורה הראשונה כשיש בה
- * מקום ובשורה משלה כשאין — והיא עוברת **כיחידה**, ולא כפתור-כפתור.
- * תת-הכותרת בבסיס 0 ובהתרחבות: היא ממלאת את מה שנשאר ליד הכותרת ומתקצרת
- * בשלוש נקודות, במקום לגלוש לשורה משלה ולמשוך את הכפתורים איתה.
+ * ב-home.js). ‎margin-inline-start: auto‎ דוחף את הקבוצה לקצה, בשורה
+ * הראשונה כשיש בה מקום ובשורה משלה כשאין — והיא עוברת **כיחידה**.
  */
-.card-head.has-slot-tools { padding-inline-end: 10px; }
 .card-head .head-sub {
   flex: 1 1 0; min-width: 0;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
@@ -723,186 +702,149 @@ textarea { resize: vertical; min-height: 76px; }
   display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
   flex: none; max-width: 100%; margin-inline-start: auto;
 }
-/* קבוצה שכל תוכנה הוא כלי החלון — במצב רגיל אין בה דבר, ושורה ריקה היא רווח */
-.home-board:not(.is-editing) .head-actions.only-tools { display: none; }
-
 /*
- * חלון צר (פחות מ-520): שתי שורות קבועות — כותרת ותת-כותרת, ומתחתן
- * הפקדים. בלי שבירה מפורשת השורה הייתה נשברת במקום אקראי לפי אורך
- * הכותרת, וכל חלון היה נראה אחרת. מתחת ל-380 גם תת-הכותרת יורדת לשורה
- * משלה — לידה הכותרת הייתה נשארת עם שתי מילים ושלוש נקודות.
+ * חלון צר (פחות מ-520): כותרת ותת-כותרת בשורה, והפקדים מתחתן. ⋯ נשאר
+ * בשורה הראשונה, בקצה — הוא שייך לחלון, לא לתוכן.
  */
 @container slot (max-width: 519px) {
-  .card-head .head-actions { flex-basis: 100%; justify-content: flex-start; margin-inline-start: 0; }
+  .card-head .head-actions:not(.only-tools) { flex-basis: 100%; justify-content: flex-start; margin-inline-start: 0; }
+  .card-head .head-actions.only-tools { display: contents; }
+  .card-head .slot-menu-btn { position: absolute; top: 9px; inset-inline-end: 8px; }
+  .card-head.is-handle { padding-inline-end: 44px; }
 }
 @container slot (max-width: 379px) {
   .card-head .head-sub { flex-basis: 100%; }
 }
 
+/* ⋯ — תפריט החלון. שקט עד ריחוף, אבל תמיד שם (יעד לחיצה של 30) */
+.slot-menu-btn {
+  border: 0; background: transparent; cursor: pointer; font: inherit;
+  width: 30px; height: 30px; border-radius: 8px; padding: 0; flex: none;
+  color: var(--text-mute); font-size: 18px; font-weight: 800; line-height: 1;
+  display: inline-grid; place-items: center; letter-spacing: 1px;
+}
+.slot-menu-btn:hover, .slot-menu-btn[aria-expanded='true'] { background: var(--surface-2); color: var(--brand-ink); }
+.slot-menu-btn:focus-visible { outline: 2px solid var(--brand); outline-offset: 1px; }
+
+/* התפריט עצמו — מבוסס על הפופאובר של הטבלה */
+.slot-menu-pop { min-width: 220px; }
+.slot-menu .popover-option { justify-content: space-between; }
+.slot-menu .popover-option:focus-visible, .slot-menu .popover-option:focus { background: var(--brand-light); outline: none; }
+.slot-menu .popover-option[disabled] { color: var(--text-mute); cursor: default; background: none; }
+.slot-menu .popover-option.is-danger { color: var(--danger); }
+.slot-menu .sm-text { display: flex; flex-direction: column; align-items: flex-start; min-width: 0; white-space: normal; text-align: start; }
+.slot-menu .sm-hint { font-size: 11.5px; color: var(--text-mute); }
+.slot-menu .sm-heading { font-size: 11.5px; font-weight: 700; color: var(--text-mute); padding: 6px 9px 2px; }
+
 /*
- * כלי החלון — רק במצב סידור (ראה ‎editing‎ ב-home.js).
- *
- * עד כה הם ישבו בכל כותרת תמיד, בשקיפות 40%: שישה כפתורים שהתחרו עם
- * הכותרת על המקום, ובשקיפות הזו גם לא עמדו בניגודיות. עכשיו במצב הרגיל
- * הכותרות נקיות, ובמצב סידור הכלים מלאים: 28 פיקסלים (מעל רצפת ה-24 של
- * יעד לחיצה) ובצבע ‎--text-soft‎ — 7.6:1 על לבן.
+ * גרירה: החלון מורם — הגדלה קלה, צל עמוק וסמן יד — ועוקב אחרי הסמן
+ * בפיקסלים (‎--drag-x/y‎), בלי הנפשה. בשחרור המחלקה יורדת והמעבר הרגיל
+ * מחזיר אותו אל הרשת, כלומר הנחיתה היא אותה הנפשה של כל שכן.
  */
-.slot-tools { display: flex; align-items: center; gap: 2px; flex: none; }
-.home-board:not(.is-editing) .slot-tools,
-.home-board:not(.is-editing) .slot-resize,
-.home-board:not(.is-editing) .slot-wresize { display: none; }
-.slot-btn {
-  border: 0; background: transparent; cursor: pointer; font-family: inherit;
-  width: 28px; height: 28px; border-radius: 7px; padding: 0;
-  color: var(--text-soft); font-size: 13px; line-height: 1;
+.home-slot.is-lifted {
+  inset-inline-start: var(--drag-x); top: var(--drag-y);
+  z-index: 30; transition: none; cursor: grabbing;
+}
+.home-slot > .card { transition: box-shadow .25s ease, transform .2s ease; }
+.home-slot.is-lifted > .card {
+  transform: scale(1.03);
+  box-shadow: 0 30px 60px -18px rgba(0, 0, 0, .42), 0 12px 26px -10px rgba(0, 0, 0, .28);
+}
+.home-slot.is-holding > .card { transform: scale(.98); }
+.home-slot.is-landed { z-index: 10; }
+.home-slot.is-landed > .card { box-shadow: 0 0 0 2px var(--brand), var(--shadow); }
+.home-board.is-arranging .home-slot:not(.is-lifted) > .card { pointer-events: none; }
+body.is-dragging-slot, body.is-dragging-slot * { cursor: grabbing !important; }
+
+/* מקום הנחיתה — מסגרת מקווקוות בגוון המותג, מתחת לכל החלונות */
+.home-ph {
+  z-index: 0; pointer-events: none;
+  border: 2px dashed var(--brand); border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--brand) 7%, transparent);
+  transition: inset-inline-start .2s ease, top .2s ease, width .2s ease, height .2s ease;
+}
+.home-ph[hidden] { display: none; }
+
+/*
+ * ידיות הגודל — שמונה, על הקצוות ובפינות, שקופות עד ריחוף. רצועה של 10
+ * פיקסלים שיושבת חציה בתוך הרווח שבין החלונות, ולכן היא אינה גונבת לחיצות
+ * מהכותרת או מהרשימה. בריחוף על צד מופיע פס דק באמצעו; בפינה — זווית.
+ */
+.slot-rz { position: absolute; z-index: 5; touch-action: none; }
+.rz-t, .rz-b { inset-inline: 18px; height: 10px; cursor: ns-resize; }
+.rz-t { top: -6px; }
+.rz-b { bottom: -6px; }
+.rz-s, .rz-e { inset-block: 18px; width: 10px; cursor: ew-resize; }
+.rz-s { inset-inline-start: -6px; }
+.rz-e { inset-inline-end: -6px; }
+.rz-ts, .rz-te, .rz-bs, .rz-be { width: 18px; height: 18px; }
+.rz-ts { top: -6px; inset-inline-start: -6px; }
+.rz-te { top: -6px; inset-inline-end: -6px; }
+.rz-bs { bottom: -6px; inset-inline-start: -6px; }
+.rz-be { bottom: -6px; inset-inline-end: -6px; }
+/* בעברית תחילת השורה מימין: עליון-התחלה הוא הפינה הימנית העליונה */
+.rz-ts, .rz-be { cursor: nesw-resize; }
+.rz-te, .rz-bs { cursor: nwse-resize; }
+[dir='ltr'] .rz-ts, [dir='ltr'] .rz-be { cursor: nwse-resize; }
+[dir='ltr'] .rz-te, [dir='ltr'] .rz-bs { cursor: nesw-resize; }
+.slot-rz::before {
+  content: ''; position: absolute; border-radius: 3px; background: var(--brand);
+  opacity: 0; transition: opacity .12s;
+}
+.rz-t::before, .rz-b::before { inset-inline: calc(50% - 22px); height: 3px; top: 3px; }
+.rz-s::before, .rz-e::before { inset-block: calc(50% - 22px); width: 3px; inset-inline-start: 3px; }
+.rz-ts::before, .rz-te::before, .rz-bs::before, .rz-be::before {
+  width: 10px; height: 10px; background: none; border: 0 solid var(--brand); border-radius: 0;
+}
+.rz-ts::before { top: 4px; inset-inline-start: 4px; border-top-width: 3px; border-inline-start-width: 3px; border-start-start-radius: 6px; }
+.rz-te::before { top: 4px; inset-inline-end: 4px; border-top-width: 3px; border-inline-end-width: 3px; border-start-end-radius: 6px; }
+.rz-bs::before { bottom: 4px; inset-inline-start: 4px; border-bottom-width: 3px; border-inline-start-width: 3px; border-end-start-radius: 6px; }
+.rz-be::before { bottom: 4px; inset-inline-end: 4px; border-bottom-width: 3px; border-inline-end-width: 3px; border-end-end-radius: 6px; }
+/* בריחוף על החלון — רק הפינות, בעדינות; פס הצד מופיע כשמגיעים אליו */
+.home-slot:hover > :is(.rz-ts, .rz-te, .rz-bs, .rz-be)::before { opacity: .3; }
+.home-slot > .slot-rz:hover::before, .home-slot.is-resizing > .slot-rz::before { opacity: 1; }
+.home-board.is-arranging .home-slot:not(.is-resizing) > .slot-rz { display: none; }
+body.is-resizing-slot { user-select: none; }
+body.is-resizing-slot[data-rz='t'] *, body.is-resizing-slot[data-rz='b'] * { cursor: ns-resize !important; }
+body.is-resizing-slot[data-rz='s'] *, body.is-resizing-slot[data-rz='e'] * { cursor: ew-resize !important; }
+body.is-resizing-slot:is([data-rz='ts'], [data-rz='be']) * { cursor: nesw-resize !important; }
+body.is-resizing-slot:is([data-rz='te'], [data-rz='bs']) * { cursor: nwse-resize !important; }
+.home-slot.is-resizing { z-index: 20; transition-duration: .14s; }
+.home-slot.is-resizing > .card { box-shadow: 0 0 0 2px var(--brand), var(--shadow); }
+
+/* תווית הגודל בזמן משיכה — "6 × 8", במרכז החלון */
+.slot-size {
+  position: absolute; z-index: 6; inset-inline-start: 50%; top: 50%; translate: 50% -50%;
+  padding: 4px 12px; border-radius: 999px; pointer-events: none;
+  background: var(--text); color: var(--surface); font-size: 13px; font-weight: 700;
+  font-variant-numeric: tabular-nums; box-shadow: var(--shadow-lg); direction: ltr;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .home-board, .home-slot, .home-ph, .home-slot > .card { transition: none; }
+  .home-slot.is-lifted > .card, .home-slot.is-holding > .card { transform: none; }
+}
+
+/* "＋ הוספת חלון" — בכותרת הדף, עם מספר החלונות המוסתרים */
+.home-add-btn { align-self: center; display: inline-flex; align-items: center; gap: 6px; }
+.home-add-btn .hab-plus { font-weight: 800; color: var(--brand-ink); }
+.home-add-btn .hab-count {
+  min-width: 18px; height: 18px; padding: 0 5px; border-radius: 999px;
+  background: var(--brand); color: #fff; font-size: 11px; font-weight: 700;
   display: inline-grid; place-items: center;
 }
-.slot-btn:hover { background: var(--surface-2); color: var(--brand); }
-.slot-grip { cursor: grab; font-size: 15px; }
-.slot-grip:active { cursor: grabbing; }
-.slot-hide:hover { background: var(--danger); color: #fff; }
-/* מצב מסומן — הבחירה נרשמה גם כשהמסך לא השתנה כתוצאה ממנה */
-.slot-btn[aria-pressed='true'] { background: var(--brand-light); color: var(--brand-dark); }
+.home-empty { margin-top: 14px; }
 
-/* מיקוד נראה על כל הפקדים, אחרת ניווט במקלדת הוא ניחוש */
-.slot-btn:focus-visible,
-.slot-resize:focus-visible,
-.slot-wresize:focus-visible {
-  outline: 2px solid var(--brand); outline-offset: 1px; border-radius: 4px;
-}
-
-/*
- * גרירה חיה (ראה liftSlot ב-home.js): החלון מורם — הגדלה קלה וצל עמוק —
- * ושאר הלוח מתפנה לו תוך כדי. בשחרור הוא נוחת ומסומן לרגע במסגרת.
- */
-.home-board { position: relative; }   /* בסיס ל-offsetTop של החלונות במדידה */
-.slot-grip { touch-action: none; }   /* מגע: הלחיצה הארוכה על הידית אינה גוללת */
-.home-slot > .card { transition: box-shadow .3s ease, transform .2s ease; }
-.home-slot.is-holding > .card { transform: scale(.97); }
-.home-slot.is-lifted { z-index: 20; cursor: grabbing; will-change: transform; }
-.home-slot.is-lifted > .card {
-  box-shadow: 0 28px 60px -16px rgba(0,0,0,.45), 0 10px 24px -8px rgba(0,0,0,.3);
-}
-.home-slot.is-landed { z-index: 10; }
-.home-slot.is-landed > .card { box-shadow: 0 0 0 2px var(--brand), var(--shadow-sm); }
-.home-board.is-arranging .home-slot:not(.is-lifted) { pointer-events: none; }
-body.is-dragging-slot, body.is-dragging-slot * { cursor: grabbing !important; }
-@media (prefers-reduced-motion: reduce) {
-  .home-slot > .card { transition: none; }
-  .home-slot.is-holding > .card { transform: none; }
-}
-
-/*
- * ידיות הגובה — פס דק בשני קצות החלון, מתגלה בריחוף כמו הכלים.
- *
- * גם מלמעלה ולא רק מלמטה: כדי לקצר חלון גבוה היה צריך לגלול עד תחתיתו,
- * ובחלון שגובהו כמעט כגובה המסך זה אומר לאבד מהעין את מה שמכווצים.
- *
- * הידית העליונה נכנסת ל-5 פיקסלים שמעל הכרטיס ומסתיימת 6 פיקסלים לתוכו,
- * ולכן היא אינה נוגעת בכפתורי הכותרת שמתחילים 11 פיקסלים פנימה. ברווח של
- * 14 פיקסלים בין השורות היא גם אינה מתנגשת בידית התחתונה של השורה שמעליה.
- */
-.slot-resize {
-  position: absolute; inset-inline: 26px; bottom: -5px; height: 11px;
-  border: 0; padding: 0; background: transparent; cursor: ns-resize;
-  touch-action: none; z-index: 4;
-}
-.slot-resize.at-top { top: -5px; bottom: auto; }
-
-/*
- * ידית היחס בין שני חלונות באותה שורה, על הגבול שביניהם.
- *
- * ‎inset-inline-end‎ ולא ‎left‎: ב-RTL זה נפתר לצד השמאלי מעצמו, וזה גם הצד
- * הנכון — הגבול עם החלון הבא בשורה. יושבת על החלון המוביל ונתלית רק כשיש
- * לצדו חלון באותה שורה, אחרת אין למה למשוך את הרוחב.
- */
-.slot-wresize {
-  position: absolute; inset-block: 24px; inset-inline-end: -8px; width: 11px;
-  border: 0; padding: 0; background: transparent; cursor: col-resize;
-  touch-action: none; z-index: 4;
-}
-.slot-wresize::before {
-  content: ''; position: absolute; inset-block: 0; inset-inline-start: 4px;
-  width: 3px; border-radius: 2px; background: transparent; transition: background .12s;
-}
-.home-slot:hover .slot-wresize::before { background: var(--border-strong); }
-.slot-wresize:hover::before,
-.slot-wresize:focus-visible::before,
-.slot-wresize.dragging::before { background: var(--brand); }
-.slot-resize::before {
-  content: ''; position: absolute; inset-inline: 0; top: 4px; height: 3px;
-  border-radius: 2px; background: transparent; transition: background .12s;
-}
-.home-slot:hover .slot-resize::before { background: var(--border-strong); }
-.slot-resize:hover::before,
-.slot-resize:focus-visible::before,
-.slot-resize.dragging::before { background: var(--brand); }
-
-/*
- * מצב סידור: מסגרת מקווקוות סביב כל חלון — "אפשר להזיז את זה" — ופס
- * הסבר מעל הלוח. המסגרת ב-‎outline‎ ולא ב-‎border‎, כדי שלא תזיז את התוכן
- * בפיקסל אחד בכניסה וביציאה.
- */
-.home-board.is-editing .home-slot > .card { outline: 2px dashed var(--border-strong); outline-offset: 3px; }
-.home-board.is-editing .home-slot:hover > .card,
-.home-board.is-editing .home-slot:focus-within > .card { outline-color: var(--brand); }
-.home-board.is-editing .home-slot.is-lifted > .card { outline-color: transparent; }
-/* הידיות במצב סידור גלויות תמיד בגוון עדין, ולא רק בריחוף — כדי שיימצאו */
-.home-board.is-editing .slot-wresize::before,
-.home-board.is-editing .slot-resize::before { background: var(--border-strong); }
-
-.home-editbar {
-  display: flex; align-items: center; gap: 10px 16px; flex-wrap: wrap;
-  margin-top: 14px; padding: 10px 14px;
-  border: 1px dashed var(--brand); border-radius: var(--radius-lg);
-  background: #f0fdfa; color: var(--text-soft); font-size: 13px;
-}
-.home-editbar[hidden] { display: none; }
-.home-editbar .heb-text { margin: 0; flex: 1 1 320px; min-width: 0; }
-.home-editbar .heb-actions { display: flex; gap: 8px; flex-wrap: wrap; }
-.home-editbar .btn .li, .home-edit-btn .li { width: 15px; height: 15px; }
-.home-edit-btn { align-self: center; display: inline-flex; align-items: center; gap: 6px; }
-.home-edit-btn.active { background: var(--brand-light); border-color: var(--brand); color: var(--brand-dark); }
-
-/*
- * תווית המדידה בזמן גרירת גבול (ראה measureTip ב-home.js). בתוך הידית,
- * ולכן זזה איתה; בצד של החלון המוביל — המספר מתאר אותו.
- */
-.slot-measure {
-  position: absolute; z-index: 6; pointer-events: none;
-  padding: 2px 8px; border-radius: 6px; white-space: nowrap;
-  background: var(--text); color: #fff; font-size: 12px; font-weight: 700;
-  font-variant-numeric: tabular-nums; box-shadow: var(--shadow);
-}
-.slot-wresize .slot-measure { top: 50%; inset-inline-end: 100%; margin-inline-end: 6px; transform: translateY(-50%); }
-.slot-resize .slot-measure { inset-inline-start: 50%; top: 14px; transform: translateX(50%); }
-.slot-resize.at-top .slot-measure { top: auto; bottom: 14px; }
-
-/* "אילו חלונות להציג" — שורה לכל חלון, השם ומתחתיו מה יש בו */
-.win-options { display: flex; flex-direction: column; gap: 2px; }
-.win-option {
-  display: flex; align-items: flex-start; gap: 10px; padding: 8px 10px;
-  border-radius: var(--radius); cursor: pointer;
-}
-.win-option:hover { background: var(--surface-2); }
-.win-option input { margin-top: 4px; flex: none; width: 18px; height: 18px; accent-color: var(--brand); }
-.win-option .wo-text { display: flex; flex-direction: column; min-width: 0; }
-.win-option.is-unavailable { cursor: default; }
-.win-option.is-unavailable b { color: var(--text-soft); }
-.win-option.is-unavailable:hover { background: none; }
 /* בורר הסינון בכותרת הכרטיס — צר, שלא ידחוק את 'לכל המשימות' */
 .card-head .home-filter { flex: none; width: auto; max-width: 190px; font-size: 12px; padding: 4px 8px; }
 
 /*
- * במסך צר אין שינוי גודל: חלון אחד לשורה ממילא, ורצועות של עשרה פיקסלים
- * באצבע הן מיס-טאפ. ההסתרה וסידור הסדר נשארים — הידית נגררת בלחיצה ארוכה.
+ * טלפון: עמודה אחת. ידית הגובה בתחתית גלויה תמיד — אין ריחוף שיגלה אותה —
+ * ורחבה מספיק לאצבע. אין שינוי רוחב.
  */
 @media (max-width: 820px) {
-  /* חלון אחד לשורה, ולכן גם היחס בין שניים חסר משמעות כאן */
-  .home-slot { flex: 1 1 100%; min-width: 0; }
-  /* הידית נשארת: במגע היא נגררת בלחיצה ארוכה */
-  .slot-resize, .slot-wresize { display: none; }
-  .slot-tools { opacity: 1; }
+  .home-slot > .rz-b { inset-inline: calc(50% - 30px); height: 22px; bottom: -11px; }
+  .home-slot > .rz-b::before { inset-inline: 14px; height: 4px; top: 9px; opacity: .35; background: var(--text-mute); }
   .card-head .home-filter { max-width: 140px; }
 }
 
@@ -1336,7 +1278,7 @@ th.cell-bar { background: var(--border) !important; }
 }
 .popover-option:hover { background: var(--surface-2); }
 .popover-option .swatch { width: 13px; height: 13px; border-radius: 4px; flex: none; }
-.popover-option .check { margin-inline-start: auto; color: var(--brand); font-weight: 800; }
+.popover-option .check { margin-inline-start: auto; color: var(--brand-ink); font-weight: 800; }
 
 /* ---------------------------------------------------------------- ציר זמן */
 
@@ -1395,7 +1337,7 @@ th.cell-bar { background: var(--border) !important; }
   padding: 6px 14px; padding-inline-start: 20px; color: var(--text); cursor: pointer;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.tl-row .tl-label:hover { color: var(--brand); }
+.tl-row .tl-label:hover { color: var(--brand-ink); }
 .tl-track { position: relative; height: 30px; flex: none; }
 .tl-bar {
   position: absolute; top: 7px; height: 16px; border-radius: 5px; cursor: pointer; z-index: 1;
@@ -1542,7 +1484,7 @@ th.cell-bar { background: var(--border) !important; }
   cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   line-height: 1.5;
 }
-.wk-item:hover { color: var(--brand); text-decoration: underline; }
+.wk-item:hover { color: var(--brand-ink); text-decoration: underline; }
 .wk-item::before { content: '• '; color: var(--text-mute); }
 
 /* שורת סטטוס במסך ניהול הסטטוסים */
@@ -1684,7 +1626,7 @@ input[type="color"] { width: 46px; height: 30px; padding: 2px; cursor: pointer; 
   border: 0; background: none; padding: 0; cursor: pointer;
   font: inherit; color: inherit; border-bottom: 1px dashed transparent;
 }
-.checklist-item .txt-open:hover { color: var(--brand); border-bottom-color: var(--brand); }
+.checklist-item .txt-open:hover { color: var(--brand-ink); border-bottom-color: var(--brand); }
 /* סימון שיש תוכן בתוך הסעיף — הערה או תגובות */
 .checklist-item .item-badge { font-size: 11px; color: var(--text-mute); flex: none; }
 /* תיבת הסימון במסך הסעיף */
@@ -1939,7 +1881,7 @@ input[type="color"] { width: 46px; height: 30px; padding: 2px; cursor: pointer; 
 }
 .pp-opt:hover, .pp-opt.is-active { background: var(--surface-2); }
 .pp-opt.is-chosen { font-weight: 700; }
-.pp-opt.is-chosen::after { content: '✓'; color: var(--brand); margin-inline-start: auto; }
+.pp-opt.is-chosen::after { content: '✓'; color: var(--brand-ink); margin-inline-start: auto; }
 .pp-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* מספר המשימות הפתוחות שלי — מה שמסביר את מקומו של הפרויקט בדירוג */
 .pp-count {
@@ -2301,7 +2243,7 @@ input[type="color"] { width: 46px; height: 30px; padding: 2px; cursor: pointer; 
   border-bottom: 1px solid var(--border); border-radius: 0;
   margin-bottom: 6px; padding-bottom: 10px;
 }
-.nav-pin-toggle:hover { color: var(--brand) !important; background: none !important; }
+.nav-pin-toggle:hover { color: var(--brand-ink) !important; background: none !important; }
 .nav-pin-toggle .ico { font-size: 14px; }
 
 /* ---- חיפוש פרויקט וידית הרוחב ---- */
@@ -2479,7 +2421,7 @@ input[type="color"] { width: 46px; height: 30px; padding: 2px; cursor: pointer; 
 .tracker .tr-project > span:last-child {
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.tracker .tr-project:hover { color: var(--brand); }
+.tracker .tr-project:hover { color: var(--brand-ink); }
 
 /* ---- הדבקה וגרירה של קבצים לתיבת התגובה ---- */
 
@@ -2490,7 +2432,7 @@ input[type="color"] { width: 46px; height: 30px; padding: 2px; cursor: pointer; 
   content: 'שחרר כדי לצרף'; position: absolute; inset: 0;
   display: grid; place-items: center; pointer-events: none;
   background: color-mix(in srgb, var(--brand) 8%, transparent);
-  border-radius: var(--radius); font-size: 13px; font-weight: 700; color: var(--brand);
+  border-radius: var(--radius); font-size: 13px; font-weight: 700; color: var(--brand-ink);
 }
 
 /* תמונה מצורפת מוצגת כתמונה קטנה, ולא כאייקון גנרי */
@@ -2663,7 +2605,7 @@ input[type="color"] { width: 46px; height: 30px; padding: 2px; cursor: pointer; 
 }
 /* איפה נמצאה ההתאמה — הסבר למה השורה הזו כאן */
 .search-results .sr-where {
-  flex: none; font-weight: 700; color: var(--brand);
+  flex: none; font-weight: 700; color: var(--brand-ink);
   background: var(--surface-2); border-radius: 4px; padding: 1px 5px; font-size: 10.5px;
 }
 .search-results mark { background: #fef08a; color: inherit; border-radius: 3px; padding: 0 1px; }
@@ -2678,14 +2620,14 @@ input[type="color"] { width: 46px; height: 30px; padding: 2px; cursor: pointer; 
 
 /* פתיחת החיפוש לכל הארגון — פעולה, ולכן כפתור ולא שורת טקסט כמו ‎sr-more‎ */
 .search-results .sr-widen {
-  font-size: 12.5px; color: var(--brand); font-weight: 600;
+  font-size: 12.5px; color: var(--brand-ink); font-weight: 600;
   font-family: inherit; padding: 10px 12px;
 }
 .search-results .sr-widen::before { content: '🏢 '; }
 .search-results .sr-widen.is-active { background: var(--surface-2); box-shadow: inset 2px 0 0 0 var(--brand); }
 /* חותם החתך הרחב, דביק בראש הרשימה — ממנו ברור למה הופיעו פריטים זרים */
 .search-results .sr-scope {
-  padding: 7px 12px; font-size: 11px; font-weight: 700; color: var(--brand);
+  padding: 7px 12px; font-size: 11px; font-weight: 700; color: var(--brand-ink);
   background: var(--brand-light); position: sticky; top: 0; z-index: 2;
 }
 
@@ -2699,7 +2641,7 @@ input[type="color"] { width: 46px; height: 30px; padding: 2px; cursor: pointer; 
   flex: none; display: inline-flex; align-items: center; gap: 3px;
   height: 22px; padding: 0 6px 0 4px; cursor: pointer;
   border: 1px solid var(--brand); border-radius: 11px;
-  background: var(--surface); color: var(--brand);
+  background: var(--surface); color: var(--brand-ink);
   font-size: 11px; font-weight: 800; font-family: inherit;
   transition: background .12s, color .12s;
 }
@@ -2735,15 +2677,15 @@ input[type="color"] { width: 46px; height: 30px; padding: 2px; cursor: pointer; 
 
 /* שורת תת-משימה — הענף בולט גם הוא, אחרת ההיררכיה אינה נראית */
 .tracker .tr-branch {
-  flex: none; color: var(--brand); font-weight: 800; font-size: 15px;
+  flex: none; color: var(--brand-ink); font-weight: 800; font-size: 15px;
   margin-inline-end: 2px;
 }
 
 /* ---- בורר העמודות ומיון הכותרות ---- */
 
 .tracker thead th.is-sortable { cursor: pointer; user-select: none; }
-.tracker thead th.is-sortable:hover { color: var(--brand); }
-.tracker thead th.is-sorted { color: var(--brand); }
+.tracker thead th.is-sortable:hover { color: var(--brand-ink); }
+.tracker thead th.is-sorted { color: var(--brand-ink); }
 .tracker thead .th-arrow { font-size: 9px; margin-inline-start: 4px; }
 /* התווית נחתכת, לא הכותרת כולה — אחרת הידית שיושבת בקצה נעלמת איתה */
 .tracker thead .th-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -2823,7 +2765,7 @@ input[type="color"] { width: 46px; height: 30px; padding: 2px; cursor: pointer; 
   border: 1px solid var(--border); border-radius: 6px;
   background: var(--surface); color: var(--text-mute); font-size: 9px;
 }
-.col-pop .col-move:hover:not(:disabled) { border-color: var(--brand); color: var(--brand); }
+.col-pop .col-move:hover:not(:disabled) { border-color: var(--brand); color: var(--brand-ink); }
 .col-pop .col-move:disabled { opacity: .3; cursor: default; }
 .col-pop .col-reset { width: 100%; margin-top: 6px; }
 /* רשימת אחראים נוספים בכרטיס המשימה — נשברת לשורות כשיש כמה */
@@ -2959,6 +2901,19 @@ input[type="color"] { width: 46px; height: 30px; padding: 2px; cursor: pointer; 
 @media (max-width: 640px) {
   .ai-row { flex-direction: column; }
   .ai-row-actions { max-width: none; justify-content: flex-start; }
+}
+
+/* פרק 11 — "לסגור?" / "לעדכן?" / "למזג?", ו"יש כבר משימה דומה" */
+.ts-task { font-weight: 600; cursor: pointer; }
+.ts-quote { max-height: 6.5em; overflow: hidden; }
+.ts-changes { display: grid; gap: 8px; }
+.ts-change { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.ts-change input[type='date'] { width: auto; }
+.ts-dups { display: grid; gap: 6px; }
+.ts-dup { display: flex; align-items: center; gap: 10px; padding: 9px 10px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface-2); }
+.ts-dup-main { flex: 1; min-width: 0; display: grid; gap: 2px; }
+@media (max-width: 640px) {
+  .ts-dup { flex-direction: column; align-items: stretch; }
 }
 
 /* ================================================================ Today */
@@ -3263,12 +3218,12 @@ input[type="color"] { width: 46px; height: 30px; padding: 2px; cursor: pointer; 
 
 /* שדה החיפוש — סמל האלפון מימין; משמאל, בתוך השדה: סמן טעינה, הוספה וניהול */
 .pb-field { position: relative; display: flex; align-items: center; }
-.pb-field > .li { position: absolute; inset-inline-start: 10px; color: var(--brand); width: 16px; height: 16px; pointer-events: none; }
+.pb-field > .li { position: absolute; inset-inline-start: 10px; color: var(--brand-ink); width: 16px; height: 16px; pointer-events: none; }
 .pb-field .pb-search { padding-inline-start: 34px; padding-inline-end: 64px; }
 .pb-field-acts { position: absolute; inset-inline-end: 4px; display: flex; align-items: center; gap: 0; }
 .pb-field-btn {
   width: 28px; height: 28px; border: 0; background: none; border-radius: 8px; cursor: pointer;
-  display: grid; place-items: center; color: var(--brand);
+  display: grid; place-items: center; color: var(--brand-ink);
 }
 .pb-field-btn:hover, .pb-field-btn:focus-visible { background: var(--brand-light); }
 .pb-field-btn .li { width: 16px; height: 16px; }
@@ -3449,13 +3404,13 @@ input[type="color"] { width: 46px; height: 30px; padding: 2px; cursor: pointer; 
 .btn .li { width: 16px; height: 16px; }
 .btn-primary .li { color: inherit; }
 /* כפתורי הפעולה באלפון — אותו קו, אותו גודל, בצבע המותג */
-.pb-act, .pb-row-acts .icon-btn { color: var(--brand); }
+.pb-act, .pb-row-acts .icon-btn { color: var(--brand-ink); }
 .pb-act .li, .pb-row-acts .icon-btn .li { width: 18px; height: 18px; }
 /* מחיקה — באותו צבע, ואדום רק בריחוף, כשהיד כבר עליה */
 .pb-row-acts .pb-del:hover { color: var(--danger); background: #fef2f2; }
 .pb-title { display: flex; align-items: center; gap: 8px; }
-.pb-title .li { color: var(--brand); width: 1em; height: 1em; }
-.e-icon .li { width: 34px; height: 34px; color: var(--brand); opacity: .6; }
+.pb-title .li { color: var(--brand-ink); width: 1em; height: 1em; }
+.e-icon .li { width: 34px; height: 34px; color: var(--brand-ink); opacity: .6; }
 /* ================================================================ שכבות: פאנל צד, ביטול, Ctrl+K, התראות */
 
 /*
@@ -3618,24 +3573,679 @@ body:has(.modal-backdrop.is-side:not(.leaving)) .toast-root { left: auto; right:
 .notif .n-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--brand); transition: box-shadow .15s; }
 .notif .n-read:hover .n-dot { box-shadow: 0 0 0 4px var(--brand-light); }
 
-/* ---------------------------------------------- 🔎 שורות החיפוש — "קרן אור" */
+/* משימת AI — הנמען שנמצא באנשי הקשר, או בחירה בין כמה */
+.ai-found, .ai-matches { margin: -4px 0 12px; }
+.ai-cc { display: flex; flex-direction: column; gap: 6px; }
+.ai-cc-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.ai-cc-chips:empty { display: none; }
+.ai-cc-chip {
+  display: inline-flex; align-items: center; gap: 6px; padding: 3px 4px 3px 10px;
+  border-radius: 999px; background: var(--brand-light); color: var(--brand-dark); font-size: 13px;
+}
+.ai-cc-chip button {
+  border: 0; background: transparent; color: inherit; cursor: pointer; font-size: 12px;
+  width: 20px; height: 20px; border-radius: 50%;
+}
+.ai-cc-chip button:hover { background: rgba(15, 118, 110, .15); }
+
+/* ------------------------------------------------------------------ מה חדש */
 
 /*
- * עיצוב אחיד לכל שורות החיפוש באתר, בהשראת ‎Beam Search Bar‎ מ-21st.dev:
- * שדה נקי עם זכוכית מגדלת בתחילתו, ובעת מיקוד קרן אור בצבעי המערכת שנעה
- * לאורך השפה התחתונה — סימן חי לכך שהשדה מקשיב.
+ * הבאנר באמצע המסך: כותרת בגרדיאנט המותג עם פס התקדמות בסגנון "סטוריז",
+ * רשימת מסכים בצד ובמרכז פריט אחד בכל פעם — צילום מסך במסגרת דפדפן, או
+ * איור אייקון כשלא צורף צילום.
+ */
+.modal.wn {
+  max-width: 920px;
+  width: min(920px, calc(100vw - 32px));
+  padding: 0;
+  overflow: hidden;
+  border-radius: 22px;
+  border: 1px solid rgba(255, 255, 255, .5);
+  box-shadow: 0 30px 80px rgba(15, 23, 42, .35), 0 0 0 1px rgba(15, 118, 110, .08);
+  animation: wn-pop .38s cubic-bezier(.2, .9, .3, 1.15);
+}
+.modal.wn .modal-body { padding: 0; }
+@keyframes wn-pop { from { opacity: 0; transform: translateY(14px) scale(.96); } to { opacity: 1; transform: none; } }
+
+/* גובה קבוע במחשב: מעבר בין פריט עם צילום לפריט בלי לא יקפיץ את החלון */
+.wn { display: flex; flex-direction: column; height: min(88vh, 740px); }
+
+.wn-head {
+  position: relative;
+  overflow: hidden;
+  padding: 22px 26px 16px;
+  color: #fff;
+  background: linear-gradient(125deg, #0b4f4a 0%, #0f766e 45%, #14b8a6 100%);
+}
+.wn-glow {
+  position: absolute; inset: -40% -10% auto auto; width: 380px; height: 380px;
+  background: radial-gradient(circle, rgba(255, 255, 255, .28), transparent 62%);
+  animation: wn-float 9s ease-in-out infinite alternate;
+  pointer-events: none;
+}
+@keyframes wn-float { to { transform: translate(-120px, 40px); } }
+.wn-head-row { position: relative; display: flex; gap: 16px; align-items: flex-start; }
+.wn-head-row > div:first-child { flex: 1; min-width: 0; }
+.wn-eyebrow {
+  display: inline-block; font-size: 12px; font-weight: 700; letter-spacing: .4px;
+  padding: 3px 10px; border-radius: 999px; background: rgba(255, 255, 255, .18);
+  backdrop-filter: blur(4px);
+}
+.wn-h1 { margin: 8px 0 2px; font-size: 24px; line-height: 1.25; font-weight: 800; }
+.wn-summary { opacity: .92; font-size: 14px; white-space: pre-line; }
+.wn-skip {
+  border: 1px solid rgba(255, 255, 255, .45); background: rgba(255, 255, 255, .12);
+  color: #fff; border-radius: 999px; padding: 6px 16px; font: inherit; font-size: 13px;
+  cursor: pointer; transition: background .15s;
+}
+.wn-skip:hover { background: rgba(255, 255, 255, .26); }
+
+.wn-progress { position: relative; display: flex; gap: 4px; margin-top: 16px; }
+.wn-progress span { flex: 1; height: 4px; border-radius: 4px; background: rgba(255, 255, 255, .28); overflow: hidden; }
+.wn-progress span i { display: block; height: 100%; width: 0; background: #fff; border-radius: inherit; transition: width .35s ease; }
+.wn-progress span.done i, .wn-progress span.now i { width: 100%; }
+
+.wn-main { display: grid; grid-template-columns: 210px minmax(0, 1fr); min-height: 0; flex: 1; background: var(--surface); }
+.wn-nav {
+  display: flex; flex-direction: column; gap: 4px; padding: 14px 10px;
+  background: var(--surface-2); border-inline-end: 1px solid var(--border); overflow-y: auto;
+}
+.wn-nav-item {
+  display: flex; align-items: center; gap: 8px; width: 100%; text-align: start;
+  border: 1px solid transparent; background: transparent; border-radius: 10px;
+  padding: 8px 10px; font: inherit; font-size: 13.5px; color: var(--text-soft); cursor: pointer;
+  transition: background .15s, color .15s, border-color .15s;
+}
+.wn-nav-item:hover { background: var(--surface); color: var(--text); }
+.wn-nav-item.active { background: var(--surface); color: var(--brand-dark); font-weight: 700; border-color: var(--border); box-shadow: var(--shadow-sm); }
+.wn-nav-icon { font-size: 16px; }
+.wn-nav-label { flex: 1; }
+.wn-nav-count {
+  min-width: 20px; padding: 0 6px; border-radius: 999px; font-size: 11.5px; text-align: center;
+  background: var(--brand-light); color: var(--brand-dark); font-weight: 700;
+}
+
+.wn-stage { padding: 20px 24px; overflow-y: auto; min-height: 340px; display: flex; flex-direction: column; gap: 16px; }
+.wn-card { display: flex; flex-direction: column; gap: 16px; animation: wn-in .32s ease both; }
+.wn-card.from-next { animation-name: wn-in-next; }
+.wn-card.from-prev { animation-name: wn-in-prev; }
+@keyframes wn-in { from { opacity: 0; } to { opacity: 1; } }
+/* RTL: "הבא" נכנס משמאל */
+@keyframes wn-in-next { from { opacity: 0; transform: translateX(-28px); } to { opacity: 1; transform: none; } }
+@keyframes wn-in-prev { from { opacity: 0; transform: translateX(28px); } to { opacity: 1; transform: none; } }
+
+.wn-shot {
+  border-radius: 14px; overflow: hidden; border: 1px solid var(--border);
+  box-shadow: 0 12px 30px rgba(15, 23, 42, .12); background: var(--surface);
+}
+.wn-shot-bar {
+  display: flex; align-items: center; gap: 6px; padding: 8px 12px;
+  background: var(--surface-2); border-bottom: 1px solid var(--border); font-size: 12px; color: var(--text-mute);
+}
+.wn-shot-bar i { width: 10px; height: 10px; border-radius: 50%; background: #cbd5e1; }
+.wn-shot-bar i:nth-child(1) { background: #f87171; }
+.wn-shot-bar i:nth-child(2) { background: #fbbf24; }
+.wn-shot-bar i:nth-child(3) { background: #34d399; }
+.wn-shot-bar span { margin-inline-start: 8px; }
+.wn-shot img { display: block; width: 100%; max-height: 300px; object-fit: cover; object-position: top; cursor: zoom-in; }
+
+.wn-hero {
+  position: relative; overflow: hidden; height: 190px; border-radius: 14px;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px;
+  background:
+    radial-gradient(circle at 20% 20%, rgba(20, 184, 166, .25), transparent 45%),
+    radial-gradient(circle at 80% 80%, rgba(194, 65, 12, .14), transparent 50%),
+    linear-gradient(135deg, #f0fdfa, #ecfeff);
+  border: 1px solid var(--border);
+}
+.wn-hero::before {
+  content: ''; position: absolute; inset: 0;
+  background-image: radial-gradient(rgba(15, 118, 110, .16) 1px, transparent 1px);
+  background-size: 16px 16px;
+}
+.wn-hero-orb {
+  position: absolute; width: 130px; height: 130px; border-radius: 50%;
+  background: radial-gradient(circle, rgba(20, 184, 166, .35), transparent 70%);
+  animation: wn-pulse 2.8s ease-in-out infinite;
+}
+@keyframes wn-pulse { 50% { transform: scale(1.18); opacity: .7; } }
+.wn-hero-icon { position: relative; font-size: 54px; filter: drop-shadow(0 6px 12px rgba(15, 118, 110, .25)); }
+.wn-hero-label { position: relative; font-weight: 700; color: var(--brand-dark); }
+
+.wn-kicker { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; font-size: 12.5px; color: var(--text-mute); }
+.wn-badge {
+  font-size: 11px; font-weight: 800; color: #fff; padding: 2px 9px; border-radius: 999px;
+  background: linear-gradient(90deg, var(--accent), #f97316);
+}
+.wn-rel { color: var(--text-mute); }
+.wn-title { margin: 6px 0 4px; font-size: 21px; line-height: 1.3; color: var(--text); }
+.wn-body { margin: 0; color: var(--text-soft); line-height: 1.7; white-space: pre-line; }
+.wn-try { margin-top: 12px; border-color: var(--brand); color: var(--brand-dark); font-weight: 700; }
+.wn-try:hover { background: var(--brand-light); }
+
+.wn-foot {
+  display: flex; align-items: center; gap: 10px; padding: 12px 20px;
+  border-top: 1px solid var(--border); background: var(--surface);
+}
+.wn-counter { font-size: 12.5px; color: var(--text-mute); font-variant-numeric: tabular-nums; }
+.wn-arrow { min-width: 40px; }
+.wn-next { min-width: 120px; }
+
+@media (max-width: 820px) {
+  /* בטלפון שאר החלונות נפתחים כמסך מלא; הבאנר נשאר כרטיס צף באמצע */
+  .modal-backdrop:has(> .modal.wn) { padding: 8px; place-items: center; }
+  .modal.wn {
+    width: calc(100vw - 16px); height: auto; max-height: 94dvh; border-radius: 18px;
+    padding-top: 0; padding-bottom: 0; animation: wn-pop .3s ease;
+  }
+  .wn { height: auto; max-height: 94dvh; }
+  .wn-head { padding: 18px 18px 14px; }
+  .wn-h1 { font-size: 20px; }
+  .wn-main { grid-template-columns: 1fr; }
+  .wn-nav {
+    flex-direction: row; overflow-x: auto; padding: 8px 10px;
+    border-inline-end: 0; border-bottom: 1px solid var(--border);
+  }
+  .wn-nav-item { width: auto; flex: none; white-space: nowrap; }
+  .wn-stage { padding: 14px 16px; min-height: 0; }
+  .wn-shot img { max-height: 220px; }
+  .wn-hero { height: 140px; }
+  .wn-later { display: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .modal.wn, .wn-card, .wn-glow, .wn-hero-orb { animation: none !important; }
+}
+
+/*
+ * זרקור חי: המסך האמיתי של המשתמש בתוך ‎iframe‎ מוקטן (‎.wn-spot-cam‎ — "המצלמה"
+ * שזזה ומתקרבת), טבעת מהבהבת סביב החידוש וכל השאר מעומעם. הטבעת יושבת בתוך
+ * המצלמה, בקואורדינטות של המסך המוטמע, ולכן נעה איתו בדיוק; עובי הקו מחולק
+ * בקנה המידה (‎--s‎) כדי שייראה זהה בכל התקרבות.
+ */
+.wn-media { display: flex; flex-direction: column; }
+.wn-media[hidden] { display: none; }
+.wn-spot {
+  border-radius: 14px; overflow: hidden; border: 1px solid var(--border);
+  box-shadow: 0 12px 30px rgba(15, 23, 42, .12); background: var(--surface);
+}
+.wn-spot[hidden] { display: none; }
+.wn-spot .wn-shot-bar { position: relative; z-index: 2; }
+.wn-spot-label { margin-inline-start: 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wn-spot-label::before { content: '🔍 '; }
+.wn-spot-view {
+  /* המסגרת מתכווצת במסך נמוך, כדי שהטקסט והכפתורים יישארו בלי גלילה */
+  position: relative; height: clamp(180px, calc(min(88vh, 740px) - 475px), 270px); overflow: hidden;
+  background:
+    radial-gradient(rgba(15, 118, 110, .12) 1px, transparent 1px) 0 0 / 14px 14px,
+    var(--bg);
+}
+.wn-spot-cam {
+  position: absolute; top: 0; left: 0; transform-origin: 0 0;
+  transition: transform 1.05s cubic-bezier(.65, .05, .25, 1);
+  will-change: transform;
+}
+.wn-spot-cam.no-anim { transition: none; }
+.wn-spot-frame {
+  display: block; border: 0; background: var(--bg);
+  /* תצוגה בלבד: שום לחיצה, גלילה או מיקוד אינם מגיעים למסך המוטמע */
+  pointer-events: none; user-select: none;
+}
+.wn-spot.is-phone .wn-spot-frame {
+  border-radius: calc(26px / var(--s, 1));
+  box-shadow: 0 0 0 calc(6px / var(--s, 1)) #0f172a, 0 calc(14px / var(--s, 1)) calc(40px / var(--s, 1)) rgba(15, 23, 42, .35);
+}
+.wn-spot-ring {
+  position: absolute; pointer-events: none; opacity: 0;
+  border: calc(3px / var(--s, 1)) solid #2dd4bf;
+  border-radius: calc(12px / var(--s, 1));
+  box-shadow: 0 0 0 calc(4px / var(--s, 1)) rgba(45, 212, 191, .28), 0 0 0 200vmax rgba(8, 15, 30, .5);
+  transition: opacity .45s ease .55s;
+}
+.wn-spot-ring.on { opacity: 1; }
+.wn-spot-ring::after {
+  content: ''; position: absolute; inset: calc(-3px / var(--s, 1)); border-radius: inherit;
+  border: calc(3px / var(--s, 1)) solid #5eead4;
+  animation: wn-ring 1.6s ease-out 1.1s infinite;
+}
+@keyframes wn-ring { from { opacity: .9; transform: scale(1); } to { opacity: 0; transform: scale(1.12); } }
+.wn-spot-load {
+  position: absolute; inset: 0; z-index: 2; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px;
+  background: color-mix(in srgb, var(--bg) 78%, transparent); color: var(--text-soft); font-size: 13px;
+  opacity: 0; pointer-events: none; transition: opacity .25s;
+}
+.wn-spot-load.on { opacity: 1; }
+.wn-spot-note {
+  position: absolute; z-index: 2; inset-inline: 12px; bottom: 12px; margin-inline: auto; width: fit-content; max-width: calc(100% - 24px);
+  padding: 6px 12px; border-radius: 999px; font-size: 12.5px;
+  background: color-mix(in srgb, var(--surface) 92%, transparent); color: var(--text-soft);
+  border: 1px solid var(--border); box-shadow: var(--shadow-sm);
+  opacity: 0; transform: translateY(6px); transition: opacity .3s, transform .3s; pointer-events: none;
+}
+.wn-spot-note.on { opacity: 1; transform: none; }
+.wn-show { margin-top: 12px; margin-inline-start: 8px; font-weight: 700; }
+@media (max-width: 820px) {
+  .wn-spot-view { height: min(34dvh, 300px); }
+  .wn-show { margin-inline-start: 6px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .wn-spot-cam, .wn-spot-ring { transition: none; }
+  .wn-spot-ring::after { animation: none; display: none; }
+}
+
+/* "הראו לי" — ההדגשה במסך האמיתי. מעל הכול, ושקופה ללחיצות */
+.spot-hl {
+  position: fixed; z-index: 1100; pointer-events: none; border-radius: 12px;
+  border: 3px solid #14b8a6;
+  box-shadow: 0 0 0 5px rgba(20, 184, 166, .25), 0 0 0 200vmax rgba(15, 23, 42, .32);
+  opacity: 0; transition: opacity .3s ease;
+}
+.spot-hl.on { opacity: 1; }
+.spot-hl.out { opacity: 0; }
+.spot-hl::after {
+  content: ''; position: absolute; inset: -3px; border-radius: inherit; border: 3px solid #2dd4bf;
+  animation: wn-ring 1.5s ease-out .3s infinite;
+}
+.spot-tip {
+  position: fixed; z-index: 1101; pointer-events: none; max-width: min(320px, calc(100vw - 16px));
+  display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-radius: 12px;
+  background: #0f172a; color: #fff; font-size: 13.5px; font-weight: 600; box-shadow: 0 12px 30px rgba(15, 23, 42, .35);
+  opacity: 0; transform: translateY(-4px); transition: opacity .3s, transform .3s;
+}
+.spot-tip.above { transform: translateY(4px); }
+.spot-tip.on { opacity: 1; transform: none; }
+.spot-tip.out { opacity: 0; }
+.spot-tip-badge {
+  flex: none; font-size: 11px; font-weight: 800; padding: 2px 8px; border-radius: 999px;
+  background: linear-gradient(90deg, var(--accent), #f97316);
+}
+@media (prefers-reduced-motion: reduce) {
+  .spot-hl, .spot-tip { transition: none; }
+  .spot-hl::after { animation: none; display: none; }
+}
+
+/* "🎯 בחירה על המסך" בעורך */
+.spot-picking .spot-pickable { outline: 2px dashed rgba(20, 184, 166, .7) !important; outline-offset: 2px; cursor: crosshair !important; }
+.spot-picking .spot-pickable * { cursor: crosshair !important; }
+.spot-pick-bar {
+  /* בתחתית: הסרגל העליון מלא בעוגנים, ופס שמכסה אותם היה מסתיר בדיוק את מה שבוחרים */
+  position: fixed; z-index: 1200; bottom: 16px; left: 50%; transform: translateX(-50%);
+  display: flex; align-items: center; gap: 12px; width: max-content; max-width: calc(100vw - 24px);
+  padding: 10px 12px 10px 16px; border-radius: 14px; background: #0f172a; color: #fff;
+  box-shadow: 0 16px 40px rgba(15, 23, 42, .4); font-size: 14px;
+}
+.spot-pick-bar { flex-direction: column; align-items: stretch; gap: 8px; }
+.spot-pick-row { display: flex; align-items: center; gap: 12px; }
+.spot-pick-row > div { flex: 1; }
+.spot-pick-open { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 12px; opacity: .95; }
+.spot-pick-open .btn { background: rgba(255, 255, 255, .1); color: #fff; border-color: rgba(255, 255, 255, .25); }
+.spot-pick-open .btn:hover { background: rgba(255, 255, 255, .2); }
+.spot-pick-icon { font-size: 22px; }
+.spot-pick-sub { font-size: 12px; opacity: .78; margin-top: 2px; }
+.spot-pick-bar .btn { flex: none; }
+.spot-pick-box {
+  position: fixed; z-index: 1190; pointer-events: none; border-radius: 10px;
+  border: 3px solid #14b8a6; background: rgba(20, 184, 166, .1);
+  box-shadow: 0 0 0 4px rgba(20, 184, 166, .22); opacity: 0; transition: opacity .12s;
+}
+.spot-pick-box.on { opacity: 1; }
+.spot-pick-name {
+  position: fixed; z-index: 1191; pointer-events: none; white-space: nowrap; max-width: calc(100vw - 16px);
+  overflow: hidden; text-overflow: ellipsis;
+  padding: 4px 10px; border-radius: 8px; background: #0f766e; color: #fff; font-size: 12.5px; font-weight: 700;
+  box-shadow: 0 6px 16px rgba(15, 23, 42, .25); opacity: 0; transition: opacity .12s;
+}
+.spot-pick-name.on { opacity: 1; }
+
+/* המערכת בתוך הבאנר: בלי הנפשות (המדידה צריכה מסך יציב), בלי פסי גלילה ובלי הקפצות */
+html.spot-embed *, html.spot-embed *::before, html.spot-embed *::after {
+  animation-duration: 1ms !important; animation-delay: -1ms !important; animation-iteration-count: 1 !important;
+  transition-duration: 1ms !important; transition-delay: 0s !important; scroll-behavior: auto !important;
+  scrollbar-width: none !important; caret-color: transparent !important;
+}
+html.spot-embed ::-webkit-scrollbar { display: none; }
+html.spot-embed .toast-root, html.spot-embed .notif-pop-root, html.spot-embed .notif-invite,
+html.spot-embed .wake-banner { display: none !important; }
+
+/* עריכה בניהול */
+.wn-ed-h { margin: 18px 0 8px; font-size: 14px; color: var(--text-soft); }
+.wn-ed-list { display: flex; flex-direction: column; gap: 10px; }
+.wn-ed-item {
+  display: grid; grid-template-columns: 28px minmax(0, 1fr) 200px; gap: 12px;
+  padding: 12px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface-2);
+}
+.wn-ed-num {
+  width: 26px; height: 26px; border-radius: 50%; background: var(--brand); color: #fff;
+  display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 700;
+}
+.wn-ed-side { display: flex; flex-direction: column; gap: 6px; }
+.wn-ed-shot {
+  height: 120px; border: 2px dashed var(--border-strong); border-radius: 10px; background: var(--surface);
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px;
+  cursor: pointer; overflow: hidden; text-align: center;
+}
+.wn-ed-shot:hover, .wn-ed-shot:focus-visible, .wn-ed-shot.over { border-color: var(--brand); outline: none; background: var(--brand-light); }
+.wn-ed-shot img { width: 100%; height: 100%; object-fit: cover; object-position: top; }
+.wn-ed-tools { display: flex; gap: 4px; }
+.wn-ed-anchor { display: flex; gap: 8px; align-items: flex-end; }
+.wn-ed-anchor .field { flex: 1; min-width: 0; margin-bottom: 0; }
+.wn-ed-anchor select { width: 100%; }
+.wn-ed-pick { flex: none; white-space: nowrap; }
+.wn-ed-item.is-bare { border-color: var(--warn); border-inline-start-width: 4px; }
+.wn-ed-warn {
+  margin-top: 8px; padding: 6px 10px; border-radius: 8px; font-size: 12.5px; font-weight: 600;
+  background: var(--warn-bg); color: var(--warn-text);
+}
+.wn-chip-warn { background: var(--warn-bg); color: var(--warn-text); font-weight: 700; }
+@media (max-width: 820px) {
+  .wn-ed-item { grid-template-columns: 1fr; }
+  .wn-ed-num { display: none; }
+  .wn-ed-anchor { flex-direction: column; align-items: stretch; }
+}
+.wn-admin-list { display: flex; flex-direction: column; gap: 12px; }
+.wn-admin-card > .mute-sm, .wn-admin-chips, .wn-admin-actions { padding-inline: 16px; }
+.wn-admin-card > .mute-sm { padding-top: 10px; }
+.wn-admin-card { padding-bottom: 14px; }
+.wn-admin-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0; }
+.wn-chip { font-size: 12px; padding: 3px 10px; border-radius: 999px; background: var(--brand-light); color: var(--brand-dark); }
+.wn-admin-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+
+/* קהל מצומצם, חלון ההמתנה לסריקת ה-AI ושורת ההסבר בעורך */
+.wn-aud {
+  font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 999px;
+  background: var(--warn-bg); color: var(--warn-text);
+}
+.wn-chip-aud { background: var(--warn-bg); color: var(--warn-text); }
+.wn-scan { display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 18px 8px; text-align: center; color: var(--text-soft); }
+.wn-ed-note { margin-bottom: 14px; }
+
+/* ---------------------------------------------- אלפון: עובדים, ספקים ופרטי קשר לחיצים */
+
+/* "👤 עובד · הנדסה וביצוע" / "🏢 ספק · חברה" */
+.pb-kind {
+  display: inline-block; margin-inline-start: 6px; padding: 1px 8px; border-radius: 999px;
+  font-size: 11.5px; font-weight: 600; line-height: 1.6; white-space: nowrap; vertical-align: middle;
+  background: var(--brand-light); color: var(--brand-dark);
+}
+.pb-kind-vendor { background: #fff7ed; color: #c2410c; }
+.pb-main > .pb-kind { display: inline-block; margin: 2px 0 0; overflow: visible; }
+.pbc-tag .pb-kind { margin-inline-start: 0; }
+.pbc-user .pbc-line { grid-template-columns: 86px 1fr auto; }
+.pbc-foot { display: flex; align-items: center; gap: 10px; justify-content: space-between; padding-top: 4px; border-top: 1px dashed var(--border); }
+.pb-manage { font-size: 12.5px; font-weight: 600; color: var(--brand); }
+
+/* הערך עצמו לחיץ — מייל, חיוג, וואטסאפ */
+.pb-link { color: inherit; text-decoration: none; border-bottom: 1px dotted var(--border-strong); cursor: pointer; }
+.pb-link:hover { color: var(--brand); border-bottom-color: var(--brand); }
+.pb-cell-hint { color: var(--text-mute); font-size: 11.5px; margin-inline-end: 6px; }
+
+/* השאלה הקטנה: Gmail או Outlook · התקשר או וואטסאפ ווב */
+.pb-choose { display: flex; flex-direction: column; gap: 8px; min-width: min(300px, 80vw); }
+.pb-choice { justify-content: center; font-size: 15px; min-height: 44px; text-decoration: none; }
+.pb-choice-copy { align-self: center; }
+.pb-remember { justify-content: center; margin-top: 4px; }
+
+/* הפילטר במסך האלפון */
+.pb-filter { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+.pb-filter-btn {
+  border: 1px solid var(--border); background: var(--surface); color: var(--text-soft);
+  border-radius: 999px; padding: 5px 12px; font: inherit; font-size: 13px; font-weight: 600; cursor: pointer;
+  display: inline-flex; align-items: center; gap: 6px;
+}
+.pb-filter-btn:hover { border-color: var(--brand); color: var(--brand); }
+.pb-filter-btn.active { background: var(--brand); border-color: var(--brand); color: #fff; }
+.pb-filter-n { font-size: 11.5px; opacity: .8; font-variant-numeric: tabular-nums; }
+.pb-twins-link { color: var(--warn-text); }
+.pb-mail-pref a { color: var(--brand); }
+.pb-table tr.pb-twin td { background: var(--warn-bg); }
+.pb-twin-note { color: var(--warn-text); font-size: 12.5px; margin-top: 2px; display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+@media (max-width: 820px) {
+  /* לעובד יש תווית משלו ("נייד" / "משרד") — בלי "טל' 2" של הטבלה בטלפון */
+  table.data.pb-table tr.pb-person td .pb-cell::before { content: none; }
+}
+.pb-twin-del { color: var(--danger); border-color: currentColor; background: var(--surface); }
+
+/* ===================================================================
+   Today — הצעות ותובנות מהמייל ומהוואטסאפ (סבב נובמבר, פרק 6)
+   ========================================================================== */
+.today-origin { font-weight: 600; color: var(--text-soft); }
+.today-older-line {
+  display: block; width: 100%; text-align: start; padding: 9px 14px; border: 0;
+  border-top: 1px dashed var(--border); background: none; cursor: pointer;
+  font: inherit; font-size: 13px; color: var(--warn); font-weight: 700;
+}
+.today-older-line:hover { background: var(--surface-2); }
+.today-ins-group > summary { cursor: pointer; list-style-position: inside; }
+.today-insight .today-title { font-weight: 400; white-space: normal; }
+.today-insight .today-title b { font-weight: 700; }
+.today-insight.is-unread .today-title b::before { content: '● '; color: var(--info); }
+@media (max-width: 640px) {
+  .today-insight { flex-wrap: wrap; }
+  .today-insight .today-actions { flex-direction: row; width: 100%; justify-content: flex-end; }
+}
+.wa-business-note { margin: 10px 0; font-size: 13px; }
+
+/* ================================================================ מצב לילה */
+
+/*
+ * מצב לילה לכל המערכת — בחירה אישית ב"החשבון שלי" (בהיר / לילה / לפי
+ * המערכת). ‎data-theme‎ על ‎<html>‎ נקבע כבר בראש הדף, מהעותק המקומי של
+ * ההעדפה, כדי שהמסך לא יהבהב בלבן עד שהשרת עונה (ראה index.html ו-app.js).
  *
- * הרכיב המקורי בנוי ב-React עם עטיפה; כאן הוא מומש ב-CSS בלבד, על השדה
- * עצמו, בשתי שכבות רקע: הקרן (מונפשת) והזכוכית (קבועה). כך הוא חל על כל
- * ‎input[type=search]‎ — בסרגל, בתפריט, בבוררים ובאלפון — בלי לשנות מבנה.
+ * כמעט הכול כאן הוא החלפה של המשתנים: הגיליון כתוב על ‎--surface‎, ‎--text‎
+ * וחבריהם, ולכן כרטיס, חלון, שדה, טבלה ותפריט מתהפכים מעצמם. מה שבא אחרי
+ * המשתנים הוא תיקון של צבעים שנכתבו כמספר — בעיקר תגיות פסטל, שעל רקע כהה
+ * היו נראות כמדבקות זוהרות.
  *
- * ‎--sg-edge / --sg-x‎ — באיזה צד הזכוכית ובאיזה מרחק; מוגדרים על השדה, כדי
- * שגם ה-‎keyframes‎ (שמזיזות את שתי השכבות יחד) ישאירו אותה במקומה.
+ * הרקעים כהים עם נטייה קלה לטורקיז, כמו הרקע הבהיר — אותה משפחה, ולא אפור
+ * מנותק מהמותג. הטורקיז של המותג נשאר כמילוי (כפתורים, סימונים); כטקסט הוא
+ * מתבהר (‎--brand-ink‎), אחרת היה נבלע ברקע. הניגודיות נמדדה: טקסט רגיל
+ * 14.1:1, ‎--text-soft‎ ‏9.1:1, ‎--text-mute‎ ‏6.1:1, ‎--brand-ink‎ ‏9.0:1 על ‎--surface‎.
+ */
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --brand-dark: #5eead4;
+  --brand-light: #12403c;
+  --brand-ink: #2dd4bf;
+  --accent: #ea580c;
+
+  --bg: #0d1514;
+  --surface: #151f1e;
+  --surface-2: #1b2827;
+  --border: #283a37;
+  --border-strong: #3a514d;
+
+  --text: #e4edeb;
+  --text-soft: #b1c2bf;
+  --text-mute: #8ba09c;
+
+  --danger: #ef4444;
+  --danger-bg: #3a1618;
+  --warn: #f59e0b;
+  --warn-bg: #36270e;
+  --warn-text: #fbbf24;
+  --ok-text: #4ade80;
+  --ok: #16a34a;
+  --ok-bg: #11301d;
+  --info: #60a5fa;
+  --info-bg: #15243d;
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, .35), 0 1px 3px rgba(0, 0, 0, .25);
+  --shadow: 0 6px 16px rgba(0, 0, 0, .4);
+  --shadow-lg: 0 22px 50px rgba(0, 0, 0, .55);
+}
+
+/* כפתורים ושדות */
+[data-theme='dark'] .btn-primary:hover { background: #128b81; border-color: #128b81; }
+[data-theme='dark'] .btn-danger { background: #dc2626; border-color: #dc2626; }
+[data-theme='dark'] .btn-danger:hover { background: #b91c1c; border-color: #b91c1c; }
+[data-theme='dark'] .btn-ghost:hover,
+[data-theme='dark'] .nav-pin:hover,
+[data-theme='dark'] .group-toggle:hover { background: rgba(255, 255, 255, .07); }
+[data-theme='dark'] input:focus, [data-theme='dark'] select:focus, [data-theme='dark'] textarea:focus {
+  box-shadow: 0 0 0 3px rgba(45, 212, 191, .2);
+}
+[data-theme='dark'] input::placeholder, [data-theme='dark'] textarea::placeholder { color: var(--text-mute); }
+[data-theme='dark'] .global-search input:hover { background-color: var(--surface-2); }
+[data-theme='dark'] .nav-item.active .count { background: var(--surface); }
+[data-theme='dark'] .today-btn { background: #33270b; border-color: #8a6414; color: #fcd34d; }
+[data-theme='dark'] .today-btn:hover, [data-theme='dark'] .today-btn.active { background: #4a3810; border-color: #f59e0b; }
+
+/* חלון קופץ, הודעות, רקע מוחשך — כהה יותר מהדף, כדי שהחלון יבלוט מעליו */
+[data-theme='dark'] .modal-backdrop { background: rgba(0, 0, 0, .62); }
+[data-theme='dark'] .modal { border: 1px solid var(--border); }
+[data-theme='dark'] .toast { background: #233230; border: 1px solid var(--border-strong); }
+[data-theme='dark'] .toast.error { background: #b91c1c; border-color: transparent; }
+[data-theme='dark'] .toast.ok { background: #15803d; border-color: transparent; }
+[data-theme='dark'] .cell-popover { border-color: var(--border-strong); }
+
+/* תגיות והתראות פסטל — רקע שקוף בגוון, טקסט בהיר באותו גוון */
+[data-theme='dark'] .tag-low { background: rgba(148, 163, 184, .16); color: #cbd5e1; }
+[data-theme='dark'] .tag-normal { background: rgba(96, 165, 250, .16); color: #93c5fd; }
+[data-theme='dark'] .tag-high { background: rgba(251, 191, 36, .16); color: #fcd34d; }
+[data-theme='dark'] .tag-urgent { background: rgba(248, 113, 113, .18); color: #fca5a5; }
+[data-theme='dark'] .tag-overdue { background: #dc2626; }
+[data-theme='dark'] .tag-scheduled,
+[data-theme='dark'] .tag-ai,
+[data-theme='dark'] .tag-meeting,
+[data-theme='dark'] .ai-state,
+[data-theme='dark'] .ai-chip-ai,
+[data-theme='dark'] .search-results .sr-tag.sr-project { background: rgba(167, 139, 250, .18); color: #c4b5fd; }
+[data-theme='dark'] .tag-recurring { background: rgba(34, 211, 238, .14); color: #67e8f9; }
+[data-theme='dark'] .tag-vendor,
+[data-theme='dark'] .search-results .sr-tag.sr-action { background: rgba(251, 146, 60, .14); color: #fdba74; border-color: rgba(251, 146, 60, .3); }
+[data-theme='dark'] .ai-state-stopped, [data-theme='dark'] .ai-state-paused,
+[data-theme='dark'] .ai-verdict-mute, [data-theme='dark'] .ai-chip { background: var(--surface-2); color: var(--text-soft); }
+[data-theme='dark'] .w-approve .w-icon { background: rgba(167, 139, 250, .16); color: #c4b5fd; }
+[data-theme='dark'] .alert-danger { color: #fecaca; border-color: rgba(248, 113, 113, .35); }
+[data-theme='dark'] .alert-warn { color: #fde68a; border-color: rgba(251, 191, 36, .3); }
+[data-theme='dark'] .alert-info { color: #bfdbfe; border-color: rgba(96, 165, 250, .3); }
+[data-theme='dark'] .alert-ok { color: #bbf7d0; border-color: rgba(74, 222, 128, .3); }
+[data-theme='dark'] .notif.unread { background: rgba(45, 212, 191, .07); }
+[data-theme='dark'] .search-results mark,
+[data-theme='dark'] .pb-row mark, [data-theme='dark'] .pb-table mark, [data-theme='dark'] .pbc mark { background: rgba(250, 204, 21, .3); }
+[data-theme='dark'] .bubble .mention { background: rgba(45, 212, 191, .16); }
+[data-theme='dark'] .pp-dot.is-empty,
+[data-theme='dark'] .track-swatch.is-empty { background: repeating-linear-gradient(45deg, var(--border-strong) 0 3px, var(--surface) 3px 6px); }
+[data-theme='dark'] .tracker tr.is-tinted .tr-short:focus { background: var(--surface); }
+[data-theme='dark'] .tracker tr.tr-group:hover > td { background: var(--brand-light); }
+[data-theme='dark'] .assignee-box.editable:hover,
+[data-theme='dark'] .due-box.editable:hover { background: var(--surface-2); }
+
+/* פאנלים סגולים של משימות AI ופגישות */
+[data-theme='dark'] .ai-panel { border-color: rgba(167, 139, 250, .3); background: linear-gradient(180deg, rgba(167, 139, 250, .1), var(--surface) 70px); }
+[data-theme='dark'] .ai-msg-in { background: rgba(45, 212, 191, .08); border-color: rgba(45, 212, 191, .3); }
+[data-theme='dark'] .ai-msg-note { background: rgba(250, 204, 21, .08); border-color: rgba(250, 204, 21, .4); }
+[data-theme='dark'] .mt-alts, [data-theme='dark'] .mt-card, [data-theme='dark'] .mt-empty.is-pending {
+  background: rgba(167, 139, 250, .08); border-color: rgba(167, 139, 250, .3);
+}
+[data-theme='dark'] .cal-ev.is-busy { background: repeating-linear-gradient(45deg, var(--border-strong), var(--border-strong) 6px, var(--surface-2) 6px, var(--surface-2) 12px); }
+
+/* שיחת וואטסאפ — גוונים כהים של הצבעים המוכרים */
+[data-theme='dark'] .wa-chat { background: #0b1418; }
+[data-theme='dark'] .wa-me { background: #144d37; }
+[data-theme='dark'] .wa-bot { background: #1f2c33; }
+[data-theme='dark'] .wa-note { background: #3a3415; }
+
+/* משטחים לבנים בכוונה — חתימה ו-PDF הם "נייר", ונשארים בהירים */
+[data-theme='dark'] .ai-signature, [data-theme='dark'] .preview-pdf { background: #fff; }
+
+/* לוח החלונות בדף הבית */
+[data-theme='dark'] .home-slot.is-lifted > .card {
+  box-shadow: 0 30px 60px -16px rgba(0, 0, 0, .75), 0 0 0 1px var(--border-strong);
+}
+[data-theme='dark'] .home-ph { background: rgba(45, 212, 191, .07); border-color: var(--brand-ink); }
+[data-theme='dark'] .slot-rz::before { background: var(--brand-ink); }
+[data-theme='dark'] .rz-ts::before, [data-theme='dark'] .rz-te::before,
+[data-theme='dark'] .rz-bs::before, [data-theme='dark'] .rz-be::before { background: none; border-color: var(--brand-ink); }
+
+/* בורר המראה ב"החשבון שלי" — המתג הקיים, ברוחב התוכן ולא ברוחב התא */
+.theme-switch { display: inline-flex; }
+.theme-switch button { padding: 5px 12px; }
+
+/* מעבר רך בין המצבים — רק כשמחליפים, לא בכל טעינה (ראה applyTheme) */
+html.theme-switching, html.theme-switching * {
+  transition: background-color .25s ease, border-color .25s ease, color .25s ease !important;
+}
+
+/* דף הבית — דחיית יעד מתוך רשימת המשימות */
+.tk-move {
+  border: 1px solid transparent; background: transparent; border-radius: 8px;
+  padding: 1px 5px; font-size: 13px; cursor: pointer; opacity: .55; transition: opacity .15s, background .15s;
+}
+.task-line:hover .tk-move, .tk-move:focus-visible { opacity: 1; }
+.tk-move:hover { background: var(--brand-light); border-color: var(--border); }
+@media (hover: none) { .tk-move { opacity: 1; } }
+
+/* ======================================================= קרן אור בחיפוש */
+
+/*
+ * שורות החיפוש — קרן אור שנעה לאורך הקצה התחתון כל עוד השדה במיקוד, בהשראת
+ * ‎Beam Search Bar‎ של 21st.dev. נבנית מרקע של השדה עצמו (שני מעברי צבע:
+ * קו דק ובוהק, והילה רכה ורחבה מעליו) ולא מאלמנט נוסף — כך היא חלה על כל
+ * שדה חיפוש במערכת בלי לגעת במבנה שלו. הכיוון מימין לשמאל, כמו כיוון הקריאה.
+ *
+ * ‎background-image‎ ולא ‎background‎: הכלל בא אחרי כללי המיקוד הקיימים של
+ * כל שדה, ומוסיף שכבה מעל צבע הרקע שלהם בלי לדרוס אותו.
+ */
+:root {
+  --beam: #2dd4bf;
+  --beam-glow: rgba(45, 212, 191, .28);
+}
+input[type="search"]:focus,
+.global-search input:focus,
+.pb-search:focus,
+.pb-side .pb-search:focus,
+.nav-search:focus,
+.pp-search:focus {
+  background-image:
+    linear-gradient(90deg, transparent, var(--beam) 45%, #ffffff 50%, var(--beam) 55%, transparent),
+    linear-gradient(90deg, transparent, var(--beam-glow), transparent),
+    var(--search-glass-on, none);
+  background-size: 45% 2px, 60% 9px, var(--sg-size, 15px) var(--sg-size, 15px);
+  background-repeat: no-repeat;
+  background-position: 130% 100%, 140% 100%, right var(--sg-x, 11px) center;
+  animation: search-beam 2.4s cubic-bezier(.45, .05, .55, .95) infinite;
+  box-shadow: 0 0 0 3px rgba(15, 118, 110, .12), 0 6px 18px -10px var(--beam);
+}
+@keyframes search-beam {
+  0%   { background-position: 130% 100%, 140% 100%, right var(--sg-x, 11px) center; }
+  100% { background-position: -30% 100%, -40% 100%, right var(--sg-x, 11px) center; }
+}
+@media (prefers-reduced-motion: reduce) {
+  input[type="search"]:focus,
+  .global-search input:focus,
+  .pb-search:focus,
+  .nav-search:focus,
+  .pp-search:focus {
+    animation: none;
+    background-size: 100% 2px, 100% 8px, var(--sg-size, 15px) var(--sg-size, 15px);
+    background-position: 0 100%, 0 100%, right var(--sg-x, 11px) center;
+  }
+}
+[data-theme="dark"] {
+  --beam: #5eead4;
+  --beam-glow: rgba(94, 234, 212, .22);
+}
+
+/* ---------------------------------------------- 🔎 שורות החיפוש — זכוכית ושדה אחיד */
+
+/*
+ * משלים את קרן האור שלמעלה: עיצוב אחיד לכל ‎input[type=search]‎ — מסגרת,
+ * רקע רך, וזכוכית מגדלת ב-SVG בתחילת השדה (במקום האימוג'י 🔍). הזכוכית היא
+ * שכבת רקע, ולכן היא גם השכבה השלישית בכלל הקרן — כך היא נשארת במקומה
+ * ונצבעת בצבע המותג בזמן שהקרן נעה.
+ *
+ * ‎--sg-x / --sg-size‎ — המרחק מהקצה וגודל הזכוכית; מוגדרים על השדה, כדי
+ * שגם ה-‎keyframes‎ של הקרן ישאירו אותה במקומה.
  */
 :root {
   --search-glass: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%2394a3b8' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cpath d='m20 20-3.5-3.5'/%3E%3C/svg%3E");
   --search-glass-on: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%230f766e' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cpath d='m20 20-3.5-3.5'/%3E%3C/svg%3E");
-  --search-beam: linear-gradient(90deg, transparent, #2dd4bf 30%, #0f766e 50%, #38bdf8 70%, transparent);
+}
+:root[data-theme='dark'] {
+  --search-glass: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%238ba09c' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cpath d='m20 20-3.5-3.5'/%3E%3C/svg%3E");
+  --search-glass-on: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%235eead4' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cpath d='m20 20-3.5-3.5'/%3E%3C/svg%3E");
 }
 
 input[type=search] {
@@ -3654,48 +4264,29 @@ input[type=search] {
   transition: background-color .15s, border-color .15s, box-shadow .15s;
 }
 input[type=search]::placeholder { color: var(--text-mute); }
-input[type=search]:hover { background-color: #eaf6f3; border-color: #9fc9c2; }
-input[type=search]:focus {
-  outline: none;
-  background-color: var(--surface);
-  border-color: var(--brand);
-  box-shadow: 0 0 0 3px rgba(15, 118, 110, .12), 0 6px 18px -10px rgba(15, 118, 110, .45);
-  /* שכבה ראשונה — הקרן; שנייה — הזכוכית, בצבע המותג */
-  background-image: var(--search-beam), var(--search-glass-on);
-  background-size: 45% 2px, var(--sg-size) var(--sg-size);
-  background-position: 50% 100%, right var(--sg-x) center;
-  animation: search-beam 2.4s cubic-bezier(.45, 0, .55, 1) infinite;
+input[type=search]:hover {
+  background-color: color-mix(in srgb, var(--brand) 6%, var(--surface-2));
+  border-color: color-mix(in srgb, var(--brand) 35%, var(--border-strong));
 }
+input[type=search]:focus { outline: none; background-color: var(--surface); border-color: var(--brand); }
 input[type=search]::-webkit-search-cancel-button { cursor: pointer; }
 
-/* כיוון התנועה כמו כיוון הקריאה — מימין לשמאל */
-@keyframes search-beam {
-  from { background-position: 180% 100%, right var(--sg-x) center; }
-  to   { background-position: -80% 100%, right var(--sg-x) center; }
-}
-@media (prefers-reduced-motion: reduce) {
-  input[type=search]:focus { animation: none; }
-}
-
-/* שדה החיפוש הראשי — הזכוכית מגיעה עכשיו מהרקע; הסמל נשאר כמשטח לחיצה שקוף */
+/* שדה החיפוש הראשי — הזכוכית מגיעה מהרקע; הסמל נשאר כמשטח לחיצה שקוף */
 .global-search input { --sg-x: 15px; padding-inline-end: 16px; border-color: var(--border); border-radius: 999px; }
-.global-search input:hover { background-color: #eaf6f3; }
-.global-search input:focus {
-  background-color: var(--surface);
-  box-shadow: 0 0 0 3px rgba(15, 118, 110, .13), 0 8px 24px -12px rgba(15, 118, 110, .5);
-}
+.global-search input:hover { background-color: color-mix(in srgb, var(--brand) 6%, var(--surface-2)); }
+.global-search input:focus { background-color: var(--surface); }
 .global-search .icon { right: 8px; width: 30px; height: 30px; }
 
 /* שדות קטנים — בתפריט ובבוררים */
 input.nav-search, input.pp-search { --sg-x: 9px; --sg-size: 13px; padding-block: 6px; border-radius: 8px; }
 
+/* האלפון מצייר את הסמל שלו (בצבע המותג) — כאן רק הקרן, בלי זכוכית נוספת */
+.pb-field input[type=search] { --search-glass: none; --search-glass-on: none; }
+
 /* תוצאות החיפוש — נפתחות בתנועה רכה מתחת לשדה */
-.search-results { animation: search-pop .16s ease-out; border-color: #c4dcd8; }
+.search-results { animation: search-pop .16s ease-out; border-color: color-mix(in srgb, var(--brand) 22%, var(--border)); }
 @keyframes search-pop {
   from { opacity: 0; transform: translateY(-4px); }
   to   { opacity: 1; transform: none; }
 }
 @media (prefers-reduced-motion: reduce) { .search-results { animation: none; } }
-
-/* האלפון מצייר את הסמל שלו (סמל האלפון בצבע המותג) — כאן רק הקרן, בלי זכוכית נוספת */
-.pb-field input[type=search] { --search-glass: none; --search-glass-on: none; }

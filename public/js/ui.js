@@ -566,6 +566,35 @@ const UI = (() => {
     });
   }
 
+  /**
+   * בורר יעד חדש למשימה — אותן אפשרויות כמו ב-Today: היום · מחר (יום העבודה
+   * הבא של המשתמש) · תחילת השבוע הבא · תאריך אחר. ‎onPick‎ מקבל ‎YYYY-MM-DD‎.
+   */
+  function pickDueDate(title, { onPick, workDays = [0, 1, 2, 3, 4] } = {}) {
+    const DAY = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי', 'שישי', 'שבת'];
+    const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Jerusalem' }).format(new Date());
+    const add = (d, n) => { const x = new Date(`${d}T12:00:00Z`); x.setUTCDate(x.getUTCDate() + n); return x.toISOString().slice(0, 10); };
+    const wd = (d) => new Date(`${d}T12:00:00Z`).getUTCDay();
+    const label = (d) => `יום ${DAY[wd(d)]} ${Number(d.slice(8))}.${Number(d.slice(5, 7))}`;
+    let tomorrow = add(today, 1);
+    for (let i = 0; i < 7 && !workDays.includes(wd(tomorrow)); i++) tomorrow = add(tomorrow, 1);
+    const sunday = add(today, 7 - wd(today));
+    const input = el('input', { type: 'date', value: tomorrow });
+    const choose = (d) => { m.close(); onPick(d); };
+    const options = [['היום', today], [`מחר — ${label(tomorrow)}`, tomorrow], sunday !== tomorrow ? [`תחילת השבוע — ${label(sunday)}`, sunday] : null].filter(Boolean);
+    const m = modal({
+      title,
+      body: el('div.today-pick', {}, [
+        ...options.map(([text, d]) => el('button.btn.btn-block', { type: 'button', onclick: () => choose(d) }, [text])),
+        el('div.today-pick-other', {}, [
+          field('תאריך אחר', input),
+          el('button.btn.btn-primary', { type: 'button', onclick: () => input.value && choose(input.value) }, ['קביעה'])
+        ])
+      ])
+    });
+    return { today, label };
+  }
+
   function prompt(label, { title = 'הזנת ערך', value = '', multiline = false, okText = 'אישור', hint = null } = {}) {
     return new Promise((resolve) => {
       const finish = settler(resolve);
@@ -654,7 +683,11 @@ const UI = (() => {
   const RING_C = 2 * Math.PI * RING_R;
   let liveUndo = null;
 
-  function undoToast(message, { onUndo, ms = 6000 } = {}) {
+  /**
+   * ‎extra‎ — כפתור נוסף בהודעה, לצד "ביטול": ‎{ label, onClick }‎. משמש
+   * פעולה המשך אופציונלית ("לא לסרוק את X") בלי לפתוח חלון.
+   */
+  function undoToast(message, { onUndo, ms = 6000, extra = null } = {}) {
     // הקודמת יורדת מיד ולא בהנפשה — לרגע היו שני כפתורי "ביטול" על המסך
     const prev = liveUndo;
     if (prev) {
@@ -676,9 +709,11 @@ const UI = (() => {
     });
     const fill = ring.querySelector('.ur-fill');
     const btn = el('button.toast-undo-btn', { type: 'button' }, ['ביטול']);
+    const extraBtn = extra ? el('button.toast-undo-btn.toast-extra-btn', { type: 'button' }, [extra.label]) : null;
     const node = el('div.toast.toast-undo', { role: 'status', 'aria-live': 'polite' }, [
       ring,
       el('span.tu-text', { text: message }),
+      extraBtn,
       btn
     ]);
 
@@ -722,6 +757,13 @@ const UI = (() => {
     };
 
     btn.addEventListener('click', undo);
+    extraBtn?.addEventListener('click', async () => {
+      extraBtn.disabled = true;
+      try {
+        await extra.onClick();
+        extraBtn.textContent = '✓';
+      } catch (err) { error(err); extraBtn.disabled = false; }
+    });
     node.addEventListener('mouseenter', () => { hovered = true; });
     node.addEventListener('mouseleave', () => { hovered = false; });
     node.addEventListener('focusin', () => { focused = true; });
@@ -1808,7 +1850,7 @@ const UI = (() => {
     el, clear, mount,
     formatDate, formatDateTime, relative, dueLabel, toInputDate, fromInputDate,
     initials, avatar, priorityTag, statusTag, taskTags,
-    modal, sheet, openLayers, confirm, prompt, toast, undoToast, error, success, taskCreated, notifyPop, clearNotifyPops,
+    modal, sheet, openLayers, confirm, prompt, pickDueDate, toast, undoToast, error, success, taskCreated, notifyPop, clearNotifyPops,
     empty, spinner, field, select, phone, projectPicker, rankProjects,
     renderMentions, fileSize, fileIcon, announceAutoStatus,
     usersByDepartment,

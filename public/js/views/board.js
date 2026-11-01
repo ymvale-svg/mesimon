@@ -1746,6 +1746,23 @@ const BoardView = (() => {
       saveBtn.disabled = true;
       if (saveOpenBtn) saveOpenBtn.disabled = true;
       try {
+        /*
+         * "יש כבר משימה דומה" במחלקה (פרק 11ב) — לפני היצירה: לפתוח בכל זאת /
+         * לא לפתוח / להצטרף. ‎dupChecked‎ — מה שהוצג, כדי שלא יוצע אחר כך כמיזוג.
+         */
+        if (!isEdit) {
+          const dup = await TaskSyncView.checkDuplicate(payload);
+          if (!dup.proceed) {
+            saveBtn.disabled = false;
+            if (saveOpenBtn) saveOpenBtn.disabled = false;
+            if (!dup.back) {
+              m.close();
+              await App.refreshView();
+            }
+            return;
+          }
+          if (dup.dupChecked) payload.dupChecked = dup.dupChecked;
+        }
         let created = null;
         if (isEdit) await API.updateTask(task.id, payload);
         else created = await API.createTask(payload);

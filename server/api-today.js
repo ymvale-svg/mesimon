@@ -39,6 +39,16 @@ function register(router, h) {
     sendJson(res, 200, await Today.build(actor, { fresh }));
   });
 
+  /**
+   * התובנות של Today — נטענות אחרי שאר המסך, כי קריאת המיילים וניתוחם לוקחים
+   * זמן. ‎null‎ — כבויות בהעדפה, או שאין מקור רלוונטי.
+   */
+  router.get('/api/today/insights', async (req, res, ctx) => {
+    const actor = userOnly(ctx);
+    const out = await Today.insightsFor(actor);
+    sendJson(res, 200, { insights: out ? { ...out, result: undefined } : null });
+  });
+
   /** המונה שעל כפתור Today — מהיר, בלי היומן */
   router.get('/api/today/count', async (req, res, ctx) => {
     const actor = userOnly(ctx);

@@ -29,6 +29,7 @@ const { router } = require('./api');
 const Today = require('./today');
 const GContacts = require('./google-contacts');
 const Meetings = require('./meetings');
+const Dupes = require('./ai/task-dupes');
 const { HttpError, sendJson, serveStatic, parseUrl, unauthorized } = require('./http-kit');
 
 const PORT = Number(process.env.PORT ?? 3000);
@@ -37,6 +38,8 @@ const PUBLIC_DIR = path.join(__dirname, '..', 'public');
 
 D.bootstrap();
 Auth.purgeExpired();
+// ההודעה הראשונה של "מה חדש" — טיוטה אחת, פעם אחת, אחרי שהטבלה קיימת
+require('./api-whats-new').seedFirstRelease();
 
 const server = http.createServer(async (req, res) => {
   const url = parseUrl(req);
@@ -99,6 +102,8 @@ server.listen(PORT, HOST, () => {
   GContacts.start();
   Meetings.start();
   WaBot.start();
+  // משימות כפולות במחלקה — סריקה פעם ביום (פרק 11ב)
+  Dupes.start();
   const nets = os.networkInterfaces();
   const lan = Object.values(nets).flat().find((n) => n && n.family === 'IPv4' && !n.internal);
   console.log('');

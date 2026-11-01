@@ -112,6 +112,17 @@ const TaskCardView = (() => {
 
     const alerts = [];
 
+    // מוזגה לתוך משימה ותיקה (פרק 11ב) — ההמשך שם
+    if (task.mergedInto) {
+      alerts.push(el('div.alert.alert-info', {}, [
+        el('span', { text: '🔀' }),
+        el('div', {}, [
+          el('b', { text: 'המשימה מוזגה' }),
+          el('div', {}, ['ההערות, הקבצים והאחראים עברו למשימה ', el('a', { onclick: () => open(task.mergedInto.id) }, [`"${task.mergedInto.title}"`]), '.'])
+        ])
+      ]));
+    }
+
     // אזהרה חזותית אם המשימה תלויה במשימה שטרם הושלמה
     if (task.dependency?.blocking) {
       alerts.push(el('div.alert.alert-warn', {}, [

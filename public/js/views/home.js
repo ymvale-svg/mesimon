@@ -61,16 +61,17 @@ const HomeView = (() => {
   const shownLabel = (shown, total, one, many) =>
     (shown < total ? `${shown} מתוך ${total} ${many}` : countLabel(total, one, many));
 
-  // ------------------------------------------------------- סידור החלונות
+  // ------------------------------------------------------- לוח החלונות
 
   /**
-   * הכרטיסים בדף הבית הם חלונות שהמשתמש מסדר: מזיז, מרחיב לרוחב, משנה גובה
-   * ומסתיר. הסידור נשמר בהעדפות בשרת, ולכן הוא הולך אחריו בין מכשירים.
+   * הכרטיסים בדף הבית הם חלונות על רשת חופשית, ברוח Draggable Widget Grid:
+   * תופסים חלון בכותרת וגוררים, מושכים כל קצה או פינה כדי לשנות גודל, ושאר
+   * הלוח מתפנה בזמן אמת. אין "מצב עריכה" — הלוח תמיד חי.
    *
-   * רשימה אחת עם עטיפת שורות, ולא שתי עמודות עם גרירה ביניהן. שתי עמודות
-   * דורשות להחליט לאיזו עמודה כל כרטיס שייך ומה קורה כשעמודה מתרוקנת;
-   * ברשימה אחת "מיקום" הוא מקום בסדר, ו"רוחב" הוא האם הכרטיס תופס חצי שורה
-   * או שורה שלמה. שני מושגים במקום ארבעה, ואותה שליטה בפועל.
+   * למה לא מצב עריכה (כמו שהיה): הסידור עבד רק אחרי לחיצה על "סידור הלוח",
+   * ומי שלא ידע על הכפתור לא ידע שאפשר לסדר בכלל. גרירה מהכותרת אינה מתנגשת
+   * בשום דבר בחלון — הרשימות, הגלילה והלחיצות כולן בגוף החלון, ולכן הכותרת
+   * פנויה להיות ידית.
    *
    * הסדר שכאן הוא ברירת המחדל, וכל מפתח שאינו מוכר מסונן — כך העדפה שנשמרה
    * לפני שכרטיס נולד אינה מסתירה אותו לנצח.
@@ -88,9 +89,9 @@ const HomeView = (() => {
     feed: 'פיד עדכונים אחרון'
   };
   /*
-   * שורת הסבר לכל חלון, לדיאלוג "אילו חלונות להציג". שם החלון לבדו אינו
-   * מספיק כדי להחליט אם להסתיר אותו: "ממתין לאישור" ו"ממתין לאישורך" הם
-   * שני חלונות שונים לגמרי, וההבדל ביניהם הוא בדיוק מה שהשורה הזו אומרת.
+   * שורת הסבר לכל חלון, לתפריט "הוספת חלון". שם החלון לבדו אינו מספיק כדי
+   * להחליט אם להחזיר אותו: "ממתין לאישור" ו"ממתין לאישורך" הם שני חלונות
+   * שונים לגמרי, וההבדל ביניהם הוא בדיוק מה שהשורה הזו אומרת.
    */
   const CARD_HINT = {
     aiInbox: 'משימות שעוזר ה-AI זיהה בדואר וממתינות לאישורך',
@@ -101,349 +102,451 @@ const HomeView = (() => {
     mentions: 'הודעות שבהן תייגו אותך',
     done: 'מה שנסגר לאחרונה, עד שעובר לארכיון',
     approval: 'תוצרי ספקים שמחכים לבדיקה',
-    feed: 'עדכונים אחרונים במשימות ובפרויקטים שלך',
+    feed: 'מה קרה לאחרונה במשימות בכל הארגון',
     phonebook: 'חיפוש מהיר באנשי הקשר של הארגון'
   };
-  // כרטיסים שברירת המחדל שלהם היא שורה שלמה — טבלת חתך רחבה מדי לחצי שורה
-  const WIDE_BY_DEFAULT = new Set(['deptCut', 'aiInbox']);
+  // שם לתצוגה גם לחלון שנוסף בקובץ אחר ועדיין לא קיבל שם כאן
+  const labelOf = (key) => CARD_LABEL[key] ?? key;
 
   /**
-   * מצב סידור. הכלים של כל חלון — חצים, ידית גרירה, רוחב, הסתרה וידיות
-   * הגודל — מוצגים רק בו, ובמצב הרגיל הכותרות נקיות.
+   * מידות הרשת.
    *
-   * קודם לכן הכלים ישבו בכל כותרת תמיד, וזה מה ששבר את החלונות הצרים: שישה
-   * כפתורים נוספים באותה שורה עם הכותרת, תת-הכותרת ו"לכל המשימות" דחקו את
-   * הכותרת לעמודה של מילה בשורה. סידור הלוח הוא פעולה של פעם בכמה ימים, ואין
-   * סיבה שישלם עליה כל מבט בדף.
+   * שורה של 40 פיקסלים ורווח של 14 — אותו רווח לרוחב ולגובה, כמו בדוגמה.
+   * שורה נמוכה ולא "תא" גבוה: הגובה של חלון הוא מה שקובע כמה שורות משימה
+   * רואים, ובצעד של 54 פיקסלים אפשר לעצור כמעט בכל גובה שהיד רוצה.
    *
-   * המצב אינו נשמר — לא בשרת ולא במכשיר. מי שחוזר לדף מצפה לראות את העבודה
-   * שלו, ולא לוח פתוח לעריכה שנשכח כך אתמול.
+   * ‎MD_BELOW‎ נמדד על רוחב הלוח ולא על רוחב המסך: תפריט הצד הנעוץ גוזל
+   * 232 פיקסלים, ולוח של 800 פיקסלים בשתים-עשרה עמודות הוא עמודות של 55.
    */
-  let editing = false;
-  let editBarRef = null;
-  let editBtnRef = null;
+  const GRID = { ROW: 40, GAP: 14, MIN_W: 3, MIN_H: 3, MD_BELOW: 900 };
+  const UNIT_Y = GRID.ROW + GRID.GAP;
+  const COLS = { lg: 12, md: 6, sm: 1 };
 
   /*
-   * גבולות גובה החלון — לא של הרשימה שבתוכו. בכותרת ובריפוד יושבים כ-84
-   * פיקסלים, ולכן חלון של 120 היה מציג שורה אחת וחצי; 170 משאיר שתיים-שלוש.
+   * גובה מינימלי לפי סוג החלון — כך שהכותרת ושורה אחת תמיד נראות. בחלון
+   * ה-AI יש כותרת ביניים לכל קבוצה, ולכן "שורה אחת" שם גבוהה יותר. החתך
+   * המחלקתי מקופל כברירת מחדל — כותרת בלבד — ולכן הוא יכול לרדת לשתיים.
    */
-  const SLOT_MIN_H = 170;
-  const SLOT_MAX_H = 900;
-  /*
-   * רוחב מינימלי לחלון בגרירת היחס. 250 ולא רצפת הבסיס (300): כשמצמצמים
-   * במפורש חלון אחד לטובת שכנו הגיוני לרדת מתחת לרוחב שהפריסה בוחרת מעצמה,
-   * אבל לא עד כדי חלון שאי אפשר לקרוא בו שורה.
-   */
-  const SHARE_MIN_PX = 250;
-
-  const layout = () => App.getPref('homeLayout', {}) ?? {};
-  const saveLayout = (patch) => {
-    App.setPref('homeLayout', { ...layout(), ...patch });
-    reload();
-  };
-
-  const isWide = (key) => {
-    const l = layout();
-    if ((l.wide ?? []).includes(key)) return true;
-    if ((l.narrow ?? []).includes(key)) return false;
-    return WIDE_BY_DEFAULT.has(key);
-  };
-  const isHidden = (key) => (layout().hidden ?? []).includes(key);
-
-  /** הסדר שהמשתמש קבע, וכרטיס חדש נופל לסופו */
-  function orderedKeys() {
-    const saved = (layout().order ?? []).filter((k) => CARD_ORDER.includes(k));
-    return [...saved, ...CARD_ORDER.filter((k) => !saved.includes(k))];
-  }
+  const MIN_H = { aiInbox: 4, deptCut: 2 };
+  const minH = (key) => MIN_H[key] ?? GRID.MIN_H;
+  const minW = (cols) => Math.min(GRID.MIN_W, cols);
 
   /*
-   * היחס בין רוחבי החלונות שייך ל**זוג**, ולא לחלון בודד. לכן כל פעולה
-   * שמשנה מי שכן של מי מאפסת אותו לחלוקה שווה: הזזה, הרחבה לרוחב מלא,
-   * הסתרה והחזרה. יחס שנקבע בין שני חלונות והוחל אחר כך על זוג אחר הוא
-   * מספר שהמשתמש לא בחר.
+   * ברירת המחדל: שורות של זוגות, וחלון שנשאר בלי בן זוג (כי אין לו תוכן או
+   * כי אינו רלוונטי לתפקיד) ממלא את השורה לבדו. הגובה כאן הוא תקרה — חלון
+   * שתוכנו קצר מתכווץ אליו (ראה fitToContent), ושני חלונות בזוג מקבלים את
+   * אותו גובה כדי שהשורה תיגמר בקו אחד.
    */
-  const evenShares = () => ({ shares: {} });
+  const DEFAULT_ROWS = [['aiInbox'], ['deptCut'], ['myTasks', 'calendar'], ['department', 'mentions'], ['done', 'approval'], ['feed']];
+  const DEFAULT_H = { aiInbox: 7, deptCut: 6, myTasks: 9, calendar: 9, department: 8, mentions: 8, done: 7, approval: 7, feed: 8 };
+  const PAIR_W = { myTasks: 7, calendar: 5, department: 7, mentions: 5 };   // מתוך 12; השאר חצי-חצי
+  const defaultH = (key) => DEFAULT_H[key] ?? 7;
 
-  const toggleWide = (key) => {
-    const l = layout();
-    const wide = new Set(l.wide ?? []);
-    const narrow = new Set(l.narrow ?? []);
-    // שתי רשימות, כי לכל כרטיס יש ברירת מחדל משלו ו"לא ברשימה" אינו תשובה
-    if (isWide(key)) { wide.delete(key); narrow.add(key); }
-    else { narrow.delete(key); wide.add(key); }
-    saveLayout({ wide: [...wide], narrow: [...narrow], ...evenShares() });
-  };
-
-  const hideCard = (key) => {
-    saveLayout({ hidden: [...new Set([...(layout().hidden ?? []), key])], ...evenShares() });
-    UI.toast(`"${CARD_LABEL[key]}" הוסתר — אפשר להחזיר מ"אילו חלונות להציג"`);
-  };
-
-  const showCard = (key) =>
-    saveLayout({ hidden: (layout().hidden ?? []).filter((k) => k !== key), ...evenShares() });
-
-  /**
-   * הזזת חלון במקלדת, מהידית.
-   *
-   * הגרירה במצביע הייתה הדרך היחידה לסדר את הלוח, כלומר מי שאינו יכול
-   * לגרור לא יכול היה לסדר אותו כלל. ההחלפה נעשית עם השכן **הנראה** ולא
-   * עם הפריט הבא בסדר: בסדר יושבים גם חלונות מוסתרים וחלונות שאין להם
-   * תוכן כרגע, והחלפה איתם הייתה נראית כלחיצה שלא עשתה דבר.
-   */
-  function moveCard(key, delta) {
-    if (!boardRef) return;
-    const visible = [...boardRef.querySelectorAll('.home-slot')].map((s) => s.dataset.key);
-    const at = visible.indexOf(key);
-    const to = at + delta;
-    if (at < 0 || to < 0 || to >= visible.length) return;
-
-    const keys = orderedKeys();
-    const i = keys.indexOf(key);
-    const j = keys.indexOf(visible[to]);
-    if (i < 0 || j < 0) return;
-
-    /*
-     * הזזה ולא החלפה.
-     *
-     * קודם לכן החלון התחלף עם שכנו, וזה נראה כקפיצה שרירותית: כשהשכן הוא
-     * חלון ברוחב שורה שלמה, החלפה איתו מעבירה את הנגרר שורה שלמה וגוררת את
-     * השכן למקומו — שתי תזוזות בלחיצה אחת, ואף אחת מהן אינה "צעד אחד".
-     * הוצאה והכנסה במקום החדש היא מה שעושה כל רשימה עם חצים, והיא הצעד
-     * היחיד שאפשר לחזות מראש.
-     */
-    keys.splice(i, 1);
-    keys.splice(j, 0, key);
-
-    // המיקוד יחזור לאותו כפתור אחרי הציור מחדש — ראה tuneBoard
-    pendingFocus = key;
-    saveLayout({ order: keys, ...evenShares() });
-  }
-
-  /* מפתח החלון שידית הגרירה שלו תקבל מיקוד מחדש אחרי הציור */
-  let pendingFocus = null;
-
-  /** צעד ההצמדה של הגובה — גם בגרירה וגם בחצים */
-  const HEIGHT_STEP = 24;
-  /*
-   * טווח ההצמדה של היחס בין שני חלונות. 12 פיקסלים — מספיק כדי שהיד "תיפול"
-   * לחצי או לשליש בלי לכוון, ומעט מספיק כדי שעדיין אפשר לעצור ממש לידם.
-   */
-  const SNAP_PX = 12;
-  const SNAP_RATIOS = [
-    { r: 1 / 3, label: '⅓' },
-    { r: 1 / 2, label: '½' },
-    { r: 2 / 3, label: '⅔' }
+  /** גודל מהיר מתפריט החלון — חלק מרוחב הלוח, ולכן נכון גם ב-6 עמודות */
+  const QUICK_SIZES = [
+    { label: 'קטן', part: 1 / 3 },
+    { label: 'בינוני', part: 1 / 2 },
+    { label: 'רחב', part: 2 / 3 },
+    { label: 'רוחב מלא', part: 1 }
   ];
 
+  // הכרטיסים שברירת המחדל שלהם בלוח הישן הייתה שורה שלמה — להמרה בלבד
+  const WIDE_BY_DEFAULT = new Set(['deptCut', 'aiInbox']);
+
+  // ------------------------------------------------------- שמירה והמרה
+
   /**
-   * תווית מדידה צפה ליד הידית בזמן גרירה — "½ · 360px".
+   * ההעדפה: ‎{ v: 2, lg, md, sm, hidden }‎. לכל פריסה מפה של
+   * ‎key → [x, y, w, h]‎ — מערך ולא אובייקט, כי ההעדפה מוגבלת בשרת ל-4KB
+   * ושלוש פריסות של תשעה חלונות עם שמות שדות היו מתקרבות לתקרה.
    *
-   * בלי מספר הגרירה היא ניחוש: אי אפשר לדעת אם שני החלונות שווים או רק
-   * כמעט, ואם הגובה נעצר כי הגיע לסוף הרשימה או כי היד נעצרה. התווית יושבת
-   * בתוך הידית עצמה, ולכן זזה איתה ואינה דורשת חישוב מיקום.
+   * שלוש פריסות נפרדות ולא אחת שמתורגמת: חלון של שליש במחשב הוא חצי
+   * בטאבלט ושורה שלמה בטלפון, ומי שסידר את הטלפון לפי מה שחשוב לו בדרכים
+   * לא רוצה שהסידור במשרד ידרוס אותו. פריסה שלא נשמרה נגזרת מהגדולה ממנה.
+   *
+   * ‎x‎ נספר מתחילת השורה — בעברית מימין — ולכן אותו מספר נכון בכל כיוון.
    */
-  function measureTip(handle) {
-    let tip = null;
-    return {
-      show(text) {
-        if (!tip) tip = handle.appendChild(el('span.slot-measure', { 'aria-hidden': 'true' }));
-        tip.textContent = text;
-      },
-      remove() { tip?.remove(); tip = null; }
-    };
+  function stored() {
+    const raw = App.getPref('homeLayout', null);
+    if (!raw || typeof raw !== 'object') return { v: 2, hidden: [] };
+    if (raw.v === 2) return raw;
+    return migrate(raw);
   }
 
   /**
-   * ידית שינוי הגובה. אחת בתחתית החלון ואחת בראשו.
+   * הלוח הקודם שמר סדר, "רחב" או "צר", וגובה בפיקסלים. ההמרה פורסת אותו
+   * לפי אותו סדר: רחב הוא 12 עמודות, צר הוא 6, ושני צרים יושבים בשורה אחת
+   * — בדיוק כפי שנראו קודם. הגובה עובר לשורות; מי שלא קבע גובה מקבל את
+   * ברירת המחדל. ההמרה נעשית בזיכרון ונשמרת עם השינוי הראשון.
    *
-   * שתי הידיות משנות את אותו גובה, אך בכיוון הפוך: מלמטה גרירה כלפי מטה
-   * מגדילה, ומלמעלה גרירה כלפי מעלה מגדילה. זה ההרגל מכל חלון שאפשר למתוח,
-   * ולכן הכיוון נגזר מהקצה שנתפס ולא מכיוון התנועה בלבד.
-   *
-   * הערה על מה שאי אפשר: החלונות יושבים בזרימה ולא בקואורדינטות, ולכן
-   * ראש החלון אינו זז מעלה כשמותחים אותו — הוא נשאר במקומו והחלון נפתח
-   * כלפי מטה. חלופה שהייתה מזיזה את הראש דורשת מיקום מוחלט, וכל שאר
-   * החלונות היו זזים תחתיו בכל גרירה.
-   *
-   * הגובה שנקבע הוא **תקרה** ולא גובה קבוע, וזה תיקון של החלטה קודמת:
-   * גובה קבוע אכן שמר על גודל החלון, אבל ברשימה קצרה ממנו הוא הותיר חלל
-   * ריק מתחת לשורות. חלון ריק למחצה גרוע יותר מחלון שגובהו נקבע לפי תוכנו.
-   *
-   * הגרירה חסומה בגובה התוכן: אי אפשר למתוח מעבר לשורה האחרונה, ולכן
-   * הידית "נעצרת" בסוף הרשימה במקום להימשך אל תוך שטח שלא יתמלא לעולם.
+   * ‎shown‎ — החלונות שמוצגים עכשיו. בלוח הישן חלון בלי תוכן פשוט לא תפס
+   * מקום, ולכן זוגות נקבעו רק בין המוצגים; פריסה לפי כל החלונות הייתה
+   * מפרידה זוג שישב יחד בגלל חלון רחב שאינו מוצג בכלל.
    */
-  function heightHandle(key, slot, edge = 'bottom') {
-    const top = edge === 'top';
-    const h = el(`button.slot-resize${top ? '.at-top' : ''}`, {
-      type: 'button',
-      role: 'separator',
-      'aria-label': `גובה החלון ${CARD_LABEL[key]} — ${top ? 'מהקצה העליון' : 'מהקצה התחתון'}`,
-      title: 'גרירה לשינוי הגובה · חצים ↑ ↓ · לחיצה כפולה לאיפוס'
+  function migrate(old, shown = CARD_ORDER) {
+    const wide = new Set(old.wide ?? []);
+    const narrow = new Set(old.narrow ?? []);
+    const isWide = (k) => wide.has(k) || (!narrow.has(k) && WIDE_BY_DEFAULT.has(k));
+    const saved = (old.order ?? []).filter((k) => CARD_ORDER.includes(k));
+    const order = [...saved, ...CARD_ORDER.filter((k) => !saved.includes(k))]
+      .filter((k) => shown.includes(k));
+    const lg = {};
+    let x = 0;
+    let y = 0;
+    let rowH = 0;
+    for (const k of order) {
+      const w = isWide(k) ? 12 : 6;
+      const px = Number(old.heights?.[k]);
+      const h = Number.isFinite(px) ? Math.max(minH(k), Math.round((px + GRID.GAP) / UNIT_Y)) : defaultH(k);
+      if (x + w > 12) { y += rowH; x = 0; rowH = 0; }
+      lg[k] = [x, y, w, h];
+      x += w;
+      rowH = Math.max(rowH, h);
+    }
+    return { v: 2, lg, hidden: Array.isArray(old.hidden) ? old.hidden : [] };
+  }
+
+  const hiddenKeys = () => new Set(stored().hidden ?? []);
+
+  const pack = (items) => Object.fromEntries(items.map((i) => [i.key, [i.x, i.y, i.w, i.h]]));
+  function unpack(map, keys) {
+    const out = [];
+    for (const key of keys) {
+      const v = map?.[key];
+      if (!Array.isArray(v) || v.length !== 4 || !v.every(Number.isFinite)) continue;
+      const [x, y, w, h] = v;
+      out.push({ key, x, y, w, h });
+    }
+    return out;
+  }
+
+  // ------------------------------------------------------- מנוע הרשת
+
+  /*
+   * המנוע עובד על מערך של ‎{ key, x, y, w, h }‎ ביחידות רשת, בלי DOM. כל
+   * פעולה — גרירה, שינוי גודל, מקלדת, הסתרה — מחשבת פריסה חדשה מהפריסה
+   * שלפני הפעולה, ולא מצטברת צעד אחר צעד. כך Escape באמצע גרירה הוא פשוט
+   * חזרה לפריסה ההתחלתית, ותנועה הלוך-חזור של העכבר אינה משאירה עקבות.
+   */
+  const overlaps = (a, b) =>
+    a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+  const hitAmong = (it, placed) => placed.find((p) => p.key !== it.key && overlaps(it, p));
+  const bottomOf = (items) => items.reduce((m, i) => Math.max(m, i.y + i.h), 0);
+
+  /**
+   * הנחת חלון אחד מול מה שכבר הונח: חלון שמתנגש יורד מתחת למה שחוסם אותו,
+   * וחלון פנוי עולה עד שהוא נוגע במשהו. עלייה צעד-צעד ולא קפיצה ל"מקום
+   * הפנוי הראשון": קפיצה הייתה מעבירה חלון מעל חלון אחר אל חור שנפתח
+   * מעליו, וזה נראה כמו ערבוב.
+   */
+  function place(it, placed) {
+    it.y = Math.max(0, it.y);
+    if (hitAmong(it, placed)) {
+      for (let hit = hitAmong(it, placed); hit; hit = hitAmong(it, placed)) it.y = hit.y + hit.h;
+      return;
+    }
+    while (it.y > 0 && !hitAmong({ ...it, y: it.y - 1 }, placed)) it.y--;
+  }
+
+  /**
+   * דחיסה כלפי מעלה, בלי חורים. הסדר הוא לפי השורה, אחר כך לפי המקום שבו
+   * החלון היה לפני הפעולה (‎rank‎) — כך שני חלונות שנדחפו לאותה שורה שומרים
+   * על הסדר שהיה ביניהם — ורק אז לפי העמודה.
+   */
+  function compact(items) {
+    const sorted = [...items].sort((a, b) =>
+      (a.y - b.y) || ((a.rank ?? a.y) - (b.rank ?? b.y)) || (a.x - b.x));
+    const placed = [];
+    for (const it of sorted) { place(it, placed); placed.push(it); }
+    for (const it of items) delete it.rank;
+    return items;
+  }
+
+  /** חלון בתוך גבולות הרשת: רוחב ומיקום בעמודות, גובה מינימלי */
+  function clampItem(it, cols) {
+    it.w = Math.max(minW(cols), Math.min(cols, Math.round(it.w)));
+    it.x = Math.max(0, Math.min(cols - it.w, Math.round(it.x)));
+    it.h = Math.max(minH(it.key), Math.round(it.h));
+    it.y = Math.max(0, Math.round(it.y));
+    return it;
+  }
+  const normalize = (items, cols) => compact(items.map((i) => clampItem({ ...i }, cols)));
+
+  /**
+   * הפריסה אחרי שהחלון ‎moved‎ הונח במקום חדש או קיבל גודל חדש.
+   *
+   * החלון שבידי המשתמש קובע; כל חלון שהוא נוגע בו מחליט אם הוא נשאר מעליו
+   * או יורד מתחתיו. ההחלטה לפי **אמצע** החלון השכן, כמו ברשימה ממוינת:
+   *  - גרירה כלפי מטה: השכן קופץ מעל כשהקצה התחתון של הנגרר עובר את אמצעו;
+   *  - גרירה כלפי מעלה, או לשורה של השכן: השכן יורד כשהקצה העליון של
+   *    הנגרר עובר את אמצעו.
+   * בלי זה הנגרר היה צריך לעבור את **כל** גובה השכן לפני שמשהו זז, וחלון
+   * גבוה נראה כקיר שאי אפשר לעבור.
+   *
+   * החלפה בתוך שורה: כשגוררים חלון הצידה אל שכנו, השכן עובר לצד השני של
+   * הנגרר, אל המקום שהתפנה — ולא יורד שורה ומשאיר חור. דחיסה כלפי מעלה בלבד לא הייתה ממלאת את
+   * החור הזה לעולם, כי הוא בצד ולא מעל.
+   *
+   * בשינוי גודל ‎(resize)‎ השכנים שמתחת תמיד יורדים — הם נדחפים, לא מדלגים
+   * מעל — ואינם מתכווצים.
+   */
+  function settle(base, moved, mode, cols) {
+    const D0 = base.find((i) => i.key === moved.key);
+    const out = base.map((i) => ({ ...(i.key === moved.key ? moved : i), rank: i.y }));
+    if (!D0) out.push({ ...moved, rank: moved.y });
+    const D = out.find((i) => i.key === moved.key);
+    for (const E of out) {
+      if (E === D || !overlaps(E, D)) continue;
+      if (mode === 'move' && D0 && E.y === D0.y) {
+        // הצד הפנוי של הנגרר — זה שקרוב יותר למקום שבו השכן עומד
+        const side = [D.x + D.w, D.x - E.w]
+          .filter((x) => x >= 0 && x + E.w <= cols && !overlaps({ ...E, x }, D))
+          .sort((p, q) => Math.abs(p - E.x) - Math.abs(q - E.x))[0];
+        if (side !== undefined) { E.x = side; continue; }
+      }
+      const fromBelow = D0 ? E.y > D0.y : false;
+      const above = fromBelow
+        ? mode === 'move' && D.y + D.h > E.y + E.h / 2
+        : D.y >= E.y + E.h / 2;
+      /*
+       * שכן שעולה מעל — רק מי שבא מלמטה זז בפועל. מי שכבר היה מעל נשאר
+       * במקומו: הזזה שלו למעלה הייתה מקפיצה אותו גם מעל חלונות אחרים.
+       */
+      if (above) { if (fromBelow) E.y = Math.min(E.y, D.y - E.h); }
+      else E.y = D.y + D.h;
+    }
+    return compact(out);
+  }
+
+  /**
+   * פריסה במסך בינוני מתוך פריסת המחשב: חצאים או שורה שלמה, בסדר הקריאה.
+   * תרגום יחסי של העמודות היה יוצר שברים — 7 ו-5 מתוך 12 הם 3.5 ו-2.5 מתוך
+   * 6 — והעיגול היה מפיל זוגות זה על זה. כאן כל חלון מקבל חצי (או שורה
+   * שלמה אם היה רחב), ונכנס למקום הפנוי הראשון.
+   */
+  function reflow(items, cols) {
+    const sorted = [...items].sort((a, b) => (a.y - b.y) || (a.x - b.x));
+    const placed = [];
+    for (const src of sorted) {
+      const w = cols === 1 ? 1 : (src.w >= 9 ? cols : Math.max(minW(cols), Math.round(cols / 2)));
+      const it = { key: src.key, x: 0, y: 0, w, h: src.h };
+      for (let y = 0, done = false; !done; y++) {
+        for (let x = 0; x + w <= cols; x++) {
+          if (!hitAmong({ ...it, x, y }, placed)) { it.x = x; it.y = y; done = true; break; }
+        }
+      }
+      placed.push(it);
+    }
+    return placed;
+  }
+
+  /**
+   * ברירת המחדל לחלונות שאין להם מקום שמור, מתחת ל-‎top‎. כל חלון מסומן
+   * בקבוצה (‎group‎) של השורה שלו, כדי שהתאמת הגובה לתוכן תשאיר זוג באותו
+   * גובה.
+   */
+  function defaults(keys, cols, top) {
+    const rows = DEFAULT_ROWS.map((r) => r.filter((k) => keys.includes(k)));
+    for (const k of keys) if (!DEFAULT_ROWS.some((r) => r.includes(k))) rows.push([k]);
+    const out = [];
+    let y = top;
+    rows.filter((r) => r.length).forEach((row, g) => {
+      const h = Math.max(...row.map(defaultH));
+      if (cols === 1 || row.length === 1) {
+        for (const k of row) { out.push({ key: k, x: 0, y, w: cols, h: defaultH(k), group: `g${g}${k}` }); y += defaultH(k); }
+        return;
+      }
+      const [a, b] = row;
+      const wa = cols === 12 ? (PAIR_W[a] ?? 6) : Math.round(cols / 2);
+      out.push({ key: a, x: 0, y, w: wa, h, group: `g${g}` });
+      out.push({ key: b, x: wa, y, w: cols - wa, h, group: `g${g}` });
+      y += h;
     });
+    return out;
+  }
 
-    const apply = (px) => slot.style.setProperty('--slot-h', `${px}px`);
-    const clear = () => {
-      const heights = { ...(layout().heights ?? {}) };
-      delete heights[key];
-      saveLayout({ heights });
-    };
-    const commit = (px) => saveLayout({ heights: { ...(layout().heights ?? {}), [key]: px } });
-
-    /**
-     * התקרה השימושית: הגובה שבו כל התוכן נראה, ולא יותר ממנו.
-     *
-     * נמדד ביחידות של **החלון** ולא של תיבת הרשימה, כי ‎--slot-h‎ מוחל על
-     * החלון. מדידה בתיבה והחלה על החלון נבדלות בגובה הכותרת, וכל גרירה
-     * הייתה "קופצת" בהפרש הזה.
-     *
-     * ‎scrollHeight - clientHeight‎ הוא בדיוק מה שחסר כדי להציג את הכול,
-     * ולכן הוא נוסף לגובה הנוכחי. ‎slot.scrollHeight‎ לא היה עובד כאן: הגולל
-     * הוא התיבה הפנימית, ולא החלון.
-     */
-    const ceiling = (box) => {
-      const now = slot.getBoundingClientRect().height;
-      const hidden = Math.max(0, box.scrollHeight - box.clientHeight);
-      return Math.min(SLOT_MAX_H, Math.max(SLOT_MIN_H, Math.round(now + hidden)));
-    };
+  /**
+   * הפריסה של נקודת שבירה, לחלונות שמוצגים עכשיו. מה ששמור — כמו שהוא;
+   * מסך בינוני או טלפון שלא סודרו — נגזרים מהמחשב; וחלון שאין לו מקום (חלון
+   * חדש, או ברירת מחדל מלאה) — לתחתית, ונמדד לפי תוכנו.
+   *
+   * חלון ששמור בפריסה אך אין לו תוכן היום (הפיד אצל מי שאינו מנהל, "ממתין
+   * לאישורך" כשאין הצעות) פשוט אינו בין ‎keys‎ — והדחיסה סוגרת את מקומו.
+   */
+  function layoutFor(bpName, keys) {
+    const raw = App.getPref('homeLayout', null);
+    const st = raw && typeof raw === 'object' && raw.v !== 2 ? migrate(raw, keys) : stored();
+    const cols = COLS[bpName];
+    let items = [];
+    if (st[bpName]) items = unpack(st[bpName], keys);
+    else if (bpName !== 'lg' && st.lg) items = reflow(unpack(st.lg, keys), cols);
+    else if (bpName === 'sm' && st.md) items = reflow(unpack(st.md, keys), cols);
+    if (cols === 1) for (const it of items) { it.x = 0; it.w = 1; }
+    const missing = keys.filter((k) => !items.some((i) => i.key === k));
+    const extra = defaults(missing, cols, bottomOf(items));
+    const auto = new Map(extra.map((i) => [i.key, i.group]));
     /*
-     * הגובה נשמר תמיד, גם כשהוא שווה לתקרת התוכן.
-     *
-     * כאן היה באג שהשבית את ההגדלה לגמרי: קודם לכן ערך שהגיע לתקרה נמחק
-     * מההעדפה, כדי שרשימה שתתקצר לא תותיר חלל ריק. הכלל הזה נכון לגובה
-     * קבוע, אבל ‎--slot-h‎ הוא ‎max-height‎ — ותקרה אינה יכולה ליצור חלל,
-     * היא רק קובעת היכן מתחילה גלילה. התוצאה הייתה שכל גרירה כלפי הגדלה
-     * חזרה לתקרת ברירת המחדל, מלמעלה ומלמטה כאחד.
-     *
-     * איפוס נשאר מפורש: לחיצה כפולה על הידית.
+     * טלפון שלא סודר: הסדר מהמחשב, אבל הגובה לפי התוכן. בעמודה צרה הכותרת
+     * נשברת לשתיים-שלוש שורות, וגובה שנקבע לחלון רחב היה חותך אותו.
      */
-    const store = (px) => commit(px);
-
-    h.addEventListener('pointerdown', (e) => {
-      e.preventDefault();
-      const box = slot.querySelector('.feed-scroll');
-      if (!box) return;
-      const startY = e.clientY;
-      const startH = slot.getBoundingClientRect().height;
-      const max = ceiling(box);
-      h.setPointerCapture(e.pointerId);
-      h.classList.add('dragging');
-      // מנטרל את המעבר החלק לזמן הגרירה, אחרת החלון נסחב אחרי הסמן
-      slot.classList.add('is-resizing');
-      document.body.style.userSelect = 'none';
-      let last = Math.round(startH);
-
-      const tip = measureTip(h);
-
-      const onMove = (ev) => {
-        // הקצה העליון הופך את הסימן: משיכה מעלה מגדילה
-        const delta = top ? startY - ev.clientY : ev.clientY - startY;
-        /*
-         * הצמדה לצעדים של 24 — אותו צעד של החצים במקלדת. בלי זה כל חלון
-         * נעצר בגובה שרירותי (‎317‎, ‎402‎), ושני חלונות באותה שורה כמעט אף
-         * פעם לא הגיעו לאותו גובה. התקרה חלה אחרי העיגול, ולכן סוף הרשימה
-         * עדיין בר-השגה גם כשאינו כפולה של 24.
-         */
-        const snapped = Math.round((startH + delta) / HEIGHT_STEP) * HEIGHT_STEP;
-        last = Math.round(Math.min(max, Math.max(SLOT_MIN_H, snapped)));
-        apply(last);
-        tip.show(last === max ? `${last}px · עד סוף הרשימה` : `${last}px`);
-      };
-      const onUp = () => {
-        tip.remove();
-        h.classList.remove('dragging');
-        slot.classList.remove('is-resizing');
-        document.body.style.userSelect = '';
-        h.removeEventListener('pointermove', onMove);
-        h.removeEventListener('pointerup', onUp);
-        h.removeEventListener('pointercancel', onUp);
-        store(last);         // שמירה אחת בסוף — שמירה בכל תזוזה מציירת מחדש
-      };
-      h.addEventListener('pointermove', onMove);
-      h.addEventListener('pointerup', onUp);
-      h.addEventListener('pointercancel', onUp);
-    });
-
-    h.addEventListener('dblclick', (e) => { e.preventDefault(); clear(); });
-
-    h.addEventListener('keydown', (e) => {
-      const raw = e.key === 'ArrowDown' ? 1 : e.key === 'ArrowUp' ? -1 : 0;
-      if (!raw) return;
-      e.preventDefault();
-      const box = slot.querySelector('.feed-scroll');
-      if (!box) return;
-      // אותה היפוך כמו בגרירה: בידית העליונה חץ מעלה מגדיל
-      const dir = top ? -raw : raw;
-      const max = ceiling(box);
-      const next = Math.round(Math.min(max, Math.max(SLOT_MIN_H,
-        slot.getBoundingClientRect().height + dir * (e.shiftKey ? 60 : 24))));
-      apply(next);
-      store(next);
-    });
-
-    return h;
+    if (cols === 1 && !st[bpName]) for (const it of items) auto.set(it.key, it.key);
+    return { items: normalize([...items, ...extra.map(({ group, ...i }) => i)], cols), auto };
   }
 
-  /**
-   * ידיות הגובה נתלות אחרי ההרכבה ולא בזמנה, כי הן תלויות במדידה: לחלון
-   * שרשימתו נכנסת בשלמותה אין מה למתוח, וידית שאינה עושה דבר מזמינה גרירה
-   * ומלמדת שהתכונה שבורה. נדרשת בדיקה אחרי שהאלמנטים במסמך — לפני כן כל
-   * הגבהים אפס.
-   */
-  function attachHeightHandles(board) {
-    for (const slot of board.querySelectorAll('.home-slot')) {
-      // ניקוי לפני תלייה מחדש — ‎tuneBoard‎ רץ גם בשינוי רוחב החלון,
-      // ובלעדיו כל שינוי גודל היה מוסיף עוד זוג ידיות על אותו חלון
-      for (const old of slot.querySelectorAll(':scope > .slot-resize')) old.remove();
+  // ------------------------------------------------------- מצב הלוח במסך
 
-      const box = slot.querySelector('.feed-scroll');
-      if (!box) continue;
-      const overflows = box.scrollHeight > box.clientHeight + 4;
-      // חלון שהמשתמש כבר קיצר חייב להישאר עם ידית, אחרת אין דרך להחזירו
-      const pinned = Number.isFinite((layout().heights ?? {})[slot.dataset.key]);
-      if (!overflows && !pinned) continue;
-      // שני הקצוות, כדי שלא יידרש לגלול לתחתית החלון כדי לקצר אותו
-      slot.appendChild(heightHandle(slot.dataset.key, slot, 'top'));
-      slot.appendChild(heightHandle(slot.dataset.key, slot, 'bottom'));
+  let phRef = null;          // מסגרת הנחיתה המקווקוות
+  let liveRef = null;        // הכרזות לקורא מסך
+  let addBtnRef = null;      // "＋ הוספת חלון"
+  let cardsRef = {};         // הכרטיסים שנבנו בציור האחרון — גם המוסתרים
+  let slotCache = new Map(); // חלון לכל כרטיס — כרטיס עטוף פעם אחת, גם אם הוסתר והוחזר
+  let bp = 'lg';
+  let items = [];            // הפריסה שעל המסך
+  let autoFit = new Map();   // חלונות בברירת מחדל שגובהם נגזר מתוכנם
+
+  /*
+   * היסטוריית הביטול — ההעדפה כולה לפני כל שינוי. שייכת לביקור במסך:
+   * ביטול של סידור מלפני שבוע אינו מה שמישהו מצפה לו מ-Ctrl+Z.
+   */
+  const undoStack = [];
+  const UNDO_MAX = 30;
+
+  const reducedMotion = () => window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+  const slotOf = (key) => boardRef?.querySelector(`:scope > .home-slot[data-key="${key}"]`) ?? null;
+  const visibleKeys = () => items.map((i) => i.key);
+
+  /** נקודת השבירה לפי המסך והלוח — טלפון, לוח צר (6) או רחב (12) */
+  function bpNow() {
+    if (App.isPhone()) return 'sm';
+    const w = boardRef?.clientWidth || containerRef?.clientWidth || 1200;
+    return w < GRID.MD_BELOW ? 'md' : 'lg';
+  }
+
+  /** גודל תא בפיקסלים, למעקב אחרי הסמן */
+  function metrics() {
+    const cols = COLS[bp];
+    const width = boardRef.clientWidth;
+    const col = (width - (cols - 1) * GRID.GAP) / cols;
+    return { cols, unitX: col + GRID.GAP, rtl: getComputedStyle(boardRef).direction === 'rtl' };
+  }
+
+  const setVars = (node, it) => {
+    node.style.setProperty('--x', String(it.x));
+    node.style.setProperty('--y', String(it.y));
+    node.style.setProperty('--w', String(it.w));
+    node.style.setProperty('--h', String(it.h));
+  };
+
+  /** החלת פריסה על המסך. המעבר עצמו — בהנפשה ב-CSS */
+  function paint(list, { skip = null } = {}) {
+    if (!boardRef) return;
+    boardRef.style.setProperty('--cols', String(COLS[bp]));
+    boardRef.style.setProperty('--rows', String(bottomOf(list)));
+    for (const it of list) {
+      const slot = slotOf(it.key);
+      if (slot && it.key !== skip) setVars(slot, it);
     }
   }
 
   /**
-   * גרירת חלונות לשינוי המיקום — לוח חי, ברוח Draggable Widget Grid.
+   * התאמת הגובה לתוכן — לחלונות בברירת מחדל, ומהתפריט לחלון אחד.
    *
-   * החלון "מורם" מהלוח (הגדלה קלה וצל עמוק), עוקב אחרי הסמן, ושאר החלונות
-   * מתפנים לו **בזמן הגרירה** בתנועה רכה — במקום קו סימון וקפיצה אחרי
-   * השחרור. בשחרור הוא נוחת במקומו החדש ומסומן לרגע במסגרת.
-   *
-   * מצביע ולא HTML5 drag-and-drop: באחרון הדפדפן מצייר תמונת רפאים שקופה
-   * ואין שליטה על שאר הלוח תוך כדי, ובמגע הוא אינו עובד כלל.
-   *
-   * - עכבר ועט: גרירה מהידית מתחילה אחרי תזוזה קטנה, כדי שלחיצה לא תיחשב.
-   * - מגע: לחיצה ארוכה על הידית, כדי שהדף עדיין יגלול.
-   * - מקלדת: במצב סידור — מיקוד בחלון, Alt וחצים (וגם כפתורי ▲ ▼ בכותרת).
-   *
-   * הגרירה משנה סדר בלבד. הרוחב נשאר של החלון — כפתור ⇤⇥ קובע אותו.
+   * בברירת המחדל הגובה הוא תקרה: חלון "תויגת" עם הודעה אחת לא צריך תשעה
+   * שורות, וחלל ריק מתחת לשורה אחת נראה כתקלה. המדידה בגובה טבעי (מחלקה
+   * זמנית שמשחררת את הגובה הקבוע), כל החלונות יחד — כדי שהדפדפן יחשב
+   * פריסה פעם אחת ולא פעם לכל חלון.
    */
-  const DRAG = {
-    ENTER: 0.18,        // כמה עמוק מרכז הנגרר צריך להיכנס לחלון כדי לתפוס את מקומו
-    HYSTERESIS: 8,      // בכמה פיקסלים מועמד צריך להיות קרוב יותר מהמקום הנוכחי
-    SWALLOW_MS: 300,    // אחרי שחרור — חסימת הלחיצה שהדפדפן יורה מיד אחריו
-    SETTLE_MS: 40,      // מרווח מינימלי בין שתי הזזות בזמן גרירה
-    LANDED_MS: 620,     // משך מסגרת הנחיתה
-    LONG_PRESS_MS: 350, // מגע: זמן לחיצה עד שהחלון מורם
-    PRESS_SLOP: 8,      // מגע: תזוזה מותרת בזמן הלחיצה לפני שזו גלילה
-    START_SLOP: 4,      // עכבר: תזוזה שהופכת לחיצה לגרירה
-    EDGE: 70            // גלילה אוטומטית ליד קצה המסך
-  };
-  // קפיץ קליל עם מעט קפיצה — המקבילה ב-CSS ל-spring של Motion
-  const SPRING_EASE = 'cubic-bezier(.22, 1.18, .36, 1)';
-  const reducedMotion = () => window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+  function naturalRows(keys) {
+    const slots = keys.map(slotOf).filter(Boolean);
+    for (const s of slots) s.classList.add('is-measuring');
+    const out = new Map(slots.map((s) => [s.dataset.key,
+      Math.ceil((s.firstElementChild.offsetHeight + GRID.GAP) / UNIT_Y)]));
+    for (const s of slots) s.classList.remove('is-measuring');
+    return out;
+  }
 
-  /** המיקום של חלון בלוח בלי ההזזות הזמניות — offset אינו מושפע מ-transform */
-  const layoutRect = (board, node) => {
-    const b = board.getBoundingClientRect();
-    const left = b.left + board.clientLeft + node.offsetLeft;
-    const top = b.top + board.clientTop + node.offsetTop;
-    return { left, top, right: left + node.offsetWidth, bottom: top + node.offsetHeight };
+  function fitToContent() {
+    if (!autoFit.size) return;
+    const need = naturalRows([...autoFit.keys()]);
+    const groups = new Map();
+    for (const [key, group] of autoFit) {
+      const it = items.find((i) => i.key === key);
+      if (!it || !need.has(key)) continue;
+      it.h = Math.max(minH(key), Math.min(defaultH(key), need.get(key)));
+      groups.set(group, Math.max(groups.get(group) ?? 0, it.h));
+    }
+    // זוג בשורה אחת — באותו גובה, אחרת השורה נגמרת בשני קווים
+    for (const [key, group] of autoFit) {
+      const it = items.find((i) => i.key === key);
+      if (it) it.h = groups.get(group) ?? it.h;
+    }
+    items = compact(items);
+  }
+
+  /**
+   * שמירה: הפריסה של נקודת השבירה הנוכחית, על גבי מה שכבר שמור — חלון
+   * ששמור אך אינו מוצג היום שומר את מקומו לפעם הבאה שיהיה לו תוכן.
+   */
+  function commit(next, { message, nextHidden = null } = {}) {
+    const before = App.getPref('homeLayout', null);
+    const st = stored();
+    const hidden = nextHidden ?? st.hidden ?? [];
+    const saved = { ...(st[bp] ?? {}) };
+    for (const k of hidden) delete saved[k];
+    App.setPref('homeLayout', { ...st, v: 2, [bp]: { ...saved, ...pack(next) }, hidden });
+    undoStack.push(before === null ? null : JSON.parse(JSON.stringify(before)));
+    if (undoStack.length > UNDO_MAX) undoStack.shift();
+    items = next;
+    autoFit = new Map();
+    if (message) UI.undoToast(message, { onUndo: undo });
+  }
+
+  /** ביטול השינוי האחרון — מהטוסט או ב-Ctrl+Z */
+  function undo() {
+    if (!undoStack.length) return;
+    const prev = undoStack.pop();
+    const hiddenBefore = [...hiddenKeys()].join();
+    App.setPref('homeLayout', prev);
+    // חלון שהוסתר או הוחזר — הלוח נבנה מחדש מהכרטיסים; אחרת רק הזזה
+    if ([...hiddenKeys()].join() !== hiddenBefore) return rebuild();
+    relayout();
+    announce('השינוי האחרון בוטל');
+  }
+
+  /** פריסה מחדש מההעדפה, בלי לבנות את החלונות — אחרי ביטול או שינוי רוחב */
+  function relayout() {
+    if (!boardRef?.isConnected) return;
+    bp = bpNow();
+    const res = layoutFor(bp, visibleKeys());
+    items = res.items;
+    autoFit = res.auto;
+    boardRef.dataset.bp = bp;
+    paint(items);
+    fitToContent();
+    paint(items);
+    syncHandles();
+  }
+
+  function announce(text) {
+    if (!liveRef) return;
+    // ריקון ומילוי, כדי שאותה הודעה פעמיים ברצף תוקרא גם בפעם השנייה
+    liveRef.textContent = '';
+    requestAnimationFrame(() => { if (liveRef) liveRef.textContent = text; });
+  }
+
+  const describe = (it) => (bp === 'sm'
+    ? `${labelOf(it.key)} במקום ${items.filter((i) => i.y < it.y).length + 1}, גובה ${it.h}`
+    : `${labelOf(it.key)} בשורה ${it.y + 1}, עמודה ${it.x + 1}, רוחב ${it.w}, גובה ${it.h}`);
+
+  // ------------------------------------------------------- גרירה
+
+  const DRAG = {
+    START_SLOP: 4,      // עכבר: תזוזה שהופכת לחיצה לגרירה
+    LONG_PRESS_MS: 380, // מגע: זמן לחיצה על הכותרת עד שהחלון מורם
+    PRESS_SLOP: 8,      // מגע: תזוזה מותרת בזמן הלחיצה לפני שזו גלילה
+    SWALLOW_MS: 300,    // אחרי שחרור — חסימת הלחיצה שהדפדפן יורה מיד אחריו
+    LANDED_MS: 650,     // משך הסימון של חלון שנחת
+    EDGE: 70            // גלילה אוטומטית ליד קצה המסך
   };
 
   /** האב הראשון שנגלל, לגלילה אוטומטית ליד הקצה */
@@ -455,175 +558,115 @@ const HomeView = (() => {
     return document.scrollingElement;
   };
 
-  function makeSlotsDraggable(slots) {
-    if (slots.length < 2) return;
+  /* פקדים בכותרת שהלחיצה עליהם היא לחיצה, ולא תחילת גרירה */
+  const INTERACTIVE = 'button, a, input, select, textarea, label, [contenteditable], [role="button"]';
 
-    for (const entry of slots) {
-      const { key, node } = entry;
-      const grip = node.querySelector('.slot-grip');
-      if (!grip) continue;
+  /**
+   * הדפדפן יורה ‎click‎ מיד אחרי השחרור, על האב המשותף של נקודת הלחיצה
+   * ונקודת השחרור. כשהשחרור נופל על שורת משימה זו הייתה פותחת את כרטיס
+   * המשימה — כלומר כל גרירה שהסתיימה מעל רשימה פתחה משימה שאיש לא ביקש.
+   */
+  function swallowNextClick() {
+    const swallow = (ev) => { ev.stopPropagation(); ev.preventDefault(); };
+    window.addEventListener('click', swallow, { capture: true, once: true });
+    setTimeout(() => window.removeEventListener('click', swallow, { capture: true }), DRAG.SWALLOW_MS);
+  }
 
-      /*
-       * מקלדת: Alt + חצים מכל מקום בחלון, חוץ משדות קלט — ורק במצב סידור.
-       *
-       * מחוץ למצב הסידור הקיצור היה מתנגש במה שהדפדפן כבר עושה בו: Alt
-       * וחץ ימינה או שמאלה הם "קדימה" ו"אחורה" בהיסטוריה, ומי שלחץ עליהם
-       * כשהמיקוד היה במקרה בתוך חלון קיבל לוח מסודר מחדש במקום הדף הקודם.
-       * מי שמנווט במקלדת מגיע למצב הסידור בכפתור "סידור הלוח", שבסדר הטאב.
-       */
-      node.addEventListener('keydown', (e) => {
-        if (!editing) return;
-        if (!e.altKey || e.target.closest('input, textarea, select')) return;
-        const delta = e.key === 'ArrowDown' ? 1 : e.key === 'ArrowUp' ? -1
-          : e.key === 'ArrowLeft' ? 1 : e.key === 'ArrowRight' ? -1 : 0;   // RTL: שמאלה = הבא
-        if (!delta) return;
-        e.preventDefault();
-        moveCard(key, delta);
-      });
+  /** תחילת לחיצה על כותרת: עכבר — אחרי תזוזה קטנה; מגע — לחיצה ארוכה */
+  function onHeadPointerDown(e, slot) {
+    if (e.button !== 0 || !e.isPrimary || e.target.closest(INTERACTIVE)) return;
+    const pointerId = e.pointerId;
+    const touch = e.pointerType === 'touch';
+    const origin = { x: e.clientX, y: e.clientY };
+    let session = null;
+    let timer = 0;
+    // עכבר: מונע בחירת טקסט בכותרת. מגע: לא — אחרת הדף לא היה נגלל מהכותרת
+    if (!touch) e.preventDefault();
 
-      grip.addEventListener('contextmenu', (e) => e.preventDefault());
-      grip.addEventListener('pointerdown', (e) => {
-        if (e.button !== 0 || !e.isPrimary) return;
-        const board = node.parentElement;
-        if (!board) return;
-        e.preventDefault();
-        const pointerId = e.pointerId;
-        const origin = { x: e.clientX, y: e.clientY };
-        let session = null;
-        let timer = 0;
+    const begin = () => {
+      timer = 0;
+      slot.classList.remove('is-holding');
+      navigator.vibrate?.(10);
+      session = liftSlot(slot, origin);
+    };
+    const onMove = (ev) => {
+      if (ev.pointerId !== pointerId) return;
+      if (session) { ev.preventDefault(); session.move(ev.clientX, ev.clientY); return; }
+      const dist = Math.hypot(ev.clientX - origin.x, ev.clientY - origin.y);
+      if (touch) { if (dist > DRAG.PRESS_SLOP) finish(ev, true); }   // זו גלילה, לא גרירה
+      else if (dist > DRAG.START_SLOP) { begin(); session.move(ev.clientX, ev.clientY); }
+    };
+    // חסימת גלילת הדף רק אחרי שהחלון הורם
+    const blockTouch = (ev) => { if (session) ev.preventDefault(); };
+    const onKey = (ev) => { if (ev.key === 'Escape' && session) { ev.preventDefault(); ev.stopPropagation(); finish(null, true); } };
+    const finish = (ev, cancelled = false) => {
+      if (ev && ev.pointerId !== pointerId) return;
+      clearTimeout(timer);
+      slot.classList.remove('is-holding');
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onCancel);
+      window.removeEventListener('touchmove', blockTouch);
+      window.removeEventListener('keydown', onKey, true);
+      if (session) session.drop(cancelled);
+    };
+    const onUp = (ev) => finish(ev, false);
+    // ‎pointercancel‎ — הדפדפן לקח את המגע (גלילה, מחווה): חזרה למקום
+    const onCancel = (ev) => finish(ev, true);
 
-        const begin = () => {
-          timer = 0;
-          node.classList.remove('is-holding');
-          navigator.vibrate?.(10);
-          session = liftSlot(board, node, origin);
-          session.move(origin.x, origin.y);
-        };
-
-        const onMove = (ev) => {
-          if (ev.pointerId !== pointerId) return;
-          if (session) { ev.preventDefault(); session.move(ev.clientX, ev.clientY); return; }
-          const dist = Math.hypot(ev.clientX - origin.x, ev.clientY - origin.y);
-          if (e.pointerType === 'touch') {
-            if (dist > DRAG.PRESS_SLOP) finish(ev, true);   // זו גלילה, לא גרירה
-          } else if (dist > DRAG.START_SLOP) {
-            begin();
-            session.move(ev.clientX, ev.clientY);
-          }
-        };
-        // חסימת גלילת הדף רק אחרי שהחלון הורם
-        const blockTouch = (ev) => { if (session) ev.preventDefault(); };
-
-        const finish = (ev, cancelled = false) => {
-          if (ev && ev.pointerId !== pointerId) return;
-          clearTimeout(timer);
-          node.classList.remove('is-holding');
-          window.removeEventListener('pointermove', onMove);
-          window.removeEventListener('pointerup', finish);
-          window.removeEventListener('pointercancel', onCancel);
-          window.removeEventListener('touchmove', blockTouch);
-          if (session) session.drop(cancelled);
-        };
-        const onCancel = (ev) => finish(ev, false);
-
-        window.addEventListener('pointermove', onMove, { passive: false });
-        window.addEventListener('pointerup', finish);
-        window.addEventListener('pointercancel', onCancel);
-        window.addEventListener('touchmove', blockTouch, { passive: false });
-
-        if (e.pointerType === 'touch') {
-          node.classList.add('is-holding');
-          timer = setTimeout(begin, DRAG.LONG_PRESS_MS);
-        }
-      });
+    window.addEventListener('pointermove', onMove, { passive: false });
+    window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onCancel);
+    window.addEventListener('touchmove', blockTouch, { passive: false });
+    window.addEventListener('keydown', onKey, true);
+    if (touch) {
+      slot.classList.add('is-holding');
+      timer = setTimeout(begin, DRAG.LONG_PRESS_MS);
     }
   }
 
   /**
-   * גרירה אחת. מחזיר ‎move‎ ו-‎drop‎; כל השאר — מעקב, סידור חי, גלילה
-   * ונחיתה — קורה כאן.
+   * גרירה אחת: החלון "מורם" — הגדלה קלה, צל עמוק וסמן יד — ועוקב אחרי
+   * הסמן בפיקסלים, בלי הצמדה. מקום הנחיתה מוצמד לרשת ומסומן במסגרת
+   * מקווקוות, ושאר החלונות זזים אליו בהנפשה. בשחרור החלון נוחת במסגרת.
+   *
+   * מצביע ולא HTML5 drag-and-drop: באחרון הדפדפן מצייר תמונת רפאים שקופה
+   * ואין שליטה על שאר הלוח תוך כדי, ובמגע הוא אינו עובד כלל.
    */
-  function liftSlot(board, node, origin) {
-    const still = reducedMotion();
-    const home0 = layoutRect(board, node);
+  function liftSlot(slot, origin) {
+    const key = slot.dataset.key;
+    const base = items.map((i) => ({ ...i }));
+    const D0 = base.find((i) => i.key === key);
+    const m = metrics();
+    const scroller = scrollerOf(boardRef);
+    const r0 = slot.getBoundingClientRect();
     // היכן בתוך החלון נתפס — כדי שהחלון לא "יקפוץ" אל הסמן
-    const grab = { x: origin.x - home0.left, y: origin.y - home0.top };
-    const scroller = scrollerOf(board);
-    const before = [...board.querySelectorAll('.home-slot')].map((s) => s.dataset.key);
+    const grab = { inline: m.rtl ? r0.right - origin.x : origin.x - r0.left, y: origin.y - r0.top };
     let pointer = { ...origin };
-    let lastMove = 0;
+    let target = { x: D0.x, y: D0.y };
+    let next = base;
     let frame = 0;
 
-    node.classList.add('is-lifted');
-    board.classList.add('is-arranging');
-    document.body.style.userSelect = 'none';
+    slot.classList.add('is-lifted');
+    boardRef.classList.add('is-arranging');
     document.body.classList.add('is-dragging-slot');
+    setVars(phRef, D0);
+    phRef.hidden = false;
 
-    /** החלון הנגרר נצמד לסמן, ביחס למקומו הנוכחי בלוח */
     const follow = () => {
-      const home = layoutRect(board, node);
-      const dx = pointer.x - grab.x - home.left;
-      const dy = pointer.y - grab.y - home.top;
-      node.style.transform = `translate(${dx}px, ${dy}px) scale(1.03)`;
-    };
-
-    /**
-     * לאן הנגרר שייך — לפי מרחק, ולא לפי "בתוך".
-     *
-     * קודם לכן הנגרר תפס מקום של שכן רק כשמרכזו נכנס לחלק הפנימי של השכן.
-     * זה עבד בתוך הלוח, אבל במרווחים בין החלונות, ומתחת לחלון האחרון, המרכז
-     * לא היה "בתוך" אף אחד — והגרירה פשוט לא הגיבה. עכשיו נמדד המרחק מהמרכז
-     * לכל חלון, והקרוב ביותר זוכה.
-     *
-     * ההיסטרזיס הוא מה שמונע ריצוד בין שני מקומות: המקום של הנגרר עצמו נמדד
-     * במלואו, והמועמדים מכווצים פנימה ב-‎DRAG.ENTER‎. מועמד מנצח רק כשהוא
-     * קרוב **יותר** מהמקום הנוכחי בהפרש ממשי, ולכן מרכז שעומד על הגבול
-     * ביניהם נשאר במקומו במקום לקפוץ הלוך ושוב.
-     */
-    const reorder = () => {
-      const now = performance.now();
-      if (now - lastMove < DRAG.SETTLE_MS) return;
-      const home = layoutRect(board, node);
-      const cx = pointer.x - grab.x + (home.right - home.left) / 2;
-      const cy = pointer.y - grab.y + (home.bottom - home.top) / 2;
-      const distance = (r, inset) => {
-        const ix = (r.right - r.left) * inset;
-        const iy = (r.bottom - r.top) * inset;
-        const dx = Math.max(r.left + ix - cx, 0, cx - (r.right - ix));
-        const dy = Math.max(r.top + iy - cy, 0, cy - (r.bottom - iy));
-        return Math.hypot(dx, dy);
-      };
-      const own = distance(home, 0);
-      if (own === 0) return;
-
-      const all = [...board.querySelectorAll('.home-slot')];
-      let target = null;
-      let best = own - DRAG.HYSTERESIS;
-      for (const s of all) {
-        if (s === node) continue;
-        const d = distance(layoutRect(board, s), DRAG.ENTER);
-        if (d < best) { best = d; target = s; }
-      }
-      if (!target) return;
-
-      // FLIP: מדידה לפני, הזזה ב-DOM, ואז כל שכן מונפש מהמקום הישן לחדש
-      const first = new Map(all.map((s) => [s, s.getBoundingClientRect()]));
-      const forward = all.indexOf(target) > all.indexOf(node);
-      board.insertBefore(node, forward ? target.nextSibling : target);
-      lastMove = now;
-      if (still) return;
-      for (const s of all) {
-        if (s === node) continue;
-        const a = first.get(s);
-        const b = s.getBoundingClientRect();
-        const dx = a.left - b.left;
-        const dy = a.top - b.top;
-        if (Math.abs(dx) < 1 && Math.abs(dy) < 1) continue;
-        s.animate(
-          [{ transform: `translate(${dx}px, ${dy}px)` }, { transform: 'none' }],
-          { duration: 380, easing: SPRING_EASE }
-        );
-      }
+      const b = boardRef.getBoundingClientRect();
+      const inline = m.rtl ? b.right - pointer.x - grab.inline : pointer.x - b.left - grab.inline;
+      const top = pointer.y - b.top - grab.y;
+      slot.style.setProperty('--drag-x', `${inline}px`);
+      slot.style.setProperty('--drag-y', `${top}px`);
+      const x = Math.max(0, Math.min(m.cols - D0.w, Math.round(inline / m.unitX)));
+      const y = Math.max(0, Math.round(top / UNIT_Y));
+      if (x === target.x && y === target.y) return;
+      target = { x, y };
+      next = settle(base, { ...D0, x, y }, 'move', m.cols);
+      const landing = next.find((i) => i.key === key);
+      setVars(phRef, landing);
+      paint(next, { skip: key });
     };
 
     /** גלילה אוטומטית כשהסמן קרוב לקצה המסך */
@@ -634,194 +677,488 @@ const HomeView = (() => {
       if (speed) scroller.scrollTop += speed * 0.35;
     };
 
-    // לולאה אחת לכל פריים: גם כשהסמן עומד, הגלילה והסידור ממשיכים
-    const tick = () => {
-      autoscroll();
-      reorder();
-      follow();
-      frame = requestAnimationFrame(tick);
-    };
+    // לולאה אחת לכל פריים: גם כשהסמן עומד, הגלילה והמעקב ממשיכים
+    const tick = () => { autoscroll(); follow(); frame = requestAnimationFrame(tick); };
+    // מיד ולא בפריים הבא: בלי מיקום בפיקסלים החלון היה מהבהב בפינת הלוח
+    follow();
     frame = requestAnimationFrame(tick);
 
     return {
       move(x, y) { pointer = { x, y }; },
-
       drop(cancelled) {
         cancelAnimationFrame(frame);
-        document.body.style.userSelect = '';
         document.body.classList.remove('is-dragging-slot');
-        board.classList.remove('is-arranging');
-        node.classList.remove('is-lifted');
-
-        if (cancelled) {
-          // ביטול — חזרה לסדר שהיה
-          const byKey = new Map([...board.querySelectorAll('.home-slot')].map((s) => [s.dataset.key, s]));
-          for (const k of before) if (byKey.get(k)) board.appendChild(byKey.get(k));
-        }
-
-        // נחיתה: מהמקום שבו שוחרר אל המקום בלוח
-        const from = node.style.transform;
-        node.style.transform = '';
-        if (!still && from) {
-          node.animate([{ transform: from }, { transform: 'none' }],
-            { duration: 420, easing: SPRING_EASE });
-        }
-        node.classList.add('is-landed');
-        setTimeout(() => node.classList.remove('is-landed'), DRAG.LANDED_MS);
-
-        /*
-         * הדפדפן יורה ‎click‎ מיד אחרי השחרור, על האב המשותף של נקודת
-         * הלחיצה ונקודת השחרור. כשהשחרור נופל על שורת משימה זו הייתה פותחת
-         * את כרטיס המשימה — כלומר כל גרירה שהסתיימה מעל רשימה פתחה משימה
-         * שאיש לא ביקש. הלחיצה הראשונה בחלון הזמן הקצר נבלעת בשלב הלכידה.
-         */
-        const swallow = (ev) => { ev.stopPropagation(); ev.preventDefault(); };
-        window.addEventListener('click', swallow, { capture: true, once: true });
-        setTimeout(() => window.removeEventListener('click', swallow, { capture: true }), DRAG.SWALLOW_MS);
-
-        const after = [...board.querySelectorAll('.home-slot')].map((s) => s.dataset.key);
-        if (after.join() === before.join()) return;
-        commitOrder(board, after);
+        boardRef.classList.remove('is-arranging');
+        flushReload();
+        phRef.hidden = true;
+        const result = cancelled ? base : next;
+        paint(result, { skip: key });
+        setVars(slot, result.find((i) => i.key === key));
+        // הסרת ‎is-lifted‎ מחזירה את החלון מהפיקסלים אל הרשת — במעבר ה-CSS
+        slot.classList.remove('is-lifted');
+        slot.style.removeProperty('--drag-x');
+        slot.style.removeProperty('--drag-y');
+        landed(slot);
+        swallowNextClick();
+        if (cancelled) { announce('הגרירה בוטלה'); return; }
+        const changed = JSON.stringify(pack(next)) !== JSON.stringify(pack(base));
+        if (!changed) return;
+        commit(next, { message: `"${labelOf(key)}" הוזז` });
+        announce(`${describe(next.find((i) => i.key === key))}`);
+        syncHandles();
       }
     };
   }
 
-  /**
-   * שמירת הסדר אחרי גרירה, בלי לצייר את המסך מחדש: ה-DOM כבר בסדר הנכון,
-   * וציור מחדש היה מוחק את אנימציית הנחיתה.
-   *
-   * הסדר השמור כולל גם חלונות מוסתרים וחלונות שאין להם תוכן כרגע, ולכן
-   * רק המקומות של החלונות הנראים מתמלאים מחדש — השאר נשארים במקומם.
+  /*
+   * רענון רקע שהגיע באמצע גרירה (עדכון משימה, סריקת דואר) נדחה לסופה:
+   * ציור מחדש היה מחליף את החלון שביד במשהו אחר, והגרירה הייתה נקטעת.
    */
-  function commitOrder(board, visible) {
-    const keys = orderedKeys();
-    const seen = new Set(visible);
-    const queue = [...visible];
-    const order = keys.map((k) => (seen.has(k) ? queue.shift() : k));
-    // יחס הרוחבים שייך לזוג, והזוגות השתנו — חזרה לחלוקה שווה (ראה evenShares)
-    App.setPref('homeLayout', { ...layout(), order, ...evenShares() });
-    for (const s of board.querySelectorAll('.home-slot')) s.style.removeProperty('--share');
-    tuneBoard();
+  let reloadWaiting = false;
+  const flushReload = () => {
+    if (!reloadWaiting) return;
+    reloadWaiting = false;
+    setTimeout(reload, 0);
+  };
+
+  /** מסגרת רגעית סביב חלון שנחת — העין מוצאת אותו במקומו החדש */
+  function landed(slot) {
+    slot.classList.add('is-landed');
+    setTimeout(() => slot.classList.remove('is-landed'), DRAG.LANDED_MS);
   }
 
-  /**
-   * מיקום כל חלון ברשימה, לקורא מסך: "3 מתוך 8". ה-DOM הוא הסדר, ולכן
-   * המספור נגזר ממנו מחדש אחרי כל גרירה — הגרירה מזיזה צמתים ולא מציירת.
+  // ------------------------------------------------------- שינוי גודל
+
+  /*
+   * שמונה ידיות: ארבעה צדדים וארבע פינות. השמות לוגיים — ‎s‎ (start) הוא
+   * תחילת השורה, ובעברית הצד הימני — כדי שאותו קוד יעבוד בכל כיוון כתיבה.
+   * בטלפון רק התחתונה: אין שינוי רוחב בעמודה אחת.
    */
-  function numberSlots(board) {
-    const slots = [...board.querySelectorAll(':scope > .home-slot')];
-    slots.forEach((s, i) => {
-      s.setAttribute('aria-posinset', String(i + 1));
-      s.setAttribute('aria-setsize', String(slots.length));
+  const HANDLES = ['t', 'b', 's', 'e', 'ts', 'te', 'bs', 'be'];
+
+  function resizeHandles(slot) {
+    const phone = bp === 'sm';
+    return (phone ? ['b'] : HANDLES).map((dir) => {
+      const h = el(`span.slot-rz.rz-${dir}`, { 'aria-hidden': 'true', 'data-dir': dir });
+      h.addEventListener('pointerdown', (e) => startResize(e, slot, dir));
+      h.addEventListener('dblclick', (e) => { e.preventDefault(); fitOne(slot.dataset.key); });
+      return h;
     });
   }
 
+  /** הידיות נבנות מחדש כשהלוח עובר בין טלפון למחשב — שם יש רק ידית אחת */
+  function syncHandles() {
+    if (!boardRef) return;
+    const want = bp === 'sm' ? 1 : HANDLES.length;
+    for (const slot of boardRef.querySelectorAll(':scope > .home-slot')) {
+      const have = slot.querySelectorAll(':scope > .slot-rz');
+      if (have.length === want) continue;
+      for (const h of have) h.remove();
+      slot.append(...resizeHandles(slot));
+    }
+  }
+
+  function startResize(e, slot, dir) {
+    if (e.button !== 0 || !e.isPrimary) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const key = slot.dataset.key;
+    const base = items.map((i) => ({ ...i }));
+    const D0 = base.find((i) => i.key === key);
+    const m = metrics();
+    const handle = e.currentTarget;
+    handle.setPointerCapture(e.pointerId);
+    const start = { x: e.clientX, y: e.clientY };
+    let next = base;
+    let shape = { ...D0 };
+
+    const tip = slot.appendChild(el('span.slot-size', { 'aria-hidden': 'true' }));
+    const showTip = (it) => { tip.textContent = bp === 'sm' ? `גובה ${it.h}` : `${it.w} × ${it.h}`; };
+    showTip(D0);
+    slot.classList.add('is-resizing');
+    boardRef.classList.add('is-arranging');
+    document.body.classList.add(`is-resizing-slot`);
+    document.body.dataset.rz = dir;
+    setVars(phRef, D0);
+    phRef.hidden = false;
+
+    const onMove = (ev) => {
+      // ‎inline‎ חיובי = לכיוון סוף השורה (בעברית — שמאלה)
+      const dInline = Math.round((m.rtl ? start.x - ev.clientX : ev.clientX - start.x) / m.unitX);
+      const dy = Math.round((ev.clientY - start.y) / UNIT_Y);
+      const it = { ...D0 };
+      const lowW = minW(m.cols);
+      if (dir.includes('e')) it.w = Math.max(lowW, Math.min(m.cols - D0.x, D0.w + dInline));
+      if (dir.includes('s')) {
+        const dx = Math.max(-D0.x, Math.min(D0.w - lowW, dInline));
+        it.x = D0.x + dx;
+        it.w = D0.w - dx;
+      }
+      if (dir.includes('b')) it.h = Math.max(minH(key), D0.h + dy);
+      if (dir.includes('t')) {
+        const d = Math.max(-D0.y, Math.min(D0.h - minH(key), dy));
+        it.y = D0.y + d;
+        it.h = D0.h - d;
+      }
+      if (it.x === shape.x && it.y === shape.y && it.w === shape.w && it.h === shape.h) return;
+      shape = it;
+      next = settle(base, it, 'resize', m.cols);
+      paint(next);
+      setVars(phRef, next.find((i) => i.key === key));
+      showTip(shape);
+    };
+    const end = (cancelled) => {
+      handle.removeEventListener('pointermove', onMove);
+      handle.removeEventListener('pointerup', onUp);
+      handle.removeEventListener('pointercancel', onCancel);
+      window.removeEventListener('keydown', onKey, true);
+      tip.remove();
+      slot.classList.remove('is-resizing');
+      boardRef.classList.remove('is-arranging');
+      flushReload();
+      document.body.classList.remove('is-resizing-slot');
+      delete document.body.dataset.rz;
+      phRef.hidden = true;
+      if (cancelled) { paint(base); announce('שינוי הגודל בוטל'); return; }
+      paint(next);
+      if (JSON.stringify(pack(next)) === JSON.stringify(pack(base))) return;
+      swallowNextClick();
+      commit(next, { message: `גודל "${labelOf(key)}" השתנה` });
+      announce(describe(next.find((i) => i.key === key)));
+    };
+    const onUp = () => end(false);
+    const onCancel = () => end(true);
+    const onKey = (ev) => { if (ev.key === 'Escape') { ev.preventDefault(); ev.stopPropagation(); end(true); } };
+    handle.addEventListener('pointermove', onMove);
+    handle.addEventListener('pointerup', onUp);
+    handle.addEventListener('pointercancel', onCancel);
+    window.addEventListener('keydown', onKey, true);
+  }
+
+  // ------------------------------------------------------- פעולות על חלון
+
+  /** הזזה או שינוי גודל בצעד אחד — מהמקלדת ומהתפריט */
+  function applyShape(key, shape, mode, message) {
+    const base = items.map((i) => ({ ...i }));
+    const next = settle(base, clampItem({ ...shape, key }, COLS[bp]), mode, COLS[bp]);
+    if (JSON.stringify(pack(next)) === JSON.stringify(pack(base))) return false;
+    paint(next);
+    commit(next, { message });
+    announce(describe(next.find((i) => i.key === key)));
+    return true;
+  }
+
   /**
-   * עטיפת כרטיס לחלון: כותרת נגררת, כפתורי רוחב והסתרה, וידית גובה.
+   * מקלדת, מהכותרת: Ctrl וחצים מזיזים, Shift וחצים משנים גודל.
    *
-   * הכפתורים נדחפים לתוך ‎.card-head‎ הקיים של הכרטיס ולא לשורה נוספת מעליו:
-   * שורת כלים לכל חלון הייתה מוסיפה שמונה שורות לדף שכל תכליתו תמונת מצב
-   * במבט אחד.
+   * הזזה אנכית מחפשת את הצעד הראשון שמשנה משהו. שורה אחת למטה לרוב אינה
+   * משנה דבר — הדחיסה מחזירה את החלון למעלה — ולחיצה שלא עושה דבר נראית
+   * כתקלה. לכן הצעד גדל עד שהחלון באמת עובר את שכנו.
+   *
+   * בעברית חץ שמאלה הוא "קדימה" בשורה — לכיוון סוף השורה.
+   */
+  function onSlotKey(e, slot) {
+    const arrows = { ArrowUp: [0, -1], ArrowDown: [0, 1], ArrowLeft: [1, 0], ArrowRight: [-1, 0] };
+    const step = arrows[e.key];
+    if (!step || e.altKey) return;
+    // רק מהכותרת — בגוף החלון החצים שייכים לרשימה ולשדות שבו
+    if (!e.target.closest('.card-head') || e.target.closest('input, select, textarea, [contenteditable]')) return;
+    const moving = (e.ctrlKey || e.metaKey) && !e.shiftKey;
+    const sizing = e.shiftKey && !e.ctrlKey && !e.metaKey;
+    if (!moving && !sizing) return;
+    const it = items.find((i) => i.key === slot.dataset.key);
+    if (!it) return;
+    e.preventDefault();
+    const rtl = getComputedStyle(boardRef).direction === 'rtl';
+    const dx = rtl ? step[0] : -step[0];
+    const [, dy] = step;
+    if (bp === 'sm' && dx) return;   // בטלפון אין רוחב ואין צד
+
+    if (sizing) {
+      const shape = { ...it, w: it.w + dx, h: it.h + dy };
+      if (!applyShape(it.key, shape, 'resize', `גודל "${labelOf(it.key)}" השתנה`)) announce(describe(it));
+      return;
+    }
+    if (dx) {
+      if (!applyShape(it.key, { ...it, x: it.x + dx }, 'move', `"${labelOf(it.key)}" הוזז`)) announce(describe(it));
+      return;
+    }
+    const base = items.map((i) => ({ ...i }));
+    const was = JSON.stringify(pack(base));
+    for (let y = it.y + dy, n = 0; y >= 0 && n < 80; y += dy, n++) {
+      const next = settle(base, { ...it, y }, 'move', COLS[bp]);
+      if (JSON.stringify(pack(next)) === was) continue;
+      paint(next);
+      commit(next, { message: `"${labelOf(it.key)}" הוזז` });
+      announce(describe(next.find((i) => i.key === it.key)));
+      return;
+    }
+    announce(describe(it));
+  }
+
+  /** גובה לפי התוכן לחלון אחד — מהתפריט ובלחיצה כפולה על ידית */
+  function fitOne(key) {
+    const it = items.find((i) => i.key === key);
+    if (!it) return;
+    const need = naturalRows([key]).get(key);
+    if (!need) return;
+    applyShape(key, { ...it, h: Math.max(minH(key), need) }, 'resize', `גובה "${labelOf(key)}" הותאם לתוכן`);
+  }
+
+  function hideCard(key) {
+    const slot = slotOf(key);
+    if (!slot) return;
+    const hidden = [...new Set([...(stored().hidden ?? []), key])];
+    slot.remove();
+    slot.classList.remove('is-landed');
+    const next = compact(items.filter((i) => i.key !== key).map((i) => ({ ...i })));
+    paint(next);
+    commit(next, { message: `"${labelOf(key)}" הוסתר`, nextHidden: hidden });
+    announce(`${labelOf(key)} הוסתר. אפשר להחזיר אותו מ"הוספת חלון".`);
+    afterMembershipChange();
+  }
+
+  /**
+   * החזרת חלון מוסתר — לתחתית הלוח, ומיד לעין. הכרטיס כבר נבנה בציור
+   * האחרון (ראה ‎cardsRef‎), ולכן אין צורך לטעון את הדף מחדש.
+   */
+  function showCard(key) {
+    const card = cardsRef[key];
+    if (!card) return;
+    const hidden = (stored().hidden ?? []).filter((k) => k !== key);
+    const slot = slotCache.get(key) ?? slotFor(key, card);
+    slotCache.set(key, slot);
+    boardRef.insertBefore(slot, phRef);
+    const [it] = defaults([key], COLS[bp], bottomOf(items));
+    const fresh = { ...it };
+    delete fresh.group;
+    setVars(slot, fresh);
+    const rows = naturalRows([key]).get(key);
+    if (rows) fresh.h = Math.max(minH(key), Math.min(defaultH(key), rows));
+    const next = compact([...items.map((i) => ({ ...i })), fresh]);
+    paint(next);
+    commit(next, { message: `"${labelOf(key)}" הוחזר ללוח`, nextHidden: hidden });
+    afterMembershipChange();
+    landed(slot);
+    slot.scrollIntoView({ behavior: reducedMotion() ? 'auto' : 'smooth', block: 'nearest' });
+    slot.querySelector('.card-head')?.focus({ preventScroll: true });
+  }
+
+  /** איפוס: כל החלונות גלויים, בברירת המחדל ובגובה לפי התוכן */
+  function resetBoard() {
+    const before = App.getPref('homeLayout', null);
+    App.setPref('homeLayout', null);
+    undoStack.push(before === null ? null : JSON.parse(JSON.stringify(before)));
+    UI.undoToast('הלוח חזר לסידור המקורי', { onUndo: undo });
+    rebuild();
+  }
+
+  /** מספר החלונות המוסתרים על הכפתור, ולוח ריק — הודעה */
+  function afterMembershipChange() {
+    refreshAddButton();
+    const wrap = boardRef?.parentElement;
+    wrap?.querySelector(':scope > .home-empty')?.remove();
+    if (wrap && !items.length) wrap.appendChild(emptyNote());
+  }
+
+  const emptyNote = () => el('div.card.card-pad.mute-sm.home-empty', {
+    text: 'כל החלונות מוסתרים. "＋ הוספת חלון" בראש הדף מחזיר אותם.'
+  });
+
+  /** בנייה מחדש של הלוח מהכרטיסים שכבר נבנו — אחרי איפוס או ביטול הסתרה */
+  function rebuild() {
+    if (!boardRef?.isConnected) return;
+    boardRef.parentElement.replaceWith(homeBoard(cardsRef));
+    layoutBoard();
+    refreshAddButton();
+  }
+
+  // ------------------------------------------------------- תפריטים
+
+  /**
+   * תפריט קטן צף, ליד הכפתור שפתח אותו. אחד בכל פעם; נסגר בלחיצה בחוץ,
+   * ב-Escape, בגלילה ובשינוי גודל — הוא ‎fixed‎ ואחרת היה מתנתק מהכפתור.
+   * (גלילה: רק כזו שבאמת הזיזה את הכפתור. הדפדפן יורה את אירוע הגלילה
+   * בפריים שאחרי הגלילה, ולחיצה מיד אחרי גלילה סגרה את התפריט ברגע שנפתח.)
+   * חצים למעלה ולמטה עוברים בין הפריטים, והמיקוד חוזר לכפתור בסגירה.
+   */
+  let menuClose = null;
+
+  function popMenu(anchor, entries, label) {
+    const wasOpen = menuClose && anchor.getAttribute('aria-expanded') === 'true';
+    menuClose?.();
+    if (wasOpen) return;
+    const options = [];
+    const list = el('div.popover-list.slot-menu', { role: 'menu', 'aria-label': label },
+      entries.map((en) => {
+        if (en === '-') return el('div.fm-sep', { role: 'separator' });
+        if (en.heading) return el('div.sm-heading', { text: en.heading });
+        const b = el(`button.popover-option${en.danger ? '.is-danger' : ''}`, {
+          type: 'button',
+          role: en.checked === undefined ? 'menuitem' : 'menuitemradio',
+          'aria-checked': en.checked === undefined ? null : String(!!en.checked),
+          disabled: en.disabled || null,
+          onclick: () => { close(); en.run(); }
+        }, [
+          el('span.sm-text', {}, [
+            el('span', { text: en.label }),
+            en.hint ? el('span.sm-hint', { text: en.hint }) : null
+          ]),
+          en.checked ? el('span.check', { text: '✓' }) : null
+        ]);
+        options.push(b);
+        return b;
+      }));
+    const node = el('div.cell-popover.slot-menu-pop', {}, [list]);
+    document.body.appendChild(node);
+
+    // מיקום: מתחת לכפתור, מיושר לקצה שלו שפונה פנימה; למעלה אם אין מקום
+    const r = anchor.getBoundingClientRect();
+    const w = node.offsetWidth;
+    const h = node.offsetHeight;
+    const left = Math.max(8, Math.min(window.innerWidth - w - 8, r.left));
+    const down = window.innerHeight - r.bottom > h + 12 || r.top < h + 12;
+    node.style.left = `${left}px`;
+    node.style.top = `${down ? r.bottom + 4 : r.top - h - 4}px`;
+    anchor.setAttribute('aria-expanded', 'true');
+
+    const onOutside = (ev) => { if (!node.contains(ev.target) && !anchor.contains(ev.target)) close(); };
+    // גלילה שהזיזה את הכפתור — ולא אירוע גלילה מאוחר של גלילה שכבר נגמרה
+    const onScroll = (ev) => {
+      if (node.contains(ev.target)) return;
+      if (Math.abs(anchor.getBoundingClientRect().top - r.top) > 2) close();
+    };
+    const onKey = (ev) => {
+      if (ev.key === 'Escape') { ev.preventDefault(); ev.stopPropagation(); close(); anchor.focus(); return; }
+      if (ev.key !== 'ArrowDown' && ev.key !== 'ArrowUp') return;
+      ev.preventDefault();
+      const live = options.filter((o) => !o.disabled);
+      const i = live.indexOf(document.activeElement);
+      live[(i + (ev.key === 'ArrowDown' ? 1 : -1) + live.length) % live.length]?.focus();
+    };
+    const timer = setTimeout(() => document.addEventListener('pointerdown', onOutside, true), 0);
+    window.addEventListener('scroll', onScroll, { capture: true, passive: true });
+    window.addEventListener('resize', close);
+    node.addEventListener('keydown', onKey);
+
+    function close() {
+      clearTimeout(timer);
+      document.removeEventListener('pointerdown', onOutside, true);
+      window.removeEventListener('scroll', onScroll, { capture: true });
+      window.removeEventListener('resize', close);
+      anchor.setAttribute('aria-expanded', 'false');
+      node.remove();
+      if (menuClose === close) menuClose = null;
+    }
+    menuClose = close;
+    options.find((o) => !o.disabled)?.focus();
+  }
+
+  /** תפריט ⋯ של חלון: הסתרה, גודל מהיר, גובה לפי התוכן ואיפוס הלוח */
+  function slotMenu(anchor, key) {
+    const it = items.find((i) => i.key === key);
+    if (!it) return;
+    const cols = COLS[bp];
+    const sizes = bp === 'sm' ? [] : QUICK_SIZES.map((s) => {
+      const w = Math.max(minW(cols), Math.round(cols * s.part));
+      return { w, label: s.label };
+    }).filter((s, i, all) => all.findLastIndex((o) => o.w === s.w) === i);   // ב-6 עמודות קטן ובינוני זהים
+
+    popMenu(anchor, [
+      ...(sizes.length ? [{ heading: 'גודל' }] : []),
+      ...sizes.map((s) => ({
+        label: s.label,
+        hint: `${s.w} מתוך ${cols}`,
+        checked: it.w === s.w,
+        run: () => applyShape(key, { ...it, w: s.w, x: Math.min(it.x, cols - s.w) }, 'resize', `גודל "${labelOf(key)}" השתנה`)
+      })),
+      ...(sizes.length ? ['-'] : []),
+      { label: 'גובה לפי התוכן', run: () => fitOne(key) },
+      { label: 'הסתרת החלון', run: () => hideCard(key) },
+      '-',
+      { label: 'איפוס הלוח לברירת מחדל', danger: true, run: resetBoard }
+    ], `אפשרויות החלון ${labelOf(key)}`);
+  }
+
+  /** "＋ הוספת חלון" — החלונות המוסתרים שיש בהם תוכן כרגע */
+  function addMenu(anchor) {
+    const hidden = hiddenKeys();
+    const can = CARD_ORDER.filter((k) => hidden.has(k) && cardsRef[k]);
+    popMenu(anchor, [
+      ...(can.length
+        ? can.map((k) => ({ label: labelOf(k), hint: CARD_HINT[k], run: () => showCard(k) }))
+        : [{ label: 'כל החלונות כבר מוצגים', disabled: true, run: () => {} }]),
+      '-',
+      { label: 'איפוס הלוח לברירת מחדל', danger: true, run: resetBoard }
+    ], 'הוספת חלון');
+  }
+
+  function refreshAddButton() {
+    if (!addBtnRef) return;
+    const hidden = hiddenKeys();
+    const n = CARD_ORDER.filter((k) => hidden.has(k) && cardsRef[k]).length;
+    addBtnRef.querySelector('.hab-count')?.remove();
+    if (n) addBtnRef.appendChild(el('span.hab-count', { text: String(n), title: `${n} חלונות מוסתרים` }));
+    addBtnRef.title = n ? `החזרת חלון מוסתר (${n})` : 'כל החלונות מוצגים';
+  }
+
+  // ------------------------------------------------------- בניית הלוח
+
+  /**
+   * עטיפת כרטיס לחלון: הכותרת נעשית ידית גרירה (ומקבלת מיקוד, לקיצורי
+   * המקלדת), כפתור ⋯ נכנס לקבוצת הפקדים שלה, וידיות הגודל יושבות על הקצוות.
    */
   function slotFor(key, card) {
-    const wide = isWide(key);
-    const height = (layout().heights ?? {})[key];
-    /*
-     * ‎has-list‎ הוא מה שמחיל את תקרת הגובה המשותפת. חלון בלי רשימה נגללת
-     * (טבלת חתך פרושה, טקסט) אינו נחתך — תקרה עליו הייתה מסתירה תוכן שאין
-     * דרך להגיע אליו.
-     */
     const hasList = !!card.querySelector('.feed-scroll');
-    const share = Number((layout().shares ?? {})[key]);
-    // שני משתני CSS על אותו אלמנט, ולכן מחרוזת אחת — ‎el‎ אינו מעביר
-    // משתני CSS כאובייקט סגנון
-    const vars = [
-      Number.isFinite(height) ? `--slot-h: ${height}px` : null,
-      Number.isFinite(share) && share > 0 ? `--share: ${share}` : null
-    ].filter(Boolean).join('; ');
-    const slot = el(`div.home-slot${wide ? '.is-wide' : ''}${hasList ? '.has-list' : ''}`, {
+    const slot = el(`div.home-slot${hasList ? '.has-list' : ''}`, {
       'data-key': key,
       role: 'listitem',
-      'aria-label': CARD_LABEL[key],
-      style: vars
+      'aria-label': labelOf(key)
     }, [card]);
 
     const head = card.querySelector('.card-head');
     if (head) {
-      head.classList.add('has-slot-tools');
+      head.classList.add('is-handle');
+      head.tabIndex = 0;
+      head.setAttribute('aria-roledescription', 'כותרת חלון נגרר');
+      head.setAttribute('aria-label', labelOf(key));
+      head.setAttribute('aria-describedby', 'home-board-help');
       const actions = headActions(head);
-
-      /*
-       * חצים גלויים, ולא רק גרירה.
-       *
-       * עד כה הסידור נעשה בגרירה, והחצים היו קיימים רק כמקשים על הידית —
-       * כלומר בלתי נראים לחלוטין למי שאינו מנסה אותם במקרה. גרירה בפריסה
-       * שנשברת לשורות היא גם המחווה הקשה ביותר להצלחה: היעד זז תוך כדי,
-       * ולחלון ברוחב שורה שלמה אין בכלל "צד" ברור. לחיצה על חץ היא צעד אחד
-       * צפוי, והידית נשארה למי שמעדיף לגרור.
-       */
-      const arrow = (glyph, delta, label) => el('button.slot-btn.slot-move', {
+      const menuBtn = el('button.slot-menu-btn', {
         type: 'button',
-        title: label,
-        'aria-label': `${label} — ${CARD_LABEL[key]}`,
-        onclick: () => moveCard(key, delta)
-      }, [glyph]);
-
-      const grip = el('button.slot-btn.slot-grip', {
-        type: 'button',
-        title: 'גרירה לשינוי המיקום · במגע: לחיצה ארוכה · במקלדת: Alt וחצים',
-        'aria-label': `גרירת החלון ${CARD_LABEL[key]}`
-      }, ['⠿']);
-
-      /*
-       * ‎aria-pressed‎ ומצב מודגש, ולא רק אייקון מתחלף. זו הייתה תלונת
-       * "פעם עובד פעם לא": חלון שנשאר לבד בשורה ממלא אותה ממילא מכוח
-       * ההתרחבות, ולכן סימונו כרוחב מלא אינו משנה דבר במסך — הלחיצה עבדה
-       * אך לא נראתה. מצב הכפתור מראה שהבחירה נרשמה, והיא כן משפיעה ברגע
-       * שמתפנה מקום לשכן באותה שורה.
-       */
-      const wideBtn = el('button.slot-btn.slot-wide', {
-        type: 'button',
-        'aria-pressed': wide ? 'true' : 'false',
-        title: wide
-          ? 'מסומן כרוחב מלא — לחיצה מחזירה לחצי שורה'
-          : 'הרחבה לרוחב מלא — החלון יקבל שורה לעצמו',
-        onclick: () => toggleWide(key)
-      }, [wide ? '⇥⇤' : '⇤⇥']);
-
-      actions.appendChild(el('div.slot-tools', {}, [
-        arrow('▲', -1, 'העלאת החלון'),
-        arrow('▼', 1, 'הורדת החלון'),
-        grip,
-        wideBtn,
-        el('button.slot-btn.slot-hide', {
-          type: 'button',
-          title: 'הסתרת החלון',
-          'aria-label': `הסתרת החלון ${CARD_LABEL[key]}`,
-          onclick: () => hideCard(key)
-        }, ['✕'])
-      ]));
+        title: 'אפשרויות החלון',
+        'aria-label': `אפשרויות החלון ${labelOf(key)}`,
+        'aria-haspopup': 'menu',
+        'aria-expanded': 'false',
+        onclick: (e) => { e.stopPropagation(); slotMenu(menuBtn, key); }
+      }, ['⋯']);
+      actions.appendChild(menuBtn);
+      head.addEventListener('pointerdown', (e) => onHeadPointerDown(e, slot));
+      // לחיצה ארוכה במגע פותחת אחרת תפריט הקשר או בחירת טקסט
+      head.addEventListener('contextmenu', (e) => { if (!e.target.closest(INTERACTIVE)) e.preventDefault(); });
     }
-
-    // ידית הגובה נתלית אחרי ההרכבה, כי היא תלויה במדידה — ראה attachHeightHandles
+    slot.addEventListener('keydown', (e) => onSlotKey(e, slot));
+    /*
+     * התוכן השתנה מבפנים (החתך המחלקתי נפתח או נסגר). חלון שגובהו נגזר
+     * מהתוכן — כלומר המשתמש עוד לא קבע לו גודל — נמדד מחדש; גודל שנקבע ביד
+     * נשאר, והתוכן נגלל בתוכו.
+     */
+    slot.addEventListener('home:content', () => { if (autoFit.has(key)) relayout(); });
+    slot.append(...resizeHandles(slot));
     return slot;
   }
 
   /**
    * סידור כותרת החלון לשתי קבוצות: הכותרת ותת-הכותרת, והפקדים.
    *
-   * זה התיקון לתלונה המרכזית. הכותרת הייתה שורת ‎flex‎ אחת שאינה נשברת,
-   * ובחלון צר כל פריט בה התכווץ — וה-‎h3‎, שהוא היחיד שיכול לשבור שורות,
-   * התכווץ לעמודה של מילה אחת בשורה, בעוד "לכל המשימות" נדחק אל מחוץ
-   * לכרטיס. עכשיו כל מה שאחרי ה-‎spacer‎ (הסינון, הכפתורים, ובמצב סידור
-   * גם כלי החלון) עובר לקבוצה אחת, שנשברת לשורה משלה **כיחידה** כשאין לה
-   * מקום — ולעולם לא באמצע (ראה ‎.head-actions‎ בגיליון).
+   * הכותרת הייתה שורת ‎flex‎ אחת שאינה נשברת, ובחלון צר כל פריט בה התכווץ —
+   * וה-‎h3‎, שהוא היחיד שיכול לשבור שורות, התכווץ לעמודה של מילה אחת בשורה,
+   * בעוד "לכל המשימות" נדחק אל מחוץ לכרטיס. עכשיו כל מה שאחרי ה-‎spacer‎
+   * (הסינון, הכפתורים ו-⋯) עובר לקבוצה אחת, שנשברת לשורה משלה **כיחידה**
+   * כשאין לה מקום — ולעולם לא באמצע (ראה ‎.head-actions‎ בגיליון).
    *
    * נעשה כאן ולא בכל כרטיס: הכרטיסים נבנים בכמה קבצים (תיבת ה-AI, האלפון),
    * וכולם כבר מסמנים את הגבול באותו ‎spacer‎. מה שלפניו הוא הכותרת.
-   *
-   * ‎title‎ על הכותרת ועל תת-הכותרת: שתיהן עלולות להתקצר בשלוש נקודות בחלון
-   * צר מאוד, והטקסט המלא נשאר בריחוף.
    */
   function headActions(head) {
     const spacer = head.querySelector(':scope > .spacer');
@@ -847,363 +1184,76 @@ const HomeView = (() => {
   }
 
   /**
-   * פס מצב הסידור, מעל הלוח. ההוראות שישבו קודם בפסקת הפתיחה של הדף עברו
-   * לכאן: הן נחוצות רק למי שמסדר, ובפתיחת הדף הן היו שתיים-שלוש שורות של
-   * הסבר על ידיות שאינן אפילו גלויות.
-   *
-   * כאן גם יושבת ההחזרה של חלונות מוסתרים — בדיאלוג, ולא עוד בשורה בתחתית
-   * הדף. שורת התחתית הופיעה רק "אם נגעו בסידור", ומי שהסתיר חלון וחזר אחרי
-   * שבוע לא ידע לחפש אותה שם.
+   * לוח החלונות — מקבל מפה של כרטיסים שנבנו. כרטיס שאין לו תוכן מחזיר
+   * ‎null‎ ומדולג, וגם אינו מוצע ב"הוספת חלון". המיקום עצמו מחושב אחרי
+   * ההרכבה (ראה layoutBoard), כי הוא תלוי ברוחב הלוח במסך.
    */
-  function editBar(available) {
-    const hiddenNow = (layout().hidden ?? []).filter((k) => available.has(k)).length;
-    editBarRef = el('div.home-editbar', {
-      role: 'region',
-      'aria-label': 'סידור הלוח',
-      hidden: !editing
-    }, [
-      el('p.heb-text', {
-        text: 'גררו חלון מהידית ⠿ והלוח יתפנה לו תוך כדי (במגע — לחיצה ארוכה, במקלדת — Alt וחצים). ⇤⇥ קובע רוחב, ואת הגבולות בין החלונות ובתחתיתם אפשר למשוך.'
-      }),
-      el('div.heb-actions', {}, [
-        el('button.btn.btn-sm', {
-          type: 'button',
-          'aria-haspopup': 'dialog',
-          onclick: () => windowsDialog(available)
-        }, [hiddenNow ? `אילו חלונות להציג (${hiddenNow} מוסתרים)` : 'אילו חלונות להציג']),
-        el('button.btn.btn-sm.btn-primary', {
-          type: 'button',
-          onclick: () => setEditing(false)
-        }, [UI.lineIcon('check'), 'סיום'])
-      ])
-    ]);
-    return editBarRef;
-  }
-
-  /**
-   * כניסה למצב סידור ויציאה ממנו — בלי לצייר את הדף מחדש. מחלקה על הלוח
-   * מגלה ומסתירה את הכלים, ולכן המעבר מיידי ואינו מאבד גלילה או מצב של
-   * שדה פתוח באחד החלונות.
-   */
-  function setEditing(on) {
-    editing = on;
-    boardRef?.classList.toggle('is-editing', on);
-    if (editBarRef) editBarRef.hidden = !on;
-    if (editBtnRef) {
-      editBtnRef.setAttribute('aria-pressed', on ? 'true' : 'false');
-      editBtnRef.classList.toggle('active', on);
-    }
-    // הכלים שהופיעו משנים את גובה הכותרות, ולכן הידיות נמדדות מחדש
-    scheduleTune();
-    // ביציאה המיקוד חוזר לכפתור — אחרת הוא נשאר על כלי שנעלם
-    if (!on && editBtnRef && boardRef?.contains(document.activeElement)) editBtnRef.focus();
-  }
-
-  /*
-   * ‎Escape‎ יוצא ממצב הסידור. מאזין אחד לכל המסמך, שנרשם פעם אחת — המסך
-   * נבנה מחדש בכל רענון רקע, ומאזין לכל ציור היה נערם. כשדיאלוג פתוח הוא
-   * זה שנסגר, ולא מצב הסידור שמאחוריו.
-   */
-  document.addEventListener('keydown', (e) => {
-    if (e.key !== 'Escape' || !editing || !boardRef?.isConnected) return;
-    if (document.querySelector('.modal-backdrop') || quickPanel) return;
-    setEditing(false);
-  });
-
-  /**
-   * "אילו חלונות להציג" — תיבת סימון לכל חלון.
-   *
-   * שמירה אחת בסוף ולא בכל סימון: כל שמירה מציירת את הלוח מחדש, ושמונה
-   * סימונים היו שמונה ציורים מאחורי הדיאלוג.
-   *
-   * חלון שאין לו תוכן כרגע (או שאינו רלוונטי לתפקיד) מוצג אך מושבת, עם
-   * הסבר: חלון שנעלם מהרשימה לגמרי נראה כמו באג, וחלון שאפשר לסמן אך לא
-   * יופיע — עוד יותר. מצב ההסתרה שלו נשמר כמו שהוא.
-   */
-  function windowsDialog(available) {
-    const hidden = new Set(layout().hidden ?? []);
-    const boxes = new Map();
-    const rows = CARD_ORDER.map((k) => {
-      const can = available.has(k);
-      const box = el('input', { type: 'checkbox', checked: !hidden.has(k), disabled: !can });
-      boxes.set(k, box);
-      return el(`label.win-option${can ? '' : '.is-unavailable'}`, {}, [
-        box,
-        el('span.wo-text', {}, [
-          el('b', { text: CARD_LABEL[k] }),
-          el('span.mute-sm', { text: can ? CARD_HINT[k] : `${CARD_HINT[k]} — אין בו תוכן כרגע` })
-        ])
-      ]);
-    });
-
-    let m = null;
-    const save = () => {
-      const next = CARD_ORDER.filter((k) =>
-        (available.has(k) ? !boxes.get(k).checked : hidden.has(k)));
-      m.close();
-      if (next.join() === CARD_ORDER.filter((k) => hidden.has(k)).join()) return;
-      // מי שכן של מי השתנה, ולכן חלוקה שווה — ראה evenShares
-      saveLayout({ hidden: next, ...evenShares() });
-    };
-
-    m = UI.modal({
-      title: 'אילו חלונות להציג',
-      body: el('div.win-options', {}, rows),
-      footer: [
-        el('button.btn.btn-ghost', {
-          type: 'button',
-          title: 'כל החלונות גלויים, בסדר, ברוחב ובגובה המקוריים',
-          onclick: () => {
-            m.close();
-            // ‎null‎ מוחק את ההעדפה בשרת ומחזיר את ברירת המחדל
-            App.setPref('homeLayout', null);
-            reload();
-            UI.toast('הלוח חזר לסידור המקורי');
-          }
-        }, ['איפוס לברירת מחדל']),
-        el('div.spacer'),
-        el('button.btn', { type: 'button', onclick: () => m.close() }, ['ביטול']),
-        el('button.btn.btn-primary', { type: 'button', onclick: save }, ['שמירה'])
-      ]
-    });
-  }
-
-  /** לוח החלונות — מקבל מפה של כרטיסים שנבנו, ומסדר אותם לפי ההעדפה */
   function homeBoard(cards) {
-    const available = new Set(Object.keys(cards).filter((k) => cards[k]));
-    const slots = [];
+    if (cards !== cardsRef) slotCache = new Map();
+    cardsRef = cards;
+    const hidden = hiddenKeys();
+    const keys = CARD_ORDER.filter((k) => cards[k] && !hidden.has(k));
     /*
-     * ‎role=list‎ ולא רק ‎div‎: לקורא מסך הלוח הוא רשימה של חלונות, וכך
-     * "3 מתוך 8" (ראה numberSlots) נקרא בהקשר ולא כמספר תלוש.
+     * ‎role=list‎: לקורא מסך הלוח הוא רשימה של חלונות. ההוראות למקלדת
+     * יושבות פעם אחת בטקסט נסתר, וכל כותרת מפנה אליהן.
      */
-    const board = el(`div.home-board${editing ? '.is-editing' : ''}`, {
-      role: 'list', 'aria-label': 'חלונות דף הבית'
-    }, orderedKeys()
-        .filter((k) => available.has(k) && !isHidden(k))
-        .map((k) => {
-          const slot = slotFor(k, cards[k]);
-          slots.push({ key: k, node: slot });
-          return slot;
-        }));
-
-    // לוח ריק לגמרי נראה כתקלה — אומרים במפורש שהכול הוסתר ואיך מחזירים
-    const empty = slots.length ? null : el('div.card.card-pad.mute-sm.mt', {
-      text: 'כל החלונות מוסתרים. "סידור הלוח" ← "אילו חלונות להציג" מחזיר אותם.'
-    });
-
-    makeSlotsDraggable(slots);
-    numberSlots(board);
+    const board = el('div.home-board', { role: 'list', 'aria-label': 'חלונות דף הבית' },
+      keys.map((k) => {
+        if (!slotCache.has(k)) slotCache.set(k, slotFor(k, cards[k]));
+        return slotCache.get(k);
+      }));
+    phRef = el('div.home-ph', { hidden: true, 'aria-hidden': 'true' });
+    board.appendChild(phRef);
+    liveRef = el('div.sr-only', { role: 'status', 'aria-live': 'polite' });
     boardRef = board;
+    items = keys.map((key) => ({ key, x: 0, y: 0, w: 1, h: 1 }));
     if (boardWatcher) { boardWatcher.disconnect(); boardWatcher.observe(board); }
-    return [editBar(available), board, empty];
+    const wrap = el('div.home-board-wrap', {}, [
+      el('p.sr-only', {
+        id: 'home-board-help',
+        text: 'גרירה מהכותרת מזיזה את החלון, ומשיכת הקצוות משנה את גודלו. במקלדת: Control וחצים להזזה, Shift וחצים לשינוי הגודל.'
+      }),
+      liveRef,
+      board,
+      keys.length ? null : emptyNote()
+    ]);
+    return wrap;
   }
 
-  /**
-   * ידית היחס בין שני חלונות שכנים באותה שורה.
-   *
-   * שני החלונות משתנים יחד ובכיוון הפוך: מה שאחד מוותר עליו עובר לשני,
-   * וסכום הרוחבים נשאר רוחב השורה. זו אינה החלטה של הקוד אלא של הפריסה —
-   * הידית משנה רק את שני המשקלים ומשמרת את סכומם, וה-CSS גוזר מכך את
-   * הרוחבים (ראה ההסבר על ‎--share‎ בגיליון).
-   *
-   * המשקל נשמר ולא הרוחב: רוחב בפיקסלים היה נשבר בכל שינוי גודל של החלון,
-   * והיחס נשאר נכון בכל רוחב מסך.
-   */
-  function widthHandle(slot, next) {
-    const h = el('button.slot-wresize', {
-      type: 'button',
-      role: 'separator',
-      'aria-orientation': 'vertical',
-      'aria-label': `היחס בין ${CARD_LABEL[slot.dataset.key]} ל${CARD_LABEL[next.dataset.key]}`,
-      title: 'גרירה לשינוי היחס בין שני החלונות · חצים ← → · לחיצה כפולה לחלוקה שווה'
-    });
-
-    const round = (n) => Math.round(n * 1000) / 1000;
-
-    /**
-     * שמירה של הזוג. כששניהם חזרו לחלוקה שווה המפתחות נמחקים ולא נשמרים
-     * כ-1 — כך העדפה נקייה נשארת נקייה, ואיפוס מזוהה כאיפוס.
-     */
-    const store = (s1, s2) => {
-      const shares = { ...(layout().shares ?? {}) };
-      const even = Math.abs(s1 - 1) < 0.02 && Math.abs(s2 - 1) < 0.02;
-      if (even) {
-        delete shares[slot.dataset.key];
-        delete shares[next.dataset.key];
-      } else {
-        shares[slot.dataset.key] = round(s1);
-        shares[next.dataset.key] = round(s2);
-      }
-      saveLayout({ shares });
-    };
-
-    /** המצב ההתחלתי של הזוג — רוחבים בפועל, ומשקלים שסכומם נשמר */
-    const pair = () => {
-      const shares = layout().shares ?? {};
-      const s1 = Number(shares[slot.dataset.key]) || 1;
-      const s2 = Number(shares[next.dataset.key]) || 1;
-      const w1 = slot.getBoundingClientRect().width;
-      const w2 = next.getBoundingClientRect().width;
-      return { s1, s2, sum: s1 + s2, w1, w2, total: w1 + w2 };
-    };
-
-    /**
-     * רוחב חדש לחלון המוביל → משקלים לשניהם, בגבול המינימום לכל אחד.
-     *
-     * ‎snap‎ — בגרירה בלבד: רוחב שנופל בטווח ‎SNAP_PX‎ משליש, מחצי או
-     * משני שלישים של הזוג נצמד אליהם. בלי זה "חצי-חצי" היה כמעט בלתי אפשרי
-     * להשגה ביד, והלוח נראה עקום בפיקסל או שניים. החצים במקלדת אינם נצמדים:
-     * הם כבר צעד מדויק, וצעד שנבלע בהצמדה נראה כלחיצה שלא עשתה דבר.
-     *
-     * היחס בין המשקלים הוא בדיוק היחס בין הרוחבים (ראה ‎--share‎ בגיליון),
-     * ולכן הצמדה של הרוחב היא הצמדה מדויקת של היחס.
-     */
-    const sharesFor = (nextW1, p, { snap = false } = {}) => {
-      let w1 = Math.min(p.total - SHARE_MIN_PX, Math.max(SHARE_MIN_PX, nextW1));
-      let mark = null;
-      if (snap) {
-        const hit = SNAP_RATIOS.find(({ r }) => Math.abs(w1 - p.total * r) <= SNAP_PX
-          && p.total * r >= SHARE_MIN_PX && p.total * (1 - r) >= SHARE_MIN_PX);
-        if (hit) { w1 = p.total * hit.r; mark = hit.label; }
-      }
-      const s1 = p.sum * w1 / p.total;
-      const out = [s1, p.sum - s1];
-      out.label = `${mark ?? `${Math.round((w1 / p.total) * 100)}%`} · ${Math.round(w1)}px`;
-      return out;
-    };
-
-    const apply = (s1, s2) => {
-      slot.style.setProperty('--share', String(round(s1)));
-      next.style.setProperty('--share', String(round(s2)));
-    };
-
-    h.addEventListener('pointerdown', (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      const rtl = getComputedStyle(slot.parentElement).direction === 'rtl';
-      const startX = e.clientX;
-      const p = pair();
-      // שני החלונות צריכים מקום למינימום, אחרת אין מה לגרור
-      if (p.total < SHARE_MIN_PX * 2) return;
-
-      h.setPointerCapture(e.pointerId);
-      h.classList.add('dragging');
-      document.body.style.userSelect = 'none';
-      let last = [p.s1, p.s2];
-      const tip = measureTip(h);
-
-      const onMove = (ev) => {
-        // ב-RTL החלון המוביל הוא הימני, ולכן משיכה שמאלה מרחיבה אותו
-        const delta = rtl ? startX - ev.clientX : ev.clientX - startX;
-        last = sharesFor(p.w1 + delta, p, { snap: true });
-        apply(last[0], last[1]);
-        tip.show(last.label);
-      };
-      const onUp = () => {
-        tip.remove();
-        h.classList.remove('dragging');
-        document.body.style.userSelect = '';
-        h.removeEventListener('pointermove', onMove);
-        h.removeEventListener('pointerup', onUp);
-        h.removeEventListener('pointercancel', onUp);
-        store(last[0], last[1]);
-      };
-      h.addEventListener('pointermove', onMove);
-      h.addEventListener('pointerup', onUp);
-      h.addEventListener('pointercancel', onUp);
-    });
-
-    // לחיצה כפולה — חזרה לחלוקה שווה בין השניים
-    h.addEventListener('dblclick', (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      store(1, 1);
-    });
-
-    h.addEventListener('keydown', (e) => {
-      const raw = e.key === 'ArrowLeft' ? 1 : e.key === 'ArrowRight' ? -1 : 0;
-      if (!raw) return;
-      e.preventDefault();
-      const rtl = getComputedStyle(slot.parentElement).direction === 'rtl';
-      const p = pair();
-      if (p.total < SHARE_MIN_PX * 2) return;
-      const step = (e.shiftKey ? 60 : 20) * (rtl ? raw : -raw);
-      const [s1, s2] = sharesFor(p.w1 + step, p);
-      apply(s1, s2);
-      store(s1, s2);
-    });
-
-    return h;
-  }
-
-  /**
-   * תליית ידיות היחס. נדרשת מדידה: "שכן באותה שורה" תלוי בעטיפה, והיא
-   * משתנה עם רוחב המסך. חלון שנשאר לבד בשורה אינו מקבל ידית — אין ממי
-   * לקחת רוחב.
-   */
-  function attachWidthHandles(board) {
-    const slots = [...board.querySelectorAll('.home-slot')];
-    for (const s of slots) {
-      for (const old of s.querySelectorAll(':scope > .slot-wresize')) old.remove();
-    }
-    slots.forEach((slot, i) => {
-      const next = slots[i + 1];
-      if (!next) return;
-      if (slot.classList.contains('is-wide') || next.classList.contains('is-wide')) return;
-      // אותה שורה בפועל, ולא לפי הנחה על מספר החלונות בשורה
-      if (Math.round(slot.offsetTop) !== Math.round(next.offsetTop)) return;
-      slot.appendChild(widthHandle(slot, next));
-    });
-  }
-
-  /**
-   * התאמה שדורשת מדידה, ולכן רצה אחרי ההרכבה: לאיזה חלון יש בכלל מה למתוח.
-   *
-   * מה שהיה כאן קודם ואינו עוד: סיווג "מי נשאר לבד בשורה" כדי להרחיב אותו.
-   * הפריסה עושה זאת בעצמה מאז ש-‎flex-grow‎ הוא 1, ולכן זה נמחק — חישוב
-   * שרץ בהשהיה אחרי כל שינוי גודל הוא בדיוק מה שנראה כקפיצה מאוחרת.
-   *
-   * ‎ResizeObserver‎ ולא ‎window.resize‎: רוחב הלוח משתנה גם בלי שגודל החלון
-   * משתנה — קיפול תפריט הצד, למשל — ואירוע החלון אינו נורה אז כלל.
-   */
-  function tuneBoard() {
+  /** מיקום החלונות אחרי שהלוח במסמך — נקודת השבירה תלויה ברוחב שלו */
+  function layoutBoard() {
     if (!boardRef?.isConnected) return;
-    /*
-     * לא באמצע גרירה. שינוי גובה מזיז את הלוח, המשקיף מזהה שינוי גודל
-     * ומתזמן התאמה — וההתאמה מחליפה את הידיות. הידית שבידי המשתמש הוסרה
-     * מהמסמך, ‎pointerup‎ שלה לא הגיע לעולם, והגובה שנגרר לא נשמר: גרירה
-     * איטית "עבדה" על המסך ונעלמה בטעינה הבאה. ההתאמה נדחית לסוף הגרירה.
-     */
-    if (boardRef.querySelector('.slot-resize.dragging, .slot-wresize.dragging')
-      || boardRef.classList.contains('is-arranging')) {
-      scheduleTune();
-      return;
-    }
-    attachHeightHandles(boardRef);
-    attachWidthHandles(boardRef);
-    numberSlots(boardRef);
-
-    // אחרי הזזה במקלדת המיקוד היה נופל לגוף המסמך, והחץ הבא לא היה עושה דבר
-    if (pendingFocus) {
-      boardRef.querySelector(`.home-slot[data-key="${pendingFocus}"] .slot-grip`)?.focus();
-      pendingFocus = null;
-    }
+    // בלי הנפשה בציור הראשון: החלונות לא "עפים" ממקום אפס למקומם
+    boardRef.classList.add('is-static');
+    relayout();
+    void boardRef.offsetHeight;
+    requestAnimationFrame(() => boardRef?.classList.remove('is-static'));
   }
-
-  let tuneTimer = null;
-  const scheduleTune = () => {
-    clearTimeout(tuneTimer);
-    tuneTimer = setTimeout(tuneBoard, 120);
-  };
 
   /*
-   * המשקיף נוצר פעם אחת ומחובר מחדש בכל ציור, כדי שלא יצטבר משקיף לכל
-   * טעינה של המסך.
+   * מעבר בין 12 ל-6 עמודות כשהלוח משנה רוחב — גם בלי שגודל החלון השתנה:
+   * קיפול תפריט הצד משנה את רוחב הלוח, ואירוע ‎resize‎ של החלון אינו נורה
+   * אז כלל. רוחב בתוך אותה נקודת שבירה אינו דורש דבר — ה-CSS מחשב.
    */
   const boardWatcher = typeof ResizeObserver === 'function'
-    ? new ResizeObserver(scheduleTune)
+    ? new ResizeObserver(() => {
+        if (!boardRef?.isConnected || boardRef.classList.contains('is-arranging')) return;
+        if (bpNow() !== bp) relayout();
+      })
     : null;
-  if (!boardWatcher) window.addEventListener('resize', scheduleTune);
+
+  /*
+   * Ctrl+Z מבטל את השינוי האחרון בלוח — רק כשהלוח על המסך, ולא מתוך שדה
+   * טקסט (שם זה הביטול של ההקלדה) או מתחת לחלון קופץ.
+   */
+  document.addEventListener('keydown', (e) => {
+    if (!(e.ctrlKey || e.metaKey) || e.shiftKey || e.altKey || e.key.toLowerCase() !== 'z') return;
+    if (!boardRef?.isConnected || !undoStack.length) return;
+    if (e.target.closest?.('input, textarea, select, [contenteditable]')) return;
+    if (document.querySelector('.modal-backdrop')) return;
+    e.preventDefault();
+    undo();
+  });
 
   /**
    * ‎silent‎ — טעינה מחדש ברקע: בלי ספינר, ותוך שמירת מיקום הגלילה. המסך
@@ -1211,12 +1261,16 @@ const HomeView = (() => {
    * כרענון של כל הדף.
    */
   async function render(container, { silent = false } = {}) {
+    if (silent && boardRef?.isConnected && boardRef.classList.contains('is-arranging')) {
+      reloadWaiting = true;
+      return;
+    }
     containerRef = container;
     const scrollTop = silent ? container.scrollTop : 0;
     // כניסה חדשה למסך מתחילה מדף נקי — המשימות שהושלמו בביקור הקודם כבר סגורות
     if (!silent) { keepCompleted.clear(); UI.mount(container, UI.spinner()); }
-    // מצב הסידור שייך לביקור — מי שחוזר לדף מקבל לוח נקי (ראה ‎editing‎)
-    if (!silent) editing = false;
+    // היסטוריית הביטול שייכת לביקור — מי שחוזר לדף מתחיל בלי ביטולים ישנים
+    if (!silent) undoStack.length = 0;
     let data;
     let reports = null;
     let inbox = null;
@@ -1234,6 +1288,11 @@ const HomeView = (() => {
       return UI.mount(container, UI.empty(err.message, '⚠️'));
     }
     App.state.homeData = data;
+    // הגרירה התחילה בזמן שהנתונים היו בדרך — הציור יחכה לסופה
+    if (silent && boardRef?.isConnected && boardRef.classList.contains('is-arranging')) {
+      reloadWaiting = true;
+      return;
+    }
 
     /**
      * זיכרון הביקור אינו נדרש עוד: משימה שהושלמה חוזרת מהשרת בכרטיס
@@ -1245,8 +1304,8 @@ const HomeView = (() => {
     const greeting = hour < 12 ? 'בוקר טוב' : hour < 18 ? 'צהריים טובים' : 'ערב טוב';
 
     /*
-     * הכרטיסים נבנים למפה ולא ישירות לעץ, כי הסדר, הרוחב וההסתרה שלהם הם
-     * העדפה של המשתמש. כרטיס שאין לו תוכן מחזיר ‎null‎, ולוח החלונות מדלג
+     * הכרטיסים נבנים למפה ולא ישירות לעץ, כי המקום, הגודל וההסתרה שלהם
+     * הם העדפה של המשתמש. כרטיס שאין לו תוכן מחזיר ‎null‎, ולוח החלונות מדלג
      * עליו — וגם אינו מציע להחזיר חלון שאין בו דבר.
      */
     const cards = {
@@ -1260,19 +1319,21 @@ const HomeView = (() => {
       approval: App.may('approve_vendor_output') || App.isVendor()
         ? approvalCard(data.tasks.awaitingApproval)
         : null,
-      feed: feedCard(data.feed)
+      // פיד הארגון — למנהל המערכת בלבד. ‎null‎ גם מוציא אותו מרשימת "סידור הלוח"
+      feed: App.may('view_activity_feed') ? feedCard(data.feed ?? []) : null
     };
 
     /*
-     * הכפתור בכותרת הדף ולא בתוך הלוח: הוא נוגע בלוח כולו, ובמקום הזה הוא
-     * נמצא גם כשכל החלונות הוסתרו. ‎aria-pressed‎ — זה מתג, לא פעולה חד-פעמית.
+     * "הוספת חלון" בכותרת הדף ולא בתוך הלוח: הוא נוגע בלוח כולו, ובמקום
+     * הזה הוא נמצא גם כשכל החלונות הוסתרו. המספר עליו — כמה מוסתרים.
      */
-    editBtnRef = el(`button.btn.btn-sm.home-edit-btn${editing ? '.active' : ''}`, {
+    menuClose?.();
+    addBtnRef = el('button.btn.btn-sm.home-add-btn', {
       type: 'button',
-      'aria-pressed': editing ? 'true' : 'false',
-      title: 'הזזה, שינוי גודל והסתרה של החלונות בדף',
-      onclick: () => setEditing(!editing)
-    }, [UI.lineIcon('pencil'), 'סידור הלוח']);
+      'aria-haspopup': 'menu',
+      'aria-expanded': 'false',
+      onclick: () => addMenu(addBtnRef)
+    }, [el('span.hab-plus', { 'aria-hidden': 'true', text: '＋' }), 'הוספת חלון']);
 
     UI.mount(container,
       el('div.page-head', {}, [
@@ -1280,19 +1341,19 @@ const HomeView = (() => {
           // ‎h1‎ — הכותרת הראשית של העמוד; עד כה לא הייתה לו כזו כלל
           el('h1', { text: `${greeting}, ${App.state.actor.name.split(' ')[0]}` }),
           /*
-           * שורה אחת. ההוראות לסידור החלונות ישבו כאן ונמתחו לשתיים-שלוש
-           * שורות בכל פתיחה של הדף; הן עברו לפס מצב הסידור (ראה editBar),
-           * שם הן נקראות ברגע שהן רלוונטיות.
+           * שורה אחת. ההוראות לסידור החלונות אינן כאן: הכותרת נראית כמו
+           * ידית (סמן יד, פס גרירה בריחוף), והקצוות מגלים ידיות כשמתקרבים.
            */
           el('div.sub', { text: 'תמונת מצב אישית של העבודה שלך.' })
         ]),
         el('div.spacer'),
-        editBtnRef
+        addBtnRef
       ]),
       widgets(data.widgets),
-      ...homeBoard(cards)
+      homeBoard(cards)
     );
-    tuneBoard();
+    layoutBoard();
+    refreshAddButton();
     ensureQuickTab();
     if (scrollTop) container.scrollTop = scrollTop;
   }
@@ -1394,6 +1455,32 @@ const HomeView = (() => {
    * העמודות יחד — פרויקט וגם אחראי — ודגל "הצג אחראי" לא היה יכול לומר
    * באיזו מהן.
    */
+  /**
+   * 📅 — דחיית היעד ישר מהרשימה, בלי לפתוח את הכרטיס: להיום, למחר, לתחילת
+   * השבוע או לתאריך אחר. כמו ב-Today. רק למי שרשאי לערוך, ורק למשימה פתוחה.
+   */
+  function moveDueButton(task) {
+    if (!task.canEdit || task.isFinal) return null;
+    return el('button.tk-move', {
+      type: 'button',
+      title: 'דחיית היעד — להיום או לתאריך אחר',
+      'aria-label': `דחיית היעד: ${task.title}`,
+      onclick: (e) => {
+        e.stopPropagation();
+        const pick = UI.pickDueDate(`יעד חדש: ${task.title}`, {
+          workDays: App.state.actor.workDays,
+          onPick: async (date) => {
+            try {
+              await API.updateTask(task.id, { dueDate: UI.fromInputDate(date) });
+              UI.success(date === pick.today ? 'היעד הועבר להיום' : `היעד הועבר ל${pick.label(date)}`);
+              reload();
+            } catch (err) { UI.error(err); }
+          }
+        });
+      }
+    }, ['📅']);
+  }
+
   function taskRow(task, { lead = 'project', trail = 'status' } = {}) {
     const leadText = (lead === 'assignee' ? task.assigneeName : task.projectName) ?? '—';
     const due = UI.dueLabel(task.dueDate);
@@ -1424,6 +1511,7 @@ const HomeView = (() => {
         class: due.tone === 'danger' ? 'text-danger' : due.tone === 'warn' ? 'text-warn' : ''
       }),
       el('span.tk-flags', {}, [
+        moveDueButton(task),
         // האחראי מוצג רק כשהוא אינו המשתמש עצמו — ברשימה "שלי" זה תמיד הוא
         task.assigneeName && task.assigneeId !== App.state.actor.id
           ? UI.avatar(task.assigneeName, { small: true, vendor: task.assigneeType === 'vendor' })
@@ -1654,6 +1742,8 @@ const HomeView = (() => {
       body.style.display = nowOpen ? '' : 'none';
       toggle.textContent = nowOpen ? 'הסתרה' : 'הצגה';
       localStorage.setItem(DEPT_CUT_KEY, nowOpen ? '1' : '0');
+      // הגובה של החלון נגזר מהתוכן כל עוד לא נקבע ביד — ראה ‎home:content‎
+      toggle.dispatchEvent(new CustomEvent('home:content', { bubbles: true }));
     });
 
     // ‎.mt‎ הוסר: הכרטיס יושב בלוח החלונות, והמרווח בא מ-‎gap‎ שלו
@@ -1783,7 +1873,7 @@ const HomeView = (() => {
       el('div.card-pad', {}, [scrollBox(shownDays.map((d) =>
         el('div.week-row', {}, [
           el('div.wk-day', {}, [
-            el('b', { style: { color: d.isToday ? 'var(--brand)' : 'inherit' },
+            el('b', { style: { color: d.isToday ? 'var(--brand-ink)' : 'inherit' },
               text: d.isToday ? 'היום' : dayNames[d.date.getDay()] }),
             el('span.mute-sm', { text: UI.formatDate(d.date.toISOString()).slice(0, 5) })
           ]),
@@ -1834,7 +1924,7 @@ const HomeView = (() => {
           ' ',
           el('span', { text: ACTION_TEXT[f.action] ?? f.action }),
           ' — ',
-          el('span', { style: { color: 'var(--brand)' }, text: f.taskTitle })
+          el('span', { style: { color: 'var(--brand-ink)' }, text: f.taskTitle })
         ]),
         // יש רשומות ללא פירוט, ובלי הסינון היה נדפס 'undefined' לפני הזמן
         el('div.h-meta', { text: [f.details, UI.relative(f.createdAt)].filter(Boolean).join(' · ') })
@@ -1859,7 +1949,7 @@ const HomeView = (() => {
       el('div.card-pad', {}, [
         items.length
           ? scrollBox(items.map(feedRow))
-          : UI.empty('אין עדכונים במשימות ובפרויקטים שלך', '📰')
+          : UI.empty('אין עדכונים אחרונים בארגון', '📰')
       ])
     ]);
   }
@@ -1893,7 +1983,7 @@ const HomeView = (() => {
 
     return el('div.card', {}, [
       el('div.card-head', {}, [
-        el('span', { text: '@', style: { fontWeight: '800', color: 'var(--brand)' } }),
+        el('span', { text: '@', style: { fontWeight: '800', color: 'var(--brand-ink)' } }),
         el('h3', { text: 'תויגת בהודעות' }),
         el('div.spacer'),
         el('span.mute-sm', { text: countLabel(mentions.length, 'הודעה אחת', 'הודעות') })
@@ -2010,13 +2100,27 @@ const HomeView = (() => {
       saveOpenBtn.disabled = true;
       saveBtn.textContent = 'יוצר…';
       try {
-        const created = await API.createTask({
+        const payload = {
           title,
           projectId: projectPicker.value() || null,
           assigneeType: aType,
           assigneeId: aId ? Number(aId) : null,
           dueDate: UI.fromInputDate(dueInput.value)
-        });
+        };
+        // "יש כבר משימה דומה" במחלקה (פרק 11ב) — כמו בדיאלוג המלא
+        const dup = await TaskSyncView.checkDuplicate(payload);
+        if (!dup.proceed) {
+          saveBtn.disabled = false;
+          saveOpenBtn.disabled = false;
+          saveBtn.textContent = 'שמירה';
+          if (!dup.back) {
+            closeQuick();
+            await App.refreshView();
+          }
+          return;
+        }
+        if (dup.dupChecked) payload.dupChecked = dup.dupChecked;
+        const created = await API.createTask(payload);
         const id = created?.task?.id;
 
         /*
