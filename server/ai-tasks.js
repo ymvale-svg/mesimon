@@ -344,6 +344,21 @@ const channelNote = (channel) => (channel === 'whatsapp'
  * כשיש חתימה, ה-AI אינו חותם בעצמו, אחרת השם היה מופיע פעמיים.
  */
 const SIGNATURE_NOTE = 'למשתמש יש חתימה ב-Gmail, והיא תתווסף אוטומטית בסוף המייל: סיים במילת סיום בלבד ("תודה,", "בברכה,") — בלי שם, תפקיד, ארגון או פרטי קשר.';
+/**
+ * מייל שיצא בלי חתימה מ-Gmail: נרשם ביומן עם הסיבה, והמשתמש מקבל על זה
+ * התראה פעם אחת — עם ההסבר מה לעשות (בדרך כלל: חתימה רק ב-Outlook).
+ */
+function signatureMissing(userId, reason, what = '') {
+  console.warn(`[משימון] מייל יצא בלי חתימה מ-Gmail (משתמש ${userId}${what ? `, ${what}` : ''}): ${reason}`);
+  if (reason === 'error' || D.userPrefs(userId).signatureWarned) return;
+  D.setUserPref(userId, 'signatureWarned', D.nowIso());
+  D.notify({
+    targetType: 'user', targetId: userId, kind: 'ai',
+    title: 'המייל יצא בלי החתימה שלך',
+    body: `${Gmail.SIGNATURE_HELP[reason] ?? ''} עד אז נוסף בסוף המייל השם שלך מהפרופיל.`.trim()
+  });
+}
+
 async function signatureNote(userId, channel) {
   if (channel !== 'email' || !userId) return null;
   return (await Gmail.signature(userId)) ? SIGNATURE_NOTE : null;
@@ -548,6 +563,7 @@ async function deliver(req, msgId) {
       // מהכתובת של המשתמש עצמו: הנמען רואה אותו, התשובה חוזרת אליו, והמייל נשאר אצלו ב"דואר יוצא".
       // בסוף — החתימה שלו מ-Gmail, כמו כל מייל שהוא שולח משם
       const body = await Gmail.signed(req.owner_id, { text: msg.body, html: emailHtml(msg.body) });
+      if (body.missing) signatureMissing(req.owner_id, body.missing, `משימת AI #${req.task_id ?? req.id}`);
       const built = Mailer.buildMessage({
         from: sender.email,
         fromName: owner.full_name,
@@ -1445,7 +1461,7 @@ module.exports = {
   setHooks, start, stop, tick,
   draftInitial, mailContext, emailHtml, launch, approve, discard, reviseMessage, answerQuestion, setState, updateDetails,
   interpretNote, applyNote, upcomingFor, waitingOnUser, contactDetected, handleInbound, matchEmail,
-  requestById,
+  requestById, signatureMissing,
   requestByTask, summaryFor, detailFor, defaultPolicy, cleanPolicy, status, STATE_LABELS, OPEN_STATES,
   // לבדיקות
   _internal: { nextWindow, inWindow, afterDays, ladder, dateToFollowUp, endOfLocalDay, tidyBody, workdaysUntil }

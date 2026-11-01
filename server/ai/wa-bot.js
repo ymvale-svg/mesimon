@@ -1060,6 +1060,18 @@ function pickText(name, candidates) {
 const VIA_MESIMON = /^(?:(?:ת?שלח|תעביר|תפתח)\s+(?:ל[והם]\s+)?(?:את\s+זה\s+)?)?(?:ב|דרך\s+(?:ה)?)משימון[\s.!]*$/;
 const VIA_EMAIL = /^(?:(?:כן\s*,?\s*)?(?:ת?שלח\s+(?:ל[והם]\s+)?)?(?:ב|דרך\s+(?:ה)?)מייל)[\s.!]*$/;
 
+/** אין חתימה ב-Gmail — שורה קצרה בטיוטה, כדי שלא יגלו את זה רק אחרי השליחה */
+const NO_SIGNATURE_LINE = {
+  none: '⚠️ _המייל ייצא בלי חתימה: אין חתימה ב-Gmail (חתימה ב-Outlook בלבד לא מספיקה). בינתיים יתווסף השם שלך._',
+  no_read: '⚠️ _המייל ייצא בלי חתימה: חסרה הרשאת קריאה ל-Gmail — התחברו מחדש באפליקציה. בינתיים יתווסף השם שלך._'
+};
+const signatureLine = (p) => (p.signature ? '✍️ _+ החתימה שלך מ-Gmail_' : NO_SIGNATURE_LINE[p.noSignature] ?? null);
+
+async function signatureFields(userId) {
+  const info = await Gmail.signatureInfo(userId);
+  return { signature: info.state === 'ok', noSignature: info.state === 'ok' ? null : info.state };
+}
+
 function emailText(p) {
   const colleague = p.contact.type === 'user';
   const lines = [
@@ -1067,8 +1079,8 @@ function emailText(p) {
     `*נושא:* ${p.draft.subject}`,
     '',
     p.draft.body.slice(0, 2500),
-    // החתימה עצמה מ-Gmail — לא מוצגת כאן במלואה, רק שהיא תצורף
-    p.signature ? '✍️ _+ החתימה שלך מ-Gmail_' : null
+    // החתימה עצמה מ-Gmail — לא מוצגת כאן במלואה, רק שהיא תצורף (או שאין)
+    colleague ? null : signatureLine(p)
   ].filter((l) => l !== null);
   if (p.suggestions.length) {
     lines.push('', '💡 *מההתכתבות האחרונה — אולי להוסיף:*', ...p.suggestions.map((x, i) => `${i + 1}. ${x}`));
@@ -1104,7 +1116,7 @@ async function draftEmail(actor, contact, instruction, { feedback = '', previous
     // בתיקון ההתכתבות אינה נקראת שוב — ההצעות שעוד לא נוספו נשארות
     suggestions: previous ? (suggestions.length ? suggestions : previous.suggestions.filter((x) => !feedback.includes(x))) : suggestions,
     notes: String(d.notes ?? '').trim().slice(0, 300),
-    signature: Boolean(await Gmail.signature(actor.id))
+    ...await signatureFields(actor.id)
   };
 }
 
@@ -1289,7 +1301,7 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
     `*נושא:* ${r.subject}`,
     '',
     r.body.slice(0, 2500),
-    r.signature ? '✍️ _+ החתימה שלך מ-Gmail_' : null,
+    signatureLine(r),
     '',
     'לשלוח? השיבו *כן*, או כתבו מה לתקן. *ביטול* — לא לשלוח.'
   ].filter((l) => l !== null).join('\n');
@@ -1301,7 +1313,7 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
     if (!request) {
       return out(`מה לענות ל${MailInsights.label(item)}?`, { draft: { kind: 'reply_ask', gmailId: item.gmailId } }, { action: 'mail_insights', status: 'unclear', result: 'חסר תוכן לתשובה' });
     }
-    const reply = { ...await MailInsights.draftReply(actor.id, item.gmailId, request), signature: Boolean(await Gmail.signature(actor.id)) };
+    const reply = { ...await MailInsights.draftReply(actor.id, item.gmailId, request), ...await signatureFields(actor.id) };
     return out(replyText(reply), { draft: { kind: 'mail_reply', reply }, awaiting: true }, { action: 'mail_insights', status: 'ok', result: `טיוטת תשובה ל${reply.toName || reply.to}` });
   };
 
@@ -1363,7 +1375,7 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
   // טיוטת תשובה למייל שממתינה: כל הודעה שאינה "כן" או "ביטול" היא תיקון
   if (kind === 'mail_reply' && !dry && state.awaiting && Claude.isEnabled() && WaActions.allowed(actor, 'mail_insights')) {
     const prev = state.draft.reply;
-    const reply = { ...await MailInsights.draftReply(actor.id, prev.gmailId, prev.request, { feedback: t, previous: prev }), signature: prev.signature };
+    const reply = { ...await MailInsights.draftReply(actor.id, prev.gmailId, prev.request, { feedback: t, previous: prev }), signature: prev.signature, noSignature: prev.noSignature ?? null };
     return out(replyText(reply), { draft: { kind: 'mail_reply', reply }, awaiting: true }, { action: 'mail_insights', status: 'ok', result: `תיקון תשובה: ${t.slice(0, 200)}` });
   }
   // "תענה ל-2" בלי תוכן — ההודעה הבאה היא מה לענות

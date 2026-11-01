@@ -244,8 +244,13 @@ function register(router, h) {
         context: b.channel === 'whatsapp' ? '' : await AiTasks.mailContext(actor.id, b.contact?.email)
       });
       // החתימה מ-Gmail — לתצוגה מתחת לנוסח בלבד; נערכת רק ב-Gmail עצמו
-      const signature = b.channel === 'whatsapp' ? null : await Gmail.signature(actor.id);
-      sendJson(res, 200, { draft, signature: signature ? signature.html : null });
+      const sig = b.channel === 'whatsapp' ? null : await Gmail.signatureInfo(actor.id);
+      sendJson(res, 200, {
+        draft,
+        signature: sig?.state === 'ok' ? sig.html : null,
+        // אין חתימה ב-Gmail — למה, ומה יופיע בסוף המייל במקומה
+        signatureMissing: sig && sig.state !== 'ok' ? { state: sig.state, help: sig.help, fallback: Gmail.fallbackSignature(actor.id)?.text ?? '' } : null
+      });
     } catch (err) {
       throw userError(err);
     }
@@ -513,6 +518,15 @@ function register(router, h) {
 
   router.get('/api/me/gmail', async (req, res, ctx) => {
     sendJson(res, 200, gmailInfo(userOnly(ctx)));
+  });
+
+  /** החתימה מ-Gmail למסך החשבון — ‎?refresh=1‎ קורא אותה מחדש עכשיו */
+  router.get('/api/me/gmail/signature', async (req, res, ctx) => {
+    const actor = ctx.requireActor();
+    internalOnly(actor);
+    const fresh = parseUrl(req).searchParams.get('refresh') === '1';
+    const info = await Gmail.signatureInfo(actor.id, { fresh });
+    sendJson(res, 200, { ...info, fallback: info.state === 'ok' ? null : Gmail.fallbackSignature(actor.id)?.text ?? '' });
   });
 
   router.get('/api/me/gmail/connect', async (req, res, ctx) => {

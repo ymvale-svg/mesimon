@@ -331,6 +331,7 @@ async function sendReply(userId, reply) {
   const conn = Gmail.connectionOf(userId);
   // עם החתימה של המשתמש מ-Gmail, כמו כל מייל שהוא שולח משם
   const body = await Gmail.signed(userId, { text: reply.body, html: AiTasks.emailHtml(reply.body) });
+  if (body.missing) AiTasks.signatureMissing(userId, body.missing, 'תשובה מהבוט');
   const built = Mailer.buildMessage({
     from: conn.email, fromName: owner.full_name, to: reply.to, toName: reply.toName || undefined,
     subject: reply.subject, inReplyTo: reply.inReplyTo, references: reply.references,

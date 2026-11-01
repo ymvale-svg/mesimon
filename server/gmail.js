@@ -314,24 +314,46 @@ function publicStatus(userId) {
 // ---------------------------------------------------------------------------
 
 const SIGNATURE_TTL = 3 * 60 * 60 * 1000;
-const signatures = new Map(); // userId → { at, value }
+// "אין חתימה" נזכר לזמן קצר: מי שהגדיר חתימה ב-Gmail עכשיו לא צריך לחכות שעות
+const NO_SIGNATURE_TTL = 10 * 60 * 1000;
+const signatures = new Map(); // userId → { at, info }
+
+/**
+ * מה לומר למשתמש כשאין חתימה, לפי הסיבה. חוזר במסך החשבון, בטיוטת משימת
+ * AI ובבוט — אותו נוסח בכל מקום.
+ *
+ * הסיבה הנפוצה: החתימה מוגדרת רק ב-Outlook שבמחשב. Outlook מוסיף אותה
+ * במחשב שלו בלבד, ומשימון — ששולח דרך Gmail — אינו רואה אותה.
+ */
+const SIGNATURE_HELP = {
+  none: 'לא נמצאה חתימה ב-Gmail. המיילים ממשימון יוצאים דרך Gmail, ולכן חתימה שמוגדרת רק ב-Outlook לא מספיקה — צריך להגדיר אותה גם ב-Gmail: הגדרות ← כללי ← חתימה, ולבחור אותה ב"ברירת מחדל לאימיילים חדשים".',
+  no_read: 'כדי לצרף את החתימה שלך מ-Gmail, משימון צריך גם הרשאת קריאה. התחברו מחדש ל-Google ("החשבון שלי ← חיבור Google") וסמנו את כל התיבות.',
+  error: 'לא הצלחנו לקרוא את החתימה מ-Gmail כרגע. ננסה שוב בשליחה הבאה.',
+  not_connected: 'תיבת ה-Gmail אינה מחוברת.'
+};
 
 /**
  * החתימה האישית כפי שהוגדרה ב-Gmail (הגדרות ← כללי ← חתימה) — של כתובת
- * השליחה של החיבור. נקראת מ-Gmail בלבד ואינה נערכת במשימון: מה שמשתנה שם
- * מגיע לכאן בעדכון הבא (עד 3 שעות, או מיד אחרי חיבור מחדש).
+ * השליחה של החיבור, וליתר דיוק החתימה שנבחרה ב"ברירת מחדל לאימיילים
+ * חדשים". נקראת מ-Gmail בלבד ואינה נערכת במשימון.
  *
- * ‎null‎ — אין חתימה ב-Gmail, ואז לא מוסיפים כלום, בדיוק כמו ב-Gmail.
- * תקלה בקריאה אינה עוצרת שליחה: המייל יוצא בלי חתימה, והתקלה נרשמת.
- * ההרשאה — קריאת הדואר (‎gmail.readonly‎) שכבר אושרה; אין צורך להתחבר מחדש.
+ * ‎state‎: ‎ok‎ · ‎none‎ (אין חתימה ב-Gmail) · ‎no_read‎ (אושרה שליחה בלי
+ * קריאה — אי אפשר לקרוא את ההגדרות) · ‎error‎ · ‎not_connected‎.
+ * ‎fresh‎ — לעקוף את הזיכרון (כפתור "רענון חתימה").
  *
- * @returns {Promise<{html: string, text: string}|null>}
+ * @returns {Promise<{state: string, html?: string, text?: string, help?: string}>}
  */
-async function signature(userId) {
+async function signatureInfo(userId, { fresh = false } = {}) {
   const hit = signatures.get(userId);
-  if (hit && Date.now() - hit.at < SIGNATURE_TTL) return hit.value;
+  if (!fresh && hit && Date.now() - hit.at < (hit.info.state === 'ok' ? SIGNATURE_TTL : NO_SIGNATURE_TTL)) return hit.info;
   const conn = connectionOf(userId);
-  if (!conn || conn.state !== 'ok' || !has(userId, 'mail')) return null;
+  const done = (info) => {
+    const out = info.state === 'ok' ? info : { ...info, help: SIGNATURE_HELP[info.state] };
+    if (info.state !== 'error') signatures.set(userId, { at: Date.now(), info: out });
+    return out;
+  };
+  if (!conn || conn.state !== 'ok') return done({ state: 'not_connected' });
+  if (!has(userId, 'mail')) return done({ state: 'no_read' });
   try {
     const list = (await call(userId, '/settings/sendAs')).sendAs ?? [];
     const mine = list.find((x) => String(x.sendAsEmail).toLowerCase() === conn.email)
@@ -339,24 +361,47 @@ async function signature(userId) {
     const html = String(mine?.signature ?? '').trim();
     // בלי ‎require‎ בראש הקובץ: ‎mime.js‎ עצמאי, וכך אין סיכוי לתלות מעגלית
     const text = html ? require('./mime').htmlToText(html).trim() : '';
-    const value = html && text ? { html, text } : null;
-    signatures.set(userId, { at: Date.now(), value });
-    return value;
+    return done(html && text ? { state: 'ok', html, text } : { state: 'none' });
   } catch (err) {
     console.error(`[משימון] קריאת החתימה מ-Gmail למשתמש ${userId} נכשלה:`, err.message);
-    return hit?.value ?? null;
+    // חתימה שכבר נקראה עדיפה על מייל בלי חתימה בגלל תקלה רגעית
+    return hit?.info?.state === 'ok' ? hit.info : done({ state: 'error' });
   }
 }
 
-/** מייל שיוצא מהתיבה של המשתמש, עם החתימה שלו מ-Gmail בסוף — אם יש */
+/** החתימה, או ‎null‎ — לקוראים שרק צריכים לדעת אם יש */
+async function signature(userId) {
+  const info = await signatureInfo(userId);
+  return info.state === 'ok' ? { html: info.html, text: info.text } : null;
+}
+
+/**
+ * כשאין חתימה ב-Gmail — לפחות השם והמחלקה מהפרופיל במשימון. ה-AI מנוסח
+ * בלי שם (הוא סומך על החתימה), ובלי זה המייל היה יוצא בלי שם השולח בכלל.
+ */
+function fallbackSignature(userId) {
+  const u = D.get('SELECT full_name, department FROM users WHERE id = ?', userId);
+  const lines = [u?.full_name, u?.department].map((x) => String(x ?? '').trim()).filter(Boolean);
+  if (!lines.length) return null;
+  const esc = (x) => x.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  return { text: lines.join('\n'), html: lines.map(esc).join('<br>') };
+}
+
+/**
+ * מייל שיוצא מהתיבה של המשתמש, עם החתימה שלו מ-Gmail בסוף. אין חתימה —
+ * השם והמחלקה מהפרופיל, ו-‎missing‎ אומר למה (לרישום ולהודעה למשתמש).
+ */
 async function signed(userId, { text, html }) {
-  const sig = await signature(userId);
-  if (!sig) return { text, html, signature: null };
+  const info = await signatureInfo(userId);
+  const sig = info.state === 'ok' ? info : fallbackSignature(userId);
+  const missing = info.state === 'ok' ? null : info.state;
+  if (!sig) return { text, html, signature: null, missing };
   const block = `<br><div dir="auto" class="gmail_signature" data-smartmail="gmail_signature">${sig.html}</div>`;
   return {
     text: `${String(text).replace(/\s+$/, '')}\n\n${sig.text}`,
     html: /<\/body>/i.test(html) ? html.replace(/<\/body>/i, `${block}</body>`) : `${html}${block}`,
-    signature: sig
+    signature: info.state === 'ok' ? sig : null,
+    missing
   };
 }
 
@@ -366,5 +411,5 @@ const webLink = (email, gmailId) => `https://mail.google.com/mail/u/?authuser=${
 module.exports = {
   isEnabled, authorizeUrl, isGmailState, consumeState, connect, disconnect,
   search, raw, send, connectedUsers, isConnected, canSend, connectionOf, publicStatus, webLink, SCOPE, SEND_SCOPE,
-  SCOPES, has, googleCall, signature, signed
+  SCOPES, has, googleCall, signature, signatureInfo, fallbackSignature, signed, SIGNATURE_HELP
 };

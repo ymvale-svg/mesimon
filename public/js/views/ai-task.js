@@ -345,7 +345,7 @@ const AiTaskView = (() => {
     }
 
     async function makeDraft(feedback = '') {
-      const { draft, signature } = await API.post('/api/ai/draft', {
+      const { draft, signature, signatureMissing } = await API.post('/api/ai/draft', {
         instruction: state.instruction,
         contact: state.contact,
         channel: state.channel,
@@ -362,6 +362,19 @@ const AiTaskView = (() => {
       // תיקון טיוטה אינו דורס כותרת שהמשתמש כבר ערך
       state.draft = feedback && state.draft ? { ...draft, title: state.draft.title } : draft;
       state.signature = signature ?? null;
+      state.signatureMissing = signatureMissing ?? null;
+    }
+
+    /** אין חתימה ב-Gmail — למה, ומה ייכתב בסוף המייל במקומה */
+    function signatureWarning(miss) {
+      return el('div.alert.alert-warn.ai-signature-warn', {}, [
+        el('span', { text: '✍️' }),
+        el('div', {}, [
+          el('b', { text: 'המייל ייצא בלי החתימה שלך. ' }),
+          el('span', { text: miss.help ?? '' }),
+          miss.fallback ? el('div.mute-sm', { style: { marginTop: '4px', whiteSpace: 'pre-line' }, text: `עד אז יתווסף בסוף המייל:\n${miss.fallback}` }) : null
+        ])
+      ]);
     }
 
     /**
@@ -504,6 +517,7 @@ const AiTaskView = (() => {
               : isEmail ? 'יישלח מתיבת ה-Gmail שלך ויישאר אצלך ב"דואר יוצא". התשובה תחזור אליך ותיקלט אוטומטית.' : 'יישלח מהוואטסאפ שלך.')
         ]),
         isEmail && state.signature ? signaturePreview(state.signature) : null,
+        isEmail && !state.signature && state.signatureMissing ? signatureWarning(state.signatureMissing) : null,
         el('div.ai-revise', {}, [feedback, redo]),
         UI.field('מתי זה נחשב שהתקבל?', criteria, 'לפי זה ה-AI יכריע אם התשובה שחזרה מספיקה וסוגר את המשימה'),
         el('div.ai-foot', {}, [
