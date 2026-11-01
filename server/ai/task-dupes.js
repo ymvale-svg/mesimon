@@ -205,11 +205,30 @@ async function judge(pairs, { timeoutMs = 0 } = {}) {
  * הדיאלוג "משימה חדשה", לפני היצירה: יש כבר משימה פתוחה דומה במחלקה?
  * ‎departmentId‎ — המחלקה שהמשימה תיפתח בה (כמו ב-‎createTask‎).
  */
+/*
+ * מה הוצג לכל משתמש בדיאלוג "יש כבר משימה דומה" — רק אליהן מותר "להצטרף" לפי מחלקה.
+ * בלי זה עובד שרואה רק את המשימות שלו יכול להצטרף לכל משימה במחלקה לפי מספר רץ.
+ */
+const OFFERED_TTL_MS = 30 * 60 * 1000;
+const offered = new Map(); // userId -> Map(taskId -> expiresAt)
+function rememberOffered(userId, taskIds) {
+  const now = Date.now();
+  const mine = offered.get(userId) ?? new Map();
+  for (const [id, exp] of mine) if (exp <= now) mine.delete(id);
+  for (const id of taskIds) mine.set(id, now + OFFERED_TTL_MS);
+  offered.set(userId, mine);
+}
+function wasOffered(userId, taskId) {
+  const exp = offered.get(userId)?.get(taskId);
+  return !!exp && exp > Date.now();
+}
+
 async function similarForNew(actor, { title, description = '', projectId = null, departmentId = null }) {
   if (!departmentId || !String(title ?? '').trim()) return [];
   const draft = { id: 0, title: String(title), description: String(description ?? ''), project_id: projectId ? Number(projectId) : null };
   const pool = openInDepartment(departmentId);
   const found = await judge(candidates(draft, pool).map((c) => ({ a: draft, b: c.task, score: c.score })), { timeoutMs: DIALOG_AI_MS });
+  rememberOffered(actor.id, found.map(({ b }) => b.id));
   return found.map(({ b: t, score }) => ({
     id: t.id,
     title: t.title,
@@ -226,12 +245,13 @@ async function similarForNew(actor, { title, description = '', projectId = null,
 
 /**
  * "להצטרף למשימה של יוסי" — אחראי נוסף, בלי משימה חדשה. מותר כשהמשימה פתוחה
- * ובמחלקה של המצטרף (שם היא נמצאה), או כשהוא כבר רואה אותה.
+ * ובמחלקה של המצטרף והוצגה לו זה עתה בדיאלוג (שם היא נמצאה), או כשהוא כבר רואה אותה.
  */
 function join(actor, taskId) {
   const task = taskById(Number(taskId));
   if (!task || !isOpen(task)) throw Object.assign(new Error('המשימה כבר לא פתוחה'), { status: 400 });
-  const inDept = task.department_id && (actor.departmentIds ?? [actor.departmentId]).includes(task.department_id);
+  const inDept = task.department_id && (actor.departmentIds ?? [actor.departmentId]).includes(task.department_id)
+    && wasOffered(actor.id, task.id);
   if (!inDept && !(hooks.canSeeTask && hooks.canSeeTask(actor, task))) throw Object.assign(new Error('אין לך גישה למשימה הזו'), { status: 403 });
   if (involved(actor.id, task) && task.created_by !== actor.id) return task.id;
   D.run(`INSERT OR IGNORE INTO task_assignees (task_id, assignee_type, assignee_id, added_at, added_by) VALUES (?, 'user', ?, ?, ?)`,
