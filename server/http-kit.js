@@ -147,6 +147,15 @@ function sendText(res, status, text, contentType = 'text/plain; charset=utf-8', 
   res.end(body);
 }
 
+// כותרות הגנה לכל קובץ סטטי (כולל מעטפת האפליקציה ומסך הכניסה): מניעת הטמעה באתר זר
+// (clickjacking), ניחוש סוג תוכן, וחיבור HTTPS בלבד.
+const SECURITY_HEADERS = {
+  'x-frame-options': 'DENY',
+  'content-security-policy': "frame-ancestors 'none'",
+  'x-content-type-options': 'nosniff',
+  'strict-transport-security': 'max-age=31536000'
+};
+
 function serveStatic(res, rootDir, urlPath) {
   const clean = decodeURIComponent(urlPath.split('?')[0]);
   const rel = clean === '/' ? 'index.html' : clean.replace(/^\/+/, '');
@@ -163,7 +172,8 @@ function serveStatic(res, rootDir, urlPath) {
   res.writeHead(200, {
     'content-type': MIME[ext] ?? 'application/octet-stream',
     'content-length': stat.size,
-    'cache-control': 'no-cache'
+    'cache-control': 'no-cache',
+    ...SECURITY_HEADERS
   });
   fs.createReadStream(target).pipe(res);
   return true;
