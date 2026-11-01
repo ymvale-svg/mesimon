@@ -1845,7 +1845,7 @@ const HomeView = (() => {
       el('div.card-pad', {}, [scrollBox(shownDays.map((d) =>
         el('div.week-row', {}, [
           el('div.wk-day', {}, [
-            el('b', { style: { color: d.isToday ? 'var(--brand)' : 'inherit' },
+            el('b', { style: { color: d.isToday ? 'var(--brand-ink)' : 'inherit' },
               text: d.isToday ? 'היום' : dayNames[d.date.getDay()] }),
             el('span.mute-sm', { text: UI.formatDate(d.date.toISOString()).slice(0, 5) })
           ]),
@@ -1896,7 +1896,7 @@ const HomeView = (() => {
           ' ',
           el('span', { text: ACTION_TEXT[f.action] ?? f.action }),
           ' — ',
-          el('span', { style: { color: 'var(--brand)' }, text: f.taskTitle })
+          el('span', { style: { color: 'var(--brand-ink)' }, text: f.taskTitle })
         ]),
         // יש רשומות ללא פירוט, ובלי הסינון היה נדפס 'undefined' לפני הזמן
         el('div.h-meta', { text: [f.details, UI.relative(f.createdAt)].filter(Boolean).join(' · ') })
@@ -1955,7 +1955,7 @@ const HomeView = (() => {
 
     return el('div.card', {}, [
       el('div.card-head', {}, [
-        el('span', { text: '@', style: { fontWeight: '800', color: 'var(--brand)' } }),
+        el('span', { text: '@', style: { fontWeight: '800', color: 'var(--brand-ink)' } }),
         el('h3', { text: 'תויגת בהודעות' }),
         el('div.spacer'),
         el('span.mute-sm', { text: countLabel(mentions.length, 'הודעה אחת', 'הודעות') })

@@ -44,6 +44,56 @@ const App = (() => {
 
   const getPref = (key, fallback = null) => state.prefs?.[key] ?? fallback;
 
+  // ------------------------------------------------------------- מצב לילה
+
+  /**
+   * מראה המערכת: בהיר, לילה, או לפי הגדרת מערכת ההפעלה. ההעדפה נשמרת בשרת
+   * כמו כל העדפה — כדי שתלך אחרי המשתמש בין מכשירים — ובמקביל במכשיר:
+   * הסקריפט הקטן בראש index.html קורא את העותק המקומי לפני הציור הראשון,
+   * ולכן מי שבחר לילה אינו רואה הבזק לבן בכל טעינה.
+   *
+   * "לפי המערכת" מוחל כאן ל"בהיר" או "לילה" ממש, ולא נשאר ל-CSS: כך יש
+   * בגיליון מצב אחד לכל מראה (‎data-theme‎), והמעבר של מערכת ההפעלה בערב
+   * מתעדכן חי דרך המאזין למטה.
+   */
+  const THEME_KEY = 'mesimon.theme';
+  const THEMES = [
+    { key: 'light', label: 'בהיר', glyph: '☀' },
+    { key: 'dark', label: 'לילה', glyph: '☾' },
+    // בלי סימן: אין תו "חצי ירח" שמופיע זהה בכל הגופנים, ומילים מספיקות
+    { key: 'system', label: 'לפי המערכת', glyph: '' }
+  ];
+  const DARK_QUERY = window.matchMedia('(prefers-color-scheme: dark)');
+
+  function themePref() {
+    let local = null;
+    try { local = localStorage.getItem(THEME_KEY); } catch { /* אחסון חסום — נשארים עם השרת */ }
+    const value = getPref('theme', null) ?? local;
+    return THEMES.some((t) => t.key === value) ? value : 'light';
+  }
+
+  function applyTheme(pref = themePref(), { animate = false } = {}) {
+    const html = document.documentElement;
+    const dark = pref === 'dark' || (pref === 'system' && DARK_QUERY.matches);
+    /*
+     * מעבר רך רק כשהמשתמש מחליף. בטעינה המצב כבר נכון מהסקריפט שבראש הדף,
+     * ומעבר שם היה מנפיש כל כרטיס מלבן לכהה.
+     */
+    if (animate && !window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      html.classList.add('theme-switching');
+      setTimeout(() => html.classList.remove('theme-switching'), 320);
+    }
+    html.dataset.theme = dark ? 'dark' : 'light';
+    try { localStorage.setItem(THEME_KEY, pref); } catch { /* המכשיר לא יזכור — השרת כן */ }
+  }
+
+  function setTheme(pref) {
+    setPref('theme', pref);
+    applyTheme(pref, { animate: true });
+  }
+
+  DARK_QUERY.addEventListener('change', () => { if (themePref() === 'system') applyTheme(); });
+
   const root = () => document.getElementById('app');
 
   // חתך רשימת הפרויקטים בתפריט — 'mine' או 'all'. נשמר במכשיר, לא בשרת.
@@ -142,6 +192,8 @@ const App = (() => {
     try {
       const data = await API.bootstrap();
       Object.assign(state, data);
+      // ההעדפה מהשרת גוברת על העותק במכשיר — משתמש אחר, או בחירה ממכשיר אחר
+      applyTheme();
       await refreshNotifications();
       startNotifPolling();
       const params = new URLSearchParams(location.search);
@@ -2664,6 +2716,31 @@ const App = (() => {
     return el('tr', {}, [el('th', { text: 'טלפון נייד' }), cell]);
   }
 
+  /**
+   * בורר המראה בחלון "החשבון שלי" — שלוש אפשרויות במתג אחד. ההחלה מיידית,
+   * בלי "שמירה": זו העדפת תצוגה, ורואים אותה ברגע הלחיצה.
+   */
+  function themeRow() {
+    const current = themePref();
+    const buttons = THEMES.map((t) => el(`button${t.key === current ? '.active' : ''}`, {
+      type: 'button',
+      role: 'radio',
+      'aria-checked': String(t.key === current),
+      onclick: () => {
+        setTheme(t.key);
+        for (const b of buttons) {
+          const on = b === buttons[THEMES.indexOf(t)];
+          b.classList.toggle('active', on);
+          b.setAttribute('aria-checked', String(on));
+        }
+      }
+    }, [t.glyph ? el('span', { 'aria-hidden': 'true', text: `${t.glyph} ` }) : null, t.label]));
+    return el('tr', {}, [
+      el('th', { text: 'מראה' }),
+      el('td', {}, [el('div.view-switch.theme-switch', { role: 'radiogroup', 'aria-label': 'מראה המערכת' }, buttons)])
+    ]);
+  }
+
   function userMenu() {
     const m = UI.modal({
       title: 'החשבון שלי',
@@ -2682,7 +2759,8 @@ const App = (() => {
               : null,
             state.actor.department ? el('tr', {}, [el('th', { text: 'מחלקה' }), el('td', { text: state.actor.department })]) : null,
             isVendor() ? null : phoneRow(),
-            isVendor() ? el('tr', {}, [el('th', { text: 'הרשאת עדכון' }), el('td', { text: state.actor.readOnly ? 'צפייה בלבד' : 'מלאה' })]) : null
+            isVendor() ? el('tr', {}, [el('th', { text: 'הרשאת עדכון' }), el('td', { text: state.actor.readOnly ? 'צפייה בלבד' : 'מלאה' })]) : null,
+            themeRow()
           ])
         ]),
         // הוואטסאפ האישי משמש את משימות ה-AI להמשך מעקב מהמספר של המשתמש
