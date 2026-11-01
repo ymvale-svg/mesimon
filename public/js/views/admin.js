@@ -19,7 +19,9 @@ const AdminView = (() => {
     { key: 'settings', label: 'הגדרות מערכת', perm: 'manage_automations' },
     { key: 'whatsapp', label: 'בוט וואטסאפ', perm: 'manage_automations', full: true },
     { key: 'matrix', label: 'מטריצת הרשאות', perm: 'manage_users' },
-    { key: 'templates', label: 'תבניות', perm: 'create_project', full: true }
+    { key: 'templates', label: 'תבניות', perm: 'create_project', full: true },
+    // הודעה שנפתחת לכל המשתמשים — רק אדמין על (ראה ‎manage_release_notes‎)
+    { key: 'whatsnew', label: '✨ מה חדש', perm: 'manage_release_notes', full: true }
   ];
 
   async function render(container, params = {}) {
@@ -64,6 +66,7 @@ const AdminView = (() => {
       else if (tab === 'whatsapp') await whatsappTab(body);
       else if (tab === 'matrix') await matrixTab(body);
       else if (tab === 'templates') await templatesTab(body);
+      else if (tab === 'whatsnew') await WhatsNewView.adminTab(body, reload);
     } catch (err) {
       UI.mount(body, UI.empty(err.message, '⚠️'));
     }

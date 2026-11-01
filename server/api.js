@@ -20,6 +20,7 @@ const AiApi = require('./api-ai');
 const TodayApi = require('./api-today');
 const PhonebookApi = require('./api-phonebook');
 const MeetingsApi = require('./api-meetings');
+const WhatsNew = require('./api-whats-new');
 const Zoom = require('./zoom');
 const W = require('./workdays');
 const GContacts = require('./google-contacts');
@@ -933,6 +934,8 @@ router.get('/api/bootstrap', async (req, res, ctx) => {
      * הנכון. קריאה נוספת הייתה מציגה קודם לוח ריק ואז מקפיצה אותו.
      */
     prefs: isVendor(actor) ? {} : D.userPrefs(actor.id),
+    // כמה גרסאות "מה חדש" עוד לא נסגרו אצלו — הבאנר נפתח רק אם יש
+    whatsNewPending: WhatsNew.pendingCount(actor),
     settings: {
       orgName: D.getSetting('org_name', 'MESIMON'),
       maxUploadMb: D.getSetting('max_upload_mb', 25),
@@ -2912,52 +2915,38 @@ router.get('/api/home', async (req, res, ctx) => {
   }
 
   /**
-   * פיד העדכונים — בהקשר של המשתמש בלבד.
+   * פיד העדכונים — כלי של מנהל המערכת, על כל הארגון.
    *
-   * עד כה הפיד הראה כל מה שמותר לראות, ולמנהל מערכת זה כל הארגון: מסך הבית
-   * שלו התמלא בעדכונים על משימות של מחלקות אחרות, ובתוכם נעלמו העדכונים
-   * שנוגעים אליו. פיד שאי אפשר לסרוק אינו פיד.
+   * בעבר הוצג לכל העובדים, מצומצם למשימות ולפרויקטים של כל אחד. בפועל רק מי
+   * שאחראי על המערכת כולה צריך לראות "מה זז בארגון" ברצף אחד; לעובד יש את
+   * ההתראות ואת ההיסטוריה בכרטיס המשימה. לכן ההרשאה היא שורה במטריצה
+   * (‎view_activity_feed‎), ומי שאין לו אותה מקבל מערך ריק — והשאילתה כלל
+   * אינה רצה, כך שאי אפשר לחלץ את המידע גם בעקיפין.
    *
-   * ההיקף: משימות שהוקצו לי, ומשימות בפרויקטים שאני אחראי עליהם — אותה
-   * הגדרת בעלות שקובעת את "שלי" בתפריט (ownedProjectIds).
-   *
-   * הסינון ב-SQL ולא בקוד: הגרסה הקודמת שלפה 200 שורות ואז הריצה שאילתה
-   * לכל אחת מהן, וכשרובן נפלו בסינון היא נשארה עם רשימה קצרה מדי.
+   * מה שאני עצמי עשיתי אינו עדכון בשבילי: הפיד נועד לומר מה קרה בלי
+   * שהסתכלתי, ושורה על כל פעולה שלי הייתה בולעת את מה שאחרים עשו.
    */
-  const ownedForFeed = isVendor(actor) ? new Set() : ownedProjectIds(actor);
-  const feedParams = [actor.type === 'vendor' ? 'vendor' : 'user', actor.id];
-  const projectClause = ownedForFeed.size
-    ? ` OR t.project_id IN (${[...ownedForFeed].map(() => '?').join(',')})`
-    : '';
-  feedParams.push(...ownedForFeed);
-
-  /*
-   * מה שאני עצמי עשיתי אינו עדכון בשבילי.
-   *
-   * הפיד נועד לומר מה קרה בלי שהסתכלתי, ועד כה כל שינוי סטטוס וכל תגובה
-   * שלי חזרו אליי כשורה — כך שהפיד היה בעיקר הד של הפעולות שלי, ובתוכו
-   * נבלע מה שאחרים עשו. אותה הבחנה בדיוק כמו בהתראות: אין מודיעים לאדם על
-   * מה שהוא בדיוק כתב.
-   */
-  const feed = D.all(
-    `SELECT a.*, t.title AS task_title FROM audit_log a
-       JOIN tasks t ON t.id = a.task_id
-      WHERE ((t.assignee_type = ? AND t.assignee_id = ?)${projectClause})
-        AND NOT (a.actor_type = ? AND a.actor_id = ?)
-      ORDER BY a.created_at DESC, a.id DESC LIMIT 120`,
-    ...feedParams, actor.type === 'vendor' ? 'vendor' : 'user', actor.id
-  ).filter((row) => {
-    // שכבת הגנה שנייה: ההיקף אינו תחליף להרשאה
-    const task = D.get('SELECT * FROM tasks WHERE id = ?', row.task_id);
-    return task && canSeeTask(actor, task);
-  }).slice(0, 60).map((row) => ({
-    id: row.id, action: row.action, details: row.details,
-    actorName: row.actor_name || 'המערכת',
-    // הממשק מבדיל חזותית בין עדכון של אדם לעדכון של המערכת
-    actorType: row.actor_type ?? 'system',
-    taskId: row.task_id,
-    taskTitle: row.task_title, createdAt: row.created_at
-  }));
+  let feed = [];
+  if (P.may(actor, 'view_activity_feed')) {
+    feed = D.all(
+      `SELECT a.*, t.title AS task_title FROM audit_log a
+         JOIN tasks t ON t.id = a.task_id
+        WHERE NOT (a.actor_type = ? AND a.actor_id = ?)
+        ORDER BY a.created_at DESC, a.id DESC LIMIT 120`,
+      'user', actor.id
+    ).filter((row) => {
+      // שכבת הגנה שנייה: ההרשאה לפיד אינה תחליף להרשאה על המשימה
+      const task = D.get('SELECT * FROM tasks WHERE id = ?', row.task_id);
+      return task && canSeeTask(actor, task);
+    }).slice(0, 60).map((row) => ({
+      id: row.id, action: row.action, details: row.details,
+      actorName: row.actor_name || 'המערכת',
+      // הממשק מבדיל חזותית בין עדכון של אדם לעדכון של המערכת
+      actorType: row.actor_type ?? 'system',
+      taskId: row.task_id,
+      taskTitle: row.task_title, createdAt: row.created_at
+    }));
+  }
 
   /**
    * הודעות שתויגתי בהן. זה מה שאדם אחר ביקש ממני במפורש, ולכן הוא הדבר
@@ -4992,6 +4981,7 @@ const botTaskOps = {
 AiApi.register(router, { getTaskOr404, assertVisible, mayOnTask, shapeTask, actorRef, saveAttachment, createTask, assertMayAssignTo, assertMayUseProject, listProjectsFor, newTaskProjects, assignableUserIds, assignBlockReason, botTaskOps });
 TodayApi.register(router, { shapeTask, createTask, getTaskOr404, listProjectsFor, newTaskProjects, assertMayAssignTo });
 PhonebookApi.register(router);
+WhatsNew.register(router);
 MeetingsApi.register(router, { getTaskOr404, assertVisible, shapeTask, canSeeTask });
 Tiful360.register(router, { createTask, saveAttachment, getTaskOr404 });
 

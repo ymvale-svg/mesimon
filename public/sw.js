@@ -41,6 +41,7 @@ const SHELL = [
   '/js/views/vendor-portal.js',
   '/js/views/reports.js',
   '/js/views/admin.js',
+  '/js/views/whats-new.js',
   '/js/views/today.js',
   '/js/views/meeting.js',
   '/js/views/calendar.js',

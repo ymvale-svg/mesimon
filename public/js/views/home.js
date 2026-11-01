@@ -101,7 +101,7 @@ const HomeView = (() => {
     mentions: 'הודעות שבהן תייגו אותך',
     done: 'מה שנסגר לאחרונה, עד שעובר לארכיון',
     approval: 'תוצרי ספקים שמחכים לבדיקה',
-    feed: 'עדכונים אחרונים במשימות ובפרויקטים שלך',
+    feed: 'מה קרה לאחרונה במשימות בכל הארגון',
     phonebook: 'חיפוש מהיר באנשי הקשר של הארגון'
   };
   // כרטיסים שברירת המחדל שלהם היא שורה שלמה — טבלת חתך רחבה מדי לחצי שורה
@@ -1260,7 +1260,8 @@ const HomeView = (() => {
       approval: App.may('approve_vendor_output') || App.isVendor()
         ? approvalCard(data.tasks.awaitingApproval)
         : null,
-      feed: feedCard(data.feed)
+      // פיד הארגון — למנהל המערכת בלבד. ‎null‎ גם מוציא אותו מרשימת "סידור הלוח"
+      feed: App.may('view_activity_feed') ? feedCard(data.feed ?? []) : null
     };
 
     /*
@@ -1859,7 +1860,7 @@ const HomeView = (() => {
       el('div.card-pad', {}, [
         items.length
           ? scrollBox(items.map(feedRow))
-          : UI.empty('אין עדכונים במשימות ובפרויקטים שלך', '📰')
+          : UI.empty('אין עדכונים אחרונים בארגון', '📰')
       ])
     ]);
   }
