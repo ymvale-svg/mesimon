@@ -97,12 +97,12 @@ const CalendarView = (() => {
         el('h2', { text: '📅 יומן' }),
         el('div.seg', {}, [['day', 'יום'], ['week', 'שבוע']].map(([k, label]) =>
           el(`button${view.mode === k ? '.active' : ''}`, { onclick: () => { view.mode = k; loadRange(); } }, [label]))),
-        el('button.btn.btn-sm', { title: 'הקודם', onclick: () => { view.date = addDays(view.date, view.mode === 'day' ? -1 : -7); loadRange(); } }, ['▶']),
+        el('button.btn.btn-sm', { title: 'הקודם', 'aria-label': 'הקודם', onclick: () => { view.date = addDays(view.date, view.mode === 'day' ? -1 : -7); loadRange(); } }, [UI.lineIcon('chevron-right')]),
         el('b.cal-title', { text: title }),
-        el('button.btn.btn-sm', { title: 'הבא', onclick: () => { view.date = addDays(view.date, view.mode === 'day' ? 1 : 7); loadRange(); } }, ['◀']),
+        el('button.btn.btn-sm', { title: 'הבא', 'aria-label': 'הבא', onclick: () => { view.date = addDays(view.date, view.mode === 'day' ? 1 : 7); loadRange(); } }, [UI.lineIcon('chevron-left')]),
         el('button.btn.btn-sm', { onclick: () => { view.date = new Date(); loadRange(); } }, ['היום']),
         el('div.spacer'),
-        el('button.btn.btn-sm', { title: 'רענון רשימת היומנים ששותפו', onclick: async () => { info = await API.get('/api/meetings/calendars?fresh=1'); loadRange(); } }, ['⟳'])
+        el('button.btn.btn-sm', { title: 'רענון רשימת היומנים ששותפו', 'aria-label': 'רענון רשימת היומנים ששותפו', onclick: async () => { info = await API.get('/api/meetings/calendars?fresh=1'); loadRange(); } }, [UI.lineIcon('refresh-cw')])
       ]),
       el('div.cal-access', {}, [
         `שיתפו איתך לעריכה: ${counts.write} · לצפייה: ${counts.read} · לא שיתפו: ${counts.none}`,
@@ -272,9 +272,9 @@ const CalendarView = (() => {
     const person = info.calendars.find((c) => c.userId === e.userId);
     const buttons = [];
     if (e.taskId) buttons.push(el('button.btn.btn-sm', { onclick: () => { m.close(); TaskCardView.open(e.taskId); } }, ['פתיחת המשימה']));
-    if (e.link) buttons.push(el('a.btn.btn-sm', { href: e.link, target: '_blank', rel: 'noopener' }, ['פתיחה ב-Google ↗']));
+    if (e.link) buttons.push(el('a.btn.btn-sm', { href: e.link, target: '_blank', rel: 'noopener' }, ['פתיחה ב-Google', UI.lineIcon('external-link')]));
     if (e.editable && e.organizerIsOwner && !e.busyOnly && !e.allDay) {
-      buttons.push(el('button.btn.btn-sm', { onclick: () => { m.close(); moveDialog(e); } }, ['🔀 הזזה']));
+      buttons.push(el('button.btn.btn-sm', { onclick: () => { m.close(); moveDialog(e); } }, [UI.lineIcon('shuffle'), 'הזזה']));
     }
     const m = UI.modal({
       title: e.title ?? 'תפוס',
@@ -335,7 +335,7 @@ const CalendarView = (() => {
             ]),
             el('button.btn.btn-sm.btn-primary', {
               onclick: (e) => { e.stopPropagation(); MeetingView.openDialog({ task: t, onDone: () => { reload(); refreshPending(); } }); }
-            }, ['📅 קביעה'])
+            }, [UI.lineIcon('calendar'), 'קביעה'])
           ]))
         : [el('div.mute-sm.today-pad', { text: 'אין משימות שמחכות לקביעת פגישה' })])
     ]);

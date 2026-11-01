@@ -139,7 +139,7 @@ const AiTaskView = (() => {
       const chips = el('div.ai-cc-chips');
       const drawChips = () => UI.mount(chips, state.cc.map((c, i) => el('span.ai-cc-chip', { title: c.email }, [
         c.name || c.email,
-        el('button', { type: 'button', 'aria-label': `הסרה מההעתק: ${c.name || c.email}`, onclick: () => { state.cc.splice(i, 1); drawChips(); onChange(); } }, ['✕'])
+        el('button', { type: 'button', 'aria-label': `הסרה מההעתק: ${c.name || c.email}`, title: 'הסרה', onclick: () => { state.cc.splice(i, 1); drawChips(); onChange(); } }, [UI.lineIcon('x')])
       ])));
       const add = (c) => {
         const email = String(c.email ?? '').trim().toLowerCase();
@@ -248,7 +248,7 @@ const AiTaskView = (() => {
                   el('button.btn.btn-sm', {
                     type: 'button',
                     onclick: () => ContactPicker.saveDialog({ ...c, email: emailInput.value, phone: phoneInput.value || c.phone }, { onSaved: () => UI.mount(extrasBox) })
-                  }, ['⭐ שמור באנשי הקשר של Google'])
+                  }, [UI.lineIcon('star'), 'שמור באנשי הקשר של Google'])
                 ])
               : null);
           showColleague();
@@ -297,7 +297,7 @@ const AiTaskView = (() => {
                 onclick: () => PhonebookView.editDialog({ name, email, phone }, {
                   onSaved: (entry) => { if (entry) { fromPhonebook = true; showPbSave(); } }
                 })
-              }, ['📒 שמירה באלפון'])
+              }, [UI.lineIcon('contacts'), 'שמירה באלפון'])
             ])
           : null);
       };
@@ -313,12 +313,12 @@ const AiTaskView = (() => {
       const waReady = status.whatsapp?.state === 'authorized';
       const channelSeg = waReady
         ? el('div.seg', {}, [
-            ['email', '📧 מייל', status.mail, 'מייל יוצא מתיבת ה-Gmail שלך — מחברים מ"החשבון שלי ← Gmail ועוזר ה-AI"'],
-            ['whatsapp', '💬 וואטסאפ', true, '']
-          ].map(([key, label, ok, why]) => el(`button${state.channel === key ? '.active' : ''}`, {
+            ['email', 'מייל', status.mail, 'מייל יוצא מתיבת ה-Gmail שלך — מחברים מ"החשבון שלי ← Gmail ועוזר ה-AI"', 'mail'],
+            ['whatsapp', 'וואטסאפ', true, '', 'message']
+          ].map(([key, label, ok, why, icon]) => el(`button${state.channel === key ? '.active' : ''}`, {
             type: 'button', disabled: !ok, title: ok ? '' : why,
             onclick: () => { read(); state.channel = key; draw(); }
-          }, [label])))
+          }, [UI.lineIcon(icon), label])))
         : null;
 
       const projectSelect = UI.select([{ value: '', label: 'ללא פרויקט' },
@@ -338,7 +338,7 @@ const AiTaskView = (() => {
         Object.assign(state.policy, policyBox.read());
       }
 
-      const go = el('button.btn.btn-primary', {}, ['✨ נסח לי את הפנייה']);
+      const go = el('button.btn.btn-primary', {}, [UI.lineIcon('sparkles'), 'נסח לי את הפנייה']);
       go.addEventListener('click', async () => {
         read();
         if (!state.instruction) return UI.toast('כתבו מה המשימה', 'error');
@@ -350,7 +350,7 @@ const AiTaskView = (() => {
           draw();
         } catch (err) {
           go.disabled = false;
-          go.textContent = '✨ נסח לי את הפנייה';
+          UI.mount(go, UI.lineIcon('sparkles'), 'נסח לי את הפנייה');
           UI.error(err);
         }
       });
@@ -500,7 +500,7 @@ const AiTaskView = (() => {
       };
 
       const feedback = el('input', { type: 'text', placeholder: 'מה לשנות? למשל: "יותר רשמי", "להוסיף שזה דחוף", "באנגלית"' });
-      const redo = el('button.btn', {}, ['✨ תקן']);
+      const redo = el('button.btn', {}, [UI.lineIcon('sparkles'), 'תקן']);
       const doRedo = async () => {
         if (!feedback.value.trim()) return feedback.focus();
         read();
@@ -511,14 +511,14 @@ const AiTaskView = (() => {
           draw();
         } catch (err) {
           redo.disabled = false;
-          redo.textContent = '✨ תקן';
+          UI.mount(redo, UI.lineIcon('sparkles'), 'תקן');
           UI.error(err);
         }
       };
       redo.addEventListener('click', doRedo);
       feedback.addEventListener('keydown', (e) => { if (e.key === 'Enter') doRedo(); });
 
-      const send = el('button.btn.btn-primary', {}, [internal ? `👤 העברה ל${state.contact.name || 'עובד'}` : isEmail ? '📧 אישור ושליחה' : '💬 אישור ושליחה']);
+      const send = el('button.btn.btn-primary', {}, internal ? [UI.lineIcon('user'), `העברה ל${state.contact.name || 'עובד'}`] : [UI.lineIcon(isEmail ? 'mail' : 'message'), 'אישור ושליחה']);
       // מייל בלי כתובת היה יוצר משימה שהשליחה שלה נכשלת — הכפתור כבוי עד שיש כתובת
       const noAddress = () => isEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(toEmail.value.trim());
       const ccPending = () => isEmail && state.ccAsk.length > 0;
@@ -591,7 +591,7 @@ const AiTaskView = (() => {
         el('div.ai-foot', {}, [
           send,
           el('div.spacer'),
-          el('button.btn', { onclick: () => { read(); state.step = 'compose'; draw(); } }, ['→ חזרה'])
+          el('button.btn', { onclick: () => { read(); state.step = 'compose'; draw(); } }, [UI.lineIcon('arrow-right'), 'חזרה'])
         ])
       ]);
     }
@@ -664,8 +664,8 @@ const AiTaskView = (() => {
       }
     };
     const base = `/api/ai/tasks/${task.id}`;
-    const action = (name, label, cls = '') => {
-      const b = el(`button.btn.btn-sm${cls}`, {}, [label]);
+    const action = (name, label, cls = '', icon = null) => {
+      const b = el(`button.btn.btn-sm${cls}`, {}, [icon ? UI.lineIcon(icon) : null, label]);
       b.addEventListener('click', () => act(b, () => API.post(`${base}/action`, { action: name })));
       return b;
     };
@@ -707,7 +707,7 @@ const AiTaskView = (() => {
 
     // המעקב נעצר כי ייתכן שסוכם משהו מחוץ להתכתבות — "דיברתי איתו" הוא התשובה
     if (a.attention === 'contact_detected' || a.attention === 'handled_elsewhere') {
-      const b = el('button.btn.btn-primary.btn-sm', { onclick: () => talked(task, onChange) }, ['📞 עדכון: מה המצב?']);
+      const b = el('button.btn.btn-primary.btn-sm', { onclick: () => talked(task, onChange) }, [UI.lineIcon('phone'), 'עדכון: מה המצב?']);
       lines.push(el('div.ai-question', {}, [
         el('div', {}, [
           el('b', { text: a.attention === 'contact_detected' ? '👀 ' : '📞 ' }),
@@ -722,7 +722,7 @@ const AiTaskView = (() => {
     // שאלה פתוחה של ה-AI
     if (a.ownerQuestion && a.attention !== 'contact_detected') {
       const answer = el('textarea', { placeholder: 'התשובה שלך — ה-AI ינסח ממנה תשובה לנמען, לאישורך' });
-      const send = el('button.btn.btn-primary.btn-sm', {}, ['✨ נסח תשובה']);
+      const send = el('button.btn.btn-primary.btn-sm', {}, [UI.lineIcon('sparkles'), 'נסח תשובה']);
       send.addEventListener('click', () => {
         if (!answer.value.trim()) return answer.focus();
         act(send, () => API.post(`${base}/answer`, { answer: answer.value.trim() }));
@@ -744,7 +744,7 @@ const AiTaskView = (() => {
       const approve = el('button.btn.btn-primary.btn-sm', {}, [`${CHANNEL_ICON[msg.channel]} אישור ושליחה`]);
       approve.addEventListener('click', () => act(approve, () =>
         API.post(`${base}/messages/${msg.id}/approve`, { subject: subject?.value, body: text.value })));
-      const fix = el('button.btn.btn-sm', {}, ['✨ תקן']);
+      const fix = el('button.btn.btn-sm', {}, [UI.lineIcon('sparkles'), 'תקן']);
       fix.addEventListener('click', async () => {
         const feedback = await UI.prompt('מה לשנות בטיוטה?', { title: 'תיקון עם AI' });
         if (feedback) act(fix, () => API.post(`${base}/messages/${msg.id}/revise`, { feedback }));
@@ -796,7 +796,7 @@ const AiTaskView = (() => {
         msg.attachments.length
           ? el('div.ai-msg-files', {}, msg.attachments.map((f) =>
               // ‎bdi‎ — שם קובץ עברי עם סיומת לטינית מתהפך בלעדיו ("pdf.2 טופס")
-              el('a', { href: `/api/attachments/${f.id}/download`, target: '_blank', rel: 'noopener' }, ['📎 ', el('bdi', { text: f.filename })])))
+              el('a', { href: `/api/attachments/${f.id}/download`, target: '_blank', rel: 'noopener' }, [UI.lineIcon('paperclip'), ' ', el('bdi', { text: f.filename })])))
           : null,
         msg.analysis?.summary && msg.direction === 'in'
           ? el('div.ai-msg-analysis', {}, ['✨ ', msg.analysis.summary, msg.analysis.missing ? ` · חסר: ${msg.analysis.missing}` : ''])
@@ -805,13 +805,13 @@ const AiTaskView = (() => {
     });
 
     const actions = el('div.ai-actions', {}, [
-      open ? el('button.btn.btn-sm', { title: 'סוכם משהו בטלפון, בפגישה או בהודעה אחרת', onclick: () => talked(task, onChange) }, ['📞 דיברתי איתו']) : null,
-      a.state === 'waiting' ? action('nudge', '🔔 תזכורת עכשיו') : null,
+      open ? el('button.btn.btn-sm', { title: 'סוכם משהו בטלפון, בפגישה או בהודעה אחרת', onclick: () => talked(task, onChange) }, [UI.lineIcon('phone'), 'דיברתי איתו']) : null,
+      a.state === 'waiting' ? action('nudge', 'תזכורת עכשיו', '', 'bell') : null,
       a.state === 'waiting' && a.nextActionAt ? postponeButton(task, onChange) : null,
-      a.state === 'waiting' || a.state === 'needs_user' ? action('pause', '⏸ השהיה') : null,
-      a.state === 'paused' || a.state === 'stalled' ? action('resume', a.state === 'stalled' ? '🔁 סבב מעקב נוסף' : '▶ חידוש') : null,
-      open ? action('complete', '✅ התקבל') : null,
-      open ? el('button.btn.btn-sm', { onclick: () => editDetails(task, a, onChange) }, ['✎ פרטים ומדיניות']) : null,
+      a.state === 'waiting' || a.state === 'needs_user' ? action('pause', 'השהיה', '', 'pause') : null,
+      a.state === 'paused' || a.state === 'stalled' ? (a.state === 'stalled' ? action('resume', 'סבב מעקב נוסף', '', 'repeat') : action('resume', 'חידוש', '', 'play')) : null,
+      open ? action('complete', 'התקבל', '', 'check') : null,
+      open ? el('button.btn.btn-sm', { onclick: () => editDetails(task, a, onChange) }, [UI.lineIcon('pencil'), 'פרטים ומדיניות']) : null,
       el('div.spacer'),
       open ? action('stop', 'עצירת המעקב', '.btn-ghost') : null
     ]);
@@ -832,7 +832,7 @@ const AiTaskView = (() => {
 
   /** "דחה" — הנדנוד הבא זז בכמה ימי עבודה, והספירה אינה משתנה */
   function postponeButton(task, onChange) {
-    const b = el('button.btn.btn-sm', {}, ['⏭ דחייה']);
+    const b = el('button.btn.btn-sm', {}, [UI.lineIcon('skip-forward'), 'דחייה']);
     b.addEventListener('click', async () => {
       const days = await UI.prompt('בכמה ימי עבודה לדחות את הנדנוד הבא?', { title: 'דחיית נדנוד', value: '1' });
       if (!days) return;
@@ -879,7 +879,7 @@ const AiTaskView = (() => {
           : null);
     actionSel.addEventListener('change', drawExtra);
 
-    const understand = el('button.btn', {}, ['✨ מה זה אומר?']);
+    const understand = el('button.btn', {}, [UI.lineIcon('sparkles'), 'מה זה אומר?']);
     const save = el('button.btn.btn-primary', {}, ['שמירה']);
     understand.addEventListener('click', async () => {
       if (!note.value.trim()) return note.focus();
@@ -897,7 +897,7 @@ const AiTaskView = (() => {
         UI.error(err);
       }
       understand.disabled = false;
-      understand.textContent = '✨ מה זה אומר?';
+      UI.mount(understand, UI.lineIcon('sparkles'), 'מה זה אומר?');
     });
     save.addEventListener('click', async () => {
       if (actionSel.value === 'reschedule' && !date.value) return date.focus();

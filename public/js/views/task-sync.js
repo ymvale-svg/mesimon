@@ -36,7 +36,7 @@ const TaskSyncView = (() => {
     return el('div.mute-sm', {}, [
       who,
       s.receivedAt ? ` · ${UI.relative(s.receivedAt)}` : '',
-      s.link ? el('a', { href: s.link, target: '_blank', rel: 'noopener', onclick: (e) => e.stopPropagation() }, [' · פתיחת המייל ↗']) : null
+      s.link ? el('a', { href: s.link, target: '_blank', rel: 'noopener', onclick: (e) => e.stopPropagation() }, [' · פתיחת המייל ', UI.lineIcon('external-link')]) : null
     ]);
   }
 
@@ -103,7 +103,7 @@ const TaskSyncView = (() => {
     closeBox.addEventListener('change', sync);
     sync();
 
-    const ok = el('button.btn.btn-primary', {}, ['✓ אישור']);
+    const ok = el('button.btn.btn-primary', {}, [UI.lineIcon('check'), 'אישור']);
     const m = UI.modal({
       title: s.kind === 'task_close' ? '✅ הודעה שעונה על משימה שפתחת' : '📝 עדכון למשימה שפתחת',
       size: 'wide',
@@ -140,27 +140,27 @@ const TaskSyncView = (() => {
     const close = s.kind === 'task_close';
     const actions = [];
     if (close) {
-      const ok = el('button.btn.btn-sm.btn-primary', {}, ['✓ לסגור']);
+      const ok = el('button.btn.btn-sm.btn-primary', {}, [UI.lineIcon('check'), 'לסגור']);
       ok.title = 'המשימה תסומן כבוצעה, וההודעה תישמר בה כהערה עם קישור למקור';
       ok.addEventListener('click', run(ok, async () => {
         await API.post(`/api/ai/suggestions/${s.id}/approve`, {});
         UI.success(`"${d.taskTitle}" נסגרה — ההודעה נשמרה בה`);
       }, reload));
-      const note = el('button.btn.btn-sm', { title: 'רק להוסיף כהערה, בלי לסגור' }, ['📝 רק הערה']);
+      const note = el('button.btn.btn-sm', { title: 'רק להוסיף כהערה, בלי לסגור' }, [UI.lineIcon('note'), 'רק הערה']);
       note.addEventListener('click', (e) => { e.stopPropagation(); approveDialog({ ...s, kind: 'task_close', data: d }, reload); });
       actions.push(ok, note);
     } else if (p.dueDate || p.status) {
       // יש שינוי מוצע — בחירה מפורשת בחלון
       actions.push(el('button.btn.btn-sm.btn-primary', { onclick: (e) => { e.stopPropagation(); approveDialog(s, reload); } }, ['בדיקה ואישור']));
     } else {
-      const ok = el('button.btn.btn-sm.btn-primary', {}, ['✓ להוסיף כהערה']);
+      const ok = el('button.btn.btn-sm.btn-primary', {}, [UI.lineIcon('check'), 'להוסיף כהערה']);
       ok.addEventListener('click', run(ok, async () => {
         await API.post(`/api/ai/suggestions/${s.id}/approve`, {});
         UI.success('העדכון נוסף למשימה');
       }, reload));
-      actions.push(ok, el('button.btn.btn-sm', { title: 'עריכה ושינויים נוספים', onclick: (e) => { e.stopPropagation(); approveDialog(s, reload); } }, ['✎']));
+      actions.push(ok, el('button.btn.btn-sm', { title: 'עריכה ושינויים נוספים', 'aria-label': 'עריכה ושינויים נוספים', onclick: (e) => { e.stopPropagation(); approveDialog(s, reload); } }, [UI.lineIcon('pencil')]));
     }
-    const no = el('button.btn.btn-sm.btn-ghost', { title: 'לא קשור — ההודעה לא תוצע שוב למשימה הזו' }, ['✕ לא קשור']);
+    const no = el('button.btn.btn-sm.btn-ghost', { title: 'לא קשור — ההודעה לא תוצע שוב למשימה הזו' }, [UI.lineIcon('x'), 'לא קשור']);
     no.addEventListener('click', run(no, () => rejectNow(s, reload), reload));
     actions.push(no);
 
@@ -185,7 +185,7 @@ const TaskSyncView = (() => {
 
   function mergeParts(s, reload) {
     const d = s.data ?? {};
-    const ok = el('button.btn.btn-sm.btn-primary', {}, ['🔀 למזג']);
+    const ok = el('button.btn.btn-sm.btn-primary', {}, [UI.lineIcon('merge'), 'למזג']);
     ok.addEventListener('click', async (e) => {
       e.stopPropagation();
       if (!await UI.confirm(`"${d.keepTitle}" תישאר, ו"${d.dropTitle}" תיסגר עם קישור אליה. האחראים, ההערות, הקבצים והצ'קליסט יעברו, והיעד יהיה המוקדם מבין השניים.`, { okText: 'מיזוג' })) return;
@@ -195,7 +195,7 @@ const TaskSyncView = (() => {
         if (r.taskId) TaskCardView.open(r.taskId);
       }, reload)();
     });
-    const no = el('button.btn.btn-sm.btn-ghost', { title: 'לא כפולות — הזוג לא יוצע שוב' }, ['✕ לא כפולות']);
+    const no = el('button.btn.btn-sm.btn-ghost', { title: 'לא כפולות — הזוג לא יוצע שוב' }, [UI.lineIcon('x'), 'לא כפולות']);
     no.addEventListener('click', run(no, () => rejectNow(s, reload), reload));
     return {
       title: el('div', {}, [el('b', { text: '🔀 למזג? ' }), 'נראה ש', taskLink(d.dropId, d.dropTitle), ` (אצל ${d.dropOwner}) ו`, taskLink(d.keepId, d.keepTitle), ` (אצל ${d.keepOwner}) הן אותה עבודה`]),

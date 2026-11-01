@@ -511,13 +511,13 @@ const Spotlight = (() => {
     return null;
   }
 
-  // החלונות שאפשר לפתוח מפס הבחירה — ‎[הכנה, כיתוב, מסך שצריך להיות בו]‎
+  // החלונות שאפשר לפתוח מפס הבחירה — ‎[הכנה, כיתוב, מסך שצריך להיות בו, סמל]‎
   const OPENERS = [
-    ['account', '👤 החשבון שלי'],
-    ['aiTask', '✨ משימת AI'],
-    ['newTask', '＋ משימה חדשה'],
-    ['taskCard', '🗂️ כרטיס משימה', 'board'],
-    ['notifications', '🔔 התראות']
+    ['account', 'החשבון שלי', null, 'user'],
+    ['aiTask', 'משימת AI', null, 'sparkles'],
+    ['newTask', 'משימה חדשה', null, 'plus'],
+    ['taskCard', 'כרטיס משימה', 'board', 'note'],
+    ['notifications', 'התראות', null, 'bell']
   ];
 
   /**
@@ -543,14 +543,14 @@ const Spotlight = (() => {
        */
       const openers = el('div.spot-pick-open', {}, [
         el('span', { text: 'פתיחת חלון:' }),
-        ...OPENERS.map(([kind, text, route]) => el('button.btn.btn-sm', {
+        ...OPENERS.map(([kind, text, route, icon]) => el('button.btn.btn-sm', {
           type: 'button',
           onclick: async () => {
             closeOverlays();
             if (route && App.state.route.name !== route) App.navigate(route);
             await prepare({ prepare: kind });
           }
-        }, [text]))
+        }, [UI.lineIcon(icon), text]))
       ]);
       const bar = el('div.spot-pick-bar', { role: 'dialog', 'aria-label': 'בחירת מקום במסך' }, [
         el('div.spot-pick-row', {}, [

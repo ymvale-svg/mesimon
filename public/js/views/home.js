@@ -1004,7 +1004,7 @@ const HomeView = (() => {
             el('span', { text: en.label }),
             en.hint ? el('span.sm-hint', { text: en.hint }) : null
           ]),
-          en.checked ? el('span.check', { text: '✓' }) : null
+          en.checked ? el('span.check', {}, [UI.lineIcon('check')]) : null
         ]);
         options.push(b);
         return b;
@@ -1131,7 +1131,7 @@ const HomeView = (() => {
         'aria-haspopup': 'menu',
         'aria-expanded': 'false',
         onclick: (e) => { e.stopPropagation(); slotMenu(menuBtn, key); }
-      }, ['⋯']);
+      }, [UI.lineIcon('ellipsis')]);
       actions.appendChild(menuBtn);
       head.addEventListener('pointerdown', (e) => onHeadPointerDown(e, slot));
       // לחיצה ארוכה במגע פותחת אחרת תפריט הקשר או בחירת טקסט
@@ -1478,7 +1478,7 @@ const HomeView = (() => {
           }
         });
       }
-    }, ['📅']);
+    }, [UI.lineIcon('calendar')]);
   }
 
   function taskRow(task, { lead = 'project', trail = 'status' } = {}) {
@@ -2062,8 +2062,8 @@ const HomeView = (() => {
         el('span.fc-name', { text: f.name, title: f.name }),
         el('span.mute-sm', { text: UI.fileSize(f.size) }),
         el('button.chip-x', {
-          title: 'הסרה', onclick: () => { files.splice(i, 1); drawChips(); }
-        }, ['✕'])
+          title: 'הסרה', 'aria-label': `הסרת ${f.name}`, onclick: () => { files.splice(i, 1); drawChips(); }
+        }, [UI.lineIcon('x')])
       ])));
       chips.style.display = files.length ? 'flex' : 'none';
     };
@@ -2170,7 +2170,7 @@ const HomeView = (() => {
       el('div.qt-head', {}, [
         el('b', { text: 'משימה מהירה' }),
         el('div.spacer'),
-        el('button.chip-x', { title: 'סגירה', onclick: () => closeQuick() }, ['✕'])
+        el('button.chip-x', { title: 'סגירה', 'aria-label': 'סגירה', onclick: () => closeQuick() }, [UI.lineIcon('x')])
       ]),
       el('div.qt-body', {}, [
         UI.field('נושא', titleInput),

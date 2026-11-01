@@ -87,7 +87,7 @@ const ReportsView = (() => {
         el('div.sub', { text: sub })
       ]),
       el('div.spacer'),
-      App.may('export_data') ? el('a.btn', { href: '/api/export/tasks.csv' }, ['⬇ ייצוא כל המשימות ל-CSV']) : null
+      App.may('export_data') ? el('a.btn', { href: '/api/export/tasks.csv' }, [UI.lineIcon('download'), 'ייצוא כל המשימות ל-CSV']) : null
     ]);
   }
 

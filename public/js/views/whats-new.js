@@ -119,7 +119,7 @@ const WhatsNewView = (() => {
       flat.map(() => el('span', {}, [el('i')])));
     const stage = el('div.wn-stage', {}, [media, copyHost]);
     const counter = el('span.wn-counter');
-    const prevBtn = el('button.btn.wn-arrow', { type: 'button', 'aria-label': 'הקודם', onclick: () => go(index - 1) }, ['→']);
+    const prevBtn = el('button.btn.wn-arrow', { type: 'button', 'aria-label': 'הקודם', title: 'הקודם', onclick: () => go(index - 1) }, [UI.lineIcon('arrow-right')]);
     const nextBtn = el('button.btn.btn-primary.wn-next', { type: 'button', onclick: () => (index < flat.length - 1 ? go(index + 1) : finish()) });
 
     let m = null;
@@ -205,12 +205,12 @@ const WhatsNewView = (() => {
           reach ? el('button.btn.wn-try', {
             type: 'button',
             onclick: () => { finish(); App.navigate(s.route); }
-          }, [`נסו עכשיו ב${s.label} ←`]) : null,
+          }, [`נסו עכשיו ב${s.label}`, UI.lineIcon('arrow-left')]) : null,
           showable ? el('button.btn.btn-primary.wn-show', {
             type: 'button',
             title: 'הבאנר נסגר, והחידוש יודגש לך במסך עצמו',
             onclick: () => { finish(); Spotlight.showMe(anchor.key, item.title); }
-          }, ['🎯 הראו לי']) : null
+          }, [UI.lineIcon('target'), 'הראו לי']) : null
         ])
       ]);
       UI.mount(copyHost, card);
@@ -220,7 +220,7 @@ const WhatsNewView = (() => {
       });
       counter.textContent = `${index + 1} / ${flat.length}`;
       prevBtn.disabled = index === 0;
-      nextBtn.textContent = index < flat.length - 1 ? 'הבא ←' : 'יאללה, למשימון ✓';
+      UI.mount(nextBtn, index < flat.length - 1 ? ['הבא', UI.lineIcon('arrow-left')] : ['יאללה, למשימון', UI.lineIcon('check')]);
       drawNav();
     }
 
@@ -450,7 +450,7 @@ const WhatsNewView = (() => {
           type: 'button',
           title: 'המסך נפתח — לוחצים על המקום שבו נמצא החידוש',
           onclick: () => pickOnScreen(i)
-        }, ['🎯 בחירה על המסך']);
+        }, [UI.lineIcon('target'), 'בחירה על המסך']);
         const t = el('input', { type: 'text', placeholder: 'מה נוסף? (כותרת)' });
         t.value = item.title;
         t.addEventListener('input', () => { item.title = t.value; });
@@ -507,11 +507,11 @@ const WhatsNewView = (() => {
             item.image ? el('button.btn.btn-sm', { type: 'button', onclick: () => { item.image = null; drawList(); } }, ['הסרת התמונה']) : null,
             el('div.wn-ed-tools', {}, [
               el('button.btn.btn-sm', { type: 'button', title: 'למעלה', 'aria-label': 'הזזת הפריט למעלה', disabled: i === 0,
-                onclick: () => { [items[i - 1], items[i]] = [items[i], items[i - 1]]; drawList(); } }, ['↑']),
+                onclick: () => { [items[i - 1], items[i]] = [items[i], items[i - 1]]; drawList(); } }, [UI.lineIcon('arrow-up')]),
               el('button.btn.btn-sm', { type: 'button', title: 'למטה', 'aria-label': 'הזזת הפריט למטה', disabled: i === items.length - 1,
-                onclick: () => { [items[i + 1], items[i]] = [items[i], items[i + 1]]; drawList(); } }, ['↓']),
+                onclick: () => { [items[i + 1], items[i]] = [items[i], items[i + 1]]; drawList(); } }, [UI.lineIcon('arrow-down')]),
               el('button.btn.btn-sm.btn-danger', { type: 'button', title: 'מחיקת הפריט', 'aria-label': 'מחיקת הפריט',
-                onclick: () => { items.splice(i, 1); drawList(); } }, ['✕'])
+                onclick: () => { items.splice(i, 1); drawList(); } }, [UI.lineIcon('x')])
             ])
           ])
         ]);
@@ -534,12 +534,12 @@ const WhatsNewView = (() => {
      * סריקה נוספת מתוך העורך — מוסיפה את ההצעות לסוף הרשימה ואינה דורסת את
      * מה שכבר נכתב. פריט שכותרתו כבר קיימת אינו נוסף פעמיים.
      */
-    const scanBtn = el('button.btn', { type: 'button', title: 'ה-AI סורק מה השתנה מאז ההודעה האחרונה ומוסיף הצעות' }, ['✨ הצע לי חידושים עם AI']);
+    const scanBtn = el('button.btn', { type: 'button', title: 'ה-AI סורק מה השתנה מאז ההודעה האחרונה ומוסיף הצעות' }, [UI.lineIcon('sparkles'), 'הצע לי חידושים עם AI']);
     scanBtn.addEventListener('click', async () => {
       const range = await pickRange();
       if (!range) return;
       scanBtn.disabled = true;
-      const label = scanBtn.textContent;
+      const label = [...scanBtn.childNodes];
       scanBtn.textContent = 'סורק…';
       try {
         const res = await runScan(range);
@@ -556,7 +556,7 @@ const WhatsNewView = (() => {
         UI.mount(note, scanNote(null, err));
       } finally {
         scanBtn.disabled = false;
-        scanBtn.textContent = label;
+        scanBtn.replaceChildren(...label);
       }
     });
 
@@ -592,7 +592,7 @@ const WhatsNewView = (() => {
     }
 
     const saveBtn = el('button.btn.btn-primary', { type: 'button' }, [isEdit ? 'שמירת השינויים' : 'שמירה כטיוטה']);
-    const previewBtn = el('button.btn', { type: 'button' }, ['👁 תצוגה מקדימה']);
+    const previewBtn = el('button.btn', { type: 'button' }, [UI.lineIcon('eye'), 'תצוגה מקדימה']);
     const m = UI.modal({
       title: isEdit ? `עריכת "${release.title}"` : 'גרסה חדשה — מה נוסף?',
       size: 'wide',
@@ -665,8 +665,8 @@ const WhatsNewView = (() => {
           r.emailedAt ? el('span.tag', { title: UI.formatDateTime(r.emailedAt) },
             [r.sending ? `✉ נשלח ל-${r.emailedCount} מתוך ${r.emailedTotal}…` : `✉ נשלח ל-${r.emailedCount}${r.emailedTotal && r.emailedTotal !== r.emailedCount ? ` מתוך ${r.emailedTotal}` : ''} · ${UI.formatDate(r.emailedAt)}`]) : null,
           el('div.spacer'),
-          el('button.btn.btn-sm', { onclick: () => editor(r, screens, reload) }, ['✎ עריכה']),
-          el('button.btn.btn-sm', { onclick: () => open({ preview: r }) }, ['👁 תצוגה']),
+          el('button.btn.btn-sm', { onclick: () => editor(r, screens, reload) }, [UI.lineIcon('pencil'), 'עריכה']),
+          el('button.btn.btn-sm', { onclick: () => open({ preview: r }) }, [UI.lineIcon('eye'), 'תצוגה']),
           el('button.btn.btn-sm.btn-danger', {
             onclick: async () => {
               if (!await UI.confirm(`למחוק את "${r.title}"?`, { danger: true, okText: 'מחיקה' })) return;
@@ -699,14 +699,14 @@ const WhatsNewView = (() => {
                 if (!await UI.confirm('מהרגע הזה הבאנר ייפתח לכל משתמש בכניסה הבאה שלו (עם אפשרות לדלג). כל משתמש יראה רק את הפריטים שמיועדים לו.', { title: 'פרסום הגרסה', okText: 'פרסום' })) return;
                 act(() => API.post(`/api/admin/releases/${r.id}/publish`, {}), 'פורסם — הבאנר יוצג לכולם');
               }
-            }, ['🚀 פרסום']),
+            }, [UI.lineIcon('rocket'), 'פרסום']),
           el('button.btn.btn-sm', {
             disabled: !data.mailEnabled,
             onclick: () => act(async () => {
               const res = await API.post(`/api/admin/releases/${r.id}/email`, { test: true });
               UI.success(`מייל בדיקה נשלח אל ${res.to}`);
             })
-          }, ['✉ מייל בדיקה אליי']),
+          }, [UI.lineIcon('mail'), 'מייל בדיקה אליי']),
           el('button.btn.btn-sm', {
             disabled: !data.mailEnabled || !published || r.sending,
             title: !published ? 'יש לפרסם קודם' : '',
@@ -718,7 +718,7 @@ const WhatsNewView = (() => {
                 UI.success(`המשלוח התחיל — ${res.total} נמענים. המונה יתעדכן תוך כדי.`);
               });
             }
-          }, ['📣 שליחה במייל לכל המשתמשים'])
+          }, [UI.lineIcon('megaphone'), 'שליחה במייל לכל המשתמשים'])
         ])
       ]);
     };
@@ -733,7 +733,7 @@ const WhatsNewView = (() => {
         ]),
         el('button.btn', { onclick: () => editor(null, screens, reload) }, ['גרסה ריקה']),
         el('button.btn.btn-primary', { onclick: () => newRelease(screens, reload, data.aiEnabled) },
-          [data.aiEnabled ? '✨ גרסה חדשה' : '＋ גרסה חדשה'])
+          [UI.lineIcon(data.aiEnabled ? 'sparkles' : 'plus'), 'גרסה חדשה'])
       ]),
       data.mailEnabled ? null : el('div.alert.alert-info', { style: { marginBottom: '12px' } }, [
         el('div', { text: 'שליחת דואר אינה מוגדרת (SMTP), ולכן כפתורי המייל כבויים. הבאנר עובד גם בלי.' })

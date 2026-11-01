@@ -106,8 +106,8 @@ const AssigneePicker = (() => {
         'data-value': value
       }, [
         el(`span.ap-avatar${vendor ? '.is-vendor' : ''}${isMe ? '.is-me' : ''}`, {}, [UI.initials(shortName(o.label))]),
-        extra ? el('span.ap-badge', { text: '＋' }) : null,
-        primary ? el('span.ap-check', { text: '✓' }) : null,
+        extra ? el('span.ap-badge', {}, [UI.lineIcon('plus')]) : null,
+        primary ? el('span.ap-check', {}, [UI.lineIcon('check')]) : null,
         el('span.ap-name', { text: label })
       ]);
 
