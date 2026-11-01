@@ -54,7 +54,9 @@ const MATRIX = {
   view_reports:             { superadmin: true, admin: true,  executive: true,  manager: 'department', employee: false, vendor: false },
   export_data:              { superadmin: true, admin: true,  executive: true,  manager: true,        employee: false, vendor: false },
   vendor_upload_deliverable:{ superadmin: false, admin: false, executive: false, manager: false,      employee: false, vendor: true },
-  view_internal_comments:   { superadmin: true, admin: true,  executive: true,  manager: true,        employee: true,  vendor: false }
+  view_internal_comments:   { superadmin: true, admin: true,  executive: true,  manager: true,        employee: true,  vendor: false },
+  // הפיד מציג את כל הארגון, ולכן הוא כלי ניהול מערכת ולא חלון אישי
+  view_activity_feed:       { superadmin: true, admin: true,  executive: false, manager: false,       employee: false, vendor: false }
 };
 
 const MATRIX_LABELS = {
@@ -74,7 +76,8 @@ const MATRIX_LABELS = {
   view_reports:             'צפייה בדוחות',
   export_data:              'ייצוא נתונים',
   vendor_upload_deliverable:'העלאת תוצרים / הערות (בפורטל הספק)',
-  view_internal_comments:   'צפייה בהערות ובשדות פנימיים'
+  view_internal_comments:   'צפייה בהערות ובשדות פנימיים',
+  view_activity_feed:       'צפייה בפיד העדכונים (כל הארגון)'
 };
 
 const MATRIX_NOTES = {
