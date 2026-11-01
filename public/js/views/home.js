@@ -1455,6 +1455,32 @@ const HomeView = (() => {
    * העמודות יחד — פרויקט וגם אחראי — ודגל "הצג אחראי" לא היה יכול לומר
    * באיזו מהן.
    */
+  /**
+   * 📅 — דחיית היעד ישר מהרשימה, בלי לפתוח את הכרטיס: להיום, למחר, לתחילת
+   * השבוע או לתאריך אחר. כמו ב-Today. רק למי שרשאי לערוך, ורק למשימה פתוחה.
+   */
+  function moveDueButton(task) {
+    if (!task.canEdit || task.isFinal) return null;
+    return el('button.tk-move', {
+      type: 'button',
+      title: 'דחיית היעד — להיום או לתאריך אחר',
+      'aria-label': `דחיית היעד: ${task.title}`,
+      onclick: (e) => {
+        e.stopPropagation();
+        const pick = UI.pickDueDate(`יעד חדש: ${task.title}`, {
+          workDays: App.state.actor.workDays,
+          onPick: async (date) => {
+            try {
+              await API.updateTask(task.id, { dueDate: UI.fromInputDate(date) });
+              UI.success(date === pick.today ? 'היעד הועבר להיום' : `היעד הועבר ל${pick.label(date)}`);
+              reload();
+            } catch (err) { UI.error(err); }
+          }
+        });
+      }
+    }, ['📅']);
+  }
+
   function taskRow(task, { lead = 'project', trail = 'status' } = {}) {
     const leadText = (lead === 'assignee' ? task.assigneeName : task.projectName) ?? '—';
     const due = UI.dueLabel(task.dueDate);
@@ -1485,6 +1511,7 @@ const HomeView = (() => {
         class: due.tone === 'danger' ? 'text-danger' : due.tone === 'warn' ? 'text-warn' : ''
       }),
       el('span.tk-flags', {}, [
+        moveDueButton(task),
         // האחראי מוצג רק כשהוא אינו המשתמש עצמו — ברשימה "שלי" זה תמיד הוא
         task.assigneeName && task.assigneeId !== App.state.actor.id
           ? UI.avatar(task.assigneeName, { small: true, vendor: task.assigneeType === 'vendor' })

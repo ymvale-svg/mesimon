@@ -3993,3 +3993,12 @@ body:has(.modal-backdrop.is-side:not(.leaving)) .toast-root { left: auto; right:
 html.theme-switching, html.theme-switching * {
   transition: background-color .25s ease, border-color .25s ease, color .25s ease !important;
 }
+
+/* דף הבית — דחיית יעד מתוך רשימת המשימות */
+.tk-move {
+  border: 1px solid transparent; background: transparent; border-radius: 8px;
+  padding: 1px 5px; font-size: 13px; cursor: pointer; opacity: .55; transition: opacity .15s, background .15s;
+}
+.task-line:hover .tk-move, .tk-move:focus-visible { opacity: 1; }
+.tk-move:hover { background: var(--brand-light); border-color: var(--border); }
+@media (hover: none) { .tk-move { opacity: 1; } }

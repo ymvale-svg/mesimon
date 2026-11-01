@@ -375,7 +375,14 @@ const TodayView = (() => {
     });
 
     const reject = el('button.btn.btn-sm.btn-ghost', { title: 'לא משימה' }, ['✕ לא משימה']);
-    reject.addEventListener('click', (e) => { e.stopPropagation(); AiInboxView.rejectDialog(s, () => reload()); });
+    reject.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      reject.disabled = true;
+      try {
+        await AiInboxView.rejectNow(s, () => reload());
+        await reload();
+      } catch (err) { reject.disabled = false; UI.error(err); }
+    });
 
     return el('div.today-row.today-mail', { onclick: () => AiInboxView.editSuggestion(s, () => reload()) }, [
       el('div.today-main', {}, [

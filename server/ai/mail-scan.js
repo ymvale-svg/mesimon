@@ -702,6 +702,25 @@ function reject(id, actor, { ignoreSender = false } = {}) {
   else setSender(actor.id, sug.from_email, 'ignore');
 }
 
+/**
+ * "ביטול" אחרי "לא משימה" — ההצעה חוזרת לממתינות. רק הצעה שנדחתה בשעה
+ * האחרונה: זה כפתור הביטול של ההודעה, לא דרך להחיות הצעות ישנות.
+ */
+function restore(id, actor) {
+  const sug = ownSuggestion(id, actor.id);
+  if (sug.status !== 'rejected') throw new Error('ההצעה אינה דחויה');
+  if (sug.decided_at && Date.now() - new Date(sug.decided_at).getTime() > 3600e3) throw new Error('עבר יותר מדי זמן מהדחייה');
+  D.run("UPDATE ai_suggestions SET status = 'pending', decided_at = NULL WHERE id = ?", id);
+}
+
+/** אחרי "לא משימה": לא להציע עוד מהשולח (מייל) / לא לסרוק את השיחה (וואטסאפ אישי) */
+function ignoreSenderOf(id, actor) {
+  const sug = ownSuggestion(id, actor.id);
+  const data = parseJson(sug.data, {});
+  if (data.personal && data.chatPhone) require('./whatsapp-scan').mark(actor.id, data.chatPhone, 'personal');
+  else if (sug.from_email) setSender(actor.id, sug.from_email, 'ignore');
+}
+
 /** "כבר קיימת אצל…" → "צרף אותי": אחראי נוסף על המשימה הקיימת */
 function join(id, actor) {
   const sug = ownSuggestion(id, actor.id);
@@ -815,7 +834,7 @@ function init({ createTask }) {
 
 module.exports = {
   init, startScan, runScan, rangeOf, morningRun, pollMailbox,
-  approve, approveAll, reject, join, skip, undo, markConverted, setSender, senders,
+  approve, approveAll, reject, restore, ignoreSenderOf, join, skip, undo, markConverted, setSender, senders,
   listFor, sourceLink, suggestionById,
   _internal: { sanitize, processMessage, createFromSuggestion }
 };

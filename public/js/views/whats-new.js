@@ -273,7 +273,35 @@ const WhatsNewView = (() => {
   }
 
   /** סריקת AI — מחזירה הצעה, או זורקת שגיאה עם הסבר */
-  const runScan = () => API.post('/api/admin/releases/scan', {});
+  const runScan = (range = 'last') => API.post('/api/admin/releases/scan', { range });
+
+  /**
+   * מאיזה זמן לסרוק — לפני הסריקה. "מאז ההודעה האחרונה" היא ברירת המחדל;
+   * "24 השעות האחרונות" — כשרוצים רק את מה שנכנס היום. מחזיר את הבחירה, או
+   * ‎null‎ כשנסגר בלי לבחור.
+   */
+  function pickRange() {
+    return new Promise((resolve) => {
+      let done = false;
+      const pick = (v) => { done = true; m.close(); resolve(v); };
+      const date = el('input', { type: 'date' });
+      const m = UI.modal({
+        title: '✨ מאיזה זמן לסרוק את החידושים?',
+        body: el('div.today-pick', {}, [
+          el('button.btn.btn-block.btn-primary', { type: 'button', onclick: () => pick('last') }, ['מאז ההודעה האחרונה שפורסמה']),
+          el('button.btn.btn-block', { type: 'button', onclick: () => pick('24h') }, ['24 השעות האחרונות']),
+          el('button.btn.btn-block', { type: 'button', onclick: () => pick('7d') }, ['השבוע האחרון']),
+          el('button.btn.btn-block', { type: 'button', onclick: () => pick('30d') }, ['30 הימים האחרונים']),
+          el('div.today-pick-other', {}, [
+            UI.field('מתאריך', date),
+            el('button.btn', { type: 'button', onclick: () => date.value && pick(date.value) }, ['סריקה'])
+          ])
+        ]),
+        autofocus: false,
+        onClose: () => { if (!done) resolve(null); }
+      });
+    });
+  }
 
   /** שורת ההסבר בראש העורך: מה ה-AI עשה, או למה הוא לא רץ */
   function scanNote(result, error) {
@@ -283,14 +311,16 @@ const WhatsNewView = (() => {
       return el('div.alert.alert-info.wn-ed-note', {}, [el('div', { text: 'חיבור ה-AI אינו מוגדר בשרת, ולכן הטיוטה נפתחת ריקה. אפשר לכתוב את הפריטים ידנית.' })]);
     }
     const since = UI.formatDate(result.since);
-    const src = result.source === 'git' ? 'היסטוריית git' : result.source === 'file' ? 'changelog.json' : 'אין מקור';
+    const src = { git: 'היסטוריית git', file: 'changelog.json', 'git+file': 'git ו-changelog.json' }[result.source] ?? 'אין מקור';
+    // עד מתי ההיסטוריה מגיעה — כך רואים מיד אם המקור לא מעודכן
+    const upTo = result.latest ? `, האחרון מ-${UI.formatDateTime(result.latest)}` : '';
     if (!result.commits) return el('div.alert.alert-info.wn-ed-note', {}, [el('div', { text: `לא נמצאו שינויים במערכת מאז ${since} (${src}).` })]);
     if (!result.items.length) {
-      return el('div.alert.alert-info.wn-ed-note', {}, [el('div', { text: `נסרקו ${result.commits} שינויים מאז ${since}, ולא נמצא ביניהם חידוש שמשתמשים רואים.` })]);
+      return el('div.alert.alert-info.wn-ed-note', {}, [el('div', { text: `נסרקו ${result.commits} שינויים מאז ${since} (${src}${upTo}), ולא נמצא ביניהם חידוש שמשתמשים רואים.` })]);
     }
     return el('div.alert.alert-info.wn-ed-note', {}, [el('div', {}, [
       el('b', { text: `✨ ה-AI הציע ${result.items.length} פריטים` }),
-      ` מתוך ${result.commits} שינויים מאז ${since} (${src}). עברו על כל פריט, תקנו, צרפו צילומי מסך — ורק אז שמרו.`
+      ` מתוך ${result.commits} שינויים מאז ${since} (${src}${upTo}). עברו על כל פריט, תקנו, צרפו צילומי מסך — ורק אז שמרו.`
     ])]);
   }
 
@@ -300,6 +330,8 @@ const WhatsNewView = (() => {
    */
   async function newRelease(screens, onSaved, aiEnabled) {
     if (!aiEnabled) return editor(null, screens, onSaved, { scan: { enabled: false } });
+    const range = await pickRange();
+    if (!range) return;
     const wait = UI.modal({
       title: 'סורק מה השתנה במערכת…',
       body: el('div.wn-scan', {}, [
@@ -310,7 +342,7 @@ const WhatsNewView = (() => {
     });
     let result = null;
     let error = null;
-    try { result = await runScan(); } catch (err) { error = err; }
+    try { result = await runScan(range); } catch (err) { error = err; }
     // סגירה ידנית של חלון ההמתנה מבטלת — לא קופצים לעורך מתחת לידיים
     if (!wait.backdrop.isConnected) return;
     wait.close();
@@ -415,11 +447,13 @@ const WhatsNewView = (() => {
      */
     const scanBtn = el('button.btn', { type: 'button', title: 'ה-AI סורק מה השתנה מאז ההודעה האחרונה ומוסיף הצעות' }, ['✨ הצע לי חידושים עם AI']);
     scanBtn.addEventListener('click', async () => {
+      const range = await pickRange();
+      if (!range) return;
       scanBtn.disabled = true;
       const label = scanBtn.textContent;
       scanBtn.textContent = 'סורק…';
       try {
-        const res = await runScan();
+        const res = await runScan(range);
         UI.mount(note, scanNote(res, null));
         const have = new Set(items.map((i) => String(i.title ?? '').trim()));
         // פריט ריק יחיד (עורך חדש) מפנה את מקומו להצעות
