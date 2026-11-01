@@ -37,6 +37,8 @@ const PUBLIC_DIR = path.join(__dirname, '..', 'public');
 
 D.bootstrap();
 Auth.purgeExpired();
+// ההודעה הראשונה של "מה חדש" — טיוטה אחת, פעם אחת, אחרי שהטבלה קיימת
+require('./api-whats-new').seedFirstRelease();
 
 const server = http.createServer(async (req, res) => {
   const url = parseUrl(req);

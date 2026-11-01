@@ -152,6 +152,8 @@ const App = (() => {
       navigate(isVendor() ? 'vendor' : (isPhone() || params.get('view') === 'today') ? 'today' : 'home');
       openTaskFromUrl();
       if (!isVendor()) {
+        // באנר "מה חדש" — רק כשיש גרסה שעוד לא נראתה, או מקישור במייל
+        WhatsNewView.maybeShow();
         AiInboxView.handleReturn();
         openFromUrl(params);
         refreshTodayCount();
@@ -2694,6 +2696,10 @@ const App = (() => {
           style: { marginInlineStart: '8px' },
           onclick: () => { m.close(); navigate('phonebook'); }
         }, ['📒 אלפון ארגוני']),
+        isVendor() ? null : el('button.btn.mt', {
+          style: { marginInlineStart: '8px' },
+          onclick: () => { m.close(); WhatsNewView.open({ force: true }); }
+        }, ['✨ מה חדש במערכת']),
         el('div.alert.alert-info.mt', {}, [
           el('div', {}, [
             el('b', { text: 'מה מותר לי במערכת?' }),

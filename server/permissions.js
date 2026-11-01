@@ -56,7 +56,9 @@ const MATRIX = {
   vendor_upload_deliverable:{ superadmin: false, admin: false, executive: false, manager: false,      employee: false, vendor: true },
   view_internal_comments:   { superadmin: true, admin: true,  executive: true,  manager: true,        employee: true,  vendor: false },
   // הפיד מציג את כל הארגון, ולכן הוא כלי ניהול מערכת ולא חלון אישי
-  view_activity_feed:       { superadmin: true, admin: true,  executive: false, manager: false,       employee: false, vendor: false }
+  view_activity_feed:       { superadmin: true, admin: true,  executive: false, manager: false,       employee: false, vendor: false },
+  // הודעה שנפתחת לכל משתמש בכניסה — קול אחד מדבר אל כולם, ולכן רק אדמין על
+  manage_release_notes:     { superadmin: true, admin: false, executive: false, manager: false,       employee: false, vendor: false }
 };
 
 const MATRIX_LABELS = {
@@ -77,7 +79,8 @@ const MATRIX_LABELS = {
   export_data:              'ייצוא נתונים',
   vendor_upload_deliverable:'העלאת תוצרים / הערות (בפורטל הספק)',
   view_internal_comments:   'צפייה בהערות ובשדות פנימיים',
-  view_activity_feed:       'צפייה בפיד העדכונים (כל הארגון)'
+  view_activity_feed:       'צפייה בפיד העדכונים (כל הארגון)',
+  manage_release_notes:     'פרסום הודעות "מה חדש" ומייל לכל המשתמשים'
 };
 
 const MATRIX_NOTES = {
