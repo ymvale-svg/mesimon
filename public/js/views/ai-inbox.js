@@ -55,22 +55,35 @@ const AiInboxView = (() => {
     // אחרי מעבר למסך אחר, רענון של דף הבית היה דורס אותו
     clearTimeout(pollTimer);
     let node = null;
-    if (g.connection?.scanning) pollTimer = setTimeout(() => { if (node?.isConnected) reload(); }, 5000);
+    // כל התיבות — הראשית והנוספות. סריקה באחת מהן = "סורק", עם רענון עד שכולן מסיימות
+    const boxes = g.connection ? [g.connection, ...(g.connection.accounts ?? [])] : [];
+    const scanning = boxes.filter((b) => b.scanning);
+    if (scanning.length) pollTimer = setTimeout(() => { if (node?.isConnected) reload(); }, 5000);
 
     const sections = [];
 
-    if (g.connection?.scanning) {
-      const p = g.connection.progress ?? {};
-      sections.push(el('div.ai-scan-progress', {}, [
-        el('span.spinner-sm'),
-        ` סורק את המייל… ${p.done ?? 0} מתוך ${p.total ?? '?'}`,
-        p.suggested ? ` · ${p.suggested} הצעות` : ''
-      ]));
+    if (scanning.length) {
+      for (const b of scanning) {
+        const p = b.progress ?? {};
+        sections.push(el('div.ai-scan-progress', {}, [
+          el('span.spinner-sm'),
+          ` סורק את המייל${boxes.length > 1 ? ` (${b.email})` : ''}… ${p.done ?? 0} מתוך ${p.total ?? '?'}`,
+          p.suggested ? ` · ${p.suggested} הצעות` : ''
+        ]));
+      }
     } else if (g.connection?.state === 'revoked') {
       sections.push(el('div.alert.alert-warn', {}, [el('span', { text: '📭' }), el('div', {}, [
         'החיבור ל-Gmail בוטל. ',
         el('a', { href: '#', onclick: (e) => { e.preventDefault(); openGmail(reload); } }, ['לחיבור מחדש'])
       ])]));
+    }
+
+    // סריקה ידנית שהסתיימה ב-15 הדקות האחרונות — מה יצא ממנה, גם כשלא נמצא כלום
+    if (!scanning.length) {
+      for (const b of boxes) {
+        const line = scanResultLine(b, boxes.length > 1);
+        if (line) sections.push(line);
+      }
     }
 
     if (data.upcoming.length) {
@@ -121,13 +134,32 @@ const AiInboxView = (() => {
         total ? el('span.ai-count', { text: String(total) }) : null,
         el('div.spacer'),
         g.connection?.state === 'ok' && g.scanEnabled
-          ? el('button.btn.btn-sm', { disabled: g.connection.scanning, onclick: () => scanDialog(reload) }, ['🔍 סרוק עכשיו'])
+          ? el('button.btn.btn-sm', { disabled: scanning.length > 0, onclick: () => scanDialog(reload) }, ['🔍 סרוק עכשיו'])
           : null,
         el('button.btn.btn-sm.btn-ghost', { title: 'חיבור Gmail והעדפות', onclick: () => openGmail(reload) }, ['⚙'])
       ]),
       el('div.card-pad', {}, [el('div.feed-scroll', {}, sections)])
     ]);
     return node;
+  }
+
+  /**
+   * תוצאת סריקה ידנית שהסתיימה זה עתה — בלעדיה, סריקה שלא מצאה כלום נראית
+   * כמו כפתור שלא עובד. ‎null‎ — אין מה לומר (לא ידנית, ישנה, או שנמצאו הצעות).
+   */
+  function scanResultLine(b, named) {
+    const p = b.progress ?? {};
+    if (p.trigger !== 'manual' || !p.finishedAt || Date.now() - new Date(p.finishedAt).getTime() > 15 * 60000) return null;
+    const found = (p.suggested ?? 0) + (p.auto ?? 0);
+    const where = named ? ` (${b.email})` : '';
+    let text;
+    if (p.failed) text = `הסריקה${where} נכשלה: ${p.failed}`;
+    else if (p.total === 0 && p.capped) text = `הסריקה${where} לא רצה: הגעת לתקרה היומית של ${p.limit ?? 100} מיילים לתיבה. מנהל המערכת יכול להעלות אותה ב"סריקת מיילים: תקרה יומית למשתמש", או שהשאר ייסרק מחר.`;
+    else if (p.total === 0) text = `הסריקה${where} הסתיימה: אין בטווח מיילים חדשים שלא נקראו. מייל שכבר נפתח, או שכבר נסרק, אינו נסרק שוב.`;
+    else if (!found) text = `הסריקה${where} עברה על ${p.total} מיילים ולא מצאה בהם משימה${p.errors ? ` (${p.errors} נכשלו — ייסרקו שוב בפעם הבאה)` : ''}.`;
+    else if (p.capped) text = `הסריקה${where}: ${found} הצעות מתוך ${p.total} מיילים. נעצרה בתקרה היומית — השאר ייסרק מחר.`;
+    else return null;
+    return el('div.mute-sm', { style: { margin: '4px 0 8px' } }, [`🔍 ${text}`]);
   }
 
   function section(title, hint, rows, action = null) {
