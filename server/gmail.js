@@ -17,6 +17,14 @@
  * משימון לא מוחק ולא מסמן כנקרא — ההרשאות אינן מאפשרות זאת.
  *
  * אותו חיבור — "חיבור Google" בממשק — משמש גם את היומן ואת אנשי הקשר (‎SCOPES‎).
+ *
+ * כמה תיבות לעובד אחד: החיבור הראשון הוא התיבה הראשית (‎mail_connections‎),
+ * ואפשר להוסיף עוד חשבונות Google (‎mail_accounts‎). כל תיבה נסרקת, נכנסת
+ * לתובנות, לאנשי הקשר וליומן, ואפשר לשלוח ממנה.
+ *
+ * ‎who‎ — "ידית" לתיבה, בכל פונקציה כאן שמקבלת משתמש: מספר המשתמש = התיבה
+ * הראשית שלו (כמו תמיד, ולכן כל הקוד הקיים ממשיך לעבוד), או ‎"12:3"‎ — תיבה
+ * נוספת 3 של משתמש 12 (‎handle‎). ‎boxesOf‎ — כל התיבות של משתמש.
  */
 const crypto = require('node:crypto');
 const D = require('./db');
@@ -50,14 +58,31 @@ const REVOKE = 'https://oauth2.googleapis.com/revoke';
 
 const isEnabled = () => Google.isGmailClientEnabled();
 
+// --- תיבות ---
+
+/** ‎who‎ ← ‎{ userId, boxId }‎. ‎boxId‎ ‎0‎ — התיבה הראשית */
+function parse(who) {
+  if (typeof who === 'string' && who.includes(':')) {
+    const [u, b] = who.split(':').map(Number);
+    return { userId: u, boxId: b || 0 };
+  }
+  return { userId: Number(who), boxId: 0 };
+}
+/** הידית לתיבה: הראשית — מספר המשתמש עצמו; נוספת — ‎"משתמש:תיבה"‎ */
+const handle = (userId, boxId = 0) => (Number(boxId) ? `${Number(userId)}:${Number(boxId)}` : Number(userId));
+const userOf = (who) => parse(who).userId;
+const boxOf = (who) => parse(who).boxId;
+const keyOf = (who) => String(handle(parse(who).userId, parse(who).boxId));
+
 // --- מצב זמני בין הפנייה ל-Google לחזרה ממנו, לכל משתמש ---
 
 const STATE_TTL_MS = 10 * 60 * 1000;
 const pending = new Map();
 
-function authorizeUrl(req, user) {
+/** ‎add‎ — חשבון Google נוסף (ולא חיבור, או חיבור מחדש, של הראשי) */
+function authorizeUrl(req, user, { add = false } = {}) {
   const state = `gm_${crypto.randomBytes(24).toString('hex')}`;
-  pending.set(state, { userId: user.id, expires: Date.now() + STATE_TTL_MS });
+  pending.set(state, { userId: user.id, add, expires: Date.now() + STATE_TTL_MS });
   const params = new URLSearchParams({
     client_id: Google.CLIENT_ID,
     redirect_uri: Google.redirectUri(req),
@@ -68,7 +93,8 @@ function authorizeUrl(req, user) {
     access_type: 'offline',
     prompt: 'consent',
     include_granted_scopes: 'true',
-    login_hint: user.email ?? ''
+    // חשבון נוסף — Google מציג את בחירת החשבון, ולא נכנס ישר לראשי
+    ...(add ? { prompt: 'consent select_account' } : { login_hint: user.email ?? '' })
   });
   return `https://accounts.google.com/o/oauth2/v2/auth?${params}`;
 }
@@ -77,10 +103,16 @@ const isGmailState = (state) => String(state ?? '').startsWith('gm_');
 
 /** המשתמש שהחזרה הזו שייכת לו, או ‎null‎ — שימוש חד-פעמי */
 function consumeState(state) {
+  const entry = consumeStateFull(state);
+  return entry ? entry.userId : null;
+}
+
+/** ‎{ userId, add }‎, או ‎null‎ */
+function consumeStateFull(state) {
   const entry = pending.get(state);
   if (!entry) return null;
   pending.delete(state);
-  return Date.now() <= entry.expires ? entry.userId : null;
+  return Date.now() <= entry.expires ? { userId: entry.userId, add: Boolean(entry.add) } : null;
 }
 
 setInterval(() => {
@@ -90,7 +122,7 @@ setInterval(() => {
 
 // --- אסימונים ---
 
-const tokens = new Map(); // userId → { access, expires }
+const tokens = new Map(); // ‎keyOf(who)‎ → { access, expires }
 
 async function tokenRequest(params) {
   const res = await fetch(Google.TOKEN_ENDPOINT, {
@@ -108,7 +140,14 @@ async function tokenRequest(params) {
   return data;
 }
 
-async function connect(userId, code, req) {
+/**
+ * החזרה מ-Google. התיבה נקבעת לפי הכתובת שאושרה: כתובת שכבר מחוברת אצלו
+ * (ראשית או נוספת) — מתעדכנת. אחרת: ‎add‎ — תיבה נוספת; בלי ‎add‎ — התיבה
+ * הראשית (חיבור ראשון, או חיבור מחדש).
+ *
+ * @returns {Promise<{box: number, email: string, added: boolean}>}
+ */
+async function connect(userId, code, req, { add = false } = {}) {
   const data = await tokenRequest({ code, redirect_uri: Google.redirectUri(req), grant_type: 'authorization_code' });
   /*
    * מה שאושר נשמר כמו שהוא, וכל פיצ'ר בודק את ההרשאה שלו (‎has‎). מי שלא סימן
@@ -120,39 +159,121 @@ async function connect(userId, code, req) {
     throw new Error('לא אושרה אף הרשאה. יש לסמן במסך של Google את התיבות של הדואר, היומן ואנשי הקשר.');
   }
   if (!data.refresh_token) throw new Error('Google לא החזיר אסימון רענון. נסו לנתק את משימון בהגדרות חשבון ה-Google ולחבר שוב.');
-  tokens.set(userId, { access: data.access_token, expires: Date.now() + (Number(data.expires_in ?? 3000) - 60) * 1000 });
-  const profile = await call(userId, '/profile');
-  D.run(
-    `INSERT INTO mail_connections (user_id, email, refresh_token, scope, state, error, created_at)
-     VALUES (?,?,?,?,'ok','',?)
-     ON CONFLICT(user_id) DO UPDATE SET email = excluded.email, refresh_token = excluded.refresh_token,
-       scope = excluded.scope, state = 'ok', error = ''`,
-    userId, String(profile.emailAddress ?? '').toLowerCase(), Secrets.encrypt(data.refresh_token), String(data.scope), D.nowIso()
-  );
+  const email = await emailOf(data);
+  const primary = D.get('SELECT email FROM mail_connections WHERE user_id = ?', userId);
+  const extra = email ? D.get('SELECT id FROM mail_accounts WHERE user_id = ? AND lower(email) = ?', userId, email) : null;
+  const refresh = Secrets.encrypt(data.refresh_token);
+  let box = 0;
+  let added = false;
+  if (extra) {
+    box = extra.id;
+    D.run("UPDATE mail_accounts SET refresh_token = ?, scope = ?, state = 'ok', error = '' WHERE id = ?", refresh, String(data.scope), box);
+  } else if (add && primary && primary.email !== email) {
+    box = Number(D.run(
+      "INSERT INTO mail_accounts (user_id, email, refresh_token, scope, state, error, created_at) VALUES (?,?,?,?,'ok','',?)",
+      userId, email, refresh, String(data.scope), D.nowIso()
+    ).lastInsertRowid);
+    added = true;
+  } else {
+    D.run(
+      `INSERT INTO mail_connections (user_id, email, refresh_token, scope, state, error, created_at)
+       VALUES (?,?,?,?,'ok','',?)
+       ON CONFLICT(user_id) DO UPDATE SET email = excluded.email, refresh_token = excluded.refresh_token,
+         scope = excluded.scope, state = 'ok', error = ''`,
+      userId, email, refresh, String(data.scope), D.nowIso()
+    );
+  }
+  const who = handle(userId, box);
+  tokens.set(keyOf(who), { access: data.access_token, expires: Date.now() + (Number(data.expires_in ?? 3000) - 60) * 1000 });
   // חיבור מחדש הוא גם הדרך לרענן מיד חתימה ששונתה ב-Gmail
-  signatures.delete(userId);
+  signatures.delete(keyOf(who));
+  return { box, email, added };
 }
 
-const connectionOf = (userId) => D.get('SELECT * FROM mail_connections WHERE user_id = ?', userId);
+/** הכתובת של החשבון שאושר — מ-Gmail, ואם אין הרשאת דואר — מאסימון הזיהוי */
+async function emailOf(data) {
+  try {
+    const res = await fetch(`${API}/profile`, { headers: { authorization: `Bearer ${data.access_token}` }, signal: AbortSignal.timeout(30000) });
+    if (res.ok) {
+      const p = await res.json();
+      if (p.emailAddress) return String(p.emailAddress).toLowerCase();
+    }
+  } catch { /* ננסה מאסימון הזיהוי */ }
+  try {
+    const payload = JSON.parse(Buffer.from(String(data.id_token ?? '').split('.')[1] ?? '', 'base64url').toString('utf8'));
+    return String(payload.email ?? '').toLowerCase();
+  } catch {
+    return '';
+  }
+}
 
-async function accessToken(userId) {
-  const cached = tokens.get(userId);
+/** החיבור של תיבה — ‎{ ...row, user_id, box }‎, או ‎undefined‎ */
+function connectionOf(who) {
+  const { userId, boxId } = parse(who);
+  const row = boxId
+    ? D.get('SELECT * FROM mail_accounts WHERE id = ? AND user_id = ?', boxId, userId)
+    : D.get('SELECT * FROM mail_connections WHERE user_id = ?', userId);
+  return row ? { ...row, user_id: userId, box: boxId } : undefined;
+}
+
+const CONN_FIELDS = new Set(['state', 'error', 'scan_running', 'scan_progress', 'last_scan_at']);
+/** עדכון שדות בחיבור של תיבה (מצב, סריקה) — בטבלה הנכונה */
+function setConn(who, fields) {
+  const { userId, boxId } = parse(who);
+  const keys = Object.keys(fields).filter((k) => CONN_FIELDS.has(k));
+  if (!keys.length) return;
+  const set = keys.map((k) => `${k} = ?`).join(', ');
+  const values = keys.map((k) => fields[k]);
+  if (boxId) D.run(`UPDATE mail_accounts SET ${set} WHERE id = ? AND user_id = ?`, ...values, boxId, userId);
+  else D.run(`UPDATE mail_connections SET ${set} WHERE user_id = ?`, ...values, userId);
+}
+
+/** תפיסת התיבה לסריקה — ‎false‎ אם סריקה כבר רצה בה */
+function claimScan(who) {
+  const { userId, boxId } = parse(who);
+  const r = boxId
+    ? D.run('UPDATE mail_accounts SET scan_running = 1 WHERE id = ? AND user_id = ? AND scan_running = 0', boxId, userId)
+    : D.run('UPDATE mail_connections SET scan_running = 1 WHERE user_id = ? AND scan_running = 0', userId);
+  return r.changes > 0;
+}
+
+/** הכתובות של כל התיבות של המשתמש — "ממני" בסריקה */
+const emailsOf = (userId) => [
+  D.get('SELECT email FROM mail_connections WHERE user_id = ?', userId)?.email,
+  ...D.all('SELECT email FROM mail_accounts WHERE user_id = ?', userId).map((r) => r.email)
+].filter(Boolean).map((e) => e.toLowerCase());
+
+/**
+ * כל התיבות של המשתמש שאושרה בהן ההרשאה — הראשית קודם. ‎feature‎ ריק — כל
+ * התיבות המחוברות, בלי קשר להרשאה.
+ */
+function boxesOf(userId, feature = 'mail') {
+  const ids = [0, ...D.all('SELECT id FROM mail_accounts WHERE user_id = ? ORDER BY id', userId).map((r) => r.id)];
+  return ids.map((b) => handle(userId, b)).filter((who) => (feature ? has(who, feature) : connectionOf(who)));
+}
+
+/** כל התיבות של כל העובדים הפעילים — לסריקת הבוקר ולקליטת תשובות */
+const allBoxes = (feature = 'mail') => connectedUsers(null).flatMap((id) => boxesOf(id, feature));
+
+async function accessToken(who) {
+  const key = keyOf(who);
+  const cached = tokens.get(key);
   if (cached && cached.expires > Date.now()) return cached.access;
-  const conn = connectionOf(userId);
-  if (!conn || conn.state === 'revoked') throw new Error('תיבת ה-Gmail אינה מחוברת');
+  const conn = connectionOf(who);
+  if (!conn || conn.state === 'revoked') throw new Error(`תיבת ה-Gmail${conn?.email ? ` ${conn.email}` : ''} אינה מחוברת`);
   const refresh = Secrets.decrypt(conn.refresh_token);
   if (!refresh) {
-    D.run("UPDATE mail_connections SET state = 'revoked', error = ? WHERE user_id = ?", 'החיבור אינו קריא — יש לחבר מחדש', userId);
+    setConn(who, { state: 'revoked', error: 'החיבור אינו קריא — יש לחבר מחדש' });
     throw new Error('החיבור לתיבה אינו קריא — יש לחבר את Gmail מחדש');
   }
   try {
     const data = await tokenRequest({ refresh_token: refresh, grant_type: 'refresh_token' });
-    tokens.set(userId, { access: data.access_token, expires: Date.now() + (Number(data.expires_in ?? 3000) - 60) * 1000 });
-    if (conn.state !== 'ok') D.run("UPDATE mail_connections SET state = 'ok', error = '' WHERE user_id = ?", userId);
+    tokens.set(key, { access: data.access_token, expires: Date.now() + (Number(data.expires_in ?? 3000) - 60) * 1000 });
+    if (conn.state !== 'ok') setConn(who, { state: 'ok', error: '' });
     return data.access_token;
   } catch (err) {
     // ההרשאה בוטלה בצד של Google — אין טעם לנסות שוב עד שיחבר מחדש
-    if (err.revoked) D.run("UPDATE mail_connections SET state = 'revoked', error = ? WHERE user_id = ?", 'ההרשאה בוטלה ב-Google — יש לחבר מחדש', userId);
+    if (err.revoked) setConn(who, { state: 'revoked', error: 'ההרשאה בוטלה ב-Google — יש לחבר מחדש' });
     throw err;
   }
 }
@@ -177,7 +298,7 @@ async function googleCall(userId, url, params = {}, { method = 'GET', body = nul
   });
   const text = await res.text();
   if (!res.ok) {
-    if (res.status === 401) tokens.delete(userId);
+    if (res.status === 401) tokens.delete(keyOf(userId));
     const err = new Error(`Google החזיר ${res.status}: ${text.slice(0, 200)}`);
     err.status = res.status;
     throw err;
@@ -196,7 +317,7 @@ async function call(userId, path, params = {}, { method = 'GET', body = null } =
   });
   const text = await res.text();
   if (!res.ok) {
-    if (res.status === 401) tokens.delete(userId);
+    if (res.status === 401) tokens.delete(keyOf(userId));
     throw new Error(`Gmail החזיר ${res.status}: ${text.slice(0, 200)}`);
   }
   return text ? JSON.parse(text) : {};
@@ -260,20 +381,48 @@ async function send(userId, raw, { threadId = null } = {}) {
   return { gmailId: sent.id, threadId: sent.threadId, messageId };
 }
 
-async function disconnect(userId) {
-  const conn = connectionOf(userId);
-  tokens.delete(userId);
+/**
+ * ניתוק תיבה. ‎who‎ — הראשית (מספר המשתמש) או נוספת. ניתוק הראשית כשיש
+ * נוספות — הנוספת הראשונה הופכת לראשית, עם ההצעות, אנשי הקשר והמשימות שלה.
+ */
+async function disconnect(who) {
+  const { userId, boxId } = parse(who);
+  const conn = connectionOf(who);
+  tokens.delete(keyOf(who));
+  signatures.delete(keyOf(who));
   if (!conn) return;
   const refresh = Secrets.decrypt(conn.refresh_token);
   if (refresh) {
     // ביטול ההרשאה גם בצד של Google — לא רק מחיקה אצלנו
     await fetch(`${REVOKE}?token=${encodeURIComponent(refresh)}`, { method: 'POST', signal: AbortSignal.timeout(15000) }).catch(() => {});
   }
-  D.run('DELETE FROM mail_connections WHERE user_id = ?', userId);
-  signatures.delete(userId);
   // אנשי הקשר שסונכרנו שייכים לחיבור — בלעדיו אין להם מקום אצלנו
-  D.run('DELETE FROM google_contacts WHERE user_id = ?', userId);
-  D.run('DELETE FROM google_contact_sync WHERE user_id = ?', userId);
+  D.run('DELETE FROM google_contacts WHERE user_id = ? AND box = ?', userId, boxId);
+  if (boxId) {
+    D.run('DELETE FROM mail_accounts WHERE id = ? AND user_id = ?', boxId, userId);
+    // מה שהגיע מהתיבה הזו נשאר (הצעות, משימות) — רק בלי קישור לתיבה שאינה
+    D.run('UPDATE ai_requests SET from_box = 0 WHERE owner_id = ? AND from_box = ?', userId, boxId);
+    return;
+  }
+  D.run('DELETE FROM mail_connections WHERE user_id = ?', userId);
+  const next = D.get('SELECT * FROM mail_accounts WHERE user_id = ? ORDER BY id LIMIT 1', userId);
+  if (!next) {
+    D.run('DELETE FROM google_contact_sync WHERE user_id = ?', userId);
+    return;
+  }
+  // הנוספת הראשונה עולה לראשית — כל מה שמסומן בה עובר לתיבה 0
+  D.run(
+    `INSERT INTO mail_connections (user_id, email, refresh_token, scope, state, error, scan_running, scan_progress, last_scan_at, created_at)
+     VALUES (?,?,?,?,?,?,0,?,?,?)`,
+    userId, next.email, next.refresh_token, next.scope, next.state, next.error, next.scan_progress, next.last_scan_at, next.created_at
+  );
+  D.run('DELETE FROM mail_accounts WHERE id = ?', next.id);
+  for (const [table, col, owner] of [['ai_suggestions', 'box', 'user_id'], ['google_contacts', 'box', 'user_id'], ['ai_requests', 'from_box', 'owner_id']]) {
+    D.run(`UPDATE ${table} SET ${col} = 0 WHERE ${owner} = ? AND ${col} = ?`, userId, next.id);
+  }
+  const moved = tokens.get(keyOf(handle(userId, next.id)));
+  tokens.delete(keyOf(handle(userId, next.id)));
+  if (moved) tokens.set(keyOf(userId), moved);
 }
 
 /*
@@ -284,31 +433,34 @@ async function disconnect(userId) {
 const grantedScopes = (c) => new Set(String(c?.scope ?? '').split(/\s+/).filter(Boolean));
 
 /** האם החיבור תקין ואושרה בו ההרשאה של הפיצ'ר: ‎mail · send · calendar · contacts · …‎ */
-function has(userId, feature) {
-  const c = connectionOf(userId);
+function has(who, feature) {
+  const c = connectionOf(who);
   return c?.state === 'ok' && Boolean(SCOPES[feature]) && grantedScopes(c).has(SCOPES[feature]);
 }
 
 /** משתמשים שהתיבה שלהם מחוברת לקריאה — לסריקה ולקליטת תשובות */
+/*
+ * ‎feature‎ ‎null‎ — כל מי שיש לו חיבור (ראשי). הנוספות תלויות בראשית: ניתוק
+ * הראשית מעלה נוספת במקומה, ולכן אין משתמש עם נוספות בלי ראשית.
+ */
 const connectedUsers = (feature = 'mail') => D.all(
-  "SELECT c.user_id FROM mail_connections c JOIN users u ON u.id = c.user_id WHERE c.state = 'ok' AND u.status = 'active'"
-).map((r) => r.user_id).filter((id) => has(id, feature));
+  "SELECT c.user_id FROM mail_connections c JOIN users u ON u.id = c.user_id WHERE u.status = 'active'"
+).map((r) => r.user_id).filter((id) => (feature ? boxesOf(id, feature).length > 0 : true));
 
-const isConnected = (userId) => has(userId, 'mail');
+/** יש לו לפחות תיבה אחת מחוברת לקריאה */
+const isConnected = (userId) => boxesOf(userId, 'mail').length > 0;
 
 /** חיבור שאושרה בו גם שליחה. חיבור ישן (קריאה בלבד) צריך להתחבר מחדש */
-const canSend = (userId) => {
-  const c = connectionOf(userId);
+const canSend = (who) => {
+  const c = connectionOf(who);
   return c?.state === 'ok' && String(c.scope).includes(SEND_SCOPE);
 };
 
-/** תצוגה ללקוח — בלי האסימון */
-function publicStatus(userId) {
-  const c = connectionOf(userId);
-  if (!c) return null;
+function statusOf(c) {
   const granted = grantedScopes(c);
   const scopes = Object.fromEntries(Object.entries(SCOPES).map(([k, v]) => [k, granted.has(v)]));
   return {
+    box: c.box ?? 0,
     email: c.email,
     state: c.state,
     canSend: String(c.scope).includes(SEND_SCOPE),
@@ -323,6 +475,21 @@ function publicStatus(userId) {
   };
 }
 
+/** תצוגה ללקוח — בלי האסימון. הראשית, ו-‎accounts‎ — התיבות הנוספות */
+function publicStatus(userId) {
+  const c = connectionOf(userId);
+  if (!c) return null;
+  const accounts = D.all('SELECT id FROM mail_accounts WHERE user_id = ? ORDER BY id', userId)
+    .map((r) => statusOf(connectionOf(handle(userId, r.id))));
+  const main = statusOf(c);
+  return { ...main, accounts, scanningAny: main.scanning || accounts.some((a) => a.scanning) };
+}
+
+/** התיבות שאפשר לשלוח מהן — לבחירת "שליחה מ…" */
+const sendBoxes = (userId) => boxesOf(userId, null)
+  .filter((who) => canSend(who))
+  .map((who) => ({ box: boxOf(who), email: connectionOf(who).email }));
+
 // ---------------------------------------------------------------------------
 // החתימה
 // ---------------------------------------------------------------------------
@@ -330,7 +497,7 @@ function publicStatus(userId) {
 const SIGNATURE_TTL = 3 * 60 * 60 * 1000;
 // "אין חתימה" נזכר לזמן קצר: מי שהגדיר חתימה ב-Gmail עכשיו לא צריך לחכות שעות
 const NO_SIGNATURE_TTL = 10 * 60 * 1000;
-const signatures = new Map(); // userId → { at, info }
+const signatures = new Map(); // ‎keyOf(who)‎ → { at, info }
 
 /**
  * מה לומר למשתמש כשאין חתימה, לפי הסיבה. חוזר במסך החשבון, בטיוטת משימת
@@ -358,12 +525,12 @@ const SIGNATURE_HELP = {
  * @returns {Promise<{state: string, html?: string, text?: string, help?: string}>}
  */
 async function signatureInfo(userId, { fresh = false } = {}) {
-  const hit = signatures.get(userId);
+  const hit = signatures.get(keyOf(userId));
   if (!fresh && hit && Date.now() - hit.at < (hit.info.state === 'ok' ? SIGNATURE_TTL : NO_SIGNATURE_TTL)) return hit.info;
   const conn = connectionOf(userId);
   const done = (info) => {
     const out = info.state === 'ok' ? info : { ...info, help: SIGNATURE_HELP[info.state] };
-    if (info.state !== 'error') signatures.set(userId, { at: Date.now(), info: out });
+    if (info.state !== 'error') signatures.set(keyOf(userId), { at: Date.now(), info: out });
     return out;
   };
   if (!conn || conn.state !== 'ok') return done({ state: 'not_connected' });
@@ -394,7 +561,7 @@ async function signature(userId) {
  * בלי שם (הוא סומך על החתימה), ובלי זה המייל היה יוצא בלי שם השולח בכלל.
  */
 function fallbackSignature(userId) {
-  const u = D.get('SELECT full_name, department FROM users WHERE id = ?', userId);
+  const u = D.get('SELECT full_name, department FROM users WHERE id = ?', userOf(userId));
   const lines = [u?.full_name, u?.department].map((x) => String(x ?? '').trim()).filter(Boolean);
   if (!lines.length) return null;
   const esc = (x) => x.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -423,6 +590,7 @@ async function signed(userId, { text, html }) {
 const webLink = (email, gmailId) => `https://mail.google.com/mail/u/?authuser=${encodeURIComponent(email)}#all/${encodeURIComponent(gmailId)}`;
 
 module.exports = {
+  parse, handle, userOf, boxOf, boxesOf, allBoxes, setConn, sendBoxes, consumeStateFull, claimScan, emailsOf,
   isEnabled, authorizeUrl, isGmailState, consumeState, connect, disconnect,
   search, raw, threadOf, send, connectedUsers, isConnected, canSend, connectionOf, publicStatus, webLink, SCOPE, SEND_SCOPE,
   SCOPES, has, googleCall, signature, signatureInfo, fallbackSignature, signed, SIGNATURE_HELP

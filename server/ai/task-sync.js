@@ -355,7 +355,7 @@ async function mailFiles(sug) {
   try {
     const Gmail = require('../gmail');
     const Mime = require('../mime');
-    const mail = Mime.parse((await Gmail.raw(sug.user_id, sug.gmail_id)).raw);
+    const mail = Mime.parse((await Gmail.raw(Gmail.handle(sug.user_id, sug.box ?? 0), sug.gmail_id)).raw);
     return mail.attachments.map((a) => ({ filename: a.filename, mime: a.mime, data: a.data.toString('base64') }));
   } catch (err) {
     console.error('[משימון] קריאת הקבצים מהמייל נכשלה:', err.message);

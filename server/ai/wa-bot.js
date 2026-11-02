@@ -1687,7 +1687,7 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
   };
 
   const replyText = (r) => [
-    `↩️ *תשובה ל${r.toName || r.to}*`,
+    `↩️ *תשובה ל${r.toName || r.to}*${r.box && r.from ? ` · מהתיבה ${r.from}` : ''}`,
     `*נושא:* ${r.subject}`,
     '',
     r.body.slice(0, 2500),
@@ -1697,13 +1697,15 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
   ].filter((l) => l !== null).join('\n');
 
   const startReply = async (item, request) => {
-    if (!Gmail.canSend(actor.id)) {
+    // התשובה יוצאת מהתיבה שקיבלה את המייל
+    const box = Gmail.handle(actor.id, MailInsights.itemOf(actor.id, item.gmailId)?.box ?? 0);
+    if (!Gmail.canSend(box)) {
       return out('כדי לענות מהבוט צריך לחבר את תיבת ה-Gmail שלך עם הרשאת שליחה ("החשבון שלי ← Gmail ועוזר ה-AI").', { draft: null }, { action: 'mail_insights', status: 'error', result: 'אין הרשאת שליחה' });
     }
     if (!request) {
       return out(`מה לענות ל${item.label}?`, { draft: { kind: 'reply_ask', gmailId: item.gmailId } }, { action: 'mail_insights', status: 'unclear', result: 'חסר תוכן לתשובה' });
     }
-    const reply = { ...await MailInsights.draftReply(actor.id, item.gmailId, request), ...await signatureFields(actor.id) };
+    const reply = { ...await MailInsights.draftReply(actor.id, item.gmailId, request), ...await signatureFields(box) };
     return out(replyText(reply), { draft: { kind: 'mail_reply', reply }, awaiting: true }, { action: 'mail_insights', status: 'ok', result: `טיוטת תשובה ל${reply.toName || reply.to}` });
   };
 

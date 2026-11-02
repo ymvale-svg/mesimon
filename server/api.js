@@ -698,15 +698,16 @@ router.get('/api/auth/google/callback', async (req, res, ctx) => {
    */
   if (Gmail.isGmailState(params.get('state'))) {
     const back = (key, value) => redirectTo(res, `/?${key}=${encodeURIComponent(value)}`);
-    const userId = Gmail.consumeState(params.get('state'));
+    const entry = Gmail.consumeStateFull(params.get('state'));
+    const userId = entry?.userId ?? null;
     if (params.get('error')) return back('gmailError', 'החיבור בוטל');
     if (!userId || !ctx.actor || ctx.actor.type !== 'user' || ctx.actor.id !== userId) return back('gmailError', 'הבקשה פגה או אינה תקינה. נסו לחבר שוב.');
     try {
-      await Gmail.connect(userId, params.get('code'), req);
+      const r = await Gmail.connect(userId, params.get('code'), req, { add: entry.add });
       // החיבור כולל עכשיו גם יומן ואנשי קשר — סנכרון ראשון ברקע, ומטמון יומן נקי
       Calendar.forget(userId);
       GContacts.syncSoon(userId);
-      return back('gmail', 'connected');
+      return back('gmail', r.added ? `added:${r.email}` : 'connected');
     } catch (err) {
       console.error('[משימון] חיבור Gmail נכשל:', err.message);
       return back('gmailError', err.message);
