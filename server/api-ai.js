@@ -713,7 +713,7 @@ function register(router, h) {
       context = `המשימה: ${task.title}${task.description ? `\n${task.description}` : ''}`;
     }
     try {
-      sendJson(res, 200, await MailAsk.ask(meUser(actor), b.question, Array.isArray(b.history) ? b.history : [], { context }));
+      sendJson(res, 200, await require('./load-monitor').track(() => MailAsk.ask(meUser(actor), b.question, Array.isArray(b.history) ? b.history : [], { context })));
     } catch (err) {
       throw userError(err);
     }

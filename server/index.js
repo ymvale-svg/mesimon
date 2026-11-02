@@ -23,6 +23,7 @@ const D = require('./db');
 const Auth = require('./auth');
 const Rules = require('./rules-engine');
 const Push = require('./push');
+const LoadMonitor = require('./load-monitor');
 const AiTasks = require('./ai-tasks');
 const WaBot = require('./ai/wa-bot');
 const { router } = require('./api');
@@ -104,6 +105,8 @@ server.listen(PORT, HOST, () => {
   WaBot.start();
   // משימות כפולות במחלקה — סריקה פעם ביום (פרק 11ב)
   Dupes.start();
+  // התראה למנהלים כשתקרת המעבד מאטה את הסוכנים
+  LoadMonitor.start();
   const nets = os.networkInterfaces();
   const lan = Object.values(nets).flat().find((n) => n && n.family === 'IPv4' && !n.internal);
   console.log('');
