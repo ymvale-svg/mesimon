@@ -863,6 +863,19 @@ function register(router, h) {
     try { mcp = require('./ai/mcp-client').status(); } catch { mcp = {}; }
     sendJson(res, 200, { agents: Agents.catalog(), mcp, log: Agents.recentLog({ limit: 100 }), dailyLimit: Number(D.getSetting('agents_daily_limit', 40)) });
   });
+  /** 🩺 בדיקת סוכנים — מהשרת החי: כל מקור נתונים בקריאה אמיתית, ה-AI, המחשבונים ו-Timeless */
+  router.get('/api/admin/agents/health', async (req, res, ctx) => {
+    aiAdmin(ctx);
+    sendJson(res, 200, { last: require('./ai/agents-health').last() });
+  });
+  router.post('/api/admin/agents/health', async (req, res, ctx) => {
+    const actor = aiAdmin(ctx);
+    try {
+      sendJson(res, 200, { last: await require('./ai/agents-health').run(meUser(actor)) });
+    } catch (err) {
+      throw userError(err);
+    }
+  });
   router.put('/api/admin/agents/:key', async (req, res, ctx) => {
     aiAdmin(ctx);
     const b = await readJson(req);

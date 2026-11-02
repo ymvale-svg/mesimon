@@ -206,13 +206,59 @@ const AdminAiView = (() => {
       byDept.get(a.deptLabel).list.push(a);
     }
     const mcpRows = Object.entries(r.mcp ?? {}).map(([k, s]) => el('div.mute-sm', { text: `${s.started ? '🟢' : '⚪'} ${s.label ?? k}${s.toolCount ? ` · ${s.toolCount} כלים` : ''}${s.lastError ? ` · ${s.lastError}` : ''}` }));
+    const healthBox = el('div');
+    let last = null;
+    try { last = (await API.get('/api/admin/agents/health')).last; } catch { /* בלי תוצאה קודמת */ }
+    const runBtn = el('button.btn.btn-primary', { type: 'button' }, ['🩺 בדיקת סוכנים']);
+    runBtn.addEventListener('click', async () => {
+      runBtn.disabled = true;
+      runBtn.textContent = '🩺 בודק… (עד דקה)';
+      try { drawHealth(healthBox, (await API.post('/api/admin/agents/health')).last); } catch (err) { UI.error(err); }
+      runBtn.disabled = false;
+      runBtn.textContent = '🩺 בדיקה שוב';
+    });
+    if (last) drawHealth(healthBox, last);
     UI.mount(holder,
+      el('div.ai-sec', {}, [
+        el('div.ai-sec-head', {}, [el('b', { text: '🩺 בדיקת סוכנים' }), el('span.mute-sm', { text: ' · מהשרת החי: קריאה אמיתית לכל מקור נתונים, ל-AI, למחשבונים ול-Timeless שלך' })]),
+        el('div', { style: { margin: '6px 0' } }, [runBtn]),
+        healthBox
+      ]),
       el('p.mute-sm', { text: `כל הסוכנים פתוחים לכל העובדים, חוץ ממה שהוגבל כאן. "מחלקות" — ביטוי שמתאים לשם המחלקה (ריק = כולם; מנהלי מערכת תמיד). תקרה: ${r.dailyLimit} שאלות ביום לעובד.` }),
       ...[...byDept.entries()].map(([label, g]) => el('div.ai-sec', {}, [
         el('div.ai-sec-head', {}, [el('b', { text: `${g.icon} ${label}` })]),
         ...g.list.map(agentRow)
       ])),
       el('div.ai-sec', {}, [el('div.ai-sec-head', {}, [el('b', { text: '🌐 מקורות נתונים' }), el('span.mute-sm', { text: ' · עולים כשסוכן צריך אותם לראשונה' })]), ...(mcpRows.length ? mcpRows : [el('div.mute-sm', { text: 'עוד לא הופעלו מאז שהשרת עלה.' })])])
+    );
+  }
+
+  function drawHealth(box, h) {
+    const mark = (ok) => (ok === true ? '✅' : ok === false ? '❌' : '➖');
+    const stateMark = { ok: '✅', partial: '⚠️', error: '❌', unknown: '➖' };
+    const okCount = h.agents.filter((a) => a.state === 'ok').length;
+    UI.mount(box,
+      el('div.mute-sm', { text: `נבדק ${UI.relative(h.at)}${h.by ? ` · ${h.by}` : ''} · ${okCount} מתוך ${h.agents.length} סוכנים עובדים במלואם` }),
+      el('div.ai-health', {}, [
+        el('b', { text: 'תשתית' }),
+        el('div', { text: `${mark(h.claude.ok)} AI (${h.claude.model})${h.claude.ms ? ` · ${(h.claude.ms / 1000).toFixed(1)} ש׳` : ''}${h.claude.error ? ` — ${h.claude.error}` : ''}` }),
+        ...h.mcp.map((m) => el('div', { title: m.sample || m.error }, [
+          `${m.state === 'warming' ? '⏳' : mark(m.ok)} ${m.label} · ${(m.ms / 1000).toFixed(1)} ש׳`,
+          m.state === 'warming' ? el('span.mute-sm', { text: ' — עלה, טוען בפעם הראשונה; בדיקה נוספת בעוד דקה' }) : null,
+          m.error ? el('div.mute-sm.text-warn', { text: m.error }) : null
+        ])),
+        el('div', { text: `${h.calc.every((c) => c.ok) ? '✅' : '❌'} מחשבונים (${h.calc.filter((c) => c.ok).length}/${h.calc.length})${h.calc.filter((c) => !c.ok).map((c) => ` — ${c.key}: ${c.error}`).join('')}` }),
+        el('div', { text: `${mark(h.timeless.ok)} Timeless${h.timeless.error ? ` — ${h.timeless.error}` : ` · ${h.timeless.connectedUsers} עובדים חיברו`}` })
+      ]),
+      el('div.ai-health', {}, [
+        el('b', { text: 'סוכנים' }),
+        ...h.agents.map((a) => el('div', {}, [
+          `${stateMark[a.state] ?? '➖'} ${a.icon} ${a.title}`,
+          a.enabled ? null : el('span.mute-sm', { text: ' · כבוי' }),
+          a.failing.length ? el('span.mute-sm', { text: ` — לא עובד: ${a.failing.join(', ')}` }) : null,
+          !a.failing.length && a.unknown.length ? el('span.mute-sm', { text: ` — לא נבדק: ${a.unknown.join(', ')}` }) : null
+        ]))
+      ])
     );
   }
 

@@ -1284,6 +1284,8 @@ const DEFAULT_SETTINGS = {
   mail_memory_nightly_threads: 1500,       // כמה שרשורים לכל משתמש ביממה
   mail_doc_expiry_days: 30,                // כמה ימים לפני תום תוקף של מסמך מציעים לחדש
   mail_ask_daily_limit: 60,                // "שאל את המיילים": שאלות ביום לכל משתמש
+  mail_ask_memory_first: true,             // ⚡ כשהזיכרון כבר נבנה ומצא — עונים ממנו, בלי חיפוש חי ב-Gmail (לא נמצא — חיפוש חי)
+  mail_ask_plan_model: 'claude-haiku-5-5', // תכנון החיפוש ב-Gmail — מודל מהיר וזול
   task_closure_enabled: true,              // 💡 הצעה איך לסגור משימה מהמייל
   agents_daily_limit: 40,                  // ✨ שאל: שאלות לסוכנים ביום, לכל משתמש
   agents_config: {},                       // לכל סוכן: ‎{enabled, departments}‎ — מסך הניהול

@@ -134,15 +134,29 @@ async function ask(user, question, history = [], { context = '' } = {}) {
       'שלב א: תכנן את החיפוש (plan).'
     ].filter(Boolean).join('\n') }],
     schema: PLAN_SCHEMA,
-    effort: 'low'
+    effort: 'low',
+    // תכנון חיפוש הוא משימה פשוטה — המודל המהיר והזול
+    model: String(D.getSetting('mail_ask_plan_model', 'claude-haiku-5-5') || '').trim() || null
   });
 
-  // 2. חיפוש — זיכרון ו-Gmail במקביל
-  // כל התיבות של השואל — הראשית והנוספות
   const boxes = Gmail.boxesOf(user.id, 'mail');
   const ex = await exclusions(user.id, boxes);
   const mem = Memory.search(user.id, `${plan.memory_query} ${q}`, { limit: 8 });
-  const queries = (plan.gmail_queries ?? []).map((x) => String(x).trim()).filter(Boolean).slice(0, 3);
+  /*
+   * ⚡ הזיכרון קודם: כשכל ההיסטוריה כבר נקראה, והזיכרון מצא 2 רשומות ומעלה —
+   * עונים מהן ומהמיילים שלהן, בלי חיפוש חי ב-Gmail. לא נמצאה תשובה — סבב
+   * שני עם החיפוש החי, כך שהמהירות לא עולה בתשובה.
+   */
+  const memoryDone = D.get('SELECT state FROM mail_memory_runs WHERE user_id = ?', user.id)?.state === 'done';
+  const memoryFirst = memoryDone && mem.events.filter((e) => e.gmail_id).length >= 2 && D.getSetting('mail_ask_memory_first', true);
+  let r = await attempt(!memoryFirst);
+  if (memoryFirst && !r.out.found) r = await attempt(true);
+  const { out, sources, mails, docs } = r;
+
+  async function attempt(live) {
+  // 2. חיפוש — זיכרון ו-Gmail במקביל
+  // כל התיבות של השואל — הראשית והנוספות
+  const queries = live ? (plan.gmail_queries ?? []).map((x) => String(x).trim()).filter(Boolean).slice(0, 3) : [];
   const idLists = await Promise.all(boxes.flatMap((who) => queries.map((gq) =>
     Gmail.search(who, `${gq} -in:spam -in:trash`, { max: 8 })
       .then((list) => list.map((id) => ({ who, id })))
@@ -156,19 +170,23 @@ async function ask(user, question, history = [], { context = '' } = {}) {
     if (e.gmail_id && !has(x)) ids.push(x);
   }
 
-  // 3. קריאה
-  const mails = [];
-  for (const { who, id } of ids) {
-    if (mails.length >= MAX_MAILS) break;
+  // 3. קריאה — במקביל (5 בכל פעם), ולפי סדר החשיבות של החיפוש
+  const read = async ({ who, id }) => {
     try {
       const msg = await Gmail.raw(who, id);
-      if ([...(ex.labelIds.get(String(who)) ?? [])].some((l) => msg.labels.includes(l))) continue;
+      if ([...(ex.labelIds.get(String(who)) ?? [])].some((l) => msg.labels.includes(l))) return null;
       const mail = Mime.parse(msg.raw);
-      if (ex.ignored.has(mail.from.address)) continue;
-      mails.push({ id, who, box: Gmail.boxOf(who), mail, at: mail.date ?? msg.internalDate });
+      if (ex.ignored.has(mail.from.address)) return null;
+      return { id, who, box: Gmail.boxOf(who), mail, at: mail.date ?? msg.internalDate };
     } catch (err) {
       if (!/ 404/.test(err.message)) console.error('[משימון] קריאת מייל לשאלה נכשלה:', err.message);
+      return null;
     }
+  };
+  const mails = [];
+  for (let i = 0; i < ids.length && mails.length < MAX_MAILS; i += 5) {
+    const got = await Promise.all(ids.slice(i, i + 5).map(read));
+    for (const m of got) if (m && mails.length < MAX_MAILS) mails.push(m);
   }
 
   let docs = [];
@@ -236,8 +254,12 @@ async function ask(user, question, history = [], { context = '' } = {}) {
     system: skill(),
     content: [...docs.map((d) => d.block), { type: 'text', text: lines.join('\n') }],
     schema: ANSWER_SCHEMA,
-    effort: 'medium'
+    effort: 'medium',
+    // מישהו מחכה — מצב מהיר (נדחה — אותה בקשה בלעדיו)
+    live: true
   });
+  return { out, sources, mails, docs };
+  }
 
   remember(user.id, q);
   const byId = new Map(sources.map((s) => [s.id, s]));
