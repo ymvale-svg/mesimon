@@ -959,6 +959,8 @@ router.get('/api/bootstrap', async (req, res, ctx) => {
     prefs: isVendor(actor) ? {} : D.userPrefs(actor.id),
     // כמה גרסאות "מה חדש" עוד לא נסגרו אצלו — הבאנר נפתח רק אם יש
     whatsNewPending: WhatsNew.pendingCount(actor),
+    // אנשי הקשר מ-Google לא עובדים אצלו — מה לעשות (חלון בפתיחה, פעם ביום)
+    contactsNotice: actor.type === 'user' ? GContacts.notice(actor.id) : null,
     settings: {
       orgName: D.getSetting('org_name', 'MESIMON'),
       maxUploadMb: D.getSetting('max_upload_mb', 25),

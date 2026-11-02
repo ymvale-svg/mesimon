@@ -213,6 +213,7 @@ const App = (() => {
         // באנר "מה חדש" — רק כשיש גרסה שעוד לא נראתה, או מקישור במייל
         WhatsNewView.maybeShow();
         AiInboxView.handleReturn();
+        contactsNotice();
         openFromUrl(params);
         refreshTodayCount();
         clearInterval(todayTimer);
@@ -237,6 +238,30 @@ const App = (() => {
         ]));
       }
     }
+  }
+
+  /**
+   * אנשי הקשר מ-Google לא עובדים אצלו (לא מחובר, חיבור שפג, הרשאה חסרה, או
+   * שלא נטענו) — חלון אחד בפתיחה, פעם ביום, עם הכפתור שמתקן: חיבור, חיבור
+   * מחדש או רענון. לא אחרי חזרה מ-Google (שם כבר מתחבר), ולא מעל "מה חדש".
+   */
+  function contactsNotice() {
+    const n = state.contactsNotice;
+    if (!n || new URLSearchParams(location.search).has('gmail')) return;
+    const key = 'mesimon.contactsNotice';
+    const day = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Jerusalem' }).format(new Date());
+    try { if (localStorage.getItem(key) === day) return; } catch { /* בלי אחסון — מציגים */ }
+    setTimeout(async () => {
+      if (document.querySelector('.modal-backdrop, .wn-overlay, dialog[open]')) return; // חלון אחר פתוח — מחר
+      try { localStorage.setItem(key, day); } catch { /* ריק */ }
+      const okText = { connect: 'חיבור Google', reconnect: 'חיבור מחדש', refresh: '🔄 רענון' }[n.kind];
+      if (!await UI.confirm(n.text, { title: `👥 ${n.title}`, okText })) return;
+      if (n.kind !== 'refresh') { location.href = '/api/me/gmail/connect'; return; }
+      try {
+        await API.post('/api/me/google/contacts/sync');
+        UI.success('אנשי הקשר נטענים מ-Google ברקע');
+      } catch (err) { UI.error(err); }
+    }, 1500);
   }
 
   /**

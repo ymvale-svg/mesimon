@@ -1646,7 +1646,9 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
         return { text: [section?.text ?? null, menu].filter(Boolean).join('\n\n'), insights: section?.ids ?? null };
       });
     }
-    const parts = [prefix || null, today?.text ?? null, connectHint, followUps.length ? null : menu].filter(Boolean);
+    // אנשי הקשר מ-Google — מה לעשות כדי שיעבדו, בהודעה הראשונה של היום
+    const contactsHint = firstOfDay && !dry ? GContacts.noticeLine(actor.id) : null;
+    const parts = [prefix || null, today?.text ?? null, connectHint, contactsHint, followUps.length ? null : menu].filter(Boolean);
     if (!parts.length) return out(helpText(actor), {}, { action: 'help', status: 'ok', result: 'עזרה' });
     return out(parts.join('\n\n'), {
       ...(today ? { lastList: today.ids, suggestions: today.suggestions } : {}),
