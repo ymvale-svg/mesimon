@@ -116,7 +116,7 @@ async function build(actor, { fresh = false, insights = false } = {}) {
   today.sort((a, b) => (PRIORITY_RANK[a.priority] ?? 2) - (PRIORITY_RANK[b.priority] ?? 2) || a.title.localeCompare(b.title, 'he'));
 
   const window = Range.forUser(actor.id);
-  const mailConnected = Gmail.has(actor.id, 'mail');
+  const mailConnected = Gmail.isConnected(actor.id);
   const pending = MailScan.listFor(actor.id).pending;
   /*
    * הצעות למשימות מכל המקורות — גם בלי Gmail (הצעות מהוואטסאפ). ‎older‎ — הוצעה

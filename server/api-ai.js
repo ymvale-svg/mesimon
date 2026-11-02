@@ -250,6 +250,8 @@ function register(router, h) {
       mail: Gmail.canSend(actor.id),
       inbox: Gmail.isConnected(actor.id),
       gmail: Gmail.publicStatus(actor.id),
+      // יותר מתיבה אחת עם שליחה — באשף מופיע "שליחה מ…"
+      sendBoxes: Gmail.sendBoxes(actor.id),
       gmailEnabled: Gmail.isEnabled(),
       whatsapp: WhatsApp.publicChannel(actor.id),
       defaults: AiTasks.defaultPolicy(actor.id),
@@ -307,6 +309,8 @@ function register(router, h) {
      */
     const waReady = WhatsApp.isReady(actor.id);
     const channel = b.channel === 'whatsapp' && waReady ? 'whatsapp' : 'email';
+    // מאיזו תיבה יוצא המייל — ‎0‎ הראשית, או תיבה נוספת של המשתמש
+    const fromBox = Number.isInteger(Number(b.fromBox)) && Number(b.fromBox) > 0 ? Number(b.fromBox) : 0;
     const policy = { ...(b.policy ?? {}), ...(waReady ? {} : { whatsapp: false }) };
     const contact = {
       name: String(b.contact?.name ?? '').trim(),
@@ -334,7 +338,8 @@ function register(router, h) {
     } else if (channel === 'email') {
       if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(contact.email)) throw badRequest('נדרשת כתובת מייל תקינה לנמען');
       if (!String(draft.subject ?? '').trim()) throw badRequest('נדרש נושא למייל');
-      if (!Gmail.canSend(actor.id)) throw badRequest(`כדי לשלוח מייל צריך לחבר את תיבת ה-Gmail שלך ("החשבון שלי ← Gmail ועוזר ה-AI").${waReady ? ' אפשר גם לפתוח בוואטסאפ' : ''}`);
+      if (fromBox && !Gmail.canSend(Gmail.handle(actor.id, fromBox))) throw badRequest('אי אפשר לשלוח מהתיבה שנבחרה — היא לא מחוברת עם הרשאת שליחה');
+      if (!Gmail.canSend(Gmail.handle(actor.id, fromBox))) throw badRequest(`כדי לשלוח מייל צריך לחבר את תיבת ה-Gmail שלך ("החשבון שלי ← Gmail ועוזר ה-AI").${waReady ? ' אפשר גם לפתוח בוואטסאפ' : ''}`);
     } else {
       if (!WhatsApp.normalizePhone(contact.phone)) throw badRequest('נדרש מספר טלפון תקין לנמען');
       if (!WhatsApp.isReady(actor.id)) throw badRequest('הוואטסאפ שלך אינו מחובר. מחברים אותו מ"החשבון שלי"');
@@ -379,7 +384,7 @@ function register(router, h) {
     let sendError = null;
     try {
       const owner = D.get('SELECT id, full_name, email FROM users WHERE id = ?', actor.id);
-      await AiTasks.launch({ taskId, owner, instruction, draft, contact, cc, policy, channel });
+      await AiTasks.launch({ taskId, owner, instruction, draft, contact, cc, policy, channel, fromBox });
     } catch (err) {
       // המשימה והטיוטה נשמרו; אפשר לנסות לשלוח שוב מהכרטיס אחרי תיקון התקלה
       sendError = err.message;
@@ -550,6 +555,8 @@ function register(router, h) {
     scanTime: D.getSetting('ai_scan_time', '07:00'),
     dailyLimit: Number(D.getSetting('ai_scan_daily_limit', 100)),
     connection: Gmail.publicStatus(actor.id),
+    // התיבות שאפשר לשלוח מהן — לבחירת "שליחה מ…" במשימת AI
+    sendBoxes: Gmail.sendBoxes(actor.id),
     contacts: GContacts.status(actor.id),
     calendar: { connected: Calendar.isConnected(actor.id) },
     senders: MailScan.senders(actor.id),
@@ -576,8 +583,20 @@ function register(router, h) {
     const actor = userOnly(ctx);
     if (!Gmail.isEnabled()) throw badRequest('חיבור Google אינו מוגדר בשרת');
     const user = D.get('SELECT id, email FROM users WHERE id = ?', actor.id);
-    res.writeHead(302, { location: Gmail.authorizeUrl(req, user), 'cache-control': 'no-store' });
+    // ‎?add=1‎ — חשבון Google נוסף (רק למי שכבר חיבר את הראשי)
+    const add = parseUrl(req).searchParams.get('add') === '1' && Boolean(Gmail.connectionOf(actor.id));
+    res.writeHead(302, { location: Gmail.authorizeUrl(req, user, { add }), 'cache-control': 'no-store' });
     res.end();
+  });
+
+  /** ניתוק תיבה נוספת אחת — הראשית נשארת */
+  router.delete('/api/me/gmail/accounts/:box', async (req, res, ctx) => {
+    const actor = userOnly(ctx);
+    const box = Number(ctx.params.box);
+    if (!Number.isInteger(box) || box <= 0 || !Gmail.connectionOf(Gmail.handle(actor.id, box))) throw notFound('התיבה לא נמצאה');
+    await Gmail.disconnect(Gmail.handle(actor.id, box));
+    Calendar.forget(actor.id);
+    sendJson(res, 200, gmailInfo(actor));
   });
 
   router.delete('/api/me/gmail', async (req, res, ctx) => {

@@ -76,8 +76,18 @@ const AiTaskView = (() => {
       // בהעתק (CC): ‎[{name, email}]‎ · ‎ccAsk‎ — שמות מההוראה שלא ברור למי הם
       cc: [],
       ccAsk: [],
+      // מאיזו תיבה יוצא המייל — ‎0‎ הראשית (רק למי שחיבר יותר מחשבון Google אחד)
+      fromBox: 0,
       draft: null
     };
+
+    /** בורר התיבה שממנה יוצא המייל — הכתובות של חשבונות ה-Google שלו */
+    function fromBoxSelect() {
+      const sel = el('select', { dir: 'ltr' }, (status.sendBoxes ?? []).map((b) => el('option', { value: String(b.box) }, [b.email])));
+      sel.value = String(state.fromBox);
+      sel.addEventListener('change', () => { state.fromBox = Number(sel.value) || 0; });
+      return sel;
+    }
 
     const body = el('div.ai-dialog');
     const m = UI.modal({ title: '✨ משימת AI חדשה', body, size: 'wide' });
@@ -371,6 +381,7 @@ const AiTaskView = (() => {
         pbBox,
         colleagueNote,
         state.channel === 'email' ? UI.field('📎 בהעתק (CC) — לא חובה', ccEditor(), 'אפשר גם לכתוב בהוראה: "לשים בכתב את דני"') : null,
+        state.channel === 'email' && (status.sendBoxes ?? []).length > 1 ? UI.field('📤 שליחה מהתיבה', fromBoxSelect(), 'התשובות יחזרו לתיבה הזו וייקלטו משם') : null,
         el('div.row', {}, [
           channelSeg ? UI.field('ערוץ ראשון', channelSeg) : null,
           UI.field('פרויקט', projectSelect),
@@ -538,6 +549,7 @@ const AiTaskView = (() => {
             contact: state.contact,
             cc: isEmail ? state.cc : [],
             channel: state.channel,
+            fromBox: isEmail ? state.fromBox : 0,
             projectId: state.projectId || null,
             dueDate: UI.fromInputDate(state.dueDate),
             policy: state.policy,

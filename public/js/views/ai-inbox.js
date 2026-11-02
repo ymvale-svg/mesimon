@@ -211,6 +211,8 @@ const AiInboxView = (() => {
     return el('div.mute-sm', {}, [
       `מאת ${s.from.name}`,
       s.receivedAt ? ` · ${UI.relative(s.receivedAt)}` : '',
+      // מאיזו תיבה — רק למי שחיבר יותר מחשבון אחד
+      s.mailbox ? el('span', { dir: 'ltr', text: ` · 📬 ${s.mailbox}` }) : null,
       s.link ? el('a', { href: s.link, target: '_blank', rel: 'noopener', onclick: (e) => e.stopPropagation() }, [' · פתיחת המייל ↗']) : null
     ]);
   }
@@ -633,12 +635,45 @@ const AiInboxView = (() => {
                   return b;
                 })()
               ]),
+              accountsBox(c),
               info.scanEnabled
                 ? el('div.mute-sm', { style: { marginTop: '6px' }, text: `סריקה אוטומטית כל בוקר ב-${info.scanTime}, עד ${info.dailyLimit} מיילים ביום.` })
                 : el('div.mute-sm', { style: { marginTop: '6px' }, text: 'סריקת המיילים כבויה כרגע במסך הניהול.' }),
               info.scanEnabled ? el('button.btn.btn-sm.mt', { onclick: () => { m.close(); scanDialog(onChange); } }, ['🔍 סרוק עכשיו']) : null,
               contactsLine()
             ]);
+
+      /**
+       * חשבונות Google נוספים — כל אחד נסרק, נכנס לתובנות, לאנשי הקשר
+       * וליומן, ואפשר לשלוח ממנו. ניתוק — רק של החשבון הנוסף.
+       */
+      function accountsBox(main) {
+        const rows = (main.accounts ?? []).map((a) => {
+          const off = el('button.btn.btn-sm.btn-ghost', {}, ['ניתוק']);
+          off.addEventListener('click', async () => {
+            if (!await UI.confirm(`לנתק את ${a.email}? הסריקה ממנו תיפסק, אנשי הקשר והיומן שלו ייעלמו ממשימון, וההרשאה תבוטל גם ב-Google. התיבה הראשית נשארת.`, { danger: true, okText: 'ניתוק' })) return;
+            try { refresh(await API.del(`/api/me/gmail/accounts/${a.box}`)); } catch (err) { UI.error(err); }
+          });
+          const ok = a.state === 'ok';
+          return el('div.flex', { style: { gap: '8px', alignItems: 'center', flexWrap: 'wrap', marginTop: '6px' } }, [
+            el('span', { text: ok ? '📬' : '⚠️' }), el('b', { dir: 'ltr', text: a.email }),
+            ok
+              ? el('span.mute-sm', { text: [a.scopes?.mail ? (a.canSend ? '📧 קריאה ושליחה' : '📧 קריאה') : null, a.scopes?.calendar ? '📅 יומן' : null, a.scopes?.contacts ? '👥 אנשי קשר' : null].filter(Boolean).join(' · ') })
+              : el('a.mute-sm', { href: '/api/me/gmail/connect?add=1', text: `${a.error || 'החיבור פג'} — חיבור מחדש` }),
+            ok ? el('span.mute-sm', { text: a.lastScanAt ? `סריקה אחרונה ${UI.relative(a.lastScanAt)}` : 'עוד לא נסרקה' }) : null,
+            el('div.spacer'),
+            off
+          ]);
+        });
+        return el('div.mt', {}, [
+          rows.length ? el('div.mute-sm', { text: 'חשבונות נוספים:' }) : null,
+          ...rows,
+          el('div.flex.mt', { style: { gap: '8px', alignItems: 'center', flexWrap: 'wrap' } }, [
+            el('a.btn.btn-sm', { href: '/api/me/gmail/connect?add=1' }, ['➕ הוספת חשבון Google']),
+            el('span.mute-sm', { text: 'תיבה נוספת נסרקת להצעות משימה, נכנסת לתובנות, לאנשי הקשר וליומן, ואפשר לשלוח ממנה.' })
+          ])
+        ]);
+      }
 
       /** אנשי הקשר: כמה סונכרנו, מתי, ורענון */
       function contactsLine() {
@@ -701,7 +736,8 @@ const AiInboxView = (() => {
       UI.toast(`חיבור Google נכשל: ${error}`, 'error');
       return;
     }
-    UI.success('חשבון Google חובר — דואר, יומן ואנשי קשר');
+    const added = /^added:(.+)$/.exec(q.get('gmail') ?? '');
+    UI.success(added ? `החשבון ${added[1]} נוסף — דואר, יומן ואנשי קשר` : 'חשבון Google חובר — דואר, יומן ואנשי קשר');
     setTimeout(() => scanDialog(() => HomeView.reload()), 300);
   }
 

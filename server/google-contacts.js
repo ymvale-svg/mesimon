@@ -117,7 +117,9 @@ function setSync(userId, fields) {
   D.run(`UPDATE google_contact_sync SET ${keys.map((k) => `${k} = ?`).join(', ')} WHERE user_id = ?`, ...keys.map((k) => fields[k]), userId);
 }
 
-const canSync = (userId) => Object.values(SOURCES).some((s) => Gmail.has(userId, s.scope));
+/** התיבות של העובד (ראשית ונוספות) — מכל אחת נטענים אנשי הקשר שאושרו בה */
+const boxesFor = (userId) => Gmail.boxesOf(userId, null);
+const canSync = (userId) => boxesFor(userId).some((who) => Object.values(SOURCES).some((s) => Gmail.has(who, s.scope)));
 
 /**
  * סנכרון מלא: כל מקור מוחלף כולו בטרנזקציה. מקור שנכשל (למשל ספרייה בחשבון
@@ -131,38 +133,42 @@ async function sync(userId) {
   const counts = {};
   const errors = [];
   try {
-    for (const [source, def] of Object.entries(SOURCES)) {
-      if (!Gmail.has(userId, def.scope)) {
-        D.run('DELETE FROM google_contacts WHERE user_id = ? AND source = ?', userId, source);
-        continue;
-      }
-      let people;
-      try {
-        people = await def.fetch(userId);
-      } catch (err) {
-        // ספרייה בחשבון שאינו של ארגון מחזירה 400 — זה לא תקלה שצריך להציג
-        if (!(source === 'directory' && [400, 403].includes(err.status))) errors.push(`${source}: ${err.message.slice(0, 120)}`);
-        continue;
-      }
-      const at = D.nowIso();
-      D.db.exec('BEGIN');
-      try {
-        D.run('DELETE FROM google_contacts WHERE user_id = ? AND source = ?', userId, source);
-        for (const p of people) {
-          if (!p.resourceName || (!p.emails.length && !p.phones.length)) continue;
-          D.run(
-            `INSERT OR REPLACE INTO google_contacts (user_id, resource_name, source, name, emails, phones, organization, title, photo_url, updated_at)
-             VALUES (?,?,?,?,?,?,?,?,?,?)`,
-            userId, p.resourceName, source, p.name, JSON.stringify(p.emails), JSON.stringify(p.phones),
-            p.organization, p.title, p.photoUrl, at
-          );
+    for (const who of boxesFor(userId)) {
+      const box = Gmail.boxOf(who);
+      const tag = box ? `${Gmail.connectionOf(who)?.email ?? box} · ` : '';
+      for (const [source, def] of Object.entries(SOURCES)) {
+        if (!Gmail.has(who, def.scope)) {
+          D.run('DELETE FROM google_contacts WHERE user_id = ? AND source = ? AND box = ?', userId, source, box);
+          continue;
         }
-        D.db.exec('COMMIT');
-      } catch (err) {
-        D.db.exec('ROLLBACK');
-        throw err;
+        let people;
+        try {
+          people = await def.fetch(who);
+        } catch (err) {
+          // ספרייה בחשבון שאינו של ארגון מחזירה 400 — זה לא תקלה שצריך להציג
+          if (!(source === 'directory' && [400, 403].includes(err.status))) errors.push(`${tag}${source}: ${err.message.slice(0, 120)}`);
+          continue;
+        }
+        const at = D.nowIso();
+        D.db.exec('BEGIN');
+        try {
+          D.run('DELETE FROM google_contacts WHERE user_id = ? AND source = ? AND box = ?', userId, source, box);
+          for (const p of people) {
+            if (!p.resourceName || (!p.emails.length && !p.phones.length)) continue;
+            D.run(
+              `INSERT OR REPLACE INTO google_contacts (user_id, resource_name, source, name, emails, phones, organization, title, photo_url, updated_at, box)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+              userId, p.resourceName, source, p.name, JSON.stringify(p.emails), JSON.stringify(p.phones),
+              p.organization, p.title, p.photoUrl, at, box
+            );
+          }
+          D.db.exec('COMMIT');
+        } catch (err) {
+          D.db.exec('ROLLBACK');
+          throw err;
+        }
+        counts[source] = (counts[source] ?? 0) + people.length;
       }
-      counts[source] = people.length;
     }
   } finally {
     memo.delete(userId);

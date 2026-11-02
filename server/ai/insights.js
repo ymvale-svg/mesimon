@@ -51,7 +51,7 @@ function personalScanning(userId) {
 
 /** מאילו מקורות יש לעובד הצעות ותובנות */
 function sourcesOf(userId) {
-  return { mail: Gmail.has(userId, 'mail'), whatsapp: groupsOf(userId).length > 0 || personalScanning(userId) };
+  return { mail: Gmail.isConnected(userId), whatsapp: groupsOf(userId).length > 0 || personalScanning(userId) };
 }
 
 /**
@@ -142,6 +142,8 @@ function shapeWa(r, groupName = '') {
 }
 
 function shapeMail(x, conn) {
+  // מתיבה נוספת — הקישור לאותה תיבה
+  if (x.box && conn) conn = Gmail.connectionOf(Gmail.handle(conn.user_id, x.box)) ?? conn;
   return {
     ref: x.gmailId,
     source: 'mail',
@@ -156,7 +158,8 @@ function shapeMail(x, conn) {
     gmailId: x.gmailId,
     subject: x.subject,
     fromEmail: x.fromEmail,
-    link: conn?.email ? Gmail.webLink(conn.email, x.gmailId) : null
+    link: conn?.email ? Gmail.webLink(conn.email, x.gmailId) : null,
+    mailbox: x.box && conn?.email ? conn.email : null
   };
 }
 
