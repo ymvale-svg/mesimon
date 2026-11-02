@@ -248,14 +248,20 @@ function notice(userId) {
   return { kind: 'refresh', title: 'רענון אנשי הקשר מ-Google', text: 'אנשי הקשר שלך מ-Google עוד לא נטענו למשימון. התחלנו לטעון אותם — אפשר ללחוץ "רענון" כדי לנסות שוב.', error: st.error };
 }
 
-/** שורה לבוט, בהודעה הראשונה של היום */
-function noticeLine(userId) {
+/**
+ * שורה לבוט, בהודעה הראשונה של היום. ‎root‎ — כתובת משימון באינטרנט: עם
+ * קישור ישיר למסך האישור של Google (‎?connect=google‎), או לחלון החיבור
+ * לרענון (‎?open=google‎). בלי כתובת — ההסבר איפה זה באפליקציה.
+ */
+function noticeLine(userId, root = '') {
   const n = notice(userId);
   if (!n) return null;
+  const connectLink = root ? `\n👉 לחיבור בלחיצה: ${root}/?connect=google` : '';
+  const where = '"החשבון שלי ← Gmail ועוזר ה-AI"';
   return {
-    connect: '👥 *אנשי הקשר מ-Google:* כדי שאמצא טלפונים ומיילים מאנשי הקשר שלך — חברו את Google באפליקציה: "החשבון שלי ← Gmail ועוזר ה-AI".',
-    reconnect: '👥 *אנשי הקשר מ-Google:* צריך לחבר מחדש את Google באפליקציה ("החשבון שלי ← Gmail ועוזר ה-AI") ולסמן במסך של Google את כל התיבות.',
-    refresh: '👥 *אנשי הקשר מ-Google* עוד לא נטענו — התחלתי לטעון אותם. אם זה לא מסתדר: "החשבון שלי ← Gmail ועוזר ה-AI ← 🔄 רענון".'
+    connect: `👥 *אנשי הקשר מ-Google:* כדי שאמצא טלפונים ומיילים מאנשי הקשר שלך — חברו את Google${root ? '' : ` באפליקציה: ${where}`}. במסך של Google — לסמן את כל התיבות.${connectLink}`,
+    reconnect: `👥 *אנשי הקשר מ-Google:* צריך לחבר מחדש את Google${root ? '' : ` באפליקציה (${where})`}, ובמסך של Google לסמן את כל התיבות.${connectLink}`,
+    refresh: `👥 *אנשי הקשר מ-Google* עוד לא נטענו — התחלתי לטעון אותם. אם זה לא מסתדר — ${root ? `🔄 רענון: ${root}/?open=google` : `${where} ← 🔄 רענון`}`
   }[n.kind];
 }
 

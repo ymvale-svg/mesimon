@@ -1370,8 +1370,9 @@ function createFromDraft(actor, original) {
   });
 }
 
+const appRoot = () => String(D.getSetting('public_url', '') || process.env.PUBLIC_URL || '').trim().replace(/\/+$/, '');
 const taskLink = (id) => {
-  const root = String(D.getSetting('public_url', '') || process.env.PUBLIC_URL || '').trim().replace(/\/+$/, '');
+  const root = appRoot();
   return root ? `${root}/?task=${id}` : null;
 };
 
@@ -1647,7 +1648,7 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
       });
     }
     // אנשי הקשר מ-Google — מה לעשות כדי שיעבדו, בהודעה הראשונה של היום
-    const contactsHint = firstOfDay && !dry ? GContacts.noticeLine(actor.id) : null;
+    const contactsHint = firstOfDay && !dry ? GContacts.noticeLine(actor.id, appRoot()) : null;
     const parts = [prefix || null, today?.text ?? null, connectHint, contactsHint, followUps.length ? null : menu].filter(Boolean);
     if (!parts.length) return out(helpText(actor), {}, { action: 'help', status: 'ok', result: 'עזרה' });
     return out(parts.join('\n\n'), {

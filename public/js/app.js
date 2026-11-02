@@ -229,7 +229,13 @@ const App = (() => {
     } catch (err) {
       // בתוך הבאנר אין מסך כניסה — הבאנר עובר לאייקון
       if (Spotlight.embedded) return Spotlight.embedFail();
-      if (err.status === 401) LoginView.render(root(), boot);
+      if (err.status === 401) {
+        // קישור מהבוט ("לחיבור Google") — ממשיכים אליו אחרי הכניסה, גם דרך כניסה עם Google
+        const q = new URLSearchParams(location.search);
+        const after = q.get('connect') ? `connect:${q.get('connect')}` : q.get('open') ? `open:${q.get('open')}` : null;
+        if (after) { try { sessionStorage.setItem('mesimon.afterLogin', after); } catch { /* ריק */ } }
+        LoginView.render(root(), boot);
+      }
       else {
         UI.mount(root(), el('div.empty', {}, [
           el('div.e-icon', { text: '⚠️' }),
@@ -247,7 +253,8 @@ const App = (() => {
    */
   function contactsNotice() {
     const n = state.contactsNotice;
-    if (!n || new URLSearchParams(location.search).has('gmail')) return;
+    const q = new URLSearchParams(location.search);
+    if (!n || q.has('gmail') || q.has('connect') || q.has('open')) return;
     const key = 'mesimon.contactsNotice';
     const day = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Jerusalem' }).format(new Date());
     try { if (localStorage.getItem(key) === day) return; } catch { /* בלי אחסון — מציגים */ }
@@ -273,7 +280,20 @@ const App = (() => {
   function openFromUrl(params) {
     const voice = params.get('voice') === '1';
     const newTask = params.get('new') === 'task';
-    if (params.has('voice') || params.has('new') || params.has('view')) history.replaceState(null, '', location.pathname);
+    /*
+     * ‎?connect=google‎ — קישור מהבוט: ישר למסך האישור של Google (חיבור או
+     * חיבור מחדש, עם כל ההרשאות). ‎?open=google‎ — חלון חיבור Google במשימון
+     * (לרענון אנשי הקשר). נשמר גם דרך מסך הכניסה, אם היה צריך להתחבר קודם.
+     */
+    let connect = params.get('connect') ?? params.get('open');
+    if (connect) connect = `${params.has('connect') ? 'connect' : 'open'}:${connect}`;
+    try {
+      connect = connect || sessionStorage.getItem('mesimon.afterLogin');
+      sessionStorage.removeItem('mesimon.afterLogin');
+    } catch { /* ריק */ }
+    if (params.has('voice') || params.has('new') || params.has('view') || params.has('connect') || params.has('open')) history.replaceState(null, '', location.pathname);
+    if (connect === 'connect:google') { location.href = '/api/me/gmail/connect'; return; }
+    if (connect === 'open:google') { setTimeout(() => AiInboxView.openGmail(() => {}), 300); return; }
     if (voice && may('create_task')) setTimeout(() => VoiceView.open({ ask: true, handsFree: true }), 300);
     else if (newTask && may('create_task')) setTimeout(() => BoardView.openTaskDialog(), 300);
   }
