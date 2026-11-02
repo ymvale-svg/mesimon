@@ -95,7 +95,7 @@ const MailMemoryView = (() => {
       const s = state;
       const parts = [];
       if (!s.allowed) {
-        parts.push(el('div.mute-sm', { text: 'זיכרון העבודה בפיילוט — מנהל המערכת קובע מי משתתף (ניהול ← הגדרות).' }));
+        parts.push(el('div.mute-sm', { text: 'זיכרון העבודה אינו פתוח עבורך כרגע — מנהל המערכת קובע מי משתתף (ניהול ← הגדרות).' }));
         if (s.counts?.people || s.counts?.events) parts.push(counts(), forgetButton());
         return UI.mount(box, ...parts);
       }

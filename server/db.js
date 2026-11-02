@@ -1221,11 +1221,11 @@ const DEFAULT_SETTINGS = {
 
   /*
    * זיכרון העבודה — סריקת כל היסטוריית המייל (‎ai/mail-memory.js‎).
-   * ‎mail_memory_users‎: למי מותר להפעיל. ריק = מנהלי מערכת בלבד (פיילוט),
+   * ‎mail_memory_users‎: למי מותר להפעיל. ריק = מנהלי מערכת בלבד,
    * ‎*‎ = כל העובדים, או רשימת כתובות מופרדות בפסיק.
    */
   mail_memory_enabled: true,
-  mail_memory_users: '',
+  mail_memory_users: '*',                  // פתוח לכל העובדים; כל אחד מפעיל ומאשר עלות לעצמו
   mail_memory_model: 'claude-haiku-5-5',   // מודל זול: הקריאה רבה, ואין צורך בשיקול דעת עמוק
   mail_memory_hours: '19:00-07:00',        // חלון קריאת ההיסטוריה, שעון ישראל. ריק = כל שעה
   mail_memory_nightly_threads: 400,        // כמה שרשורים לכל משתמש ביממה

@@ -59,13 +59,13 @@ const ymd = (d) => (d && !Number.isNaN(d.getTime()) ? localParts(d).date : null)
 // ---------------------------------------------------------------------------
 
 /**
- * ‎mail_memory_users‎: ריק = מנהלי מערכת בלבד (פיילוט) · ‎*‎ = כל העובדים ·
+ * ‎mail_memory_users‎: ריק = מנהלי מערכת בלבד · ‎*‎ = כל העובדים ·
  * אחרת רשימת כתובות. ספקים — לעולם לא.
  */
 function allowed(user) {
   if (!user || user.role === 'vendor') return false;
   if (!D.getSetting('mail_memory_enabled', true)) return false;
-  const rule = String(D.getSetting('mail_memory_users', '') ?? '').trim();
+  const rule = String(D.getSetting('mail_memory_users', '*') ?? '').trim();
   if (rule === '*') return true;
   if (!rule) return ['superadmin', 'admin'].includes(user.role);
   const list = rule.split(/[\s,;]+/).map((x) => x.toLowerCase()).filter(Boolean);
