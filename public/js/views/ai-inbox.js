@@ -518,8 +518,11 @@ const AiInboxView = (() => {
 
   function scanDialog(reload) {
     let range = 'yesterday';
-    const from = el('input', { type: 'date' });
-    const to = el('input', { type: 'date' });
+    // "עד תאריך" — היום כברירת מחדל (שעון ישראל); "מתאריך" לא יכול להיות אחריו
+    const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Jerusalem' }).format(new Date());
+    const from = el('input', { type: 'date', max: today });
+    const to = el('input', { type: 'date', value: today, max: today });
+    to.addEventListener('change', () => { from.max = to.value || today; });
     const custom = el('div.row', { style: { display: 'none' } }, [UI.field('מתאריך', from), UI.field('עד תאריך', to)]);
     const seg = el('div.seg', {}, [
       ['yesterday', 'מאתמול'], ['week', 'שבוע אחרון'], ['month', 'חודש אחרון'], ['custom', 'בין תאריכים']
