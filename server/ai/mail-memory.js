@@ -935,15 +935,22 @@ function search(userId, query, { limit = 12 } = {}) {
     const t = normalize(text);
     return words.reduce((n, w) => n + (t.includes(w) ? 1 : 0), 0);
   };
-  const people = D.all('SELECT * FROM mail_people WHERE user_id = ?', userId)
-    .map((p) => ({ p, s: score(`${p.name} ${p.company} ${p.role} ${p.email}`) * 2 }))
-    .filter((x) => x.s > 0).sort((a, b) => b.s - a.s || (b.p.threads - a.p.threads)).slice(0, limit).map((x) => shapePerson(x.p));
-  const events = D.all('SELECT * FROM mail_memory WHERE user_id = ? ORDER BY happened_at DESC LIMIT 5000', userId)
-    .map((e) => ({ e, s: score(`${e.domain} ${e.keywords} ${e.summary} ${e.contact_email}`) }))
-    .filter((x) => x.s > 0).sort((a, b) => b.s - a.s || String(b.e.happened_at).localeCompare(String(a.e.happened_at))).slice(0, limit).map((x) => x.e);
-  const docs = D.all('SELECT * FROM mail_documents WHERE user_id = ? ORDER BY doc_date DESC LIMIT 5000', userId)
-    .map((d) => ({ d, s: score(`${d.title} ${d.filename} ${d.fields} ${d.kind} ${d.from_email}`) }))
-    .filter((x) => x.s > 0).sort((a, b) => b.s - a.s).slice(0, limit).map((x) => ({ ...x.d, fields: parseJson(x.d.fields, {}) }));
+  // השורות נקראות אחת-אחת מהמסד ונשמרות רק המתאימות — לא כל הזיכרון בבת אחת.
+  // החיפוש רץ בכל שאלה ובכל הצעת סגירה, ולעובד יכולות להיות אלפי רשומות
+  const top = (sql, text, extra = 1) => {
+    const hits = [];
+    for (const row of D.db.prepare(sql).iterate(userId)) {
+      const s = score(text(row)) * extra;
+      if (s > 0) hits.push({ row, s });
+    }
+    return hits;
+  };
+  const people = top('SELECT * FROM mail_people WHERE user_id = ?', (p) => `${p.name} ${p.company} ${p.role} ${p.email}`, 2)
+    .sort((a, b) => b.s - a.s || (b.row.threads - a.row.threads)).slice(0, limit).map((x) => shapePerson(x.row));
+  const events = top('SELECT * FROM mail_memory WHERE user_id = ? ORDER BY happened_at DESC LIMIT 5000', (e) => `${e.domain} ${e.keywords} ${e.summary} ${e.contact_email}`)
+    .sort((a, b) => b.s - a.s || String(b.row.happened_at).localeCompare(String(a.row.happened_at))).slice(0, limit).map((x) => x.row);
+  const docs = top('SELECT * FROM mail_documents WHERE user_id = ? ORDER BY doc_date DESC LIMIT 5000', (d) => `${d.title} ${d.filename} ${d.fields} ${d.kind} ${d.from_email}`)
+    .sort((a, b) => b.s - a.s).slice(0, limit).map((x) => ({ ...x.row, fields: parseJson(x.row.fields, {}) }));
   return { people, events, docs };
 }
 

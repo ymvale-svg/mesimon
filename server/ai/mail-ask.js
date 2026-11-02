@@ -163,9 +163,12 @@ async function ask(user, question, history = [], { context = '' } = {}) {
     try {
       const msg = await Gmail.raw(who, id);
       if ([...(ex.labelIds.get(String(who)) ?? [])].some((l) => msg.labels.includes(l))) continue;
-      const mail = Mime.parse(msg.raw);
-      if (ex.ignored.has(mail.from.address)) continue;
-      mails.push({ id, who, box: Gmail.boxOf(who), mail, at: mail.date ?? msg.internalDate });
+      const full = Mime.parse(msg.raw);
+      if (ex.ignored.has(full.from.address)) continue;
+      // תוכן הקבצים נשמר רק אם השאלה צריכה מסמכים, ורק מה שעשוי להיקרא
+      const files = plan.needs_documents ? full.attachments.filter((a) => Docs.classify(a).kind) : [];
+      const mail = Mime.slim(full);
+      mails.push({ id, who, box: Gmail.boxOf(who), mail, files, at: mail.date ?? msg.internalDate });
     } catch (err) {
       if (!/ 404/.test(err.message)) console.error('[משימון] קריאת מייל לשאלה נכשלה:', err.message);
     }
@@ -179,13 +182,14 @@ async function ask(user, question, history = [], { context = '' } = {}) {
     for (const d of mem.docs.slice(0, 3)) {
       const inHand = mails.find((m) => m.id === d.gmail_id && m.box === (d.box ?? 0));
       try {
-        const mail = inHand ? inHand.mail : Mime.parse((await Gmail.raw(Gmail.handle(user.id, d.box ?? 0), d.gmail_id)).raw);
-        for (const a of mail.attachments) if (want.has(Docs.hashOf(a.data))) atts.push(a);
+        const files = inHand ? inHand.files : Mime.parse((await Gmail.raw(Gmail.handle(user.id, d.box ?? 0), d.gmail_id)).raw).attachments;
+        for (const a of files) if (want.has(Docs.hashOf(a.data))) atts.push(a);
       } catch { /* המייל נמחק */ }
     }
-    for (const m of mails) atts.push(...m.mail.attachments);
+    for (const m of mails) atts.push(...m.files);
     docs = Docs.prepare(atts, { limit: 3 }).docs;
   }
+  for (const m of mails) m.files = null;
 
   const sources = [];
   const lines = [`תאריך היום: ${today}`, `השואל: ${user.full_name}`];
