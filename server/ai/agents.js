@@ -244,7 +244,7 @@ async function toolsFor(def, key, user, actor, state) {
     if (r.length) state.sources.add('📚 הידע הארגוני');
     return { entries: r.map((e) => ({ domain: e.domain, project: e.project, text: e.text, cases: e.cases, updatedAt: e.updated_at })) };
   });
-  if (Gmail.has(user.id, 'mail')) {
+  if (Gmail.boxesOf(user.id, 'mail').length) {
     tools.push(MEMORY_TOOL);
     handlers.set('search_my_memory', (i) => {
       const r = shapeMemory(Memory.search(user.id, String(i.query ?? ''), { limit: 10 }));

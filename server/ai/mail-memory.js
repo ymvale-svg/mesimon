@@ -41,6 +41,21 @@ const EST_THREAD_IN = 5500;
 const EST_THREAD_OUT = 500;
 
 const skill = () => fs.readFileSync(SKILL_PATH, 'utf8');
+
+/*
+ * כמה תיבות לעובד (‎mail_accounts‎): לכל שרשור, רשומה ומסמך — מאיזו תיבה הם.
+ * כך הקישור "פתח ב-Gmail" נפתח בחשבון הנכון, וכל תיבה ממופה ונקראת בנפרד.
+ * ‎box‎ = 0 — התיבה הראשית.
+ */
+for (const t of ['mail_memory_threads', 'mail_memory', 'mail_documents']) {
+  try { D.db.exec(`ALTER TABLE ${t} ADD COLUMN box INTEGER NOT NULL DEFAULT 0`); } catch { /* כבר קיימת */ }
+}
+/** התיבות המחוברות של העובד לקריאה — ‎handle‎ של Gmail (הראשית קודם) */
+const boxesFor = (userId) => Gmail.boxesOf(userId, 'mail');
+const connected = (userId) => boxesFor(userId).length > 0;
+const whoOf = (userId, box) => Gmail.handle(userId, Number(box) || 0);
+/** כתובת התיבה — לקישורים */
+const boxEmail = (userId, box) => Gmail.connectionOf(whoOf(userId, box))?.email ?? '';
 const parseJson = (text, fallback) => { try { return JSON.parse(text); } catch { return fallback; } };
 const nowIso = () => D.nowIso();
 const model = () => String(D.getSetting('mail_memory_model', 'claude-haiku-5-5') || 'claude-haiku-5-5');
@@ -151,7 +166,8 @@ function status(user) {
   );
   const base = {
     allowed: allowed(user),
-    connected: Gmail.has(user.id, 'mail'),
+    connected: connected(user.id),
+    boxes: boxesFor(user.id).map((who) => ({ box: Gmail.boxOf(who), email: Gmail.connectionOf(who)?.email ?? '' })),
     aiEnabled: Claude.isEnabled(),
     hours: String(D.getSetting('mail_memory_hours', '') ?? ''),
     perDay: Number(D.getSetting('mail_memory_nightly_threads', 400)),
@@ -186,7 +202,7 @@ function status(user) {
 
 function assertAllowed(user) {
   if (!allowed(user)) throw Object.assign(new Error('זיכרון העבודה אינו פתוח עבורך כרגע — מנהל המערכת קובע מי משתתף'), { status: 403 });
-  if (!Gmail.has(user.id, 'mail')) throw new Error('יש לחבר קודם את תיבת ה-Gmail');
+  if (!connected(user.id)) throw new Error('יש לחבר קודם את תיבת ה-Gmail');
   if (!Claude.isEnabled()) throw new Error('חיבור ה-AI אינו מוגדר בשרת');
 }
 
@@ -200,7 +216,7 @@ function start(user, { fromDate = null, withDocs = true, internal = true, exclud
     state: 'mapping', from_date: fromDate || null, with_docs: withDocs !== false, internal: internal !== false,
     excluded_labels: JSON.stringify((excludedLabels ?? []).map((x) => String(x).trim()).filter(Boolean).slice(0, 30)),
     page_token: null, error: '', started_at: run?.started_at ?? nowIso(),
-    stats: run ? parseJson(run.stats, {}) : {}
+    stats: { ...(run ? parseJson(run.stats, {}) : {}), boxesMapped: [] }
   });
   kick();
   return status(user);
@@ -248,10 +264,10 @@ function forget(userId) {
 
 const orgEmails = () => new Set(D.all("SELECT lower(email) e FROM users WHERE status = 'active' AND role <> 'vendor'").map((r) => r.e));
 
+/** כל הכתובות של העובד — מכל התיבות. מייל מאחת מהן הוא "שלי" */
 function myAddresses(userId) {
-  const conn = Gmail.connectionOf(userId);
   const u = userRow(userId);
-  return new Set([conn?.email, u?.email].filter(Boolean).map((a) => a.toLowerCase()));
+  return new Set([...Gmail.emailsOf(userId), u?.email].filter(Boolean).map((a) => a.toLowerCase()));
 }
 
 const addressesIn = (value) => String(value ?? '').split(',').map((x) => Mime.parseAddress(x)).filter((a) => a.address && a.address.includes('@'));
@@ -272,10 +288,10 @@ async function withRetry(fn, tries = 4) {
  * שרשור אחד מהמפה: עדכון מוני אנשי הקשר, והכרעה אם לקרוא אותו בשלב 3.
  * מחזיר את ההכרעה, או ‎null‎ אם השרשור כבר במפה.
  */
-async function mapThread(userId, threadId, ctx, { fresh = false } = {}) {
+async function mapThread(userId, who, threadId, ctx, { fresh = false } = {}) {
   const existing = D.get('SELECT status, last_at FROM mail_memory_threads WHERE user_id = ? AND thread_id = ?', userId, threadId);
   if (existing && !fresh) return null;
-  const msgs = await withRetry(() => Gmail.threadMeta(userId, threadId));
+  const msgs = await withRetry(() => Gmail.threadMeta(who, threadId));
   if (!msgs.length) return null;
   const last = msgs[msgs.length - 1];
   const lastAt = (last.at ?? new Date()).toISOString();
@@ -335,11 +351,11 @@ async function mapThread(userId, threadId, ctx, { fresh = false } = {}) {
   }
 
   D.run(
-    `INSERT INTO mail_memory_threads (user_id, thread_id, last_at, subject, messages, has_files, status, reason, fresh)
-     VALUES (?,?,?,?,?,?,?,?,?)
-     ON CONFLICT(user_id, thread_id) DO UPDATE SET last_at = excluded.last_at, subject = excluded.subject, messages = excluded.messages,
+    `INSERT INTO mail_memory_threads (user_id, thread_id, box, last_at, subject, messages, has_files, status, reason, fresh)
+     VALUES (?,?,?,?,?,?,?,?,?,?)
+     ON CONFLICT(user_id, thread_id) DO UPDATE SET box = excluded.box, last_at = excluded.last_at, subject = excluded.subject, messages = excluded.messages,
        has_files = excluded.has_files, status = excluded.status, reason = excluded.reason, fresh = excluded.fresh`,
-    userId, threadId, lastAt, subject, msgs.length, msgs.some((m) => m.hasFiles) ? 1 : 0,
+    userId, threadId, Gmail.boxOf(who), lastAt, subject, msgs.length, msgs.some((m) => m.hasFiles) ? 1 : 0,
     reason ? 'skipped' : 'pending', reason, fresh ? 1 : 0
   );
   return reason || 'selected';
@@ -368,12 +384,12 @@ function touchPerson(userId, address, t, internal) {
   );
 }
 
-async function mapContext(userId, run) {
+async function mapContext(userId, who, run) {
   const excluded = parseJson(run.excluded_labels, []).map((x) => x.toLowerCase());
   let excludedIds = new Set();
   if (excluded.length) {
     try {
-      excludedIds = new Set((await Gmail.labels(userId)).filter((l) => excluded.includes(l.name.toLowerCase())).map((l) => l.id));
+      excludedIds = new Set((await Gmail.labels(who)).filter((l) => excluded.includes(l.name.toLowerCase())).map((l) => l.id));
     } catch (err) {
       console.error('[משימון] קריאת התוויות נכשלה:', err.message);
     }
@@ -387,33 +403,60 @@ async function mapContext(userId, run) {
   };
 }
 
-/** שלב 1: עמוד אחרי עמוד, עד הסוף. נשמר ‎page_token‎ — ממשיכים מאותה נקודה */
+/**
+ * נקודת ההמשך של המיפוי, לכל תיבה: ‎{"<box>": pageToken}‎. ערך ישן (מחרוזת
+ * אחת, מלפני התיבות הנוספות) — של התיבה הראשית.
+ */
+function pageTokens(run) {
+  const raw = run.page_token;
+  if (!raw) return {};
+  const parsed = parseJson(raw, null);
+  return parsed && typeof parsed === 'object' ? parsed : { 0: raw };
+}
+
+/**
+ * שלב 1: כל תיבה שעוד לא מופתה — עמוד אחרי עמוד, עד הסוף. נקודת ההמשך נשמרת
+ * לכל תיבה, וכך ממשיכים מאותו מקום אחרי הפעלה מחדש. תיבה שנוספה אחרי שהזיכרון
+ * כבר נבנה — ממופה לבד, ואז מחכה לאישור העלות שלה.
+ */
 async function mapStep(userId) {
   let run = runOf(userId);
   if (!run || run.state !== 'mapping') return;
-  const ctx = await mapContext(userId, run);
   const q = ['-in:spam', '-in:trash', '-in:chats', run.from_date ? `after:${run.from_date.replace(/-/g, '/')}` : null].filter(Boolean).join(' ');
-  for (;;) {
-    run = runOf(userId);
-    if (!run || run.state !== 'mapping') return;
-    const page = await withRetry(() => Gmail.listThreads(userId, q, { pageToken: run.page_token }));
-    for (let i = 0; i < page.ids.length; i += MAP_CONCURRENCY) {
-      const results = await Promise.all(page.ids.slice(i, i + MAP_CONCURRENCY).map((id) =>
-        mapThread(userId, id, ctx).catch((err) => { console.error('[משימון] מיפוי שרשור נכשל:', err.message); return 'error'; })));
-      bumpStats(userId, (s) => {
-        s.mapped = (s.mapped ?? 0) + results.filter((r) => r).length;
-        for (const r of results) if (r) s[`r_${r}`] = (s[`r_${r}`] ?? 0) + 1;
-      });
-      if (runOf(userId)?.state !== 'mapping') return;
+  const firstTime = !run.mapped_at;
+  for (const who of boxesFor(userId)) {
+    const box = Gmail.boxOf(who);
+    if ((parseJson(runOf(userId)?.stats, {}).boxesMapped ?? []).includes(box)) continue;
+    const ctx = await mapContext(userId, who, run);
+    for (;;) {
+      run = runOf(userId);
+      if (!run || run.state !== 'mapping') return;
+      const tokens = pageTokens(run);
+      const page = await withRetry(() => Gmail.listThreads(who, q, { pageToken: tokens[box] ?? null }));
+      for (let i = 0; i < page.ids.length; i += MAP_CONCURRENCY) {
+        const results = await Promise.all(page.ids.slice(i, i + MAP_CONCURRENCY).map((id) =>
+          mapThread(userId, who, id, ctx).catch((err) => { console.error('[משימון] מיפוי שרשור נכשל:', err.message); return 'error'; })));
+        bumpStats(userId, (s) => {
+          s.mapped = (s.mapped ?? 0) + results.filter((r) => r).length;
+          for (const r of results) if (r) s[`r_${r}`] = (s[`r_${r}`] ?? 0) + 1;
+        });
+        if (runOf(userId)?.state !== 'mapping') return;
+      }
+      const next = { ...pageTokens(runOf(userId)) };
+      if (page.next) next[box] = page.next;
+      else delete next[box];
+      D.run('UPDATE mail_memory_runs SET page_token = ?, updated_at = ? WHERE user_id = ?', JSON.stringify(next), nowIso(), userId);
+      if (!page.next) break;
     }
-    if (!page.next) break;
-    D.run('UPDATE mail_memory_runs SET page_token = ?, updated_at = ? WHERE user_id = ?', page.next, nowIso(), userId);
+    bumpStats(userId, (s) => { s.boxesMapped = [...new Set([...(s.boxesMapped ?? []), box])]; });
   }
-  saveRun(userId, { state: 'mapped', page_token: null, mapped_at: nowIso(), last_incremental_at: nowIso() });
+  saveRun(userId, { state: 'mapped', page_token: null, mapped_at: nowIso(), last_incremental_at: runOf(userId)?.last_incremental_at ?? nowIso() });
   const est = estimate(userId, runOf(userId));
   D.notify({
     targetType: 'user', targetId: userId, kind: 'ai',
-    title: `🧠 המיפוי הסתיים: ${est.threads.toLocaleString('he-IL')} שרשורים לקריאה`,
+    title: firstTime
+      ? `🧠 המיפוי הסתיים: ${est.threads.toLocaleString('he-IL')} שרשורים לקריאה`
+      : `🧠 תיבה נוספת מופתה: ${est.threads.toLocaleString('he-IL')} שרשורים לקריאה`,
     body: `${est.cost !== null ? `הערכת עלות: כ-$${est.cost}. ` : ''}הקריאה תתחיל רק אחרי שתאשר — "החשבון שלי ← חיבור Google ועוזר ה-AI".`
   });
 }
@@ -474,15 +517,16 @@ const isDate = (x) => /^\d{4}-\d{2}-\d{2}$/.test(String(x ?? ''));
 const normPhone = (p) => String(p ?? '').replace(/[^\d+]/g, '');
 
 /** שרשור אחד: קריאה, AI, ושמירת מה שהוסק */
-async function readThread(userId, threadId, run) {
+async function readThread(userId, who, threadId, run) {
   const user = userRow(userId);
   if (!user) return 'skipped';
-  const meta = await withRetry(() => Gmail.threadMeta(userId, threadId));
+  const box = Gmail.boxOf(who);
+  const meta = await withRetry(() => Gmail.threadMeta(who, threadId));
   const recent = meta.slice(-MESSAGES_PER_THREAD);
   const mine = myAddresses(userId);
   const mails = [];
   for (const m of recent) {
-    const msg = await withRetry(() => Gmail.raw(userId, m.id));
+    const msg = await withRetry(() => Gmail.raw(who, m.id));
     mails.push({ id: m.id, mail: Mime.parse(msg.raw), at: m.at });
   }
   if (!mails.length) return 'skipped';
@@ -558,9 +602,9 @@ async function readThread(userId, threadId, run) {
     if (!summary) continue;
     const contact = String(e.contact_email ?? '').trim().toLowerCase();
     D.run(
-      `INSERT INTO mail_memory (user_id, thread_id, gmail_id, contact_email, domain, keywords, summary, outcome, amount, happened_at, created_at)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
-      userId, threadId, lastGmail, participants.has(contact) ? contact : '',
+      `INSERT INTO mail_memory (user_id, thread_id, box, gmail_id, contact_email, domain, keywords, summary, outcome, amount, happened_at, created_at)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+      userId, threadId, box, lastGmail, participants.has(contact) ? contact : '',
       String(e.domain ?? '').trim().slice(0, 80),
       (e.keywords ?? []).map((k) => String(k).trim()).filter(Boolean).slice(0, 10).join(' ').slice(0, 300),
       summary, ['closed', 'open', 'stuck', 'cancelled', 'info'].includes(e.outcome) ? e.outcome : 'info',
@@ -574,9 +618,9 @@ async function readThread(userId, threadId, run) {
     const fields = Object.fromEntries(['amount', 'number', 'parties', 'gush_helka', 'project']
       .map((k) => [k, String(d[k] ?? '').trim().slice(0, 200)]).filter(([, v]) => v));
     D.run(
-      `INSERT INTO mail_documents (user_id, hash, thread_id, gmail_id, filename, mime, kind, from_email, title, fields, valid_until, doc_date, created_at)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(user_id, hash) DO NOTHING`,
-      userId, doc.hash, threadId, doc.gmailId, String(doc.filename).slice(0, 200), String(doc.mime ?? '').slice(0, 100),
+      `INSERT INTO mail_documents (user_id, hash, thread_id, box, gmail_id, filename, mime, kind, from_email, title, fields, valid_until, doc_date, created_at)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(user_id, hash) DO NOTHING`,
+      userId, doc.hash, threadId, box, doc.gmailId, String(doc.filename).slice(0, 200), String(doc.mime ?? '').slice(0, 100),
       d.kind, doc.from, String(d.title ?? '').trim().slice(0, 300), JSON.stringify(fields),
       isDate(d.valid_until) ? d.valid_until : null, doc.at ? ymd(doc.at) : null, nowIso()
     );
@@ -635,7 +679,7 @@ async function readStep(userId) {
   const historyOpen = run.state === 'running' && inHours();
   // עדכון הבוקר נקרא בכל שעה; ההיסטוריה — רק בחלון ובמצב "רץ"
   const rows = D.all(
-    `SELECT thread_id FROM mail_memory_threads WHERE user_id = ? AND status = 'pending' ${historyOpen ? '' : 'AND fresh = 1'}
+    `SELECT thread_id, box FROM mail_memory_threads WHERE user_id = ? AND status = 'pending' ${historyOpen ? '' : 'AND fresh = 1'}
       ORDER BY fresh DESC, last_at DESC LIMIT ?`,
     userId, Math.min(PER_TICK, left)
   );
@@ -653,11 +697,13 @@ async function readStep(userId) {
   }
   for (let i = 0; i < rows.length; i += READ_CONCURRENCY) {
     if (!['running', 'done'].includes(runOf(userId)?.state)) return;
-    await Promise.all(rows.slice(i, i + READ_CONCURRENCY).map(async ({ thread_id: threadId }) => {
+    await Promise.all(rows.slice(i, i + READ_CONCURRENCY).map(async ({ thread_id: threadId, box }) => {
+      // תיבה שנותקה בינתיים — השרשור נשאר בתור עד שתחובר שוב
+      if (!Gmail.has(whoOf(userId, box), 'mail')) return;
       let st = 'error';
       let reason = '';
       try {
-        const r = await readThread(userId, threadId, runOf(userId));
+        const r = await readThread(userId, whoOf(userId, box), threadId, runOf(userId));
         st = r === 'done' ? 'done' : 'skipped';
         reason = r === 'done' ? '' : r;
       } catch (err) {
@@ -681,7 +727,7 @@ async function tick() {
     // ‎mapped‎ — ממתין לאישור העלות, ‎paused‎ — עצר: בשניהם לא קוראים כלום
     for (const run of D.all("SELECT * FROM mail_memory_runs WHERE state IN ('mapping','running','done')")) {
       const user = userRow(run.user_id);
-      if (!user || !allowed(user) || !Gmail.has(user.id, 'mail') || busy.has(user.id)) continue;
+      if (!user || !allowed(user) || !connected(user.id) || busy.has(user.id)) continue;
       busy.add(user.id);
       const job = run.state === 'mapping' ? mapStep(user.id) : readStep(user.id);
       // המיפוי יכול להימשך שעה — לא מחכים לו; כל משתמש בנפרד
@@ -708,21 +754,30 @@ async function morning() {
   if (!Claude.isEnabled() || !D.getSetting('mail_memory_enabled', true)) return;
   for (const run of D.all("SELECT * FROM mail_memory_runs WHERE state IN ('running','done')")) {
     const user = userRow(run.user_id);
-    if (!user || !allowed(user) || !Gmail.has(user.id, 'mail')) continue;
+    if (!user || !allowed(user) || !connected(user.id)) continue;
+    const mapped = new Set(parseJson(run.stats, {}).boxesMapped ?? [0]);
+    const boxes = boxesFor(user.id);
+    // תיבה שנוספה מאז — ממופה כמו בפעם הראשונה, ומחכה לאישור העלות שלה
+    if (boxes.some((who) => !mapped.has(Gmail.boxOf(who)))) {
+      if (!parseJson(run.stats, {}).boxesMapped) bumpStats(user.id, (s) => { s.boxesMapped = [0]; });
+      saveRun(user.id, { state: 'mapping' });
+    }
     try {
       const since = new Date(run.last_incremental_at ?? run.mapped_at ?? Date.now() - DAY);
-      const ctx = await mapContext(user.id, run);
       const q = `-in:spam -in:trash -in:chats after:${Math.floor((since.getTime() - 3600000) / 1000)}`;
-      let pageToken = null;
-      let n = 0;
-      do {
-        const page = await withRetry(() => Gmail.listThreads(user.id, q, { pageToken }));
-        for (const id of page.ids) {
-          await mapThread(user.id, id, ctx, { fresh: true }).catch((err) => console.error('[משימון] עדכון בוקר לשרשור נכשל:', err.message));
-          n++;
-        }
-        pageToken = page.next;
-      } while (pageToken && n < 1000);
+      for (const who of boxes.filter((w) => mapped.has(Gmail.boxOf(w)))) {
+        const ctx = await mapContext(user.id, who, run);
+        let pageToken = null;
+        let n = 0;
+        do {
+          const page = await withRetry(() => Gmail.listThreads(who, q, { pageToken }));
+          for (const id of page.ids) {
+            await mapThread(user.id, who, id, ctx, { fresh: true }).catch((err) => console.error('[משימון] עדכון בוקר לשרשור נכשל:', err.message));
+            n++;
+          }
+          pageToken = page.next;
+        } while (pageToken && n < 1000);
+      }
       D.run('UPDATE mail_memory_runs SET last_incremental_at = ?, updated_at = ? WHERE user_id = ?', nowIso(), nowIso(), user.id);
     } catch (err) {
       console.error(`[משימון] עדכון הבוקר של זיכרון המייל (${user.id}) נכשל:`, err.message);
@@ -822,21 +877,25 @@ const personByEmail = (userId, email) => {
 function browse(userId, { q = '', tab = 'people', offset = 0 } = {}) {
   const lim = 50;
   const off = Math.max(0, Number(offset) || 0);
-  const conn = Gmail.connectionOf(userId);
-  const link = (gmailId) => (conn?.email && gmailId ? Gmail.webLink(conn.email, gmailId) : null);
+  const emails = new Map();
+  const link = (gmailId, box = 0) => {
+    if (!gmailId) return null;
+    if (!emails.has(box)) emails.set(box, boxEmail(userId, box));
+    return emails.get(box) ? Gmail.webLink(emails.get(box), gmailId) : null;
+  };
   if (q.trim()) {
     const r = search(userId, q, { limit: lim });
     return {
       people: r.people,
-      events: r.events.map((e) => ({ ...e, link: link(e.gmail_id) })),
-      docs: r.docs.map((d) => ({ ...d, link: link(d.gmail_id) }))
+      events: r.events.map((e) => ({ ...e, link: link(e.gmail_id, e.box) })),
+      docs: r.docs.map((d) => ({ ...d, link: link(d.gmail_id, d.box) }))
     };
   }
   if (tab === 'events') {
-    return { events: D.all('SELECT * FROM mail_memory WHERE user_id = ? ORDER BY happened_at DESC LIMIT ? OFFSET ?', userId, lim, off).map((e) => ({ ...e, link: link(e.gmail_id) })) };
+    return { events: D.all('SELECT * FROM mail_memory WHERE user_id = ? ORDER BY happened_at DESC LIMIT ? OFFSET ?', userId, lim, off).map((e) => ({ ...e, link: link(e.gmail_id, e.box) })) };
   }
   if (tab === 'docs') {
-    return { docs: D.all('SELECT * FROM mail_documents WHERE user_id = ? ORDER BY doc_date DESC LIMIT ? OFFSET ?', userId, lim, off).map((d) => ({ ...d, fields: parseJson(d.fields, {}), link: link(d.gmail_id) })) };
+    return { docs: D.all('SELECT * FROM mail_documents WHERE user_id = ? ORDER BY doc_date DESC LIMIT ? OFFSET ?', userId, lim, off).map((d) => ({ ...d, fields: parseJson(d.fields, {}), link: link(d.gmail_id, d.box) })) };
   }
   return {
     people: D.all(
@@ -874,7 +933,7 @@ function init() {
 }
 
 module.exports = {
-  init, tick, morning, allowed, status, start, approve, pause, update, forget,
+  init, tick, morning, allowed, status, start, approve, pause, update, forget, boxesFor, whoOf,
   search, personByEmail, eventsWith, browse, editPerson, remove, terms, normalize,
   _internal: { mapThread, readThread, estimate, inHours, expiryNotices, savePerson }
 };

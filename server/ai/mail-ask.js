@@ -61,7 +61,7 @@ const ymd = (d) => (d && !Number.isNaN(new Date(d).getTime()) ? new Date(d).toLo
 const heDate = (d) => (d && !Number.isNaN(new Date(d).getTime()) ? new Date(d).toLocaleDateString('he-IL', { timeZone: TZ }) : '');
 
 function available(userId) {
-  return Claude.isEnabled() && Gmail.has(userId, 'mail');
+  return Claude.isEnabled() && Gmail.boxesOf(userId, 'mail').length > 0;
 }
 
 /** תקרה יומית לכל משתמש — נשמרת בהעדפות שלו, כדי לשרוד הפעלה מחדש */
@@ -86,14 +86,19 @@ function clearRecent(userId) {
 }
 
 /** מה שהוחרג מהזיכרון — מוחרג גם מהתשובות */
-async function exclusions(userId) {
+async function exclusions(userId, boxes) {
   const run = D.get('SELECT excluded_labels FROM mail_memory_runs WHERE user_id = ?', userId);
   const names = parseJson(run?.excluded_labels, []).map((x) => x.toLowerCase());
-  let labelIds = new Set();
-  if (names.length) {
-    try {
-      labelIds = new Set((await Gmail.labels(userId)).filter((l) => names.includes(l.name.toLowerCase())).map((l) => l.id));
-    } catch { /* בלי החרגת תוויות הפעם */ }
+  // לכל תיבה — מזהי התוויות שלה (אותו שם, מזהה שונה בכל חשבון)
+  const labelIds = new Map();
+  for (const who of boxes) {
+    let ids = new Set();
+    if (names.length) {
+      try {
+        ids = new Set((await Gmail.labels(who)).filter((l) => names.includes(l.name.toLowerCase())).map((l) => l.id));
+      } catch { /* בלי החרגת תוויות הפעם */ }
+    }
+    labelIds.set(String(who), ids);
   }
   const ignored = new Set(D.all("SELECT email FROM mail_trusted_senders WHERE user_id = ? AND mode = 'ignore'", userId).map((r) => r.email.toLowerCase()));
   return { labelIds, ignored };
@@ -133,26 +138,34 @@ async function ask(user, question, history = [], { context = '' } = {}) {
   });
 
   // 2. חיפוש — זיכרון ו-Gmail במקביל
-  const ex = await exclusions(user.id);
+  // כל התיבות של השואל — הראשית והנוספות
+  const boxes = Gmail.boxesOf(user.id, 'mail');
+  const ex = await exclusions(user.id, boxes);
   const mem = Memory.search(user.id, `${plan.memory_query} ${q}`, { limit: 8 });
   const queries = (plan.gmail_queries ?? []).map((x) => String(x).trim()).filter(Boolean).slice(0, 3);
-  const idLists = await Promise.all(queries.map((gq) =>
-    Gmail.search(user.id, `${gq} -in:spam -in:trash`, { max: 8 }).catch((err) => { console.error('[משימון] חיפוש Gmail לשאלה נכשל:', err.message); return []; })));
+  const idLists = await Promise.all(boxes.flatMap((who) => queries.map((gq) =>
+    Gmail.search(who, `${gq} -in:spam -in:trash`, { max: 8 })
+      .then((list) => list.map((id) => ({ who, id })))
+      .catch((err) => { console.error('[משימון] חיפוש Gmail לשאלה נכשל:', err.message); return []; }))));
   const ids = [];
-  // לסירוגין בין החיפושים — כך כל חיפוש תורם, ולא רק הראשון
-  for (let i = 0; i < 8; i++) for (const list of idLists) if (list[i] && !ids.includes(list[i])) ids.push(list[i]);
-  for (const e of mem.events) if (e.gmail_id && !ids.includes(e.gmail_id)) ids.push(e.gmail_id);
+  const has = (x) => ids.some((y) => y.id === x.id && String(y.who) === String(x.who));
+  // לסירוגין בין החיפושים והתיבות — כך כל חיפוש תורם, ולא רק הראשון
+  for (let i = 0; i < 8; i++) for (const list of idLists) if (list[i] && !has(list[i])) ids.push(list[i]);
+  for (const e of mem.events) {
+    const x = { who: Gmail.handle(user.id, e.box ?? 0), id: e.gmail_id };
+    if (e.gmail_id && !has(x)) ids.push(x);
+  }
 
   // 3. קריאה
   const mails = [];
-  for (const id of ids) {
+  for (const { who, id } of ids) {
     if (mails.length >= MAX_MAILS) break;
     try {
-      const msg = await Gmail.raw(user.id, id);
-      if ([...ex.labelIds].some((l) => msg.labels.includes(l))) continue;
+      const msg = await Gmail.raw(who, id);
+      if ([...(ex.labelIds.get(String(who)) ?? [])].some((l) => msg.labels.includes(l))) continue;
       const mail = Mime.parse(msg.raw);
       if (ex.ignored.has(mail.from.address)) continue;
-      mails.push({ id, mail, at: mail.date ?? msg.internalDate });
+      mails.push({ id, who, box: Gmail.boxOf(who), mail, at: mail.date ?? msg.internalDate });
     } catch (err) {
       if (!/ 404/.test(err.message)) console.error('[משימון] קריאת מייל לשאלה נכשלה:', err.message);
     }
@@ -164,9 +177,9 @@ async function ask(user, question, history = [], { context = '' } = {}) {
     const want = new Set(mem.docs.slice(0, 3).map((d) => d.hash));
     const atts = [];
     for (const d of mem.docs.slice(0, 3)) {
-      const inHand = mails.find((m) => m.id === d.gmail_id);
+      const inHand = mails.find((m) => m.id === d.gmail_id && m.box === (d.box ?? 0));
       try {
-        const mail = inHand ? inHand.mail : Mime.parse((await Gmail.raw(user.id, d.gmail_id)).raw);
+        const mail = inHand ? inHand.mail : Mime.parse((await Gmail.raw(Gmail.handle(user.id, d.box ?? 0), d.gmail_id)).raw);
         for (const a of mail.attachments) if (want.has(Docs.hashOf(a.data))) atts.push(a);
       } catch { /* המייל נמחק */ }
     }
@@ -182,7 +195,7 @@ async function ask(user, question, history = [], { context = '' } = {}) {
   mails.sort((a, b) => new Date(b.at ?? 0) - new Date(a.at ?? 0));
   mails.forEach((m, i) => {
     const sid = `S${i + 1}`;
-    sources.push({ id: sid, type: 'mail', gmailId: m.id, from: m.mail.from.name || m.mail.from.address, fromEmail: m.mail.from.address, subject: m.mail.subject, date: m.at ? new Date(m.at).toISOString() : null });
+    sources.push({ id: sid, type: 'mail', gmailId: m.id, box: m.box, from: m.mail.from.name || m.mail.from.address, fromEmail: m.mail.from.address, subject: m.mail.subject, date: m.at ? new Date(m.at).toISOString() : null });
     lines.push(
       `[${sid}] ${ymd(m.at)} · מאת: ${m.mail.from.name ? `${m.mail.from.name} ` : ''}<${m.mail.from.address}> · אל: ${m.mail.to}`,
       `נושא: ${m.mail.subject}${m.mail.attachments.length ? ` · קבצים: ${m.mail.attachments.map((a) => a.filename).join(', ')}` : ''}`,
@@ -192,7 +205,7 @@ async function ask(user, question, history = [], { context = '' } = {}) {
   });
   mem.events.forEach((e, i) => {
     const sid = `M${i + 1}`;
-    sources.push({ id: sid, type: 'memory', gmailId: e.gmail_id, subject: e.domain, summary: e.summary, date: e.happened_at, fromEmail: e.contact_email });
+    sources.push({ id: sid, type: 'memory', gmailId: e.gmail_id, box: e.box ?? 0, subject: e.domain, summary: e.summary, date: e.happened_at, fromEmail: e.contact_email });
     lines.push(`[${sid}] זיכרון · ${e.happened_at ?? ''} · ${e.domain} · ${e.contact_email || ''} · ${e.summary}${e.amount ? ` · ${e.amount}` : ''} · ${e.outcome}`);
   });
   mem.people.slice(0, 5).forEach((p) => {
@@ -200,7 +213,7 @@ async function ask(user, question, history = [], { context = '' } = {}) {
   });
   mem.docs.forEach((d, i) => {
     const sid = `D${i + 1}`;
-    sources.push({ id: sid, type: 'doc', gmailId: d.gmail_id, subject: d.title || d.filename, filename: d.filename, date: d.doc_date, fromEmail: d.from_email });
+    sources.push({ id: sid, type: 'doc', gmailId: d.gmail_id, box: d.box ?? 0, subject: d.title || d.filename, filename: d.filename, date: d.doc_date, fromEmail: d.from_email });
     lines.push(`[${sid}] מסמך · ${d.doc_date ?? ''} · ${d.kind} · ${d.filename} · ${d.title}${Object.keys(d.fields).length ? ` · ${Object.entries(d.fields).map(([k, v]) => `${k}: ${v}`).join(' · ')}` : ''}${d.valid_until ? ` · בתוקף עד ${d.valid_until}` : ''}`);
   });
   // 📚 הידע הארגוני — "איך עושים אצלנו", מכל העובדים
@@ -224,15 +237,18 @@ async function ask(user, question, history = [], { context = '' } = {}) {
   });
 
   remember(user.id, q);
-  const conn = Gmail.connectionOf(user.id);
-  const link = (gmailId) => (conn?.email && gmailId ? Gmail.webLink(conn.email, gmailId) : null);
+  // הקישור נפתח בחשבון שבו המייל נמצא
+  const link = (gmailId, box = 0) => {
+    const email = Gmail.connectionOf(Gmail.handle(user.id, box))?.email;
+    return email && gmailId ? Gmail.webLink(email, gmailId) : null;
+  };
   const byId = new Map(sources.map((s) => [s.id, s]));
   // אותו מייל משני מקורות (זיכרון ומייל) — פעם אחת, המייל עצמו עדיף
   const picked = [...new Set((out.sources ?? []).map(String))].map((id) => byId.get(id)).filter(Boolean);
   const used = [];
   for (const s of [...picked.filter((x) => x.type === 'mail'), ...picked.filter((x) => x.type !== 'mail')]) {
     if (s.gmailId && used.some((u) => u.gmailId === s.gmailId && u.type === 'mail')) continue;
-    used.push({ ...s, link: link(s.gmailId), dateLabel: heDate(s.date) });
+    used.push({ ...s, link: link(s.gmailId, s.box ?? 0), dateLabel: heDate(s.date) });
   }
   used.splice(6);
   // פרטי קשר — רק כתובת שבאמת הופיעה במקורות
@@ -256,7 +272,7 @@ async function ask(user, question, history = [], { context = '' } = {}) {
     actions: {
       task: String(out.task_title ?? '').trim().slice(0, 120) || null,
       contact,
-      reply: replyTo?.type === 'mail' ? { gmailId: replyTo.gmailId, to: replyTo.from, subject: replyTo.subject } : null
+      reply: replyTo?.type === 'mail' ? { gmailId: replyTo.gmailId, box: replyTo.box ?? 0, to: replyTo.from, subject: replyTo.subject } : null
     }
   };
 }

@@ -104,6 +104,10 @@ const MailMemoryView = (() => {
 
       const q = s.queue ?? {};
       const st = s.stats ?? {};
+      // כמה חשבונות Google — כולם נכנסים לזיכרון; תיבה שנוספה אחר כך ממופה לבד
+      if ((s.boxes ?? []).length > 1) {
+        parts.push(el('div.mute-sm', { text: `📬 ${s.boxes.length} תיבות: ${s.boxes.map((b) => b.email).filter(Boolean).join(' · ')}` }));
+      }
       switch (s.state) {
         case 'idle':
           parts.push(options());

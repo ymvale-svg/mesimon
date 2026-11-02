@@ -732,7 +732,8 @@ function register(router, h) {
     if (!Gmail.canSend(actor.id)) throw badRequest('כדי לענות צריך לחבר את תיבת ה-Gmail עם הרשאת שליחה');
     try {
       const prev = b.previous && b.feedback ? { body: String(b.previous.body ?? '') } : null;
-      const reply = await MailInsights.draftReply(actor.id, String(b.gmailId ?? ''), String(b.request ?? ''), prev ? { feedback: String(b.feedback), previous: prev } : undefined);
+      const box = Number(b.box) || 0;
+      const reply = await MailInsights.draftReply(actor.id, String(b.gmailId ?? ''), String(b.request ?? ''), { box, ...(prev ? { feedback: String(b.feedback), previous: prev } : {}) });
       sendJson(res, 200, { body: reply.body, to: reply.to, toName: reply.toName, subject: reply.subject });
     } catch (err) {
       throw userError(err);
@@ -744,10 +745,13 @@ function register(router, h) {
     const body = String(b.body ?? '').trim();
     if (!body) throw badRequest('אין מה לשלוח');
     try {
-      // הנמען, הנושא והשרשור — מהמייל המקורי בתיבה, לא ממה שהגיע מהדפדפן
-      const msg = await Gmail.raw(actor.id, String(b.gmailId ?? ''));
+      // הנמען, הנושא והשרשור — מהמייל המקורי בתיבה, לא ממה שהגיע מהדפדפן.
+      // התיבה — רק אחת מהתיבות של המשתמש עצמו (‎handle‎ בונה אותה מהמזהה שלו)
+      const box = Number(b.box) || 0;
+      const msg = await Gmail.raw(Gmail.handle(actor.id, box), String(b.gmailId ?? ''));
       const mail = Mime.parse(msg.raw);
       await MailInsights.sendReply(actor.id, {
+        box,
         threadId: msg.threadId,
         to: mail.from.address,
         toName: mail.from.name || '',

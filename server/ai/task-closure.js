@@ -164,14 +164,16 @@ async function candidatesFor(user, { need, keywords, mayVendors }) {
 
   // 6. עד שהזיכרון נבנה — חיפוש חי בדואר היוצא, בכותרות בלבד
   const run = D.get('SELECT state FROM mail_memory_runs WHERE user_id = ?', user.id);
-  if (run?.state !== 'done' && Gmail.has(user.id, 'mail')) {
+  const boxes = Gmail.boxesOf(user.id, 'mail');
+  if (run?.state !== 'done' && boxes.length) {
     try {
       const q = `in:sent {${words.slice(0, 5).map((w) => `"${w.replace(/"/g, '')}"`).join(' ')}} newer_than:180d`;
-      const ids = await Gmail.search(user.id, q, { max: 10 });
-      const mine = new Set([Gmail.connectionOf(user.id)?.email, user.email].filter(Boolean).map(fold));
+      // הדואר היוצא של כל התיבות — הראשית והנוספות
+      const ids = (await Promise.all(boxes.map((who) => Gmail.search(who, q, { max: 10 }).then((l) => l.map((id) => ({ who, id }))).catch(() => [])))).flat().slice(0, 15);
+      const mine = new Set([...Gmail.emailsOf(user.id), user.email].filter(Boolean).map(fold));
       const seen = new Map();
-      for (const id of ids) {
-        const m = await Gmail.messageMeta(user.id, id);
+      for (const { who, id } of ids) {
+        const m = await Gmail.messageMeta(who, id);
         for (const part of String(m.headers.to ?? '').split(',')) {
           const a = Mime.parseAddress(part);
           if (!a.address || mine.has(a.address)) continue;

@@ -230,7 +230,7 @@ const AskView = (() => {
           if (!what.value.trim()) return what.focus();
           draftBtn.disabled = true;
           try {
-            const d = await API.post('/api/ai/mail-ask/reply/draft', { gmailId: src.gmailId, request: what.value.trim() });
+            const d = await API.post('/api/ai/mail-ask/reply/draft', { gmailId: src.gmailId, box: src.box ?? 0, request: what.value.trim() });
             bodyBox.value = d.body;
             bodyBox.style.display = '';
             send.style.display = '';
@@ -241,7 +241,7 @@ const AskView = (() => {
           if (!bodyBox.value.trim()) return bodyBox.focus();
           send.disabled = true;
           try {
-            await API.post('/api/ai/mail-ask/reply/send', { gmailId: src.gmailId, body: bodyBox.value.trim() });
+            await API.post('/api/ai/mail-ask/reply/send', { gmailId: src.gmailId, box: src.box ?? 0, body: bodyBox.value.trim() });
             dm.close();
             UI.success('התשובה נשלחה מתיבת ה-Gmail שלך');
           } catch (err) { send.disabled = false; UI.error(err); }
