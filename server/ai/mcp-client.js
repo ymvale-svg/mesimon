@@ -29,7 +29,7 @@ const CLIENT_INFO = { name: 'mesimon', version: '1.0' };
 // כל שרת הוא תהליך נפרד (npx + node, או uv + python) של עשרות MB, וכולם נספרים
 // במגבלת הזיכרון של השרת בענן — לכן גם קצר, וגם תקרה על כמה רצים יחד.
 const IDLE_MS = 10 * 60 * 1000;
-const MAX_LIVE = Math.max(1, Number(process.env.MCP_MAX_LIVE) || 3);
+const MAX_LIVE = Math.max(1, Number(process.env.MCP_MAX_LIVE) || 2);
 // תקרת זיכרון לתהליך Node של שרת נתונים — כלי קטן, לא צריך יותר
 const CHILD_NODE_OPTIONS = '--max-old-space-size=128';
 const RESTART_WINDOW_MS = 10 * 60 * 1000;
@@ -79,8 +79,42 @@ function childEnv() {
   return env;
 }
 
+/**
+ * חבילה שכבר הותקנה במטמון של npx — מריצים את הקובץ שלה ישירות ב-node.
+ * ‎npx‎ משאיר תהליך ‎npm exec‎ פתוח כאבא של השרת כל זמן שהוא רץ, וזה כ-100MB
+ * בזיכרון לכל מקור נתונים בלי שום תועלת. בפעם הראשונה (החבילה עוד לא במטמון)
+ * — דרך npx כרגיל, והוא מתקין; מהפעם הבאה ישירות.
+ */
+function npxDirect(args) {
+  const spec = args.find((a) => !a.startsWith('-'));
+  if (!spec) return null;
+  const at = spec.lastIndexOf('@');
+  const name = at > 0 ? spec.slice(0, at) : spec;
+  const version = at > 0 ? spec.slice(at + 1) : null;
+  const rest = args.slice(args.indexOf(spec) + 1);
+  const cacheDir = process.env.npm_config_cache || process.env.NPM_CONFIG_CACHE || path.join(require('os').homedir(), '.npm');
+  let dirs = [];
+  try { dirs = fs.readdirSync(path.join(cacheDir, '_npx')); } catch { return null; }
+  for (const d of dirs) {
+    const pkgDir = path.join(cacheDir, '_npx', d, 'node_modules', name);
+    let pkg;
+    try { pkg = JSON.parse(fs.readFileSync(path.join(pkgDir, 'package.json'), 'utf8')); } catch { continue; }
+    if (version && pkg.version !== version) continue;
+    const bin = typeof pkg.bin === 'string' ? pkg.bin
+      : pkg.bin?.[name.split('/').pop()] ?? Object.values(pkg.bin ?? {})[0];
+    if (!bin) continue;
+    const file = path.join(pkgDir, bin);
+    if (fs.existsSync(file)) return { command: process.execPath, args: [file, ...rest] };
+  }
+  return null;
+}
+
 /** ב-Windows ‏npx הוא ‎npx.cmd‎, ו-Node 22 לא מריץ ‎.cmd‎ בלי shell — מריצים את npx-cli.js ישירות. */
 function resolveCommand(command, args) {
+  if (command === 'npx') {
+    const direct = npxDirect(args);
+    if (direct) return direct;
+  }
   if (process.platform === 'win32' && (command === 'npx' || command === 'npm')) {
     const cli = path.join(path.dirname(process.execPath), 'node_modules', 'npm', 'bin', `${command}-cli.js`);
     if (fs.existsSync(cli)) return { command: process.execPath, args: [cli, ...args] };
