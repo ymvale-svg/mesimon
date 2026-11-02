@@ -431,7 +431,9 @@ async function runScan(who, { from, to = null, trigger = 'manual' }) {
   const progress = { trigger, total: 0, done: 0, suggested: 0, auto: 0, skipped: 0, replies: 0, errors: 0, startedAt: D.nowIso(), from: from.toISOString(), to: to?.toISOString() ?? null };
   setProgress(who, progress);
   try {
-    const budget = Math.max(0, Number(D.getSetting('ai_scan_daily_limit', 100)) - scannedToday(userId, Gmail.boxOf(who)));
+    const limit = Number(D.getSetting('ai_scan_daily_limit', 100));
+    const budget = Math.max(0, limit - scannedToday(userId, Gmail.boxOf(who)));
+    progress.limit = limit;
     const q = ['is:unread', 'in:inbox', '-category:promotions', '-category:social', `after:${epoch(from)}`, to ? `before:${epoch(to)}` : null].filter(Boolean).join(' ');
     const ids = (await Gmail.search(who, q, { max: 300 }))
       .filter((id) => !D.get('SELECT 1 FROM mail_scanned WHERE user_id = ? AND gmail_id = ?', userId, id));
@@ -458,6 +460,10 @@ async function runScan(who, { from, to = null, trigger = 'manual' }) {
       }));
       setProgress(who, progress);
     }
+  } catch (err) {
+    // החיפוש עצמו נכשל (חיבור, רשת) — נרשם, כדי שהממשק יאמר "נכשלה" ולא "אין מיילים"
+    progress.failed = err.message.slice(0, 200);
+    throw err;
   } finally {
     progress.finishedAt = D.nowIso();
     Gmail.setConn(who, { scan_running: 0, scan_progress: JSON.stringify(progress), last_scan_at: D.nowIso() });
