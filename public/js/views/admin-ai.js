@@ -171,6 +171,8 @@ const AdminAiView = (() => {
         ? `סריקה אוטומטית: כל עובד שחיבר Gmail נסרק לבד — העובדים אינם רואים את זה. ${r.hours ? `קריאת ההיסטוריה בשעות ${r.hours}, ` : ''}עד ${r.perDay} שרשורים ביום לעובד${r.night?.on ? ` — ובמצב לילה (${r.night.hours}) בלי תקרה, ברצף${r.night.now ? '. 🌙 מצב לילה פעיל עכשיו' : ''}` : ''}.`
         : 'סריקה ידנית: כל עובד מפעיל בעצמו ומאשר עלות. (ההגדרה "זיכרון העבודה: סריקה אוטומטית" — בהגדרות המערכת.)' }),
       el('div.mute-sm', { text: `${r.users.length} עובדים · עלות עד עכשיו: כ-$${Math.round(total * 100) / 100}` }),
+      // 🌙 זיכרון השרת — כמה נקרא במקביל עכשיו, והשיא (מאז שהשרת עלה)
+      r.memory ? el('div.mute-sm', { text: `זיכרון השרת: ${r.memory.rssMb}MB מתוך תקרת לילה של ${r.memory.budgetMb}MB · נקראים עכשיו ${r.memory.reading} במקביל (ביום עד ${r.memory.dayParallel}, בלילה עד ${r.memory.maxNight})${r.memory.peakMb ? ` · שיא ${r.memory.peakMb}MB עם ${r.memory.peakReading} במקביל, ${UI.relative(r.memory.peakAt)}` : ''}${r.memory.heldBack ? ` · ${r.memory.heldBack} פעמים חיכה לזיכרון` : ''}` }) : null,
       el('div.mm-list', {}, r.users.length ? r.users.map((u) => {
         const q = u.queue ?? {};
         const total = (q.done ?? 0) + (q.pending ?? 0);

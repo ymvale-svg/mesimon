@@ -749,15 +749,50 @@ const busy = new Set();
  * כוללת, עשרה עובדים × 3 שרשורים במקביל חרגו ממגבלת הזיכרון של השרת.
  */
 const GLOBAL_READS = Math.max(1, Number(process.env.MAIL_MEMORY_PARALLEL) || 2);
-// בלילה אפשר יותר — רק אם הוגדר במפורש בשרת (ברירת המחדל: כמו ביום)
-const NIGHT_READS = Math.max(1, Number(process.env.MAIL_MEMORY_NIGHT_PARALLEL) || GLOBAL_READS);
-const readSlots = () => (isNight() ? NIGHT_READS : GLOBAL_READS);
+
+/*
+ * 🌙 בלילה — יותר שרשורים במקביל, לפי הזיכרון בפועל ולא לפי מספר קבוע:
+ * מעבר ל-2 הרגילים, שרשור נוסף מתחיל רק אם הזיכרון של התהליך (RSS) ועוד
+ * ההערכה לשרשור (‎SLOT_MB‎) מתחת לתקרה (‎mail_memory_night_mem_mb‎, ברירת מחדל
+ * 1400MB — תקרת ה-heap ב-render.yaml; בתוכנית של 2GB נשארים כ-600MB לשרתי
+ * הנתונים ולשאר). מעל התקרה — לא מתחילים חדש, ממתינים שאחד ייגמר. תמיד לפחות
+ * אחד, כדי שהקריאה לא תיעצר. עד ‎NIGHT_MAX_READS‎ (8, או MAIL_MEMORY_NIGHT_PARALLEL).
+ */
+const NIGHT_MAX_READS = Math.max(GLOBAL_READS, Number(process.env.MAIL_MEMORY_NIGHT_PARALLEL) || 8);
+const SLOT_MB = 60;                 // שרשור: עד 8 הודעות ו-3 מסמכים מפוענחים, עם מרווח
+const NIGHT_READS_PER_USER = 6;     // ביום — ‎READ_CONCURRENCY‎ (3)
+const rssMb = () => Math.round(process.memoryUsage().rss / 1048576);
+const memBudget = () => Math.max(300, Number(D.getSetting('mail_memory_night_mem_mb', 1400)) || 1400);
+const memStats = { peakMb: 0, peakAt: null, peakReading: 0, heldBack: 0 };
+
+function canStartRead() {
+  if (reading === 0) return true;
+  if (!isNight()) return reading < GLOBAL_READS;
+  if (reading >= NIGHT_MAX_READS) return false;
+  if (reading < GLOBAL_READS) return true;
+  const ok = rssMb() + SLOT_MB < memBudget();
+  if (!ok) memStats.heldBack++;
+  return ok;
+}
+
 let reading = 0;
 const waiting = [];
 async function withReadSlot(fn) {
-  while (reading >= readSlots()) await new Promise((r) => waiting.push(r));
+  while (!canStartRead()) await new Promise((r) => waiting.push(r));
   reading++;
-  try { return await fn(); } finally { reading--; waiting.shift()?.(); }
+  const mb = rssMb();
+  if (mb > memStats.peakMb) Object.assign(memStats, { peakMb: mb, peakAt: nowIso(), peakReading: reading });
+  try { return await fn(); } finally {
+    reading--;
+    // כמה ממתינים יכולים להתחיל עכשיו — לא רק אחד (בלילה התקרה לפי זיכרון)
+    for (let n = waiting.length; n > 0 && canStartRead(); n--) waiting.shift()?.();
+    if (reading === 0) waiting.shift()?.();
+  }
+}
+
+/** למסך הניהול: הזיכרון עכשיו, השיא, וכמה שרשורים נקראים במקביל */
+function memoryInfo() {
+  return { rssMb: rssMb(), budgetMb: memBudget(), reading, maxNight: NIGHT_MAX_READS, dayParallel: GLOBAL_READS, ...memStats };
 }
 
 /** @returns {Promise<number>} כמה שרשורים טופלו בסבב הזה — בלילה, יותר מ-0 = סבב נוסף מיד */
@@ -791,9 +826,10 @@ async function readStep(userId) {
   }
   // רק מה שבאמת טופל: תקלה זמנית ב-AI (השרשור נשאר בתור) לא מפעילה סבב מיידי, כדי שלא תיווצר לולאה
   let processed = 0;
-  for (let i = 0; i < rows.length; i += READ_CONCURRENCY) {
+  const perUser = night ? NIGHT_READS_PER_USER : READ_CONCURRENCY;
+  for (let i = 0; i < rows.length; i += perUser) {
     if (!['running', 'done'].includes(runOf(userId)?.state)) return processed;
-    await Promise.all(rows.slice(i, i + READ_CONCURRENCY).map(async ({ thread_id: threadId, box }) => {
+    await Promise.all(rows.slice(i, i + perUser).map(async ({ thread_id: threadId, box }) => {
       // תיבה שנותקה בינתיים — השרשור נשאר בתור עד שתחובר שוב
       if (!Gmail.has(whoOf(userId, box), 'mail')) return;
       let st = 'error';
@@ -1095,7 +1131,7 @@ function adminAction(userId, action) {
 }
 
 module.exports = {
-  init, tick, morning, allowed, status, start, approve, pause, update, forget, boxesFor, whoOf, adminOverview, adminAction, auto, isNight,
+  init, tick, morning, allowed, status, start, approve, pause, update, forget, boxesFor, whoOf, adminOverview, adminAction, auto, isNight, memoryInfo,
   search, personByEmail, eventsWith, browse, editPerson, remove, terms, normalize,
   _internal: { mapThread, readThread, estimate, inHours, isNight, readStep, expiryNotices, savePerson }
 };

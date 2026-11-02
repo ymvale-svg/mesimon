@@ -847,7 +847,8 @@ function register(router, h) {
   router.get('/api/admin/mail-memory', async (req, res, ctx) => {
     aiAdmin(ctx);
     sendJson(res, 200, { users: Memory.adminOverview(), auto: Memory.auto(), hours: D.getSetting('mail_memory_hours', ''), perDay: Number(D.getSetting('mail_memory_nightly_threads', 1500)),
-      night: { on: Boolean(D.getSetting('mail_memory_night', true)), hours: D.getSetting('mail_memory_night_hours', '19:00-07:00'), now: Memory.isNight() } });
+      night: { on: Boolean(D.getSetting('mail_memory_night', true)), hours: D.getSetting('mail_memory_night_hours', '19:00-07:00'), now: Memory.isNight() },
+      memory: Memory.memoryInfo() });
   });
   router.post('/api/admin/mail-memory/:userId/:action', async (req, res, ctx) => {
     aiAdmin(ctx);
