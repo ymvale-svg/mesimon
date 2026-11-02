@@ -110,7 +110,8 @@ function bumpStats(userId, fn) {
 /** כמה שרשורים נקראו היום (שעון ישראל, בקירוב של שעה בשעון קיץ) — לתקציב היומי */
 function readToday(userId) {
   const since = new Date(`${localParts().date}T00:00:00+02:00`).toISOString();
-  return D.get("SELECT COUNT(*) c FROM mail_memory_threads WHERE user_id = ? AND status IN ('done','error') AND processed_at >= ?", userId, since).c;
+  // כל שרשור שנקרא נספר — גם מה שה-AI סימן כאישי: גם הוא עלה קריאה
+  return D.get('SELECT COUNT(*) c FROM mail_memory_threads WHERE user_id = ? AND processed_at >= ?', userId, since).c;
 }
 
 /** הערכת עלות לשלב 3, לפי מה שנמצא במיפוי */

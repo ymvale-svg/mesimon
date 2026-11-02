@@ -398,6 +398,8 @@ const TodayView = (() => {
           s.older ? el('span.today-older', { text: ' · מחכה מלפני כן' }) : null,
           s.link ? el('a', { href: s.link, target: '_blank', rel: 'noopener', onclick: (e) => e.stopPropagation() }, [' · פתיחת המייל ↗']) : null
         ]),
+        // 💡 איך לסגור — אותה שורה כמו ב"ממתין לאישורך"
+        AiInboxView.closureLine(s, () => reload()),
         el('div.today-mail-actions', {}, [approve, later, toAi, reject])
       ])
     ]);

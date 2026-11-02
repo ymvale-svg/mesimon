@@ -66,9 +66,15 @@ const AiTaskView = (() => {
       contact: { name: '', email: '', phone: '', type: 'external', refId: null, ...(opts.contact ?? {}) },
       // נפתח מהצעה שהגיעה מהמייל — פרטי הנמען חולצו מתוכן שלא אנחנו כתבנו
       suggestionId: opts.suggestionId ?? null,
-      fromEmail: Boolean(opts.suggestionId),
-      // וואטסאפ קיים כאן רק למי שחיבר אותו; מי שלא — הכול במייל
-      channel: status.mail || status.whatsapp?.state !== 'authorized' ? 'email' : 'whatsapp',
+      // מ"💡 איך לסגור" הנמען נלקח מאנשי הקשר והזיכרון של המשתמש — לא מהמייל
+      fromEmail: Boolean(opts.suggestionId) && !opts.contactFromSystem,
+      // וואטסאפ קיים כאן רק למי שחיבר אותו; מי שלא — הכול במייל.
+      // מ"💡 איך לסגור" מגיע ערוץ מוצע — אם הוא זמין
+      channel: opts.channel === 'whatsapp' && status.whatsapp?.state === 'authorized' ? 'whatsapp'
+        : opts.channel === 'email' ? 'email'
+          : status.mail || status.whatsapp?.state !== 'authorized' ? 'email' : 'whatsapp',
+      // משימה קיימת שהופכת למשימת AI (מכרטיס המשימה) — בלי משימה חדשה
+      taskId: opts.taskId ?? null,
       projectId: opts.projectId ?? '',
       // מהקלטה — היעד שנאמר כבר מולא
       dueDate: opts.dueDate ?? '',
@@ -80,7 +86,7 @@ const AiTaskView = (() => {
     };
 
     const body = el('div.ai-dialog');
-    const m = UI.modal({ title: '✨ משימת AI חדשה', body, size: 'wide' });
+    const m = UI.modal({ title: opts.taskId ? '✨ פנייה עם מעקב AI' : '✨ משימת AI חדשה', body, size: 'wide' });
 
     const draw = () => UI.mount(body, state.step === 'compose' ? composeStep() : previewStep());
 
@@ -541,7 +547,8 @@ const AiTaskView = (() => {
             projectId: state.projectId || null,
             dueDate: UI.fromInputDate(state.dueDate),
             policy: state.policy,
-            suggestionId: state.suggestionId
+            suggestionId: state.suggestionId,
+            taskId: state.taskId
           });
           m.close();
           if (res.sendError) UI.toast(`המשימה נוצרה, אבל השליחה נכשלה: ${res.sendError}`, 'error');

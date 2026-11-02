@@ -195,6 +195,11 @@ const TaskCardView = (() => {
             task.source.link ? el('a', { href: task.source.link, target: '_blank', rel: 'noopener' }, [' · פתיחת המייל המקורי ↗']) : null
           ])
         : null,
+      closurePanel(),
+      // 🔎 שאל את המיילים — על המשימה הזו, כשההקשר כבר ממולא
+      App.isVendor() ? null : el('div.mute-sm', { style: { marginBottom: '10px' } }, [
+        el('a', { href: '#', onclick: (e) => { e.preventDefault(); MailAskView.open({ taskId: task.id, taskTitle: task.title, question: `מה יש במיילים על: ${task.title}` }); } }, ['🔎 מה יש במיילים על זה?'])
+      ]),
       vendorWorkflowBar(),
       descNode,
       shortStatusRow(),
@@ -215,6 +220,50 @@ const TaskCardView = (() => {
   }
 
   /** פעולות זרימת העבודה מול הספק */
+  /**
+   * 💡 איך לסגור — ההצעה שהגיעה עם המשימה מהמייל. אותו כפתור כמו ב"ממתין
+   * לאישורך": פותח פנייה עם מעקב AI על המשימה הזו עצמה, והנוסח מוצג לפני שליחה.
+   */
+  function closurePanel() {
+    const c = task.closure;
+    if (!c) return null;
+    const dismiss = el('button.btn.btn-sm.btn-ghost', { type: 'button', title: 'לא רלוונטי' }, ['✕']);
+    dismiss.addEventListener('click', async () => {
+      dismiss.disabled = true;
+      try {
+        await API.post(`/api/ai/suggestions/${c.suggestionId}/closure-dismiss`);
+        task.closure = null;
+        draw(modalRef.box.querySelector('.task-detail'));
+      } catch (err) { dismiss.disabled = false; UI.error(err); }
+    });
+    if (c.kind === 'self') {
+      return el('div.ai-closure', {}, [el('div.ai-closure-main', {}, [el('b', { text: '💡 לסגור בעצמך: ' }), el('span', { text: c.steps.join(' · ') })]), dismiss]);
+    }
+    const p = c.primary;
+    if (c.kind === 'assign') {
+      return el('div.ai-closure', {}, [el('div.ai-closure-main', {}, [el('b', { text: `💡 בדרך כלל של ${p.name}` }), p.why ? el('div.mute-sm', { text: p.why }) : null]), dismiss]);
+    }
+    const icon = (ch) => (ch === 'whatsapp' ? '💬' : '📧');
+    const openAi = (who, channel) => AiTaskView.openDialog({
+      taskId: task.id,
+      instruction: p.instruction,
+      contact: { name: who.name, email: who.email, phone: who.phone, type: who.type, refId: who.refId },
+      contactFromSystem: true,
+      channel
+    });
+    return el('div.ai-closure', {}, [
+      el('div.ai-closure-main', {}, [
+        el('div', {}, [el('b', { text: `💡 ${icon(p.channel)} ${p.name}` }), el('span', { text: ` — ${p.instruction}` })]),
+        p.why ? el('div.mute-sm', { text: `למה: ${p.why}` }) : null
+      ]),
+      el('div.ai-closure-actions', {}, [
+        el('button.btn.btn-sm.btn-primary', { type: 'button', onclick: () => { modalRef.close(); openAi(p, p.channel); } }, [`${icon(p.channel)} שלח ל${p.name}`]),
+        ...(c.alternatives ?? []).map((a) => el('button.btn.btn-sm.btn-ghost', { type: 'button', title: a.why || '', onclick: () => { modalRef.close(); openAi(a, a.channel); } }, [`או ${icon(a.channel)} ${a.name}`])),
+        dismiss
+      ])
+    ]);
+  }
+
   function vendorWorkflowBar() {
     if (task.boardType !== 'vendor') return null;
     const actions = [];

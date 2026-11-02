@@ -306,7 +306,8 @@ const AiInboxView = (() => {
       d.priority && d.priority !== 'normal' ? el('span.ai-chip.ai-chip-warn', { text: d.priority === 'urgent' ? 'דחוף' : 'גבוהה' }) : null,
       d.checklist?.length ? el('span.ai-chip', { text: `☑ ${d.checklist.length} שלבים` }) : null,
       ...peopleChips(d.people),
-      d.aiRequest ? el('span.ai-chip.ai-chip-ai', { text: '✨ בקשה מגורם אחר' }) : null
+      d.aiRequest ? el('span.ai-chip.ai-chip-ai', { text: '✨ בקשה מגורם אחר' }) : null,
+      d.expiry ? el('span.ai-chip.ai-chip-warn', { text: '📎 תוקף מסמך' }) : null
     ];
 
     return el('div.ai-row', {}, [
@@ -318,7 +319,8 @@ const AiInboxView = (() => {
         d.ambiguous?.length ? el('div.mute-sm', { text: `❓ לא ברור למי הכוונה: ${d.ambiguous.join(', ')} — בחרו בעריכה` }) : null,
         d.alsoSuggestedTo?.length ? el('div.mute-sm', { text: `👥 הוצע גם ל${d.alsoSuggestedTo.join(', ')}` }) : null,
         d.routedAsManager ? el('div.mute-sm', { text: '👤 לא היה ברור למי הבקשה — הגיעה אליך כמנהל/ת הפרויקט. אפשר להעביר בעריכה' }) : null,
-        fromLine(s)
+        fromLine(s),
+        closureLine(s, reload)
       ]),
       el('div.ai-row-actions', {}, [
         // הצעה עם אנשים נוספים או ספק מחייבת מבט — האישור המהיר עובר דרך העריכה
@@ -328,6 +330,61 @@ const AiInboxView = (() => {
         d.source === 'whatsapp' ? null : toAi,
         reject
       ])
+    ]);
+  }
+
+  /**
+   * 💡 איך לסגור — שורה אחת מתחת להצעת המשימה: למי לפנות, באיזה ערוץ ומה לבקש.
+   * הכפתור פותח את דיאלוג משימת ה-AI הקיים עם הנמען וההוראה — הנוסח מוצג
+   * לפני כל שליחה. "✕" מוריד רק את ההצעה לסגירה, לא את המשימה.
+   */
+  function closureLine(s, reload) {
+    const c = s.data?.closure;
+    if (!c || c.dismissed) return null;
+    const stop = (e) => e.stopPropagation();
+    const dismiss = el('button.btn.btn-sm.btn-ghost', { type: 'button', title: 'לא רלוונטי — ההצעה לסגירה יורדת, המשימה נשארת' }, ['✕']);
+    dismiss.addEventListener('click', (e) => { stop(e); run(dismiss, () => API.post(`/api/ai/suggestions/${s.id}/closure-dismiss`), reload)(); });
+
+    if (c.kind === 'self') {
+      return el('div.ai-closure', { onclick: stop }, [
+        el('div.ai-closure-main', {}, [el('b', { text: '💡 לסגור בעצמך: ' }), el('span', { text: c.steps.join(' · ') })]),
+        dismiss
+      ]);
+    }
+    const p = c.primary;
+    if (c.kind === 'assign') {
+      const give = el('button.btn.btn-sm', { type: 'button' }, [`👤 להעביר ל${p.name}`]);
+      give.addEventListener('click', (e) => {
+        stop(e);
+        run(give, () => API.post(`/api/ai/suggestions/${s.id}/approve`, { people: [{ userId: p.refId, role: 'assignee', checklistIndex: 0 }] }), reload)();
+      });
+      return el('div.ai-closure', { onclick: stop }, [
+        el('div.ai-closure-main', {}, [el('b', { text: `💡 בדרך כלל של ${p.name}` }), p.why ? el('div.mute-sm', { text: p.why }) : null]),
+        give, dismiss
+      ]);
+    }
+
+    const icon = (ch) => (ch === 'whatsapp' ? '💬' : '📧');
+    const openAi = (who, channel) => AiTaskView.openDialog({
+      suggestionId: s.id,
+      instruction: p.instruction,
+      contact: { name: who.name, email: who.email, phone: who.phone, type: who.type, refId: who.refId },
+      contactFromSystem: true,
+      channel,
+      onCreated: () => reload()
+    });
+    const send = el('button.btn.btn-sm.btn-primary', { type: 'button' }, [`${icon(p.channel)} שלח ל${p.name}`]);
+    send.title = 'פותח את הפנייה עם הנמען וההוראה — תראו את הנוסח לפני שליחה';
+    send.addEventListener('click', (e) => { stop(e); openAi(p, p.channel); });
+    const alts = (c.alternatives ?? []).map((a) => el('button.btn.btn-sm.btn-ghost', {
+      type: 'button', title: a.why || '', onclick: (e) => { stop(e); openAi(a, a.channel); }
+    }, [`או ${icon(a.channel)} ${a.name}`]));
+    return el('div.ai-closure', { onclick: stop }, [
+      el('div.ai-closure-main', {}, [
+        el('div', {}, [el('b', { text: `💡 ${icon(p.channel)} ${p.name}` }), el('span', { text: ` — ${p.instruction}` })]),
+        p.why ? el('div.mute-sm', { text: `למה: ${p.why}` }) : null
+      ]),
+      el('div.ai-closure-actions', {}, [send, ...alts, dismiss])
     ]);
   }
 
@@ -628,7 +685,13 @@ const AiInboxView = (() => {
                   const b = el('button.btn.btn-sm.btn-ghost', {}, ['ניתוק']);
                   b.addEventListener('click', async () => {
                     if (!await UI.confirm('לנתק את Google? הסריקה תיפסק, תזכורות במייל לא ייצאו, היומן ייעלם מ-Today, אנשי הקשר יימחקו ממשימון, וההרשאה תבוטל גם ב-Google.', { danger: true, okText: 'ניתוק' })) return;
-                    try { refresh(await API.del('/api/me/gmail')); } catch (err) { UI.error(err); }
+                    // זיכרון העבודה — שואלים בזמן הניתוק אם למחוק גם אותו
+                    const mc = info.memory?.counts ?? {};
+                    const hasMemory = mc.people || mc.events || mc.docs || (info.memory && info.memory.state !== 'idle');
+                    const forget = hasMemory
+                      ? await UI.confirm('למחוק גם את זיכרון העבודה (אנשי קשר, רשומות ומסמכים שהעוזר למד מהמייל)? אם תשאיר אותו — הוא יחכה לחיבור הבא.', { okText: 'למחוק', cancelText: 'להשאיר' })
+                      : false;
+                    try { refresh(await API.del(`/api/me/gmail${forget ? '?forget=1' : ''}`)); } catch (err) { UI.error(err); }
                   });
                   return b;
                 })()
@@ -639,6 +702,7 @@ const AiInboxView = (() => {
               info.scanEnabled ? el('button.btn.btn-sm.mt', { onclick: () => { m.close(); scanDialog(onChange); } }, ['🔍 סרוק עכשיו']) : null,
               contactsLine()
             ]);
+      const memoryBox = c?.state === 'ok' && info.memory ? MailMemoryView.section(info.memory, onChange) : null;
 
       /** אנשי הקשר: כמה סונכרנו, מתי, ורענון */
       function contactsLine() {
@@ -679,6 +743,8 @@ const AiInboxView = (() => {
       UI.mount(body,
         el('div.ai-section-title', { text: 'חשבון Google' }),
         connectBox,
+        memoryBox ? el('div.ai-section-title', { text: '🧠 זיכרון העבודה מהמייל', style: { marginTop: '16px' } }) : null,
+        memoryBox,
         el('div.ai-section-title', { text: 'העדפות', style: { marginTop: '16px' } }),
         pref('approveReminders', 'כל תזכורת שלי מחכה לאישור לפני שיוצאת',
           'כבוי: אחרי שאישרת את הפנייה הראשונה, התזכורות יוצאות לבד — ובכל בוקר רואים "היום יוצאים" ואפשר לעצור. אפשר לשנות גם לכל משימה בנפרד.'),
@@ -705,5 +771,5 @@ const AiInboxView = (() => {
     setTimeout(() => scanDialog(() => HomeView.reload()), 300);
   }
 
-  return { load, card, openGmail, scanDialog, handleReturn, editSuggestion, rejectDialog, rejectNow, meetingRow };
+  return { load, card, openGmail, scanDialog, handleReturn, editSuggestion, rejectDialog, rejectNow, meetingRow, closureLine };
 })();

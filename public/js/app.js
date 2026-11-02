@@ -1775,6 +1775,16 @@ const App = (() => {
         for (const item of list) addRow(row(item, data?.query ?? q));
       }
 
+      /*
+       * 🔎 שאל את המיילים — שורה אחת בסוף, כשהוקלדה שאלה. החיפוש הרגיל לא
+       * משתנה: זו פעולה נוספת, והתשובה נפתחת בחלון משלה.
+       */
+      if (!isVendor() && String(q ?? '').trim().length >= 2) {
+        const question = String(q).trim();
+        results.appendChild(el('div.sr-group', { role: 'presentation', text: 'במיילים' }));
+        addRow(actionRow({ kind: 'action', title: `🔎 שאל את המיילים: "${question}"`, keys: [], run: () => MailAskView.open({ question }) }));
+      }
+
       // כשיש יותר ממה שמוצג — נאמר, ולא נשתוק
       if (data && data.total > items.length) {
         results.appendChild(el('div.sr-more', {

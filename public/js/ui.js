@@ -549,7 +549,7 @@ const UI = (() => {
     };
   }
 
-  function confirm(message, { title = 'אישור פעולה', danger = false, okText = 'אישור' } = {}) {
+  function confirm(message, { title = 'אישור פעולה', danger = false, okText = 'אישור', cancelText = 'ביטול' } = {}) {
     return new Promise((resolve) => {
       const finish = settler(resolve);
       const m = modal({
@@ -559,7 +559,7 @@ const UI = (() => {
           el(`button.btn${danger ? '.btn-danger' : '.btn-primary'}`, {
             onclick: () => { finish(true); m.close(); }
           }, [okText]),
-          el('button.btn', { onclick: () => { finish(false); m.close(); } }, ['ביטול'])
+          el('button.btn', { onclick: () => { finish(false); m.close(); } }, [cancelText])
         ],
         onClose: () => finish(false)
       });
