@@ -647,6 +647,18 @@ const AiInboxView = (() => {
        * חשבונות Google נוספים — כל אחד נסרק, נכנס לתובנות, לאנשי הקשר
        * וליומן, ואפשר לשלוח ממנו. ניתוק — רק של החשבון הנוסף.
        */
+      /** מה מצאה הסריקה האחרונה — כדי ש"אין הצעות" לא ייראה כמו תקלה שקטה */
+      function scanSummary(p) {
+        if (!p || p.total === undefined) return '';
+        const found = (p.suggested ?? 0) + (p.auto ?? 0);
+        return [
+          ` · ${p.total} מיילים שלא נקראו`,
+          ` · ${found} הצעות`,
+          p.capped ? ' · הגיעה לתקרה היומית' : '',
+          p.errors ? ` · ${p.errors} שגיאות` : ''
+        ].join('');
+      }
+
       function accountsBox(main) {
         const rows = (main.accounts ?? []).map((a) => {
           const off = el('button.btn.btn-sm.btn-ghost', {}, ['ניתוק']);
@@ -660,7 +672,8 @@ const AiInboxView = (() => {
             ok
               ? el('span.mute-sm', { text: [a.scopes?.mail ? (a.canSend ? '📧 קריאה ושליחה' : '📧 קריאה') : null, a.scopes?.calendar ? '📅 יומן' : null, a.scopes?.contacts ? '👥 אנשי קשר' : null].filter(Boolean).join(' · ') })
               : el('a.mute-sm', { href: '/api/me/gmail/connect?add=1', text: `${a.error || 'החיבור פג'} — חיבור מחדש` }),
-            ok ? el('span.mute-sm', { text: a.lastScanAt ? `סריקה אחרונה ${UI.relative(a.lastScanAt)}` : 'עוד לא נסרקה' }) : null,
+            ok ? el('span.mute-sm', { text: a.scanning ? 'נסרקת עכשיו…' : a.lastScanAt ? `סריקה אחרונה ${UI.relative(a.lastScanAt)}${scanSummary(a.progress)}` : 'עוד לא נסרקה' }) : null,
+            ok && a.scopes && !a.scopes.mail ? el('span.mute-sm.text-warn', { text: 'לא אושרה קריאת דואר — התיבה לא נסרקת. חברו שוב וסמנו את כל התיבות.' }) : null,
             el('div.spacer'),
             off
           ]);
