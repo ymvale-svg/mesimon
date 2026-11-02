@@ -742,7 +742,7 @@ function inHours(date = new Date()) {
 // שיחה פרטית — הפעולות
 // ---------------------------------------------------------------------------
 
-const INTENTS = ['create_task', 'my_tasks', 'complete', 'comment', 'project_tasks', 'send_email', 'mail_insights', 'contact', 'today', 'today_email', 'menu', 'help', 'cancel', 'other'];
+const INTENTS = ['create_task', 'my_tasks', 'complete', 'comment', 'project_tasks', 'send_email', 'mail_insights', 'mail_ask', 'contact', 'today', 'today_email', 'menu', 'help', 'cancel', 'other'];
 const INSIGHT_ACTIONS = ['list', 'detail', 'reply', 'task', 'follow'];
 
 /** הכוונה ← הפעולה במסך הניהול שמפעילה אותה */
@@ -762,7 +762,7 @@ const CHAT_SCHEMA = {
     recipient_name: { type: 'string', description: 'במייל: שם הנמען כפי שנכתב ("אורן", "שושנה חן"). אחרת ריק' },
     recipient_org: { type: 'string', description: 'במייל: רק השם המזהה של החברה או המשרד ("כהן" מתוך "משרד עורכי הדין כהן"). אחרת ריק' },
     recipient_email: { type: 'string', description: 'במייל: כתובת אם נכתבה במפורש. אחרת ריק' },
-    request: { type: 'string', description: 'במייל: מה לבקש או לכתוב לנמען, במילים של הכותב. בתשובה למייל: מה לענות. אחרת ריק' },
+    request: { type: 'string', description: 'במייל: מה לבקש או לכתוב לנמען, במילים של הכותב. בתשובה למייל: מה לענות. בשאלה על המיילים: השאלה המלאה. אחרת ריק' },
     insight_action: { type: 'string', enum: INSIGHT_ACTIONS, description: 'בתובנות מהמיילים: מה לעשות. אחרת list' },
     insight_n: { type: 'integer', description: 'בתובנות: מספר המייל ברשימת התובנות האחרונה, או 0' },
     insight_from: { type: 'string', description: 'בתובנות: רק משולח מסוים ("בנק לאומי"), אחרת ריק' },
@@ -1785,6 +1785,25 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
     case 'menu':
     case 'today':
       return todayReply({ withMenu: u.intent === 'menu' || firstToday, firstOfDay: firstToday });
+
+    /*
+     * 🔎 שאל את המיילים — רק בשיחה הפרטית, רק התיבה של הכותב. התשובה עם
+     * קישורים למיילים: היא נשלחת רק אליו.
+     */
+    case 'mail_ask': {
+      if (actor.type !== 'user') return out('שאלות על המייל זמינות לעובדים בלבד.', {}, { action: 'mail_ask', status: 'denied', result: 'לא עובד' });
+      const question = u.request || text;
+      if (dry) return out(`(בדיקה) הייתי מחפש במיילים: "${question}"`, {}, { action: 'mail_ask', status: 'ok', result: 'בדיקה' });
+      const MailAsk = require('./mail-ask'); // בעצלתיים: טוען את זיכרון המייל
+      if (!MailAsk.available(actor.id)) return out('כדי לחפש במיילים צריך לחבר את תיבת ה-Gmail ("החשבון שלי ← חיבור Google").', {}, { action: 'mail_ask', status: 'error', result: 'אין חיבור Gmail' });
+      try {
+        const user = D.get('SELECT id, full_name, email, role FROM users WHERE id = ?', actor.id);
+        const r = await MailAsk.ask(user, question);
+        return out(MailAsk.asText(r), {}, { action: 'mail_ask', status: 'ok', result: `"${question.slice(0, 120)}": ${r.found ? 'נמצא' : 'לא נמצא'}` });
+      } catch (err) {
+        return out(err.message, {}, { action: 'mail_ask', status: 'error', result: err.message.slice(0, 200) });
+      }
+    }
 
     case 'mail_insights': {
       const { action, n, from, range } = u.insight;

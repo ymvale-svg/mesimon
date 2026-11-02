@@ -57,7 +57,8 @@ function readZip(buf, wanted) {
       const localExtraLen = buf.readUInt16LE(localOffset + 28);
       const start = localOffset + 30 + localNameLen + localExtraLen;
       const raw = buf.subarray(start, start + compressedSize);
-      out.set(name, method === 0 ? Buffer.from(raw) : zlib.inflateRawSync(raw));
+      // תקרה לפריסה: קובץ קטן שנפרס לגיגה-בייטים (zip bomb) נעצר כאן
+      out.set(name, method === 0 ? Buffer.from(raw) : zlib.inflateRawSync(raw, { maxOutputLength: 64 * 1024 * 1024 }));
     }
 
     offset += 46 + nameLen + extraLen + commentLen;
@@ -226,4 +227,4 @@ function parse(buffer, filename = '') {
   return parseCsv(buffer);
 }
 
-module.exports = { parse, parseCsv, parseXlsx, decodeText, columnIndex };
+module.exports = { parse, parseCsv, parseXlsx, decodeText, columnIndex, readZip, decodeXml };

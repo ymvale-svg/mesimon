@@ -31,13 +31,18 @@ class AiError extends Error {}
  * @param {Array}  opts.content          בלוקי התוכן של הודעת המשתמש
  * @param {object} opts.schema           סכמת JSON לתשובה
  * @param {string} [opts.effort]         low | medium | high
+ * @param {string} [opts.model]          מודל אחר מברירת המחדל — לעבודה רבה וזולה (זיכרון המייל)
+ * @param {(usage: object) => void} [opts.onUsage]  כמה טוקנים נצרכו — למעקב עלות
  * @returns {Promise<object>}            התשובה כאובייקט שעבר את הסכמה
  */
-async function json({ system, content, schema, effort = 'medium' }) {
+async function json({ system, content, schema, effort = 'medium', model: modelId = null, onUsage = null }) {
   if (!isEnabled()) throw new AiError('חיבור ה-AI אינו מוגדר בשרת (ANTHROPIC_API_KEY)');
 
+  const chosen = String(modelId || model()).trim();
+  // ל-Haiku אין מודל חלופי בצד השרת — הפרמטר היה נדחה
+  const withFallback = !/haiku/i.test(chosen);
   const body = {
-    model: model(),
+    model: chosen,
     max_tokens: 16000,
     // ההנחיות זהות בכל קריאה — מטמון הפרומפט חוסך את רובן מהקריאה השנייה
     system: [{ type: 'text', text: system, cache_control: { type: 'ephemeral' } }],
@@ -47,7 +52,7 @@ async function json({ system, content, schema, effort = 'medium' }) {
       format: { type: 'json_schema', schema }
     },
     // בקשה שנדחתה על ידי מסנני הבטיחות עוברת למודל חלופי בצד השרת
-    fallbacks: 'default'
+    ...(withFallback ? { fallbacks: 'default' } : {})
   };
 
   let res;
@@ -58,7 +63,7 @@ async function json({ system, content, schema, effort = 'medium' }) {
         'content-type': 'application/json',
         'x-api-key': apiKey(),
         'anthropic-version': '2023-06-01',
-        'anthropic-beta': 'server-side-fallback-2026-07-01'
+        ...(withFallback ? { 'anthropic-beta': 'server-side-fallback-2026-07-01' } : {})
       },
       body: JSON.stringify(body),
       signal: AbortSignal.timeout(180000)
@@ -79,6 +84,10 @@ async function json({ system, content, schema, effort = 'medium' }) {
     throw err;
   }
 
+  if (onUsage && data?.usage) {
+    try { onUsage(data.usage); } catch { /* מעקב בלבד */ }
+  }
+
   if (data?.stop_reason === 'refusal') {
     throw new AiError('ה-AI סירב לטפל בבקשה הזו');
   }
@@ -94,4 +103,15 @@ async function json({ system, content, schema, effort = 'medium' }) {
   }
 }
 
-module.exports = { json, isEnabled, status, model, AiError, DEFAULT_MODEL };
+/*
+ * מחירון לכל מיליון טוקנים (דולר), לחישוב הערכת עלות בלבד — לא לחיוב.
+ * מודל שאינו כאן: ההערכה מוצגת בטוקנים בלי סכום.
+ */
+const PRICES = {
+  'claude-haiku-5-5': { input: 0.10, output: 0.50 },
+  'claude-sonnet-5-5': { input: 2, output: 10 },
+  'claude-opus-5-5': { input: 4, output: 20 }
+};
+const priceOf = (id) => PRICES[String(id ?? '').trim()] ?? null;
+
+module.exports = { json, isEnabled, status, model, priceOf, AiError, DEFAULT_MODEL };

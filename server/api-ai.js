@@ -19,6 +19,10 @@ const WaScan = require('./ai/whatsapp-scan');
 const Calendar = require('./calendar');
 const WaBot = require('./ai/wa-bot');
 const WaActions = require('./ai/wa-actions');
+const Memory = require('./ai/mail-memory');
+const MailAsk = require('./ai/mail-ask');
+const MailInsights = require('./ai/mail-insights');
+const Mime = require('./mime');
 const { badRequest, forbidden, notFound, readJson, sendJson, parseUrl } = require('./http-kit');
 
 function register(router, h) {
@@ -298,6 +302,18 @@ function register(router, h) {
       : null;
     if (contact.type === 'user' && contact.refId && !colleague) throw badRequest('העובד שנבחר אינו פעיל');
     if (colleague && colleague.id === actor.id) throw badRequest('אי אפשר לפתוח משימת AI לעצמך');
+
+    /*
+     * משימה קיימת שהופכת למשימת AI ("💡 איך לסגור" בכרטיס): הפנייה יוצאת עליה,
+     * בלי משימה חדשה. רק מי שרשאי לערוך אותה, ורק אם אין בה כבר מעקב.
+     */
+    const existing = b.taskId ? getTaskOr404(Number(b.taskId)) : null;
+    if (existing) {
+      assertVisible(actor, existing);
+      if (!mayOnTask(actor, 'edit_delete_task', existing) && !(existing.assignee_type === 'user' && existing.assignee_id === actor.id)) throw forbidden('אין הרשאה לערוך את המשימה');
+      if (AiTasks.requestByTask(existing.id)) throw badRequest('במשימה הזו כבר יש מעקב AI');
+      if (colleague) throw badRequest('העברה לעובד — בשיוך המשימה, לא במשימת AI');
+    }
     if (colleague) {
       assertMayAssignTo(actor, 'user', colleague.id);
       contact.name = contact.name || colleague.full_name;
@@ -331,7 +347,7 @@ function register(router, h) {
       cc.length ? `בהעתק: ${cc.map((c) => (c.name ? `${c.name} <${c.email}>` : c.email)).join(', ')}` : null
     ].filter(Boolean).join('\n');
 
-    const taskId = createTask(actor, {
+    const taskId = existing ? existing.id : createTask(actor, {
       title,
       description,
       projectId,
@@ -514,7 +530,10 @@ function register(router, h) {
     return actor;
   };
 
+  const meUser = (actor) => D.get('SELECT id, full_name, email, role FROM users WHERE id = ?', actor.id);
+
   const gmailInfo = (actor) => ({
+    memory: Memory.status(meUser(actor)),
     enabled: Gmail.isEnabled(),
     ai: Claude.isEnabled(),
     scanEnabled: Boolean(D.getSetting('ai_mail_scan_enabled', true)),
@@ -553,6 +572,12 @@ function register(router, h) {
 
   router.delete('/api/me/gmail', async (req, res, ctx) => {
     const actor = userOnly(ctx);
+    // ‎?forget=1‎ — המשתמש בחר בזמן הניתוק למחוק גם את זיכרון העבודה
+    if (parseUrl(req).searchParams.get('forget') === '1') Memory.forget(actor.id);
+    else if (Memory.status(meUser(actor)).state !== 'idle') {
+      // בלי חיבור אין המשך — ריצה פעילה נעצרת, הזיכרון נשמר
+      D.run("UPDATE mail_memory_runs SET state = CASE WHEN state IN ('mapping','running','mapped') THEN 'paused' ELSE state END WHERE user_id = ?", actor.id);
+    }
     await Gmail.disconnect(actor.id);
     sendJson(res, 200, gmailInfo(actor));
   });
@@ -586,6 +611,105 @@ function register(router, h) {
     sendJson(res, 200, gmailInfo(actor));
   });
 
+  // --- 🧠 זיכרון העבודה מהמייל — של המשתמש עצמו בלבד ---
+
+  const memoryCall = (fn) => async (req, res, ctx) => {
+    const actor = userOnly(ctx);
+    const b = req.method === 'GET' || req.method === 'DELETE' ? {} : await readJson(req);
+    try {
+      sendJson(res, 200, await fn(meUser(actor), b, ctx, req));
+    } catch (err) {
+      throw userError(err);
+    }
+  };
+  router.get('/api/me/mail-memory', memoryCall((user) => Memory.status(user)));
+  router.post('/api/me/mail-memory/start', memoryCall((user, b) => Memory.start(user, {
+    fromDate: b.fromDate || null, withDocs: b.withDocs !== false, internal: b.internal !== false,
+    excludedLabels: Array.isArray(b.excludedLabels) ? b.excludedLabels : []
+  })));
+  router.post('/api/me/mail-memory/approve', memoryCall((user, b) => Memory.approve(user, { withDocs: typeof b.withDocs === 'boolean' ? b.withDocs : undefined })));
+  router.post('/api/me/mail-memory/pause', memoryCall((user) => Memory.pause(user)));
+  router.put('/api/me/mail-memory', memoryCall((user, b) => Memory.update(user, b)));
+  router.delete('/api/me/mail-memory', memoryCall((user) => { Memory.forget(user.id); return Memory.status(user); }));
+  router.get('/api/me/mail-memory/browse', memoryCall((user, b, ctx, req) => {
+    const sp = parseUrl(req).searchParams;
+    return Memory.browse(user.id, { q: sp.get('q') ?? '', tab: sp.get('tab') ?? 'people', offset: sp.get('offset') ?? 0 });
+  }));
+  router.put('/api/me/mail-memory/people/:id', memoryCall((user, b, ctx) => Memory.editPerson(user.id, Number(ctx.params.id), b)));
+  router.delete('/api/me/mail-memory/:kind/:id', memoryCall((user, b, ctx) => {
+    Memory.remove(user.id, ctx.params.kind, Number(ctx.params.id));
+    return { ok: true };
+  }));
+  /** תוויות ה-Gmail — לבחירת מה להחריג מהסריקה */
+  router.get('/api/me/gmail/labels', memoryCall(async (user) => {
+    if (!Gmail.has(user.id, 'mail')) return { labels: [] };
+    return { labels: (await Gmail.labels(user.id)).filter((l) => l.type === 'user').map((l) => l.name).sort() };
+  }));
+
+  // --- ✉️ שאל את המיילים ---
+
+  router.post('/api/ai/mail-ask', async (req, res, ctx) => {
+    const actor = userOnly(ctx);
+    const b = await readJson(req);
+    let context = '';
+    if (b.taskId) {
+      const task = getTaskOr404(Number(b.taskId));
+      assertVisible(actor, task);
+      context = `המשימה: ${task.title}${task.description ? `\n${task.description}` : ''}`;
+    }
+    try {
+      sendJson(res, 200, await MailAsk.ask(meUser(actor), b.question, Array.isArray(b.history) ? b.history : [], { context }));
+    } catch (err) {
+      throw userError(err);
+    }
+  });
+  router.get('/api/ai/mail-ask/recent', async (req, res, ctx) => {
+    const actor = userOnly(ctx);
+    sendJson(res, 200, { recent: MailAsk.recent(actor.id), available: MailAsk.available(actor.id) });
+  });
+  router.delete('/api/ai/mail-ask/recent', async (req, res, ctx) => {
+    const actor = userOnly(ctx);
+    MailAsk.clearRecent(actor.id);
+    sendJson(res, 200, { recent: [] });
+  });
+
+  /** "↩︎ תשובה במייל" מתוך תשובה — אותו ניסוח של תשובה מהבוט, ושליחה רק באישור */
+  router.post('/api/ai/mail-ask/reply/draft', async (req, res, ctx) => {
+    const actor = userOnly(ctx);
+    const b = await readJson(req);
+    if (!Gmail.canSend(actor.id)) throw badRequest('כדי לענות צריך לחבר את תיבת ה-Gmail עם הרשאת שליחה');
+    try {
+      const prev = b.previous && b.feedback ? { body: String(b.previous.body ?? '') } : null;
+      const reply = await MailInsights.draftReply(actor.id, String(b.gmailId ?? ''), String(b.request ?? ''), prev ? { feedback: String(b.feedback), previous: prev } : undefined);
+      sendJson(res, 200, { body: reply.body, to: reply.to, toName: reply.toName, subject: reply.subject });
+    } catch (err) {
+      throw userError(err);
+    }
+  });
+  router.post('/api/ai/mail-ask/reply/send', async (req, res, ctx) => {
+    const actor = userOnly(ctx);
+    const b = await readJson(req);
+    const body = String(b.body ?? '').trim();
+    if (!body) throw badRequest('אין מה לשלוח');
+    try {
+      // הנמען, הנושא והשרשור — מהמייל המקורי בתיבה, לא ממה שהגיע מהדפדפן
+      const msg = await Gmail.raw(actor.id, String(b.gmailId ?? ''));
+      const mail = Mime.parse(msg.raw);
+      await MailInsights.sendReply(actor.id, {
+        threadId: msg.threadId,
+        to: mail.from.address,
+        toName: mail.from.name || '',
+        subject: /^(re|תשובה)\s*:/i.test(mail.subject) ? mail.subject : `Re: ${mail.subject}`,
+        inReplyTo: mail.messageId,
+        references: [...mail.references.slice(-9), mail.messageId].filter(Boolean),
+        body
+      });
+      sendJson(res, 200, { ok: true });
+    } catch (err) {
+      throw userError(err);
+    }
+  });
+
   // --- "ממתין לאישורך" — כל מה שהעוזר מחכה בו למשתמש ---
 
   router.get('/api/ai/inbox', async (req, res, ctx) => {
@@ -616,6 +740,7 @@ function register(router, h) {
   suggestionAction('undo', (id, actor) => MailScan.undo(id, actor));
   suggestionAction('restore', (id, actor) => MailScan.restore(id, actor));
   suggestionAction('ignore-sender', (id, actor) => MailScan.ignoreSenderOf(id, actor));
+  suggestionAction('closure-dismiss', (id, actor) => MailScan.dismissClosure(id, actor));
 
   router.post('/api/ai/suggestions/approve-all', async (req, res, ctx) => {
     const actor = userOnly(ctx);

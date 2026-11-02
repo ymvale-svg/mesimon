@@ -895,6 +895,115 @@ CREATE TABLE IF NOT EXISTS mail_trusted_senders (
   created_at  TEXT    NOT NULL,
   PRIMARY KEY (user_id, email)
 );
+
+/*
+ * זיכרון העבודה מהמייל (‎ai/mail-memory.js‎) — מה שהעוזר למד מכל היסטוריית
+ * התיבה. אישי לחלוטין: כל שורה שייכת לבעל התיבה בלבד, ואיש אחר — גם לא מנהל
+ * המערכת — אינו קורא אותה. גוף המייל והקבצים עצמם אינם נשמרים: רק מה שהוסק.
+ */
+
+/* מצב סריקת ההיסטוריה — שורה אחת לכל משתמש, וממנה ממשיכים אחרי הפעלה מחדש */
+CREATE TABLE IF NOT EXISTS mail_memory_runs (
+  user_id       INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  -- idle | mapping (שלב 1) | mapped (ממתין לאישור העלות) | running (שלב 3) | paused | done | error
+  state         TEXT    NOT NULL DEFAULT 'idle',
+  from_date     TEXT,                         -- מאיזה תאריך; ריק = מההתחלה
+  with_docs     INTEGER NOT NULL DEFAULT 1,   -- לקרוא גם את המסמכים המצורפים
+  internal      INTEGER NOT NULL DEFAULT 1,   -- לכלול שרשורים פנימיים בין עובדים
+  excluded_labels TEXT  NOT NULL DEFAULT '[]',-- שמות תוויות Gmail שלא נסרקות
+  page_token    TEXT,                         -- המשך המיפוי מהעמוד הבא
+  mapped_at     TEXT,
+  stats         TEXT    NOT NULL DEFAULT '{}',-- מונים והערכת עלות
+  last_incremental_at TEXT,                   -- עדכון הבוקר האחרון
+  error         TEXT    NOT NULL DEFAULT '',
+  started_at    TEXT,
+  updated_at    TEXT    NOT NULL
+);
+
+/* תור השרשורים: מה שמופה בשלב 1, ומה שנקרא בשלב 3 */
+CREATE TABLE IF NOT EXISTS mail_memory_threads (
+  user_id       INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  thread_id     TEXT    NOT NULL,
+  last_at       TEXT    NOT NULL,
+  subject       TEXT    NOT NULL DEFAULT '',
+  messages      INTEGER NOT NULL DEFAULT 0,
+  has_files     INTEGER NOT NULL DEFAULT 0,
+  -- pending | done | skipped (לא נבחר / דיוור / אישי) | error
+  status        TEXT    NOT NULL DEFAULT 'pending',
+  reason        TEXT    NOT NULL DEFAULT '',
+  -- 1 = הגיע בעדכון הבוקר: נקרא מיד, לא מחכה לחלון הלילה
+  fresh         INTEGER NOT NULL DEFAULT 0,
+  processed_at  TEXT,
+  PRIMARY KEY (user_id, thread_id)
+);
+CREATE INDEX IF NOT EXISTS idx_mm_threads_queue ON mail_memory_threads(user_id, status, fresh, last_at);
+
+/* כרטיס איש קשר — מי הוא ומה הוא עושה בשבילי */
+CREATE TABLE IF NOT EXISTS mail_people (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id       INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  email         TEXT    NOT NULL,
+  name          TEXT    NOT NULL DEFAULT '',
+  company       TEXT    NOT NULL DEFAULT '',
+  role          TEXT    NOT NULL DEFAULT '',   -- "טכנאי מזגנים", "מודד מוסמך"
+  phone         TEXT    NOT NULL DEFAULT '',
+  -- בכמה שרשורים שונים הופיע אותו טלפון בחתימה שלו. מ-2 ומעלה — מאומת
+  phone_hits    INTEGER NOT NULL DEFAULT 0,
+  internal      INTEGER NOT NULL DEFAULT 0,    -- עובד בארגון
+  mails_in      INTEGER NOT NULL DEFAULT 0,
+  mails_out     INTEGER NOT NULL DEFAULT 0,
+  threads       INTEGER NOT NULL DEFAULT 0,
+  first_at      TEXT,
+  last_at       TEXT,
+  reply_hours   REAL,                          -- זמן תגובה חציוני שלו, בשעות
+  -- המשתמש תיקן ידנית: ה-AI לא דורס את התפקיד והחברה
+  edited        INTEGER NOT NULL DEFAULT 0,
+  updated_at    TEXT    NOT NULL,
+  UNIQUE (user_id, email)
+);
+CREATE INDEX IF NOT EXISTS idx_mail_people_user ON mail_people(user_id, last_at);
+
+/* רשומת זיכרון — אירוע עבודה אחד, משרשור אחד */
+CREATE TABLE IF NOT EXISTS mail_memory (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id       INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  thread_id     TEXT    NOT NULL,
+  gmail_id      TEXT    NOT NULL DEFAULT '',   -- המייל האחרון בשרשור, לקישור
+  contact_email TEXT    NOT NULL DEFAULT '',
+  domain        TEXT    NOT NULL DEFAULT '',   -- התחום: "תיקון מזגן"
+  keywords      TEXT    NOT NULL DEFAULT '',   -- מופרדות ברווח, לחיפוש
+  summary       TEXT    NOT NULL,
+  -- closed | open | stuck | cancelled | info
+  outcome       TEXT    NOT NULL DEFAULT 'info',
+  amount        TEXT    NOT NULL DEFAULT '',
+  happened_at   TEXT,
+  created_at    TEXT    NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_mail_memory_user ON mail_memory(user_id, happened_at);
+CREATE INDEX IF NOT EXISTS idx_mail_memory_thread ON mail_memory(user_id, thread_id);
+
+/* כרטיס מסמך — קובץ מצורף שנקרא. הקובץ נשאר ב-Gmail; כאן רק מה שחולץ ממנו */
+CREATE TABLE IF NOT EXISTS mail_documents (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id       INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  hash          TEXT    NOT NULL,              -- SHA-256 של הקובץ: אותו קובץ נקרא פעם אחת
+  thread_id     TEXT    NOT NULL,
+  gmail_id      TEXT    NOT NULL,
+  filename      TEXT    NOT NULL DEFAULT '',
+  mime          TEXT    NOT NULL DEFAULT '',
+  -- quote | invoice | contract | plan | permit | report | form | other
+  kind          TEXT    NOT NULL DEFAULT 'other',
+  from_email    TEXT    NOT NULL DEFAULT '',
+  title         TEXT    NOT NULL DEFAULT '',   -- שורת תקציר
+  fields        TEXT    NOT NULL DEFAULT '{}', -- סכום, מספר, צדדים, תוקף, גוש/חלקה, פרויקט
+  valid_until   TEXT,                          -- YYYY-MM-DD — להתראה לפני שפג
+  expiry_noticed INTEGER NOT NULL DEFAULT 0,   -- כבר הוצעה משימת חידוש
+  doc_date      TEXT,
+  created_at    TEXT    NOT NULL,
+  UNIQUE (user_id, hash)
+);
+CREATE INDEX IF NOT EXISTS idx_mail_documents_user ON mail_documents(user_id, doc_date);
+CREATE INDEX IF NOT EXISTS idx_mail_documents_valid ON mail_documents(valid_until, expiry_noticed);
 `);
 
 // ---------------------------------------------------------------------------
@@ -1109,6 +1218,20 @@ const DEFAULT_SETTINGS = {
   ai_mail_scan_enabled: true,
   ai_scan_time: '07:00',                   // ריצת הבוקר, שעון ישראל
   ai_scan_daily_limit: 100,                // תקרת מיילים לסריקה ביום, לכל משתמש
+
+  /*
+   * זיכרון העבודה — סריקת כל היסטוריית המייל (‎ai/mail-memory.js‎).
+   * ‎mail_memory_users‎: למי מותר להפעיל. ריק = מנהלי מערכת בלבד (פיילוט),
+   * ‎*‎ = כל העובדים, או רשימת כתובות מופרדות בפסיק.
+   */
+  mail_memory_enabled: true,
+  mail_memory_users: '',
+  mail_memory_model: 'claude-haiku-5-5',   // מודל זול: הקריאה רבה, ואין צורך בשיקול דעת עמוק
+  mail_memory_hours: '19:00-07:00',        // חלון קריאת ההיסטוריה, שעון ישראל. ריק = כל שעה
+  mail_memory_nightly_threads: 400,        // כמה שרשורים לכל משתמש ביממה
+  mail_doc_expiry_days: 30,                // כמה ימים לפני תום תוקף של מסמך מציעים לחדש
+  mail_ask_daily_limit: 60,                // "שאל את המיילים": שאלות ביום לכל משתמש
+  task_closure_enabled: true,              // 💡 הצעה איך לסגור משימה מהמייל
 
   /*
    * בוט הוואטסאפ: הודעות קבוצה נאספות עד שיש הפסקה בשיחה, ונותחות יחד —

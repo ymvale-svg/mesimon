@@ -186,7 +186,12 @@ async function googleCall(userId, url, params = {}, { method = 'GET', body = nul
 }
 
 async function call(userId, path, params = {}, { method = 'GET', body = null } = {}) {
-  const qs = new URLSearchParams(Object.entries(params).filter(([, v]) => v !== undefined && v !== null && v !== ''));
+  const qs = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) {
+    if (v === undefined || v === null || v === '') continue;
+    // פרמטר שחוזר על עצמו (‎metadataHeaders=From&metadataHeaders=To‎) מגיע כמערך
+    for (const one of [v].flat()) qs.append(k, one);
+  }
   const url = `${API}${path}${qs.toString() ? `?${qs}` : ''}`;
   const res = await fetch(url, {
     method,
@@ -226,6 +231,50 @@ async function threadOf(userId, gmailId) {
     labels: x.labelIds ?? [],
     at: x.internalDate ? new Date(Number(x.internalDate)) : null
   }));
+}
+
+/**
+ * עמוד אחד של שרשורים לפי חיפוש — לסריקת ההיסטוריה, שעוברת על כל התיבה
+ * בעמודים ושומרת את ‎pageToken‎ כדי להמשיך מאותה נקודה.
+ */
+async function listThreads(userId, q, { pageToken = null, max = 500 } = {}) {
+  const page = await call(userId, '/threads', { q, maxResults: Math.min(500, max), pageToken });
+  return { ids: (page.threads ?? []).map((t) => t.id), next: page.nextPageToken ?? null };
+}
+
+const META_HEADERS = ['From', 'To', 'Cc', 'Subject', 'Date', 'List-Unsubscribe', 'Precedence', 'Auto-Submitted'];
+
+/**
+ * שרשור בכותרות בלבד, בלי תוכן: מי, למי, מתי, נושא ותוויות — לכל הודעה.
+ * ‎hasFiles‎ — לפי מבנה ההודעה (‎multipart/mixed‎), סימן לקובץ מצורף בלי לקרוא אותו.
+ */
+async function threadMeta(userId, threadId) {
+  const t = await call(userId, `/threads/${encodeURIComponent(threadId)}`, { format: 'metadata', metadataHeaders: META_HEADERS });
+  return (t.messages ?? []).map((m) => {
+    const h = {};
+    for (const x of m.payload?.headers ?? []) h[x.name.toLowerCase()] = x.value;
+    return {
+      id: m.id,
+      labels: m.labelIds ?? [],
+      at: m.internalDate ? new Date(Number(m.internalDate)) : null,
+      headers: h,
+      hasFiles: /multipart\/mixed/i.test(m.payload?.mimeType ?? '')
+    };
+  });
+}
+
+/** הודעה אחת בכותרות בלבד — מי, למי, נושא, מתי */
+async function messageMeta(userId, id) {
+  const m = await call(userId, `/messages/${encodeURIComponent(id)}`, { format: 'metadata', metadataHeaders: META_HEADERS });
+  const h = {};
+  for (const x of m.payload?.headers ?? []) h[x.name.toLowerCase()] = x.value;
+  return { id: m.id, threadId: m.threadId, labels: m.labelIds ?? [], at: m.internalDate ? new Date(Number(m.internalDate)) : null, headers: h };
+}
+
+/** התוויות של התיבה — כדי להחריג לפי שם ("אישי") */
+async function labels(userId) {
+  const r = await call(userId, '/labels');
+  return (r.labels ?? []).map((l) => ({ id: l.id, name: l.name, type: l.type }));
 }
 
 /** ההודעה המלאה כ-RFC 822 — לפענוח ב-‎mime.js‎, כמו דואר שהגיע ב-IMAP */
@@ -424,6 +473,6 @@ const webLink = (email, gmailId) => `https://mail.google.com/mail/u/?authuser=${
 
 module.exports = {
   isEnabled, authorizeUrl, isGmailState, consumeState, connect, disconnect,
-  search, raw, threadOf, send, connectedUsers, isConnected, canSend, connectionOf, publicStatus, webLink, SCOPE, SEND_SCOPE,
+  search, raw, threadOf, send, listThreads, threadMeta, messageMeta, labels, connectedUsers, isConnected, canSend, connectionOf, publicStatus, webLink, SCOPE, SEND_SCOPE,
   SCOPES, has, googleCall, signature, signatureInfo, fallbackSignature, signed, SIGNATURE_HELP
 };
