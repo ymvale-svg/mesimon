@@ -90,17 +90,18 @@ function senderMode(userId, email) {
   return D.get('SELECT mode FROM mail_trusted_senders WHERE user_id = ? AND email = ?', userId, String(email ?? '').toLowerCase())?.mode ?? null;
 }
 
-function record(userId, gmailId, headerId, outcome) {
+function record(userId, gmailId, headerId, outcome, box = 0) {
   D.run(
-    `INSERT INTO mail_scanned (user_id, gmail_id, header_id, outcome, scanned_at) VALUES (?,?,?,?,?)
+    `INSERT INTO mail_scanned (user_id, gmail_id, header_id, outcome, scanned_at, box) VALUES (?,?,?,?,?,?)
      ON CONFLICT(user_id, gmail_id) DO UPDATE SET outcome = excluded.outcome, scanned_at = excluded.scanned_at`,
-    userId, gmailId, headerId, outcome, D.nowIso()
+    userId, gmailId, headerId, outcome, D.nowIso(), box
   );
 }
 
-function scannedToday(userId) {
+/** כמה נסרקו היום בתיבה — התקרה היומית לכל תיבה בנפרד, כך שתיבה אחת לא "אוכלת" את השנייה */
+function scannedToday(userId, box = 0) {
   const since = startOfLocalDay(localDate().date).toISOString();
-  return D.get("SELECT COUNT(*) c FROM mail_scanned WHERE user_id = ? AND scanned_at >= ? AND outcome <> 'reply'", userId, since).c;
+  return D.get("SELECT COUNT(*) c FROM mail_scanned WHERE user_id = ? AND box = ? AND scanned_at >= ? AND outcome <> 'reply'", userId, box, since).c;
 }
 
 const shortDate = (d) => (d ? new Date(d).toLocaleDateString('he-IL', { timeZone: TZ }) : '');
@@ -164,12 +165,18 @@ const ANALYSIS_SCHEMA = {
   additionalProperties: false
 };
 
-async function analyze(user, mail) {
+async function analyze(user, mail, conn = null) {
   const users = orgUsers().filter((u) => u.id !== user.id);
+  /*
+   * הכתובת של התיבה שנסרקת — ולא רק כתובת המשתמש במשימון. בתיבה נוספת המייל
+   * נשלח לכתובת האחרת, ובלי זה ה-AI היה מחליט שהבקשה "לא מופנית לבעל התיבה".
+   */
+  const own = [...new Set([conn?.email, user.email, ...Gmail.emailsOf(user.id)].filter(Boolean).map((a) => a.toLowerCase()))];
   const text = [
     `תאריך היום: ${localDate().date}`,
     `הארגון: ${D.getSetting('org_name', '')}`,
-    `בעל התיבה: ${user.full_name} <${user.email}>`,
+    `בעל התיבה: ${user.full_name} <${own[0]}>`,
+    own.length > 1 ? `כל הכתובות של בעל התיבה (מייל לכל אחת מהן — אליו): ${own.join(', ')}` : null,
     '',
     'העובדים בארגון (מזהה · שם · מייל · מחלקה):',
     ...users.map((u) => `${u.id} · ${u.full_name} · ${u.email} · ${u.department ?? ''}`),
@@ -328,9 +335,9 @@ async function processMessage(user, conn, gmailId) {
   // כל הכתובות שלי — מייל שעובר ביני לבין עצמי (מתיבה לתיבה) אינו משימה
   const mine = new Set([conn.email, user.email, ...Gmail.emailsOf(user.id)].filter(Boolean).map((a) => a.toLowerCase()));
 
-  if (!mail.from.address || mine.has(mail.from.address)) return record(user.id, gmailId, headerId, 'skipped'), 'skipped';
-  if (await routeReply(user, mail)) return record(user.id, gmailId, headerId, 'reply'), 'reply';
-  if (senderMode(user.id, mail.from.address) === 'ignore') return record(user.id, gmailId, headerId, 'skipped'), 'skipped';
+  if (!mail.from.address || mine.has(mail.from.address)) return record(user.id, gmailId, headerId, 'skipped', meta.box), 'skipped';
+  if (await routeReply(user, mail)) return record(user.id, gmailId, headerId, 'reply', meta.box), 'reply';
+  if (senderMode(user.id, mail.from.address) === 'ignore') return record(user.id, gmailId, headerId, 'skipped', meta.box), 'skipped';
 
   /*
    * מייל שעונה על משימה שפתחתי, או מעדכן אותה — הצעה "לסגור?" / "לעדכן?"
@@ -352,18 +359,18 @@ async function processMessage(user, conn, gmailId) {
     if (!involvedIn(user.id, existing)) {
       insertSuggestion(user, meta, 'duplicate', { ownerName: existing.owner_name, taskTitle: existing.title }, { taskId: existing.id });
     }
-    record(user.id, gmailId, headerId, 'duplicate');
+    record(user.id, gmailId, headerId, 'duplicate', meta.box);
     return 'duplicate';
   }
 
-  const result = await analyze(user, mail);
+  const result = await analyze(user, mail, conn);
 
   // הבקשה מופנית לעמית שמחובר בעצמו — היא תוצע לו, לא לי
   if (!result.forMe && result.addressedTo && !mine.has(result.addressedTo)) {
     const colleague = D.get("SELECT id FROM users WHERE lower(email) = ? AND status = 'active'", result.addressedTo);
-    if (colleague && Gmail.isConnected(colleague.id)) return record(user.id, gmailId, headerId, 'not_mine'), 'not_mine';
+    if (colleague && Gmail.isConnected(colleague.id)) return record(user.id, gmailId, headerId, 'not_mine', meta.box), 'not_mine';
   }
-  if (!result.tasks.length) return record(user.id, gmailId, headerId, 'skipped'), 'skipped';
+  if (!result.tasks.length) return record(user.id, gmailId, headerId, 'skipped', meta.box), 'skipped';
 
   // הוצע גם לעמית אחר שעוד לא החליט — נאמר, כדי שלא יטפלו בזה שניים
   const others = D.all(
@@ -395,7 +402,7 @@ async function processMessage(user, conn, gmailId) {
       insertSuggestion(user, meta, 'task', data);
     }
   }
-  record(user.id, gmailId, headerId, 'suggested');
+  record(user.id, gmailId, headerId, 'suggested', meta.box);
   return created ? 'auto' : 'suggested';
 }
 
@@ -424,7 +431,7 @@ async function runScan(who, { from, to = null, trigger = 'manual' }) {
   const progress = { trigger, total: 0, done: 0, suggested: 0, auto: 0, skipped: 0, replies: 0, errors: 0, startedAt: D.nowIso(), from: from.toISOString(), to: to?.toISOString() ?? null };
   setProgress(who, progress);
   try {
-    const budget = Math.max(0, Number(D.getSetting('ai_scan_daily_limit', 100)) - scannedToday(userId));
+    const budget = Math.max(0, Number(D.getSetting('ai_scan_daily_limit', 100)) - scannedToday(userId, Gmail.boxOf(who)));
     const q = ['is:unread', 'in:inbox', '-category:promotions', '-category:social', `after:${epoch(from)}`, to ? `before:${epoch(to)}` : null].filter(Boolean).join(' ');
     const ids = (await Gmail.search(who, q, { max: 300 }))
       .filter((id) => !D.get('SELECT 1 FROM mail_scanned WHERE user_id = ? AND gmail_id = ?', userId, id));
@@ -915,9 +922,27 @@ function sourceLink(task, viewerId) {
   return conn?.email && sug?.gmail_id ? Gmail.webLink(conn.email, sug.gmail_id) : null;
 }
 
+/*
+ * תיקון חד-פעמי: לפני שהסריקה ידעה את הכתובות של התיבות הנוספות, מיילים
+ * שנשלחו לתיבה נוספת סומנו לפעמים "לא בשבילי" ודולגו — ומייל שנסרק אינו
+ * נסרק שוב. אצל מי שיש לו תיבה נוספת, מה שדולג בשבוע האחרון נמחק מהרישום,
+ * וייסרק שוב בסריקה הבאה.
+ */
+function rescanSkippedOnce() {
+  const KEY = 'mail_rescan_multibox_v1';
+  if (D.getSetting(KEY, false)) return;
+  D.run(
+    `DELETE FROM mail_scanned WHERE outcome IN ('skipped', 'not_mine') AND scanned_at >= ?
+       AND user_id IN (SELECT DISTINCT user_id FROM mail_accounts)`,
+    new Date(Date.now() - 7 * DAY).toISOString()
+  );
+  D.setSetting(KEY, true);
+}
+
 function init({ createTask }) {
   hooks.createTask = createTask;
   releaseStuck();
+  rescanSkippedOnce();
   AiTasks.setHooks({ pollMailbox, afterTick: morningRun });
 }
 

@@ -1440,6 +1440,8 @@ function migrate() {
   addColumn('ai_suggestions', 'box', 'INTEGER NOT NULL DEFAULT 0');
   addColumn('google_contacts', 'box', 'INTEGER NOT NULL DEFAULT 0');
   addColumn('ai_requests', 'from_box', 'INTEGER NOT NULL DEFAULT 0');
+  // התקרה היומית של הסריקה — לכל תיבה בנפרד
+  addColumn('mail_scanned', 'box', 'INTEGER NOT NULL DEFAULT 0');
   // הרשימה האחרונה שהבוט שלח בפרטי — כדי ש"סיימתי את 2" יידע מה זה 2
   addColumn('wa_chats', 'last_list', "TEXT NOT NULL DEFAULT '[]'");
   // אלפון: טל' 2 ופקס (הטלפון הקיים הוא טל' 1)
