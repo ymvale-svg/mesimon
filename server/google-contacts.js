@@ -178,20 +178,61 @@ function syncSoon(userId) {
   });
 }
 
+/*
+ * מצב החיבור, במדויק — ולא רק "מחובר / לא מחובר". ‎available‎ — יש מה לחפש:
+ * ההרשאה בתוקף, או שיש עותק מקומי (החיפוש רץ עליו, גם כשהאסימון נפל לרגע).
+ * ‎reason‎ — למה אין, או למה אין עדיין:
+ *   not_connected · revoked · no_permission · not_synced · sync_error · ''
+ */
 function status(userId) {
   const row = syncRow(userId);
   const total = D.get('SELECT COUNT(*) c FROM google_contacts WHERE user_id = ?', userId).c;
   let counts = {};
   try { counts = JSON.parse(row?.counts ?? '{}'); } catch { /* ריק */ }
+  const conn = D.get('SELECT state FROM mail_connections WHERE user_id = ?', userId);
+  const permitted = canSync(userId);
+  const error = row?.error ?? '';
+  let reason = '';
+  if (!conn) reason = 'not_connected';
+  else if (conn.state !== 'ok') reason = 'revoked';
+  else if (!permitted) reason = 'no_permission';
+  else if (!total && error) reason = 'sync_error';
+  else if (!total) reason = 'not_synced';
   return {
-    available: canSync(userId),
+    available: permitted || total > 0,
+    connected: Boolean(conn && conn.state === 'ok'),
+    reason,
     canSave: Gmail.has(userId, 'contacts'),
     running: Boolean(row?.running),
     lastSyncAt: row?.last_sync_at ?? null,
-    error: row?.error ?? '',
+    error,
     counts,
     total
   };
+}
+
+/** משפט לבוט: למה אנשי הקשר של Google לא נמצאו / לא זמינים. ריק — הכול תקין */
+function reasonText(st) {
+  return {
+    not_connected: 'חשבון ה-Google שלך לא מחובר למשימון — מחברים באפליקציה: "החשבון שלי ← Gmail ועוזר ה-AI".',
+    revoked: 'החיבור ל-Google פג או בוטל — צריך לחבר מחדש באפליקציה: "החשבון שלי ← Gmail ועוזר ה-AI".',
+    no_permission: 'בחיבור ל-Google לא אושרה ההרשאה לאנשי הקשר — חברו מחדש באפליקציה וסמנו את כל התיבות.',
+    not_synced: st.running ? 'אנשי הקשר מ-Google מסתנכרנים עכשיו — נסו שוב בעוד דקה.' : 'אנשי הקשר מ-Google עוד לא סונכרנו — התחלתי סנכרון, נסו שוב בעוד דקה.',
+    sync_error: `הסנכרון של אנשי הקשר מ-Google נכשל: ${String(st.error).slice(0, 160)}`
+  }[st.reason] ?? '';
+}
+
+/*
+ * חיבור תקין בלי עותק מקומי (הסנכרון הראשון נכשל, או עוד לא רץ) — סנכרון
+ * ברקע מהחיפוש עצמו, ולא רק מהמתזמן. לכל היותר פעם ב-10 דקות למשתמש.
+ */
+const healedAt = new Map();
+function healIfEmpty(userId, rows) {
+  if (rows.length || !canSync(userId)) return;
+  if (Date.now() - (healedAt.get(userId) ?? 0) < 10 * 60000) return;
+  if (syncRow(userId)?.running) return;
+  healedAt.set(userId, Date.now());
+  syncSoon(userId);
 }
 
 // ---------------------------------------------------------------------------
@@ -247,6 +288,7 @@ function matcher(q) {
 function search(userId, q, limit = 20) {
   const { tokens, digits } = matcher(q);
   const rows = rowsFor(userId);
+  healIfEmpty(userId, rows);
   if (!tokens.length && !digits) {
     return rows.filter((c) => c.source === 'contacts').sort((a, b) => a.name.localeCompare(b.name, 'he')).slice(0, limit).map(publicOf);
   }
@@ -256,6 +298,19 @@ function search(userId, q, limit = 20) {
     .sort((a, b) => b.s - a.s || SOURCE_RANK[a.c.source] - SOURCE_RANK[b.c.source] || a.c.name.localeCompare(b.c.name, 'he'))
     .slice(0, limit)
     .map((x) => publicOf(x.c));
+}
+
+const SOURCE_TAG = { contacts: 'אנשי הקשר שלי ב-Google', directory: 'ספריית הארגון ב-Google', other: 'התכתבת איתו ב-Gmail' };
+
+/** כרטיס לבוט — כמו כרטיס האלפון, רק השדות שיש */
+function cardText(c) {
+  const org = [c.title, c.organization].filter(Boolean).join(' · ');
+  return [
+    `👤 *${c.name || c.emails[0]?.value || c.phones[0]?.value}*${org ? ` · ${org}` : ''}`,
+    ...c.phones.map((p) => `📞 ${p.label ? `${p.label}: ` : ''}${p.value}`),
+    ...c.emails.map((e) => `✉️ ${e.value}`),
+    `_מקור: ${SOURCE_TAG[c.source] ?? 'Google'}_`
+  ].join('\n');
 }
 
 const publicOf = (c) => ({
@@ -417,6 +472,6 @@ function stop() {
 }
 
 module.exports = {
-  sync, syncSoon, status, search, isSaved, lookup, save, dismiss, shouldSuggest, normalizePhone, phoneKey, fold, matcher, score,
+  sync, syncSoon, status, reasonText, cardText, search, isSaved, lookup, save, dismiss, shouldSuggest, normalizePhone, phoneKey, fold, matcher, score,
   start, stop
 };

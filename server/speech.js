@@ -6,13 +6,16 @@
  * כתובה. ההקלטה באפליקציה אינה עוברת כאן — שם הדפדפן מתמלל בעצמו.
  *
  * שלושה ספקים, לפי הסדר הזה — כל אחד גיבוי לקודם (נכשל, או החזיר ריק):
- *   1. ivrit.ai על RunPod (‎RUNPOD_API_KEY‎ + ‎RUNPOD_ENDPOINT_ID‎) — Whisper שאומן
+ *   1. OpenAI (‎OPENAI_API_KEY‎) — מקבל את קובץ ה-ogg של וואטסאפ כמו שהוא.
+ *      המודל: ‎OPENAI_TRANSCRIBE_MODEL‎ (ברירת מחדל: ‎gpt-4o-transcribe‎).
+ *      תמיד בעברית: השפה נקבעת ל-‎he‎, וההנחיה אוסרת תרגום לאנגלית. תמלול
+ *      שחזר בלי אף אות עברית (תורגם לאנגלית) — נחשב כישלון, והגיבוי ממשיך.
+ *   2. ivrit.ai על RunPod (‎RUNPOD_API_KEY‎ + ‎RUNPOD_ENDPOINT_ID‎) — Whisper שאומן
  *      על עברית, ב-endpoint בחשבון ה-RunPod של הארגון. המודל:
  *      ‎RUNPOD_TRANSCRIBE_MODEL‎ (ברירת מחדל: ‎ivrit-ai/whisper-large-v3-turbo-ct2‎).
  *      endpoint שלא היה בשימוש "מתעורר" — הבקשה הראשונה אחרי הפסקה איטית.
- *   2. OpenAI (‎OPENAI_API_KEY‎) — מקבל את קובץ ה-ogg של וואטסאפ כמו שהוא.
- *      המודל: ‎OPENAI_TRANSCRIBE_MODEL‎ (ברירת מחדל: ‎gpt-4o-transcribe‎).
  *   3. Google Cloud Speech-to-Text (‎GOOGLE_SPEECH_API_KEY‎).
+ * הסדר ניתן לשינוי ב-‎SPEECH_PROVIDERS‎ (למשל ‎ivrit,openai,google‎).
  * בלי אף אחד מהם — הבוט ממשיך לבקש טקסט.
  *
  * מצב השוואה (‎compare‎): כל הספקים המוגדרים רצים במקביל על אותה הקלטה, כדי
@@ -120,12 +123,20 @@ function extOf(mime) {
   return 'ogg'; // הודעה קולית של וואטסאפ: ‎audio/ogg; codecs=opus‎
 }
 
+const HEBREW_PROMPT = 'תמלול של הודעה קולית בעברית, במשרד בישראל. כתוב את הטקסט בעברית בלבד, בדיוק כפי שנאמר, עם פיסוק. אל תתרגם לאנגלית. שמות ומונחים באנגלית — כפי שנאמרו.';
+const HEBREW = /[\u0590-\u05FF]/;
+const LATIN = /[A-Za-z]/;
+/** תמלול שתורגם לאנגלית: יש בו אותיות לטיניות ואין אף אות עברית */
+const notHebrew = (text) => Boolean(text) && LATIN.test(text) && !HEBREW.test(text);
+
 async function transcribeOpenAI(buf, mime) {
   if (buf.length > OPENAI_MAX_BYTES) throw new Error('ההודעה הקולית ארוכה מדי לתמלול');
   const form = new FormData();
   form.append('file', new Blob([buf], { type: String(mime || 'audio/ogg').split(';')[0] }), `voice.${extOf(mime)}`);
   form.append('model', openaiModel());
   form.append('language', 'he');
+  // ההקלטות כאן בעברית — תמלול מילה במילה בעברית, לעולם לא תרגום לאנגלית
+  form.append('prompt', HEBREW_PROMPT);
   form.append('response_format', 'json');
   const res = await fetch(OPENAI_URL, {
     method: 'POST',
@@ -135,11 +146,14 @@ async function transcribeOpenAI(buf, mime) {
   });
   const text = await res.text();
   if (!res.ok) throw new Error(`OpenAI החזיר ${res.status}: ${text.slice(0, 200)}`);
+  let out = '';
   try {
-    return String(JSON.parse(text).text ?? '').replace(/\s+/g, ' ').trim();
+    out = String(JSON.parse(text).text ?? '').replace(/\s+/g, ' ').trim();
   } catch {
     return '';
   }
+  if (notHebrew(out)) throw new Error(`OpenAI החזיר תמלול שאינו בעברית: "${out.slice(0, 80)}"`);
+  return out;
 }
 
 // ---------------------------------------------------------------------------
@@ -226,16 +240,23 @@ async function transcribeGoogle(buf, mime) {
 // הסדר, הגיבוי וההשוואה
 // ---------------------------------------------------------------------------
 
-const PROVIDERS = [
-  { key: 'ivrit', name: 'ivrit.ai', ready: () => Boolean(runpodKey() && runpodEndpoint()), run: (buf) => transcribeRunPod(buf) },
+const ALL_PROVIDERS = [
   { key: 'openai', name: 'OpenAI', ready: () => Boolean(openaiKey()), run: (buf, mime) => transcribeOpenAI(buf, mime) },
+  { key: 'ivrit', name: 'ivrit.ai', ready: () => Boolean(runpodKey() && runpodEndpoint()), run: (buf) => transcribeRunPod(buf) },
   { key: 'google', name: 'Google', ready: () => Boolean(apiKey()), run: (buf, mime) => transcribeGoogle(buf, mime) }
 ];
 
+/** הסדר: ‎SPEECH_PROVIDERS‎ אם הוגדר (מה שלא נכתב שם — בסוף), אחרת OpenAI ראשון */
+function ordered() {
+  const want = String(process.env.SPEECH_PROVIDERS ?? '').toLowerCase().split(/[\s,]+/).filter(Boolean);
+  const rank = (p) => (want.includes(p.key) ? want.indexOf(p.key) : want.length + ALL_PROVIDERS.indexOf(p));
+  return [...ALL_PROVIDERS].sort((a, b) => rank(a) - rank(b));
+}
+
 /** הספקים המוגדרים, לפי הסדר — ‎[{ key, name }]‎ */
-const providers = () => PROVIDERS.filter((p) => p.ready()).map(({ key, name }) => ({ key, name }));
+const providers = () => ordered().filter((p) => p.ready()).map(({ key, name }) => ({ key, name }));
 const isEnabled = () => providers().length > 0;
-const nameOf = (key) => PROVIDERS.find((p) => p.key === key)?.name ?? key;
+const nameOf = (key) => ALL_PROVIDERS.find((p) => p.key === key)?.name ?? key;
 
 /** ספק אחד, עם מדידת זמן. לעולם לא זורק — השגיאה חוזרת בתוצאה */
 async function attempt(p, buf, mime) {
@@ -257,7 +278,7 @@ async function attempt(p, buf, mime) {
  * @returns {Promise<{text: string, used: object|null, attempts: object[], all: Promise<object[]>|null}>}
  */
 async function transcribeDetailed(buf, mime, { compare = false } = {}) {
-  const ready = PROVIDERS.filter((p) => p.ready());
+  const ready = ordered().filter((p) => p.ready());
   if (!ready.length) throw new Error('תמלול הודעות קוליות אינו מוגדר (RUNPOD_API_KEY, OPENAI_API_KEY או GOOGLE_SPEECH_API_KEY)');
   if (compare && ready.length > 1) {
     const running = ready.map((p) => attempt(p, buf, mime));
@@ -300,5 +321,5 @@ async function transcribeUrl(url, mime) {
 
 module.exports = {
   isEnabled, providers, nameOf, transcribe, transcribeDetailed, transcribeUrl, download,
-  _internal: { configFor, opusRate, extOf, transcribeRunPod }
+  _internal: { configFor, opusRate, extOf, transcribeRunPod, notHebrew, ordered }
 };

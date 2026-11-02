@@ -768,7 +768,8 @@ const CHAT_SCHEMA = {
     insight_from: { type: 'string', description: 'בתובנות: רק משולח מסוים ("בנק לאומי"), אחרת ריק' },
     insight_range_unit: { type: 'string', enum: ['default', 'hours', 'workdays'], description: 'בתובנות: הטווח שנאמר — בשעות ("48 שעות") או בימים ("מאתמול", "מהיומיים האחרונים"). לא נאמר — default' },
     insight_range_n: { type: 'integer', description: 'בתובנות: מספר השעות או הימים שנאמר, אחרת 0' },
-    contact_query: { type: 'string', description: 'באיש קשר מהאלפון: את מי לחפש — שם, טלפון או מילה מההערה ("דני כהן", "היועץ הסניטרי"), בלי אותיות שימוש. אחרת ריק' },
+    contact_query: { type: 'string', description: 'באיש קשר: את מי לחפש — שם, טלפון או מילה מההערה ("דני כהן", "היועץ הסניטרי"), בלי אותיות שימוש. אחרת ריק' },
+    contact_source: { type: 'string', enum: ['any', 'google', 'phonebook'], description: 'באיש קשר ובמייל: מאיפה לחפש — phonebook רק כשנאמר במפורש "מהאלפון"/"באלפון", google רק כשנאמר "מגוגל"/"מאנשי הקשר בגוגל". אחרת any' },
     draft: {
       type: 'object',
       properties: {
@@ -785,7 +786,7 @@ const CHAT_SCHEMA = {
       additionalProperties: false
     }
   },
-  required: ['intent', 'ready', 'reply', 'range', 'task_id', 'comment', 'project_id', 'recipient_name', 'recipient_org', 'recipient_email', 'request', 'insight_action', 'insight_n', 'insight_from', 'insight_range_unit', 'insight_range_n', 'contact_query', 'draft'],
+  required: ['intent', 'ready', 'reply', 'range', 'task_id', 'comment', 'project_id', 'recipient_name', 'recipient_org', 'recipient_email', 'request', 'insight_action', 'insight_n', 'insight_from', 'insight_range_unit', 'insight_range_n', 'contact_query', 'contact_source', 'draft'],
   additionalProperties: false
 };
 
@@ -883,6 +884,41 @@ const RANGES = {
   all: { title: 'הפתוחות', pick: () => true, empty: 'אין לך משימות פתוחות 🎉' }
 };
 
+/**
+ * כרטיסי איש קשר לבוט, לפי סדר העדיפות: Google השמורים והספרייה ← האלפון ←
+ * מי שהתכתבתי איתו. כפילות (אותו טלפון או מייל) — הכרטיס הראשון בלבד.
+ */
+function findContactCards(actor, q, only = 'any') {
+  const google = only === 'phonebook' ? [] : GContacts.search(actor.id, q, 20);
+  const book = only === 'google' ? [] : Phonebook.search(q, { limit: 20 });
+  const seen = new Set();
+  const cards = [];
+  let fromGoogle = 0;
+  let fromBook = 0;
+  const fresh = (emails, phones) => {
+    const keys = [
+      ...emails.filter(Boolean).map((e) => `e:${String(e).toLowerCase()}`),
+      ...phones.map((p) => GContacts.phoneKey(p)).filter((p) => p.length >= 9).map((p) => `p:${p}`)
+    ];
+    if (keys.some((k) => seen.has(k))) return false;
+    keys.forEach((k) => seen.add(k));
+    return true;
+  };
+  const addG = (c) => {
+    if (!fresh(c.emails.map((e) => e.value), c.phones.map((p) => p.value))) return;
+    cards.push(GContacts.cardText(c));
+    fromGoogle++;
+  };
+  for (const c of google.filter((x) => x.source !== 'other')) addG(c);
+  for (const e of book) {
+    if (!fresh([e.email], [e.phone, e.phone2].filter(Boolean))) continue;
+    cards.push(Phonebook.cardText(e));
+    fromBook++;
+  }
+  for (const c of google.filter((x) => x.source === 'other')) addG(c);
+  return { cards, google: fromGoogle, phonebook: fromBook };
+}
+
 function helpText(actor) {
   const actions = WaActions.forActor(actor);
   if (!actions.length) return 'כרגע אין פעולות זמינות לך בוואטסאפ.';
@@ -892,6 +928,19 @@ function helpText(actor) {
     '',
     'בכל שלב: "ביטול".'
   ].join('\n');
+}
+
+/*
+ * מאיפה לחפש איש קשר. ברירת המחדל — הכול, Google קודם. מה שנכתב במפורש
+ * ("מהאלפון", "מגוגל") גובר גם אם ה-AI פספס.
+ */
+const FROM_PHONEBOOK = /(?:^|\s)(?:מה|ב|ל)?אלפון/;
+const FROM_GOOGLE = /(?:מ|ב)(?:-)?(?:גוגל|google)|אנשי\s+(?:ה)?קשר\s+(?:של|ב|מ)(?:-)?(?:גוגל|google)/i;
+function sourceOf(aiSource, text) {
+  const t = String(text ?? '');
+  if (FROM_PHONEBOOK.test(t)) return 'phonebook';
+  if (FROM_GOOGLE.test(t)) return 'google';
+  return ['google', 'phonebook'].includes(aiSource) ? aiSource : 'any';
 }
 
 async function understand(user, actor, state, text, projects, myOpen) {
@@ -923,7 +972,7 @@ async function understand(user, actor, state, text, projects, myOpen) {
     '',
     'פרויקטים נוספים שהוא רואה — לשאלות בלבד, לא לפתיחת משימה:',
     ...(otherList.length ? otherList.map((p) => `${p.id} · ${p.name}`) : ['(אין)']),
-    '',
+    '\u0000',
     'המשימות הפתוחות של הכותב (מזהה · כותרת):',
     ...(myOpen.length ? myOpen.map((t) => `${t.id} · ${t.title}`) : ['(אין)']),
     '',
@@ -944,7 +993,17 @@ async function understand(user, actor, state, text, projects, myOpen) {
     '>>>'
   ].join('\n');
 
-  const out = await Claude.json({ system: fs.readFileSync(CHAT_SKILL, 'utf8'), content: [{ type: 'text', text: prompt }], schema: CHAT_SCHEMA, effort: 'low' });
+  /*
+   * שני חלקים: הקבוע (העובדים והפרויקטים — זהים בין הודעה להודעה של אותו
+   * עובד) עם נקודת מטמון, והמשתנה (משימות, שיחה, ההודעה). כך בהודעה השנייה
+   * בשיחה רוב הפרומפט נקרא מהמטמון, והתשובה מתחילה מהר יותר.
+   */
+  const [stable, rest] = prompt.split('\n\u0000\n');
+  const out = await Claude.json({
+    system: fs.readFileSync(CHAT_SKILL, 'utf8'),
+    content: [{ type: 'text', text: stable, cache_control: { type: 'ephemeral' } }, { type: 'text', text: rest }],
+    schema: CHAT_SCHEMA, effort: 'low', live: true
+  });
   const ids = new Set(users.map((u) => u.id));
   const projectIds = new Set(projects.map((p) => p.id));
   const d = out.draft ?? {};
@@ -956,6 +1015,7 @@ async function understand(user, actor, state, text, projects, myOpen) {
     taskId: Number(out.task_id) || 0,
     comment: String(out.comment ?? '').trim().slice(0, 2000),
     contactQuery: String(out.contact_query ?? '').trim().slice(0, 80),
+    contactSource: sourceOf(out.contact_source, text),
     projectId: projectIds.has(Number(out.project_id)) ? Number(out.project_id) : 0,
     recipient: {
       name: String(out.recipient_name ?? '').trim().slice(0, 80),
@@ -1155,8 +1215,8 @@ const ORG_NOISE = new Set(['משרד', 'עורכי', 'עורך', 'דין', 'עו
  * הנמען לפי שם, ואם נאמרה חברה — רק מי שהחברה מופיעה אצלו (בארגון, בתפקיד
  * או בכתובת). רק מי שיש לו מייל, או עובד בארגון.
  */
-function findRecipients(actor, name, org = '') {
-  const results = (hooks.mail?.searchContacts(actor, name || org) ?? []).filter((c) => c.email || c.type === 'user');
+function findRecipients(actor, name, org = '', { only = null } = {}) {
+  const results = (hooks.mail?.searchContacts(actor, name || org, { only }) ?? []).filter((c) => c.email || c.type === 'user');
   const tokens = GContacts.fold(org).split(/\s+/).map((w) => w.replace(/^(מה|מ|ה|ב|ל)(?=\S{3})/, '')).filter((w) => w.length >= 2 && !ORG_NOISE.has(w));
   if (!name || !tokens.length) return results;
   const narrowed = results.filter((c) => {
@@ -1653,16 +1713,18 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
   };
 
   /** מייל לאיש קשר: חיפוש הנמען, ובהתאמה אחת — ישר לטיוטה */
-  const startEmail = async ({ name, org, email }, request) => {
+  const startEmail = async ({ name, org, email }, request, only = null) => {
     if (!hooks.mail) return out('שליחת מיילים מהבוט אינה זמינה כרגע.', {}, { action: 'send_email', status: 'error', result: 'אין חיבור לאשף' });
     const ask = (reply, result) => out(reply, { draft: { kind: 'email_pick', name, request, candidates: [] } }, { action: 'send_email', status: 'unclear', result });
     if (!email && !name && !org) return out('למי לשלוח?', {}, { action: 'send_email', status: 'unclear', result: 'חסר נמען' });
     const candidates = email
       ? [{ name: name || email, email, type: 'external' }]
-      : findRecipients(actor, name, org).map(contactOf);
+      : findRecipients(actor, name, org, { only }).map(contactOf);
     if (!candidates.length) {
-      const where = GContacts.status(actor.id).available ? 'באנשי הקשר שלך ב-Google ובמשימון' : 'במשימון (אנשי הקשר של Google לא מחוברים)';
-      return ask(`לא מצאתי את "${[name, org].filter(Boolean).join(' · ')}" ${where}.\nכתבו שם אחר, או את כתובת המייל.`, 'הנמען לא נמצא');
+      const g = GContacts.status(actor.id);
+      const where = only === 'phonebook' ? 'באלפון' : only === 'google' ? 'באנשי הקשר שלך ב-Google' : 'באנשי הקשר שלך ב-Google, במשימון ובאלפון';
+      const why = only === 'phonebook' ? '' : GContacts.reasonText(g);
+      return ask(`לא מצאתי את "${[name, org].filter(Boolean).join(' · ')}" ${where}.${why ? `\n⚠️ ${why}` : ''}\nכתבו שם אחר, או את כתובת המייל.`, 'הנמען לא נמצא');
     }
     if (candidates.length > 1) {
       return out(pickText(name || org, candidates), { draft: { kind: 'email_pick', name: name || org, request, candidates: candidates.slice(0, PICK_SHOWN) } },
@@ -1836,30 +1898,40 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
       if (!u.ready && u.reply && !u.recipient.name && !u.recipient.email && !u.recipient.org) {
         return out(u.reply, { draft: null }, { action: 'send_email', status: 'unclear', result: 'חסרים פרטים' });
       }
-      return startEmail(u.recipient, u.request);
+      return startEmail(u.recipient, u.request, u.contactSource === 'any' ? null : u.contactSource);
 
     case 'help':
       return out(helpText(actor), {}, { action: 'help', status: 'ok', result: 'עזרה' });
 
     /*
-     * איש קשר מהאלפון — הכרטיס המלא, רק השדות שהוזנו. כמה התאמות: עד שלושה
-     * כרטיסים, לפי אותו סדר של החיפוש באפליקציה (שמות קודם, הערות בסוף).
+     * איש קשר — הכרטיס המלא, רק השדות שיש. הסדר: אנשי הקשר של Google
+     * (שמורים, ספריית הארגון) ← האלפון הארגוני ← מי שהתכתבתי איתו ב-Gmail.
+     * "מהאלפון" — רק האלפון; "מגוגל" — רק Google. כמה התאמות: עד שלושה
+     * כרטיסים. אותו אדם בשני המקורות (אותו טלפון או מייל) — כרטיס אחד.
      */
     case 'contact': {
-      if (actor.type !== 'user') return out('האלפון הארגוני זמין לעובדים בלבד.', {}, { action: 'phonebook', status: 'denied', result: 'לא עובד' });
+      if (actor.type !== 'user') return out('אנשי הקשר זמינים לעובדים בלבד.', {}, { action: 'phonebook', status: 'denied', result: 'לא עובד' });
       const q = u.contactQuery;
-      if (!q) return out(u.reply || 'את מי לחפש באלפון?', {}, { action: 'phonebook', status: 'unclear', result: 'לא נאמר את מי' });
-      const found = Phonebook.search(q, { limit: 20 });
-      if (!found.length) {
-        return out(`לא מצאתי באלפון את "${q}". אפשר לחפש לפי שם, טלפון או מילה מההערה.`, {}, { action: 'phonebook', status: 'ok', result: `"${q}": לא נמצא` });
+      const only = u.contactSource;
+      const whereAsk = only === 'phonebook' ? 'באלפון' : only === 'google' ? 'באנשי הקשר של Google' : 'באנשי הקשר';
+      if (!q) return out(u.reply || `את מי לחפש ${whereAsk}?`, {}, { action: 'phonebook', status: 'unclear', result: 'לא נאמר את מי' });
+      const r = findContactCards(actor, q, only);
+      const g = only === 'phonebook' ? null : GContacts.status(actor.id);
+      const warn = g ? GContacts.reasonText(g) : '';
+      if (!r.cards.length) {
+        const where = only === 'phonebook' ? 'באלפון' : only === 'google' ? 'באנשי הקשר שלך ב-Google' : 'באנשי הקשר שלך ב-Google ובאלפון';
+        return out([`לא מצאתי ${where} את "${q}". אפשר לחפש לפי שם, טלפון או מילה מההערה.`, warn ? `⚠️ ${warn}` : null].filter(Boolean).join('\n'), {},
+          { action: 'phonebook', status: 'ok', result: `"${q}" (${only}): לא נמצא${g?.reason ? ` · ${g.reason}` : ''}` });
       }
-      const shown = found.slice(0, 3);
+      const shown = r.cards.slice(0, 3);
       const text = [
-        found.length > 1 ? `מצאתי ${found.length} באלפון עבור "${q}":` : null,
-        ...shown.map(Phonebook.cardText),
-        found.length > shown.length ? `ועוד ${found.length - shown.length} — כתבו שם מלא או מילה מההערה.` : null
+        r.cards.length > 1 ? `מצאתי ${r.cards.length} עבור "${q}":` : null,
+        ...shown,
+        r.cards.length > shown.length ? `ועוד ${r.cards.length - shown.length} — כתבו שם מלא או מילה מההערה.` : null,
+        // בחיפוש הכללי, כשאין אף תוצאה מ-Google — אומרים למה, בשורה קטנה
+        only !== 'phonebook' && !r.google && warn ? `ℹ️ ${warn}` : null
       ].filter(Boolean).join('\n\n');
-      return out(text, {}, { action: 'phonebook', status: 'ok', result: `"${q}": ${found.length} בכרטיסים` });
+      return out(text, {}, { action: 'phonebook', status: 'ok', result: `"${q}" (${only}): ${r.google} מ-Google, ${r.phonebook} מהאלפון` });
     }
 
     case 'my_tasks':
@@ -1986,9 +2058,11 @@ async function handleDirect(msg) {
   // הודעה קולית — מתומללת, ומשם בדיוק כמו הודעה כתובה
   let text = msg.text;
   const voice = !text && Boolean(msg.audio);
+  let notice = null;
   if (voice && Speech.isEnabled() && WaActions.allowed(actor, 'voice_notes')) {
-    // התמלול לבדו לוקח כמה שניות — מודיעים מיד שההקלטה התקבלה
-    await sendText(msg.chatId, '🎧 קיבלתי את ההקלטה, מתמלל…').catch(() => {});
+    // התמלול לבדו לוקח כמה שניות — מודיעים מיד שההקלטה התקבלה, בלי לחכות
+    // לשליחה: ההורדה והתמלול רצים במקביל (ההודעה תמיד יוצאת לפני התשובה)
+    notice = sendText(msg.chatId, '🎧 קיבלתי את ההקלטה, מתמלל…').catch(() => {});
   }
   if (voice) {
     if (!Speech.isEnabled() || !WaActions.allowed(actor, 'voice_notes')) {
@@ -2015,11 +2089,13 @@ async function handleDirect(msg) {
     } catch (err) {
       console.error('[משימון] תמלול הודעה קולית נכשל:', err.message);
       log({ ...base, text: '[הודעה קולית]', action: 'voice', status: 'error', result: err.message });
+      await notice;
       await sendText(msg.chatId, 'לא הצלחתי לתמלל את ההודעה הקולית. נסו שוב, או כתבו לי 🙏');
       return;
     }
     if (!text) {
       log({ ...base, text: '[הודעה קולית]', action: 'voice', status: 'unclear', result: 'לא נשמע דיבור' });
+      await notice;
       await sendText(msg.chatId, 'לא שמעתי דיבור בהודעה. נסו שוב, או כתבו לי.');
       return;
     }
@@ -2046,6 +2122,7 @@ async function handleDirect(msg) {
     return;
   }
   clearTimeout(slow);
+  await notice;
   // מה שנשמע חוזר בשורה אחת — כך רואים מיד אם התמלול טעה
   const reply = voice ? `🎙 *שמעתי:* "${text}"\n\n${r.reply}` : r.reply;
   const history = [...state.history, { role: 'user', text: text.slice(0, 500) }, { role: 'bot', text: r.reply.slice(0, 500) }];
@@ -2431,6 +2508,6 @@ module.exports = {
   sendText, log, notifyAssignment, assistant,
   _internal: {
     storeGroupMessage, processGroup, handleDirect, sanitizeGroup, resolveMentions, candidatesOf, converse, turn, withFollowUps, sendSummaries, YES,
-    findRecipients, suggestionFeedback, flushOutbox, todayMessage, splitMessage, parseSuggestionCommand, businessCommand, chatOf, saveChat
+    findRecipients, findContactCards, sourceOf, suggestionFeedback, flushOutbox, todayMessage, splitMessage, parseSuggestionCommand, businessCommand, chatOf, saveChat
   }
 };
