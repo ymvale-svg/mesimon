@@ -1041,6 +1041,19 @@ CREATE TABLE IF NOT EXISTS agent_log (
   created_at  TEXT    NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_agent_log_created ON agent_log(created_at);
+
+/*
+ * 💡 איך לסגור — למשימות שלא נולדו ממייל (ידנית, בוט, הקלטה, וואטסאפ).
+ * משימה ממייל שומרת את ההצעה בהצעה שלה (‎ai_suggestions.data.closure‎).
+ * ‎user_id‎ — מי שההצעה בשבילו (האחראי, או מי שפתח); רק הוא רואה אותה.
+ */
+CREATE TABLE IF NOT EXISTS task_closures (
+  task_id     INTEGER PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE,
+  user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  data        TEXT    NOT NULL,
+  dismissed   INTEGER NOT NULL DEFAULT 0,
+  created_at  TEXT    NOT NULL
+);
 `);
 
 // ---------------------------------------------------------------------------
@@ -1277,6 +1290,9 @@ const DEFAULT_SETTINGS = {
   org_knowledge_enabled: true,             // 📚 ידע ארגוני מזיכרון העבודה של כל העובדים
   org_merge_days: 1,                       // כל כמה ימים מאחדים לקחים לערכים
   org_refresh_hours: 2,                    // כל כמה שעות מזקקים לקחים ממה שנוסף לזיכרון
+  task_closure_agents: true,               // 💡 איך לסגור: גם סוכן המחלקה המתאים ממליץ (מס, שכר, נדל"ן…)
+  task_closure_all: true,                  // 💡 איך לסגור גם למשימות שלא נולדו ממייל (ידנית, בוט, הקלטה)
+  mail_reply_suggest: true,                // 📧 הצעת תשובה מוכנה למייל שמחכה לתשובה, ב"ממתין לאישורך"
   org_knowledge_blocklist: '',             // שמות לקוחות שתמיד יוסרו מהידע הארגוני, מופרדים בפסיק
 
   /*

@@ -386,10 +386,16 @@ async function route(user, question, agents, history) {
 /** "כללי" — כשאין סוכן מתאים: ידע ארגוני, זיכרון והצעת משימות, בלי סקיל */
 const GENERAL = { title: 'העוזר', icon: '✨', mcp: ['hebcal', 'boi-exchange'], calc: [], mesimon: 'אין סקיל מחלקתי לשאלה הזו. ענה מהידע הארגוני, מהזיכרון ומהכלים; אם אין מידע — אמור זאת בקצרה.' };
 
-async function runAgent(key, user, actor, question, { history = [], attachments = [], context = '', simple = false } = {}) {
+/**
+ * ‎live‎ — מישהו מחכה (מצב מהיר). ‎propose‎ — מותר להציע משימות; ב"💡 איך
+ * לסגור" לא: המשימה כבר קיימת, והסוכן רק ממליץ.
+ */
+async function runAgent(key, user, actor, question, { history = [], attachments = [], context = '', simple = false, live = true, propose = true, maxTurns = 6 } = {}) {
   const def = key ? manifest().agents[key] : GENERAL;
   const state = { question, sources: new Set(), proposed: [] };
-  const { tools, run } = await toolsFor(def, key ?? 'general', user, actor, state);
+  const all = await toolsFor(def, key ?? 'general', user, actor, state);
+  const tools = propose ? all.tools : all.tools.filter((t) => t.name !== 'propose_tasks');
+  const run = all.run;
   const docs = attachments.length ? Docs.prepare(attachments, { limit: 3 }).docs : [];
   const past = history.slice(-4).map((h) => `שאלה: ${String(h.q).slice(0, 300)}\nתשובה: ${String(h.a).slice(0, 800)}`).join('\n\n');
   const text = [
@@ -406,7 +412,7 @@ async function runAgent(key, user, actor, question, { history = [], attachments 
   const r = await Claude.withTools({
     system, content: [...docs.map((d) => d.block), { type: 'text', text }], tools, onTool: run,
     // שאלה פשוטה ("מה שער הדולר?") — חשיבה קצרה; ניתוח וניסוח — בינונית. ובכל מקרה מצב מהיר: מישהו מחכה
-    effort: simple && !docs.length ? 'low' : 'medium', maxTurns: 6, live: true
+    effort: simple && !docs.length ? 'low' : 'medium', maxTurns, live
   });
   if (docs.length) state.sources.add('📎 המסמך שצירפת');
   return {
@@ -416,6 +422,26 @@ async function runAgent(key, user, actor, question, { history = [], attachments 
     proposed: state.proposed,
     calls: r.calls.map((c) => ({ name: c.name, ok: c.ok, ms: c.ms }))
   };
+}
+
+/*
+ * 💡 עצה מסוכן המחלקה למשימה — ל"איך לסגור". הנתב בוחר סוכן רק כשהסקיל שלו
+ * באמת עונה (מס רכישה, שכר, היתר בנייה); אחרת ‎null‎ ואין עלות מעבר לניתוב
+ * הזול. ברקע: בלי מצב מהיר, בלי הצעת משימות, ועד 4 סבבי כלים.
+ */
+async function advise(user, actor, task) {
+  if (!Claude.isEnabled() || !D.getSetting('task_closure_agents', true)) return null;
+  const agents = allowedFor(actor);
+  if (!agents.length) return null;
+  const question = `איך לסגור את המשימה: ${task.title}${task.summary ? ` — ${String(task.summary).slice(0, 600)}` : ''}`;
+  const routed = await route(user, question, agents, []);
+  if (!routed.agent) return null;
+  const r = await runAgent(routed.agent, user, actor, question, {
+    context: 'זו משימה שכבר נפתחה. תן המלצה קצרה ומעשית איך לסגור אותה (עד 6 שורות): מה לעשות, נתון או חישוב רלוונטי מכלי, ולמי לפנות. לא להציע משימות.',
+    simple: false, live: false, propose: false, maxTurns: 4
+  });
+  if (!r.text) return null;
+  return { key: r.key, title: r.title, icon: r.icon, text: r.text.slice(0, 2000), sources: r.sources };
 }
 
 // ---------------------------------------------------------------------------
@@ -515,6 +541,6 @@ function recentLog({ limit = 100 } = {}) {
 }
 
 module.exports = {
-  init, catalog, allowedFor, setConfig, ask, asText, runAgent, route, recentLog,
+  init, catalog, allowedFor, setConfig, ask, asText, runAgent, route, advise, recentLog,
   _internal: { systemFor, toolsFor, skillText, referenceFiles, proposeTasks, projectContext, manifest }
 };

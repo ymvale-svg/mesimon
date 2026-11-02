@@ -354,7 +354,8 @@ const AiInboxView = (() => {
         d.alsoSuggestedTo?.length ? el('div.mute-sm', { text: `👥 הוצע גם ל${d.alsoSuggestedTo.join(', ')}` }) : null,
         d.routedAsManager ? el('div.mute-sm', { text: '👤 לא היה ברור למי הבקשה — הגיעה אליך כמנהל/ת הפרויקט. אפשר להעביר בעריכה' }) : null,
         fromLine(s),
-        closureLine(s, reload)
+        closureLine(s, reload),
+        replyLine(s, reload)
       ]),
       el('div.ai-row-actions', {}, [
         // הצעה עם אנשים נוספים או ספק מחייבת מבט — האישור המהיר עובר דרך העריכה
@@ -378,6 +379,35 @@ const AiInboxView = (() => {
     const stop = (e) => e.stopPropagation();
     const dismiss = el('button.btn.btn-sm.btn-ghost', { type: 'button', title: 'לא רלוונטי — ההצעה לסגירה יורדת, המשימה נשארת' }, ['✕']);
     dismiss.addEventListener('click', (e) => { stop(e); run(dismiss, () => API.post(`/api/ai/suggestions/${s.id}/closure-dismiss`), reload)(); });
+    const line = closureMain(s, c, dismiss, stop, reload);
+    // עצה בלבד (אין למי לפנות) — ה-✕ עובר אליה
+    if (!line) return agentAdvice(c.agent, dismiss);
+    const advice = agentAdvice(c.agent);
+    return advice ? el('div', { onclick: stop }, [line, advice]) : line;
+  }
+
+  /**
+   * 🤖 עצה מסוכן המחלקה — מצטרפת ל-💡 (מס רכישה, שכר, היתר…). מקופלת: שורה
+   * אחת, ובלחיצה הטקסט המלא. משותף לכרטיס המשימה.
+   */
+  function agentAdvice(a, dismiss = null) {
+    if (!a?.text) return null;
+    const full = el('div.mask-a.ai-advice-text', { style: { display: 'none' }, text: a.text });
+    const first = a.text.split(/\n/).map((l) => l.replace(/[*#>-]/g, '').trim()).find(Boolean) ?? '';
+    const more = el('button.btn-link', { type: 'button' }, ['עוד']);
+    more.addEventListener('click', (e) => { e.stopPropagation(); const open = full.style.display === 'none'; full.style.display = open ? '' : 'none'; more.textContent = open ? 'פחות' : 'עוד'; });
+    return el('div.ai-closure.ai-advice', { onclick: (e) => e.stopPropagation() }, [
+      el('div.ai-closure-main', {}, [
+        el('div', {}, [el('b', { text: `${a.icon ?? '🤖'} ${a.title}: ` }), el('span', { text: first.length > 160 ? `${first.slice(0, 158)}…` : first }), ' ', more]),
+        full,
+        a.sources?.length ? el('div.mute-sm', { text: `מקורות: ${a.sources.join(' · ')}` }) : null
+      ]),
+      dismiss
+    ]);
+  }
+
+  function closureMain(s, c, dismiss, stop, reload) {
+    if (c.kind === 'advice') return null;
 
     if (c.kind === 'self') {
       return el('div.ai-closure', { onclick: stop }, [
@@ -421,6 +451,57 @@ const AiInboxView = (() => {
       ]),
       el('div.ai-closure-actions', {}, [send, ...alts, dismiss])
     ]);
+  }
+
+  /**
+   * 📧 הצעת תשובה מוכנה — למייל שהשולח מחכה בו לתשובה. "✏️ עריכה ושליחה"
+   * פותח את הטיוטה לעריכה; שום דבר לא יוצא בלי לחיצה על "שליחה".
+   */
+  function replyLine(s, reload) {
+    const r = s.data?.reply;
+    if (!r || r.sent || r.dismissed || !r.body) return null;
+    const stop = (e) => e.stopPropagation();
+    const dismiss = el('button.btn.btn-sm.btn-ghost', { type: 'button', title: 'לא צריך לענות — ההצעה יורדת, המשימה נשארת' }, ['✕']);
+    dismiss.addEventListener('click', (e) => { stop(e); run(dismiss, () => API.post(`/api/ai/suggestions/${s.id}/reply-dismiss`), reload)(); });
+    const open = el('button.btn.btn-sm.btn-primary', { type: 'button' }, ['✏️ עריכה ושליחה']);
+    open.addEventListener('click', (e) => { stop(e); replyDialog(s, r, reload); });
+    const preview = r.body.replace(/\s+/g, ' ').trim();
+    return el('div.ai-closure.ai-reply', { onclick: stop }, [
+      el('div.ai-closure-main', {}, [
+        el('div', {}, [el('b', { text: `📧 הצעת תשובה ל${r.toName || r.to}: ` }), el('span', { text: preview.length > 140 ? `${preview.slice(0, 138)}…` : preview })]),
+        r.missing ? el('div.mute-sm', { text: `⚠️ ${r.missing}` }) : null
+      ]),
+      el('div.ai-closure-actions', {}, [open, dismiss])
+    ]);
+  }
+
+  function replyDialog(s, r, reload) {
+    const body = el('textarea', { rows: '9' });
+    body.value = r.body;
+    const send = el('button.btn.btn-primary', { type: 'button' }, ['📧 שליחה']);
+    const m = UI.modal({
+      title: `📧 תשובה ל${r.toName || r.to}`,
+      body: el('div', {}, [
+        el('div.mute-sm', { text: r.subject }),
+        r.basis?.length ? el('div.mute-sm', { text: `💡 לפי: ${r.basis.join(' · ')}` }) : null,
+        r.missing ? el('div.alert.alert-warn.ai-mini', {}, [el('span', { text: '⚠️' }), el('div', { text: r.missing })]) : null,
+        body,
+        el('div.mute-sm', { text: 'החתימה שלך מ-Gmail תתווסף בשליחה. התשובה יוצאת באותו שרשור, מהתיבה שקיבלה את המייל.' })
+      ]),
+      footer: [send, el('div.spacer'), el('button.btn', { onclick: () => m.close() }, ['ביטול'])]
+    });
+    send.addEventListener('click', async () => {
+      if (!body.value.trim()) return body.focus();
+      if (/\[[^\]]{1,30}\]/.test(body.value) && !confirm('נשארו בטיוטה סוגריים להשלמה (כמו "[מועד]"). לשלוח בכל זאת?')) return;
+      send.disabled = true;
+      try {
+        await API.post('/api/ai/mail-ask/reply/send', { gmailId: r.gmailId, box: r.box ?? 0, body: body.value.trim() });
+        await API.post(`/api/ai/suggestions/${s.id}/reply-sent`).catch(() => {});
+        m.close();
+        UI.success('התשובה נשלחה מתיבת ה-Gmail שלך');
+        reload();
+      } catch (err) { send.disabled = false; UI.error(err); }
+    });
   }
 
   function autoRow(s, reload) {
@@ -891,5 +972,5 @@ const AiInboxView = (() => {
     setTimeout(() => scanDialog(() => HomeView.reload()), 300);
   }
 
-  return { load, card, openGmail, scanDialog, handleReturn, editSuggestion, rejectDialog, rejectNow, meetingRow, closureLine };
+  return { load, card, openGmail, scanDialog, handleReturn, editSuggestion, rejectDialog, rejectNow, meetingRow, closureLine, agentAdvice };
 })();

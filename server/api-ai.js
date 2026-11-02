@@ -942,6 +942,14 @@ function register(router, h) {
   suggestionAction('restore', (id, actor) => MailScan.restore(id, actor));
   suggestionAction('ignore-sender', (id, actor) => MailScan.ignoreSenderOf(id, actor));
   suggestionAction('closure-dismiss', (id, actor) => MailScan.dismissClosure(id, actor));
+  suggestionAction('reply-sent', (id, actor) => MailScan.markReply(id, actor, 'sent'));
+  suggestionAction('reply-dismiss', (id, actor) => MailScan.markReply(id, actor, 'dismissed'));
+  // 💡 על משימה שלא נולדה ממייל — "✕" מוריד את ההצעה
+  router.post('/api/tasks/:taskId/closure-dismiss', async (req, res, ctx) => {
+    const actor = userOnly(ctx);
+    try { require('./ai/task-closure').dismissTask(Number(ctx.params.taskId), actor.id); } catch (err) { throw badRequest(err.message); }
+    sendJson(res, 200, { ok: true });
+  });
 
   router.post('/api/ai/suggestions/approve-all', async (req, res, ctx) => {
     const actor = userOnly(ctx);
