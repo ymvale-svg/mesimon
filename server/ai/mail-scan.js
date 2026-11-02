@@ -395,7 +395,8 @@ async function processMessage(user, conn, gmailId) {
     for (const t of result.tasks) {
       if (t.meeting) continue;
       try {
-        t.closure = await Closure.suggest(user, t, { mayVendors });
+        // מי כתב: 'נא להגדיר את איציק קנדל כאדמין' צריך את השם המלא של מי שביקש
+        t.closure = await Closure.suggest(user, { ...t, fromName: meta.fromName, fromEmail: meta.fromEmail }, { mayVendors });
       } catch (err) {
         console.error('[משימון] הצעת סגירה נכשלה:', err.message);
       }

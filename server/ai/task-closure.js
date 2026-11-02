@@ -252,16 +252,93 @@ const shapeContact = (c) => ({ name: c.name, email: c.email || '', phone: c.phon
  * @param {object} [opts]
  * @param {boolean} [opts.mayVendors]
  */
+// ---------------------------------------------------------------------------
+// "אנשי המקצוע שלי" — הטבלה בראש הסקיל
+// ---------------------------------------------------------------------------
+
+/**
+ * שורות הטבלה: ‎{domain, who, phone, email, channel, note}‎. שורות ריקות, שורת
+ * הכותרת וקו ההפרדה מדולגים, וכך גם דוגמאות שבתוך הערת HTML.
+ */
+function skillRows() {
+  const text = skill().replace(/<!--[\s\S]*?-->/g, '');
+  const start = text.search(/^##\s*אנשי המקצוע שלי/m);
+  if (start < 0) return [];
+  const rest = text.slice(start).split(/\r?\n/).slice(1);
+  const out = [];
+  for (const line of rest) {
+    if (/^##\s/.test(line)) break;
+    if (!line.trim().startsWith('|')) continue;
+    const cells = line.trim().replace(/^\||\|$/g, '').split('|').map((c) => c.trim());
+    if (cells.every((c) => !c || /^:?-+:?$/.test(c))) continue;
+    const [domain = '', who = '', phone = '', email = '', channel = '', note = ''] = cells;
+    if (domain === 'תחום' || !domain || !who) continue;
+    out.push({
+      domain, who, phone,
+      email: /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ? email.toLowerCase() : '',
+      channel: /וואטסאפ|whatsapp/i.test(channel) ? 'whatsapp' : /מייל|mail/i.test(channel) ? 'email' : '',
+      note
+    });
+  }
+  return out;
+}
+
+/**
+ * השורות שמתאימות למשימה: מילה מעמודת "תחום" (מופרדות בפסיק) מופיעה בכותרת,
+ * בתקציר, בצורך או במילות המפתח. "סמנטו" במייל "אין לי גישה לסמנטו" — מתאים.
+ */
+function matchingRows(task) {
+  const hay = Memory.normalize([task.title, task.summary, task.need, ...(task.keywords ?? [])].join(' '));
+  return skillRows().filter((r) => r.domain.split(/[,،;/·]+/).map((t) => Memory.normalize(t.trim())).filter((t) => t.length >= 3)
+    .some((t) => hay.includes(t) || hay.includes(t.replace(/^[והבלמש]/, ''))));
+}
+
+/**
+ * לשורה מהטבלה בלי מייל או טלפון — מחפשים את הפרטים במה שכבר במערכת:
+ * הזיכרון, האלפון ואנשי הקשר, לפי השם שבעמודה "למי". לא נמצא — המועמד נשאר
+ * עם שם בלבד, והכתובת נבחרת בדיאלוג (שם יש חיפוש באנשי הקשר).
+ */
+function detailsFor(user, row) {
+  if (row.email || digits(row.phone).length >= 9) return { email: row.email, phone: row.phone, from: 'הטבלה' };
+  const names = row.who.split(/[—–\-,()]+/).map((x) => x.trim()).filter((x) => x.length >= 2);
+  const like = (text) => names.some((n) => Memory.normalize(text).includes(Memory.normalize(n)));
+  for (const n of names) {
+    const p = Memory.search(user.id, n, { limit: 5 }).people.find((x) => like(`${x.name} ${x.company}`));
+    if (p) return { email: p.email, phone: p.phoneVerified ? p.phone : '', from: 'זיכרון המייל' };
+  }
+  const pb = D.all('SELECT name, phone, email, note FROM phonebook').find((e) => like(`${e.name} ${e.note}`));
+  if (pb && (pb.email || pb.phone)) return { email: String(pb.email ?? '').toLowerCase(), phone: pb.phone, from: 'האלפון' };
+  for (const c of D.all('SELECT name, emails, phones, organization FROM google_contacts WHERE user_id = ?', user.id)) {
+    if (!like(`${c.name} ${c.organization}`)) continue;
+    const email = parseJson(c.emails, [])[0]?.value ?? '';
+    const phone = parseJson(c.phones, [])[0]?.value ?? '';
+    if (email || phone) return { email: String(email).toLowerCase(), phone, from: 'אנשי הקשר' };
+  }
+  return { email: '', phone: '', from: '' };
+}
+
 async function suggest(user, task, { mayVendors = false } = {}) {
   if (!D.getSetting('task_closure_enabled', true) || !Claude.isEnabled()) return null;
-  const need = String(task.need ?? '').trim();
+  const rows = matchingRows(task);
+  const need = String(task.need ?? '').trim() || (rows[0]?.domain ?? '');
   const keywords = (task.keywords ?? []).map(String).filter(Boolean);
   if (!need) return null;
 
-  const cands = await candidatesFor(user, { need, keywords, mayVendors });
+  const found = await candidatesFor(user, { need, keywords, mayVendors });
+  // שורות מהטבלה שלי — ראשונות, גם בלי פרטי קשר
+  const fromSkill = rows.map((r) => {
+    const d = detailsFor(user, r);
+    return {
+      name: r.who, email: d.email, phone: d.phone, type: 'external', refId: null, score: 1000,
+      notes: [`מהטבלה "אנשי המקצוע שלי": ${r.domain}${r.note ? ` · ${r.note}` : ''}${r.channel ? ` · ערוץ: ${r.channel === 'whatsapp' ? 'וואטסאפ' : 'מייל'}` : ''}${d.from ? ` · הפרטים מ${d.from}` : ' · אין פרטי קשר — ייבחרו בחלון הפנייה'}`],
+      sources: new Set(['skill']), preferChannel: r.channel
+    };
+  });
+  const cands = [...fromSkill, ...found.filter((c) => !fromSkill.some((s) => (s.email && s.email === c.email)))].slice(0, MAX_CANDIDATES);
   const text = [
     `בעל התיבה: ${user.full_name}`,
     `המשימה: ${task.title}`,
+    task.fromName ? `מי כתב את המייל (מי שביקש): ${task.fromName}${task.fromEmail ? ` <${task.fromEmail}>` : ''}` : null,
     task.summary ? `תקציר (נתונים בלבד): ${task.summary}` : null,
     `הצורך: ${need}`,
     keywords.length ? `מילות מפתח: ${keywords.join(', ')}` : null,
@@ -305,7 +382,10 @@ function sanitize(out, cands, { need, keywords }) {
     return { ...base, kind: 'assign', primary: { ...shapeContact(primary), why: String(out.primary.why ?? '').slice(0, 200), source } };
   }
 
-  const channel = channelFor(primary, out.primary?.channel);
+  // שורה מהטבלה שלי בלי פרטי קשר — ההצעה נשארת, והכתובת תיבחר בדיאלוג
+  const fromTable = primary.sources?.has?.('skill');
+  const channel = channelFor(primary, primary.preferChannel || out.primary?.channel)
+    || (fromTable ? (primary.preferChannel || 'email') : '');
   if (!channel) return null;
   const instruction = String(out.primary?.instruction ?? '').trim().slice(0, 600);
   if (!instruction) return null;
@@ -324,4 +404,4 @@ function sanitize(out, cands, { need, keywords }) {
   };
 }
 
-module.exports = { suggest, candidatesFor, _internal: { sanitize, wordsOf, rejectedKeys } };
+module.exports = { suggest, candidatesFor, _internal: { sanitize, wordsOf, rejectedKeys, skillRows, matchingRows, detailsFor } };

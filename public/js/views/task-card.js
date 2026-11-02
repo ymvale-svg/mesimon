@@ -254,7 +254,8 @@ const TaskCardView = (() => {
     return el('div.ai-closure', {}, [
       el('div.ai-closure-main', {}, [
         el('div', {}, [el('b', { text: `💡 ${icon(p.channel)} ${p.name}` }), el('span', { text: ` — ${p.instruction}` })]),
-        p.why ? el('div.mute-sm', { text: `למה: ${p.why}` }) : null
+        p.why ? el('div.mute-sm', { text: `למה: ${p.why}` }) : null,
+        !p.email && !p.phone ? el('div.mute-sm', { text: `אין עדיין כתובת של ${p.name} — תבחרו אותה בחלון הפנייה (או הוסיפו אותה לטבלת "אנשי המקצוע שלי")` }) : null
       ]),
       el('div.ai-closure-actions', {}, [
         el('button.btn.btn-sm.btn-primary', { type: 'button', onclick: () => { modalRef.close(); openAi(p, p.channel); } }, [`${icon(p.channel)} שלח ל${p.name}`]),
