@@ -1004,6 +1004,23 @@ CREATE TABLE IF NOT EXISTS mail_documents (
 );
 CREATE INDEX IF NOT EXISTS idx_mail_documents_user ON mail_documents(user_id, doc_date);
 CREATE INDEX IF NOT EXISTS idx_mail_documents_valid ON mail_documents(valid_until, expiry_noticed);
+
+/* יומן "✨ שאל" והסוכנים — איזה סוכן, אילו כלים, כמה זמן. למסך הניהול */
+CREATE TABLE IF NOT EXISTS agent_log (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id     INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  channel     TEXT    NOT NULL DEFAULT 'web',   -- web | whatsapp
+  agent       TEXT    NOT NULL DEFAULT '',
+  question    TEXT    NOT NULL DEFAULT '',
+  mail        INTEGER NOT NULL DEFAULT 0,
+  sources     TEXT    NOT NULL DEFAULT '[]',
+  tools       TEXT    NOT NULL DEFAULT '[]',
+  ms          INTEGER NOT NULL DEFAULT 0,
+  ok          INTEGER NOT NULL DEFAULT 1,
+  error       TEXT    NOT NULL DEFAULT '',
+  created_at  TEXT    NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_agent_log_created ON agent_log(created_at);
 `);
 
 // ---------------------------------------------------------------------------
@@ -1232,6 +1249,11 @@ const DEFAULT_SETTINGS = {
   mail_doc_expiry_days: 30,                // כמה ימים לפני תום תוקף של מסמך מציעים לחדש
   mail_ask_daily_limit: 60,                // "שאל את המיילים": שאלות ביום לכל משתמש
   task_closure_enabled: true,              // 💡 הצעה איך לסגור משימה מהמייל
+  agents_daily_limit: 40,                  // ✨ שאל: שאלות לסוכנים ביום, לכל משתמש
+  agents_config: {},                       // לכל סוכן: ‎{enabled, departments}‎ — מסך הניהול
+  org_knowledge_enabled: true,             // 📚 ידע ארגוני מזיכרון העבודה של כל העובדים
+  org_merge_days: 7,                       // כל כמה ימים מאחדים לקחים לערכים
+  org_knowledge_blocklist: '',             // שמות לקוחות שתמיד יוסרו מהידע הארגוני, מופרדים בפסיק
 
   /*
    * בוט הוואטסאפ: הודעות קבוצה נאספות עד שיש הפסקה בשיחה, ונותחות יחד —

@@ -7,8 +7,10 @@ services:
     runtime: node
     plan: starter          # נדרש תשלום — התוכנית החינמית מוחקת את הנתונים
     region: frankfurt      # אירופה — הקרוב ביותר לישראל מבחינת זמן תגובה ורגולציה
-    buildCommand: "echo אין תלויות להתקין"
-    startCommand: node server/index.js
+    # אין תלויות npm. רק uv — לשני מקורות הנתונים שכתובים ב-Python (עסקאות נדל"ן, הלמ"ס).
+    # מותקן לתוך תיקיית הפרויקט, כדי שיהיה זמין גם בזמן הריצה ולא רק בבנייה.
+    buildCommand: "curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=$PWD/.bin UV_NO_MODIFY_PATH=1 sh"
+    startCommand: PATH="$PWD/.bin:$PATH" node server/index.js
     healthCheckPath: /api/branding
     envVars:
       - key: NODE_VERSION
@@ -17,6 +19,12 @@ services:
         value: /var/mesimon/data
       - key: UPLOADS_DIR
         value: /var/mesimon/uploads
+      - key: UV_CACHE_DIR            # מטמון של uv ושל Python שהוא מוריד — על הדיסק הקבוע, כדי שלא יורד שוב בכל הפעלה
+        value: /var/mesimon/uv-cache
+      - key: UV_PYTHON_INSTALL_DIR
+        value: /var/mesimon/uv-python
+      - key: npm_config_cache        # מטמון של npx לשרתי הנתונים
+        value: /var/mesimon/npm-cache
 
       # הערכים של אלה נקבעים בלוח הבקרה ולא כאן — הם סודות ואין להם מקום בקוד.
       # sync: false אומר ל-Render לא לנהל אותם: בלעדיו סנכרון של הקובץ הזה

@@ -1090,6 +1090,15 @@ function closureHint(c) {
   return `   💡 ${c.primary.channel === 'whatsapp' ? '💬' : '📧'} ${c.primary.name} — ${cut(c.primary.instruction)}`;
 }
 
+/** ההיסטוריה של השיחה (‎{role, text}‎) כזוגות שאלה-תשובה — להמשך שאלה ב"✨ שאל" */
+function pairsOf(history = []) {
+  const out = [];
+  for (let i = 0; i < history.length - 1; i++) {
+    if (history[i].role === 'user' && history[i + 1].role === 'bot') out.push({ q: history[i].text, a: history[i + 1].text });
+  }
+  return out.slice(-3);
+}
+
 /** הצעה עם אנשים נוספים, ספק, פנייה החוצה או אזהרה — רק אחרי מבט באפליקציה */
 const needsLook = (d) => Boolean(d.people?.length || d.ambiguous?.length || d.warning || d.aiRequest);
 
@@ -1893,12 +1902,12 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
       if (actor.type !== 'user') return out('שאלות על המייל זמינות לעובדים בלבד.', {}, { action: 'mail_ask', status: 'denied', result: 'לא עובד' });
       const question = u.request || text;
       if (dry) return out(`(בדיקה) הייתי מחפש במיילים: "${question}"`, {}, { action: 'mail_ask', status: 'ok', result: 'בדיקה' });
-      const MailAsk = require('./mail-ask'); // בעצלתיים: טוען את זיכרון המייל
-      if (!MailAsk.available(actor.id)) return out('כדי לחפש במיילים צריך לחבר את תיבת ה-Gmail ("החשבון שלי ← חיבור Google").', {}, { action: 'mail_ask', status: 'error', result: 'אין חיבור Gmail' });
+      // ✨ שאל — מיילים, סוכן המחלקה והידע הארגוני, באותה תשובה כמו באפליקציה
+      const Agents = require('./agents'); // בעצלתיים: טוען את זיכרון המייל
       try {
         const user = D.get('SELECT id, full_name, email, role FROM users WHERE id = ?', actor.id);
-        const r = await MailAsk.ask(user, question);
-        return out(MailAsk.asText(r), {}, { action: 'mail_ask', status: 'ok', result: `"${question.slice(0, 120)}": ${r.found ? 'נמצא' : 'לא נמצא'}` });
+        const r = await Agents.ask(user, actor, question, { channel: 'whatsapp', history: pairsOf(state.history) });
+        return out(Agents.asText(r), {}, { action: 'mail_ask', status: 'ok', result: `"${question.slice(0, 120)}": ${r.agent?.title ?? (r.mail ? 'מיילים' : 'כללי')}` });
       } catch (err) {
         return out(err.message, {}, { action: 'mail_ask', status: 'error', result: err.message.slice(0, 200) });
       }

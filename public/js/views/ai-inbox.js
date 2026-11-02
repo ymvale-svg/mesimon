@@ -641,6 +641,38 @@ const AiInboxView = (() => {
       return sigSlot;
     };
 
+    /*
+     * Timeless — אסימון אישי (my.timeless.day/api-token). הסוכנים "סיכום שיחה",
+     * "הכנה לשיחה" ו"מצב לקוח" קוראים ממנו פגישות ותמלולים — רק של מי שחיבר.
+     */
+    const tlSlot = el('div');
+    let tl = null;
+    async function loadTimeless() {
+      try { tl = await API.get('/api/me/timeless'); } catch { tl = { connected: false }; }
+      drawTimeless();
+    }
+    function drawTimeless() {
+      if (!tl) return UI.mount(tlSlot, el('div.mute-sm', { text: 'בודק…' }));
+      if (tl.connected) {
+        const off = el('button.btn.btn-sm.btn-ghost', { type: 'button' }, ['ניתוק']);
+        off.addEventListener('click', async () => { try { tl = await API.del('/api/me/timeless'); drawTimeless(); } catch (err) { UI.error(err); } });
+        return UI.mount(tlSlot, el('div.flex', { style: { gap: '8px', alignItems: 'center' } }, [el('span', { text: '✅' }), el('span', { text: 'מחובר — אפשר לבקש "סכם את השיחה עם…"' }), el('div.spacer'), off]));
+      }
+      const token = el('input', { type: 'password', placeholder: 'האסימון מ-my.timeless.day/api-token', autocomplete: 'off' });
+      const save = el('button.btn.btn-sm.btn-primary', { type: 'button' }, ['חיבור']);
+      save.addEventListener('click', async () => {
+        if (!token.value.trim()) return token.focus();
+        save.disabled = true;
+        try { tl = await API.put('/api/me/timeless', { token: token.value.trim() }); UI.success('Timeless חובר'); drawTimeless(); } catch (err) { save.disabled = false; UI.error(err); }
+      });
+      UI.mount(tlSlot, el('div', {}, [
+        tl.state === 'revoked' ? el('div.alert.alert-warn', {}, [el('span', { text: '🔄' }), el('div', { text: 'האסימון כבר לא תקף — חברו מחדש.' })]) : null,
+        el('div.flex', { style: { gap: '8px' } }, [token, save]),
+        el('div.mute-sm', { text: 'האסימון נשמר מוצפן ואינו מוצג שוב. רק הפגישות שלך.' })
+      ]));
+    }
+    const timelessSection = () => { if (!tl) loadTimeless(); else drawTimeless(); return tlSlot; };
+
     function draw() {
       const c = info.connection;
       const connectBox = !info.enabled
@@ -704,6 +736,7 @@ const AiInboxView = (() => {
               contactsLine()
             ]);
       const memoryBox = c?.state === 'ok' && info.memory ? MailMemoryView.section(info.memory, onChange) : null;
+      const timelessBox = timelessSection();
 
       /** אנשי הקשר: כמה סונכרנו, מתי, ורענון */
       function contactsLine() {
@@ -746,6 +779,8 @@ const AiInboxView = (() => {
         connectBox,
         memoryBox ? el('div.ai-section-title', { text: '🧠 זיכרון העבודה מהמייל', style: { marginTop: '16px' } }) : null,
         memoryBox,
+        el('div.ai-section-title', { text: '🎥 Timeless — הקלטות ותמלולים מ-Zoom', style: { marginTop: '16px' } }),
+        timelessBox,
         el('div.ai-section-title', { text: 'העדפות', style: { marginTop: '16px' } }),
         pref('approveReminders', 'כל תזכורת שלי מחכה לאישור לפני שיוצאת',
           'כבוי: אחרי שאישרת את הפנייה הראשונה, התזכורות יוצאות לבד — ובכל בוקר רואים "היום יוצאים" ואפשר לעצור. אפשר לשנות גם לכל משימה בנפרד.'),

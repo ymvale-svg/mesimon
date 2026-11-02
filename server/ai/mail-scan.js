@@ -544,7 +544,10 @@ async function morningRun() {
     }
 
     // זיכרון העבודה: מה שנוסף מאתמול, ומסמכים שתוקפם מתקרב
-    Memory.morning().catch((err) => console.error('[משימון] עדכון הבוקר של זיכרון המייל נכשל:', err.message));
+    Memory.morning()
+      // 📚 הידע הארגוני — אחרי שהזיכרון התעדכן: זיקוק של מה שנוסף, ופעם בשבוע איחוד
+      .then(() => require('./org-knowledge').daily())
+      .catch((err) => console.error('[משימון] עדכון הבוקר של זיכרון המייל והידע הארגוני נכשל:', err.message));
 
     if (!D.getSetting('ai_mail_scan_enabled', true) || !Claude.isEnabled()) return;
     for (const userId of Gmail.connectedUsers()) {
@@ -695,20 +698,23 @@ function createFromSuggestion(sug, actor, edits = {}) {
 
   const summary = String(edits.summary ?? data.summary ?? '').trim();
   const fromWhatsApp = data.source === 'whatsapp';
+  const fromAgent = data.source === 'agent';
   const description = [
     summary,
     '',
-    fromWhatsApp
+    fromAgent
+      ? `🤖 הוצע על ידי ${sug.from_name} · מהשאלה: "${sug.subject}" · ${shortDate(sug.received_at)}`
+      : fromWhatsApp
       ? `💬 מקבוצת הוואטסאפ "${data.groupName}" · ${sug.from_name} · ${shortDate(sug.received_at)}`
       : `📧 מהמייל של ${sug.from_name}${sug.from_email && sug.from_email !== sug.from_name ? ` · ${sug.from_email}` : ''} · ${shortDate(sug.received_at)}`,
-    !fromWhatsApp && sug.subject ? `נושא: ${sug.subject}` : null
+    !fromWhatsApp && !fromAgent && sug.subject ? `נושא: ${sug.subject}` : null
   ].filter((l) => l !== null).join('\n').trim();
 
   const taskId = hooks.createTask(actor, {
     title: String(edits.title ?? data.title ?? sug.subject).trim().slice(0, 120) || 'משימה מהמייל',
     description,
     // מקבוצה — תמיד הפרויקט שהקבוצה קשורה אליו, גם אם נשלח אחר: אין ערבוב בין פרויקטים
-    projectId: fromWhatsApp ? data.projectId : (edits.projectId || null),
+    projectId: fromWhatsApp ? data.projectId : (edits.projectId || (fromAgent ? data.projectId : null) || null),
     assigneeType: 'user',
     assigneeId: assignee,
     extraAssignees: extras,
@@ -719,12 +725,12 @@ function createFromSuggestion(sug, actor, edits = {}) {
       const owner = people.find((p) => p.role === 'checklist' && p.checklistIndex === i + 1);
       return { text, note: owner ? `באחריות: ${nameOf(owner.userId)}` : '' };
     }),
-    source: fromWhatsApp ? 'whatsapp' : 'email',
+    source: fromWhatsApp ? 'whatsapp' : fromAgent ? 'agent' : 'email',
     sourceRef: sug.header_id,
     sourceUserId: sug.user_id,
     auditNote: fromWhatsApp
       ? (data.personal ? `המשימה נוצרה מהודעת וואטסאפ של ${sug.from_name}` : `המשימה נוצרה מבקשה של ${sug.from_name} בקבוצת "${data.groupName}"`)
-      : `המשימה נוצרה ממייל של ${sug.from_name}`
+      : fromAgent ? `המשימה נוצרה מהצעה של הסוכן "${sug.from_name}"` : `המשימה נוצרה ממייל של ${sug.from_name}`
   });
   // בקשה לפגישה — מהמייל, מקבוצה או מהוואטסאפ האישי: "📅 פגישה לקביעה"
   if (data.meeting) D.run('UPDATE tasks SET meeting_pending = 1 WHERE id = ?', taskId);

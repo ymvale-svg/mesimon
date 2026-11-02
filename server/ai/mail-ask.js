@@ -203,6 +203,14 @@ async function ask(user, question, history = [], { context = '' } = {}) {
     sources.push({ id: sid, type: 'doc', gmailId: d.gmail_id, subject: d.title || d.filename, filename: d.filename, date: d.doc_date, fromEmail: d.from_email });
     lines.push(`[${sid}] מסמך · ${d.doc_date ?? ''} · ${d.kind} · ${d.filename} · ${d.title}${Object.keys(d.fields).length ? ` · ${Object.entries(d.fields).map(([k, v]) => `${k}: ${v}`).join(' · ')}` : ''}${d.valid_until ? ` · בתוקף עד ${d.valid_until}` : ''}`);
   });
+  // 📚 הידע הארגוני — "איך עושים אצלנו", מכל העובדים
+  let org = [];
+  try { org = require('./org-knowledge').search(`${plan.memory_query} ${q}`, { limit: 3, actor: { type: 'user', id: user.id, role: user.role } }); } catch { org = []; }
+  org.forEach((e, i) => {
+    const sid = `K${i + 1}`;
+    sources.push({ id: sid, type: 'org', subject: e.domain, summary: e.text.slice(0, 300), date: e.updated_at });
+    lines.push(`[${sid}] ידע ארגוני · ${e.domain}${e.project ? ` · ${e.project}` : ''} · ${e.text.slice(0, 1200)}`);
+  });
   if (docs.length) lines.push('', `קבצים מצורפים שנשלחו אליך לקריאה: ${docs.map((d) => d.filename).join(', ')}. כשאתה נשען על אחד מהם — ציין את המייל שאליו צורף.`);
   if (!sources.length && !docs.length) lines.push('(לא נמצאו מקורות)');
   lines.push('', 'שלב ב: ענה (answer).');

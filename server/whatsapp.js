@@ -76,10 +76,10 @@ async function checkState(userId) {
   try {
     state = (await call(channel, 'getStateInstance'))?.stateInstance ?? 'unknown';
   } catch (err) {
-    D.run('UPDATE user_channels SET state = ?, checked_at = ? WHERE user_id = ?', 'error', D.nowIso(), userId);
+    D.run("UPDATE user_channels SET state = ?, checked_at = ? WHERE user_id = ? AND provider = 'green_api'", 'error', D.nowIso(), userId);
     return { state: 'error', error: err.message };
   }
-  D.run('UPDATE user_channels SET state = ?, checked_at = ? WHERE user_id = ?', state, D.nowIso(), userId);
+  D.run("UPDATE user_channels SET state = ?, checked_at = ? WHERE user_id = ? AND provider = 'green_api'", state, D.nowIso(), userId);
   return { state };
 }
 
@@ -147,7 +147,7 @@ async function receive(userId, { max = 20 } = {}) {
           outgoing
         });
       } else if (b.typeWebhook === 'stateInstanceChanged' && b.stateInstance) {
-        D.run('UPDATE user_channels SET state = ?, checked_at = ? WHERE user_id = ?', b.stateInstance, D.nowIso(), userId);
+        D.run("UPDATE user_channels SET state = ?, checked_at = ? WHERE user_id = ? AND provider = 'green_api'", b.stateInstance, D.nowIso(), userId);
       }
     } finally {
       await call(channel, 'deleteNotification', { http: 'DELETE', suffix: `/${note.receiptId}` }).catch(() => {});

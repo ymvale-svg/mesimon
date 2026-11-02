@@ -21,6 +21,9 @@ const WaBot = require('./ai/wa-bot');
 const WaActions = require('./ai/wa-actions');
 const Memory = require('./ai/mail-memory');
 const MailAsk = require('./ai/mail-ask');
+const Agents = require('./ai/agents');
+const OrgKnowledge = require('./ai/org-knowledge');
+const Timeless = require('./timeless');
 const MailInsights = require('./ai/mail-insights');
 const Mime = require('./mime');
 const { badRequest, forbidden, notFound, readJson, sendJson, parseUrl } = require('./http-kit');
@@ -30,6 +33,7 @@ function register(router, h) {
 
   AiTasks.setHooks({ saveFile: saveAttachment, scanWhatsApp: WaScan.handle, scanningUsers: WaScan.scanningUsers });
   MailScan.init({ createTask });
+  Agents.init({ listProjectsFor, projectTasks: (actor, projectId) => botTaskOps.projectTasks(actor, projectId) });
   WaBot.init({ createTask, listProjectsFor, newTaskProjects, assignableUserIds, assignBlockReason, tasks: botTaskOps, mail: { searchContacts, createAiTask } });
 
   const internalOnly = (actor) => {
@@ -708,6 +712,121 @@ function register(router, h) {
     } catch (err) {
       throw userError(err);
     }
+  });
+
+  // --- ✨ שאל — שאלה חופשית: משימות, מיילים, סוכנים וידע ארגוני ---
+
+  router.post('/api/ai/ask', async (req, res, ctx) => {
+    const actor = userOnly(ctx);
+    const b = await readJson(req);
+    let context = '';
+    if (b.taskId) {
+      const task = getTaskOr404(Number(b.taskId));
+      assertVisible(actor, task);
+      context = `המשימה: ${task.title}${task.description ? `\n${task.description}` : ''}`;
+    }
+    // מסמכים שצורפו לשאלה (קבלה, נסח טאבו, מכתב מהעירייה) — לא נשמרים
+    const attachments = (Array.isArray(b.attachments) ? b.attachments : []).slice(0, 3).map((a) => ({
+      filename: String(a.filename ?? 'קובץ').slice(0, 200),
+      mime: String(a.mime ?? 'application/octet-stream').slice(0, 100),
+      data: Buffer.from(String(a.data ?? ''), 'base64')
+    })).filter((a) => a.data.length && a.data.length <= 15 * 1024 * 1024);
+    try {
+      sendJson(res, 200, await Agents.ask(meUser(actor), actor, b.question, {
+        history: Array.isArray(b.history) ? b.history.slice(-6) : [], attachments, context, channel: 'web'
+      }));
+    } catch (err) {
+      throw userError(err);
+    }
+  });
+
+  /** הסוכנים שמותרים לי — לתצוגה ("מה אפשר לשאול") */
+  router.get('/api/ai/agents', async (req, res, ctx) => {
+    const actor = userOnly(ctx);
+    sendJson(res, 200, { agents: Agents.allowedFor(actor).map(({ key, title, icon, short, deptLabel, deptIcon }) => ({ key, title, icon, short, deptLabel, deptIcon })) });
+  });
+
+  // --- 🎥 Timeless — אסימון אישי ---
+
+  router.get('/api/me/timeless', async (req, res, ctx) => {
+    sendJson(res, 200, Timeless.publicStatus(userOnly(ctx).id));
+  });
+  router.put('/api/me/timeless', async (req, res, ctx) => {
+    const actor = userOnly(ctx);
+    const b = await readJson(req);
+    if (!String(b.token ?? '').trim()) throw badRequest('נדרש אסימון');
+    try {
+      sendJson(res, 200, await Timeless.connect(actor.id, String(b.token).trim()));
+    } catch (err) {
+      throw userError(err);
+    }
+  });
+  router.delete('/api/me/timeless', async (req, res, ctx) => {
+    const actor = userOnly(ctx);
+    Timeless.disconnect(actor.id);
+    sendJson(res, 200, Timeless.publicStatus(actor.id));
+  });
+
+  // --- 🤖 סוכנים ו-📚 ידע ארגוני — מנהל המערכת ---
+
+  const aiAdmin = (ctx) => {
+    const actor = userOnly(ctx);
+    if (!P.can(actor, 'manage_automations')) throw forbidden();
+    return actor;
+  };
+
+  router.get('/api/admin/agents', async (req, res, ctx) => {
+    aiAdmin(ctx);
+    let mcp = {};
+    try { mcp = require('./ai/mcp-client').status(); } catch { mcp = {}; }
+    sendJson(res, 200, { agents: Agents.catalog(), mcp, log: Agents.recentLog({ limit: 100 }), dailyLimit: Number(D.getSetting('agents_daily_limit', 40)) });
+  });
+  router.put('/api/admin/agents/:key', async (req, res, ctx) => {
+    aiAdmin(ctx);
+    const b = await readJson(req);
+    try {
+      Agents.setConfig(ctx.params.key, { enabled: typeof b.enabled === 'boolean' ? b.enabled : undefined, departments: typeof b.departments === 'string' ? b.departments : undefined });
+    } catch (err) {
+      throw userError(err);
+    }
+    sendJson(res, 200, { agents: Agents.catalog() });
+  });
+
+  router.get('/api/admin/knowledge', async (req, res, ctx) => {
+    aiAdmin(ctx);
+    const sp = parseUrl(req).searchParams;
+    sendJson(res, 200, { ...OrgKnowledge.list({ q: sp.get('q') ?? '', dept: sp.get('dept') ?? '', week: sp.get('week') === '1' }), blocklist: D.getSetting('org_knowledge_blocklist', '') });
+  });
+  router.put('/api/admin/knowledge/blocklist', async (req, res, ctx) => {
+    aiAdmin(ctx);
+    const b = await readJson(req);
+    D.setSetting('org_knowledge_blocklist', String(b.blocklist ?? '').slice(0, 5000));
+    sendJson(res, 200, { blocklist: D.getSetting('org_knowledge_blocklist', '') });
+  });
+  router.post('/api/admin/knowledge/run', async (req, res, ctx) => {
+    aiAdmin(ctx);
+    if (!Claude.isEnabled()) throw badRequest('חיבור ה-AI אינו מוגדר בשרת');
+    // רץ ברקע — זיקוק של כל העובדים יכול לקחת דקות
+    OrgKnowledge.daily({ force: true }).catch((err) => console.error('[משימון] עדכון הידע הארגוני נכשל:', err.message));
+    sendJson(res, 202, { started: true });
+  });
+  router.get('/api/admin/knowledge/:id/sources', async (req, res, ctx) => {
+    aiAdmin(ctx);
+    sendJson(res, 200, { sources: OrgKnowledge.sources(Number(ctx.params.id)) });
+  });
+  router.put('/api/admin/knowledge/:id', async (req, res, ctx) => {
+    aiAdmin(ctx);
+    const b = await readJson(req);
+    try {
+      sendJson(res, 200, { entry: OrgKnowledge.edit(Number(ctx.params.id), b) });
+    } catch (err) {
+      throw userError(err);
+    }
+  });
+  router.delete('/api/admin/knowledge/:id', async (req, res, ctx) => {
+    aiAdmin(ctx);
+    OrgKnowledge.remove(Number(ctx.params.id));
+    sendJson(res, 200, { ok: true });
   });
 
   // --- "ממתין לאישורך" — כל מה שהעוזר מחכה בו למשתמש ---

@@ -198,7 +198,7 @@ const TaskCardView = (() => {
       closurePanel(),
       // 🔎 שאל את המיילים — על המשימה הזו, כשההקשר כבר ממולא
       App.isVendor() ? null : el('div.mute-sm', { style: { marginBottom: '10px' } }, [
-        el('a', { href: '#', onclick: (e) => { e.preventDefault(); MailAskView.open({ taskId: task.id, taskTitle: task.title, question: `מה יש במיילים על: ${task.title}` }); } }, ['🔎 מה יש במיילים על זה?'])
+        el('a', { href: '#', onclick: (e) => { e.preventDefault(); AskView.open({ taskId: task.id, taskTitle: task.title, question: `מה ידוע על: ${task.title}` }); } }, ['✨ מה ידוע על זה? (מיילים, סוכנים, ידע ארגוני)'])
       ]),
       vendorWorkflowBar(),
       descNode,

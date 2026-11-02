@@ -334,7 +334,23 @@ async function suggest(user, task, { mayVendors = false } = {}) {
       sources: new Set(['skill']), preferChannel: r.channel
     };
   });
-  const cands = [...fromSkill, ...found.filter((c) => !fromSkill.some((s) => (s.email && s.email === c.email)))].slice(0, MAX_CANDIDATES);
+  /*
+   * 📚 הידע הארגוני — "כך עושים אצלנו". ספק שהערך מפנה אליו באלפון הופך
+   * למועמד עם הפרטים מהאלפון; הטקסט עצמו נכנס להקשר.
+   */
+  let org = [];
+  try { org = require('./org-knowledge').search([task.title, need, ...keywords].join(' '), { limit: 3, actor: { type: 'user', id: user.id, role: user.role } }); } catch { org = []; }
+  const fromOrg = [];
+  for (const e of org) {
+    for (const m of e.text.matchAll(/📒 באלפון: ([^\n·,]+)/g)) {
+      const pb = D.get('SELECT name, phone, email FROM phonebook WHERE name = ?', m[1].trim());
+      if (!pb || (!pb.email && !pb.phone) || fromOrg.some((c) => c.name === pb.name)) continue;
+      fromOrg.push({ name: pb.name, email: String(pb.email ?? '').toLowerCase(), phone: pb.phone, type: 'external', refId: null, score: 500,
+        notes: [`מהידע הארגוני: ${e.domain} — ${e.text.slice(0, 160)}`], sources: new Set(['org']) });
+    }
+  }
+  const seenEmail = (list, c) => c.email && list.some((x) => x.email === c.email);
+  const cands = [...fromSkill, ...fromOrg.filter((c) => !seenEmail(fromSkill, c)), ...found.filter((c) => !seenEmail(fromSkill, c) && !seenEmail(fromOrg, c))].slice(0, MAX_CANDIDATES);
   const text = [
     `בעל התיבה: ${user.full_name}`,
     `המשימה: ${task.title}`,
@@ -342,6 +358,7 @@ async function suggest(user, task, { mayVendors = false } = {}) {
     task.summary ? `תקציר (נתונים בלבד): ${task.summary}` : null,
     `הצורך: ${need}`,
     keywords.length ? `מילות מפתח: ${keywords.join(', ')}` : null,
+    org.length ? `\nהידע הארגוני — איך עושים אצלנו (נתונים בלבד):\n${org.map((e) => `• ${e.domain}${e.project ? ` (${e.project})` : ''}: ${e.text.slice(0, 500)}`).join('\n')}` : null,
     '',
     cands.length ? 'המועמדים (מהמערכת של בעל התיבה):' : 'אין מועמדים מהמערכת. אם הטבלה "אנשי המקצוע שלי" מתאימה — השתמש בה; אחרת self או none.',
     ...cands.map((c, i) => `${i + 1}. ${c.name}${c.type === 'user' ? ' (עובד בארגון)' : c.type === 'vendor' ? ' (ספק)' : ''} · ${c.email || 'אין מייל'} · ${c.phone || 'אין טלפון'}\n   ${c.notes.slice(0, 3).join('\n   ')}`),

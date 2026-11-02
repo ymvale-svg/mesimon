@@ -1776,13 +1776,16 @@ const App = (() => {
       }
 
       /*
-       * 🔎 שאל את המיילים — שורה אחת בסוף, כשהוקלדה שאלה. החיפוש הרגיל לא
-       * משתנה: זו פעולה נוספת, והתשובה נפתחת בחלון משלה.
+       * ✨ שאל — שורה אחת בסוף, כשהוקלדה שאלה: תשובה מהמשימות, מהמיילים,
+       * מהסוכנים ומהידע הארגוני. החיפוש הרגיל לא משתנה; התשובה בחלון משלה.
        */
       if (!isVendor() && String(q ?? '').trim().length >= 2) {
         const question = String(q).trim();
-        results.appendChild(el('div.sr-group', { role: 'presentation', text: 'במיילים' }));
-        addRow(actionRow({ kind: 'action', title: `🔎 שאל את המיילים: "${question}"`, keys: [], run: () => MailAskView.open({ question }) }));
+        results.appendChild(el('div.sr-group', { role: 'presentation', text: 'שאלה חופשית' }));
+        const askRow = actionRow({ kind: 'action', title: `✨ שאל: "${question}"`, keys: [], run: () => AskView.open({ question }) });
+        askRow.classList.add('sr-ask');
+        askRow.title = 'תשובה מהמשימות, מהמיילים שלך, מסוכני המחלקות ומהידע הארגוני';
+        addRow(askRow);
       }
 
       // כשיש יותר ממה שמוצג — נאמר, ולא נשתוק
