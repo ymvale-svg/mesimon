@@ -6,6 +6,20 @@
         "-y",
         "@hebcal/mcp@0.10.3"
       ]
+    },
+    "kolzchut": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@skills-il/kolzchut-mcp@1.0.1"
+      ]
+    },
+    "israel-hiking": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@skills-il/israel-hiking-mcp@1.0.1"
+      ]
     }
   }
 }
