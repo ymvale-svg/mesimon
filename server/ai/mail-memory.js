@@ -37,6 +37,7 @@ const QUOTA_COOLDOWN_MS = 3 * 60 * 1000;
 const READ_CONCURRENCY = 3;
 const PER_TICK = 24;               // שרשורים לכל משתמש בכל סבב של המנוע (כל 2 דקות)
 const MESSAGES_PER_THREAD = 8;
+const DOCS_PER_THREAD = 3;
 const CHARS_PER_MESSAGE = 2500;
 const CHARS_PER_THREAD = 14000;
 // הערכת טוקנים לשרשור — להערכת העלות לפני שמתחילים
@@ -567,10 +568,30 @@ async function readThread(userId, who, threadId, run) {
   const meta = await withRetry(() => Gmail.threadMeta(who, threadId));
   const recent = meta.slice(-MESSAGES_PER_THREAD);
   const mine = myAddresses(userId);
+  // מהחדש לישן — כדי שהמסמכים שנשמרים יהיו החדשים. מכל הודעה נשארים בזיכרון רק
+  // הטקסט ושמות הקבצים; תוכן קובץ נשמר רק אם הוא מועמד לקריאה, ובתקרה כוללת.
+  // (שרשור של 8 הודעות עם קבצים גדולים החזיק כאן עשרות MB — וכמה כאלה במקביל
+  // הפילו את השרת על מגבלת הזיכרון)
+  const known = run.with_docs ? new Set(D.all('SELECT hash FROM mail_documents WHERE user_id = ?', userId).map((r) => r.hash)) : null;
+  const atts = [];
+  const seenDocs = new Set();
+  let docBytes = 0;
   const mails = [];
-  for (const m of recent) {
+  for (const m of [...recent].reverse()) {
     const msg = await withRetry(() => Gmail.raw(who, m.id));
-    mails.push({ id: m.id, mail: Mime.parse(msg.raw), at: m.at });
+    const mail = Mime.parse(msg.raw);
+    if (known) {
+      for (const a of mail.attachments) {
+        if (atts.length >= DOCS_PER_THREAD) break;
+        if (docBytes + a.data.length > Docs.MAX_TOTAL || !Docs.classify(a).kind) continue;
+        const hash = Docs.hashOf(a.data);
+        if (known.has(hash) || seenDocs.has(hash)) continue;
+        seenDocs.add(hash);
+        docBytes += a.data.length;
+        atts.push({ ...a, hash, gmailId: m.id, from: mail.from.address, at: mail.date });
+      }
+    }
+    mails.unshift({ id: m.id, mail: Mime.slim(mail), at: m.at });
   }
   if (!mails.length) return 'skipped';
 
@@ -586,12 +607,10 @@ async function readThread(userId, who, threadId, run) {
 
   // מסמכים: מכל ההודעות, חדשים קודם, בלי מה שכבר נקרא בשרשור אחר
   let docs = [];
-  if (run.with_docs) {
-    const known = new Set(D.all('SELECT hash FROM mail_documents WHERE user_id = ?', userId).map((r) => r.hash));
-    const atts = [...mails].reverse().flatMap(({ id, mail }) => mail.attachments.map((a) => ({ ...a, gmailId: id, from: mail.from.address, at: mail.date })));
-    const prepared = Docs.prepare(atts, { limit: 3, known });
+  if (atts.length) {
+    const prepared = Docs.prepare(atts, { limit: DOCS_PER_THREAD });
     docs = prepared.docs.map((d) => {
-      const src = atts.find((a) => Docs.hashOf(a.data) === d.hash);
+      const src = atts.find((a) => a.hash === d.hash);
       return { ...d, gmailId: src?.gmailId ?? mails[mails.length - 1].id, from: src?.from ?? '', at: src?.at ?? null };
     });
   }
@@ -713,6 +732,20 @@ function inHours() {
 
 const busy = new Set();
 
+/*
+ * תקרה כוללת לשרשורים שנקראים במקביל — לכל המשתמשים יחד, לא לכל אחד.
+ * כל שרשור מחזיק בזיכרון את ההודעות והמסמכים שלו עד שה-AI עונה; בלי תקרה
+ * כוללת, עשרה עובדים × 3 שרשורים במקביל חרגו ממגבלת הזיכרון של השרת.
+ */
+const GLOBAL_READS = Math.max(1, Number(process.env.MAIL_MEMORY_PARALLEL) || 2);
+let reading = 0;
+const waiting = [];
+async function withReadSlot(fn) {
+  while (reading >= GLOBAL_READS) await new Promise((r) => waiting.push(r));
+  reading++;
+  try { return await fn(); } finally { reading--; waiting.shift()?.(); }
+}
+
 async function readStep(userId) {
   const run = runOf(userId);
   if (!run) return;
@@ -747,7 +780,7 @@ async function readStep(userId) {
       let st = 'error';
       let reason = '';
       try {
-        const r = await readThread(userId, whoOf(userId, box), threadId, runOf(userId));
+        const r = await withReadSlot(() => readThread(userId, whoOf(userId, box), threadId, runOf(userId)));
         st = r === 'done' ? 'done' : 'skipped';
         reason = r === 'done' ? '' : r;
       } catch (err) {

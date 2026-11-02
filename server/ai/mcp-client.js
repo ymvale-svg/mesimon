@@ -25,8 +25,13 @@ const path = require('path');
 const CONFIG_PATH = path.join(__dirname, '..', 'agents-mcp.json');
 const PROTOCOL_VERSION = '2025-06-18';
 const CLIENT_INFO = { name: 'mesimon', version: '1.0' };
-// חצי שעה בלי שימוש — ואז נסגר. הפעלה מחדש עולה כשתיים-שלוש שניות לשאלה הבאה
-const IDLE_MS = 30 * 60 * 1000;
+// עשר דקות בלי שימוש — ואז נסגר. הפעלה מחדש עולה כשתיים-שלוש שניות לשאלה הבאה.
+// כל שרת הוא תהליך נפרד (npx + node, או uv + python) של עשרות MB, וכולם נספרים
+// במגבלת הזיכרון של השרת בענן — לכן גם קצר, וגם תקרה על כמה רצים יחד.
+const IDLE_MS = 10 * 60 * 1000;
+const MAX_LIVE = Math.max(1, Number(process.env.MCP_MAX_LIVE) || 3);
+// תקרת זיכרון לתהליך Node של שרת נתונים — כלי קטן, לא צריך יותר
+const CHILD_NODE_OPTIONS = '--max-old-space-size=128';
 const RESTART_WINDOW_MS = 10 * 60 * 1000;
 const MAX_RESTARTS = 3;
 const MAX_TEXT = 20000;
@@ -70,6 +75,7 @@ function childEnv() {
   env.PYTHONUNBUFFERED = '1';
   env.PYTHONIOENCODING = 'utf-8';
   env.NO_COLOR = '1';
+  env.NODE_OPTIONS = CHILD_NODE_OPTIONS;
   return env;
 }
 
@@ -108,8 +114,10 @@ class Conn {
   }
 
   ensure() {
+    this.usedAt = Date.now();
     if (this.alive && this.ready) return this.ready;
     if (!this.starting) {
+      makeRoom(this);
       this.starting = this.boot().finally(() => { this.starting = null; });
     }
     return this.starting;
@@ -318,6 +326,15 @@ function killTree(child, signal) {
 process.once('exit', () => { for (const c of live) killTree(c, 'SIGKILL'); });
 
 const conns = new Map();
+
+/** לפני הפעלת שרת: אם כבר רצים ‎MAX_LIVE‎ — נסגר זה שלא היה בשימוש הכי הרבה זמן ואינו באמצע קריאה */
+function makeRoom(except) {
+  const running = [...conns.values()].filter((c) => c !== except && (c.alive || c.starting));
+  if (running.length < MAX_LIVE) return;
+  const idle = running.filter((c) => c.alive && !c.pending.size && !c.starting).sort((a, b) => (a.usedAt ?? 0) - (b.usedAt ?? 0));
+  for (const c of idle.slice(0, running.length - MAX_LIVE + 1)) c.kill();
+}
+
 function conn(key) {
   cfgOf(key);
   let c = conns.get(key);
