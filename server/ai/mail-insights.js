@@ -283,7 +283,7 @@ async function draftReply(userId, gmailId, request, { feedback = '', previous = 
   ];
   if (previous && feedback) lines.push('', 'הטיוטה הקודמת:', previous.body, '', `המשתמש ביקש לתקן כך: ${feedback}`);
   lines.push('', 'נסח את התשובה, לפי "תשובה למייל" בהנחיות.');
-  const out = await Claude.json({ system: skill(), content: [{ type: 'text', text: lines.filter((l) => l !== null).join('\n') }], schema: REPLY_SCHEMA, effort: 'low' });
+  const out = await Claude.json({ system: skill(), content: [{ type: 'text', text: lines.filter((l) => l !== null).join('\n') }], schema: REPLY_SCHEMA, effort: 'low', live: true });
   return {
     gmailId,
     threadId: msg.threadId,

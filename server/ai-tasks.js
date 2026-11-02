@@ -442,7 +442,9 @@ async function draftInitial({ owner, instruction, contact = {}, cc = [], project
   const out = await Claude.json({
     system: skill(),
     content: [{ type: 'text', text: lines.join('\n') }],
-    schema: DRAFT_SCHEMA
+    schema: DRAFT_SCHEMA,
+    // הטיוטה נכתבת כשהמשתמש מחכה לה — בבוט ובאשף
+    live: true
   });
   return tidied(out, owner.full_name, { skip: Boolean(previous && feedback) });
 }

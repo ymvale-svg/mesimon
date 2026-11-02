@@ -156,7 +156,8 @@ async function understand(actor, text, ctx, { aiRequested }) {
       text: `${contextText(actor, ctx, { aiRequested })}\n\nמה שנאמר (אחרי התמלול):\n"""\n${text}\n"""`
     }],
     schema: SCHEMA,
-    effort: 'low'
+    effort: 'low',
+    live: true
   });
 }
 

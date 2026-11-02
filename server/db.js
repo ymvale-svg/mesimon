@@ -1083,6 +1083,8 @@ const DEFAULT_SETTINGS = {
    * אותן לעצמה בזמן הפתיחה.
    */
   ai_model: 'claude-opus-5-5',
+  ai_bot_model: '',                        // הבוט וההקלטה — ריק = המודל הראשי
+  ai_fast_mode: true,                      // מצב מהיר לשיחה חיה (בוט, הקלטה)
   ai_email_attempts: 2,                    // כמה מיילים שלא נענו לפני מעבר לוואטסאפ
   ai_days_between_emails: 2,
   ai_whatsapp_enabled: true,
