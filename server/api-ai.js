@@ -742,6 +742,19 @@ function register(router, h) {
       throw userError(err);
     }
   });
+  /** 💡 הצעת תשובה — בלי "מה לענות": לפי המייל, תשובות קודמות, הזיכרון והידע הארגוני */
+  router.post('/api/ai/mail-ask/reply/suggest', async (req, res, ctx) => {
+    const actor = userOnly(ctx);
+    const b = await readJson(req);
+    const box = Number(b.box) || 0;
+    if (!Gmail.canSend(Gmail.handle(actor.id, box))) throw badRequest('כדי לענות צריך לחבר את תיבת ה-Gmail עם הרשאת שליחה');
+    try {
+      const r = await MailInsights.suggestReply(actor.id, String(b.gmailId ?? ''), { box });
+      sendJson(res, 200, { body: r.body, basis: r.basis, missing: r.missing, to: r.to, toName: r.toName, subject: r.subject });
+    } catch (err) {
+      throw userError(err);
+    }
+  });
   router.post('/api/ai/mail-ask/reply/send', async (req, res, ctx) => {
     const actor = userOnly(ctx);
     const b = await readJson(req);
@@ -833,7 +846,7 @@ function register(router, h) {
   // 🧠 זיכרון העבודה של כל העובדים
   router.get('/api/admin/mail-memory', async (req, res, ctx) => {
     aiAdmin(ctx);
-    sendJson(res, 200, { users: Memory.adminOverview(), auto: Memory.auto(), hours: D.getSetting('mail_memory_hours', ''), perDay: Number(D.getSetting('mail_memory_nightly_threads', 400)) });
+    sendJson(res, 200, { users: Memory.adminOverview(), auto: Memory.auto(), hours: D.getSetting('mail_memory_hours', ''), perDay: Number(D.getSetting('mail_memory_nightly_threads', 1500)) });
   });
   router.post('/api/admin/mail-memory/:userId/:action', async (req, res, ctx) => {
     aiAdmin(ctx);

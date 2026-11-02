@@ -328,6 +328,20 @@ async function daily({ force = false } = {}) {
   return result;
 }
 
+/*
+ * לאורך היום, ולא רק בבוקר: כל ‎org_refresh_hours‎ שעות מזקקים את מה שנוסף
+ * לזיכרון של כל העובדים מאז הפעם הקודמת (הזיקוק ממשיך מהרשומה האחרונה, ולכן
+ * סבב בלי חדש לא עולה כלום). נקרא מסבב הרקע של המייל.
+ */
+function refresh() {
+  const hours = Math.max(0.5, Number(D.getSetting('org_refresh_hours', 2)) || 2);
+  const last = D.getSetting('org_refresh_last', null);
+  if (last && Date.now() - new Date(last).getTime() < hours * 3600000) return null;
+  if (busy || !Claude.isEnabled() || !D.getSetting('org_knowledge_enabled', true)) return null;
+  D.setSetting('org_refresh_last', new Date().toISOString());
+  return daily().catch((err) => console.error('[משימון] עדכון הידע הארגוני נכשל:', err.message));
+}
+
 // ---------------------------------------------------------------------------
 // חיפוש — לסוכנים, ל"איך לסגור" ול"✨ שאל"
 // ---------------------------------------------------------------------------
@@ -409,4 +423,4 @@ function sources(id) {
   return D.all('SELECT user_name, happened_at, summary FROM org_knowledge_sources WHERE knowledge_id = ? ORDER BY happened_at DESC LIMIT 100', id);
 }
 
-module.exports = { daily, distillUser, mergeAll, search, list, edit, remove, sources, scrub, _internal: { validTz, luhn, matchEntry } };
+module.exports = { daily, refresh, distillUser, mergeAll, search, list, edit, remove, sources, scrub, _internal: { validTz, luhn, matchEntry } };

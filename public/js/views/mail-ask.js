@@ -240,28 +240,54 @@ const AskView = (() => {
       ]);
     }
 
-    /** ↩︎ תשובה למייל: מה לענות → טיוטה → עריכה → שליחה, רק בלחיצה */
+    /*
+     * ↩︎ תשובה למייל — שתי דרכים לטיוטה:
+     *   💡 הצע תשובה — העוזר מציע לבד, לפי המייל, איך ענית לשולח בעבר, זיכרון
+     *      העבודה והידע הארגוני; מה שלא נמצא נשאר בסוגריים "[מועד]".
+     *   ✍️ נסח — לפי מה שכתבת ב"מה לענות".
+     * אחר כך עריכה, ושליחה רק בלחיצה.
+     */
     function replyButton(src) {
       const b = el('button.btn.btn-sm', { type: 'button' }, ['↩︎ תשובה במייל']);
       b.addEventListener('click', () => {
-        const what = el('textarea', { rows: '2', placeholder: 'מה לענות? למשל: שנאשר ונשלח עד יום חמישי' });
+        const what = el('textarea', { rows: '2', placeholder: 'מה לענות? למשל: שנאשר ונשלח עד יום חמישי — או "💡 הצע תשובה" והעוזר יציע לבד' });
         const bodyBox = el('textarea', { rows: '7', style: { display: 'none' } });
-        const draftBtn = el('button.btn.btn-primary', { type: 'button' }, ['✍️ נסח']);
+        const note = el('div.mask-suggest-note', { style: { display: 'none' } });
+        const suggestBtn = el('button.btn.btn-primary', { type: 'button', title: 'לפי המייל, התשובות הקודמות שלך לשולח, זיכרון העבודה והידע הארגוני' }, ['💡 הצע תשובה']);
+        const draftBtn = el('button.btn', { type: 'button' }, ['✍️ נסח לפי מה שכתבתי']);
         const send = el('button.btn.btn-primary', { type: 'button', style: { display: 'none' } }, ['📧 שליחה']);
         const dm = UI.modal({
           title: `↩︎ תשובה ל${src.to}`,
-          body: el('div', {}, [el('div.mute-sm', { text: src.subject }), UI.field('מה לענות', what), bodyBox]),
-          footer: [draftBtn, send, el('div.spacer'), el('button.btn', { onclick: () => dm.close() }, ['ביטול'])]
+          body: el('div', {}, [el('div.mute-sm', { text: src.subject }), UI.field('מה לענות', what), note, bodyBox]),
+          footer: [suggestBtn, draftBtn, send, el('div.spacer'), el('button.btn', { onclick: () => dm.close() }, ['ביטול'])]
+        });
+        suggestBtn.addEventListener('click', async () => {
+          suggestBtn.disabled = true;
+          draftBtn.disabled = true;
+          const label = suggestBtn.textContent;
+          suggestBtn.textContent = '💡 מציע…';
+          try {
+            const d = await API.post('/api/ai/mail-ask/reply/suggest', { gmailId: src.gmailId, box: src.box ?? 0 });
+            bodyBox.value = d.body;
+            bodyBox.style.display = '';
+            send.style.display = '';
+            UI.mount(note,
+              d.basis?.length ? el('div.mute-sm', { text: `💡 לפי: ${d.basis.join(' · ')}` }) : el('div.mute-sm', { text: '💡 הצעה לפי המייל עצמו — לא נמצאו תשובות קודמות או ידע רלוונטי.' }),
+              d.missing ? el('div.alert.alert-warn.ai-mini', {}, [el('span', { text: '⚠️' }), el('div', { text: d.missing })]) : null);
+            note.style.display = '';
+            suggestBtn.textContent = '💡 הצע שוב';
+          } catch (err) { suggestBtn.textContent = label; UI.error(err); } finally { suggestBtn.disabled = false; draftBtn.disabled = false; }
         });
         draftBtn.addEventListener('click', async () => {
           if (!what.value.trim()) return what.focus();
           draftBtn.disabled = true;
           try {
+            note.style.display = 'none';
             const d = await API.post('/api/ai/mail-ask/reply/draft', { gmailId: src.gmailId, box: src.box ?? 0, request: what.value.trim() });
             bodyBox.value = d.body;
             bodyBox.style.display = '';
             send.style.display = '';
-            draftBtn.textContent = '✍️ נסח מחדש';
+            draftBtn.textContent = '✍️ נסח מחדש לפי מה שכתבתי';
           } catch (err) { UI.error(err); } finally { draftBtn.disabled = false; }
         });
         send.addEventListener('click', async () => {

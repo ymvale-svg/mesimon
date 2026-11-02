@@ -1022,6 +1022,8 @@ function init({ createTask }) {
     afterTick: () => {
       // זיכרון המייל רץ ברקע ובקצב משלו — לא מעכב את ריצת הבוקר
       Memory.tick().catch((err) => console.error('[משימון] זיכרון המייל:', err.message));
+      // 📚 הידע הארגוני מתעדכן ממה שהזיכרון קרא — כל כמה שעות, לא רק בבוקר
+      require('./org-knowledge').refresh();
       return morningRun();
     }
   });

@@ -1267,15 +1267,16 @@ const DEFAULT_SETTINGS = {
   mail_memory_auto: true,                  // כל עובד מחובר נסרק אוטומטית, בלי הפעלה ואישור עלות; השליטה — במסך הניהול
   mail_memory_users: '*',                  // פתוח לכל העובדים; כל אחד מפעיל ומאשר עלות לעצמו
   mail_memory_model: 'claude-haiku-5-5',   // מודל זול: הקריאה רבה, ואין צורך בשיקול דעת עמוק
-  mail_memory_hours: '19:00-07:00',        // חלון קריאת ההיסטוריה, שעון ישראל. ריק = כל שעה
-  mail_memory_nightly_threads: 400,        // כמה שרשורים לכל משתמש ביממה
+  mail_memory_hours: '',                   // חלון קריאת ההיסטוריה, שעון ישראל ("19:00-07:00"). ריק = כל שעה
+  mail_memory_nightly_threads: 1500,       // כמה שרשורים לכל משתמש ביממה
   mail_doc_expiry_days: 30,                // כמה ימים לפני תום תוקף של מסמך מציעים לחדש
   mail_ask_daily_limit: 60,                // "שאל את המיילים": שאלות ביום לכל משתמש
   task_closure_enabled: true,              // 💡 הצעה איך לסגור משימה מהמייל
   agents_daily_limit: 40,                  // ✨ שאל: שאלות לסוכנים ביום, לכל משתמש
   agents_config: {},                       // לכל סוכן: ‎{enabled, departments}‎ — מסך הניהול
   org_knowledge_enabled: true,             // 📚 ידע ארגוני מזיכרון העבודה של כל העובדים
-  org_merge_days: 7,                       // כל כמה ימים מאחדים לקחים לערכים
+  org_merge_days: 1,                       // כל כמה ימים מאחדים לקחים לערכים
+  org_refresh_hours: 2,                    // כל כמה שעות מזקקים לקחים ממה שנוסף לזיכרון
   org_knowledge_blocklist: '',             // שמות לקוחות שתמיד יוסרו מהידע הארגוני, מופרדים בפסיק
 
   /*
@@ -1610,6 +1611,18 @@ function migrate() {
    * רק מה שחסר נוסף, והסדר נשמר — משתמש שהוסיף או הסיר סוגים בעצמו
    * במסך ההגדרות לא יאבד את הבחירה שלו.
    */
+  /*
+   * זיכרון העבודה והידע הארגוני — "אוטומטי, מעכשיו" (החלטת ההנהלה, 11.2026):
+   * קריאה בכל שעה ולא רק בלילה, יותר שרשורים ביום, ואיחוד לקחים יומי. רק
+   * מה שעדיין על ברירת המחדל הישנה מתעדכן — מנהל ששינה ידנית שומר על בחירתו.
+   */
+  if (getSetting('migr_memory_always_on', null) === null) {
+    if (getSetting('mail_memory_hours', null) === '19:00-07:00') setSetting('mail_memory_hours', '');
+    if (getSetting('mail_memory_nightly_threads', null) === 400) setSetting('mail_memory_nightly_threads', 1500);
+    if (getSetting('org_merge_days', null) === 7) setSetting('org_merge_days', 1);
+    setSetting('migr_memory_always_on', true);
+  }
+
   const ADDED_EXTENSIONS = ['wav', 'eml', 'msg'];
   const currentExt = getSetting('allowed_extensions', null);
   if (Array.isArray(currentExt)) {

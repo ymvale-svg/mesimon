@@ -2934,6 +2934,7 @@ input[type="color"] { width: 46px; height: 30px; padding: 2px; cursor: pointer; 
 .mask-rich li { margin: 2px 0; }
 .mask-rich .mask-h { font-weight: 700; margin: 10px 0 4px; }
 .mask-rich a { color: var(--brand); word-break: break-all; }
+.mask-suggest-note { display: grid; gap: 6px; margin: 4px 0 8px; }
 .mask-none { color: var(--text-soft); }
 .mask-sources { display: grid; gap: 4px; border-top: 1px dashed var(--border); padding-top: 6px; }
 .mask-src { display: flex; gap: 8px; align-items: flex-start; font-size: 13px; }
