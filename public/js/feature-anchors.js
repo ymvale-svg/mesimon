@@ -126,7 +126,9 @@
     { key: 'admin.matrix-tab', label: 'הלשונית "מטריצת הרשאות"', screen: 'admin', route: 'admin', params: { tab: 'matrix' },
       selector: '#admin-tab-matrix' },
     { key: 'admin.whats-new', label: 'הלשונית "✨ מה חדש"', screen: 'admin', route: 'admin', params: { tab: 'whatsnew' },
-      selector: '#admin-tab-whatsnew' }
+      selector: '#admin-tab-whatsnew' },
+    { key: 'admin.ai', label: 'הלשונית "🤖 סוכנים וידע ארגוני"', screen: 'admin', route: 'admin', params: { tab: 'ai' },
+      selector: '#admin-tab-ai' }
   ];
 
   for (const a of ANCHORS) Object.freeze(a);
