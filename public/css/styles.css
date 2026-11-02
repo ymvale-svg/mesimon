@@ -2891,6 +2891,70 @@ input[type="color"] { width: 46px; height: 30px; padding: 2px; cursor: pointer; 
 .ai-chip-ai { background: #ede9fe; color: #5b21b6; }
 .ai-mini { padding: 6px 9px; font-size: 12.5px; margin: 2px 0; }
 .ai-scan-progress { font-size: 13px; color: #5b21b6; padding: 4px 2px 10px; display: flex; align-items: center; gap: 4px; }
+
+/* 💡 איך לסגור — שורה מתחת להצעת משימה, ובכרטיס המשימה */
+.ai-closure {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; margin-top: 4px;
+  padding: 7px 10px; border-radius: 8px; background: #fffbeb; border: 1px solid #fde68a;
+  font-size: 13px; cursor: default;
+}
+.ai-closure-main { flex: 1 1 220px; min-width: 0; display: grid; gap: 2px; }
+.ai-closure-actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.task-detail .ai-closure { margin-bottom: 10px; }
+
+/* 🧠 זיכרון העבודה */
+.mm-box { display: grid; gap: 8px; font-size: 13.5px; }
+.mm-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 8px; }
+.mm-estimate { display: grid; gap: 3px; padding: 10px 12px; border-radius: 8px; background: var(--surface-2); border: 1px solid var(--border); }
+.mm-counts { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; color: var(--text-soft); }
+.mm-foot { display: flex; justify-content: flex-end; }
+.mm-tools { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 10px 0; }
+.mm-tools input[type=search] { flex: 1 1 220px; min-width: 0; }
+.mm-list { display: grid; gap: 0; max-height: 60vh; overflow: auto; }
+.mm-row { display: flex; gap: 6px; align-items: flex-start; padding: 9px 2px; border-bottom: 1px solid var(--border); font-size: 13.5px; }
+.mm-row-main { flex: 1; min-width: 0; display: grid; gap: 2px; overflow-wrap: anywhere; }
+
+/* 🔎 שאל את המיילים */
+.mask { display: grid; gap: 10px; }
+.mask-form { display: flex; gap: 8px; }
+.mask-form input { flex: 1; min-width: 0; }
+.mask-chips { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.mask-chips .chip {
+  border: 1px solid var(--border); background: var(--surface-2); color: var(--text);
+  border-radius: 999px; padding: 3px 10px; font-size: 12.5px; cursor: pointer;
+}
+.mask-chips .chip:hover { border-color: var(--border-strong); }
+.mask-thread { display: grid; gap: 12px; max-height: 58vh; overflow: auto; }
+.mask-turn { display: grid; gap: 6px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); }
+.mask-q { font-weight: 700; }
+.mask-a { white-space: pre-line; font-size: 14px; line-height: 1.55; }
+.mask-none { color: var(--text-soft); }
+.mask-sources { display: grid; gap: 4px; border-top: 1px dashed var(--border); padding-top: 6px; }
+.mask-src { display: flex; gap: 8px; align-items: flex-start; font-size: 13px; }
+.mask-src-main { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.mask-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.mask-foot { margin-top: 2px; }
+.mask-sec { display: grid; gap: 6px; padding-top: 8px; border-top: 1px solid var(--border); }
+.mask-sec:first-child { border-top: 0; padding-top: 0; }
+.mask-sec-title { font-weight: 700; font-size: 13.5px; color: var(--text-soft); }
+.mask-item {
+  display: flex; gap: 6px; align-items: baseline; text-align: start; width: 100%;
+  border: 1px solid var(--border); background: var(--surface-2); color: var(--text);
+  border-radius: 8px; padding: 6px 10px; cursor: pointer; font-size: 13px;
+}
+.mask-item:hover { border-color: var(--border-strong); }
+.mask-org { display: grid; gap: 3px; }
+.mask-chips .chip .btn-link { background: none; border: 0; cursor: pointer; color: var(--text-soft); padding: 0 2px; }
+.mm-hidden { opacity: .55; }
+/* ✨ שאל בחיפוש העליון — נבדל מתוצאות החיפוש */
+.search-results .sr-ask .sr-title { color: #5b21b6; font-weight: 700; }
+.search-results .sr-ask .sr-tag.sr-action { background: linear-gradient(90deg, #ede9fe, #ccfbf1); color: #5b21b6; }
+[data-theme='dark'] .search-results .sr-ask .sr-title { color: #c4b5fd; }
+@media (max-width: 600px) {
+  .mask-form { flex-wrap: wrap; }
+  .mask-form input[type=text] { flex: 1 1 100%; }
+  .mask-form .btn-primary { flex: 1; }
+}
 .spinner-sm { width: 13px; height: 13px; border: 2px solid #ddd6fe; border-top-color: #7c3aed; border-radius: 50%; display: inline-block; animation: ai-spin .8s linear infinite; }
 @keyframes ai-spin { to { transform: rotate(360deg); } }
 .ai-people { display: grid; gap: 6px; }
@@ -4064,6 +4128,7 @@ html.spot-embed .wake-banner { display: none !important; }
 [data-theme='dark'] .tag-ai,
 [data-theme='dark'] .tag-meeting,
 [data-theme='dark'] .ai-state,
+[data-theme='dark'] .ai-closure { background: #3a2f0b; border-color: #6b5612; }
 [data-theme='dark'] .ai-chip-ai,
 [data-theme='dark'] .search-results .sr-tag.sr-project { background: rgba(167, 139, 250, .18); color: #c4b5fd; }
 [data-theme='dark'] .tag-recurring { background: rgba(34, 211, 238, .14); color: #67e8f9; }

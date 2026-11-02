@@ -595,6 +595,8 @@ function shapeTask(task, actor, { withDetails = false } = {}) {
       type: task.source,
       link: actor.type === 'user' ? MailScan.sourceLink(task, actor.id) : null
     },
+    // 💡 איך לסגור — רק לבעל התיבה שממנה נוצרה המשימה
+    closure: actor.type === 'user' && task.source === 'email' ? MailScan.closureForTask(task.id, actor.id) : null,
     checklist: checklist.map((c) => ({
       id: c.id, text: c.text, done: !!c.done, note: c.note ?? '',
       commentsCount: D.get(

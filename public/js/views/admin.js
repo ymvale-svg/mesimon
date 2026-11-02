@@ -21,7 +21,8 @@ const AdminView = (() => {
     { key: 'matrix', label: 'מטריצת הרשאות', perm: 'manage_users' },
     { key: 'templates', label: 'תבניות', perm: 'create_project', full: true },
     // הודעה שנפתחת לכל המשתמשים — רק אדמין על (ראה ‎manage_release_notes‎)
-    { key: 'whatsnew', label: '✨ מה חדש', perm: 'manage_release_notes', full: true }
+    { key: 'whatsnew', label: '✨ מה חדש', perm: 'manage_release_notes', full: true },
+    { key: 'ai', label: '🤖 סוכנים וידע ארגוני', perm: 'manage_automations', full: true }
   ];
 
   async function render(container, params = {}) {
@@ -67,6 +68,7 @@ const AdminView = (() => {
       else if (tab === 'matrix') await matrixTab(body);
       else if (tab === 'templates') await templatesTab(body);
       else if (tab === 'whatsnew') await WhatsNewView.adminTab(body, reload);
+      else if (tab === 'ai') await AdminAiView.tab(body);
     } catch (err) {
       UI.mount(body, UI.empty(err.message, '⚠️'));
     }
@@ -1292,6 +1294,17 @@ const AdminView = (() => {
     ai_mail_scan_enabled: ['סריקת מיילים: פעילה', 'מיילים שלא נקראו בתיבת ה-Gmail של כל משתמש שחיבר אותה הופכים להצעות משימה'],
     ai_scan_time: ['סריקת מיילים: שעת ריצת הבוקר', 'שעון ישראל, בפורמט 07:00. באותה שעה נשלחת גם ההודעה "היום יוצאים"'],
     ai_scan_daily_limit: ['סריקת מיילים: תקרה יומית למשתמש', 'כל מייל הוא קריאה ל-AI. מה שמעבר לתקרה נסרק למחרת'],
+    task_closure_enabled: ['💡 איך לסגור: הצעה לכל משימה מהמייל', 'למי לפנות, באיזה ערוץ ומה לבקש — מזיכרון המייל, משימות AI קודמות, האלפון ואנשי הקשר. שום דבר לא נשלח בלי לחיצה'],
+    mail_memory_enabled: ['🧠 זיכרון העבודה: פעיל', 'סריקת כל היסטוריית המייל של המשתמש, אחרי שאישר את הערכת העלות'],
+    mail_memory_users: ['🧠 זיכרון העבודה: מי משתתף', '* = כל העובדים (ברירת המחדל) · ריק = מנהלי מערכת בלבד · או רשימת כתובות מייל מופרדות בפסיק'],
+    mail_memory_model: ['🧠 זיכרון העבודה: מודל', 'ברירת המחדל claude-haiku-5-5 — זול, ומספיק לסיכום שרשורים'],
+    mail_memory_hours: ['🧠 זיכרון העבודה: שעות קריאת ההיסטוריה', 'שעון ישראל, בפורמט 19:00-07:00. ריק = כל שעה. עדכון הבוקר רץ בכל מקרה'],
+    mail_memory_nightly_threads: ['🧠 זיכרון העבודה: שרשורים ביום למשתמש', 'התקציב היומי של הקריאה. כל שרשור הוא קריאה אחת ל-AI'],
+    mail_doc_expiry_days: ['📎 מסמכים: ימים לפני תום תוקף', 'חוזה, היתר או ביטוח שתוקפם מתקרב — הצעה לחדש ב"ממתין לאישורך"'],
+    mail_ask_daily_limit: ['🔎 שאל את המיילים: שאלות ביום למשתמש', 'כל שאלה היא שתי קריאות ל-AI'],
+    agents_daily_limit: ['✨ שאל: שאלות ביום למשתמש', 'כל שאלה: ניתוב זול, ואז הסוכן (ולפעמים גם המיילים)'],
+    org_knowledge_enabled: ['📚 ידע ארגוני: פעיל', 'זיקוק כל בוקר מזיכרון העבודה של כל העובדים'],
+    org_merge_days: ['📚 ידע ארגוני: כל כמה ימים מאחדים', 'לקחים חדשים מצטרפים לערכים קיימים או יוצרים ערכים חדשים'],
     meeting_hours: ['פגישות: שעות לפגישות', 'שעון ישראל, בפורמט 08:30-18:00. הצעת מועדים ושורת הזמינות — רק בתוך השעות האלה'],
     meeting_default_minutes: ['פגישות: משך ברירת מחדל (דקות)', ''],
     meeting_buffer_minutes: ['פגישות: מרווח מפגישה צמודה (דקות)', 'בהצעת מועדים — לא צמוד לפגישה אחרת'],
