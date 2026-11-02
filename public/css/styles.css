@@ -2947,6 +2947,7 @@ input[type="color"] { width: 46px; height: 30px; padding: 2px; cursor: pointer; 
 .mask-chips .chip .btn-link { background: none; border: 0; cursor: pointer; color: var(--text-soft); padding: 0 2px; }
 .mm-hidden { opacity: .55; }
 /* ✨ שאל בחיפוש העליון — נבדל מתוצאות החיפוש */
+.search-results .sr-ask { border-bottom: 1px solid var(--border); margin-bottom: 4px; background: linear-gradient(90deg, rgba(237,233,254,.45), rgba(204,251,241,.45)); }
 .search-results .sr-ask .sr-title { color: #5b21b6; font-weight: 700; }
 .search-results .sr-ask .sr-tag.sr-action { background: linear-gradient(90deg, #ede9fe, #ccfbf1); color: #5b21b6; }
 [data-theme='dark'] .search-results .sr-ask .sr-title { color: #c4b5fd; }
@@ -3566,6 +3567,20 @@ body:has(.modal-backdrop.is-side:not(.leaving)) .toast-root { left: auto; right:
  * ‎inset-inline-end‎: היסט לוגי נפתר לפי הכיוון של האלמנט *עצמו*, וב-‎ltr‎
  * ה-end הוא ימין — הרמז ישב על הזכוכית ועל תחילת הטקסט. כמו ‎.icon‎ שמימין.
  */
+/* ✨ שאל בתוך שורת החיפוש — בצד השמאלי, והרמז Ctrl K זז לפניו */
+.global-search .gs-ask {
+  position: absolute; left: 5px; top: 50%; transform: translateY(-50%);
+  height: 30px; padding: 0 12px; border-radius: 999px; border: 0; cursor: pointer;
+  font: inherit; font-size: 13px; font-weight: 700; color: #5b21b6;
+  background: linear-gradient(90deg, #ede9fe, #ccfbf1);
+}
+.global-search .gs-ask:hover { filter: brightness(.96); }
+.global-search .gs-ask:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+.global-search.has-ask input { padding-left: 84px; }
+.global-search.has-ask .gs-kbd { left: 84px; }
+.global-search.is-inline .gs-ask { top: 20px; }
+.global-search.is-inline.has-ask input { padding-inline-end: 84px; }
+[data-theme='dark'] .global-search .gs-ask { color: #ddd6fe; background: linear-gradient(90deg, #3b2a6b, #134e4a); }
 .global-search .gs-kbd {
   position: absolute; left: 12px; top: 50%; transform: translateY(-50%);
   direction: ltr; pointer-events: none;

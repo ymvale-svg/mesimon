@@ -14,13 +14,13 @@ const AdminAiView = (() => {
   async function tab(body) {
     let sub = 'knowledge';
     const holder = el('div');
-    const seg = el('div.seg', {}, [['knowledge', '📚 ידע ארגוני'], ['agents', '🤖 סוכנים'], ['log', '📜 יומן']].map(([key, label]) => {
+    const seg = el('div.seg', {}, [['knowledge', '📚 ידע ארגוני'], ['memory', '🧠 זיכרון'], ['agents', '🤖 סוכנים'], ['log', '📜 יומן']].map(([key, label]) => {
       const b = el(`button${key === sub ? '.active' : ''}`, { type: 'button' }, [label]);
       b.addEventListener('click', () => { sub = key; for (const x of seg.children) x.classList.toggle('active', x === b); draw(); });
       return b;
     }));
     UI.mount(body, el('div.card', {}, [el('div.card-pad', {}, [seg, holder])]));
-    const draw = () => (sub === 'knowledge' ? knowledge(holder) : sub === 'agents' ? agents(holder) : log(holder));
+    const draw = () => (sub === 'knowledge' ? knowledge(holder) : sub === 'memory' ? memory(holder) : sub === 'agents' ? agents(holder) : log(holder));
     draw();
   }
 
@@ -144,6 +144,52 @@ const AdminAiView = (() => {
     } catch (err) {
       UI.error(err);
     }
+  }
+
+  // ------------------------------------------------------------ 🧠 זיכרון העבודה של העובדים
+
+  const STATE = { idle: '⚪ טרם התחיל', mapping: '🗺 ממפה', mapped: '⏳ ממתין לאישור', running: '📖 קורא', paused: '⏸ מושהה', done: '✅ מוכן', error: '⚠️ נעצר' };
+
+  async function memory(holder) {
+    UI.mount(holder, UI.spinner());
+    let r;
+    try { r = await API.get('/api/admin/mail-memory'); } catch (err) { return UI.mount(holder, UI.empty(err.message, '⚠️')); }
+    const total = r.users.reduce((n, u) => n + (u.cost ?? 0), 0);
+    const act = (u, action, label, confirmText) => {
+      const b = el('button.btn.btn-sm', { type: 'button' }, [label]);
+      b.addEventListener('click', async () => {
+        if (confirmText && !await UI.confirm(confirmText, { danger: true, okText: label })) return;
+        b.disabled = true;
+        try { await API.post(`/api/admin/mail-memory/${u.userId}/${action}`); memory(holder); } catch (err) { b.disabled = false; UI.error(err); }
+      });
+      return b;
+    };
+    UI.mount(holder,
+      el('p.mute-sm', { text: r.auto
+        ? `סריקה אוטומטית: כל עובד שחיבר Gmail נסרק לבד — העובדים אינם רואים את זה. ${r.hours ? `קריאת ההיסטוריה בשעות ${r.hours}, ` : ''}עד ${r.perDay} שרשורים ביום לעובד.`
+        : 'סריקה ידנית: כל עובד מפעיל בעצמו ומאשר עלות. (ההגדרה "זיכרון העבודה: סריקה אוטומטית" — בהגדרות המערכת.)' }),
+      el('div.mute-sm', { text: `${r.users.length} עובדים · עלות עד עכשיו: כ-$${Math.round(total * 100) / 100}` }),
+      el('div.mm-list', {}, r.users.length ? r.users.map((u) => {
+        const q = u.queue ?? {};
+        const total = (q.done ?? 0) + (q.pending ?? 0);
+        return el('div.mm-row', {}, [
+          el('div.mm-row-main', {}, [
+            el('div', {}, [el('b', { text: u.name }), el('span.mute-sm', { text: ` · ${STATE[u.state] ?? u.state}` })]),
+            el('div.mute-sm', { text: [
+              u.boxes.length ? `📬 ${u.boxes.join(', ')}` : '📭 לא מחובר',
+              u.state === 'mapping' ? `${u.mapped} שרשורים מופו` : total ? `${q.done ?? 0} מתוך ${total} נקראו` : null,
+              `👤 ${u.counts?.people ?? 0} · 🗂 ${u.counts?.events ?? 0} · 📎 ${u.counts?.docs ?? 0}`,
+              u.cost !== null ? `$${u.cost}` : null,
+              u.lastIncrementalAt ? `עדכון ${UI.relative(u.lastIncrementalAt)}` : null
+            ].filter(Boolean).join(' · ') }),
+            u.error ? el('div.mute-sm.text-warn', { text: `⏳ ${u.error}` }) : null
+          ]),
+          ['running', 'mapping'].includes(u.state) ? act(u, 'pause', '⏸ השהיה') : null,
+          ['paused', 'error', 'idle', 'mapped'].includes(u.state) ? act(u, 'resume', '▶ המשך') : null,
+          act(u, 'forget', '↺ איפוס', `למחוק את כל זיכרון העבודה של ${u.name} ולסרוק מחדש מההתחלה?`)
+        ]);
+      }) : [UI.empty('עוד אף עובד לא חיבר Gmail', '🧠')])
+    );
   }
 
   // ------------------------------------------------------------ 🤖 סוכנים

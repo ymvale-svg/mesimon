@@ -571,7 +571,8 @@ function register(router, h) {
   const meUser = (actor) => D.get('SELECT id, full_name, email, role FROM users WHERE id = ?', actor.id);
 
   const gmailInfo = (actor) => ({
-    memory: Memory.status(meUser(actor)),
+    // זיכרון העבודה — רק מנהל המערכת רואה ושולט; אצל העובדים הוא רץ אוטומטית ברקע
+    memory: P.can(actor, 'manage_automations') ? Memory.status(meUser(actor)) : null,
     enabled: Gmail.isEnabled(),
     ai: Claude.isEnabled(),
     scanEnabled: Boolean(D.getSetting('ai_mail_scan_enabled', true)),
@@ -667,6 +668,8 @@ function register(router, h) {
 
   const memoryCall = (fn) => async (req, res, ctx) => {
     const actor = userOnly(ctx);
+    // השליטה בזיכרון — מנהל המערכת בלבד (החלטת ההנהלה: אצל העובדים הסריקה אוטומטית ושקופה)
+    if (!P.can(actor, 'manage_automations')) throw forbidden();
     const b = req.method === 'GET' || req.method === 'DELETE' ? {} : await readJson(req);
     try {
       sendJson(res, 200, await fn(meUser(actor), b, ctx, req));
@@ -826,6 +829,20 @@ function register(router, h) {
     if (!P.can(actor, 'manage_automations')) throw forbidden();
     return actor;
   };
+
+  // 🧠 זיכרון העבודה של כל העובדים
+  router.get('/api/admin/mail-memory', async (req, res, ctx) => {
+    aiAdmin(ctx);
+    sendJson(res, 200, { users: Memory.adminOverview(), auto: Memory.auto(), hours: D.getSetting('mail_memory_hours', ''), perDay: Number(D.getSetting('mail_memory_nightly_threads', 400)) });
+  });
+  router.post('/api/admin/mail-memory/:userId/:action', async (req, res, ctx) => {
+    aiAdmin(ctx);
+    try {
+      sendJson(res, 200, { user: Memory.adminAction(Number(ctx.params.userId), ctx.params.action) });
+    } catch (err) {
+      throw userError(err);
+    }
+  });
 
   router.get('/api/admin/agents', async (req, res, ctx) => {
     aiAdmin(ctx);

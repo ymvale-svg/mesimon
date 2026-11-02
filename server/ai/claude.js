@@ -141,12 +141,15 @@ async function request({ system, content, schema, effort, model: modelId, fast, 
  * @param {Array}  opts.tools                הגדרות הכלים ‎{name, description, input_schema}‎
  * @param {(name: string, input: object) => Promise<any>} opts.onTool
  * @param {number} [opts.maxTurns]           כמה סבבי כלים לכל היותר
+ * @param {boolean} [opts.live]              מישהו מחכה (✨ שאל, הבוט) — מצב מהיר, כמו ב-‎json‎
  * @returns {Promise<{text: string, calls: Array<{name, input, ok, ms}>}>}
  */
-async function withTools({ system, content, tools, onTool, effort = 'medium', model: modelId = null, maxTurns = 6, onUsage = null }) {
+async function withTools({ system, content, tools, onTool, effort = 'medium', model: modelId = null, maxTurns = 6, onUsage = null, live = false }) {
   if (!isEnabled()) throw new AiError('חיבור ה-AI אינו מוגדר בשרת (ANTHROPIC_API_KEY)');
   const chosen = String(modelId || model()).trim();
   const fallback = withFallback(chosen);
+  // מצב מהיר: אותו מודל, פלט מהיר עד פי 2.5. נדחה (מכסה, חשבון) — ממשיכים בלעדיו
+  let fast = live && fastMode() && FAST_MODELS.has(chosen);
   const messages = [{ role: 'user', content }];
   const calls = [];
 
@@ -160,8 +163,10 @@ async function withTools({ system, content, tools, onTool, effort = 'medium', mo
       output_config: { effort },
       // בסבב האחרון — בלי כלים: חייבים לענות עם מה שיש
       ...(tools?.length && !last ? { tools, tool_choice: { type: 'auto' } } : {}),
-      ...(fallback ? { fallbacks: 'default' } : {})
+      ...(fallback ? { fallbacks: 'default' } : {}),
+      ...(fast ? { speed: 'fast' } : {})
     };
+    const betas = [fallback ? 'server-side-fallback-2026-07-01' : null, fast ? 'fast-mode-2026-02-01' : null].filter(Boolean);
     let res;
     try {
       res = await fetch(API_URL, {
@@ -170,7 +175,7 @@ async function withTools({ system, content, tools, onTool, effort = 'medium', mo
           'content-type': 'application/json',
           'x-api-key': apiKey(),
           'anthropic-version': '2023-06-01',
-          ...(fallback ? { 'anthropic-beta': 'server-side-fallback-2026-07-01' } : {})
+          ...(betas.length ? { 'anthropic-beta': betas.join(',') } : {})
         },
         body: JSON.stringify(body),
         signal: AbortSignal.timeout(180000)
@@ -181,6 +186,12 @@ async function withTools({ system, content, tools, onTool, effort = 'medium', mo
     const raw = await res.text();
     let data = null;
     try { data = JSON.parse(raw); } catch { /* למטה */ }
+    if (!res.ok && fast && res.status < 500) {
+      // המצב המהיר נדחה — אותו סבב שוב, במהירות רגילה
+      fast = false;
+      turn--;
+      continue;
+    }
     if (!res.ok) {
       const err = new AiError(`שירות ה-AI החזיר שגיאה ${res.status}: ${data?.error?.message ?? raw.slice(0, 300)}`);
       err.retryable = res.status === 429 || res.status >= 500;

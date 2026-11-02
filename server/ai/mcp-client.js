@@ -25,7 +25,8 @@ const path = require('path');
 const CONFIG_PATH = path.join(__dirname, '..', 'agents-mcp.json');
 const PROTOCOL_VERSION = '2025-06-18';
 const CLIENT_INFO = { name: 'mesimon', version: '1.0' };
-const IDLE_MS = 10 * 60 * 1000;
+// חצי שעה בלי שימוש — ואז נסגר. הפעלה מחדש עולה כשתיים-שלוש שניות לשאלה הבאה
+const IDLE_MS = 30 * 60 * 1000;
 const RESTART_WINDOW_MS = 10 * 60 * 1000;
 const MAX_RESTARTS = 3;
 const MAX_TEXT = 20000;

@@ -30,7 +30,10 @@ const SKILL_PATH = path.join(__dirname, 'skills', 'mail-memory.md');
 const TZ = 'Asia/Jerusalem';
 const DAY = 24 * 60 * 60 * 1000;
 
-const MAP_CONCURRENCY = 4;
+// בקצב מתון: למשתמש יש מכסה של Google לדקה, והסריקה הרגילה של משימון משתמשת בה גם היא
+const MAP_CONCURRENCY = 2;
+const MAP_PAUSE_MS = 400;           // הפסקה קצרה בין קבוצות — כשש שרשורים בשנייה
+const QUOTA_COOLDOWN_MS = 3 * 60 * 1000;
 const READ_CONCURRENCY = 3;
 const PER_TICK = 24;               // שרשורים לכל משתמש בכל סבב של המנוע (כל 2 דקות)
 const MESSAGES_PER_THREAD = 8;
@@ -86,6 +89,13 @@ function allowed(user) {
   const list = rule.split(/[\s,;]+/).map((x) => x.toLowerCase()).filter(Boolean);
   return list.includes(String(user.email ?? '').toLowerCase());
 }
+
+/*
+ * סריקה אוטומטית (החלטת ההנהלה): כל עובד שחיבר Gmail נכנס לזיכרון לבד, בלי
+ * להפעיל ובלי לאשר עלות, והעובדים אינם רואים את השליטה בזה — רק מנהל המערכת,
+ * במסך הניהול. ‎mail_memory_auto‎ כבוי — חוזרים להפעלה ידנית עם אישור עלות.
+ */
+const auto = () => D.getSetting('mail_memory_auto', true) !== false;
 
 const userRow = (id) => D.get("SELECT id, full_name, email, role FROM users WHERE id = ? AND status = 'active'", id);
 
@@ -215,8 +225,13 @@ function start(user, { fromDate = null, withDocs = true, internal = true, exclud
   saveRun(user.id, {
     state: 'mapping', from_date: fromDate || null, with_docs: withDocs !== false, internal: internal !== false,
     excluded_labels: JSON.stringify((excludedLabels ?? []).map((x) => String(x).trim()).filter(Boolean).slice(0, 30)),
+    /*
+     * "נסה שוב" אחרי שגיאה — עוברים שוב על רשימת השרשורים מההתחלה: זה זול (עמוד
+     * של 500 בקריאה אחת), ושרשור שכבר מופה מדולג בלי לפנות ל-Gmail. כך נאספים גם
+     * שרשורים שדולגו לפני התיקון של המכסה. תיבות שהושלמו — לא נמפות שוב.
+     */
     page_token: null, error: '', started_at: run?.started_at ?? nowIso(),
-    stats: { ...(run ? parseJson(run.stats, {}) : {}), boxesMapped: [] }
+    stats: { ...(run ? parseJson(run.stats, {}) : {}), boxesMapped: run?.state === 'error' ? (parseJson(run.stats, {}).boxesMapped ?? []) : [] }
   });
   kick();
   return status(user);
@@ -273,15 +288,36 @@ function myAddresses(userId) {
 const addressesIn = (value) => String(value ?? '').split(',').map((x) => Mime.parseAddress(x)).filter((a) => a.address && a.address.includes('@'));
 
 /** Gmail מגביל קריאות לשנייה — 429 וטעויות זמניות מנוסים שוב בהמתנה */
+/*
+ * מכסה של Google: Gmail מחזיר 429, או 403 עם "Quota exceeded" / "rateLimitExceeded".
+ * זו לא תקלה — צריך לחכות. ‎err.quota‎ מסמן אותה, כדי שהמיפוי ייעצר ויחזור לבד
+ * מאותה נקודה, ולא ידלג על שרשורים.
+ */
+const isQuota = (err) => / 429\b/.test(String(err?.message)) || /\b403\b[\s\S]*(quota|rate ?limit)/i.test(String(err?.message));
+
 async function withRetry(fn, tries = 4) {
   for (let i = 0; ; i++) {
     try {
       return await fn();
     } catch (err) {
-      if (i >= tries - 1 || !/ (429|5\d\d)\b/.test(String(err.message))) throw err;
-      await new Promise((r) => setTimeout(r, 1500 * 2 ** i));
+      const quota = isQuota(err);
+      if (i >= tries - 1 || !(quota || / 5\d\d\b/.test(String(err.message)))) {
+        if (quota) { err.quota = true; err.retryable = true; }
+        throw err;
+      }
+      // מכסה מתאפסת כל דקה — מחכים יותר; תקלה זמנית — קצת
+      await new Promise((r) => setTimeout(r, quota ? 15000 * (i + 1) : 1500 * 2 ** i));
     }
   }
+}
+
+/** משתמשים שהגיעו למכסה — לא פונים ל-Gmail בשמם עד שהזמן עובר */
+const quotaUntil = new Map();
+const cooling = (userId) => (quotaUntil.get(userId) ?? 0) > Date.now();
+function coolDown(userId) {
+  quotaUntil.set(userId, Date.now() + QUOTA_COOLDOWN_MS);
+  D.run("UPDATE mail_memory_runs SET error = ?, updated_at = ? WHERE user_id = ?",
+    'Google הגבילה זמנית את קצב הקריאה מהתיבה. ממשיך לבד בעוד כמה דקות, מאותה נקודה.', nowIso(), userId);
 }
 
 /**
@@ -435,12 +471,18 @@ async function mapStep(userId) {
       const page = await withRetry(() => Gmail.listThreads(who, q, { pageToken: tokens[box] ?? null }));
       for (let i = 0; i < page.ids.length; i += MAP_CONCURRENCY) {
         const results = await Promise.all(page.ids.slice(i, i + MAP_CONCURRENCY).map((id) =>
-          mapThread(userId, who, id, ctx).catch((err) => { console.error('[משימון] מיפוי שרשור נכשל:', err.message); return 'error'; })));
+          mapThread(userId, who, id, ctx).catch((err) => {
+            // מכסה — עוצרים את העמוד כולו, כדי שנקודת ההמשך לא תתקדם מעל שרשורים שלא מופו
+            if (err.quota) throw err;
+            console.error('[משימון] מיפוי שרשור נכשל:', err.message);
+            return 'error';
+          })));
         bumpStats(userId, (s) => {
           s.mapped = (s.mapped ?? 0) + results.filter((r) => r).length;
           for (const r of results) if (r) s[`r_${r}`] = (s[`r_${r}`] ?? 0) + 1;
         });
         if (runOf(userId)?.state !== 'mapping') return;
+        await new Promise((r) => setTimeout(r, MAP_PAUSE_MS));
       }
       const next = { ...pageTokens(runOf(userId)) };
       if (page.next) next[box] = page.next;
@@ -450,7 +492,8 @@ async function mapStep(userId) {
     }
     bumpStats(userId, (s) => { s.boxesMapped = [...new Set([...(s.boxesMapped ?? []), box])]; });
   }
-  saveRun(userId, { state: 'mapped', page_token: null, mapped_at: nowIso(), last_incremental_at: runOf(userId)?.last_incremental_at ?? nowIso() });
+  saveRun(userId, { state: auto() ? 'running' : 'mapped', page_token: null, mapped_at: nowIso(), last_incremental_at: runOf(userId)?.last_incremental_at ?? nowIso() });
+  if (auto()) return kick();
   const est = estimate(userId, runOf(userId));
   D.notify({
     targetType: 'user', targetId: userId, kind: 'ai',
@@ -686,6 +729,7 @@ async function readStep(userId) {
   if (!rows.length) {
     if (run.state === 'running' && !D.get("SELECT 1 FROM mail_memory_threads WHERE user_id = ? AND status = 'pending'", userId)) {
       saveRun(userId, { state: 'done' });
+      if (auto()) return;
       const st = status(userRow(userId));
       D.notify({
         targetType: 'user', targetId: userId, kind: 'ai',
@@ -707,6 +751,8 @@ async function readStep(userId) {
         st = r === 'done' ? 'done' : 'skipped';
         reason = r === 'done' ? '' : r;
       } catch (err) {
+        // מכסה של Google — השרשור נשאר בתור, וממתינים לפני הסבב הבא
+        if (err.quota) { coolDown(userId); return; }
         // תקלה זמנית ב-AI — השרשור נשאר בתור. אחרת — נרשם ולא חוזרים אליו
         if (err.retryable) return;
         reason = String(err.message).slice(0, 200);
@@ -720,18 +766,34 @@ async function readStep(userId) {
 
 let ticking = false;
 
+/** סריקה אוטומטית: כל עובד מחובר שעוד לא נכנס לזיכרון — מתחיל עכשיו, בברירות המחדל */
+function enrollAll() {
+  if (!auto()) return;
+  for (const userId of Gmail.connectedUsers()) {
+    const user = userRow(userId);
+    if (!user || !allowed(user) || runOf(userId)) continue;
+    saveRun(userId, { state: 'mapping', with_docs: true, internal: true, excluded_labels: '[]', started_at: nowIso(), stats: { boxesMapped: [] } });
+  }
+  // ריצה שנשארה ממתינה לאישור עלות מלפני המעבר לאוטומטי — ממשיכה
+  D.run("UPDATE mail_memory_runs SET state = 'running', updated_at = ? WHERE state = 'mapped'", nowIso());
+}
+
 async function tick() {
   if (ticking || !Claude.isEnabled() || !D.getSetting('mail_memory_enabled', true)) return;
   ticking = true;
   try {
+    enrollAll();
     // ‎mapped‎ — ממתין לאישור העלות, ‎paused‎ — עצר: בשניהם לא קוראים כלום
     for (const run of D.all("SELECT * FROM mail_memory_runs WHERE state IN ('mapping','running','done')")) {
       const user = userRow(run.user_id);
-      if (!user || !allowed(user) || !connected(user.id) || busy.has(user.id)) continue;
+      if (!user || !allowed(user) || !connected(user.id) || busy.has(user.id) || cooling(user.id)) continue;
       busy.add(user.id);
+      // ההודעה "Google הגבילה זמנית" יורדת כשממשיכים
+      if (run.error && run.state === 'mapping') D.run("UPDATE mail_memory_runs SET error = '' WHERE user_id = ?", user.id);
       const job = run.state === 'mapping' ? mapStep(user.id) : readStep(user.id);
       // המיפוי יכול להימשך שעה — לא מחכים לו; כל משתמש בנפרד
       job.catch((err) => {
+        if (err.quota) return coolDown(user.id);
         console.error(`[משימון] זיכרון המייל של משתמש ${user.id} נכשל:`, err.message);
         if (run.state === 'mapping') saveRun(user.id, { state: 'error', error: String(err.message).slice(0, 300) });
       }).finally(() => busy.delete(user.id));
@@ -932,8 +994,45 @@ function init() {
   kick();
 }
 
+/** מסך הניהול: מצב הזיכרון של כל העובדים */
+function adminOverview() {
+  const price = Claude.priceOf(model());
+  return D.all("SELECT id, full_name, email, role FROM users WHERE status = 'active' AND role <> 'vendor' ORDER BY full_name")
+    .map((u) => ({ u, st: status(u) }))
+    .filter(({ st }) => st.connected || st.state !== 'idle' || st.counts.people)
+    .map(({ u, st }) => {
+      const tin = st.stats?.tokensIn ?? 0;
+      const tout = st.stats?.tokensOut ?? 0;
+      return {
+        userId: u.id, name: u.full_name, state: st.state, boxes: (st.boxes ?? []).map((b) => b.email),
+        queue: st.queue ?? {}, counts: st.counts, mapped: st.stats?.mapped ?? 0, error: st.error ?? '',
+        tokens: tin + tout, cost: price ? Math.round(((tin / 1e6) * price.input + (tout / 1e6) * price.output) * 100) / 100 : null,
+        lastIncrementalAt: st.lastIncrementalAt
+      };
+    });
+}
+
+function adminAction(userId, action) {
+  const user = userRow(userId);
+  if (!user) throw new Error('המשתמש לא נמצא');
+  const run = runOf(userId);
+  if (action === 'pause') {
+    if (!run || !['running', 'mapping'].includes(run.state)) throw new Error('אין סריקה פעילה');
+    saveRun(userId, { state: run.state === 'mapping' ? 'idle' : 'paused' });
+  } else if (action === 'resume') {
+    if (!run) throw new Error('הסריקה עוד לא התחילה');
+    saveRun(userId, { state: run.state === 'idle' || run.state === 'error' ? 'mapping' : 'running', error: '' });
+    kick();
+  } else if (action === 'forget') {
+    forget(userId);
+  } else {
+    throw new Error('פעולה לא מוכרת');
+  }
+  return adminOverview().find((x) => x.userId === userId) ?? null;
+}
+
 module.exports = {
-  init, tick, morning, allowed, status, start, approve, pause, update, forget, boxesFor, whoOf,
+  init, tick, morning, allowed, status, start, approve, pause, update, forget, boxesFor, whoOf, adminOverview, adminAction, auto,
   search, personByEmail, eventsWith, browse, editPerson, remove, terms, normalize,
   _internal: { mapThread, readThread, estimate, inHours, expiryNotices, savePerson }
 };
