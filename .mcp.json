@@ -20,6 +20,13 @@
         "-y",
         "@skills-il/israel-hiking-mcp@1.0.1"
       ]
+    },
+    "boi-exchange": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@skills-il/boi-exchange-mcp@1.0.1"
+      ]
     }
   }
 }
