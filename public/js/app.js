@@ -1820,19 +1820,6 @@ const App = (() => {
         for (const item of list) addRow(row(item, data?.query ?? q));
       }
 
-      /*
-       * ✨ שאל — שורה אחת בסוף, כשהוקלדה שאלה: תשובה מהמשימות, מהמיילים,
-       * מהסוכנים ומהידע הארגוני. החיפוש הרגיל לא משתנה; התשובה בחלון משלה.
-       */
-      if (!isVendor() && String(q ?? '').trim().length >= 2) {
-        const question = String(q).trim();
-        results.appendChild(el('div.sr-group', { role: 'presentation', text: 'שאלה חופשית' }));
-        const askRow = actionRow({ kind: 'action', title: `✨ שאל: "${question}"`, keys: [], run: () => AskView.open({ question }) });
-        askRow.classList.add('sr-ask');
-        askRow.title = 'תשובה מהמשימות, מהמיילים שלך, מסוכני המחלקות ומהידע הארגוני';
-        addRow(askRow);
-      }
-
       // כשיש יותר ממה שמוצג — נאמר, ולא נשתוק
       if (data && data.total > items.length) {
         results.appendChild(el('div.sr-more', {
@@ -1952,7 +1939,19 @@ const App = (() => {
     // רמז לקיצור — רק במחשב, ונעלם כשמקלידים או כשהשדה ממוקד (ב-CSS)
     const kbd = inline ? null : el('kbd.gs-kbd', { 'aria-hidden': 'true', text: IS_MAC ? '⌘K' : 'Ctrl K' });
 
-    const wrap = el(`div.global-search${inline ? '.is-inline' : ''}`, {}, [input, icon, kbd, results]);
+    /*
+     * ✨ שאל את אשל — כפתור נפרד ליד החיפוש, לא חלק ממנו: החיפוש מוצא משימות
+     * ופרויקטים, ו"שאל את אשל" עונה על שאלה (מיילים, סוכנים, ידע ארגוני)
+     * בחלון משלו. רק בסרגל העליון; בטלפון — כפתור ✨ משלו בסרגל.
+     */
+    const askBtn = inline || isVendor() ? null : el('button.gs-ask', {
+      type: 'button',
+      title: 'שאלה חופשית — תשובה מהמיילים, מסוכני המחלקות ומהידע הארגוני',
+      onclick: () => { hide?.(); AskView.open(); }
+    }, ['✨ שאל את אשל']);
+
+    const field = el('div.gs-field', {}, [input, icon, kbd, results]);
+    const wrap = el(`div.global-search${inline ? '.is-inline' : ''}${askBtn ? '.has-ask' : ''}`, {}, [field, askBtn]);
 
     /*
      * סגירה בלחיצה בחוץ. המאזין מסיר את עצמו כשהשדה כבר אינו במסמך: הסרגל
@@ -2718,6 +2717,7 @@ const App = (() => {
         : null,
       // בטלפון שדה החיפוש מוסתר — הזכוכית פותחת אותו כחלון מלא (מוצגת רק שם, ב-CSS)
       el('button.icon-btn.m-search-btn', { title: 'חיפוש ומעבר מהיר', 'aria-label': 'חיפוש', onclick: () => openSearchOverlay() }, ['🔍']),
+      !isVendor() ? el('button.icon-btn.m-search-btn.m-ask-btn', { title: 'שאל את אשל', 'aria-label': 'שאל את אשל', onclick: () => AskView.open() }, ['✨']) : null,
       bell,
       (() => {
         // רמת הגישה מוצגת רק למי שרשאי לראות רמות; לשאר מוצגת המחלקה

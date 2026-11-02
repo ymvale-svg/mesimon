@@ -115,6 +115,7 @@ const MailMemoryView = (() => {
         case 'mapping':
           parts.push(el('div.ai-scan-progress', {}, [el('span.spinner-sm'), ` ממפה את התיבה (כותרות בלבד)… ${num(st.mapped)} שרשורים`]),
             el('div.mute-sm', { text: 'אפשר לסגור את החלון — המיפוי ממשיך ברקע, ותקבל התראה בסופו.' }),
+            s.error ? el('div.mute-sm.text-warn', { text: `⏳ ${s.error}` }) : null,
             act('⏸ עצירה', () => call('post', '/api/me/mail-memory/pause')));
           break;
         case 'mapped':
@@ -142,6 +143,7 @@ const MailMemoryView = (() => {
           parts.push(
             el('div.ai-scan-progress', {}, [el('span.spinner-sm'), ` קורא… ${num(q.done)} מתוך ${num(total)} שרשורים${q.reachedBack ? ` · הגיע ל-${day(q.reachedBack)}` : ''}`]),
             el('div.mute-sm', { text: `${s.hours ? `הקריאה רצה בשעות ${s.hours}, ` : ''}עד ${num(s.perDay)} שרשורים ביום.${st.tokensIn ? ` נצרכו עד עכשיו כ-${num(Math.round((st.tokensIn + (st.tokensOut ?? 0)) / 1000))} אלף טוקנים.` : ''}` }),
+            s.error ? el('div.mute-sm.text-warn', { text: `⏳ ${s.error}` }) : null,
             act('⏸ השהיה', () => call('post', '/api/me/mail-memory/pause'))
           );
           break;
