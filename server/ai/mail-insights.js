@@ -174,11 +174,15 @@ async function collect(userId, { window = null, from = '' } = {}) {
   const toRead = ids.filter((x) => !cached.get(x));
   const fetched = [];
   for (let i = 0; i < toRead.length; i += READ_PARALLEL) {
-    fetched.push(...await Promise.all(toRead.slice(i, i + READ_PARALLEL).map(async (id) => ({ id, msg: await Gmail.raw(whoOf.get(id), id) }))));
+    // מפענחים מיד ומשאירים רק טקסט ושמות קבצים — 80 מיילים שלמים עם הקבצים
+    // שלהם, מוחזקים יחד עד סוף הניתוח, חרגו ממגבלת הזיכרון של השרת
+    fetched.push(...await Promise.all(toRead.slice(i, i + READ_PARALLEL).map(async (id) => {
+      const { raw, ...msg } = await Gmail.raw(whoOf.get(id), id);
+      return { id, msg, mail: Mime.slim(Mime.parse(raw)) };
+    })));
   }
   const fresh = [];
-  for (const { id, msg } of fetched) {
-    const mail = Mime.parse(msg.raw);
+  for (const { id, msg, mail } of fetched) {
     if (mine.has(mail.from.address)) {
       // מה ששלחתי לעצמי אינו חדשות — נרשם כדי שלא ייקרא שוב בכל בקשה
       D.run('INSERT OR REPLACE INTO mail_insights (user_id, gmail_id, data, received_at, created_at) VALUES (?,?,?,?,?)',

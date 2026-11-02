@@ -5,12 +5,16 @@ services:
   - type: web
     name: mesimon
     runtime: node
-    plan: starter          # נדרש תשלום — התוכנית החינמית מוחקת את הנתונים
+    plan: standard         # 2GB זיכרון, 1 מעבד. נדרש תשלום — התוכנית החינמית מוחקת את הנתונים, ו-starter (512MB) קטנה מדי לסוכנים ולסריקת המייל
     region: frankfurt      # אירופה — הקרוב ביותר לישראל מבחינת זמן תגובה ורגולציה
     # אין תלויות npm. רק uv — לשני מקורות הנתונים שכתובים ב-Python (עסקאות נדל"ן, הלמ"ס).
     # מותקן לתוך תיקיית הפרויקט, כדי שיהיה זמין גם בזמן הריצה ולא רק בבנייה.
     buildCommand: "curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=$PWD/.bin UV_NO_MODIFY_PATH=1 sh"
-    startCommand: PATH="$PWD/.bin:$PATH" node server/index.js
+    # תקרת זיכרון ל-Node מתחת למגבלת התוכנית (2GB), כדי שינקה זיכרון בזמן ולא
+    # יגיע למגבלה של Render — חריגה שם = הפעלה מחדש ו-502 לכולם. כ-600MB נשארים
+    # לשאר: שרתי הנתונים של הסוכנים (תהליכים נפרדים) וזיכרון שמחוץ ל-heap.
+    # בתוכנית של 512MB — 320
+    startCommand: PATH="$PWD/.bin:$PATH" node --max-old-space-size=1400 server/index.js
     healthCheckPath: /api/branding
     envVars:
       - key: NODE_VERSION

@@ -126,4 +126,4 @@ function prepare(attachments, { limit = 3, known = new Set() } = {}) {
 /** הערכת טוקנים לקובץ — להערכת העלות לפני סריקת ההיסטוריה */
 const ESTIMATED_DOC_TOKENS = 4000;
 
-module.exports = { classify, prepare, docxText, hashOf, ESTIMATED_DOC_TOKENS };
+module.exports = { classify, prepare, docxText, hashOf, ESTIMATED_DOC_TOKENS, MAX_TOTAL };

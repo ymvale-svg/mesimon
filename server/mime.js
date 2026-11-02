@@ -244,4 +244,12 @@ function parse(raw) {
   };
 }
 
-module.exports = { parse, decodeWords, parseAddress, htmlToText, stripQuoted };
+/**
+ * המייל בלי תוכן הקבצים — רק שם, סוג וגודל. למי שצריך מהקבצים רק את השמות:
+ * מייל עם קבצים מצורפים יכול לשקול עשרות MB, ואין סיבה להחזיק אותם בזיכרון.
+ */
+function slim(mail) {
+  return { ...mail, attachments: mail.attachments.map((a) => ({ filename: a.filename, mime: a.mime, size: a.data?.length ?? a.size ?? 0 })) };
+}
+
+module.exports = { parse, slim, decodeWords, parseAddress, htmlToText, stripQuoted };
