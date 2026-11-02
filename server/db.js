@@ -580,6 +580,26 @@ CREATE TABLE IF NOT EXISTS mail_connections (
 );
 
 /*
+ * חשבונות Google נוספים של אותו עובד — "תיבה נוספת". אותם שדות כמו החיבור
+ * הראשי (‎mail_connections‎); המזהה הוא מספר התיבה (‎box‎) בטבלאות שמסמנות
+ * מאיזו תיבה הגיע משהו. ‎0‎ — התיבה הראשית.
+ */
+CREATE TABLE IF NOT EXISTS mail_accounts (
+  id             INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id        INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  email          TEXT    NOT NULL DEFAULT '',
+  refresh_token  TEXT    NOT NULL DEFAULT '',   -- מוצפן
+  scope          TEXT    NOT NULL DEFAULT '',
+  state          TEXT    NOT NULL DEFAULT 'ok',
+  error          TEXT    NOT NULL DEFAULT '',
+  scan_running   INTEGER NOT NULL DEFAULT 0,
+  scan_progress  TEXT    NOT NULL DEFAULT '{}',
+  last_scan_at   TEXT,
+  created_at     TEXT    NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_mail_accounts_email ON mail_accounts(user_id, email);
+
+/*
  * כל מייל שנסרק, פעם אחת לכל תיבה. ‎header_id‎ הוא ה-Message-ID של המייל —
  * זהה בכל התיבות שקיבלו אותו — ועליו נשענת מניעת הכפילויות בין עובדים.
  */
@@ -1209,6 +1229,8 @@ const DEFAULT_SETTINGS = {
    * אותן לעצמה בזמן הפתיחה.
    */
   ai_model: 'claude-opus-5-5',
+  ai_bot_model: '',                        // הבוט וההקלטה — ריק = המודל הראשי
+  ai_fast_mode: true,                      // מצב מהיר לשיחה חיה (בוט, הקלטה)
   ai_email_attempts: 2,                    // כמה מיילים שלא נענו לפני מעבר לוואטסאפ
   ai_days_between_emails: 2,
   ai_whatsapp_enabled: true,
@@ -1559,6 +1581,12 @@ function migrate() {
   addColumn('wa_groups', 'participants_at', 'TEXT');
   // משימת AI — מי בהעתק (CC) של המייל: ‎[{name, email}]‎
   addColumn('ai_requests', 'cc', "TEXT NOT NULL DEFAULT '[]'");
+  // כמה תיבות לעובד: מאיזו תיבה הגיעה ההצעה / איש הקשר, ומאיזו יוצאת משימת AI (‎0‎ — הראשית)
+  addColumn('ai_suggestions', 'box', 'INTEGER NOT NULL DEFAULT 0');
+  addColumn('google_contacts', 'box', 'INTEGER NOT NULL DEFAULT 0');
+  addColumn('ai_requests', 'from_box', 'INTEGER NOT NULL DEFAULT 0');
+  // התקרה היומית של הסריקה — לכל תיבה בנפרד
+  addColumn('mail_scanned', 'box', 'INTEGER NOT NULL DEFAULT 0');
   // הרשימה האחרונה שהבוט שלח בפרטי — כדי ש"סיימתי את 2" יידע מה זה 2
   addColumn('wa_chats', 'last_list', "TEXT NOT NULL DEFAULT '[]'");
   // אלפון: טל' 2 ופקס (הטלפון הקיים הוא טל' 1)

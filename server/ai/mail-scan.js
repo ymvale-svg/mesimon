@@ -94,17 +94,18 @@ function senderMode(userId, email) {
   return D.get('SELECT mode FROM mail_trusted_senders WHERE user_id = ? AND email = ?', userId, String(email ?? '').toLowerCase())?.mode ?? null;
 }
 
-function record(userId, gmailId, headerId, outcome) {
+function record(userId, gmailId, headerId, outcome, box = 0) {
   D.run(
-    `INSERT INTO mail_scanned (user_id, gmail_id, header_id, outcome, scanned_at) VALUES (?,?,?,?,?)
+    `INSERT INTO mail_scanned (user_id, gmail_id, header_id, outcome, scanned_at, box) VALUES (?,?,?,?,?,?)
      ON CONFLICT(user_id, gmail_id) DO UPDATE SET outcome = excluded.outcome, scanned_at = excluded.scanned_at`,
-    userId, gmailId, headerId, outcome, D.nowIso()
+    userId, gmailId, headerId, outcome, D.nowIso(), box
   );
 }
 
-function scannedToday(userId) {
+/** כמה נסרקו היום בתיבה — התקרה היומית לכל תיבה בנפרד, כך שתיבה אחת לא "אוכלת" את השנייה */
+function scannedToday(userId, box = 0) {
   const since = startOfLocalDay(localDate().date).toISOString();
-  return D.get("SELECT COUNT(*) c FROM mail_scanned WHERE user_id = ? AND scanned_at >= ? AND outcome <> 'reply'", userId, since).c;
+  return D.get("SELECT COUNT(*) c FROM mail_scanned WHERE user_id = ? AND box = ? AND scanned_at >= ? AND outcome <> 'reply'", userId, box, since).c;
 }
 
 const shortDate = (d) => (d ? new Date(d).toLocaleDateString('he-IL', { timeZone: TZ }) : '');
@@ -170,8 +171,13 @@ const ANALYSIS_SCHEMA = {
   additionalProperties: false
 };
 
-async function analyze(user, mail) {
+async function analyze(user, mail, conn = null) {
   const users = orgUsers().filter((u) => u.id !== user.id);
+  /*
+   * הכתובת של התיבה שנסרקת — ולא רק כתובת המשתמש במשימון. בתיבה נוספת המייל
+   * נשלח לכתובת האחרת, ובלי זה ה-AI היה מחליט שהבקשה "לא מופנית לבעל התיבה".
+   */
+  const own = [...new Set([conn?.email, user.email, ...Gmail.emailsOf(user.id)].filter(Boolean).map((a) => a.toLowerCase()))];
   /*
    * "מצ"ב" — כשגוף המייל דל והעיקר בקובץ, ה-AI קורא גם את המסמך (עד שניים).
    * מייל ארוך עם קובץ נשען על הגוף: אין צורך לשלם על קריאת הקובץ.
@@ -181,7 +187,8 @@ async function analyze(user, mail) {
   const text = [
     `תאריך היום: ${localDate().date}`,
     `הארגון: ${D.getSetting('org_name', '')}`,
-    `בעל התיבה: ${user.full_name} <${user.email}>`,
+    `בעל התיבה: ${user.full_name} <${own[0]}>`,
+    own.length > 1 ? `כל הכתובות של בעל התיבה (מייל לכל אחת מהן — אליו): ${own.join(', ')}` : null,
     '',
     'העובדים בארגון (מזהה · שם · מייל · מחלקה):',
     ...users.map((u) => `${u.id} · ${u.full_name} · ${u.email} · ${u.department ?? ''}`),
@@ -305,10 +312,10 @@ async function routeReply(user, mail) {
 
 function insertSuggestion(user, meta, kind, data, { status = 'pending', taskId = null } = {}) {
   const r = D.run(
-    `INSERT INTO ai_suggestions (user_id, kind, status, gmail_id, header_id, from_name, from_email, subject, received_at, data, task_id, created_at, decided_at)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+    `INSERT INTO ai_suggestions (user_id, kind, status, gmail_id, header_id, from_name, from_email, subject, received_at, data, task_id, created_at, decided_at, box)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     user.id, kind, status, meta.gmailId, meta.headerId, meta.fromName, meta.fromEmail, meta.subject,
-    meta.receivedAt, JSON.stringify(data), taskId, D.nowIso(), status === 'pending' ? null : D.nowIso()
+    meta.receivedAt, JSON.stringify(data), taskId, D.nowIso(), status === 'pending' ? null : D.nowIso(), meta.box ?? 0
   );
   return Number(r.lastInsertRowid);
 }
@@ -328,7 +335,7 @@ const involvedIn = (userId, task) => task.created_by === userId || task.assignee
   || Boolean(D.get("SELECT 1 FROM task_assignees WHERE task_id = ? AND assignee_type = 'user' AND assignee_id = ?", task.id, userId));
 
 async function processMessage(user, conn, gmailId) {
-  const msg = await Gmail.raw(user.id, gmailId);
+  const msg = await Gmail.raw(Gmail.handle(user.id, conn.box ?? 0), gmailId);
   const mail = Mime.parse(msg.raw);
   const headerId = mail.messageId || `gmail:${gmailId}`;
   const meta = {
@@ -337,13 +344,15 @@ async function processMessage(user, conn, gmailId) {
     fromName: mail.from.name || mail.from.address,
     fromEmail: mail.from.address,
     subject: mail.subject.slice(0, 300),
-    receivedAt: (mail.date && !Number.isNaN(mail.date.getTime()) ? mail.date : msg.internalDate ?? new Date()).toISOString()
+    receivedAt: (mail.date && !Number.isNaN(mail.date.getTime()) ? mail.date : msg.internalDate ?? new Date()).toISOString(),
+    box: conn.box ?? 0
   };
-  const mine = new Set([conn.email, user.email].filter(Boolean).map((a) => a.toLowerCase()));
+  // כל הכתובות שלי — מייל שעובר ביני לבין עצמי (מתיבה לתיבה) אינו משימה
+  const mine = new Set([conn.email, user.email, ...Gmail.emailsOf(user.id)].filter(Boolean).map((a) => a.toLowerCase()));
 
-  if (!mail.from.address || mine.has(mail.from.address)) return record(user.id, gmailId, headerId, 'skipped'), 'skipped';
-  if (await routeReply(user, mail)) return record(user.id, gmailId, headerId, 'reply'), 'reply';
-  if (senderMode(user.id, mail.from.address) === 'ignore') return record(user.id, gmailId, headerId, 'skipped'), 'skipped';
+  if (!mail.from.address || mine.has(mail.from.address)) return record(user.id, gmailId, headerId, 'skipped', meta.box), 'skipped';
+  if (await routeReply(user, mail)) return record(user.id, gmailId, headerId, 'reply', meta.box), 'reply';
+  if (senderMode(user.id, mail.from.address) === 'ignore') return record(user.id, gmailId, headerId, 'skipped', meta.box), 'skipped';
 
   /*
    * מייל שעונה על משימה שפתחתי, או מעדכן אותה — הצעה "לסגור?" / "לעדכן?"
@@ -365,18 +374,18 @@ async function processMessage(user, conn, gmailId) {
     if (!involvedIn(user.id, existing)) {
       insertSuggestion(user, meta, 'duplicate', { ownerName: existing.owner_name, taskTitle: existing.title }, { taskId: existing.id });
     }
-    record(user.id, gmailId, headerId, 'duplicate');
+    record(user.id, gmailId, headerId, 'duplicate', meta.box);
     return 'duplicate';
   }
 
-  const result = await analyze(user, mail);
+  const result = await analyze(user, mail, conn);
 
   // הבקשה מופנית לעמית שמחובר בעצמו — היא תוצע לו, לא לי
   if (!result.forMe && result.addressedTo && !mine.has(result.addressedTo)) {
     const colleague = D.get("SELECT id FROM users WHERE lower(email) = ? AND status = 'active'", result.addressedTo);
-    if (colleague && Gmail.isConnected(colleague.id)) return record(user.id, gmailId, headerId, 'not_mine'), 'not_mine';
+    if (colleague && Gmail.isConnected(colleague.id)) return record(user.id, gmailId, headerId, 'not_mine', meta.box), 'not_mine';
   }
-  if (!result.tasks.length) return record(user.id, gmailId, headerId, 'skipped'), 'skipped';
+  if (!result.tasks.length) return record(user.id, gmailId, headerId, 'skipped', meta.box), 'skipped';
 
   // הוצע גם לעמית אחר שעוד לא החליט — נאמר, כדי שלא יטפלו בזה שניים
   const others = D.all(
@@ -426,7 +435,7 @@ async function processMessage(user, conn, gmailId) {
       insertSuggestion(user, meta, 'task', data);
     }
   }
-  record(user.id, gmailId, headerId, 'suggested');
+  record(user.id, gmailId, headerId, 'suggested', meta.box);
   return created ? 'auto' : 'suggested';
 }
 
@@ -434,34 +443,37 @@ async function processMessage(user, conn, gmailId) {
 // סריקה
 // ---------------------------------------------------------------------------
 
-function setProgress(userId, progress) {
-  D.run('UPDATE mail_connections SET scan_progress = ? WHERE user_id = ?', JSON.stringify(progress), userId);
+function setProgress(who, progress) {
+  Gmail.setConn(who, { scan_progress: JSON.stringify(progress) });
 }
 
 /**
- * סריקת התיבה בטווח. רצה ברקע: מייל אחד הוא קריאה ל-AI, ו-50 מיילים הם
- * דקות — הממשק מציג התקדמות ולא ממתין.
+ * סריקת תיבה אחת בטווח. ‎who‎ — הראשית (מספר המשתמש) או נוספת. רצה ברקע:
+ * מייל אחד הוא קריאה ל-AI, ו-50 מיילים הם דקות — הממשק מציג התקדמות ולא
+ * ממתין. התקרה היומית משותפת לכל התיבות של העובד.
  */
-async function runScan(userId, { from, to = null, trigger = 'manual' }) {
+async function runScan(who, { from, to = null, trigger = 'manual' }) {
+  const userId = Gmail.userOf(who);
   const user = userOf(userId);
-  const conn = Gmail.connectionOf(userId);
-  if (!user || !conn || conn.state !== 'ok') return null;
+  const conn = Gmail.connectionOf(who);
+  if (!user || !conn || conn.state !== 'ok' || !Gmail.has(who, 'mail')) return null;
   if (!Claude.isEnabled()) throw new Error('חיבור ה-AI אינו מוגדר בשרת');
 
-  const claimed = D.run('UPDATE mail_connections SET scan_running = 1 WHERE user_id = ? AND scan_running = 0', userId);
-  if (!claimed.changes) return null;
+  if (!Gmail.claimScan(who)) return null;
 
   const progress = { trigger, total: 0, done: 0, suggested: 0, auto: 0, skipped: 0, replies: 0, errors: 0, startedAt: D.nowIso(), from: from.toISOString(), to: to?.toISOString() ?? null };
-  setProgress(userId, progress);
+  setProgress(who, progress);
   try {
-    const budget = Math.max(0, Number(D.getSetting('ai_scan_daily_limit', 100)) - scannedToday(userId));
+    const limit = Number(D.getSetting('ai_scan_daily_limit', 100));
+    const budget = Math.max(0, limit - scannedToday(userId, Gmail.boxOf(who)));
+    progress.limit = limit;
     const q = ['is:unread', 'in:inbox', '-category:promotions', '-category:social', `after:${epoch(from)}`, to ? `before:${epoch(to)}` : null].filter(Boolean).join(' ');
-    const ids = (await Gmail.search(userId, q, { max: 300 }))
+    const ids = (await Gmail.search(who, q, { max: 300 }))
       .filter((id) => !D.get('SELECT 1 FROM mail_scanned WHERE user_id = ? AND gmail_id = ?', userId, id));
     const batch = ids.slice(0, budget);
     progress.total = batch.length;
     progress.capped = ids.length > batch.length;
-    setProgress(userId, progress);
+    setProgress(who, progress);
 
     for (let i = 0; i < batch.length; i += CONCURRENCY) {
       await Promise.all(batch.slice(i, i + CONCURRENCY).map(async (id) => {
@@ -479,39 +491,49 @@ async function runScan(userId, { from, to = null, trigger = 'manual' }) {
         }
         progress.done++;
       }));
-      setProgress(userId, progress);
+      setProgress(who, progress);
     }
+  } catch (err) {
+    // החיפוש עצמו נכשל (חיבור, רשת) — נרשם, כדי שהממשק יאמר "נכשלה" ולא "אין מיילים"
+    progress.failed = err.message.slice(0, 200);
+    throw err;
   } finally {
     progress.finishedAt = D.nowIso();
-    D.run('UPDATE mail_connections SET scan_running = 0, scan_progress = ?, last_scan_at = ? WHERE user_id = ?',
-      JSON.stringify(progress), D.nowIso(), userId);
+    Gmail.setConn(who, { scan_running: 0, scan_progress: JSON.stringify(progress), last_scan_at: D.nowIso() });
   }
 
   const pending = D.get("SELECT COUNT(*) c FROM ai_suggestions WHERE user_id = ? AND status = 'pending'", userId).c;
   if (progress.suggested || progress.auto) {
+    const extra = Gmail.boxOf(who) ? ` (${conn.email})` : '';
     D.notify({
       targetType: 'user', targetId: userId, kind: 'ai',
-      title: `✨ מהמייל: ${pending} משימות ממתינות לאישורך`,
+      title: `✨ מהמייל${extra}: ${pending} משימות ממתינות לאישורך`,
       body: progress.auto ? `ועוד ${progress.auto} נוספו לבד משולחים מהימנים.` : 'אישור, עריכה או דחייה — בדף הבית.'
     });
   }
   return progress;
 }
 
+/** "סרוק עכשיו" — כל התיבות של העובד, אחת אחרי השנייה, ברקע */
 function startScan(userId, range) {
   const { from, to } = rangeOf(range);
-  const conn = Gmail.connectionOf(userId);
-  if (!conn || conn.state !== 'ok') throw new Error('תיבת ה-Gmail אינה מחוברת');
-  if (conn.scan_running) throw new Error('סריקה כבר רצה');
-  runScan(userId, { from, to, trigger: 'manual' }).catch((err) => {
-    D.run('UPDATE mail_connections SET scan_running = 0, error = ? WHERE user_id = ?', err.message, userId);
-    console.error('[משימון] סריקת התיבה נכשלה:', err.message);
-  });
+  const boxes = Gmail.boxesOf(userId, 'mail');
+  if (!boxes.length) throw new Error('תיבת ה-Gmail אינה מחוברת');
+  if (boxes.some((who) => Gmail.connectionOf(who)?.scan_running)) throw new Error('סריקה כבר רצה');
+  (async () => {
+    for (const who of boxes) {
+      await runScan(who, { from, to, trigger: 'manual' }).catch((err) => {
+        Gmail.setConn(who, { scan_running: 0, error: err.message });
+        console.error('[משימון] סריקת התיבה נכשלה:', err.message);
+      });
+    }
+  })();
 }
 
 /** סריקה שנתקעה (השרת הופעל מחדש באמצעה) משתחררת בעלייה */
 function releaseStuck() {
   D.run('UPDATE mail_connections SET scan_running = 0 WHERE scan_running = 1');
+  D.run('UPDATE mail_accounts SET scan_running = 0 WHERE scan_running = 1');
 }
 
 // ---------------------------------------------------------------------------
@@ -550,7 +572,8 @@ async function morningRun() {
       .catch((err) => console.error('[משימון] עדכון הבוקר של זיכרון המייל והידע הארגוני נכשל:', err.message));
 
     if (!D.getSetting('ai_mail_scan_enabled', true) || !Claude.isEnabled()) return;
-    for (const userId of Gmail.connectedUsers()) {
+    // כל תיבה של כל עובד — הראשית והנוספות
+    for (const userId of Gmail.allBoxes('mail')) {
       const conn = Gmail.connectionOf(userId);
       // מהסריקה הקודמת, ולא יותר משבוע אחורה — מי שחזר מחופשה לא יקבל חודש של הצעות בבת אחת
       const last = conn.last_scan_at ? new Date(conn.last_scan_at) : rangeOf({ range: 'yesterday' }).from;
@@ -593,17 +616,19 @@ const replyChecked = new Map(); // suggestionId → זמן הבדיקה האחר
 
 async function dropAnswered() {
   const rows = D.all(
-    `SELECT s.* FROM ai_suggestions s JOIN mail_connections c ON c.user_id = s.user_id AND c.state = 'ok'
+    `SELECT s.* FROM ai_suggestions s
       WHERE s.status = 'pending' AND s.kind = 'task' AND s.gmail_id <> ''
         AND COALESCE(json_extract(s.data, '$.source'), 'email') = 'email'
       ORDER BY s.id DESC LIMIT 200`
   ).filter((s) => Date.now() - (replyChecked.get(s.id) ?? 0) > REPLY_CHECK_MS).slice(0, 30);
   for (const s of rows) {
     replyChecked.set(s.id, Date.now());
-    if (!Gmail.has(s.user_id, 'mail')) continue;
+    // ההצעה מתיבה מסוימת — השרשור נבדק באותה תיבה
+    const who = Gmail.handle(s.user_id, s.box ?? 0);
+    if (!Gmail.has(who, 'mail')) continue;
     try {
       const received = new Date(s.received_at ?? s.created_at).getTime();
-      const thread = await Gmail.threadOf(s.user_id, s.gmail_id);
+      const thread = await Gmail.threadOf(who, s.gmail_id);
       const answered = thread.find((m) => m.id !== s.gmail_id && m.labels.includes('SENT') && m.at && m.at.getTime() > received - 60000);
       if (!answered) continue;
       D.run("UPDATE ai_suggestions SET status = 'replied', decided_at = ? WHERE id = ? AND status = 'pending'", D.nowIso(), s.id);
@@ -619,7 +644,7 @@ async function pollMailbox() {
   await dropAnswered().catch((err) => console.error('[משימון] בדיקת הצעות שנענו נכשלה:', err.message));
   const cutoff = new Date(Date.now() - CONTACT_CHECK_MINUTES * 60000).toISOString();
   const open = D.all(
-    `SELECT r.* FROM ai_requests r JOIN mail_connections c ON c.user_id = r.owner_id AND c.state = 'ok'
+    `SELECT r.* FROM ai_requests r JOIN mail_connections c ON c.user_id = r.owner_id
       WHERE r.contact_email <> '' AND r.state IN ('waiting','needs_user','stalled','paused')
         AND NOT (r.contact_type = 'user' AND r.contact_ref_id IS NOT NULL)
         AND (r.contact_checked_at IS NULL OR r.contact_checked_at < ?)
@@ -628,12 +653,15 @@ async function pollMailbox() {
   );
   for (const req of open) {
     D.run('UPDATE ai_requests SET contact_checked_at = ? WHERE id = ?', D.nowIso(), req.id);
+    // המייל יצא מתיבה מסוימת — התשובות חוזרות אליה
+    const box = Gmail.handle(req.owner_id, req.from_box ?? 0);
+    if (!Gmail.has(box, 'mail')) continue;
     const since = new Date(req.last_outbound_at ?? req.created_at);
     const after = epoch(new Date(since.getTime() - 60000));
     try {
       // תשובה ישירה
-      for (const id of await Gmail.search(req.owner_id, `from:${req.contact_email} after:${after}`, { max: 5 })) {
-        const mail = Mime.parse((await Gmail.raw(req.owner_id, id)).raw);
+      for (const id of await Gmail.search(box, `from:${req.contact_email} after:${after}`, { max: 5 })) {
+        const mail = Mime.parse((await Gmail.raw(box, id)).raw);
         if (mail.messageId && D.get("SELECT 1 FROM ai_messages WHERE message_id = ? AND direction = 'in'", mail.messageId)) continue;
         if (mail.date && mail.date < since) continue;
         const fresh = AiTasks.requestById(req.id);
@@ -646,11 +674,11 @@ async function pollMailbox() {
       // מייל שהמשתמש שלח בעצמו
       const fresh = AiTasks.requestById(req.id);
       if (!['waiting', 'stalled', 'paused'].includes(fresh.state)) continue;
-      const sent = await Gmail.search(req.owner_id, `in:sent to:${req.contact_email} after:${after}`, { max: 3 });
+      const sent = await Gmail.search(box, `in:sent to:${req.contact_email} after:${after}`, { max: 3 });
       for (const id of sent) {
         // מה שמשימון עצמו שלח מהתיבה — תזכורת, תודה — אינו "כתבת בעצמך"
         if (D.get('SELECT 1 FROM ai_messages WHERE gmail_id = ?', id)) continue;
-        const msg = await Gmail.raw(req.owner_id, id);
+        const msg = await Gmail.raw(box, id);
         const mail = Mime.parse(msg.raw);
         if (mail.messageId && D.get('SELECT 1 FROM ai_messages WHERE message_id = ?', mail.messageId)) continue;
         if (AiTasks.contactDetected(fresh, { channel: 'email', text: mail.newText || mail.text, at: mail.date ?? msg.internalDate ?? new Date(), ref: mail.messageId })) break;
@@ -924,6 +952,8 @@ const senders = (userId) => D.all('SELECT email, mode, created_at FROM mail_trus
 
 function shape(sug, conn) {
   const data = parseJson(sug.data, {});
+  // ההצעה מתיבה נוספת — הקישור והתווית לפי אותה תיבה
+  if (sug.box) conn = Gmail.connectionOf(Gmail.handle(sug.user_id, sug.box)) ?? null;
   return {
     id: sug.id,
     kind: sug.kind,
@@ -932,6 +962,8 @@ function shape(sug, conn) {
     subject: sug.subject,
     receivedAt: sug.received_at,
     link: conn?.email && sug.gmail_id ? Gmail.webLink(conn.email, sug.gmail_id) : null,
+    // מאיזו תיבה — רק כשיש לעובד יותר מאחת
+    mailbox: conn?.email && Gmail.boxesOf(sug.user_id, null).length > 1 ? conn.email : null,
     // לזיהוי מייל או הודעה שהם גם הצעה וגם תובנה — מוצגים פעם אחת, כהצעה
     gmailId: sug.gmail_id || null,
     headerId: sug.header_id || null,
@@ -958,14 +990,32 @@ function listFor(userId) {
 /** הקישור למייל המקורי — רק לבעל התיבה שממנה נוצרה המשימה */
 function sourceLink(task, viewerId) {
   if (task.source !== 'email' || task.source_user_id !== viewerId) return null;
-  const conn = Gmail.connectionOf(viewerId);
-  const sug = D.get('SELECT gmail_id FROM ai_suggestions WHERE task_id = ? AND user_id = ? ORDER BY id DESC LIMIT 1', task.id, viewerId);
+  const sug = D.get('SELECT gmail_id, box FROM ai_suggestions WHERE task_id = ? AND user_id = ? ORDER BY id DESC LIMIT 1', task.id, viewerId);
+  const conn = Gmail.connectionOf(Gmail.handle(viewerId, sug?.box ?? 0));
   return conn?.email && sug?.gmail_id ? Gmail.webLink(conn.email, sug.gmail_id) : null;
+}
+
+/*
+ * תיקון חד-פעמי: לפני שהסריקה ידעה את הכתובות של התיבות הנוספות, מיילים
+ * שנשלחו לתיבה נוספת סומנו לפעמים "לא בשבילי" ודולגו — ומייל שנסרק אינו
+ * נסרק שוב. אצל מי שיש לו תיבה נוספת, מה שדולג בשבוע האחרון נמחק מהרישום,
+ * וייסרק שוב בסריקה הבאה.
+ */
+function rescanSkippedOnce() {
+  const KEY = 'mail_rescan_multibox_v1';
+  if (D.getSetting(KEY, false)) return;
+  D.run(
+    `DELETE FROM mail_scanned WHERE outcome IN ('skipped', 'not_mine') AND scanned_at >= ?
+       AND user_id IN (SELECT DISTINCT user_id FROM mail_accounts)`,
+    new Date(Date.now() - 7 * DAY).toISOString()
+  );
+  D.setSetting(KEY, true);
 }
 
 function init({ createTask }) {
   hooks.createTask = createTask;
   releaseStuck();
+  rescanSkippedOnce();
   Memory.init();
   AiTasks.setHooks({
     pollMailbox,

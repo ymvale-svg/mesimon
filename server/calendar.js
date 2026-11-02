@@ -6,7 +6,9 @@
  * ההרשאה כוללת כתיבה, כדי שפיצ'ר עתידי שכותב ליומן לא יחייב חיבור מחדש —
  * אבל כאן רק קוראים. שום דבר מהיומן אינו נשמר במסד: מטמון קצר בזיכרון בלבד.
  *
- * אילו יומנים: הראשי, ומה שהמשתמש סימן בהגדרות (‎user_prefs.todayCalendars‎).
+ * אילו יומנים: הראשי, ומה שהמשתמש סימן בהגדרות (‎user_prefs.todayCalendars‎) —
+ * בחשבון הראשי. מכל חשבון Google נוסף של העובד — היומן הראשי שלו. אותה פגישה
+ * בשני החשבונות (הזמנה לשתי הכתובות) — מוצגת פעם אחת.
  */
 const D = require('./db');
 const Gmail = require('./gmail');
@@ -16,7 +18,8 @@ const API = 'https://www.googleapis.com/calendar/v3';
 const CACHE_MS = 5 * 60 * 1000;
 const cache = new Map(); // `${userId}:${date}` → { at, value }
 
-const isConnected = (userId) => Gmail.has(userId, 'calendar');
+/** יש לו יומן בלפחות אחת מהתיבות */
+const isConnected = (userId) => Gmail.boxesOf(userId, 'calendar').length > 0;
 
 /** היומנים שנבחרו ל-Today. ברירת מחדל — הראשי בלבד */
 function selectedCalendars(userId) {
@@ -46,7 +49,8 @@ function shapeEvent(e, calendar) {
     link: safeLink(e.htmlLink),
     declined: self?.responseStatus === 'declined',
     // נוצר על ידי משימון — מסומן לפיצ'רים שכותבים ליומן
-    mesimon: Boolean(e.extendedProperties?.private?.mesimon)
+    mesimon: Boolean(e.extendedProperties?.private?.mesimon),
+    uid: e.iCalUID ?? e.id
   };
 }
 
@@ -68,16 +72,25 @@ async function eventsForDay(userId, dateStr = W.todayIL(), { fresh = false } = {
 
   const events = [];
   const errors = [];
-  for (const id of selectedCalendars(userId)) {
+  // היומנים שנבחרו בחשבון הראשי, והיומן הראשי של כל חשבון נוסף
+  const sources = [
+    ...(Gmail.has(userId, 'calendar') ? selectedCalendars(userId).map((id) => ({ who: userId, id, label: null })) : []),
+    ...Gmail.boxesOf(userId, 'calendar').filter((who) => Gmail.boxOf(who))
+      .map((who) => ({ who, id: 'primary', label: Gmail.connectionOf(who)?.email ?? '' }))
+  ];
+  const seen = new Set();
+  for (const { who, id, label } of sources) {
     try {
-      const data = await Gmail.googleCall(userId, `${API}/calendars/${encodeURIComponent(id)}/events`, {
+      const data = await Gmail.googleCall(who, `${API}/calendars/${encodeURIComponent(id)}/events`, {
         timeMin, timeMax, singleEvents: 'true', orderBy: 'startTime', maxResults: 100, timeZone: W.TZ
       });
-      const calendar = { id, primary: id === 'primary', name: names[id] ?? '' };
+      const calendar = label ? { id, primary: false, name: label } : { id, primary: id === 'primary', name: names[id] ?? '' };
       for (const e of data.items ?? []) {
         if (e.status === 'cancelled') continue;
         const ev = shapeEvent(e, calendar);
-        if (!ev.declined) events.push(ev);
+        if (ev.declined || seen.has(`${ev.uid}|${ev.start}`)) continue;
+        seen.add(`${ev.uid}|${ev.start}`);
+        events.push(ev);
       }
     } catch (err) {
       errors.push(err.message);

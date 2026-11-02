@@ -90,16 +90,22 @@ function register(router, h) {
 
   /**
    * חיפוש נמען — מאחד את המקורות של משימון (עובדים, ספקים, נמענים קודמים)
-   * עם אנשי הקשר של Google (שמורים, ספריית הארגון, ומי שהתכתבתי איתו ולא
-   * שמרתי). אותו אדם מופיע פעם אחת: לפי מייל או טלפון, והמקור של משימון
-   * גובר — לספק או לעובד יש משמעות במשימון. טלפון שחסר לספק נלקח מ-Google.
+   * עם אנשי הקשר של Google ועם האלפון הארגוני. אותו אדם מופיע פעם אחת: לפי
+   * מייל או טלפון.
    *
+   * הסדר: אנשי הקשר של Google (שמורים וספריית הארגון) ← עובדים, ספקים
+   * ונמענים קודמים במשימון ← האלפון הארגוני ← מי שהתכתבתי איתו ב-Gmail ולא
+   * שמרתי. איש קשר מ-Google שהוא עובד או ספק במשימון — נשאר עם המשמעות
+   * שלו במשימון (עובד / ספק), והטלפון שחסר לספק נלקח מ-Google.
+   *
+   * ‎only‎ — 'phonebook' (רק האלפון: "תביא לי מהאלפון…") או 'google' (רק Google).
    * ‎unsaved‎ — לא שמור באנשי הקשר של Google, ולכן מוצע "⭐ שמור".
    */
-  function searchContacts(actor, q) {
+  function searchContacts(actor, q, { only = null } = {}) {
     const { tokens, digits } = GContacts.matcher(q);
     const canSave = Gmail.has(actor.id, 'contacts');
-    const local = contactsFor(actor).filter((c) => {
+    const all = contactsFor(actor);
+    const local = all.filter((c) => {
       if (!tokens.length && !digits) return c.type !== 'user';
       const hay = GContacts.fold([c.name, c.email].join(' '));
       if (digits.length >= 3 && GContacts.phoneKey(c.phone).includes(digits)) return true;
@@ -117,22 +123,66 @@ function register(router, h) {
       keys.forEach((k) => seen.add(k));
       out.push(entry);
     };
+    // ספקים במשימון לפי מייל וטלפון — כדי שאיש קשר מ-Google שהוא ספק יישאר ספק
+    const vendorByKey = new Map();
+    for (const c of all.filter((x) => x.type === 'vendor')) for (const k of keysOf([c.email].filter(Boolean), [c.phone].filter(Boolean))) vendorByKey.set(k, c);
 
-    // האלפון הארגוני ראשון: מי שהוזן שם הוזן בשביל זה בדיוק
-    if (q) {
+    const addGoogle = (g) => {
+      // עובד בארגון שנמצא בספריית Google — מופיע כעובד במשימון
+      const colleague = g.emails.map((e) => D.get("SELECT id, full_name FROM users WHERE lower(email) = ? AND status = 'active'", e.value)).find(Boolean);
+      if (colleague && colleague.id === actor.id) return;
+      const keys = keysOf(g.emails.map((e) => e.value), g.phones.map((p) => p.value));
+      const vendor = colleague ? null : keys.map((k) => vendorByKey.get(k)).find(Boolean);
+      add({
+        type: colleague ? 'user' : vendor ? 'vendor' : 'external',
+        refId: colleague?.id ?? vendor?.refId ?? null,
+        source: g.source,
+        resourceName: g.resourceName,
+        name: colleague?.full_name ?? vendor?.name ?? g.name,
+        email: vendor?.email || g.emails[0]?.value || '',
+        phone: vendor?.phone || g.phones[0]?.value || '',
+        emails: g.emails, phones: g.phones, organization: g.organization, title: g.title,
+        unsaved: canSave && g.source === 'other'
+      }, keys);
+    };
+
+    const google = only === 'phonebook' ? [] : GContacts.search(actor.id, q, 30);
+
+    // 1. אנשי הקשר של Google — השמורים וספריית הארגון
+    for (const g of google.filter((x) => x.source !== 'other')) addGoogle(g);
+
+    // 2. משימון: עובדים, ספקים ונמענים קודמים
+    if (!only) {
+      for (const c of local.slice(0, 30)) {
+        const g = GContacts.lookup(actor.id, { email: c.email, phone: c.phone });
+        const phone = c.phone || g?.phones[0]?.value || '';
+        add({
+          type: c.type, refId: c.refId, source: c.recent ? 'recent' : c.type,
+          name: c.name, email: c.email ?? '', phone,
+          emails: c.email ? [{ value: c.email, label: '' }] : [],
+          phones: phone ? [{ value: phone, label: '' }] : [],
+          organization: '',
+          unsaved: canSave && c.type !== 'user' && !GContacts.isSaved(actor.id, { email: c.email, phone })
+        }, keysOf([c.email].filter(Boolean), [phone].filter(Boolean)));
+      }
+    }
+
+    // 3. האלפון הארגוני
+    if (q && only !== 'google') {
       for (const e of Phonebook.search(q, { limit: 20 })) {
         /*
          * עובדים וספקים נמצאים באלפון, אך כאן הם מגיעים מהמקור שלהם, עם
          * המשמעות שלהם במשימון (‎contactsFor‎). ספק נשאר מהאלפון רק למי שאינו
-         * רואה ספקים — אצלו הוא איש קשר חיצוני רגיל.
+         * רואה ספקים — אצלו הוא איש קשר חיצוני רגיל. בחיפוש באלפון בלבד —
+         * כל הרשומות.
          */
-        if (e.kind === 'user') continue;
-        if (e.kind === 'vendor' && P.may(actor, 'view_vendor_boards')) continue;
-        const colleague = e.email ? D.get("SELECT id FROM users WHERE lower(email) = ? AND status = 'active'", e.email) : null;
+        if (!only && e.kind === 'user') continue;
+        if (!only && e.kind === 'vendor' && P.may(actor, 'view_vendor_boards')) continue;
+        const colleague = !only && e.email ? D.get("SELECT id FROM users WHERE lower(email) = ? AND status = 'active'", e.email) : null;
         if (colleague) continue;  // עובד — מופיע כעובד, עם המשמעות שלו במשימון
         const two = e.phone && e.phone2;
         add({
-          type: 'external', refId: null, source: 'phonebook',
+          type: e.kind === 'user' ? 'user' : 'external', refId: e.kind === 'user' ? Number(String(e.id).replace(/\D/g, '')) || null : null, source: 'phonebook',
           name: e.name, email: e.email, phone: e.phone || e.phone2,
           emails: e.email ? [{ value: e.email, label: '' }] : [],
           phones: [[e.phone, two ? "טל' 1" : ''], [e.phone2, "טל' 2"]].filter(([v]) => v).map(([value, label]) => ({ value, label })),
@@ -142,30 +192,9 @@ function register(router, h) {
       }
     }
 
-    for (const c of local.slice(0, 30)) {
-      const g = GContacts.lookup(actor.id, { email: c.email, phone: c.phone });
-      const phone = c.phone || g?.phones[0]?.value || '';
-      add({
-        type: c.type, refId: c.refId, source: c.recent ? 'recent' : c.type,
-        name: c.name, email: c.email ?? '', phone,
-        emails: c.email ? [{ value: c.email, label: '' }] : [],
-        phones: phone ? [{ value: phone, label: '' }] : [],
-        organization: '',
-        unsaved: canSave && c.type !== 'user' && !GContacts.isSaved(actor.id, { email: c.email, phone })
-      }, keysOf([c.email].filter(Boolean), [phone].filter(Boolean)));
-    }
-    for (const g of GContacts.search(actor.id, q, 30)) {
-      // עובד בארגון שנמצא בספריית Google — כבר מופיע כעובד במשימון
-      const colleague = g.emails.map((e) => D.get("SELECT id, full_name FROM users WHERE lower(email) = ? AND status = 'active'", e.value)).find(Boolean);
-      if (colleague && colleague.id === actor.id) continue;
-      add({
-        type: colleague ? 'user' : 'external', refId: colleague?.id ?? null, source: g.source,
-        resourceName: g.resourceName,
-        name: colleague?.full_name ?? g.name, email: g.emails[0]?.value ?? '', phone: g.phones[0]?.value ?? '',
-        emails: g.emails, phones: g.phones, organization: g.organization, title: g.title,
-        unsaved: canSave && g.source === 'other'
-      }, keysOf(g.emails.map((e) => e.value), g.phones.map((p) => p.value)));
-    }
+    // 4. מי שהתכתבתי איתו ב-Gmail ולא שמרתי — בסוף
+    for (const g of google.filter((x) => x.source === 'other')) addGoogle(g);
+
     /*
      * ‎mobile‎ — הנייד (05X) מבין המספרים, לכל מקור. שדה וואטסאפ מתמלא רק
      * ממנו: טלפון משרד או פקס אינם מקבלים וואטסאפ, ועדיף שדה ריק משליחה
@@ -229,6 +258,8 @@ function register(router, h) {
       mail: Gmail.canSend(actor.id),
       inbox: Gmail.isConnected(actor.id),
       gmail: Gmail.publicStatus(actor.id),
+      // יותר מתיבה אחת עם שליחה — באשף מופיע "שליחה מ…"
+      sendBoxes: Gmail.sendBoxes(actor.id),
       gmailEnabled: Gmail.isEnabled(),
       whatsapp: WhatsApp.publicChannel(actor.id),
       defaults: AiTasks.defaultPolicy(actor.id),
@@ -286,6 +317,8 @@ function register(router, h) {
      */
     const waReady = WhatsApp.isReady(actor.id);
     const channel = b.channel === 'whatsapp' && waReady ? 'whatsapp' : 'email';
+    // מאיזו תיבה יוצא המייל — ‎0‎ הראשית, או תיבה נוספת של המשתמש
+    const fromBox = Number.isInteger(Number(b.fromBox)) && Number(b.fromBox) > 0 ? Number(b.fromBox) : 0;
     const policy = { ...(b.policy ?? {}), ...(waReady ? {} : { whatsapp: false }) };
     const contact = {
       name: String(b.contact?.name ?? '').trim(),
@@ -325,7 +358,8 @@ function register(router, h) {
     } else if (channel === 'email') {
       if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(contact.email)) throw badRequest('נדרשת כתובת מייל תקינה לנמען');
       if (!String(draft.subject ?? '').trim()) throw badRequest('נדרש נושא למייל');
-      if (!Gmail.canSend(actor.id)) throw badRequest(`כדי לשלוח מייל צריך לחבר את תיבת ה-Gmail שלך ("החשבון שלי ← Gmail ועוזר ה-AI").${waReady ? ' אפשר גם לפתוח בוואטסאפ' : ''}`);
+      if (fromBox && !Gmail.canSend(Gmail.handle(actor.id, fromBox))) throw badRequest('אי אפשר לשלוח מהתיבה שנבחרה — היא לא מחוברת עם הרשאת שליחה');
+      if (!Gmail.canSend(Gmail.handle(actor.id, fromBox))) throw badRequest(`כדי לשלוח מייל צריך לחבר את תיבת ה-Gmail שלך ("החשבון שלי ← Gmail ועוזר ה-AI").${waReady ? ' אפשר גם לפתוח בוואטסאפ' : ''}`);
     } else {
       if (!WhatsApp.normalizePhone(contact.phone)) throw badRequest('נדרש מספר טלפון תקין לנמען');
       if (!WhatsApp.isReady(actor.id)) throw badRequest('הוואטסאפ שלך אינו מחובר. מחברים אותו מ"החשבון שלי"');
@@ -370,7 +404,7 @@ function register(router, h) {
     let sendError = null;
     try {
       const owner = D.get('SELECT id, full_name, email FROM users WHERE id = ?', actor.id);
-      await AiTasks.launch({ taskId, owner, instruction, draft, contact, cc, policy, channel });
+      await AiTasks.launch({ taskId, owner, instruction, draft, contact, cc, policy, channel, fromBox });
     } catch (err) {
       // המשימה והטיוטה נשמרו; אפשר לנסות לשלוח שוב מהכרטיס אחרי תיקון התקלה
       sendError = err.message;
@@ -544,6 +578,8 @@ function register(router, h) {
     scanTime: D.getSetting('ai_scan_time', '07:00'),
     dailyLimit: Number(D.getSetting('ai_scan_daily_limit', 100)),
     connection: Gmail.publicStatus(actor.id),
+    // התיבות שאפשר לשלוח מהן — לבחירת "שליחה מ…" במשימת AI
+    sendBoxes: Gmail.sendBoxes(actor.id),
     contacts: GContacts.status(actor.id),
     calendar: { connected: Calendar.isConnected(actor.id) },
     senders: MailScan.senders(actor.id),
@@ -570,8 +606,20 @@ function register(router, h) {
     const actor = userOnly(ctx);
     if (!Gmail.isEnabled()) throw badRequest('חיבור Google אינו מוגדר בשרת');
     const user = D.get('SELECT id, email FROM users WHERE id = ?', actor.id);
-    res.writeHead(302, { location: Gmail.authorizeUrl(req, user), 'cache-control': 'no-store' });
+    // ‎?add=1‎ — חשבון Google נוסף (רק למי שכבר חיבר את הראשי)
+    const add = parseUrl(req).searchParams.get('add') === '1' && Boolean(Gmail.connectionOf(actor.id));
+    res.writeHead(302, { location: Gmail.authorizeUrl(req, user, { add }), 'cache-control': 'no-store' });
     res.end();
+  });
+
+  /** ניתוק תיבה נוספת אחת — הראשית נשארת */
+  router.delete('/api/me/gmail/accounts/:box', async (req, res, ctx) => {
+    const actor = userOnly(ctx);
+    const box = Number(ctx.params.box);
+    if (!Number.isInteger(box) || box <= 0 || !Gmail.connectionOf(Gmail.handle(actor.id, box))) throw notFound('התיבה לא נמצאה');
+    await Gmail.disconnect(Gmail.handle(actor.id, box));
+    Calendar.forget(actor.id);
+    sendJson(res, 200, gmailInfo(actor));
   });
 
   router.delete('/api/me/gmail', async (req, res, ctx) => {

@@ -21,7 +21,19 @@ const apiKey = () => process.env.ANTHROPIC_API_KEY ?? '';
 const isEnabled = () => Boolean(apiKey());
 const model = () => String(D.getSetting('ai_model', DEFAULT_MODEL) || DEFAULT_MODEL).trim();
 
-const status = () => ({ enabled: isEnabled(), model: model() });
+/*
+ * שיחה חיה (הבוט, ההקלטה) — מישהו מחכה לתשובה. מודל משלה (‎ai_bot_model‎,
+ * ריק = המודל הראשי), ומצב מהיר (‎ai_fast_mode‎): אותו מודל, פלט מהיר עד פי
+ * 2.5, במחיר כפול. רק במודלים שתומכים בו; כשהמצב המהיר אינו זמין (מכסה,
+ * מודל אחר) — אותה בקשה בלעדיו, כך שהמהירות לעולם אינה עולה בתשובה.
+ */
+const FAST_MODELS = new Set(['claude-opus-5-5', 'claude-opus-5', 'claude-opus-4-8']);
+const botModel = () => String(D.getSetting('ai_bot_model', '') || '').trim() || model();
+const fastMode = () => Boolean(D.getSetting('ai_fast_mode', true));
+
+const withFallback = (m) => /^claude-(opus|fable|sonnet-5-5)/.test(m);
+
+const status = () => ({ enabled: isEnabled(), model: model(), botModel: botModel(), fast: fastMode() });
 
 class AiError extends Error {}
 
@@ -31,18 +43,27 @@ class AiError extends Error {}
  * @param {Array}  opts.content          בלוקי התוכן של הודעת המשתמש
  * @param {object} opts.schema           סכמת JSON לתשובה
  * @param {string} [opts.effort]         low | medium | high
- * @param {string} [opts.model]          מודל אחר מברירת המחדל — לעבודה רבה וזולה (זיכרון המייל)
+ * @param {boolean} [opts.live]          מישהו מחכה לתשובה — מודל הבוט ומצב מהיר
+ * @param {string} [opts.model]          מודל אחר מברירת המחדל — לעבודה רבה וזולה (זיכרון המייל, ניתוב)
  * @param {(usage: object) => void} [opts.onUsage]  כמה טוקנים נצרכו — למעקב עלות
  * @returns {Promise<object>}            התשובה כאובייקט שעבר את הסכמה
  */
-async function json({ system, content, schema, effort = 'medium', model: modelId = null, onUsage = null }) {
+async function json({ system, content, schema, effort = 'medium', live = false, model: modelId = null, onUsage = null }) {
   if (!isEnabled()) throw new AiError('חיבור ה-AI אינו מוגדר בשרת (ANTHROPIC_API_KEY)');
+  const m = String(modelId || (live ? botModel() : model())).trim();
+  const fast = live && !modelId && fastMode() && FAST_MODELS.has(m);
+  try {
+    return await request({ system, content, schema, effort, model: m, fast, onUsage });
+  } catch (err) {
+    // המצב המהיר נדחה (מכסה נפרדת, חשבון בלי גישה) — אותה בקשה במהירות רגילה
+    if (fast && err.status && err.status < 500) return request({ system, content, schema, effort, model: m, fast: false, onUsage });
+    throw err;
+  }
+}
 
-  const chosen = String(modelId || model()).trim();
-  // ל-Haiku אין מודל חלופי בצד השרת — הפרמטר היה נדחה
-  const withFallback = !/haiku/i.test(chosen);
+async function request({ system, content, schema, effort, model: modelId, fast, onUsage = null }) {
   const body = {
-    model: chosen,
+    model: modelId,
     max_tokens: 16000,
     // ההנחיות זהות בכל קריאה — מטמון הפרומפט חוסך את רובן מהקריאה השנייה
     system: [{ type: 'text', text: system, cache_control: { type: 'ephemeral' } }],
@@ -51,10 +72,12 @@ async function json({ system, content, schema, effort = 'medium', model: modelId
       effort,
       format: { type: 'json_schema', schema }
     },
-    // בקשה שנדחתה על ידי מסנני הבטיחות עוברת למודל חלופי בצד השרת
-    ...(withFallback ? { fallbacks: 'default' } : {})
+    // בקשה שנדחתה על ידי מסנני הבטיחות עוברת למודל חלופי בצד השרת (לא ב-Haiku)
+    ...(withFallback(modelId) ? { fallbacks: 'default' } : {}),
+    ...(fast ? { speed: 'fast' } : {})
   };
 
+  const betas = [withFallback(modelId) ? 'server-side-fallback-2026-07-01' : null, fast ? 'fast-mode-2026-02-01' : null].filter(Boolean);
   let res;
   try {
     res = await fetch(API_URL, {
@@ -63,7 +86,7 @@ async function json({ system, content, schema, effort = 'medium', model: modelId
         'content-type': 'application/json',
         'x-api-key': apiKey(),
         'anthropic-version': '2023-06-01',
-        ...(withFallback ? { 'anthropic-beta': 'server-side-fallback-2026-07-01' } : {})
+        ...(betas.length ? { 'anthropic-beta': betas.join(',') } : {})
       },
       body: JSON.stringify(body),
       signal: AbortSignal.timeout(180000)
@@ -81,6 +104,7 @@ async function json({ system, content, schema, effort = 'medium', model: modelId
     // 429 ו-5xx הם תקלה זמנית — המנוע ינסה שוב בסבב הבא
     const err = new AiError(`שירות ה-AI החזיר שגיאה ${res.status}: ${msg}`);
     err.retryable = res.status === 429 || res.status >= 500;
+    err.status = res.status;
     throw err;
   }
 
@@ -122,7 +146,7 @@ async function json({ system, content, schema, effort = 'medium', model: modelId
 async function withTools({ system, content, tools, onTool, effort = 'medium', model: modelId = null, maxTurns = 6, onUsage = null }) {
   if (!isEnabled()) throw new AiError('חיבור ה-AI אינו מוגדר בשרת (ANTHROPIC_API_KEY)');
   const chosen = String(modelId || model()).trim();
-  const withFallback = !/haiku/i.test(chosen);
+  const fallback = withFallback(chosen);
   const messages = [{ role: 'user', content }];
   const calls = [];
 
@@ -136,7 +160,7 @@ async function withTools({ system, content, tools, onTool, effort = 'medium', mo
       output_config: { effort },
       // בסבב האחרון — בלי כלים: חייבים לענות עם מה שיש
       ...(tools?.length && !last ? { tools, tool_choice: { type: 'auto' } } : {}),
-      ...(withFallback ? { fallbacks: 'default' } : {})
+      ...(fallback ? { fallbacks: 'default' } : {})
     };
     let res;
     try {
@@ -146,7 +170,7 @@ async function withTools({ system, content, tools, onTool, effort = 'medium', mo
           'content-type': 'application/json',
           'x-api-key': apiKey(),
           'anthropic-version': '2023-06-01',
-          ...(withFallback ? { 'anthropic-beta': 'server-side-fallback-2026-07-01' } : {})
+          ...(fallback ? { 'anthropic-beta': 'server-side-fallback-2026-07-01' } : {})
         },
         body: JSON.stringify(body),
         signal: AbortSignal.timeout(180000)
@@ -202,4 +226,4 @@ const PRICES = {
 };
 const priceOf = (id) => PRICES[String(id ?? '').trim()] ?? null;
 
-module.exports = { json, withTools, isEnabled, status, model, priceOf, AiError, DEFAULT_MODEL };
+module.exports = { json, withTools, isEnabled, status, model, botModel, priceOf, AiError, DEFAULT_MODEL };

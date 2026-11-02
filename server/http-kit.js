@@ -15,6 +15,9 @@ const MIME = {
   // מניפסט האפליקציה. בלי הסוג הנכון הוא מוגש כזרם בתים, וכלי בדיקה
   // וכלי אריזת ה-APK אינם מזהים אותו כמניפסט.
   '.webmanifest': 'application/manifest+json; charset=utf-8',
+  // robots.txt ומפת האתר — מנועי חיפוש מצפים לסוג הנכון
+  '.txt': 'text/plain; charset=utf-8',
+  '.xml': 'application/xml; charset=utf-8',
   '.webp': 'image/webp',
   '.svg': 'image/svg+xml',
   '.png': 'image/png',

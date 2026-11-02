@@ -47,7 +47,7 @@ async function split(text, { classify = false } = {}) {
   const maybeMany = words >= MIN_WORDS && JOINERS.test(clean);
   if (!Claude.isEnabled() || (!maybeMany && !classify)) return [{ kind: null, text: clean }];
   try {
-    const out = await Claude.json({ system: fs.readFileSync(SKILL, 'utf8'), content: [{ type: 'text', text: `<<<\n${clean.slice(0, 4000)}\n>>>` }], schema: SCHEMA, effort: 'low' });
+    const out = await Claude.json({ system: fs.readFileSync(SKILL, 'utf8'), content: [{ type: 'text', text: `<<<\n${clean.slice(0, 4000)}\n>>>` }], schema: SCHEMA, effort: 'low', live: true });
     const requests = (out.requests ?? [])
       .map((r) => ({ kind: r.kind === 'task' ? 'task' : 'other', text: String(r.text ?? '').trim() }))
       .filter((r) => r.text)
