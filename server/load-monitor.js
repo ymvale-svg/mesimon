@@ -1,6 +1,6 @@
 'use strict';
 /**
- * ניטור עומס: התראה למנהלי המערכת כשתקרת המעבד מאטה את הסוכנים.
+ * ניטור עומס: התראה למשתמשים בתפקיד admin בלבד כשתקרת המעבד מאטה את הסוכנים.
  *
  * כל 30 שניות נמדדים:
  *   • המעבד של כל השרת (כולל שרתי הנתונים של הסוכנים, שהם תהליכים נפרדים) —
@@ -202,7 +202,7 @@ function check() {
   const body = lines.join('\n');
   console.warn(`[משימון] ${title} — ${body.replace(/\n/g, ' ')}`);
 
-  const admins = D.all("SELECT id FROM users WHERE status = 'active' AND role IN ('superadmin','admin')");
+  const admins = D.all("SELECT id FROM users WHERE status = 'active' AND role = 'admin'");
   for (const a of admins) {
     try { D.notify({ targetType: 'user', targetId: a.id, kind: 'ai', title, body }); } catch (err) {
       console.error('[משימון] התראת עומס נכשלה:', err.message);
