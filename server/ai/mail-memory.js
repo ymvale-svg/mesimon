@@ -721,14 +721,25 @@ function savePerson(userId, email, { name, company, role, phone, internal }) {
 // המנוע: כל סבב (‎ai-tasks.js‎ → ‎afterTick‎)
 // ---------------------------------------------------------------------------
 
-function inHours() {
-  const m = /^(\d{1,2}):(\d{2})\s*-\s*(\d{1,2}):(\d{2})$/.exec(String(D.getSetting('mail_memory_hours', '') ?? '').trim());
-  if (!m) return true;
+/** "19:00-07:00" — האם עכשיו בתוך החלון (שעון ישראל). ריק או לא תקין — ‎empty‎ */
+function inWindow(text, empty) {
+  const m = /^(\d{1,2}):(\d{2})\s*-\s*(\d{1,2}):(\d{2})$/.exec(String(text ?? '').trim());
+  if (!m) return empty;
   const from = Number(m[1]) * 60 + Number(m[2]);
   const to = Number(m[3]) * 60 + Number(m[4]);
   const now = localParts().minutes;
   return from <= to ? now >= from && now < to : now >= from || now < to;
 }
+
+const inHours = () => inWindow(D.getSetting('mail_memory_hours', ''), true);
+
+/*
+ * 🌙 מצב לילה (‎mail_memory_night‎, ‎mail_memory_night_hours‎): בשעות שאיש לא
+ * עובד באתר — בלי התקרה היומית לעובד, וקריאה ברצף (סבב נגמר → הבא מיד) במקום
+ * לחכות 2 דקות. הזיכרון של השרת לא משתנה: התקרה הכוללת של שרשורים במקביל
+ * (‎MAIL_MEMORY_PARALLEL‎) נשארת. ביום — כמו קודם: קצב מתון ותקרה יומית.
+ */
+const isNight = () => Boolean(D.getSetting('mail_memory_night', true)) && inWindow(D.getSetting('mail_memory_night_hours', '19:00-07:00'), false);
 
 const busy = new Set();
 
@@ -738,20 +749,26 @@ const busy = new Set();
  * כוללת, עשרה עובדים × 3 שרשורים במקביל חרגו ממגבלת הזיכרון של השרת.
  */
 const GLOBAL_READS = Math.max(1, Number(process.env.MAIL_MEMORY_PARALLEL) || 2);
+// בלילה אפשר יותר — רק אם הוגדר במפורש בשרת (ברירת המחדל: כמו ביום)
+const NIGHT_READS = Math.max(1, Number(process.env.MAIL_MEMORY_NIGHT_PARALLEL) || GLOBAL_READS);
+const readSlots = () => (isNight() ? NIGHT_READS : GLOBAL_READS);
 let reading = 0;
 const waiting = [];
 async function withReadSlot(fn) {
-  while (reading >= GLOBAL_READS) await new Promise((r) => waiting.push(r));
+  while (reading >= readSlots()) await new Promise((r) => waiting.push(r));
   reading++;
   try { return await fn(); } finally { reading--; waiting.shift()?.(); }
 }
 
+/** @returns {Promise<number>} כמה שרשורים טופלו בסבב הזה — בלילה, יותר מ-0 = סבב נוסף מיד */
 async function readStep(userId) {
   const run = runOf(userId);
-  if (!run) return;
+  if (!run) return 0;
+  const night = isNight();
   const perDay = Math.max(1, Number(D.getSetting('mail_memory_nightly_threads', 1500)) || 1500);
-  const left = perDay - readToday(userId);
-  if (left <= 0) return;
+  // 🌙 בלילה — בלי תקרה יומית
+  const left = night ? PER_TICK : perDay - readToday(userId);
+  if (left <= 0) return 0;
   const historyOpen = run.state === 'running' && inHours();
   // עדכון הבוקר נקרא בכל שעה; ההיסטוריה — רק בחלון ובמצב "רץ"
   const rows = D.all(
@@ -770,10 +787,12 @@ async function readStep(userId) {
         body: `${st.counts.people} אנשי קשר, ${st.counts.events} רשומות ו-${st.counts.docs} מסמכים. מעכשיו הוא מתעדכן כל בוקר.`
       });
     }
-    return;
+    return 0;
   }
+  // רק מה שבאמת טופל: תקלה זמנית ב-AI (השרשור נשאר בתור) לא מפעילה סבב מיידי, כדי שלא תיווצר לולאה
+  let processed = 0;
   for (let i = 0; i < rows.length; i += READ_CONCURRENCY) {
-    if (!['running', 'done'].includes(runOf(userId)?.state)) return;
+    if (!['running', 'done'].includes(runOf(userId)?.state)) return processed;
     await Promise.all(rows.slice(i, i + READ_CONCURRENCY).map(async ({ thread_id: threadId, box }) => {
       // תיבה שנותקה בינתיים — השרשור נשאר בתור עד שתחובר שוב
       if (!Gmail.has(whoOf(userId, box), 'mail')) return;
@@ -793,8 +812,10 @@ async function readStep(userId) {
       }
       D.run('UPDATE mail_memory_threads SET status = ?, reason = ?, fresh = 0, processed_at = ? WHERE user_id = ? AND thread_id = ?',
         st === 'done' ? 'done' : st === 'skipped' ? 'skipped' : 'error', reason, nowIso(), userId, threadId);
+      processed++;
     }));
   }
+  return processed;
 }
 
 let ticking = false;
@@ -824,12 +845,14 @@ async function tick() {
       // ההודעה "Google הגבילה זמנית" יורדת כשממשיכים
       if (run.error && run.state === 'mapping') D.run("UPDATE mail_memory_runs SET error = '' WHERE user_id = ?", user.id);
       const job = run.state === 'mapping' ? mapStep(user.id) : readStep(user.id);
+      // 🌙 בלילה: סבב קריאה שקרא משהו — הבא מיד, בלי לחכות לסבב של המנוע
+      let again = false;
       // המיפוי יכול להימשך שעה — לא מחכים לו; כל משתמש בנפרד
-      job.catch((err) => {
+      job.then((n) => { again = run.state !== 'mapping' && Number(n) > 0 && isNight(); }, (err) => {
         if (err.quota) return coolDown(user.id);
         console.error(`[משימון] זיכרון המייל של משתמש ${user.id} נכשל:`, err.message);
         if (run.state === 'mapping') saveRun(user.id, { state: 'error', error: String(err.message).slice(0, 300) });
-      }).finally(() => busy.delete(user.id));
+      }).finally(() => { busy.delete(user.id); if (again && !cooling(user.id)) kick(); });
     }
   } finally {
     ticking = false;
@@ -1072,7 +1095,7 @@ function adminAction(userId, action) {
 }
 
 module.exports = {
-  init, tick, morning, allowed, status, start, approve, pause, update, forget, boxesFor, whoOf, adminOverview, adminAction, auto,
+  init, tick, morning, allowed, status, start, approve, pause, update, forget, boxesFor, whoOf, adminOverview, adminAction, auto, isNight,
   search, personByEmail, eventsWith, browse, editPerson, remove, terms, normalize,
-  _internal: { mapThread, readThread, estimate, inHours, expiryNotices, savePerson }
+  _internal: { mapThread, readThread, estimate, inHours, isNight, readStep, expiryNotices, savePerson }
 };
