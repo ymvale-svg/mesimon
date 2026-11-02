@@ -1,10 +1,10 @@
 'use strict';
 /**
- * ✨ שאל — שאלה חופשית אחת, תשובה מכל מה שהעוזר יודע. נפתח מהחיפוש העליון
- * (Ctrl+K), מכרטיס משימה, ומהעוזר.
+ * ✨ שאל את אשל — שאלה חופשית אחת, תשובה מכל מה שהעוזר יודע. נפתח מהכפתור
+ * שליד החיפוש העליון, מכרטיס משימה, ומהעוזר. חיפוש משימות ופרויקטים — בשדה
+ * החיפוש עצמו, לא כאן: התשובה לא מוצפת ברשימת משימות שנמצאו לפי מילה.
  *
  * הסדר בתשובה:
- *   📋 משימות ופרויקטים בעניין — מהחיפוש הקיים, לפי מילות המפתח של השאלה
  *   📧 מהמיילים — למי שחיבר את התיבה, כשהשאלה נוגעת למה שבמייל
  *   🤖 הסוכן המתאים — סקיל של מחלקה, עם מחשבונים ומקורות נתונים
  *   📚 מהידע הארגוני — "איך עושים אצלנו"
@@ -54,7 +54,7 @@ const AskView = (() => {
     const drawFiles = () => UI.mount(fileChips, ...files.map((f, i) => el('span.chip', {}, [`📎 ${f.name} `, el('button.btn-link', { type: 'button', title: 'הסרה', onclick: () => { files.splice(i, 1); drawFiles(); } }, ['✕'])])));
 
     const m = UI.modal({
-      title: '✨ שאל',
+      title: '✨ שאל את אשל',
       size: 'wide',
       body: el('div.mask', {}, [
         opts.taskTitle ? el('div.mute-sm', { text: `על המשימה: ${opts.taskTitle}` }) : null,
@@ -62,7 +62,7 @@ const AskView = (() => {
         fileChips,
         recentBox,
         thread,
-        el('div.mute-sm.mask-foot', { text: 'משימות, המיילים שלך, סוכני המחלקות והידע הארגוני — במקום אחד. כל תשובה עם המקור; שום דבר לא נשלח בלי לחיצה.' })
+        el('div.mute-sm.mask-foot', { text: 'המיילים שלך, סוכני המחלקות והידע הארגוני — במקום אחד. כל תשובה עם המקור; שום דבר לא נשלח בלי לחיצה. משימות ופרויקטים — בשדה החיפוש.' })
       ])
     });
 
@@ -83,9 +83,8 @@ const AskView = (() => {
       if (!question) return input.focus();
       UI.mount(recentBox);
       go.disabled = true;
-      const tasksBox = el('div');
       const answerBox = el('div', {}, [el('div.mute-sm', {}, [el('span.spinner-sm'), ' מחפש במיילים, בסוכנים ובידע הארגוני…'])]);
-      const turnEl = el('div.mask-turn', {}, [el('div.mask-q', { text: question }), tasksBox, answerBox]);
+      const turnEl = el('div.mask-turn', {}, [el('div.mask-q', { text: question }), answerBox]);
       thread.prepend(turnEl);
       const sent = files;
       files = [];
@@ -94,8 +93,6 @@ const AskView = (() => {
         const attachments = await Promise.all(sent.map(async (f) => ({ filename: f.name, mime: f.type || 'application/octet-stream', data: await toBase64(f) })));
         const r = await API.post('/api/ai/ask', { question, history, taskId: opts.taskId ?? null, attachments });
         history.push({ q: question, a: [r.mail?.answer, r.agent?.text].filter(Boolean).join('\n').slice(0, 1500) });
-        // משימות בעניין — ראשונות, מהחיפוש הקיים
-        tasksSection(r.keywords, tasksBox);
         UI.mount(answerBox, ...answer(r, question));
         input.value = '';
         input.placeholder = 'שאלת המשך…';
@@ -111,25 +108,6 @@ const AskView = (() => {
     }
     form.addEventListener('submit', (e) => { e.preventDefault(); submit(); });
 
-    async function tasksSection(keywords, box) {
-      const seen = new Map();
-      for (const k of (keywords ?? []).slice(0, 3)) {
-        try {
-          const res = await API.get(`/api/search?q=${encodeURIComponent(k)}`);
-          for (const x of res.results ?? []) if (!seen.has(`${x.type}:${x.id}`)) seen.set(`${x.type}:${x.id}`, x);
-        } catch { /* בלי משימות */ }
-      }
-      const items = [...seen.values()].slice(0, 6);
-      if (!items.length) return;
-      UI.mount(box, el('div.mask-sec', {}, [
-        el('div.mask-sec-title', { text: '📋 משימות ופרויקטים בעניין' }),
-        ...items.map((x) => el('button.mask-item', {
-          type: 'button',
-          onclick: () => { m.close(); if (x.type === 'task') TaskCardView.open(x.id); else App.navigate('board', { projectId: x.id }); }
-        }, [el('span', { text: x.type === 'task' ? '📋' : '📁' }), el('b', { text: x.title }), x.subtitle ? el('span.mute-sm', { text: ` · ${x.subtitle}` }) : null]))
-      ]));
-    }
-
     function answer(r, question) {
       const out = [];
       if (r.clarify && !r.agent?.text && !r.mail?.answer) out.push(el('div.mask-a', { text: r.clarify }));
@@ -138,7 +116,7 @@ const AskView = (() => {
       if (r.mail?.answer) {
         out.push(el('div.mask-sec', {}, [
           el('div.mask-sec-title', { text: '📧 מהמיילים שלך' }),
-          el(`div.mask-a${r.mail.found ? '' : '.mask-none'}`, { text: r.mail.answer }),
+          rich(r.mail.answer, r.mail.found ? '' : '.mask-none'),
           r.mail.sources?.length ? el('div.mask-sources', {}, r.mail.sources.map(sourceRow)) : null,
           el('div.mask-actions', {}, mailActions(r.mail))
         ]));
@@ -151,7 +129,7 @@ const AskView = (() => {
         const a = r.agent;
         out.push(el('div.mask-sec', {}, [
           el('div.mask-sec-title', { text: `${a.icon ?? '🤖'} ${a.title}` }),
-          el('div.mask-a', { text: a.text }),
+          rich(a.text),
           a.sources?.length ? el('div.mute-sm', { text: `מקורות: ${a.sources.join(' · ')}` }) : null,
           a.proposed?.length ? el('div.alert.alert-info.ai-mini', {}, [el('span', { text: '📌' }), el('div', {}, [
             `${a.proposed.length === 1 ? 'הוצעה משימה' : `הוצעו ${a.proposed.length} משימות`}: ${a.proposed.map((p) => p.title).join(' · ')} — `,
@@ -172,13 +150,62 @@ const AskView = (() => {
           el('div.mask-sec-title', { text: '📚 מהידע הארגוני' }),
           ...r.org.map((e) => el('div.mask-org', {}, [
             el('b', { text: e.domain }), e.project ? el('span.mute-sm', { text: ` · ${e.project}` }) : null,
-            el('div.mask-a', { text: e.text }),
+            rich(e.text),
             el('div.mute-sm', { text: `${e.cases ? `${e.cases} מקרים · ` : ''}עודכן ${new Date(e.updatedAt).toLocaleDateString('he-IL')}` })
           ]))
         ]));
       }
       if (!out.length) out.push(el('div.mask-a.mask-none', { text: 'לא מצאתי תשובה.' }));
       return out;
+    }
+
+    /*
+     * התשובה מגיעה ב-Markdown (‎**מודגש**‎, רשימות, כותרות, קישורים). בונים
+     * ממנה אלמנטים — לא ‎innerHTML‎ — כך שטקסט מהמיילים לעולם אינו מתפרש כ-HTML.
+     */
+    function rich(text, extra = '') {
+      const box = el(`div.mask-a.mask-rich${extra}`);
+      let list = null;
+      for (const raw of String(text ?? '').split(/\r?\n/)) {
+        const line = raw.trim();
+        if (!line) { list = null; continue; }
+        const h = line.match(/^#{1,4}\s+(.*)$/);
+        const li = line.match(/^(?:[-*•]|\d+[.)])\s+(.*)$/);
+        if (h) { list = null; box.appendChild(el('div.mask-h', {}, inline(h[1]))); continue; }
+        if (li) {
+          const ordered = /^\d/.test(line);
+          if (!list || list.ordered !== ordered) {
+            // רשימה ממוספרת שנקטעה בתת-סעיפים ממשיכה מהמספר שכתוב ("3."), לא מ-1
+            list = el(ordered ? 'ol' : 'ul', ordered ? { start: String(parseInt(line, 10) || 1) } : {});
+            list.ordered = ordered;
+            box.appendChild(list);
+          }
+          list.appendChild(el('li', {}, inline(li[1])));
+          continue;
+        }
+        list = null;
+        box.appendChild(el('p', {}, inline(line)));
+      }
+      return box;
+    }
+
+    /** ‎**מודגש**‎ וקישורים בתוך שורה */
+    function inline(text) {
+      const out = [];
+      const re = /\*\*([^*]+)\*\*|\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)|(https?:\/\/[^\s)]+)|((?:[a-z0-9-]+\.)+(?:gov\.il|org\.il|co\.il)(?:\/[^\s)]*)?)/gi;
+      let last = 0;
+      for (const m of String(text).matchAll(re)) {
+        if (m.index > last) out.push(String(text).slice(last, m.index));
+        if (m[1]) out.push(el('b', { text: m[1] }));
+        else {
+          const label = m[2] ?? m[4] ?? m[5];
+          const href = m[3] ?? m[4] ?? `https://${m[5]}`;
+          out.push(el('a', { href, target: '_blank', rel: 'noopener', text: label }));
+        }
+        last = m.index + m[0].length;
+      }
+      if (last < String(text).length) out.push(String(text).slice(last));
+      return out.map((x) => (typeof x === 'string' ? x.replace(/\*\*/g, '') : x));
     }
 
     function mailActions(mail) {

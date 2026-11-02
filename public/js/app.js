@@ -1617,7 +1617,7 @@ const App = (() => {
       'aria-keyshortcuts': IS_MAC ? 'Meta+K' : 'Control+K',
       'aria-label': 'חיפוש משימות ופרויקטים, ומעבר מהיר',
       autocomplete: 'off',
-      placeholder: inline ? 'חיפוש, פעולה, או שאלה חופשית…' : 'חיפוש משימות ופרויקטים, או שאלה חופשית…'
+      placeholder: inline ? 'חיפוש, או שם של מסך או פעולה…' : 'חיפוש משימות ופרויקטים…'
     });
     const results = el(`div.search-results${inline ? '.is-inline' : ''}#${listId}`, {
       role: 'listbox', 'aria-label': 'תוצאות', style: { display: 'none' }
@@ -1783,20 +1783,6 @@ const App = (() => {
       cursor = -1;
       input.removeAttribute('aria-activedescendant');
 
-      /*
-       * ✨ שאל — ראשונה, כדי שתיראה גם כשיש הרבה תוצאות (בסוף הרשימה היא
-       * נדחקה מתחת לקצה החלון). תשובה מהמשימות, מהמיילים, מהסוכנים ומהידע
-       * הארגוני — בחלון משלה; החיפוש הרגיל לא משתנה.
-       */
-      const question = String(q ?? '').trim();
-      const asking = !isVendor() && question.length >= 2;
-      if (asking) {
-        const askRow = actionRow({ kind: 'action', title: `✨ שאל: "${question}"`, keys: [], run: () => AskView.open({ question }) });
-        askRow.classList.add('sr-ask');
-        askRow.title = 'תשובה מהמשימות, מהמיילים שלך, מסוכני המחלקות ומהידע הארגוני';
-        addRow(askRow);
-      }
-
       const acts = matchActions(q);
       drawActions(acts);
 
@@ -1854,12 +1840,8 @@ const App = (() => {
           onclick: () => runSearch({ scope: 'all', now: true })
         }, [`עוד ${data.othersCount} בכל הארגון`]));
       }
-      /*
-       * Enter פותח את התוצאה הראשונה, כמו תמיד. כשמה שהוקלד נראה כשאלה (סימן
-       * שאלה, או שלוש מילים ומעלה) — Enter הוא "✨ שאל".
-       */
-      const looksLikeQuestion = /[?？]/.test(question) || question.split(/\s+/).length >= 3;
-      if (rows.length) setCursor(asking && rows.length > 1 && !looksLikeQuestion ? 1 : 0);
+      // השורה הראשונה מסומנת מיד, כדי ש-Enter יפתח אותה בלי חץ מקדים
+      if (rows.length) setCursor(0);
       show();
     };
 
@@ -1958,16 +1940,18 @@ const App = (() => {
     const kbd = inline ? null : el('kbd.gs-kbd', { 'aria-hidden': 'true', text: IS_MAC ? '⌘K' : 'Ctrl K' });
 
     /*
-     * ✨ שאל — תמיד גלוי בשורה עצמה: עם מה שהוקלד, או חלון ריק לשאלה. כך
-     * רואים שהחיפוש הזה עונה גם על שאלות, בלי לחפש את השורה בתוצאות.
+     * ✨ שאל את אשל — כפתור נפרד ליד החיפוש, לא חלק ממנו: החיפוש מוצא משימות
+     * ופרויקטים, ו"שאל את אשל" עונה על שאלה (מיילים, סוכנים, ידע ארגוני)
+     * בחלון משלו. רק בסרגל העליון; בטלפון — כפתור ✨ משלו בסרגל.
      */
-    const askBtn = isVendor() ? null : el('button.gs-ask', {
+    const askBtn = inline || isVendor() ? null : el('button.gs-ask', {
       type: 'button',
-      title: 'שאלה חופשית — תשובה מהמשימות, מהמיילים, מסוכני המחלקות ומהידע הארגוני',
-      onclick: () => { const question = input.value.trim(); hide?.(); onPick?.(); AskView.open(question.length >= 2 ? { question } : {}); }
-    }, ['✨ שאל']);
+      title: 'שאלה חופשית — תשובה מהמיילים, מסוכני המחלקות ומהידע הארגוני',
+      onclick: () => { hide?.(); AskView.open(); }
+    }, ['✨ שאל את אשל']);
 
-    const wrap = el(`div.global-search${inline ? '.is-inline' : ''}${askBtn ? '.has-ask' : ''}`, {}, [input, icon, kbd, askBtn, results]);
+    const field = el('div.gs-field', {}, [input, icon, kbd, results]);
+    const wrap = el(`div.global-search${inline ? '.is-inline' : ''}${askBtn ? '.has-ask' : ''}`, {}, [field, askBtn]);
 
     /*
      * סגירה בלחיצה בחוץ. המאזין מסיר את עצמו כשהשדה כבר אינו במסמך: הסרגל
@@ -2733,6 +2717,7 @@ const App = (() => {
         : null,
       // בטלפון שדה החיפוש מוסתר — הזכוכית פותחת אותו כחלון מלא (מוצגת רק שם, ב-CSS)
       el('button.icon-btn.m-search-btn', { title: 'חיפוש ומעבר מהיר', 'aria-label': 'חיפוש', onclick: () => openSearchOverlay() }, ['🔍']),
+      !isVendor() ? el('button.icon-btn.m-search-btn.m-ask-btn', { title: 'שאל את אשל', 'aria-label': 'שאל את אשל', onclick: () => AskView.open() }, ['✨']) : null,
       bell,
       (() => {
         // רמת הגישה מוצגת רק למי שרשאי לראות רמות; לשאר מוצגת המחלקה

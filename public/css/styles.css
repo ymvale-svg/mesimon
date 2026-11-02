@@ -2928,6 +2928,12 @@ input[type="color"] { width: 46px; height: 30px; padding: 2px; cursor: pointer; 
 .mask-turn { display: grid; gap: 6px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); }
 .mask-q { font-weight: 700; }
 .mask-a { white-space: pre-line; font-size: 14px; line-height: 1.55; }
+.mask-rich { white-space: normal; }
+.mask-rich p { margin: 0 0 6px; }
+.mask-rich ul, .mask-rich ol { margin: 0 0 8px; padding-inline-start: 22px; }
+.mask-rich li { margin: 2px 0; }
+.mask-rich .mask-h { font-weight: 700; margin: 10px 0 4px; }
+.mask-rich a { color: var(--brand); word-break: break-all; }
 .mask-none { color: var(--text-soft); }
 .mask-sources { display: grid; gap: 4px; border-top: 1px dashed var(--border); padding-top: 6px; }
 .mask-src { display: flex; gap: 8px; align-items: flex-start; font-size: 13px; }
@@ -2947,10 +2953,6 @@ input[type="color"] { width: 46px; height: 30px; padding: 2px; cursor: pointer; 
 .mask-chips .chip .btn-link { background: none; border: 0; cursor: pointer; color: var(--text-soft); padding: 0 2px; }
 .mm-hidden { opacity: .55; }
 /* ✨ שאל בחיפוש העליון — נבדל מתוצאות החיפוש */
-.search-results .sr-ask { border-bottom: 1px solid var(--border); margin-bottom: 4px; background: linear-gradient(90deg, rgba(237,233,254,.45), rgba(204,251,241,.45)); }
-.search-results .sr-ask .sr-title { color: #5b21b6; font-weight: 700; }
-.search-results .sr-ask .sr-tag.sr-action { background: linear-gradient(90deg, #ede9fe, #ccfbf1); color: #5b21b6; }
-[data-theme='dark'] .search-results .sr-ask .sr-title { color: #c4b5fd; }
 @media (max-width: 600px) {
   .mask-form { flex-wrap: wrap; }
   .mask-form input[type=text] { flex: 1 1 100%; }
@@ -3567,20 +3569,21 @@ body:has(.modal-backdrop.is-side:not(.leaving)) .toast-root { left: auto; right:
  * ‎inset-inline-end‎: היסט לוגי נפתר לפי הכיוון של האלמנט *עצמו*, וב-‎ltr‎
  * ה-end הוא ימין — הרמז ישב על הזכוכית ועל תחילת הטקסט. כמו ‎.icon‎ שמימין.
  */
-/* ✨ שאל בתוך שורת החיפוש — בצד השמאלי, והרמז Ctrl K זז לפניו */
+/*
+ * ✨ שאל את אשל — כפתור נפרד משמאל לשדה החיפוש (לא בתוכו). השדה, הזכוכית
+ * והרמז Ctrl K יושבים ב-‎.gs-field‎, כך שהכפתור אינו משנה את מיקומם.
+ */
+.global-search.has-ask { display: flex; align-items: center; gap: 8px; flex-basis: 640px; }
+.global-search .gs-field { position: relative; flex: 1; min-width: 0; }
 .global-search .gs-ask {
-  position: absolute; left: 5px; top: 50%; transform: translateY(-50%);
-  height: 30px; padding: 0 12px; border-radius: 999px; border: 0; cursor: pointer;
-  font: inherit; font-size: 13px; font-weight: 700; color: #5b21b6;
+  flex: none; height: 40px; padding: 0 16px; border-radius: 999px; border: 0; cursor: pointer;
+  font: inherit; font-size: 14px; font-weight: 700; color: #5b21b6; white-space: nowrap;
   background: linear-gradient(90deg, #ede9fe, #ccfbf1);
 }
 .global-search .gs-ask:hover { filter: brightness(.96); }
 .global-search .gs-ask:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
-.global-search.has-ask input { padding-left: 84px; }
-.global-search.has-ask .gs-kbd { left: 84px; }
-.global-search.is-inline .gs-ask { top: 20px; }
-.global-search.is-inline.has-ask input { padding-inline-end: 84px; }
 [data-theme='dark'] .global-search .gs-ask { color: #ddd6fe; background: linear-gradient(90deg, #3b2a6b, #134e4a); }
+@media (min-width: 1400px) { .global-search.has-ask { width: min(640px, calc(100% - 1060px)); } }
 .global-search .gs-kbd {
   position: absolute; left: 12px; top: 50%; transform: translateY(-50%);
   direction: ltr; pointer-events: none;
