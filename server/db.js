@@ -1281,9 +1281,14 @@ const DEFAULT_SETTINGS = {
   mail_memory_users: '*',                  // פתוח לכל העובדים; כל אחד מפעיל ומאשר עלות לעצמו
   mail_memory_model: 'claude-haiku-5-5',   // מודל זול: הקריאה רבה, ואין צורך בשיקול דעת עמוק
   mail_memory_hours: '',                   // חלון קריאת ההיסטוריה, שעון ישראל ("19:00-07:00"). ריק = כל שעה
-  mail_memory_nightly_threads: 1500,       // כמה שרשורים לכל משתמש ביממה
+  mail_memory_nightly_threads: 1500,       // כמה שרשורים לכל משתמש ביממה (ביום; בלילה — בלי תקרה, ראה mail_memory_night)
+  mail_memory_night: true,                 // 🌙 מצב לילה: בלי תקרה יומית וקריאה ברצף, בשעות mail_memory_night_hours
+  mail_memory_night_hours: '19:00-07:00',  // שעות מצב הלילה, שעון ישראל
+  mail_memory_night_mem_mb: 1400,          // 🌙 בלילה: שרשור נוסף במקביל רק כשזיכרון השרת מתחת לזה (MB)
   mail_doc_expiry_days: 30,                // כמה ימים לפני תום תוקף של מסמך מציעים לחדש
   mail_ask_daily_limit: 60,                // "שאל את המיילים": שאלות ביום לכל משתמש
+  mail_ask_memory_first: true,             // ⚡ כשהזיכרון כבר נבנה ומצא — עונים ממנו, בלי חיפוש חי ב-Gmail (לא נמצא — חיפוש חי)
+  mail_ask_plan_model: 'claude-haiku-5-5', // תכנון החיפוש ב-Gmail — מודל מהיר וזול
   task_closure_enabled: true,              // 💡 הצעה איך לסגור משימה מהמייל
   agents_daily_limit: 40,                  // ✨ שאל: שאלות לסוכנים ביום, לכל משתמש
   agents_config: {},                       // לכל סוכן: ‎{enabled, departments}‎ — מסך הניהול

@@ -1081,18 +1081,45 @@ function checkDraft(actor, draft) {
 // היום שלי ותפריט
 // ---------------------------------------------------------------------------
 
-const KEYCAPS = ['1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣', '9️⃣'];
+const KEYCAPS = ['1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣', '9️⃣', '🔟'];
 
 const MENU = [
   ['today', 'today', '☀️ מה יש לי היום'],
-  ['insights', 'mail_insights', '📬 תובנות — מה חדש'],
+  ['ask', 'mail_ask', '✨ לשאול את אשל — ידע ארגוני, מיילים וסוכנים'],
+  ['insights', 'mail_insights', '📬 תובנות — מה חדש (ו-💡 הצעת תשובה)'],
   ['send_email', 'send_email', '✉️ לשלוח מייל לאיש קשר'],
   ['create_task', 'create_task', '📝 לפתוח משימה'],
   ['my_tasks', 'my_tasks', '📋 כל המשימות הפתוחות שלי'],
   ['overdue', 'my_tasks', '⚠️ מה באיחור'],
   ['project_tasks', 'project_tasks', '📁 מה פתוח בפרויקט'],
+  ['agents', 'mail_ask', '🤖 מה הסוכנים יודעים'],
   ['today_email', 'today', '📧 לשלוח לי את Today במייל']
 ];
+
+/**
+ * 🤖 הסוכנים שמותרים לכותב, לפי מחלקה — שורה לכל סוכן. לא צריך לבחור סוכן:
+ * שואלים את אשל, והוא מעביר לסוכן המתאים.
+ */
+function agentsText(actor) {
+  const Agents = require('./agents');
+  const list = Agents.allowedFor(actor);
+  if (!list.length) return 'כרגע אין סוכנים זמינים לך.';
+  const byDept = new Map();
+  for (const a of list) {
+    const k = `${a.deptIcon ?? ''} ${a.deptLabel ?? ''}`.trim();
+    if (!byDept.has(k)) byDept.set(k, []);
+    byDept.get(k).push(a);
+  }
+  return [
+    `🤖 *${list.length} הסוכנים של אשל*`,
+    'לא צריך לבחור — פשוט שואלים, ואשל מעביר לסוכן המתאים.',
+    ...[...byDept.entries()].flatMap(([dept, agents]) => ['', `*${dept}*`, ...agents.map((a) => `${a.icon} ${a.title}`)]),
+    '',
+    '✨ ובנוסף אשל עצמו: "איך עושים אצלנו" מהידע הארגוני, והמיילים שלך.',
+    'למשל: "כמה מס רכישה על דירה שנייה ב-2.4 מיליון?"'
+  ].join('\n');
+}
+const PLAIN_AGENTS = /^(סוכנים|הסוכנים|מה הסוכנים( יודעים)?|אילו סוכנים( יש)?|רשימת (ה)?סוכנים)[?.!\s]*$/;
 
 /**
  * מה אפשר לבחור בתפריט — רק פעולות שמופעלות לכותב. התובנות — למי שיש לו מייל
@@ -1708,7 +1735,7 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
     return out(formatList(`📋 המשימות שלך ${r.title} (${tasks.length}):`, tasks, { actor }), { lastList: tasks.slice(0, LIST_SHOWN).map((x) => x.id) },
       { action: 'my_tasks', status: 'ok', result: `נשלחה רשימה ${r.title}: ${tasks.length} משימות` });
   };
-  if (kind === 'menu' && /^\d$/.test(t) && ['my_tasks', 'overdue'].includes(state.draft.options?.[Number(t) - 1])) {
+  if (kind === 'menu' && /^\d{1,2}$/.test(t) && ['my_tasks', 'overdue'].includes(state.draft.options?.[Number(t) - 1])) {
     const key = state.draft.options[Number(t) - 1];
     const r = listReply(key === 'overdue' ? 'overdue' : 'all');
     return { ...r, next: { ...r.next, draft: null } };
@@ -1911,7 +1938,7 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
   }
 
   // בחירה מהתפריט במספר
-  if (kind === 'menu' && /^\d$/.test(t)) {
+  if (kind === 'menu' && /^\d{1,2}$/.test(t)) {
     const key = state.draft.options?.[Number(t) - 1];
     const go = (reply) => out(reply, { draft: null }, { action: 'menu', status: 'ok', result: `תפריט: ${key}` });
     switch (key) {
@@ -1921,10 +1948,15 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
       case 'send_email': return go('למי לשלוח, ומה לבקש?\nלמשל: "לאורן ממשרד עורכי הדין כהן — שיעביר לי את טיוטת ההסכם"');
       case 'create_task': return go('מה המשימה? אפשר לציין למי ועד מתי.\nלמשל: "לשושנה לפנות ליועץ הסניטרי, עד חמישי"');
       case 'project_tasks': return go('באיזה פרויקט?');
+      case 'ask': return go('מה לשאול את אשל? למשל:\n• "למי פונים כשהמזגן מתקלקל, וכמה זה עולה?"\n• "מה סיכמנו עם העירייה על חלקה 12?"\n• "כמה מס רכישה על דירה שנייה ב-2.4 מיליון?"\nאפשר גם הודעה קולית או מסמך.');
+      case 'agents': return go(agentsText(actor));
       default:
         return out(`בחרו מספר מ-1 עד ${state.draft.options?.length ?? 1}.`, {}, { action: 'menu', status: 'unclear', result: 'מספר לא בתפריט' });
     }
   }
+
+  // "סוכנים" — הרשימה, בלי AI
+  if (PLAIN_AGENTS.test(t) && actor.type === 'user' && WaActions.allowed(actor, 'mail_ask')) return out(agentsText(actor), {}, { action: 'mail_ask', status: 'ok', result: 'רשימת הסוכנים' });
 
   if (!Claude.isEnabled()) {
     if (PLAIN_HELP.test(t) && WaActions.allowed(actor, 'help')) return out(helpText(actor), {}, { action: 'help', status: 'ok', result: 'עזרה' });
@@ -1967,8 +1999,8 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
       return todayReply({ withMenu: u.intent === 'menu' || firstToday, firstOfDay: firstToday });
 
     /*
-     * 🔎 שאל את המיילים — רק בשיחה הפרטית, רק התיבה של הכותב. התשובה עם
-     * קישורים למיילים: היא נשלחת רק אליו.
+     * ✨ שאל את אשל — רק בשיחה הפרטית, רק התיבה של הכותב. מקורות כטקסט, בלי
+     * קישורים; ידע ניהולי רק להנהלה (‎org-knowledge.search‎).
      */
     case 'mail_ask': {
       if (actor.type !== 'user') return out('שאלות על המייל זמינות לעובדים בלבד.', {}, { action: 'mail_ask', status: 'denied', result: 'לא עובד' });

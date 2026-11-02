@@ -2938,6 +2938,7 @@ input[type="color"] { width: 46px; height: 30px; padding: 2px; cursor: pointer; 
 .ai-advice { margin-top: 6px; }
 .ai-advice .ai-advice-text { margin-top: 6px; }
 .ai-reply { margin-top: 6px; }
+.ai-health { display: grid; gap: 4px; margin: 8px 0; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); font-size: 13px; }
 .mask-none { color: var(--text-soft); }
 .mask-sources { display: grid; gap: 4px; border-top: 1px dashed var(--border); padding-top: 6px; }
 .mask-src { display: flex; gap: 8px; align-items: flex-start; font-size: 13px; }

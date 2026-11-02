@@ -846,7 +846,9 @@ function register(router, h) {
   // 🧠 זיכרון העבודה של כל העובדים
   router.get('/api/admin/mail-memory', async (req, res, ctx) => {
     aiAdmin(ctx);
-    sendJson(res, 200, { users: Memory.adminOverview(), auto: Memory.auto(), hours: D.getSetting('mail_memory_hours', ''), perDay: Number(D.getSetting('mail_memory_nightly_threads', 1500)) });
+    sendJson(res, 200, { users: Memory.adminOverview(), auto: Memory.auto(), hours: D.getSetting('mail_memory_hours', ''), perDay: Number(D.getSetting('mail_memory_nightly_threads', 1500)),
+      night: { on: Boolean(D.getSetting('mail_memory_night', true)), hours: D.getSetting('mail_memory_night_hours', '19:00-07:00'), now: Memory.isNight() },
+      memory: Memory.memoryInfo() });
   });
   router.post('/api/admin/mail-memory/:userId/:action', async (req, res, ctx) => {
     aiAdmin(ctx);
@@ -862,6 +864,19 @@ function register(router, h) {
     let mcp = {};
     try { mcp = require('./ai/mcp-client').status(); } catch { mcp = {}; }
     sendJson(res, 200, { agents: Agents.catalog(), mcp, log: Agents.recentLog({ limit: 100 }), dailyLimit: Number(D.getSetting('agents_daily_limit', 40)) });
+  });
+  /** 🩺 בדיקת סוכנים — מהשרת החי: כל מקור נתונים בקריאה אמיתית, ה-AI, המחשבונים ו-Timeless */
+  router.get('/api/admin/agents/health', async (req, res, ctx) => {
+    aiAdmin(ctx);
+    sendJson(res, 200, { last: require('./ai/agents-health').last() });
+  });
+  router.post('/api/admin/agents/health', async (req, res, ctx) => {
+    const actor = aiAdmin(ctx);
+    try {
+      sendJson(res, 200, { last: await require('./ai/agents-health').run(meUser(actor)) });
+    } catch (err) {
+      throw userError(err);
+    }
   });
   router.put('/api/admin/agents/:key', async (req, res, ctx) => {
     aiAdmin(ctx);
