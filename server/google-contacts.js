@@ -19,6 +19,7 @@ const Gmail = require('./gmail');
 
 const PEOPLE = 'https://people.googleapis.com/v1';
 const SYNC_EVERY_MS = 6 * 60 * 60 * 1000;
+const RETRY_FAILED_MS = 30 * 60 * 1000;
 const MAX_PER_SOURCE = 20000;
 
 // ---------------------------------------------------------------------------
@@ -220,6 +221,48 @@ function reasonText(st) {
     not_synced: st.running ? 'אנשי הקשר מ-Google מסתנכרנים עכשיו — נסו שוב בעוד דקה.' : 'אנשי הקשר מ-Google עוד לא סונכרנו — התחלתי סנכרון, נסו שוב בעוד דקה.',
     sync_error: `הסנכרון של אנשי הקשר מ-Google נכשל: ${String(st.error).slice(0, 160)}`
   }[st.reason] ?? '';
+}
+
+/**
+ * ההודעה למשתמש כשהוא פותח את משימון או כותב לבוט בפעם הראשונה ביום — מה
+ * לעשות כדי שאנשי הקשר של Google יעבדו. ‎null‎ — הכול תקין, או ש-Google
+ * אינו מוגדר בשרת בכלל.
+ *   connect   — אין חיבור ל-Google
+ *   reconnect — החיבור פג, או שלא אושרה בו ההרשאה לאנשי הקשר
+ *   refresh   — מחובר, אבל אין אנשי קשר (הסנכרון נכשל או לא רץ). הסנכרון
+ *               מתחיל כאן מעצמו; הכפתור "רענון" — למקרה שצריך שוב.
+ */
+function notice(userId) {
+  if (!Gmail.isEnabled()) return null;
+  const st = status(userId);
+  if (!st.reason) return null;
+  if (st.reason === 'not_connected') {
+    return { kind: 'connect', title: 'חיבור אנשי הקשר מ-Google', text: 'כדי שמשימון והבוט ימצאו טלפונים ומיילים מאנשי הקשר שלך ב-Google — חברו את חשבון ה-Google שלך (במסך של Google: לסמן את כל התיבות).' };
+  }
+  if (st.reason === 'revoked' || st.reason === 'no_permission') {
+    return { kind: 'reconnect', title: 'צריך לחבר מחדש את Google', text: st.reason === 'revoked'
+      ? 'החיבור ל-Google פג או בוטל, ולכן אנשי הקשר שלך לא מתעדכנים. חברו מחדש — אותו מסך של Google, לסמן את כל התיבות.'
+      : 'בחיבור ל-Google לא אושרה ההרשאה לאנשי הקשר. חברו מחדש ובמסך של Google סמנו את כל התיבות — כולל אנשי הקשר.' };
+  }
+  healIfEmpty(userId, []);
+  return { kind: 'refresh', title: 'רענון אנשי הקשר מ-Google', text: 'אנשי הקשר שלך מ-Google עוד לא נטענו למשימון. התחלנו לטעון אותם — אפשר ללחוץ "רענון" כדי לנסות שוב.', error: st.error };
+}
+
+/**
+ * שורה לבוט, בהודעה הראשונה של היום. ‎root‎ — כתובת משימון באינטרנט: עם
+ * קישור ישיר למסך האישור של Google (‎?connect=google‎), או לחלון החיבור
+ * לרענון (‎?open=google‎). בלי כתובת — ההסבר איפה זה באפליקציה.
+ */
+function noticeLine(userId, root = '') {
+  const n = notice(userId);
+  if (!n) return null;
+  const connectLink = root ? `\n👉 לחיבור בלחיצה: ${root}/?connect=google` : '';
+  const where = '"החשבון שלי ← Gmail ועוזר ה-AI"';
+  return {
+    connect: `👥 *אנשי הקשר מ-Google:* כדי שאמצא טלפונים ומיילים מאנשי הקשר שלך — חברו את Google${root ? '' : ` באפליקציה: ${where}`}. במסך של Google — לסמן את כל התיבות.${connectLink}`,
+    reconnect: `👥 *אנשי הקשר מ-Google:* צריך לחבר מחדש את Google${root ? '' : ` באפליקציה (${where})`}, ובמסך של Google לסמן את כל התיבות.${connectLink}`,
+    refresh: `👥 *אנשי הקשר מ-Google* עוד לא נטענו — התחלתי לטעון אותם. אם זה לא מסתדר — ${root ? `🔄 רענון: ${root}/?open=google` : `${where} ← 🔄 רענון`}`
+  }[n.kind];
 }
 
 /*
@@ -445,8 +488,12 @@ async function tick() {
     const users = D.all("SELECT c.user_id FROM mail_connections c JOIN users u ON u.id = c.user_id WHERE c.state = 'ok' AND u.status = 'active'")
       .map((r) => r.user_id).filter(canSync);
     for (const userId of users) {
-      const last = syncRow(userId)?.last_sync_at;
-      if (last && Date.now() - new Date(last).getTime() < SYNC_EVERY_MS) continue;
+      const row = syncRow(userId);
+      const last = row?.last_sync_at;
+      // סנכרון שנכשל, או שלא הביא כלום — שוב אחרי חצי שעה, ולא אחרי 6 שעות
+      const empty = !D.get('SELECT 1 FROM google_contacts WHERE user_id = ? LIMIT 1', userId);
+      const every = row?.error || empty ? RETRY_FAILED_MS : SYNC_EVERY_MS;
+      if (last && Date.now() - new Date(last).getTime() < every) continue;
       await sync(userId).catch((err) => {
         setSync(userId, { running: 0, error: err.message.slice(0, 200) });
         console.error(`[משימון] סנכרון אנשי הקשר למשתמש ${userId} נכשל:`, err.message);
@@ -472,6 +519,6 @@ function stop() {
 }
 
 module.exports = {
-  sync, syncSoon, status, reasonText, cardText, search, isSaved, lookup, save, dismiss, shouldSuggest, normalizePhone, phoneKey, fold, matcher, score,
+  sync, syncSoon, status, reasonText, notice, noticeLine, cardText, search, isSaved, lookup, save, dismiss, shouldSuggest, normalizePhone, phoneKey, fold, matcher, score,
   start, stop
 };
