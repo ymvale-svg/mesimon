@@ -85,11 +85,13 @@ const AdminAiView = (() => {
       UI.mount(row,
         el('div.mm-row-main', {}, [
           el('div', {}, [el('b', { text: e.domain }), e.project ? el('span.ai-chip', { text: `📁 ${e.project}` }) : null, e.deptLabel ? el('span.mute-sm', { text: ` · ${e.deptLabel}` }) : null,
+            e.level === 'mgmt' ? el('span.ai-chip.ai-chip-warn', { text: '🔒 ניהולי — רק להנהלה', title: 'ועדות, שכר, כוח אדם, מחלוקות, החלטות הנהלה. עובדים לא מקבלים את הערך הזה' }) : el('span.ai-chip', { text: 'מקצועי — לכל העובדים' }),
             e.hidden ? el('span.ai-chip.ai-chip-warn', { text: 'מוסתר' }) : null, e.edited ? el('span.ai-chip', { text: 'נערך ידנית' }) : null, e.dept_only ? el('span.ai-chip', { text: 'רק למחלקה' }) : null]),
           el('div.mask-a', { text: e.text }),
           el('div.mute-sm', { text: `${e.cases} מקרים · ${e.contributors} עובדים · עודכן ${UI.relative(e.updated_at)}` })
         ]),
         act('✎', 'עריכה', () => editEntry(e, load)),
+        act(e.level === 'mgmt' ? '🔓' : '🔒', e.level === 'mgmt' ? 'להפוך למקצועי — לכל העובדים' : 'להפוך לניהולי — רק להנהלה', async () => { await API.put(`/api/admin/knowledge/${e.id}`, { level: e.level === 'mgmt' ? 'pro' : 'mgmt' }); load(); }),
         act('🔍', 'מאיפה זה', () => showSources(e)),
         act(e.hidden ? '👁' : '🙈', e.hidden ? 'הצגה' : 'הסתרה', async () => { await API.put(`/api/admin/knowledge/${e.id}`, { hidden: !e.hidden }); load(); }),
         act('🗑', 'מחיקה', async () => {

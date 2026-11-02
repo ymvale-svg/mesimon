@@ -151,7 +151,8 @@ const AskView = (() => {
           ...r.org.map((e) => el('div.mask-org', {}, [
             el('b', { text: e.domain }), e.project ? el('span.mute-sm', { text: ` · ${e.project}` }) : null,
             rich(e.text),
-            el('div.mute-sm', { text: `${e.cases ? `${e.cases} מקרים · ` : ''}עודכן ${new Date(e.updatedAt).toLocaleDateString('he-IL')}` })
+            // מקור — רק להנהלה, ורק כטקסט; לעובד — התוכן המקצועי בלבד
+            e.source ? el('div.mute-sm', { text: `מקור: ${e.source}` }) : null
           ]))
         ]));
       }
@@ -236,7 +237,6 @@ const AskView = (() => {
           s.dateLabel ? el('span.mute-sm', { text: ` · ${s.dateLabel}` }) : null,
           el('div.mute-sm', { text: s.type === 'mail' ? s.subject : s.type === 'doc' ? s.subject : s.summary ?? '' })
         ]),
-        s.link ? el('a.btn.btn-sm.btn-ghost', { href: s.link, target: '_blank', rel: 'noopener' }, ['פתח ב-Gmail']) : null
       ]);
     }
 
