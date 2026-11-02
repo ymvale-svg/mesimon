@@ -231,11 +231,20 @@ const TaskCardView = (() => {
     dismiss.addEventListener('click', async () => {
       dismiss.disabled = true;
       try {
-        await API.post(`/api/ai/suggestions/${c.suggestionId}/closure-dismiss`);
+        // משימה ממייל — ההצעה יושבת על הצעת המייל; אחרת — על המשימה עצמה
+        await API.post(c.taskClosure ? `/api/tasks/${task.id}/closure-dismiss` : `/api/ai/suggestions/${c.suggestionId}/closure-dismiss`);
         task.closure = null;
         draw(modalRef.box.querySelector('.task-detail'));
       } catch (err) { dismiss.disabled = false; UI.error(err); }
     });
+    const main = closureMain(c, dismiss);
+    if (!main) return AiInboxView.agentAdvice(c.agent, dismiss);
+    const advice = AiInboxView.agentAdvice(c.agent);
+    return advice ? el('div', {}, [main, advice]) : main;
+  }
+
+  function closureMain(c, dismiss) {
+    if (c.kind === 'advice') return null;
     if (c.kind === 'self') {
       return el('div.ai-closure', {}, [el('div.ai-closure-main', {}, [el('b', { text: '💡 לסגור בעצמך: ' }), el('span', { text: c.steps.join(' · ') })]), dismiss]);
     }

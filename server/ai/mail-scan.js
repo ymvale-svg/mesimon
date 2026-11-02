@@ -118,6 +118,7 @@ const ANALYSIS_SCHEMA = {
   type: 'object',
   properties: {
     for_me: { type: 'boolean', description: 'האם המייל מבקש פעולה מבעל התיבה' },
+    reply_expected: { type: 'boolean', description: 'האם אדם כתב ומצפה לתשובה במייל מבעל התיבה (שאלה, בקשת אישור, תיאום). לא בהודעה אוטומטית, ניוזלטר או עדכון בלבד' },
     addressed_to_email: { type: 'string', description: 'כשהבקשה מופנית בבירור לאדם אחר — הכתובת שלו. אחרת ריק' },
     skip_reason: { type: 'string', description: 'כשאין משימה — למה, במשפט קצר. אחרת ריק' },
     warning: { type: 'string', description: 'אם המייל נראה כניסיון לגרום למערכת לפעול לרעה — הסבר קצר. אחרת ריק' },
@@ -167,7 +168,7 @@ const ANALYSIS_SCHEMA = {
       }
     }
   },
-  required: ['for_me', 'addressed_to_email', 'skip_reason', 'warning', 'tasks'],
+  required: ['for_me', 'reply_expected', 'addressed_to_email', 'skip_reason', 'warning', 'tasks'],
   additionalProperties: false
 };
 
@@ -265,6 +266,7 @@ function sanitize(out, user, users) {
   });
   return {
     forMe: out.for_me !== false,
+    replyExpected: out.reply_expected === true && !out.warning,
     addressedTo: String(out.addressed_to_email ?? '').trim().toLowerCase(),
     skipReason: String(out.skip_reason ?? ''),
     warning: String(out.warning ?? '').trim(),
@@ -405,10 +407,24 @@ async function processMessage(user, conn, gmailId) {
       if (t.meeting) continue;
       try {
         // מי כתב: 'נא להגדיר את איציק קנדל כאדמין' צריך את השם המלא של מי שביקש
-        t.closure = await Closure.suggest(user, { ...t, fromName: meta.fromName, fromEmail: meta.fromEmail }, { mayVendors });
+        t.closure = await Closure.suggest(user, { ...t, fromName: meta.fromName, fromEmail: meta.fromEmail }, { mayVendors, actor });
       } catch (err) {
         console.error('[משימון] הצעת סגירה נכשלה:', err.message);
       }
+    }
+  }
+
+  /*
+   * 📧 הצעת תשובה מוכנה — כשהשולח מחכה לתשובה במייל: לפי המייל, איך ענית לו
+   * בעבר, זיכרון העבודה והידע הארגוני. נשמרת עם ההצעה הראשונה של המייל;
+   * נשלחת רק בלחיצה ("✏️ עריכה ושליחה"). כשל — ההצעה נשארת בלי תשובה.
+   */
+  if (result.replyExpected && D.getSetting('mail_reply_suggest', true) && Gmail.canSend(Gmail.handle(user.id, meta.box))) {
+    try {
+      const r = await require('./mail-insights').suggestReply(user.id, gmailId, { box: meta.box });
+      if (r.body) result.tasks[0].reply = { body: r.body, basis: r.basis, missing: r.missing, to: r.to, toName: r.toName, subject: r.subject, gmailId, box: meta.box };
+    } catch (err) {
+      console.error('[משימון] הצעת תשובה למייל נכשלה:', err.message);
     }
   }
 
@@ -907,11 +923,24 @@ function dismissClosure(id, actor) {
   D.run('UPDATE ai_suggestions SET data = ? WHERE id = ?', JSON.stringify(data), sug.id);
 }
 
+/** 📧 הצעת התשובה שעל ההצעה: נשלחה (מהחלון) או נדחתה — יורדת מהשורה */
+function markReply(id, actor, state) {
+  const sug = ownSuggestion(id, actor.id);
+  const data = parseJson(sug.data, {});
+  if (!data.reply) throw new Error('אין הצעת תשובה');
+  data.reply[state === 'sent' ? 'sent' : 'dismissed'] = D.nowIso();
+  D.run('UPDATE ai_suggestions SET data = ? WHERE id = ?', JSON.stringify(data), sug.id);
+}
+
 /**
  * ההצעה לסגירה של משימה שנוצרה מהמייל — לכרטיס המשימה. רק לבעל התיבה שממנה
  * נוצרה, ורק כל עוד לא נדחתה ולא נפתחה עליה משימת AI.
  */
 function closureForTask(taskId, viewerId) {
+  if (D.get('SELECT 1 FROM ai_requests WHERE task_id = ?', taskId)) return null;
+  // משימה שלא נולדה ממייל — ההצעה שנבנתה אחרי היצירה (‎task-closure.forTask‎)
+  const own = Closure.closureOfTask(taskId, viewerId);
+  if (own) return { taskClosure: true, ...own };
   const sug = D.get(
     "SELECT id, data FROM ai_suggestions WHERE task_id = ? AND user_id = ? AND json_extract(data, '$.closure') IS NOT NULL ORDER BY id DESC LIMIT 1",
     taskId, viewerId
@@ -1022,6 +1051,8 @@ function init({ createTask }) {
     afterTick: () => {
       // זיכרון המייל רץ ברקע ובקצב משלו — לא מעכב את ריצת הבוקר
       Memory.tick().catch((err) => console.error('[משימון] זיכרון המייל:', err.message));
+      // 📚 הידע הארגוני מתעדכן ממה שהזיכרון קרא — כל כמה שעות, לא רק בבוקר
+      require('./org-knowledge').refresh();
       return morningRun();
     }
   });
@@ -1030,7 +1061,7 @@ function init({ createTask }) {
 module.exports = {
   init, startScan, runScan, rangeOf, morningRun, pollMailbox,
   approve, approveAll, reject, restore, ignoreSenderOf, join, skip, undo, markConverted, setSender, senders,
-  dismissClosure, closureForTask,
+  dismissClosure, closureForTask, markReply,
   listFor, sourceLink, suggestionById,
   _internal: { sanitize, processMessage, createFromSuggestion }
 };

@@ -1795,11 +1795,13 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
   };
 
   const replyText = (r) => [
-    `↩️ *תשובה ל${r.toName || r.to}*${r.box && r.from ? ` · מהתיבה ${r.from}` : ''}`,
+    `${r.suggested ? '💡 *הצעת תשובה' : '↩️ *תשובה'} ל${r.toName || r.to}*${r.box && r.from ? ` · מהתיבה ${r.from}` : ''}`,
     `*נושא:* ${r.subject}`,
     '',
     r.body.slice(0, 2500),
     signatureLine(r),
+    r.basis?.length ? `\n_לפי: ${r.basis.join(' · ')}_` : null,
+    r.missing ? `⚠️ ${r.missing}` : null,
     '',
     'לשלוח? השיבו *כן*, או כתבו מה לתקן. *ביטול* — לא לשלוח.'
   ].filter((l) => l !== null).join('\n');
@@ -1810,10 +1812,13 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
     if (!Gmail.canSend(box)) {
       return out('כדי לענות מהבוט צריך לחבר את תיבת ה-Gmail שלך עם הרשאת שליחה ("החשבון שלי ← Gmail ועוזר ה-AI").', { draft: null }, { action: 'mail_insights', status: 'error', result: 'אין הרשאת שליחה' });
     }
-    if (!request) {
-      return out(`מה לענות ל${item.label}?`, { draft: { kind: 'reply_ask', gmailId: item.gmailId } }, { action: 'mail_insights', status: 'unclear', result: 'חסר תוכן לתשובה' });
-    }
-    const reply = { ...await MailInsights.draftReply(actor.id, item.gmailId, request), ...await signatureFields(box) };
+    /*
+     * בלי "מה לענות" — 💡 הצעה: לפי המייל, התשובות הקודמות לשולח, הזיכרון
+     * והידע הארגוני. כמו כל טיוטה: "כן" שולח, כל דבר אחר מתקן.
+     */
+    const reply = request
+      ? { ...await MailInsights.draftReply(actor.id, item.gmailId, request), ...await signatureFields(box) }
+      : { ...await MailInsights.suggestReply(actor.id, item.gmailId), ...await signatureFields(box) };
     return out(replyText(reply), { draft: { kind: 'mail_reply', reply }, awaiting: true }, { action: 'mail_insights', status: 'ok', result: `טיוטת תשובה ל${reply.toName || reply.to}` });
   };
 

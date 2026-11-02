@@ -218,11 +218,14 @@ async function ask(user, question, history = [], { context = '' } = {}) {
   });
   // 📚 הידע הארגוני — "איך עושים אצלנו", מכל העובדים
   let org = [];
-  try { org = require('./org-knowledge').search(`${plan.memory_query} ${q}`, { limit: 3, actor: { type: 'user', id: user.id, role: user.role } }); } catch { org = []; }
+  // לעובד — רק ידע מקצועי ובלי מקור; להנהלה — גם ניהולי, עם מקור כטקסט
+  const Org = require('./org-knowledge');
+  const viewer = { type: 'user', id: user.id, role: user.role };
+  try { org = Org.search(`${plan.memory_query} ${q}`, { limit: 3, actor: viewer }).map((e) => Org.forViewer(e, viewer)); } catch { org = []; }
   org.forEach((e, i) => {
     const sid = `K${i + 1}`;
-    sources.push({ id: sid, type: 'org', subject: e.domain, summary: e.text.slice(0, 300), date: e.updated_at });
-    lines.push(`[${sid}] ידע ארגוני · ${e.domain}${e.project ? ` · ${e.project}` : ''} · ${e.text.slice(0, 1200)}`);
+    sources.push({ id: sid, type: 'org', subject: e.domain, summary: e.source || '', date: e.source ? e.updatedAt : null });
+    lines.push(`[${sid}] ידע ארגוני · ${e.domain}${e.project ? ` · ${e.project}` : ''} · ${e.text.slice(0, 1200)}${e.source ? `\n   מקור: ${e.source}` : ''}`);
   });
   if (docs.length) lines.push('', `קבצים מצורפים שנשלחו אליך לקריאה: ${docs.map((d) => d.filename).join(', ')}. כשאתה נשען על אחד מהם — ציין את המייל שאליו צורף.`);
   if (!sources.length && !docs.length) lines.push('(לא נמצאו מקורות)');
@@ -237,18 +240,16 @@ async function ask(user, question, history = [], { context = '' } = {}) {
   });
 
   remember(user.id, q);
-  // הקישור נפתח בחשבון שבו המייל נמצא
-  const link = (gmailId, box = 0) => {
-    const email = Gmail.connectionOf(Gmail.handle(user.id, box))?.email;
-    return email && gmailId ? Gmail.webLink(email, gmailId) : null;
-  };
   const byId = new Map(sources.map((s) => [s.id, s]));
   // אותו מייל משני מקורות (זיכרון ומייל) — פעם אחת, המייל עצמו עדיף
   const picked = [...new Set((out.sources ?? []).map(String))].map((id) => byId.get(id)).filter(Boolean);
   const used = [];
   for (const s of [...picked.filter((x) => x.type === 'mail'), ...picked.filter((x) => x.type !== 'mail')]) {
     if (s.gmailId && used.some((u) => u.gmailId === s.gmailId && u.type === 'mail')) continue;
-    used.push({ ...s, link: link(s.gmailId, s.box ?? 0), dateLabel: heDate(s.date) });
+    // ידע ארגוני בלי מקור (עובד) — אין מה להציג כמקור
+    if (s.type === 'org' && !s.summary) continue;
+    // בלי קישור למייל (החלטת ההנהלה): המקור — שולח ותאריך, כטקסט
+    used.push({ ...s, link: null, dateLabel: heDate(s.date) });
   }
   used.splice(6);
   // פרטי קשר — רק כתובת שבאמת הופיעה במקורות
@@ -277,11 +278,18 @@ async function ask(user, question, history = [], { context = '' } = {}) {
   };
 }
 
-/** תשובה בוואטסאפ: טקסט, ושורת מקור לכל מייל — עם קישור, כי זו שיחה פרטית עם השואל */
+/** שורת מקור כטקסט — "מייל של מורן אשל · 28.4.2026", בלי קישור. ידע ארגוני — רק כשיש לו מקור (הנהלה) */
+const sourceLine = (s) => {
+  if (s.type === 'org') return s.summary ? `📚 ${s.summary}` : null;
+  const icon = { mail: '📧', memory: '🧠', doc: '📎' }[s.type] ?? '📧';
+  const what = s.type === 'doc' ? `מסמך ${s.filename || s.subject}` : s.type === 'memory' ? s.subject : `מייל של ${s.from || s.fromEmail}`;
+  return `${icon} ${what}${s.dateLabel ? ` · ${s.dateLabel}` : ''}`;
+};
+
+/** תשובה בוואטסאפ: התשובה, ומקורות כטקסט — בלי קישורים למיילים */
 function asText(r) {
-  const icon = { mail: '📧', memory: '🧠', doc: '📎' };
-  const src = r.sources.slice(0, 4).map((s) => `${icon[s.type] ?? '📧'} ${s.from || s.subject}${s.dateLabel ? ` · ${s.dateLabel}` : ''}${s.subject && s.from ? ` · "${s.subject.slice(0, 50)}"` : ''}${s.link ? `\n${s.link}` : ''}`);
+  const src = r.sources.slice(0, 4).map(sourceLine).filter(Boolean);
   return [r.answer, src.length ? '' : null, ...src].filter((l) => l !== null).join('\n');
 }
 
-module.exports = { ask, asText, available, recent, clearRecent };
+module.exports = { ask, asText, sourceLine, available, recent, clearRecent };

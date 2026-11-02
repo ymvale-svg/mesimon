@@ -151,7 +151,7 @@ function estimate(userId, run) {
   const out = threads * EST_THREAD_OUT;
   const price = Claude.priceOf(model());
   const cost = (input, output) => (price ? Math.round(((input / 1e6) * price.input + (output / 1e6) * price.output) * 100) / 100 : null);
-  const perDay = Math.max(1, Number(D.getSetting('mail_memory_nightly_threads', 400)) || 400);
+  const perDay = Math.max(1, Number(D.getSetting('mail_memory_nightly_threads', 1500)) || 1500);
   return {
     threads,
     threadsWithFiles: pending.f,
@@ -180,7 +180,7 @@ function status(user) {
     boxes: boxesFor(user.id).map((who) => ({ box: Gmail.boxOf(who), email: Gmail.connectionOf(who)?.email ?? '' })),
     aiEnabled: Claude.isEnabled(),
     hours: String(D.getSetting('mail_memory_hours', '') ?? ''),
-    perDay: Number(D.getSetting('mail_memory_nightly_threads', 400)),
+    perDay: Number(D.getSetting('mail_memory_nightly_threads', 1500)),
     counts
   };
   if (!run) return { ...base, state: 'idle' };
@@ -716,7 +716,7 @@ const busy = new Set();
 async function readStep(userId) {
   const run = runOf(userId);
   if (!run) return;
-  const perDay = Math.max(1, Number(D.getSetting('mail_memory_nightly_threads', 400)) || 400);
+  const perDay = Math.max(1, Number(D.getSetting('mail_memory_nightly_threads', 1500)) || 1500);
   const left = perDay - readToday(userId);
   if (left <= 0) return;
   const historyOpen = run.state === 'running' && inHours();

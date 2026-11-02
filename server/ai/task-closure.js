@@ -319,10 +319,25 @@ function detailsFor(user, row) {
   return { email: '', phone: '', from: '' };
 }
 
-async function suggest(user, task, { mayVendors = false } = {}) {
+/**
+ * ‎actor‎ — כשנמסר, גם סוכן המחלקה המתאים נשאל (במקביל), והעצה שלו מצטרפת
+ * להצעה (‎agent‎). בלי איש קשר להמליץ עליו אבל עם עצה — ‎kind: 'advice'‎.
+ */
+async function suggest(user, task, { mayVendors = false, actor = null } = {}) {
   if (!D.getSetting('task_closure_enabled', true) || !Claude.isEnabled()) return null;
+  const agent = actor
+    ? require('./agents').advise(user, actor, task).catch((err) => { console.error('[משימון] עצת סוכן למשימה נכשלה:', err.message); return null; })
+    : Promise.resolve(null);
+  const [closure, advice] = await Promise.all([closureOf(user, task, { mayVendors }), agent]);
+  if (!advice) return closure;
+  if (closure) return { ...closure, agent: advice };
+  return { need: String(task.need ?? '').trim(), keywords: task.keywords ?? [], createdAt: D.nowIso(), kind: 'advice', agent: advice };
+}
+
+async function closureOf(user, task, { mayVendors = false } = {}) {
   const rows = matchingRows(task);
-  const need = String(task.need ?? '').trim() || (rows[0]?.domain ?? '');
+  // משימה שלא נולדה ממייל אין לה "צורך" — הכותרת היא הצורך
+  const need = String(task.need ?? '').trim() || (rows[0]?.domain ?? '') || String(task.title ?? '').trim().slice(0, 80);
   const keywords = (task.keywords ?? []).map(String).filter(Boolean);
   if (!need) return null;
 
@@ -423,4 +438,38 @@ function sanitize(out, cands, { need, keywords }) {
   };
 }
 
-module.exports = { suggest, candidatesFor, _internal: { sanitize, wordsOf, rejectedKeys, skillRows, matchingRows, detailsFor } };
+/*
+ * 💡 לכל משימה חדשה שלא נולדה ממייל (ידנית, בוט, הקלטה, וואטסאפ, סוכן) —
+ * ברקע, אחרי היצירה. ההצעה של מי שהמשימה עליו: האחראי כשהוא עובד, אחרת מי
+ * שפתח. נשמרת ב-‎task_closures‎ ומוצגת בכרטיס המשימה רק לו.
+ */
+async function forTask(taskId) {
+  if (!D.getSetting('task_closure_enabled', true) || !Claude.isEnabled()) return null;
+  const t = D.get('SELECT id, title, description, assignee_type, assignee_id, created_by, completed_at FROM tasks WHERE id = ?', taskId);
+  if (!t || t.completed_at) return null;
+  const userId = t.assignee_type === 'user' && t.assignee_id ? t.assignee_id : t.created_by;
+  const user = userId ? D.get("SELECT id, full_name, email, role FROM users WHERE id = ? AND status = 'active'", userId) : null;
+  if (!user || user.role === 'vendor') return null;
+  if (D.get('SELECT 1 FROM ai_requests WHERE task_id = ?', taskId)) return null;
+  const Auth = require('../auth');
+  const P = require('../permissions');
+  const actor = Auth.loadActor('user', user.id);
+  const c = await suggest(user, { title: t.title, summary: String(t.description ?? '').slice(0, 1500), keywords: [] }, { mayVendors: Boolean(actor && P.may(actor, 'view_vendor_boards')), actor });
+  if (!c) return null;
+  D.run('INSERT INTO task_closures (task_id, user_id, data, dismissed, created_at) VALUES (?,?,?,0,?) ON CONFLICT(task_id) DO UPDATE SET user_id = excluded.user_id, data = excluded.data, dismissed = 0, created_at = excluded.created_at',
+    taskId, user.id, JSON.stringify(c), D.nowIso());
+  return c;
+}
+
+function closureOfTask(taskId, viewerId) {
+  const row = D.get('SELECT data FROM task_closures WHERE task_id = ? AND user_id = ? AND dismissed = 0', taskId, viewerId);
+  if (!row) return null;
+  try { return JSON.parse(row.data); } catch { return null; }
+}
+
+function dismissTask(taskId, viewerId) {
+  const r = D.run('UPDATE task_closures SET dismissed = 1 WHERE task_id = ? AND user_id = ?', taskId, viewerId);
+  if (!r.changes) throw new Error('אין הצעה לסגירה');
+}
+
+module.exports = { suggest, forTask, closureOfTask, dismissTask, candidatesFor, _internal: { sanitize, wordsOf, rejectedKeys, skillRows, matchingRows, detailsFor } };

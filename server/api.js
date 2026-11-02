@@ -596,7 +596,7 @@ function shapeTask(task, actor, { withDetails = false } = {}) {
       link: actor.type === 'user' ? MailScan.sourceLink(task, actor.id) : null
     },
     // 💡 איך לסגור — רק לבעל התיבה שממנה נוצרה המשימה
-    closure: actor.type === 'user' && task.source === 'email' ? MailScan.closureForTask(task.id, actor.id) : null,
+    closure: actor.type === 'user' ? MailScan.closureForTask(task.id, actor.id) : null,
     checklist: checklist.map((c) => ({
       id: c.id, text: c.text, done: !!c.done, note: c.note ?? '',
       commentsCount: D.get(
@@ -1586,6 +1586,14 @@ function createTask(actor, body) {
    * יוצעו כמיזוג. בכל מסלול אחר — הצעה, הקלטה, בוט, משימת AI — אין את מי
    * לשאול עכשיו: הבדיקה רצה ברקע, ואם נמצאה כפולה — הצעת מיזוג לאחראים.
    */
+  /*
+   * 💡 איך לסגור — ברקע, לכל משימה שלא נולדה ממייל (לזו ממייל כבר יש הצעה
+   * מהסריקה). למי לפנות, ועצה מסוכן המחלקה כשיש מתאים. מוצג בכרטיס המשימה.
+   */
+  if (actor.type === 'user' && body.source !== 'email' && D.getSetting('task_closure_all', true)) {
+    setImmediate(() => require('./ai/task-closure').forTask(id).catch((err) => console.error('[משימון] הצעת סגירה למשימה נכשלה:', err.message)));
+  }
+
   if (Array.isArray(body.dupChecked)) {
     Dupes.keepApart(id, body.dupChecked, actor.type === 'user' ? actor.id : null);
   } else if (actor.type === 'user' && body.dupCheck !== false) {
