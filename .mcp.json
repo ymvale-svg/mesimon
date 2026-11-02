@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "hebcal": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@hebcal/mcp@0.10.3"
+      ]
+    }
+  }
+}
