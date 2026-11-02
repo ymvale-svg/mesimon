@@ -4,31 +4,36 @@
       "label": "לוח עברי (Hebcal)",
       "command": "npx",
       "args": ["-y", "@hebcal/mcp@0.10.3"],
-      "startupTimeoutMs": 60000
+      "startupTimeoutMs": 60000,
+      "probe": { "tool": "jewish-holidays-year", "args": { "year": 2026 } }
     },
     "boi-exchange": {
       "label": "שערי חליפין (בנק ישראל)",
       "command": "npx",
       "args": ["-y", "@skills-il/boi-exchange-mcp@1.0.1"],
-      "startupTimeoutMs": 60000
+      "startupTimeoutMs": 60000,
+      "probe": { "tool": "get_exchange_rate", "args": { "currency": "USD" } }
     },
     "israel-statistics": {
       "label": "מדדי מחירים (הלמ\"ס)",
       "command": "npx",
       "args": ["-y", "@reuvenorg/israel-statistics-mcp@1.1.0"],
-      "startupTimeoutMs": 60000
+      "startupTimeoutMs": 60000,
+      "probe": { "tool": "get_main_indices", "args": {} }
     },
     "data-gov-il": {
       "label": "מאגרי מידע ממשלתיים (data.gov.il)",
       "command": "npx",
       "args": ["-y", "data-gov-il-mcp@3.0.1"],
-      "startupTimeoutMs": 60000
+      "startupTimeoutMs": 60000,
+      "probe": { "tool": "list_organizations", "args": {} }
     },
     "kolzchut": {
       "label": "כל זכות",
       "command": "npx",
       "args": ["-y", "@skills-il/kolzchut-mcp@1.0.1"],
-      "startupTimeoutMs": 60000
+      "startupTimeoutMs": 60000,
+      "probe": { "tool": "kolzchut_search_rights", "args": { "query": "דמי הבראה" } }
     },
     "nadlan": {
       "label": "עסקאות נדל\"ן",
@@ -38,7 +43,8 @@
         "--with", "git+https://github.com/nitzpo/nadlan-mcp@b87cb268d5f0265dee327b0a237da8ccd5062b8f",
         "python", "-c", "from nadlan_mcp.fastmcp_server import mcp; mcp.run()"
       ],
-      "startupTimeoutMs": 120000
+      "startupTimeoutMs": 120000,
+      "probe": { "tool": "autocomplete_address", "args": { "search_text": "נהריה" } }
     },
     "israeli-cbs": {
       "label": "נתוני הלשכה המרכזית לסטטיסטיקה",
@@ -49,7 +55,8 @@
         "--with", "git+https://github.com/amirrosi/israeli-cbs-mcp@3e447f82ec17c28e5c7318507e0b5eb35f5a0e78",
         "python", "-c", "import asyncio, cbs_mcp_server as m; asyncio.run(m.main())"
       ],
-      "startupTimeoutMs": 120000
+      "startupTimeoutMs": 120000,
+      "probe": { "tool": "list_main_topics", "args": {} }
     }
   }
 }
