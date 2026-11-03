@@ -833,6 +833,8 @@ async function readStep(userId) {
   const perUser = night ? NIGHT_READS_PER_USER : READ_CONCURRENCY;
   for (let i = 0; i < rows.length; i += perUser) {
     if (!['running', 'done'].includes(runOf(userId)?.state)) return processed;
+    // מעבד עמוס — ממתינים שירד (עד 2 דקות), כדי שהסריקה לא תתפוס את כל המעבד
+    for (let w = 0; w < 24 && pressure().busy; w++) await new Promise((r) => setTimeout(r, 5000).unref?.());
     await Promise.all(rows.slice(i, i + perUser).map(async ({ thread_id: threadId, box }) => {
       // תיבה שנותקה בינתיים — השרשור נשאר בתור עד שתחובר שוב
       if (!Gmail.has(whoOf(userId, box), 'mail')) return;
