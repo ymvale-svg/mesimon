@@ -3564,9 +3564,9 @@ router.get('/api/admin/users', async (req, res, ctx) => {
    * אותן שם היה מאשר חשבון בלי לקבוע לו מחלקה ורמת גישה.
    */
   const rows = P.isOrgWide(actor)
-    ? D.all(`SELECT id, full_name, email, phone, office_phone, role, department, department_id, status, field_worker, is_secretary, zoom_user_id FROM users
+    ? D.all(`SELECT id, full_name, email, work_email, phone, office_phone, role, department, department_id, status, field_worker, is_secretary, zoom_user_id FROM users
              WHERE signup_at IS NULL ORDER BY full_name`)
-    : D.all(`SELECT id, full_name, email, phone, office_phone, role, department, department_id, status, field_worker, is_secretary, zoom_user_id FROM users
+    : D.all(`SELECT id, full_name, email, work_email, phone, office_phone, role, department, department_id, status, field_worker, is_secretary, zoom_user_id FROM users
              WHERE department_id ${DEPT_IN} AND role = 'employee' AND signup_at IS NULL ORDER BY full_name`,
       deptsParam(actor));
 
@@ -3582,7 +3582,7 @@ router.get('/api/admin/users', async (req, res, ctx) => {
     grantCatalog: P.GRANT_KEYS.map((key) => ({ key, ...P.GRANTS[key] })),
     mayManageDepartments: P.may(actor, 'manage_departments'),
     users: rows.map((u) => ({
-      id: u.id, name: u.full_name, email: u.email, phone: u.phone, officePhone: u.office_phone ?? '', role: u.role,
+      id: u.id, name: u.full_name, email: u.email, workEmail: u.work_email ?? '', phone: u.phone, officePhone: u.office_phone ?? '', role: u.role,
       roleLabel: P.seesRoles(actor) ? P.ROLE_LABELS[u.role] : null, department: u.department,
       departmentId: u.department_id, status: u.status,
       // עובד שטח — עובד גם בשישי (‎server/workdays.js‎)
@@ -3985,6 +3985,7 @@ router.post('/api/admin/users', async (req, res, ctx) => {
   // נבדק לפני היצירה — מספר שגוי לא אמור להשאיר משתמש חצי-שמור
   const phone = userPhone(b.phone, 0);
   const officePhone = officePhoneOf(b.officePhone);
+  const workEmail = workEmailOf(b.workEmail, 0);
 
   // בלי סיסמה מפורשת נקבעת סיסמה אקראית שאיש אינו יודע —
   // הכניסה נעשית דרך קישור ההזמנה, שבו המשתמש קובע סיסמה בעצמו
@@ -3994,7 +3995,7 @@ router.post('/api/admin/users', async (req, res, ctx) => {
     name, email, D.hashPassword(password), b.role, departmentName(departmentId), 'active', D.nowIso()
   );
   const newUserId = Number(result.lastInsertRowid);
-  D.run('UPDATE users SET department_id = ?, phone = ?, office_phone = ? WHERE id = ?', departmentId, phone, officePhone, newUserId);
+  D.run('UPDATE users SET department_id = ?, phone = ?, office_phone = ?, work_email = ? WHERE id = ?', departmentId, phone, officePhone, workEmail, newUserId);
   if (b.fieldWorker === true) D.run('UPDATE users SET field_worker = 1 WHERE id = ?', newUserId);
   if (b.secretary === true) D.run('UPDATE users SET is_secretary = 1 WHERE id = ?', newUserId);
   if (b.zoomUserId && D.get('SELECT 1 FROM zoom_users WHERE id = ?', String(b.zoomUserId))) D.run('UPDATE users SET zoom_user_id = ? WHERE id = ?', String(b.zoomUserId), newUserId);
@@ -4116,6 +4117,7 @@ router.patch('/api/admin/users/:id', async (req, res, ctx) => {
   }
   if (b.phone !== undefined) D.run('UPDATE users SET phone = ? WHERE id = ?', userPhone(b.phone, user.id), user.id);
   if (b.officePhone !== undefined) D.run('UPDATE users SET office_phone = ? WHERE id = ?', officePhoneOf(b.officePhone), user.id);
+  if (b.workEmail !== undefined) D.run('UPDATE users SET work_email = ? WHERE id = ?', workEmailOf(b.workEmail, user.id), user.id);
   sendJson(res, 200, { ok: true });
 });
 
@@ -4136,6 +4138,19 @@ function userPhone(raw, userId) {
  * טלפון במשרד / שלוחה — טקסט חופשי, כי כך הוא נאמר: "03-1234567 שלוחה 12",
  * או רק "212". נשמר כפי שהוקלד; נדרשת רק ספרה אחת לפחות, שלא ייכנס "אין".
  */
+/**
+ * המייל הארגוני / המחלקתי — התיבה שמחוברת למשימון. ריק מותר (= כמו מייל
+ * הכניסה). לא כתובת פרטית, ולא של עובד אחר.
+ */
+function workEmailOf(raw, userId) {
+  const v = String(raw ?? '').trim().toLowerCase();
+  if (!v) return '';
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)) throw badRequest('המייל הארגוני אינו תקין');
+  if (require('./gmail').isPersonalEmail(v)) throw badRequest(`${v} היא כתובת פרטית — המייל הארגוני הוא של הארגון או של המחלקה`);
+  if (D.get('SELECT id FROM users WHERE id <> ? AND (lower(work_email) = ? OR lower(email) = ?)', userId ?? 0, v, v)) throw badRequest('המייל הארגוני הזה כבר משויך לעובד אחר');
+  return v;
+}
+
 function officePhoneOf(raw) {
   const value = String(raw ?? '').replace(/\s+/g, ' ').trim().slice(0, 40);
   if (value && !/\d/.test(value)) throw badRequest(`הטלפון במשרד "${value}" אינו תקין`);

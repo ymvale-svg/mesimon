@@ -579,6 +579,9 @@ function register(router, h) {
     scanTime: D.getSetting('ai_scan_time', '07:00'),
     dailyLimit: Number(D.getSetting('ai_scan_daily_limit', 100)),
     connection: Gmail.publicStatus(actor.id),
+    // התיבה הארגונית שתחובר — ריק: נכנס עם כתובת פרטית ועוד לא כתב מייל ארגוני
+    workEmail: Gmail.workMailbox(actor.id),
+    loginIsPersonal: Gmail.isPersonalEmail(D.get('SELECT email FROM users WHERE id = ?', actor.id)?.email),
     // התיבות שאפשר לשלוח מהן — לבחירת "שליחה מ…" במשימת AI
     sendBoxes: Gmail.sendBoxes(actor.id),
     contacts: GContacts.status(actor.id),
@@ -607,8 +610,20 @@ function register(router, h) {
     const actor = userOnly(ctx);
     if (!Gmail.isEnabled()) throw badRequest('חיבור Google אינו מוגדר בשרת');
     const user = D.get('SELECT id, email FROM users WHERE id = ?', actor.id);
+    const url = parseUrl(req);
     // ‎?add=1‎ — חשבון Google נוסף (רק למי שכבר חיבר את הראשי)
-    const add = parseUrl(req).searchParams.get('add') === '1' && Boolean(Gmail.connectionOf(actor.id));
+    const add = url.searchParams.get('add') === '1' && Boolean(Gmail.connectionOf(actor.id));
+    // ‎?email=‎ — המייל הארגוני / המחלקתי שהעובד כתב לפני החיבור (נכנס עם Gmail פרטי)
+    const work = String(url.searchParams.get('email') ?? '').trim().toLowerCase();
+    if (work && !add) {
+      // זה ניווט (קישור), לא קריאת API — שגיאה חוזרת לאפליקציה כמו שאר שגיאות החיבור
+      const back = (message) => { res.writeHead(302, { location: `/?gmailError=${encodeURIComponent(message)}`, 'cache-control': 'no-store' }); res.end(); };
+      if (!Gmail.validEmail(work)) return back('כתובת המייל אינה תקינה');
+      if (Gmail.isPersonalEmail(work)) return back(`${work} היא כתובת פרטית — יש לכתוב את המייל הארגוני / המחלקתי`);
+      const taken = D.get('SELECT id FROM users WHERE id <> ? AND (lower(work_email) = ? OR lower(email) = ?)', actor.id, work, work);
+      if (taken) return back('המייל הזה כבר משויך לעובד אחר. פנו למנהל המערכת');
+      D.run('UPDATE users SET work_email = ? WHERE id = ?', work, actor.id);
+    }
     res.writeHead(302, { location: Gmail.authorizeUrl(req, user, { add }), 'cache-control': 'no-store' });
     res.end();
   });

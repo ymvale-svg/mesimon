@@ -58,6 +58,31 @@ const REVOKE = 'https://oauth2.googleapis.com/revoke';
 
 const isEnabled = () => Google.isGmailClientEnabled();
 
+/*
+ * כתובות פרטיות (Gmail, Outlook, Hotmail, Yahoo, Walla…) — לא התיבה של
+ * הארגון. עובד שנכנס עם כתובת כזו מחבר את התיבה הארגונית שלו (‎work_email‎).
+ */
+const PERSONAL_DOMAINS = new Set([
+  'gmail.com', 'googlemail.com', 'outlook.com', 'outlook.co.il', 'hotmail.com', 'hotmail.co.il', 'live.com', 'msn.com',
+  'yahoo.com', 'yahoo.co.il', 'icloud.com', 'me.com', 'mac.com', 'aol.com', 'proton.me', 'protonmail.com',
+  'walla.co.il', 'walla.com', 'bezeqint.net', 'netvision.net.il', '012.net.il', '013.net', 'zahav.net.il', 'inter.net.il'
+]);
+const domainOf = (email) => String(email ?? '').trim().toLowerCase().split('@')[1] ?? '';
+const isPersonalEmail = (email) => PERSONAL_DOMAINS.has(domainOf(email));
+const validEmail = (email) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email ?? '').trim());
+
+/**
+ * התיבה שהעובד צריך לחבר כתיבה ראשית: המייל הארגוני שנשמר לו, ואם אין —
+ * הכתובת שאיתה הוא נכנס, אם היא ארגונית. כתובת פרטית בלי מייל ארגוני — ריק:
+ * צריך קודם לשאול אותו מה המייל הארגוני.
+ */
+function workMailbox(userId) {
+  const u = D.get('SELECT email, work_email FROM users WHERE id = ?', userId);
+  if (!u) return '';
+  if (u.work_email) return String(u.work_email).toLowerCase();
+  return isPersonalEmail(u.email) ? '' : String(u.email ?? '').toLowerCase();
+}
+
 // --- תיבות ---
 
 /** ‎who‎ ← ‎{ userId, boxId }‎. ‎boxId‎ ‎0‎ — התיבה הראשית */
@@ -83,6 +108,14 @@ const pending = new Map();
 function authorizeUrl(req, user, { add = false } = {}) {
   const state = `gm_${crypto.randomBytes(24).toString('hex')}`;
   pending.set(state, { userId: user.id, add, expires: Date.now() + STATE_TTL_MS });
+  /*
+   * התיבה הראשית — ההסכמה ניתנת מהמייל הארגוני, לא מה-Gmail הפרטי שאיתו
+   * נכנס: ‎login_hint‎ מכוון אליו, ‎hd‎ מצמצם את בחירת החשבון לדומיין של
+   * הארגון (Google Workspace), ו-‎select_account‎ — כדי ש-Google לא ייכנס
+   * אוטומטית לחשבון הפרטי שכבר מחובר בדפדפן.
+   */
+  const work = add ? '' : workMailbox(user.id);
+  const workDomain = work && !isPersonalEmail(work) ? domainOf(work) : '';
   const params = new URLSearchParams({
     client_id: Google.CLIENT_ID,
     redirect_uri: Google.redirectUri(req),
@@ -94,7 +127,11 @@ function authorizeUrl(req, user, { add = false } = {}) {
     prompt: 'consent',
     include_granted_scopes: 'true',
     // חשבון נוסף — Google מציג את בחירת החשבון, ולא נכנס ישר לראשי
-    ...(add ? { prompt: 'consent select_account' } : { login_hint: user.email ?? '' })
+    ...(add ? { prompt: 'consent select_account' } : {
+      prompt: 'consent select_account',
+      ...(work ? { login_hint: work } : {}),
+      ...(workDomain ? { hd: workDomain } : {})
+    })
   });
   return `https://accounts.google.com/o/oauth2/v2/auth?${params}`;
 }
@@ -161,6 +198,27 @@ async function connect(userId, code, req, { add = false } = {}) {
   if (!data.refresh_token) throw new Error('Google לא החזיר אסימון רענון. נסו לנתק את משימון בהגדרות חשבון ה-Google ולחבר שוב.');
   const email = await emailOf(data);
   const primary = D.get('SELECT email FROM mail_connections WHERE user_id = ?', userId);
+  /*
+   * התיבה הראשית חייבת להיות המייל הארגוני. נבחר חשבון אחר (בדרך כלל ה-Gmail
+   * הפרטי, שכבר מחובר בדפדפן) — לא מחברים, ואומרים איזה חשבון לבחור.
+   */
+  const work = workMailbox(userId);
+  const isExtra = email && D.get('SELECT 1 FROM mail_accounts WHERE user_id = ? AND lower(email) = ?', userId, email);
+  // סירוב — ההרשאה שניתנה מהחשבון הלא נכון מבוטלת מיד, ולא נשארת פתוחה
+  const refuse = async (message) => {
+    await fetch(`${REVOKE}?token=${encodeURIComponent(data.refresh_token ?? data.access_token ?? '')}`, { method: 'POST', signal: AbortSignal.timeout(10000) }).catch(() => {});
+    throw new Error(message);
+  };
+  if (!add && !isExtra && email) {
+    if (work && email !== work) {
+      await refuse(`חובר החשבון ${email}, אבל המייל הארגוני שלך הוא ${work}. יש לחבר שוב ולבחור במסך של Google את ${work}.`);
+    }
+    if (!work && isPersonalEmail(email)) {
+      await refuse(`${email} הוא חשבון פרטי. יש לחבר את המייל הארגוני / המחלקתי שלך — כתבו אותו במסך "חיבור Google" ונסו שוב.`);
+    }
+    // נכנס עם כתובת פרטית ובחר בחשבון ארגוני — זה המייל הארגוני שלו מעכשיו
+    if (!work) D.run("UPDATE users SET work_email = ? WHERE id = ? AND work_email = ''", email, userId);
+  }
   const extra = email ? D.get('SELECT id FROM mail_accounts WHERE user_id = ? AND lower(email) = ?', userId, email) : null;
   const refresh = Secrets.encrypt(data.refresh_token);
   let box = 0;
@@ -640,7 +698,7 @@ const webLink = (email, gmailId) => `https://mail.google.com/mail/u/?authuser=${
 
 module.exports = {
   parse, handle, userOf, boxOf, boxesOf, allBoxes, setConn, sendBoxes, consumeStateFull, claimScan, emailsOf,
-  isEnabled, authorizeUrl, isGmailState, consumeState, connect, disconnect,
+  isEnabled, authorizeUrl, isGmailState, consumeState, connect, disconnect, workMailbox, isPersonalEmail, validEmail,
   search, raw, threadOf, send, listThreads, threadMeta, messageMeta, labels, connectedUsers, isConnected, canSend, connectionOf, publicStatus, webLink, SCOPE, SEND_SCOPE,
   SCOPES, has, googleCall, signature, signatureInfo, fallbackSignature, signed, SIGNATURE_HELP
 };

@@ -10,8 +10,16 @@
  *               כל בוקר, רק מה שנוסף מאז.
  *   2. ניקוי  — קוד: ת"ז, חשבונות בנק וכרטיסי אשראי נמחקים; שמות לקוחות מרשימה
  *               מוחלפים; פרטי קשר של ספק שבאלפון — הפניה לכרטיס.
- *   3. איחוד  — פעם בשבוע: לקחים מאותו תחום (ופרויקט) → ערך אחד (‎org-merge.md‎).
- *               עובד אחד ומקרה אחד מספיקים. ערך עולה מיד — בלי שלב אישור.
+ *   3. איחוד  — בכל עדכון (כל כמה שעות, ומיד אחרי הזיקוק): לקחים מאותו תחום (ופרויקט)
+ *               → ערך אחד (‎org-merge.md‎). עובד אחד ומקרה אחד מספיקים. ערך עולה מיד —
+ *               בלי שלב אישור ובלי המתנה.
+ *
+ * הסכמה (החלטת ההנהלה, 11.2026):
+ *   • מי אצלנו — המחלקה ("מחלקת בדק"), לעולם לא שם של עובד.
+ *   • עם מי עבדנו — ספק / בעל מקצוע / יועץ **בשם, עם טלפון ומייל** — זה הידע הארגוני.
+ *   • הניסיון איתו — טוב ורע, מוצלב בין המקרים: "מומלץ, אבל פעמיים היו תלונות על…".
+ *   • סכום מדויק; מקור = מחלקה + חודש ושנה, לא תאריך מדויק.
+ * ערכים מלפני הסכמה (‎scheme < SCHEME‎) נכתבים מחדש בהדרגה (‎reformatOld‎).
  *
  * מנהל המערכת אחראי: עורך, מסתיר, מוחק, ורואה מאיפה הגיע כל ערך.
  */
@@ -84,7 +92,7 @@ CREATE INDEX IF NOT EXISTS idx_org_sources ON org_knowledge_sources(knowledge_id
  *   pro  — ידע מקצועי: איך עושים, למי פונים, כמה עולה, נהלים. לכל העובדים, בלי מקור.
  *   mgmt — ידע ניהולי: ועדות (תגמול, ביקורת, דירקטוריון), שכר ותנאים, כוח אדם,
  *          מחלוקות ומשפט, אסטרטגיה וכספי החברה, משא ומתן. רק להנהלה (אדמין על,
- *          מנהל מערכת, הנהלה) — עם מקור כטקסט ("מייל של X מ-28.4.2026").
+ *          מנהל מערכת, הנהלה). המקור — מחלקה וחודש ("מחלקת בדק, מרץ 2026"), כמו בכל ערך.
  * ‎classified‎ — ערך שכבר סווג. ערכים מלפני הסיווג מסווגים בסבב הבא.
  */
 {
@@ -92,7 +100,32 @@ CREATE INDEX IF NOT EXISTS idx_org_sources ON org_knowledge_sources(knowledge_id
   if (!cols('org_knowledge').includes('level')) D.db.exec("ALTER TABLE org_knowledge ADD COLUMN level TEXT NOT NULL DEFAULT 'pro'");
   if (!cols('org_knowledge').includes('classified')) D.db.exec('ALTER TABLE org_knowledge ADD COLUMN classified INTEGER NOT NULL DEFAULT 0');
   if (!cols('org_lessons').includes('level')) D.db.exec("ALTER TABLE org_lessons ADD COLUMN level TEXT NOT NULL DEFAULT 'pro'");
+  // גרסת הסכמה שלפיה נכתב הערך. קטן מ-‎SCHEME‎ — ערך ישן, ייכתב מחדש
+  if (!cols('org_knowledge').includes('scheme')) D.db.exec('ALTER TABLE org_knowledge ADD COLUMN scheme INTEGER NOT NULL DEFAULT 0');
 }
+/* 2 — מחלקה במקום עובד; ספקים בשם עם פרטי קשר והניסיון איתם (טוב ורע); חודש ושנה */
+const SCHEME = 2;
+
+// ---------------------------------------------------------------------------
+// מחלקה וחודש — המקור בסכמה
+// ---------------------------------------------------------------------------
+
+const HE_MONTHS = ['ינואר', 'פברואר', 'מרץ', 'אפריל', 'מאי', 'יוני', 'יולי', 'אוגוסט', 'ספטמבר', 'אוקטובר', 'נובמבר', 'דצמבר'];
+/** "מרץ 2026" — חודש ושנה בלבד, לעולם לא יום */
+function monthLabel(iso) {
+  const d = new Date(iso ?? '');
+  if (Number.isNaN(d.getTime())) return '';
+  const [y, m] = d.toLocaleDateString('en-CA', { timeZone: 'Asia/Jerusalem' }).split('-');
+  return `${HE_MONTHS[Number(m) - 1]} ${y}`;
+}
+
+/** שם המחלקה של עובד: מהטבלה, ואם אין — מהשדה החופשי בכרטיס */
+function deptNameOfUser(userId) {
+  if (!userId) return '';
+  const r = D.get('SELECT u.department, d.name AS dname FROM users u LEFT JOIN departments d ON d.id = u.department_id WHERE u.id = ?', userId);
+  return String(r?.dname || r?.department || '').trim().replace(/^מחלקת\s+/, '');
+}
+const deptPhrase = (name) => (name ? `מחלקת ${name}` : 'אחת המחלקות');
 
 const MGMT_ROLES = ['superadmin', 'admin', 'executive'];
 /** מי מקבל גם ידע ניהולי, ומקורות */
@@ -151,16 +184,8 @@ function scrub(text) {
   for (const name of blocklist()) {
     t = t.split(name).join('[לקוח]');
   }
-  // ספק שבאלפון — פרטי הקשר שלו הם בכרטיס, לא בטקסט
-  for (const e of D.all("SELECT name, phone, email FROM phonebook WHERE name <> ''")) {
-    if (!t.includes(e.name)) continue;
-    if (e.email) t = t.split(e.email).join(`📒 באלפון: ${e.name}`);
-    const digits = String(e.phone ?? '').replace(/\D/g, '');
-    if (digits.length >= 9) {
-      t = t.replace(new RegExp(digits.split('').join('[\\s-]?'), 'g'), `📒 באלפון: ${e.name}`);
-    }
-  }
-  return t.replace(/(📒 באלפון: [^\n·]+)(\s*[·,]?\s*\1)+/g, '$1').trim();
+  // שמות ופרטי הקשר של ספקים נשארים — "למי פונים" הוא עיקר הידע הארגוני
+  return t.replace(/[ \t]{2,}/g, ' ').replace(/\s+([,.·])/g, '$1').replace(/([,·])(?:\s*[,·])+/g, '$1').replace(/[,·]\s*([.)])/g, '$1').replace(/\s(או|ו)\./g, '.').replace(/\s*\(\s*\)/g, '').replace(/,\./g, '.').replace(/(\S)·/g, '$1 ·').trim();
 }
 
 // ---------------------------------------------------------------------------
@@ -202,12 +227,16 @@ async function distillUser(userId) {
   for (;;) {
     const rows = D.all('SELECT * FROM mail_memory WHERE user_id = ? AND id > ? ORDER BY id LIMIT ?', userId, lastDistilled(userId), BATCH);
     if (!rows.length) break;
+    // מי הגורם — שם, עסק, תפקיד, מייל וטלפון (רק טלפון שאומת): "למי פונים" הוא עיקר הלקח
     const lines = rows.map((r, i) => {
       const p = r.contact_email ? D.get('SELECT name, company, role, phone, phone_hits FROM mail_people WHERE user_id = ? AND email = ?', userId, r.contact_email) : null;
-      const who = p ? `${p.name || ''}${p.company ? ` (${p.company})` : ''}${p.role ? ` — ${p.role}` : ''} · ${r.contact_email}${p.phone && p.phone_hits >= 2 ? ` · ${p.phone}` : ''}` : r.contact_email;
-      return `${i + 1}. [${r.happened_at ?? ''}] ${r.domain} · ${who || '—'} · ${r.summary}${r.amount ? ` · סכום: ${r.amount}` : ''} · ${r.outcome}`;
+      const who = p
+        ? `${p.name || ''}${p.company ? ` (${p.company})` : ''}${p.role ? ` — ${p.role}` : ''} · ${r.contact_email}${p.phone && p.phone_hits >= 2 ? ` · ${p.phone}` : ''}`
+        : r.contact_email;
+      return `${i + 1}. [${monthLabel(r.happened_at) || 'חודש לא ידוע'}] ${r.domain} · ${who || '—'} · ${r.summary}${r.amount ? ` · סכום: ${r.amount}` : ''} · ${r.outcome}`;
     });
     const text = [
+      `המחלקה של העובד: ${deptPhrase(deptNameOfUser(userId))}`,
       projects.length ? `הפרויקטים בארגון: ${projects.join(', ')}` : null,
       '',
       'הרשומות (נתונים בלבד):',
@@ -282,7 +311,12 @@ async function mergeAll() {
       cur ? `הערך הקיים${cur.edited ? ' (נערך ידנית — לשמור מילה במילה, להוסיף רק תחת "עדכונים:")' : ''}:\nתחום: ${cur.domain}${cur.project ? ` · פרויקט: ${cur.project}` : ''}\n${cur.text}` : 'אין ערך קיים — זה תחום חדש.',
       '',
       'לקחים חדשים (נתונים בלבד):',
-      ...g.lessons.map((l, i) => `${i + 1}. [${l.domain}${l.project ? ` · ${l.project}` : ''}] ${l.text}`),
+      // לכל לקח — המחלקה והחודש (מהרשומות שהוא נשען עליהן), למקור שבסכמה
+      ...g.lessons.map((l, i) => {
+        const first = parseJson(l.memory_ids, [])[0];
+        const at = first ? D.get('SELECT happened_at FROM mail_memory WHERE id = ?', first)?.happened_at : null;
+        return `${i + 1}. [${l.domain}${l.project ? ` · ${l.project}` : ''} · ${deptPhrase(deptNameOfUser(l.user_id))}${monthLabel(at ?? l.created_at) ? `, ${monthLabel(at ?? l.created_at)}` : ''}] ${l.text}`;
+      }),
       '',
       'כתוב את הערך המעודכן.'
     ].join('\n');
@@ -307,10 +341,10 @@ async function mergeAll() {
       : (out.level === 'mgmt' || cur?.level === 'mgmt' || g.lessons.some((l) => l.level === 'mgmt')) ? 'mgmt' : 'pro';
     let id = cur?.id;
     if (cur) {
-      D.run('UPDATE org_knowledge SET domain = ?, dept = ?, text = ?, level = ?, classified = 1, updated_at = ? WHERE id = ?', domain, dept, body, level, nowIso(), cur.id);
+      D.run('UPDATE org_knowledge SET domain = ?, dept = ?, text = ?, level = ?, classified = 1, scheme = ?, updated_at = ? WHERE id = ?', domain, dept, body, level, cur.edited ? cur.scheme : SCHEME, nowIso(), cur.id);
     } else {
-      id = Number(D.run('INSERT INTO org_knowledge (domain, dept, project, text, level, classified, created_at, updated_at) VALUES (?,?,?,?,?,1,?,?)',
-        domain, dept, project, body, level, nowIso(), nowIso()).lastInsertRowid);
+      id = Number(D.run('INSERT INTO org_knowledge (domain, dept, project, text, level, classified, scheme, created_at, updated_at) VALUES (?,?,?,?,?,1,?,?,?)',
+        domain, dept, project, body, level, SCHEME, nowIso(), nowIso()).lastInsertRowid);
     }
     for (const l of g.lessons) {
       D.run('UPDATE org_lessons SET knowledge_id = ? WHERE id = ?', id, l.id);
@@ -370,12 +404,71 @@ async function classifyPending() {
   return done;
 }
 
-/** מקור הערך כטקסט — רק להנהלה: "מייל של מורן אשל מ-28.4.2026: …" */
+/**
+ * מקור הערך כטקסט — לפי הסכמה: מחלקה וחודש, בלי שמות ובלי תאריך מדויק.
+ * "מחלקת בדק, מרץ 2026 · מחלקת התחדשות עירונית, ינואר 2026"
+ */
 function sourceText(id) {
-  const rows = D.all('SELECT user_name, happened_at, summary FROM org_knowledge_sources WHERE knowledge_id = ? ORDER BY happened_at DESC LIMIT 2', id);
-  if (!rows.length) return '';
-  const day = (iso) => { const d = new Date(iso); return Number.isNaN(d.getTime()) ? '' : d.toLocaleDateString('he-IL', { timeZone: 'Asia/Jerusalem' }); };
-  return rows.map((r) => `מתיבת המייל של ${r.user_name || 'עובד'}${day(r.happened_at) ? ` מ-${day(r.happened_at)}` : ''}${r.summary ? `: ${r.summary.slice(0, 160)}` : ''}`).join(' · ');
+  const rows = D.all('SELECT user_id, happened_at FROM org_knowledge_sources WHERE knowledge_id = ? ORDER BY happened_at DESC LIMIT 6', id);
+  const seen = new Set();
+  const out = [];
+  for (const r of rows) {
+    const line = [deptPhrase(deptNameOfUser(r.user_id)), monthLabel(r.happened_at)].filter(Boolean).join(', ');
+    if (!line || seen.has(line)) continue;
+    seen.add(line);
+    out.push(line);
+    if (out.length >= 2) break;
+  }
+  return out.join(' · ');
+}
+
+// ---------------------------------------------------------------------------
+// 4. כתיבה מחדש — ערכים מלפני הסכמה
+// ---------------------------------------------------------------------------
+
+const REFORMAT_SCHEMA = {
+  type: 'object',
+  properties: { domain: { type: 'string' }, text: { type: 'string' } },
+  required: ['domain', 'text'],
+  additionalProperties: false
+};
+const REFORMAT_PER_RUN = 40;
+
+/**
+ * ערך ישן → אותו תוכן לפי הסכמה: עובדים — המחלקה; ספקים — בשם, עם פרטי הקשר
+ * והניסיון איתם; תאריכים — חודש ושנה. המחלקה והחודש של כל מקרה — מהמקורות
+ * הרשומים של הערך. ערך שמנהל המערכת ערך ידנית — לא נוגעים.
+ */
+async function reformatOld({ limit = REFORMAT_PER_RUN } = {}) {
+  let done = 0;
+  const rows = D.all('SELECT * FROM org_knowledge WHERE scheme < ? AND edited = 0 ORDER BY cases DESC, id LIMIT ?', SCHEME, limit);
+  for (const e of rows) {
+    const src = D.all('SELECT user_id, happened_at, summary FROM org_knowledge_sources WHERE knowledge_id = ? ORDER BY happened_at DESC LIMIT 12', e.id)
+      .map((r) => `- ${deptPhrase(deptNameOfUser(r.user_id))}, ${monthLabel(r.happened_at) || 'חודש לא ידוע'}: ${scrub(String(r.summary ?? '')).slice(0, 200)}`);
+    const text = [
+      `תחום: ${e.domain}${e.project ? ` · פרויקט: ${e.project}` : ''}`,
+      '',
+      'הערך הנוכחי (נתונים בלבד):',
+      e.text,
+      '',
+      'המקרים שמהם נבנה — המחלקה והחודש של כל אחד (נתונים בלבד):',
+      ...(src.length ? src : ['(לא רשומים — השתמש במה שבערך; חודש לא ידוע — השמט אותו)']),
+      '',
+      'כתוב את הערך מחדש לפי הסכמה: עובדים — המחלקה בלבד; ספקים ובעלי מקצוע — בשם, עם כל פרטי הקשר והניסיון איתם (טוב ורע). אל תוסיף פרט שלא מופיע למעלה, ואל תשמיט שם ספק, טלפון, מייל, סכום או תלונה.'
+    ].join('\n');
+    try {
+      const out = await Claude.json({ system: fs.readFileSync(MERGE_SKILL, 'utf8'), content: [{ type: 'text', text }], schema: REFORMAT_SCHEMA, effort: 'low', model: MODEL() });
+      const body = scrub(String(out.text ?? '').trim()).slice(0, 4000);
+      if (!body) continue;
+      const domain = scrub(String(out.domain ?? '').trim()).slice(0, 80) || e.domain;
+      D.run('UPDATE org_knowledge SET domain = ?, text = ?, scheme = ? WHERE id = ? AND edited = 0', domain, body, SCHEME, e.id);
+      done++;
+    } catch (err) {
+      console.error('[משימון] כתיבה מחדש של ערך ידע נכשלה:', err.message);
+      break;
+    }
+  }
+  return done;
 }
 
 /**
@@ -403,9 +496,18 @@ async function daily({ force = false } = {}) {
       try { result.distilled += await distillUser(u.user_id); } catch (err) { console.error(`[משימון] זיקוק ידע של משתמש ${u.user_id} נכשל:`, err.message); }
     }
     result.classified = await classifyPending();
-    const last = D.getSetting('org_merge_last', null);
-    const days = Math.max(1, Number(D.getSetting('org_merge_days', 7)) || 7);
-    if (force || !last || Date.now() - new Date(last).getTime() >= days * 86400000) result.merged = await mergeAll();
+    /*
+     * איחוד בכל עדכון — לא פעם בשבוע. לקח שזוקק עולה כערך כבר בסבב הזה, ואין
+     * ערימה של "מחכים". עד ‎org_merge_rounds‎ סבבים של 500 בכל עדכון, כדי שערימה
+     * ישנה גדולה תתרוקן בהדרגה בלי להעמיס על השרת; העדכון הבא ממשיך.
+     */
+    const rounds = Math.max(1, Number(D.getSetting('org_merge_rounds', force ? 20 : 6)) || 6);
+    for (let i = 0; i < rounds; i++) {
+      const n = await mergeAll();
+      result.merged += n;
+      if (!n || !D.get('SELECT 1 FROM org_lessons WHERE knowledge_id IS NULL AND dropped = 0 LIMIT 1')) break;
+    }
+    result.reformatted = await reformatOld({ limit: force ? REFORMAT_PER_RUN * 3 : REFORMAT_PER_RUN });
   } finally {
     busy = false;
   }
@@ -475,6 +577,7 @@ function list({ q = '', dept = '', week = false } = {}) {
       hidden: D.get('SELECT COUNT(*) c FROM org_knowledge WHERE hidden = 1').c,
       newThisWeek: D.get('SELECT COUNT(*) c FROM org_knowledge WHERE updated_at >= ?', new Date(Date.now() - 7 * 86400000).toISOString()).c,
       pendingLessons: D.get('SELECT COUNT(*) c FROM org_lessons WHERE knowledge_id IS NULL AND dropped = 0').c,
+      oldFormat: D.get('SELECT COUNT(*) c FROM org_knowledge WHERE scheme < ? AND edited = 0', SCHEME).c,
       lastMerge: D.getSetting('org_merge_last', null)
     },
     depts: DEPT_LABEL
@@ -512,4 +615,4 @@ function sources(id) {
   return D.all('SELECT user_name, happened_at, summary FROM org_knowledge_sources WHERE knowledge_id = ? ORDER BY happened_at DESC LIMIT 100', id);
 }
 
-module.exports = { daily, refresh, distillUser, mergeAll, classifyPending, isManagement, forViewer, sourceText, search, list, edit, remove, sources, scrub, _internal: { validTz, luhn, matchEntry } };
+module.exports = { daily, refresh, distillUser, mergeAll, classifyPending, reformatOld, monthLabel, isManagement, forViewer, sourceText, search, list, edit, remove, sources, scrub, _internal: { validTz, luhn, matchEntry } };

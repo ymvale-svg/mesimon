@@ -52,7 +52,7 @@ const AdminAiView = (() => {
     });
 
     UI.mount(holder,
-      el('p.mute-sm', { text: '"איך עושים אצלנו" — מזיכרון העבודה של כל העובדים: למי פונים, איך, כמה זמן וכמה זה עלה. כל ערך עולה מיד ומשמש את העוזר, ההצעות "איך לסגור" ו"✨ שאל". כאן מתקנים, מסתירים ומוחקים.' }),
+      el('p.mute-sm', { text: '"איך פעלנו אצלנו" — מזיכרון העבודה של כל העובדים, לפי סכמה קבועה: איזו מחלקה פעלה ואיך (בלי שמות עובדים), לאיזה ספק או בעל מקצוע פנתה — בשם, עם טלפון ומייל, והניסיון איתו טוב ורע, כולל תלונות — כמה זה עלה (מדויק) וכמה זמן לקח, ומקור עם חודש ושנה בלבד ("מקור: מחלקת בדק, מרץ 2026"). כל ערך עולה מיד — אין מה לאשר — ומשמש את העוזר, ההצעות "איך לסגור" ו"✨ שאל". כאן מתקנים, מסתירים ומוחקים כשרואים צורך.' }),
       el('div.mm-tools', {}, [search, deptSel, el('label.checkbox', {}, [weekBox, ' חדש השבוע']), run]),
       statsLine,
       list,
@@ -68,7 +68,7 @@ const AdminAiView = (() => {
           blockInput.value = r.blocklist ?? '';
         }
         const s = r.stats;
-        statsLine.textContent = `${s.total} ערכים · ${s.newThisWeek} עודכנו השבוע${s.hidden ? ` · ${s.hidden} מוסתרים` : ''}${s.pendingLessons ? ` · ${s.pendingLessons} לקחים מחכים לאיחוד` : ''}${s.lastMerge ? ` · איחוד אחרון ${UI.relative(s.lastMerge)}` : ''}`;
+        statsLine.textContent = `${s.total} ערכים · ${s.newThisWeek} עודכנו השבוע${s.hidden ? ` · ${s.hidden} מוסתרים` : ''}${s.pendingLessons ? ` · ${s.pendingLessons} לקחים בעיבוד — עולים אוטומטית בעדכון הבא, בלי אישור` : ''}${s.oldFormat ? ` · ${s.oldFormat} ערכים ישנים נכתבים מחדש לפי הסכמה` : ''}${s.lastMerge ? ` · עדכון אחרון ${UI.relative(s.lastMerge)}` : ''}`;
         UI.mount(list, ...(r.entries.length ? r.entries.map(entryRow) : [UI.empty(q ? 'לא נמצא' : 'עוד אין ידע ארגוני. הוא נבנה מזיכרון העבודה של העובדים — כל בוקר.', '📚')]));
       } catch (err) {
         UI.mount(list, UI.empty(err.message, '⚠️'));

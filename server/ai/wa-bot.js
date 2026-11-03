@@ -48,6 +48,7 @@ const WaActions = require('./wa-actions');
 const MailInsights = require('./mail-insights');
 const VoiceRouter = require('./voice-router');
 const Phonebook = require('../phonebook');
+const Solve = require('./solve');
 const ProjectHints = require('../project-hints');
 const Insights = require('./insights');
 const Range = require('./insight-window');
@@ -742,7 +743,7 @@ function inHours(date = new Date()) {
 // שיחה פרטית — הפעולות
 // ---------------------------------------------------------------------------
 
-const INTENTS = ['create_task', 'my_tasks', 'complete', 'comment', 'project_tasks', 'send_email', 'mail_insights', 'mail_ask', 'contact', 'today', 'today_email', 'menu', 'help', 'cancel', 'other'];
+const INTENTS = ['create_task', 'my_tasks', 'complete', 'comment', 'project_tasks', 'send_email', 'mail_insights', 'mail_ask', 'solve', 'contact', 'today', 'today_email', 'menu', 'help', 'cancel', 'other'];
 const INSIGHT_ACTIONS = ['list', 'detail', 'reply', 'task', 'follow'];
 
 /** הכוונה ← הפעולה במסך הניהול שמפעילה אותה */
@@ -762,7 +763,7 @@ const CHAT_SCHEMA = {
     recipient_name: { type: 'string', description: 'במייל: שם הנמען כפי שנכתב ("אורן", "שושנה חן"). אחרת ריק' },
     recipient_org: { type: 'string', description: 'במייל: רק השם המזהה של החברה או המשרד ("כהן" מתוך "משרד עורכי הדין כהן"). אחרת ריק' },
     recipient_email: { type: 'string', description: 'במייל: כתובת אם נכתבה במפורש. אחרת ריק' },
-    request: { type: 'string', description: 'במייל: מה לבקש או לכתוב לנמען, במילים של הכותב. בתשובה למייל: מה לענות. בשאלה על המיילים: השאלה המלאה. אחרת ריק' },
+    request: { type: 'string', description: 'במייל: מה לבקש או לכתוב לנמען, במילים של הכותב. בתשובה למייל: מה לענות. בשאלה על המיילים: השאלה המלאה. בבעיה (solve): תיאור הבעיה המלא, כולל מה שנאמר עליה קודם בשיחה. אחרת ריק' },
     insight_action: { type: 'string', enum: INSIGHT_ACTIONS, description: 'בתובנות מהמיילים: מה לעשות. אחרת list' },
     insight_n: { type: 'integer', description: 'בתובנות: מספר המייל ברשימת התובנות האחרונה, או 0' },
     insight_from: { type: 'string', description: 'בתובנות: רק משולח מסוים ("בנק לאומי"), אחרת ריק' },
@@ -1087,6 +1088,7 @@ const MENU = [
   ['today', 'today', '☀️ מה יש לי היום'],
   ['ask', 'mail_ask', '✨ לשאול את אשל — ידע ארגוני, מיילים וסוכנים'],
   ['insights', 'mail_insights', '📬 תובנות — מה חדש (ו-💡 הצעת תשובה)'],
+  ['solve', 'solve', '💡 יש לי בעיה — פתרון ופנייה מוכנה'],
   ['send_email', 'send_email', '✉️ לשלוח מייל לאיש קשר'],
   ['create_task', 'create_task', '📝 לפתוח משימה'],
   ['my_tasks', 'my_tasks', '📋 כל המשימות הפתוחות שלי'],
@@ -1317,9 +1319,53 @@ async function signatureFields(userId) {
   return { signature: info.state === 'ok', noSignature: info.state === 'ok' ? null : info.state };
 }
 
+/**
+ * מתחת לטיוטה מ"💡 פתרון לבעיה": להחליף ערוץ ("בוואטסאפ" / "במייל") או
+ * לפנות לאחר מהחלופות ("2"). רק מה שאפשר באמת — ערוץ שלא מחובר לא מוצע.
+ */
+function solveAlternatives(p) {
+  if (!p.solve) return '';
+  const out = [];
+  if (p.contact.type !== 'user') {
+    if (p.channel === 'whatsapp' && p.solve.can?.email) out.push('*במייל* — אותה פנייה במייל');
+    if (p.channel !== 'whatsapp' && p.solve.can?.whatsapp) out.push('*בוואטסאפ* — אותה פנייה בוואטסאפ');
+  }
+  (p.solve.options ?? []).forEach((o, i) => {
+    if (o.contact.name === p.contact.name && (o.contact.email || o.contact.phone) === (p.contact.email || p.contact.phone)) return;
+    out.push(`*${i + 1}* — לפנות ל${o.contact.name}${o.why ? ` (${o.why})` : ''} במקום`);
+  });
+  return out.length ? `🔀 ${out.join('\n🔀 ')}` : '';
+}
+
+/** הפתרון — מעל הטיוטה הראשונה */
+function solveText(r) {
+  const lines = [
+    r.understood ? `💡 *הבנתי:* ${r.understood}` : '💡',
+    '',
+    `*מה עושים*${r.fromExperience ? ' _(לפי הניסיון בחברה)_' : ''}:`,
+    r.solution
+  ];
+  if (r.options.length) {
+    lines.push('', '📒 *למי לפנות:*', ...r.options.map((o, i) => {
+      const c = o.contact;
+      const how = [c.mobile || c.phone ? `📞 ${c.mobile || c.phone}` : null, c.email ? `✉️ ${c.email}` : null].filter(Boolean).join(' · ');
+      return `${i + 1}. *${c.name}*${c.tag ? ` · ${c.tag}` : ''}${o.why ? ` — ${o.why}` : ''}${how ? `\n   ${how}` : ''}`;
+    }));
+  } else if (r.noContact) {
+    lines.push('', `📒 ${r.noContact}`);
+  }
+  if (r.sources.length) lines.push('', `_מקורות: ${r.sources.join(' · ')}_`);
+  return lines.join('\n');
+}
+
 function emailText(p) {
   const colleague = p.contact.type === 'user';
-  const lines = [
+  const wa = p.channel === 'whatsapp';
+  const lines = wa ? [
+    `💬 *הודעת וואטסאפ ל${p.contact.name}* · ${p.contact.mobile || p.contact.phone}`,
+    '',
+    p.draft.body.slice(0, 2500)
+  ] : [
     `✉️ *טיוטה ל${p.contact.name || p.contact.email}*${p.contact.email ? ` <${p.contact.email}>` : ''}${colleague ? ' · 👤 עובד/ת בארגון' : ''}`,
     `*נושא:* ${p.draft.subject}`,
     '',
@@ -1340,19 +1386,25 @@ function emailText(p) {
     lines.push('', '💡 *מההתכתבות האחרונה — אולי להוסיף:*', ...p.suggestions.map((x, i) => `${i + 1}. ${x}`));
   }
   if (p.notes) lines.push('', `ℹ️ ${p.notes}`);
-  lines.push('', colleague
+  const alt = solveAlternatives(p);
+  if (alt) lines.push('', alt);
+  lines.push('', wa
+    ? `לשלוח בוואטסאפ מהמספר שלך? השיבו *כן*, כתבו מה לתקן, או *ביטול*.`
+    : colleague
     ? `לשלוח במייל? השיבו *כן*. *במשימון* — במקום מייל, משימה שתשויך ל${firstName(p.contact.name) || 'עובד'} במשימון. אפשר גם לכתוב מה לתקן, או *ביטול*.`
     : `לשלוח? השיבו *כן*, כתבו מה לתקן${p.suggestions.length ? ', או "תוסיף את 1"' : ''}. *ביטול* — לא לשלוח.`);
   return lines.join('\n');
 }
 
 /** טיוטה (או תיקון שלה) — עם ההתכתבות האחרונה עם הנמען, להצעות מה להוסיף */
-async function draftEmail(actor, contact, instruction, { feedback = '', previous = null, dry = false } = {}) {
+async function draftEmail(actor, contact, instruction, { feedback = '', previous = null, dry = false, channel = null, solve = null } = {}) {
   const owner = D.get('SELECT id, full_name, email FROM users WHERE id = ?', actor.id);
+  // וואטסאפ — רק מ"💡 פתרון לבעיה", לנייד, למי שחיבר וואטסאפ. עובד בארגון — תמיד מייל או משימון
+  const via = contact.type === 'user' ? 'email' : channel ?? previous?.channel ?? 'email';
   // בבדיקה ממסך הניהול (‎dry‎) לא קוראים את התיבה של העובד
-  const context = previous || dry ? '' : await AiTasks.mailContext(actor.id, contact.email);
+  const context = previous || dry || via !== 'email' || !contact.email ? '' : await AiTasks.mailContext(actor.id, contact.email);
   const d = await AiTasks.draftInitial({
-    owner, instruction, contact, channel: 'email', context,
+    owner, instruction, contact: via === 'whatsapp' ? { ...contact, phone: contact.mobile || contact.phone } : contact, channel: via, context,
     cc: previous?.cc ?? [],
     feedback, previous: previous ? previous.draft : null
   });
@@ -1360,6 +1412,9 @@ async function draftEmail(actor, contact, instruction, { feedback = '', previous
   const suggestions = (Array.isArray(d.suggestions) ? d.suggestions : []).map((x) => String(x).trim()).filter(Boolean).slice(0, 4);
   return {
     kind: 'email',
+    channel: via,
+    // מ"💡 פתרון לבעיה": הבעיה, הפתרון והחלופות — לבחירה באחר ("2") ולהחלפת ערוץ
+    solve: solve ?? previous?.solve ?? null,
     instruction,
     contact,
     draft: {
@@ -1372,9 +1427,9 @@ async function draftEmail(actor, contact, instruction, { feedback = '', previous
     // בתיקון ההתכתבות אינה נקראת שוב — ההצעות שעוד לא נוספו נשארות
     suggestions: previous ? (suggestions.length ? suggestions : previous.suggestions.filter((x) => !feedback.includes(x))) : suggestions,
     notes: String(d.notes ?? '').trim().slice(0, 300),
-    cc,
-    ccAsk,
-    ...await signatureFields(actor.id)
+    cc: via === 'email' ? cc : [],
+    ccAsk: via === 'email' ? ccAsk : [],
+    ...(via === 'email' ? await signatureFields(actor.id) : { signature: false, noSignature: null })
   };
 }
 
@@ -1437,7 +1492,7 @@ const taskLink = (id) => {
 /** ביצוע מה שהעובד אישר ב"כן". בבדיקה ממסך הניהול (‎dry‎) — רק מתארים */
 async function confirmPending(actor, pending, dry) {
   const kind = pending.kind ?? 'task';
-  const action = { task: 'create_task', email: 'send_email', mail_reply: 'mail_insights' }[kind] ?? kind;
+  const action = pending.solve ? 'solve' : { task: 'create_task', email: 'send_email', mail_reply: 'mail_insights' }[kind] ?? kind;
   if (!WaActions.allowed(actor, action)) {
     return { reply: 'הפעולה הזו כבר אינה זמינה לך בוואטסאפ.', action, status: 'denied', result: 'הפעולה כובתה' };
   }
@@ -1466,27 +1521,28 @@ async function confirmPending(actor, pending, dry) {
       // עובד בארגון: "במשימון" — משימה משויכת אליו; אחרת — מייל, כמו לכל נמען
       const internal = pending.contact.type === 'user' && pending.via === 'mesimon';
       if (!P.may(actor, 'create_task')) throw new Error('אין לך הרשאה לפתוח משימות');
+      const wa = pending.channel === 'whatsapp' && pending.contact.type !== 'user';
       const contact = pending.contact.type === 'user' && !internal
         ? { name: pending.contact.name, email: pending.contact.email, phone: '', type: 'external', refId: null }
-        : pending.contact;
+        : wa ? { ...pending.contact, phone: pending.contact.mobile || pending.contact.phone } : pending.contact;
       // אותה פתיחה של האשף באפליקציה: משימת AI שעוקבת אחרי התשובה
       // שם בהעתק שעוד לא הובהר — לא שולחים עד שיהיה ברור למי
       if (!internal && pending.ccAsk?.length) {
         return { reply: `לפני השליחה — עוד לא ברור מי בהעתק: ${pending.ccAsk.map((x) => `"${x.name}"`).join(', ')}. כתבו *בהעתק* עם השם המלא או המייל, או *בלי* והשם.`, action, status: 'unclear', result: 'העתק לא ברור', keep: true };
       }
       const r = dry ? { taskId: null, sendError: null } : await hooks.mail.createAiTask(actor, {
-        instruction: pending.instruction, draft: pending.draft, contact, channel: 'email',
-        cc: internal ? [] : pending.cc ?? [],
+        instruction: pending.instruction, draft: pending.draft, contact, channel: wa ? 'whatsapp' : 'email',
+        cc: internal || wa ? [] : pending.cc ?? [],
         // מ"סגור א": המשימה נפתחת מההצעה (ונעלמת מ"ממתין לאישורך")
         ...(pending.suggestionId ? { suggestionId: pending.suggestionId } : {})
       });
       const link = r.taskId ? taskLink(r.taskId) : null;
       if (r.sendError) {
-        return { reply: `⚠️ המשימה נפתחה, אבל המייל לא יצא: ${r.sendError}\nאפשר לשלוח שוב מכרטיס המשימה.${link ? `\n${link}` : ''}`, action, status: 'error', result: `המייל ל${who} לא יצא: ${r.sendError}`, taskId: r.taskId };
+        return { reply: `⚠️ המשימה נפתחה, אבל ${wa ? 'ההודעה בוואטסאפ' : 'המייל'} לא יצא${wa ? 'ה' : ''}: ${r.sendError}\nאפשר לשלוח שוב מכרטיס המשימה.${link ? `\n${link}` : ''}`, action, status: 'error', result: `המייל ל${who} לא יצא: ${r.sendError}`, taskId: r.taskId };
       }
       return {
-        reply: `${internal ? `👤 הועבר ל${who} — המשימה אצלו/ה במשימון.` : `📧 נשלח ל${who}. אעקוב אחרי התשובה ואעדכן אותך.`}${test}${link ? `\n${link}` : ''}`,
-        action, status: 'ok', result: `${internal ? 'הועבר' : 'נשלח מייל'} ל${who}: ${pending.draft.subject || pending.draft.title}`, taskId: r.taskId
+        reply: `${internal ? `👤 הועבר ל${who} — המשימה אצלו/ה במשימון.` : `${wa ? '💬 נשלח בוואטסאפ' : '📧 נשלח'} ל${who}. אעקוב אחרי התשובה ואעדכן אותך.`}${test}${link ? `\n${link}` : ''}`,
+        action, status: 'ok', result: `${internal ? 'הועבר' : wa ? 'נשלח וואטסאפ' : 'נשלח מייל'} ל${who}: ${pending.draft.subject || pending.draft.title}`, taskId: r.taskId
       };
     }
   } catch (err) {
@@ -1857,6 +1913,28 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
     return out(`לא הצלחתי לשלוח את ה-Today במייל: ${r.reason}`, {}, { action: 'today', status: 'error', result: r.reason });
   };
 
+  /**
+   * 💡 טיוטת הפנייה מהפתרון — לאיש הקשר שנבחר, בערוץ שאפשר (המועדף, ואם לא
+   * — האחר). אין ערוץ — הפתרון בלבד, עם הסבר מה לחבר.
+   */
+  const solveDraft = async (sv, contact, preferred, result, head = '') => {
+    const via = contact.type === 'user' ? 'email' : Solve.pickChannel(actor.id, contact, preferred);
+    if (!via) {
+      const why = [
+        contact.mobile ? (WhatsApp.isReady(actor.id) ? null : 'לוואטסאפ — לחבר את הוואטסאפ שלך ב"החשבון שלי"') : null,
+        contact.email ? (Gmail.canSend(actor.id) ? null : 'למייל — לחבר את תיבת ה-Gmail ב"החשבון שלי"') : null
+      ].filter(Boolean);
+      const tail = `כדי שאכין פנייה ל${contact.name}: ${why.length ? why.join('; ') : `אין לו/ה נייד או מייל באלפון`}.`;
+      return out([head, `ℹ️ ${tail}`].filter(Boolean).join('\n\n'), { draft: null }, { action: 'solve', status: 'ok', result: `${result} · אין ערוץ לפנייה` });
+    }
+    // מה אפשר מול איש הקשר הזה — לשורות "בוואטסאפ / במייל" מתחת לטיוטה
+    sv = { ...sv, can: Solve.channelsFor(actor.id, contact) };
+    const instruction = `${sv.request || `לבקש עזרה בבעיה: ${sv.problem}`}\n(הרקע, במילים של הכותב: ${sv.problem})`.slice(0, 2000);
+    const pending = await draftEmail(actor, contact, instruction, { dry, channel: via, solve: sv });
+    return out([head, emailText(pending)].filter(Boolean).join('\n\n—\n\n'), { draft: pending, awaiting: true },
+      { action: 'solve', status: 'ok', result: `${result} · טיוטה ${via === 'whatsapp' ? 'בוואטסאפ' : 'במייל'} ל${contact.name}` });
+  };
+
   /** מייל לאיש קשר: חיפוש הנמען, ובהתאמה אחת — ישר לטיוטה */
   const startEmail = async ({ name, org, email }, request, only = null) => {
     if (!hooks.mail) return out('שליחת מיילים מהבוט אינה זמינה כרגע.', {}, { action: 'send_email', status: 'error', result: 'אין חיבור לאשף' });
@@ -1899,8 +1977,38 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
     return out(r.reply, { draft: r.keep ? state.draft : null, awaiting: Boolean(r.keep) }, r);
   }
 
+  /*
+   * 💡 פתרון לבעיה — טיוטה שממתינה: "2" — לפנות לחלופה השנייה; "בוואטסאפ" /
+   * "במייל" — אותה פנייה בערוץ האחר. כל השאר — תיקון, כמו בכל טיוטת מייל.
+   */
+  if (kind === 'email' && state.awaiting && state.draft.solve && Claude.isEnabled() && WaActions.allowed(actor, 'solve')) {
+    const sv = state.draft.solve;
+    const n = /^\s*(\d)\s*[.!]?\s*$/.exec(t);
+    if (n && sv.options?.[Number(n[1]) - 1]) {
+      const o = sv.options[Number(n[1]) - 1];
+      // הבקשה נוסחה לראשון — לאחר מבקשים לפי הבעיה עצמה
+      return solveDraft({ ...sv, request: '' }, o.contact, state.draft.channel, `פנייה ל${o.contact.name}`);
+    }
+    const toWa = /^(?:(?:כן\s*,?\s*)?(?:ת?שלח\s+)?(?:ב|דרך\s+(?:ה)?)?)וו?אטסאפ[\s.!]*$/i.test(t);
+    const toMail = /^(?:(?:כן\s*,?\s*)?(?:ת?שלח\s+)?(?:ב|דרך\s+(?:ה)?)?)(?:מייל|אימייל)[\s.!]*$/.test(t);
+    if ((toWa || toMail) && state.draft.contact.type !== 'user') {
+      const want = toWa ? 'whatsapp' : 'email';
+      if ((state.draft.channel ?? 'email') === want) {
+        return out(`הטיוטה כבר ${want === 'whatsapp' ? 'בוואטסאפ' : 'במייל'}. לשלוח? *כן*, או כתבו מה לתקן.`, { awaiting: true }, { action: 'solve', status: 'ok', result: 'כבר בערוץ הזה' });
+      }
+      const can = Solve.channelsFor(actor.id, state.draft.contact);
+      if (!can[want]) {
+        const why = want === 'whatsapp'
+          ? (state.draft.contact.mobile ? 'הוואטסאפ שלך אינו מחובר למשימון (מחברים מ"החשבון שלי")' : `אין נייד של ${state.draft.contact.name}`)
+          : (state.draft.contact.email ? 'תיבת ה-Gmail שלך אינה מחוברת לשליחה (מחברים מ"החשבון שלי")' : `אין מייל של ${state.draft.contact.name}`);
+        return out(`אי אפשר ${want === 'whatsapp' ? 'בוואטסאפ' : 'במייל'}: ${why}.`, { awaiting: true }, { action: 'solve', status: 'unclear', result: `ערוץ ${want} לא זמין` });
+      }
+      return solveDraft(sv, state.draft.contact, want, `מעבר ל${want === 'whatsapp' ? 'וואטסאפ' : 'מייל'}`);
+    }
+  }
+
   // טיוטת מייל שממתינה: כל הודעה שאינה "כן" או "ביטול" היא תיקון
-  if (kind === 'email' && state.awaiting && Claude.isEnabled() && WaActions.allowed(actor, 'send_email')) {
+  if (kind === 'email' && state.awaiting && Claude.isEnabled() && (WaActions.allowed(actor, 'send_email') || (state.draft.solve && WaActions.allowed(actor, 'solve')))) {
     const feedback = suggestionFeedback(t, state.draft.suggestions ?? []) ?? t;
     const pending = await draftEmail(actor, state.draft.contact, state.draft.instruction, { feedback, previous: state.draft, dry });
     return out(emailText(pending), { draft: pending, awaiting: true }, { action: 'send_email', status: 'ok', result: `תיקון טיוטה: ${feedback.slice(0, 200)}` });
@@ -1946,6 +2054,7 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
       case 'insights': return insightsReply();
       case 'today_email': return sendTodayEmail();
       case 'send_email': return go('למי לשלוח, ומה לבקש?\nלמשל: "לאורן ממשרד עורכי הדין כהן — שיעביר לי את טיוטת ההסכם"');
+      case 'solve': return go('מה הבעיה? תארו במילים פשוטות, ואציע מה עושים ולמי לפנות — עם הודעה מוכנה לשליחה.\nלמשל: "המזגן בחדר הישיבות מטפטף ויש ריח"');
       case 'create_task': return go('מה המשימה? אפשר לציין למי ועד מתי.\nלמשל: "לשושנה לפנות ליועץ הסניטרי, עד חמישי"');
       case 'project_tasks': return go('באיזה פרויקט?');
       case 'ask': return go('מה לשאול את אשל? למשל:\n• "למי פונים כשהמזגן מתקלקל, וכמה זה עולה?"\n• "מה סיכמנו עם העירייה על חלקה 12?"\n• "כמה מס רכישה על דירה שנייה ב-2.4 מיליון?"\nאפשר גם הודעה קולית או מסמך.');
@@ -2014,6 +2123,36 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
         return out(Agents.asText(r), {}, { action: 'mail_ask', status: 'ok', result: `"${question.slice(0, 120)}": ${r.agent?.title ?? (r.mail ? 'מיילים' : 'כללי')}` });
       } catch (err) {
         return out(err.message, {}, { action: 'mail_ask', status: 'error', result: err.message.slice(0, 200) });
+      }
+    }
+
+    /*
+     * 💡 פתרון לבעיה — הניסיון בחברה, האלפון והמיילים: מה עושים ולמי פונים,
+     * ומתחת טיוטה מוכנה לראשון (מייל או וואטסאפ). נשלח רק אחרי "כן".
+     */
+    case 'solve': {
+      if (actor.type !== 'user') return out('פתרון בעיות זמין לעובדים בלבד.', {}, { action: 'solve', status: 'denied', result: 'לא עובד' });
+      const problem = u.request || text;
+      try {
+        const user = D.get('SELECT id, full_name, email, role FROM users WHERE id = ?', actor.id);
+        const r = await Solve.solve(user, actor, problem, { history: pairsOf(state.history) });
+        const head = solveText(r);
+        const first = r.options[0]?.contact;
+        if (!first) return out(head, { draft: null }, { action: 'solve', status: 'ok', result: `"${problem.slice(0, 100)}": פתרון בלי איש קשר` });
+        // לשליחה מתוך הבוט צריך גם הרשאה לפתוח משימות (הפנייה נפתחת כמשימת AI)
+        if (!P.may(actor, 'create_task') || !hooks.mail) {
+          return out(head, { draft: null }, { action: 'solve', status: 'ok', result: `"${problem.slice(0, 100)}": פתרון, בלי טיוטה (אין הרשאת פתיחת משימה)` });
+        }
+        const sv = {
+          problem: problem.slice(0, 1500),
+          request: r.request,
+          // רק השדות שהטיוטה והשליחה צריכות — נשמר בשיחה
+          options: r.options.map((o) => ({ why: o.why, contact: { name: o.contact.name, email: o.contact.email, phone: o.contact.phone, mobile: o.contact.mobile, type: o.contact.type, refId: o.contact.refId, organization: o.contact.organization } })),
+          can: null
+        };
+        return solveDraft(sv, sv.options[0].contact, r.channel, `"${problem.slice(0, 100)}": ${r.options.length} אנשי קשר${r.fromExperience ? ' · מהניסיון בחברה' : ''}`, head);
+      } catch (err) {
+        return out(`לא הצלחתי למצוא פתרון: ${err.message}`, {}, { action: 'solve', status: 'error', result: err.message.slice(0, 200) });
       }
     }
 
@@ -2323,10 +2462,15 @@ function choicesOf(next) {
   const d = next.draft;
   const out = [];
   if (next.awaiting && d) {
-    const yes = { task: '✓ פתח משימה', complete: '✓ סמן כבוצע', comment: '✓ הוסף הערה', mail_reply: '📧 שלח', email: d.contact?.type === 'user' ? '📧 שלח במייל' : '📧 שלח' }[d.kind] ?? '✓ אישור';
+    const yes = { task: '✓ פתח משימה', complete: '✓ סמן כבוצע', comment: '✓ הוסף הערה', mail_reply: '📧 שלח', email: d.channel === 'whatsapp' ? '💬 שלח בוואטסאפ' : d.contact?.type === 'user' ? '📧 שלח במייל' : '📧 שלח' }[d.kind] ?? '✓ אישור';
     out.push({ label: yes, say: 'כן', primary: true });
     if (d.kind === 'email' && d.contact?.type === 'user') out.push({ label: '📌 במשימון במקום', say: 'במשימון' });
     if (d.kind === 'email') (d.suggestions ?? []).forEach((x, i) => out.push({ label: `＋ ${x}`, say: `תוסיף את ${i + 1}` }));
+    if (d.kind === 'email' && d.solve && d.contact?.type !== 'user') {
+      if (d.channel === 'whatsapp' && d.solve.can?.email) out.push({ label: '✉️ במייל במקום', say: 'במייל' });
+      if (d.channel !== 'whatsapp' && d.solve.can?.whatsapp) out.push({ label: '💬 בוואטסאפ במקום', say: 'בוואטסאפ' });
+    }
+    if (d.kind === 'email' && d.solve) (d.solve.options ?? []).forEach((o, i) => { if (o.contact.name !== d.contact?.name) out.push({ label: `↪ ${o.contact.name}`, say: String(i + 1) }); });
     out.push({ label: 'ביטול', say: 'ביטול' });
   } else if (d?.kind === 'email_pick') {
     d.candidates.forEach((c, i) => out.push({ label: [c.name, c.organization, c.type === 'user' ? 'עובד/ת בארגון' : c.email].filter(Boolean).join(' · '), say: String(i + 1) }));

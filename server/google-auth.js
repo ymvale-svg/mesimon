@@ -137,7 +137,9 @@ function matchAccount(profile) {
 
   const email = String(profile.email).trim().toLowerCase();
 
-  const user = D.get('SELECT id, status FROM users WHERE lower(email) = ?', email);
+  // גם במייל הארגוני / המחלקתי — מי שנכנס עם החשבון של הארגון ולא עם ה-Gmail הפרטי
+  const user = D.get('SELECT id, status FROM users WHERE lower(email) = ?', email)
+    ?? D.get("SELECT id, status FROM users WHERE work_email <> '' AND lower(work_email) = ?", email);
   if (user) {
     if (user.status !== 'active') throw new Error('המשתמש אינו פעיל. פנה למנהל המערכת.');
     return { actorType: 'user', id: user.id, email };

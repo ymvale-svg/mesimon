@@ -2600,6 +2600,14 @@ const App = (() => {
     if (may('manage_users') || may('manage_automations') || may('assign_task_to_vendor') || can('create_project')) {
       add('admin');
     }
+    // ⚙ הגדרות — החשבון שלי (העדפות, טלפון, Gmail, מראה). במחשב הוא בעיגול השם
+    // שבפס העליון; בטלפון גם כאן, כדי שמי שמחפש "הגדרות" בתפריט ימצא אותן
+    if (isPhone()) {
+      items.push(el('button.nav-item', {
+        'aria-label': 'הגדרות', title: 'הגדרות',
+        onclick: () => { closeDrawer(); userMenu(); }
+      }, [el('span.ico', {}, [UI.icon('admin')]), el('span', { text: 'הגדרות' })]));
+    }
 
     return el(`aside.sidebar#sidebar${sidebarPinned() ? '.pinned' : ''}`, {},
       [...items, UI.companyLogo('in-sidebar'), resizeHandle()]);
@@ -2717,7 +2725,6 @@ const App = (() => {
         : null,
       // בטלפון שדה החיפוש מוסתר — הזכוכית פותחת אותו כחלון מלא (מוצגת רק שם, ב-CSS)
       el('button.icon-btn.m-search-btn', { title: 'חיפוש ומעבר מהיר', 'aria-label': 'חיפוש', onclick: () => openSearchOverlay() }, ['🔍']),
-      !isVendor() ? el('button.icon-btn.m-search-btn.m-ask-btn', { title: 'שאל את אשל', 'aria-label': 'שאל את אשל', onclick: () => AskView.open() }, ['✨']) : null,
       bell,
       (() => {
         // רמת הגישה מוצגת רק למי שרשאי לראות רמות; לשאר מוצגת המחלקה
@@ -2934,8 +2941,8 @@ const App = (() => {
   }
 
   /**
-   * הניווט התחתון. ארבעה יעדים בלבד — אלה שנעשים מהטלפון. השאר (ניהול,
-   * דוחות, ארכיון, בורדי ספקים) נשארים במגירה, כי הם מסכים של מחשב.
+   * הניווט התחתון — היעדים שנעשים מהטלפון, וההגדרות. השאר (ניהול, דוחות,
+   * ארכיון, בורדי ספקים) נשארים במגירה (☰ למעלה), כי הם מסכים של מחשב.
    */
   function tabbar() {
     const tab = (routeName, iconName, label, extra = {}) => {
@@ -2969,9 +2976,15 @@ const App = (() => {
         el('span.ic-wrap', {}, [UI.icon('bell'), state.unread ? el('span.tab-dot', { text: String(state.unread) }) : null]),
         el('span.lbl', { text: 'התראות' })
       ]),
-      el(`button${state.route.name === 'admin' ? '.active' : ''}`, { onclick: toggleDrawer }, [
+      /*
+       * ⚙ הגדרות — פותח את "החשבון שלי". קודם הכפתור הזה נקרא "עוד", עם אותו
+       * גלגל שיניים, ופתח את תפריט הצד: מי שלחץ על גלגל השיניים ציפה להגדרות
+       * וקיבל תפריט בלי הגדרות. תפריט הצד (ניהול, דוחות, ארכיון, פרויקטים)
+       * נשאר ב-☰ שבפס העליון.
+       */
+      el('button', { onclick: () => { closeDrawer(); userMenu(); } }, [
         el('span.ic-wrap', {}, [UI.icon('admin')]),
-        el('span.lbl', { text: 'עוד' })
+        el('span.lbl', { text: 'הגדרות' })
       ])
     ]);
   }
@@ -3012,6 +3025,10 @@ const App = (() => {
       phone && !isVendor() ? actionBar() : null,
       phone && !isVendor() && may('create_task')
         ? el('button.fab', { title: 'משימה חדשה', onclick: () => BoardView.openTaskDialog() }, ['＋'])
+        : null,
+      // ✨ שאל את אשל — עיגול צף מול ה-＋, בהישג האגודל (במקום כפתור קטן בסרגל העליון)
+      phone && !isVendor()
+        ? el('button.fab-ask', { title: 'שאל את אשל', 'aria-label': 'שאל את אשל', onclick: () => AskView.open() }, ['✨'])
         : null
     ]));
     UI.refitLogos(); // הסמל נבנה מחדש בכל רינדור — מיישרים את הכיתוב לרוחב השם
