@@ -141,6 +141,28 @@
   }
   .fab:active { transform: scale(.94); }
 
+  /*
+   * ✨ שאל את אשל — עיגול צף מול ה-＋ (בצד השני של המסך), באותו גובה. סגול-
+   * טורקיז כמו כפתור "שאל את אשל" במחשב, כדי שיזוהה כאותה פעולה.
+   */
+  .fab-ask {
+    position: fixed; z-index: 51;
+    inset-inline-end: 16px;
+    bottom: calc(var(--nav-h) + env(safe-area-inset-bottom, 0px) + 14px);
+    width: 52px; height: 52px; border-radius: 50%; border: 0; cursor: pointer;
+    background: linear-gradient(135deg, #7c3aed, #0d9488); color: #fff; font-size: 24px;
+    box-shadow: 0 6px 18px rgba(124, 58, 237, .35);
+    display: grid; place-items: center; line-height: 1;
+  }
+  .fab-ask:active { transform: scale(.94); }
+
+  /* מגירת "שאל את אשל": השיחה גולשת עם המגירה, והשדה נשאר בראש */
+  .ask-sheet .mask-thread { max-height: none; overflow: visible; }
+  .ask-sheet .mask-form { position: sticky; top: 0; z-index: 2; background: var(--surface); padding-block: 4px; }
+  .ask-sheet .mask-form input { font-size: 16px; }   /* 16 ומעלה — iOS לא מגדיל את המסך במיקוד */
+  .mask-mic.is-live { background: #dc2626; color: #fff; border-color: #dc2626; animation: mask-mic-pulse 1.2s ease-in-out infinite; }
+  @keyframes mask-mic-pulse { 50% { box-shadow: 0 0 0 6px rgba(220, 38, 38, .2); } }
+
   /* ---------------------------------------------------------------- שדות ומגע */
 
   /*
@@ -450,6 +472,7 @@
   /* התוכן מפנה מקום גם לפס הפעולה, והכפתור הצף עולה מעליו */
   .main { padding-bottom: calc(var(--nav-h) + var(--action-h) + env(safe-area-inset-bottom, 0px) + 14px); }
   .fab { bottom: calc(var(--nav-h) + var(--action-h) + env(safe-area-inset-bottom, 0px) + 10px); width: 46px; height: 46px; font-size: 24px; }
+  .fab-ask { bottom: calc(var(--nav-h) + var(--action-h) + env(safe-area-inset-bottom, 0px) + 10px); width: 46px; height: 46px; font-size: 21px; }
   .toast-root { bottom: calc(var(--nav-h) + var(--action-h) + env(safe-area-inset-bottom, 0px) + 8px); }
 
   /* בטלפון Today והקלטה בפס הפעולה — לא בסרגל העליון */

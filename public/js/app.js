@@ -2725,7 +2725,6 @@ const App = (() => {
         : null,
       // בטלפון שדה החיפוש מוסתר — הזכוכית פותחת אותו כחלון מלא (מוצגת רק שם, ב-CSS)
       el('button.icon-btn.m-search-btn', { title: 'חיפוש ומעבר מהיר', 'aria-label': 'חיפוש', onclick: () => openSearchOverlay() }, ['🔍']),
-      !isVendor() ? el('button.icon-btn.m-search-btn.m-ask-btn', { title: 'שאל את אשל', 'aria-label': 'שאל את אשל', onclick: () => AskView.open() }, ['✨']) : null,
       bell,
       (() => {
         // רמת הגישה מוצגת רק למי שרשאי לראות רמות; לשאר מוצגת המחלקה
@@ -3026,6 +3025,10 @@ const App = (() => {
       phone && !isVendor() ? actionBar() : null,
       phone && !isVendor() && may('create_task')
         ? el('button.fab', { title: 'משימה חדשה', onclick: () => BoardView.openTaskDialog() }, ['＋'])
+        : null,
+      // ✨ שאל את אשל — עיגול צף מול ה-＋, בהישג האגודל (במקום כפתור קטן בסרגל העליון)
+      phone && !isVendor()
+        ? el('button.fab-ask', { title: 'שאל את אשל', 'aria-label': 'שאל את אשל', onclick: () => AskView.open() }, ['✨'])
         : null
     ]));
     UI.refitLogos(); // הסמל נבנה מחדש בכל רינדור — מיישרים את הכיתוב לרוחב השם

@@ -80,7 +80,38 @@ const AskView = (() => {
     const attach = el('button.btn', { type: 'button', title: 'לצרף מסמך — קבלה, נסח טאבו, מכתב, קורות חיים' }, ['📎']);
     const fileChips = el('div.mask-chips');
     const recentBox = el('div.mask-recent');
-    const form = el('form.mask-form', {}, [input, attach, go, fileInput]);
+    /*
+     * 🎙 לשאול בקול — זיהוי הדיבור של הדפדפן (עברית). הטקסט מופיע בשדה תוך
+     * כדי דיבור, ובסוף נשלח. בלי זיהוי דיבור (פיירפוקס) — הכפתור לא מוצג.
+     */
+    const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition || null;
+    const mic = Recognition ? el('button.btn.mask-mic', { type: 'button', title: 'לשאול בקול', 'aria-label': 'לשאול בקול' }, ['🎙']) : null;
+    let rec = null;
+    mic?.addEventListener('click', () => {
+      if (rec) { try { rec.stop(); } catch { /* כבר עצר */ } return; }
+      try {
+        rec = new Recognition();
+        rec.lang = 'he-IL';
+        rec.interimResults = true;
+        rec.continuous = false;
+        let said = '';
+        rec.onstart = () => mic.classList.add('is-live');
+        rec.onresult = (e) => {
+          said = [...e.results].map((r) => r[0].transcript).join(' ').trim();
+          input.value = said;
+        };
+        rec.onerror = (e) => { if (e.error === 'not-allowed') UI.toast('אין הרשאה למיקרופון', 'error'); };
+        rec.onend = () => {
+          mic.classList.remove('is-live');
+          rec = null;
+          if (said) submit();
+        };
+        rec.start();
+      } catch {
+        rec = null;
+      }
+    });
+    const form = el('form.mask-form', {}, [input, mic, attach, go, fileInput]);
     attach.addEventListener('click', () => fileInput.click());
     fileInput.addEventListener('change', () => {
       for (const f of fileInput.files) {
@@ -100,7 +131,12 @@ const AskView = (() => {
         thread,
         el('div.mute-sm.mask-foot', { text: 'המיילים שלך, סוכני המחלקות והידע הארגוני — במקום אחד. כל תשובה עם המקור; שום דבר לא נשלח בלי לחיצה. משימות ופרויקטים — בשדה החיפוש.' })
       ]);
-    const m = docked ? openDock(content) : UI.modal({ title: '✨ שאל את אשל', size: 'wide', body: content });
+    /*
+     * בטלפון — מגירה מלמטה (מהעיגול הצף ✨): קומפקטית בגובה השאלה, וגדלה עם
+     * התשובה עד כמעט כל המסך. נגררת למטה לסגירה, כמו שאר המגירות.
+     */
+    const m = docked ? openDock(content) : UI.sheet({ title: '✨ מה תרצה לשאול את אשל?', body: content, snap: [0.95], className: 'ask-sheet', label: 'שאל את אשל' });
+    if (!docked) setTimeout(() => input.focus(), 60);
     if (docked) dock = { panel: m.panel, input, ask: (q) => { input.value = q; submit(); } };
     // פעולה מהתשובה (פתיחת משימה, מעבר ל"ממתין לאישורך"): החלון בטלפון נסגר; החלונית במחשב נשארת
     const leave = () => { if (!docked) m.close(); };
