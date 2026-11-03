@@ -445,8 +445,8 @@ function search(query, { limit = 5, actor = null } = {}) {
   const admin = actor?.type === 'user' && ['superadmin', 'admin'].includes(actor.role);
   const mgmt = isManagement(actor);
   return D.all('SELECT * FROM org_knowledge WHERE hidden = 0')
-    // ניהולי — רק להנהלה. בלי שואל ידוע — רק מקצועי
-    .filter((e) => e.level !== 'mgmt' || mgmt)
+    // ניהולי — רק להנהלה. בלי שואל ידוע — רק מקצועי. ערך שעוד לא סווג נחשב ניהולי
+    .filter((e) => mgmt || (e.level === 'pro' && e.classified))
     .filter((e) => !e.dept_only || admin || (DEPT_MATCH[e.dept]?.test(dept)))
     .map((e) => {
       const dom = Memory.normalize(`${e.domain} ${e.project}`);
