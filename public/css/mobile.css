@@ -188,6 +188,17 @@
   .modal-head { padding: 12px 14px; }
   .modal-body { padding: 14px; }
   .modal-foot { border-radius: 0; padding: 12px 14px; flex-wrap: wrap; }
+  /*
+   * החלון לעולם לא רחב מהמסך. ב"החשבון שלי" טבלת הפרטים (עמודת כותרות
+   * רחבה + שלושת כפתורי המראה בשורה אחת) דחפה את החלון ל-432 פיקסלים במסך
+   * של 412 — ה-✕ ו"סגירה" נחתכו בשפה השמאלית.
+   */
+  .modal { min-width: 0; max-width: 100vw; }
+  .modal-body table.data { width: 100%; }
+  .modal-body table.data th { width: 32%; white-space: normal; padding-inline: 8px; }
+  .modal-body table.data td { padding-inline: 8px; }
+  .modal-body .theme-switch { flex-wrap: wrap; }
+  .modal-body .theme-switch button { padding: 5px 9px; }
   .row { flex-direction: column; gap: 0; }
 
   /*
