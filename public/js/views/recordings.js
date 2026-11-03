@@ -77,7 +77,7 @@ const RecordingsView = (() => {
       el('button.btn.btn-sm', { onclick: () => { view.month = new Date(); load(); } }, ['החודש']),
       el('div.spacer'),
       search,
-      el('button.btn.btn-sm', { title: 'רענון', onclick: () => load() }, ['⟳'])
+      el('button.btn.btn-sm', { title: 'רענון מ-Zoom', onclick: async (e) => { e.currentTarget.disabled = true; await load(); UI.success('ההקלטות עודכנו'); } }, ['⟳ רענון'])
     ]);
   }
 

@@ -65,6 +65,7 @@ async function accessMap(actor, { fresh = false } = {}) {
   const hit = accessCache.get(actor.id);
   if (!fresh && hit && Date.now() - hit.at < 10 * MIN) return hit.map;
   const map = new Map();
+  let error = '';
   if (Gmail.has(actor.id, 'calendar')) map.set(actor.id, 'owner');
   if (isSecretary(actor) && Gmail.has(actor.id, 'calendarList')) {
     try {
@@ -81,11 +82,32 @@ async function accessMap(actor, { fresh = false } = {}) {
       } while (pageToken);
     } catch (err) {
       console.error('[משימון] קריאת היומנים המשותפים נכשלה:', err.message);
+      error = `Google לא החזיר את רשימת היומנים: ${err.message}`;
     }
   }
-  accessCache.set(actor.id, { at: Date.now(), map });
+  /*
+   * רענון ידני: יומן ששותף עם המזכירה לא תמיד נכנס לרשימת היומנים שלה ב-Google
+   * (עד שלוחצים "הוספת יומן" במייל השיתוף). לכל עובד שלא נמצא — בודקים ישירות:
+   * רשימת האירועים מחזירה גם את רמת הגישה (‎accessRole‎).
+   */
+  if (fresh && isSecretary(actor) && Gmail.has(actor.id, 'calendar')) {
+    const rest = D.all("SELECT id, email FROM users WHERE status = 'active' AND email <> '' AND id <> ?", actor.id)
+      .filter((u) => (map.get(u.id) ?? 'none') === 'none');
+    const probe = async (u) => {
+      try {
+        const r = await Gmail.googleCall(actor.id, `${CAL}/calendars/${encodeURIComponent(u.email)}/events`, { maxResults: 1, timeMin: new Date().toISOString() });
+        const level = ROLE_TO_ACCESS[r.accessRole] ?? 'none';
+        if (ACCESS_RANK[level] > ACCESS_RANK[map.get(u.id) ?? 'none']) map.set(u.id, level);
+      } catch { /* לא שיתף — נשאר "לא שיתף" */ }
+    };
+    for (let i = 0; i < rest.length; i += 6) await Promise.all(rest.slice(i, i + 6).map(probe));
+  }
+  accessCache.set(actor.id, { at: Date.now(), map, error });
   return map;
 }
+
+/** השגיאה מהקריאה האחרונה של רשימת היומנים, אם הייתה */
+const accessError = (actorId) => accessCache.get(actorId)?.error ?? '';
 
 const forgetAccess = (actorId) => accessCache.delete(actorId);
 
@@ -1041,7 +1063,7 @@ function stop() {
 }
 
 module.exports = {
-  init, MeetingError, isSecretary, accessMap, forgetAccess, calendarsFor, resolveCalendar, canWrite,
+  init, MeetingError, isSecretary, accessMap, accessError, forgetAccess, calendarsFor, resolveCalendar, canWrite,
   freeBusy, availability, suggest, alternatives, create, update, cancel, declineReschedule, markRescheduled,
   moveEvent, requestMove, previewMove, approveMove, forTask, joinLink, recording, shape, meetingById, syncOne, syncAll, sendReminders,
   recipientsOf, externalRecipientsOf, reminderText, externalReminderText, start, stop, tick,

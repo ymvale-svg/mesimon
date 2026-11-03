@@ -63,7 +63,8 @@ function register(router, h) {
         record: Boolean(D.getSetting('meeting_record_default', false)),
         hours: D.getSetting('meeting_hours', '08:30-18:00')
       },
-      calendars: await Meetings.calendarsFor(actor, { fresh })
+      calendars: await Meetings.calendarsFor(actor, { fresh }),
+      accessError: Meetings.accessError(actor.id)
     }));
   });
 

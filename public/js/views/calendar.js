@@ -104,7 +104,7 @@ const CalendarView = (() => {
         el('div.spacer'),
         // קביעת פגישה בלי לבחור משבצת ובלי משימה — למזכירות בלבד (המסך כולו שלהן)
         info.secretary ? el('button.btn.btn-sm.btn-primary', { onclick: scheduleNew }, ['📅 קביעת פגישה']) : null,
-        el('button.btn.btn-sm', { title: 'רענון רשימת היומנים ששותפו', onclick: async () => { info = await API.get('/api/meetings/calendars?fresh=1'); loadRange(); } }, ['⟳'])
+        el('button.btn.btn-sm.cal-refresh', { title: 'רענון: היומנים ששותפו, הפגישות והמשימות שמחכות', onclick: (e) => refreshAll(e.currentTarget) }, ['⟳ רענון'])
       ]),
       el('div.cal-access', {}, [
         `שיתפו איתך לעריכה: ${counts.write} · לצפייה: ${counts.read} · לא שיתפו: ${counts.none}`,
@@ -251,6 +251,41 @@ const CalendarView = (() => {
   }
 
   // ------------------------------------------------------------- פעולות
+
+  /**
+   * ⟳ — שואל את Google מחדש מי שיתף (גם יומנים שעוד לא נוספו לרשימה), טוען
+   * את הפגישות ואת "מחכות לקביעה", ואומר מה השתנה.
+   */
+  async function refreshAll(btn) {
+    if (btn.disabled) return;
+    btn.disabled = true;
+    btn.classList.add('is-busy');
+    btn.textContent = '⟳ מרענן…';
+    const writable = (list) => new Set(list.filter((c) => !c.self && ['owner', 'write'].includes(c.access)).map((c) => c.userId));
+    const before = writable(info.calendars);
+    try {
+      const [fresh, p] = await Promise.all([API.get('/api/meetings/calendars?fresh=1'), API.get('/api/meetings/pending')]);
+      info = fresh;
+      pending = p.tasks;
+      const after = writable(info.calendars);
+      const added = [...after].filter((id) => !before.has(id));
+      // עובד ששיתף עכשיו — מופיע מיד במסך
+      for (const id of added) if (!view.users.includes(id) && view.users.length < 15) view.users.push(id);
+      if (added.length) App.setPref(PREF, view.users);
+      await loadRange();
+      if (info.accessError) UI.toast(info.accessError, 'error');
+      else if (added.length) {
+        const names = added.map((id) => info.calendars.find((c) => c.userId === id)?.name).filter(Boolean);
+        UI.success(`נוספו ${added.length === 1 ? 'יומן אחד' : `${added.length} יומנים`} לעריכה: ${names.join(', ')}`);
+      } else UI.success(`עודכן — ${after.size} יומנים משותפים לעריכה`);
+    } catch (err) {
+      UI.error(err);
+    } finally {
+      btn.disabled = false;
+      btn.classList.remove('is-busy');
+      btn.textContent = '⟳ רענון';
+    }
+  }
 
   /**
    * "📅 קביעת פגישה" בראש המסך — הדיאלוג הרגיל, בלי משימה. ביומן של העובד

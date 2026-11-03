@@ -115,45 +115,47 @@ const MeetingView = (() => {
         : 'ההזמנה יוצאת בשם בעל היומן');
     };
 
-    // --- משתתפים
-    function attendeesBox() {
-      const picker = ContactPicker.create({
-        onPick: (c) => {
-          const email = c.email || c.emails?.[0]?.value;
-          if (!email) return UI.toast(`ל${c.name} אין כתובת מייל — אי אפשר להזמין`, 'error');
-          picker.input.value = '';
-          if (!state.attendees.some((a) => a.email === email)) state.attendees.push({ email, name: c.name || '' });
-          state.alternatives = null;
-          draw();
-          loadAvailability();
-          setTimeout(() => body.querySelector('.cp input')?.focus(), 30);
-        }
-      });
-      // כתובת שהוקלדה ידנית ואינה ברשימה — Enter מוסיף אותה
-      picker.input.addEventListener('keydown', (e) => {
-        if (e.key !== 'Enter') return;
-        const v = picker.input.value.trim().toLowerCase();
-        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)) return;
-        e.preventDefault();
-        if (!state.attendees.some((a) => a.email === v)) state.attendees.push({ email: v, name: '' });
-        picker.input.value = '';
+    // --- משתתפים: רשימה נפתחת עם חיפוש וסימון. נוצרת פעם אחת, כדי שתישאר
+    // פתוחה בזמן הסימון; הזמינות וההצעות מתעדכנות כשהיא נסגרת
+    let attendeesChanged = false;
+    const chipsBox = el('div');
+    const drawChips = () => UI.mount(chipsBox, state.attendees.length
+      ? el('div.mt-chips', {}, state.attendees.map((a) => {
+          const resp = editing?.attendees.find((x) => x.email === a.email)?.response;
+          return el('span.chip.chip-assignee', { title: a.email }, [
+            resp ? el('span', { title: RESPONSE_TITLE[resp], text: `${RESPONSE[resp]} ` }) : null,
+            el('span', { text: a.name ? `${a.name} · ${a.email}` : a.email }),
+            el('button.chip-x', { type: 'button', title: 'הסרה', onclick: () => { state.attendees = state.attendees.filter((x) => x.email !== a.email); state.alternatives = null; draw(); loadAvailability(); } }, ['✕'])
+          ]);
+        }))
+      : el('div.mute-sm', { text: 'אפשר גם בלי משתתפים — פגישה ביומן בלבד.' }));
+    const attendeePicker = ContactPicker.multi({
+      selected: () => state.attendees.map((a) => a.email),
+      onToggle: (c, on) => {
+        const email = String(c.email || c.emails?.[0]?.value || '').toLowerCase();
+        state.attendees = on
+          ? [...state.attendees.filter((a) => a.email !== email), { email, name: c.name || '' }]
+          : state.attendees.filter((a) => a.email !== email);
+        attendeesChanged = true;
+        drawChips();
+      },
+      onAddEmail: (email) => {
+        if (!state.attendees.some((a) => a.email === email)) state.attendees.push({ email, name: '' });
+        attendeesChanged = true;
+        drawChips();
+      },
+      onClose: () => {
+        if (!attendeesChanged) return;
+        attendeesChanged = false;
+        state.alternatives = null;
         draw();
         loadAvailability();
-      });
-      picker.input.placeholder = 'שם, חברה או מייל — ו-Enter לכתובת חדשה';
-      return el('div', {}, [
-        picker.node,
-        state.attendees.length
-          ? el('div.mt-chips', {}, state.attendees.map((a) => {
-              const resp = editing?.attendees.find((x) => x.email === a.email)?.response;
-              return el('span.chip.chip-assignee', { title: a.email }, [
-                resp ? el('span', { title: RESPONSE_TITLE[resp], text: `${RESPONSE[resp]} ` }) : null,
-                el('span', { text: a.name ? `${a.name} · ${a.email}` : a.email }),
-                el('button.chip-x', { type: 'button', title: 'הסרה', onclick: () => { state.attendees = state.attendees.filter((x) => x.email !== a.email); state.alternatives = null; draw(); loadAvailability(); } }, ['✕'])
-              ]);
-            }))
-          : el('div.mute-sm', { text: 'אפשר גם בלי משתתפים — פגישה ביומן בלבד.' })
-      ]);
+      }
+    });
+    function attendeesBox() {
+      attendeePicker.refresh();
+      drawChips();
+      return el('div', {}, [attendeePicker.node, chipsBox]);
     }
 
     // --- משך
