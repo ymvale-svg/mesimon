@@ -141,7 +141,9 @@ function sendJson(res, status, payload) {
   res.writeHead(status, {
     'content-type': 'application/json; charset=utf-8',
     'content-length': body.length,
-    'cache-control': 'no-store'
+    'cache-control': 'no-store',
+    'x-content-type-options': 'nosniff',
+    'strict-transport-security': 'max-age=31536000'
   });
   res.end(body);
 }
