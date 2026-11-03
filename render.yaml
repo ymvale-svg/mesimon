@@ -81,6 +81,18 @@ services:
         sync: false
       - key: PRIORITY_COMPANY      # קוד החברה בפריוריטי. בבדיקות: test11
         sync: false
+      - key: ZOOM_ACCOUNT_ID       # Zoom של החברה — אפליקציית Server-to-Server OAuth. בלי שלושתם הפגישות בלי Zoom
+        sync: false
+      - key: ZOOM_CLIENT_ID
+        sync: false
+      - key: ZOOM_CLIENT_SECRET
+        sync: false
+      - key: ZOOM2_ACCOUNT_ID      # חשבון Zoom שני — לא חובה
+        sync: false
+      - key: ZOOM2_CLIENT_ID
+        sync: false
+      - key: ZOOM2_CLIENT_SECRET
+        sync: false
     disk:
       name: mesimon-data   # הדיסק שורד עדכוני גרסה — כאן נשמרים מסד הנתונים והקבצים
       mountPath: /var/mesimon
