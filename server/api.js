@@ -30,6 +30,7 @@ const MailScan = require('./ai/mail-scan');
 const Claude = require('./ai/claude');
 const WhatsApp = require('./whatsapp');
 const WaBot = require('./ai/wa-bot');
+const TaskOutreach = require('./ai/task-outreach');
 const Dupes = require('./ai/task-dupes');
 const TaskSync = require('./ai/task-sync');
 const Tiful360 = require('./tiful360');
@@ -1671,6 +1672,14 @@ function notifyAssignment(taskId, assigneeType, assigneeId, title, assigner = nu
   if (task) TaskMail.sendAssignment({ task, assigneeType, assigneeId, assigner });
   // ועוד הודעה מבוט הוואטסאפ — לעובד עם טלפון, לפי ההגדרות שלו
   if (task && assigneeType === 'user') WaBot.notifyAssignment({ taskId, userId: assigneeId, assigner, extra });
+  /*
+   * משימה שהיא פנייה ("לבקש הצעת מחיר מ…") — הנוסח מוכן עוד לפני שהכרטיס נפתח.
+   * בלי ‎await‎, ולא זורק; ההחלטה אם בכלל — ב-TaskOutreach (כולל סינון זול לפני ה-AI)
+   */
+  if (task && assigneeType === 'user') {
+    const assignee = Auth.loadActor('user', assigneeId);
+    if (assignee && TaskOutreach.eligible(task, assignee)) void TaskOutreach.prepare(task.id, assignee);
+  }
 }
 
 router.patch('/api/tasks/:id', async (req, res, ctx) => {

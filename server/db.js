@@ -907,6 +907,22 @@ CREATE TABLE IF NOT EXISTS release_notes (
   updated_at    TEXT    NOT NULL
 );
 
+/*
+ * הצעת מייל למשימה שהיא פנייה החוצה ("לבקש הצעת מחיר מהדפוס") — לכל משימה
+ * ועובד. ‎state‎: none | ready | no_contact | dismissed | sent. ‎fingerprint‎ —
+ * הכותרת והתיאור שלפיהם חושבה; שינוי בהם מחשב מחדש. ראה ‎server/ai/task-outreach.js‎
+ */
+CREATE TABLE IF NOT EXISTS task_outreach (
+  task_id     INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  state       TEXT    NOT NULL,
+  fingerprint TEXT    NOT NULL DEFAULT '',
+  data        TEXT    NOT NULL DEFAULT '{}',
+  created_at  TEXT    NOT NULL,
+  updated_at  TEXT    NOT NULL,
+  PRIMARY KEY (task_id, user_id)
+);
+
 /* שולחים מיוחדים לכל משתמש: ‎trust‎ — משימות נוצרות ישר, בלי אישור; ‎ignore‎ — לא מציעים מהם משימות */
 CREATE TABLE IF NOT EXISTS mail_trusted_senders (
   user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,

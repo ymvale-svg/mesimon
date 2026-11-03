@@ -55,6 +55,7 @@ const Range = require('./insight-window');
 const WaScan = require('./whatsapp-scan');
 const Business = require('./wa-business');
 const TaskSync = require('./task-sync');
+const TaskOutreach = require('./task-outreach');
 
 const GROUP_SKILL = path.join(__dirname, 'skills', 'whatsapp-group-to-tasks.md');
 const CHAT_SKILL = path.join(__dirname, 'skills', 'whatsapp-chat.md');
@@ -1415,6 +1416,8 @@ async function draftEmail(actor, contact, instruction, { feedback = '', previous
     channel: via,
     // מ"💡 פתרון לבעיה": הבעיה, הפתרון והחלופות — לבחירה באחר ("2") ולהחלפת ערוץ
     solve: solve ?? previous?.solve ?? null,
+    // נוסח למשימה קיימת ("לבקש הצעת מחיר מ…") — "כן" שולח עליה, ולא פותח משימה חדשה
+    taskId: previous?.taskId ?? null,
     instruction,
     contact,
     draft: {
@@ -1515,6 +1518,23 @@ async function confirmPending(actor, pending, dry) {
       const r = pending.reply;
       if (!dry) await MailInsights.sendReply(actor.id, r);
       return { reply: `📧 התשובה נשלחה ל${r.toName || r.to}.${test}`, action, status: 'ok', result: `תשובה ל${r.toName || r.to}: ${r.subject}` };
+    }
+    if (kind === 'email' && pending.taskId) {
+      const who = pending.contact.name || pending.contact.email;
+      if (pending.ccAsk?.length) {
+        return { reply: `לפני השליחה — עוד לא ברור מי בהעתק: ${pending.ccAsk.map((x) => `"${x.name}"`).join(', ')}. כתבו *בהעתק* עם השם המלא או המייל, או *בלי* והשם.`, action, status: 'unclear', result: 'העתק לא ברור', keep: true };
+      }
+      if (!dry) {
+        await hooks.mail.sendOutreach(actor, pending.taskId, {
+          draft: pending.draft, cc: pending.cc ?? [],
+          contact: { name: pending.contact.name, email: pending.contact.email, type: pending.contact.type, refId: pending.contact.refId ?? null }
+        });
+      }
+      const link = taskLink(pending.taskId);
+      return {
+        reply: `📧 נשלח ל${who}. המשימה במעקב — אעדכן כשתגיע תשובה.${test}${link ? `\n${link}` : ''}`,
+        action, status: 'ok', result: `נשלח מייל למשימה #${pending.taskId} ל${who}: ${pending.draft.subject}`, taskId: pending.taskId
+      };
     }
     if (kind === 'email') {
       const who = pending.contact.name || pending.contact.email;
@@ -1936,9 +1956,9 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
   };
 
   /** מייל לאיש קשר: חיפוש הנמען, ובהתאמה אחת — ישר לטיוטה */
-  const startEmail = async ({ name, org, email }, request, only = null) => {
+  const startEmail = async ({ name, org, email }, request, only = null, taskId = null) => {
     if (!hooks.mail) return out('שליחת מיילים מהבוט אינה זמינה כרגע.', {}, { action: 'send_email', status: 'error', result: 'אין חיבור לאשף' });
-    const ask = (reply, result) => out(reply, { draft: { kind: 'email_pick', name, request, candidates: [] } }, { action: 'send_email', status: 'unclear', result });
+    const ask = (reply, result) => out(reply, { draft: { kind: 'email_pick', name, request, candidates: [], taskId } }, { action: 'send_email', status: 'unclear', result });
     if (!email && !name && !org) return out('למי לשלוח?', {}, { action: 'send_email', status: 'unclear', result: 'חסר נמען' });
     const candidates = email
       ? [{ name: name || email, email, type: 'external' }]
@@ -1950,22 +1970,24 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
       return ask(`לא מצאתי את "${[name, org].filter(Boolean).join(' · ')}" ${where}.${why ? `\n⚠️ ${why}` : ''}\nכתבו שם אחר, או את כתובת המייל.`, 'הנמען לא נמצא');
     }
     if (candidates.length > 1) {
-      return out(pickText(name || org, candidates), { draft: { kind: 'email_pick', name: name || org, request, candidates: candidates.slice(0, PICK_SHOWN) } },
+      return out(pickText(name || org, candidates), { draft: { kind: 'email_pick', name: name || org, request, candidates: candidates.slice(0, PICK_SHOWN), taskId } },
         { action: 'send_email', status: 'unclear', result: `${candidates.length} נמענים אפשריים ל"${name || org}"` });
     }
-    return composeTo(candidates[0], request);
+    return composeTo(candidates[0], request, taskId);
   };
 
-  const composeTo = async (contact, request) => {
+  const composeTo = async (picked, request, taskId = null) => {
+    // מייל למשימה קיימת — גם לעובד בארגון זה מייל, לא שיוך במשימון
+    const contact = taskId && picked.type === 'user' ? { ...picked, type: 'external', refId: null } : picked;
     if (contact.type !== 'user' && !Gmail.canSend(actor.id)) {
       return out('כדי לשלוח מייל מהבוט צריך לחבר את תיבת ה-Gmail שלך באפליקציה: "החשבון שלי ← Gmail ועוזר ה-AI".', { draft: null },
         { action: 'send_email', status: 'error', result: 'Gmail לא מחובר לשליחה' });
     }
     if (!request) {
-      return out(`מה לכתוב ל${contact.name || contact.email}?`, { draft: { kind: 'email_pick', name: contact.name, request: '', candidates: [contact] } },
+      return out(`מה לכתוב ל${contact.name || contact.email}?`, { draft: { kind: 'email_pick', name: contact.name, request: '', candidates: [contact], taskId } },
         { action: 'send_email', status: 'unclear', result: 'חסר תוכן' });
     }
-    const pending = await draftEmail(actor, contact, request, { dry });
+    const pending = { ...await draftEmail(actor, contact, request, { dry }), taskId };
     return out(emailText(pending), { draft: pending, awaiting: true },
       { action: 'send_email', status: 'ok', result: `טיוטת מייל ל${contact.name || contact.email}: ${pending.draft.subject}${pending.suggestions.length ? ` · ${pending.suggestions.length} הצעות` : ''}` });
   };
@@ -2032,15 +2054,15 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
     if (/^\d{1,2}$/.test(t) && pick.candidates.length) {
       const c = pick.candidates[Number(t) - 1];
       if (!c) return out(`בחרו מספר מ-1 עד ${pick.candidates.length}.`, {}, { action: 'send_email', status: 'unclear', result: 'מספר לא ברשימה' });
-      return composeTo(c, pick.request);
+      return composeTo(c, pick.request, pick.taskId ?? null);
     }
     const mail = /[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+/.exec(t)?.[0];
-    if (mail) return startEmail({ name: pick.name, org: '', email: mail.toLowerCase() }, pick.request);
+    if (mail) return startEmail({ name: pick.name, org: '', email: mail.toLowerCase() }, pick.request, null, pick.taskId ?? null);
     // נמען כבר ידוע ורק חסר תוכן — ההודעה היא התוכן
-    if (pick.candidates.length === 1 && !pick.request) return composeTo(pick.candidates[0], t);
+    if (pick.candidates.length === 1 && !pick.request) return composeTo(pick.candidates[0], t, pick.taskId ?? null);
     if (t.split(/\s+/).length <= 4) {
       const found = findRecipients(actor, t).map(contactOf);
-      if (found.length) return startEmail({ name: t, org: '', email: '' }, pick.request);
+      if (found.length) return startEmail({ name: t, org: '', email: '' }, pick.request, null, pick.taskId ?? null);
     }
     // אחרת — אולי בקשה חדשה; ה-AI יחליט
   }
@@ -2560,12 +2582,62 @@ const OUTBOX_DAYS = 3;
 
 /** אחרי ההודעה, "סיימתי את 1" ו"תוסיף ל-1" מתייחסים למשימה שהתקבלה */
 function sendProactive(userId, chatId, text, { taskId = null, action = 'assignment_notice', who = '' } = {}) {
-  return sendText(chatId, text).then(() => {
+  return sendText(chatId, text).then(async () => {
     if (taskId) saveChat(userId, { ...chatOf(userId), lastList: [taskId] });
     log({ channel: 'summary', chatId, userId, who, action, status: 'ok', result: text.split('\n')[0].slice(0, 300), taskId });
+    if (taskId && action === 'assignment_notice') await offerOutreach(userId, chatId, taskId, who);
   }).catch((err) => {
     log({ channel: 'summary', chatId, userId, who, action, status: 'error', result: err.message, taskId });
   });
+}
+
+/**
+ * משימה שהיא פנייה החוצה ("לשלוח מייל לדני", "לבקש הצעת מחיר מהדפוס") — מיד
+ * אחרי "קיבלת משימה", הודעה שנייה עם נוסח מייל מוכן. "כן" שולח מהתיבה של
+ * העובד, והמשימה עצמה נעשית משימת AI שעוקבת אחרי התשובה. אותו נוסח מחכה גם
+ * בכרטיס המשימה. נמען שלא נמצא, או כמה באותו שם — שואלים, כמו "שלח מייל ל…".
+ *
+ * עובד שבאמצע משהו אחר מול הבוט (טיוטה שמחכה ל"כן") — לא דורסים לו: רק
+ * שורה שהנוסח מחכה בכרטיס. לעולם לא זורקת.
+ */
+async function offerOutreach(userId, chatId, taskId, who = '') {
+  try {
+    const actor = Auth.loadActor('user', userId);
+    if (!actor || !hooks.mail?.sendOutreach || !WaActions.allowed(actor, 'send_email')) return;
+    const row = await TaskOutreach.prepare(taskId, actor);
+    if (!row || !['ready', 'no_contact'].includes(row.state)) return;
+    const state = chatOf(userId);
+    const link = taskLink(taskId);
+    const busy = state.awaiting || ['email_pick', 'reply_ask'].includes(state.draft?.kind);
+    const d = row.data;
+    let text;
+    let draft = null;
+    if (busy) {
+      text = `✉️ למשימה הזו הכנתי נוסח מייל${d.contact ? ` ל${d.contact.name || d.contact.email}` : ''} — מחכה לך בכרטיס המשימה.${link ? `\n${link}` : ''}`;
+    } else if (row.state === 'ready') {
+      draft = {
+        kind: 'email', taskId, instruction: d.instruction, contact: d.contact, draft: d.draft,
+        suggestions: d.suggestions ?? [], notes: d.notes ?? '', cc: [], ccAsk: [], ...await signatureFields(userId)
+      };
+      text = `✉️ *הכנתי לך נוסח מייל למשימה הזו:*\n\n${emailText(draft)}`;
+    } else if (d.candidates?.length) {
+      draft = { kind: 'email_pick', name: d.recipient?.name || d.recipient?.org || '', request: d.instruction, candidates: d.candidates, taskId };
+      text = `✉️ *אפשר לשלוח את המייל למשימה הזו מכאן.*\n${pickText(draft.name, d.candidates)}`;
+    } else {
+      const name = [d.recipient?.name, d.recipient?.org].filter(Boolean).join(' · ');
+      draft = { kind: 'email_pick', name: d.recipient?.name || '', request: d.instruction, candidates: [], taskId };
+      text = `✉️ *אפשר לשלוח את המייל למשימה הזו מכאן* — ${name ? `אבל לא מצאתי את "${name}" באנשי הקשר` : 'אבל לא ברור למי'}.\nכתבו את כתובת המייל של הנמען, ואכין נוסח. *ביטול* — לא עכשיו.`;
+    }
+    await sendText(chatId, text);
+    // המצב נקרא שוב רגע לפני השמירה — הודעה שהגיעה בינתיים מהעובד גוברת
+    const now = chatOf(userId);
+    if (draft && !now.awaiting && !['email_pick', 'reply_ask'].includes(now.draft?.kind)) {
+      saveChat(userId, { ...now, draft, awaiting: draft.kind === 'email' });
+    }
+    log({ channel: 'summary', chatId, userId, who, action: 'send_email', status: 'ok', result: text.split('\n')[0].slice(0, 300), taskId });
+  } catch (err) {
+    log({ channel: 'summary', chatId, userId, who, action: 'send_email', status: 'error', result: `נוסח למשימה: ${err.message}`, taskId });
+  }
 }
 
 /**
