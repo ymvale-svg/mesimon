@@ -57,7 +57,8 @@ function register(router, h) {
         freebusy: Gmail.has(actor.id, 'freebusy'),
         calendarList: Gmail.has(actor.id, 'calendarList')
       },
-      zoom: { enabled: Zoom.isEnabled() },
+      // ‎chooseHost‎ — הנהלה ומזכירות בוחרים חשבון ומשתמש Zoom (‎/api/meetings/zoom-hosts‎)
+      zoom: { enabled: Zoom.isEnabled(), chooseHost: Zoom.isEnabled() && Meetings.isZoomManager(actor) },
       defaults: {
         minutes: Number(D.getSetting('meeting_default_minutes', 30)),
         record: Boolean(D.getSetting('meeting_record_default', false)),
@@ -66,6 +67,17 @@ function register(router, h) {
       calendars: await Meetings.calendarsFor(actor, { fresh }),
       accessError: Meetings.accessError(actor.id)
     }));
+  });
+
+  // משתמשי ה-Zoom בשני החשבונות, ומי תפוס במועד — לבורר המארח של הנהלה ומזכירות
+  router.get('/api/meetings/zoom-hosts', async (req, res, ctx) => {
+    const actor = userOnly(ctx);
+    if (!Meetings.isZoomManager(actor)) throw forbidden();
+    const q = parseUrl(req).searchParams;
+    const start = Date.parse(q.get('start') ?? '');
+    const minutes = Math.max(5, Number(q.get('minutes')) || 30);
+    const range = Number.isFinite(start) ? [new Date(start).toISOString(), new Date(start + minutes * 60000).toISOString()] : [null, null];
+    sendJson(res, 200, { hosts: Zoom.hostsAt(range[0], range[1], Number(q.get('exclude')) || null), multi: Zoom.accounts().filter((a) => a.enabled).length > 1 });
   });
 
   router.post('/api/meetings/availability', async (req, res, ctx) => {

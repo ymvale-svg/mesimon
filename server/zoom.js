@@ -193,27 +193,46 @@ const listUsers = () => D.all('SELECT * FROM zoom_users ORDER BY account, name')
 // בחירת משתמש Zoom פנוי
 // ---------------------------------------------------------------------------
 
+/** משתמשי ה-Zoom שמארחים פגישת משימון אחרת בטווח */
+const busyHosts = (startIso, endIso, excludeMeetingId = null) => new Set(D.all(
+  `SELECT zoom_user_id FROM meetings
+    WHERE status = 'scheduled' AND zoom_user_id IS NOT NULL AND start_at < ? AND end_at > ? AND id IS NOT ?`,
+  endIso, startIso, excludeMeetingId
+).map((r) => r.zoom_user_id));
+
 /**
- * משתמש ה-Zoom שיארח פגישה בטווח הזה. קודם המקושר לעובד; אם הוא מארח
- * באותה שעה פגישה אחרת של משימון — משתמש פנוי אחר מהחשבון.
+ * משתמש ה-Zoom שיארח פגישה בטווח הזה. ‎prefer‎ — מארח שנבחר במפורש (הנהלה
+ * ומזכירות, מכל אחד מהחשבונות): תפוס — אין פגישה, עם הסבר. בלי בחירה — קודם
+ * המקושר לעובד, ואם אין או שהוא תפוס — משתמש פנוי מכל החשבונות. כך גם עובד
+ * שאינו רשום ב-Zoom מקבל פגישה.
  *
  * @returns {{zoomUser: object|null, swapped: boolean, reason?: string}}
  */
-function pickHost(userId, startIso, endIso, { excludeMeetingId = null } = {}) {
-  const busy = new Set(D.all(
-    `SELECT zoom_user_id FROM meetings
-      WHERE status = 'scheduled' AND zoom_user_id IS NOT NULL AND start_at < ? AND end_at > ? AND id IS NOT ?`,
-    endIso, startIso, excludeMeetingId
-  ).map((r) => r.zoom_user_id));
+function pickHost(userId, startIso, endIso, { excludeMeetingId = null, prefer = null } = {}) {
+  const busy = busyHosts(startIso, endIso, excludeMeetingId);
+  const live = enabledAccounts();
+  if (prefer) {
+    const z = D.get('SELECT * FROM zoom_users WHERE id = ?', prefer);
+    if (!z || !live.includes(z.account)) return { zoomUser: null, swapped: false, reason: 'משתמש ה-Zoom שנבחר אינו זמין עוד — רעננו את רשימת משתמשי ה-Zoom' };
+    if (busy.has(z.id)) return { zoomUser: null, swapped: false, reason: `${z.name} מארח/ת פגישה אחרת בשעה הזו` };
+    return { zoomUser: z, swapped: false };
+  }
   const linked = D.get('SELECT zoom_user_id FROM users WHERE id = ?', userId)?.zoom_user_id ?? null;
   const own = linked ? D.get('SELECT * FROM zoom_users WHERE id = ?', linked) : null;
-  if (own && !busy.has(own.id) && accountEnabled(own.account)) return { zoomUser: own, swapped: false };
+  if (own && !busy.has(own.id) && live.includes(own.account)) return { zoomUser: own, swapped: false };
   // חשבונות בתשלום קודם — חינמי נקטע אחרי 40 דקות
-  const live = enabledAccounts();
   const free = D.all("SELECT * FROM zoom_users ORDER BY CASE license WHEN 'licensed' THEN 0 ELSE 1 END, account, name")
     .find((z) => !busy.has(z.id) && live.includes(z.account));
   if (!free) return { zoomUser: null, swapped: false, reason: 'אין משתמש Zoom פנוי בשעה הזו' };
-  return { zoomUser: free, swapped: Boolean(own), reason: own ? `${own.name} תפוס בשעה הזו` : (linked ? '' : 'לעובד לא שויך משתמש Zoom') };
+  return { zoomUser: free, swapped: Boolean(own), reason: own ? `${own.name} תפוס בשעה הזו` : '' };
+}
+
+/** כל משתמשי ה-Zoom בחשבונות הפעילים, ומי מהם תפוס בטווח — לבורר המארח */
+function hostsAt(startIso, endIso, excludeMeetingId = null) {
+  const busy = startIso && endIso ? busyHosts(startIso, endIso, excludeMeetingId) : new Set();
+  const live = enabledAccounts();
+  return D.all('SELECT * FROM zoom_users ORDER BY account, name').filter((z) => live.includes(z.account))
+    .map((z) => ({ id: z.id, name: z.name, email: z.email, account: z.account, license: z.license, busy: busy.has(z.id) }));
 }
 
 // ---------------------------------------------------------------------------
@@ -457,7 +476,7 @@ async function recordingsFor(actor, from, to) {
 }
 
 module.exports = {
-  isEnabled, missing, accounts, syncUsers, listUsers, pickHost, createMeeting, updateMeeting, deleteMeeting, startUrl,
+  isEnabled, missing, accounts, syncUsers, listUsers, pickHost, hostsAt, createMeeting, updateMeeting, deleteMeeting, startUrl,
   listRecordings, recordingFileUrl, meetingRecording, recordingScope, mayWatch, recordingsFor, ZoomError,
   _internal: { meetingBody, call }
 };

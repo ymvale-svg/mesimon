@@ -75,6 +75,7 @@ const MeetingView = (() => {
       time: '',
       locationType: editing?.locationType ?? (info.zoom.enabled ? 'zoom' : 'place'),
       record: editing ? Boolean(editing.zoom?.record) : Boolean(info.defaults.record),
+      zoomUserId: editing?.zoom?.userId ?? '',   // ריק = אוטומטי (הנהלה ומזכירות בוחרים)
       suggestions: null,
       alternatives: null,
       avail: null
@@ -162,10 +163,10 @@ const MeetingView = (() => {
     function minutesBox() {
       const preset = [30, 45, 60, 90];
       const other = el('input', { type: 'number', min: 5, max: 600, step: 5, value: preset.includes(state.minutes) ? '' : state.minutes, placeholder: 'אחר', style: { width: '80px' } });
-      other.addEventListener('change', () => { if (Number(other.value) > 0) { state.minutes = Number(other.value); state.suggestions = null; draw(); } });
+      other.addEventListener('change', () => { if (Number(other.value) > 0) { state.minutes = Number(other.value); state.suggestions = null; draw(); loadHosts(); } });
       return el('div.flex', { style: { flexWrap: 'wrap', gap: '6px' } }, [
         el('div.seg', {}, preset.map((n) => el(`button${state.minutes === n ? '.active' : ''}`, {
-          type: 'button', onclick: () => { state.minutes = n; state.suggestions = null; state.alternatives = null; draw(); }
+          type: 'button', onclick: () => { state.minutes = n; state.suggestions = null; state.alternatives = null; draw(); loadHosts(); }
         }, [`${n} דק׳`]))),
         other
       ]);
@@ -226,6 +227,7 @@ const MeetingView = (() => {
 
     let availSeq = 0;
     async function loadAvailability() {
+      loadHosts();
       const mine = ++availSeq;
       state.avail = null;
       redrawAvail();
@@ -370,6 +372,27 @@ const MeetingView = (() => {
       ]);
     }
 
+    // --- מארח Zoom: הנהלה ומזכירות בוחרים חשבון ומשתמש — גם כשבעל היומן אינו רשום ב-Zoom
+    const hostSelect = el('select', { onchange: () => { state.zoomUserId = hostSelect.value; } });
+    let hostsSeq = 0;
+    async function loadHosts() {
+      if (!info.zoom.chooseHost) return;
+      const mine = ++hostsSeq;
+      try {
+        const q = new URLSearchParams({ start: startIso(), minutes: String(state.minutes), exclude: editing?.id ?? '' });
+        const { hosts, multi } = await API.get(`/api/meetings/zoom-hosts?${q}`);
+        if (mine !== hostsSeq) return;
+        const option = (h) => el('option', { value: h.id, disabled: h.busy && h.id !== editing?.zoom?.userId },
+          [`${h.name} · ${h.email}${h.license === 'basic' ? ' · חינמי (40 דק׳)' : ''}${h.busy && h.id !== editing?.zoom?.userId ? ' — תפוס בשעה הזו' : ''}`]);
+        const groups = multi
+          ? [...new Set(hosts.map((h) => h.account))].map((acc) => el('optgroup', { label: `חשבון Zoom ${acc}` }, hosts.filter((h) => h.account === acc).map(option)))
+          : hosts.map(option);
+        UI.mount(hostSelect, el('option', { value: '' }, [editing ? 'ללא שינוי' : 'אוטומטי — המשויך לבעל היומן, ואם אין או שהוא תפוס — משתמש פנוי']), ...groups);
+        hostSelect.value = hosts.some((h) => h.id === state.zoomUserId) ? state.zoomUserId : '';
+        if (editing && hostSelect.value === editing.zoom?.userId) hostSelect.value = '';
+      } catch { /* בלי הבורר — אוטומטי */ }
+    }
+
     // --- מיקום
     function locationBox() {
       const types = [
@@ -384,7 +407,10 @@ const MeetingView = (() => {
           el('span', { text: label })
         ]))),
         ['place', 'link'].includes(state.locationType) ? locationInput : null,
-        state.locationType === 'zoom' ? el('div.mute-sm', { text: 'מחשבון ה-Zoom של החברה — מהמשתמש המקושר לבעל היומן, ואם הוא תפוס — ממשתמש פנוי.' }) : null,
+        state.locationType === 'zoom' && info.zoom.chooseHost
+          ? UI.field('מארח Zoom', hostSelect, editing?.zoom?.host ? `כרגע: ${editing.zoom.host}. בחירת משתמש אחר יוצרת קישור חדש, והמשתתפים מקבלים עדכון` : 'מכל חשבונות ה-Zoom של החברה. קישור המארח — לבעל היומן, למי שקבע, להנהלה ולמזכירות')
+          : null,
+        state.locationType === 'zoom' && !info.zoom.chooseHost ? el('div.mute-sm', { text: 'מחשבון ה-Zoom של החברה — מהמשתמש המקושר לבעל היומן, ואם הוא תפוס — ממשתמש פנוי.' }) : null,
         state.locationType === 'zoom' ? el('label.today-radio', { title: 'Zoom מקליט מתחילת הפגישה, וההקלטה נשמרת בענן — במסך "🎥 הקלטות Zoom" ובבוט' }, [
           el('input', { type: 'checkbox', checked: state.record, onchange: (e) => { state.record = e.target.checked; } }),
           el('span', { text: '⏺ הקלטה אוטומטית לענן' })
@@ -409,6 +435,7 @@ const MeetingView = (() => {
         minutes: state.minutes,
         locationType: state.locationType,
         record: state.locationType === 'zoom' && state.record,
+        zoomUserId: state.locationType === 'zoom' && info.zoom.chooseHost && state.zoomUserId ? state.zoomUserId : undefined,
         location: locationInput.value.trim(),
         notes: notesInput.value,
         sendInvites: sendInvites.checked
@@ -428,7 +455,7 @@ const MeetingView = (() => {
     saveBtn.addEventListener('click', save);
 
     dateInput.addEventListener('change', () => { state.date = dateInput.value; state.alternatives = null; loadAvailability(); });
-    timeInput.addEventListener('change', () => { state.time = timeInput.value; state.alternatives = null; redrawAvail(); });
+    timeInput.addEventListener('change', () => { state.time = timeInput.value; state.alternatives = null; redrawAvail(); loadHosts(); });
 
     function draw() {
       const suggestBtn = el('button.btn.btn-sm', { type: 'button' }, ['💡 הצע מועדים']);
