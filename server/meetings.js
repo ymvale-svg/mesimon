@@ -49,6 +49,7 @@ const isSecretary = (actor) => actor?.type === 'user' && Boolean(D.get('SELECT i
 const canChooseZoomHost = (actor) => actor?.type === 'user' && actor.role !== 'vendor';
 
 /** קישור המארח לכל פגישה — גם כשלא הם קבעו: הנהלה, מנהלי מחלקות ומזכירות */
+const ZOOM_MANAGERS = ['superadmin', 'admin', 'executive', 'manager'];
 const isZoomManager = (actor) => actor?.type === 'user' && (ZOOM_MANAGERS.includes(actor.role) || isSecretary(actor));
 
 function meetingHours() {
