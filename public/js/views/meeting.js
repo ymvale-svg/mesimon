@@ -372,7 +372,7 @@ const MeetingView = (() => {
       ]);
     }
 
-    // --- מארח Zoom: הנהלה ומזכירות בוחרים חשבון ומשתמש — גם כשבעל היומן אינו רשום ב-Zoom
+    // --- מארח Zoom: כל עובד בוחר חשבון ומשתמש — גם כשבעל היומן אינו רשום ב-Zoom
     const hostSelect = el('select', { onchange: () => { state.zoomUserId = hostSelect.value; } });
     let hostsSeq = 0;
     async function loadHosts() {
@@ -408,7 +408,7 @@ const MeetingView = (() => {
         ]))),
         ['place', 'link'].includes(state.locationType) ? locationInput : null,
         state.locationType === 'zoom' && info.zoom.chooseHost
-          ? UI.field('מארח Zoom', hostSelect, editing?.zoom?.host ? `כרגע: ${editing.zoom.host}. בחירת משתמש אחר יוצרת קישור חדש, והמשתתפים מקבלים עדכון` : 'מכל חשבונות ה-Zoom של החברה. קישור המארח — לבעל היומן, למי שקבע, להנהלה ולמזכירות')
+          ? UI.field('מארח Zoom', hostSelect, editing?.zoom?.host ? `כרגע: ${editing.zoom.host}. בחירת משתמש אחר יוצרת קישור חדש, והמשתתפים מקבלים עדכון` : 'הפגישה נפתחת תמיד באחד מחשבונות ה-Zoom של החברה. קישור המארח — לבעל היומן, למי שקבע, להנהלה, למנהלי מחלקות ולמזכירות')
           : null,
         state.locationType === 'zoom' && !info.zoom.chooseHost ? el('div.mute-sm', { text: 'מחשבון ה-Zoom של החברה — מהמשתמש המקושר לבעל היומן, ואם הוא תפוס — ממשתמש פנוי.' }) : null,
         state.locationType === 'zoom' ? el('label.today-radio', { title: 'Zoom מקליט מתחילת הפגישה, וההקלטה נשמרת בענן — במסך "🎥 הקלטות Zoom" ובבוט' }, [

@@ -57,8 +57,8 @@ function register(router, h) {
         freebusy: Gmail.has(actor.id, 'freebusy'),
         calendarList: Gmail.has(actor.id, 'calendarList')
       },
-      // ‎chooseHost‎ — הנהלה ומזכירות בוחרים חשבון ומשתמש Zoom (‎/api/meetings/zoom-hosts‎)
-      zoom: { enabled: Zoom.isEnabled(), chooseHost: Zoom.isEnabled() && Meetings.isZoomManager(actor) },
+      // ‎chooseHost‎ — כל עובד בוחר חשבון ומשתמש Zoom (‎/api/meetings/zoom-hosts‎)
+      zoom: { enabled: Zoom.isEnabled(), chooseHost: Zoom.isEnabled() && Meetings.canChooseZoomHost(actor) },
       defaults: {
         minutes: Number(D.getSetting('meeting_default_minutes', 30)),
         record: Boolean(D.getSetting('meeting_record_default', false)),
@@ -69,10 +69,10 @@ function register(router, h) {
     }));
   });
 
-  // משתמשי ה-Zoom בשני החשבונות, ומי תפוס במועד — לבורר המארח של הנהלה ומזכירות
+  // משתמשי ה-Zoom בשני החשבונות, ומי תפוס במועד — לבורר המארח
   router.get('/api/meetings/zoom-hosts', async (req, res, ctx) => {
     const actor = userOnly(ctx);
-    if (!Meetings.isZoomManager(actor)) throw forbidden();
+    if (!Meetings.canChooseZoomHost(actor)) throw forbidden();
     const q = parseUrl(req).searchParams;
     const start = Date.parse(q.get('start') ?? '');
     const minutes = Math.max(5, Number(q.get('minutes')) || 30);
