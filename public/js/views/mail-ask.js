@@ -83,7 +83,7 @@ const AskView = (() => {
       if (!question) return input.focus();
       UI.mount(recentBox);
       go.disabled = true;
-      const answerBox = el('div', {}, [el('div.mute-sm', {}, [el('span.spinner-sm'), ' מחפש במיילים, בסוכנים ובידע הארגוני…'])]);
+      const answerBox = el('div', {}, [el('div.mute-sm', {}, [el('span.spinner-sm'), ' הסוכנים, המיילים והידע הארגוני עונים יחד…'])]);
       const turnEl = el('div.mask-turn', {}, [el('div.mask-q', { text: question }), answerBox]);
       thread.prepend(turnEl);
       const sent = files;
@@ -92,7 +92,7 @@ const AskView = (() => {
       try {
         const attachments = await Promise.all(sent.map(async (f) => ({ filename: f.name, mime: f.type || 'application/octet-stream', data: await toBase64(f) })));
         const r = await API.post('/api/ai/ask', { question, history, taskId: opts.taskId ?? null, attachments });
-        history.push({ q: question, a: [r.mail?.answer, r.agent?.text].filter(Boolean).join('\n').slice(0, 1500) });
+        history.push({ q: question, a: (r.merged ? [r.agent?.text] : [r.mail?.answer, r.agent?.text]).filter(Boolean).join('\n').slice(0, 1500) });
         UI.mount(answerBox, ...answer(r, question));
         input.value = '';
         input.placeholder = 'שאלת המשך…';
@@ -112,8 +112,15 @@ const AskView = (() => {
       const out = [];
       if (r.clarify && !r.agent?.text && !r.mail?.answer) out.push(el('div.mask-a', { text: r.clarify }));
 
+      // ✨ תשובה מאוחדת — קודם; מהמיילים נשארים רק המקורות והפעולות
+      const mailBox = r.merged && r.mail?.answer && r.mail.found !== false ? el('div.mask-sec', {}, [
+        el('div.mask-sec-title', { text: '📧 המיילים שעליהם נשענה התשובה' }),
+        r.mail.sources?.length ? el('div.mask-sources', {}, r.mail.sources.map(sourceRow)) : null,
+        el('div.mask-actions', {}, mailActions(r.mail))
+      ]) : null;
+
       // 📧 מהמיילים
-      if (r.mail?.answer) {
+      if (r.mail?.answer && !r.merged) {
         out.push(el('div.mask-sec', {}, [
           el('div.mask-sec-title', { text: '📧 מהמיילים שלך' }),
           rich(r.mail.answer, r.mail.found ? '' : '.mask-none'),
@@ -130,7 +137,9 @@ const AskView = (() => {
         out.push(el('div.mask-sec', {}, [
           el('div.mask-sec-title', { text: `${a.icon ?? '🤖'} ${a.title}` }),
           rich(a.text),
+          r.contributors?.length ? el('div.mute-sm', { text: `ענו יחד: ${r.contributors.map((c) => `${c.icon ?? '🤖'} ${c.title}`).join(' · ')}` }) : null,
           a.sources?.length ? el('div.mute-sm', { text: `מקורות: ${a.sources.join(' · ')}` }) : null,
+          r.failed?.length ? el('div.mute-sm', { text: `⚠️ לא ענו: ${r.failed.map((f) => f.title).join(', ')}` }) : null,
           a.proposed?.length ? el('div.alert.alert-info.ai-mini', {}, [el('span', { text: '📌' }), el('div', {}, [
             `${a.proposed.length === 1 ? 'הוצעה משימה' : `הוצעו ${a.proposed.length} משימות`}: ${a.proposed.map((p) => p.title).join(' · ')} — `,
             el('a', { href: '#', onclick: (e) => { e.preventDefault(); m.close(); App.navigate('home', {}); } }, ['לאישור ב"ממתין לאישורך"'])
@@ -143,6 +152,7 @@ const AskView = (() => {
       } else if (r.agent?.error) {
         out.push(el('div.mute-sm', { text: `${r.agent.title ?? 'הסוכן'} לא הצליח לענות: ${r.agent.error}` }));
       }
+      if (mailBox) out.push(mailBox);
 
       // 📚 הידע הארגוני — כשהסוכן לא כבר נשען עליו
       if (r.org?.length && !r.agent?.sources?.includes('📚 הידע הארגוני')) {
