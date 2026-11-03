@@ -145,14 +145,20 @@ class Conn {
     this.idleTimer = null;
     this.stopping = false;
     this.starting = null;
+    this.booting = false;     // תופס מקום בתקרה: עולה, או ממתין להפעלה מחדש אחרי נפילה
+    this.users = 0;           // קריאות שמשתמשות בשרת עכשיו (מ-ensure ועד התשובה) — לא "פנוי" לסגירה
   }
 
   ensure() {
     this.usedAt = Date.now();
     if (this.alive && this.ready) return this.ready;
     if (!this.starting) {
-      makeRoom(this);
-      this.starting = this.boot().finally(() => { this.starting = null; });
+      // קודם מקום פנוי בתקרה (‎MAX_LIVE‎), ורק אז הפעלה — כמה סוכנים במקביל לא
+      // יפעילו יחד יותר שרתים ממה שהזיכרון והמעבד של השרת בענן מחזיקים
+      this.starting = acquireSlot(this)
+        .then(() => this.boot())
+        // ההתעוררות בסבב הבא: קודם מי שחיכה לשרת הזה שולח את הקריאה שלו, כדי שלא ייסגר כ"פנוי"
+        .finally(() => { this.starting = null; this.booting = false; setImmediate(wakeSlots); });
     }
     return this.starting;
   }
@@ -249,6 +255,7 @@ class Conn {
     if (!p) return;
     this.pending.delete(msg.id);
     clearTimeout(p.timer);
+    if (!this.pending.size) setImmediate(wakeSlots); // אחרי שהתשובה עברה למי שחיכה לה
     if (msg.error) {
       const e = new Error(`MCP ${this.key} ${p.method}: ${msg.error.message ?? 'error'} (${msg.error.code ?? '?'})`);
       e.rpcError = msg.error;
@@ -288,6 +295,7 @@ class Conn {
       p.reject(new Error(`MCP ${this.key}: server ${why}${tail ? ` — ${tail}` : ''}`));
     }
     this.pending.clear();
+    wakeSlots();
   }
 
   send(msg) {
@@ -306,6 +314,7 @@ class Conn {
       const timer = setTimeout(() => {
         if (!this.pending.has(id)) return;
         this.pending.delete(id);
+        if (!this.pending.size) setImmediate(wakeSlots);
         this.notify('notifications/cancelled', { requestId: id, reason: 'timeout' });
         const tail = method === 'initialize' ? ` — stderr: ${this.stderrTail(3)}` : '';
         reject(new Error(`MCP ${this.key} ${method}: timed out after ${timeoutMs}ms${tail}`));
@@ -361,12 +370,64 @@ process.once('exit', () => { for (const c of live) killTree(c, 'SIGKILL'); });
 
 const conns = new Map();
 
-/** לפני הפעלת שרת: אם כבר רצים ‎MAX_LIVE‎ — נסגר זה שלא היה בשימוש הכי הרבה זמן ואינו באמצע קריאה */
-function makeRoom(except) {
-  const running = [...conns.values()].filter((c) => c !== except && (c.alive || c.starting));
-  if (running.length < MAX_LIVE) return;
-  const idle = running.filter((c) => c.alive && !c.pending.size && !c.starting).sort((a, b) => (a.usedAt ?? 0) - (b.usedAt ?? 0));
-  for (const c of idle.slice(0, running.length - MAX_LIVE + 1)) c.kill();
+/*
+ * התקרה על שרתים שרצים יחד — תור אמיתי, לא רק ניקוי.
+ *
+ * לפני הפעלת שרת: אם כבר רצים ‎MAX_LIVE‎ — נסגר זה שלא היה בשימוש הכי הרבה
+ * זמן ואינו באמצע קריאה. כולם עסוקים (כמה סוכנים עובדים במקביל) — ממתינים
+ * בתור עד שאחד מסיים, ולא מפעילים עוד תהליך מעל התקרה. כך שאלה עם שלושה
+ * סוכנים לא מפעילה שישה שרתים בבת אחת על שרת עם מעבד אחד ו-2GB.
+ */
+const SLOT_WAIT_MS = 90 * 1000;
+const slotQueue = []; // ‎{c, wake}‎ לפי סדר הגעה
+
+const holdsSlot = (c) => c.alive || c.booting;
+
+/** מריץ פעולה על שרת כשהוא מסומן "בשימוש" — כך התור לא סוגר אותו באמצע */
+async function using(c, fn) {
+  c.users++;
+  try { return await fn(); } finally { c.users--; if (!c.users) setImmediate(wakeSlots); }
+}
+
+function freeSlotFor(c) {
+  const running = [...conns.values()].filter((x) => x !== c && holdsSlot(x));
+  if (running.length < MAX_LIVE) return true;
+  const idle = running.filter((x) => x.alive && !x.pending.size && !x.users && !x.booting).sort((a, b) => (a.usedAt ?? 0) - (b.usedAt ?? 0));
+  if (!idle.length) return false;
+  idle[0].kill(); // מסמן מת מיד — המקום מתפנה עכשיו
+  return true;
+}
+
+function acquireSlot(c) {
+  // אין תור — בודקים מיד. יש תור — נכנסים לסופו, כדי שלא לעקוף מי שמחכה
+  if (!slotQueue.length && freeSlotFor(c)) { c.booting = true; return Promise.resolve(); }
+  return new Promise((resolve, reject) => {
+    const entry = { c, wake: null };
+    const timer = setTimeout(() => {
+      const i = slotQueue.indexOf(entry);
+      if (i >= 0) slotQueue.splice(i, 1);
+      reject(new Error(`MCP ${c.key}: busy — ${MAX_LIVE} data sources already running, waited ${SLOT_WAIT_MS / 1000}s`));
+      wakeSlots();
+    }, SLOT_WAIT_MS);
+    entry.wake = () => { clearTimeout(timer); resolve(); };
+    slotQueue.push(entry);
+    wakeSlots();
+  });
+}
+
+/** מקום התפנה (שרת נסגר, סיים קריאה, או סיים לעלות) — מכניסים מהתור לפי הסדר */
+let waking = false;
+function wakeSlots() {
+  // סגירת שרת פנוי בתוך הלולאה קוראת שוב לפונקציה (‎onExit‎) — בלי השמירה הזו
+  // הקריאה הפנימית הייתה מכניסה מהתור, והחיצונית מכניסה עוד אחד מעל התקרה
+  if (waking) return;
+  waking = true;
+  try {
+    // המקום נתפס מיד (‎booting‎), לפני שהבא בתור נבדק — כך לא נכנסים שניים למקום אחד
+    while (slotQueue.length && freeSlotFor(slotQueue[0].c)) { const e = slotQueue.shift(); e.c.booting = true; e.wake(); }
+  } finally {
+    waking = false;
+  }
 }
 
 function conn(key) {
@@ -385,8 +446,8 @@ const toolsInflight = new Map();
 async function listTools(serverKey) {
   if (toolsCache.has(serverKey)) return toolsCache.get(serverKey);
   if (toolsInflight.has(serverKey)) return toolsInflight.get(serverKey);
-  const p = (async () => {
-    const c = conn(serverKey);
+  const c = conn(serverKey);
+  const p = using(c, async () => {
     await c.ensure();
     const tools = [];
     let cursor;
@@ -406,7 +467,7 @@ async function listTools(serverKey) {
     c.touch();
     toolsCache.set(serverKey, tools);
     return tools;
-  })();
+  });
   toolsInflight.set(serverKey, p);
   try { return await p; } finally { toolsInflight.delete(serverKey); }
 }
@@ -431,14 +492,16 @@ function contentToText(result) {
 /** קריאה לכלי. ‎text‎ — כל תוכן הטקסט של התשובה, מקוצר ל-~20,000 תווים. */
 async function callTool(serverKey, toolName, args, { timeoutMs = 30000 } = {}) {
   const c = conn(serverKey);
-  await c.ensure();
-  c.touch();
-  try {
-    const res = await c.request('tools/call', { name: toolName, arguments: args ?? {} }, timeoutMs);
-    return { text: contentToText(res), isError: !!res?.isError };
-  } finally {
-    if (c.alive) c.touch();
-  }
+  return using(c, async () => {
+    await c.ensure();
+    c.touch();
+    try {
+      const res = await c.request('tools/call', { name: toolName, arguments: args ?? {} }, timeoutMs);
+      return { text: contentToText(res), isError: !!res?.isError };
+    } finally {
+      if (c.alive) c.touch();
+    }
+  });
 }
 
 // שמות כלים ל-Anthropic: ‎^[a-zA-Z0-9_-]{1,64}$‎
@@ -514,6 +577,7 @@ function status() {
       toolCount: toolsCache.has(key) ? toolsCache.get(key).length : null,
       restartsInWindow: c ? c.restarts.filter((t) => now - t < RESTART_WINDOW_MS).length : 0,
       inflight: c?.pending.size ?? 0,
+      queued: slotQueue.some((q) => q.c === c),
       serverInfo: c?.serverInfo ?? null,
       stderrTail: c ? c.stderr.slice(-5) : [],
     };
