@@ -183,6 +183,12 @@ const TaskCardView = (() => {
         refreshBackground();
         App.refreshNotifications();
       }),
+      // משימה שהיא פנייה ("לבקש הצעת מחיר מ…") — נוסח מייל מוכן לשליחה
+      AiTaskView.outreach(task, (updated) => {
+        task = updated;
+        draw(modalRef.box.querySelector('.task-detail'));
+        refreshBackground();
+      }),
       // הפגישה של המשימה — נקבעה, בוטלה, או "📅 קביעת פגישה"
       MeetingView.panel(task, async () => {
         await reload();

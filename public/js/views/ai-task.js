@@ -649,6 +649,120 @@ const AiTaskView = (() => {
    * @param {object} task     המשימה כפי שהשרת שלח, עם ‎aiDetail‎
    * @param {(task) => void} onChange  נקרא עם המשימה המעודכנת אחרי כל פעולה
    */
+  // ------------------------------------------------- הצעת מייל למשימה
+
+  /**
+   * משימה שהיא פנייה החוצה ("לבקש הצעת מחיר מהדפוס") — ליד המשימה נוסח מייל
+   * מוכן לנמען שנמצא באנשי הקשר. השרת מחליט אם בכלל (ומחשב פעם אחת); כאן
+   * רק מציגים: הנוסח לעריכה, תיקון במילים, ושליחה — שהופכת את המשימה הזו
+   * עצמה למשימת AI שעוקבת אחרי התשובה.
+   */
+  function outreach(task, onChange) {
+    if (task.aiDetail || task.completedAt || task.archived || App.isVendor()) return null;
+    const box = el('div');
+    const base = `/api/tasks/${task.id}/outreach`;
+    let open = false;
+
+    const draw = (o) => {
+      box.replaceChildren();
+      if (!o) return;
+      const who = o.contact ? (o.contact.name || o.contact.email) : (o.recipient?.name || o.recipient?.org || '');
+      const head = el('div.flex', { style: { alignItems: 'center', gap: '8px', flexWrap: 'wrap' } }, [
+        el('span', { text: '✉️' }),
+        el('b', { text: o.state === 'ready' ? `הכנתי נוסח מייל ל${who}` : 'אפשר לשלוח מכאן מייל לנמען' }),
+        el('div.spacer'),
+        o.state === 'ready' && !open ? el('button.btn.btn-sm.btn-primary', { onclick: () => { open = true; draw(o); } }, ['הצגת הנוסח']) : null,
+        el('button.btn.btn-sm', {
+          title: 'לא להציע שוב למשימה הזו',
+          onclick: async () => {
+            try { await API.post(`${base}/dismiss`); box.replaceChildren(); } catch (err) { UI.error(err); }
+          }
+        }, ['לא עכשיו'])
+      ]);
+
+      const busy = async (button, fn) => {
+        button.disabled = true;
+        try { await fn(); } catch (err) { button.disabled = false; UI.error(err); }
+      };
+      const redraft = (body) => API.post(`${base}/draft`, body).then((r) => { open = true; draw(r.outreach); });
+
+      // אין נמען ודאי: בחירה מהרשימה, או מייל שמקלידים
+      if (o.state === 'no_contact') {
+        const email = el('input', { type: 'email', placeholder: 'כתובת המייל של הנמען', dir: 'ltr' });
+        const name = el('input', { type: 'text', placeholder: 'שם (לא חובה)', value: o.recipient?.name ?? '' });
+        const go = el('button.btn.btn-sm.btn-primary', {}, ['✨ הכנת נוסח']);
+        go.addEventListener('click', () => {
+          if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.value.trim())) return UI.toast('כתבו כתובת מייל תקינה', 'error');
+          busy(go, () => redraft({ contact: { name: name.value.trim(), email: email.value.trim() } }));
+        });
+        box.append(el('div.ai-panel', {}, [
+          head,
+          el('div.mute-sm', { style: { margin: '6px 0' }, text: o.candidates.length ? `למי מהם${who ? ` ("${who}")` : ''}?` : `${who ? `לא מצאתי את "${who}" באנשי הקשר. ` : ''}למי לשלוח?` }),
+          o.candidates.length
+            ? el('div.flex', { style: { gap: '6px', flexWrap: 'wrap', marginBottom: '8px' } }, o.candidates.map((c) => {
+                const b = el('button.btn.btn-sm', {}, [`${c.name}${c.organization ? ` · ${c.organization}` : ''} <${c.email}>`]);
+                b.addEventListener('click', () => busy(b, () => redraft({ contact: c })));
+                return b;
+              }))
+            : null,
+          el('div.flex', { style: { gap: '6px', flexWrap: 'wrap' } }, [name, email, go])
+        ]));
+        return;
+      }
+
+      if (!open) { box.append(el('div.ai-panel', {}, [head])); return; }
+
+      const toName = el('input', { type: 'text', value: o.contact.name ?? '' });
+      const toEmail = el('input', { type: 'email', value: o.contact.email ?? '', dir: 'ltr' });
+      const subject = el('input', { type: 'text', value: o.draft.subject ?? '' });
+      const text = el('textarea', { rows: 6 }, []);
+      text.value = o.draft.body ?? '';
+      const feedback = el('input', { type: 'text', placeholder: 'מה לתקן? למשל: "תוסיף שזה דחוף" או "באנגלית"' });
+      const redo = el('button.btn', {}, ['✨ תיקון']);
+      const doRedo = () => {
+        if (!feedback.value.trim()) return;
+        busy(redo, () => redraft({ feedback: feedback.value.trim() }));
+      };
+      redo.addEventListener('click', doRedo);
+      feedback.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); doRedo(); } });
+
+      const send = el('button.btn.btn-primary', {}, ['📧 שליחה']);
+      send.addEventListener('click', () => busy(send, async () => {
+        const res = await API.post(`${base}/send`, {
+          subject: subject.value, body: text.value,
+          contact: { name: toName.value.trim(), email: toEmail.value.trim() }
+        });
+        UI.success('המייל נשלח — ה-AI עוקב אחרי התשובה');
+        onChange(res.task);
+      }));
+
+      box.append(el('div.ai-panel', {}, [
+        head,
+        o.notes ? el('div.alert.alert-info', { style: { marginTop: '8px' } }, [el('span', { text: '💡' }), el('div', { text: o.notes })]) : null,
+        o.suggestions?.length
+          ? el('div.alert.alert-info', { style: { marginTop: '8px' } }, [
+              el('span', { text: '📨' }),
+              el('div', {}, [
+                el('div', { text: 'מההתכתבות האחרונה איתו — אולי להוסיף:' }),
+                el('div.flex', { style: { gap: '6px', flexWrap: 'wrap', marginTop: '6px' } }, o.suggestions.map((x) =>
+                  el('button.btn.btn-sm', { onclick: () => { feedback.value = `הוסף למייל: ${x}`; doRedo(); } }, [`＋ ${x}`])))
+              ])
+            ])
+          : null,
+        el('div.ai-letter', { style: { marginTop: '10px' } }, [
+          el('div.row', {}, [UI.field('אל', toName), UI.field('מייל', toEmail)]),
+          UI.field('נושא', subject),
+          UI.field('המייל', text, 'יישלח מתיבת ה-Gmail שלך, עם החתימה שלך. המשימה תעבור למעקב AI עד שתגיע תשובה.')
+        ]),
+        el('div.ai-revise', {}, [feedback, redo]),
+        el('div.ai-foot', {}, [send, el('div.spacer'), el('button.btn', { onclick: () => { open = false; draw(o); } }, ['הסתרה'])])
+      ]));
+    };
+
+    API.get(base).then((r) => draw(r.outreach)).catch(() => {});
+    return box;
+  }
+
   function panel(task, onChange) {
     const a = task.aiDetail;
     if (!a) return null;
@@ -1092,5 +1206,5 @@ const AiTaskView = (() => {
     }
   }
 
-  return { openDialog, panel, openWhatsApp, talked, postponeButton };
+  return { openDialog, panel, outreach, openWhatsApp, talked, postponeButton };
 })();
