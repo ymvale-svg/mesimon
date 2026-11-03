@@ -57,8 +57,13 @@ function register(router, h) {
         freebusy: Gmail.has(actor.id, 'freebusy'),
         calendarList: Gmail.has(actor.id, 'calendarList')
       },
-      // ‎chooseHost‎ — כל עובד בוחר חשבון ומשתמש Zoom (‎/api/meetings/zoom-hosts‎)
-      zoom: { enabled: Zoom.isEnabled(), chooseHost: Zoom.isEnabled() && Meetings.canChooseZoomHost(actor) },
+      // ‎chooseHost‎ — מזכירות והנהלה בוחרים משתמש Zoom משני החשבונות (‎/api/meetings/zoom-hosts‎);
+      // ‎own‎ — לכל השאר: משתמש ה-Zoom המשויך להם, שבו בלבד נפתחת הפגישה
+      zoom: (() => {
+        const chooseHost = Zoom.isEnabled() && Meetings.canChooseZoomHost(actor);
+        const own = Meetings.ownZoomUser(actor.id);
+        return { enabled: Zoom.isEnabled(), chooseHost, own: own ? { name: own.name, email: own.email, basic: own.license === 'basic' } : null };
+      })(),
       defaults: {
         minutes: Number(D.getSetting('meeting_default_minutes', 30)),
         record: Boolean(D.getSetting('meeting_record_default', false)),
