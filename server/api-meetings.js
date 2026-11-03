@@ -60,9 +60,11 @@ function register(router, h) {
       zoom: { enabled: Zoom.isEnabled() },
       defaults: {
         minutes: Number(D.getSetting('meeting_default_minutes', 30)),
+        record: Boolean(D.getSetting('meeting_record_default', false)),
         hours: D.getSetting('meeting_hours', '08:30-18:00')
       },
-      calendars: await Meetings.calendarsFor(actor, { fresh })
+      calendars: await Meetings.calendarsFor(actor, { fresh }),
+      accessError: Meetings.accessError(actor.id)
     }));
   });
 
@@ -115,15 +117,26 @@ function register(router, h) {
     sendJson(res, 200, { meetings: Meetings.forTask(task.id), pending: Boolean(task.meeting_pending) });
   });
 
+  // מי שקשור לפגישה: בעל היומן, מי שקבע, משתתף, או מי שרואה את המשימה שלה
+  const involved = (actor, m) => [m.owner_id, m.created_by].includes(actor.id)
+    || JSON.parse(m.attendees || '[]').some((a) => a.email === String(actor.email ?? '').toLowerCase())
+    || Boolean(m.task_id && canSeeTask(actor, D.get('SELECT * FROM tasks WHERE id = ?', m.task_id)));
+
   router.get('/api/meetings/:id/join', async (req, res, ctx) => {
     const actor = userOnly(ctx);
     const m = Meetings.meetingById(Number(ctx.params.id));
     if (!m) throw notFound();
-    const involved = [m.owner_id, m.created_by].includes(actor.id)
-      || JSON.parse(m.attendees || '[]').some((a) => a.email === String(actor.email ?? '').toLowerCase())
-      || (m.task_id && canSeeTask(actor, D.get('SELECT * FROM tasks WHERE id = ?', m.task_id)));
-    if (!involved) throw forbidden();
+    if (!involved(actor, m)) throw forbidden();
     await run(res, () => Meetings.joinLink(actor, m.id));
+  });
+
+  // ההקלטה של הפגישה — ‎null‎ כשאין עדיין (לא הוקלטה, או ש-Zoom עוד מעבד)
+  router.get('/api/meetings/:id/recording', async (req, res, ctx) => {
+    const actor = userOnly(ctx);
+    const m = Meetings.meetingById(Number(ctx.params.id));
+    if (!m) throw notFound();
+    if (!involved(actor, m) && !P.may(actor, 'manage_users')) throw forbidden();
+    await run(res, async () => ({ recording: await Meetings.recording(m.id) }));
   });
 
   /** "📅 פגישה לקביעה" — סימון ידני על משימה */
@@ -262,12 +275,63 @@ function register(router, h) {
 
   router.get('/api/admin/zoom/users', async (req, res, ctx) => {
     zoomAdmin(ctx);
-    sendJson(res, 200, { enabled: Zoom.isEnabled(), missing: Zoom.missing(), users: Zoom.listUsers() });
+    sendJson(res, 200, { enabled: Zoom.isEnabled(), missing: Zoom.missing(), accounts: Zoom.accounts(), users: Zoom.listUsers() });
   });
 
   router.post('/api/admin/zoom/sync', async (req, res, ctx) => {
     zoomAdmin(ctx);
-    await run(res, async () => ({ enabled: true, missing: [], users: await Zoom.syncUsers() }));
+    await run(res, async () => {
+      const { users, errors } = await Zoom.syncUsers();
+      return { enabled: true, missing: [], accounts: Zoom.accounts(), users, errors };
+    });
+  });
+
+  // --- Zoom: הקלטות בענן (מי רואה מה — ‎Zoom.recordingScope‎) ---
+
+  router.get('/api/zoom/recordings', async (req, res, ctx) => {
+    const actor = userOnly(ctx);
+    if (!Zoom.isEnabled()) throw badRequest('חיבור Zoom אינו מוגדר בשרת');
+    const q = parseUrl(req).searchParams;
+    const day = /^\d{4}-\d{2}-\d{2}$/;
+    const to = day.test(q.get('to') ?? '') ? q.get('to') : new Date().toISOString().slice(0, 10);
+    const from = day.test(q.get('from') ?? '') ? q.get('from') : new Date(Date.parse(to) - 30 * 86400000).toISOString().slice(0, 10);
+    if (from > to) throw badRequest('טווח תאריכים לא תקין');
+    if (Date.parse(to) - Date.parse(from) > 92 * 86400000) throw badRequest('אפשר להציג עד שלושה חודשים בכל פעם');
+    await run(res, async () => {
+      const r = await Zoom.recordingsFor(actor, from, to);
+      return {
+        from, to, all: r.all, errors: r.errors,
+        recordings: r.recordings.map(({ meeting, ...rec }) => {
+          const task = meeting?.taskId ? D.get('SELECT * FROM tasks WHERE id = ?', meeting.taskId) : null;
+          return {
+            ...rec,
+            meeting: meeting ? { id: meeting.id, title: meeting.title } : null,
+            task: task && canSeeTask(actor, task) ? { id: task.id, title: task.title } : null
+          };
+        })
+      };
+    });
+  });
+
+  // צפייה בקובץ — הפניה לכתובת חתומה של Zoom, אחרי בדיקת הרשאה
+  router.get('/api/zoom/recordings/file', async (req, res, ctx) => {
+    const actor = userOnly(ctx);
+    const q = parseUrl(req).searchParams;
+    const uuid = q.get('uuid') ?? '';
+    const fileId = q.get('file') ?? '';
+    if (!uuid || !fileId) throw badRequest('חסר מזהה הקלטה');
+    let link;
+    try {
+      link = await Zoom.recordingFileUrl(uuid, fileId);
+    } catch (err) {
+      throw err.status === 404 ? notFound('ההקלטה לא נמצאה ב-Zoom') : userError(err);
+    }
+    const ours = link.meetingId ? D.get('SELECT * FROM meetings WHERE zoom_meeting_id = ? ORDER BY id DESC LIMIT 1', link.meetingId) : null;
+    if (!Zoom.mayWatch(Zoom.recordingScope(actor), link.hostZoomUserId, link.meetingId) && !(ours && involved(actor, ours))) {
+      throw forbidden('אין לך הרשאה לצפות בהקלטה הזו');
+    }
+    res.writeHead(302, { location: link.url, 'cache-control': 'no-store' });
+    res.end();
   });
 }
 

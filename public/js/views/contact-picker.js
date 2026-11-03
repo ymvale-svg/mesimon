@@ -108,6 +108,139 @@ const ContactPicker = (() => {
     return { node, input };
   }
 
+  /**
+   * בחירה מרובה — למשתתפי פגישה. סגורה כברירת מחדל: שדה אחד ("בחירת
+   * משתתפים ▾"). בפתיחה — שורת חיפוש בראש הרשימה, ותיבת סימון לכל איש קשר.
+   * סימון מוסיף, ביטול מסיר, והרשימה נשארת פתוחה עד לחיצה מחוץ לה או Escape.
+   * Enter על כתובת מייל שאינה ברשימה — מוסיף אותה.
+   *
+   * @param {object} opts
+   * @param {() => string[]} opts.selected           המיילים שנבחרו כרגע
+   * @param {(c: object, on: boolean) => void} opts.onToggle
+   * @param {(email: string) => void} opts.onAddEmail
+   * @param {() => void} [opts.onClose]               הרשימה נסגרה
+   * @param {string} [opts.label]
+   * @returns {{node: HTMLElement, refresh: () => void, close: () => void}}
+   */
+  function multi({ selected, onToggle, onAddEmail, onClose = () => {}, label = 'בחירת משתתפים' }) {
+    const trigger = el('button.cp-trigger', { type: 'button', 'aria-haspopup': 'listbox' });
+    const search = el('input', { type: 'search', placeholder: 'חיפוש שם, חברה או מייל — Enter לכתובת חדשה', autocomplete: 'off' });
+    const listBox = el('div.cp-mlist', { role: 'listbox', 'aria-multiselectable': 'true' });
+    const panel = el('div.cp-list.cp-panel', {}, [el('div.cp-search', {}, [search]), listBox]);
+    const node = el('div.cp.cp-multi', {}, [trigger, panel]);
+
+    let results = [];
+    let google = null;
+    let seq = 0;
+    let timer = null;
+    let isOpen = false;
+    let active = -1;
+
+    const emailOf = (c) => String(c.email || c.emails?.[0]?.value || '').toLowerCase();
+    const isEmail = (v) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v);
+
+    function refresh() {
+      const n = selected().length;
+      UI.mount(trigger,
+        el('span', { text: n ? `${n === 1 ? 'משתתף אחד נבחר' : `${n} משתתפים נבחרו`} — לחצו להוספה או הסרה` : label }),
+        el('span.cp-caret', { text: isOpen ? '▴' : '▾' }));
+      if (isOpen) drawList();
+    }
+
+    async function doSearch() {
+      const mine = ++seq;
+      try {
+        const data = await API.get(`/api/ai/contacts?q=${encodeURIComponent(search.value.trim())}`);
+        if (mine !== seq) return;
+        results = data.contacts;
+        google = data.google;
+        active = -1;
+        drawList();
+      } catch {
+        /* אפשר תמיד להקליד מייל ידנית */
+      }
+    }
+
+    function toggle(c) {
+      const email = emailOf(c);
+      if (!email) return UI.toast(`ל${c.name || 'איש הקשר'} אין כתובת מייל — אי אפשר להזמין`, 'error');
+      onToggle(c, !selected().includes(email));
+      refresh();
+    }
+
+    function drawList() {
+      const chosen = new Set(selected());
+      const q = search.value.trim().toLowerCase();
+      const rows = results.map((c, i) => {
+        const s = SOURCE[c.source] ?? SOURCE.contacts;
+        const email = emailOf(c);
+        const box = el('input', { type: 'checkbox', checked: chosen.has(email), disabled: !email, tabindex: '-1' });
+        return el(`label.cp-row.cp-check${i === active ? '.active' : ''}${email ? '' : '.is-disabled'}`, {
+          role: 'option', 'aria-selected': String(chosen.has(email)),
+          onmousedown: (e) => e.preventDefault(),
+          onclick: (e) => { e.preventDefault(); toggle(c); }
+        }, [
+          box,
+          el(`span.cp-ic.cp-${c.source}`, { title: s.label, text: s.icon }),
+          el('div.cp-main', {}, [
+            el('div', {}, [
+              el('b', { text: c.name || email || c.phone }),
+              c.organization ? el('span.mute-sm', { text: ` · ${c.organization}` }) : null,
+              c.source === 'user' ? el('span.mute-sm', { text: ' (עובד/ת)' }) : null
+            ]),
+            el('div.mute-sm', { dir: 'auto', text: email || 'אין כתובת מייל' })
+          ])
+        ]);
+      });
+      const addNew = isEmail(q) && !results.some((c) => emailOf(c) === q) && !chosen.has(q)
+        ? el('div.cp-row.cp-add', { onmousedown: (e) => e.preventDefault(), onclick: () => { onAddEmail(q); search.value = ''; refresh(); doSearch(); } }, [`➕ הוספת ${q}`])
+        : null;
+      const foot = google && !google.available
+        ? el('div.cp-foot', {}, ['חברו את אנשי הקשר של Google כדי לבחור מהם · ', el('a', { href: '/api/me/gmail/connect', onmousedown: (e) => e.preventDefault() }, ['חיבור'])])
+        : google?.running ? el('div.cp-foot', { text: 'אנשי הקשר מסתנכרנים מ-Google…' }) : null;
+      UI.mount(listBox, addNew, ...rows, !rows.length && !addNew ? el('div.cp-foot', { text: q ? 'לא נמצא — אפשר להקליד כתובת מייל מלאה' : 'מקלידים שם כדי לחפש' }) : null, foot);
+    }
+
+    const outside = (e) => { if (!node.contains(e.target)) close(); };
+
+    function open() {
+      if (isOpen) return;
+      isOpen = true;
+      panel.classList.add('open');
+      search.value = '';
+      refresh();
+      search.focus();
+      doSearch();
+      document.addEventListener('mousedown', outside, true);
+    }
+
+    function close() {
+      if (!isOpen) return;
+      isOpen = false;
+      panel.classList.remove('open');
+      document.removeEventListener('mousedown', outside, true);
+      refresh();
+      onClose();
+    }
+
+    trigger.addEventListener('click', () => (isOpen ? close() : open()));
+    search.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(doSearch, 160); });
+    search.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') { e.preventDefault(); close(); trigger.focus(); return; }
+      if (e.key === 'ArrowDown' && results.length) { e.preventDefault(); active = (active + 1) % results.length; drawList(); return; }
+      if (e.key === 'ArrowUp' && results.length) { e.preventDefault(); active = (active - 1 + results.length) % results.length; drawList(); return; }
+      if (e.key !== 'Enter') return;
+      e.preventDefault();
+      const v = search.value.trim().toLowerCase();
+      if (active >= 0 && results[active]) toggle(results[active]);
+      else if (isEmail(v)) { if (!selected().includes(v)) onAddEmail(v); search.value = ''; refresh(); doSearch(); }
+      else if (results.length === 1) toggle(results[0]);
+    });
+
+    refresh();
+    return { node, refresh, close };
+  }
+
   /** נייד ישראלי (05X) — רק אליו יוצא וואטסאפ */
   const isMobile = (p) => /^05\d{8}$/.test(String(p ?? '').replace(/\D/g, '').replace(/^972/, '0'));
 
@@ -200,5 +333,5 @@ const ContactPicker = (() => {
     return box;
   }
 
-  return { create, variants, saveDialog, suggestion, SOURCE, isMobile, mobileOf, mobilesOnly };
+  return { create, multi, variants, saveDialog, suggestion, SOURCE, isMobile, mobileOf, mobilesOnly };
 })();

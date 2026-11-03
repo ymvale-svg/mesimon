@@ -74,6 +74,7 @@ const MeetingView = (() => {
       date: '',
       time: '',
       locationType: editing?.locationType ?? (info.zoom.enabled ? 'zoom' : 'place'),
+      record: editing ? Boolean(editing.zoom?.record) : Boolean(info.defaults.record),
       suggestions: null,
       alternatives: null,
       avail: null
@@ -114,45 +115,47 @@ const MeetingView = (() => {
         : 'ההזמנה יוצאת בשם בעל היומן');
     };
 
-    // --- משתתפים
-    function attendeesBox() {
-      const picker = ContactPicker.create({
-        onPick: (c) => {
-          const email = c.email || c.emails?.[0]?.value;
-          if (!email) return UI.toast(`ל${c.name} אין כתובת מייל — אי אפשר להזמין`, 'error');
-          picker.input.value = '';
-          if (!state.attendees.some((a) => a.email === email)) state.attendees.push({ email, name: c.name || '' });
-          state.alternatives = null;
-          draw();
-          loadAvailability();
-          setTimeout(() => body.querySelector('.cp input')?.focus(), 30);
-        }
-      });
-      // כתובת שהוקלדה ידנית ואינה ברשימה — Enter מוסיף אותה
-      picker.input.addEventListener('keydown', (e) => {
-        if (e.key !== 'Enter') return;
-        const v = picker.input.value.trim().toLowerCase();
-        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)) return;
-        e.preventDefault();
-        if (!state.attendees.some((a) => a.email === v)) state.attendees.push({ email: v, name: '' });
-        picker.input.value = '';
+    // --- משתתפים: רשימה נפתחת עם חיפוש וסימון. נוצרת פעם אחת, כדי שתישאר
+    // פתוחה בזמן הסימון; הזמינות וההצעות מתעדכנות כשהיא נסגרת
+    let attendeesChanged = false;
+    const chipsBox = el('div');
+    const drawChips = () => UI.mount(chipsBox, state.attendees.length
+      ? el('div.mt-chips', {}, state.attendees.map((a) => {
+          const resp = editing?.attendees.find((x) => x.email === a.email)?.response;
+          return el('span.chip.chip-assignee', { title: a.email }, [
+            resp ? el('span', { title: RESPONSE_TITLE[resp], text: `${RESPONSE[resp]} ` }) : null,
+            el('span', { text: a.name ? `${a.name} · ${a.email}` : a.email }),
+            el('button.chip-x', { type: 'button', title: 'הסרה', onclick: () => { state.attendees = state.attendees.filter((x) => x.email !== a.email); state.alternatives = null; draw(); loadAvailability(); } }, ['✕'])
+          ]);
+        }))
+      : el('div.mute-sm', { text: 'אפשר גם בלי משתתפים — פגישה ביומן בלבד.' }));
+    const attendeePicker = ContactPicker.multi({
+      selected: () => state.attendees.map((a) => a.email),
+      onToggle: (c, on) => {
+        const email = String(c.email || c.emails?.[0]?.value || '').toLowerCase();
+        state.attendees = on
+          ? [...state.attendees.filter((a) => a.email !== email), { email, name: c.name || '' }]
+          : state.attendees.filter((a) => a.email !== email);
+        attendeesChanged = true;
+        drawChips();
+      },
+      onAddEmail: (email) => {
+        if (!state.attendees.some((a) => a.email === email)) state.attendees.push({ email, name: '' });
+        attendeesChanged = true;
+        drawChips();
+      },
+      onClose: () => {
+        if (!attendeesChanged) return;
+        attendeesChanged = false;
+        state.alternatives = null;
         draw();
         loadAvailability();
-      });
-      picker.input.placeholder = 'שם, חברה או מייל — ו-Enter לכתובת חדשה';
-      return el('div', {}, [
-        picker.node,
-        state.attendees.length
-          ? el('div.mt-chips', {}, state.attendees.map((a) => {
-              const resp = editing?.attendees.find((x) => x.email === a.email)?.response;
-              return el('span.chip.chip-assignee', { title: a.email }, [
-                resp ? el('span', { title: RESPONSE_TITLE[resp], text: `${RESPONSE[resp]} ` }) : null,
-                el('span', { text: a.name ? `${a.name} · ${a.email}` : a.email }),
-                el('button.chip-x', { type: 'button', title: 'הסרה', onclick: () => { state.attendees = state.attendees.filter((x) => x.email !== a.email); state.alternatives = null; draw(); loadAvailability(); } }, ['✕'])
-              ]);
-            }))
-          : el('div.mute-sm', { text: 'אפשר גם בלי משתתפים — פגישה ביומן בלבד.' })
-      ]);
+      }
+    });
+    function attendeesBox() {
+      attendeePicker.refresh();
+      drawChips();
+      return el('div', {}, [attendeePicker.node, chipsBox]);
     }
 
     // --- משך
@@ -382,6 +385,10 @@ const MeetingView = (() => {
         ]))),
         ['place', 'link'].includes(state.locationType) ? locationInput : null,
         state.locationType === 'zoom' ? el('div.mute-sm', { text: 'מחשבון ה-Zoom של החברה — מהמשתמש המקושר לבעל היומן, ואם הוא תפוס — ממשתמש פנוי.' }) : null,
+        state.locationType === 'zoom' ? el('label.today-radio', { title: 'Zoom מקליט מתחילת הפגישה, וההקלטה נשמרת בענן — במסך "🎥 הקלטות Zoom" ובבוט' }, [
+          el('input', { type: 'checkbox', checked: state.record, onchange: (e) => { state.record = e.target.checked; } }),
+          el('span', { text: '⏺ הקלטה אוטומטית לענן' })
+        ]) : null,
         !info.zoom.enabled ? el('div.mute-sm', { text: 'Zoom עדיין לא מוגדר בשרת.' }) : null
       ]);
     }
@@ -401,6 +408,7 @@ const MeetingView = (() => {
         start: startIso(),
         minutes: state.minutes,
         locationType: state.locationType,
+        record: state.locationType === 'zoom' && state.record,
         location: locationInput.value.trim(),
         notes: notesInput.value,
         sendInvites: sendInvites.checked
@@ -509,7 +517,7 @@ const MeetingView = (() => {
             el('b', { text: `${when(current.start)}–${hhmm(current.end)}` }),
             el('div.mute-sm', {
               text: [current.ownerName ? `ביומן של ${current.ownerName}` : null,
-                current.zoom ? `Zoom${current.zoom.host ? ` (${current.zoom.host})` : ''}` : current.location || null].filter(Boolean).join(' · ')
+                current.zoom ? `Zoom${current.zoom.host ? ` (${current.zoom.host})` : ''}${current.zoom.record ? ' · ⏺ מוקלט' : ''}` : current.location || null].filter(Boolean).join(' · ')
             })
           ]),
           el('div.spacer'),
@@ -524,6 +532,7 @@ const MeetingView = (() => {
           ? el('div.mute-sm.text-warn', { text: '⚠ חשבון Zoom חינמי — פגישה של 3 משתתפים ומעלה נקטעת אחרי 40 דקות' })
           : null,
         current.syncError ? el('div.mute-sm.text-warn', { text: `⚠ ${current.syncError}` }) : null,
+        past && current.zoom ? recordingRow(current) : null,
         past ? el('div.mt-after', {}, [
           el('span', { text: 'הפגישה התקיימה?' }),
           el('button.btn.btn-sm.btn-primary', { onclick: () => closeTask(task, onChange) }, ['✓ סגירת המשימה']),
@@ -534,6 +543,17 @@ const MeetingView = (() => {
 
     API.get(`/api/meetings/task/${task.id}`).then((r) => draw(r.meetings)).catch(() => UI.mount(box));
     return box;
+  }
+
+  /** פגישת Zoom שהתקיימה — ההקלטה, אם יש (נטענת רק כשהכרטיס מוצג) */
+  function recordingRow(meeting) {
+    const row = el('div.mt-after', {}, [el('span.mute-sm', { text: '🎥 בודק אם יש הקלטה…' })]);
+    API.get(`/api/meetings/${meeting.id}/recording`).then(({ recording }) => {
+      UI.mount(row, ...(recording?.files.length
+        ? [el('span', { text: '🎥 ההקלטה:' }), ...RecordingsView.actions(recording)]
+        : [el('span.mute-sm', { text: meeting.zoom.record ? '🎥 ההקלטה עוד לא מוכנה — Zoom מעבד אותה אחרי סוף הפגישה' : '🎥 אין הקלטה לפגישה הזו' })]));
+    }).catch(() => row.remove());
+    return row;
   }
 
   async function closeTask(task, onChange) {

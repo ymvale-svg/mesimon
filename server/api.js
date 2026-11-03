@@ -30,6 +30,7 @@ const MailScan = require('./ai/mail-scan');
 const Claude = require('./ai/claude');
 const WhatsApp = require('./whatsapp');
 const WaBot = require('./ai/wa-bot');
+const TaskOutreach = require('./ai/task-outreach');
 const Dupes = require('./ai/task-dupes');
 const TaskSync = require('./ai/task-sync');
 const Tiful360 = require('./tiful360');
@@ -795,7 +796,9 @@ function publicActor(actor) {
     // ימי העבודה (0=ראשון) — "מחר" בבורר דחיית היעד הוא יום העבודה הבא שלו
     workDays: actor.type === 'user' ? W.workDaysOf(actor.id) : [0, 1, 2, 3, 4],
     // מזכירה — רואה את מסך היומן וקובעת ביומנים שהעובדים שיתפו איתה
-    secretary: actor.type === 'user' && Boolean(D.get('SELECT is_secretary FROM users WHERE id = ?', actor.id)?.is_secretary)
+    secretary: actor.type === 'user' && Boolean(D.get('SELECT is_secretary FROM users WHERE id = ?', actor.id)?.is_secretary),
+    // מסך הקלטות ה-Zoom — כשיש חיבור Zoom
+    zoomRecordings: actor.type === 'user' && Zoom.isEnabled()
   };
 }
 
@@ -1671,6 +1674,14 @@ function notifyAssignment(taskId, assigneeType, assigneeId, title, assigner = nu
   if (task) TaskMail.sendAssignment({ task, assigneeType, assigneeId, assigner });
   // ועוד הודעה מבוט הוואטסאפ — לעובד עם טלפון, לפי ההגדרות שלו
   if (task && assigneeType === 'user') WaBot.notifyAssignment({ taskId, userId: assigneeId, assigner, extra });
+  /*
+   * משימה שהיא פנייה ("לבקש הצעת מחיר מ…") — הנוסח מוכן עוד לפני שהכרטיס נפתח.
+   * בלי ‎await‎, ולא זורק; ההחלטה אם בכלל — ב-TaskOutreach (כולל סינון זול לפני ה-AI)
+   */
+  if (task && assigneeType === 'user') {
+    const assignee = Auth.loadActor('user', assigneeId);
+    if (assignee && TaskOutreach.eligible(task, assignee)) void TaskOutreach.prepare(task.id, assignee);
+  }
 }
 
 router.patch('/api/tasks/:id', async (req, res, ctx) => {
@@ -4254,6 +4265,7 @@ router.get('/api/admin/settings', async (req, res, ctx) => {
       zoom: {
         enabled: Zoom.isEnabled(),
         missing: Zoom.missing(),
+        accounts: Zoom.accounts(),
         users: D.get('SELECT COUNT(*) c FROM zoom_users').c,
         linked: D.get("SELECT COUNT(*) c FROM users WHERE zoom_user_id IS NOT NULL AND status = 'active'").c
       }

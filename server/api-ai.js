@@ -26,6 +26,7 @@ const OrgKnowledge = require('./ai/org-knowledge');
 const Timeless = require('./timeless');
 const MailInsights = require('./ai/mail-insights');
 const Mime = require('./mime');
+const TaskOutreach = require('./ai/task-outreach');
 const { badRequest, forbidden, notFound, readJson, sendJson, parseUrl } = require('./http-kit');
 
 function register(router, h) {
@@ -34,7 +35,8 @@ function register(router, h) {
   AiTasks.setHooks({ saveFile: saveAttachment, scanWhatsApp: WaScan.handle, scanningUsers: WaScan.scanningUsers });
   MailScan.init({ createTask });
   Agents.init({ listProjectsFor, projectTasks: (actor, projectId) => botTaskOps.projectTasks(actor, projectId) });
-  WaBot.init({ createTask, listProjectsFor, newTaskProjects, assignableUserIds, assignBlockReason, tasks: botTaskOps, mail: { searchContacts, createAiTask } });
+  WaBot.init({ createTask, listProjectsFor, newTaskProjects, assignableUserIds, assignBlockReason, tasks: botTaskOps, mail: { searchContacts, createAiTask, sendOutreach } });
+  TaskOutreach.init({ searchContacts });
 
   const internalOnly = (actor) => {
     if (actor.type === 'vendor') throw forbidden();
@@ -419,6 +421,61 @@ function register(router, h) {
     if (!P.may(actor, 'create_task')) throw forbidden();
     const { taskId, sendError } = await createAiTask(actor, await readJson(req));
     sendJson(res, 201, { task: shapeTask(getTaskOr404(taskId), actor, { withDetails: true }), sendError });
+  });
+
+  // --- הצעת מייל למשימה שהיא פנייה החוצה ("לבקש הצעת מחיר מהדפוס") ---
+
+  /** שליחת הנוסח המוצע — מהכרטיס ומהבוט, באותן בדיקות */
+  async function sendOutreach(actor, taskId, edits = {}) {
+    const task = getTaskOr404(taskId);
+    assertVisible(actor, task);
+    if (!P.may(actor, 'create_task')) throw forbidden();
+    try {
+      return await TaskOutreach.send(task.id, actor, edits);
+    } catch (err) {
+      throw userError(err);
+    }
+  }
+
+  function outreachTask(ctx) {
+    const actor = ctx.requireActor();
+    internalOnly(actor);
+    const task = getTaskOr404(ctx.params.taskId);
+    assertVisible(actor, task);
+    return { actor, task };
+  }
+
+  // מחושב בפעם הראשונה שהכרטיס נפתח (או כשהמשימה הוקצתה) — אחר כך מהשמור
+  router.get('/api/tasks/:taskId/outreach', async (req, res, ctx) => {
+    const { actor, task } = outreachTask(ctx);
+    sendJson(res, 200, { outreach: TaskOutreach.shape(await TaskOutreach.prepare(task.id, actor)) });
+  });
+
+  router.post('/api/tasks/:taskId/outreach/draft', async (req, res, ctx) => {
+    const { actor, task } = outreachTask(ctx);
+    const b = await readJson(req);
+    try {
+      const row = await TaskOutreach.redraft(task.id, actor, { contact: b.contact ?? null, feedback: String(b.feedback ?? '').trim() });
+      sendJson(res, 200, { outreach: TaskOutreach.shape(row) });
+    } catch (err) {
+      throw userError(err);
+    }
+  });
+
+  router.post('/api/tasks/:taskId/outreach/send', async (req, res, ctx) => {
+    const { actor, task } = outreachTask(ctx);
+    const b = await readJson(req);
+    await sendOutreach(actor, task.id, {
+      subject: b.subject, body: b.body, cc: Array.isArray(b.cc) ? b.cc : [],
+      contact: b.contact?.email ? { name: String(b.contact.name ?? ''), email: String(b.contact.email) } : null
+    });
+    reply(res, actor, task);
+  });
+
+  router.post('/api/tasks/:taskId/outreach/dismiss', async (req, res, ctx) => {
+    const { actor, task } = outreachTask(ctx);
+    TaskOutreach.dismiss(task.id, actor.id);
+    sendJson(res, 200, { ok: true });
   });
 
   router.post('/api/ai/tasks/:taskId/messages/:msgId/approve', async (req, res, ctx) => {

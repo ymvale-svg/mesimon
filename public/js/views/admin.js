@@ -691,7 +691,8 @@ const AdminView = (() => {
     zoomField.style.display = 'none';
     API.get('/api/admin/zoom/users').then((z) => {
       if (!z.enabled || !z.users.length) return;
-      for (const u of z.users) zoomSelect.appendChild(el('option', { value: u.id }, [`${u.name} · ${u.email}${u.license === 'basic' ? ' (חינמי — 40 דק׳)' : ''}`]));
+      const multi = new Set(z.users.map((u) => u.account)).size > 1;
+      for (const u of z.users) zoomSelect.appendChild(el('option', { value: u.id }, [`${u.name} · ${u.email}${multi ? ` · חשבון ${u.account}` : ''}${u.license === 'basic' ? ' (חינמי — 40 דק׳)' : ''}`]));
       zoomSelect.value = user?.zoomUserId ?? '';
       zoomField.style.display = '';
     }).catch(() => {});
@@ -1320,8 +1321,9 @@ const AdminView = (() => {
     meeting_hours: ['פגישות: שעות לפגישות', 'שעון ישראל, בפורמט 08:30-18:00. הצעת מועדים ושורת הזמינות — רק בתוך השעות האלה'],
     meeting_default_minutes: ['פגישות: משך ברירת מחדל (דקות)', ''],
     meeting_buffer_minutes: ['פגישות: מרווח מפגישה צמודה (דקות)', 'בהצעת מועדים — לא צמוד לפגישה אחרת'],
-    meeting_reminder_minutes: ['פגישות: התראה לפני (דקות)', 'במשימון ובבוט הוואטסאפ, עם קישור ה-Zoom'],
+    meeting_reminder_minutes: ['פגישות: התראה לפני (דקות)', 'במשימון ובבוט הוואטסאפ, עם קישור ה-Zoom — לבעל היומן, למי שקבע ולמוזמנים שהם משתמשי משימון'],
     meeting_ai_alternatives: ['פגישות: הצעות AI להזזת פגישות חופפות', 'כבוי = החלופות מסודרות לפי כללים קבועים, בלי AI'],
+    meeting_record_default: ['פגישות: הקלטה אוטומטית לענן — מסומן מראש', 'בפגישת Zoom חדשה. בכל פגישה אפשר לשנות. ההקלטות — במסך "🎥 הקלטות Zoom" ובבוט'],
   };
 
   /**
@@ -1363,7 +1365,10 @@ const AdminView = (() => {
         x.ai ? row('משימות AI', x.ai.enabled, x.ai.model, x.ai.missing,
           x.ai.enabled ? 'ניסוח פניות, מעקב והכרעה אם התשובה מספקת.' : 'בלי המפתח האפשרות "משימת AI" אינה זמינה.') : null,
         x.zoom ? row('Zoom של החברה', x.zoom.enabled, `${x.zoom.users} משתמשי Zoom · ${x.zoom.linked} עובדים משויכים`, x.zoom.missing,
-          x.zoom.enabled ? 'קישורי Zoom לפגישות שנקבעות ממשימון. שיוך עובד למשתמש Zoom — בכרטיס העובד.' : 'Server-to-Server OAuth ב-Zoom Marketplace — שלושה ערכים לשרת. בלעדיו הפגישות נקבעות בלי Zoom.') : null,
+          x.zoom.enabled ? 'קישורי Zoom לפגישות שנקבעות ממשימון, והקלטות בענן. שיוך עובד למשתמש Zoom — בכרטיס העובד.' : 'Server-to-Server OAuth ב-Zoom Marketplace — שלושה ערכים לשרת. בלעדיו הפגישות נקבעות בלי Zoom.') : null,
+        // חשבון Zoom שני — מוצג רק כשהתחילו להגדיר אותו (ערך אחד לפחות מתוך ‎ZOOM2_*‎)
+        ...(x.zoom?.accounts ?? []).filter((a) => a.key !== '1').map((a) => row(`Zoom — חשבון ${a.key}`, a.enabled, `${a.users} משתמשי Zoom`, a.missing,
+          a.enabled ? 'המשתמשים שלו נכנסים לאותה רשימה, ופגישות נפתחות גם אצלם כשמשתמש תפוס.' : 'חסרים ערכים — כל עוד החשבון לא מוגדר במלואו, הוא לא בשימוש.')),
         x.zoom?.enabled ? zoomUsersBox() : null
       ])
     ]);
@@ -1372,24 +1377,33 @@ const AdminView = (() => {
   /** משתמשי ה-Zoom של החברה — רענון מ-Zoom, ומי משויך לכל אחד */
   function zoomUsersBox() {
     const box = el('div', { style: { padding: '10px 0' } });
-    const draw = (z) => UI.mount(box,
-      el('div.flex', {}, [
-        el('b', { text: 'משתמשי Zoom' }),
-        el('div.spacer'),
-        (() => {
-          const b = el('button.btn.btn-sm', {}, ['⟳ רענון מ-Zoom']);
-          b.addEventListener('click', async () => {
-            b.disabled = true;
-            try { draw(await API.post('/api/admin/zoom/sync')); UI.success('הרשימה עודכנה'); } catch (err) { b.disabled = false; UI.error(err); }
-          });
-          return b;
-        })()
-      ]),
-      z.users.length
-        ? el('div', {}, z.users.map((u) => el('div.mute-sm', {
-            text: `${u.name} · ${u.email}${u.license === 'basic' ? ' · חינמי (40 דק׳)' : ''} — ${u.linked.length ? u.linked.map((x) => x.name).join(', ') : 'לא משויך'}`
-          })))
-        : el('div.mute-sm', { text: 'עוד לא נטענו משתמשים — "רענון מ-Zoom".' }));
+    let multi = false;
+    const draw = (z) => {
+      multi = new Set(z.users.map((u) => u.account)).size > 1;
+      UI.mount(box,
+        el('div.flex', {}, [
+          el('b', { text: 'משתמשי Zoom' }),
+          el('div.spacer'),
+          (() => {
+            const b = el('button.btn.btn-sm', {}, ['⟳ רענון מ-Zoom']);
+            b.addEventListener('click', async () => {
+              b.disabled = true;
+              try {
+                const r = await API.post('/api/admin/zoom/sync');
+                draw(r);
+                if (r.errors?.length) UI.error(new Error(`חלק מהחשבונות לא עודכנו — ${r.errors.join(' · ')}`));
+                else UI.success('הרשימה עודכנה');
+              } catch (err) { b.disabled = false; UI.error(err); }
+            });
+            return b;
+          })()
+        ]),
+        z.users.length
+          ? el('div', {}, z.users.map((u) => el('div.mute-sm', {
+              text: `${u.name} · ${u.email}${multi ? ` · חשבון ${u.account}` : ''}${u.license === 'basic' ? ' · חינמי (40 דק׳)' : ''} — ${u.linked.length ? u.linked.map((x) => x.name).join(', ') : 'לא משויך'}`
+            })))
+          : el('div.mute-sm', { text: 'עוד לא נטענו משתמשים — "רענון מ-Zoom".' }));
+    };
     API.get('/api/admin/zoom/users').then(draw).catch(() => {});
     return box;
   }

@@ -189,7 +189,8 @@ const TodayView = (() => {
           e.link ? el('a.btn.btn-sm.btn-ghost', { href: e.link, target: '_blank', rel: 'noopener', title: 'פתיחה ב-Google Calendar' }, ['↗']) : null,
           el('button.btn.btn-sm', {
             title: 'משימה חדשה מהפגישה — מעקב, סיכום, מה שסוכם',
-            onclick: () => BoardView.openTaskDialog(null, { prefill: { title: e.title, dueDate: data.date }, onSaved: () => reload() })
+            // אחראי — רק מי שמשתתף בפגישה
+            onclick: () => BoardView.openTaskDialog(null, { prefill: { title: e.title, dueDate: data.date }, participants: e.participants ?? [], onSaved: () => reload() })
           }, ['+ משימה'])
         ])
       ]);

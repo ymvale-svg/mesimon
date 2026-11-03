@@ -48,6 +48,9 @@ function shapeEvent(e, calendar) {
     meetLink: safeLink(e.hangoutLink ?? e.conferenceData?.entryPoints?.find((p) => p.entryPointType === 'video')?.uri),
     link: safeLink(e.htmlLink),
     declined: self?.responseStatus === 'declined',
+    // המשתתפים (ומארגן הפגישה) — משימה מהפגישה מוצעת רק להם
+    participants: [...new Set([e.organizer?.email, ...(e.attendees ?? []).filter((a) => !a.resource).map((a) => a.email)]
+      .map((x) => String(x ?? '').trim().toLowerCase()).filter((x) => x.includes('@')))],
     // נוצר על ידי משימון — מסומן לפיצ'רים שכותבים ליומן
     mesimon: Boolean(e.extendedProperties?.private?.mesimon),
     uid: e.iCalUID ?? e.id

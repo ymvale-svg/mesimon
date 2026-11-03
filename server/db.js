@@ -851,6 +851,7 @@ CREATE INDEX IF NOT EXISTS idx_meetings_start ON meetings(status, start_at);
 /* משתמשי ה-Zoom בחשבון החברה — מסונכרנים מ-Zoom, לשיוך לעובדים */
 CREATE TABLE IF NOT EXISTS zoom_users (
   id         TEXT PRIMARY KEY,
+  account    TEXT NOT NULL DEFAULT '1',   -- חשבון ה-Zoom: 1 (ZOOM_*) או 2 (ZOOM2_*)
   email      TEXT NOT NULL DEFAULT '',
   name       TEXT NOT NULL DEFAULT '',
   license    TEXT NOT NULL DEFAULT 'basic',
@@ -905,6 +906,22 @@ CREATE TABLE IF NOT EXISTS release_notes (
   created_by    INTEGER REFERENCES users(id) ON DELETE SET NULL,
   created_at    TEXT    NOT NULL,
   updated_at    TEXT    NOT NULL
+);
+
+/*
+ * הצעת מייל למשימה שהיא פנייה החוצה ("לבקש הצעת מחיר מהדפוס") — לכל משימה
+ * ועובד. ‎state‎: none | ready | no_contact | dismissed | sent. ‎fingerprint‎ —
+ * הכותרת והתיאור שלפיהם חושבה; שינוי בהם מחשב מחדש. ראה ‎server/ai/task-outreach.js‎
+ */
+CREATE TABLE IF NOT EXISTS task_outreach (
+  task_id     INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  state       TEXT    NOT NULL,
+  fingerprint TEXT    NOT NULL DEFAULT '',
+  data        TEXT    NOT NULL DEFAULT '{}',
+  created_at  TEXT    NOT NULL,
+  updated_at  TEXT    NOT NULL,
+  PRIMARY KEY (task_id, user_id)
 );
 
 /* שולחים מיוחדים לכל משתמש: ‎trust‎ — משימות נוצרות ישר, בלי אישור; ‎ignore‎ — לא מציעים מהם משימות */
@@ -1264,8 +1281,9 @@ const DEFAULT_SETTINGS = {
   meeting_hours: '08:30-18:00',            // שעות לפגישות — הצעת מועדים ושורת הזמינות, שעון ישראל
   meeting_default_minutes: 30,             // משך ברירת מחדל
   meeting_buffer_minutes: 10,              // מרווח מפגישה צמודה בהצעת מועדים
-  meeting_reminder_minutes: 10,            // כמה דקות לפני — התראה ובוט הוואטסאפ
+  meeting_reminder_minutes: 15,            // כמה דקות לפני — התראה ובוט הוואטסאפ, עם קישור הפגישה
   meeting_ai_alternatives: true,           // הצעות AI להזזת פגישות חופפות
+  meeting_record_default: false,           // "הקלטה אוטומטית לענן" מסומן מראש בפגישת Zoom חדשה
 
   ai_mail_scan_enabled: true,
   ai_scan_time: '07:00',                   // ריצת הבוקר, שעון ישראל
@@ -1674,6 +1692,10 @@ function migrate() {
   addColumn('users', 'is_secretary', 'INTEGER NOT NULL DEFAULT 0');
   // משתמש ה-Zoom בחשבון החברה שמארח את הפגישות של העובד (‎zoom_users.id‎)
   addColumn('users', 'zoom_user_id', 'TEXT');
+  // חשבון Zoom שני — לאיזה חשבון שייך כל משתמש Zoom
+  addColumn('zoom_users', 'account', "TEXT NOT NULL DEFAULT '1'");
+  // הקלטה אוטומטית לענן ב-Zoom — נבחר בקביעת הפגישה
+  addColumn('meetings', 'zoom_record', 'INTEGER NOT NULL DEFAULT 0');
   // "📅 פגישה לקביעה" — מחכה שתיקבע לה פגישה
   addColumn('tasks', 'meeting_pending', 'INTEGER NOT NULL DEFAULT 0');
   addColumn('templates', 'department_id', 'INTEGER REFERENCES departments(id) ON DELETE SET NULL');
