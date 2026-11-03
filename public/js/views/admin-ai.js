@@ -250,7 +250,7 @@ const AdminAiView = (() => {
           m.error ? el('div.mute-sm.text-warn', { text: m.error }) : null
         ])),
         el('div', { text: `${h.calc.every((c) => c.ok) ? '✅' : '❌'} מחשבונים (${h.calc.filter((c) => c.ok).length}/${h.calc.length})${h.calc.filter((c) => !c.ok).map((c) => ` — ${c.key}: ${c.error}`).join('')}` }),
-        el('div', { text: `${mark(h.timeless.ok)} Timeless${h.timeless.error ? ` — ${h.timeless.error}` : ` · ${h.timeless.connectedUsers} עובדים חיברו`}` })
+        el('div', { text: `${mark(h.timeless.ok)} Timeless${h.timeless.error ? ` — ${h.timeless.error}` : ` · ${h.timeless.org ? 'אסימון ארגוני — לכל העובדים, ' : ''}${h.timeless.connectedUsers} חיברו אישי`}` })
       ]),
       el('div.ai-health', {}, [
         el('b', { text: 'סוכנים' }),

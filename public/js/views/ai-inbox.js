@@ -760,8 +760,9 @@ const AiInboxView = (() => {
     };
 
     /*
-     * Timeless — אסימון אישי (my.timeless.day/api-token). הסוכנים "סיכום שיחה",
-     * "הכנה לשיחה" ו"מצב לקוח" קוראים ממנו פגישות ותמלולים — רק של מי שחיבר.
+     * Timeless — אסימון אישי (my.timeless.day/api-token), או הארגוני מהשרת
+     * (‎TIMELESS_ACCESS_TOKEN‎) למי שלא חיבר. הסוכנים "סיכום שיחה", "הכנה לשיחה"
+     * ו"מצב לקוח" קוראים ממנו פגישות ותמלולים. בארגוני: הנהלה — הכול, עובד — שלו.
      */
     const tlSlot = el('div');
     let tl = null;
@@ -771,6 +772,12 @@ const AiInboxView = (() => {
     }
     function drawTimeless() {
       if (!tl) return UI.mount(tlSlot, el('div.mute-sm', { text: 'בודק…' }));
+      if (tl.connected && tl.source === 'org') {
+        return UI.mount(tlSlot, el('div.flex', { style: { gap: '8px', alignItems: 'center' } }, [
+          el('span', { text: '✅' }),
+          el('span', { text: `מחובר דרך החשבון הארגוני — ${tl.scope === 'all' ? 'כל פגישות הארגון' : 'הפגישות שהשתתפת בהן'}. אפשר לבקש "סכם את השיחה עם…"` })
+        ]));
+      }
       if (tl.connected) {
         const off = el('button.btn.btn-sm.btn-ghost', { type: 'button' }, ['ניתוק']);
         off.addEventListener('click', async () => { try { tl = await API.del('/api/me/timeless'); drawTimeless(); } catch (err) { UI.error(err); } });
