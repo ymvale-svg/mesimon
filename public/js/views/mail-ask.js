@@ -18,6 +18,38 @@ const AskView = (() => {
   const ICON = { mail: '📧', memory: '🧠', doc: '📎', org: '📚' };
   const MAX_FILE = 12 * 1024 * 1024;
 
+  /*
+   * במחשב — חלונית צד שנשארת פתוחה (‎ask-dock‎), לא חלון באמצע המסך: שואלים,
+   * וממשיכים לעבוד במערכת לידה — לעבור מסך, לפתוח משימה, להעתיק מהתשובה.
+   * בלי רקע כהה; שאר המסך מצטמצם לצידה ולא מוסתר. נשארת בין מסכים (היא על
+   * ה-body, מחוץ לאזור שמצויר מחדש בכל ניווט), ונסגרת רק ב-✕ או Escape מתוכה.
+   * בטלפון — חלון מלא, כמו קודם.
+   */
+  const PHONE = window.matchMedia('(max-width: 820px)');
+  let dock = null; // ‎{ panel, input, ask(question) }‎ — החלונית הפתוחה
+
+  function openDock(content, onClose) {
+    const closeBtn = el('button.icon-btn', { type: 'button', title: 'סגירה', 'aria-label': 'סגירת שאל את אשל' }, ['✕']);
+    const panel = el('aside.ask-dock', { role: 'complementary', 'aria-label': 'שאל את אשל' }, [
+      el('div.ask-dock-head', {}, [el('b', { text: '✨ שאל את אשל' }), el('div.spacer'), closeBtn]),
+      el('div.ask-dock-body', {}, [content])
+    ]);
+    const close = () => {
+      panel.remove();
+      document.body.classList.remove('has-ask-dock');
+      dock = null;
+      onClose?.();
+    };
+    closeBtn.addEventListener('click', close);
+    panel.addEventListener('keydown', (e) => {
+      // Escape רק כשהמיקוד בחלונית — כדי לא לסגור אותה כשסוגרים חלון אחר מעליה
+      if (e.key === 'Escape' && !document.querySelector('#modal-root .modal-backdrop')) { e.stopPropagation(); close(); }
+    });
+    document.body.appendChild(panel);
+    document.body.classList.add('has-ask-dock');
+    return { close, panel };
+  }
+
   const toBase64 = (file) => new Promise((resolve, reject) => {
     const r = new FileReader();
     r.onload = () => resolve(String(r.result).split(',')[1] ?? '');
@@ -32,6 +64,13 @@ const AskView = (() => {
    * @param {string} [opts.taskTitle]
    */
   async function open(opts = {}) {
+    // כבר פתוחה במחשב — אותה שיחה: שאלה חדשה נשלחת בה, אחרת רק מיקוד
+    if (dock && !PHONE.matches) {
+      if (opts.question) dock.ask(opts.question);
+      else dock.input.focus();
+      return;
+    }
+    const docked = !PHONE.matches;
     const history = [];
     let files = [];
     const thread = el('div.mask-thread');
@@ -53,18 +92,18 @@ const AskView = (() => {
     });
     const drawFiles = () => UI.mount(fileChips, ...files.map((f, i) => el('span.chip', {}, [`📎 ${f.name} `, el('button.btn-link', { type: 'button', title: 'הסרה', onclick: () => { files.splice(i, 1); drawFiles(); } }, ['✕'])])));
 
-    const m = UI.modal({
-      title: '✨ שאל את אשל',
-      size: 'wide',
-      body: el('div.mask', {}, [
+    const content = el('div.mask', {}, [
         opts.taskTitle ? el('div.mute-sm', { text: `על המשימה: ${opts.taskTitle}` }) : null,
         form,
         fileChips,
         recentBox,
         thread,
         el('div.mute-sm.mask-foot', { text: 'המיילים שלך, סוכני המחלקות והידע הארגוני — במקום אחד. כל תשובה עם המקור; שום דבר לא נשלח בלי לחיצה. משימות ופרויקטים — בשדה החיפוש.' })
-      ])
-    });
+      ]);
+    const m = docked ? openDock(content) : UI.modal({ title: '✨ שאל את אשל', size: 'wide', body: content });
+    if (docked) dock = { panel: m.panel, input, ask: (q) => { input.value = q; submit(); } };
+    // פעולה מהתשובה (פתיחת משימה, מעבר ל"ממתין לאישורך"): החלון בטלפון נסגר; החלונית במחשב נשארת
+    const leave = () => { if (!docked) m.close(); };
 
     async function loadRecent() {
       try {
@@ -142,10 +181,10 @@ const AskView = (() => {
           r.failed?.length ? el('div.mute-sm', { text: `⚠️ לא ענו: ${r.failed.map((f) => f.title).join(', ')}` }) : null,
           a.proposed?.length ? el('div.alert.alert-info.ai-mini', {}, [el('span', { text: '📌' }), el('div', {}, [
             `${a.proposed.length === 1 ? 'הוצעה משימה' : `הוצעו ${a.proposed.length} משימות`}: ${a.proposed.map((p) => p.title).join(' · ')} — `,
-            el('a', { href: '#', onclick: (e) => { e.preventDefault(); m.close(); App.navigate('home', {}); } }, ['לאישור ב"ממתין לאישורך"'])
+            el('a', { href: '#', onclick: (e) => { e.preventDefault(); leave(); App.navigate('home', {}); } }, ['לאישור ב"ממתין לאישורך"'])
           ])]) : null,
           el('div.mask-actions', {}, [
-            el('button.btn.btn-sm', { type: 'button', onclick: () => { m.close(); BoardView.openTaskDialog(null, { prefill: { title: question.slice(0, 120), description: `${a.text}\n\n${a.icon ?? '🤖'} ${a.title}` } }); } }, ['📌 משימה מזה']),
+            el('button.btn.btn-sm', { type: 'button', onclick: () => { leave(); BoardView.openTaskDialog(null, { prefill: { title: question.slice(0, 120), description: `${a.text}\n\n${a.icon ?? '🤖'} ${a.title}` } }); } }, ['📌 משימה מזה']),
             copyButton(a.text)
           ])
         ]));
@@ -221,10 +260,10 @@ const AskView = (() => {
 
     function mailActions(mail) {
       return [
-        mail.actions?.task ? el('button.btn.btn-sm', { type: 'button', onclick: () => { m.close(); BoardView.openTaskDialog(null, { prefill: { title: mail.actions.task, description: `${mail.answer}\n\n📧 מתוך המיילים: "${mail.question}"` } }); } }, ['📌 משימה מזה']) : null,
+        mail.actions?.task ? el('button.btn.btn-sm', { type: 'button', onclick: () => { leave(); BoardView.openTaskDialog(null, { prefill: { title: mail.actions.task, description: `${mail.answer}\n\n📧 מתוך המיילים: "${mail.question}"` } }); } }, ['📌 משימה מזה']) : null,
         mail.actions?.contact ? el('button.btn.btn-sm', {
           type: 'button',
-          onclick: () => { m.close(); AiTaskView.openDialog({ instruction: '', contact: { name: mail.actions.contact.name, email: mail.actions.contact.email, phone: mail.actions.contact.phone }, contactFromSystem: true }); }
+          onclick: () => { leave(); AiTaskView.openDialog({ instruction: '', contact: { name: mail.actions.contact.name, email: mail.actions.contact.email, phone: mail.actions.contact.phone }, contactFromSystem: true }); }
         }, [`✨ פנייה ל${mail.actions.contact.name}`]) : null,
         mail.actions?.reply ? replyButton(mail.actions.reply) : null,
         copyButton(mail.answer)
