@@ -56,6 +56,7 @@ const WaScan = require('./whatsapp-scan');
 const Business = require('./wa-business');
 const TaskSync = require('./task-sync');
 const TaskOutreach = require('./task-outreach');
+const Zoom = require('../zoom');
 
 const GROUP_SKILL = path.join(__dirname, 'skills', 'whatsapp-group-to-tasks.md');
 const CHAT_SKILL = path.join(__dirname, 'skills', 'whatsapp-chat.md');
@@ -744,11 +745,11 @@ function inHours(date = new Date()) {
 // שיחה פרטית — הפעולות
 // ---------------------------------------------------------------------------
 
-const INTENTS = ['create_task', 'my_tasks', 'complete', 'comment', 'project_tasks', 'send_email', 'mail_insights', 'mail_ask', 'solve', 'contact', 'today', 'today_email', 'menu', 'help', 'cancel', 'other'];
+const INTENTS = ['create_task', 'my_tasks', 'complete', 'comment', 'project_tasks', 'send_email', 'mail_insights', 'mail_ask', 'solve', 'contact', 'recording', 'today', 'today_email', 'menu', 'help', 'cancel', 'other'];
 const INSIGHT_ACTIONS = ['list', 'detail', 'reply', 'task', 'follow'];
 
 /** הכוונה ← הפעולה במסך הניהול שמפעילה אותה */
-const ACTION_OF = { menu: 'today', today_email: 'today', contact: 'phonebook' };
+const ACTION_OF = { menu: 'today', today_email: 'today', contact: 'phonebook', recording: 'recordings' };
 const actionOf = (intent) => ACTION_OF[intent] ?? intent;
 
 const CHAT_SCHEMA = {
@@ -771,6 +772,8 @@ const CHAT_SCHEMA = {
     insight_range_unit: { type: 'string', enum: ['default', 'hours', 'workdays'], description: 'בתובנות: הטווח שנאמר — בשעות ("48 שעות") או בימים ("מאתמול", "מהיומיים האחרונים"). לא נאמר — default' },
     insight_range_n: { type: 'integer', description: 'בתובנות: מספר השעות או הימים שנאמר, אחרת 0' },
     contact_query: { type: 'string', description: 'באיש קשר: את מי לחפש — שם, טלפון או מילה מההערה ("דני כהן", "היועץ הסניטרי"), בלי אותיות שימוש. אחרת ריק' },
+    recording_query: { type: 'string', description: 'בהקלטה: לפי מה לחפש — נושא הפגישה, שם משתתף או חברה ("רזבר", "ישיבת צוות"), בלי מילים כמו "ההקלטה של הפגישה עם". לא נאמר — ריק' },
+    recording_date: { type: 'string', description: 'בהקלטה: YYYY-MM-DD כשנאמר יום ("מאתמול", "של יום שלישי"), לפי תאריך היום. לא נאמר — ריק' },
     contact_source: { type: 'string', enum: ['any', 'google', 'phonebook'], description: 'באיש קשר ובמייל: מאיפה לחפש — phonebook רק כשנאמר במפורש "מהאלפון"/"באלפון", google רק כשנאמר "מגוגל"/"מאנשי הקשר בגוגל". אחרת any' },
     draft: {
       type: 'object',
@@ -788,7 +791,7 @@ const CHAT_SCHEMA = {
       additionalProperties: false
     }
   },
-  required: ['intent', 'ready', 'reply', 'range', 'task_id', 'comment', 'project_id', 'recipient_name', 'recipient_org', 'recipient_email', 'request', 'insight_action', 'insight_n', 'insight_from', 'insight_range_unit', 'insight_range_n', 'contact_query', 'contact_source', 'draft'],
+  required: ['intent', 'ready', 'reply', 'range', 'task_id', 'comment', 'project_id', 'recipient_name', 'recipient_org', 'recipient_email', 'request', 'insight_action', 'insight_n', 'insight_from', 'insight_range_unit', 'insight_range_n', 'contact_query', 'contact_source', 'recording_query', 'recording_date', 'draft'],
   additionalProperties: false
 };
 
@@ -1018,6 +1021,10 @@ async function understand(user, actor, state, text, projects, myOpen) {
     comment: String(out.comment ?? '').trim().slice(0, 2000),
     contactQuery: String(out.contact_query ?? '').trim().slice(0, 80),
     contactSource: sourceOf(out.contact_source, text),
+    recording: {
+      query: String(out.recording_query ?? '').trim().slice(0, 80),
+      date: /^\d{4}-\d{2}-\d{2}$/.test(String(out.recording_date ?? '')) ? out.recording_date : ''
+    },
     projectId: projectIds.has(Number(out.project_id)) ? Number(out.project_id) : 0,
     recipient: {
       name: String(out.recipient_name ?? '').trim().slice(0, 80),
@@ -1084,6 +1091,68 @@ function checkDraft(actor, draft) {
 // ---------------------------------------------------------------------------
 
 const KEYCAPS = ['1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣', '9️⃣', '🔟'];
+
+// ---------------------------------------------------------------------------
+// 🎥 הקלטות Zoom
+// ---------------------------------------------------------------------------
+
+const RECORDINGS_SHOWN = 3;
+const RECORDINGS_DAYS = 30;   // בלי תאריך — מחפשים בחודש האחרון
+
+const ilDate = (iso) => new Intl.DateTimeFormat('en-CA', { timeZone: TZ }).format(new Date(iso));
+
+/**
+ * ההקלטות שמתאימות לבקשה, כטקסט לוואטסאפ: נושא, מועד וקישור צפייה. ‎query‎
+ * — מילים מהנושא, מהמשתתפים או מהמארח; בלי — האחרונות. ‎date‎ — יום אחד.
+ */
+async function recordingReply(actor, query, date) {
+  const day = 24 * 60 * 60 * 1000;
+  const ymd = (ms) => new Date(ms).toISOString().slice(0, 10);
+  // Zoom מסנן לפי תאריך UTC — יום לפני ואחרי, והסינון לפי שעון ישראל כאן
+  const from = date ? ymd(Date.parse(date) - day) : ymd(Date.now() - RECORDINGS_DAYS * day);
+  const to = date ? ymd(Date.parse(date) + day) : ymd(Date.now());
+  const { recordings, errors } = await Zoom.recordingsFor(actor, from, to);
+  let list = recordings.filter((r) => r.files.some((f) => f.ready) && (!date || ilDate(r.start) === date));
+
+  const words = query.toLowerCase().split(/[\s,.־-]+/).filter((w) => w.length > 1);
+  if (words.length) {
+    const scored = list.map((r) => {
+      const hay = [r.topic, r.meeting?.title, ...(r.meeting?.attendees ?? []), r.host.name, r.host.email].filter(Boolean).join(' ').toLowerCase();
+      return { r, score: words.filter((w) => hay.includes(w)).length };
+    }).filter((x) => x.score > 0);
+    const best = Math.max(0, ...scored.map((x) => x.score));
+    list = scored.filter((x) => x.score === best).map((x) => x.r);
+  }
+
+  const what = [query ? `של "${query}"` : null, date ? `מ-${date.split('-').reverse().join('.')}` : `מ-${RECORDINGS_DAYS} הימים האחרונים`].filter(Boolean).join(' ');
+  if (!list.length) {
+    const why = errors.length ? `\n⚠️ ${errors[0]}` : '';
+    return { found: false, text: `לא מצאתי הקלטה ${what}. אפשר לנסות לפי נושא הפגישה, שם משתתף או יום.${why}`, log: `לא נמצאה הקלטה ${what}` };
+  }
+
+  const root = appRoot();
+  const shown = list.slice(0, RECORDINGS_SHOWN);
+  const blocks = shown.map((r) => {
+    const when = new Intl.DateTimeFormat('he-IL', { timeZone: TZ, weekday: 'short', day: 'numeric', month: 'numeric', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(r.start));
+    const video = r.files.find((f) => f.kind === 'video' && f.ready) ?? r.files.find((f) => f.ready);
+    const inApp = root && video ? `${root}/api/zoom/recordings/file?uuid=${encodeURIComponent(r.uuid)}&file=${encodeURIComponent(video.id)}` : '';
+    return [
+      `🎥 *${r.meeting?.title || r.topic || 'פגישת Zoom'}*`,
+      `${when}${r.minutes ? ` · ${r.minutes} דק׳` : ''}`,
+      r.shareUrl ? `▶ ${r.shareUrl}` : null,
+      r.shareUrl && r.passcode && !r.shareUrl.includes('pwd=') ? `קוד: ${r.passcode}` : null,
+      !r.shareUrl && inApp ? `▶ ${inApp}` : null,
+      r.shareUrl && inApp ? `במשימון: ${inApp}` : null,
+      r.files.some((f) => f.kind === 'transcript' && f.ready) ? '📝 יש גם תמליל — במסך "🎥 הקלטות Zoom" במשימון' : null
+    ].filter(Boolean).join('\n');
+  });
+  const more = list.length > shown.length ? `\nועוד ${list.length - shown.length} — כתבו נושא, משתתף או יום כדי לצמצם.` : '';
+  return {
+    found: true,
+    text: [list.length > 1 ? `מצאתי ${list.length} הקלטות ${what}:` : null, ...blocks].filter(Boolean).join('\n\n') + more,
+    log: `${list.length} הקלטות ${what}: ${shown.map((r) => r.topic).join(' · ')}`.slice(0, 300)
+  };
+}
 
 const MENU = [
   ['today', 'today', '☀️ מה יש לי היום'],
@@ -2362,6 +2431,20 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
       return out(text, {}, { action: 'phonebook', status: 'ok', result: `"${q}" (${only}): ${r.google} מ-Google, ${r.phonebook} מהאלפון` });
     }
 
+    // 🎥 הקלטה מ-Zoom — רק מה שהכותב רשאי לראות (‎Zoom.recordingsFor‎)
+    case 'recording': {
+      if (actor.type !== 'user') return out('הקלטות זמינות לעובדים בלבד.', {}, { action: 'recordings', status: 'denied', result: 'לא עובד' });
+      if (!Zoom.isEnabled()) return out('Zoom עדיין לא מחובר למשימון, ולכן אין לי גישה להקלטות.', {}, { action: 'recordings', status: 'error', result: 'אין חיבור Zoom' });
+      const { query, date } = u.recording;
+      if (dry) return out(`(בדיקה) הייתי מחפש הקלטה${query ? ` של "${query}"` : ''}${date ? ` מ-${date}` : ''}.`, {}, { action: 'recordings', status: 'ok', result: 'בדיקה' });
+      try {
+        const r = await recordingReply(actor, query, date);
+        return out(r.text, {}, { action: 'recordings', status: r.found ? 'ok' : 'unclear', result: r.log });
+      } catch (err) {
+        return out(`לא הצלחתי להגיע להקלטות ב-Zoom: ${err.message}`, {}, { action: 'recordings', status: 'error', result: err.message });
+      }
+    }
+
     case 'my_tasks':
       return listReply(u.range);
 
@@ -3003,6 +3086,7 @@ module.exports = {
   sendText, log, notifyAssignment, assistant,
   _internal: {
     storeGroupMessage, processGroup, handleDirect, sanitizeGroup, resolveMentions, candidatesOf, converse, turn, withFollowUps, sendSummaries, YES,
-    findRecipients, findContactCards, sourceOf, suggestionFeedback, flushOutbox, todayMessage, splitMessage, parseSuggestionCommand, businessCommand, chatOf, saveChat
+    findRecipients, findContactCards, sourceOf, suggestionFeedback, flushOutbox, todayMessage, splitMessage, parseSuggestionCommand, businessCommand, chatOf, saveChat,
+    recordingReply
   }
 };

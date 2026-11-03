@@ -478,7 +478,7 @@ function shape(m) {
     end: m.end_at,
     minutes: Math.round((new Date(m.end_at) - new Date(m.start_at)) / MIN),
     attendees: parseJson(m.attendees, []),
-    zoom: m.zoom_meeting_id ? { joinUrl: m.zoom_join_url, host: zoomUser?.name ?? '', hostEmail: zoomUser?.email ?? '', basic: zoomUser?.license === 'basic' } : null,
+    zoom: m.zoom_meeting_id ? { joinUrl: m.zoom_join_url, host: zoomUser?.name ?? '', hostEmail: zoomUser?.email ?? '', basic: zoomUser?.license === 'basic', record: Boolean(m.zoom_record) } : null,
     status: m.status,
     past: new Date(m.end_at).getTime() < Date.now(),
     syncError: m.sync_error,
@@ -488,7 +488,8 @@ function shape(m) {
 
 /**
  * ‎input‎: ‎{ taskId, ownerId, title, attendees: [{email,name}], start (ISO),
- * minutes, locationType: zoom|place|link|none, location, notes, sendInvites }‎
+ * minutes, locationType: zoom|place|link|none, location, notes, sendInvites,
+ * record }‎ — ‎record‎: הקלטה אוטומטית לענן ב-Zoom
  */
 async function create(actor, input) {
   const cal = await resolveCalendar(actor, Number(input.ownerId) || actor.id);
@@ -500,6 +501,7 @@ async function create(actor, input) {
   const startIso = new Date(startMs).toISOString();
   const endIso = new Date(startMs + minutes * MIN).toISOString();
   const locationType = ['zoom', 'place', 'link', 'none'].includes(input.locationType) ? input.locationType : 'none';
+  const record = locationType === 'zoom' && Boolean(input.record);
   const attendees = cleanAttendees(input.attendees, cal.calendarEmail);
   const now = D.nowIso();
 
@@ -511,17 +513,17 @@ async function create(actor, input) {
     const pick = Zoom.pickHost(cal.owner.id, startIso, endIso);
     if (!pick.zoomUser) throw new MeetingError(`${pick.reason}. בחרו מועד אחר, או מיקום אחר.`);
     zoomNote = pick.swapped || pick.reason ? `הפגישה ב-Zoom של ${pick.zoomUser.name}${pick.reason ? ` (${pick.reason})` : ''}` : '';
-    const z = await Zoom.createMeeting(pick.zoomUser.id, { title, startIso, minutes, agenda: String(input.notes ?? '') });
+    const z = await Zoom.createMeeting(pick.zoomUser.id, { title, startIso, minutes, agenda: String(input.notes ?? ''), record });
     zoom = { userId: pick.zoomUser.id, ...z };
   }
 
   const r = D.run(
     `INSERT INTO meetings (task_id, created_by, owner_id, via_user_id, calendar_id, title, notes, location_type, location,
-       start_at, end_at, attendees, zoom_user_id, zoom_meeting_id, zoom_join_url, status, created_at, updated_at)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'scheduled',?,?)`,
+       start_at, end_at, attendees, zoom_user_id, zoom_meeting_id, zoom_join_url, zoom_record, status, created_at, updated_at)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'scheduled',?,?)`,
     input.taskId ? Number(input.taskId) : null, actor.id, cal.owner.id, cal.viaUserId, cal.calendarId, title,
     String(input.notes ?? '').slice(0, 4000), locationType, String(input.location ?? '').slice(0, 500),
-    startIso, endIso, JSON.stringify(attendees), zoom?.userId ?? null, zoom?.id ?? null, zoom?.joinUrl ?? null, now, now
+    startIso, endIso, JSON.stringify(attendees), zoom?.userId ?? null, zoom?.id ?? null, zoom?.joinUrl ?? null, record ? 1 : 0, now, now
   );
   const id = Number(r.lastInsertRowid);
   let m = meetingById(id);
@@ -571,25 +573,27 @@ async function update(actor, id, input) {
   const attendees = input.attendees !== undefined ? cleanAttendees(input.attendees, userById(m.owner_id)?.email) : parseJson(m.attendees, []);
   const notes = input.notes !== undefined ? String(input.notes).slice(0, 4000) : m.notes;
   const moved = startIso !== m.start_at || endIso !== m.end_at;
+  const record = input.record !== undefined && m.zoom_meeting_id ? Boolean(input.record) : Boolean(m.zoom_record);
+  const recordChanged = record !== Boolean(m.zoom_record);
 
   let zoomUserId = m.zoom_user_id;
-  if (m.zoom_meeting_id && moved) {
+  if (m.zoom_meeting_id && (moved || recordChanged)) {
     // המארח תפוס במועד החדש — הפגישה עוברת למשתמש Zoom פנוי
     const pick = Zoom.pickHost(m.owner_id, startIso, endIso, { excludeMeetingId: m.id });
-    if (pick.zoomUser && pick.zoomUser.id !== m.zoom_user_id && D.get(
+    if (moved && pick.zoomUser && pick.zoomUser.id !== m.zoom_user_id && D.get(
       "SELECT 1 FROM meetings WHERE zoom_user_id = ? AND status = 'scheduled' AND id <> ? AND start_at < ? AND end_at > ?", m.zoom_user_id, m.id, endIso, startIso)) {
       await Zoom.deleteMeeting(m.zoom_meeting_id).catch(() => {});
-      const z = await Zoom.createMeeting(pick.zoomUser.id, { title, startIso, minutes, agenda: notes });
+      const z = await Zoom.createMeeting(pick.zoomUser.id, { title, startIso, minutes, agenda: notes, record });
       D.run('UPDATE meetings SET zoom_user_id = ?, zoom_meeting_id = ?, zoom_join_url = ? WHERE id = ?', pick.zoomUser.id, z.id, z.joinUrl, m.id);
       zoomUserId = pick.zoomUser.id;
     } else {
-      await Zoom.updateMeeting(m.zoom_meeting_id, { title, startIso, minutes, agenda: notes }).catch((err) => console.error('[משימון] עדכון Zoom נכשל:', err.message));
+      await Zoom.updateMeeting(m.zoom_meeting_id, { title, startIso, minutes, agenda: notes, record }).catch((err) => console.error('[משימון] עדכון Zoom נכשל:', err.message));
     }
   }
   D.run(
     `UPDATE meetings SET title = ?, notes = ?, start_at = ?, end_at = ?, attendees = ?, reminded_at = CASE WHEN ? THEN NULL ELSE reminded_at END,
-       zoom_user_id = ?, updated_at = ? WHERE id = ?`,
-    title, notes, startIso, endIso, JSON.stringify(attendees), moved ? 1 : 0, zoomUserId, D.nowIso(), m.id
+       zoom_user_id = ?, zoom_record = ?, updated_at = ? WHERE id = ?`,
+    title, notes, startIso, endIso, JSON.stringify(attendees), moved ? 1 : 0, zoomUserId, record ? 1 : 0, D.nowIso(), m.id
   );
   const fresh = meetingById(m.id);
   const ev = await Gmail.googleCall(via, eventUrl(calendarId, m.google_event_id), { sendUpdates: 'all' }, { method: 'PATCH', body: eventBody(fresh) });
@@ -813,6 +817,16 @@ async function approveMove(actor, suggestionId) {
 // לפי משימה, וקישור מארח
 // ---------------------------------------------------------------------------
 
+/**
+ * ההקלטה של פגישה — לכל מי שרשאי לראות את הפגישה (‎canSee‎ נבדק ב-API).
+ * ‎null‎ — אין הקלטה עדיין.
+ */
+async function recording(id) {
+  const m = meetingById(id);
+  if (!m?.zoom_meeting_id) throw new MeetingError('אין לפגישה הזו Zoom', 404);
+  return Zoom.meetingRecording(m.zoom_meeting_id);
+}
+
 const forTask = (taskId) => D.all("SELECT * FROM meetings WHERE task_id = ? ORDER BY CASE status WHEN 'scheduled' THEN 0 ELSE 1 END, start_at DESC", taskId).map(shape);
 
 async function joinLink(actor, id) {
@@ -981,7 +995,7 @@ function stop() {
 module.exports = {
   init, MeetingError, isSecretary, accessMap, forgetAccess, calendarsFor, resolveCalendar, canWrite,
   freeBusy, availability, suggest, alternatives, create, update, cancel, declineReschedule, markRescheduled,
-  moveEvent, requestMove, previewMove, approveMove, forTask, joinLink, shape, meetingById, syncOne, syncAll, sendReminders,
+  moveEvent, requestMove, previewMove, approveMove, forTask, joinLink, recording, shape, meetingById, syncOne, syncAll, sendReminders,
   recipientsOf, reminderText, start, stop, tick,
   _internal: { splitPeople, cleanAttendees, eventBody, shapeEvent, ruleScore, rank, meetingHours }
 };

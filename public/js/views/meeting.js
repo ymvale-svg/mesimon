@@ -74,6 +74,7 @@ const MeetingView = (() => {
       date: '',
       time: '',
       locationType: editing?.locationType ?? (info.zoom.enabled ? 'zoom' : 'place'),
+      record: editing ? Boolean(editing.zoom?.record) : Boolean(info.defaults.record),
       suggestions: null,
       alternatives: null,
       avail: null
@@ -382,6 +383,10 @@ const MeetingView = (() => {
         ]))),
         ['place', 'link'].includes(state.locationType) ? locationInput : null,
         state.locationType === 'zoom' ? el('div.mute-sm', { text: 'מחשבון ה-Zoom של החברה — מהמשתמש המקושר לבעל היומן, ואם הוא תפוס — ממשתמש פנוי.' }) : null,
+        state.locationType === 'zoom' ? el('label.today-radio', { title: 'Zoom מקליט מתחילת הפגישה, וההקלטה נשמרת בענן — במסך "🎥 הקלטות Zoom" ובבוט' }, [
+          el('input', { type: 'checkbox', checked: state.record, onchange: (e) => { state.record = e.target.checked; } }),
+          el('span', { text: '⏺ הקלטה אוטומטית לענן' })
+        ]) : null,
         !info.zoom.enabled ? el('div.mute-sm', { text: 'Zoom עדיין לא מוגדר בשרת.' }) : null
       ]);
     }
@@ -401,6 +406,7 @@ const MeetingView = (() => {
         start: startIso(),
         minutes: state.minutes,
         locationType: state.locationType,
+        record: state.locationType === 'zoom' && state.record,
         location: locationInput.value.trim(),
         notes: notesInput.value,
         sendInvites: sendInvites.checked
@@ -509,7 +515,7 @@ const MeetingView = (() => {
             el('b', { text: `${when(current.start)}–${hhmm(current.end)}` }),
             el('div.mute-sm', {
               text: [current.ownerName ? `ביומן של ${current.ownerName}` : null,
-                current.zoom ? `Zoom${current.zoom.host ? ` (${current.zoom.host})` : ''}` : current.location || null].filter(Boolean).join(' · ')
+                current.zoom ? `Zoom${current.zoom.host ? ` (${current.zoom.host})` : ''}${current.zoom.record ? ' · ⏺ מוקלט' : ''}` : current.location || null].filter(Boolean).join(' · ')
             })
           ]),
           el('div.spacer'),
@@ -524,6 +530,7 @@ const MeetingView = (() => {
           ? el('div.mute-sm.text-warn', { text: '⚠ חשבון Zoom חינמי — פגישה של 3 משתתפים ומעלה נקטעת אחרי 40 דקות' })
           : null,
         current.syncError ? el('div.mute-sm.text-warn', { text: `⚠ ${current.syncError}` }) : null,
+        past && current.zoom ? recordingRow(current) : null,
         past ? el('div.mt-after', {}, [
           el('span', { text: 'הפגישה התקיימה?' }),
           el('button.btn.btn-sm.btn-primary', { onclick: () => closeTask(task, onChange) }, ['✓ סגירת המשימה']),
@@ -534,6 +541,17 @@ const MeetingView = (() => {
 
     API.get(`/api/meetings/task/${task.id}`).then((r) => draw(r.meetings)).catch(() => UI.mount(box));
     return box;
+  }
+
+  /** פגישת Zoom שהתקיימה — ההקלטה, אם יש (נטענת רק כשהכרטיס מוצג) */
+  function recordingRow(meeting) {
+    const row = el('div.mt-after', {}, [el('span.mute-sm', { text: '🎥 בודק אם יש הקלטה…' })]);
+    API.get(`/api/meetings/${meeting.id}/recording`).then(({ recording }) => {
+      UI.mount(row, ...(recording?.files.length
+        ? [el('span', { text: '🎥 ההקלטה:' }), ...RecordingsView.actions(recording)]
+        : [el('span.mute-sm', { text: meeting.zoom.record ? '🎥 ההקלטה עוד לא מוכנה — Zoom מעבד אותה אחרי סוף הפגישה' : '🎥 אין הקלטה לפגישה הזו' })]));
+    }).catch(() => row.remove());
+    return row;
   }
 
   async function closeTask(task, onChange) {

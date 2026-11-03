@@ -108,13 +108,11 @@ const RecordingsView = (() => {
     UI.mount(listBox, ...list.map(card));
   }
 
-  function card(r) {
-    const when = new Date(r.start);
-    const date = when.toLocaleDateString('he-IL', { weekday: 'short', day: 'numeric', month: 'numeric' });
-    const time = when.toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit', hour12: false });
-    const size = r.files.reduce((n, f) => n + f.size, 0);
-
-    // וידאו אחד מוצג כ"צפייה"; כשיש כמה תצוגות — כל אחת עם שמה
+  /**
+   * הכפתורים של הקלטה: וידאו אחד מוצג כ"צפייה", וכשיש כמה תצוגות — כל אחת
+   * עם שמה; שמע, תמליל, צ'אט; וקישור השיתוף של Zoom. משותף גם לכרטיס הפגישה.
+   */
+  function actions(r) {
     const videos = r.files.filter((f) => f.kind === 'video');
     const others = r.files.filter((f) => f.kind !== 'video' && FILE_BUTTONS[f.kind]);
     const fileButton = (f, label) => el('button.btn.btn-sm', {
@@ -122,6 +120,24 @@ const RecordingsView = (() => {
       title: f.ready ? `${f.type}${f.size ? ` · ${UI.fileSize(f.size)}` : ''}` : 'Zoom עוד מעבד את הקובץ',
       onclick: () => window.open(`/api/zoom/recordings/file?uuid=${encodeURIComponent(r.uuid)}&file=${encodeURIComponent(f.id)}`, '_blank', 'noopener')
     }, [f.ready ? label : `${label} (בעיבוד)`]);
+    return [
+      ...videos.map((f) => fileButton(f, videos.length > 1 && VIEW_LABEL[f.view] ? `▶ ${VIEW_LABEL[f.view]}` : FILE_BUTTONS.video)),
+      ...others.map((f) => fileButton(f, FILE_BUTTONS[f.kind])),
+      r.shareUrl ? el('button.btn.btn-sm', {
+        title: 'קישור הצפייה של Zoom — אפשר לשלוח למי שלא במשימון',
+        onclick: async () => {
+          const text = r.passcode ? `${r.shareUrl}\nקוד: ${r.passcode}` : r.shareUrl;
+          try { await navigator.clipboard.writeText(text); UI.success('הקישור הועתק'); } catch { UI.prompt('העתיקו את הקישור', { title: 'קישור ההקלטה', value: text, multiline: true, okText: 'סגירה' }); }
+        }
+      }, ['🔗 העתקת קישור']) : null
+    ];
+  }
+
+  function card(r) {
+    const when = new Date(r.start);
+    const date = when.toLocaleDateString('he-IL', { weekday: 'short', day: 'numeric', month: 'numeric' });
+    const time = when.toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit', hour12: false });
+    const size = r.files.reduce((n, f) => n + f.size, 0);
 
     return el('div.card.rec-card', {}, [
       el('div.rec-top', {}, [
@@ -134,19 +150,11 @@ const RecordingsView = (() => {
         r.meeting ? ` · פגישת משימון: ${r.meeting.title}` : ''
       ]),
       el('div.rec-actions', {}, [
-        ...videos.map((f) => fileButton(f, videos.length > 1 && VIEW_LABEL[f.view] ? `▶ ${VIEW_LABEL[f.view]}` : FILE_BUTTONS.video)),
-        ...others.map((f) => fileButton(f, FILE_BUTTONS[f.kind])),
-        r.shareUrl ? el('button.btn.btn-sm', {
-          title: 'קישור הצפייה של Zoom — אפשר לשלוח למי שלא במשימון',
-          onclick: async () => {
-            const text = r.passcode ? `${r.shareUrl}\nקוד: ${r.passcode}` : r.shareUrl;
-            try { await navigator.clipboard.writeText(text); UI.success('הקישור הועתק'); } catch { UI.prompt('העתיקו את הקישור', { title: 'קישור ההקלטה', value: text, multiline: true, okText: 'סגירה' }); }
-          }
-        }, ['🔗 העתקת קישור']) : null,
+        ...actions(r),
         r.task ? el('button.btn.btn-sm', { onclick: () => TaskCardView.open(r.task.id) }, ['פתיחת המשימה']) : null
       ])
     ]);
   }
 
-  return { render, reload };
+  return { render, reload, actions };
 })();

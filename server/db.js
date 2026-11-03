@@ -1283,6 +1283,7 @@ const DEFAULT_SETTINGS = {
   meeting_buffer_minutes: 10,              // מרווח מפגישה צמודה בהצעת מועדים
   meeting_reminder_minutes: 10,            // כמה דקות לפני — התראה ובוט הוואטסאפ
   meeting_ai_alternatives: true,           // הצעות AI להזזת פגישות חופפות
+  meeting_record_default: false,           // "הקלטה אוטומטית לענן" מסומן מראש בפגישת Zoom חדשה
 
   ai_mail_scan_enabled: true,
   ai_scan_time: '07:00',                   // ריצת הבוקר, שעון ישראל
@@ -1693,6 +1694,8 @@ function migrate() {
   addColumn('users', 'zoom_user_id', 'TEXT');
   // חשבון Zoom שני — לאיזה חשבון שייך כל משתמש Zoom
   addColumn('zoom_users', 'account', "TEXT NOT NULL DEFAULT '1'");
+  // הקלטה אוטומטית לענן ב-Zoom — נבחר בקביעת הפגישה
+  addColumn('meetings', 'zoom_record', 'INTEGER NOT NULL DEFAULT 0');
   // "📅 פגישה לקביעה" — מחכה שתיקבע לה פגישה
   addColumn('tasks', 'meeting_pending', 'INTEGER NOT NULL DEFAULT 0');
   addColumn('templates', 'department_id', 'INTEGER REFERENCES departments(id) ON DELETE SET NULL');

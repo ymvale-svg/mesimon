@@ -18,6 +18,7 @@
  * שאסימון החשבון לא מגיע לדפדפן.
  */
 const D = require('./db');
+const P = require('./permissions');
 
 const OAUTH = 'https://zoom.us/oauth/token';
 const API = 'https://api.zoom.us/v2';
@@ -221,7 +222,11 @@ function pickHost(userId, startIso, endIso, { excludeMeetingId = null } = {}) {
 
 const zoomTime = (iso) => new Date(iso).toISOString().replace(/\.\d{3}Z$/, 'Z');
 
-function meetingBody({ title, startIso, minutes, agenda = '' }) {
+/**
+ * ‎record‎ — הקלטה אוטומטית לענן. רק כשנמסר: עדכון שלא נגע בהקלטה (הזזה
+ * מהיומן) לא משנה אותה ב-Zoom.
+ */
+function meetingBody({ title, startIso, minutes, agenda = '', record }) {
   return {
     topic: String(title).slice(0, 200),
     type: 2,
@@ -234,7 +239,8 @@ function meetingBody({ title, startIso, minutes, agenda = '' }) {
       join_before_host: true,
       jbh_time: 10,
       waiting_room: false,
-      mute_upon_entry: true
+      mute_upon_entry: true,
+      ...(record === undefined ? {} : { auto_recording: record ? 'cloud' : 'none' })
     }
   };
 }
@@ -281,6 +287,20 @@ const FILE_KIND = {
   MP4: 'video', M4A: 'audio', TRANSCRIPT: 'transcript', VTT: 'transcript', CHAT: 'chat', TXT: 'chat', CC: 'transcript', SUMMARY: 'summary'
 };
 
+/** הקלטה של פגישה, כפי שמשימון מציג אותה. ‎host‎ — שורה מ-‎zoom_users‎, אם ידועה */
+const shapeRecording = (m, host = null) => ({
+  uuid: m.uuid,
+  meetingId: String(m.id),
+  topic: m.topic ?? '',
+  start: m.start_time,
+  minutes: Number(m.duration ?? 0),
+  host: host ? { id: host.id, name: host.name, email: host.email, account: host.account } : { id: m.host_id ?? '', name: '', email: m.host_email ?? '', account: '' },
+  // קישור השיתוף של Zoom — עם קוד הצפייה בתוכו, כשיש
+  shareUrl: m.share_url ? `${m.share_url}${m.recording_play_passcode ? `${m.share_url.includes('?') ? '&' : '?'}pwd=${m.recording_play_passcode}` : ''}` : '',
+  passcode: m.password ?? '',
+  files: (m.recording_files ?? []).map(shapeFile)
+});
+
 const shapeFile = (f) => ({
   id: f.id,
   kind: FILE_KIND[f.file_type] ?? 'other',
@@ -318,18 +338,7 @@ async function listRecordings(zoomUserIds, from, to) {
           const page = await call(z.account, 'GET',
             `/users/${encodeURIComponent(z.id)}/recordings?from=${f}&to=${t}&page_size=300${next ? `&next_page_token=${encodeURIComponent(next)}` : ''}`);
           for (const m of page.meetings ?? []) {
-            out.push({
-              uuid: m.uuid,
-              meetingId: String(m.id),
-              topic: m.topic ?? '',
-              start: m.start_time,
-              minutes: Number(m.duration ?? 0),
-              host: { id: z.id, name: z.name, email: z.email, account: z.account },
-              // קישור השיתוף של Zoom — עם קוד הצפייה בתוכו, כשיש
-              shareUrl: m.share_url ? `${m.share_url}${m.recording_play_passcode ? `${m.share_url.includes('?') ? '&' : '?'}pwd=${m.recording_play_passcode}` : ''}` : '',
-              passcode: m.password ?? '',
-              files: (m.recording_files ?? []).map(shapeFile)
-            });
+            out.push(shapeRecording(m, z));
           }
           next = page.next_page_token ?? '';
         } while (next);
@@ -384,8 +393,71 @@ async function recordingFileUrl(uuid, fileId) {
   throw new ZoomError('Zoom לא החזיר קישור לקובץ');
 }
 
+/**
+ * ההקלטה של פגישה שמשימון קבע — לפי מזהה הפגישה ב-Zoom (המופע האחרון שלה).
+ * אין הקלטה (עוד לא הסתיימה, לא הוקלטה, או ש-Zoom עוד מעבד) — ‎null‎.
+ */
+async function meetingRecording(zoomMeetingId) {
+  try {
+    const m = await onMeeting(zoomMeetingId, (key) => call(key, 'GET', `/meetings/${encodeURIComponent(zoomMeetingId)}/recordings`));
+    const host = m.host_id ? D.get('SELECT * FROM zoom_users WHERE id = ?', m.host_id) : null;
+    return shapeRecording(m, host);
+  } catch (err) {
+    if (err.status === 404) return null;
+    throw err;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// מי רואה אילו הקלטות
+// ---------------------------------------------------------------------------
+
+/**
+ * מי שמנהל משתמשים — את כל ההקלטות בחשבונות. עובד אחר — של משתמש ה-Zoom
+ * המשויך לו, ושל פגישות משימון שהוא בעל היומן שלהן, קבע אותן או הוזמן אליהן.
+ * אותו כלל באפליקציה ובבוט.
+ */
+function recordingScope(actor) {
+  if (P.may(actor, 'manage_users')) return { all: true, own: null, hosts: D.all('SELECT id FROM zoom_users').map((z) => z.id), meetingIds: new Set() };
+  const email = String(D.get('SELECT email FROM users WHERE id = ?', actor.id)?.email ?? '').toLowerCase();
+  const own = D.get('SELECT zoom_user_id FROM users WHERE id = ?', actor.id)?.zoom_user_id ?? null;
+  const mine = D.all(
+    `SELECT zoom_user_id, zoom_meeting_id FROM meetings
+      WHERE zoom_meeting_id IS NOT NULL AND (owner_id = ? OR created_by = ? OR via_user_id = ? OR (? <> '' AND lower(attendees) LIKE ?))`,
+    actor.id, actor.id, actor.id, email, `%"${email}"%`
+  );
+  return {
+    all: false,
+    own,
+    hosts: [...new Set([own, ...mine.map((m) => m.zoom_user_id)].filter(Boolean))],
+    meetingIds: new Set(mine.map((m) => String(m.zoom_meeting_id)))
+  };
+}
+
+const mayWatch = (scope, hostId, meetingId) => scope.all || Boolean(scope.own && scope.own === hostId) || scope.meetingIds.has(String(meetingId));
+
+/**
+ * ההקלטות שהעובד רשאי לראות בטווח, וליד כל אחת — פגישת משימון שלה, אם יש
+ * (נושא, משתתפים, משימה).
+ */
+async function recordingsFor(actor, from, to) {
+  const scope = recordingScope(actor);
+  const { recordings, errors } = await listRecordings(scope.hosts, from, to);
+  const ours = new Map();
+  const list = recordings.filter((r) => mayWatch(scope, r.host.id, r.meetingId)).map((r) => {
+    if (!ours.has(r.meetingId)) {
+      ours.set(r.meetingId, D.get('SELECT id, task_id, title, attendees FROM meetings WHERE zoom_meeting_id = ? ORDER BY id DESC LIMIT 1', r.meetingId) ?? null);
+    }
+    const m = ours.get(r.meetingId);
+    let attendees = [];
+    try { attendees = m ? JSON.parse(m.attendees) : []; } catch { /* ריק */ }
+    return { ...r, meeting: m ? { id: m.id, taskId: m.task_id, title: m.title, attendees: attendees.map((a) => a.name || a.email) } : null };
+  });
+  return { all: scope.all, recordings: list, errors };
+}
+
 module.exports = {
   isEnabled, missing, accounts, syncUsers, listUsers, pickHost, createMeeting, updateMeeting, deleteMeeting, startUrl,
-  listRecordings, recordingFileUrl, ZoomError,
+  listRecordings, recordingFileUrl, meetingRecording, recordingScope, mayWatch, recordingsFor, ZoomError,
   _internal: { meetingBody, call }
 };
