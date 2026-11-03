@@ -42,6 +42,13 @@ const userById = (id) => D.get("SELECT id, full_name, email, phone, is_secretary
 const userByEmail = (email) => D.get("SELECT id, full_name, email, phone FROM users WHERE lower(email) = ? AND status = 'active'", String(email ?? '').toLowerCase());
 const isSecretary = (actor) => actor?.type === 'user' && Boolean(D.get('SELECT is_secretary FROM users WHERE id = ?', actor.id)?.is_secretary);
 
+/**
+ * הנהלה ומזכירות: בוחרים מאיזה חשבון ומאיזה משתמש Zoom הפגישה, ומקבלים את
+ * קישור המארח לפגישות שקבעו — גם כשבעל היומן אינו רשום ב-Zoom.
+ */
+const ZOOM_MANAGERS = ['superadmin', 'admin', 'executive'];
+const isZoomManager = (actor) => actor?.type === 'user' && (ZOOM_MANAGERS.includes(actor.role) || isSecretary(actor));
+
 function meetingHours() {
   const m = /^(\d{1,2}):(\d{2})\s*-\s*(\d{1,2}):(\d{2})$/.exec(String(D.getSetting('meeting_hours', '08:30-18:00')));
   return m ? { from: [Number(m[1]), Number(m[2])], to: [Number(m[3]), Number(m[4])] } : { from: [8, 30], to: [18, 0] };
@@ -500,7 +507,7 @@ function shape(m) {
     end: m.end_at,
     minutes: Math.round((new Date(m.end_at) - new Date(m.start_at)) / MIN),
     attendees: parseJson(m.attendees, []),
-    zoom: m.zoom_meeting_id ? { joinUrl: m.zoom_join_url, host: zoomUser?.name ?? '', hostEmail: zoomUser?.email ?? '', basic: zoomUser?.license === 'basic', record: Boolean(m.zoom_record) } : null,
+    zoom: m.zoom_meeting_id ? { userId: m.zoom_user_id, joinUrl: m.zoom_join_url, host: zoomUser?.name ?? '', hostEmail: zoomUser?.email ?? '', basic: zoomUser?.license === 'basic', record: Boolean(m.zoom_record) } : null,
     status: m.status,
     past: new Date(m.end_at).getTime() < Date.now(),
     syncError: m.sync_error,
@@ -532,8 +539,9 @@ async function create(actor, input) {
   let zoomNote = '';
   if (locationType === 'zoom') {
     if (!Zoom.isEnabled()) throw new MeetingError('חיבור Zoom אינו מוגדר בשרת — בחרו מיקום אחר, או בקשו ממנהל המערכת להגדיר');
-    const pick = Zoom.pickHost(cal.owner.id, startIso, endIso);
-    if (!pick.zoomUser) throw new MeetingError(`${pick.reason}. בחרו מועד אחר, או מיקום אחר.`);
+    const prefer = input.zoomUserId && isZoomManager(actor) ? String(input.zoomUserId) : null;
+    const pick = Zoom.pickHost(cal.owner.id, startIso, endIso, { prefer });
+    if (!pick.zoomUser) throw new MeetingError(`${pick.reason}. בחרו ${prefer ? 'משתמש Zoom אחר, ' : ''}מועד אחר, או מיקום אחר.`);
     zoomNote = pick.swapped || pick.reason ? `הפגישה ב-Zoom של ${pick.zoomUser.name}${pick.reason ? ` (${pick.reason})` : ''}` : '';
     const z = await Zoom.createMeeting(pick.zoomUser.id, { title, startIso, minutes, agenda: String(input.notes ?? ''), record });
     zoom = { userId: pick.zoomUser.id, ...z };
@@ -599,7 +607,16 @@ async function update(actor, id, input) {
   const recordChanged = record !== Boolean(m.zoom_record);
 
   let zoomUserId = m.zoom_user_id;
-  if (m.zoom_meeting_id && (moved || recordChanged)) {
+  // הנהלה ומזכירות — העברת הפגישה למשתמש Zoom אחר (גם בחשבון השני)
+  const wanted = input.zoomUserId && isZoomManager(actor) && m.zoom_meeting_id ? String(input.zoomUserId) : null;
+  if (wanted && wanted !== m.zoom_user_id) {
+    const pick = Zoom.pickHost(m.owner_id, startIso, endIso, { excludeMeetingId: m.id, prefer: wanted });
+    if (!pick.zoomUser) throw new MeetingError(pick.reason);
+    const z = await Zoom.createMeeting(pick.zoomUser.id, { title, startIso, minutes, agenda: notes, record });
+    await Zoom.deleteMeeting(m.zoom_meeting_id).catch(() => {});
+    D.run('UPDATE meetings SET zoom_user_id = ?, zoom_meeting_id = ?, zoom_join_url = ?, reminded_at = NULL WHERE id = ?', pick.zoomUser.id, z.id, z.joinUrl, m.id);
+    zoomUserId = pick.zoomUser.id;
+  } else if (m.zoom_meeting_id && (moved || recordChanged)) {
     // המארח תפוס במועד החדש — הפגישה עוברת למשתמש Zoom פנוי
     const pick = Zoom.pickHost(m.owner_id, startIso, endIso, { excludeMeetingId: m.id });
     if (moved && pick.zoomUser && pick.zoomUser.id !== m.zoom_user_id && D.get(
@@ -854,8 +871,8 @@ const forTask = (taskId) => D.all("SELECT * FROM meetings WHERE task_id = ? ORDE
 async function joinLink(actor, id) {
   const m = meetingById(id);
   if (!m?.zoom_meeting_id) throw new MeetingError('אין לפגישה הזו Zoom', 404);
-  // המארח (בעל היומן) מקבל קישור מארח טרי; כל השאר — קישור ההצטרפות
-  if (actor.id === m.owner_id) {
+  // קישור מארח טרי — לבעל היומן, למי שקבע, ולהנהלה ולמזכירות; כל השאר — קישור ההצטרפות
+  if (actor.id === m.owner_id || actor.id === m.created_by || isZoomManager(actor)) {
     try { return { url: await Zoom.startUrl(m.zoom_meeting_id), host: true }; } catch { /* קישור הצטרפות */ }
   }
   return { url: m.zoom_join_url, host: false };
@@ -1020,7 +1037,7 @@ function stop() {
 }
 
 module.exports = {
-  init, MeetingError, isSecretary, accessMap, accessError, forgetAccess, calendarsFor, resolveCalendar, canWrite,
+  init, MeetingError, isSecretary, isZoomManager, accessMap, accessError, forgetAccess, calendarsFor, resolveCalendar, canWrite,
   freeBusy, availability, suggest, alternatives, create, update, cancel, declineReschedule, markRescheduled,
   moveEvent, requestMove, previewMove, approveMove, forTask, joinLink, recording, shape, meetingById, syncOne, syncAll, sendReminders,
   recipientsOf, reminderText, start, stop, tick,
