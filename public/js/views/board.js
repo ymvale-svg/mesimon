@@ -1413,6 +1413,8 @@ const BoardView = (() => {
    * ('YYYY-MM-DD'), checklist[], statusShort, recurrence, activateDate‎.
    * ‎opts.voice‎ — נפתח מהקלטה: ‎{ transcript, warnings, uncertain[] }‎ — מה שלא
    * ודאי מסומן לבדיקה, ו"🎙 הוסף עוד" ממשיך את אותה הקלטה.
+   * ‎opts.participants‎ — משימה מפגישה: מיילים של משתתפי הפגישה. האחראי מוצע
+   * רק מביניהם (ואני תמיד — הפגישה ביומן שלי), בלי ספקים ובלי שאר הארגון.
    * ‎opts.onSaved‎ — נקרא אחרי שמירה.
    */
   function openTaskDialog(task = null, opts = {}) {
@@ -1456,11 +1458,23 @@ const BoardView = (() => {
       // רמת הגישה מצורפת לשם רק כשהצופה רשאי לראות רמות
       label: u.roleLabel ? `${u.name} — ${u.roleLabel}` : u.name
     });
-    const { near, far, deptName } = UI.usersByDepartment({
+    const byDept = UI.usersByDepartment({
       keep: [task?.assigneeType === 'user' ? task.assigneeId : null, ...(task?.extraAssignees ?? []).filter((e) => e.type === 'user').map((e) => e.id)].filter(Boolean)
     });
+    /*
+     * משימה מפגישה — מוצעת רק למשתתפים בה. מי שלא ישב בפגישה אינו יודע מה
+     * סוכם בה, ומשימה "מהפגישה" אצלו היא משימה בלי הקשר.
+     */
+    const fromMeeting = !isEdit && Array.isArray(opts.participants);
+    const inMeeting = new Set((opts.participants ?? []).map((x) => String(x ?? '').toLowerCase()));
+    const onlyParticipants = (list) => (fromMeeting
+      ? list.filter((u) => u.id === App.state.actor?.id || inMeeting.has(String(u.email ?? '').toLowerCase()))
+      : list);
+    const near = onlyParticipants(byDept.near);
+    const far = onlyParticipants(byDept.far);
+    const deptName = byDept.deptName;
 
-    const vendorOptions = App.may('assign_task_to_vendor')
+    const vendorOptions = !fromMeeting && App.may('assign_task_to_vendor')
       ? App.state.vendors.filter((v) => v.status === 'active')
         .map((v) => ({ value: `vendor:${v.id}`, label: `${v.name} (ספק חיצוני)` }))
       : [];
@@ -1471,7 +1485,7 @@ const BoardView = (() => {
       ...(near.length && far.length
         ? [
             { label: deptName, options: near.map(userOption) },
-            { label: 'שאר הארגון', options: far.map(userOption) }
+            { label: fromMeeting ? 'משתתפים נוספים בפגישה' : 'שאר הארגון', options: far.map(userOption) }
           ]
         : [...near, ...far].map(userOption)),
       ...(vendorOptions.length
@@ -1685,7 +1699,9 @@ const BoardView = (() => {
       fieldOf('title', 'כותרת המשימה', titleInput),
       UI.field('תיאור', descInput),
       // האחראי בשורה משלו — העיגולים צריכים רוחב
-      fieldOf('assignee', 'אחראי', assigneePicker.node, 'משימה ללא אחראי לא תופיע ב"המשימות שלי" של אף אחד'),
+      fieldOf('assignee', 'אחראי', assigneePicker.node, fromMeeting
+        ? 'משימה מהפגישה — מוצעת רק למשתתפים בה'
+        : 'משימה ללא אחראי לא תופיע ב"המשימות שלי" של אף אחד'),
       fieldOf('projectId', 'פרויקט', projectPicker, 'משימה ללא פרויקט תופיע בלוח בקבוצת "ללא פרויקט"'),
       UI.field('אחראים נוספים', extraList,
         'המשימה תופיע גם אצלם, והם יקבלו את ההתראות. אפשר לצרף גם ספק חיצוני — המשימה נשארת בלוח הפנימי'),
