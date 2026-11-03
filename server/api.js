@@ -796,7 +796,9 @@ function publicActor(actor) {
     // ימי העבודה (0=ראשון) — "מחר" בבורר דחיית היעד הוא יום העבודה הבא שלו
     workDays: actor.type === 'user' ? W.workDaysOf(actor.id) : [0, 1, 2, 3, 4],
     // מזכירה — רואה את מסך היומן וקובעת ביומנים שהעובדים שיתפו איתה
-    secretary: actor.type === 'user' && Boolean(D.get('SELECT is_secretary FROM users WHERE id = ?', actor.id)?.is_secretary)
+    secretary: actor.type === 'user' && Boolean(D.get('SELECT is_secretary FROM users WHERE id = ?', actor.id)?.is_secretary),
+    // מסך הקלטות ה-Zoom — כשיש חיבור Zoom
+    zoomRecordings: actor.type === 'user' && Zoom.isEnabled()
   };
 }
 
@@ -4263,6 +4265,7 @@ router.get('/api/admin/settings', async (req, res, ctx) => {
       zoom: {
         enabled: Zoom.isEnabled(),
         missing: Zoom.missing(),
+        accounts: Zoom.accounts(),
         users: D.get('SELECT COUNT(*) c FROM zoom_users').c,
         linked: D.get("SELECT COUNT(*) c FROM users WHERE zoom_user_id IS NOT NULL AND status = 'active'").c
       }

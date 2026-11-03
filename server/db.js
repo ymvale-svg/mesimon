@@ -851,6 +851,7 @@ CREATE INDEX IF NOT EXISTS idx_meetings_start ON meetings(status, start_at);
 /* משתמשי ה-Zoom בחשבון החברה — מסונכרנים מ-Zoom, לשיוך לעובדים */
 CREATE TABLE IF NOT EXISTS zoom_users (
   id         TEXT PRIMARY KEY,
+  account    TEXT NOT NULL DEFAULT '1',   -- חשבון ה-Zoom: 1 (ZOOM_*) או 2 (ZOOM2_*)
   email      TEXT NOT NULL DEFAULT '',
   name       TEXT NOT NULL DEFAULT '',
   license    TEXT NOT NULL DEFAULT 'basic',
@@ -1690,6 +1691,8 @@ function migrate() {
   addColumn('users', 'is_secretary', 'INTEGER NOT NULL DEFAULT 0');
   // משתמש ה-Zoom בחשבון החברה שמארח את הפגישות של העובד (‎zoom_users.id‎)
   addColumn('users', 'zoom_user_id', 'TEXT');
+  // חשבון Zoom שני — לאיזה חשבון שייך כל משתמש Zoom
+  addColumn('zoom_users', 'account', "TEXT NOT NULL DEFAULT '1'");
   // "📅 פגישה לקביעה" — מחכה שתיקבע לה פגישה
   addColumn('tasks', 'meeting_pending', 'INTEGER NOT NULL DEFAULT 0');
   addColumn('templates', 'department_id', 'INTEGER REFERENCES departments(id) ON DELETE SET NULL');

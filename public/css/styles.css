@@ -3260,6 +3260,12 @@ input[type="color"] { width: 46px; height: 30px; padding: 2px; cursor: pointer; 
 .cal { display: flex; flex-direction: column; gap: 10px; }
 .cal-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .cal-head h2 { margin: 0 6px 0 0; font-size: 20px; }
+
+/* 🎥 הקלטות Zoom */
+.rec { display: flex; flex-direction: column; gap: 10px; }
+.rec-list { display: flex; flex-direction: column; gap: 8px; }
+.rec-card { padding: 12px 14px; display: flex; flex-direction: column; gap: 4px; }
+.rec-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
 .cal-title { min-width: 120px; text-align: center; }
 .cal-access { font-size: 12.5px; color: var(--text-soft); }
 .cal-people-row { display: flex; gap: 8px; align-items: flex-start; }
