@@ -452,6 +452,8 @@ const MeetingView = (() => {
         if (res.note) UI.toast(res.note);
         opts.onDone?.(res.meeting);
         App.refreshView();
+        // פגישה חדשה מתוך משימה — אולי הפגישה היא כל המשימה ("לקבוע פגישה עם…")
+        if (!editing && opts.task) askCloseTask(opts.task, opts.onDone ? () => opts.onDone(res.meeting) : () => {});
       } catch (err) {
         saveBtn.disabled = false;
         UI.error(err);
@@ -586,6 +588,20 @@ const MeetingView = (() => {
         : [el('span.mute-sm', { text: meeting.zoom.record ? '🎥 ההקלטה עוד לא מוכנה — Zoom מעבד אותה אחרי סוף הפגישה' : '🎥 אין הקלטה לפגישה הזו' })]));
     }).catch(() => row.remove());
     return row;
+  }
+
+  /**
+   * אחרי קביעת פגישה מתוך משימה: לסגור את המשימה? רק כשהמשימה עוד פתוחה
+   * ויש לה עמודת "בוצע". "להשאיר פתוחה" — כלום לא משתנה.
+   */
+  async function askCloseTask(task, onChange) {
+    const board = App.state.boards.find((b) => b.id === task.boardId);
+    const final = board?.columns.find((c) => c.isFinal);
+    if (!final || task.status === final.key) return;
+    const yes = await UI.confirm(`הפגישה נקבעה. לסגור גם את המשימה "${task.title}"?`, {
+      title: '✓ סגירת המשימה', okText: '✓ לסגור את המשימה', cancelText: 'להשאיר פתוחה'
+    });
+    if (yes) await closeTask(task, () => { onChange(); App.refreshView(); });
   }
 
   async function closeTask(task, onChange) {
