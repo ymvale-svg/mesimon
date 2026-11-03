@@ -756,17 +756,21 @@ const GLOBAL_READS = Math.max(1, Number(process.env.MAIL_MEMORY_PARALLEL) || 2);
  * ההערכה לשרשור (‎SLOT_MB‎) מתחת לתקרה (‎mail_memory_night_mem_mb‎, ברירת מחדל
  * 1400MB — תקרת ה-heap ב-render.yaml; בתוכנית של 2GB נשארים כ-600MB לשרתי
  * הנתונים ולשאר). מעל התקרה — לא מתחילים חדש, ממתינים שאחד ייגמר. תמיד לפחות
- * אחד, כדי שהקריאה לא תיעצר. עד ‎NIGHT_MAX_READS‎ (8, או MAIL_MEMORY_NIGHT_PARALLEL).
+ * אחד, כדי שהקריאה לא תיעצר. עד ‎NIGHT_MAX_READS‎ (4, או MAIL_MEMORY_NIGHT_PARALLEL).
+ * ובכל שעה: כשהמעבד מעל 70% או שיש שאלה לסוכן — רק שרשור אחד (‎load-monitor.pressure‎).
  */
-const NIGHT_MAX_READS = Math.max(GLOBAL_READS, Number(process.env.MAIL_MEMORY_NIGHT_PARALLEL) || 8);
+const NIGHT_MAX_READS = Math.max(GLOBAL_READS, Number(process.env.MAIL_MEMORY_NIGHT_PARALLEL) || 4);
 const SLOT_MB = 60;                 // שרשור: עד 8 הודעות ו-3 מסמכים מפוענחים, עם מרווח
 const NIGHT_READS_PER_USER = 6;     // ביום — ‎READ_CONCURRENCY‎ (3)
 const rssMb = () => Math.round(process.memoryUsage().rss / 1048576);
 const memBudget = () => Math.max(300, Number(D.getSetting('mail_memory_night_mem_mb', 1400)) || 1400);
-const memStats = { peakMb: 0, peakAt: null, peakReading: 0, heldBack: 0 };
+const memStats = { peakMb: 0, peakAt: null, peakReading: 0, heldBack: 0, cpuHeld: 0 };
+const pressure = () => { try { return require('../load-monitor').pressure(); } catch { return { busy: false }; } };
 
 function canStartRead() {
   if (reading === 0) return true;
+  // המעבד עמוס, או שמישהו שואל סוכן עכשיו — רק שרשור אחד בכל פעם (שרת עם מעבד אחד)
+  if (pressure().busy) { memStats.cpuHeld++; return false; }
   if (!isNight()) return reading < GLOBAL_READS;
   if (reading >= NIGHT_MAX_READS) return false;
   if (reading < GLOBAL_READS) return true;
@@ -888,7 +892,13 @@ async function tick() {
         if (err.quota) return coolDown(user.id);
         console.error(`[משימון] זיכרון המייל של משתמש ${user.id} נכשל:`, err.message);
         if (run.state === 'mapping') saveRun(user.id, { state: 'error', error: String(err.message).slice(0, 300) });
-      }).finally(() => { busy.delete(user.id); if (again && !cooling(user.id)) kick(); });
+      }).finally(() => {
+        busy.delete(user.id);
+        if (!again || cooling(user.id)) return;
+        // מעבד עמוס — הסבב הבא אחרי חצי דקה, לא מיד: שהאתר והסוכנים ינשמו
+        if (pressure().busy) setTimeout(() => tick().catch(() => {}), 30000).unref?.();
+        else kick();
+      });
     }
   } finally {
     ticking = false;
