@@ -933,7 +933,10 @@ async function syncAll() {
 // התראה לפני פגישה
 // ---------------------------------------------------------------------------
 
-/** מי מקבל: בעל היומן, מי שקבע, וכל משתתף מהארגון */
+/**
+ * מי מקבל: בעל היומן, מי שקבע, וכל משתתף שהוא משתמש במשימון. מוזמן מחוץ
+ * לארגון אינו מקבל הודעה מהבוט — רק את ההזמנה ביומן מ-Google.
+ */
 function recipientsOf(m) {
   const ids = new Set([m.owner_id, m.created_by].filter(Boolean));
   for (const a of parseJson(m.attendees, [])) {
@@ -952,41 +955,6 @@ function reminderText(m) {
     `📅 בעוד ${until} דקות: ${m.title}`,
     `${hhmm(m.start_at)}–${hhmm(m.end_at)} · ${people}`,
     m.zoom_join_url ? `🎥 Zoom: ${m.zoom_join_url}` : m.location ? `📍 ${m.location}` : null
-  ].filter(Boolean).join('\n');
-}
-
-/**
- * מוזמנים מחוץ לארגון שאפשר לשלוח להם את הקישור בוואטסאפ: הנייד מהאלפון
- * הארגוני (ספקים ורשומות ידניות), ואם אין — מאנשי הקשר ב-Google של מי שקבע
- * או של בעל היומן. מי שסירב, או שאין לו נייד ישראלי — לא.
- */
-function externalRecipientsOf(m) {
-  const Phonebook = require('./phonebook');
-  const GContacts = require('./google-contacts');
-  const book = Phonebook.all();
-  const out = [];
-  for (const a of parseJson(m.attendees, [])) {
-    const email = String(a.email ?? '').toLowerCase();
-    if (!email || a.response === 'declined' || userByEmail(email)) continue;
-    let mobile = book.find((e) => e.email && String(e.email).toLowerCase() === email && e.mobile)?.mobile ?? '';
-    for (const uid of [m.created_by, m.owner_id].filter(Boolean)) {
-      if (mobile) break;
-      mobile = GContacts.lookup(uid, { email })?.phones.map((p) => p.value).find((p) => Phonebook.isMobile(p)) ?? '';
-    }
-    if (mobile) out.push({ email, name: a.name || email, phone: `972${Phonebook.phoneDigits(mobile).slice(1)}` });
-  }
-  return out;
-}
-
-/** ההודעה למוזמן מחוץ לארגון — בלי רשימת המשתתפים, עם מי הפגישה והקישור */
-function externalReminderText(m) {
-  const hhmm = (iso) => new Intl.DateTimeFormat('he-IL', { timeZone: TZ, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(iso));
-  const until = Math.max(1, Math.round((new Date(m.start_at) - Date.now()) / MIN));
-  const owner = userById(m.owner_id)?.full_name;
-  return [
-    `📅 תזכורת: ${m.title}`,
-    `בעוד ${until} דקות, ${hhmm(m.start_at)}–${hhmm(m.end_at)}${owner ? ` · עם ${owner}` : ''}`,
-    m.zoom_join_url ? `🎥 הצטרפות ל-Zoom: ${m.zoom_join_url}` : m.location_type === 'link' && m.location ? `🔗 ${m.location}` : m.location ? `📍 ${m.location}` : null
   ].filter(Boolean).join('\n');
 }
 
@@ -1012,17 +980,6 @@ async function sendReminders() {
       if (wa && u.phone && !sent.has(u.phone)) {
         sent.add(u.phone);
         try { await hooks.sendWhatsApp(`${u.phone}@c.us`, text); } catch (err) { console.error('[משימון] התראת פגישה בוואטסאפ נכשלה:', err.message); }
-      }
-    }
-    // מוזמנים מחוץ לארגון — הקישור מהבוט, כשההגדרה דלוקה
-    if (wa && D.getSetting('meeting_remind_external', true)) {
-      let guests = [];
-      try { guests = externalRecipientsOf(m); } catch (err) { console.error('[משימון] איתור טלפון למוזמנים נכשל:', err.message); }
-      const guestText = externalReminderText(m);
-      for (const g of guests) {
-        if (sent.has(g.phone)) continue;
-        sent.add(g.phone);
-        try { await hooks.sendWhatsApp(`${g.phone}@c.us`, guestText); } catch (err) { console.error('[משימון] התראת פגישה למוזמן נכשלה:', err.message); }
       }
     }
   }
@@ -1066,6 +1023,6 @@ module.exports = {
   init, MeetingError, isSecretary, accessMap, accessError, forgetAccess, calendarsFor, resolveCalendar, canWrite,
   freeBusy, availability, suggest, alternatives, create, update, cancel, declineReschedule, markRescheduled,
   moveEvent, requestMove, previewMove, approveMove, forTask, joinLink, recording, shape, meetingById, syncOne, syncAll, sendReminders,
-  recipientsOf, externalRecipientsOf, reminderText, externalReminderText, start, stop, tick,
+  recipientsOf, reminderText, start, stop, tick,
   _internal: { splitPeople, cleanAttendees, eventBody, shapeEvent, ruleScore, rank, meetingHours }
 };
