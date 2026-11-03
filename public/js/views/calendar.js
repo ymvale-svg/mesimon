@@ -102,6 +102,8 @@ const CalendarView = (() => {
         el('button.btn.btn-sm', { title: 'הבא', onclick: () => { view.date = addDays(view.date, view.mode === 'day' ? 1 : 7); loadRange(); } }, ['◀']),
         el('button.btn.btn-sm', { onclick: () => { view.date = new Date(); loadRange(); } }, ['היום']),
         el('div.spacer'),
+        // קביעת פגישה בלי לבחור משבצת ובלי משימה — למזכירות בלבד (המסך כולו שלהן)
+        info.secretary ? el('button.btn.btn-sm.btn-primary', { onclick: scheduleNew }, ['📅 קביעת פגישה']) : null,
         el('button.btn.btn-sm', { title: 'רענון רשימת היומנים ששותפו', onclick: async () => { info = await API.get('/api/meetings/calendars?fresh=1'); loadRange(); } }, ['⟳'])
       ]),
       el('div.cal-access', {}, [
@@ -249,6 +251,17 @@ const CalendarView = (() => {
   }
 
   // ------------------------------------------------------------- פעולות
+
+  /**
+   * "📅 קביעת פגישה" בראש המסך — הדיאלוג הרגיל, בלי משימה. ביומן של העובד
+   * היחיד שמוצג (אם שיתף לעריכה), ואחרת ביומן שלי; בדיאלוג אפשר להחליף.
+   */
+  function scheduleNew() {
+    const editable = (c) => c && (c.self || ['owner', 'write'].includes(c.access));
+    const shown = view.users.map((id) => info.calendars.find((c) => c.userId === id)).filter(editable);
+    const ownerId = shown.length === 1 ? shown[0].userId : info.calendars.find((c) => c.self)?.userId;
+    MeetingView.openDialog({ prefill: ownerId ? { ownerId } : {}, onDone: () => { reload(); refreshPending(); } });
+  }
 
   /** משבצת ריקה — פגישה חדשה, למשימה שמחכה או בלי משימה */
   function newMeeting(ownerId, start) {
