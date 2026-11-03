@@ -1599,6 +1599,12 @@ function migrate() {
   addColumn('users', 'phone', "TEXT NOT NULL DEFAULT ''");
   // טלפון במשרד / שלוחה — טקסט חופשי ("03-1234567 שלוחה 12", או "212"), לאלפון
   addColumn('users', 'office_phone', "TEXT NOT NULL DEFAULT ''");
+  /*
+   * המייל הארגוני / המחלקתי — התיבה שמחוברת למשימון (דואר, יומן, אנשי קשר).
+   * עובדים מחלקתיים נכנסים עם Gmail פרטי (‎email‎), אבל התיבה שנסרקת היא של
+   * הארגון — וההסכמה ב-Google צריכה להינתן ממנה, לא מה-Gmail. ריק — כמו ‎email‎.
+   */
+  addColumn('users', 'work_email', "TEXT NOT NULL DEFAULT ''");
   // חברי קבוצת הוואטסאפ (מספרים), שמורים לכמה שעות — הצעות רק לעובדים שבקבוצה
   addColumn('wa_groups', 'participants', "TEXT NOT NULL DEFAULT '[]'");
   addColumn('wa_groups', 'participants_at', 'TEXT');

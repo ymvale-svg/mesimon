@@ -791,6 +791,33 @@ const AiInboxView = (() => {
     }
     const timelessSection = () => { if (!tl) loadTimeless(); else drawTimeless(); return tlSlot; };
 
+    /*
+     * איזו תיבה מתחברת. עובד מחלקתי נכנס עם Gmail פרטי, אבל התיבה שנסרקת היא
+     * של הארגון — וההסכמה ב-Google צריכה להינתן ממנה. מי שאין לו עדיין מייל
+     * ארגוני שמור כותב אותו כאן; Google נפתח ישר על החשבון הזה.
+     */
+    const workMailboxBox = () => {
+      const go = (email) => { location.href = `/api/me/gmail/connect${email ? `?email=${encodeURIComponent(email)}` : ''}`; };
+      if (info.workEmail && !info.loginIsPersonal) return el('a.btn.btn-primary', { href: '/api/me/gmail/connect' }, ['חיבור Google']);
+      const input = el('input', { type: 'email', dir: 'ltr', value: info.workEmail ?? '', placeholder: 'bedek@eshel.co.il', style: { maxWidth: '280px' } });
+      const btn = el('button.btn.btn-primary', { type: 'button' }, ['חיבור Google']);
+      const submit = () => {
+        const v = input.value.trim().toLowerCase();
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)) { input.focus(); return UI.toast('כתבו את המייל הארגוני / המחלקתי', 'error'); }
+        go(v === (info.workEmail ?? '') ? '' : v);
+      };
+      btn.addEventListener('click', submit);
+      input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); submit(); } });
+      return el('div', {}, [
+        el('div.alert.alert-info.ai-mini', {}, [el('span', { text: '🏢' }), el('div', {}, [
+          el('b', { text: 'מחברים את המייל הארגוני / המחלקתי — לא את ה-Gmail הפרטי. ' }),
+          'הכניסה למשימון נשארת עם החשבון שלך; הדואר, היומן ואנשי הקשר — מהתיבה של הארגון. במסך של Google בחרו בחשבון הזה.'
+        ])]),
+        UI.field('המייל הארגוני / המחלקתי', input),
+        btn
+      ]);
+    };
+
     function draw() {
       const c = info.connection;
       const connectBox = !info.enabled
@@ -809,7 +836,7 @@ const AiInboxView = (() => {
                 el('li', { text: '👥 אנשי קשר — בחירת נמען במשימת AI בלי להקליד מייל וטלפון, ושמירת איש קשר חדש בלחיצה.' })
               ]),
               el('div.mute-sm', { style: { marginBottom: '10px' }, text: 'במסך של Google — סמנו את כל התיבות.' }),
-              el('a.btn.btn-primary', { href: '/api/me/gmail/connect' }, ['חיבור Google'])
+              workMailboxBox()
             ])
           : el('div', {}, [
               // חיבור מלפני היומן ואנשי הקשר — אישור אחד נוסף משלים אותו

@@ -603,6 +603,8 @@ const AdminView = (() => {
     const phoneInput = el('input', { type: 'tel', dir: 'ltr', value: user?.phone ? UI.phone(user.phone) : '', placeholder: '050-0000000' });
     // טלפון במשרד / שלוחה — טקסט חופשי, מוצג באלפון
     const officeInput = el('input', { type: 'text', dir: 'ltr', value: user?.officePhone ?? '', placeholder: '03-0000000 שלוחה 12', maxlength: 40 });
+    // המייל הארגוני / המחלקתי — התיבה שמתחברת למשימון, כשהעובד נכנס עם Gmail פרטי
+    const workEmailInput = el('input', { type: 'email', dir: 'ltr', value: user?.workEmail ?? '', placeholder: 'bedek@eshel.co.il' });
 
     // רמות הגישה מגיעות מהשרת כשהן מסוננות לפי מה שהמשתמש המחובר רשאי להעניק —
     // מנהל מחלקה יקבל כך רק 'עובד פנימי', בלי החלטה בקוד הממשק.
@@ -702,7 +704,8 @@ const AdminView = (() => {
         UI.field('אימייל', emailInput, 'משמש גם לכניסה למערכת'),
         el('div.row', {}, [
           UI.field('טלפון נייד', phoneInput, 'כך בוט הוואטסאפ מזהה מי כתב בקבוצה, ומאפשר לפתוח משימות בהודעה אליו'),
-          UI.field('טלפון במשרד / שלוחה', officeInput, 'מופיע באלפון. לחיצה עליו מחייגת מהטלפון במשרד')
+          UI.field('טלפון במשרד / שלוחה', officeInput, 'מופיע באלפון. לחיצה עליו מחייגת מהטלפון במשרד'),
+          UI.field('מייל ארגוני / מחלקתי', workEmailInput, 'כשהעובד נכנס עם Gmail פרטי: התיבה של הארגון שתחובר למשימון (דואר, יומן). ההסכמה ב-Google תינתן ממנה. ריק — מייל הכניסה הוא גם התיבה')
         ]),
         el('div.row', {}, [UI.field('רמת גישה', roleSelect), UI.field('סטטוס', statusSelect)]),
         el('div.row', {}, [
@@ -738,6 +741,7 @@ const AdminView = (() => {
         email: emailInput.value.trim(),
         phone: phoneInput.value.trim(),
         officePhone: officeInput.value.trim(),
+        workEmail: workEmailInput.value.trim(),
         role: roleSelect.value,
         status: statusSelect.value,
         fieldWorker: fieldWorkerCheck.checked,
