@@ -1281,7 +1281,8 @@ const DEFAULT_SETTINGS = {
   meeting_hours: '08:30-18:00',            // שעות לפגישות — הצעת מועדים ושורת הזמינות, שעון ישראל
   meeting_default_minutes: 30,             // משך ברירת מחדל
   meeting_buffer_minutes: 10,              // מרווח מפגישה צמודה בהצעת מועדים
-  meeting_reminder_minutes: 10,            // כמה דקות לפני — התראה ובוט הוואטסאפ
+  meeting_reminder_minutes: 15,            // כמה דקות לפני — התראה ובוט הוואטסאפ, עם קישור הפגישה
+  meeting_remind_external: true,           // גם למוזמנים מחוץ לארגון — בוואטסאפ, כשיש להם נייד באלפון או באנשי הקשר
   meeting_ai_alternatives: true,           // הצעות AI להזזת פגישות חופפות
   meeting_record_default: false,           // "הקלטה אוטומטית לענן" מסומן מראש בפגישת Zoom חדשה
 
