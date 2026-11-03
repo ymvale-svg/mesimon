@@ -156,11 +156,27 @@ const PLAN_SCHEMA = {
         additionalProperties: false
       }
     },
+    from_experience_contacts: {
+      type: 'array',
+      description: 'ספקים / בעלי מקצוע שמופיעים בניסיון בחברה עם טלפון או מייל, ואינם ברשימת המועמדים — עד 2. רק כמו שכתוב שם, מילה במילה',
+      items: {
+        type: 'object',
+        properties: {
+          name: { type: 'string' },
+          trade: { type: 'string', description: 'סוג בעל המקצוע' },
+          phone: { type: 'string', description: 'כמו שכתוב בניסיון, או ריק' },
+          email: { type: 'string', description: 'כמו שכתוב בניסיון, או ריק' },
+          why: { type: 'string', description: 'הניסיון איתו בקצרה — כולל תלונות אם היו ("עבד טוב פעמיים; תלונה אחת על איחור")' }
+        },
+        required: ['name', 'trade', 'phone', 'email', 'why'],
+        additionalProperties: false
+      }
+    },
     channel: { type: 'string', enum: ['email', 'whatsapp'], description: 'הערוץ המתאים לפנייה לראשון: whatsapp לבעל מקצוע או לדבר דחוף וקצר, email לפנייה רשמית, מסמכים או הצעת מחיר' },
     request: { type: 'string', description: 'מה לבקש מאיש הקשר הראשון, בגוף ראשון של הכותב ובמילים פשוטות ("לבקש שיגיע השבוע לתקן נזילה במזגן בחדר הישיבות"). ריק אם אין איש קשר' },
     no_contact: { type: 'string', description: 'כשאין איש קשר מתאים: משפט אחד — את מי כדאי לחפש או לשאול. אחרת ריק' }
   },
-  required: ['understood', 'solution', 'from_experience', 'contacts', 'channel', 'request', 'no_contact'],
+  required: ['understood', 'solution', 'from_experience', 'contacts', 'from_experience_contacts', 'channel', 'request', 'no_contact'],
   additionalProperties: false
 };
 
@@ -168,7 +184,9 @@ const PLAN_SYSTEM = [
   'אתה העוזר של משימון לפתרון בעיות בעבודה. עובד תיאר בעיה בשפה פשוטה. תפקידך: להציע מה עושים ולמי פונים — כדי שהוא יוכל לשלוח פנייה מוכנה בלחיצה.',
   '',
   '- **הניסיון בחברה קודם.** אם בידע הארגוני יש מקרה דומה — זה הבסיס: מה עשו, למי פנו, כמה זה עלה וכמה זמן לקח. ציין "לפי הניסיון בחברה". ידע כללי — רק להשלים.',
-  '- **איש קשר רק מהמועמדים שקיבלת**, לפי המספר שלהם. לעולם לא שם, טלפון או מייל שלא ברשימה. מי שמופיע בניסיון בחברה כמי שטיפל בדבר דומה — עדיף.',
+  '- **איש קשר — מהמועמדים שקיבלת** (לפי המספר שלהם), **או ספק שמופיע בניסיון בחברה** עם טלפון או מייל (ב-from_experience_contacts, מילה במילה). לעולם לא שם, טלפון או מייל שלא כתובים באחד מהם. מי שטיפל אצלנו בדבר דומה — עדיף.',
+  '- **הניסיון עם הספק — בכנות:** אם בניסיון בחברה יש תלונות או בעיות איתו, כתוב אותן ב-why ובפתרון ("מומלץ, אבל פעמיים היו תלונות על איחורים"). ספק שהיו עליו בעיות רבות — לא ראשון.',
+  '- **עובדים בארגון** — בפתרון מציינים את המחלקה ("מחלקת בדק טיפלה בזה"), לא שם של עובד.',
   '- עובד בארגון שאחראי על התחום (אחזקה, מחשוב, הנהלת חשבונות) — מתאים כשהבעיה פנימית.',
   '- אין מועמד מתאים — רשימה ריקה, וב-no_contact: את מי לחפש.',
   '- קצר ומעשי, בעברית, בגובה העיניים. בלי הקדמות.',
@@ -206,11 +224,39 @@ async function solve(user, actor, problem, { history = [] } = {}) {
   const out = await Claude.json({ system: PLAN_SYSTEM, content: [{ type: 'text', text }], schema: PLAN_SCHEMA, effort: 'medium', live: true });
 
   const options = [];
-  for (const x of out.contacts ?? []) {
-    const c = found[Number(x.id) - 1];
-    if (!c || options.some((o) => o.contact === c)) continue;
-    options.push({ contact: c, why: String(x.why ?? '').trim().slice(0, 160) });
+  /*
+   * ספק מהניסיון בחברה — רק אם הטלפון או המייל שה-AI החזיר באמת כתובים בניסיון
+   * (לא הומצאו). מי שכבר מופיע באלפון — נשאר הכרטיס מהאלפון.
+   */
+  const lessonText = lessons.map((e) => e.text).join('\n');
+  const digits = (x) => String(x ?? '').replace(/\D/g, '');
+  const lessonDigits = digits(lessonText);
+  for (const x of out.from_experience_contacts ?? []) {
+    const email = String(x.email ?? '').trim().toLowerCase();
+    const phone = String(x.phone ?? '').trim();
+    const okEmail = email && lessonText.toLowerCase().includes(email);
+    const okPhone = digits(phone).length >= 9 && lessonDigits.includes(digits(phone));
+    if (!okEmail && !okPhone) continue;
+    const c = {
+      name: String(x.name ?? '').trim().slice(0, 80) || email || phone,
+      email: okEmail ? email : '', phone: okPhone ? phone : '',
+      type: 'external', refId: null,
+      organization: String(x.trade ?? '').trim().slice(0, 60), tag: String(x.trade ?? '').trim().slice(0, 60), note: '',
+      mobile: okPhone && Phonebook.isMobile(phone) ? phone : '',
+      source: '📚 הניסיון בחברה'
+    };
+    const keys = keyOf(c);
+    const known = found.find((f) => keyOf(f).some((k) => keys.includes(k)));
+    const contact = known ?? c;
+    if (options.some((o) => o.contact === contact)) continue;
+    options.push({ contact, why: String(x.why ?? '').trim().slice(0, 200) });
     if (options.length >= MAX_OPTIONS) break;
+  }
+  for (const x of out.contacts ?? []) {
+    if (options.length >= MAX_OPTIONS) break;
+    const c = found[Number(x.id) - 1];
+    if (!c || options.some((o) => o.contact === c || keyOf(o.contact).some((k) => keyOf(c).includes(k)))) continue;
+    options.push({ contact: c, why: String(x.why ?? '').trim().slice(0, 200) });
   }
   return {
     understood: String(out.understood ?? '').trim(),
@@ -220,7 +266,7 @@ async function solve(user, actor, problem, { history = [] } = {}) {
     channel: out.channel === 'whatsapp' ? 'whatsapp' : 'email',
     request: String(out.request ?? '').trim(),
     noContact: String(out.no_contact ?? '').trim(),
-    sources: [lessons.length ? '📚 הניסיון בחברה' : null, found.some((c) => c.source === '📒 האלפון') ? '📒 האלפון' : null, found.some((c) => c.source === '🧠 המיילים שלך') ? '🧠 המיילים שלך' : null].filter(Boolean)
+    sources: [lessons.length || options.some((o) => o.contact.source === '📚 הניסיון בחברה') ? '📚 הניסיון בחברה' : null, found.some((c) => c.source === '📒 האלפון') ? '📒 האלפון' : null, found.some((c) => c.source === '🧠 המיילים שלך') ? '🧠 המיילים שלך' : null].filter(Boolean)
   };
 }
 

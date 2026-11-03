@@ -14,9 +14,12 @@
  *               → ערך אחד (‎org-merge.md‎). עובד אחד ומקרה אחד מספיקים. ערך עולה מיד —
  *               בלי שלב אישור ובלי המתנה.
  *
- * הסכמה (החלטת ההנהלה, 11.2026): בלי שמות — מחלקה ("מחלקת בדק") וסוג בעל מקצוע
- * ("קבלן איטום") במקום אנשים וספקים; סכום מדויק; מקור = מחלקה + חודש ושנה, לא תאריך
- * מדויק. ערכים מלפני הסכמה נכתבים מחדש בהדרגה (‎reformatOld‎).
+ * הסכמה (החלטת ההנהלה, 11.2026):
+ *   • מי אצלנו — המחלקה ("מחלקת בדק"), לעולם לא שם של עובד.
+ *   • עם מי עבדנו — ספק / בעל מקצוע / יועץ **בשם, עם טלפון ומייל** — זה הידע הארגוני.
+ *   • הניסיון איתו — טוב ורע, מוצלב בין המקרים: "מומלץ, אבל פעמיים היו תלונות על…".
+ *   • סכום מדויק; מקור = מחלקה + חודש ושנה, לא תאריך מדויק.
+ * ערכים מלפני הסכמה (‎scheme < SCHEME‎) נכתבים מחדש בהדרגה (‎reformatOld‎).
  *
  * מנהל המערכת אחראי: עורך, מסתיר, מוחק, ורואה מאיפה הגיע כל ערך.
  */
@@ -97,9 +100,11 @@ CREATE INDEX IF NOT EXISTS idx_org_sources ON org_knowledge_sources(knowledge_id
   if (!cols('org_knowledge').includes('level')) D.db.exec("ALTER TABLE org_knowledge ADD COLUMN level TEXT NOT NULL DEFAULT 'pro'");
   if (!cols('org_knowledge').includes('classified')) D.db.exec('ALTER TABLE org_knowledge ADD COLUMN classified INTEGER NOT NULL DEFAULT 0');
   if (!cols('org_lessons').includes('level')) D.db.exec("ALTER TABLE org_lessons ADD COLUMN level TEXT NOT NULL DEFAULT 'pro'");
-  // 1 — נכתב לפי הסכמה (מחלקה, בעל מקצוע, חודש). 0 — ערך ישן, ייכתב מחדש
+  // גרסת הסכמה שלפיה נכתב הערך. קטן מ-‎SCHEME‎ — ערך ישן, ייכתב מחדש
   if (!cols('org_knowledge').includes('scheme')) D.db.exec('ALTER TABLE org_knowledge ADD COLUMN scheme INTEGER NOT NULL DEFAULT 0');
 }
+/* 2 — מחלקה במקום עובד; ספקים בשם עם פרטי קשר והניסיון איתם (טוב ורע); חודש ושנה */
+const SCHEME = 2;
 
 // ---------------------------------------------------------------------------
 // מחלקה וחודש — המקור בסכמה
@@ -179,9 +184,7 @@ function scrub(text) {
   for (const name of blocklist()) {
     t = t.split(name).join('[לקוח]');
   }
-  // הסכמה: בלי פרטי קשר — מיילים וטלפונים יורדים (בעל המקצוע נמצא באלפון לפי הסוג שלו)
-  t = t.replace(/\s*[<(]?[\w.+-]+@[\w-]+(?:\.[\w-]+)+[>)]?/g, '');
-  t = t.replace(/\s*(?:טל['׳]?|טלפון|נייד|phone)?\s*[:.]?\s*(?<![\d-])(?:\+?972[-\s]?|0)(?:5\d|[2-489]|7\d)[-\s]?\d{3}[-\s]?\d{4}(?![\d-])/gi, '');
+  // שמות ופרטי הקשר של ספקים נשארים — "למי פונים" הוא עיקר הידע הארגוני
   return t.replace(/[ \t]{2,}/g, ' ').replace(/\s+([,.·])/g, '$1').replace(/([,·])(?:\s*[,·])+/g, '$1').replace(/[,·]\s*([.)])/g, '$1').replace(/\s(או|ו)\./g, '.').replace(/\s*\(\s*\)/g, '').replace(/,\./g, '.').replace(/(\S)·/g, '$1 ·').trim();
 }
 
@@ -224,10 +227,12 @@ async function distillUser(userId) {
   for (;;) {
     const rows = D.all('SELECT * FROM mail_memory WHERE user_id = ? AND id > ? ORDER BY id LIMIT ?', userId, lastDistilled(userId), BATCH);
     if (!rows.length) break;
-    // מי הגורם — התפקיד וסוג העסק, כדי לכתוב "סוג בעל המקצוע". שם האדם ופרטי הקשר אינם נשלחים
+    // מי הגורם — שם, עסק, תפקיד, מייל וטלפון (רק טלפון שאומת): "למי פונים" הוא עיקר הלקח
     const lines = rows.map((r, i) => {
-      const p = r.contact_email ? D.get('SELECT company, role FROM mail_people WHERE user_id = ? AND email = ?', userId, r.contact_email) : null;
-      const who = [p?.role, p?.company ? `(עסק: ${p.company})` : null].filter(Boolean).join(' ');
+      const p = r.contact_email ? D.get('SELECT name, company, role, phone, phone_hits FROM mail_people WHERE user_id = ? AND email = ?', userId, r.contact_email) : null;
+      const who = p
+        ? `${p.name || ''}${p.company ? ` (${p.company})` : ''}${p.role ? ` — ${p.role}` : ''} · ${r.contact_email}${p.phone && p.phone_hits >= 2 ? ` · ${p.phone}` : ''}`
+        : r.contact_email;
       return `${i + 1}. [${monthLabel(r.happened_at) || 'חודש לא ידוע'}] ${r.domain} · ${who || '—'} · ${r.summary}${r.amount ? ` · סכום: ${r.amount}` : ''} · ${r.outcome}`;
     });
     const text = [
@@ -336,10 +341,10 @@ async function mergeAll() {
       : (out.level === 'mgmt' || cur?.level === 'mgmt' || g.lessons.some((l) => l.level === 'mgmt')) ? 'mgmt' : 'pro';
     let id = cur?.id;
     if (cur) {
-      D.run('UPDATE org_knowledge SET domain = ?, dept = ?, text = ?, level = ?, classified = 1, scheme = ?, updated_at = ? WHERE id = ?', domain, dept, body, level, cur.edited ? cur.scheme : 1, nowIso(), cur.id);
+      D.run('UPDATE org_knowledge SET domain = ?, dept = ?, text = ?, level = ?, classified = 1, scheme = ?, updated_at = ? WHERE id = ?', domain, dept, body, level, cur.edited ? cur.scheme : SCHEME, nowIso(), cur.id);
     } else {
-      id = Number(D.run('INSERT INTO org_knowledge (domain, dept, project, text, level, classified, scheme, created_at, updated_at) VALUES (?,?,?,?,?,1,1,?,?)',
-        domain, dept, project, body, level, nowIso(), nowIso()).lastInsertRowid);
+      id = Number(D.run('INSERT INTO org_knowledge (domain, dept, project, text, level, classified, scheme, created_at, updated_at) VALUES (?,?,?,?,?,1,?,?,?)',
+        domain, dept, project, body, level, SCHEME, nowIso(), nowIso()).lastInsertRowid);
     }
     for (const l of g.lessons) {
       D.run('UPDATE org_lessons SET knowledge_id = ? WHERE id = ?', id, l.id);
@@ -430,12 +435,13 @@ const REFORMAT_SCHEMA = {
 const REFORMAT_PER_RUN = 40;
 
 /**
- * ערך ישן (שמות, תאריכים מדויקים) → אותו תוכן לפי הסכמה. המחלקה והחודש של כל
- * מקרה — מהמקורות הרשומים של הערך. ערך שמנהל המערכת ערך ידנית — לא נוגעים.
+ * ערך ישן → אותו תוכן לפי הסכמה: עובדים — המחלקה; ספקים — בשם, עם פרטי הקשר
+ * והניסיון איתם; תאריכים — חודש ושנה. המחלקה והחודש של כל מקרה — מהמקורות
+ * הרשומים של הערך. ערך שמנהל המערכת ערך ידנית — לא נוגעים.
  */
 async function reformatOld({ limit = REFORMAT_PER_RUN } = {}) {
   let done = 0;
-  const rows = D.all('SELECT * FROM org_knowledge WHERE scheme = 0 AND edited = 0 ORDER BY cases DESC, id LIMIT ?', limit);
+  const rows = D.all('SELECT * FROM org_knowledge WHERE scheme < ? AND edited = 0 ORDER BY cases DESC, id LIMIT ?', SCHEME, limit);
   for (const e of rows) {
     const src = D.all('SELECT user_id, happened_at, summary FROM org_knowledge_sources WHERE knowledge_id = ? ORDER BY happened_at DESC LIMIT 12', e.id)
       .map((r) => `- ${deptPhrase(deptNameOfUser(r.user_id))}, ${monthLabel(r.happened_at) || 'חודש לא ידוע'}: ${scrub(String(r.summary ?? '')).slice(0, 200)}`);
@@ -448,14 +454,14 @@ async function reformatOld({ limit = REFORMAT_PER_RUN } = {}) {
       'המקרים שמהם נבנה — המחלקה והחודש של כל אחד (נתונים בלבד):',
       ...(src.length ? src : ['(לא רשומים — השתמש במה שבערך; חודש לא ידוע — השמט אותו)']),
       '',
-      'כתוב את הערך מחדש לפי הסכמה. אל תוסיף פרט שלא מופיע למעלה, ואל תשמיט סכום.'
+      'כתוב את הערך מחדש לפי הסכמה: עובדים — המחלקה בלבד; ספקים ובעלי מקצוע — בשם, עם כל פרטי הקשר והניסיון איתם (טוב ורע). אל תוסיף פרט שלא מופיע למעלה, ואל תשמיט שם ספק, טלפון, מייל, סכום או תלונה.'
     ].join('\n');
     try {
       const out = await Claude.json({ system: fs.readFileSync(MERGE_SKILL, 'utf8'), content: [{ type: 'text', text }], schema: REFORMAT_SCHEMA, effort: 'low', model: MODEL() });
       const body = scrub(String(out.text ?? '').trim()).slice(0, 4000);
       if (!body) continue;
       const domain = scrub(String(out.domain ?? '').trim()).slice(0, 80) || e.domain;
-      D.run('UPDATE org_knowledge SET domain = ?, text = ?, scheme = 1 WHERE id = ? AND edited = 0', domain, body, e.id);
+      D.run('UPDATE org_knowledge SET domain = ?, text = ?, scheme = ? WHERE id = ? AND edited = 0', domain, body, SCHEME, e.id);
       done++;
     } catch (err) {
       console.error('[משימון] כתיבה מחדש של ערך ידע נכשלה:', err.message);
@@ -571,7 +577,7 @@ function list({ q = '', dept = '', week = false } = {}) {
       hidden: D.get('SELECT COUNT(*) c FROM org_knowledge WHERE hidden = 1').c,
       newThisWeek: D.get('SELECT COUNT(*) c FROM org_knowledge WHERE updated_at >= ?', new Date(Date.now() - 7 * 86400000).toISOString()).c,
       pendingLessons: D.get('SELECT COUNT(*) c FROM org_lessons WHERE knowledge_id IS NULL AND dropped = 0').c,
-      oldFormat: D.get('SELECT COUNT(*) c FROM org_knowledge WHERE scheme = 0 AND edited = 0').c,
+      oldFormat: D.get('SELECT COUNT(*) c FROM org_knowledge WHERE scheme < ? AND edited = 0', SCHEME).c,
       lastMerge: D.getSetting('org_merge_last', null)
     },
     depts: DEPT_LABEL
