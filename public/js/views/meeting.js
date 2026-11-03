@@ -67,14 +67,17 @@ const MeetingView = (() => {
     }
 
     const me = App.state.actor;
+    // Zoom פתוח למזכירות ולהנהלה, ולכל השאר — רק כשיש להם משתמש Zoom משויך
+    const zoomOpen = info.zoom.enabled && (info.zoom.chooseHost || Boolean(info.zoom.own));
     const state = {
       ownerId: editing?.ownerId ?? opts.prefill?.ownerId ?? (writable.find((c) => c.self)?.userId ?? writable[0]?.userId),
       attendees: (editing?.attendees ?? opts.prefill?.attendees ?? []).map((a) => ({ email: a.email, name: a.name ?? '' })),
       minutes: editing?.minutes ?? opts.prefill?.minutes ?? info.defaults.minutes,
       date: '',
       time: '',
-      locationType: editing?.locationType ?? (info.zoom.enabled ? 'zoom' : 'place'),
+      locationType: editing?.locationType ?? (zoomOpen ? 'zoom' : 'place'),
       record: editing ? Boolean(editing.zoom?.record) : Boolean(info.defaults.record),
+      zoomUserId: editing?.zoom?.userId ?? '',   // ריק = אוטומטי (הנהלה ומזכירות בוחרים)
       suggestions: null,
       alternatives: null,
       avail: null
@@ -162,10 +165,10 @@ const MeetingView = (() => {
     function minutesBox() {
       const preset = [30, 45, 60, 90];
       const other = el('input', { type: 'number', min: 5, max: 600, step: 5, value: preset.includes(state.minutes) ? '' : state.minutes, placeholder: 'אחר', style: { width: '80px' } });
-      other.addEventListener('change', () => { if (Number(other.value) > 0) { state.minutes = Number(other.value); state.suggestions = null; draw(); } });
+      other.addEventListener('change', () => { if (Number(other.value) > 0) { state.minutes = Number(other.value); state.suggestions = null; draw(); loadHosts(); } });
       return el('div.flex', { style: { flexWrap: 'wrap', gap: '6px' } }, [
         el('div.seg', {}, preset.map((n) => el(`button${state.minutes === n ? '.active' : ''}`, {
-          type: 'button', onclick: () => { state.minutes = n; state.suggestions = null; state.alternatives = null; draw(); }
+          type: 'button', onclick: () => { state.minutes = n; state.suggestions = null; state.alternatives = null; draw(); loadHosts(); }
         }, [`${n} דק׳`]))),
         other
       ]);
@@ -226,6 +229,7 @@ const MeetingView = (() => {
 
     let availSeq = 0;
     async function loadAvailability() {
+      loadHosts();
       const mine = ++availSeq;
       state.avail = null;
       redrawAvail();
@@ -370,10 +374,31 @@ const MeetingView = (() => {
       ]);
     }
 
+    // --- מארח Zoom: מזכירות והנהלה בוחרות חשבון ומשתמש — גם כשבעל היומן אינו רשום ב-Zoom
+    const hostSelect = el('select', { onchange: () => { state.zoomUserId = hostSelect.value; } });
+    let hostsSeq = 0;
+    async function loadHosts() {
+      if (!info.zoom.chooseHost) return;
+      const mine = ++hostsSeq;
+      try {
+        const q = new URLSearchParams({ start: startIso(), minutes: String(state.minutes), exclude: editing?.id ?? '' });
+        const { hosts, multi } = await API.get(`/api/meetings/zoom-hosts?${q}`);
+        if (mine !== hostsSeq) return;
+        const option = (h) => el('option', { value: h.id, disabled: h.busy && h.id !== editing?.zoom?.userId },
+          [`${h.name} · ${h.email}${h.license === 'basic' ? ' · חינמי (40 דק׳)' : ''}${h.busy && h.id !== editing?.zoom?.userId ? ' — תפוס בשעה הזו' : ''}`]);
+        const groups = multi
+          ? [...new Set(hosts.map((h) => h.account))].map((acc) => el('optgroup', { label: `חשבון Zoom ${acc}` }, hosts.filter((h) => h.account === acc).map(option)))
+          : hosts.map(option);
+        UI.mount(hostSelect, el('option', { value: '' }, [editing ? 'ללא שינוי' : 'אוטומטי — המשויך לבעל היומן, ואם אין או שהוא תפוס — משתמש פנוי']), ...groups);
+        hostSelect.value = hosts.some((h) => h.id === state.zoomUserId) ? state.zoomUserId : '';
+        if (editing && hostSelect.value === editing.zoom?.userId) hostSelect.value = '';
+      } catch { /* בלי הבורר — אוטומטי */ }
+    }
+
     // --- מיקום
     function locationBox() {
       const types = [
-        info.zoom.enabled ? ['zoom', '🎥 Zoom — קישור נוצר אוטומטית'] : null,
+        zoomOpen || editing?.locationType === 'zoom' ? ['zoom', '🎥 Zoom — קישור נוצר אוטומטית'] : null,
         ['place', '📍 במשרד / כתובת'],
         ['link', '🔗 קישור משלי'],
         ['none', 'בלי מיקום']
@@ -384,7 +409,13 @@ const MeetingView = (() => {
           el('span', { text: label })
         ]))),
         ['place', 'link'].includes(state.locationType) ? locationInput : null,
-        state.locationType === 'zoom' ? el('div.mute-sm', { text: 'מחשבון ה-Zoom של החברה — מהמשתמש המקושר לבעל היומן, ואם הוא תפוס — ממשתמש פנוי.' }) : null,
+        state.locationType === 'zoom' && info.zoom.chooseHost
+          ? UI.field('מארח Zoom', hostSelect, editing?.zoom?.host ? `כרגע: ${editing.zoom.host}. בחירת משתמש אחר יוצרת קישור חדש, והמשתתפים מקבלים עדכון` : 'הפגישה נפתחת תמיד באחד מחשבונות ה-Zoom של החברה. קישור המארח — לבעל היומן, למי שקבע, להנהלה ולמזכירות')
+          : null,
+        state.locationType === 'zoom' && !info.zoom.chooseHost && info.zoom.own
+          ? el('div.mute-sm', { text: `במשתמש ה-Zoom שלך: ${info.zoom.own.name} · ${info.zoom.own.email}${info.zoom.own.basic ? ' (חינמי — 40 דק׳)' : ''}` })
+          : null,
+        info.zoom.enabled && !zoomOpen ? el('div.mute-sm', { text: 'לא שויך לך משתמש Zoom — לפגישת Zoom בקשו מהמזכירות, או משייכים בכרטיס העובד.' }) : null,
         state.locationType === 'zoom' ? el('label.today-radio', { title: 'Zoom מקליט מתחילת הפגישה, וההקלטה נשמרת בענן — במסך "🎥 הקלטות Zoom" ובבוט' }, [
           el('input', { type: 'checkbox', checked: state.record, onchange: (e) => { state.record = e.target.checked; } }),
           el('span', { text: '⏺ הקלטה אוטומטית לענן' })
@@ -409,6 +440,7 @@ const MeetingView = (() => {
         minutes: state.minutes,
         locationType: state.locationType,
         record: state.locationType === 'zoom' && state.record,
+        zoomUserId: state.locationType === 'zoom' && info.zoom.chooseHost && state.zoomUserId ? state.zoomUserId : undefined,
         location: locationInput.value.trim(),
         notes: notesInput.value,
         sendInvites: sendInvites.checked
@@ -420,6 +452,8 @@ const MeetingView = (() => {
         if (res.note) UI.toast(res.note);
         opts.onDone?.(res.meeting);
         App.refreshView();
+        // פגישה חדשה מתוך משימה — אולי הפגישה היא כל המשימה ("לקבוע פגישה עם…")
+        if (!editing && opts.task) askCloseTask(opts.task, opts.onDone ? () => opts.onDone(res.meeting) : () => {});
       } catch (err) {
         saveBtn.disabled = false;
         UI.error(err);
@@ -428,7 +462,7 @@ const MeetingView = (() => {
     saveBtn.addEventListener('click', save);
 
     dateInput.addEventListener('change', () => { state.date = dateInput.value; state.alternatives = null; loadAvailability(); });
-    timeInput.addEventListener('change', () => { state.time = timeInput.value; state.alternatives = null; redrawAvail(); });
+    timeInput.addEventListener('change', () => { state.time = timeInput.value; state.alternatives = null; redrawAvail(); loadHosts(); });
 
     function draw() {
       const suggestBtn = el('button.btn.btn-sm', { type: 'button' }, ['💡 הצע מועדים']);
@@ -554,6 +588,20 @@ const MeetingView = (() => {
         : [el('span.mute-sm', { text: meeting.zoom.record ? '🎥 ההקלטה עוד לא מוכנה — Zoom מעבד אותה אחרי סוף הפגישה' : '🎥 אין הקלטה לפגישה הזו' })]));
     }).catch(() => row.remove());
     return row;
+  }
+
+  /**
+   * אחרי קביעת פגישה מתוך משימה: לסגור את המשימה? רק כשהמשימה עוד פתוחה
+   * ויש לה עמודת "בוצע". "להשאיר פתוחה" — כלום לא משתנה.
+   */
+  async function askCloseTask(task, onChange) {
+    const board = App.state.boards.find((b) => b.id === task.boardId);
+    const final = board?.columns.find((c) => c.isFinal);
+    if (!final || task.status === final.key) return;
+    const yes = await UI.confirm(`הפגישה נקבעה. לסגור גם את המשימה "${task.title}"?`, {
+      title: '✓ סגירת המשימה', okText: '✓ לסגור את המשימה', cancelText: 'להשאיר פתוחה'
+    });
+    if (yes) await closeTask(task, () => { onChange(); App.refreshView(); });
   }
 
   async function closeTask(task, onChange) {

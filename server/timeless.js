@@ -5,8 +5,15 @@
  * רק ה-API הרשמי: ‎https://api.timeless.day/v1‎ עם ‎Authorization: Bearer‎.
  * לא נוגעים ב-API הלא רשמי (my.timeless.day/api), לא בהעלאות ולא ב-webhooks.
  *
- * לכל משתמש אסימון משלו, שמור מוצפן (‎server/secrets.js‎) בטבלת ‎user_channels‎
- * עם ‎provider = 'timeless'‎. האסימון לא נשלח לעולם ללקוח ולא חוזר מהכלים.
+ * שני מקורות לאסימון, לפי הסדר:
+ *  1. אסימון אישי — שמור מוצפן (‎server/secrets.js‎) בטבלת ‎user_channels‎ עם
+ *     ‎provider = 'timeless'‎. רואה את מה שהחשבון שלו ב-Timeless רואה, בלי סינון.
+ *  2. אסימון ארגוני — משתנה הסביבה ‎TIMELESS_ACCESS_TOKEN‎, לכל מי שלא חיבר אישי.
+ *     הנהלה (‎org-knowledge.isManagement‎) רואה את כל פגישות הארגון; עובד — רק
+ *     פגישות שהוא המארח או משתתף בהן, לפי האימייל שלו או המייל הארגוני בכרטיס.
+ *     הסינון כאן בשרת, לפני שמשהו מגיע למודל: פגישה של אחרים לא מופיעה ברשימה,
+ *     ותמלול או מסמך שלה נחסמים גם כשמבקשים לפי מזהה.
+ * האסימון לא נשלח לעולם ללקוח ולא חוזר מהכלים.
  *
  * שדות התשובה שעליהם הקוד נשען (לפי התיעוד, לבדוק מול חשבון אמיתי):
  *  GET /meetings            → { data: [{ id, title, status, start_time, end_time, duration (שניות),
@@ -28,6 +35,8 @@ const LIST_HARD_MAX = 200;     // תקרה לכמה פגישות נאסוף בק
 const MAX_PAGES = 10;          // הגנה מלולאת דפדוף אינסופית
 
 const RECONNECT_MSG = 'החיבור ל-Timeless פג או בוטל. יש לחבר מחדש את Timeless בהגדרות עם אסימון API חדש (my.timeless.day/api-token).';
+const ORG_RECONNECT_MSG = 'האסימון הארגוני של Timeless פג או בוטל. מנהל המערכת צריך להחליף את TIMELESS_ACCESS_TOKEN בהגדרות השרת.';
+const NOT_ATTENDED_MSG = 'הפגישה לא נמצאה ב-Timeless, או שלא השתתפת בה. עובדים רואים רק פגישות שהשתתפו בהן.';
 
 // ---------- אחסון ----------
 
@@ -45,20 +54,72 @@ function tokenOf(userId) {
   return secrets.decrypt(row.api_token);
 }
 
-function isConnected(userId) {
-  const row = rowOf(userId);
-  return Boolean(row && row.api_token && row.state !== 'revoked');
+const hasPersonal = (row) => Boolean(row && row.api_token && row.state !== 'revoked');
+
+/** האסימון הארגוני מסביבת השרת, או ריק */
+const orgToken = () => String(process.env.TIMELESS_ACCESS_TOKEN ?? '').trim().replace(/^Bearer\s+/i, '');
+
+const normEmail = (e) => String(e ?? '').trim().toLowerCase();
+
+/**
+ * מה המשתמש רואה דרך האסימון הארגוני: ‎{ all: true }‎ להנהלה, ‎{ all: false, emails }‎
+ * לעובד, ‎null‎ כשאין אסימון ארגוני או שאין משתמש פעיל כזה
+ */
+function orgAccess(userId) {
+  if (!orgToken()) return null;
+  const u = D.get('SELECT * FROM users WHERE id = ?', userId);
+  if (!u || u.status !== 'active') return null;
+  const { isManagement } = require('./ai/org-knowledge');
+  if (isManagement(u)) return { all: true };
+  const emails = new Set([u.email, u.work_email].map(normEmail).filter((e) => e.includes('@')));
+  return emails.size ? { all: false, emails } : null;
 }
 
-/** תצוגה ללקוח — בלי האסימון */
+/**
+ * דרך מה פונים בשם המשתמש: ‎{ source: 'personal', token }‎, ‎{ source: 'org', token, emails? }‎
+ * (‎emails‎ — רק לעובד, שרואה רק פגישות שלו), או ‎null‎
+ */
+function accessOf(userId) {
+  const row = rowOf(userId);
+  if (hasPersonal(row)) {
+    const token = secrets.decrypt(row.api_token);
+    if (token) return { source: 'personal', token };
+    setState(userId, 'revoked'); // שמור אך לא ניתן לפענוח (מפתח הוחלף)
+  }
+  const org = orgAccess(userId);
+  if (org) return { source: 'org', token: orgToken(), emails: org.all ? null : org.emails };
+  return null;
+}
+
+/** סינון לפגישות של המשתמש — ‎null‎ כשרואה הכול */
+function restrictionOf(userId) {
+  const a = accessOf(userId);
+  return a && a.source === 'org' ? a.emails : null;
+}
+
+function isConnected(userId) {
+  return hasPersonal(rowOf(userId)) || Boolean(orgAccess(userId));
+}
+
+/** תצוגה ללקוח — בלי האסימון. ‎source‎: ‎personal‎ / ‎org‎; ‎scope‎ (ארגוני): ‎all‎ / ‎mine‎ */
 function publicStatus(userId) {
   const row = rowOf(userId);
+  if (hasPersonal(row)) return { connected: true, source: 'personal', state: row.state, checkedAt: row.checked_at || null };
+  const org = orgAccess(userId);
+  if (org) return { connected: true, source: 'org', scope: org.all ? 'all' : 'mine', state: 'connected', checkedAt: null };
   if (!row) return { connected: false, state: 'disconnected', checkedAt: null };
-  return {
-    connected: Boolean(row.api_token) && row.state !== 'revoked',
-    state: row.state,
-    checkedAt: row.checked_at || null
-  };
+  return { connected: false, state: row.state, checkedAt: row.checked_at || null };
+}
+
+/** האם המשתמש מארח או משתתף בפגישה (לפי האימייל) */
+function attended(m, emails) {
+  if (!m) return false;
+  for (const p of [m.host, ...(Array.isArray(m.participants) ? m.participants : [])]) {
+    if (!p) continue;
+    const found = typeof p === 'string' ? (p.match(/[^\s<>"']+@[^\s<>"']+/g) || []) : [p.email];
+    if (found.some((e) => emails.has(normEmail(e)))) return true;
+  }
+  return false;
 }
 
 function disconnect(userId) {
@@ -114,16 +175,26 @@ async function rawCall(token, path, query) {
   throw apiError(`Timeless החזיר שגיאה (${res.status})${apiMsg ? `: ${apiMsg}` : ''}`, { status: res.status, code });
 }
 
-/** קריאה בשם משתמש; ‎401‎ מסמן את החיבור כמבוטל */
+/**
+ * קריאה בשם משתמש — באסימון האישי, ואם אין, בארגוני. ‎401‎ מסמן חיבור אישי
+ * כמבוטל; בארגוני — הודעה שמנהל המערכת צריך להחליף אותו
+ */
 async function call(userId, path, query) {
-  const token = tokenOf(userId);
-  if (!token) {
-    if (rowOf(userId)) setState(userId, 'revoked'); // שמור אך לא ניתן לפענוח (מפתח הוחלף)
+  const access = accessOf(userId);
+  if (!access) {
     throw apiError(rowOf(userId) ? RECONNECT_MSG : 'Timeless אינו מחובר. יש לחבר אותו בהגדרות עם אסימון API.',
       { status: 401, code: 'not_connected' });
   }
+  if (access.source === 'org') {
+    try {
+      return await rawCall(access.token, path, query);
+    } catch (err) {
+      if (err.status === 401) err.message = ORG_RECONNECT_MSG;
+      throw err;
+    }
+  }
   try {
-    const out = await rawCall(token, path, query);
+    const out = await rawCall(access.token, path, query);
     const row = rowOf(userId);
     if (row && row.state !== 'connected') setState(userId, 'connected');
     return out;
@@ -228,12 +299,16 @@ async function listMeetings(userId, { search, from, to, limit = 20, status, scop
   const term = search ? String(search).trim() : '';
   if (term) query[semantic ? 'q' : 'search'] = term;
 
+  // עובד באסימון הארגוני — רק פגישות שלו; מבקשים דפים מלאים כי חלק מסוננים
+  const emails = restrictionOf(userId);
   const out = [];
   let cursor;
   for (let page = 0; page < MAX_PAGES && out.length < want; page++) {
-    const body = await call(userId, '/meetings', { ...query, limit: Math.min(PAGE_MAX, want - out.length), cursor });
+    const body = await call(userId, '/meetings', { ...query, limit: emails ? PAGE_MAX : Math.min(PAGE_MAX, want - out.length), cursor });
     const items = Array.isArray(body.data) ? body.data : [];
-    for (const m of items) if (m && m.id && out.length < want) out.push(normalizeMeeting(m));
+    for (const m of items) {
+      if (m && m.id && out.length < want && (!emails || attended(m, emails))) out.push(normalizeMeeting(m));
+    }
     if (!body.has_more || !body.next_cursor || body.next_cursor === cursor || !items.length) break;
     cursor = body.next_cursor;
   }
@@ -245,19 +320,30 @@ async function findMeeting(userId, meetingId, { expandDocuments = false } = {}) 
   const body = await call(userId, '/meetings', { id: meetingId, scope: 'all', limit: 1, expand: expandDocuments ? 'documents' : undefined });
   const items = Array.isArray(body.data) ? body.data : [];
   // אם השרת מתעלם מ-‎id‎ — לא נחזיר פגישה אחרת בטעות
-  return items.find((m) => m && m.id === meetingId) || null;
+  const m = items.find((x) => x && x.id === meetingId) || null;
+  // עובד באסימון הארגוני — פגישה שלא השתתף בה כאילו לא קיימת
+  const emails = restrictionOf(userId);
+  return m && emails && !attended(m, emails) ? null : m;
 }
 
 async function transcript(userId, meetingId, { maxChars = 60000 } = {}) {
   const id = String(meetingId ?? '').trim();
   if (!id) throw apiError('חסר מזהה פגישה.', { status: 400 });
+  // עובד באסימון הארגוני — קודם מוודאים שהשתתף, ורק אז מושכים את התמלול
+  let title = '';
+  if (restrictionOf(userId)) {
+    const m = await findMeeting(userId, id);
+    if (!m) throw apiError(NOT_ATTENDED_MSG, { status: 404 });
+    title = m.title || '';
+  }
   const body = await call(userId, `/meetings/${encodeURIComponent(id)}/transcript`);
   const names = new Map((Array.isArray(body.speakers) ? body.speakers : []).map((s) => [s.id, s.name || s.id]));
   const lines = (Array.isArray(body.segments) ? body.segments : [])
     .filter((s) => s && s.text)
     .map((s) => `[${fmtTime(s.start_time)}] ${names.get(s.speaker_id) || s.speaker_name || s.speaker_id || 'דובר'}: ${String(s.text).trim()}`);
-  let title = '';
-  try { title = (await findMeeting(userId, id))?.title || ''; } catch (err) { if (err.status === 401) throw err; }
+  if (!title) {
+    try { title = (await findMeeting(userId, id))?.title || ''; } catch (err) { if (err.status === 401) throw err; }
+  }
   const t = truncate(lines.join('\n'), maxChars);
   return { meetingId: body.meeting_id || id, title, language: body.language || null, text: t.text, truncated: t.truncated };
 }
@@ -267,18 +353,30 @@ async function documents(userId, meetingId) {
   const id = String(meetingId ?? '').trim();
   if (!id) throw apiError('חסר מזהה פגישה.', { status: 400 });
   const m = await findMeeting(userId, id, { expandDocuments: true });
-  if (!m) throw apiError('הפגישה לא נמצאה ב-Timeless.', { status: 404 });
+  if (!m) throw apiError(restrictionOf(userId) ? NOT_ATTENDED_MSG : 'הפגישה לא נמצאה ב-Timeless.', { status: 404 });
   return (Array.isArray(m.documents) ? m.documents : []).map(normalizeDocRef);
 }
 
-async function document(userId, docId) {
+/**
+ * מסמך AI. לעובד באסימון הארגוני מזהה מסמך לבדו אינו מספיק — אי אפשר לדעת של
+ * איזו פגישה הוא. צריך ‎meetingId‎ של פגישה שהשתתף בה, והמסמך חייב להיות שלה.
+ * ‎verified‎ — הקורא כבר בדק (רשימת המסמכים של אותה פגישה)
+ */
+async function document(userId, docId, { meetingId, verified = false } = {}) {
   const id = String(docId ?? '').trim();
   if (!id) throw apiError('חסר מזהה מסמך.', { status: 400 });
+  if (!verified && restrictionOf(userId)) {
+    if (!meetingId) throw apiError('כדי לקרוא מסמך יש לתת גם את מזהה הפגישה (meeting_id).', { status: 400 });
+    const refs = await documents(userId, meetingId);
+    if (!refs.some((r) => r.id === id)) throw apiError(NOT_ATTENDED_MSG, { status: 404 });
+  }
   const body = await call(userId, `/documents/${encodeURIComponent(id)}`, { format: 'markdown' });
   return typeof body.content === 'string' ? body.content : '';
 }
 
 async function listRooms(userId, { search, limit = 25 } = {}) {
+  // חדר מאגד פגישות של כמה אנשים — לעובד באסימון הארגוני אין דרך לסנן אותו
+  if (restrictionOf(userId)) throw apiError('חדרי Timeless זמינים רק להנהלה או עם אסימון אישי.', { status: 403 });
   const want = Math.min(LIST_HARD_MAX, Math.max(1, Math.floor(Number(limit) || 25)));
   const out = [];
   let cursor;
@@ -326,11 +424,11 @@ const TOOLS = [
   },
   {
     name: 'timeless_get_document',
-    description: 'מחזיר מסמך AI של Timeless (סיכום, משימות לביצוע, הערות) כטקסט Markdown. אפשר לתת מזהה מסמך, או מזהה פגישה כדי לקבל את כל מסמכיה.',
+    description: 'מחזיר מסמך AI של Timeless (סיכום, משימות לביצוע, הערות) כטקסט Markdown. אפשר לתת מזהה פגישה כדי לקבל את כל מסמכיה, או מזהה מסמך — תמיד יחד עם מזהה הפגישה שלו.',
     input_schema: {
       type: 'object',
       properties: {
-        document_id: { type: 'string', description: 'מזהה המסמך (למשל doc_abc123)' },
+        document_id: { type: 'string', description: 'מזהה המסמך (למשל doc_abc123). לתת יחד עם meeting_id' },
         meeting_id: { type: 'string', description: 'מזהה פגישה — מחזיר את כל מסמכי ה-AI שלה' }
       },
       additionalProperties: false
@@ -360,7 +458,7 @@ async function runTool(userId, name, input = {}) {
         return await transcript(userId, args.meeting_id, { maxChars: Math.min(120000, Number(args.max_chars) || 60000) });
       case 'timeless_get_document': {
         if (args.document_id) {
-          const t = truncate(await document(userId, args.document_id), DOC_TOOL_MAX);
+          const t = truncate(await document(userId, args.document_id, { meetingId: args.meeting_id }), DOC_TOOL_MAX);
           return { documentId: args.document_id, markdown: t.text, truncated: t.truncated };
         }
         if (args.meeting_id) {
@@ -369,7 +467,7 @@ async function runTool(userId, name, input = {}) {
           let budget = DOC_TOOL_MAX;
           for (const ref of refs.slice(0, 5)) {
             if (budget <= 1000) break;
-            const t = truncate(await document(userId, ref.id), budget);
+            const t = truncate(await document(userId, ref.id, { verified: true }), budget);
             budget -= t.text.length;
             docs.push({ ...ref, markdown: t.text, truncated: t.truncated });
           }
@@ -386,7 +484,7 @@ async function runTool(userId, name, input = {}) {
 }
 
 module.exports = {
-  connect, disconnect, isConnected, publicStatus,
+  connect, disconnect, isConnected, publicStatus, hasOrgToken: () => Boolean(orgToken()),
   listMeetings, transcript, documents, document, listRooms,
   TOOLS, runTool,
   BASE_URL
