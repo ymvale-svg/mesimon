@@ -219,4 +219,23 @@ function start(now = Date.now()) {
   timer.unref?.();
 }
 
-module.exports = { start, begin, track, snapshot, readCpu, _sample: sample };
+/*
+ * לחץ עכשיו — לעבודות רקע (סריקת זיכרון המייל) שצריכות לפנות מקום:
+ * ניצול המעבד בשניות האחרונות (מדידה ישירה מה-cgroup, לא הדגימה של 30 שניות)
+ * וכמה שאלות לסוכנים רצות. ‎busy‎ — לא מתחילים עבודת רקע נוספת.
+ */
+const BUSY_CPU = 0.7;
+let live = { cpu: null, at: 0, share: null };
+function pressure(now = Date.now()) {
+  if (now - live.at >= 2000) {
+    const cpu = readCpu();
+    const share = cpu && live.cpu && cpu.usageUs != null && live.cpu.usageUs != null && cpu.cpus
+      ? (cpu.usageUs - live.cpu.usageUs) / ((now - live.at) * 1000 * cpu.cpus)
+      : live.share;
+    live = { cpu, at: now, share };
+  }
+  const cpuShare = live.share;
+  return { cpuShare, inflight, busy: inflight > 0 || (cpuShare != null && cpuShare >= BUSY_CPU) };
+}
+
+module.exports = { start, begin, track, snapshot, readCpu, pressure, _sample: sample };
