@@ -124,6 +124,8 @@ const AskView = (() => {
     const drawFiles = () => UI.mount(fileChips, ...files.map((f, i) => el('span.chip', {}, [`📎 ${f.name} `, el('button.btn-link', { type: 'button', title: 'הסרה', onclick: () => { files.splice(i, 1); drawFiles(); } }, ['✕'])])));
 
     const content = el('div.mask', {}, [
+      // במחשב, לפני השאלה הראשונה — כותרת מעל השדה, שניהם במרכז החלונית
+      docked ? el('div.mask-hello', { text: '✨ מה תרצה לשאול את אשל?' }) : null,
         opts.taskTitle ? el('div.mute-sm', { text: `על המשימה: ${opts.taskTitle}` }) : null,
         form,
         fileChips,
@@ -160,7 +162,17 @@ const AskView = (() => {
       go.disabled = true;
       const answerBox = el('div', {}, [el('div.mute-sm', {}, [el('span.spinner-sm'), ' הסוכנים, המיילים והידע הארגוני עונים יחד…'])]);
       const turnEl = el('div.mask-turn', {}, [el('div.mask-q', { text: question }), answerBox]);
-      thread.prepend(turnEl);
+      /*
+       * בחלונית שבמחשב — כמו שיחה: החדש למטה, ליד השדה שיורד לתחתית. בטלפון —
+       * החדש למעלה, מתחת לשדה, כמו קודם.
+       */
+      if (docked) {
+        thread.append(turnEl);
+        content.classList.add('has-turns');
+        turnEl.scrollIntoView({ block: 'end' });
+      } else {
+        thread.prepend(turnEl);
+      }
       const sent = files;
       files = [];
       drawFiles();
@@ -173,6 +185,7 @@ const AskView = (() => {
         input.placeholder = 'שאלת המשך…';
       } catch (err) {
         turnEl.remove();
+        if (!thread.children.length) content.classList.remove('has-turns');
         files = sent;
         drawFiles();
         UI.error(err);

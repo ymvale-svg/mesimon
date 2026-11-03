@@ -4335,30 +4335,41 @@ input.nav-search, input.pp-search { --sg-x: 9px; --sg-size: 13px; padding-block:
 @media (prefers-reduced-motion: reduce) { .search-results { animation: none; } }
 
 /*
- * ✨ שאל את אשל במחשב — חלונית צד שנשארת פתוחה. בשפה השמאלית (סוף השורה
- * ב-RTL; התפריט הראשי בימין), בלי רקע כהה, ושאר האפליקציה מצטמצמת לצידה —
- * כך ממשיכים לעבוד תוך כדי שאלה. מתחת לחלונות (100) ולטוסטים (200).
+ * ✨ שאל את אשל במחשב — חלונית צד שנשארת פתוחה, **מימין** (תחילת השורה
+ * בעברית), בלי רקע כהה; שאר האפליקציה זזה שמאלה ומצטמצמת לצידה — כך
+ * ממשיכים לעבוד תוך כדי שאלה. מתחת לחלונות (100) ולטוסטים (200).
+ *
+ * לפני השאלה הראשונה השדה במרכז החלונית (לא למעלה). אחרי שיש שיחה — כמו
+ * צ'אט: התשובות למעלה, החדשה למטה, והשדה קבוע בתחתית.
  */
 :root { --ask-dock-w: 420px; }
 .ask-dock {
-  position: fixed; inset-block: 0; inset-inline-end: 0; width: var(--ask-dock-w);
+  position: fixed; inset-block: 0; inset-inline-start: 0; width: var(--ask-dock-w);
   z-index: 90; display: flex; flex-direction: column;
-  background: var(--surface); border-inline-start: 1px solid var(--border);
-  box-shadow: -1px 0 0 var(--border), 8px 0 28px rgba(15, 23, 42, .10);
+  background: var(--surface); border-inline-end: 1px solid var(--border);
+  box-shadow: -8px 0 28px rgba(15, 23, 42, .10);
   animation: ask-dock-in .18s ease-out;
 }
-@keyframes ask-dock-in { from { transform: translateX(-24px); opacity: 0; } }
+@keyframes ask-dock-in { from { transform: translateX(24px); opacity: 0; } }
 @media (prefers-reduced-motion: reduce) { .ask-dock { animation: none; } }
 .ask-dock-head {
   display: flex; align-items: center; gap: 8px; padding: 12px 14px;
   border-bottom: 1px solid var(--border); background: var(--surface-2); font-size: 15px;
 }
-.ask-dock-body { flex: 1; min-height: 0; overflow-y: auto; padding: 14px; }
-/* בחלונית השיחה גולשת עם החלונית כולה, לא בתיבה פנימית קטנה */
+.ask-dock-body { flex: 1; min-height: 0; overflow-y: auto; padding: 14px; display: flex; flex-direction: column; }
+.ask-dock .mask { flex: 1; align-content: center; }
+.ask-dock .mask-hello { font-size: 20px; font-weight: 800; text-align: center; margin-bottom: 4px; }
+.ask-dock .mask-form input { height: 44px; font-size: 15px; }
 .ask-dock .mask-thread { max-height: none; overflow: visible; }
-.ask-dock .mask-form { position: sticky; top: -14px; z-index: 2; background: var(--surface); padding-block: 4px; }
-.has-ask-dock .shell { margin-inline-end: var(--ask-dock-w); }
-.has-ask-dock .toast-root { left: calc(var(--ask-dock-w) + 18px); }
+/* יש שיחה: התשובות למעלה, השדה (והקבצים המצורפים) בתחתית — דבוקים לה בגלילה */
+.ask-dock .mask.has-turns { align-content: end; }
+.ask-dock .mask.has-turns .mask-hello,
+.ask-dock .mask.has-turns .mask-recent,
+.ask-dock .mask.has-turns .mask-foot { display: none; }
+.ask-dock .mask.has-turns .mask-thread { order: 1; }
+.ask-dock .mask.has-turns .mask-form { order: 2; position: sticky; bottom: -14px; z-index: 2; background: var(--surface); padding-block: 8px; border-top: 1px solid var(--border); }
+.ask-dock .mask.has-turns .mask-chips { order: 3; }
+.has-ask-dock .shell { margin-inline-start: var(--ask-dock-w); }
 @media (max-width: 1100px) { :root { --ask-dock-w: 360px; } }
 /*
  * כשהחלונית פתוחה האפליקציה צרה יותר מהחלון, אבל ה-@media מודדים את החלון —
