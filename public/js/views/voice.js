@@ -26,6 +26,7 @@ const VoiceView = (() => {
   const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition || null;
   const supported = () => Boolean(Recognition);
   const MAX_MS = 3 * 60 * 1000;
+  const CREATED_MS = 3000; // כמה זמן נשאר הבאנר הירוק "✓ נוצרה"
   const SILENCE_MS = 5000; // שקט שנחשב סוף דיבור — בהקלטה ובתשובות לשאלות
   const QUESTION = 'במה אפשר לעזור?';
   const STOP_WORDS = /[\s,.]*(?:סיום|זהו|זה הכל|זה הכול|סוף)[\s,.!]*$/;
@@ -792,8 +793,15 @@ const VoiceView = (() => {
       ]),
       el('div.toast-buttons', {}, [edit, undo])
     ]);
-    const remove = () => node.remove();
-    const timer = setTimeout(remove, warnings.length ? 15000 : 10000);
+    // באנר קצר: 3 שניות ונעלם בדעיכה. "עריכה" ו"ביטול" — רק בזמן הזה;
+    // אחר כך המשימה פתוחה כרגיל בלוח
+    const remove = () => {
+      node.style.transition = 'opacity .25s, transform .25s';
+      node.style.opacity = '0';
+      node.style.transform = 'translateY(8px)';
+      setTimeout(() => node.remove(), 260);
+    };
+    const timer = setTimeout(remove, CREATED_MS);
     edit.addEventListener('click', () => { clearTimeout(timer); remove(); TaskCardView.open(task.id); });
     undo.addEventListener('click', async () => {
       undo.disabled = true;
