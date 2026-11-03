@@ -874,8 +874,11 @@ function enrollAll() {
   D.run("UPDATE mail_memory_runs SET state = 'running', updated_at = ? WHERE state = 'mapped'", nowIso());
 }
 
+const offByEnv = () => /^(1|true|yes)$/i.test(String(process.env.MAIL_MEMORY_OFF ?? '').trim());
+
 async function tick() {
-  if (ticking || !Claude.isEnabled() || !D.getSetting('mail_memory_enabled', true)) return;
+  // ‎MAIL_MEMORY_OFF=1‎ ב-Render — כיבוי בלי מסך הניהול (כשהאתר לא עולה)
+  if (ticking || offByEnv() || !Claude.isEnabled() || !D.getSetting('mail_memory_enabled', true)) return;
   ticking = true;
   try {
     enrollAll();
