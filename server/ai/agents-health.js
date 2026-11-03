@@ -85,13 +85,14 @@ function checkCalculators() {
 async function checkTimeless(userId) {
   const Timeless = require('../timeless');
   const connected = D.get("SELECT COUNT(*) c FROM user_channels WHERE provider = 'timeless' AND api_token <> '' AND state <> 'revoked'")?.c ?? 0;
-  if (!Timeless.isConnected(userId)) return { ok: null, connectedUsers: connected, error: 'לא מחובר אצלך — אי אפשר לבדוק מכאן. העובדים שחיברו: ' + connected };
+  const org = Timeless.hasOrgToken();
+  if (!Timeless.isConnected(userId)) return { ok: null, org, connectedUsers: connected, error: 'לא מחובר אצלך — אי אפשר לבדוק מכאן. העובדים שחיברו: ' + connected };
   const started = Date.now();
   try {
     await Timeless.listMeetings(userId, { limit: 1 });
-    return { ok: true, ms: Date.now() - started, connectedUsers: connected, error: '' };
+    return { ok: true, org, ms: Date.now() - started, connectedUsers: connected, error: '' };
   } catch (err) {
-    return { ok: false, ms: Date.now() - started, connectedUsers: connected, error: String(err.message).slice(0, 240) };
+    return { ok: false, org, ms: Date.now() - started, connectedUsers: connected, error: String(err.message).slice(0, 240) };
   }
 }
 

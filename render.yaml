@@ -75,6 +75,8 @@ services:
         sync: false
       - key: TIFUL360_API_KEY
         sync: false
+      - key: TIMELESS_ACCESS_TOKEN # Timeless — אסימון ארגוני: הנהלה רואה הכול, עובד רק פגישות שהשתתף בהן
+        sync: false
       - key: ZOOM_ACCOUNT_ID       # Zoom של החברה — אפליקציית Server-to-Server OAuth. בלי שלושתם הפגישות בלי Zoom
         sync: false
       - key: ZOOM_CLIENT_ID
