@@ -470,6 +470,11 @@ function logAsk(userId, row) {
  * @param {object} [opts]   ‎history, attachments ([{filename, mime, data: Buffer}]), context, channel ('web'|'whatsapp')‎
  */
 async function ask(user, actor, question, opts = {}) {
+  // ניטור עומס: כמה שאלות רצות במקביל וכמה זמן כל אחת (‎load-monitor.js‎)
+  return require('../load-monitor').track(() => askInner(user, actor, question, opts));
+}
+
+async function askInner(user, actor, question, opts = {}) {
   const q = String(question ?? '').trim().slice(0, 1000);
   if (!q) throw new Error('מה לשאול?');
   if (!Claude.isEnabled()) throw new Error('חיבור ה-AI אינו מוגדר בשרת');
