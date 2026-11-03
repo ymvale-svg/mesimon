@@ -17,7 +17,7 @@
  * בלי זיהוי דיבור (פיירפוקס) — אותו מסך עם שדה הקלדה, באותו מסלול.
  *
  * ‎handsFree‎ — נפתח מ"משימון!" (‎voice-wake.js‎): אין יד על הטלפון, ולכן
- * שתיקה של 3 שניות או המילה "סיום" עוצרות, והתוצאה נאמרת בקול.
+ * שתיקה של 5 שניות או המילה "סיום" עוצרות, והתוצאה נאמרת בקול.
  */
 
 const VoiceView = (() => {
@@ -26,7 +26,7 @@ const VoiceView = (() => {
   const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition || null;
   const supported = () => Boolean(Recognition);
   const MAX_MS = 3 * 60 * 1000;
-  const SILENCE_MS = 3000;
+  const SILENCE_MS = 5000; // שקט שנחשב סוף דיבור — בהקלטה ובתשובות לשאלות
   const QUESTION = 'במה אפשר לעזור?';
   const STOP_WORDS = /[\s,.]*(?:סיום|זהו|זה הכל|זה הכול|סוף)[\s,.!]*$/;
 
@@ -397,45 +397,79 @@ const VoiceView = (() => {
     // --- שיחת השלמה: "מי אחראי?", "עד מתי?", "לאיזה פרויקט?"
 
     /**
-     * האזנה לתשובה אחת קצרה. ‎onText‎ — מה שנאמר; ‎onNothing‎ — נגמר בלי
+     * האזנה לתשובה אחת. ‎onText‎ — מה שנאמר; ‎onNothing‎ — נגמר בלי
      * תשובה (שתיקה, או שהמשתמש לחץ על הצעה).
+     *
+     * התשובה נחשבת גמורה רק אחרי ‎SILENCE_MS‎ (5 שניות) של שקט. במצב
+     * ‎continuous=false‎ הדפדפן סוגר אחרי כשנייה של שקט — הפסקה קצרה באמצע
+     * המשפט הספיקה כדי שהמערכת תעבור לשאלה הבאה. לכן מאזינים ברצף, ואם
+     * הדפדפן עוצר לבד לפני הזמן — מתחילים מחדש וממשיכים לצבור.
      */
     function listenOnce(onText, onNothing) {
       if (!supported() || closed) { onNothing(); return { stop() {} }; }
       let got = false;
       let r = null;
-      try {
+      let heard = '';          // מה שנקלט בסבבים קודמים
+      let round = '';          // מה שנקלט בסבב הנוכחי
+      let lastHeardAt = 0;     // מתי נשמע דיבור לאחרונה
+      let quietTimer = null;
+      const startedAt = Date.now();
+      const said = () => cleanRepeats(mergeSegment(heard, round)).trim();
+
+      const finish = () => {
+        if (got) return;
+        got = true;
+        clearTimeout(quietTimer);
+        try { r?.stop(); } catch { /* כבר עצר */ }
+        const t = said();
+        if (t) onText(t); else onNothing();
+      };
+      // שקט — סופרים מחדש מכל מילה שנשמעה
+      const armQuiet = () => {
+        clearTimeout(quietTimer);
+        quietTimer = setTimeout(finish, SILENCE_MS);
+      };
+
+      const begin = () => {
         r = new Recognition();
         r.lang = 'he-IL';
-        r.continuous = false;
+        r.continuous = true;
         r.interimResults = true;
         r.onstart = () => { listening = true; overlay.classList.add('is-listening'); setStatus('מקשיב לתשובה…', 'live'); };
         r.onresult = (e) => {
-          if (closed) return;
-          let said = '';
-          let final = false;
-          for (let i = 0; i < e.results.length; i++) {
-            said = mergeSegment(said, e.results[i][0].transcript);
-            if (e.results[i].isFinal) final = true;
-          }
-          live.textContent = cleanRepeats(said);
-          if (final && !got) {
-            got = true;
-            try { r.stop(); } catch { /* כבר עצר */ }
-            onText(cleanRepeats(said));
-          }
+          if (closed || got) return;
+          let text = '';
+          for (let i = 0; i < e.results.length; i++) text = mergeSegment(text, e.results[i][0].transcript);
+          round = text;
+          lastHeardAt = Date.now();
+          live.textContent = said();
+          armQuiet();
         };
         r.onerror = () => {};
         r.onend = () => {
           listening = false;
           overlay.classList.remove('is-listening');
-          if (!got) { got = true; onNothing(); }
+          if (got || closed) return;
+          heard = said() ? `${said()} ` : '';
+          round = '';
+          // הדפדפן עצר לפני 5 שניות של שקט — ממשיכים להאזין
+          const since = Date.now() - (lastHeardAt || startedAt);
+          if (since < SILENCE_MS && Date.now() - startedAt < MAX_MS) {
+            try { begin(); return; } catch { /* לא הצליח להתחדש */ }
+          }
+          finish();
         };
         r.start();
+      };
+
+      try {
+        begin();
+        armQuiet();
       } catch {
+        got = true;
         onNothing();
       }
-      answerRec = { stop: () => { got = true; try { r?.abort(); } catch { /* כבר עצר */ } } };
+      answerRec = { stop: () => { got = true; clearTimeout(quietTimer); try { r?.abort(); } catch { /* כבר עצר */ } } };
       return answerRec;
     }
 
