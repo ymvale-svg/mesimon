@@ -616,10 +616,12 @@ function register(router, h) {
     // ‎?email=‎ — המייל הארגוני / המחלקתי שהעובד כתב לפני החיבור (נכנס עם Gmail פרטי)
     const work = String(url.searchParams.get('email') ?? '').trim().toLowerCase();
     if (work && !add) {
-      if (!Gmail.validEmail(work)) throw badRequest('כתובת המייל אינה תקינה');
-      if (Gmail.isPersonalEmail(work)) throw badRequest(`${work} היא כתובת פרטית — יש לכתוב את המייל הארגוני / המחלקתי`);
+      // זה ניווט (קישור), לא קריאת API — שגיאה חוזרת לאפליקציה כמו שאר שגיאות החיבור
+      const back = (message) => { res.writeHead(302, { location: `/?gmailError=${encodeURIComponent(message)}`, 'cache-control': 'no-store' }); res.end(); };
+      if (!Gmail.validEmail(work)) return back('כתובת המייל אינה תקינה');
+      if (Gmail.isPersonalEmail(work)) return back(`${work} היא כתובת פרטית — יש לכתוב את המייל הארגוני / המחלקתי`);
       const taken = D.get('SELECT id FROM users WHERE id <> ? AND (lower(work_email) = ? OR lower(email) = ?)', actor.id, work, work);
-      if (taken) throw badRequest('המייל הזה כבר משויך לעובד אחר. פנו למנהל המערכת');
+      if (taken) return back('המייל הזה כבר משויך לעובד אחר. פנו למנהל המערכת');
       D.run('UPDATE users SET work_email = ? WHERE id = ?', work, actor.id);
     }
     res.writeHead(302, { location: Gmail.authorizeUrl(req, user, { add }), 'cache-control': 'no-store' });
