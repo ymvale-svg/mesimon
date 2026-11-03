@@ -28,7 +28,8 @@ const CalendarView = (() => {
   let info = null;      // היומנים ורמת הגישה
   let data = null;      // האירועים בטווח
   let pending = [];
-  const view = { mode: 'day', date: new Date(), users: null, filter: '' };
+  // ‎tab‎: ‎calendar‎ — היומנים; ‎recordings‎ — 🎥 הקלטות Zoom (‎RecordingsView‎), כשיש חיבור Zoom
+  const view = { tab: 'calendar', mode: 'day', date: new Date(), users: null, filter: '' };
 
   const colorOf = (userId) => {
     const i = (view.users ?? []).indexOf(userId);
@@ -52,10 +53,31 @@ const CalendarView = (() => {
       view.users = (Array.isArray(saved) && saved.length ? saved : shared.slice(0, 6)).filter((id) => info.calendars.some((c) => c.userId === id));
       if (!view.users.length) view.users = info.calendars.filter((c) => c.self).map((c) => c.userId);
     }
+    if (view.tab === 'recordings' && info.zoom?.enabled) return drawRecordings();
     await loadRange();
   }
 
-  const reload = () => (containerRef?.isConnected ? loadRange() : Promise.resolve());
+  // בלשונית ההקלטות — לא פונים ל-Zoom בכל רענון רקע; "⟳ רענון" שם מושך מחדש
+  const reload = () => (!containerRef?.isConnected ? Promise.resolve() : view.tab === 'recordings' ? Promise.resolve() : loadRange());
+
+  /** הלשוניות בראש המסך — רק כשיש חיבור Zoom */
+  function tabs() {
+    if (!info.zoom?.enabled) return null;
+    const go = (tab) => {
+      if (view.tab === tab) return;
+      view.tab = tab;
+      if (tab === 'recordings') drawRecordings();
+      else loadRange();
+    };
+    return el('div.seg.cal-tabs', {}, [['calendar', '📅 יומן'], ['recordings', '🎥 הקלטות Zoom']].map(([k, label]) =>
+      el(`button${view.tab === k ? '.active' : ''}`, { onclick: () => go(k) }, [label])));
+  }
+
+  function drawRecordings() {
+    const box = el('div');
+    UI.mount(containerRef, el('div.cal', {}, [tabs(), box]));
+    RecordingsView.render(box, { embedded: true });
+  }
 
   function range() {
     if (view.mode === 'day') return { from: iso(view.date), to: iso(view.date), days: [new Date(view.date)] };
@@ -93,6 +115,7 @@ const CalendarView = (() => {
       : `${r.days[0].getDate()}.${r.days[0].getMonth() + 1}–${r.days[r.days.length - 1].getDate()}.${r.days[r.days.length - 1].getMonth() + 1}`;
 
     UI.mount(containerRef, el('div.cal', {}, [
+      tabs(),
       el('div.cal-head', {}, [
         el('h2', { text: '📅 יומן' }),
         el('div.seg', {}, [['day', 'יום'], ['week', 'שבוע']].map(([k, label]) =>

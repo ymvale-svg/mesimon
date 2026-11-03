@@ -1,6 +1,7 @@
 'use strict';
 /**
- * 🎥 הקלטות Zoom — ההקלטות בענן של חשבונות ה-Zoom של החברה.
+ * 🎥 הקלטות Zoom — ההקלטות בענן של חשבונות ה-Zoom של החברה. מוצג כלשונית
+ * במסך היומן (‎CalendarView‎).
  *
  * מי שמנהל משתמשים רואה את כל ההקלטות; עובד אחר — של משתמש ה-Zoom המשויך
  * לו ושל פגישות משימון שלו (השרת מסנן). חודש בכל פעם, עם חיפוש.
@@ -41,8 +42,12 @@ const RecordingsView = (() => {
     audio_only: ''
   };
 
-  async function render(container) {
+  let embedded = false;
+
+  /** ‎embedded‎ — בתוך מסך היומן, מתחת ללשוניות: בלי כותרת משלו */
+  async function render(container, opts = {}) {
     containerRef = container;
+    embedded = Boolean(opts.embedded);
     await load();
   }
 
@@ -70,7 +75,7 @@ const RecordingsView = (() => {
     const search = el('input', { type: 'search', placeholder: 'חיפוש לפי נושא או מארח…', value: view.q, style: { width: '220px' } });
     search.addEventListener('input', () => { view.q = search.value; drawList(); });
     return el('div.cal-head', {}, [
-      el('h2', { text: '🎥 הקלטות Zoom' }),
+      embedded ? null : el('h2', { text: '🎥 הקלטות Zoom' }),
       el('button.btn.btn-sm', { title: 'החודש הקודם', onclick: () => shiftMonth(-1) }, ['▶']),
       el('b.cal-title', { text: title }),
       el('button.btn.btn-sm', { title: 'החודש הבא', onclick: () => shiftMonth(1) }, ['◀']),

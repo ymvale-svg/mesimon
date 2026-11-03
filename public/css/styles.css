@@ -3274,6 +3274,7 @@ input[type="color"] { width: 46px; height: 30px; padding: 2px; cursor: pointer; 
 
 .cal { display: flex; flex-direction: column; gap: 10px; }
 .cal-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.cal-tabs { align-self: flex-start; }
 .cal-refresh.is-busy { opacity: .7; cursor: progress; }
 .cal-head h2 { margin: 0 6px 0 0; font-size: 20px; }
 
