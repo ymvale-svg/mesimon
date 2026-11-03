@@ -67,13 +67,15 @@ const MeetingView = (() => {
     }
 
     const me = App.state.actor;
+    // Zoom פתוח למזכירות ולהנהלה, ולכל השאר — רק כשיש להם משתמש Zoom משויך
+    const zoomOpen = info.zoom.enabled && (info.zoom.chooseHost || Boolean(info.zoom.own));
     const state = {
       ownerId: editing?.ownerId ?? opts.prefill?.ownerId ?? (writable.find((c) => c.self)?.userId ?? writable[0]?.userId),
       attendees: (editing?.attendees ?? opts.prefill?.attendees ?? []).map((a) => ({ email: a.email, name: a.name ?? '' })),
       minutes: editing?.minutes ?? opts.prefill?.minutes ?? info.defaults.minutes,
       date: '',
       time: '',
-      locationType: editing?.locationType ?? (info.zoom.enabled ? 'zoom' : 'place'),
+      locationType: editing?.locationType ?? (zoomOpen ? 'zoom' : 'place'),
       record: editing ? Boolean(editing.zoom?.record) : Boolean(info.defaults.record),
       zoomUserId: editing?.zoom?.userId ?? '',   // ריק = אוטומטי (הנהלה ומזכירות בוחרים)
       suggestions: null,
@@ -372,7 +374,7 @@ const MeetingView = (() => {
       ]);
     }
 
-    // --- מארח Zoom: כל עובד בוחר חשבון ומשתמש — גם כשבעל היומן אינו רשום ב-Zoom
+    // --- מארח Zoom: מזכירות והנהלה בוחרות חשבון ומשתמש — גם כשבעל היומן אינו רשום ב-Zoom
     const hostSelect = el('select', { onchange: () => { state.zoomUserId = hostSelect.value; } });
     let hostsSeq = 0;
     async function loadHosts() {
@@ -396,7 +398,7 @@ const MeetingView = (() => {
     // --- מיקום
     function locationBox() {
       const types = [
-        info.zoom.enabled ? ['zoom', '🎥 Zoom — קישור נוצר אוטומטית'] : null,
+        zoomOpen || editing?.locationType === 'zoom' ? ['zoom', '🎥 Zoom — קישור נוצר אוטומטית'] : null,
         ['place', '📍 במשרד / כתובת'],
         ['link', '🔗 קישור משלי'],
         ['none', 'בלי מיקום']
@@ -408,9 +410,12 @@ const MeetingView = (() => {
         ]))),
         ['place', 'link'].includes(state.locationType) ? locationInput : null,
         state.locationType === 'zoom' && info.zoom.chooseHost
-          ? UI.field('מארח Zoom', hostSelect, editing?.zoom?.host ? `כרגע: ${editing.zoom.host}. בחירת משתמש אחר יוצרת קישור חדש, והמשתתפים מקבלים עדכון` : 'הפגישה נפתחת תמיד באחד מחשבונות ה-Zoom של החברה. קישור המארח — לבעל היומן, למי שקבע, להנהלה, למנהלי מחלקות ולמזכירות')
+          ? UI.field('מארח Zoom', hostSelect, editing?.zoom?.host ? `כרגע: ${editing.zoom.host}. בחירת משתמש אחר יוצרת קישור חדש, והמשתתפים מקבלים עדכון` : 'הפגישה נפתחת תמיד באחד מחשבונות ה-Zoom של החברה. קישור המארח — לבעל היומן, למי שקבע, להנהלה ולמזכירות')
           : null,
-        state.locationType === 'zoom' && !info.zoom.chooseHost ? el('div.mute-sm', { text: 'מחשבון ה-Zoom של החברה — מהמשתמש המקושר לבעל היומן, ואם הוא תפוס — ממשתמש פנוי.' }) : null,
+        state.locationType === 'zoom' && !info.zoom.chooseHost && info.zoom.own
+          ? el('div.mute-sm', { text: `במשתמש ה-Zoom שלך: ${info.zoom.own.name} · ${info.zoom.own.email}${info.zoom.own.basic ? ' (חינמי — 40 דק׳)' : ''}` })
+          : null,
+        info.zoom.enabled && !zoomOpen ? el('div.mute-sm', { text: 'לא שויך לך משתמש Zoom — לפגישת Zoom בקשו מהמזכירות, או משייכים בכרטיס העובד.' }) : null,
         state.locationType === 'zoom' ? el('label.today-radio', { title: 'Zoom מקליט מתחילת הפגישה, וההקלטה נשמרת בענן — במסך "🎥 הקלטות Zoom" ובבוט' }, [
           el('input', { type: 'checkbox', checked: state.record, onchange: (e) => { state.record = e.target.checked; } }),
           el('span', { text: '⏺ הקלטה אוטומטית לענן' })
