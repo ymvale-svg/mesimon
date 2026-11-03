@@ -2309,7 +2309,12 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
       try {
         const user = D.get('SELECT id, full_name, email, role FROM users WHERE id = ?', actor.id);
         const r = await Agents.ask(user, actor, question, { channel: 'whatsapp', history: pairsOf(state.history) });
-        return out(Agents.asText(r), {}, { action: 'mail_ask', status: 'ok', result: `"${question.slice(0, 120)}": ${r.agent?.title ?? (r.mail ? 'מיילים' : 'כללי')}` });
+        // ✍️ נוסח מוכן — הודעה נפרדת אחרי התשובה, נקייה, להעברה כמו שהיא
+        const [first, draft] = Agents.asMessages(r);
+        return out(first, {}, {
+          action: 'mail_ask', status: 'ok', result: `"${question.slice(0, 120)}": ${r.agent?.title ?? (r.mail ? 'מיילים' : 'כללי')}`,
+          ...(draft ? { readyText: draft, followUps: [async () => ({ text: draft })] } : {})
+        });
       } catch (err) {
         return out(err.message, {}, { action: 'mail_ask', status: 'error', result: err.message.slice(0, 200) });
       }
@@ -2636,7 +2641,8 @@ async function handleDirect(msg) {
   await notice;
   // מה שנשמע חוזר בשורה אחת — כך רואים מיד אם התמלול טעה
   const reply = voice ? `🎙 *שמעתי:* "${text}"\n\n${r.reply}` : r.reply;
-  const history = [...state.history, { role: 'user', text: text.slice(0, 500) }, { role: 'bot', text: r.reply.slice(0, 500) }];
+  // הנוסח שנשלח בנפרד נכנס גם להיסטוריה — כך "תקצר אותו" יודע על מה מדובר
+  const history = [...state.history, { role: 'user', text: text.slice(0, 500) }, { role: 'bot', text: [r.reply, r.readyText].filter(Boolean).join('\n\n').slice(0, 900) }];
   saveChat(user.id, { ...r.next, history });
   log({ ...base, text: voice ? `🎙 ${text}` : text, action: r.action, status: r.status, result: r.result, taskId: r.taskId ?? null });
   // הודעה ארוכה מדי — בכמה הודעות
