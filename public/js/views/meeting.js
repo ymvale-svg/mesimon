@@ -70,7 +70,10 @@ const MeetingView = (() => {
     // Zoom פתוח למזכירות ולהנהלה, ולכל השאר — רק כשיש להם משתמש Zoom משויך
     const zoomOpen = info.zoom.enabled && (info.zoom.chooseHost || Boolean(info.zoom.own));
     const state = {
-      ownerId: editing?.ownerId ?? opts.prefill?.ownerId ?? (writable.find((c) => c.self)?.userId ?? writable[0]?.userId),
+      // משימה למזכירות — ברירת המחדל היא היומן של מי שביקש, אם שיתף אותו לעריכה
+      ownerId: editing?.ownerId ?? opts.prefill?.ownerId
+        ?? (opts.task?.requestedBy && writable.some((c) => c.userId === opts.task.requestedBy) ? opts.task.requestedBy : null)
+        ?? (writable.find((c) => c.self)?.userId ?? writable[0]?.userId),
       attendees: (editing?.attendees ?? opts.prefill?.attendees ?? []).map((a) => ({ email: a.email, name: a.name ?? '' })),
       minutes: editing?.minutes ?? opts.prefill?.minutes ?? info.defaults.minutes,
       date: '',
@@ -450,10 +453,11 @@ const MeetingView = (() => {
         m.close();
         UI.success(editing ? 'הפגישה עודכנה — המשתתפים קיבלו עדכון' : `הפגישה נקבעה ל${when(res.meeting.start)}${sendInvites.checked ? ' — ההזמנות יצאו' : ''}`);
         if (res.note) UI.toast(res.note);
+        if (res.taskClosed) UI.toast('✓ המשימה למזכירות נסגרה — מי שביקש/ה קיבל/ה עדכון', 'ok');
         opts.onDone?.(res.meeting);
         App.refreshView();
         // פגישה חדשה מתוך משימה — אולי הפגישה היא כל המשימה ("לקבוע פגישה עם…")
-        if (!editing && opts.task) askCloseTask(opts.task, opts.onDone ? () => opts.onDone(res.meeting) : () => {});
+        if (!editing && opts.task && !res.taskClosed) askCloseTask(opts.task, opts.onDone ? () => opts.onDone(res.meeting) : () => {});
       } catch (err) {
         saveBtn.disabled = false;
         UI.error(err);
@@ -515,7 +519,8 @@ const MeetingView = (() => {
           el('span', { text: '📅' }),
           el('div.spacer-0', {}, [
             task.meetingPending ? el('b', { text: lastCancelled ? 'הפגישה בוטלה — לקביעה מחדש' : 'פגישה לקביעה' }) : el('span.mute-sm', { text: 'אין פגישה למשימה' }),
-            lastCancelled ? el('div.mute-sm', { text: `בוטלה: ${when(lastCancelled.start)}` }) : null
+            lastCancelled ? el('div.mute-sm', { text: `בוטלה: ${when(lastCancelled.start)}` }) : null,
+            task.secretaryRequest ? el('div.mute-sm', { text: 'משימה למזכירות — תיסגר לבד כשהפגישה תיקבע ביומן' }) : null
           ]),
           el('div.spacer'),
           el(`button.btn.btn-sm${task.meetingPending ? '.btn-primary' : ''}`, {

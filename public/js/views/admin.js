@@ -810,7 +810,7 @@ const AdminView = (() => {
       el('div.table-wrap', {}, [
         el('table.data', {}, [
           el('thead', {}, [el('tr', {}, [
-            el('th', { text: 'מחלקה' }), el('th', { text: 'מנהל/ת' }), el('th', { text: 'אנשים' }),
+            el('th', { text: 'מחלקה' }), el('th', { text: 'מנהל/ת' }), el('th', { text: 'מזכירות' }), el('th', { text: 'אנשים' }),
             el('th', { text: 'ימי עבודה' }), el('th', { text: 'סטטוס' }), el('th', { text: '' })
           ])]),
           el('tbody', {}, data.departments.length ? data.departments.map((d) =>
@@ -822,6 +822,9 @@ const AdminView = (() => {
               el('td', {}, [d.managerName
                 ? el('div.flex', {}, [UI.avatar(d.managerName, { small: true }), el('span', { text: d.managerName })])
                 : el('span.mute-sm', { text: 'לא הוגדר' })]),
+              el('td', {}, [d.secretaries?.length
+                ? el('span', { text: d.secretaries.map((x) => x.name).join(', ') })
+                : el('span.mute-sm', { text: 'המזכירות הכלליות' })]),
               el('td', { text: String(d.peopleCount) }),
               el('td', { text: d.workDaysLabel ?? 'א׳–ה׳' }),
               el('td', {}, [el('span', {
@@ -882,6 +885,38 @@ const AdminView = (() => {
       // רמת הגישה מצורפת לשם רק כשהצופה רשאי לראות רמות
       ...App.state.users.map((u) => ({ value: String(u.id), label: u.roleLabel ? `${u.name} — ${u.roleLabel}` : u.name }))
     ], String(dept?.managerUserId ?? ''));
+
+    /*
+     * מזכירות המחלקה — מי שמשרת/ת את המחלקה (למשל שושנה בתכנון). מנהלי המחלקה
+     * פותחים לה משימות, והיא קובעת פגישות ביומנים שעובדי המחלקה שיתפו איתה.
+     * המזכירות הכלליות (הסימון בכרטיס העובד) משרתות את כל המחלקות ממילא.
+     */
+    const secretaryIds = new Set((dept?.secretaries ?? []).map((x) => x.id));
+    const secretaryBox = el('div');
+    const secretaryAdd = UI.select([], '');
+    const drawSecretaries = () => {
+      const users = App.state.users ?? [];
+      UI.mount(secretaryAdd, ...[{ value: '', label: '＋ הוספת מזכירה…' },
+        ...users.filter((u) => !secretaryIds.has(u.id)).map((u) => ({ value: String(u.id), label: u.department ? `${u.name} — ${u.department}` : u.name }))]
+        .map((o) => el('option', { value: o.value, text: o.label })));
+      secretaryAdd.value = '';
+      UI.mount(secretaryBox,
+        secretaryIds.size
+          ? el('div.flex-wrap.mb', {}, [...secretaryIds].map((id) => {
+              const name = users.find((u) => u.id === id)?.name ?? (dept?.secretaries ?? []).find((x) => x.id === id)?.name ?? `#${id}`;
+              return el('span.chip.chip-assignee', {}, [
+                el('span', { text: `📅 ${name}` }),
+                el('button.chip-x', { type: 'button', title: 'הסרה', onclick: () => { secretaryIds.delete(id); drawSecretaries(); } }, ['✕'])
+              ]);
+            }))
+          : null,
+        secretaryAdd);
+    };
+    secretaryAdd.addEventListener('change', () => {
+      if (secretaryAdd.value) secretaryIds.add(Number(secretaryAdd.value));
+      drawSecretaries();
+    });
+    drawSecretaries();
 
     const statusSelect = UI.select(
       [{ value: 'active', label: 'פעילה' }, { value: 'inactive', label: 'לא פעילה' }],
@@ -959,6 +994,7 @@ const AdminView = (() => {
 
     const newOnly = el('div', {}, [
       UI.field('מנהל/ת המחלקה', managerSelect, 'מי שייבחר ישויך למחלקה הזו ויקבל עליה אחריות ניהולית'),
+      UI.field('מזכירות המחלקה', secretaryBox, 'מנהלי המחלקה יוכלו לפתוח להן משימות (בעיקר פגישות לקביעה), והן יקבעו פגישות ביומנים שעובדי המחלקה שיתפו איתן. פגישה שנקבעה מתוך משימה כזו — המשימה נסגרת לבד. המזכירות הכלליות (סימון בכרטיס העובד) משרתות את כל המחלקות.'),
       UI.field('ימי עבודה', daysBox, 'קובע את "מחר" בהקלטה וב-Today, ואת ימי מייל הבוקר. שבת — יום מנוחה. עובד שטח מוסיף לעצמו את יום ו׳ (בכרטיס המשתמש).')
     ]);
 
@@ -991,8 +1027,9 @@ const AdminView = (() => {
         if (!days.size) { saveBtn.disabled = false; return UI.toast('נדרש לפחות יום עבודה אחד', 'error'); }
         const workDays = [...days].sort();
         const parentId = parentSelect.value ? Number(parentSelect.value) : null;
-        if (isEdit) await API.updateDepartment(dept.id, { name, parentId, managerUserId, status: statusSelect.value, workDays });
-        else await API.createDepartment({ name, parentId, managerUserId, workDays });
+        const secretaries = [...secretaryIds];
+        if (isEdit) await API.updateDepartment(dept.id, { name, parentId, managerUserId, status: statusSelect.value, workDays, secretaryIds: secretaries });
+        else await API.createDepartment({ name, parentId, managerUserId, workDays, secretaryIds: secretaries });
         for (const id of picked) await API.updateDepartment(id, { parentId });
         m.close();
         UI.success('נשמר');
