@@ -19,6 +19,8 @@ const Sheet = require('./spreadsheet');
 // מגבלות לקריאה אחת ל-AI: הבקשה כולה עד 32MB, ו-base64 מנפח בשליש
 const MAX_FILE = 12 * 1024 * 1024;
 const MAX_TOTAL = 18 * 1024 * 1024;
+// פענוח לפי בקשה (‎mail-doc-queue.js‎) — קובץ אחד לבד בקריאה, ועד כאן
+const LAZY_MAX_FILE = 24 * 1024 * 1024;
 const MAX_TEXT = 20000;
 // תמונה קטנה מזה היא כמעט תמיד לוגו או אייקון בחתימה
 const MIN_IMAGE = 15 * 1024;
@@ -33,15 +35,16 @@ const hashOf = (data) => crypto.createHash('sha256').update(data).digest('hex');
  * מה סוג הקובץ מבחינתנו, או למה לא קוראים אותו.
  * @returns {{kind: 'pdf'|'image'|'docx'|'sheet'|null, reason?: string}}
  */
-function classify(att) {
+function classify(att, { maxFile = MAX_FILE } = {}) {
   const mime = String(att.mime ?? '').toLowerCase();
   const e = ext(att.filename);
-  const size = att.data?.length ?? 0;
+  // בלי תוכן (רק רשימת הקבצים מ-Gmail) — לפי הגודל המוצהר
+  const size = att.data?.length ?? Number(att.size) ?? 0;
   if (!size) return { kind: null, reason: 'ריק' };
-  if (size > MAX_FILE) return { kind: null, reason: 'גדול מדי' };
+  if (size > maxFile) return { kind: null, reason: 'גדול מדי' };
   if (mime === 'application/pdf' || e === 'pdf') {
     // PDF מוצפן או בסיסמה — אין טעם לשלוח
-    if (att.data.includes('/Encrypt')) return { kind: null, reason: 'מוצפן — לא נקרא' };
+    if (att.data && att.data.includes('/Encrypt')) return { kind: null, reason: 'מוצפן — לא נקרא' };
     return { kind: 'pdf' };
   }
   if (IMAGE_TYPES.includes(mime) || ['jpg', 'jpeg', 'png', 'gif', 'webp'].includes(e)) {
@@ -126,4 +129,4 @@ function prepare(attachments, { limit = 3, known = new Set() } = {}) {
 /** הערכת טוקנים לקובץ — להערכת העלות לפני סריקת ההיסטוריה */
 const ESTIMATED_DOC_TOKENS = 4000;
 
-module.exports = { classify, prepare, docxText, hashOf, ESTIMATED_DOC_TOKENS, MAX_TOTAL };
+module.exports = { classify, prepare, docxText, hashOf, ESTIMATED_DOC_TOKENS, MAX_TOTAL, MAX_FILE, LAZY_MAX_FILE };

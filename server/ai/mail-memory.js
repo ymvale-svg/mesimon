@@ -34,9 +34,9 @@ const DAY = 24 * 60 * 60 * 1000;
 const MAP_CONCURRENCY = 2;
 const MAP_PAUSE_MS = 400;           // הפסקה קצרה בין קבוצות — כשש שרשורים בשנייה
 const QUOTA_COOLDOWN_MS = 3 * 60 * 1000;
-const READ_CONCURRENCY = 3;
+const READ_CONCURRENCY = 2;
 const PER_TICK = 24;               // שרשורים לכל משתמש בכל סבב של המנוע (כל 2 דקות)
-const MESSAGES_PER_THREAD = 8;
+const MESSAGES_PER_THREAD = 5;
 const DOCS_PER_THREAD = 3;
 const CHARS_PER_MESSAGE = 2500;
 const CHARS_PER_THREAD = 14000;
@@ -561,6 +561,39 @@ const isDate = (x) => /^\d{4}-\d{2}-\d{2}$/.test(String(x ?? ''));
 const normPhone = (p) => String(p ?? '').replace(/[^\d+]/g, '');
 
 /** שרשור אחד: קריאה, AI, ושמירת מה שהוסק */
+/** הגודל המרבי לפענוח בסריקה (‎mail_memory_doc_mb‎), בבתים */
+const docLimitBytes = () => Math.max(0.25, Number(D.getSetting('mail_memory_doc_mb', 2)) || 2) * 1048576;
+
+/**
+ * הודעה מ-Gmail במבנה, בלי תוכן הקבצים: ‎Mime.parse‎ בצורה, וב-‎attachments‎
+ * ‎{filename, mime, size, attachmentId, data?}‎. טקסט ש-Gmail לא צירף — נמשך בנפרד.
+ */
+async function fetchMail(who, gmailId) {
+  const msg = await withRetry(() => Gmail.messageFull(who, gmailId));
+  const parts = Mime.fromGmail(msg.payload);
+  for (const t of parts.pendingText) {
+    if (t.size > 1048576) continue; // גוף מייל של יותר מ-1MB — לא טקסט שכדאי לקרוא
+    try {
+      const buf = await withRetry(() => Gmail.attachment(who, gmailId, t.attachmentId));
+      (t.type === 'text/plain' ? parts.plain : parts.html).push(Mime.decodeBytes(buf, t.charset));
+    } catch (err) {
+      if (err.quota) throw err;
+    }
+  }
+  return Mime.finishGmail(parts);
+}
+
+/** קובץ גדול — רק הכרטיס, לפענוח לפי בקשה */
+function recordLarge(userId, box, threadId, gmailId, mail, a) {
+  D.run(
+    `INSERT INTO mail_attachments (user_id, box, thread_id, gmail_id, filename, mime, kind, size, from_email, subject, sent_at, created_at)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(user_id, gmail_id, filename, size) DO NOTHING`,
+    userId, String(box ?? 0), threadId, gmailId, String(a.filename).slice(0, 200), String(a.mime ?? '').slice(0, 100),
+    Docs.classify(a, { maxFile: Docs.LAZY_MAX_FILE }).kind ?? '', a.size, mail.from.address ?? '',
+    String(mail.subject ?? '').slice(0, 300), mail.date && !Number.isNaN(mail.date.getTime()) ? mail.date.toISOString() : null, nowIso()
+  );
+}
+
 async function readThread(userId, who, threadId, run) {
   const user = userRow(userId);
   if (!user) return 'skipped';
@@ -577,19 +610,32 @@ async function readThread(userId, who, threadId, run) {
   const seenDocs = new Set();
   let docBytes = 0;
   const mails = [];
+  // 📎 קובץ מעל התקרה לא מורד ולא מפוענח כאן — רק נרשם (‎mail_attachments‎), ומפוענח
+  // לפי בקשה כשהוא נחוץ לשאלה (‎mail-doc-queue.js‎). כך הסריקה לא תוקעת את השרת.
+  const docMax = docLimitBytes();
   for (const m of [...recent].reverse()) {
-    const msg = await withRetry(() => Gmail.raw(who, m.id));
-    const mail = Mime.parse(msg.raw);
-    if (known) {
-      for (const a of mail.attachments) {
-        if (atts.length >= DOCS_PER_THREAD) break;
-        if (docBytes + a.data.length > Docs.MAX_TOTAL || !Docs.classify(a).kind) continue;
-        const hash = Docs.hashOf(a.data);
-        if (known.has(hash) || seenDocs.has(hash)) continue;
-        seenDocs.add(hash);
-        docBytes += a.data.length;
-        atts.push({ ...a, hash, gmailId: m.id, from: mail.from.address, at: mail.date });
+    const mail = await fetchMail(who, m.id);
+    for (const a of mail.attachments) {
+      if (!Docs.classify(a, { maxFile: Docs.LAZY_MAX_FILE }).kind) continue;
+      if (a.size > docMax) {
+        if (known) recordLarge(userId, box, threadId, m.id, mail, a);
+        continue;
       }
+      if (!known || atts.length >= DOCS_PER_THREAD || docBytes + a.size > Docs.MAX_TOTAL) continue;
+      let data;
+      try {
+        data = a.data ?? await withRetry(() => Gmail.attachment(who, m.id, a.attachmentId));
+      } catch (err) {
+        if (err.quota) throw err;
+        continue;
+      }
+      const full = { filename: a.filename, mime: a.mime, data };
+      if (!Docs.classify(full).kind) continue;
+      const hash = Docs.hashOf(data);
+      if (known.has(hash) || seenDocs.has(hash)) continue;
+      seenDocs.add(hash);
+      docBytes += data.length;
+      atts.push({ ...full, hash, gmailId: m.id, from: mail.from.address, at: mail.date });
     }
     mails.unshift({ id: m.id, mail: Mime.slim(mail), at: m.at });
   }
@@ -748,7 +794,7 @@ const busy = new Set();
  * כל שרשור מחזיק בזיכרון את ההודעות והמסמכים שלו עד שה-AI עונה; בלי תקרה
  * כוללת, עשרה עובדים × 3 שרשורים במקביל חרגו ממגבלת הזיכרון של השרת.
  */
-const GLOBAL_READS = Math.max(1, Number(process.env.MAIL_MEMORY_PARALLEL) || 2);
+const GLOBAL_READS = Math.max(1, Number(process.env.MAIL_MEMORY_PARALLEL) || 1);
 
 /*
  * 🌙 בלילה — יותר שרשורים במקביל, לפי הזיכרון בפועל ולא לפי מספר קבוע:
@@ -756,12 +802,14 @@ const GLOBAL_READS = Math.max(1, Number(process.env.MAIL_MEMORY_PARALLEL) || 2);
  * ההערכה לשרשור (‎SLOT_MB‎) מתחת לתקרה (‎mail_memory_night_mem_mb‎, ברירת מחדל
  * 1400MB — תקרת ה-heap ב-render.yaml; בתוכנית של 2GB נשארים כ-600MB לשרתי
  * הנתונים ולשאר). מעל התקרה — לא מתחילים חדש, ממתינים שאחד ייגמר. תמיד לפחות
- * אחד, כדי שהקריאה לא תיעצר. עד ‎NIGHT_MAX_READS‎ (4, או MAIL_MEMORY_NIGHT_PARALLEL).
- * ובכל שעה: כשהמעבד מעל 70% או שיש שאלה לסוכן — רק שרשור אחד (‎load-monitor.pressure‎).
+ * אחד, כדי שהקריאה לא תיעצר. עד ‎NIGHT_MAX_READS‎ (2, או MAIL_MEMORY_NIGHT_PARALLEL).
+ * ובכל שעה: כשהמעבד מעל 50% או שיש שאלה לסוכן — רק שרשור אחד (‎load-monitor.pressure‎),
+ * ואחרי כל שרשור הפסקה של ‎READ_GAP_MS‎ — שהאתר והסוכנים יקבלו את המעבד.
  */
-const NIGHT_MAX_READS = Math.max(GLOBAL_READS, Number(process.env.MAIL_MEMORY_NIGHT_PARALLEL) || 4);
+const NIGHT_MAX_READS = Math.max(GLOBAL_READS, Number(process.env.MAIL_MEMORY_NIGHT_PARALLEL) || 2);
+const READ_GAP_MS = 2000;         // הפסקה אחרי כל שרשור
 const SLOT_MB = 60;                 // שרשור: עד 8 הודעות ו-3 מסמכים מפוענחים, עם מרווח
-const NIGHT_READS_PER_USER = 6;     // ביום — ‎READ_CONCURRENCY‎ (3)
+const NIGHT_READS_PER_USER = 2;     // ביום — ‎READ_CONCURRENCY‎ (2)
 const rssMb = () => Math.round(process.memoryUsage().rss / 1048576);
 const memBudget = () => Math.max(300, Number(D.getSetting('mail_memory_night_mem_mb', 1400)) || 1400);
 const memStats = { peakMb: 0, peakAt: null, peakReading: 0, heldBack: 0, cpuHeld: 0 };
@@ -787,6 +835,8 @@ async function withReadSlot(fn) {
   const mb = rssMb();
   if (mb > memStats.peakMb) Object.assign(memStats, { peakMb: mb, peakAt: nowIso(), peakReading: reading });
   try { return await fn(); } finally {
+    // הפסקה לפני שהמקום מתפנה — קצב קבוע ומרווח לאתר
+    await new Promise((r) => setTimeout(r, READ_GAP_MS).unref?.());
     reading--;
     // כמה ממתינים יכולים להתחיל עכשיו — לא רק אחד (בלילה התקרה לפי זיכרון)
     for (let n = waiting.length; n > 0 && canStartRead(); n--) waiting.shift()?.();
@@ -805,8 +855,8 @@ async function readStep(userId) {
   if (!run) return 0;
   const night = isNight();
   const perDay = Math.max(1, Number(D.getSetting('mail_memory_nightly_threads', 1500)) || 1500);
-  // 🌙 בלילה — בלי תקרה יומית
-  const left = night ? PER_TICK : perDay - readToday(userId);
+  // התקרה היומית — גם בלילה (בלעדיה מצב הלילה תקע את השרת)
+  const left = perDay - readToday(userId);
   if (left <= 0) return 0;
   const historyOpen = run.state === 'running' && inHours();
   // עדכון הבוקר נקרא בכל שעה; ההיסטוריה — רק בחלון ובמצב "רץ"

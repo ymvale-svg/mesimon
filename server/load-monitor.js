@@ -312,7 +312,7 @@ function start(now = Date.now()) {
  * ניצול המעבד בשניות האחרונות (מדידה ישירה מה-cgroup, לא הדגימה של 30 שניות)
  * וכמה שאלות לסוכנים רצות. ‎busy‎ — לא מתחילים עבודת רקע נוספת.
  */
-const BUSY_CPU = 0.7;
+const BUSY_CPU = 0.5;
 let live = { cpu: null, at: 0, share: null };
 function pressure(now = Date.now()) {
   if (now - live.at >= 2000) {

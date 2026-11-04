@@ -252,4 +252,78 @@ function slim(mail) {
   return { ...mail, attachments: mail.attachments.map((a) => ({ filename: a.filename, mime: a.mime, size: a.data?.length ?? a.size ?? 0 })) };
 }
 
-module.exports = { parse, slim, decodeWords, parseAddress, htmlToText, stripQuoted };
+/**
+ * הודעה מ-Gmail במבנה (‎format=full‎) → אותה צורה כמו ‎parse‎, אבל הקבצים בלי
+ * תוכן: ‎{ filename, mime, size, attachmentId, partId, inlineImage }‎. חלק
+ * טקסט ש-Gmail לא צירף (גדול) — מסומן ב-‎pendingText‎ כדי שהקורא ימשוך אותו.
+ */
+function fromGmail(payload) {
+  const headers = {};
+  for (const h of payload?.headers ?? []) {
+    const k = String(h.name).toLowerCase();
+    headers[k] = headers[k] ? `${headers[k]}, ${h.value}` : h.value;
+  }
+  const out = { plain: [], html: [], attachments: [], pendingText: [] };
+  const visit = (part, depth = 0) => {
+    if (!part || depth > 10) return;
+    const type = String(part.mimeType ?? '').toLowerCase();
+    if (Array.isArray(part.parts) && part.parts.length) {
+      for (const p of part.parts) visit(p, depth + 1);
+      return;
+    }
+    const ph = {};
+    for (const h of part.headers ?? []) ph[String(h.name).toLowerCase()] = h.value;
+    const disposition = parseParams(ph['content-disposition'] ?? '');
+    const ctype = parseParams(ph['content-type'] ?? type);
+    const filename = part.filename || null;
+    const size = Number(part.body?.size) || 0;
+    const isText = type === 'text/plain' || type === 'text/html';
+    if (filename || disposition.value === 'attachment' || !isText) {
+      if (!size) return;
+      // תמונות מוטמעות בחתימה (לוגו) אינן מסמך שהתבקש
+      const inlineImage = disposition.value === 'inline' && type.startsWith('image/') && size < 40 * 1024;
+      if (inlineImage) return;
+      out.attachments.push({
+        filename: filename || `attachment.${(type.split('/')[1] || 'bin').replace(/[^a-z0-9]/g, '')}`,
+        mime: type || 'application/octet-stream',
+        size,
+        attachmentId: part.body?.attachmentId ?? null,
+        partId: part.partId ?? null,
+        data: part.body?.data ? Buffer.from(part.body.data, 'base64url') : null
+      });
+      return;
+    }
+    if (!part.body?.data) {
+      if (part.body?.attachmentId) out.pendingText.push({ type, charset: ctype.params.charset, attachmentId: part.body.attachmentId, size });
+      return;
+    }
+    const text = decodeBytes(Buffer.from(part.body.data, 'base64url'), ctype.params.charset);
+    if (type === 'text/plain') out.plain.push(text);
+    else out.html.push(text);
+  };
+  visit(payload);
+  return { headers, ...out };
+}
+
+/** משלים את הצורה של ‎parse‎ מתוך ‎fromGmail‎ (אחרי שנמשך טקסט חסר, אם היה) */
+function finishGmail({ headers, plain, html, attachments }) {
+  const fullText = plain.length ? plain.join('\n') : htmlToText(html.join('\n'));
+  return {
+    from: parseAddress(headers.from),
+    to: String(headers.to ?? ''),
+    cc: String(headers.cc ?? ''),
+    subject: decodeWords(headers.subject ?? ''),
+    date: headers.date ? new Date(headers.date) : null,
+    messageId: messageIds(headers['message-id'])[0] ?? null,
+    inReplyTo: messageIds(headers['in-reply-to']),
+    references: messageIds(headers.references),
+    autoSubmitted: /auto-replied|auto-generated/i.test(headers['auto-submitted'] ?? '')
+      || Boolean(headers['x-autoreply'] || headers['x-autorespond'])
+      || /^(auto|bulk|junk)/i.test(headers.precedence ?? ''),
+    text: fullText.trim(),
+    newText: stripQuoted(fullText),
+    attachments
+  };
+}
+
+module.exports = { parse, slim, fromGmail, finishGmail, decodeBytes, decodeWords, parseAddress, htmlToText, stripQuoted };

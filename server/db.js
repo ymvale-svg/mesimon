@@ -1042,6 +1042,36 @@ CREATE TABLE IF NOT EXISTS mail_documents (
 CREATE INDEX IF NOT EXISTS idx_mail_documents_user ON mail_documents(user_id, doc_date);
 CREATE INDEX IF NOT EXISTS idx_mail_documents_valid ON mail_documents(valid_until, expiry_noticed);
 
+/*
+ * קבצים מצורפים גדולים שלא פוענחו בסריקה (‎mail-memory.js‎, מעל ‎mail_memory_doc_mb‎):
+ * רק הכרטיס — שם, סוג, גודל, מאיזה מייל. הסוכן רואה אותם בחיפוש, ומבקש פענוח
+ * כשהם נחוצים לשאלה (‎mail-doc-queue.js‎). הקובץ עצמו נשאר ב-Gmail.
+ */
+CREATE TABLE IF NOT EXISTS mail_attachments (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id       INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  box           TEXT    NOT NULL DEFAULT '',   -- התיבה (‎whoOf‎) שממנה מושכים
+  thread_id     TEXT    NOT NULL,
+  gmail_id      TEXT    NOT NULL,              -- ההודעה שהקובץ מצורף אליה
+  filename      TEXT    NOT NULL,
+  mime          TEXT    NOT NULL DEFAULT '',
+  kind          TEXT    NOT NULL DEFAULT '',   -- pdf | image | docx | sheet
+  size          INTEGER NOT NULL DEFAULT 0,
+  from_email    TEXT    NOT NULL DEFAULT '',
+  subject       TEXT    NOT NULL DEFAULT '',
+  sent_at       TEXT,
+  -- pending (לא פוענח) | queued (ממתין בתור) | reading | done | failed
+  status        TEXT    NOT NULL DEFAULT 'pending',
+  reason        TEXT    NOT NULL DEFAULT '',
+  doc_hash      TEXT,                          -- ‎mail_documents.hash‎ אחרי הפענוח
+  requested_at  TEXT,
+  done_at       TEXT,
+  created_at    TEXT    NOT NULL,
+  UNIQUE (user_id, gmail_id, filename, size)
+);
+CREATE INDEX IF NOT EXISTS idx_mail_attachments_user ON mail_attachments(user_id, sent_at);
+CREATE INDEX IF NOT EXISTS idx_mail_attachments_queue ON mail_attachments(status, requested_at);
+
 /* יומן "✨ שאל" והסוכנים — איזה סוכן, אילו כלים, כמה זמן. למסך הניהול */
 CREATE TABLE IF NOT EXISTS agent_log (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1298,10 +1328,11 @@ const DEFAULT_SETTINGS = {
   mail_memory_auto: true,                  // כל עובד מחובר נסרק אוטומטית, בלי הפעלה ואישור עלות; השליטה — במסך הניהול
   mail_memory_users: '*',                  // פתוח לכל העובדים; כל אחד מפעיל ומאשר עלות לעצמו
   mail_memory_model: 'claude-haiku-5-5',   // מודל זול: הקריאה רבה, ואין צורך בשיקול דעת עמוק
-  mail_memory_hours: '',                   // חלון קריאת ההיסטוריה, שעון ישראל ("19:00-07:00"). ריק = כל שעה
-  mail_memory_nightly_threads: 1500,       // כמה שרשורים לכל משתמש ביממה (ביום; בלילה — בלי תקרה, ראה mail_memory_night)
-  mail_memory_night: true,                 // 🌙 מצב לילה: בלי תקרה יומית וקריאה ברצף, בשעות mail_memory_night_hours
-  mail_memory_night_hours: '19:00-07:00',  // שעות מצב הלילה, שעון ישראל
+  mail_memory_hours: '22:00-06:00',        // חלון קריאת ההיסטוריה, שעון ישראל. ריק = כל שעה. מיילים חדשים נקראים תמיד
+  mail_memory_nightly_threads: 300,        // כמה שרשורים לכל משתמש ביממה — גם בלילה
+  mail_memory_night: false,                // 🌙 מצב לילה: יותר במקביל וסבבים ברצף (עדיין עם התקרה היומית)
+  mail_memory_night_hours: '22:00-06:00',  // שעות מצב הלילה, שעון ישראל
+  mail_memory_doc_mb: 2,                   // 📎 קובץ מצורף גדול מזה לא מפוענח בסריקה — רק נרשם, ומפוענח לפי בקשה
   mail_memory_night_mem_mb: 1400,          // 🌙 בלילה: שרשור נוסף במקביל רק כשזיכרון השרת מתחת לזה (MB)
   mail_doc_expiry_days: 30,                // כמה ימים לפני תום תוקף של מסמך מציעים לחדש
   mail_ask_daily_limit: 60,                // "שאל את המיילים": שאלות ביום לכל משתמש
@@ -1666,6 +1697,19 @@ function migrate() {
     if (getSetting('mail_memory_nightly_threads', null) === 400) setSetting('mail_memory_nightly_threads', 1500);
     if (getSetting('org_merge_days', null) === 7) setSetting('org_merge_days', 1);
     setSetting('migr_memory_always_on', true);
+  }
+
+  /*
+   * זיכרון העבודה — קצב שמרני (11.2026): בשרת עם מעבד אחד הקצב הקודם (כל
+   * שעה, 1,500 ליום ובלילה בלי תקרה, 8 במקביל) תקע את השרת ו-Render החזיר
+   * 502. פעם אחת בלבד — מנהל יכול לשנות אחר כך במסך ההגדרות.
+   */
+  if (getSetting('migr_memory_conservative', null) === null) {
+    setSetting('mail_memory_hours', '22:00-06:00');
+    setSetting('mail_memory_night', false);
+    setSetting('mail_memory_night_hours', '22:00-06:00');
+    if (Number(getSetting('mail_memory_nightly_threads', 300)) > 300) setSetting('mail_memory_nightly_threads', 300);
+    setSetting('migr_memory_conservative', true);
   }
 
   const ADDED_EXTENSIONS = ['wav', 'eml', 'msg'];
