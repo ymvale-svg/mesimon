@@ -2617,7 +2617,7 @@ async function handleDirect(msg) {
     }
   }
   // קבלת סחורה — "קבלת סחורה" (כתוב, בכיתוב לתמונה או בהקלטה) פותח; מאז כל הודעה, גם תמונה, הולכת אליה עד הסוף
-  if (WaActions.allowed(actor, 'goods_receipt') && (GoodsReceipt.active(user.id) || GoodsReceipt.isTrigger(text))) {
+  if (WaActions.allowed(actor, 'goods_receipt') && (GoodsReceipt.active(user.id) || GoodsReceipt.opens(text, msg.file))) {
     await notice;
     const slowGr = setTimeout(() => sendText(msg.chatId, '⏳ רגע, קורא ובודק מול פריוריטי…').catch(() => {}), SLOW_NOTICE_MS);
     let r;
@@ -2641,6 +2641,13 @@ async function handleDirect(msg) {
       }
     }
     for (const reply of r.replies) for (const part of splitMessage(reply)) await sendText(msg.chatId, part);
+    return;
+  }
+  if (!text && msg.file) {
+    // תמונה או מסמך — היום הבוט מטפל בהם רק בקבלת סחורה, ואומר למה לא
+    const why = WaActions.byKey('goods_receipt')?.enabled ? 'קבלת סחורה אינה פתוחה לך' : 'קבלת סחורה עוד לא הופעלה';
+    log({ ...base, text: `[${msg.kind || 'קובץ'}]`, action: 'goods_receipt', status: 'denied', result: why });
+    await sendText(msg.chatId, `קיבלתי את הקובץ, אבל ${why} בבוט (מסך הניהול ← בוט וואטסאפ ← פעולות). בינתיים כתבו לי בטקסט 🙏`);
     return;
   }
   if (!text) {

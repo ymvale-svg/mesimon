@@ -63,6 +63,8 @@ const fresh = (s) => s && Date.now() - (s.at ?? 0) < TTL;
 
 /** יש קבלת סחורה פתוחה — כל הודעה של העובד הולכת אליה */
 const active = (userId) => fresh(load(userId));
+/** הודעה שפותחת קבלת סחורה: המילים, או קובץ בלי טקסט (ואז הבוט שואל קודם) */
+const opens = (text, file) => isTrigger(text) || Boolean(file && !String(text ?? '').trim());
 const isTrigger = (text) => TRIGGER.test(String(text ?? ''));
 
 // ---------------------------------------------------------------------------
@@ -237,7 +239,7 @@ function summaryText(s, gr) {
 const reply = (s, text, extra = {}) => ({ s, replies: [text], ...extra });
 
 async function onMainDoc(user, s, file) {
-  s.files = [await saveFile(user.id, file, 'מסמך ראשי')];
+  s.files = [file.path ? { ...file, label: 'מסמך ראשי' } : await saveFile(user.id, file, 'מסמך ראשי')];
   let doc;
   try {
     doc = await ai.extract(s.files[0]);
@@ -505,6 +507,13 @@ async function handle({ user, text = '', file = null }) {
   if (!Priority.isEnabled()) return { replies: ['החיבור לפריוריטי עוד לא הוגדר בשרת. פנו למנהל המערכת.'], status: 'error', result: 'פריוריטי לא מוגדר' };
   if (!Claude.isEnabled()) return { replies: ['קריאת מסמכים דורשת חיבור AI, שעוד לא הוגדר בשרת.'], status: 'error', result: 'AI לא מוגדר' };
 
+  // תמונה או מסמך בלי "קבלת סחורה" — כנראה מסמך לקליטה. שואלים, ושומרים את הקובץ עד התשובה
+  if (!s && file && !isTrigger(t)) {
+    const saved = await saveFile(user.id, file, 'מסמך ראשי');
+    save(user.id, { step: 'offer', startedAt: Date.now(), files: [saved] });
+    return { replies: ['📦 לקלוט את המסמך כ*קבלת סחורה* בפריוריטי?\n*כן* — להמשיך, *לא* — לא לקלוט.'], status: 'ok', result: 'הצעה: קבלת סחורה מתמונה' };
+  }
+
   // התחלה חדשה ("קבלת סחורה" באמצע קליטה — מתחילים מחדש, ומבטלים טיוטא קודמת)
   if (!s || (isTrigger(t) && file && s.step !== 'files')) {
     if (s) await cancel(user, s, 'הקודמת בוטלה');
@@ -535,6 +544,18 @@ async function step(user, s, t, file) {
     case 'doc':
       if (!file) return reply(s, 'מחכה לצילום של תעודת המשלוח או החשבונית. או *ביטול*.');
       return onMainDoc(user, s, file);
+
+    case 'offer': {
+      if (file) {
+        // עוד תמונה לפני התשובה — היא המסמך הראשי החדש
+        for (const f of s.files ?? []) { try { fs.unlinkSync(f.path); } catch { /* כבר נמחק */ } }
+        s.files = [await saveFile(user.id, file, 'מסמך ראשי')];
+        return reply(s, '📦 לקלוט את המסמך כ*קבלת סחורה* בפריוריטי? *כן* / *לא*');
+      }
+      if (YES.test(t) || isTrigger(t)) { s.step = 'doc'; return onMainDoc(user, s, s.files[0]); }
+      if (/^(לא|אל|ממש לא|no)([\s,.!]|$)/i.test(t)) return { s: null, replies: ['בסדר, לא נקלט. 👍'], status: 'ok', result: 'הצעה נדחתה' };
+      return reply(s, 'לקלוט כ*קבלת סחורה*? *כן* / *לא*');
+    }
 
     case 'company': {
       const n = numberIn(t);
@@ -695,4 +716,4 @@ async function step(user, s, t, file) {
   }
 }
 
-module.exports = { isTrigger, active, handle, _ai: ai, _load: load, _clear: (userId) => clear(userId, load(userId)) };
+module.exports = { isTrigger, opens, active, handle, _ai: ai, _load: load, _clear: (userId) => clear(userId, load(userId)) };
