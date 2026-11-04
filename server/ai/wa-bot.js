@@ -2630,6 +2630,16 @@ async function handleDirect(msg) {
     clearTimeout(slowGr);
     const shown = [voice ? `🎙 ${text}` : text, msg.file ? '[📎 קובץ]' : ''].filter(Boolean).join(' ');
     log({ ...base, text: shown || '[קובץ]', action: 'goods_receipt', status: r.status, result: r.result });
+    // קובץ (ה-PDF לבדיקה) — לפני הטקסט, כדי שהשאלה "מאשר?" תהיה ההודעה האחרונה
+    for (const f of r.files ?? []) {
+      try {
+        const ch = channel();
+        if (ch) await WhatsApp.sendFile(ch, msg.chatId, f);
+      } catch (err) {
+        console.error('[משימון] שליחת ה-PDF של קבלת הסחורה נכשלה:', err.message);
+        log({ ...base, text: `[📄 ${f.fileName}]`, action: 'goods_receipt', status: 'error', result: err.message });
+      }
+    }
     for (const reply of r.replies) for (const part of splitMessage(reply)) await sendText(msg.chatId, part);
     return;
   }

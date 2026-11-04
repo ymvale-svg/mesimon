@@ -192,6 +192,26 @@ async function enableOutgoingNotifications(userId) {
 const remove = (userId) => D.run("DELETE FROM user_channels WHERE user_id = ? AND provider = 'green_api'", userId);
 
 /** משתמשים שיש להם חיבור — רק אצלם יש תור לסרוק */
+/**
+ * שליחת קובץ (PDF, תמונה) — ‎sendFileByUpload‎. Green API מקבל קבצים בשרת
+ * ה-media שלו: ‎1103.api.green-api.com‎ ← ‎1103.media.green-api.com‎.
+ */
+async function sendFile(channel, chatId, { buf, fileName, mime = 'application/pdf', caption = '' }) {
+  const base = String(channel.api_url || DEFAULT_API_URL).replace(/\/+$/, '');
+  const media = base.replace(/\.api\.green-api\.com$/, '.media.green-api.com').replace(/^https:\/\/api\.green-api\.com$/, 'https://media.green-api.com');
+  const form = new FormData();
+  form.append('chatId', chatId);
+  form.append('fileName', fileName);
+  if (caption) form.append('caption', caption);
+  form.append('file', new Blob([buf], { type: mime }), fileName);
+  const res = await fetch(`${media}/waInstance${channel.instance_id}/sendFileByUpload/${channel.api_token}`, {
+    method: 'POST', body: form, signal: AbortSignal.timeout(60000)
+  });
+  const text = await res.text();
+  if (!res.ok) throw new Error(`שליחת הקובץ נכשלה (${res.status}): ${text.slice(0, 200)}`);
+  try { return text ? JSON.parse(text) : null; } catch { return null; }
+}
+
 const connectedUsers = () => D.all(
   "SELECT user_id FROM user_channels WHERE provider = 'green_api' AND instance_id <> '' AND api_token <> ''"
 ).map((r) => r.user_id);
@@ -200,5 +220,5 @@ module.exports = {
   send, receive, download, checkState, isReady, save, remove, publicChannel, connectedUsers, enableOutgoingNotifications,
   normalizePhone, chatIdOf, DEFAULT_API_URL,
   // לבוט הארגוני (‎server/ai/wa-bot.js‎), שמחזיק חיבור משלו ולא של משתמש
-  call
+  call, sendFile
 };

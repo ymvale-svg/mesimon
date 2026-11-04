@@ -122,12 +122,16 @@ async function supplierByCode(company, code) {
   return list[0] ?? null;
 }
 
-/** GR קיים (לא מבוטל) של אותו ספק עם אותו מספר תעודה — פריוריטי לא יקלוט פעמיים */
+/**
+ * GR קיים של אותו ספק עם אותו מספר תעודה. פריוריטי לא יקלוט פעמיים — גם כשה-GR
+ * הקודם בוטל (ואז מחזיר שגיאה מבלבלת על "סטטוס מבוטלת"). ‎cancelReceipt‎ משנה את
+ * המספר לפני הביטול, כך שזה קורה רק בביטולים שנעשו בפריוריטי עצמו.
+ */
 async function findReceiptByBooknum(company, supname, booknum) {
   if (!booknum) return null;
   const list = rows(await call(company, 'GET',
-    `DOCUMENTS_P?$filter=${enc(`SUPNAME eq '${q(supname)}' and BOOKNUM eq '${q(String(booknum).slice(0, 20))}' and STATDES ne 'מבוטלת'`)}&$select=DOCNO,STATDES,CURDATE&$top=1`));
-  return list[0] ?? null;
+    `DOCUMENTS_P?$filter=${enc(`SUPNAME eq '${q(supname)}' and BOOKNUM eq '${q(String(booknum).slice(0, 20))}'`)}&$select=DOCNO,STATDES,CURDATE&$top=5`));
+  return list.find((x) => x.STATDES !== 'מבוטלת') ?? list[0] ?? null;
 }
 
 /** הזמנה אחת, עם השורות והיתרות */
@@ -271,6 +275,15 @@ async function setDialog(company, docno, lines) {
   }
 }
 
+/** הדו-שיח הפנימי כשורות טקסט */
+async function readDialog(company, docno) {
+  let d;
+  try { d = await call(company, 'GET', `${grKey(docno)}/INTERNALDIALOGTEXT_SUBFORM`); } catch (err) { if (err.status === 404) return []; throw err; }
+  const ent = { '&amp;': '&', '&lt;': '<', '&gt;': '>', '&quot;': '"', '&#39;': "'", '&nbsp;': ' ' };
+  return String(d?.TEXT ?? '').replace(/<style[\s\S]*?<\/style>/gi, '').split(/<\/p>|<br\s*\/?>/i)
+    .map((x) => x.replace(/<[^>]+>/g, '').replace(/&[a-z#0-9]+;/gi, (e) => ent[e] ?? e).trim()).filter(Boolean);
+}
+
 /** הופך את ה-GR לסופי. אם פריוריטי דורש פעולה מהממשק — השגיאה עולה כמו שהיא */
 const finalizeReceipt = (company, docno) => call(company, 'PATCH', grKey(docno), { STATDES: 'סופית' });
 
@@ -284,12 +297,17 @@ async function cancelReceipt(company, docno) {
   for (const l of rows(await call(company, 'GET', `${k}/TRANSORDER_P_SUBFORM?$select=KLINE`))) {
     await call(company, 'DELETE', `${k}/TRANSORDER_P_SUBFORM(KLINE=${l.KLINE},TYPE='P')`);
   }
+  // מספר התעודה מתפנה — אחרת פריוריטי לא יקלוט את אותה תעודה שוב. אחרי ביטול אי אפשר לעדכן
+  const h = await call(company, 'GET', `${k}?$select=BOOKNUM`);
+  if (h?.BOOKNUM && !String(h.BOOKNUM).endsWith('~X')) {
+    await call(company, 'PATCH', k, { BOOKNUM: `${String(h.BOOKNUM).slice(0, 18)}~X` }).catch(() => {});
+  }
   await call(company, 'PATCH', k, { STATDES: 'מבוטלת' });
 }
 
 module.exports = {
   COMPANIES, isEnabled, allowed, companyOf, isTest, resolveCompany, PriorityError,
   findSuppliers, supplierByCode, findReceiptByBooknum, getOrder, openOrders, findPartExact, lastSubchapter, projects, readReceipt,
-  createReceipt, addOrderLine, addFreeLine, setLineQty, setHeader, attach, setDialog, finalizeReceipt, cancelReceipt,
+  readDialog, createReceipt, addOrderLine, addFreeLine, setLineQty, setHeader, attach, setDialog, finalizeReceipt, cancelReceipt,
   _call: call
 };

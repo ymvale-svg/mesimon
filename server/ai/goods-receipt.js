@@ -31,6 +31,7 @@ const D = require('../db');
 const Claude = require('./claude');
 const Priority = require('../priority');
 const WhatsApp = require('../whatsapp');
+const { receiptPdf } = require('./gr-pdf');
 
 const SKILL = path.join(__dirname, 'skills', 'goods-receipt.md');
 const TTL = 24 * 60 * 60 * 1000;
@@ -291,8 +292,11 @@ async function askHeader(s) {
   const d = s.doc;
   // אותו מסמך כבר נקלט — פריוריטי ממילא דוחה מספר תעודה כפול לאותו ספק
   const dup = await Priority.findReceiptByBooknum(s.company, s.supplier.code, d.doc_number);
-  if (dup) {
+  if (dup && dup.STATDES !== 'מבוטלת') {
     return { s: null, replies: [`המסמך ${d.doc_number} של ${s.supplier.name} כבר נקלט: *${dup.DOCNO}* (${dup.STATDES}, ${ymdHe(dup.CURDATE)}). לא נקלט שוב.`], status: 'denied', result: `כפול: ${dup.DOCNO}` };
+  }
+  if (dup) {
+    return { s: null, replies: [`מספר התעודה ${d.doc_number} כבר תפוס בפריוריטי ב-*${dup.DOCNO}*, שבוטל. פריוריטי לא מקבל את אותו מספר פעמיים, ואי אפשר לעדכן תעודה מבוטלת. פנו לרכש או להנהלת החשבונות.`], status: 'denied', result: `מספר תפוס ב-${dup.DOCNO} (מבוטל)` };
   }
   s.step = 'header';
   const lines = [
@@ -454,7 +458,17 @@ async function showDraft(s, problems = []) {
   s.step = 'review';
   s.reviewLines = gr.lines.map((l, i) => ({ n: i + 1, kline: l.KLINE, description: l.PDES, qty: l.TQUANT }));
   const warn = problems.length ? `⚠️ חלק לא נקלט:\n${problems.map((p) => `• ${p}`).join('\n')}\n\n` : '';
-  return reply(s, warn + summaryText(s, gr));
+  // ה-PDF לבדיקה — מהשדות כפי שנשמרו, כולל הדו-שיח הפנימי
+  const files = [];
+  try {
+    const dialog = await Priority.readDialog(s.company, s.docno).catch(() => []);
+    const c = Priority.companyOf(s.company);
+    const buf = receiptPdf(gr, { companyLabel: `${c.name.replace(/ — .*/, '')} (${s.company})`, test: Priority.isTest(s.company), order: s.order?.ordname ?? '', dialog, docTotal: s.doc?.totals?.total || null });
+    files.push({ buf, fileName: `${gr.DOCNO}-טיוטא.pdf`, mime: 'application/pdf', caption: `📄 ${gr.DOCNO} — טיוטא לבדיקה` });
+  } catch (err) {
+    console.error('[משימון] PDF של קבלת סחורה:', err.message);
+  }
+  return reply(s, warn + summaryText(s, gr), { files });
 }
 
 // ---------------------------------------------------------------------------
@@ -513,7 +527,7 @@ async function handle({ user, text = '', file = null }) {
   }
   if (out.s === null) clear(user.id, s);
   else save(user.id, out.s ?? s);
-  return { replies: out.replies, status: out.status ?? 'ok', result: out.result ?? `שלב ${(out.s ?? s)?.step ?? 'סיום'}`, docno: s.docno ?? null };
+  return { replies: out.replies, files: out.files ?? [], status: out.status ?? 'ok', result: out.result ?? `שלב ${(out.s ?? s)?.step ?? 'סיום'}`, docno: s.docno ?? null };
 }
 
 async function step(user, s, t, file) {
