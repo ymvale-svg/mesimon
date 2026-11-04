@@ -41,12 +41,7 @@ class MeetingError extends Error {
 const parseJson = (t, f) => { try { return JSON.parse(t); } catch { return f; } };
 const userById = (id) => D.get("SELECT id, full_name, email, phone, is_secretary, zoom_user_id FROM users WHERE id = ? AND status = 'active'", id);
 const userByEmail = (email) => D.get("SELECT id, full_name, email, phone FROM users WHERE lower(email) = ? AND status = 'active'", String(email ?? '').toLowerCase());
-/**
- * מזכירה — כללית (הסימון בכרטיס העובד) או של מחלקה (בעריכת המחלקה). מזכירה של
- * מחלקה מנהלת רק את היומנים של עובדי המחלקות שהיא משרתת (‎server/secretariat.js‎).
- */
 const isSecretary = (actor) => actor?.type === 'user' && Secretariat.isSecretary(actor.id);
-const covers = (actor, userId) => Secretariat.coversUser(actor.id, userId);
 
 /**
  * Zoom — מי פותח איפה:
@@ -115,7 +110,7 @@ async function accessMap(actor, { fresh = false } = {}) {
    */
   if (fresh && isSecretary(actor) && Gmail.has(actor.id, 'calendar')) {
     const rest = D.all("SELECT id, email FROM users WHERE status = 'active' AND email <> '' AND id <> ?", actor.id)
-      .filter((u) => (map.get(u.id) ?? 'none') === 'none' && covers(actor, u.id));
+      .filter((u) => (map.get(u.id) ?? 'none') === 'none');
     const probe = async (u) => {
       try {
         const r = await Gmail.googleCall(actor.id, `${CAL}/calendars/${encodeURIComponent(u.email)}/events`, { maxResults: 1, timeMin: new Date().toISOString() });
@@ -139,7 +134,7 @@ async function calendarsFor(actor, { fresh = false } = {}) {
   const map = await accessMap(actor, { fresh });
   const secretary = isSecretary(actor);
   const users = secretary
-    ? D.all("SELECT id, full_name, email, department FROM users WHERE status = 'active' ORDER BY full_name").filter((u) => covers(actor, u.id))
+    ? D.all("SELECT id, full_name, email, department FROM users WHERE status = 'active' ORDER BY full_name")
     : D.all('SELECT id, full_name, email, department FROM users WHERE id = ?', actor.id);
   return users.map((u) => ({
     userId: u.id,
@@ -163,7 +158,6 @@ async function resolveCalendar(actor, ownerId, { need = 'write' } = {}) {
     return { owner, viaUserId: actor.id, calendarId: 'primary', calendarEmail: owner.email };
   }
   if (!isSecretary(actor)) throw new MeetingError('אפשר לקבוע פגישות רק ביומן שלך', 403);
-  if (!covers(actor, owner.id)) throw new MeetingError(`${owner.full_name} אינו/ה במחלקות שאת/ה משרת/ת כמזכירות`, 403);
   const level = (await accessMap(actor)).get(owner.id) ?? 'none';
   if (ACCESS_RANK[level] < ACCESS_RANK[need]) {
     throw new MeetingError(`${owner.full_name} לא שיתף/ה איתך את היומן ${need === 'write' ? 'לעריכה' : 'לצפייה'} ב-Google`, 403);
@@ -174,7 +168,7 @@ async function resolveCalendar(actor, ownerId, { need = 'write' } = {}) {
 /** האם המשתמש רשאי לפעול ביומן של העובד בפועל — לפי מה שהעובד שיתף */
 async function canWrite(actor, userId) {
   if (userId === actor.id) return Gmail.has(actor.id, 'calendar');
-  if (!isSecretary(actor) || !covers(actor, userId)) return false;
+  if (!isSecretary(actor)) return false;
   return ACCESS_RANK[(await accessMap(actor)).get(userId) ?? 'none'] >= ACCESS_RANK.write;
 }
 

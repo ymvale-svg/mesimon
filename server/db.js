@@ -446,16 +446,6 @@ CREATE TABLE IF NOT EXISTS departments (
   created_at      TEXT NOT NULL
 );
 
--- מזכירות המחלקה: מי מהעובדים משרת/ת מחלקה מסוימת כמזכירות — למשל שושנה
--- למחלקת התכנון. מנהלי המחלקה פותחים לה משימות, והיא קובעת פגישות ביומנים
--- שעובדי המחלקה שיתפו איתה. מזכירות כלליות (‎users.is_secretary‎) משרתות את כולן.
-CREATE TABLE IF NOT EXISTS department_secretaries (
-  department_id INTEGER NOT NULL REFERENCES departments(id) ON DELETE CASCADE,
-  user_id       INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  created_at    TEXT    NOT NULL,
-  PRIMARY KEY (department_id, user_id)
-);
-
 -- הזמנות למערכת: קישור חד-פעמי לקביעת סיסמה, במקום להעביר סיסמאות בדואר
 CREATE TABLE IF NOT EXISTS invites (
   token       TEXT PRIMARY KEY,
@@ -1768,7 +1758,7 @@ function migrate() {
   // "📅 פגישה לקביעה" — מחכה שתיקבע לה פגישה
   addColumn('tasks', 'meeting_pending', 'INTEGER NOT NULL DEFAULT 0');
   /*
-   * משימה למזכירות — מנהל מחלקה פתח אותה למזכירה שמשרתת את המחלקה שלו.
+   * משימה למזכירות — מנהל מחלקה פתח אותה למזכירת החברה (שושנה, לבנה).
    * כשהמזכירה קובעת מתוכה פגישה ביומן — המשימה נסגרת לבד (‎meetings.js‎).
    */
   addColumn('tasks', 'secretary_request', 'INTEGER NOT NULL DEFAULT 0');

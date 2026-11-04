@@ -952,8 +952,9 @@ const UI = (() => {
     const inMine = (u) => myDepts.has(u.departmentId);
     const kept = new Set(keep.map(Number));
     /*
-     * המזכירות שמשרתות אותי (‎secretaryForMe‎) — מסומנות בשם, ומחוץ למחלקה שלי
-     * הן בראש "שאר הארגון": משימה למזכירות נסגרת לבד כשהיא קובעת את הפגישה.
+     * מזכירות החברה (‎secretaryForMe‎ — למנהל מחלקה ומעלה) מסומנות בשם, ומחוץ
+     * למחלקה שלי הן בראש "שאר הארגון": משימה למזכירות נסגרת לבד כשהיא קובעת
+     * מתוכה את הפגישה.
      */
     const tag = (u) => (u.secretaryForMe ? { ...u, name: `${u.name} · 📅 מזכירות` } : u);
     const list = all.filter((u) => u.id === me || kept.has(u.id) || u.assignable).map(tag);

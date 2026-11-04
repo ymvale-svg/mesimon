@@ -164,8 +164,8 @@ function assertMayAssignTo(actor, type, id) {
   if (type !== 'user' || actor.type !== 'user' || id === actor.id) return;
 
   /*
-   * מזכירות: מנהל מחלקה (ומעלה) פותח משימה למזכירה שמשרתת את המחלקה שלו —
-   * גם כשהיא יושבת במחלקה אחרת, ומעבר להיררכיה הרגילה (‎server/secretariat.js‎).
+   * מזכירות החברה: מנהל מחלקה (ומעלה) פותח משימה למזכירה — גם כשהיא יושבת
+   * במחלקה אחרת, ומעבר להיררכיה הרגילה (‎server/secretariat.js‎).
    */
   if (Secretariat.mayRequest(actor, Number(id))) return;
 
@@ -807,7 +807,6 @@ function publicActor(actor) {
     // ימי העבודה (0=ראשון) — "מחר" בבורר דחיית היעד הוא יום העבודה הבא שלו
     workDays: actor.type === 'user' ? W.workDaysOf(actor.id) : [0, 1, 2, 3, 4],
     // מזכירה — רואה את מסך היומן וקובעת ביומנים שהעובדים שיתפו איתה
-    // (כללית — הסימון בכרטיס העובד; או מזכירה של מחלקה — בעריכת המחלקה)
     secretary: actor.type === 'user' && Secretariat.isSecretary(actor.id),
     // מסך הקלטות ה-Zoom — כשיש חיבור Zoom
     zoomRecordings: actor.type === 'user' && Zoom.isEnabled()
@@ -962,7 +961,7 @@ router.get('/api/bootstrap', async (req, res, ctx) => {
       : D.all("SELECT * FROM boards WHERE type='internal'");
 
   const assignableIds = isVendor(actor) ? new Set() : assignableUserIds(actor);
-  // המזכירות שמשרתות אותי — מסומנות בבוררי האחראי ("משימה למזכירות")
+  // מזכירות החברה, כשאני מנהל מחלקה ומעלה — מסומנות בבוררי האחראי ("משימה למזכירות")
   const mySecretaries = isVendor(actor) ? new Set() : Secretariat.secretariesFor(actor);
   const payload = {
     actor: publicActor(actor),
@@ -1128,7 +1127,7 @@ function assertMayUseProject(actor, projectId) {
 }
 
 /**
- * משימה למזכירות — מנהל מחלקה פתח (או העביר) משימה למזכירה שמשרתת אותו.
+ * משימה למזכירות — מנהל מחלקה פתח (או העביר) משימה למזכירת החברה.
  * הסימון קובע שכשהמזכירה תקבע מתוכה פגישה ביומן — המשימה תיסגר לבד.
  */
 function markSecretaryRequest(taskId, actor, assigneeType, assigneeId) {
@@ -3293,9 +3292,7 @@ const shapeDepartment = (d) => ({
   peopleCount: D.get('SELECT COUNT(*) c FROM users WHERE department_id = ? AND status = ?', d.id, 'active').c,
   // ימי העבודה — ‎server/workdays.js‎. ריק בשמירה = ברירת המחדל א׳–ה׳
   workDays: W.parseDays(d.work_days),
-  workDaysLabel: W.daysLabel(W.parseDays(d.work_days)),
-  // מזכירות המחלקה — מנהלי המחלקה פותחים להן משימות, והן קובעות פגישות לעובדיה
-  secretaries: Secretariat.ofDepartment(d.id)
+  workDaysLabel: W.daysLabel(W.parseDays(d.work_days))
 });
 
 /** רשימת המחלקות — נדרשת לכל מי שממלא טופס משתמש או מסנן לפי מחלקה */
@@ -3342,7 +3339,6 @@ router.post('/api/departments', async (req, res, ctx) => {
     Array.isArray(b.workDays) ? W.serializeDays(b.workDays) : '', parentId);
   const id = Number(r.lastInsertRowid);
   if (b.managerUserId) setDepartmentManager(id, Number(b.managerUserId));
-  if (Array.isArray(b.secretaryIds)) setDepartmentSecretaries(id, b.secretaryIds);
 
   sendJson(res, 201, { department: shapeDepartment(D.get('SELECT * FROM departments WHERE id = ?', id)) });
 });
@@ -3374,7 +3370,6 @@ router.patch('/api/departments/:id', async (req, res, ctx) => {
   }
   // שבת לעולם אינה נשמרת כיום עבודה — ‎serializeDays‎ מסיר אותה
   if (Array.isArray(b.workDays)) D.run('UPDATE departments SET work_days = ? WHERE id = ?', W.serializeDays(b.workDays), dept.id);
-  if (Array.isArray(b.secretaryIds)) setDepartmentSecretaries(dept.id, b.secretaryIds);
 
   sendJson(res, 200, { department: shapeDepartment(D.get('SELECT * FROM departments WHERE id = ?', dept.id)) });
 });
@@ -3393,11 +3388,6 @@ router.delete('/api/departments/:id', async (req, res, ctx) => {
   D.run('DELETE FROM departments WHERE id = ?', dept.id);
   sendJson(res, 200, { ok: true });
 });
-
-/** מזכירות המחלקה — החלפה מלאה; שגיאת קלט חוזרת כ-400 עם ההסבר */
-function setDepartmentSecretaries(departmentId, ids) {
-  try { Secretariat.setForDepartment(departmentId, ids); } catch (err) { throw badRequest(err.message); }
-}
 
 /** קובע את מנהל המחלקה, ומשייך אותו אליה כמנהל מחלקה */
 function setDepartmentManager(departmentId, userId) {

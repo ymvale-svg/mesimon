@@ -10,7 +10,6 @@ const D = require('./db');
 const W = require('./workdays');
 const P = require('./permissions');
 const Meetings = require('./meetings');
-const Secretariat = require('./secretariat');
 const Zoom = require('./zoom');
 const Gmail = require('./gmail');
 const WaBot = require('./ai/wa-bot');
@@ -236,8 +235,6 @@ function register(router, h) {
     const ids = String(q.get('users') ?? '').split(',').map(Number).filter(Boolean).slice(0, 15);
     const secretary = Meetings.isSecretary(actor);
     if (!secretary && ids.some((id) => id !== actor.id)) throw forbidden('מסך היומן מיועד למזכירות');
-    // מזכירה של מחלקה — רק היומנים של עובדי המחלקות שהיא משרתת
-    if (ids.some((id) => id !== actor.id && !Secretariat.coversUser(actor.id, id))) throw forbidden('אחד העובדים שנבחרו אינו במחלקות שאת/ה משרת/ת');
     await run(res, async () => {
       const fromIso = W.ilWallToUtc(from, 0, 0).toISOString();
       const toIso = W.ilWallToUtc(W.addDays(to, 1), 0, 0).toISOString();
