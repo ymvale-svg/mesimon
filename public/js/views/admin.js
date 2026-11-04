@@ -592,6 +592,56 @@ const AdminView = (() => {
     });
   }
 
+  /**
+   * מחיקת משתמש לצמיתות. משימות פתוחות חייבות לעבור לעובד אחר — השרת
+   * אוכף את זה, והמסך שואל מראש כדי שהמנהל לא ייתקל בשגיאה.
+   */
+  async function deleteUserFlow(user, listData, parentModal) {
+    let load;
+    try { load = await API.userDeleteCheck(user.id); } catch (err) { return UI.error(err); }
+
+    const heirs = (listData.users ?? []).filter((u) => u.id !== user.id && u.status === 'active');
+    const heirSelect = UI.select([
+      { value: '', label: load.openTasks ? '— יש לבחור —' : 'לא להעביר' },
+      ...heirs.map((u) => ({ value: String(u.id), label: u.name }))
+    ], '');
+
+    const facts = [];
+    if (load.openTasks) facts.push(`${load.openTasks} משימות פתוחות`);
+    if (load.allTasks > load.openTasks) facts.push(`${load.allTasks - load.openTasks} משימות סגורות`);
+    if (load.projects) facts.push(`ניהול ${load.projects} פרויקטים`);
+
+    const okBtn = el('button.btn.btn-danger', {}, ['מחיקה לצמיתות']);
+    const m = UI.modal({
+      title: `מחיקת ${user.name}`,
+      body: el('div', {}, [
+        el('div.alert.alert-warn.mb', {}, [
+          el('span', { text: '⚠️' }),
+          el('div', { text: 'המחיקה אינה הפיכה: החשבון, החיבורים וההגדרות האישיות יימחקו. מי שרק עזב — אפשר במקום זאת לשנות את הסטטוס ל"לא פעיל", וההיסטוריה תישמר.' })
+        ]),
+        facts.length ? el('p', { text: `ל${user.name} יש: ${facts.join(', ')}.` }) : null,
+        facts.length
+          ? UI.field('העברת המשימות והפרויקטים אל', heirSelect, load.openTasks ? 'חובה — משימות פתוחות לא יישארו בלי אחראי' : 'רשות')
+          : null
+      ]),
+      footer: [okBtn, el('div.spacer')]
+    });
+
+    okBtn.addEventListener('click', async () => {
+      const transferTo = heirSelect.value ? Number(heirSelect.value) : null;
+      if (load.openTasks && !transferTo) return UI.toast('יש לבחור למי להעביר את המשימות הפתוחות', 'error');
+      okBtn.disabled = true;
+      try {
+        await API.deleteUser(user.id, transferTo);
+        m.close();
+        parentModal.close();
+        UI.success(`${user.name} נמחק`);
+        await App.reloadReference();
+        App.render();
+      } catch (err) { okBtn.disabled = false; UI.error(err); }
+    });
+  }
+
   /** בחירת "מחלקה חדשה" בתוך הרשימה הנפתחת — נשלח כ-newDepartmentName ולא כמזהה */
   const NEW_DEPT = '__new__';
 
@@ -732,7 +782,13 @@ const AdminView = (() => {
             ])
           : null
       ]),
-      footer: [saveBtn, el('div.spacer')]
+      footer: [
+        saveBtn,
+        el('div.spacer'),
+        isEdit && user.id !== App.state.actor?.id && App.can('manage_users')
+          ? el('button.btn.btn-danger', { onclick: () => deleteUserFlow(user, listData, m) }, ['🗑 מחיקת משתמש'])
+          : null
+      ]
     });
 
     saveBtn.addEventListener('click', async () => {

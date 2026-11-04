@@ -4160,6 +4160,103 @@ router.patch('/api/admin/users/:id', async (req, res, ctx) => {
 });
 
 /**
+ * מה יקרה למחיקת משתמש — כדי שהמסך ישאל על העברת משימות רק כשיש מה להעביר.
+ */
+function userWorkload(userId) {
+  const openTasks = D.get(
+    `SELECT COUNT(*) c FROM tasks t
+       LEFT JOIN board_columns bc ON bc.board_id = t.board_id AND bc.key = t.status
+      WHERE t.archived = 0 AND COALESCE(bc.is_final, 0) = 0
+        AND ((t.assignee_type = 'user' AND t.assignee_id = ?)
+          OR t.id IN (SELECT task_id FROM task_assignees WHERE assignee_type = 'user' AND assignee_id = ?))`,
+    userId, userId).c;
+  const allTasks = D.get(
+    "SELECT COUNT(*) c FROM tasks WHERE assignee_type = 'user' AND assignee_id = ?", userId).c;
+  const projects = D.get('SELECT COUNT(*) c FROM projects WHERE manager_id = ?', userId).c;
+  return { openTasks, allTasks, projects };
+}
+
+router.get('/api/admin/users/:id/delete-check', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  requireFullPerm(actor, 'manage_users');
+  const user = D.get('SELECT * FROM users WHERE id = ?', Number(ctx.params.id));
+  if (!user) throw notFound('המשתמש לא נמצא');
+  assertMayManageUser(actor, user);
+  sendJson(res, 200, userWorkload(user.id));
+});
+
+/**
+ * מחיקת משתמש לצמיתות.
+ *
+ * המשימות שלו אינן נמחקות — הן של הארגון. מי שיש לו משימות פתוחות חייב
+ * לקבל מחליף (‎transferTo‎), אחרת המשימות נשארות בלי אחראי ואיש אינו רואה
+ * אותן. משימות סגורות בלי מחליף נשארות עם השם שנמחק ריק. התגובות וההיסטוריה
+ * נשמרות כפי שהן — היומן מחזיק את השם בזמן הפעולה.
+ *
+ * מי שרק עזב — עדיף להשבית (סטטוס "לא פעיל"): הכניסה נחסמת וההיסטוריה נשמרת.
+ */
+router.delete('/api/admin/users/:id', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  requireFullPerm(actor, 'manage_users');
+  const user = D.get('SELECT * FROM users WHERE id = ?', Number(ctx.params.id));
+  if (!user) throw notFound('המשתמש לא נמצא');
+  if (user.id === actor.id) throw badRequest('לא ניתן למחוק את החשבון שלך');
+  assertMayManageUser(actor, user);
+
+  const b = await readJson(req).catch(() => ({}));
+  let heir = null;
+  if (b?.transferTo) {
+    heir = D.get("SELECT * FROM users WHERE id = ? AND status = 'active' AND signup_at IS NULL", Number(b.transferTo));
+    if (!heir || heir.id === user.id) throw badRequest('המשתמש שנבחר לקבלת המשימות אינו תקין');
+    if (isDeptManager(actor) && !P.inActorDepartments(actor, heir.department_id ?? null)) {
+      throw forbidden('מנהל מחלקה רשאי להעביר משימות רק לעובדים במחלקה שלו');
+    }
+  }
+
+  const load = userWorkload(user.id);
+  if (load.openTasks && !heir) {
+    throw badRequest(`ל${user.full_name} יש ${load.openTasks} משימות פתוחות — יש לבחור למי להעביר אותן`);
+  }
+
+  const id = user.id;
+  const heirId = heir?.id ?? null;
+  D.db.exec('BEGIN');
+  try {
+    if (heirId) {
+      // אחראי נוסף שכבר רשום גם אצל המחליף — נמחק ולא מועבר, אחרת המפתח מתנגש
+      D.run(`DELETE FROM task_assignees WHERE assignee_type = 'user' AND assignee_id = ?
+               AND task_id IN (SELECT task_id FROM task_assignees WHERE assignee_type = 'user' AND assignee_id = ?)`, id, heirId);
+      D.run("UPDATE task_assignees SET assignee_id = ? WHERE assignee_type = 'user' AND assignee_id = ?", heirId, id);
+      D.run("UPDATE tasks SET assignee_id = ? WHERE assignee_type = 'user' AND assignee_id = ?", heirId, id);
+    } else {
+      D.run("DELETE FROM task_assignees WHERE assignee_type = 'user' AND assignee_id = ?", id);
+      D.run("UPDATE tasks SET assignee_type = NULL, assignee_id = NULL WHERE assignee_type = 'user' AND assignee_id = ?", id);
+    }
+    // הפניות בלי ‎ON DELETE‎ — היו חוסמות את המחיקה
+    D.run('UPDATE projects SET manager_id = ? WHERE manager_id = ?', heirId, id);
+    D.run('UPDATE projects SET created_by = NULL WHERE created_by = ?', id);
+    D.run('UPDATE tasks SET created_by = NULL WHERE created_by = ?', id);
+    D.run('UPDATE task_assignees SET added_by = NULL WHERE added_by = ?', id);
+    D.run('UPDATE project_images SET uploaded_by = NULL WHERE uploaded_by = ?', id);
+    D.run('UPDATE ai_requests SET owner_id = ? WHERE owner_id = ?', heirId ?? actor.id, id);
+    // שורות שמזוהות לפי סוג ומזהה, בלי מפתח זר
+    D.run("DELETE FROM sessions WHERE actor_type = 'user' AND actor_id = ?", id);
+    D.run("DELETE FROM notifications WHERE target_type = 'user' AND target_id = ?", id);
+    D.run("DELETE FROM invites WHERE target_type = 'user' AND target_id = ?", id);
+    D.run('DELETE FROM users WHERE id = ?', id);
+    D.db.exec('COMMIT');
+  } catch (err) {
+    D.db.exec('ROLLBACK');
+    throw err;
+  }
+
+  D.audit(null, actorRef(actor), 'user_deleted',
+    `נמחק המשתמש ${user.full_name} <${user.email}>` + (heir ? `; המשימות הועברו ל${heir.full_name}` : ''));
+  console.log(`[משימון] נמחק משתמש: ${user.full_name} <${user.email}>`);
+  sendJson(res, 200, { ok: true, transferred: heir ? load.allTasks : 0 });
+});
+
+/**
  * הטלפון של עובד נשמר מנורמל (‎972541234567‎), כי כך בוט הוואטסאפ מקבל אותו.
  * אותו מספר אצל שני עובדים היה מערבב ביניהם — הבוט לא היה יודע מי כתב.
  */
