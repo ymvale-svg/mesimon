@@ -679,9 +679,10 @@ function register(router, h) {
       if (Gmail.isPersonalEmail(work)) return back(`${work} היא כתובת פרטית — יש לכתוב את המייל הארגוני / המחלקתי`);
       const taken = D.get('SELECT id FROM users WHERE id <> ? AND (lower(work_email) = ? OR lower(email) = ?)', actor.id, work, work);
       if (taken) return back('המייל הזה כבר משויך לעובד אחר. פנו למנהל המערכת');
-      D.run('UPDATE users SET work_email = ? WHERE id = ?', work, actor.id);
+      // לא נשמר כאן: נשמר רק אחרי ש-Google מאשר שהעובד שולט בכתובת (Gmail.connect).
+      // בלי זה, קישור אחד מספיק כדי לקבוע לעובד מייל ארגוני של מישהו אחר ולהיכנס בשמו
     }
-    res.writeHead(302, { location: Gmail.authorizeUrl(req, user, { add }), 'cache-control': 'no-store' });
+    res.writeHead(302, { location: Gmail.authorizeUrl(req, user, { add, expect: work && !add ? work : '' }), 'cache-control': 'no-store' });
     res.end();
   });
 

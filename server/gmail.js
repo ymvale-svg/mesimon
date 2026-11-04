@@ -105,16 +105,22 @@ const STATE_TTL_MS = 10 * 60 * 1000;
 const pending = new Map();
 
 /** ‎add‎ — חשבון Google נוסף (ולא חיבור, או חיבור מחדש, של הראשי) */
-function authorizeUrl(req, user, { add = false } = {}) {
+/**
+ * ‎expect‎ — המייל הארגוני שהעובד הקליד לפני החיבור. הוא לא נשמר עד ש-Google
+ * מאשר שהעובד שולט בו (ב-‎connect‎): כתובת שלא אומתה לא נשמרת ב-‎work_email‎,
+ * כי לפיה אפשר להיכנס למערכת.
+ */
+function authorizeUrl(req, user, { add = false, expect = '' } = {}) {
   const state = `gm_${crypto.randomBytes(24).toString('hex')}`;
-  pending.set(state, { userId: user.id, add, expires: Date.now() + STATE_TTL_MS });
+  expect = add ? '' : String(expect ?? '').trim().toLowerCase();
+  pending.set(state, { userId: user.id, add, expect, expires: Date.now() + STATE_TTL_MS });
   /*
    * התיבה הראשית — ההסכמה ניתנת מהמייל הארגוני, לא מה-Gmail הפרטי שאיתו
    * נכנס: ‎login_hint‎ מכוון אליו, ‎hd‎ מצמצם את בחירת החשבון לדומיין של
    * הארגון (Google Workspace), ו-‎select_account‎ — כדי ש-Google לא ייכנס
    * אוטומטית לחשבון הפרטי שכבר מחובר בדפדפן.
    */
-  const work = add ? '' : workMailbox(user.id);
+  const work = add ? '' : (expect || workMailbox(user.id));
   const workDomain = work && !isPersonalEmail(work) ? domainOf(work) : '';
   const params = new URLSearchParams({
     client_id: Google.CLIENT_ID,
@@ -149,7 +155,7 @@ function consumeStateFull(state) {
   const entry = pending.get(state);
   if (!entry) return null;
   pending.delete(state);
-  return Date.now() <= entry.expires ? { userId: entry.userId, add: Boolean(entry.add) } : null;
+  return Date.now() <= entry.expires ? { userId: entry.userId, add: Boolean(entry.add), expect: entry.expect || '' } : null;
 }
 
 setInterval(() => {
@@ -184,7 +190,7 @@ async function tokenRequest(params) {
  *
  * @returns {Promise<{box: number, email: string, added: boolean}>}
  */
-async function connect(userId, code, req, { add = false } = {}) {
+async function connect(userId, code, req, { add = false, expect = '' } = {}) {
   const data = await tokenRequest({ code, redirect_uri: Google.redirectUri(req), grant_type: 'authorization_code' });
   /*
    * מה שאושר נשמר כמו שהוא, וכל פיצ'ר בודק את ההרשאה שלו (‎has‎). מי שלא סימן
@@ -202,7 +208,7 @@ async function connect(userId, code, req, { add = false } = {}) {
    * התיבה הראשית חייבת להיות המייל הארגוני. נבחר חשבון אחר (בדרך כלל ה-Gmail
    * הפרטי, שכבר מחובר בדפדפן) — לא מחברים, ואומרים איזה חשבון לבחור.
    */
-  const work = workMailbox(userId);
+  const work = expect || workMailbox(userId);
   const isExtra = email && D.get('SELECT 1 FROM mail_accounts WHERE user_id = ? AND lower(email) = ?', userId, email);
   // סירוב — ההרשאה שניתנה מהחשבון הלא נכון מבוטלת מיד, ולא נשארת פתוחה
   const refuse = async (message) => {
@@ -218,6 +224,13 @@ async function connect(userId, code, req, { add = false } = {}) {
     }
     // נכנס עם כתובת פרטית ובחר בחשבון ארגוני — זה המייל הארגוני שלו מעכשיו
     if (!work) D.run("UPDATE users SET work_email = ? WHERE id = ? AND work_email = ''", email, userId);
+    // המייל שהקליד אומת עכשיו מול Google — רק עכשיו הוא נשמר כמייל הארגוני שלו
+    if (expect && email === expect) {
+      if (D.get('SELECT id FROM users WHERE id <> ? AND (lower(work_email) = ? OR lower(email) = ?)', userId, email, email)) {
+        await refuse('המייל הזה כבר משויך לעובד אחר. פנו למנהל המערכת');
+      }
+      D.run('UPDATE users SET work_email = ? WHERE id = ?', email, userId);
+    }
   }
   const extra = email ? D.get('SELECT id FROM mail_accounts WHERE user_id = ? AND lower(email) = ?', userId, email) : null;
   const refresh = Secrets.encrypt(data.refresh_token);

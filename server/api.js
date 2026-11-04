@@ -706,7 +706,7 @@ router.get('/api/auth/google/callback', async (req, res, ctx) => {
     if (params.get('error')) return back('gmailError', 'החיבור בוטל');
     if (!userId || !ctx.actor || ctx.actor.type !== 'user' || ctx.actor.id !== userId) return back('gmailError', 'הבקשה פגה או אינה תקינה. נסו לחבר שוב.');
     try {
-      const r = await Gmail.connect(userId, params.get('code'), req, { add: entry.add });
+      const r = await Gmail.connect(userId, params.get('code'), req, { add: entry.add, expect: entry.expect });
       // החיבור כולל עכשיו גם יומן ואנשי קשר — סנכרון ראשון ברקע, ומטמון יומן נקי
       Calendar.forget(userId);
       GContacts.syncSoon(userId);
