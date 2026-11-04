@@ -2908,6 +2908,20 @@ function notifyAssignment({ taskId, userId, assigner = null, extra = false }) {
 }
 
 /**
+ * 📎 תשובה שהעובד ביקש וחיכה לה (פענוח קובץ, ‎mail-doc-queue.js‎) — נשלחת מיד,
+ * גם מחוץ לשעות: הוא שאל ונאמר לו שנודיע. ‎false‎ — אין בוט או אין טלפון.
+ */
+async function deliver(userId, text) {
+  if (!D.getSetting('wa_bot_enabled', true) || !isConfigured()) return false;
+  const u = D.get("SELECT id, full_name, phone FROM users WHERE id = ? AND status = 'active'", userId);
+  if (!u?.phone) return false;
+  const chatId = `${u.phone}@c.us`;
+  for (const part of splitMessage(text)) await sendText(chatId, part);
+  log({ channel: 'private', chatId, userId: u.id, who: u.full_name, action: 'mail_ask', status: 'ok', result: `📎 תשובה אחרי פענוח: ${String(text).slice(0, 120)}` });
+  return true;
+}
+
+/**
  * הודעה יזומה לעובד מהבוט — לשאלת "עסקי או אישי?" ולהודעת המעבר בוואטסאפ
  * האישי. מחוץ לשעות — לתור. ‎false‎ — אין בוט, או שלעובד אין טלפון: אז מי
  * שקרא לכאן שולח התראה במערכת במקום.
@@ -3115,7 +3129,7 @@ module.exports = {
   init, start, tick, publicStatus, save, remove, checkState, qr, isConfigured,
   listGroups, bindGroup, userByPhone, markDone, readLog, todayStats, simulate, simulateGroup, inHours,
   // לשליחה ממודולים אחרים — התראה לפני פגישה (‎meetings.js‎), עם רישום ביומן הבוט
-  sendText, log, notifyAssignment, assistant,
+  sendText, log, notifyAssignment, assistant, deliver,
   _internal: {
     storeGroupMessage, processGroup, handleDirect, sanitizeGroup, resolveMentions, candidatesOf, converse, turn, withFollowUps, sendSummaries, YES,
     findRecipients, findContactCards, sourceOf, suggestionFeedback, flushOutbox, todayMessage, splitMessage, parseSuggestionCommand, businessCommand, chatOf, saveChat,

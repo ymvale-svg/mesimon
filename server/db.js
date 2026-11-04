@@ -1042,6 +1042,51 @@ CREATE TABLE IF NOT EXISTS mail_documents (
 CREATE INDEX IF NOT EXISTS idx_mail_documents_user ON mail_documents(user_id, doc_date);
 CREATE INDEX IF NOT EXISTS idx_mail_documents_valid ON mail_documents(valid_until, expiry_noticed);
 
+/*
+ * קבצים מצורפים גדולים שלא פוענחו בסריקה (‎mail-memory.js‎, מעל ‎mail_memory_doc_mb‎):
+ * רק הכרטיס — שם, סוג, גודל, מאיזה מייל. הסוכן רואה אותם בחיפוש, ומבקש פענוח
+ * כשהם נחוצים לשאלה (‎mail-doc-queue.js‎). הקובץ עצמו נשאר ב-Gmail.
+ */
+CREATE TABLE IF NOT EXISTS mail_attachments (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id       INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  box           TEXT    NOT NULL DEFAULT '',   -- התיבה (‎whoOf‎) שממנה מושכים
+  thread_id     TEXT    NOT NULL,
+  gmail_id      TEXT    NOT NULL,              -- ההודעה שהקובץ מצורף אליה
+  filename      TEXT    NOT NULL,
+  mime          TEXT    NOT NULL DEFAULT '',
+  kind          TEXT    NOT NULL DEFAULT '',   -- pdf | image | docx | sheet
+  size          INTEGER NOT NULL DEFAULT 0,
+  from_email    TEXT    NOT NULL DEFAULT '',
+  subject       TEXT    NOT NULL DEFAULT '',
+  sent_at       TEXT,
+  -- pending (לא פוענח) | queued (ממתין בתור) | reading | done | failed
+  status        TEXT    NOT NULL DEFAULT 'pending',
+  reason        TEXT    NOT NULL DEFAULT '',
+  doc_hash      TEXT,                          -- ‎mail_documents.hash‎ אחרי הפענוח
+  requested_at  TEXT,
+  done_at       TEXT,
+  created_at    TEXT    NOT NULL,
+  UNIQUE (user_id, gmail_id, filename, size)
+);
+CREATE INDEX IF NOT EXISTS idx_mail_attachments_user ON mail_attachments(user_id, sent_at);
+CREATE INDEX IF NOT EXISTS idx_mail_attachments_queue ON mail_attachments(status, requested_at);
+
+/* מי מחכה לפענוח קובץ גדול — והשאלה שלו, שתורץ שוב עם המסמך כשהוא מוכן */
+CREATE TABLE IF NOT EXISTS mail_doc_waiters (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  attachment_id INTEGER NOT NULL REFERENCES mail_attachments(id) ON DELETE CASCADE,
+  user_id       INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  channel       TEXT    NOT NULL DEFAULT 'web',   -- web | whatsapp — לשם נשלחת התשובה
+  question      TEXT    NOT NULL,
+  history       TEXT    NOT NULL DEFAULT '[]',
+  context       TEXT    NOT NULL DEFAULT '',
+  status        TEXT    NOT NULL DEFAULT 'waiting', -- waiting | answered | failed
+  created_at    TEXT    NOT NULL,
+  done_at       TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_mail_doc_waiters ON mail_doc_waiters(attachment_id, status);
+
 /* יומן "✨ שאל" והסוכנים — איזה סוכן, אילו כלים, כמה זמן. למסך הניהול */
 CREATE TABLE IF NOT EXISTS agent_log (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1298,10 +1343,11 @@ const DEFAULT_SETTINGS = {
   mail_memory_auto: true,                  // כל עובד מחובר נסרק אוטומטית, בלי הפעלה ואישור עלות; השליטה — במסך הניהול
   mail_memory_users: '*',                  // פתוח לכל העובדים; כל אחד מפעיל ומאשר עלות לעצמו
   mail_memory_model: 'claude-haiku-5-5',   // מודל זול: הקריאה רבה, ואין צורך בשיקול דעת עמוק
-  mail_memory_hours: '',                   // חלון קריאת ההיסטוריה, שעון ישראל ("19:00-07:00"). ריק = כל שעה
-  mail_memory_nightly_threads: 1500,       // כמה שרשורים לכל משתמש ביממה (ביום; בלילה — בלי תקרה, ראה mail_memory_night)
-  mail_memory_night: true,                 // 🌙 מצב לילה: בלי תקרה יומית וקריאה ברצף, בשעות mail_memory_night_hours
-  mail_memory_night_hours: '19:00-07:00',  // שעות מצב הלילה, שעון ישראל
+  mail_memory_hours: '22:00-06:00',        // חלון קריאת ההיסטוריה, שעון ישראל. ריק = כל שעה. מיילים חדשים נקראים תמיד
+  mail_memory_nightly_threads: 300,        // כמה שרשורים לכל משתמש ביממה — גם בלילה
+  mail_memory_night: false,                // 🌙 מצב לילה: יותר במקביל וסבבים ברצף (עדיין עם התקרה היומית)
+  mail_memory_night_hours: '22:00-06:00',  // שעות מצב הלילה, שעון ישראל
+  mail_memory_doc_mb: 2,                   // 📎 קובץ מצורף גדול מזה לא מפוענח בסריקה — רק נרשם, ומפוענח לפי בקשה
   mail_memory_night_mem_mb: 1400,          // 🌙 בלילה: שרשור נוסף במקביל רק כשזיכרון השרת מתחת לזה (MB)
   mail_doc_expiry_days: 30,                // כמה ימים לפני תום תוקף של מסמך מציעים לחדש
   mail_ask_daily_limit: 60,                // "שאל את המיילים": שאלות ביום לכל משתמש
@@ -1668,6 +1714,19 @@ function migrate() {
     setSetting('migr_memory_always_on', true);
   }
 
+  /*
+   * זיכרון העבודה — קצב שמרני (11.2026): בשרת עם מעבד אחד הקצב הקודם (כל
+   * שעה, 1,500 ליום ובלילה בלי תקרה, 8 במקביל) תקע את השרת ו-Render החזיר
+   * 502. פעם אחת בלבד — מנהל יכול לשנות אחר כך במסך ההגדרות.
+   */
+  if (getSetting('migr_memory_conservative', null) === null) {
+    setSetting('mail_memory_hours', '22:00-06:00');
+    setSetting('mail_memory_night', false);
+    setSetting('mail_memory_night_hours', '22:00-06:00');
+    if (Number(getSetting('mail_memory_nightly_threads', 300)) > 300) setSetting('mail_memory_nightly_threads', 300);
+    setSetting('migr_memory_conservative', true);
+  }
+
   const ADDED_EXTENSIONS = ['wav', 'eml', 'msg'];
   const currentExt = getSetting('allowed_extensions', null);
   if (Array.isArray(currentExt)) {
@@ -1698,6 +1757,11 @@ function migrate() {
   addColumn('meetings', 'zoom_record', 'INTEGER NOT NULL DEFAULT 0');
   // "📅 פגישה לקביעה" — מחכה שתיקבע לה פגישה
   addColumn('tasks', 'meeting_pending', 'INTEGER NOT NULL DEFAULT 0');
+  /*
+   * משימה למזכירות — מנהל מחלקה פתח אותה למזכירת החברה (שושנה, לבנה).
+   * כשהמזכירה קובעת מתוכה פגישה ביומן — המשימה נסגרת לבד (‎meetings.js‎).
+   */
+  addColumn('tasks', 'secretary_request', 'INTEGER NOT NULL DEFAULT 0');
   addColumn('templates', 'department_id', 'INTEGER REFERENCES departments(id) ON DELETE SET NULL');
   // תת-מחלקה — "הנדסה וביצוע › אתר אלעד". ריק = מחלקה ראשית
   addColumn('departments', 'parent_id', 'INTEGER REFERENCES departments(id) ON DELETE SET NULL');

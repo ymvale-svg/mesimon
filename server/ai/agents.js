@@ -42,6 +42,7 @@ const Calc = () => optional('./calculators');
 const Mcp = () => optional('./mcp-client');
 const Timeless = () => optional('../timeless');
 const Org = () => optional('./org-knowledge');
+const DocQueue = () => require('./mail-doc-queue');
 
 // ---------------------------------------------------------------------------
 // הקטלוג
@@ -161,6 +162,17 @@ const MEMORY_TOOL = {
   input_schema: { type: 'object', properties: { query: { type: 'string' } }, required: ['query'], additionalProperties: false }
 };
 
+const DOC_REQUEST_TOOL = {
+  name: 'request_document_read',
+  description: 'בקשת פענוח של קובץ מצורף גדול מהמייל (מופיע ב-largeFiles של search_my_memory, עם file_id). הפענוח לוקח כמה דקות ברקע; כשהוא מוכן, השאלה תורץ שוב עם המסמך והשואל יקבל תשובה מלאה. לבקש רק כשהתוכן של הקובץ באמת נחוץ כדי לענות — לא "ליתר ביטחון". עד 2 קבצים לשאלה.',
+  input_schema: {
+    type: 'object',
+    properties: { file_id: { type: 'integer' }, why: { type: 'string', description: 'במשפט: מה מחפשים בקובץ' } },
+    required: ['file_id', 'why'],
+    additionalProperties: false
+  }
+};
+
 const ORG_TOOL = {
   name: 'search_org_knowledge',
   description: 'חיפוש בידע הארגוני — "איך עושים אצלנו": למי פונים, איך, כמה זמן וכמה זה עלה, מכל העובדים.',
@@ -251,8 +263,29 @@ async function toolsFor(def, key, user, actor, state) {
     handlers.set('search_my_memory', (i) => {
       const r = shapeMemory(Memory.search(user.id, String(i.query ?? ''), { limit: 10 }));
       if (r.events.length || r.people.length || r.documents.length) state.sources.add('🧠 זיכרון המייל שלך');
+      // 📎 קבצים גדולים שלא פוענחו בסריקה — הסוכן רואה אותם, ומבקש פענוח כשצריך
+      if (!state.followUp) {
+        const large = DocQueue().candidates(user.id, String(i.query ?? ''));
+        if (large.length) {
+          r.largeFiles = large;
+          r.largeFilesNote = 'קבצים גדולים שעוד לא נקראו — רק השם והפרטים ידועים. אם התוכן של אחד מהם נחוץ לתשובה: request_document_read.';
+        }
+      }
       return r;
     });
+    if (!state.followUp) {
+      tools.push(DOC_REQUEST_TOOL);
+      handlers.set('request_document_read', (i) => {
+        if (state.docRequests.length >= 2) return { error: 'כבר התבקשו 2 קבצים לשאלה הזו' };
+        try {
+          const r = DocQueue().request(user, i.file_id, { question: state.question, channel: state.channel, history: state.history, context: state.context });
+          state.docRequests.push({ fileId: Number(i.file_id), filename: r.filename, size: r.size, ahead: r.ahead });
+          return { queued: true, note: 'נכנס לתור. אל תכתוב לשואל שהמסמך בפענוח — המערכת מוסיפה את זה לתשובה. ענה עכשיו על מה שאפשר בלי המסמך.' };
+        } catch (err) {
+          return { error: err.message };
+        }
+      });
+    }
   }
   if (def.project) {
     tools.push(PROJECT_TOOL);
@@ -409,13 +442,17 @@ const HOUSE_NOTE = 'בתשובה הזו אתה הקול של הארגון: מה 
  * ‎live‎ — מישהו מחכה (מצב מהיר). ‎propose‎ — מותר להציע משימות; ב"💡 איך
  * לסגור" לא: המשימה כבר קיימת, והסוכן רק ממליץ.
  */
-async function runAgent(key, user, actor, question, { history = [], attachments = [], context = '', simple = false, live = true, propose = true, maxTurns = 6, team = false } = {}) {
+async function runAgent(key, user, actor, question, { history = [], attachments = [], context = '', simple = false, live = true, propose = true, maxTurns = 6, team = false, channel = 'web', followUp = false } = {}) {
   const def = key ? manifest().agents[key] : GENERAL;
-  const state = { question, sources: new Set(), proposed: [] };
+  // ‎followUp‎ — הרצה חוזרת אחרי פענוח קובץ: בלי בקשות פענוח נוספות
+  const state = { question, sources: new Set(), proposed: [], docRequests: [], channel, history, context, followUp };
   const all = await toolsFor(def, key ?? 'general', user, actor, state);
   const tools = propose ? all.tools : all.tools.filter((t) => t.name !== 'propose_tasks');
   const run = all.run;
-  const docs = attachments.length ? Docs.prepare(attachments, { limit: 3 }).docs : [];
+  // קובץ שכבר הוכן (פענוח לפי בקשה, ‎mail-doc-queue.js‎) — לא מכינים שוב
+  const docs = !attachments.length ? []
+    : attachments.every((a) => a.block) ? attachments.slice(0, 3).map((a, i) => ({ index: i + 1, filename: a.filename, block: a.block }))
+      : Docs.prepare(attachments, { limit: 3 }).docs;
   const past = history.slice(-4).map((h) => `שאלה: ${String(h.q).slice(0, 300)}\nתשובה: ${String(h.a).slice(0, 800)}`).join('\n\n');
   const text = [
     past ? `השיחה עד עכשיו:\n${past}\n` : null,
@@ -434,12 +471,13 @@ async function runAgent(key, user, actor, question, { history = [], attachments 
     // שאלה פשוטה ("מה שער הדולר?") — חשיבה קצרה; ניתוח וניסוח — בינונית. ובכל מקרה מצב מהיר: מישהו מחכה
     effort: simple && !docs.length ? 'low' : 'medium', maxTurns, live
   });
-  if (docs.length) state.sources.add('📎 המסמך שצירפת');
+  if (docs.length) state.sources.add(followUp ? '📎 המסמך מהמייל' : '📎 המסמך שצירפת');
   return {
     key: key ?? 'general', title: key ? def.title : team ? houseTitle() : def.title, icon: key ? def.icon : team ? '🏢' : def.icon,
     text: r.text,
     sources: [...state.sources],
     proposed: state.proposed,
+    docRequests: state.docRequests,
     calls: r.calls.map((c) => ({ name: c.name, ok: c.ok, ms: c.ms }))
   };
 }
@@ -496,9 +534,12 @@ async function askInner(user, actor, question, opts = {}) {
   const q = String(question ?? '').trim().slice(0, 1000);
   if (!q) throw new Error('מה לשאול?');
   if (!Claude.isEnabled()) throw new Error('חיבור ה-AI אינו מוגדר בשרת');
-  const limit = Math.max(1, Number(D.getSetting('agents_daily_limit', 40)) || 40);
-  if (countToday(user.id) >= limit) throw new Error(`הגעת לתקרת השאלות להיום (${limit}). אפשר לשאול שוב מחר`);
-  D.setUserPref(user.id, COUNT_KEY, { date: todayIL(), n: countToday(user.id) + 1 });
+  // הרצה חוזרת אחרי פענוח קובץ — חלק מהשאלה המקורית, לא נספרת שוב
+  if (!opts.followUp) {
+    const limit = Math.max(1, Number(D.getSetting('agents_daily_limit', 40)) || 40);
+    if (countToday(user.id) >= limit) throw new Error(`הגעת לתקרת השאלות להיום (${limit}). אפשר לשאול שוב מחר`);
+    D.setUserPref(user.id, COUNT_KEY, { date: todayIL(), n: countToday(user.id) + 1 });
+  }
 
   const started = Date.now();
   // מקורות הנתונים הנפוצים מתחממים במקביל לניתוב — כך הסוכן לא מחכה להפעלה שלהם
@@ -550,6 +591,16 @@ async function askInner(user, actor, question, opts = {}) {
     agent = answered[0];
   }
 
+  // 📎 קבצים שהתבקש להם פענוח — שורה קבועה בסוף התשובה (לא תלויה בניסוח של הסוכן)
+  const docRequests = parts.flatMap((p) => p?.docRequests ?? []);
+  const seenDocs = new Set();
+  const pendingDocs = docRequests.filter((d) => !seenDocs.has(d.fileId) && seenDocs.add(d.fileId));
+  if (pendingDocs.length) {
+    const names = pendingDocs.map((d) => `"${d.filename}" (${d.size})`).join(' ו-');
+    const line = `📎 יש כאן ${pendingDocs.length > 1 ? 'מסמכים מצורפים' : 'מסמך מצורף'} שצריך לפענח: ${names}. זה ייקח כמה דקות — אודיע לך כשהתשובה המלאה מוכנה${opts.channel === 'whatsapp' ? ', כאן בוואטסאפ' : ' בהתראה'}.`;
+    agent = agent ? { ...agent, text: `${agent.text ?? ''}\n\n${line}`.trim() } : { key: 'general', title: houseTitle(), icon: '🏢', text: line, sources: [] };
+  }
+
   const failed = parts.filter((p) => p?.error);
   logAsk(user.id, {
     channel: opts.channel ?? 'web', agent: parts.map((p) => p?.key).filter(Boolean).join('+'), question: q, mail: mailOn,
@@ -568,6 +619,7 @@ async function askInner(user, actor, question, opts = {}) {
     // מי תרם — לשורת "ענו יחד" מתחת לתשובה המאוחדת
     contributors: merged ? [...(mailAnswer ? [{ icon: '📧', title: 'המיילים שלך' }] : []), ...answered.map((p) => ({ key: p.key, icon: p.icon, title: p.title }))] : [],
     failed: failed.map((p) => ({ title: p.title, error: p.error })),
+    pendingDocs,
     org
   };
 }

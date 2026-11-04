@@ -951,12 +951,19 @@ const UI = (() => {
     const myDepts = new Set(actor?.departmentIds ?? (actor?.departmentId ? [actor.departmentId] : []));
     const inMine = (u) => myDepts.has(u.departmentId);
     const kept = new Set(keep.map(Number));
-    const list = all.filter((u) => u.id === me || kept.has(u.id) || u.assignable);
+    /*
+     * מזכירות החברה (‎secretaryForMe‎ — למנהל מחלקה ומעלה) מסומנות בשם, ומחוץ
+     * למחלקה שלי הן בראש "שאר הארגון": משימה למזכירות נסגרת לבד כשהיא קובעת
+     * מתוכה את הפגישה.
+     */
+    const tag = (u) => (u.secretaryForMe ? { ...u, name: `${u.name} · 📅 מזכירות` } : u);
+    const list = all.filter((u) => u.id === me || kept.has(u.id) || u.assignable).map(tag);
     const near = list.filter(inMine);
     const nearIds = new Set(near.map((u) => u.id));
+    const rest = list.filter((u) => !nearIds.has(u.id));
     return {
       near,
-      far: list.filter((u) => !nearIds.has(u.id)),
+      far: [...rest.filter((u) => u.secretaryForMe), ...rest.filter((u) => !u.secretaryForMe)],
       deptName: App.state.actor?.department || 'המחלקה שלי'
     };
   }

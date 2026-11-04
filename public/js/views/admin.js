@@ -592,6 +592,56 @@ const AdminView = (() => {
     });
   }
 
+  /**
+   * מחיקת משתמש לצמיתות. משימות פתוחות חייבות לעבור לעובד אחר — השרת
+   * אוכף את זה, והמסך שואל מראש כדי שהמנהל לא ייתקל בשגיאה.
+   */
+  async function deleteUserFlow(user, listData, parentModal) {
+    let load;
+    try { load = await API.userDeleteCheck(user.id); } catch (err) { return UI.error(err); }
+
+    const heirs = (listData.users ?? []).filter((u) => u.id !== user.id && u.status === 'active');
+    const heirSelect = UI.select([
+      { value: '', label: load.openTasks ? '— יש לבחור —' : 'לא להעביר' },
+      ...heirs.map((u) => ({ value: String(u.id), label: u.name }))
+    ], '');
+
+    const facts = [];
+    if (load.openTasks) facts.push(`${load.openTasks} משימות פתוחות`);
+    if (load.allTasks > load.openTasks) facts.push(`${load.allTasks - load.openTasks} משימות סגורות`);
+    if (load.projects) facts.push(`ניהול ${load.projects} פרויקטים`);
+
+    const okBtn = el('button.btn.btn-danger', {}, ['מחיקה לצמיתות']);
+    const m = UI.modal({
+      title: `מחיקת ${user.name}`,
+      body: el('div', {}, [
+        el('div.alert.alert-warn.mb', {}, [
+          el('span', { text: '⚠️' }),
+          el('div', { text: 'המחיקה אינה הפיכה: החשבון, החיבורים וההגדרות האישיות יימחקו. מי שרק עזב — אפשר במקום זאת לשנות את הסטטוס ל"לא פעיל", וההיסטוריה תישמר.' })
+        ]),
+        facts.length ? el('p', { text: `ל${user.name} יש: ${facts.join(', ')}.` }) : null,
+        facts.length
+          ? UI.field('העברת המשימות והפרויקטים אל', heirSelect, load.openTasks ? 'חובה — משימות פתוחות לא יישארו בלי אחראי' : 'רשות')
+          : null
+      ]),
+      footer: [okBtn, el('div.spacer')]
+    });
+
+    okBtn.addEventListener('click', async () => {
+      const transferTo = heirSelect.value ? Number(heirSelect.value) : null;
+      if (load.openTasks && !transferTo) return UI.toast('יש לבחור למי להעביר את המשימות הפתוחות', 'error');
+      okBtn.disabled = true;
+      try {
+        await API.deleteUser(user.id, transferTo);
+        m.close();
+        parentModal.close();
+        UI.success(`${user.name} נמחק`);
+        await App.reloadReference();
+        App.render();
+      } catch (err) { okBtn.disabled = false; UI.error(err); }
+    });
+  }
+
   /** בחירת "מחלקה חדשה" בתוך הרשימה הנפתחת — נשלח כ-newDepartmentName ולא כמזהה */
   const NEW_DEPT = '__new__';
 
@@ -719,7 +769,7 @@ const AdminView = (() => {
           el('div.hint', { text: 'ימי העבודה נקבעים לפי המחלקה. עובד שטח מוסיף את יום ו׳ — "מחר" של יום חמישי הוא שישי, ומייל הבוקר נשלח גם בשישי.' })
         ]),
         el('div.field', {}, [
-          el('label.checkbox', {}, [secretaryCheck, ' 📅 מזכירות — קובעת פגישות ורואה את מסך היומן']),
+          el('label.checkbox', {}, [secretaryCheck, ' 📅 מזכירות החברה — קובעת פגישות, רואה את מסך היומן, ומנהלי המחלקות פותחים לה משימות']),
           el('div.hint', { text: 'הגישה ליומן של כל עובד — רק לפי מה שהוא שיתף איתה ב-Google. כדי לראות את המשימות שמחכות לקביעה של כולם — גם "צפייה בכל משימות המחלקה".' })
         ]),
         zoomField,
@@ -732,7 +782,13 @@ const AdminView = (() => {
             ])
           : null
       ]),
-      footer: [saveBtn, el('div.spacer')]
+      footer: [
+        saveBtn,
+        el('div.spacer'),
+        isEdit && user.id !== App.state.actor?.id && App.can('manage_users')
+          ? el('button.btn.btn-danger', { onclick: () => deleteUserFlow(user, listData, m) }, ['🗑 מחיקת משתמש'])
+          : null
+      ]
     });
 
     saveBtn.addEventListener('click', async () => {
@@ -1308,10 +1364,11 @@ const AdminView = (() => {
     mail_memory_users: ['🧠 זיכרון העבודה: מי משתתף', '* = כל העובדים (ברירת המחדל) · ריק = מנהלי מערכת בלבד · או רשימת כתובות מייל מופרדות בפסיק'],
     mail_memory_model: ['🧠 זיכרון העבודה: מודל', 'ברירת המחדל claude-haiku-5-5 — זול, ומספיק לסיכום שרשורים'],
     mail_memory_hours: ['🧠 זיכרון העבודה: שעות קריאת ההיסטוריה', 'שעון ישראל, בפורמט 19:00-07:00. ריק = כל שעה. עדכון הבוקר רץ בכל מקרה'],
-    mail_memory_nightly_threads: ['🧠 זיכרון העבודה: שרשורים ביום למשתמש', 'התקציב היומי של הקריאה בשעות היום. כל שרשור הוא קריאה אחת ל-AI. בלילה (מצב לילה) — בלי תקרה'],
-    mail_memory_night: ['🌙 זיכרון העבודה: מצב לילה', 'בשעות הלילה — בלי תקרה יומית וקריאה ברצף, כ-1,400 שרשורים בשעה לכל הארגון. זיכרון השרת לא משתנה (2 במקביל)'],
+    mail_memory_nightly_threads: ['🧠 זיכרון העבודה: שרשורים ביום למשתמש', 'התקציב היומי של הקריאה — גם בלילה. כל שרשור הוא קריאה אחת ל-AI'],
+    mail_memory_doc_mb: ['📎 זיכרון העבודה: גודל מרבי לפענוח קובץ (MB)', 'קובץ מצורף גדול מזה לא מפוענח בסריקה — רק נרשם. הסוכן מבקש לפענח אותו כשהוא נחוץ לשאלה, ומודיע כשהתשובה מוכנה'],
+    mail_memory_night: ['🌙 זיכרון העבודה: מצב לילה', 'בשעות הלילה — עד 2 שרשורים במקביל וסבבים ברצף, עדיין עם התקרה היומית. עוצר כשהמעבד עמוס או כשמישהו שואל סוכן'],
     mail_memory_night_hours: ['🌙 שעות מצב הלילה', 'שעון ישראל, בפורמט 19:00-07:00'],
-    mail_memory_night_mem_mb: ['🌙 מצב לילה: תקרת זיכרון (MB)', 'בלילה נקראים עד 8 שרשורים במקביל — כל עוד זיכרון השרת מתחת לזה. 1400 מתאים לתוכנית של 2GB; בתוכנית של 512MB — 350'],
+    mail_memory_night_mem_mb: ['🌙 מצב לילה: תקרת זיכרון (MB)', 'בלילה נקראים עד 2 שרשורים במקביל — כל עוד זיכרון השרת מתחת לזה. 1400 מתאים לתוכנית של 2GB; בתוכנית של 512MB — 350'],
     mail_doc_expiry_days: ['📎 מסמכים: ימים לפני תום תוקף', 'חוזה, היתר או ביטוח שתוקפם מתקרב — הצעה לחדש ב"ממתין לאישורך"'],
     mail_ask_daily_limit: ['🔎 שאל את המיילים: שאלות ביום למשתמש', 'כל שאלה היא שתי קריאות ל-AI'],
     agents_daily_limit: ['✨ שאל: שאלות ביום למשתמש', 'כל שאלה: ניתוב זול, ואז הסוכן (ולפעמים גם המיילים)'],

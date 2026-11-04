@@ -169,10 +169,98 @@ function background() {
   return parts;
 }
 
+// ---------- אבחון: מי אוכל את המעבד ----------
+
+/** זמן מעבד (ticks) לכל תהליך בקונטיינר, מ-‎/proc‎ — Node עצמו ושרתי הנתונים של הסוכנים */
+function procTimes() {
+  const out = new Map();
+  let pids = [];
+  try { pids = fs.readdirSync('/proc').filter((x) => /^\d+$/.test(x)); } catch { return out; }
+  for (const pid of pids) {
+    const st = readFile(`/proc/${pid}/stat`);
+    if (!st) continue;
+    const close = st.lastIndexOf(')');
+    const f = st.slice(close + 2).split(' ');
+    const cmd = String(readFile(`/proc/${pid}/cmdline`) ?? '').split('\0').filter(Boolean).join(' ').slice(0, 160) || st.slice(st.indexOf('(') + 1, close);
+    out.set(pid, { cmd, ticks: Number(f[11]) + Number(f[12]) });
+  }
+  return out;
+}
+
+/** פרופיל מעבד של Node עצמו ל-‎ms‎ — הפונקציות שצרכו הכי הרבה */
+function profileNode(ms) {
+  return new Promise((resolve) => {
+    let inspector;
+    try { inspector = require('node:inspector'); } catch { return resolve([]); }
+    const session = new inspector.Session();
+    const done = (top) => { try { session.disconnect(); } catch { /* */ } resolve(top); };
+    try { session.connect(); } catch { return resolve([]); }
+    session.post('Profiler.enable', () => session.post('Profiler.start', () => {
+      setTimeout(() => session.post('Profiler.stop', (err, res) => {
+        if (err || !res?.profile) return done([]);
+        const { nodes, samples: hits = [] } = res.profile;
+        const self = new Map();
+        const byId = new Map(nodes.map((n) => [n.id, n]));
+        const parent = new Map();
+        for (const n of nodes) for (const c of n.children ?? []) parent.set(c, n);
+        const name = (n) => {
+          const c = n.callFrame;
+          return `${c.functionName || '(anonymous)'}${c.url ? ` ${String(c.url).replace(/^.*?(server\/)/, '$1').replace(/^file:\/\//, '')}:${c.lineNumber + 1}` : ''}`;
+        };
+        for (const id of hits) {
+          const n = byId.get(id);
+          if (!n || n.callFrame.functionName === '(idle)') continue;
+          // הפונקציה, ומי שקרא לה — פונקציה מובנית (JSON.parse וכו') לבדה לא אומרת מאיפה
+          let up = parent.get(n.id);
+          while (up && !up.callFrame.url) up = parent.get(up.id);
+          const key = `${name(n)}${up && up !== n ? ` ← ${name(up)}` : ''}`;
+          self.set(key, (self.get(key) ?? 0) + 1);
+        }
+        const total = hits.length || 1;
+        done([...self.entries()].sort((a, b) => b[1] - a[1]).filter(([, v]) => v / total >= 0.02).slice(0, 10).map(([k, v]) => `${Math.round((v / total) * 100)}% ${k}`));
+      }), ms).unref?.();
+    }));
+  });
+}
+
+let lastDiagAt = 0;
+let diagnosing = false;
+/** כשהמעבד בתקרה — רושם ללוג (ולמנהלים) אילו תהליכים ואילו פונקציות צורכים אותו */
+async function diagnose(snap) {
+  if (diagnosing || snap.at - lastDiagAt < 20 * 60000) return;
+  diagnosing = true;
+  lastDiagAt = snap.at;
+  try {
+    const hz = 100;
+    const a = procTimes();
+    const t0 = Date.now();
+    const top = await profileNode(10000);
+    const b = procTimes();
+    const secs = (Date.now() - t0) / 1000;
+    const procs = [...b.entries()].map(([pid, x]) => ({ pid, cmd: x.cmd, pct: Math.round(((x.ticks - (a.get(pid)?.ticks ?? x.ticks)) / hz / secs) * 100) }))
+      .filter((x) => x.pct >= 3).sort((x, y) => y.pct - x.pct).slice(0, 8);
+    const lines = [
+      `תהליכים: ${procs.map((x) => `${x.pct}% [${x.pid}] ${x.cmd}`).join(' | ') || 'לא נמדד'}`,
+      `ב-Node: ${top.join(' | ') || 'לא נמדד'}`,
+      ...background().map((x) => `ברקע: ${x}`)
+    ];
+    console.warn(`[משימון] 🔥 אבחון מעבד (${Math.round((snap.cpuShare ?? 0) * 100)}%): ${lines.join(' || ')}`);
+    for (const ad of D.all("SELECT id FROM users WHERE status = 'active' AND role = 'admin'")) {
+      try { D.notify({ targetType: 'user', targetId: ad.id, kind: 'ai', title: '🔥 אבחון: מה צורך את המעבד', body: lines.join('\n') }); } catch { /* */ }
+    }
+  } catch (err) {
+    console.error('[משימון] אבחון המעבד נכשל:', err.message);
+  } finally {
+    diagnosing = false;
+  }
+}
+
 function check() {
   if (samples.length < 4) return; // לפחות שתי דקות של נתונים
-  if (!D.getSetting('load_alert_enabled', true)) return;
   const snap = snapshot();
+  // מעבד בתקרה — אבחון, גם כשאף אחד לא שואל סוכן
+  if (snap.cpuShare != null && snap.cpuShare >= CPU_SHARE) diagnose(snap).catch(() => {});
+  if (!D.getSetting('load_alert_enabled', true)) return;
   const agentsUsed = snap.questions > 0 || snap.inflight > 0;
   if (!agentsUsed) return;
 
@@ -219,4 +307,23 @@ function start(now = Date.now()) {
   timer.unref?.();
 }
 
-module.exports = { start, begin, track, snapshot, readCpu, _sample: sample };
+/*
+ * לחץ עכשיו — לעבודות רקע (סריקת זיכרון המייל) שצריכות לפנות מקום:
+ * ניצול המעבד בשניות האחרונות (מדידה ישירה מה-cgroup, לא הדגימה של 30 שניות)
+ * וכמה שאלות לסוכנים רצות. ‎busy‎ — לא מתחילים עבודת רקע נוספת.
+ */
+const BUSY_CPU = 0.5;
+let live = { cpu: null, at: 0, share: null };
+function pressure(now = Date.now()) {
+  if (now - live.at >= 2000) {
+    const cpu = readCpu();
+    const share = cpu && live.cpu && cpu.usageUs != null && live.cpu.usageUs != null && cpu.cpus
+      ? (cpu.usageUs - live.cpu.usageUs) / ((now - live.at) * 1000 * cpu.cpus)
+      : live.share;
+    live = { cpu, at: now, share };
+  }
+  const cpuShare = live.share;
+  return { cpuShare, inflight, busy: inflight > 0 || (cpuShare != null && cpuShare >= BUSY_CPU) };
+}
+
+module.exports = { start, begin, track, snapshot, readCpu, pressure, _sample: sample, _diagnose: diagnose };

@@ -469,6 +469,21 @@ async function raw(userId, id) {
 }
 
 /**
+ * הודעה במבנה (‎format=full‎): הכותרות, חלקי הטקסט, ורשימת הקבצים בלי התוכן
+ * שלהם (‎attachmentId‎ + גודל). לזיכרון המייל — כך לא מורידים ומפענחים קובץ
+ * של 12MB רק כדי לגלות שאין צורך לקרוא אותו. קובץ מורידים בנפרד (‎attachment‎).
+ */
+async function messageFull(userId, id) {
+  return call(userId, `/messages/${encodeURIComponent(id)}`, { format: 'full' });
+}
+
+/** תוכן של קובץ מצורף אחד. ‎attachmentId‎ משתנה בין קריאות — לקחת מ-‎messageFull‎ טרי */
+async function attachment(userId, messageId, attachmentId) {
+  const a = await call(userId, `/messages/${encodeURIComponent(messageId)}/attachments/${encodeURIComponent(attachmentId)}`);
+  return Buffer.from(String(a.data ?? ''), 'base64url');
+}
+
+/**
  * שליחה מהתיבה של המשתמש. ‎raw‎ — ההודעה המלאה (‎Mailer.buildMessage‎).
  * ‎threadId‎ — השרשור ב-Gmail, כדי שתזכורת תיכנס לאותה שיחה גם אצל השולח.
  *
@@ -699,6 +714,6 @@ const webLink = (email, gmailId) => `https://mail.google.com/mail/u/?authuser=${
 module.exports = {
   parse, handle, userOf, boxOf, boxesOf, allBoxes, setConn, sendBoxes, consumeStateFull, claimScan, emailsOf,
   isEnabled, authorizeUrl, isGmailState, consumeState, connect, disconnect, workMailbox, isPersonalEmail, validEmail,
-  search, raw, threadOf, send, listThreads, threadMeta, messageMeta, labels, connectedUsers, isConnected, canSend, connectionOf, publicStatus, webLink, SCOPE, SEND_SCOPE,
+  search, raw, messageFull, attachment, threadOf, send, listThreads, threadMeta, messageMeta, labels, connectedUsers, isConnected, canSend, connectionOf, publicStatus, webLink, SCOPE, SEND_SCOPE,
   SCOPES, has, googleCall, signature, signatureInfo, fallbackSignature, signed, SIGNATURE_HELP
 };

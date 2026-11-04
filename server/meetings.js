@@ -22,6 +22,7 @@ const D = require('./db');
 const W = require('./workdays');
 const Gmail = require('./gmail');
 const Zoom = require('./zoom');
+const Secretariat = require('./secretariat');
 const Claude = require('./ai/claude');
 
 const CAL = 'https://www.googleapis.com/calendar/v3';
@@ -40,7 +41,7 @@ class MeetingError extends Error {
 const parseJson = (t, f) => { try { return JSON.parse(t); } catch { return f; } };
 const userById = (id) => D.get("SELECT id, full_name, email, phone, is_secretary, zoom_user_id FROM users WHERE id = ? AND status = 'active'", id);
 const userByEmail = (email) => D.get("SELECT id, full_name, email, phone FROM users WHERE lower(email) = ? AND status = 'active'", String(email ?? '').toLowerCase());
-const isSecretary = (actor) => actor?.type === 'user' && Boolean(D.get('SELECT is_secretary FROM users WHERE id = ?', actor.id)?.is_secretary);
+const isSecretary = (actor) => actor?.type === 'user' && Secretariat.isSecretary(actor.id);
 
 /**
  * Zoom — מי פותח איפה:
@@ -585,8 +586,9 @@ async function create(actor, input) {
     throw new MeetingError(`היומן של Google סירב לקבוע את הפגישה: ${err.message}`);
   }
   m = meetingById(id);
-  if (m.task_id) afterScheduled(m, actor);
-  return { meeting: shape(m), note: zoomNote };
+  const taskClosed = m.task_id ? afterScheduled(m, actor) : false;
+  // ‎taskClosed‎ — משימה למזכירות שנסגרה לבד; הלקוח לא שואל "לסגור את המשימה?"
+  return { meeting: shape(m), note: zoomNote, taskClosed };
 }
 
 const fmtWhen = (iso) => new Intl.DateTimeFormat('he-IL', { timeZone: TZ, weekday: 'long', day: 'numeric', month: 'numeric', hour: '2-digit', minute: '2-digit' }).format(new Date(iso));
@@ -594,13 +596,56 @@ const fmtWhen = (iso) => new Intl.DateTimeFormat('he-IL', { timeZone: TZ, weekda
 /** המשימה אחרי שנקבעה פגישה: יומן פעולות, סטטוס קצר, ויעד לא מוקדם מהפגישה */
 function afterScheduled(m, actor, verb = 'נקבעה') {
   const task = D.get('SELECT * FROM tasks WHERE id = ?', m.task_id);
-  if (!task) return;
+  if (!task) return false;
   const people = parseJson(m.attendees, []).map((a) => a.name || a.email).slice(0, 5).join(', ');
   D.run('UPDATE tasks SET meeting_pending = 0, status_short = ? WHERE id = ?', `📅 ${verb} ל-${fmtWhen(m.start_at)}`.slice(0, 200), task.id);
   const day = W.ilDateOf(m.start_at);
   if (!task.due_date || W.ilDateOf(task.due_date) < day) D.run('UPDATE tasks SET due_date = ? WHERE id = ?', W.dueIso(day), task.id);
   D.audit(task.id, actor ? { type: 'user', id: actor.id, name: actor.name } : { type: 'system', id: null, name: 'יומן Google' },
     'meeting', `פגישה ${verb} ל-${fmtWhen(m.start_at)}${people ? ` עם ${people}` : ''}`);
+  return Boolean(task.secretary_request && verb === 'נקבעה' && closeSecretaryRequest(task, m, actor));
+}
+
+/**
+ * משימה למזכירות — הפגישה נקבעה ביומן, והעבודה של המזכירה הסתיימה: המשימה
+ * עוברת לסטטוס הסופי של הבורד שלה, ומי שביקש מקבל התראה.
+ */
+function closeSecretaryRequest(task, m, actor) {
+  const final = D.get('SELECT key, label FROM board_columns WHERE board_id = ? AND is_final = 1 ORDER BY position LIMIT 1', task.board_id);
+  const current = D.get('SELECT label, is_final FROM board_columns WHERE board_id = ? AND key = ?', task.board_id, task.status);
+  if (!final || current?.is_final) return false;
+  // משימה שתלויה במשימה פתוחה — לא נסגרת לבד (אותו כלל של סגירה ידנית)
+  if (task.depends_on_task_id) {
+    const dep = D.get('SELECT t.status, t.board_id FROM tasks t WHERE t.id = ?', task.depends_on_task_id);
+    if (dep && !D.get('SELECT is_final FROM board_columns WHERE board_id = ? AND key = ?', dep.board_id, dep.status)?.is_final) return false;
+  }
+  const now = D.nowIso();
+  D.run('UPDATE tasks SET status = ?, status_changed_at = ?, completed_at = ?, escalated = 0 WHERE id = ?', final.key, now, now, task.id);
+  D.audit(task.id, actor ? { type: 'user', id: actor.id, name: actor.name } : { type: 'system', id: null, name: 'יומן Google' },
+    'status_changed', `סטטוס: ${current?.label ?? task.status} ← ${final.label} | נסגרה אוטומטית — הפגישה נקבעה ביומן`);
+  if (task.created_by && task.created_by !== actor?.id) {
+    D.notify({
+      targetType: 'user', targetId: task.created_by, kind: 'meeting',
+      title: '📅 הפגישה נקבעה — המשימה נסגרה',
+      body: `${task.title} — ${fmtWhen(m.start_at)}${actor?.name ? ` (קבע/ה: ${actor.name})` : ''}`,
+      taskId: task.id
+    });
+  }
+  return true;
+}
+
+/**
+ * הפגישה של משימה למזכירות בוטלה — המשימה, שנסגרה כשנקבעה, נפתחת מחדש כדי
+ * שהמזכירה תקבע שוב.
+ */
+function reopenSecretaryRequest(task) {
+  if (!task.secretary_request) return;
+  const current = D.get('SELECT is_final FROM board_columns WHERE board_id = ? AND key = ?', task.board_id, task.status);
+  if (!current?.is_final) return;
+  const first = D.get('SELECT key FROM board_columns WHERE board_id = ? AND is_final = 0 ORDER BY position LIMIT 1', task.board_id);
+  if (!first) return;
+  D.run('UPDATE tasks SET status = ?, status_changed_at = ?, completed_at = NULL WHERE id = ?', first.key, D.nowIso(), task.id);
+  D.audit(task.id, { type: 'system', id: null, name: 'משימון' }, 'status_changed', 'המשימה נפתחה מחדש — הפגישה בוטלה ויש לקבוע אותה שוב');
 }
 
 async function update(actor, id, input) {
@@ -686,6 +731,7 @@ async function cancel(actor, id, { fromCalendar = false } = {}) {
     const task = D.get('SELECT * FROM tasks WHERE id = ?', m.task_id);
     if (task) {
       D.run("UPDATE tasks SET meeting_pending = 1, status_short = '📅 הפגישה בוטלה — לקביעה מחדש' WHERE id = ?", task.id);
+      reopenSecretaryRequest(task);
       D.audit(task.id, fromCalendar ? { type: 'system', id: null, name: 'יומן Google' } : { type: 'user', id: actor.id, name: actor.name },
         'meeting', `הפגישה של ${fmtWhen(m.start_at)} בוטלה${fromCalendar ? ' ביומן' : ''}`);
       if (fromCalendar) returnForApproval(m, task);

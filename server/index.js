@@ -95,16 +95,30 @@ server.on('error', (err) => {
   process.exitCode = 1;
 });
 
+/*
+ * מצב חירום (‎MESIMON_SAFE_MODE=1‎ במשתני הסביבה ב-Render): האתר עולה בלי שום
+ * עבודת רקע — בלי סריקת מיילים וזיכרון, בוט, תזכורות וסנכרונים. לשימוש כשהשרת
+ * תקוע (502) ואי אפשר להגיע למסך הניהול כדי לכבות משהו.
+ * ‎MAIL_MEMORY_OFF=1‎ — מכבה רק את סריקת זיכרון המייל.
+ */
+const SAFE_MODE = /^(1|true|yes)$/i.test(String(process.env.MESIMON_SAFE_MODE ?? '').trim());
+
 server.listen(PORT, HOST, () => {
-  Rules.start();
-  Push.start();
-  AiTasks.start();
-  Today.start();
-  GContacts.start();
-  Meetings.start();
-  WaBot.start();
-  // משימות כפולות במחלקה — סריקה פעם ביום (פרק 11ב)
-  Dupes.start();
+  if (SAFE_MODE) {
+    console.warn('[משימון] ⚠ מצב חירום (MESIMON_SAFE_MODE): עבודות הרקע כבויות — רק האתר פועל');
+  } else {
+    Rules.start();
+    Push.start();
+    AiTasks.start();
+    Today.start();
+    GContacts.start();
+    Meetings.start();
+    WaBot.start();
+    // משימות כפולות במחלקה — סריקה פעם ביום (פרק 11ב)
+    Dupes.start();
+    // 📎 פענוח קבצים גדולים מהמייל לפי בקשה — קובץ אחד בכל פעם
+    require('./ai/mail-doc-queue').start();
+  }
   // התראה למנהלים כשתקרת המעבד מאטה את הסוכנים
   LoadMonitor.start();
   const nets = os.networkInterfaces();
@@ -150,6 +164,7 @@ const shutdown = () => {
   Today.stop();
   GContacts.stop();
   Meetings.stop();
+  require('./ai/mail-doc-queue').stop();
   server.close(() => process.exit(0));
   setTimeout(() => process.exit(0), 2000).unref();
 };
