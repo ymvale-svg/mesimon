@@ -1689,6 +1689,9 @@ function migrate() {
   addColumn('wa_chats', 'greeted_on', "TEXT NOT NULL DEFAULT ''");
   // רשימת התובנות מהמיילים שנשלחה לו, ובקשות מאותה הקלטה שממתינות בתור
   addColumn('wa_chats', 'extra', "TEXT NOT NULL DEFAULT '{}'");
+  // יומן הבוט: התשובה המלאה שנשלחה, והאם ההודעה הועברה (Forward) — לסקירה הלילית
+  addColumn('wa_log', 'reply', "TEXT NOT NULL DEFAULT ''");
+  addColumn('wa_log', 'forwarded', 'INTEGER NOT NULL DEFAULT 0');
   addColumn('comments', 'checklist_item_id', 'INTEGER REFERENCES checklist_items(id) ON DELETE CASCADE');
   // תבניות פר מחלקה. תבנית קיימת נשארת ללא מחלקה, כלומר ארגונית — מי שכבר
   // הסתמך עליה לא יגלה אותה נעלמת בעלייה לגרסה

@@ -35,6 +35,7 @@ const Dupes = require('./ai/task-dupes');
 const TaskSync = require('./ai/task-sync');
 const Tiful360 = require('./tiful360');
 const Secretariat = require('./secretariat');
+const BotReview = require('./bot-review');
 const {
   Router, badRequest, forbidden, notFound,
   readJson, sendJson, sendText, parseUrl
@@ -5320,5 +5321,6 @@ PhonebookApi.register(router);
 WhatsNew.register(router);
 MeetingsApi.register(router, { getTaskOr404, assertVisible, shapeTask, canSeeTask });
 Tiful360.register(router, { createTask, saveAttachment, getTaskOr404 });
+BotReview.register(router);
 
 module.exports = { router, PRIORITIES, shapeTask, canSeeTask };

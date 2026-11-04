@@ -57,6 +57,8 @@ services:
         sync: false
       - key: PUBLIC_URL            # נדרס על ידי ההגדרה "כתובת המערכת" במסך הניהול
         sync: false
+      - key: BOT_REVIEW_KEY        # הסקירה הלילית של יומן הבוט — בלעדיו החיבור כבוי
+        sync: false
       - key: ANTHROPIC_API_KEY     # משימות AI — בלעדיו האפשרות אינה מוצגת כזמינה
         sync: false
       - key: RUNPOD_API_KEY        # תמלול הודעות קוליות במודל העברית של ivrit.ai (RunPod) — ראשון בסדר

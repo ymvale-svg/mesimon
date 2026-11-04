@@ -309,6 +309,8 @@ async function receiveOne(ch, timeout = LISTEN_TIMEOUT) {
         phone: chatId.replace(/@c\.us$/, ''),
         text: textOf(m).trim(),
         kind: m.typeMessage ?? '',
+        // הודעה שהועברה (Forward) — לסקירה הלילית ולאיסוף הודעות מועברות
+        forwarded: Boolean(m.extendedTextMessageData?.isForwarded || m.fileMessageData?.isForwarded || m.isForwarded),
         // הודעה קולית: הכתובת שממנה מורידים אותה לתמלול
         audio: m.typeMessage === 'audioMessage' && m.fileMessageData?.downloadUrl
           ? { url: m.fileMessageData.downloadUrl, mime: m.fileMessageData.mimeType ?? '' }
@@ -689,11 +691,12 @@ const LOG_DAYS = 90;
 function log(entry) {
   try {
     D.run(
-      `INSERT INTO wa_log (at, channel, chat_id, chat_name, user_id, who, text, action, result, status, task_id)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+      `INSERT INTO wa_log (at, channel, chat_id, chat_name, user_id, who, text, action, result, status, task_id, reply, forwarded)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       D.nowIso(), entry.channel, entry.chatId ?? '', String(entry.chatName ?? '').slice(0, 200), entry.userId ?? null,
       String(entry.who ?? '').slice(0, 120), String(entry.text ?? '').slice(0, 1000), entry.action ?? '',
-      String(entry.result ?? '').slice(0, 1000), entry.status ?? 'ok', entry.taskId ?? null
+      String(entry.result ?? '').slice(0, 1000), entry.status ?? 'ok', entry.taskId ?? null,
+      String(entry.reply ?? '').slice(0, 2000), entry.forwarded ? 1 : 0
     );
   } catch (err) {
     console.error('[משימון] יומן הבוט:', err.message);
@@ -1353,12 +1356,29 @@ const ORG_NOISE = new Set(['משרד', 'עורכי', 'עורך', 'דין', 'עו
 function findRecipients(actor, name, org = '', { only = null } = {}) {
   const results = (hooks.mail?.searchContacts(actor, name || org, { only }) ?? []).filter((c) => c.email || c.type === 'user');
   const tokens = GContacts.fold(org).split(/\s+/).map((w) => w.replace(/^(מה|מ|ה|ב|ל)(?=\S{3})/, '')).filter((w) => w.length >= 2 && !ORG_NOISE.has(w));
-  if (!name || !tokens.length) return results;
+  if (!name || !tokens.length) return onlyColleague(results, name, { org, only });
   const narrowed = results.filter((c) => {
     const hay = GContacts.fold([c.name, c.organization, c.title, ...(c.emails ?? []).map((e) => e.value)].join(' '));
     return tokens.some((tk) => hay.includes(tk));
   });
   return narrowed.length ? narrowed : results;
+}
+
+/**
+ * שם שמתאים לעובד אחד בלבד במשימון — הכוונה אליו, גם כשיש באנשי הקשר עוד
+ * אנשים באותו שם ("שושנה" = שושנה מהחברה). שני עובדים או יותר באותו שם —
+ * נשארת השאלה "למי מהם?". לא חל כשנאמרה חברה, או כשביקשו מגוגל / מהאלפון.
+ */
+function onlyColleague(results, name, { org = '', only = null } = {}) {
+  if (results.length < 2 || !name || org || only) return results;
+  const words = GContacts.fold(name).split(/\s+/).filter(Boolean);
+  if (!words.length) return results;
+  const colleagues = results.filter((c) => {
+    if (c.type !== 'user') return false;
+    const own = GContacts.fold(c.name).split(/\s+/);
+    return words.every((w) => own.includes(w));
+  });
+  return colleagues.length === 1 ? colleagues : results;
 }
 
 const contactOf = (c) => ({ name: c.name, email: c.email ?? '', phone: c.phone ?? '', type: c.type, refId: c.refId ?? null, organization: c.organization ?? '' });
@@ -2569,7 +2589,7 @@ async function handleDirect(msg) {
   }
   const actor = Auth.loadActor('user', user.id);
   if (!actor) return;
-  const base = { channel: 'private', chatId: msg.chatId, userId: user.id, who: user.full_name, text: msg.text };
+  const base = { channel: 'private', chatId: msg.chatId, userId: user.id, who: user.full_name, text: msg.text, forwarded: msg.forwarded };
 
   // הודעה קולית — מתומללת, ומשם בדיוק כמו הודעה כתובה
   let text = msg.text;
@@ -2677,7 +2697,7 @@ async function handleDirect(msg) {
   const reply = voice ? `🎙 *שמעתי:* "${text}"\n\n${r.reply}` : r.reply;
   const history = [...state.history, { role: 'user', text: text.slice(0, 500) }, { role: 'bot', text: r.reply.slice(0, 500) }];
   saveChat(user.id, { ...r.next, history });
-  log({ ...base, text: voice ? `🎙 ${text}` : text, action: r.action, status: r.status, result: r.result, taskId: r.taskId ?? null });
+  log({ ...base, text: voice ? `🎙 ${text}` : text, action: r.action, status: r.status, result: r.result, taskId: r.taskId ?? null, reply });
   // הודעה ארוכה מדי — בכמה הודעות
   for (const part of splitMessage(reply)) await sendText(msg.chatId, part);
   // הודעות המשך (התובנות של Today) — אחרי שהעיקר כבר אצלו
@@ -2740,7 +2760,7 @@ async function assistant(userId, text, { voice = false, reset = false, requests 
   const r = await withFollowUps(await turn(user, actor, String(text ?? '').trim(), entry.state, { voice, requests }));
   const history = [...entry.state.history, { role: 'user', text: String(text).slice(0, 500) }, { role: 'bot', text: r.reply.slice(0, 500) }].slice(-HISTORY_TURNS);
   appChats.set(userId, { state: { ...r.next, history }, at: Date.now() });
-  log({ channel: 'app', userId, who: user.full_name, text: voice ? `🎙 ${text}` : text, action: r.action, status: r.status, result: r.result, taskId: r.taskId ?? null });
+  log({ channel: 'app', userId, who: user.full_name, text: voice ? `🎙 ${text}` : text, action: r.action, status: r.status, result: r.result, taskId: r.taskId ?? null, reply: r.reply });
   return {
     reply: r.reply,
     choices: choicesOf(r.next),
