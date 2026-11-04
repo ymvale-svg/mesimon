@@ -266,7 +266,8 @@ function summaryText(s, gr) {
     `🚚 ספק: ${gr.CDES} (${gr.SUPNAME})`,
     `📄 תעודה: ${gr.BOOKNUM ?? ''} · ${ymdHe(gr.CURDATE)}`,
     `🧾 הזמנה: ${s.order ? s.order.ordname : 'ללא הזמנה'}`,
-    `📁 פרויקט: ${gr.PROJDOCNO ?? ''} ${gr.PROJDES ?? ''}`.trim()
+    `📁 פרויקט: ${gr.PROJDOCNO ?? ''} ${gr.PROJDES ?? ''}`.trim(),
+    `🏬 מחסן: ${gr.TOWARHSNAME ?? ''}${gr.TOWARHSNAME && gr.TOWARHSNAME !== 'Main' ? ' (של הפרויקט)' : ''}`
   ];
   const lines = gr.lines.map((l, i) =>
     `*${i + 1}.* ${l.PDES} (${l.PARTNAME})\n   ${qtyText(l.TQUANT)} ${l.TUNITNAME ?? ''} × ${money(l.PRICE)}${l.PERCENT ? ` −${l.PERCENT}%` : ''} = *${money(l.QPRICE)}*` +
@@ -462,7 +463,9 @@ function askFiles(s) {
 
 async function createDraft(user, s) {
   const c = s.company;
-  const docno = await Priority.createReceipt(c, { supname: s.supplier.code, booknum: s.doc.doc_number, date: s.doc.date || null, project: s.project?.code });
+  // מחסן הפרויקט — כך הסחורה נכנסת למלאי של האתר; לפרויקט בלי מחסן — Main
+  s.warehouse = await Priority.warehouseOf(c, s.project?.code);
+  const docno = await Priority.createReceipt(c, { supname: s.supplier.code, booknum: s.doc.doc_number, date: s.doc.date || null, project: s.project?.code, warehouse: s.warehouse });
   s.docno = docno;
   save(user.id, s);
   const problems = [];
