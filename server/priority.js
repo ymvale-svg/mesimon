@@ -232,29 +232,46 @@ async function projects(company) {
 }
 
 /*
- * חיפוש פרויקט לפי שם בערך — "חיפה", "אלעד", "מבואות 207", "נהריה איצטדיון".
- * כתיב חופשי: בלי מקפים וגרשיים, "יי"/"וו" כפולים כאחד ("נהרייה" = "נהריה",
- * "קריית" = "קרית"), ו"יוקנעם" = "יקנעם". מילה תואמת כשהיא תחילת מילה בשם
- * (או חלק ממנה, מ-3 אותיות); מספר — רק מספר שלם ("207" לא תואם "2070").
+ * חיפוש פרויקט בשפה חופשית — "חיפה", "49", "זה לאלעד, במגרש 49 הצפוני", "מבואות 207".
+ *  • כתיב: בלי מקפים וגרשיים, אותיות סופיות כרגילות ("צפון" ~ "הצפוני"); "יי"/"וו" כפולים כאחד ("נהרייה" = "נהריה", "קריית" = "קרית"),
+ *    ו"יוקנעם" = "יקנעם".
+ *  • אותיות שימוש: "באלעד", "לחיפה", "הצפוני", "ובמגרש" — המילה גם בלעדיהן.
+ *  • מילה תואמת כשהיא תחילת מילה בשם, או חלק ממנה (מ-3 אותיות), או שמילה בשם היא
+ *    תחילתה ("הצפוני" ← "צפון"). מספר — רק מספר שלם ("207" לא תואם "2070").
+ *  • מילות קישור ("זה", "של", "במגרש", "פרויקט") — מדולגות.
+ * מה שהקוד לא מוצא כך — ה-AI מתאים מול הרשימה (‎skills/goods-receipt.md‎, ‎project‎).
  */
-const normWord = (w) => String(w).replace(/["'`״׳]/g, '').replace(/יי/g, 'י').replace(/וו/g, 'ו').replace(/^יוק/, 'יק').toLowerCase();
-const wordsOf = (s) => String(s ?? '').split(/[\s,.\-–/()]+/).map(normWord).filter(Boolean);
+const FINALS = { 'ך': 'כ', 'ם': 'מ', 'ן': 'נ', 'ף': 'פ', 'ץ': 'צ' };
+const normWord = (w) => String(w).replace(/["'`״׳]/g, '').replace(/[ךםןףץ]/g, (c) => FINALS[c])
+  .replace(/יי/g, 'י').replace(/וו/g, 'ו').replace(/^יוק/, 'יק').toLowerCase();
+const wordsOf = (s) => String(s ?? '').split(/[\s,.\-–/()!?:;]+/).map(normWord).filter(Boolean);
+const PROJECT_STOP = new Set(['פרויקט', 'הפרויקט', 'בפרויקט', 'לפרויקט', 'מגרש', 'במגרש', 'למגרש', 'המגרש', 'אתר', 'באתר', 'לאתר',
+  'של', 'שלי', 'זה', 'זו', 'הוא', 'היא', 'את', 'אל', 'על', 'עם', 'עבור', 'בשביל', 'לי', 'כן', 'לא', 'בע', 'מ', 'בעמ', 'אני', 'חושב', 'נראה', 'כנראה']);
+/** המילה, ובלי אותיות שימוש בתחילתה ("באלעד" ← "אלעד", "ובמגרש" ← "מגרש") */
+function variants(q) {
+  const out = [q];
+  const two = q.match(/^(וב|ול|ומ|וה|וכ|של|מה|לה|בה|כש|שב|של)(.{2,})$/);
+  if (two) out.push(two[2]);
+  const one = q.match(/^[בלמהוכש](.{2,})$/);
+  if (one) out.push(one[1]);
+  return out;
+}
 function wordMatches(q, w) {
   if (/^\d+$/.test(q)) return w === q;
-  return w.startsWith(q) || (q.length >= 3 && w.includes(q));
+  return w.startsWith(q) || (q.length >= 3 && w.includes(q)) || (w.length >= 3 && !/^\d+$/.test(w) && q.startsWith(w));
 }
+const queryWords = (text) => wordsOf(text).filter((q) => (q.length >= 2 || /^\d+$/.test(q)) && !PROJECT_STOP.has(q));
 /**
  * @param {Array<{code, des}>} list
  * @param {string} text
  * @param {{all?: boolean}} [opts]  ‎all‎ — כל המילים חייבות להתאים (העובד כתב שם); אחרת — לפי כמה התאימו (רמז מהמסמך)
  */
 function matchProjects(list, text, { all = false } = {}) {
-  const STOP = new Set(['פרויקט', 'מגרש', 'אתר', 'של', 'בע', 'מ', 'בעמ']);
-  const qs = wordsOf(text).filter((q) => q.length >= 2 && !STOP.has(q));
+  const qs = queryWords(text);
   if (!qs.length) return [];
   return list.map((p) => {
-    const ws = wordsOf(p.des);
-    const hits = qs.filter((q) => ws.some((w) => wordMatches(q, w))).length;
+    const ws = wordsOf(`${p.des} ${p.alias ?? ''}`);
+    const hits = qs.filter((q) => variants(q).some((v) => ws.some((w) => wordMatches(v, w)))).length;
     return { ...p, score: hits };
   }).filter((p) => (all ? p.score === qs.length : p.score > 0))
     .sort((a, b) => b.score - a.score || a.des.localeCompare(b.des, 'he'));
