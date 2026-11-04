@@ -390,16 +390,16 @@ async function afterLines(s) {
 async function askProject(s) {
   if (s.project) return askFiles(s);
   const all = await Priority.projects(s.company);
-  const words = `${s.doc.project_hint} ${s.doc.delivery_place}`.split(/[\s,\-–/]+/).filter((w) => w.length >= 2);
-  const scored = all.map((p) => ({ ...p, score: words.filter((w) => p.des.includes(w)).length })).filter((p) => p.score > 0)
-    .sort((a, b) => b.score - a.score || a.code.localeCompare(b.code)).slice(0, 6);
-  s.projectOptions = scored.length ? scored : [];
-  s.step = 'project';
+  // רמז מהמסמך — עיר, אתר, מגרש. כל הפרויקטים שבשמם מופיעה מילה מהרמז, המתאימים ביותר קודם
   const hint = [s.doc.project_hint, s.doc.delivery_place].filter(Boolean).join(' · ');
+  const scored = Priority.matchProjects(all, hint);
+  const top = scored.length ? scored.filter((p) => p.score === scored[0].score) : [];
+  s.projectOptions = (top.length > 1 ? top : scored).slice(0, 9);
+  s.step = 'project';
   return reply(s, [`📁 לאיזה פרויקט לשייך?${hint ? ` (במסמך: ${hint})` : ''}`,
     ...s.projectOptions.map((p, i) => `*${i + 1}.* ${p.des} (${p.code})`),
-    s.projectOptions.length ? '' : 'לא מצאתי פרויקט מתאים לפי המסמך.',
-    'כתבו מספר מהרשימה, קוד פרויקט (PR…) או מילה מהשם.'].join('\n'));
+    s.projectOptions.length ? '' : `לא מצאתי לפי המסמך פרויקט מתאים מתוך ${all.length} הפרויקטים של החברה.`,
+    'כתבו מספר מהרשימה, או את שם הפרויקט בערך ("אלעד 49", "מבואות 207") או קוד (PR…).'].join('\n'));
 }
 
 function askFiles(s) {
@@ -655,15 +655,17 @@ async function step(user, s, t, file) {
       if (!p) {
         const all = await Priority.projects(s.company);
         const code = t.match(/PR\d+/i)?.[0]?.toUpperCase();
-        const list = code ? all.filter((x) => x.code === code) : all.filter((x) => x.des.includes(t));
-        if (code && !list.length) p = { code, des: '' };          // פרויקט בלי מסמכים — פריוריטי יאמת
-        else if (list.length === 1) p = list[0];
+        // שם בערך — כל המילים שנכתבו צריכות להתאים; אם אין כזה — הקרובים ביותר
+        let list = code ? all.filter((x) => x.code === code) : Priority.matchProjects(all, t, { all: true });
+        if (!code && !list.length) list = Priority.matchProjects(all, t);
+        if (code && !list.length) return reply(s, `אין פרויקט ${code} בחברה הזו. כתבו את השם בערך, או קוד אחר.`);
+        if (list.length === 1) p = list[0];
         else if (list.length) {
-          s.projectOptions = list.slice(0, 8);
-          return reply(s, ['איזה מהם?', ...s.projectOptions.map((x, i) => `*${i + 1}.* ${x.des} (${x.code})`)].join('\n'));
+          s.projectOptions = list.slice(0, 9);
+          return reply(s, ['לאיזה מהם התכוונת?', ...s.projectOptions.map((x, i) => `*${i + 1}.* ${x.des} (${x.code})`)].join('\n'));
         }
       }
-      if (!p) return reply(s, 'לא מצאתי. כתבו מספר מהרשימה או קוד פרויקט (PR…).');
+      if (!p) return reply(s, 'לא מצאתי פרויקט כזה. כתבו את השם בערך (למשל "אלעד 49" או "נהריה"), או קוד (PR…).');
       s.project = p;
       return askFiles(s);
     }
