@@ -150,6 +150,12 @@ const MATCH_SCHEMA = {
   required: ['best_order', 'matches'],
   additionalProperties: false
 };
+const PROJECT_SCHEMA = {
+  type: 'object',
+  properties: { codes: { type: 'array', items: str }, question: str },
+  required: ['codes', 'question'],
+  additionalProperties: false
+};
 const REPLY_SCHEMA = {
   type: 'object',
   properties: {
@@ -183,10 +189,58 @@ const ai = {
     });
     return Claude.json({ system: skill(), content: [{ type: 'text', text }], schema: MATCH_SCHEMA, effort: 'medium', live: true });
   },
+  async project(projects, text) {
+    const content = JSON.stringify({ task: 'project', text, projects: projects.map((p) => ({ code: p.code, name: p.des, aliases: p.alias ?? '' })) });
+    return Claude.json({ system: skill(), content: [{ type: 'text', text: content }], schema: PROJECT_SCHEMA, effort: 'low', live: true });
+  },
   async reply(shown, text) {
     return Claude.json({ system: skill(), content: [{ type: 'text', text: JSON.stringify({ task: 'reply', shown, text }) }], schema: REPLY_SCHEMA, effort: 'low', live: true });
   }
 };
+
+// ---------------------------------------------------------------------------
+// פרויקטים — כינויים (מהסקיל) וחיפוש בשפה חופשית
+// ---------------------------------------------------------------------------
+
+/** "## כינויים לפרויקטים" בסקיל: ‎- מילים מהשם = כינויים‎ */
+function projectAliases() {
+  const text = skill();
+  const at = text.indexOf('### כינויים לפרויקטים');
+  if (at < 0) return [];
+  const block = text.slice(at).split(/\n(?=---|## )/)[0];
+  return block.split('\n').map((l) => l.match(/^-\s*(.+?)\s*=\s*(.+)$/)).filter(Boolean).map((m) => ({ key: m[1], add: m[2].replace(/,/g, ' ') }));
+}
+
+async function projectsOf(company) {
+  const list = (await Priority.projects(company)).map((p) => ({ ...p }));
+  for (const a of projectAliases()) {
+    for (const p of Priority.matchProjects(list, a.key, { all: true })) {
+      const orig = list.find((x) => x.code === p.code);
+      orig.alias = `${orig.alias ?? ''} ${a.add}`.trim();
+    }
+  }
+  return list;
+}
+
+/** פרויקטים לפי טקסט חופשי: קודם הקוד (כל המילים), ואם לא — ה-AI מול הרשימה */
+async function findProjects(all, text, { strict = true } = {}) {
+  let list = Priority.matchProjects(all, text, { all: true });
+  if (!strict && !list.length) {
+    const any = Priority.matchProjects(all, text);
+    const top = any.length ? any.filter((p) => p.score === any[0].score) : [];
+    list = top;
+  }
+  if (list.length) return { list, by: 'code' };
+  if (!Claude.isEnabled() || !String(text ?? '').trim()) return { list: [], by: null };
+  try {
+    const out = await ai.project(all, text);
+    const codes = (out.codes ?? []).filter((c, i, arr) => arr.indexOf(c) === i);
+    return { list: codes.map((c) => all.find((p) => p.code === c)).filter(Boolean).slice(0, 6), by: 'ai', question: out.question };
+  } catch (err) {
+    console.error('[משימון] התאמת פרויקט ב-AI:', err.message);
+    return { list: [], by: null };
+  }
+}
 
 // ---------------------------------------------------------------------------
 // תצוגה
@@ -389,17 +443,15 @@ async function afterLines(s) {
 
 async function askProject(s) {
   if (s.project) return askFiles(s);
-  const all = await Priority.projects(s.company);
-  const words = `${s.doc.project_hint} ${s.doc.delivery_place}`.split(/[\s,\-–/]+/).filter((w) => w.length >= 2);
-  const scored = all.map((p) => ({ ...p, score: words.filter((w) => p.des.includes(w)).length })).filter((p) => p.score > 0)
-    .sort((a, b) => b.score - a.score || a.code.localeCompare(b.code)).slice(0, 6);
-  s.projectOptions = scored.length ? scored : [];
-  s.step = 'project';
+  const all = await projectsOf(s.company);
+  // רמז מהמסמך — עיר, אתר, מגרש: כל הפרויקטים המתאימים ביותר (גם לפי הכינויים), ואם לא — ה-AI
   const hint = [s.doc.project_hint, s.doc.delivery_place].filter(Boolean).join(' · ');
+  s.projectOptions = (await findProjects(all, hint, { strict: false })).list.slice(0, 9);
+  s.step = 'project';
   return reply(s, [`📁 לאיזה פרויקט לשייך?${hint ? ` (במסמך: ${hint})` : ''}`,
     ...s.projectOptions.map((p, i) => `*${i + 1}.* ${p.des} (${p.code})`),
-    s.projectOptions.length ? '' : 'לא מצאתי פרויקט מתאים לפי המסמך.',
-    'כתבו מספר מהרשימה, קוד פרויקט (PR…) או מילה מהשם.'].join('\n'));
+    s.projectOptions.length ? '' : `לא מצאתי לפי המסמך פרויקט מתאים מתוך ${all.length} הפרויקטים של החברה.`,
+    'כתבו מספר מהרשימה, או במילים שלכם ("אלעד 49", "207", "חיפה עין הים") או קוד (PR…).'].join('\n'));
 }
 
 function askFiles(s) {
@@ -650,20 +702,37 @@ async function step(user, s, t, file) {
     }
 
     case 'project': {
-      const n = numberIn(t);
-      let p = !/PR/i.test(t) && n && n <= (s.projectOptions?.length ?? 0) ? s.projectOptions[n - 1] : null;
+      // הצעה אחת מה-AI מחכה לאישור
+      if (s.projectPending) {
+        const pend = s.projectPending;
+        if (YES.test(t)) { s.projectPending = null; s.project = pend; return askFiles(s); }
+        s.projectPending = null;
+        if (/^(לא|no)([\s,.!]|$)/i.test(t)) return reply(s, 'לאיזה פרויקט, אם כך? כתבו במילים שלכם, או קוד (PR…).');
+      }
+      // מספר מהרשימה — רק כשנכתב מספר קטן לבד, והרשימה הוצגה ("2"). "49" או "207" הם מספרי מגרש
+      const n = /^\d{1,2}$/.test(t) ? Number(t) : null;
+      let p = n && n <= (s.projectOptions?.length ?? 0) ? s.projectOptions[n - 1] : null;
       if (!p) {
-        const all = await Priority.projects(s.company);
+        const all = await projectsOf(s.company);
         const code = t.match(/PR\d+/i)?.[0]?.toUpperCase();
-        const list = code ? all.filter((x) => x.code === code) : all.filter((x) => x.des.includes(t));
-        if (code && !list.length) p = { code, des: '' };          // פרויקט בלי מסמכים — פריוריטי יאמת
-        else if (list.length === 1) p = list[0];
-        else if (list.length) {
-          s.projectOptions = list.slice(0, 8);
-          return reply(s, ['איזה מהם?', ...s.projectOptions.map((x, i) => `*${i + 1}.* ${x.des} (${x.code})`)].join('\n'));
+        if (code) {
+          p = all.find((x) => x.code === code);
+          if (!p) return reply(s, `אין פרויקט ${code} בחברה הזו. כתבו את השם במילים שלכם, או קוד אחר.`);
+        } else {
+          const found = await findProjects(all, t);
+          if (found.list.length === 1 && found.by === 'code') p = found.list[0];
+          else if (found.list.length === 1) {
+            // ה-AI הבין לבד — שואלים לפני ששייכים
+            s.projectPending = found.list[0];
+            return reply(s, `📁 *${found.list[0].des}* (${found.list[0].code})? *כן*, או כתבו אחרת.`);
+          } else if (found.list.length) {
+            s.projectOptions = found.list.slice(0, 9);
+            return reply(s, ['לאיזה מהם התכוונת?', ...s.projectOptions.map((x, i) => `*${i + 1}.* ${x.des} (${x.code})`)].join('\n'));
+          } else {
+            return reply(s, found.question || 'לא מצאתי פרויקט כזה. כתבו במילים אחרות (למשל "אלעד 49" או "נהריה"), או קוד (PR…).');
+          }
         }
       }
-      if (!p) return reply(s, 'לא מצאתי. כתבו מספר מהרשימה או קוד פרויקט (PR…).');
       s.project = p;
       return askFiles(s);
     }
@@ -716,4 +785,4 @@ async function step(user, s, t, file) {
   }
 }
 
-module.exports = { isTrigger, opens, active, handle, _ai: ai, _load: load, _clear: (userId) => clear(userId, load(userId)) };
+module.exports = { isTrigger, opens, active, handle, _projectsOf: projectsOf, _findProjects: findProjects, _ai: ai, _load: load, _clear: (userId) => clear(userId, load(userId)) };

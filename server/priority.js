@@ -202,22 +202,79 @@ async function lastSubchapter(company, supname) {
 }
 
 /**
- * הפרויקטים שהבוט מכיר — ממסמכי הרכש (אין גישת API למסך הפרויקטים).
- * נשמר לשעה. פרויקט בלי אף מסמך לא יופיע — לכן העובד יכול גם לכתוב קוד.
+ * הפרויקטים של החברה — ממסך הפרויקטים, ‎DOCUMENTS_p‎ (p קטנה; ‎DOCPROJ‎ סגור ל-API).
+ * בלי המבוטלים. נשמר לשעה. אם המסך אינו זמין — מהפרויקטים שבהזמנות ובקבלות.
  */
 const projectCache = new Map();
 async function projects(company) {
   const hit = projectCache.get(company);
   if (hit && Date.now() - hit.at < 3600000) return hit.list;
-  const seen = new Map();
-  for (const ent of ['PORDERS', 'DOCUMENTS_P']) {
-    for (const r of rows(await call(company, 'GET', `${ent}?$select=PROJDOCNO,PROJDES&$top=2000`))) {
-      if (r.PROJDOCNO && !seen.has(r.PROJDOCNO)) seen.set(r.PROJDOCNO, r.PROJDES ?? '');
-    }
+  let list = [];
+  try {
+    list = rows(await call(company, 'GET', 'DOCUMENTS_p?$select=DOCNO,PROJDES,STATDES&$top=2000'))
+      .filter((r) => r.DOCNO && r.STATDES !== 'מבוטלת')
+      .map((r) => ({ code: r.DOCNO, des: r.PROJDES ?? '' }));
+  } catch (err) {
+    console.error(`[משימון] מסך הפרויקטים בפריוריטי (${company}) לא זמין:`, err.message);
   }
-  const list = [...seen].map(([code, des]) => ({ code, des })).sort((a, b) => a.code.localeCompare(b.code));
+  if (!list.length) {
+    const seen = new Map();
+    for (const ent of ['PORDERS', 'DOCUMENTS_P']) {
+      for (const r of rows(await call(company, 'GET', `${ent}?$select=PROJDOCNO,PROJDES&$top=2000`))) {
+        if (r.PROJDOCNO && !seen.has(r.PROJDOCNO)) seen.set(r.PROJDOCNO, r.PROJDES ?? '');
+      }
+    }
+    list = [...seen].map(([code, des]) => ({ code, des }));
+  }
+  list.sort((a, b) => a.code.localeCompare(b.code));
   projectCache.set(company, { at: Date.now(), list });
   return list;
+}
+
+/*
+ * חיפוש פרויקט בשפה חופשית — "חיפה", "49", "זה לאלעד, במגרש 49 הצפוני", "מבואות 207".
+ *  • כתיב: בלי מקפים וגרשיים, אותיות סופיות כרגילות ("צפון" ~ "הצפוני"); "יי"/"וו" כפולים כאחד ("נהרייה" = "נהריה", "קריית" = "קרית"),
+ *    ו"יוקנעם" = "יקנעם".
+ *  • אותיות שימוש: "באלעד", "לחיפה", "הצפוני", "ובמגרש" — המילה גם בלעדיהן.
+ *  • מילה תואמת כשהיא תחילת מילה בשם, או חלק ממנה (מ-3 אותיות), או שמילה בשם היא
+ *    תחילתה ("הצפוני" ← "צפון"). מספר — רק מספר שלם ("207" לא תואם "2070").
+ *  • מילות קישור ("זה", "של", "במגרש", "פרויקט") — מדולגות.
+ * מה שהקוד לא מוצא כך — ה-AI מתאים מול הרשימה (‎skills/goods-receipt.md‎, ‎project‎).
+ */
+const FINALS = { 'ך': 'כ', 'ם': 'מ', 'ן': 'נ', 'ף': 'פ', 'ץ': 'צ' };
+const normWord = (w) => String(w).replace(/["'`״׳]/g, '').replace(/[ךםןףץ]/g, (c) => FINALS[c])
+  .replace(/יי/g, 'י').replace(/וו/g, 'ו').replace(/^יוק/, 'יק').toLowerCase();
+const wordsOf = (s) => String(s ?? '').split(/[\s,.\-–/()!?:;]+/).map(normWord).filter(Boolean);
+const PROJECT_STOP = new Set(['פרויקט', 'הפרויקט', 'בפרויקט', 'לפרויקט', 'מגרש', 'במגרש', 'למגרש', 'המגרש', 'אתר', 'באתר', 'לאתר',
+  'של', 'שלי', 'זה', 'זו', 'הוא', 'היא', 'את', 'אל', 'על', 'עם', 'עבור', 'בשביל', 'לי', 'כן', 'לא', 'בע', 'מ', 'בעמ', 'אני', 'חושב', 'נראה', 'כנראה']);
+/** המילה, ובלי אותיות שימוש בתחילתה ("באלעד" ← "אלעד", "ובמגרש" ← "מגרש") */
+function variants(q) {
+  const out = [q];
+  const two = q.match(/^(וב|ול|ומ|וה|וכ|של|מה|לה|בה|כש|שב|של)(.{2,})$/);
+  if (two) out.push(two[2]);
+  const one = q.match(/^[בלמהוכש](.{2,})$/);
+  if (one) out.push(one[1]);
+  return out;
+}
+function wordMatches(q, w) {
+  if (/^\d+$/.test(q)) return w === q;
+  return w.startsWith(q) || (q.length >= 3 && w.includes(q)) || (w.length >= 3 && !/^\d+$/.test(w) && q.startsWith(w));
+}
+const queryWords = (text) => wordsOf(text).filter((q) => (q.length >= 2 || /^\d+$/.test(q)) && !PROJECT_STOP.has(q));
+/**
+ * @param {Array<{code, des}>} list
+ * @param {string} text
+ * @param {{all?: boolean}} [opts]  ‎all‎ — כל המילים חייבות להתאים (העובד כתב שם); אחרת — לפי כמה התאימו (רמז מהמסמך)
+ */
+function matchProjects(list, text, { all = false } = {}) {
+  const qs = queryWords(text);
+  if (!qs.length) return [];
+  return list.map((p) => {
+    const ws = wordsOf(`${p.des} ${p.alias ?? ''}`);
+    const hits = qs.filter((q) => variants(q).some((v) => ws.some((w) => wordMatches(v, w)))).length;
+    return { ...p, score: hits };
+  }).filter((p) => (all ? p.score === qs.length : p.score > 0))
+    .sort((a, b) => b.score - a.score || a.des.localeCompare(b.des, 'he'));
 }
 
 /** ה-GR כפי שנשמר — כותרת, שורות, נספחים, דו-שיח פנימי */
@@ -329,7 +386,7 @@ async function cancelReceipt(company, docno) {
 
 module.exports = {
   COMPANIES, isEnabled, allowed, companyOf, isTest, resolveCompany, PriorityError,
-  findSuppliers, supplierByCode, findReceiptByBooknum, getOrder, openOrders, findPartExact, lastSubchapter, projects, readReceipt,
+  findSuppliers, supplierByCode, findReceiptByBooknum, getOrder, openOrders, findPartExact, lastSubchapter, projects, matchProjects, readReceipt,
   readDialog, createReceipt, addOrderLine, addFreeLine, setLineQty, setHeader, attach, setDialog, finalizeReceipt, cancelReceipt,
   _call: call
 };
