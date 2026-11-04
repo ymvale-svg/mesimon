@@ -432,12 +432,12 @@ async function meetingRecording(zoomMeetingId) {
 // ---------------------------------------------------------------------------
 
 /**
- * מי שמנהל משתמשים — את כל ההקלטות בחשבונות. עובד אחר — של משתמש ה-Zoom
+ * מי שמנהל את כל המשתמשים בארגון (לא מנהל מחלקה) — את כל ההקלטות בחשבונות. עובד אחר — של משתמש ה-Zoom
  * המשויך לו, ושל פגישות משימון שהוא בעל היומן שלהן, קבע אותן או הוזמן אליהן.
  * אותו כלל באפליקציה ובבוט.
  */
 function recordingScope(actor) {
-  if (P.may(actor, 'manage_users')) return { all: true, own: null, hosts: D.all('SELECT id FROM zoom_users').map((z) => z.id), meetingIds: new Set() };
+  if (P.can(actor, 'manage_users')) return { all: true, own: null, hosts: D.all('SELECT id FROM zoom_users').map((z) => z.id), meetingIds: new Set() };
   const email = String(D.get('SELECT email FROM users WHERE id = ?', actor.id)?.email ?? '').toLowerCase();
   const own = D.get('SELECT zoom_user_id FROM users WHERE id = ?', actor.id)?.zoom_user_id ?? null;
   const mine = D.all(
