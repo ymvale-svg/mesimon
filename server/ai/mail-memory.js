@@ -269,7 +269,7 @@ function update(user, { withDocs, internal, excludedLabels }) {
 
 /** "שכח הכול" — הכול נמחק. אפשר לסרוק מחדש */
 function forget(userId) {
-  for (const t of ['mail_memory', 'mail_people', 'mail_documents', 'mail_memory_threads', 'mail_memory_runs']) {
+  for (const t of ['mail_memory', 'mail_people', 'mail_documents', 'mail_attachments', 'mail_doc_waiters', 'mail_memory_threads', 'mail_memory_runs']) {
     D.run(`DELETE FROM ${t} WHERE user_id = ?`, userId);
   }
 }

@@ -1072,6 +1072,21 @@ CREATE TABLE IF NOT EXISTS mail_attachments (
 CREATE INDEX IF NOT EXISTS idx_mail_attachments_user ON mail_attachments(user_id, sent_at);
 CREATE INDEX IF NOT EXISTS idx_mail_attachments_queue ON mail_attachments(status, requested_at);
 
+/* מי מחכה לפענוח קובץ גדול — והשאלה שלו, שתורץ שוב עם המסמך כשהוא מוכן */
+CREATE TABLE IF NOT EXISTS mail_doc_waiters (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  attachment_id INTEGER NOT NULL REFERENCES mail_attachments(id) ON DELETE CASCADE,
+  user_id       INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  channel       TEXT    NOT NULL DEFAULT 'web',   -- web | whatsapp — לשם נשלחת התשובה
+  question      TEXT    NOT NULL,
+  history       TEXT    NOT NULL DEFAULT '[]',
+  context       TEXT    NOT NULL DEFAULT '',
+  status        TEXT    NOT NULL DEFAULT 'waiting', -- waiting | answered | failed
+  created_at    TEXT    NOT NULL,
+  done_at       TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_mail_doc_waiters ON mail_doc_waiters(attachment_id, status);
+
 /* יומן "✨ שאל" והסוכנים — איזה סוכן, אילו כלים, כמה זמן. למסך הניהול */
 CREATE TABLE IF NOT EXISTS agent_log (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,

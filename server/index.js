@@ -116,6 +116,8 @@ server.listen(PORT, HOST, () => {
     WaBot.start();
     // משימות כפולות במחלקה — סריקה פעם ביום (פרק 11ב)
     Dupes.start();
+    // 📎 פענוח קבצים גדולים מהמייל לפי בקשה — קובץ אחד בכל פעם
+    require('./ai/mail-doc-queue').start();
   }
   // התראה למנהלים כשתקרת המעבד מאטה את הסוכנים
   LoadMonitor.start();
@@ -162,6 +164,7 @@ const shutdown = () => {
   Today.stop();
   GContacts.stop();
   Meetings.stop();
+  require('./ai/mail-doc-queue').stop();
   server.close(() => process.exit(0));
   setTimeout(() => process.exit(0), 2000).unref();
 };
