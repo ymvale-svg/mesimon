@@ -75,6 +75,12 @@ services:
         sync: false
       - key: TIFUL360_API_KEY
         sync: false
+      - key: PRIORITY_USER         # קבלת סחורה מהבוט לפריוריטי — ה-PAT. בלעדיו היכולת כבויה
+        sync: false
+      - key: PRIORITY_PASSWORD     # בפריוריטי עם PAT: המילה PAT
+        sync: false
+      - key: PRIORITY_COMPANIES    # לאילו חברות מותר לכתוב, בפסיקים. בפיילוט: test11 בלבד
+        value: test11
       - key: TIMELESS_ACCESS_TOKEN # Timeless — אסימון ארגוני: הנהלה רואה הכול, עובד רק פגישות שהשתתף בהן
         sync: false
       - key: ZOOM_ACCOUNT_ID       # Zoom של החברה — אפליקציית Server-to-Server OAuth. בלי שלושתם הפגישות בלי Zoom

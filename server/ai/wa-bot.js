@@ -57,6 +57,7 @@ const Business = require('./wa-business');
 const TaskSync = require('./task-sync');
 const TaskOutreach = require('./task-outreach');
 const Zoom = require('../zoom');
+const GoodsReceipt = require('./goods-receipt');
 
 const GROUP_SKILL = path.join(__dirname, 'skills', 'whatsapp-group-to-tasks.md');
 const CHAT_SKILL = path.join(__dirname, 'skills', 'whatsapp-chat.md');
@@ -311,6 +312,10 @@ async function receiveOne(ch, timeout = LISTEN_TIMEOUT) {
         // הודעה קולית: הכתובת שממנה מורידים אותה לתמלול
         audio: m.typeMessage === 'audioMessage' && m.fileMessageData?.downloadUrl
           ? { url: m.fileMessageData.downloadUrl, mime: m.fileMessageData.mimeType ?? '' }
+          : null,
+        // תמונה או מסמך (קבלת סחורה) — הכתובת זמנית, מורידים מיד כשצריך
+        file: ['imageMessage', 'documentMessage'].includes(m.typeMessage) && m.fileMessageData?.downloadUrl
+          ? { url: m.fileMessageData.downloadUrl, mime: m.fileMessageData.mimeType ?? '', name: m.fileMessageData.fileName ?? '' }
           : null,
         id: String(b.idMessage ?? note.receiptId)
       };
@@ -2610,6 +2615,23 @@ async function handleDirect(msg) {
       await sendText(msg.chatId, 'לא שמעתי דיבור בהודעה. נסו שוב, או כתבו לי.');
       return;
     }
+  }
+  // קבלת סחורה — "קבלת סחורה" (כתוב, בכיתוב לתמונה או בהקלטה) פותח; מאז כל הודעה, גם תמונה, הולכת אליה עד הסוף
+  if (WaActions.allowed(actor, 'goods_receipt') && (GoodsReceipt.active(user.id) || GoodsReceipt.isTrigger(text))) {
+    await notice;
+    const slowGr = setTimeout(() => sendText(msg.chatId, '⏳ רגע, קורא ובודק מול פריוריטי…').catch(() => {}), SLOW_NOTICE_MS);
+    let r;
+    try {
+      r = await GoodsReceipt.handle({ user, text, file: msg.file });
+    } catch (err) {
+      console.error('[משימון] קבלת סחורה נכשלה:', err.message);
+      r = { replies: ['משהו השתבש בקבלת הסחורה. נסו שוב, או *ביטול*.'], status: 'error', result: err.message };
+    }
+    clearTimeout(slowGr);
+    const shown = [voice ? `🎙 ${text}` : text, msg.file ? '[📎 קובץ]' : ''].filter(Boolean).join(' ');
+    log({ ...base, text: shown || '[קובץ]', action: 'goods_receipt', status: r.status, result: r.result });
+    for (const reply of r.replies) for (const part of splitMessage(reply)) await sendText(msg.chatId, part);
+    return;
   }
   if (!text) {
     log({ ...base, text: `[${msg.kind || 'הודעה ללא טקסט'}]`, action: 'other', status: 'unclear', result: 'לא טקסט' });
