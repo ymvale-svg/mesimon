@@ -1757,6 +1757,11 @@ function migrate() {
   addColumn('meetings', 'zoom_record', 'INTEGER NOT NULL DEFAULT 0');
   // "📅 פגישה לקביעה" — מחכה שתיקבע לה פגישה
   addColumn('tasks', 'meeting_pending', 'INTEGER NOT NULL DEFAULT 0');
+  /*
+   * משימה למזכירות — מנהל מחלקה פתח אותה למזכירת החברה (שושנה, לבנה).
+   * כשהמזכירה קובעת מתוכה פגישה ביומן — המשימה נסגרת לבד (‎meetings.js‎).
+   */
+  addColumn('tasks', 'secretary_request', 'INTEGER NOT NULL DEFAULT 0');
   addColumn('templates', 'department_id', 'INTEGER REFERENCES departments(id) ON DELETE SET NULL');
   // תת-מחלקה — "הנדסה וביצוע › אתר אלעד". ריק = מחלקה ראשית
   addColumn('departments', 'parent_id', 'INTEGER REFERENCES departments(id) ON DELETE SET NULL');
