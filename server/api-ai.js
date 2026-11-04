@@ -30,12 +30,12 @@ const TaskOutreach = require('./ai/task-outreach');
 const { badRequest, forbidden, notFound, readJson, sendJson, parseUrl } = require('./http-kit');
 
 function register(router, h) {
-  const { getTaskOr404, assertVisible, mayOnTask, shapeTask, actorRef, saveAttachment, createTask, assertMayAssignTo, assertMayUseProject, listProjectsFor, newTaskProjects, assignableUserIds, assignBlockReason, botTaskOps } = h;
+  const { getTaskOr404, assertVisible, mayOnTask, shapeTask, actorRef, saveAttachment, createTask, assertMayAssignTo, assertMayUseProject, listProjectsFor, newTaskProjects, assignableUserIds, assignBlockReason, botTaskOps, taskTemplates } = h;
 
   AiTasks.setHooks({ saveFile: saveAttachment, scanWhatsApp: WaScan.handle, scanningUsers: WaScan.scanningUsers });
   MailScan.init({ createTask });
   Agents.init({ listProjectsFor, projectTasks: (actor, projectId) => botTaskOps.projectTasks(actor, projectId) });
-  WaBot.init({ createTask, listProjectsFor, newTaskProjects, assignableUserIds, assignBlockReason, tasks: botTaskOps, mail: { searchContacts, createAiTask, sendOutreach } });
+  WaBot.init({ createTask, listProjectsFor, newTaskProjects, assignableUserIds, assignBlockReason, taskTemplates, tasks: botTaskOps, mail: { searchContacts, createAiTask, sendOutreach } });
   TaskOutreach.init({ searchContacts });
 
   const internalOnly = (actor) => {

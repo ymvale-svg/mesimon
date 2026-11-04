@@ -74,7 +74,7 @@ const parseJson = (text, fallback) => { try { return JSON.parse(text); } catch {
  * פעולות שתלויות ב-api.js — מוזרקות משם. ‎tasks‎: רשימות, סגירה והערה עם
  * הרשאות העובד. ‎mail‎: חיפוש נמען ופתיחת משימת AI — אותן פונקציות של האשף.
  */
-const hooks = { createTask: null, listProjectsFor: null, newTaskProjects: null, assignableUserIds: null, assignBlockReason: null, tasks: null, mail: null };
+const hooks = { createTask: null, listProjectsFor: null, newTaskProjects: null, assignableUserIds: null, assignBlockReason: null, taskTemplates: null, tasks: null, mail: null };
 
 // ---------------------------------------------------------------------------
 // החיבור
@@ -785,9 +785,10 @@ const CHAT_SCHEMA = {
         priority: { type: 'string', enum: ['normal', 'high', 'urgent'] },
         project_id: { type: 'integer' },
         project_suggested: { type: 'boolean', description: 'true כשהפרויקט לא נאמר, וה-AI בחר אותו לפי התוכן' },
-        checklist: { type: 'array', items: { type: 'string' } }
+        checklist: { type: 'array', items: { type: 'string' } },
+        template_id: { type: 'integer', description: 'תבנית משימה מהרשימה, כשביקש לפתוח לפי תבנית או כשהמשימה היא בדיוק מה שהתבנית מתארת. אחרת 0' }
       },
-      required: ['title', 'summary', 'assignee_user_id', 'due_date', 'priority', 'project_id', 'project_suggested', 'checklist'],
+      required: ['title', 'summary', 'assignee_user_id', 'due_date', 'priority', 'project_id', 'project_suggested', 'checklist', 'template_id'],
       additionalProperties: false
     }
   },
@@ -844,6 +845,9 @@ const dueDay = (t) => (t.dueDate ? localDate(new Date(t.dueDate)).date : null);
 function draftText(draft, user) {
   const nameOf = (id) => D.get('SELECT full_name FROM users WHERE id = ?', id)?.full_name;
   const project = draft.projectId ? D.get('SELECT name FROM projects WHERE id = ?', draft.projectId)?.name : null;
+  // סעיפי התבנית קודם, ואחריהם מה שנמנה בהודעה — כמו שייפתח
+  const fromTpl = draft.templateId ? draft.templateChecklist ?? [] : [];
+  const checklist = [...fromTpl, ...(draft.checklist ?? []).filter((c) => !fromTpl.includes(c))];
   return [
     `📝 *${draft.title}*`,
     draft.summary || null,
@@ -851,7 +855,8 @@ function draftText(draft, user) {
     `📅 יעד: ${draft.dueDate ? shortDate(draft.dueDate) : 'ללא'}`,
     `📁 פרויקט: ${project ?? 'ללא'}${project && draft.projectSuggested ? ' _(לפי התוכן — "בלי פרויקט" או שם אחר לשינוי)_' : ''}`,
     draft.priority !== 'normal' ? `⚡ עדיפות: ${PRIORITY[draft.priority]}` : null,
-    draft.checklist.length ? `☑ ${draft.checklist.map((c, i) => `${i + 1}. ${c}`).join('\n')}` : null,
+    draft.templateId && draft.templateName ? `📋 תבנית: ${draft.templateName}` : null,
+    checklist.length ? `☑ ${checklist.map((c, i) => `${i + 1}. ${c}`).join('\n')}` : null,
     ...(draft.warnings ?? []).map((w) => `⚠️ ${w}`),
     '',
     'לפתוח? השיבו *כן*, או כתבו מה לתקן.'
@@ -954,6 +959,7 @@ async function understand(user, actor, state, text, projects, myOpen) {
   const allowedList = projects.filter((p) => allowedProjects.has(p.id));
   const otherList = projects.filter((p) => !allowedProjects.has(p.id));
   const actions = WaActions.forActor(actor);
+  const templates = taskTemplatesOf(actor);
   const lastList = state.lastList
     .map((id, i) => ({ n: i + 1, id, title: D.get('SELECT title FROM tasks WHERE id = ?', id)?.title }))
     .filter((x) => x.title);
@@ -977,6 +983,9 @@ async function understand(user, actor, state, text, projects, myOpen) {
     '',
     'פרויקטים נוספים שהוא רואה — לשאלות בלבד, לא לפתיחת משימה:',
     ...(otherList.length ? otherList.map((p) => `${p.id} · ${p.name}`) : ['(אין)']),
+    '',
+    'תבניות משימה (מזהה · שם · סעיפי הצ׳קליסט):',
+    ...(templates.length ? templates.map((t) => `${t.id} · ${t.name}${templateItems(t).length ? ` · ${templateItems(t).join(' / ')}` : ''}`) : ['(אין)']),
     '\u0000',
     'המשימות הפתוחות של הכותב (מזהה · כותרת):',
     ...(myOpen.length ? myOpen.map((t) => `${t.id} · ${t.title}`) : ['(אין)']),
@@ -1049,10 +1058,23 @@ async function understand(user, actor, state, text, projects, myOpen) {
       priority: ['normal', 'high', 'urgent'].includes(d.priority) ? d.priority : 'normal',
       projectId: projectIds.has(Number(d.project_id)) ? Number(d.project_id) : 0,
       projectSuggested: d.project_suggested === true,
-      checklist: (d.checklist ?? []).map((x) => String(x).trim()).filter(Boolean).slice(0, 8)
+      checklist: (d.checklist ?? []).map((x) => String(x).trim()).filter(Boolean).slice(0, 8),
+      templateId: templates.some((t) => t.id === Number(d.template_id)) ? Number(d.template_id) : 0
     }
   };
 }
+
+/**
+ * תבניות המשימה שהכותב רואה — אותן תבניות שבבורר "יצירה מתבנית" באפליקציה,
+ * באותו גבול מחלקה. תקלה בשליפה אינה עוצרת פתיחת משימה.
+ */
+function taskTemplatesOf(actor) {
+  try { return hooks.taskTemplates?.(actor) ?? []; } catch { return []; }
+}
+
+/** סעיפי הצ'קליסט של תבנית — מחרוזות (תבנית ישנה) או ‎{ text, note }‎ */
+const templateItems = (tpl) => (tpl?.payload?.checklist ?? [])
+  .map((c) => String(typeof c === 'string' ? c : c?.text ?? '').trim()).filter(Boolean);
 
 /**
  * מה מותר לכותב בפתיחת משימה: למי לשייך (‎assertMayAssignTo‎ — המחלקה שלו,
@@ -1083,7 +1105,32 @@ function checkDraft(actor, draft) {
     warnings.push(`הפרויקט ${name ? `"${name}" ` : ''}אינו שלך או של המחלקה שלך — המשימה תיפתח בלי פרויקט`);
     draft = { ...draft, projectId: 0 };
   }
+  /*
+   * תבנית — רק מאלה שהכותב רואה. שמים את השם בטיוטה כדי שיופיע בתצוגה, ואת
+   * הסעיפים שלה מוסיפים לפני מה שהוא מנה בעצמו (בלי כפילויות). התוכן המלא
+   * (תיאור, הערות בסעיפים) נכנס בפתיחה עצמה.
+   */
+  if (draft.templateId) {
+    const tpl = taskTemplatesOf(actor).find((t) => t.id === draft.templateId);
+    if (!tpl) {
+      warnings.push('התבנית שנבחרה אינה זמינה לך — המשימה תיפתח בלעדיה');
+      draft = { ...draft, templateId: 0, templateName: '', templateChecklist: [] };
+    } else {
+      draft = { ...draft, templateName: tpl.name, templateChecklist: templateItems(tpl) };
+    }
+  }
   return { ...draft, warnings };
+}
+
+/** הצ'קליסט של הטיוטה עם סעיפי התבנית לפניו — לתצוגה (מחרוזות) ולפתיחה (עם הערות) */
+function mergedChecklist(actor, draft) {
+  const own = draft.checklist ?? [];
+  const tpl = draft.templateId ? taskTemplatesOf(actor).find((t) => t.id === draft.templateId) : null;
+  const fromTpl = (tpl?.payload?.checklist ?? [])
+    .map((c) => (typeof c === 'string' ? { text: c.trim(), note: '' } : { text: String(c?.text ?? '').trim(), note: String(c?.note ?? '') }))
+    .filter((c) => c.text);
+  const seen = new Set(fromTpl.map((c) => c.text));
+  return { tpl, items: [...fromTpl, ...own.filter((x) => !seen.has(x)).map((text) => ({ text, note: '' }))] };
 }
 
 // ---------------------------------------------------------------------------
@@ -1538,20 +1585,23 @@ function createFromDraft(actor, original) {
   // בדיקה אחרונה לפני הפתיחה — הרשאות יכולות להשתנות בין הטיוטה ל"כן"
   const draft = checkDraft(actor, original);
   const assignee = draft.assigneeId || actor.id;
+  const { tpl, items } = mergedChecklist(actor, draft);
+  const tplDesc = String(tpl?.payload?.description ?? '').trim();
   return hooks.createTask(actor, {
     title: draft.title,
-    description: [draft.summary, '', '💬 נפתחה מוואטסאפ'].join('\n').trim(),
+    description: [draft.summary, tplDesc && tplDesc !== draft.summary ? tplDesc : null, '', '💬 נפתחה מוואטסאפ'].filter((x) => x !== null).join('\n').trim(),
     projectId: draft.projectId || null,
     assigneeType: 'user',
     assigneeId: assignee,
     // מי שפתח למישהו אחר נשאר שותף — אחרת המשימה נעלמת לו מהעיניים
     extraAssignees: assignee !== actor.id ? [{ type: 'user', id: actor.id }] : [],
-    priority: draft.priority,
+    // עדיפות שלא נאמרה (רגילה) נלקחת מהתבנית
+    priority: draft.priority === 'normal' && ['high', 'urgent'].includes(tpl?.payload?.priority) ? tpl.payload.priority : draft.priority,
     dueDate: draft.dueDate ? new Date(`${draft.dueDate}T17:00:00+03:00`).toISOString() : null,
-    checklist: draft.checklist,
+    checklist: items,
     source: 'whatsapp',
     sourceUserId: actor.id,
-    auditNote: 'המשימה נפתחה מוואטסאפ'
+    auditNote: tpl ? `המשימה נפתחה מוואטסאפ מהתבנית "${tpl.name}"` : 'המשימה נפתחה מוואטסאפ'
   });
 }
 
@@ -2374,7 +2424,8 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
           dueDate: u.draft.dueDate || item.dueDate || '',
           priority: u.draft.priority || (item.importance === 3 ? 'high' : 'normal'),
           projectId: u.draft.projectId || 0,
-          checklist: u.draft.checklist ?? []
+          checklist: u.draft.checklist ?? [],
+          templateId: u.draft.templateId || 0
         };
         const checked = checkDraft(actor, draft);
         return out(draftText(checked, user), { draft: checked, awaiting: true }, { action: 'mail_insights', status: 'ok', result: `טיוטת משימה ממייל: ${checked.title}` });
@@ -3081,8 +3132,8 @@ async function tick() {
   }
 }
 
-function init({ createTask, listProjectsFor, newTaskProjects, assignableUserIds, assignBlockReason, tasks, mail }) {
-  Object.assign(hooks, { createTask, listProjectsFor, newTaskProjects, assignableUserIds, assignBlockReason, tasks, mail });
+function init({ createTask, listProjectsFor, newTaskProjects, assignableUserIds, assignBlockReason, taskTemplates, tasks, mail }) {
+  Object.assign(hooks, { createTask, listProjectsFor, newTaskProjects, assignableUserIds, assignBlockReason, taskTemplates, tasks, mail });
 }
 
 function start() {
@@ -3101,6 +3152,6 @@ module.exports = {
   _internal: {
     storeGroupMessage, processGroup, handleDirect, sanitizeGroup, resolveMentions, candidatesOf, converse, turn, withFollowUps, sendSummaries, YES,
     findRecipients, findContactCards, sourceOf, suggestionFeedback, flushOutbox, todayMessage, splitMessage, parseSuggestionCommand, businessCommand, chatOf, saveChat,
-    recordingReply
+    recordingReply, checkDraft, draftText, createFromDraft
   }
 };

@@ -5190,7 +5190,9 @@ Dupes.setHooks({
   }
 });
 
-AiApi.register(router, { getTaskOr404, assertVisible, mayOnTask, shapeTask, actorRef, saveAttachment, createTask, assertMayAssignTo, assertMayUseProject, listProjectsFor, newTaskProjects, assignableUserIds, assignBlockReason, botTaskOps });
+AiApi.register(router, { getTaskOr404, assertVisible, mayOnTask, shapeTask, actorRef, saveAttachment, createTask, assertMayAssignTo, assertMayUseProject, listProjectsFor, newTaskProjects, assignableUserIds, assignBlockReason, botTaskOps,
+  // תבניות המשימה שהשחקן רואה — הבוט מציע אותן בפתיחת משימה
+  taskTemplates: (actor) => visibleTemplates(actor).filter((t) => t.kind === 'task').map(shapeTemplate) });
 TodayApi.register(router, { shapeTask, createTask, getTaskOr404, listProjectsFor, newTaskProjects, assertMayAssignTo });
 PhonebookApi.register(router);
 WhatsNew.register(router);
