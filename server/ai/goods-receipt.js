@@ -792,10 +792,8 @@ async function askProject(s) {
  */
 async function chooseWarehouse(s, note = '') {
   const go = async (extra) => {
-    // שאר המחסנים בחברה — לשינוי במספר, בשלב הנספחים
-    const others = ((await Priority.warehouses(s.company).catch(() => null)) ?? []).filter((w) => w.code !== s.warehouse).slice(0, 8);
-    s.warehouseChoices = others.map((w) => ({ code: w.code, name: w.name }));
-    const change = extra && others.length ? `   לשנות מחסן — כתבו מספר: ${others.map((w, i) => `*${i + 1}.* ${w.name || w.code}`).join(' · ')}` : '';
+    // לא עוצרים: המחסן נקבע, ולשינוי — "מחסן" בשלב הנספחים מציג את הרשימה
+    const change = extra ? '   לשנות מחסן — כתבו *מחסן*.' : '';
     const r = askFiles(s);
     const pre = [note, extra, change].filter(Boolean).join('\n');
     return pre ? { ...r, replies: [`${pre}\n\n${r.replies[0]}`] } : r;
@@ -808,10 +806,10 @@ async function chooseWarehouse(s, note = '') {
   const opts = await Priority.projectWarehouses(s.company, s.project?.code).catch(() => []);
   if (opts.length === 1) { s.warehouse = opts[0].code; return go(`🏬 מחסן: *${opts[0].name || opts[0].code}* (${opts[0].code})`); }
   if (opts.length > 1) {
-    s.step = 'warehouse';
-    s.warehouseOptions = opts.slice(0, 9);
-    return reply(s, [note || null, `🏬 לאיזה מחסן לשייך? לפרויקט ${s.project.des} יש כמה מחסנים:`,
-      ...s.warehouseOptions.map((w, i) => `*${i + 1}.* ${w.name || w.code} (${w.code})${w.n ? ` — ${w.n} קבלות` : ''}`), '', 'כתבו מספר מהרשימה.'].filter((x) => x !== null).join('\n'));
+    // כמה מחסנים — המחסן הראשי אם הוא ביניהם, אחרת הנפוץ בקבלות הפרויקט. לא עוצרים לשאלה
+    const w = opts.find((x) => x.code === 'Main') ?? opts[0];
+    s.warehouse = w.code;
+    return go(`🏬 מחסן: *${w.name || w.code}* (${w.code})`);
   }
   s.warehouse = await Priority.warehouseOf(s.company, s.project?.code);
   const name = ((await Priority.warehouses(s.company).catch(() => null)) ?? []).find((w) => w.code === s.warehouse)?.name;
@@ -821,7 +819,15 @@ async function chooseWarehouse(s, note = '') {
 function askFiles(s) {
   s.step = 'files';
   return reply(s, ['📎 *נספחים* — יש עוד מסמכים לצרף (תעודה נוספת, תמונה של הסחורה)? שלחו אותם עכשיו, אחד אחרי השני.',
-    'כשסיימתם — *סיום*. אין — *אין*.'].join('\n'));
+    'כשסיימתם, או אם אין — *סיום*.'].join('\n'));
+}
+
+/** "מחסן" בשלב הנספחים — רשימת המחסנים של החברה, לבחירה במספר */
+async function listWarehouses(s) {
+  const all = ((await Priority.warehouses(s.company).catch(() => null)) ?? []).slice(0, 9);
+  if (!all.length) return reply(s, `🏬 המחסן: *${s.warehouse}*. לא הצלחתי לקרוא את רשימת המחסנים. כתבו *סיום* להמשך.`);
+  s.warehouseChoices = all.map((w) => ({ code: w.code, name: w.name }));
+  return { s, replies: [['🏬 לאיזה מחסן לשייך? כתבו מספר:', ...all.map((w, i) => `*${i + 1}.* ${w.name || w.code} (${w.code})${w.code === s.warehouse ? ' ← עכשיו' : ''}`)].join('\n')] };
 }
 
 async function createDraft(user, s) {
@@ -1542,9 +1548,10 @@ async function step(user, s, t, file) {
     case 'files':
       if (s.pendingNew && !file) { const r = await answerPendingNew(user, s, t); if (r) return r; }
       if (file) return routeFile(user, s, file, t);
+      if (/^(מחסן|מחסנים|שנה מחסן|לשנות מחסן|החלף מחסן|פירוט מחסנים|רשימת מחסנים)([\s,.!?]|$)/.test(t.trim())) return listWarehouses(s);
       if (/^\d{1,2}$/.test(t.trim()) && s.warehouseChoices?.[Number(t) - 1]) {
         const w = s.warehouseChoices[Number(t) - 1];
-        s.warehouseChoices = s.warehouseChoices.filter((x) => x !== w);
+        s.warehouseChoices = null;
         s.warehouse = w.code;
         const r = askFiles(s);
         return { ...r, replies: [`🏬 המחסן שונה ל*${w.name || w.code}* (${w.code}).\n\n${r.replies[0]}`] };
