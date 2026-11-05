@@ -6,6 +6,7 @@ const crypto = require('node:crypto');
 
 const D = require('./db');
 const P = require('./permissions');
+const Cls = require('./ai/classification');
 const Auth = require('./auth');
 const Rules = require('./rules-engine');
 const Google = require('./google-auth');
@@ -313,8 +314,17 @@ const EXTRA_ASSIGNEE_SQL = `EXISTS (
    WHERE ta.task_id = t.id AND ta.assignee_type = ? AND ta.assignee_id = ?
 )`;
 
-/** מה כל שחקן רשאי לראות — הבורדים נפרדים, וההיקף נקבע לפי התפקיד */
+/**
+ * מה כל שחקן רשאי לראות: ההרשאות הרגילות, ומעליהן הסיווג לפי נושא ורמת
+ * רגישות (‎ai/classification.js‎). הסיווג רק מצמצם — משימה מסווגת נשארת
+ * גלויה למשתתפים בה ולמי שטבלת הרגישות מתירה, גם אם הוא בהנהלה או מנהל מערכת.
+ */
 function canSeeTask(actor, task) {
+  return canSeeTaskByRole(actor, task) && Cls.mayReadTask(actor, task);
+}
+
+/** מה כל שחקן רשאי לראות לפי התפקיד — הבורדים נפרדים, וההיקף נקבע לפי התפקיד */
+function canSeeTaskByRole(actor, task) {
   const board = boardOf(task);
   if (!board) return false;
   const extras = extraAssigneesOf(task);
@@ -353,7 +363,8 @@ function canSeeTask(actor, task) {
  * ארגוניות. עוטף את P.canOnTask כדי שאף קורא לא ישכח את הפרמטר הזה.
  */
 function mayOnTask(actor, action, task, project = null) {
-  return P.canOnTask(actor, action, task, project, assigneeDepartmentId(task), extraAssigneesOf(task));
+  return Cls.mayReadTask(actor, task)
+    && P.canOnTask(actor, action, task, project, assigneeDepartmentId(task), extraAssigneesOf(task));
 }
 
 function assertVisible(actor, task) {
@@ -521,8 +532,11 @@ function shapeTask(task, actor, { withDetails = false } = {}) {
           ORDER BY COALESCE(t.due_date, '9999-12-31'), t.id LIMIT 1`,
         task.id
       );
-      return row ? shapeSubtask(row) : null;
+      return row && Cls.mayReadTask(actor, row) ? shapeSubtask(row) : null;
     })(),
+    // 🔒 הסיווג של המשימה עצמה, ומה שהיא יורשת מהפרויקט כשאין לה משלה
+    classification: Cls.classView(task),
+    inheritedClassification: !Cls.classView(task) && project ? Cls.classView(project) : null,
     departmentId: task.department_id ?? null,
     departmentName: task.department_id
       ? D.get('SELECT name FROM departments WHERE id = ?', task.department_id)?.name ?? null
@@ -968,6 +982,8 @@ router.get('/api/bootstrap', async (req, res, ctx) => {
     actor: publicActor(actor),
     permissions: P.permissionsFor(actor),
     priorities: PRIORITIES,
+    // 🔒 נושאי הסיווג לבורר במשימה ובפרויקט — שם ורמת מינימום בלבד, בלי המחלקות
+    classTopics: isVendor(actor) ? [] : Object.entries(Cls.topics()).map(([key, t]) => ({ key, label: t.label, floor: t.floor })),
     // הרשימה האישית של המשתמש ולוח הצבעים — הבורר בטבלה נבנה מהפרויקט עצמו
     myStatuses: isVendor(actor) ? [] : statusList(actor.id),
     statusPalette: STATUS_PALETTE,
@@ -1194,7 +1210,9 @@ function listProjectsFor(actor) {
   const mineIds = ownedProjectIds(actor);
 
   const rows = D.all('SELECT * FROM projects ORDER BY status, name')
-    .filter((p) => visible === null || visible.has(p.id));
+    .filter((p) => visible === null || visible.has(p.id))
+    // 🔒 פרויקט מסווג — רק למי שהטבלה מתירה, למנהלו, לפותחו ולמי שיש לו בו משימה
+    .filter((p) => Cls.mayReadProject(actor, p));
   const shaped = rows.map((p) => {
     const stats = D.get(
       `SELECT COUNT(*) total,
@@ -1253,6 +1271,7 @@ function listProjectsFor(actor) {
         : null,
       parentProjectId: p.parent_project_id ?? null,
       statusOwnerId: p.status_owner_id ?? null,
+      classification: Cls.classView(p),
       /*
        * האם אפשר לפתוח בו משימה: פרויקט שלי (מנהל, פתחתי, נעצתי, יש לי בו
        * עבודה) או של המחלקה שלי. גם למי שרואה את כל הארגון — בורר הפרויקט
@@ -1450,7 +1469,8 @@ router.get('/api/tasks', async (req, res, ctx) => {
     ...params
   );
 
-  sendJson(res, 200, { tasks: rows.map((t) => shapeTask(t, actor)) });
+  // 🔒 הסיווג — אחרי השאילתה: הוא נשען על טבלת הנושאים, לא על עמודות בלבד
+  sendJson(res, 200, { tasks: rows.filter((t) => Cls.mayReadTask(actor, t)).map((t) => shapeTask(t, actor)) });
 });
 
 router.get('/api/tasks/:id', async (req, res, ctx) => {
@@ -1571,6 +1591,11 @@ function createTask(actor, body) {
     String(body.statusShort ?? '').slice(0, 200)
   );
   const id = Number(res1.lastInsertRowid);
+  // 🔒 סיווג מהטופס (נושא ורמה). בלי — המשימה יורשת מהפרויקט, ואם גם לו אין: רגילה
+  if (body.topic) {
+    const c = Cls.parseClass(body.topic, body.sens);
+    if (c.sens) D.run('UPDATE tasks SET topic = ?, sens = ? WHERE id = ?', c.topic, c.sens, id);
+  }
   /*
    * "📅 פגישה לקביעה" — משימה שהכותרת שלה היא בקשה לפגישה, מכל מקור (ידני,
    * הקלטה, בוט, מייל). אפשר להסיר את הסימון מהכרטיס.
@@ -1741,6 +1766,23 @@ router.patch('/api/tasks/:id', async (req, res, ctx) => {
       D.run(`UPDATE tasks SET ${column} = ? WHERE id = ?`, next, task.id);
       changes.push(`${label}: ${formatter(current) || '—'} ← ${formatter(next) || '—'}`);
     };
+
+    // 🔒 סיווג: כל מי שעורך רשאי להחמיר. להקל או לבטל — רק מי שהטבלה מתירה לו את הסיווג
+    // הנוכחי, ולא רק כמשתתף: אחרת מי שהוסף למשימה רגישה יכול היה לפתוח אותה לכולם
+    if (body.topic !== undefined || body.sens !== undefined) {
+      const next = Cls.parseClass(body.topic ?? task.topic, body.sens ?? task.sens);
+      // הסיווג בפועל — גם זה שעובר בירושה מהפרויקט: סיווג משלה נמוך ממנו היה פותח אותה
+      const cur = Cls.classView(Cls.taskClass(task) ?? {});
+      if (next.topic !== (task.topic || '') || next.sens !== Number(task.sens || 0)) {
+        const lowering = cur && (!next.sens || next.sens < cur.sens || next.topic !== cur.topic);
+        if (lowering && !Cls.mayRead(Cls.scopeOf(actor), cur.topic, cur.sens)) {
+          throw forbidden('רק מי שטבלת הרגישות מתירה לו את הסיווג הנוכחי רשאי להקל אותו');
+        }
+        D.run('UPDATE tasks SET topic = ?, sens = ? WHERE id = ?', next.topic, next.sens, task.id);
+        const after = Cls.classView({ topic: next.topic, sens: next.sens });
+        changes.push(`סיווג: ${cur?.label ?? 'רגיל'} ← ${after?.label ?? 'רגיל'}`);
+      }
+    }
 
     setField('title', 'title', body.title !== undefined ? String(body.title).trim() : undefined, 'כותרת');
     setField('description', 'description', body.description !== undefined ? String(body.description) : undefined, 'תיאור');
@@ -2792,6 +2834,10 @@ router.post('/api/projects', async (req, res, ctx) => {
     b.statusOwnerId ? Number(b.statusOwnerId) : null
   );
   const id = Number(r.lastInsertRowid);
+  if (b.topic) {
+    const c = Cls.parseClass(b.topic, b.sens);
+    if (c.sens) D.run('UPDATE projects SET topic = ?, sens = ? WHERE id = ?', c.topic, c.sens, id);
+  }
 
   // יצירה מתבנית
   if (b.templateId) {
@@ -2829,6 +2875,17 @@ router.patch('/api/projects/:id', async (req, res, ctx) => {
     ? resolveParentProject(actor, b.parentProjectId, project.id)
     : (project.parent_project_id ?? null);
 
+  // 🔒 סיווג הפרויקט — חל על כל משימה בו שאין לה סיווג משלה. להקל — רק מי שהטבלה מתירה לו
+  let classNext = null;
+  if (b.topic !== undefined || b.sens !== undefined) {
+    const next = Cls.parseClass(b.topic ?? project.topic, b.sens ?? project.sens);
+    const cur = Cls.classView(project);
+    const lowering = cur && (!next.sens || next.sens < cur.sens || next.topic !== cur.topic);
+    if (lowering && !Cls.mayRead(Cls.scopeOf(actor), cur.topic, cur.sens)) {
+      throw forbidden('רק מי שטבלת הרגישות מתירה לו את הסיווג הנוכחי רשאי להקל אותו');
+    }
+    classNext = next;
+  }
   D.run(
     `UPDATE projects SET name = ?, description = ?, manager_id = ?, start_date = ?, due_date = ?,
                          status = ?, color = ?, parent_project_id = ?, status_owner_id = ? WHERE id = ?`,
@@ -2844,6 +2901,7 @@ router.patch('/api/projects/:id', async (req, res, ctx) => {
       : (project.status_owner_id ?? null),
     project.id
   );
+  if (classNext) D.run('UPDATE projects SET topic = ?, sens = ? WHERE id = ?', classNext.topic, classNext.sens, project.id);
   // רק כשהאחראי באמת התחלף — שמירת הפרויקט בלי לגעת בו אינה מינוי מחדש
   if (nextManager !== project.manager_id) {
     notifyProjectManager(project.id, nextManager, b.name ?? project.name, actor);
@@ -3027,7 +3085,7 @@ router.get('/api/home', async (req, res, ctx) => {
                   AND t.assignee_id IN (SELECT id FROM users WHERE department_id = ?))
             )`,
         D.nowIso(), actor.id, actor.departmentId, actor.departmentId
-      ).map((t) => shapeTask(t, actor)).filter((t) => !t.isFinal)
+      ).filter((t) => Cls.mayReadTask(actor, t)).map((t) => shapeTask(t, actor)).filter((t) => !t.isFinal)
     : [];
 
   let awaitingApproval = [];
@@ -3036,7 +3094,7 @@ router.get('/api/home', async (req, res, ctx) => {
       `SELECT t.* FROM tasks t JOIN boards b ON b.id = t.board_id
         WHERE b.type = 'vendor' AND t.archived = 0
           AND t.status IN ('pending_team_review','in_team_review','uploaded')`
-    ).map((t) => shapeTask(t, actor));
+    ).filter((t) => Cls.mayReadTask(actor, t)).map((t) => shapeTask(t, actor));
   } else if (isVendor(actor)) {
     awaitingApproval = mine.filter((t) => ['pending_team_review', 'in_team_review', 'uploaded'].includes(t.status));
   }

@@ -18,6 +18,7 @@ function lines(projects, { sep = ' · ', marker = () => '' } = {}) {
     const titles = D.all(
       `SELECT t.title FROM tasks t LEFT JOIN board_columns c ON c.board_id = t.board_id AND c.key = t.status
         WHERE t.project_id = ? AND t.archived = 0 AND COALESCE(c.is_final, 0) = 0
+          AND t.sens <= 1 -- 🔒 כותרת של משימה מסווגת לא נכנסת לרמזים שה-AI מקבל
         ORDER BY t.created_at DESC LIMIT ?`,
       p.id, TITLES
     ).map((t) => String(t.title).slice(0, 60));
