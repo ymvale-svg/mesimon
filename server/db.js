@@ -676,6 +676,20 @@ CREATE TABLE IF NOT EXISTS wa_chats (
  * הודעות יזומות של הבוט (קיבלת משימה) שנוצרו מחוץ לשעות הפעילות או בשבת —
  * נשלחות כשהחלון נפתח.
  */
+/*
+ * הודעות שעובד העביר (Forward) לבוט, וממתינות להוראה מה לעשות איתן ("לשושנה,
+ * תפתח משימה"). ‎kind‎: ‎forward‎ — ההודעה שהועברה · ‎note‎ — הוראה חלקית שכבר
+ * נאמרה עליהן. נמחקות כשההוראה טופלה, או אחרי חלון ההמתנה.
+ */
+CREATE TABLE IF NOT EXISTS wa_forwards (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  kind        TEXT    NOT NULL DEFAULT 'forward',
+  text        TEXT    NOT NULL,
+  at          TEXT    NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_wa_forwards_user ON wa_forwards(user_id, id);
+
 CREATE TABLE IF NOT EXISTS wa_outbox (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
   user_id     INTEGER REFERENCES users(id) ON DELETE CASCADE,
@@ -1689,6 +1703,9 @@ function migrate() {
   addColumn('wa_chats', 'greeted_on', "TEXT NOT NULL DEFAULT ''");
   // רשימת התובנות מהמיילים שנשלחה לו, ובקשות מאותה הקלטה שממתינות בתור
   addColumn('wa_chats', 'extra', "TEXT NOT NULL DEFAULT '{}'");
+  // יומן הבוט: התשובה המלאה שנשלחה, והאם ההודעה הועברה (Forward) — לסקירה הלילית
+  addColumn('wa_log', 'reply', "TEXT NOT NULL DEFAULT ''");
+  addColumn('wa_log', 'forwarded', 'INTEGER NOT NULL DEFAULT 0');
   addColumn('comments', 'checklist_item_id', 'INTEGER REFERENCES checklist_items(id) ON DELETE CASCADE');
   // תבניות פר מחלקה. תבנית קיימת נשארת ללא מחלקה, כלומר ארגונית — מי שכבר
   // הסתמך עליה לא יגלה אותה נעלמת בעלייה לגרסה
