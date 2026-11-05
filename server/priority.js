@@ -179,7 +179,7 @@ async function findSuppliers(company, { vat = '', name = '' } = {}) {
   // לפי השם: מועמדים מכמה מילים מהשם, מדורגים לפי מספר המילים המשותפות (ובונוס כשהח.פ. שלהם קרוב לזה שבמסמך —
   // ח.פ. חתוך או ספרה שנקראה לא נכון). כך "זיו מערכות לניהול בניה (מסד דרום) 1992 (zivsystems)" מוצא את
   // "זיו מערכות לניהול בניה (מסד דרום)  1992 בעמ", ולא כל ספק עם "מערכות".
-  const words = [...new Set(normName(name).split(' ').filter((w) => w.length >= 3 && !/^\d+$/.test(w)))];
+  const words = [...new Set(normName(name).split(' ').filter((w) => w.length >= 3 && !/^\d+$/.test(w) && !/^(ספק|הספק|חברת|חברה)$/.test(w)))];
   const probe = [...new Set([words[0], ...[...words].sort((x, y) => y.length - x.length).slice(0, 3)].filter(Boolean))];
   const cand = new Map();
   for (const w of probe) {
@@ -193,14 +193,15 @@ async function findSuppliers(company, { vat = '', name = '' } = {}) {
   const scored = [...cand.values()].map((x) => {
     const theirs = normName(x.SUPDES).split(' ').filter((w) => w.length >= 3);
     const shared = theirs.filter((w) => mine.has(w)).length;
-    const vatNear = near(String(x.COMPNUM ?? '').padStart(9, '0'), vatD);
+    const vatNear = digits.length >= 7 && String(x.COMPNUM ?? '').replace(/\D/g, '').length >= 7 && near(String(x.COMPNUM).padStart(9, '0'), vatD);
     return { x, score: shared + (vatNear ? 3 : 0), shared, vatNear };
   }).filter((c) => c.shared > 0).sort((a, b) => b.score - a.score);
   if (!scored.length) return { by: null, list: [] };
   const [top, second] = scored;
   // ברור: רוב המילים משותפות (או ח.פ. קרוב), ויותר מהבא אחריו
   const clear = (top.shared >= Math.min(3, words.length) || top.vatNear) && (!second || top.score > second.score);
-  return { by: top.vatNear ? 'vat_near' : 'name', list: clear ? [top.x] : scored.slice(0, 5).map((c) => c.x) };
+  // ‎weak‎ — אין ספק שמתאים לשם באמת (רק מילה משותפת או שתיים): הצעות בלבד, לא בחירה אוטומטית
+  return { by: top.vatNear ? 'vat_near' : 'name', list: clear ? [top.x] : scored.slice(0, 5).map((c) => c.x), weak: !clear };
   return { by: null, list: [] };
 }
 

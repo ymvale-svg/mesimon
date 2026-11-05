@@ -62,6 +62,8 @@ const YES = /^(כן|נכון|מאשר|מאשרת|אשר|אישור|תקין|יא
 const CANCEL = /^(ביטול|בטל|לבטל|עזוב|יציאה|stop)([\s,.!]|$)/i;
 /** "תוסיף בדו שיח: ...", "הערה: ...", "תרשום בהערות ..." — הערה חופשית של המקבל לדו-שיח הפנימי, בכל שלב */
 const NOTE_CMD = /^\s*(?:תוסיף|תוסיפי|הוסף|להוסיף|תרשום|תכתוב|רשום|כתוב)?\s*(?:ל|ב)?\s*(?:דו[\s-]*שיח(?:\s*פנימי)?|הערה|הערות)\s*[,:\-–]?\s*([\s\S]+)$/;
+/** "ספק …", "שם ספק: …", "הספק הוא …", "ספק אחר" — ‎[1]‎ השם או המספר */
+const SUPPLIER_CMD = /^\s*(?:שם\s*(?:ה)?ספק|(?:ה)?ספק(?:\s+(?:הוא|זה|נכון|אחר))?|לשנות\s*ספק|תשנה\s*ספק|ספק\s*שגוי)(?=[\s:\-–]|$)\s*[:\-–]?\s*([\s\S]*)$/;
 const DONE_FILES = /^(סיום|סיימתי|זהו|אין|אין נספחים|בלי נספחים|המשך)([\s,.!]|$)/;
 const NO_ORDER = /^(בלי הזמנה|אין הזמנה|ללא הזמנה|לפי המסמך|אין|בלי|לא)([\s,.!]|$)/;
 
@@ -533,7 +535,7 @@ async function resolveCompany(s) {
 async function resolveSupplier(s) {
   const found = await Priority.findSuppliers(s.company, { vat: s.doc.supplier_vat, name: s.doc.supplier_name });
   s.supplierBy = found.by;
-  if (found.list.length === 1) {
+  if (found.list.length === 1 && !found.weak) {
     s.supplier = { code: found.list[0].SUPNAME, name: found.list[0].SUPDES };
     return askHeader(s);
   }
@@ -543,7 +545,7 @@ async function resolveSupplier(s) {
     return reply(s, [companyLine(s), '', `לא מצאתי בפריוריטי את הספק *${s.doc.supplier_name}*${s.doc.supplier_vat ? ` (ח.פ. ${s.doc.supplier_vat})` : ''}.`,
       'כתבו את מספר הספק בפריוריטי, או *ביטול*.'].join('\n'));
   }
-  return reply(s, [companyLine(s), '', `איזה ספק זה? (במסמך: ${s.doc.supplier_name})`,
+  return reply(s, [companyLine(s), '', found.weak ? `לא מצאתי בפריוריטי ספק בשם *${s.doc.supplier_name}*. אולי אחד מאלה?` : `איזה ספק זה? (במסמך: ${s.doc.supplier_name})`,
     ...s.supplierOptions.map((x, i) => `*${i + 1}.* ${x.name} (${x.code})`), '', 'כתבו מספר, או *ביטול*.'].join('\n'));
 }
 
@@ -594,12 +596,12 @@ async function askHeader(s) {
     `📦 *קבלת סחורה* — ${docName(d)} ${d.doc_number}`,
     companyLine(s),
     s.via === 'sandbox' ? `   (המסמך מופנה ל${companyMatch(d).matched?.name ?? 'חברה אחרת'} — נקלט לעותק הבדיקה)` : null,
-    `🚚 ספק: *${s.supplier.name}* (${s.supplier.code})${s.supplierBy === 'vat' ? ` — לפי ח.פ. ${String(d.supplier_vat).replace(/\D/g, '')}` : s.supplierBy === 'name' ? (d.supplier_vat ? ` — לפי שם: ח.פ. ${String(d.supplier_vat).replace(/\D/g, '')} שבמסמך לא נמצא בכרטיסי הספקים` : ' — לפי שם, אין ח.פ. במסמך') : ['vat_near', 'vat_fuzzy'].includes(s.supplierBy) ? ` — לפי שם וח.פ. דומה (במסמך נקרא ${String(d.supplier_vat).replace(/\D/g, '')})` : ''}`,
+    `🚚 ספק: *${s.supplier.name}* (${s.supplier.code})${s.supplierBy === 'vat' ? ` — לפי ח.פ. ${String(d.supplier_vat).replace(/\D/g, '')}` : s.supplierBy === 'name' ? (d.supplier_vat ? ` — לפי שם: ח.פ. ${String(d.supplier_vat).replace(/\D/g, '')} שבמסמך לא נמצא בכרטיסי הספקים` : ' — לפי שם, אין ח.פ. במסמך') : s.supplierBy === 'user' ? ' — נבחר ע"י המקבל' : ['vat_near', 'vat_fuzzy'].includes(s.supplierBy) ? ` — לפי שם וח.פ. דומה (במסמך נקרא ${String(d.supplier_vat).replace(/\D/g, '')})` : ''}`,
     d.date ? `📅 ${ymdHe(d.date)}${d.delivery_place ? ` · ${d.delivery_place}` : ''}` : null,
     `💳 תנאי תשלום: *${Priority.payLabel(s.payCode ?? Priority.DEFAULT_PAY)}*${(s.payCode ?? Priority.DEFAULT_PAY) === Priority.DEFAULT_PAY ? ' (ברירת מחדל)' : ''}${dueText(s, s.payCode ?? Priority.DEFAULT_PAY)}`,
     s.noVat ? `🧾 מע"מ: *ללא מע"מ* — קוד ${Priority.NO_VAT_CODE} ${Priority.TAX_CODES[Priority.NO_VAT_CODE]}${s.noVatBy === 'user' ? ' (נבחר)' : ' — במסמך אין מע"מ'}` : null,
     d.warnings?.length ? `⚠️ ${d.warnings.join('\n⚠️ ')}` : null,
-    '', `נכון? *כן* 👍 להמשך, או *ביטול*. לתנאי תשלום אחר — כתבו אותו ("שוטף 60"). ${s.noVat ? 'יש מע"מ — *עם מע"מ*.' : 'אין מע"מ — *ללא מע"מ*.'}`
+    '', `נכון? *כן* 👍 להמשך, או *ביטול*. ספק אחר — "ספק …". לתנאי תשלום אחר — כתבו אותו ("שוטף 60"). ${s.noVat ? 'יש מע"מ — *עם מע"מ*.' : 'אין מע"מ — *ללא מע"מ*.'}`
   ];
   return reply(s, lines.filter((x) => x !== null).join('\n'));
 }
@@ -1628,6 +1630,9 @@ async function step(user, s, t, file) {
     }
 
     case 'supplier': {
+      // "ספק …" / "שם ספק: …" גם כאן — רק השם
+      const smc = t.match(SUPPLIER_CMD);
+      if (smc && smc[1].trim()) t = smc[1].replace(/\s+/g, ' ').trim();
       const n = numberIn(t);
       let sup = s.supplierOptions?.length && n && n <= s.supplierOptions.length && /^\d{1,2}$/.test(t) ? s.supplierOptions[n - 1] : null;
       if (!sup && /^\d{3,}$/.test(t)) {
@@ -1640,13 +1645,14 @@ async function step(user, s, t, file) {
         const found = await Priority.findSuppliers(s.company, { vat: /^\d{9}$/.test(t) ? t : '', name: t });
         const exact = /^\d+$/.test(t) ? found.list.find((x) => x.SUPNAME === t) : null;
         const list = exact ? [exact] : found.list;
-        if (list.length === 1) sup = { code: list[0].SUPNAME, name: list[0].SUPDES };
+        if (list.length === 1 && (exact || !found.weak)) sup = { code: list[0].SUPNAME, name: list[0].SUPDES };
         else if (list.length) {
           s.supplierOptions = list.map((x) => ({ code: x.SUPNAME, name: x.SUPDES }));
-          return reply(s, ['איזה מהם?', ...s.supplierOptions.map((x, i) => `*${i + 1}.* ${x.name} (${x.code})`)].join('\n'));
+          return reply(s, [found.weak ? `לא מצאתי ספק בשם "${t}". אולי אחד מאלה?` : 'איזה מהם?', ...s.supplierOptions.map((x, i) => `*${i + 1}.* ${x.name} (${x.code})`),
+            '', 'כתבו מספר מהרשימה, שם אחר, או מספר ספק בפריוריטי. אין ספק כזה — צריך לפתוח אותו בפריוריטי (רכש), או *ביטול*.'].join('\n'));
         }
       }
-      if (!sup) return reply(s, 'לא מצאתי. כתבו את מספר הספק בפריוריטי, או *ביטול*.');
+      if (!sup) return reply(s, `לא מצאתי ספק${t && !/^\d+$/.test(t) ? ` בשם "${t}"` : ''} בחברה הזו. כתבו שם אחר או מספר ספק בפריוריטי. אין ספק כזה — צריך לפתוח אותו בפריוריטי (רכש), או *ביטול*.`);
       s.supplier = sup;
       s.supplierBy = 'user';
       return askHeader(s);
@@ -1656,9 +1662,18 @@ async function step(user, s, t, file) {
       const pay = Priority.payFromText(t);
       if (pay?.unknown !== undefined) return reply(s, `אין בפריוריטי תנאי תשלום שוטף + ${pay.unknown}. האפשרויות: ${Priority.PAY_TERMS.map((p) => Priority.payLabel(p.code)).join(', ')}.`);
       if (pay) { s.payCode = pay.code; return askHeader(s); }
+      // ספק אחר בשפה חופשית: "ספק מועצה מקומית רכסים", "שם ספק: …", "ספק 600038", "ספק אחר"
+      const sm = t.match(SUPPLIER_CMD);
+      if (sm) {
+        const who = sm[1].replace(/\s+/g, ' ').trim();
+        s.step = 'supplier';
+        s.supplierOptions = null;
+        if (!who || /^(אחר|שגוי|לא נכון)$/.test(who)) return reply(s, 'איזה ספק? כתבו את השם או את מספר הספק בפריוריטי.');
+        return step(user, s, who, null);
+      }
       if (NO_VAT_TEXT.test(t)) { s.noVat = true; s.noVatBy = 'user'; return askHeader(s); }
       if (WITH_VAT_TEXT.test(t.trim())) { s.noVat = false; s.noVatBy = 'user'; return askHeader(s); }
-      if (!YES.test(t)) return reply(s, '*כן* 👍 להמשך, או *ביטול*. לתנאי תשלום אחר — כתבו אותו ("שוטף 60"). מע"מ — *ללא מע"מ* / *עם מע"מ*.');
+      if (!YES.test(t)) return reply(s, '*כן* 👍 להמשך, או *ביטול*. ספק אחר — "ספק …" (שם או מספר). לתנאי תשלום אחר — כתבו אותו ("שוטף 60"). מע"מ — *ללא מע"מ* / *עם מע"מ*.');
       return resolveOrder(s);
     }
 
