@@ -314,12 +314,21 @@ function summaryText(s, gr) {
     `לפני מע"מ: ${money(gr.DISPRICE)} · מע"מ: ${money(gr.VAT)}`,
     `*סה"כ: ${money(gr.TOTPRICE)}*`
   ].filter(Boolean);
-  const docTotal = s.doc?.totals?.total;
-  const diff = docTotal ? Math.round((gr.TOTPRICE - docTotal) * 100) / 100 : 0;
+  // בקרה מול המסמך: לפני מע"מ (כשידוע), אחרת הסה"כ. הפרש עיגול (פחות מ-1 ₪) אינו בעיה
+  const before = s.doc?.totals?.before_vat;
+  const docTotal = before || s.doc?.totals?.total;
+  const grTotal = before ? gr.DISPRICE : gr.TOTPRICE;
+  const what = before ? 'לפני מע"מ' : 'סה"כ';
+  const src = s.doc?.detail ? `בחשבונית ${s.doc.doc_number}` : 'במסמך';
+  const toSrc = s.doc?.detail ? `לחשבונית ${s.doc.doc_number}` : 'למסמך';
+  const diff = docTotal ? Math.round((grTotal - docTotal) * 100) / 100 : 0;
   const check = docTotal
-    ? (Math.abs(diff) < 0.01 ? `✅ תואם לסה"כ במסמך (${money(docTotal)})` : `⚠️ במסמך: ${money(docTotal)} — הפרש ${money(diff)}`)
+    ? (Math.abs(diff) < 0.01 ? `✅ ${what} תואם ${toSrc} (${money(docTotal)})`
+      : Math.abs(diff) < 1 ? `✅ ${what} תואם ${toSrc} (${money(docTotal)}; עיגול ${money(diff)})`
+        : `⚠️ ${what} ${src}: ${money(docTotal)} — הפרש ${money(diff)}`)
     : null;
-  const files = `📎 נספחים: ${gr.files.length}`;
+  const detailLine = s.doc?.detail ? `📋 הפירוט מ${s.doc.detail.doc_type === 'invoice' ? 'חשבונית' : 'חשבון לתשלום'} ${s.doc.detail.doc_number}` : null;
+  const files = [detailLine, `📎 נספחים: ${gr.files.length}`].filter(Boolean).join('\n');
   return [...header, '', ...lines, '', ...totals, check, files, '',
     '*מאשר* — הופך את ה-GR לסופי.', 'תיקון — כתבו מה לשנות ("שורה 2: 5 ולא 6").', '*ביטול* — מבטל את הטיוטא.'].filter((x) => x !== null).join('\n');
 }
@@ -330,6 +339,30 @@ function summaryText(s, gr) {
 
 /** ‎lastPrompt‎ — השאלה האחרונה, כדי לחזור עליה אחרי נספח שהגיע באמצעה */
 const reply = (s, text, extra = {}) => { if (s && s.step) s.lastPrompt = text; return { s, replies: [text], ...extra }; };
+
+const linesOf = (doc) => (doc.lines ?? []).map((l, i) => ({ n: i + 1, description: l.description, supplierCode: l.supplier_code, qty: l.qty, unit: l.unit,
+  price: l.unit_price, discount: l.discount_pct, handwritten: l.handwritten, unclear: l.unclear, options: l.options ?? [] }));
+
+/*
+ * חשבונית מס עם שורה אחת שמפנה לחשבון לתשלום ("ח-ן לתשלום 2011796") — הפירוט בחשבון.
+ * השורות של ה-GR נלקחות מהחשבון; מספר התעודה, הסכום לפני מע"מ והבקרה — מהחשבונית.
+ */
+const refsOf = (doc) => [doc.supplier_order_ref, ...(doc.lines ?? []).map((l) => `${l.description} ${l.supplier_code}`)].join(' ');
+function isDetailOf(main, d) {
+  if (!main || !d || !(d.lines ?? []).length || !d.doc_number || d.doc_number === main.doc_number) return false;
+  if ((main.lines ?? []).length > 2) return false;           // לחשבונית יש פירוט משלה
+  return refsOf(main).replace(/\s/g, '').includes(String(d.doc_number).replace(/\s/g, ''));
+}
+function withDetail(main, d) {
+  const n = String(d.doc_number);
+  return {
+    ...main,
+    lines: d.lines,
+    detail: { doc_number: n, doc_type: d.doc_type, totals: d.totals },
+    // "אין פירוט פריטים" — כבר לא נכון
+    warnings: (main.warnings ?? []).filter((w) => !w.includes(n) && !/פירוט/.test(w))
+  };
+}
 
 async function onMainDoc(user, s, file, pre = null) {
   s.files = [file.path ? { ...file, label: 'מסמך ראשי' } : await saveFile(user.id, file, 'מסמך ראשי')];
@@ -346,8 +379,7 @@ async function onMainDoc(user, s, file, pre = null) {
     return { s: null, replies: ['זה לא נראה כמו תעודת משלוח או חשבונית ספק' + (doc.warnings?.length ? ` (${doc.warnings.join('; ')})` : '') + '. קבלת הסחורה בוטלה. אפשר להתחיל שוב עם צילום אחר.'], status: 'unclear', result: 'מסמך שאינו תעודה/חשבונית' };
   }
   if (!doc.lines?.length) return reply(s, 'לא מצאתי שורות פריטים במסמך. נסו לצלם שוב, כך שכל הטבלה תיראה.', { status: 'unclear', result: 'אין שורות' });
-  s.lines = doc.lines.map((l, i) => ({ n: i + 1, description: l.description, supplierCode: l.supplier_code, qty: l.qty, unit: l.unit,
-    price: l.unit_price, discount: l.discount_pct, handwritten: l.handwritten, unclear: l.unclear, options: l.options ?? [] }));
+  s.lines = linesOf(doc);
   return resolveCompany(s);
 }
 
@@ -542,12 +574,21 @@ async function createDraft(user, s) {
     try {
       if (l.order) await Priority.addOrderLine(c, docno, { ordname: l.order.ordname, line: l.order.line, qty: l.qty });
       else if (l.part) await Priority.addFreeLine(c, docno, { part: l.part.code, qty: l.qty, price: l.price, discount: l.discount, chapter: l.part.chapter, topic: l.part.topic });
-      else await Priority.addFreeLine(c, docno, { part: '000', description: l.description, qty: l.qty, price: l.price, discount: l.discount, chapter: s.chapter?.chapter, topic: s.chapter?.topic });
+      else {
+        // הפריט הכללי נמדד ב"יח'" ומקבל רק כמות שלמה. כמות שבורה (2.3 מ"א) — כמות 1 בסכום השורה
+        // אחרי ההנחה, והכמות והיחידה המקוריות בתחילת התיאור (נחתך אחרי 48 תווים). כך הסכום נשאר מדויק
+        const whole = Number.isInteger(Number(l.qty));
+        const net = Math.round(Number(l.qty) * Number(l.price) * (1 - (Number(l.discount) || 0) / 100) * 100) / 100;
+        await Priority.addFreeLine(c, docno, whole
+          ? { part: '000', description: l.description, qty: l.qty, price: l.price, discount: l.discount, chapter: s.chapter?.chapter, topic: s.chapter?.topic }
+          : { part: '000', description: `${qtyText(l.qty)} ${l.unit ?? ''} · ${l.description}`.replace(/\s+·/, ' ·'), qty: 1, price: net, discount: 0, chapter: s.chapter?.chapter, topic: s.chapter?.topic });
+      }
     } catch (err) {
       problems.push({ what: `שורה ${l.n} (${l.description}) לא נקלטה`, err: `שורה ${l.n}: ${err.message}` });
     }
   }
-  if (!s.order && s.doc.totals?.doc_discount_pct) {
+  // הנחת מסמך — רק הנחה של ממש (לא עיגול של אגורות, ולא "הנחה" שלילית)
+  if (!s.order && s.doc.totals?.doc_discount_pct >= 0.1) {
     await Priority.setHeader(c, docno, { PERCENT: s.doc.totals.doc_discount_pct }).catch((err) => problems.push({ what: 'הנחת המסמך לא נקלטה', err: `הנחת מסמך: ${err.message}` }));
   }
   await Priority.setHeader(c, docno, { DETAILS: `בוט ${s.doc.doc_number}`.slice(0, 24) }).catch(() => {});
@@ -571,6 +612,7 @@ function writeDialog(user, s) {
     `התקבל ע"י: ${user.full_name} | ${nowHe()}`,
     `מסמך מקור: ${d.doc_type === 'invoice' ? 'חשבונית' : 'תעודת משלוח'} ${d.doc_number} של ${s.supplier.name}, מצורף בנספחים`,
     d.supplier_order_ref ? `הזמנה אצל הספק: ${d.supplier_order_ref}` : null,
+    d.detail ? `פירוט השורות: מתוך ${d.detail.doc_type === 'invoice' ? 'חשבונית' : 'חשבון לתשלום'} ${d.detail.doc_number}` : null,
     d.date || d.delivery_place ? `אספקה: ${[ymdHe(d.date), d.delivery_place].filter(Boolean).join(', ')}` : null,
     d.purchase_type !== 'unknown' ? `סוג רכש: ${d.purchase_type === 'site' ? 'אתרי' : 'משרדי'}` : null,
     `תנאי תשלום: ${Priority.payLabel(s.payCode ?? Priority.DEFAULT_PAY)}${(s.payCode ?? Priority.DEFAULT_PAY) === Priority.DEFAULT_PAY ? ' (ברירת מחדל)' : ' (נבחר ע"י המקבל)'}`,
@@ -626,12 +668,39 @@ async function routeFile(user, s, file, t) {
   } catch (err) {
     console.error('[משימון] סיווג נספח:', err.message);
   }
-  if (cls?.kind === 'attachment') return attachNow(user, s, saved);
+  if (cls?.kind === 'attachment' || (cls && isDetailRef(s, cls))) {
+    const r = await maybeAdoptDetail(user, s, saved, cls);
+    return r ?? attachNow(user, s, saved);
+  }
   s.pendingNew = { file: saved, label: cls?.doc_number ? `${cls.doc_type === 'invoice' ? 'חשבונית' : cls.doc_type === 'delivery_note' ? 'תעודת משלוח' : 'מסמך'} ${cls.doc_number}${cls.supplier_name ? ` של ${cls.supplier_name}` : ''}` : '' };
   const cur = s.docno ? `ל-${s.docno}` : 'לקבלת הסחורה הנוכחית';
   // לא ‎reply()‎: השאלה הזו אינה "השאלה של השלב", ואחרי התשובה חוזרים לזו שחיכתה
   return { s, replies: [[cls ? `📄 זה נראה כמו מסמך חדש${s.pendingNew.label ? `: ${s.pendingNew.label}` : ''}.` : '📄 קיבלתי מסמך נוסף.',
     `*1* — לצרף כנספח ${cur} · *2* — קבלת סחורה חדשה${!s.docno && s.step !== 'files' ? ' (הנוכחית תבוטל)' : ''}`].join('\n')] };
+}
+
+/** המסמך שהגיע הוא החשבון שהחשבונית מפנה אליו? (לפני שנוצרה טיוטא) */
+const isDetailRef = (s, cls) => !s.docno && !s.doc?.detail && cls?.doc_number && (s.doc?.lines ?? []).length <= 2
+  && refsOf(s.doc).replace(/\s/g, '').includes(String(cls.doc_number).replace(/\s/g, ''));
+
+/**
+ * החשבון לתשלום הגיע אחרי החשבונית: קוראים אותו, לוקחים ממנו את השורות, וחוזרים להשוואה
+ * (או ממשיכים בכותרת, אם עוד לא הגענו לשורות). ‎null‎ — לא פירוט; יצורף כנספח רגיל.
+ */
+async function maybeAdoptDetail(user, s, saved, cls) {
+  if (!isDetailRef(s, cls)) return null;
+  let d;
+  try { d = await ai.extract(saved); } catch { return null; }
+  if (!isDetailOf(s.doc, d)) return null;
+  s.files.push({ ...saved, label: `${d.doc_type === 'invoice' ? 'חשבונית' : 'חשבון'} ${d.doc_number}` });
+  s.doc = withDetail(s.doc, d);
+  s.lines = linesOf(s.doc);
+  const note = `📋 הפירוט נלקח מ${d.doc_type === 'invoice' ? 'חשבונית' : 'חשבון לתשלום'} ${d.doc_number} (${s.lines.length} שורות). הסכום לפני מע"מ ייבדק מול החשבונית.`;
+  if (['company', 'supplier', 'header'].includes(s.step)) return { s, replies: [`${note}${s.lastPrompt ? `\n\n${s.lastPrompt}` : ''}`] };
+  // כבר עברנו את השורות — מחשבים שוב את ההתאמה להזמנה ומציגים את השורות החדשות
+  s.order = null; s.ordersChecked = false; s.chapter = null;
+  const out = await resolveOrder(s);
+  return { ...out, replies: [note, ...out.replies] };
 }
 
 /** תשובה לשאלה "נספח או חדש?" — ‎null‎ אם התשובה אינה אחת מהשתיים */
@@ -714,7 +783,8 @@ async function sortBatch(user, s) {
     if (isMain(x.doc) && !related(x.doc)) separate.push(x); else attach.push(x);
   }
   const name = (d) => (d?.doc_number ? `${d.doc_type === 'invoice' ? 'חשבונית' : d.doc_type === 'delivery_note' ? 'תעודה' : 'מסמך'} ${d.doc_number}` : 'תמונה');
-  const out = await onMainDoc(user, s, main.f, main.doc);
+  const detail = attach.find((x) => isDetailOf(main.doc, x.doc));
+  const out = await onMainDoc(user, s, main.f, detail ? withDetail(main.doc, detail.doc) : main.doc);
   const target = out.s ?? s;
   if (out.s !== null) {
     attach.forEach((x, i) => target.files.push({ ...x.f, label: `נספח ${i + 1}` }));
