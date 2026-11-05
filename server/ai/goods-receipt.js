@@ -44,6 +44,12 @@ const PRIORITY = /פריוריטי|פריורטי|פרויוריטי|priority/i;
 // שיחה פעילה — רק כל עוד העובד באמת עונה. אחרי הפסקה ארוכה, הודעה חדשה היא ברירת המחדל (משימות),
 // וקבלת הסחורה ממתינה עד "קבלת סחורה" / "פריוריטי"
 const IDLE = 20 * 60 * 1000;
+/**
+ * ברירת המחדל (הגדרות הבוט): מעבר לנושא אחר *מבטל* את הקליטה — אין חזרה אליה, והבוט עושה מה שביקשו.
+ * כבוי — הקליטה רק מושהית, ו"קבלת סחורה" ממשיך מאותה שאלה.
+ */
+const switchCancels = () => Boolean(D.getSetting('wa_topic_switch_cancels', true));
+const DROPPED = 'ℹ️ קבלת הסחורה הקודמת בוטלה — עברתי לבקשה החדשה.';
 const YES = /^(כן|נכון|מאשר|מאשרת|אשר|אישור|תקין|יאללה|אוקי|אוקיי|סבבה|ok|yes|👍|✅)([\s,.!]|$)/i;
 const CANCEL = /^(ביטול|בטל|לבטל|עזוב|יציאה|stop)([\s,.!]|$)/i;
 const DONE_FILES = /^(סיום|סיימתי|זהו|אין|אין נספחים|בלי נספחים|המשך)([\s,.!]|$)/;
@@ -91,7 +97,18 @@ function pass(s, why) {
   return { s: { ...s, paused: true, reminded: false }, pass: true, replies: [], status: 'ok', result: `לא לקבלת סחורה: ${why}` };
 }
 
-/** תזכורת חד-פעמית, אחרי תשובה רגילה, שיש קבלת סחורה מושהית */
+/**
+ * הודעה רגילה כשיש קליטה פתוחה שאינה פעילה (אחרי הפסקה) — לפי ההגדרה:
+ * מבטלים אותה (כולל הטיוטא בפריוריטי) ומחזירים שורת הודעה, או משאירים מושהית.
+ */
+async function abandon(user) {
+  const s = load(user.id);
+  if (!fresh(s) || !switchCancels()) return '';
+  await cancel(user, s);
+  return ['menu', 'offer'].includes(s.step) ? '' : DROPPED;
+}
+
+/** תזכורת חד-פעמית, אחרי תשובה רגילה, שיש קבלת סחורה מושהית (כשמעבר נושא אינו מבטל) */
 function pausedNote(userId) {
   const s = load(userId);
   if (!fresh(s) || s.reminded || ['menu', 'offer'].includes(s.step)) return '';
@@ -652,7 +669,15 @@ async function handle({ user, text = '', file = null }) {
     if (!out.pass && out.replies?.length) next.lastAsk = out.replies.at(-1);
     save(user.id, next);
   }
-  if (out.pass) return { pass: true, replies: [], status: out.status, result: out.result };
+  if (out.pass) {
+    // מעבר נושא — ברירת המחדל: הקליטה מבוטלת לגמרי (גם הטיוטא בפריוריטי), והבוט הרגיל מטפל בבקשה
+    const live = out.s !== null && load(user.id);
+    if (live && switchCancels()) {
+      await cancel(user, live);
+      return { pass: true, note: ['menu', 'offer'].includes(live.step) ? '' : DROPPED, replies: [], status: out.status, result: `${out.result} — בוטלה` };
+    }
+    return { pass: true, note: '', replies: [], status: out.status, result: out.result };
+  }
   return { replies: out.replies, files: out.files ?? [], status: out.status ?? 'ok', result: out.result ?? `שלב ${(out.s ?? s)?.step ?? 'סיום'}`, docno: s.docno ?? null };
 }
 
@@ -875,4 +900,4 @@ async function step(user, s, t, file) {
   }
 }
 
-module.exports = { isTrigger, isPriority, opens, active, pending, pausedNote, handle, _projectsOf: projectsOf, _findProjects: findProjects, _ai: ai, _load: load, _clear: (userId) => clear(userId, load(userId)) };
+module.exports = { isTrigger, isPriority, opens, active, pending, pausedNote, abandon, switchCancels, handle, _projectsOf: projectsOf, _findProjects: findProjects, _ai: ai, _load: load, _clear: (userId) => clear(userId, load(userId)) };

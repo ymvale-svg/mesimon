@@ -1058,7 +1058,9 @@ function register(router, h) {
     hours: String(D.getSetting('wa_hours', '') ?? ''),
     shabbat: Boolean(D.getSetting('wa_shabbat', true)),
     // השוואת ספקי התמלול: כולם רצים על כל הודעה קולית, והתוצאות ביומן
-    speechCompare: Boolean(D.getSetting('speech_compare', false))
+    speechCompare: Boolean(D.getSetting('speech_compare', false)),
+    // מעבר לנושא אחר מבטל את הפריט הקודם (טיוטה, שאלה, קבלת סחורה) — בלי "ביטול", ובלי חזרה
+    topicSwitchCancels: Boolean(D.getSetting('wa_topic_switch_cancels', true))
   });
 
   const botInfo = () => ({
@@ -1131,6 +1133,7 @@ function register(router, h) {
     if (b.hours !== undefined) D.setSetting('wa_hours', hours);
     if (b.shabbat !== undefined) D.setSetting('wa_shabbat', Boolean(b.shabbat));
     if (b.speechCompare !== undefined) D.setSetting('speech_compare', Boolean(b.speechCompare));
+    if (b.topicSwitchCancels !== undefined) D.setSetting('wa_topic_switch_cancels', Boolean(b.topicSwitchCancels));
     sendJson(res, 200, botInfo());
   });
 
