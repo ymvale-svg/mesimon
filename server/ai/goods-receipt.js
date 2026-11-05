@@ -555,7 +555,7 @@ async function resolveOrder(s) {
   if (open.length) return useOrders(s, open, '');
   s.step = 'order';
   return reply(s, [s.orderNote ? `⚠️ ${s.orderNote}.` : null, `לספק ${s.supplier.name} אין הזמנות פתוחות.`,
-    'יש מספר הזמנה? כתבו אותו (PO…), או *בלי הזמנה* — קליטה לפי המסמך בלבד.'].filter(Boolean).join('\n'));
+    'יש מספר הזמנה? כתבו אותו (PO…), או *בלי הזמנה* 👎 — קליטה לפי המסמך בלבד.'].filter(Boolean).join('\n'));
 }
 
 async function useOrders(s, orders, forced) {
@@ -843,7 +843,7 @@ async function chooseWarehouse(s, note = '') {
 function askFiles(s) {
   s.step = 'files';
   return reply(s, ['📎 *נספחים* — יש עוד מסמכים לצרף (תעודה נוספת, תמונה של הסחורה)? שלחו אותם עכשיו, אחד אחרי השני.',
-    'כשסיימתם, או אם אין — *סיום*.'].join('\n'));
+    'כשסיימתם, או אם אין — *סיום* 👍.'].join('\n'));
 }
 
 /** "מחסן" בשלב הנספחים — רשימת המחסנים של החברה, לבחירה במספר */
@@ -1177,7 +1177,7 @@ function waitingQuestion(s) {
     lines: 'זה מה שהתקבל בפועל?',
     parts: 'מק"ט, תת פרק ומשאב',
     header: 'פרטי המסמך — נכון?',
-    order: 'מספר הזמנה, או *בלי הזמנה*',
+    order: 'מספר הזמנה, או *בלי הזמנה* 👎',
     supplier: 'איזה ספק?',
     company: 'לאיזו חברה?',
     project: 'לאיזה פרויקט?',
@@ -1203,7 +1203,7 @@ async function answerPendingNew(user, s, t) {
 
 async function attachNow(user, s, f) {
   s.files.push(f);
-  if (s.step === 'files') return reply(s, `📎 נספח ${s.files.length - 1} התקבל. עוד? או *סיום*.`);
+  if (s.step === 'files') return reply(s, `📎 נספח ${s.files.length - 1} התקבל. עוד? או *סיום* 👍.`);
   if (!s.docno) {
     // לפני הטיוטא — נשמר, ויצורף כשהטיוטא תיווצר. חוזרים לשאלה שחיכתה לתשובה
     return { s, replies: [`📎 נשמר כנספח (${s.files.length - 1}), ויצורף לקבלת הסחורה.${s.lastPrompt ? `\n\n${s.lastPrompt}` : ''}`] };
@@ -1429,9 +1429,14 @@ async function handle({ user, text = '', file = null }) {
     return { replies: next.replies, files: next.files ?? [], status: next.status ?? 'ok', result: next.result ?? 'ביטול ומעבר למסמך הבא' };
   }
 
+  // 👍 בנספחים — "סיום"; בשאלת ההזמנה 👍 אינו תשובה (צריך מספר, או 👎 — בלי הזמנה)
+  if (t === '👍' && !file && s.step === 'files' && !s.pendingNew) t = 'סיום';
+  if (t === '👍' && !file && s.step === 'order') return { replies: ['כתבו את מספר ההזמנה (PO…), או *בלי הזמנה* 👎.'], status: 'ok', result: '👍 בשאלת ההזמנה' };
   // 👎 — "לא": בשאלת כן/לא — לא; על סיכום — לא ממשיכים ושואלים מה לתקן; על הטיוטא — מבקשים אישור לביטול
   if (t === '👎' && !file) {
     if (s.pendingList || s.pendingNew || ['offer', 'doctype'].includes(s.step)) t = 'לא';
+    else if (s.step === 'order') t = 'בלי הזמנה';      // "יש מספר הזמנה?" — 👎 = אין, בלי הזמנה
+    else if (s.step === 'files') t = 'סיום';           // "יש עוד נספחים?" — 👎 = אין
     else if (s.step === 'review') {
       return { replies: [`👎 לבטל את הטיוטא *${s.docno}*? כתבו *ביטול* לאישור — או כתבו מה לתקן (כמות, תיאור, שורה שחסרה).`], status: 'ok', result: '👎 בבדיקת הטיוטא' };
     } else {
@@ -1544,11 +1549,11 @@ async function step(user, s, t, file) {
     case 'order': {
       if (NO_ORDER.test(t)) { s.ordersChecked = false; return askLines(s); }
       const po = (t.match(/PO\s*\d+/i)?.[0] ?? '').replace(/\s+/g, '').toUpperCase();
-      if (!po) return reply(s, 'כתבו מספר הזמנה (PO…), או *בלי הזמנה*.');
+      if (!po) return reply(s, 'כתבו מספר הזמנה (PO…), או *בלי הזמנה* 👎.');
       const o = await Priority.getOrder(s.company, po);
-      if (!o) return reply(s, `לא מצאתי את ${po}. כתבו מספר אחר, או *בלי הזמנה*.`);
-      if (o.SUPNAME !== s.supplier.code) return reply(s, `${po} שייכת לספק אחר (${o.CDES}). כתבו מספר אחר, או *בלי הזמנה*.`);
-      if (o.STATDES !== 'אושרה') return reply(s, `${po} בסטטוס "${o.STATDES}" — אפשר לקבל רק מהזמנה מאושרת. כתבו מספר אחר, או *בלי הזמנה*.`);
+      if (!o) return reply(s, `לא מצאתי את ${po}. כתבו מספר אחר, או *בלי הזמנה* 👎.`);
+      if (o.SUPNAME !== s.supplier.code) return reply(s, `${po} שייכת לספק אחר (${o.CDES}). כתבו מספר אחר, או *בלי הזמנה* 👎.`);
+      if (o.STATDES !== 'אושרה') return reply(s, `${po} בסטטוס "${o.STATDES}" — אפשר לקבל רק מהזמנה מאושרת. כתבו מספר אחר, או *בלי הזמנה* 👎.`);
       return useOrders(s, [{ ...o, lines: o.lines.filter((l) => (l.TBALANCE ?? 0) > 0) }], o.ORDNAME);
     }
 
@@ -1718,7 +1723,7 @@ async function step(user, s, t, file) {
         const r = askFiles(s);
         return { ...r, replies: [`🏬 המחסן שונה ל*${w.name || w.code}* (${w.code}).\n\n${r.replies[0]}`] };
       }
-      if (!DONE_FILES.test(t)) return reply(s, 'שלחו נספח, או *סיום* להמשך.');
+      if (!DONE_FILES.test(t)) return reply(s, 'שלחו נספח, או *סיום* 👍 להמשך.');
       return draftAndShow(user, s);
 
     case 'review': {
