@@ -56,8 +56,18 @@ const OPEN_SQL = `SELECT t.* FROM tasks t
     AND (t.activate_at IS NULL OR t.activate_at <= ?)`;
 
 /** המשימות הפתוחות של מחלקה אחת — בבורד הפנימי, לא מתוזמנות לעתיד */
+/*
+ * 🔒 משימה מסווגת (רמה 2 ומעלה, שלה או של הפרויקט) לא נכנסת לבדיקת הכפילויות
+ * בכלל: הדיאלוג וההצעה מציגים כותרות לאנשים אחרים במחלקה, ומיזוג היה מעביר
+ * תוכן רגיש למשימה רגילה.
+ */
+const Cls = require('./classification');
+const sensitive = (t) => {
+  const c = Cls.taskClass(t);
+  return !!c && Cls.effectiveLevel(c.topic, c.sens) >= 2;
+};
 const openInDepartment = (departmentId) => (departmentId
-  ? D.all(`${OPEN_SQL} AND t.department_id = ? ORDER BY t.id`, D.nowIso(), departmentId)
+  ? D.all(`${OPEN_SQL} AND t.department_id = ? ORDER BY t.id`, D.nowIso(), departmentId).filter((t) => !sensitive(t))
   : []);
 
 const taskById = (id) => D.get('SELECT * FROM tasks WHERE id = ?', id);
@@ -277,7 +287,7 @@ function keepApart(taskId, otherIds, userId) {
  */
 async function checkCreated(taskId) {
   const task = taskById(taskId);
-  if (!task || !isOpen(task)) return null;
+  if (!task || !isOpen(task) || sensitive(task)) return null;
   const pool = openInDepartment(task.department_id).filter((t) => t.id !== task.id && !settled(task.id, t.id));
   const found = await judge(candidates(task, pool, { limit: 2 }).map((c) => ({ a: c.task, b: task, score: c.score })));
   if (!found.length) return null;
