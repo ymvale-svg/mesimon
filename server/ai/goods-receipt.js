@@ -911,7 +911,23 @@ async function createDraft(user, s) {
           : { part: '000', description: `${qtyText(l.qty)} ${l.unit ?? ''} · ${l.description}`.replace(/\s+·/, ' ·'), qty: 1, price: net, discount: 0, chapter: chap, topic });
       }
     } catch (err) {
-      problems.push({ what: `שורה ${l.n} (${l.description}) לא נקלטה`, err: `שורה ${l.n}: ${err.message}` });
+      // רשת ביטחון: השורה נדחתה (מק"ט בלי תת פרק, יחידה, פריט לא פעיל…) — שוב על מק"ט כללי 000, תת פרק 101 כללי
+      // ומשאב 98-10 כללי, עם התיאור מהמסמך. לא קיים בחברה (עותק הבדיקה) — הקידוד הכללי הנפוץ שלה. נכשל — רק אז העובד רואה
+      if (l.order) { problems.push({ what: `שורה ${l.n} (${l.description}) לא נקלטה`, err: `שורה ${l.n}: ${err.message}` }); continue; }
+      const whole = Number.isInteger(Number(l.qty));
+      const net = Math.round(Number(l.qty) * Number(l.price) * (1 - (Number(l.discount) || 0) / 100) * 100) / 100;
+      const line = { part: '000', description: whole ? l.description : `${qtyText(l.qty)} ${l.unit ?? ''} · ${l.description}`,
+        qty: whole ? l.qty : 1, price: whole ? l.price : net, discount: whole ? l.discount : 0 };
+      let used = null, last = null;
+      for (const g of [Priority.GENERAL, await Priority.generalCoding(c).catch(() => null)].filter(Boolean)) {
+        try { await Priority.addFreeLine(c, docno, { ...line, chapter: g.chapter, topic: g.topic }); used = g; break; } catch (e) { last = e; }
+      }
+      if (used) {
+        (s.notes ??= []).push(`שורה ${l.n} (${l.description}) נקלטה על מק"ט כללי 000, ${used.chapter} ${used.chapterDes} / ${used.topic} ${used.topicDes}${l.part?.code && l.part.code !== '000' ? ` — ${l.part.code} נדחה בפריוריטי` : ''}`);
+        problems.push({ what: null, err: `שורה ${l.n}: ${l.part?.code ?? ''} נדחה (${err.message}), נקלטה על 000 ${used.chapter}/${used.topic}` });
+      } else {
+        problems.push({ what: `שורה ${l.n} (${l.description}) לא נקלטה`, err: `שורה ${l.n}: ${err.message} / 000: ${last?.message}` });
+      }
     }
   }
   // הנחת מסמך — רק הנחה של ממש (לא עיגול של אגורות, ולא "הנחה" שלילית)
@@ -960,6 +976,7 @@ function writeDialog(user, s) {
     !s.order && s.project ? `פרויקט נבחר ע"י המקבל: ${s.project.code} ${s.project.des}` : null,
     s.chapter ? `תת פרק לפריט כללי: ${s.chapter.chapter} ${s.chapter.topic}` : null,
     s.warehouseNote ?? null,
+    ...(s.notes ?? []),
     ...[...new Set(s.lines.filter((l) => !l.order && l.part).map((l) => `קידוד: ${l.part.code} ${l.part.chapter ?? ''}/${l.part.topic ?? ''} — ${l.part.why}`))]
   ]);
 }

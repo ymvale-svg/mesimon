@@ -290,6 +290,8 @@ async function partByCode(company, code) {
  * תת הפרק והמשאב שבהם החברה קולטת בדרך כלל את המק"ט הכללי ‎000‎ (לפי 300 הקבלות האחרונות),
  * ואם אין — "101 כללי" / "98-10 כללי" כשהם קיימים בחברה. נשמר לשעה.
  */
+/** הקידוד "כללי" — תת פרק 101 כללי, משאב 98-10 כללי (זהה בכל החברות; לא קיים בעותק הבדיקה test11) */
+const GENERAL = { chapter: '101', chapterDes: 'כללי', topic: '98-10', topicDes: 'כללי' };
 const generalCache = new Map();
 async function generalCoding(company) {
   const hit = generalCache.get(company);
@@ -676,7 +678,7 @@ async function cancelReceipt(company, docno) {
 
 module.exports = {
   COMPANIES, isEnabled, allowed, companyOf, isTest, resolveCompany, companiesByName, PriorityError,
-  NO_VAT_CODE, TAX_CODES, PAY_TERMS, DEFAULT_PAY, payTerm, payLabel, payFromText, dueDate, projectWarehouses, warehouses, warehouseExists, defaultWarehouse, supplierHistory, recentLines, partByCode, findPartsByText, generalCoding, warehouseOf, findSuppliers, supplierByCode, findReceiptByBooknum, getOrder, openOrders, findPartExact, lastSubchapter, projects, matchProjects, readReceipt,
+  GENERAL, NO_VAT_CODE, TAX_CODES, PAY_TERMS, DEFAULT_PAY, payTerm, payLabel, payFromText, dueDate, projectWarehouses, warehouses, warehouseExists, defaultWarehouse, supplierHistory, recentLines, partByCode, findPartsByText, generalCoding, warehouseOf, findSuppliers, supplierByCode, findReceiptByBooknum, getOrder, openOrders, findPartExact, lastSubchapter, projects, matchProjects, readReceipt,
   readDialog, createReceipt, addOrderLine, addFreeLine, setLineQty, setHeader, attach, setDialog, finalizeReceipt, cancelReceipt, receiptStatus, deleteLines,
   _call: call
 };
