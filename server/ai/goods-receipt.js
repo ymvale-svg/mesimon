@@ -328,7 +328,8 @@ function summaryText(s, gr) {
 // השלבים
 // ---------------------------------------------------------------------------
 
-const reply = (s, text, extra = {}) => ({ s, replies: [text], ...extra });
+/** ‎lastPrompt‎ — השאלה האחרונה, כדי לחזור עליה אחרי נספח שהגיע באמצעה */
+const reply = (s, text, extra = {}) => { if (s && s.step) s.lastPrompt = text; return { s, replies: [text], ...extra }; };
 
 async function onMainDoc(user, s, file) {
   s.files = [file.path ? { ...file, label: 'מסמך ראשי' } : await saveFile(user.id, file, 'מסמך ראשי')];
@@ -552,7 +553,7 @@ async function createDraft(user, s) {
   await Priority.setHeader(c, docno, { DETAILS: `בוט ${s.doc.doc_number}`.slice(0, 24) }).catch(() => {});
   for (const f of s.files) {
     try {
-      await Priority.attach(c, docno, { buf: fs.readFileSync(f.path), mime: f.mime, description: f.label === 'מסמך ראשי' ? `${s.doc.doc_type === 'invoice' ? 'חשבונית' : 'תעודת משלוח'} ${s.doc.doc_number} — ${s.supplier.name}` : f.label });
+      await Priority.attach(c, docno, { buf: fs.readFileSync(f.path), mime: f.mime, description: f.label === 'מסמך ראשי' ? `${s.doc.doc_type === 'invoice' ? 'חשבונית' : 'תעודת משלוח'} ${s.doc.doc_number}`.slice(0, 32) : f.label });   // התיאור בפריוריטי נחתך אחרי ~32 תווים
     } catch (err) {
       problems.push({ what: `${f.label === 'מסמך ראשי' ? 'צילום המסמך' : f.label} לא צורף לנספחים`, err: `נספח ${f.label}: ${err.message}` });
     }
@@ -619,15 +620,18 @@ async function routeFile(user, s, file, t) {
   let cls = null;
   try {
     cls = await ai.classify({ doc_type: s.doc.doc_type, doc_number: s.doc.doc_number, supplier_name: s.supplier?.name ?? s.doc.supplier_name,
-      po_number: s.order?.ordname ?? s.doc.po_number, supplier_order_ref: s.doc.supplier_order_ref, date: s.doc.date }, saved);
+      po_number: s.order?.ordname ?? s.doc.po_number, supplier_order_ref: s.doc.supplier_order_ref, date: s.doc.date,
+      // מספרים שהמסמך מפנה אליהם (שורה "ח-ן לתשלום 2011796") — מסמך עם מספר כזה הוא נספח
+      lines: (s.doc.lines ?? []).map((l) => l.description).slice(0, 20), warnings: s.doc.warnings ?? [] }, saved);
   } catch (err) {
     console.error('[משימון] סיווג נספח:', err.message);
   }
   if (cls?.kind === 'attachment') return attachNow(user, s, saved);
   s.pendingNew = { file: saved, label: cls?.doc_number ? `${cls.doc_type === 'invoice' ? 'חשבונית' : cls.doc_type === 'delivery_note' ? 'תעודת משלוח' : 'מסמך'} ${cls.doc_number}${cls.supplier_name ? ` של ${cls.supplier_name}` : ''}` : '' };
   const cur = s.docno ? `ל-${s.docno}` : 'לקבלת הסחורה הנוכחית';
-  return reply(s, [cls ? `📄 זה נראה כמו מסמך חדש${s.pendingNew.label ? `: ${s.pendingNew.label}` : ''}.` : '📄 קיבלתי מסמך נוסף.',
-    `*1* — לצרף כנספח ${cur} · *2* — קבלת סחורה חדשה`].join('\n'));
+  // לא ‎reply()‎: השאלה הזו אינה "השאלה של השלב", ואחרי התשובה חוזרים לזו שחיכתה
+  return { s, replies: [[cls ? `📄 זה נראה כמו מסמך חדש${s.pendingNew.label ? `: ${s.pendingNew.label}` : ''}.` : '📄 קיבלתי מסמך נוסף.',
+    `*1* — לצרף כנספח ${cur} · *2* — קבלת סחורה חדשה${!s.docno && s.step !== 'files' ? ' (הנוכחית תבוטל)' : ''}`].join('\n')] };
 }
 
 /** תשובה לשאלה "נספח או חדש?" — ‎null‎ אם התשובה אינה אחת מהשתיים */
@@ -635,12 +639,16 @@ async function answerPendingNew(user, s, t) {
   const f = s.pendingNew.file;
   if (/^\s*1\s*$/.test(t) || ATTACH_WORD.test(t)) { s.pendingNew = null; return attachNow(user, s, f); }
   if (NEW_WORD.test(t)) { s.pendingNew = null; return queueNew(user, s, f, null); }
-  return reply(s, `*1* — לצרף כנספח${s.docno ? ` ל-${s.docno}` : ''} · *2* — קבלת סחורה חדשה`);
+  return { s, replies: [`*1* — לצרף כנספח${s.docno ? ` ל-${s.docno}` : ''} · *2* — קבלת סחורה חדשה`] };
 }
 
 async function attachNow(user, s, f) {
   s.files.push(f);
   if (s.step === 'files') return reply(s, `📎 נספח ${s.files.length - 1} התקבל. עוד? או *סיום*.`);
+  if (!s.docno) {
+    // לפני הטיוטא — נשמר, ויצורף כשהטיוטא תיווצר. חוזרים לשאלה שחיכתה לתשובה
+    return { s, replies: [`📎 נשמר כנספח (${s.files.length - 1}), ויצורף לקבלת הסחורה.${s.lastPrompt ? `\n\n${s.lastPrompt}` : ''}`] };
+  }
   const problems = [];
   await Priority.attach(s.company, s.docno, { buf: fs.readFileSync(f.path), mime: f.mime, description: f.label })
     .catch((err) => problems.push({ what: 'הנספח לא צורף', err: `נספח: ${err.message}` }));
@@ -653,6 +661,12 @@ async function attachNow(user, s, f) {
  */
 async function queueNew(user, s, f) {
   s.queued = f;
+  if (!s.docno && s.step !== 'files') {
+    // עוד אין טיוטא: העובד בחר "קבלת סחורה חדשה" — הנוכחית מתבטלת, ועוברים לחדש
+    const was = s.doc?.doc_number ? ` (${s.doc.doc_type === 'invoice' ? 'חשבונית' : 'תעודה'} ${s.doc.doc_number})` : '';
+    const r = await cancel(user, s);
+    return startQueued(user, s, [r.replies[0].replace('קבלת הסחורה בוטלה.', `קבלת הסחורה הקודמת${was} בוטלה.`)]);
+  }
   const note = '📄 המסמך החדש שמור, ואעבור אליו מיד אחרי שנסיים את הנוכחית.';
   if (s.step === 'files') {
     const out = await showDraft(s, await createDraft(user, s), user);
@@ -758,8 +772,9 @@ async function handle({ user, text = '', file = null }) {
   // (העובד שלח מסמך אחר במקום לענות) — מתחילים מחדש, ואומרים שהקודמת בוטלה.
   // בנספחים ובבדיקת הטיוטא — הבוט בודק אם זה נספח או מסמך חדש (‎routeFile‎), ולא מבטל טיוטא בשקט.
   let restarted = '';
-  const OWN_FILE_STEPS = ['files', 'review'];
-  if (!s || (file && !OWN_FILE_STEPS.includes(s.step) && (isTrigger(t) || !['offer', 'doc'].includes(s.step)))) {
+  // מתחילים מחדש רק כשנכתב "קבלת סחורה" עם הקובץ; קובץ בלי זה באמצע קליטה — נספח או מסמך חדש? (‎routeFile‎)
+  const OWN_FILE_STEPS = ['files', 'review', 'offer', 'doc'];
+  if (!s || (file && isTrigger(t) && !OWN_FILE_STEPS.includes(s.step))) {
     if (s) {
       const was = s.doc?.doc_number ? `${s.doc.doc_type === 'invoice' ? 'חשבונית' : 'תעודה'} ${s.doc.doc_number}` : '';
       const r = await cancel(user, s, 'הקודמת בוטלה');
@@ -783,7 +798,11 @@ async function handle({ user, text = '', file = null }) {
 
   let out;
   try {
-    out = await step(user, s, t, file);
+    // קובץ באמצע הקליטה, לפני שלב הנספחים: נספח (נשמר, וחוזרים לשאלה), או מסמך חדש (שואלים)
+    const early = !OWN_FILE_STEPS.includes(s.step);
+    if (early && s.pendingNew && !file) out = await answerPendingNew(user, s, t);
+    if (!out && early && file) out = await routeFile(user, s, file, t);
+    if (!out) out = await step(user, s, t, file);
   } catch (err) {
     console.error('[משימון] קבלת סחורה:', err.message);
     save(user.id, s);
