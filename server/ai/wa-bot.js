@@ -3204,6 +3204,10 @@ async function personalHousekeeping() {
 
 async function tick() {
   if (!busy) await personalHousekeeping();
+  // קבלות סחורה שלא אושרו — תזכורת וביטול (פעם ב-10 דקות לכל היותר)
+  if (!busy && WaActions.byKey('goods_receipt')?.enabled) {
+    await GoodsReceipt.sweep((userId, text) => messageUser(userId, text, 'goods_receipt')).catch((err) => console.error('[משימון] ניקוי קבלות סחורה:', err.message));
+  }
   if (busy || !D.getSetting('wa_bot_enabled', true)) return;
   const ch = channel();
   if (!ch) return;

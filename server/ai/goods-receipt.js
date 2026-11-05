@@ -169,6 +169,16 @@ const MATCH_SCHEMA = {
   required: ['best_order', 'matches'],
   additionalProperties: false
 };
+const CLASSIFY_SCHEMA = {
+  type: 'object',
+  properties: {
+    kind: { type: 'string', enum: ['attachment', 'new_document'] },
+    doc_type: { type: 'string', enum: ['delivery_note', 'invoice', 'other'] },
+    doc_number: str, supplier_name: str
+  },
+  required: ['kind', 'doc_type', 'doc_number', 'supplier_name'],
+  additionalProperties: false
+};
 const PROJECT_SCHEMA = {
   type: 'object',
   properties: { codes: { type: 'array', items: str }, question: str },
@@ -207,6 +217,13 @@ const ai = {
       open_order_lines: orders.flatMap((o) => o.lines.map((l) => ({ order: o.ORDNAME, line: l.LINE, part: l.PARTNAME, description: l.PDES, balance: l.TBALANCE, unit: l.TUNITNAME, price: l.PRICE })))
     });
     return Claude.json({ system: skill(), content: [{ type: 'text', text }], schema: MATCH_SCHEMA, effort: 'medium', live: true });
+  },
+  async classify(current, file) {
+    const data = fs.readFileSync(file.path).toString('base64');
+    const block = file.mime.includes('pdf')
+      ? { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data } }
+      : { type: 'image', source: { type: 'base64', media_type: file.mime.includes('png') ? 'image/png' : 'image/jpeg', data } };
+    return Claude.json({ system: skill(), content: [block, { type: 'text', text: JSON.stringify({ task: 'classify', current }) }], schema: CLASSIFY_SCHEMA, effort: 'low', live: true });
   },
   async project(projects, text) {
     const content = JSON.stringify({ task: 'project', text, projects: projects.map((p) => ({ code: p.code, name: p.des, aliases: p.alias ?? '' })) });
@@ -584,6 +601,118 @@ async function showDraft(s, problems = [], user = null) {
 }
 
 // ---------------------------------------------------------------------------
+// קובץ נוסף בשלב הנספחים או בבדיקת הטיוטא: נספח, או מסמך חדש?
+// ---------------------------------------------------------------------------
+
+const ATTACH_WORD = /נספח|לצרף|תצרף|צרף/;
+const NEW_WORD = /^\s*2\s*$|חדש|קבלת\s*סחורה|מסמך אחר|הבא/;
+
+/**
+ * "נספח" בכיתוב — נספח. "קבלת סחורה" — מסמך חדש. בלי כיתוב — ה-AI מסווג: תמונה של
+ * הסחורה, דף נוסף או תעודה של אותה הזמנה — נספח, בלי שאלה; מסמך עם מספר אחר או ספק אחר —
+ * שואלים. גם כשהסיווג נכשל — שואלים, לא מחליטים לבד.
+ */
+async function routeFile(user, s, file, t) {
+  const saved = await saveFile(user.id, file, `נספח ${s.files.length}`);
+  if (ATTACH_WORD.test(t)) return attachNow(user, s, saved);
+  if (isTrigger(t)) return queueNew(user, s, saved, null);
+  let cls = null;
+  try {
+    cls = await ai.classify({ doc_type: s.doc.doc_type, doc_number: s.doc.doc_number, supplier_name: s.supplier?.name ?? s.doc.supplier_name,
+      po_number: s.order?.ordname ?? s.doc.po_number, supplier_order_ref: s.doc.supplier_order_ref, date: s.doc.date }, saved);
+  } catch (err) {
+    console.error('[משימון] סיווג נספח:', err.message);
+  }
+  if (cls?.kind === 'attachment') return attachNow(user, s, saved);
+  s.pendingNew = { file: saved, label: cls?.doc_number ? `${cls.doc_type === 'invoice' ? 'חשבונית' : cls.doc_type === 'delivery_note' ? 'תעודת משלוח' : 'מסמך'} ${cls.doc_number}${cls.supplier_name ? ` של ${cls.supplier_name}` : ''}` : '' };
+  const cur = s.docno ? `ל-${s.docno}` : 'לקבלת הסחורה הנוכחית';
+  return reply(s, [cls ? `📄 זה נראה כמו מסמך חדש${s.pendingNew.label ? `: ${s.pendingNew.label}` : ''}.` : '📄 קיבלתי מסמך נוסף.',
+    `*1* — לצרף כנספח ${cur} · *2* — קבלת סחורה חדשה`].join('\n'));
+}
+
+/** תשובה לשאלה "נספח או חדש?" — ‎null‎ אם התשובה אינה אחת מהשתיים */
+async function answerPendingNew(user, s, t) {
+  const f = s.pendingNew.file;
+  if (/^\s*1\s*$/.test(t) || ATTACH_WORD.test(t)) { s.pendingNew = null; return attachNow(user, s, f); }
+  if (NEW_WORD.test(t)) { s.pendingNew = null; return queueNew(user, s, f, null); }
+  return reply(s, `*1* — לצרף כנספח${s.docno ? ` ל-${s.docno}` : ''} · *2* — קבלת סחורה חדשה`);
+}
+
+async function attachNow(user, s, f) {
+  s.files.push(f);
+  if (s.step === 'files') return reply(s, `📎 נספח ${s.files.length - 1} התקבל. עוד? או *סיום*.`);
+  const problems = [];
+  await Priority.attach(s.company, s.docno, { buf: fs.readFileSync(f.path), mime: f.mime, description: f.label })
+    .catch((err) => problems.push({ what: 'הנספח לא צורף', err: `נספח: ${err.message}` }));
+  return showDraft(s, problems, user);
+}
+
+/**
+ * מסמך חדש בזמן שהנוכחית פתוחה: הוא ממתין בתור, והנוכחית נסגרת קודם — בנספחים: נקלטת
+ * כטיוטא לבדיקה; בבדיקת הטיוטא: "מאשר" או "ביטול". אחר כך הבוט עובר אליו לבד.
+ */
+async function queueNew(user, s, f) {
+  s.queued = f;
+  const note = '📄 המסמך החדש שמור, ואעבור אליו מיד אחרי שנסיים את הנוכחית.';
+  if (s.step === 'files') {
+    const out = await showDraft(s, await createDraft(user, s), user);
+    return { ...out, replies: [note, ...out.replies] };
+  }
+  return reply(s, [note, `*${s.docno}* עדיין טיוטא: *מאשר* — להפוך לסופי, או *ביטול* — לבטל אותה.`].join('\n'));
+}
+
+/** סיום הנוכחית — ומעבר למסמך שבתור, בלי לשלוח אותו שוב */
+async function startQueued(user, oldS, before = []) {
+  const q = oldS.queued;
+  for (const f of oldS.files ?? []) { if (f.path !== q.path) { try { fs.unlinkSync(f.path); } catch { /* כבר נמחק */ } } }
+  const ns = { step: 'doc', startedAt: Date.now() };
+  const out = await onMainDoc(user, ns, q);
+  return { ...out, s: out.s === null ? null : (out.s ?? ns), replies: [...before, '↪️ עובר למסמך הבא…', ...out.replies] };
+}
+
+// ---------------------------------------------------------------------------
+// טיוטות שלא אושרו — תזכורת אחרי 4 שעות, ביטול אחרי 24
+// ---------------------------------------------------------------------------
+
+const REMIND_AFTER = 4 * 60 * 60 * 1000;
+let lastSweep = 0;
+
+/**
+ * נקרא מסבב הבוט. ‎send(userId, text)‎ — הודעה יזומה לעובד (בשעות הפעילות, או בתור).
+ * הזמן נמדד מההודעה האחרונה של העובד בקליטה (‎at‎), ולכן שמירת "נשלחה תזכורת" לא מאפסת אותו.
+ */
+async function sweep(send, { force = false } = {}) {
+  if (!force && Date.now() - lastSweep < 10 * 60 * 1000) return;
+  lastSweep = Date.now();
+  for (const row of D.all("SELECT key, value FROM settings WHERE key LIKE 'goods_receipt:%'")) {
+    const userId = Number(row.key.split(':')[1]);
+    let s;
+    try { s = JSON.parse(row.value); } catch { continue; }
+    if (!s?.step) continue;
+    const age = Date.now() - (s.at ?? 0);
+    const user = D.get('SELECT id, full_name FROM users WHERE id = ?', userId) ?? { id: userId, full_name: '' };
+    try {
+      if (age >= TTL) {
+        if (s.docno) {
+          let ok = true;
+          await Priority.cancelReceipt(s.company, s.docno).catch((err) => { ok = false; alertAdmins(user, s, 'טיוטא נטושה לא בוטלה', [err.message]); });
+          if (ok) {
+            send(userId, `⏱ *${s.docno}* (${s.supplier?.name ?? ''}) חיכתה לאישור יותר מ-24 שעות, ובוטלה. אם הסחורה התקבלה — שלחו את המסמך שוב.`);
+            alertAdmins(user, s, 'טיוטא נטושה בוטלה', ['חיכתה לאישור יותר מ-24 שעות.']);
+          }
+        }
+        clear(userId, s);
+      } else if (s.docno && s.step === 'review' && !s.reminded && age >= REMIND_AFTER) {
+        send(userId, `⏳ *${s.docno}* (${s.supplier?.name ?? ''}) מחכה לאישור שלך. *מאשר* — להפוך לסופי, או *ביטול*. בלי תשובה — תבוטל מחר.`);
+        D.setSetting(row.key, { ...s, reminded: true });   // בלי לגעת ב-at
+      }
+    } catch (err) {
+      console.error('[משימון] ניקוי קבלות סחורה:', err.message);
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
 // הכניסה
 // ---------------------------------------------------------------------------
 
@@ -627,10 +756,10 @@ async function handle({ user, text = '', file = null }) {
 
   // התחלה חדשה: "קבלת סחורה" עם קובץ באמצע קליטה, או קובץ חדש באמצע קליטה שעוד אין לה טיוטא
   // (העובד שלח מסמך אחר במקום לענות) — מתחילים מחדש, ואומרים שהקודמת בוטלה.
-  // בנספחים ובבדיקת הטיוטא — קובץ הוא נספח, כמו קודם.
+  // בנספחים ובבדיקת הטיוטא — הבוט בודק אם זה נספח או מסמך חדש (‎routeFile‎), ולא מבטל טיוטא בשקט.
   let restarted = '';
-  const ATTACH_STEPS = ['files', 'review', 'offer', 'doc'];
-  if (!s || (file && s.step !== 'files' && (isTrigger(t) || !ATTACH_STEPS.includes(s.step)))) {
+  const OWN_FILE_STEPS = ['files', 'review'];
+  if (!s || (file && !OWN_FILE_STEPS.includes(s.step) && (isTrigger(t) || !['offer', 'doc'].includes(s.step)))) {
     if (s) {
       const was = s.doc?.doc_number ? `${s.doc.doc_type === 'invoice' ? 'חשבונית' : 'תעודה'} ${s.doc.doc_number}` : '';
       const r = await cancel(user, s, 'הקודמת בוטלה');
@@ -643,7 +772,14 @@ async function handle({ user, text = '', file = null }) {
     }
   }
 
-  if (CANCEL.test(t) && !file) return cancel(user, s);
+  if (CANCEL.test(t) && !file) {
+    if (!s.queued) return cancel(user, s);
+    // ביטול של הנוכחית, ומעבר למסמך שחיכה בתור
+    const r = await cancel(user, s);
+    const next = await startQueued(user, s, r.replies);
+    if (next.s) save(user.id, next.s);
+    return { replies: next.replies, files: next.files ?? [], status: next.status ?? 'ok', result: next.result ?? 'ביטול ומעבר למסמך הבא' };
+  }
 
   let out;
   try {
@@ -814,15 +950,15 @@ async function step(user, s, t, file) {
     }
 
     case 'files':
-      if (file) {
-        s.files.push(await saveFile(user.id, file, `נספח ${s.files.length}`));
-        return reply(s, `📎 נספח ${s.files.length - 1} התקבל. עוד? או *סיום*.`);
-      }
+      if (s.pendingNew && !file) { const r = await answerPendingNew(user, s, t); if (r) return r; }
+      if (file) return routeFile(user, s, file, t);
       if (!DONE_FILES.test(t)) return reply(s, 'שלחו נספח, או *סיום* להמשך.');
       return showDraft(s, await createDraft(user, s), user);
 
     case 'review': {
-      const pay = !file && Priority.payFromText(t);
+      if (s.pendingNew && !file) { const r = await answerPendingNew(user, s, t); if (r) return r; }
+      if (file) return routeFile(user, s, file, t);
+      const pay = Priority.payFromText(t);
       if (pay?.unknown !== undefined) return reply(s, `אין בפריוריטי תנאי תשלום שוטף + ${pay.unknown}. האפשרויות: ${Priority.PAY_TERMS.map((p) => Priority.payLabel(p.code)).join(', ')}.`);
       if (pay) {
         await Priority.setHeader(s.company, s.docno, { MED_MXPAYCODE: pay.code });
@@ -837,18 +973,16 @@ async function step(user, s, t, file) {
           alertAdmins(user, s, 'GR לא הפך לסופי', [err.message]);
           return { s: null, replies: [`ה-GR *${s.docno}* נשמר כטיוטא, אבל לא הפך לסופי. מנהל המערכת קיבל הודעה ויטפל.`], status: 'error', result: `סופית נכשלה: ${err.message}` };
         }
-        return { s: null, replies: [`✅ *קבלת סחורה ${s.docno}* נקלטה כסופית.\n${companyLine(s)}\nספק: ${s.supplier.name}${s.order ? ` · הזמנה ${s.order.ordname}` : ''}`], status: 'ok', result: `GR סופי ${s.docno}` };
-      }
-      if (file) {
-        const f = await saveFile(user.id, file, `נספח ${s.files.length}`);
-        s.files.push(f);
-        const problems = [];
-        await Priority.attach(s.company, s.docno, { buf: fs.readFileSync(f.path), mime: f.mime, description: f.label }).catch((err) => problems.push({ what: 'הנספח לא צורף', err: `נספח: ${err.message}` }));
-        return showDraft(s, problems, user);
+        const done = `✅ *קבלת סחורה ${s.docno}* נקלטה כסופית.\n${companyLine(s)}\nספק: ${s.supplier.name}${s.order ? ` · הזמנה ${s.order.ordname}` : ''}`;
+        if (s.queued) return startQueued(user, s, [done]);
+        return { s: null, replies: [done], status: 'ok', result: `GR סופי ${s.docno}` };
       }
       const out = await ai.reply(s.reviewLines.map((l) => ({ line: l.n, description: l.description, qty: l.qty, options: [] })), t);
       if (out.action === 'confirm') return step(user, s, 'מאשר', null);
-      if (out.action === 'cancel') return cancel(user, s).then((r) => ({ s: null, ...r }));
+      if (out.action === 'cancel') {
+        const r = await cancel(user, s);
+        return s.queued ? startQueued(user, s, r.replies) : { s: null, ...r };
+      }
       if (out.action === 'update' && out.updates?.length) {
         const changed = [];
         for (const u of out.updates) {
@@ -870,4 +1004,4 @@ async function step(user, s, t, file) {
   }
 }
 
-module.exports = { isTrigger, opens, active, handle, _projectsOf: projectsOf, _findProjects: findProjects, _ai: ai, _load: load, _clear: (userId) => clear(userId, load(userId)) };
+module.exports = { isTrigger, opens, active, handle, sweep, _projectsOf: projectsOf, _findProjects: findProjects, _ai: ai, _load: load, _clear: (userId) => clear(userId, load(userId)) };
