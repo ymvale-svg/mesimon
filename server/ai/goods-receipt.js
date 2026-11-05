@@ -68,17 +68,17 @@ const NOTE_CMD = /^\s*(?:תוסיף|תוסיפי|הוסף|להוסיף|תרשו�
  */
 function buttonsFor(s) {
   if (!s) return [];
-  if (s.confirmCancel) return ['כן, לבטל ✅', 'חזרה לטיוטא'];
-  if (s.pendingNew) return ['צרף כנספח', 'קבלה חדשה', 'להתעלם 👎'];
-  if (s.pendingList) return ['כן ✅', 'לא 👎'];
+  if (s.confirmCancel) return ['כן, לבטל 🗑️', 'חזרה לטיוטא'];
+  if (s.pendingNew) return ['צרף כנספח', 'קבלה חדשה', 'להתעלם ❌'];
+  if (s.pendingList) return ['כן ✅', 'לא ❌'];
   switch (s.step) {
-    case 'offer': case 'doctype': return ['כן ✅', 'לא 👎'];
-    case 'header': return ['כן ✅', s.noVat ? 'עם מע"מ' : 'ללא מע"מ', 'ביטול'];
-    case 'order': return ['בלי הזמנה 👎', 'ביטול'];
-    case 'lines': return ['כן ✅', 'ביטול'];
+    case 'offer': case 'doctype': return ['כן ✅', 'לא ❌'];
+    case 'header': return ['כן ✅', s.noVat ? 'עם מע"מ' : 'ללא מע"מ', 'ביטול 🗑️'];
+    case 'order': return ['בלי הזמנה ❌', 'ביטול 🗑️'];
+    case 'lines': return ['כן ✅', 'ביטול 🗑️'];
     case 'parts': return ['כן ✅', 'כללי'];
-    case 'files': return ['סיום ✅'];
-    case 'review': return ['מאשר ✅', 'ביטול'];
+    case 'files': return ['סיום 🏁'];
+    case 'review': return ['מאשר ✅', 'ביטול 🗑️'];
     default: return [];
   }
 }
@@ -1495,7 +1495,7 @@ async function handle({ user, text = '', file = null, reaction = false }) {
   if (!s && file && !isTrigger(t)) {
     const saved = await saveFile(user.id, file, 'מסמך ראשי');
     save(user.id, { step: 'offer', startedAt: Date.now(), files: [saved] });
-    return { replies: [...(released ? [released] : []), '📦 לקלוט את המסמך כ*קבלת סחורה* בפריוריטי?\n*כן* 👍 — להמשיך, *לא* 👎 — לא לקלוט.'], status: 'ok', result: 'הצעה: קבלת סחורה מתמונה', buttons: ['כן ✅', 'לא 👎'] };
+    return { replies: [...(released ? [released] : []), '📦 לקלוט את המסמך כ*קבלת סחורה* בפריוריטי?\n*כן* 👍 — להמשיך, *לא* 👎 — לא לקלוט.'], status: 'ok', result: 'הצעה: קבלת סחורה מתמונה', buttons: ['כן ✅', 'לא ❌'] };
   }
 
   // התחלה חדשה: "קבלת סחורה" עם קובץ באמצע קליטה, או קובץ חדש באמצע קליטה שעוד אין לה טיוטא
