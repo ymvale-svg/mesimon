@@ -175,7 +175,7 @@ async function findReceiptByBooknum(company, supname, booknum) {
 /** הזמנה אחת, עם השורות והיתרות */
 async function getOrder(company, ordname) {
   try {
-    const h = strip(await call(company, 'GET', `PORDERS('${q(ordname)}')?$select=ORDNAME,SUPNAME,CDES,STATDES,PROJDOCNO,PROJDES,TYPECODE,TYPEDES,CURDATE,PAYCODE,PAYDES`));
+    const h = strip(await call(company, 'GET', `PORDERS('${q(ordname)}')?$select=ORDNAME,SUPNAME,CDES,STATDES,PROJDOCNO,PROJDES,TYPECODE,TYPEDES,CURDATE,PAYCODE,PAYDES,WARHSNAME`));
     const lines = rows(await call(company, 'GET', `PORDERS('${q(ordname)}')/PORDERITEMS_SUBFORM?$select=LINE,KLINE,PARTNAME,PDES,TQUANT,TBALANCE,TUNITNAME,PRICE,PERCENT`));
     return { ...h, lines };
   } catch (err) {
@@ -187,7 +187,7 @@ async function getOrder(company, ordname) {
 /** הזמנות מאושרות של הספק שיש בהן יתרה */
 async function openOrders(company, supname) {
   const list = rows(await call(company, 'GET',
-    `PORDERS?$filter=${enc(`SUPNAME eq '${q(supname)}' and STATDES eq 'אושרה'`)}&$select=ORDNAME,CURDATE,PROJDOCNO,PROJDES,TYPECODE,PAYCODE,PAYDES&$top=20&$orderby=CURDATE desc`));
+    `PORDERS?$filter=${enc(`SUPNAME eq '${q(supname)}' and STATDES eq 'אושרה'`)}&$select=ORDNAME,CURDATE,PROJDOCNO,PROJDES,TYPECODE,PAYCODE,PAYDES,WARHSNAME&$top=20&$orderby=CURDATE desc`));
   const out = [];
   for (const o of list) {
     const lines = rows(await call(company, 'GET', `PORDERS('${q(o.ORDNAME)}')/PORDERITEMS_SUBFORM?$select=LINE,KLINE,PARTNAME,PDES,TQUANT,TBALANCE,TUNITNAME,PRICE,PERCENT`))
@@ -366,7 +366,7 @@ function matchProjects(list, text, { all = false } = {}) {
 /** ה-GR כפי שנשמר — כותרת, שורות, נספחים, דו-שיח פנימי */
 async function readReceipt(company, docno) {
   const k = grKey(docno);
-  const h = strip(await call(company, 'GET', `${k}?$select=DOCNO,CURDATE,SUPNAME,CDES,BOOKNUM,PROJDOCNO,PROJDES,TOWARHSNAME,STATDES,DETAILS,QPRICE,PERCENT,DISPRICE,VAT,TOTPRICE,MED_MXPAYCODE,MED_MXPAYDES`));
+  const h = strip(await call(company, 'GET', `${k}?$select=DOCNO,CURDATE,SUPNAME,CDES,BOOKNUM,PROJDOCNO,PROJDES,TOWARHSNAME,TOWARHSDES,STATDES,DETAILS,QPRICE,PERCENT,DISPRICE,VAT,TOTPRICE,MED_MXPAYCODE,MED_MXPAYDES`));
   const lines = rows(await call(company, 'GET', `${k}/TRANSORDER_P_SUBFORM?$select=KLINE,PARTNAME,PDES,TQUANT,TUNITNAME,PRICE,PERCENT,QPRICE,ORDNAME,OLINE,BUD_SUBCHAPTERNAME,BUD_SUBCHAPTERDES,BUD_SUBTOPICNAME`))
     .sort((a, b) => a.KLINE - b.KLINE);
   const files = rows(await call(company, 'GET', `${k}/EXTFILES_SUBFORM?$select=EXTFILENUM,EXTFILEDES,SUFFIX`));
@@ -424,6 +424,24 @@ function payFromText(text) {
 }
 
 /** המחסן של הפרויקט (‎BUD_WARHSNAME‎ במסך הפרויקטים), או ‎Main‎ כשלפרויקט אין מחסן */
+/**
+ * המחסנים שאליהם נקלטו בפועל קבלות של הפרויקט, עם השם (‎TOWARHSDES‎) ומספר הקבלות — מסך המחסנים
+ * סגור ל-API, ולכן זו הרשימה. ‎[]‎ — לפרויקט אין קבלות קודמות.
+ */
+async function projectWarehouses(company, project) {
+  if (!project) return [];
+  const used = rows(await call(company, 'GET',
+    `DOCUMENTS_P?$filter=${enc(`PROJDOCNO eq '${q(project)}' and STATDES ne 'מבוטלת'`)}&$select=TOWARHSNAME,TOWARHSDES&$orderby=CURDATE%20desc&$top=200`));
+  const m = new Map();
+  for (const r of used) {
+    if (!r.TOWARHSNAME) continue;
+    const e = m.get(r.TOWARHSNAME) ?? { code: r.TOWARHSNAME, name: r.TOWARHSDES ?? '', n: 0 };
+    e.n += 1; if (!e.name && r.TOWARHSDES) e.name = r.TOWARHSDES;
+    m.set(r.TOWARHSNAME, e);
+  }
+  return [...m.values()].sort((a, b) => b.n - a.n);
+}
+
 /*
  * המחסן — נלמד מקבלות הסחורה של החברה, כי המחסן שמוגדר בפרויקט אינו תמיד המחסן שקולטים אליו
  * (ב-a160226 132 מתוך 194 קבלות נכנסו למחסן הפרויקט; בדניה הירוקה, באלעד ובמורדות — כמעט תמיד Main,
@@ -547,7 +565,7 @@ async function cancelReceipt(company, docno) {
 
 module.exports = {
   COMPANIES, isEnabled, allowed, companyOf, isTest, resolveCompany, PriorityError,
-  PAY_TERMS, DEFAULT_PAY, payTerm, payLabel, payFromText, dueDate, supplierHistory, recentLines, partByCode, findPartsByText, generalCoding, warehouseOf, findSuppliers, supplierByCode, findReceiptByBooknum, getOrder, openOrders, findPartExact, lastSubchapter, projects, matchProjects, readReceipt,
+  PAY_TERMS, DEFAULT_PAY, payTerm, payLabel, payFromText, dueDate, projectWarehouses, supplierHistory, recentLines, partByCode, findPartsByText, generalCoding, warehouseOf, findSuppliers, supplierByCode, findReceiptByBooknum, getOrder, openOrders, findPartExact, lastSubchapter, projects, matchProjects, readReceipt,
   readDialog, createReceipt, addOrderLine, addFreeLine, setLineQty, setHeader, attach, setDialog, finalizeReceipt, cancelReceipt,
   _call: call
 };
