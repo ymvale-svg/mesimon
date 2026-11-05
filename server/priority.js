@@ -61,7 +61,9 @@ const isTest = (code) => Boolean(companyOf(code).test);
  * ‎via='direct'‎ — החברה עצמה פתוחה; ‎'sandbox'‎ — העותק לבדיקה; ‎null‎ — לא נמצאה
  * חברה מותרת.
  */
-const normName = (t) => String(t ?? '').replace(/בע"?'?מ|בעמ|בע'מ|ltd\.?/gi, ' ').replace(/[^\u0590-\u05FFa-z0-9 ]/gi, ' ').replace(/\s+/g, ' ').trim();
+// "ובניין" = "ובנין", "בע"מ" / "בע'מ" / "בעמ" — לא חלק מהשם
+const normName = (t) => String(t ?? '').replace(/בע["'״׳]?מ|ltd\.?/gi, ' ').replace(/[^\u0590-\u05FFa-z0-9 ]/gi, ' ')
+  .replace(/יי/g, 'י').replace(/וו/g, 'ו').replace(/\s+/g, ' ').trim();
 
 /**
  * החברה לפי הח.פ. של הנמען; אם אין — לפי כל מספר אחר שבמסמך (למשל "מספר חשבון משלם" בשובר עירייה,
@@ -74,10 +76,18 @@ function resolveCompany(vat, { ids = [], name = '' } = {}) {
   if (!c) { for (const i of ids) { c = byVat(i); if (c) { how = 'id'; break; } } }
   if (!c && normName(name).length >= 4) {
     const n = normName(name);
-    const hits = COMPANIES.filter((x) => { const m = normName(x.name); return m.length >= 4 && (n === m || n.startsWith(m + ' ') || m.startsWith(n + ' ')); });
+    // עותק הבדיקה אינו נמען של מסמך אמיתי — לא נספר
+    const hits = COMPANIES.filter((x) => !x.test).filter((x) => { const m = normName(x.name); return m.length >= 4 && (n === m || n.startsWith(m + ' ') || m.startsWith(n + ' ')); });
     if (hits.length === 1) { c = hits[0]; how = 'name'; }
   }
   return resolveOpen(c, how);
+}
+
+/** החברות ששמן מתאים לטקסט (בלי עותק הבדיקה) — לתשובה בשם בשלב בחירת החברה */
+function companiesByName(text) {
+  const n = normName(text);
+  if (n.length < 2) return [];
+  return COMPANIES.filter((x) => !x.test && normName(x.name).includes(n));
 }
 
 function resolveOpen(c, how = 'vat') {
@@ -628,6 +638,14 @@ const finalizeReceipt = (company, docno) => call(company, 'PATCH', grKey(docno),
  * ולכן טיוטא נטושה חייבת להתבטל. פריוריטי אינו מוחק תעודה ואינו מבטל תעודה
  * עם שורות — קודם השורות, אחר כך הסטטוס.
  */
+/** מחיקת כל השורות של טיוטא — לבנייה מחדש של השורות באותו GR */
+async function deleteLines(company, docno) {
+  const k = grKey(docno);
+  for (const l of rows(await call(company, 'GET', `${k}/TRANSORDER_P_SUBFORM?$select=KLINE`))) {
+    await call(company, 'DELETE', `${k}/TRANSORDER_P_SUBFORM(KLINE=${l.KLINE},TYPE='P')`);
+  }
+}
+
 /** הסטטוס של ה-GR בפריוריטי ("טיוטא", "סופית", "מבוטלת"); ‎null‎ — לא נמצא */
 async function receiptStatus(company, docno) {
   try {
@@ -657,8 +675,8 @@ async function cancelReceipt(company, docno) {
 }
 
 module.exports = {
-  COMPANIES, isEnabled, allowed, companyOf, isTest, resolveCompany, PriorityError,
+  COMPANIES, isEnabled, allowed, companyOf, isTest, resolveCompany, companiesByName, PriorityError,
   NO_VAT_CODE, TAX_CODES, PAY_TERMS, DEFAULT_PAY, payTerm, payLabel, payFromText, dueDate, projectWarehouses, warehouses, warehouseExists, defaultWarehouse, supplierHistory, recentLines, partByCode, findPartsByText, generalCoding, warehouseOf, findSuppliers, supplierByCode, findReceiptByBooknum, getOrder, openOrders, findPartExact, lastSubchapter, projects, matchProjects, readReceipt,
-  readDialog, createReceipt, addOrderLine, addFreeLine, setLineQty, setHeader, attach, setDialog, finalizeReceipt, cancelReceipt, receiptStatus,
+  readDialog, createReceipt, addOrderLine, addFreeLine, setLineQty, setHeader, attach, setDialog, finalizeReceipt, cancelReceipt, receiptStatus, deleteLines,
   _call: call
 };

@@ -248,6 +248,16 @@ function resolveMentions(text) {
 // קליטה
 // ---------------------------------------------------------------------------
 
+/** הקובץ האחרון שהעובד שלח ולא נקלט — ל"קבלת סחורה" שנכתבת אחריו (עד 15 דקות) */
+const recentFiles = new Map();
+const RECENT_FILE_MS = 15 * 60 * 1000;
+function rememberFile(userId, file) { recentFiles.set(userId, { file, at: Date.now() }); }
+function takeRecentFile(userId) {
+  const r = recentFiles.get(userId);
+  recentFiles.delete(userId);
+  return r && Date.now() - r.at < RECENT_FILE_MS ? r.file : null;
+}
+
 function textOf(m) {
   const main = m.textMessageData?.textMessage
     ?? m.extendedTextMessageData?.text
@@ -304,10 +314,13 @@ async function receiveOne(ch, timeout = LISTEN_TIMEOUT) {
       storeGroupMessage(b);
     } else if (b.typeWebhook === 'incomingMessageReceived' && chatId.endsWith('@c.us')) {
       const m = b.messageData ?? {};
+      // מסמך (PDF) מגיע עם שם הקובץ בכיתוב — זה לא טקסט שהעובד כתב
+      const fname = String(m.fileMessageData?.fileName ?? '').trim();
+      const raw = textOf(m).trim();
       direct = {
         chatId,
         phone: chatId.replace(/@c\.us$/, ''),
-        text: textOf(m).trim(),
+        text: m.typeMessage === 'documentMessage' && fname && raw === fname ? '' : raw,
         kind: m.typeMessage ?? '',
         // הודעה שהועברה (Forward) — לסקירה הלילית ולאיסוף הודעות מועברות
         forwarded: Boolean(m.extendedTextMessageData?.isForwarded || m.fileMessageData?.isForwarded || m.isForwarded),
@@ -2682,8 +2695,13 @@ async function handleDirect(msg) {
       return;
     }
   }
-  // קבלת סחורה — "קבלת סחורה" (כתוב, בכיתוב לתמונה או בהקלטה) פותח; מאז כל הודעה, גם תמונה, הולכת אליה עד הסוף
-  if (WaActions.allowed(actor, 'goods_receipt') && (GoodsReceipt.active(user.id) || GoodsReceipt.opens(text, msg.file))) {
+  // קבלת סחורה — "קבלת סחורה" (כתוב, בכיתוב לתמונה או בהקלטה) פותח; מאז כל הודעה, גם תמונה, הולכת אליה עד הסוף.
+  // "קבלת סחורה" בלי קובץ, דקות אחרי קובץ שלא נקלט — הקובץ ההוא הוא המסמך
+  const grAllowed = WaActions.allowed(actor, 'goods_receipt');
+  const recentFile = grAllowed && !msg.file && GoodsReceipt.isTrigger(text) && !GoodsReceipt.active(user.id) ? takeRecentFile(user.id) : null;
+  if (recentFile) msg = { ...msg, file: recentFile };
+  if (msg.file && !(grAllowed && (GoodsReceipt.active(user.id) || GoodsReceipt.opens(text, msg.file)))) rememberFile(user.id, msg.file);
+  if (grAllowed && (GoodsReceipt.active(user.id) || GoodsReceipt.opens(text, msg.file))) {
     await notice;
     const slowGr = setTimeout(() => sendText(msg.chatId, '⏳ רגע, קורא ובודק מול פריוריטי…').catch(() => {}), SLOW_NOTICE_MS);
     let r;

@@ -212,7 +212,17 @@ const ai = {
     const block = file.mime.includes('pdf')
       ? { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data } }
       : { type: 'image', source: { type: 'base64', media_type: file.mime.includes('png') ? 'image/png' : 'image/jpeg', data } };
-    return Claude.json({ system: skill(), content: [block, { type: 'text', text: 'task: extract' }], schema: EXTRACT_SCHEMA, effort: 'high', live: true });
+    const first = await Claude.json({ system: skill(), content: [block, { type: 'text', text: 'task: extract' }], schema: EXTRACT_SCHEMA, effort: 'high', live: true });
+    // בדיקה עצמית: סכום השורות לא תואם לסה"כ השורות במסמך — קוראים שוב את הטבלה, שורה אחרי שורה
+    const want = Number(first.totals?.subtotal || (Number(first.totals?.before_vat || 0) + Number(first.totals?.doc_discount || 0)) || 0);
+    const gap = (d) => Math.abs(lineSum(d.lines) - want);
+    if (!(want > 0) || !(first.lines ?? []).length || gap(first) <= 1) return first;
+    const again = await Claude.json({ system: skill(), schema: EXTRACT_SCHEMA, effort: 'high', live: true, content: [block, { type: 'text', text: [
+      'task: extract',
+      `בדיקה: סכום השורות שקראת (${lineSum(first.lines)}) אינו תואם לסה"כ השורות במסמך (${want}). קראת ${first.lines.length} שורות.`,
+      'קרא שוב את כל טבלת השורות, שורה אחרי שורה: גם שורות דומות זו לזו, שורות עם אותו מק"ט, שורות שנמשכות על שתי שורות טקסט, ושורות בסוף הטבלה. בדוק כמות × מחיר = סכום בכל שורה.'
+    ].join('\n') }] }).catch(() => null);
+    return again && (again.lines ?? []).length && gap(again) < gap(first) ? again : first;
   },
   async match(docLines, orders) {
     const text = JSON.stringify({
@@ -460,11 +470,15 @@ async function resolveCompany(s) {
   if (r.matched) {
     return { s: null, replies: [`המסמך מופנה ל*${r.matched.name}* (${r.matched.code}), שעדיין לא פתוחה לקליטה מהבוט. קבלת הסחורה בוטלה.`], status: 'denied', result: `חברה סגורה: ${r.matched.code}` };
   }
-  const open = Priority.allowed();
+  // עותק הבדיקה אינו אפשרות לעובד (רק כשהוא היחיד שפתוח). חברות ששמן דומה לנמען — ראשונות
+  const all = Priority.allowed();
+  const real = all.filter((c) => !Priority.isTest(c));
+  const near = new Set(Priority.companiesByName(String(s.doc.recipient_name ?? '').split(/\s+/).slice(0, 2).join(' ')).map((c) => c.code));
+  const open = (real.length ? real : all).sort((a, b) => Number(near.has(b)) - Number(near.has(a)));
   s.step = 'company';
   s.companyOptions = open;
   return reply(s, [`לא זיהיתי לאיזו חברה המסמך מופנה (נמען: ${s.doc.recipient_name || '—'}${s.doc.recipient_vat ? `, ח.פ. ${s.doc.recipient_vat}` : ''}).`,
-    'לאיזו חברה לקלוט?', ...open.map((c, i) => `*${i + 1}.* ${Priority.companyOf(c).name} (${c})`), '', 'או *ביטול*.'].join('\n'));
+    'לאיזו חברה לקלוט?', ...open.map((c, i) => `*${i + 1}.* ${Priority.companyOf(c).name} (${c})`), '', 'כתבו מספר או שם, או *ביטול*.'].join('\n'));
 }
 
 async function resolveSupplier(s) {
@@ -792,10 +806,8 @@ async function askProject(s) {
  */
 async function chooseWarehouse(s, note = '') {
   const go = async (extra) => {
-    // שאר המחסנים בחברה — לשינוי במספר, בשלב הנספחים
-    const others = ((await Priority.warehouses(s.company).catch(() => null)) ?? []).filter((w) => w.code !== s.warehouse).slice(0, 8);
-    s.warehouseChoices = others.map((w) => ({ code: w.code, name: w.name }));
-    const change = extra && others.length ? `   לשנות מחסן — כתבו מספר: ${others.map((w, i) => `*${i + 1}.* ${w.name || w.code}`).join(' · ')}` : '';
+    // לא עוצרים: המחסן נקבע, ולשינוי — "מחסן" בשלב הנספחים מציג את הרשימה
+    const change = extra ? '   לשנות מחסן — כתבו *מחסן*.' : '';
     const r = askFiles(s);
     const pre = [note, extra, change].filter(Boolean).join('\n');
     return pre ? { ...r, replies: [`${pre}\n\n${r.replies[0]}`] } : r;
@@ -808,10 +820,10 @@ async function chooseWarehouse(s, note = '') {
   const opts = await Priority.projectWarehouses(s.company, s.project?.code).catch(() => []);
   if (opts.length === 1) { s.warehouse = opts[0].code; return go(`🏬 מחסן: *${opts[0].name || opts[0].code}* (${opts[0].code})`); }
   if (opts.length > 1) {
-    s.step = 'warehouse';
-    s.warehouseOptions = opts.slice(0, 9);
-    return reply(s, [note || null, `🏬 לאיזה מחסן לשייך? לפרויקט ${s.project.des} יש כמה מחסנים:`,
-      ...s.warehouseOptions.map((w, i) => `*${i + 1}.* ${w.name || w.code} (${w.code})${w.n ? ` — ${w.n} קבלות` : ''}`), '', 'כתבו מספר מהרשימה.'].filter((x) => x !== null).join('\n'));
+    // כמה מחסנים — המחסן הראשי אם הוא ביניהם, אחרת הנפוץ בקבלות הפרויקט. לא עוצרים לשאלה
+    const w = opts.find((x) => x.code === 'Main') ?? opts[0];
+    s.warehouse = w.code;
+    return go(`🏬 מחסן: *${w.name || w.code}* (${w.code})`);
   }
   s.warehouse = await Priority.warehouseOf(s.company, s.project?.code);
   const name = ((await Priority.warehouses(s.company).catch(() => null)) ?? []).find((w) => w.code === s.warehouse)?.name;
@@ -821,7 +833,15 @@ async function chooseWarehouse(s, note = '') {
 function askFiles(s) {
   s.step = 'files';
   return reply(s, ['📎 *נספחים* — יש עוד מסמכים לצרף (תעודה נוספת, תמונה של הסחורה)? שלחו אותם עכשיו, אחד אחרי השני.',
-    'כשסיימתם — *סיום*. אין — *אין*.'].join('\n'));
+    'כשסיימתם, או אם אין — *סיום*.'].join('\n'));
+}
+
+/** "מחסן" בשלב הנספחים — רשימת המחסנים של החברה, לבחירה במספר */
+async function listWarehouses(s) {
+  const all = ((await Priority.warehouses(s.company).catch(() => null)) ?? []).slice(0, 9);
+  if (!all.length) return reply(s, `🏬 המחסן: *${s.warehouse}*. לא הצלחתי לקרוא את רשימת המחסנים. כתבו *סיום* להמשך.`);
+  s.warehouseChoices = all.map((w) => ({ code: w.code, name: w.name }));
+  return { s, replies: [['🏬 לאיזה מחסן לשייך? כתבו מספר:', ...all.map((w, i) => `*${i + 1}.* ${w.name || w.code} (${w.code})${w.code === s.warehouse ? ' ← עכשיו' : ''}`)].join('\n')] };
 }
 
 async function createDraft(user, s) {
@@ -830,7 +850,12 @@ async function createDraft(user, s) {
   if (!s.warehouse || !(await Priority.warehouseExists(c, s.warehouse).catch(() => true))) s.warehouse = await Priority.warehouseOf(c, s.project?.code);
   const head = { supname: s.supplier.code, booknum: s.doc.doc_number, date: s.doc.date || null, project: s.project?.code, warehouse: s.warehouse, payCode: s.payCode ?? Priority.DEFAULT_PAY };
   let docno;
-  try {
+  // בנייה מחדש של השורות (טבלה שנשלחה בבדיקת הטיוטא): אותו GR — מוחקים את השורות וכותבים מחדש
+  if (s.docno && s.rebuild) {
+    await Priority.deleteLines(c, s.docno);
+    docno = s.docno;
+  }
+  if (!docno) try {
     docno = await Priority.createReceipt(c, head);
   } catch (err) {
     // פריוריטי דחה את הכותרת — מנסים מחסנים אחרים של החברה (של הפרויקט, ברירת המחדל, השאר)
@@ -891,8 +916,10 @@ async function createDraft(user, s) {
   }
   // פרטים (‎DETAILS‎, עד 24 תווים) — שם המקבל ומספר התעודה; מוצג ברשימת התעודות בחשבונית הספק
   await Priority.setHeader(c, docno, { DETAILS: receiverDetails(user, s.doc.doc_number) }).catch(() => {});
-  for (const f of s.files) {
+  s.rebuild = false;
+  for (const f of s.files.filter((x) => !x.attached)) {
     try {
+      f.attached = true;
       await Priority.attach(c, docno, { buf: fs.readFileSync(f.path), mime: f.mime, description: f.label === 'מסמך ראשי' ? `${docName(s.doc)} ${s.doc.doc_number}`.slice(0, 32) : f.label });   // התיאור בפריוריטי נחתך אחרי ~32 תווים
     } catch (err) {
       problems.push({ what: `${f.label === 'מסמך ראשי' ? 'צילום המסמך' : f.label} לא צורף לנספחים`, err: `נספח ${f.label}: ${err.message}` });
@@ -1040,7 +1067,8 @@ async function maybeAdoptDetail(user, s, saved, cls) {
  * נספח עם רשימת פריטים, לפני שנוצרה טיוטא (‎isListFor‎). ‎null‎ — לא רשימה; יצורף כנספח רגיל.
  */
 async function maybeAdoptList(user, s, saved) {
-  if (s.docno || !isListFor(s.doc, { lines: [{}, {}] })) return null;
+  if (s.docno) return maybeRebuildFromTable(user, s, saved);
+  if (!isListFor(s.doc, { lines: [{}, {}] })) return null;
   let d;
   try { d = await ai.extract(saved); } catch { return null; }
   if (!isListFor(s.doc, d)) return null;
@@ -1049,19 +1077,40 @@ async function maybeAdoptList(user, s, saved) {
   s.pendingList = { doc: d };
   return { s, replies: [listQuestion(s.doc, d)] };
 }
+/*
+ * בבדיקת הטיוטא: נשלחה טבלה (צילום של שורות החשבונית) שהסכום שלה קרוב יותר לסכום שבמסמך מהשורות
+ * שבטיוטא — מציעים לבנות את השורות מחדש לפיה, באותו GR. ‎null‎ — לא טבלה כזו; יצורף כנספח רגיל.
+ */
+async function maybeRebuildFromTable(user, s, saved) {
+  if (s.step !== 'review') return null;
+  let d;
+  try { d = await ai.extract(saved); } catch { return null; }
+  const want = docBeforeVat(s.doc);
+  const now = lineSum((s.doc.lines ?? []).map((l, i) => ({ ...l, qty: s.lines[i]?.qty ?? l.qty })));
+  if (!(want > 0) || !(d.lines ?? []).length || Math.abs(lineSum(d.lines) - want) >= Math.abs(now - want) || Math.abs(now - want) <= 1) return null;
+  s.files.push({ ...saved, label: 'טבלת שורות', attached: true });
+  await Priority.attach(s.company, s.docno, { buf: fs.readFileSync(saved.path), mime: saved.mime, description: 'טבלת שורות' }).catch(() => { s.files[s.files.length - 1].attached = false; });
+  s.pendingList = { doc: d, rebuild: true };
+  return { s, replies: [[`📋 בתמונה יש *${d.lines.length} שורות* בסך ${money(lineSum(d.lines))}${listMatches(s.doc, d) ? ' — *תואם* למסמך' : ''} (במסמך: ${money(want)} לפני מע"מ; בטיוטא: ${money(now)}).`,
+    ...d.lines.slice(0, 12).map((l, i) => `*${i + 1}.* ${l.description} — ${qtyText(l.qty)} × ${money(l.unit_price)}`),
+    '', `לעדכן את שורות ${s.docno} לפי התמונה? *כן* — לעדכן · *לא* — להשאיר כנספח בלבד`].join('\n')] };
+}
+
 function listQuestion(main, d) {
   return [`📋 בנספח יש רשימה של *${d.lines.length} פריטים*, בסך ${money(lineSum(d.lines))}${docBeforeVat(main) ? ` (במסמך: ${money(docBeforeVat(main))} לפני מע"מ)` : ''}.`,
     'לעדכן את שורות הקבלה לפי הרשימה? *כן* — לעדכן · *לא* — להשאיר כנספח בלבד'].join('\n');
 }
 /** השורות מהרשימה; אם כבר עברנו את השורות — חוזרים להשוואה עם ההזמנה ולהצגת השורות */
 async function adoptList(s, d, note) {
+  if (s.pendingList?.rebuild) { s.rebuild = true; (s.corrections ??= []).push(`השורות נבנו מחדש לפי טבלה שנשלחה בבדיקת הטיוטא (${d.lines.length} שורות)`); }
   s.pendingList = null;
   s.doc = withList(s.doc, d);
   s.lines = linesOf(s.doc);
   if (['company', 'supplier', 'header'].includes(s.step)) return { s, replies: [`${note}${s.lastPrompt ? `\n\n${s.lastPrompt}` : ''}`] };
   // כבר נבחר "בלי הזמנה" — ישר לשורות החדשות; אחרת — השוואה מחדש עם ההזמנה
   const noOrder = !s.order && s.step !== 'order';
-  s.order = null; s.ordersChecked = false; s.chapter = null; s.warehouse = null;
+  s.order = null; s.ordersChecked = false; s.chapter = null;
+  if (!s.rebuild) s.warehouse = null;   // בבנייה מחדש — המחסן והפרויקט של ה-GR נשארים
   const out = noOrder ? await askLines(s) : await resolveOrder(s);
   return { ...out, replies: [note, ...out.replies] };
 }
@@ -1082,6 +1131,7 @@ async function attachNow(user, s, f) {
     return { s, replies: [`📎 נשמר כנספח (${s.files.length - 1}), ויצורף לקבלת הסחורה.${s.lastPrompt ? `\n\n${s.lastPrompt}` : ''}`] };
   }
   const problems = [];
+  f.attached = true;
   await Priority.attach(s.company, s.docno, { buf: fs.readFileSync(f.path), mime: f.mime, description: f.label })
     .catch((err) => problems.push({ what: 'הנספח לא צורף', err: `נספח: ${err.message}` }));
   return showDraft(s, problems, user);
@@ -1351,9 +1401,10 @@ async function step(user, s, t, file) {
     }
 
     case 'company': {
-      const n = numberIn(t);
-      const c = n && s.companyOptions[n - 1];
-      if (!c) return reply(s, 'כתבו את מספר החברה מהרשימה, או *ביטול*.');
+      const n = /^\s*\d{1,2}\s*$/.test(t) ? Number(t) : null;
+      const byName = !n ? Priority.companiesByName(t).map((x) => x.code).filter((x) => s.companyOptions.includes(x)) : [];
+      const c = (n && s.companyOptions[n - 1]) || (byName.length === 1 ? byName[0] : null);
+      if (!c) return reply(s, byName.length > 1 ? `יש כמה חברות בשם הזה: ${byName.map((x) => `*${s.companyOptions.indexOf(x) + 1}.* ${Priority.companyOf(x).name}`).join(' · ')}. כתבו מספר.` : 'כתבו את מספר החברה מהרשימה, או את שמה, או *ביטול*.');
       s.company = c;
       s.via = 'direct';
       return resolveSupplier(s);
@@ -1542,9 +1593,10 @@ async function step(user, s, t, file) {
     case 'files':
       if (s.pendingNew && !file) { const r = await answerPendingNew(user, s, t); if (r) return r; }
       if (file) return routeFile(user, s, file, t);
+      if (/^(מחסן|מחסנים|שנה מחסן|לשנות מחסן|החלף מחסן|פירוט מחסנים|רשימת מחסנים)([\s,.!?]|$)/.test(t.trim())) return listWarehouses(s);
       if (/^\d{1,2}$/.test(t.trim()) && s.warehouseChoices?.[Number(t) - 1]) {
         const w = s.warehouseChoices[Number(t) - 1];
-        s.warehouseChoices = s.warehouseChoices.filter((x) => x !== w);
+        s.warehouseChoices = null;
         s.warehouse = w.code;
         const r = askFiles(s);
         return { ...r, replies: [`🏬 המחסן שונה ל*${w.name || w.code}* (${w.code}).\n\n${r.replies[0]}`] };
