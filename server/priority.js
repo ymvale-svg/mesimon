@@ -211,9 +211,10 @@ async function projects(company) {
   if (hit && Date.now() - hit.at < 3600000) return hit.list;
   let list = [];
   try {
-    list = rows(await call(company, 'GET', 'DOCUMENTS_p?$select=DOCNO,PROJDES,STATDES&$top=2000'))
+    // ‎BUD_WARHSNAME‎ — המחסן של הפרויקט; לשם נקלטת הסחורה
+    list = rows(await call(company, 'GET', 'DOCUMENTS_p?$select=DOCNO,PROJDES,STATDES,BUD_WARHSNAME&$top=2000'))
       .filter((r) => r.DOCNO && r.STATDES !== 'מבוטלת')
-      .map((r) => ({ code: r.DOCNO, des: r.PROJDES ?? '' }));
+      .map((r) => ({ code: r.DOCNO, des: r.PROJDES ?? '', warehouse: r.BUD_WARHSNAME || '' }));
   } catch (err) {
     console.error(`[משימון] מסך הפרויקטים בפריוריטי (${company}) לא זמין:`, err.message);
   }
@@ -291,7 +292,14 @@ async function readReceipt(company, docno) {
 // כתיבה — קבלת סחורה
 // ---------------------------------------------------------------------------
 
-/** GR טיוטא. ‎project‎ — כשיש הזמנה, הפרויקט שלה */
+/** המחסן של הפרויקט (‎BUD_WARHSNAME‎ במסך הפרויקטים), או ‎Main‎ כשלפרויקט אין מחסן */
+async function warehouseOf(company, project) {
+  if (!project) return 'Main';
+  const p = (await projects(company)).find((x) => x.code === project);
+  return p?.warehouse || 'Main';
+}
+
+/** GR טיוטא. ‎project‎ — כשיש הזמנה, הפרויקט שלה. ‎warehouse‎ — המחסן של הפרויקט */
 async function createReceipt(company, { supname, booknum, date, project, warehouse = 'Main' }) {
   const body = { SUPNAME: supname, TOWARHSNAME: warehouse };
   if (booknum) body.BOOKNUM = String(booknum).slice(0, 20);
@@ -386,7 +394,7 @@ async function cancelReceipt(company, docno) {
 
 module.exports = {
   COMPANIES, isEnabled, allowed, companyOf, isTest, resolveCompany, PriorityError,
-  findSuppliers, supplierByCode, findReceiptByBooknum, getOrder, openOrders, findPartExact, lastSubchapter, projects, matchProjects, readReceipt,
+  warehouseOf, findSuppliers, supplierByCode, findReceiptByBooknum, getOrder, openOrders, findPartExact, lastSubchapter, projects, matchProjects, readReceipt,
   readDialog, createReceipt, addOrderLine, addFreeLine, setLineQty, setHeader, attach, setDialog, finalizeReceipt, cancelReceipt,
   _call: call
 };
