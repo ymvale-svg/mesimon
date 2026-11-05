@@ -63,22 +63,22 @@ const CANCEL = /^(ביטול|בטל|לבטל|עזוב|יציאה|stop)([\s,.!]|$
 /** "תוסיף בדו שיח: ...", "הערה: ...", "תרשום בהערות ..." — הערה חופשית של המקבל לדו-שיח הפנימי, בכל שלב */
 const NOTE_CMD = /^\s*(?:תוסיף|תוסיפי|הוסף|להוסיף|תרשום|תכתוב|רשום|כתוב)?\s*(?:ל|ב)?\s*(?:דו[\s-]*שיח(?:\s*פנימי)?|הערה|הערות)\s*[,:\-–]?\s*([\s\S]+)$/;
 /*
- * כפתורים לתשובה (וואטסאפ, עד 3). הכיתוב של כל כפתור הוא בדיוק המילה שהבוט מבין ("כן 👍", "מאשר 👍"),
+ * כפתורים לתשובה (וואטסאפ, עד 3). הכיתוב של כל כפתור הוא בדיוק המילה שהבוט מבין ("כן ✅", "מאשר ✅" — ✅ ירוק לאישור),
  * כך שלחיצה עובדת גם כשהיא חוזרת כטקסט רגיל. ‎[]‎ — בלי כפתורים (רשימות ממוספרות, שאלות פתוחות).
  */
 function buttonsFor(s) {
   if (!s) return [];
-  if (s.confirmCancel) return ['כן, לבטל 👍', 'חזרה לטיוטא'];
+  if (s.confirmCancel) return ['כן, לבטל ✅', 'חזרה לטיוטא'];
   if (s.pendingNew) return ['צרף כנספח', 'קבלה חדשה', 'להתעלם 👎'];
-  if (s.pendingList) return ['כן 👍', 'לא 👎'];
+  if (s.pendingList) return ['כן ✅', 'לא 👎'];
   switch (s.step) {
-    case 'offer': case 'doctype': return ['כן 👍', 'לא 👎'];
-    case 'header': return ['כן 👍', s.noVat ? 'עם מע"מ' : 'ללא מע"מ', 'ביטול'];
+    case 'offer': case 'doctype': return ['כן ✅', 'לא 👎'];
+    case 'header': return ['כן ✅', s.noVat ? 'עם מע"מ' : 'ללא מע"מ', 'ביטול'];
     case 'order': return ['בלי הזמנה 👎', 'ביטול'];
-    case 'lines': return ['כן 👍', 'ביטול'];
-    case 'parts': return ['כן 👍', 'כללי'];
-    case 'files': return ['סיום 👍'];
-    case 'review': return ['מאשר 👍', 'ביטול'];
+    case 'lines': return ['כן ✅', 'ביטול'];
+    case 'parts': return ['כן ✅', 'כללי'];
+    case 'files': return ['סיום ✅'];
+    case 'review': return ['מאשר ✅', 'ביטול'];
     default: return [];
   }
 }
@@ -1495,7 +1495,7 @@ async function handle({ user, text = '', file = null, reaction = false }) {
   if (!s && file && !isTrigger(t)) {
     const saved = await saveFile(user.id, file, 'מסמך ראשי');
     save(user.id, { step: 'offer', startedAt: Date.now(), files: [saved] });
-    return { replies: [...(released ? [released] : []), '📦 לקלוט את המסמך כ*קבלת סחורה* בפריוריטי?\n*כן* 👍 — להמשיך, *לא* 👎 — לא לקלוט.'], status: 'ok', result: 'הצעה: קבלת סחורה מתמונה', buttons: ['כן 👍', 'לא 👎'] };
+    return { replies: [...(released ? [released] : []), '📦 לקלוט את המסמך כ*קבלת סחורה* בפריוריטי?\n*כן* 👍 — להמשיך, *לא* 👎 — לא לקלוט.'], status: 'ok', result: 'הצעה: קבלת סחורה מתמונה', buttons: ['כן ✅', 'לא 👎'] };
   }
 
   // התחלה חדשה: "קבלת סחורה" עם קובץ באמצע קליטה, או קובץ חדש באמצע קליטה שעוד אין לה טיוטא
