@@ -1693,6 +1693,8 @@ const BoardView = (() => {
         ])
       : null;
 
+    // 🔒 סיווג — נושא ורמת רגישות. ריק: רגיל, או כמו הפרויקט
+    const classPicker = ClassPicker.create(task?.classification ?? null, { inherited: task?.inheritedClassification ?? null });
     const body = el('div', {}, [
       modeToggle,
       voiceBox,
@@ -1706,6 +1708,7 @@ const BoardView = (() => {
       UI.field('אחראים נוספים', extraList,
         'המשימה תופיע גם אצלם, והם יקבלו את ההתראות. אפשר לצרף גם ספק חיצוני — המשימה נשארת בלוח הפנימי'),
       el('div.row', {}, [UI.field('עדיפות', prioritySelect), fieldOf('dueDate', 'תאריך יעד', dueInput)]),
+      UI.field('🔒 סיווג', classPicker.node, ClassPicker.HINT),
       el('div.row', {}, [
         UI.field('תלות במשימה אחרת', dependsSelect, 'המשימה לא תיסגר לפני שהמשימה החוסמת תושלם'),
         UI.field('תאריך הפעלה (משימה עתידית)', activateInput, 'עד למועד זה המשימה לא תופיע ברשימות הפעילות')
@@ -1750,6 +1753,9 @@ const BoardView = (() => {
         recurrenceFreq: freqSelect.value,
         recurrencePolicy: policySelect.value
       };
+      // הסיווג נשלח רק כשהשתנה — כדי ששמירה רגילה לא תיתקל בכלל ההקלה
+      const cls = classPicker.value();
+      if (cls.topic !== (task?.classification?.topic ?? '') || cls.sens !== (task?.classification?.sens ?? 0)) Object.assign(payload, cls);
       // בלי הרשאה להטיל משימה ארגונית לא שולחים את השדה כלל, כדי שעריכה של
       // משימה ארגונית קיימת לא תוריד אותה בשוגג לרמה המחלקתית
       if (!isEdit) {
@@ -1894,6 +1900,7 @@ const BoardView = (() => {
      * רחוקות, ורוב פתיחות הדיאלוג אינן נוגעות בשדה הזה.
      */
     const statusOwnerSelect = UI.select([{ value: '', label: 'ללא צביעה' }], String(project?.statusOwnerId ?? ''));
+    const projectClass = ClassPicker.create(project?.classification ?? null);
     API.statusList().then((d) => {
       for (const l of d.lists ?? []) {
         const mine = l.ownerId === App.state.actor?.id;
@@ -2067,6 +2074,7 @@ const BoardView = (() => {
           'איזו רשימת סטטוסים תצבע את שורות הפרויקט במסך הבקרה')
       ]),
       el('div.row', {}, [UI.field('תאריך התחלה', startInput), UI.field('תאריך יעד', dueInput)]),
+      UI.field('🔒 סיווג הפרויקט', projectClass.node, `חל על כל משימה בפרויקט שאין לה סיווג משלה. ${ClassPicker.HINT}`),
       UI.field('צבע הפרויקט', el('div.flex', {}, [colorInput, colorSwatches]),
         'הצבע מסמן את שורות המשימות של הפרויקט, לזיהוי במבט'),
       imagesBox,
@@ -2101,6 +2109,8 @@ const BoardView = (() => {
         statusOwnerId: statusOwnerSelect.value || null,
         templateId: templateSelect.value || null
       };
+      const pcls = projectClass.value();
+      if (pcls.topic !== (project?.classification?.topic ?? '') || pcls.sens !== (project?.classification?.sens ?? 0)) Object.assign(payload, pcls);
       saveBtn.disabled = true;
       try {
         if (isEdit) await API.updateProject(project.id, payload);

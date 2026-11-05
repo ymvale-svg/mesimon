@@ -1259,6 +1259,21 @@ function countsAsOpener(userId) {
 }
 
 function notify({ targetType, targetId, kind, title, body = '', taskId = null, push = null }) {
+  /*
+   * 🔒 משימה מסווגת (‎ai/classification.js‎): נמען שהסיווג לא מתיר לו לראות אותה
+   * מקבל התראה כללית, בלי כותרת ובלי תוכן — גם בדחיפה לטלפון ובמייל.
+   */
+  if (taskId) {
+    const task = get('SELECT * FROM tasks WHERE id = ?', taskId);
+    if (task && (Number(task.sens) > 0 || task.project_id)) {
+      const Cls = require('./ai/classification');
+      if (Cls.taskClass(task) && !Cls.mayReadTask({ type: targetType, id: targetId }, task)) {
+        title = '🔒 עדכון במשימה מסווגת';
+        body = '';
+        push = null;
+      }
+    }
+  }
   const res = run(
     'INSERT INTO notifications (target_type, target_id, kind, title, body, task_id, is_read, created_at) VALUES (?,?,?,?,?,?,0,?)',
     targetType,
@@ -1648,6 +1663,14 @@ function migrate() {
   // הארגונית שבוטלה. היא נותרת ריקה ואינה נקראת; מחיקת עמודה ב-SQLite
   // דורשת בניית טבלה מחדש, וזה סיכון מיותר עבור עמודה שאינה מפריעה.
   addColumn('tasks', 'department_id', 'INTEGER REFERENCES departments(id) ON DELETE SET NULL');
+  /*
+   * 🔒 סיווג לפי נושא ורמת רגישות (‎ai/classification.js‎). ‎sens = 0‎ — לא מסווג:
+   * ההרשאות הרגילות בלבד. משימה בלי סיווג משלה יורשת את זה של הפרויקט.
+   */
+  for (const t of ['tasks', 'projects']) {
+    addColumn(t, 'topic', "TEXT NOT NULL DEFAULT ''");
+    addColumn(t, 'sens', 'INTEGER NOT NULL DEFAULT 0');
+  }
   // תת-משימה והסטטוס המקוצר שלה — ראה ההסבר בהגדרת הטבלה
   addColumn('tasks', 'parent_task_id', 'INTEGER REFERENCES tasks(id) ON DELETE CASCADE');
   addColumn('tasks', 'status_short', "TEXT NOT NULL DEFAULT ''");

@@ -46,8 +46,16 @@ function cleanTopic(t, fallback = {}) {
   };
 }
 
-/** טבלת הנושאים: ברירת המחדל, ומעליה מה שנערך במסך הניהול */
+/** טבלת הנושאים — עם זיכרון קצר, כי בדיקת משימות קוראת לה לכל שורה */
+let memo = { at: 0, table: null };
 function topics() {
+  if (memo.table && Date.now() - memo.at < 5000) return memo.table;
+  memo = { at: Date.now(), table: loadTopics() };
+  return memo.table;
+}
+
+/** טבלת הנושאים: ברירת המחדל, ומעליה מה שנערך במסך הניהול */
+function loadTopics() {
   const saved = D.getSetting('knowledge_topics', null);
   const out = {};
   for (const [key, t] of Object.entries(DEFAULTS)) out[key] = cleanTopic(t);
@@ -70,6 +78,7 @@ function saveTopics(next) {
     if (out[key] && !out[key].label) throw Object.assign(new Error('לכל נושא צריך שם'), { status: 400 });
   }
   D.setSetting('knowledge_topics', out);
+  memo = { at: 0, table: null };
   return topics();
 }
 
@@ -128,6 +137,80 @@ function readerFor(actor) {
   return { scope, may: (item) => !!item && (scope.leader || (!!item.classified && mayRead(scope, item.topic, item.sens, table))) };
 }
 
+// ---------------------------------------------------------------------------
+// משימות ופרויקטים
+// ---------------------------------------------------------------------------
+
+/*
+ * משימה או פרויקט בלי סיווג (‎sens = 0‎) — ההרשאות הרגילות בלבד, כמו תמיד.
+ * עם סיווג, נוסף תנאי: משתתף במשימה (אחראי, אחראי נוסף, יוצר, מנהל הפרויקט),
+ * או מי שטבלת הרגישות מתירה לו. התנאי רק מצמצם — לא פותח למי שלא ראה קודם.
+ * משימה בלי סיווג משלה יורשת את הסיווג של הפרויקט שלה.
+ */
+const scopes = new WeakMap();
+function cachedScope(actor) {
+  if (!actor || typeof actor !== 'object') return scopeOf(actor);
+  if (!scopes.has(actor)) scopes.set(actor, scopeOf(actor));
+  return scopes.get(actor);
+}
+
+const ownClass = (row) => (row?.topic && Number(row.sens) > 0 ? { topic: row.topic, sens: Number(row.sens) } : null);
+
+/** הסיווג בפועל של משימה: שלה, ואם אין — של הפרויקט */
+function taskClass(task) {
+  const own = ownClass(task);
+  if (own || !task?.project_id) return own;
+  return ownClass(D.get('SELECT topic, sens FROM projects WHERE id = ?', task.project_id));
+}
+
+function isTaskParticipant(actor, task) {
+  const type = actor.type === 'vendor' ? 'vendor' : 'user';
+  if (task.assignee_type === type && task.assignee_id === actor.id) return true;
+  if (type === 'user' && task.created_by === actor.id) return true;
+  if (D.get('SELECT 1 FROM task_assignees WHERE task_id = ? AND assignee_type = ? AND assignee_id = ?', task.id, type, actor.id)) return true;
+  return type === 'user' && !!task.project_id && !!D.get('SELECT 1 FROM projects WHERE id = ? AND manager_id = ?', task.project_id, actor.id);
+}
+
+/** האם הסיווג מתיר לשחקן לראות את המשימה (בנוסף להרשאות הרגילות) */
+function mayReadTask(actor, task) {
+  if (!task) return false;
+  const c = taskClass(task);
+  if (!c) return true;
+  const table = topics();
+  if (effectiveLevel(c.topic, c.sens, table) <= 1) return true;
+  if (!actor) return false;
+  if (isTaskParticipant(actor, task)) return true;
+  return actor.type !== 'vendor' && mayRead(cachedScope(actor), c.topic, c.sens, table);
+}
+
+/** האם הסיווג מתיר לשחקן לראות את הפרויקט — מנהלו ופותחו תמיד, ומי שיש לו בו משימה */
+function mayReadProject(actor, project) {
+  const c = ownClass(project);
+  if (!c) return true;
+  const table = topics();
+  if (effectiveLevel(c.topic, c.sens, table) <= 1) return true;
+  if (!actor || actor.type === 'vendor') return false;
+  if (project.manager_id === actor.id || project.created_by === actor.id) return true;
+  if (mayRead(cachedScope(actor), c.topic, c.sens, table)) return true;
+  return !!D.get(`SELECT 1 FROM tasks t WHERE t.project_id = ? AND ((t.assignee_type = 'user' AND t.assignee_id = ?)
+    OR EXISTS (SELECT 1 FROM task_assignees ta WHERE ta.task_id = t.id AND ta.assignee_type = 'user' AND ta.assignee_id = ?)) LIMIT 1`, project.id, actor.id, actor.id);
+}
+
+/** סיווג לתצוגה — ‎null‎ כשאין */
+function classView(row, table = topics()) {
+  const c = ownClass(row);
+  if (!c) return null;
+  const level = effectiveLevel(c.topic, c.sens, table);
+  return { topic: c.topic, sens: level, label: `${table[c.topic]?.label ?? c.topic} · ${LEVEL_LABELS[level]}` };
+}
+
+/** קלט מטופס: ‎{topic, sens}‎ תקין, או ‎{topic: '', sens: 0}‎ לביטול */
+function parseClass(topic, sens) {
+  const table = topics();
+  if (!topic || !table[topic] || !Number(sens)) return { topic: '', sens: 0 };
+  return { topic, sens: effectiveLevel(topic, Number(sens), table) };
+}
+
 /** הטקסט לסקיל הזיקוק והסיווג: הנושאים, המחלקות והדוגמאות */
 function promptTable(table = topics()) {
   return [
@@ -161,5 +244,6 @@ function preview({ departmentId = null, role = 'employee' } = {}) {
 module.exports = {
   LEVELS, LEVEL_LABELS, LEVEL_HINTS, DEFAULTS,
   topics, saveTopics, scopeOf, mayRead, effectiveLevel, readerFor, promptTable, leadershipList, preview,
+  taskClass, mayReadTask, mayReadProject, classView, parseClass,
   _internal: { inTopic, norm }
 };

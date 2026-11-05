@@ -374,7 +374,9 @@ async function processMessage(user, conn, gmailId) {
   const existing = existingTaskFor(headerId);
   if (existing) {
     if (!involvedIn(user.id, existing)) {
-      insertSuggestion(user, meta, 'duplicate', { ownerName: existing.owner_name, taskTitle: existing.title }, { taskId: existing.id });
+      // 🔒 משימה מסווגת שהמשתמש לא רשאי לראות — "כבר קיימת" בלי הכותרת
+      const readable = require('./classification').mayReadTask({ type: 'user', id: user.id }, D.get('SELECT * FROM tasks WHERE id = ?', existing.id));
+      insertSuggestion(user, meta, 'duplicate', { ownerName: existing.owner_name, taskTitle: readable ? existing.title : '🔒 משימה מסווגת' }, { taskId: existing.id });
     }
     record(user.id, gmailId, headerId, 'duplicate', meta.box);
     return 'duplicate';

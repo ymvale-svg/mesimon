@@ -21,9 +21,10 @@ const check = (name, ok) => { console.log(`${ok ? '✓' : '✗'} ${name}`); if (
 // --- מחלקות ומשתמשים ---------------------------------------------------------
 const now = D.nowIso();
 const dept = (name, parent = null) => Number(D.run('INSERT INTO departments (name, created_at, parent_id) VALUES (?,?,?)', name, now, parent).lastInsertRowid);
+let seq = 0;
 const user = (name, role, deptId) => Number(D.run(
   "INSERT INTO users (full_name, email, password_hash, role, department, department_id, status, created_at) VALUES (?,?,?,?,?,?,'active',?)",
-  name, `${name}@t.test`, 'x', role, '', deptId, now).lastInsertRowid);
+  name, `u${++seq}@t.test`, D.hashPassword('1234'), role, '', deptId, now).lastInsertRowid);
 
 const bedek = dept('בדק');
 const coord = dept('מתאמות בדק', bedek);
@@ -40,7 +41,8 @@ const U = {
   hrMgr: user('מנהלת משאבי אנוש', 'manager', hr),
   sysAdmin: user('מנהל מערכת', 'admin', ops),
   ceo: user('מנכל', 'executive', mgmt),
-  owner: user('אדמין על', 'superadmin', null)
+  owner: user('אדמין על', 'superadmin', null),
+  opsMgr: user('מנהל תפעול', 'manager', ops)
 };
 D.run('UPDATE departments SET manager_user_id = ? WHERE id = ?', U.bedekMgr, bedek);
 const actor = (id) => ({ type: 'user', id, role: D.get('SELECT role FROM users WHERE id = ?', id).role });
@@ -141,7 +143,98 @@ fake.classify = { items: [{ n: 1, topic: 'hr_personal', sens: 1 }] };
   check('"איך זה נראה": מתאמת רואה בדק עד רמה 2', pv.find((x) => x.key === 'service').upTo === 2);
   check('"איך זה נראה": מתאמת לא רואה משאבי אנוש אישי', pv.find((x) => x.key === 'hr_personal').upTo === 0);
 
+  await taskChecks();
+
   console.log(failures ? `\n${failures} בדיקות נכשלו` : '\nכל הבדיקות עברו');
   fs.rmSync(process.env.DATA_DIR, { recursive: true, force: true });
   process.exit(failures ? 1 : 0);
 })().catch((err) => { console.error(err); process.exit(1); });
+
+// ---------------------------------------------------------------------------
+// משימות ופרויקטים — דרך השרת האמיתי, ב-HTTP
+// ---------------------------------------------------------------------------
+
+async function taskChecks() {
+  const { spawn } = require('node:child_process');
+  const PORT = 3900 + Math.floor(Math.random() * 90);
+  const board = D.internalBoard().id;
+  const status = D.get('SELECT key FROM board_columns WHERE board_id = ? AND is_final = 0 ORDER BY position LIMIT 1', board).key;
+  const task = (title, { dept: d, assignee, by, topic = '', sens = 0, project = null }) => Number(D.run(
+    `INSERT INTO tasks (title, description, board_id, assignee_type, assignee_id, status, priority, created_at, created_by, status_changed_at, department_id, topic, sens, project_id)
+     VALUES (?, '', ?, 'user', ?, ?, 'normal', ?, ?, ?, ?, ?, ?, ?)`,
+    title, board, assignee, status, now, by, now, d, topic, sens, project).lastInsertRowid);
+
+  const plain = task('הזמנת ציוד משרדי', { dept: ops, assignee: U.opsEmp, by: U.opsMgr });
+  const hearing = task('בירור משמעתי לעובד תפעול', { dept: ops, assignee: U.hrMgr, by: U.hrMgr, topic: 'hr_personal', sens: 3 });
+  const proj = Number(D.run("INSERT INTO projects (name, description, status, created_at, created_by, topic, sens) VALUES ('בדיקת רווחיות', '', 'active', ?, ?, 'finance_biz', 3)", now, U.cfo).lastInsertRowid);
+  const inherited = task('לאסוף חשבוניות לבדיקת הרווחיות', { dept: bedek, assignee: U.coordinator, by: U.cfo, project: proj });
+
+  D.audit(hearing, { type: 'user', id: U.hrMgr }, 'comment', 'בירור משמעתי — נקבע שימוע');
+  D.audit(plain, { type: 'user', id: U.opsMgr }, 'comment', 'הוזמן ציוד');
+  const server = spawn(process.execPath, [path.join(__dirname, '..', 'server', 'index.js')], {
+    env: { ...process.env, PORT: String(PORT) }, stdio: ['ignore', 'pipe', 'pipe']
+  });
+  try {
+    for (let i = 0; i < 50; i++) {
+      try { await fetch(`http://localhost:${PORT}/`); break; } catch { await new Promise((r) => setTimeout(r, 200)); }
+    }
+    const login = async (id) => {
+      const email = D.get('SELECT email FROM users WHERE id = ?', id).email;
+      const r = await fetch(`http://localhost:${PORT}/api/auth/login`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email, password: '1234' }) });
+      const cookie = (r.headers.getSetCookie?.() ?? [r.headers.get('set-cookie')]).map((c) => String(c).split(';')[0]).join('; ');
+      return (p, opts = {}) => fetch(`http://localhost:${PORT}${p}`, { ...opts, headers: { cookie, 'content-type': 'application/json', ...(opts.headers ?? {}) } });
+    };
+    const sees = async (who) => {
+      const api = await login(U[who]);
+      const r = await (await api('/api/tasks')).json();
+      return new Set((r.tasks ?? []).map((t) => t.id));
+    };
+
+    const row = {};
+    for (const who of ['hrMgr', 'opsMgr', 'sysAdmin', 'cfo', 'ceo', 'owner', 'coordinator', 'bedekMgr']) row[who] = await sees(who);
+    check('משימה רגילה: מנהל תפעול רואה כרגיל', row.opsMgr.has(plain));
+    check('משימה רגישה (משאבי אנוש אישי): מנהלת משאבי אנוש — משתתפת — רואה', row.hrMgr.has(hearing));
+    check('משימה רגישה: מנהל תפעול לא רואה, גם שהיא במחלקה שלו', !row.opsMgr.has(hearing));
+    check('משימה רגישה: מנהל מערכת לא רואה', !row.sysAdmin.has(hearing));
+    check('משימה רגישה: סמנכ"ל כספים (הנהלה במחלקת כספים) לא רואה', !row.cfo.has(hearing));
+    check('משימה רגישה: מנכ"ל ואדמין על רואים', row.ceo.has(hearing) && row.owner.has(hearing));
+    check('ירושה מפרויקט כספים: המתאמת — אחראית — רואה', row.coordinator.has(inherited));
+    check('ירושה מפרויקט כספים: מנהל בדק לא רואה, גם שהיא במחלקה שלו', !row.bedekMgr.has(inherited));
+    check('ירושה מפרויקט כספים: סמנכ"ל כספים רואה', row.cfo.has(inherited));
+
+    const admin = await login(U.sysAdmin);
+    check('פתיחה ישירה (‎/api/tasks/:id‎) של משימה רגישה ע"י מנהל מערכת — 403', (await admin(`/api/tasks/${hearing}`)).status === 403);
+
+    const coord = await login(U.coordinator);
+    const lower = await coord(`/api/tasks/${inherited}`, { method: 'PATCH', body: JSON.stringify({ topic: 'service', sens: 1 }) });
+    check('משתתפת לא יכולה להקל סיווג שעובר בירושה (403)', lower.status === 403);
+    const raise = await coord(`/api/tasks/${inherited}`, { method: 'PATCH', body: JSON.stringify({ topic: 'finance_biz', sens: 4 }) });
+    check('משתתפת יכולה להחמיר', raise.ok && D.get('SELECT sens FROM tasks WHERE id = ?', inherited).sens === 4);
+
+    const projectsOf = async (who) => new Set(((await (await (await login(U[who]))('/api/projects')).json()).projects ?? []).map((p) => p.id));
+    check('פרויקט מסווג: מי שיש לו בו משימה רואה אותו', (await projectsOf('coordinator')).has(proj));
+    check('פרויקט מסווג: מנהל מערכת לא רואה אותו', !(await projectsOf('sysAdmin')).has(proj));
+
+    const opsApi = await login(U.opsMgr);
+    const home = await (await opsApi('/api/home')).json();
+    check('דף הבית של מנהל תפעול — "משימות המחלקה" בלי המשימה הרגישה', !(home.tasks?.department ?? []).some((t) => t.id === hearing)
+      && JSON.stringify(home).indexOf('בירור משמעתי') === -1);
+    const adminHome = JSON.stringify(await (await admin('/api/home')).json());
+    check('פיד העדכונים של מנהל מערכת — בלי המשימה הרגישה, עם הרגילה', !adminHome.includes('בירור משמעתי') && !adminHome.includes('שימוע') && adminHome.includes('הזמנת ציוד'));
+    const searchAll = async (api) => JSON.stringify(await (await api(`/api/search?q=${encodeURIComponent('בירור משמעתי')}&scope=all`)).json());
+    check('חיפוש של מנהל מערכת לא מוצא את המשימה הרגישה', !(await searchAll(admin)).includes('בירור משמעתי לעובד'));
+    check('חיפוש של מנכ"ל מוצא אותה', (await searchAll(await login(U.ceo))).includes('בירור משמעתי לעובד'));
+
+    const cls = (await (await (await login(U.hrMgr))(`/api/tasks/${hearing}`)).json()).task?.classification;
+    check('הכרטיס מחזיר את הסיווג', cls?.topic === 'hr_personal' && cls.sens === 3);
+  } finally {
+    server.kill();
+  }
+
+  // התראה למי שלא רשאי — בלי כותרת
+  D.notify({ targetType: 'user', targetId: U.opsMgr, kind: 'comment', title: 'בירור משמעתי לעובד תפעול', body: 'פרטים', taskId: hearing });
+  D.notify({ targetType: 'user', targetId: U.ceo, kind: 'comment', title: 'בירור משמעתי לעובד תפעול', body: 'פרטים', taskId: hearing });
+  const n = (id) => D.get('SELECT title, body FROM notifications WHERE target_id = ? AND task_id = ? ORDER BY id DESC LIMIT 1', id, hearing);
+  check('התראה למי שלא רשאי — בלי כותרת ובלי תוכן', n(U.opsMgr).title === '🔒 עדכון במשימה מסווגת' && n(U.opsMgr).body === '');
+  check('התראה למורשה — כרגיל', n(U.ceo).title === 'בירור משמעתי לעובד תפעול');
+}
