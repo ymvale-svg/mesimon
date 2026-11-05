@@ -62,6 +62,27 @@ const YES = /^(כן|נכון|מאשר|מאשרת|אשר|אישור|תקין|יא
 const CANCEL = /^(ביטול|בטל|לבטל|עזוב|יציאה|stop)([\s,.!]|$)/i;
 /** "תוסיף בדו שיח: ...", "הערה: ...", "תרשום בהערות ..." — הערה חופשית של המקבל לדו-שיח הפנימי, בכל שלב */
 const NOTE_CMD = /^\s*(?:תוסיף|תוסיפי|הוסף|להוסיף|תרשום|תכתוב|רשום|כתוב)?\s*(?:ל|ב)?\s*(?:דו[\s-]*שיח(?:\s*פנימי)?|הערה|הערות)\s*[,:\-–]?\s*([\s\S]+)$/;
+/*
+ * כפתורים לתשובה (וואטסאפ, עד 3). הכיתוב של כל כפתור הוא בדיוק המילה שהבוט מבין ("כן 👍", "מאשר 👍"),
+ * כך שלחיצה עובדת גם כשהיא חוזרת כטקסט רגיל. ‎[]‎ — בלי כפתורים (רשימות ממוספרות, שאלות פתוחות).
+ */
+function buttonsFor(s) {
+  if (!s) return [];
+  if (s.confirmCancel) return ['כן, לבטל 👍', 'חזרה לטיוטא'];
+  if (s.pendingNew) return ['צרף כנספח', 'קבלה חדשה', 'להתעלם 👎'];
+  if (s.pendingList) return ['כן 👍', 'לא 👎'];
+  switch (s.step) {
+    case 'offer': case 'doctype': return ['כן 👍', 'לא 👎'];
+    case 'header': return ['כן 👍', s.noVat ? 'עם מע"מ' : 'ללא מע"מ', 'ביטול'];
+    case 'order': return ['בלי הזמנה 👎', 'ביטול'];
+    case 'lines': return ['כן 👍', 'ביטול'];
+    case 'parts': return ['כן 👍', 'כללי'];
+    case 'files': return ['סיום 👍'];
+    case 'review': return ['מאשר 👍', 'ביטול'];
+    default: return [];
+  }
+}
+
 /** "ספק …", "שם ספק: …", "הספק הוא …", "ספק אחר" — ‎[1]‎ השם או המספר */
 const SUPPLIER_CMD = /^\s*(?:שם\s*(?:ה)?ספק|(?:ה)?ספק(?:\s+(?:הוא|זה|נכון|אחר))?|לשנות\s*ספק|תשנה\s*ספק|ספק\s*שגוי)(?=[\s:\-–]|$)\s*[:\-–]?\s*([\s\S]*)$/;
 const DONE_FILES = /^(סיום|סיימתי|זהו|אין|אין נספחים|בלי נספחים|המשך)([\s,.!]|$)/;
@@ -1257,7 +1278,7 @@ async function answerPendingNew(user, s, t) {
   if (/^\s*1\s*$/.test(t) || ATTACH_WORD.test(t)) { s.pendingNew = null; return attachNow(user, s, f); }
   if (NEW_WORD.test(t)) { s.pendingNew = null; return queueNew(user, s, f, null); }
   // "לא" / "אף אחד" / "3" — לא זה ולא זה: הקובץ נמחק, וחוזרים לשאלה שחיכתה
-  if (/^\s*3\s*$/.test(t) || /^(לא|אל|אף אחד|שום דבר|לא זה ולא זה|תתעלם|עזוב|no)([\s,.!]|$)/i.test(t)) {
+  if (/^\s*3\s*$/.test(t) || /^(לא|אל|אף אחד|שום דבר|לא זה ולא זה|תתעלם|להתעלם|התעלם|עזוב|no)([\s,.!]|$)/i.test(t)) {
     s.pendingNew = null;
     try { fs.unlinkSync(f.path); } catch { /* כבר נמחק */ }
     return { s, replies: [`👍 הקובץ לא צורף, ולא נפתחה קבלה חדשה.${s.lastPrompt ? `\n\n${s.lastPrompt}` : ''}`] };
@@ -1474,7 +1495,7 @@ async function handle({ user, text = '', file = null, reaction = false }) {
   if (!s && file && !isTrigger(t)) {
     const saved = await saveFile(user.id, file, 'מסמך ראשי');
     save(user.id, { step: 'offer', startedAt: Date.now(), files: [saved] });
-    return { replies: [...(released ? [released] : []), '📦 לקלוט את המסמך כ*קבלת סחורה* בפריוריטי?\n*כן* 👍 — להמשיך, *לא* 👎 — לא לקלוט.'], status: 'ok', result: 'הצעה: קבלת סחורה מתמונה' };
+    return { replies: [...(released ? [released] : []), '📦 לקלוט את המסמך כ*קבלת סחורה* בפריוריטי?\n*כן* 👍 — להמשיך, *לא* 👎 — לא לקלוט.'], status: 'ok', result: 'הצעה: קבלת סחורה מתמונה', buttons: ['כן 👍', 'לא 👎'] };
   }
 
   // התחלה חדשה: "קבלת סחורה" עם קובץ באמצע קליטה, או קובץ חדש באמצע קליטה שעוד אין לה טיוטא
@@ -1527,11 +1548,12 @@ async function handle({ user, text = '', file = null, reaction = false }) {
     const keep = new Set((back.files ?? []).map((f) => f.path));
     for (const f of s.files ?? []) if (!keep.has(f.path)) { try { fs.unlinkSync(f.path); } catch { /* כבר נמחק */ } }
     save(user.id, back);
-    return { replies: [`↩️ חזרתי שלב אחד אחורה.${back.lastPrompt ? `\n\n${back.lastPrompt}` : ''}`], status: 'ok', result: `שלב אחורה: ${s.step} ← ${back.step}` };
+    return { replies: [`↩️ חזרתי שלב אחד אחורה.${back.lastPrompt ? `\n\n${back.lastPrompt}` : ''}`], status: 'ok', result: `שלב אחורה: ${s.step} ← ${back.step}`, buttons: buttonsFor(back) };
   }
   // תשובה לשאלה "לבטל את הטיוטא?" — 👍 / כן מבטל (לא מאשר!); כל דבר אחר — ממשיכים בבדיקה
   if (s.confirmCancel) {
     s.confirmCancel = false;
+    if (!file && /^חזרה לטיוטא/.test(t)) { const out = await showDraft(s, [], user); save(user.id, out.s ?? s); return { ...out, buttons: buttonsFor(out.s ?? s) }; }
     if (!file && (YES.test(t) || CANCEL.test(t))) {
       const r = await cancel(user, s);
       return queueOf(s).length ? (async () => { const next = await startQueued(user, s, r.replies); if (next.s) save(user.id, next.s); return { replies: next.replies, status: 'ok', result: 'ביטול ומעבר למסמך הבא' }; })() : r;
@@ -1549,7 +1571,7 @@ async function handle({ user, text = '', file = null, reaction = false }) {
     else if (s.step === 'review') {
       s.confirmCancel = true;
       save(user.id, s);
-      return { replies: [`👎 לבטל את הטיוטא *${s.docno}*? *כן* 👍 — לבטל · או כתבו מה לתקן (כמות, תיאור, שורה שחסרה).`], status: 'ok', result: '👎 בבדיקת הטיוטא' };
+      return { replies: [`👎 לבטל את הטיוטא *${s.docno}*? *כן* 👍 — לבטל · או כתבו מה לתקן (כמות, תיאור, שורה שחסרה).`], status: 'ok', result: '👎 בבדיקת הטיוטא', buttons: buttonsFor(s) };
     } else {
       save(user.id, s);
       return { replies: [`👎 מה לא נכון? כתבו מה לתקן, או *ביטול* לביטול הקליטה.${s.lastPrompt ? `\n\n${s.lastPrompt}` : ''}`], status: 'ok', result: `👎 בשלב ${s.step}` };
@@ -1590,7 +1612,8 @@ async function handle({ user, text = '', file = null, reaction = false }) {
   if (out.s === null) clear(user.id, s);
   else save(user.id, out.s ?? s);
   if (released) restarted = [released, restarted].filter(Boolean).join('\n');
-  return { replies: restarted ? [restarted, ...out.replies] : out.replies, files: out.files ?? [], status: out.status ?? 'ok', result: out.result ?? `שלב ${(out.s ?? s)?.step ?? 'סיום'}`, docno: s.docno ?? null };
+  return { replies: restarted ? [restarted, ...out.replies] : out.replies, files: out.files ?? [], status: out.status ?? 'ok', result: out.result ?? `שלב ${(out.s ?? s)?.step ?? 'סיום'}`, docno: s.docno ?? null,
+    buttons: out.s === null ? [] : buttonsFor(out.s ?? s) };
 }
 
 async function step(user, s, t, file) {
