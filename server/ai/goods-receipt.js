@@ -303,7 +303,7 @@ function summaryText(s, gr) {
     `📄 תעודה: ${gr.BOOKNUM ?? ''} · ${ymdHe(gr.CURDATE)}`,
     `🧾 הזמנה: ${s.order ? s.order.ordname : 'ללא הזמנה'}`,
     `📁 פרויקט: ${gr.PROJDOCNO ?? ''} ${gr.PROJDES ?? ''}`.trim(),
-    `🏬 מחסן: ${gr.TOWARHSNAME ?? ''}${gr.TOWARHSNAME && gr.TOWARHSNAME !== 'Main' ? ' (של הפרויקט)' : ''}`,
+    `🏬 מחסן: ${gr.TOWARHSDES ? `${gr.TOWARHSDES} (${gr.TOWARHSNAME})` : gr.TOWARHSNAME ?? ''}`,
     `💳 תנאי תשלום: ${Priority.payLabel(gr.MED_MXPAYCODE) || gr.MED_MXPAYDES || '—'}${dueText(s, gr.MED_MXPAYCODE)}${s.order?.payCode && s.order.payCode !== gr.MED_MXPAYCODE ? ` ⚠️ בהזמנה: ${Priority.payLabel(s.order.payCode)}` : ''}`
   ];
   const lines = gr.lines.map((l, i) =>
@@ -473,7 +473,7 @@ async function useOrders(s, orders, forced) {
     l.order = ol ? { ordname: order.ORDNAME, line: ol.LINE, des: ol.PDES, part: ol.PARTNAME, balance: ol.TBALANCE, confidence: hit.confidence } : null;
   }
   if (order && s.lines.some((l) => l.order)) {
-    s.order = { ordname: order.ORDNAME, project: order.PROJDOCNO, projectDes: order.PROJDES, payCode: order.PAYCODE ?? null };
+    s.order = { ordname: order.ORDNAME, project: order.PROJDOCNO, projectDes: order.PROJDES, payCode: order.PAYCODE ?? null, warehouse: order.WARHSNAME ?? null };
     s.project = order.PROJDOCNO ? { code: order.PROJDOCNO, des: order.PROJDES } : null;
   }
   return askLines(s);
@@ -669,7 +669,8 @@ async function afterLines(s) {
  * מיוני, עם 5 פרויקטים בלבד). אז אומרים זאת במפורש, במקום שה-AI ינחש מתוך רשימת הבדיקה.
  */
 async function sandboxNote(s, text, testList) {
-  if (s.via !== 'sandbox' || !String(text ?? '').trim()) return null;
+  // רק טקסט עם מילה — מספר לבד ("2") אינו שם פרויקט
+  if (s.via !== 'sandbox' || !/[\u0590-\u05FFA-Za-z]{2}/.test(String(text ?? ''))) return null;
   const real = Priority.resolveCompany(s.doc.recipient_vat).matched;
   if (!real?.code) return null;
   let hits = [];
@@ -689,8 +690,13 @@ async function sandboxNote(s, text, testList) {
 }
 
 async function askProject(s) {
-  if (s.project) return askFiles(s);
+  if (s.project) return chooseWarehouse(s);
   const all = await projectsOf(s.company);
+  // פרויקט אחד בחברה — הוא ברירת המחדל, בלי לשאול
+  if (all.length === 1) {
+    s.project = all[0];
+    return chooseWarehouse(s, `📁 פרויקט: *${all[0].des}* (${all[0].code}) — הפרויקט היחיד בחברה`);
+  }
   // רמז מהמסמך — עיר, אתר, מגרש: כל הפרויקטים המתאימים ביותר (גם לפי הכינויים), ואם לא — ה-AI
   const hint = [s.doc.project_hint, s.doc.delivery_place].filter(Boolean).join(' · ');
   s.step = 'project';
@@ -699,10 +705,32 @@ async function askProject(s) {
     if (note) return reply(s, note);
   }
   s.projectOptions = (await findProjects(all, hint, { strict: false })).list.slice(0, 9);
+  // אין הצעה מהמסמך, ובחברה עד 9 פרויקטים — מציגים את כולם (ומחכים לבחירה)
+  if (!s.projectOptions.length && all.length <= 9) s.projectOptions = all;
   return reply(s, [`📁 לאיזה פרויקט לשייך?${hint ? ` (במסמך: ${hint})` : ''}`,
     ...s.projectOptions.map((p, i) => `*${i + 1}.* ${p.des} (${p.code})`),
     s.projectOptions.length ? '' : `לא מצאתי לפי המסמך פרויקט מתאים מתוך ${all.length} הפרויקטים של החברה.`,
     'כתבו מספר מהרשימה, או במילים שלכם ("אלעד 49", "207", "חיפה עין הים") או קוד (PR…).'].join('\n'));
+}
+
+/**
+ * המחסן: מההזמנה, כשיש; מחסן אחד שאליו נקלטו קבלות הפרויקט — ברירת המחדל; כמה — שואלים, עם
+ * השמות; אף אחד — מחסן הפרויקט אם כבר קלטו אליו בחברה, אחרת Main (‎warehouseOf‎).
+ */
+async function chooseWarehouse(s, note = '') {
+  const go = (extra) => { const r = askFiles(s); const pre = [note, extra].filter(Boolean).join('\n'); return pre ? { ...r, replies: [`${pre}\n\n${r.replies[0]}`] } : r; };
+  if (s.warehouse) return go('');
+  if (s.order?.warehouse) { s.warehouse = s.order.warehouse; return go(`🏬 מחסן: ${s.warehouse} — מההזמנה`); }
+  const opts = await Priority.projectWarehouses(s.company, s.project?.code).catch(() => []);
+  if (opts.length === 1) { s.warehouse = opts[0].code; return go(`🏬 מחסן: *${opts[0].name || opts[0].code}* (${opts[0].code})`); }
+  if (opts.length > 1) {
+    s.step = 'warehouse';
+    s.warehouseOptions = opts.slice(0, 9);
+    return reply(s, [note || null, `🏬 לאיזה מחסן לשייך? בפרויקט ${s.project.des} נקלטו קבלות לכמה מחסנים:`,
+      ...s.warehouseOptions.map((w, i) => `*${i + 1}.* ${w.name || w.code} (${w.code}) — ${w.n} קבלות`), '', 'כתבו מספר מהרשימה.'].filter((x) => x !== null).join('\n'));
+  }
+  s.warehouse = await Priority.warehouseOf(s.company, s.project?.code);
+  return go('');
 }
 
 function askFiles(s) {
@@ -714,7 +742,7 @@ function askFiles(s) {
 async function createDraft(user, s) {
   const c = s.company;
   // המחסן — נלמד מהקבלות הקודמות של הפרויקט (‎warehouseOf‎); פריוריטי דוחה אותו — Main
-  s.warehouse = await Priority.warehouseOf(c, s.project?.code);
+  if (!s.warehouse) s.warehouse = await Priority.warehouseOf(c, s.project?.code);
   const head = { supname: s.supplier.code, booknum: s.doc.doc_number, date: s.doc.date || null, project: s.project?.code, warehouse: s.warehouse, payCode: s.payCode ?? Priority.DEFAULT_PAY };
   let docno;
   try {
@@ -869,7 +897,7 @@ async function maybeAdoptDetail(user, s, saved, cls) {
   const note = `📋 הפירוט נלקח מ${d.doc_type === 'invoice' ? 'חשבונית' : 'חשבון לתשלום'} ${d.doc_number} (${s.lines.length} שורות). הסכום לפני מע"מ ייבדק מול החשבונית.`;
   if (['company', 'supplier', 'header'].includes(s.step)) return { s, replies: [`${note}${s.lastPrompt ? `\n\n${s.lastPrompt}` : ''}`] };
   // כבר עברנו את השורות — מחשבים שוב את ההתאמה להזמנה ומציגים את השורות החדשות
-  s.order = null; s.ordersChecked = false; s.chapter = null;
+  s.order = null; s.ordersChecked = false; s.chapter = null; s.warehouse = null;
   const out = await resolveOrder(s);
   return { ...out, replies: [note, ...out.replies] };
 }
@@ -1204,6 +1232,16 @@ async function step(user, s, t, file) {
       return reply(s, out.question || 'לא הבנתי. *כן* — אם זה מה שהתקבל, או כתבו מה לתקן (מספר שורה וכמות).');
     }
 
+    case 'warehouse': {
+      const opts = s.warehouseOptions ?? [];
+      const n = /^\d{1,2}$/.test(t) ? Number(t) : null;
+      const w = (n && opts[n - 1]) || opts.find((x) => x.code === t.trim() || (x.name && t.trim().length >= 2 && x.name.includes(t.trim())));
+      if (!w) return reply(s, ['לאיזה מחסן? כתבו מספר מהרשימה:', ...opts.map((x, i) => `*${i + 1}.* ${x.name || x.code} (${x.code})`)].join('\n'));
+      s.warehouse = w.code;
+      const r = askFiles(s);
+      return { ...r, replies: [`🏬 מחסן: *${w.name || w.code}* (${w.code})\n\n${r.replies[0]}`] };
+    }
+
     case 'parts': {
       if (YES.test(t)) return askProject(s);
       const free = s.lines.filter((l) => !l.order);
@@ -1259,7 +1297,7 @@ async function step(user, s, t, file) {
       // הצעה אחת מה-AI מחכה לאישור
       if (s.projectPending) {
         const pend = s.projectPending;
-        if (YES.test(t)) { s.projectPending = null; s.project = pend; return askFiles(s); }
+        if (YES.test(t)) { s.projectPending = null; s.project = pend; return chooseWarehouse(s); }
         s.projectPending = null;
         if (/^(לא|no)([\s,.!]|$)/i.test(t)) return reply(s, 'לאיזה פרויקט, אם כך? כתבו במילים שלכם, או קוד (PR…).');
       }
@@ -1292,7 +1330,7 @@ async function step(user, s, t, file) {
         }
       }
       s.project = p;
-      return askFiles(s);
+      return chooseWarehouse(s);
     }
 
     case 'files':
