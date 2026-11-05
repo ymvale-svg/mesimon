@@ -1619,7 +1619,7 @@ async function confirmPending(actor, pending, dry) {
     }
     if (kind === 'complete') {
       if (!dry) hooks.tasks.complete(actor, pending.taskId);
-      return { reply: `✅ סומן כבוצע: ${pending.title}${test}`, action, status: 'ok', result: `נסגרה: ${pending.title}`, taskId: pending.taskId };
+      return { reply: `✅ ${pending.cancel ? 'בוטלה (נסגרה)' : 'סומן כבוצע'}: ${pending.title}${test}`, action, status: 'ok', result: `נסגרה: ${pending.title}`, taskId: pending.taskId };
     }
     if (kind === 'comment') {
       if (!dry) hooks.tasks.comment(actor, pending.taskId, pending.text);
@@ -1975,7 +1975,9 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
   const scanCmd = businessCommand(actor, t, { dry, out });
   if (scanCmd) return scanCmd;
 
-  if (state.awaiting && state.draft && YES.test(t)) {
+  // אחרי "לבטל את המשימה?" — גם "לבטל"/"ביטול" הם אישור, ולא ביטול של השאלה
+  const cancelYes = Boolean(state.draft?.cancel) && /^(ת?בטל[יו]?|לבטל|ביטול|תמחק[יו]?|למחוק|מחק)([\s,.!]|$)/.test(t);
+  if (state.awaiting && state.draft && (YES.test(t) || cancelYes)) {
     const r = await confirmPending(actor, state.draft, dry);
     return out(r.reply, { draft: r.keep ? state.draft : null, awaiting: Boolean(r.keep) }, r);
   }
@@ -2507,6 +2509,12 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
       const task = known.has(u.taskId) && hooks.tasks.canSee(actor, u.taskId) ? D.get('SELECT id, title FROM tasks WHERE id = ?', u.taskId) : null;
       if (!task) return out(u.reply || 'איזו משימה? כתבו את המספר מהרשימה, או "המשימות שלי".', {}, { action: u.intent, status: 'unclear', result: 'המשימה לא זוהתה' });
       if (u.intent === 'complete') {
+        // "תבטל/תמחק את המשימה" — מהבוט אפשר רק לסגור, אז אומרים את זה במילים שלו, ולא "בוצע"
+        const cancel = /(^|[\s,.])(תבטל[יו]?|לבטל|בטל|ביטול|תמחק[יו]?|למחוק|מחק)([\s,.!?]|$)/.test(String(text ?? ''));
+        if (cancel) {
+          return out(`לבטל את *${task.title}*? המשימה תיסגר (מהבוט אפשר לסגור משימה, לא למחוק).\nהשיבו *כן*.`, { draft: { kind: 'complete', taskId: task.id, title: task.title, cancel: true }, awaiting: true },
+            { action: 'complete', status: 'ok', result: `ממתין לאישור ביטול: ${task.title}`, taskId: task.id });
+        }
         return out(`לסמן כבוצע: *${task.title}*?\nהשיבו *כן*.`, { draft: { kind: 'complete', taskId: task.id, title: task.title }, awaiting: true },
           { action: 'complete', status: 'ok', result: `ממתין לאישור סגירה: ${task.title}`, taskId: task.id });
       }
