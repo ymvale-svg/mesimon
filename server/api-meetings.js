@@ -152,7 +152,7 @@ function register(router, h) {
     const actor = userOnly(ctx);
     const m = Meetings.meetingById(Number(ctx.params.id));
     if (!m) throw notFound();
-    if (!involved(actor, m) && !P.may(actor, 'manage_users')) throw forbidden();
+    if (!involved(actor, m) && !P.can(actor, 'manage_users')) throw forbidden();
     await run(res, async () => ({ recording: await Meetings.recording(m.id) }));
   });
 
