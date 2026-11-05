@@ -505,22 +505,108 @@ function applyUpdates(s, out) {
   return changed;
 }
 
+// ---------------------------------------------------------------------------
+// קידוד השורות — מק"ט, תת פרק ומשאב, נלמד מקבלות הסחורה הקודמות
+// ---------------------------------------------------------------------------
+
+const partOf = (p, why) => ({ code: p.PARTNAME, des: p.PARTDES ?? p.PDES ?? '', chapter: p.BUD_SUBCHAPTERNAME ?? null, chapterDes: p.BUD_SUBCHAPTERDES ?? '',
+  topic: p.BUD_SUBTOPICNAME ?? null, topicDes: p.BUD_SUBTOPICDES ?? '', why });
+const generalPart = (g, why = 'מק"ט כללי') => ({ code: '000', des: 'מוצר כללי', chapter: g?.chapter ?? null, chapterDes: g?.chapterDes ?? '', topic: g?.topic ?? null, topicDes: g?.topicDes ?? '', why });
+
+/** היסטוריית הספק — בחברה הזו, ואם אין: אותו ספק (לפי ח.פ.) בחברות האחרות. נשמר לשעה */
+const historyCache = new Map();
+async function historyFor(s) {
+  const own = await Priority.supplierHistory(s.company, s.supplier.code).catch(() => []);
+  if (own.length) return { lines: own, from: s.company };
+  const vat = String(s.doc?.supplier_vat ?? '').replace(/\D/g, '');
+  if (vat.length < 7) return { lines: [], from: null };
+  const hit = historyCache.get(vat);
+  if (hit && Date.now() - hit.at < 3600000) return hit.v;
+  let v = { lines: [], from: null };
+  for (const c of Priority.COMPANIES.filter((x) => x.vat && x.code !== s.company && !x.test)) {
+    try {
+      const f = await Priority.findSuppliers(c.code, { vat });
+      if (f.by !== 'vat' || !f.list[0]) continue;
+      const lines = await Priority.supplierHistory(c.code, f.list[0].SUPNAME);
+      if (lines.length) { v = { lines, from: c.code }; break; }
+    } catch { /* החברה הבאה */ }
+  }
+  historyCache.set(vat, { at: Date.now(), v });
+  return v;
+}
+
+const simWords = (t) => String(t ?? '').replace(/["'״׳]/g, '').split(/[\s,.\-–/()]+/).filter((w) => w.length >= 2);
+function similarity(a, b) {
+  const B = new Set(simWords(b));
+  return simWords(a).filter((w) => B.has(w)).length;
+}
+
+/**
+ * לכל שורה בלי הזמנה: פריט בתיאור זהה בקטלוג → המק"ט שהספק נקלט בו בעבר (הקרוב ביותר בתיאור,
+ * או הנפוץ) → ‎000‎ בקידוד שהספק נקלט בו → ‎000‎ בקידוד הכללי של החברה. תמיד יש תשובה.
+ */
+async function codeLines(s) {
+  const free = s.lines.filter((l) => !l.order);
+  for (const l of free) {
+    const p = await Priority.findPartExact(s.company, l.description).catch(() => null);
+    l.part = p ? partOf(p, 'תיאור זהה בקטלוג') : null;
+  }
+  const todo = free.filter((l) => !l.part);
+  if (!todo.length) return;
+  const hist = await historyFor(s);
+  const fromName = hist.from && hist.from !== s.company ? ` (ב${Priority.companyOf(hist.from).name})` : '';
+  // מק"טים שהספק נקלט בהם (לא הכללי), עם התיאורים שליוו אותם
+  const learned = new Map();
+  const gen = new Map();
+  for (const h of hist.lines) {
+    if (h.PARTNAME === '000') {
+      if (h.BUD_SUBCHAPTERNAME && h.BUD_SUBTOPICNAME) { const k = `${h.BUD_SUBCHAPTERNAME}|${h.BUD_SUBTOPICNAME}`; gen.set(k, { n: (gen.get(k)?.n ?? 0) + 1, h }); }
+      continue;
+    }
+    const e = learned.get(h.PARTNAME) ?? { n: 0, h, des: [] };
+    e.n += 1; e.des.push(h.PDES ?? '');
+    learned.set(h.PARTNAME, e);
+  }
+  // מק"ט מחברה אחרת — רק אם קיים כאן, ובקידוד של החברה הזו
+  const valid = [];
+  for (const e of learned.values()) {
+    const here = hist.from === s.company ? e.h : await Priority.partByCode(s.company, e.h.PARTNAME).catch(() => null);
+    if (here && (here.STATDES ?? 'פעיל') === 'פעיל') valid.push({ ...e, p: hist.from === s.company ? { ...e.h, PARTDES: e.h.PDES } : here });
+  }
+  valid.sort((a, b) => b.n - a.n);
+  const supGen = [...gen.values()].sort((a, b) => b.n - a.n)[0]?.h;
+  const general = await Priority.generalCoding(s.company).catch(() => null);
+  for (const l of todo) {
+    if (valid.length) {
+      const best = valid.length === 1 ? valid[0]
+        : valid.map((e) => ({ e, sc: Math.max(...e.des.map((d) => similarity(l.description, d)), similarity(l.description, e.p.PARTDES)) }))
+          .sort((a, b) => b.sc - a.sc || b.e.n - a.e.n)[0].e;
+      l.part = partOf(best.p, `כמו בקליטות קודמות של הספק${fromName}`);
+    } else if (supGen) {
+      l.part = generalPart({ chapter: supGen.BUD_SUBCHAPTERNAME, chapterDes: supGen.BUD_SUBCHAPTERDES, topic: supGen.BUD_SUBTOPICNAME, topicDes: supGen.BUD_SUBTOPICDES }, `מק"ט כללי, כמו בקליטות קודמות של הספק${fromName}`);
+    } else {
+      l.part = generalPart(general);
+    }
+  }
+}
+
+const codeText = (p) => `*${p.code} ${p.des}*${p.chapter ? ` · ${p.chapterDes || p.chapter} / ${p.topicDes || p.topic || '—'}` : ''}`;
+
+function askParts(s) {
+  s.step = 'parts';
+  const free = s.lines.filter((l) => !l.order && l.part);
+  if (!free.length) return askProject(s);
+  const same = free.every((l) => l.part.code === free[0].part.code && l.part.chapter === free[0].part.chapter && l.part.topic === free[0].part.topic);
+  const body = same
+    ? [`🏷 ${free.length > 1 ? `כל ${free.length} השורות` : 'השורה'} ← ${codeText(free[0].part)}`, `   (${free[0].part.why})`]
+    : free.map((l) => `*${l.n}.* ${l.description}\n   ← ${codeText(l.part)} (${l.part.why})`);
+  return reply(s, ['🏷 *מק"ט, תת פרק ומשאב*', ...body, '',
+    '*כן* — להמשיך. לשנות: מק"ט ("A120-035-010"), "שורה 2 A120-035-010", מילה מהתיאור ("העתקות"), או *כללי*.'].join('\n'));
+}
+
 async function afterLines(s) {
-  // שורות בלי הזמנה — פריט בתיאור זהה, אחרת ‎000‎ ותת פרק
-  for (const l of s.lines.filter((x) => !x.order)) {
-    const part = await Priority.findPartExact(s.company, l.description);
-    l.part = part ? { code: part.PARTNAME, chapter: part.BUD_SUBCHAPTERNAME, topic: part.BUD_SUBTOPICNAME } : null;
-  }
-  const general = s.lines.filter((x) => !x.order && !x.part && x.qty > 0);
-  if (general.length && !s.chapter) {
-    s.step = 'chapter';
-    s.chapterSuggestion = await Priority.lastSubchapter(s.company, s.supplier.code);
-    const sug = s.chapterSuggestion;
-    return reply(s, [`${general.length} שורות ייקלטו כ*פריט כללי 000* עם התיאור של הספק.`,
-      sug ? `תת פרק: *${sug.chapter} ${sug.chapterDes}* (תת נושא ${sug.topic}) — כמו בקליטה הקודמת של הספק. *כן*, או כתבו תת פרק ותת נושא (למשל "01 01-20").`
-        : 'לאיזה תת פרק? כתבו תת פרק ותת נושא (למשל "98 90-00").'].join('\n'));
-  }
-  return askProject(s);
+  await codeLines(s);
+  return askParts(s);
 }
 
 /**
@@ -581,15 +667,25 @@ async function createDraft(user, s) {
   for (const l of s.lines.filter((x) => x.qty > 0)) {
     try {
       if (l.order) await Priority.addOrderLine(c, docno, { ordname: l.order.ordname, line: l.order.line, qty: l.qty });
-      else if (l.part) await Priority.addFreeLine(c, docno, { part: l.part.code, qty: l.qty, price: l.price, discount: l.discount, chapter: l.part.chapter, topic: l.part.topic });
-      else {
+      else if (l.part && l.part.code !== '000') {
+        try {
+          await Priority.addFreeLine(c, docno, { part: l.part.code, qty: l.qty, price: l.price, discount: l.discount, chapter: l.part.chapter, topic: l.part.topic });
+        } catch (err) {
+          if (!/שלם/.test(err.message) || Number.isInteger(Number(l.qty))) throw err;
+          // היחידה של הפריט מקבלת רק כמות שלמה — כמות 1 בסכום השורה
+          const net = Math.round(Number(l.qty) * Number(l.price) * (1 - (Number(l.discount) || 0) / 100) * 100) / 100;
+          await Priority.addFreeLine(c, docno, { part: l.part.code, qty: 1, price: net, discount: 0, chapter: l.part.chapter, topic: l.part.topic });
+        }
+      } else {
+        const chap = l.part?.chapter ?? s.chapter?.chapter;
+        const topic = l.part?.topic ?? s.chapter?.topic;
         // הפריט הכללי נמדד ב"יח'" ומקבל רק כמות שלמה. כמות שבורה (2.3 מ"א) — כמות 1 בסכום השורה
         // אחרי ההנחה, והכמות והיחידה המקוריות בתחילת התיאור (נחתך אחרי 48 תווים). כך הסכום נשאר מדויק
         const whole = Number.isInteger(Number(l.qty));
         const net = Math.round(Number(l.qty) * Number(l.price) * (1 - (Number(l.discount) || 0) / 100) * 100) / 100;
         await Priority.addFreeLine(c, docno, whole
-          ? { part: '000', description: l.description, qty: l.qty, price: l.price, discount: l.discount, chapter: s.chapter?.chapter, topic: s.chapter?.topic }
-          : { part: '000', description: `${qtyText(l.qty)} ${l.unit ?? ''} · ${l.description}`.replace(/\s+·/, ' ·'), qty: 1, price: net, discount: 0, chapter: s.chapter?.chapter, topic: s.chapter?.topic });
+          ? { part: '000', description: l.description, qty: l.qty, price: l.price, discount: l.discount, chapter: chap, topic }
+          : { part: '000', description: `${qtyText(l.qty)} ${l.unit ?? ''} · ${l.description}`.replace(/\s+·/, ' ·'), qty: 1, price: net, discount: 0, chapter: chap, topic });
       }
     } catch (err) {
       problems.push({ what: `שורה ${l.n} (${l.description}) לא נקלטה`, err: `שורה ${l.n}: ${err.message}` });
@@ -627,7 +723,8 @@ function writeDialog(user, s) {
     ...(s.corrections ?? []).map((c) => `תיקון המקבל: ${c}`),
     ...short.map((x) => `קבלה חלקית — ${x}. היתרה נשארת פתוחה`),
     !s.order && s.project ? `פרויקט נבחר ע"י המקבל: ${s.project.code} ${s.project.des}` : null,
-    s.chapter ? `תת פרק לפריט כללי: ${s.chapter.chapter} ${s.chapter.topic}` : null
+    s.chapter ? `תת פרק לפריט כללי: ${s.chapter.chapter} ${s.chapter.topic}` : null,
+    ...[...new Set(s.lines.filter((l) => !l.order && l.part).map((l) => `קידוד: ${l.part.code} ${l.part.chapter ?? ''}/${l.part.topic ?? ''} — ${l.part.why}`))]
   ]);
 }
 
@@ -1039,9 +1136,49 @@ async function step(user, s, t, file) {
       return reply(s, out.question || 'לא הבנתי. *כן* — אם זה מה שהתקבל, או כתבו מה לתקן (מספר שורה וכמות).');
     }
 
+    case 'parts': {
+      if (YES.test(t)) return askProject(s);
+      const free = s.lines.filter((l) => !l.order);
+      // "שורה 2 ..." — רק לשורה הזו; אחרת — לכל השורות
+      const lm = t.match(/שורה\s*(\d+)\s*(.*)$/);
+      const target = lm ? free.filter((l) => l.n === Number(lm[1])) : free;
+      const rest = (lm ? lm[2] : t).trim();
+      if (lm && !target.length) return reply(s, `אין שורה ${lm[1]} בלי הזמנה.`);
+      if (/^(כללי|מק"?ט כללי|000)$/.test(rest)) {
+        const g = await Priority.generalCoding(s.company).catch(() => null);
+        target.forEach((l) => { l.part = generalPart(g, 'נבחר ע"י המקבל'); });
+        return askParts(s);
+      }
+      // מספר מרשימה שהוצגה
+      if (/^\d{1,2}$/.test(rest) && s.partOptions?.length) {
+        const p = s.partOptions[Number(rest) - 1];
+        if (p) { target.forEach((l) => { l.part = partOf(p, 'נבחר ע"י המקבל'); }); s.partOptions = null; return askParts(s); }
+      }
+      const code = rest.match(/[A-Za-z]*\d[\w]*(?:-[\w]+)+/)?.[0];
+      if (code) {
+        const p = await Priority.partByCode(s.company, code.toUpperCase()).catch(() => null);
+        if (!p) return reply(s, `אין מק"ט ${code} בחברה הזו. כתבו מק"ט אחר, מילה מהתיאור, או *כללי*.`);
+        target.forEach((l) => { l.part = partOf(p, 'נבחר ע"י המקבל'); });
+        return askParts(s);
+      }
+      // מילה מהתיאור ("מק"ט העתקות" ← "העתקות")
+      const word = rest.replace(/מק"?ט|מקט|פריט/g, '').trim();
+      if (word.length >= 2) {
+        const list = await Priority.findPartsByText(s.company, word).catch(() => []);
+        if (list.length === 1) { target.forEach((l) => { l.part = partOf(list[0], 'נבחר ע"י המקבל'); }); return askParts(s); }
+        if (list.length) {
+          s.partOptions = list;
+          return { s, replies: [['איזה מהם?', ...list.map((p, i) => `*${i + 1}.* ${codeText(partOf(p, ''))}`)].join('\n')] };
+        }
+        return reply(s, `לא מצאתי מק"ט עם "${word}". כתבו מק"ט, מילה אחרת, או *כללי*.`);
+      }
+      return reply(s, '*כן* — להמשיך, או כתבו מק"ט / מילה מהתיאור / *כללי*.');
+    }
+
     case 'chapter': {
       const sug = s.chapterSuggestion;
       if (YES.test(t) && sug) s.chapter = { chapter: sug.chapter, topic: sug.topic };
+      else if (YES.test(t)) { await codeLines(s); return askParts(s); }
       else {
         const m = t.match(/(\d{2})\s+(\d{2}-\d{2})/);
         if (!m) return reply(s, 'כתבו תת פרק ותת נושא (למשל "98 90-00"), או *כן* להצעה.');
@@ -1145,4 +1282,4 @@ async function step(user, s, t, file) {
   }
 }
 
-module.exports = { isTrigger, opens, active, handle, sweep, _projectsOf: projectsOf, _findProjects: findProjects, _ai: ai, _load: load, _clear: (userId) => clear(userId, load(userId)) };
+module.exports = { isTrigger, opens, active, handle, sweep, _codeLines: codeLines, _askParts: askParts, _projectsOf: projectsOf, _findProjects: findProjects, _ai: ai, _load: load, _clear: (userId) => clear(userId, load(userId)) };

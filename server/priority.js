@@ -206,6 +206,67 @@ async function findPartExact(company, description) {
   return list.length === 1 ? list[0] : null;
 }
 
+/*
+ * קידוד שורות — מק"ט, תת פרק ומשאב (‎BUD_SUBCHAPTERNAME‎, ‎BUD_SUBTOPICNAME‎). הבוט לומד מקבלות
+ * הסחורה הקודמות: של אותו ספק, ואם אין — של אותו ספק בחברות האחרות (לפי ח.פ.; קטלוג הפריטים
+ * משותף). אין היסטוריה — מק"ט כללי ‎000‎ עם תת הפרק והמשאב הכלליים של החברה.
+ */
+const LINE_SEL = 'PARTNAME,PDES,BUD_SUBCHAPTERNAME,BUD_SUBCHAPTERDES,BUD_SUBTOPICNAME,BUD_SUBTOPICDES';
+
+/** שורות קבלות הסחורה האחרונות של הספק (בקריאה אחת, ‎$expand‎) */
+async function supplierHistory(company, supname, top = 30) {
+  const grs = rows(await call(company, 'GET',
+    `DOCUMENTS_P?$filter=${enc(`SUPNAME eq '${q(supname)}' and STATDES ne 'מבוטלת'`)}&$select=DOCNO&$orderby=CURDATE%20desc&$top=${top}`
+    + `&$expand=TRANSORDER_P_SUBFORM($select=${LINE_SEL})`));
+  return grs.flatMap((g) => g.TRANSORDER_P_SUBFORM ?? []).filter((l) => l.PARTNAME);
+}
+
+/** פריטים פעילים שבתיאורם המילה ("העתקות"), עד 6 */
+async function findPartsByText(company, word) {
+  return rows(await call(company, 'GET', `LOGPART?$filter=${enc(`contains(PARTDES,'${q(word)}') and STATDES eq 'פעיל'`)}&$select=PARTNAME,PARTDES,STATDES,BUD_SUBCHAPTERNAME,BUD_SUBCHAPTERDES,BUD_SUBTOPICNAME,BUD_SUBTOPICDES&$top=6`));
+}
+
+/** פריט לפי קוד, עם תת הפרק והמשאב שלו */
+async function partByCode(company, code) {
+  const list = rows(await call(company, 'GET', `LOGPART?$filter=${enc(`PARTNAME eq '${q(code)}'`)}&$select=PARTNAME,PARTDES,STATDES,BUD_SUBCHAPTERNAME,BUD_SUBCHAPTERDES,BUD_SUBTOPICNAME,BUD_SUBTOPICDES&$top=1`));
+  return list[0] ?? null;
+}
+
+/**
+ * תת הפרק והמשאב שבהם החברה קולטת בדרך כלל את המק"ט הכללי ‎000‎ (לפי 300 הקבלות האחרונות),
+ * ואם אין — "101 כללי" / "98-10 כללי" כשהם קיימים בחברה. נשמר לשעה.
+ */
+const generalCache = new Map();
+async function generalCoding(company) {
+  const hit = generalCache.get(company);
+  if (hit && Date.now() - hit.at < 3600000) return hit.v;
+  let v = null;
+  try {
+    const grs = rows(await call(company, 'GET',
+      `DOCUMENTS_P?$filter=${enc("STATDES ne 'מבוטלת'")}&$select=DOCNO&$orderby=CURDATE%20desc&$top=300`
+      + `&$expand=TRANSORDER_P_SUBFORM($select=${LINE_SEL};$filter=${enc("PARTNAME eq '000'")})`));
+    const count = new Map();
+    for (const l of grs.flatMap((g) => g.TRANSORDER_P_SUBFORM ?? [])) {
+      if (!l.BUD_SUBCHAPTERNAME || !l.BUD_SUBTOPICNAME) continue;
+      const k = `${l.BUD_SUBCHAPTERNAME}|${l.BUD_SUBTOPICNAME}`;
+      const e = count.get(k) ?? { n: 0, l };
+      e.n += 1; count.set(k, e);
+    }
+    const best = [...count.values()].sort((a, b) => b.n - a.n)[0]?.l;
+    if (best) v = { chapter: best.BUD_SUBCHAPTERNAME, chapterDes: best.BUD_SUBCHAPTERDES ?? '', topic: best.BUD_SUBTOPICNAME, topicDes: best.BUD_SUBTOPICDES ?? '' };
+  } catch (err) {
+    console.error(`[משימון] קידוד כללי (${company}):`, err.message);
+  }
+  if (!v) {
+    try {
+      const p = rows(await call(company, 'GET', `LOGPART?$filter=${enc("BUD_SUBCHAPTERNAME eq '101' and BUD_SUBTOPICNAME eq '98-10'")}&$select=BUD_SUBCHAPTERDES,BUD_SUBTOPICDES&$top=1`))[0];
+      if (p) v = { chapter: '101', chapterDes: p.BUD_SUBCHAPTERDES ?? 'כללי', topic: '98-10', topicDes: p.BUD_SUBTOPICDES ?? 'כללי' };
+    } catch { /* בלי קידוד כללי */ }
+  }
+  generalCache.set(company, { at: Date.now(), v });
+  return v;
+}
+
 /** תת הפרק שבו הספק נקלט בפעם האחרונה — הצעה לשורות בפריט כללי */
 async function lastSubchapter(company, supname) {
   const grs = rows(await call(company, 'GET',
@@ -456,7 +517,7 @@ async function cancelReceipt(company, docno) {
 
 module.exports = {
   COMPANIES, isEnabled, allowed, companyOf, isTest, resolveCompany, PriorityError,
-  PAY_TERMS, DEFAULT_PAY, payTerm, payLabel, payFromText, dueDate, warehouseOf, findSuppliers, supplierByCode, findReceiptByBooknum, getOrder, openOrders, findPartExact, lastSubchapter, projects, matchProjects, readReceipt,
+  PAY_TERMS, DEFAULT_PAY, payTerm, payLabel, payFromText, dueDate, supplierHistory, partByCode, findPartsByText, generalCoding, warehouseOf, findSuppliers, supplierByCode, findReceiptByBooknum, getOrder, openOrders, findPartExact, lastSubchapter, projects, matchProjects, readReceipt,
   readDialog, createReceipt, addOrderLine, addFreeLine, setLineQty, setHeader, attach, setDialog, finalizeReceipt, cancelReceipt,
   _call: call
 };
