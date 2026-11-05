@@ -424,10 +424,32 @@ function payFromText(text) {
 }
 
 /** המחסן של הפרויקט (‎BUD_WARHSNAME‎ במסך הפרויקטים), או ‎Main‎ כשלפרויקט אין מחסן */
+/*
+ * המחסן — נלמד מקבלות הסחורה של החברה, כי המחסן שמוגדר בפרויקט אינו תמיד המחסן שקולטים אליו
+ * (ב-a160226 132 מתוך 194 קבלות נכנסו למחסן הפרויקט; בדניה הירוקה, באלעד ובמורדות — כמעט תמיד Main,
+ * ומחסן הפרויקט "01" בדניה הירוקה לא שימש אף פעם):
+ *   1. המחסן שקולטים אליו הכי הרבה בפרויקט הזה;
+ *   2. מחסן הפרויקט — רק אם כבר קלטו אליו בחברה;
+ *   3. Main.
+ */
 async function warehouseOf(company, project) {
   if (!project) return 'Main';
-  const p = (await projects(company)).find((x) => x.code === project);
-  return p?.warehouse || 'Main';
+  try {
+    const used = rows(await call(company, 'GET',
+      `DOCUMENTS_P?$filter=${enc(`PROJDOCNO eq '${q(project)}' and STATDES ne 'מבוטלת'`)}&$select=TOWARHSNAME&$orderby=CURDATE%20desc&$top=100`));
+    const count = new Map();
+    for (const r of used) if (r.TOWARHSNAME) count.set(r.TOWARHSNAME, (count.get(r.TOWARHSNAME) ?? 0) + 1);
+    const best = [...count].sort((a, b) => b[1] - a[1])[0]?.[0];
+    if (best) return best;
+    const pw = (await projects(company)).find((x) => x.code === project)?.warehouse;
+    if (pw) {
+      const seen = rows(await call(company, 'GET', `DOCUMENTS_P?$filter=${enc(`TOWARHSNAME eq '${q(pw)}'`)}&$select=DOCNO&$top=1`));
+      if (seen.length) return pw;
+    }
+  } catch (err) {
+    console.error(`[משימון] מחסן לפרויקט ${project} (${company}):`, err.message);
+  }
+  return 'Main';
 }
 
 /** GR טיוטא. ‎project‎ — כשיש הזמנה, הפרויקט שלה. ‎warehouse‎ — המחסן של הפרויקט */
