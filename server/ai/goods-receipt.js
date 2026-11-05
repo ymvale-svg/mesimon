@@ -600,9 +600,17 @@ async function handle({ user, text = '', file = null }) {
     return { replies: ['📦 לקלוט את המסמך כ*קבלת סחורה* בפריוריטי?\n*כן* — להמשיך, *לא* — לא לקלוט.'], status: 'ok', result: 'הצעה: קבלת סחורה מתמונה' };
   }
 
-  // התחלה חדשה ("קבלת סחורה" באמצע קליטה — מתחילים מחדש, ומבטלים טיוטא קודמת)
-  if (!s || (isTrigger(t) && file && s.step !== 'files')) {
-    if (s) await cancel(user, s, 'הקודמת בוטלה');
+  // התחלה חדשה: "קבלת סחורה" עם קובץ באמצע קליטה, או קובץ חדש באמצע קליטה שעוד אין לה טיוטא
+  // (העובד שלח מסמך אחר במקום לענות) — מתחילים מחדש, ואומרים שהקודמת בוטלה.
+  // בנספחים ובבדיקת הטיוטא — קובץ הוא נספח, כמו קודם.
+  let restarted = '';
+  const ATTACH_STEPS = ['files', 'review', 'offer', 'doc'];
+  if (!s || (file && s.step !== 'files' && (isTrigger(t) || !ATTACH_STEPS.includes(s.step)))) {
+    if (s) {
+      const was = s.doc?.doc_number ? `${s.doc.doc_type === 'invoice' ? 'חשבונית' : 'תעודה'} ${s.doc.doc_number}` : '';
+      const r = await cancel(user, s, 'הקודמת בוטלה');
+      restarted = `↩️ ${r.replies[0].replace('קבלת הסחורה הקודמת בוטלה.', `קבלת הסחורה הקודמת${was ? ` (${was})` : ''} בוטלה.`)} מתחיל עם המסמך החדש.`;
+    }
     s = { step: 'doc', startedAt: Date.now() };
     if (!file) {
       save(user.id, s);
@@ -622,7 +630,7 @@ async function handle({ user, text = '', file = null }) {
   }
   if (out.s === null) clear(user.id, s);
   else save(user.id, out.s ?? s);
-  return { replies: out.replies, files: out.files ?? [], status: out.status ?? 'ok', result: out.result ?? `שלב ${(out.s ?? s)?.step ?? 'סיום'}`, docno: s.docno ?? null };
+  return { replies: restarted ? [restarted, ...out.replies] : out.replies, files: out.files ?? [], status: out.status ?? 'ok', result: out.result ?? `שלב ${(out.s ?? s)?.step ?? 'סיום'}`, docno: s.docno ?? null };
 }
 
 async function step(user, s, t, file) {
