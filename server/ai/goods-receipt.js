@@ -99,8 +99,11 @@ const companyLine = (s) => {
   const c = Priority.companyOf(s.company);
   return Priority.isTest(s.company)
     ? `🧪 *${s.company}* — סביבת בדיקה (${c.name.replace(/ — .*/, '')}). לא נרשם בהנהלת החשבונות`
-    : `🏢 *${c.name}* (${s.company}) — *סביבת אמת*`;
+    : `🏢 *${c.name}* (${s.company}) — *סביבת אמת*${s.companyHow === 'name' ? ' · זוהתה לפי שם הנמען' : s.companyHow === 'id' ? ' · זוהתה לפי מספר במסמך' : ''}`;
 };
+
+/** החברה של המסמך: ח.פ. הנמען, כל מספר אחר שבמסמך, או שם הנמען (‎Priority.resolveCompany‎) */
+const companyMatch = (d) => Priority.resolveCompany(d?.recipient_vat, { ids: d?.other_ids ?? [], name: d?.recipient_name ?? '' });
 
 async function saveFile(userId, file, label) {
   const buf = file.buf ?? await WhatsApp.download(file.url);
@@ -123,7 +126,7 @@ const EXTRACT_SCHEMA = {
   properties: {
     doc_type: { type: 'string', enum: ['delivery_note', 'invoice', 'payment', 'other'] },
     doc_label: str,
-    recipient_name: str, recipient_vat: str,
+    recipient_name: str, recipient_vat: str, other_ids: { type: 'array', items: str },
     supplier_name: str, supplier_vat: str,
     doc_number: str, po_number: str, supplier_order_ref: str,
     date: str, doc_date: str, delivery_place: str, project_hint: str,
@@ -149,7 +152,7 @@ const EXTRACT_SCHEMA = {
     },
     warnings: { type: 'array', items: str }
   },
-  required: ['doc_type', 'doc_label', 'recipient_name', 'recipient_vat', 'supplier_name', 'supplier_vat', 'doc_number', 'po_number', 'supplier_order_ref',
+  required: ['doc_type', 'doc_label', 'recipient_name', 'recipient_vat', 'other_ids', 'supplier_name', 'supplier_vat', 'doc_number', 'po_number', 'supplier_order_ref',
     'date', 'doc_date', 'delivery_place', 'project_hint', 'purchase_type', 'lines', 'totals', 'warnings'],
   additionalProperties: false
 };
@@ -425,10 +428,11 @@ async function afterDocType(s) {
 }
 
 async function resolveCompany(s) {
-  const r = Priority.resolveCompany(s.doc.recipient_vat);
+  const r = companyMatch(s.doc);
   if (r.company) {
     s.company = r.company;
     s.via = r.via;
+    s.companyHow = r.how;
     return resolveSupplier(s);
   }
   if (r.matched) {
@@ -472,7 +476,7 @@ async function askHeader(s) {
   const lines = [
     `📦 *קבלת סחורה* — ${docName(d)} ${d.doc_number}`,
     companyLine(s),
-    s.via === 'sandbox' ? `   (המסמך מופנה ל${Priority.resolveCompany(d.recipient_vat).matched?.name ?? 'חברה אחרת'} — נקלט לעותק הבדיקה)` : null,
+    s.via === 'sandbox' ? `   (המסמך מופנה ל${companyMatch(d).matched?.name ?? 'חברה אחרת'} — נקלט לעותק הבדיקה)` : null,
     `🚚 ספק: *${s.supplier.name}* (${s.supplier.code})${s.supplierBy === 'vat' ? ` — לפי ח.פ. ${String(d.supplier_vat).replace(/\D/g, '')}` : s.supplierBy === 'name' ? (d.supplier_vat ? ` — לפי שם: ח.פ. ${String(d.supplier_vat).replace(/\D/g, '')} שבמסמך לא נמצא בכרטיסי הספקים` : ' — לפי שם, אין ח.פ. במסמך') : ''}`,
     d.date ? `📅 ${ymdHe(d.date)}${d.delivery_place ? ` · ${d.delivery_place}` : ''}` : null,
     `💳 תנאי תשלום: *${Priority.payLabel(s.payCode ?? Priority.DEFAULT_PAY)}*${(s.payCode ?? Priority.DEFAULT_PAY) === Priority.DEFAULT_PAY ? ' (ברירת מחדל)' : ''}${dueText(s, s.payCode ?? Priority.DEFAULT_PAY)}`,
@@ -704,7 +708,7 @@ async function afterLines(s) {
 async function sandboxNote(s, text, testList) {
   // רק טקסט עם מילה — מספר לבד ("2") אינו שם פרויקט
   if (s.via !== 'sandbox' || !/[\u0590-\u05FFA-Za-z]{2}/.test(String(text ?? ''))) return null;
-  const real = Priority.resolveCompany(s.doc.recipient_vat).matched;
+  const real = companyMatch(s.doc).matched;
   if (!real?.code) return null;
   let hits = [];
   try {
@@ -752,7 +756,15 @@ async function askProject(s) {
  * אם קיים, אחרת מחסן ברירת המחדל של החברה (‎warehouseOf‎).
  */
 async function chooseWarehouse(s, note = '') {
-  const go = (extra) => { const r = askFiles(s); const pre = [note, extra].filter(Boolean).join('\n'); return pre ? { ...r, replies: [`${pre}\n\n${r.replies[0]}`] } : r; };
+  const go = async (extra) => {
+    // שאר המחסנים בחברה — לשינוי במספר, בשלב הנספחים
+    const others = ((await Priority.warehouses(s.company).catch(() => null)) ?? []).filter((w) => w.code !== s.warehouse).slice(0, 8);
+    s.warehouseChoices = others.map((w) => ({ code: w.code, name: w.name }));
+    const change = extra && others.length ? `   לשנות מחסן — כתבו מספר: ${others.map((w, i) => `*${i + 1}.* ${w.name || w.code}`).join(' · ')}` : '';
+    const r = askFiles(s);
+    const pre = [note, extra, change].filter(Boolean).join('\n');
+    return pre ? { ...r, replies: [`${pre}\n\n${r.replies[0]}`] } : r;
+  };
   if (s.warehouse) return go('');
   if (s.order?.warehouse && await Priority.warehouseExists(s.company, s.order.warehouse).catch(() => true)) {
     s.warehouse = s.order.warehouse;
@@ -767,7 +779,8 @@ async function chooseWarehouse(s, note = '') {
       ...s.warehouseOptions.map((w, i) => `*${i + 1}.* ${w.name || w.code} (${w.code})${w.n ? ` — ${w.n} קבלות` : ''}`), '', 'כתבו מספר מהרשימה.'].filter((x) => x !== null).join('\n'));
   }
   s.warehouse = await Priority.warehouseOf(s.company, s.project?.code);
-  return go('');
+  const name = ((await Priority.warehouses(s.company).catch(() => null)) ?? []).find((w) => w.code === s.warehouse)?.name;
+  return go(`🏬 מחסן: *${name || s.warehouse}* (${s.warehouse})`);
 }
 
 function askFiles(s) {
@@ -785,11 +798,23 @@ async function createDraft(user, s) {
   try {
     docno = await Priority.createReceipt(c, head);
   } catch (err) {
-    if (s.warehouse === 'Main') throw err;
-    console.error(`[משימון] קבלת סחורה: מחסן ${s.warehouse} נדחה (${err.message}), קולט ל-Main`);
-    s.warehouseNote = `מחסן ${s.warehouse} נדחה בפריוריטי, נקלט ל-Main`;
-    s.warehouse = 'Main';
-    docno = await Priority.createReceipt(c, { ...head, warehouse: 'Main' });
+    // פריוריטי דחה את הכותרת — מנסים מחסנים אחרים של החברה (של הפרויקט, ברירת המחדל, השאר)
+    const first = s.warehouse;
+    const alt = [...new Set([
+      ...(await Priority.projectWarehouses(c, s.project?.code).catch(() => [])).map((w) => w.code),
+      await Priority.defaultWarehouse(c).catch(() => 'Main'),
+      ...((await Priority.warehouses(c).catch(() => null)) ?? []).map((w) => w.code)
+    ])].filter((w) => w && w !== first).slice(0, 3);
+    for (const w of alt) {
+      try {
+        docno = await Priority.createReceipt(c, { ...head, warehouse: w });
+        console.error(`[משימון] קבלת סחורה: מחסן ${first} נדחה (${err.message}), נקלט ל-${w}`);
+        s.warehouseNote = `מחסן ${first} נדחה בפריוריטי, נקלט ל-${w}`;
+        s.warehouse = w;
+        break;
+      } catch { /* הבא */ }
+    }
+    if (!docno) return { failed: err, tried: [first, ...alt] };
   }
   s.docno = docno;
   save(user.id, s);
@@ -866,6 +891,29 @@ function writeDialog(user, s) {
     s.warehouseNote ?? null,
     ...[...new Set(s.lines.filter((l) => !l.order && l.part).map((l) => `קידוד: ${l.part.code} ${l.part.chapter ?? ''}/${l.part.topic ?? ''} — ${l.part.why}`))]
   ]);
+}
+
+/**
+ * פותח את הטיוטא ומציג אותה. פריוריטי דחה את הכותרת גם עם מחסנים אחרים — לא "משהו השתבש":
+ * שואלים לאיזה מחסן לשייך (הפירוט הטכני — למנהלים). נכשל שוב — הקבלה נשמרת, ומנסים מאוחר יותר.
+ */
+async function draftAndShow(user, s) {
+  const r = await createDraft(user, s);
+  if (!r?.failed) return showDraft(s, r, user);
+  alertAdmins(user, s, 'הטיוטא לא נפתחה בפריוריטי', [`מחסנים שנוסו: ${r.tried.join(', ')}`, r.failed.message]);
+  if (s.warehouseRetry) {
+    s.warehouseRetry = false;
+    s.step = 'files';
+    return reply(s, 'לא הצלחתי לפתוח את הקבלה בפריוריטי גם עם המחסן הזה. מנהל המערכת קיבל פירוט. הכל שמור — כתבו *סיום* כדי לנסות שוב מאוחר יותר, או *ביטול*.', { status: 'error', result: `טיוטא לא נפתחה: ${r.failed.message}` });
+  }
+  const all = (await Priority.warehouses(s.company).catch(() => null)) ?? [];
+  if (!all.length) throw r.failed;
+  s.step = 'warehouse';
+  s.warehouseRetry = true;
+  s.warehouse = null;
+  s.warehouseOptions = all.slice(0, 9).map((w) => ({ code: w.code, name: w.name, n: 0 }));
+  return reply(s, ['🏬 לאיזה מחסן לשייך את הקבלה? המחסנים בחברה:',
+    ...s.warehouseOptions.map((w, i) => `*${i + 1}.* ${w.name || w.code} (${w.code})`), '', 'כתבו מספר מהרשימה.'].join('\n'), { result: `מחסן נדחה: ${r.failed.message}` });
 }
 
 async function showDraft(s, problems = [], user = null) {
@@ -985,7 +1033,7 @@ async function queueNew(user, s, f) {
   }
   const note = '📄 המסמך החדש שמור, ואעבור אליו מיד אחרי שנסיים את הנוכחית.';
   if (s.step === 'files') {
-    const out = await showDraft(s, await createDraft(user, s), user);
+    const out = await draftAndShow(user, s);
     return { ...out, replies: [note, ...out.replies] };
   }
   return reply(s, [note, `*${s.docno}* עדיין טיוטא: *מאשר* — להפוך לסופי, או *ביטול* — לבטל אותה.`].join('\n'));
@@ -1013,7 +1061,9 @@ async function sortBatch(user, s) {
   const files = s.files.slice(0, 6);
   const read = await Promise.all(files.map((f) => ai.extract(f).then((doc) => ({ f, doc })).catch(() => ({ f, doc: null }))));
   const isMain = (d) => d && ['invoice', 'delivery_note', 'payment'].includes(d.doc_type) && ((d.lines ?? []).length > 0 || d.doc_type === 'payment');
-  const main = read.find((x) => isMain(x.doc));
+  // המסמך הראשי: מסמך עם מספר (חשבונית, תעודה, שובר) — לא דף תמונות או רשימה בלי מספר
+  const main = read.find((x) => isMain(x.doc) && x.doc.doc_number) ?? read.find((x) => x.doc?.doc_number && x.doc.doc_type !== 'other' && x.doc.supplier_name)
+    ?? read.find((x) => isMain(x.doc));
   if (!main) return onMainDoc(user, s, files[0], read[0].doc ?? undefined);
   const textOf = (d) => [d.doc_number, d.po_number, d.supplier_order_ref, ...(d.lines ?? []).map((l) => `${l.description} ${l.supplier_code}`)].join(' ');
   const mainText = textOf(main.doc);
@@ -1290,6 +1340,7 @@ async function step(user, s, t, file) {
       const w = (n && opts[n - 1]) || opts.find((x) => x.code === t.trim() || (x.name && t.trim().length >= 2 && x.name.includes(t.trim())));
       if (!w) return reply(s, ['לאיזה מחסן? כתבו מספר מהרשימה:', ...opts.map((x, i) => `*${i + 1}.* ${x.name || x.code} (${x.code})`)].join('\n'));
       s.warehouse = w.code;
+      if (s.warehouseRetry) return draftAndShow(user, s);
       const r = askFiles(s);
       return { ...r, replies: [`🏬 מחסן: *${w.name || w.code}* (${w.code})\n\n${r.replies[0]}`] };
     }
@@ -1388,8 +1439,15 @@ async function step(user, s, t, file) {
     case 'files':
       if (s.pendingNew && !file) { const r = await answerPendingNew(user, s, t); if (r) return r; }
       if (file) return routeFile(user, s, file, t);
+      if (/^\d{1,2}$/.test(t.trim()) && s.warehouseChoices?.[Number(t) - 1]) {
+        const w = s.warehouseChoices[Number(t) - 1];
+        s.warehouseChoices = s.warehouseChoices.filter((x) => x !== w);
+        s.warehouse = w.code;
+        const r = askFiles(s);
+        return { ...r, replies: [`🏬 המחסן שונה ל*${w.name || w.code}* (${w.code}).\n\n${r.replies[0]}`] };
+      }
       if (!DONE_FILES.test(t)) return reply(s, 'שלחו נספח, או *סיום* להמשך.');
-      return showDraft(s, await createDraft(user, s), user);
+      return draftAndShow(user, s);
 
     case 'review': {
       if (s.pendingNew && !file) { const r = await answerPendingNew(user, s, t); if (r) return r; }
