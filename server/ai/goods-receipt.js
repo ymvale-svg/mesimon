@@ -911,7 +911,21 @@ async function createDraft(user, s) {
           : { part: '000', description: `${qtyText(l.qty)} ${l.unit ?? ''} · ${l.description}`.replace(/\s+·/, ' ·'), qty: 1, price: net, discount: 0, chapter: chap, topic });
       }
     } catch (err) {
-      problems.push({ what: `שורה ${l.n} (${l.description}) לא נקלטה`, err: `שורה ${l.n}: ${err.message}` });
+      // רשת ביטחון: השורה נדחתה (מק"ט בלי תת פרק, יחידה, פריט לא פעיל…) — שוב על המק"ט הכללי 000, עם התיאור
+      // מהמסמך והקידוד של שאר השורות (או הכללי של החברה). נכשל גם זה — רק אז העובד רואה
+      if (l.order) { problems.push({ what: `שורה ${l.n} (${l.description}) לא נקלטה`, err: `שורה ${l.n}: ${err.message}` }); continue; }
+      const sib = s.lines.find((x) => x !== l && x.part?.chapter && x.part?.topic)?.part;
+      const g = l.part?.chapter && l.part?.topic ? l.part : sib ?? await Priority.generalCoding(c).catch(() => null);
+      const whole = Number.isInteger(Number(l.qty));
+      const net = Math.round(Number(l.qty) * Number(l.price) * (1 - (Number(l.discount) || 0) / 100) * 100) / 100;
+      try {
+        await Priority.addFreeLine(c, docno, { part: '000', description: whole ? l.description : `${qtyText(l.qty)} ${l.unit ?? ''} · ${l.description}`,
+          qty: whole ? l.qty : 1, price: whole ? l.price : net, discount: whole ? l.discount : 0, chapter: g?.chapter, topic: g?.topic });
+        (s.notes ??= []).push(`שורה ${l.n} (${l.description}) נקלטה על מק"ט כללי 000${l.part?.code && l.part.code !== '000' ? ` — ${l.part.code} נדחה בפריוריטי` : ''}`);
+        problems.push({ what: null, err: `שורה ${l.n}: ${l.part?.code ?? ''} נדחה (${err.message}), נקלטה על 000` });
+      } catch (err2) {
+        problems.push({ what: `שורה ${l.n} (${l.description}) לא נקלטה`, err: `שורה ${l.n}: ${err.message} / 000: ${err2.message}` });
+      }
     }
   }
   // הנחת מסמך — רק הנחה של ממש (לא עיגול של אגורות, ולא "הנחה" שלילית)
@@ -960,6 +974,7 @@ function writeDialog(user, s) {
     !s.order && s.project ? `פרויקט נבחר ע"י המקבל: ${s.project.code} ${s.project.des}` : null,
     s.chapter ? `תת פרק לפריט כללי: ${s.chapter.chapter} ${s.chapter.topic}` : null,
     s.warehouseNote ?? null,
+    ...(s.notes ?? []),
     ...[...new Set(s.lines.filter((l) => !l.order && l.part).map((l) => `קידוד: ${l.part.code} ${l.part.chapter ?? ''}/${l.part.topic ?? ''} — ${l.part.why}`))]
   ]);
 }
