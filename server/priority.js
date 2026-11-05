@@ -221,6 +221,14 @@ async function supplierHistory(company, supname, top = 30) {
   return grs.flatMap((g) => g.TRANSORDER_P_SUBFORM ?? []).filter((l) => l.PARTNAME);
 }
 
+/** שורות (לא 000) מ-300 קבלות הסחורה האחרונות של החברה — לאינדקס הקידוד */
+async function recentLines(company, top = 300) {
+  const grs = rows(await call(company, 'GET',
+    `DOCUMENTS_P?$filter=${enc("STATDES ne 'מבוטלת'")}&$select=DOCNO&$orderby=CURDATE%20desc&$top=${top}`
+    + `&$expand=TRANSORDER_P_SUBFORM($select=${LINE_SEL};$filter=${enc("PARTNAME ne '000'")})`));
+  return grs.flatMap((g) => g.TRANSORDER_P_SUBFORM ?? []).filter((l) => l.PARTNAME && l.PDES);
+}
+
 /** פריטים פעילים שבתיאורם המילה ("העתקות"), עד 6 */
 async function findPartsByText(company, word) {
   return rows(await call(company, 'GET', `LOGPART?$filter=${enc(`contains(PARTDES,'${q(word)}') and STATDES eq 'פעיל'`)}&$select=PARTNAME,PARTDES,STATDES,BUD_SUBCHAPTERNAME,BUD_SUBCHAPTERDES,BUD_SUBTOPICNAME,BUD_SUBTOPICDES&$top=6`));
@@ -517,7 +525,7 @@ async function cancelReceipt(company, docno) {
 
 module.exports = {
   COMPANIES, isEnabled, allowed, companyOf, isTest, resolveCompany, PriorityError,
-  PAY_TERMS, DEFAULT_PAY, payTerm, payLabel, payFromText, dueDate, supplierHistory, partByCode, findPartsByText, generalCoding, warehouseOf, findSuppliers, supplierByCode, findReceiptByBooknum, getOrder, openOrders, findPartExact, lastSubchapter, projects, matchProjects, readReceipt,
+  PAY_TERMS, DEFAULT_PAY, payTerm, payLabel, payFromText, dueDate, supplierHistory, recentLines, partByCode, findPartsByText, generalCoding, warehouseOf, findSuppliers, supplierByCode, findReceiptByBooknum, getOrder, openOrders, findPartExact, lastSubchapter, projects, matchProjects, readReceipt,
   readDialog, createReceipt, addOrderLine, addFreeLine, setLineQty, setHeader, attach, setDialog, finalizeReceipt, cancelReceipt,
   _call: call
 };
