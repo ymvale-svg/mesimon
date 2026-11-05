@@ -612,8 +612,12 @@ const setHeader = (company, docno, fields) => call(company, 'PATCH', grKey(docno
 /** נספח — תמונה או PDF, כ-data URI */
 async function attach(company, docno, { buf, mime, description }) {
   const uri = `data:${mime || 'image/jpeg'};base64,${buf.toString('base64')}`;
-  await call(company, 'POST', `${grKey(docno)}/EXTFILES_SUBFORM`, { EXTFILEDES: String(description ?? '').slice(0, 80), EXTFILENAME: uri });
+  const r = await call(company, 'POST', `${grKey(docno)}/EXTFILES_SUBFORM`, { EXTFILEDES: String(description ?? '').slice(0, 80), EXTFILENAME: uri });
+  return r?.EXTFILENUM ?? null;
 }
+
+/** מחיקת נספח מה-GR (ביטול נספח שצורף בטעות) */
+const deleteAttachment = (company, docno, num) => call(company, 'DELETE', `${grKey(docno)}/EXTFILES_SUBFORM(EXTFILENUM=${Number(num)})`);
 
 /** דו-שיח פנימי — מי קיבל, ממה, ומה תוקן. מחליף את הטקסט הקיים */
 async function setDialog(company, docno, lines) {
@@ -683,6 +687,6 @@ async function cancelReceipt(company, docno) {
 module.exports = {
   COMPANIES, isEnabled, allowed, companyOf, isTest, resolveCompany, companiesByName, PriorityError,
   GENERAL, NO_VAT_CODE, TAX_CODES, PAY_TERMS, DEFAULT_PAY, payTerm, payLabel, payFromText, dueDate, projectWarehouses, warehouses, warehouseExists, defaultWarehouse, supplierHistory, recentLines, partByCode, findPartsByText, generalCoding, warehouseOf, findSuppliers, supplierByCode, findReceiptByBooknum, getOrder, openOrders, findPartExact, lastSubchapter, projects, matchProjects, readReceipt,
-  readDialog, createReceipt, addOrderLine, addFreeLine, setLineQty, setLineDes, setHeader, attach, setDialog, finalizeReceipt, cancelReceipt, receiptStatus, deleteLines,
+  readDialog, createReceipt, addOrderLine, addFreeLine, setLineQty, setLineDes, setHeader, attach, deleteAttachment, setDialog, finalizeReceipt, cancelReceipt, receiptStatus, deleteLines,
   _call: call
 };

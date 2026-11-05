@@ -1120,7 +1120,8 @@ async function maybeRebuildFromTable(user, s, saved, { known = false } = {}) {
   try { d = await ai.extract(saved); } catch (err) { why = err.message; }
   if (!known) {
     s.files.push({ ...saved, label: 'טבלת שורות', attached: true });
-    await Priority.attach(s.company, s.docno, { buf: fs.readFileSync(saved.path), mime: saved.mime, description: 'טבלת שורות' }).catch(() => { s.files[s.files.length - 1].attached = false; });
+    const num = await Priority.attach(s.company, s.docno, { buf: fs.readFileSync(saved.path), mime: saved.mime, description: 'טבלת שורות' }).catch(() => { s.files[s.files.length - 1].attached = false; return null; });
+    s.undo = { kind: 'attach', path: saved.path, num, at: Date.now() };
   }
   if (!(d?.lines ?? []).length) {
     return { s, replies: [`📎 הצילום צורף לנספחים, אבל לא הצלחתי לקרוא ממנו שורות.\nבטיוטא ${money(now)} לפני מע"מ, ובמסמך ${money(want)}. כתבו את השורה שחסרה ("חסר כבל HDMI 7 מטר, 1 יח', 12"), או תקנו כמות ("שורה 2: 1").`],
@@ -1203,16 +1204,18 @@ async function answerPendingNew(user, s, t) {
 
 async function attachNow(user, s, f) {
   s.files.push(f);
-  if (s.step === 'files') return reply(s, `📎 נספח ${s.files.length - 1} התקבל. עוד? או *סיום* 👍.`);
+  s.undo = { kind: 'attach', path: f.path, at: Date.now() };   // 👎 בהודעה הבאה — מבטל את הצירוף
+  if (s.step === 'files') return reply(s, `📎 נספח ${s.files.length - 1} התקבל. עוד? או *סיום* 👍. (צורף בטעות — 👎)`);
   if (!s.docno) {
     // לפני הטיוטא — נשמר, ויצורף כשהטיוטא תיווצר. חוזרים לשאלה שחיכתה לתשובה
     return { s, replies: [`📎 נשמר כנספח (${s.files.length - 1}), ויצורף לקבלת הסחורה.${s.lastPrompt ? `\n\n${s.lastPrompt}` : ''}`] };
   }
   const problems = [];
   f.attached = true;
-  await Priority.attach(s.company, s.docno, { buf: fs.readFileSync(f.path), mime: f.mime, description: f.label })
-    .catch((err) => problems.push({ what: 'הנספח לא צורף', err: `נספח: ${err.message}` }));
-  return showDraft(s, problems, user);
+  s.undo.num = await Priority.attach(s.company, s.docno, { buf: fs.readFileSync(f.path), mime: f.mime, description: f.label })
+    .catch((err) => { problems.push({ what: 'הנספח לא צורף', err: `נספח: ${err.message}` }); return null; });
+  const out = await showDraft(s, problems, user);
+  return { ...out, replies: [`📎 צורף ל-${s.docno}. צורף בטעות? 👎`, ...out.replies] };
 }
 
 /**
@@ -1429,6 +1432,19 @@ async function handle({ user, text = '', file = null }) {
     return { replies: next.replies, files: next.files ?? [], status: next.status ?? 'ok', result: next.result ?? 'ביטול ומעבר למסמך הבא' };
   }
 
+  // ביטול שקט: 👎 בהודעה נפרדת מיד אחרי צירוף קובץ — הנספח נמחק (גם מה-GR בפריוריטי), בלי להציג שוב את הטיוטא
+  const undo = s.undo && Date.now() - s.undo.at < 15 * 60 * 1000 ? s.undo : null;
+  s.undo = null;
+  if (t === '👎' && !file && undo?.kind === 'attach' && !s.pendingList && !s.pendingNew) {
+    let ok = true;
+    if (undo.num && s.docno) await Priority.deleteAttachment(s.company, s.docno, undo.num).catch((err) => { ok = false; alertAdmins(user, s, 'נספח לא נמחק', [err.message]); });
+    if (ok) {
+      s.files = (s.files ?? []).filter((x) => x.path !== undo.path);
+      try { fs.unlinkSync(undo.path); } catch { /* כבר נמחק */ }
+    }
+    save(user.id, s);
+    return { replies: [ok ? `↩️ הנספח האחרון הוסר${s.docno && undo.num ? ` מ-${s.docno}` : ''}.` : '⚠️ לא הצלחתי להסיר את הנספח. מנהל המערכת קיבל הודעה.'], status: ok ? 'ok' : 'error', result: 'ביטול נספח' };
+  }
   // 👍 בנספחים — "סיום"; בשאלת ההזמנה 👍 אינו תשובה (צריך מספר, או 👎 — בלי הזמנה)
   if (t === '👍' && !file && s.step === 'files' && !s.pendingNew) t = 'סיום';
   if (t === '👍' && !file && s.step === 'order') return { replies: ['כתבו את מספר ההזמנה (PO…), או *בלי הזמנה* 👎.'], status: 'ok', result: '👍 בשאלת ההזמנה' };
