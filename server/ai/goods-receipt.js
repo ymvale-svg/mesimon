@@ -60,6 +60,8 @@ const FILES_DIR = () => path.join(D.UPLOADS_DIR, 'goods-receipt');
 const TRIGGER = /קבלת\s*סחורה/;
 const YES = /^(כן|נכון|מאשר|מאשרת|אשר|אישור|תקין|יאללה|אוקי|אוקיי|סבבה|ok|yes|👍|✅)([\s,.!]|$)/i;
 const CANCEL = /^(ביטול|בטל|לבטל|עזוב|יציאה|stop)([\s,.!]|$)/i;
+/** "תוסיף בדו שיח: ...", "הערה: ...", "תרשום בהערות ..." — הערה חופשית של המקבל לדו-שיח הפנימי, בכל שלב */
+const NOTE_CMD = /^\s*(?:תוסיף|תוסיפי|הוסף|להוסיף|תרשום|תכתוב|רשום|כתוב)?\s*(?:ל|ב)?\s*(?:דו[\s-]*שיח(?:\s*פנימי)?|הערה|הערות)\s*[,:\-–]?\s*([\s\S]+)$/;
 const DONE_FILES = /^(סיום|סיימתי|זהו|אין|אין נספחים|בלי נספחים|המשך)([\s,.!]|$)/;
 const NO_ORDER = /^(בלי הזמנה|אין הזמנה|ללא הזמנה|לפי המסמך|אין|בלי|לא)([\s,.!]|$)/;
 
@@ -977,6 +979,7 @@ function writeDialog(user, s) {
     s.chapter ? `תת פרק לפריט כללי: ${s.chapter.chapter} ${s.chapter.topic}` : null,
     s.warehouseNote ?? null,
     ...(s.notes ?? []),
+    ...(s.userNotes ?? []).map((x) => `הערת המקבל: ${x}`),
     ...[...new Set(s.lines.filter((l) => !l.order && l.part).map((l) => `קידוד: ${l.part.code} ${l.part.chapter ?? ''}/${l.part.topic ?? ''} — ${l.part.why}`))]
   ]);
 }
@@ -1401,12 +1404,18 @@ async function handle({ user, text = '', file = null }) {
   try {
     // קובץ באמצע הקליטה, לפני שלב הנספחים: נספח (נשמר, וחוזרים לשאלה), או מסמך חדש (שואלים)
     const early = !OWN_FILE_STEPS.includes(s.step);
+    const nm = !file && !s.pendingList ? t.match(NOTE_CMD) : null;
+    if (nm && nm[1].trim().length >= 2) {
+      (s.userNotes ??= []).push(nm[1].trim().replace(/\s*\n\s*/g, ' '));
+      if (s.docno) await writeDialog(user, s).catch(() => {});
+      out = { s, replies: [`📝 נרשם בדו-שיח הפנימי${s.docno ? ` של ${s.docno}` : ' (ייכתב עם הטיוטא)'}: "${s.userNotes[s.userNotes.length - 1]}"${s.lastPrompt ? `\n\n${s.lastPrompt}` : ''}`], result: 'הערה לדו-שיח' };
+    }
     if (s.pendingList && !file) {
       if (YES.test(t)) out = await adoptList(s, s.pendingList.doc, `📋 עדכנתי את שורות הקבלה לפי הרשימה שבנספח (${s.pendingList.doc.lines.length} פריטים).`);
       else if (/^(לא|אל|בלי|no)([\s,.!]|$)/i.test(t)) { s.pendingList = null; out = { s, replies: [`👍 הרשימה נשארת כנספח בלבד.${s.lastPrompt ? `\n\n${s.lastPrompt}` : ''}`] }; }
       else out = { s, replies: [listQuestion(s.doc, s.pendingList.doc)] };
     }
-    if (early && s.pendingNew && !file) out = await answerPendingNew(user, s, t);
+    if (!out && early && s.pendingNew && !file) out = await answerPendingNew(user, s, t);
     if (!out && early && file) out = await routeFile(user, s, file, t);
     if (!out) out = await step(user, s, t, file);
   } catch (err) {
