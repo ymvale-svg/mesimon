@@ -70,8 +70,15 @@ function resolveCompany(vat) {
   return { company: null, via: null, matched: c ?? null };
 }
 
-function companyUrl(company) {
-  if (!allowed().includes(company)) throw new Error(`החברה ${company} אינה פתוחה לכתיבה מהבוט (PRIORITY_COMPANIES)`);
+/**
+ * כתיבה — רק לחברה שב-‎PRIORITY_COMPANIES‎. קריאה — גם לחברה מוכרת שאינה פתוחה לכתיבה
+ * (למשל לבדוק אם פרויקט קיים בחברה האמיתית, כשהקליטה היא לעותק הבדיקה).
+ */
+function companyUrl(company, method = 'GET') {
+  const known = COMPANIES.some((c) => c.code === company);
+  if (method === 'GET' ? !(known || allowed().includes(company)) : !allowed().includes(company)) {
+    throw new Error(`החברה ${company} אינה פתוחה ${method === 'GET' ? 'לבוט' : 'לכתיבה מהבוט'} (PRIORITY_COMPANIES)`);
+  }
   return `${HOST}/${encodeURIComponent(company)}/`;
 }
 
@@ -85,7 +92,7 @@ function errorText(data, raw) {
 async function call(company, method, path, body = null) {
   if (!isEnabled()) throw new PriorityError('החיבור לפריוריטי אינו מוגדר בשרת (PRIORITY_USER, PRIORITY_PASSWORD)');
   const auth = Buffer.from(`${process.env.PRIORITY_USER}:${process.env.PRIORITY_PASSWORD}`).toString('base64');
-  const url = companyUrl(company) + path;
+  const url = companyUrl(company, method) + path;
   let res;
   try {
     res = await fetch(url, {
@@ -159,7 +166,7 @@ async function findReceiptByBooknum(company, supname, booknum) {
 /** הזמנה אחת, עם השורות והיתרות */
 async function getOrder(company, ordname) {
   try {
-    const h = strip(await call(company, 'GET', `PORDERS('${q(ordname)}')?$select=ORDNAME,SUPNAME,CDES,STATDES,PROJDOCNO,PROJDES,TYPECODE,TYPEDES,CURDATE`));
+    const h = strip(await call(company, 'GET', `PORDERS('${q(ordname)}')?$select=ORDNAME,SUPNAME,CDES,STATDES,PROJDOCNO,PROJDES,TYPECODE,TYPEDES,CURDATE,PAYCODE,PAYDES`));
     const lines = rows(await call(company, 'GET', `PORDERS('${q(ordname)}')/PORDERITEMS_SUBFORM?$select=LINE,KLINE,PARTNAME,PDES,TQUANT,TBALANCE,TUNITNAME,PRICE,PERCENT`));
     return { ...h, lines };
   } catch (err) {
@@ -171,7 +178,7 @@ async function getOrder(company, ordname) {
 /** הזמנות מאושרות של הספק שיש בהן יתרה */
 async function openOrders(company, supname) {
   const list = rows(await call(company, 'GET',
-    `PORDERS?$filter=${enc(`SUPNAME eq '${q(supname)}' and STATDES eq 'אושרה'`)}&$select=ORDNAME,CURDATE,PROJDOCNO,PROJDES,TYPECODE&$top=20&$orderby=CURDATE desc`));
+    `PORDERS?$filter=${enc(`SUPNAME eq '${q(supname)}' and STATDES eq 'אושרה'`)}&$select=ORDNAME,CURDATE,PROJDOCNO,PROJDES,TYPECODE,PAYCODE,PAYDES&$top=20&$orderby=CURDATE desc`));
   const out = [];
   for (const o of list) {
     const lines = rows(await call(company, 'GET', `PORDERS('${q(o.ORDNAME)}')/PORDERITEMS_SUBFORM?$select=LINE,KLINE,PARTNAME,PDES,TQUANT,TBALANCE,TUNITNAME,PRICE,PERCENT`))
@@ -281,7 +288,7 @@ function matchProjects(list, text, { all = false } = {}) {
 /** ה-GR כפי שנשמר — כותרת, שורות, נספחים, דו-שיח פנימי */
 async function readReceipt(company, docno) {
   const k = grKey(docno);
-  const h = strip(await call(company, 'GET', `${k}?$select=DOCNO,CURDATE,SUPNAME,CDES,BOOKNUM,PROJDOCNO,PROJDES,TOWARHSNAME,STATDES,DETAILS,QPRICE,PERCENT,DISPRICE,VAT,TOTPRICE`));
+  const h = strip(await call(company, 'GET', `${k}?$select=DOCNO,CURDATE,SUPNAME,CDES,BOOKNUM,PROJDOCNO,PROJDES,TOWARHSNAME,STATDES,DETAILS,QPRICE,PERCENT,DISPRICE,VAT,TOTPRICE,MED_MXPAYCODE,MED_MXPAYDES`));
   const lines = rows(await call(company, 'GET', `${k}/TRANSORDER_P_SUBFORM?$select=KLINE,PARTNAME,PDES,TQUANT,TUNITNAME,PRICE,PERCENT,QPRICE,ORDNAME,OLINE,BUD_SUBCHAPTERNAME,BUD_SUBCHAPTERDES,BUD_SUBTOPICNAME`))
     .sort((a, b) => a.KLINE - b.KLINE);
   const files = rows(await call(company, 'GET', `${k}/EXTFILES_SUBFORM?$select=EXTFILENUM,EXTFILEDES,SUFFIX`));
@@ -292,6 +299,39 @@ async function readReceipt(company, docno) {
 // כתיבה — קבלת סחורה
 // ---------------------------------------------------------------------------
 
+/*
+ * תנאי תשלום (‎MED_MXPAYCODE‎ ב-GR). מסך תנאי התשלום (‎PAY‎) סגור ל-API, ולכן הרשימה
+ * כאן — הקודים שבשימוש בהזמנות, בספקים ובקבלות הסחורה, זהים בכל החברות שנבדקו
+ * (a160226, test11, elad1). ברירת המחדל: ‎04‎ = שוטף + 45. פריוריטי דוחה קוד שאינו קיים.
+ */
+const PAY_TERMS = [
+  { code: '01', name: 'שוטף', days: 0 },
+  { code: '02', name: 'ש15', days: 15 },
+  { code: '03', name: 'ש30', days: 30 },
+  { code: '04', name: 'ש45', days: 45 },
+  { code: '05', name: 'ש60', days: 60 },
+  { code: '08', name: 'ש75', days: 75 },
+  { code: '06', name: 'ש90', days: 90 }
+];
+const DEFAULT_PAY = '04';
+const payTerm = (code) => PAY_TERMS.find((p) => p.code === code) ?? null;
+const payLabel = (code) => { const p = payTerm(code); return !p ? code : p.days ? `שוטף + ${p.days}` : 'שוטף'; };
+/**
+ * תנאי התשלום שבטקסט: "שוטף 60", "שוטף+30", "ש60", "שוטף פלוס 90", "שוטף" לבד.
+ * ‎null‎ — לא נאמר תנאי תשלום. ‎{ unknown: 75 }‎ — נאמר מספר ימים שאין לו קוד.
+ */
+function payFromText(text) {
+  const t = String(text ?? '').replace(/["'״׳]/g, '');
+  const m = t.match(/(?:^|[\s,])(?:שוטף|ש)\s*(?:\+|פלוס)?\s*(\d{1,3})(?!\d)/);
+  if (m) {
+    const days = Number(m[1]);
+    const p = PAY_TERMS.find((x) => x.days === days);
+    return p ? p : { unknown: days };
+  }
+  if (/(?:^|[\s,])שוטף(?:$|[\s,.!])/.test(t)) return payTerm('01');
+  return null;
+}
+
 /** המחסן של הפרויקט (‎BUD_WARHSNAME‎ במסך הפרויקטים), או ‎Main‎ כשלפרויקט אין מחסן */
 async function warehouseOf(company, project) {
   if (!project) return 'Main';
@@ -300,8 +340,8 @@ async function warehouseOf(company, project) {
 }
 
 /** GR טיוטא. ‎project‎ — כשיש הזמנה, הפרויקט שלה. ‎warehouse‎ — המחסן של הפרויקט */
-async function createReceipt(company, { supname, booknum, date, project, warehouse = 'Main' }) {
-  const body = { SUPNAME: supname, TOWARHSNAME: warehouse };
+async function createReceipt(company, { supname, booknum, date, project, warehouse = 'Main', payCode = DEFAULT_PAY }) {
+  const body = { SUPNAME: supname, TOWARHSNAME: warehouse, MED_MXPAYCODE: payCode };
   if (booknum) body.BOOKNUM = String(booknum).slice(0, 20);
   if (date) body.CURDATE = `${date}T00:00:00Z`;
   if (project) body.PROJDOCNO = project;
@@ -394,7 +434,7 @@ async function cancelReceipt(company, docno) {
 
 module.exports = {
   COMPANIES, isEnabled, allowed, companyOf, isTest, resolveCompany, PriorityError,
-  warehouseOf, findSuppliers, supplierByCode, findReceiptByBooknum, getOrder, openOrders, findPartExact, lastSubchapter, projects, matchProjects, readReceipt,
+  PAY_TERMS, DEFAULT_PAY, payTerm, payLabel, payFromText, warehouseOf, findSuppliers, supplierByCode, findReceiptByBooknum, getOrder, openOrders, findPartExact, lastSubchapter, projects, matchProjects, readReceipt,
   readDialog, createReceipt, addOrderLine, addFreeLine, setLineQty, setHeader, attach, setDialog, finalizeReceipt, cancelReceipt,
   _call: call
 };

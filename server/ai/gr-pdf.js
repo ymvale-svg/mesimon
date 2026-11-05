@@ -37,7 +37,8 @@ function receiptPdf(gr, { companyLabel = '', test = false, order = '', dialog = 
   const fields = [
     ['ספק', `${gr.CDES ?? ''} (${gr.SUPNAME ?? ''})`], ['תאריך', ymd(gr.CURDATE)],
     ['מס\' תעודה', gr.BOOKNUM ?? ''], ['הזמנה', order || 'ללא הזמנה'],
-    ['פרויקט', `${gr.PROJDOCNO ?? ''} ${gr.PROJDES ?? ''}`.trim()], ['מחסן', gr.TOWARHSNAME ?? '']
+    ['פרויקט', `${gr.PROJDOCNO ?? ''} ${gr.PROJDES ?? ''}`.trim()], ['מחסן', gr.TOWARHSNAME ?? ''],
+    ['תנאי תשלום', gr.MED_MXPAYDES ?? '']
   ];
   const colW = W / 2;
   for (let i = 0; i < fields.length; i += 2) {
