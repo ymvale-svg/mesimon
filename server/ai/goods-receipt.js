@@ -196,6 +196,18 @@ const CLASSIFY_SCHEMA = {
   required: ['kind', 'doc_type', 'doc_number', 'supplier_name'],
   additionalProperties: false
 };
+const PARTS_SCHEMA = {
+  type: 'object',
+  properties: { codes: { type: 'array', items: str }, note: str },
+  required: ['codes', 'note'],
+  additionalProperties: false
+};
+const TERMS_SCHEMA = {
+  type: 'object',
+  properties: { terms: { type: 'array', items: str } },
+  required: ['terms'],
+  additionalProperties: false
+};
 const PROJECT_SCHEMA = {
   type: 'object',
   properties: { codes: { type: 'array', items: str }, question: str },
@@ -259,6 +271,14 @@ const ai = {
       ? { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data } }
       : { type: 'image', source: { type: 'base64', media_type: file.mime.includes('png') ? 'image/png' : 'image/jpeg', data } };
     return Claude.json({ system: skill(), content: [block, { type: 'text', text: JSON.stringify({ task: 'classify', current }) }], schema: CLASSIFY_SCHEMA, effort: 'low', live: true });
+  },
+  async partTerms(text, line) {
+    const content = JSON.stringify({ task: 'part_terms', text, line });
+    return Claude.json({ system: skill(), content: [{ type: 'text', text: content }], schema: TERMS_SCHEMA, effort: 'low', live: true });
+  },
+  async parts(text, line, candidates) {
+    const content = JSON.stringify({ task: 'parts', text, line, candidates: candidates.map((c) => ({ code: c.PARTNAME, description: c.PARTDES, chapter: c.BUD_SUBCHAPTERDES ?? '', resource: c.BUD_SUBTOPICDES ?? '' })) });
+    return Claude.json({ system: skill(), content: [{ type: 'text', text: content }], schema: PARTS_SCHEMA, effort: 'low', live: true });
   },
   async project(projects, text) {
     const content = JSON.stringify({ task: 'project', text, projects: projects.map((p) => ({ code: p.code, name: p.des, aliases: p.alias ?? '' })) });
@@ -792,7 +812,7 @@ function askParts(s) {
     ? [`🏷 ${free.length > 1 ? `כל ${free.length} השורות` : 'השורה'} ← ${codeText(free[0].part)}`, `   (${free[0].part.why})`]
     : free.map((l) => `*${l.n}.* ${l.description}\n   ← ${codeText(l.part)} (${l.part.why})`);
   return reply(s, ['🏷 *מק"ט, תת פרק ומשאב*', ...body, '',
-    '*כן* 👍 — להמשיך. לשנות: מק"ט ("A120-035-010"), "שורה 2 A120-035-010", מילה מהתיאור ("העתקות"), או *כללי*.'].join('\n'));
+    '*כן* 👍 — להמשיך. לשנות: מק"ט ("A120-035-010"), או במילים שלכם ("שורה 1 מיזוג אוויר", "שורה 2 עכבר אלחוטי"), או *כללי*.'].join('\n'));
 }
 
 async function afterLines(s) {
@@ -1730,10 +1750,11 @@ async function step(user, s, t, file) {
         target.forEach((l) => { l.part = generalPart(g, 'נבחר ע"י המקבל'); });
         return askParts(s);
       }
-      // מספר מרשימה שהוצגה
+      // מספר מרשימה שהוצגה — לשורות שהרשימה הוצגה בשבילן
       if (/^\d{1,2}$/.test(rest) && s.partOptions?.length) {
         const p = s.partOptions[Number(rest) - 1];
-        if (p) { target.forEach((l) => { l.part = partOf(p, 'נבחר ע"י המקבל'); }); s.partOptions = null; return askParts(s); }
+        const forLines = s.partTarget?.length ? free.filter((l) => s.partTarget.includes(l.n)) : target;
+        if (p) { forLines.forEach((l) => { l.part = partOf(p, 'נבחר ע"י המקבל'); }); s.partOptions = null; s.partTarget = null; return askParts(s); }
       }
       const code = rest.match(/[A-Za-z]*\d[\w]*(?:-[\w]+)+/)?.[0];
       if (code) {
@@ -1742,16 +1763,41 @@ async function step(user, s, t, file) {
         target.forEach((l) => { l.part = partOf(p, 'נבחר ע"י המקבל'); });
         return askParts(s);
       }
-      // מילה מהתיאור ("מק"ט העתקות" ← "העתקות")
+      // שפה חופשית ("עכבר אלחוטי", "מק"ט העתקות") — חיפוש בקירוב בקטלוג, עם ההקשר של השורה
       const word = rest.replace(/מק"?ט|מקט|פריט/g, '').trim();
       if (word.length >= 2) {
-        const list = await Priority.findPartsByText(s.company, word).catch(() => []);
-        if (list.length === 1) { target.forEach((l) => { l.part = partOf(list[0], 'נבחר ע"י המקבל'); }); return askParts(s); }
+        const context = target.length === 1 ? target[0].description : '';
+        let found = await Priority.searchParts(s.company, word, context).catch(() => []);
+        let full = found.filter((c) => c.full);
+        if (!full.length) {
+          // אין התאמה במילים — מילים נרדפות כפי שכתובות בקטלוג ("מזגן" ← "מיזוג אוויר"), וחיפוש נוסף
+          const terms = (await ai.partTerms(word, context || target.map((l) => l.description).join(' · ')).catch(() => null))?.terms ?? [];
+          const more = [];
+          for (const term of terms.slice(0, 5)) more.push(...await Priority.searchParts(s.company, term, context).catch(() => []));
+          const seen = new Set(found.map((c) => c.p.PARTNAME));
+          found = [...found, ...more.filter((c) => !seen.has(c.p.PARTNAME) && seen.add(c.p.PARTNAME))].sort((a, b) => b.score - a.score);
+          full = [];
+        }
+        // התאמה ברורה: כל המילים נמצאו, ורק פריט אחד כזה (או שהוא מוביל בבירור)
+        if (full.length === 1 || (full.length > 1 && full[0].score > full[1].score)) {
+          target.forEach((l) => { l.part = partOf(full[0].p, 'נבחר ע"י המקבל'); });
+          return askParts(s);
+        }
+        // אין התאמה מלאה אחת — חלופות לפי ההקשר: ה-AI בוחר עד 5 מתוך המועמדים; בלי AI — לפי הדירוג
+        const pool = found.slice(0, 40).map((c) => c.p);
+        let pick = [];
+        if (pool.length > 5) {
+          const r = await ai.parts(word, context || target.map((l) => l.description).join(' · '), pool).catch(() => null);
+          pick = (r?.codes ?? []).map((c) => pool.find((p) => p.PARTNAME === c)).filter(Boolean);
+        }
+        const list = (pick.length ? pick : pool).slice(0, 5);
         if (list.length) {
           s.partOptions = list;
-          return { s, replies: [['איזה מהם?', ...list.map((p, i) => `*${i + 1}.* ${codeText(partOf(p, ''))}`)].join('\n')] };
+          s.partTarget = target.map((l) => l.n);
+          return { s, replies: [[full.length ? `כמה מק"טים מתאימים ל"${word}":` : `לא מצאתי מק"ט שמתאים בדיוק ל"${word}". אולי אחד מאלה:`,
+            ...list.map((p, i) => `*${i + 1}.* ${codeText(partOf(p, ''))}`), '', 'כתבו מספר, תיאור אחר, מק"ט, או *כללי*.'].join('\n')] };
         }
-        return reply(s, `לא מצאתי מק"ט עם "${word}". כתבו מק"ט, מילה אחרת, או *כללי*.`);
+        return reply(s, `לא מצאתי בקטלוג מק"ט שקרוב ל"${word}". כתבו תיאור אחר, מק"ט, או *כללי*.`);
       }
       return reply(s, '*כן* 👍 — להמשיך, או כתבו מק"ט / מילה מהתיאור / *כללי*.');
     }

@@ -296,6 +296,36 @@ async function findPartsByText(company, word) {
   return rows(await call(company, 'GET', `LOGPART?$filter=${enc(`contains(PARTDES,'${q(word)}') and STATDES eq 'פעיל'`)}&$select=PARTNAME,PARTDES,STATDES,BUD_SUBCHAPTERNAME,BUD_SUBCHAPTERDES,BUD_SUBTOPICNAME,BUD_SUBTOPICDES&$top=6`));
 }
 
+/*
+ * חיפוש מק"ט בשפה חופשית: מועמדים מכל מילה בטקסט (וגם בלי אות שימוש בתחילתה — ה, ו, ב, ל, מ, ש) ומהמילים של
+ * ההקשר (תיאור השורה), ודירוג לפי מילים מהטקסט שמופיעות בתיאור הפריט (ההקשר — חצי משקל).
+ * ‎[{ p, score, full }]‎; ‎full‎ — כל מילות הטקסט נמצאו בתיאור.
+ */
+async function searchParts(company, text, context = '') {
+  const wordsOf = (t) => [...new Set(String(t ?? '').replace(/["'״׳(),.:;\-/]/g, ' ').split(/\s+/).filter((w) => w.length >= 2 && !/^\d+$/.test(w)))];
+  // צורות המילה: כמו שהיא, בלי ריבוי (ים/ות, ן← נ), בלי אות שימוש בתחילה (ה ו ב ל מ ש), ושניהם — "המזגנים" ← "מזגן"
+  const finals = (x) => x.replace(/נ$/, 'ן').replace(/מ$/, 'ם').replace(/צ$/, 'ץ').replace(/פ$/, 'ף').replace(/כ$/, 'ך');
+  const noPlural = (x) => (x.length >= 5 && /(ים|ות)$/.test(x) ? finals(x.slice(0, -2)) : x);
+  const noPrefix = (x) => (x.length >= 4 && /^[הובלמש]/.test(x) ? x.slice(1) : x);
+  const forms = (w) => [...new Set([w, noPlural(w), noPrefix(w), noPlural(noPrefix(w))])].filter((x) => x.length >= 2);
+  const tw = wordsOf(text).filter((w) => !/^(מק"?ט|מקט|פריט|של|עם|את|על)$/.test(w));
+  const cw = wordsOf(context).filter((w) => w.length >= 3).slice(0, 6);
+  const probe = [...new Set([...tw.flatMap(forms), ...cw.map(noPlural)])].slice(0, 14);
+  const sel = '$select=PARTNAME,PARTDES,STATDES,BUD_SUBCHAPTERNAME,BUD_SUBCHAPTERDES,BUD_SUBTOPICNAME,BUD_SUBTOPICDES&$top=30';
+  const cand = new Map();
+  for (const w of probe) {
+    const list = await call(company, 'GET', `LOGPART?$filter=${enc(`contains(PARTDES,'${q(w)}') and STATDES eq 'פעיל'`)}&${sel}`).then(rows).catch(() => []);
+    for (const x of list) cand.set(x.PARTNAME, x);
+  }
+  const has = (des, w) => forms(w).some((f) => des.includes(f));
+  return [...cand.values()].map((p) => {
+    const des = String(p.PARTDES ?? '');
+    const hitT = tw.filter((w) => has(des, w)).length;
+    const hitC = cw.filter((w) => has(des, w)).length;
+    return { p, score: hitT + hitC / 2, full: tw.length > 0 && hitT === tw.length };
+  }).filter((c) => c.score > 0).sort((a, b) => b.score - a.score || String(a.p.PARTDES).length - String(b.p.PARTDES).length);
+}
+
 /** פריט לפי קוד, עם תת הפרק והמשאב שלו */
 async function partByCode(company, code) {
   const list = rows(await call(company, 'GET', `LOGPART?$filter=${enc(`PARTNAME eq '${q(code)}'`)}&$select=PARTNAME,PARTDES,STATDES,BUD_SUBCHAPTERNAME,BUD_SUBCHAPTERDES,BUD_SUBTOPICNAME,BUD_SUBTOPICDES&$top=1`));
@@ -702,7 +732,7 @@ async function cancelReceipt(company, docno) {
 
 module.exports = {
   COMPANIES, isEnabled, allowed, companyOf, isTest, resolveCompany, companiesByName, PriorityError,
-  GENERAL, NO_VAT_CODE, TAX_CODES, PAY_TERMS, DEFAULT_PAY, payTerm, payLabel, payFromText, dueDate, projectWarehouses, warehouses, warehouseExists, defaultWarehouse, supplierHistory, recentLines, partByCode, findPartsByText, generalCoding, warehouseOf, findSuppliers, supplierByCode, findReceiptByBooknum, getOrder, openOrders, findPartExact, lastSubchapter, projects, matchProjects, readReceipt,
+  GENERAL, NO_VAT_CODE, TAX_CODES, PAY_TERMS, DEFAULT_PAY, payTerm, payLabel, payFromText, dueDate, projectWarehouses, warehouses, warehouseExists, defaultWarehouse, supplierHistory, recentLines, partByCode, findPartsByText, searchParts, generalCoding, warehouseOf, findSuppliers, supplierByCode, findReceiptByBooknum, getOrder, openOrders, findPartExact, lastSubchapter, projects, matchProjects, readReceipt,
   readDialog, createReceipt, addOrderLine, addFreeLine, setLineQty, setLineDes, setHeader, attach, deleteAttachment, setDialog, finalizeReceipt, cancelReceipt, receiptStatus, deleteLines,
   _call: call
 };
