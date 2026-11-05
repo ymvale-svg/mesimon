@@ -121,7 +121,8 @@ const num = { type: 'number' };
 const EXTRACT_SCHEMA = {
   type: 'object',
   properties: {
-    doc_type: { type: 'string', enum: ['delivery_note', 'invoice', 'other'] },
+    doc_type: { type: 'string', enum: ['delivery_note', 'invoice', 'payment', 'other'] },
+    doc_label: str,
     recipient_name: str, recipient_vat: str,
     supplier_name: str, supplier_vat: str,
     doc_number: str, po_number: str, supplier_order_ref: str,
@@ -148,7 +149,7 @@ const EXTRACT_SCHEMA = {
     },
     warnings: { type: 'array', items: str }
   },
-  required: ['doc_type', 'recipient_name', 'recipient_vat', 'supplier_name', 'supplier_vat', 'doc_number', 'po_number', 'supplier_order_ref',
+  required: ['doc_type', 'doc_label', 'recipient_name', 'recipient_vat', 'supplier_name', 'supplier_vat', 'doc_number', 'po_number', 'supplier_order_ref',
     'date', 'doc_date', 'delivery_place', 'project_hint', 'purchase_type', 'lines', 'totals', 'warnings'],
   additionalProperties: false
 };
@@ -173,7 +174,7 @@ const CLASSIFY_SCHEMA = {
   type: 'object',
   properties: {
     kind: { type: 'string', enum: ['attachment', 'new_document'] },
-    doc_type: { type: 'string', enum: ['delivery_note', 'invoice', 'other'] },
+    doc_type: { type: 'string', enum: ['delivery_note', 'invoice', 'payment', 'other'] },
     doc_number: str, supplier_name: str
   },
   required: ['kind', 'doc_type', 'doc_number', 'supplier_name'],
@@ -351,6 +352,26 @@ const reply = (s, text, extra = {}) => { if (s && s.step) s.lastPrompt = text; r
 const linesOf = (doc) => (doc.lines ?? []).map((l, i) => ({ n: i + 1, description: l.description, supplierCode: l.supplier_code, qty: l.qty, unit: l.unit,
   price: l.unit_price, discount: l.discount_pct, handwritten: l.handwritten, unclear: l.unclear, options: l.options ?? [] }));
 
+/** שם סוג המסמך לתצוגה: "חשבונית", "תעודת משלוח", או כפי שכתוב עליו ("אגרת שלטים", "שובר תשלום") */
+function docName(d, short = false) {
+  if (!d) return 'מסמך';
+  if (d.doc_type === 'invoice') return 'חשבונית';
+  if (d.doc_type === 'delivery_note') return short ? 'תעודה' : 'תעודת משלוח';
+  const label = String(d.doc_label ?? '').trim();
+  return label && label.length <= 24 ? label : d.doc_type === 'payment' ? 'שובר תשלום' : 'מסמך';
+}
+
+/*
+ * מסמך בלי שורות פריטים אבל עם סכום (אגרה, שובר תשלום) — שורה אחת: תיאור המסמך, כמות 1, הסכום לפני מע"מ.
+ */
+function oneLineOf(doc) {
+  const t = doc.totals ?? {};
+  const amount = Number(t.before_vat || t.subtotal || t.total || 0);
+  if (!(amount > 0)) return null;
+  return { description: [doc.doc_label || docName(doc), doc.doc_number].filter(Boolean).join(' ').slice(0, 48), supplier_code: '', qty: 1, unit: "יח'",
+    unit_price: amount, discount_pct: 0, line_total: amount, handwritten: '', unclear: false, options: [] };
+}
+
 /*
  * חשבונית מס עם שורה אחת שמפנה לחשבון לתשלום ("ח-ן לתשלום 2011796") — הפירוט בחשבון.
  * השורות של ה-GR נלקחות מהחשבון; מספר התעודה, הסכום לפני מע"מ והבקרה — מהחשבונית.
@@ -383,10 +404,22 @@ async function onMainDoc(user, s, file, pre = null) {
   // אזהרות — בעברית בלבד; אזהרה שהגיעה באנגלית למרות ההנחיה אינה מוצגת
   doc.warnings = (doc.warnings ?? []).filter((w) => /[\u0590-\u05FF]/.test(w) && !/^[\x00-\x7F]{12}/.test(String(w).trim())).slice(0, 3);
   s.doc = doc;
+  // כמעט מכל מסמך ספק אפשר לקלוט קבלת סחורה (גם אגרה או שובר תשלום). רק כשלא ברור שזה מסמך ספק — שואלים
   if (doc.doc_type === 'other') {
-    return { s: null, replies: ['זה לא נראה כמו תעודת משלוח או חשבונית ספק' + (doc.warnings?.length ? ` (${doc.warnings.join('; ')})` : '') + '. קבלת הסחורה בוטלה. אפשר להתחיל שוב עם צילום אחר.'], status: 'unclear', result: 'מסמך שאינו תעודה/חשבונית' };
+    s.step = 'doctype';
+    return reply(s, [`🤔 זה נראה כמו *${docName(doc)}*${doc.doc_number ? ` ${doc.doc_number}` : ''}${doc.supplier_name ? ` של ${doc.supplier_name}` : ''}, לא תעודת משלוח או חשבונית.`,
+      'לקלוט אותו בכל זאת כ*קבלת סחורה*? *כן* / *לא*'].join('\n'), { status: 'unclear', result: `סוג מסמך לא ברור: ${doc.doc_label || 'other'}` });
   }
-  if (!doc.lines?.length) return reply(s, 'לא מצאתי שורות פריטים במסמך. נסו לצלם שוב, כך שכל הטבלה תיראה.', { status: 'unclear', result: 'אין שורות' });
+  return afterDocType(s);
+}
+
+async function afterDocType(s) {
+  const doc = s.doc;
+  if (!doc.lines?.length) {
+    const one = oneLineOf(doc);
+    if (!one) return reply(s, 'לא מצאתי במסמך שורות פריטים או סכום. נסו לצלם שוב, כך שכל הדף ייראה.', { status: 'unclear', result: 'אין שורות' });
+    doc.lines = [one];
+  }
   s.lines = linesOf(doc);
   return resolveCompany(s);
 }
@@ -437,7 +470,7 @@ async function askHeader(s) {
   }
   s.step = 'header';
   const lines = [
-    `📦 *קבלת סחורה* — ${d.doc_type === 'invoice' ? 'חשבונית' : 'תעודת משלוח'} ${d.doc_number}`,
+    `📦 *קבלת סחורה* — ${docName(d)} ${d.doc_number}`,
     companyLine(s),
     s.via === 'sandbox' ? `   (המסמך מופנה ל${Priority.resolveCompany(d.recipient_vat).matched?.name ?? 'חברה אחרת'} — נקלט לעותק הבדיקה)` : null,
     `🚚 ספק: *${s.supplier.name}* (${s.supplier.code})${s.supplierBy === 'vat' ? ` — לפי ח.פ. ${String(d.supplier_vat).replace(/\D/g, '')}` : s.supplierBy === 'name' ? (d.supplier_vat ? ` — לפי שם: ח.פ. ${String(d.supplier_vat).replace(/\D/g, '')} שבמסמך לא נמצא בכרטיסי הספקים` : ' — לפי שם, אין ח.פ. במסמך') : ''}`,
@@ -796,7 +829,7 @@ async function createDraft(user, s) {
   await Priority.setHeader(c, docno, { DETAILS: receiverDetails(user, s.doc.doc_number) }).catch(() => {});
   for (const f of s.files) {
     try {
-      await Priority.attach(c, docno, { buf: fs.readFileSync(f.path), mime: f.mime, description: f.label === 'מסמך ראשי' ? `${s.doc.doc_type === 'invoice' ? 'חשבונית' : 'תעודת משלוח'} ${s.doc.doc_number}`.slice(0, 32) : f.label });   // התיאור בפריוריטי נחתך אחרי ~32 תווים
+      await Priority.attach(c, docno, { buf: fs.readFileSync(f.path), mime: f.mime, description: f.label === 'מסמך ראשי' ? `${docName(s.doc)} ${s.doc.doc_number}`.slice(0, 32) : f.label });   // התיאור בפריוריטי נחתך אחרי ~32 תווים
     } catch (err) {
       problems.push({ what: `${f.label === 'מסמך ראשי' ? 'צילום המסמך' : f.label} לא צורף לנספחים`, err: `נספח ${f.label}: ${err.message}` });
     }
@@ -820,7 +853,7 @@ function writeDialog(user, s) {
   return Priority.setDialog(s.company, s.docno, [
     'קבלת סחורה דרך בוט משימון',
     `התקבל ע"י: ${user.full_name} | ${nowHe()}`,
-    `מסמך מקור: ${d.doc_type === 'invoice' ? 'חשבונית' : 'תעודת משלוח'} ${d.doc_number} של ${s.supplier.name}, מצורף בנספחים`,
+    `מסמך מקור: ${docName(d)} ${d.doc_number} של ${s.supplier.name}, מצורף בנספחים`,
     d.supplier_order_ref ? `הזמנה אצל הספק: ${d.supplier_order_ref}` : null,
     d.detail ? `פירוט השורות: מתוך ${d.detail.doc_type === 'invoice' ? 'חשבונית' : 'חשבון לתשלום'} ${d.detail.doc_number}` : null,
     d.date || d.delivery_place ? `אספקה: ${[ymdHe(d.date), d.delivery_place].filter(Boolean).join(', ')}` : null,
@@ -884,7 +917,7 @@ async function routeFile(user, s, file, t) {
     const r = await maybeAdoptDetail(user, s, saved, cls);
     return r ?? attachNow(user, s, saved);
   }
-  s.pendingNew = { file: saved, label: cls?.doc_number ? `${cls.doc_type === 'invoice' ? 'חשבונית' : cls.doc_type === 'delivery_note' ? 'תעודת משלוח' : 'מסמך'} ${cls.doc_number}${cls.supplier_name ? ` של ${cls.supplier_name}` : ''}` : '' };
+  s.pendingNew = { file: saved, label: cls?.doc_number ? `${docName(cls)} ${cls.doc_number}${cls.supplier_name ? ` של ${cls.supplier_name}` : ''}` : '' };
   const cur = s.docno ? `ל-${s.docno}` : 'לקבלת הסחורה הנוכחית';
   // לא ‎reply()‎: השאלה הזו אינה "השאלה של השלב", ואחרי התשובה חוזרים לזו שחיכתה
   return { s, replies: [[cls ? `📄 זה נראה כמו מסמך חדש${s.pendingNew.label ? `: ${s.pendingNew.label}` : ''}.` : '📄 קיבלתי מסמך נוסף.',
@@ -946,7 +979,7 @@ async function queueNew(user, s, f) {
   s.queued = [...queueOf(s), f];
   if (!s.docno && s.step !== 'files') {
     // עוד אין טיוטא: העובד בחר "קבלת סחורה חדשה" — הנוכחית מתבטלת, ועוברים לחדש
-    const was = s.doc?.doc_number ? ` (${s.doc.doc_type === 'invoice' ? 'חשבונית' : 'תעודה'} ${s.doc.doc_number})` : '';
+    const was = s.doc?.doc_number ? ` (${docName(s.doc, true)} ${s.doc.doc_number})` : '';
     const r = await cancel(user, s);
     return startQueued(user, s, [r.replies[0].replace('קבלת הסחורה בוטלה.', `קבלת הסחורה הקודמת${was} בוטלה.`)]);
   }
@@ -979,7 +1012,7 @@ async function startQueued(user, oldS, before = []) {
 async function sortBatch(user, s) {
   const files = s.files.slice(0, 6);
   const read = await Promise.all(files.map((f) => ai.extract(f).then((doc) => ({ f, doc })).catch(() => ({ f, doc: null }))));
-  const isMain = (d) => d && ['invoice', 'delivery_note'].includes(d.doc_type) && (d.lines ?? []).length > 0;
+  const isMain = (d) => d && ['invoice', 'delivery_note', 'payment'].includes(d.doc_type) && ((d.lines ?? []).length > 0 || d.doc_type === 'payment');
   const main = read.find((x) => isMain(x.doc));
   if (!main) return onMainDoc(user, s, files[0], read[0].doc ?? undefined);
   const textOf = (d) => [d.doc_number, d.po_number, d.supplier_order_ref, ...(d.lines ?? []).map((l) => `${l.description} ${l.supplier_code}`)].join(' ');
@@ -994,7 +1027,7 @@ async function sortBatch(user, s) {
     if (x === main) continue;
     if (isMain(x.doc) && !related(x.doc)) separate.push(x); else attach.push(x);
   }
-  const name = (d) => (d?.doc_number ? `${d.doc_type === 'invoice' ? 'חשבונית' : d.doc_type === 'delivery_note' ? 'תעודה' : 'מסמך'} ${d.doc_number}` : 'תמונה');
+  const name = (d) => (d?.doc_number ? `${docName(d, true)} ${d.doc_number}` : 'תמונה');
   const detail = attach.find((x) => isDetailOf(main.doc, x.doc));
   const out = await onMainDoc(user, s, main.f, detail ? withDetail(main.doc, detail.doc) : main.doc);
   const target = out.s ?? s;
@@ -1102,7 +1135,7 @@ async function handle({ user, text = '', file = null }) {
   const OWN_FILE_STEPS = ['files', 'review', 'offer', 'doc'];
   if (!s || (file && isTrigger(t) && !OWN_FILE_STEPS.includes(s.step))) {
     if (s) {
-      const was = s.doc?.doc_number ? `${s.doc.doc_type === 'invoice' ? 'חשבונית' : 'תעודה'} ${s.doc.doc_number}` : '';
+      const was = s.doc?.doc_number ? `${docName(s.doc, true)} ${s.doc.doc_number}` : '';
       const r = await cancel(user, s, 'הקודמת בוטלה');
       restarted = `↩️ ${r.replies[0].replace('קבלת הסחורה הקודמת בוטלה.', `קבלת הסחורה הקודמת${was ? ` (${was})` : ''} בוטלה.`)} מתחיל עם המסמך החדש.`;
     }
@@ -1145,6 +1178,12 @@ async function step(user, s, t, file) {
     case 'doc':
       if (!file) return reply(s, 'מחכה לצילום של תעודת המשלוח או החשבונית. או *ביטול*.');
       return onMainDoc(user, s, file);
+
+    case 'doctype': {
+      if (YES.test(t)) return afterDocType(s);
+      if (/^(לא|אל|ממש לא|no)([\s,.!]|$)/i.test(t)) return { s: null, replies: ['בסדר, לא נקלט. 👍 אפשר להתחיל שוב עם צילום אחר.'], status: 'ok', result: 'מסמך לא נקלט' };
+      return reply(s, `לקלוט את ה${docName(s.doc)} כ*קבלת סחורה*? *כן* / *לא*`);
+    }
 
     case 'offer': {
       if (file) {
