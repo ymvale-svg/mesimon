@@ -690,6 +690,26 @@ CREATE TABLE IF NOT EXISTS wa_forwards (
 );
 CREATE INDEX IF NOT EXISTS idx_wa_forwards_user ON wa_forwards(user_id, id);
 
+/*
+ * הסקירה הלילית של יומן הבוט (‎server/bot-review.js‎): מה עבד, מה לא, מה
+ * למדנו על האנשים, ואילו תיקונים מוצעים. ‎fixes‎ — מערך: כותרת, הבעיה, דוגמה,
+ * קישור למיזוג, ומצב שהמנהל קובע (‎new‎ · ‎done‎ · ‎dismissed‎) עם הערה —
+ * והסקירה הבאה רואה את ההחלטות ולומדת מהן.
+ */
+CREATE TABLE IF NOT EXISTS bot_reviews (
+  id             INTEGER PRIMARY KEY AUTOINCREMENT,
+  created_at     TEXT    NOT NULL,
+  period_from    TEXT    NOT NULL DEFAULT '',
+  period_to      TEXT    NOT NULL DEFAULT '',
+  subject        TEXT    NOT NULL DEFAULT '',
+  summary        TEXT    NOT NULL DEFAULT '',
+  conversations  INTEGER NOT NULL DEFAULT 0,
+  succeeded      INTEGER NOT NULL DEFAULT 0,
+  patterns       TEXT    NOT NULL DEFAULT '[]',
+  fixes          TEXT    NOT NULL DEFAULT '[]',
+  emailed        INTEGER NOT NULL DEFAULT 0
+);
+
 CREATE TABLE IF NOT EXISTS wa_outbox (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
   user_id     INTEGER REFERENCES users(id) ON DELETE CASCADE,
