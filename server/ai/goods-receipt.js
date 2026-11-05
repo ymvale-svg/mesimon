@@ -1136,7 +1136,8 @@ async function sweep(send, { force = false } = {}) {
       if (age >= TTL) {
         if (s.docno) {
           let ok = true;
-          await Priority.cancelReceipt(s.company, s.docno).catch((err) => { ok = false; alertAdmins(user, s, 'טיוטא נטושה לא בוטלה', [err.message]); });
+          const r = await Priority.cancelReceipt(s.company, s.docno).catch((err) => { ok = false; alertAdmins(user, s, 'טיוטא נטושה לא בוטלה', [err.message]); });
+          if (r?.skipped) ok = false;   // אושרה או בוטלה במחשב — לא נוגעים ולא מודיעים על ביטול
           if (ok) {
             send(userId, `⏱ *${s.docno}* (${s.supplier?.name ?? ''}) חיכתה לאישור יותר מ-24 שעות, ובוטלה. אם הסחורה התקבלה — שלחו את המסמך שוב.`);
             alertAdmins(user, s, 'טיוטא נטושה בוטלה', ['חיכתה לאישור יותר מ-24 שעות.']);
@@ -1161,8 +1162,8 @@ async function cancel(user, s, why = 'בוטלה') {
   let note = '';
   if (s?.docno) {
     try {
-      await Priority.cancelReceipt(s.company, s.docno);
-      note = ` הטיוטא ${s.docno} בוטלה בפריוריטי.`;
+      const r = await Priority.cancelReceipt(s.company, s.docno);
+      note = r?.skipped ? ` ${s.docno} כבר *${r.skipped}* בפריוריטי, ולא שונתה.` : ` הטיוטא ${s.docno} בוטלה בפריוריטי.`;
     } catch (err) {
       note = ` ⚠️ הטיוטא ${s.docno} לא בוטלה בפריוריטי. מנהל המערכת קיבל הודעה ויטפל.`;
       alertAdmins(user, s, 'טיוטא לא בוטלה', [`הטיוטא נשארה בפריוריטי; שורות מהזמנה תופסות יתרה עד שתבוטל.`, err.message]);
@@ -1185,6 +1186,26 @@ async function handle({ user, text = '', file = null }) {
     clear(user.id, s);
     s = null;
   }
+  // ה-GR אושר או בוטל ישר בפריוריטי (במחשב) — הקליטה בבוט נסגרת, וההודעה מטופלת כהתחלה חדשה
+  let released = '';
+  if (s?.docno) {
+    const status = await Priority.receiptStatus(s.company, s.docno).catch(() => 'טיוטא');
+    if (status !== 'טיוטא') {
+      released = `ℹ️ *${s.docno}* כבר ${status ? `*${status}*` : 'לא קיימת'} בפריוריטי (עודכנה במחשב), ולכן סגרתי אותה בבוט.`;
+      const queued = queueOf(s);
+      const keep = new Set(queued.map((f) => f.path));
+      clear(user.id, { ...s, files: (s.files ?? []).filter((f) => !keep.has(f.path)) });   // מסמכים בתור נשארים
+      s = null;
+      if (queued.length && !file && !isTrigger(t)) {
+        const out = await startQueued(user, { queued }, [released]);
+        if (out.s) save(user.id, out.s);
+        return { replies: out.replies, files: out.files ?? [], status: out.status ?? 'ok', result: `שוחרר: ${status}`, docno: null };
+      }
+      if (!file && !isTrigger(t)) {
+        return { replies: [`${released}\nאפשר להתחיל קבלת סחורה חדשה — שלחו צילום, או כתבו *קבלת סחורה*.`], status: 'ok', result: `שוחרר: ${status}` };
+      }
+    }
+  }
   if (!Priority.isEnabled()) return { replies: ['החיבור לפריוריטי עוד לא הוגדר בשרת. פנו למנהל המערכת.'], status: 'error', result: 'פריוריטי לא מוגדר' };
   if (!Claude.isEnabled()) return { replies: ['קריאת מסמכים דורשת חיבור AI, שעוד לא הוגדר בשרת.'], status: 'error', result: 'AI לא מוגדר' };
 
@@ -1192,7 +1213,7 @@ async function handle({ user, text = '', file = null }) {
   if (!s && file && !isTrigger(t)) {
     const saved = await saveFile(user.id, file, 'מסמך ראשי');
     save(user.id, { step: 'offer', startedAt: Date.now(), files: [saved] });
-    return { replies: ['📦 לקלוט את המסמך כ*קבלת סחורה* בפריוריטי?\n*כן* — להמשיך, *לא* — לא לקלוט.'], status: 'ok', result: 'הצעה: קבלת סחורה מתמונה' };
+    return { replies: [...(released ? [released] : []), '📦 לקלוט את המסמך כ*קבלת סחורה* בפריוריטי?\n*כן* — להמשיך, *לא* — לא לקלוט.'], status: 'ok', result: 'הצעה: קבלת סחורה מתמונה' };
   }
 
   // התחלה חדשה: "קבלת סחורה" עם קובץ באמצע קליטה, או קובץ חדש באמצע קליטה שעוד אין לה טיוטא
@@ -1210,7 +1231,7 @@ async function handle({ user, text = '', file = null }) {
     s = { step: 'doc', startedAt: Date.now() };
     if (!file) {
       save(user.id, s);
-      return { replies: ['📦 *קבלת סחורה* — שלחו צילום של תעודת המשלוח או החשבונית (המסמך הראשי, שממנו נקראים הנתונים).'], status: 'ok', result: 'התחלה' };
+      return { replies: [...(released ? [released] : []), '📦 *קבלת סחורה* — שלחו צילום של תעודת המשלוח או החשבונית (המסמך הראשי, שממנו נקראים הנתונים).'], status: 'ok', result: 'התחלה' };
     }
   }
 
@@ -1238,6 +1259,7 @@ async function handle({ user, text = '', file = null }) {
   }
   if (out.s === null) clear(user.id, s);
   else save(user.id, out.s ?? s);
+  if (released) restarted = [released, restarted].filter(Boolean).join('\n');
   return { replies: restarted ? [restarted, ...out.replies] : out.replies, files: out.files ?? [], status: out.status ?? 'ok', result: out.result ?? `שלב ${(out.s ?? s)?.step ?? 'סיום'}`, docno: s.docno ?? null };
 }
 
@@ -1482,7 +1504,8 @@ async function step(user, s, t, file) {
       }
       if (/^(מאשר|מאשרת|אישור|אשר)([\s,.!]|$)/.test(t)) {
         try {
-          await Priority.finalizeReceipt(s.company, s.docno);
+          // כבר סופית (אושרה במחשב) — לא מאשרים שוב
+          if ((await Priority.receiptStatus(s.company, s.docno)) !== 'סופית') await Priority.finalizeReceipt(s.company, s.docno);
         } catch (err) {
           alertAdmins(user, s, 'GR לא הפך לסופי', [err.message]);
           return { s: null, replies: [`ה-GR *${s.docno}* נשמר כטיוטא, אבל לא הפך לסופי. מנהל המערכת קיבל הודעה ויטפל.`], status: 'error', result: `סופית נכשלה: ${err.message}` };
