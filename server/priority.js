@@ -423,51 +423,84 @@ function payFromText(text) {
   return null;
 }
 
-/** המחסן של הפרויקט (‎BUD_WARHSNAME‎ במסך הפרויקטים), או ‎Main‎ כשלפרויקט אין מחסן */
 /**
- * המחסנים שאליהם נקלטו בפועל קבלות של הפרויקט, עם השם (‎TOWARHSDES‎) ומספר הקבלות — מסך המחסנים
- * סגור ל-API, ולכן זו הרשימה. ‎[]‎ — לפרויקט אין קבלות קודמות.
+ * מסך המחסנים (‎WAREHOUSES‎) — הרשימה של החברה, בלי הלא-פעילים. ‎project‎ — הפרויקט שהמחסן משויך
+ * אליו (‎DOCNO‎). נשמר לשעה. ‎null‎ — המסך לא זמין (אז לא מסננים לפיו).
+ */
+const warehouseCache = new Map();
+async function warehouses(company) {
+  const hit = warehouseCache.get(company);
+  if (hit && Date.now() - hit.at < 3600000) return hit.list;
+  let list = null;
+  try {
+    list = rows(await call(company, 'GET', 'WAREHOUSES?$select=WARHSNAME,WARHSDES,DOCNO,PROJDES,INACTIVE&$top=2000'))
+      .filter((r) => r.WARHSNAME && !r.INACTIVE)
+      .map((r) => ({ code: r.WARHSNAME, name: r.WARHSDES ?? '', project: r.DOCNO || '', projectDes: r.PROJDES ?? '' }));
+    warehouseCache.set(company, { at: Date.now(), list });
+  } catch (err) {
+    console.error(`[משימון] מסך המחסנים בפריוריטי (${company}) לא זמין:`, err.message);
+  }
+  return list;
+}
+
+/** המחסן קיים ופעיל בחברה (כשמסך המחסנים לא זמין — מניחים שכן) */
+async function warehouseExists(company, code) {
+  const list = await warehouses(company);
+  return !list || list.some((w) => w.code === code);
+}
+
+/** מחסן ברירת המחדל של החברה: ‎Main‎ אם קיים, אחרת המחסן היחיד שאינו של פרויקט */
+async function defaultWarehouse(company) {
+  const list = await warehouses(company);
+  if (!list || list.some((w) => w.code === 'Main')) return 'Main';
+  const free = list.filter((w) => !w.project);
+  return (free.length === 1 ? free[0] : list.length === 1 ? list[0] : null)?.code ?? 'Main';
+}
+
+/**
+ * המחסנים של הפרויקט: קודם מסך המחסנים — המחסנים ששויכו לפרויקט (‎WAREHOUSES.DOCNO‎); כשאין —
+ * המחסנים שאליהם נקלטו בפועל קבלות של הפרויקט, רק כאלה שקיימים במסך המחסנים.
+ * ‎[{ code, name, n, linked }]‎; ‎n‎ — מספר הקבלות שנקלטו אליו בפרויקט.
  */
 async function projectWarehouses(company, project) {
   if (!project) return [];
-  const used = rows(await call(company, 'GET',
-    `DOCUMENTS_P?$filter=${enc(`PROJDOCNO eq '${q(project)}' and STATDES ne 'מבוטלת'`)}&$select=TOWARHSNAME,TOWARHSDES&$orderby=CURDATE%20desc&$top=200`));
+  const [list, used] = await Promise.all([
+    warehouses(company),
+    call(company, 'GET', `DOCUMENTS_P?$filter=${enc(`PROJDOCNO eq '${q(project)}' and STATDES ne 'מבוטלת'`)}&$select=TOWARHSNAME,TOWARHSDES&$orderby=CURDATE%20desc&$top=200`)
+      .then(rows).catch(() => [])
+  ]);
+  const count = new Map();
+  for (const r of used) if (r.TOWARHSNAME) count.set(r.TOWARHSNAME, (count.get(r.TOWARHSNAME) ?? 0) + 1);
+  const linked = (list ?? []).filter((w) => w.project === project);
+  if (linked.length) {
+    return linked.map((w) => ({ code: w.code, name: w.name, n: count.get(w.code) ?? 0, linked: true })).sort((a, b) => b.n - a.n);
+  }
   const m = new Map();
   for (const r of used) {
-    if (!r.TOWARHSNAME) continue;
-    const e = m.get(r.TOWARHSNAME) ?? { code: r.TOWARHSNAME, name: r.TOWARHSDES ?? '', n: 0 };
-    e.n += 1; if (!e.name && r.TOWARHSDES) e.name = r.TOWARHSDES;
+    if (!r.TOWARHSNAME || (list && !list.some((w) => w.code === r.TOWARHSNAME))) continue;
+    const e = m.get(r.TOWARHSNAME) ?? { code: r.TOWARHSNAME, name: r.TOWARHSDES || list?.find((w) => w.code === r.TOWARHSNAME)?.name || '', n: 0, linked: false };
+    e.n += 1;
     m.set(r.TOWARHSNAME, e);
   }
   return [...m.values()].sort((a, b) => b.n - a.n);
 }
 
 /*
- * המחסן — נלמד מקבלות הסחורה של החברה, כי המחסן שמוגדר בפרויקט אינו תמיד המחסן שקולטים אליו
- * (ב-a160226 132 מתוך 194 קבלות נכנסו למחסן הפרויקט; בדניה הירוקה, באלעד ובמורדות — כמעט תמיד Main,
- * ומחסן הפרויקט "01" בדניה הירוקה לא שימש אף פעם):
- *   1. המחסן שקולטים אליו הכי הרבה בפרויקט הזה;
- *   2. מחסן הפרויקט — רק אם כבר קלטו אליו בחברה;
- *   3. Main.
+ * המחסן כשאין לפרויקט מחסן משויך ואין קבלות קודמות: מחסן הפרויקט שבמסך הפרויקטים
+ * (‎BUD_WARHSNAME‎) — רק אם הוא קיים במסך המחסנים (בדניה הירוקה "01" אינו קיים); אחרת מחסן
+ * ברירת המחדל של החברה (‎Main‎).
  */
 async function warehouseOf(company, project) {
-  if (!project) return 'Main';
   try {
-    const used = rows(await call(company, 'GET',
-      `DOCUMENTS_P?$filter=${enc(`PROJDOCNO eq '${q(project)}' and STATDES ne 'מבוטלת'`)}&$select=TOWARHSNAME&$orderby=CURDATE%20desc&$top=100`));
-    const count = new Map();
-    for (const r of used) if (r.TOWARHSNAME) count.set(r.TOWARHSNAME, (count.get(r.TOWARHSNAME) ?? 0) + 1);
-    const best = [...count].sort((a, b) => b[1] - a[1])[0]?.[0];
-    if (best) return best;
-    const pw = (await projects(company)).find((x) => x.code === project)?.warehouse;
-    if (pw) {
-      const seen = rows(await call(company, 'GET', `DOCUMENTS_P?$filter=${enc(`TOWARHSNAME eq '${q(pw)}'`)}&$select=DOCNO&$top=1`));
-      if (seen.length) return pw;
-    }
+    const opts = await projectWarehouses(company, project);
+    if (opts.length) return opts[0].code;
+    const pw = project && (await projects(company)).find((x) => x.code === project)?.warehouse;
+    if (pw && await warehouseExists(company, pw)) return pw;
+    return await defaultWarehouse(company);
   } catch (err) {
     console.error(`[משימון] מחסן לפרויקט ${project} (${company}):`, err.message);
+    return 'Main';
   }
-  return 'Main';
 }
 
 /** GR טיוטא. ‎project‎ — כשיש הזמנה, הפרויקט שלה. ‎warehouse‎ — המחסן של הפרויקט */
@@ -565,7 +598,7 @@ async function cancelReceipt(company, docno) {
 
 module.exports = {
   COMPANIES, isEnabled, allowed, companyOf, isTest, resolveCompany, PriorityError,
-  PAY_TERMS, DEFAULT_PAY, payTerm, payLabel, payFromText, dueDate, projectWarehouses, supplierHistory, recentLines, partByCode, findPartsByText, generalCoding, warehouseOf, findSuppliers, supplierByCode, findReceiptByBooknum, getOrder, openOrders, findPartExact, lastSubchapter, projects, matchProjects, readReceipt,
+  PAY_TERMS, DEFAULT_PAY, payTerm, payLabel, payFromText, dueDate, projectWarehouses, warehouses, warehouseExists, defaultWarehouse, supplierHistory, recentLines, partByCode, findPartsByText, generalCoding, warehouseOf, findSuppliers, supplierByCode, findReceiptByBooknum, getOrder, openOrders, findPartExact, lastSubchapter, projects, matchProjects, readReceipt,
   readDialog, createReceipt, addOrderLine, addFreeLine, setLineQty, setHeader, attach, setDialog, finalizeReceipt, cancelReceipt,
   _call: call
 };
