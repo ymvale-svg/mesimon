@@ -62,6 +62,29 @@ const YES = /^(כן|נכון|מאשר|מאשרת|אשר|אישור|תקין|יא
 const CANCEL = /^(ביטול|בטל|לבטל|עזוב|יציאה|stop)([\s,.!]|$)/i;
 /** "תוסיף בדו שיח: ...", "הערה: ...", "תרשום בהערות ..." — הערה חופשית של המקבל לדו-שיח הפנימי, בכל שלב */
 const NOTE_CMD = /^\s*(?:תוסיף|תוסיפי|הוסף|להוסיף|תרשום|תכתוב|רשום|כתוב)?\s*(?:ל|ב)?\s*(?:דו[\s-]*שיח(?:\s*פנימי)?|הערה|הערות)\s*[,:\-–]?\s*([\s\S]+)$/;
+/*
+ * כפתורים לתשובה (וואטסאפ, עד 3). הכיתוב של כל כפתור הוא בדיוק המילה שהבוט מבין ("כן 👍", "מאשר 👍"),
+ * כך שלחיצה עובדת גם כשהיא חוזרת כטקסט רגיל. ‎[]‎ — בלי כפתורים (רשימות ממוספרות, שאלות פתוחות).
+ */
+function buttonsFor(s) {
+  if (!s) return [];
+  if (s.confirmCancel) return ['כן, לבטל 👍', 'חזרה לטיוטא'];
+  if (s.pendingNew) return ['צרף כנספח', 'קבלה חדשה', 'להתעלם 👎'];
+  if (s.pendingList) return ['כן 👍', 'לא 👎'];
+  switch (s.step) {
+    case 'offer': case 'doctype': return ['כן 👍', 'לא 👎'];
+    case 'header': return ['כן 👍', s.noVat ? 'עם מע"מ' : 'ללא מע"מ', 'ביטול'];
+    case 'order': return ['בלי הזמנה 👎', 'ביטול'];
+    case 'lines': return ['כן 👍', 'ביטול'];
+    case 'parts': return ['כן 👍', 'כללי'];
+    case 'files': return ['סיום 👍'];
+    case 'review': return ['מאשר 👍', 'ביטול'];
+    default: return [];
+  }
+}
+
+/** "ספק …", "שם ספק: …", "הספק הוא …", "ספק אחר" — ‎[1]‎ השם או המספר */
+const SUPPLIER_CMD = /^\s*(?:שם\s*(?:ה)?ספק|(?:ה)?ספק(?:\s+(?:הוא|זה|נכון|אחר))?|לשנות\s*ספק|תשנה\s*ספק|ספק\s*שגוי)(?=[\s:\-–]|$)\s*[:\-–]?\s*([\s\S]*)$/;
 const DONE_FILES = /^(סיום|סיימתי|זהו|אין|אין נספחים|בלי נספחים|המשך)([\s,.!]|$)/;
 const NO_ORDER = /^(בלי הזמנה|אין הזמנה|ללא הזמנה|לפי המסמך|אין|בלי|לא)([\s,.!]|$)/;
 
@@ -196,6 +219,18 @@ const CLASSIFY_SCHEMA = {
   required: ['kind', 'doc_type', 'doc_number', 'supplier_name'],
   additionalProperties: false
 };
+const PARTS_SCHEMA = {
+  type: 'object',
+  properties: { codes: { type: 'array', items: str }, note: str },
+  required: ['codes', 'note'],
+  additionalProperties: false
+};
+const TERMS_SCHEMA = {
+  type: 'object',
+  properties: { terms: { type: 'array', items: str } },
+  required: ['terms'],
+  additionalProperties: false
+};
 const PROJECT_SCHEMA = {
   type: 'object',
   properties: { codes: { type: 'array', items: str }, question: str },
@@ -259,6 +294,14 @@ const ai = {
       ? { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data } }
       : { type: 'image', source: { type: 'base64', media_type: file.mime.includes('png') ? 'image/png' : 'image/jpeg', data } };
     return Claude.json({ system: skill(), content: [block, { type: 'text', text: JSON.stringify({ task: 'classify', current }) }], schema: CLASSIFY_SCHEMA, effort: 'low', live: true });
+  },
+  async partTerms(text, line) {
+    const content = JSON.stringify({ task: 'part_terms', text, line });
+    return Claude.json({ system: skill(), content: [{ type: 'text', text: content }], schema: TERMS_SCHEMA, effort: 'low', live: true });
+  },
+  async parts(text, line, candidates) {
+    const content = JSON.stringify({ task: 'parts', text, line, candidates: candidates.map((c) => ({ code: c.PARTNAME, description: c.PARTDES, chapter: c.BUD_SUBCHAPTERDES ?? '', resource: c.BUD_SUBTOPICDES ?? '' })) });
+    return Claude.json({ system: skill(), content: [{ type: 'text', text: content }], schema: PARTS_SCHEMA, effort: 'low', live: true });
   },
   async project(projects, text) {
     const content = JSON.stringify({ task: 'project', text, projects: projects.map((p) => ({ code: p.code, name: p.des, aliases: p.alias ?? '' })) });
@@ -513,7 +556,7 @@ async function resolveCompany(s) {
 async function resolveSupplier(s) {
   const found = await Priority.findSuppliers(s.company, { vat: s.doc.supplier_vat, name: s.doc.supplier_name });
   s.supplierBy = found.by;
-  if (found.list.length === 1) {
+  if (found.list.length === 1 && !found.weak) {
     s.supplier = { code: found.list[0].SUPNAME, name: found.list[0].SUPDES };
     return askHeader(s);
   }
@@ -523,7 +566,7 @@ async function resolveSupplier(s) {
     return reply(s, [companyLine(s), '', `לא מצאתי בפריוריטי את הספק *${s.doc.supplier_name}*${s.doc.supplier_vat ? ` (ח.פ. ${s.doc.supplier_vat})` : ''}.`,
       'כתבו את מספר הספק בפריוריטי, או *ביטול*.'].join('\n'));
   }
-  return reply(s, [companyLine(s), '', `איזה ספק זה? (במסמך: ${s.doc.supplier_name})`,
+  return reply(s, [companyLine(s), '', found.weak ? `לא מצאתי בפריוריטי ספק בשם *${s.doc.supplier_name}*. אולי אחד מאלה?` : `איזה ספק זה? (במסמך: ${s.doc.supplier_name})`,
     ...s.supplierOptions.map((x, i) => `*${i + 1}.* ${x.name} (${x.code})`), '', 'כתבו מספר, או *ביטול*.'].join('\n'));
 }
 
@@ -574,12 +617,12 @@ async function askHeader(s) {
     `📦 *קבלת סחורה* — ${docName(d)} ${d.doc_number}`,
     companyLine(s),
     s.via === 'sandbox' ? `   (המסמך מופנה ל${companyMatch(d).matched?.name ?? 'חברה אחרת'} — נקלט לעותק הבדיקה)` : null,
-    `🚚 ספק: *${s.supplier.name}* (${s.supplier.code})${s.supplierBy === 'vat' ? ` — לפי ח.פ. ${String(d.supplier_vat).replace(/\D/g, '')}` : s.supplierBy === 'name' ? (d.supplier_vat ? ` — לפי שם: ח.פ. ${String(d.supplier_vat).replace(/\D/g, '')} שבמסמך לא נמצא בכרטיסי הספקים` : ' — לפי שם, אין ח.פ. במסמך') : ''}`,
+    `🚚 ספק: *${s.supplier.name}* (${s.supplier.code})${s.supplierBy === 'vat' ? ` — לפי ח.פ. ${String(d.supplier_vat).replace(/\D/g, '')}` : s.supplierBy === 'name' ? (d.supplier_vat ? ` — לפי שם: ח.פ. ${String(d.supplier_vat).replace(/\D/g, '')} שבמסמך לא נמצא בכרטיסי הספקים` : ' — לפי שם, אין ח.פ. במסמך') : s.supplierBy === 'user' ? ' — נבחר ע"י המקבל' : ['vat_near', 'vat_fuzzy'].includes(s.supplierBy) ? ` — לפי שם וח.פ. דומה (במסמך נקרא ${String(d.supplier_vat).replace(/\D/g, '')})` : ''}`,
     d.date ? `📅 ${ymdHe(d.date)}${d.delivery_place ? ` · ${d.delivery_place}` : ''}` : null,
     `💳 תנאי תשלום: *${Priority.payLabel(s.payCode ?? Priority.DEFAULT_PAY)}*${(s.payCode ?? Priority.DEFAULT_PAY) === Priority.DEFAULT_PAY ? ' (ברירת מחדל)' : ''}${dueText(s, s.payCode ?? Priority.DEFAULT_PAY)}`,
     s.noVat ? `🧾 מע"מ: *ללא מע"מ* — קוד ${Priority.NO_VAT_CODE} ${Priority.TAX_CODES[Priority.NO_VAT_CODE]}${s.noVatBy === 'user' ? ' (נבחר)' : ' — במסמך אין מע"מ'}` : null,
     d.warnings?.length ? `⚠️ ${d.warnings.join('\n⚠️ ')}` : null,
-    '', `נכון? *כן* 👍 להמשך, או *ביטול*. לתנאי תשלום אחר — כתבו אותו ("שוטף 60"). ${s.noVat ? 'יש מע"מ — *עם מע"מ*.' : 'אין מע"מ — *ללא מע"מ*.'}`
+    '', `נכון? *כן* 👍 להמשך, או *ביטול*. ספק אחר — "ספק …". לתנאי תשלום אחר — כתבו אותו ("שוטף 60"). ${s.noVat ? 'יש מע"מ — *עם מע"מ*.' : 'אין מע"מ — *ללא מע"מ*.'}`
   ];
   return reply(s, lines.filter((x) => x !== null).join('\n'));
 }
@@ -792,7 +835,7 @@ function askParts(s) {
     ? [`🏷 ${free.length > 1 ? `כל ${free.length} השורות` : 'השורה'} ← ${codeText(free[0].part)}`, `   (${free[0].part.why})`]
     : free.map((l) => `*${l.n}.* ${l.description}\n   ← ${codeText(l.part)} (${l.part.why})`);
   return reply(s, ['🏷 *מק"ט, תת פרק ומשאב*', ...body, '',
-    '*כן* 👍 — להמשיך. לשנות: מק"ט ("A120-035-010"), "שורה 2 A120-035-010", מילה מהתיאור ("העתקות"), או *כללי*.'].join('\n'));
+    '*כן* 👍 — להמשיך. לשנות: מק"ט ("A120-035-010"), או במילים שלכם ("שורה 1 מיזוג אוויר", "שורה 2 עכבר אלחוטי"), או *כללי*.'].join('\n'));
 }
 
 async function afterLines(s) {
@@ -1235,7 +1278,7 @@ async function answerPendingNew(user, s, t) {
   if (/^\s*1\s*$/.test(t) || ATTACH_WORD.test(t)) { s.pendingNew = null; return attachNow(user, s, f); }
   if (NEW_WORD.test(t)) { s.pendingNew = null; return queueNew(user, s, f, null); }
   // "לא" / "אף אחד" / "3" — לא זה ולא זה: הקובץ נמחק, וחוזרים לשאלה שחיכתה
-  if (/^\s*3\s*$/.test(t) || /^(לא|אל|אף אחד|שום דבר|לא זה ולא זה|תתעלם|עזוב|no)([\s,.!]|$)/i.test(t)) {
+  if (/^\s*3\s*$/.test(t) || /^(לא|אל|אף אחד|שום דבר|לא זה ולא זה|תתעלם|להתעלם|התעלם|עזוב|no)([\s,.!]|$)/i.test(t)) {
     s.pendingNew = null;
     try { fs.unlinkSync(f.path); } catch { /* כבר נמחק */ }
     return { s, replies: [`👍 הקובץ לא צורף, ולא נפתחה קבלה חדשה.${s.lastPrompt ? `\n\n${s.lastPrompt}` : ''}`] };
@@ -1452,7 +1495,7 @@ async function handle({ user, text = '', file = null, reaction = false }) {
   if (!s && file && !isTrigger(t)) {
     const saved = await saveFile(user.id, file, 'מסמך ראשי');
     save(user.id, { step: 'offer', startedAt: Date.now(), files: [saved] });
-    return { replies: [...(released ? [released] : []), '📦 לקלוט את המסמך כ*קבלת סחורה* בפריוריטי?\n*כן* 👍 — להמשיך, *לא* 👎 — לא לקלוט.'], status: 'ok', result: 'הצעה: קבלת סחורה מתמונה' };
+    return { replies: [...(released ? [released] : []), '📦 לקלוט את המסמך כ*קבלת סחורה* בפריוריטי?\n*כן* 👍 — להמשיך, *לא* 👎 — לא לקלוט.'], status: 'ok', result: 'הצעה: קבלת סחורה מתמונה', buttons: ['כן 👍', 'לא 👎'] };
   }
 
   // התחלה חדשה: "קבלת סחורה" עם קובץ באמצע קליטה, או קובץ חדש באמצע קליטה שעוד אין לה טיוטא
@@ -1505,11 +1548,12 @@ async function handle({ user, text = '', file = null, reaction = false }) {
     const keep = new Set((back.files ?? []).map((f) => f.path));
     for (const f of s.files ?? []) if (!keep.has(f.path)) { try { fs.unlinkSync(f.path); } catch { /* כבר נמחק */ } }
     save(user.id, back);
-    return { replies: [`↩️ חזרתי שלב אחד אחורה.${back.lastPrompt ? `\n\n${back.lastPrompt}` : ''}`], status: 'ok', result: `שלב אחורה: ${s.step} ← ${back.step}` };
+    return { replies: [`↩️ חזרתי שלב אחד אחורה.${back.lastPrompt ? `\n\n${back.lastPrompt}` : ''}`], status: 'ok', result: `שלב אחורה: ${s.step} ← ${back.step}`, buttons: buttonsFor(back) };
   }
   // תשובה לשאלה "לבטל את הטיוטא?" — 👍 / כן מבטל (לא מאשר!); כל דבר אחר — ממשיכים בבדיקה
   if (s.confirmCancel) {
     s.confirmCancel = false;
+    if (!file && /^חזרה לטיוטא/.test(t)) { const out = await showDraft(s, [], user); save(user.id, out.s ?? s); return { ...out, buttons: buttonsFor(out.s ?? s) }; }
     if (!file && (YES.test(t) || CANCEL.test(t))) {
       const r = await cancel(user, s);
       return queueOf(s).length ? (async () => { const next = await startQueued(user, s, r.replies); if (next.s) save(user.id, next.s); return { replies: next.replies, status: 'ok', result: 'ביטול ומעבר למסמך הבא' }; })() : r;
@@ -1527,7 +1571,7 @@ async function handle({ user, text = '', file = null, reaction = false }) {
     else if (s.step === 'review') {
       s.confirmCancel = true;
       save(user.id, s);
-      return { replies: [`👎 לבטל את הטיוטא *${s.docno}*? *כן* 👍 — לבטל · או כתבו מה לתקן (כמות, תיאור, שורה שחסרה).`], status: 'ok', result: '👎 בבדיקת הטיוטא' };
+      return { replies: [`👎 לבטל את הטיוטא *${s.docno}*? *כן* 👍 — לבטל · או כתבו מה לתקן (כמות, תיאור, שורה שחסרה).`], status: 'ok', result: '👎 בבדיקת הטיוטא', buttons: buttonsFor(s) };
     } else {
       save(user.id, s);
       return { replies: [`👎 מה לא נכון? כתבו מה לתקן, או *ביטול* לביטול הקליטה.${s.lastPrompt ? `\n\n${s.lastPrompt}` : ''}`], status: 'ok', result: `👎 בשלב ${s.step}` };
@@ -1568,7 +1612,8 @@ async function handle({ user, text = '', file = null, reaction = false }) {
   if (out.s === null) clear(user.id, s);
   else save(user.id, out.s ?? s);
   if (released) restarted = [released, restarted].filter(Boolean).join('\n');
-  return { replies: restarted ? [restarted, ...out.replies] : out.replies, files: out.files ?? [], status: out.status ?? 'ok', result: out.result ?? `שלב ${(out.s ?? s)?.step ?? 'סיום'}`, docno: s.docno ?? null };
+  return { replies: restarted ? [restarted, ...out.replies] : out.replies, files: out.files ?? [], status: out.status ?? 'ok', result: out.result ?? `שלב ${(out.s ?? s)?.step ?? 'סיום'}`, docno: s.docno ?? null,
+    buttons: out.s === null ? [] : buttonsFor(out.s ?? s) };
 }
 
 async function step(user, s, t, file) {
@@ -1608,6 +1653,9 @@ async function step(user, s, t, file) {
     }
 
     case 'supplier': {
+      // "ספק …" / "שם ספק: …" גם כאן — רק השם
+      const smc = t.match(SUPPLIER_CMD);
+      if (smc && smc[1].trim()) t = smc[1].replace(/\s+/g, ' ').trim();
       const n = numberIn(t);
       let sup = s.supplierOptions?.length && n && n <= s.supplierOptions.length && /^\d{1,2}$/.test(t) ? s.supplierOptions[n - 1] : null;
       if (!sup && /^\d{3,}$/.test(t)) {
@@ -1620,13 +1668,14 @@ async function step(user, s, t, file) {
         const found = await Priority.findSuppliers(s.company, { vat: /^\d{9}$/.test(t) ? t : '', name: t });
         const exact = /^\d+$/.test(t) ? found.list.find((x) => x.SUPNAME === t) : null;
         const list = exact ? [exact] : found.list;
-        if (list.length === 1) sup = { code: list[0].SUPNAME, name: list[0].SUPDES };
+        if (list.length === 1 && (exact || !found.weak)) sup = { code: list[0].SUPNAME, name: list[0].SUPDES };
         else if (list.length) {
           s.supplierOptions = list.map((x) => ({ code: x.SUPNAME, name: x.SUPDES }));
-          return reply(s, ['איזה מהם?', ...s.supplierOptions.map((x, i) => `*${i + 1}.* ${x.name} (${x.code})`)].join('\n'));
+          return reply(s, [found.weak ? `לא מצאתי ספק בשם "${t}". אולי אחד מאלה?` : 'איזה מהם?', ...s.supplierOptions.map((x, i) => `*${i + 1}.* ${x.name} (${x.code})`),
+            '', 'כתבו מספר מהרשימה, שם אחר, או מספר ספק בפריוריטי. אין ספק כזה — צריך לפתוח אותו בפריוריטי (רכש), או *ביטול*.'].join('\n'));
         }
       }
-      if (!sup) return reply(s, 'לא מצאתי. כתבו את מספר הספק בפריוריטי, או *ביטול*.');
+      if (!sup) return reply(s, `לא מצאתי ספק${t && !/^\d+$/.test(t) ? ` בשם "${t}"` : ''} בחברה הזו. כתבו שם אחר או מספר ספק בפריוריטי. אין ספק כזה — צריך לפתוח אותו בפריוריטי (רכש), או *ביטול*.`);
       s.supplier = sup;
       s.supplierBy = 'user';
       return askHeader(s);
@@ -1636,9 +1685,18 @@ async function step(user, s, t, file) {
       const pay = Priority.payFromText(t);
       if (pay?.unknown !== undefined) return reply(s, `אין בפריוריטי תנאי תשלום שוטף + ${pay.unknown}. האפשרויות: ${Priority.PAY_TERMS.map((p) => Priority.payLabel(p.code)).join(', ')}.`);
       if (pay) { s.payCode = pay.code; return askHeader(s); }
+      // ספק אחר בשפה חופשית: "ספק מועצה מקומית רכסים", "שם ספק: …", "ספק 600038", "ספק אחר"
+      const sm = t.match(SUPPLIER_CMD);
+      if (sm) {
+        const who = sm[1].replace(/\s+/g, ' ').trim();
+        s.step = 'supplier';
+        s.supplierOptions = null;
+        if (!who || /^(אחר|שגוי|לא נכון)$/.test(who)) return reply(s, 'איזה ספק? כתבו את השם או את מספר הספק בפריוריטי.');
+        return step(user, s, who, null);
+      }
       if (NO_VAT_TEXT.test(t)) { s.noVat = true; s.noVatBy = 'user'; return askHeader(s); }
       if (WITH_VAT_TEXT.test(t.trim())) { s.noVat = false; s.noVatBy = 'user'; return askHeader(s); }
-      if (!YES.test(t)) return reply(s, '*כן* 👍 להמשך, או *ביטול*. לתנאי תשלום אחר — כתבו אותו ("שוטף 60"). מע"מ — *ללא מע"מ* / *עם מע"מ*.');
+      if (!YES.test(t)) return reply(s, '*כן* 👍 להמשך, או *ביטול*. ספק אחר — "ספק …" (שם או מספר). לתנאי תשלום אחר — כתבו אותו ("שוטף 60"). מע"מ — *ללא מע"מ* / *עם מע"מ*.');
       return resolveOrder(s);
     }
 
@@ -1730,10 +1788,11 @@ async function step(user, s, t, file) {
         target.forEach((l) => { l.part = generalPart(g, 'נבחר ע"י המקבל'); });
         return askParts(s);
       }
-      // מספר מרשימה שהוצגה
+      // מספר מרשימה שהוצגה — לשורות שהרשימה הוצגה בשבילן
       if (/^\d{1,2}$/.test(rest) && s.partOptions?.length) {
         const p = s.partOptions[Number(rest) - 1];
-        if (p) { target.forEach((l) => { l.part = partOf(p, 'נבחר ע"י המקבל'); }); s.partOptions = null; return askParts(s); }
+        const forLines = s.partTarget?.length ? free.filter((l) => s.partTarget.includes(l.n)) : target;
+        if (p) { forLines.forEach((l) => { l.part = partOf(p, 'נבחר ע"י המקבל'); }); s.partOptions = null; s.partTarget = null; return askParts(s); }
       }
       const code = rest.match(/[A-Za-z]*\d[\w]*(?:-[\w]+)+/)?.[0];
       if (code) {
@@ -1742,16 +1801,41 @@ async function step(user, s, t, file) {
         target.forEach((l) => { l.part = partOf(p, 'נבחר ע"י המקבל'); });
         return askParts(s);
       }
-      // מילה מהתיאור ("מק"ט העתקות" ← "העתקות")
+      // שפה חופשית ("עכבר אלחוטי", "מק"ט העתקות") — חיפוש בקירוב בקטלוג, עם ההקשר של השורה
       const word = rest.replace(/מק"?ט|מקט|פריט/g, '').trim();
       if (word.length >= 2) {
-        const list = await Priority.findPartsByText(s.company, word).catch(() => []);
-        if (list.length === 1) { target.forEach((l) => { l.part = partOf(list[0], 'נבחר ע"י המקבל'); }); return askParts(s); }
+        const context = target.length === 1 ? target[0].description : '';
+        let found = await Priority.searchParts(s.company, word, context).catch(() => []);
+        let full = found.filter((c) => c.full);
+        if (!full.length) {
+          // אין התאמה במילים — מילים נרדפות כפי שכתובות בקטלוג ("מזגן" ← "מיזוג אוויר"), וחיפוש נוסף
+          const terms = (await ai.partTerms(word, context || target.map((l) => l.description).join(' · ')).catch(() => null))?.terms ?? [];
+          const more = [];
+          for (const term of terms.slice(0, 5)) more.push(...await Priority.searchParts(s.company, term, context).catch(() => []));
+          const seen = new Set(found.map((c) => c.p.PARTNAME));
+          found = [...found, ...more.filter((c) => !seen.has(c.p.PARTNAME) && seen.add(c.p.PARTNAME))].sort((a, b) => b.score - a.score);
+          full = [];
+        }
+        // התאמה ברורה: כל המילים נמצאו, ורק פריט אחד כזה (או שהוא מוביל בבירור)
+        if (full.length === 1 || (full.length > 1 && full[0].score > full[1].score)) {
+          target.forEach((l) => { l.part = partOf(full[0].p, 'נבחר ע"י המקבל'); });
+          return askParts(s);
+        }
+        // אין התאמה מלאה אחת — חלופות לפי ההקשר: ה-AI בוחר עד 5 מתוך המועמדים; בלי AI — לפי הדירוג
+        const pool = found.slice(0, 40).map((c) => c.p);
+        let pick = [];
+        if (pool.length > 5) {
+          const r = await ai.parts(word, context || target.map((l) => l.description).join(' · '), pool).catch(() => null);
+          pick = (r?.codes ?? []).map((c) => pool.find((p) => p.PARTNAME === c)).filter(Boolean);
+        }
+        const list = (pick.length ? pick : pool).slice(0, 5);
         if (list.length) {
           s.partOptions = list;
-          return { s, replies: [['איזה מהם?', ...list.map((p, i) => `*${i + 1}.* ${codeText(partOf(p, ''))}`)].join('\n')] };
+          s.partTarget = target.map((l) => l.n);
+          return { s, replies: [[full.length ? `כמה מק"טים מתאימים ל"${word}":` : `לא מצאתי מק"ט שמתאים בדיוק ל"${word}". אולי אחד מאלה:`,
+            ...list.map((p, i) => `*${i + 1}.* ${codeText(partOf(p, ''))}`), '', 'כתבו מספר, תיאור אחר, מק"ט, או *כללי*.'].join('\n')] };
         }
-        return reply(s, `לא מצאתי מק"ט עם "${word}". כתבו מק"ט, מילה אחרת, או *כללי*.`);
+        return reply(s, `לא מצאתי בקטלוג מק"ט שקרוב ל"${word}". כתבו תיאור אחר, מק"ט, או *כללי*.`);
       }
       return reply(s, '*כן* 👍 — להמשיך, או כתבו מק"ט / מילה מהתיאור / *כללי*.');
     }

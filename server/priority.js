@@ -176,15 +176,32 @@ async function findSuppliers(company, { vat = '', name = '' } = {}) {
       if (near.length === 1) return { by: 'vat_fuzzy', list: near };
     }
   }
-  // קודם השם המלא בלי "בע"מ", אחר כך מילה ארוכה ממנו — כך "דאר אלביאן בע"מ" נמצא גם ככתוב אחרת
-  const clean = String(name).replace(/בע"?מ|בעמ|ltd\.?/gi, ' ').replace(/\s+/g, ' ').trim();
-  const words = clean.split(/[\s,.()"']+/).filter((w) => w.length >= 3).sort((a, b) => b.length - a.length);
-  for (const w of [clean, ...words.slice(0, 2)].filter(Boolean)) {
-    const list = rows(await call(company, 'GET', `SUPPLIERS?$filter=${enc(`contains(SUPDES,'${q(w)}')`)}&${sel}`)).filter(activeSupplier).slice(0, 5);
-    if (!list.length) continue;
-    const exact = list.filter((x) => String(x.SUPDES).replace(/בע"?מ|בעמ/g, '').replace(/\s+/g, ' ').trim() === clean);
-    return { by: 'name', list: exact.length === 1 ? exact : list };
+  // לפי השם: מועמדים מכמה מילים מהשם, מדורגים לפי מספר המילים המשותפות (ובונוס כשהח.פ. שלהם קרוב לזה שבמסמך —
+  // ח.פ. חתוך או ספרה שנקראה לא נכון). כך "זיו מערכות לניהול בניה (מסד דרום) 1992 (zivsystems)" מוצא את
+  // "זיו מערכות לניהול בניה (מסד דרום)  1992 בעמ", ולא כל ספק עם "מערכות".
+  const words = [...new Set(normName(name).split(' ').filter((w) => w.length >= 3 && !/^\d+$/.test(w) && !/^(ספק|הספק|חברת|חברה)$/.test(w)))];
+  const probe = [...new Set([words[0], ...[...words].sort((x, y) => y.length - x.length).slice(0, 3)].filter(Boolean))];
+  const cand = new Map();
+  for (const w of probe) {
+    const list = rows(await call(company, 'GET', `SUPPLIERS?$filter=${enc(`contains(SUPDES,'${q(w)}')`)}&${sel.replace('$top=10', '$top=40')}`)).filter(activeSupplier);
+    for (const x of list) cand.set(x.SUPNAME, x);
   }
+  if (!cand.size) return { by: null, list: [] };
+  const mine = new Set(words);
+  const near = (a, b) => { if (!a || !b || a.length < 7 || b.length < 7) return false; let d = Math.abs(a.length - b.length); for (let i = 0; i < Math.min(a.length, b.length); i++) if (a[i] !== b[i]) d++; return d <= 2; };
+  const vatD = digits.padStart(9, '0');
+  const scored = [...cand.values()].map((x) => {
+    const theirs = normName(x.SUPDES).split(' ').filter((w) => w.length >= 3);
+    const shared = theirs.filter((w) => mine.has(w)).length;
+    const vatNear = digits.length >= 7 && String(x.COMPNUM ?? '').replace(/\D/g, '').length >= 7 && near(String(x.COMPNUM).padStart(9, '0'), vatD);
+    return { x, score: shared + (vatNear ? 3 : 0), shared, vatNear };
+  }).filter((c) => c.shared > 0).sort((a, b) => b.score - a.score);
+  if (!scored.length) return { by: null, list: [] };
+  const [top, second] = scored;
+  // ברור: רוב המילים משותפות (או ח.פ. קרוב), ויותר מהבא אחריו
+  const clear = (top.shared >= Math.min(3, words.length) || top.vatNear) && (!second || top.score > second.score);
+  // ‎weak‎ — אין ספק שמתאים לשם באמת (רק מילה משותפת או שתיים): הצעות בלבד, לא בחירה אוטומטית
+  return { by: top.vatNear ? 'vat_near' : 'name', list: clear ? [top.x] : scored.slice(0, 5).map((c) => c.x), weak: !clear };
   return { by: null, list: [] };
 }
 
@@ -278,6 +295,36 @@ async function recentLines(company, top = 300) {
 /** פריטים פעילים שבתיאורם המילה ("העתקות"), עד 6 */
 async function findPartsByText(company, word) {
   return rows(await call(company, 'GET', `LOGPART?$filter=${enc(`contains(PARTDES,'${q(word)}') and STATDES eq 'פעיל'`)}&$select=PARTNAME,PARTDES,STATDES,BUD_SUBCHAPTERNAME,BUD_SUBCHAPTERDES,BUD_SUBTOPICNAME,BUD_SUBTOPICDES&$top=6`));
+}
+
+/*
+ * חיפוש מק"ט בשפה חופשית: מועמדים מכל מילה בטקסט (וגם בלי אות שימוש בתחילתה — ה, ו, ב, ל, מ, ש) ומהמילים של
+ * ההקשר (תיאור השורה), ודירוג לפי מילים מהטקסט שמופיעות בתיאור הפריט (ההקשר — חצי משקל).
+ * ‎[{ p, score, full }]‎; ‎full‎ — כל מילות הטקסט נמצאו בתיאור.
+ */
+async function searchParts(company, text, context = '') {
+  const wordsOf = (t) => [...new Set(String(t ?? '').replace(/["'״׳(),.:;\-/]/g, ' ').split(/\s+/).filter((w) => w.length >= 2 && !/^\d+$/.test(w)))];
+  // צורות המילה: כמו שהיא, בלי ריבוי (ים/ות, ן← נ), בלי אות שימוש בתחילה (ה ו ב ל מ ש), ושניהם — "המזגנים" ← "מזגן"
+  const finals = (x) => x.replace(/נ$/, 'ן').replace(/מ$/, 'ם').replace(/צ$/, 'ץ').replace(/פ$/, 'ף').replace(/כ$/, 'ך');
+  const noPlural = (x) => (x.length >= 5 && /(ים|ות)$/.test(x) ? finals(x.slice(0, -2)) : x);
+  const noPrefix = (x) => (x.length >= 4 && /^[הובלמש]/.test(x) ? x.slice(1) : x);
+  const forms = (w) => [...new Set([w, noPlural(w), noPrefix(w), noPlural(noPrefix(w))])].filter((x) => x.length >= 2);
+  const tw = wordsOf(text).filter((w) => !/^(מק"?ט|מקט|פריט|של|עם|את|על)$/.test(w));
+  const cw = wordsOf(context).filter((w) => w.length >= 3).slice(0, 6);
+  const probe = [...new Set([...tw.flatMap(forms), ...cw.map(noPlural)])].slice(0, 14);
+  const sel = '$select=PARTNAME,PARTDES,STATDES,BUD_SUBCHAPTERNAME,BUD_SUBCHAPTERDES,BUD_SUBTOPICNAME,BUD_SUBTOPICDES&$top=30';
+  const cand = new Map();
+  for (const w of probe) {
+    const list = await call(company, 'GET', `LOGPART?$filter=${enc(`contains(PARTDES,'${q(w)}') and STATDES eq 'פעיל'`)}&${sel}`).then(rows).catch(() => []);
+    for (const x of list) cand.set(x.PARTNAME, x);
+  }
+  const has = (des, w) => forms(w).some((f) => des.includes(f));
+  return [...cand.values()].map((p) => {
+    const des = String(p.PARTDES ?? '');
+    const hitT = tw.filter((w) => has(des, w)).length;
+    const hitC = cw.filter((w) => has(des, w)).length;
+    return { p, score: hitT + hitC / 2, full: tw.length > 0 && hitT === tw.length };
+  }).filter((c) => c.score > 0).sort((a, b) => b.score - a.score || String(a.p.PARTDES).length - String(b.p.PARTDES).length);
 }
 
 /** פריט לפי קוד, עם תת הפרק והמשאב שלו */
@@ -686,7 +733,7 @@ async function cancelReceipt(company, docno) {
 
 module.exports = {
   COMPANIES, isEnabled, allowed, companyOf, isTest, resolveCompany, companiesByName, PriorityError,
-  GENERAL, NO_VAT_CODE, TAX_CODES, PAY_TERMS, DEFAULT_PAY, payTerm, payLabel, payFromText, dueDate, projectWarehouses, warehouses, warehouseExists, defaultWarehouse, supplierHistory, recentLines, partByCode, findPartsByText, generalCoding, warehouseOf, findSuppliers, supplierByCode, findReceiptByBooknum, getOrder, openOrders, findPartExact, lastSubchapter, projects, matchProjects, readReceipt,
+  GENERAL, NO_VAT_CODE, TAX_CODES, PAY_TERMS, DEFAULT_PAY, payTerm, payLabel, payFromText, dueDate, projectWarehouses, warehouses, warehouseExists, defaultWarehouse, supplierHistory, recentLines, partByCode, findPartsByText, searchParts, generalCoding, warehouseOf, findSuppliers, supplierByCode, findReceiptByBooknum, getOrder, openOrders, findPartExact, lastSubchapter, projects, matchProjects, readReceipt,
   readDialog, createReceipt, addOrderLine, addFreeLine, setLineQty, setLineDes, setHeader, attach, deleteAttachment, setDialog, finalizeReceipt, cancelReceipt, receiptStatus, deleteLines,
   _call: call
 };

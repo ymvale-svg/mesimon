@@ -168,6 +168,41 @@ async function sendText(chatId, message) {
   await WhatsApp.call(ch, 'sendMessage', { http: 'POST', body: { chatId, message } });
 }
 
+/*
+ * הודעה עם כפתורי תשובה (Green API ‎sendInteractiveButtonsReply‎: עד 3 כפתורים, כיתוב קצר). הכיתוב של הכפתור הוא
+ * התשובה שהבוט מבין, ולכן גם לחיצה שחוזרת כטקסט עובדת. נכשל (החשבון / הלקוח לא תומך) — טקסט רגיל, ולא מנסים
+ * שוב שעה. גוף ארוך מ-1000 תווים — הטקסט לבד, והכפתורים בהודעה קצרה אחריו.
+ */
+let buttonsOffUntil = 0;
+async function sendButtons(chatId, message, buttons) {
+  const ch = channel();
+  if (!ch) return;
+  if (!buttons?.length || Date.now() < buttonsOffUntil) return sendText(chatId, message);
+  let body = message;
+  if (String(message).length > 1000) { await sendText(chatId, message); body = '👇'; }
+  try {
+    await WhatsApp.call(ch, 'sendInteractiveButtonsReply', { http: 'POST', body: {
+      chatId, body,
+      buttons: buttons.slice(0, 3).map((t, i) => ({ buttonId: String(i + 1), buttonText: String(t).slice(0, 20) }))
+    } });
+  } catch (err) {
+    console.error('[משימון] כפתורים בוואטסאפ לא נשלחו, נשלח טקסט:', err.message);
+    buttonsOffUntil = Date.now() + 60 * 60 * 1000;
+    if (body !== '👇') await sendText(chatId, message);
+  }
+}
+
+/** הכיתוב של כפתור שנלחץ — בכל צורה שהשירות מחזיר (‎buttonsResponseMessage‎, ‎templateButtonReplyMessage‎, ‎interactiveButtons…‎) */
+function buttonReplyText(m) {
+  for (const [k, v] of Object.entries(m ?? {})) {
+    if (!/button|interactive/i.test(k) || !v || typeof v !== 'object') continue;
+    for (const f of ['selectedButtonText', 'selectedDisplayText', 'buttonText', 'selectedText', 'titleText', 'title', 'text']) {
+      if (typeof v[f] === 'string' && v[f].trim()) return v[f].trim();
+    }
+  }
+  return '';
+}
+
 /**
  * ✅ על ההודעה בקבוצה שהפכה למשימה — סימן לכולם שהבקשה נקלטה, בלי לכתוב
  * בקבוצה. ניסיון בלבד: תגובה שנכשלה אינה מבטלת את המשימה.
@@ -316,7 +351,7 @@ async function receiveOne(ch, timeout = LISTEN_TIMEOUT) {
       const m = b.messageData ?? {};
       // מסמך (PDF) מגיע עם שם הקובץ בכיתוב — זה לא טקסט שהעובד כתב
       const fname = String(m.fileMessageData?.fileName ?? '').trim();
-      const raw = textOf(m).trim();
+      const raw = (buttonReplyText(m) || textOf(m)).trim();
       direct = {
         chatId,
         phone: chatId.replace(/@c\.us$/, ''),
@@ -2726,7 +2761,12 @@ async function handleDirect(msg) {
         log({ ...base, text: `[📄 ${f.fileName}]`, action: 'goods_receipt', status: 'error', result: err.message });
       }
     }
-    for (const reply of r.replies) for (const part of splitMessage(reply)) await sendText(msg.chatId, part);
+    // כפתורי תשובה — על ההודעה האחרונה בלבד
+    const parts = r.replies.flatMap((reply) => splitMessage(reply));
+    for (let i = 0; i < parts.length; i++) {
+      if (i === parts.length - 1 && r.buttons?.length) await sendButtons(msg.chatId, parts[i], r.buttons);
+      else await sendText(msg.chatId, parts[i]);
+    }
     return;
   }
   if (msg.forwarded) {
