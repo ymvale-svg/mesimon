@@ -2703,7 +2703,7 @@ async function handleDirect(msg) {
   const recentFile = grAllowed && !msg.file && GoodsReceipt.isTrigger(text) && !GoodsReceipt.active(user.id) ? takeRecentFile(user.id) : null;
   if (recentFile) msg = { ...msg, file: recentFile };
   if (msg.file && !(grAllowed && (GoodsReceipt.active(user.id) || GoodsReceipt.opens(text, msg.file)))) rememberFile(user.id, msg.file);
-  if (grAllowed && (GoodsReceipt.active(user.id) || GoodsReceipt.opens(text, msg.file))) {
+  if (grAllowed && (GoodsReceipt.active(user.id) || GoodsReceipt.opens(text, msg.file) || GoodsReceipt.wantsUndoFinal(user.id, text))) {
     await notice;
     const slowGr = setTimeout(() => sendText(msg.chatId, '⏳ רגע, קורא ובודק מול פריוריטי…').catch(() => {}), SLOW_NOTICE_MS);
     let r;

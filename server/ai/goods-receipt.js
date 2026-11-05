@@ -70,6 +70,17 @@ const NO_ORDER = /^(בלי הזמנה|אין הזמנה|ללא הזמנה|לפי
 // ---------------------------------------------------------------------------
 
 const key = (userId) => `goods_receipt:${userId}`;
+const doneKey = (userId) => `goods_receipt_done:${userId}`;
+/** GR שהפך לסופי בבוט ב-15 הדקות האחרונות (‎null‎ — אין) */
+function lastFinal(userId) {
+  try {
+    const row = D.get('SELECT value FROM settings WHERE key = ?', doneKey(userId));
+    const v = row ? JSON.parse(row.value) : null;
+    return v && Date.now() - v.at < 15 * 60 * 1000 ? v : null;
+  } catch { return null; }
+}
+/** 👎 מיד אחרי אישור סופי — הבוט מטפל בו (ולא העוזר הכללי) */
+const wantsUndoFinal = (userId, text) => /^\s*👎[\u{1F3FB}-\u{1F3FF}\uFE0F]*\s*$/u.test(String(text ?? '')) && Boolean(lastFinal(userId));
 function load(userId) {
   const s = D.getSetting(key(userId), null);
   if (!s || typeof s !== 'object' || !s.step) return null;
@@ -527,11 +538,31 @@ function docWithoutVat(d) {
   return Number(t.total || t.before_vat || 0) > 0 && !Number(t.vat || 0);
 }
 
+/*
+ * טיוטא קיימת לאותו מסמך — הקליטה ממשיכה ממנה, בשלב בדיקת הטיוטא: הפרויקט, המחסן ותנאי התשלום מה-GR, השורות
+ * והסכומים של המסמך מהקריאה החדשה (לבדיקה מול המסמך, ולעדכון לפי צילום). המסמך כבר בנספחים — לא מצורף שוב.
+ */
+async function resumeDraft(s, dup) {
+  const gr = await Priority.readReceipt(s.company, dup.DOCNO);
+  s.docno = dup.DOCNO;
+  s.resumed = true;
+  s.project = gr.PROJDOCNO ? { code: gr.PROJDOCNO, des: gr.PROJDES ?? '' } : null;
+  s.warehouse = gr.TOWARHSNAME || null;
+  s.payCode = gr.MED_MXPAYCODE || s.payCode;
+  s.order = null;
+  for (const f of s.files ?? []) f.attached = true;
+  const out = await showDraft(s, [], null);
+  return { ...out, replies: [`📂 *${dup.DOCNO}* כבר קיימת בפריוריטי כ*טיוטא* (${ymdHe(dup.CURDATE)}) — ממשיכים ממנה. זה מה שיש בה עכשיו; לשנות משהו?`, ...out.replies],
+    result: `המשך טיוטא ${dup.DOCNO}` };
+}
+
 async function askHeader(s) {
   const d = s.doc;
   if (s.noVat === undefined) s.noVat = docWithoutVat(d);
   // אותו מסמך כבר נקלט — פריוריטי ממילא דוחה מספר תעודה כפול לאותו ספק
   const dup = await Priority.findReceiptByBooknum(s.company, s.supplier.code, d.doc_number);
+  // אותו מסמך כבר נקלט כטיוטא (למשל נפתח שוב לעריכה בפריוריטי) — ממשיכים ממנה: מציגים מה שיש ושואלים אם לשנות
+  if (dup && dup.STATDES === 'טיוטא') return resumeDraft(s, dup);
   if (dup && dup.STATDES !== 'מבוטלת') {
     return { s: null, replies: [`המסמך ${d.doc_number} של ${s.supplier.name} כבר נקלט: *${dup.DOCNO}* (${dup.STATDES}, ${ymdHe(dup.CURDATE)}). לא נקלט שוב.`], status: 'denied', result: `כפול: ${dup.DOCNO}` };
   }
@@ -1405,6 +1436,16 @@ async function handle({ user, text = '', file = null, reaction = false }) {
     }
   }
   if (!Priority.isEnabled()) return { replies: ['החיבור לפריוריטי עוד לא הוגדר בשרת. פנו למנהל המערכת.'], status: 'error', result: 'פריוריטי לא מוגדר' };
+
+  // 👎 מיד אחרי "מאשר": סופית אי אפשר להחזיר לטיוטא מהבוט — בקשה למנהל המערכת
+  if (!s && !file && /^👎+$/u.test(String(text ?? '').replace(/[\u{1F3FB}-\u{1F3FF}\uFE0F]/gu, '').trim())) {
+    const f = lastFinal(user.id);
+    if (f) {
+      D.run('DELETE FROM settings WHERE key = ?', doneKey(user.id));
+      alertAdmins(user, { company: f.company, docno: f.docno }, 'בקשה להחזיר GR לטיוטא', [`העובד שלח 👎 מיד אחרי האישור של ${f.docno} (${f.supplier}). יש להחזיר לטיוטא בפריוריטי, או לבטל.`]);
+      return { replies: [`⚠️ *${f.docno}* כבר *סופית* בפריוריטי, ומהבוט אי אפשר להחזיר אותה לטיוטא. שלחתי למנהל המערכת בקשה להחזיר אותה לטיוטא.`], status: 'ok', result: `בקשה להחזיר ${f.docno} לטיוטא` };
+    }
+  }
   if (!Claude.isEnabled()) return { replies: ['קריאת מסמכים דורשת חיבור AI, שעוד לא הוגדר בשרת.'], status: 'error', result: 'AI לא מוגדר' };
 
   // תמונה או מסמך בלי "קבלת סחורה" — כנראה מסמך לקליטה. שואלים, ושומרים את הקובץ עד התשובה
@@ -1466,6 +1507,15 @@ async function handle({ user, text = '', file = null, reaction = false }) {
     save(user.id, back);
     return { replies: [`↩️ חזרתי שלב אחד אחורה.${back.lastPrompt ? `\n\n${back.lastPrompt}` : ''}`], status: 'ok', result: `שלב אחורה: ${s.step} ← ${back.step}` };
   }
+  // תשובה לשאלה "לבטל את הטיוטא?" — 👍 / כן מבטל (לא מאשר!); כל דבר אחר — ממשיכים בבדיקה
+  if (s.confirmCancel) {
+    s.confirmCancel = false;
+    if (!file && (YES.test(t) || CANCEL.test(t))) {
+      const r = await cancel(user, s);
+      return queueOf(s).length ? (async () => { const next = await startQueued(user, s, r.replies); if (next.s) save(user.id, next.s); return { replies: next.replies, status: 'ok', result: 'ביטול ומעבר למסמך הבא' }; })() : r;
+    }
+    save(user.id, s);
+  }
   // 👍 בנספחים — "סיום"; בשאלת ההזמנה 👍 אינו תשובה (צריך מספר, או 👎 — בלי הזמנה)
   if (t === '👍' && !file && s.step === 'files' && !s.pendingNew) t = 'סיום';
   if (t === '👍' && !file && s.step === 'order') return { replies: ['כתבו את מספר ההזמנה (PO…), או *בלי הזמנה* 👎.'], status: 'ok', result: '👍 בשאלת ההזמנה' };
@@ -1475,7 +1525,9 @@ async function handle({ user, text = '', file = null, reaction = false }) {
     else if (s.step === 'order') t = 'בלי הזמנה';      // "יש מספר הזמנה?" — 👎 = אין, בלי הזמנה
     else if (s.step === 'files') t = 'סיום';           // "יש עוד נספחים?" — 👎 = אין
     else if (s.step === 'review') {
-      return { replies: [`👎 לבטל את הטיוטא *${s.docno}*? כתבו *ביטול* לאישור — או כתבו מה לתקן (כמות, תיאור, שורה שחסרה).`], status: 'ok', result: '👎 בבדיקת הטיוטא' };
+      s.confirmCancel = true;
+      save(user.id, s);
+      return { replies: [`👎 לבטל את הטיוטא *${s.docno}*? *כן* 👍 — לבטל · או כתבו מה לתקן (כמות, תיאור, שורה שחסרה).`], status: 'ok', result: '👎 בבדיקת הטיוטא' };
     } else {
       save(user.id, s);
       return { replies: [`👎 מה לא נכון? כתבו מה לתקן, או *ביטול* לביטול הקליטה.${s.lastPrompt ? `\n\n${s.lastPrompt}` : ''}`], status: 'ok', result: `👎 בשלב ${s.step}` };
@@ -1789,6 +1841,8 @@ async function step(user, s, t, file) {
           alertAdmins(user, s, 'GR לא הפך לסופי', [err.message]);
           return { s: null, replies: [`ה-GR *${s.docno}* נשמר כטיוטא, אבל לא הפך לסופי. מנהל המערכת קיבל הודעה ויטפל.`], status: 'error', result: `סופית נכשלה: ${err.message}` };
         }
+        // ה-GR האחרון שהפך לסופי — ל-👎 שנשלח מיד אחר כך (פריוריטי לא מחזיר סופית לטיוטא דרך ה-API)
+        D.setSetting(doneKey(user.id), { docno: s.docno, company: s.company, supplier: s.supplier?.name ?? '', at: Date.now() });
         const done = `✅ *קבלת סחורה ${s.docno}* נקלטה כסופית.\n${companyLine(s)}\nספק: ${s.supplier.name}${s.order ? ` · הזמנה ${s.order.ordname}` : ''}`;
         if (queueOf(s).length) return startQueued(user, s, [done]);
         return { s: null, replies: [done], status: 'ok', result: `GR סופי ${s.docno}` };
@@ -1861,4 +1915,4 @@ async function step(user, s, t, file) {
   }
 }
 
-module.exports = { isTrigger, opens, active, handle, sweep, _codeLines: codeLines, _similarLines: similarLines, _askParts: askParts, _projectsOf: projectsOf, _findProjects: findProjects, _ai: ai, _load: load, _clear: (userId) => clear(userId, load(userId)) };
+module.exports = { isTrigger, opens, active, wantsUndoFinal, handle, sweep, _codeLines: codeLines, _similarLines: similarLines, _askParts: askParts, _projectsOf: projectsOf, _findProjects: findProjects, _ai: ai, _load: load, _clear: (userId) => clear(userId, load(userId)) };
