@@ -267,7 +267,8 @@ function summaryText(s, gr) {
     `📄 תעודה: ${gr.BOOKNUM ?? ''} · ${ymdHe(gr.CURDATE)}`,
     `🧾 הזמנה: ${s.order ? s.order.ordname : 'ללא הזמנה'}`,
     `📁 פרויקט: ${gr.PROJDOCNO ?? ''} ${gr.PROJDES ?? ''}`.trim(),
-    `🏬 מחסן: ${gr.TOWARHSNAME ?? ''}${gr.TOWARHSNAME && gr.TOWARHSNAME !== 'Main' ? ' (של הפרויקט)' : ''}`
+    `🏬 מחסן: ${gr.TOWARHSNAME ?? ''}${gr.TOWARHSNAME && gr.TOWARHSNAME !== 'Main' ? ' (של הפרויקט)' : ''}`,
+    `💳 תנאי תשלום: ${Priority.payLabel(gr.MED_MXPAYCODE) || gr.MED_MXPAYDES || '—'}${s.order?.payCode && s.order.payCode !== gr.MED_MXPAYCODE ? ` ⚠️ בהזמנה: ${Priority.payLabel(s.order.payCode)}` : ''}`
   ];
   const lines = gr.lines.map((l, i) =>
     `*${i + 1}.* ${l.PDES} (${l.PARTNAME})\n   ${qtyText(l.TQUANT)} ${l.TUNITNAME ?? ''} × ${money(l.PRICE)}${l.PERCENT ? ` −${l.PERCENT}%` : ''} = *${money(l.QPRICE)}*` +
@@ -362,8 +363,9 @@ async function askHeader(s) {
     s.via === 'sandbox' ? `   (המסמך מופנה ל${Priority.resolveCompany(d.recipient_vat).matched?.name ?? 'חברה אחרת'} — נקלט לעותק הבדיקה)` : null,
     `🚚 ספק: *${s.supplier.name}* (${s.supplier.code})${s.supplierBy === 'name' ? ' — נמצא לפי שם, אין ח.פ. בכרטיס' : ''}`,
     d.date ? `📅 ${ymdHe(d.date)}${d.delivery_place ? ` · ${d.delivery_place}` : ''}` : null,
+    `💳 תנאי תשלום: *${Priority.payLabel(s.payCode ?? Priority.DEFAULT_PAY)}*${(s.payCode ?? Priority.DEFAULT_PAY) === Priority.DEFAULT_PAY ? ' (ברירת מחדל)' : ''}`,
     d.warnings?.length ? `⚠️ ${d.warnings.join('\n⚠️ ')}` : null,
-    '', 'נכון? *כן* להמשך, או *ביטול*.'
+    '', 'נכון? *כן* להמשך, או *ביטול*. לתנאי תשלום אחר — כתבו אותו ("שוטף 60").'
   ];
   return reply(s, lines.filter((x) => x !== null).join('\n'));
 }
@@ -392,7 +394,7 @@ async function useOrders(s, orders, forced) {
     l.order = ol ? { ordname: order.ORDNAME, line: ol.LINE, des: ol.PDES, part: ol.PARTNAME, balance: ol.TBALANCE, confidence: hit.confidence } : null;
   }
   if (order && s.lines.some((l) => l.order)) {
-    s.order = { ordname: order.ORDNAME, project: order.PROJDOCNO, projectDes: order.PROJDES };
+    s.order = { ordname: order.ORDNAME, project: order.PROJDOCNO, projectDes: order.PROJDES, payCode: order.PAYCODE ?? null };
     s.project = order.PROJDOCNO ? { code: order.PROJDOCNO, des: order.PROJDES } : null;
   }
   return askLines(s);
@@ -465,7 +467,7 @@ async function createDraft(user, s) {
   const c = s.company;
   // מחסן הפרויקט — כך הסחורה נכנסת למלאי של האתר; לפרויקט בלי מחסן — Main
   s.warehouse = await Priority.warehouseOf(c, s.project?.code);
-  const docno = await Priority.createReceipt(c, { supname: s.supplier.code, booknum: s.doc.doc_number, date: s.doc.date || null, project: s.project?.code, warehouse: s.warehouse });
+  const docno = await Priority.createReceipt(c, { supname: s.supplier.code, booknum: s.doc.doc_number, date: s.doc.date || null, project: s.project?.code, warehouse: s.warehouse, payCode: s.payCode ?? Priority.DEFAULT_PAY });
   s.docno = docno;
   save(user.id, s);
   const problems = [];
@@ -503,6 +505,7 @@ function writeDialog(user, s) {
     d.supplier_order_ref ? `הזמנה אצל הספק: ${d.supplier_order_ref}` : null,
     d.date || d.delivery_place ? `אספקה: ${[ymdHe(d.date), d.delivery_place].filter(Boolean).join(', ')}` : null,
     d.purchase_type !== 'unknown' ? `סוג רכש: ${d.purchase_type === 'site' ? 'אתרי' : 'משרדי'}` : null,
+    `תנאי תשלום: ${Priority.payLabel(s.payCode ?? Priority.DEFAULT_PAY)}${(s.payCode ?? Priority.DEFAULT_PAY) === Priority.DEFAULT_PAY ? ' (ברירת מחדל)' : ' (נבחר ע"י המקבל)'}`,
     ...(s.corrections ?? []).map((c) => `תיקון המקבל: ${c}`),
     ...short.map((x) => `קבלה חלקית — ${x}. היתרה נשארת פתוחה`),
     !s.order && s.project ? `פרויקט נבחר ע"י המקבל: ${s.project.code} ${s.project.des}` : null,
@@ -646,9 +649,13 @@ async function step(user, s, t, file) {
       return askHeader(s);
     }
 
-    case 'header':
-      if (!YES.test(t)) return reply(s, '*כן* להמשך, או *ביטול*.');
+    case 'header': {
+      const pay = Priority.payFromText(t);
+      if (pay?.unknown !== undefined) return reply(s, `אין בפריוריטי תנאי תשלום שוטף + ${pay.unknown}. האפשרויות: ${Priority.PAY_TERMS.map((p) => Priority.payLabel(p.code)).join(', ')}.`);
+      if (pay) { s.payCode = pay.code; return askHeader(s); }
+      if (!YES.test(t)) return reply(s, '*כן* להמשך, או *ביטול*. לתנאי תשלום אחר — כתבו אותו ("שוטף 60").');
       return resolveOrder(s);
+    }
 
     case 'order': {
       if (NO_ORDER.test(t)) { s.ordersChecked = false; return askLines(s); }
@@ -749,6 +756,14 @@ async function step(user, s, t, file) {
       return showDraft(s, await createDraft(user, s));
 
     case 'review': {
+      const pay = !file && Priority.payFromText(t);
+      if (pay?.unknown !== undefined) return reply(s, `אין בפריוריטי תנאי תשלום שוטף + ${pay.unknown}. האפשרויות: ${Priority.PAY_TERMS.map((p) => Priority.payLabel(p.code)).join(', ')}.`);
+      if (pay) {
+        await Priority.setHeader(s.company, s.docno, { MED_MXPAYCODE: pay.code });
+        s.payCode = pay.code;
+        await writeDialog(user, s).catch(() => {});
+        return showDraft(s);
+      }
       if (/^(מאשר|מאשרת|אישור|אשר)([\s,.!]|$)/.test(t)) {
         try {
           await Priority.finalizeReceipt(s.company, s.docno);
