@@ -302,6 +302,8 @@ async function onMainDoc(user, s, file) {
   } catch (err) {
     return reply(s, `לא הצלחתי לקרוא את המסמך (${err.message}). נסו לצלם שוב, ישר ובאור טוב.`, { status: 'error', result: err.message });
   }
+  // אזהרות — בעברית בלבד; אזהרה שהגיעה באנגלית למרות ההנחיה אינה מוצגת
+  doc.warnings = (doc.warnings ?? []).filter((w) => /[\u0590-\u05FF]/.test(w) && !/^[\x00-\x7F]{12}/.test(String(w).trim())).slice(0, 3);
   s.doc = doc;
   if (doc.doc_type === 'other') {
     return { s: null, replies: ['זה לא נראה כמו תעודת משלוח או חשבונית ספק' + (doc.warnings?.length ? ` (${doc.warnings.join('; ')})` : '') + '. קבלת הסחורה בוטלה. אפשר להתחיל שוב עם צילום אחר.'], status: 'unclear', result: 'מסמך שאינו תעודה/חשבונית' };
