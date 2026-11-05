@@ -1087,19 +1087,28 @@ async function maybeAdoptList(user, s, saved) {
  */
 async function maybeRebuildFromTable(user, s, saved, { known = false } = {}) {
   if (s.step !== 'review') return null;
-  let d;
-  try { d = await ai.extract(saved); } catch { return null; }
+  // הסכום בטיוטא — מה שבאמת נקלט ב-GR (לא מהקריאה של המסמך)
+  const gr = await Priority.readReceipt(s.company, s.docno).catch(() => null);
   const want = docBeforeVat(s.doc);
-  const now = lineSum((s.doc.lines ?? []).map((l, i) => ({ ...l, qty: s.lines[i]?.qty ?? l.qty })));
-  if (!(want > 0) || !(d.lines ?? []).length || Math.abs(lineSum(d.lines) - want) >= Math.abs(now - want) || Math.abs(now - want) <= 1) return null;
+  const now = Number(gr?.DISPRICE ?? 0);
+  if (!(want > 0) || Math.abs(now - want) <= 1) return null;   // הטיוטא כבר תואמת — נספח רגיל
+  let d = null, why = '';
+  try { d = await ai.extract(saved); } catch (err) { why = err.message; }
   if (!known) {
     s.files.push({ ...saved, label: 'טבלת שורות', attached: true });
     await Priority.attach(s.company, s.docno, { buf: fs.readFileSync(saved.path), mime: saved.mime, description: 'טבלת שורות' }).catch(() => { s.files[s.files.length - 1].attached = false; });
   }
+  if (!(d?.lines ?? []).length) {
+    return { s, replies: [`📎 הצילום צורף לנספחים, אבל לא הצלחתי לקרוא ממנו שורות.\nבטיוטא ${money(now)} לפני מע"מ, ובמסמך ${money(want)}. כתבו את השורה שחסרה ("חסר כבל HDMI 7 מטר, 1 יח', 12"), או תקנו כמות ("שורה 2: 1").`],
+      result: `טבלה: לא נקראו שורות${why ? ` (${why})` : ''}` };
+  }
+  // הטיוטא לא תואמת והצילום יש בו שורות — מציעים תמיד; העובד מחליט לפי הסכומים
   s.pendingList = { doc: d, rebuild: true };
-  return { s, replies: [[`📋 בתמונה יש *${d.lines.length} שורות* בסך ${money(lineSum(d.lines))}${listMatches(s.doc, d) ? ' — *תואם* למסמך' : ''} (במסמך: ${money(want)} לפני מע"מ; בטיוטא: ${money(now)}).`,
+  const sum = lineSum(d.lines);
+  return { s, result: `טבלה: ${d.lines.length} שורות, ${sum} (מסמך ${want}, טיוטא ${now})`, replies: [[
+    `📋 בצילום יש *${d.lines.length} שורות* בסך ${money(sum)}${listMatches(s.doc, d) ? ' — *תואם* למסמך' : ''}. במסמך: ${money(want)} לפני מע"מ; בטיוטא: ${money(now)}.`,
     ...d.lines.slice(0, 12).map((l, i) => `*${i + 1}.* ${l.description} — ${qtyText(l.qty)} × ${money(l.unit_price)}`),
-    '', `לעדכן את שורות ${s.docno} לפי התמונה? *כן* — לעדכן · *לא* — להשאיר כנספח בלבד`].join('\n')] };
+    '', `לעדכן את שורות ${s.docno} לפי הצילום? *כן* — לעדכן · *לא* — להשאיר כנספח בלבד`].join('\n')] };
 }
 
 /*
