@@ -1724,6 +1724,7 @@ const AdminView = (() => {
     { key: 'actions', label: 'פעולות' },
     { key: 'groups', label: 'קבוצות' },
     { key: 'log', label: 'יומן' },
+    { key: 'review', label: '🌙 סקירה לילית' },
     { key: 'test', label: 'בדיקה' },
     { key: 'settings', label: 'הגדרות' },
     { key: 'connection', label: 'חיבור' }
@@ -1759,7 +1760,7 @@ const AdminView = (() => {
       UI.mount(body, headerCard(), el('div.seg.mb', {}, WA_SECTIONS.map((s) =>
         el(`button${waSection === s.key ? '.active' : ''}`, { onclick: () => { waSection = s.key; draw(); } }, [s.label])
       )), host);
-      const sections = { actions: actionsSection, groups: groupsSection, log: logSection, test: testSection, settings: settingsSection, connection: connectionSection };
+      const sections = { actions: actionsSection, groups: groupsSection, log: logSection, review: reviewSection, test: testSection, settings: settingsSection, connection: connectionSection };
       Promise.resolve(sections[waSection]()).catch((err) => UI.mount(host, UI.empty(err.message, '⚠️')));
     };
 
@@ -1942,7 +1943,12 @@ const AdminView = (() => {
           el('td', { title: UI.formatDateTime(e.at), text: UI.relative(e.at) }),
           el('td', {}, [WA_CHANNELS[e.channel] ?? e.channel, e.chatName ? el('div.mute-sm', { text: e.chatName }) : null]),
           el('td', { text: e.who || '—' }),
-          el('td.wrap', { text: e.text || '—' }),
+          el('td.wrap', {}, [
+            e.forwarded ? el('span.ai-chip', { text: '↪ הועברה', style: { marginInlineEnd: '6px' } }) : null,
+            e.text || '—',
+            // מה הבוט ענה — כך רואים ביומן אם התשובה התאימה לבקשה
+            e.reply ? el('div.mute-sm.rv-reply', { title: e.reply, text: `🤖 ${e.reply.length > 220 ? `${e.reply.slice(0, 220)}…` : e.reply}` }) : null
+          ]),
           el('td', {}, [actionLabel(e.action), ' ', el(`span.ai-chip${statusClass ? `.${statusClass}` : ''}`, { text: statusLabel })]),
           el('td.wrap', {}, [e.result, e.taskId ? el('span.mute-sm', { text: ` · #${e.taskId}` }) : null])
         ]);
@@ -1960,6 +1966,110 @@ const AdminView = (() => {
         el('div.mute-sm.mt', { text: 'היומן נשמר 90 יום. לחיצה על שורה עם משימה פותחת אותה.' })
       );
       await load();
+    }
+
+    // ---- סקירה לילית: מה עבד, מה לא, ומה מוצע לתקן
+
+    const FIX_STATUS = { new: ['ממתין להחלטה', 'ai-chip-warn'], done: ['טופל', 'wa-chip-ok'], dismissed: ['לא רלוונטי', ''] };
+    const FIX_KIND = { skill: 'ניסוח לבוט', code: 'כלל בקוד', alias: 'שמות וכינויים', feature: 'יכולת חדשה' };
+    const pct = (r) => (r.conversations ? Math.round((r.succeeded / r.conversations) * 100) : null);
+
+    async function reviewSection() {
+      let data = await API.get('/api/admin/wa-bot/reviews');
+
+      const decide = async (review, fix, status) => {
+        let note = '';
+        if (status === 'dismissed') {
+          note = await UI.prompt('למה? (לא חובה — הסקירה הבאה תלמד מזה)', { title: 'לא רלוונטי', multiline: true, okText: 'סימון' });
+          if (note === null && !(await UI.confirm('לסמן בלי הסבר?', { okText: 'כן, בלי הסבר' }))) return;
+        }
+        try {
+          data = await API.put(`/api/admin/wa-bot/reviews/${review.id}/fixes/${fix.n}`, { status, note: note ?? '' });
+          paint();
+        } catch (err) { UI.error(err); }
+      };
+
+      const fixCard = (review, fix) => {
+        const [label, cls] = FIX_STATUS[fix.status] ?? FIX_STATUS.new;
+        return el(`div.rv-fix${fix.status === 'new' ? '' : '.rv-fix-closed'}`, {}, [
+          el('div.flex', { style: { flexWrap: 'wrap', gap: '6px', alignItems: 'center' } }, [
+            el('b', { text: fix.title }),
+            fix.kind && FIX_KIND[fix.kind] ? el('span.ai-chip.ai-chip-ai', { text: FIX_KIND[fix.kind] }) : null,
+            el(`span.ai-chip${cls ? `.${cls}` : ''}`, { text: label })
+          ]),
+          fix.problem ? el('div.rv-text', { text: fix.problem }) : null,
+          fix.example ? el('div.rv-example', {}, [el('span.mute-sm', { text: 'דוגמה מהיומן: ' }), fix.example]) : null,
+          fix.note ? el('div.mute-sm', { text: `📝 ${fix.note}${fix.decidedBy ? ` — ${fix.decidedBy}` : ''}` }) : null,
+          el('div.flex.rv-actions', {}, [
+            fix.url ? el('a.btn.btn-primary.btn-sm', { href: fix.url, target: '_blank', rel: 'noopener' }, ['לבדיקה ולמיזוג ↗']) : null,
+            fix.status === 'new' ? el('button.btn.btn-sm', { onclick: () => decide(review, fix, 'done') }, ['✓ טופל']) : null,
+            fix.status === 'new' ? el('button.btn.btn-ghost.btn-sm', { onclick: () => decide(review, fix, 'dismissed') }, ['✕ לא רלוונטי']) : null,
+            fix.status !== 'new' ? el('button.btn.btn-ghost.btn-sm', { onclick: () => decide(review, fix, 'new') }, ['↩ החזרה להחלטה']) : null
+          ])
+        ]);
+      };
+
+      const reviewBody = (r) => el('div', {}, [
+        el('div.wa-stats.mb', {}, [
+          el('div.wa-stat', {}, [el('b', { text: String(r.conversations) }), el('span', { text: 'שיחות' })]),
+          el('div.wa-stat', {}, [el('b', { text: String(r.succeeded) }), el('span', { text: 'קיבלו מה שביקשו' })]),
+          el('div.wa-stat', {}, [el('b', { text: pct(r) === null ? '—' : `${pct(r)}%` }), el('span', { text: 'הצלחה' })]),
+          el('div.wa-stat', {}, [el('b', { text: String(r.fixes.length) }), el('span', { text: 'הצעות לתיקון' })])
+        ]),
+        r.summary ? el('div.rv-text.mb', { text: r.summary }) : null,
+        r.patterns.length ? el('div.mb', {}, [
+          el('h4.rv-h', { text: '👥 מה למדנו על איך האנשים מבקשים' }),
+          el('ul.rv-list', {}, r.patterns.map((p) => el('li', {}, [p.who ? el('b', { text: `${p.who}: ` }) : null, p.pattern])))
+        ]) : null,
+        r.fixes.length ? el('div', {}, [el('h4.rv-h', { text: '🛠 הצעות לתיקון' }), ...r.fixes.map((f) => fixCard(r, f))])
+          : el('div.mute-sm', { text: 'אין הצעות לתיקון בסקירה הזו.' })
+      ]);
+
+      const when = (r) => `${UI.formatDate(r.createdAt)} · ${UI.relative(r.createdAt)}`;
+
+      function paint() {
+        const { reviews } = data;
+        const open = reviews.flatMap((r) => r.fixes.filter((f) => f.status === 'new').map((f) => ({ r, f })));
+        const [latest, ...older] = reviews;
+        // מגמה: אחוז ההצלחה בסקירות האחרונות, מהישנה לחדשה
+        const trend = reviews.slice(0, 14).reverse().filter((r) => pct(r) !== null);
+
+        UI.mount(host,
+          el('div.alert.alert-info.mb', {}, [el('span', { text: '🌙' }), el('div', {}, [
+            'כל ערב (א׳–ה׳, 21:40) עוברים על כל השיחות של היום עם הבוט: מי ביקש מה, ואם קיבל את זה — משימה שנפתחה, מייל שיצא, תשובה. איפה שאנשים ניסו ולא הצליחו, מוכן תיקון. ',
+            el('b', { text: 'תיקון נכנס רק אחרי "לבדיקה ולמיזוג".' }),
+            ' "טופל" או "לא רלוונטי" כאן — והסקירה הבאה לומדת מההחלטה ולא מציעה שוב. טלפונים, מיילים וסכומים מוסתרים לפני שהשיחות יוצאות מהמערכת.'
+          ])]),
+          !data.configured ? el('div.alert.alert-warn.mb', {}, [el('span', { text: '⚠️' }), el('div', { text: 'הסקירה עוד לא מחוברת: חסר המפתח BOT_REVIEW_KEY בהגדרות השרת (Render ← Environment).' })]) : null,
+          !reviews.length ? UI.empty('עוד אין סקירות. הראשונה תופיע כאן אחרי הערב הראשון שבו הסקירה רצה.', '🌙') : null,
+          trend.length > 1 ? el('div.card.mb', {}, [el('div.card-pad', {}, [
+            el('h4.rv-h', { text: 'אחוז השיחות שהצליחו — לאורך זמן' }),
+            el('div.rv-bars', {}, trend.map((r) => el('div.rv-bar', { title: `${UI.formatDate(r.createdAt)}: ${pct(r)}% (${r.succeeded}/${r.conversations})` }, [
+              el('div.rv-bar-fill', { style: { height: `${Math.max(4, pct(r))}%` } }),
+              el('span', { text: `${pct(r)}%` })
+            ])))
+          ])]) : null,
+          open.length ? el('div.card.mb', {}, [
+            el('div.card-head', {}, [el('h3', { text: `ממתינות להחלטה (${open.length})` })]),
+            el('div.card-pad', {}, open.map(({ r, f }) => el('div', {}, [el('div.mute-sm', { text: `מהסקירה של ${UI.formatDate(r.createdAt)}` }), fixCard(r, f)])))
+          ]) : null,
+          latest ? el('div.card.mb', {}, [
+            el('div.card-head', {}, [el('h3', { text: latest.subject || 'הסקירה האחרונה' }), el('span.mute-sm', { text: when(latest) })]),
+            el('div.card-pad', {}, [reviewBody(latest)])
+          ]) : null,
+          older.length ? el('div.card', {}, [
+            el('div.card-head', {}, [el('h3', { text: 'סקירות קודמות' })]),
+            el('div.card-pad', {}, older.map((r) => el('details.rv-old', {}, [
+              el('summary', {}, [
+                el('b', { text: UI.formatDate(r.createdAt) }),
+                el('span.mute-sm', { text: ` · ${r.conversations} שיחות · ${pct(r) === null ? '—' : `${pct(r)}% הצלחה`} · ${r.fixes.length} הצעות` })
+              ]),
+              reviewBody(r)
+            ])))
+          ]) : null
+        );
+      }
+      paint();
     }
 
     // ---- בדיקה
