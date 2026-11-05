@@ -460,11 +460,15 @@ async function resolveCompany(s) {
   if (r.matched) {
     return { s: null, replies: [`המסמך מופנה ל*${r.matched.name}* (${r.matched.code}), שעדיין לא פתוחה לקליטה מהבוט. קבלת הסחורה בוטלה.`], status: 'denied', result: `חברה סגורה: ${r.matched.code}` };
   }
-  const open = Priority.allowed();
+  // עותק הבדיקה אינו אפשרות לעובד (רק כשהוא היחיד שפתוח). חברות ששמן דומה לנמען — ראשונות
+  const all = Priority.allowed();
+  const real = all.filter((c) => !Priority.isTest(c));
+  const near = new Set(Priority.companiesByName(String(s.doc.recipient_name ?? '').split(/\s+/).slice(0, 2).join(' ')).map((c) => c.code));
+  const open = (real.length ? real : all).sort((a, b) => Number(near.has(b)) - Number(near.has(a)));
   s.step = 'company';
   s.companyOptions = open;
   return reply(s, [`לא זיהיתי לאיזו חברה המסמך מופנה (נמען: ${s.doc.recipient_name || '—'}${s.doc.recipient_vat ? `, ח.פ. ${s.doc.recipient_vat}` : ''}).`,
-    'לאיזו חברה לקלוט?', ...open.map((c, i) => `*${i + 1}.* ${Priority.companyOf(c).name} (${c})`), '', 'או *ביטול*.'].join('\n'));
+    'לאיזו חברה לקלוט?', ...open.map((c, i) => `*${i + 1}.* ${Priority.companyOf(c).name} (${c})`), '', 'כתבו מספר או שם, או *ביטול*.'].join('\n'));
 }
 
 async function resolveSupplier(s) {
@@ -1357,9 +1361,10 @@ async function step(user, s, t, file) {
     }
 
     case 'company': {
-      const n = numberIn(t);
-      const c = n && s.companyOptions[n - 1];
-      if (!c) return reply(s, 'כתבו את מספר החברה מהרשימה, או *ביטול*.');
+      const n = /^\s*\d{1,2}\s*$/.test(t) ? Number(t) : null;
+      const byName = !n ? Priority.companiesByName(t).map((x) => x.code).filter((x) => s.companyOptions.includes(x)) : [];
+      const c = (n && s.companyOptions[n - 1]) || (byName.length === 1 ? byName[0] : null);
+      if (!c) return reply(s, byName.length > 1 ? `יש כמה חברות בשם הזה: ${byName.map((x) => `*${s.companyOptions.indexOf(x) + 1}.* ${Priority.companyOf(x).name}`).join(' · ')}. כתבו מספר.` : 'כתבו את מספר החברה מהרשימה, או את שמה, או *ביטול*.');
       s.company = c;
       s.via = 'direct';
       return resolveSupplier(s);
