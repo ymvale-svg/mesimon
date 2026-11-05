@@ -714,20 +714,24 @@ async function askProject(s) {
 }
 
 /**
- * המחסן: מההזמנה, כשיש; מחסן אחד שאליו נקלטו קבלות הפרויקט — ברירת המחדל; כמה — שואלים, עם
- * השמות; אף אחד — מחסן הפרויקט אם כבר קלטו אליו בחברה, אחרת Main (‎warehouseOf‎).
+ * המחסן: מההזמנה, כשיש (ורק אם קיים במסך המחסנים); המחסנים של הפרויקט — ממסך המחסנים, ואם אין
+ * שם שיוך, מהקבלות הקודמות — אחד הוא ברירת המחדל, כמה — שואלים עם השמות; אף אחד — מחסן הפרויקט
+ * אם קיים, אחרת מחסן ברירת המחדל של החברה (‎warehouseOf‎).
  */
 async function chooseWarehouse(s, note = '') {
   const go = (extra) => { const r = askFiles(s); const pre = [note, extra].filter(Boolean).join('\n'); return pre ? { ...r, replies: [`${pre}\n\n${r.replies[0]}`] } : r; };
   if (s.warehouse) return go('');
-  if (s.order?.warehouse) { s.warehouse = s.order.warehouse; return go(`🏬 מחסן: ${s.warehouse} — מההזמנה`); }
+  if (s.order?.warehouse && await Priority.warehouseExists(s.company, s.order.warehouse).catch(() => true)) {
+    s.warehouse = s.order.warehouse;
+    return go(`🏬 מחסן: ${s.warehouse} — מההזמנה`);
+  }
   const opts = await Priority.projectWarehouses(s.company, s.project?.code).catch(() => []);
   if (opts.length === 1) { s.warehouse = opts[0].code; return go(`🏬 מחסן: *${opts[0].name || opts[0].code}* (${opts[0].code})`); }
   if (opts.length > 1) {
     s.step = 'warehouse';
     s.warehouseOptions = opts.slice(0, 9);
-    return reply(s, [note || null, `🏬 לאיזה מחסן לשייך? בפרויקט ${s.project.des} נקלטו קבלות לכמה מחסנים:`,
-      ...s.warehouseOptions.map((w, i) => `*${i + 1}.* ${w.name || w.code} (${w.code}) — ${w.n} קבלות`), '', 'כתבו מספר מהרשימה.'].filter((x) => x !== null).join('\n'));
+    return reply(s, [note || null, `🏬 לאיזה מחסן לשייך? לפרויקט ${s.project.des} יש כמה מחסנים:`,
+      ...s.warehouseOptions.map((w, i) => `*${i + 1}.* ${w.name || w.code} (${w.code})${w.n ? ` — ${w.n} קבלות` : ''}`), '', 'כתבו מספר מהרשימה.'].filter((x) => x !== null).join('\n'));
   }
   s.warehouse = await Priority.warehouseOf(s.company, s.project?.code);
   return go('');
@@ -741,8 +745,8 @@ function askFiles(s) {
 
 async function createDraft(user, s) {
   const c = s.company;
-  // המחסן — נלמד מהקבלות הקודמות של הפרויקט (‎warehouseOf‎); פריוריטי דוחה אותו — Main
-  if (!s.warehouse) s.warehouse = await Priority.warehouseOf(c, s.project?.code);
+  // המחסן — נבדק מול מסך המחסנים לפני הקליטה; פריוריטי בכל זאת דוחה אותו — Main
+  if (!s.warehouse || !(await Priority.warehouseExists(c, s.warehouse).catch(() => true))) s.warehouse = await Priority.warehouseOf(c, s.project?.code);
   const head = { supname: s.supplier.code, booknum: s.doc.doc_number, date: s.doc.date || null, project: s.project?.code, warehouse: s.warehouse, payCode: s.payCode ?? Priority.DEFAULT_PAY };
   let docno;
   try {
