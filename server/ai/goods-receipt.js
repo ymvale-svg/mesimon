@@ -538,11 +538,31 @@ function docWithoutVat(d) {
   return Number(t.total || t.before_vat || 0) > 0 && !Number(t.vat || 0);
 }
 
+/*
+ * טיוטא קיימת לאותו מסמך — הקליטה ממשיכה ממנה, בשלב בדיקת הטיוטא: הפרויקט, המחסן ותנאי התשלום מה-GR, השורות
+ * והסכומים של המסמך מהקריאה החדשה (לבדיקה מול המסמך, ולעדכון לפי צילום). המסמך כבר בנספחים — לא מצורף שוב.
+ */
+async function resumeDraft(s, dup) {
+  const gr = await Priority.readReceipt(s.company, dup.DOCNO);
+  s.docno = dup.DOCNO;
+  s.resumed = true;
+  s.project = gr.PROJDOCNO ? { code: gr.PROJDOCNO, des: gr.PROJDES ?? '' } : null;
+  s.warehouse = gr.TOWARHSNAME || null;
+  s.payCode = gr.MED_MXPAYCODE || s.payCode;
+  s.order = null;
+  for (const f of s.files ?? []) f.attached = true;
+  const out = await showDraft(s, [], null);
+  return { ...out, replies: [`📂 *${dup.DOCNO}* כבר קיימת בפריוריטי כ*טיוטא* (${ymdHe(dup.CURDATE)}) — ממשיכים ממנה. זה מה שיש בה עכשיו; לשנות משהו?`, ...out.replies],
+    result: `המשך טיוטא ${dup.DOCNO}` };
+}
+
 async function askHeader(s) {
   const d = s.doc;
   if (s.noVat === undefined) s.noVat = docWithoutVat(d);
   // אותו מסמך כבר נקלט — פריוריטי ממילא דוחה מספר תעודה כפול לאותו ספק
   const dup = await Priority.findReceiptByBooknum(s.company, s.supplier.code, d.doc_number);
+  // אותו מסמך כבר נקלט כטיוטא (למשל נפתח שוב לעריכה בפריוריטי) — ממשיכים ממנה: מציגים מה שיש ושואלים אם לשנות
+  if (dup && dup.STATDES === 'טיוטא') return resumeDraft(s, dup);
   if (dup && dup.STATDES !== 'מבוטלת') {
     return { s: null, replies: [`המסמך ${d.doc_number} של ${s.supplier.name} כבר נקלט: *${dup.DOCNO}* (${dup.STATDES}, ${ymdHe(dup.CURDATE)}). לא נקלט שוב.`], status: 'denied', result: `כפול: ${dup.DOCNO}` };
   }
