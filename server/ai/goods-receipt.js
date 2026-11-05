@@ -792,7 +792,8 @@ async function createDraft(user, s) {
   if (!s.order && s.doc.totals?.doc_discount_pct >= 0.1) {
     await Priority.setHeader(c, docno, { PERCENT: s.doc.totals.doc_discount_pct }).catch((err) => problems.push({ what: 'הנחת המסמך לא נקלטה', err: `הנחת מסמך: ${err.message}` }));
   }
-  await Priority.setHeader(c, docno, { DETAILS: `בוט ${s.doc.doc_number}`.slice(0, 24) }).catch(() => {});
+  // פרטים (‎DETAILS‎, עד 24 תווים) — שם המקבל ומספר התעודה; מוצג ברשימת התעודות בחשבונית הספק
+  await Priority.setHeader(c, docno, { DETAILS: receiverDetails(user, s.doc.doc_number) }).catch(() => {});
   for (const f of s.files) {
     try {
       await Priority.attach(c, docno, { buf: fs.readFileSync(f.path), mime: f.mime, description: f.label === 'מסמך ראשי' ? `${s.doc.doc_type === 'invoice' ? 'חשבונית' : 'תעודת משלוח'} ${s.doc.doc_number}`.slice(0, 32) : f.label });   // התיאור בפריוריטי נחתך אחרי ~32 תווים
@@ -803,6 +804,14 @@ async function createDraft(user, s) {
   // דו-שיח פנימי שנכשל — לא משהו שהעובד יכול לתקן; רק למנהל
   await writeDialog(user, s).catch((err) => problems.push({ what: null, err: `דו-שיח פנימי: ${err.message}` }));
   return problems;
+}
+
+/** "ישראל כהן 643340" — השם מתקצר כך שהמספר תמיד נכנס ב-24 התווים */
+function receiverDetails(user, number) {
+  const num = String(number ?? '').slice(0, 20);
+  const name = String(user?.full_name || user?.name || '').trim().replace(/\s+/g, ' ');
+  if (!name) return num;
+  return `${name.slice(0, Math.max(0, 23 - num.length)).trim()} ${num}`.trim();
 }
 
 function writeDialog(user, s) {
