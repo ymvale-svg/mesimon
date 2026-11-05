@@ -23,6 +23,7 @@ const Memory = require('./ai/mail-memory');
 const MailAsk = require('./ai/mail-ask');
 const Agents = require('./ai/agents');
 const OrgKnowledge = require('./ai/org-knowledge');
+const Classification = require('./ai/classification');
 const Timeless = require('./timeless');
 const MailInsights = require('./ai/mail-insights');
 const Mime = require('./mime');
@@ -962,9 +963,9 @@ function register(router, h) {
   });
 
   router.get('/api/admin/knowledge', async (req, res, ctx) => {
-    aiAdmin(ctx);
+    const actor = aiAdmin(ctx);
     const sp = parseUrl(req).searchParams;
-    sendJson(res, 200, { ...OrgKnowledge.list({ q: sp.get('q') ?? '', dept: sp.get('dept') ?? '', week: sp.get('week') === '1' }), blocklist: D.getSetting('org_knowledge_blocklist', '') });
+    sendJson(res, 200, { ...OrgKnowledge.list({ q: sp.get('q') ?? '', dept: sp.get('dept') ?? '', topic: sp.get('topic') ?? '', week: sp.get('week') === '1', actor }), blocklist: D.getSetting('org_knowledge_blocklist', '') });
   });
   router.put('/api/admin/knowledge/blocklist', async (req, res, ctx) => {
     aiAdmin(ctx);
@@ -979,15 +980,40 @@ function register(router, h) {
     OrgKnowledge.daily({ force: true }).catch((err) => console.error('[משימון] עדכון הידע הארגוני נכשל:', err.message));
     sendJson(res, 202, { started: true });
   });
-  router.get('/api/admin/knowledge/:id/sources', async (req, res, ctx) => {
+  // 🔒 טבלת הרגישות — נושאים, מחלקות, רצפה ודוגמאות (‎classification.js‎)
+  router.get('/api/admin/knowledge/topics', async (req, res, ctx) => {
     aiAdmin(ctx);
-    sendJson(res, 200, { sources: OrgKnowledge.sources(Number(ctx.params.id)) });
+    sendJson(res, 200, {
+      topics: Classification.topics(),
+      levels: Classification.LEVEL_LABELS,
+      hints: Classification.LEVEL_HINTS,
+      leadership: Classification.leadershipList(),
+      departments: D.all('SELECT id, name FROM departments ORDER BY name').map((d) => ({ id: d.id, name: D.departmentPath(d.id) }))
+    });
   });
-  router.put('/api/admin/knowledge/:id', async (req, res, ctx) => {
+  router.put('/api/admin/knowledge/topics', async (req, res, ctx) => {
     aiAdmin(ctx);
     const b = await readJson(req);
     try {
-      sendJson(res, 200, { entry: OrgKnowledge.edit(Number(ctx.params.id), b) });
+      sendJson(res, 200, { topics: Classification.saveTopics(b.topics) });
+    } catch (err) {
+      throw userError(err);
+    }
+  });
+  router.get('/api/admin/knowledge/preview', async (req, res, ctx) => {
+    aiAdmin(ctx);
+    const sp = parseUrl(req).searchParams;
+    sendJson(res, 200, { rows: Classification.preview({ departmentId: Number(sp.get('department')) || null, role: sp.get('role') || 'employee' }) });
+  });
+  router.get('/api/admin/knowledge/:id/sources', async (req, res, ctx) => {
+    const actor = aiAdmin(ctx);
+    sendJson(res, 200, { sources: OrgKnowledge.sources(Number(ctx.params.id), actor) });
+  });
+  router.put('/api/admin/knowledge/:id', async (req, res, ctx) => {
+    const actor = aiAdmin(ctx);
+    const b = await readJson(req);
+    try {
+      sendJson(res, 200, { entry: OrgKnowledge.edit(Number(ctx.params.id), b, actor) });
     } catch (err) {
       throw userError(err);
     }
