@@ -39,6 +39,11 @@ const TZ = 'Asia/Jerusalem';
 const FILES_DIR = () => path.join(D.UPLOADS_DIR, 'goods-receipt');
 
 const TRIGGER = /קבלת\s*סחורה/;
+// "פריוריטי" לבד — תפריט: מה לעשות בפריוריטי (היום קבלת סחורה; בהמשך חשבוניות חלקיות ועוד)
+const PRIORITY = /פריוריטי|פריורטי|פרויוריטי|priority/i;
+// שיחה פעילה — רק כל עוד העובד באמת עונה. אחרי הפסקה ארוכה, הודעה חדשה היא ברירת המחדל (משימות),
+// וקבלת הסחורה ממתינה עד "קבלת סחורה" / "פריוריטי"
+const IDLE = 20 * 60 * 1000;
 const YES = /^(כן|נכון|מאשר|מאשרת|אשר|אישור|תקין|יאללה|אוקי|אוקיי|סבבה|ok|yes|👍|✅)([\s,.!]|$)/i;
 const CANCEL = /^(ביטול|בטל|לבטל|עזוב|יציאה|stop)([\s,.!]|$)/i;
 const DONE_FILES = /^(סיום|סיימתי|זהו|אין|אין נספחים|בלי נספחים|המשך)([\s,.!]|$)/;
@@ -61,11 +66,39 @@ function clear(userId, s) {
 }
 const fresh = (s) => s && Date.now() - (s.at ?? 0) < TTL;
 
-/** יש קבלת סחורה פתוחה — כל הודעה של העובד הולכת אליה */
-const active = (userId) => fresh(load(userId));
-/** הודעה שפותחת קבלת סחורה: המילים, או קובץ בלי טקסט (ואז הבוט שואל קודם) */
-const opens = (text, file) => isTrigger(text) || Boolean(file && !String(text ?? '').trim());
+/**
+ * העובד באמצע שיחה עם קבלת הסחורה — ההודעה הבאה שלו הולכת אליה.
+ * רק כשהשיחה טרייה (‎IDLE‎) ולא הושהתה. קליטה שנשכחה אינה "בולעת" הודעות: ברירת המחדל היא משימות.
+ */
+const active = (userId) => {
+  const s = load(userId);
+  return Boolean(fresh(s) && !s.paused && Date.now() - (s.at ?? 0) < IDLE);
+};
+/** יש קליטה פתוחה (גם מושהית) — לתזכורת ולהמשך ב"קבלת סחורה" */
+const pending = (userId) => Boolean(fresh(load(userId)));
+/**
+ * הודעה שנכנסת לפריוריטי — רק במפורש: "קבלת סחורה", "פריוריטי",
+ * או קובץ בלי טקסט (הבוט אינו מטפל בקבצים אחרת, ושואל קודם).
+ */
+const opens = (text, file) => isTrigger(text) || isPriority(text) || Boolean(file && !String(text ?? '').trim());
 const isTrigger = (text) => TRIGGER.test(String(text ?? ''));
+const isPriority = (text) => PRIORITY.test(String(text ?? ''));
+/** תשובה לשאלה של קבלת הסחורה קצרה. משפט ארוך שלא התאים לשלב — כנראה בקשה אחרת (משימה) */
+const looksUnrelated = (t) => String(t ?? '').trim().split(/\s+/).filter(Boolean).length >= 6;
+
+/** ההודעה אינה לקבלת הסחורה — משהים אותה, והבוט הרגיל מטפל בהודעה */
+function pass(s, why) {
+  return { s: { ...s, paused: true, reminded: false }, pass: true, replies: [], status: 'ok', result: `לא לקבלת סחורה: ${why}` };
+}
+
+/** תזכורת חד-פעמית, אחרי תשובה רגילה, שיש קבלת סחורה מושהית */
+function pausedNote(userId) {
+  const s = load(userId);
+  if (!fresh(s) || s.reminded || ['menu', 'offer'].includes(s.step)) return '';
+  if (!s.paused && Date.now() - (s.at ?? 0) < IDLE) return '';
+  D.setSetting(key(userId), { ...s, paused: true, reminded: true });
+  return '📦 _יש לך קבלת סחורה פתוחה. להמשך — *קבלת סחורה*, לביטול — *ביטול קבלת סחורה*._';
+}
 
 // ---------------------------------------------------------------------------
 // עזרים
@@ -152,14 +185,14 @@ const MATCH_SCHEMA = {
 };
 const PROJECT_SCHEMA = {
   type: 'object',
-  properties: { codes: { type: 'array', items: str }, question: str },
-  required: ['codes', 'question'],
+  properties: { codes: { type: 'array', items: str }, question: str, unrelated: { type: 'boolean' } },
+  required: ['codes', 'question', 'unrelated'],
   additionalProperties: false
 };
 const REPLY_SCHEMA = {
   type: 'object',
   properties: {
-    action: { type: 'string', enum: ['confirm', 'cancel', 'update', 'answer', 'unclear'] },
+    action: { type: 'string', enum: ['confirm', 'cancel', 'update', 'answer', 'unclear', 'unrelated'] },
     updates: {
       type: 'array',
       items: { type: 'object', properties: { line: { type: 'integer' }, qty: num }, required: ['line', 'qty'], additionalProperties: false }
@@ -235,7 +268,7 @@ async function findProjects(all, text, { strict = true } = {}) {
   try {
     const out = await ai.project(all, text);
     const codes = (out.codes ?? []).filter((c, i, arr) => arr.indexOf(c) === i);
-    return { list: codes.map((c) => all.find((p) => p.code === c)).filter(Boolean).slice(0, 6), by: 'ai', question: out.question };
+    return { list: codes.map((c) => all.find((p) => p.code === c)).filter(Boolean).slice(0, 6), by: 'ai', question: out.question, unrelated: Boolean(out.unrelated) };
   } catch (err) {
     console.error('[משימון] התאמת פרויקט ב-AI:', err.message);
     return { list: [], by: null };
@@ -292,6 +325,11 @@ function summaryText(s, gr) {
 // ---------------------------------------------------------------------------
 
 const reply = (s, text, extra = {}) => ({ s, replies: [text], ...extra });
+
+const MENU = ['🗂 *פריוריטי* — מה לעשות?',
+  '*1.* 📦 קבלת סחורה (תעודת משלוח או חשבונית ← GR)',
+  '_בקרוב: חשבוניות חלקיות ועוד._',
+  'כתבו מספר, או פשוט המשיכו במה שרציתם — זה יגיע למשימות כרגיל.'].join('\n');
 
 async function onMainDoc(user, s, file) {
   s.files = [file.path ? { ...file, label: 'מסמך ראשי' } : await saveFile(user.id, file, 'מסמך ראשי')];
@@ -562,6 +600,25 @@ async function handle({ user, text = '', file = null }) {
   if (!Priority.isEnabled()) return { replies: ['החיבור לפריוריטי עוד לא הוגדר בשרת. פנו למנהל המערכת.'], status: 'error', result: 'פריוריטי לא מוגדר' };
   if (!Claude.isEnabled()) return { replies: ['קריאת מסמכים דורשת חיבור AI, שעוד לא הוגדר בשרת.'], status: 'error', result: 'AI לא מוגדר' };
 
+  // "ביטול קבלת סחורה" — גם כשהקליטה מושהית
+  if (s && isTrigger(t) && CANCEL.test(t.replace(TRIGGER, '').trim()) && !file) return cancel(user, s);
+  if (!s && isTrigger(t) && CANCEL.test(t)) return { replies: ['אין קבלת סחורה פתוחה.'], status: 'ok', result: 'אין מה לבטל' };
+
+  // חזרה לקליטה מושהית או שנשכחה — "קבלת סחורה" / "פריוריטי" בלי קובץ: ממשיכים מאותה שאלה
+  const idle = s && (s.paused || Date.now() - (s.at ?? 0) >= IDLE);
+  if (s && idle && !file && (isTrigger(t) || isPriority(t)) && !['menu', 'offer', 'doc'].includes(s.step)) {
+    s.paused = false;
+    save(user.id, s);
+    return { replies: [`📦 ממשיכים בקבלת הסחורה מאיפה שעצרנו:\n\n${s.lastAsk || 'שלחו את התשובה לשאלה האחרונה.'}\n\nלביטול — *ביטול*.`], status: 'ok', result: 'המשך קליטה מושהית' };
+  }
+  if (s?.paused) s.paused = false;
+
+  // "פריוריטי" בלי "קבלת סחורה" — תפריט. היום יש בו רק קבלת סחורה; בהמשך גם חשבוניות חלקיות ועוד
+  if (!s && !file && isPriority(t) && !isTrigger(t)) {
+    save(user.id, { step: 'menu', startedAt: Date.now() });
+    return { replies: [MENU], status: 'ok', result: 'תפריט פריוריטי' };
+  }
+
   // תמונה או מסמך בלי "קבלת סחורה" — כנראה מסמך לקליטה. שואלים, ושומרים את הקובץ עד התשובה
   if (!s && file && !isTrigger(t)) {
     const saved = await saveFile(user.id, file, 'מסמך ראשי');
@@ -590,14 +647,33 @@ async function handle({ user, text = '', file = null }) {
     return { replies: [`משהו השתבש מול פריוריטי: ${err.message}\nנסו שוב, או *ביטול*.`], status: 'error', result: err.message };
   }
   if (out.s === null) clear(user.id, s);
-  else save(user.id, out.s ?? s);
+  else {
+    const next = out.s ?? s;
+    if (!out.pass && out.replies?.length) next.lastAsk = out.replies.at(-1);
+    save(user.id, next);
+  }
+  if (out.pass) return { pass: true, replies: [], status: out.status, result: out.result };
   return { replies: out.replies, files: out.files ?? [], status: out.status ?? 'ok', result: out.result ?? `שלב ${(out.s ?? s)?.step ?? 'סיום'}`, docno: s.docno ?? null };
 }
 
 async function step(user, s, t, file) {
   switch (s.step) {
+    case 'menu': {
+      // "1" / "קבלת סחורה" — מתחילים. כל דבר אחר — לא לפריוריטי: יוצאים מהתפריט, והבוט הרגיל מטפל
+      if (isPriority(t) && !isTrigger(t) && !file) return reply(s, MENU);
+      if (file || isTrigger(t) || /^(1|אחת|אחד)([\s,.!]|$)/.test(t)) {
+        s.step = 'doc';
+        if (file) return onMainDoc(user, s, file);
+        return reply(s, '📦 *קבלת סחורה* — שלחו צילום של תעודת המשלוח או החשבונית (המסמך הראשי, שממנו נקראים הנתונים).');
+      }
+      return { s: null, pass: true, replies: [], status: 'ok', result: 'יציאה מתפריט פריוריטי' };
+    }
+
     case 'doc':
-      if (!file) return reply(s, 'מחכה לצילום של תעודת המשלוח או החשבונית. או *ביטול*.');
+      if (!file) {
+        if (looksUnrelated(t)) return pass(s, 'מחכה לצילום, והגיעה בקשה אחרת');
+        return reply(s, 'מחכה לצילום של תעודת המשלוח או החשבונית. או *ביטול*.');
+      }
       return onMainDoc(user, s, file);
 
     case 'offer': {
@@ -609,12 +685,14 @@ async function step(user, s, t, file) {
       }
       if (YES.test(t) || isTrigger(t)) { s.step = 'doc'; return onMainDoc(user, s, s.files[0]); }
       if (/^(לא|אל|ממש לא|no)([\s,.!]|$)/i.test(t)) return { s: null, replies: ['בסדר, לא נקלט. 👍'], status: 'ok', result: 'הצעה נדחתה' };
-      return reply(s, 'לקלוט כ*קבלת סחורה*? *כן* / *לא*');
+      // לא ענה על ההצעה — ההודעה לבוט הרגיל, וההצעה יורדת
+      return { s: null, pass: true, replies: [], status: 'ok', result: 'הצעה ירדה — הודעה אחרת' };
     }
 
     case 'company': {
       const n = numberIn(t);
       const c = n && s.companyOptions[n - 1];
+      if (!c && looksUnrelated(t)) return pass(s, 'לא תשובה לבחירת חברה');
       if (!c) return reply(s, 'כתבו את מספר החברה מהרשימה, או *ביטול*.');
       s.company = c;
       s.via = 'direct';
@@ -630,6 +708,7 @@ async function step(user, s, t, file) {
         if (!x) return reply(s, `אין ספק ${t}. כתבו מספר מהרשימה, מספר ספק אחר, או *ביטול*.`);
         sup = { code: x.SUPNAME, name: x.SUPDES };
       }
+      if (!sup && looksUnrelated(t)) return pass(s, 'לא תשובה לבחירת ספק');
       if (!sup && t && !/^\d+$/.test(t)) {
         const found = await Priority.findSuppliers(s.company, { vat: /^\d{9}$/.test(t) ? t : '', name: t });
         const exact = /^\d+$/.test(t) ? found.list.find((x) => x.SUPNAME === t) : null;
@@ -647,12 +726,14 @@ async function step(user, s, t, file) {
     }
 
     case 'header':
+      if (!YES.test(t) && looksUnrelated(t)) return pass(s, 'לא תשובה לאישור חברה וספק');
       if (!YES.test(t)) return reply(s, '*כן* להמשך, או *ביטול*.');
       return resolveOrder(s);
 
     case 'order': {
       if (NO_ORDER.test(t)) { s.ordersChecked = false; return askLines(s); }
       const po = (t.match(/PO\s*\d+/i)?.[0] ?? '').replace(/\s+/g, '').toUpperCase();
+      if (!po && looksUnrelated(t)) return pass(s, 'לא תשובה למספר הזמנה');
       if (!po) return reply(s, 'כתבו מספר הזמנה (PO…), או *בלי הזמנה*.');
       const o = await Priority.getOrder(s.company, po);
       if (!o) return reply(s, `לא מצאתי את ${po}. כתבו מספר אחר, או *בלי הזמנה*.`);
@@ -676,6 +757,7 @@ async function step(user, s, t, file) {
         return askLines(s);
       }
       const out = await understandReply(s, t);
+      if (out.action === 'unrelated') return pass(s, 'לא תשובה על השורות');
       if (out.action === 'confirm') return step(user, s, 'כן', null);
       if (out.action === 'cancel') return cancel(user, s).then((r) => ({ s: null, ...r }));
       if (out.action === 'answer' && out.choice) {
@@ -698,6 +780,7 @@ async function step(user, s, t, file) {
       if (YES.test(t) && sug) s.chapter = { chapter: sug.chapter, topic: sug.topic };
       else {
         const m = t.match(/(\d{2})\s+(\d{2}-\d{2})/);
+        if (!m && looksUnrelated(t)) return pass(s, 'לא תשובה לתת פרק');
         if (!m) return reply(s, 'כתבו תת פרק ותת נושא (למשל "98 90-00"), או *כן* להצעה.');
         s.chapter = { chapter: m[1], topic: m[2] };
       }
@@ -723,6 +806,8 @@ async function step(user, s, t, file) {
           if (!p) return reply(s, `אין פרויקט ${code} בחברה הזו. כתבו את השם במילים שלכם, או קוד אחר.`);
         } else {
           const found = await findProjects(all, t);
+          // ה-AI אמר שההודעה אינה על פרויקט ("תבדוק למה תיוג הרכב לא נשלח") — היא לבוט הרגיל
+          if (!found.list.length && (found.unrelated || looksUnrelated(t))) return pass(s, 'לא תשובה לשאלת הפרויקט');
           if (found.list.length === 1 && found.by === 'code') p = found.list[0];
           else if (found.list.length === 1) {
             // ה-AI הבין לבד — שואלים לפני ששייכים
@@ -745,6 +830,7 @@ async function step(user, s, t, file) {
         s.files.push(await saveFile(user.id, file, `נספח ${s.files.length}`));
         return reply(s, `📎 נספח ${s.files.length - 1} התקבל. עוד? או *סיום*.`);
       }
+      if (!DONE_FILES.test(t) && looksUnrelated(t)) return pass(s, 'לא נספח ולא סיום');
       if (!DONE_FILES.test(t)) return reply(s, 'שלחו נספח, או *סיום* להמשך.');
       return showDraft(s, await createDraft(user, s));
 
@@ -765,6 +851,7 @@ async function step(user, s, t, file) {
         return showDraft(s, problems);
       }
       const out = await ai.reply(s.reviewLines.map((l) => ({ line: l.n, description: l.description, qty: l.qty, options: [] })), t);
+      if (out.action === 'unrelated') return pass(s, 'לא תשובה על הטיוטא');
       if (out.action === 'confirm') return step(user, s, 'מאשר', null);
       if (out.action === 'cancel') return cancel(user, s).then((r) => ({ s: null, ...r }));
       if (out.action === 'update' && out.updates?.length) {
@@ -788,4 +875,4 @@ async function step(user, s, t, file) {
   }
 }
 
-module.exports = { isTrigger, opens, active, handle, _projectsOf: projectsOf, _findProjects: findProjects, _ai: ai, _load: load, _clear: (userId) => clear(userId, load(userId)) };
+module.exports = { isTrigger, isPriority, opens, active, pending, pausedNote, handle, _projectsOf: projectsOf, _findProjects: findProjects, _ai: ai, _load: load, _clear: (userId) => clear(userId, load(userId)) };

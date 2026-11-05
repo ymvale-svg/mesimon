@@ -2616,9 +2616,11 @@ async function handleDirect(msg) {
       return;
     }
   }
-  // קבלת סחורה — "קבלת סחורה" (כתוב, בכיתוב לתמונה או בהקלטה) פותח; מאז כל הודעה, גם תמונה, הולכת אליה עד הסוף
+  // פריוריטי (קבלת סחורה) — רק בטריגר מפורש: "קבלת סחורה" / "פריוריטי" (כתוב, בכיתוב לתמונה או בהקלטה),
+  // או קובץ בלי טקסט. ברירת המחדל לכל הודעה אחרת — משימות. באמצע קליטה, רק תשובה לשאלה הולכת אליה;
+  // בקשה אחרת (או הודעה אחרי הפסקה ארוכה) עוברת לבוט הרגיל, והקליטה ממתינה ל"קבלת סחורה"
+  let grPassed = false;
   if (WaActions.allowed(actor, 'goods_receipt') && (GoodsReceipt.active(user.id) || GoodsReceipt.opens(text, msg.file))) {
-    await notice;
     const slowGr = setTimeout(() => sendText(msg.chatId, '⏳ רגע, קורא ובודק מול פריוריטי…').catch(() => {}), SLOW_NOTICE_MS);
     let r;
     try {
@@ -2630,18 +2632,22 @@ async function handleDirect(msg) {
     clearTimeout(slowGr);
     const shown = [voice ? `🎙 ${text}` : text, msg.file ? '[📎 קובץ]' : ''].filter(Boolean).join(' ');
     log({ ...base, text: shown || '[קובץ]', action: 'goods_receipt', status: r.status, result: r.result });
-    // קובץ (ה-PDF לבדיקה) — לפני הטקסט, כדי שהשאלה "מאשר?" תהיה ההודעה האחרונה
-    for (const f of r.files ?? []) {
-      try {
-        const ch = channel();
-        if (ch) await WhatsApp.sendFile(ch, msg.chatId, f);
-      } catch (err) {
-        console.error('[משימון] שליחת ה-PDF של קבלת הסחורה נכשלה:', err.message);
-        log({ ...base, text: `[📄 ${f.fileName}]`, action: 'goods_receipt', status: 'error', result: err.message });
+    grPassed = Boolean(r.pass);
+    if (!grPassed) {
+      await notice;
+      // קובץ (ה-PDF לבדיקה) — לפני הטקסט, כדי שהשאלה "מאשר?" תהיה ההודעה האחרונה
+      for (const f of r.files ?? []) {
+        try {
+          const ch = channel();
+          if (ch) await WhatsApp.sendFile(ch, msg.chatId, f);
+        } catch (err) {
+          console.error('[משימון] שליחת ה-PDF של קבלת הסחורה נכשלה:', err.message);
+          log({ ...base, text: `[📄 ${f.fileName}]`, action: 'goods_receipt', status: 'error', result: err.message });
+        }
       }
+      for (const reply of r.replies) for (const part of splitMessage(reply)) await sendText(msg.chatId, part);
+      return;
     }
-    for (const reply of r.replies) for (const part of splitMessage(reply)) await sendText(msg.chatId, part);
-    return;
   }
   if (!text && msg.file) {
     // תמונה או מסמך — היום הבוט מטפל בהם רק בקבלת סחורה, ואומר למה לא
@@ -2674,7 +2680,9 @@ async function handleDirect(msg) {
   clearTimeout(slow);
   await notice;
   // מה שנשמע חוזר בשורה אחת — כך רואים מיד אם התמלול טעה
-  const reply = voice ? `🎙 *שמעתי:* "${text}"\n\n${r.reply}` : r.reply;
+  // קבלת סחורה שהושהתה (ההודעה הלכה למשימות) — תזכורת חד-פעמית בסוף
+  const grNote = WaActions.allowed(actor, 'goods_receipt') ? GoodsReceipt.pausedNote(user.id) : '';
+  const reply = `${voice ? `🎙 *שמעתי:* "${text}"\n\n${r.reply}` : r.reply}${grNote ? `\n\n${grNote}` : ''}`;
   const history = [...state.history, { role: 'user', text: text.slice(0, 500) }, { role: 'bot', text: r.reply.slice(0, 500) }];
   saveChat(user.id, { ...r.next, history });
   log({ ...base, text: voice ? `🎙 ${text}` : text, action: r.action, status: r.status, result: r.result, taskId: r.taskId ?? null });
