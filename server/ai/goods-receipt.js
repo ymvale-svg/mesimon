@@ -125,7 +125,7 @@ const EXTRACT_SCHEMA = {
     recipient_name: str, recipient_vat: str,
     supplier_name: str, supplier_vat: str,
     doc_number: str, po_number: str, supplier_order_ref: str,
-    date: str, delivery_place: str, project_hint: str,
+    date: str, doc_date: str, delivery_place: str, project_hint: str,
     purchase_type: { type: 'string', enum: ['site', 'office', 'unknown'] },
     lines: {
       type: 'array',
@@ -149,7 +149,7 @@ const EXTRACT_SCHEMA = {
     warnings: { type: 'array', items: str }
   },
   required: ['doc_type', 'recipient_name', 'recipient_vat', 'supplier_name', 'supplier_vat', 'doc_number', 'po_number', 'supplier_order_ref',
-    'date', 'delivery_place', 'project_hint', 'purchase_type', 'lines', 'totals', 'warnings'],
+    'date', 'doc_date', 'delivery_place', 'project_hint', 'purchase_type', 'lines', 'totals', 'warnings'],
   additionalProperties: false
 };
 const MATCH_SCHEMA = {
@@ -304,7 +304,7 @@ function summaryText(s, gr) {
     `🧾 הזמנה: ${s.order ? s.order.ordname : 'ללא הזמנה'}`,
     `📁 פרויקט: ${gr.PROJDOCNO ?? ''} ${gr.PROJDES ?? ''}`.trim(),
     `🏬 מחסן: ${gr.TOWARHSNAME ?? ''}${gr.TOWARHSNAME && gr.TOWARHSNAME !== 'Main' ? ' (של הפרויקט)' : ''}`,
-    `💳 תנאי תשלום: ${Priority.payLabel(gr.MED_MXPAYCODE) || gr.MED_MXPAYDES || '—'}${s.order?.payCode && s.order.payCode !== gr.MED_MXPAYCODE ? ` ⚠️ בהזמנה: ${Priority.payLabel(s.order.payCode)}` : ''}`
+    `💳 תנאי תשלום: ${Priority.payLabel(gr.MED_MXPAYCODE) || gr.MED_MXPAYDES || '—'}${dueText(s, gr.MED_MXPAYCODE)}${s.order?.payCode && s.order.payCode !== gr.MED_MXPAYCODE ? ` ⚠️ בהזמנה: ${Priority.payLabel(s.order.payCode)}` : ''}`
   ];
   const lines = gr.lines.map((l, i) =>
     `*${i + 1}.* ${l.PDES} (${l.PARTNAME})\n   ${qtyText(l.TQUANT)} ${l.TUNITNAME ?? ''} × ${money(l.PRICE)}${l.PERCENT ? ` −${l.PERCENT}%` : ''} = *${money(l.QPRICE)}*` +
@@ -338,6 +338,14 @@ function summaryText(s, gr) {
 // ---------------------------------------------------------------------------
 
 /** ‎lastPrompt‎ — השאלה האחרונה, כדי לחזור עליה אחרי נספח שהגיע באמצעה */
+/** "לתשלום עד 15.05.2026 (מתאריך החשבונית 15.03.2026)" — מתאריך המסמך הראשי (החשבונית) */
+function dueText(s, code) {
+  const from = s.doc?.doc_date || s.doc?.date;
+  const due = Priority.dueDate(code, from);
+  if (!due) return '';
+  return ` — לתשלום עד ${ymdHe(due)} (מתאריך ${s.doc?.doc_type === 'invoice' ? 'החשבונית' : 'המסמך'} ${ymdHe(from)})`;
+}
+
 const reply = (s, text, extra = {}) => { if (s && s.step) s.lastPrompt = text; return { s, replies: [text], ...extra }; };
 
 const linesOf = (doc) => (doc.lines ?? []).map((l, i) => ({ n: i + 1, description: l.description, supplierCode: l.supplier_code, qty: l.qty, unit: l.unit,
@@ -434,7 +442,7 @@ async function askHeader(s) {
     s.via === 'sandbox' ? `   (המסמך מופנה ל${Priority.resolveCompany(d.recipient_vat).matched?.name ?? 'חברה אחרת'} — נקלט לעותק הבדיקה)` : null,
     `🚚 ספק: *${s.supplier.name}* (${s.supplier.code})${s.supplierBy === 'vat' ? ` — לפי ח.פ. ${String(d.supplier_vat).replace(/\D/g, '')}` : s.supplierBy === 'name' ? (d.supplier_vat ? ` — לפי שם: ח.פ. ${String(d.supplier_vat).replace(/\D/g, '')} שבמסמך לא נמצא בכרטיסי הספקים` : ' — לפי שם, אין ח.פ. במסמך') : ''}`,
     d.date ? `📅 ${ymdHe(d.date)}${d.delivery_place ? ` · ${d.delivery_place}` : ''}` : null,
-    `💳 תנאי תשלום: *${Priority.payLabel(s.payCode ?? Priority.DEFAULT_PAY)}*${(s.payCode ?? Priority.DEFAULT_PAY) === Priority.DEFAULT_PAY ? ' (ברירת מחדל)' : ''}`,
+    `💳 תנאי תשלום: *${Priority.payLabel(s.payCode ?? Priority.DEFAULT_PAY)}*${(s.payCode ?? Priority.DEFAULT_PAY) === Priority.DEFAULT_PAY ? ' (ברירת מחדל)' : ''}${dueText(s, s.payCode ?? Priority.DEFAULT_PAY)}`,
     d.warnings?.length ? `⚠️ ${d.warnings.join('\n⚠️ ')}` : null,
     '', 'נכון? *כן* להמשך, או *ביטול*. לתנאי תשלום אחר — כתבו אותו ("שוטף 60").'
   ];
@@ -615,7 +623,7 @@ function writeDialog(user, s) {
     d.detail ? `פירוט השורות: מתוך ${d.detail.doc_type === 'invoice' ? 'חשבונית' : 'חשבון לתשלום'} ${d.detail.doc_number}` : null,
     d.date || d.delivery_place ? `אספקה: ${[ymdHe(d.date), d.delivery_place].filter(Boolean).join(', ')}` : null,
     d.purchase_type !== 'unknown' ? `סוג רכש: ${d.purchase_type === 'site' ? 'אתרי' : 'משרדי'}` : null,
-    `תנאי תשלום: ${Priority.payLabel(s.payCode ?? Priority.DEFAULT_PAY)}${(s.payCode ?? Priority.DEFAULT_PAY) === Priority.DEFAULT_PAY ? ' (ברירת מחדל)' : ' (נבחר ע"י המקבל)'}`,
+    `תנאי תשלום: ${Priority.payLabel(s.payCode ?? Priority.DEFAULT_PAY)}${(s.payCode ?? Priority.DEFAULT_PAY) === Priority.DEFAULT_PAY ? ' (ברירת מחדל)' : ' (נבחר ע"י המקבל)'}${dueText(s, s.payCode ?? Priority.DEFAULT_PAY)}`,
     ...(s.corrections ?? []).map((c) => `תיקון המקבל: ${c}`),
     ...short.map((x) => `קבלה חלקית — ${x}. היתרה נשארת פתוחה`),
     !s.order && s.project ? `פרויקט נבחר ע"י המקבל: ${s.project.code} ${s.project.des}` : null,
@@ -635,7 +643,7 @@ async function showDraft(s, problems = [], user = null) {
   try {
     const dialog = await Priority.readDialog(s.company, s.docno).catch(() => []);
     const c = Priority.companyOf(s.company);
-    const buf = receiptPdf(gr, { companyLabel: `${c.name.replace(/ — .*/, '')} (${s.company})`, test: Priority.isTest(s.company), order: s.order?.ordname ?? '', dialog, docTotal: s.doc?.totals?.total || null });
+    const buf = receiptPdf(gr, { companyLabel: `${c.name.replace(/ — .*/, '')} (${s.company})`, test: Priority.isTest(s.company), order: s.order?.ordname ?? '', dialog, docTotal: s.doc?.totals?.total || null, due: Priority.dueDate(gr.MED_MXPAYCODE, s.doc?.doc_date || s.doc?.date) });
     files.push({ buf, fileName: `${gr.DOCNO}-טיוטא.pdf`, mime: 'application/pdf', caption: `📄 ${gr.DOCNO} — טיוטא לבדיקה` });
   } catch (err) {
     console.error('[משימון] PDF של קבלת סחורה:', err.message);

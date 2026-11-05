@@ -329,6 +329,19 @@ const payLabel = (code) => { const p = payTerm(code); return !p ? code : p.days 
  * תנאי התשלום שבטקסט: "שוטף 60", "שוטף+30", "ש60", "שוטף פלוס 90", "שוטף" לבד.
  * ‎null‎ — לא נאמר תנאי תשלום. ‎{ unknown: 75 }‎ — נאמר מספר ימים שאין לו קוד.
  */
+/**
+ * מועד התשלום — מתאריך החשבונית: "שוטף" = סוף החודש של התאריך; "שוטף + N" = סוף החודש ועוד N ימים.
+ * ‎YYYY-MM-DD‎, או ריק כשאין תאריך או קוד.
+ */
+function dueDate(code, docDate) {
+  const p = payTerm(code);
+  const m = String(docDate ?? '').match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (!p || !m) return '';
+  const eom = new Date(Date.UTC(Number(m[1]), Number(m[2]), 0));        // היום האחרון בחודש
+  eom.setUTCDate(eom.getUTCDate() + p.days);
+  return eom.toISOString().slice(0, 10);
+}
+
 function payFromText(text) {
   const t = String(text ?? '').replace(/["'״׳]/g, '');
   const m = t.match(/(?:^|[\s,])(?:שוטף|ש)\s*(?:\+|פלוס)?\s*(\d{1,3})(?!\d)/);
@@ -443,7 +456,7 @@ async function cancelReceipt(company, docno) {
 
 module.exports = {
   COMPANIES, isEnabled, allowed, companyOf, isTest, resolveCompany, PriorityError,
-  PAY_TERMS, DEFAULT_PAY, payTerm, payLabel, payFromText, warehouseOf, findSuppliers, supplierByCode, findReceiptByBooknum, getOrder, openOrders, findPartExact, lastSubchapter, projects, matchProjects, readReceipt,
+  PAY_TERMS, DEFAULT_PAY, payTerm, payLabel, payFromText, dueDate, warehouseOf, findSuppliers, supplierByCode, findReceiptByBooknum, getOrder, openOrders, findPartExact, lastSubchapter, projects, matchProjects, readReceipt,
   readDialog, createReceipt, addOrderLine, addFreeLine, setLineQty, setHeader, attach, setDialog, finalizeReceipt, cancelReceipt,
   _call: call
 };

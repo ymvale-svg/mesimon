@@ -14,7 +14,7 @@ const ymd = (d) => (d ? String(d).slice(0, 10).split('-').reverse().join('.') : 
  * @param {object} info    ‎{ companyLabel, test, order, dialog: string[], docTotal }‎
  * @returns {Buffer}
  */
-function receiptPdf(gr, { companyLabel = '', test = false, order = '', dialog = [], docTotal = null } = {}) {
+function receiptPdf(gr, { companyLabel = '', test = false, order = '', dialog = [], docTotal = null, due = '' } = {}) {
   const pdf = new Pdf();
   const M = 40;
   const R = pdf.width - M;
@@ -38,7 +38,7 @@ function receiptPdf(gr, { companyLabel = '', test = false, order = '', dialog = 
     ['ספק', `${gr.CDES ?? ''} (${gr.SUPNAME ?? ''})`], ['תאריך', ymd(gr.CURDATE)],
     ['מס\' תעודה', gr.BOOKNUM ?? ''], ['הזמנה', order || 'ללא הזמנה'],
     ['פרויקט', `${gr.PROJDOCNO ?? ''} ${gr.PROJDES ?? ''}`.trim()], ['מחסן', gr.TOWARHSNAME ?? ''],
-    ['תנאי תשלום', gr.MED_MXPAYDES ?? '']
+    ['תנאי תשלום', `${gr.MED_MXPAYDES ?? ''}${due ? ` · לתשלום עד ${ymd(due)}` : ''}`]
   ];
   const colW = W / 2;
   for (let i = 0; i < fields.length; i += 2) {
