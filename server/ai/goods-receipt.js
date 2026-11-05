@@ -1364,7 +1364,7 @@ async function cancel(user, s, why = 'בוטלה') {
  * הודעה של העובד — טקסט, קובץ, או שניהם.
  * @returns {Promise<{replies: string[], status: string, result: string}>}
  */
-async function handle({ user, text = '', file = null }) {
+async function handle({ user, text = '', file = null, reaction = false }) {
   // 👍🏽 → 👍: גוון עור ובורר תצוגה של אימוג'י אינם חלק מהתשובה
   let t = String(text ?? '').replace(/[\u{1F3FB}-\u{1F3FF}\uFE0F]/gu, '').replace(/(👍|👌|✅|✔|👎)\1+/gu, '$1').trim();
   let s = load(user.id);
@@ -1432,10 +1432,13 @@ async function handle({ user, text = '', file = null }) {
     return { replies: next.replies, files: next.files ?? [], status: next.status ?? 'ok', result: next.result ?? 'ביטול ומעבר למסמך הבא' };
   }
 
+  // 👎 כהודעה נפרדת (לא תגובה על הודעה) — "בטל את מה שעשיתי עכשיו": נספח שצורף, או התשובה האחרונה (שלב אחורה)
+  const prev = s.prev && Date.now() - s.prev.at < 15 * 60 * 1000 ? s.prev : null;
+  s.prev = null;
   // ביטול שקט: 👎 בהודעה נפרדת מיד אחרי צירוף קובץ — הנספח נמחק (גם מה-GR בפריוריטי), בלי להציג שוב את הטיוטא
   const undo = s.undo && Date.now() - s.undo.at < 15 * 60 * 1000 ? s.undo : null;
   s.undo = null;
-  if (t === '👎' && !file && undo?.kind === 'attach' && !s.pendingList && !s.pendingNew) {
+  if (t === '👎' && !reaction && !file && undo?.kind === 'attach' && !s.pendingList && !s.pendingNew) {
     let ok = true;
     if (undo.num && s.docno) await Priority.deleteAttachment(s.company, s.docno, undo.num).catch((err) => { ok = false; alertAdmins(user, s, 'נספח לא נמחק', [err.message]); });
     if (ok) {
@@ -1444,6 +1447,14 @@ async function handle({ user, text = '', file = null }) {
     }
     save(user.id, s);
     return { replies: [ok ? `↩️ הנספח האחרון הוסר${s.docno && undo.num ? ` מ-${s.docno}` : ''}.` : '⚠️ לא הצלחתי להסיר את הנספח. מנהל המערכת קיבל הודעה.'], status: ok ? 'ok' : 'error', result: 'ביטול נספח' };
+  }
+  if (t === '👎' && !reaction && !file && prev && !s.docno) {
+    // שלב אחד אחורה — המצב שלפני התשובה האחרונה (רק לפני שנפתחה טיוטא; שינוי בפריוריטי לא מתבטל כך)
+    const back = JSON.parse(prev.snap);
+    const keep = new Set((back.files ?? []).map((f) => f.path));
+    for (const f of s.files ?? []) if (!keep.has(f.path)) { try { fs.unlinkSync(f.path); } catch { /* כבר נמחק */ } }
+    save(user.id, back);
+    return { replies: [`↩️ חזרתי שלב אחד אחורה.${back.lastPrompt ? `\n\n${back.lastPrompt}` : ''}`], status: 'ok', result: `שלב אחורה: ${s.step} ← ${back.step}` };
   }
   // 👍 בנספחים — "סיום"; בשאלת ההזמנה 👍 אינו תשובה (צריך מספר, או 👎 — בלי הזמנה)
   if (t === '👍' && !file && s.step === 'files' && !s.pendingNew) t = 'סיום';
@@ -1460,6 +1471,9 @@ async function handle({ user, text = '', file = null }) {
       return { replies: [`👎 מה לא נכון? כתבו מה לתקן, או *ביטול* לביטול הקליטה.${s.lastPrompt ? `\n\n${s.lastPrompt}` : ''}`], status: 'ok', result: `👎 בשלב ${s.step}` };
     }
   }
+
+  // צילום מצב לפני התשובה — ל-👎 בהודעה הבאה. רק לפני הטיוטא
+  const snap = s.docno ? null : JSON.stringify({ ...s, prev: null, undo: null });
 
   let out;
   try {
@@ -1484,6 +1498,10 @@ async function handle({ user, text = '', file = null }) {
     save(user.id, s);
     alertAdmins(user, s, 'תקלה מול פריוריטי', [`שלב: ${s.step}`, err.message]);
     return { replies: ['משהו השתבש מול פריוריטי. נסו שוב בעוד דקה, או *ביטול*.'], status: 'error', result: `שלב ${s.step}: ${err.message}` };
+  }
+  if (out.s !== null) {
+    const ns = out.s ?? s;
+    ns.prev = snap && !ns.docno ? { snap, at: Date.now() } : null;
   }
   if (out.s === null) clear(user.id, s);
   else save(user.id, out.s ?? s);

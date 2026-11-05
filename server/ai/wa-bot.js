@@ -320,7 +320,9 @@ async function receiveOne(ch, timeout = LISTEN_TIMEOUT) {
       direct = {
         chatId,
         phone: chatId.replace(/@c\.us$/, ''),
-        text: m.typeMessage === 'documentMessage' && fname && raw === fname ? '' : raw,
+        // תגובה (Reaction) על הודעה — רק האימוג'י, בלי ציטוט ההודעה
+        text: m.typeMessage === 'reactionMessage' ? String(m.extendedTextMessageData?.text ?? '').trim()
+          : m.typeMessage === 'documentMessage' && fname && raw === fname ? '' : raw,
         kind: m.typeMessage ?? '',
         // הודעה שהועברה (Forward) — לסקירה הלילית ולאיסוף הודעות מועברות
         forwarded: Boolean(m.extendedTextMessageData?.isForwarded || m.fileMessageData?.isForwarded || m.isForwarded),
@@ -2706,7 +2708,7 @@ async function handleDirect(msg) {
     const slowGr = setTimeout(() => sendText(msg.chatId, '⏳ רגע, קורא ובודק מול פריוריטי…').catch(() => {}), SLOW_NOTICE_MS);
     let r;
     try {
-      r = await GoodsReceipt.handle({ user, text, file: msg.file });
+      r = await GoodsReceipt.handle({ user, text, file: msg.file, reaction: msg.kind === 'reactionMessage' });
     } catch (err) {
       console.error('[משימון] קבלת סחורה נכשלה:', err.message);
       r = { replies: ['משהו השתבש בקבלת הסחורה. נסו שוב, או *ביטול*.'], status: 'error', result: err.message };
