@@ -212,7 +212,17 @@ const ai = {
     const block = file.mime.includes('pdf')
       ? { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data } }
       : { type: 'image', source: { type: 'base64', media_type: file.mime.includes('png') ? 'image/png' : 'image/jpeg', data } };
-    return Claude.json({ system: skill(), content: [block, { type: 'text', text: 'task: extract' }], schema: EXTRACT_SCHEMA, effort: 'high', live: true });
+    const first = await Claude.json({ system: skill(), content: [block, { type: 'text', text: 'task: extract' }], schema: EXTRACT_SCHEMA, effort: 'high', live: true });
+    // בדיקה עצמית: סכום השורות לא תואם לסה"כ השורות במסמך — קוראים שוב את הטבלה, שורה אחרי שורה
+    const want = Number(first.totals?.subtotal || (Number(first.totals?.before_vat || 0) + Number(first.totals?.doc_discount || 0)) || 0);
+    const gap = (d) => Math.abs(lineSum(d.lines) - want);
+    if (!(want > 0) || !(first.lines ?? []).length || gap(first) <= 1) return first;
+    const again = await Claude.json({ system: skill(), schema: EXTRACT_SCHEMA, effort: 'high', live: true, content: [block, { type: 'text', text: [
+      'task: extract',
+      `בדיקה: סכום השורות שקראת (${lineSum(first.lines)}) אינו תואם לסה"כ השורות במסמך (${want}). קראת ${first.lines.length} שורות.`,
+      'קרא שוב את כל טבלת השורות, שורה אחרי שורה: גם שורות דומות זו לזו, שורות עם אותו מק"ט, שורות שנמשכות על שתי שורות טקסט, ושורות בסוף הטבלה. בדוק כמות × מחיר = סכום בכל שורה.'
+    ].join('\n') }] }).catch(() => null);
+    return again && (again.lines ?? []).length && gap(again) < gap(first) ? again : first;
   },
   async match(docLines, orders) {
     const text = JSON.stringify({
@@ -840,7 +850,12 @@ async function createDraft(user, s) {
   if (!s.warehouse || !(await Priority.warehouseExists(c, s.warehouse).catch(() => true))) s.warehouse = await Priority.warehouseOf(c, s.project?.code);
   const head = { supname: s.supplier.code, booknum: s.doc.doc_number, date: s.doc.date || null, project: s.project?.code, warehouse: s.warehouse, payCode: s.payCode ?? Priority.DEFAULT_PAY };
   let docno;
-  try {
+  // בנייה מחדש של השורות (טבלה שנשלחה בבדיקת הטיוטא): אותו GR — מוחקים את השורות וכותבים מחדש
+  if (s.docno && s.rebuild) {
+    await Priority.deleteLines(c, s.docno);
+    docno = s.docno;
+  }
+  if (!docno) try {
     docno = await Priority.createReceipt(c, head);
   } catch (err) {
     // פריוריטי דחה את הכותרת — מנסים מחסנים אחרים של החברה (של הפרויקט, ברירת המחדל, השאר)
@@ -901,8 +916,10 @@ async function createDraft(user, s) {
   }
   // פרטים (‎DETAILS‎, עד 24 תווים) — שם המקבל ומספר התעודה; מוצג ברשימת התעודות בחשבונית הספק
   await Priority.setHeader(c, docno, { DETAILS: receiverDetails(user, s.doc.doc_number) }).catch(() => {});
-  for (const f of s.files) {
+  s.rebuild = false;
+  for (const f of s.files.filter((x) => !x.attached)) {
     try {
+      f.attached = true;
       await Priority.attach(c, docno, { buf: fs.readFileSync(f.path), mime: f.mime, description: f.label === 'מסמך ראשי' ? `${docName(s.doc)} ${s.doc.doc_number}`.slice(0, 32) : f.label });   // התיאור בפריוריטי נחתך אחרי ~32 תווים
     } catch (err) {
       problems.push({ what: `${f.label === 'מסמך ראשי' ? 'צילום המסמך' : f.label} לא צורף לנספחים`, err: `נספח ${f.label}: ${err.message}` });
@@ -1050,7 +1067,8 @@ async function maybeAdoptDetail(user, s, saved, cls) {
  * נספח עם רשימת פריטים, לפני שנוצרה טיוטא (‎isListFor‎). ‎null‎ — לא רשימה; יצורף כנספח רגיל.
  */
 async function maybeAdoptList(user, s, saved) {
-  if (s.docno || !isListFor(s.doc, { lines: [{}, {}] })) return null;
+  if (s.docno) return maybeRebuildFromTable(user, s, saved);
+  if (!isListFor(s.doc, { lines: [{}, {}] })) return null;
   let d;
   try { d = await ai.extract(saved); } catch { return null; }
   if (!isListFor(s.doc, d)) return null;
@@ -1059,19 +1077,40 @@ async function maybeAdoptList(user, s, saved) {
   s.pendingList = { doc: d };
   return { s, replies: [listQuestion(s.doc, d)] };
 }
+/*
+ * בבדיקת הטיוטא: נשלחה טבלה (צילום של שורות החשבונית) שהסכום שלה קרוב יותר לסכום שבמסמך מהשורות
+ * שבטיוטא — מציעים לבנות את השורות מחדש לפיה, באותו GR. ‎null‎ — לא טבלה כזו; יצורף כנספח רגיל.
+ */
+async function maybeRebuildFromTable(user, s, saved) {
+  if (s.step !== 'review') return null;
+  let d;
+  try { d = await ai.extract(saved); } catch { return null; }
+  const want = docBeforeVat(s.doc);
+  const now = lineSum((s.doc.lines ?? []).map((l, i) => ({ ...l, qty: s.lines[i]?.qty ?? l.qty })));
+  if (!(want > 0) || !(d.lines ?? []).length || Math.abs(lineSum(d.lines) - want) >= Math.abs(now - want) || Math.abs(now - want) <= 1) return null;
+  s.files.push({ ...saved, label: 'טבלת שורות', attached: true });
+  await Priority.attach(s.company, s.docno, { buf: fs.readFileSync(saved.path), mime: saved.mime, description: 'טבלת שורות' }).catch(() => { s.files[s.files.length - 1].attached = false; });
+  s.pendingList = { doc: d, rebuild: true };
+  return { s, replies: [[`📋 בתמונה יש *${d.lines.length} שורות* בסך ${money(lineSum(d.lines))}${listMatches(s.doc, d) ? ' — *תואם* למסמך' : ''} (במסמך: ${money(want)} לפני מע"מ; בטיוטא: ${money(now)}).`,
+    ...d.lines.slice(0, 12).map((l, i) => `*${i + 1}.* ${l.description} — ${qtyText(l.qty)} × ${money(l.unit_price)}`),
+    '', `לעדכן את שורות ${s.docno} לפי התמונה? *כן* — לעדכן · *לא* — להשאיר כנספח בלבד`].join('\n')] };
+}
+
 function listQuestion(main, d) {
   return [`📋 בנספח יש רשימה של *${d.lines.length} פריטים*, בסך ${money(lineSum(d.lines))}${docBeforeVat(main) ? ` (במסמך: ${money(docBeforeVat(main))} לפני מע"מ)` : ''}.`,
     'לעדכן את שורות הקבלה לפי הרשימה? *כן* — לעדכן · *לא* — להשאיר כנספח בלבד'].join('\n');
 }
 /** השורות מהרשימה; אם כבר עברנו את השורות — חוזרים להשוואה עם ההזמנה ולהצגת השורות */
 async function adoptList(s, d, note) {
+  if (s.pendingList?.rebuild) { s.rebuild = true; (s.corrections ??= []).push(`השורות נבנו מחדש לפי טבלה שנשלחה בבדיקת הטיוטא (${d.lines.length} שורות)`); }
   s.pendingList = null;
   s.doc = withList(s.doc, d);
   s.lines = linesOf(s.doc);
   if (['company', 'supplier', 'header'].includes(s.step)) return { s, replies: [`${note}${s.lastPrompt ? `\n\n${s.lastPrompt}` : ''}`] };
   // כבר נבחר "בלי הזמנה" — ישר לשורות החדשות; אחרת — השוואה מחדש עם ההזמנה
   const noOrder = !s.order && s.step !== 'order';
-  s.order = null; s.ordersChecked = false; s.chapter = null; s.warehouse = null;
+  s.order = null; s.ordersChecked = false; s.chapter = null;
+  if (!s.rebuild) s.warehouse = null;   // בבנייה מחדש — המחסן והפרויקט של ה-GR נשארים
   const out = noOrder ? await askLines(s) : await resolveOrder(s);
   return { ...out, replies: [note, ...out.replies] };
 }
@@ -1092,6 +1131,7 @@ async function attachNow(user, s, f) {
     return { s, replies: [`📎 נשמר כנספח (${s.files.length - 1}), ויצורף לקבלת הסחורה.${s.lastPrompt ? `\n\n${s.lastPrompt}` : ''}`] };
   }
   const problems = [];
+  f.attached = true;
   await Priority.attach(s.company, s.docno, { buf: fs.readFileSync(f.path), mime: f.mime, description: f.label })
     .catch((err) => problems.push({ what: 'הנספח לא צורף', err: `נספח: ${err.message}` }));
   return showDraft(s, problems, user);

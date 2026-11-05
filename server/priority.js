@@ -638,6 +638,14 @@ const finalizeReceipt = (company, docno) => call(company, 'PATCH', grKey(docno),
  * ולכן טיוטא נטושה חייבת להתבטל. פריוריטי אינו מוחק תעודה ואינו מבטל תעודה
  * עם שורות — קודם השורות, אחר כך הסטטוס.
  */
+/** מחיקת כל השורות של טיוטא — לבנייה מחדש של השורות באותו GR */
+async function deleteLines(company, docno) {
+  const k = grKey(docno);
+  for (const l of rows(await call(company, 'GET', `${k}/TRANSORDER_P_SUBFORM?$select=KLINE`))) {
+    await call(company, 'DELETE', `${k}/TRANSORDER_P_SUBFORM(KLINE=${l.KLINE},TYPE='P')`);
+  }
+}
+
 /** הסטטוס של ה-GR בפריוריטי ("טיוטא", "סופית", "מבוטלת"); ‎null‎ — לא נמצא */
 async function receiptStatus(company, docno) {
   try {
@@ -669,6 +677,6 @@ async function cancelReceipt(company, docno) {
 module.exports = {
   COMPANIES, isEnabled, allowed, companyOf, isTest, resolveCompany, companiesByName, PriorityError,
   NO_VAT_CODE, TAX_CODES, PAY_TERMS, DEFAULT_PAY, payTerm, payLabel, payFromText, dueDate, projectWarehouses, warehouses, warehouseExists, defaultWarehouse, supplierHistory, recentLines, partByCode, findPartsByText, generalCoding, warehouseOf, findSuppliers, supplierByCode, findReceiptByBooknum, getOrder, openOrders, findPartExact, lastSubchapter, projects, matchProjects, readReceipt,
-  readDialog, createReceipt, addOrderLine, addFreeLine, setLineQty, setHeader, attach, setDialog, finalizeReceipt, cancelReceipt, receiptStatus,
+  readDialog, createReceipt, addOrderLine, addFreeLine, setLineQty, setHeader, attach, setDialog, finalizeReceipt, cancelReceipt, receiptStatus, deleteLines,
   _call: call
 };
