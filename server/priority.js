@@ -176,15 +176,31 @@ async function findSuppliers(company, { vat = '', name = '' } = {}) {
       if (near.length === 1) return { by: 'vat_fuzzy', list: near };
     }
   }
-  // קודם השם המלא בלי "בע"מ", אחר כך מילה ארוכה ממנו — כך "דאר אלביאן בע"מ" נמצא גם ככתוב אחרת
-  const clean = String(name).replace(/בע"?מ|בעמ|ltd\.?/gi, ' ').replace(/\s+/g, ' ').trim();
-  const words = clean.split(/[\s,.()"']+/).filter((w) => w.length >= 3).sort((a, b) => b.length - a.length);
-  for (const w of [clean, ...words.slice(0, 2)].filter(Boolean)) {
-    const list = rows(await call(company, 'GET', `SUPPLIERS?$filter=${enc(`contains(SUPDES,'${q(w)}')`)}&${sel}`)).filter(activeSupplier).slice(0, 5);
-    if (!list.length) continue;
-    const exact = list.filter((x) => String(x.SUPDES).replace(/בע"?מ|בעמ/g, '').replace(/\s+/g, ' ').trim() === clean);
-    return { by: 'name', list: exact.length === 1 ? exact : list };
+  // לפי השם: מועמדים מכמה מילים מהשם, מדורגים לפי מספר המילים המשותפות (ובונוס כשהח.פ. שלהם קרוב לזה שבמסמך —
+  // ח.פ. חתוך או ספרה שנקראה לא נכון). כך "זיו מערכות לניהול בניה (מסד דרום) 1992 (zivsystems)" מוצא את
+  // "זיו מערכות לניהול בניה (מסד דרום)  1992 בעמ", ולא כל ספק עם "מערכות".
+  const words = [...new Set(normName(name).split(' ').filter((w) => w.length >= 3 && !/^\d+$/.test(w)))];
+  const probe = [...new Set([words[0], ...[...words].sort((x, y) => y.length - x.length).slice(0, 3)].filter(Boolean))];
+  const cand = new Map();
+  for (const w of probe) {
+    const list = rows(await call(company, 'GET', `SUPPLIERS?$filter=${enc(`contains(SUPDES,'${q(w)}')`)}&${sel.replace('$top=10', '$top=40')}`)).filter(activeSupplier);
+    for (const x of list) cand.set(x.SUPNAME, x);
   }
+  if (!cand.size) return { by: null, list: [] };
+  const mine = new Set(words);
+  const near = (a, b) => { if (!a || !b || a.length < 7 || b.length < 7) return false; let d = Math.abs(a.length - b.length); for (let i = 0; i < Math.min(a.length, b.length); i++) if (a[i] !== b[i]) d++; return d <= 2; };
+  const vatD = digits.padStart(9, '0');
+  const scored = [...cand.values()].map((x) => {
+    const theirs = normName(x.SUPDES).split(' ').filter((w) => w.length >= 3);
+    const shared = theirs.filter((w) => mine.has(w)).length;
+    const vatNear = near(String(x.COMPNUM ?? '').padStart(9, '0'), vatD);
+    return { x, score: shared + (vatNear ? 3 : 0), shared, vatNear };
+  }).filter((c) => c.shared > 0).sort((a, b) => b.score - a.score);
+  if (!scored.length) return { by: null, list: [] };
+  const [top, second] = scored;
+  // ברור: רוב המילים משותפות (או ח.פ. קרוב), ויותר מהבא אחריו
+  const clear = (top.shared >= Math.min(3, words.length) || top.vatNear) && (!second || top.score > second.score);
+  return { by: top.vatNear ? 'vat_near' : 'name', list: clear ? [top.x] : scored.slice(0, 5).map((c) => c.x) };
   return { by: null, list: [] };
 }
 
