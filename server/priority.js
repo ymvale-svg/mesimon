@@ -600,6 +600,10 @@ async function addFreeLine(company, docno, { part = '000', description, qty, pri
   return r.KLINE;
 }
 
+/** תיאור שורה (‎PDES‎) — במק"ט הכללי 000 */
+const setLineDes = (company, docno, kline, des) =>
+  call(company, 'PATCH', `${grKey(docno)}/TRANSORDER_P_SUBFORM(KLINE=${Number(kline)},TYPE='P')`, { PDES: String(des).slice(0, 48) });
+
 const setLineQty = (company, docno, kline, qty) =>
   call(company, 'PATCH', `${grKey(docno)}/TRANSORDER_P_SUBFORM(KLINE=${Number(kline)},TYPE='P')`, { TQUANT: qty });
 
@@ -679,6 +683,6 @@ async function cancelReceipt(company, docno) {
 module.exports = {
   COMPANIES, isEnabled, allowed, companyOf, isTest, resolveCompany, companiesByName, PriorityError,
   GENERAL, NO_VAT_CODE, TAX_CODES, PAY_TERMS, DEFAULT_PAY, payTerm, payLabel, payFromText, dueDate, projectWarehouses, warehouses, warehouseExists, defaultWarehouse, supplierHistory, recentLines, partByCode, findPartsByText, generalCoding, warehouseOf, findSuppliers, supplierByCode, findReceiptByBooknum, getOrder, openOrders, findPartExact, lastSubchapter, projects, matchProjects, readReceipt,
-  readDialog, createReceipt, addOrderLine, addFreeLine, setLineQty, setHeader, attach, setDialog, finalizeReceipt, cancelReceipt, receiptStatus, deleteLines,
+  readDialog, createReceipt, addOrderLine, addFreeLine, setLineQty, setLineDes, setHeader, attach, setDialog, finalizeReceipt, cancelReceipt, receiptStatus, deleteLines,
   _call: call
 };

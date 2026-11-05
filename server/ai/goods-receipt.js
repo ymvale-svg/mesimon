@@ -194,7 +194,11 @@ const PROJECT_SCHEMA = {
 const REPLY_SCHEMA = {
   type: 'object',
   properties: {
-    action: { type: 'string', enum: ['confirm', 'cancel', 'update', 'add', 'photo', 'answer', 'unclear'] },
+    action: { type: 'string', enum: ['confirm', 'cancel', 'update', 'rename', 'add', 'photo', 'answer', 'unclear'] },
+    renames: {
+      type: 'array',
+      items: { type: 'object', properties: { line: { type: 'integer' }, description: str }, required: ['line', 'description'], additionalProperties: false }
+    },
     updates: {
       type: 'array',
       items: { type: 'object', properties: { line: { type: 'integer' }, qty: num }, required: ['line', 'qty'], additionalProperties: false }
@@ -205,7 +209,7 @@ const REPLY_SCHEMA = {
     },
     note: str, choice: str, question: str
   },
-  required: ['action', 'updates', 'adds', 'note', 'choice', 'question'],
+  required: ['action', 'updates', 'renames', 'adds', 'note', 'choice', 'question'],
   additionalProperties: false
 };
 
@@ -1530,6 +1534,17 @@ async function step(user, s, t, file) {
       if (out.action === 'confirm') return step(user, s, 'כן', null);
       if (out.action === 'cancel') return cancel(user, s).then((r) => ({ s: null, ...r }));
       if (out.action === 'photo') { const r = await rebuildFromLastPhoto(user, s); if (r) return r; }
+      if (out.action === 'rename' && out.renames?.length) {
+        const changed = [];
+        for (const r of out.renames) {
+          const l = s.lines.find((x) => x.n === r.line);
+          if (!l || !String(r.description ?? '').trim()) continue;
+          changed.push(`שורה ${l.n}: "${l.description}" ← "${r.description.trim()}"`);
+          l.description = r.description.trim();
+          if (s.doc.lines?.[l.n - 1]) s.doc.lines[l.n - 1].description = l.description;
+        }
+        if (changed.length) { s.corrections = [...(s.corrections ?? []), `תיאור: ${changed.join('; ')}`]; return askLines(s); }
+      }
       if (out.action === 'add' && out.adds?.length) {
         // שורה שחסרה בקריאה — נוספת לרשימה (בלי מק"ט; הקידוד בשלב הבא)
         for (const a of out.adds) {
@@ -1704,6 +1719,23 @@ async function step(user, s, t, file) {
         if (r) return r;
         return reply(s, 'לא מצאתי בצילום האחרון שורות שמתאימות יותר לסכום שבמסמך. שלחו צילום של טבלת השורות, או כתבו את השורה שחסרה ("חסר כבל HDMI, 1 יח\', 12 ש"ח").');
       }
+      if (out.action === 'rename' && out.renames?.length) {
+        // תיאור השורה (‎PDES‎) — פתוח לכתיבה בשורות על המק"ט הכללי 000
+        const changed = [], problems = [];
+        for (const r of out.renames) {
+          const l = s.reviewLines.find((x) => x.n === r.line);
+          const des = String(r.description ?? '').trim().slice(0, 48);
+          if (!l || !des) continue;
+          try {
+            await Priority.setLineDes(s.company, s.docno, l.kline, des);
+            changed.push(`שורה ${l.n}: "${l.description}" ← "${des}"`);
+          } catch (err) {
+            problems.push({ what: `התיאור של שורה ${l.n} לא שונה (במק"ט שאינו כללי התיאור מכרטיס הפריט)`, err: `תיאור שורה ${l.n}: ${err.message}` });
+          }
+        }
+        if (changed.length) { s.corrections = [...(s.corrections ?? []), `תיאור: ${changed.join('; ')}`]; await writeDialog(user, s).catch(() => {}); }
+        return showDraft(s, problems, user);
+      }
       if (out.action === 'add' && out.adds?.length) {
         // שורה שחסרה — נוספת לטיוטא על המק"ט הכללי, עם הקידוד של שאר השורות (או הכללי של החברה)
         const like = s.lines.find((l) => l.part?.chapter) ?? null;
@@ -1737,7 +1769,7 @@ async function step(user, s, t, file) {
         }
         return showDraft(s);
       }
-      return reply(s, out.question || '*מאשר*, תיקון (מספר שורה וכמות), שורה שחסרה (תיאור, כמות ומחיר), צילום של טבלת השורות, או *ביטול*.');
+      return reply(s, out.question || '*מאשר*, תיקון (מספר שורה וכמות, או תיאור חדש), שורה שחסרה (תיאור, כמות ומחיר), צילום של טבלת השורות, או *ביטול*.');
     }
     default:
       return { s: null, replies: ['קבלת הסחורה הסתיימה. להתחלה — "קבלת סחורה" וצילום.'] };
