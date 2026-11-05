@@ -718,7 +718,8 @@ function readLog({ channel = '', status = '', userId = 0, chatId = '', q = '', b
     ...params, Math.min(200, Number(limit) || 100)
   ).map((r) => ({
     id: r.id, at: r.at, channel: r.channel, chatId: r.chat_id, chatName: r.chat_name, userId: r.user_id,
-    who: r.who, text: r.text, action: r.action, result: r.result, status: r.status, taskId: r.task_id
+    who: r.who, text: r.text, action: r.action, result: r.result, status: r.status, taskId: r.task_id,
+    reply: r.reply ?? '', forwarded: Boolean(r.forwarded)
   }));
 }
 

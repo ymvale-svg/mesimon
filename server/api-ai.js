@@ -18,6 +18,7 @@ const GContacts = require('./google-contacts');
 const WaScan = require('./ai/whatsapp-scan');
 const Calendar = require('./calendar');
 const WaBot = require('./ai/wa-bot');
+const BotReview = require('./bot-review');
 const WaActions = require('./ai/wa-actions');
 const Memory = require('./ai/mail-memory');
 const MailAsk = require('./ai/mail-ask');
@@ -1169,6 +1170,19 @@ function register(router, h) {
         chatId: q.get('chatId') ?? '', q: (q.get('q') ?? '').trim().slice(0, 100), before: Number(q.get('before')) || 0
       })
     });
+  });
+
+  // הסקירה הלילית של היומן: הדו"חות וההצעות לתיקון (‎server/bot-review.js‎)
+  router.get('/api/admin/wa-bot/reviews', async (req, res, ctx) => {
+    botAdmin(ctx);
+    sendJson(res, 200, { configured: BotReview.isConfigured(), reviews: BotReview.listReviews() });
+  });
+
+  router.put('/api/admin/wa-bot/reviews/:id/fixes/:n', async (req, res, ctx) => {
+    const actor = botAdmin(ctx);
+    const b = await readJson(req);
+    BotReview.setFixStatus(ctx.params.id, ctx.params.n, { status: String(b.status ?? ''), note: b.note }, actor);
+    sendJson(res, 200, { configured: BotReview.isConfigured(), reviews: BotReview.listReviews() });
   });
 
   // בדיקה בלי וואטסאפ: מה הבוט היה עונה ועושה. לא נשלח ולא מבוצע דבר
