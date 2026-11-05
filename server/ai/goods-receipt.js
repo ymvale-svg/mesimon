@@ -192,14 +192,18 @@ const PROJECT_SCHEMA = {
 const REPLY_SCHEMA = {
   type: 'object',
   properties: {
-    action: { type: 'string', enum: ['confirm', 'cancel', 'update', 'answer', 'unclear'] },
+    action: { type: 'string', enum: ['confirm', 'cancel', 'update', 'add', 'photo', 'answer', 'unclear'] },
     updates: {
       type: 'array',
       items: { type: 'object', properties: { line: { type: 'integer' }, qty: num }, required: ['line', 'qty'], additionalProperties: false }
     },
+    adds: {
+      type: 'array',
+      items: { type: 'object', properties: { description: str, qty: num, unit: str, unit_price: num }, required: ['description', 'qty', 'unit', 'unit_price'], additionalProperties: false }
+    },
     note: str, choice: str, question: str
   },
-  required: ['action', 'updates', 'note', 'choice', 'question'],
+  required: ['action', 'updates', 'adds', 'note', 'choice', 'question'],
   additionalProperties: false
 };
 
@@ -1081,19 +1085,36 @@ async function maybeAdoptList(user, s, saved) {
  * בבדיקת הטיוטא: נשלחה טבלה (צילום של שורות החשבונית) שהסכום שלה קרוב יותר לסכום שבמסמך מהשורות
  * שבטיוטא — מציעים לבנות את השורות מחדש לפיה, באותו GR. ‎null‎ — לא טבלה כזו; יצורף כנספח רגיל.
  */
-async function maybeRebuildFromTable(user, s, saved) {
+async function maybeRebuildFromTable(user, s, saved, { known = false } = {}) {
   if (s.step !== 'review') return null;
   let d;
   try { d = await ai.extract(saved); } catch { return null; }
   const want = docBeforeVat(s.doc);
   const now = lineSum((s.doc.lines ?? []).map((l, i) => ({ ...l, qty: s.lines[i]?.qty ?? l.qty })));
   if (!(want > 0) || !(d.lines ?? []).length || Math.abs(lineSum(d.lines) - want) >= Math.abs(now - want) || Math.abs(now - want) <= 1) return null;
-  s.files.push({ ...saved, label: 'טבלת שורות', attached: true });
-  await Priority.attach(s.company, s.docno, { buf: fs.readFileSync(saved.path), mime: saved.mime, description: 'טבלת שורות' }).catch(() => { s.files[s.files.length - 1].attached = false; });
+  if (!known) {
+    s.files.push({ ...saved, label: 'טבלת שורות', attached: true });
+    await Priority.attach(s.company, s.docno, { buf: fs.readFileSync(saved.path), mime: saved.mime, description: 'טבלת שורות' }).catch(() => { s.files[s.files.length - 1].attached = false; });
+  }
   s.pendingList = { doc: d, rebuild: true };
   return { s, replies: [[`📋 בתמונה יש *${d.lines.length} שורות* בסך ${money(lineSum(d.lines))}${listMatches(s.doc, d) ? ' — *תואם* למסמך' : ''} (במסמך: ${money(want)} לפני מע"מ; בטיוטא: ${money(now)}).`,
     ...d.lines.slice(0, 12).map((l, i) => `*${i + 1}.* ${l.description} — ${qtyText(l.qty)} × ${money(l.unit_price)}`),
     '', `לעדכן את שורות ${s.docno} לפי התמונה? *כן* — לעדכן · *לא* — להשאיר כנספח בלבד`].join('\n')] };
+}
+
+/*
+ * "ראה צילום", "לפי הטבלה" — הצילום האחרון שנשלח (נספח שאינו המסמך הראשי). לפני טיוטא — כרשימת פריטים;
+ * בבדיקת הטיוטא — כטבלה לבנייה מחדש. ‎null‎ — אין צילום כזה, או שהוא לא מתאים יותר לסכום.
+ */
+async function rebuildFromLastPhoto(user, s) {
+  const last = [...(s.files ?? [])].reverse().find((f) => f.label !== 'מסמך ראשי');
+  if (!last) return null;
+  if (s.docno) return maybeRebuildFromTable(user, s, last, { known: true });
+  let d;
+  try { d = await ai.extract(last); } catch { return null; }
+  if (!(d.lines ?? []).length || Math.abs(lineSum(d.lines) - docBeforeVat(s.doc)) >= Math.abs(lineSum(s.doc.lines) - docBeforeVat(s.doc))) return null;
+  s.pendingList = { doc: d };
+  return { s, replies: [listQuestion(s.doc, d)] };
 }
 
 function listQuestion(main, d) {
@@ -1473,6 +1494,16 @@ async function step(user, s, t, file) {
       const out = await understandReply(s, t);
       if (out.action === 'confirm') return step(user, s, 'כן', null);
       if (out.action === 'cancel') return cancel(user, s).then((r) => ({ s: null, ...r }));
+      if (out.action === 'photo') { const r = await rebuildFromLastPhoto(user, s); if (r) return r; }
+      if (out.action === 'add' && out.adds?.length) {
+        // שורה שחסרה בקריאה — נוספת לרשימה (בלי מק"ט; הקידוד בשלב הבא)
+        for (const a of out.adds) {
+          (s.doc.lines ??= []).push({ description: a.description, supplier_code: '', qty: a.qty, unit: a.unit, unit_price: a.unit_price, discount_pct: 0, line_total: a.qty * a.unit_price, handwritten: '', unclear: false, options: [] });
+          s.lines.push({ n: s.lines.length + 1, description: a.description, supplierCode: '', qty: a.qty, unit: a.unit, price: a.unit_price, discount: 0, handwritten: '', unclear: false, options: [] });
+        }
+        s.corrections = [...(s.corrections ?? []), `נוספו ע"י המקבל: ${out.adds.map((a) => `${a.description} ${qtyText(a.qty)} × ${money(a.unit_price)}`).join('; ')}`];
+        return askLines(s);
+      }
       if (out.action === 'answer' && out.choice) {
         const l = s.lines.find((x) => x.unclear);
         const v = Number(String(out.choice).replace(/[^\d.]/g, ''));
@@ -1633,6 +1664,30 @@ async function step(user, s, t, file) {
         const r = await cancel(user, s);
         return queueOf(s).length ? startQueued(user, s, r.replies) : { s: null, ...r };
       }
+      if (out.action === 'photo') {
+        const r = await rebuildFromLastPhoto(user, s);
+        if (r) return r;
+        return reply(s, 'לא מצאתי בצילום האחרון שורות שמתאימות יותר לסכום שבמסמך. שלחו צילום של טבלת השורות, או כתבו את השורה שחסרה ("חסר כבל HDMI, 1 יח\', 12 ש"ח").');
+      }
+      if (out.action === 'add' && out.adds?.length) {
+        // שורה שחסרה — נוספת לטיוטא על המק"ט הכללי, עם הקידוד של שאר השורות (או הכללי של החברה)
+        const like = s.lines.find((l) => l.part?.chapter) ?? null;
+        const g = like ? null : await Priority.generalCoding(s.company).catch(() => null);
+        const problems = [];
+        for (const a of out.adds) {
+          const whole = Number.isInteger(Number(a.qty));
+          try {
+            await Priority.addFreeLine(s.company, s.docno, { part: '000', description: whole ? a.description : `${qtyText(a.qty)} ${a.unit} · ${a.description}`, qty: whole ? a.qty : 1,
+              price: whole ? a.unit_price : Math.round(a.qty * a.unit_price * 100) / 100, chapter: like?.part.chapter ?? g?.chapter, topic: like?.part.topic ?? g?.topic });
+          } catch (err) {
+            problems.push({ what: `השורה "${a.description}" לא נוספה`, err: `הוספת שורה: ${err.message}` });
+          }
+        }
+        s.corrections = [...(s.corrections ?? []), `נוספו ע"י המקבל: ${out.adds.map((a) => `${a.description} ${qtyText(a.qty)} × ${money(a.unit_price)}`).join('; ')}`];
+        await writeDialog(user, s).catch(() => {});
+        if (problems.length) alertAdmins(user, s, 'שורה לא נוספה לטיוטא', problems.map((p) => p.err));
+        return showDraft(s, problems, user);
+      }
       if (out.action === 'update' && out.updates?.length) {
         const changed = [];
         for (const u of out.updates) {
@@ -1647,7 +1702,7 @@ async function step(user, s, t, file) {
         }
         return showDraft(s);
       }
-      return reply(s, out.question || '*מאשר*, תיקון (מספר שורה וכמות), או *ביטול*.');
+      return reply(s, out.question || '*מאשר*, תיקון (מספר שורה וכמות), שורה שחסרה (תיאור, כמות ומחיר), צילום של טבלת השורות, או *ביטול*.');
     }
     default:
       return { s: null, replies: ['קבלת הסחורה הסתיימה. להתחלה — "קבלת סחורה" וצילום.'] };
