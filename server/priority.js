@@ -61,13 +61,30 @@ const isTest = (code) => Boolean(companyOf(code).test);
  * ‎via='direct'‎ — החברה עצמה פתוחה; ‎'sandbox'‎ — העותק לבדיקה; ‎null‎ — לא נמצאה
  * חברה מותרת.
  */
-function resolveCompany(vat) {
-  const digits = String(vat ?? '').replace(/\D/g, '');
-  const c = digits ? COMPANIES.find((x) => x.vat && x.vat === digits) : null;
+const normName = (t) => String(t ?? '').replace(/בע"?'?מ|בעמ|בע'מ|ltd\.?/gi, ' ').replace(/[^\u0590-\u05FFa-z0-9 ]/gi, ' ').replace(/\s+/g, ' ').trim();
+
+/**
+ * החברה לפי הח.פ. של הנמען; אם אין — לפי כל מספר אחר שבמסמך (למשל "מספר חשבון משלם" בשובר עירייה,
+ * או ח.פ. בכתב יד); אם אין — לפי שם הנמען, רק כשהוא מתאים לחברה אחת בדיוק.
+ */
+function resolveCompany(vat, { ids = [], name = '' } = {}) {
+  const byVat = (v) => { const d = String(v ?? '').replace(/\D/g, ''); return d ? COMPANIES.find((x) => x.vat && x.vat === d) : null; };
+  let c = byVat(vat);
+  let how = c ? 'vat' : null;
+  if (!c) { for (const i of ids) { c = byVat(i); if (c) { how = 'id'; break; } } }
+  if (!c && normName(name).length >= 4) {
+    const n = normName(name);
+    const hits = COMPANIES.filter((x) => { const m = normName(x.name); return m.length >= 4 && (n === m || n.startsWith(m + ' ') || m.startsWith(n + ' ')); });
+    if (hits.length === 1) { c = hits[0]; how = 'name'; }
+  }
+  return resolveOpen(c, how);
+}
+
+function resolveOpen(c, how = 'vat') {
   const open = allowed();
-  if (c && open.includes(c.code)) return { company: c.code, via: 'direct', matched: c };
-  if (c && c.sandbox && open.includes(c.sandbox)) return { company: c.sandbox, via: 'sandbox', matched: c };
-  return { company: null, via: null, matched: c ?? null };
+  if (c && open.includes(c.code)) return { company: c.code, via: 'direct', matched: c, how };
+  if (c && c.sandbox && open.includes(c.sandbox)) return { company: c.sandbox, via: 'sandbox', matched: c, how };
+  return { company: null, via: null, matched: c ?? null, how };
 }
 
 /**
@@ -141,6 +158,13 @@ async function findSuppliers(company, { vat = '', name = '' } = {}) {
     const filter = forms.flatMap((d) => [`COMPNUM eq '${d}'`, `VATNUM eq '${d}'`]).join(' or ');
     const byVat = rows(await call(company, 'GET', `SUPPLIERS?$filter=${enc(filter)}&${sel}`)).filter(activeSupplier);
     if (byVat.length) return { by: 'vat', list: byVat.slice(0, 5) };
+    // ח.פ. בכתב יד — ספרה אחת שנקראה לא נכון (5/8, 1/7, 0/6…). מתקבל רק כשגם השם דומה
+    const alts = handwritingVariants(digits.padStart(9, '0'));
+    for (let i = 0; i < alts.length; i += 15) {
+      const f = alts.slice(i, i + 15).map((d) => `COMPNUM eq '${d}'`).join(' or ');
+      const near = rows(await call(company, 'GET', `SUPPLIERS?$filter=${enc(f)}&${sel}`)).filter(activeSupplier).filter((x) => similarName(x.SUPDES, name));
+      if (near.length === 1) return { by: 'vat_fuzzy', list: near };
+    }
   }
   // קודם השם המלא בלי "בע"מ", אחר כך מילה ארוכה ממנו — כך "דאר אלביאן בע"מ" נמצא גם ככתוב אחרת
   const clean = String(name).replace(/בע"?מ|בעמ|ltd\.?/gi, ' ').replace(/\s+/g, ' ').trim();
@@ -152,6 +176,18 @@ async function findSuppliers(company, { vat = '', name = '' } = {}) {
     return { by: 'name', list: exact.length === 1 ? exact : list };
   }
   return { by: null, list: [] };
+}
+
+const CONFUSE = { 0: '68', 1: '7', 2: '7', 3: '8', 4: '9', 5: '86', 6: '058', 7: '12', 8: '3560', 9: '4' };
+function handwritingVariants(d) {
+  const out = [];
+  for (let i = 0; i < d.length; i++) for (const r of CONFUSE[d[i]] ?? '') out.push(d.slice(0, i) + r + d.slice(i + 1));
+  return out;
+}
+function similarName(a, b) {
+  const words = (t) => normName(t).split(' ').filter((w) => w.length >= 3);
+  const B = new Set(words(b));
+  return words(a).some((w) => B.has(w));
 }
 
 /** ספק לפי מספר הספק בפריוריטי */
