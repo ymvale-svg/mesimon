@@ -306,10 +306,15 @@ async function findProjects(all, text, { strict = true } = {}) {
 // תצוגה
 // ---------------------------------------------------------------------------
 
+/** שורת הנחה או זיכוי במסמך ("הנחת לקוח קבוע", כמות או מחיר במינוס) — נקלטת כמו שהיא, ומפחיתה את הסכום */
+const isCredit = (l) => Number(l.qty) < 0 || Number(l.price ?? l.unit_price) < 0;
+
 function linesTable(s) {
   return s.lines.map((l) => {
     const head = `*${l.n}.* ${l.description}`;
-    const got = `   התקבל: *${qtyText(l.qty)}*${l.unit ? ` ${l.unit}` : ''}`;
+    const got = isCredit(l)
+      ? `   ➖ הנחה / זיכוי: ${qtyText(l.qty)} × ${money(l.price)} = *${money(Number(l.qty) * Number(l.price))}*`
+      : `   התקבל: *${qtyText(l.qty)}*${l.unit ? ` ${l.unit}` : ''}`;
     const ord = l.order
       ? `   בהזמנה ${l.order.ordname}/${l.order.line}: ${l.order.des} · יתרה ${qtyText(l.order.balance)}${l.qty > l.order.balance ? ' ⚠️ יותר מהיתרה' : ''}${l.order.confidence === 'low' ? ' ❓ התאמה לא ודאית' : ''}`
       : (s.order || s.ordersChecked) ? '   ללא שורת הזמנה' : '';
@@ -447,7 +452,10 @@ async function onMainDoc(user, s, file, pre = null) {
     return reply(s, 'לא הצלחתי לקרוא את המסמך. נסו לצלם שוב, ישר ובאור טוב, כך שכל הדף ייראה.', { status: 'error', result: `קריאת מסמך נכשלה: ${err.message}` });
   }
   // אזהרות — בעברית בלבד; אזהרה שהגיעה באנגלית למרות ההנחיה אינה מוצגת
-  doc.warnings = (doc.warnings ?? []).filter((w) => /[\u0590-\u05FF]/.test(w) && !/^[\x00-\x7F]{12}/.test(String(w).trim())).slice(0, 3);
+  doc.warnings = (doc.warnings ?? []).filter((w) => /[\u0590-\u05FF]/.test(w) && !/^[\x00-\x7F]{12}/.test(String(w).trim()))
+    // שורות הנחה במינוס — נקלטות כמו שהן; לא אזהרה
+    .filter((w) => !((doc.lines ?? []).some((l) => l.qty < 0 || l.unit_price < 0 || l.line_total < 0) && /שליל|במינוס|מינוס|הנחת לקוח|זיכוי/.test(w)))
+    .slice(0, 3);
   s.doc = doc;
   // כמעט מכל מסמך ספק אפשר לקלוט קבלת סחורה (גם אגרה או שובר תשלום). רק כשלא ברור שזה מסמך ספק — שואלים
   if (doc.doc_type === 'other') {
@@ -564,7 +572,8 @@ async function useOrders(s, orders, forced) {
   const chosen = forced || m.best_order || '';
   const order = orders.find((o) => o.ORDNAME === chosen) ?? null;
   for (const l of s.lines) {
-    const hit = m.matches.find((x) => x.doc_line === l.n && x.order === chosen && x.line);
+    // שורת הנחה / זיכוי — לא שורת הזמנה
+    const hit = isCredit(l) ? null : m.matches.find((x) => x.doc_line === l.n && x.order === chosen && x.line);
     const ol = hit && order?.lines.find((x) => Number(x.LINE) === Number(hit.line));
     l.order = ol ? { ordname: order.ORDNAME, line: ol.LINE, des: ol.PDES, part: ol.PARTNAME, balance: ol.TBALANCE, confidence: hit.confidence } : null;
   }
@@ -893,7 +902,8 @@ async function createDraft(user, s) {
     await Priority.setHeader(c, docno, { TAXCODE: Priority.NO_VAT_CODE })
       .catch((err) => problems.push({ what: 'הקבלה נקלטה עם מע"מ — שנו בפריוריטי ל"ללא מע"מ"', err: `קוד מס ${Priority.NO_VAT_CODE}: ${err.message}` }));
   }
-  for (const l of s.lines.filter((x) => x.qty > 0)) {
+  // כמות 0 — לא התקבל; כמות במינוס — שורת הנחה / זיכוי מהמסמך, נקלטת כמו שהיא
+  for (const l of s.lines.filter((x) => Number(x.qty) !== 0 && Number.isFinite(Number(x.qty)))) {
     try {
       if (l.order) await Priority.addOrderLine(c, docno, { ordname: l.order.ordname, line: l.order.line, qty: l.qty });
       else if (l.part && l.part.code !== '000') {
