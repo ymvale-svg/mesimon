@@ -57,6 +57,7 @@ const Business = require('./wa-business');
 const TaskSync = require('./task-sync');
 const TaskOutreach = require('./task-outreach');
 const Zoom = require('../zoom');
+const GoodsReceipt = require('./goods-receipt');
 
 const GROUP_SKILL = path.join(__dirname, 'skills', 'whatsapp-group-to-tasks.md');
 const CHAT_SKILL = path.join(__dirname, 'skills', 'whatsapp-chat.md');
@@ -308,9 +309,15 @@ async function receiveOne(ch, timeout = LISTEN_TIMEOUT) {
         phone: chatId.replace(/@c\.us$/, ''),
         text: textOf(m).trim(),
         kind: m.typeMessage ?? '',
+        // הודעה שהועברה (Forward) — לסקירה הלילית ולאיסוף הודעות מועברות
+        forwarded: Boolean(m.extendedTextMessageData?.isForwarded || m.fileMessageData?.isForwarded || m.isForwarded),
         // הודעה קולית: הכתובת שממנה מורידים אותה לתמלול
         audio: m.typeMessage === 'audioMessage' && m.fileMessageData?.downloadUrl
           ? { url: m.fileMessageData.downloadUrl, mime: m.fileMessageData.mimeType ?? '' }
+          : null,
+        // תמונה או מסמך (קבלת סחורה) — הכתובת זמנית, מורידים מיד כשצריך
+        file: ['imageMessage', 'documentMessage'].includes(m.typeMessage) && m.fileMessageData?.downloadUrl
+          ? { url: m.fileMessageData.downloadUrl, mime: m.fileMessageData.mimeType ?? '', name: m.fileMessageData.fileName ?? '' }
           : null,
         id: String(b.idMessage ?? note.receiptId)
       };
@@ -599,6 +606,7 @@ function prune() {
   D.run('DELETE FROM wa_messages WHERE at < ?', new Date(Date.now() - KEEP_DAYS * DAY).toISOString());
   D.run("DELETE FROM wa_messages WHERE chat_id IN (SELECT chat_id FROM wa_groups WHERE status = 'ignored')");
   D.run('DELETE FROM wa_log WHERE at < ?', new Date(Date.now() - LOG_DAYS * DAY).toISOString());
+  D.run('DELETE FROM wa_forwards WHERE at < ?', new Date(Date.now() - DAY).toISOString());
 }
 
 function notifyAdmins(title, body) {
@@ -684,11 +692,12 @@ const LOG_DAYS = 90;
 function log(entry) {
   try {
     D.run(
-      `INSERT INTO wa_log (at, channel, chat_id, chat_name, user_id, who, text, action, result, status, task_id)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+      `INSERT INTO wa_log (at, channel, chat_id, chat_name, user_id, who, text, action, result, status, task_id, reply, forwarded)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       D.nowIso(), entry.channel, entry.chatId ?? '', String(entry.chatName ?? '').slice(0, 200), entry.userId ?? null,
       String(entry.who ?? '').slice(0, 120), String(entry.text ?? '').slice(0, 1000), entry.action ?? '',
-      String(entry.result ?? '').slice(0, 1000), entry.status ?? 'ok', entry.taskId ?? null
+      String(entry.result ?? '').slice(0, 1000), entry.status ?? 'ok', entry.taskId ?? null,
+      String(entry.reply ?? '').slice(0, 2000), entry.forwarded ? 1 : 0
     );
   } catch (err) {
     console.error('[משימון] יומן הבוט:', err.message);
@@ -1348,12 +1357,29 @@ const ORG_NOISE = new Set(['משרד', 'עורכי', 'עורך', 'דין', 'עו
 function findRecipients(actor, name, org = '', { only = null } = {}) {
   const results = (hooks.mail?.searchContacts(actor, name || org, { only }) ?? []).filter((c) => c.email || c.type === 'user');
   const tokens = GContacts.fold(org).split(/\s+/).map((w) => w.replace(/^(מה|מ|ה|ב|ל)(?=\S{3})/, '')).filter((w) => w.length >= 2 && !ORG_NOISE.has(w));
-  if (!name || !tokens.length) return results;
+  if (!name || !tokens.length) return onlyColleague(results, name, { org, only });
   const narrowed = results.filter((c) => {
     const hay = GContacts.fold([c.name, c.organization, c.title, ...(c.emails ?? []).map((e) => e.value)].join(' '));
     return tokens.some((tk) => hay.includes(tk));
   });
   return narrowed.length ? narrowed : results;
+}
+
+/**
+ * שם שמתאים לעובד אחד בלבד במשימון — הכוונה אליו, גם כשיש באנשי הקשר עוד
+ * אנשים באותו שם ("שושנה" = שושנה מהחברה). שני עובדים או יותר באותו שם —
+ * נשארת השאלה "למי מהם?". לא חל כשנאמרה חברה, או כשביקשו מגוגל / מהאלפון.
+ */
+function onlyColleague(results, name, { org = '', only = null } = {}) {
+  if (results.length < 2 || !name || org || only) return results;
+  const words = GContacts.fold(name).split(/\s+/).filter(Boolean);
+  if (!words.length) return results;
+  const colleagues = results.filter((c) => {
+    if (c.type !== 'user') return false;
+    const own = GContacts.fold(c.name).split(/\s+/);
+    return words.every((w) => own.includes(w));
+  });
+  return colleagues.length === 1 ? colleagues : results;
 }
 
 const contactOf = (c) => ({ name: c.name, email: c.email ?? '', phone: c.phone ?? '', type: c.type, refId: c.refId ?? null, organization: c.organization ?? '' });
@@ -2548,6 +2574,50 @@ async function withFollowUps(r) {
   };
 }
 
+// ---------------------------------------------------------------------------
+// הודעות מועברות — אוספים, ומחכים להוראה
+// ---------------------------------------------------------------------------
+
+/*
+ * דפוס נפוץ: מעבירים לבוט כמה הודעות (Forward), ואז כותבים או מקליטים מה לעשות
+ * איתן ולמי ("לשושנה — תפתח לה משימה"). הבוט לא מנסה להבין כל הודעה מועברת
+ * לבד: הוא אוסף אותן, מאשר פעם אחת, וההודעה הבאה שאינה מועברת היא ההוראה —
+ * והיא מטופלת עם כל מה שנאסף. הוראה חלקית ("לשושנה") נשמרת עם ההודעות עד
+ * שמשלימים אותה.
+ */
+const FORWARD_WINDOW_MS = 30 * 60 * 1000;
+const FORWARD_MAX = 15;
+
+function forwardsOf(userId) {
+  const rows = D.all('SELECT kind, text, at FROM wa_forwards WHERE user_id = ? ORDER BY id', userId);
+  const last = rows.length ? Date.parse(rows[rows.length - 1].at) : 0;
+  if (rows.length && Date.now() - last > FORWARD_WINDOW_MS) {
+    clearForwards(userId);
+    return [];
+  }
+  return rows;
+}
+
+function addForward(userId, kind, text) {
+  D.run('INSERT INTO wa_forwards (user_id, kind, text, at) VALUES (?,?,?,?)', userId, kind, String(text).slice(0, 1500), D.nowIso());
+}
+
+function clearForwards(userId) {
+  D.run('DELETE FROM wa_forwards WHERE user_id = ?', userId);
+}
+
+/** ההוראה, ומתחתיה ההודעות שהועברו — כך ה-AI רואה את שתיהן כבקשה אחת */
+function withForwards(rows, text) {
+  const notes = rows.filter((r) => r.kind === 'note').map((r) => r.text);
+  const fwd = rows.filter((r) => r.kind === 'forward');
+  return [
+    [...notes, text].join('\n'),
+    '',
+    `(ההודעות שהעברתי לפני כן — ${fwd.length}. הן התוכן של הבקשה שלמעלה:)`,
+    ...fwd.map((r, i) => `${i + 1}. ${r.text}`)
+  ].join('\n').slice(0, 6000);
+}
+
 /** למספר שאינו מוכר עונים פעם ביום — לא יותר, כדי לא לנהל שיחה עם זרים */
 const unknownReplied = new Map();
 
@@ -2564,7 +2634,7 @@ async function handleDirect(msg) {
   }
   const actor = Auth.loadActor('user', user.id);
   if (!actor) return;
-  const base = { channel: 'private', chatId: msg.chatId, userId: user.id, who: user.full_name, text: msg.text };
+  const base = { channel: 'private', chatId: msg.chatId, userId: user.id, who: user.full_name, text: msg.text, forwarded: msg.forwarded };
 
   // הודעה קולית — מתומללת, ומשם בדיוק כמו הודעה כתובה
   let text = msg.text;
@@ -2611,10 +2681,75 @@ async function handleDirect(msg) {
       return;
     }
   }
+  // קבלת סחורה — "קבלת סחורה" (כתוב, בכיתוב לתמונה או בהקלטה) פותח; מאז כל הודעה, גם תמונה, הולכת אליה עד הסוף
+  if (WaActions.allowed(actor, 'goods_receipt') && (GoodsReceipt.active(user.id) || GoodsReceipt.opens(text, msg.file))) {
+    await notice;
+    const slowGr = setTimeout(() => sendText(msg.chatId, '⏳ רגע, קורא ובודק מול פריוריטי…').catch(() => {}), SLOW_NOTICE_MS);
+    let r;
+    try {
+      r = await GoodsReceipt.handle({ user, text, file: msg.file });
+    } catch (err) {
+      console.error('[משימון] קבלת סחורה נכשלה:', err.message);
+      r = { replies: ['משהו השתבש בקבלת הסחורה. נסו שוב, או *ביטול*.'], status: 'error', result: err.message };
+    }
+    clearTimeout(slowGr);
+    const shown = [voice ? `🎙 ${text}` : text, msg.file ? '[📎 קובץ]' : ''].filter(Boolean).join(' ');
+    log({ ...base, text: shown || '[קובץ]', action: 'goods_receipt', status: r.status, result: r.result });
+    // קובץ (ה-PDF לבדיקה) — לפני הטקסט, כדי שהשאלה "מאשר?" תהיה ההודעה האחרונה
+    for (const f of r.files ?? []) {
+      try {
+        const ch = channel();
+        if (ch) await WhatsApp.sendFile(ch, msg.chatId, f);
+      } catch (err) {
+        console.error('[משימון] שליחת ה-PDF של קבלת הסחורה נכשלה:', err.message);
+        log({ ...base, text: `[📄 ${f.fileName}]`, action: 'goods_receipt', status: 'error', result: err.message });
+      }
+    }
+    for (const reply of r.replies) for (const part of splitMessage(reply)) await sendText(msg.chatId, part);
+    return;
+  }
+  if (msg.forwarded) {
+    const before = forwardsOf(user.id).filter((r) => r.kind === 'forward').length;
+    if (before >= FORWARD_MAX) {
+      await notice;
+      await sendText(msg.chatId, `יש אצלי כבר ${FORWARD_MAX} הודעות מועברות. כתבו מה לעשות איתן, או *ביטול*.`);
+      return;
+    }
+    const content = text || (msg.file ? `[📎 ${msg.file.name || msg.kind || 'קובץ'}]` : `[${msg.kind || 'הודעה'}]`);
+    addForward(user.id, 'forward', voice ? `🎙 ${content}` : content);
+    // מאשרים רק את הראשונה — כמה הודעות מועברות ברצף לא מקבלות כמה תשובות
+    const ack = before ? '' : '📥 קיבלתי. אפשר להעביר עוד, ואז לכתוב או להקליט מה לעשות ולמי (משימה, מייל, הערה).';
+    log({ ...base, text: voice ? `🎙 ${content}` : content, action: 'forward', status: 'ok', result: `הודעה מועברת נאספה (${before + 1})`, reply: ack });
+    await notice;
+    if (ack) await sendText(msg.chatId, ack);
+    return;
+  }
+  if (!text && msg.file) {
+    // תמונה או מסמך — היום הבוט מטפל בהם רק בקבלת סחורה, ואומר למה לא
+    const why = WaActions.byKey('goods_receipt')?.enabled ? 'קבלת סחורה אינה פתוחה לך' : 'קבלת סחורה עוד לא הופעלה';
+    log({ ...base, text: `[${msg.kind || 'קובץ'}]`, action: 'goods_receipt', status: 'denied', result: why });
+    await sendText(msg.chatId, `קיבלתי את הקובץ, אבל ${why} בבוט (מסך הניהול ← בוט וואטסאפ ← פעולות). בינתיים כתבו לי בטקסט 🙏`);
+    return;
+  }
   if (!text) {
     log({ ...base, text: `[${msg.kind || 'הודעה ללא טקסט'}]`, action: 'other', status: 'unclear', result: 'לא טקסט' });
     await sendText(msg.chatId, 'כתבו לי בטקסט 🙏');
     return;
+  }
+
+  // הודעות מועברות שממתינות — ההודעה הזו היא ההוראה עליהן
+  const forwards = forwardsOf(user.id);
+  const said = text;
+  if (forwards.length) {
+    const n = forwards.filter((r) => r.kind === 'forward').length;
+    if (CANCEL.test(text.trim())) {
+      clearForwards(user.id);
+      log({ ...base, text, action: 'forward', status: 'ok', result: `בוטלו ${n} הודעות מועברות`, reply: 'בוטל 👍' });
+      await notice;
+      await sendText(msg.chatId, `בוטל 👍 (${n} ההודעות שהועברו נמחקו)`);
+      return;
+    }
+    text = withForwards(forwards, text);
   }
 
   const state = chatOf(user.id);
@@ -2634,11 +2769,19 @@ async function handleDirect(msg) {
   }
   clearTimeout(slow);
   await notice;
+  if (forwards.length) {
+    // ההוראה עוד לא הובנה ("לשושנה" בלי מה לעשות) — ההודעות נשארות, עם מה שכבר נאמר
+    // תקלה — ההודעות נשמרות, כדי שאפשר יהיה לנסות שוב בלי להעביר הכול מחדש
+    const stuck = ['unclear', 'error'].includes(r.status) && !isPending(r.next) && !r.taskId;
+    if (!stuck) clearForwards(user.id);
+    else if (r.status === 'unclear') addForward(user.id, 'note', said);
+  }
   // מה שנשמע חוזר בשורה אחת — כך רואים מיד אם התמלול טעה
-  const reply = voice ? `🎙 *שמעתי:* "${text}"\n\n${r.reply}` : r.reply;
+  const reply = voice ? `🎙 *שמעתי:* "${said}"\n\n${r.reply}` : r.reply;
   const history = [...state.history, { role: 'user', text: text.slice(0, 500) }, { role: 'bot', text: r.reply.slice(0, 500) }];
   saveChat(user.id, { ...r.next, history });
-  log({ ...base, text: voice ? `🎙 ${text}` : text, action: r.action, status: r.status, result: r.result, taskId: r.taskId ?? null });
+  const fwdNote = forwards.length ? ` (+${forwards.filter((x) => x.kind === 'forward').length} מועברות)` : '';
+  log({ ...base, text: `${voice ? `🎙 ${said}` : said}${fwdNote}`, action: r.action, status: r.status, result: r.result, taskId: r.taskId ?? null, reply });
   // הודעה ארוכה מדי — בכמה הודעות
   for (const part of splitMessage(reply)) await sendText(msg.chatId, part);
   // הודעות המשך (התובנות של Today) — אחרי שהעיקר כבר אצלו
@@ -2701,7 +2844,7 @@ async function assistant(userId, text, { voice = false, reset = false, requests 
   const r = await withFollowUps(await turn(user, actor, String(text ?? '').trim(), entry.state, { voice, requests }));
   const history = [...entry.state.history, { role: 'user', text: String(text).slice(0, 500) }, { role: 'bot', text: r.reply.slice(0, 500) }].slice(-HISTORY_TURNS);
   appChats.set(userId, { state: { ...r.next, history }, at: Date.now() });
-  log({ channel: 'app', userId, who: user.full_name, text: voice ? `🎙 ${text}` : text, action: r.action, status: r.status, result: r.result, taskId: r.taskId ?? null });
+  log({ channel: 'app', userId, who: user.full_name, text: voice ? `🎙 ${text}` : text, action: r.action, status: r.status, result: r.result, taskId: r.taskId ?? null, reply: r.reply });
   return {
     reply: r.reply,
     choices: choicesOf(r.next),

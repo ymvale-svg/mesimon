@@ -57,6 +57,8 @@ services:
         sync: false
       - key: PUBLIC_URL            # נדרס על ידי ההגדרה "כתובת המערכת" במסך הניהול
         sync: false
+      - key: BOT_REVIEW_KEY        # הסקירה הלילית של יומן הבוט — בלעדיו החיבור כבוי
+        sync: false
       - key: ANTHROPIC_API_KEY     # משימות AI — בלעדיו האפשרות אינה מוצגת כזמינה
         sync: false
       - key: RUNPOD_API_KEY        # תמלול הודעות קוליות במודל העברית של ivrit.ai (RunPod) — ראשון בסדר
@@ -75,6 +77,12 @@ services:
         sync: false
       - key: TIFUL360_API_KEY
         sync: false
+      - key: PRIORITY_USER         # קבלת סחורה מהבוט לפריוריטי — ה-PAT. בלעדיו היכולת כבויה
+        sync: false
+      - key: PRIORITY_PASSWORD     # בפריוריטי עם PAT: המילה PAT
+        sync: false
+      - key: PRIORITY_COMPANIES    # לאילו חברות מותר לכתוב, בפסיקים. כל החברות שיש להן ח.פ. בקוד, ו-test11 לבדיקות (04.11.26)
+        value: test11,a160226,a040626,mordot,raba,kanyan1,pono1,ghyar1,denia1,mahala1,elad1,rivie1,greha1,mydot1,kedma1,esah1,hatali1,rhos1,isdat1
       - key: TIMELESS_ACCESS_TOKEN # Timeless — אסימון ארגוני: הנהלה רואה הכול, עובד רק פגישות שהשתתף בהן
         sync: false
       - key: ZOOM_ACCOUNT_ID       # Zoom של החברה — אפליקציית Server-to-Server OAuth. בלי שלושתם הפגישות בלי Zoom

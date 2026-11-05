@@ -34,6 +34,8 @@ const TaskOutreach = require('./ai/task-outreach');
 const Dupes = require('./ai/task-dupes');
 const TaskSync = require('./ai/task-sync');
 const Tiful360 = require('./tiful360');
+const Secretariat = require('./secretariat');
+const BotReview = require('./bot-review');
 const {
   Router, badRequest, forbidden, notFound,
   readJson, sendJson, sendText, parseUrl
@@ -161,6 +163,12 @@ function assertMayAssignTo(actor, type, id) {
     return;
   }
   if (type !== 'user' || actor.type !== 'user' || id === actor.id) return;
+
+  /*
+   * מזכירות החברה: מנהל מחלקה (ומעלה) פותח משימה למזכירה — גם כשהיא יושבת
+   * במחלקה אחרת, ומעבר להיררכיה הרגילה (‎server/secretariat.js‎).
+   */
+  if (Secretariat.mayRequest(actor, Number(id))) return;
 
   // הקצאה לאדם אחר אינה מובנת מאליה: עובד פנימי יוצר משימות לעצמו, ורק אם
   // הוענקה לו הרשאה אישית (או שהוא מנהל ומעלה) הוא מקצה לאחרים במחלקתו.
@@ -472,6 +480,10 @@ function shapeTask(task, actor, { withDetails = false } = {}) {
     statusShort: task.status_short ?? '',
     // "📅 פגישה לקביעה" — מחכה שתיקבע לה פגישה (‎meetings.js‎)
     meetingPending: Boolean(task.meeting_pending),
+    // משימה למזכירות — נסגרת לבד כשנקבעה מתוכה פגישה
+    secretaryRequest: Boolean(task.secretary_request),
+    // מי ביקש — במשימה למזכירות, הפגישה נקבעת כברירת מחדל ביומן שלו
+    requestedBy: task.secretary_request ? task.created_by : null,
     // מוזגה לתוך משימה ותיקה (פרק 11ב) — הכרטיס מפנה אליה
     mergedInto: task.merged_into_task_id
       ? { id: task.merged_into_task_id, title: D.get('SELECT title FROM tasks WHERE id = ?', task.merged_into_task_id)?.title ?? '' }
@@ -796,7 +808,7 @@ function publicActor(actor) {
     // ימי העבודה (0=ראשון) — "מחר" בבורר דחיית היעד הוא יום העבודה הבא שלו
     workDays: actor.type === 'user' ? W.workDaysOf(actor.id) : [0, 1, 2, 3, 4],
     // מזכירה — רואה את מסך היומן וקובעת ביומנים שהעובדים שיתפו איתה
-    secretary: actor.type === 'user' && Boolean(D.get('SELECT is_secretary FROM users WHERE id = ?', actor.id)?.is_secretary),
+    secretary: actor.type === 'user' && Secretariat.isSecretary(actor.id),
     // מסך הקלטות ה-Zoom — כשיש חיבור Zoom
     zoomRecordings: actor.type === 'user' && Zoom.isEnabled()
   };
@@ -950,6 +962,8 @@ router.get('/api/bootstrap', async (req, res, ctx) => {
       : D.all("SELECT * FROM boards WHERE type='internal'");
 
   const assignableIds = isVendor(actor) ? new Set() : assignableUserIds(actor);
+  // מזכירות החברה, כשאני מנהל מחלקה ומעלה — מסומנות בבוררי האחראי ("משימה למזכירות")
+  const mySecretaries = isVendor(actor) ? new Set() : Secretariat.secretariesFor(actor);
   const payload = {
     actor: publicActor(actor),
     permissions: P.permissionsFor(actor),
@@ -988,6 +1002,7 @@ router.get('/api/bootstrap', async (req, res, ctx) => {
             id: u.id, name: u.full_name, email: u.email,
             // האם מותר לי לשייך אליו משימה — בוררי האחראי מציגים רק את אלה (‎assertMayAssignTo‎)
             assignable: assignableIds.has(u.id),
+            secretaryForMe: mySecretaries.has(u.id),
             role: P.seesRoles(actor) ? u.role : null,
             roleLabel: P.seesRoles(actor) ? P.ROLE_LABELS[u.role] : null,
             // המחלקה אינה רמת הרשאה אלא שיוך ארגוני, ולכן היא גלויה לכולם —
@@ -1110,6 +1125,17 @@ function assertMayUseProject(actor, projectId) {
   const p = listProjectsFor(actor).find((x) => x.id === Number(projectId));
   if (!p) throw badRequest('הפרויקט לא נמצא');
   if (!p.canAddTask) throw forbidden(`הפרויקט "${p.name}" אינו שלך או של המחלקה שלך — משימה בו פותח רק מי שעובד בו או במחלקה שלו`);
+}
+
+/**
+ * משימה למזכירות — מנהל מחלקה פתח (או העביר) משימה למזכירת החברה.
+ * הסימון קובע שכשהמזכירה תקבע מתוכה פגישה ביומן — המשימה תיסגר לבד.
+ */
+function markSecretaryRequest(taskId, actor, assigneeType, assigneeId) {
+  const yes = actor.type === 'user' && assigneeType === 'user' && Boolean(assigneeId)
+    && Number(assigneeId) !== actor.id && Secretariat.mayRequest(actor, Number(assigneeId));
+  D.run('UPDATE tasks SET secretary_request = ? WHERE id = ?', yes ? 1 : 0, taskId);
+  return yes;
 }
 
 /** למה אסור לשייך — הסיבה לתצוגה, או ‎null‎ כשמותר (‎assertMayAssignTo‎) */
@@ -1552,6 +1578,7 @@ function createTask(actor, body) {
   if (body.meetingPending === true || (body.meetingPending !== false && MEETING_TITLE.test(title))) {
     D.run('UPDATE tasks SET meeting_pending = 1 WHERE id = ?', id);
   }
+  markSecretaryRequest(id, actor, assigneeType, assigneeId);
   if (body.source) {
     D.run('UPDATE tasks SET source = ?, source_ref = ?, source_user_id = ? WHERE id = ?',
       String(body.source), body.sourceRef ?? null, body.sourceUserId ?? null, id);
@@ -1804,6 +1831,7 @@ router.patch('/api/tasks/:id', async (req, res, ctx) => {
         }
         D.run('UPDATE tasks SET assignee_type = ?, assignee_id = ?, board_id = ?, status = ?, status_changed_at = ? WHERE id = ?',
           newType, newId, boardId, status, D.nowIso(), task.id);
+        markSecretaryRequest(task.id, actor, newType, newId);
         const updated = getTaskOr404(task.id);
         changes.push(`אחראי: ${prevName} ← ${assigneeName(updated) ?? '—'}`);
         if (newId) notifyAssignment(task.id, newType, newId, task.title, actor);
@@ -5293,5 +5321,6 @@ PhonebookApi.register(router);
 WhatsNew.register(router);
 MeetingsApi.register(router, { getTaskOr404, assertVisible, shapeTask, canSeeTask });
 Tiful360.register(router, { createTask, saveAttachment, getTaskOr404 });
+BotReview.register(router);
 
 module.exports = { router, PRIORITIES, shapeTask, canSeeTask };
