@@ -513,37 +513,83 @@ const partOf = (p, why) => ({ code: p.PARTNAME, des: p.PARTDES ?? p.PDES ?? '', 
   topic: p.BUD_SUBTOPICNAME ?? null, topicDes: p.BUD_SUBTOPICDES ?? '', why });
 const generalPart = (g, why = 'מק"ט כללי') => ({ code: '000', des: 'מוצר כללי', chapter: g?.chapter ?? null, chapterDes: g?.chapterDes ?? '', topic: g?.topic ?? null, topicDes: g?.topicDes ?? '', why });
 
-/** היסטוריית הספק — בחברה הזו, ואם אין: אותו ספק (לפי ח.פ.) בחברות האחרות. נשמר לשעה */
+/**
+ * היסטוריית הספק בכל החברות — המק"טים משותפים לכל החברות. בחברה הזו לפי קוד הספק, ובשאר
+ * לפי ח.פ. (במקביל). כל שורה מסומנת בחברה שלה. מהחברות האחרות — נשמר לשעה.
+ */
 const historyCache = new Map();
 async function historyFor(s) {
-  const own = await Priority.supplierHistory(s.company, s.supplier.code).catch(() => []);
-  if (own.length) return { lines: own, from: s.company };
+  const own = (await Priority.supplierHistory(s.company, s.supplier.code).catch(() => [])).map((l) => ({ ...l, company: s.company }));
   const vat = String(s.doc?.supplier_vat ?? '').replace(/\D/g, '');
-  if (vat.length < 7) return { lines: [], from: null };
-  const hit = historyCache.get(vat);
-  if (hit && Date.now() - hit.at < 3600000) return hit.v;
-  let v = { lines: [], from: null };
-  for (const c of Priority.COMPANIES.filter((x) => x.vat && x.code !== s.company && !x.test)) {
-    try {
-      const f = await Priority.findSuppliers(c.code, { vat });
-      if (f.by !== 'vat' || !f.list[0]) continue;
-      const lines = await Priority.supplierHistory(c.code, f.list[0].SUPNAME);
-      if (lines.length) { v = { lines, from: c.code }; break; }
-    } catch { /* החברה הבאה */ }
+  if (vat.length < 7) return own;
+  let others = historyCache.get(vat);
+  if (!others || Date.now() - others.at > 3600000) {
+    const lists = await Promise.all(Priority.COMPANIES.filter((x) => x.vat && x.code !== s.company && !x.test).map(async (c) => {
+      try {
+        const f = await Priority.findSuppliers(c.code, { vat });
+        if (f.by !== 'vat' || !f.list[0]) return [];
+        return (await Priority.supplierHistory(c.code, f.list[0].SUPNAME)).map((l) => ({ ...l, company: c.code }));
+      } catch { return []; }
+    }));
+    others = { at: Date.now(), lines: lists.flat() };
+    historyCache.set(vat, others);
   }
-  historyCache.set(vat, { at: Date.now(), v });
-  return v;
+  return [...own, ...others.lines.filter((l) => l.company !== s.company)];
 }
 
-const simWords = (t) => String(t ?? '').replace(/["'״׳]/g, '').split(/[\s,.\-–/()]+/).filter((w) => w.length >= 2);
+/*
+ * אינדקס שורות מכל החברות — לשורה של ספק שאין לו היסטוריה בשום מקום: שורה קודמת עם תיאור
+ * דומה (מכל ספק, מכל חברה) מלמדת באיזה מק"ט קולטים אותה. נבנה ברקע (‎warmIndex‎, חברה אחת בכל
+ * סבב) ומתרענן כל 12 שעות; החברה הנוכחית נבנית מיד אם חסרה.
+ */
+const INDEX_TTL = 12 * 60 * 60 * 1000;
+const lineIndex = new Map(); // company → { at, lines }
+async function indexOf(company) {
+  const hit = lineIndex.get(company);
+  if (hit && Date.now() - hit.at < INDEX_TTL) return hit.lines;
+  const lines = (await Priority.recentLines(company).catch(() => [])).map((l) => ({ ...l, company }));
+  lineIndex.set(company, { at: Date.now(), lines });
+  return lines;
+}
+async function warmIndex() {
+  const stale = Priority.COMPANIES.filter((c) => c.vat && !c.test).find((c) => !lineIndex.has(c.code) || Date.now() - lineIndex.get(c.code).at > INDEX_TTL);
+  if (stale) await indexOf(stale.code);
+}
+async function similarLines(company, description) {
+  await indexOf(company);
+  const words = simWords(description).length;
+  if (!words) return [];
+  const out = [];
+  for (const { lines } of lineIndex.values()) {
+    for (const l of lines) {
+      const sc = similarity(description, l.PDES);
+      // לפחות 2 מילים משותפות, ולפחות חצי מהמילים של השורה
+      if (sc >= 2 && sc / words >= 0.5) out.push({ l, sc });
+    }
+  }
+  return out.sort((a, b) => b.sc - a.sc);
+}
+
+const simWords = (t) => String(t ?? '').replace(/["'״׳]/g, '').split(/[\s,.\-–/()]+/).filter((w) => w.length >= 2 && !/^\d+([.,]\d+)?$/.test(w));
 function similarity(a, b) {
   const B = new Set(simWords(b));
   return simWords(a).filter((w) => B.has(w)).length;
 }
 
+/** מק"ט מחברה אחרת — רק אם קיים ופעיל כאן, ובקידוד של החברה הזו */
+async function partHere(s, h) {
+  if (h.company === s.company) return { ...h, PARTDES: h.PDES };
+  const p = await Priority.partByCode(s.company, h.PARTNAME).catch(() => null);
+  return p && (p.STATDES ?? 'פעיל') === 'פעיל' ? p : null;
+}
+const where = (s, company) => (company && company !== s.company ? ` (ב${Priority.companyOf(company).name})` : '');
+
 /**
- * לכל שורה בלי הזמנה: פריט בתיאור זהה בקטלוג → המק"ט שהספק נקלט בו בעבר (הקרוב ביותר בתיאור,
- * או הנפוץ) → ‎000‎ בקידוד שהספק נקלט בו → ‎000‎ בקידוד הכללי של החברה. תמיד יש תשובה.
+ * לכל שורה בלי הזמנה — תמיד יש מק"ט, תת פרק ומשאב:
+ *   1. פריט שתיאורו זהה בקטלוג;
+ *   2. המק"ט שהספק נקלט בו — בכל החברות (החברה הזו קודם), הקרוב ביותר בתיאור או הנפוץ;
+ *   3. שורות דומות בתיאור מכל ספק ומכל חברה (אינדקס);
+ *   4. ‎000‎ בקידוד שבו הספק נקלט; 5. ‎000‎ בקידוד הכללי של החברה.
  */
 async function codeLines(s) {
   const free = s.lines.filter((l) => !l.order);
@@ -554,24 +600,27 @@ async function codeLines(s) {
   const todo = free.filter((l) => !l.part);
   if (!todo.length) return;
   const hist = await historyFor(s);
-  const fromName = hist.from && hist.from !== s.company ? ` (ב${Priority.companyOf(hist.from).name})` : '';
-  // מק"טים שהספק נקלט בהם (לא הכללי), עם התיאורים שליוו אותם
+  // מק"טים שהספק נקלט בהם (לא הכללי) — משקל כפול לחברה הזו
   const learned = new Map();
   const gen = new Map();
-  for (const h of hist.lines) {
+  for (const h of hist) {
+    const w = h.company === s.company ? 2 : 1;
     if (h.PARTNAME === '000') {
-      if (h.BUD_SUBCHAPTERNAME && h.BUD_SUBTOPICNAME) { const k = `${h.BUD_SUBCHAPTERNAME}|${h.BUD_SUBTOPICNAME}`; gen.set(k, { n: (gen.get(k)?.n ?? 0) + 1, h }); }
+      if (h.BUD_SUBCHAPTERNAME && h.BUD_SUBTOPICNAME && h.company === s.company) {
+        const k = `${h.BUD_SUBCHAPTERNAME}|${h.BUD_SUBTOPICNAME}`;
+        gen.set(k, { n: (gen.get(k)?.n ?? 0) + 1, h });
+      }
       continue;
     }
-    const e = learned.get(h.PARTNAME) ?? { n: 0, h, des: [] };
-    e.n += 1; e.des.push(h.PDES ?? '');
+    const e = learned.get(h.PARTNAME) ?? { n: 0, h, des: [], own: false };
+    e.n += w; e.des.push(h.PDES ?? '');
+    if (h.company === s.company) { e.own = true; e.h = h; }
     learned.set(h.PARTNAME, e);
   }
-  // מק"ט מחברה אחרת — רק אם קיים כאן, ובקידוד של החברה הזו
   const valid = [];
   for (const e of learned.values()) {
-    const here = hist.from === s.company ? e.h : await Priority.partByCode(s.company, e.h.PARTNAME).catch(() => null);
-    if (here && (here.STATDES ?? 'פעיל') === 'פעיל') valid.push({ ...e, p: hist.from === s.company ? { ...e.h, PARTDES: e.h.PDES } : here });
+    const p = await partHere(s, e.h);
+    if (p) valid.push({ ...e, p });
   }
   valid.sort((a, b) => b.n - a.n);
   const supGen = [...gen.values()].sort((a, b) => b.n - a.n)[0]?.h;
@@ -581,12 +630,18 @@ async function codeLines(s) {
       const best = valid.length === 1 ? valid[0]
         : valid.map((e) => ({ e, sc: Math.max(...e.des.map((d) => similarity(l.description, d)), similarity(l.description, e.p.PARTDES)) }))
           .sort((a, b) => b.sc - a.sc || b.e.n - a.e.n)[0].e;
-      l.part = partOf(best.p, `כמו בקליטות קודמות של הספק${fromName}`);
-    } else if (supGen) {
-      l.part = generalPart({ chapter: supGen.BUD_SUBCHAPTERNAME, chapterDes: supGen.BUD_SUBCHAPTERDES, topic: supGen.BUD_SUBTOPICNAME, topicDes: supGen.BUD_SUBTOPICDES }, `מק"ט כללי, כמו בקליטות קודמות של הספק${fromName}`);
-    } else {
-      l.part = generalPart(general);
+      l.part = partOf(best.p, `כמו בקליטות קודמות של הספק${best.own ? '' : where(s, best.h.company)}`);
+      continue;
     }
+    // הספק בלי היסטוריה בשום חברה — שורות דומות מכל ספק ומכל חברה
+    let found = null;
+    for (const { l: h } of (await similarLines(s.company, l.description)).slice(0, 10)) {
+      const p = await partHere(s, h);
+      if (p) { found = { p, h }; break; }
+    }
+    if (found) l.part = partOf(found.p, `לפי שורה דומה בקליטה קודמת${where(s, found.h.company)}: "${String(found.h.PDES).slice(0, 40)}"`);
+    else if (supGen) l.part = generalPart({ chapter: supGen.BUD_SUBCHAPTERNAME, chapterDes: supGen.BUD_SUBCHAPTERDES, topic: supGen.BUD_SUBTOPICNAME, topicDes: supGen.BUD_SUBTOPICDES }, 'מק"ט כללי, כמו בקליטות קודמות של הספק');
+    else l.part = generalPart(general);
   }
 }
 
@@ -915,6 +970,8 @@ let lastSweep = 0;
 async function sweep(send, { force = false } = {}) {
   if (!force && Date.now() - lastSweep < 10 * 60 * 1000) return;
   lastSweep = Date.now();
+  // אינדקס השורות לקידוד — חברה אחת בכל סבב, ברקע
+  await warmIndex().catch((err) => console.error('[משימון] אינדקס שורות:', err.message));
   for (const row of D.all("SELECT key, value FROM settings WHERE key LIKE 'goods_receipt:%'")) {
     const userId = Number(row.key.split(':')[1]);
     let s;
@@ -1282,4 +1339,4 @@ async function step(user, s, t, file) {
   }
 }
 
-module.exports = { isTrigger, opens, active, handle, sweep, _codeLines: codeLines, _askParts: askParts, _projectsOf: projectsOf, _findProjects: findProjects, _ai: ai, _load: load, _clear: (userId) => clear(userId, load(userId)) };
+module.exports = { isTrigger, opens, active, handle, sweep, _codeLines: codeLines, _similarLines: similarLines, _askParts: askParts, _projectsOf: projectsOf, _findProjects: findProjects, _ai: ai, _load: load, _clear: (userId) => clear(userId, load(userId)) };
