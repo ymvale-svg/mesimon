@@ -1064,7 +1064,7 @@ async function routeFile(user, s, file, t) {
   const cur = s.docno ? `ל-${s.docno}` : 'לקבלת הסחורה הנוכחית';
   // לא ‎reply()‎: השאלה הזו אינה "השאלה של השלב", ואחרי התשובה חוזרים לזו שחיכתה
   return { s, replies: [[cls ? `📄 זה נראה כמו מסמך חדש${s.pendingNew.label ? `: ${s.pendingNew.label}` : ''}.` : '📄 קיבלתי מסמך נוסף.',
-    `*1* — לצרף כנספח ${cur} · *2* — קבלת סחורה חדשה${!s.docno && s.step !== 'files' ? ' (הנוכחית תבוטל)' : ''}`].join('\n')] };
+    `*1* — לצרף כנספח ${cur} · *2* — קבלת סחורה חדשה${!s.docno && s.step !== 'files' ? ' (הנוכחית תבוטל)' : ''} · *לא* — להתעלם מהקובץ`].join('\n')] };
 }
 
 /** המסמך שהגיע הוא החשבון שהחשבונית מפנה אליו? (לפני שנוצרה טיוטא) */
@@ -1169,12 +1169,20 @@ async function adoptList(s, d, note) {
   return { ...out, replies: [note, ...out.replies] };
 }
 
+const newOrAttach = (s) => `*1* — לצרף כנספח${s.docno ? ` ל-${s.docno}` : ''} · *2* — קבלת סחורה חדשה · *לא* — להתעלם מהקובץ`;
+
 /** תשובה לשאלה "נספח או חדש?" — ‎null‎ אם התשובה אינה אחת מהשתיים */
 async function answerPendingNew(user, s, t) {
   const f = s.pendingNew.file;
   if (/^\s*1\s*$/.test(t) || ATTACH_WORD.test(t)) { s.pendingNew = null; return attachNow(user, s, f); }
   if (NEW_WORD.test(t)) { s.pendingNew = null; return queueNew(user, s, f, null); }
-  return { s, replies: [`*1* — לצרף כנספח${s.docno ? ` ל-${s.docno}` : ''} · *2* — קבלת סחורה חדשה`] };
+  // "לא" / "אף אחד" / "3" — לא זה ולא זה: הקובץ נמחק, וחוזרים לשאלה שחיכתה
+  if (/^\s*3\s*$/.test(t) || /^(לא|אל|אף אחד|שום דבר|לא זה ולא זה|תתעלם|עזוב|no)([\s,.!]|$)/i.test(t)) {
+    s.pendingNew = null;
+    try { fs.unlinkSync(f.path); } catch { /* כבר נמחק */ }
+    return { s, replies: [`👍 הקובץ לא צורף, ולא נפתחה קבלה חדשה.${s.lastPrompt ? `\n\n${s.lastPrompt}` : ''}`] };
+  }
+  return { s, replies: [newOrAttach(s)] };
 }
 
 async function attachNow(user, s, f) {
@@ -1407,7 +1415,7 @@ async function handle({ user, text = '', file = null }) {
 
   // 👎 — "לא": בשאלת כן/לא — לא; על סיכום — לא ממשיכים ושואלים מה לתקן; על הטיוטא — מבקשים אישור לביטול
   if (t === '👎' && !file) {
-    if (s.pendingList || ['offer', 'doctype'].includes(s.step)) t = 'לא';
+    if (s.pendingList || s.pendingNew || ['offer', 'doctype'].includes(s.step)) t = 'לא';
     else if (s.step === 'review') {
       return { replies: [`👎 לבטל את הטיוטא *${s.docno}*? כתבו *ביטול* לאישור — או כתבו מה לתקן (כמות, תיאור, שורה שחסרה).`], status: 'ok', result: '👎 בבדיקת הטיוטא' };
     } else {
