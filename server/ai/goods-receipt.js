@@ -331,11 +331,11 @@ function summaryText(s, gr) {
 /** ‎lastPrompt‎ — השאלה האחרונה, כדי לחזור עליה אחרי נספח שהגיע באמצעה */
 const reply = (s, text, extra = {}) => { if (s && s.step) s.lastPrompt = text; return { s, replies: [text], ...extra }; };
 
-async function onMainDoc(user, s, file) {
+async function onMainDoc(user, s, file, pre = null) {
   s.files = [file.path ? { ...file, label: 'מסמך ראשי' } : await saveFile(user.id, file, 'מסמך ראשי')];
   let doc;
   try {
-    doc = await ai.extract(s.files[0]);
+    doc = pre ?? await ai.extract(s.files[0]);
   } catch (err) {
     return reply(s, 'לא הצלחתי לקרוא את המסמך. נסו לצלם שוב, ישר ובאור טוב, כך שכל הדף ייראה.', { status: 'error', result: `קריאת מסמך נכשלה: ${err.message}` });
   }
@@ -659,8 +659,10 @@ async function attachNow(user, s, f) {
  * מסמך חדש בזמן שהנוכחית פתוחה: הוא ממתין בתור, והנוכחית נסגרת קודם — בנספחים: נקלטת
  * כטיוטא לבדיקה; בבדיקת הטיוטא: "מאשר" או "ביטול". אחר כך הבוט עובר אליו לבד.
  */
+const queueOf = (s) => (Array.isArray(s?.queued) ? s.queued : s?.queued ? [s.queued] : []);
+
 async function queueNew(user, s, f) {
-  s.queued = f;
+  s.queued = [...queueOf(s), f];
   if (!s.docno && s.step !== 'files') {
     // עוד אין טיוטא: העובד בחר "קבלת סחורה חדשה" — הנוכחית מתבטלת, ועוברים לחדש
     const was = s.doc?.doc_number ? ` (${s.doc.doc_type === 'invoice' ? 'חשבונית' : 'תעודה'} ${s.doc.doc_number})` : '';
@@ -677,11 +679,51 @@ async function queueNew(user, s, f) {
 
 /** סיום הנוכחית — ומעבר למסמך שבתור, בלי לשלוח אותו שוב */
 async function startQueued(user, oldS, before = []) {
-  const q = oldS.queued;
-  for (const f of oldS.files ?? []) { if (f.path !== q.path) { try { fs.unlinkSync(f.path); } catch { /* כבר נמחק */ } } }
-  const ns = { step: 'doc', startedAt: Date.now() };
+  const [q, ...rest] = queueOf(oldS);
+  const keep = new Set(queueOf(oldS).map((f) => f.path));
+  for (const f of oldS.files ?? []) { if (!keep.has(f.path)) { try { fs.unlinkSync(f.path); } catch { /* כבר נמחק */ } } }
+  const ns = { step: 'doc', startedAt: Date.now(), ...(rest.length ? { queued: rest } : {}) };
   const out = await onMainDoc(user, ns, q);
-  return { ...out, s: out.s === null ? null : (out.s ?? ns), replies: [...before, '↪️ עובר למסמך הבא…', ...out.replies] };
+  const left = rest.length ? ` (עוד ${rest.length} בתור)` : '';
+  return { ...out, s: out.s === null ? null : (out.s ?? ns), replies: [...before, `↪️ עובר למסמך הבא…${left}`, ...out.replies] };
+}
+
+/**
+ * כמה צילומים ביחד: קוראים את כולם ומחליטים —
+ *   • ראשי: הראשון שהוא תעודת משלוח או חשבונית עם שורות;
+ *   • נספחים: מה שאינו כזה (חשבון לתשלום, טופס הזמנה, תמונה), ומסמך שמספרו מופיע בראשי
+ *     או ההפך, או אותו מספר (דף נוסף);
+ *   • קבלות נפרדות: תעודה או חשבונית אחרת — בתור, אחת אחרי השנייה.
+ */
+async function sortBatch(user, s) {
+  const files = s.files.slice(0, 6);
+  const read = await Promise.all(files.map((f) => ai.extract(f).then((doc) => ({ f, doc })).catch(() => ({ f, doc: null }))));
+  const isMain = (d) => d && ['invoice', 'delivery_note'].includes(d.doc_type) && (d.lines ?? []).length > 0;
+  const main = read.find((x) => isMain(x.doc));
+  if (!main) return onMainDoc(user, s, files[0], read[0].doc ?? undefined);
+  const textOf = (d) => [d.doc_number, d.po_number, d.supplier_order_ref, ...(d.lines ?? []).map((l) => `${l.description} ${l.supplier_code}`)].join(' ');
+  const mainText = textOf(main.doc);
+  const related = (d) => {
+    if (!d?.doc_number) return true;
+    const n = String(d.doc_number).replace(/\s/g, '');
+    return n === String(main.doc.doc_number).replace(/\s/g, '') || mainText.includes(n) || textOf(d).includes(String(main.doc.doc_number));
+  };
+  const attach = [], separate = [];
+  for (const x of read) {
+    if (x === main) continue;
+    if (isMain(x.doc) && !related(x.doc)) separate.push(x); else attach.push(x);
+  }
+  const name = (d) => (d?.doc_number ? `${d.doc_type === 'invoice' ? 'חשבונית' : d.doc_type === 'delivery_note' ? 'תעודה' : 'מסמך'} ${d.doc_number}` : 'תמונה');
+  const out = await onMainDoc(user, s, main.f, main.doc);
+  const target = out.s ?? s;
+  if (out.s !== null) {
+    attach.forEach((x, i) => target.files.push({ ...x.f, label: `נספח ${i + 1}` }));
+    if (separate.length) target.queued = [...queueOf(target), ...separate.map((x) => x.f)];
+  }
+  const summary = [`📎 ${files.length} צילומים — הראשי: ${name(main.doc)}`,
+    attach.length ? `נספחים: ${attach.map((x) => name(x.doc)).join(', ')}` : null,
+    separate.length ? `קבלות נפרדות (אחרי זו): ${separate.map((x) => name(x.doc)).join(', ')}` : null].filter(Boolean).join(' · ');
+  return { ...out, replies: [summary, ...out.replies] };
 }
 
 // ---------------------------------------------------------------------------
@@ -788,7 +830,7 @@ async function handle({ user, text = '', file = null }) {
   }
 
   if (CANCEL.test(t) && !file) {
-    if (!s.queued) return cancel(user, s);
+    if (!queueOf(s).length) return cancel(user, s);
     // ביטול של הנוכחית, ומעבר למסמך שחיכה בתור
     const r = await cancel(user, s);
     const next = await startQueued(user, s, r.replies);
@@ -822,12 +864,14 @@ async function step(user, s, t, file) {
 
     case 'offer': {
       if (file) {
-        // עוד תמונה לפני התשובה — היא המסמך הראשי החדש
-        for (const f of s.files ?? []) { try { fs.unlinkSync(f.path); } catch { /* כבר נמחק */ } }
-        s.files = [await saveFile(user.id, file, 'מסמך ראשי')];
-        return reply(s, '📦 לקלוט את המסמך כ*קבלת סחורה* בפריוריטי? *כן* / *לא*');
+        // עוד תמונה לפני התשובה (כמה תמונות ביחד, אלבום) — נשמרות כולן, בלי לשאול שוב על כל אחת
+        s.files.push(await saveFile(user.id, file, `מסמך ${s.files.length + 1}`));
+        return { s, replies: [], result: `הצעה: ${s.files.length} צילומים` };
       }
-      if (YES.test(t) || isTrigger(t)) { s.step = 'doc'; return onMainDoc(user, s, s.files[0]); }
+      if (YES.test(t) || isTrigger(t)) {
+        s.step = 'doc';
+        return s.files.length > 1 ? sortBatch(user, s) : onMainDoc(user, s, s.files[0]);
+      }
       if (/^(לא|אל|ממש לא|no)([\s,.!]|$)/i.test(t)) return { s: null, replies: ['בסדר, לא נקלט. 👍'], status: 'ok', result: 'הצעה נדחתה' };
       return reply(s, 'לקלוט כ*קבלת סחורה*? *כן* / *לא*');
     }
@@ -993,14 +1037,14 @@ async function step(user, s, t, file) {
           return { s: null, replies: [`ה-GR *${s.docno}* נשמר כטיוטא, אבל לא הפך לסופי. מנהל המערכת קיבל הודעה ויטפל.`], status: 'error', result: `סופית נכשלה: ${err.message}` };
         }
         const done = `✅ *קבלת סחורה ${s.docno}* נקלטה כסופית.\n${companyLine(s)}\nספק: ${s.supplier.name}${s.order ? ` · הזמנה ${s.order.ordname}` : ''}`;
-        if (s.queued) return startQueued(user, s, [done]);
+        if (queueOf(s).length) return startQueued(user, s, [done]);
         return { s: null, replies: [done], status: 'ok', result: `GR סופי ${s.docno}` };
       }
       const out = await ai.reply(s.reviewLines.map((l) => ({ line: l.n, description: l.description, qty: l.qty, options: [] })), t);
       if (out.action === 'confirm') return step(user, s, 'מאשר', null);
       if (out.action === 'cancel') {
         const r = await cancel(user, s);
-        return s.queued ? startQueued(user, s, r.replies) : { s: null, ...r };
+        return queueOf(s).length ? startQueued(user, s, r.replies) : { s: null, ...r };
       }
       if (out.action === 'update' && out.updates?.length) {
         const changed = [];
