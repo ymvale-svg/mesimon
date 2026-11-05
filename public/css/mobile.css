@@ -626,3 +626,12 @@
   [data-theme='dark'] .m-actionbar { background: linear-gradient(to top, var(--surface) 70%, transparent); }
   [data-theme='dark'] .m-desktop-only { border-color: rgba(251, 191, 36, .3); color: #fde68a; }
 }
+
+/*
+ * 📌 מחכות לקביעה במסך היומן. בטלפון הכפתור הממוזער יושב בראש היומן (לא צף —
+ * למטה יש כבר כפתורים צפים וסרגל ניווט), והלוח הפתוח צף מעל הכול מלמעלה.
+ */
+@media (max-width: 820px) {
+  .cal-dock-pill { position: static; align-self: flex-end; box-shadow: none; }
+  .cal-dock { top: calc(var(--header-h) + env(safe-area-inset-top, 0px) + 8px); bottom: auto; left: 12px; right: 12px; width: auto; max-height: 65vh; z-index: 60; }
+}

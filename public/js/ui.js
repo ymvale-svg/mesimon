@@ -280,8 +280,13 @@ const UI = (() => {
    *
    * ‎label‎ — שם נגיש לחלון שאין לו כותרת (‎title: null‎).
    * ‎ignoreOutside(e)‎ — בפאנל צד בלבד: לחיצה מחוץ לו שאין לסגור בגללה.
+   *
+   * ‎sticky‎ — חלון שאסור לאבד בטעות (קביעת פגישה): לחיצה מחוץ לו לא סוגרת
+   * (החלון מהבהב, כדי שיהיה ברור שהוא עדיין פתוח), ו-Escape / ‎✕‎ / ‎requestClose‎
+   * שואלים קודם. ‎sticky‎ מחרוזת — שאלת האישור. ‎close()‎ סוגר בלי לשאול —
+   * לסיום מוצלח.
    */
-  function modal({ title, body, footer, size = '', onClose, side = false, autofocus = true, label = null, ignoreOutside = null }) {
+  function modal({ title, body, footer, size = '', onClose, side = false, autofocus = true, label = null, ignoreOutside = null, sticky = false }) {
     const root = modalRoot();
     const asSide = side && !PHONE_MQ.matches;
     let closed = false;
@@ -304,6 +309,21 @@ const UI = (() => {
       }
       finish();
     };
+    // סגירה ביוזמת המשתמש — בחלון ‎sticky‎ רק אחרי אישור
+    let asking = false;
+    const requestClose = async () => {
+      if (closed || asking) return;
+      if (!sticky) return close();
+      asking = true;
+      const ok = await confirm(typeof sticky === 'string' ? sticky : 'לצאת בלי לסיים?', { title: 'רגע לפני שיוצאים', okText: 'יציאה', cancelText: 'חזרה', danger: true });
+      asking = false;
+      if (ok) close();
+    };
+    const nudge = () => {
+      box.classList.remove('is-nudge');
+      void box.offsetWidth; // הפעלה מחדש של האנימציה
+      box.classList.add('is-nudge');
+    };
 
     const titleId = `dlg-title-${++dialogSeq}`;
     const box = el(`div.modal${size ? `.${size}` : ''}${asSide ? '.is-side' : ''}`, {
@@ -315,14 +335,14 @@ const UI = (() => {
     }, [
       title === null ? null : el('div.modal-head', {}, [
         el(`h3#${titleId}`, { text: title ?? '' }),
-        el('button.icon-btn', { onclick: close, title: 'סגירה', 'aria-label': 'סגירה' }, ['✕'])
+        el('button.icon-btn', { onclick: requestClose, title: 'סגירה', 'aria-label': 'סגירה' }, ['✕'])
       ]),
       body instanceof Node && body.classList?.contains('task-detail') ? body : el('div.modal-body', {}, [body]),
       footer ? el('div.modal-foot', {}, footer) : null
     ]);
 
     const backdrop = el(`div.modal-backdrop${asSide ? '.is-side' : ''}`, {
-      onclick: (e) => { if (e.target === backdrop) close(); }
+      onclick: (e) => { if (e.target === backdrop) (sticky ? nudge() : close()); }
     }, [box]);
 
     /*
@@ -342,7 +362,7 @@ const UI = (() => {
     };
 
     root.appendChild(backdrop);
-    layer = pushLayer({ node: backdrop, box, close, trap: !asSide, lock: !asSide, side: asSide });
+    layer = pushLayer({ node: backdrop, box, close: requestClose, trap: !asSide, lock: !asSide, side: asSide });
     if (asSide) setTimeout(() => { if (!closed) document.addEventListener('click', onOutside, true); }, 0);
 
     const firstInput = autofocus ? box.querySelector('input, textarea, select') : null;
@@ -352,7 +372,7 @@ const UI = (() => {
       // בלי שדה — לפחות החלון עצמו, כדי ש-Tab ו-Escape יפעלו מתוכו
       else if (!box.contains(document.activeElement)) box.focus({ preventScroll: true });
     }, 40);
-    return { close, box, backdrop };
+    return { close, requestClose, box, backdrop };
   }
 
   // --- מגירה תחתונה ---

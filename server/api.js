@@ -495,6 +495,9 @@ function shapeTask(task, actor, { withDetails = false } = {}) {
     secretaryRequest: Boolean(task.secretary_request),
     // מי ביקש — במשימה למזכירות, הפגישה נקבעת כברירת מחדל ביומן שלו
     requestedBy: task.secretary_request ? task.created_by : null,
+    requestedByName: task.secretary_request && task.created_by
+      ? D.get('SELECT full_name FROM users WHERE id = ?', task.created_by)?.full_name ?? null
+      : null,
     // מוזגה לתוך משימה ותיקה (פרק 11ב) — הכרטיס מפנה אליה
     mergedInto: task.merged_into_task_id
       ? { id: task.merged_into_task_id, title: D.get('SELECT title FROM tasks WHERE id = ?', task.merged_into_task_id)?.title ?? '' }
@@ -4908,6 +4911,8 @@ const PREF_KEYS = [
   'homeProject',
   // אילו עובדים מוצגים במסך היומן של המזכירה
   'calendarUsers',
+  // הלוח הצף "מחכות לקביעה" במסך היומן של המזכירה — 'open' או 'min'
+  'calendarDock',
   // מראה המערכת — 'light', 'dark' או 'system' (מצב לילה, ב"החשבון שלי")
   'theme'
 ];

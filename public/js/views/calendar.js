@@ -1,20 +1,24 @@
 'use strict';
 /**
- * 📅 יומן — למזכירות.
+ * 📅 יומן — לכל העובדים.
  *
- * היומנים שהעובדים שיתפו עם המזכירה ב-Google, זה לצד זה:
+ * עובד — היומן של עצמו ב-Google: יום ושבוע, וקביעת פגישה בלחיצה על משבצת.
+ *
+ * מזכירות — גם היומנים שהעובדים שיתפו איתן, זה לצד זה:
  *   • יום  — עמודה לכל עובד (התצוגה שמזכירה עובדת בה: מי פנוי עכשיו)
  *   • שבוע — עמודה לכל יום, הפגישות של כל העובדים שנבחרו בצבעים
  * עובד ששיתף לצפייה בלבד, או לא שיתף — מופיע ב"תפוס" בלבד, באפור.
  *
- * למטה — "מחכות לקביעה": משימות "📅 פגישה לקביעה" מכל המקורות.
- * לחיצה על משבצת ריקה — קביעת פגישה ביומן של העובד, באותה שעה.
+ * למזכירות בלבד — לוח צף משמאל ליומן, "📌 מחכות לקביעה": המשימות שמחכות
+ * לפגישה. "📅 קביעה" או גרירה של המשימה למשבצת ביומן. אפשר למזער אותו
+ * לכפתור קטן, והבחירה נזכרת (‎calendarDock‎).
  */
 
 const CalendarView = (() => {
   const { el } = UI;
 
   const PREF = 'calendarUsers';
+  const DOCK_PREF = 'calendarDock';
   const COLORS = ['#2563eb', '#7c3aed', '#0f766e', '#c2410c', '#be123c', '#0891b2', '#65a30d', '#a16207', '#db2777', '#4f46e5'];
   const DAY_NAMES = ['א׳', 'ב׳', 'ג׳', 'ד׳', 'ה׳', 'ו׳', 'ש׳'];
   const HOUR_FROM = 7;
@@ -42,11 +46,12 @@ const CalendarView = (() => {
     containerRef = container;
     UI.mount(container, UI.spinner());
     try {
-      [info, { tasks: pending }] = await Promise.all([API.get('/api/meetings/calendars'), API.get('/api/meetings/pending')]);
+      info = await API.get('/api/meetings/calendars');
+      // "מחכות לקביעה" — רק למזכירות
+      pending = info.secretary ? (await API.get('/api/meetings/pending')).tasks : [];
     } catch (err) {
       return UI.mount(container, UI.empty(err.message, '⚠️'));
     }
-    if (!info.secretary) return UI.mount(container, UI.empty('מסך היומן מיועד למזכירות', '📅'));
     if (!view.users) {
       const saved = App.getPref(PREF);
       const shared = info.calendars.filter((c) => c.access !== 'none').map((c) => c.userId);
@@ -114,7 +119,13 @@ const CalendarView = (() => {
       ? view.date.toLocaleDateString('he-IL', { weekday: 'long', day: 'numeric', month: 'long' })
       : `${r.days[0].getDate()}.${r.days[0].getMonth() + 1}–${r.days[r.days.length - 1].getDate()}.${r.days[r.days.length - 1].getMonth() + 1}`;
 
-    UI.mount(containerRef, el('div.cal', {}, [
+    const secretary = Boolean(info.secretary);
+    // ברירת מחדל: פתוח במחשב, ממוזער בטלפון (שם הוא צף מעל היומן)
+    const narrow = window.matchMedia?.('(max-width: 820px)').matches;
+    const dockOpen = secretary && App.getPref(DOCK_PREF, narrow ? 'min' : 'open') !== 'min';
+    UI.mount(containerRef, el(`div.cal${dockOpen ? '.has-dock' : ''}`, {}, [
+      // ראשון במסמך: במחשב הוא צף ממילא; בטלפון הכפתור הממוזער יושב בראש היומן
+      secretary ? pendingDock(dockOpen) : null,
       tabs(),
       el('div.cal-head', {}, [
         el('h2', { text: '📅 יומן' }),
@@ -125,18 +136,24 @@ const CalendarView = (() => {
         el('button.btn.btn-sm', { title: 'הבא', onclick: () => { view.date = addDays(view.date, view.mode === 'day' ? 1 : 7); loadRange(); } }, ['◀']),
         el('button.btn.btn-sm', { onclick: () => { view.date = new Date(); loadRange(); } }, ['היום']),
         el('div.spacer'),
-        // קביעת פגישה בלי לבחור משבצת ובלי משימה — למזכירות בלבד (המסך כולו שלהן)
-        info.secretary ? el('button.btn.btn-sm.btn-primary', { onclick: scheduleNew }, ['📅 קביעת פגישה']) : null,
-        el('button.btn.btn-sm.cal-refresh', { title: 'רענון: היומנים ששותפו, הפגישות והמשימות שמחכות', onclick: (e) => refreshAll(e.currentTarget) }, ['⟳ רענון'])
+        // קביעת פגישה בלי לבחור משבצת ובלי משימה — מזכירה: בכל יומן ששותף איתה; עובד: ביומן שלו
+        info.google?.calendar || secretary ? el('button.btn.btn-sm.btn-primary', { onclick: scheduleNew }, ['📅 קביעת פגישה']) : null,
+        el('button.btn.btn-sm.cal-refresh', { title: secretary ? 'רענון: היומנים ששותפו, הפגישות והמשימות שמחכות' : 'רענון הפגישות', onclick: (e) => refreshAll(e.currentTarget) }, ['⟳ רענון'])
       ]),
-      el('div.cal-access', {}, [
+      // היומן של Google לא מחובר — בלי זה אין מה להציג
+      !info.google?.calendar ? el('div.alert.alert-warn', {}, [el('span', { text: '📅' }), el('div', {}, [
+        el('b', { text: 'צריך לחבר את היומן של Google' }),
+        el('div', { text: 'היומן כאן הוא היומן שלך ב-Google. חיבור פעם אחת — ואפשר לראות פגישות ולקבוע אותן מכאן.' }),
+        el('a.btn.btn-primary.btn-sm.mt', { href: '/api/me/gmail/connect' }, ['חיבור Google'])
+      ])]) : null,
+      secretary ? el('div.cal-access', {}, [
         `שיתפו איתך לעריכה: ${counts.write} · לצפייה: ${counts.read} · לא שיתפו: ${counts.none}`,
         counts.none ? el('a', { href: '#', onclick: (e) => { e.preventDefault(); shareHelp(); } }, [' · איך משתפים']) : null
-      ]),
-      peoplePicker(),
+      ]) : null,
+      // עובד רואה רק את היומן של עצמו — אין את מי לבחור
+      secretary ? peoplePicker() : null,
       data?.error ? el('div.alert.alert-warn', {}, [el('span', { text: '⚠️' }), el('div', { text: data.error })]) : null,
-      view.mode === 'day' ? dayGrid(r.days[0]) : weekGrid(r.days),
-      pendingList()
+      view.mode === 'day' ? dayGrid(r.days[0]) : weekGrid(r.days)
     ]));
   }
 
@@ -211,15 +228,34 @@ const CalendarView = (() => {
       ...columns.map((c) => {
         const allDay = c.events.filter((e) => e.allDay);
         const timed = layout(c.events.filter((e) => !e.allDay));
+        // השעה במשבצת שמתחת לסמן — ברבעי שעה
+        const slotAt = (clientY) => {
+          const rect = col.getBoundingClientRect();
+          const minutes = Math.max(0, Math.floor(((clientY - rect.top) / rect.height) * total / 15) * 15);
+          const start = new Date(c.date);
+          start.setHours(HOUR_FROM, 0, 0, 0);
+          start.setMinutes(minutes);
+          return start;
+        };
         const col = el('div.cal-col', {
           onclick: (e) => {
             if (e.target !== col) return;
-            const rect = col.getBoundingClientRect();
-            const minutes = Math.floor(((e.clientY - rect.top) / rect.height) * total / 15) * 15;
-            const start = new Date(c.date);
-            start.setHours(HOUR_FROM, 0, 0, 0);
-            start.setMinutes(minutes);
-            newMeeting(c.ownerId, start);
+            newMeeting(c.ownerId, slotAt(e.clientY));
+          },
+          // משימה שנגררה מ"מחכות לקביעה" — הדיאלוג נפתח עם המשימה, היומן והשעה
+          ondragover: (e) => {
+            if (!dragTask) return;
+            e.preventDefault();
+            col.classList.add('is-drop');
+          },
+          ondragleave: () => col.classList.remove('is-drop'),
+          ondrop: (e) => {
+            col.classList.remove('is-drop');
+            if (!dragTask) return;
+            e.preventDefault();
+            const task = dragTask;
+            dragTask = null;
+            scheduleTask(task, c.ownerId, slotAt(e.clientY));
           }
         }, [
           ...hours.map((h, i) => el('div.cal-line', { style: { top: `${(i / hours.length) * 100}%` } })),
@@ -287,9 +323,8 @@ const CalendarView = (() => {
     const writable = (list) => new Set(list.filter((c) => !c.self && ['owner', 'write'].includes(c.access)).map((c) => c.userId));
     const before = writable(info.calendars);
     try {
-      const [fresh, p] = await Promise.all([API.get('/api/meetings/calendars?fresh=1'), API.get('/api/meetings/pending')]);
-      info = fresh;
-      pending = p.tasks;
+      info = await API.get(`/api/meetings/calendars${info.secretary ? '?fresh=1' : ''}`);
+      pending = info.secretary ? (await API.get('/api/meetings/pending')).tasks : [];
       const after = writable(info.calendars);
       const added = [...after].filter((id) => !before.has(id));
       // עובד ששיתף עכשיו — מופיע מיד במסך
@@ -297,6 +332,7 @@ const CalendarView = (() => {
       if (added.length) App.setPref(PREF, view.users);
       await loadRange();
       if (info.accessError) UI.toast(info.accessError, 'error');
+      else if (!info.secretary) UI.success('עודכן');
       else if (added.length) {
         const names = added.map((id) => info.calendars.find((c) => c.userId === id)?.name).filter(Boolean);
         UI.success(`נוספו ${added.length === 1 ? 'יומן אחד' : `${added.length} יומנים`} לעריכה: ${names.join(', ')}`);
@@ -321,12 +357,25 @@ const CalendarView = (() => {
     MeetingView.openDialog({ prefill: ownerId ? { ownerId } : {}, onDone: () => { reload(); refreshPending(); } });
   }
 
+  /** האם אפשר לקבוע ביומן של העובד — ‎null‎, או ההסבר למה לא */
+  function blockedCalendar(ownerId) {
+    const cal = ownerId ? info.calendars.find((c) => c.userId === ownerId) : null;
+    if (cal?.self && cal.access === 'none') return 'כדי לקבוע פגישות צריך לחבר את היומן של Google';
+    if (cal && !['owner', 'write'].includes(cal.self ? 'owner' : cal.access)) return `${cal.name} לא שיתף/ה איתך את היומן לעריכה`;
+    return null;
+  }
+
+  /** משימה מ"מחכות לקביעה" שנגררה למשבצת — הדיאלוג, ממולא */
+  function scheduleTask(task, ownerId, start) {
+    const why = blockedCalendar(ownerId);
+    if (why) return UI.toast(why, 'error');
+    MeetingView.openDialog({ task, prefill: { ...(ownerId ? { ownerId } : {}), start: start.toISOString() }, onDone: () => { reload(); refreshPending(); } });
+  }
+
   /** משבצת ריקה — פגישה חדשה, למשימה שמחכה או בלי משימה */
   function newMeeting(ownerId, start) {
-    const cal = ownerId ? info.calendars.find((c) => c.userId === ownerId) : null;
-    if (cal && !['owner', 'write'].includes(cal.self ? 'owner' : cal.access)) {
-      return UI.toast(`${cal.name} לא שיתף/ה איתך את היומן לעריכה`, 'error');
-    }
+    const why = blockedCalendar(ownerId);
+    if (why) return UI.toast(why, 'error');
     const open = (task = null) => MeetingView.openDialog({ task, prefill: { ownerId, start: start.toISOString() }, onDone: () => { reload(); refreshPending(); } });
     if (!pending.length) return open();
     const m = UI.modal({
@@ -389,26 +438,60 @@ const CalendarView = (() => {
     });
   }
 
-  // --- מחכות לקביעה
+  // --- מחכות לקביעה — למזכירות בלבד
+  let dragTask = null;
+
   async function refreshPending() {
-    try { pending = (await API.get('/api/meetings/pending')).tasks; } catch { /* נשאר */ }
+    if (info?.secretary) {
+      try { pending = (await API.get('/api/meetings/pending')).tasks; } catch { /* נשאר */ }
+    }
     draw();
   }
 
-  function pendingList() {
-    return el('div.card.today-sec', { style: { marginTop: '14px' } }, [
-      el('div.today-sec-head', {}, [el('b', { text: '📌 מחכות לקביעה' }), el('span.today-count', { text: String(pending.length) })]),
-      el('div.today-rows', {}, pending.length
-        ? pending.map((t) => el('div.today-row.today-task', { onclick: () => TaskCardView.open(t.id) }, [
-            el('div.today-main', {}, [
+  const setDock = (state) => { App.setPref(DOCK_PREF, state); draw(); };
+
+  /**
+   * לוח צף משמאל ליומן. פתוח — רשימת המשימות, עם "📅 קביעה" וגרירה למשבצת;
+   * ממוזער — כפתור קטן עם המספר. היומן מפנה לו מקום (‎.cal.has-dock‎).
+   */
+  function pendingDock(open) {
+    if (!open) {
+      return el('button.cal-dock-pill', { title: 'פתיחת המשימות שמחכות לקביעה', onclick: () => setDock('open') }, [
+        el('span', { text: '📌 מחכות לקביעה' }),
+        el('span.today-count', { text: String(pending.length) })
+      ]);
+    }
+    return el('aside.cal-dock', { 'aria-label': 'משימות שמחכות לקביעת פגישה' }, [
+      el('div.cal-dock-head', {}, [
+        el('b', { text: '📌 מחכות לקביעה' }),
+        el('span.today-count', { text: String(pending.length) }),
+        el('div.spacer'),
+        el('button.btn.btn-sm.btn-ghost.cal-dock-min', { title: 'מזעור', 'aria-label': 'מזעור', onclick: () => setDock('min') }, ['—'])
+      ]),
+      pending.length ? el('div.mute-sm.cal-dock-hint', { text: 'גררו משימה למשבצת ביומן, או "📅 קביעה"' }) : null,
+      el('div.cal-dock-list', {}, pending.length
+        ? pending.map((t) => el('div.cal-dock-task', {
+            draggable: 'true',
+            ondragstart: (e) => {
+              dragTask = t;
+              e.dataTransfer.effectAllowed = 'copy';
+              e.dataTransfer.setData('text/plain', t.title);
+            },
+            ondragend: () => { dragTask = null; }
+          }, [
+            el('div.cal-dock-main', { onclick: () => TaskCardView.open(t.id) }, [
               el('div.today-title', { text: t.title }),
-              el('div.mute-sm', { text: [t.assigneeName, t.projectName, t.statusShort].filter(Boolean).join(' · ') })
+              el('div.mute-sm', { text: [t.requestedByName ? `ביקש/ה: ${t.requestedByName}` : null, t.assigneeName, t.projectName, t.statusShort].filter(Boolean).join(' · ') })
             ]),
             el('button.btn.btn-sm.btn-primary', {
-              onclick: (e) => { e.stopPropagation(); MeetingView.openDialog({ task: t, onDone: () => { reload(); refreshPending(); } }); }
+              onclick: () => {
+                // משימה למזכירות — ביומן של מי שביקש, אם שיתף אותו לעריכה
+                const ownerId = t.requestedBy && !blockedCalendar(t.requestedBy) ? t.requestedBy : undefined;
+                MeetingView.openDialog({ task: t, prefill: ownerId ? { ownerId } : null, onDone: () => { reload(); refreshPending(); } });
+              }
             }, ['📅 קביעה'])
           ]))
-        : [el('div.mute-sm.today-pad', { text: 'אין משימות שמחכות לקביעת פגישה' })])
+        : [el('div.mute-sm.cal-dock-empty', { text: 'אין משימות שמחכות לקביעת פגישה ✓' })])
     ]);
   }
 
