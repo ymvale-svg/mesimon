@@ -58,7 +58,7 @@ const TZ = 'Asia/Jerusalem';
 const FILES_DIR = () => path.join(D.UPLOADS_DIR, 'goods-receipt');
 
 const TRIGGER = /קבלת\s*סחורה/;
-const YES = /^(כן|נכון|מאשר|מאשרת|אשר|אישור|תקין|יאללה|אוקי|אוקיי|סבבה|ok|yes|👍|✅)([\s,.!]|$)/i;
+const YES = /^(כן|נכון|מאשר|מאשרת|אשר|אישור|תקין|יאללה|אוקי|אוקיי|סבבה|ok|yes|👍|👌|✅|✔)([\s,.!]|$)/i;
 const CANCEL = /^(ביטול|בטל|לבטל|עזוב|יציאה|stop)([\s,.!]|$)/i;
 /** "תוסיף בדו שיח: ...", "הערה: ...", "תרשום בהערות ..." — הערה חופשית של המקבל לדו-שיח הפנימי, בכל שלב */
 const NOTE_CMD = /^\s*(?:תוסיף|תוסיפי|הוסף|להוסיף|תרשום|תכתוב|רשום|כתוב)?\s*(?:ל|ב)?\s*(?:דו[\s-]*שיח(?:\s*פנימי)?|הערה|הערות)\s*[,:\-–]?\s*([\s\S]+)$/;
@@ -1338,7 +1338,8 @@ async function cancel(user, s, why = 'בוטלה') {
  * @returns {Promise<{replies: string[], status: string, result: string}>}
  */
 async function handle({ user, text = '', file = null }) {
-  const t = String(text ?? '').trim();
+  // 👍🏽 → 👍: גוון עור ובורר תצוגה של אימוג'י אינם חלק מהתשובה
+  let t = String(text ?? '').replace(/[\u{1F3FB}-\u{1F3FF}\uFE0F]/gu, '').replace(/(👍|👌|✅|✔|👎)\1+/gu, '$1').trim();
   let s = load(user.id);
   if (s && !fresh(s)) {
     // נשכחה — טיוטא שלא אושרה מבוטלת, כדי לא להשאיר יתרה תפוסה בהזמנה
@@ -1402,6 +1403,17 @@ async function handle({ user, text = '', file = null }) {
     const next = await startQueued(user, s, r.replies);
     if (next.s) save(user.id, next.s);
     return { replies: next.replies, files: next.files ?? [], status: next.status ?? 'ok', result: next.result ?? 'ביטול ומעבר למסמך הבא' };
+  }
+
+  // 👎 — "לא": בשאלת כן/לא — לא; על סיכום — לא ממשיכים ושואלים מה לתקן; על הטיוטא — מבקשים אישור לביטול
+  if (t === '👎' && !file) {
+    if (s.pendingList || ['offer', 'doctype'].includes(s.step)) t = 'לא';
+    else if (s.step === 'review') {
+      return { replies: [`👎 לבטל את הטיוטא *${s.docno}*? כתבו *ביטול* לאישור — או כתבו מה לתקן (כמות, תיאור, שורה שחסרה).`], status: 'ok', result: '👎 בבדיקת הטיוטא' };
+    } else {
+      save(user.id, s);
+      return { replies: [`👎 מה לא נכון? כתבו מה לתקן, או *ביטול* לביטול הקליטה.${s.lastPrompt ? `\n\n${s.lastPrompt}` : ''}`], status: 'ok', result: `👎 בשלב ${s.step}` };
+    }
   }
 
   let out;
@@ -1696,7 +1708,7 @@ async function step(user, s, t, file) {
         await writeDialog(user, s).catch(() => {});
         return showDraft(s);
       }
-      if (/^(מאשר|מאשרת|אישור|אשר)([\s,.!]|$)/.test(t)) {
+      if (/^(מאשר|מאשרת|אישור|אשר|👍|👌|✅|✔)([\s,.!]|$)/.test(t)) {
         try {
           // כבר סופית (אושרה במחשב) — לא מאשרים שוב
           if ((await Priority.receiptStatus(s.company, s.docno)) !== 'סופית') await Priority.finalizeReceipt(s.company, s.docno);
