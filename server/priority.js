@@ -126,18 +126,27 @@ const grKey = (docno) => `DOCUMENTS_P(DOCNO='${q(docno)}',TYPE='P')`;
 // ---------------------------------------------------------------------------
 
 /** ספקים לפי ח.פ., ואם אין — לפי שם (עד 5). רבים בכרטיס בלי ח.פ. */
+/** ספק שאינו פעיל — לפי הסטטוס, או "לא פעיל" בתחילת השם (כך מסמנים אצלנו) */
+const activeSupplier = (x) => (x.STATDES ?? 'פעיל') === 'פעיל' && !/^\s*לא\s*פעיל/.test(x.SUPDES ?? '');
+
+/**
+ * ח.פ. של הספק נשמר בפריוריטי ב-‎COMPNUM‎ ("מס' חברה", מלא ברוב הכרטיסים); ‎VATNUM‎ כמעט
+ * ריק. מחפשים בשניהם, גם עם אפסים מובילים ("23043854" = "023043854").
+ */
 async function findSuppliers(company, { vat = '', name = '' } = {}) {
-  const sel = '$select=SUPNAME,SUPDES,VATNUM,STATDES&$top=5';
+  const sel = '$select=SUPNAME,SUPDES,VATNUM,COMPNUM,STATDES&$top=10';
   const digits = String(vat).replace(/\D/g, '');
-  if (digits) {
-    const byVat = rows(await call(company, 'GET', `SUPPLIERS?$filter=${enc(`VATNUM eq '${digits}'`)}&${sel}`));
-    if (byVat.length) return { by: 'vat', list: byVat };
+  if (digits.length >= 7) {
+    const forms = [...new Set([digits, digits.padStart(9, '0'), digits.replace(/^0+/, '')])];
+    const filter = forms.flatMap((d) => [`COMPNUM eq '${d}'`, `VATNUM eq '${d}'`]).join(' or ');
+    const byVat = rows(await call(company, 'GET', `SUPPLIERS?$filter=${enc(filter)}&${sel}`)).filter(activeSupplier);
+    if (byVat.length) return { by: 'vat', list: byVat.slice(0, 5) };
   }
   // קודם השם המלא בלי "בע"מ", אחר כך מילה ארוכה ממנו — כך "דאר אלביאן בע"מ" נמצא גם ככתוב אחרת
   const clean = String(name).replace(/בע"?מ|בעמ|ltd\.?/gi, ' ').replace(/\s+/g, ' ').trim();
   const words = clean.split(/[\s,.()"']+/).filter((w) => w.length >= 3).sort((a, b) => b.length - a.length);
   for (const w of [clean, ...words.slice(0, 2)].filter(Boolean)) {
-    const list = rows(await call(company, 'GET', `SUPPLIERS?$filter=${enc(`contains(SUPDES,'${q(w)}')`)}&${sel}`));
+    const list = rows(await call(company, 'GET', `SUPPLIERS?$filter=${enc(`contains(SUPDES,'${q(w)}')`)}&${sel}`)).filter(activeSupplier).slice(0, 5);
     if (!list.length) continue;
     const exact = list.filter((x) => String(x.SUPDES).replace(/בע"?מ|בעמ/g, '').replace(/\s+/g, ' ').trim() === clean);
     return { by: 'name', list: exact.length === 1 ? exact : list };

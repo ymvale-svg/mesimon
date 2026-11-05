@@ -361,7 +361,7 @@ async function askHeader(s) {
     `📦 *קבלת סחורה* — ${d.doc_type === 'invoice' ? 'חשבונית' : 'תעודת משלוח'} ${d.doc_number}`,
     companyLine(s),
     s.via === 'sandbox' ? `   (המסמך מופנה ל${Priority.resolveCompany(d.recipient_vat).matched?.name ?? 'חברה אחרת'} — נקלט לעותק הבדיקה)` : null,
-    `🚚 ספק: *${s.supplier.name}* (${s.supplier.code})${s.supplierBy === 'name' ? ' — נמצא לפי שם, אין ח.פ. בכרטיס' : ''}`,
+    `🚚 ספק: *${s.supplier.name}* (${s.supplier.code})${s.supplierBy === 'vat' ? ` — לפי ח.פ. ${String(d.supplier_vat).replace(/\D/g, '')}` : s.supplierBy === 'name' ? (d.supplier_vat ? ` — לפי שם: ח.פ. ${String(d.supplier_vat).replace(/\D/g, '')} שבמסמך לא נמצא בכרטיסי הספקים` : ' — לפי שם, אין ח.פ. במסמך') : ''}`,
     d.date ? `📅 ${ymdHe(d.date)}${d.delivery_place ? ` · ${d.delivery_place}` : ''}` : null,
     `💳 תנאי תשלום: *${Priority.payLabel(s.payCode ?? Priority.DEFAULT_PAY)}*${(s.payCode ?? Priority.DEFAULT_PAY) === Priority.DEFAULT_PAY ? ' (ברירת מחדל)' : ''}`,
     d.warnings?.length ? `⚠️ ${d.warnings.join('\n⚠️ ')}` : null,
