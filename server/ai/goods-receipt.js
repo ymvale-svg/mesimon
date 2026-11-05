@@ -492,7 +492,7 @@ async function askHeader(s) {
     `🚚 ספק: *${s.supplier.name}* (${s.supplier.code})${s.supplierBy === 'vat' ? ` — לפי ח.פ. ${String(d.supplier_vat).replace(/\D/g, '')}` : s.supplierBy === 'name' ? (d.supplier_vat ? ` — לפי שם: ח.פ. ${String(d.supplier_vat).replace(/\D/g, '')} שבמסמך לא נמצא בכרטיסי הספקים` : ' — לפי שם, אין ח.פ. במסמך') : ''}`,
     d.date ? `📅 ${ymdHe(d.date)}${d.delivery_place ? ` · ${d.delivery_place}` : ''}` : null,
     `💳 תנאי תשלום: *${Priority.payLabel(s.payCode ?? Priority.DEFAULT_PAY)}*${(s.payCode ?? Priority.DEFAULT_PAY) === Priority.DEFAULT_PAY ? ' (ברירת מחדל)' : ''}${dueText(s, s.payCode ?? Priority.DEFAULT_PAY)}`,
-    s.noVat ? `🧾 מע"מ: *ללא מע"מ*${s.noVatBy === 'user' ? ' (נבחר)' : ' — במסמך אין מע"מ'}` : null,
+    s.noVat ? `🧾 מע"מ: *ללא מע"מ* — קוד ${Priority.NO_VAT_CODE} ${Priority.TAX_CODES[Priority.NO_VAT_CODE]}${s.noVatBy === 'user' ? ' (נבחר)' : ' — במסמך אין מע"מ'}` : null,
     d.warnings?.length ? `⚠️ ${d.warnings.join('\n⚠️ ')}` : null,
     '', `נכון? *כן* להמשך, או *ביטול*. לתנאי תשלום אחר — כתבו אותו ("שוטף 60"). ${s.noVat ? 'יש מע"מ — *עם מע"מ*.' : 'אין מע"מ — *ללא מע"מ*.'}`
   ];
@@ -900,7 +900,7 @@ function writeDialog(user, s) {
     d.detail ? `פירוט השורות: מתוך ${d.detail.doc_type === 'invoice' ? 'חשבונית' : 'חשבון לתשלום'} ${d.detail.doc_number}` : null,
     d.date || d.delivery_place ? `אספקה: ${[ymdHe(d.date), d.delivery_place].filter(Boolean).join(', ')}` : null,
     d.purchase_type !== 'unknown' ? `סוג רכש: ${d.purchase_type === 'site' ? 'אתרי' : 'משרדי'}` : null,
-    s.noVat ? `מע"מ: ללא מע"מ (קוד ${Priority.NO_VAT_CODE})${s.noVatBy === 'user' ? ' — נבחר ע"י המקבל' : ' — במסמך אין מע"מ'}` : null,
+    s.noVat ? `מע"מ: קוד ${Priority.NO_VAT_CODE} ${Priority.TAX_CODES[Priority.NO_VAT_CODE]}${s.noVatBy === 'user' ? ' — נבחר ע"י המקבל' : ' — במסמך אין מע"מ'}` : null,
     `תנאי תשלום: ${Priority.payLabel(s.payCode ?? Priority.DEFAULT_PAY)}${(s.payCode ?? Priority.DEFAULT_PAY) === Priority.DEFAULT_PAY ? ' (ברירת מחדל)' : ' (נבחר ע"י המקבל)'}${dueText(s, s.payCode ?? Priority.DEFAULT_PAY)}`,
     ...(s.corrections ?? []).map((c) => `תיקון המקבל: ${c}`),
     ...short.map((x) => `קבלה חלקית — ${x}. היתרה נשארת פתוחה`),

@@ -539,7 +539,13 @@ async function warehouseOf(company, project) {
   }
 }
 
-/** קוד מס "ללא מע"מ" בקבלות סחורה (‎TAXCODE‎; ‎002‎ = עם מע"מ). מסך המסים סגור ל-API — נלמד מהקבלות */
+/*
+ * קודי מס בקבלת סחורה (‎TAXCODE‎; מסך המסים סגור ל-API — הרשימה מהמסך בפריוריטי):
+ *   000 פטור ממע"מ · 002 מע"מ תשומות (ברירת המחדל) · 003 מע"מ תשומות לנכסים ·
+ *   006 מע"מ נקבע ידנית · 007 מע"מ בשיעור 0.
+ * אגרה, ארנונה, שכר דירה, עוסק פטור — ‎000‎.
+ */
+const TAX_CODES = { '000': 'פטור ממע"מ', '002': 'מע"מ תשומות', '003': 'מע"מ תשומות לנכסים', '006': 'מע"מ נקבע ידנית', '007': 'מע"מ בשיעור 0' };
 const NO_VAT_CODE = '000';
 
 /** GR טיוטא. ‎project‎ — כשיש הזמנה, הפרויקט שלה. ‎warehouse‎ — המחסן של הפרויקט */
@@ -637,7 +643,7 @@ async function cancelReceipt(company, docno) {
 
 module.exports = {
   COMPANIES, isEnabled, allowed, companyOf, isTest, resolveCompany, PriorityError,
-  NO_VAT_CODE, PAY_TERMS, DEFAULT_PAY, payTerm, payLabel, payFromText, dueDate, projectWarehouses, warehouses, warehouseExists, defaultWarehouse, supplierHistory, recentLines, partByCode, findPartsByText, generalCoding, warehouseOf, findSuppliers, supplierByCode, findReceiptByBooknum, getOrder, openOrders, findPartExact, lastSubchapter, projects, matchProjects, readReceipt,
+  NO_VAT_CODE, TAX_CODES, PAY_TERMS, DEFAULT_PAY, payTerm, payLabel, payFromText, dueDate, projectWarehouses, warehouses, warehouseExists, defaultWarehouse, supplierHistory, recentLines, partByCode, findPartsByText, generalCoding, warehouseOf, findSuppliers, supplierByCode, findReceiptByBooknum, getOrder, openOrders, findPartExact, lastSubchapter, projects, matchProjects, readReceipt,
   readDialog, createReceipt, addOrderLine, addFreeLine, setLineQty, setHeader, attach, setDialog, finalizeReceipt, cancelReceipt,
   _call: call
 };
