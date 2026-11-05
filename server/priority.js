@@ -539,6 +539,9 @@ async function warehouseOf(company, project) {
   }
 }
 
+/** קוד מס "ללא מע"מ" בקבלות סחורה (‎TAXCODE‎; ‎002‎ = עם מע"מ). מסך המסים סגור ל-API — נלמד מהקבלות */
+const NO_VAT_CODE = '000';
+
 /** GR טיוטא. ‎project‎ — כשיש הזמנה, הפרויקט שלה. ‎warehouse‎ — המחסן של הפרויקט */
 async function createReceipt(company, { supname, booknum, date, project, warehouse = 'Main', payCode = DEFAULT_PAY }) {
   const body = { SUPNAME: supname, TOWARHSNAME: warehouse, MED_MXPAYCODE: payCode };
@@ -634,7 +637,7 @@ async function cancelReceipt(company, docno) {
 
 module.exports = {
   COMPANIES, isEnabled, allowed, companyOf, isTest, resolveCompany, PriorityError,
-  PAY_TERMS, DEFAULT_PAY, payTerm, payLabel, payFromText, dueDate, projectWarehouses, warehouses, warehouseExists, defaultWarehouse, supplierHistory, recentLines, partByCode, findPartsByText, generalCoding, warehouseOf, findSuppliers, supplierByCode, findReceiptByBooknum, getOrder, openOrders, findPartExact, lastSubchapter, projects, matchProjects, readReceipt,
+  NO_VAT_CODE, PAY_TERMS, DEFAULT_PAY, payTerm, payLabel, payFromText, dueDate, projectWarehouses, warehouses, warehouseExists, defaultWarehouse, supplierHistory, recentLines, partByCode, findPartsByText, generalCoding, warehouseOf, findSuppliers, supplierByCode, findReceiptByBooknum, getOrder, openOrders, findPartExact, lastSubchapter, projects, matchProjects, readReceipt,
   readDialog, createReceipt, addOrderLine, addFreeLine, setLineQty, setHeader, attach, setDialog, finalizeReceipt, cancelReceipt,
   _call: call
 };

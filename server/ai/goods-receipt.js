@@ -462,8 +462,20 @@ async function resolveSupplier(s) {
     ...s.supplierOptions.map((x, i) => `*${i + 1}.* ${x.name} (${x.code})`), '', 'כתבו מספר, או *ביטול*.'].join('\n'));
 }
 
+/*
+ * מע"מ: מסמך עם סכום ובלי מע"מ (אגרה, ארנונה, שכר דירה, חלק משכר הטרחה) — קוד מס ‎000‎ (ללא מע"מ).
+ * ברירת המחדל של פריוריטי — ‎002‎ (עם מע"מ). העובד יכול לשנות: "ללא מע"מ" / "עם מע"מ".
+ */
+const NO_VAT_TEXT = /(ללא|בלי|אין|פטור\s*מ)\s*מע["'״]?מ/;
+const WITH_VAT_TEXT = /^(עם|כולל|יש)\s*מע["'״]?מ/;
+function docWithoutVat(d) {
+  const t = d?.totals ?? {};
+  return Number(t.total || t.before_vat || 0) > 0 && !Number(t.vat || 0);
+}
+
 async function askHeader(s) {
   const d = s.doc;
+  if (s.noVat === undefined) s.noVat = docWithoutVat(d);
   // אותו מסמך כבר נקלט — פריוריטי ממילא דוחה מספר תעודה כפול לאותו ספק
   const dup = await Priority.findReceiptByBooknum(s.company, s.supplier.code, d.doc_number);
   if (dup && dup.STATDES !== 'מבוטלת') {
@@ -480,8 +492,9 @@ async function askHeader(s) {
     `🚚 ספק: *${s.supplier.name}* (${s.supplier.code})${s.supplierBy === 'vat' ? ` — לפי ח.פ. ${String(d.supplier_vat).replace(/\D/g, '')}` : s.supplierBy === 'name' ? (d.supplier_vat ? ` — לפי שם: ח.פ. ${String(d.supplier_vat).replace(/\D/g, '')} שבמסמך לא נמצא בכרטיסי הספקים` : ' — לפי שם, אין ח.פ. במסמך') : ''}`,
     d.date ? `📅 ${ymdHe(d.date)}${d.delivery_place ? ` · ${d.delivery_place}` : ''}` : null,
     `💳 תנאי תשלום: *${Priority.payLabel(s.payCode ?? Priority.DEFAULT_PAY)}*${(s.payCode ?? Priority.DEFAULT_PAY) === Priority.DEFAULT_PAY ? ' (ברירת מחדל)' : ''}${dueText(s, s.payCode ?? Priority.DEFAULT_PAY)}`,
+    s.noVat ? `🧾 מע"מ: *ללא מע"מ*${s.noVatBy === 'user' ? ' (נבחר)' : ' — במסמך אין מע"מ'}` : null,
     d.warnings?.length ? `⚠️ ${d.warnings.join('\n⚠️ ')}` : null,
-    '', 'נכון? *כן* להמשך, או *ביטול*. לתנאי תשלום אחר — כתבו אותו ("שוטף 60").'
+    '', `נכון? *כן* להמשך, או *ביטול*. לתנאי תשלום אחר — כתבו אותו ("שוטף 60"). ${s.noVat ? 'יש מע"מ — *עם מע"מ*.' : 'אין מע"מ — *ללא מע"מ*.'}`
   ];
   return reply(s, lines.filter((x) => x !== null).join('\n'));
 }
@@ -819,6 +832,10 @@ async function createDraft(user, s) {
   s.docno = docno;
   save(user.id, s);
   const problems = [];
+  if (s.noVat) {
+    await Priority.setHeader(c, docno, { TAXCODE: Priority.NO_VAT_CODE })
+      .catch((err) => problems.push({ what: 'הקבלה נקלטה עם מע"מ — שנו בפריוריטי ל"ללא מע"מ"', err: `קוד מס ${Priority.NO_VAT_CODE}: ${err.message}` }));
+  }
   for (const l of s.lines.filter((x) => x.qty > 0)) {
     try {
       if (l.order) await Priority.addOrderLine(c, docno, { ordname: l.order.ordname, line: l.order.line, qty: l.qty });
@@ -883,6 +900,7 @@ function writeDialog(user, s) {
     d.detail ? `פירוט השורות: מתוך ${d.detail.doc_type === 'invoice' ? 'חשבונית' : 'חשבון לתשלום'} ${d.detail.doc_number}` : null,
     d.date || d.delivery_place ? `אספקה: ${[ymdHe(d.date), d.delivery_place].filter(Boolean).join(', ')}` : null,
     d.purchase_type !== 'unknown' ? `סוג רכש: ${d.purchase_type === 'site' ? 'אתרי' : 'משרדי'}` : null,
+    s.noVat ? `מע"מ: ללא מע"מ (קוד ${Priority.NO_VAT_CODE})${s.noVatBy === 'user' ? ' — נבחר ע"י המקבל' : ' — במסמך אין מע"מ'}` : null,
     `תנאי תשלום: ${Priority.payLabel(s.payCode ?? Priority.DEFAULT_PAY)}${(s.payCode ?? Priority.DEFAULT_PAY) === Priority.DEFAULT_PAY ? ' (ברירת מחדל)' : ' (נבחר ע"י המקבל)'}${dueText(s, s.payCode ?? Priority.DEFAULT_PAY)}`,
     ...(s.corrections ?? []).map((c) => `תיקון המקבל: ${c}`),
     ...short.map((x) => `קבלה חלקית — ${x}. היתרה נשארת פתוחה`),
@@ -1287,7 +1305,9 @@ async function step(user, s, t, file) {
       const pay = Priority.payFromText(t);
       if (pay?.unknown !== undefined) return reply(s, `אין בפריוריטי תנאי תשלום שוטף + ${pay.unknown}. האפשרויות: ${Priority.PAY_TERMS.map((p) => Priority.payLabel(p.code)).join(', ')}.`);
       if (pay) { s.payCode = pay.code; return askHeader(s); }
-      if (!YES.test(t)) return reply(s, '*כן* להמשך, או *ביטול*. לתנאי תשלום אחר — כתבו אותו ("שוטף 60").');
+      if (NO_VAT_TEXT.test(t)) { s.noVat = true; s.noVatBy = 'user'; return askHeader(s); }
+      if (WITH_VAT_TEXT.test(t.trim())) { s.noVat = false; s.noVatBy = 'user'; return askHeader(s); }
+      if (!YES.test(t)) return reply(s, '*כן* להמשך, או *ביטול*. לתנאי תשלום אחר — כתבו אותו ("שוטף 60"). מע"מ — *ללא מע"מ* / *עם מע"מ*.');
       return resolveOrder(s);
     }
 
