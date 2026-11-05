@@ -3306,6 +3306,11 @@ input[type="color"] { width: 46px; height: 30px; padding: 2px; cursor: pointer; 
 .cal-ev.is-ours { box-shadow: inset 3px 0 0 #fbbf24; }
 .cal-allday { position: absolute; inset-inline: 2px; height: 18px; border-radius: 4px; color: #fff; font-size: 11px; padding: 0 5px; overflow: hidden; z-index: 2; cursor: pointer; }
 
+/* חלון ‎sticky‎ — לחיצה מחוץ לו לא סוגרת, רק מזכירה שהוא פתוח */
+.modal.is-nudge { animation: modal-nudge .32s ease; }
+@keyframes modal-nudge { 0%, 100% { transform: scale(1); } 40% { transform: scale(1.015); box-shadow: 0 0 0 3px var(--brand-light), var(--shadow-lg); } }
+@media (prefers-reduced-motion: reduce) { .modal.is-nudge { animation: none; } }
+
 /* 📌 מחכות לקביעה — לוח צף משמאל ליומן, למזכירות. היומן מפנה לו מקום */
 .cal.has-dock { padding-left: 316px; }
 .cal-col.is-drop { background: var(--brand-light); outline: 2px dashed var(--brand); outline-offset: -2px; }
