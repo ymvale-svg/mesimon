@@ -713,9 +713,19 @@ function askFiles(s) {
 
 async function createDraft(user, s) {
   const c = s.company;
-  // מחסן הפרויקט — כך הסחורה נכנסת למלאי של האתר; לפרויקט בלי מחסן — Main
+  // המחסן — נלמד מהקבלות הקודמות של הפרויקט (‎warehouseOf‎); פריוריטי דוחה אותו — Main
   s.warehouse = await Priority.warehouseOf(c, s.project?.code);
-  const docno = await Priority.createReceipt(c, { supname: s.supplier.code, booknum: s.doc.doc_number, date: s.doc.date || null, project: s.project?.code, warehouse: s.warehouse, payCode: s.payCode ?? Priority.DEFAULT_PAY });
+  const head = { supname: s.supplier.code, booknum: s.doc.doc_number, date: s.doc.date || null, project: s.project?.code, warehouse: s.warehouse, payCode: s.payCode ?? Priority.DEFAULT_PAY };
+  let docno;
+  try {
+    docno = await Priority.createReceipt(c, head);
+  } catch (err) {
+    if (s.warehouse === 'Main') throw err;
+    console.error(`[משימון] קבלת סחורה: מחסן ${s.warehouse} נדחה (${err.message}), קולט ל-Main`);
+    s.warehouseNote = `מחסן ${s.warehouse} נדחה בפריוריטי, נקלט ל-Main`;
+    s.warehouse = 'Main';
+    docno = await Priority.createReceipt(c, { ...head, warehouse: 'Main' });
+  }
   s.docno = docno;
   save(user.id, s);
   const problems = [];
@@ -779,6 +789,7 @@ function writeDialog(user, s) {
     ...short.map((x) => `קבלה חלקית — ${x}. היתרה נשארת פתוחה`),
     !s.order && s.project ? `פרויקט נבחר ע"י המקבל: ${s.project.code} ${s.project.des}` : null,
     s.chapter ? `תת פרק לפריט כללי: ${s.chapter.chapter} ${s.chapter.topic}` : null,
+    s.warehouseNote ?? null,
     ...[...new Set(s.lines.filter((l) => !l.order && l.part).map((l) => `קידוד: ${l.part.code} ${l.part.chapter ?? ''}/${l.part.topic ?? ''} — ${l.part.why}`))]
   ]);
 }
