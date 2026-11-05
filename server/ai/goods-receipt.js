@@ -1064,7 +1064,7 @@ async function routeFile(user, s, file, t) {
   const cur = s.docno ? `ל-${s.docno}` : 'לקבלת הסחורה הנוכחית';
   // לא ‎reply()‎: השאלה הזו אינה "השאלה של השלב", ואחרי התשובה חוזרים לזו שחיכתה
   return { s, replies: [[cls ? `📄 זה נראה כמו מסמך חדש${s.pendingNew.label ? `: ${s.pendingNew.label}` : ''}.` : '📄 קיבלתי מסמך נוסף.',
-    `*1* — לצרף כנספח ${cur} · *2* — קבלת סחורה חדשה${!s.docno && s.step !== 'files' ? ' (הנוכחית תבוטל)' : ''} · *לא* — להתעלם מהקובץ`].join('\n')] };
+    `*1* — לצרף כנספח ${cur}`, `*2* — קבלת סחורה חדשה${!s.docno && s.step !== 'files' ? ' (הנוכחית תבוטל)' : ''}`, `*3* — להתעלם מהקובץ ולחזור ל: ${waitingQuestion(s)}`].join('\n')] };
 }
 
 /** המסמך שהגיע הוא החשבון שהחשבונית מפנה אליו? (לפני שנוצרה טיוטא) */
@@ -1169,7 +1169,23 @@ async function adoptList(s, d, note) {
   return { ...out, replies: [note, ...out.replies] };
 }
 
-const newOrAttach = (s) => `*1* — לצרף כנספח${s.docno ? ` ל-${s.docno}` : ''} · *2* — קבלת סחורה חדשה · *לא* — להתעלם מהקובץ`;
+/** השאלה שחיכתה לפני שהגיע הקובץ — בקצרה, לאפשרות 3 */
+function waitingQuestion(s) {
+  const by = {
+    review: `לאשר את ${s.docno ?? 'הטיוטא'} (*מאשר* / תיקון / *ביטול*)`,
+    files: 'נספחים — *סיום* כשסיימתם',
+    lines: 'זה מה שהתקבל בפועל?',
+    parts: 'מק"ט, תת פרק ומשאב',
+    header: 'פרטי המסמך — נכון?',
+    order: 'מספר הזמנה, או *בלי הזמנה*',
+    supplier: 'איזה ספק?',
+    company: 'לאיזו חברה?',
+    project: 'לאיזה פרויקט?',
+    warehouse: 'לאיזה מחסן?'
+  };
+  return by[s.step] ?? String(s.lastPrompt ?? '').split('\n').find((l) => l.trim())?.slice(0, 60) ?? 'השאלה הקודמת';
+}
+const newOrAttach = (s) => `*1* — לצרף כנספח${s.docno ? ` ל-${s.docno}` : ''} · *2* — קבלת סחורה חדשה · *3* — להתעלם מהקובץ ולחזור ל: ${waitingQuestion(s)}`;
 
 /** תשובה לשאלה "נספח או חדש?" — ‎null‎ אם התשובה אינה אחת מהשתיים */
 async function answerPendingNew(user, s, t) {
