@@ -444,13 +444,41 @@ async function afterLines(s) {
   return askProject(s);
 }
 
+/**
+ * קליטה לעותק הבדיקה, ופרויקט שלא נמצא בו — אולי הוא קיים בחברה האמיתית (test11 הוא עותק
+ * מיוני, עם 5 פרויקטים בלבד). אז אומרים זאת במפורש, במקום שה-AI ינחש מתוך רשימת הבדיקה.
+ */
+async function sandboxNote(s, text, testList) {
+  if (s.via !== 'sandbox' || !String(text ?? '').trim()) return null;
+  const real = Priority.resolveCompany(s.doc.recipient_vat).matched;
+  if (!real?.code) return null;
+  let hits = [];
+  try {
+    const list = await projectsOf(real.code);
+    hits = Priority.matchProjects(list, text, { all: true });
+    if (!hits.length) { const any = Priority.matchProjects(list, text); hits = any.length ? any.filter((p) => p.score === any[0].score) : []; }
+  } catch (err) {
+    console.error('[משימון] בדיקת פרויקט בחברה האמיתית:', err.message);
+    return null;
+  }
+  if (!hits.length) return null;
+  s.projectOptions = testList.slice(0, 9);
+  return [`📌 ${hits.slice(0, 3).map((p) => `*${p.des}* (${p.code})`).join(', ')} — קיים ב${real.name} (${real.code}),`,
+    `אבל הקליטה הזו היא ל*עותק הבדיקה ${s.company}*, שיש בו רק ${testList.length} פרויקטים. ${real.code} עוד לא פתוחה לכתיבה מהבוט (PRIORITY_COMPANIES ב-Render).`,
+    '', `פרויקטים ב-${s.company}:`, ...s.projectOptions.map((p, i) => `*${i + 1}.* ${p.des} (${p.code})`), '', 'בחרו מספר, או *ביטול*.'].join('\n');
+}
+
 async function askProject(s) {
   if (s.project) return askFiles(s);
   const all = await projectsOf(s.company);
   // רמז מהמסמך — עיר, אתר, מגרש: כל הפרויקטים המתאימים ביותר (גם לפי הכינויים), ואם לא — ה-AI
   const hint = [s.doc.project_hint, s.doc.delivery_place].filter(Boolean).join(' · ');
-  s.projectOptions = (await findProjects(all, hint, { strict: false })).list.slice(0, 9);
   s.step = 'project';
+  if (!Priority.matchProjects(all, hint).length) {
+    const note = await sandboxNote(s, hint, all);
+    if (note) return reply(s, note);
+  }
+  s.projectOptions = (await findProjects(all, hint, { strict: false })).list.slice(0, 9);
   return reply(s, [`📁 לאיזה פרויקט לשייך?${hint ? ` (במסמך: ${hint})` : ''}`,
     ...s.projectOptions.map((p, i) => `*${i + 1}.* ${p.des} (${p.code})`),
     s.projectOptions.length ? '' : `לא מצאתי לפי המסמך פרויקט מתאים מתוך ${all.length} הפרויקטים של החברה.`,
@@ -729,6 +757,10 @@ async function step(user, s, t, file) {
           p = all.find((x) => x.code === code);
           if (!p) return reply(s, `אין פרויקט ${code} בחברה הזו. כתבו את השם במילים שלכם, או קוד אחר.`);
         } else {
+          if (!Priority.matchProjects(all, t, { all: true }).length) {
+            const note = await sandboxNote(s, t, all);
+            if (note) return reply(s, note);
+          }
           const found = await findProjects(all, t);
           if (found.list.length === 1 && found.by === 'code') p = found.list[0];
           else if (found.list.length === 1) {

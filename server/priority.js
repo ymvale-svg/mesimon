@@ -70,8 +70,15 @@ function resolveCompany(vat) {
   return { company: null, via: null, matched: c ?? null };
 }
 
-function companyUrl(company) {
-  if (!allowed().includes(company)) throw new Error(`החברה ${company} אינה פתוחה לכתיבה מהבוט (PRIORITY_COMPANIES)`);
+/**
+ * כתיבה — רק לחברה שב-‎PRIORITY_COMPANIES‎. קריאה — גם לחברה מוכרת שאינה פתוחה לכתיבה
+ * (למשל לבדוק אם פרויקט קיים בחברה האמיתית, כשהקליטה היא לעותק הבדיקה).
+ */
+function companyUrl(company, method = 'GET') {
+  const known = COMPANIES.some((c) => c.code === company);
+  if (method === 'GET' ? !(known || allowed().includes(company)) : !allowed().includes(company)) {
+    throw new Error(`החברה ${company} אינה פתוחה ${method === 'GET' ? 'לבוט' : 'לכתיבה מהבוט'} (PRIORITY_COMPANIES)`);
+  }
   return `${HOST}/${encodeURIComponent(company)}/`;
 }
 
@@ -85,7 +92,7 @@ function errorText(data, raw) {
 async function call(company, method, path, body = null) {
   if (!isEnabled()) throw new PriorityError('החיבור לפריוריטי אינו מוגדר בשרת (PRIORITY_USER, PRIORITY_PASSWORD)');
   const auth = Buffer.from(`${process.env.PRIORITY_USER}:${process.env.PRIORITY_PASSWORD}`).toString('base64');
-  const url = companyUrl(company) + path;
+  const url = companyUrl(company, method) + path;
   let res;
   try {
     res = await fetch(url, {
