@@ -331,7 +331,7 @@ function summaryText(s, gr) {
       : Math.abs(diff) < 1 ? `✅ ${what} תואם ${toSrc} (${money(docTotal)}; עיגול ${money(diff)})`
         : `⚠️ ${what} ${src}: ${money(docTotal)} — הפרש ${money(diff)}`)
     : null;
-  const detailLine = s.doc?.detail ? `📋 הפירוט מ${s.doc.detail.doc_type === 'invoice' ? 'חשבונית' : 'חשבון לתשלום'} ${s.doc.detail.doc_number}` : null;
+  const detailLine = s.doc?.detail ? `📋 הפירוט מ${detailName(s.doc.detail)}` : null;
   const files = [detailLine, `📎 נספחים: ${gr.files.length}`].filter(Boolean).join('\n');
   return [...header, '', ...lines, '', ...totals, check, files, '',
     '*מאשר* — הופך את ה-GR לסופי.', 'תיקון — כתבו מה לשנות ("שורה 2: 5 ולא 6").', '*ביטול* — מבטל את הטיוטא.'].filter((x) => x !== null).join('\n');
@@ -395,6 +395,28 @@ function withDetail(main, d) {
     warnings: (main.warnings ?? []).filter((w) => !w.includes(n) && !/פירוט/.test(w))
   };
 }
+
+/*
+ * נספח עם רשימת פריטים (למשל דף השלטים של אגרת שלטים) כשלמסמך הראשי שורה אחת או שתיים: הרשימה היא
+ * הפירוט. הסכום תואם לסכום לפני מע"מ במסמך (עד 1 ₪) — מעדכנים לבד; לא תואם — שואלים.
+ */
+const lineSum = (lines) => Math.round((lines ?? []).reduce((a, l) => a + Number(l.line_total || (l.qty * l.unit_price * (1 - (l.discount_pct || 0) / 100)) || 0), 0) * 100) / 100;
+const docBeforeVat = (d) => Number(d?.totals?.before_vat || d?.totals?.subtotal || d?.totals?.total || 0);
+function isListFor(main, d) {
+  if (!main || !d || main.detail || (main.lines ?? []).length > 2 || (d.lines ?? []).length < 2) return false;
+  return !(d.doc_number && String(d.doc_number) === String(main.doc_number));
+}
+const listMatches = (main, d) => Math.abs(lineSum(d.lines) - docBeforeVat(main)) <= 1;
+function withList(main, d) {
+  return {
+    ...main,
+    lines: d.lines,
+    detail: { doc_number: d.doc_number || '', doc_type: d.doc_type, totals: d.totals, label: 'רשימת הפריטים שבנספח' },
+    warnings: (main.warnings ?? []).filter((w) => !/פירוט/.test(w))
+  };
+}
+/** "חשבון לתשלום 2011796" / "רשימת הפריטים שבנספח" */
+const detailName = (x) => x.label || `${x.doc_type === 'invoice' ? 'חשבונית' : 'חשבון לתשלום'} ${x.doc_number}`;
 
 async function onMainDoc(user, s, file, pre = null) {
   s.files = [file.path ? { ...file, label: 'מסמך ראשי' } : await saveFile(user.id, file, 'מסמך ראשי')];
@@ -897,7 +919,7 @@ function writeDialog(user, s) {
     `התקבל ע"י: ${user.full_name} | ${nowHe()}`,
     `מסמך מקור: ${docName(d)} ${d.doc_number} של ${s.supplier.name}, מצורף בנספחים`,
     d.supplier_order_ref ? `הזמנה אצל הספק: ${d.supplier_order_ref}` : null,
-    d.detail ? `פירוט השורות: מתוך ${d.detail.doc_type === 'invoice' ? 'חשבונית' : 'חשבון לתשלום'} ${d.detail.doc_number}` : null,
+    d.detail ? `פירוט השורות: מתוך ${detailName(d.detail)}` : null,
     d.date || d.delivery_place ? `אספקה: ${[ymdHe(d.date), d.delivery_place].filter(Boolean).join(', ')}` : null,
     d.purchase_type !== 'unknown' ? `סוג רכש: ${d.purchase_type === 'site' ? 'אתרי' : 'משרדי'}` : null,
     s.noVat ? `מע"מ: קוד ${Priority.NO_VAT_CODE} ${Priority.TAX_CODES[Priority.NO_VAT_CODE]}${s.noVatBy === 'user' ? ' — נבחר ע"י המקבל' : ' — במסמך אין מע"מ'}` : null,
@@ -980,7 +1002,7 @@ async function routeFile(user, s, file, t) {
     console.error('[משימון] סיווג נספח:', err.message);
   }
   if (cls?.kind === 'attachment' || (cls && isDetailRef(s, cls))) {
-    const r = await maybeAdoptDetail(user, s, saved, cls);
+    const r = await maybeAdoptDetail(user, s, saved, cls) ?? await maybeAdoptList(user, s, saved);
     return r ?? attachNow(user, s, saved);
   }
   s.pendingNew = { file: saved, label: cls?.doc_number ? `${docName(cls)} ${cls.doc_number}${cls.supplier_name ? ` של ${cls.supplier_name}` : ''}` : '' };
@@ -1011,6 +1033,36 @@ async function maybeAdoptDetail(user, s, saved, cls) {
   // כבר עברנו את השורות — מחשבים שוב את ההתאמה להזמנה ומציגים את השורות החדשות
   s.order = null; s.ordersChecked = false; s.chapter = null; s.warehouse = null;
   const out = await resolveOrder(s);
+  return { ...out, replies: [note, ...out.replies] };
+}
+
+/**
+ * נספח עם רשימת פריטים, לפני שנוצרה טיוטא (‎isListFor‎). ‎null‎ — לא רשימה; יצורף כנספח רגיל.
+ */
+async function maybeAdoptList(user, s, saved) {
+  if (s.docno || !isListFor(s.doc, { lines: [{}, {}] })) return null;
+  let d;
+  try { d = await ai.extract(saved); } catch { return null; }
+  if (!isListFor(s.doc, d)) return null;
+  s.files.push({ ...saved, label: 'פירוט פריטים' });
+  if (listMatches(s.doc, d)) return adoptList(s, d, `📋 בנספח יש רשימה של ${d.lines.length} פריטים, והסכום תואם (${money(lineSum(d.lines))}) — עדכנתי את שורות הקבלה לפיה.`);
+  s.pendingList = { doc: d };
+  return { s, replies: [listQuestion(s.doc, d)] };
+}
+function listQuestion(main, d) {
+  return [`📋 בנספח יש רשימה של *${d.lines.length} פריטים*, בסך ${money(lineSum(d.lines))}${docBeforeVat(main) ? ` (במסמך: ${money(docBeforeVat(main))} לפני מע"מ)` : ''}.`,
+    'לעדכן את שורות הקבלה לפי הרשימה? *כן* — לעדכן · *לא* — להשאיר כנספח בלבד'].join('\n');
+}
+/** השורות מהרשימה; אם כבר עברנו את השורות — חוזרים להשוואה עם ההזמנה ולהצגת השורות */
+async function adoptList(s, d, note) {
+  s.pendingList = null;
+  s.doc = withList(s.doc, d);
+  s.lines = linesOf(s.doc);
+  if (['company', 'supplier', 'header'].includes(s.step)) return { s, replies: [`${note}${s.lastPrompt ? `\n\n${s.lastPrompt}` : ''}`] };
+  // כבר נבחר "בלי הזמנה" — ישר לשורות החדשות; אחרת — השוואה מחדש עם ההזמנה
+  const noOrder = !s.order && s.step !== 'order';
+  s.order = null; s.ordersChecked = false; s.chapter = null; s.warehouse = null;
+  const out = noOrder ? await askLines(s) : await resolveOrder(s);
   return { ...out, replies: [note, ...out.replies] };
 }
 
@@ -1097,8 +1149,12 @@ async function sortBatch(user, s) {
   }
   const name = (d) => (d?.doc_number ? `${docName(d, true)} ${d.doc_number}` : 'תמונה');
   const detail = attach.find((x) => isDetailOf(main.doc, x.doc));
-  const out = await onMainDoc(user, s, main.f, detail ? withDetail(main.doc, detail.doc) : main.doc);
+  // דף עם רשימת פריטים (בלי מספר) — הפירוט: הסכום תואם — לוקחים ממנו; לא תואם — שואלים אחר כך
+  const list = !detail ? attach.find((x) => isListFor(main.doc, x.doc)) : null;
+  const pre = detail ? withDetail(main.doc, detail.doc) : list && listMatches(main.doc, list.doc) ? withList(main.doc, list.doc) : main.doc;
+  const out = await onMainDoc(user, s, main.f, pre);
   const target = out.s ?? s;
+  if (out.s !== null && list && pre === main.doc) { target.pendingList = { doc: list.doc }; out.replies = [...out.replies, listQuestion(main.doc, list.doc)]; }
   if (out.s !== null) {
     attach.forEach((x, i) => target.files.push({ ...x.f, label: `נספח ${i + 1}` }));
     if (separate.length) target.queued = [...queueOf(target), ...separate.map((x) => x.f)];
@@ -1248,6 +1304,11 @@ async function handle({ user, text = '', file = null }) {
   try {
     // קובץ באמצע הקליטה, לפני שלב הנספחים: נספח (נשמר, וחוזרים לשאלה), או מסמך חדש (שואלים)
     const early = !OWN_FILE_STEPS.includes(s.step);
+    if (s.pendingList && !file) {
+      if (YES.test(t)) out = await adoptList(s, s.pendingList.doc, `📋 עדכנתי את שורות הקבלה לפי הרשימה שבנספח (${s.pendingList.doc.lines.length} פריטים).`);
+      else if (/^(לא|אל|בלי|no)([\s,.!]|$)/i.test(t)) { s.pendingList = null; out = { s, replies: [`👍 הרשימה נשארת כנספח בלבד.${s.lastPrompt ? `\n\n${s.lastPrompt}` : ''}`] }; }
+      else out = { s, replies: [listQuestion(s.doc, s.pendingList.doc)] };
+    }
     if (early && s.pendingNew && !file) out = await answerPendingNew(user, s, t);
     if (!out && early && file) out = await routeFile(user, s, file, t);
     if (!out) out = await step(user, s, t, file);
