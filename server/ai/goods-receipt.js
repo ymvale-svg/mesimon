@@ -354,7 +354,7 @@ function summaryText(s, gr) {
   const detailLine = s.doc?.detail ? `📋 הפירוט מ${detailName(s.doc.detail)}` : null;
   const files = [detailLine, `📎 נספחים: ${gr.files.length}`].filter(Boolean).join('\n');
   return [...header, '', ...lines, '', ...totals, check, files, '',
-    '*מאשר* — הופך את ה-GR לסופי.', 'תיקון — כתבו מה לשנות ("שורה 2: 5 ולא 6").', '*ביטול* — מבטל את הטיוטא.'].filter((x) => x !== null).join('\n');
+    '*מאשר* 👍 — הופך את ה-GR לסופי.', 'תיקון — כתבו מה לשנות ("שורה 2: 5 ולא 6").', '*ביטול* — מבטל את הטיוטא (👎 — שואל קודם).'].filter((x) => x !== null).join('\n');
 }
 
 // ---------------------------------------------------------------------------
@@ -453,7 +453,7 @@ async function onMainDoc(user, s, file, pre = null) {
   if (doc.doc_type === 'other') {
     s.step = 'doctype';
     return reply(s, [`🤔 זה נראה כמו *${docName(doc)}*${doc.doc_number ? ` ${doc.doc_number}` : ''}${doc.supplier_name ? ` של ${doc.supplier_name}` : ''}, לא תעודת משלוח או חשבונית.`,
-      'לקלוט אותו בכל זאת כ*קבלת סחורה*? *כן* / *לא*'].join('\n'), { status: 'unclear', result: `סוג מסמך לא ברור: ${doc.doc_label || 'other'}` });
+      'לקלוט אותו בכל זאת כ*קבלת סחורה*? *כן* 👍 / *לא* 👎'].join('\n'), { status: 'unclear', result: `סוג מסמך לא ברור: ${doc.doc_label || 'other'}` });
   }
   return afterDocType(s);
 }
@@ -540,7 +540,7 @@ async function askHeader(s) {
     `💳 תנאי תשלום: *${Priority.payLabel(s.payCode ?? Priority.DEFAULT_PAY)}*${(s.payCode ?? Priority.DEFAULT_PAY) === Priority.DEFAULT_PAY ? ' (ברירת מחדל)' : ''}${dueText(s, s.payCode ?? Priority.DEFAULT_PAY)}`,
     s.noVat ? `🧾 מע"מ: *ללא מע"מ* — קוד ${Priority.NO_VAT_CODE} ${Priority.TAX_CODES[Priority.NO_VAT_CODE]}${s.noVatBy === 'user' ? ' (נבחר)' : ' — במסמך אין מע"מ'}` : null,
     d.warnings?.length ? `⚠️ ${d.warnings.join('\n⚠️ ')}` : null,
-    '', `נכון? *כן* להמשך, או *ביטול*. לתנאי תשלום אחר — כתבו אותו ("שוטף 60"). ${s.noVat ? 'יש מע"מ — *עם מע"מ*.' : 'אין מע"מ — *ללא מע"מ*.'}`
+    '', `נכון? *כן* 👍 להמשך, או *ביטול*. לתנאי תשלום אחר — כתבו אותו ("שוטף 60"). ${s.noVat ? 'יש מע"מ — *עם מע"מ*.' : 'אין מע"מ — *ללא מע"מ*.'}`
   ];
   return reply(s, lines.filter((x) => x !== null).join('\n'));
 }
@@ -579,7 +579,7 @@ function askLines(s) {
   s.step = 'lines';
   const others = s.order ? '' : (s.ordersChecked ? 'לא מצאתי התאמה בהזמנות הפתוחות של הספק — נקלט לפי המסמך.\n' : '');
   return reply(s, [s.order ? `🧾 לפי הזמנה *${s.order.ordname}*` : '🧾 ללא הזמנה', others, linesTable(s), '',
-    '*זה מה שהתקבל בפועל?*', '*כן* — להמשך. משהו חסר, נשבר או הוחזר — כתבו מה ("מלט קיבלתי רק 100, 100 שבורים הוחזרו").'].filter(Boolean).join('\n'));
+    '*זה מה שהתקבל בפועל?*', '*כן* 👍 — להמשך. משהו חסר, נשבר או הוחזר — כתבו מה ("מלט קיבלתי רק 100, 100 שבורים הוחזרו").'].filter(Boolean).join('\n'));
 }
 
 /** מה שהעובד כתב על השורות או על הטיוטא */
@@ -752,7 +752,7 @@ function askParts(s) {
     ? [`🏷 ${free.length > 1 ? `כל ${free.length} השורות` : 'השורה'} ← ${codeText(free[0].part)}`, `   (${free[0].part.why})`]
     : free.map((l) => `*${l.n}.* ${l.description}\n   ← ${codeText(l.part)} (${l.part.why})`);
   return reply(s, ['🏷 *מק"ט, תת פרק ומשאב*', ...body, '',
-    '*כן* — להמשיך. לשנות: מק"ט ("A120-035-010"), "שורה 2 A120-035-010", מילה מהתיאור ("העתקות"), או *כללי*.'].join('\n'));
+    '*כן* 👍 — להמשיך. לשנות: מק"ט ("A120-035-010"), "שורה 2 A120-035-010", מילה מהתיאור ("העתקות"), או *כללי*.'].join('\n'));
 }
 
 async function afterLines(s) {
@@ -1064,7 +1064,7 @@ async function routeFile(user, s, file, t) {
   const cur = s.docno ? `ל-${s.docno}` : 'לקבלת הסחורה הנוכחית';
   // לא ‎reply()‎: השאלה הזו אינה "השאלה של השלב", ואחרי התשובה חוזרים לזו שחיכתה
   return { s, replies: [[cls ? `📄 זה נראה כמו מסמך חדש${s.pendingNew.label ? `: ${s.pendingNew.label}` : ''}.` : '📄 קיבלתי מסמך נוסף.',
-    `*1* — לצרף כנספח ${cur}`, `*2* — קבלת סחורה חדשה${!s.docno && s.step !== 'files' ? ' (הנוכחית תבוטל)' : ''}`, `*3* — להתעלם מהקובץ ולחזור ל: ${waitingQuestion(s)}`].join('\n')] };
+    `*1* — לצרף כנספח ${cur}`, `*2* — קבלת סחורה חדשה${!s.docno && s.step !== 'files' ? ' (הנוכחית תבוטל)' : ''}`, `*3* 👎 — להתעלם מהקובץ ולחזור ל: ${waitingQuestion(s)}`].join('\n')] };
 }
 
 /** המסמך שהגיע הוא החשבון שהחשבונית מפנה אליו? (לפני שנוצרה טיוטא) */
@@ -1132,7 +1132,7 @@ async function maybeRebuildFromTable(user, s, saved, { known = false } = {}) {
   return { s, result: `טבלה: ${d.lines.length} שורות, ${sum} (מסמך ${want}, טיוטא ${now})`, replies: [[
     `📋 בצילום יש *${d.lines.length} שורות* בסך ${money(sum)}${listMatches(s.doc, d) ? ' — *תואם* למסמך' : ''}. במסמך: ${money(want)} לפני מע"מ; בטיוטא: ${money(now)}.`,
     ...d.lines.slice(0, 12).map((l, i) => `*${i + 1}.* ${l.description} — ${qtyText(l.qty)} × ${money(l.unit_price)}`),
-    '', `לעדכן את שורות ${s.docno} לפי הצילום? *כן* — לעדכן · *לא* — להשאיר כנספח בלבד`].join('\n')] };
+    '', `לעדכן את שורות ${s.docno} לפי הצילום? *כן* 👍 — לעדכן · *לא* 👎 — להשאיר כנספח בלבד`].join('\n')] };
 }
 
 /*
@@ -1152,7 +1152,7 @@ async function rebuildFromLastPhoto(user, s) {
 
 function listQuestion(main, d) {
   return [`📋 בנספח יש רשימה של *${d.lines.length} פריטים*, בסך ${money(lineSum(d.lines))}${docBeforeVat(main) ? ` (במסמך: ${money(docBeforeVat(main))} לפני מע"מ)` : ''}.`,
-    'לעדכן את שורות הקבלה לפי הרשימה? *כן* — לעדכן · *לא* — להשאיר כנספח בלבד'].join('\n');
+    'לעדכן את שורות הקבלה לפי הרשימה? *כן* 👍 — לעדכן · *לא* 👎 — להשאיר כנספח בלבד'].join('\n');
 }
 /** השורות מהרשימה; אם כבר עברנו את השורות — חוזרים להשוואה עם ההזמנה ולהצגת השורות */
 async function adoptList(s, d, note) {
@@ -1172,7 +1172,7 @@ async function adoptList(s, d, note) {
 /** השאלה שחיכתה לפני שהגיע הקובץ — בקצרה, לאפשרות 3 */
 function waitingQuestion(s) {
   const by = {
-    review: `לאשר את ${s.docno ?? 'הטיוטא'} (*מאשר* / תיקון / *ביטול*)`,
+    review: `לאשר את ${s.docno ?? 'הטיוטא'} (*מאשר* 👍 / תיקון / *ביטול*)`,
     files: 'נספחים — *סיום* כשסיימתם',
     lines: 'זה מה שהתקבל בפועל?',
     parts: 'מק"ט, תת פרק ומשאב',
@@ -1185,7 +1185,7 @@ function waitingQuestion(s) {
   };
   return by[s.step] ?? String(s.lastPrompt ?? '').split('\n').find((l) => l.trim())?.slice(0, 60) ?? 'השאלה הקודמת';
 }
-const newOrAttach = (s) => `*1* — לצרף כנספח${s.docno ? ` ל-${s.docno}` : ''} · *2* — קבלת סחורה חדשה · *3* — להתעלם מהקובץ ולחזור ל: ${waitingQuestion(s)}`;
+const newOrAttach = (s) => `*1* — לצרף כנספח${s.docno ? ` ל-${s.docno}` : ''} · *2* — קבלת סחורה חדשה · *3* 👎 — להתעלם מהקובץ ולחזור ל: ${waitingQuestion(s)}`;
 
 /** תשובה לשאלה "נספח או חדש?" — ‎null‎ אם התשובה אינה אחת מהשתיים */
 async function answerPendingNew(user, s, t) {
@@ -1234,7 +1234,7 @@ async function queueNew(user, s, f) {
     const out = await draftAndShow(user, s);
     return { ...out, replies: [note, ...out.replies] };
   }
-  return reply(s, [note, `*${s.docno}* עדיין טיוטא: *מאשר* — להפוך לסופי, או *ביטול* — לבטל אותה.`].join('\n'));
+  return reply(s, [note, `*${s.docno}* עדיין טיוטא: *מאשר* 👍 — להפוך לסופי, או *ביטול* — לבטל אותה.`].join('\n'));
 }
 
 /** סיום הנוכחית — ומעבר למסמך שבתור, בלי לשלוח אותו שוב */
@@ -1329,7 +1329,7 @@ async function sweep(send, { force = false } = {}) {
         }
         clear(userId, s);
       } else if (s.docno && s.step === 'review' && !s.reminded && age >= REMIND_AFTER) {
-        send(userId, `⏳ *${s.docno}* (${s.supplier?.name ?? ''}) מחכה לאישור שלך. *מאשר* — להפוך לסופי, או *ביטול*. בלי תשובה — תבוטל מחר.`);
+        send(userId, `⏳ *${s.docno}* (${s.supplier?.name ?? ''}) מחכה לאישור שלך. *מאשר* 👍 — להפוך לסופי, או *ביטול*. בלי תשובה — תבוטל מחר.`);
         D.setSetting(row.key, { ...s, reminded: true });   // בלי לגעת ב-at
       }
     } catch (err) {
@@ -1398,7 +1398,7 @@ async function handle({ user, text = '', file = null }) {
   if (!s && file && !isTrigger(t)) {
     const saved = await saveFile(user.id, file, 'מסמך ראשי');
     save(user.id, { step: 'offer', startedAt: Date.now(), files: [saved] });
-    return { replies: [...(released ? [released] : []), '📦 לקלוט את המסמך כ*קבלת סחורה* בפריוריטי?\n*כן* — להמשיך, *לא* — לא לקלוט.'], status: 'ok', result: 'הצעה: קבלת סחורה מתמונה' };
+    return { replies: [...(released ? [released] : []), '📦 לקלוט את המסמך כ*קבלת סחורה* בפריוריטי?\n*כן* 👍 — להמשיך, *לא* 👎 — לא לקלוט.'], status: 'ok', result: 'הצעה: קבלת סחורה מתמונה' };
   }
 
   // התחלה חדשה: "קבלת סחורה" עם קובץ באמצע קליטה, או קובץ חדש באמצע קליטה שעוד אין לה טיוטא
@@ -1479,7 +1479,7 @@ async function step(user, s, t, file) {
     case 'doctype': {
       if (YES.test(t)) return afterDocType(s);
       if (/^(לא|אל|ממש לא|no)([\s,.!]|$)/i.test(t)) return { s: null, replies: ['בסדר, לא נקלט. 👍 אפשר להתחיל שוב עם צילום אחר.'], status: 'ok', result: 'מסמך לא נקלט' };
-      return reply(s, `לקלוט את ה${docName(s.doc)} כ*קבלת סחורה*? *כן* / *לא*`);
+      return reply(s, `לקלוט את ה${docName(s.doc)} כ*קבלת סחורה*? *כן* 👍 / *לא* 👎`);
     }
 
     case 'offer': {
@@ -1493,7 +1493,7 @@ async function step(user, s, t, file) {
         return s.files.length > 1 ? sortBatch(user, s) : onMainDoc(user, s, s.files[0]);
       }
       if (/^(לא|אל|ממש לא|no)([\s,.!]|$)/i.test(t)) return { s: null, replies: ['בסדר, לא נקלט. 👍'], status: 'ok', result: 'הצעה נדחתה' };
-      return reply(s, 'לקלוט כ*קבלת סחורה*? *כן* / *לא*');
+      return reply(s, 'לקלוט כ*קבלת סחורה*? *כן* 👍 / *לא* 👎');
     }
 
     case 'company': {
@@ -1537,7 +1537,7 @@ async function step(user, s, t, file) {
       if (pay) { s.payCode = pay.code; return askHeader(s); }
       if (NO_VAT_TEXT.test(t)) { s.noVat = true; s.noVatBy = 'user'; return askHeader(s); }
       if (WITH_VAT_TEXT.test(t.trim())) { s.noVat = false; s.noVatBy = 'user'; return askHeader(s); }
-      if (!YES.test(t)) return reply(s, '*כן* להמשך, או *ביטול*. לתנאי תשלום אחר — כתבו אותו ("שוטף 60"). מע"מ — *ללא מע"מ* / *עם מע"מ*.');
+      if (!YES.test(t)) return reply(s, '*כן* 👍 להמשך, או *ביטול*. לתנאי תשלום אחר — כתבו אותו ("שוטף 60"). מע"מ — *ללא מע"מ* / *עם מע"מ*.');
       return resolveOrder(s);
     }
 
@@ -1557,7 +1557,7 @@ async function step(user, s, t, file) {
         const open = s.lines.filter((l) => l.unclear && l.options?.length > 1);
         if (open.length) return reply(s, `❓ קודם שורה ${open[0].n} (${open[0].description}): ${open[0].options.map(qtyText).join(' או ')}?`);
         const low = s.lines.filter((l) => l.order?.confidence === 'low' && !l.lowConfirmed);
-        if (low.length && !s.lowAsked) { s.lowAsked = true; return reply(s, `❓ ההתאמה להזמנה בשורות ${low.map((l) => l.n).join(', ')} אינה ודאית. *כן* — להשאיר, או כתבו "שורה X בלי הזמנה".`); }
+        if (low.length && !s.lowAsked) { s.lowAsked = true; return reply(s, `❓ ההתאמה להזמנה בשורות ${low.map((l) => l.n).join(', ')} אינה ודאית. *כן* 👍 — להשאיר, או כתבו "שורה X בלי הזמנה".`); }
         return afterLines(s);
       }
       const noOrder = t.match(/שורה\s*(\d+)\s*בלי הזמנה/);
@@ -1602,7 +1602,7 @@ async function step(user, s, t, file) {
         return askLines(s);
       }
       if (out.action === 'update' && applyUpdates(s, out).length) return askLines(s);
-      return reply(s, out.question || 'לא הבנתי. *כן* — אם זה מה שהתקבל, או כתבו מה לתקן (מספר שורה וכמות).');
+      return reply(s, out.question || 'לא הבנתי. *כן* 👍 — אם זה מה שהתקבל, או כתבו מה לתקן (מספר שורה וכמות).');
     }
 
     case 'warehouse': {
@@ -1652,7 +1652,7 @@ async function step(user, s, t, file) {
         }
         return reply(s, `לא מצאתי מק"ט עם "${word}". כתבו מק"ט, מילה אחרת, או *כללי*.`);
       }
-      return reply(s, '*כן* — להמשיך, או כתבו מק"ט / מילה מהתיאור / *כללי*.');
+      return reply(s, '*כן* 👍 — להמשיך, או כתבו מק"ט / מילה מהתיאור / *כללי*.');
     }
 
     case 'chapter': {
@@ -1661,7 +1661,7 @@ async function step(user, s, t, file) {
       else if (YES.test(t)) { await codeLines(s); return askParts(s); }
       else {
         const m = t.match(/(\d{2})\s+(\d{2}-\d{2})/);
-        if (!m) return reply(s, 'כתבו תת פרק ותת נושא (למשל "98 90-00"), או *כן* להצעה.');
+        if (!m) return reply(s, 'כתבו תת פרק ותת נושא (למשל "98 90-00"), או *כן* 👍 להצעה.');
         s.chapter = { chapter: m[1], topic: m[2] };
       }
       return askProject(s);
@@ -1694,7 +1694,7 @@ async function step(user, s, t, file) {
           else if (found.list.length === 1) {
             // ה-AI הבין לבד — שואלים לפני ששייכים
             s.projectPending = found.list[0];
-            return reply(s, `📁 *${found.list[0].des}* (${found.list[0].code})? *כן*, או כתבו אחרת.`);
+            return reply(s, `📁 *${found.list[0].des}* (${found.list[0].code})? *כן* 👍, או כתבו אחרת.`);
           } else if (found.list.length) {
             s.projectOptions = found.list.slice(0, 9);
             return reply(s, ['לאיזה מהם התכוונת?', ...s.projectOptions.map((x, i) => `*${i + 1}.* ${x.des} (${x.code})`)].join('\n'));
@@ -1805,7 +1805,7 @@ async function step(user, s, t, file) {
         }
         return showDraft(s);
       }
-      return reply(s, out.question || '*מאשר*, תיקון (מספר שורה וכמות, או תיאור חדש), שורה שחסרה (תיאור, כמות ומחיר), צילום של טבלת השורות, או *ביטול*.');
+      return reply(s, out.question || '*מאשר* 👍, תיקון (מספר שורה וכמות, או תיאור חדש), שורה שחסרה (תיאור, כמות ומחיר), צילום של טבלת השורות, או *ביטול*.');
     }
     default:
       return { s: null, replies: ['קבלת הסחורה הסתיימה. להתחלה — "קבלת סחורה" וצילום.'] };
