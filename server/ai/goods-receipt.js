@@ -911,20 +911,22 @@ async function createDraft(user, s) {
           : { part: '000', description: `${qtyText(l.qty)} ${l.unit ?? ''} · ${l.description}`.replace(/\s+·/, ' ·'), qty: 1, price: net, discount: 0, chapter: chap, topic });
       }
     } catch (err) {
-      // רשת ביטחון: השורה נדחתה (מק"ט בלי תת פרק, יחידה, פריט לא פעיל…) — שוב על המק"ט הכללי 000, עם התיאור
-      // מהמסמך והקידוד של שאר השורות (או הכללי של החברה). נכשל גם זה — רק אז העובד רואה
+      // רשת ביטחון: השורה נדחתה (מק"ט בלי תת פרק, יחידה, פריט לא פעיל…) — שוב על מק"ט כללי 000, תת פרק 101 כללי
+      // ומשאב 98-10 כללי, עם התיאור מהמסמך. לא קיים בחברה (עותק הבדיקה) — הקידוד הכללי הנפוץ שלה. נכשל — רק אז העובד רואה
       if (l.order) { problems.push({ what: `שורה ${l.n} (${l.description}) לא נקלטה`, err: `שורה ${l.n}: ${err.message}` }); continue; }
-      const sib = s.lines.find((x) => x !== l && x.part?.chapter && x.part?.topic)?.part;
-      const g = l.part?.chapter && l.part?.topic ? l.part : sib ?? await Priority.generalCoding(c).catch(() => null);
       const whole = Number.isInteger(Number(l.qty));
       const net = Math.round(Number(l.qty) * Number(l.price) * (1 - (Number(l.discount) || 0) / 100) * 100) / 100;
-      try {
-        await Priority.addFreeLine(c, docno, { part: '000', description: whole ? l.description : `${qtyText(l.qty)} ${l.unit ?? ''} · ${l.description}`,
-          qty: whole ? l.qty : 1, price: whole ? l.price : net, discount: whole ? l.discount : 0, chapter: g?.chapter, topic: g?.topic });
-        (s.notes ??= []).push(`שורה ${l.n} (${l.description}) נקלטה על מק"ט כללי 000${l.part?.code && l.part.code !== '000' ? ` — ${l.part.code} נדחה בפריוריטי` : ''}`);
-        problems.push({ what: null, err: `שורה ${l.n}: ${l.part?.code ?? ''} נדחה (${err.message}), נקלטה על 000` });
-      } catch (err2) {
-        problems.push({ what: `שורה ${l.n} (${l.description}) לא נקלטה`, err: `שורה ${l.n}: ${err.message} / 000: ${err2.message}` });
+      const line = { part: '000', description: whole ? l.description : `${qtyText(l.qty)} ${l.unit ?? ''} · ${l.description}`,
+        qty: whole ? l.qty : 1, price: whole ? l.price : net, discount: whole ? l.discount : 0 };
+      let used = null, last = null;
+      for (const g of [Priority.GENERAL, await Priority.generalCoding(c).catch(() => null)].filter(Boolean)) {
+        try { await Priority.addFreeLine(c, docno, { ...line, chapter: g.chapter, topic: g.topic }); used = g; break; } catch (e) { last = e; }
+      }
+      if (used) {
+        (s.notes ??= []).push(`שורה ${l.n} (${l.description}) נקלטה על מק"ט כללי 000, ${used.chapter} ${used.chapterDes} / ${used.topic} ${used.topicDes}${l.part?.code && l.part.code !== '000' ? ` — ${l.part.code} נדחה בפריוריטי` : ''}`);
+        problems.push({ what: null, err: `שורה ${l.n}: ${l.part?.code ?? ''} נדחה (${err.message}), נקלטה על 000 ${used.chapter}/${used.topic}` });
+      } else {
+        problems.push({ what: `שורה ${l.n} (${l.description}) לא נקלטה`, err: `שורה ${l.n}: ${err.message} / 000: ${last?.message}` });
       }
     }
   }
