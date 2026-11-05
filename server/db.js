@@ -676,6 +676,20 @@ CREATE TABLE IF NOT EXISTS wa_chats (
  * הודעות יזומות של הבוט (קיבלת משימה) שנוצרו מחוץ לשעות הפעילות או בשבת —
  * נשלחות כשהחלון נפתח.
  */
+/*
+ * הודעות שעובד העביר (Forward) לבוט, וממתינות להוראה מה לעשות איתן ("לשושנה,
+ * תפתח משימה"). ‎kind‎: ‎forward‎ — ההודעה שהועברה · ‎note‎ — הוראה חלקית שכבר
+ * נאמרה עליהן. נמחקות כשההוראה טופלה, או אחרי חלון ההמתנה.
+ */
+CREATE TABLE IF NOT EXISTS wa_forwards (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  kind        TEXT    NOT NULL DEFAULT 'forward',
+  text        TEXT    NOT NULL,
+  at          TEXT    NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_wa_forwards_user ON wa_forwards(user_id, id);
+
 CREATE TABLE IF NOT EXISTS wa_outbox (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
   user_id     INTEGER REFERENCES users(id) ON DELETE CASCADE,

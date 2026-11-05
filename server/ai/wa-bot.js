@@ -606,6 +606,7 @@ function prune() {
   D.run('DELETE FROM wa_messages WHERE at < ?', new Date(Date.now() - KEEP_DAYS * DAY).toISOString());
   D.run("DELETE FROM wa_messages WHERE chat_id IN (SELECT chat_id FROM wa_groups WHERE status = 'ignored')");
   D.run('DELETE FROM wa_log WHERE at < ?', new Date(Date.now() - LOG_DAYS * DAY).toISOString());
+  D.run('DELETE FROM wa_forwards WHERE at < ?', new Date(Date.now() - DAY).toISOString());
 }
 
 function notifyAdmins(title, body) {
@@ -2573,6 +2574,50 @@ async function withFollowUps(r) {
   };
 }
 
+// ---------------------------------------------------------------------------
+// הודעות מועברות — אוספים, ומחכים להוראה
+// ---------------------------------------------------------------------------
+
+/*
+ * דפוס נפוץ: מעבירים לבוט כמה הודעות (Forward), ואז כותבים או מקליטים מה לעשות
+ * איתן ולמי ("לשושנה — תפתח לה משימה"). הבוט לא מנסה להבין כל הודעה מועברת
+ * לבד: הוא אוסף אותן, מאשר פעם אחת, וההודעה הבאה שאינה מועברת היא ההוראה —
+ * והיא מטופלת עם כל מה שנאסף. הוראה חלקית ("לשושנה") נשמרת עם ההודעות עד
+ * שמשלימים אותה.
+ */
+const FORWARD_WINDOW_MS = 30 * 60 * 1000;
+const FORWARD_MAX = 15;
+
+function forwardsOf(userId) {
+  const rows = D.all('SELECT kind, text, at FROM wa_forwards WHERE user_id = ? ORDER BY id', userId);
+  const last = rows.length ? Date.parse(rows[rows.length - 1].at) : 0;
+  if (rows.length && Date.now() - last > FORWARD_WINDOW_MS) {
+    clearForwards(userId);
+    return [];
+  }
+  return rows;
+}
+
+function addForward(userId, kind, text) {
+  D.run('INSERT INTO wa_forwards (user_id, kind, text, at) VALUES (?,?,?,?)', userId, kind, String(text).slice(0, 1500), D.nowIso());
+}
+
+function clearForwards(userId) {
+  D.run('DELETE FROM wa_forwards WHERE user_id = ?', userId);
+}
+
+/** ההוראה, ומתחתיה ההודעות שהועברו — כך ה-AI רואה את שתיהן כבקשה אחת */
+function withForwards(rows, text) {
+  const notes = rows.filter((r) => r.kind === 'note').map((r) => r.text);
+  const fwd = rows.filter((r) => r.kind === 'forward');
+  return [
+    [...notes, text].join('\n'),
+    '',
+    `(ההודעות שהעברתי לפני כן — ${fwd.length}. הן התוכן של הבקשה שלמעלה:)`,
+    ...fwd.map((r, i) => `${i + 1}. ${r.text}`)
+  ].join('\n').slice(0, 6000);
+}
+
 /** למספר שאינו מוכר עונים פעם ביום — לא יותר, כדי לא לנהל שיחה עם זרים */
 const unknownReplied = new Map();
 
@@ -2663,6 +2708,22 @@ async function handleDirect(msg) {
     for (const reply of r.replies) for (const part of splitMessage(reply)) await sendText(msg.chatId, part);
     return;
   }
+  if (msg.forwarded) {
+    const before = forwardsOf(user.id).filter((r) => r.kind === 'forward').length;
+    if (before >= FORWARD_MAX) {
+      await notice;
+      await sendText(msg.chatId, `יש אצלי כבר ${FORWARD_MAX} הודעות מועברות. כתבו מה לעשות איתן, או *ביטול*.`);
+      return;
+    }
+    const content = text || (msg.file ? `[📎 ${msg.file.name || msg.kind || 'קובץ'}]` : `[${msg.kind || 'הודעה'}]`);
+    addForward(user.id, 'forward', voice ? `🎙 ${content}` : content);
+    // מאשרים רק את הראשונה — כמה הודעות מועברות ברצף לא מקבלות כמה תשובות
+    const ack = before ? '' : '📥 קיבלתי. אפשר להעביר עוד, ואז לכתוב או להקליט מה לעשות ולמי (משימה, מייל, הערה).';
+    log({ ...base, text: voice ? `🎙 ${content}` : content, action: 'forward', status: 'ok', result: `הודעה מועברת נאספה (${before + 1})`, reply: ack });
+    await notice;
+    if (ack) await sendText(msg.chatId, ack);
+    return;
+  }
   if (!text && msg.file) {
     // תמונה או מסמך — היום הבוט מטפל בהם רק בקבלת סחורה, ואומר למה לא
     const why = WaActions.byKey('goods_receipt')?.enabled ? 'קבלת סחורה אינה פתוחה לך' : 'קבלת סחורה עוד לא הופעלה';
@@ -2674,6 +2735,21 @@ async function handleDirect(msg) {
     log({ ...base, text: `[${msg.kind || 'הודעה ללא טקסט'}]`, action: 'other', status: 'unclear', result: 'לא טקסט' });
     await sendText(msg.chatId, 'כתבו לי בטקסט 🙏');
     return;
+  }
+
+  // הודעות מועברות שממתינות — ההודעה הזו היא ההוראה עליהן
+  const forwards = forwardsOf(user.id);
+  const said = text;
+  if (forwards.length) {
+    const n = forwards.filter((r) => r.kind === 'forward').length;
+    if (CANCEL.test(text.trim())) {
+      clearForwards(user.id);
+      log({ ...base, text, action: 'forward', status: 'ok', result: `בוטלו ${n} הודעות מועברות`, reply: 'בוטל 👍' });
+      await notice;
+      await sendText(msg.chatId, `בוטל 👍 (${n} ההודעות שהועברו נמחקו)`);
+      return;
+    }
+    text = withForwards(forwards, text);
   }
 
   const state = chatOf(user.id);
@@ -2693,11 +2769,19 @@ async function handleDirect(msg) {
   }
   clearTimeout(slow);
   await notice;
+  if (forwards.length) {
+    // ההוראה עוד לא הובנה ("לשושנה" בלי מה לעשות) — ההודעות נשארות, עם מה שכבר נאמר
+    // תקלה — ההודעות נשמרות, כדי שאפשר יהיה לנסות שוב בלי להעביר הכול מחדש
+    const stuck = ['unclear', 'error'].includes(r.status) && !isPending(r.next) && !r.taskId;
+    if (!stuck) clearForwards(user.id);
+    else if (r.status === 'unclear') addForward(user.id, 'note', said);
+  }
   // מה שנשמע חוזר בשורה אחת — כך רואים מיד אם התמלול טעה
-  const reply = voice ? `🎙 *שמעתי:* "${text}"\n\n${r.reply}` : r.reply;
+  const reply = voice ? `🎙 *שמעתי:* "${said}"\n\n${r.reply}` : r.reply;
   const history = [...state.history, { role: 'user', text: text.slice(0, 500) }, { role: 'bot', text: r.reply.slice(0, 500) }];
   saveChat(user.id, { ...r.next, history });
-  log({ ...base, text: voice ? `🎙 ${text}` : text, action: r.action, status: r.status, result: r.result, taskId: r.taskId ?? null, reply });
+  const fwdNote = forwards.length ? ` (+${forwards.filter((x) => x.kind === 'forward').length} מועברות)` : '';
+  log({ ...base, text: `${voice ? `🎙 ${said}` : said}${fwdNote}`, action: r.action, status: r.status, result: r.result, taskId: r.taskId ?? null, reply });
   // הודעה ארוכה מדי — בכמה הודעות
   for (const part of splitMessage(reply)) await sendText(msg.chatId, part);
   // הודעות המשך (התובנות של Today) — אחרי שהעיקר כבר אצלו
