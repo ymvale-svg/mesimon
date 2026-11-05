@@ -32,6 +32,25 @@ const Claude = require('./claude');
 const Priority = require('../priority');
 const WhatsApp = require('../whatsapp');
 const { receiptPdf } = require('./gr-pdf');
+const Auth = require('../auth');
+const P = require('../permissions');
+
+/*
+ * הודעות לעובד — רק מה שהוא יכול לעשות. פרטים טכניים (שגיאת פריוריטי, הגדרות שרת)
+ * אינם מוצגים לו: הם נרשמים ביומן הבוט (‎result‎) ונשלחים כהתראה למנהלי המערכת.
+ */
+function alertAdmins(user, s, title, details) {
+  const body = [`עובד: ${user?.full_name ?? ''}`, s?.company ? `חברה: ${s.company}` : null, s?.docno ? `GR: ${s.docno}` : null,
+    s?.doc?.doc_number ? `מסמך: ${s.doc.doc_number}${s.supplier ? ` של ${s.supplier.name}` : ''}` : null, ...details].filter(Boolean).join('\n');
+  try {
+    for (const u of D.all("SELECT id FROM users WHERE status = 'active' AND role IN ('superadmin','admin')")) {
+      const actor = Auth.loadActor('user', u.id);
+      if (actor && P.can(actor, 'manage_automations')) D.notify({ targetType: 'user', targetId: u.id, kind: 'ai', title: `📦 קבלת סחורה: ${title}`, body });
+    }
+  } catch (err) {
+    console.error('[משימון] התראה למנהלים על קבלת סחורה:', err.message);
+  }
+}
 
 const SKILL = path.join(__dirname, 'skills', 'goods-receipt.md');
 const TTL = 24 * 60 * 60 * 1000;
@@ -300,7 +319,7 @@ async function onMainDoc(user, s, file) {
   try {
     doc = await ai.extract(s.files[0]);
   } catch (err) {
-    return reply(s, `לא הצלחתי לקרוא את המסמך (${err.message}). נסו לצלם שוב, ישר ובאור טוב.`, { status: 'error', result: err.message });
+    return reply(s, 'לא הצלחתי לקרוא את המסמך. נסו לצלם שוב, ישר ובאור טוב, כך שכל הדף ייראה.', { status: 'error', result: `קריאת מסמך נכשלה: ${err.message}` });
   }
   // אזהרות — בעברית בלבד; אזהרה שהגיעה באנגלית למרות ההנחיה אינה מוצגת
   doc.warnings = (doc.warnings ?? []).filter((w) => /[\u0590-\u05FF]/.test(w) && !/^[\x00-\x7F]{12}/.test(String(w).trim())).slice(0, 3);
@@ -466,7 +485,7 @@ async function sandboxNote(s, text, testList) {
   if (!hits.length) return null;
   s.projectOptions = testList.slice(0, 9);
   return [`📌 ${hits.slice(0, 3).map((p) => `*${p.des}* (${p.code})`).join(', ')} — קיים ב${real.name} (${real.code}),`,
-    `אבל הקליטה הזו היא ל*עותק הבדיקה ${s.company}*, שיש בו רק ${testList.length} פרויקטים. ${real.code} עוד לא פתוחה לכתיבה מהבוט (PRIORITY_COMPANIES ב-Render).`,
+    `אבל הקליטה הזו היא ל*עותק הבדיקה ${s.company}*, שיש בו רק ${testList.length} פרויקטים. ${real.name} עוד לא פתוחה לקליטה מהבוט.`,
     '', `פרויקטים ב-${s.company}:`, ...s.projectOptions.map((p, i) => `*${i + 1}.* ${p.des} (${p.code})`), '', 'בחרו מספר, או *ביטול*.'].join('\n');
 }
 
@@ -507,21 +526,22 @@ async function createDraft(user, s) {
       else if (l.part) await Priority.addFreeLine(c, docno, { part: l.part.code, qty: l.qty, price: l.price, discount: l.discount, chapter: l.part.chapter, topic: l.part.topic });
       else await Priority.addFreeLine(c, docno, { part: '000', description: l.description, qty: l.qty, price: l.price, discount: l.discount, chapter: s.chapter?.chapter, topic: s.chapter?.topic });
     } catch (err) {
-      problems.push(`שורה ${l.n} (${l.description}): ${err.message}`);
+      problems.push({ what: `שורה ${l.n} (${l.description}) לא נקלטה`, err: `שורה ${l.n}: ${err.message}` });
     }
   }
   if (!s.order && s.doc.totals?.doc_discount_pct) {
-    await Priority.setHeader(c, docno, { PERCENT: s.doc.totals.doc_discount_pct }).catch((err) => problems.push(`הנחת מסמך: ${err.message}`));
+    await Priority.setHeader(c, docno, { PERCENT: s.doc.totals.doc_discount_pct }).catch((err) => problems.push({ what: 'הנחת המסמך לא נקלטה', err: `הנחת מסמך: ${err.message}` }));
   }
   await Priority.setHeader(c, docno, { DETAILS: `בוט ${s.doc.doc_number}`.slice(0, 24) }).catch(() => {});
   for (const f of s.files) {
     try {
       await Priority.attach(c, docno, { buf: fs.readFileSync(f.path), mime: f.mime, description: f.label === 'מסמך ראשי' ? `${s.doc.doc_type === 'invoice' ? 'חשבונית' : 'תעודת משלוח'} ${s.doc.doc_number} — ${s.supplier.name}` : f.label });
     } catch (err) {
-      problems.push(`נספח ${f.label}: ${err.message}`);
+      problems.push({ what: `${f.label === 'מסמך ראשי' ? 'צילום המסמך' : f.label} לא צורף לנספחים`, err: `נספח ${f.label}: ${err.message}` });
     }
   }
-  await writeDialog(user, s).catch((err) => problems.push(`דו-שיח פנימי: ${err.message}`));
+  // דו-שיח פנימי שנכשל — לא משהו שהעובד יכול לתקן; רק למנהל
+  await writeDialog(user, s).catch((err) => problems.push({ what: null, err: `דו-שיח פנימי: ${err.message}` }));
   return problems;
 }
 
@@ -543,11 +563,13 @@ function writeDialog(user, s) {
   ]);
 }
 
-async function showDraft(s, problems = []) {
+async function showDraft(s, problems = [], user = null) {
   const gr = await Priority.readReceipt(s.company, s.docno);
   s.step = 'review';
   s.reviewLines = gr.lines.map((l, i) => ({ n: i + 1, kline: l.KLINE, description: l.PDES, qty: l.TQUANT }));
-  const warn = problems.length ? `⚠️ חלק לא נקלט:\n${problems.map((p) => `• ${p}`).join('\n')}\n\n` : '';
+  const shown = problems.filter((p) => p.what).map((p) => p.what);
+  const warn = shown.length ? `⚠️ ${shown.join('. ')}. בדקו את הטיוטא לפני "מאשר". מנהל המערכת קיבל פירוט.\n\n` : '';
+  if (problems.length) alertAdmins(user, s, 'חלק מהטיוטא לא נקלט', problems.map((p) => p.err));
   // ה-PDF לבדיקה — מהשדות כפי שנשמרו, כולל הדו-שיח הפנימי
   const files = [];
   try {
@@ -558,7 +580,7 @@ async function showDraft(s, problems = []) {
   } catch (err) {
     console.error('[משימון] PDF של קבלת סחורה:', err.message);
   }
-  return reply(s, warn + summaryText(s, gr), { files });
+  return reply(s, warn + summaryText(s, gr), { files, ...(problems.length ? { status: 'error', result: `טיוטא ${s.docno}; תקלות: ${problems.map((p) => p.err).join(' | ')}` } : {}) });
 }
 
 // ---------------------------------------------------------------------------
@@ -572,7 +594,8 @@ async function cancel(user, s, why = 'בוטלה') {
       await Priority.cancelReceipt(s.company, s.docno);
       note = ` הטיוטא ${s.docno} בוטלה בפריוריטי.`;
     } catch (err) {
-      note = ` ⚠️ לא הצלחתי לבטל את הטיוטא ${s.docno} בפריוריטי (${err.message}) — בטלו אותה ידנית, אחרת היתרה בהזמנה נשארת תפוסה.`;
+      note = ` ⚠️ הטיוטא ${s.docno} לא בוטלה בפריוריטי. מנהל המערכת קיבל הודעה ויטפל.`;
+      alertAdmins(user, s, 'טיוטא לא בוטלה', [`הטיוטא נשארה בפריוריטי; שורות מהזמנה תופסות יתרה עד שתבוטל.`, err.message]);
     }
   }
   clear(user.id, s);
@@ -628,7 +651,8 @@ async function handle({ user, text = '', file = null }) {
   } catch (err) {
     console.error('[משימון] קבלת סחורה:', err.message);
     save(user.id, s);
-    return { replies: [`משהו השתבש מול פריוריטי: ${err.message}\nנסו שוב, או *ביטול*.`], status: 'error', result: err.message };
+    alertAdmins(user, s, 'תקלה מול פריוריטי', [`שלב: ${s.step}`, err.message]);
+    return { replies: ['משהו השתבש מול פריוריטי. נסו שוב בעוד דקה, או *ביטול*.'], status: 'error', result: `שלב ${s.step}: ${err.message}` };
   }
   if (out.s === null) clear(user.id, s);
   else save(user.id, out.s ?? s);
@@ -795,7 +819,7 @@ async function step(user, s, t, file) {
         return reply(s, `📎 נספח ${s.files.length - 1} התקבל. עוד? או *סיום*.`);
       }
       if (!DONE_FILES.test(t)) return reply(s, 'שלחו נספח, או *סיום* להמשך.');
-      return showDraft(s, await createDraft(user, s));
+      return showDraft(s, await createDraft(user, s), user);
 
     case 'review': {
       const pay = !file && Priority.payFromText(t);
@@ -810,7 +834,8 @@ async function step(user, s, t, file) {
         try {
           await Priority.finalizeReceipt(s.company, s.docno);
         } catch (err) {
-          return { s: null, replies: [`ה-GR *${s.docno}* נשמר כטיוטא, אבל לא הצלחתי להפוך אותו לסופי: ${err.message}\nאפשר לאשר אותו בפריוריטי.`], status: 'error', result: `סופית נכשלה: ${err.message}` };
+          alertAdmins(user, s, 'GR לא הפך לסופי', [err.message]);
+          return { s: null, replies: [`ה-GR *${s.docno}* נשמר כטיוטא, אבל לא הפך לסופי. מנהל המערכת קיבל הודעה ויטפל.`], status: 'error', result: `סופית נכשלה: ${err.message}` };
         }
         return { s: null, replies: [`✅ *קבלת סחורה ${s.docno}* נקלטה כסופית.\n${companyLine(s)}\nספק: ${s.supplier.name}${s.order ? ` · הזמנה ${s.order.ordname}` : ''}`], status: 'ok', result: `GR סופי ${s.docno}` };
       }
@@ -818,8 +843,8 @@ async function step(user, s, t, file) {
         const f = await saveFile(user.id, file, `נספח ${s.files.length}`);
         s.files.push(f);
         const problems = [];
-        await Priority.attach(s.company, s.docno, { buf: fs.readFileSync(f.path), mime: f.mime, description: f.label }).catch((err) => problems.push(`נספח: ${err.message}`));
-        return showDraft(s, problems);
+        await Priority.attach(s.company, s.docno, { buf: fs.readFileSync(f.path), mime: f.mime, description: f.label }).catch((err) => problems.push({ what: 'הנספח לא צורף', err: `נספח: ${err.message}` }));
+        return showDraft(s, problems, user);
       }
       const out = await ai.reply(s.reviewLines.map((l) => ({ line: l.n, description: l.description, qty: l.qty, options: [] })), t);
       if (out.action === 'confirm') return step(user, s, 'מאשר', null);

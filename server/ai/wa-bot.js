@@ -2729,7 +2729,7 @@ async function handleDirect(msg) {
     // תמונה או מסמך — היום הבוט מטפל בהם רק בקבלת סחורה, ואומר למה לא
     const why = WaActions.byKey('goods_receipt')?.enabled ? 'קבלת סחורה אינה פתוחה לך' : 'קבלת סחורה עוד לא הופעלה';
     log({ ...base, text: `[${msg.kind || 'קובץ'}]`, action: 'goods_receipt', status: 'denied', result: why });
-    await sendText(msg.chatId, `קיבלתי את הקובץ, אבל ${why} בבוט (מסך הניהול ← בוט וואטסאפ ← פעולות). בינתיים כתבו לי בטקסט 🙏`);
+    await sendText(msg.chatId, 'קיבלתי את הקובץ, אבל קבלת סחורה עוד לא פתוחה לך בבוט. אם צריך — פנו למנהל המערכת. בינתיים כתבו לי בטקסט 🙏');
     return;
   }
   if (!text) {
