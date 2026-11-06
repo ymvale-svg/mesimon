@@ -139,6 +139,11 @@ function register(router, h) {
     || JSON.parse(m.attendees || '[]').some((a) => a.email === String(actor.email ?? '').toLowerCase())
     || Boolean(m.task_id && canSeeTask(actor, D.get('SELECT * FROM tasks WHERE id = ?', m.task_id)));
 
+  // מי שהיה בפגישה: בעל היומן, מי שקבע (גם בשם אחר) או מי שהוזמן. הקלטה ותמליל — רק להם ולהנהלה,
+  // לא לכל מי שרואה את המשימה (issue #65). אותו כלל כמו ‎Zoom.recordingScope‎
+  const attended = (actor, m) => [m.owner_id, m.created_by, m.via_user_id].includes(actor.id)
+    || JSON.parse(m.attendees || '[]').some((a) => String(a.email ?? '').toLowerCase() === String(actor.email ?? '').toLowerCase() && Boolean(actor.email));
+
   router.get('/api/meetings/:id/join', async (req, res, ctx) => {
     const actor = userOnly(ctx);
     const m = Meetings.meetingById(Number(ctx.params.id));
@@ -152,7 +157,7 @@ function register(router, h) {
     const actor = userOnly(ctx);
     const m = Meetings.meetingById(Number(ctx.params.id));
     if (!m) throw notFound();
-    if (!involved(actor, m) && !P.can(actor, 'manage_users')) throw forbidden();
+    if (!attended(actor, m) && !P.can(actor, 'manage_users')) throw forbidden();
     await run(res, async () => ({ recording: await Meetings.recording(m.id) }));
   });
 
@@ -344,7 +349,7 @@ function register(router, h) {
       throw err.status === 404 ? notFound('ההקלטה לא נמצאה ב-Zoom') : userError(err);
     }
     const ours = link.meetingId ? D.get('SELECT * FROM meetings WHERE zoom_meeting_id = ? ORDER BY id DESC LIMIT 1', link.meetingId) : null;
-    if (!Zoom.mayWatch(Zoom.recordingScope(actor), link.hostZoomUserId, link.meetingId) && !(ours && involved(actor, ours))) {
+    if (!Zoom.mayWatch(Zoom.recordingScope(actor), link.meetingId) && !(ours && attended(actor, ours))) {
       throw forbidden('אין לך הרשאה לצפות בהקלטה הזו');
     }
     res.writeHead(302, { location: link.url, 'cache-control': 'no-store' });

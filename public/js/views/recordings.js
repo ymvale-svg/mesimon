@@ -115,7 +115,7 @@ const RecordingsView = (() => {
 
   /**
    * הכפתורים של הקלטה: וידאו אחד מוצג כ"צפייה", וכשיש כמה תצוגות — כל אחת
-   * עם שמה; שמע, תמליל, צ'אט; וקישור השיתוף של Zoom. משותף גם לכרטיס הפגישה.
+   * עם שמה; שמע, תמליל, צ'אט. משותף גם לכרטיס הפגישה.
    */
   function actions(r) {
     const videos = r.files.filter((f) => f.kind === 'video');
@@ -128,13 +128,6 @@ const RecordingsView = (() => {
     return [
       ...videos.map((f) => fileButton(f, videos.length > 1 && VIEW_LABEL[f.view] ? `▶ ${VIEW_LABEL[f.view]}` : FILE_BUTTONS.video)),
       ...others.map((f) => fileButton(f, FILE_BUTTONS[f.kind])),
-      r.shareUrl ? el('button.btn.btn-sm', {
-        title: 'קישור הצפייה של Zoom — אפשר לשלוח למי שלא במשימון',
-        onclick: async () => {
-          const text = r.passcode ? `${r.shareUrl}\nקוד: ${r.passcode}` : r.shareUrl;
-          try { await navigator.clipboard.writeText(text); UI.success('הקישור הועתק'); } catch { UI.prompt('העתיקו את הקישור', { title: 'קישור ההקלטה', value: text, multiline: true, okText: 'סגירה' }); }
-        }
-      }, ['🔗 העתקת קישור']) : null
     ];
   }
 
