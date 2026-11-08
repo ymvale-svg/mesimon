@@ -74,6 +74,7 @@ function buttonsFor(s) {
   if (s.pendingList) return [BTN.yes, BTN.no];
   switch (s.step) {
     case 'offer': case 'doctype': return [BTN.yes, BTN.no];
+    case 'doc': return s.files?.[0] ? ['נסה שוב 🔄', BTN.cancel] : [BTN.cancel];
     case 'header': return [BTN.yes, s.noVat ? 'עם מע"מ' : 'ללא מע"מ', BTN.cancel];
     case 'order': return ['בלי הזמנה ❌', BTN.cancel];
     case 'lines': return [BTN.yes, BTN.cancel];
@@ -294,6 +295,10 @@ const skill = () => fs.readFileSync(SKILL, 'utf8');
  * הקובץ לקריאה ב-AI. תמונה גדולה מהמגבלה של תמונה (5MB אחרי base64 — צילום HD מוואטסאפ) נעטפת ב-PDF של עמוד
  * אחד (JPEG כמו שהוא, בלי הקטנה ובלי איבוד איכות), כי המגבלה של מסמך גבוהה בהרבה.
  */
+/** שגיאה של שירות ה-AI עצמו (קרדיט, הרשאה, עומס, חיבור) — ולא של הקובץ */
+const isServiceError = (err) => /credit|billing|balance|quota|rate.?limit|overloaded|ANTHROPIC_API_KEY|אין חיבור לשירות|authentication|permission/i.test(String(err?.message ?? ''))
+  || [401, 402, 403, 429, 500, 502, 503, 529].includes(Number(err?.status));
+
 const IMAGE_MAX = 3.6 * 1024 * 1024;
 function fileBlock(file) {
   const buf = fs.readFileSync(file.path);
@@ -572,8 +577,14 @@ async function onMainDoc(user, s, file, pre = null) {
   try {
     doc = pre ?? await ai.extract(s.files[0]);
   } catch (err) {
-    // הסיבה (גודל, שירות ה-AI) — למנהלים; לעובד — מה לעשות
-    alertAdmins(user, s, 'קריאת מסמך נכשלה', [`קובץ: ${s.files[0]?.mime ?? ''}, ${Math.round((fs.statSync(s.files[0].path).size || 0) / 1024)}KB`, err.message]);
+    // תקלה בשירות ה-AI (קרדיט שנגמר, עומס, חיבור) — לא הצילום: לעובד "נסו שוב מאוחר יותר", ולמנהלים הסיבה
+    const service = isServiceError(err);
+    alertAdmins(user, s, service ? (/credit|billing|balance/i.test(err.message) ? 'נגמר הקרדיט של שירות ה-AI' : 'שירות ה-AI לא זמין') : 'קריאת מסמך נכשלה',
+      [`קובץ: ${s.files[0]?.mime ?? ''}, ${Math.round((fs.statSync(s.files[0].path).size || 0) / 1024)}KB`, err.message]);
+    if (service) {
+      return reply(s, '⏳ קריאת המסמכים לא זמינה כרגע — זו תקלה אצלנו, לא בצילום. מנהל המערכת קיבל הודעה. הצילום שמור: כתבו *נסה שוב* בעוד כמה דקות, או *ביטול*.',
+        { status: 'error', result: `שירות ה-AI: ${err.message}` });
+    }
     return reply(s, 'לא הצלחתי לקרוא את המסמך. נסו לצלם שוב, ישר ובאור טוב, כך שכל הדף ייראה.', { status: 'error', result: `קריאת מסמך נכשלה: ${err.message}` });
   }
   // אזהרות — בעברית בלבד; אזהרה שהגיעה באנגלית למרות ההנחיה אינה מוצגת
@@ -1710,6 +1721,8 @@ async function handle({ user, text = '', file = null, reaction = false }) {
 async function step(user, s, t, file) {
   switch (s.step) {
     case 'doc':
+      // "נסה שוב" אחרי תקלה בשירות — אותו צילום, בלי לשלוח שוב
+      if (!file && s.files?.[0]?.path && fs.existsSync(s.files[0].path) && (YES.test(t) || /^(נסה|נסי|תנסה|לנסות)?\s*שוב|^retry/i.test(t))) return onMainDoc(user, s, s.files[0]);
       if (!file) return reply(s, 'מחכה לצילום של תעודת המשלוח או החשבונית. או *ביטול*.');
       return onMainDoc(user, s, file);
 
