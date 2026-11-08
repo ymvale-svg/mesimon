@@ -75,6 +75,7 @@ function buttonsFor(s) {
   switch (s.step) {
     case 'offer': case 'doctype': return [BTN.yes, BTN.no];
     case 'doc': return s.files?.[0] ? ['נסה שוב 🔄', BTN.cancel] : [BTN.cancel];
+    case 'project': return s.projectPending ? [BTN.yes] : [];
     case 'header': return [BTN.yes, s.noVat ? 'עם מע"מ' : 'ללא מע"מ', BTN.cancel];
     case 'order': return ['בלי הזמנה ❌', BTN.cancel];
     case 'lines': return [BTN.yes, BTN.cancel];
@@ -960,13 +961,24 @@ async function askProject(s) {
   }
   // רמז מהמסמך — עיר, אתר, מגרש: כל הפרויקטים המתאימים ביותר (גם לפי הכינויים), ואם לא — ה-AI
   const hint = [s.doc.project_hint, s.doc.delivery_place].filter(Boolean).join(' · ');
-  // הפרויקט שהמשתמש בחר בפעם האחרונה בחברה הזו — ברירת המחדל; לשנות — "פרויקט …"
+  // הפרויקט שהמשתמש בחר בפעם האחרונה בחברה הזו. המסמך גובר: כשיש בו רמז (עיר, אתר) — הפרויקט שמתאים לרמז מוצע
+  // לאישור; הבחירה האחרונה נקבעת לבד רק כשאין רמז, או כשהיא עצמה מתאימה לרמז
   const last = !s.noPref && prefsOf(s.uid, s.company)?.project;
   const lastP = last && all.find((p) => p.code === last.code);
-  if (lastP) {
-    s.project = lastP;
-    s.projectFrom = 'pref';
-    return chooseWarehouse(s, `📁 פרויקט: *${lastP.des}* (${lastP.code}) — הבחירה האחרונה שלך${hint ? ` (במסמך: ${hint})` : ''}\n   לשנות פרויקט — כתבו *פרויקט* ושם ("פרויקט אלעד 49").`);
+  const prefNote = (p) => `📁 פרויקט: *${p.des}* (${p.code}) — הבחירה האחרונה שלך\n   לשנות פרויקט — כתבו *פרויקט* ושם ("פרויקט אלעד 49").`;
+  if (lastP && !hint) { s.project = lastP; s.projectFrom = 'pref'; return chooseWarehouse(s, prefNote(lastP)); }
+  if (hint) {
+    const byHint = (await findProjects(all, hint, { strict: false })).list;
+    if (lastP && byHint.some((p) => p.code === lastP.code)) { s.project = lastP; s.projectFrom = 'pref'; return chooseWarehouse(s, prefNote(lastP)); }
+    s.step = 'project';
+    if (byHint.length === 1) {
+      s.projectPending = byHint[0];
+      return reply(s, `📁 לפי המסמך (${hint}): *${byHint[0].des}* (${byHint[0].code})?\n*כן* 👍 — לשייך, או כתבו פרויקט אחר${lastP ? ` (בפעם האחרונה: ${lastP.des})` : ''}.`);
+    }
+    if (!byHint.length && lastP) {
+      s.projectPending = lastP;
+      return reply(s, `📁 במסמך: ${hint} — לא מצאתי פרויקט שמתאים. לשייך ל*${lastP.des}* (${lastP.code}), הבחירה האחרונה שלך?\n*כן* 👍, או כתבו פרויקט אחר.`);
+    }
   }
   s.step = 'project';
   if (!Priority.matchProjects(all, hint).length) {
@@ -1957,6 +1969,7 @@ async function step(user, s, t, file) {
     }
 
     case 'project': {
+      t = t.replace(/^\s*(?:פרו+י+קט|פרוקט)(?:\s+אחר)?\s*[:\-–]?\s*/, '').trim() || t;
       // הצעה אחת מה-AI מחכה לאישור
       if (s.projectPending) {
         const pend = s.projectPending;
@@ -2001,7 +2014,7 @@ async function step(user, s, t, file) {
       if (file) return routeFile(user, s, file, t);
       if (/^(מחסן|מחסנים|שנה מחסן|לשנות מחסן|החלף מחסן|פירוט מחסנים|רשימת מחסנים)([\s,.!?]|$)/.test(t.trim())) return listWarehouses(s);
       // "פרויקט …" — פרויקט אחר (במקום ברירת המחדל); המחסן נבחר מחדש
-      const pm = t.match(/^\s*(?:פרויקט|לשנות פרויקט|שנה פרויקט|פרויקט אחר)(?=[\s:\-–]|$)\s*[:\-–]?\s*([\s\S]*)$/);
+      const pm = t.match(/^\s*(?:(?:לשנות|שנה|תשנה)\s+)?(?:ה)?(?:פרו+י+קט|פרוקט)(?:\s+אחר)?(?=[\s:\-–]|$)\s*[:\-–]?\s*([\s\S]*)$/);
       if (pm) {
         s.project = null; s.warehouse = null; s.noPref = true; s.projectOptions = null; s.projectPending = null;
         const what = pm[1].replace(/\s+/g, ' ').trim();
