@@ -4293,9 +4293,18 @@ router.patch('/api/admin/users/:id', async (req, res, ctx) => {
   if (nextRole === 'manager' && !targetDepartmentId) {
     throw badRequest('משתמש ברמת מנהל מחלקה חייב להיות משויך למחלקה.');
   }
+  // אימייל הכניסה ייחודי במסד; בלי הבדיקה הזו כתובת של משתמש אחר נופלת
+  // על אילוץ ה-UNIQUE ומגיעה למסך כ"שגיאה פנימית בשרת"
+  const nextEmail = String(b.email ?? user.email).trim().toLowerCase();
+  if (nextEmail !== String(user.email).toLowerCase()) {
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(nextEmail)) throw badRequest('כתובת האימייל אינה תקינה');
+    const other = D.get('SELECT full_name FROM users WHERE lower(email) = ? AND id <> ?', nextEmail, user.id);
+    if (other) throw badRequest(`כתובת האימייל ${nextEmail} כבר רשומה אצל ${other.full_name}`);
+    if (D.get('SELECT 1 FROM vendors WHERE lower(email) = ?', nextEmail)) throw badRequest('כתובת האימייל שייכת לספק במערכת');
+  }
   D.run(
     'UPDATE users SET full_name = ?, email = ?, role = ?, department = ?, department_id = ?, status = ? WHERE id = ?',
-    b.name ?? user.full_name, (b.email ?? user.email).toLowerCase(), nextRole,
+    b.name ?? user.full_name, nextEmail, nextRole,
     departmentName(targetDepartmentId), targetDepartmentId, b.status ?? user.status, user.id
   );
 
