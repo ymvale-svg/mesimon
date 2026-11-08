@@ -314,9 +314,8 @@ const shapeRecording = (m, host = null) => ({
   start: m.start_time,
   minutes: Number(m.duration ?? 0),
   host: host ? { id: host.id, name: host.name, email: host.email, account: host.account } : { id: m.host_id ?? '', name: '', email: m.host_email ?? '', account: '' },
-  // קישור השיתוף של Zoom — עם קוד הצפייה בתוכו, כשיש
-  shareUrl: m.share_url ? `${m.share_url}${m.recording_play_passcode ? `${m.share_url.includes('?') ? '&' : '?'}pwd=${m.recording_play_passcode}` : ''}` : '',
-  passcode: m.password ?? '',
+  // בלי קישור השיתוף של Zoom ובלי קוד הצפייה: מי שמקבל אותם צופה בלי בדיקת הרשאה.
+  // הצפייה רק דרך ‎/api/zoom/recordings/file‎, שבודק הרשאה בכל פעם (issue #65)
   files: (m.recording_files ?? []).map(shapeFile)
 });
 
@@ -432,14 +431,13 @@ async function meetingRecording(zoomMeetingId) {
 // ---------------------------------------------------------------------------
 
 /**
- * מי שמנהל את כל המשתמשים בארגון (לא מנהל מחלקה) — את כל ההקלטות בחשבונות. עובד אחר — של משתמש ה-Zoom
- * המשויך לו, ושל פגישות משימון שהוא בעל היומן שלהן, קבע אותן או הוזמן אליהן.
- * אותו כלל באפליקציה ובבוט.
+ * מי שמנהל את כל המשתמשים בארגון (לא מנהל מחלקה) — את כל ההקלטות בחשבונות. עובד אחר — רק של פגישות
+ * משימון שהוא בעל היומן שלהן, קבע אותן או הוזמן אליהן. לא לפי שיוך רישיון Zoom: הרישיונות משותפים,
+ * ופגישות של הנהלה ומזכירות יושבות על כל רישיון פנוי (issue #65). אותו כלל באפליקציה ובבוט.
  */
 function recordingScope(actor) {
-  if (P.can(actor, 'manage_users')) return { all: true, own: null, hosts: D.all('SELECT id FROM zoom_users').map((z) => z.id), meetingIds: new Set() };
+  if (P.can(actor, 'manage_users')) return { all: true, hosts: D.all('SELECT id FROM zoom_users').map((z) => z.id), meetingIds: new Set() };
   const email = String(D.get('SELECT email FROM users WHERE id = ?', actor.id)?.email ?? '').toLowerCase();
-  const own = D.get('SELECT zoom_user_id FROM users WHERE id = ?', actor.id)?.zoom_user_id ?? null;
   const mine = D.all(
     `SELECT zoom_user_id, zoom_meeting_id FROM meetings
       WHERE zoom_meeting_id IS NOT NULL AND (owner_id = ? OR created_by = ? OR via_user_id = ? OR (? <> '' AND lower(attendees) LIKE ?))`,
@@ -447,13 +445,12 @@ function recordingScope(actor) {
   );
   return {
     all: false,
-    own,
-    hosts: [...new Set([own, ...mine.map((m) => m.zoom_user_id)].filter(Boolean))],
+    hosts: [...new Set(mine.map((m) => m.zoom_user_id).filter(Boolean))],
     meetingIds: new Set(mine.map((m) => String(m.zoom_meeting_id)))
   };
 }
 
-const mayWatch = (scope, hostId, meetingId) => scope.all || Boolean(scope.own && scope.own === hostId) || scope.meetingIds.has(String(meetingId));
+const mayWatch = (scope, meetingId) => scope.all || scope.meetingIds.has(String(meetingId));
 
 /**
  * ההקלטות שהעובד רשאי לראות בטווח, וליד כל אחת — פגישת משימון שלה, אם יש
@@ -463,7 +460,7 @@ async function recordingsFor(actor, from, to) {
   const scope = recordingScope(actor);
   const { recordings, errors } = await listRecordings(scope.hosts, from, to);
   const ours = new Map();
-  const list = recordings.filter((r) => mayWatch(scope, r.host.id, r.meetingId)).map((r) => {
+  const list = recordings.filter((r) => mayWatch(scope, r.meetingId)).map((r) => {
     if (!ours.has(r.meetingId)) {
       ours.set(r.meetingId, D.get('SELECT id, task_id, title, attendees FROM meetings WHERE zoom_meeting_id = ? ORDER BY id DESC LIMIT 1', r.meetingId) ?? null);
     }

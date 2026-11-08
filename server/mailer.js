@@ -126,6 +126,8 @@ function buildMessage(message) {
   const cc = (message.cc ?? []).map(oneLine).filter((a) => a && a.toLowerCase() !== to.toLowerCase());
   const from = oneLine(message.from);
   const boundary = `mesimon_${Date.now().toString(36)}`;
+  const mixed = `${boundary}_mixed`;
+  const files = (message.attachments ?? []).filter((f) => f?.buf && f.fileName);
   const domain = from.split('@')[1] || 'mesimon.local';
   const messageId = `<${Date.now().toString(36)}.${crypto.randomBytes(8).toString('hex')}@${domain}>`;
   const headers = [
@@ -141,7 +143,7 @@ function buildMessage(message) {
     message.inReplyTo ? `In-Reply-To: ${oneLine(message.inReplyTo)}` : null,
     message.references?.length ? `References: ${message.references.map(oneLine).join(' ')}` : null,
     'MIME-Version: 1.0',
-    `Content-Type: multipart/alternative; boundary="${boundary}"`,
+    `Content-Type: ${files.length ? `multipart/mixed; boundary="${mixed}"` : `multipart/alternative; boundary="${boundary}"`}`,
     ''
   ].filter((line) => line !== null).join('\r\n');
 
@@ -160,14 +162,32 @@ function buildMessage(message) {
     ''
   ].join('\r\n');
 
-  return { messageId, raw: `${headers}\r\n${body}` };
+  if (!files.length) return { messageId, raw: `${headers}\r\n${body}` };
+  // קבצים מצורפים (‎attachments: [{ buf, fileName, mime }]‎) — הגוף כחלק הראשון, וכל קובץ אחריו
+  const parts = [
+    `--${mixed}`,
+    `Content-Type: multipart/alternative; boundary="${boundary}"`,
+    '',
+    body,
+    ...files.flatMap((f) => [
+      `--${mixed}`,
+      `Content-Type: ${oneLine(f.mime || 'application/octet-stream')}; name="${encodeHeader(f.fileName)}"`,
+      'Content-Transfer-Encoding: base64',
+      `Content-Disposition: attachment; filename="${encodeHeader(f.fileName)}"`,
+      '',
+      Buffer.from(f.buf).toString('base64').replace(/(.{76})/g, '$1\r\n')
+    ]),
+    `--${mixed}--`,
+    ''
+  ].join('\r\n');
+  return { messageId, raw: `${headers}\r\n${parts}` };
 }
 
 
 /**
  * @param {{to: string, toName?: string, subject: string, html: string, text: string, fromName?: string,
  *          personalName?: string, replyTo?: string, replyToName?: string, cc?: string[],
- *          inReplyTo?: string, references?: string[]}} message
+ *          inReplyTo?: string, references?: string[], attachments?: Array<{buf: Buffer, fileName: string, mime?: string}>}} message
  *
  * ‎personalName‎ — שם התצוגה של השולח גובר על כל ברירת מחדל. משמש הודעה
  * שנשלחת בשמו של משתמש (משימת AI), שבה הנמען צריך לראות אדם ולא מערכת.
