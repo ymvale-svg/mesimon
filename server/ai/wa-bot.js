@@ -1199,10 +1199,8 @@ async function recordingReply(actor, query, date) {
     return [
       `🎥 *${r.meeting?.title || r.topic || 'פגישת Zoom'}*`,
       `${when}${r.minutes ? ` · ${r.minutes} דק׳` : ''}`,
-      r.shareUrl ? `▶ ${r.shareUrl}` : null,
-      r.shareUrl && r.passcode && !r.shareUrl.includes('pwd=') ? `קוד: ${r.passcode}` : null,
-      !r.shareUrl && inApp ? `▶ ${inApp}` : null,
-      r.shareUrl && inApp ? `במשימון: ${inApp}` : null,
+      // רק הקישור הפנימי, שבודק הרשאה בכל צפייה — לא קישור השיתוף של Zoom עם הקוד (issue #65)
+      inApp ? `▶ ${inApp}` : null,
       r.files.some((f) => f.kind === 'transcript' && f.ready) ? '📝 יש גם תמליל — במסך "🎥 הקלטות Zoom" במשימון' : null
     ].filter(Boolean).join('\n');
   });
