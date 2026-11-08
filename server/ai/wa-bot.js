@@ -1264,20 +1264,19 @@ async function recordingReply(actor, query, date) {
   };
 }
 
+/*
+ * התפריט — 5 אפשרויות בלבד (הוחלט 08.11.26). השאר — בשפה חופשית, בלי כפתור: "משימה ל…", "מייל ל…",
+ * "מה פתוח בפרויקט…", "יש לי בעיה…", "מה באיחור", "הסוכנים", "שלח לי את Today במייל" (‎MENU_FREE_HINT‎).
+ * "✨ לשאול את אשל" — גם שאלה וגם בעיה: ה-AI מזהה ומעביר (‎mail_ask‎ / ‎solve‎).
+ */
 const MENU = [
   ['today', 'today', '☀️ מה יש לי היום'],
   ['priority', 'goods_receipt', '🗂 פריוריטי — קבלת סחורה ודרישת רכש'],
-  ['ask', 'mail_ask', '✨ לשאול את אשל — ידע ארגוני, מיילים וסוכנים'],
   ['insights', 'mail_insights', '📬 תובנות — מה חדש (ו-💡 הצעת תשובה)'],
-  ['solve', 'solve', '💡 יש לי בעיה — פתרון ופנייה מוכנה'],
-  ['send_email', 'send_email', '✉️ לשלוח מייל לאיש קשר'],
-  ['create_task', 'create_task', '📝 לפתוח משימה'],
   ['my_tasks', 'my_tasks', '📋 כל המשימות הפתוחות שלי'],
-  ['overdue', 'my_tasks', '⚠️ מה באיחור'],
-  ['project_tasks', 'project_tasks', '📁 מה פתוח בפרויקט'],
-  ['agents', 'mail_ask', '🤖 מה הסוכנים יודעים'],
-  ['today_email', 'today', '📧 לשלוח לי את Today במייל']
+  ['ask', 'mail_ask', '✨ לשאול את אשל — שאלה או בעיה']
 ];
+const MENU_FREE_HINT = '_אפשר גם לכתוב או להקליט חופשי: "משימה ל…", "מייל ל…", "מה פתוח בפרויקט…", "יש לי בעיה…"_';
 
 /**
  * 🤖 הסוכנים שמותרים לכותב, לפי מחלקה — שורה לכל סוכן. לא צריך לבחור סוכן:
@@ -1314,7 +1313,8 @@ function menuOptions(actor) {
     const h = Insights.headings({ mail: sources.mail && MailInsights.available(actor.id), whatsapp: sources.whatsapp });
     return `${h.insights} (${Range.forUser(actor.id).span})`;
   };
-  return MENU.filter(([key, action]) => (key === 'priority' ? WaActions.allowed(actor, 'goods_receipt') || WaActions.allowed(actor, 'purchase_demand') : WaActions.allowed(actor, action))
+  return MENU.filter(([key, action]) => (key === 'priority' ? WaActions.allowed(actor, 'goods_receipt') || WaActions.allowed(actor, 'purchase_demand')
+    : key === 'ask' ? WaActions.allowed(actor, 'mail_ask') || WaActions.allowed(actor, 'solve') : WaActions.allowed(actor, action))
     && (key !== 'insights' || MailInsights.available(actor.id) || sources.whatsapp))
     .map(([key, , label]) => ({ key, label: key === 'insights' ? insightLabel() : label }));
 }
@@ -1350,7 +1350,8 @@ const normBtn = (x) => String(x ?? '').replace(/[\u{1F3FB}-\u{1F3FF}\uFE0F]/gu, 
 /** הכיתוב של כפתור מהתפריט הראשי — מזוהה גם כשהתפריט כבר לא "פתוח" (כפתור מהודעה ישנה) */
 function isMenuButton(text) {
   const t = normBtn(text);
-  return t === normBtn(MENU_MORE) || t === 'עוד אפשרויות' || Object.values(MENU_BUTTON).some((b) => normBtn(b) === t);
+  // רק הכפתורים שבתפריט היום — כפתור שירד מהתפריט (מהודעה ישנה) עובר ל-AI כבקשה רגילה
+  return t === normBtn(MENU_MORE) || t === 'עוד אפשרויות' || MENU.some(([key]) => normBtn(MENU_BUTTON[key]) === t);
 }
 /** כפתור שנלחץ (או הכיתוב שלו) ← מספר האפשרות בתפריט; ‎'more'‎ — כל שאר האפשרויות; ‎null‎ — לא כפתור */
 function menuPick(draft, text) {
@@ -1361,7 +1362,8 @@ function menuPick(draft, text) {
   return i >= 0 ? i + 1 : null;
 }
 
-const menuText = () => '*במה אפשר לעזור היום?* 👇';
+/** כותרת התפריט; כשכל האפשרויות נכנסות בהודעה אחת (אין "עוד אפשרויות") — גם שורת השפה החופשית */
+const menuText = (options = []) => `*במה אפשר לעזור היום?* 👇${options.length && options.length <= 3 ? `\n\n${MENU_FREE_HINT}` : ''}`;
 
 const timeOf = (iso) => new Date(iso).toLocaleTimeString('he-IL', { timeZone: TZ, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
 
@@ -2146,7 +2148,7 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
       const keys = state.draft.options ?? [];
       const [first = [], ...others] = moreMenuGroups(keys);
       if (first.length) {
-        return out('*כל האפשרויות:* 👇', { draft: { kind: 'menu', options: keys } }, {
+        return out(`*עוד אפשרויות:* 👇\n\n${MENU_FREE_HINT}`, { draft: { kind: 'menu', options: keys } }, {
           action: 'menu', status: 'ok', result: `תפריט: כל האפשרויות (${keys.length})`, buttons: first,
           followUps: others.map((buttons) => async () => ({ text: '👇', buttons }))
         });
@@ -2245,7 +2247,7 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
   const menuReply = (prefix = '') => {
     const keys = menuOptions(actor).map((o) => o.key);
     if (!keys.length) return null;
-    return out([prefix || null, menuText()].filter(Boolean).join('\n\n'), { draft: { kind: 'menu', options: keys } },
+    return out([prefix || null, menuText(keys)].filter(Boolean).join('\n\n'), { draft: { kind: 'menu', options: keys } },
       { action: 'menu', status: 'ok', result: 'תפריט', buttons: menuButtons(keys, 0) });
   };
 
@@ -2475,7 +2477,7 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
       case 'solve': return go('מה הבעיה? תארו במילים פשוטות, ואציע מה עושים ולמי לפנות — עם הודעה מוכנה לשליחה.\nלמשל: "המזגן בחדר הישיבות מטפטף ויש ריח"');
       case 'create_task': return go('מה המשימה? אפשר לציין למי ועד מתי.\nלמשל: "לשושנה לפנות ליועץ הסניטרי, עד חמישי"');
       case 'project_tasks': return go('באיזה פרויקט?');
-      case 'ask': return go('מה לשאול את אשל? למשל:\n• "למי פונים כשהמזגן מתקלקל, וכמה זה עולה?"\n• "מה סיכמנו עם העירייה על חלקה 12?"\n• "כמה מס רכישה על דירה שנייה ב-2.4 מיליון?"\nאפשר גם הודעה קולית או מסמך.');
+      case 'ask': return go('מה לשאול את אשל — או מה הבעיה? למשל:\n• "מה סיכמנו עם העירייה על חלקה 12?"\n• "כמה מס רכישה על דירה שנייה ב-2.4 מיליון?"\n• "המזגן בחדר הישיבות מטפטף" — אציע מה עושים ולמי לפנות, עם הודעה מוכנה\nאפשר גם הודעה קולית או מסמך.');
       case 'agents': return go(agentsText(actor));
       case 'priority': return go('🗂 כתבו *פריוריטי* — קבלת סחורה או דרישת רכש.');
       default:
