@@ -3542,6 +3542,10 @@ function assertMayEditProject(actor, project) {
   if (visible !== null && !visible.has(project.id)) {
     throw forbidden('אין לך גישה לפרויקט הזה');
   }
+  // 🔒 פרויקט מסווג — מי שהסיווג אינו מתיר לו לראות אותו גם אינו עורך, מוחק או מחליף את מנהלו
+  if (!Cls.mayReadProject(actor, project)) {
+    throw forbidden('אין לך גישה לפרויקט הזה');
+  }
 
   if (P.level(actor, 'create_project') === 'own'
       && project.created_by !== actor.id && project.manager_id !== actor.id) {
@@ -3569,6 +3573,7 @@ router.get('/api/projects/:id/images', async (req, res, ctx) => {
   // הרשאת הצפייה זהה לזו של רשימת הפרויקטים — פרויקט שאינו נראה, גם תמונותיו לא
   const visible = visibleProjectIds(actor);
   if (visible !== null && !visible.has(project.id)) throw forbidden();
+  if (!Cls.mayReadProject(actor, project)) throw forbidden();
   sendJson(res, 200, { images: projectImages(project.id) });
 });
 
@@ -3641,6 +3646,7 @@ router.get('/api/project-images/:id/view', async (req, res, ctx) => {
   if (!image) throw notFound('התמונה לא נמצאה');
   const visible = visibleProjectIds(actor);
   if (visible !== null && !visible.has(image.project_id)) throw forbidden();
+  if (!Cls.mayReadProject(actor, D.get('SELECT * FROM projects WHERE id = ?', image.project_id))) throw forbidden();
 
   const filePath = path.join(D.UPLOADS_DIR, image.stored_name);
   if (!fs.existsSync(filePath)) throw notFound('הקובץ אינו קיים בשרת');
