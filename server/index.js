@@ -118,6 +118,8 @@ server.listen(PORT, HOST, () => {
     Dupes.start();
     // 📎 פענוח קבצים גדולים מהמייל לפי בקשה — קובץ אחד בכל פעם
     require('./ai/mail-doc-queue').start();
+    // 🧾 הזמנת רכש שהפכה לסופית בפריוריטי — למנהל הפרויקט וליוזם הדרישה (וואטסאפ ומייל)
+    require('./ai/po-notify').start();
   }
   // התראה למנהלים כשתקרת המעבד מאטה את הסוכנים
   LoadMonitor.start();

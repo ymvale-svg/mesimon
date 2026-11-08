@@ -778,6 +778,25 @@ CREATE TABLE IF NOT EXISTS wa_log (
 CREATE INDEX IF NOT EXISTS idx_wa_log_at ON wa_log(at);
 
 /*
+ * התראות על הזמנות רכש שהפכו לסופיות בפריוריטי (‎ai/po-notify.js‎) — שורה לכל הזמנה, כדי שלא תישלח פעמיים.
+ * ‎status‎: ‎baseline‎ — הייתה סופית כבר בסריקה הראשונה (לא נשלחה); ‎sent‎; ‎error‎ — ינסה שוב;
+ * ‎none‎ — אין למי לשלוח. ‎wa_pending‎ — משתמשי משימון שהוואטסאפ אליהם ממתין לשעות הפעילות.
+ */
+CREATE TABLE IF NOT EXISTS po_notices (
+  company     TEXT    NOT NULL,
+  ordname     TEXT    NOT NULL,
+  version     INTEGER NOT NULL DEFAULT 1,
+  status      TEXT    NOT NULL,
+  recipients  TEXT    NOT NULL DEFAULT '[]',
+  wa_pending  TEXT    NOT NULL DEFAULT '[]',
+  attempts    INTEGER NOT NULL DEFAULT 0,
+  error       TEXT    NOT NULL DEFAULT '',
+  created_at  TEXT    NOT NULL,
+  sent_at     TEXT,
+  PRIMARY KEY (company, ordname)
+);
+
+/*
  * הצעות שה-AI הכין מהמייל וממתינות להחלטה. ‎data‎ — ההצעה עצמה: כותרת,
  * תיאור, צ'קליסט, יעד, אנשים ובקשת AI אם יש.
  */
@@ -1947,8 +1966,13 @@ function ensureFirstAdmin() {
   console.log('  ' + '='.repeat(58));
   console.log('  נוצר חשבון מנהל המערכת הראשון:');
   console.log(`     אימייל:  ${email}`);
-  console.log(`     סיסמה:   ${password}`);
-  if (generated) console.log('  יש לשמור אותה עכשיו — היא לא תוצג שוב.');
+  // סיסמה שהוגדרה ב-ADMIN_PASSWORD לא נכתבת ללוג; רק סיסמה שנוצרה כאן מוצגת, פעם אחת
+  if (generated) {
+    console.log(`     סיסמה:   ${password}`);
+    console.log('  יש לשמור אותה עכשיו — היא לא תוצג שוב. מומלץ להחליף אותה בכניסה הראשונה.');
+  } else {
+    console.log('     סיסמה:   מתוך ADMIN_PASSWORD');
+  }
   console.log('  ' + '='.repeat(58));
   console.log('');
 }

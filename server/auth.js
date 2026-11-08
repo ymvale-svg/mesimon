@@ -128,33 +128,52 @@ const clearCookieHeader = () => `${COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max
 // ---------------------------------------------------------------------------
 
 const MAX_ATTEMPTS = 10;
+// מגבלה לפי חשבון, בנוסף למגבלה לפי כתובת: X-Forwarded-For נשלט ע"י הלקוח,
+// ולכן החלפת הכותרת בכל בקשה עוקפת את המגבלה לפי כתובת בלבד.
+const MAX_ACCOUNT_ATTEMPTS = 20;
 const WINDOW_MS = 15 * 60 * 1000;
 const attempts = new Map();
 
 const clientIp = (req) =>
   String(req.headers['x-forwarded-for'] ?? '').split(',')[0].trim() || req.socket?.remoteAddress || 'unknown';
 
-function checkLoginRate(req) {
-  const ip = clientIp(req);
+const accountKey = (account) => {
+  const a = String(account ?? '').trim().toLowerCase();
+  return a ? `acct:${a}` : null;
+};
+
+function rateKeys(req, account) {
+  const keys = [[`ip:${clientIp(req)}`, MAX_ATTEMPTS]];
+  const acct = accountKey(account);
+  if (acct) keys.push([acct, MAX_ACCOUNT_ATTEMPTS]);
+  return keys;
+}
+
+function checkLoginRate(req, account) {
   const now = Date.now();
-  const entry = attempts.get(ip);
-  if (entry && now > entry.resetAt) attempts.delete(ip);
-  const current = attempts.get(ip);
-  if (current && current.count >= MAX_ATTEMPTS) {
-    const minutes = Math.ceil((current.resetAt - now) / 60000);
-    throw unauthorized(`יותר מדי ניסיונות התחברות. נסה שוב בעוד ${minutes} דקות.`);
+  for (const [key, max] of rateKeys(req, account)) {
+    const entry = attempts.get(key);
+    if (entry && now > entry.resetAt) attempts.delete(key);
+    const current = attempts.get(key);
+    if (current && current.count >= max) {
+      const minutes = Math.ceil((current.resetAt - now) / 60000);
+      throw unauthorized(`יותר מדי ניסיונות התחברות. נסה שוב בעוד ${minutes} דקות.`);
+    }
   }
 }
 
-function noteFailedLogin(req) {
-  const ip = clientIp(req);
+function noteFailedLogin(req, account) {
   const now = Date.now();
-  const entry = attempts.get(ip);
-  if (entry && now <= entry.resetAt) entry.count++;
-  else attempts.set(ip, { count: 1, resetAt: now + WINDOW_MS });
+  for (const [key] of rateKeys(req, account)) {
+    const entry = attempts.get(key);
+    if (entry && now <= entry.resetAt) entry.count++;
+    else attempts.set(key, { count: 1, resetAt: now + WINDOW_MS });
+  }
 }
 
-const clearLoginRate = (req) => attempts.delete(clientIp(req));
+const clearLoginRate = (req, account) => {
+  for (const [key] of rateKeys(req, account)) attempts.delete(key);
+};
 
 // ניקוי תקופתי כדי שהמפה לא תגדל ללא הגבלה
 setInterval(() => {

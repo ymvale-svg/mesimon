@@ -797,16 +797,17 @@ router.get('/api/auth/google/callback', async (req, res, ctx) => {
 router.post('/api/auth/login', async (req, res) => {
   Auth.checkLoginRate(req);
   const { email, password } = await readJson(req);
+  Auth.checkLoginRate(req, email);
 
   let result;
   try {
     result = Auth.login(email, password);
   } catch (err) {
-    Auth.noteFailedLogin(req);
+    Auth.noteFailedLogin(req, email);
     throw err;
   }
 
-  Auth.clearLoginRate(req);
+  Auth.clearLoginRate(req, email);
   const { actorType, actor } = result;
   const { token, expires } = Auth.createSession(actorType, actor.id);
   res.setHeader('set-cookie', Auth.cookieHeader(token, expires, req));
@@ -3629,6 +3630,10 @@ function assertMayEditProject(actor, project) {
   if (visible !== null && !visible.has(project.id)) {
     throw forbidden('אין לך גישה לפרויקט הזה');
   }
+  // 🔒 פרויקט מסווג — מי שהסיווג אינו מתיר לו לראות אותו גם אינו עורך, מוחק או מחליף את מנהלו
+  if (!Cls.mayReadProject(actor, project)) {
+    throw forbidden('אין לך גישה לפרויקט הזה');
+  }
 
   if (P.level(actor, 'create_project') === 'own'
       && project.created_by !== actor.id && project.manager_id !== actor.id) {
@@ -3656,6 +3661,7 @@ router.get('/api/projects/:id/images', async (req, res, ctx) => {
   // הרשאת הצפייה זהה לזו של רשימת הפרויקטים — פרויקט שאינו נראה, גם תמונותיו לא
   const visible = visibleProjectIds(actor);
   if (visible !== null && !visible.has(project.id)) throw forbidden();
+  if (!Cls.mayReadProject(actor, project)) throw forbidden();
   sendJson(res, 200, { images: projectImages(project.id) });
 });
 
@@ -3728,6 +3734,7 @@ router.get('/api/project-images/:id/view', async (req, res, ctx) => {
   if (!image) throw notFound('התמונה לא נמצאה');
   const visible = visibleProjectIds(actor);
   if (visible !== null && !visible.has(image.project_id)) throw forbidden();
+  if (!Cls.mayReadProject(actor, D.get('SELECT * FROM projects WHERE id = ?', image.project_id))) throw forbidden();
 
   const filePath = path.join(D.UPLOADS_DIR, image.stored_name);
   if (!fs.existsSync(filePath)) throw notFound('הקובץ אינו קיים בשרת');
@@ -5257,9 +5264,12 @@ router.get('/api/search', async (req, res, ctx) => {
    */
   const visibleProjects = visibleProjectIds(actor);
   const projects = D.all(
-    'SELECT id, name, description, status FROM projects WHERE name LIKE ? OR description LIKE ?',
+    'SELECT id, name, description, status, topic, sens, manager_id, created_by FROM projects WHERE name LIKE ? OR description LIKE ?',
     like, like
-  ).filter((p) => visibleProjects === null || visibleProjects.has(p.id));
+  ).filter((p) => visibleProjects === null || visibleProjects.has(p.id))
+    // 🔒 פרויקט מסווג — אותו כלל כמו ברשימת הפרויקטים (‎listProjectsFor‎)
+    .filter((p) => Cls.mayReadProject(actor, p))
+    .map(({ topic, sens, manager_id, created_by, ...p }) => p);
 
   /*
    * דירוג: התאמה בתחילת השם קודמת להתאמה באמצעו, ופרויקט קודם למשימה בדירוג
