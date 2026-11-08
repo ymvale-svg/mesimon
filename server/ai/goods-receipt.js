@@ -30,6 +30,7 @@ const path = require('node:path');
 const D = require('../db');
 const Claude = require('./claude');
 const { BTN } = require('./wa-ui');
+const Prefs = require('./priority-prefs');
 const Priority = require('../priority');
 const WhatsApp = require('../whatsapp');
 const { receiptPdf } = require('./gr-pdf');
@@ -84,6 +85,7 @@ function buttonsFor(s) {
   if (s.pendingNew) return ['צרף כנספח', 'קבלה חדשה', 'להתעלם ❌'];
   if (s.pendingList) return [BTN.yes, BTN.no];
   switch (s.step) {
+    case 'menu': return [MENU_GR, MENU_PD];
     case 'offer': case 'doctype': return [BTN.yes, BTN.no];
     case 'header': return [BTN.yes, s.noVat ? 'עם מע"מ' : 'ללא מע"מ', BTN.cancel];
     case 'order': return ['בלי הזמנה ❌', BTN.cancel];
@@ -109,29 +111,12 @@ const doneKey = (userId) => `goods_receipt_done:${userId}`;
 
 /*
  * העדפות המשתמש (משתמש משימון), לכל חברה בנפרד: הפרויקט והמחסן שבחר בפעם האחרונה — ברירת המחדל בפעם הבאה.
- * נשמר כשהטיוטא נפתחת. ‎{ [company]: { project: {code, des}, warehouse, byProject: {[code]: warehouse} } }‎
+ * משותף לכל הזרימות של פריוריטי (‎priority-prefs.js‎). נשמר כשהטיוטא נפתחת.
  */
-const prefsKey = (userId) => `goods_receipt_prefs:${userId}`;
-function prefsOf(userId, company) {
-  try {
-    const row = D.get('SELECT value FROM settings WHERE key = ?', prefsKey(userId));
-    return (row ? JSON.parse(row.value) : {})[company] ?? null;
-  } catch { return null; }
-}
+const prefsOf = (userId, company) => Prefs.of(userId, company);
 function rememberPrefs(userId, s) {
   if (!userId || !s.company || !s.project?.code) return;
-  try {
-    const row = D.get('SELECT value FROM settings WHERE key = ?', prefsKey(userId));
-    const all = row ? JSON.parse(row.value) : {};
-    const c = all[s.company] ?? {};
-    c.project = { code: s.project.code, des: s.project.des ?? '' };
-    if (s.warehouse) { c.warehouse = s.warehouse; c.byProject = { ...(c.byProject ?? {}), [s.project.code]: s.warehouse }; }
-    c.at = Date.now();
-    all[s.company] = c;
-    D.setSetting(prefsKey(userId), all);
-  } catch (err) {
-    console.error('[משימון] העדפות קבלת סחורה:', err.message);
-  }
+  Prefs.remember(userId, { company: s.company, project: s.project, warehouse: s.warehouse });
 }
 /** GR שהפך לסופי בבוט ב-15 הדקות האחרונות (‎null‎ — אין) */
 function lastFinal(userId) {
@@ -507,10 +492,13 @@ function dueText(s, code) {
   return ` — לתשלום עד ${ymdHe(due)} (מתאריך ${s.doc?.doc_type === 'invoice' ? 'החשבונית' : 'המסמך'} ${ymdHe(from)})`;
 }
 
+/** תפריט פריוריטי — בכפתורים. הכיתוב של כל כפתור הוא הטריגר של הזרימה ("קבלת סחורה", "דרישת רכש") */
+const MENU_GR = '📦 קבלת סחורה';
+const MENU_PD = '🛒 דרישת רכש';
 const MENU = ['🗂 *פריוריטי* — מה לעשות?',
-  '*1.* 📦 קבלת סחורה (תעודת משלוח או חשבונית ← GR)',
-  '_בקרוב: חשבוניות חלקיות ועוד._',
-  'כתבו מספר, או פשוט המשיכו במה שרציתם — זה יגיע למשימות כרגיל.'].join('\n');
+  '📦 *קבלת סחורה* — תעודת משלוח או חשבונית ← GR',
+  '🛒 *דרישת רכש* — רשימת פריטים (צילום, הקלטה או הקלדה) ← דרישה לאישור',
+  '_או פשוט המשיכו במה שרציתם — זה יגיע למשימות כרגיל._'].join('\n');
 
 const reply = (s, text, extra = {}) => { if (s && s.step) s.lastPrompt = text; return { s, replies: [text], ...extra }; };
 
@@ -1550,7 +1538,7 @@ async function cancel(user, s, why = 'בוטלה') {
  * הודעה של העובד — טקסט, קובץ, או שניהם.
  * @returns {Promise<{replies: string[], status: string, result: string}>}
  */
-async function handle({ user, text = '', file = null, reaction = false }) {
+async function handle({ user, text = '', file = null, reaction = false, allow = { gr: true, pd: false } }) {
   // 👍🏽 → 👍: גוון עור ובורר תצוגה של אימוג'י אינם חלק מהתשובה
   let t = String(text ?? '').replace(/[\u{1F3FB}-\u{1F3FF}\uFE0F]/gu, '').replace(/(👍|👌|✅|✔|👎)\1+/gu, '$1').trim();
   let s = load(user.id);
@@ -1610,7 +1598,7 @@ async function handle({ user, text = '', file = null, reaction = false }) {
   // "פריוריטי" בלי "קבלת סחורה" — תפריט. היום יש בו רק קבלת סחורה; בהמשך גם חשבוניות חלקיות ועוד
   if (!s && !file && isPriority(t) && !isTrigger(t)) {
     save(user.id, { step: 'menu', startedAt: Date.now() });
-    return { replies: [MENU], status: 'ok', result: 'תפריט פריוריטי' };
+    return { replies: [MENU], status: 'ok', result: 'תפריט פריוריטי', buttons: [MENU_GR, MENU_PD] };
   }
 
   // תמונה או מסמך בלי "קבלת סחורה" — כנראה מסמך לקליטה. שואלים, ושומרים את הקובץ עד התשובה
@@ -1720,7 +1708,7 @@ async function handle({ user, text = '', file = null, reaction = false }) {
     }
     if (!out && early && s.pendingNew && !file) out = await answerPendingNew(user, s, t);
     if (!out && early && file) out = await routeFile(user, s, file, t);
-    if (!out) out = await step(user, s, t, file);
+    if (!out) out = await step(user, s, t, file, allow);
   } catch (err) {
     console.error('[משימון] קבלת סחורה:', err.message);
     save(user.id, s);
@@ -1747,11 +1735,14 @@ async function handle({ user, text = '', file = null, reaction = false }) {
     buttons: out.s === null ? [] : buttonsFor(out.s ?? s) };
 }
 
-async function step(user, s, t, file) {
+async function step(user, s, t, file, allow = { gr: true, pd: false }) {
   switch (s.step) {
     case 'menu': {
-      // "1" / "קבלת סחורה" — מתחילים. כל דבר אחר — לא לפריוריטי: יוצאים מהתפריט, והבוט הרגיל מטפל
+      // "קבלת סחורה" (הכפתור) — מתחילים. "דרישת רכש" — הבוט מעביר לדרישת הרכש (wa-bot), וכאן רק כשאינה פתוחה לעובד.
+      // כל דבר אחר — לא לפריוריטי: יוצאים מהתפריט, והבוט הרגיל מטפל
       if (isPriority(t) && !isTrigger(t) && !file) return reply(s, MENU);
+      if (/דרישת\s*רכש/.test(t)) return { s: null, replies: ['דרישת רכש עוד לא פתוחה לך בבוט. אם צריך — פנו למנהל המערכת.'], status: 'ok', result: 'דרישת רכש — לא מורשה' };
+      if (!allow.gr && (file || isTrigger(t) || /^(1|אחת|אחד)([\s,.!]|$)/.test(t))) return { s: null, replies: ['קבלת סחורה עוד לא פתוחה לך בבוט. אם צריך — פנו למנהל המערכת.'], status: 'ok', result: 'קבלת סחורה — לא מורשה' };
       if (file || isTrigger(t) || /^(1|אחת|אחד)([\s,.!]|$)/.test(t)) {
         s.step = 'doc';
         if (file) return onMainDoc(user, s, file);
@@ -2164,4 +2155,9 @@ async function step(user, s, t, file) {
   }
 }
 
-module.exports = { isTrigger, isPriority, opens, active, pending, pausedNote, abandon, switchCancels, wantsUndoFinal, handle, sweep, _codeLines: codeLines, _similarLines: similarLines, _askParts: askParts, _projectsOf: projectsOf, _findProjects: findProjects, _ai: ai, _load: load, _clear: (userId) => clear(userId, load(userId)) };
+/** תפריט פריוריטי פתוח (בלי קליטה) */
+const inMenu = (userId) => { const s = load(userId); return Boolean(fresh(s) && s.step === 'menu' && Date.now() - (s.at ?? 0) < IDLE); };
+/** בחירה בזרימה אחרת (דרישת רכש) — התפריט יורד */
+function dropMenu(userId) { const s = load(userId); if (s?.step === 'menu') clear(userId, s); }
+
+module.exports = { inMenu, dropMenu, isTrigger, isPriority, opens, active, pending, pausedNote, abandon, switchCancels, wantsUndoFinal, handle, sweep, _codeLines: codeLines, _similarLines: similarLines, _askParts: askParts, _projectsOf: projectsOf, _findProjects: findProjects, _ai: ai, _load: load, _clear: (userId) => clear(userId, load(userId)) };
