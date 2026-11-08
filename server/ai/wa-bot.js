@@ -3132,6 +3132,22 @@ async function deliver(userId, text) {
 }
 
 /**
+ * הודעה יזומה עם קבצים (PDF) — להתראה על הזמנת רכש (‎po-notify.js‎). הקבצים קודם, והטקסט אחרון.
+ * ‎false‎ — אין בוט פעיל, או שלעובד אין טלפון. בלי בדיקת שעות: מי שקורא אחראי לכך.
+ */
+async function sendFilesToUser(userId, { files = [], text = '', action = 'notice', result = '' }) {
+  if (!D.getSetting('wa_bot_enabled', true) || !isConfigured()) return false;
+  const u = D.get("SELECT id, full_name, phone FROM users WHERE id = ? AND status = 'active'", userId);
+  const ch = channel();
+  if (!u?.phone || !ch) return false;
+  const chatId = `${u.phone}@c.us`;
+  for (const f of files) await WhatsApp.sendFile(ch, chatId, f);
+  for (const part of splitMessage(text)) await sendText(chatId, part);
+  log({ channel: 'private', chatId, userId: u.id, who: u.full_name, action, status: 'ok', text: files.map((f) => `[📄 ${f.fileName}]`).join(' '), result: result || String(text).slice(0, 200) });
+  return true;
+}
+
+/**
  * הודעה יזומה לעובד מהבוט — לשאלת "עסקי או אישי?" ולהודעת המעבר בוואטסאפ
  * האישי. מחוץ לשעות — לתור. ‎false‎ — אין בוט, או שלעובד אין טלפון: אז מי
  * שקרא לכאן שולח התראה במערכת במקום.
@@ -3343,7 +3359,7 @@ module.exports = {
   init, start, tick, publicStatus, save, remove, checkState, qr, isConfigured,
   listGroups, bindGroup, userByPhone, markDone, readLog, todayStats, simulate, simulateGroup, inHours,
   // לשליחה ממודולים אחרים — התראה לפני פגישה (‎meetings.js‎), עם רישום ביומן הבוט
-  sendText, log, notifyAssignment, assistant, deliver,
+  sendText, log, notifyAssignment, assistant, deliver, sendFilesToUser,
   _internal: {
     storeGroupMessage, processGroup, handleDirect, sanitizeGroup, resolveMentions, candidatesOf, converse, turn, withFollowUps, sendSummaries, YES,
     findRecipients, findContactCards, sourceOf, suggestionFeedback, flushOutbox, todayMessage, splitMessage, parseSuggestionCommand, businessCommand, chatOf, saveChat,

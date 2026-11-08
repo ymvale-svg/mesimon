@@ -247,6 +247,49 @@ async function getOrder(company, ordname) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// התראה על הזמנת רכש שהפכה לסופית (‎ai/po-notify.js‎) — קריאה בלבד
+// ---------------------------------------------------------------------------
+
+/** הזמנות בסטטוס סופי, החדשות קודם */
+async function finalOrders(company, statuses, top = 200) {
+  const f = statuses.map((s) => `STATDES eq '${q(s)}'`).join(' or ');
+  return rows(await call(company, 'GET', `PORDERS?$filter=${enc(f)}&$select=ORDNAME,STATDES,CURVERSION&$orderby=ORD desc&$top=${top}`));
+}
+
+/** הזמנה מלאה להתראה: כותרת, שורות עם מחירים, ואיש הקשר / כתובת האספקה */
+async function orderForNotice(company, ordname) {
+  const k = `PORDERS('${q(ordname)}')`;
+  const h = strip(await call(company, 'GET', `${k}?$select=ORDNAME,SUPNAME,CDES,STATDES,CURDATE,PRDNO,PROJDOCNO,PROJDES,OWNERLOGIN,TYPEDES,WARHSNAME,PAYDES,QPRICE,PERCENT,DISPRICE,VAT,TOTPRICE,CODE,DETAILS,CURVERSION`));
+  const lines = rows(await call(company, 'GET', `${k}/PORDERITEMS_SUBFORM?$select=LINE,PARTNAME,PDES,TQUANT,TUNITNAME,PRICE,PERCENT,QPRICE,ICODE,DUEDATE,REQDATE,PRDNO,REMARK`));
+  const ship = await call(company, 'GET', `${k}/SHIPTO_SUBFORM`).then(strip).catch(() => null);
+  return { ...h, lines: lines.sort((a, b) => (a.LINE ?? 0) - (b.LINE ?? 0)), ship };
+}
+
+/** מי פתח את דרישת הרכש (‎INITUSERLOGIN‎; אם ריק — בעל הדרישה) */
+async function demandInitiator(company, prdno) {
+  const d = rows(await call(company, 'GET', `PURDEMANDS?$filter=${enc(`PRDNO eq '${q(prdno)}'`)}&$select=PRDNO,INITUSERLOGIN,OWNERLOGIN&$top=1`))[0];
+  return d ? (d.INITUSERLOGIN || d.OWNERLOGIN || null) : null;
+}
+
+/** מנהל הפרויקט בפריוריטי (‎MUSERLOGIN‎ במסך הפרויקטים) */
+async function projectManager(company, projdocno) {
+  const p = rows(await call(company, 'GET', `DOCUMENTS_p?$filter=${enc(`DOCNO eq '${q(projdocno)}'`)}&$select=DOCNO,MUSERLOGIN&$top=1`))[0];
+  return p?.MUSERLOGIN || null;
+}
+
+/** משתמש פריוריטי — שם ומייל (‎USERSB‎; ‎USERS‎ סגור ל-API). נשמר לשעה */
+const userCache = new Map();
+async function priorityUser(company, login) {
+  const key = `${company}|${login}`;
+  const hit = userCache.get(key);
+  if (hit && Date.now() - hit.at < 3600000) return hit.v;
+  const u = rows(await call(company, 'GET', `USERSB?$filter=${enc(`USERLOGIN eq '${q(login)}'`)}&$select=USERLOGIN,SNAME,EMAIL,STATDES&$top=1`))[0];
+  const v = u ? { login: u.USERLOGIN, name: u.SNAME ?? u.USERLOGIN, email: String(u.EMAIL ?? '').trim(), active: (u.STATDES ?? 'עובד פעיל') === 'עובד פעיל' } : null;
+  userCache.set(key, { at: Date.now(), v });
+  return v;
+}
+
 /** הזמנות מאושרות של הספק שיש בהן יתרה */
 async function openOrders(company, supname) {
   const list = rows(await call(company, 'GET',
@@ -734,6 +777,7 @@ async function cancelReceipt(company, docno) {
 module.exports = {
   COMPANIES, isEnabled, allowed, companyOf, isTest, resolveCompany, companiesByName, PriorityError,
   GENERAL, NO_VAT_CODE, TAX_CODES, PAY_TERMS, DEFAULT_PAY, payTerm, payLabel, payFromText, dueDate, projectWarehouses, warehouses, warehouseExists, defaultWarehouse, supplierHistory, recentLines, partByCode, findPartsByText, searchParts, generalCoding, warehouseOf, findSuppliers, supplierByCode, findReceiptByBooknum, getOrder, openOrders, findPartExact, lastSubchapter, projects, matchProjects, readReceipt,
+  finalOrders, orderForNotice, demandInitiator, projectManager, priorityUser,
   readDialog, createReceipt, addOrderLine, addFreeLine, setLineQty, setLineDes, setHeader, attach, deleteAttachment, setDialog, finalizeReceipt, cancelReceipt, receiptStatus, deleteLines,
   _call: call
 };
