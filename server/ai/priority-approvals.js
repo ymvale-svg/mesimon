@@ -13,7 +13,8 @@
  *   3. השם — שם פרטי ומשפחה (בכל סדר) זהים לשם המלא במשימון.
  * לא נמצא — מנהלי המערכת מקבלים התראה (פעם אחת לכל שם משתמש).
  *
- * באילו חברות: ההגדרה ‎pd_notify_companies‎ (מערך קודים); ברירת המחדל — החברות שב-‎PRIORITY_COMPANIES‎.
+ * באילו חברות (הוחלט 08.11.26): כל החברות המוכרות — האמיתיות (קריאה בלבד; אין צורך בהגדרה) ועותק הבדיקה כשהוא פתוח.
+ * ההגדרה ‎pd_notify_companies‎ (מערך קודים) — רק אם רוצים לצמצם.
  */
 const D = require('../db');
 const Priority = require('../priority');
@@ -87,7 +88,8 @@ async function mapping() {
 
 const companies = () => {
   const v = D.getSetting('pd_notify_companies', null);
-  return Array.isArray(v) && v.length ? v : Priority.allowed();
+  if (Array.isArray(v) && v.length) return v;
+  return [...new Set([...Priority.COMPANIES.filter((c) => !c.test).map((c) => c.code), ...Priority.allowed()])];
 };
 
 function messageFor(company, d, owner) {

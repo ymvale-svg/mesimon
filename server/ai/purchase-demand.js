@@ -26,7 +26,7 @@ const Auth = require('../auth');
 const P = require('../permissions');
 const Prefs = require('./priority-prefs');
 const Approvals = require('./priority-approvals');
-const { BTN, YES, NO, CANCEL, normalize } = require('./wa-ui');
+const { BTN, YES, NO, CANCEL, normalize, label, labels, sameLabel } = require('./wa-ui');
 
 const SKILL = path.join(__dirname, 'skills', 'purchase-demand.md');
 const TZ = 'Asia/Jerusalem';
@@ -96,24 +96,6 @@ const ymdHe = (d) => (d ? String(d).slice(0, 10).split('-').reverse().join('.') 
 const today = () => new Intl.DateTimeFormat('en-CA', { timeZone: TZ }).format(new Date());
 const plusDays = (ymd, n) => { const d = new Date(`${ymd}T12:00:00Z`); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
 const nowHe = () => new Date().toLocaleString('he-IL', { timeZone: TZ, day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' });
-/** כיתוב כפתור — עד 20 תווים (וואטסאפ); הכיתוב הוא בדיוק התשובה שהבוט מבין */
-const label = (t) => { const x = String(t ?? '').replace(/\s+/g, ' ').trim(); return x.length <= 20 ? x : `${x.slice(0, 19).trim()}…`; };
-/**
- * כיתובים לכמה כפתורים: כשהקיצור מתנגש ("מבואות חיפה sea&clo…" פעמיים) — בלי המילים המשותפות בתחילת השמות
- * ("מגרש 207", "מגרש 208"), וכשגם זה לא מספיק — סוף השם.
- */
-function labels(names) {
-  const out = names.map(label);
-  if (new Set(out).size === out.length) return out;
-  const ws = names.map((n) => String(n ?? '').replace(/\s+/g, ' ').trim().split(' '));
-  let k = 0;
-  while (ws.every((w) => w.length > k + 1 && w[k] === ws[0][k])) k++;
-  const tail = ws.map((w) => label(w.slice(k).join(' ')));
-  if (new Set(tail).size === tail.length) return tail;
-  return names.map((n) => { const x = String(n ?? '').replace(/\s+/g, ' ').trim(); return x.length <= 20 ? x : `…${x.slice(-19).trim()}`; });
-}
-const sameLabel = (a, b) => normalize(a).replace(/…$/, '') === normalize(b).replace(/…$/, '') || (normalize(b).endsWith('…') && normalize(a).startsWith(normalize(b).slice(0, -1)));
-
 function companyLine(company) {
   const c = Priority.companyOf(company);
   return Priority.isTest(company)
@@ -283,10 +265,11 @@ function headerLines(s, { notes = [] } = {}) {
     `📅 תאריך: *${ymdHe(s.date)}*${s.date === today() ? ' (היום)' : ''}`,
     s.project ? `📁 פרויקט: *${s.project.des}* (${s.project.code})${s.projectFrom === 'pref' ? ' — הבחירה האחרונה שלך' : s.projectFrom === 'only' ? ' — הפרויקט היחיד בחברה' : ''}` : null,
     s.warehouse ? `🏬 מחסן: *${s.warehouseName || s.warehouse}* (${s.warehouse})${s.warehouseFrom === 'pref' ? ' — הבחירה האחרונה שלך' : ''}` : null,
+    s.demandCode ? `📋 ${s.demandCode.des}${s.codeFrom === 'pref' ? ' — הבחירה האחרונה שלך' : ''}` : null,
     ...notes
   ].filter(Boolean);
 }
-const CHANGE_HINT = '_לשנות — כתבו "תאריך 12.11", "פרויקט …", "מחסן …" או "סביבה"._';
+const CHANGE_HINT = '_לשנות — כתבו "תאריך 12.11", "פרויקט …", "מחסן …", "בדק" / "אתרי" או "סביבה"._';
 
 function itemLine(it) {
   const head = `*${it.n}.* ${it.description} — ${qtyText(it.qty)} ${it.unit || "יח'"}${it.note ? ` _(${it.note})_` : ''}`;
@@ -365,7 +348,40 @@ async function afterCompany(s, pre = []) {
     else return askProject(s, all, pre);
   }
   await chooseWarehouse(s);
+  const ask = await chooseCode(s, pre);
+  if (ask) return ask;
   return (s.items ?? []).length ? showList(s, pre) : askItems(s, pre);
+}
+
+/*
+ * רשימת המאשרים (‎CODENAME‎: "דרישות רכש אתרי" / "דרישות רכש בדק") — ממנה פריוריטי ממלא את המאשרים. בפעם הראשונה
+ * בחברה — שואלים, בכפתורים; מכאן — הבחירה האחרונה של המשתמש. לשנות — "אתרי" / "בדק" / "רשימת מאשרים".
+ */
+async function codesOf(s) { return Priority.demandCodes(s.company).catch(() => []); }
+async function chooseCode(s, pre = []) {
+  if (s.demandCode !== undefined) return null;
+  const codes = await codesOf(s);
+  const last = Prefs.of(s.uid, s.company)?.demandCode;
+  const hit = last && codes.find((c) => c.code === last);
+  if (hit) { s.demandCode = hit; s.codeFrom = 'pref'; return null; }
+  if (codes.length <= 1) { s.demandCode = codes[0] ?? null; s.codeFrom = 'only'; return null; }
+  return askCode(s, codes, pre);
+}
+function askCode(s, codes, pre = []) {
+  s.step = 'code';
+  const opts = codes.slice(0, 3);
+  // בלי המילים המשותפות ("דרישות רכש") — "אתרי", "בדק"
+  const ws = opts.map((c) => c.des.split(/\s+/));
+  let k = 0;
+  while (opts.length > 1 && ws.every((w) => w.length > k + 1 && w[k] === ws[0][k])) k++;
+  const btns = labels(ws.map((w) => w.slice(k).join(' ')));
+  s.codeOptions = opts.map((c, i) => ({ ...c, btn: btns[i] }));
+  return reply(s, [...pre, '📋 *איזו דרישה?* (לפי זה נקבעים המאשרים)', ...s.codeOptions.map((c) => `• ${c.des}`), '', '_בפעם הבאה אזכור את הבחירה._'].join('\n'),
+    s.codeOptions.map((c) => c.btn));
+}
+function pickCode(s, t, codes) {
+  const n = normalize(t);
+  return (s.codeOptions ?? codes).find((c) => sameLabel(t, c.btn ?? label(c.des)) || n === c.code || (n.length >= 3 && normalize(c.des).includes(n))) ?? null;
 }
 
 const GR = () => require('./goods-receipt');
@@ -422,8 +438,16 @@ async function headerCommand(s, t) {
   }
   if (COMPANY_CMD.test(t)) {
     if (writable().length < 2) return back(s, `${companyLine(s.company)}\nזו הסביבה היחידה שפתוחה לדרישות מהבוט.`);
-    s.company = null; s.project = null; s.warehouse = null; s.noPref = false;
+    s.company = null; s.project = null; s.warehouse = null; s.noPref = false; s.demandCode = undefined;
     return askCompany(s);
+  }
+  if (/^\s*(רשימת מאשרים|מאשרים|סוג דרישה|אתרי|בדק|דרישת רכש (אתרי|בדק)|רכש (אתרי|בדק))\s*$/.test(t)) {
+    const codes = await codesOf(s);
+    const word = t.match(/אתרי|בדק/)?.[0];
+    const c = word && codes.find((x) => x.des.includes(word));
+    if (c) { s.demandCode = c; s.codeFrom = 'user'; Prefs.set(s.uid, s.company, 'demandCode', c.code); return back(s, `📋 עודכן: *${c.des}*.`); }
+    if (codes.length > 1) return askCode(s, codes);
+    return back(s, codes.length ? `📋 ${codes[0].des} — הרשימה היחידה בחברה.` : '📋 אין בחברה רשימות מאשרים לדרישות.');
   }
   const pm = t.match(PROJECT_CMD);
   if (pm) {
@@ -482,6 +506,8 @@ async function projectAnswer(s, t, all) {
   s.projectOptions = null;
   s.warehouse = null;
   await chooseWarehouse(s);
+  const askC = await chooseCode(s, [`📁 פרויקט: *${p.des}* (${p.code})`, '']);
+  if (askC) return askC;
   return back(s, `📁 פרויקט: *${p.des}* (${p.code}) · 🏬 מחסן: *${s.warehouseName || s.warehouse}* (${s.warehouse})`);
 }
 
@@ -532,7 +558,7 @@ async function onText(user, s, t) {
   }
   if (changed.length) await resolveItems(s, changed);
   const added = await addItems(s, out.adds);
-  if (added.length) notes.push(`➕ נוספו ${added.length} ${added.length === 1 ? 'פריט' : 'פריטים'}.`);
+  if (added.length) notes.push(added.length === 1 ? "➕ נוסף פריט אחד." : `➕ נוספו ${added.length} פריטים.`);
   if (!notes.length) {
     if (out.action === 'done') return reply(s, 'עוד אין פריטים ברשימה. שלחו צילום, הקלטה או הקלדה של מה שצריך.', [BTN.cancel]);
     return reply(s, out.question || 'לא הבנתי. שלחו פריטים (פריט וכמות), תיקון ("שורה 2 — 20"), או *סיום* 🏁.', s.lastButtons ?? [BTN.cancel]);
@@ -584,10 +610,10 @@ async function submit(user, s) {
   // הבעלים בפריוריטי — העובד עצמו (לפי המייל / השם במסך המשתמשים); לא נמצא — משתמש ה-API, והשם בדו-שיח
   const owner = await Approvals.priorityLoginFor(user).catch(() => null);
   try {
-    prdno = await Priority.createDemand(c, { date: s.date, project: s.project?.code, warehouse: s.warehouse, details: detailsOf(user), owner });
+    prdno = await Priority.createDemand(c, { date: s.date, project: s.project?.code, warehouse: s.warehouse, details: detailsOf(user), owner, approvalCode: s.demandCode?.code ?? null });
   } catch (err) {
     // מחסן שנדחה — בלי מחסן (פריוריטי ממלא את מחסן הפרויקט)
-    try { prdno = await Priority.createDemand(c, { date: s.date, project: s.project?.code, details: detailsOf(user) }); s.notes = [...(s.notes ?? []), `הכותרת נדחתה (${err.message}) — נפתחה בלי מחסן${owner ? ' ובלי בעלים' : ''}`]; } catch (err2) {
+    try { prdno = await Priority.createDemand(c, { date: s.date, project: s.project?.code, details: detailsOf(user), approvalCode: s.demandCode?.code ?? null }); s.notes = [...(s.notes ?? []), `הכותרת נדחתה (${err.message}) — נפתחה בלי מחסן${owner ? ' ובלי בעלים' : ''}`]; } catch (err2) {
       alertAdmins(user, s, 'הדרישה לא נפתחה בפריוריטי', [err2.message]);
       return reply(s, 'לא הצלחתי לפתוח את הדרישה בפריוריטי. מנהל המערכת קיבל פירוט. הרשימה שמורה — נסו *סיום* שוב בעוד כמה דקות, או *ביטול*.', [BTN.done, BTN.cancel], { status: 'error', result: `פתיחה נכשלה: ${err2.message}` });
     }
@@ -630,6 +656,7 @@ async function submit(user, s) {
     ...(s.notes ?? [])
   ]).catch((err) => problems.push(`דו-שיח פנימי: ${err.message}`));
   Prefs.remember(user.id, { company: c, project: s.project, warehouse: s.warehouse });
+  if (s.demandCode?.code) Prefs.set(user.id, c, 'demandCode', s.demandCode.code);
 
   const failed = s.items.filter((x) => x.failed);
   if (failed.length) {
@@ -689,7 +716,7 @@ async function handle({ user, text = '', file = null, reaction = false, voice = 
   const heard = voice && t ? [`🎙 *שמעתי:* "${t}"`, ''] : [];
 
   // "דרישת רכש" — התחלה (או המשך של דרישה פתוחה)
-  if (!s || (isTrigger(t) && !file && !s.items?.length)) {
+  if (!s || (isTrigger(t) && !file && !s.items?.length && s.step !== 'code')) {
     if (isTrigger(t) && CANCEL.test(t.replace(TRIGGER, '').trim())) { if (s) clear(user.id, s); return { replies: [s ? 'דרישת הרכש בוטלה.' : 'אין דרישת רכש פתוחה.'], status: 'ok', result: 'ביטול' }; }
     const out = await start(user, heard);
     if (out.s) save(user.id, out.s);
@@ -704,7 +731,7 @@ async function handle({ user, text = '', file = null, reaction = false, voice = 
   }
   s.uid = user.id;
   if (s.paused) s.paused = false;
-  if (isTrigger(t) && !file) return finish(user, s, s.lastPrompt ? reply(s, `🛒 ממשיכים בדרישת הרכש:\n\n${s.lastPrompt}`, s.lastButtons ?? []) : showList(s), 'המשך');
+  if (isTrigger(t) && !file && s.step !== 'code') return finish(user, s, s.lastPrompt ? reply(s, `🛒 ממשיכים בדרישת הרכש:\n\n${s.lastPrompt}`, s.lastButtons ?? []) : showList(s), 'המשך');
   if (GR_TRIGGER.test(t)) { save(user.id, { ...s, paused: true }); return { pass: true, replies: [], status: 'ok', result: 'מעבר לקבלת סחורה' }; }
   if (!file && (CANCEL.test(t) || sameLabel(t, BTN.cancel))) { clear(user.id, s); return { replies: ['דרישת הרכש בוטלה. לא נכתב דבר בפריוריטי.'], status: 'ok', result: 'ביטול' }; }
 
@@ -757,6 +784,14 @@ async function step(user, s, t, file, { reaction }) {
       if (file) return reply(s, 'קודם הפרויקט — ואז הרשימה.', s.lastButtons ?? []);
       const all = await projectsOf(s.company);
       return projectAnswer(s, t, all);
+    }
+    case 'code': {
+      const codes = await codesOf(s);
+      const c = pickCode(s, t, codes);
+      if (!c) return t.split(/\s+/).length >= 6 ? null : askCode(s, codes);
+      s.demandCode = c; s.codeFrom = 'user';
+      Prefs.set(s.uid, s.company, 'demandCode', c.code);
+      return back(s, `📋 *${c.des}* — אזכור לפעם הבאה.`);
     }
     case 'warehouse': {
       const opts = s.warehouseOptions ?? [];

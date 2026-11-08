@@ -740,8 +740,9 @@ const pdKey = (prdno) => `PURDEMANDS('${q(prdno)}')`;
 const PD_TYPES = { '02': 'רכש אתרי', '01': 'רכש משרדי' };
 
 /** דרישת רכש טיוטא. ‎date‎ — ‎YYYY-MM-DD‎ */
-async function createDemand(company, { date, project, warehouse, details = '', ordType = '02', owner = null }) {
+async function createDemand(company, { date, project, warehouse, details = '', ordType = '02', owner = null, approvalCode = null }) {
   const body = { PORDTYPECODE: ordType };
+  if (approvalCode) body.CODENAME = approvalCode;
   if (owner) body.OWNERLOGIN = owner;
   if (date) body.CURDATE = `${date}T00:00:00Z`;
   if (project) body.PROJDOCNO = project;
@@ -786,6 +787,22 @@ async function recentDemandProjects(company, top = 80) {
   const n = new Map();
   for (const r of list) if (r.PROJDOCNO) n.set(r.PROJDOCNO, (n.get(r.PROJDOCNO) ?? 0) + 1);
   return [...n].sort((a, b) => b[1] - a[1]).map(([code]) => code);
+}
+
+/**
+ * רשימות המאשרים שבשימוש בדרישות החברה (‎CODENAME‎ / ‎CODEDES‎ — למשל 13 "דרישות רכש אתרי", 14 "דרישות רכש בדק").
+ * מסך רשימות המאשרים סגור ל-API, ולכן מהדרישות הקודמות. הנפוצה קודם. נשמר לשעה.
+ */
+const codesCache = new Map();
+async function demandCodes(company) {
+  const hit = codesCache.get(company);
+  if (hit && Date.now() - hit.at < 3600000) return hit.list;
+  const list = rows(await call(company, 'GET', `PURDEMANDS?$filter=${enc("CODENAME ne ''")}&$select=CODENAME,CODEDES&$orderby=CURDATE%20desc&$top=300`));
+  const m = new Map();
+  for (const r of list) if (r.CODENAME) m.set(r.CODENAME, { code: r.CODENAME, des: r.CODEDES ?? r.CODENAME, n: (m.get(r.CODENAME)?.n ?? 0) + 1 });
+  const out = [...m.values()].sort((a, b) => b.n - a.n);
+  codesCache.set(company, { at: Date.now(), list: out });
+  return out;
 }
 
 /** כל הדרישות שמחכות לאישור בחברה, עם המאשרים ומספר השורות */
@@ -879,6 +896,6 @@ module.exports = {
   COMPANIES, isEnabled, allowed, companyOf, isTest, resolveCompany, companiesByName, PriorityError,
   GENERAL, NO_VAT_CODE, TAX_CODES, PAY_TERMS, DEFAULT_PAY, payTerm, payLabel, payFromText, dueDate, projectWarehouses, warehouses, warehouseExists, defaultWarehouse, supplierHistory, recentLines, partByCode, findPartsByText, searchParts, generalCoding, warehouseOf, findSuppliers, supplierByCode, findReceiptByBooknum, getOrder, openOrders, findPartExact, lastSubchapter, projects, matchProjects, readReceipt,
   readDialog, createReceipt, addOrderLine, addFreeLine, setLineQty, setLineDes, setHeader, attach, deleteAttachment, setDialog, finalizeReceipt, cancelReceipt, receiptStatus, deleteLines,
-  PD_TYPES, recentDemandProjects, createDemand, addDemandLine, setDemand, submitDemand, isNoApproversError, readDemand, waitingDemands, nextSigner, cancelDemand, setDemandDialog, attachDemand, priorityUsers, budgetPairs,
+  PD_TYPES, demandCodes, recentDemandProjects, createDemand, addDemandLine, setDemand, submitDemand, isNoApproversError, readDemand, waitingDemands, nextSigner, cancelDemand, setDemandDialog, attachDemand, priorityUsers, budgetPairs,
   _call: call
 };

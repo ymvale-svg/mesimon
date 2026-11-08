@@ -54,4 +54,16 @@ function warehouseFor(userId, company, projectCode) {
   return p?.byProject?.[projectCode] ?? null;
 }
 
-module.exports = { of, lastCompany, remember, warehouseFor };
+/** ערך נוסף לחברה (למשל ‎demandCode‎ — רשימת המאשרים של דרישת הרכש) */
+function set(userId, company, field, value) {
+  if (!userId || !company) return;
+  try {
+    const a = all(userId);
+    a[company] = { ...(a[company] ?? {}), [field]: value, at: Date.now() };
+    D.setSetting(key(userId), a);
+  } catch (err) {
+    console.error('[משימון] העדפות פריוריטי:', err.message);
+  }
+}
+
+module.exports = { of, lastCompany, remember, warehouseFor, set };
