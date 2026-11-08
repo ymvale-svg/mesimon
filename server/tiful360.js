@@ -152,6 +152,9 @@ function actorFor(dept, assigneeId) {
   return (admin && Auth.loadActor('user', admin.id)) || actor;
 }
 
+// פרויקט בלי סיווג (כמו ‎ownClass‎ ב-classification.js)
+const UNCLASSIFIED = "(COALESCE(topic, '') = '' OR COALESCE(sens, 0) = 0)";
+
 function register(router, { createTask, saveAttachment, getTaskOr404 }) {
   /**
    * מה שתפעול 360 מציג בחלון השליחה: המשתמשים הפעילים לבחירת אחראי, הפרויקטים
@@ -165,7 +168,8 @@ function register(router, { createTask, saveAttachment, getTaskOr404 }) {
       `SELECT u.id, u.full_name AS name, u.email, COALESCE(d.name, '') AS department
          FROM users u LEFT JOIN departments d ON d.id = u.department_id
         WHERE u.status = 'active' ORDER BY u.full_name`);
-    const projects = D.all("SELECT id, name FROM projects WHERE status = 'active' ORDER BY name");
+    // 🔒 פרויקטים מסווגים אינם נחשפים למערכת חיצונית
+    const projects = D.all(`SELECT id, name FROM projects WHERE status = 'active' AND ${UNCLASSIFIED} ORDER BY name`);
     sendJson(res, 200, {
       department: dept.name,
       users,
@@ -209,7 +213,7 @@ function register(router, { createTask, saveAttachment, getTaskOr404 }) {
     // פרויקט: מה שנבחר בחלון, ואם לא נבחר — הפרויקט של נושא הקריאה
     let projectId;
     if (body.projectId) {
-      const p = D.get("SELECT id FROM projects WHERE id = ? AND status != 'done'", Number(body.projectId));
+      const p = D.get(`SELECT id FROM projects WHERE id = ? AND status != 'done' AND ${UNCLASSIFIED}`, Number(body.projectId));
       if (!p) throw badRequest('הפרויקט שנבחר אינו קיים או שהסתיים');
       projectId = p.id;
     } else {
