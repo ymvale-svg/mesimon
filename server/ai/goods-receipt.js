@@ -290,12 +290,56 @@ const REPLY_SCHEMA = {
 const skill = () => fs.readFileSync(SKILL, 'utf8');
 
 /** ניתן להחלפה בבדיקות — ‎_set({ extract, match, reply })‎ */
+/*
+ * הקובץ לקריאה ב-AI. תמונה גדולה מהמגבלה של תמונה (5MB אחרי base64 — צילום HD מוואטסאפ) נעטפת ב-PDF של עמוד
+ * אחד (JPEG כמו שהוא, בלי הקטנה ובלי איבוד איכות), כי המגבלה של מסמך גבוהה בהרבה.
+ */
+const IMAGE_MAX = 3.6 * 1024 * 1024;
+function fileBlock(file) {
+  const buf = fs.readFileSync(file.path);
+  if (file.mime.includes('pdf')) return { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: buf.toString('base64') } };
+  const jpeg = buf[0] === 0xff && buf[1] === 0xd8;
+  if (buf.length > IMAGE_MAX && jpeg) {
+    const pdf = jpegToPdf(buf);
+    if (pdf) return { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: pdf.toString('base64') } };
+  }
+  return { type: 'image', source: { type: 'base64', media_type: file.mime.includes('png') ? 'image/png' : 'image/jpeg', data: buf.toString('base64') } };
+}
+
+/** JPEG ← PDF של עמוד אחד בגודל התמונה (‎DCTDecode‎ — הקובץ עצמו, בלי פענוח). ‎null‎ — לא נמצאו מידות */
+function jpegToPdf(jpg) {
+  let w = 0, h = 0, comps = 3;
+  for (let i = 2; i < jpg.length - 9;) {
+    if (jpg[i] !== 0xff) { i++; continue; }
+    const m = jpg[i + 1];
+    if (m >= 0xc0 && m <= 0xcf && ![0xc4, 0xc8, 0xcc].includes(m)) { h = jpg.readUInt16BE(i + 5); w = jpg.readUInt16BE(i + 7); comps = jpg[i + 9]; break; }
+    if (m === 0xd8 || m === 0x01 || (m >= 0xd0 && m <= 0xd7)) { i += 2; continue; }
+    i += 2 + jpg.readUInt16BE(i + 2);
+  }
+  if (!w || !h) return null;
+  const scale = Math.min(1, 1440 / Math.max(w, h));   // עמוד עד 20 אינץ' — התמונה עצמה ברזולוציה המלאה
+  const pw = Math.round(w * scale), ph = Math.round(h * scale);
+  const cs = comps === 1 ? '/DeviceGray' : comps === 4 ? '/DeviceCMYK' : '/DeviceRGB';
+  const content = `q ${pw} 0 0 ${ph} 0 0 cm /Im0 Do Q`;
+  const parts = [];
+  const offsets = [];
+  let len = 0;
+  const push = (x) => { const b = Buffer.isBuffer(x) ? x : Buffer.from(x, 'latin1'); parts.push(b); len += b.length; };
+  const obj = (n, body) => { offsets[n] = len; push(`${n} 0 obj\n`); body(); push('\nendobj\n'); };
+  push('%PDF-1.4\n%\xff\xff\xff\xff\n');
+  obj(1, () => push('<< /Type /Catalog /Pages 2 0 R >>'));
+  obj(2, () => push('<< /Type /Pages /Kids [3 0 R] /Count 1 >>'));
+  obj(3, () => push(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${pw} ${ph}] /Resources << /XObject << /Im0 4 0 R >> >> /Contents 5 0 R >>`));
+  obj(4, () => { push(`<< /Type /XObject /Subtype /Image /Width ${w} /Height ${h} /ColorSpace ${cs} /BitsPerComponent 8 /Filter /DCTDecode${comps === 4 ? ' /Decode [1 0 1 0 1 0 1 0]' : ''} /Length ${jpg.length} >>\nstream\n`); push(jpg); push('\nendstream'); });
+  obj(5, () => push(`<< /Length ${content.length} >>\nstream\n${content}\nendstream`));
+  const xref = len;
+  push(`xref\n0 6\n0000000000 65535 f \n${[1, 2, 3, 4, 5].map((n) => `${String(offsets[n]).padStart(10, '0')} 00000 n \n`).join('')}trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`);
+  return Buffer.concat(parts);
+}
+
 const ai = {
   async extract(file) {
-    const data = fs.readFileSync(file.path).toString('base64');
-    const block = file.mime.includes('pdf')
-      ? { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data } }
-      : { type: 'image', source: { type: 'base64', media_type: file.mime.includes('png') ? 'image/png' : 'image/jpeg', data } };
+    const block = fileBlock(file);
     const first = await Claude.json({ system: skill(), content: [block, { type: 'text', text: 'task: extract' }], schema: EXTRACT_SCHEMA, effort: 'high', live: true });
     // בדיקה עצמית: סכום השורות לא תואם לסה"כ השורות במסמך — קוראים שוב את הטבלה, שורה אחרי שורה
     const want = Number(first.totals?.subtotal || (Number(first.totals?.before_vat || 0) + Number(first.totals?.doc_discount || 0)) || 0);
@@ -317,10 +361,7 @@ const ai = {
     return Claude.json({ system: skill(), content: [{ type: 'text', text }], schema: MATCH_SCHEMA, effort: 'medium', live: true });
   },
   async classify(current, file) {
-    const data = fs.readFileSync(file.path).toString('base64');
-    const block = file.mime.includes('pdf')
-      ? { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data } }
-      : { type: 'image', source: { type: 'base64', media_type: file.mime.includes('png') ? 'image/png' : 'image/jpeg', data } };
+    const block = fileBlock(file);
     return Claude.json({ system: skill(), content: [block, { type: 'text', text: JSON.stringify({ task: 'classify', current }) }], schema: CLASSIFY_SCHEMA, effort: 'low', live: true });
   },
   async partTerms(text, line) {
@@ -531,6 +572,8 @@ async function onMainDoc(user, s, file, pre = null) {
   try {
     doc = pre ?? await ai.extract(s.files[0]);
   } catch (err) {
+    // הסיבה (גודל, שירות ה-AI) — למנהלים; לעובד — מה לעשות
+    alertAdmins(user, s, 'קריאת מסמך נכשלה', [`קובץ: ${s.files[0]?.mime ?? ''}, ${Math.round((fs.statSync(s.files[0].path).size || 0) / 1024)}KB`, err.message]);
     return reply(s, 'לא הצלחתי לקרוא את המסמך. נסו לצלם שוב, ישר ובאור טוב, כך שכל הדף ייראה.', { status: 'error', result: `קריאת מסמך נכשלה: ${err.message}` });
   }
   // אזהרות — בעברית בלבד; אזהרה שהגיעה באנגלית למרות ההנחיה אינה מוצגת
@@ -2056,4 +2099,4 @@ async function step(user, s, t, file) {
   }
 }
 
-module.exports = { isTrigger, opens, active, wantsUndoFinal, handle, sweep, _codeLines: codeLines, _similarLines: similarLines, _askParts: askParts, _projectsOf: projectsOf, _findProjects: findProjects, _ai: ai, _load: load, _clear: (userId) => clear(userId, load(userId)) };
+module.exports = { isTrigger, opens, active, wantsUndoFinal, handle, _jpegToPdf: jpegToPdf, sweep, _codeLines: codeLines, _similarLines: similarLines, _askParts: askParts, _projectsOf: projectsOf, _findProjects: findProjects, _ai: ai, _load: load, _clear: (userId) => clear(userId, load(userId)) };
