@@ -1306,7 +1306,7 @@ const UI = (() => {
    */
   function projectPicker({
     value = '',
-    projects = App.state.projects,
+    projects = App.myProjects({ keep: value || null }),
     noneLabel = 'ללא פרויקט',
     allowNone = true,
     onChange = null

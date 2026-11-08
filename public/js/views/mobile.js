@@ -306,7 +306,7 @@ const MobileView = (() => {
   function openSheet() {
     const projectSelect = UI.select(
       [{ value: '', label: 'כל הפרויקטים' },
-        ...App.state.projects.map((p) => ({ value: String(p.id), label: p.name }))],
+        ...App.myProjects({ keep: filter.projectId ?? null }).map((p) => ({ value: String(p.id), label: p.name }))],
       String(filter.projectId ?? '')
     );
     const statusSource = App.internalBoard()?.columns ?? [];
