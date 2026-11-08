@@ -323,18 +323,47 @@ function showList(s, pre = []) {
 
 const writable = () => Priority.allowed();
 
-async function askCompany(s, pre = []) {
+/**
+ * באיזו סביבה (חברה)? כשפתוחות הרבה חברות — כפתורים לשלוש: החברות שבהן העובד פתח דרישות לאחרונה (לפי שם המשתמש שלו
+ * בפריוריטי), ואם אין — הראשונות ברשימה; ושם החברה בשפה חופשית ("אלעד", "דניה"). כמה חברות מתאימות לשם — כפתורים.
+ */
+const companyName = (c) => (Priority.isTest(c) ? `🧪 ${c}` : Priority.companyOf(c).name.replace(/ — .*/, ''));
+async function suggestCompanies(s) {
   const list = writable();
+  if (list.length <= 3) return list;
+  const login = await Approvals.priorityLoginFor({ id: s.uid }).catch(() => null);
+  if (login) {
+    const hits = await Promise.all(list.map(async (c) => {
+      try {
+        const r = await Priority._call(c, 'GET', `PURDEMANDS?$filter=${encodeURIComponent(`OWNERLOGIN eq '${login.replace(/'/g, "''")}'`)}&$select=CURDATE&$orderby=CURDATE%20desc&$top=1`);
+        return { c, at: r?.value?.[0]?.CURDATE ?? '' };
+      } catch { return { c, at: '' }; }
+    }));
+    const mine = hits.filter((x) => x.at).sort((a, b) => b.at.localeCompare(a.at)).map((x) => x.c);
+    if (mine.length) return [...mine, ...list.filter((c) => !mine.includes(c))].slice(0, 3);
+  }
+  return list.slice(0, 3);
+}
+async function askCompany(s, pre = [], options = null, head = '🏢 *באיזו חברה לפתוח את הדרישה?*') {
   s.step = 'company';
-  s.companyOptions = list;
-  return reply(s, [...pre, '🏢 *באיזו סביבה (חברה) לפתוח את הדרישה?*', ...list.map((c) => `• ${Priority.companyOf(c).name.replace(/ — .*/, '')} (${c})${Priority.isTest(c) ? ' 🧪 בדיקה' : ''}`)].join('\n'),
-    list.length <= 3 ? list.map((c) => label(Priority.isTest(c) ? `🧪 ${c}` : Priority.companyOf(c).name)) : []);
+  const opts = (options ?? await suggestCompanies(s)).slice(0, 3);
+  const btns = labels(opts.map(companyName));
+  s.companyOptions = opts.map((c, i) => ({ code: c, btn: btns[i] }));
+  const many = !options && writable().length > 3;
+  return reply(s, [...pre, head, ...opts.map((c) => `• ${companyName(c)} (${c})`), many ? 'או כתבו את שם החברה ("אלעד", "דניה", "מורדות").' : null].filter(Boolean).join('\n'), btns);
 }
 
+/** כפתור, קוד, או שם החברה. ‎{ code }‎ — נמצאה; ‎{ many }‎ — כמה חברות מתאימות; ‎null‎ — לא נמצאה */
 function pickCompany(s, t) {
-  const opts = s.companyOptions ?? writable();
-  return opts.find((c) => sameLabel(t, label(Priority.isTest(c) ? `🧪 ${c}` : Priority.companyOf(c).name)) || t.trim() === c
-    || (t.trim().length >= 2 && Priority.companyOf(c).name.includes(t.trim()))) ?? null;
+  const n = String(t ?? '').trim();
+  const byBtn = (s.companyOptions ?? []).find((x) => sameLabel(n, x.btn));
+  if (byBtn) return { code: byBtn.code };
+  const list = writable();
+  if (list.includes(n)) return { code: n };
+  if (n.length < 2) return null;
+  const norm = (x) => normalize(x).replace(/["'״׳]/g, '').replace(/יי/g, 'י').replace(/וו/g, 'ו');
+  const hits = list.filter((c) => norm(Priority.companyOf(c).name).includes(norm(n)));
+  return hits.length === 1 ? { code: hits[0] } : hits.length ? { many: hits } : null;
 }
 
 /** הכותרת אחרי שנקבעה סביבה: פרויקט (ברירת מחדל או שאלה), מחסן, ואז הפריטים */
@@ -670,23 +699,6 @@ async function submit(user, s) {
   try {
     await Priority.submitDemand(c, prdno);
   } catch (err) {
-    // סביבת הבדיקה (test11) בלי רשימת מאשרים — סימולציה: הדרישה נשארת טיוטא, והעובד עצמו מקבל את ההודעה שהחותם הבא
-    // היה מקבל, כדי שאפשר יהיה לבדוק את כל הזרימה. בחברה אמיתית — לא מדמים
-    if (Priority.isTest(c) && Priority.isNoApproversError(err)) {
-      let sent = false;
-      try {
-        const d = await Priority.readDemand(c, prdno);
-        const msg = Approvals.messageFor(c, { ...d, PRDITEMS_SUBFORM: d.PRDITEMS_SUBFORM ?? [] }, user.full_name);
-        if (hooks.send) sent = await hooks.send(user.id, `🧪 *סימולציה* — ב-${c} אין רשימת מאשרים, ולכן ההודעה שהחותם הבא היה מקבל נשלחת אליך:\n\n${msg}`);
-      } catch (e) {
-        console.error('[משימון] סימולציית חותם בא:', e.message);
-      }
-      clear(user.id, s);
-      return { s: null, replies: [[`🧪 *דרישת רכש ${prdno}* נפתחה בסביבת הבדיקה (${s.items.length === 1 ? 'פריט אחד' : `${s.items.length} פריטים`}) ונשארה *טיוטא*:`,
-        `ב-${c} אין רשימת מאשרים, ולכן היא לא עוברת ל"מחכה לאישור".`,
-        sent ? 'במקום זה שלחתי לך את ההודעה שהחותם הבא היה מקבל.' : null,
-        'בחברה אמיתית הדרישה עוברת לאישור, והחותם הבא מקבל את ההודעה.'].filter(Boolean).join('\n')], buttons: [], status: 'ok', result: `${prdno} טיוטא (סימולציה — אין רשימת מאשרים ב-${c})` };
-    }
     alertAdmins(user, s, 'הדרישה לא עברה לאישור', [Priority.isNoApproversError(err) ? 'אין בפריוריטי רשימת מאשרים שמתאימה לדרישה (רשימות מאשרים לדרישות רכש). צריך להגדיר רשימה — או להעביר לאישור ידנית.' : '', err.message].filter(Boolean));
     return { s: null, replies: [[`📝 *דרישת רכש ${prdno}* נפתחה בפריוריטי (${s.items.length} ${s.items.length === 1 ? 'פריט' : 'פריטים'}), אבל עוד *לא עברה לאישור* — חסרה הגדרה בפריוריטי.`,
       'מנהל המערכת קיבל פירוט ויעביר אותה לאישור.', companyLine(c)].join('\n')], buttons: [], status: 'error', result: `${prdno} טיוטא: ${err.message}` };
@@ -792,10 +804,11 @@ async function step(user, s, t, file, { reaction }) {
   }
   switch (s.step) {
     case 'company': {
-      const c = pickCompany(s, t);
-      if (!c) return t.split(/\s+/).length >= 6 ? null : askCompany(s);
-      s.company = c;
-      return afterCompany(s, [companyLine(c), '']);
+      const hit = pickCompany(s, t);
+      if (hit?.many) return askCompany(s, [], hit.many, `🏢 יש כמה חברות בשם הזה${hit.many.length > 3 ? ' (כתבו שם מדויק יותר)' : ''}:`);
+      if (!hit) return t.split(/\s+/).length >= 6 ? null : askCompany(s, [], null, '🏢 לא מצאתי חברה בשם הזה. באיזו חברה?');
+      s.company = hit.code;
+      return afterCompany(s);
     }
     case 'project': {
       if (file) return reply(s, 'קודם הפרויקט — ואז הרשימה.', s.lastButtons ?? []);
