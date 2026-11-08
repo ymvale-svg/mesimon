@@ -681,9 +681,10 @@ function register(router, h) {
       if (Gmail.isPersonalEmail(work)) return back(`${work} היא כתובת פרטית — יש לכתוב את המייל הארגוני / המחלקתי`);
       const taken = D.get('SELECT id FROM users WHERE id <> ? AND (lower(work_email) = ? OR lower(email) = ?)', actor.id, work, work);
       if (taken) return back('המייל הזה כבר משויך לעובד אחר. פנו למנהל המערכת');
-      D.run('UPDATE users SET work_email = ? WHERE id = ?', work, actor.id);
+      // לא נשמר כאן: נשמר רק אחרי ש-Google מאשר שהעובד שולט בכתובת (Gmail.connect).
+      // בלי זה, קישור אחד מספיק כדי לקבוע לעובד מייל ארגוני של מישהו אחר ולהיכנס בשמו
     }
-    res.writeHead(302, { location: Gmail.authorizeUrl(req, user, { add }), 'cache-control': 'no-store' });
+    res.writeHead(302, { location: Gmail.authorizeUrl(req, user, { add, expect: work && !add ? work : '' }), 'cache-control': 'no-store' });
     res.end();
   });
 
@@ -1085,7 +1086,9 @@ function register(router, h) {
     hours: String(D.getSetting('wa_hours', '') ?? ''),
     shabbat: Boolean(D.getSetting('wa_shabbat', true)),
     // השוואת ספקי התמלול: כולם רצים על כל הודעה קולית, והתוצאות ביומן
-    speechCompare: Boolean(D.getSetting('speech_compare', false))
+    speechCompare: Boolean(D.getSetting('speech_compare', false)),
+    // מעבר לנושא אחר מבטל את הפריט הקודם (טיוטה, שאלה, קבלת סחורה) — בלי "ביטול", ובלי חזרה
+    topicSwitchCancels: Boolean(D.getSetting('wa_topic_switch_cancels', true))
   });
 
   const botInfo = () => ({
@@ -1158,6 +1161,7 @@ function register(router, h) {
     if (b.hours !== undefined) D.setSetting('wa_hours', hours);
     if (b.shabbat !== undefined) D.setSetting('wa_shabbat', Boolean(b.shabbat));
     if (b.speechCompare !== undefined) D.setSetting('speech_compare', Boolean(b.speechCompare));
+    if (b.topicSwitchCancels !== undefined) D.setSetting('wa_topic_switch_cancels', Boolean(b.topicSwitchCancels));
     sendJson(res, 200, botInfo());
   });
 
