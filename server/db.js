@@ -1960,8 +1960,13 @@ function ensureFirstAdmin() {
   console.log('  ' + '='.repeat(58));
   console.log('  נוצר חשבון מנהל המערכת הראשון:');
   console.log(`     אימייל:  ${email}`);
-  console.log(`     סיסמה:   ${password}`);
-  if (generated) console.log('  יש לשמור אותה עכשיו — היא לא תוצג שוב.');
+  // סיסמה שהוגדרה ב-ADMIN_PASSWORD לא נכתבת ללוג; רק סיסמה שנוצרה כאן מוצגת, פעם אחת
+  if (generated) {
+    console.log(`     סיסמה:   ${password}`);
+    console.log('  יש לשמור אותה עכשיו — היא לא תוצג שוב. מומלץ להחליף אותה בכניסה הראשונה.');
+  } else {
+    console.log('     סיסמה:   מתוך ADMIN_PASSWORD');
+  }
   console.log('  ' + '='.repeat(58));
   console.log('');
 }
