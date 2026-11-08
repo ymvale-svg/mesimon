@@ -12,8 +12,9 @@
  *   • פרטי — עובד כותב לבוט: לפתוח משימה, מה המשימות שלו, לסגור משימה, להוסיף
  *     הערה, מה פתוח בפרויקט, מה יש לו היום, ולשלוח מייל לאיש קשר מ-Google —
  *     הבוט מוצא את הנמען (ושואל איזה, כשיש כמה), מנסח ושולח רק אחרי "כן".
- *     על "היי" או הודעה ראשונה ביום — מה יש היום (יומן, משימות, הצעות למשימות
- *     — "אשר א" / "דחה ב") ותפריט ממוספר, והתובנות בהודעת המשך. תובנות מהמייל
+ *     הודעה ראשונה ביום — מה יש היום (יומן, משימות, הצעות למשימות — "אשר א" /
+ *     "דחה ב"), התובנות בהודעת המשך, והתפריט (כפתורים). אחר כך "היי" — התפריט בלבד
+ *     (☀️ מה יש לי היום · 🗂 פריוריטי · עוד אפשרויות — כל השאר). תובנות מהמייל
  *     ומהוואטסאפ לפי טווח ("מהיומיים האחרונים"), ותשובה למייל מתוכן.
  *     וואטסאפ אישי: "יוסי עסקי", "אל תסרוק את דני", ותשובה לשאלה "עסקי או אישי?". הודעה קולית מתומללת (Google)
  *     ומטופלת כמו כתובה; כמה בקשות בהודעה אחת — אחת-אחת, בתור. מה מותר — לפי מסך הניהול (‎wa-actions.js‎). ה-AI
@@ -866,6 +867,7 @@ const CANCEL = /^(ביטול|בטל|עזוב|לא צריך)([\s,.!]|$)/;
 const PLAIN_LIST = /^(המשימות שלי|משימות|מה יש לי)/;
 const PLAIN_HELP = /^(עזרה|help|\?|מה אתה יודע)/i;
 const PLAIN_TODAY = /^(היום|היי|הי|שלום|בוקר טוב|מה יש לי היום|today)[\s?!.]*$/i;
+const PLAIN_GREETING = /^(היי|הי|שלום|בוקר טוב)[\s?!.]*$/;
 const PLAIN_INSIGHTS = /^(תובנות|מה חדש)/;
 
 /*
@@ -1334,9 +1336,25 @@ function menuButtons(keys, page = 0) {
   if (!rest.length) return keys.slice(0, 2).map(menuButtonOf).concat(keys.length > 2 ? [MENU_MORE] : []);
   return rest.length <= 3 ? rest.map(menuButtonOf) : [...rest.slice(0, 2).map(menuButtonOf), MENU_MORE];
 }
-/** כפתור שנלחץ (או הכיתוב שלו) ← מספר האפשרות בתפריט; ‎'more'‎ — העמוד הבא; ‎null‎ — לא כפתור */
+/**
+ * "עוד אפשרויות" — כל שאר האפשרויות בבת אחת, 3 כפתורים להודעה (וואטסאפ מגביל ל-3):
+ * הקבוצה הראשונה על התשובה, והשאר בהודעות המשך. כל כפתור מכל הודעה מזוהה (‎menuPick‎).
+ */
+function moreMenuGroups(keys) {
+  const rest = keys.slice(2).map(menuButtonOf);
+  const groups = [];
+  for (let i = 0; i < rest.length; i += 3) groups.push(rest.slice(i, i + 3));
+  return groups;
+}
+const normBtn = (x) => String(x ?? '').replace(/[\u{1F3FB}-\u{1F3FF}\uFE0F]/gu, '').replace(/\s+/g, ' ').trim();
+/** הכיתוב של כפתור מהתפריט הראשי — מזוהה גם כשהתפריט כבר לא "פתוח" (כפתור מהודעה ישנה) */
+function isMenuButton(text) {
+  const t = normBtn(text);
+  return t === normBtn(MENU_MORE) || t === 'עוד אפשרויות' || Object.values(MENU_BUTTON).some((b) => normBtn(b) === t);
+}
+/** כפתור שנלחץ (או הכיתוב שלו) ← מספר האפשרות בתפריט; ‎'more'‎ — כל שאר האפשרויות; ‎null‎ — לא כפתור */
 function menuPick(draft, text) {
-  const n = (x) => String(x ?? '').replace(/[\u{1F3FB}-\u{1F3FF}\uFE0F]/gu, '').replace(/\s+/g, ' ').trim();
+  const n = normBtn;
   const t = n(text);
   if (t === n(MENU_MORE) || /^עוד( אפשרויות)?$/.test(t)) return 'more';
   const i = (draft?.options ?? []).findIndex((k) => n(menuButtonOf(k)) === t || n(MENU.find((m) => m[0] === k)?.[2]) === t);
@@ -2112,14 +2130,27 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
 
   let kind = state.draft?.kind;
 
-  // כפתור מהתפריט — כמו בחירה במספר; "עוד אפשרויות" — הכפתורים הבאים
+  // כפתור מהתפריט הראשי מהודעה ישנה — אחרי שהתפריט כבר נסגר (בקשה אחרת באמצע): התפריט נפתח מחדש,
+  // והכפתור עובד. אחרת "עוד אפשרויות" היה מגיע ל-AI כ"פתיחה" — וחוזר ל-Today
+  if (kind !== 'menu' && isMenuButton(t) && menuOptions(actor).length) {
+    if (state.draft) notice = `ℹ️ ${pendingLabel(state.draft)} — עברתי לתפריט.`;
+    state = { ...state, draft: { kind: 'menu', options: menuOptions(actor).map((o) => o.key) }, awaiting: false };
+    keep.draft = state.draft;
+    kind = 'menu';
+  }
+
+  // כפתור מהתפריט — כמו בחירה במספר; "עוד אפשרויות" — כל שאר האפשרויות, בכמה הודעות של 3 כפתורים
   if (kind === 'menu') {
     const pick = menuPick(state.draft, t);
     if (pick === 'more') {
-      const page = (state.draft.page ?? 0) + 1;
       const keys = state.draft.options ?? [];
-      const next = page * 2 < keys.length ? page : 0;
-      return out('*עוד אפשרויות:* 👇', { draft: { ...state.draft, page: next } }, { action: 'menu', status: 'ok', result: 'תפריט: עוד אפשרויות', buttons: menuButtons(keys, next) });
+      const [first = [], ...others] = moreMenuGroups(keys);
+      if (first.length) {
+        return out('*כל האפשרויות:* 👇', { draft: { kind: 'menu', options: keys } }, {
+          action: 'menu', status: 'ok', result: `תפריט: כל האפשרויות (${keys.length})`, buttons: first,
+          followUps: others.map((buttons) => async () => ({ text: '👇', buttons }))
+        });
+      }
     }
     if (pick) t = String(pick);
   }
@@ -2205,6 +2236,17 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
       action: 'today', status: 'ok', followUps, buttons: followUps.length ? [] : buttons,
       result: `Today${menu ? ' ותפריט' : ''}: ${today?.ids.length ?? 0} משימות${today?.suggestions.length ? `, ${today.suggestions.length} הצעות` : ''}`
     });
+  };
+
+  /**
+   * התפריט בלבד — לפתיחה ("היי") אחרי ההודעה הראשונה של היום: ה-Today המלא (משימות, הצעות,
+   * תובנות) — רק פעם ביום; אחר כך "☀️ מה יש לי היום" או "תובנות" — כשמבקשים. ‎null‎ — אין תפריט
+   */
+  const menuReply = (prefix = '') => {
+    const keys = menuOptions(actor).map((o) => o.key);
+    if (!keys.length) return null;
+    return out([prefix || null, menuText()].filter(Boolean).join('\n\n'), { draft: { kind: 'menu', options: keys } },
+      { action: 'menu', status: 'ok', result: 'תפריט', buttons: menuButtons(keys, 0) });
   };
 
   /**
@@ -2449,6 +2491,11 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
     // ה-Today והתובנות מהוואטסאפ אינם צריכים AI בזמן הבקשה — גם הטווח מזוהה בלי AI
     if (PLAIN_TODAY.test(t) && WaActions.allowed(actor, 'today')) {
       const firstOfDay = state.greetedOn !== localDay(0);
+      // ברכה ("היי") אחרי הפעם הראשונה ביום — התפריט; "היום" / "מה יש לי היום" — ה-Today
+      if (!firstOfDay && PLAIN_GREETING.test(t)) {
+        const m = menuReply();
+        if (m) return m;
+      }
       return todayReply({ withMenu: firstOfDay, firstOfDay });
     }
     if (PLAIN_INSIGHTS.test(t) && WaActions.allowed(actor, 'mail_insights')) return insightsReply({ range: Range.parseRange(t) });
@@ -2458,8 +2505,13 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
 
   const u = await understand(user, actor, state, t, projects, myOpen);
   if (u.intent === 'cancel') return out('בוטל 👍', { draft: null }, { action: 'cancel', status: 'ok', result: 'בוטל' });
-  // "היי", "מה נשמע", או משהו שאינו פעולה — ובהודעה הראשונה של היום: ה-Today והתפריט
+  // "היי", "מה נשמע", או משהו שאינו פעולה — בהודעה הראשונה של היום: ה-Today המלא והתפריט.
+  // אחר כך — התפריט בלבד (☀️ מה יש לי היום · 🗂 פריוריטי · עוד אפשרויות); תובנות — כשמבקשים
   const firstToday = state.greetedOn !== localDay(0);
+  if (u.intent === 'menu' && !firstToday) {
+    const m = menuReply();
+    if (m) return m;
+  }
   if (u.intent === 'menu' || (u.intent === 'other' && firstToday)) {
     if (WaActions.allowed(actor, 'today') || menuOptions(actor).length) {
       const hello = firstToday ? `${localDate().time < '12:00' ? 'בוקר טוב' : 'שלום'} ${firstName(user.full_name)} 👋` : '';
