@@ -61,17 +61,51 @@ const isTest = (code) => Boolean(companyOf(code).test);
  * ‎via='direct'‎ — החברה עצמה פתוחה; ‎'sandbox'‎ — העותק לבדיקה; ‎null‎ — לא נמצאה
  * חברה מותרת.
  */
-function resolveCompany(vat) {
-  const digits = String(vat ?? '').replace(/\D/g, '');
-  const c = digits ? COMPANIES.find((x) => x.vat && x.vat === digits) : null;
-  const open = allowed();
-  if (c && open.includes(c.code)) return { company: c.code, via: 'direct', matched: c };
-  if (c && c.sandbox && open.includes(c.sandbox)) return { company: c.sandbox, via: 'sandbox', matched: c };
-  return { company: null, via: null, matched: c ?? null };
+// "ובניין" = "ובנין", "בע"מ" / "בע'מ" / "בעמ" — לא חלק מהשם
+const normName = (t) => String(t ?? '').replace(/בע["'״׳]?מ|ltd\.?/gi, ' ').replace(/[^\u0590-\u05FFa-z0-9 ]/gi, ' ')
+  .replace(/יי/g, 'י').replace(/וו/g, 'ו').replace(/\s+/g, ' ').trim();
+
+/**
+ * החברה לפי הח.פ. של הנמען; אם אין — לפי כל מספר אחר שבמסמך (למשל "מספר חשבון משלם" בשובר עירייה,
+ * או ח.פ. בכתב יד); אם אין — לפי שם הנמען, רק כשהוא מתאים לחברה אחת בדיוק.
+ */
+function resolveCompany(vat, { ids = [], name = '' } = {}) {
+  const byVat = (v) => { const d = String(v ?? '').replace(/\D/g, ''); return d ? COMPANIES.find((x) => x.vat && x.vat === d) : null; };
+  let c = byVat(vat);
+  let how = c ? 'vat' : null;
+  if (!c) { for (const i of ids) { c = byVat(i); if (c) { how = 'id'; break; } } }
+  if (!c && normName(name).length >= 4) {
+    const n = normName(name);
+    // עותק הבדיקה אינו נמען של מסמך אמיתי — לא נספר
+    const hits = COMPANIES.filter((x) => !x.test).filter((x) => { const m = normName(x.name); return m.length >= 4 && (n === m || n.startsWith(m + ' ') || m.startsWith(n + ' ')); });
+    if (hits.length === 1) { c = hits[0]; how = 'name'; }
+  }
+  return resolveOpen(c, how);
 }
 
-function companyUrl(company) {
-  if (!allowed().includes(company)) throw new Error(`החברה ${company} אינה פתוחה לכתיבה מהבוט (PRIORITY_COMPANIES)`);
+/** החברות ששמן מתאים לטקסט (בלי עותק הבדיקה) — לתשובה בשם בשלב בחירת החברה */
+function companiesByName(text) {
+  const n = normName(text);
+  if (n.length < 2) return [];
+  return COMPANIES.filter((x) => !x.test && normName(x.name).includes(n));
+}
+
+function resolveOpen(c, how = 'vat') {
+  const open = allowed();
+  if (c && open.includes(c.code)) return { company: c.code, via: 'direct', matched: c, how };
+  if (c && c.sandbox && open.includes(c.sandbox)) return { company: c.sandbox, via: 'sandbox', matched: c, how };
+  return { company: null, via: null, matched: c ?? null, how };
+}
+
+/**
+ * כתיבה — רק לחברה שב-‎PRIORITY_COMPANIES‎. קריאה — גם לחברה מוכרת שאינה פתוחה לכתיבה
+ * (למשל לבדוק אם פרויקט קיים בחברה האמיתית, כשהקליטה היא לעותק הבדיקה).
+ */
+function companyUrl(company, method = 'GET') {
+  const known = COMPANIES.some((c) => c.code === company);
+  if (method === 'GET' ? !(known || allowed().includes(company)) : !allowed().includes(company)) {
+    throw new Error(`החברה ${company} אינה פתוחה ${method === 'GET' ? 'לבוט' : 'לכתיבה מהבוט'} (PRIORITY_COMPANIES)`);
+  }
   return `${HOST}/${encodeURIComponent(company)}/`;
 }
 
@@ -85,7 +119,7 @@ function errorText(data, raw) {
 async function call(company, method, path, body = null) {
   if (!isEnabled()) throw new PriorityError('החיבור לפריוריטי אינו מוגדר בשרת (PRIORITY_USER, PRIORITY_PASSWORD)');
   const auth = Buffer.from(`${process.env.PRIORITY_USER}:${process.env.PRIORITY_PASSWORD}`).toString('base64');
-  const url = companyUrl(company) + path;
+  const url = companyUrl(company, method) + path;
   let res;
   try {
     res = await fetch(url, {
@@ -119,23 +153,68 @@ const grKey = (docno) => `DOCUMENTS_P(DOCNO='${q(docno)}',TYPE='P')`;
 // ---------------------------------------------------------------------------
 
 /** ספקים לפי ח.פ., ואם אין — לפי שם (עד 5). רבים בכרטיס בלי ח.פ. */
+/** ספק שאינו פעיל — לפי הסטטוס, או "לא פעיל" בתחילת השם (כך מסמנים אצלנו) */
+const activeSupplier = (x) => (x.STATDES ?? 'פעיל') === 'פעיל' && !/^\s*לא\s*פעיל/.test(x.SUPDES ?? '');
+
+/**
+ * ח.פ. של הספק נשמר בפריוריטי ב-‎COMPNUM‎ ("מס' חברה", מלא ברוב הכרטיסים); ‎VATNUM‎ כמעט
+ * ריק. מחפשים בשניהם, גם עם אפסים מובילים ("23043854" = "023043854").
+ */
 async function findSuppliers(company, { vat = '', name = '' } = {}) {
-  const sel = '$select=SUPNAME,SUPDES,VATNUM,STATDES&$top=5';
+  const sel = '$select=SUPNAME,SUPDES,VATNUM,COMPNUM,STATDES&$top=10';
   const digits = String(vat).replace(/\D/g, '');
-  if (digits) {
-    const byVat = rows(await call(company, 'GET', `SUPPLIERS?$filter=${enc(`VATNUM eq '${digits}'`)}&${sel}`));
-    if (byVat.length) return { by: 'vat', list: byVat };
+  if (digits.length >= 7) {
+    const forms = [...new Set([digits, digits.padStart(9, '0'), digits.replace(/^0+/, '')])];
+    const filter = forms.flatMap((d) => [`COMPNUM eq '${d}'`, `VATNUM eq '${d}'`]).join(' or ');
+    const byVat = rows(await call(company, 'GET', `SUPPLIERS?$filter=${enc(filter)}&${sel}`)).filter(activeSupplier);
+    if (byVat.length) return { by: 'vat', list: byVat.slice(0, 5) };
+    // ח.פ. בכתב יד — ספרה אחת שנקראה לא נכון (5/8, 1/7, 0/6…). מתקבל רק כשגם השם דומה
+    const alts = handwritingVariants(digits.padStart(9, '0'));
+    for (let i = 0; i < alts.length; i += 15) {
+      const f = alts.slice(i, i + 15).map((d) => `COMPNUM eq '${d}'`).join(' or ');
+      const near = rows(await call(company, 'GET', `SUPPLIERS?$filter=${enc(f)}&${sel}`)).filter(activeSupplier).filter((x) => similarName(x.SUPDES, name));
+      if (near.length === 1) return { by: 'vat_fuzzy', list: near };
+    }
   }
-  // קודם השם המלא בלי "בע"מ", אחר כך מילה ארוכה ממנו — כך "דאר אלביאן בע"מ" נמצא גם ככתוב אחרת
-  const clean = String(name).replace(/בע"?מ|בעמ|ltd\.?/gi, ' ').replace(/\s+/g, ' ').trim();
-  const words = clean.split(/[\s,.()"']+/).filter((w) => w.length >= 3).sort((a, b) => b.length - a.length);
-  for (const w of [clean, ...words.slice(0, 2)].filter(Boolean)) {
-    const list = rows(await call(company, 'GET', `SUPPLIERS?$filter=${enc(`contains(SUPDES,'${q(w)}')`)}&${sel}`));
-    if (!list.length) continue;
-    const exact = list.filter((x) => String(x.SUPDES).replace(/בע"?מ|בעמ/g, '').replace(/\s+/g, ' ').trim() === clean);
-    return { by: 'name', list: exact.length === 1 ? exact : list };
+  // לפי השם: מועמדים מכמה מילים מהשם, מדורגים לפי מספר המילים המשותפות (ובונוס כשהח.פ. שלהם קרוב לזה שבמסמך —
+  // ח.פ. חתוך או ספרה שנקראה לא נכון). כך "זיו מערכות לניהול בניה (מסד דרום) 1992 (zivsystems)" מוצא את
+  // "זיו מערכות לניהול בניה (מסד דרום)  1992 בעמ", ולא כל ספק עם "מערכות".
+  const words = [...new Set(normName(name).split(' ').filter((w) => w.length >= 3 && !/^\d+$/.test(w) && !/^(ספק|הספק|חברת|חברה)$/.test(w)))];
+  const probe = [...new Set([words[0], ...[...words].sort((x, y) => y.length - x.length).slice(0, 3)].filter(Boolean))];
+  const cand = new Map();
+  for (const w of probe) {
+    const list = rows(await call(company, 'GET', `SUPPLIERS?$filter=${enc(`contains(SUPDES,'${q(w)}')`)}&${sel.replace('$top=10', '$top=40')}`)).filter(activeSupplier);
+    for (const x of list) cand.set(x.SUPNAME, x);
   }
+  if (!cand.size) return { by: null, list: [] };
+  const mine = new Set(words);
+  const near = (a, b) => { if (!a || !b || a.length < 7 || b.length < 7) return false; let d = Math.abs(a.length - b.length); for (let i = 0; i < Math.min(a.length, b.length); i++) if (a[i] !== b[i]) d++; return d <= 2; };
+  const vatD = digits.padStart(9, '0');
+  const scored = [...cand.values()].map((x) => {
+    const theirs = normName(x.SUPDES).split(' ').filter((w) => w.length >= 3);
+    const shared = theirs.filter((w) => mine.has(w)).length;
+    const vatNear = digits.length >= 7 && String(x.COMPNUM ?? '').replace(/\D/g, '').length >= 7 && near(String(x.COMPNUM).padStart(9, '0'), vatD);
+    return { x, score: shared + (vatNear ? 3 : 0), shared, vatNear };
+  }).filter((c) => c.shared > 0).sort((a, b) => b.score - a.score);
+  if (!scored.length) return { by: null, list: [] };
+  const [top, second] = scored;
+  // ברור: רוב המילים משותפות (או ח.פ. קרוב), ויותר מהבא אחריו
+  const clear = (top.shared >= Math.min(3, words.length) || top.vatNear) && (!second || top.score > second.score);
+  // ‎weak‎ — אין ספק שמתאים לשם באמת (רק מילה משותפת או שתיים): הצעות בלבד, לא בחירה אוטומטית
+  return { by: top.vatNear ? 'vat_near' : 'name', list: clear ? [top.x] : scored.slice(0, 5).map((c) => c.x), weak: !clear };
   return { by: null, list: [] };
+}
+
+const CONFUSE = { 0: '68', 1: '7', 2: '7', 3: '8', 4: '9', 5: '86', 6: '058', 7: '12', 8: '3560', 9: '4' };
+function handwritingVariants(d) {
+  const out = [];
+  for (let i = 0; i < d.length; i++) for (const r of CONFUSE[d[i]] ?? '') out.push(d.slice(0, i) + r + d.slice(i + 1));
+  return out;
+}
+function similarName(a, b) {
+  const words = (t) => normName(t).split(' ').filter((w) => w.length >= 3);
+  const B = new Set(words(b));
+  return words(a).some((w) => B.has(w));
 }
 
 /** ספק לפי מספר הספק בפריוריטי */
@@ -159,7 +238,7 @@ async function findReceiptByBooknum(company, supname, booknum) {
 /** הזמנה אחת, עם השורות והיתרות */
 async function getOrder(company, ordname) {
   try {
-    const h = strip(await call(company, 'GET', `PORDERS('${q(ordname)}')?$select=ORDNAME,SUPNAME,CDES,STATDES,PROJDOCNO,PROJDES,TYPECODE,TYPEDES,CURDATE`));
+    const h = strip(await call(company, 'GET', `PORDERS('${q(ordname)}')?$select=ORDNAME,SUPNAME,CDES,STATDES,PROJDOCNO,PROJDES,TYPECODE,TYPEDES,CURDATE,PAYCODE,PAYDES,WARHSNAME`));
     const lines = rows(await call(company, 'GET', `PORDERS('${q(ordname)}')/PORDERITEMS_SUBFORM?$select=LINE,KLINE,PARTNAME,PDES,TQUANT,TBALANCE,TUNITNAME,PRICE,PERCENT`));
     return { ...h, lines };
   } catch (err) {
@@ -171,7 +250,7 @@ async function getOrder(company, ordname) {
 /** הזמנות מאושרות של הספק שיש בהן יתרה */
 async function openOrders(company, supname) {
   const list = rows(await call(company, 'GET',
-    `PORDERS?$filter=${enc(`SUPNAME eq '${q(supname)}' and STATDES eq 'אושרה'`)}&$select=ORDNAME,CURDATE,PROJDOCNO,PROJDES,TYPECODE&$top=20&$orderby=CURDATE desc`));
+    `PORDERS?$filter=${enc(`SUPNAME eq '${q(supname)}' and STATDES eq 'אושרה'`)}&$select=ORDNAME,CURDATE,PROJDOCNO,PROJDES,TYPECODE,PAYCODE,PAYDES,WARHSNAME&$top=20&$orderby=CURDATE desc`));
   const out = [];
   for (const o of list) {
     const lines = rows(await call(company, 'GET', `PORDERS('${q(o.ORDNAME)}')/PORDERITEMS_SUBFORM?$select=LINE,KLINE,PARTNAME,PDES,TQUANT,TBALANCE,TUNITNAME,PRICE,PERCENT`))
@@ -188,6 +267,107 @@ async function findPartExact(company, description) {
   const list = rows(await call(company, 'GET',
     `LOGPART?$filter=${enc(`PARTDES eq '${q(d)}'`)}&$select=PARTNAME,PARTDES,BUD_SUBCHAPTERNAME,BUD_SUBTOPICNAME&$top=2`));
   return list.length === 1 ? list[0] : null;
+}
+
+/*
+ * קידוד שורות — מק"ט, תת פרק ומשאב (‎BUD_SUBCHAPTERNAME‎, ‎BUD_SUBTOPICNAME‎). הבוט לומד מקבלות
+ * הסחורה הקודמות: של אותו ספק, ואם אין — של אותו ספק בחברות האחרות (לפי ח.פ.; קטלוג הפריטים
+ * משותף). אין היסטוריה — מק"ט כללי ‎000‎ עם תת הפרק והמשאב הכלליים של החברה.
+ */
+const LINE_SEL = 'PARTNAME,PDES,BUD_SUBCHAPTERNAME,BUD_SUBCHAPTERDES,BUD_SUBTOPICNAME,BUD_SUBTOPICDES';
+
+/** שורות קבלות הסחורה האחרונות של הספק (בקריאה אחת, ‎$expand‎) */
+async function supplierHistory(company, supname, top = 30) {
+  const grs = rows(await call(company, 'GET',
+    `DOCUMENTS_P?$filter=${enc(`SUPNAME eq '${q(supname)}' and STATDES ne 'מבוטלת'`)}&$select=DOCNO&$orderby=CURDATE%20desc&$top=${top}`
+    + `&$expand=TRANSORDER_P_SUBFORM($select=${LINE_SEL})`));
+  return grs.flatMap((g) => g.TRANSORDER_P_SUBFORM ?? []).filter((l) => l.PARTNAME);
+}
+
+/** שורות (לא 000) מ-300 קבלות הסחורה האחרונות של החברה — לאינדקס הקידוד */
+async function recentLines(company, top = 300) {
+  const grs = rows(await call(company, 'GET',
+    `DOCUMENTS_P?$filter=${enc("STATDES ne 'מבוטלת'")}&$select=DOCNO&$orderby=CURDATE%20desc&$top=${top}`
+    + `&$expand=TRANSORDER_P_SUBFORM($select=${LINE_SEL};$filter=${enc("PARTNAME ne '000'")})`));
+  return grs.flatMap((g) => g.TRANSORDER_P_SUBFORM ?? []).filter((l) => l.PARTNAME && l.PDES);
+}
+
+/** פריטים פעילים שבתיאורם המילה ("העתקות"), עד 6 */
+async function findPartsByText(company, word) {
+  return rows(await call(company, 'GET', `LOGPART?$filter=${enc(`contains(PARTDES,'${q(word)}') and STATDES eq 'פעיל'`)}&$select=PARTNAME,PARTDES,STATDES,BUD_SUBCHAPTERNAME,BUD_SUBCHAPTERDES,BUD_SUBTOPICNAME,BUD_SUBTOPICDES&$top=6`));
+}
+
+/*
+ * חיפוש מק"ט בשפה חופשית: מועמדים מכל מילה בטקסט (וגם בלי אות שימוש בתחילתה — ה, ו, ב, ל, מ, ש) ומהמילים של
+ * ההקשר (תיאור השורה), ודירוג לפי מילים מהטקסט שמופיעות בתיאור הפריט (ההקשר — חצי משקל).
+ * ‎[{ p, score, full }]‎; ‎full‎ — כל מילות הטקסט נמצאו בתיאור.
+ */
+async function searchParts(company, text, context = '') {
+  const wordsOf = (t) => [...new Set(String(t ?? '').replace(/["'״׳(),.:;\-/]/g, ' ').split(/\s+/).filter((w) => w.length >= 2 && !/^\d+$/.test(w)))];
+  // צורות המילה: כמו שהיא, בלי ריבוי (ים/ות, ן← נ), בלי אות שימוש בתחילה (ה ו ב ל מ ש), ושניהם — "המזגנים" ← "מזגן"
+  const finals = (x) => x.replace(/נ$/, 'ן').replace(/מ$/, 'ם').replace(/צ$/, 'ץ').replace(/פ$/, 'ף').replace(/כ$/, 'ך');
+  const noPlural = (x) => (x.length >= 5 && /(ים|ות)$/.test(x) ? finals(x.slice(0, -2)) : x);
+  const noPrefix = (x) => (x.length >= 4 && /^[הובלמש]/.test(x) ? x.slice(1) : x);
+  const forms = (w) => [...new Set([w, noPlural(w), noPrefix(w), noPlural(noPrefix(w))])].filter((x) => x.length >= 2);
+  const tw = wordsOf(text).filter((w) => !/^(מק"?ט|מקט|פריט|של|עם|את|על)$/.test(w));
+  const cw = wordsOf(context).filter((w) => w.length >= 3).slice(0, 6);
+  const probe = [...new Set([...tw.flatMap(forms), ...cw.map(noPlural)])].slice(0, 14);
+  const sel = '$select=PARTNAME,PARTDES,STATDES,BUD_SUBCHAPTERNAME,BUD_SUBCHAPTERDES,BUD_SUBTOPICNAME,BUD_SUBTOPICDES&$top=30';
+  const cand = new Map();
+  for (const w of probe) {
+    const list = await call(company, 'GET', `LOGPART?$filter=${enc(`contains(PARTDES,'${q(w)}') and STATDES eq 'פעיל'`)}&${sel}`).then(rows).catch(() => []);
+    for (const x of list) cand.set(x.PARTNAME, x);
+  }
+  const has = (des, w) => forms(w).some((f) => des.includes(f));
+  return [...cand.values()].map((p) => {
+    const des = String(p.PARTDES ?? '');
+    const hitT = tw.filter((w) => has(des, w)).length;
+    const hitC = cw.filter((w) => has(des, w)).length;
+    return { p, score: hitT + hitC / 2, full: tw.length > 0 && hitT === tw.length };
+  }).filter((c) => c.score > 0).sort((a, b) => b.score - a.score || String(a.p.PARTDES).length - String(b.p.PARTDES).length);
+}
+
+/** פריט לפי קוד, עם תת הפרק והמשאב שלו */
+async function partByCode(company, code) {
+  const list = rows(await call(company, 'GET', `LOGPART?$filter=${enc(`PARTNAME eq '${q(code)}'`)}&$select=PARTNAME,PARTDES,STATDES,BUD_SUBCHAPTERNAME,BUD_SUBCHAPTERDES,BUD_SUBTOPICNAME,BUD_SUBTOPICDES&$top=1`));
+  return list[0] ?? null;
+}
+
+/**
+ * תת הפרק והמשאב שבהם החברה קולטת בדרך כלל את המק"ט הכללי ‎000‎ (לפי 300 הקבלות האחרונות),
+ * ואם אין — "101 כללי" / "98-10 כללי" כשהם קיימים בחברה. נשמר לשעה.
+ */
+/** הקידוד "כללי" — תת פרק 101 כללי, משאב 98-10 כללי (זהה בכל החברות; לא קיים בעותק הבדיקה test11) */
+const GENERAL = { chapter: '101', chapterDes: 'כללי', topic: '98-10', topicDes: 'כללי' };
+const generalCache = new Map();
+async function generalCoding(company) {
+  const hit = generalCache.get(company);
+  if (hit && Date.now() - hit.at < 3600000) return hit.v;
+  let v = null;
+  try {
+    const grs = rows(await call(company, 'GET',
+      `DOCUMENTS_P?$filter=${enc("STATDES ne 'מבוטלת'")}&$select=DOCNO&$orderby=CURDATE%20desc&$top=300`
+      + `&$expand=TRANSORDER_P_SUBFORM($select=${LINE_SEL};$filter=${enc("PARTNAME eq '000'")})`));
+    const count = new Map();
+    for (const l of grs.flatMap((g) => g.TRANSORDER_P_SUBFORM ?? [])) {
+      if (!l.BUD_SUBCHAPTERNAME || !l.BUD_SUBTOPICNAME) continue;
+      const k = `${l.BUD_SUBCHAPTERNAME}|${l.BUD_SUBTOPICNAME}`;
+      const e = count.get(k) ?? { n: 0, l };
+      e.n += 1; count.set(k, e);
+    }
+    const best = [...count.values()].sort((a, b) => b.n - a.n)[0]?.l;
+    if (best) v = { chapter: best.BUD_SUBCHAPTERNAME, chapterDes: best.BUD_SUBCHAPTERDES ?? '', topic: best.BUD_SUBTOPICNAME, topicDes: best.BUD_SUBTOPICDES ?? '' };
+  } catch (err) {
+    console.error(`[משימון] קידוד כללי (${company}):`, err.message);
+  }
+  if (!v) {
+    try {
+      const p = rows(await call(company, 'GET', `LOGPART?$filter=${enc("BUD_SUBCHAPTERNAME eq '101' and BUD_SUBTOPICNAME eq '98-10'")}&$select=BUD_SUBCHAPTERDES,BUD_SUBTOPICDES&$top=1`))[0];
+      if (p) v = { chapter: '101', chapterDes: p.BUD_SUBCHAPTERDES ?? 'כללי', topic: '98-10', topicDes: p.BUD_SUBTOPICDES ?? 'כללי' };
+    } catch { /* בלי קידוד כללי */ }
+  }
+  generalCache.set(company, { at: Date.now(), v });
+  return v;
 }
 
 /** תת הפרק שבו הספק נקלט בפעם האחרונה — הצעה לשורות בפריט כללי */
@@ -281,7 +461,7 @@ function matchProjects(list, text, { all = false } = {}) {
 /** ה-GR כפי שנשמר — כותרת, שורות, נספחים, דו-שיח פנימי */
 async function readReceipt(company, docno) {
   const k = grKey(docno);
-  const h = strip(await call(company, 'GET', `${k}?$select=DOCNO,CURDATE,SUPNAME,CDES,BOOKNUM,PROJDOCNO,PROJDES,TOWARHSNAME,STATDES,DETAILS,QPRICE,PERCENT,DISPRICE,VAT,TOTPRICE`));
+  const h = strip(await call(company, 'GET', `${k}?$select=DOCNO,CURDATE,SUPNAME,CDES,BOOKNUM,PROJDOCNO,PROJDES,TOWARHSNAME,TOWARHSDES,STATDES,DETAILS,QPRICE,PERCENT,DISPRICE,VAT,TOTPRICE,MED_MXPAYCODE,MED_MXPAYDES`));
   const lines = rows(await call(company, 'GET', `${k}/TRANSORDER_P_SUBFORM?$select=KLINE,PARTNAME,PDES,TQUANT,TUNITNAME,PRICE,PERCENT,QPRICE,ORDNAME,OLINE,BUD_SUBCHAPTERNAME,BUD_SUBCHAPTERDES,BUD_SUBTOPICNAME`))
     .sort((a, b) => a.KLINE - b.KLINE);
   const files = rows(await call(company, 'GET', `${k}/EXTFILES_SUBFORM?$select=EXTFILENUM,EXTFILEDES,SUFFIX`));
@@ -292,16 +472,144 @@ async function readReceipt(company, docno) {
 // כתיבה — קבלת סחורה
 // ---------------------------------------------------------------------------
 
-/** המחסן של הפרויקט (‎BUD_WARHSNAME‎ במסך הפרויקטים), או ‎Main‎ כשלפרויקט אין מחסן */
-async function warehouseOf(company, project) {
-  if (!project) return 'Main';
-  const p = (await projects(company)).find((x) => x.code === project);
-  return p?.warehouse || 'Main';
+/*
+ * תנאי תשלום (‎MED_MXPAYCODE‎ ב-GR). מסך תנאי התשלום (‎PAY‎) סגור ל-API, ולכן הרשימה
+ * כאן — הקודים שבשימוש בהזמנות, בספקים ובקבלות הסחורה, זהים בכל החברות שנבדקו
+ * (a160226, test11, elad1). ברירת המחדל: ‎04‎ = שוטף + 45. פריוריטי דוחה קוד שאינו קיים.
+ */
+const PAY_TERMS = [
+  { code: '01', name: 'שוטף', days: 0 },
+  { code: '02', name: 'ש15', days: 15 },
+  { code: '03', name: 'ש30', days: 30 },
+  { code: '04', name: 'ש45', days: 45 },
+  { code: '05', name: 'ש60', days: 60 },
+  { code: '08', name: 'ש75', days: 75 },
+  { code: '06', name: 'ש90', days: 90 }
+];
+const DEFAULT_PAY = '04';
+const payTerm = (code) => PAY_TERMS.find((p) => p.code === code) ?? null;
+const payLabel = (code) => { const p = payTerm(code); return !p ? code : p.days ? `שוטף + ${p.days}` : 'שוטף'; };
+/**
+ * תנאי התשלום שבטקסט: "שוטף 60", "שוטף+30", "ש60", "שוטף פלוס 90", "שוטף" לבד.
+ * ‎null‎ — לא נאמר תנאי תשלום. ‎{ unknown: 75 }‎ — נאמר מספר ימים שאין לו קוד.
+ */
+/**
+ * מועד התשלום — מתאריך החשבונית: "שוטף" = סוף החודש של התאריך; "שוטף + N" = סוף החודש ועוד N ימים.
+ * ‎YYYY-MM-DD‎, או ריק כשאין תאריך או קוד.
+ */
+function dueDate(code, docDate) {
+  const p = payTerm(code);
+  const m = String(docDate ?? '').match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (!p || !m) return '';
+  const eom = new Date(Date.UTC(Number(m[1]), Number(m[2]), 0));        // היום האחרון בחודש
+  eom.setUTCDate(eom.getUTCDate() + p.days);
+  return eom.toISOString().slice(0, 10);
 }
 
+function payFromText(text) {
+  const t = String(text ?? '').replace(/["'״׳]/g, '');
+  const m = t.match(/(?:^|[\s,])(?:שוטף|ש)\s*(?:\+|פלוס)?\s*(\d{1,3})(?!\d)/);
+  if (m) {
+    const days = Number(m[1]);
+    const p = PAY_TERMS.find((x) => x.days === days);
+    return p ? p : { unknown: days };
+  }
+  if (/(?:^|[\s,])שוטף(?:$|[\s,.!])/.test(t)) return payTerm('01');
+  return null;
+}
+
+/**
+ * מסך המחסנים (‎WAREHOUSES‎) — הרשימה של החברה, בלי הלא-פעילים. ‎project‎ — הפרויקט שהמחסן משויך
+ * אליו (‎DOCNO‎). נשמר לשעה. ‎null‎ — המסך לא זמין (אז לא מסננים לפיו).
+ */
+const warehouseCache = new Map();
+async function warehouses(company) {
+  const hit = warehouseCache.get(company);
+  if (hit && Date.now() - hit.at < 3600000) return hit.list;
+  let list = null;
+  try {
+    list = rows(await call(company, 'GET', 'WAREHOUSES?$select=WARHSNAME,WARHSDES,DOCNO,PROJDES,INACTIVE&$top=2000'))
+      .filter((r) => r.WARHSNAME && !r.INACTIVE)
+      .map((r) => ({ code: r.WARHSNAME, name: r.WARHSDES ?? '', project: r.DOCNO || '', projectDes: r.PROJDES ?? '' }));
+    warehouseCache.set(company, { at: Date.now(), list });
+  } catch (err) {
+    console.error(`[משימון] מסך המחסנים בפריוריטי (${company}) לא זמין:`, err.message);
+  }
+  return list;
+}
+
+/** המחסן קיים ופעיל בחברה (כשמסך המחסנים לא זמין — מניחים שכן) */
+async function warehouseExists(company, code) {
+  const list = await warehouses(company);
+  return !list || list.some((w) => w.code === code);
+}
+
+/** מחסן ברירת המחדל של החברה: ‎Main‎ אם קיים, אחרת המחסן היחיד שאינו של פרויקט */
+async function defaultWarehouse(company) {
+  const list = await warehouses(company);
+  if (!list || list.some((w) => w.code === 'Main')) return 'Main';
+  const free = list.filter((w) => !w.project);
+  return (free.length === 1 ? free[0] : list.length === 1 ? list[0] : null)?.code ?? 'Main';
+}
+
+/**
+ * המחסנים של הפרויקט: קודם מסך המחסנים — המחסנים ששויכו לפרויקט (‎WAREHOUSES.DOCNO‎); כשאין —
+ * המחסנים שאליהם נקלטו בפועל קבלות של הפרויקט, רק כאלה שקיימים במסך המחסנים.
+ * ‎[{ code, name, n, linked }]‎; ‎n‎ — מספר הקבלות שנקלטו אליו בפרויקט.
+ */
+async function projectWarehouses(company, project) {
+  if (!project) return [];
+  const [list, used] = await Promise.all([
+    warehouses(company),
+    call(company, 'GET', `DOCUMENTS_P?$filter=${enc(`PROJDOCNO eq '${q(project)}' and STATDES ne 'מבוטלת'`)}&$select=TOWARHSNAME,TOWARHSDES&$orderby=CURDATE%20desc&$top=200`)
+      .then(rows).catch(() => [])
+  ]);
+  const count = new Map();
+  for (const r of used) if (r.TOWARHSNAME) count.set(r.TOWARHSNAME, (count.get(r.TOWARHSNAME) ?? 0) + 1);
+  const linked = (list ?? []).filter((w) => w.project === project);
+  if (linked.length) {
+    return linked.map((w) => ({ code: w.code, name: w.name, n: count.get(w.code) ?? 0, linked: true })).sort((a, b) => b.n - a.n);
+  }
+  const m = new Map();
+  for (const r of used) {
+    if (!r.TOWARHSNAME || (list && !list.some((w) => w.code === r.TOWARHSNAME))) continue;
+    const e = m.get(r.TOWARHSNAME) ?? { code: r.TOWARHSNAME, name: r.TOWARHSDES || list?.find((w) => w.code === r.TOWARHSNAME)?.name || '', n: 0, linked: false };
+    e.n += 1;
+    m.set(r.TOWARHSNAME, e);
+  }
+  return [...m.values()].sort((a, b) => b.n - a.n);
+}
+
+/*
+ * המחסן כשאין לפרויקט מחסן משויך ואין קבלות קודמות: מחסן הפרויקט שבמסך הפרויקטים
+ * (‎BUD_WARHSNAME‎) — רק אם הוא קיים במסך המחסנים (בדניה הירוקה "01" אינו קיים); אחרת מחסן
+ * ברירת המחדל של החברה (‎Main‎).
+ */
+async function warehouseOf(company, project) {
+  try {
+    const opts = await projectWarehouses(company, project);
+    if (opts.length) return opts[0].code;
+    const pw = project && (await projects(company)).find((x) => x.code === project)?.warehouse;
+    if (pw && await warehouseExists(company, pw)) return pw;
+    return await defaultWarehouse(company);
+  } catch (err) {
+    console.error(`[משימון] מחסן לפרויקט ${project} (${company}):`, err.message);
+    return 'Main';
+  }
+}
+
+/*
+ * קודי מס בקבלת סחורה (‎TAXCODE‎; מסך המסים סגור ל-API — הרשימה מהמסך בפריוריטי):
+ *   000 פטור ממע"מ · 002 מע"מ תשומות (ברירת המחדל) · 003 מע"מ תשומות לנכסים ·
+ *   006 מע"מ נקבע ידנית · 007 מע"מ בשיעור 0.
+ * אגרה, ארנונה, שכר דירה, עוסק פטור — ‎000‎.
+ */
+const TAX_CODES = { '000': 'פטור ממע"מ', '002': 'מע"מ תשומות', '003': 'מע"מ תשומות לנכסים', '006': 'מע"מ נקבע ידנית', '007': 'מע"מ בשיעור 0' };
+const NO_VAT_CODE = '000';
+
 /** GR טיוטא. ‎project‎ — כשיש הזמנה, הפרויקט שלה. ‎warehouse‎ — המחסן של הפרויקט */
-async function createReceipt(company, { supname, booknum, date, project, warehouse = 'Main' }) {
-  const body = { SUPNAME: supname, TOWARHSNAME: warehouse };
+async function createReceipt(company, { supname, booknum, date, project, warehouse = 'Main', payCode = DEFAULT_PAY }) {
+  const body = { SUPNAME: supname, TOWARHSNAME: warehouse, MED_MXPAYCODE: payCode };
   if (booknum) body.BOOKNUM = String(booknum).slice(0, 20);
   if (date) body.CURDATE = `${date}T00:00:00Z`;
   if (project) body.PROJDOCNO = project;
@@ -339,6 +647,10 @@ async function addFreeLine(company, docno, { part = '000', description, qty, pri
   return r.KLINE;
 }
 
+/** תיאור שורה (‎PDES‎) — במק"ט הכללי 000 */
+const setLineDes = (company, docno, kline, des) =>
+  call(company, 'PATCH', `${grKey(docno)}/TRANSORDER_P_SUBFORM(KLINE=${Number(kline)},TYPE='P')`, { PDES: String(des).slice(0, 48) });
+
 const setLineQty = (company, docno, kline, qty) =>
   call(company, 'PATCH', `${grKey(docno)}/TRANSORDER_P_SUBFORM(KLINE=${Number(kline)},TYPE='P')`, { TQUANT: qty });
 
@@ -347,8 +659,12 @@ const setHeader = (company, docno, fields) => call(company, 'PATCH', grKey(docno
 /** נספח — תמונה או PDF, כ-data URI */
 async function attach(company, docno, { buf, mime, description }) {
   const uri = `data:${mime || 'image/jpeg'};base64,${buf.toString('base64')}`;
-  await call(company, 'POST', `${grKey(docno)}/EXTFILES_SUBFORM`, { EXTFILEDES: String(description ?? '').slice(0, 80), EXTFILENAME: uri });
+  const r = await call(company, 'POST', `${grKey(docno)}/EXTFILES_SUBFORM`, { EXTFILEDES: String(description ?? '').slice(0, 80), EXTFILENAME: uri });
+  return r?.EXTFILENUM ?? null;
 }
+
+/** מחיקת נספח מה-GR (ביטול נספח שצורף בטעות) */
+const deleteAttachment = (company, docno, num) => call(company, 'DELETE', `${grKey(docno)}/EXTFILES_SUBFORM(EXTFILENUM=${Number(num)})`);
 
 /** דו-שיח פנימי — מי קיבל, ממה, ומה תוקן. מחליף את הטקסט הקיים */
 async function setDialog(company, docno, lines) {
@@ -379,8 +695,31 @@ const finalizeReceipt = (company, docno) => call(company, 'PATCH', grKey(docno),
  * ולכן טיוטא נטושה חייבת להתבטל. פריוריטי אינו מוחק תעודה ואינו מבטל תעודה
  * עם שורות — קודם השורות, אחר כך הסטטוס.
  */
+/** מחיקת כל השורות של טיוטא — לבנייה מחדש של השורות באותו GR */
+async function deleteLines(company, docno) {
+  const k = grKey(docno);
+  for (const l of rows(await call(company, 'GET', `${k}/TRANSORDER_P_SUBFORM?$select=KLINE`))) {
+    await call(company, 'DELETE', `${k}/TRANSORDER_P_SUBFORM(KLINE=${l.KLINE},TYPE='P')`);
+  }
+}
+
+/** הסטטוס של ה-GR בפריוריטי ("טיוטא", "סופית", "מבוטלת"); ‎null‎ — לא נמצא */
+async function receiptStatus(company, docno) {
+  try {
+    return (await call(company, 'GET', `${grKey(docno)}?$select=STATDES`))?.STATDES ?? null;
+  } catch (err) {
+    if (/404|not found|לא נמצא/i.test(err.message)) return null;
+    throw err;
+  }
+}
+
+/**
+ * ביטול — רק טיוטא. GR שכבר אושר במחשב (סופית) או בוטל — לא נוגעים בו: ‎{ skipped: status }‎.
+ */
 async function cancelReceipt(company, docno) {
   const k = grKey(docno);
+  const status = await receiptStatus(company, docno);
+  if (status !== 'טיוטא') return { skipped: status ?? 'לא נמצא' };
   for (const l of rows(await call(company, 'GET', `${k}/TRANSORDER_P_SUBFORM?$select=KLINE`))) {
     await call(company, 'DELETE', `${k}/TRANSORDER_P_SUBFORM(KLINE=${l.KLINE},TYPE='P')`);
   }
@@ -393,8 +732,8 @@ async function cancelReceipt(company, docno) {
 }
 
 module.exports = {
-  COMPANIES, isEnabled, allowed, companyOf, isTest, resolveCompany, PriorityError,
-  warehouseOf, findSuppliers, supplierByCode, findReceiptByBooknum, getOrder, openOrders, findPartExact, lastSubchapter, projects, matchProjects, readReceipt,
-  readDialog, createReceipt, addOrderLine, addFreeLine, setLineQty, setHeader, attach, setDialog, finalizeReceipt, cancelReceipt,
+  COMPANIES, isEnabled, allowed, companyOf, isTest, resolveCompany, companiesByName, PriorityError,
+  GENERAL, NO_VAT_CODE, TAX_CODES, PAY_TERMS, DEFAULT_PAY, payTerm, payLabel, payFromText, dueDate, projectWarehouses, warehouses, warehouseExists, defaultWarehouse, supplierHistory, recentLines, partByCode, findPartsByText, searchParts, generalCoding, warehouseOf, findSuppliers, supplierByCode, findReceiptByBooknum, getOrder, openOrders, findPartExact, lastSubchapter, projects, matchProjects, readReceipt,
+  readDialog, createReceipt, addOrderLine, addFreeLine, setLineQty, setLineDes, setHeader, attach, deleteAttachment, setDialog, finalizeReceipt, cancelReceipt, receiptStatus, deleteLines,
   _call: call
 };

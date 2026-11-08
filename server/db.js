@@ -676,6 +676,40 @@ CREATE TABLE IF NOT EXISTS wa_chats (
  * הודעות יזומות של הבוט (קיבלת משימה) שנוצרו מחוץ לשעות הפעילות או בשבת —
  * נשלחות כשהחלון נפתח.
  */
+/*
+ * הודעות שעובד העביר (Forward) לבוט, וממתינות להוראה מה לעשות איתן ("לשושנה,
+ * תפתח משימה"). ‎kind‎: ‎forward‎ — ההודעה שהועברה · ‎note‎ — הוראה חלקית שכבר
+ * נאמרה עליהן. נמחקות כשההוראה טופלה, או אחרי חלון ההמתנה.
+ */
+CREATE TABLE IF NOT EXISTS wa_forwards (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  kind        TEXT    NOT NULL DEFAULT 'forward',
+  text        TEXT    NOT NULL,
+  at          TEXT    NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_wa_forwards_user ON wa_forwards(user_id, id);
+
+/*
+ * הסקירה הלילית של יומן הבוט (‎server/bot-review.js‎): מה עבד, מה לא, מה
+ * למדנו על האנשים, ואילו תיקונים מוצעים. ‎fixes‎ — מערך: כותרת, הבעיה, דוגמה,
+ * קישור למיזוג, ומצב שהמנהל קובע (‎new‎ · ‎done‎ · ‎dismissed‎) עם הערה —
+ * והסקירה הבאה רואה את ההחלטות ולומדת מהן.
+ */
+CREATE TABLE IF NOT EXISTS bot_reviews (
+  id             INTEGER PRIMARY KEY AUTOINCREMENT,
+  created_at     TEXT    NOT NULL,
+  period_from    TEXT    NOT NULL DEFAULT '',
+  period_to      TEXT    NOT NULL DEFAULT '',
+  subject        TEXT    NOT NULL DEFAULT '',
+  summary        TEXT    NOT NULL DEFAULT '',
+  conversations  INTEGER NOT NULL DEFAULT 0,
+  succeeded      INTEGER NOT NULL DEFAULT 0,
+  patterns       TEXT    NOT NULL DEFAULT '[]',
+  fixes          TEXT    NOT NULL DEFAULT '[]',
+  emailed        INTEGER NOT NULL DEFAULT 0
+);
+
 CREATE TABLE IF NOT EXISTS wa_outbox (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
   user_id     INTEGER REFERENCES users(id) ON DELETE CASCADE,
@@ -1245,6 +1279,21 @@ function countsAsOpener(userId) {
 }
 
 function notify({ targetType, targetId, kind, title, body = '', taskId = null, push = null }) {
+  /*
+   * 🔒 משימה מסווגת (‎ai/classification.js‎): נמען שהסיווג לא מתיר לו לראות אותה
+   * מקבל התראה כללית, בלי כותרת ובלי תוכן — גם בדחיפה לטלפון ובמייל.
+   */
+  if (taskId) {
+    const task = get('SELECT * FROM tasks WHERE id = ?', taskId);
+    if (task && (Number(task.sens) > 0 || task.project_id)) {
+      const Cls = require('./ai/classification');
+      if (Cls.taskClass(task) && !Cls.mayReadTask({ type: targetType, id: targetId }, task)) {
+        title = '🔒 עדכון במשימה מסווגת';
+        body = '';
+        push = null;
+      }
+    }
+  }
   const res = run(
     'INSERT INTO notifications (target_type, target_id, kind, title, body, task_id, is_read, created_at) VALUES (?,?,?,?,?,?,0,?)',
     targetType,
@@ -1634,6 +1683,14 @@ function migrate() {
   // הארגונית שבוטלה. היא נותרת ריקה ואינה נקראת; מחיקת עמודה ב-SQLite
   // דורשת בניית טבלה מחדש, וזה סיכון מיותר עבור עמודה שאינה מפריעה.
   addColumn('tasks', 'department_id', 'INTEGER REFERENCES departments(id) ON DELETE SET NULL');
+  /*
+   * 🔒 סיווג לפי נושא ורמת רגישות (‎ai/classification.js‎). ‎sens = 0‎ — לא מסווג:
+   * ההרשאות הרגילות בלבד. משימה בלי סיווג משלה יורשת את זה של הפרויקט.
+   */
+  for (const t of ['tasks', 'projects']) {
+    addColumn(t, 'topic', "TEXT NOT NULL DEFAULT ''");
+    addColumn(t, 'sens', 'INTEGER NOT NULL DEFAULT 0');
+  }
   // תת-משימה והסטטוס המקוצר שלה — ראה ההסבר בהגדרת הטבלה
   addColumn('tasks', 'parent_task_id', 'INTEGER REFERENCES tasks(id) ON DELETE CASCADE');
   addColumn('tasks', 'status_short', "TEXT NOT NULL DEFAULT ''");
@@ -1689,6 +1746,9 @@ function migrate() {
   addColumn('wa_chats', 'greeted_on', "TEXT NOT NULL DEFAULT ''");
   // רשימת התובנות מהמיילים שנשלחה לו, ובקשות מאותה הקלטה שממתינות בתור
   addColumn('wa_chats', 'extra', "TEXT NOT NULL DEFAULT '{}'");
+  // יומן הבוט: התשובה המלאה שנשלחה, והאם ההודעה הועברה (Forward) — לסקירה הלילית
+  addColumn('wa_log', 'reply', "TEXT NOT NULL DEFAULT ''");
+  addColumn('wa_log', 'forwarded', 'INTEGER NOT NULL DEFAULT 0');
   addColumn('comments', 'checklist_item_id', 'INTEGER REFERENCES checklist_items(id) ON DELETE CASCADE');
   // תבניות פר מחלקה. תבנית קיימת נשארת ללא מחלקה, כלומר ארגונית — מי שכבר
   // הסתמך עליה לא יגלה אותה נעלמת בעלייה לגרסה

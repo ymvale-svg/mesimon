@@ -970,7 +970,7 @@ function kick() {
  * תוקף של מסמכים שמתקרבים הופכים להצעת משימה.
  */
 async function morning() {
-  if (!Claude.isEnabled() || !D.getSetting('mail_memory_enabled', true)) return;
+  if (offByEnv() || !Claude.isEnabled() || !D.getSetting('mail_memory_enabled', true)) return;
   for (const run of D.all("SELECT * FROM mail_memory_runs WHERE state IN ('running','done')")) {
     const user = userRow(run.user_id);
     if (!user || !allowed(user) || !connected(user.id)) continue;

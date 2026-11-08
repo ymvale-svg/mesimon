@@ -3204,6 +3204,21 @@ input[type="color"] { width: 46px; height: 30px; padding: 2px; cursor: pointer; 
 .wa-stat b { font-size: 22px; line-height: 1.1; }
 .wa-stat span { font-size: 12px; color: var(--text-soft); }
 .wa-stat-link { cursor: pointer; }
+.rv-reply { margin-top: 4px; white-space: pre-wrap; }
+.rv-h { margin: 4px 0 8px; font-size: 14px; }
+.rv-text { white-space: pre-wrap; line-height: 1.65; margin-top: 6px; }
+.rv-example { margin-top: 6px; padding: 6px 10px; border-inline-start: 3px solid var(--border-strong); background: var(--surface-2); border-radius: 6px; font-size: 13px; white-space: pre-wrap; }
+.rv-list { margin: 0; padding-inline-start: 20px; display: grid; gap: 4px; }
+.rv-fix { border: 1px solid var(--border); border-radius: var(--radius); padding: 12px 14px; margin-bottom: 10px; background: var(--surface); }
+.rv-fix-closed { opacity: .7; }
+.rv-actions { flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.rv-bars { display: flex; align-items: flex-end; gap: 6px; height: 110px; }
+.rv-bar { flex: 1; max-width: 42px; height: 100%; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; gap: 2px; }
+.rv-bar-fill { width: 100%; background: var(--brand); border-radius: 4px 4px 0 0; }
+.rv-bar span { font-size: 11px; color: var(--text-soft); }
+.rv-old { border-top: 1px solid var(--border); padding: 8px 0; }
+.rv-old summary { cursor: pointer; padding: 4px 0; }
+.rv-old[open] summary { margin-bottom: 10px; }
 .wa-stat-link:hover { border-color: var(--brand); }
 .wa-chip-ok { background: var(--ok-bg); color: #166534; }
 .wa-chip-danger { background: #fef2f2; color: #991b1b; }
@@ -3305,6 +3320,42 @@ input[type="color"] { width: 46px; height: 30px; padding: 2px; cursor: pointer; 
 .cal-ev.is-busy { background: repeating-linear-gradient(45deg, #cbd5e1, #cbd5e1 6px, #e2e8f0 6px, #e2e8f0 12px); color: var(--text-soft); }
 .cal-ev.is-ours { box-shadow: inset 3px 0 0 #fbbf24; }
 .cal-allday { position: absolute; inset-inline: 2px; height: 18px; border-radius: 4px; color: #fff; font-size: 11px; padding: 0 5px; overflow: hidden; z-index: 2; cursor: pointer; }
+
+/* חלון ‎sticky‎ — לחיצה מחוץ לו לא סוגרת, רק מזכירה שהוא פתוח */
+.modal.is-nudge { animation: modal-nudge .32s ease; }
+@keyframes modal-nudge { 0%, 100% { transform: scale(1); } 40% { transform: scale(1.015); box-shadow: 0 0 0 3px var(--brand-light), var(--shadow-lg); } }
+@media (prefers-reduced-motion: reduce) { .modal.is-nudge { animation: none; } }
+
+/* 📌 מחכות לקביעה — לוח צף משמאל ליומן, למזכירות. היומן מפנה לו מקום */
+.cal.has-dock { padding-left: 316px; }
+.cal-col.is-drop { background: var(--brand-light); outline: 2px dashed var(--brand); outline-offset: -2px; }
+.cal-dock {
+  position: fixed; top: calc(var(--header-h) + 14px); left: 16px; z-index: 40;
+  width: 296px; max-height: calc(100vh - var(--header-h) - 32px);
+  display: flex; flex-direction: column;
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); box-shadow: var(--shadow-lg);
+}
+.cal-dock-head { display: flex; align-items: center; gap: 6px; padding: 10px 12px; border-bottom: 1px solid var(--border); }
+.cal-dock-min { font-weight: 700; line-height: 1; }
+.cal-dock-hint { padding: 6px 12px 0; }
+.cal-dock-list { overflow-y: auto; padding: 8px; display: flex; flex-direction: column; gap: 6px; }
+.cal-dock-task { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius, 8px); background: var(--surface-2); cursor: grab; }
+.cal-dock-task:active { cursor: grabbing; }
+.cal-dock-main { flex: 1; min-width: 0; cursor: pointer; }
+.cal-dock-main .today-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cal-dock-empty { padding: 10px 4px; text-align: center; }
+.cal-dock-pill {
+  position: fixed; top: calc(var(--header-h) + 14px); left: 16px; z-index: 40;
+  display: inline-flex; align-items: center; gap: 8px; padding: 8px 14px;
+  font: inherit; font-weight: 700; cursor: pointer;
+  background: var(--surface); color: var(--text); border: 1px solid var(--border-strong); border-radius: 999px; box-shadow: var(--shadow-lg);
+}
+@media (max-width: 1100px) {
+  /* מסך צר — הלוח צף מעל היומן ולא דוחק אותו */
+  .cal.has-dock { padding-left: 0; }
+  .cal-dock { top: auto; bottom: 16px; width: min(340px, calc(100vw - 32px)); max-height: 55vh; }
+  .cal-dock-pill { top: auto; bottom: 16px; }
+}
 
 /* ---------------------------------------------- 📒 אלפון ארגוני */
 

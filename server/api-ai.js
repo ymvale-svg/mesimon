@@ -18,11 +18,13 @@ const GContacts = require('./google-contacts');
 const WaScan = require('./ai/whatsapp-scan');
 const Calendar = require('./calendar');
 const WaBot = require('./ai/wa-bot');
+const BotReview = require('./bot-review');
 const WaActions = require('./ai/wa-actions');
 const Memory = require('./ai/mail-memory');
 const MailAsk = require('./ai/mail-ask');
 const Agents = require('./ai/agents');
 const OrgKnowledge = require('./ai/org-knowledge');
+const Classification = require('./ai/classification');
 const Timeless = require('./timeless');
 const MailInsights = require('./ai/mail-insights');
 const Mime = require('./mime');
@@ -679,9 +681,10 @@ function register(router, h) {
       if (Gmail.isPersonalEmail(work)) return back(`${work} היא כתובת פרטית — יש לכתוב את המייל הארגוני / המחלקתי`);
       const taken = D.get('SELECT id FROM users WHERE id <> ? AND (lower(work_email) = ? OR lower(email) = ?)', actor.id, work, work);
       if (taken) return back('המייל הזה כבר משויך לעובד אחר. פנו למנהל המערכת');
-      D.run('UPDATE users SET work_email = ? WHERE id = ?', work, actor.id);
+      // לא נשמר כאן: נשמר רק אחרי ש-Google מאשר שהעובד שולט בכתובת (Gmail.connect).
+      // בלי זה, קישור אחד מספיק כדי לקבוע לעובד מייל ארגוני של מישהו אחר ולהיכנס בשמו
     }
-    res.writeHead(302, { location: Gmail.authorizeUrl(req, user, { add }), 'cache-control': 'no-store' });
+    res.writeHead(302, { location: Gmail.authorizeUrl(req, user, { add, expect: work && !add ? work : '' }), 'cache-control': 'no-store' });
     res.end();
   });
 
@@ -962,9 +965,9 @@ function register(router, h) {
   });
 
   router.get('/api/admin/knowledge', async (req, res, ctx) => {
-    aiAdmin(ctx);
+    const actor = aiAdmin(ctx);
     const sp = parseUrl(req).searchParams;
-    sendJson(res, 200, { ...OrgKnowledge.list({ q: sp.get('q') ?? '', dept: sp.get('dept') ?? '', week: sp.get('week') === '1' }), blocklist: D.getSetting('org_knowledge_blocklist', '') });
+    sendJson(res, 200, { ...OrgKnowledge.list({ q: sp.get('q') ?? '', dept: sp.get('dept') ?? '', topic: sp.get('topic') ?? '', week: sp.get('week') === '1', actor }), blocklist: D.getSetting('org_knowledge_blocklist', '') });
   });
   router.put('/api/admin/knowledge/blocklist', async (req, res, ctx) => {
     aiAdmin(ctx);
@@ -979,15 +982,40 @@ function register(router, h) {
     OrgKnowledge.daily({ force: true }).catch((err) => console.error('[משימון] עדכון הידע הארגוני נכשל:', err.message));
     sendJson(res, 202, { started: true });
   });
-  router.get('/api/admin/knowledge/:id/sources', async (req, res, ctx) => {
+  // 🔒 טבלת הרגישות — נושאים, מחלקות, רצפה ודוגמאות (‎classification.js‎)
+  router.get('/api/admin/knowledge/topics', async (req, res, ctx) => {
     aiAdmin(ctx);
-    sendJson(res, 200, { sources: OrgKnowledge.sources(Number(ctx.params.id)) });
+    sendJson(res, 200, {
+      topics: Classification.topics(),
+      levels: Classification.LEVEL_LABELS,
+      hints: Classification.LEVEL_HINTS,
+      leadership: Classification.leadershipList(),
+      departments: D.all('SELECT id, name FROM departments ORDER BY name').map((d) => ({ id: d.id, name: D.departmentPath(d.id) }))
+    });
   });
-  router.put('/api/admin/knowledge/:id', async (req, res, ctx) => {
+  router.put('/api/admin/knowledge/topics', async (req, res, ctx) => {
     aiAdmin(ctx);
     const b = await readJson(req);
     try {
-      sendJson(res, 200, { entry: OrgKnowledge.edit(Number(ctx.params.id), b) });
+      sendJson(res, 200, { topics: Classification.saveTopics(b.topics) });
+    } catch (err) {
+      throw userError(err);
+    }
+  });
+  router.get('/api/admin/knowledge/preview', async (req, res, ctx) => {
+    aiAdmin(ctx);
+    const sp = parseUrl(req).searchParams;
+    sendJson(res, 200, { rows: Classification.preview({ departmentId: Number(sp.get('department')) || null, role: sp.get('role') || 'employee' }) });
+  });
+  router.get('/api/admin/knowledge/:id/sources', async (req, res, ctx) => {
+    const actor = aiAdmin(ctx);
+    sendJson(res, 200, { sources: OrgKnowledge.sources(Number(ctx.params.id), actor) });
+  });
+  router.put('/api/admin/knowledge/:id', async (req, res, ctx) => {
+    const actor = aiAdmin(ctx);
+    const b = await readJson(req);
+    try {
+      sendJson(res, 200, { entry: OrgKnowledge.edit(Number(ctx.params.id), b, actor) });
     } catch (err) {
       throw userError(err);
     }
@@ -1146,6 +1174,19 @@ function register(router, h) {
         chatId: q.get('chatId') ?? '', q: (q.get('q') ?? '').trim().slice(0, 100), before: Number(q.get('before')) || 0
       })
     });
+  });
+
+  // הסקירה הלילית של היומן: הדו"חות וההצעות לתיקון (‎server/bot-review.js‎)
+  router.get('/api/admin/wa-bot/reviews', async (req, res, ctx) => {
+    botAdmin(ctx);
+    sendJson(res, 200, { configured: BotReview.isConfigured(), reviews: BotReview.listReviews() });
+  });
+
+  router.put('/api/admin/wa-bot/reviews/:id/fixes/:n', async (req, res, ctx) => {
+    const actor = botAdmin(ctx);
+    const b = await readJson(req);
+    BotReview.setFixStatus(ctx.params.id, ctx.params.n, { status: String(b.status ?? ''), note: b.note }, actor);
+    sendJson(res, 200, { configured: BotReview.isConfigured(), reviews: BotReview.listReviews() });
   });
 
   // בדיקה בלי וואטסאפ: מה הבוט היה עונה ועושה. לא נשלח ולא מבוצע דבר

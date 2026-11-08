@@ -1565,8 +1565,8 @@ const App = (() => {
         : null,
       route('today', ['היום', 'מה להיום', 'יומי', 'today']),
       route('home', ['בית', 'המשימות שלי', 'דשבורד', 'ראשי', 'home']),
-      // יומן — למזכירות בלבד, כמו בתפריט הצד
-      state.actor?.secretary ? route('calendar', ['יומן', 'פגישות', 'לוח שנה', 'calendar']) : null,
+      // יומן — לכל העובדים, כמו בתפריט הצד
+      route('calendar', ['יומן', 'פגישות', 'לוח שנה', 'calendar']),
       route('board', ['לוח', 'משימות', 'רשימה', 'בורד', 'board']),
       may('view_vendor_boards') ? route('vendorBoards', ['ספקים', 'ספק', 'vendors']) : null,
       route('archive', ['ארכיון', 'שהושלמו', 'archive']),
@@ -2427,8 +2427,8 @@ const App = (() => {
 
     add('today', {}, { icon: el('span.nav-emoji', { text: '☀' }), count: state.todayCount || undefined });
     add('home');
-    // יומן — למזכירות בלבד (הסימון בכרטיס העובד)
-    if (state.actor.secretary) add('calendar', {}, { icon: el('span.nav-emoji', { text: '📅' }) });
+    // יומן — לכל העובדים: היומן שלי. מזכירות — גם היומנים ששותפו איתן ו"מחכות לקביעה"
+    add('calendar', {}, { icon: el('span.nav-emoji', { text: '📅' }) });
     add('board');
     if (may('view_vendor_boards')) add('vendorBoards');
 

@@ -98,7 +98,11 @@ const MeetingView = (() => {
     const timeInput = el('input', { type: 'time', value: state.time, step: 900 });
 
     const body = el('div.mt-dialog');
-    const m = UI.modal({ title: editing ? '📅 שינוי פגישה' : '📅 קביעת פגישה', body, size: 'wide' });
+    // לא נסגר בלחיצה בחוץ — רק בסיום, או ביציאה מפורשת עם אישור
+    const m = UI.modal({
+      title: editing ? '📅 שינוי פגישה' : '📅 קביעת פגישה', body, size: 'wide',
+      sticky: editing ? 'לצאת בלי לשמור את השינויים בפגישה?' : 'לצאת בלי לקבוע את הפגישה?'
+    });
     const startIso = () => new Date(`${state.date}T${state.time}:00`).toISOString();
     const emails = () => state.attendees.map((a) => a.email);
 
@@ -489,7 +493,7 @@ const MeetingView = (() => {
         UI.field('מיקום', locationBox()),
         UI.field('הערות', notesInput),
         el('label.checkbox', {}, [sendInvites, editing ? ' לשלוח עדכון במייל למשתתפים' : ' לשלוח הזמנה במייל לכל המשתתפים']),
-        el('div.ai-foot', { style: { marginTop: '14px' } }, [saveBtn, el('div.spacer'), el('button.btn', { onclick: () => m.close() }, ['ביטול'])])
+        el('div.ai-foot', { style: { marginTop: '14px' } }, [saveBtn, el('div.spacer'), el('button.btn', { onclick: () => m.requestClose() }, ['ביטול'])])
       );
       redrawAvail();
     }

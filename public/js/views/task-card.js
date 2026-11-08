@@ -790,6 +790,10 @@ const TaskCardView = (() => {
           )))
         : null,
       sec('עדיפות', priorityControl),
+      // 🔒 סיווג — נערך בדיאלוג המשימה; כאן רק מוצג
+      task.classification || task.inheritedClassification
+        ? sec('סיווג', ClassPicker.badge(task.classification ?? task.inheritedClassification, { inherited: !task.classification }))
+        : null,
       sec('תאריך יעד', el('div', {}, [
         dueControl,
         el('div.mute-sm', {
