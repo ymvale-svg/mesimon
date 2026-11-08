@@ -85,6 +85,8 @@ function buttonsFor(s) {
   if (s.pendingList) return [BTN.yes, BTN.no];
   switch (s.step) {
     case 'offer': case 'doctype': return [BTN.yes, BTN.no];
+    case 'doc': return s.files?.[0] ? ['נסה שוב 🔄', BTN.cancel] : [BTN.cancel];
+    case 'project': return s.projectPending ? [BTN.yes] : [];
     case 'header': return [BTN.yes, s.noVat ? 'עם מע"מ' : 'ללא מע"מ', BTN.cancel];
     case 'order': return ['בלי הזמנה ❌', BTN.cancel];
     case 'lines': return [BTN.yes, BTN.cancel];
@@ -340,12 +342,60 @@ const REPLY_SCHEMA = {
 const skill = () => fs.readFileSync(SKILL, 'utf8');
 
 /** ניתן להחלפה בבדיקות — ‎_set({ extract, match, reply })‎ */
+/*
+ * הקובץ לקריאה ב-AI. תמונה גדולה מהמגבלה של תמונה (5MB אחרי base64 — צילום HD מוואטסאפ) נעטפת ב-PDF של עמוד
+ * אחד (JPEG כמו שהוא, בלי הקטנה ובלי איבוד איכות), כי המגבלה של מסמך גבוהה בהרבה.
+ */
+/** שגיאה של שירות ה-AI עצמו (קרדיט, הרשאה, עומס, חיבור) — ולא של הקובץ */
+const isServiceError = (err) => /credit|billing|balance|quota|rate.?limit|overloaded|ANTHROPIC_API_KEY|אין חיבור לשירות|authentication|permission/i.test(String(err?.message ?? ''))
+  || [401, 402, 403, 429, 500, 502, 503, 529].includes(Number(err?.status));
+
+const IMAGE_MAX = 3.6 * 1024 * 1024;
+function fileBlock(file) {
+  const buf = fs.readFileSync(file.path);
+  if (file.mime.includes('pdf')) return { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: buf.toString('base64') } };
+  const jpeg = buf[0] === 0xff && buf[1] === 0xd8;
+  if (buf.length > IMAGE_MAX && jpeg) {
+    const pdf = jpegToPdf(buf);
+    if (pdf) return { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: pdf.toString('base64') } };
+  }
+  return { type: 'image', source: { type: 'base64', media_type: file.mime.includes('png') ? 'image/png' : 'image/jpeg', data: buf.toString('base64') } };
+}
+
+/** JPEG ← PDF של עמוד אחד בגודל התמונה (‎DCTDecode‎ — הקובץ עצמו, בלי פענוח). ‎null‎ — לא נמצאו מידות */
+function jpegToPdf(jpg) {
+  let w = 0, h = 0, comps = 3;
+  for (let i = 2; i < jpg.length - 9;) {
+    if (jpg[i] !== 0xff) { i++; continue; }
+    const m = jpg[i + 1];
+    if (m >= 0xc0 && m <= 0xcf && ![0xc4, 0xc8, 0xcc].includes(m)) { h = jpg.readUInt16BE(i + 5); w = jpg.readUInt16BE(i + 7); comps = jpg[i + 9]; break; }
+    if (m === 0xd8 || m === 0x01 || (m >= 0xd0 && m <= 0xd7)) { i += 2; continue; }
+    i += 2 + jpg.readUInt16BE(i + 2);
+  }
+  if (!w || !h) return null;
+  const scale = Math.min(1, 1440 / Math.max(w, h));   // עמוד עד 20 אינץ' — התמונה עצמה ברזולוציה המלאה
+  const pw = Math.round(w * scale), ph = Math.round(h * scale);
+  const cs = comps === 1 ? '/DeviceGray' : comps === 4 ? '/DeviceCMYK' : '/DeviceRGB';
+  const content = `q ${pw} 0 0 ${ph} 0 0 cm /Im0 Do Q`;
+  const parts = [];
+  const offsets = [];
+  let len = 0;
+  const push = (x) => { const b = Buffer.isBuffer(x) ? x : Buffer.from(x, 'latin1'); parts.push(b); len += b.length; };
+  const obj = (n, body) => { offsets[n] = len; push(`${n} 0 obj\n`); body(); push('\nendobj\n'); };
+  push('%PDF-1.4\n%\xff\xff\xff\xff\n');
+  obj(1, () => push('<< /Type /Catalog /Pages 2 0 R >>'));
+  obj(2, () => push('<< /Type /Pages /Kids [3 0 R] /Count 1 >>'));
+  obj(3, () => push(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${pw} ${ph}] /Resources << /XObject << /Im0 4 0 R >> >> /Contents 5 0 R >>`));
+  obj(4, () => { push(`<< /Type /XObject /Subtype /Image /Width ${w} /Height ${h} /ColorSpace ${cs} /BitsPerComponent 8 /Filter /DCTDecode${comps === 4 ? ' /Decode [1 0 1 0 1 0 1 0]' : ''} /Length ${jpg.length} >>\nstream\n`); push(jpg); push('\nendstream'); });
+  obj(5, () => push(`<< /Length ${content.length} >>\nstream\n${content}\nendstream`));
+  const xref = len;
+  push(`xref\n0 6\n0000000000 65535 f \n${[1, 2, 3, 4, 5].map((n) => `${String(offsets[n]).padStart(10, '0')} 00000 n \n`).join('')}trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`);
+  return Buffer.concat(parts);
+}
+
 const ai = {
   async extract(file) {
-    const data = fs.readFileSync(file.path).toString('base64');
-    const block = file.mime.includes('pdf')
-      ? { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data } }
-      : { type: 'image', source: { type: 'base64', media_type: file.mime.includes('png') ? 'image/png' : 'image/jpeg', data } };
+    const block = fileBlock(file);
     const first = await Claude.json({ system: skill(), content: [block, { type: 'text', text: 'task: extract' }], schema: EXTRACT_SCHEMA, effort: 'high', live: true });
     // בדיקה עצמית: סכום השורות לא תואם לסה"כ השורות במסמך — קוראים שוב את הטבלה, שורה אחרי שורה
     const want = Number(first.totals?.subtotal || (Number(first.totals?.before_vat || 0) + Number(first.totals?.doc_discount || 0)) || 0);
@@ -367,10 +417,7 @@ const ai = {
     return Claude.json({ system: skill(), content: [{ type: 'text', text }], schema: MATCH_SCHEMA, effort: 'medium', live: true });
   },
   async classify(current, file) {
-    const data = fs.readFileSync(file.path).toString('base64');
-    const block = file.mime.includes('pdf')
-      ? { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data } }
-      : { type: 'image', source: { type: 'base64', media_type: file.mime.includes('png') ? 'image/png' : 'image/jpeg', data } };
+    const block = fileBlock(file);
     return Claude.json({ system: skill(), content: [block, { type: 'text', text: JSON.stringify({ task: 'classify', current }) }], schema: CLASSIFY_SCHEMA, effort: 'low', live: true });
   },
   async partTerms(text, line) {
@@ -586,6 +633,14 @@ async function onMainDoc(user, s, file, pre = null) {
   try {
     doc = pre ?? await ai.extract(s.files[0]);
   } catch (err) {
+    // תקלה בשירות ה-AI (קרדיט שנגמר, עומס, חיבור) — לא הצילום: לעובד "נסו שוב מאוחר יותר", ולמנהלים הסיבה
+    const service = isServiceError(err);
+    alertAdmins(user, s, service ? (/credit|billing|balance/i.test(err.message) ? 'נגמר הקרדיט של שירות ה-AI' : 'שירות ה-AI לא זמין') : 'קריאת מסמך נכשלה',
+      [`קובץ: ${s.files[0]?.mime ?? ''}, ${Math.round((fs.statSync(s.files[0].path).size || 0) / 1024)}KB`, err.message]);
+    if (service) {
+      return reply(s, '⏳ קריאת המסמכים לא זמינה כרגע — זו תקלה אצלנו, לא בצילום. מנהל המערכת קיבל הודעה. הצילום שמור: כתבו *נסה שוב* בעוד כמה דקות, או *ביטול*.',
+        { status: 'error', result: `שירות ה-AI: ${err.message}` });
+    }
     return reply(s, 'לא הצלחתי לקרוא את המסמך. נסו לצלם שוב, ישר ובאור טוב, כך שכל הדף ייראה.', { status: 'error', result: `קריאת מסמך נכשלה: ${err.message}` });
   }
   // אזהרות — בעברית בלבד; אזהרה שהגיעה באנגלית למרות ההנחיה אינה מוצגת
@@ -961,13 +1016,24 @@ async function askProject(s) {
   }
   // רמז מהמסמך — עיר, אתר, מגרש: כל הפרויקטים המתאימים ביותר (גם לפי הכינויים), ואם לא — ה-AI
   const hint = [s.doc.project_hint, s.doc.delivery_place].filter(Boolean).join(' · ');
-  // הפרויקט שהמשתמש בחר בפעם האחרונה בחברה הזו — ברירת המחדל; לשנות — "פרויקט …"
+  // הפרויקט שהמשתמש בחר בפעם האחרונה בחברה הזו. המסמך גובר: כשיש בו רמז (עיר, אתר) — הפרויקט שמתאים לרמז מוצע
+  // לאישור; הבחירה האחרונה נקבעת לבד רק כשאין רמז, או כשהיא עצמה מתאימה לרמז
   const last = !s.noPref && prefsOf(s.uid, s.company)?.project;
   const lastP = last && all.find((p) => p.code === last.code);
-  if (lastP) {
-    s.project = lastP;
-    s.projectFrom = 'pref';
-    return chooseWarehouse(s, `📁 פרויקט: *${lastP.des}* (${lastP.code}) — הבחירה האחרונה שלך${hint ? ` (במסמך: ${hint})` : ''}\n   לשנות פרויקט — כתבו *פרויקט* ושם ("פרויקט אלעד 49").`);
+  const prefNote = (p) => `📁 פרויקט: *${p.des}* (${p.code}) — הבחירה האחרונה שלך\n   לשנות פרויקט — כתבו *פרויקט* ושם ("פרויקט אלעד 49").`;
+  if (lastP && !hint) { s.project = lastP; s.projectFrom = 'pref'; return chooseWarehouse(s, prefNote(lastP)); }
+  if (hint) {
+    const byHint = (await findProjects(all, hint, { strict: false })).list;
+    if (lastP && byHint.some((p) => p.code === lastP.code)) { s.project = lastP; s.projectFrom = 'pref'; return chooseWarehouse(s, prefNote(lastP)); }
+    s.step = 'project';
+    if (byHint.length === 1) {
+      s.projectPending = byHint[0];
+      return reply(s, `📁 לפי המסמך (${hint}): *${byHint[0].des}* (${byHint[0].code})?\n*כן* 👍 — לשייך, או כתבו פרויקט אחר${lastP ? ` (בפעם האחרונה: ${lastP.des})` : ''}.`);
+    }
+    if (!byHint.length && lastP) {
+      s.projectPending = lastP;
+      return reply(s, `📁 במסמך: ${hint} — לא מצאתי פרויקט שמתאים. לשייך ל*${lastP.des}* (${lastP.code}), הבחירה האחרונה שלך?\n*כן* 👍, או כתבו פרויקט אחר.`);
+    }
   }
   s.step = 'project';
   if (!Priority.matchProjects(all, hint).length) {
@@ -1761,6 +1827,8 @@ async function step(user, s, t, file) {
     }
 
     case 'doc':
+      // "נסה שוב" אחרי תקלה בשירות — אותו צילום, בלי לשלוח שוב
+      if (!file && s.files?.[0]?.path && fs.existsSync(s.files[0].path) && (YES.test(t) || /^(נסה|נסי|תנסה|לנסות)?\s*שוב|^retry/i.test(t))) return onMainDoc(user, s, s.files[0]);
       if (!file) {
         if (looksUnrelated(t)) return pass(s, 'מחכה לצילום, והגיעה בקשה אחרת');
         return reply(s, 'מחכה לצילום של תעודת המשלוח או החשבונית. או *ביטול*.');
@@ -2005,6 +2073,7 @@ async function step(user, s, t, file) {
     }
 
     case 'project': {
+      t = t.replace(/^\s*(?:פרו+י+קט|פרוקט)(?:\s+אחר)?\s*[:\-–]?\s*/, '').trim() || t;
       // הצעה אחת מה-AI מחכה לאישור
       if (s.projectPending) {
         const pend = s.projectPending;
@@ -2051,7 +2120,7 @@ async function step(user, s, t, file) {
       if (file) return routeFile(user, s, file, t);
       if (/^(מחסן|מחסנים|שנה מחסן|לשנות מחסן|החלף מחסן|פירוט מחסנים|רשימת מחסנים)([\s,.!?]|$)/.test(t.trim())) return listWarehouses(s);
       // "פרויקט …" — פרויקט אחר (במקום ברירת המחדל); המחסן נבחר מחדש
-      const pm = t.match(/^\s*(?:פרויקט|לשנות פרויקט|שנה פרויקט|פרויקט אחר)(?=[\s:\-–]|$)\s*[:\-–]?\s*([\s\S]*)$/);
+      const pm = t.match(/^\s*(?:(?:לשנות|שנה|תשנה)\s+)?(?:ה)?(?:פרו+י+קט|פרוקט)(?:\s+אחר)?(?=[\s:\-–]|$)\s*[:\-–]?\s*([\s\S]*)$/);
       if (pm) {
         s.project = null; s.warehouse = null; s.noPref = true; s.projectOptions = null; s.projectPending = null;
         const what = pm[1].replace(/\s+/g, ' ').trim();
@@ -2164,4 +2233,4 @@ async function step(user, s, t, file) {
   }
 }
 
-module.exports = { isTrigger, isPriority, opens, active, pending, pausedNote, abandon, switchCancels, wantsUndoFinal, handle, sweep, _codeLines: codeLines, _similarLines: similarLines, _askParts: askParts, _projectsOf: projectsOf, _findProjects: findProjects, _ai: ai, _load: load, _clear: (userId) => clear(userId, load(userId)) };
+module.exports = { isTrigger, isPriority, opens, active, pending, pausedNote, abandon, switchCancels, wantsUndoFinal, handle, sweep, _jpegToPdf: jpegToPdf, _codeLines: codeLines, _similarLines: similarLines, _askParts: askParts, _projectsOf: projectsOf, _findProjects: findProjects, _ai: ai, _load: load, _clear: (userId) => clear(userId, load(userId)) };
