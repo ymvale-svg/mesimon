@@ -781,16 +781,17 @@ router.get('/api/auth/google/callback', async (req, res, ctx) => {
 router.post('/api/auth/login', async (req, res) => {
   Auth.checkLoginRate(req);
   const { email, password } = await readJson(req);
+  Auth.checkLoginRate(req, email);
 
   let result;
   try {
     result = Auth.login(email, password);
   } catch (err) {
-    Auth.noteFailedLogin(req);
+    Auth.noteFailedLogin(req, email);
     throw err;
   }
 
-  Auth.clearLoginRate(req);
+  Auth.clearLoginRate(req, email);
   const { actorType, actor } = result;
   const { token, expires } = Auth.createSession(actorType, actor.id);
   res.setHeader('set-cookie', Auth.cookieHeader(token, expires, req));
