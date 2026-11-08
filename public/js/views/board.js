@@ -1442,7 +1442,9 @@ const BoardView = (() => {
     // רק פרויקטים שבהם מותר לי לפתוח משימה (‎canAddTask‎ מהשרת) — והפרויקט הנוכחי, שלא יתאפס
     const projectPicker = UI.projectPicker({
       value: current,
-      projects: App.state.projects.filter((p) => p.canAddTask || String(p.id) === String(current))
+      projects: App.state.projects.filter((p) => p.canAddTask || String(p.id) === String(current)),
+      // רשימת משימות-האב תלויה בפרויקט — נטענת מחדש כשהוא משתנה
+      onChange: () => loadParents?.()
     });
 
     /*
@@ -1588,6 +1590,44 @@ const BoardView = (() => {
       ...currentTasks.filter((t) => !task || t.id !== task.id).map((t) => ({ value: t.id, label: `#${t.id} — ${t.title}` }))];
     const dependsSelect = UI.select(dependencyOptions, task?.dependsOnTaskId ?? '');
 
+    /*
+     * משימת אב — רק למי שנפתחה לו בקרת המשימות, שם העץ מוצג (ואחרים לא
+     * יתבלבלו). המשימות של הפרויקט שנבחר, בעץ: משימת-אב, ותחתיה המשימות שלה.
+     * רמה שלישית אינה מוצעת — מתחתיה אין רמה נוספת.
+     */
+    const parentWanted = String(task?.parentTaskId ?? opts.parentTaskId ?? '');
+    const parentSelect = UI.select([{ value: '', label: 'ללא — משימה ראשית' }], parentWanted);
+    let loadParents = null;
+    if (App.hasTracker()) {
+      let seq = 0;
+      loadParents = async () => {
+        const my = ++seq;
+        const keep = parentSelect.value || parentWanted;
+        const qs = new URLSearchParams();
+        if (projectPicker.value()) qs.set('projectId', projectPicker.value());
+        if (task?.id) qs.set('exclude', task.id);
+        try {
+          const { tasks } = await API.get(`/api/tasks/parent-options?${qs}`);
+          if (my !== seq) return;
+          const kids = new Map();
+          for (const t of tasks) if (t.parentId) (kids.get(t.parentId) ?? kids.set(t.parentId, []).get(t.parentId)).push(t);
+          const ids = new Set(tasks.map((t) => t.id));
+          const opts2 = [{ value: '', label: 'ללא — משימה ראשית' }];
+          for (const t of tasks.filter((x) => !x.parentId || !ids.has(x.parentId))) {
+            opts2.push({ value: String(t.id), label: t.parentId ? `↳ ${t.title}` : t.title });
+            for (const k of kids.get(t.id) ?? []) opts2.push({ value: String(k.id), label: `\u00a0\u00a0\u00a0↳ ${k.title}` });
+          }
+          // אב שנבחר ואינו ברשימה (פרויקט אחר, הושלם) — נשאר, כדי שלא יתאפס בשקט
+          if (keep && !opts2.some((o) => o.value === keep)) {
+            opts2.splice(1, 0, { value: keep, label: task?.parentTitle || opts.parentTitle || `#${keep}` });
+          }
+          UI.mount(parentSelect, ...opts2.map((o) => el('option', { value: o.value }, [o.label])));
+          parentSelect.value = keep;
+        } catch { /* בלי הרשימה — נשאר רק "ללא", והמשימה נשמרת כרגיל */ }
+      };
+      loadParents();
+    }
+
     const recurringCheck = el('input', { type: 'checkbox', checked: !!task?.isRecurring || Boolean(pre.recurrence) });
     const freqSelect = UI.select(
       [{ value: 'daily', label: 'יומי' }, { value: 'weekly', label: 'שבועי' }, { value: 'monthly', label: 'חודשי' }],
@@ -1705,6 +1745,10 @@ const BoardView = (() => {
         ? 'משימה מהפגישה — מוצעת רק למשתתפים בה'
         : 'משימה ללא אחראי לא תופיע ב"המשימות שלי" של אף אחד'),
       fieldOf('projectId', 'פרויקט', projectPicker, 'משימה ללא פרויקט תופיע בלוח בקבוצת "ללא פרויקט"'),
+      // ליד הפרויקט — הרשימה היא המשימות של הפרויקט שנבחר
+      App.hasTracker()
+        ? UI.field('משימת אב', parentSelect, 'המשימה תופיע תחתיה בבקרת המשימות ובתרשים הזרימה. עד שלוש רמות: משימת אב ← משימה ← תת-משימה')
+        : null,
       UI.field('אחראים נוספים', extraList,
         'המשימה תופיע גם אצלם, והם יקבלו את ההתראות. אפשר לצרף גם ספק חיצוני — המשימה נשארת בלוח הפנימי'),
       el('div.row', {}, [UI.field('עדיפות', prioritySelect), fieldOf('dueDate', 'תאריך יעד', dueInput)]),
@@ -1761,8 +1805,12 @@ const BoardView = (() => {
       if (!isEdit) {
         payload.checklist = checklistInput.value.split('\n').map((s) => s.trim()).filter(Boolean);
         if (pre.statusShort) payload.statusShort = pre.statusShort;
-        // תת-משימה: נשלח רק ביצירה, כי העברת משימה קיימת תחת אב היא פעולה אחרת
-        if (opts.parentTaskId) payload.parentTaskId = opts.parentTaskId;
+        if (opts.parentTaskId && !App.hasTracker()) payload.parentTaskId = opts.parentTaskId;
+      }
+      // משימת אב מהבורר — ביצירה, ובעריכה רק כשהשתנתה
+      if (App.hasTracker()) {
+        const chosen = parentSelect.value ? Number(parentSelect.value) : null;
+        if (!isEdit ? chosen : chosen !== (task.parentTaskId ?? null)) payload.parentTaskId = chosen;
       }
 
       saveBtn.disabled = true;

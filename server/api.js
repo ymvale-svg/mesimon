@@ -447,6 +447,31 @@ function taskDepth(task) {
   return depth;
 }
 
+/** גובה הענף מתחת למשימה: בלי ילדים = 1, עם ילדים = 2, עם נכדים = 3 */
+function subtreeHeight(taskId, guard = 0) {
+  if (guard > MAX_TASK_DEPTH) return guard;
+  const kids = D.all('SELECT id FROM tasks WHERE parent_task_id = ?', taskId);
+  return 1 + kids.reduce((m, k) => Math.max(m, subtreeHeight(k.id, guard + 1)), 0);
+}
+
+/**
+ * קביעת משימת-אב למשימה קיימת (עריכה). נבדק: האב גלוי לי, אינו המשימה עצמה
+ * או אחת מצאצאיה (מעגל), והעץ שנוצר אינו עמוק משלוש רמות.
+ */
+function assertMayReparent(actor, task, parentId) {
+  if (!parentId) return null;
+  const parent = getTaskOr404(parentId);
+  assertVisible(actor, parent);
+  for (let cur = parent, i = 0; cur && i < 10; i += 1) {
+    if (cur.id === task.id) throw badRequest('אי אפשר לשים משימה תחת עצמה או תחת תת-משימה שלה');
+    cur = cur.parent_task_id ? D.get('SELECT id, parent_task_id FROM tasks WHERE id = ?', cur.parent_task_id) : null;
+  }
+  if (taskDepth(parent) + subtreeHeight(task.id) > MAX_TASK_DEPTH) {
+    throw badRequest('עד שלוש רמות: משימת-אב ← משימה ← תת-משימה. למשימה הזו יש תתי-משימות, ולכן היא לא יכולה לרדת לרמה הזו');
+  }
+  return parent.id;
+}
+
 /** ייצוג משימה לממשק, כולל שדות נגזרים */
 function shapeTask(task, actor, { withDetails = false } = {}) {
   const board = boardOf(task);
@@ -1495,6 +1520,37 @@ router.get('/api/tasks', async (req, res, ctx) => {
   sendJson(res, 200, { tasks: rows.filter((t) => Cls.mayReadTask(actor, t)).map((t) => shapeTask(t, actor)) });
 });
 
+/**
+ * המשימות שאפשר לשים תחתן משימה — לבורר "משימת אב" בטופס המשימה.
+ *
+ * פתוחות, לא בארכיון, גלויות לי, ולא ברמה השלישית (מתחתיה אין רמה נוספת).
+ * לפי הפרויקט שנבחר בטופס; בלי פרויקט — מהפרויקטים שלי ושל המחלקה ומה שבלי
+ * פרויקט. ‎exclude‎ — המשימה הנערכת, שלא תוצע כאב של עצמה.
+ */
+router.get('/api/tasks/parent-options', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  if (isVendor(actor) || !D.trackerAccess(actor.id)) throw forbidden();
+  const q = parseUrl(req).searchParams;
+  const projectId = Number(q.get('projectId')) || null;
+  const exclude = Number(q.get('exclude')) || null;
+  const rows = D.all(
+    `SELECT t.*, p2.parent_task_id AS grand FROM tasks t
+       JOIN boards b ON b.id = t.board_id AND b.type = 'internal'
+       LEFT JOIN board_columns bc ON bc.board_id = t.board_id AND bc.key = t.status
+       LEFT JOIN tasks p2 ON p2.id = t.parent_task_id
+      WHERE t.archived = 0 AND COALESCE(bc.is_final, 0) = 0
+        AND (t.parent_task_id IS NULL OR p2.parent_task_id IS NULL)
+        ${projectId ? 'AND t.project_id = ?' : ''}
+      ORDER BY COALESCE(t.parent_task_id, t.id), t.parent_task_id IS NOT NULL, t.title
+      LIMIT 600`, ...(projectId ? [projectId] : []));
+  const exclTree = new Set(exclude ? [exclude] : []);
+  if (exclude) for (const r of D.all('SELECT id FROM tasks WHERE parent_task_id = ?', exclude)) exclTree.add(r.id);
+  const tasks = rows
+    .filter((t) => !exclTree.has(t.id) && canSeeTask(actor, t))
+    .map((t) => ({ id: t.id, title: t.title, parentId: t.parent_task_id ?? null, projectId: t.project_id ?? null }));
+  sendJson(res, 200, { tasks });
+});
+
 router.get('/api/tasks/:id', async (req, res, ctx) => {
   const actor = ctx.requireActor();
   const task = getTaskOr404(ctx.params.id);
@@ -1652,6 +1708,8 @@ function createTask(actor, body) {
     const parent = getTaskOr404(body.parentTaskId);
     assertVisible(actor, parent);
     parentTaskId = taskDepth(parent) >= MAX_TASK_DEPTH ? parent.parent_task_id : parent.id;
+    // תת-משימה בלי פרויקט — בפרויקט של האב, כדי שתופיע איתו בלוח ובבקרה
+    if (!body.projectId && parent.project_id) body.projectId = parent.project_id;
   }
 
   const res1 = D.run(
@@ -1923,6 +1981,12 @@ router.patch('/api/tasks/:id', async (req, res, ctx) => {
     setField('dependsOn', 'depends_on_task_id',
       body.dependsOnTaskId !== undefined ? (body.dependsOnTaskId ? Number(body.dependsOnTaskId) : null) : undefined,
       'תלות במשימה', (v) => (v ? `#${v}` : ''));
+    // משימת-אב — רק למי שנפתחה לו בקרת המשימות (שם העץ מוצג)
+    if (body.parentTaskId !== undefined && (Number(body.parentTaskId) || null) !== (task.parent_task_id ?? null)) {
+      if (isVendor(actor) || !D.trackerAccess(actor.id)) throw forbidden();
+      setField('parentTask', 'parent_task_id', assertMayReparent(actor, task, Number(body.parentTaskId) || null),
+        'משימת אב', (v) => (v ? `#${v} ${D.get('SELECT title FROM tasks WHERE id = ?', v)?.title ?? ''}` : ''));
+    }
 
     if (body.isRecurring !== undefined) {
       D.run('UPDATE tasks SET is_recurring = ?, recurrence_freq = ? WHERE id = ?',
