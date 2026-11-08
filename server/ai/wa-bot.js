@@ -58,6 +58,8 @@ const TaskSync = require('./task-sync');
 const TaskOutreach = require('./task-outreach');
 const Zoom = require('../zoom');
 const GoodsReceipt = require('./goods-receipt');
+const PurchaseDemand = require('./purchase-demand');
+const Approvals = require('./priority-approvals');
 
 const GROUP_SKILL = path.join(__dirname, 'skills', 'whatsapp-group-to-tasks.md');
 const CHAT_SKILL = path.join(__dirname, 'skills', 'whatsapp-chat.md');
@@ -177,7 +179,9 @@ let buttonsOffUntil = 0;
 async function sendButtons(chatId, message, buttons) {
   const ch = channel();
   if (!ch) return;
-  if (!buttons?.length || Date.now() < buttonsOffUntil) return sendText(chatId, message);
+  if (!buttons?.length) return sendText(chatId, message);
+  // הכפתורים כבויים (נכשלו לאחרונה) — הטקסט, והאפשרויות כשורות, כדי שלא יאבדו
+  if (Date.now() < buttonsOffUntil) return sendText(chatId, `${message}\n\n${buttons.slice(0, 3).map((b) => `▫️ ${b}`).join('\n')}`);
   let body = message;
   if (String(message).length > 1000) { await sendText(chatId, message); body = '👇'; }
   try {
@@ -188,7 +192,7 @@ async function sendButtons(chatId, message, buttons) {
   } catch (err) {
     console.error('[משימון] כפתורים בוואטסאפ לא נשלחו, נשלח טקסט:', err.message);
     buttonsOffUntil = Date.now() + 60 * 60 * 1000;
-    if (body !== '👇') await sendText(chatId, message);
+    await sendText(chatId, `${body !== '👇' ? `${message}\n\n` : ''}${buttons.slice(0, 3).map((b) => `▫️ ${b}`).join('\n')}`);
   }
 }
 
@@ -1150,7 +1154,6 @@ function checkDraft(actor, draft) {
 // היום שלי ותפריט
 // ---------------------------------------------------------------------------
 
-const KEYCAPS = ['1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣', '9️⃣', '🔟'];
 
 // ---------------------------------------------------------------------------
 // 🎥 הקלטות Zoom
@@ -1214,6 +1217,7 @@ async function recordingReply(actor, query, date) {
 
 const MENU = [
   ['today', 'today', '☀️ מה יש לי היום'],
+  ['priority', 'goods_receipt', '🗂 פריוריטי — קבלת סחורה ודרישת רכש'],
   ['ask', 'mail_ask', '✨ לשאול את אשל — ידע ארגוני, מיילים וסוכנים'],
   ['insights', 'mail_insights', '📬 תובנות — מה חדש (ו-💡 הצעת תשובה)'],
   ['solve', 'solve', '💡 יש לי בעיה — פתרון ופנייה מוכנה'],
@@ -1261,17 +1265,38 @@ function menuOptions(actor) {
     const h = Insights.headings({ mail: sources.mail && MailInsights.available(actor.id), whatsapp: sources.whatsapp });
     return `${h.insights} (${Range.forUser(actor.id).span})`;
   };
-  return MENU.filter(([key, action]) => WaActions.allowed(actor, action)
+  return MENU.filter(([key, action]) => (key === 'priority' ? WaActions.allowed(actor, 'goods_receipt') || WaActions.allowed(actor, 'purchase_demand') : WaActions.allowed(actor, action))
     && (key !== 'insights' || MailInsights.available(actor.id) || sources.whatsapp))
     .map(([key, , label]) => ({ key, label: key === 'insights' ? insightLabel() : label }));
 }
 
-const menuText = (options) => [
-  '*במה אפשר לעזור היום?*',
-  ...options.map((o, i) => `${KEYCAPS[i] ?? `${i + 1}.`} ${o.label}`),
-  '',
-  'השיבו במספר, או פשוט כתבו לי.'
-].join('\n');
+/*
+ * התפריט בוואטסאפ — כפתורים בלבד (עד 3 להודעה, ‎wa-ui.js‎): השניים הראשונים ו"עוד אפשרויות", וכך הלאה.
+ * הכיתוב של כפתור הוא מה שהבוט מבין (‎menuPick‎). "🗂 פריוריטי" — מעביר לתפריט פריוריטי (קבלת סחורה / דרישת רכש).
+ */
+const MENU_BUTTON = {
+  today: '☀️ מה יש לי היום', priority: '🗂 פריוריטי', ask: '✨ לשאול את אשל', insights: '📬 תובנות', solve: '💡 יש לי בעיה',
+  send_email: '✉️ לשלוח מייל', create_task: '📝 לפתוח משימה', my_tasks: '📋 המשימות שלי', overdue: '⚠️ מה באיחור',
+  project_tasks: '📁 מה פתוח בפרויקט', agents: '🤖 הסוכנים', today_email: '📧 Today במייל'
+};
+const MENU_MORE = 'עוד אפשרויות ⬇️';
+const menuButtonOf = (key) => MENU_BUTTON[key] ?? key;
+function menuButtons(keys, page = 0) {
+  const start = page * 2;
+  const rest = keys.slice(start);
+  if (!rest.length) return keys.slice(0, 2).map(menuButtonOf).concat(keys.length > 2 ? [MENU_MORE] : []);
+  return rest.length <= 3 ? rest.map(menuButtonOf) : [...rest.slice(0, 2).map(menuButtonOf), MENU_MORE];
+}
+/** כפתור שנלחץ (או הכיתוב שלו) ← מספר האפשרות בתפריט; ‎'more'‎ — העמוד הבא; ‎null‎ — לא כפתור */
+function menuPick(draft, text) {
+  const n = (x) => String(x ?? '').replace(/[\u{1F3FB}-\u{1F3FF}\uFE0F]/gu, '').replace(/\s+/g, ' ').trim();
+  const t = n(text);
+  if (t === n(MENU_MORE) || /^עוד( אפשרויות)?$/.test(t)) return 'more';
+  const i = (draft?.options ?? []).findIndex((k) => n(menuButtonOf(k)) === t || n(MENU.find((m) => m[0] === k)?.[2]) === t);
+  return i >= 0 ? i + 1 : null;
+}
+
+const menuText = () => '*במה אפשר לעזור היום?* 👇';
 
 const timeOf = (iso) => new Date(iso).toLocaleTimeString('he-IL', { timeZone: TZ, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
 
@@ -1992,7 +2017,7 @@ const pendingLabel = (d) => (d.kind === 'email' ? `הטיוטה ל${d.contact?.n
  * כך אותה פונקציה משמשת גם את תיבת הבדיקה במסך הניהול.
  */
 async function converse(user, actor, text, state, { dry = false } = {}) {
-  const t = text.trim();
+  let t = text.trim();
   const keep = { draft: state.draft, awaiting: false, lastList: state.lastList, greetedOn: state.greetedOn ?? '', insights: state.insights ?? [], suggestions: state.suggestions ?? [], queue: state.queue ?? [] };
   // ‎notice‎ — שורה לפני התשובה: הטיוטה הקודמת ירדה כי עברנו לנושא אחר
   let notice = '';
@@ -2036,6 +2061,18 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
   if (CANCEL.test(t)) return out('בוטל 👍', { draft: null }, { action: 'cancel', status: 'ok', result: 'בוטל' });
 
   let kind = state.draft?.kind;
+
+  // כפתור מהתפריט — כמו בחירה במספר; "עוד אפשרויות" — הכפתורים הבאים
+  if (kind === 'menu') {
+    const pick = menuPick(state.draft, t);
+    if (pick === 'more') {
+      const page = (state.draft.page ?? 0) + 1;
+      const keys = state.draft.options ?? [];
+      const next = page * 2 < keys.length ? page : 0;
+      return out('*עוד אפשרויות:* 👇', { draft: { ...state.draft, page: next } }, { action: 'menu', status: 'ok', result: 'תפריט: עוד אפשרויות', buttons: menuButtons(keys, next) });
+    }
+    if (pick) t = String(pick);
+  }
 
   // טיוטה / שאלה שממתינה, וההודעה בנושא אחר — הטיוטה יורדת, וההודעה היא בקשה חדשה
   if (state.draft && topicKinds().includes(kind ?? 'task') && !(kind === 'email' && state.draft.contact?.type === 'user' && (VIA_MESIMON.test(t) || VIA_EMAIL.test(t)))
@@ -2087,6 +2124,7 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
       }
     }
     const menu = withMenu && options.length ? menuText(options) : null;
+    const buttons = menu ? menuButtons(options.map((o) => o.key), 0) : [];
     const t = today?.t;
     const sources = t?.suggestions?.sources ?? { mail: false, whatsapp: false };
     const connectHint = firstOfDay && t && !sources.mail && !sources.whatsapp && Gmail.isEnabled()
@@ -2102,7 +2140,7 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
         } catch (err) {
           console.error('[משימון] התובנות ל-Today בבוט נכשלו:', err.message);
         }
-        return { text: [section?.text ?? null, menu].filter(Boolean).join('\n\n'), insights: section?.ids ?? null };
+        return { text: [section?.text ?? null, menu].filter(Boolean).join('\n\n'), insights: section?.ids ?? null, buttons };
       });
     }
     // אנשי הקשר מ-Google — מה לעשות כדי שיעבדו, בהודעה הראשונה של היום
@@ -2114,7 +2152,7 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
       ...(menu ? { draft: { kind: 'menu', options: options.map((o) => o.key) } } : {}),
       greetedOn: localDay(0)
     }, {
-      action: 'today', status: 'ok', followUps,
+      action: 'today', status: 'ok', followUps, buttons: followUps.length ? [] : buttons,
       result: `Today${menu ? ' ותפריט' : ''}: ${today?.ids.length ?? 0} משימות${today?.suggestions.length ? `, ${today.suggestions.length} הצעות` : ''}`
     });
   };
@@ -2347,6 +2385,7 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
       case 'project_tasks': return go('באיזה פרויקט?');
       case 'ask': return go('מה לשאול את אשל? למשל:\n• "למי פונים כשהמזגן מתקלקל, וכמה זה עולה?"\n• "מה סיכמנו עם העירייה על חלקה 12?"\n• "כמה מס רכישה על דירה שנייה ב-2.4 מיליון?"\nאפשר גם הודעה קולית או מסמך.');
       case 'agents': return go(agentsText(actor));
+      case 'priority': return go('🗂 כתבו *פריוריטי* — קבלת סחורה או דרישת רכש.');
       default:
         return out(`בחרו מספר מ-1 עד ${state.draft.options?.length ?? 1}.`, {}, { action: 'menu', status: 'unclear', result: 'מספר לא בתפריט' });
     }
@@ -2381,7 +2420,7 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
     const options = menuOptions(actor);
     if (options.length) {
       return out([u.reply, menuText(options)].filter(Boolean).join('\n\n'), { draft: { kind: 'menu', options: options.map((o) => o.key) } },
-        { action: 'other', status: 'unclear', result: 'לא זוהתה פעולה — הוצג התפריט' });
+        { action: 'other', status: 'unclear', result: 'לא זוהתה פעולה — הוצג התפריט', buttons: menuButtons(options.map((o) => o.key), 0) });
     }
     return out(u.reply || helpText(actor), {}, { action: 'other', status: 'unclear', result: 'לא זוהתה פעולה' });
   }
@@ -2754,6 +2793,36 @@ async function handleDirect(msg) {
       return;
     }
   }
+  // דרישת רכש — "דרישת רכש" (כתוב, בהקלטה, או הכפתור בתפריט פריוריטי), ובאמצע דרישה — התשובות לשאלות שלה.
+  // לא לדרישה (קבלת סחורה, בקשה אחרת) — ממשיכים לקבלת הסחורה / לבוט הרגיל
+  const pdAllowed = WaActions.allowed(actor, 'purchase_demand');
+  if (pdAllowed && (PurchaseDemand.active(user.id) || (PurchaseDemand.opens(text) && !(msg.file && !text)))) {
+    let pre = '';
+    if (!PurchaseDemand.active(user.id)) {
+      // דרישה חדשה — תפריט פריוריטי יורד, וקבלת סחורה פתוחה — לפי ההגדרה (מבוטלת / מושהית)
+      GoodsReceipt.dropMenu(user.id);
+      if (GoodsReceipt.pending(user.id)) pre = await GoodsReceipt.abandon(user).catch(() => '');
+    }
+    const slowPd = setTimeout(() => sendText(msg.chatId, '⏳ רגע, מחפש בקטלוג של פריוריטי…').catch(() => {}), SLOW_NOTICE_MS);
+    let r;
+    try {
+      r = await PurchaseDemand.handle({ user, text, file: msg.file, reaction: msg.kind === 'reactionMessage', voice });
+    } catch (err) {
+      console.error('[משימון] דרישת רכש נכשלה:', err.message);
+      r = { replies: ['משהו השתבש בדרישת הרכש. נסו שוב, או *ביטול*.'], status: 'error', result: err.message };
+    }
+    clearTimeout(slowPd);
+    log({ ...base, text: [voice ? `🎙 ${text}` : text, msg.file ? '[📎 קובץ]' : ''].filter(Boolean).join(' ') || '[קובץ]', action: 'purchase_demand', status: r.status, result: r.result });
+    if (!r.pass) {
+      await notice;
+      const parts = r.replies.map((x, i) => (i === 0 && pre ? `${pre}\n\n${x}` : x)).flatMap((reply) => splitMessage(reply));
+      for (let i = 0; i < parts.length; i++) {
+        if (i === parts.length - 1 && r.buttons?.length) await sendButtons(msg.chatId, parts[i], r.buttons);
+        else await sendText(msg.chatId, parts[i]);
+      }
+      return;
+    }
+  }
   // פריוריטי (קבלת סחורה) — רק בטריגר מפורש: "קבלת סחורה" / "פריוריטי" (כתוב, בכיתוב לתמונה או בהקלטה),
   // או קובץ בלי טקסט. ברירת המחדל לכל הודעה אחרת — משימות. באמצע קליטה, רק תשובה לשאלה הולכת אליה;
   // בקשה אחרת (או הודעה אחרי הפסקה ארוכה) עוברת לבוט הרגיל — ולפי ההגדרה הקליטה מבוטלת או מושהית.
@@ -2764,11 +2833,12 @@ async function handleDirect(msg) {
   if (msg.file && !(grAllowed && (GoodsReceipt.active(user.id) || GoodsReceipt.opens(text, msg.file)))) rememberFile(user.id, msg.file);
   let grPassed = false;
   let grNotice = '';
-  if (grAllowed && (GoodsReceipt.active(user.id) || GoodsReceipt.opens(text, msg.file) || GoodsReceipt.wantsUndoFinal(user.id, text))) {
+  const prioMenuOnly = !grAllowed && pdAllowed && !msg.file && (GoodsReceipt.isPriority(text) || GoodsReceipt.inMenu(user.id));
+  if (prioMenuOnly || (grAllowed && (GoodsReceipt.active(user.id) || GoodsReceipt.opens(text, msg.file) || GoodsReceipt.wantsUndoFinal(user.id, text)))) {
     const slowGr = setTimeout(() => sendText(msg.chatId, '⏳ רגע, קורא ובודק מול פריוריטי…').catch(() => {}), SLOW_NOTICE_MS);
     let r;
     try {
-      r = await GoodsReceipt.handle({ user, text, file: msg.file, reaction: msg.kind === 'reactionMessage' });
+      r = await GoodsReceipt.handle({ user, text, file: msg.file, reaction: msg.kind === 'reactionMessage', allow: { gr: grAllowed, pd: pdAllowed } });
     } catch (err) {
       console.error('[משימון] קבלת סחורה נכשלה:', err.message);
       r = { replies: ['משהו השתבש בקבלת הסחורה. נסו שוב, או *ביטול*.'], status: 'error', result: err.message };
@@ -2802,6 +2872,10 @@ async function handleDirect(msg) {
   // קליטה פתוחה שנשכחה (אחרי הפסקה), וההודעה בנושא אחר — לפי ההגדרה: מבוטלת, אין חזרה
   if (!grPassed && text && grAllowed && GoodsReceipt.pending(user.id)) {
     grNotice = await GoodsReceipt.abandon(user).catch(() => '');
+  }
+  // דרישת רכש שהושהתה (ההודעה בנושא אחר) — לפי אותה הגדרה: יורדת (עוד לא נכתב כלום בפריוריטי), או נשארת עד "דרישת רכש"
+  if (text && pdAllowed && GoodsReceipt.switchCancels() && PurchaseDemand.pending(user.id) && !PurchaseDemand.active(user.id)) {
+    grNotice = [grNotice, PurchaseDemand.abandon(user)].filter(Boolean).join('\n');
   }
   if (msg.forwarded) {
     const before = forwardsOf(user.id).filter((r) => r.kind === 'forward').length;
@@ -2881,14 +2955,22 @@ async function handleDirect(msg) {
   saveChat(user.id, { ...r.next, history });
   const fwdNote = forwards.length ? ` (+${forwards.filter((x) => x.kind === 'forward').length} מועברות)` : '';
   log({ ...base, text: `${voice ? `🎙 ${said}` : said}${fwdNote}`, action: r.action, status: r.status, result: r.result, taskId: r.taskId ?? null, reply });
-  // הודעה ארוכה מדי — בכמה הודעות
-  for (const part of splitMessage(reply)) await sendText(msg.chatId, part);
+  // הודעה ארוכה מדי — בכמה הודעות; כפתורי תשובה (התפריט) — על האחרונה
+  const replyParts = splitMessage(reply);
+  for (let i = 0; i < replyParts.length; i++) {
+    if (i === replyParts.length - 1 && r.buttons?.length) await sendButtons(msg.chatId, replyParts[i], r.buttons);
+    else await sendText(msg.chatId, replyParts[i]);
+  }
   // הודעות המשך (התובנות של Today) — אחרי שהעיקר כבר אצלו
   for (const f of r.followUps ?? []) {
     try {
       const x = await f();
       if (x?.insights) saveChat(user.id, { ...chatOf(user.id), insights: x.insights });
-      if (x?.text) for (const part of splitMessage(x.text)) await sendText(msg.chatId, part);
+      const fParts = x?.text ? splitMessage(x.text) : [];
+      for (let i = 0; i < fParts.length; i++) {
+        if (i === fParts.length - 1 && x.buttons?.length) await sendButtons(msg.chatId, fParts[i], x.buttons);
+        else await sendText(msg.chatId, fParts[i]);
+      }
     } catch (err) {
       console.error('[משימון] הודעת ההמשך בבוט נכשלה:', err.message);
     }
@@ -3161,6 +3243,7 @@ function messageUser(userId, text, action) {
   else D.run('INSERT INTO wa_outbox (user_id, chat_id, text, task_id, action, created_at) VALUES (?,?,?,?,?,?)', u.id, chatId, text, null, action, D.nowIso());
   return true;
 }
+PurchaseDemand.setHooks({ send: (userId, text) => messageUser(userId, text, 'purchase_demand') });
 WaScan.setHooks({
   ask: (userId, text) => messageUser(userId, text, 'wa_scan_ask'),
   notice: (userId, text) => messageUser(userId, text, 'wa_scan_notice')
@@ -3321,6 +3404,10 @@ async function tick() {
   // קבלות סחורה שלא אושרו — תזכורת וביטול (פעם ב-10 דקות לכל היותר)
   if (!busy && WaActions.byKey('goods_receipt')?.enabled) {
     await GoodsReceipt.sweep((userId, text) => messageUser(userId, text, 'goods_receipt')).catch((err) => console.error('[משימון] ניקוי קבלות סחורה:', err.message));
+  }
+  // דרישות רכש שמחכות לאישור — הודעה לחותם הבא (פעם ב-10 דקות לכל היותר)
+  if (!busy && WaActions.byKey('purchase_demand')?.enabled) {
+    await Approvals.sweep((userId, text) => messageUser(userId, text, 'purchase_demand')).catch((err) => console.error('[משימון] הודעות לחותמים בפריוריטי:', err.message));
   }
   if (busy || !D.getSetting('wa_bot_enabled', true)) return;
   const ch = channel();

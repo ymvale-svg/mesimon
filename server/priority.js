@@ -774,10 +774,172 @@ async function cancelReceipt(company, docno) {
   await call(company, 'PATCH', k, { STATDES: 'מבוטלת' });
 }
 
+// ---------------------------------------------------------------------------
+// דרישת רכש (‎PURDEMANDS‎) — האפיון: "אפיון — סריקת מסמכי רכש לפריוריטי.md", "דרישת רכש"
+// ---------------------------------------------------------------------------
+
+const pdKey = (prdno) => `PURDEMANDS('${q(prdno)}')`;
+/** סוג הזמנה בדרישה: ‎02‎ רכש אתרי (ברירת המחדל), ‎01‎ רכש משרדי */
+const PD_TYPES = { '02': 'רכש אתרי', '01': 'רכש משרדי' };
+
+/** דרישת רכש טיוטא. ‎date‎ — ‎YYYY-MM-DD‎ */
+async function createDemand(company, { date, project, warehouse, details = '', ordType = '02', owner = null, approvalCode = null }) {
+  const body = { PORDTYPECODE: ordType };
+  if (approvalCode) body.CODENAME = approvalCode;
+  if (owner) body.OWNERLOGIN = owner;
+  if (date) body.CURDATE = `${date}T00:00:00Z`;
+  if (project) body.PROJDOCNO = project;
+  if (warehouse) body.WARHSNAME = warehouse;
+  if (details) body.DETAILS = String(details).slice(0, 24);
+  const r = await call(company, 'POST', 'PURDEMANDS', body);
+  return r.PRDNO;
+}
+
+/** שורה בדרישה: פריט מהקטלוג, או ‎000‎ עם תיאור — ותת פרק ומשאב (חובה בפריוריטי: "יש לקשר תת פרק") */
+async function addDemandLine(company, prdno, { part = '000', description, qty, dueDate = null, chapter, topic }) {
+  const body = { PARTNAME: part, TQUANT: qty };
+  if (part === '000' && description) body.PDES = String(description).slice(0, 48);
+  if (chapter) body.BUD_SUBCHAPTERNAME = chapter;
+  if (topic) body.BUD_SUBTOPICNAME = topic;
+  if (dueDate) body.DUEDATE = `${dueDate}T00:00:00Z`;
+  const r = await call(company, 'POST', `${pdKey(prdno)}/PRDITEMS_SUBFORM`, body);
+  return r.KLINE;
+}
+
+const setDemand = (company, prdno, fields) => call(company, 'PATCH', pdKey(prdno), fields);
+
+/**
+ * העברה ל"מחכה לאישור" — פריוריטי ממלא את רשימת המאשרים לפי רשימת מאשרים שמתאימה לתעודה.
+ * אין רשימה מתאימה (למשל בעותק הבדיקה test11) — השגיאה עולה, והדרישה נשארת טיוטא.
+ */
+const submitDemand = (company, prdno) => call(company, 'PATCH', pdKey(prdno), { STATDES: 'מחכה לאישור' });
+const isNoApproversError = (err) => /רשימת מאשרים|רשימת המאשרים/.test(String(err?.message ?? ''));
+
+const PD_SEL = 'PRDNO,CURDATE,STATDES,PROJDOCNO,PROJDES,WARHSNAME,OWNERLOGIN,INITUSERLOGIN,USERLOGIN,CODENAME,CODEDES,PORDTYPECODE,DETAILS';
+const PDUSER_SEL = 'USERLOGIN,POSITIONDES,UFLAG,NEXTUSERLOGIN,ALTUSERLOGIN,CUSERLOGIN,UDATE';
+
+/** הדרישה עם השורות והמאשרים */
+async function readDemand(company, prdno) {
+  return call(company, 'GET', `${pdKey(prdno)}?$select=${PD_SEL}&$expand=PDUSER_SUBFORM($select=${PDUSER_SEL}),`
+    + 'PRDITEMS_SUBFORM($select=KLINE,PARTNAME,PDES,TQUANT,TUNITNAME,DUEDATE,BUD_SUBCHAPTERNAME,BUD_SUBCHAPTERDES,BUD_SUBTOPICNAME,BUD_SUBTOPICDES)');
+}
+
+/** הפרויקטים של הדרישות האחרונות בחברה, הנפוץ קודם — להצעה בכפתורים */
+async function recentDemandProjects(company, top = 80) {
+  const list = rows(await call(company, 'GET', `PURDEMANDS?$filter=${enc("STATDES ne 'מבוטלת'")}&$select=PROJDOCNO&$orderby=CURDATE%20desc&$top=${top}`));
+  const n = new Map();
+  for (const r of list) if (r.PROJDOCNO) n.set(r.PROJDOCNO, (n.get(r.PROJDOCNO) ?? 0) + 1);
+  return [...n].sort((a, b) => b[1] - a[1]).map(([code]) => code);
+}
+
+/**
+ * רשימות המאשרים שבשימוש בדרישות החברה (‎CODENAME‎ / ‎CODEDES‎ — למשל 13 "דרישות רכש אתרי", 14 "דרישות רכש בדק").
+ * מסך רשימות המאשרים סגור ל-API, ולכן מהדרישות הקודמות. הנפוצה קודם. נשמר לשעה.
+ */
+const codesCache = new Map();
+async function demandCodes(company) {
+  const hit = codesCache.get(company);
+  if (hit && Date.now() - hit.at < 3600000) return hit.list;
+  const list = rows(await call(company, 'GET', `PURDEMANDS?$filter=${enc("CODENAME ne ''")}&$select=CODENAME,CODEDES&$orderby=CURDATE%20desc&$top=300`));
+  const m = new Map();
+  for (const r of list) if (r.CODENAME) m.set(r.CODENAME, { code: r.CODENAME, des: r.CODEDES ?? r.CODENAME, n: (m.get(r.CODENAME)?.n ?? 0) + 1 });
+  const out = [...m.values()].sort((a, b) => b.n - a.n);
+  codesCache.set(company, { at: Date.now(), list: out });
+  return out;
+}
+
+/** כל הדרישות שמחכות לאישור בחברה, עם המאשרים ומספר השורות */
+async function waitingDemands(company) {
+  return rows(await call(company, 'GET', `PURDEMANDS?$filter=${enc("STATDES eq 'מחכה לאישור'")}&$select=${PD_SEL}`
+    + `&$expand=PDUSER_SUBFORM($select=${PDUSER_SEL}),PRDITEMS_SUBFORM($select=KLINE)&$top=200`));
+}
+
+/**
+ * החותם הבא: ‎USERLOGIN‎ בכותרת (פריוריטי מציב בו את המאשר הבא כשהסבב מתחיל), ואם ריק —
+ * המאשר הראשון ברשימת המאשרים שעוד לא אישר. ‎null‎ — לא ידוע (דרישה שמחכה בלי רשימת מאשרים).
+ */
+function nextSigner(d) {
+  if (d?.USERLOGIN) return d.USERLOGIN;
+  const open = (d?.PDUSER_SUBFORM ?? []).find((u) => u.UFLAG !== 'Y' && u.USERLOGIN);
+  return open?.NEXTUSERLOGIN || open?.USERLOGIN || null;
+}
+
+/** ביטול טיוטא (גם עם שורות). דרישה שכבר אינה טיוטא — לא נוגעים: ‎{ skipped }‎ */
+async function cancelDemand(company, prdno) {
+  const d = await call(company, 'GET', `${pdKey(prdno)}?$select=STATDES`).catch(() => null);
+  if (!d) return { skipped: 'לא נמצא' };
+  if (d.STATDES !== 'טיוטא') return { skipped: d.STATDES };
+  await call(company, 'PATCH', pdKey(prdno), { STATDES: 'מבוטלת' });
+  return {};
+}
+
+/** דו-שיח פנימי של הדרישה */
+async function setDemandDialog(company, prdno, lines) {
+  const esc = (s) => String(s).replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+  const TEXT = lines.filter(Boolean).map((l) => `<p>${esc(l)}</p>`).join('');
+  const k = `${pdKey(prdno)}/INTERNALDIALOGTEXT_SUBFORM`;
+  try { await call(company, 'POST', k, { TEXT }); } catch { await call(company, 'PATCH', k, { TEXT }); }
+}
+
+/** נספח לדרישה — הצילום של הרשימה */
+async function attachDemand(company, prdno, { buf, mime, description }) {
+  const uri = `data:${mime || 'image/jpeg'};base64,${buf.toString('base64')}`;
+  const r = await call(company, 'POST', `${pdKey(prdno)}/EXTFILES_SUBFORM`, { EXTFILEDES: String(description ?? '').slice(0, 80), EXTFILENAME: uri });
+  return r?.EXTFILENUM ?? null;
+}
+
+/**
+ * משתמשי פריוריטי (מסך ‎USERSB‎ — פתוח ל-API; ‎USERS‎ סגור): שם משתמש ("Eladh", "MatanR"), שם בעברית, מייל
+ * וטלפון. המשתמשים משותפים לכל החברות, ולכן נקרא מהחברה הראשונה שאפשר. נשמר ל-6 שעות.
+ */
+let usersCache = null;
+async function priorityUsers() {
+  if (usersCache && Date.now() - usersCache.at < 6 * 3600000) return usersCache.list;
+  const from = [...new Set([...allowed(), ...COMPANIES.filter((c) => !c.test).map((c) => c.code)])];
+  let list = null, last = null;
+  for (const c of from) {
+    try {
+      list = rows(await call(c, 'GET', 'USERSB?$select=USERLOGIN,SNAME,FIRSTNAME,FAMILYNAME,EMAIL,CELLPHONE,STATDES,POSITIONDES&$top=2000'));
+      break;
+    } catch (err) { last = err; }
+  }
+  if (!list) throw last ?? new PriorityError('מסך המשתמשים אינו זמין');
+  usersCache = { at: Date.now(), list: list.filter((u) => u.USERLOGIN) };
+  return usersCache.list;
+}
+
+/**
+ * צירופי תת פרק ומשאב שבשימוש בחברה — מקטלוג הפריטים (מסכי תתי הפרקים והמשאבים סגורים ל-API).
+ * ‎[{ chapter, chapterDes, topic, topicDes, n }]‎ לפי מספר הפריטים. נשמר ל-12 שעות.
+ */
+const pairsCache = new Map();
+async function budgetPairs(company) {
+  const hit = pairsCache.get(company);
+  if (hit && Date.now() - hit.at < 12 * 3600000) return hit.list;
+  const m = new Map();
+  const PAGE = 2000;
+  for (let skip = 0; skip < 40000; skip += PAGE) {
+    const page = rows(await call(company, 'GET', `LOGPART?$filter=${enc("STATDES eq 'פעיל'")}`
+      + `&$select=PARTNAME,BUD_SUBCHAPTERNAME,BUD_SUBCHAPTERDES,BUD_SUBTOPICNAME,BUD_SUBTOPICDES&$top=${PAGE}&$skip=${skip}`));
+    for (const p of page) {
+      if (!p.BUD_SUBCHAPTERNAME || !p.BUD_SUBTOPICNAME) continue;
+      const k = `${p.BUD_SUBCHAPTERNAME}|${p.BUD_SUBTOPICNAME}`;
+      const e = m.get(k) ?? { chapter: p.BUD_SUBCHAPTERNAME, chapterDes: p.BUD_SUBCHAPTERDES ?? '', topic: p.BUD_SUBTOPICNAME, topicDes: p.BUD_SUBTOPICDES ?? '', n: 0 };
+      e.n += 1;
+      m.set(k, e);
+    }
+    if (page.length < PAGE) break;
+  }
+  const list = [...m.values()].sort((a, b) => b.n - a.n);
+  pairsCache.set(company, { at: Date.now(), list });
+  return list;
+}
+
 module.exports = {
   COMPANIES, isEnabled, allowed, companyOf, isTest, resolveCompany, companiesByName, PriorityError,
   GENERAL, NO_VAT_CODE, TAX_CODES, PAY_TERMS, DEFAULT_PAY, payTerm, payLabel, payFromText, dueDate, projectWarehouses, warehouses, warehouseExists, defaultWarehouse, supplierHistory, recentLines, partByCode, findPartsByText, searchParts, generalCoding, warehouseOf, findSuppliers, supplierByCode, findReceiptByBooknum, getOrder, openOrders, findPartExact, lastSubchapter, projects, matchProjects, readReceipt,
   finalOrders, orderForNotice, demandInitiator, projectManager, priorityUser,
   readDialog, createReceipt, addOrderLine, addFreeLine, setLineQty, setLineDes, setHeader, attach, deleteAttachment, setDialog, finalizeReceipt, cancelReceipt, receiptStatus, deleteLines,
+  PD_TYPES, demandCodes, recentDemandProjects, createDemand, addDemandLine, setDemand, submitDemand, isNoApproversError, readDemand, waitingDemands, nextSigner, cancelDemand, setDemandDialog, attachDemand, priorityUsers, budgetPairs,
   _call: call
 };
