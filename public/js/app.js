@@ -675,10 +675,10 @@ const App = (() => {
     board: { label: 'לוח המשימות', icon: 'board', render: (c, p) => BoardView.render(c, { ...p, scope: 'internal' }) },
     vendorBoards: { label: 'כל משימות הספקים', icon: 'vendors', render: (c, p) => BoardView.render(c, { ...p, scope: 'vendors' }) },
     /*
-     * מוסתר מכולם, גם ממנהל המערכת, עד שישופר: אינו בתפריט, וניווט אליו
-     * (קישור שנשמר) מגיע לדף הבית. הקוד נשאר — ‎TrackerView‎.
+     * פתוח רק למי שנפתח לו בתיק העובד (ברירת המחדל — מחלקת תכנון), כדי שלא
+     * יבלבל את כולם. לשאר אינו בתפריט, וניווט אליו מגיע לדף הבית.
      */
-    tracker: { label: 'בקרת משימות', icon: 'reports', hidden: true, render: (c, p) => TrackerView.render(c, p) },
+    tracker: { label: 'בקרת משימות', icon: 'reports', allowed: () => hasTracker(), render: (c, p) => TrackerView.render(c, p) },
     archive: { label: 'ארכיון', icon: 'archive', render: (c, p) => BoardView.render(c, { ...p, scope: 'internal', archived: true }) },
     reports: { label: 'דוחות', icon: 'reports', render: (c) => ReportsView.render(c) },
     // אלפון ארגוני — מ"החשבון שלי" ומהחלון בדשבורד, לכל העובדים
@@ -687,8 +687,11 @@ const App = (() => {
     vendor: { label: 'המשימות שלי', icon: 'my-tasks', render: (c) => VendorPortalView.render(c) }
   };
 
+  /** מסך "בקרת משימות" ותתי-משימות — רק למי שנפתח לו (‎publicActor.tracker‎ בשרת) */
+  const hasTracker = () => !isVendor() && Boolean(state.actor?.tracker);
+
   function navigate(name, params = {}) {
-    if (ROUTES[name]?.hidden) name = 'home';
+    if (ROUTES[name]?.hidden || ROUTES[name]?.allowed?.() === false) name = 'home';
     if (name === 'phonebook' && isVendor()) name = 'vendor';
     state.route = { name, params };
     closeDrawer();
@@ -1548,8 +1551,7 @@ const App = (() => {
    * הצד ומה מופיע בסרגל העליון. פעולה שמוצעת כאן ונכשלת ב-403 גרועה
    * מפעולה שלא הוצעה.
    *
-   * מסך "בקרת משימות" אינו כאן — הוא מוסתר מכולם (‎hidden‎ ב-‎ROUTES‎), וניווט
-   * אליו מגיע ממילא לדף הבית.
+   * מסך "בקרת משימות" — רק למי שנפתח לו, כמו בתפריט הצד.
    */
   function paletteActions() {
     const route = (name, keys) => ({ kind: 'route', title: ROUTES[name].label, keys, run: () => navigate(name, {}) });
@@ -1568,6 +1570,7 @@ const App = (() => {
       // יומן — לכל העובדים, כמו בתפריט הצד
       route('calendar', ['יומן', 'פגישות', 'לוח שנה', 'calendar']),
       route('board', ['לוח', 'משימות', 'רשימה', 'בורד', 'board']),
+      hasTracker() ? route('tracker', ['בקרה', 'בקרת משימות', 'תתי-משימות', 'משימות אב', 'tracker']) : null,
       may('view_vendor_boards') ? route('vendorBoards', ['ספקים', 'ספק', 'vendors']) : null,
       route('archive', ['ארכיון', 'שהושלמו', 'archive']),
       route('phonebook', ['אלפון', 'טלפונים', 'אנשי קשר', 'עובדים', 'phonebook', 'contacts']),
@@ -2430,6 +2433,7 @@ const App = (() => {
     // יומן — לכל העובדים: היומן שלי. מזכירות — גם היומנים ששותפו איתן ו"מחכות לקביעה"
     add('calendar', {}, { icon: el('span.nav-emoji', { text: '📅' }) });
     add('board');
+    if (hasTracker()) add('tracker');
     if (may('view_vendor_boards')) add('vendorBoards');
 
     // הבלוק הזה כולו לא נבנה לספק — מסלול הספק חזר כבר למעלה עם רשימת הניווט שלו
@@ -3100,7 +3104,7 @@ const App = (() => {
   return {
     state, boot, navigate, refresh, refreshNotifications, logout, render,
     refreshChrome, refreshView, isPhone, closeDrawer, setPref, getPref, setTodayCount, refreshTodayCount,
-    may, can, isVendor, userName, vendorName, project, internalBoard, vendorBoards,
+    may, can, isVendor, hasTracker, userName, vendorName, project, internalBoard, vendorBoards,
     reloadReference
   };
 })();

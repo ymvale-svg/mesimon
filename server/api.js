@@ -826,6 +826,8 @@ function publicActor(actor) {
     workDays: actor.type === 'user' ? W.workDaysOf(actor.id) : [0, 1, 2, 3, 4],
     // מזכירה — רואה את מסך היומן וקובעת ביומנים שהעובדים שיתפו איתה
     secretary: actor.type === 'user' && Secretariat.isSecretary(actor.id),
+    // מסך "בקרת משימות" ותתי-משימות — רק למי שנפתח לו (‎D.trackerAccess‎)
+    tracker: actor.type === 'user' && D.trackerAccess(actor.id),
     // מסך הקלטות ה-Zoom — כשיש חיבור Zoom
     zoomRecordings: actor.type === 'user' && Zoom.isEnabled()
   };
@@ -3664,9 +3666,9 @@ router.get('/api/admin/users', async (req, res, ctx) => {
    * אותן שם היה מאשר חשבון בלי לקבוע לו מחלקה ורמת גישה.
    */
   const rows = P.isOrgWide(actor)
-    ? D.all(`SELECT id, full_name, email, work_email, phone, office_phone, role, department, department_id, status, field_worker, is_secretary, zoom_user_id FROM users
+    ? D.all(`SELECT id, full_name, email, work_email, phone, office_phone, role, department, department_id, status, field_worker, is_secretary, tracker_access, zoom_user_id FROM users
              WHERE signup_at IS NULL ORDER BY full_name`)
-    : D.all(`SELECT id, full_name, email, work_email, phone, office_phone, role, department, department_id, status, field_worker, is_secretary, zoom_user_id FROM users
+    : D.all(`SELECT id, full_name, email, work_email, phone, office_phone, role, department, department_id, status, field_worker, is_secretary, tracker_access, zoom_user_id FROM users
              WHERE department_id ${DEPT_IN} AND role = 'employee' AND signup_at IS NULL ORDER BY full_name`,
       deptsParam(actor));
 
@@ -3689,6 +3691,9 @@ router.get('/api/admin/users', async (req, res, ctx) => {
       fieldWorker: Boolean(u.field_worker),
       // מזכירות — קובעות פגישות ביומנים שהעובדים שיתפו איתן, ורואות את מסך היומן
       secretary: Boolean(u.is_secretary),
+      // "בקרת משימות": הערך בפועל, והאם הוא ברירת המחדל של המחלקה ולא בחירה מפורשת
+      tracker: D.trackerAccess(u.id),
+      trackerByDefault: u.tracker_access === null,
       zoomUserId: u.zoom_user_id ?? null,
       grants: D.all('SELECT grant_key FROM user_grants WHERE user_id = ?', u.id).map((g) => g.grant_key)
     }))
@@ -4098,6 +4103,7 @@ router.post('/api/admin/users', async (req, res, ctx) => {
   D.run('UPDATE users SET department_id = ?, phone = ?, office_phone = ?, work_email = ? WHERE id = ?', departmentId, phone, officePhone, workEmail, newUserId);
   if (b.fieldWorker === true) D.run('UPDATE users SET field_worker = 1 WHERE id = ?', newUserId);
   if (b.secretary === true) D.run('UPDATE users SET is_secretary = 1 WHERE id = ?', newUserId);
+  if (typeof b.tracker === 'boolean') D.run('UPDATE users SET tracker_access = ? WHERE id = ?', b.tracker ? 1 : 0, newUserId);
   if (b.zoomUserId && D.get('SELECT 1 FROM zoom_users WHERE id = ?', String(b.zoomUserId))) D.run('UPDATE users SET zoom_user_id = ? WHERE id = ?', String(b.zoomUserId), newUserId);
 
   // מנהל מחלקה נרשם כמנהל של אותה מחלקה
@@ -4210,6 +4216,7 @@ router.patch('/api/admin/users/:id', async (req, res, ctx) => {
   if (b.password) D.run('UPDATE users SET password_hash = ? WHERE id = ?', D.hashPassword(b.password), user.id);
   if (typeof b.fieldWorker === 'boolean') D.run('UPDATE users SET field_worker = ? WHERE id = ?', b.fieldWorker ? 1 : 0, user.id);
   if (typeof b.secretary === 'boolean') D.run('UPDATE users SET is_secretary = ? WHERE id = ?', b.secretary ? 1 : 0, user.id);
+  if (typeof b.tracker === 'boolean') D.run('UPDATE users SET tracker_access = ? WHERE id = ?', b.tracker ? 1 : 0, user.id);
   if (b.zoomUserId !== undefined) {
     const z = b.zoomUserId ? D.get('SELECT id FROM zoom_users WHERE id = ?', String(b.zoomUserId)) : null;
     if (b.zoomUserId && !z) throw badRequest('משתמש ה-Zoom שנבחר אינו קיים — רעננו את רשימת משתמשי ה-Zoom');
@@ -4759,7 +4766,7 @@ router.delete('/api/status-list/:id', async (req, res, ctx) => {
  */
 router.get('/api/tracker/export', async (req, res, ctx) => {
   const actor = ctx.requireActor();
-  if (isVendor(actor)) throw forbidden();
+  if (isVendor(actor) || !D.trackerAccess(actor.id)) throw forbidden();
   const q = parseUrl(req).searchParams;
   const projectId = q.get('projectId') ? Number(q.get('projectId')) : null;
   /*

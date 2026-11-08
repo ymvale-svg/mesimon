@@ -359,7 +359,8 @@ const TaskCardView = (() => {
    */
   function shortStatusRow() {
     const relevant = task.subtasksTotal > 0 || task.parentTaskId || task.statusShort;
-    if (!relevant || !task.permissions.edit) {
+    // הסטטוס המקוצר שייך לטבלת הבקרה — מי שאין לו את המסך רואה ערך קיים בלבד
+    if (!relevant || !task.permissions.edit || !App.hasTracker()) {
       return task.statusShort
         ? el('div.short-status.is-readonly', {}, [
             el('span.ss-label', { text: 'סטטוס' }),
@@ -412,9 +413,14 @@ const TaskCardView = (() => {
         }, [task.parentTitle || `#${task.parentTaskId}`])
       ]);
     }
-    if (!subs.length && !App.may('create_task')) return null;
+    /*
+     * הוספת תת-משימה — רק למי שנפתח לו מסך "בקרת משימות": בלי המסך אין לה
+     * טעם, והיא רק מבלבלת. תתי-משימות שכבר קיימות מוצגות לכולם.
+     */
+    const mayAdd = App.may('create_task') && App.hasTracker();
+    if (!subs.length && !mayAdd) return null;
 
-    const addBtn = App.may('create_task')
+    const addBtn = mayAdd
       ? el('button.btn.btn-sm', {
           onclick: () => BoardView.openTaskDialog(null, {
             projectId: task.projectId, parentTaskId: task.id, parentTitle: task.title
