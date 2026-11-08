@@ -302,7 +302,7 @@ const BoardView = (() => {
     const archived = filters.archived === '1';
 
     const projectOptions = [{ value: '', label: 'כל הפרויקטים' },
-      ...App.state.projects.map((p) => ({ value: p.id, label: p.name }))];
+      ...App.myProjects({ keep: filters.projectId }).map((p) => ({ value: p.id, label: p.name }))];
 
     const assigneeOptions = [{ value: '', label: 'כל האחראים' },
       ...App.state.users.map((u) => ({ value: `user:${u.id}`, label: u.name })),
@@ -1884,7 +1884,7 @@ const BoardView = (() => {
      */
     const parentOptions = [
       { value: '', label: 'פרויקט ראשי (ללא אב)' },
-      ...App.state.projects
+      ...App.myProjects({ keep: project?.parentProjectId ?? opts.parentProjectId ?? null })
         .filter((p) => !p.parentProjectId && p.status !== 'done' && (!project || p.id !== project.id))
         .map((p) => ({ value: p.id, label: p.name }))
     ];

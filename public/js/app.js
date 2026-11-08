@@ -163,6 +163,19 @@ const App = (() => {
   const userName = (id) => state.users.find((u) => u.id === id)?.name ?? null;
   const vendorName = (id) => state.vendors.find((v) => v.id === id)?.name ?? null;
   const project = (id) => state.projects.find((p) => p.id === id) ?? null;
+
+  /**
+   * הפרויקטים שלי — אותו עולם בכל בורר ומסנן פרויקט במערכת: פרויקט שאני מנהל
+   * או פתחתי, שנעצתי, שיש לי בו משימות, או של המחלקה שלי (‎canAddTask‎ מהשרת,
+   * אותו כלל ש-‎assertMayUseProject‎ אוכף). לא כל פרויקט בארגון — גם למנהל
+   * מערכת, שרשימה של כל הארגון רק מבלבלת אותו.
+   *
+   * ‎keep‎ — פרויקט שכבר נבחר נשאר ברשימה גם אם אינו "שלי", כדי שבורר לא
+   * יוצג ריק ולא ישנה ערך בשקט.
+   */
+  const myProjects = ({ keep = null, openOnly = false } = {}) => state.projects.filter((p) =>
+    (p.canAddTask || p.mine || (keep !== null && keep !== '' && String(p.id) === String(keep)))
+    && (!openOnly || p.status !== 'done' || String(p.id) === String(keep)));
   const internalBoard = () => state.boards.find((b) => b.type === 'internal') ?? null;
   const vendorBoards = () => state.boards.filter((b) => b.type === 'vendor');
 
@@ -2477,7 +2490,8 @@ const App = (() => {
      * השרת כבר מחזיר את הנעוצים בראש, אך את החלוקה מחשבים כאן מחדש כדי שהחוצץ
      * יישאר במקום הנכון גם אחרי סינון הפרויקטים שהושלמו.
      */
-    const live = state.projects.filter((p) => p.status !== 'done');
+    // "הכול" בתפריט הוא הפרויקטים שלי ושל המחלקה — לא כל הארגון (‎myProjects‎)
+    const live = myProjects({ openOnly: true });
 
     /**
      * למנהל מערכת יש גם עבודה משלו, ורשימה שמערבבת את הפרויקטים שלו עם כל
@@ -3104,7 +3118,7 @@ const App = (() => {
   return {
     state, boot, navigate, refresh, refreshNotifications, logout, render,
     refreshChrome, refreshView, isPhone, closeDrawer, setPref, getPref, setTodayCount, refreshTodayCount,
-    may, can, isVendor, hasTracker, userName, vendorName, project, internalBoard, vendorBoards,
+    may, can, isVendor, hasTracker, userName, vendorName, project, myProjects, internalBoard, vendorBoards,
     reloadReference
   };
 })();

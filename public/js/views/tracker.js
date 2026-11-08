@@ -807,10 +807,11 @@ const TrackerView = (() => {
     const mine = myProjectIds();
     /*
      * רשימת הפרויקטים מצטמצמת לחתך הנבחר: הצעת פרויקט שאינו בחתך הייתה
-     * מייצרת טבלה ריקה בלי הסבר. בחתך המחלקה הרשימה אינה מצטמצמת — הוא
-     * נמדד לפי האחראי ולא לפי הפרויקט, ולכן כל פרויקט עשוי להופיע בו.
+     * מייצרת טבלה ריקה בלי הסבר. בשאר החתכים — הפרויקטים שלי ושל המחלקה
+     * (‎App.myProjects‎), כמו בכל בורר פרויקט במערכת, ולא כל הארגון.
      */
-    const live = App.state.projects.filter((p) => p.status !== 'done' && (!scoped || mine.has(p.id)));
+    const live = App.myProjects({ keep: savedProject(), openOnly: true })
+      .filter((p) => !scoped || mine.has(p.id) || String(p.id) === savedProject());
     const projectOptions = [{ value: '', label: 'כל הפרויקטים' },
       ...live.map((p) => ({ value: p.id, label: p.name }))];
 
