@@ -5172,9 +5172,12 @@ router.get('/api/search', async (req, res, ctx) => {
    */
   const visibleProjects = visibleProjectIds(actor);
   const projects = D.all(
-    'SELECT id, name, description, status FROM projects WHERE name LIKE ? OR description LIKE ?',
+    'SELECT id, name, description, status, topic, sens, manager_id, created_by FROM projects WHERE name LIKE ? OR description LIKE ?',
     like, like
-  ).filter((p) => visibleProjects === null || visibleProjects.has(p.id));
+  ).filter((p) => visibleProjects === null || visibleProjects.has(p.id))
+    // 🔒 פרויקט מסווג — אותו כלל כמו ברשימת הפרויקטים (‎listProjectsFor‎)
+    .filter((p) => Cls.mayReadProject(actor, p))
+    .map(({ topic, sens, manager_id, created_by, ...p }) => p);
 
   /*
    * דירוג: התאמה בתחילת השם קודמת להתאמה באמצעו, ופרויקט קודם למשימה בדירוג
