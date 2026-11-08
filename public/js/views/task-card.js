@@ -359,7 +359,8 @@ const TaskCardView = (() => {
    */
   function shortStatusRow() {
     const relevant = task.subtasksTotal > 0 || task.parentTaskId || task.statusShort;
-    if (!relevant || !task.permissions.edit) {
+    // הסטטוס המקוצר שייך לטבלת הבקרה — מי שאין לו את המסך רואה ערך קיים בלבד
+    if (!relevant || !task.permissions.edit || !App.hasTracker()) {
       return task.statusShort
         ? el('div.short-status.is-readonly', {}, [
             el('span.ss-label', { text: 'סטטוס' }),
@@ -402,19 +403,35 @@ const TaskCardView = (() => {
    */
   function subtasksSection() {
     const subs = task.subtasks ?? [];
-    if (task.parentTaskId) {
-      // בתוך תת-משימה מוצג קישור למעלה, ולא רשימה — אין רמה שלישית
-      return el('div.subtask-parent', {}, [
-        el('span', { text: '↰' }),
-        el('span.mute-sm', { text: 'תת-משימה בתוך' }),
-        el('button.txt.txt-open', {
-          onclick: () => open(task.parentTaskId)
-        }, [task.parentTitle || `#${task.parentTaskId}`])
-      ]);
-    }
-    if (!subs.length && !App.may('create_task')) return null;
+    // תרשים הזרימה — לכל משימה שהיא חלק מעץ, למי שנפתח לו מסך הבקרה
+    const flowBtn = App.hasTracker() && (subs.length || task.parentTaskId)
+      ? el('button.btn.btn-sm', {
+          title: 'תרשים זרימה — איפה עומד כל דבר, מי אחראי, הנתיב הקריטי והחסמים',
+          onclick: () => FlowView.open(task.id)
+        }, ['🔀 תרשים זרימה'])
+      : null;
+    // קישור למעלה — בתוך משימה שיש מעליה אב
+    const parentLink = task.parentTaskId
+      ? el('div.subtask-parent', {}, [
+          el('span', { text: '↰' }),
+          el('span.mute-sm', { text: 'תת-משימה בתוך' }),
+          el('button.txt.txt-open', {
+            onclick: () => open(task.parentTaskId)
+          }, [task.parentTitle || `#${task.parentTaskId}`]),
+          el('div.spacer'),
+          subs.length ? null : flowBtn
+        ])
+      : null;
+    // שלוש רמות: אב ← משימה ← תת-משימה. ברמה השלישית אין תתי-משימות משלה
+    if ((task.depth ?? 1) >= 3 && !subs.length) return parentLink;
+    /*
+     * הוספת תת-משימה — רק למי שנפתח לו מסך "בקרת משימות": בלי המסך אין לה
+     * טעם, והיא רק מבלבלת. תתי-משימות שכבר קיימות מוצגות לכולם.
+     */
+    const mayAdd = App.may('create_task') && App.hasTracker() && (task.depth ?? 1) < 3;
+    if (!subs.length && !mayAdd) return parentLink;
 
-    const addBtn = App.may('create_task')
+    const addBtn = mayAdd
       ? el('button.btn.btn-sm', {
           onclick: () => BoardView.openTaskDialog(null, {
             projectId: task.projectId, parentTaskId: task.id, parentTitle: task.title
@@ -423,12 +440,14 @@ const TaskCardView = (() => {
       : null;
 
     return el('div', { style: { margin: '16px 0' } }, [
+      parentLink,
       el('div.flex', {}, [
         el('h4', { text: 'תתי-משימות', style: { fontSize: '13.5px' } }),
         subs.length
           ? el('span.mute-sm', { text: `${subs.filter((s) => s.isFinal).length}/${subs.length}` })
           : null,
         el('div.spacer'),
+        subs.length ? flowBtn : null,
         addBtn
       ]),
       subs.length

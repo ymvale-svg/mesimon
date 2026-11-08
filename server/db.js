@@ -1828,6 +1828,12 @@ function migrate() {
   addColumn('users', 'field_worker', 'INTEGER NOT NULL DEFAULT 0');
   // מזכירות — מנהלות את היומנים שהעובדים שיתפו איתן, ורואות את מסך היומן
   addColumn('users', 'is_secretary', 'INTEGER NOT NULL DEFAULT 0');
+  /*
+   * מסך "בקרת משימות" (משימות-אב ותתי-משימות) — פתוח רק למי שביקשנו, כדי
+   * שלא יבלבל את כולם. ‎NULL‎ = ברירת המחדל לפי המחלקה (מחלקת תכנון — פתוח,
+   * ראה ‎trackerAccess‎); 0/1 — בחירה מפורשת בתיק העובד.
+   */
+  addColumn('users', 'tracker_access', 'INTEGER');
   // משתמש ה-Zoom בחשבון החברה שמארח את הפגישות של העובד (‎zoom_users.id‎)
   addColumn('users', 'zoom_user_id', 'TEXT');
   // חשבון Zoom שני — לאיזה חשבון שייך כל משתמש Zoom
@@ -2228,8 +2234,26 @@ function departmentPath(id) {
   return names.join(' › ');
 }
 
+/**
+ * ברירת המחדל של מסך "בקרת משימות": פתוח למחלקת תכנון ולתתי-המחלקות שלה.
+ * לפי השם ולא לפי מזהה — כך גם מחלקת תכנון שתוקם בעתיד מקבלת אותו.
+ */
+const TRACKER_DEFAULT_DEPT = /תכנון/;
+
+function trackerDefault(departmentId) {
+  return departmentPath(departmentId).split(' › ').some((n) => TRACKER_DEFAULT_DEPT.test(n));
+}
+
+/** האם המשתמש רואה את "בקרת משימות": בחירה מפורשת בתיק העובד, ובלעדיה — לפי המחלקה */
+function trackerAccess(userId) {
+  const u = get('SELECT tracker_access, department_id FROM users WHERE id = ?', userId);
+  if (!u) return false;
+  if (u.tracker_access !== null && u.tracker_access !== undefined) return Boolean(u.tracker_access);
+  return trackerDefault(u.department_id);
+}
+
 module.exports = {
-  departmentSubtree, departmentPath,
+  departmentSubtree, departmentPath, trackerAccess, trackerDefault,
   db, DB_PATH, UPLOADS_DIR, ROOT, STORAGE,
   all, get, run,
   nowIso, hashPassword, verifyPassword,

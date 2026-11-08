@@ -404,8 +404,9 @@ const AdminView = (() => {
       ])
     );
 
+    // תיק העובד נפתח בהקלקה על השורה שלו
     function userRow(u) {
-      return el('tr', {}, [
+      return el('tr.row-link', { title: `תיק עובד — ${u.name}`, onclick: () => userDialog(u, data) }, [
           el('td', {}, [el('div.flex', {}, [UI.avatar(u.name, { small: true }), el('b', { text: u.name })])]),
           el('td', { text: u.email }),
           // עמודת טלפון — כך רואים במבט מי עוד חסר לבוט הוואטסאפ
@@ -421,10 +422,10 @@ const AdminView = (() => {
           })]),
           el('td', {}, [
             el('div.flex', {}, [
-              el('button.btn.btn-sm', { onclick: () => userDialog(u, data) }, ['עריכה']),
               el('button.btn.btn-sm', {
                 title: 'שליחה חוזרת של הזמנה לקביעת סיסמה',
-                onclick: async () => {
+                onclick: async (e) => {
+                  e.stopPropagation(); // לא לפתוח גם את תיק העובד
                   try {
                     const r = await API.resendInvite('user', u.id);
                     showInviteResult(r.invite, u.name);
@@ -733,6 +734,25 @@ const AdminView = (() => {
     // מזכירות — קובעות פגישות ביומנים שהעובדים שיתפו איתן, ורואות את מסך היומן
     const secretaryCheck = el('input', { type: 'checkbox', checked: Boolean(user?.secretary) });
     /*
+     * מסך "בקרת משימות" ותתי-משימות. ברירת המחדל לפי המחלקה (מחלקת תכנון —
+     * פתוח); נשמר כבחירה מפורשת רק כשסימנו כאן, כדי שעובד שיעבור מחלקה ימשיך
+     * לקבל את ברירת המחדל של המחלקה החדשה.
+     */
+    const trackerCheck = el('input', { type: 'checkbox', checked: Boolean(user?.tracker) });
+    let trackerTouched = false;
+    trackerCheck.addEventListener('change', () => { trackerTouched = true; });
+    const trackerHint = el('div.hint');
+    const syncTrackerDefault = () => {
+      const opt = deptSelect.selectedOptions[0];
+      const byDept = /תכנון/.test(opt?.textContent ?? '');
+      if (!trackerTouched && (!isEdit || user.trackerByDefault)) trackerCheck.checked = byDept;
+      trackerHint.textContent = 'משימות-אב ותתי-משימות, והפעולה הבאה בכל אחת. פתוח רק למי שמסמנים — כדי לא לבלבל את כולם. '
+        + 'ברירת המחדל: פתוח למחלקת תכנון.'
+        + (isEdit && !user.trackerByDefault ? ' (נקבע ידנית לעובד הזה)' : '');
+    };
+    deptSelect.addEventListener('change', syncTrackerDefault);
+    syncTrackerDefault();
+    /*
      * משתמש ה-Zoom שמארח את הפגישות של העובד — מחשבון ה-Zoom של החברה, לא
      * בהכרח המייל שלו. הרשימה נטענת מהשרת; בלי חיבור Zoom השדה מוסתר.
      */
@@ -749,7 +769,7 @@ const AdminView = (() => {
 
     const saveBtn = el('button.btn.btn-primary', {}, ['שמירה']);
     const m = UI.modal({
-      title: isEdit ? `עריכת משתמש — ${user.name}` : 'משתמש חדש',
+      title: isEdit ? `תיק עובד — ${user.name}` : 'משתמש חדש',
       body: el('div', {}, [
         UI.field('שם מלא', nameInput),
         UI.field('אימייל', emailInput, 'משמש גם לכניסה למערכת'),
@@ -771,6 +791,10 @@ const AdminView = (() => {
         el('div.field', {}, [
           el('label.checkbox', {}, [secretaryCheck, ' 📅 מזכירות החברה — קובעת פגישות, רואה את מסך היומן, ומנהלי המחלקות פותחים לה משימות']),
           el('div.hint', { text: 'הגישה ליומן של כל עובד — רק לפי מה שהוא שיתף איתה ב-Google. כדי לראות את המשימות שמחכות לקביעה של כולם — גם "צפייה בכל משימות המחלקה".' })
+        ]),
+        el('div.field', {}, [
+          el('label.checkbox', {}, [trackerCheck, ' 📊 בקרת משימות — משימות-אב ותתי-משימות']),
+          trackerHint
         ]),
         zoomField,
         grantsBox,
@@ -802,6 +826,7 @@ const AdminView = (() => {
         role: roleSelect.value,
         status: statusSelect.value,
         fieldWorker: fieldWorkerCheck.checked,
+        ...(trackerTouched ? { tracker: trackerCheck.checked } : {}),
         secretary: secretaryCheck.checked
       };
       if (zoomField.style.display !== 'none') payload.zoomUserId = zoomSelect.value || null;
