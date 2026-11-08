@@ -144,7 +144,9 @@ function lastFinal(userId) {
   } catch { return null; }
 }
 /** 👎 מיד אחרי אישור סופי — הבוט מטפל בו (ולא העוזר הכללי) */
-const wantsUndoFinal = (userId, text) => /^\s*👎[\u{1F3FB}-\u{1F3FF}\uFE0F]*\s*$/u.test(String(text ?? '')) && Boolean(lastFinal(userId));
+/** "בטל את מה שאישרתי": 👎, או ביטול (גם כפתור "ביטול 🗑️" ישן שנלחץ אחרי האישור) */
+const UNDO_FINAL = (text) => { const t = String(text ?? '').replace(/[\u{1F3FB}-\u{1F3FF}\uFE0F]/gu, '').trim(); return /^👎+$/u.test(t) || /^(ביטול|בטל|לבטל|תבטל|🗑)([\s,.!🗑]|$)/u.test(t); };
+const wantsUndoFinal = (userId, text) => UNDO_FINAL(text) && Boolean(lastFinal(userId));
 function load(userId) {
   const s = D.getSetting(key(userId), null);
   if (!s || typeof s !== 'object' || !s.step) return null;
@@ -1650,12 +1652,12 @@ async function handle({ user, text = '', file = null, reaction = false }) {
   if (!Priority.isEnabled()) return { replies: ['החיבור לפריוריטי עוד לא הוגדר בשרת. פנו למנהל המערכת.'], status: 'error', result: 'פריוריטי לא מוגדר' };
 
   // 👎 מיד אחרי "מאשר": סופית אי אפשר להחזיר לטיוטא מהבוט — בקשה למנהל המערכת
-  if (!s && !file && /^👎+$/u.test(String(text ?? '').replace(/[\u{1F3FB}-\u{1F3FF}\uFE0F]/gu, '').trim())) {
+  if (!s && !file && UNDO_FINAL(text)) {
     const f = lastFinal(user.id);
     if (f) {
       D.run('DELETE FROM settings WHERE key = ?', doneKey(user.id));
       alertAdmins(user, { company: f.company, docno: f.docno }, 'בקשה להחזיר GR לטיוטא', [`העובד שלח 👎 מיד אחרי האישור של ${f.docno} (${f.supplier}). יש להחזיר לטיוטא בפריוריטי, או לבטל.`]);
-      return { replies: [`⚠️ *${f.docno}* כבר *סופית* בפריוריטי, ומהבוט אי אפשר להחזיר אותה לטיוטא. שלחתי למנהל המערכת בקשה להחזיר אותה לטיוטא.`], status: 'ok', result: `בקשה להחזיר ${f.docno} לטיוטא` };
+      return { replies: [`⚠️ *${f.docno}* כבר *סופית* בפריוריטי — מהבוט אי אפשר לבטל או להחזיר אותה לטיוטא. שלחתי למנהל המערכת בקשה לפתוח אותה לעריכה (פעולות ← "פתיחת תעודה סופית לעריכה").`], status: 'ok', result: `בקשה להחזיר ${f.docno} לטיוטא` };
     }
   }
   if (!Claude.isEnabled()) return { replies: ['קריאת מסמכים דורשת חיבור AI, שעוד לא הוגדר בשרת.'], status: 'error', result: 'AI לא מוגדר' };
