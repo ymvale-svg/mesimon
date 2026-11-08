@@ -29,6 +29,7 @@ const path = require('node:path');
 
 const D = require('../db');
 const Claude = require('./claude');
+const { BTN } = require('./wa-ui');
 const Priority = require('../priority');
 const WhatsApp = require('../whatsapp');
 const { receiptPdf } = require('./gr-pdf');
@@ -74,22 +75,22 @@ const CANCEL = /^(ביטול|בטל|לבטל|עזוב|יציאה|stop)([\s,.!]|$
 /** "תוסיף בדו שיח: ...", "הערה: ...", "תרשום בהערות ..." — הערה חופשית של המקבל לדו-שיח הפנימי, בכל שלב */
 const NOTE_CMD = /^\s*(?:תוסיף|תוסיפי|הוסף|להוסיף|תרשום|תכתוב|רשום|כתוב)?\s*(?:ל|ב)?\s*(?:דו[\s-]*שיח(?:\s*פנימי)?|הערה|הערות)\s*[,:\-–]?\s*([\s\S]+)$/;
 /*
- * כפתורים לתשובה (וואטסאפ, עד 3). הכיתוב של כל כפתור הוא בדיוק המילה שהבוט מבין ("כן 👍", "מאשר 👍"),
+ * כפתורים לתשובה (וואטסאפ, עד 3). הכיתוב של כל כפתור הוא בדיוק המילה שהבוט מבין ("כן ✅", "מאשר ✅" — ✅ ירוק לאישור),
  * כך שלחיצה עובדת גם כשהיא חוזרת כטקסט רגיל. ‎[]‎ — בלי כפתורים (רשימות ממוספרות, שאלות פתוחות).
  */
 function buttonsFor(s) {
   if (!s) return [];
-  if (s.confirmCancel) return ['כן, לבטל 👍', 'חזרה לטיוטא'];
-  if (s.pendingNew) return ['צרף כנספח', 'קבלה חדשה', 'להתעלם 👎'];
-  if (s.pendingList) return ['כן 👍', 'לא 👎'];
+  if (s.confirmCancel) return [BTN.confirmCancel, 'חזרה לטיוטא'];
+  if (s.pendingNew) return ['צרף כנספח', 'קבלה חדשה', 'להתעלם ❌'];
+  if (s.pendingList) return [BTN.yes, BTN.no];
   switch (s.step) {
-    case 'offer': case 'doctype': return ['כן 👍', 'לא 👎'];
-    case 'header': return ['כן 👍', s.noVat ? 'עם מע"מ' : 'ללא מע"מ', 'ביטול'];
-    case 'order': return ['בלי הזמנה 👎', 'ביטול'];
-    case 'lines': return ['כן 👍', 'ביטול'];
-    case 'parts': return ['כן 👍', 'כללי'];
-    case 'files': return ['סיום 👍'];
-    case 'review': return ['מאשר 👍', 'ביטול'];
+    case 'offer': case 'doctype': return [BTN.yes, BTN.no];
+    case 'header': return [BTN.yes, s.noVat ? 'עם מע"מ' : 'ללא מע"מ', BTN.cancel];
+    case 'order': return ['בלי הזמנה ❌', BTN.cancel];
+    case 'lines': return [BTN.yes, BTN.cancel];
+    case 'parts': return [BTN.yes, 'כללי'];
+    case 'files': return [BTN.done];
+    case 'review': return [BTN.approve, BTN.cancel];
     default: return [];
   }
 }
@@ -105,6 +106,33 @@ const NO_ORDER = /^(בלי הזמנה|אין הזמנה|ללא הזמנה|לפי
 
 const key = (userId) => `goods_receipt:${userId}`;
 const doneKey = (userId) => `goods_receipt_done:${userId}`;
+
+/*
+ * העדפות המשתמש (משתמש משימון), לכל חברה בנפרד: הפרויקט והמחסן שבחר בפעם האחרונה — ברירת המחדל בפעם הבאה.
+ * נשמר כשהטיוטא נפתחת. ‎{ [company]: { project: {code, des}, warehouse, byProject: {[code]: warehouse} } }‎
+ */
+const prefsKey = (userId) => `goods_receipt_prefs:${userId}`;
+function prefsOf(userId, company) {
+  try {
+    const row = D.get('SELECT value FROM settings WHERE key = ?', prefsKey(userId));
+    return (row ? JSON.parse(row.value) : {})[company] ?? null;
+  } catch { return null; }
+}
+function rememberPrefs(userId, s) {
+  if (!userId || !s.company || !s.project?.code) return;
+  try {
+    const row = D.get('SELECT value FROM settings WHERE key = ?', prefsKey(userId));
+    const all = row ? JSON.parse(row.value) : {};
+    const c = all[s.company] ?? {};
+    c.project = { code: s.project.code, des: s.project.des ?? '' };
+    if (s.warehouse) { c.warehouse = s.warehouse; c.byProject = { ...(c.byProject ?? {}), [s.project.code]: s.warehouse }; }
+    c.at = Date.now();
+    all[s.company] = c;
+    D.setSetting(prefsKey(userId), all);
+  } catch (err) {
+    console.error('[משימון] העדפות קבלת סחורה:', err.message);
+  }
+}
 /** GR שהפך לסופי בבוט ב-15 הדקות האחרונות (‎null‎ — אין) */
 function lastFinal(userId) {
   try {
@@ -933,6 +961,14 @@ async function askProject(s) {
   }
   // רמז מהמסמך — עיר, אתר, מגרש: כל הפרויקטים המתאימים ביותר (גם לפי הכינויים), ואם לא — ה-AI
   const hint = [s.doc.project_hint, s.doc.delivery_place].filter(Boolean).join(' · ');
+  // הפרויקט שהמשתמש בחר בפעם האחרונה בחברה הזו — ברירת המחדל; לשנות — "פרויקט …"
+  const last = !s.noPref && prefsOf(s.uid, s.company)?.project;
+  const lastP = last && all.find((p) => p.code === last.code);
+  if (lastP) {
+    s.project = lastP;
+    s.projectFrom = 'pref';
+    return chooseWarehouse(s, `📁 פרויקט: *${lastP.des}* (${lastP.code}) — הבחירה האחרונה שלך${hint ? ` (במסמך: ${hint})` : ''}\n   לשנות פרויקט — כתבו *פרויקט* ושם ("פרויקט אלעד 49").`);
+  }
   s.step = 'project';
   if (!Priority.matchProjects(all, hint).length) {
     const note = await sandboxNote(s, hint, all);
@@ -966,6 +1002,14 @@ async function chooseWarehouse(s, note = '') {
     return go(`🏬 מחסן: ${s.warehouse} — מההזמנה`);
   }
   const opts = await Priority.projectWarehouses(s.company, s.project?.code).catch(() => []);
+  // המחסן שהמשתמש בחר בפעם האחרונה — לפרויקט הזה; אחרת האחרון בכלל, אם הוא מחסן של הפרויקט (או שלפרויקט אין מחסנים)
+  const pref = prefsOf(s.uid, s.company);
+  const lastW = pref?.byProject?.[s.project?.code] ?? (pref?.warehouse && (!opts.length || opts.some((w) => w.code === pref.warehouse)) ? pref.warehouse : null);
+  if (lastW && await Priority.warehouseExists(s.company, lastW).catch(() => false)) {
+    s.warehouse = lastW;
+    const name = opts.find((w) => w.code === lastW)?.name || ((await Priority.warehouses(s.company).catch(() => null)) ?? []).find((w) => w.code === lastW)?.name;
+    return go(`🏬 מחסן: *${name || lastW}* (${lastW}) — הבחירה האחרונה שלך`);
+  }
   if (opts.length === 1) { s.warehouse = opts[0].code; return go(`🏬 מחסן: *${opts[0].name || opts[0].code}* (${opts[0].code})`); }
   if (opts.length > 1) {
     // כמה מחסנים — המחסן הראשי אם הוא ביניהם, אחרת הנפוץ בקבלות הפרויקט. לא עוצרים לשאלה
@@ -1025,6 +1069,9 @@ async function createDraft(user, s) {
     if (!docno) return { failed: err, tried: [first, ...alt] };
   }
   s.docno = docno;
+  // פריוריטי מציב בפתיחה את מחסן הפרויקט, גם כשנשלח מחסן אחר — מעדכנים למחסן שנבחר (לפני השורות, שיורשות אותו)
+  if (s.warehouse) await Priority.setHeader(c, docno, { TOWARHSNAME: s.warehouse }).catch((err) => console.error(`[משימון] מחסן ${s.warehouse} ל-${docno}:`, err.message));
+  rememberPrefs(user.id, s);
   save(user.id, s);
   const problems = [];
   if (s.noVat) {
@@ -1507,6 +1554,7 @@ async function handle({ user, text = '', file = null, reaction = false }) {
   // 👍🏽 → 👍: גוון עור ובורר תצוגה של אימוג'י אינם חלק מהתשובה
   let t = String(text ?? '').replace(/[\u{1F3FB}-\u{1F3FF}\uFE0F]/gu, '').replace(/(👍|👌|✅|✔|👎)\1+/gu, '$1').trim();
   let s = load(user.id);
+  if (s) s.uid = user.id;
   if (s && !fresh(s)) {
     // נשכחה — טיוטא שלא אושרה מבוטלת, כדי לא להשאיר יתרה תפוסה בהזמנה
     if (s.docno) await Priority.cancelReceipt(s.company, s.docno).catch(() => {});
@@ -1569,7 +1617,7 @@ async function handle({ user, text = '', file = null, reaction = false }) {
   if (!s && file && !isTrigger(t)) {
     const saved = await saveFile(user.id, file, 'מסמך ראשי');
     save(user.id, { step: 'offer', startedAt: Date.now(), files: [saved] });
-    return { replies: [...(released ? [released] : []), '📦 לקלוט את המסמך כ*קבלת סחורה* בפריוריטי?\n*כן* 👍 — להמשיך, *לא* 👎 — לא לקלוט.'], status: 'ok', result: 'הצעה: קבלת סחורה מתמונה', buttons: ['כן 👍', 'לא 👎'] };
+    return { replies: [...(released ? [released] : []), '📦 לקלוט את המסמך כ*קבלת סחורה* בפריוריטי?\n*כן* 👍 — להמשיך, *לא* 👎 — לא לקלוט.'], status: 'ok', result: 'הצעה: קבלת סחורה מתמונה', buttons: [BTN.yes, BTN.no] };
   }
 
   // התחלה חדשה: "קבלת סחורה" עם קובץ באמצע קליטה, או קובץ חדש באמצע קליטה שעוד אין לה טיוטא
@@ -1584,7 +1632,7 @@ async function handle({ user, text = '', file = null, reaction = false }) {
       const r = await cancel(user, s, 'הקודמת בוטלה');
       restarted = `↩️ ${r.replies[0].replace('קבלת הסחורה הקודמת בוטלה.', `קבלת הסחורה הקודמת${was ? ` (${was})` : ''} בוטלה.`)} מתחיל עם המסמך החדש.`;
     }
-    s = { step: 'doc', startedAt: Date.now() };
+    s = { step: 'doc', startedAt: Date.now(), uid: user.id };
     if (!file) {
       save(user.id, s);
       return { replies: [...(released ? [released] : []), '📦 *קבלת סחורה* — שלחו צילום של תעודת המשלוח או החשבונית (המסמך הראשי, שממנו נקראים הנתונים).'], status: 'ok', result: 'התחלה' };
@@ -2002,6 +2050,15 @@ async function step(user, s, t, file) {
       if (s.pendingNew && !file) { const r = await answerPendingNew(user, s, t); if (r) return r; }
       if (file) return routeFile(user, s, file, t);
       if (/^(מחסן|מחסנים|שנה מחסן|לשנות מחסן|החלף מחסן|פירוט מחסנים|רשימת מחסנים)([\s,.!?]|$)/.test(t.trim())) return listWarehouses(s);
+      // "פרויקט …" — פרויקט אחר (במקום ברירת המחדל); המחסן נבחר מחדש
+      const pm = t.match(/^\s*(?:פרויקט|לשנות פרויקט|שנה פרויקט|פרויקט אחר)(?=[\s:\-–]|$)\s*[:\-–]?\s*([\s\S]*)$/);
+      if (pm) {
+        s.project = null; s.warehouse = null; s.noPref = true; s.projectOptions = null; s.projectPending = null;
+        const what = pm[1].replace(/\s+/g, ' ').trim();
+        if (!what || /^אחר$/.test(what)) return askProject(s);
+        s.step = 'project';
+        return step(user, s, what, null);
+      }
       if (/^\d{1,2}$/.test(t.trim()) && s.warehouseChoices?.[Number(t) - 1]) {
         const w = s.warehouseChoices[Number(t) - 1];
         s.warehouseChoices = null;
