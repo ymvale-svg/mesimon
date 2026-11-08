@@ -1656,8 +1656,9 @@ async function handle({ user, text = '', file = null, reaction = false }) {
     const f = lastFinal(user.id);
     if (f) {
       D.run('DELETE FROM settings WHERE key = ?', doneKey(user.id));
-      alertAdmins(user, { company: f.company, docno: f.docno }, 'בקשה להחזיר GR לטיוטא', [`העובד שלח 👎 מיד אחרי האישור של ${f.docno} (${f.supplier}). יש להחזיר לטיוטא בפריוריטי, או לבטל.`]);
-      return { replies: [`⚠️ *${f.docno}* כבר *סופית* בפריוריטי — מהבוט אי אפשר לבטל או להחזיר אותה לטיוטא. שלחתי למנהל המערכת בקשה לפתוח אותה לעריכה (פעולות ← "פתיחת תעודה סופית לעריכה").`], status: 'ok', result: `בקשה להחזיר ${f.docno} לטיוטא` };
+      alertAdmins(user, { company: f.company, docno: f.docno }, 'ביקש לבטל GR סופי', [`העובד ביקש לבטל את ${f.docno} (${f.supplier}) מיד אחרי האישור. קיבל הנחיה לפתוח את התעודה לעריכה בפריוריטי ולבטל.`]);
+      return { replies: [[`⚠️ לא ניתן לבטל את *${f.docno}* — התעודה נסגרה (סטטוס *סופית*).`,
+        'כדי לבטל: בפריוריטי, במסך *קבלות סחורה* ← *פעולות* ← *פתיחת תעודה סופית לעריכה*, ואז לבטל את התעודה.'].join('\n')], status: 'ok', result: `ביטול אחרי סגירה: ${f.docno}` };
     }
   }
   if (!Claude.isEnabled()) return { replies: ['קריאת מסמכים דורשת חיבור AI, שעוד לא הוגדר בשרת.'], status: 'error', result: 'AI לא מוגדר' };
