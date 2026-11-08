@@ -2188,6 +2188,7 @@ const AdminView = (() => {
       always.addEventListener('change', () => { hFrom.disabled = hTo.disabled = always.checked; });
       const shabbat = el('input', { type: 'checkbox', checked: s.shabbat });
       const speechCompare = el('input', { type: 'checkbox', checked: s.speechCompare });
+      const topicSwitch = el('input', { type: 'checkbox', checked: s.topicSwitchCancels !== false });
       const check = (input, label, hint) => el('label.wa-check', {}, [input, el('div', {}, [el('b', { text: label }), hint ? el('div.mute-sm', { text: hint }) : null])]);
 
       const save = el('button.btn.btn-primary', {}, ['שמירת ההגדרות']);
@@ -2197,7 +2198,7 @@ const AdminView = (() => {
           draw(await API.put('/api/admin/wa-bot/settings', {
             enabled: enabled.checked, quietMinutes: Number(quiet.value), summaryTime: summary.value,
             hours: always.checked ? '' : `${hFrom.value}-${hTo.value}`, shabbat: shabbat.checked,
-            speechCompare: speechCompare.checked
+            speechCompare: speechCompare.checked, topicSwitchCancels: topicSwitch.checked
           }));
           UI.success('ההגדרות נשמרו');
         } catch (err) { save.disabled = false; UI.error(err); }
@@ -2209,6 +2210,9 @@ const AdminView = (() => {
           UI.field('דקות שקט לפני ניתוח קבוצה', quiet, 'רצף הודעות נקרא יחד, אחרי הפסקה בשיחה — כך "וגם את זה עד חמישי" מובן בהקשר'),
           UI.field('שעת סיכום הבוקר', summary, 'בימים א׳–ה׳. הפעלה וכיבוי — בלשונית "פעולות"')
         ]),
+        el('h4.mt', { text: 'שיחה בפרטי' }),
+        check(topicSwitch, 'מעבר לנושא אחר מבטל את הקודם (ברירת מחדל)',
+          'הבוט תמיד עושה את מה שמבקשים ממנו עכשיו. עובד שבאמצע טיוטת מייל, משימה, אישור או קבלת סחורה שולח בקשה אחרת ("תפתח משימה לדני…") — הפריט הקודם מבוטל בלי לכתוב "ביטול", ואין חזרה אליו (בקבלת סחורה — גם הטיוטא בפריוריטי). כבוי — רק טיוטות מייל יורדות, וקבלת סחורה מושהית עד "קבלת סחורה".'),
         el('h4.mt', { text: 'מתי הבוט שולח הודעות' }),
         check(always, 'כל שעות היום'),
         el('div.row', {}, [UI.field('מהשעה', hFrom), UI.field('עד השעה', hTo)]),
