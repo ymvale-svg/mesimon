@@ -429,8 +429,22 @@ function shapeSubtask(task) {
     isFinal: final,
     priority: task.priority,
     dueDate: task.due_date,
-    overdue: isOverdue(task, final)
+    overdue: isOverdue(task, final),
+    // לתת-משימה ברמה השנייה — כמה תתי-משימות יש תחתיה
+    subtasksTotal: D.get('SELECT COUNT(*) c FROM tasks WHERE parent_task_id = ? AND archived = 0', task.id).c
   };
+}
+
+/** עומק ההיררכיה: משימת-אב = 1, משימה תחתיה = 2, תת-משימה = 3 */
+const MAX_TASK_DEPTH = 3;
+function taskDepth(task) {
+  let depth = 1;
+  const seen = new Set([task.id]);
+  for (let cur = task.parent_task_id; cur && !seen.has(cur) && depth < 10; depth += 1) {
+    seen.add(cur);
+    cur = D.get('SELECT parent_task_id FROM tasks WHERE id = ?', cur)?.parent_task_id ?? null;
+  }
+  return depth;
 }
 
 /** ייצוג משימה לממשק, כולל שדות נגזרים */
@@ -508,6 +522,8 @@ function shapeTask(task, actor, { withDetails = false } = {}) {
     // אילו סטטוסים אפשר לבחור למשימה הזו — נגזר מהרשימה שהוחלה על הפרויקט
     trackOptions: project?.status_owner_id ? statusList(project.status_owner_id) : [],
     parentTaskId: task.parent_task_id ?? null,
+    // רמה בעץ (1–3) — מתחת לרמה 3 אין "＋ תת-משימה"
+    depth: taskDepth(task),
     parentTitle: task.parent_task_id
       ? D.get('SELECT title FROM tasks WHERE id = ?', task.parent_task_id)?.title ?? null
       : null,
@@ -1485,6 +1501,75 @@ router.get('/api/tasks/:id', async (req, res, ctx) => {
   sendJson(res, 200, { task: shapeTask(task, actor, { withDetails: true }) });
 });
 
+/**
+ * תרשים הזרימה של משימה — כל העץ שלה, מהשורש (משימת-האב) ועד תתי-המשימות.
+ *
+ * מבקשים מכל צומת בעץ ומקבלים את העץ כולו, עם הצומת המבוקש מסומן: מי שפתח
+ * את התרשים מתוך תת-משימה רוצה לראות איפה היא עומדת ביחס לכל השאר. השורש
+ * הוא האב הגבוה ביותר שהצופה רשאי לראות. צמתים שאינם בתחומו נשמטים יחד עם
+ * הענף שלהם. ניתוח הנתיב הקריטי והחסמים נעשה בממשק (‎public/js/views/flow.js‎).
+ */
+router.get('/api/tasks/:id/flow', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  if (isVendor(actor) || !D.trackerAccess(actor.id)) throw forbidden();
+  const task = getTaskOr404(ctx.params.id);
+  assertVisible(actor, task);
+
+  let root = task;
+  for (let i = 0; i < MAX_TASK_DEPTH && root.parent_task_id; i += 1) {
+    const up = D.get('SELECT * FROM tasks WHERE id = ?', root.parent_task_id);
+    if (!up || !canSeeTask(actor, up)) break;
+    root = up;
+  }
+
+  const nodes = [];
+  const seen = new Set();
+  const visit = (t, parentId, depth) => {
+    if (seen.has(t.id) || depth > MAX_TASK_DEPTH + 1) return;
+    seen.add(t.id);
+    const col = columnMeta(t.board_id, t.status);
+    const final = col ? !!col.is_final : false;
+    const track = taskTrackStatus(t);
+    const dep = t.depends_on_task_id
+      ? D.get('SELECT id, title, status, board_id FROM tasks WHERE id = ?', t.depends_on_task_id)
+      : null;
+    const depCol = dep ? columnMeta(dep.board_id, dep.status) : null;
+    nodes.push({
+      id: t.id,
+      parentId,
+      depth,
+      title: t.title,
+      assigneeType: t.assignee_type,
+      assigneeName: assigneeName(t),
+      extraAssignees: shapeExtraAssignees(t.id).map((e) => e.name).filter(Boolean),
+      dueDate: t.due_date,
+      overdue: isOverdue(t, final),
+      isFinal: final,
+      statusLabel: col ? col.label : t.status,
+      statusColor: col ? col.color : '#94a3b8',
+      trackLabel: track?.label ?? null,
+      trackColor: track?.color ?? null,
+      statusShort: t.status_short ?? '',
+      dependsOn: dep ? { id: dep.id, title: dep.title, isFinal: !!depCol?.is_final } : null
+    });
+    const kids = D.all(
+      `SELECT t.*, COALESCE(bc.is_final, 0) fin FROM tasks t
+         LEFT JOIN board_columns bc ON bc.board_id = t.board_id AND bc.key = t.status
+        WHERE t.parent_task_id = ? AND t.archived = 0
+        ORDER BY COALESCE(t.due_date, '9999'), t.id`, t.id);
+    for (const k of kids) if (canSeeTask(actor, k)) visit(k, t.id, depth + 1);
+  };
+  visit(root, null, 1);
+
+  const project = projectOf(root);
+  sendJson(res, 200, {
+    rootId: root.id,
+    focusId: task.id,
+    project: project ? { id: project.id, name: project.name, color: project.color } : null,
+    nodes
+  });
+});
+
 router.post('/api/tasks', async (req, res, ctx) => {
   const actor = ctx.requireActor();
   const body = await readJson(req);
@@ -1557,15 +1642,15 @@ function createTask(actor, body) {
    * נדרש ‎create_task‎ ממילא, וזה בדיוק מה שמאפשר גם למי שקיבל תת-משימה
    * לפתוח את הבאה בשרשרת — הזרימה שביקש המשתמש.
    *
-   * שתי רמות בלבד: תת-משימה של תת-משימה נתלית באב המקורי. עץ עמוק היה
-   * מחייב תצוגה רקורסיבית וטבלת בקרה שאי אפשר לקרוא, ובפועל מה שנדרש הוא
-   * "המשימה והפעולה הבאה שלה".
+   * שלוש רמות: משימת-אב ← משימות ← תתי-משימות (כך נבנה תרשים הזרימה
+   * בבקרת המשימות). תת-משימה של תת-משימה נתלית בהורה שלה, באותה רמה — עץ
+   * עמוק יותר כבר אינו נקרא במבט אחד.
    */
   let parentTaskId = null;
   if (body.parentTaskId) {
     const parent = getTaskOr404(body.parentTaskId);
     assertVisible(actor, parent);
-    parentTaskId = parent.parent_task_id ?? parent.id;
+    parentTaskId = taskDepth(parent) >= MAX_TASK_DEPTH ? parent.parent_task_id : parent.id;
   }
 
   const res1 = D.run(

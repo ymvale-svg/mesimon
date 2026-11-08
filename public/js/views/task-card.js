@@ -403,22 +403,33 @@ const TaskCardView = (() => {
    */
   function subtasksSection() {
     const subs = task.subtasks ?? [];
-    if (task.parentTaskId) {
-      // בתוך תת-משימה מוצג קישור למעלה, ולא רשימה — אין רמה שלישית
-      return el('div.subtask-parent', {}, [
-        el('span', { text: '↰' }),
-        el('span.mute-sm', { text: 'תת-משימה בתוך' }),
-        el('button.txt.txt-open', {
-          onclick: () => open(task.parentTaskId)
-        }, [task.parentTitle || `#${task.parentTaskId}`])
-      ]);
-    }
+    // תרשים הזרימה — לכל משימה שהיא חלק מעץ, למי שנפתח לו מסך הבקרה
+    const flowBtn = App.hasTracker() && (subs.length || task.parentTaskId)
+      ? el('button.btn.btn-sm', {
+          title: 'תרשים זרימה — איפה עומד כל דבר, מי אחראי, הנתיב הקריטי והחסמים',
+          onclick: () => FlowView.open(task.id)
+        }, ['🔀 תרשים זרימה'])
+      : null;
+    // קישור למעלה — בתוך משימה שיש מעליה אב
+    const parentLink = task.parentTaskId
+      ? el('div.subtask-parent', {}, [
+          el('span', { text: '↰' }),
+          el('span.mute-sm', { text: 'תת-משימה בתוך' }),
+          el('button.txt.txt-open', {
+            onclick: () => open(task.parentTaskId)
+          }, [task.parentTitle || `#${task.parentTaskId}`]),
+          el('div.spacer'),
+          subs.length ? null : flowBtn
+        ])
+      : null;
+    // שלוש רמות: אב ← משימה ← תת-משימה. ברמה השלישית אין תתי-משימות משלה
+    if ((task.depth ?? 1) >= 3 && !subs.length) return parentLink;
     /*
      * הוספת תת-משימה — רק למי שנפתח לו מסך "בקרת משימות": בלי המסך אין לה
      * טעם, והיא רק מבלבלת. תתי-משימות שכבר קיימות מוצגות לכולם.
      */
-    const mayAdd = App.may('create_task') && App.hasTracker();
-    if (!subs.length && !mayAdd) return null;
+    const mayAdd = App.may('create_task') && App.hasTracker() && (task.depth ?? 1) < 3;
+    if (!subs.length && !mayAdd) return parentLink;
 
     const addBtn = mayAdd
       ? el('button.btn.btn-sm', {
@@ -429,12 +440,14 @@ const TaskCardView = (() => {
       : null;
 
     return el('div', { style: { margin: '16px 0' } }, [
+      parentLink,
       el('div.flex', {}, [
         el('h4', { text: 'תתי-משימות', style: { fontSize: '13.5px' } }),
         subs.length
           ? el('span.mute-sm', { text: `${subs.filter((s) => s.isFinal).length}/${subs.length}` })
           : null,
         el('div.spacer'),
+        subs.length ? flowBtn : null,
         addBtn
       ]),
       subs.length
