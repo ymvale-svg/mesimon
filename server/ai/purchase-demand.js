@@ -670,6 +670,23 @@ async function submit(user, s) {
   try {
     await Priority.submitDemand(c, prdno);
   } catch (err) {
+    // סביבת הבדיקה (test11) בלי רשימת מאשרים — סימולציה: הדרישה נשארת טיוטא, והעובד עצמו מקבל את ההודעה שהחותם הבא
+    // היה מקבל, כדי שאפשר יהיה לבדוק את כל הזרימה. בחברה אמיתית — לא מדמים
+    if (Priority.isTest(c) && Priority.isNoApproversError(err)) {
+      let sent = false;
+      try {
+        const d = await Priority.readDemand(c, prdno);
+        const msg = Approvals.messageFor(c, { ...d, PRDITEMS_SUBFORM: d.PRDITEMS_SUBFORM ?? [] }, user.full_name);
+        if (hooks.send) sent = await hooks.send(user.id, `🧪 *סימולציה* — ב-${c} אין רשימת מאשרים, ולכן ההודעה שהחותם הבא היה מקבל נשלחת אליך:\n\n${msg}`);
+      } catch (e) {
+        console.error('[משימון] סימולציית חותם בא:', e.message);
+      }
+      clear(user.id, s);
+      return { s: null, replies: [[`🧪 *דרישת רכש ${prdno}* נפתחה בסביבת הבדיקה (${s.items.length === 1 ? 'פריט אחד' : `${s.items.length} פריטים`}) ונשארה *טיוטא*:`,
+        `ב-${c} אין רשימת מאשרים, ולכן היא לא עוברת ל"מחכה לאישור".`,
+        sent ? 'במקום זה שלחתי לך את ההודעה שהחותם הבא היה מקבל.' : null,
+        'בחברה אמיתית הדרישה עוברת לאישור, והחותם הבא מקבל את ההודעה.'].filter(Boolean).join('\n')], buttons: [], status: 'ok', result: `${prdno} טיוטא (סימולציה — אין רשימת מאשרים ב-${c})` };
+    }
     alertAdmins(user, s, 'הדרישה לא עברה לאישור', [Priority.isNoApproversError(err) ? 'אין בפריוריטי רשימת מאשרים שמתאימה לדרישה (רשימות מאשרים לדרישות רכש). צריך להגדיר רשימה — או להעביר לאישור ידנית.' : '', err.message].filter(Boolean));
     return { s: null, replies: [[`📝 *דרישת רכש ${prdno}* נפתחה בפריוריטי (${s.items.length} ${s.items.length === 1 ? 'פריט' : 'פריטים'}), אבל עוד *לא עברה לאישור* — חסרה הגדרה בפריוריטי.`,
       'מנהל המערכת קיבל פירוט ויעביר אותה לאישור.', companyLine(c)].join('\n')], buttons: [], status: 'error', result: `${prdno} טיוטא: ${err.message}` };
