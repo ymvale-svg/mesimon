@@ -1196,9 +1196,28 @@ async function createDraft(user, s) {
       }
     }
   }
-  // הנחת מסמך — רק הנחה של ממש (לא עיגול של אגורות, ולא "הנחה" שלילית)
-  if (!s.order && s.doc.totals?.doc_discount_pct >= 0.1) {
-    await Priority.setHeader(c, docno, { PERCENT: s.doc.totals.doc_discount_pct }).catch((err) => problems.push({ what: 'הנחת המסמך לא נקלטה', err: `הנחת מסמך: ${err.message}` }));
+  // הנחת מסמך — הנחה של ממש (0.1% ומעלה) באחוז בכותרת. "הנחה כללית" זעירה (0.02% = 0.20 ₪ — עיגול אגורות של הספק)
+  // באחוז לא תצא מדויקת, ובלעדיה המע"מ והסה"כ יוצאים גבוהים מהחשבונית (1,041.23 מול 1,041.00) — נקלטת כשורת
+  // הנחה בסכום, על מק"ט כללי 000, כמו שאר שורות ההנחה במסמך. "הנחה" שלילית — לא נקלטת
+  const t = s.doc.totals ?? {};
+  // הסכום מהמסמך; לא נקרא — סה"כ השורות פחות לפני מע"מ, כשבמסמך יש אחוז הנחה
+  const discAmt = Math.round((Number(t.doc_discount) || (t.doc_discount_pct > 0 ? Number(t.subtotal) - Number(t.before_vat) : 0) || 0) * 100) / 100;
+  if (!s.order && t.doc_discount_pct >= 0.1) {
+    await Priority.setHeader(c, docno, { PERCENT: t.doc_discount_pct }).catch((err) => problems.push({ what: 'הנחת המסמך לא נקלטה', err: `הנחת מסמך: ${err.message}` }));
+  } else if (!s.order && discAmt > 0 && discAmt < 1) {
+    const first = s.lines.find((l) => !l.order && (l.part?.chapter || s.chapter?.chapter));
+    const codings = [
+      first && { chapter: first.part?.chapter ?? s.chapter?.chapter, topic: first.part?.topic ?? s.chapter?.topic },
+      Priority.GENERAL
+    ].filter(Boolean);
+    let last = null, done = false;
+    for (const g of codings) {
+      try {
+        await Priority.addFreeLine(c, docno, { part: '000', description: `הנחה כללית / עיגול${t.doc_discount_pct ? ` (${t.doc_discount_pct}%)` : ''}`, qty: 1, price: -discAmt, chapter: g.chapter, topic: g.topic });
+        done = true; break;
+      } catch (err) { last = err; }
+    }
+    if (!done) problems.push({ what: null, err: `הנחה כללית ${money(discAmt)}: ${last?.message}` });
   }
   // פרטים (‎DETAILS‎, עד 24 תווים) — שם המקבל ומספר התעודה; מוצג ברשימת התעודות בחשבונית הספק
   await Priority.setHeader(c, docno, { DETAILS: receiverDetails(user, s.doc.doc_number) }).catch(() => {});
