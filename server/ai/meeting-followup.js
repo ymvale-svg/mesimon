@@ -15,7 +15,7 @@
  *     כבר בעיבוד, ו"סיכום / משימות / הקלטת הפגישה" עובדים עליה באותו אופן.
  *
  * התשובות:
- *   • סיכום — מסמך ה-AI של Timeless / תמליל Zoom ← סיכום, החלטות ומשימות
+ *   • סיכום — מסמך ה-AI והתמליל של Timeless (גם לפגישת Zoom — לפי שעת ההתחלה) ← סיכום, החלטות ומשימות
  *     (‎digest‎, פעם אחת לפגישה ונשמר — לא משלמים שוב על כל משתתף).
  *   • משימות — רק מה שהוטל על הכותב, ו"לפתוח משימות ✅" פותח אותן אצלו.
  *   • הקלטה — הקישור הפנימי של משימון, שבודק הרשאה בכל צפייה (issue #65).
@@ -32,6 +32,7 @@ const WaUi = require('./wa-ui');
 
 const MIN = 60000;
 const HOUR = 60 * MIN;
+const DAY_MS = 24 * HOUR;
 const GIVE_UP_MS = 24 * HOUR;          // אחרי יממה מסוף הפגישה — לא פונים
 const ANSWER_WINDOW_MS = 48 * HOUR;    // עד מתי "סיכום" מתייחס לפגישה שנשאלה
 const ZOOM_RECHECK_MS = 10 * MIN;      // בדיקת הקלטה ב-Zoom לכל פגישה
@@ -216,10 +217,33 @@ function vttText(vtt) {
     .join('\n');
 }
 
-async function zoomSource(row) {
+/**
+ * הפגישה ב-Timeless שמתאימה לפגישת Zoom — לפי שעת ההתחלה (עד 20 דקות הפרש), מהפגישות שהעובד רואה.
+ * Timeless מקליט ומתמלל את פגישות ה-Zoom, ולכן לא צריך תמלול של Zoom עצמו (הוחלט 09.11.26).
+ */
+async function timelessMatch(userId, startIso) {
+  if (!Timeless.isConnected(userId) || !startIso) return null;
+  const t = new Date(startIso).getTime();
+  const ymd = (ms) => new Date(ms).toISOString().slice(0, 10);
+  const list = await Timeless.listMeetings(userId, { from: ymd(t - DAY_MS), to: ymd(t + DAY_MS), limit: 50, scope: 'all' }).catch(() => []);
+  return list
+    .map((m) => ({ m, diff: Math.abs(new Date(m.start ?? 0).getTime() - t) }))
+    .filter((x) => x.diff <= 20 * MIN)
+    .sort((a, b) => a.diff - b.diff)[0]?.m ?? null;
+}
+
+async function zoomSource(row, userId) {
   const d = parseJson(row.data, {});
   const m = D.get('SELECT * FROM meetings WHERE id = ?', d.meetingId);
   if (!m?.zoom_meeting_id) return null;
+  const people = parseJson(m.attendees, []).map((a) => `${a.name || ''} <${a.email}>`);
+  // קודם Timeless — שם התמליל וסיכום ה-AI
+  const tl = await timelessMatch(userId, m.start_at);
+  if (tl) {
+    const src = await timelessSource({ ...row, ref: String(tl.id), data: JSON.stringify({ participants: tl.participants }) }, userId);
+    if (src) return { people: [...people, ...src.people], text: src.text };
+  }
+  // גיבוי: תמליל של Zoom, אם במקרה קיים
   const rec = await Zoom.meetingRecording(m.zoom_meeting_id);
   const file = rec?.files.find((f) => f.kind === 'transcript' && f.ready && f.type !== 'CC');
   const parts = [];
@@ -229,7 +253,6 @@ async function zoomSource(row) {
     if (res.ok) parts.push(`תמליל:\n${vttText(await res.text()).slice(0, 60000)}`);
   }
   if (!parts.length) return null;
-  const people = parseJson(m.attendees, []).map((a) => `${a.name || ''} <${a.email}>`);
   return { people, text: parts.join('\n\n') };
 }
 
@@ -253,7 +276,7 @@ async function digest(row, userId) {
   if (cached) return parseJson(cached.data, null);
   // הקלטה מוואטסאפ — הסיכום נשמר כבר בעיבוד (‎meeting-audio.js‎)
   if (row.source === 'wa') return null;
-  const src = row.source === 'zoom' ? await zoomSource(row) : await timelessSource(row, userId);
+  const src = row.source === 'zoom' ? await zoomSource(row, userId) : await timelessSource(row, userId);
   if (!src) return null;
   const out = await Claude.json({
     system: DIGEST_SYSTEM,
@@ -358,7 +381,7 @@ async function answer(actor, text, { appRoot = '', dry = false, createTask = nul
   }
   if (!dig) {
     return {
-      text: `${head}\nלפגישה הזו אין תמליל, ולכן אין לי ממה לסכם.${row.source === 'zoom' ? ' (כדי שיהיה — להפעיל ב-Zoom תמלול אוטומטי של הקלטות בענן.)' : ''}`,
+      text: `${head}\n${row.source === 'zoom' ? 'עוד לא מצאתי את הפגישה הזו ב-Timeless (התמליל והסיכום מגיעים משם). נסו שוב בעוד כמה דקות.' : 'לפגישה הזו אין תמליל, ולכן אין לי ממה לסכם.'}`,
       buttons: row.source === 'zoom' ? [BTN.recording] : [], result: `אין תמליל: ${row.title}`
     };
   }
