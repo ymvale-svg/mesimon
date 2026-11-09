@@ -933,6 +933,15 @@ CREATE TABLE IF NOT EXISTS sent_followups (
   UNIQUE (user_id, gmail_id)
 );
 
+/* 📋 תדריך לפני פגישה שכבר נשלח (‎ai/briefing.js‎) — פעם אחת לכל פגישה ולכל עובד. נמחק אחרי 3 ימים */
+CREATE TABLE IF NOT EXISTS meeting_briefs (
+  uid      TEXT    NOT NULL,
+  start_at TEXT    NOT NULL,
+  user_id  INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  sent_at  TEXT    NOT NULL,
+  PRIMARY KEY (uid, start_at, user_id)
+);
+
 /* 🌊 קצב התזכורות לכל עובד (‎ai/mail-actions.js‎) — כמה נשלחו היום ומתי האחרונה, כדי לא להציף */
 CREATE TABLE IF NOT EXISTS reminder_pace (
   user_id  INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
@@ -1661,6 +1670,7 @@ const DEFAULT_SETTINGS = {
   rfq_daily_max: 20,                       // פנייה לספקים: כמה מיילים לכל היותר לעובד ביום (לא להיחשב דואר זבל)
   bot_pilot: true,                         // 🧪 היכולות החדשות בבוט (סבב Instinct) — רק למנהלי המערכת, עד "פתח את היכולות החדשות לכולם"
   remind_hours: '08:30-18:00',             // 🌊 שעות התזכורות מהמייל (מחוץ להן — לא מזכירים, גם לא בשעות הבוט)
+  briefing_minutes: 20,                    // 📋 כמה דקות לפני פגישה — התדריך בבוט
   meeting_ai_alternatives: true,           // הצעות AI להזזת פגישות חופפות
   meeting_record_default: false,           // "הקלטה אוטומטית לענן" מסומן מראש בפגישת Zoom חדשה
   meeting_office_address: '',              // "🏢 במשרד" בקביעת פגישה — הכתובת שנכנסת למיקום ביומן ובהזמנה

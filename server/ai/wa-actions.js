@@ -179,6 +179,12 @@ const ACTIONS = [
     enabled: true
   },
   {
+    key: 'briefing', icon: '📋', label: 'תדריך לפני פגישה', channel: 'proactive',
+    description: '20 דקות לפני פגישה ביומן שיש בה עוד משתתף (‎briefing_minutes‎): "📋 תדריך לפגישה … להלן התדריך כפי שנאסף" — מי, הרקע, מה פתוח, מה סוכם בפעם הקודמת ונקודות לפגישה. מזיכרון המייל של העובד, המשימות הפתוחות מול המשתתפים, סיכום הפגישה הקודמת איתם והידע הארגוני (לפי ההרשאות). אין מידע — אין הודעה.',
+    examples: [],
+    enabled: true
+  },
+  {
     key: 'meeting_reminder', icon: '📅', label: 'התראה לפני פגישה', channel: 'proactive',
     description: 'כמה דקות לפני פגישה (ברירת המחדל 15; "קביעת פגישות" בהגדרות): הודעה עם הנושא, השעה, קישור ה-Zoom / Meet או המיקום, ומי משתתף — לבעל היומן, למי שקבע ולמוזמנים שהם משתמשי משימון, לפי הטלפון בפרופיל. גם פגישות שנקבעו ישירות ביומן Google (לא ממשימון) — מהיומנים המחוברים, פעם אחת לכל משתתף; מי שדחה את ההזמנה — לא מקבל. "מי משתתף?" (או הכפתור) — רשימת המשתתפים ומי אישר, לפגישה האחרונה שהתריעה, לזו שעכשיו / הבאה, או לפי שם ("מי משתתף בפגישה עם רזבר?"). מוזמנים מחוץ לארגון אינם מקבלים הודעה מהבוט. פגישה שבוטלה ביומן — בלי הודעה.',
     examples: ['מי משתתף בפגישה?', 'מי משתתף בפגישה עם רזבר?'],
@@ -242,7 +248,7 @@ const isManager = (actor) => actor?.type === 'user' && actor.role !== 'employee'
  * 🧪 פיילוט (הוחלט 09.11.26): היכולות החדשות מסבב Instinct — רק למנהלי המערכת, עד שפותחים אותן לכולם
  * ("פתח את היכולות החדשות לכולם" בבוט, או ההגדרה ‎bot_pilot‎). כך הבדיקה בבוט האמיתי לא מגיעה לעובדים.
  */
-const PILOT_KEYS = new Set(['reminders', 'sent_followup', 'day_digest', 'meeting_followup', 'meeting_audio', 'mail_deadline', 'goods_offer', 'notices', 'rfq', 'form_fill', 'meet_coord']);
+const PILOT_KEYS = new Set(['reminders', 'sent_followup', 'day_digest', 'briefing', 'meeting_followup', 'meeting_audio', 'mail_deadline', 'goods_offer', 'notices', 'rfq', 'form_fill', 'meet_coord']);
 const PILOT_ROLES = ['superadmin', 'admin'];
 const inPilot = (actor) => actor?.type === 'user' && PILOT_ROLES.includes(actor.role);
 

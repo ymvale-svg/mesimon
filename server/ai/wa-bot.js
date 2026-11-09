@@ -72,6 +72,7 @@ const MeetCoord = require('./meeting-coord');
 const Reminders = require('./reminders');
 const SentFollowup = require('./sent-followup');
 const DayDigest = require('./day-digest');
+const Briefing = require('./briefing');
 
 const GROUP_SKILL = path.join(__dirname, 'skills', 'whatsapp-group-to-tasks.md');
 const CHAT_SKILL = path.join(__dirname, 'skills', 'whatsapp-chat.md');
@@ -4308,6 +4309,12 @@ async function tick() {
           users: () => orgUsers().filter((u) => u.phone && D.userPrefs(u.id)?.botPrefs?.dayDigest !== false && WaActions.allowed(Auth.loadActor('user', u.id), 'day_digest')),
           push: (userId, m) => pushToUser(userId, m, 'day_digest')
         }).catch((err) => console.error('[משימון] סיכום יומי נכשל:', err.message));
+      }
+      if (WaActions.byKey('briefing')?.enabled) {
+        await Briefing.tick({
+          users: () => orgUsers().filter((u) => u.phone && D.userPrefs(u.id)?.botPrefs?.briefing !== false && WaActions.allowed(Auth.loadActor('user', u.id), 'briefing')),
+          push: (userId, m) => pushToUser(userId, m, 'briefing')
+        }).catch((err) => console.error('[משימון] תדריכים נכשלו:', err.message));
       }
       if (WaActions.byKey('reminders')?.enabled) await Reminders.tick((userId, m) => pushToUser(userId, m, 'reminders')).catch((err) => console.error('[משימון] תזכורות נכשלו:', err.message));
       await warmInsights();
