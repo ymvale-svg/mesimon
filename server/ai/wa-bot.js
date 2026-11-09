@@ -69,6 +69,7 @@ const Notice = require('./notice');
 const Rfq = require('./rfq');
 const FormFill = require('./form-fill');
 const MeetCoord = require('./meeting-coord');
+const Reminders = require('./reminders');
 
 const GROUP_SKILL = path.join(__dirname, 'skills', 'whatsapp-group-to-tasks.md');
 const CHAT_SKILL = path.join(__dirname, 'skills', 'whatsapp-chat.md');
@@ -2238,6 +2239,17 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
     const r = await Notice.start(actor.id, t).catch((err) => ({ text: 'לא הצלחתי להכין את זה כרגע. נסו שוב בעוד רגע 🙏', result: `שגיאה: ${err.message}`, error: true }));
     return out(r.text, { draft: r.draft ?? null, awaiting: Boolean(r.awaiting) }, { action: 'notices', status: r.error ? 'error' : 'ok', result: String(r.result ?? '').slice(0, 300), buttons: r.buttons, files: r.files });
   }
+  // ⏰ "תזכיר לי …", "התזכורות שלי", "בטל תזכורת 2" — ותשובה לתזכורת שהגיעה
+  if (state.awaiting && state.draft?.kind === 'reminder') {
+    const r = dry ? null : Reminders.answer(actor.id, state.draft, t);
+    if (r) return out(r.text, { draft: null }, { action: 'reminders', status: 'ok', result: r.result.slice(0, 300) });
+    keep.draft = null;
+    state = { ...state, draft: null, awaiting: false };
+  }
+  if (WaActions.allowed(actor, 'reminders') && !(state.awaiting && state.draft)) {
+    const r = dry ? null : await Reminders.command(actor.id, t).catch((err) => ({ text: 'לא הצלחתי לרשום את התזכורת. נסו שוב בעוד רגע 🙏', result: `שגיאה: ${err.message}`, error: true }));
+    if (r) return out(r.text, {}, { action: 'reminders', status: r.error ? 'error' : 'ok', result: r.result });
+  }
   // 📬 "זכרת? 🐣" על מייל שלא טופל, ו"לבצע קבלת סחורה?" על חשבונית מהמייל
   if (state.awaiting && ['mail_remind', 'goods_offer'].includes(state.draft?.kind)) {
     const d = state.draft;
@@ -4267,6 +4279,7 @@ async function tick() {
       await mailActionAlerts();
       await rfqTick();
       await meetCoordTick();
+      if (WaActions.byKey('reminders')?.enabled) await Reminders.tick((userId, m) => pushToUser(userId, m, 'reminders')).catch((err) => console.error('[משימון] תזכורות נכשלו:', err.message));
       await warmInsights();
     }
     if (Claude.isEnabled() && WaActions.byKey('group_tasks')?.enabled) await processGroups();

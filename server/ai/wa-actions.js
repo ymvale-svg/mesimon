@@ -83,6 +83,12 @@ const ACTIONS = [
     enabled: true
   },
   {
+    key: 'reminders', icon: '⏰', label: '"תזכיר לי"', channel: 'private',
+    description: '"תזכיר לי מחר ב-8 להתקשר לאבי" — בזמן: "⏰ תזכורת: …" עם בוצע ✅ · בעוד שעה ⏰ · מחר ⏰. בלי שעה — 08:30; בלי יום — מחר. "התזכורות שלי" — הרשימה; "בטל תזכורת 2" — ביטול. בשעה שביקשת (לא בקצב של התזכורות מהמייל).',
+    examples: ['תזכיר לי מחר ב-8 להתקשר לאבי', 'התזכורות שלי'],
+    enabled: true
+  },
+  {
     key: 'my_tasks', icon: '📋', label: 'המשימות שלי', channel: 'private',
     description: 'רשימת המשימות הפתוחות של הכותב: להיום, באיחור, לשבוע הקרוב או הכול.',
     examples: ['מה המשימות שלי היום?', 'מה באיחור?', 'מה יש לי השבוע?'],
@@ -224,7 +230,7 @@ const isManager = (actor) => actor?.type === 'user' && actor.role !== 'employee'
  * 🧪 פיילוט (הוחלט 09.11.26): היכולות החדשות מסבב Instinct — רק למנהלי המערכת, עד שפותחים אותן לכולם
  * ("פתח את היכולות החדשות לכולם" בבוט, או ההגדרה ‎bot_pilot‎). כך הבדיקה בבוט האמיתי לא מגיעה לעובדים.
  */
-const PILOT_KEYS = new Set(['meeting_followup', 'meeting_audio', 'mail_deadline', 'goods_offer', 'notices', 'rfq', 'form_fill', 'meet_coord']);
+const PILOT_KEYS = new Set(['reminders', 'meeting_followup', 'meeting_audio', 'mail_deadline', 'goods_offer', 'notices', 'rfq', 'form_fill', 'meet_coord']);
 const PILOT_ROLES = ['superadmin', 'admin'];
 const inPilot = (actor) => actor?.type === 'user' && PILOT_ROLES.includes(actor.role);
 

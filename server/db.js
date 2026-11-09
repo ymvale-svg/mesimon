@@ -898,6 +898,21 @@ CREATE TABLE IF NOT EXISTS meet_coord (
 );
 CREATE INDEX IF NOT EXISTS idx_meet_coord_msg ON meet_coord(message_id);
 
+/* ⏰ "תזכיר לי" (‎ai/reminders.js‎). ‎status‎: active / fired / done / cancelled */
+CREATE TABLE IF NOT EXISTS reminders (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  text       TEXT    NOT NULL,
+  due_at     TEXT    NOT NULL,
+  status     TEXT    NOT NULL DEFAULT 'active',
+  source     TEXT    NOT NULL DEFAULT 'bot',
+  ref        TEXT,
+  fired_at   TEXT,
+  done_at    TEXT,
+  created_at TEXT    NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_reminders_due ON reminders(status, due_at);
+
 /* 🌊 קצב התזכורות לכל עובד (‎ai/mail-actions.js‎) — כמה נשלחו היום ומתי האחרונה, כדי לא להציף */
 CREATE TABLE IF NOT EXISTS reminder_pace (
   user_id  INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
