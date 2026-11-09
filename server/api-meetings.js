@@ -331,7 +331,7 @@ function register(router, h) {
     await run(res, async () => {
       const r = await Zoom.recordingsFor(actor, from, to);
       return {
-        from, to, all: r.all, errors: r.errors,
+        from, to, all: r.all, hosts: r.hosts, errors: r.errors,
         recordings: r.recordings.map(({ meeting, ...rec }) => {
           const task = meeting?.taskId ? D.get('SELECT * FROM tasks WHERE id = ?', meeting.taskId) : null;
           return {

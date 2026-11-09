@@ -107,7 +107,16 @@ const RecordingsView = (() => {
       || r.host.email.includes(q)
       || (r.meeting?.title ?? '').toLowerCase().includes(q));
     if (!list.length) {
-      UI.mount(listBox, UI.empty(q ? 'אין הקלטות שמתאימות לחיפוש' : 'אין הקלטות בענן בחודש הזה', '🎥'));
+      if (q) { UI.mount(listBox, UI.empty('אין הקלטות שמתאימות לחיפוש', '🎥')); return; }
+      // ריק — ולמה זה יכול לקרות, כדי שלא ייראה כמו תקלה
+      UI.mount(listBox, UI.empty('אין הקלטות בענן בחודש הזה', '🎥'), el('ul.rec-why.mute-sm', {}, [
+        data.all
+          ? el('li', { text: `נבדקו ${data.hosts ?? 0} משתמשי Zoom בחשבונות של החברה.` })
+          : el('li', { text: 'מוצגות רק הקלטות של פגישות משימון שקבעת, שהן ביומן שלך או שהוזמנת אליהן. הקלטות אחרות — אצל מנהלי המערכת.' }),
+        el('li', { text: 'רק הקלטה לענן מגיעה לכאן. הקלטה למחשב ("Record on this computer") נשמרת במחשב של מי שהקליט.' }),
+        el('li', { text: 'משתמש Zoom חינמי (Basic) לא מקליט לענן.' }),
+        el('li', { text: 'אחרי סוף הפגישה Zoom מעבד את ההקלטה — לפעמים עד כמה שעות.' })
+      ]));
       return;
     }
     UI.mount(listBox, ...list.map(card));

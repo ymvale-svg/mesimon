@@ -482,8 +482,23 @@ const mayWatch = (scope, meetingId) => scope.all || scope.meetingIds.has(String(
  * (נושא, משתתפים, משימה).
  */
 async function recordingsFor(actor, from, to) {
+  // מי שרואה הכול — ההקלטות נמשכות לפי רשימת משתמשי ה-Zoom ששמורה אצלנו. הרשימה
+  // התעדכנה רק בלחיצה על "סנכרון" במסך הניהול, ולכן משתמש Zoom שנוסף אחרי זה — וכל
+  // ההקלטות שלו — לא הופיעו. עכשיו: רשימה ריקה או ישנה מ-6 שעות מתעדכנת כאן לבד
+  const syncErrors = [];
+  if (P.can(actor, 'manage_users')) {
+    const last = D.get('SELECT MAX(synced_at) AS at FROM zoom_users')?.at;
+    if (!last || Date.now() - new Date(last).getTime() > 6 * 3600000) {
+      try {
+        syncErrors.push(...(await syncUsers()).errors);
+      } catch (err) {
+        syncErrors.push(`רשימת משתמשי ה-Zoom לא התעדכנה: ${err.message}`);
+      }
+    }
+  }
   const scope = recordingScope(actor);
-  const { recordings, errors } = await listRecordings(scope.hosts, from, to);
+  const { recordings, errors: listErrors } = await listRecordings(scope.hosts, from, to);
+  const errors = [...syncErrors, ...listErrors];
   const ours = new Map();
   const list = recordings.filter((r) => mayWatch(scope, r.meetingId)).map((r) => {
     if (!ours.has(r.meetingId)) {
@@ -494,7 +509,7 @@ async function recordingsFor(actor, from, to) {
     try { attendees = m ? JSON.parse(m.attendees) : []; } catch { /* ריק */ }
     return { ...r, meeting: m ? { id: m.id, taskId: m.task_id, title: m.title, attendees: attendees.map((a) => a.name || a.email) } : null };
   });
-  return { all: scope.all, recordings: list, errors };
+  return { all: scope.all, hosts: scope.hosts.length, recordings: list, errors };
 }
 
 module.exports = {
