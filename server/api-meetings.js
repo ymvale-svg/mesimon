@@ -11,6 +11,7 @@ const W = require('./workdays');
 const P = require('./permissions');
 const Meetings = require('./meetings');
 const Zoom = require('./zoom');
+const Timeless = require('./timeless');
 const Gmail = require('./gmail');
 const WaBot = require('./ai/wa-bot');
 const WaActions = require('./ai/wa-actions');
@@ -64,6 +65,8 @@ function register(router, h) {
         const own = Meetings.ownZoomUser(actor.id);
         return { enabled: Zoom.isEnabled(), chooseHost, own: own ? { name: own.name, email: own.email, basic: own.license === 'basic' } : null };
       })(),
+      // 🎥 הקלטות מ-Timeless — כשיש חיבור (אישי, או הארגוני מהשרת)
+      timeless: { connected: Timeless.isConnected(actor.id) },
       defaults: {
         minutes: Number(D.getSetting('meeting_default_minutes', 30)),
         record: Boolean(D.getSetting('meeting_record_default', false)),
@@ -342,6 +345,63 @@ function register(router, h) {
         })
       };
     });
+  });
+
+  // --- 🎥 Timeless: ההקלטות, התמלול והסיכום. הרשאות — ב-‎timeless.js‎ (אסימון אישי,
+  // או הארגוני: הנהלה רואה הכול, עובד — רק פגישות שהשתתף בהן) ---
+
+  // ‎401‎ של Timeless (אסימון פג) — לא ‎401‎ של משימון: המשתמש מחובר, רק צריך לחבר מחדש את Timeless
+  const tlError = (err) => (err instanceof HttpError ? err : new HttpError(err.status === 401 ? 400 : err.status >= 400 && err.status < 500 ? err.status : 502, err.message));
+
+  router.get('/api/timeless/recordings', async (req, res, ctx) => {
+    const actor = userOnly(ctx);
+    if (!Timeless.isConnected(actor.id)) throw badRequest('Timeless אינו מחובר — "החשבון שלי ← AI ← Timeless"');
+    const q = parseUrl(req).searchParams;
+    const day = /^\d{4}-\d{2}-\d{2}$/;
+    const to = day.test(q.get('to') ?? '') ? q.get('to') : new Date().toISOString().slice(0, 10);
+    const from = day.test(q.get('from') ?? '') ? q.get('from') : new Date(Date.parse(to) - 30 * 86400000).toISOString().slice(0, 10);
+    if (from > to) throw badRequest('טווח תאריכים לא תקין');
+    try {
+      sendJson(res, 200, { from, to, status: Timeless.publicStatus(actor.id), recordings: await Timeless.recordings(actor.id, from, to) });
+    } catch (err) {
+      throw tlError(err);
+    }
+  });
+
+  // צפייה — הפניה לכתובת החתומה של Timeless (נוצרת מחדש בכל לחיצה)
+  router.get('/api/timeless/recordings/:id/play', async (req, res, ctx) => {
+    const actor = userOnly(ctx);
+    let url;
+    try {
+      url = await Timeless.recordingUrl(actor.id, ctx.params.id);
+    } catch (err) {
+      throw tlError(err);
+    }
+    if (!url) throw notFound('לפגישה הזו אין הקלטה ב-Timeless — רק תמלול וסיכום');
+    res.writeHead(302, { location: url, 'cache-control': 'no-store' });
+    res.end();
+  });
+
+  router.get('/api/timeless/recordings/:id/transcript', async (req, res, ctx) => {
+    const actor = userOnly(ctx);
+    try {
+      sendJson(res, 200, await Timeless.transcript(actor.id, ctx.params.id, { maxChars: 200000 }));
+    } catch (err) {
+      throw tlError(err);
+    }
+  });
+
+  // סיכום — מסמכי ה-AI של הפגישה, כ-Markdown
+  router.get('/api/timeless/recordings/:id/summary', async (req, res, ctx) => {
+    const actor = userOnly(ctx);
+    try {
+      const refs = await Timeless.documents(actor.id, ctx.params.id);
+      const docs = [];
+      for (const ref of refs.slice(0, 5)) docs.push({ ...ref, markdown: await Timeless.document(actor.id, ref.id, { verified: true }) });
+      sendJson(res, 200, { documents: docs });
+    } catch (err) {
+      throw tlError(err);
+    }
   });
 
   // צפייה בקובץ — הפניה לכתובת חתומה של Zoom, אחרי בדיקת הרשאה

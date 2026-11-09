@@ -37,7 +37,7 @@ const CalendarView = (() => {
   let info = null;      // היומנים ורמת הגישה
   let data = null;      // האירועים בטווח
   let pending = [];
-  // ‎tab‎: ‎calendar‎ — היומנים; ‎recordings‎ — 🎥 הקלטות Zoom (‎RecordingsView‎), כשיש חיבור Zoom
+  // ‎tab‎: ‎calendar‎ — היומנים; ‎recordings‎ — 🎥 הקלטות (‎RecordingsView‎): מ-Timeless, ומ-Zoom כשיש חיבור
   const view = { tab: 'calendar', mode: 'day', layout: null, date: new Date(), users: null, hidden: null, filter: '' };
 
   // צבע קבוע לכל עובד — לפי מקומו ברשימת היומנים, לא לפי מי מסומן: הורדת יומן לא צובעת מחדש את האחרים
@@ -73,30 +73,29 @@ const CalendarView = (() => {
       view.layout = App.getPref(LAYOUT_PREF, 'combined') === 'columns' ? 'columns' : 'combined';
     }
     syncUsers();
-    if (view.tab === 'recordings' && info.zoom?.enabled) return drawRecordings();
+    if (view.tab === 'recordings') return drawRecordings();
     await loadRange();
   }
 
   // בלשונית ההקלטות — לא פונים ל-Zoom בכל רענון רקע; "⟳ רענון" שם מושך מחדש
   const reload = () => (!containerRef?.isConnected ? Promise.resolve() : view.tab === 'recordings' ? Promise.resolve() : loadRange());
 
-  /** הלשוניות בראש המסך — רק כשיש חיבור Zoom */
+  /** הלשוניות בראש המסך: היומן, וההקלטות (Timeless / Zoom) */
   function tabs() {
-    if (!info.zoom?.enabled) return null;
     const go = (tab) => {
       if (view.tab === tab) return;
       view.tab = tab;
       if (tab === 'recordings') drawRecordings();
       else loadRange();
     };
-    return el('div.seg.cal-tabs', {}, [['calendar', '📅 יומן'], ['recordings', '🎥 הקלטות Zoom']].map(([k, label]) =>
+    return el('div.seg.cal-tabs', {}, [['calendar', '📅 יומן'], ['recordings', '🎥 הקלטות']].map(([k, label]) =>
       el(`button${view.tab === k ? '.active' : ''}`, { onclick: () => go(k) }, [label])));
   }
 
   function drawRecordings() {
     const box = el('div');
     UI.mount(containerRef, el('div.cal', {}, [tabs(), box]));
-    RecordingsView.render(box, { embedded: true });
+    RecordingsView.render(box, { embedded: true, zoom: Boolean(info.zoom?.enabled), timeless: Boolean(info.timeless?.connected) });
   }
 
   function range() {

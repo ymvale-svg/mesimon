@@ -3306,6 +3306,11 @@ button.txt-open:hover { color: var(--brand-ink); text-decoration: underline; }
 /* 🎥 הקלטות Zoom */
 .rec { display: flex; flex-direction: column; gap: 10px; }
 .rec-list { display: flex; flex-direction: column; gap: 8px; }
+.rec-pre { white-space: pre-wrap; font: inherit; font-size: 13.5px; line-height: 1.7; max-height: 65vh; overflow-y: auto; margin: 0; }
+.rec-pre h3, .rec-pre h4 { margin: 10px 0 4px; }
+.rec-li { padding-inline-start: 8px; }
+.rec-gap { height: 8px; }
+.rec-connect { max-width: 560px; margin: 0 auto; display: flex; flex-direction: column; gap: 8px; }
 .rec-why { max-width: 560px; margin: 0 auto; padding-inline-start: 18px; line-height: 1.7; }
 .rec-card { padding: 12px 14px; display: flex; flex-direction: column; gap: 4px; }
 .rec-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }

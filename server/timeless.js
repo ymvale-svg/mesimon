@@ -390,6 +390,30 @@ async function listRooms(userId, { search, limit = 25 } = {}) {
   return out;
 }
 
+// ---------- מסך ההקלטות (🎥 בלשונית היומן) ----------
+
+/**
+ * ההקלטות בטווח — הפגישות שהושלמו, עם מסמכי ה-AI. אותו סינון כמו בכלים:
+ * עובד באסימון הארגוני — רק פגישות שהשתתף בהן.
+ */
+async function recordings(userId, from, to) {
+  const meetings = await listMeetings(userId, { from, to, status: 'completed', limit: LIST_HARD_MAX, expandDocuments: true });
+  return meetings.sort((a, b) => String(b.start ?? '').localeCompare(String(a.start ?? '')));
+}
+
+/**
+ * קישור לצפייה בהקלטה — כתובת חתומה לזמן קצר מ-Timeless. נמשך מחדש בכל לחיצה,
+ * ורק אחרי בדיקה שהפגישה נראית למשתמש. ‎null‎ — אין הקלטה (רק תמלול).
+ */
+async function recordingUrl(userId, meetingId) {
+  const id = String(meetingId ?? '').trim();
+  if (!id) throw apiError('חסר מזהה פגישה.', { status: 400 });
+  if (restrictionOf(userId) && !(await findMeeting(userId, id))) throw apiError(NOT_ATTENDED_MSG, { status: 404 });
+  const body = await call(userId, `/meetings/${encodeURIComponent(id)}/recording`);
+  const url = body.recording_url;
+  return typeof url === 'string' && /^https:\/\//.test(url) ? url : null;
+}
+
 // ---------- כלים למודל ----------
 
 const TOOLS = [
@@ -485,7 +509,7 @@ async function runTool(userId, name, input = {}) {
 
 module.exports = {
   connect, disconnect, isConnected, publicStatus, hasOrgToken: () => Boolean(orgToken()),
-  listMeetings, transcript, documents, document, listRooms,
+  listMeetings, transcript, documents, document, listRooms, recordings, recordingUrl,
   TOOLS, runTool,
   BASE_URL
 };

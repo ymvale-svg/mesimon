@@ -683,7 +683,7 @@ const App = (() => {
     today: { label: 'Today', icon: 'my-tasks', render: (c) => TodayView.render(c) },
     calendar: { label: 'יומן', icon: 'my-tasks', render: (c) => CalendarView.render(c) },
     // הקלטות Zoom — לשונית במסך היומן; קישור ישן לכאן מגיע לדף הבית
-    recordings: { label: 'הקלטות Zoom', icon: 'my-tasks', hidden: true, render: (c) => RecordingsView.render(c) },
+    recordings: { label: 'הקלטות', icon: 'my-tasks', hidden: true, render: (c) => RecordingsView.render(c) },
     home: { label: 'דף הבית', icon: 'home', render: (c) => HomeView.render(c) },
     board: { label: 'לוח המשימות', icon: 'board', render: (c, p) => BoardView.render(c, { ...p, scope: 'internal' }) },
     vendorBoards: { label: 'כל משימות הספקים', icon: 'vendors', render: (c, p) => BoardView.render(c, { ...p, scope: 'vendors' }) },
