@@ -19,6 +19,17 @@ const MeetingView = (() => {
   const hhmm = (iso) => localTime(new Date(iso));
   const when = (iso) => new Date(iso).toLocaleString('he-IL', { weekday: 'long', day: 'numeric', month: 'numeric', hour: '2-digit', minute: '2-digit' });
   const shortWhen = (iso) => new Date(iso).toLocaleString('he-IL', { weekday: 'short', day: 'numeric', month: 'numeric', hour: '2-digit', minute: '2-digit' });
+  /** פרק זמן במילים: 30 ← "חצי שעה", 90 ← "שעה וחצי", 180 ← "3 שעות", 50 ← "50 דק׳" */
+  function durationLabel(min) {
+    const n = Number(min) || 0;
+    const named = { 15: 'רבע שעה', 30: 'חצי שעה', 45: 'שלושת רבעי שעה', 60: 'שעה', 90: 'שעה וחצי', 120: 'שעתיים', 150: 'שעתיים וחצי' };
+    if (named[n]) return named[n];
+    if (n < 60) return `${n} דק׳`;
+    const h = Math.floor(n / 60);
+    const rest = n % 60;
+    const hours = h === 1 ? 'שעה' : h === 2 ? 'שעתיים' : `${h} שעות`;
+    return rest === 0 ? hours : rest === 30 ? `${hours} וחצי` : rest === 15 ? `${hours} ורבע` : `${hours} ו-${rest} דק׳`;
+  }
   const RESPONSE = { accepted: '✓', declined: '✗', tentative: '?', needsAction: '·' };
   const RESPONSE_TITLE = { accepted: 'אישר/ה', declined: 'דחה/תה', tentative: 'אולי', needsAction: 'עוד לא ענה/תה' };
 
@@ -67,6 +78,8 @@ const MeetingView = (() => {
     }
 
     const me = App.state.actor;
+    const officeAddress = info.defaults.officeAddress ?? '';
+    const isOffice = (loc) => Boolean(loc) && (loc === officeAddress || loc === 'במשרד');
     // Zoom פתוח למזכירות ולהנהלה, ולכל השאר — רק כשיש להם משתמש Zoom משויך
     const zoomOpen = info.zoom.enabled && (info.zoom.chooseHost || Boolean(info.zoom.own));
     const state = {
@@ -78,7 +91,8 @@ const MeetingView = (() => {
       minutes: editing?.minutes ?? opts.prefill?.minutes ?? info.defaults.minutes,
       date: '',
       time: '',
-      locationType: editing?.locationType ?? (zoomOpen ? 'zoom' : 'place'),
+      // ‎office‎ — "🏢 במשרד": בשרת זה ‎place‎ עם כתובת המשרד מההגדרות
+      locationType: editing?.locationType === 'place' && isOffice(editing.location) ? 'office' : editing?.locationType ?? (zoomOpen ? 'zoom' : 'office'),
       record: editing ? Boolean(editing.zoom?.record) : Boolean(info.defaults.record),
       zoomUserId: editing?.zoom?.userId ?? '',   // ריק = אוטומטי (הנהלה ומזכירות בוחרים)
       suggestions: null,
@@ -92,7 +106,7 @@ const MeetingView = (() => {
     const titleInput = el('input', { type: 'text', value: editing?.title ?? opts.task?.title ?? '' });
     const notesInput = el('textarea', { placeholder: 'נכנס לתיאור הפגישה ביומן', style: { minHeight: '56px' } });
     notesInput.value = editing?.notes ?? '';
-    const locationInput = el('input', { type: 'text', value: editing?.locationType !== 'zoom' ? editing?.location ?? '' : '' });
+    const locationInput = el('input', { type: 'text', placeholder: 'כתובת', value: editing?.locationType !== 'zoom' && !isOffice(editing?.location) ? editing?.location ?? '' : '' });
     const sendInvites = el('input', { type: 'checkbox', checked: true });
     const dateInput = el('input', { type: 'date', value: state.date });
     const timeInput = el('input', { type: 'time', value: state.time, step: 900 });
@@ -105,6 +119,9 @@ const MeetingView = (() => {
     });
     const startIso = () => new Date(`${state.date}T${state.time}:00`).toISOString();
     const emails = () => state.attendees.map((a) => a.email);
+    // כמו בשרת: מותר מתחילת הרבע שעה הנוכחי (ב-15:47 — גם 15:45), לא לפני
+    const quarterStart = () => Math.floor(Date.now() / 900000) * 900000;
+    const isPast = () => new Date(startIso()).getTime() < quarterStart();
 
     // --- ביומן של
     const ownerField = () => {
@@ -168,15 +185,20 @@ const MeetingView = (() => {
       return el('div', {}, [attendeePicker.node, chipsBox]);
     }
 
-    // --- משך
+    // --- משך: בפרקי זמן ("חצי שעה", "שעה וחצי"), לא בדקות
     function minutesBox() {
-      const preset = [30, 45, 60, 90];
-      const other = el('input', { type: 'number', min: 5, max: 600, step: 5, value: preset.includes(state.minutes) ? '' : state.minutes, placeholder: 'אחר', style: { width: '80px' } });
-      other.addEventListener('change', () => { if (Number(other.value) > 0) { state.minutes = Number(other.value); state.suggestions = null; draw(); loadHosts(); } });
+      const preset = [30, 45, 60, 90, 120];
+      const more = [15, 150, 180, 240, 300, 360, 480];
+      const set = (n) => { state.minutes = n; state.suggestions = null; state.alternatives = null; draw(); loadHosts(); };
+      // משך שלא ברשימות (פגישה קיימת של 50 דק׳) — מופיע בבחירה כמו שהוא
+      const extra = preset.includes(state.minutes) || more.includes(state.minutes) ? [] : [state.minutes];
+      const other = el('select', { style: { width: 'auto' } }, [
+        el('option', { value: '' }, ['עוד…']),
+        ...[...more, ...extra].sort((a, b) => a - b).map((n) => el('option', { value: String(n), selected: state.minutes === n }, [durationLabel(n)]))
+      ]);
+      other.addEventListener('change', () => { if (Number(other.value) > 0) set(Number(other.value)); });
       return el('div.flex', { style: { flexWrap: 'wrap', gap: '6px' } }, [
-        el('div.seg', {}, preset.map((n) => el(`button${state.minutes === n ? '.active' : ''}`, {
-          type: 'button', onclick: () => { state.minutes = n; state.suggestions = null; state.alternatives = null; draw(); loadHosts(); }
-        }, [`${n} דק׳`]))),
+        el('div.seg', {}, preset.map((n) => el(`button${state.minutes === n ? '.active' : ''}`, { type: 'button', onclick: () => set(n) }, [durationLabel(n)]))),
         other
       ]);
     }
@@ -196,10 +218,18 @@ const MeetingView = (() => {
       const selEnd = selStart + state.minutes * 60000;
       const ticks = [];
       for (let h = Math.max(0, fh - 1); h <= Math.min(23, th + 1); h++) ticks.push(h);
+      // היום — מה שכבר עבר מוצלל, וקו "עכשיו": לא קובעים לפניו
+      const nowMs = Date.now();
+      const pastPct = nowMs > dayStart ? pos(new Date(Math.min(nowMs, dayEnd)).toISOString()) : 0;
+      const pastMarks = () => pastPct > 0 ? [
+        el('div.mt-past', { style: { insetInlineStart: '0', width: `${pastPct}%` }, title: 'כבר עבר' }),
+        nowMs < dayEnd ? el('div.mt-now', { style: { insetInlineStart: `${pastPct}%` }, title: `עכשיו ${localTime(new Date(nowMs))}` }) : null
+      ] : [];
       const rows = a.rows.map((r) => el('div.mt-row', {}, [
         el('div.mt-who', { title: r.email, text: r.name }),
         el('div.mt-track', {}, r.internal
           ? [
+              ...pastMarks(),
               ...r.busy.map((b) => {
                 const clash = new Date(b.start).getTime() < selEnd && new Date(b.end).getTime() > selStart;
                 return el(`div.mt-busy${clash ? '.is-clash' : ''}`, {
@@ -215,7 +245,8 @@ const MeetingView = (() => {
         el('div.mt-row.mt-head', {}, [el('div.mt-who'), el('div.mt-track', {}, ticks.map((h) => el('span.mt-tick', { style: { insetInlineStart: `${pos(`${a.date}T${pad(h)}:00:00`)}%` }, text: String(h) })))]),
         ...rows,
         el('div.mt-row.mt-sel-row', {}, [el('div.mt-who'), el('div.mt-track', {}, [
-          el('div.mt-sel', { style: { insetInlineStart: `${pos(new Date(selStart).toISOString())}%`, width: `${Math.max(1, pos(new Date(selEnd).toISOString()) - pos(new Date(selStart).toISOString()))}%` } })
+          ...pastMarks(),
+          el(`div.mt-sel${isPast() ? '.is-past' : ''}`, { style: { insetInlineStart: `${pos(new Date(selStart).toISOString())}%`, width: `${Math.max(1, pos(new Date(selEnd).toISOString()) - pos(new Date(selStart).toISOString()))}%` } })
         ])])
       ]);
     }
@@ -257,12 +288,13 @@ const MeetingView = (() => {
       UI.mount(availSlot, availabilityBox());
       const conflicts = conflictsOf();
       UI.mount(conflictSlot,
+        isPast() ? el('div.text-danger', { text: '⚠ המועד כבר עבר — בחרו שעה מעכשיו והלאה (או "💡 הצע מועדים")' }) : null,
         conflicts.length
           ? el('div.mt-conflicts', {}, [
               ...conflicts.map((c) => el('div.text-danger', { text: `⚠ ${c.who} תפוס/ה ${hhmm(c.start)}–${hhmm(c.end)}${c.title ? ` (${c.title})` : ''}` })),
               el('button.btn.btn-sm.mt', { type: 'button', onclick: loadAlternatives }, ['🔀 חלופות — מה להזיז'])
             ])
-          : state.avail && !state.avail.error ? el('div.text-ok.mute-sm', { text: '✓ כל המשתתפים מהארגון פנויים במועד הזה' }) : null,
+          : state.avail && !state.avail.error && !isPast() ? el('div.text-ok.mute-sm', { text: '✓ כל המשתתפים מהארגון פנויים במועד הזה' }) : null,
         alternativesBox()
       );
     }
@@ -283,7 +315,7 @@ const MeetingView = (() => {
       if (!s) return null;
       if (!s.slots.length) return el('div.mute-sm', { text: 'לא נמצא מועד שכולם פנויים בו בשבוע הקרוב — נסו "🔀 חלופות".' });
       return el('div.mt-slots', {}, [
-        el('div.mute-sm', { text: `💡 מועדים שבהם כולם פנויים${s.unknown?.length ? ` (בלי מידע על ${s.unknown.length})` : ''}:` }),
+        el('div.mute-sm', { text: `💡 מועדים שבהם כולם פנויים${s.buffer ? `, עם ${s.buffer} דק׳ מרווח מפגישה צמודה` : ''}${s.unknown?.length ? ` (בלי מידע על ${s.unknown.length})` : ''}:` }),
         ...s.slots.map((x) => el(`button.mt-slot${startIso() === x.start ? '.on' : ''}`, {
           type: 'button',
           onclick: () => {
@@ -406,7 +438,8 @@ const MeetingView = (() => {
     function locationBox() {
       const types = [
         zoomOpen || editing?.locationType === 'zoom' ? ['zoom', '🎥 Zoom — קישור נוצר אוטומטית'] : null,
-        ['place', '📍 במשרד / כתובת'],
+        ['office', '🏢 במשרד'],
+        ['place', '📍 כתובת אחרת'],
         ['link', '🔗 קישור משלי'],
         ['none', 'בלי מיקום']
       ].filter(Boolean);
@@ -416,6 +449,9 @@ const MeetingView = (() => {
           el('span', { text: label })
         ]))),
         ['place', 'link'].includes(state.locationType) ? locationInput : null,
+        state.locationType === 'office'
+          ? el('div.mute-sm', { text: officeAddress ? `📍 ${officeAddress} — נכנס למיקום ביומן ובהזמנה` : 'כתובת המשרד עוד לא הוגדרה (ניהול ← הגדרות ← "פגישות: כתובת המשרד") — במיקום ייכתב "במשרד"' })
+          : null,
         state.locationType === 'zoom' && info.zoom.chooseHost
           ? UI.field('מארח Zoom', hostSelect, editing?.zoom?.host ? `כרגע: ${editing.zoom.host}. בחירת משתמש אחר יוצרת קישור חדש, והמשתתפים מקבלים עדכון` : 'הפגישה נפתחת תמיד באחד מחשבונות ה-Zoom של החברה. קישור המארח — לבעל היומן, למי שקבע, להנהלה ולמזכירות')
           : null,
@@ -437,6 +473,7 @@ const MeetingView = (() => {
       const title = titleInput.value.trim();
       if (!title) return UI.toast('נדרש נושא לפגישה', 'error');
       if (!state.date || !state.time) return UI.toast('נדרש מועד', 'error');
+      if (isPast() && (!editing || startIso() !== new Date(editing.start).toISOString())) return UI.toast('המועד כבר עבר — בחרו מועד מעכשיו והלאה', 'error');
       saveBtn.disabled = true;
       const payload = {
         taskId: opts.task?.id ?? null,
@@ -445,10 +482,10 @@ const MeetingView = (() => {
         attendees: state.attendees,
         start: startIso(),
         minutes: state.minutes,
-        locationType: state.locationType,
+        locationType: state.locationType === 'office' ? 'place' : state.locationType,
         record: state.locationType === 'zoom' && state.record,
         zoomUserId: state.locationType === 'zoom' && info.zoom.chooseHost && state.zoomUserId ? state.zoomUserId : undefined,
-        location: locationInput.value.trim(),
+        location: state.locationType === 'office' ? officeAddress || 'במשרד' : locationInput.value.trim(),
         notes: notesInput.value,
         sendInvites: sendInvites.checked
       };
@@ -576,6 +613,7 @@ const MeetingView = (() => {
           : null,
         current.syncError ? el('div.mute-sm.text-warn', { text: `⚠ ${current.syncError}` }) : null,
         past && current.zoom ? recordingRow(current) : null,
+        past ? timelessRow(current) : null,
         past ? el('div.mt-after', {}, [
           el('span', { text: 'הפגישה התקיימה?' }),
           el('button.btn.btn-sm.btn-primary', { onclick: () => closeTask(task, onChange) }, ['✓ סגירת המשימה']),
@@ -595,6 +633,35 @@ const MeetingView = (() => {
       UI.mount(row, ...(recording?.files.length
         ? [el('span', { text: '🎥 ההקלטה:' }), ...RecordingsView.actions(recording)]
         : [el('span.mute-sm', { text: meeting.zoom.record ? '🎥 ההקלטה עוד לא מוכנה — Zoom מעבד אותה אחרי סוף הפגישה' : '🎥 אין הקלטה לפגישה הזו' })]));
+    }).catch(() => row.remove());
+    return row;
+  }
+
+  /**
+   * פגישה שהתקיימה — ההקלטה ב-Timeless (לפי שעה ומשתתפים), ומשימות שנפתחו ממנה.
+   * בלי חיבור ל-Timeless, או בלי הקלטה — השורה לא מוצגת.
+   */
+  function timelessRow(meeting) {
+    const row = el('div.mt-tl', {}, [el('span.mute-sm', { text: '🎥 מחפש הקלטה ב-Timeless…' })]);
+    API.get(`/api/meetings/${meeting.id}/timeless`).then(({ recording, tasks }) => {
+      if (!recording) return row.remove();
+      UI.mount(row,
+        el('div.mt-tl-box', {}, [
+          el('button.mt-tl-thumb', { type: 'button', 'aria-label': 'צפייה בהקלטה', onclick: () => RecordingPlayer.open(recording.id) }, ['▶']),
+          el('div.mt-tl-main', {}, [
+            el('b', { text: 'הקלטה, תמליל וסיכום' }),
+            el('span.mute-sm', { text: [recording.durationMinutes ? durationLabel(recording.durationMinutes) : '', 'מ-Timeless'].filter(Boolean).join(' · ') })
+          ]),
+          el('button.btn.btn-sm.btn-primary', { type: 'button', onclick: () => RecordingPlayer.open(recording.id, { tab: 'summary' }) }, ['פתיחה'])
+        ]),
+        tasks.length ? el('div.mt-tl-tasks', {}, [
+          el('b.mute-sm', { text: 'משימות שנפתחו מהפגישה' }),
+          ...tasks.map((t) => el('button.rp-linked', { type: 'button', onclick: () => TaskCardView.open(t.id) }, [
+            el('span.rp-dot', { style: { background: t.done ? '#16a34a' : '#f59e0b' } }),
+            el('span', { class: t.done ? 'is-done' : '', text: `${t.title}${t.assignee ? ` — ${t.assignee}` : ''}` }),
+            el('span.mute-sm', { text: t.status })
+          ]))
+        ]) : null);
     }).catch(() => row.remove());
     return row;
   }
@@ -625,5 +692,5 @@ const MeetingView = (() => {
     }
   }
 
-  return { openDialog, panel, closeTask, when, hhmm };
+  return { openDialog, panel, closeTask, when, hhmm, durationLabel };
 })();

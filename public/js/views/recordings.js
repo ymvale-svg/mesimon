@@ -1,7 +1,12 @@
 'use strict';
 /**
- * 🎥 הקלטות Zoom — ההקלטות בענן של חשבונות ה-Zoom של החברה. מוצג כלשונית
- * במסך היומן (‎CalendarView‎).
+ * 🎥 הקלטות — לשונית במסך היומן (‎CalendarView‎). שני מקורות:
+ *   • Timeless (ברירת המחדל) — הפגישות שהוקלטו ותומללו; כל אחת נפתחת בנגן
+ *     (‎RecordingPlayer‎): סרטון, תמליל צמוד, סיכום מובנה ומשימות. דרך החיבור ל-Timeless (אישי, או הארגוני מהשרת — הנהלה רואה
+ *     הכול, עובד רק פגישות שהשתתף בהן; הסינון בשרת, ‎server/timeless.js‎).
+ *   • Zoom — ההקלטות בענן של חשבונות ה-Zoom של החברה, כשיש חיבור Zoom.
+ *
+ * Zoom:
  *
  * מי שמנהל משתמשים רואה את כל ההקלטות; עובד אחר — של משתמש ה-Zoom המשויך
  * לו ושל פגישות משימון שלו (השרת מסנן). חודש בכל פעם, עם חיפוש.
@@ -15,7 +20,8 @@ const RecordingsView = (() => {
 
   let containerRef = null;
   let data = null;
-  const view = { month: new Date(), q: '' };
+  const view = { month: new Date(), q: '', source: null };
+  const sources = { zoom: false, timeless: false };
 
   const pad = (n) => String(n).padStart(2, '0');
   const ymd = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
@@ -48,6 +54,17 @@ const RecordingsView = (() => {
   async function render(container, opts = {}) {
     containerRef = container;
     embedded = Boolean(opts.embedded);
+    if (opts.zoom === undefined || opts.timeless === undefined) {
+      // מסך עצמאי (לא מתוך היומן) — בודקים מה מחובר
+      try {
+        const info = await API.get('/api/meetings/calendars');
+        opts = { ...opts, zoom: Boolean(info.zoom?.enabled), timeless: Boolean(info.timeless?.connected) };
+      } catch { opts = { ...opts, zoom: false, timeless: false }; }
+    }
+    sources.zoom = Boolean(opts.zoom);
+    sources.timeless = Boolean(opts.timeless);
+    // Timeless — ברירת המחדל (גם כשעוד לא מחובר: מוצג החיבור); Zoom — כשבוחרים בו
+    if (!view.source || (view.source === 'zoom' && !sources.zoom)) view.source = 'timeless';
     await load();
   }
 
@@ -55,6 +72,15 @@ const RecordingsView = (() => {
     if (!containerRef) return;
     UI.mount(containerRef, el('div.rec', {}, [head(), UI.spinner()]));
     const { from, to } = monthRange();
+    if (view.source === 'timeless') {
+      if (!sources.timeless) { data = { recordings: [], connect: true }; return draw(); }
+      try {
+        data = await API.get(`/api/timeless/recordings?from=${from}&to=${to}`);
+      } catch (err) {
+        data = { recordings: [], errors: [err.message] };
+      }
+      return draw();
+    }
     try {
       data = await API.get(`/api/zoom/recordings?from=${from}&to=${to}`);
     } catch (err) {
@@ -72,17 +98,20 @@ const RecordingsView = (() => {
 
   function head() {
     const title = view.month.toLocaleDateString('he-IL', { month: 'long', year: 'numeric' });
-    const search = el('input', { type: 'search', placeholder: 'חיפוש לפי נושא או מארח…', value: view.q, style: { width: '220px' } });
+    const search = el('input', { type: 'search', placeholder: view.source === 'timeless' ? 'חיפוש לפי נושא או משתתף…' : 'חיפוש לפי נושא או מארח…', value: view.q, style: { width: '220px' } });
     search.addEventListener('input', () => { view.q = search.value; drawList(); });
     return el('div.cal-head', {}, [
-      embedded ? null : el('h2', { text: '🎥 הקלטות Zoom' }),
+      embedded ? null : el('h2', { text: '🎥 הקלטות' }),
+      // המקור — רק כשיש גם Zoom
+      sources.zoom ? el('div.seg', {}, [['timeless', 'Timeless'], ['zoom', 'Zoom']].map(([k, label]) =>
+        el(`button${view.source === k ? '.active' : ''}`, { onclick: () => { if (view.source !== k) { view.source = k; load(); } } }, [label]))) : null,
       el('button.btn.btn-sm', { title: 'החודש הקודם', onclick: () => shiftMonth(-1) }, ['▶']),
       el('b.cal-title', { text: title }),
       el('button.btn.btn-sm', { title: 'החודש הבא', onclick: () => shiftMonth(1) }, ['◀']),
       el('button.btn.btn-sm', { onclick: () => { view.month = new Date(); load(); } }, ['החודש']),
       el('div.spacer'),
       search,
-      el('button.btn.btn-sm', { title: 'רענון מ-Zoom', onclick: async (e) => { e.currentTarget.disabled = true; await load(); UI.success('ההקלטות עודכנו'); } }, ['⟳ רענון'])
+      el('button.btn.btn-sm', { title: view.source === 'timeless' ? 'רענון מ-Timeless' : 'רענון מ-Zoom', onclick: async (e) => { e.currentTarget.disabled = true; await load(); UI.success('ההקלטות עודכנו'); } }, ['⟳ רענון'])
     ]);
   }
 
@@ -100,6 +129,7 @@ const RecordingsView = (() => {
 
   function drawList() {
     if (!listBox) return;
+    if (view.source === 'timeless') return drawTimeless();
     const q = view.q.trim().toLowerCase();
     const list = (data.recordings ?? []).filter((r) => !q
       || r.topic.toLowerCase().includes(q)
@@ -107,7 +137,16 @@ const RecordingsView = (() => {
       || r.host.email.includes(q)
       || (r.meeting?.title ?? '').toLowerCase().includes(q));
     if (!list.length) {
-      UI.mount(listBox, UI.empty(q ? 'אין הקלטות שמתאימות לחיפוש' : 'אין הקלטות בענן בחודש הזה', '🎥'));
+      if (q) { UI.mount(listBox, UI.empty('אין הקלטות שמתאימות לחיפוש', '🎥')); return; }
+      // ריק — ולמה זה יכול לקרות, כדי שלא ייראה כמו תקלה
+      UI.mount(listBox, UI.empty('אין הקלטות בענן בחודש הזה', '🎥'), el('ul.rec-why.mute-sm', {}, [
+        data.all
+          ? el('li', { text: `נבדקו ${data.hosts ?? 0} משתמשי Zoom בחשבונות של החברה.` })
+          : el('li', { text: 'מוצגות רק הקלטות של פגישות משימון שקבעת, שהן ביומן שלך או שהוזמנת אליהן. הקלטות אחרות — אצל מנהלי המערכת.' }),
+        el('li', { text: 'רק הקלטה לענן מגיעה לכאן. הקלטה למחשב ("Record on this computer") נשמרת במחשב של מי שהקליט.' }),
+        el('li', { text: 'משתמש Zoom חינמי (Basic) לא מקליט לענן.' }),
+        el('li', { text: 'אחרי סוף הפגישה Zoom מעבד את ההקלטה — לפעמים עד כמה שעות.' })
+      ]));
       return;
     }
     UI.mount(listBox, ...list.map(card));
@@ -140,7 +179,7 @@ const RecordingsView = (() => {
     return el('div.card.rec-card', {}, [
       el('div.rec-top', {}, [
         el('b', { text: r.topic || 'פגישת Zoom' }),
-        el('span.mute-sm', { text: ` · ${date} ${time}${r.minutes ? ` · ${r.minutes} דק׳` : ''}` })
+        el('span.mute-sm', { text: ` · ${date} ${time}${r.minutes ? ` · ${MeetingView.durationLabel(r.minutes)}` : ''}` })
       ]),
       el('div.mute-sm', {}, [
         `מארח: ${r.host.name}`,
@@ -151,6 +190,69 @@ const RecordingsView = (() => {
         ...actions(r),
         r.task ? el('button.btn.btn-sm', { onclick: () => TaskCardView.open(r.task.id) }, ['פתיחת המשימה']) : null
       ])
+    ]);
+  }
+
+  // ------------------------------------------------------------- Timeless
+
+  function drawTimeless() {
+    if (data.connect) return UI.mount(listBox, connectBox());
+    const q = view.q.trim().toLowerCase();
+    const list = (data.recordings ?? []).filter((r) => !q
+      || r.title.toLowerCase().includes(q)
+      || r.participants.some((p) => p.toLowerCase().includes(q)));
+    if (!list.length) {
+      UI.mount(listBox, UI.empty(q ? 'אין הקלטות שמתאימות לחיפוש' : 'אין פגישות מוקלטות ב-Timeless בחודש הזה', '🎥'),
+        data.status?.source === 'org' && data.status.scope === 'mine'
+          ? el('div.mute-sm', { style: { textAlign: 'center' }, text: 'מוצגות הפגישות שהשתתפת בהן (לפי המייל שלך).' })
+          : null);
+      return;
+    }
+    UI.mount(listBox, ...list.map(tlCard));
+  }
+
+  function tlCard(r) {
+    const when = r.start ? new Date(r.start) : null;
+    const date = when ? when.toLocaleDateString('he-IL', { weekday: 'short', day: 'numeric', month: 'numeric' }) : '';
+    const time = when ? when.toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit', hour12: false }) : '';
+    // "שם <מייל>" ← השם בלבד
+    const people = r.participants.map((p) => p.replace(/\s*<[^>]+>\s*$/, '')).filter(Boolean);
+    return el('div.card.rec-card', {}, [
+      el('div.rec-top', {}, [
+        el('b', { text: r.title || 'פגישה' }),
+        el('span.mute-sm', { text: ` · ${date} ${time}${r.durationMinutes ? ` · ${MeetingView.durationLabel(r.durationMinutes)}` : ''}` })
+      ]),
+      people.length ? el('div.mute-sm', { text: `משתתפים: ${people.slice(0, 6).join(', ')}${people.length > 6 ? ` +${people.length - 6}` : ''}` }) : null,
+      el('div.rec-actions', {}, [
+        el('button.btn.btn-sm.btn-primary', { onclick: () => RecordingPlayer.open(r.id) }, ['▶ צפייה ותמליל']),
+        el('button.btn.btn-sm', { onclick: () => RecordingPlayer.open(r.id, { tab: 'summary' }) }, ['📋 סיכום ומשימות']),
+        el('button.btn.btn-sm.btn-ghost', { onclick: () => RecordingPlayer.open(r.id, { tab: 'ask' }) }, ['✨ שאל על הפגישה'])
+      ])
+    ]);
+  }
+
+  /** Timeless עוד לא מחובר — חיבור כאן, עם האסימון האישי */
+  function connectBox() {
+    const token = el('input', { type: 'password', placeholder: 'האסימון מ-my.timeless.day/api-token', autocomplete: 'off' });
+    const save = el('button.btn.btn-primary', { type: 'button' }, ['חיבור Timeless']);
+    save.addEventListener('click', async () => {
+      if (!token.value.trim()) return token.focus();
+      save.disabled = true;
+      try {
+        await API.put('/api/me/timeless', { token: token.value.trim() });
+        sources.timeless = true;
+        UI.success('Timeless חובר');
+        load();
+      } catch (err) { save.disabled = false; UI.error(err); }
+    });
+    return el('div.card.card-pad.rec-connect', {}, [
+      el('b', { text: '🎥 ההקלטות מגיעות מ-Timeless' }),
+      el('ol.ai-steps', {}, [
+        el('li', {}, ['נכנסים ל-', el('a', { href: 'https://my.timeless.day/api-token', target: '_blank', rel: 'noopener' }, ['my.timeless.day/api-token']), ' ומעתיקים את האסימון.']),
+        el('li', { text: 'מדביקים כאן ← "חיבור Timeless".' })
+      ]),
+      el('div.flex', { style: { gap: '8px' } }, [token, save]),
+      el('div.mute-sm', { text: 'האסימון נשמר מוצפן ואינו מוצג שוב. אפשר לנתק ב"החשבון שלי". מנהל המערכת יכול גם להגדיר אסימון ארגוני לכולם (TIMELESS_ACCESS_TOKEN).' })
     ]);
   }
 

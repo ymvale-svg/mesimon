@@ -113,6 +113,8 @@ server.listen(PORT, HOST, () => {
     Today.start();
     GContacts.start();
     Meetings.start();
+    // 🎥 פגישה מקוונת שהתחילה ולא מוקלטת ב-Timeless — הודעה למזכירות
+    require('./timeless-media').start();
     WaBot.start();
     // משימות כפולות במחלקה — סריקה פעם ביום (פרק 11ב)
     Dupes.start();
