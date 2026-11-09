@@ -12,6 +12,7 @@ const P = require('./permissions');
 const Meetings = require('./meetings');
 const Zoom = require('./zoom');
 const Timeless = require('./timeless');
+const TimelessMedia = require('./timeless-media');
 const Gmail = require('./gmail');
 const WaBot = require('./ai/wa-bot');
 const WaActions = require('./ai/wa-actions');
@@ -26,6 +27,16 @@ function register(router, h) {
     sendWhatsApp: async (chatId, text) => {
       await WaBot.sendText(chatId, text);
       WaBot.log({ channel: 'summary', chatId, action: 'meeting_reminder', status: 'ok', result: text.split('\n')[0] });
+    }
+  });
+
+  // התראה למזכירות על פגישה שלא מוקלטת ב-Timeless — דרך אותו בוט, ניתנת לכיבוי בפעולות הבוט
+  TimelessMedia.init({
+    botReady: () => WaBot.isConfigured() && Boolean(D.getSetting('wa_bot_enabled', true)),
+    botAllowed: () => WaActions.byKey('timeless_unrecorded')?.enabled !== false,
+    sendWhatsApp: async (chatId, text) => {
+      await WaBot.sendText(chatId, text);
+      WaBot.log({ channel: 'summary', chatId, action: 'timeless_unrecorded', status: 'ok', result: text.split('\n')[0] });
     }
   });
 
@@ -402,6 +413,66 @@ function register(router, h) {
     } catch (err) {
       throw tlError(err);
     }
+  });
+
+  // --- 🎥 הנגן: הפגישה, התמליל כקטעים, הסיכום המובנה, שאלה, ומשימות שנפתחו ממנה ---
+
+  const tl = async (res, fn) => {
+    try { sendJson(res, 200, await fn()); } catch (err) { throw tlError(err); }
+  };
+
+  router.get('/api/timeless/recordings/:id', async (req, res, ctx) => {
+    const actor = userOnly(ctx);
+    await tl(res, async () => {
+      const m = await Timeless.meeting(actor.id, ctx.params.id);
+      if (!m) throw new HttpError(404, 'הפגישה לא נמצאה ב-Timeless, או שאין לך גישה אליה');
+      return { meeting: m, tasks: TimelessMedia.tasksOf(m.id, (t) => canSeeTask(actor, t)) };
+    });
+  });
+
+  router.get('/api/timeless/recordings/:id/segments', async (req, res, ctx) => {
+    const actor = userOnly(ctx);
+    await tl(res, () => Timeless.segments(actor.id, ctx.params.id));
+  });
+
+  router.get('/api/timeless/recordings/:id/digest', async (req, res, ctx) => {
+    const actor = userOnly(ctx);
+    const fresh = parseUrl(req).searchParams.get('fresh') === '1';
+    await tl(res, () => TimelessMedia.digest(actor.id, ctx.params.id, { fresh }));
+  });
+
+  router.post('/api/timeless/recordings/:id/ask', async (req, res, ctx) => {
+    const actor = userOnly(ctx);
+    const b = await readJson(req);
+    await tl(res, () => TimelessMedia.ask(actor.id, ctx.params.id, b.question));
+  });
+
+  // משימות שנפתחו מהנגן — הקישור לפגישה, אחרי שהמשימות נוצרו (‎POST /api/tasks‎)
+  router.post('/api/timeless/recordings/:id/tasks', async (req, res, ctx) => {
+    const actor = userOnly(ctx);
+    const b = await readJson(req);
+    await tl(res, async () => {
+      const m = await Timeless.meeting(actor.id, ctx.params.id);
+      if (!m) throw new HttpError(404, 'הפגישה לא נמצאה ב-Timeless, או שאין לך גישה אליה');
+      const links = (Array.isArray(b.links) ? b.links : []).slice(0, 20).filter((x) => {
+        const t = D.get('SELECT * FROM tasks WHERE id = ?', Number(x.taskId));
+        return t && canSeeTask(actor, t);
+      });
+      TimelessMedia.linkTasks(m.id, links);
+      return { tasks: TimelessMedia.tasksOf(m.id, (t) => canSeeTask(actor, t)) };
+    });
+  });
+
+  // פגישת משימון שהתקיימה — ההקלטה שלה ב-Timeless (לכרטיס המשימה), אם יש
+  router.get('/api/meetings/:id/timeless', async (req, res, ctx) => {
+    const actor = userOnly(ctx);
+    const m = Meetings.meetingById(Number(ctx.params.id));
+    if (!m) throw notFound();
+    if (!attended(actor, m) && !P.can(actor, 'manage_users')) throw forbidden();
+    await tl(res, async () => {
+      const rec = await TimelessMedia.forMeeting(actor.id, m);
+      return { recording: rec, tasks: rec ? TimelessMedia.tasksOf(rec.id, (t) => canSeeTask(actor, t)) : [] };
+    });
   });
 
   // צפייה בקובץ — הפניה לכתובת חתומה של Zoom, אחרי בדיקת הרשאה

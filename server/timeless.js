@@ -414,6 +414,51 @@ async function recordingUrl(userId, meetingId) {
   return typeof url === 'string' && /^https:\/\//.test(url) ? url : null;
 }
 
+/**
+ * התמליל כקטעים — לנגן: דובר, התחלה וסוף בשניות, טקסט. אותה בדיקת הרשאה כמו ‎transcript‎.
+ */
+async function segments(userId, meetingId) {
+  const id = String(meetingId ?? '').trim();
+  if (!id) throw apiError('חסר מזהה פגישה.', { status: 400 });
+  if (restrictionOf(userId) && !(await findMeeting(userId, id))) throw apiError(NOT_ATTENDED_MSG, { status: 404 });
+  const body = await call(userId, `/meetings/${encodeURIComponent(id)}/transcript`);
+  const speakers = (Array.isArray(body.speakers) ? body.speakers : []).map((x) => ({ id: String(x.id), name: x.name || String(x.id) }));
+  const list = (Array.isArray(body.segments) ? body.segments : [])
+    .filter((x) => x && x.text)
+    .map((x) => ({ s: Number(x.start_time) || 0, e: Number(x.end_time) || Number(x.start_time) || 0, speaker: String(x.speaker_id ?? ''), text: String(x.text).trim() }));
+  return { meetingId: id, language: body.language || null, speakers, segments: list };
+}
+
+/** פגישה אחת, מנורמלת — ‎null‎ כשאינה נראית למשתמש */
+async function meeting(userId, meetingId) {
+  const m = await findMeeting(userId, String(meetingId ?? '').trim(), { expandDocuments: true });
+  return m ? normalizeMeeting(m) : null;
+}
+
+/**
+ * לבדיקת "לא מוקלטת": כל הפגישות ב-Timeless ביום, בכל סטטוס (גם ‎scheduled‎ —
+ * Timeless מתכונן להצטרף), באסימון נתון. בלי סינון משתתפים — רק לשרת, לא למשתמש.
+ */
+async function meetingsOnDay(token, date) {
+  const out = [];
+  let cursor;
+  for (let page = 0; page < MAX_PAGES; page++) {
+    const body = await rawCall(token, '/meetings', { scope: 'all', start_date: date, end_date: date, limit: PAGE_MAX, cursor });
+    const items = Array.isArray(body.data) ? body.data : [];
+    for (const m of items) if (m && m.id) out.push(m);
+    if (!body.has_more || !body.next_cursor || body.next_cursor === cursor || !items.length) break;
+    cursor = body.next_cursor;
+  }
+  return out;
+}
+
+/** האסימון לבדיקות הרקע: הארגוני, ואם אין — האישי של העובד (רואה את הפגישות שלו) */
+function backgroundToken(userId) {
+  if (orgToken()) return orgToken();
+  const row = rowOf(userId);
+  return hasPersonal(row) ? secrets.decrypt(row.api_token) : null;
+}
+
 // ---------- כלים למודל ----------
 
 const TOOLS = [
@@ -509,7 +554,7 @@ async function runTool(userId, name, input = {}) {
 
 module.exports = {
   connect, disconnect, isConnected, publicStatus, hasOrgToken: () => Boolean(orgToken()),
-  listMeetings, transcript, documents, document, listRooms, recordings, recordingUrl,
+  listMeetings, transcript, documents, document, listRooms, recordings, recordingUrl, segments, meeting, meetingsOnDay, backgroundToken,
   TOOLS, runTool,
   BASE_URL
 };

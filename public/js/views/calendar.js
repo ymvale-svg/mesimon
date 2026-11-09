@@ -105,12 +105,49 @@ const CalendarView = (() => {
     return { from: iso(days[0]), to: iso(days[days.length - 1]), days };
   }
 
+  /*
+   * 🎥 הקלטות Timeless בטווח (רק מה שכבר היה) — כל פגישה ביומן, גם כזו שלא נקבעה
+   * במשימון, שיש לה הקלטה, מקבלת תג ונפתחת בנגן. ההתאמה: מתחילה עד 20 דקות מהאירוע,
+   * ושם דומה או משתתף משותף. נשמר לשתי דקות, כדי שהורדה והוספה של יומנים לא ימשכו שוב.
+   */
+  const recCache = new Map();
+  async function loadRecordings(r) {
+    if (!info.timeless?.connected) return [];
+    const today = iso(new Date());
+    if (r.from > today) return [];
+    const key = `${r.from}|${r.to < today ? r.to : today}`;
+    const hit = recCache.get(key);
+    if (hit && Date.now() - hit.at < 120000) return hit.list;
+    try {
+      const list = (await API.get(`/api/timeless/recordings?from=${r.from}&to=${r.to < today ? r.to : today}`)).recordings ?? [];
+      recCache.set(key, { at: Date.now(), list });
+      return list;
+    } catch { return []; }
+  }
+  const normTitle = (x) => String(x ?? '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+  const mailsOf = (list) => new Set(list.flatMap((p) => String(p).match(/[^\s<>"']+@[^\s<>"']+/g) ?? []).map((x) => x.toLowerCase()));
+  function markRecordings(events, recs) {
+    if (!recs.length) return;
+    const prepared = recs.map((rec) => ({ rec, t: new Date(rec.start).getTime(), title: normTitle(rec.title), mails: mailsOf(rec.participants ?? []) }));
+    for (const e of events) {
+      if (e.allDay || e.busyOnly) continue;
+      const t = new Date(e.start).getTime();
+      const title = normTitle(e.title);
+      const owner = info.calendars.find((c) => c.userId === e.userId)?.email?.toLowerCase();
+      const mails = new Set([owner, ...(e.attendees ?? []).map((a) => String(a.email ?? '').toLowerCase())].filter(Boolean));
+      const hit = prepared.find((p) => Math.abs(p.t - t) <= 20 * 60000
+        && ((title && p.title && (title.includes(p.title) || p.title.includes(title))) || [...p.mails].some((m) => mails.has(m))));
+      if (hit) e.rec = { id: hit.rec.id, title: hit.rec.title };
+    }
+  }
+
   // רק התשובה האחרונה נכנסת למסך — לחיצות מהירות על היומנים לא מחזירות תמונה ישנה
   let rangeSeq = 0;
   async function loadRange() {
     const r = range();
     const mine = ++rangeSeq;
     let res;
+    const recsP = loadRecordings(r);
     try {
       res = view.users.length
         ? await API.get(`/api/meetings/range?from=${r.from}&to=${r.to}&users=${view.users.join(',')}`)
@@ -118,6 +155,7 @@ const CalendarView = (() => {
     } catch (err) {
       res = { events: [], access: {}, error: err.message };
     }
+    markRecordings(res.events ?? [], await recsP);
     if (mine !== rangeSeq) return;
     data = res;
     draw();
@@ -388,7 +426,8 @@ const CalendarView = (() => {
             ]) : null,
             el('b', { text: e.title ?? 'תפוס' }),
             el('span', { text: ` ${hhmm(e.start)}` }),
-            e.meetingId ? el('span', { text: ' ✦' }) : null
+            e.meetingId ? el('span', { text: ' ✦' }) : null,
+            e.rec ? el('span.cal-ev-rec', { title: 'יש הקלטה ב-Timeless' }, ['🎥 הקלטה']) : null
           ]))
         ]);
         return col;
@@ -505,7 +544,18 @@ const CalendarView = (() => {
   function openEvent(e) {
     const person = info.calendars.find((c) => c.userId === e.userId);
     const buttons = [];
+    if (e.rec) {
+      buttons.push(el('button.btn.btn-sm.btn-primary', { onclick: () => { m.close(); RecordingPlayer.open(e.rec.id); } }, ['▶ צפייה ותמליל']));
+      buttons.push(el('button.btn.btn-sm', { onclick: () => { m.close(); RecordingPlayer.open(e.rec.id, { tab: 'summary' }); } }, ['📋 סיכום ומשימות']));
+    }
     if (e.taskId) buttons.push(el('button.btn.btn-sm', { onclick: () => { m.close(); TaskCardView.open(e.taskId); } }, ['פתיחת המשימה']));
+    // פגישה שהוקלטה — משפט אחד מהסיכום (נטען כשהחלון נפתח)
+    const brief = e.rec ? el('div.cal-rec-brief.mute-sm', {}, [el('span.spinner-sm'), ' טוען סיכום…']) : null;
+    if (e.rec) {
+      API.get(`/api/timeless/recordings/${encodeURIComponent(e.rec.id)}/digest`)
+        .then((d) => { if (d.brief) UI.mount(brief, el('b', { text: 'בקצרה: ' }), el('span', { text: d.brief })); else brief.remove(); })
+        .catch(() => brief.remove());
+    }
     if (e.link) buttons.push(el('a.btn.btn-sm', { href: e.link, target: '_blank', rel: 'noopener' }, ['פתיחה ב-Google ↗']));
     if (e.editable && e.organizerIsOwner && !e.busyOnly && !e.allDay) {
       buttons.push(el('button.btn.btn-sm', { onclick: () => { m.close(); moveDialog(e); } }, ['🔀 הזזה']));
@@ -516,6 +566,7 @@ const CalendarView = (() => {
         el('div', { text: `${new Date(e.start).toLocaleString('he-IL', { weekday: 'long', day: 'numeric', month: 'numeric' })} · ${e.allDay ? 'כל היום' : `${hhmm(e.start)}–${hhmm(e.end)}`}` }),
         el('div.mute-sm', { text: `${(e.owners?.length ?? 1) > 1 ? `ביומנים של ${e.owners.map(nameOf).join(', ')}` : `ביומן של ${person?.name ?? ''}`}${e.busyOnly ? ' · זמינות בלבד — העובד לא שיתף פרטים' : ''}` }),
         e.location ? el('div.mute-sm', { text: `📍 ${e.location}` }) : null,
+        brief,
         e.attendees?.length ? el('div.mt-people', {}, e.attendees.map((a) => el(`span.mt-person.is-${a.response ?? 'needsAction'}`, {}, [a.name || a.email]))) : null,
         e.editable && !e.organizerIsOwner && !e.busyOnly ? el('div.mute-sm', { text: 'את הפגישה הזו ארגן מישהו אחר — רק הוא יכול להזיז אותה.' }) : null,
         el('div.flex.mt', { style: { flexWrap: 'wrap', gap: '6px' } }, buttons)

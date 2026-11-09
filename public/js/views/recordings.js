@@ -1,8 +1,8 @@
 'use strict';
 /**
  * 🎥 הקלטות — לשונית במסך היומן (‎CalendarView‎). שני מקורות:
- *   • Timeless (ברירת המחדל) — הפגישות שהוקלטו ותומללו: ▶ צפייה, 📝 תמליל,
- *     📋 סיכום. דרך החיבור ל-Timeless (אישי, או הארגוני מהשרת — הנהלה רואה
+ *   • Timeless (ברירת המחדל) — הפגישות שהוקלטו ותומללו; כל אחת נפתחת בנגן
+ *     (‎RecordingPlayer‎): סרטון, תמליל צמוד, סיכום מובנה ומשימות. דרך החיבור ל-Timeless (אישי, או הארגוני מהשרת — הנהלה רואה
  *     הכול, עובד רק פגישות שהשתתף בהן; הסינון בשרת, ‎server/timeless.js‎).
  *   • Zoom — ההקלטות בענן של חשבונות ה-Zoom של החברה, כשיש חיבור Zoom.
  *
@@ -224,45 +224,12 @@ const RecordingsView = (() => {
       ]),
       people.length ? el('div.mute-sm', { text: `משתתפים: ${people.slice(0, 6).join(', ')}${people.length > 6 ? ` +${people.length - 6}` : ''}` }) : null,
       el('div.rec-actions', {}, [
-        el('button.btn.btn-sm', { onclick: () => window.open(`/api/timeless/recordings/${encodeURIComponent(r.id)}/play`, '_blank', 'noopener') }, ['▶ צפייה']),
-        el('button.btn.btn-sm', { onclick: () => showTranscript(r) }, ['📝 תמליל']),
-        r.documents?.length ? el('button.btn.btn-sm', { onclick: () => showSummary(r) }, ['📋 סיכום']) : null
+        el('button.btn.btn-sm.btn-primary', { onclick: () => RecordingPlayer.open(r.id) }, ['▶ צפייה ותמליל']),
+        el('button.btn.btn-sm', { onclick: () => RecordingPlayer.open(r.id, { tab: 'summary' }) }, ['📋 סיכום ומשימות']),
+        el('button.btn.btn-sm.btn-ghost', { onclick: () => RecordingPlayer.open(r.id, { tab: 'ask' }) }, ['✨ שאל על הפגישה'])
       ])
     ]);
   }
-
-  /** חלון עם טקסט ארוך — נטען ברקע, עם העתקה */
-  function textModal(title, loadText, markdown = false) {
-    const body = el('div.rec-text', {}, [UI.spinner()]);
-    const copy = el('button.btn.btn-sm', { disabled: true }, ['העתקה']);
-    let text = '';
-    copy.addEventListener('click', async () => { try { await navigator.clipboard.writeText(text); UI.success('הועתק'); } catch { UI.toast('ההעתקה לא הצליחה', 'error'); } });
-    UI.modal({ title, size: 'wide', body, footer: [copy] });
-    loadText().then((t) => {
-      text = t || '';
-      copy.disabled = !text;
-      UI.mount(body, text ? (markdown ? mdView(text) : el('pre.rec-pre', { text })) : UI.empty('אין תוכן', '📄'));
-    }).catch((err) => UI.mount(body, el('div.alert.alert-warn', {}, [el('span', { text: '⚠️' }), el('div', { text: err.message })])));
-  }
-
-  /** Markdown פשוט של Timeless — כותרות ותבליטים, כטקסט (בלי HTML מבחוץ) */
-  function mdView(md) {
-    return el('div.rec-pre', {}, md.split('\n').map((line) => {
-      const h = line.match(/^(#{1,6})\s+(.*)$/);
-      if (h) return el(h[1].length <= 1 ? 'h3' : 'h4', { text: h[2].replace(/\*\*/g, '') });
-      const li = line.match(/^\s*[-*]\s+(.*)$/);
-      if (li) return el('div.rec-li', { text: `• ${li[1].replace(/\*\*/g, '')}` });
-      return line.trim() ? el('div', { text: line.replace(/\*\*/g, '') }) : el('div.rec-gap');
-    }));
-  }
-
-  const showTranscript = (r) => textModal(`📝 ${r.title || 'תמליל'}`, async () =>
-    (await API.get(`/api/timeless/recordings/${encodeURIComponent(r.id)}/transcript`)).text);
-
-  const showSummary = (r) => textModal(`📋 ${r.title || 'סיכום'}`, async () => {
-    const { documents } = await API.get(`/api/timeless/recordings/${encodeURIComponent(r.id)}/summary`);
-    return documents.map((d) => `${d.title ? `# ${d.title}\n\n` : ''}${d.markdown}`).join('\n\n———\n\n');
-  }, true);
 
   /** Timeless עוד לא מחובר — חיבור כאן, עם האסימון האישי */
   function connectBox() {

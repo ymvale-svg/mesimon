@@ -613,6 +613,7 @@ const MeetingView = (() => {
           : null,
         current.syncError ? el('div.mute-sm.text-warn', { text: `⚠ ${current.syncError}` }) : null,
         past && current.zoom ? recordingRow(current) : null,
+        past ? timelessRow(current) : null,
         past ? el('div.mt-after', {}, [
           el('span', { text: 'הפגישה התקיימה?' }),
           el('button.btn.btn-sm.btn-primary', { onclick: () => closeTask(task, onChange) }, ['✓ סגירת המשימה']),
@@ -632,6 +633,35 @@ const MeetingView = (() => {
       UI.mount(row, ...(recording?.files.length
         ? [el('span', { text: '🎥 ההקלטה:' }), ...RecordingsView.actions(recording)]
         : [el('span.mute-sm', { text: meeting.zoom.record ? '🎥 ההקלטה עוד לא מוכנה — Zoom מעבד אותה אחרי סוף הפגישה' : '🎥 אין הקלטה לפגישה הזו' })]));
+    }).catch(() => row.remove());
+    return row;
+  }
+
+  /**
+   * פגישה שהתקיימה — ההקלטה ב-Timeless (לפי שעה ומשתתפים), ומשימות שנפתחו ממנה.
+   * בלי חיבור ל-Timeless, או בלי הקלטה — השורה לא מוצגת.
+   */
+  function timelessRow(meeting) {
+    const row = el('div.mt-tl', {}, [el('span.mute-sm', { text: '🎥 מחפש הקלטה ב-Timeless…' })]);
+    API.get(`/api/meetings/${meeting.id}/timeless`).then(({ recording, tasks }) => {
+      if (!recording) return row.remove();
+      UI.mount(row,
+        el('div.mt-tl-box', {}, [
+          el('button.mt-tl-thumb', { type: 'button', 'aria-label': 'צפייה בהקלטה', onclick: () => RecordingPlayer.open(recording.id) }, ['▶']),
+          el('div.mt-tl-main', {}, [
+            el('b', { text: 'הקלטה, תמליל וסיכום' }),
+            el('span.mute-sm', { text: [recording.durationMinutes ? durationLabel(recording.durationMinutes) : '', 'מ-Timeless'].filter(Boolean).join(' · ') })
+          ]),
+          el('button.btn.btn-sm.btn-primary', { type: 'button', onclick: () => RecordingPlayer.open(recording.id, { tab: 'summary' }) }, ['פתיחה'])
+        ]),
+        tasks.length ? el('div.mt-tl-tasks', {}, [
+          el('b.mute-sm', { text: 'משימות שנפתחו מהפגישה' }),
+          ...tasks.map((t) => el('button.rp-linked', { type: 'button', onclick: () => TaskCardView.open(t.id) }, [
+            el('span.rp-dot', { style: { background: t.done ? '#16a34a' : '#f59e0b' } }),
+            el('span', { class: t.done ? 'is-done' : '', text: `${t.title}${t.assignee ? ` — ${t.assignee}` : ''}` }),
+            el('span.mute-sm', { text: t.status })
+          ]))
+        ]) : null);
     }).catch(() => row.remove());
     return row;
   }
