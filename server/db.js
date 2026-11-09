@@ -760,6 +760,27 @@ CREATE TABLE IF NOT EXISTS meeting_followups (
 );
 CREATE INDEX IF NOT EXISTS idx_meeting_followups_user ON meeting_followups (user_id, sent_at);
 
+/*
+ * 🎙 הקלטת פגישה שנשלחה לבוט (‎ai/meeting-audio.js‎). הקובץ שמור ב-‎uploads/meeting-audio‎ עד
+ * שהוא מצורף למשימת הפגישה (‎task_id‎), ואז נמחק משם. ‎meeting‎ — הפגישה שנבחרה (נושא, מועד, משתתפים).
+ * ‎status‎: choose / transcribing / ready / empty / error / expired.
+ */
+CREATE TABLE IF NOT EXISTS meeting_audio (
+  id               INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id          INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  stored_name      TEXT    NOT NULL,
+  filename         TEXT    NOT NULL DEFAULT '',
+  mime             TEXT    NOT NULL DEFAULT '',
+  size             INTEGER NOT NULL DEFAULT 0,
+  status           TEXT    NOT NULL DEFAULT 'choose',
+  meeting          TEXT,
+  task_id          INTEGER REFERENCES tasks(id) ON DELETE SET NULL,
+  digest           TEXT,
+  transcript_chars INTEGER,
+  error            TEXT,
+  created_at       TEXT    NOT NULL
+);
+
 /* סיכום, החלטות ומשימות של פגישה — פעם אחת לפגישה, לכל המשתתפים. נמחק אחרי חודש */
 CREATE TABLE IF NOT EXISTS meeting_digests (
   source     TEXT    NOT NULL,
@@ -1407,7 +1428,7 @@ const DEFAULT_SETTINGS = {
   max_upload_mb: 25,
   // ‎wav‎ הוא הקלטת קול — הודעה קולית בתגובה או תיעוד שיחה מצורף למשימה
   // ‎eml‎ ו-‎msg‎ הם קובצי מייל שמורים — ‎eml‎ תקן פתוח, ‎msg‎ של Outlook
-  allowed_extensions: ['pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'png', 'jpg', 'jpeg', 'gif', 'svg', 'zip', 'ai', 'psd', 'mp4', 'wav', 'eml', 'msg', 'txt', 'csv'],
+  allowed_extensions: ['pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'png', 'jpg', 'jpeg', 'gif', 'svg', 'zip', 'ai', 'psd', 'mp4', 'wav', 'eml', 'msg', 'txt', 'csv', 'ogg', 'opus', 'm4a', 'mp3', 'aac', 'amr', 'webm'],
   recurring_default_policy: 'skip_if_open', // לא נוצר מופע כפול עד לסגירת הקודם
   org_name: 'MESIMON',
   // כתובת המערכת כפי שמשתמשים מגיעים אליה — קישורי ההזמנות נבנים ממנה
@@ -1454,6 +1475,7 @@ const DEFAULT_SETTINGS = {
   meeting_buffer_minutes: 10,              // מרווח מפגישה צמודה בהצעת מועדים
   meeting_reminder_minutes: 15,            // כמה דקות לפני — התראה ובוט הוואטסאפ, עם קישור הפגישה
   meeting_followup_minutes: 15,            // כמה דקות אחרי סוף פגישה מוקלטת — הבוט שואל את המשתתפים מה לשלוח
+  meeting_audio_min_kb: 1024,              // הודעה קולית גדולה מזה (כ-8 דקות) לבוט = הקלטת פגישה, והבוט שואל לאיזו פגישה לשייך
   meeting_ai_alternatives: true,           // הצעות AI להזזת פגישות חופפות
   meeting_record_default: false,           // "הקלטה אוטומטית לענן" מסומן מראש בפגישת Zoom חדשה
 
@@ -1865,7 +1887,8 @@ function migrate() {
     setSetting('migr_memory_conservative', true);
   }
 
-  const ADDED_EXTENSIONS = ['wav', 'eml', 'msg'];
+  // ‎ogg‎…‎webm‎ — הקלטות פגישה מוואטסאפ (‎ai/meeting-audio.js‎), מצורפות למשימת הפגישה
+  const ADDED_EXTENSIONS = ['wav', 'eml', 'msg', 'ogg', 'opus', 'm4a', 'mp3', 'aac', 'amr', 'webm'];
   const currentExt = getSetting('allowed_extensions', null);
   if (Array.isArray(currentExt)) {
     const missing = ADDED_EXTENSIONS.filter((e) => !currentExt.includes(e));

@@ -63,6 +63,7 @@ const PurchaseDemand = require('./purchase-demand');
 const Approvals = require('./priority-approvals');
 const WaUi = require('./wa-ui');
 const MeetingFollowup = require('./meeting-followup');
+const MeetingAudio = require('./meeting-audio');
 
 const GROUP_SKILL = path.join(__dirname, 'skills', 'whatsapp-group-to-tasks.md');
 const CHAT_SKILL = path.join(__dirname, 'skills', 'whatsapp-chat.md');
@@ -80,7 +81,7 @@ const parseJson = (text, fallback) => { try { return JSON.parse(text); } catch {
  * פעולות שתלויות ב-api.js — מוזרקות משם. ‎tasks‎: רשימות, סגירה והערה עם
  * הרשאות העובד. ‎mail‎: חיפוש נמען ופתיחת משימת AI — אותן פונקציות של האשף.
  */
-const hooks = { createTask: null, listProjectsFor: null, newTaskProjects: null, assignableUserIds: null, assignBlockReason: null, taskTemplates: null, tasks: null, mail: null };
+const hooks = { createTask: null, listProjectsFor: null, newTaskProjects: null, assignableUserIds: null, assignBlockReason: null, taskTemplates: null, tasks: null, mail: null, files: null };
 
 // ---------------------------------------------------------------------------
 // החיבור
@@ -2140,6 +2141,18 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
     }
   }
 
+  // 🎙 הקלטת פגישה מוואטסאפ: "לאיזו פגישה?", "לפתוח את המשימות?", ו"הקלטת פגישה" (ההקלטה הבאה)
+  if (['meeting_audio_pick', 'meeting_audio_tasks'].includes(state.draft?.kind)) {
+    const r = await meetingAudioTurn(user, actor, t, state, { dry, out });
+    if (r) return r;
+    // כל דבר אחר — נושא חדש; השאלה יורדת
+    keep.draft = null;
+    state = { ...state, draft: null, awaiting: false };
+  }
+  if (meetingAudioAllowed(actor)) {
+    const armed = MeetingAudio.arm(actor.id, t);
+    if (armed) return out(armed, { draft: null }, { action: 'meeting_audio', status: 'ok', result: 'ממתין להקלטת פגישה' });
+  }
   // 🎥 אחרי פגישה מוקלטת: "לפתוח משימות ✅" / "לא" על המשימות שהוצעו
   if (state.draft?.kind === 'meeting_tasks' && state.awaiting) {
     const n = WaUi.normalize(t);
@@ -2912,6 +2925,113 @@ function withForwards(rows, text) {
 /** למספר שאינו מוכר עונים פעם ביום — לא יותר, כדי לא לנהל שיחה עם זרים */
 const unknownReplied = new Map();
 
+// ---------------------------------------------------------------------------
+// 🎙 הקלטת פגישה מוואטסאפ ← משימון (‎meeting-audio.js‎)
+// ---------------------------------------------------------------------------
+
+const meetingAudioAllowed = (actor) => actor?.type === 'user' && Boolean(hooks.files) && Speech.isEnabled() && WaActions.allowed(actor, 'meeting_audio') && WaActions.allowed(actor, 'create_task');
+
+/** ההקלטה התקבלה: שומרים, ושואלים לאיזו פגישה לשייך */
+async function receiveMeetingAudio(user, msg, base, load) {
+  try {
+    const file = await load();
+    const r = await MeetingAudio.receive(user.id, file);
+    const st = chatOf(user.id);
+    saveChat(user.id, { ...st, draft: r.draft, awaiting: true, history: [...st.history, { role: 'user', text: '[🎙 הקלטת פגישה]' }, { role: 'bot', text: r.text.slice(0, 500) }].slice(-HISTORY_TURNS) });
+    await sendButtons(msg.chatId, r.text, r.buttons);
+    log({ ...base, text: `[🎙 הקלטת פגישה · ${(file.buf.length / 1048576).toFixed(1)}MB]`, action: 'meeting_audio', status: 'ok', result: `לאיזו פגישה? ${r.draft.options.map((o) => o.title).join(' · ') || 'אין פגישות ביומן'}`.slice(0, 300) });
+  } catch (err) {
+    console.error('[משימון] קליטת הקלטת פגישה נכשלה:', err.message);
+    log({ ...base, text: '[🎙 הקלטת פגישה]', action: 'meeting_audio', status: 'error', result: err.message });
+    await sendText(msg.chatId, 'לא הצלחתי לקבל את ההקלטה. נסו לשלוח שוב 🙏');
+  }
+}
+
+const meetingAudioDeps = (actor) => ({
+  actor, createTask: hooks.createTask, saveAttachment: hooks.files.saveAttachment, actorRef: hooks.files.actorRef,
+  getTask: hooks.files.getTask, addComment: (a, id, text) => hooks.tasks.comment(a, id, text), taskLink
+});
+
+/** ברקע: תמלול, סיכום ומשימת הפגישה — ובסוף הודעה לעובד */
+function processMeetingAudio(actor, audioId) {
+  setImmediate(async () => {
+    const u = D.get('SELECT id, full_name, phone FROM users WHERE id = ?', actor.id);
+    const chatId = `${u.phone}@c.us`;
+    try {
+      const r = await MeetingAudio.processAudio(audioId, meetingAudioDeps(actor));
+      const st = chatOf(actor.id);
+      const busy = st.awaiting && st.draft;
+      const text = r.draft && busy ? `${r.text.replace(/\n\*לפתוח את המשימות[\s\S]*$/, '')}\n\nכדי לפתוח את המשימות — כתבו *משימות מהפגישה*.` : r.text;
+      const parts = splitMessage(text);
+      for (let i = 0; i < parts.length; i++) {
+        if (i === parts.length - 1 && r.draft && !busy) await sendButtons(chatId, parts[i], r.buttons);
+        else await sendText(chatId, parts[i]);
+      }
+      rememberBot(actor.id, text);
+      if (r.draft && !busy) saveChat(actor.id, { ...chatOf(actor.id), draft: r.draft, awaiting: true });
+      log({ channel: 'summary', chatId, userId: actor.id, who: u.full_name, action: 'meeting_audio', status: 'ok', result: text.split('\n')[0].slice(0, 300) });
+    } catch (err) {
+      console.error('[משימון] עיבוד הקלטת פגישה נכשל:', err.message);
+      D.run("UPDATE meeting_audio SET status = 'error', error = ? WHERE id = ?", String(err.message).slice(0, 500), audioId);
+      log({ channel: 'summary', chatId, userId: actor.id, who: u.full_name, action: 'meeting_audio', status: 'error', result: err.message.slice(0, 300) });
+      // לעובד — רק מה שהוא יכול לעשות; הפרטים — ליומן ולמנהלי המערכת
+      for (const a of D.all("SELECT id FROM users WHERE status = 'active' AND role IN ('superadmin','admin')")) {
+        D.notify({ targetType: 'user', targetId: a.id, kind: 'ai', title: '🎙 הקלטת פגישה מוואטסאפ נכשלה', body: `${u.full_name}: ${err.message}`.slice(0, 500) });
+      }
+      await sendText(chatId, 'לא הצלחתי לתמלל ולסכם את ההקלטה 😕 מנהלי המערכת קיבלו הודעה. אפשר לנסות לשלוח אותה שוב מאוחר יותר.').catch(() => {});
+    }
+  });
+}
+
+/** תשובה לשאלות של הקלטת הפגישה — "לאיזו פגישה?" ו"לפתוח את המשימות?". ‎null‎ — לא שלנו */
+async function meetingAudioTurn(user, actor, t, state, { dry, out }) {
+  const d = state.draft;
+  if (!d || !state.awaiting) return null;
+  const n = WaUi.normalize(t);
+  if (d.kind === 'meeting_audio_pick') {
+    if (CANCEL.test(t) || WaUi.CANCEL.test(n)) {
+      return out('בסדר, ההקלטה לא שויכה 👍', { draft: null }, { action: 'meeting_audio', status: 'ok', result: 'בוטל' });
+    }
+    const pick = MeetingAudio.resolvePick(d, t);
+    if (!pick) {
+      return out('לא הבנתי לאיזו פגישה 🤔 בחרו בכפתור, או כתבו נושא ומשתתפים.', { draft: d, awaiting: true },
+        { action: 'meeting_audio', status: 'unclear', result: `לא זוהתה פגישה: ${t}`.slice(0, 300), buttons: [...d.options.map((o) => o.label), MeetingAudio.BTN.other] });
+    }
+    if (pick.ask) return out(pick.ask, { draft: d, awaiting: true }, { action: 'meeting_audio', status: 'ok', result: 'פגישה אחרת' });
+    if (pick.voice) {
+      // בכל זאת הודעה קולית רגילה — מתמללים ומטפלים בה כמו בכל הודעה
+      const row = D.get('SELECT * FROM meeting_audio WHERE id = ? AND user_id = ?', d.audioId, actor.id);
+      const file = row ? require('node:path').join(D.UPLOADS_DIR, 'meeting-audio', row.stored_name) : null;
+      let said = '';
+      try { said = file ? await Speech.transcribe(require('node:fs').readFileSync(file), row.mime) : ''; } catch { /* ריק */ }
+      if (row) { D.run("UPDATE meeting_audio SET status = 'expired' WHERE id = ?", row.id); try { require('node:fs').unlinkSync(file); } catch { /* */ } }
+      if (!said) return out('לא שמעתי דיבור בהודעה. נסו שוב, או כתבו לי.', { draft: null }, { action: 'voice', status: 'unclear', result: 'לא נשמע דיבור' });
+      const r = await converse(user, actor, said, { ...state, draft: null, awaiting: false }, { dry });
+      return { ...r, reply: `🎙 _${said.slice(0, 300)}_\n\n${r.reply}` };
+    }
+    const m = pick.meeting;
+    if (dry) return out(`(בדיקה) הייתי משייך את ההקלטה ל"${m.title}" ומתמלל.`, { draft: null }, { action: 'meeting_audio', status: 'ok', result: 'בדיקה' });
+    D.run("UPDATE meeting_audio SET meeting = ?, status = 'transcribing' WHERE id = ? AND user_id = ?", JSON.stringify(m), d.audioId, actor.id);
+    processMeetingAudio(actor, d.audioId);
+    const who = m.people.length ? `\n👥 ${m.people.map((p) => p.name || p.email).slice(0, 8).join(', ')}` : '\n_לא זיהיתי משתתפים מהארגון — המשימות ייפתחו אצלך, עם השם שנאמר._';
+    return out(`✅ שייכתי ל*${m.title}*.${who}\n\n⏳ מתמלל ומסכם — בהקלטה ארוכה זה לוקח כמה דקות. אודיע כשמוכן.`, { draft: null },
+      { action: 'meeting_audio', status: 'ok', result: `שויכה ל"${m.title}" (${m.source})`.slice(0, 300) });
+  }
+  if (d.kind === 'meeting_audio_tasks') {
+    const only = /^(?:רק\s+|לפתוח\s+(?:רק\s+)?)?([\d\s,ו\-]+)$/.exec(n);
+    const yes = MeetingAudio.BTN.open && (WaUi.normalize(MeetingAudio.BTN.open) === n || /^לפתוח(\s+(אותן|משימות|את\s+המשימות))?$/.test(n) || WaUi.YES.test(n));
+    if (yes || only) {
+      const reply = MeetingAudio.openTasks(actor, d, {
+        createTask: hooks.createTask, assignBlockReason: hooks.assignBlockReason, taskLink, dry,
+        only: only ? [...new Set((only[1].match(/\d+/g) ?? []).map(Number))] : null
+      });
+      return out(reply, { draft: null }, { action: 'meeting_audio', status: 'ok', result: `משימות מהפגישה "${d.title}": ${reply.split('\n')[0]}`.slice(0, 300) });
+    }
+    if (WaUi.NO.test(n) || CANCEL.test(t)) return out('בסדר, לא נפתחו משימות. ההקלטה והסיכום נשארים במשימון 👍', { draft: null }, { action: 'meeting_audio', status: 'ok', result: `לא: משימות מ"${d.title}"`.slice(0, 300) });
+  }
+  return null;
+}
+
 async function handleDirect(msg) {
   const user = userByPhone(msg.phone);
   if (!user) {
@@ -2931,6 +3051,20 @@ async function handleDirect(msg) {
   let text = msg.text;
   const voice = !text && Boolean(msg.audio);
   let notice = null;
+  // 🎙 הקלטת פגישה — קובץ שמע, או הודעה קולית ארוכה (או אחרי "הקלטת פגישה"): שואלים לאיזו פגישה
+  const meetingAudioOn = meetingAudioAllowed(actor);
+  if (meetingAudioOn && msg.file && MeetingAudio.isAudioFile(msg.file)) {
+    await receiveMeetingAudio(user, msg, base, () => Speech.download(msg.file.url, msg.file.mime).then((f) => ({ ...f, name: msg.file.name })));
+    return;
+  }
+  let voiceFile = null;
+  if (voice && meetingAudioOn) {
+    try { voiceFile = await Speech.download(msg.audio.url, msg.audio.mime); } catch { /* ננסה שוב בתמלול */ }
+    if (voiceFile && MeetingAudio.isMeetingVoice(user.id, voiceFile.buf)) {
+      await receiveMeetingAudio(user, msg, base, async () => voiceFile);
+      return;
+    }
+  }
   if (voice && Speech.isEnabled() && WaActions.allowed(actor, 'voice_notes')) {
     // התמלול לבדו לוקח כמה שניות — מודיעים מיד שההקלטה התקבלה, בלי לחכות
     // לשליחה: ההורדה והתמלול רצים במקביל (ההודעה תמיד יוצאת לפני התשובה)
@@ -2945,7 +3079,7 @@ async function handleDirect(msg) {
       return;
     }
     try {
-      const file = await Speech.download(msg.audio.url, msg.audio.mime);
+      const file = voiceFile ?? await Speech.download(msg.audio.url, msg.audio.mime);
       const compare = Boolean(D.getSetting('speech_compare', false));
       const r = await Speech.transcribeDetailed(file.buf, file.mime, { compare });
       text = r.text;
@@ -3408,6 +3542,7 @@ async function meetingFollowups() {
     }
   }).catch((err) => console.error('[משימון] פנייה אחרי פגישה נכשלה:', err.message));
   MeetingFollowup.prune();
+  MeetingAudio.prune();
 }
 
 // ---------------------------------------------------------------------------
@@ -3763,8 +3898,8 @@ async function tick() {
   }
 }
 
-function init({ createTask, listProjectsFor, newTaskProjects, assignableUserIds, assignBlockReason, taskTemplates, tasks, mail }) {
-  Object.assign(hooks, { createTask, listProjectsFor, newTaskProjects, assignableUserIds, assignBlockReason, taskTemplates, tasks, mail });
+function init({ createTask, listProjectsFor, newTaskProjects, assignableUserIds, assignBlockReason, taskTemplates, tasks, mail, files = null }) {
+  Object.assign(hooks, { createTask, listProjectsFor, newTaskProjects, assignableUserIds, assignBlockReason, taskTemplates, tasks, mail, files });
 }
 
 function start() {

@@ -37,7 +37,14 @@ function register(router, h) {
   AiTasks.setHooks({ saveFile: saveAttachment, scanWhatsApp: WaScan.handle, scanningUsers: WaScan.scanningUsers });
   MailScan.init({ createTask });
   Agents.init({ listProjectsFor, projectTasks: (actor, projectId) => botTaskOps.projectTasks(actor, projectId) });
-  WaBot.init({ createTask, listProjectsFor, newTaskProjects, assignableUserIds, assignBlockReason, taskTemplates, tasks: botTaskOps, mail: { searchContacts, createAiTask, sendOutreach } });
+  WaBot.init({
+    createTask, listProjectsFor, newTaskProjects, assignableUserIds, assignBlockReason, taskTemplates, tasks: botTaskOps, mail: { searchContacts, createAiTask, sendOutreach },
+    // 🎙 הקלטת פגישה מוואטסאפ — מצורפת למשימת הפגישה. משימה שהשולח אינו רואה — ‎null‎
+    files: {
+      saveAttachment, actorRef,
+      getTask: (actor, id) => { try { const t = getTaskOr404(id); assertVisible(actor, t); return t; } catch { return null; } }
+    }
+  });
   TaskOutreach.init({ searchContacts });
 
   const internalOnly = (actor) => {

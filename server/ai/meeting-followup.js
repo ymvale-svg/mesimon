@@ -11,6 +11,8 @@
  *   • פגישה ב-Timeless — לכל עובד לפי הגישה שלו (‎Timeless.listMeetings‎), רק
  *     פגישה שהשתתף בה, ורק כשמסמך ה-AI שלה כבר מוכן.
  *   אותה פגישה משני המקורות — פנייה אחת (לפי שעת ההתחלה).
+ *   • הקלטה ששלחו לבוט (‎source = wa‎, ‎meeting-audio.js‎) — בלי פנייה: הסיכום מוכן
+ *     כבר בעיבוד, ו"סיכום / משימות / הקלטת הפגישה" עובדים עליה באותו אופן.
  *
  * התשובות:
  *   • סיכום — מסמך ה-AI של Timeless / תמליל Zoom ← סיכום, החלטות ומשימות
@@ -249,6 +251,8 @@ async function timelessSource(row, userId) {
 async function digest(row, userId) {
   const cached = D.get('SELECT data FROM meeting_digests WHERE source = ? AND ref = ?', row.source, row.ref);
   if (cached) return parseJson(cached.data, null);
+  // הקלטה מוואטסאפ — הסיכום נשמר כבר בעיבוד (‎meeting-audio.js‎)
+  if (row.source === 'wa') return null;
   const src = row.source === 'zoom' ? await zoomSource(row) : await timelessSource(row, userId);
   if (!src) return null;
   const out = await Claude.json({
@@ -323,6 +327,11 @@ async function answer(actor, text, { appRoot = '', dry = false, createTask = nul
   const u = userRow(actor.id);
   const head = `🎥 *${row.title}* · ${hhmm(row.start_at)}`;
 
+  if (kind === 'recording' && row.source === 'wa') {
+    const taskId = parseJson(row.data, {}).taskId;
+    const link = appRoot && taskId ? `${appRoot}/?task=${taskId}` : '';
+    return { text: `${head}\n🎙 ההקלטה והתמליל — בקבצים המצורפים למשימת הפגישה${link ? `:\n${link}` : ' במשימון.'}`, buttons: [BTN.summary, BTN.tasks], result: `הקלטה (וואטסאפ): ${row.title}` };
+  }
   if (kind === 'recording') {
     if (row.source === 'zoom') {
       const d = parseJson(row.data, {});
@@ -365,6 +374,21 @@ async function answer(actor, text, { appRoot = '', dry = false, createTask = nul
     return { text: lines.join('\n'), buttons: [BTN.tasks, ...(row.source === 'zoom' ? [BTN.recording] : [])], result: `סיכום: ${row.title}` };
   }
 
+  // הקלטה מוואטסאפ, ומי ששלח אותה — המשימות של כל המשתתפים, כל אחת אצל האחראי שלה
+  if (row.source === 'wa' && dig.items.length && typeof createTask === 'function') {
+    const audio = D.get('SELECT user_id FROM meeting_audio WHERE id = ?', Number(row.ref));
+    if (audio?.user_id === actor.id) {
+      let n = 0;
+      return {
+        text: [head, '', `*המשימות מהפגישה (${dig.items.length}):*`, ...dig.items.map((it) => `${++n}. ${it.task}${it._ownerName || it.owner_name ? ` — ${it._ownerName || it.owner_name}` : ''}`),
+          '\n*לפתוח אותן, כל אחת אצל האחראי שלה?* *כן* 👍 · *לא* 👎 · או רק חלק: "רק 1 ו-3"'].join('\n'),
+        buttons: ['לפתוח משימות ✅', WaUi.BTN.no],
+        draft: { kind: 'meeting_audio_tasks', audioId: Number(row.ref), title: row.title, taskId: parseJson(row.data, {}).taskId ?? null },
+        awaiting: true,
+        result: `${dig.items.length} משימות (הקלטה מוואטסאפ): ${row.title}`
+      };
+    }
+  }
   // משימות
   const mine = myItems(dig, u);
   const others = dig.items.filter((it) => !mine.includes(it));
