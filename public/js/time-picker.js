@@ -259,7 +259,7 @@ const TimePicker = (() => {
       input.focus();
     });
 
-    const hint = Object.assign(document.createElement('div'), { className: 'tp-hint', textContent: 'בפנים — שעות · בחוץ — דקות. אפשר גם לגרור, או להקליד בשדה' });
+    const hint = Object.assign(document.createElement('div'), { className: 'tp-hint', textContent: 'בפנים שעות · בחוץ דקות' });
     const foot = document.createElement('div');
     foot.className = 'tp-foot';
     foot.append(nowBtn, Object.assign(document.createElement('div'), { className: 'spacer' }), cancelBtn, okBtn);
