@@ -2244,7 +2244,9 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
     if (d.kind === 'mail_remind') {
       const r = dry ? null : MailActions.answerReminder(actor.id, d, t, { closeAlerted });
       if (r?.openTask) {
-        // אותו מסלול כמו "כן" על "לפתוח משימה?" — עם כל הבדיקות (אנשים נוספים, פנייה החוצה)
+        // אותו מסלול כמו "כן" על "לפתוח משימה?" — עם כל הבדיקות (אנשים נוספים, פנייה החוצה).
+        // מייל שנקרא ב-Gmail ירד מ"ממתין" — קריאה אינה טיפול, אז הוא חוזר להצעה פתוחה
+        if (!dry) D.run("UPDATE ai_suggestions SET status = 'pending', decided_at = NULL WHERE id = ? AND status = 'read'", d.suggestionId);
         const c = await confirmPending(actor, { kind: 'mail_task', alert: true, suggestionIds: [d.suggestionId], title: d.title }, dry);
         return out(c.reply, { draft: null }, { action: 'mail_deadline', status: c.status, result: String(c.result ?? r.result).slice(0, 300), taskId: c.taskId ?? null });
       }

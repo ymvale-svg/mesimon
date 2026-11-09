@@ -898,6 +898,14 @@ CREATE TABLE IF NOT EXISTS meet_coord (
 );
 CREATE INDEX IF NOT EXISTS idx_meet_coord_msg ON meet_coord(message_id);
 
+/* 🌊 קצב התזכורות לכל עובד (‎ai/mail-actions.js‎) — כמה נשלחו היום ומתי האחרונה, כדי לא להציף */
+CREATE TABLE IF NOT EXISTS reminder_pace (
+  user_id  INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  day      TEXT    NOT NULL,
+  count    INTEGER NOT NULL DEFAULT 0,
+  last_at  TEXT
+);
+
 /* סיכום, החלטות ומשימות של פגישה — פעם אחת לפגישה, לכל המשתתפים. נמחק אחרי חודש */
 CREATE TABLE IF NOT EXISTS meeting_digests (
   source     TEXT    NOT NULL,
@@ -1617,6 +1625,7 @@ const DEFAULT_SETTINGS = {
   meeting_audio_min_kb: 1024,              // הודעה קולית גדולה מזה (כ-8 דקות) לבוט = הקלטת פגישה, והבוט שואל לאיזו פגישה לשייך
   rfq_daily_max: 20,                       // פנייה לספקים: כמה מיילים לכל היותר לעובד ביום (לא להיחשב דואר זבל)
   bot_pilot: true,                         // 🧪 היכולות החדשות בבוט (סבב Instinct) — רק למנהלי המערכת, עד "פתח את היכולות החדשות לכולם"
+  remind_hours: '08:30-18:00',             // 🌊 שעות התזכורות מהמייל (מחוץ להן — לא מזכירים, גם לא בשעות הבוט)
   meeting_ai_alternatives: true,           // הצעות AI להזזת פגישות חופפות
   meeting_record_default: false,           // "הקלטה אוטומטית לענן" מסומן מראש בפגישת Zoom חדשה
   meeting_office_address: '',              // "🏢 במשרד" בקביעת פגישה — הכתובת שנכנסת למיקום ביומן ובהזמנה

@@ -29,7 +29,23 @@ const HOUR = 60 * 60 * 1000;
 const REMIND_AFTER_MS = DAY;   // יום אחרי שהמייל הגיע
 const MIN_WAIT_MS = 3 * HOUR;  // דדליין קרוב — לא פחות מ-3 שעות אחרי שהגיע
 const KEEP_DAYS = 7;           // מייל ישן משבוע — כבר לא מזכירים
-const DAILY_MAX = 5;           // לא יותר מ-5 תזכורות לעובד ביום
+
+/*
+ * 🌊 בלי הצפה (הוחלט 09.11.26 — "המנכ"ל מקבל 40–50 מיילים ביום, 30 מהם קריאה לפעולה"):
+ *   • קצב לפי העובד (‎botPrefs.remindPace‎): רגיל — תזכורת אחת לכל היותר כל 30 דקות, עד 8 ביום;
+ *     מעט — כל שעתיים, עד 3; רק בבוקר — אף אחת במהלך היום (רק הרשימה בסיכום הבוקר); כבוי.
+ *   • רק בשעות התזכורות (‎remind_hours‎, ברירת מחדל 08:30–18:00), ולא באמצע פגישה ביומן.
+ *   • קודם החשוב: דדליין קרוב, עדיפות, שולח שעונים לו בדרך כלל, ואז הוותיק.
+ * "טופל" (ולא מזכירים): ענית / העברת מ-Gmail, העברת לארכיון או מחקת, או החלטת במשימון. **קריאה
+ * אינה טיפול** — מייל שנקרא ולא טופל עדיין מקבל תזכורת.
+ */
+const PACE = {
+  normal: { gapMin: 30, max: 8 },
+  light: { gapMin: 120, max: 3 },
+  morning: { gapMin: 0, max: 0 },
+  off: { gapMin: 0, max: 0 }
+};
+const paceOf = (userId) => PACE[D.userPrefs(userId)?.botPrefs?.remindPace] ?? PACE.normal;
 const GOODS_DAYS = 3;          // חשבונית שלא נשאלה תוך 3 ימים — כבר לא מציעים
 const DOC_MIME = /^(application\/pdf|image\/)/i;
 const DOC_NAME = /\.(pdf|jpe?g|png|heic|tiff?)$/i;
@@ -105,43 +121,110 @@ function remindAt(row) {
   return at;
 }
 
-/** כבר ענית על המייל ב-Gmail (הודעה שלך בשרשור אחרי שהגיע) — אין על מה להזכיר */
-async function answeredInGmail(row) {
+/**
+ * טופל ב-Gmail? ‎'answered'‎ — הודעה שלך בשרשור אחרי שהגיע (תשובה / העברה); ‎'archived'‎ — המייל כבר
+ * לא בתיבת הדואר הנכנס (ארכיון / נמחק); ‎null‎ — לא טופל. קריאה בלבד — לא טיפול.
+ */
+async function handledInGmail(row) {
   try {
     const box = D.get('SELECT box FROM mail_scanned WHERE user_id = ? AND gmail_id = ?', row.user_id, row.gmail_id)?.box ?? 0;
     const got = new Date(row.received_at || row.created_at).getTime();
-    return (await Gmail.threadOf(Gmail.handle(row.user_id, box), row.gmail_id)).some((m) => m.labels.includes('SENT') && m.at && m.at.getTime() > got);
-  } catch {
-    return false;
+    const thread = await Gmail.threadOf(Gmail.handle(row.user_id, box), row.gmail_id);
+    if (thread.some((m) => m.id !== row.gmail_id && m.labels.includes('SENT') && m.at && m.at.getTime() > got - 60000)) return 'answered';
+    const src = thread.find((m) => m.id === row.gmail_id);
+    if (src && (!src.labels.includes('INBOX') || src.labels.includes('TRASH'))) return 'archived';
+    return null;
+  } catch (err) {
+    return / 404/.test(err.message) ? 'archived' : null;
   }
 }
 
-/** התזכורת הבאה — מייל שעדיין ממתין, שהגיע זמנו ושלא נשאל עליו */
-async function nextReminder(userId) {
+/** כמה תזכורות נשלחו היום, ומתי האחרונה — לקצב */
+function paceState(userId) {
+  const today = W.todayIL();
+  const r = D.get('SELECT * FROM reminder_pace WHERE user_id = ?', userId);
+  return r && r.day === today ? { count: r.count, lastAt: r.last_at } : { count: 0, lastAt: null };
+}
+function paceTick(userId) {
+  const today = W.todayIL();
+  const cur = paceState(userId);
+  D.run(`INSERT INTO reminder_pace (user_id, day, count, last_at) VALUES (?,?,?,?)
+         ON CONFLICT(user_id) DO UPDATE SET day = excluded.day, count = excluded.count, last_at = excluded.last_at`,
+  userId, today, cur.count + 1, D.nowIso());
+}
+
+/** אפשר לשלוח עכשיו תזכורת לעובד הזה? (שעות, קצב, תקרה, פגישה ביומן) */
+async function mayRemindNow(userId) {
+  const pace = paceOf(userId);
+  if (!pace.max) return false;
+  const now = new Date();
+  const hm = new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Jerusalem', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(now);
+  const m = /^(\d{2}:\d{2})-(\d{2}:\d{2})$/.exec(String(D.getSetting('remind_hours', '08:30-18:00') ?? ''));
+  if (m && !(hm >= m[1] && hm < m[2])) return false;
+  const st = paceState(userId);
+  if (st.count >= pace.max) return false;
+  if (st.lastAt && Date.now() - new Date(st.lastAt).getTime() < pace.gapMin * 60000) return false;
+  // באמצע פגישה ביומן — מחכים שתסתיים
+  try {
+    const Calendar = require('../calendar');
+    if (Calendar.isConnected(userId)) {
+      const day = await Calendar.eventsForDay(userId);
+      if ((day.events ?? []).some((e) => !e.allDay && !e.declined && new Date(e.start) <= now && new Date(e.end) > now)) return false;
+    }
+  } catch { /* בלי יומן */ }
+  return true;
+}
+
+/** כמה חשוב: דדליין קרוב, עדיפות, שולח שעונים לו, ותק */
+function scoreOf(row) {
+  const d = parseJson(row.data, {});
+  const today = W.todayIL();
+  let s = 0;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(d.dueDate ?? '')) s += d.dueDate <= today ? 6 : d.dueDate <= W.addDays(today, 1) ? 4 : d.dueDate <= W.addDays(today, 3) ? 2 : 0;
+  s += { urgent: 4, high: 2 }[d.priority] ?? 0;
+  const p = D.get('SELECT mails_out FROM mail_people WHERE user_id = ? AND email = ?', row.user_id, String(row.from_email ?? '').toLowerCase());
+  if ((p?.mails_out ?? 0) >= 3) s += 2;
+  s += Math.min(3, Math.floor((Date.now() - new Date(row.received_at || row.created_at).getTime()) / DAY));
+  return s;
+}
+
+/** התזכורות שהגיע זמנן — מיילים שלא טופלו (גם כאלה שנקראו), החשוב קודם */
+async function dueReminders(userId, { limit = 20 } = {}) {
   let since = D.getSetting('mail_remind_since', '');
   if (!since) { since = D.nowIso(); D.setSetting('mail_remind_since', since); }
-  const today = W.todayIL();
-  const asked = D.get("SELECT COUNT(*) n FROM ai_suggestions WHERE user_id = ? AND substr(json_extract(data, '$.remind.askedAt'), 1, 10) = ?", userId, today).n;
-  if (asked >= DAILY_MAX) return null;
   const rows = D.all(
     `SELECT * FROM ai_suggestions
-      WHERE user_id = ? AND kind = 'task' AND status = 'pending' AND gmail_id <> ''
+      WHERE user_id = ? AND kind = 'task' AND status IN ('pending', 'read') AND gmail_id <> ''
         AND header_id NOT LIKE 'doc:%' AND json_extract(data, '$.expiry') IS NULL
         AND COALESCE(json_extract(data, '$.source'), 'email') = 'email'
         AND COALESCE(json_extract(data, '$.meeting'), 0) = 0
         AND json_extract(data, '$.remind') IS NULL
         AND created_at >= ? AND COALESCE(received_at, created_at) >= ?
-      ORDER BY received_at, id LIMIT 50`,
+      ORDER BY received_at, id LIMIT 80`,
     userId, since, new Date(Date.now() - KEEP_DAYS * DAY).toISOString()
   );
   const seen = new Set();
+  const out = [];
   for (const row of rows) {
     if (seen.has(row.gmail_id) || remindAt(row) > Date.now()) continue;
     seen.add(row.gmail_id);
-    if (await answeredInGmail(row)) { setRemind(row.id, { closed: 'answered', at: D.nowIso() }); continue; }
-    return row;
+    out.push({ row, score: scoreOf(row) });
   }
-  return null;
+  out.sort((a, b) => b.score - a.score || String(a.row.received_at).localeCompare(String(b.row.received_at)));
+  const result = [];
+  for (const { row } of out) {
+    if (result.length >= limit) break;
+    const handled = await handledInGmail(row);
+    if (handled) { setRemind(row.id, { closed: handled, at: D.nowIso() }); continue; }
+    result.push(row);
+  }
+  return result;
+}
+
+/** התזכורת הבאה לשלוח עכשיו — רק כשהקצב מרשה */
+async function nextReminder(userId) {
+  if (!(await mayRemindNow(userId))) return null;
+  return (await dueReminders(userId, { limit: 1 }))[0] ?? null;
 }
 
 function nextGoods(userId) {
@@ -210,6 +293,7 @@ async function nextQuestion(userId, allow) {
     const row = await nextReminder(userId);
     if (row) {
       setRemind(row.id, { askedAt: D.nowIso() });
+      paceTick(userId);
       const u = D.get('SELECT full_name FROM users WHERE id = ?', userId);
       return { ...reminderQuestion(row, u?.full_name), action: 'mail_deadline', log: `🐣 זכרת? ${parseJson(row.data, {}).title}` };
     }
@@ -280,6 +364,6 @@ function prune() {
 }
 
 module.exports = {
-  GOODS_SCHEMA, BTN, goodsDocFrom, goodsFile, nextQuestion, answerReminder, answerGoods, prune,
-  _internal: { nextReminder, nextGoods, reminderQuestion, goodsQuestion, setRemind, remindAt }
+  GOODS_SCHEMA, BTN, goodsDocFrom, goodsFile, nextQuestion, answerReminder, answerGoods, prune, dueReminders, mayRemindNow, paceTick, PACE,
+  _internal: { nextReminder, nextGoods, reminderQuestion, goodsQuestion, setRemind, remindAt, scoreOf, handledInGmail, paceState }
 };
