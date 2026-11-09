@@ -143,7 +143,7 @@ function lastFinal(userId) {
 }
 /** 👎 מיד אחרי אישור סופי — הבוט מטפל בו (ולא העוזר הכללי) */
 /** "בטל את מה שאישרתי": 👎, או ביטול (גם כפתור "ביטול 🗑️" ישן שנלחץ אחרי האישור) */
-const UNDO_FINAL = (text) => { const t = String(text ?? '').replace(/[\u{1F3FB}-\u{1F3FF}\uFE0F]/gu, '').trim(); return /^👎+$/u.test(t) || /^(ביטול|בטל|לבטל|תבטל|🗑)([\s,.!🗑]|$)/u.test(t); };
+const UNDO_FINAL = (text) => { const t = String(text ?? '').replace(/[\u{1F3FB}-\u{1F3FF}\uFE0F]/gu, '').trim(); return /^👎+$/u.test(t) || /^(?:(?:נא|בבקשה|צריך|אפשר)\s+)?(ביטול|בטל|לבטל|תבטל|תבטלי|🗑)([\s,.!🗑]|$)/u.test(t); };
 const wantsUndoFinal = (userId, text) => UNDO_FINAL(text) && Boolean(lastFinal(userId));
 function load(userId) {
   const s = D.getSetting(key(userId), null);
@@ -750,6 +750,8 @@ async function askHeader(s) {
   // אותו מסמך כבר נקלט כטיוטא (למשל נפתח שוב לעריכה בפריוריטי) — ממשיכים ממנה: מציגים מה שיש ושואלים אם לשנות
   if (dup && dup.STATDES === 'טיוטא') return resumeDraft(s, dup);
   if (dup && dup.STATDES !== 'מבוטלת') {
+    // "לבטל" מיד אחרי ההודעה הזו — הכוונה ל-GR הקיים: אותה הנחיה כמו ביטול מיד אחרי אישור (ולא "בוטל 👍" כללי)
+    if (dup.STATDES === 'סופית' && s.uid) D.setSetting(doneKey(s.uid), { docno: dup.DOCNO, company: s.company, supplier: s.supplier?.name ?? '', at: Date.now() });
     return { s: null, replies: [`המסמך ${d.doc_number} של ${s.supplier.name} כבר נקלט: *${dup.DOCNO}* (${dup.STATDES}, ${ymdHe(dup.CURDATE)}). לא נקלט שוב.`], status: 'denied', result: `כפול: ${dup.DOCNO}` };
   }
   if (dup) {
