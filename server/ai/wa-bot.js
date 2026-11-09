@@ -62,6 +62,13 @@ const GoodsReceipt = require('./goods-receipt');
 const PurchaseDemand = require('./purchase-demand');
 const Approvals = require('./priority-approvals');
 const WaUi = require('./wa-ui');
+const MeetingFollowup = require('./meeting-followup');
+const MeetingAudio = require('./meeting-audio');
+const MailActions = require('./mail-actions');
+const Notice = require('./notice');
+const Rfq = require('./rfq');
+const FormFill = require('./form-fill');
+const MeetCoord = require('./meeting-coord');
 
 const GROUP_SKILL = path.join(__dirname, 'skills', 'whatsapp-group-to-tasks.md');
 const CHAT_SKILL = path.join(__dirname, 'skills', 'whatsapp-chat.md');
@@ -79,7 +86,7 @@ const parseJson = (text, fallback) => { try { return JSON.parse(text); } catch {
  * פעולות שתלויות ב-api.js — מוזרקות משם. ‎tasks‎: רשימות, סגירה והערה עם
  * הרשאות העובד. ‎mail‎: חיפוש נמען ופתיחת משימת AI — אותן פונקציות של האשף.
  */
-const hooks = { createTask: null, listProjectsFor: null, newTaskProjects: null, assignableUserIds: null, assignBlockReason: null, taskTemplates: null, tasks: null, mail: null };
+const hooks = { createTask: null, listProjectsFor: null, newTaskProjects: null, assignableUserIds: null, assignBlockReason: null, taskTemplates: null, tasks: null, mail: null, files: null };
 
 // ---------------------------------------------------------------------------
 // החיבור
@@ -2139,6 +2146,165 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
     }
   }
 
+  // 🧪 פיילוט היכולות החדשות — מנהל מערכת פותח לכולם / מחזיר לפיילוט
+  {
+    const open = /^(?:תפתח|פתח)\s+(?:את\s+)?היכולות\s+החדשות\s+לכולם[.!]?$/.test(t);
+    const back = /^(?:תחזיר|החזר)\s+(?:את\s+)?היכולות\s+החדשות\s+לפיילוט[.!]?$/.test(t);
+    if (open || back) {
+      if (!WaActions.inPilot(actor)) return out('רק מנהל מערכת יכול לשנות את זה.', {}, { action: 'other', status: 'denied', result: 'פיילוט — אין הרשאה' });
+      if (!dry) D.setSetting('bot_pilot', !open);
+      return out(open ? '✅ היכולות החדשות פתוחות עכשיו לכל העובדים (לפי ההרשאות של כל פעולה).' : '🧪 היכולות החדשות חזרו לפיילוט — רק למנהלי המערכת.', {},
+        { action: 'other', status: 'ok', result: open ? 'פיילוט נפתח לכולם' : 'חזרה לפיילוט' });
+    }
+  }
+  // 📅 תיאום פגישה עם גורם חיצוני — "תקבע לי פגישה עם …", ובתוך הזרימה
+  if (state.awaiting && state.draft?.kind === 'meet_coord') {
+    const d = state.draft;
+    const r = dry ? null : await MeetCoord.answer(actor, d, t, { searchContacts: hooks.mail?.searchContacts, closeAlerted })
+      .catch((err) => ({ text: 'משהו השתבש בתיאום הפגישה. נסו שוב בעוד רגע 🙏', result: `שגיאה: ${err.message}`, error: true }));
+    if (r) {
+      if (r.send) meetCoordRun(actor, () => MeetCoord.send(actor, r.coordId));
+      if (r.book) meetCoordRun(actor, () => MeetCoord.book(actor, r.coordId, r.start));
+      return out(r.text, { draft: r.draft ?? null, awaiting: Boolean(r.awaiting) }, { action: 'meet_coord', status: r.error ? 'error' : 'ok', result: String(r.result ?? '').slice(0, 300), buttons: r.buttons });
+    }
+    keep.draft = null;
+    state = { ...state, draft: null, awaiting: false };
+  }
+  if (WaActions.allowed(actor, 'meet_coord') && MeetCoord.isRequest(t)) {
+    if (dry) return out('(בדיקה) הייתי מציע מועדים.', {}, { action: 'meet_coord', status: 'ok', result: 'בדיקה' });
+    const r = await MeetCoord.start(actor, t, { searchContacts: hooks.mail?.searchContacts }).catch((err) => ({ text: 'משהו השתבש בתיאום הפגישה. נסו שוב בעוד רגע 🙏', result: `שגיאה: ${err.message}`, error: true }));
+    if (r) return out(r.text, { draft: r.draft ?? null, awaiting: Boolean(r.awaiting) }, { action: 'meet_coord', status: r.error ? 'error' : 'ok', result: String(r.result ?? '').slice(0, 300), buttons: r.buttons });
+  }
+  // 📝 טופס ריק מהמייל — "למלא?", תיקונים, "לשלוח לשולח"; ו"כרטיס חברה"
+  if (state.awaiting && state.draft?.kind === 'form_fill') {
+    const r = dry ? null : FormFill.answer(actor.id, state.draft, t);
+    if (r) {
+      if (r.work) {
+        setImmediate(async () => {
+          try {
+            await pushToUser(actor.id, await r.work(), 'form_fill');
+          } catch (err) {
+            console.error('[משימון] מילוי טופס נכשל:', err.message);
+            log({ channel: 'summary', userId: actor.id, action: 'form_fill', status: 'error', result: err.message.slice(0, 300) });
+            await pushToUser(actor.id, { text: 'לא הצלחתי להשלים את הטופס 😕 נסו שוב מאוחר יותר, או מלאו אותו ידנית.' }, 'form_fill');
+          }
+        });
+      }
+      return out(r.text, { draft: r.draft ?? null, awaiting: Boolean(r.awaiting) }, { action: 'form_fill', status: 'ok', result: String(r.result ?? '').slice(0, 300), buttons: r.buttons });
+    }
+    if (state.draft.step === 'offer') D.run("UPDATE mail_forms SET status = 'pending' WHERE id = ? AND status = 'asked'", state.draft.formId);
+    keep.draft = null;
+    state = { ...state, draft: null, awaiting: false };
+  }
+  if (WaActions.byKey('form_fill')?.enabled && /^כרטיס\s+(?:ה)?חברה/.test(t)) {
+    const r = dry ? { text: '(בדיקה) כרטיס חברה', result: 'בדיקה' } : await FormFill.cardCommand(actor, t).catch((err) => ({ text: `לא הצלחתי לעדכן: ${err.message}`, result: err.message }));
+    if (r) return out(r.text, {}, { action: 'form_fill', status: 'ok', result: r.result });
+  }
+  // 🛒 פנייה לספקים להצעת מחיר — הבקשה, השאלות, האישור, ואחרי הסיכום
+  if (state.awaiting && ['rfq', 'rfq_done'].includes(state.draft?.kind)) {
+    const d = state.draft;
+    const r = dry ? null : await (d.kind === 'rfq' ? Rfq.answer(actor.id, d, t) : Rfq.answerDone(actor.id, d, t))
+      .catch((err) => ({ text: 'משהו השתבש בפנייה לספקים. נסו שוב בעוד רגע 🙏', draft: d, awaiting: true, result: `שגיאה: ${err.message}`, error: true }));
+    if (r) {
+      if (r.search) rfqPrepare(actor, r.rfqId);
+      if (r.send) rfqSend(actor, r.rfqId);
+      if (r.demand && WaActions.allowed(actor, 'purchase_demand')) setImmediate(() => enqueueAs(actor.id, { text: r.demand }));
+      return out(r.text, { draft: r.draft ?? null, awaiting: Boolean(r.awaiting) }, { action: 'rfq', status: r.error ? 'error' : 'ok', result: String(r.result ?? '').slice(0, 300), buttons: r.buttons });
+    }
+    keep.draft = null;
+    state = { ...state, draft: null, awaiting: false };
+  }
+  if (WaActions.allowed(actor, 'rfq') && Rfq.SUMMARY_ASK.test(WaUi.normalize(t))) {
+    const s2 = Rfq.lastSummary(actor.id);
+    if (s2) return out(s2.text, { draft: s2.draft, awaiting: true }, { action: 'rfq', status: 'ok', result: 'טבלת הצעות', buttons: s2.buttons, files: s2.files });
+  }
+  if (WaActions.allowed(actor, 'rfq') && Rfq.isRequest(t)) {
+    if (dry) return out('(בדיקה) הייתי מתחיל פנייה לספקים.', {}, { action: 'rfq', status: 'ok', result: 'בדיקה' });
+    const r = await Rfq.start(actor.id, t).catch((err) => ({ text: 'משהו השתבש בפנייה לספקים. נסו שוב בעוד רגע 🙏', result: `שגיאה: ${err.message}`, error: true }));
+    if (r) {
+      if (r.search) rfqPrepare(actor, r.rfqId);
+      return out(r.text, { draft: r.draft ?? null, awaiting: Boolean(r.awaiting) }, { action: 'rfq', status: r.error ? 'error' : 'ok', result: String(r.result ?? '').slice(0, 300), buttons: r.buttons });
+    }
+  }
+  // 🎨 מודעה / ✉️ מכתב רשמי — "תעצב לי מודעה…", ובתוך הזרימה: סגנון, תיקונים, "מאשר"
+  if (state.awaiting && state.draft?.kind === 'notice') {
+    const r = await Notice.answer(actor.id, state.draft, t).catch((err) => ({ text: 'לא הצלחתי להכין את זה כרגע. נסו שוב בעוד רגע 🙏', draft: state.draft, awaiting: true, result: `שגיאה: ${err.message}`, error: true }));
+    if (r) return out(r.text, { draft: r.draft ?? null, awaiting: Boolean(r.awaiting) }, { action: 'notices', status: r.error ? 'error' : 'ok', result: String(r.result ?? '').slice(0, 300), buttons: r.buttons, files: r.files });
+    keep.draft = null;
+    state = { ...state, draft: null, awaiting: false };
+  }
+  if (WaActions.allowed(actor, 'notices') && Notice.parseRequest(t)) {
+    if (dry) return out('(בדיקה) הייתי מכין PDF.', {}, { action: 'notices', status: 'ok', result: 'בדיקה' });
+    const r = await Notice.start(actor.id, t).catch((err) => ({ text: 'לא הצלחתי להכין את זה כרגע. נסו שוב בעוד רגע 🙏', result: `שגיאה: ${err.message}`, error: true }));
+    return out(r.text, { draft: r.draft ?? null, awaiting: Boolean(r.awaiting) }, { action: 'notices', status: r.error ? 'error' : 'ok', result: String(r.result ?? '').slice(0, 300), buttons: r.buttons, files: r.files });
+  }
+  // 📬 "זכרת?" על דדליין ממייל, ו"לבצע קבלת סחורה?" על חשבונית מהמייל
+  if (state.awaiting && ['deadline_check', 'goods_offer'].includes(state.draft?.kind)) {
+    const d = state.draft;
+    if (d.kind === 'deadline_check') {
+      const r = dry ? null : MailActions.answerDeadline(actor.id, d, t, {
+        goodsAllowed: WaActions.allowed(actor, 'goods_offer') && WaActions.allowed(actor, 'goods_receipt'), closeAlerted
+      });
+      if (r) return out(r.text, { draft: r.draft ?? null, awaiting: Boolean(r.awaiting) }, { action: 'mail_deadline', status: 'ok', result: r.result.slice(0, 300), buttons: r.buttons });
+    } else {
+      const r = dry ? null : MailActions.answerGoods(d, t);
+      if (r) {
+        if (r.start) startGoodsFromMail(user, d.goodsId);
+        return out(r.text, { draft: null }, { action: 'goods_offer', status: 'ok', result: r.result.slice(0, 300) });
+      }
+    }
+    // כל דבר אחר — נושא חדש; השאלה יורדת (ותישאל שוב: דדליין — מחר, חשבונית — בסבב הבא)
+    if (d.kind === 'goods_offer') D.run("UPDATE mail_goods_docs SET status = 'pending' WHERE id = ? AND status = 'asked'", d.goodsId);
+    keep.draft = null;
+    state = { ...state, draft: null, awaiting: false };
+  }
+  // 🎙 הקלטת פגישה מוואטסאפ: "לאיזו פגישה?", "לפתוח את המשימות?", ו"הקלטת פגישה" (ההקלטה הבאה)
+  if (['meeting_audio_pick', 'meeting_audio_tasks'].includes(state.draft?.kind)) {
+    const r = await meetingAudioTurn(user, actor, t, state, { dry, out });
+    if (r) return r;
+    // כל דבר אחר — נושא חדש; השאלה יורדת
+    keep.draft = null;
+    state = { ...state, draft: null, awaiting: false };
+  }
+  if (meetingAudioAllowed(actor)) {
+    const armed = MeetingAudio.arm(actor.id, t);
+    if (armed) return out(armed, { draft: null }, { action: 'meeting_audio', status: 'ok', result: 'ממתין להקלטת פגישה' });
+  }
+  // 🎥 אחרי פגישה מוקלטת: "לפתוח משימות ✅" / "לא" על המשימות שהוצעו
+  if (state.draft?.kind === 'meeting_tasks' && state.awaiting) {
+    const n = WaUi.normalize(t);
+    if (MeetingFollowup.isOpenButton(t) || WaUi.YES.test(n)) {
+      if (!WaActions.allowed(actor, 'create_task')) return out('פתיחת משימות כבויה לך בוואטסאפ.', { draft: null }, { action: 'meeting_followup', status: 'denied', result: 'פתיחת משימות כבויה' });
+      const reply = MeetingFollowup.openTasks(actor, state.draft, { createTask: hooks.createTask, taskLink, dry });
+      return out(reply, { draft: null }, { action: 'meeting_followup', status: 'ok', result: `נפתחו ${state.draft.items.length} משימות מהפגישה "${state.draft.title}"`.slice(0, 300) });
+    }
+    // "רק 1 ו-3" — חלק מהמשימות
+    const picks = /^(?:רק\s+|לפתוח\s+(?:רק\s+)?)?([\d\s,ו\-]+)$/.exec(n);
+    if (picks) {
+      const items = [...new Set((picks[1].match(/\d+/g) ?? []).map(Number))].map((i) => state.draft.items[i - 1]).filter(Boolean);
+      if (items.length && WaActions.allowed(actor, 'create_task')) {
+        const reply = MeetingFollowup.openTasks(actor, { ...state.draft, items }, { createTask: hooks.createTask, taskLink, dry });
+        return out(reply, { draft: null }, { action: 'meeting_followup', status: 'ok', result: `נפתחו ${items.length} משימות מהפגישה "${state.draft.title}"`.slice(0, 300) });
+      }
+    }
+    if (WaUi.NO.test(n) || CANCEL.test(t)) {
+      return out('בסדר, לא נפתחו משימות 👍', { draft: null }, { action: 'meeting_followup', status: 'ok', result: `לא: משימות מ"${state.draft.title}"`.slice(0, 300) });
+    }
+    // כל דבר אחר — נושא חדש; ההצעה לפתוח משימות יורדת
+    keep.draft = null;
+    state = { ...state, draft: null, awaiting: false };
+  }
+  // 🎥 אחרי פגישה מוקלטת: "סיכום הפגישה", "משימות מהפגישה", "הקלטת הפגישה"
+  if (WaActions.allowed(actor, 'meeting_followup') && actor.type === 'user' && !(state.awaiting && state.draft && state.draft.kind !== 'meeting_tasks')) {
+    const r = await MeetingFollowup.answer(actor, t, {
+      appRoot: appRoot(), dry, createTask: WaActions.allowed(actor, 'create_task') && hooks.createTask ? hooks.createTask : null
+    }).catch((err) => ({ text: 'לא הצלחתי להגיע לפגישה כרגע. נסו שוב בעוד כמה דקות 🙏', result: err.message, error: true }));
+    if (r) {
+      return out(r.text, { draft: r.draft ?? null, awaiting: Boolean(r.awaiting) },
+        { action: 'meeting_followup', status: r.error ? 'error' : 'ok', result: String(r.result ?? '').slice(0, 300), buttons: r.buttons?.length ? r.buttons : undefined });
+    }
+  }
+
   // 📅 "מי משתתף בפגישה?" — מהיומן (גם פגישות שלא נקבעו ממשימון)
   if (WaActions.byKey('meeting_reminder')?.enabled && !(state.awaiting && state.draft)) {
     const who = await require('../meetings').participantsAnswer(actor.id, t).catch(() => null);
@@ -2876,6 +3042,113 @@ function withForwards(rows, text) {
 /** למספר שאינו מוכר עונים פעם ביום — לא יותר, כדי לא לנהל שיחה עם זרים */
 const unknownReplied = new Map();
 
+// ---------------------------------------------------------------------------
+// 🎙 הקלטת פגישה מוואטסאפ ← משימון (‎meeting-audio.js‎)
+// ---------------------------------------------------------------------------
+
+const meetingAudioAllowed = (actor) => actor?.type === 'user' && Boolean(hooks.files) && Speech.isEnabled() && WaActions.allowed(actor, 'meeting_audio') && WaActions.allowed(actor, 'create_task');
+
+/** ההקלטה התקבלה: שומרים, ושואלים לאיזו פגישה לשייך */
+async function receiveMeetingAudio(user, msg, base, load) {
+  try {
+    const file = await load();
+    const r = await MeetingAudio.receive(user.id, file);
+    const st = chatOf(user.id);
+    saveChat(user.id, { ...st, draft: r.draft, awaiting: true, history: [...st.history, { role: 'user', text: '[🎙 הקלטת פגישה]' }, { role: 'bot', text: r.text.slice(0, 500) }].slice(-HISTORY_TURNS) });
+    await sendButtons(msg.chatId, r.text, r.buttons);
+    log({ ...base, text: `[🎙 הקלטת פגישה · ${(file.buf.length / 1048576).toFixed(1)}MB]`, action: 'meeting_audio', status: 'ok', result: `לאיזו פגישה? ${r.draft.options.map((o) => o.title).join(' · ') || 'אין פגישות ביומן'}`.slice(0, 300) });
+  } catch (err) {
+    console.error('[משימון] קליטת הקלטת פגישה נכשלה:', err.message);
+    log({ ...base, text: '[🎙 הקלטת פגישה]', action: 'meeting_audio', status: 'error', result: err.message });
+    await sendText(msg.chatId, 'לא הצלחתי לקבל את ההקלטה. נסו לשלוח שוב 🙏');
+  }
+}
+
+const meetingAudioDeps = (actor) => ({
+  actor, createTask: hooks.createTask, saveAttachment: hooks.files.saveAttachment, actorRef: hooks.files.actorRef,
+  getTask: hooks.files.getTask, addComment: (a, id, text) => hooks.tasks.comment(a, id, text), taskLink
+});
+
+/** ברקע: תמלול, סיכום ומשימת הפגישה — ובסוף הודעה לעובד */
+function processMeetingAudio(actor, audioId) {
+  setImmediate(async () => {
+    const u = D.get('SELECT id, full_name, phone FROM users WHERE id = ?', actor.id);
+    const chatId = `${u.phone}@c.us`;
+    try {
+      const r = await MeetingAudio.processAudio(audioId, meetingAudioDeps(actor));
+      const st = chatOf(actor.id);
+      const busy = st.awaiting && st.draft;
+      const text = r.draft && busy ? `${r.text.replace(/\n\*לפתוח את המשימות[\s\S]*$/, '')}\n\nכדי לפתוח את המשימות — כתבו *משימות מהפגישה*.` : r.text;
+      const parts = splitMessage(text);
+      for (let i = 0; i < parts.length; i++) {
+        if (i === parts.length - 1 && r.draft && !busy) await sendButtons(chatId, parts[i], r.buttons);
+        else await sendText(chatId, parts[i]);
+      }
+      rememberBot(actor.id, text);
+      if (r.draft && !busy) saveChat(actor.id, { ...chatOf(actor.id), draft: r.draft, awaiting: true });
+      log({ channel: 'summary', chatId, userId: actor.id, who: u.full_name, action: 'meeting_audio', status: 'ok', result: text.split('\n')[0].slice(0, 300) });
+    } catch (err) {
+      console.error('[משימון] עיבוד הקלטת פגישה נכשל:', err.message);
+      D.run("UPDATE meeting_audio SET status = 'error', error = ? WHERE id = ?", String(err.message).slice(0, 500), audioId);
+      log({ channel: 'summary', chatId, userId: actor.id, who: u.full_name, action: 'meeting_audio', status: 'error', result: err.message.slice(0, 300) });
+      // לעובד — רק מה שהוא יכול לעשות; הפרטים — ליומן ולמנהלי המערכת
+      for (const a of D.all("SELECT id FROM users WHERE status = 'active' AND role IN ('superadmin','admin')")) {
+        D.notify({ targetType: 'user', targetId: a.id, kind: 'ai', title: '🎙 הקלטת פגישה מוואטסאפ נכשלה', body: `${u.full_name}: ${err.message}`.slice(0, 500) });
+      }
+      await sendText(chatId, 'לא הצלחתי לתמלל ולסכם את ההקלטה 😕 מנהלי המערכת קיבלו הודעה. אפשר לנסות לשלוח אותה שוב מאוחר יותר.').catch(() => {});
+    }
+  });
+}
+
+/** תשובה לשאלות של הקלטת הפגישה — "לאיזו פגישה?" ו"לפתוח את המשימות?". ‎null‎ — לא שלנו */
+async function meetingAudioTurn(user, actor, t, state, { dry, out }) {
+  const d = state.draft;
+  if (!d || !state.awaiting) return null;
+  const n = WaUi.normalize(t);
+  if (d.kind === 'meeting_audio_pick') {
+    if (CANCEL.test(t) || WaUi.CANCEL.test(n)) {
+      return out('בסדר, ההקלטה לא שויכה 👍', { draft: null }, { action: 'meeting_audio', status: 'ok', result: 'בוטל' });
+    }
+    const pick = MeetingAudio.resolvePick(d, t);
+    if (!pick) {
+      return out('לא הבנתי לאיזו פגישה 🤔 בחרו בכפתור, או כתבו נושא ומשתתפים.', { draft: d, awaiting: true },
+        { action: 'meeting_audio', status: 'unclear', result: `לא זוהתה פגישה: ${t}`.slice(0, 300), buttons: [...d.options.map((o) => o.label), MeetingAudio.BTN.other] });
+    }
+    if (pick.ask) return out(pick.ask, { draft: d, awaiting: true }, { action: 'meeting_audio', status: 'ok', result: 'פגישה אחרת' });
+    if (pick.voice) {
+      // בכל זאת הודעה קולית רגילה — מתמללים ומטפלים בה כמו בכל הודעה
+      const row = D.get('SELECT * FROM meeting_audio WHERE id = ? AND user_id = ?', d.audioId, actor.id);
+      const file = row ? require('node:path').join(D.UPLOADS_DIR, 'meeting-audio', row.stored_name) : null;
+      let said = '';
+      try { said = file ? await Speech.transcribe(require('node:fs').readFileSync(file), row.mime) : ''; } catch { /* ריק */ }
+      if (row) { D.run("UPDATE meeting_audio SET status = 'expired' WHERE id = ?", row.id); try { require('node:fs').unlinkSync(file); } catch { /* */ } }
+      if (!said) return out('לא שמעתי דיבור בהודעה. נסו שוב, או כתבו לי.', { draft: null }, { action: 'voice', status: 'unclear', result: 'לא נשמע דיבור' });
+      const r = await converse(user, actor, said, { ...state, draft: null, awaiting: false }, { dry });
+      return { ...r, reply: `🎙 _${said.slice(0, 300)}_\n\n${r.reply}` };
+    }
+    const m = pick.meeting;
+    if (dry) return out(`(בדיקה) הייתי משייך את ההקלטה ל"${m.title}" ומתמלל.`, { draft: null }, { action: 'meeting_audio', status: 'ok', result: 'בדיקה' });
+    D.run("UPDATE meeting_audio SET meeting = ?, status = 'transcribing' WHERE id = ? AND user_id = ?", JSON.stringify(m), d.audioId, actor.id);
+    processMeetingAudio(actor, d.audioId);
+    const who = m.people.length ? `\n👥 ${m.people.map((p) => p.name || p.email).slice(0, 8).join(', ')}` : '\n_לא זיהיתי משתתפים מהארגון — המשימות ייפתחו אצלך, עם השם שנאמר._';
+    return out(`✅ שייכתי ל*${m.title}*.${who}\n\n⏳ מתמלל ומסכם — בהקלטה ארוכה זה לוקח כמה דקות. אודיע כשמוכן.`, { draft: null },
+      { action: 'meeting_audio', status: 'ok', result: `שויכה ל"${m.title}" (${m.source})`.slice(0, 300) });
+  }
+  if (d.kind === 'meeting_audio_tasks') {
+    const only = /^(?:רק\s+|לפתוח\s+(?:רק\s+)?)?([\d\s,ו\-]+)$/.exec(n);
+    const yes = MeetingAudio.BTN.open && (WaUi.normalize(MeetingAudio.BTN.open) === n || /^לפתוח(\s+(אותן|משימות|את\s+המשימות))?$/.test(n) || WaUi.YES.test(n));
+    if (yes || only) {
+      const reply = MeetingAudio.openTasks(actor, d, {
+        createTask: hooks.createTask, assignBlockReason: hooks.assignBlockReason, taskLink, dry,
+        only: only ? [...new Set((only[1].match(/\d+/g) ?? []).map(Number))] : null
+      });
+      return out(reply, { draft: null }, { action: 'meeting_audio', status: 'ok', result: `משימות מהפגישה "${d.title}": ${reply.split('\n')[0]}`.slice(0, 300) });
+    }
+    if (WaUi.NO.test(n) || CANCEL.test(t)) return out('בסדר, לא נפתחו משימות. ההקלטה והסיכום נשארים במשימון 👍', { draft: null }, { action: 'meeting_audio', status: 'ok', result: `לא: משימות מ"${d.title}"`.slice(0, 300) });
+  }
+  return null;
+}
+
 async function handleDirect(msg) {
   const user = userByPhone(msg.phone);
   if (!user) {
@@ -2895,6 +3168,39 @@ async function handleDirect(msg) {
   let text = msg.text;
   const voice = !text && Boolean(msg.audio);
   let notice = null;
+  // 🎨 תמונה עם הכיתוב "לוגו" / "לוגו <חברה>" — הלוגו למודעות ולמכתבים. רק מנהלים (לא עובד מן השורה)
+  const logoAsk = msg.file && /^image\//i.test(msg.file.mime ?? '') ? Notice.logoCaption(text) : null;
+  if (logoAsk && WaActions.allowed(actor, 'notices')) {
+    let reply;
+    if (actor.role === 'employee') {
+      reply = 'רק מנהלים יכולים לעדכן את הלוגו של המודעות. אפשר לבקש ממנהל המחלקה 🙏';
+    } else {
+      try {
+        const file = await Speech.download(msg.file.url, msg.file.mime);
+        const name = Notice.saveLogo(file, logoAsk.name);
+        reply = `✅ הלוגו נשמר${name ? ` בשם *${name}* — במודעה: "עם הלוגו של ${name}"` : ' — מעכשיו הוא במודעות ובמכתבים'}.`;
+      } catch (err) {
+        reply = `לא הצלחתי לשמור את הלוגו: ${err.message}`;
+      }
+    }
+    log({ ...base, text: `[🖼 ${text}]`, action: 'notices', status: 'ok', result: reply.slice(0, 300) });
+    await sendText(msg.chatId, reply);
+    return;
+  }
+  // 🎙 הקלטת פגישה — קובץ שמע, או הודעה קולית ארוכה (או אחרי "הקלטת פגישה"): שואלים לאיזו פגישה
+  const meetingAudioOn = meetingAudioAllowed(actor);
+  if (meetingAudioOn && msg.file && MeetingAudio.isAudioFile(msg.file)) {
+    await receiveMeetingAudio(user, msg, base, () => Speech.download(msg.file.url, msg.file.mime).then((f) => ({ ...f, name: msg.file.name })));
+    return;
+  }
+  let voiceFile = null;
+  if (voice && meetingAudioOn) {
+    try { voiceFile = await Speech.download(msg.audio.url, msg.audio.mime); } catch { /* ננסה שוב בתמלול */ }
+    if (voiceFile && MeetingAudio.isMeetingVoice(user.id, voiceFile.buf)) {
+      await receiveMeetingAudio(user, msg, base, async () => voiceFile);
+      return;
+    }
+  }
   if (voice && Speech.isEnabled() && WaActions.allowed(actor, 'voice_notes')) {
     // התמלול לבדו לוקח כמה שניות — מודיעים מיד שההקלטה התקבלה, בלי לחכות
     // לשליחה: ההורדה והתמלול רצים במקביל (ההודעה תמיד יוצאת לפני התשובה)
@@ -2909,7 +3215,7 @@ async function handleDirect(msg) {
       return;
     }
     try {
-      const file = await Speech.download(msg.audio.url, msg.audio.mime);
+      const file = voiceFile ?? await Speech.download(msg.audio.url, msg.audio.mime);
       const compare = Boolean(D.getSetting('speech_compare', false));
       const r = await Speech.transcribeDetailed(file.buf, file.mime, { compare });
       text = r.text;
@@ -3099,6 +3405,16 @@ async function handleDirect(msg) {
   const fwdNote = forwards.length ? ` (+${forwards.filter((x) => x.kind === 'forward').length} מועברות)` : '';
   log({ ...base, text: `${voice ? `🎙 ${said}` : said}${fwdNote}`, action: r.action, status: r.status, result: r.result, taskId: r.taskId ?? null, reply });
   // הודעה ארוכה מדי — בכמה הודעות; כפתורי תשובה (התפריט) — על האחרונה
+  // קובץ (מודעה, מכתב) — לפני הטקסט, כדי שהשאלה "מאשר?" תהיה ההודעה האחרונה
+  for (const f of r.files ?? []) {
+    try {
+      const ch = channel();
+      if (ch) await WhatsApp.sendFile(ch, msg.chatId, f);
+    } catch (err) {
+      console.error('[משימון] שליחת קובץ מהבוט נכשלה:', err.message);
+      log({ ...base, text: `[📄 ${f.fileName}]`, action: r.action, status: 'error', result: err.message });
+    }
+  }
   const replyParts = splitMessage(reply);
   for (let i = 0; i < replyParts.length; i++) {
     if (i === replyParts.length - 1 && r.buttons?.length) await sendButtons(msg.chatId, replyParts[i], r.buttons);
@@ -3308,6 +3624,21 @@ async function mailAlertFor(userId) {
   let text;
   let draft;
   let reply = null;
+  // 📅 מייל שמבקש להיפגש — "לשלוח לו 3 מועדים?" במקום "לפתוח משימה?"
+  const actorU = Auth.loadActor('user', userId);
+  if (head.d.meeting && actorU && WaActions.allowed(actorU, 'meet_coord') && Gmail.canSend(userId) && (Gmail.has(userId, 'freebusy') || Gmail.has(userId, 'calendar'))) {
+    const offer = MeetCoord.offerForMail(head, ids);
+    try {
+      await sendButtons(chatId, offer.text, offer.buttons);
+      rememberBot(userId, offer.text);
+      const now = chatOf(userId);
+      if (!now.awaiting && !(now.draft && now.draft.kind !== 'menu')) saveChat(userId, { ...now, draft: offer.draft, awaiting: true });
+      log({ channel: 'summary', chatId, userId, who: u.full_name, action: 'meet_coord', status: 'ok', result: `📧 ${head.from_name}: בקשה לפגישה — ${oneLine(head.subject, 100)}` });
+    } catch (err) {
+      log({ channel: 'summary', chatId, userId, who: u.full_name, action: 'meet_coord', status: 'error', result: err.message });
+    }
+    return;
+  }
   if (withReply && Gmail.canSend(Gmail.handle(userId, withReply.d.reply.box ?? 0))) {
     reply = await MailInsights.completeReply(userId, withReply.d.reply).catch((err) => {
       log({ channel: 'summary', chatId, userId, who: u.full_name, action: 'mail_alert', status: 'error', result: `השלמת התשובה: ${err.message}` });
@@ -3338,6 +3669,194 @@ async function mailAlerts() {
   for (const userId of mailAlertUsers()) {
     await mailAlertFor(userId).catch((err) => console.error('[משימון] פנייה על מייל חדש נכשלה:', err.message));
   }
+}
+
+// ---------------------------------------------------------------------------
+// הודעה יזומה עם קבצים וכפתורים — וטיוטה שמחכה לתשובה (כשהעובד לא באמצע משהו אחר)
+// ---------------------------------------------------------------------------
+
+async function pushToUser(userId, { text, files = [], buttons = [], draft = null }, action) {
+  const u = D.get("SELECT id, full_name, phone FROM users WHERE id = ? AND status = 'active'", userId);
+  const ch = channel();
+  if (!u?.phone || !ch) return false;
+  const chatId = `${u.phone}@c.us`;
+  const st = chatOf(userId);
+  const busy = st.awaiting && st.draft && st.draft.kind !== draft?.kind;
+  try {
+    for (const f of files) await WhatsApp.sendFile(ch, chatId, f);
+    const parts = splitMessage(text);
+    for (let i = 0; i < parts.length; i++) {
+      if (i === parts.length - 1 && buttons.length && !busy) await sendButtons(chatId, parts[i], buttons);
+      else await sendText(chatId, parts[i]);
+    }
+    rememberBot(userId, text);
+    if (draft && !busy) saveChat(userId, { ...chatOf(userId), draft, awaiting: true });
+    log({ channel: 'summary', chatId, userId, who: u.full_name, action, status: 'ok', result: text.split('\n')[0].slice(0, 300) });
+    return true;
+  } catch (err) {
+    log({ channel: 'summary', chatId, userId, who: u.full_name, action, status: 'error', result: err.message });
+    return false;
+  }
+}
+
+/** הודעה מדומה לתור של העובד (אחרי התשובה הנוכחית) — "קבלת סחורה" עם קובץ, "דרישת רכש …" */
+function enqueueAs(userId, m) {
+  const u = D.get('SELECT phone FROM users WHERE id = ?', userId);
+  if (!u?.phone) return;
+  const msg = { chatId: `${u.phone}@c.us`, phone: u.phone, kind: 'textMessage', forwarded: false, audio: null, file: null, id: `bot-${Date.now()}`, ...m };
+  const prev = chains.get(msg.phone) ?? Promise.resolve();
+  const next = prev.then(() => handleDirect(msg))
+    .catch((err) => console.error('[משימון] הודעה פנימית לבוט נכשלה:', err.message))
+    .finally(() => { if (chains.get(msg.phone) === next) chains.delete(msg.phone); });
+  chains.set(msg.phone, next);
+}
+
+// 📅 תיאום פגישה — שליחה / קביעה ברקע, ותשובות שמגיעות
+function meetCoordRun(actor, fn) {
+  setImmediate(async () => {
+    try {
+      await pushToUser(actor.id, { text: await fn() }, 'meet_coord');
+    } catch (err) {
+      console.error('[משימון] תיאום פגישה נכשל:', err.message);
+      await pushToUser(actor.id, { text: `לא הצלחתי להשלים את תיאום הפגישה: ${err.message}` }, 'meet_coord');
+    }
+  });
+}
+let meetCoordAt = 0;
+async function meetCoordTick() {
+  if (!WaActions.byKey('meet_coord')?.enabled || Date.now() - meetCoordAt < 5 * 60 * 1000) return;
+  meetCoordAt = Date.now();
+  await MeetCoord.tick({ push: (userId, m) => pushToUser(userId, m, 'meet_coord') }).catch((err) => console.error('[משימון] מעקב תיאום פגישות נכשל:', err.message));
+}
+
+// 🛒 פנייה לספקים — החיפוש והשליחה ברקע (חיפוש ברשת לוקח זמן)
+function rfqPrepare(actor, rfqId) {
+  setImmediate(async () => {
+    try {
+      const r = await Rfq.prepare(actor.id, rfqId);
+      await pushToUser(actor.id, { text: r.text, buttons: r.buttons ?? [], draft: r.draft ?? null }, 'rfq');
+    } catch (err) {
+      console.error('[משימון] חיפוש ספקים נכשל:', err.message);
+      await pushToUser(actor.id, { text: 'לא הצלחתי למצוא ספקים כרגע 😕 נסו שוב בעוד כמה דקות.' }, 'rfq');
+    }
+  });
+}
+function rfqSend(actor, rfqId) {
+  setImmediate(async () => {
+    try {
+      const text = await Rfq.send(actor.id, rfqId, { createTask: hooks.createTask, actor });
+      await pushToUser(actor.id, { text }, 'rfq');
+    } catch (err) {
+      console.error('[משימון] שליחה לספקים נכשלה:', err.message);
+      await pushToUser(actor.id, { text: `השליחה לספקים נכשלה: ${err.message}` }, 'rfq');
+    }
+  });
+}
+let rfqAt = 0;
+async function rfqTick() {
+  if (!WaActions.byKey('rfq')?.enabled || Date.now() - rfqAt < 5 * 60 * 1000) return;
+  rfqAt = Date.now();
+  await Rfq.tick({
+    notify: (userId, text) => pushToUser(userId, { text }, 'rfq'),
+    summary: (userId, s) => pushToUser(userId, s, 'rfq')
+  }).catch((err) => console.error('[משימון] מעקב הצעות מחיר נכשל:', err.message));
+}
+
+// ---------------------------------------------------------------------------
+// 📬 פעולות לפי המיילים: "זכרת?" על דדליין, וחשבונית ← קבלת סחורה (‎mail-actions.js‎)
+// ---------------------------------------------------------------------------
+
+let mailActionsAt = 0;
+async function mailActionAlerts() {
+  if (Date.now() - mailActionsAt < 2 * 60 * 1000) return;
+  mailActionsAt = Date.now();
+  const on = { deadline: WaActions.byKey('mail_deadline')?.enabled, goods: WaActions.byKey('goods_offer')?.enabled, form: WaActions.byKey('form_fill')?.enabled };
+  if (!on.deadline && !on.goods && !on.form) return;
+  for (const u of orgUsers()) {
+    if (!u.phone) continue;
+    const prefs = D.userPrefs(u.id)?.botPrefs ?? {};
+    const actor = Auth.loadActor('user', u.id);
+    if (!actor) continue;
+    const allow = {
+      deadline: Boolean(on.deadline && prefs.mailDeadline !== false && WaActions.allowed(actor, 'mail_deadline')),
+      goods: Boolean(on.goods && prefs.goodsOffer !== false && WaActions.allowed(actor, 'goods_offer') && WaActions.allowed(actor, 'goods_receipt')),
+      form: Boolean(on.form && prefs.formOffer !== false && WaActions.allowed(actor, 'form_fill') && Gmail.canSend(u.id))
+    };
+    if (!allow.deadline && !allow.goods && !allow.form) continue;
+    // באמצע שיחה מול הבוט — לא קוטעים; השאלה מחכה לסבב הבא
+    const st = chatOf(u.id);
+    if (st.awaiting || (st.draft && st.draft.kind !== 'menu') || GoodsReceipt.active(u.id) || PurchaseDemand.active(u.id)) continue;
+    const q = MailActions.nextQuestion(u.id, allow);
+    if (!q) continue;
+    const chatId = `${u.phone}@c.us`;
+    try {
+      await sendButtons(chatId, q.text, q.buttons);
+      rememberBot(u.id, q.text);
+      const now = chatOf(u.id);
+      if (!now.awaiting && !(now.draft && now.draft.kind !== 'menu')) saveChat(u.id, { ...now, draft: q.draft, awaiting: true });
+      log({ channel: 'summary', chatId, userId: u.id, who: u.full_name, action: q.action, status: 'ok', result: q.log.slice(0, 300) });
+    } catch (err) {
+      log({ channel: 'summary', chatId, userId: u.id, who: u.full_name, action: q.action, status: 'error', result: err.message });
+    }
+  }
+  MailActions.prune();
+  FormFill.prune();
+}
+
+/** "קבלת סחורה" על חשבונית מהמייל — הקובץ יורד מ-Gmail ונכנס לקבלת הסחורה כאילו נשלח לבוט */
+function startGoodsFromMail(user, goodsId) {
+  setImmediate(async () => {
+    const row = D.get('SELECT * FROM mail_goods_docs WHERE id = ? AND user_id = ?', goodsId, user.id);
+    const u = D.get('SELECT id, full_name, phone FROM users WHERE id = ?', user.id);
+    if (!row || !u?.phone) return;
+    const chatId = `${u.phone}@c.us`;
+    try {
+      const file = await MailActions.goodsFile(row);
+      // אחרי התשובה הנוכחית (אותו תור לכל עובד) — בדיוק כמו קובץ שנשלח עם "קבלת סחורה"
+      // לא דרך ‎dispatch‎: מחוץ לשעות הוא דוחה לתור שנשמר במסד, והקובץ (‎buf‎) לא נשמר שם
+      enqueueAs(u.id, { text: 'קבלת סחורה', kind: 'documentMessage', file, id: `mail-goods-${row.id}` });
+    } catch (err) {
+      console.error('[משימון] הורדת חשבונית מהמייל נכשלה:', err.message);
+      log({ channel: 'summary', chatId, userId: u.id, who: u.full_name, action: 'goods_offer', status: 'error', result: `הורדה מ-Gmail: ${err.message}`.slice(0, 300) });
+      D.run("UPDATE mail_goods_docs SET status = 'pending' WHERE id = ?", row.id);
+      await sendText(chatId, `לא הצלחתי להוריד את ${row.filename} מהמייל 😕 אפשר להעביר לי את הקובץ ישירות, ואתחיל קבלת סחורה.`).catch(() => {});
+    }
+  });
+}
+
+// ---------------------------------------------------------------------------
+// 🎥 אחרי פגישה מוקלטת — הבוט שואל את המשתתפים מה לשלוח (‎meeting-followup.js‎)
+// ---------------------------------------------------------------------------
+
+let followupsAt = 0;
+async function meetingFollowups() {
+  if (!WaActions.byKey('meeting_followup')?.enabled || Date.now() - followupsAt < 2 * 60 * 1000) return;
+  followupsAt = Date.now();
+  await MeetingFollowup.sweep({
+    eligible: (userId) => {
+      if (D.userPrefs(userId)?.botPrefs?.meetingFollowup === false) return false;
+      const actor = Auth.loadActor('user', userId);
+      return Boolean(actor && WaActions.allowed(actor, 'meeting_followup'));
+    },
+    // באמצע שיחה מול הבוט — לא קוטעים; הפנייה מחכה לסבב הבא
+    busy: (userId) => {
+      const st = chatOf(userId);
+      return st.awaiting || Boolean(st.draft && st.draft.kind !== 'menu') || GoodsReceipt.active(userId) || PurchaseDemand.active(userId);
+    },
+    send: async (userId, text, buttons, m) => {
+      const u = D.get("SELECT id, full_name, phone FROM users WHERE id = ?", userId);
+      const chatId = `${u.phone}@c.us`;
+      try {
+        await sendButtons(chatId, text, buttons);
+        rememberBot(userId, text);
+        log({ channel: 'summary', chatId, userId, who: u.full_name, action: 'meeting_followup', status: 'ok', result: `🎥 ${m.title} (${m.source})`.slice(0, 300), taskId: m.data?.taskId ?? null });
+      } catch (err) {
+        log({ channel: 'summary', chatId, userId, who: u.full_name, action: 'meeting_followup', status: 'error', result: err.message });
+      }
+    }
+  }).catch((err) => console.error('[משימון] פנייה אחרי פגישה נכשלה:', err.message));
+  MeetingFollowup.prune();
+  MeetingAudio.prune();
 }
 
 // ---------------------------------------------------------------------------
@@ -3380,6 +3899,20 @@ function sendProactive(userId, chatId, text, { taskId = null, action = 'assignme
 async function offerOutreach(userId, chatId, taskId, who = '') {
   try {
     const actor = Auth.loadActor('user', userId);
+    // 📅 משימה של "פגישה לקביעה" — הצעה לתאם אותה (3 מועדים במייל), במקום נוסח מייל רגיל
+    const task = D.get('SELECT id, title, description, meeting_pending FROM tasks WHERE id = ?', taskId);
+    if (actor && task?.meeting_pending && WaActions.allowed(actor, 'meet_coord')) {
+      const st = chatOf(userId);
+      const offer = st.awaiting ? null : await MeetCoord.offerForTask(actor, task, { searchContacts: hooks.mail?.searchContacts }).catch(() => null);
+      if (offer) {
+        await sendButtons(chatId, offer.text, offer.buttons);
+        rememberBot(userId, offer.text);
+        const now = chatOf(userId);
+        if (!now.awaiting) saveChat(userId, { ...now, draft: offer.draft, awaiting: true });
+        log({ channel: 'summary', chatId, userId, who, action: 'meet_coord', status: 'ok', result: `לתאם: ${task.title}`.slice(0, 300), taskId });
+        return;
+      }
+    }
     if (!actor || !hooks.mail?.sendOutreach || !WaActions.allowed(actor, 'send_email')) return;
     const row = await TaskOutreach.prepare(taskId, actor);
     if (!row || !['ready', 'no_contact'].includes(row.state)) return;
@@ -3681,6 +4214,10 @@ async function tick() {
       await sendSummaries();
       await flushOutbox();
       await mailAlerts();
+      await meetingFollowups();
+      await mailActionAlerts();
+      await rfqTick();
+      await meetCoordTick();
       await warmInsights();
     }
     if (Claude.isEnabled() && WaActions.byKey('group_tasks')?.enabled) await processGroups();
@@ -3692,8 +4229,8 @@ async function tick() {
   }
 }
 
-function init({ createTask, listProjectsFor, newTaskProjects, assignableUserIds, assignBlockReason, taskTemplates, tasks, mail }) {
-  Object.assign(hooks, { createTask, listProjectsFor, newTaskProjects, assignableUserIds, assignBlockReason, taskTemplates, tasks, mail });
+function init({ createTask, listProjectsFor, newTaskProjects, assignableUserIds, assignBlockReason, taskTemplates, tasks, mail, files = null }) {
+  Object.assign(hooks, { createTask, listProjectsFor, newTaskProjects, assignableUserIds, assignBlockReason, taskTemplates, tasks, mail, files });
 }
 
 function start() {

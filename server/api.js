@@ -2739,6 +2739,13 @@ router.post('/api/tasks/:id/comments', async (req, res, ctx) => {
  */
 const MIME_BY_EXT = {
   wav: 'audio/wav',
+  ogg: 'audio/ogg',
+  opus: 'audio/ogg',
+  m4a: 'audio/mp4',
+  mp3: 'audio/mpeg',
+  aac: 'audio/aac',
+  amr: 'audio/amr',
+  webm: 'audio/webm',
   eml: 'message/rfc822',
   msg: 'application/vnd.ms-outlook'
 };

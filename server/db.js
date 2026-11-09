@@ -743,6 +743,170 @@ CREATE TABLE IF NOT EXISTS calendar_reminders (
   PRIMARY KEY (uid, start_at, user_id)
 );
 
+/*
+ * 🎥 אחרי פגישה מוקלטת — לכל משתתף פנייה אחת (‎ai/meeting-followup.js‎). ‎source‎:
+ * ‎zoom‎ (‎ref‎ = ‎meetings.id‎) או ‎timeless‎ (‎ref‎ = מזהה הפגישה ב-Timeless). נמחק אחרי חודש.
+ */
+CREATE TABLE IF NOT EXISTS meeting_followups (
+  source     TEXT    NOT NULL,
+  ref        TEXT    NOT NULL,
+  user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  title      TEXT    NOT NULL DEFAULT '',
+  start_at   TEXT    NOT NULL,
+  end_at     TEXT    NOT NULL,
+  data       TEXT    NOT NULL DEFAULT '{}',
+  sent_at    TEXT    NOT NULL,
+  PRIMARY KEY (source, ref, user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_meeting_followups_user ON meeting_followups (user_id, sent_at);
+
+/*
+ * 🎙 הקלטת פגישה שנשלחה לבוט (‎ai/meeting-audio.js‎). הקובץ שמור ב-‎uploads/meeting-audio‎ עד
+ * שהוא מצורף למשימת הפגישה (‎task_id‎), ואז נמחק משם. ‎meeting‎ — הפגישה שנבחרה (נושא, מועד, משתתפים).
+ * ‎status‎: choose / transcribing / ready / empty / error / expired.
+ */
+CREATE TABLE IF NOT EXISTS meeting_audio (
+  id               INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id          INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  stored_name      TEXT    NOT NULL,
+  filename         TEXT    NOT NULL DEFAULT '',
+  mime             TEXT    NOT NULL DEFAULT '',
+  size             INTEGER NOT NULL DEFAULT 0,
+  status           TEXT    NOT NULL DEFAULT 'choose',
+  meeting          TEXT,
+  task_id          INTEGER REFERENCES tasks(id) ON DELETE SET NULL,
+  digest           TEXT,
+  transcript_chars INTEGER,
+  error            TEXT,
+  created_at       TEXT    NOT NULL
+);
+
+/*
+ * 📄 חשבונית / תעודת משלוח שהגיעה במייל (‎ai/mail-actions.js‎) — הבוט מציע קבלת סחורה, והקובץ
+ * יורד מ-Gmail רק כשהעובד אומר "כן". ‎status‎: pending / asked / later / started / declined.
+ */
+CREATE TABLE IF NOT EXISTS mail_goods_docs (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  gmail_id     TEXT    NOT NULL,
+  box          INTEGER NOT NULL DEFAULT 0,
+  kind         TEXT    NOT NULL DEFAULT 'invoice',
+  filename     TEXT    NOT NULL,
+  mime         TEXT    NOT NULL DEFAULT '',
+  supplier     TEXT    NOT NULL DEFAULT '',
+  from_name    TEXT    NOT NULL DEFAULT '',
+  from_email   TEXT    NOT NULL DEFAULT '',
+  subject      TEXT    NOT NULL DEFAULT '',
+  status       TEXT    NOT NULL DEFAULT 'pending',
+  snooze_until TEXT,
+  asked_at     TEXT,
+  decided_at   TEXT,
+  created_at   TEXT    NOT NULL,
+  UNIQUE (user_id, gmail_id, filename)
+);
+
+/*
+ * 🛒 פנייה לספקים להצעת מחיר (‎ai/rfq.js‎). ‎item‎ — מה מבוקש (JSON), ‎draft‎ — נושא וגוף המייל.
+ * ‎status‎: draft / review / sent / summarized / closed / cancelled.
+ */
+CREATE TABLE IF NOT EXISTS rfq (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id       INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  status        TEXT    NOT NULL DEFAULT 'draft',
+  request       TEXT    NOT NULL DEFAULT '',
+  item          TEXT    NOT NULL DEFAULT '{}',
+  draft         TEXT    NOT NULL DEFAULT '{}',
+  deadline_at   TEXT,
+  sent_at       TEXT,
+  polled_at     TEXT,
+  summarized_at TEXT,
+  task_id       INTEGER REFERENCES tasks(id) ON DELETE SET NULL,
+  created_at    TEXT    NOT NULL
+);
+/* ספק בפנייה — ‎status‎: pending / no_email / sent / replied / declined / failed / skipped. ‎offer‎ — מה חולץ מהתשובה */
+CREATE TABLE IF NOT EXISTS rfq_vendors (
+  id             INTEGER PRIMARY KEY AUTOINCREMENT,
+  rfq_id         INTEGER NOT NULL REFERENCES rfq(id) ON DELETE CASCADE,
+  name           TEXT    NOT NULL,
+  email          TEXT    NOT NULL DEFAULT '',
+  phone          TEXT    NOT NULL DEFAULT '',
+  source         TEXT    NOT NULL DEFAULT '',
+  source_url     TEXT    NOT NULL DEFAULT '',
+  reason         TEXT    NOT NULL DEFAULT '',
+  status         TEXT    NOT NULL DEFAULT 'pending',
+  message_id     TEXT,
+  gmail_id       TEXT,
+  thread_id      TEXT,
+  sent_at        TEXT,
+  reply_at       TEXT,
+  reply_gmail_id TEXT,
+  offer          TEXT,
+  error          TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_rfq_vendors_msg ON rfq_vendors(message_id);
+
+/*
+ * 📝 טופס ריק שהגיע במייל, כשהעובד הוא הנמען הראשי (‎ai/form-fill.js‎). ‎fill‎ — מה מולא (JSON),
+ * ‎out_name‎ — שם הקובץ הממולא (נשמר ב-‎uploads/forms‎ עד השליחה). ‎status‎: pending / asked / filled / sent / declined.
+ */
+CREATE TABLE IF NOT EXISTS mail_forms (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  gmail_id    TEXT    NOT NULL,
+  box         INTEGER NOT NULL DEFAULT 0,
+  filename    TEXT    NOT NULL,
+  mime        TEXT    NOT NULL DEFAULT '',
+  title       TEXT    NOT NULL DEFAULT '',
+  from_name   TEXT    NOT NULL DEFAULT '',
+  from_email  TEXT    NOT NULL DEFAULT '',
+  subject     TEXT    NOT NULL DEFAULT '',
+  message_id  TEXT    NOT NULL DEFAULT '',
+  status      TEXT    NOT NULL DEFAULT 'pending',
+  fill        TEXT,
+  out_name    TEXT,
+  asked_at    TEXT,
+  decided_at  TEXT,
+  created_at  TEXT    NOT NULL,
+  UNIQUE (user_id, gmail_id, filename)
+);
+
+/*
+ * 📅 תיאום פגישה עם גורם חיצוני (‎ai/meeting-coord.js‎): 3 מועדים במייל, וקביעה כשעונים.
+ * ‎source‎: bot / task / mail. ‎reply_to‎ — ה-Message-ID של המייל שעליו עונים (טריגר מייל).
+ * ‎status‎: review / waiting / booked / needs_user / declined / cancelled / expired.
+ */
+CREATE TABLE IF NOT EXISTS meet_coord (
+  id             INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id        INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  status         TEXT    NOT NULL DEFAULT 'review',
+  contact        TEXT    NOT NULL DEFAULT '{}',
+  prefs          TEXT    NOT NULL DEFAULT '{}',
+  slots          TEXT    NOT NULL DEFAULT '[]',
+  task_id        INTEGER REFERENCES tasks(id) ON DELETE SET NULL,
+  source         TEXT    NOT NULL DEFAULT 'bot',
+  reply_to       TEXT    NOT NULL DEFAULT '',
+  box            INTEGER NOT NULL DEFAULT 0,
+  gmail_ref      TEXT    NOT NULL DEFAULT '',
+  suggestion_ids TEXT    NOT NULL DEFAULT '[]',
+  message_id     TEXT,
+  thread_id      TEXT,
+  sent_at        TEXT,
+  polled_at      TEXT,
+  booked_at      TEXT,
+  meeting_id     INTEGER,
+  created_at     TEXT    NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_meet_coord_msg ON meet_coord(message_id);
+
+/* סיכום, החלטות ומשימות של פגישה — פעם אחת לפגישה, לכל המשתתפים. נמחק אחרי חודש */
+CREATE TABLE IF NOT EXISTS meeting_digests (
+  source     TEXT    NOT NULL,
+  ref        TEXT    NOT NULL,
+  data       TEXT    NOT NULL,
+  created_at TEXT    NOT NULL,
+  PRIMARY KEY (source, ref)
+);
+
 CREATE TABLE IF NOT EXISTS reply_rules (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
   user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -1403,7 +1567,7 @@ const DEFAULT_SETTINGS = {
   max_upload_mb: 25,
   // ‎wav‎ הוא הקלטת קול — הודעה קולית בתגובה או תיעוד שיחה מצורף למשימה
   // ‎eml‎ ו-‎msg‎ הם קובצי מייל שמורים — ‎eml‎ תקן פתוח, ‎msg‎ של Outlook
-  allowed_extensions: ['pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'png', 'jpg', 'jpeg', 'gif', 'svg', 'zip', 'ai', 'psd', 'mp4', 'wav', 'eml', 'msg', 'txt', 'csv'],
+  allowed_extensions: ['pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'png', 'jpg', 'jpeg', 'gif', 'svg', 'zip', 'ai', 'psd', 'mp4', 'wav', 'eml', 'msg', 'txt', 'csv', 'ogg', 'opus', 'm4a', 'mp3', 'aac', 'amr', 'webm'],
   recurring_default_policy: 'skip_if_open', // לא נוצר מופע כפול עד לסגירת הקודם
   org_name: 'MESIMON',
   // כתובת המערכת כפי שמשתמשים מגיעים אליה — קישורי ההזמנות נבנים ממנה
@@ -1449,6 +1613,10 @@ const DEFAULT_SETTINGS = {
   meeting_default_minutes: 30,             // משך ברירת מחדל
   meeting_buffer_minutes: 10,              // מרווח מפגישה צמודה בהצעת מועדים
   meeting_reminder_minutes: 15,            // כמה דקות לפני — התראה ובוט הוואטסאפ, עם קישור הפגישה
+  meeting_followup_minutes: 15,            // כמה דקות אחרי סוף פגישה מוקלטת — הבוט שואל את המשתתפים מה לשלוח
+  meeting_audio_min_kb: 1024,              // הודעה קולית גדולה מזה (כ-8 דקות) לבוט = הקלטת פגישה, והבוט שואל לאיזו פגישה לשייך
+  rfq_daily_max: 20,                       // פנייה לספקים: כמה מיילים לכל היותר לעובד ביום (לא להיחשב דואר זבל)
+  bot_pilot: true,                         // 🧪 היכולות החדשות בבוט (סבב Instinct) — רק למנהלי המערכת, עד "פתח את היכולות החדשות לכולם"
   meeting_ai_alternatives: true,           // הצעות AI להזזת פגישות חופפות
   meeting_record_default: false,           // "הקלטה אוטומטית לענן" מסומן מראש בפגישת Zoom חדשה
   meeting_office_address: '',              // "🏢 במשרד" בקביעת פגישה — הכתובת שנכנסת למיקום ביומן ובהזמנה
@@ -1863,7 +2031,8 @@ function migrate() {
     setSetting('migr_memory_conservative', true);
   }
 
-  const ADDED_EXTENSIONS = ['wav', 'eml', 'msg'];
+  // ‎ogg‎…‎webm‎ — הקלטות פגישה מוואטסאפ (‎ai/meeting-audio.js‎), מצורפות למשימת הפגישה
+  const ADDED_EXTENSIONS = ['wav', 'eml', 'msg', 'ogg', 'opus', 'm4a', 'mp3', 'aac', 'amr', 'webm'];
   const currentExt = getSetting('allowed_extensions', null);
   if (Array.isArray(currentExt)) {
     const missing = ADDED_EXTENSIONS.filter((e) => !currentExt.includes(e));
