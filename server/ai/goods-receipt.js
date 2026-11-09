@@ -794,7 +794,7 @@ async function useOrders(s, orders, forced) {
     // שורת הנחה / זיכוי — לא שורת הזמנה
     const hit = isCredit(l) ? null : m.matches.find((x) => x.doc_line === l.n && x.order === chosen && x.line);
     const ol = hit && order?.lines.find((x) => Number(x.LINE) === Number(hit.line));
-    l.order = ol ? { ordname: order.ORDNAME, line: ol.LINE, des: ol.PDES, part: ol.PARTNAME, balance: ol.TBALANCE, confidence: hit.confidence } : null;
+    l.order = ol ? { ordname: order.ORDNAME, line: ol.LINE, des: ol.PDES, part: ol.PARTNAME, balance: ol.TBALANCE, price: ol.PRICE ?? null, pct: ol.PERCENT ?? 0, confidence: hit.confidence } : null;
   }
   if (order && s.lines.some((l) => l.order)) {
     s.order = { ordname: order.ORDNAME, project: order.PROJDOCNO, projectDes: order.PROJDES, payCode: order.PAYCODE ?? null, warehouse: order.WARHSNAME ?? null };
@@ -803,10 +803,32 @@ async function useOrders(s, orders, forced) {
   return askLines(s);
 }
 
+/*
+ * 🧾 חשבונית מול הזמנה (רעיון 12, הוחלט 09.11.26): רק כשיש הזמנה פתוחה של אותו ספק והשורות הותאמו —
+ * מקפיצים את ההפרשים: כמות מעל היתרה בהזמנה, ומחיר נטו ליחידה ששונה ביותר מ-1% מהמחיר בהזמנה.
+ */
+const net = (price, pct) => Number(price) * (1 - (Number(pct) || 0) / 100);
+function orderDiffs(s) {
+  if (!s.order) return [];
+  const out = [];
+  for (const l of s.lines) {
+    if (!l.order || isCredit(l)) continue;
+    if (Number(l.qty) > Number(l.order.balance)) out.push(`*${l.n}.* ${l.description}: כמות ${qtyText(l.qty)} — ביתרת ההזמנה ${qtyText(l.order.balance)} (+${qtyText(Number(l.qty) - Number(l.order.balance))})`);
+    if (l.price > 0 && l.order.price > 0) {
+      const doc = net(l.price, l.discount);
+      const ord = net(l.order.price, l.order.pct);
+      if (Math.abs(doc - ord) / ord > 0.01) out.push(`*${l.n}.* ${l.description}: מחיר ליחידה ${money(doc)} — בהזמנה ${money(ord)} (${doc > ord ? '+' : ''}${money(doc - ord)} ליחידה${Number(l.qty) ? `, ${doc > ord ? '+' : ''}${money((doc - ord) * Number(l.qty))} בסה"כ` : ''})`);
+    }
+  }
+  return out;
+}
+
 function askLines(s) {
   s.step = 'lines';
   const others = s.order ? '' : (s.ordersChecked ? 'לא מצאתי התאמה בהזמנות הפתוחות של הספק — נקלט לפי המסמך.\n' : '');
-  return reply(s, [s.order ? `🧾 לפי הזמנה *${s.order.ordname}*` : '🧾 ללא הזמנה', others, linesTable(s), '',
+  const diffs = orderDiffs(s);
+  return reply(s, [s.order ? `🧾 לפי הזמנה *${s.order.ordname}*` : '🧾 ללא הזמנה', others, linesTable(s),
+    diffs.length ? `\n⚠️ *הפרשים מול ההזמנה ${s.order.ordname}:*\n${diffs.join('\n')}` : null, '',
     '*זה מה שהתקבל בפועל?*', '*כן* 👍 — להמשך. משהו חסר, נשבר או הוחזר — כתבו מה ("מלט קיבלתי רק 100, 100 שבורים הוחזרו").'].filter(Boolean).join('\n'));
 }
 
@@ -2272,4 +2294,4 @@ const inMenu = (userId) => { const s = load(userId); return Boolean(fresh(s) && 
 /** בחירה בזרימה אחרת (דרישת רכש) — התפריט יורד */
 function dropMenu(userId) { const s = load(userId); if (s?.step === 'menu') clear(userId, s); }
 
-module.exports = { inMenu, dropMenu, isTrigger, isPriority, opens, active, pending, pausedNote, abandon, switchCancels, wantsUndoFinal, handle, sweep, _jpegToPdf: jpegToPdf, _codeLines: codeLines, _similarLines: similarLines, _askParts: askParts, _projectsOf: projectsOf, _findProjects: findProjects, _ai: ai, _load: load, _clear: (userId) => clear(userId, load(userId)) };
+module.exports = { inMenu, dropMenu, isTrigger, isPriority, opens, active, pending, pausedNote, abandon, switchCancels, wantsUndoFinal, handle, sweep, _jpegToPdf: jpegToPdf, _codeLines: codeLines, _orderDiffs: orderDiffs, _similarLines: similarLines, _askParts: askParts, _projectsOf: projectsOf, _findProjects: findProjects, _ai: ai, _load: load, _clear: (userId) => clear(userId, load(userId)) };
