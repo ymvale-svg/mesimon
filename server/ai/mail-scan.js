@@ -33,6 +33,7 @@ const P = require('../permissions');
 const Docs = require('../doc-text');
 const Memory = require('./mail-memory');
 const Closure = require('./task-closure');
+const MailActions = require('./mail-actions');
 
 const SKILL_PATH = path.join(__dirname, 'skills', 'email-to-tasks.md');
 const TZ = 'Asia/Jerusalem';
@@ -168,9 +169,11 @@ const ANALYSIS_SCHEMA = {
       }
     }
   },
-  required: ['for_me', 'reply_expected', 'addressed_to_email', 'skip_reason', 'warning', 'tasks'],
+  required: ['for_me', 'reply_expected', 'addressed_to_email', 'skip_reason', 'warning', 'tasks', 'goods_document'],
   additionalProperties: false
 };
+// 📄 חשבונית / תעודת משלוח בקובץ המצורף — הבוט יציע קבלת סחורה (‎mail-actions.js‎)
+ANALYSIS_SCHEMA.properties.goods_document = MailActions.GOODS_SCHEMA;
 
 async function analyze(user, mail, conn = null) {
   const users = orgUsers().filter((u) => u.id !== user.id);
@@ -270,7 +273,8 @@ function sanitize(out, user, users) {
     addressedTo: String(out.addressed_to_email ?? '').trim().toLowerCase(),
     skipReason: String(out.skip_reason ?? ''),
     warning: String(out.warning ?? '').trim(),
-    tasks
+    tasks,
+    goods: out.warning ? null : (out.goods_document ?? null)
   };
 }
 
@@ -383,6 +387,8 @@ async function processMessage(user, conn, gmailId) {
   }
 
   const result = await analyze(user, mail, conn);
+  // 📄 חשבונית / תעודת משלוח מצורפת — הצעה לקבלת סחורה בבוט, גם כשאין במייל משימה
+  try { MailActions.goodsDocFrom(user, meta, mail, result.goods); } catch (err) { console.error('[משימון] רישום חשבונית מהמייל נכשל:', err.message); }
 
   // הבקשה מופנית לעמית שמחובר בעצמו — היא תוצע לו, לא לי
   if (!result.forMe && result.addressedTo && !mine.has(result.addressedTo)) {

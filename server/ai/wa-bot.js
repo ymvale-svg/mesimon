@@ -64,6 +64,7 @@ const Approvals = require('./priority-approvals');
 const WaUi = require('./wa-ui');
 const MeetingFollowup = require('./meeting-followup');
 const MeetingAudio = require('./meeting-audio');
+const MailActions = require('./mail-actions');
 
 const GROUP_SKILL = path.join(__dirname, 'skills', 'whatsapp-group-to-tasks.md');
 const CHAT_SKILL = path.join(__dirname, 'skills', 'whatsapp-chat.md');
@@ -2141,6 +2142,26 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
     }
   }
 
+  // 📬 "זכרת?" על דדליין ממייל, ו"לבצע קבלת סחורה?" על חשבונית מהמייל
+  if (state.awaiting && ['deadline_check', 'goods_offer'].includes(state.draft?.kind)) {
+    const d = state.draft;
+    if (d.kind === 'deadline_check') {
+      const r = dry ? null : MailActions.answerDeadline(actor.id, d, t, {
+        goodsAllowed: WaActions.allowed(actor, 'goods_offer') && WaActions.allowed(actor, 'goods_receipt'), closeAlerted
+      });
+      if (r) return out(r.text, { draft: r.draft ?? null, awaiting: Boolean(r.awaiting) }, { action: 'mail_deadline', status: 'ok', result: r.result.slice(0, 300), buttons: r.buttons });
+    } else {
+      const r = dry ? null : MailActions.answerGoods(d, t);
+      if (r) {
+        if (r.start) startGoodsFromMail(user, d.goodsId);
+        return out(r.text, { draft: null }, { action: 'goods_offer', status: 'ok', result: r.result.slice(0, 300) });
+      }
+    }
+    // כל דבר אחר — נושא חדש; השאלה יורדת (ותישאל שוב: דדליין — מחר, חשבונית — בסבב הבא)
+    if (d.kind === 'goods_offer') D.run("UPDATE mail_goods_docs SET status = 'pending' WHERE id = ? AND status = 'asked'", d.goodsId);
+    keep.draft = null;
+    state = { ...state, draft: null, awaiting: false };
+  }
   // 🎙 הקלטת פגישה מוואטסאפ: "לאיזו פגישה?", "לפתוח את המשימות?", ו"הקלטת פגישה" (ההקלטה הבאה)
   if (['meeting_audio_pick', 'meeting_audio_tasks'].includes(state.draft?.kind)) {
     const r = await meetingAudioTurn(user, actor, t, state, { dry, out });
@@ -3511,6 +3532,71 @@ async function mailAlerts() {
 }
 
 // ---------------------------------------------------------------------------
+// 📬 פעולות לפי המיילים: "זכרת?" על דדליין, וחשבונית ← קבלת סחורה (‎mail-actions.js‎)
+// ---------------------------------------------------------------------------
+
+let mailActionsAt = 0;
+async function mailActionAlerts() {
+  if (Date.now() - mailActionsAt < 2 * 60 * 1000) return;
+  mailActionsAt = Date.now();
+  const on = { deadline: WaActions.byKey('mail_deadline')?.enabled, goods: WaActions.byKey('goods_offer')?.enabled };
+  if (!on.deadline && !on.goods) return;
+  for (const u of orgUsers()) {
+    if (!u.phone) continue;
+    const prefs = D.userPrefs(u.id)?.botPrefs ?? {};
+    const actor = Auth.loadActor('user', u.id);
+    if (!actor) continue;
+    const allow = {
+      deadline: Boolean(on.deadline && prefs.mailDeadline !== false && WaActions.allowed(actor, 'mail_deadline')),
+      goods: Boolean(on.goods && prefs.goodsOffer !== false && WaActions.allowed(actor, 'goods_offer') && WaActions.allowed(actor, 'goods_receipt'))
+    };
+    if (!allow.deadline && !allow.goods) continue;
+    // באמצע שיחה מול הבוט — לא קוטעים; השאלה מחכה לסבב הבא
+    const st = chatOf(u.id);
+    if (st.awaiting || (st.draft && st.draft.kind !== 'menu') || GoodsReceipt.active(u.id) || PurchaseDemand.active(u.id)) continue;
+    const q = MailActions.nextQuestion(u.id, allow);
+    if (!q) continue;
+    const chatId = `${u.phone}@c.us`;
+    try {
+      await sendButtons(chatId, q.text, q.buttons);
+      rememberBot(u.id, q.text);
+      const now = chatOf(u.id);
+      if (!now.awaiting && !(now.draft && now.draft.kind !== 'menu')) saveChat(u.id, { ...now, draft: q.draft, awaiting: true });
+      log({ channel: 'summary', chatId, userId: u.id, who: u.full_name, action: q.action, status: 'ok', result: q.log.slice(0, 300) });
+    } catch (err) {
+      log({ channel: 'summary', chatId, userId: u.id, who: u.full_name, action: q.action, status: 'error', result: err.message });
+    }
+  }
+  MailActions.prune();
+}
+
+/** "קבלת סחורה" על חשבונית מהמייל — הקובץ יורד מ-Gmail ונכנס לקבלת הסחורה כאילו נשלח לבוט */
+function startGoodsFromMail(user, goodsId) {
+  setImmediate(async () => {
+    const row = D.get('SELECT * FROM mail_goods_docs WHERE id = ? AND user_id = ?', goodsId, user.id);
+    const u = D.get('SELECT id, full_name, phone FROM users WHERE id = ?', user.id);
+    if (!row || !u?.phone) return;
+    const chatId = `${u.phone}@c.us`;
+    try {
+      const file = await MailActions.goodsFile(row);
+      // אחרי התשובה הנוכחית (אותו תור לכל עובד) — בדיוק כמו קובץ שנשלח עם "קבלת סחורה"
+      // לא דרך ‎dispatch‎: מחוץ לשעות הוא דוחה לתור שנשמר במסד, והקובץ (‎buf‎) לא נשמר שם
+      const m = { chatId, phone: u.phone, text: 'קבלת סחורה', kind: 'documentMessage', forwarded: false, audio: null, file, id: `mail-goods-${row.id}` };
+      const prev = chains.get(m.phone) ?? Promise.resolve();
+      const next = prev.then(() => handleDirect(m))
+        .catch((err) => console.error('[משימון] קבלת סחורה מהמייל נכשלה:', err.message))
+        .finally(() => { if (chains.get(m.phone) === next) chains.delete(m.phone); });
+      chains.set(m.phone, next);
+    } catch (err) {
+      console.error('[משימון] הורדת חשבונית מהמייל נכשלה:', err.message);
+      log({ channel: 'summary', chatId, userId: u.id, who: u.full_name, action: 'goods_offer', status: 'error', result: `הורדה מ-Gmail: ${err.message}`.slice(0, 300) });
+      D.run("UPDATE mail_goods_docs SET status = 'pending' WHERE id = ?", row.id);
+      await sendText(chatId, `לא הצלחתי להוריד את ${row.filename} מהמייל 😕 אפשר להעביר לי את הקובץ ישירות, ואתחיל קבלת סחורה.`).catch(() => {});
+    }
+  });
+}
+
+// ---------------------------------------------------------------------------
 // 🎥 אחרי פגישה מוקלטת — הבוט שואל את המשתתפים מה לשלוח (‎meeting-followup.js‎)
 // ---------------------------------------------------------------------------
 
@@ -3887,6 +3973,7 @@ async function tick() {
       await flushOutbox();
       await mailAlerts();
       await meetingFollowups();
+      await mailActionAlerts();
       await warmInsights();
     }
     if (Claude.isEnabled() && WaActions.byKey('group_tasks')?.enabled) await processGroups();

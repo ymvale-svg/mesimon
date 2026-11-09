@@ -781,6 +781,30 @@ CREATE TABLE IF NOT EXISTS meeting_audio (
   created_at       TEXT    NOT NULL
 );
 
+/*
+ * 📄 חשבונית / תעודת משלוח שהגיעה במייל (‎ai/mail-actions.js‎) — הבוט מציע קבלת סחורה, והקובץ
+ * יורד מ-Gmail רק כשהעובד אומר "כן". ‎status‎: pending / asked / later / started / declined.
+ */
+CREATE TABLE IF NOT EXISTS mail_goods_docs (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  gmail_id     TEXT    NOT NULL,
+  box          INTEGER NOT NULL DEFAULT 0,
+  kind         TEXT    NOT NULL DEFAULT 'invoice',
+  filename     TEXT    NOT NULL,
+  mime         TEXT    NOT NULL DEFAULT '',
+  supplier     TEXT    NOT NULL DEFAULT '',
+  from_name    TEXT    NOT NULL DEFAULT '',
+  from_email   TEXT    NOT NULL DEFAULT '',
+  subject      TEXT    NOT NULL DEFAULT '',
+  status       TEXT    NOT NULL DEFAULT 'pending',
+  snooze_until TEXT,
+  asked_at     TEXT,
+  decided_at   TEXT,
+  created_at   TEXT    NOT NULL,
+  UNIQUE (user_id, gmail_id, filename)
+);
+
 /* סיכום, החלטות ומשימות של פגישה — פעם אחת לפגישה, לכל המשתתפים. נמחק אחרי חודש */
 CREATE TABLE IF NOT EXISTS meeting_digests (
   source     TEXT    NOT NULL,
