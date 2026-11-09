@@ -65,6 +65,7 @@ const WaUi = require('./wa-ui');
 const MeetingFollowup = require('./meeting-followup');
 const MeetingAudio = require('./meeting-audio');
 const MailActions = require('./mail-actions');
+const Notice = require('./notice');
 
 const GROUP_SKILL = path.join(__dirname, 'skills', 'whatsapp-group-to-tasks.md');
 const CHAT_SKILL = path.join(__dirname, 'skills', 'whatsapp-chat.md');
@@ -2142,6 +2143,18 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
     }
   }
 
+  // 🎨 מודעה / ✉️ מכתב רשמי — "תעצב לי מודעה…", ובתוך הזרימה: סגנון, תיקונים, "מאשר"
+  if (state.awaiting && state.draft?.kind === 'notice') {
+    const r = await Notice.answer(actor.id, state.draft, t).catch((err) => ({ text: 'לא הצלחתי להכין את זה כרגע. נסו שוב בעוד רגע 🙏', draft: state.draft, awaiting: true, result: `שגיאה: ${err.message}`, error: true }));
+    if (r) return out(r.text, { draft: r.draft ?? null, awaiting: Boolean(r.awaiting) }, { action: 'notices', status: r.error ? 'error' : 'ok', result: String(r.result ?? '').slice(0, 300), buttons: r.buttons, files: r.files });
+    keep.draft = null;
+    state = { ...state, draft: null, awaiting: false };
+  }
+  if (WaActions.allowed(actor, 'notices') && Notice.parseRequest(t)) {
+    if (dry) return out('(בדיקה) הייתי מכין PDF.', {}, { action: 'notices', status: 'ok', result: 'בדיקה' });
+    const r = await Notice.start(actor.id, t).catch((err) => ({ text: 'לא הצלחתי להכין את זה כרגע. נסו שוב בעוד רגע 🙏', result: `שגיאה: ${err.message}`, error: true }));
+    return out(r.text, { draft: r.draft ?? null, awaiting: Boolean(r.awaiting) }, { action: 'notices', status: r.error ? 'error' : 'ok', result: String(r.result ?? '').slice(0, 300), buttons: r.buttons, files: r.files });
+  }
   // 📬 "זכרת?" על דדליין ממייל, ו"לבצע קבלת סחורה?" על חשבונית מהמייל
   if (state.awaiting && ['deadline_check', 'goods_offer'].includes(state.draft?.kind)) {
     const d = state.draft;
@@ -3072,6 +3085,25 @@ async function handleDirect(msg) {
   let text = msg.text;
   const voice = !text && Boolean(msg.audio);
   let notice = null;
+  // 🎨 תמונה עם הכיתוב "לוגו" / "לוגו <חברה>" — הלוגו למודעות ולמכתבים. רק מנהלים (לא עובד מן השורה)
+  const logoAsk = msg.file && /^image\//i.test(msg.file.mime ?? '') ? Notice.logoCaption(text) : null;
+  if (logoAsk && WaActions.allowed(actor, 'notices')) {
+    let reply;
+    if (actor.role === 'employee') {
+      reply = 'רק מנהלים יכולים לעדכן את הלוגו של המודעות. אפשר לבקש ממנהל המחלקה 🙏';
+    } else {
+      try {
+        const file = await Speech.download(msg.file.url, msg.file.mime);
+        const name = Notice.saveLogo(file, logoAsk.name);
+        reply = `✅ הלוגו נשמר${name ? ` בשם *${name}* — במודעה: "עם הלוגו של ${name}"` : ' — מעכשיו הוא במודעות ובמכתבים'}.`;
+      } catch (err) {
+        reply = `לא הצלחתי לשמור את הלוגו: ${err.message}`;
+      }
+    }
+    log({ ...base, text: `[🖼 ${text}]`, action: 'notices', status: 'ok', result: reply.slice(0, 300) });
+    await sendText(msg.chatId, reply);
+    return;
+  }
   // 🎙 הקלטת פגישה — קובץ שמע, או הודעה קולית ארוכה (או אחרי "הקלטת פגישה"): שואלים לאיזו פגישה
   const meetingAudioOn = meetingAudioAllowed(actor);
   if (meetingAudioOn && msg.file && MeetingAudio.isAudioFile(msg.file)) {
@@ -3290,6 +3322,16 @@ async function handleDirect(msg) {
   const fwdNote = forwards.length ? ` (+${forwards.filter((x) => x.kind === 'forward').length} מועברות)` : '';
   log({ ...base, text: `${voice ? `🎙 ${said}` : said}${fwdNote}`, action: r.action, status: r.status, result: r.result, taskId: r.taskId ?? null, reply });
   // הודעה ארוכה מדי — בכמה הודעות; כפתורי תשובה (התפריט) — על האחרונה
+  // קובץ (מודעה, מכתב) — לפני הטקסט, כדי שהשאלה "מאשר?" תהיה ההודעה האחרונה
+  for (const f of r.files ?? []) {
+    try {
+      const ch = channel();
+      if (ch) await WhatsApp.sendFile(ch, msg.chatId, f);
+    } catch (err) {
+      console.error('[משימון] שליחת קובץ מהבוט נכשלה:', err.message);
+      log({ ...base, text: `[📄 ${f.fileName}]`, action: r.action, status: 'error', result: err.message });
+    }
+  }
   const replyParts = splitMessage(reply);
   for (let i = 0; i < replyParts.length; i++) {
     if (i === replyParts.length - 1 && r.buttons?.length) await sendButtons(msg.chatId, replyParts[i], r.buttons);
