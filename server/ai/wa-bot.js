@@ -2146,6 +2146,17 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
     }
   }
 
+  // 🧪 פיילוט היכולות החדשות — מנהל מערכת פותח לכולם / מחזיר לפיילוט
+  {
+    const open = /^(?:תפתח|פתח)\s+(?:את\s+)?היכולות\s+החדשות\s+לכולם[.!]?$/.test(t);
+    const back = /^(?:תחזיר|החזר)\s+(?:את\s+)?היכולות\s+החדשות\s+לפיילוט[.!]?$/.test(t);
+    if (open || back) {
+      if (!WaActions.inPilot(actor)) return out('רק מנהל מערכת יכול לשנות את זה.', {}, { action: 'other', status: 'denied', result: 'פיילוט — אין הרשאה' });
+      if (!dry) D.setSetting('bot_pilot', !open);
+      return out(open ? '✅ היכולות החדשות פתוחות עכשיו לכל העובדים (לפי ההרשאות של כל פעולה).' : '🧪 היכולות החדשות חזרו לפיילוט — רק למנהלי המערכת.', {},
+        { action: 'other', status: 'ok', result: open ? 'פיילוט נפתח לכולם' : 'חזרה לפיילוט' });
+    }
+  }
   // 📅 תיאום פגישה עם גורם חיצוני — "תקבע לי פגישה עם …", ובתוך הזרימה
   if (state.awaiting && state.draft?.kind === 'meet_coord') {
     const d = state.draft;

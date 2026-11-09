@@ -950,7 +950,9 @@ async function suppliersByWords(company, words) {
     } catch {
       try { list = rows(await call(company, 'GET', `SUPPLIERS?${f}&$select=SUPNAME,SUPDES,STATDES`)); } catch { list = []; }
     }
-    for (const x of list.filter(activeSupplier)) out.set(x.SUPNAME, { code: x.SUPNAME, name: String(x.SUPDES ?? '').trim(), email: String(x.EMAIL ?? '').trim().toLowerCase(), phone: String(x.PHONE ?? '').trim() });
+    // ‎contains‎ מוצא גם בתוך מילה ("כלי" ב"אדריכלים") — רק מילה שמתחילה במילת החיפוש (אחרי ו/ה/ב/ל/מ/ש)
+    const word = new RegExp(`(^|[\\s,.()\\-"'׳])[והבלמש]?${String(w).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`);
+    for (const x of list.filter(activeSupplier).filter((y) => word.test(String(y.SUPDES ?? '')))) out.set(x.SUPNAME, { code: x.SUPNAME, name: String(x.SUPDES ?? '').trim(), email: String(x.EMAIL ?? '').trim().toLowerCase(), phone: String(x.PHONE ?? '').trim() });
   }
   return [...out.values()];
 }

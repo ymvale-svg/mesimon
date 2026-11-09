@@ -214,8 +214,17 @@ const byKey = (key) => list().find((a) => a.key === key) ?? null;
 /** מנהל = מי שאינו עובד מן השורה. הנהלה ומנהלי מחלקות */
 const isManager = (actor) => actor?.type === 'user' && actor.role !== 'employee';
 
+/*
+ * 🧪 פיילוט (הוחלט 09.11.26): היכולות החדשות מסבב Instinct — רק למנהלי המערכת, עד שפותחים אותן לכולם
+ * ("פתח את היכולות החדשות לכולם" בבוט, או ההגדרה ‎bot_pilot‎). כך הבדיקה בבוט האמיתי לא מגיעה לעובדים.
+ */
+const PILOT_KEYS = new Set(['meeting_followup', 'meeting_audio', 'mail_deadline', 'goods_offer', 'notices', 'rfq', 'form_fill', 'meet_coord']);
+const PILOT_ROLES = ['superadmin', 'admin'];
+const inPilot = (actor) => actor?.type === 'user' && PILOT_ROLES.includes(actor.role);
+
 function allowed(actor, key) {
   const a = byKey(key);
+  if (PILOT_KEYS.has(key) && D.getSetting('bot_pilot', true) && !inPilot(actor)) return false;
   return Boolean(a?.enabled && (a.audience === 'all' || isManager(actor)));
 }
 
@@ -235,4 +244,5 @@ function save(input) {
   D.setSetting('wa_actions', saved);
 }
 
-module.exports = { list, byKey, allowed, forActor, save, isManager };
+module.exports = {
+  PILOT_KEYS, inPilot, list, byKey, allowed, forActor, save, isManager };
