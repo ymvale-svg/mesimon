@@ -137,6 +137,12 @@ const ACTIONS = [
     enabled: false
   },
   {
+    key: 'day_digest', icon: '☀️', label: 'סיכום בוקר וסוף יום', channel: 'proactive',
+    description: 'בימי א׳–ה׳. בוקר (‎digest_morning‎, 08:15): משימות להיום ובאיחור, מיילים שעוד מחכים לך (לא טופלו), מחכה לך מאחרים (מיילים ששלחת ולא נענו, משימות שהטלת ובאיחור) ותזכורות להיום. סוף יום (‎digest_evening‎, 17:30): מה נסגר היום, ומה עוד פתוח — "להעביר למחר ✅" מעביר את תאריך היעד ליום העבודה הבא. יום בלי כלום — בלי הודעה.',
+    examples: [],
+    enabled: true
+  },
+  {
     key: 'mail_alert', icon: '📬', label: 'מייל חדש — הבוט פונה', channel: 'proactive',
     description: 'כל מייל חדש שמחכה ממך למשהו — הודעה אחת בוואטסאפ, מייל אחד בכל פעם: "שלום <שם>, קיבלת מייל מדני: … לענות לו כך?" עם הצעת תשובה מוכנה, או "לפתוח משימה?" כשאין למה לענות (למי שתזכורת ממייל — "זכרת? 🐣" — דלוקה: במקום השאלה הזו, תזכורת למחרת אם המייל לא טופל). *כן* ✅ — התשובה יוצאת מתיבת ה-Gmail (או המשימה נפתחת); *לא* ❌ — יורד מהרשימה; כל דבר אחר — תיקון לנוסח. התיבה נסרקת כל 10 דקות (‎ai_mail_live_minutes‎), בשעות הפעילות. מייל שקראת ב-Gmail — כבר לא נשאל עליו, ויורד מ"ממתין לאישורך". כל עובד יכול לכבות לעצמו בהגדרות הבוט.',
     examples: [],
@@ -236,7 +242,7 @@ const isManager = (actor) => actor?.type === 'user' && actor.role !== 'employee'
  * 🧪 פיילוט (הוחלט 09.11.26): היכולות החדשות מסבב Instinct — רק למנהלי המערכת, עד שפותחים אותן לכולם
  * ("פתח את היכולות החדשות לכולם" בבוט, או ההגדרה ‎bot_pilot‎). כך הבדיקה בבוט האמיתי לא מגיעה לעובדים.
  */
-const PILOT_KEYS = new Set(['reminders', 'sent_followup', 'meeting_followup', 'meeting_audio', 'mail_deadline', 'goods_offer', 'notices', 'rfq', 'form_fill', 'meet_coord']);
+const PILOT_KEYS = new Set(['reminders', 'sent_followup', 'day_digest', 'meeting_followup', 'meeting_audio', 'mail_deadline', 'goods_offer', 'notices', 'rfq', 'form_fill', 'meet_coord']);
 const PILOT_ROLES = ['superadmin', 'admin'];
 const inPilot = (actor) => actor?.type === 'user' && PILOT_ROLES.includes(actor.role);
 

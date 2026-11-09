@@ -71,6 +71,7 @@ const FormFill = require('./form-fill');
 const MeetCoord = require('./meeting-coord');
 const Reminders = require('./reminders');
 const SentFollowup = require('./sent-followup');
+const DayDigest = require('./day-digest');
 
 const GROUP_SKILL = path.join(__dirname, 'skills', 'whatsapp-group-to-tasks.md');
 const CHAT_SKILL = path.join(__dirname, 'skills', 'whatsapp-chat.md');
@@ -2240,6 +2241,13 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
     const r = await Notice.start(actor.id, t).catch((err) => ({ text: 'לא הצלחתי להכין את זה כרגע. נסו שוב בעוד רגע 🙏', result: `שגיאה: ${err.message}`, error: true }));
     return out(r.text, { draft: r.draft ?? null, awaiting: Boolean(r.awaiting) }, { action: 'notices', status: r.error ? 'error' : 'ok', result: String(r.result ?? '').slice(0, 300), buttons: r.buttons, files: r.files });
   }
+  // 🌙 סוף יום: "להעביר למחר?"
+  if (state.awaiting && state.draft?.kind === 'day_evening') {
+    const r = dry ? null : DayDigest.answer(actor.id, state.draft, t);
+    if (r) return out(r.text, { draft: null }, { action: 'day_digest', status: 'ok', result: r.result });
+    keep.draft = null;
+    state = { ...state, draft: null, awaiting: false };
+  }
   // 📤 "לשלוח תזכורת עדינה?" על מייל ששלחת ולא נענה
   if (state.awaiting && state.draft?.kind === 'sent_followup') {
     const d = state.draft;
@@ -4295,6 +4303,12 @@ async function tick() {
       await mailActionAlerts();
       await rfqTick();
       await meetCoordTick();
+      if (WaActions.byKey('day_digest')?.enabled) {
+        await DayDigest.tick({
+          users: () => orgUsers().filter((u) => u.phone && D.userPrefs(u.id)?.botPrefs?.dayDigest !== false && WaActions.allowed(Auth.loadActor('user', u.id), 'day_digest')),
+          push: (userId, m) => pushToUser(userId, m, 'day_digest')
+        }).catch((err) => console.error('[משימון] סיכום יומי נכשל:', err.message));
+      }
       if (WaActions.byKey('reminders')?.enabled) await Reminders.tick((userId, m) => pushToUser(userId, m, 'reminders')).catch((err) => console.error('[משימון] תזכורות נכשלו:', err.message));
       await warmInsights();
     }
