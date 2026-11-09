@@ -729,6 +729,20 @@ CREATE TABLE IF NOT EXISTS wa_outbox (
  * ה-15 לחודש"). נכנסים להצעת התשובה הבאה בנושא (‎ai/reply-memory.js‎). כלל חדש
  * באותו נושא מחליף את הקודם. ‎example‎ — משפט קצר מהתשובה שממנה נלמד.
  */
+/*
+ * 📅 התראה בבוט לפני פגישה מיומן Google שלא נקבעה ממשימון — פעם אחת לכל משתתף
+ * (‎meetings.sendCalendarReminders‎). ‎data‎ — הנושא, הקישור והמשתתפים, לשאלה
+ * "מי משתתף?" אחרי ההתראה. נמחק אחרי יומיים.
+ */
+CREATE TABLE IF NOT EXISTS calendar_reminders (
+  uid        TEXT    NOT NULL,
+  start_at   TEXT    NOT NULL,
+  user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  data       TEXT    NOT NULL,
+  sent_at    TEXT    NOT NULL,
+  PRIMARY KEY (uid, start_at, user_id)
+);
+
 CREATE TABLE IF NOT EXISTS reply_rules (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
   user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,

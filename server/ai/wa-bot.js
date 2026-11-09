@@ -2139,6 +2139,12 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
     }
   }
 
+  // 📅 "מי משתתף בפגישה?" — מהיומן (גם פגישות שלא נקבעו ממשימון)
+  if (WaActions.byKey('meeting_reminder')?.enabled && !(state.awaiting && state.draft)) {
+    const who = await require('../meetings').participantsAnswer(actor.id, t).catch(() => null);
+    if (who) return out(who, {}, { action: 'meeting_reminder', status: 'ok', result: who.split('\n')[0] });
+  }
+
   // וואטסאפ אישי: "יוסי עסקי", "אל תסרוק את דני", ותשובה לשאלה "עסקי או אישי?"
   const scanCmd = businessCommand(actor, t, { dry, out });
   if (scanCmd) return scanCmd;
@@ -3702,7 +3708,7 @@ module.exports = {
   init, start, tick, publicStatus, save, remove, checkState, qr, isConfigured,
   listGroups, bindGroup, userByPhone, markDone, readLog, todayStats, simulate, simulateGroup, inHours,
   // לשליחה ממודולים אחרים — התראה לפני פגישה (‎meetings.js‎), עם רישום ביומן הבוט
-  sendText, log, notifyAssignment, assistant, deliver, sendFilesToUser, mailAlertUsers,
+  sendText, sendButtons, log, notifyAssignment, assistant, deliver, sendFilesToUser, mailAlertUsers,
   _internal: {
     storeGroupMessage, processGroup, handleDirect, sanitizeGroup, resolveMentions, candidatesOf, converse, turn, withFollowUps, sendSummaries, YES,
     findRecipients, findContactCards, sourceOf, suggestionFeedback, flushOutbox, todayMessage, splitMessage, parseSuggestionCommand, businessCommand, chatOf, saveChat,
