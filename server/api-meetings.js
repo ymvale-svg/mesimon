@@ -22,6 +22,11 @@ function register(router, h) {
   Meetings.init({
     botReady: () => WaBot.isConfigured() && Boolean(D.getSetting('wa_bot_enabled', true)),
     botAllowed: () => Boolean(WaActions.byKey('meeting_reminder')?.enabled),
+    // 📅 התראה מהיומן — עם כפתור "מי משתתף?"
+    sendButtons: async (chatId, text, buttons) => {
+      await WaBot.sendButtons(chatId, text, buttons);
+      WaBot.log({ channel: 'summary', chatId, action: 'meeting_reminder', status: 'ok', result: `${text.split('\n')[0]} (מהיומן)` });
+    },
     sendWhatsApp: async (chatId, text) => {
       await WaBot.sendText(chatId, text);
       WaBot.log({ channel: 'summary', chatId, action: 'meeting_reminder', status: 'ok', result: text.split('\n')[0] });
