@@ -450,8 +450,31 @@ async function sendReply(userId, reply) {
   return Gmail.send(who, built.raw, { threadId: reply.threadId });
 }
 
+/**
+ * הצעת תשובה שנשמרה עם הצעה מהסריקה — עם מה שחסר לשליחה (השרשור והכותרות).
+ * הצעות ישנות נשמרו בלי אלה; כאן הם נקראים מהמייל עצמו.
+ */
+async function completeReply(userId, r) {
+  const box = r.box ?? 0;
+  if (r.threadId && r.inReplyTo && r.to) return { ...r, box };
+  const { msg, mail } = await readMail(userId, r.gmailId, box);
+  return {
+    request: 'הצעת תשובה של העוזר — ראה את הטיוטה הקודמת',
+    suggested: true,
+    ...r,
+    box,
+    from: r.from || (Gmail.connectionOf(boxFor(userId, r.gmailId, box))?.email ?? ''),
+    threadId: msg.threadId,
+    to: r.to || mail.from.address,
+    toName: r.toName || mail.from.name || '',
+    subject: r.subject || (/^(re|תשובה)\s*:/i.test(mail.subject) ? mail.subject : `Re: ${mail.subject}`),
+    inReplyTo: mail.messageId,
+    references: [...mail.references.slice(-9), mail.messageId].filter(Boolean)
+  };
+}
+
 function prune() {
   D.run('DELETE FROM mail_insights WHERE created_at < ?', new Date(Date.now() - KEEP_DAYS * 864e5).toISOString());
 }
 
-module.exports = { available, collect, itemOf, label, detail, draftReply, suggestReply, sendReply, prune, mask, HOURS, GROUPS, MAX_MAILS, MAX_MAILS_LONG };
+module.exports = { available, collect, itemOf, label, detail, draftReply, suggestReply, sendReply, completeReply, prune, mask, HOURS, GROUPS, MAX_MAILS, MAX_MAILS_LONG };

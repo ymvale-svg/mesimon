@@ -424,7 +424,8 @@ async function processMessage(user, conn, gmailId) {
   if (result.replyExpected && D.getSetting('mail_reply_suggest', true) && Gmail.canSend(Gmail.handle(user.id, meta.box))) {
     try {
       const r = await require('./mail-insights').suggestReply(user.id, gmailId, { box: meta.box });
-      if (r.body) result.tasks[0].reply = { body: r.body, basis: r.basis, missing: r.missing, to: r.to, toName: r.toName, subject: r.subject, gmailId, box: meta.box };
+      // כל השדות — גם השרשור והכותרות, כדי שהבוט יוכל לשלוח את התשובה ב"כן" (‎mailAlerts‎ ב-‎wa-bot.js‎)
+      if (r.body) result.tasks[0].reply = { ...r, gmailId, box: meta.box };
     } catch (err) {
       console.error('[משימון] הצעת תשובה למייל נכשלה:', err.message);
     }
@@ -521,7 +522,8 @@ async function runScan(who, { from, to = null, trigger = 'manual' }) {
   }
 
   const pending = D.get("SELECT COUNT(*) c FROM ai_suggestions WHERE user_id = ? AND status = 'pending'", userId).c;
-  if (progress.suggested || progress.auto) {
+  // סריקה שוטפת (‎live‎) — הבוט פונה על כל מייל בנפרד; בלי התראה מרוכזת
+  if ((progress.suggested || progress.auto) && trigger !== 'live') {
     const extra = Gmail.boxOf(who) ? ` (${conn.email})` : '';
     D.notify({
       targetType: 'user', targetId: userId, kind: 'ai',
@@ -607,6 +609,35 @@ async function morningRun() {
   }
 }
 
+/**
+ * 📬 סריקה שוטפת — למי שהבוט פונה אליו על כל מייל חדש (‎mail_alert‎ בפעולות
+ * הבוט; הרשימה מ-‎wa-bot.mailAlertUsers‎). כל ‎ai_mail_live_minutes‎ דקות
+ * (ברירת מחדל 10), מהסריקה הקודמת ולא יותר מיממה אחורה. אותה תקרה יומית של
+ * הסריקה הרגילה; מייל שכבר נסרק אינו נסרק שוב.
+ */
+let liveAt = 0;
+let liveBusy = false;
+async function liveRun() {
+  const every = Number(D.getSetting('ai_mail_live_minutes', 10));
+  if (liveBusy || !every || Date.now() - liveAt < every * 60000) return;
+  if (!D.getSetting('ai_mail_scan_enabled', true) || !Claude.isEnabled()) return;
+  liveAt = Date.now();
+  liveBusy = true;
+  try {
+    for (const userId of require('./wa-bot').mailAlertUsers()) {
+      for (const who of Gmail.boxesOf(userId, 'mail')) {
+        const conn = Gmail.connectionOf(who);
+        if (!conn || conn.state !== 'ok' || conn.scan_running) continue;
+        const last = conn.last_scan_at ? new Date(conn.last_scan_at).getTime() : 0;
+        const from = new Date(Math.max(last - 30 * 60000, Date.now() - DAY));
+        await runScan(who, { from, trigger: 'live' }).catch((err) => console.error(`[משימון] סריקה שוטפת של משתמש ${userId} נכשלה:`, err.message));
+      }
+    }
+  } finally {
+    liveBusy = false;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // התיבה כמקור למעקב: תשובות ישירות וקשר שהמשתמש יזם
 // ---------------------------------------------------------------------------
@@ -618,7 +649,11 @@ async function morningRun() {
  * פעם בחמש דקות לכל בקשה — זה גם קצב קליטת התשובות, כי הן חוזרות לתיבה הזו.
  */
 /**
- * הצעה ממייל שכבר עניתי עליו — יורדת מ"ממתין לאישורך".
+ * הצעה ממייל שכבר עניתי עליו, או שקראתי אותו — יורדת מ"ממתין לאישורך".
+ *
+ * קראתי (הסימן ‎UNREAD‎ ירד מהמייל ב-Gmail או ב-Outlook) — ראיתי ואני מטפל בזה
+ * בעצמי; ההצעה מסומנת ‎read‎ (הוחלט 09.11.26). הסריקה בוחנת רק מיילים שלא נקראו,
+ * כך שכל הצעה נולדה ממייל שלא נקרא.
  *
  * מי שעבר על התיבה וענה מ-Gmail או מ-Outlook כבר טיפל בעניין, וההצעה רק
  * מעמיסה. הסימן: בשרשור של המייל יש הודעה שיצאה ממני (‎SENT‎) אחרי שהוא
@@ -627,18 +662,19 @@ async function morningRun() {
  * אם מגיעה אחר כך תשובה בשרשור — זו הודעה חדשה, שלא נקראה, והסריקה הרגילה
  * בוחנת אותה כמו כל מייל: רק אם יש בה משימה היא חוזרת לממתינות.
  *
- * כל הצעה נבדקת לכל היותר פעם ב-15 דקות, ועד 30 הצעות בסבב.
+ * כל הצעה נבדקת לכל היותר פעם ב-5 דקות, ועד 40 הצעות בסבב.
  */
-const REPLY_CHECK_MS = 15 * 60000;
+const REPLY_CHECK_MS = 5 * 60000;
 const replyChecked = new Map(); // suggestionId → זמן הבדיקה האחרונה
 
 async function dropAnswered() {
   const rows = D.all(
     `SELECT s.* FROM ai_suggestions s
-      WHERE s.status = 'pending' AND s.kind = 'task' AND s.gmail_id <> ''
+      WHERE s.status = 'pending' AND s.kind IN ('task', 'duplicate') AND s.gmail_id <> ''
         AND COALESCE(json_extract(s.data, '$.source'), 'email') = 'email'
+        AND s.header_id NOT LIKE 'doc:%' AND json_extract(s.data, '$.expiry') IS NULL
       ORDER BY s.id DESC LIMIT 200`
-  ).filter((s) => Date.now() - (replyChecked.get(s.id) ?? 0) > REPLY_CHECK_MS).slice(0, 30);
+  ).filter((s) => Date.now() - (replyChecked.get(s.id) ?? 0) > REPLY_CHECK_MS).slice(0, 40);
   for (const s of rows) {
     replyChecked.set(s.id, Date.now());
     // ההצעה מתיבה מסוימת — השרשור נבדק באותה תיבה
@@ -648,8 +684,10 @@ async function dropAnswered() {
       const received = new Date(s.received_at ?? s.created_at).getTime();
       const thread = await Gmail.threadOf(who, s.gmail_id);
       const answered = thread.find((m) => m.id !== s.gmail_id && m.labels.includes('SENT') && m.at && m.at.getTime() > received - 60000);
-      if (!answered) continue;
-      D.run("UPDATE ai_suggestions SET status = 'replied', decided_at = ? WHERE id = ? AND status = 'pending'", D.nowIso(), s.id);
+      const source = thread.find((m) => m.id === s.gmail_id);
+      const read = source && !source.labels.includes('UNREAD');
+      if (!answered && !read) continue;
+      D.run("UPDATE ai_suggestions SET status = ?, decided_at = ? WHERE id = ? AND status = 'pending'", answered ? 'replied' : 'read', D.nowIso(), s.id);
     } catch (err) {
       // מייל שנמחק מהתיבה — אין מה לבדוק עוד; שאר התקלות: בסבב הבא
       if (/ 404/.test(err.message)) replyChecked.set(s.id, Date.now() + 365 * DAY);
@@ -1055,13 +1093,15 @@ function init({ createTask }) {
       Memory.tick().catch((err) => console.error('[משימון] זיכרון המייל:', err.message));
       // 📚 הידע הארגוני מתעדכן ממה שהזיכרון קרא — כל כמה שעות, לא רק בבוקר
       require('./org-knowledge').refresh();
+      // 📬 הסריקה השוטפת רצה ברקע — לא מעכבת את ריצת הבוקר
+      liveRun().catch((err) => console.error('[משימון] הסריקה השוטפת נכשלה:', err.message));
       return morningRun();
     }
   });
 }
 
 module.exports = {
-  init, startScan, runScan, rangeOf, morningRun, pollMailbox,
+  init, startScan, runScan, rangeOf, morningRun, liveRun, pollMailbox,
   approve, approveAll, reject, restore, ignoreSenderOf, join, skip, undo, markConverted, setSender, senders,
   dismissClosure, closureForTask, markReply,
   listFor, sourceLink, suggestionById,
