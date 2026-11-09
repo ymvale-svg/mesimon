@@ -81,12 +81,19 @@ async function insightsFor(actor, { window = null, suggestions = null, mail = tr
   const win = window ?? Range.forUser(actor.id);
   const pending = suggestions ?? MailScan.listFor(actor.id).pending.filter(isSuggestion);
   const result = await Insights.collect(actor.id, { window: win, mail, exclude: suggestionRefs(pending) });
+  /*
+   * ב-Today — רק מיילים שעוד לא נקראו: מה שכבר קראתי, ראיתי (הוחלט 09.11.26).
+   * לפי בקשה ("תובנות", "מה חדש במייל") — הכול, נקרא ושלא נקרא, כמו קודם.
+   */
+  const readHidden = result.items.filter((x) => x.source === 'mail' && !x.unread).length;
+  result.items = result.items.filter((x) => x.source !== 'mail' || x.unread);
   const heading = Insights.headings(result.sources);
   if (!heading) return null;
   return {
     heading: heading.insights,
     window: { label: result.window.label, span: result.window.span, unit: result.window.unit, since: result.window.sinceIso, note: result.window.note },
     count: result.items.length,
+    readHidden,
     groups: Insights.grouped(result.items),
     mail: result.mail,
     mailError: result.mailError,

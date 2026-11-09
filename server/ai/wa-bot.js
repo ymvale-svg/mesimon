@@ -61,6 +61,7 @@ const Zoom = require('../zoom');
 const GoodsReceipt = require('./goods-receipt');
 const PurchaseDemand = require('./purchase-demand');
 const Approvals = require('./priority-approvals');
+const WaUi = require('./wa-ui');
 
 const GROUP_SKILL = path.join(__dirname, 'skills', 'whatsapp-group-to-tasks.md');
 const CHAT_SKILL = path.join(__dirname, 'skills', 'whatsapp-chat.md');
@@ -1734,7 +1735,8 @@ const taskLink = (id) => {
 /** ביצוע מה שהעובד אישר ב"כן". בבדיקה ממסך הניהול (‎dry‎) — רק מתארים */
 async function confirmPending(actor, pending, dry) {
   const kind = pending.kind ?? 'task';
-  const action = pending.solve ? 'solve' : { task: 'create_task', email: 'send_email', mail_reply: 'mail_insights' }[kind] ?? kind;
+  // פנייה יזומה על מייל חדש (‎mailAlerts‎) — לפי הפעולה "מייל חדש — הבוט פונה"
+  const action = pending.solve ? 'solve' : pending.alert ? 'mail_alert' : { task: 'create_task', email: 'send_email', mail_reply: 'mail_insights' }[kind] ?? kind;
   if (!WaActions.allowed(actor, action)) {
     return { reply: 'הפעולה הזו כבר אינה זמינה לך בוואטסאפ.', action, status: 'denied', result: 'הפעולה כובתה' };
   }
@@ -1756,7 +1758,28 @@ async function confirmPending(actor, pending, dry) {
     if (kind === 'mail_reply') {
       const r = pending.reply;
       if (!dry) await MailInsights.sendReply(actor.id, r);
+      // מהפנייה היזומה: ההצעה מהמייל נענתה — יורדת מ"ממתין לאישורך"
+      if (!dry && pending.suggestionIds?.length) closeAlerted(actor.id, pending.suggestionIds, 'replied');
       return { reply: `📧 התשובה נשלחה ל${r.toName || r.to}.${test}`, action, status: 'ok', result: `תשובה ל${r.toName || r.to}: ${r.subject}` };
+    }
+    if (kind === 'mail_task') {
+      const MailScan = require('./mail-scan');
+      const lines = [];
+      let taskId = null;
+      for (const id of pending.suggestionIds ?? []) {
+        const sug = D.get("SELECT * FROM ai_suggestions WHERE id = ? AND user_id = ? AND status = 'pending'", id, actor.id);
+        if (!sug) continue;
+        const d = parseJson(sug.data, {});
+        if (needsLook(d)) {
+          const root = appRoot();
+          lines.push(`"${d.title}" — יש בה אנשים נוספים או פנייה החוצה; כדאי לבדוק ולאשר באפליקציה.${root ? `\n${root}/?view=today` : ''}`);
+          continue;
+        }
+        taskId = dry ? null : await MailScan.approve(id, actor, { dueDate: d.dueDate || localDay(0) });
+        lines.push(`✅ נפתחה משימה: ${d.title}${d.dueDate && d.dueDate !== localDay(0) ? ` · 📅 ${shortDate(d.dueDate)}` : ''}${test}${taskId ? `\n${taskLink(taskId) ?? ''}` : ''}`.trim());
+      }
+      if (!lines.length) return { reply: 'ההצעה כבר טופלה 👍', action, status: 'ok', result: 'כבר טופלה' };
+      return { reply: lines.join('\n'), action, status: 'ok', result: lines.join(' · ').slice(0, 300), taskId };
     }
     if (kind === 'email' && pending.taskId) {
       const who = pending.contact.name || pending.contact.email;
@@ -2010,7 +2033,7 @@ function businessCommand(actor, t, { dry, out }) {
  * מה שבבירור תיקון — בלי AI; השאר — שאלה קצרה ל-AI. נושא חדש: הטיוטה הישנה
  * יורדת (לא נשלחת, ואומרים לו), וההודעה מטופלת כבקשה חדשה.
  */
-const PENDING_KINDS = ['email', 'mail_reply', 'reply_ask', 'email_pick'];
+const PENDING_KINDS = ['email', 'mail_reply', 'reply_ask', 'email_pick', 'mail_task'];
 /**
  * ברירת המחדל (הגדרות הבוט ← "מעבר נושא מבטל"): כל פריט שממתין — גם טיוטת משימה, אישור סגירה או הערה,
  * ותפריט — יורד ברגע שעוברים לבקשה אחרת, בלי "ביטול", יחד עם הבקשות שחיכו בתור. אין חזרה אליו.
@@ -2028,6 +2051,7 @@ function pendingSummary(d) {
   if (d.kind === 'email') return `טיוטת מייל ל${d.contact?.name || d.contact?.email || '?'} · נושא: ${d.draft?.subject ?? ''}\n${String(d.draft?.body ?? '').slice(0, 600)}`;
   if (d.kind === 'mail_reply') return `טיוטת תשובה למייל של ${d.reply?.toName || d.reply?.to || '?'} · נושא: ${d.reply?.subject ?? ''}\n${String(d.reply?.body ?? '').slice(0, 600)}`;
   if (d.kind === 'reply_ask') return 'הבוט שאל מה לענות למייל שנבחר מהתובנות';
+  if (d.kind === 'mail_task') return `הבוט שאל אם לפתוח משימה ממייל שהתקבל: ${d.title ?? ''}`;
   if (d.kind === 'email_pick') return `הבוט שאל למי לשלוח מייל ("${d.name || ''}")${d.request ? ` — הבקשה: ${d.request}` : ' — וגם מה לכתוב'}`;
   if ((d.kind ?? 'task') === 'task') return `טיוטת משימה: ${d.title ?? ''}${d.assignee ? ` · אחראי: ${d.assignee}` : ''}${d.due ? ` · עד ${d.due}` : ''}`;
   if (d.kind === 'complete') return `הבוט שאל אם לסמן כבוצעה את המשימה: ${d.title ?? ''}`;
@@ -2076,6 +2100,7 @@ async function aboutPending(state, text) {
 
 const pendingLabel = (d) => (d.kind === 'email' ? `הטיוטה ל${d.contact?.name || d.contact?.email || 'נמען'} לא נשלחה`
   : d.kind === 'mail_reply' ? `טיוטת התשובה ל${d.reply?.toName || d.reply?.to || 'מייל'} לא נשלחה`
+    : d.kind === 'mail_task' ? `המשימה מהמייל${d.title ? ` "${d.title}"` : ''} לא נפתחה — היא מחכה ב"ממתין לאישורך"`
     : d.kind === 'email_pick' ? 'המייל הקודם לא נשלח'
       : d.kind === 'complete' ? `"${d.title ?? 'המשימה'}" לא סומנה כבוצעה`
         : d.kind === 'comment' ? `ההערה ל"${d.title ?? 'המשימה'}" לא נוספה`
@@ -2122,6 +2147,12 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
   // הודעה ארוכה שפותחת במילת אישור — אישור רק אם היא על הפריט שממתין
   let about = null;
   const isAbout = async () => (about ??= await aboutPending(state, t));
+  // "לא ❌" על פנייה יזומה על מייל — לא לענות / לא משימה: ההצעה יורדת מ"ממתין לאישורך"
+  if (state.awaiting && state.draft?.alert && (WaUi.NO.test(WaUi.normalize(t)) || CANCEL.test(t))) {
+    const d = state.draft;
+    if (!dry) closeAlerted(actor.id, d.suggestionIds ?? [], d.kind === 'mail_task' ? 'rejected' : 'skipped');
+    return out(d.kind === 'mail_task' ? 'בסדר, לא נפתחה משימה 👍' : 'בסדר, לא עונים 👍', { draft: null }, { action: 'mail_alert', status: 'ok', result: `לא: ${d.subject ?? d.title ?? ''}`.slice(0, 300) });
+  }
   const approval = state.awaiting && state.draft && YES.test(t)
     && (!switchCancels() || t.split(/\s+/).filter(Boolean).length <= 3 || await isAbout());
   if (approval) {
@@ -2418,8 +2449,9 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
   // טיוטת תשובה למייל שממתינה: כל הודעה שאינה "כן" או "ביטול" היא תיקון
   if (kind === 'mail_reply' && !dry && state.awaiting && Claude.isEnabled() && WaActions.allowed(actor, 'mail_insights')) {
     const prev = state.draft.reply;
-    const reply = { ...await MailInsights.draftReply(actor.id, prev.gmailId, prev.request, { feedback: t, previous: prev }), signature: prev.signature, noSignature: prev.noSignature ?? null };
-    return out(replyText(reply), { draft: { kind: 'mail_reply', reply }, awaiting: true }, { action: 'mail_insights', status: 'ok', result: `תיקון תשובה: ${t.slice(0, 200)}` });
+    const reply = { ...await MailInsights.draftReply(actor.id, prev.gmailId, prev.request, { feedback: t, previous: prev, box: prev.box ?? null }), signature: prev.signature, noSignature: prev.noSignature ?? null };
+    // מהפנייה היזומה — ההצעות שעליהן נשאלה השאלה נשארות קשורות לטיוטה
+    return out(replyText(reply), { draft: { ...state.draft, kind: 'mail_reply', reply }, awaiting: true }, { action: 'mail_insights', status: 'ok', result: `תיקון תשובה: ${t.slice(0, 200)}`, buttons: state.draft.alert ? [WaUi.BTN.yes, WaUi.BTN.no] : undefined });
   }
   // "תענה ל-2" בלי תוכן — ההודעה הבאה היא מה לענות
   if (kind === 'reply_ask' && !dry && Claude.isEnabled() && WaActions.allowed(actor, 'mail_insights')) {
@@ -3094,7 +3126,7 @@ function choicesOf(next) {
   const d = next.draft;
   const out = [];
   if (next.awaiting && d) {
-    const yes = { task: '✓ פתח משימה', complete: '✓ סמן כבוצע', comment: '✓ הוסף הערה', mail_reply: '📧 שלח', email: d.channel === 'whatsapp' ? '💬 שלח בוואטסאפ' : d.contact?.type === 'user' ? '📧 שלח במייל' : '📧 שלח' }[d.kind] ?? '✓ אישור';
+    const yes = { task: '✓ פתח משימה', mail_task: '✓ פתח משימה', complete: '✓ סמן כבוצע', comment: '✓ הוסף הערה', mail_reply: '📧 שלח', email: d.channel === 'whatsapp' ? '💬 שלח בוואטסאפ' : d.contact?.type === 'user' ? '📧 שלח במייל' : '📧 שלח' }[d.kind] ?? '✓ אישור';
     out.push({ label: yes, say: 'כן', primary: true });
     if (d.kind === 'email' && d.contact?.type === 'user') out.push({ label: '📌 במשימון במקום', say: 'במשימון' });
     if (d.kind === 'email') (d.suggestions ?? []).forEach((x, i) => out.push({ label: `＋ ${x}`, say: `תוסיף את ${i + 1}` }));
@@ -3181,6 +3213,124 @@ async function sendSummaries() {
     } catch (err) {
       log({ channel: 'summary', userId: u.id, who: u.full_name, action: 'summary', status: 'error', result: err.message });
     }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 📬 מייל חדש — הבוט פונה (הוחלט 09.11.26)
+// ---------------------------------------------------------------------------
+
+/*
+ * על כל מייל חדש שהסריקה מצאה בו משהו בשבילי — הודעה אחת, מייל אחד בכל פעם:
+ *   "שלום <שם> 👋 קיבלת מייל מדני: … לענות לו כך? «…»"   [כן ✅] [לא ❌]
+ * כשאין למה לענות (או שאי אפשר לשלוח מהתיבה) — "לפתוח משימה: …?".
+ * *כן* — התשובה יוצאת (או המשימה נפתחת) וההצעה יורדת מ"ממתין לאישורך";
+ * *לא* — יורדת בלי כלום; כל דבר אחר — תיקון לנוסח, כמו כל טיוטת תשובה.
+ * לא דורסים שיחה פעילה: עובד שבאמצע משהו מול הבוט — המייל מחכה לסבב הבא.
+ * מייל שנקרא ב-Gmail יורד מהרשימה (‎mail-scan.dropAnswered‎) ולא נשאל עליו.
+ * רק הצעות שנוצרו מאז שהפעולה הופעלה — בלי גל של הצעות ישנות.
+ */
+const ALERT_WINDOW_MS = DAY;
+
+/** מי מקבל פנייה על מייל חדש: בוט פעיל, הפעולה מופעלת לו, טלפון, Gmail מחובר, ולא כיבה לעצמו */
+function mailAlertUsers() {
+  if (!D.getSetting('wa_bot_enabled', true) || !isConfigured() || !WaActions.byKey('mail_alert')?.enabled || !inHours()) return [];
+  return orgUsers().filter((u) => {
+    if (!u.phone || D.userPrefs(u.id)?.botPrefs?.mailAlert === false || !Gmail.boxesOf(u.id, 'mail').length) return false;
+    const actor = Auth.loadActor('user', u.id);
+    return Boolean(actor && WaActions.allowed(actor, 'mail_alert'));
+  }).map((u) => u.id);
+}
+
+/** ההצעות של המייל שנשאל עליו — נענו / נדחו / דולגו. רק מה שעוד ממתין */
+function closeAlerted(userId, ids, status) {
+  for (const id of ids) {
+    const sug = D.get("SELECT * FROM ai_suggestions WHERE id = ? AND user_id = ? AND status = 'pending'", id, userId);
+    if (!sug) continue;
+    if (status === 'rejected') {
+      require('./mail-scan').reject(id, { type: 'user', id: userId });
+      continue;
+    }
+    const d = parseJson(sug.data, {});
+    if (d.reply) d.reply[status === 'replied' ? 'sent' : 'dismissed'] = D.nowIso();
+    D.run("UPDATE ai_suggestions SET status = ?, data = ?, decided_at = ? WHERE id = ? AND status = 'pending'", status, JSON.stringify(d), D.nowIso(), id);
+  }
+}
+
+const oneLine = (x, n) => { const v = String(x ?? '').replace(/\s+/g, ' ').trim(); return v.length > n ? `${v.slice(0, n - 1)}…` : v; };
+
+/** המייל הבא לשאול עליו — הוותיק ביותר שעוד לא נשאל, מהיממה האחרונה */
+function nextAlert(userId, since) {
+  const first = D.get(
+    `SELECT * FROM ai_suggestions
+      WHERE user_id = ? AND status = 'pending' AND kind = 'task' AND gmail_id <> ''
+        AND COALESCE(json_extract(data, '$.source'), 'email') = 'email'
+        AND header_id NOT LIKE 'doc:%' AND json_extract(data, '$.expiry') IS NULL
+        AND json_extract(data, '$.waAlert') IS NULL AND created_at >= ?
+      ORDER BY received_at, id LIMIT 1`,
+    userId, new Date(Math.max(Date.now() - ALERT_WINDOW_MS, new Date(since).getTime())).toISOString()
+  );
+  if (!first) return null;
+  // כל ההצעות מאותו מייל — שאלה אחת
+  const rows = D.all("SELECT * FROM ai_suggestions WHERE user_id = ? AND gmail_id = ? AND status = 'pending' AND kind = 'task' ORDER BY id", userId, first.gmail_id);
+  for (const r of rows) {
+    const d = parseJson(r.data, {});
+    d.waAlert = { at: D.nowIso() };
+    D.run('UPDATE ai_suggestions SET data = ? WHERE id = ?', JSON.stringify(d), r.id);
+  }
+  return rows.map((r) => ({ ...r, d: parseJson(r.data, {}) }));
+}
+
+async function mailAlertFor(userId) {
+  const u = D.get("SELECT id, full_name, phone FROM users WHERE id = ? AND status = 'active'", userId);
+  const state = chatOf(userId);
+  // באמצע שיחה מול הבוט — לא קוטעים. המייל מחכה לסבב הבא
+  if (!u?.phone || state.awaiting || (state.draft && state.draft.kind !== 'menu') || GoodsReceipt.active(userId) || PurchaseDemand.active(userId)) return;
+  let since = D.getSetting('wa_mail_alert_since', '');
+  if (!since) { since = D.nowIso(); D.setSetting('wa_mail_alert_since', since); }
+  const rows = nextAlert(userId, since);
+  if (!rows?.length) return;
+  const head = rows[0];
+  const withReply = rows.find((r) => r.d.reply?.body && !r.d.reply.sent && !r.d.reply.dismissed);
+  const ids = rows.map((r) => r.id);
+  const chatId = `${u.phone}@c.us`;
+  const intro = [
+    `שלום ${firstName(u.full_name)} 👋`,
+    `📧 קיבלת מייל מ*${head.from_name || head.from_email}*${head.subject ? `: ${oneLine(head.subject, 90)}` : ''}`,
+    head.d.summary ? oneLine(head.d.summary, 220) : null
+  ].filter(Boolean);
+  let text;
+  let draft;
+  let reply = null;
+  if (withReply && Gmail.canSend(Gmail.handle(userId, withReply.d.reply.box ?? 0))) {
+    reply = await MailInsights.completeReply(userId, withReply.d.reply).catch((err) => {
+      log({ channel: 'summary', chatId, userId, who: u.full_name, action: 'mail_alert', status: 'error', result: `השלמת התשובה: ${err.message}` });
+      return null;
+    });
+  }
+  if (reply) {
+    text = [...intro, '', '*לענות לו כך?*', `_${oneLine(reply.body, 700)}_`, reply.missing ? `⚠️ ${reply.missing}` : null, '', '*כן* 👍 שולח · *לא* 👎 לא עונים · או כתבו מה לשנות.'].filter((l) => l !== null).join('\n');
+    draft = { kind: 'mail_reply', reply, alert: true, suggestionIds: ids, subject: head.subject };
+  } else {
+    const titles = rows.map((r) => r.d.title).filter(Boolean);
+    text = [...intro, '', titles.length > 1 ? `*לפתוח ${titles.length} משימות?*\n${titles.map((x) => `• ${x}`).join('\n')}` : `*לפתוח משימה:* ${titles[0] ?? head.subject}?`, '', '*כן* 👍 · *לא* 👎'].join('\n');
+    draft = { kind: 'mail_task', alert: true, suggestionIds: ids, title: titles[0] ?? head.subject, subject: head.subject };
+  }
+  try {
+    await sendButtons(chatId, text, [WaUi.BTN.yes, WaUi.BTN.no]);
+    rememberBot(userId, text);
+    // המצב נקרא שוב רגע לפני השמירה — הודעה שהגיעה בינתיים מהעובד גוברת
+    const now = chatOf(userId);
+    if (!now.awaiting && !(now.draft && now.draft.kind !== 'menu')) saveChat(userId, { ...now, draft, awaiting: true });
+    log({ channel: 'summary', chatId, userId, who: u.full_name, action: 'mail_alert', status: 'ok', result: `📧 ${head.from_name}: ${oneLine(head.subject, 120)} — ${reply ? 'הצעת תשובה' : 'משימה'}` });
+  } catch (err) {
+    log({ channel: 'summary', chatId, userId, who: u.full_name, action: 'mail_alert', status: 'error', result: err.message });
+  }
+}
+
+async function mailAlerts() {
+  for (const userId of mailAlertUsers()) {
+    await mailAlertFor(userId).catch((err) => console.error('[משימון] פנייה על מייל חדש נכשלה:', err.message));
   }
 }
 
@@ -3524,6 +3674,7 @@ async function tick() {
       for (const m of takeDeferred()) dispatch(m);
       await sendSummaries();
       await flushOutbox();
+      await mailAlerts();
       await warmInsights();
     }
     if (Claude.isEnabled() && WaActions.byKey('group_tasks')?.enabled) await processGroups();
@@ -3551,10 +3702,10 @@ module.exports = {
   init, start, tick, publicStatus, save, remove, checkState, qr, isConfigured,
   listGroups, bindGroup, userByPhone, markDone, readLog, todayStats, simulate, simulateGroup, inHours,
   // לשליחה ממודולים אחרים — התראה לפני פגישה (‎meetings.js‎), עם רישום ביומן הבוט
-  sendText, log, notifyAssignment, assistant, deliver, sendFilesToUser,
+  sendText, log, notifyAssignment, assistant, deliver, sendFilesToUser, mailAlertUsers,
   _internal: {
     storeGroupMessage, processGroup, handleDirect, sanitizeGroup, resolveMentions, candidatesOf, converse, turn, withFollowUps, sendSummaries, YES,
     findRecipients, findContactCards, sourceOf, suggestionFeedback, flushOutbox, todayMessage, splitMessage, parseSuggestionCommand, businessCommand, chatOf, saveChat,
-    recordingReply, checkDraft, draftText, createFromDraft
+    recordingReply, checkDraft, draftText, createFromDraft, mailAlertFor, closeAlerted
   }
 };
