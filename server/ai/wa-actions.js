@@ -89,6 +89,12 @@ const ACTIONS = [
     enabled: true
   },
   {
+    key: 'translate', icon: '🌐', label: 'תרגום', channel: 'private',
+    description: '"תתרגם לאנגלית: …" / "תתרגם לערבית" (בלי טקסט — ההודעה האחרונה של הבוט) — תרגום טבעי ומקצועי. בטיוטת מייל — "באנגלית" / "בערבית" מתרגם את הטיוטה עצמה. בהודעה קולית: "תשלח מייל לדני ש…" — טיוטה, כמו בכתב.',
+    examples: ['תתרגם לאנגלית: נשמח לקבל הצעת מחיר עד יום חמישי'],
+    enabled: true
+  },
+  {
     key: 'my_tasks', icon: '📋', label: 'המשימות שלי', channel: 'private',
     description: 'רשימת המשימות הפתוחות של הכותב: להיום, באיחור, לשבוע הקרוב או הכול.',
     examples: ['מה המשימות שלי היום?', 'מה באיחור?', 'מה יש לי השבוע?'],
@@ -248,7 +254,7 @@ const isManager = (actor) => actor?.type === 'user' && actor.role !== 'employee'
  * 🧪 פיילוט (הוחלט 09.11.26): היכולות החדשות מסבב Instinct — רק למנהלי המערכת, עד שפותחים אותן לכולם
  * ("פתח את היכולות החדשות לכולם" בבוט, או ההגדרה ‎bot_pilot‎). כך הבדיקה בבוט האמיתי לא מגיעה לעובדים.
  */
-const PILOT_KEYS = new Set(['reminders', 'sent_followup', 'day_digest', 'briefing', 'meeting_followup', 'meeting_audio', 'mail_deadline', 'goods_offer', 'notices', 'rfq', 'form_fill', 'meet_coord']);
+const PILOT_KEYS = new Set(['reminders', 'sent_followup', 'day_digest', 'briefing', 'translate', 'meeting_followup', 'meeting_audio', 'mail_deadline', 'goods_offer', 'notices', 'rfq', 'form_fill', 'meet_coord']);
 const PILOT_ROLES = ['superadmin', 'admin'];
 const inPilot = (actor) => actor?.type === 'user' && PILOT_ROLES.includes(actor.role);
 
