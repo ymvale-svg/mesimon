@@ -3149,6 +3149,42 @@ async function meetingAudioTurn(user, actor, t, state, { dry, out }) {
   return null;
 }
 
+// 🎨 לוגו: הודעות "לוגו" ותמונה יכולות להגיע בכל סדר (וגם בסדר הפוך מזה שנשלחו — וואטסאפ לא מבטיח)
+const logoArmed = new Map(); // ‎userId‎ → { name, at }
+const LOGO_ARM_MS = 10 * 60 * 1000;
+const isImageFile = (f) => Boolean(f) && (/^image\//i.test(f.mime ?? '') || /\.(png|jpe?g)$/i.test(f.name ?? ''));
+
+/**
+ * ‎{ name, load, fromGoods }‎ — לשמור לוגו; ‎{ arm: true }‎ — "לוגו" בלי קובץ: מחכים לקובץ; ‎null‎ — לא לוגו.
+ */
+function logoIntent(userId, msg, text) {
+  const cap = Notice.logoCaption(text);
+  const download = (f) => () => (f.buf ? Promise.resolve({ buf: f.buf, mime: f.mime }) : Speech.download(f.url, f.mime));
+  if (msg.file && isImageFile(msg.file)) {
+    if (cap) return { name: cap.name, load: download(msg.file) };
+    const armed = logoArmed.get(userId);
+    if (armed && Date.now() - armed.at < LOGO_ARM_MS && !String(text ?? '').trim()) {
+      logoArmed.delete(userId);
+      return { name: armed.name, load: download(msg.file) };
+    }
+    return null;
+  }
+  if (!cap || msg.file) return null;
+  // הקובץ שנשלח רגע לפני: מחכה לשאלה "לקלוט כקבלת סחורה?", או שנשמר כקובץ אחרון
+  const gr = GoodsReceipt._load(userId);
+  const grFile = gr?.step === 'offer' && Date.now() - (gr.startedAt ?? 0) < LOGO_ARM_MS ? gr.files?.[0] : null;
+  if (grFile && /png|jpe?g/i.test(grFile.mime ?? '')) {
+    return { name: cap.name, fromGoods: true, load: async () => ({ buf: require('node:fs').readFileSync(grFile.path), mime: grFile.mime }) };
+  }
+  const recent = recentFiles.get(userId);
+  if (recent && Date.now() - recent.at < LOGO_ARM_MS && isImageFile(recent.file)) {
+    recentFiles.delete(userId);
+    return { name: cap.name, load: download(recent.file) };
+  }
+  logoArmed.set(userId, { name: cap.name, at: Date.now() });
+  return { arm: true };
+}
+
 async function handleDirect(msg) {
   const user = userByPhone(msg.phone);
   if (!user) {
@@ -3168,22 +3204,25 @@ async function handleDirect(msg) {
   let text = msg.text;
   const voice = !text && Boolean(msg.audio);
   let notice = null;
-  // 🎨 תמונה עם הכיתוב "לוגו" / "לוגו <חברה>" — הלוגו למודעות ולמכתבים. רק מנהלים (לא עובד מן השורה)
-  const logoAsk = msg.file && /^image\//i.test(msg.file.mime ?? '') ? Notice.logoCaption(text) : null;
-  if (logoAsk && WaActions.allowed(actor, 'notices')) {
+  // 🎨 הלוגו למודעות ולמכתבים — בכל סדר: תמונה עם הכיתוב "לוגו"; קובץ ואחריו "לוגו"; "לוגו" ואחריו קובץ
+  const logo = WaActions.allowed(actor, 'notices') ? logoIntent(user.id, msg, text) : null;
+  if (logo) {
     let reply;
-    if (actor.role === 'employee') {
+    if (logo.arm) {
+      reply = '🖼 שלחו לי את קובץ הלוגו (תמונה, PNG או JPG) — ואשמור אותו למודעות ולמכתבים.';
+    } else if (actor.role === 'employee') {
       reply = 'רק מנהלים יכולים לעדכן את הלוגו של המודעות. אפשר לבקש ממנהל המחלקה 🙏';
     } else {
       try {
-        const file = await Speech.download(msg.file.url, msg.file.mime);
-        const name = Notice.saveLogo(file, logoAsk.name);
-        reply = `✅ הלוגו נשמר${name ? ` בשם *${name}* — במודעה: "עם הלוגו של ${name}"` : ' — מעכשיו הוא במודעות ובמכתבים'}.`;
+        const name = Notice.saveLogo(await logo.load(), logo.name);
+        // הקובץ נשאל קודם "לקלוט כקבלת סחורה?" — כבר לא
+        if (logo.fromGoods) GoodsReceipt._clear(user.id);
+        reply = `✅ הלוגו נשמר${name ? ` בשם *${name}* — במודעה: "עם הלוגו של ${name}"` : ' — מעכשיו הוא במודעות ובמכתבים'}.${logo.fromGoods ? '\n(הקובץ לא נקלט כקבלת סחורה.)' : ''}`;
       } catch (err) {
         reply = `לא הצלחתי לשמור את הלוגו: ${err.message}`;
       }
     }
-    log({ ...base, text: `[🖼 ${text}]`, action: 'notices', status: 'ok', result: reply.slice(0, 300) });
+    log({ ...base, text: `[🖼 ${text || msg.file?.name || 'לוגו'}]`, action: 'notices', status: 'ok', result: reply.slice(0, 300) });
     await sendText(msg.chatId, reply);
     return;
   }
@@ -4249,6 +4288,6 @@ module.exports = {
   _internal: {
     storeGroupMessage, processGroup, handleDirect, sanitizeGroup, resolveMentions, candidatesOf, converse, turn, withFollowUps, sendSummaries, YES,
     findRecipients, findContactCards, sourceOf, suggestionFeedback, flushOutbox, todayMessage, splitMessage, parseSuggestionCommand, businessCommand, chatOf, saveChat,
-    recordingReply, checkDraft, draftText, createFromDraft, mailAlertFor, closeAlerted
+    recordingReply, checkDraft, draftText, createFromDraft, mailAlertFor, closeAlerted, logoIntent
   }
 };
