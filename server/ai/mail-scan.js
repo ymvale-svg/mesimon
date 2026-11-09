@@ -358,6 +358,8 @@ async function processMessage(user, conn, gmailId) {
 
   if (!mail.from.address || mine.has(mail.from.address)) return record(user.id, gmailId, headerId, 'skipped', meta.box), 'skipped';
   if (await routeReply(user, mail)) return record(user.id, gmailId, headerId, 'reply', meta.box), 'reply';
+  // תשובה של ספק לפנייה להצעת מחיר — נקראת שם (‎rfq.js‎), לא הצעת משימה
+  if (require('./rfq').ownsReply(mail)) return record(user.id, gmailId, headerId, 'reply', meta.box), 'reply';
   if (senderMode(user.id, mail.from.address) === 'ignore') return record(user.id, gmailId, headerId, 'skipped', meta.box), 'skipped';
 
   /*

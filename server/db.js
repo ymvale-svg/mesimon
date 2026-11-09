@@ -805,6 +805,46 @@ CREATE TABLE IF NOT EXISTS mail_goods_docs (
   UNIQUE (user_id, gmail_id, filename)
 );
 
+/*
+ * 🛒 פנייה לספקים להצעת מחיר (‎ai/rfq.js‎). ‎item‎ — מה מבוקש (JSON), ‎draft‎ — נושא וגוף המייל.
+ * ‎status‎: draft / review / sent / summarized / closed / cancelled.
+ */
+CREATE TABLE IF NOT EXISTS rfq (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id       INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  status        TEXT    NOT NULL DEFAULT 'draft',
+  request       TEXT    NOT NULL DEFAULT '',
+  item          TEXT    NOT NULL DEFAULT '{}',
+  draft         TEXT    NOT NULL DEFAULT '{}',
+  deadline_at   TEXT,
+  sent_at       TEXT,
+  polled_at     TEXT,
+  summarized_at TEXT,
+  task_id       INTEGER REFERENCES tasks(id) ON DELETE SET NULL,
+  created_at    TEXT    NOT NULL
+);
+/* ספק בפנייה — ‎status‎: pending / no_email / sent / replied / declined / failed / skipped. ‎offer‎ — מה חולץ מהתשובה */
+CREATE TABLE IF NOT EXISTS rfq_vendors (
+  id             INTEGER PRIMARY KEY AUTOINCREMENT,
+  rfq_id         INTEGER NOT NULL REFERENCES rfq(id) ON DELETE CASCADE,
+  name           TEXT    NOT NULL,
+  email          TEXT    NOT NULL DEFAULT '',
+  phone          TEXT    NOT NULL DEFAULT '',
+  source         TEXT    NOT NULL DEFAULT '',
+  source_url     TEXT    NOT NULL DEFAULT '',
+  reason         TEXT    NOT NULL DEFAULT '',
+  status         TEXT    NOT NULL DEFAULT 'pending',
+  message_id     TEXT,
+  gmail_id       TEXT,
+  thread_id      TEXT,
+  sent_at        TEXT,
+  reply_at       TEXT,
+  reply_gmail_id TEXT,
+  offer          TEXT,
+  error          TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_rfq_vendors_msg ON rfq_vendors(message_id);
+
 /* סיכום, החלטות ומשימות של פגישה — פעם אחת לפגישה, לכל המשתתפים. נמחק אחרי חודש */
 CREATE TABLE IF NOT EXISTS meeting_digests (
   source     TEXT    NOT NULL,
@@ -1500,6 +1540,7 @@ const DEFAULT_SETTINGS = {
   meeting_reminder_minutes: 15,            // כמה דקות לפני — התראה ובוט הוואטסאפ, עם קישור הפגישה
   meeting_followup_minutes: 15,            // כמה דקות אחרי סוף פגישה מוקלטת — הבוט שואל את המשתתפים מה לשלוח
   meeting_audio_min_kb: 1024,              // הודעה קולית גדולה מזה (כ-8 דקות) לבוט = הקלטת פגישה, והבוט שואל לאיזו פגישה לשייך
+  rfq_daily_max: 20,                       // פנייה לספקים: כמה מיילים לכל היותר לעובד ביום (לא להיחשב דואר זבל)
   meeting_ai_alternatives: true,           // הצעות AI להזזת פגישות חופפות
   meeting_record_default: false,           // "הקלטה אוטומטית לענן" מסומן מראש בפגישת Zoom חדשה
 

@@ -935,7 +935,28 @@ async function budgetPairs(company) {
   return list;
 }
 
+/**
+ * 🛒 ספקים לפנייה להצעת מחיר (‎ai/rfq.js‎) — לפי מילה בשם הספק ("ברזל", "חשמל", "כלי עבודה").
+ * המייל והטלפון מכרטיס הספק; אם השדות האלה לא פתוחים ל-API — בלעדיהם (ואז המייל מהאלפון / מהמיילים).
+ * לבדוק מול פריוריטי אמיתי: שמות השדות ‎EMAIL‎ / ‎PHONE‎ ב-‎SUPPLIERS‎.
+ */
+async function suppliersByWords(company, words) {
+  const out = new Map();
+  for (const w of words.filter((x) => String(x).length >= 3).slice(0, 4)) {
+    const f = `$filter=${enc(`contains(SUPDES,'${q(w)}')`)}&$top=15`;
+    let list;
+    try {
+      list = rows(await call(company, 'GET', `SUPPLIERS?${f}&$select=SUPNAME,SUPDES,STATDES,EMAIL,PHONE`));
+    } catch {
+      try { list = rows(await call(company, 'GET', `SUPPLIERS?${f}&$select=SUPNAME,SUPDES,STATDES`)); } catch { list = []; }
+    }
+    for (const x of list.filter(activeSupplier)) out.set(x.SUPNAME, { code: x.SUPNAME, name: String(x.SUPDES ?? '').trim(), email: String(x.EMAIL ?? '').trim().toLowerCase(), phone: String(x.PHONE ?? '').trim() });
+  }
+  return [...out.values()];
+}
+
 module.exports = {
+  suppliersByWords,
   COMPANIES, isEnabled, allowed, companyOf, isTest, resolveCompany, companiesByName, PriorityError,
   GENERAL, NO_VAT_CODE, TAX_CODES, PAY_TERMS, DEFAULT_PAY, payTerm, payLabel, payFromText, dueDate, projectWarehouses, warehouses, warehouseExists, defaultWarehouse, supplierHistory, recentLines, partByCode, findPartsByText, searchParts, generalCoding, warehouseOf, findSuppliers, supplierByCode, findReceiptByBooknum, getOrder, openOrders, findPartExact, lastSubchapter, projects, matchProjects, readReceipt,
   finalOrders, orderForNotice, demandInitiator, projectManager, priorityUser,

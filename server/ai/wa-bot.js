@@ -66,6 +66,7 @@ const MeetingFollowup = require('./meeting-followup');
 const MeetingAudio = require('./meeting-audio');
 const MailActions = require('./mail-actions');
 const Notice = require('./notice');
+const Rfq = require('./rfq');
 
 const GROUP_SKILL = path.join(__dirname, 'skills', 'whatsapp-group-to-tasks.md');
 const CHAT_SKILL = path.join(__dirname, 'skills', 'whatsapp-chat.md');
@@ -2143,6 +2144,32 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
     }
   }
 
+  // 🛒 פנייה לספקים להצעת מחיר — הבקשה, השאלות, האישור, ואחרי הסיכום
+  if (state.awaiting && ['rfq', 'rfq_done'].includes(state.draft?.kind)) {
+    const d = state.draft;
+    const r = dry ? null : await (d.kind === 'rfq' ? Rfq.answer(actor.id, d, t) : Rfq.answerDone(actor.id, d, t))
+      .catch((err) => ({ text: 'משהו השתבש בפנייה לספקים. נסו שוב בעוד רגע 🙏', draft: d, awaiting: true, result: `שגיאה: ${err.message}`, error: true }));
+    if (r) {
+      if (r.search) rfqPrepare(actor, r.rfqId);
+      if (r.send) rfqSend(actor, r.rfqId);
+      if (r.demand && WaActions.allowed(actor, 'purchase_demand')) setImmediate(() => enqueueAs(actor.id, { text: r.demand }));
+      return out(r.text, { draft: r.draft ?? null, awaiting: Boolean(r.awaiting) }, { action: 'rfq', status: r.error ? 'error' : 'ok', result: String(r.result ?? '').slice(0, 300), buttons: r.buttons });
+    }
+    keep.draft = null;
+    state = { ...state, draft: null, awaiting: false };
+  }
+  if (WaActions.allowed(actor, 'rfq') && Rfq.SUMMARY_ASK.test(WaUi.normalize(t))) {
+    const s2 = Rfq.lastSummary(actor.id);
+    if (s2) return out(s2.text, { draft: s2.draft, awaiting: true }, { action: 'rfq', status: 'ok', result: 'טבלת הצעות', buttons: s2.buttons, files: s2.files });
+  }
+  if (WaActions.allowed(actor, 'rfq') && Rfq.isRequest(t)) {
+    if (dry) return out('(בדיקה) הייתי מתחיל פנייה לספקים.', {}, { action: 'rfq', status: 'ok', result: 'בדיקה' });
+    const r = await Rfq.start(actor.id, t).catch((err) => ({ text: 'משהו השתבש בפנייה לספקים. נסו שוב בעוד רגע 🙏', result: `שגיאה: ${err.message}`, error: true }));
+    if (r) {
+      if (r.search) rfqPrepare(actor, r.rfqId);
+      return out(r.text, { draft: r.draft ?? null, awaiting: Boolean(r.awaiting) }, { action: 'rfq', status: r.error ? 'error' : 'ok', result: String(r.result ?? '').slice(0, 300), buttons: r.buttons });
+    }
+  }
   // 🎨 מודעה / ✉️ מכתב רשמי — "תעצב לי מודעה…", ובתוך הזרימה: סגנון, תיקונים, "מאשר"
   if (state.awaiting && state.draft?.kind === 'notice') {
     const r = await Notice.answer(actor.id, state.draft, t).catch((err) => ({ text: 'לא הצלחתי להכין את זה כרגע. נסו שוב בעוד רגע 🙏', draft: state.draft, awaiting: true, result: `שגיאה: ${err.message}`, error: true }));
@@ -3574,6 +3601,79 @@ async function mailAlerts() {
 }
 
 // ---------------------------------------------------------------------------
+// הודעה יזומה עם קבצים וכפתורים — וטיוטה שמחכה לתשובה (כשהעובד לא באמצע משהו אחר)
+// ---------------------------------------------------------------------------
+
+async function pushToUser(userId, { text, files = [], buttons = [], draft = null }, action) {
+  const u = D.get("SELECT id, full_name, phone FROM users WHERE id = ? AND status = 'active'", userId);
+  const ch = channel();
+  if (!u?.phone || !ch) return false;
+  const chatId = `${u.phone}@c.us`;
+  const st = chatOf(userId);
+  const busy = st.awaiting && st.draft && st.draft.kind !== draft?.kind;
+  try {
+    for (const f of files) await WhatsApp.sendFile(ch, chatId, f);
+    const parts = splitMessage(text);
+    for (let i = 0; i < parts.length; i++) {
+      if (i === parts.length - 1 && buttons.length && !busy) await sendButtons(chatId, parts[i], buttons);
+      else await sendText(chatId, parts[i]);
+    }
+    rememberBot(userId, text);
+    if (draft && !busy) saveChat(userId, { ...chatOf(userId), draft, awaiting: true });
+    log({ channel: 'summary', chatId, userId, who: u.full_name, action, status: 'ok', result: text.split('\n')[0].slice(0, 300) });
+    return true;
+  } catch (err) {
+    log({ channel: 'summary', chatId, userId, who: u.full_name, action, status: 'error', result: err.message });
+    return false;
+  }
+}
+
+/** הודעה מדומה לתור של העובד (אחרי התשובה הנוכחית) — "קבלת סחורה" עם קובץ, "דרישת רכש …" */
+function enqueueAs(userId, m) {
+  const u = D.get('SELECT phone FROM users WHERE id = ?', userId);
+  if (!u?.phone) return;
+  const msg = { chatId: `${u.phone}@c.us`, phone: u.phone, kind: 'textMessage', forwarded: false, audio: null, file: null, id: `bot-${Date.now()}`, ...m };
+  const prev = chains.get(msg.phone) ?? Promise.resolve();
+  const next = prev.then(() => handleDirect(msg))
+    .catch((err) => console.error('[משימון] הודעה פנימית לבוט נכשלה:', err.message))
+    .finally(() => { if (chains.get(msg.phone) === next) chains.delete(msg.phone); });
+  chains.set(msg.phone, next);
+}
+
+// 🛒 פנייה לספקים — החיפוש והשליחה ברקע (חיפוש ברשת לוקח זמן)
+function rfqPrepare(actor, rfqId) {
+  setImmediate(async () => {
+    try {
+      const r = await Rfq.prepare(actor.id, rfqId);
+      await pushToUser(actor.id, { text: r.text, buttons: r.buttons ?? [], draft: r.draft ?? null }, 'rfq');
+    } catch (err) {
+      console.error('[משימון] חיפוש ספקים נכשל:', err.message);
+      await pushToUser(actor.id, { text: 'לא הצלחתי למצוא ספקים כרגע 😕 נסו שוב בעוד כמה דקות.' }, 'rfq');
+    }
+  });
+}
+function rfqSend(actor, rfqId) {
+  setImmediate(async () => {
+    try {
+      const text = await Rfq.send(actor.id, rfqId, { createTask: hooks.createTask, actor });
+      await pushToUser(actor.id, { text }, 'rfq');
+    } catch (err) {
+      console.error('[משימון] שליחה לספקים נכשלה:', err.message);
+      await pushToUser(actor.id, { text: `השליחה לספקים נכשלה: ${err.message}` }, 'rfq');
+    }
+  });
+}
+let rfqAt = 0;
+async function rfqTick() {
+  if (!WaActions.byKey('rfq')?.enabled || Date.now() - rfqAt < 5 * 60 * 1000) return;
+  rfqAt = Date.now();
+  await Rfq.tick({
+    notify: (userId, text) => pushToUser(userId, { text }, 'rfq'),
+    summary: (userId, s) => pushToUser(userId, s, 'rfq')
+  }).catch((err) => console.error('[משימון] מעקב הצעות מחיר נכשל:', err.message));
+}
+
+// ---------------------------------------------------------------------------
 // 📬 פעולות לפי המיילים: "זכרת?" על דדליין, וחשבונית ← קבלת סחורה (‎mail-actions.js‎)
 // ---------------------------------------------------------------------------
 
@@ -3623,12 +3723,7 @@ function startGoodsFromMail(user, goodsId) {
       const file = await MailActions.goodsFile(row);
       // אחרי התשובה הנוכחית (אותו תור לכל עובד) — בדיוק כמו קובץ שנשלח עם "קבלת סחורה"
       // לא דרך ‎dispatch‎: מחוץ לשעות הוא דוחה לתור שנשמר במסד, והקובץ (‎buf‎) לא נשמר שם
-      const m = { chatId, phone: u.phone, text: 'קבלת סחורה', kind: 'documentMessage', forwarded: false, audio: null, file, id: `mail-goods-${row.id}` };
-      const prev = chains.get(m.phone) ?? Promise.resolve();
-      const next = prev.then(() => handleDirect(m))
-        .catch((err) => console.error('[משימון] קבלת סחורה מהמייל נכשלה:', err.message))
-        .finally(() => { if (chains.get(m.phone) === next) chains.delete(m.phone); });
-      chains.set(m.phone, next);
+      enqueueAs(u.id, { text: 'קבלת סחורה', kind: 'documentMessage', file, id: `mail-goods-${row.id}` });
     } catch (err) {
       console.error('[משימון] הורדת חשבונית מהמייל נכשלה:', err.message);
       log({ channel: 'summary', chatId, userId: u.id, who: u.full_name, action: 'goods_offer', status: 'error', result: `הורדה מ-Gmail: ${err.message}`.slice(0, 300) });
@@ -4016,6 +4111,7 @@ async function tick() {
       await mailAlerts();
       await meetingFollowups();
       await mailActionAlerts();
+      await rfqTick();
       await warmInsights();
     }
     if (Claude.isEnabled() && WaActions.byKey('group_tasks')?.enabled) await processGroups();
