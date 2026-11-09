@@ -19,6 +19,17 @@ const MeetingView = (() => {
   const hhmm = (iso) => localTime(new Date(iso));
   const when = (iso) => new Date(iso).toLocaleString('he-IL', { weekday: 'long', day: 'numeric', month: 'numeric', hour: '2-digit', minute: '2-digit' });
   const shortWhen = (iso) => new Date(iso).toLocaleString('he-IL', { weekday: 'short', day: 'numeric', month: 'numeric', hour: '2-digit', minute: '2-digit' });
+  /** פרק זמן במילים: 30 ← "חצי שעה", 90 ← "שעה וחצי", 180 ← "3 שעות", 50 ← "50 דק׳" */
+  function durationLabel(min) {
+    const n = Number(min) || 0;
+    const named = { 15: 'רבע שעה', 30: 'חצי שעה', 45: 'שלושת רבעי שעה', 60: 'שעה', 90: 'שעה וחצי', 120: 'שעתיים', 150: 'שעתיים וחצי' };
+    if (named[n]) return named[n];
+    if (n < 60) return `${n} דק׳`;
+    const h = Math.floor(n / 60);
+    const rest = n % 60;
+    const hours = h === 1 ? 'שעה' : h === 2 ? 'שעתיים' : `${h} שעות`;
+    return rest === 0 ? hours : rest === 30 ? `${hours} וחצי` : rest === 15 ? `${hours} ורבע` : `${hours} ו-${rest} דק׳`;
+  }
   const RESPONSE = { accepted: '✓', declined: '✗', tentative: '?', needsAction: '·' };
   const RESPONSE_TITLE = { accepted: 'אישר/ה', declined: 'דחה/תה', tentative: 'אולי', needsAction: 'עוד לא ענה/תה' };
 
@@ -174,15 +185,20 @@ const MeetingView = (() => {
       return el('div', {}, [attendeePicker.node, chipsBox]);
     }
 
-    // --- משך
+    // --- משך: בפרקי זמן ("חצי שעה", "שעה וחצי"), לא בדקות
     function minutesBox() {
-      const preset = [30, 45, 60, 90];
-      const other = el('input', { type: 'number', min: 5, max: 600, step: 5, value: preset.includes(state.minutes) ? '' : state.minutes, placeholder: 'אחר', style: { width: '80px' } });
-      other.addEventListener('change', () => { if (Number(other.value) > 0) { state.minutes = Number(other.value); state.suggestions = null; draw(); loadHosts(); } });
+      const preset = [30, 45, 60, 90, 120];
+      const more = [15, 150, 180, 240, 300, 360, 480];
+      const set = (n) => { state.minutes = n; state.suggestions = null; state.alternatives = null; draw(); loadHosts(); };
+      // משך שלא ברשימות (פגישה קיימת של 50 דק׳) — מופיע בבחירה כמו שהוא
+      const extra = preset.includes(state.minutes) || more.includes(state.minutes) ? [] : [state.minutes];
+      const other = el('select', { style: { width: 'auto' } }, [
+        el('option', { value: '' }, ['עוד…']),
+        ...[...more, ...extra].sort((a, b) => a - b).map((n) => el('option', { value: String(n), selected: state.minutes === n }, [durationLabel(n)]))
+      ]);
+      other.addEventListener('change', () => { if (Number(other.value) > 0) set(Number(other.value)); });
       return el('div.flex', { style: { flexWrap: 'wrap', gap: '6px' } }, [
-        el('div.seg', {}, preset.map((n) => el(`button${state.minutes === n ? '.active' : ''}`, {
-          type: 'button', onclick: () => { state.minutes = n; state.suggestions = null; state.alternatives = null; draw(); loadHosts(); }
-        }, [`${n} דק׳`]))),
+        el('div.seg', {}, preset.map((n) => el(`button${state.minutes === n ? '.active' : ''}`, { type: 'button', onclick: () => set(n) }, [durationLabel(n)]))),
         other
       ]);
     }
@@ -646,5 +662,5 @@ const MeetingView = (() => {
     }
   }
 
-  return { openDialog, panel, closeTask, when, hhmm };
+  return { openDialog, panel, closeTask, when, hhmm, durationLabel };
 })();

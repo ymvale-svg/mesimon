@@ -140,7 +140,7 @@ const RecordingsView = (() => {
     return el('div.card.rec-card', {}, [
       el('div.rec-top', {}, [
         el('b', { text: r.topic || 'פגישת Zoom' }),
-        el('span.mute-sm', { text: ` · ${date} ${time}${r.minutes ? ` · ${r.minutes} דק׳` : ''}` })
+        el('span.mute-sm', { text: ` · ${date} ${time}${r.minutes ? ` · ${MeetingView.durationLabel(r.minutes)}` : ''}` })
       ]),
       el('div.mute-sm', {}, [
         `מארח: ${r.host.name}`,
