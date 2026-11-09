@@ -2898,6 +2898,9 @@ button.txt-open:hover { color: var(--brand-ink); text-decoration: underline; }
 .ai-more.is-open { color: var(--brand-dark); }
 .ai-details, .today-details { display: grid; gap: 6px; margin-top: 6px; cursor: default; }
 .ai-details[hidden], .today-details[hidden] { display: none; }
+.ai-rules { margin: 8px 0; font-size: 13px; }
+.ai-rules summary { cursor: pointer; font-weight: 600; }
+.ai-rule { display: flex; gap: 8px; align-items: flex-start; padding: 5px 0; border-bottom: 1px solid var(--border); }
 .ai-sum { color: var(--text-soft); font-size: 13px; line-height: 1.5; }
 .ai-quote { white-space: pre-wrap; background: var(--surface-2); border-inline-start: 3px solid #c4b5fd; padding: 6px 9px; border-radius: 6px; margin-top: 4px; font-size: 13px; }
 .ai-chips { display: flex; flex-wrap: wrap; gap: 4px; }

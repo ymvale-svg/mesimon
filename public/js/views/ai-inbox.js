@@ -776,6 +776,40 @@ const AiInboxView = (() => {
         ])
       ]));
     }
+    /*
+     * 🧠 מה למדתי מהתשובות שלך — כללים שנכנסים להצעות התשובה הבאות ("התשלום
+     * ב-15 לחודש"). כלל שגוי — מוחקים כאן, או עונים פעם אחת אחרת והוא מתעדכן.
+     */
+    const rulesSlot = el('div');
+    let rules = null;
+    async function loadRules() {
+      try { rules = (await API.get('/api/me/reply-rules')).rules; } catch { rules = []; }
+      drawRules();
+    }
+    function drawRules() {
+      if (!rules?.length) return UI.mount(rulesSlot);
+      UI.mount(rulesSlot, el('details.ai-rules', {}, [
+        el('summary', { text: `🧠 מה למדתי מהתשובות שלך (${rules.length})` }),
+        el('div.mute-sm', { text: 'נכנס להצעות התשובה הבאות, גם לשולחים אחרים. ענית אחרת — הכלל מתעדכן לבד.' }),
+        ...rules.map((r) => {
+          const del = el('button.btn.btn-sm.btn-ghost', { type: 'button', title: 'לא נכון — למחוק' }, ['✕']);
+          del.addEventListener('click', async () => {
+            del.disabled = true;
+            try { await API.del(`/api/me/reply-rules/${r.id}`); rules = rules.filter((x) => x.id !== r.id); drawRules(); } catch (err) { del.disabled = false; UI.error(err); }
+          });
+          return el('div.ai-rule', {}, [
+            el('div', { style: { flex: '1', minWidth: '0' } }, [el('b', { text: `${r.topic}: ` }), r.rule, r.example ? el('div.mute-sm', { text: `כתבת: "${r.example}"` }) : null]),
+            del
+          ]);
+        })
+      ]));
+    }
+    const rulesBox = () => {
+      if (rules === null) { rules = undefined; loadRules(); }
+      drawRules();
+      return rulesSlot;
+    };
+
     const signatureBox = () => {
       if (!sigInfo && !sigLoading) { sigLoading = true; loadSignature(); }
       drawSignature();
@@ -884,6 +918,7 @@ const AiInboxView = (() => {
                   ])])
                 : null,
               signatureBox(),
+              rulesBox(),
               el('div.flex', { style: { gap: '8px', alignItems: 'center' } }, [
                 el('span', { text: '✅' }), el('b', { text: c.email }),
                 el('span.mute-sm', { text: [c.scopes?.mail ? (c.canSend ? '📧 קריאה ושליחה' : '📧 קריאה') : null, c.scopes?.calendar ? '📅 יומן' : null, c.scopes?.contacts ? '👥 אנשי קשר' : null].filter(Boolean).join(' · ') }),

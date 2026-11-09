@@ -687,7 +687,16 @@ async function dropAnswered() {
       const source = thread.find((m) => m.id === s.gmail_id);
       const read = source && !source.labels.includes('UNREAD');
       if (!answered && !read) continue;
-      D.run("UPDATE ai_suggestions SET status = ?, decided_at = ? WHERE id = ? AND status = 'pending'", answered ? 'replied' : 'read', D.nowIso(), s.id);
+      const changed = D.run("UPDATE ai_suggestions SET status = ?, decided_at = ? WHERE id = ? AND status = 'pending'", answered ? 'replied' : 'read', D.nowIso(), s.id).changes;
+      /*
+       * 🧠 עניתי בעצמי מ-Gmail / Outlook — לומדים מהתשובה מה אני נוהג לענות
+       * (‎reply-memory.js‎). מה שיצא ממשימון כבר נלמד בשליחה.
+       */
+      const MailInsights = require('./mail-insights');
+      if (changed && answered && !MailInsights.alreadyLearned(answered.id)) {
+        const sent = Mime.parse((await Gmail.raw(who, answered.id)).raw);
+        MailInsights.learnFromReply(s.user_id, { gmailId: s.gmail_id, box: s.box ?? 0, body: sent.newText || sent.text, source: 'gmail' });
+      }
     } catch (err) {
       // מייל שנמחק מהתיבה — אין מה לבדוק עוד; שאר התקלות: בסבב הבא
       if (/ 404/.test(err.message)) replyChecked.set(s.id, Date.now() + 365 * DAY);
