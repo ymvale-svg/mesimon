@@ -153,10 +153,12 @@ function paceTick(userId) {
   userId, today, cur.count + 1, D.nowIso());
 }
 
-/** אפשר לשלוח עכשיו תזכורת לעובד הזה? (שעות, קצב, תקרה, פגישה ביומן) */
+/** אפשר לשלוח עכשיו תזכורת לעובד הזה? (השתקה, שעות, קצב, תקרה, פגישה ביומן) */
 async function mayRemindNow(userId) {
   const pace = paceOf(userId);
   if (!pace.max) return false;
+  const mute = D.userPrefs(userId)?.botPrefs?.remindMuteUntil;
+  if (mute && W.todayIL() < mute) return false;
   const now = new Date();
   const hm = new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Jerusalem', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(now);
   const m = /^(\d{2}:\d{2})-(\d{2}:\d{2})$/.exec(String(D.getSetting('remind_hours', '08:30-18:00') ?? ''));
@@ -186,6 +188,54 @@ function scoreOf(row) {
   if ((p?.mails_out ?? 0) >= 3) s += 2;
   s += Math.min(3, Math.floor((Date.now() - new Date(row.received_at || row.created_at).getTime()) / DAY));
   return s;
+}
+
+// ---------------------------------------------------------------------------
+// 🔕 השתקה והפעלה מהבוט (הוחלט 09.11.26): פתוח לכולם, וכל אחד מכבה / מחזיר / משנה קצב במילים שלו
+// ---------------------------------------------------------------------------
+
+/*
+ * צריך גם "תזכורת/להזכיר" וגם "מייל" — כדי ש"תזכיר לי מחר להתקשר לאבי" (‎reminders.js‎) לא ייתפס כאן.
+ *   🔕 כיבוי:   "תפסיק להזכיר לי מהמייל", "בלי תזכורות מהמייל", "די עם התזכורות מהמיילים", "השתק תזכורות מייל"
+ *   🔕 להיום:   כיבוי + "היום" / "להיום" — חוזר לבד מחר
+ *   🔔 הפעלה:   "תחזיר את התזכורות מהמייל", "תזכיר לי מהמייל", "תפעיל תזכורות מהמייל"
+ *   🌊 קצב:     "תזכורות מהמייל רק בבוקר", "פחות תזכורות מהמייל", "תזכורות מהמייל כרגיל"
+ */
+const ABOUT = /(תזכורות|תזכורת|להזכיר|תזכיר|תזכירי|התזכורות)/;
+const MAIL = /מייל|מיילים|דואר/;
+// מילים שלמות בלבד — "די" לא בתוך "לדני"
+const word = (list) => new RegExp(`(^|\\s)(?:${list})(?=\\s|$|[.,!?])`);
+const OFF = word('תפסיק|הפסק|תפסיקי|די|בלי|עצור|תעצור|השתק|תשתיק|כבה|תכבה|לא\\s+צריך|אל\\s+תזכיר|אל\\s+תזכירי');
+const ON = new RegExp(`${word('תחזיר|החזר|תחזירי|תפעיל|הפעל|תפתח|פתח|תמשיך|המשך|כן\\s+להזכיר').source}|^תזכיר(\\s+לי)?\\s+מה?מייל[.!]?$`);
+const PACE_WORDS = [[/רק\s+(?:ב)?בוקר|בסיכום\s+הבוקר/, 'morning'], [/פחות|מעט|לא\s+הרבה/, 'light'], [/כרגיל|רגיל|כמו\s+קודם|יותר/, 'normal']];
+const PACE_LABEL = { normal: 'רגיל — עד אחת לחצי שעה, 8 ביום', light: 'מעט — עד אחת לשעתיים, 3 ביום', morning: 'רק ברשימה של סיכום הבוקר', off: 'כבויות' };
+
+/** פקודת השתקה / הפעלה / קצב. ‎null‎ — לא פקודה כזו */
+function paceCommand(userId, text) {
+  const t = String(text ?? '').trim();
+  if (t.length > 80 || !ABOUT.test(t) || !MAIL.test(t)) return null;
+  const prefs = D.userPrefs(userId)?.botPrefs ?? {};
+  const save = (patch) => D.setUserPref(userId, 'botPrefs', { ...prefs, ...patch });
+  const pace = PACE_WORDS.find(([re]) => re.test(t))?.[1];
+  if (OFF.test(t) && !pace) {
+    if (/(^|\s)ל?היום(\s|$|[.!])/.test(t)) {
+      const until = W.addDays(W.todayIL(), 1);
+      save({ remindMuteUntil: until });
+      return { text: '🔕 בסדר, היום בלי תזכורות מהמייל. מחר הן חוזרות לבד 🌼', result: 'השתקה להיום' };
+    }
+    save({ remindPace: 'off', remindMuteUntil: null });
+    return { text: '🔕 הפסקתי את התזכורות מהמייל.\nלהחזיר — "תחזיר את התזכורות מהמייל". רק בבוקר — "תזכורות מהמייל רק בבוקר".', result: 'תזכורות מהמייל — כבוי' };
+  }
+  if (pace) {
+    save({ remindPace: pace, remindMuteUntil: null });
+    return { text: `🌊 התזכורות מהמייל: *${PACE_LABEL[pace]}*.`, result: `קצב: ${pace}` };
+  }
+  if (ON.test(t)) {
+    const was = prefs.remindPace;
+    save({ remindPace: was && was !== 'off' ? was : 'normal', remindMuteUntil: null, mailDeadline: true });
+    return { text: `🔔 התזכורות מהמייל חזרו (${PACE_LABEL[was && was !== 'off' ? was : 'normal']}).\nלהפסיק — "תפסיק להזכיר לי מהמייל".`, result: 'תזכורות מהמייל — פועל' };
+  }
+  return null;
 }
 
 /** התזכורות שהגיע זמנן — מיילים שלא טופלו (גם כאלה שנקראו), החשוב קודם */
@@ -262,7 +312,8 @@ function reminderQuestion(row, userName = '') {
       `תזכורת קטנה ועדינה: ${whenGot(row.received_at || row.created_at)} הגיע אליך מייל מ*${row.from_name || row.from_email}*`,
       `*${oneLine(d.title, 120)}*${due ? `\n⏳ עד ${ddmm(due)}${due === W.todayIL() ? ' (היום)' : ''}` : ''}`,
       '',
-      'זכרת? 🐣'
+      'זכרת? 🐣',
+      '_להשתיק: "תפסיק להזכיר לי מהמייל" · להיום: "בלי תזכורות מהמייל היום"_'
     ].join('\n'),
     buttons: [BTN.open, BTN.ignore],
     draft: { kind: 'mail_remind', suggestionId: row.id, title: d.title, gmailId: row.gmail_id }
@@ -370,6 +421,6 @@ function prune() {
 }
 
 module.exports = {
-  GOODS_SCHEMA, BTN, goodsDocFrom, goodsFile, nextQuestion, answerReminder, answerGoods, prune, dueReminders, mayRemindNow, paceTick, PACE,
+  GOODS_SCHEMA, BTN, goodsDocFrom, goodsFile, nextQuestion, answerReminder, answerGoods, prune, dueReminders, mayRemindNow, paceTick, PACE, paceCommand,
   _internal: { nextReminder, nextGoods, reminderQuestion, goodsQuestion, setRemind, remindAt, scoreOf, handledInGmail, paceState }
 };

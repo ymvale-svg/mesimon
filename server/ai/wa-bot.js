@@ -2262,6 +2262,12 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
     keep.draft = null;
     state = { ...state, draft: null, awaiting: false };
   }
+  // 🔕 / 🔔 תזכורות מהמייל — "תפסיק להזכיר לי מהמייל", "תחזיר את התזכורות מהמייל", "… רק בבוקר", "… היום".
+  // לפני "תזכיר לי …" — "תזכיר לי מהמייל" היא הפעלה, לא תזכורת חדשה
+  {
+    const r = dry ? null : MailActions.paceCommand(actor.id, t);
+    if (r) return out(r.text, {}, { action: 'mail_deadline', status: 'ok', result: r.result });
+  }
   // 🌐 תרגום: "תתרגם לאנגלית: …" (או בלי טקסט — ההודעה האחרונה של הבוט)
   if (WaActions.allowed(actor, 'translate') && !(state.awaiting && state.draft)) {
     const m = TRANSLATE.exec(t);
