@@ -933,6 +933,28 @@ CREATE TABLE IF NOT EXISTS meetings (
 CREATE INDEX IF NOT EXISTS idx_meetings_task ON meetings(task_id);
 CREATE INDEX IF NOT EXISTS idx_meetings_start ON meetings(status, start_at);
 
+/*
+ * 🎥 Timeless — ‎timeless_alerts‎: פגישה שהמזכירות כבר קיבלו עליה "לא מוקלטת" (פעם אחת
+ * לפגישה, לפי ‎iCalUID‎ והמועד); ‎timeless_digests‎: הסיכום המובנה (החלטות, משימות,
+ * נקודות פתוחות) — נבנה פעם אחת לפגישה; ‎timeless_tasks‎: משימות שנפתחו מפגישה.
+ */
+CREATE TABLE IF NOT EXISTS timeless_alerts (
+  event_key  TEXT PRIMARY KEY,
+  at         TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS timeless_digests (
+  meeting_id TEXT PRIMARY KEY,
+  data       TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS timeless_tasks (
+  meeting_id TEXT    NOT NULL,
+  task_id    INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  item       TEXT    NOT NULL DEFAULT '',
+  created_at TEXT    NOT NULL,
+  PRIMARY KEY (meeting_id, task_id)
+);
+
 /* משתמשי ה-Zoom בחשבון החברה — מסונכרנים מ-Zoom, לשיוך לעובדים */
 CREATE TABLE IF NOT EXISTS zoom_users (
   id         TEXT PRIMARY KEY,
@@ -1429,6 +1451,9 @@ const DEFAULT_SETTINGS = {
   meeting_reminder_minutes: 15,            // כמה דקות לפני — התראה ובוט הוואטסאפ, עם קישור הפגישה
   meeting_ai_alternatives: true,           // הצעות AI להזזת פגישות חופפות
   meeting_record_default: false,           // "הקלטה אוטומטית לענן" מסומן מראש בפגישת Zoom חדשה
+  meeting_office_address: '',              // "🏢 במשרד" בקביעת פגישה — הכתובת שנכנסת למיקום ביומן ובהזמנה
+  timeless_unrecorded_alert: true,         // פגישה מקוונת שהתחילה ולא מוקלטת ב-Timeless — הודעה למזכירות
+  timeless_unrecorded_delay: 2,            // כמה דקות אחרי תחילת הפגישה בודקים (ש-Timeless יספיק להצטרף)
 
   ai_mail_scan_enabled: true,
   ai_scan_time: '07:00',                   // ריצת הבוקר, שעון ישראל

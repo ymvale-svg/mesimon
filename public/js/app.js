@@ -222,6 +222,7 @@ const App = (() => {
        */
       navigate(isVendor() ? 'vendor' : (isPhone() || params.get('view') === 'today') ? 'today' : 'home');
       openTaskFromUrl();
+      if (!isVendor()) openRecordingFromUrl();
       if (!isVendor()) {
         // באנר "מה חדש" — רק כשיש גרסה שעוד לא נראתה, או מקישור במייל
         WhatsNewView.maybeShow();
@@ -341,6 +342,18 @@ const App = (() => {
     if (!id) return;
     history.replaceState(null, '', location.pathname);
     TaskCardView.open(id);
+  }
+
+  /**
+   * ‎?rec=mtg_abc&t=760‎ — קישור לרגע בהקלטה (מהנגן, ממשימה שנפתחה מפגישה): הנגן
+   * נפתח ומתחיל מהשנייה הזו. גם כאן הפרמטרים נמחקים מהכתובת.
+   */
+  function openRecordingFromUrl() {
+    const q = new URLSearchParams(location.search);
+    const id = q.get('rec');
+    if (!id || !/^[\w-]{1,80}$/.test(id) || typeof RecordingPlayer === 'undefined') return;
+    history.replaceState(null, '', location.pathname);
+    RecordingPlayer.open(id, { t: Number(q.get('t')) || 0 });
   }
 
   /**
@@ -683,7 +696,7 @@ const App = (() => {
     today: { label: 'Today', icon: 'my-tasks', render: (c) => TodayView.render(c) },
     calendar: { label: 'יומן', icon: 'my-tasks', render: (c) => CalendarView.render(c) },
     // הקלטות Zoom — לשונית במסך היומן; קישור ישן לכאן מגיע לדף הבית
-    recordings: { label: 'הקלטות Zoom', icon: 'my-tasks', hidden: true, render: (c) => RecordingsView.render(c) },
+    recordings: { label: 'הקלטות', icon: 'my-tasks', hidden: true, render: (c) => RecordingsView.render(c) },
     home: { label: 'דף הבית', icon: 'home', render: (c) => HomeView.render(c) },
     board: { label: 'לוח המשימות', icon: 'board', render: (c, p) => BoardView.render(c, { ...p, scope: 'internal' }) },
     vendorBoards: { label: 'כל משימות הספקים', icon: 'vendors', render: (c, p) => BoardView.render(c, { ...p, scope: 'vendors' }) },
