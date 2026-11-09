@@ -957,8 +957,25 @@ async function suppliersByWords(company, words) {
   return [...out.values()];
 }
 
+/**
+ * 🗂 שאלות על נתונים (‎ai/agents.js‎, הסוכן "רכש ופריוריטי") — קריאה בלבד: הזמנות מאושרות של פרויקט, עם
+ * השורות, תאריך האספקה (‎DUEDATE‎) והיתרה שעוד לא התקבלה. ‎item‎ — מילה מתיאור הפריט, לסינון.
+ */
+async function ordersByProject(company, projdocno, { item = '', top = 25 } = {}) {
+  const list = rows(await call(company, 'GET',
+    `PORDERS?$filter=${enc(`PROJDOCNO eq '${q(projdocno)}' and STATDES eq 'אושרה'`)}&$select=ORDNAME,SUPNAME,CDES,CURDATE,PROJDOCNO,PROJDES&$top=${top}&$orderby=CURDATE desc`));
+  const out = [];
+  const word = String(item ?? '').trim();
+  for (const o of list) {
+    const lines = rows(await call(company, 'GET', `PORDERS('${q(o.ORDNAME)}')/PORDERITEMS_SUBFORM?$select=LINE,PARTNAME,PDES,TQUANT,TBALANCE,TUNITNAME,PRICE,DUEDATE`))
+      .filter((l) => (l.TBALANCE ?? 0) > 0 && (!word || String(l.PDES ?? '').includes(word)));
+    if (lines.length) out.push({ ...o, lines });
+  }
+  return out;
+}
+
 module.exports = {
-  suppliersByWords,
+  suppliersByWords, ordersByProject,
   COMPANIES, isEnabled, allowed, companyOf, isTest, resolveCompany, companiesByName, PriorityError,
   GENERAL, NO_VAT_CODE, TAX_CODES, PAY_TERMS, DEFAULT_PAY, payTerm, payLabel, payFromText, dueDate, projectWarehouses, warehouses, warehouseExists, defaultWarehouse, supplierHistory, recentLines, partByCode, findPartsByText, searchParts, generalCoding, warehouseOf, findSuppliers, supplierByCode, findReceiptByBooknum, getOrder, openOrders, findPartExact, lastSubchapter, projects, matchProjects, readReceipt,
   finalOrders, orderForNotice, demandInitiator, projectManager, priorityUser,
