@@ -67,6 +67,7 @@ const MeetingAudio = require('./meeting-audio');
 const MailActions = require('./mail-actions');
 const Notice = require('./notice');
 const Rfq = require('./rfq');
+const FormFill = require('./form-fill');
 
 const GROUP_SKILL = path.join(__dirname, 'skills', 'whatsapp-group-to-tasks.md');
 const CHAT_SKILL = path.join(__dirname, 'skills', 'whatsapp-chat.md');
@@ -2144,6 +2145,31 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
     }
   }
 
+  // 📝 טופס ריק מהמייל — "למלא?", תיקונים, "לשלוח לשולח"; ו"כרטיס חברה"
+  if (state.awaiting && state.draft?.kind === 'form_fill') {
+    const r = dry ? null : FormFill.answer(actor.id, state.draft, t);
+    if (r) {
+      if (r.work) {
+        setImmediate(async () => {
+          try {
+            await pushToUser(actor.id, await r.work(), 'form_fill');
+          } catch (err) {
+            console.error('[משימון] מילוי טופס נכשל:', err.message);
+            log({ channel: 'summary', userId: actor.id, action: 'form_fill', status: 'error', result: err.message.slice(0, 300) });
+            await pushToUser(actor.id, { text: 'לא הצלחתי להשלים את הטופס 😕 נסו שוב מאוחר יותר, או מלאו אותו ידנית.' }, 'form_fill');
+          }
+        });
+      }
+      return out(r.text, { draft: r.draft ?? null, awaiting: Boolean(r.awaiting) }, { action: 'form_fill', status: 'ok', result: String(r.result ?? '').slice(0, 300), buttons: r.buttons });
+    }
+    if (state.draft.step === 'offer') D.run("UPDATE mail_forms SET status = 'pending' WHERE id = ? AND status = 'asked'", state.draft.formId);
+    keep.draft = null;
+    state = { ...state, draft: null, awaiting: false };
+  }
+  if (WaActions.byKey('form_fill')?.enabled && /^כרטיס\s+(?:ה)?חברה/.test(t)) {
+    const r = dry ? { text: '(בדיקה) כרטיס חברה', result: 'בדיקה' } : await FormFill.cardCommand(actor, t).catch((err) => ({ text: `לא הצלחתי לעדכן: ${err.message}`, result: err.message }));
+    if (r) return out(r.text, {}, { action: 'form_fill', status: 'ok', result: r.result });
+  }
   // 🛒 פנייה לספקים להצעת מחיר — הבקשה, השאלות, האישור, ואחרי הסיכום
   if (state.awaiting && ['rfq', 'rfq_done'].includes(state.draft?.kind)) {
     const d = state.draft;
@@ -3681,8 +3707,8 @@ let mailActionsAt = 0;
 async function mailActionAlerts() {
   if (Date.now() - mailActionsAt < 2 * 60 * 1000) return;
   mailActionsAt = Date.now();
-  const on = { deadline: WaActions.byKey('mail_deadline')?.enabled, goods: WaActions.byKey('goods_offer')?.enabled };
-  if (!on.deadline && !on.goods) return;
+  const on = { deadline: WaActions.byKey('mail_deadline')?.enabled, goods: WaActions.byKey('goods_offer')?.enabled, form: WaActions.byKey('form_fill')?.enabled };
+  if (!on.deadline && !on.goods && !on.form) return;
   for (const u of orgUsers()) {
     if (!u.phone) continue;
     const prefs = D.userPrefs(u.id)?.botPrefs ?? {};
@@ -3690,9 +3716,10 @@ async function mailActionAlerts() {
     if (!actor) continue;
     const allow = {
       deadline: Boolean(on.deadline && prefs.mailDeadline !== false && WaActions.allowed(actor, 'mail_deadline')),
-      goods: Boolean(on.goods && prefs.goodsOffer !== false && WaActions.allowed(actor, 'goods_offer') && WaActions.allowed(actor, 'goods_receipt'))
+      goods: Boolean(on.goods && prefs.goodsOffer !== false && WaActions.allowed(actor, 'goods_offer') && WaActions.allowed(actor, 'goods_receipt')),
+      form: Boolean(on.form && prefs.formOffer !== false && WaActions.allowed(actor, 'form_fill') && Gmail.canSend(u.id))
     };
-    if (!allow.deadline && !allow.goods) continue;
+    if (!allow.deadline && !allow.goods && !allow.form) continue;
     // באמצע שיחה מול הבוט — לא קוטעים; השאלה מחכה לסבב הבא
     const st = chatOf(u.id);
     if (st.awaiting || (st.draft && st.draft.kind !== 'menu') || GoodsReceipt.active(u.id) || PurchaseDemand.active(u.id)) continue;
@@ -3710,6 +3737,7 @@ async function mailActionAlerts() {
     }
   }
   MailActions.prune();
+  FormFill.prune();
 }
 
 /** "קבלת סחורה" על חשבונית מהמייל — הקובץ יורד מ-Gmail ונכנס לקבלת הסחורה כאילו נשלח לבוט */

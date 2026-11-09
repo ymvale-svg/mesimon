@@ -164,12 +164,16 @@ function goodsQuestion(row, { after = false } = {}) {
 
 /**
  * השאלה הבאה לעובד — דדליין קודם (מועד), אחר כך חשבונית.
- * @param {{deadline: boolean, goods: boolean}} allow
+ * @param {{deadline: boolean, goods: boolean, form: boolean}} allow
  */
 function nextQuestion(userId, allow) {
   if (allow.deadline) {
     const row = nextDeadline(userId);
     if (row) { setDeadline(row.id, { askedOn: W.todayIL() }); return { ...deadlineQuestion(row), action: 'mail_deadline', log: `⏰ ${parseJson(row.data, {}).title}` }; }
+  }
+  if (allow.form) {
+    const row = require('./form-fill').nextForm(userId);
+    if (row) return require('./form-fill').question(row);
   }
   if (allow.goods) {
     const row = nextGoods(userId);

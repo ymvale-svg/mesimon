@@ -845,6 +845,31 @@ CREATE TABLE IF NOT EXISTS rfq_vendors (
 );
 CREATE INDEX IF NOT EXISTS idx_rfq_vendors_msg ON rfq_vendors(message_id);
 
+/*
+ * 📝 טופס ריק שהגיע במייל, כשהעובד הוא הנמען הראשי (‎ai/form-fill.js‎). ‎fill‎ — מה מולא (JSON),
+ * ‎out_name‎ — שם הקובץ הממולא (נשמר ב-‎uploads/forms‎ עד השליחה). ‎status‎: pending / asked / filled / sent / declined.
+ */
+CREATE TABLE IF NOT EXISTS mail_forms (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  gmail_id    TEXT    NOT NULL,
+  box         INTEGER NOT NULL DEFAULT 0,
+  filename    TEXT    NOT NULL,
+  mime        TEXT    NOT NULL DEFAULT '',
+  title       TEXT    NOT NULL DEFAULT '',
+  from_name   TEXT    NOT NULL DEFAULT '',
+  from_email  TEXT    NOT NULL DEFAULT '',
+  subject     TEXT    NOT NULL DEFAULT '',
+  message_id  TEXT    NOT NULL DEFAULT '',
+  status      TEXT    NOT NULL DEFAULT 'pending',
+  fill        TEXT,
+  out_name    TEXT,
+  asked_at    TEXT,
+  decided_at  TEXT,
+  created_at  TEXT    NOT NULL,
+  UNIQUE (user_id, gmail_id, filename)
+);
+
 /* סיכום, החלטות ומשימות של פגישה — פעם אחת לפגישה, לכל המשתתפים. נמחק אחרי חודש */
 CREATE TABLE IF NOT EXISTS meeting_digests (
   source     TEXT    NOT NULL,

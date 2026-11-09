@@ -1246,6 +1246,11 @@ const App = (() => {
       goods.addEventListener('change', () => {
         setPref('botPrefs', { ...(getPref('botPrefs', {}) ?? {}), goodsOffer: goods.checked });
       });
+      // 📝 טופס ריק במייל — להציע למלא. דלוק כברירת מחדל
+      const formOffer = el('input', { type: 'checkbox', checked: getPref('botPrefs', {})?.formOffer !== false });
+      formOffer.addEventListener('change', () => {
+        setPref('botPrefs', { ...(getPref('botPrefs', {}) ?? {}), formOffer: formOffer.checked });
+      });
       return el('div', {}, [
         el('h4', { text: 'בוט הוואטסאפ', style: { margin: '16px 0 8px', fontSize: '13px' } }),
         el('div.table-wrap', {}, [
@@ -1285,6 +1290,13 @@ const App = (() => {
                   el('div.mute-sm', { text: 'כשמגיעה חשבונית או תעודת משלוח: "לבצע קבלת סחורה?" — הבוט מוריד את הקובץ מהמייל ומתחיל. רק למי שמורשה לקבלת סחורה.' })
                 ]),
                 el('td', { style: { textAlign: 'center', width: '110px' } }, [el('label.checkbox', {}, [goods])])
+              ]),
+              el('tr', {}, [
+                el('td', {}, [
+                  el('div', { text: '📝 טופס ריק במייל — להציע למלא' }),
+                  el('div.mute-sm', { text: 'רק כשאני הנמען הראשי (לא בהעתק): הבוט ממלא מכרטיס החברה ומהפרטים שלי, מראה לי, ושולח לשולח רק אחרי אישור.' })
+                ]),
+                el('td', { style: { textAlign: 'center', width: '110px' } }, [el('label.checkbox', {}, [formOffer])])
               ])
             ])
           ])

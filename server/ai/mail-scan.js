@@ -34,6 +34,7 @@ const Docs = require('../doc-text');
 const Memory = require('./mail-memory');
 const Closure = require('./task-closure');
 const MailActions = require('./mail-actions');
+const FormFill = require('./form-fill');
 
 const SKILL_PATH = path.join(__dirname, 'skills', 'email-to-tasks.md');
 const TZ = 'Asia/Jerusalem';
@@ -174,6 +175,9 @@ const ANALYSIS_SCHEMA = {
 };
 // 📄 חשבונית / תעודת משלוח בקובץ המצורף — הבוט יציע קבלת סחורה (‎mail-actions.js‎)
 ANALYSIS_SCHEMA.properties.goods_document = MailActions.GOODS_SCHEMA;
+// 📝 טופס ריק למילוי בקובץ המצורף — הבוט יציע למלא (‎form-fill.js‎)
+ANALYSIS_SCHEMA.properties.blank_form = FormFill.FORM_SCHEMA;
+ANALYSIS_SCHEMA.required.push('blank_form');
 
 async function analyze(user, mail, conn = null) {
   const users = orgUsers().filter((u) => u.id !== user.id);
@@ -274,7 +278,8 @@ function sanitize(out, user, users) {
     skipReason: String(out.skip_reason ?? ''),
     warning: String(out.warning ?? '').trim(),
     tasks,
-    goods: out.warning ? null : (out.goods_document ?? null)
+    goods: out.warning ? null : (out.goods_document ?? null),
+    form: out.warning ? null : (out.blank_form ?? null)
   };
 }
 
@@ -391,6 +396,8 @@ async function processMessage(user, conn, gmailId) {
   const result = await analyze(user, mail, conn);
   // 📄 חשבונית / תעודת משלוח מצורפת — הצעה לקבלת סחורה בבוט, גם כשאין במייל משימה
   try { MailActions.goodsDocFrom(user, meta, mail, result.goods); } catch (err) { console.error('[משימון] רישום חשבונית מהמייל נכשל:', err.message); }
+  // 📝 טופס ריק — רק כשבעל התיבה הוא הנמען הראשי (לא בהעתק)
+  try { FormFill.formFrom(user, meta, mail, result.form, [...mine]); } catch (err) { console.error('[משימון] רישום טופס מהמייל נכשל:', err.message); }
 
   // הבקשה מופנית לעמית שמחובר בעצמו — היא תוצע לו, לא לי
   if (!result.forMe && result.addressedTo && !mine.has(result.addressedTo)) {
