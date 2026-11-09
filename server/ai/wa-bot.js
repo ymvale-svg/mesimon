@@ -70,6 +70,7 @@ const Rfq = require('./rfq');
 const FormFill = require('./form-fill');
 const MeetCoord = require('./meeting-coord');
 const Reminders = require('./reminders');
+const SentFollowup = require('./sent-followup');
 
 const GROUP_SKILL = path.join(__dirname, 'skills', 'whatsapp-group-to-tasks.md');
 const CHAT_SKILL = path.join(__dirname, 'skills', 'whatsapp-chat.md');
@@ -2239,6 +2240,17 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
     const r = await Notice.start(actor.id, t).catch((err) => ({ text: 'לא הצלחתי להכין את זה כרגע. נסו שוב בעוד רגע 🙏', result: `שגיאה: ${err.message}`, error: true }));
     return out(r.text, { draft: r.draft ?? null, awaiting: Boolean(r.awaiting) }, { action: 'notices', status: r.error ? 'error' : 'ok', result: String(r.result ?? '').slice(0, 300), buttons: r.buttons, files: r.files });
   }
+  // 📤 "לשלוח תזכורת עדינה?" על מייל ששלחת ולא נענה
+  if (state.awaiting && state.draft?.kind === 'sent_followup') {
+    const d = state.draft;
+    const r = dry ? null : SentFollowup.answer(actor.id, d, t);
+    if (r) {
+      if (r.send) meetCoordRun(actor, () => SentFollowup.send(actor.id, d.followupId));
+      return out(r.text, { draft: null }, { action: 'sent_followup', status: 'ok', result: r.result.slice(0, 300) });
+    }
+    keep.draft = null;
+    state = { ...state, draft: null, awaiting: false };
+  }
   // ⏰ "תזכיר לי …", "התזכורות שלי", "בטל תזכורת 2" — ותשובה לתזכורת שהגיעה
   if (state.awaiting && state.draft?.kind === 'reminder') {
     const r = dry ? null : Reminders.answer(actor.id, state.draft, t);
@@ -3831,8 +3843,8 @@ let mailActionsAt = 0;
 async function mailActionAlerts() {
   if (Date.now() - mailActionsAt < 2 * 60 * 1000) return;
   mailActionsAt = Date.now();
-  const on = { deadline: WaActions.byKey('mail_deadline')?.enabled, goods: WaActions.byKey('goods_offer')?.enabled, form: WaActions.byKey('form_fill')?.enabled };
-  if (!on.deadline && !on.goods && !on.form) return;
+  const on = { deadline: WaActions.byKey('mail_deadline')?.enabled, followup: WaActions.byKey('sent_followup')?.enabled, goods: WaActions.byKey('goods_offer')?.enabled, form: WaActions.byKey('form_fill')?.enabled };
+  if (!on.deadline && !on.followup && !on.goods && !on.form) return;
   for (const u of orgUsers()) {
     if (!u.phone) continue;
     const prefs = D.userPrefs(u.id)?.botPrefs ?? {};
@@ -3841,9 +3853,12 @@ async function mailActionAlerts() {
     const allow = {
       deadline: Boolean(on.deadline && prefs.mailDeadline !== false && WaActions.allowed(actor, 'mail_deadline')),
       goods: Boolean(on.goods && prefs.goodsOffer !== false && WaActions.allowed(actor, 'goods_offer') && WaActions.allowed(actor, 'goods_receipt')),
-      form: Boolean(on.form && prefs.formOffer !== false && WaActions.allowed(actor, 'form_fill') && Gmail.canSend(u.id))
+      form: Boolean(on.form && prefs.formOffer !== false && WaActions.allowed(actor, 'form_fill') && Gmail.canSend(u.id)),
+      followup: Boolean(on.followup && prefs.sentFollowup !== false && WaActions.allowed(actor, 'sent_followup') && Gmail.canSend(u.id))
     };
-    if (!allow.deadline && !allow.goods && !allow.form) continue;
+    if (!allow.deadline && !allow.goods && !allow.form && !allow.followup) continue;
+    // 📤 פעם ביום — המיילים ששלחת ולא נענו
+    if (allow.followup) await SentFollowup.scan(u.id).catch((err) => console.error('[משימון] סריקת שאלות שלא נענו נכשלה:', err.message));
     // באמצע שיחה מול הבוט — לא קוטעים; השאלה מחכה לסבב הבא
     const st = chatOf(u.id);
     if (st.awaiting || (st.draft && st.draft.kind !== 'menu') || GoodsReceipt.active(u.id) || PurchaseDemand.active(u.id)) continue;
@@ -3862,6 +3877,7 @@ async function mailActionAlerts() {
   }
   MailActions.prune();
   FormFill.prune();
+  SentFollowup.prune();
 }
 
 /** "קבלת סחורה" על חשבונית מהמייל — הקובץ יורד מ-Gmail ונכנס לקבלת הסחורה כאילו נשלח לבוט */

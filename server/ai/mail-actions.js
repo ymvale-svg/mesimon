@@ -286,17 +286,23 @@ function goodsQuestion(row, { after = false } = {}) {
 
 /**
  * השאלה הבאה לעובד — תזכורת ממייל קודם, אחר כך טופס, ואז חשבונית.
- * @param {{deadline: boolean, goods: boolean, form: boolean}} allow
+ * @param {{deadline: boolean, followup: boolean, goods: boolean, form: boolean}} allow
  */
 async function nextQuestion(userId, allow) {
-  if (allow.deadline) {
-    const row = await nextReminder(userId);
+  // תזכורות (מייל שלא טופל, שאלה ששלחת ולא נענתה) — בקצב אחד משותף, בלי הצפה
+  const paced = (allow.deadline || allow.followup) && await mayRemindNow(userId);
+  if (paced && allow.deadline) {
+    const row = (await dueReminders(userId, { limit: 1 }))[0];
     if (row) {
       setRemind(row.id, { askedAt: D.nowIso() });
       paceTick(userId);
       const u = D.get('SELECT full_name FROM users WHERE id = ?', userId);
       return { ...reminderQuestion(row, u?.full_name), action: 'mail_deadline', log: `🐣 זכרת? ${parseJson(row.data, {}).title}` };
     }
+  }
+  if (paced && allow.followup) {
+    const q = await require('./sent-followup').next(userId);
+    if (q) { paceTick(userId); return q; }
   }
   if (allow.form) {
     const row = require('./form-fill').nextForm(userId);

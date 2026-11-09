@@ -155,6 +155,12 @@ const ACTIONS = [
     enabled: true
   },
   {
+    key: 'sent_followup', icon: '📤', label: 'שאלה ששלחת ולא נענתה', channel: 'proactive',
+    description: 'פעם ביום: מיילים ששלחת לפני 3–10 ימים, שאף אחד לא ענה אחריהם וה-AI זיהה שהם שאלו / ביקשו משהו. במהלך היום, בקצב התזכורות (בלי הצפה): "📤 לפני 4 ימים שאלת את דני: … עוד אין תשובה. לשלוח תזכורת עדינה?" עם הנוסח, ו-לשלוח תזכורת ✅ · התעלם 🙈. השליחה — רק אחרי בדיקה שעדיין אין תשובה, באותו שרשור מהתיבה שלך.',
+    examples: [],
+    enabled: true
+  },
+  {
     key: 'goods_offer', icon: '📄', label: 'חשבונית במייל ← קבלת סחורה', channel: 'proactive',
     description: 'כשמגיעה במייל חשבונית ספק או תעודת משלוח (PDF או תמונה מצורפים; הזיהוי בסריקת המייל): "📄 הגיעה חשבונית מ… — לבצע עכשיו קבלת סחורה בפריוריטי?" עם קבלת סחורה 📦 · אחר כך ⏰ · לא ❌. "קבלת סחורה" — הבוט מוריד את הקובץ מ-Gmail ומתחיל את קבלת הסחורה הרגילה. רק למי שמותרת לו "קבלת סחורה לפריוריטי". מייל עם דדליין ועם חשבונית — ההצעה באה אחרי "בוצע". כל עובד יכול לכבות לעצמו בהגדרות ההתראות.',
     examples: [],
@@ -230,7 +236,7 @@ const isManager = (actor) => actor?.type === 'user' && actor.role !== 'employee'
  * 🧪 פיילוט (הוחלט 09.11.26): היכולות החדשות מסבב Instinct — רק למנהלי המערכת, עד שפותחים אותן לכולם
  * ("פתח את היכולות החדשות לכולם" בבוט, או ההגדרה ‎bot_pilot‎). כך הבדיקה בבוט האמיתי לא מגיעה לעובדים.
  */
-const PILOT_KEYS = new Set(['reminders', 'meeting_followup', 'meeting_audio', 'mail_deadline', 'goods_offer', 'notices', 'rfq', 'form_fill', 'meet_coord']);
+const PILOT_KEYS = new Set(['reminders', 'sent_followup', 'meeting_followup', 'meeting_audio', 'mail_deadline', 'goods_offer', 'notices', 'rfq', 'form_fill', 'meet_coord']);
 const PILOT_ROLES = ['superadmin', 'admin'];
 const inPilot = (actor) => actor?.type === 'user' && PILOT_ROLES.includes(actor.role);
 

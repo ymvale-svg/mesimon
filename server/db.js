@@ -913,6 +913,26 @@ CREATE TABLE IF NOT EXISTS reminders (
 );
 CREATE INDEX IF NOT EXISTS idx_reminders_due ON reminders(status, due_at);
 
+/* 📤 מייל ששלחת עם שאלה ולא נענה (‎ai/sent-followup.js‎). ‎status‎: pending / asked / sent / ignored / answered */
+CREATE TABLE IF NOT EXISTS sent_followups (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  gmail_id    TEXT    NOT NULL,
+  thread_id   TEXT    NOT NULL,
+  message_id  TEXT    NOT NULL DEFAULT '',
+  to_email    TEXT    NOT NULL,
+  to_name     TEXT    NOT NULL DEFAULT '',
+  subject     TEXT    NOT NULL DEFAULT '',
+  sent_at     TEXT    NOT NULL,
+  asked       TEXT    NOT NULL DEFAULT '',
+  nudge       TEXT    NOT NULL DEFAULT '',
+  status      TEXT    NOT NULL DEFAULT 'pending',
+  asked_at    TEXT,
+  nudged_at   TEXT,
+  created_at  TEXT    NOT NULL,
+  UNIQUE (user_id, gmail_id)
+);
+
 /* 🌊 קצב התזכורות לכל עובד (‎ai/mail-actions.js‎) — כמה נשלחו היום ומתי האחרונה, כדי לא להציף */
 CREATE TABLE IF NOT EXISTS reminder_pace (
   user_id  INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
