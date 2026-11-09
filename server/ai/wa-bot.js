@@ -2238,14 +2238,17 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
     const r = await Notice.start(actor.id, t).catch((err) => ({ text: 'לא הצלחתי להכין את זה כרגע. נסו שוב בעוד רגע 🙏', result: `שגיאה: ${err.message}`, error: true }));
     return out(r.text, { draft: r.draft ?? null, awaiting: Boolean(r.awaiting) }, { action: 'notices', status: r.error ? 'error' : 'ok', result: String(r.result ?? '').slice(0, 300), buttons: r.buttons, files: r.files });
   }
-  // 📬 "זכרת?" על דדליין ממייל, ו"לבצע קבלת סחורה?" על חשבונית מהמייל
-  if (state.awaiting && ['deadline_check', 'goods_offer'].includes(state.draft?.kind)) {
+  // 📬 "זכרת? 🐣" על מייל שלא טופל, ו"לבצע קבלת סחורה?" על חשבונית מהמייל
+  if (state.awaiting && ['mail_remind', 'goods_offer'].includes(state.draft?.kind)) {
     const d = state.draft;
-    if (d.kind === 'deadline_check') {
-      const r = dry ? null : MailActions.answerDeadline(actor.id, d, t, {
-        goodsAllowed: WaActions.allowed(actor, 'goods_offer') && WaActions.allowed(actor, 'goods_receipt'), closeAlerted
-      });
-      if (r) return out(r.text, { draft: r.draft ?? null, awaiting: Boolean(r.awaiting) }, { action: 'mail_deadline', status: 'ok', result: r.result.slice(0, 300), buttons: r.buttons });
+    if (d.kind === 'mail_remind') {
+      const r = dry ? null : MailActions.answerReminder(actor.id, d, t, { closeAlerted });
+      if (r?.openTask) {
+        // אותו מסלול כמו "כן" על "לפתוח משימה?" — עם כל הבדיקות (אנשים נוספים, פנייה החוצה)
+        const c = await confirmPending(actor, { kind: 'mail_task', alert: true, suggestionIds: [d.suggestionId], title: d.title }, dry);
+        return out(c.reply, { draft: null }, { action: 'mail_deadline', status: c.status, result: String(c.result ?? r.result).slice(0, 300), taskId: c.taskId ?? null });
+      }
+      if (r) return out(r.text, { draft: null }, { action: 'mail_deadline', status: 'ok', result: r.result.slice(0, 300) });
     } else {
       const r = dry ? null : MailActions.answerGoods(d, t);
       if (r) {
@@ -3687,6 +3690,11 @@ async function mailAlertFor(userId) {
   if (reply) {
     text = [...intro, '', '*לענות לו כך?*', `_${oneLine(reply.body, 700)}_`, reply.missing ? `⚠️ ${reply.missing}` : null, '', '*כן* 👍 שולח · *לא* 👎 לא עונים · או כתבו מה לשנות.'].filter((l) => l !== null).join('\n');
     draft = { kind: 'mail_reply', reply, alert: true, suggestionIds: ids, subject: head.subject };
+  } else if (actorU && WaActions.allowed(actorU, 'mail_deadline') && D.userPrefs(userId)?.botPrefs?.mailDeadline !== false) {
+    // 🐣 בלי מה לענות — לא שואלים עכשיו "לפתוח משימה?". אם המייל לא יטופל, תגיע מחר תזכורת "זכרת?"
+    // עם "לפתוח משימה" / "התעלם" (‎mail-actions.js‎) — שאלה אחת על כל מייל, לא שתיים (הוחלט 09.11.26)
+    log({ channel: 'summary', chatId, userId, who: u.full_name, action: 'mail_alert', status: 'ok', result: `📧 ${head.from_name}: ${oneLine(head.subject, 120)} — תזכורת מחר, אם לא יטופל` });
+    return;
   } else {
     const titles = rows.map((r) => r.d.title).filter(Boolean);
     text = [...intro, '', titles.length > 1 ? `*לפתוח ${titles.length} משימות?*\n${titles.map((x) => `• ${x}`).join('\n')}` : `*לפתוח משימה:* ${titles[0] ?? head.subject}?`, '', '*כן* 👍 · *לא* 👎'].join('\n');
@@ -3825,7 +3833,7 @@ async function mailActionAlerts() {
     // באמצע שיחה מול הבוט — לא קוטעים; השאלה מחכה לסבב הבא
     const st = chatOf(u.id);
     if (st.awaiting || (st.draft && st.draft.kind !== 'menu') || GoodsReceipt.active(u.id) || PurchaseDemand.active(u.id)) continue;
-    const q = MailActions.nextQuestion(u.id, allow);
+    const q = await MailActions.nextQuestion(u.id, allow).catch(() => null);
     if (!q) continue;
     const chatId = `${u.phone}@c.us`;
     try {

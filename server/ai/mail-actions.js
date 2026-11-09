@@ -2,11 +2,12 @@
 /**
  * 📬 הבוט יוזם פעולות לפי המיילים שהעובד קיבל (הוחלט 09.11.26):
  *
- *   1. ⏰ דדליין ממייל — מייל שיש בו מועד ("לאסוף את הדואר עד רביעי", "דרישת
- *      תשלום עד ה-15") ולא נפתחה ממנו משימה: ביום המועד הבוט שואל "זכרת?"
- *        [בוצע ✅] [תזכיר מחר ⏰] [לא רלוונטי ❌]
- *      המקור — ההצעות מסריקת המייל (‎ai_suggestions‎, עם ‎dueDate‎). הצעה שהעובד
- *      דחה ("לא" — לא משימה), או שהפכה למשימה (שם יש לה יעד משלה) — לא נשאלת.
+ *   1. 🐣 תזכורת ממייל — "זכרת?" (הוחלט 09.11.26, ישראל): מייל עם דדליין או קריאה לפעולה, שלא
+ *      טופל — יום אחרי שהגיע (או בבוקר יום הדדליין, אם הוא קודם), תזכורת אחת בלשון מנומסת:
+ *        [לפתוח משימה ✅] [התעלם 🙈]
+ *      המקור — ההצעות מסריקת המייל (‎ai_suggestions‎) שעדיין ממתינות. לא נשאלים: מייל שכבר ענית עליו
+ *      ב-Gmail, הצעה שהוחלט עליה (משימה / לא), בקשה לפגישה (יש לה תיאום משלה). במקום השאלה
+ *      "לפתוח משימה?" שהייתה נשלחת מיד כשהמייל הגיע — כדי שלא יהיו שתי שאלות על אותו מייל.
  *
  *   2. 📄 חשבונית / תעודת משלוח במייל ← קבלת סחורה. סריקת המייל מזהה מסמך כזה
  *      בקובץ המצורף (‎goodsDocFrom‎, שדה בניתוח הקיים — בלי קריאה נוספת ל-AI),
@@ -24,16 +25,18 @@ const Mime = require('../mime');
 const WaUi = require('./wa-ui');
 
 const DAY = 24 * 60 * 60 * 1000;
-const LATE_DAYS = 2;           // מועד שעבר (סוף שבוע, חופש) — עדיין שואלים עד יומיים אחרי
-const DAILY_MAX = 5;           // לא יותר מ-5 שאלות דדליין לעובד ביום
+const HOUR = 60 * 60 * 1000;
+const REMIND_AFTER_MS = DAY;   // יום אחרי שהמייל הגיע
+const MIN_WAIT_MS = 3 * HOUR;  // דדליין קרוב — לא פחות מ-3 שעות אחרי שהגיע
+const KEEP_DAYS = 7;           // מייל ישן משבוע — כבר לא מזכירים
+const DAILY_MAX = 5;           // לא יותר מ-5 תזכורות לעובד ביום
 const GOODS_DAYS = 3;          // חשבונית שלא נשאלה תוך 3 ימים — כבר לא מציעים
 const DOC_MIME = /^(application\/pdf|image\/)/i;
 const DOC_NAME = /\.(pdf|jpe?g|png|heic|tiff?)$/i;
 
 const BTN = Object.freeze({
-  done: 'בוצע ✅',
-  tomorrow: 'תזכיר מחר ⏰',
-  irrelevant: 'לא רלוונטי ❌',
+  open: 'לפתוח משימה ✅',
+  ignore: 'התעלם 🙈',
   receive: 'קבלת סחורה 📦',
   later: 'אחר כך ⏰'
 });
@@ -93,24 +96,52 @@ async function goodsFile(row) {
 // מה לשאול עכשיו
 // ---------------------------------------------------------------------------
 
-/** הדדליין הבא לשאול עליו — של היום (או שעבר בימים האחרונים), שלא נשאל היום */
-function nextDeadline(userId) {
+/** מתי להזכיר: יום אחרי שהגיע; דדליין מוקדם יותר — בבוקר יום הדדליין (ולא לפני 3 שעות מההגעה) */
+function remindAt(row) {
+  const got = new Date(row.received_at || row.created_at).getTime();
+  let at = got + REMIND_AFTER_MS;
+  const due = parseJson(row.data, {}).dueDate;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(due ?? '')) at = Math.min(at, Math.max(got + MIN_WAIT_MS, W.ilWallToUtc(due, 8, 30).getTime()));
+  return at;
+}
+
+/** כבר ענית על המייל ב-Gmail (הודעה שלך בשרשור אחרי שהגיע) — אין על מה להזכיר */
+async function answeredInGmail(row) {
+  try {
+    const box = D.get('SELECT box FROM mail_scanned WHERE user_id = ? AND gmail_id = ?', row.user_id, row.gmail_id)?.box ?? 0;
+    const got = new Date(row.received_at || row.created_at).getTime();
+    return (await Gmail.threadOf(Gmail.handle(row.user_id, box), row.gmail_id)).some((m) => m.labels.includes('SENT') && m.at && m.at.getTime() > got);
+  } catch {
+    return false;
+  }
+}
+
+/** התזכורת הבאה — מייל שעדיין ממתין, שהגיע זמנו ושלא נשאל עליו */
+async function nextReminder(userId) {
+  let since = D.getSetting('mail_remind_since', '');
+  if (!since) { since = D.nowIso(); D.setSetting('mail_remind_since', since); }
   const today = W.todayIL();
-  const asked = D.get(
-    "SELECT COUNT(*) n FROM ai_suggestions WHERE user_id = ? AND json_extract(data, '$.deadline.askedOn') = ?", userId, today
-  ).n;
+  const asked = D.get("SELECT COUNT(*) n FROM ai_suggestions WHERE user_id = ? AND substr(json_extract(data, '$.remind.askedAt'), 1, 10) = ?", userId, today).n;
   if (asked >= DAILY_MAX) return null;
-  return D.get(
+  const rows = D.all(
     `SELECT * FROM ai_suggestions
-      WHERE user_id = ? AND kind = 'task' AND status IN ('pending', 'skipped', 'replied')
-        AND header_id NOT LIKE 'doc:%'
-        AND json_extract(data, '$.dueDate') BETWEEN ? AND ?
-        AND json_extract(data, '$.deadline.closed') IS NULL
-        AND COALESCE(json_extract(data, '$.deadline.askedOn'), '') <> ?
-        AND COALESCE(json_extract(data, '$.deadline.snoozeUntil'), '') <= ?
-      ORDER BY json_extract(data, '$.dueDate'), id LIMIT 1`,
-    userId, W.addDays(today, -LATE_DAYS), today, today, today
-  ) ?? null;
+      WHERE user_id = ? AND kind = 'task' AND status = 'pending' AND gmail_id <> ''
+        AND header_id NOT LIKE 'doc:%' AND json_extract(data, '$.expiry') IS NULL
+        AND COALESCE(json_extract(data, '$.source'), 'email') = 'email'
+        AND COALESCE(json_extract(data, '$.meeting'), 0) = 0
+        AND json_extract(data, '$.remind') IS NULL
+        AND created_at >= ? AND COALESCE(received_at, created_at) >= ?
+      ORDER BY received_at, id LIMIT 50`,
+    userId, since, new Date(Date.now() - KEEP_DAYS * DAY).toISOString()
+  );
+  const seen = new Set();
+  for (const row of rows) {
+    if (seen.has(row.gmail_id) || remindAt(row) > Date.now()) continue;
+    seen.add(row.gmail_id);
+    if (await answeredInGmail(row)) { setRemind(row.id, { closed: 'answered', at: D.nowIso() }); continue; }
+    return row;
+  }
+  return null;
 }
 
 function nextGoods(userId) {
@@ -122,28 +153,36 @@ function nextGoods(userId) {
   ) ?? null;
 }
 
-function setDeadline(id, patch) {
+function setRemind(id, patch) {
   const row = D.get('SELECT data FROM ai_suggestions WHERE id = ?', id);
   if (!row) return;
   const d = parseJson(row.data, {});
-  d.deadline = { ...(d.deadline ?? {}), ...patch };
+  d.remind = { ...(d.remind ?? {}), ...patch };
   D.run('UPDATE ai_suggestions SET data = ? WHERE id = ?', JSON.stringify(d), id);
 }
 
-function deadlineQuestion(row) {
+const firstName = (n) => String(n ?? '').trim().split(/\s+/)[0] ?? '';
+const whenGot = (iso) => {
+  const day = (x) => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Jerusalem' }).format(x);
+  const got = new Date(iso);
+  if (day(got) === day(new Date())) return 'היום';
+  if (day(got) === day(new Date(Date.now() - DAY))) return 'אתמול';
+  return `ב-${ddmm(day(got))}`;
+};
+
+function reminderQuestion(row, userName = '') {
   const d = parseJson(row.data, {});
-  const today = W.todayIL();
-  const when = d.dueDate === today ? '*היום* הדדליין' : `הדדליין עבר (${ddmm(d.dueDate)})`;
+  const due = /^\d{4}-\d{2}-\d{2}$/.test(d.dueDate ?? '') ? d.dueDate : '';
   return {
     text: [
-      `⏰ ${when}: *${oneLine(d.title, 120)}*`,
-      `📧 מהמייל של ${row.from_name || row.from_email}${row.subject ? ` — ${oneLine(row.subject, 80)}` : ''}`,
-      d.summary ? `_${oneLine(d.summary, 200)}_` : null,
+      `שלום${firstName(userName) ? ` ${firstName(userName)}` : ''} 🌼`,
+      `תזכורת קטנה ועדינה: ${whenGot(row.received_at || row.created_at)} הגיע אליך מייל מ*${row.from_name || row.from_email}*`,
+      `*${oneLine(d.title, 120)}*${due ? `\n⏳ עד ${ddmm(due)}${due === W.todayIL() ? ' (היום)' : ''}` : ''}`,
       '',
-      '*זכרת?*'
-    ].filter((l) => l !== null).join('\n'),
-    buttons: [BTN.done, BTN.tomorrow, BTN.irrelevant],
-    draft: { kind: 'deadline_check', suggestionId: row.id, title: d.title, gmailId: row.gmail_id }
+      'זכרת? 🐣'
+    ].join('\n'),
+    buttons: [BTN.open, BTN.ignore],
+    draft: { kind: 'mail_remind', suggestionId: row.id, title: d.title, gmailId: row.gmail_id }
   };
 }
 
@@ -163,13 +202,17 @@ function goodsQuestion(row, { after = false } = {}) {
 }
 
 /**
- * השאלה הבאה לעובד — דדליין קודם (מועד), אחר כך חשבונית.
+ * השאלה הבאה לעובד — תזכורת ממייל קודם, אחר כך טופס, ואז חשבונית.
  * @param {{deadline: boolean, goods: boolean, form: boolean}} allow
  */
-function nextQuestion(userId, allow) {
+async function nextQuestion(userId, allow) {
   if (allow.deadline) {
-    const row = nextDeadline(userId);
-    if (row) { setDeadline(row.id, { askedOn: W.todayIL() }); return { ...deadlineQuestion(row), action: 'mail_deadline', log: `⏰ ${parseJson(row.data, {}).title}` }; }
+    const row = await nextReminder(userId);
+    if (row) {
+      setRemind(row.id, { askedAt: D.nowIso() });
+      const u = D.get('SELECT full_name FROM users WHERE id = ?', userId);
+      return { ...reminderQuestion(row, u?.full_name), action: 'mail_deadline', log: `🐣 זכרת? ${parseJson(row.data, {}).title}` };
+    }
   }
   if (allow.form) {
     const row = require('./form-fill').nextForm(userId);
@@ -187,40 +230,24 @@ function nextQuestion(userId, allow) {
 // ---------------------------------------------------------------------------
 
 const is = (t, btn, re) => WaUi.sameLabel(t, btn) || re.test(WaUi.normalize(t));
-const DONE = /^(בוצע|ביצעתי|עשיתי|טופל|כן|סגור|זכרתי|👍)([\s,.!]|$)/;
+const OPEN = /^(לפתוח(\s+משימה)?|תפתח(\s+משימה)?|פתח|כן|משימה|👍)([\s,.!?]|$)/;
+const IGNORE = /^(התעלם|תתעלם|לא\s+צריך|לא|עזוב|👎|🙈)([\s,.!]|$)/;
 const TOMORROW = /^(תזכיר(\s+לי)?\s+מחר|מחר|אחר\s+כך|אח"כ|לא\s+עכשיו|תזכיר)([\s,.!]|$)/;
-const IRRELEVANT = /^(לא\s+רלוונטי|לא\s+צריך|לא|👎)([\s,.!]|$)/;
 const RECEIVE = /^(קבלת\s+סחורה|כן|לבצע|יאללה|קדימה|👍)([\s,.!]|$)/;
 
 /**
- * תשובה לשאלת דדליין. ‎null‎ — ההודעה אינה תשובה (נושא חדש).
- * @returns {{text: string, buttons?: string[], draft?: object, awaiting?: boolean, result: string}|null}
+ * תשובה ל"זכרת?". ‎openTask: true‎ — לפתוח משימה מההצעה (‎confirmPending‎ בבוט). ‎null‎ — נושא חדש.
  */
-function answerDeadline(userId, draft, text, { goodsAllowed = false, closeAlerted } = {}) {
+function answerReminder(userId, draft, text, { closeAlerted } = {}) {
   const t = String(text ?? '').trim();
-  if (is(t, BTN.done, DONE)) {
-    setDeadline(draft.suggestionId, { closed: 'done', at: D.nowIso() });
-    closeAlerted?.(userId, [draft.suggestionId], 'skipped');
-    // אותו מייל עם חשבונית — ההצעה לקבלת סחורה מיד
-    const goods = goodsAllowed && draft.gmailId
-      ? D.get("SELECT * FROM mail_goods_docs WHERE user_id = ? AND gmail_id = ? AND status IN ('pending', 'later', 'asked')", userId, draft.gmailId)
-      : null;
-    if (goods) {
-      D.run("UPDATE mail_goods_docs SET status = 'asked', asked_at = ? WHERE id = ?", D.nowIso(), goods.id);
-      const q = goodsQuestion(goods, { after: true });
-      return { text: `👍 מעולה, סימנתי.\n\n${q.text}`, buttons: q.buttons, draft: q.draft, awaiting: true, result: `בוצע: ${draft.title} · הוצעה קבלת סחורה` };
-    }
-    return { text: '👍 מעולה, סימנתי.', result: `בוצע: ${draft.title}` };
+  if (is(t, BTN.open, OPEN)) {
+    setRemind(draft.suggestionId, { closed: 'task', at: D.nowIso() });
+    return { openTask: true, result: `לפתוח משימה: ${draft.title}` };
   }
-  if (is(t, BTN.tomorrow, TOMORROW)) {
-    const next = W.addDays(W.todayIL(), 1);
-    setDeadline(draft.suggestionId, { snoozeUntil: next });
-    return { text: `⏰ בסדר, אזכיר מחר (${ddmm(next)}).`, result: `תזכורת מחר: ${draft.title}` };
-  }
-  if (is(t, BTN.irrelevant, IRRELEVANT)) {
-    setDeadline(draft.suggestionId, { closed: 'irrelevant', at: D.nowIso() });
+  if (is(t, BTN.ignore, IGNORE)) {
+    setRemind(draft.suggestionId, { closed: 'ignored', at: D.nowIso() });
     closeAlerted?.(userId, [draft.suggestionId], 'skipped');
-    return { text: 'בסדר, ירד מהרשימה 👍', result: `לא רלוונטי: ${draft.title}` };
+    return { text: 'בסדר גמור, לא אזכיר על זה שוב 🙂', result: `התעלם: ${draft.title}` };
   }
   return null;
 }
@@ -253,6 +280,6 @@ function prune() {
 }
 
 module.exports = {
-  GOODS_SCHEMA, BTN, goodsDocFrom, goodsFile, nextQuestion, answerDeadline, answerGoods, prune,
-  _internal: { nextDeadline, nextGoods, deadlineQuestion, goodsQuestion, setDeadline }
+  GOODS_SCHEMA, BTN, goodsDocFrom, goodsFile, nextQuestion, answerReminder, answerGoods, prune,
+  _internal: { nextReminder, nextGoods, reminderQuestion, goodsQuestion, setRemind, remindAt }
 };
