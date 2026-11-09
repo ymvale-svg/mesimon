@@ -870,6 +870,34 @@ CREATE TABLE IF NOT EXISTS mail_forms (
   UNIQUE (user_id, gmail_id, filename)
 );
 
+/*
+ * 📅 תיאום פגישה עם גורם חיצוני (‎ai/meeting-coord.js‎): 3 מועדים במייל, וקביעה כשעונים.
+ * ‎source‎: bot / task / mail. ‎reply_to‎ — ה-Message-ID של המייל שעליו עונים (טריגר מייל).
+ * ‎status‎: review / waiting / booked / needs_user / declined / cancelled / expired.
+ */
+CREATE TABLE IF NOT EXISTS meet_coord (
+  id             INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id        INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  status         TEXT    NOT NULL DEFAULT 'review',
+  contact        TEXT    NOT NULL DEFAULT '{}',
+  prefs          TEXT    NOT NULL DEFAULT '{}',
+  slots          TEXT    NOT NULL DEFAULT '[]',
+  task_id        INTEGER REFERENCES tasks(id) ON DELETE SET NULL,
+  source         TEXT    NOT NULL DEFAULT 'bot',
+  reply_to       TEXT    NOT NULL DEFAULT '',
+  box            INTEGER NOT NULL DEFAULT 0,
+  gmail_ref      TEXT    NOT NULL DEFAULT '',
+  suggestion_ids TEXT    NOT NULL DEFAULT '[]',
+  message_id     TEXT,
+  thread_id      TEXT,
+  sent_at        TEXT,
+  polled_at      TEXT,
+  booked_at      TEXT,
+  meeting_id     INTEGER,
+  created_at     TEXT    NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_meet_coord_msg ON meet_coord(message_id);
+
 /* סיכום, החלטות ומשימות של פגישה — פעם אחת לפגישה, לכל המשתתפים. נמחק אחרי חודש */
 CREATE TABLE IF NOT EXISTS meeting_digests (
   source     TEXT    NOT NULL,

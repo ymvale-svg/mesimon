@@ -365,6 +365,8 @@ async function processMessage(user, conn, gmailId) {
   if (await routeReply(user, mail)) return record(user.id, gmailId, headerId, 'reply', meta.box), 'reply';
   // תשובה של ספק לפנייה להצעת מחיר — נקראת שם (‎rfq.js‎), לא הצעת משימה
   if (require('./rfq').ownsReply(mail)) return record(user.id, gmailId, headerId, 'reply', meta.box), 'reply';
+  // תשובה למייל עם מועדים לפגישה — נקראת שם (‎meeting-coord.js‎)
+  if (require('./meeting-coord').ownsReply(mail)) return record(user.id, gmailId, headerId, 'reply', meta.box), 'reply';
   if (senderMode(user.id, mail.from.address) === 'ignore') return record(user.id, gmailId, headerId, 'skipped', meta.box), 'skipped';
 
   /*

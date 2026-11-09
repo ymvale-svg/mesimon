@@ -68,6 +68,7 @@ const MailActions = require('./mail-actions');
 const Notice = require('./notice');
 const Rfq = require('./rfq');
 const FormFill = require('./form-fill');
+const MeetCoord = require('./meeting-coord');
 
 const GROUP_SKILL = path.join(__dirname, 'skills', 'whatsapp-group-to-tasks.md');
 const CHAT_SKILL = path.join(__dirname, 'skills', 'whatsapp-chat.md');
@@ -2145,6 +2146,24 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
     }
   }
 
+  // 📅 תיאום פגישה עם גורם חיצוני — "תקבע לי פגישה עם …", ובתוך הזרימה
+  if (state.awaiting && state.draft?.kind === 'meet_coord') {
+    const d = state.draft;
+    const r = dry ? null : await MeetCoord.answer(actor, d, t, { searchContacts: hooks.mail?.searchContacts, closeAlerted })
+      .catch((err) => ({ text: 'משהו השתבש בתיאום הפגישה. נסו שוב בעוד רגע 🙏', result: `שגיאה: ${err.message}`, error: true }));
+    if (r) {
+      if (r.send) meetCoordRun(actor, () => MeetCoord.send(actor, r.coordId));
+      if (r.book) meetCoordRun(actor, () => MeetCoord.book(actor, r.coordId, r.start));
+      return out(r.text, { draft: r.draft ?? null, awaiting: Boolean(r.awaiting) }, { action: 'meet_coord', status: r.error ? 'error' : 'ok', result: String(r.result ?? '').slice(0, 300), buttons: r.buttons });
+    }
+    keep.draft = null;
+    state = { ...state, draft: null, awaiting: false };
+  }
+  if (WaActions.allowed(actor, 'meet_coord') && MeetCoord.isRequest(t)) {
+    if (dry) return out('(בדיקה) הייתי מציע מועדים.', {}, { action: 'meet_coord', status: 'ok', result: 'בדיקה' });
+    const r = await MeetCoord.start(actor, t, { searchContacts: hooks.mail?.searchContacts }).catch((err) => ({ text: 'משהו השתבש בתיאום הפגישה. נסו שוב בעוד רגע 🙏', result: `שגיאה: ${err.message}`, error: true }));
+    if (r) return out(r.text, { draft: r.draft ?? null, awaiting: Boolean(r.awaiting) }, { action: 'meet_coord', status: r.error ? 'error' : 'ok', result: String(r.result ?? '').slice(0, 300), buttons: r.buttons });
+  }
   // 📝 טופס ריק מהמייל — "למלא?", תיקונים, "לשלוח לשולח"; ו"כרטיס חברה"
   if (state.awaiting && state.draft?.kind === 'form_fill') {
     const r = dry ? null : FormFill.answer(actor.id, state.draft, t);
@@ -3594,6 +3613,21 @@ async function mailAlertFor(userId) {
   let text;
   let draft;
   let reply = null;
+  // 📅 מייל שמבקש להיפגש — "לשלוח לו 3 מועדים?" במקום "לפתוח משימה?"
+  const actorU = Auth.loadActor('user', userId);
+  if (head.d.meeting && actorU && WaActions.allowed(actorU, 'meet_coord') && Gmail.canSend(userId) && (Gmail.has(userId, 'freebusy') || Gmail.has(userId, 'calendar'))) {
+    const offer = MeetCoord.offerForMail(head, ids);
+    try {
+      await sendButtons(chatId, offer.text, offer.buttons);
+      rememberBot(userId, offer.text);
+      const now = chatOf(userId);
+      if (!now.awaiting && !(now.draft && now.draft.kind !== 'menu')) saveChat(userId, { ...now, draft: offer.draft, awaiting: true });
+      log({ channel: 'summary', chatId, userId, who: u.full_name, action: 'meet_coord', status: 'ok', result: `📧 ${head.from_name}: בקשה לפגישה — ${oneLine(head.subject, 100)}` });
+    } catch (err) {
+      log({ channel: 'summary', chatId, userId, who: u.full_name, action: 'meet_coord', status: 'error', result: err.message });
+    }
+    return;
+  }
   if (withReply && Gmail.canSend(Gmail.handle(userId, withReply.d.reply.box ?? 0))) {
     reply = await MailInsights.completeReply(userId, withReply.d.reply).catch((err) => {
       log({ channel: 'summary', chatId, userId, who: u.full_name, action: 'mail_alert', status: 'error', result: `השלמת התשובה: ${err.message}` });
@@ -3664,6 +3698,24 @@ function enqueueAs(userId, m) {
     .catch((err) => console.error('[משימון] הודעה פנימית לבוט נכשלה:', err.message))
     .finally(() => { if (chains.get(msg.phone) === next) chains.delete(msg.phone); });
   chains.set(msg.phone, next);
+}
+
+// 📅 תיאום פגישה — שליחה / קביעה ברקע, ותשובות שמגיעות
+function meetCoordRun(actor, fn) {
+  setImmediate(async () => {
+    try {
+      await pushToUser(actor.id, { text: await fn() }, 'meet_coord');
+    } catch (err) {
+      console.error('[משימון] תיאום פגישה נכשל:', err.message);
+      await pushToUser(actor.id, { text: `לא הצלחתי להשלים את תיאום הפגישה: ${err.message}` }, 'meet_coord');
+    }
+  });
+}
+let meetCoordAt = 0;
+async function meetCoordTick() {
+  if (!WaActions.byKey('meet_coord')?.enabled || Date.now() - meetCoordAt < 5 * 60 * 1000) return;
+  meetCoordAt = Date.now();
+  await MeetCoord.tick({ push: (userId, m) => pushToUser(userId, m, 'meet_coord') }).catch((err) => console.error('[משימון] מעקב תיאום פגישות נכשל:', err.message));
 }
 
 // 🛒 פנייה לספקים — החיפוש והשליחה ברקע (חיפוש ברשת לוקח זמן)
@@ -3836,6 +3888,20 @@ function sendProactive(userId, chatId, text, { taskId = null, action = 'assignme
 async function offerOutreach(userId, chatId, taskId, who = '') {
   try {
     const actor = Auth.loadActor('user', userId);
+    // 📅 משימה של "פגישה לקביעה" — הצעה לתאם אותה (3 מועדים במייל), במקום נוסח מייל רגיל
+    const task = D.get('SELECT id, title, description, meeting_pending FROM tasks WHERE id = ?', taskId);
+    if (actor && task?.meeting_pending && WaActions.allowed(actor, 'meet_coord')) {
+      const st = chatOf(userId);
+      const offer = st.awaiting ? null : await MeetCoord.offerForTask(actor, task, { searchContacts: hooks.mail?.searchContacts }).catch(() => null);
+      if (offer) {
+        await sendButtons(chatId, offer.text, offer.buttons);
+        rememberBot(userId, offer.text);
+        const now = chatOf(userId);
+        if (!now.awaiting) saveChat(userId, { ...now, draft: offer.draft, awaiting: true });
+        log({ channel: 'summary', chatId, userId, who, action: 'meet_coord', status: 'ok', result: `לתאם: ${task.title}`.slice(0, 300), taskId });
+        return;
+      }
+    }
     if (!actor || !hooks.mail?.sendOutreach || !WaActions.allowed(actor, 'send_email')) return;
     const row = await TaskOutreach.prepare(taskId, actor);
     if (!row || !['ready', 'no_contact'].includes(row.state)) return;
@@ -4140,6 +4206,7 @@ async function tick() {
       await meetingFollowups();
       await mailActionAlerts();
       await rfqTick();
+      await meetCoordTick();
       await warmInsights();
     }
     if (Claude.isEnabled() && WaActions.byKey('group_tasks')?.enabled) await processGroups();
