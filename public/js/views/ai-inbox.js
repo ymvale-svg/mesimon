@@ -220,8 +220,11 @@ const AiInboxView = (() => {
       what = el('div', { text: w.question || (w.draft ? `טיוטה ל${w.contactName} ממתינה לאישורך` : w.summary || 'נדרשת החלטה שלך') });
       actions = [el('button.btn.btn-sm.btn-primary', { onclick: open }, ['פתיחה'])];
     }
+    // שורה אחת: מה מחכה, ומתחת — המשימה. הנוסח המלא בריחוף ובכרטיס
+    what.classList.add('ai-line');
+    what.title = what.textContent;
     return el('div.ai-row', {}, [
-      el('div.ai-row-main', { onclick: open }, [el('div.mute-sm', { text: w.title }), what]),
+      el('div.ai-row-main', { onclick: open }, [what, el('div.mute-sm.ai-line', { text: w.title })]),
       el('div.ai-row-actions', {}, actions)
     ]);
   }
@@ -245,7 +248,7 @@ const AiInboxView = (() => {
       s.receivedAt ? ` · ${UI.relative(s.receivedAt)}` : '',
       // מאיזו תיבה — רק למי שחיבר יותר מחשבון אחד
       s.mailbox ? el('span', { dir: 'ltr', text: ` · 📬 ${s.mailbox}` }) : null,
-      s.link ? el('a', { href: s.link, target: '_blank', rel: 'noopener', onclick: (e) => e.stopPropagation() }, [' · פתיחת המייל ↗']) : null
+      s.link ? el('a', { href: s.link, target: '_blank', rel: 'noopener', title: 'פתיחת המייל ב-Gmail', onclick: (e) => e.stopPropagation() }, [' · המייל ↗']) : null
     ]);
   }
 
@@ -321,9 +324,9 @@ const AiInboxView = (() => {
     }
 
     const d = s.data;
-    const approve = el('button.btn.btn-sm.btn-primary', {}, ['✓ אישור']);
+    const approve = el('button.btn.btn-sm.btn-primary', { title: 'אישור — נפתחת משימה' }, ['✓ אישור']);
     approve.addEventListener('click', run(approve, () => API.post(`/api/ai/suggestions/${s.id}/approve`, {}), reload));
-    const reject = el('button.btn.btn-sm.btn-ghost', {}, ['✕ לא משימה']);
+    const reject = el('button.btn.btn-sm.btn-ghost', {}, ['✕']);
     reject.title = 'לא משימה — נדחית מיד, אפשר לבטל';
     reject.addEventListener('click', run(reject, () => rejectNow(s, reload), reload));
     const toAi = el('button.btn.btn-sm', {}, ['✨ משימת AI']);
@@ -335,6 +338,10 @@ const AiInboxView = (() => {
       onCreated: () => reload()
     }));
 
+    /*
+     * שורה אחת (הוחלט 09.11.26): הכותרת, מאת מי ומתי — ושלושה כפתורים. כל השאר
+     * (תקציר, אנשים, 💡 איך לסגור, 📧 הצעת תשובה, משימת AI) — ב"▾ פרטים".
+     */
     const flags = [
       d.dueDate ? el('span.ai-chip', { text: `📅 ${new Date(`${d.dueDate}T12:00:00`).toLocaleDateString('he-IL')}` }) : null,
       d.priority && d.priority !== 'normal' ? el('span.ai-chip.ai-chip-warn', { text: d.priority === 'urgent' ? 'דחוף' : 'גבוהה' }) : null,
@@ -342,27 +349,43 @@ const AiInboxView = (() => {
       ...peopleChips(d.people),
       d.aiRequest ? el('span.ai-chip.ai-chip-ai', { text: '✨ בקשה מגורם אחר' }) : null,
       d.expiry ? el('span.ai-chip.ai-chip-warn', { text: '📎 תוקף מסמך' }) : null
-    ];
+    ].filter(Boolean);
+    const reply = d.reply && !d.reply.sent && !d.reply.dismissed && d.reply.body;
+    const closure = d.closure && !d.closure.dismissed;
+    const details = el('div.ai-details', { hidden: true, onclick: (e) => e.stopPropagation() }, [
+      d.summary ? el('div.ai-sum', { text: d.summary }) : null,
+      flags.length ? el('div.ai-chips', {}, flags) : null,
+      d.warning ? el('div.alert.alert-warn.ai-mini', {}, [el('span', { text: '⚠️' }), el('div', { text: `שימו לב: ${d.warning}` })]) : null,
+      d.ambiguous?.length ? el('div.mute-sm', { text: `❓ לא ברור למי הכוונה: ${d.ambiguous.join(', ')} — בחרו בעריכה` }) : null,
+      d.alsoSuggestedTo?.length ? el('div.mute-sm', { text: `👥 הוצע גם ל${d.alsoSuggestedTo.join(', ')}` }) : null,
+      d.routedAsManager ? el('div.mute-sm', { text: '👤 לא היה ברור למי הבקשה — הגיעה אליך כמנהל/ת הפרויקט. אפשר להעביר בעריכה' }) : null,
+      replyLine(s, reload),
+      closureLine(s, reload),
+      // משימת AI נפתחת בדיאלוג משלה, בלי הפרויקט של הקבוצה — לכן רק ממייל
+      d.source === 'whatsapp' ? null : el('div', {}, [toAi])
+    ]);
+    const more = el('button.btn-link.ai-more', { type: 'button', title: 'תקציר, הצעת תשובה ואיך לסגור' }, [reply ? '📧 ▾' : closure ? '💡 ▾' : '▾']);
+    more.addEventListener('click', (e) => {
+      e.stopPropagation();
+      details.hidden = !details.hidden;
+      more.classList.toggle('is-open', !details.hidden);
+    });
+    const marks = [
+      d.priority === 'urgent' || d.priority === 'high' ? '⚡' : '',
+      d.warning || d.ambiguous?.length ? '⚠️' : '',
+      d.dueDate ? `📅 ${new Date(`${d.dueDate}T12:00:00`).toLocaleDateString('he-IL', { day: 'numeric', month: 'numeric' })}` : ''
+    ].filter(Boolean).join(' ');
 
     return el('div.ai-row', {}, [
       el('div.ai-row-main', { onclick: () => editSuggestion(s, reload) }, [
-        el('div', {}, [el('b', { text: d.title })]),
-        d.summary ? el('div.ai-sum', { text: d.summary }) : null,
-        el('div.ai-chips', {}, flags),
-        d.warning ? el('div.alert.alert-warn.ai-mini', {}, [el('span', { text: '⚠️' }), el('div', { text: `שימו לב: ${d.warning}` })]) : null,
-        d.ambiguous?.length ? el('div.mute-sm', { text: `❓ לא ברור למי הכוונה: ${d.ambiguous.join(', ')} — בחרו בעריכה` }) : null,
-        d.alsoSuggestedTo?.length ? el('div.mute-sm', { text: `👥 הוצע גם ל${d.alsoSuggestedTo.join(', ')}` }) : null,
-        d.routedAsManager ? el('div.mute-sm', { text: '👤 לא היה ברור למי הבקשה — הגיעה אליך כמנהל/ת הפרויקט. אפשר להעביר בעריכה' }) : null,
-        fromLine(s),
-        closureLine(s, reload),
-        replyLine(s, reload)
+        el('div.ai-line', { title: d.summary || d.title }, [marks ? el('span', { text: `${marks} ` }) : null, el('b', { text: d.title })]),
+        el('div.ai-meta', {}, [fromLine(s), more]),
+        details
       ]),
       el('div.ai-row-actions', {}, [
         // הצעה עם אנשים נוספים או ספק מחייבת מבט — האישור המהיר עובר דרך העריכה
-        (d.people?.length || d.ambiguous?.length || d.warning) ? el('button.btn.btn-sm.btn-primary', { onclick: () => editSuggestion(s, reload) }, ['בדיקה ואישור']) : approve,
-        el('button.btn.btn-sm', { onclick: () => editSuggestion(s, reload) }, ['✎']),
-        // משימת AI נפתחת בדיאלוג משלה, בלי הפרויקט של הקבוצה — לכן רק ממייל
-        d.source === 'whatsapp' ? null : toAi,
+        (d.people?.length || d.ambiguous?.length || d.warning) ? el('button.btn.btn-sm.btn-primary', { title: 'בדיקה ואישור', onclick: () => editSuggestion(s, reload) }, ['✓ בדיקה']) : approve,
+        el('button.btn.btn-sm', { title: 'עריכה', onclick: () => editSuggestion(s, reload) }, ['✎']),
         reject
       ])
     ]);
@@ -753,6 +776,40 @@ const AiInboxView = (() => {
         ])
       ]));
     }
+    /*
+     * 🧠 מה למדתי מהתשובות שלך — כללים שנכנסים להצעות התשובה הבאות ("התשלום
+     * ב-15 לחודש"). כלל שגוי — מוחקים כאן, או עונים פעם אחת אחרת והוא מתעדכן.
+     */
+    const rulesSlot = el('div');
+    let rules = null;
+    async function loadRules() {
+      try { rules = (await API.get('/api/me/reply-rules')).rules; } catch { rules = []; }
+      drawRules();
+    }
+    function drawRules() {
+      if (!rules?.length) return UI.mount(rulesSlot);
+      UI.mount(rulesSlot, el('details.ai-rules', {}, [
+        el('summary', { text: `🧠 מה למדתי מהתשובות שלך (${rules.length})` }),
+        el('div.mute-sm', { text: 'נכנס להצעות התשובה הבאות, גם לשולחים אחרים. ענית אחרת — הכלל מתעדכן לבד.' }),
+        ...rules.map((r) => {
+          const del = el('button.btn.btn-sm.btn-ghost', { type: 'button', title: 'לא נכון — למחוק' }, ['✕']);
+          del.addEventListener('click', async () => {
+            del.disabled = true;
+            try { await API.del(`/api/me/reply-rules/${r.id}`); rules = rules.filter((x) => x.id !== r.id); drawRules(); } catch (err) { del.disabled = false; UI.error(err); }
+          });
+          return el('div.ai-rule', {}, [
+            el('div', { style: { flex: '1', minWidth: '0' } }, [el('b', { text: `${r.topic}: ` }), r.rule, r.example ? el('div.mute-sm', { text: `כתבת: "${r.example}"` }) : null]),
+            del
+          ]);
+        })
+      ]));
+    }
+    const rulesBox = () => {
+      if (rules === null) { rules = undefined; loadRules(); }
+      drawRules();
+      return rulesSlot;
+    };
+
     const signatureBox = () => {
       if (!sigInfo && !sigLoading) { sigLoading = true; loadSignature(); }
       drawSignature();
@@ -861,6 +918,7 @@ const AiInboxView = (() => {
                   ])])
                 : null,
               signatureBox(),
+              rulesBox(),
               el('div.flex', { style: { gap: '8px', alignItems: 'center' } }, [
                 el('span', { text: '✅' }), el('b', { text: c.email }),
                 el('span.mute-sm', { text: [c.scopes?.mail ? (c.canSend ? '📧 קריאה ושליחה' : '📧 קריאה') : null, c.scopes?.calendar ? '📅 יומן' : null, c.scopes?.contacts ? '👥 אנשי קשר' : null].filter(Boolean).join(' · ') }),

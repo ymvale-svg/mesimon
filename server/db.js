@@ -724,6 +724,38 @@ CREATE TABLE IF NOT EXISTS wa_outbox (
  * תובנות מהמיילים: שורה אחת לכל מייל, כדי שבקשה חוזרת לא תנתח שוב את אותו
  * מייל. גוף המייל אינו נשמר — רק השולח, הנושא והתובנה. נמחק אחרי 7 ימים.
  */
+/*
+ * 🧠 מה המשתמש נוהג לענות — כללים קבועים שנלמדו מתשובות ששלח ("מועד תשלום לספקים:
+ * ה-15 לחודש"). נכנסים להצעת התשובה הבאה בנושא (‎ai/reply-memory.js‎). כלל חדש
+ * באותו נושא מחליף את הקודם. ‎example‎ — משפט קצר מהתשובה שממנה נלמד.
+ */
+/*
+ * 📅 התראה בבוט לפני פגישה מיומן Google שלא נקבעה ממשימון — פעם אחת לכל משתתף
+ * (‎meetings.sendCalendarReminders‎). ‎data‎ — הנושא, הקישור והמשתתפים, לשאלה
+ * "מי משתתף?" אחרי ההתראה. נמחק אחרי יומיים.
+ */
+CREATE TABLE IF NOT EXISTS calendar_reminders (
+  uid        TEXT    NOT NULL,
+  start_at   TEXT    NOT NULL,
+  user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  data       TEXT    NOT NULL,
+  sent_at    TEXT    NOT NULL,
+  PRIMARY KEY (uid, start_at, user_id)
+);
+
+CREATE TABLE IF NOT EXISTS reply_rules (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  topic       TEXT    NOT NULL,
+  rule        TEXT    NOT NULL,
+  example     TEXT    NOT NULL DEFAULT '',
+  source      TEXT    NOT NULL DEFAULT '',
+  uses        INTEGER NOT NULL DEFAULT 0,
+  created_at  TEXT    NOT NULL,
+  updated_at  TEXT    NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_reply_rules_user ON reply_rules(user_id);
+
 CREATE TABLE IF NOT EXISTS mail_insights (
   user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   gmail_id    TEXT    NOT NULL,

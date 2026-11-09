@@ -27,6 +27,7 @@ const Mime = require('../mime');
 const Mailer = require('../mailer');
 const AiTasks = require('../ai-tasks');
 const Range = require('./insight-window');
+const ReplyMemory = require('./reply-memory');
 
 const SKILL = path.join(__dirname, 'skills', 'email-insights.md');
 const TZ = 'Asia/Jerusalem';
@@ -308,6 +309,8 @@ async function draftReply(userId, gmailId, request, { feedback = '', previous = 
     (mail.newText || mail.text).slice(0, 4000),
     '>>>'
   ];
+  // 🧠 מה המשתמש נוהג לענות — מה שביקש עכשיו גובר
+  lines.push(...ReplyMemory.promptLines(userId));
   if (previous && feedback) lines.push('', 'הטיוטה הקודמת:', previous.body, '', `המשתמש ביקש לתקן כך: ${feedback}`);
   lines.push('', 'נסח את התשובה, לפי "תשובה למייל" בהנחיות.');
   const out = await Claude.json({ system: skill(), content: [{ type: 'text', text: lines.filter((l) => l !== null).join('\n') }], schema: REPLY_SCHEMA, effort: 'low', live: true });
@@ -412,9 +415,12 @@ async function suggestReply(userId, gmailId, { box = null } = {}) {
     lines.push('', 'מהידע הארגוני (איך עושים אצלנו):');
     for (const e of org) lines.push(`• ${e.domain}${e.project ? ` · ${e.project}` : ''}: ${e.text}`);
   }
+  // 🧠 מה המשתמש נוהג לענות — נלמד מתשובות קודמות, גם לשולחים אחרים ("התשלום ב-15 לחודש")
+  lines.push(...ReplyMemory.promptLines(userId));
   lines.push('', 'הצע תשובה, לפי "הצעת תשובה" בהנחיות.');
 
   const out = await Claude.json({ system: skill(), content: [{ type: 'text', text: lines.filter((l) => l !== null).join('\n') }], schema: SUGGEST_SCHEMA, effort: 'medium', live: true });
+  ReplyMemory.markUsed(userId, out.basis ?? []);
   return {
     gmailId,
     box: box ?? itemOf(userId, gmailId)?.box ?? 0,
@@ -447,11 +453,57 @@ async function sendReply(userId, reply) {
     subject: reply.subject, inReplyTo: reply.inReplyTo, references: reply.references,
     text: body.text, html: body.html
   });
-  return Gmail.send(who, built.raw, { threadId: reply.threadId });
+  const sent = await Gmail.send(who, built.raw, { threadId: reply.threadId });
+  // 🧠 לומד מהתשובה (ברקע): עובדות קבועות שתחזורנה בתשובות הבאות
+  if (sent?.gmailId) learnedSent.add(sent.gmailId);
+  if (reply.gmailId) learnFromReply(userId, { gmailId: reply.gmailId, box: reply.box ?? 0, body: reply.body, source: 'mesimon' });
+  return sent;
+}
+
+/*
+ * תשובות שיצאו ממשימון ונלמדו כבר — כדי שהסריקה (‎mail-scan.dropAnswered‎) לא
+ * תלמד מהן שוב כשהיא רואה אותן בשרשור.
+ */
+const learnedSent = new Set();
+const alreadyLearned = (sentId) => learnedSent.has(sentId);
+
+/** לומד מתשובה ששלחתי למייל ‎gmailId‎ — קורא את המייל המקורי. ברקע, לעולם לא זורקת */
+function learnFromReply(userId, { gmailId, box = 0, body, source = '' }) {
+  void (async () => {
+    let incoming = {};
+    try {
+      const { mail } = await readMail(userId, gmailId, box);
+      incoming = { from: `${mail.from.name || ''} <${mail.from.address}>`, subject: mail.subject, text: mail.newText || mail.text };
+    } catch { /* המייל המקורי לא נקרא — לומדים מהתשובה לבד */ }
+    await ReplyMemory.learn(userId, { incoming, sent: body, source });
+  })();
+}
+
+/**
+ * הצעת תשובה שנשמרה עם הצעה מהסריקה — עם מה שחסר לשליחה (השרשור והכותרות).
+ * הצעות ישנות נשמרו בלי אלה; כאן הם נקראים מהמייל עצמו.
+ */
+async function completeReply(userId, r) {
+  const box = r.box ?? 0;
+  if (r.threadId && r.inReplyTo && r.to) return { ...r, box };
+  const { msg, mail } = await readMail(userId, r.gmailId, box);
+  return {
+    request: 'הצעת תשובה של העוזר — ראה את הטיוטה הקודמת',
+    suggested: true,
+    ...r,
+    box,
+    from: r.from || (Gmail.connectionOf(boxFor(userId, r.gmailId, box))?.email ?? ''),
+    threadId: msg.threadId,
+    to: r.to || mail.from.address,
+    toName: r.toName || mail.from.name || '',
+    subject: r.subject || (/^(re|תשובה)\s*:/i.test(mail.subject) ? mail.subject : `Re: ${mail.subject}`),
+    inReplyTo: mail.messageId,
+    references: [...mail.references.slice(-9), mail.messageId].filter(Boolean)
+  };
 }
 
 function prune() {
   D.run('DELETE FROM mail_insights WHERE created_at < ?', new Date(Date.now() - KEEP_DAYS * 864e5).toISOString());
 }
 
-module.exports = { available, collect, itemOf, label, detail, draftReply, suggestReply, sendReply, prune, mask, HOURS, GROUPS, MAX_MAILS, MAX_MAILS_LONG };
+module.exports = { available, collect, itemOf, label, detail, draftReply, suggestReply, sendReply, completeReply, learnFromReply, alreadyLearned, prune, mask, HOURS, GROUPS, MAX_MAILS, MAX_MAILS_LONG };

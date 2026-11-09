@@ -1240,6 +1240,11 @@ const App = (() => {
       box.addEventListener('change', () => {
         setPref('botPrefs', { ...(getPref('botPrefs', {}) ?? {}), insightsInToday: box.checked });
       });
+      // 📬 מייל חדש — הבוט פונה ושואל מה לענות. דלוק כברירת מחדל
+      const alert = el('input', { type: 'checkbox', checked: getPref('botPrefs', {})?.mailAlert !== false });
+      alert.addEventListener('change', () => {
+        setPref('botPrefs', { ...(getPref('botPrefs', {}) ?? {}), mailAlert: alert.checked });
+      });
       return el('div', {}, [
         el('h4', { text: 'בוט הוואטסאפ', style: { margin: '16px 0 8px', fontSize: '13px' } }),
         el('div.table-wrap', {}, [
@@ -1251,6 +1256,13 @@ const App = (() => {
                   el('div.mute-sm', { text: 'החלק האחרון של Today: במסך, בבוט (בהודעת המשך) ובמייל הבוקר. את הרשימה המלאה מקבלים תמיד לפי בקשה: "תובנות", "תובנות מהיומיים האחרונים".' })
                 ]),
                 el('td', { style: { textAlign: 'center', width: '110px' } }, [el('label.checkbox', {}, [box])])
+              ]),
+              el('tr', {}, [
+                el('td', {}, [
+                  el('div', { text: '📧 מייל חדש — הבוט פונה אליי' }),
+                  el('div.mute-sm', { text: 'על כל מייל שמחכה ממך למשהו: "קיבלת מייל מ… — לענות לו כך?" עם כן / לא. מייל שכבר קראת — לא נשאל עליו.' })
+                ]),
+                el('td', { style: { textAlign: 'center', width: '110px' } }, [el('label.checkbox', {}, [alert])])
               ])
             ])
           ])

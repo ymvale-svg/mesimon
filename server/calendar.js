@@ -33,6 +33,13 @@ function selectedCalendars(userId) {
  */
 const safeLink = (url) => (/^https:\/\//i.test(String(url ?? '')) ? String(url) : null);
 
+/** קישור Zoom מהאירוע — מתוסף ה-Zoom (‎conferenceData‎), מהמיקום או מהתיאור */
+function zoomOf(e) {
+  const fromConf = (e.conferenceData?.entryPoints ?? []).find((p) => p.entryPointType === 'video' && /zoom\.us\//i.test(p.uri ?? ''))?.uri;
+  const inText = /https:\/\/[\w.-]*zoom\.us\/[^\s<>"')]+/i.exec(`${e.location ?? ''} ${e.description ?? ''}`)?.[0];
+  return safeLink(fromConf || inText);
+}
+
 function shapeEvent(e, calendar) {
   const allDay = Boolean(e.start?.date && !e.start?.dateTime);
   const self = (e.attendees ?? []).find((a) => a.self);
@@ -46,6 +53,12 @@ function shapeEvent(e, calendar) {
     allDay,
     location: String(e.location ?? ''),
     meetLink: safeLink(e.hangoutLink ?? e.conferenceData?.entryPoints?.find((p) => p.entryPointType === 'video')?.uri),
+    zoomLink: zoomOf(e),
+    // מי משתתף — לשאלה "מי בפגישה?" בבוט. מארגן מסומן; חדרים ומשאבים — לא
+    people: (e.attendees ?? []).filter((a) => !a.resource && a.email).map((a) => ({
+      email: String(a.email).toLowerCase(), name: String(a.displayName ?? ''), response: a.responseStatus ?? 'needsAction', organizer: Boolean(a.organizer)
+    })),
+    organizer: { email: String(e.organizer?.email ?? '').toLowerCase(), name: String(e.organizer?.displayName ?? '') },
     link: safeLink(e.htmlLink),
     declined: self?.responseStatus === 'declined',
     // המשתתפים (ומארגן הפגישה) — משימה מהפגישה מוצעת רק להם
@@ -138,4 +151,4 @@ function forget(userId) {
   namesCache.delete(userId);
 }
 
-module.exports = { isConnected, eventsForDay, listCalendars, selectedCalendars, forget };
+module.exports = { isConnected, eventsForDay, listCalendars, selectedCalendars, forget, _internal: { shapeEvent } };
