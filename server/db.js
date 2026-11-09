@@ -743,6 +743,32 @@ CREATE TABLE IF NOT EXISTS calendar_reminders (
   PRIMARY KEY (uid, start_at, user_id)
 );
 
+/*
+ * 🎥 אחרי פגישה מוקלטת — לכל משתתף פנייה אחת (‎ai/meeting-followup.js‎). ‎source‎:
+ * ‎zoom‎ (‎ref‎ = ‎meetings.id‎) או ‎timeless‎ (‎ref‎ = מזהה הפגישה ב-Timeless). נמחק אחרי חודש.
+ */
+CREATE TABLE IF NOT EXISTS meeting_followups (
+  source     TEXT    NOT NULL,
+  ref        TEXT    NOT NULL,
+  user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  title      TEXT    NOT NULL DEFAULT '',
+  start_at   TEXT    NOT NULL,
+  end_at     TEXT    NOT NULL,
+  data       TEXT    NOT NULL DEFAULT '{}',
+  sent_at    TEXT    NOT NULL,
+  PRIMARY KEY (source, ref, user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_meeting_followups_user ON meeting_followups (user_id, sent_at);
+
+/* סיכום, החלטות ומשימות של פגישה — פעם אחת לפגישה, לכל המשתתפים. נמחק אחרי חודש */
+CREATE TABLE IF NOT EXISTS meeting_digests (
+  source     TEXT    NOT NULL,
+  ref        TEXT    NOT NULL,
+  data       TEXT    NOT NULL,
+  created_at TEXT    NOT NULL,
+  PRIMARY KEY (source, ref)
+);
+
 CREATE TABLE IF NOT EXISTS reply_rules (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
   user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -1427,6 +1453,7 @@ const DEFAULT_SETTINGS = {
   meeting_default_minutes: 30,             // משך ברירת מחדל
   meeting_buffer_minutes: 10,              // מרווח מפגישה צמודה בהצעת מועדים
   meeting_reminder_minutes: 15,            // כמה דקות לפני — התראה ובוט הוואטסאפ, עם קישור הפגישה
+  meeting_followup_minutes: 15,            // כמה דקות אחרי סוף פגישה מוקלטת — הבוט שואל את המשתתפים מה לשלוח
   meeting_ai_alternatives: true,           // הצעות AI להזזת פגישות חופפות
   meeting_record_default: false,           // "הקלטה אוטומטית לענן" מסומן מראש בפגישת Zoom חדשה
 

@@ -62,6 +62,7 @@ const GoodsReceipt = require('./goods-receipt');
 const PurchaseDemand = require('./purchase-demand');
 const Approvals = require('./priority-approvals');
 const WaUi = require('./wa-ui');
+const MeetingFollowup = require('./meeting-followup');
 
 const GROUP_SKILL = path.join(__dirname, 'skills', 'whatsapp-group-to-tasks.md');
 const CHAT_SKILL = path.join(__dirname, 'skills', 'whatsapp-chat.md');
@@ -2139,6 +2140,41 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
     }
   }
 
+  // 🎥 אחרי פגישה מוקלטת: "לפתוח משימות ✅" / "לא" על המשימות שהוצעו
+  if (state.draft?.kind === 'meeting_tasks' && state.awaiting) {
+    const n = WaUi.normalize(t);
+    if (MeetingFollowup.isOpenButton(t) || WaUi.YES.test(n)) {
+      if (!WaActions.allowed(actor, 'create_task')) return out('פתיחת משימות כבויה לך בוואטסאפ.', { draft: null }, { action: 'meeting_followup', status: 'denied', result: 'פתיחת משימות כבויה' });
+      const reply = MeetingFollowup.openTasks(actor, state.draft, { createTask: hooks.createTask, taskLink, dry });
+      return out(reply, { draft: null }, { action: 'meeting_followup', status: 'ok', result: `נפתחו ${state.draft.items.length} משימות מהפגישה "${state.draft.title}"`.slice(0, 300) });
+    }
+    // "רק 1 ו-3" — חלק מהמשימות
+    const picks = /^(?:רק\s+|לפתוח\s+(?:רק\s+)?)?([\d\s,ו\-]+)$/.exec(n);
+    if (picks) {
+      const items = [...new Set((picks[1].match(/\d+/g) ?? []).map(Number))].map((i) => state.draft.items[i - 1]).filter(Boolean);
+      if (items.length && WaActions.allowed(actor, 'create_task')) {
+        const reply = MeetingFollowup.openTasks(actor, { ...state.draft, items }, { createTask: hooks.createTask, taskLink, dry });
+        return out(reply, { draft: null }, { action: 'meeting_followup', status: 'ok', result: `נפתחו ${items.length} משימות מהפגישה "${state.draft.title}"`.slice(0, 300) });
+      }
+    }
+    if (WaUi.NO.test(n) || CANCEL.test(t)) {
+      return out('בסדר, לא נפתחו משימות 👍', { draft: null }, { action: 'meeting_followup', status: 'ok', result: `לא: משימות מ"${state.draft.title}"`.slice(0, 300) });
+    }
+    // כל דבר אחר — נושא חדש; ההצעה לפתוח משימות יורדת
+    keep.draft = null;
+    state = { ...state, draft: null, awaiting: false };
+  }
+  // 🎥 אחרי פגישה מוקלטת: "סיכום הפגישה", "משימות מהפגישה", "הקלטת הפגישה"
+  if (WaActions.allowed(actor, 'meeting_followup') && actor.type === 'user' && !(state.awaiting && state.draft && state.draft.kind !== 'meeting_tasks')) {
+    const r = await MeetingFollowup.answer(actor, t, {
+      appRoot: appRoot(), dry, createTask: WaActions.allowed(actor, 'create_task') && hooks.createTask ? hooks.createTask : null
+    }).catch((err) => ({ text: 'לא הצלחתי להגיע לפגישה כרגע. נסו שוב בעוד כמה דקות 🙏', result: err.message, error: true }));
+    if (r) {
+      return out(r.text, { draft: r.draft ?? null, awaiting: Boolean(r.awaiting) },
+        { action: 'meeting_followup', status: r.error ? 'error' : 'ok', result: String(r.result ?? '').slice(0, 300), buttons: r.buttons?.length ? r.buttons : undefined });
+    }
+  }
+
   // 📅 "מי משתתף בפגישה?" — מהיומן (גם פגישות שלא נקבעו ממשימון)
   if (WaActions.byKey('meeting_reminder')?.enabled && !(state.awaiting && state.draft)) {
     const who = await require('../meetings').participantsAnswer(actor.id, t).catch(() => null);
@@ -3341,6 +3377,40 @@ async function mailAlerts() {
 }
 
 // ---------------------------------------------------------------------------
+// 🎥 אחרי פגישה מוקלטת — הבוט שואל את המשתתפים מה לשלוח (‎meeting-followup.js‎)
+// ---------------------------------------------------------------------------
+
+let followupsAt = 0;
+async function meetingFollowups() {
+  if (!WaActions.byKey('meeting_followup')?.enabled || Date.now() - followupsAt < 2 * 60 * 1000) return;
+  followupsAt = Date.now();
+  await MeetingFollowup.sweep({
+    eligible: (userId) => {
+      if (D.userPrefs(userId)?.botPrefs?.meetingFollowup === false) return false;
+      const actor = Auth.loadActor('user', userId);
+      return Boolean(actor && WaActions.allowed(actor, 'meeting_followup'));
+    },
+    // באמצע שיחה מול הבוט — לא קוטעים; הפנייה מחכה לסבב הבא
+    busy: (userId) => {
+      const st = chatOf(userId);
+      return st.awaiting || Boolean(st.draft && st.draft.kind !== 'menu') || GoodsReceipt.active(userId) || PurchaseDemand.active(userId);
+    },
+    send: async (userId, text, buttons, m) => {
+      const u = D.get("SELECT id, full_name, phone FROM users WHERE id = ?", userId);
+      const chatId = `${u.phone}@c.us`;
+      try {
+        await sendButtons(chatId, text, buttons);
+        rememberBot(userId, text);
+        log({ channel: 'summary', chatId, userId, who: u.full_name, action: 'meeting_followup', status: 'ok', result: `🎥 ${m.title} (${m.source})`.slice(0, 300), taskId: m.data?.taskId ?? null });
+      } catch (err) {
+        log({ channel: 'summary', chatId, userId, who: u.full_name, action: 'meeting_followup', status: 'error', result: err.message });
+      }
+    }
+  }).catch((err) => console.error('[משימון] פנייה אחרי פגישה נכשלה:', err.message));
+  MeetingFollowup.prune();
+}
+
+// ---------------------------------------------------------------------------
 // קיבלת משימה
 // ---------------------------------------------------------------------------
 
@@ -3681,6 +3751,7 @@ async function tick() {
       await sendSummaries();
       await flushOutbox();
       await mailAlerts();
+      await meetingFollowups();
       await warmInsights();
     }
     if (Claude.isEnabled() && WaActions.byKey('group_tasks')?.enabled) await processGroups();

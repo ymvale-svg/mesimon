@@ -1232,6 +1232,11 @@ const App = (() => {
       alert.addEventListener('change', () => {
         setPref('botPrefs', { ...(getPref('botPrefs', {}) ?? {}), mailAlert: alert.checked });
       });
+      // 🎥 אחרי פגישה מוקלטת — הבוט שואל מה לשלוח. דלוק כברירת מחדל
+      const followup = el('input', { type: 'checkbox', checked: getPref('botPrefs', {})?.meetingFollowup !== false });
+      followup.addEventListener('change', () => {
+        setPref('botPrefs', { ...(getPref('botPrefs', {}) ?? {}), meetingFollowup: followup.checked });
+      });
       return el('div', {}, [
         el('h4', { text: 'בוט הוואטסאפ', style: { margin: '16px 0 8px', fontSize: '13px' } }),
         el('div.table-wrap', {}, [
@@ -1250,6 +1255,13 @@ const App = (() => {
                   el('div.mute-sm', { text: 'על כל מייל שמחכה ממך למשהו: "קיבלת מייל מ… — לענות לו כך?" עם כן / לא. מייל שכבר קראת — לא נשאל עליו.' })
                 ]),
                 el('td', { style: { textAlign: 'center', width: '110px' } }, [el('label.checkbox', {}, [alert])])
+              ]),
+              el('tr', {}, [
+                el('td', {}, [
+                  el('div', { text: '🎥 אחרי פגישה מוקלטת — הבוט שואל אותי' }),
+                  el('div.mute-sm', { text: '"הפגישה הסתיימה והוקלטה. איך היה? מה לשלוח לך?" — סיכום, המשימות שלי מהפגישה או ההקלטה. רק בפגישות שהשתתפתי בהן.' })
+                ]),
+                el('td', { style: { textAlign: 'center', width: '110px' } }, [el('label.checkbox', {}, [followup])])
               ])
             ])
           ])
