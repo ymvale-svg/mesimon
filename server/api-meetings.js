@@ -67,7 +67,8 @@ function register(router, h) {
       defaults: {
         minutes: Number(D.getSetting('meeting_default_minutes', 30)),
         record: Boolean(D.getSetting('meeting_record_default', false)),
-        hours: D.getSetting('meeting_hours', '08:30-18:00')
+        hours: D.getSetting('meeting_hours', '08:30-18:00'),
+        officeAddress: String(D.getSetting('meeting_office_address', '') ?? '').trim()
       },
       calendars: await Meetings.calendarsFor(actor, { fresh }),
       accessError: Meetings.accessError(actor.id)
@@ -237,7 +238,8 @@ function register(router, h) {
     const from = q.get('from');
     const to = q.get('to');
     if (!W.isDate(from) || !W.isDate(to) || to < from) throw badRequest('טווח לא תקין');
-    const ids = String(q.get('users') ?? '').split(',').map(Number).filter(Boolean).slice(0, 15);
+    // תצוגה משולבת — כל היומנים מסומנים כברירת מחדל, לכן עד 80 (בלי כפילויות)
+    const ids = [...new Set(String(q.get('users') ?? '').split(',').map(Number).filter(Boolean))].slice(0, 80);
     const secretary = Meetings.isSecretary(actor);
     if (!secretary && ids.some((id) => id !== actor.id)) throw forbidden('מסך היומן מיועד למזכירות');
     await run(res, async () => {
@@ -245,9 +247,11 @@ function register(router, h) {
       const toIso = W.ilWallToUtc(W.addDays(to, 1), 0, 0).toISOString();
       const access = await Meetings.accessMap(actor);
       const users = ids.map((id) => D.get("SELECT id, full_name, email FROM users WHERE id = ? AND status = 'active'", id)).filter(Boolean);
-      const out = [];
+      const perUser = new Map(users.map((u) => [u.id, []]));
       const fbNeeded = [];
-      for (const u of users) {
+      // כמה עובדים במקביל — עם עשרות יומנים, אחד-אחד לוקח יותר מדי
+      const loadOne = async (u) => {
+        const out = perUser.get(u.id);
         const level = u.id === actor.id ? (Gmail.has(actor.id, 'calendar') ? 'owner' : 'none') : access.get(u.id) ?? 'none';
         if (['owner', 'write', 'read'].includes(level)) {
           try {
@@ -274,7 +278,12 @@ function register(router, h) {
         } else {
           fbNeeded.push(u);
         }
-      }
+      };
+      const queue = [...users];
+      await Promise.all(Array.from({ length: Math.min(6, queue.length) }, async () => {
+        while (queue.length) await loadOne(queue.shift());
+      }));
+      const out = users.flatMap((u) => perUser.get(u.id));
       if (fbNeeded.length) {
         const fb = await Meetings.freeBusy(actor, fbNeeded.map((u) => u.email), fromIso, toIso);
         for (const u of fbNeeded) {

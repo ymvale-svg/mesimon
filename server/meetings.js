@@ -321,7 +321,8 @@ async function suggest(actor, { ownerId, emails = [], minutes, days = 7, max = 8
   for (const a of avoid) busy.push([new Date(a.start).getTime(), new Date(a.end).getTime()]);
 
   const h = meetingHours();
-  const now = Date.now() + 15 * MIN;
+  // מהרבע שעה הנוכחי — ב-15:47 גם 15:45 מוצע (כמו שהדיאלוג מאפשר לקבוע)
+  const now = quarterStart();
   const slots = [];
   for (const d of dates) {
     let perDay = 0;
@@ -334,10 +335,10 @@ async function suggest(actor, { ownerId, emails = [], minutes, days = 7, max = 8
       slots.push({ start: new Date(t).toISOString(), end: new Date(end).toISOString() });
       perDay++;
       t += 45 * MIN; // הצעות מפוזרות, לא רבע שעה אחרי רבע שעה
-      if (slots.length >= max) return { slots, people: internal.length, unknown: [...fb.entries()].filter(([, v]) => v.error).map(([k]) => k) };
+      if (slots.length >= max) return { slots, people: internal.length, buffer: buffer / MIN, unknown: [...fb.entries()].filter(([, v]) => v.error).map(([k]) => k) };
     }
   }
-  return { slots, people: internal.length, unknown: [...fb.entries()].filter(([, v]) => v.error).map(([k]) => k) };
+  return { slots, people: internal.length, buffer: buffer / MIN, unknown: [...fb.entries()].filter(([, v]) => v.error).map(([k]) => k) };
 }
 
 // ---------------------------------------------------------------------------
@@ -527,6 +528,29 @@ function shape(m) {
 }
 
 /**
+ * מועד שכבר עבר — לא קובעים. מותר מתחילת הרבע שעה הנוכחי: ב-15:47 אפשר עוד
+ * לקבוע ל-15:45 (פגישה שמתחילה עכשיו), לא ל-15:30.
+ */
+/** Zoom סירב ליצור פגישה — התראה למנהלי המערכת, עם מה ש-Zoom החזיר */
+function zoomAlert(actor, zoomUser, title, startIso, err) {
+  console.error(`[משימון] יצירת פגישת Zoom נכשלה (${zoomUser?.email ?? zoomUser?.id}):`, err.firstError ?? '', err.message);
+  const body = [`קבע/ה: ${actor?.name ?? ''}`, `פגישה: ${title} · ${fmtWhen(startIso)}`, `משתמש Zoom: ${zoomUser?.name ?? ''} ${zoomUser?.email ?? ''}`,
+    err.firstError ? `ניסיון ראשון: ${err.firstError}` : null, `שגיאה: ${err.message}`].filter(Boolean).join('\n');
+  try {
+    for (const u of D.all("SELECT id FROM users WHERE status = 'active' AND role IN ('superadmin','admin')")) {
+      D.notify({ targetType: 'user', targetId: u.id, kind: 'meeting', title: '🎥 Zoom: יצירת פגישה נכשלה', body });
+    }
+  } catch (e) {
+    console.error('[משימון] התראה למנהלים על Zoom:', e.message);
+  }
+}
+
+const quarterStart = (ms = Date.now()) => Math.floor(ms / (15 * MIN)) * 15 * MIN;
+function assertNotPast(startMs) {
+  if (startMs < quarterStart()) throw new MeetingError('המועד כבר עבר — בחרו מועד מעכשיו והלאה');
+}
+
+/**
  * ‎input‎: ‎{ taskId, ownerId, title, attendees: [{email,name}], start (ISO),
  * minutes, locationType: zoom|place|link|none, location, notes, sendInvites,
  * record }‎ — ‎record‎: הקלטה אוטומטית לענן ב-Zoom
@@ -537,6 +561,7 @@ async function create(actor, input) {
   if (!title) throw new MeetingError('נדרש נושא לפגישה');
   const startMs = new Date(input.start).getTime();
   if (!Number.isFinite(startMs)) throw new MeetingError('נדרש מועד לפגישה');
+  assertNotPast(startMs);
   const minutes = Math.max(5, Math.min(12 * 60, Math.round(Number(input.minutes) || 30)));
   const startIso = new Date(startMs).toISOString();
   const endIso = new Date(startMs + minutes * MIN).toISOString();
@@ -560,8 +585,16 @@ async function create(actor, input) {
     const pick = Zoom.pickHost(cal.owner.id, startIso, endIso, { prefer });
     if (!pick.zoomUser) throw new MeetingError(`${pick.reason}. בחרו ${prefer && canChooseZoomHost(actor) ? 'משתמש Zoom אחר, ' : ''}מועד אחר, או מיקום אחר.`);
     zoomNote = pick.swapped || pick.reason ? `הפגישה ב-Zoom של ${pick.zoomUser.name}${pick.reason ? ` (${pick.reason})` : ''}` : '';
-    const z = await Zoom.createMeeting(pick.zoomUser.id, { title, startIso, minutes, agenda: String(input.notes ?? ''), record });
-    zoom = { userId: pick.zoomUser.id, ...z };
+    let z;
+    try {
+      z = await Zoom.createMeeting(pick.zoomUser.id, { title, startIso, minutes, agenda: String(input.notes ?? ''), record });
+    } catch (err) {
+      // לעובד — מה אפשר לעשות; הפרטים הטכניים — למנהלי המערכת
+      zoomAlert(actor, pick.zoomUser, title, startIso, err);
+      throw new MeetingError('לא הצלחנו ליצור את קישור ה-Zoom, והפגישה לא נקבעה. אפשר לנסות שוב, לבחור מארח Zoom אחר, או לקבוע ב"במשרד" / "קישור משלי" — מנהלי המערכת קיבלו את פרטי התקלה.');
+    }
+    if (z.warning) zoomNote = [zoomNote, z.warning].filter(Boolean).join(' · ');
+    zoom = { userId: pick.zoomUser.id, id: z.id, joinUrl: z.joinUrl, password: z.password };
   }
 
   const r = D.run(
@@ -664,6 +697,7 @@ async function update(actor, id, input) {
   const attendees = input.attendees !== undefined ? cleanAttendees(input.attendees, userById(m.owner_id)?.email) : parseJson(m.attendees, []);
   const notes = input.notes !== undefined ? String(input.notes).slice(0, 4000) : m.notes;
   const moved = startIso !== m.start_at || endIso !== m.end_at;
+  if (input.start !== undefined && startIso !== m.start_at) assertNotPast(startMs);
   const record = input.record !== undefined && m.zoom_meeting_id ? Boolean(input.record) : Boolean(m.zoom_record);
   const recordChanged = record !== Boolean(m.zoom_record);
 

@@ -264,9 +264,34 @@ function meetingBody({ title, startIso, minutes, agenda = '', record }) {
   };
 }
 
+/**
+ * יצירת פגישה. Zoom מחזיר 400 על הגדרה שהחשבון או המשתמש לא מאפשרים (הקלטה
+ * לענן במשתמש חינמי, "כניסה לפני המארח" שנעולה בחשבון) או על מועד שכבר
+ * התחיל — אז מנסים שוב: מועד מעכשיו, ובלי ההגדרות האלה. ‎warning‎ — מה ירד.
+ */
 async function createMeeting(zoomUserId, opts) {
-  const m = await call(accountOfUser(zoomUserId), 'POST', `/users/${encodeURIComponent(zoomUserId)}/meetings`, meetingBody(opts));
-  return { id: String(m.id), joinUrl: m.join_url, password: m.password ?? '' };
+  const key = accountOfUser(zoomUserId);
+  const path = `/users/${encodeURIComponent(zoomUserId)}/meetings`;
+  // פגישה שמתחילה עכשיו (נקבעה ל-15:45 ב-15:47) — ל-Zoom שולחים מועד עתידי; הקישור זהה
+  const startMs = Math.max(new Date(opts.startIso).getTime(), Date.now() + 60000);
+  const body = meetingBody({ ...opts, startIso: new Date(startMs).toISOString() });
+  let m;
+  let warning = '';
+  try {
+    m = await call(key, 'POST', path, body);
+  } catch (err) {
+    if (err.status !== 400) throw err;
+    console.error(`[משימון] Zoom דחה יצירת פגישה (${zoomUserId}): ${err.message} — מנסה שוב בלי הגדרות נוספות`);
+    const plain = { ...body, settings: {} };
+    try {
+      m = await call(key, 'POST', path, plain);
+    } catch (err2) {
+      err2.firstError = err.message;
+      throw err2;
+    }
+    warning = opts.record ? 'Zoom לא אפשר הקלטה אוטומטית לענן במשתמש הזה — הפגישה נוצרה בלי הקלטה' : '';
+  }
+  return { id: String(m.id), joinUrl: m.join_url, password: m.password ?? '', warning };
 }
 
 async function updateMeeting(meetingId, opts) {

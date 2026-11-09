@@ -1397,6 +1397,7 @@ const DEFAULT_SETTINGS = {
   meeting_reminder_minutes: 15,            // כמה דקות לפני — התראה ובוט הוואטסאפ, עם קישור הפגישה
   meeting_ai_alternatives: true,           // הצעות AI להזזת פגישות חופפות
   meeting_record_default: false,           // "הקלטה אוטומטית לענן" מסומן מראש בפגישת Zoom חדשה
+  meeting_office_address: '',              // "🏢 במשרד" בקביעת פגישה — הכתובת שנכנסת למיקום ביומן ובהזמנה
 
   ai_mail_scan_enabled: true,
   ai_scan_time: '07:00',                   // ריצת הבוקר, שעון ישראל

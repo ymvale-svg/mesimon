@@ -67,6 +67,8 @@ const MeetingView = (() => {
     }
 
     const me = App.state.actor;
+    const officeAddress = info.defaults.officeAddress ?? '';
+    const isOffice = (loc) => Boolean(loc) && (loc === officeAddress || loc === 'במשרד');
     // Zoom פתוח למזכירות ולהנהלה, ולכל השאר — רק כשיש להם משתמש Zoom משויך
     const zoomOpen = info.zoom.enabled && (info.zoom.chooseHost || Boolean(info.zoom.own));
     const state = {
@@ -78,7 +80,8 @@ const MeetingView = (() => {
       minutes: editing?.minutes ?? opts.prefill?.minutes ?? info.defaults.minutes,
       date: '',
       time: '',
-      locationType: editing?.locationType ?? (zoomOpen ? 'zoom' : 'place'),
+      // ‎office‎ — "🏢 במשרד": בשרת זה ‎place‎ עם כתובת המשרד מההגדרות
+      locationType: editing?.locationType === 'place' && isOffice(editing.location) ? 'office' : editing?.locationType ?? (zoomOpen ? 'zoom' : 'office'),
       record: editing ? Boolean(editing.zoom?.record) : Boolean(info.defaults.record),
       zoomUserId: editing?.zoom?.userId ?? '',   // ריק = אוטומטי (הנהלה ומזכירות בוחרים)
       suggestions: null,
@@ -92,7 +95,7 @@ const MeetingView = (() => {
     const titleInput = el('input', { type: 'text', value: editing?.title ?? opts.task?.title ?? '' });
     const notesInput = el('textarea', { placeholder: 'נכנס לתיאור הפגישה ביומן', style: { minHeight: '56px' } });
     notesInput.value = editing?.notes ?? '';
-    const locationInput = el('input', { type: 'text', value: editing?.locationType !== 'zoom' ? editing?.location ?? '' : '' });
+    const locationInput = el('input', { type: 'text', placeholder: 'כתובת', value: editing?.locationType !== 'zoom' && !isOffice(editing?.location) ? editing?.location ?? '' : '' });
     const sendInvites = el('input', { type: 'checkbox', checked: true });
     const dateInput = el('input', { type: 'date', value: state.date });
     const timeInput = el('input', { type: 'time', value: state.time, step: 900 });
@@ -105,6 +108,9 @@ const MeetingView = (() => {
     });
     const startIso = () => new Date(`${state.date}T${state.time}:00`).toISOString();
     const emails = () => state.attendees.map((a) => a.email);
+    // כמו בשרת: מותר מתחילת הרבע שעה הנוכחי (ב-15:47 — גם 15:45), לא לפני
+    const quarterStart = () => Math.floor(Date.now() / 900000) * 900000;
+    const isPast = () => new Date(startIso()).getTime() < quarterStart();
 
     // --- ביומן של
     const ownerField = () => {
@@ -196,10 +202,18 @@ const MeetingView = (() => {
       const selEnd = selStart + state.minutes * 60000;
       const ticks = [];
       for (let h = Math.max(0, fh - 1); h <= Math.min(23, th + 1); h++) ticks.push(h);
+      // היום — מה שכבר עבר מוצלל, וקו "עכשיו": לא קובעים לפניו
+      const nowMs = Date.now();
+      const pastPct = nowMs > dayStart ? pos(new Date(Math.min(nowMs, dayEnd)).toISOString()) : 0;
+      const pastMarks = () => pastPct > 0 ? [
+        el('div.mt-past', { style: { insetInlineStart: '0', width: `${pastPct}%` }, title: 'כבר עבר' }),
+        nowMs < dayEnd ? el('div.mt-now', { style: { insetInlineStart: `${pastPct}%` }, title: `עכשיו ${localTime(new Date(nowMs))}` }) : null
+      ] : [];
       const rows = a.rows.map((r) => el('div.mt-row', {}, [
         el('div.mt-who', { title: r.email, text: r.name }),
         el('div.mt-track', {}, r.internal
           ? [
+              ...pastMarks(),
               ...r.busy.map((b) => {
                 const clash = new Date(b.start).getTime() < selEnd && new Date(b.end).getTime() > selStart;
                 return el(`div.mt-busy${clash ? '.is-clash' : ''}`, {
@@ -215,7 +229,8 @@ const MeetingView = (() => {
         el('div.mt-row.mt-head', {}, [el('div.mt-who'), el('div.mt-track', {}, ticks.map((h) => el('span.mt-tick', { style: { insetInlineStart: `${pos(`${a.date}T${pad(h)}:00:00`)}%` }, text: String(h) })))]),
         ...rows,
         el('div.mt-row.mt-sel-row', {}, [el('div.mt-who'), el('div.mt-track', {}, [
-          el('div.mt-sel', { style: { insetInlineStart: `${pos(new Date(selStart).toISOString())}%`, width: `${Math.max(1, pos(new Date(selEnd).toISOString()) - pos(new Date(selStart).toISOString()))}%` } })
+          ...pastMarks(),
+          el(`div.mt-sel${isPast() ? '.is-past' : ''}`, { style: { insetInlineStart: `${pos(new Date(selStart).toISOString())}%`, width: `${Math.max(1, pos(new Date(selEnd).toISOString()) - pos(new Date(selStart).toISOString()))}%` } })
         ])])
       ]);
     }
@@ -257,12 +272,13 @@ const MeetingView = (() => {
       UI.mount(availSlot, availabilityBox());
       const conflicts = conflictsOf();
       UI.mount(conflictSlot,
+        isPast() ? el('div.text-danger', { text: '⚠ המועד כבר עבר — בחרו שעה מעכשיו והלאה (או "💡 הצע מועדים")' }) : null,
         conflicts.length
           ? el('div.mt-conflicts', {}, [
               ...conflicts.map((c) => el('div.text-danger', { text: `⚠ ${c.who} תפוס/ה ${hhmm(c.start)}–${hhmm(c.end)}${c.title ? ` (${c.title})` : ''}` })),
               el('button.btn.btn-sm.mt', { type: 'button', onclick: loadAlternatives }, ['🔀 חלופות — מה להזיז'])
             ])
-          : state.avail && !state.avail.error ? el('div.text-ok.mute-sm', { text: '✓ כל המשתתפים מהארגון פנויים במועד הזה' }) : null,
+          : state.avail && !state.avail.error && !isPast() ? el('div.text-ok.mute-sm', { text: '✓ כל המשתתפים מהארגון פנויים במועד הזה' }) : null,
         alternativesBox()
       );
     }
@@ -283,7 +299,7 @@ const MeetingView = (() => {
       if (!s) return null;
       if (!s.slots.length) return el('div.mute-sm', { text: 'לא נמצא מועד שכולם פנויים בו בשבוע הקרוב — נסו "🔀 חלופות".' });
       return el('div.mt-slots', {}, [
-        el('div.mute-sm', { text: `💡 מועדים שבהם כולם פנויים${s.unknown?.length ? ` (בלי מידע על ${s.unknown.length})` : ''}:` }),
+        el('div.mute-sm', { text: `💡 מועדים שבהם כולם פנויים${s.buffer ? `, עם ${s.buffer} דק׳ מרווח מפגישה צמודה` : ''}${s.unknown?.length ? ` (בלי מידע על ${s.unknown.length})` : ''}:` }),
         ...s.slots.map((x) => el(`button.mt-slot${startIso() === x.start ? '.on' : ''}`, {
           type: 'button',
           onclick: () => {
@@ -406,7 +422,8 @@ const MeetingView = (() => {
     function locationBox() {
       const types = [
         zoomOpen || editing?.locationType === 'zoom' ? ['zoom', '🎥 Zoom — קישור נוצר אוטומטית'] : null,
-        ['place', '📍 במשרד / כתובת'],
+        ['office', '🏢 במשרד'],
+        ['place', '📍 כתובת אחרת'],
         ['link', '🔗 קישור משלי'],
         ['none', 'בלי מיקום']
       ].filter(Boolean);
@@ -416,6 +433,9 @@ const MeetingView = (() => {
           el('span', { text: label })
         ]))),
         ['place', 'link'].includes(state.locationType) ? locationInput : null,
+        state.locationType === 'office'
+          ? el('div.mute-sm', { text: officeAddress ? `📍 ${officeAddress} — נכנס למיקום ביומן ובהזמנה` : 'כתובת המשרד עוד לא הוגדרה (ניהול ← הגדרות ← "פגישות: כתובת המשרד") — במיקום ייכתב "במשרד"' })
+          : null,
         state.locationType === 'zoom' && info.zoom.chooseHost
           ? UI.field('מארח Zoom', hostSelect, editing?.zoom?.host ? `כרגע: ${editing.zoom.host}. בחירת משתמש אחר יוצרת קישור חדש, והמשתתפים מקבלים עדכון` : 'הפגישה נפתחת תמיד באחד מחשבונות ה-Zoom של החברה. קישור המארח — לבעל היומן, למי שקבע, להנהלה ולמזכירות')
           : null,
@@ -437,6 +457,7 @@ const MeetingView = (() => {
       const title = titleInput.value.trim();
       if (!title) return UI.toast('נדרש נושא לפגישה', 'error');
       if (!state.date || !state.time) return UI.toast('נדרש מועד', 'error');
+      if (isPast() && (!editing || startIso() !== new Date(editing.start).toISOString())) return UI.toast('המועד כבר עבר — בחרו מועד מעכשיו והלאה', 'error');
       saveBtn.disabled = true;
       const payload = {
         taskId: opts.task?.id ?? null,
@@ -445,10 +466,10 @@ const MeetingView = (() => {
         attendees: state.attendees,
         start: startIso(),
         minutes: state.minutes,
-        locationType: state.locationType,
+        locationType: state.locationType === 'office' ? 'place' : state.locationType,
         record: state.locationType === 'zoom' && state.record,
         zoomUserId: state.locationType === 'zoom' && info.zoom.chooseHost && state.zoomUserId ? state.zoomUserId : undefined,
-        location: locationInput.value.trim(),
+        location: state.locationType === 'office' ? officeAddress || 'במשרד' : locationInput.value.trim(),
         notes: notesInput.value,
         sendInvites: sendInvites.checked
       };

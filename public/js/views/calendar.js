@@ -4,9 +4,13 @@
  *
  * עובד — היומן של עצמו ב-Google: יום ושבוע, וקביעת פגישה בלחיצה על משבצת.
  *
- * מזכירות — גם היומנים שהעובדים שיתפו איתן, זה לצד זה:
- *   • יום  — עמודה לכל עובד (התצוגה שמזכירה עובדת בה: מי פנוי עכשיו)
- *   • שבוע — עמודה לכל יום, הפגישות של כל העובדים שנבחרו בצבעים
+ * מזכירות — גם היומנים שהעובדים שיתפו איתן, כמו "יומן מרובה משתתפים" ב-Google:
+ *   • כל היומנים מסומנים כברירת מחדל; מורידים את מי שלא רוצים לראות (נזכר —
+ *     ‎calendarHidden‎, כך שעובד חדש ששיתף מופיע לבד). צבע קבוע לכל עובד.
+ *   • יום, משולב — כל הפגישות בעמודה אחת, בצבע ובשם של בעל היומן; פגישה
+ *     משותפת לכמה עובדים — בלוק אחד עם כל השמות
+ *   • יום, לפי עובד — עמודה לכל עובד (מי פנוי עכשיו)
+ *   • שבוע — עמודה לכל יום, משולב
  * עובד ששיתף לצפייה בלבד, או לא שיתף — מופיע ב"תפוס" בלבד, באפור.
  *
  * למזכירות בלבד — לוח צף משמאל ליומן, "📌 מחכות לקביעה": המשימות שמחכות
@@ -17,7 +21,8 @@
 const CalendarView = (() => {
   const { el } = UI;
 
-  const PREF = 'calendarUsers';
+  const HIDDEN_PREF = 'calendarHidden';   // היומנים שהורדו — כל השאר מוצגים
+  const LAYOUT_PREF = 'calendarLayout';   // ביום: ‎combined‎ (ברירת מחדל) או ‎columns‎
   const DOCK_PREF = 'calendarDock';
   const COLORS = ['#2563eb', '#7c3aed', '#0f766e', '#c2410c', '#be123c', '#0891b2', '#65a30d', '#a16207', '#db2777', '#4f46e5'];
   const DAY_NAMES = ['א׳', 'ב׳', 'ג׳', 'ד׳', 'ה׳', 'ו׳', 'ש׳'];
@@ -33,12 +38,22 @@ const CalendarView = (() => {
   let data = null;      // האירועים בטווח
   let pending = [];
   // ‎tab‎: ‎calendar‎ — היומנים; ‎recordings‎ — 🎥 הקלטות Zoom (‎RecordingsView‎), כשיש חיבור Zoom
-  const view = { tab: 'calendar', mode: 'day', date: new Date(), users: null, filter: '' };
+  const view = { tab: 'calendar', mode: 'day', layout: null, date: new Date(), users: null, hidden: null, filter: '' };
 
+  // צבע קבוע לכל עובד — לפי מקומו ברשימת היומנים, לא לפי מי מסומן: הורדת יומן לא צובעת מחדש את האחרים
   const colorOf = (userId) => {
-    const i = (view.users ?? []).indexOf(userId);
+    const i = (info?.calendars ?? []).findIndex((c) => c.userId === userId);
     return COLORS[(i < 0 ? userId : i) % COLORS.length];
   };
+  const nameOf = (userId) => {
+    const c = info?.calendars.find((x) => x.userId === userId);
+    return c ? (c.self ? `${c.name} (אני)` : c.name) : '';
+  };
+
+  /** המוצגים — כל היומנים שלא הורדו, בסדר הרשימה */
+  function syncUsers() {
+    view.users = info.calendars.filter((c) => !view.hidden.has(c.userId)).map((c) => c.userId);
+  }
 
   // ------------------------------------------------------------- טעינה
 
@@ -52,12 +67,12 @@ const CalendarView = (() => {
     } catch (err) {
       return UI.mount(container, UI.empty(err.message, '⚠️'));
     }
-    if (!view.users) {
-      const saved = App.getPref(PREF);
-      const shared = info.calendars.filter((c) => c.access !== 'none').map((c) => c.userId);
-      view.users = (Array.isArray(saved) && saved.length ? saved : shared.slice(0, 6)).filter((id) => info.calendars.some((c) => c.userId === id));
-      if (!view.users.length) view.users = info.calendars.filter((c) => c.self).map((c) => c.userId);
+    if (!view.hidden) {
+      const saved = App.getPref(HIDDEN_PREF);
+      view.hidden = new Set(Array.isArray(saved) ? saved : []);
+      view.layout = App.getPref(LAYOUT_PREF, 'combined') === 'columns' ? 'columns' : 'combined';
     }
+    syncUsers();
     if (view.tab === 'recordings' && info.zoom?.enabled) return drawRecordings();
     await loadRange();
   }
@@ -91,16 +106,35 @@ const CalendarView = (() => {
     return { from: iso(days[0]), to: iso(days[days.length - 1]), days };
   }
 
+  // רק התשובה האחרונה נכנסת למסך — לחיצות מהירות על היומנים לא מחזירות תמונה ישנה
+  let rangeSeq = 0;
   async function loadRange() {
     const r = range();
+    const mine = ++rangeSeq;
+    let res;
     try {
-      data = view.users.length
+      res = view.users.length
         ? await API.get(`/api/meetings/range?from=${r.from}&to=${r.to}&users=${view.users.join(',')}`)
         : { events: [], access: {} };
     } catch (err) {
-      data = { events: [], access: {}, error: err.message };
+      res = { events: [], access: {}, error: err.message };
     }
+    if (mine !== rangeSeq) return;
+    data = res;
     draw();
+  }
+
+  // הורדה / הוספה של יומן: המסך מתעדכן מיד מהנתונים שכבר יש, והטעינה — אחרי שהלחיצות נרגעות
+  let toggleTimer = null;
+  function usersChanged() {
+    App.setPref(HIDDEN_PREF, [...view.hidden]);
+    const before = new Set(view.users);
+    syncUsers();
+    draw();
+    const added = view.users.some((id) => !before.has(id));
+    clearTimeout(toggleTimer);
+    // רק הורדה — אין מה לטעון, האירועים כבר במסך
+    if (added) toggleTimer = setTimeout(loadRange, 350);
   }
 
   // ------------------------------------------------------------- המסך
@@ -131,6 +165,11 @@ const CalendarView = (() => {
         el('h2', { text: '📅 יומן' }),
         el('div.seg', {}, [['day', 'יום'], ['week', 'שבוע']].map(([k, label]) =>
           el(`button${view.mode === k ? '.active' : ''}`, { onclick: () => { view.mode = k; loadRange(); } }, [label]))),
+        // ביום, כשמוצג יותר מיומן אחד: הכול בעמודה אחת, או עמודה לכל עובד
+        secretary && view.mode === 'day' && view.users.length > 1
+          ? el('div.seg', { title: 'איך להציג כמה יומנים' }, [['combined', 'משולב'], ['columns', 'עמודה לכל עובד']].map(([k, label]) =>
+              el(`button${view.layout === k ? '.active' : ''}`, { onclick: () => { view.layout = k; App.setPref(LAYOUT_PREF, k); draw(); } }, [label])))
+          : null,
         el('button.btn.btn-sm', { title: 'הקודם', onclick: () => { view.date = addDays(view.date, view.mode === 'day' ? -1 : -7); loadRange(); } }, ['▶']),
         el('b.cal-title', { text: title }),
         el('button.btn.btn-sm', { title: 'הבא', onclick: () => { view.date = addDays(view.date, view.mode === 'day' ? 1 : 7); loadRange(); } }, ['◀']),
@@ -153,34 +192,94 @@ const CalendarView = (() => {
       // עובד רואה רק את היומן של עצמו — אין את מי לבחור
       secretary ? peoplePicker() : null,
       data?.error ? el('div.alert.alert-warn', {}, [el('span', { text: '⚠️' }), el('div', { text: data.error })]) : null,
-      view.mode === 'day' ? dayGrid(r.days[0]) : weekGrid(r.days)
+      view.mode === 'week' ? weekGrid(r.days) : view.layout === 'columns' && view.users.length > 1 ? dayGrid(r.days[0]) : combinedDay(r.days[0])
     ]));
   }
 
-  /** מי מוצג — שבבים לבחירה, עם חיפוש */
+  /**
+   * היומנים — כמו ב-Google: כולם מסומנים, לחיצה מורידה / מחזירה. הצבע של כל
+   * עובד קבוע, וזה המקרא של הפגישות ביומן.
+   */
   function peoplePicker() {
-    const search = el('input', { type: 'search', placeholder: 'עובד…', value: view.filter, style: { width: '150px' } });
+    const search = el('input', { type: 'search', placeholder: 'חיפוש עובד…', value: view.filter, style: { width: '150px' } });
     search.addEventListener('input', () => { view.filter = search.value; drawChips(); });
     const chips = el('div.cal-people');
-    const drawChips = () => {
+    const visible = () => {
       const q = view.filter.trim();
-      const list = info.calendars.filter((c) => !q || c.name.includes(q) || c.email.includes(q));
-      UI.mount(chips, ...list.slice(0, 40).map((c) => {
-        const on = view.users.includes(c.userId);
+      return info.calendars.filter((c) => !q || c.name.includes(q) || c.email.includes(q));
+    };
+    const drawChips = () => {
+      UI.mount(chips, ...visible().map((c) => {
+        const on = !view.hidden.has(c.userId);
         const access = c.self ? 'owner' : c.access;
+        const color = colorOf(c.userId);
         return el(`button.cal-chip${on ? '.on' : ''}${['owner', 'write'].includes(access) ? '' : '.is-limited'}`, {
-          title: access === 'none' ? 'לא שיתף/ה — רק "תפוס"' : access === 'read' || access === 'freebusy' ? 'צפייה בלבד' : 'עריכה',
-          style: on ? { background: colorOf(c.userId), borderColor: colorOf(c.userId) } : {},
+          type: 'button',
+          'aria-pressed': String(on),
+          title: `${on ? 'להוריד מהתצוגה' : 'להציג'} · ${access === 'none' ? 'לא שיתף/ה — רק "תפוס"' : access === 'read' || access === 'freebusy' ? 'צפייה בלבד' : 'עריכה'}`,
+          style: on ? { background: color, borderColor: color } : { borderColor: color },
           onclick: () => {
-            view.users = on ? view.users.filter((x) => x !== c.userId) : [...view.users, c.userId].slice(0, 15);
-            App.setPref(PREF, view.users);
-            loadRange();
+            // לפי המצב הנוכחי — לא לפי מה שהיה כשהשבב צויר (לחיצה כפולה לא מכפילה)
+            if (view.hidden.has(c.userId)) view.hidden.delete(c.userId);
+            else view.hidden.add(c.userId);
+            usersChanged();
           }
-        }, [c.self ? `${c.name} (אני)` : c.name]);
+        }, [el('span.cal-chip-box', { text: on ? '✓' : '', style: on ? {} : { borderColor: color } }), c.self ? `${c.name} (אני)` : c.name]);
       }));
     };
     drawChips();
-    return el('div.cal-people-row', {}, [search, chips]);
+    const setAll = (show) => {
+      const ids = visible().map((c) => c.userId);
+      for (const id of ids) show ? view.hidden.delete(id) : view.hidden.add(id);
+      usersChanged();
+    };
+    return el('div.cal-people-row', {}, [
+      el('div.cal-people-tools', {}, [
+        search,
+        el('button.btn.btn-sm.btn-ghost', { type: 'button', title: 'להציג את כל היומנים (שברשימה)', onclick: () => setAll(true) }, ['הכול']),
+        el('button.btn.btn-sm.btn-ghost', { type: 'button', title: 'להוריד את כל היומנים (שברשימה)', onclick: () => setAll(false) }, ['נקה'])
+      ]),
+      chips
+    ]);
+  }
+
+  /**
+   * פגישה שמופיעה בכמה יומנים (כולם מוזמנים) — בלוק אחד, עם כל בעלי היומנים.
+   * ‎userId‎ של הבלוק — מי שארגן אותה, כדי ש"הזזה" תעבוד ממנו.
+   */
+  function mergeShared(events) {
+    const byKey = new Map();
+    const out = [];
+    for (const e of events) {
+      const key = e.eventId && !e.busyOnly ? `${e.eventId}|${e.start}` : null;
+      const hit = key ? byKey.get(key) : null;
+      if (!hit) {
+        const x = { ...e, owners: [e.userId] };
+        if (key) byKey.set(key, x);
+        out.push(x);
+        continue;
+      }
+      if (!hit.owners.includes(e.userId)) hit.owners.push(e.userId);
+      if (e.organizerIsOwner && e.editable && !(hit.organizerIsOwner && hit.editable)) {
+        Object.assign(hit, { ...e, owners: hit.owners });
+      }
+    }
+    return out;
+  }
+
+  // --- רשת יום משולבת: עמודה אחת, כל היומנים המוצגים
+  function combinedDay(day) {
+    if (!view.users.length) return UI.empty('בחרו יומנים להצגה', '👥');
+    const single = view.users.length === 1 ? info.calendars.find((c) => c.userId === view.users[0]) : null;
+    return grid([{
+      key: iso(day),
+      label: single ? nameOf(single.userId) : `${DAY_NAMES[day.getDay()]} ${day.getDate()}.${day.getMonth() + 1} · ${view.users.length} יומנים`,
+      date: day,
+      ownerId: single ? single.userId : null,
+      writable: true,
+      showWho: view.users.length > 1,
+      events: mergeShared((data?.events ?? []).filter((e) => view.users.includes(e.userId) && sameDay(e.start, day)))
+    }]);
   }
 
   // --- רשת יום: עמודה לכל עובד
@@ -193,6 +292,7 @@ const CalendarView = (() => {
       date: day,
       ownerId: p.userId,
       writable: ['owner', 'write'].includes(p.self ? 'owner' : p.access),
+      color: colorOf(p.userId),
       events: (data?.events ?? []).filter((e) => e.userId === p.userId && sameDay(e.start, day))
     })));
   }
@@ -205,11 +305,18 @@ const CalendarView = (() => {
       date: d,
       ownerId: view.users.length === 1 ? view.users[0] : null,
       writable: true,
-      events: (data?.events ?? []).filter((e) => sameDay(e.start, d))
+      showWho: view.users.length > 1,
+      events: mergeShared((data?.events ?? []).filter((e) => view.users.includes(e.userId) && sameDay(e.start, d)))
     })));
   }
 
   const sameDay = (s, d) => iso(new Date(s)) === iso(d);
+  /** בעלי היומנים של הבלוק: "מורן אדי", או "מורן אדי +2" */
+  const whoOf = (e) => {
+    const owners = e.owners ?? [e.userId];
+    const first = nameOf(e.userId); // בצבע שלו הבלוק — מי שארגן
+    return owners.length > 1 ? `${first} +${owners.length - 1}` : first;
+  };
 
   function grid(columns) {
     const hours = [];
@@ -223,7 +330,7 @@ const CalendarView = (() => {
 
     return el('div.cal-grid', { style: { gridTemplateColumns: `52px repeat(${columns.length}, minmax(120px, 1fr))` } }, [
       el('div.cal-corner'),
-      ...columns.map((c) => el('div.cal-colhead', { text: c.label })),
+      ...columns.map((c) => el('div.cal-colhead', c.color ? { style: { boxShadow: `inset 0 -3px 0 ${c.color}` } } : {}, [c.label])),
       el('div.cal-hours', {}, hours.map((h) => el('div.cal-hour', { text: `${pad(h)}:00` }))),
       ...columns.map((c) => {
         const allDay = c.events.filter((e) => e.allDay);
@@ -261,18 +368,25 @@ const CalendarView = (() => {
           ...hours.map((h, i) => el('div.cal-line', { style: { top: `${(i / hours.length) * 100}%` } })),
           sameDay(now, c.date) && now.getHours() >= HOUR_FROM && now.getHours() < HOUR_TO
             ? el('div.cal-now', { style: { top: `${top(now)}%` } }) : null,
-          ...allDay.map((e, i) => el('div.cal-allday', { style: { top: `${i * 20}px`, background: colorOf(e.userId) }, onclick: () => openEvent(e) }, [e.title ?? 'תפוס'])),
+          ...allDay.map((e, i) => el('div.cal-allday', { style: { top: `${i * 20}px`, background: colorOf(e.userId) }, onclick: (ev) => { ev.stopPropagation(); openEvent(e); } },
+            [c.showWho ? `${whoOf(e)} · ${e.title ?? 'תפוס'}` : e.title ?? 'תפוס'])),
           ...timed.map(({ e, lane, lanes }) => el(`div.cal-ev${e.busyOnly ? '.is-busy' : ''}${e.meetingId ? '.is-ours' : ''}`, {
             style: {
               top: `${top(e.start)}%`,
               height: `${Math.max(2.2, top(e.end) - top(e.start))}%`,
               insetInlineStart: `${(lane / lanes) * 100}%`,
               width: `${100 / lanes}%`,
-              ...(e.busyOnly ? {} : { background: colorOf(e.userId) })
+              // "תפוס" בלי פרטים — אפור, ובתצוגה משולבת פס בצבע של העובד
+              ...(e.busyOnly ? (c.showWho ? { borderInlineStart: `4px solid ${colorOf(e.userId)}` } : {}) : { background: colorOf(e.userId) })
             },
-            title: `${hhmm(e.start)}–${hhmm(e.end)} ${e.title ?? 'תפוס'}`,
+            title: `${hhmm(e.start)}–${hhmm(e.end)} ${e.title ?? 'תפוס'}${c.showWho ? ` · ${whoOf(e)}` : ''}`,
             onclick: (ev) => { ev.stopPropagation(); openEvent(e); }
           }, [
+            // בתצוגה משולבת — של מי הפגישה: שם, ונקודה בצבע של כל יומן נוסף
+            c.showWho ? el('div.cal-ev-who', {}, [
+              ...(e.owners ?? []).filter((id) => id !== e.userId).slice(0, 5).map((id) => el('span.cal-ev-dot', { style: { background: colorOf(id) } })),
+              whoOf(e)
+            ]) : null,
             el('b', { text: e.title ?? 'תפוס' }),
             el('span', { text: ` ${hhmm(e.start)}` }),
             e.meetingId ? el('span', { text: ' ✦' }) : null
@@ -328,8 +442,9 @@ const CalendarView = (() => {
       const after = writable(info.calendars);
       const added = [...after].filter((id) => !before.has(id));
       // עובד ששיתף עכשיו — מופיע מיד במסך
-      for (const id of added) if (!view.users.includes(id) && view.users.length < 15) view.users.push(id);
-      if (added.length) App.setPref(PREF, view.users);
+      for (const id of added) view.hidden.delete(id);
+      if (added.length) App.setPref(HIDDEN_PREF, [...view.hidden]);
+      syncUsers();
       await loadRange();
       if (info.accessError) UI.toast(info.accessError, 'error');
       else if (!info.secretary) UI.success('עודכן');
@@ -400,7 +515,7 @@ const CalendarView = (() => {
       title: e.title ?? 'תפוס',
       body: el('div', {}, [
         el('div', { text: `${new Date(e.start).toLocaleString('he-IL', { weekday: 'long', day: 'numeric', month: 'numeric' })} · ${e.allDay ? 'כל היום' : `${hhmm(e.start)}–${hhmm(e.end)}`}` }),
-        el('div.mute-sm', { text: `ביומן של ${person?.name ?? ''}${e.busyOnly ? ' · זמינות בלבד — העובד לא שיתף פרטים' : ''}` }),
+        el('div.mute-sm', { text: `${(e.owners?.length ?? 1) > 1 ? `ביומנים של ${e.owners.map(nameOf).join(', ')}` : `ביומן של ${person?.name ?? ''}`}${e.busyOnly ? ' · זמינות בלבד — העובד לא שיתף פרטים' : ''}` }),
         e.location ? el('div.mute-sm', { text: `📍 ${e.location}` }) : null,
         e.attendees?.length ? el('div.mt-people', {}, e.attendees.map((a) => el(`span.mt-person.is-${a.response ?? 'needsAction'}`, {}, [a.name || a.email]))) : null,
         e.editable && !e.organizerIsOwner && !e.busyOnly ? el('div.mute-sm', { text: 'את הפגישה הזו ארגן מישהו אחר — רק הוא יכול להזיז אותה.' }) : null,
