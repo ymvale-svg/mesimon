@@ -61,6 +61,24 @@ function mask(text) {
     .replace(PHONE, '[טלפון]');
 }
 
+/**
+ * 🔊 כמה הקראות היו בתקופה — לפי היומן (‎result‎ של "המשימות שלי": "🔊 הוקרא" / "🔇 הקראה נכשלה").
+ * כל הקראה עולה ב-OpenAI, ולכן היא נספרת בכל סקירה.
+ */
+function readAloudUsage(from, to = new Date().toISOString()) {
+  const row = D.get(
+    `SELECT SUM(CASE WHEN result LIKE '%🔊 הוקרא%' THEN 1 ELSE 0 END) AS ok,
+            SUM(CASE WHEN result LIKE '%🔇 הקראה נכשלה%' THEN 1 ELSE 0 END) AS failed,
+            COUNT(DISTINCT CASE WHEN result LIKE '%🔊 הוקרא%' THEN user_id END) AS users
+       FROM wa_log WHERE at >= ? AND at <= ?`,
+    from, to
+  ) ?? {};
+  return { ok: Number(row.ok) || 0, failed: Number(row.failed) || 0, users: Number(row.users) || 0 };
+}
+const usageLine = (u) => (u.ok || u.failed
+  ? `🔊 הקראות: ${u.ok}${u.ok ? ` (${u.users === 1 ? 'עובד אחד' : `${u.users} עובדים`})` : ''}${u.failed ? ` · נכשלו: ${u.failed}` : ''}`
+  : '');
+
 /** השיחות הפרטיות (וואטסאפ והעוזר באפליקציה) מאז ‎since‎, מקובצות לשיחות */
 function exportSince(since) {
   const floor = new Date(Date.now() - MAX_DAYS * 86400000);
@@ -95,9 +113,11 @@ function exportSince(since) {
     });
   }
   conversations.sort((a, b) => a.startedAt.localeCompare(b.startedAt));
+  const until = D.nowIso();
   return {
     since: from.toISOString(),
-    until: D.nowIso(),
+    until,
+    usage: { readAloud: readAloudUsage(from.toISOString(), until) },
     feedback: feedback(),
     conversations: conversations.map(({ lastAt, ...c }) => ({ ...c, endedAt: new Date(lastAt).toISOString() }))
   };
@@ -134,7 +154,7 @@ const isHttps = (u) => /^https:\/\/\S+$/.test(u);
  */
 async function sendReport(body) {
   const subject = clean(body.subject, 200) || 'סקירת הבוט';
-  const summary = clean(body.summary, 4000);
+  let summary = clean(body.summary, 4000);
   const fixes = (Array.isArray(body.fixes) ? body.fixes : []).slice(0, 20).map((f, i) => ({
     n: i + 1,
     title: clean(f.title, 200),
@@ -145,6 +165,11 @@ async function sendReport(body) {
   })).filter((f) => f.title).map((f, i) => ({ ...f, n: i + 1 }));
   const reportUrl = isHttps(clean(body.reportUrl, 500)) ? clean(body.reportUrl, 500) : '';
   if (!summary && !fixes.length) throw badRequest('הדו"ח ריק');
+  // 🔊 ההקראות בתקופת הסקירה — נוספות לסיכום לבד, מהיומן (לא תלוי במה שהסוקר כתב)
+  const valid = (v) => (v && !Number.isNaN(Date.parse(v)) ? new Date(v).toISOString() : null);
+  const from = valid(body.since);
+  const usage = from ? usageLine(readAloudUsage(from, valid(body.until) ?? new Date().toISOString())) : '';
+  if (usage && !summary.includes('🔊 הקראות:')) summary = [summary, usage].filter(Boolean).join('\n\n');
   const patterns = (Array.isArray(body.patterns) ? body.patterns : []).slice(0, 30)
     .map((p) => ({ who: clean(mask(p.who), 120), pattern: clean(mask(p.pattern), 600) })).filter((p) => p.pattern);
   const n = (v) => Math.max(0, Math.min(100000, Math.round(Number(v) || 0)));
@@ -247,4 +272,4 @@ function register(router) {
   });
 }
 
-module.exports = { register, mask, exportSince, sendReport, listReviews, setFixStatus, isConfigured };
+module.exports = { register, mask, exportSince, sendReport, listReviews, setFixStatus, isConfigured, readAloudUsage };
