@@ -12,22 +12,36 @@ const users = [me, { id: 2, full_name: 'דנה' }, { id: 3, full_name: 'יוסי
 test('rangeOf — היום: מחצות בשעון ישראל', (t) => {
   t.mock.timers.enable({ apis: ['Date'], now: new Date('2026-11-10T10:00:00Z') });
   const r = Scan.rangeOf({});
-  assert.equal(r.from.toISOString(), '2026-11-09T21:00:00.000Z');
+  assert.equal(r.from.toISOString(), '2026-11-09T22:00:00.000Z');
   assert.equal(r.to, null);
 });
 
 test('rangeOf — אתמול ושבוע: מתחילת היום ההוא', (t) => {
   t.mock.timers.enable({ apis: ['Date'], now: new Date('2026-11-10T10:00:00Z') });
-  assert.equal(Scan.rangeOf({ range: 'yesterday' }).from.toISOString(), '2026-11-08T21:00:00.000Z');
-  assert.equal(Scan.rangeOf({ range: 'week' }).from.toISOString(), '2026-11-02T21:00:00.000Z');
+  assert.equal(Scan.rangeOf({ range: 'yesterday' }).from.toISOString(), '2026-11-08T22:00:00.000Z');
+  assert.equal(Scan.rangeOf({ range: 'week' }).from.toISOString(), '2026-11-02T22:00:00.000Z');
 });
 
 test('rangeOf — טווח מותאם: עד סוף היום של "עד"', () => {
   const r = Scan.rangeOf({ range: 'custom', from: '2026-11-01', to: '2026-11-05' });
-  assert.equal(r.from.toISOString(), '2026-10-31T21:00:00.000Z');
-  assert.equal(r.to.toISOString(), '2026-11-05T21:00:00.000Z');
+  assert.equal(r.from.toISOString(), '2026-10-31T22:00:00.000Z');
+  assert.equal(r.to.toISOString(), '2026-11-05T22:00:00.000Z');
   assert.equal(Scan.rangeOf({ range: 'custom', from: '2026-11-01', to: 'x' }).to, null);
   assert.throws(() => Scan.rangeOf({ range: 'custom', from: '1.11.2026' }), /נדרש תאריך התחלה/);
+});
+
+test('rangeOf — חצות בשעון ישראל: חורף +02:00, קיץ +03:00', (t) => {
+  t.mock.timers.enable({ apis: ['Date'], now: new Date('2026-01-15T10:00:00Z') });
+  assert.equal(Scan.rangeOf({}).from.toISOString(), '2026-01-14T22:00:00.000Z');
+  t.mock.timers.setTime(new Date('2026-07-15T10:00:00Z').getTime());
+  assert.equal(Scan.rangeOf({}).from.toISOString(), '2026-07-14T21:00:00.000Z');
+});
+
+test('rangeOf — טווח מותאם שחוצה מעבר לשעון חורף', () => {
+  // שעון הקיץ 2026 נגמר ב-25.10: ההתחלה ב-+03:00 והסוף ב-+02:00
+  const r = Scan.rangeOf({ range: 'custom', from: '2026-10-20', to: '2026-10-25' });
+  assert.equal(r.from.toISOString(), '2026-10-19T21:00:00.000Z');
+  assert.equal(r.to.toISOString(), '2026-10-25T22:00:00.000Z');
 });
 
 test('sanitize — ברירות מחדל לתשובה ריקה', () => {

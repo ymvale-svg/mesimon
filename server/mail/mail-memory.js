@@ -22,6 +22,7 @@ const Paths = require('../core').Paths;
 const path = require('node:path');
 
 const D = require('../core').Db;
+const W = require('../core').Workdays;
 const Claude = require('../integrations').Claude;
 const Gmail = require('../integrations').Gmail;
 const Mime = require('../core').Mime;
@@ -134,9 +135,9 @@ function bumpStats(userId, fn) {
   D.run('UPDATE mail_memory_runs SET stats = ?, updated_at = ? WHERE user_id = ?', JSON.stringify(stats), nowIso(), userId);
 }
 
-/** כמה שרשורים נקראו היום (שעון ישראל, בקירוב של שעה בשעון קיץ) — לתקציב היומי */
+/** כמה שרשורים נקראו היום (מחצות בשעון ישראל) — לתקציב היומי */
 function readToday(userId) {
-  const since = new Date(`${localParts().date}T00:00:00+02:00`).toISOString();
+  const since = W.ilWallToUtc(localParts().date, 0, 0).toISOString();
   // כל שרשור שנקרא נספר — גם מה שה-AI סימן כאישי: גם הוא עלה קריאה
   return D.get('SELECT COUNT(*) c FROM mail_memory_threads WHERE user_id = ? AND processed_at >= ?', userId, since).c;
 }
@@ -786,7 +787,7 @@ const inHours = () => inWindow(D.getSetting('mail_memory_hours', ''), true);
  * לחכות 2 דקות. הזיכרון של השרת לא משתנה: התקרה הכוללת של שרשורים במקביל
  * (‎MAIL_MEMORY_PARALLEL‎) נשארת. ביום — כמו קודם: קצב מתון ותקרה יומית.
  */
-const isNight = () => Boolean(D.getSetting('mail_memory_night', true)) && inWindow(D.getSetting('mail_memory_night_hours', '19:00-07:00'), false);
+const isNight = () => Boolean(D.getSetting('mail_memory_night', false)) && inWindow(D.getSetting('mail_memory_night_hours', '22:00-06:00'), false);
 
 const busy = new Set();
 
@@ -1202,5 +1203,5 @@ const load = () => ({ reading, waiting: waiting.length });
 module.exports = {
   load, init, tick, morning, allowed, status, start, approve, pause, update, forget, boxesFor, whoOf, adminOverview, adminAction, auto, isNight, memoryInfo,
   search, personByEmail, eventsWith, browse, editPerson, remove, terms, normalize,
-  _internal: { mapThread, readThread, estimate, inHours, isNight, readStep, expiryNotices, savePerson }
+  _internal: { mapThread, readThread, estimate, inHours, isNight, readStep, expiryNotices, savePerson, readToday }
 };

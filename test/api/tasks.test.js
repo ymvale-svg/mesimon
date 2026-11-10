@@ -270,6 +270,79 @@ test('ייצוא CSV כולל את המשימות', async () => {
   assert.ok(r.text.includes(`"${t.id}"`));
 });
 
+test('יצירה עם עדיפות לא מוכרת — 400 (לא 500 מאילוץ במסד)', async () => {
+  const r = await call('POST', '/api/tasks', { title: 'x', priority: 'super-urgent' });
+  assert.equal(r.status, 400, r.text);
+  assert.equal(r.json.error, 'עדיפות לא מוכרת');
+});
+
+test('עדכון לעדיפות לא מוכרת — 400, והעדיפות לא משתנה', async () => {
+  const t = await create({ title: 'עדיפות שגויה', priority: 'high' });
+  for (const priority of ['bogus', '', null]) {
+    const r = await call('PATCH', `/api/tasks/${t.id}`, { priority });
+    assert.equal(r.status, 400, `${JSON.stringify(priority)}: ${r.text}`);
+  }
+  assert.equal((await call('GET', `/api/tasks/${t.id}`)).json.task.priority, 'high');
+});
+
+test('עדכון לכותרת ריקה — 400, והכותרת לא משתנה', async () => {
+  const t = await create({ title: 'כותרת קיימת' });
+  for (const title of ['', '   ']) {
+    const r = await call('PATCH', `/api/tasks/${t.id}`, { title });
+    assert.equal(r.status, 400, r.text);
+    assert.equal(r.json.error, 'נדרשת כותרת למשימה');
+  }
+  assert.equal((await call('GET', `/api/tasks/${t.id}`)).json.task.title, 'כותרת קיימת');
+});
+
+test('סוג אחראי לא מוכר — 400 ביצירה ובעדכון', async () => {
+  const c = await call('POST', '/api/tasks', { title: 'x', assigneeType: 'robot', assigneeId: 1 });
+  assert.equal(c.status, 400, c.text);
+  assert.equal(c.json.error, 'סוג אחראי לא מוכר');
+  const t = await create({ title: 'אחראי מוזר' });
+  const r = await call('PATCH', `/api/tasks/${t.id}`, { assigneeType: 'robot', assigneeId: 1 });
+  assert.equal(r.status, 400, r.text);
+});
+
+test('סוג אחראי ריק — מותר (בלי אחראי)', async () => {
+  const t = await create({ title: 'בלי אחראי', assigneeType: '' });
+  assert.equal(t.assigneeId ?? null, null);
+});
+
+test('תאריך יעד לא תקין — 400 ביצירה ובעדכון, ולא נשמר', async () => {
+  const c = await call('POST', '/api/tasks', { title: 'x', dueDate: 'מחר בבוקר' });
+  assert.equal(c.status, 400, c.text);
+  assert.equal(c.json.error, 'תאריך יעד לא תקין');
+  const t = await create({ title: 'תאריך שגוי', dueDate: '2026-12-01' });
+  const r = await call('PATCH', `/api/tasks/${t.id}`, { dueDate: 'not-a-date' });
+  assert.equal(r.status, 400, r.text);
+  assert.equal((await call('GET', `/api/tasks/${t.id}`)).json.task.dueDate, '2026-12-01');
+  const csv = await call('GET', '/api/export/tasks.csv');
+  assert.doesNotMatch(csv.text, /NaN/);
+});
+
+test('פעולת אצווה: עדיפות לא מוכרת — 400, ושום משימה לא משתנה', async () => {
+  const t = await create({ title: 'אצווה עדיפות', priority: 'low' });
+  const r = await call('POST', '/api/tasks/bulk', { ids: [t.id], action: 'priority', value: 'bogus' });
+  assert.equal(r.status, 400, r.text);
+  assert.equal(r.json.error, 'עדיפות לא מוכרת');
+  assert.equal((await call('GET', `/api/tasks/${t.id}`)).json.task.priority, 'low');
+  const ok = await call('POST', '/api/tasks/bulk', { ids: [t.id], action: 'priority', value: 'urgent' });
+  assert.equal(ok.json.affected, 1);
+});
+
+test('גוף JSON שאינו אובייקט (null, מספר, מחרוזת) — 400 ביצירה ובעדכון', async () => {
+  const t = await create({ title: 'גוף null' });
+  for (const raw of ['null', '7', '"x"']) {
+    assert.equal((await call('POST', '/api/tasks', raw)).status, 400, raw);
+    assert.equal((await call('PATCH', `/api/tasks/${t.id}`, raw)).status, 400, raw);
+  }
+});
+
+test('כתובת בקידוד אחוזים שבור — 400', async () => {
+  assert.equal((await call('GET', '/api/tasks/%E0%A4%A')).status, 400);
+});
+
 test('השרת לא נפל, לא החזיר 500 ולא ניסה לפנות לרשת במהלך הבדיקות', () => {
   assert.equal(srv.exited(), null);
   assert.doesNotMatch(srv.output(), /שרת הבדיקה ניסה לפנות לרשת/);

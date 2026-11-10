@@ -156,6 +156,19 @@ test('כניסה עם Google כשאינה מוגדרת — 400 ולא הפניה
   assert.equal(r.status, 400);
 });
 
+test('כניסה עם גוף JSON שאינו אובייקט (null) — 400 ולא 500', async () => {
+  for (const raw of ['null', '1', '"x"']) {
+    const r = await srv.api('POST', '/api/auth/login', { body: raw });
+    assert.equal(r.status, 400, `${raw}: ${r.text}`);
+  }
+});
+
+test('עוגייה בקידוד שבור לא שוברת את הבקשה — הסשן עדיין מזוהה', async () => {
+  const login = await srv.api('POST', '/api/auth/login', { body: { email: ADMIN.email, password: ADMIN.password } });
+  const r = await srv.api('GET', '/api/bootstrap', { cookie: `junk=%E0%A4%A; ${login.cookie}` });
+  assert.equal(r.status, 200, r.text);
+});
+
 test('השרת לא נפל, לא החזיר 500 ולא ניסה לפנות לרשת במהלך הבדיקות', () => {
   assert.equal(srv.exited(), null);
   assert.doesNotMatch(srv.output(), /שרת הבדיקה ניסה לפנות לרשת/);

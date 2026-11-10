@@ -746,7 +746,7 @@ async function handle({ user, text = '', file = null, reaction = false, voice = 
   let s = load(user.id);
   if (s && !fresh(s)) { clear(user.id, s); s = null; }
   if (!Priority.isEnabled()) return { replies: ['החיבור לפריוריטי עוד לא הוגדר בשרת. פנו למנהל המערכת.'], status: 'error', result: 'פריוריטי לא מוגדר' };
-  if (!writable().length) return { replies: ['אין סביבה שפתוחה לכתיבה מהבוט. פנו למנהל המערכת.'], status: 'error', result: 'PRIORITY_COMPANIES ריק' };
+  if (!writable().length) return { replies: ['אין סביבה שפתוחה לכתיבה מהבוט. פנו למנהל המערכת.'], status: 'error', result: `PRIORITY_COMPANIES בלי חברה מוכרת (${process.env.PRIORITY_COMPANIES ?? ''})` };
   const heard = voice && t ? [`🎙 *שמעתי:* "${t}"`, ''] : [];
 
   // "דרישת רכש" — התחלה (או המשך של דרישה פתוחה)
