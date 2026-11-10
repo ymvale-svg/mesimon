@@ -1154,6 +1154,8 @@ async function listWarehouses(s) {
 
 async function createDraft(user, s) {
   const c = s.company;
+  // החברה נסגרה לכתיבה (PRIORITY_COMPANIES) מאז שהקליטה התחילה — לא כותבים כלום, וגם לא מנסים מחסנים אחרים
+  if (!Priority.allowed().includes(c)) return { closed: true };
   // המחסן — נבדק מול מסך המחסנים לפני הקליטה; פריוריטי בכל זאת דוחה אותו — Main
   if (!s.warehouse || !(await Priority.warehouseExists(c, s.warehouse).catch(() => true))) s.warehouse = await Priority.warehouseOf(c, s.project?.code);
   const head = { supname: s.supplier.code, booknum: s.doc.doc_number, date: s.doc.date || null, project: s.project?.code, warehouse: s.warehouse, payCode: s.payCode ?? Priority.DEFAULT_PAY };
@@ -1296,6 +1298,13 @@ function writeDialog(user, s) {
  */
 async function draftAndShow(user, s) {
   const r = await createDraft(user, s);
+  if (r?.closed) {
+    alertAdmins(user, s, 'החברה אינה פתוחה לכתיבה', [`${s.company} אינה ב-PRIORITY_COMPANIES (${process.env.PRIORITY_COMPANIES ?? ''}) — הקבלה לא נכתבה לפריוריטי.`]);
+    s.step = 'files';
+    const c = Priority.companyOf(s.company);
+    return reply(s, `הקבלה לא נקלטה: *${c.name.replace(/ — .*/, '')}* (${s.company}) עדיין לא פתוחה לקליטה מהבוט. מנהל המערכת קיבל הודעה. הכל שמור — כתבו *סיום* כדי לנסות שוב מאוחר יותר, או *ביטול*.`,
+      { status: 'denied', result: `חברה סגורה לכתיבה: ${s.company}` });
+  }
   if (!r?.failed) return showDraft(s, r, user);
   alertAdmins(user, s, 'הטיוטא לא נפתחה בפריוריטי', [`מחסנים שנוסו: ${r.tried.join(', ')}`, r.failed.message]);
   if (s.warehouseRetry) {

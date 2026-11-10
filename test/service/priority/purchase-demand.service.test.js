@@ -290,3 +290,14 @@ test('בטיחות: PRIORITY_COMPANIES בלי אף חברה מוכרת (בריר
   await say(BTN.done);
   assert.deepEqual(pr.writes, []);
 });
+
+test('בטיחות: ערך ב-PRIORITY_COMPANIES שאינו קוד חברה מוכר (שגיאת הקלדה) אינו מוצע כסביבה — רק החברה המוכרת', async (t) => {
+  H.companies(t, 'test11,tset11');
+  const u = H.worker();
+  priority(t);
+  ai(t);
+  const { say } = H.chat(t, u);
+  const r = await say('דרישת רכש');
+  assert.match(r.text, /לאיזה פרויקט/, 'סביבה אחת מוכרת — נבחרת לבד, בלי לשאול על סביבה');
+  assert.doesNotMatch(r.text, /tset11/);
+});

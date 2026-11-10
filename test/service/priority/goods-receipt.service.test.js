@@ -442,9 +442,7 @@ test('בטיחות: חברה אמיתית פתוחה ועותק הבדיקה ס�
   assert.deepEqual(pr.writes, []);
 });
 
-test('בטיחות: החברה נסגרה (PRIORITY_COMPANIES) בין הקריאה לקליטה — "סיום" לא מנסה לכתוב, והעובד מקבל הסבר', {
-  todo: 'goods-receipt.js:1140 (createDraft) — אין בדיקה של Priority.allowed() לפני הכתיבה; ההגנה היחידה היא companyUrl בשכבת האינטגרציה, ואז העובד נשאל "לאיזה מחסן לשייך" (draftAndShow) במקום הסבר'
-}, async (t) => {
+test('בטיחות: החברה נסגרה (PRIORITY_COMPANIES) בין הקריאה לקליטה — "סיום" לא מנסה לכתוב, והעובד מקבל הסבר', async (t) => {
   H.companies(t, 'test11');
   const u = H.worker();
   const pr = priority(t);
@@ -453,7 +451,14 @@ test('בטיחות: החברה נסגרה (PRIORITY_COMPANIES) בין הקריא
   await toProject(say);
   await say('אלעד 49 צפון');
   process.env.PRIORITY_COMPANIES = 'elad1';
-  const r = await say(BTN.done);
+  let r = await say(BTN.done);
   assert.deepEqual(pr.writes, []);
-  assert.match(r.text, /אינה פתוחה/);
+  assert.match(r.text, /\(test11\) עדיין לא פתוחה לקליטה מהבוט/);
+  assert.doesNotMatch(r.text, /PRIORITY_COMPANIES|מחסן/, 'בלי פרטים טכניים, ובלי לשאול על מחסן');
+  H.assertButtons(r.buttons, [BTN.done]);
+  // נפתחה שוב — "סיום" כותב
+  process.env.PRIORITY_COMPANIES = 'test11';
+  r = await say(BTN.done);
+  assert.equal(pr.wrote('createReceipt').length, 1);
+  assert.match(r.text, /טיוטא לבדיקה/);
 });

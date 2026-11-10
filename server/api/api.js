@@ -1649,13 +1649,36 @@ router.post('/api/tasks', async (req, res, ctx) => {
 // ‎\b‎ אינו עובד עם אותיות עבריות ב-JavaScript — הגבול הוא רווח, פיסוק או סוף
 const MEETING_TITLE = /^\s*(?:פגישה|פגישת|קביעת\s+פגישה|לקבוע\s+פגישה|לתאם\s+פגישה|תיאום\s+פגישה|ישיבה\s+עם)(?=$|[\s,.:;!?-])/;
 
+/**
+ * בדיקת השדות שהמסד אוכף באילוץ (‎CHECK‎ / ‎NOT NULL‎) או שנשמרים כמו שהם —
+ * לפני הכתיבה, כדי שערך שגוי יחזיר 400 עם הסבר ולא 500. תאריך יעד שאינו
+ * תאריך נשמר בעבר כמו שהוא, והייצוא הראה ‎NaN.NaN.NaN‎.
+ * ‎create‎ — ביצירה עדיפות ריקה היא ברירת המחדל; בעריכה היא שגיאה.
+ */
+const isPriority = (v) => PRIORITIES.some((p) => p.key === v);
+function validateTaskFields(body, { create = false } = {}) {
+  const emptyPriority = body.priority === null || body.priority === '';
+  if (body.priority !== undefined && !(create && emptyPriority) && !isPriority(body.priority)) {
+    throw badRequest('עדיפות לא מוכרת');
+  }
+  if (!create && body.title !== undefined && !String(body.title ?? '').trim()) throw badRequest('נדרשת כותרת למשימה');
+  if (body.assigneeType !== undefined && ![null, '', 'user', 'vendor'].includes(body.assigneeType)) {
+    throw badRequest('סוג אחראי לא מוכר');
+  }
+  const due = body.dueDate;
+  if (due !== undefined && due !== null && due !== '' && (typeof due !== 'string' || Number.isNaN(Date.parse(due)))) {
+    throw badRequest('תאריך יעד לא תקין');
+  }
+}
+
 function createTask(actor, body) {
   requirePerm(actor, 'create_task');
   const title = String(body.title ?? '').trim();
   if (!title) throw badRequest('נדרשת כותרת למשימה');
+  validateTaskFields(body, { create: true });
 
   let boardId = D.internalBoard().id;
-  let assigneeType = body.assigneeType ?? null;
+  let assigneeType = body.assigneeType || null;
   let assigneeId = body.assigneeId ? Number(body.assigneeId) : null;
 
   // הקצאה לספק מחייבת הרשאה, ומעבירה את המשימה לבורד של אותו ספק
@@ -1726,7 +1749,7 @@ function createTask(actor, body) {
     assigneeType,
     assigneeId,
     status,
-    body.priority ?? 'normal',
+    body.priority || 'normal',
     body.dueDate || null,
     D.nowIso(),
     actor.type === 'user' ? actor.id : null,
@@ -1894,6 +1917,8 @@ router.patch('/api/tasks/:id', async (req, res, ctx) => {
   const project = projectOf(task);
 
   if (isVendor(actor) && actor.readOnly) throw forbidden('לחשבון שלך הוגדרה הרשאת צפייה בלבד');
+  // לפני כל כתיבה — שגיאה באחד השדות לא משאירה שינוי חלקי
+  validateTaskFields(body);
 
   // שינוי סטטוס — מסלול נפרד עם כללי הזרימה בין הסטטוסים
   if (body.status !== undefined && body.status !== task.status) {
@@ -2001,7 +2026,7 @@ router.patch('/api/tasks/:id', async (req, res, ctx) => {
 
     // שינוי אחראי — כולל מעבר בין בורדים
     if (body.assigneeType !== undefined || body.assigneeId !== undefined) {
-      const newType = body.assigneeType ?? task.assignee_type;
+      const newType = body.assigneeType === '' ? null : body.assigneeType ?? task.assignee_type;
       const newId = body.assigneeId === null || body.assigneeId === '' ? null : Number(body.assigneeId ?? task.assignee_id);
       if (newType !== task.assignee_type || newId !== task.assignee_id) {
         /*
@@ -2184,6 +2209,7 @@ router.post('/api/tasks/bulk', async (req, res, ctx) => {
   if (isVendor(actor)) throw forbidden();
   const { ids, action, value } = await readJson(req);
   if (!Array.isArray(ids) || !ids.length) throw badRequest('לא נבחרו משימות');
+  if (action === 'priority' && !isPriority(value)) throw badRequest('עדיפות לא מוכרת');
 
   let affected = 0;
   const errors = [];

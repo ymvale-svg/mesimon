@@ -288,8 +288,24 @@ test('parse — multipart מקונן ו-message/rfc822', () => {
     'מועבר',
     '--OUT--'
   ]));
-  // ה-CRLF שלפני הגבול נשאר בגוף החלק — משווים בלי CR
-  assert.equal(m.text.replace(/\r/g, ''), 'פנימי\n\nמועבר');
+  // ה-CRLF שלפני הגבול שייך לגבול (RFC 2046) ולא לגוף החלק
+  assert.equal(m.text, 'פנימי\nמועבר', 'החלקים מחוברים בשורה אחת, בלי שבירות שורה עודפות');
+});
+
+test('parse — שבירת השורה שלפני הגבול לא נכנסת לקובץ מצורף, ורק היא מוסרת', () => {
+  const m = M.parse(raw([
+    'Content-Type: multipart/mixed; boundary=B',
+    '',
+    '--B',
+    'Content-Type: application/octet-stream; name=data.bin',
+    'Content-Transfer-Encoding: 8bit',
+    '',
+    'abc',
+    '',
+    '--B--'
+  ]));
+  // השורה הריקה שלפני הגבול היא חלק מהתוכן — רק ה-CRLF האחרון שייך לגבול
+  assert.equal(m.attachments[0].data.toString('latin1'), 'abc\r\n');
 });
 
 test('parse — זיהוי מענה אוטומטי', () => {
