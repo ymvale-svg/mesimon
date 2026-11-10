@@ -898,6 +898,58 @@ CREATE TABLE IF NOT EXISTS meet_coord (
 );
 CREATE INDEX IF NOT EXISTS idx_meet_coord_msg ON meet_coord(message_id);
 
+/* ⏰ "תזכיר לי" (‎ai/reminders.js‎). ‎status‎: active / fired / done / cancelled */
+CREATE TABLE IF NOT EXISTS reminders (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  text       TEXT    NOT NULL,
+  due_at     TEXT    NOT NULL,
+  status     TEXT    NOT NULL DEFAULT 'active',
+  source     TEXT    NOT NULL DEFAULT 'bot',
+  ref        TEXT,
+  fired_at   TEXT,
+  done_at    TEXT,
+  created_at TEXT    NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_reminders_due ON reminders(status, due_at);
+
+/* 📤 מייל ששלחת עם שאלה ולא נענה (‎ai/sent-followup.js‎). ‎status‎: pending / asked / sent / ignored / answered */
+CREATE TABLE IF NOT EXISTS sent_followups (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  gmail_id    TEXT    NOT NULL,
+  thread_id   TEXT    NOT NULL,
+  message_id  TEXT    NOT NULL DEFAULT '',
+  to_email    TEXT    NOT NULL,
+  to_name     TEXT    NOT NULL DEFAULT '',
+  subject     TEXT    NOT NULL DEFAULT '',
+  sent_at     TEXT    NOT NULL,
+  asked       TEXT    NOT NULL DEFAULT '',
+  nudge       TEXT    NOT NULL DEFAULT '',
+  status      TEXT    NOT NULL DEFAULT 'pending',
+  asked_at    TEXT,
+  nudged_at   TEXT,
+  created_at  TEXT    NOT NULL,
+  UNIQUE (user_id, gmail_id)
+);
+
+/* 📋 תדריך לפני פגישה שכבר נשלח (‎ai/briefing.js‎) — פעם אחת לכל פגישה ולכל עובד. נמחק אחרי 3 ימים */
+CREATE TABLE IF NOT EXISTS meeting_briefs (
+  uid      TEXT    NOT NULL,
+  start_at TEXT    NOT NULL,
+  user_id  INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  sent_at  TEXT    NOT NULL,
+  PRIMARY KEY (uid, start_at, user_id)
+);
+
+/* 🌊 קצב התזכורות לכל עובד (‎ai/mail-actions.js‎) — כמה נשלחו היום ומתי האחרונה, כדי לא להציף */
+CREATE TABLE IF NOT EXISTS reminder_pace (
+  user_id  INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  day      TEXT    NOT NULL,
+  count    INTEGER NOT NULL DEFAULT 0,
+  last_at  TEXT
+);
+
 /* סיכום, החלטות ומשימות של פגישה — פעם אחת לפגישה, לכל המשתתפים. נמחק אחרי חודש */
 CREATE TABLE IF NOT EXISTS meeting_digests (
   source     TEXT    NOT NULL,
@@ -1616,7 +1668,9 @@ const DEFAULT_SETTINGS = {
   meeting_followup_minutes: 15,            // כמה דקות אחרי סוף פגישה מוקלטת — הבוט שואל את המשתתפים מה לשלוח
   meeting_audio_min_kb: 1024,              // הודעה קולית גדולה מזה (כ-8 דקות) לבוט = הקלטת פגישה, והבוט שואל לאיזו פגישה לשייך
   rfq_daily_max: 20,                       // פנייה לספקים: כמה מיילים לכל היותר לעובד ביום (לא להיחשב דואר זבל)
-  bot_pilot: true,                         // 🧪 היכולות החדשות בבוט (סבב Instinct) — רק למנהלי המערכת, עד "פתח את היכולות החדשות לכולם"
+  bot_pilot: false,                        // 🧪 true — היכולות החדשות בבוט (סבב Instinct) רק למנהלי המערכת. נפתח לכולם 10.11.26; "החזר את היכולות החדשות לפיילוט" — סוגר שוב
+  remind_hours: '08:30-18:00',             // 🌊 שעות התזכורות מהמייל (מחוץ להן — לא מזכירים, גם לא בשעות הבוט)
+  briefing_minutes: 20,                    // 📋 כמה דקות לפני פגישה — התדריך בבוט
   meeting_ai_alternatives: true,           // הצעות AI להזזת פגישות חופפות
   meeting_record_default: false,           // "הקלטה אוטומטית לענן" מסומן מראש בפגישת Zoom חדשה
   meeting_office_address: '',              // "🏢 במשרד" בקביעת פגישה — הכתובת שנכנסת למיקום ביומן ובהזמנה
@@ -2029,6 +2083,13 @@ function migrate() {
     setSetting('mail_memory_night_hours', '22:00-06:00');
     if (Number(getSetting('mail_memory_nightly_threads', 300)) > 300) setSetting('mail_memory_nightly_threads', 300);
     setSetting('migr_memory_conservative', true);
+  }
+
+  // 🧪 היכולות החדשות בבוט נפתחו לכולם (הוחלט 10.11.26, ישראל) — פעם אחת: מסד שעלה עם הפיילוט (‎bot_pilot = true‎)
+  // נפתח. אחר כך מנהל מערכת יכול להחזיר לפיילוט מהבוט, וזה לא נדרס בעלייה הבאה
+  if (!getSetting('migr_bot_pilot_open', false)) {
+    setSetting('bot_pilot', false);
+    setSetting('migr_bot_pilot_open', true);
   }
 
   // ‎ogg‎…‎webm‎ — הקלטות פגישה מוואטסאפ (‎ai/meeting-audio.js‎), מצורפות למשימת הפגישה

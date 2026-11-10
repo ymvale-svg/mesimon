@@ -1264,6 +1264,16 @@ const App = (() => {
       formOffer.addEventListener('change', () => {
         setPref('botPrefs', { ...(getPref('botPrefs', {}) ?? {}), formOffer: formOffer.checked });
       });
+      // 🌊 קצב התזכורות מהמייל — כדי לא להציף מי שמקבל עשרות מיילים ביום
+      const pace = el('select', {}, [
+        ['normal', 'רגיל — עד אחת לחצי שעה, 8 ביום'],
+        ['light', 'מעט — עד אחת לשעתיים, 3 ביום'],
+        ['morning', 'רק בסיכום הבוקר'],
+        ['off', 'בלי תזכורות']
+      ].map(([v, t]) => el('option', { value: v, text: t, selected: (getPref('botPrefs', {})?.remindPace ?? 'normal') === v })));
+      pace.addEventListener('change', () => {
+        setPref('botPrefs', { ...(getPref('botPrefs', {}) ?? {}), remindPace: pace.value });
+      });
       return el('div', {}, [
         el('h4', { text: 'בוט הוואטסאפ', style: { margin: '16px 0 8px', fontSize: '13px' } }),
         el('div.table-wrap', {}, [
@@ -1292,10 +1302,18 @@ const App = (() => {
               ]),
               el('tr', {}, [
                 el('td', {}, [
-                  el('div', { text: '⏰ דדליין ממייל — "זכרת?"' }),
-                  el('div.mute-sm', { text: 'ביום המועד שכתוב במייל (לאסוף דואר, דרישת תשלום…), כשלא נפתחה ממנו משימה: "זכרת?" עם בוצע / תזכיר מחר / לא רלוונטי.' })
+                  el('div', { text: '🐣 תזכורת ממייל — "זכרת?"' }),
+                  el('div.mute-sm', { text: 'מייל עם דדליין או קריאה לפעולה שלא טופל — יום אחרי שהגיע (או בבוקר יום הדדליין): "זכרת?" עם לפתוח משימה / התעלם. במקום השאלה "לפתוח משימה?" כשהמייל מגיע.' })
                 ]),
                 el('td', { style: { textAlign: 'center', width: '110px' } }, [el('label.checkbox', {}, [deadline])])
+              ]),
+              el('tr', {}, [
+                el('td', {}, [
+                  el('div', { text: '🌊 קצב התזכורות' }),
+                  el('div.mute-sm', { text: 'כמה תזכורות על מיילים שלא טופלו במהלך היום — החשובות קודם (דדליין קרוב, עדיפות). לא באמצע פגישה, ורק בשעות העבודה.' }),
+                  pace
+                ]),
+                el('td', {}, [])
               ]),
               el('tr', {}, [
                 el('td', {}, [

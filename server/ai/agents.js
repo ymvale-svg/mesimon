@@ -86,6 +86,7 @@ function allowedFor(actor) {
   const dept = deptNameOf(actor);
   return catalog().filter((a) => {
     if (!a.enabled) return false;
+    if (manifest().agents[a.key]?.priority && !priorityAllowed(actor)) return false;
     if (!a.departments || isAdmin(actor)) return true;
     try { return new RegExp(a.departments, 'i').test(dept); } catch { return false; }
   });
@@ -184,6 +185,31 @@ const PROJECT_TOOL = {
   description: 'מצב פרויקט או לקוח במשימון: המשימות הפתוחות (סטטוס, יעד, אחראי) ומה שבזיכרון המייל על אותו נושא. לפי שם הפרויקט או הלקוח.',
   input_schema: { type: 'object', properties: { name: { type: 'string' } }, required: ['name'], additionalProperties: false }
 };
+
+const PRIORITY_TOOLS = [
+  {
+    name: 'priority_find_project',
+    description: 'מציאת פרויקט בפריוריטי לפי שם / מילה ("הגפן"). מחזיר קוד ושם. company — שם החברה אם נאמר, אחרת ריק',
+    input_schema: { type: 'object', properties: { text: { type: 'string' }, company: { type: 'string' } }, required: ['text'], additionalProperties: false }
+  },
+  {
+    name: 'priority_open_orders',
+    description: 'הזמנות רכש מאושרות שעוד לא התקבלו במלואן — לפי פרויקט (project_code מ-priority_find_project) או לפי ספק (שם). item — מילה מתיאור הפריט לסינון ("ברזל"). לכל שורה: כמה הוזמן, כמה עוד לא התקבל, ותאריך אספקה',
+    input_schema: { type: 'object', properties: { project_code: { type: 'string' }, supplier: { type: 'string' }, item: { type: 'string' }, company: { type: 'string' } }, additionalProperties: false }
+  },
+  {
+    name: 'priority_order',
+    description: 'הזמנת רכש אחת לפי מספר (PO…): ספק, סטטוס, שורות, יתרות ותאריכי אספקה',
+    input_schema: { type: 'object', properties: { ordname: { type: 'string' }, company: { type: 'string' } }, required: ['ordname'], additionalProperties: false }
+  }
+];
+
+/** מי רואה נתוני רכש מפריוריטי: מנהלי מערכת, ומי שמורשה לקבלת סחורה / דרישת רכש בבוט (ובפיילוט — רק מנהלי מערכת) */
+function priorityAllowed(actor) {
+  const WaActions = require('./wa-actions');
+  if (D.getSetting('bot_pilot', false) && !WaActions.inPilot(actor)) return false;
+  return isAdmin(actor) || WaActions.allowed(actor, 'goods_receipt') || WaActions.allowed(actor, 'purchase_demand');
+}
 
 const referenceTool = (files) => ({
   name: 'read_reference',
@@ -286,6 +312,38 @@ async function toolsFor(def, key, user, actor, state) {
         }
       });
     }
+  }
+  // 🗂 נתוני רכש מפריוריטי — קריאה בלבד, רק למי שמורשה לרכש בבוט (‎priorityAllowed‎)
+  if (def.priority && priorityAllowed(actor)) {
+    const P = require('../priority');
+    const companyOf = (name) => (name && P.companiesByName(name)[0]?.code) || require('./priority-prefs').lastCompany(user.id) || P.COMPANIES[0].code;
+    const short = (o) => ({
+      order: o.ORDNAME, supplier: o.CDES ?? o.SUPNAME, date: String(o.CURDATE ?? '').slice(0, 10), project: o.PROJDES ?? o.PROJDOCNO,
+      lines: (o.lines ?? []).slice(0, 15).map((l) => ({ item: l.PDES, ordered: l.TQUANT, still_to_receive: l.TBALANCE, unit: l.TUNITNAME, due: String(l.DUEDATE ?? '').slice(0, 10) || null }))
+    });
+    tools.push(...PRIORITY_TOOLS);
+    handlers.set('priority_find_project', async (i) => {
+      state.sources.add('🗂 פריוריטי');
+      const c = companyOf(i.company);
+      return { company: c, projects: P.matchProjects(await P.projects(c), String(i.text ?? '')).slice(0, 5).map((p) => ({ code: p.code, name: p.des })) };
+    });
+    handlers.set('priority_open_orders', async (i) => {
+      state.sources.add('🗂 פריוריטי');
+      const c = companyOf(i.company);
+      let orders = [];
+      if (i.project_code) orders = await P.ordersByProject(c, i.project_code, { item: i.item ?? '' });
+      else if (i.supplier) {
+        const found = await P.findSuppliers(c, { name: i.supplier });
+        for (const sup of (found.list ?? []).slice(0, 2)) orders.push(...(await P.openOrders(c, sup.SUPNAME)).map((o) => ({ ...o, CDES: sup.SUPDES })));
+        if (i.item) orders = orders.map((o) => ({ ...o, lines: o.lines.filter((l) => String(l.PDES ?? '').includes(i.item)) })).filter((o) => o.lines.length);
+      } else return { error: 'צריך פרויקט (project_code) או ספק (supplier)' };
+      return { company: c, count: orders.length, orders: orders.slice(0, 15).map(short) };
+    });
+    handlers.set('priority_order', async (i) => {
+      state.sources.add('🗂 פריוריטי');
+      const o = await P.orderForNotice(companyOf(i.company), String(i.ordname ?? '').trim());
+      return { ...short(o), status: o.STATDES, total: o.TOTPRICE };
+    });
   }
   if (def.project) {
     tools.push(PROJECT_TOOL);
