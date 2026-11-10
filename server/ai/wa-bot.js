@@ -2093,6 +2093,7 @@ function pendingSummary(d) {
   if (d.kind === 'complete') return `הבוט שאל אם לסמן כבוצעה את המשימה: ${d.title ?? ''}`;
   if (d.kind === 'comment') return `הבוט שאל אם להוסיף הערה למשימה "${d.title ?? ''}": ${d.text ?? ''}`;
   if (d.kind === 'menu') return 'הבוט הציג תפריט ממוספר';
+  if (d.kind === 'notice') return Notice.pendingSummary(d);
   return '';
 }
 
@@ -2134,7 +2135,7 @@ async function aboutPending(state, text) {
   }
 }
 
-const pendingLabel = (d) => (d.kind === 'email' ? `הטיוטה ל${d.contact?.name || d.contact?.email || 'נמען'} לא נשלחה`
+const pendingLabel = (d) => (d.kind === 'notice' ? Notice.pendingLabel(d) : d.kind === 'email' ? `הטיוטה ל${d.contact?.name || d.contact?.email || 'נמען'} לא נשלחה`
   : d.kind === 'mail_reply' ? `טיוטת התשובה ל${d.reply?.toName || d.reply?.to || 'מייל'} לא נשלחה`
     : d.kind === 'mail_task' ? `המשימה מהמייל${d.title ? ` "${d.title}"` : ''} לא נפתחה — היא מחכה ב"ממתין לאישורך"`
     : d.kind === 'email_pick' ? 'המייל הקודם לא נשלח'
@@ -2261,8 +2262,11 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
   }
   // 🎨 מודעה / ✉️ מכתב רשמי — "תעצב לי מודעה…", ובתוך הזרימה: סגנון, תיקונים, "מאשר"
   if (state.awaiting && state.draft?.kind === 'notice') {
-    if (!dry) reactNow(actor.id, '📝');
-    const r = await Notice.answer(actor.id, state.draft, t).catch((err) => ({ text: 'לא הצלחתי להכין את זה כרגע. נסו שוב בעוד רגע 🙏', draft: state.draft, awaiting: true, result: `שגיאה: ${err.message}`, error: true }));
+    // "תענה במייל ל…" כשמודעה מחכה ל"מאשר" — בקשה חדשה, לא תיקון למודעה: המודעה יורדת, וההודעה ממשיכה הלאה
+    const own = Notice.isOwn(state.draft, t) || (!Notice.parseRequest(t) && await aboutPending(state, t));
+    if (!own) notice = `ℹ️ ${pendingLabel(state.draft)} — עברתי לבקשה החדשה.`;
+    else if (!dry) reactNow(actor.id, '📝');
+    const r = !own ? null : await Notice.answer(actor.id, state.draft, t).catch((err) => ({ text: 'לא הצלחתי להכין את זה כרגע. נסו שוב בעוד רגע 🙏', draft: state.draft, awaiting: true, result: `שגיאה: ${err.message}`, error: true }));
     if (r) return out(r.text, { draft: r.draft ?? null, awaiting: Boolean(r.awaiting) }, { action: 'notices', status: r.error ? 'error' : 'ok', result: String(r.result ?? '').slice(0, 300), buttons: r.buttons, files: r.files });
     keep.draft = null;
     state = { ...state, draft: null, awaiting: false };

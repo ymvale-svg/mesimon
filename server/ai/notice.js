@@ -333,6 +333,35 @@ async function start(userId, text) {
   return produce(draft, userId);
 }
 
+// תיקון למודעה, בלי ספק: "כותרת גדולה יותר", "בלי הלוגו", "תשנה את השעה ל-19:00"
+const FIX_RE = /^(?:ו?(?:ת?וסיף|תוסיפי|הוסף|ת?וריד|תורידי|הורד|תשנה|תשני|שנה|תקצר|קצר|תגדיל|תגדילי|הגדל|תקטין|תקטיני|הקטן|תחליף|החלף|תתקן|תקן|תמחק|מחק|תדגיש|הדגש|במקום|בלי|ללא|עם|יותר|פחות|ה?כותרת|ה?לוגו|ה?צבע|ה?שעה|ה?תאריך|ה?מקום|ה?שורה|ה?טקסט|ה?חתימה|ה?נדון|ה?סגנון)(?:\s|[,:.!]|$))/;
+
+/**
+ * הודעה שבבירור שייכת לזרימה (אישור, ביטול, סגנון, תיקון) — בלי לשאול את ה-AI. כל השאר נבדק ב-‎wa-bot‎:
+ * "תענה במייל ל…" באמצע מודעה שמחכה ל"מאשר" היא בקשה חדשה, לא תיקון למודעה (10.11.26).
+ */
+function isOwn(draft, text) {
+  const t = String(text ?? '').trim();
+  const n = WaUi.normalize(t);
+  if (WaUi.CANCEL.test(n) || WaUi.sameLabel(t, BTN.ok) || (WaUi.YES.test(n) && n.split(/\s+/).length <= 3)) return true;
+  if (draft?.type === 'notice' && styleOf(n) && n.split(/\s+/).length <= 4) return true;
+  return draft?.step === 'review' && FIX_RE.test(n);
+}
+
+/** מה מחכה — לשאלה "ההודעה על זה, או בקשה חדשה?", ולשורה "… — עברתי לבקשה החדשה" */
+function pendingSummary(draft) {
+  const what = draft.type === 'letter' ? 'מכתב רשמי' : 'מודעה';
+  const about = draft.content?.title || draft.content?.subject || String(draft.request ?? '').slice(0, 200);
+  if (draft.step === 'review') return `הבוט שלח ${what} ב-PDF ("${about}") ומחכה לתיקונים בעיצוב או בתוכן שלה, או ל"מאשר". בקשה לפעולה אחרת (מייל, משימה, שאלה) אינה תיקון.`;
+  if (draft.step === 'style') return `הבוט שאל באיזה סגנון לעצב ${what} (מינימלי / מעוצב): ${about}`;
+  return `הבוט שאל מה לכתוב ב${what}${about ? `: ${about}` : ''}`;
+}
+
+const pendingLabel = (draft) => {
+  const what = draft.type === 'letter' ? 'המכתב' : 'המודעה';
+  return draft.step === 'review' ? `${what} נשאר${draft.type === 'letter' ? '' : 'ה'} כמו ש${draft.type === 'letter' ? 'הוא' : 'היא'}` : `${what} לא הוכ${draft.type === 'letter' ? 'ן' : 'נה'}`;
+};
+
 /** תשובה בתוך הזרימה. ‎null‎ — לא שייך (נושא חדש) */
 async function answer(userId, draft, text) {
   const t = String(text ?? '').trim();
@@ -364,6 +393,6 @@ async function answer(userId, draft, text) {
 }
 
 module.exports = {
-  parseRequest, start, answer, saveLogo, logoCaption, render, BTN,
+  parseRequest, start, answer, isOwn, pendingSummary, pendingLabel, saveLogo, logoCaption, render, BTN,
   _internal: { styleOf, logoBytes, renderNotice, renderLetter, compose, CONTENT_SCHEMA }
 };
