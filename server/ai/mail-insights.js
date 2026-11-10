@@ -223,7 +223,7 @@ async function collect(userId, { window = null, from = '' } = {}) {
     });
   }
 
-  const items = ids.map((id) => cached.get(id)).filter((x) => x && !x.skip).map((x) => ({ ...x, unread: unread.has(x.gmailId) }));
+  const items = ids.map((id) => cached.get(id)).filter((x) => x && !x.skip && !x.dismissed).map((x) => ({ ...x, unread: unread.has(x.gmailId) }));
   const newsletters = newsletterCount + items.filter((x) => x.kind === 'newsletter').length;
   items.sort((a, b) => b.importance - a.importance || String(b.receivedAt).localeCompare(String(a.receivedAt)));
   return {
@@ -249,6 +249,12 @@ const itemOf = (userId, gmailId) => parseJson(D.get('SELECT data FROM mail_insig
 // ---------------------------------------------------------------------------
 
 /** התיבה שממנה הגיע המייל (לפי התובנה), והמייל עצמו */
+/** "להתעלם" — המייל לא חוזר בתובנות, ב"היום" ובתזכורות (‎mail-push.js‎) */
+function dismiss(userId, gmailId) {
+  const x = itemOf(userId, gmailId);
+  if (x) D.run('UPDATE mail_insights SET data = ? WHERE user_id = ? AND gmail_id = ?', JSON.stringify({ ...x, dismissed: true }), userId, gmailId);
+}
+
 const boxFor = (userId, gmailId, box = null) => Gmail.handle(userId, box ?? itemOf(userId, gmailId)?.box ?? 0);
 
 async function readMail(userId, gmailId, box = null) {
@@ -506,4 +512,4 @@ function prune() {
   D.run('DELETE FROM mail_insights WHERE created_at < ?', new Date(Date.now() - KEEP_DAYS * 864e5).toISOString());
 }
 
-module.exports = { available, collect, itemOf, label, detail, draftReply, suggestReply, sendReply, completeReply, learnFromReply, alreadyLearned, prune, mask, HOURS, GROUPS, MAX_MAILS, MAX_MAILS_LONG };
+module.exports = { available, collect, itemOf, dismiss, label, detail, draftReply, suggestReply, sendReply, completeReply, learnFromReply, alreadyLearned, prune, mask, HOURS, GROUPS, MAX_MAILS, MAX_MAILS_LONG };
