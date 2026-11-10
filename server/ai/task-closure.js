@@ -17,6 +17,7 @@
  * פרטי קשר נלקחים רק מהמועמדים או מטבלת הסקיל — לעולם לא מגוף המייל הנכנס.
  */
 const fs = require('node:fs');
+const Paths = require('../paths');
 const path = require('node:path');
 
 const D = require('../db');
@@ -29,7 +30,7 @@ const Auth = require('../auth');
 const P = require('../permissions');
 const OrgKnowledge = require('./org-knowledge');
 
-const SKILL_PATH = path.join(__dirname, 'skills', 'task-closure.md');
+const SKILL_PATH = Paths.skill('task-closure.md');
 const skill = () => fs.readFileSync(SKILL_PATH, 'utf8');
 const parseJson = (text, fallback) => { try { return JSON.parse(text); } catch { return fallback; } };
 

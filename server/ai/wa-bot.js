@@ -33,6 +33,7 @@
  * להודעות שאחריהן. ההצעה עצמה נשמרת ב-‎ai_suggestions‎, כמו הצעות מהמייל.
  */
 const fs = require('node:fs');
+const Paths = require('../paths');
 const path = require('node:path');
 
 const D = require('../db');
@@ -78,8 +79,8 @@ const DayDigest = require('./day-digest');
 const Briefing = require('./briefing');
 const Meetings = require('../meetings');
 
-const GROUP_SKILL = path.join(__dirname, 'skills', 'whatsapp-group-to-tasks.md');
-const CHAT_SKILL = path.join(__dirname, 'skills', 'whatsapp-chat.md');
+const GROUP_SKILL = Paths.skill('whatsapp-group-to-tasks.md');
+const CHAT_SKILL = Paths.skill('whatsapp-chat.md');
 const TZ = 'Asia/Jerusalem';
 const DAY = 24 * 60 * 60 * 1000;
 const KEEP_DAYS = 7;          // כמה זמן נשמרות הודעות קבוצה

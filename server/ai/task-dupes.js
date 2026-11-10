@@ -23,13 +23,14 @@
  * והצ'קליסט עוברים לוותיקה, והיעד — המוקדם מבין השניים.
  */
 const fs = require('node:fs');
+const Paths = require('../paths');
 const path = require('node:path');
 
 const D = require('../db');
 const Claude = require('./claude');
 const Match = require('./task-match');
 
-const SKILL = path.join(__dirname, 'skills', 'task-duplicates.md');
+const SKILL = Paths.skill('task-duplicates.md');
 // מעל זה — מועמד שה-AI יבדוק
 const PREFILTER = 0.45;
 // בלי AI — רק מעל זה נחשב כפול

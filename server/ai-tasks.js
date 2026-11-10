@@ -21,6 +21,7 @@
  * חלה מהפנייה הבאה, בלי הפעלה מחדש.
  */
 const fs = require('node:fs');
+const Paths = require('./paths');
 const path = require('node:path');
 
 const D = require('./db');
@@ -31,7 +32,7 @@ const Mime = require('./mime');
 const WhatsApp = require('./whatsapp');
 const Ports = require('./ports');
 
-const SKILL_PATH = path.join(__dirname, 'ai', 'skills', 'request-followup.md');
+const SKILL_PATH = Paths.skill('request-followup.md');
 const TZ = 'Asia/Jerusalem';
 const DAY = 24 * 60 * 60 * 1000;
 const AI_ACTOR = { type: 'system', id: null, name: 'עוזר AI' };

@@ -27,6 +27,7 @@
  * רק באישור.
  */
 const fs = require('node:fs');
+const Paths = require('../paths');
 const path = require('node:path');
 
 const D = require('../db');
@@ -36,7 +37,7 @@ const Match = require('./task-match');
 const Gmail = require('../gmail');
 const Mime = require('../mime');
 
-const SKILL = path.join(__dirname, 'skills', 'task-sync.md');
+const SKILL = Paths.skill('task-sync.md');
 const MAX_CANDIDATES = 6;
 const MIN_SCORE = 2;
 const COMMENT_MAX = 2000;

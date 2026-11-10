@@ -16,6 +16,7 @@
  *   • התראה כמה דקות לפני — במשימון, ובבוט הוואטסאפ הארגוני.
  */
 const fs = require('node:fs');
+const Paths = require('./paths');
 const path = require('node:path');
 
 const D = require('./db');
@@ -28,7 +29,7 @@ const Claude = require('./ai/claude');
 const CAL = 'https://www.googleapis.com/calendar/v3';
 const TZ = W.TZ;
 const MIN = 60000;
-const SKILL_PATH = path.join(__dirname, 'ai', 'skills', 'meeting-alternatives.md');
+const SKILL_PATH = Paths.skill('meeting-alternatives.md');
 
 // מוזרק מ-api.js: יצירת משימה וצורת משימה עם כל ההרשאות, ובוט הוואטסאפ
 const hooks = { sendWhatsApp: null, botReady: () => false, botAllowed: () => false };

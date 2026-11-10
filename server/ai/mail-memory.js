@@ -18,6 +18,7 @@
  * זיכרון של משתמש אחר.
  */
 const fs = require('node:fs');
+const Paths = require('../paths');
 const path = require('node:path');
 
 const D = require('../db');
@@ -26,7 +27,7 @@ const Gmail = require('../gmail');
 const Mime = require('../mime');
 const Docs = require('../doc-text');
 
-const SKILL_PATH = path.join(__dirname, 'skills', 'mail-memory.md');
+const SKILL_PATH = Paths.skill('mail-memory.md');
 const TZ = 'Asia/Jerusalem';
 const DAY = 24 * 60 * 60 * 1000;
 

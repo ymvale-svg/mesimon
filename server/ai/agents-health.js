@@ -11,6 +11,7 @@
  * התוצאה האחרונה נשמרת (‎agents_health_last‎), כדי שהמסך יציג אותה גם אחר כך.
  */
 const fs = require('node:fs');
+const Paths = require('../paths');
 const path = require('node:path');
 const D = require('../db');
 const Claude = require('./claude');
@@ -19,7 +20,7 @@ const Agents = require('./agents');
 const Calc = require('./calculators');
 const Mcp = require('./mcp-client');
 
-const CFG = path.join(__dirname, '..', 'agents-mcp.json');
+const CFG = Paths.AGENTS_MCP;
 const cfg = () => JSON.parse(fs.readFileSync(CFG, 'utf8'));
 
 // סימנים של קריאה שנכשלה גם כשהשרת לא סימן ‎isError‎

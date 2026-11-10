@@ -16,6 +16,7 @@
  * מצב השיחה — בהגדרה ‎purchase_demand:<userId>‎, וצילומי הרשימה — בתיקיית ההעלאות עד הסוף.
  */
 const fs = require('node:fs');
+const Paths = require('../paths');
 const path = require('node:path');
 
 const D = require('../db');
@@ -28,7 +29,7 @@ const Prefs = require('./priority-prefs');
 const Approvals = require('./priority-approvals');
 const { BTN, YES, NO, CANCEL, normalize, label, labels, sameLabel } = require('./wa-ui');
 
-const SKILL = path.join(__dirname, 'skills', 'purchase-demand.md');
+const SKILL = Paths.skill('purchase-demand.md');
 const TZ = 'Asia/Jerusalem';
 const TTL = 24 * 60 * 60 * 1000;
 const IDLE = 20 * 60 * 1000;

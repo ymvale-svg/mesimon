@@ -3,6 +3,7 @@
  * משימון — נקודת הכניסה לשרת.
  */
 const http = require('node:http');
+const Paths = require('./paths');
 const path = require('node:path');
 const os = require('node:os');
 
@@ -38,7 +39,7 @@ const TimelessMedia = require('./timeless-media');
 
 const PORT = Number(process.env.PORT ?? 3000);
 const HOST = process.env.HOST ?? '0.0.0.0';
-const PUBLIC_DIR = path.join(__dirname, '..', 'public');
+const PUBLIC_DIR = Paths.PUBLIC;
 
 // חיבור השקעים בין המודולים — לפני כל עבודה (‎wiring.js‎)
 require('./wiring');

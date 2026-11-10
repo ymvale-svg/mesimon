@@ -18,6 +18,7 @@
  * גוף המייל אינו נשמר. נשמרים רק ההצעה, מי שלח, הנושא והקישור למייל.
  */
 const fs = require('node:fs');
+const Paths = require('../paths');
 const path = require('node:path');
 
 const D = require('../db');
@@ -43,7 +44,7 @@ const OrgKnowledge = require('./org-knowledge');
 const Rfq = require('./rfq');
 const WhatsappScan = require('./whatsapp-scan');
 
-const SKILL_PATH = path.join(__dirname, 'skills', 'email-to-tasks.md');
+const SKILL_PATH = Paths.skill('email-to-tasks.md');
 const TZ = 'Asia/Jerusalem';
 const DAY = 24 * 60 * 60 * 1000;
 const CONCURRENCY = 3;

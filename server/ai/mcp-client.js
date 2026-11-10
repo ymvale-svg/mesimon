@@ -19,10 +19,11 @@
  * ולכל היותר 3 הפעלות מחדש ב-10 דקות. אחרי 10 דקות בלי קריאות התהליך נסגר.
  */
 const { spawn, spawnSync } = require('child_process');
+const Paths = require('../paths');
 const fs = require('fs');
 const path = require('path');
 
-const CONFIG_PATH = path.join(__dirname, '..', 'agents-mcp.json');
+const CONFIG_PATH = Paths.AGENTS_MCP;
 const PROTOCOL_VERSION = '2025-06-18';
 const CLIENT_INFO = { name: 'mesimon', version: '1.0' };
 // עשר דקות בלי שימוש — ואז נסגר. הפעלה מחדש עולה כשתיים-שלוש שניות לשאלה הבאה.

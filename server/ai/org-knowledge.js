@@ -24,6 +24,7 @@
  * מנהל המערכת אחראי: עורך, מסתיר, מוחק, ורואה מאיפה הגיע כל ערך.
  */
 const fs = require('node:fs');
+const Paths = require('../paths');
 const path = require('node:path');
 
 const D = require('../db');
@@ -31,8 +32,8 @@ const Claude = require('./claude');
 const Memory = require('./mail-memory');
 const Cls = require('./classification');
 
-const DISTILL_SKILL = path.join(__dirname, 'skills', 'org-distill.md');
-const MERGE_SKILL = path.join(__dirname, 'skills', 'org-merge.md');
+const DISTILL_SKILL = Paths.skill('org-distill.md');
+const MERGE_SKILL = Paths.skill('org-merge.md');
 const MODEL = () => String(D.getSetting('mail_memory_model', 'claude-haiku-5-5') || 'claude-haiku-5-5');
 const BATCH = 20;
 const DEPTS = ['office', 'realestate', 'finance', 'hr', 'marketing', 'other'];

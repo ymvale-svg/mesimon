@@ -25,6 +25,7 @@
  * הראשונה שלו. הוא מתחיל מהגרסה הבאה.
  */
 const fs = require('node:fs');
+const Paths = require('./paths');
 const path = require('node:path');
 
 const D = require('./db');
@@ -66,7 +67,7 @@ const validAnchor = (key) => (key && ANCHOR_KEYS.has(key) ? key : null);
  * סרטון ההדמיה — רק קובץ שהגיע עם הקוד, תחת ‎public/whats-new/‎. כתובת
  * אחרת, או קובץ שאינו קיים, נקראים כ"אין סרטון".
  */
-const PUBLIC_DIR = path.join(__dirname, '..', 'public');
+const PUBLIC_DIR = Paths.PUBLIC;
 const MEDIA = /^\/whats-new\/[\w.-]+\/[\w.-]+\.(mp4|jpg)$/;
 const mediaOk = (url) => Boolean(url && MEDIA.test(url) && fs.existsSync(path.join(PUBLIC_DIR, url)));
 /** פריט שאפשר לפרסם — יש לו סרטון, או (בגרסאות ישנות) מקום במסך או צילום */
@@ -361,7 +362,7 @@ function fillFirstReleaseAnchors() {
 // גרסאות שמגיעות עם הקוד
 // ---------------------------------------------------------------------------
 
-const RELEASES_DIR = path.join(__dirname, 'whats-new');
+const RELEASES_DIR = Paths.WHATS_NEW;
 
 /**
  * כל קובץ ב-‎server/whats-new/‎ הוא גרסה מוכנה — מלל וסרטון לכל פריט. בעלייה

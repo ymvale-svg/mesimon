@@ -1,6 +1,5 @@
 [
   "fetch: ai/claude.js",
-  "fetch: ai/meeting-followup.js",
   "fetch: gmail.js",
   "fetch: google-auth.js",
   "fetch: priority.js",

@@ -8,10 +8,11 @@
  * נוספת ל-AI רק הייתה מאטה אותה.
  */
 const fs = require('node:fs');
+const Paths = require('../paths');
 const path = require('node:path');
 const Claude = require('./claude');
 
-const SKILL = path.join(__dirname, 'skills', 'voice-router.md');
+const SKILL = Paths.skill('voice-router.md');
 const MIN_WORDS = 10;
 const MAX_REQUESTS = 5;
 

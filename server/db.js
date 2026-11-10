@@ -5,12 +5,13 @@
  * מימוש ישויות הנתונים של המערכת.
  */
 const { DatabaseSync } = require('node:sqlite');
+const Paths = require('./paths');
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const Ports = require('./ports');
 
-const ROOT = path.join(__dirname, '..');
+const ROOT = Paths.ROOT;
 
 /**
  * האם הנתיב הוא נקודת עיגון של דיסק — כלומר דיסק שחובר לשרת.

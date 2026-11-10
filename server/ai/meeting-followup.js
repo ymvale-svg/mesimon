@@ -249,9 +249,8 @@ async function zoomSource(row, userId) {
   const file = rec?.files.find((f) => f.kind === 'transcript' && f.ready && f.type !== 'CC');
   const parts = [];
   if (file) {
-    const { url } = await Zoom.recordingFileUrl(rec.uuid, file.id);
-    const res = await fetch(url, { signal: AbortSignal.timeout(30000) });
-    if (res.ok) parts.push(`תמליל:\n${vttText(await res.text()).slice(0, 60000)}`);
+    const vtt = await Zoom.recordingFileText(rec.uuid, file.id);
+    if (vtt !== null) parts.push(`תמליל:\n${vttText(vtt).slice(0, 60000)}`);
   }
   if (!parts.length) return null;
   return { people, text: parts.join('\n\n') };

@@ -14,6 +14,7 @@
  *      עוברת דרך האשף, כי היא שולחת הודעה לאדם אחר.
  */
 const fs = require('node:fs');
+const Paths = require('./paths');
 const path = require('node:path');
 
 const D = require('./db');
@@ -23,7 +24,7 @@ const Claude = require('./ai/claude');
 const ProjectHints = require('./project-hints');
 const Dialog = require('./voice-dialog');
 
-const SKILL_PATH = path.join(__dirname, 'ai', 'skills', 'voice-to-task.md');
+const SKILL_PATH = Paths.skill('voice-to-task.md');
 const MAX_TEXT = 4000;
 
 // ---------------------------------------------------------------------------

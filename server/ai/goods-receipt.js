@@ -25,6 +25,7 @@
  * עד סוף הקליטה.
  */
 const fs = require('node:fs');
+const Paths = require('../paths');
 const path = require('node:path');
 
 const D = require('../db');
@@ -54,7 +55,7 @@ function alertAdmins(user, s, title, details) {
   }
 }
 
-const SKILL = path.join(__dirname, 'skills', 'goods-receipt.md');
+const SKILL = Paths.skill('goods-receipt.md');
 const TTL = 24 * 60 * 60 * 1000;
 const TZ = 'Asia/Jerusalem';
 const FILES_DIR = () => path.join(D.UPLOADS_DIR, 'goods-receipt');

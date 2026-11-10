@@ -13,6 +13,7 @@
  * גם כאן. השאלה והתשובה אינן נשמרות; רק 20 השאלות האחרונות, אצל השואל, לנוחות.
  */
 const fs = require('node:fs');
+const Paths = require('../paths');
 const path = require('node:path');
 
 const D = require('../db');
@@ -23,7 +24,7 @@ const Docs = require('../doc-text');
 const Memory = require('./mail-memory');
 const Org = require('./org-knowledge');
 
-const SKILL_PATH = path.join(__dirname, 'skills', 'mail-ask.md');
+const SKILL_PATH = Paths.skill('mail-ask.md');
 const skill = () => fs.readFileSync(SKILL_PATH, 'utf8');
 const parseJson = (text, fallback) => { try { return JSON.parse(text); } catch { return fallback; } };
 

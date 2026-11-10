@@ -15,10 +15,11 @@
  * הקואורדינטות — בנקודות (A4: ‎595×842‎), מהפינה **השמאלית העליונה**.
  */
 const fs = require('node:fs');
+const Paths = require('./paths');
 const path = require('node:path');
 const zlib = require('node:zlib');
 
-const FONTS_DIR = path.join(__dirname, 'fonts');
+const FONTS_DIR = Paths.FONTS;
 const A4 = { w: 595.28, h: 841.89 };
 
 // ---------------------------------------------------------------------------

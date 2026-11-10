@@ -512,8 +512,15 @@ async function recordingsFor(actor, from, to) {
   return { all: scope.all, hosts: scope.hosts.length, recordings: list, errors };
 }
 
+/** הטקסט של קובץ הקלטה (תמליל VTT) — ‎null‎ אם ההורדה נכשלה */
+async function recordingFileText(uuid, fileId, { timeoutMs = 30000 } = {}) {
+  const { url } = await recordingFileUrl(uuid, fileId);
+  const res = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) });
+  return res.ok ? res.text() : null;
+}
+
 module.exports = {
   isEnabled, missing, accounts, syncUsers, listUsers, pickHost, hostsAt, createMeeting, updateMeeting, deleteMeeting, startUrl,
-  listRecordings, recordingFileUrl, meetingRecording, recordingScope, mayWatch, recordingsFor, ZoomError,
+  listRecordings, recordingFileUrl, recordingFileText, meetingRecording, recordingScope, mayWatch, recordingsFor, ZoomError,
   _internal: { meetingBody, call }
 };

@@ -18,6 +18,7 @@
  * כשל לכיוון הסגור: נושא לא מוכר, פריט שלא סווג, או שואל לא ידוע — הנהלה בלבד.
  */
 const fs = require('node:fs');
+const Paths = require('../paths');
 const path = require('node:path');
 
 const D = require('../db');
@@ -32,7 +33,7 @@ const LEVEL_HINTS = {
 };
 const LEADERSHIP_DEPT = /הנהלה|מנכ["״']?ל|דירקטור/;
 
-const DEFAULTS = JSON.parse(fs.readFileSync(path.join(__dirname, 'topics.json'), 'utf8')).topics;
+const DEFAULTS = JSON.parse(fs.readFileSync(Paths.TOPICS, 'utf8')).topics;
 
 const norm = (s) => String(s ?? '').trim().replace(/^מחלקת\s+/, '').replace(/["״׳']/g, '').toLowerCase();
 

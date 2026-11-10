@@ -16,6 +16,7 @@
  * המשימה או התיאור שלה השתנו. שום דבר לא יוצא בלי לחיצה או "כן" של העובד.
  */
 const fs = require('node:fs');
+const Paths = require('../paths');
 const path = require('node:path');
 const crypto = require('node:crypto');
 
@@ -25,7 +26,7 @@ const AiTasks = require('../ai-tasks');
 const Gmail = require('../gmail');
 const GContacts = require('../google-contacts');
 
-const SKILL_PATH = path.join(__dirname, 'skills', 'task-outreach.md');
+const SKILL_PATH = Paths.skill('task-outreach.md');
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const CANDIDATES_SHOWN = 5;
 

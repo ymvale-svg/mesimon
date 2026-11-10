@@ -18,6 +18,7 @@
  * ההנחיות ל-AI: ‎skills/email-insights.md‎.
  */
 const fs = require('node:fs');
+const Paths = require('../paths');
 const path = require('node:path');
 
 const D = require('../db');
@@ -31,7 +32,7 @@ const ReplyMemory = require('./reply-memory');
 const Memory = require('./mail-memory');
 const Org = require('./org-knowledge');
 
-const SKILL = path.join(__dirname, 'skills', 'email-insights.md');
+const SKILL = Paths.skill('email-insights.md');
 const TZ = 'Asia/Jerusalem';
 const HOURS = 24;
 const MAX_MAILS = 40;

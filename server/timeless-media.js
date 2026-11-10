@@ -15,6 +15,7 @@
  * בעל היומן), ומה שהיא רואה לא חוזר לאף משתמש — רק "מוקלטת / לא".
  */
 const fs = require('node:fs');
+const Paths = require('./paths');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const D = require('./db');
@@ -26,7 +27,7 @@ const Claude = require('./ai/claude');
 const MIN = 60000;
 const TZ = 'Asia/Jerusalem';
 const CAL = 'https://www.googleapis.com/calendar/v3';
-const SKILLS = path.join(__dirname, 'ai', 'skills');
+const SKILLS = Paths.SKILLS;
 
 const hooks = { sendWhatsApp: null, botReady: () => false, botAllowed: () => false };
 const init = (h) => Object.assign(hooks, h);

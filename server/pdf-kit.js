@@ -7,6 +7,7 @@
  * טופס PDF קיים (שדות AcroForm, או כתיבה מעל דף שטוח) ומודעות ומכתבים עם לוגו.
  */
 const fs = require('node:fs');
+const Paths = require('./paths');
 const path = require('node:path');
 const { visual } = require('./pdf');
 
@@ -17,7 +18,7 @@ function L() {
   return lib;
 }
 
-const FONT_DIR = path.join(__dirname, 'fonts');
+const FONT_DIR = Paths.FONTS;
 const fontCache = {};
 const fontBytes = (name) => (fontCache[name] ??= fs.readFileSync(path.join(FONT_DIR, name)));
 

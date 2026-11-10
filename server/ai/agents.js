@@ -19,6 +19,7 @@
  * סוכן, כמו בשאר הסקילים.
  */
 const fs = require('node:fs');
+const Paths = require('../paths');
 const path = require('node:path');
 
 const D = require('../db');
@@ -27,8 +28,8 @@ const Gmail = require('../gmail');
 const Docs = require('../doc-text');
 const Memory = require('./mail-memory');
 
-const DIR = path.join(__dirname, 'agents');
-const MANIFEST = path.join(__dirname, 'agents.json');
+const DIR = Paths.AGENTS;
+const MANIFEST = Paths.AGENTS_MANIFEST;
 const ROUTER_MODEL = () => String(D.getSetting('mail_memory_model', 'claude-haiku-5-5') || 'claude-haiku-5-5');
 const parseJson = (text, fallback) => { try { return JSON.parse(text); } catch { return fallback; } };
 
@@ -402,7 +403,7 @@ async function toolsFor(def, key, user, actor, state) {
 let labelsCache = null;
 function mcpLabels() {
   if (!labelsCache) {
-    const cfg = parseJson(fs.readFileSync(path.join(__dirname, '..', 'agents-mcp.json'), 'utf8'), { servers: {} });
+    const cfg = parseJson(fs.readFileSync(Paths.AGENTS_MCP, 'utf8'), { servers: {} });
     labelsCache = Object.fromEntries(Object.entries(cfg.servers ?? {}).map(([k, v]) => [k, v.label ?? k]));
   }
   return labelsCache;

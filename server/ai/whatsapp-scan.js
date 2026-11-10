@@ -21,6 +21,7 @@
  * מה ששייך למשימת AI הולך למעקב, והשאר מגיע לכאן.
  */
 const fs = require('node:fs');
+const Paths = require('../paths');
 const path = require('node:path');
 
 const D = require('../db');
@@ -31,7 +32,7 @@ const Business = require('./wa-business');
 const Insights = require('./insights');
 const TaskSync = require('./task-sync');
 
-const SKILL = path.join(__dirname, 'skills', 'whatsapp-personal-to-tasks.md');
+const SKILL = Paths.skill('whatsapp-personal-to-tasks.md');
 const ANSWER_DAYS = 3;
 const MAX_LIST = 300;
 
