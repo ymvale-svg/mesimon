@@ -63,9 +63,9 @@ const FILES_DIR = () => path.join(D.UPLOADS_DIR, 'goods-receipt');
 const TRIGGER = /קבלת\s*סחורה/;
 // "פריוריטי" לבד — תפריט: מה לעשות בפריוריטי (היום קבלת סחורה; בהמשך חשבוניות חלקיות ועוד)
 const PRIORITY = /פריוריטי|פריורטי|פרויוריטי|priority/i;
-// שיחה פעילה — רק כל עוד העובד באמת עונה. אחרי הפסקה ארוכה, הודעה חדשה היא ברירת המחדל (משימות),
-// וקבלת הסחורה ממתינה עד "קבלת סחורה" / "פריוריטי"
-const IDLE = 20 * 60 * 1000;
+// שיחה פעילה — רק כל עוד העובד באמת עונה: 15 דקות מההודעה האחרונה (הוחלט 10.11.26; אותה הגדרה של שאר
+// הבוט — ‎wa_question_ttl_min‎). אחרי זה הודעה חדשה מתחילה מההתחלה; רק לחיצה על כפתור (‎late‎) עוד עונה לשאלה
+const idleMs = () => Math.max(1, Number(D.getSetting('wa_question_ttl_min', 15)) || 15) * 60 * 1000;
 /**
  * ברירת המחדל (הגדרות הבוט): מעבר לנושא אחר *מבטל* את הקליטה — אין חזרה אליה, והבוט עושה מה שביקשו.
  * כבוי — הקליטה רק מושהית, ו"קבלת סחורה" ממשיך מאותה שאלה.
@@ -162,9 +162,9 @@ const fresh = (s) => s && Date.now() - (s.at ?? 0) < TTL;
  * העובד באמצע שיחה עם קבלת הסחורה — ההודעה הבאה שלו הולכת אליה.
  * רק כשהשיחה טרייה (‎IDLE‎) ולא הושהתה. קליטה שנשכחה אינה "בולעת" הודעות: ברירת המחדל היא משימות.
  */
-const active = (userId) => {
+const active = (userId, late = false) => {
   const s = load(userId);
-  return Boolean(fresh(s) && !s.paused && Date.now() - (s.at ?? 0) < IDLE);
+  return Boolean(fresh(s) && !s.paused && (Date.now() - (s.at ?? 0) < idleMs() || (late && s.step !== 'menu')));
 };
 /** יש קליטה פתוחה (גם מושהית) — לתזכורת ולהמשך ב"קבלת סחורה" */
 const pending = (userId) => Boolean(fresh(load(userId)));
@@ -190,7 +190,10 @@ function pass(s, why) {
 async function abandon(user) {
   const s = load(user.id);
   if (!fresh(s) || !switchCancels()) return '';
+  // פגה אחרי 15 דקות בלי תשובה — יורדת בשקט; מודיעים רק כשבוטלה טיוטא שכבר נכתבה לפריוריטי
+  const expired = !s.paused && Date.now() - (s.at ?? 0) >= idleMs();
   await cancel(user, s);
+  if (expired && !s.docno) return '';
   return ['menu', 'offer'].includes(s.step) ? '' : DROPPED;
 }
 
@@ -198,7 +201,7 @@ async function abandon(user) {
 function pausedNote(userId) {
   const s = load(userId);
   if (!fresh(s) || s.pauseNoted || ['menu', 'offer'].includes(s.step)) return '';
-  if (!s.paused && Date.now() - (s.at ?? 0) < IDLE) return '';
+  if (!s.paused && Date.now() - (s.at ?? 0) < idleMs()) return '';
   D.setSetting(key(userId), { ...s, paused: true, pauseNoted: true });
   return '📦 _יש לך קבלת סחורה פתוחה. להמשך — *קבלת סחורה*, לביטול — *ביטול קבלת סחורה*._';
 }
@@ -1702,7 +1705,7 @@ async function handle({ user, text = '', file = null, reaction = false, allow = 
   if (!s && isTrigger(t) && CANCEL.test(t)) return { replies: ['אין קבלת סחורה פתוחה.'], status: 'ok', result: 'אין מה לבטל' };
 
   // חזרה לקליטה מושהית או שנשכחה — "קבלת סחורה" / "פריוריטי" בלי קובץ: ממשיכים מאותה שאלה
-  const idle = s && (s.paused || Date.now() - (s.at ?? 0) >= IDLE);
+  const idle = s && (s.paused || Date.now() - (s.at ?? 0) >= idleMs());
   if (s && idle && !file && (isTrigger(t) || isPriority(t)) && !['menu', 'offer', 'doc'].includes(s.step)) {
     s.paused = false;
     save(user.id, s);
@@ -2291,7 +2294,7 @@ async function step(user, s, t, file, allow = { gr: true, pd: false }) {
 }
 
 /** תפריט פריוריטי פתוח (בלי קליטה) */
-const inMenu = (userId) => { const s = load(userId); return Boolean(fresh(s) && s.step === 'menu' && Date.now() - (s.at ?? 0) < IDLE); };
+const inMenu = (userId) => { const s = load(userId); return Boolean(fresh(s) && s.step === 'menu' && Date.now() - (s.at ?? 0) < idleMs()); };
 /** בחירה בזרימה אחרת (דרישת רכש) — התפריט יורד */
 function dropMenu(userId) { const s = load(userId); if (s?.step === 'menu') clear(userId, s); }
 

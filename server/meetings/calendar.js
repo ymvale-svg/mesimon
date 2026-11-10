@@ -11,6 +11,7 @@
  * בשני החשבונות (הזמנה לשתי הכתובות) — מוצגת פעם אחת.
  */
 const D = require('../core').Db;
+const Secretariat = require('../core').Secretariat;
 const Gmail = require('../integrations').Gmail;
 const W = require('../core').Workdays;
 
@@ -176,8 +177,11 @@ const isDayStatus = (ev) => Boolean(ev) && (STATUS_TYPES.has(ev.eventType) || ST
 function isRealMeeting(ev, ownerEmail = '') {
   if (!ev || ev.declined || isStatus(ev)) return false;
   const me = String(ownerEmail ?? '').toLowerCase();
-  const others = (ev.people ?? []).filter((p) => p.email && p.email !== me && p.email !== String(ev.organizer?.email ?? '').toLowerCase());
-  return others.length > 0 || (ev.people ?? []).length > 1 || Boolean(ev.zoomLink || ev.meetLink);
+  // המזכירה שקבעה / הוזמנה — לא משתתפת (10.11.26): אירוע שרק היא בו — תזכורת אישית, לא פגישה
+  const { withoutSecretaries } = Secretariat;
+  const people = withoutSecretaries(ev.people ?? []);
+  const others = people.filter((p) => p.email && p.email !== me && p.email !== String(ev.organizer?.email ?? '').toLowerCase());
+  return others.length > 0 || people.length > 1 || Boolean(ev.zoomLink || ev.meetLink);
 }
 
 /** האירוע הוא של העובד עצמו: ביומן הראשי שלו, או שהוא משתתף / מארגן (ולא רק יומן של מישהו אחר שהוא עוקב אחריו) */

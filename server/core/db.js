@@ -900,6 +900,22 @@ CREATE TABLE IF NOT EXISTS meet_coord (
 );
 CREATE INDEX IF NOT EXISTS idx_meet_coord_msg ON meet_coord(message_id);
 
+-- 📬 מייל שיצא ממשימון ומחכים לתשובה עליו — "קיבלת תשובה" בבוט (‎mail/reply-watch.js‎)
+CREATE TABLE IF NOT EXISTS mail_reply_watch (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  box        INTEGER NOT NULL DEFAULT 0,
+  thread_id  TEXT    NOT NULL,
+  to_name    TEXT    NOT NULL DEFAULT '',
+  to_email   TEXT    NOT NULL DEFAULT '',
+  subject    TEXT    NOT NULL DEFAULT '',
+  status     TEXT    NOT NULL DEFAULT 'waiting',
+  sent_at    TEXT    NOT NULL,
+  polled_at  TEXT,
+  created_at TEXT    NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_mail_reply_watch ON mail_reply_watch(status, user_id);
+
 /* ⏰ "תזכיר לי" (‎ai/reminders.js‎). ‎status‎: active / fired / done / cancelled */
 CREATE TABLE IF NOT EXISTS reminders (
   id         INTEGER PRIMARY KEY AUTOINCREMENT,

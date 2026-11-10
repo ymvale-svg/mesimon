@@ -22,6 +22,7 @@
  * שתופיע במשימון. היא מצורפת למשימה, ורואים אותה רק מי שרואה את המשימה.
  */
 const fs = require('node:fs');
+const Secretariat = require('../core').Secretariat;
 const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
@@ -108,7 +109,7 @@ async function candidates(userId) {
       ...(owner ? [{ email: normEmail(owner.email), name: owner.full_name }] : []),
       ...parseJson(m.attendees, []).map((a) => ({ email: normEmail(a.email), name: a.name || '' }))
     ];
-    out.push({ source: 'mesimon', ref: String(m.id), title: m.title, start: m.start_at, end: m.end_at, taskId: m.task_id ?? null, people });
+    out.push({ source: 'mesimon', ref: String(m.id), title: m.title, start: m.start_at, end: m.end_at, taskId: m.task_id ?? null, people: Secretariat.withoutSecretaries(people) });
   }
   // היומן — היום ואתמול
   if (Calendar.isConnected(userId)) {
@@ -122,7 +123,7 @@ async function candidates(userId) {
         const people = [...(ev.organizer?.email ? [ev.organizer] : []), ...ev.people]
           .filter((p, i, a) => p.email && a.findIndex((x) => x.email === p.email) === i)
           .map((p) => ({ email: normEmail(p.email), name: userByEmail(p.email)?.full_name || p.name || '' }));
-        out.push({ source: 'calendar', ref: ev.id, title: ev.title, start: ev.start, end: ev.end, taskId: null, people });
+        out.push({ source: 'calendar', ref: ev.id, title: ev.title, start: ev.start, end: ev.end, taskId: null, people: Secretariat.withoutSecretaries(people) });
       }
     }
   }
