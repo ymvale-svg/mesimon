@@ -21,6 +21,7 @@ const D = require('./db');
 const W = require('./workdays');
 const Gmail = require('./gmail');
 const Timeless = require('./timeless');
+const Calendar = require('./calendar');
 const Claude = require('./ai/claude');
 
 const MIN = 60000;
@@ -229,11 +230,12 @@ async function forMeeting(userId, m) {
 
 /** הקישור לפגישה המקוונת: Meet, Zoom, Teams — מהאירוע, מהמיקום או מהתיאור */
 function meetingLink(e) {
-  const video = (e.conferenceData?.entryPoints ?? []).find((p) => p.entryPointType === 'video' && /^https:\/\//.test(p.uri ?? ''));
+  // רק דומיין של ספק מוכר — הקישור נשלח למזכירות בוואטסאפ, והאירוע יכול להגיע מהזמנה חיצונית
+  const video = (e.conferenceData?.entryPoints ?? []).find((p) => p.entryPointType === 'video' && Calendar.videoLink(p.uri));
   if (video) return video.uri;
-  if (/^https:\/\//.test(e.hangoutLink ?? '')) return e.hangoutLink;
-  const m = `${e.location ?? ''} ${e.description ?? ''}`.match(/https:\/\/[^\s"'<>]*(?:zoom\.us|meet\.google\.com|teams\.microsoft\.com|teams\.live\.com|webex\.com)[^\s"'<>]*/i);
-  return m ? m[0] : '';
+  if (Calendar.videoLink(e.hangoutLink)) return e.hangoutLink;
+  const found = `${e.location ?? ''} ${e.description ?? ''}`.match(/https:\/\/[^\s"'<>]+/gi) ?? [];
+  return found.find((u) => Calendar.videoLink(u)) ?? '';
 }
 
 const candidates = new Map(); // ‎key‎ ← ‎{ key, title, start, end, link, owners: Set(userId), emails: Set }‎
