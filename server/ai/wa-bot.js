@@ -3682,9 +3682,11 @@ async function handleDirect(msg) {
   // דרישת רכש — "דרישת רכש" (כתוב, בהקלטה, או הכפתור בתפריט פריוריטי), ובאמצע דרישה — התשובות לשאלות שלה.
   // לא לדרישה (קבלת סחורה, בקשה אחרת) — ממשיכים לקבלת הסחורה / לבוט הרגיל
   const pdAllowed = WaActions.allowed(actor, 'purchase_demand');
-  if (pdAllowed && (PurchaseDemand.active(user.id) || (PurchaseDemand.opens(text) && !(msg.file && !text)))) {
+  // ⏳ 15 דקות בלי תשובה — דרישת הרכש / קבלת הסחורה כבר לא "פעילה", והודעה חדשה מתחילה מההתחלה. לחיצה על כפתור — עוד עונה
+  const late = !msg.file && answerLike(text, msg);
+  if (pdAllowed && (PurchaseDemand.active(user.id, late) || (PurchaseDemand.opens(text) && !(msg.file && !text)))) {
     let pre = '';
-    if (!PurchaseDemand.active(user.id)) {
+    if (!PurchaseDemand.active(user.id, late)) {
       // דרישה חדשה — תפריט פריוריטי יורד, וקבלת סחורה פתוחה — לפי ההגדרה (מבוטלת / מושהית)
       GoodsReceipt.dropMenu(user.id);
       if (GoodsReceipt.pending(user.id)) pre = await GoodsReceipt.abandon(user).catch(() => '');
@@ -3714,13 +3716,13 @@ async function handleDirect(msg) {
   // בקשה אחרת (או הודעה אחרי הפסקה ארוכה) עוברת לבוט הרגיל — ולפי ההגדרה הקליטה מבוטלת או מושהית.
   // "קבלת סחורה" בלי קובץ, דקות אחרי קובץ שלא נקלט — הקובץ ההוא הוא המסמך
   const grAllowed = WaActions.allowed(actor, 'goods_receipt');
-  const recentFile = grAllowed && !msg.file && GoodsReceipt.isTrigger(text) && !GoodsReceipt.active(user.id) ? takeRecentFile(user.id) : null;
+  const recentFile = grAllowed && !msg.file && GoodsReceipt.isTrigger(text) && !GoodsReceipt.active(user.id, late) ? takeRecentFile(user.id) : null;
   if (recentFile) msg = { ...msg, file: recentFile };
-  if (msg.file && !(grAllowed && (GoodsReceipt.active(user.id) || GoodsReceipt.opens(text, msg.file)))) rememberFile(user.id, msg.file);
+  if (msg.file && !(grAllowed && (GoodsReceipt.active(user.id, late) || GoodsReceipt.opens(text, msg.file)))) rememberFile(user.id, msg.file);
   let grPassed = false;
   let grNotice = '';
   const prioMenuOnly = !grAllowed && pdAllowed && !msg.file && (GoodsReceipt.isPriority(text) || GoodsReceipt.inMenu(user.id));
-  if (prioMenuOnly || (grAllowed && (GoodsReceipt.active(user.id) || GoodsReceipt.opens(text, msg.file) || GoodsReceipt.wantsUndoFinal(user.id, text)))) {
+  if (prioMenuOnly || (grAllowed && (GoodsReceipt.active(user.id, late) || GoodsReceipt.opens(text, msg.file) || GoodsReceipt.wantsUndoFinal(user.id, text)))) {
     const slowGr = setTimeout(() => react(ref, '🧐'), SLOW_NOTICE_MS);
     let r;
     try {
@@ -3760,7 +3762,7 @@ async function handleDirect(msg) {
     grNotice = await GoodsReceipt.abandon(user).catch(() => '');
   }
   // דרישת רכש שהושהתה (ההודעה בנושא אחר) — לפי אותה הגדרה: יורדת (עוד לא נכתב כלום בפריוריטי), או נשארת עד "דרישת רכש"
-  if (text && pdAllowed && GoodsReceipt.switchCancels() && PurchaseDemand.pending(user.id) && !PurchaseDemand.active(user.id)) {
+  if (text && pdAllowed && GoodsReceipt.switchCancels() && PurchaseDemand.pending(user.id) && !PurchaseDemand.active(user.id, late)) {
     grNotice = [grNotice, PurchaseDemand.abandon(user)].filter(Boolean).join('\n');
   }
   if (msg.forwarded) {
@@ -4163,9 +4165,14 @@ function staleQuestion(userId, st, text, msg = {}) {
   if (!st.draft || st.draft.kind === 'menu') return false;
   const asked = Date.parse(st.draft.askedAt ?? '') || Date.parse(D.get('SELECT updated_at FROM wa_chats WHERE user_id = ?', userId)?.updated_at ?? '') || 0;
   if (!asked || Date.now() - asked < questionTtlMin() * 60 * 1000) return false;
+  return !answerLike(text, msg);
+}
+
+/** לחיצה על כפתור, 👍 / 👎, או "מאשר" / "ביטול" לבד — תשובה לשאלה שממתינה, גם אחרי 15 דקות */
+function answerLike(text, msg = {}) {
   const n = WaUi.normalize(String(text ?? ''));
   const short = n.split(/\s+/).filter(Boolean).length <= 3;
-  return !(msg.button || msg.kind === 'reactionMessage' || (short && (WaUi.YES.test(n) || WaUi.NO.test(n) || WaUi.CANCEL.test(n) || CANCEL.test(n))));
+  return Boolean(msg.button || msg.kind === 'reactionMessage' || (n && short && (WaUi.YES.test(n) || WaUi.NO.test(n) || WaUi.CANCEL.test(n) || CANCEL.test(n))));
 }
 
 /** אפשר לשמור שאלה יזומה חדשה: אין שאלה פתוחה, או שהיא כבר לא חוסמת (‎busyFor‎) — ואז היא מוחלפת */
