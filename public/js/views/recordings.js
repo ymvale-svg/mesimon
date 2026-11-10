@@ -202,6 +202,8 @@ const RecordingsView = (() => {
       || r.title.toLowerCase().includes(q)
       || r.participants.some((p) => p.toLowerCase().includes(q)));
     if (!list.length) {
+      // הטעינה נכשלה (למשל Timeless מגביל את הקצב) — ההודעה למעלה מספיקה; "אין פגישות" יטעה
+      if (!q && (data.errors ?? []).length) { UI.mount(listBox); return; }
       UI.mount(listBox, UI.empty(q ? 'אין הקלטות שמתאימות לחיפוש' : 'אין פגישות מוקלטות ב-Timeless בחודש הזה', '🎥'),
         data.status?.source === 'org' && data.status.scope === 'mine'
           ? el('div.mute-sm', { style: { textAlign: 'center' }, text: 'מוצגות הפגישות שהשתתפת בהן (לפי המייל שלך).' })
