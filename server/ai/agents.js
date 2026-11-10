@@ -589,6 +589,13 @@ async function ask(user, actor, question, opts = {}) {
   return require('../load-monitor').track(() => askInner(user, actor, question, opts));
 }
 
+/*
+ * "מה לינור כתבה לי?", "מה שלח לי דני?", "מה ענתה לי הדס" — שאלה על ההתכתבות עם אדם: עונים רק מהמיילים.
+ * בלי סוכני מחלקות ובלי הידע הארגוני (10.11.26, ישראל: "מה הקשר לבדק?" — על "מה לינור כתבה לי" הגיע ידע על נזילות).
+ */
+const PERSON_MAIL = /^(?:ו?מה|מתי|האם|תגיד\s+לי\s+מה|מה\s+עם\s+מה)\s+(?:\S+\s+){0,4}?(?:כתב|כתבה|כתבו|שלח|שלחה|שלחו|ענה|ענתה|ענו|השיב|השיבה|אמר|אמרה|ביקש|ביקשה|רצה|רצתה)\s+(?:לי|אליי|אלי)(?:\s|$|[?.!,])/;
+const isPersonMail = (q) => PERSON_MAIL.test(String(q ?? '').trim()) || /^(?:ו?מה|מתי|האם)\s+(?:\S+\s+){0,2}?(?:כתב|כתבה|שלח|שלחה|ענה|ענתה)\s+\S+\s+(?:לי|אליי)(?:\s|$|[?.!,])/.test(String(q ?? '').trim());
+
 async function askInner(user, actor, question, opts = {}) {
   const q = String(question ?? '').trim().slice(0, 1000);
   if (!q) throw new Error('מה לשאול?');
@@ -612,6 +619,9 @@ async function askInner(user, actor, question, opts = {}) {
   }
 
   const MailAsk = require('./mail-ask');
+  // "מה X כתב לי?" — המיילים בלבד (כשיש מיילים); בלי סוכנים ובלי ידע ארגוני
+  const personMail = isPersonMail(q) && MailAsk.available(user.id);
+  if (personMail) routed = { ...routed, mail: true, agent: null, agents: [], simple: true };
   const mailOn = routed.mail && MailAsk.available(user.id);
   const keys = routed.agents?.length ? routed.agents : routed.agent ? [routed.agent] : [];
   /*
@@ -631,7 +641,7 @@ async function askInner(user, actor, question, opts = {}) {
     mailOn ? MailAsk.ask(user, q, opts.history ?? [], { context: opts.context ?? '' }).catch((err) => ({ error: err.message })) : null,
     ...agentRuns
   ]);
-  const org = (Org()?.search(q, { limit: 3, actor }) ?? []).map((e) => Org().forViewer(e, actor));
+  const org = personMail ? [] : (Org()?.search(q, { limit: 3, actor }) ?? []).map((e) => Org().forViewer(e, actor));
 
   // יותר ממקור אחד ענה — תשובה אחת מאוחדת. נכשל האיחוד — כל תשובה בנפרד, כמו קודם
   const answered = parts.filter((p) => p?.text);
@@ -773,5 +783,5 @@ function recentLog({ limit = 100 } = {}) {
 
 module.exports = {
   init, catalog, allowedFor, setConfig, ask, asText, runAgent, route, advise, recentLog,
-  _internal: { combine, systemFor, toolsFor, skillText, referenceFiles, proposeTasks, projectContext, manifest }
+  _internal: { isPersonMail, combine, systemFor, toolsFor, skillText, referenceFiles, proposeTasks, projectContext, manifest }
 };
