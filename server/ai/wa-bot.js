@@ -3298,6 +3298,8 @@ async function handleDirect(msg) {
   if (!actor) return;
   const base = { channel: 'private', chatId: msg.chatId, userId: user.id, who: user.full_name, text: msg.text, forwarded: msg.forwarded };
   const ref = { chatId: msg.chatId, id: msg.id };
+  // העובד כתב — תזכורות מחכות שהשיחה תירגע (‎mail-actions.mayRemindNow‎), ושאלה פתוחה "מתעוררת"
+  if (!/^(bot-|mail-goods-)/.test(String(msg.id ?? ''))) { MailActions.noteUser(user.id); userLastAt.set(user.id, Date.now()); }
   // הודעה פנימית (‎enqueueAs‎) — לא דורסת את ההודעה האמיתית שעליה מגיבים
   if (!/^(bot-|mail-goods-)/.test(String(msg.id ?? ''))) currentMsg.set(user.id, ref);
 
@@ -3754,7 +3756,7 @@ async function mailAlertFor(userId) {
   const u = D.get("SELECT id, full_name, phone FROM users WHERE id = ? AND status = 'active'", userId);
   const state = chatOf(userId);
   // באמצע שיחה מול הבוט — לא קוטעים. המייל מחכה לסבב הבא
-  if (!u?.phone || state.awaiting || (state.draft && state.draft.kind !== 'menu') || GoodsReceipt.active(userId) || PurchaseDemand.active(userId)) return;
+  if (!u?.phone || busyFor(userId) || GoodsReceipt.active(userId) || PurchaseDemand.active(userId)) return;
   let since = D.getSetting('wa_mail_alert_since', '');
   if (!since) { since = D.nowIso(); D.setSetting('wa_mail_alert_since', since); }
   const rows = nextAlert(userId, since);
@@ -3779,7 +3781,8 @@ async function mailAlertFor(userId) {
       await sendButtons(chatId, offer.text, offer.buttons);
       rememberBot(userId, offer.text);
       const now = chatOf(userId);
-      if (!now.awaiting && !(now.draft && now.draft.kind !== 'menu')) saveChat(userId, { ...now, draft: offer.draft, awaiting: true });
+      if (!now.awaiting && !(now.draft && now.draft.kind !== 'menu')) saveChat(userId, { ...now, draft: { ...offer.draft, askedAt: D.nowIso() }, awaiting: true });
+      MailActions.noteProactive(userId);
       log({ channel: 'summary', chatId, userId, who: u.full_name, action: 'meet_coord', status: 'ok', result: `📧 ${head.from_name}: בקשה לפגישה — ${oneLine(head.subject, 100)}` });
     } catch (err) {
       log({ channel: 'summary', chatId, userId, who: u.full_name, action: 'meet_coord', status: 'error', result: err.message });
@@ -3810,7 +3813,8 @@ async function mailAlertFor(userId) {
     rememberBot(userId, text);
     // המצב נקרא שוב רגע לפני השמירה — הודעה שהגיעה בינתיים מהעובד גוברת
     const now = chatOf(userId);
-    if (!now.awaiting && !(now.draft && now.draft.kind !== 'menu')) saveChat(userId, { ...now, draft, awaiting: true });
+    if (!now.awaiting && !(now.draft && now.draft.kind !== 'menu')) saveChat(userId, { ...now, draft: { ...draft, askedAt: D.nowIso() }, awaiting: true });
+    MailActions.noteProactive(userId);
     log({ channel: 'summary', chatId, userId, who: u.full_name, action: 'mail_alert', status: 'ok', result: `📧 ${head.from_name}: ${oneLine(head.subject, 120)} — ${reply ? 'הצעת תשובה' : 'משימה'}` });
   } catch (err) {
     log({ channel: 'summary', chatId, userId, who: u.full_name, action: 'mail_alert', status: 'error', result: err.message });
@@ -3824,6 +3828,33 @@ async function mailAlerts() {
 }
 
 // ---------------------------------------------------------------------------
+// ⏳ שאלה פתוחה שלא נענתה — פגה אחרי שעתיים (הוחלט 10.11.26)
+// ---------------------------------------------------------------------------
+
+/*
+ * הבוט לא קוטע שאלה פתוחה. אבל שאלה שאיש לא ענה עליה ("זכרת? 🐣" שהמנכ"ל התעלם ממנו) עצרה את כל ההודעות
+ * היזומות — גם בימים הבאים. עכשיו: שאלה פתוחה שאין בה תנועה שעתיים (לא נשאלה ולא נכתב לבוט) — יורדת, והבאה
+ * בתור יכולה לבוא. הפריט עצמו נשאר במקומו (ב"ממתין לאישורך", ברשימת התזכורות).
+ */
+const userLastAt = new Map(); // ‎userId‎ → מתי העובד כתב לבוט
+const STALE_QUESTION_MS = 2 * 60 * 60 * 1000;
+
+function busyFor(userId) {
+  const st = chatOf(userId);
+  if (!(st.awaiting || (st.draft && st.draft.kind !== 'menu'))) return false;
+  const chatAt = Date.parse(D.get('SELECT updated_at FROM wa_chats WHERE user_id = ?', userId)?.updated_at ?? '') || 0;
+  // מתי הייתה תנועה: מתי נשאלה השאלה ומתי העובד כתב. שמירת השיחה לא נחשבת — הבוט שומר גם כשהוא שולח לבד.
+  // שאלה בלי חותמת זמן (מלפני העדכון) ועובד שלא כתב מאז שהשרת עלה — לפי השמירה האחרונה
+  const asked = Date.parse(st.draft?.askedAt ?? '') || 0;
+  const since = Math.max(userLastAt.get(userId) ?? 0, asked || chatAt);
+  if (Date.now() - since < STALE_QUESTION_MS) return true;
+  if (st.draft?.kind === 'goods_offer') D.run("UPDATE mail_goods_docs SET status = 'pending' WHERE id = ? AND status = 'asked'", st.draft.goodsId);
+  saveChat(userId, { ...st, draft: null, awaiting: false });
+  log({ channel: 'summary', userId, action: 'other', status: 'ok', result: `שאלה פתוחה פגה אחרי שעתיים בלי תשובה: ${st.draft?.kind ?? ''}` });
+  return false;
+}
+
+// ---------------------------------------------------------------------------
 // הודעה יזומה עם קבצים וכפתורים — וטיוטה שמחכה לתשובה (כשהעובד לא באמצע משהו אחר)
 // ---------------------------------------------------------------------------
 
@@ -3833,7 +3864,7 @@ async function pushToUser(userId, { text, files = [], buttons = [], draft = null
   if (!u?.phone || !ch) return false;
   const chatId = `${u.phone}@c.us`;
   const st = chatOf(userId);
-  const busy = st.awaiting && st.draft && st.draft.kind !== draft?.kind;
+  const busy = busyFor(userId) && chatOf(userId).draft?.kind !== draft?.kind;
   try {
     for (const f of files) await WhatsApp.sendFile(ch, chatId, f);
     const parts = splitMessage(text);
@@ -3842,7 +3873,8 @@ async function pushToUser(userId, { text, files = [], buttons = [], draft = null
       else await sendText(chatId, parts[i]);
     }
     rememberBot(userId, text);
-    if (draft && !busy) saveChat(userId, { ...chatOf(userId), draft, awaiting: true });
+    if (draft && !busy) saveChat(userId, { ...chatOf(userId), draft: { ...draft, askedAt: D.nowIso() }, awaiting: true });
+    MailActions.noteProactive(userId);
     log({ channel: 'summary', chatId, userId, who: u.full_name, action, status: 'ok', result: text.split('\n')[0].slice(0, 300) });
     return true;
   } catch (err) {
@@ -3951,7 +3983,7 @@ async function mailActionAlerts() {
     if (allow.followup) await SentFollowup.scan(u.id).catch((err) => console.error('[משימון] סריקת שאלות שלא נענו נכשלה:', err.message));
     // באמצע שיחה מול הבוט — לא קוטעים; השאלה מחכה לסבב הבא
     const st = chatOf(u.id);
-    if (st.awaiting || (st.draft && st.draft.kind !== 'menu') || GoodsReceipt.active(u.id) || PurchaseDemand.active(u.id)) continue;
+    if (busyFor(u.id) || GoodsReceipt.active(u.id) || PurchaseDemand.active(u.id)) continue;
     const q = await MailActions.nextQuestion(u.id, allow).catch(() => null);
     if (!q) continue;
     const chatId = `${u.phone}@c.us`;
@@ -3959,7 +3991,8 @@ async function mailActionAlerts() {
       await sendButtons(chatId, q.text, q.buttons);
       rememberBot(u.id, q.text);
       const now = chatOf(u.id);
-      if (!now.awaiting && !(now.draft && now.draft.kind !== 'menu')) saveChat(u.id, { ...now, draft: q.draft, awaiting: true });
+      if (!now.awaiting && !(now.draft && now.draft.kind !== 'menu')) saveChat(u.id, { ...now, draft: { ...q.draft, askedAt: D.nowIso() }, awaiting: true });
+      MailActions.noteProactive(u.id);
       log({ channel: 'summary', chatId, userId: u.id, who: u.full_name, action: q.action, status: 'ok', result: q.log.slice(0, 300) });
     } catch (err) {
       log({ channel: 'summary', chatId, userId: u.id, who: u.full_name, action: q.action, status: 'error', result: err.message });
@@ -4009,16 +4042,14 @@ async function meetingFollowups() {
       return Boolean(actor && WaActions.allowed(actor, 'meeting_followup'));
     },
     // באמצע שיחה מול הבוט — לא קוטעים; הפנייה מחכה לסבב הבא
-    busy: (userId) => {
-      const st = chatOf(userId);
-      return st.awaiting || Boolean(st.draft && st.draft.kind !== 'menu') || GoodsReceipt.active(userId) || PurchaseDemand.active(userId);
-    },
+    busy: (userId) => busyFor(userId) || GoodsReceipt.active(userId) || PurchaseDemand.active(userId),
     send: async (userId, text, buttons, m) => {
       const u = D.get("SELECT id, full_name, phone FROM users WHERE id = ?", userId);
       const chatId = `${u.phone}@c.us`;
       try {
         await sendButtons(chatId, text, buttons);
         rememberBot(userId, text);
+        MailActions.noteProactive(userId);
         log({ channel: 'summary', chatId, userId, who: u.full_name, action: 'meeting_followup', status: 'ok', result: `🎥 ${m.title} (${m.source})`.slice(0, 300), taskId: m.data?.taskId ?? null });
       } catch (err) {
         log({ channel: 'summary', chatId, userId, who: u.full_name, action: 'meeting_followup', status: 'error', result: err.message });
@@ -4048,6 +4079,7 @@ function rememberBot(userId, text) {
 /** אחרי ההודעה, "סיימתי את 1" ו"תוסיף ל-1" מתייחסים למשימה שהתקבלה */
 function sendProactive(userId, chatId, text, { taskId = null, action = 'assignment_notice', who = '' } = {}) {
   return sendText(chatId, text).then(async () => {
+    MailActions.noteProactive(userId);
     if (taskId) saveChat(userId, { ...chatOf(userId), lastList: [taskId] });
     rememberBot(userId, text);
     log({ channel: 'summary', chatId, userId, who, action, status: 'ok', result: text.split('\n')[0].slice(0, 300), taskId });
@@ -4078,7 +4110,8 @@ async function offerOutreach(userId, chatId, taskId, who = '') {
         await sendButtons(chatId, offer.text, offer.buttons);
         rememberBot(userId, offer.text);
         const now = chatOf(userId);
-        if (!now.awaiting) saveChat(userId, { ...now, draft: offer.draft, awaiting: true });
+        if (!now.awaiting) saveChat(userId, { ...now, draft: { ...offer.draft, askedAt: D.nowIso() }, awaiting: true });
+        MailActions.noteProactive(userId);
         log({ channel: 'summary', chatId, userId, who, action: 'meet_coord', status: 'ok', result: `לתאם: ${task.title}`.slice(0, 300), taskId });
         return;
       }
@@ -4113,7 +4146,7 @@ async function offerOutreach(userId, chatId, taskId, who = '') {
     // המצב נקרא שוב רגע לפני השמירה — הודעה שהגיעה בינתיים מהעובד גוברת
     const now = chatOf(userId);
     if (draft && !now.awaiting && !['email_pick', 'reply_ask'].includes(now.draft?.kind)) {
-      saveChat(userId, { ...now, draft, awaiting: draft.kind === 'email' });
+      saveChat(userId, { ...now, draft: { ...draft, askedAt: D.nowIso() }, awaiting: draft.kind === 'email' });
     }
     log({ channel: 'summary', chatId, userId, who, action: 'send_email', status: 'ok', result: text.split('\n')[0].slice(0, 300), taskId });
   } catch (err) {
@@ -4432,6 +4465,6 @@ module.exports = {
   _internal: {
     storeGroupMessage, processGroup, handleDirect, sanitizeGroup, resolveMentions, candidatesOf, converse, turn, withFollowUps, sendSummaries, YES,
     findRecipients, findContactCards, sourceOf, suggestionFeedback, flushOutbox, todayMessage, splitMessage, parseSuggestionCommand, businessCommand, chatOf, saveChat,
-    recordingReply, checkDraft, draftText, createFromDraft, mailAlertFor, closeAlerted, logoIntent
+    recordingReply, checkDraft, draftText, createFromDraft, mailAlertFor, closeAlerted, logoIntent, busyFor, userLastAt
   }
 };
