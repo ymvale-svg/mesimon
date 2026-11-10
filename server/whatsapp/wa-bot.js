@@ -76,6 +76,7 @@ const MeetingAudio = require('../meetings').MeetingAudio;
 const MailActions = require('../mail').MailActions;
 const Notice = require('./notice');
 const AiOutage = require('./ai-outage');
+const WaQuestions = require('./wa-questions');
 const Rfq = require('../priority').Rfq;
 const FormFill = require('../mail').FormFill;
 const MeetCoord = require('../meetings').MeetingCoord;
@@ -200,7 +201,11 @@ async function sendText(chatId, message) {
  * שוב שעה. גוף ארוך מ-1000 תווים — הטקסט לבד, והכפתורים בהודעה קצרה אחריו.
  */
 let buttonsOffUntil = 0;
-async function sendButtons(chatId, message, buttons) {
+/**
+ * ‎q‎ — מי שואל ועל מה (‎{ owner, draft, awaiting }‎): ההודעה נרשמת לפי המזהה שוואטסאפ מחזיר, כדי שלחיצה
+ * עליה תגיע לשאלה הזו גם אם בינתיים נפתח משהו אחר (‎wa-questions.js‎)
+ */
+async function sendButtons(chatId, message, buttons, q = null) {
   const ch = channel();
   if (!ch) return;
   if (!buttons?.length) return sendText(chatId, message);
@@ -209,10 +214,14 @@ async function sendButtons(chatId, message, buttons) {
   let body = message;
   if (String(message).length > 1000) { await sendText(chatId, message); body = '👇'; }
   try {
-    await WhatsApp.call(ch, 'sendInteractiveButtonsReply', { http: 'POST', body: {
+    const sent = await WhatsApp.call(ch, 'sendInteractiveButtonsReply', { http: 'POST', body: {
       chatId, body,
       buttons: buttons.slice(0, 3).map((t, i) => ({ buttonId: String(i + 1), buttonText: String(t).slice(0, 20) }))
     } });
+    if (q && sent?.idMessage) {
+      const u = userByPhone(String(chatId).replace(/@c\.us$/, ''));
+      if (u) WaQuestions.record(u.id, sent.idMessage, q);
+    }
   } catch (err) {
     console.error('[משימון] כפתורים בוואטסאפ לא נשלחו, נשלח טקסט:', err.message);
     buttonsOffUntil = Date.now() + 60 * 60 * 1000;
@@ -412,6 +421,10 @@ async function receiveOne(ch, timeout = LISTEN_TIMEOUT) {
         kind: m.typeMessage ?? '',
         // לחיצה על כפתור תשובה — תקפה גם אחרי שהשאלה פגה (‎staleQuestion‎)
         button: Boolean(buttonReplyText(m)),
+        // על איזו הודעה ענו (הכפתור שנלחץ, או ציטוט) — ‎wa-questions.js‎
+        replyTo: WaQuestions.replyToOf(m),
+        // אילו שדות הגיעו עם הלחיצה (בלי תוכן) — לבדיקה שהשירות מחזיר את מזהה ההודעה
+        buttonShape: buttonReplyText(m) ? Object.entries(m).filter(([k, v]) => /button|interactive/i.test(k) && v && typeof v === 'object').map(([k, v]) => `${k}{${Object.keys(v).join(',')}}`).join(' ') : '',
         // הודעה שהועברה (Forward) — לסקירה הלילית ולאיסוף הודעות מועברות
         forwarded: Boolean(m.extendedTextMessageData?.isForwarded || m.fileMessageData?.isForwarded || m.isForwarded),
         // הודעה קולית: הכתובת שממנה מורידים אותה לתמלול
@@ -3692,6 +3705,7 @@ function flowReply(r, pre = '') {
   ].filter(Boolean).join('\n\n');
 }
 
+let buttonShapeLogged = false;
 async function handleDirect(msg) {
   const user = userByPhone(msg.phone);
   if (!user) {
@@ -3798,7 +3812,35 @@ async function handleDirect(msg) {
   const pdAllowed = WaActions.allowed(actor, 'purchase_demand');
   // ⏳ 15 דקות בלי תשובה — דרישת הרכש / קבלת הסחורה כבר לא "פעילה", והודעה חדשה מתחילה מההתחלה. לחיצה על כפתור — עוד עונה
   const late = !msg.file && answerLike(text, msg);
-  if (pdAllowed && (PurchaseDemand.active(user.id, late) || (PurchaseDemand.opens(text) && !(msg.file && !text)))) {
+  // ❓ לחיצה על כפתור של שאלה מסוימת — לשאלה הזו, ולא למה שפתוח עכשיו (‎wa-questions.js‎)
+  const pressed = msg.button && msg.replyTo?.button ? WaQuestions.find(user.id, msg.replyTo.id) : null;
+  // 🔍 פעם אחת לכל הפעלה: לחיצה שהגיעה בלי מזהה ההודעה — ביומן (לסקירה הלילית), עם שמות השדות בלבד
+  if (msg.button && !msg.replyTo?.button && !buttonShapeLogged) {
+    buttonShapeLogged = true;
+    log({ ...base, action: 'other', status: 'ok', result: `🔍 כפתור בלי מזהה הודעה — השדות: ${msg.buttonShape || '(אין)'}`.slice(0, 300) });
+  }
+  let forceChat = false;
+  let forceFlow = null;
+  let displaced = null; // מה שהיה פתוח לפני ששאלה ישנה הוחזרה — חוזר להיות פתוח אחרי התשובה
+  if (pressed?.owner === 'chat') {
+    const cur = chatOf(user.id);
+    const how = WaQuestions.decide(pressed, cur.awaiting ? cur.draft : null);
+    if (how === 'closed') {
+      log({ ...base, text, action: 'other', status: 'unclear', result: `כפתור על שאלה שכבר לא פתוחה: ${pressed.draft?.kind ?? ''}`, reply: WaQuestions.CLOSED_TEXT });
+      await sendText(msg.chatId, WaQuestions.CLOSED_TEXT);
+      return;
+    }
+    if (how === 'restore') {
+      if (cur.awaiting && cur.draft) displaced = { draft: cur.draft, awaiting: true };
+      saveChat(user.id, { ...cur, draft: { ...pressed.draft, askedAt: D.nowIso() }, awaiting: true });
+    }
+    if (how !== 'free') { forceChat = true; WaQuestions.markAnswered(user.id, pressed.id); }
+  } else if (pressed && ['goods_receipt', 'purchase_demand'].includes(pressed.owner)) {
+    // כפתור של קבלת סחורה / דרישת רכש — לזרימה שלו, כשהיא פתוחה. סגורה (או תפריט פריוריטי) — הניתוב הרגיל
+    const open = pressed.owner === 'goods_receipt' ? GoodsReceipt.active(user.id, true) : PurchaseDemand.active(user.id, true);
+    if (open) forceFlow = pressed.owner;
+  }
+  if (!forceChat && forceFlow !== 'goods_receipt' && pdAllowed && (PurchaseDemand.active(user.id, late) || forceFlow === 'purchase_demand' || (PurchaseDemand.opens(text) && !(msg.file && !text)))) {
     let pre = '';
     if (!PurchaseDemand.active(user.id, late)) {
       // דרישה חדשה — תפריט פריוריטי יורד, וקבלת סחורה פתוחה — לפי ההגדרה (מבוטלת / מושהית)
@@ -3819,7 +3861,7 @@ async function handleDirect(msg) {
       await notice;
       const parts = r.replies.map((x, i) => (i === 0 && pre ? `${pre}\n\n${x}` : x)).flatMap((reply) => splitMessage(reply));
       for (let i = 0; i < parts.length; i++) {
-        if (i === parts.length - 1 && r.buttons?.length) await sendButtons(msg.chatId, parts[i], r.buttons);
+        if (i === parts.length - 1 && r.buttons?.length) await sendButtons(msg.chatId, parts[i], r.buttons, { owner: 'purchase_demand' });
         else await sendText(msg.chatId, parts[i]);
       }
       return;
@@ -3840,7 +3882,7 @@ async function handleDirect(msg) {
   let grPassed = false;
   let grNotice = '';
   const prioMenuOnly = !grAllowed && pdAllowed && !msg.file && (GoodsReceipt.isPriority(text) || GoodsReceipt.inMenu(user.id));
-  if (!offerAnswer && (prioMenuOnly || (grAllowed && (GoodsReceipt.active(user.id, late) || GoodsReceipt.opens(text, msg.file) || GoodsReceipt.wantsUndoFinal(user.id, text))))) {
+  if (!offerAnswer && !forceChat && (prioMenuOnly || forceFlow === 'goods_receipt' || (grAllowed && (GoodsReceipt.active(user.id, late) || GoodsReceipt.opens(text, msg.file) || GoodsReceipt.wantsUndoFinal(user.id, text))))) {
     const slowGr = setTimeout(() => react(ref, '🧐'), SLOW_NOTICE_MS);
     let r;
     try {
@@ -3869,7 +3911,7 @@ async function handleDirect(msg) {
       // כפתורי תשובה — על ההודעה האחרונה בלבד
       const parts = r.replies.flatMap((reply) => splitMessage(reply));
       for (let i = 0; i < parts.length; i++) {
-        if (i === parts.length - 1 && r.buttons?.length) await sendButtons(msg.chatId, parts[i], r.buttons);
+        if (i === parts.length - 1 && r.buttons?.length) await sendButtons(msg.chatId, parts[i], r.buttons, { owner: 'goods_receipt' });
         else await sendText(msg.chatId, parts[i]);
       }
       return;
@@ -3985,6 +4027,8 @@ async function handleDirect(msg) {
   const reply = `${retried ? `${AiOutage.retryHeader(retried)}\n\n` : ''}${voice ? `🎙 *שמעתי:* "${said}"\n\n${body}` : body}${grNote ? `\n\n${grNote}` : ''}`;
   const history = [...state.history, { role: 'user', text: text.slice(0, 500) }, { role: 'bot', text: r.reply.slice(0, 500) }];
   // חותמת הזמן של השאלה — ממנה נספרות 15 הדקות (‎staleQuestion‎) והשעתיים (‎busyFor‎)
+  // ענו על שאלה ישנה שהוחזרה — מה שהיה פתוח קודם (טיוטת מייל, משימה) חוזר להיות פתוח
+  if (displaced && !r.next.draft) r = { ...r, next: { ...r.next, draft: displaced.draft, awaiting: displaced.awaiting } };
   saveChat(user.id, { ...r.next, draft: r.next.draft ? { ...r.next.draft, askedAt: D.nowIso() } : r.next.draft, history });
   const fwdNote = forwards.length ? ` (+${forwards.filter((x) => x.kind === 'forward').length} מועברות)` : '';
   log({ ...base, text: `${voice ? `🎙 ${said}` : said}${fwdNote}`, action: r.action, status: r.status, result: r.result, taskId: r.taskId ?? null, reply });
@@ -4009,7 +4053,7 @@ async function handleDirect(msg) {
   // הקראה (קובץ קולי בלבד) — בלי "שמעתי": ההודעה הקולית היא התשובה
   const replyParts = quiet ? (voice && !r.files?.length ? [`🎙 *שמעתי:* "${said}"`] : []) : splitMessage(reply);
   for (let i = 0; i < replyParts.length; i++) {
-    if (i === replyParts.length - 1 && r.buttons?.length) await sendButtons(msg.chatId, replyParts[i], r.buttons);
+    if (i === replyParts.length - 1 && r.buttons?.length) await sendButtons(msg.chatId, replyParts[i], r.buttons, { owner: 'chat', draft: r.next.draft, awaiting: r.next.awaiting });
     else await sendText(msg.chatId, replyParts[i]);
   }
   // הודעות המשך (התובנות של Today) — אחרי שהעיקר כבר אצלו
@@ -4261,7 +4305,7 @@ async function mailAlertFor(userId) {
     draft = { kind: 'mail_task', alert: true, suggestionIds: ids, title: titles[0] ?? head.subject, subject: head.subject };
   }
   try {
-    await sendButtons(chatId, text, [WaUi.BTN.yes, WaUi.BTN.no]);
+    await sendButtons(chatId, text, [WaUi.BTN.yes, WaUi.BTN.no], { owner: 'chat', draft, awaiting: true });
     rememberBot(userId, text);
     // המצב נקרא שוב רגע לפני השמירה — הודעה שהגיעה בינתיים מהעובד גוברת
     const now = chatOf(userId);
@@ -4361,7 +4405,7 @@ async function pushToUser(userId, { text, files = [], buttons = [], draft = null
     for (const f of files) await WhatsApp.sendFile(ch, chatId, f);
     const parts = splitMessage(text);
     for (let i = 0; i < parts.length; i++) {
-      if (i === parts.length - 1 && buttons.length && !busy) await sendButtons(chatId, parts[i], buttons);
+      if (i === parts.length - 1 && buttons.length && !busy) await sendButtons(chatId, parts[i], buttons, { owner: 'chat', draft, awaiting: Boolean(draft) });
       else await sendText(chatId, parts[i]);
     }
     rememberBot(userId, text);
@@ -4509,7 +4553,7 @@ async function mailActionAlerts() {
     if (!q) continue;
     const chatId = `${u.phone}@c.us`;
     try {
-      await sendButtons(chatId, q.text, q.buttons);
+      await sendButtons(chatId, q.text, q.buttons, { owner: 'chat', draft: q.draft, awaiting: true });
       rememberBot(u.id, q.text);
       const now = chatOf(u.id);
       if (freeToAsk(u.id, now)) saveChat(u.id, { ...now, draft: { ...q.draft, askedAt: D.nowIso() }, awaiting: true });
