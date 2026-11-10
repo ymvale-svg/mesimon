@@ -3524,12 +3524,11 @@ async function handleDirect(msg) {
   }
 
   let state = chatOf(user.id);
-  // ⏳ שאלת אישור שעברו עליה 15 דקות — יורדת, וההודעה מתחילה מההתחלה (אלא אם זו לחיצה על כפתור)
+  // ⏳ שאלת אישור שעברו עליה 15 דקות — יורדת, וההודעה מתחילה מההתחלה (אלא אם זו לחיצה על כפתור). בלי להודיע לעובד — רק ביומן
   if (!/^(bot-|mail-goods-)/.test(String(msg.id ?? '')) && staleQuestion(user.id, state, text, msg)) {
     log({ channel: 'summary', userId: user.id, action: 'other', status: 'ok', result: `שאלת אישור פגה אחרי ${questionTtlMin()} דקות: ${state.draft?.kind ?? ''}` });
     releaseQuestion(state.draft);
     state = { ...state, draft: null, awaiting: false, queue: [] };
-    grNotice = [grNotice, `⏳ עברו יותר מ-${questionTtlMin()} דקות בלי אישור או ביטול, אז הבקשה הקודמת ירדה — מתחילים מההתחלה.`].filter(Boolean).join('\n');
   }
   let r;
   // תשובה שמתעכבת (תמלול, Today ראשון של היום, ניסוח מייל) — קודם "רגע", כדי שלא ייראה שהבוט לא שמע
