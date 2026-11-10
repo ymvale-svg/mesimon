@@ -3668,6 +3668,20 @@ function logoIntent(userId, msg, text) {
 
 const TRANSLATE = /^(?:תתרגם|תרגם|תתרגמי|תרגמי|תרגום)\s+(?:את\s+(?:זה|ה(?:הודעה|טקסט))\s+)?(?:ל|לשפה\s+ה?)(אנגלית|ערבית|רוסית|צרפתית|ספרדית|גרמנית|אמהרית|תאילנדית|רומנית|סינית|טורקית|עברית)\s*[:\-–]?\s*([\s\S]*)$/;
 
+/**
+ * מה שזרימה של פריוריטי (קבלת סחורה, דרישת רכש) ענתה — ליומן, כמו בשאר הבוט: הטקסט, הקבצים והכפתורים.
+ * בלי זה הסקירה הלילית לא רואה מה העובד קיבל, בדיוק בזרימות העמוסות. ‎pass‎ — לא נענה כאן (עבר לבוט הרגיל)
+ */
+function flowReply(r, pre = '') {
+  if (!r || r.pass) return '';
+  const texts = (r.replies ?? []).map((x, i) => (i === 0 && pre ? `${pre}\n\n${x}` : x)).filter((x) => String(x ?? '').trim());
+  return [
+    ...(r.files ?? []).map((f) => `[📄 ${f.fileName}]`),
+    ...texts,
+    r.buttons?.length ? `[${r.buttons.join(' · ')}]` : null
+  ].filter(Boolean).join('\n\n');
+}
+
 async function handleDirect(msg) {
   const user = userByPhone(msg.phone);
   if (!user) {
@@ -3790,7 +3804,7 @@ async function handleDirect(msg) {
       r = { replies: ['משהו השתבש בדרישת הרכש. נסו שוב, או *ביטול*.'], status: 'error', result: err.message };
     }
     clearTimeout(slowPd);
-    log({ ...base, text: [voice ? `🎙 ${text}` : text, msg.file ? '[📎 קובץ]' : ''].filter(Boolean).join(' ') || '[קובץ]', action: 'purchase_demand', status: r.status, result: r.result });
+    log({ ...base, text: [voice ? `🎙 ${text}` : text, msg.file ? '[📎 קובץ]' : ''].filter(Boolean).join(' ') || '[קובץ]', action: 'purchase_demand', status: r.status, result: r.result, reply: flowReply(r, pre) });
     if (!r.pass) {
       await notice;
       const parts = r.replies.map((x, i) => (i === 0 && pre ? `${pre}\n\n${x}` : x)).flatMap((reply) => splitMessage(reply));
@@ -3827,7 +3841,7 @@ async function handleDirect(msg) {
     }
     clearTimeout(slowGr);
     const shown = [voice ? `🎙 ${text}` : text, msg.file ? '[📎 קובץ]' : ''].filter(Boolean).join(' ');
-    log({ ...base, text: shown || '[קובץ]', action: 'goods_receipt', status: r.status, result: r.result });
+    log({ ...base, text: shown || '[קובץ]', action: 'goods_receipt', status: r.status, result: r.result, reply: flowReply(r) });
     grPassed = Boolean(r.pass);
     grNotice = r.note ?? '';
     if (!grPassed) {
@@ -4944,6 +4958,6 @@ module.exports = {
     storeGroupMessage, processGroup, handleDirect, sanitizeGroup, resolveMentions, candidatesOf, converse, turn, withFollowUps, sendSummaries, YES,
     findRecipients, findContactCards, sourceOf, suggestionFeedback, flushOutbox, todayMessage, splitMessage, parseSuggestionCommand, businessCommand, chatOf, saveChat,
     recordingReply, checkDraft, draftText, createFromDraft, mailAlertFor, closeAlerted, logoIntent, busyFor, userLastAt, staleQuestion,
-    READ_ALOUD, readAloudText, readAloudFile, hooks
+    READ_ALOUD, readAloudText, readAloudFile, hooks, flowReply
   }
 };

@@ -323,3 +323,17 @@ test('"לא" בשאלת סוג הדרישה — הפרויקט שהוצג לא �
   assert.match(r.text, /פרויקט: \*נהריה מגרש 12\* \(PR2\)/);
   assert.deepEqual(pr.writes, []);
 });
+
+test('יומן הבוט: מה שהזרימה ענתה נשמר (הטקסט והכפתורים) — לסקירה הלילית', async (t) => {
+  H.companies(t, 'test11');
+  const u = H.worker();
+  priority(t);
+  ai(t);
+  const { say } = H.chat(t, u);
+  await say('דרישת רכש');
+  const Bot = require('../../../server/whatsapp/wa-bot');
+  const row = Bot.readLog({}).find((x) => x.userId === u.id && x.action === 'purchase_demand');
+  assert.ok(row, 'נרשם ביומן');
+  assert.match(row.reply, /לאיזה פרויקט/);
+  assert.match(row.reply, /\[אלעד 49 צפון · נהריה מגרש 12 · /);
+});
