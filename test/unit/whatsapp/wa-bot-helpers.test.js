@@ -240,3 +240,12 @@ test('isConfigured — בלי חיבור לבוט: לא', () => {
   Bot.remove();
   assert.equal(Bot.isConfigured(), false);
 });
+
+test('flowReply — קבצים, טקסט וכפתורים ליומן; pass — ריק', () => {
+  const { flowReply } = require('../../../server/whatsapp/wa-bot')._internal;
+  assert.equal(flowReply({ replies: ['שלום'], pass: true }), '');
+  assert.equal(flowReply(null), '');
+  assert.equal(flowReply({ replies: ['זה מה שהתקבל?'], buttons: ['כן ✅', 'לא ❌'], files: [{ fileName: 'GR.pdf' }] }),
+    '[📄 GR.pdf]\n\nזה מה שהתקבל?\n\n[כן ✅ · לא ❌]');
+  assert.equal(flowReply({ replies: ['איזה פרויקט?'] }, 'הקליטה בוטלה.'), 'הקליטה בוטלה.\n\nאיזה פרויקט?');
+});
