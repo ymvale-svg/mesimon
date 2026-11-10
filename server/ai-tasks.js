@@ -306,9 +306,13 @@ const DRAFT_SCHEMA = {
       type: 'array',
       items: { type: 'string' },
       description: 'מההתכתבות האחרונה עם הנמען: מה כדאי להוסיף למייל ולא נכלל בו. כל הצעה משפט קצר. ריק כשאין התכתבות או שאין מה להוסיף'
+    },
+    reply_thread: {
+      type: 'integer',
+      description: 'מייל: מספר השרשור מהרשימה "השרשורים האחרונים עם הנמען" שהמייל ממשיך — אותו עניין (אותה חשבונית / הזמנה / פרויקט / בקשה), או שהמשתמש אמר "בהמשך ל", "על המייל", "תענה לו". כך עושים במייל עסקי: ממשיכים את השרשור. 0 — מייל חדש: נושא חדש, אין שרשור מתאים, או שהמשתמש ביקש "מייל חדש"'
     }
   },
-  required: ['title', 'goal', 'success_criteria', 'contact_name', 'contact_email', 'contact_phone', 'cc_names', 'subject', 'body', 'notes', 'suggestions'],
+  required: ['title', 'goal', 'success_criteria', 'contact_name', 'contact_email', 'contact_phone', 'cc_names', 'subject', 'body', 'notes', 'suggestions', 'reply_thread'],
   additionalProperties: false
 };
 
@@ -421,7 +425,7 @@ async function mailContext(userId, email) {
   }
 }
 
-async function draftInitial({ owner, instruction, contact = {}, cc = [], projectName = null, channel = 'email', feedback = '', previous = null, context = '' }) {
+async function draftInitial({ owner, instruction, contact = {}, cc = [], projectName = null, channel = 'email', feedback = '', previous = null, context = '', threads = '' }) {
   const lines = [
     `תאריך היום: ${todayLocal()}`,
     `הארגון: ${D.getSetting('org_name', '')}`,
@@ -435,6 +439,7 @@ async function draftInitial({ owner, instruction, contact = {}, cc = [], project
     projectName ? `פרויקט: ${projectName}` : null,
     channelNote(channel),
     await signatureNote(owner.id, channel),
+    threads ? `\n${threads}\nבתשובה בשרשור — הגוף ממשיך את השיחה (בלי להציג מחדש את העניין), והנושא כמו בשרשור.` : null,
     context ? `\n${context}\n\nאם מההתכתבות עולה שמשהו חסר, שלא נענה, או שכדאי להזכיר — הצע זאת ב-suggestions. הכנס לגוף המייל רק מה שהמשתמש ביקש.` : null
   ].filter(Boolean);
 
@@ -572,8 +577,16 @@ async function deliver(req, msgId) {
         "SELECT external_id FROM ai_messages WHERE request_id = ? AND channel = 'email' AND direction = 'out' AND status = 'sent' AND external_id IS NOT NULL ORDER BY id DESC LIMIT 1",
         req.id
       )?.external_id ?? null;
-      const base = threadSubject(req);
-      const subject = msg.kind === 'initial' || !base
+      // הפנייה הראשונה בהמשך לשרשור קיים עם הנמען (‎reply_thread‎) — תשובה בו, לא מייל חדש
+      let rt = null;
+      try { rt = req.reply_thread ? JSON.parse(req.reply_thread) : null; } catch { rt = null; }
+      if (rt?.threadId) {
+        const before = [...(rt.references ?? []), rt.inReplyTo].filter((x, i, a) => x && a.indexOf(x) === i && !thread.includes(x));
+        thread.unshift(...before);
+      }
+      const replyGmailThread = gmailThread ?? (rt?.threadId || null);
+      const base = threadSubject(req) ?? (rt?.subject ? rt.subject : null);
+      const subject = (msg.kind === 'initial' && !rt?.threadId) || !base
         ? msg.subject
         : (/^(re|תשובה)\s*:/i.test(base) ? base : `Re: ${base}`);
       // מהכתובת של המשתמש עצמו: הנמען רואה אותו, התשובה חוזרת אליו, והמייל נשאר אצלו ב"דואר יוצא".
@@ -593,7 +606,7 @@ async function deliver(req, msgId) {
         text: body.text,
         html: body.html
       });
-      const out = await Gmail.send(box, built.raw, { threadId: gmailThread });
+      const out = await Gmail.send(box, built.raw, { threadId: replyGmailThread });
       D.run('UPDATE ai_messages SET status = ?, subject = ?, message_id = ?, external_id = ?, gmail_id = ?, sent_at = ?, error = ? WHERE id = ?',
         'sent', subject, out.messageId ?? built.messageId, out.threadId ?? null, out.gmailId ?? null, D.nowIso(), '', msg.id);
     } else {
@@ -607,7 +620,7 @@ async function deliver(req, msgId) {
   }
 
   // הודעה שמצפה לתשובה מקדמת את מונה הניסיונות בערוץ שלה
-  const expectsAnswer = msg.kind !== 'thanks';
+  const expectsAnswer = !['thanks', 'cc_added'].includes(msg.kind);
   const counter = msg.channel === 'email' ? 'unanswered_email' : 'unanswered_whatsapp';
   const fresh = requestById(req.id);
   const policy = policyOf(fresh);
@@ -658,19 +671,23 @@ function cleanCc(list, { contactEmail = '', ownerEmail = '' } = {}) {
 
 const ccOf = (req) => { try { return JSON.parse(req.cc || '[]'); } catch { return []; } };
 
-async function launch({ taskId, owner, instruction, draft, contact, cc = [], policy, channel, fromBox = 0 }) {
+async function launch({ taskId, owner, instruction, draft, contact, cc = [], policy, channel, fromBox = 0, replyThread = null }) {
   const now = D.nowIso();
   // תיבה נוספת שנבחרה — רק אם היא של המשתמש ואפשר לשלוח ממנה; אחרת הראשית
-  const box = Number(fromBox) > 0 && Gmail.canSend(Gmail.handle(owner.id, Number(fromBox))) ? Number(fromBox) : 0;
+  // בהמשך לשרשור — מהתיבה שבה השרשור נמצא
+  const rt = channel === 'email' && replyThread?.threadId ? replyThread : null;
+  const want = rt ? Number(rt.box) || 0 : Number(fromBox);
+  const box = want > 0 && Gmail.canSend(Gmail.handle(owner.id, want)) ? want : 0;
   const r = D.run(
     `INSERT INTO ai_requests (task_id, owner_id, instruction, goal, success_criteria, contact_name, contact_email,
-       contact_phone, contact_type, contact_ref_id, state, policy, cc, created_at, updated_at, from_box)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+       contact_phone, contact_type, contact_ref_id, state, policy, cc, created_at, updated_at, from_box, reply_thread)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     taskId, owner.id, instruction, draft.goal ?? '', draft.success_criteria ?? '',
     contact.name ?? '', String(contact.email ?? '').trim().toLowerCase(), contact.phone ?? '',
     ['vendor', 'user'].includes(contact.type) ? contact.type : 'external', contact.refId ?? null,
     'draft', JSON.stringify(cleanPolicy({ ...policy, firstChannel: channel }, owner.id)),
-    JSON.stringify(channel === 'email' ? cleanCc(cc, { contactEmail: contact.email, ownerEmail: owner.email }) : []), now, now, box
+    JSON.stringify(channel === 'email' ? cleanCc(cc, { contactEmail: contact.email, ownerEmail: owner.email }) : []), now, now, box,
+    rt && Number(rt.box || 0) === box ? JSON.stringify({ box, threadId: rt.threadId, subject: rt.subject, inReplyTo: rt.inReplyTo, references: rt.references ?? [] }) : ''
   );
   const req = requestById(Number(r.lastInsertRowid));
 

@@ -434,7 +434,7 @@ async function listThreads(userId, q, { pageToken = null, max = 500 } = {}) {
   return { ids: (page.threads ?? []).map((t) => t.id), next: page.nextPageToken ?? null };
 }
 
-const META_HEADERS = ['From', 'To', 'Cc', 'Subject', 'Date', 'List-Unsubscribe', 'Precedence', 'Auto-Submitted'];
+const META_HEADERS = ['From', 'To', 'Cc', 'Subject', 'Date', 'List-Unsubscribe', 'Precedence', 'Auto-Submitted', 'Message-ID', 'References'];
 
 /**
  * שרשור בכותרות בלבד, בלי תוכן: מי, למי, מתי, נושא ותוויות — לכל הודעה.

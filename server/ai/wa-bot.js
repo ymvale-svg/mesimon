@@ -48,6 +48,7 @@ const Speech = require('../speech');
 const WaActions = require('./wa-actions');
 const MailInsights = require('./mail-insights');
 const VoiceRouter = require('./voice-router');
+const MailThread = require('./mail-thread');
 const Phonebook = require('../phonebook');
 const Solve = require('./solve');
 const ProjectHints = require('../project-hints');
@@ -399,6 +400,8 @@ async function receiveOne(ch, timeout = LISTEN_TIMEOUT) {
         text: m.typeMessage === 'reactionMessage' ? String(m.extendedTextMessageData?.text ?? '').trim()
           : m.typeMessage === 'documentMessage' && fname && raw === fname ? '' : raw,
         kind: m.typeMessage ?? '',
+        // לחיצה על כפתור תשובה — תקפה גם אחרי שהשאלה פגה (‎staleQuestion‎)
+        button: Boolean(buttonReplyText(m)),
         // הודעה שהועברה (Forward) — לסקירה הלילית ולאיסוף הודעות מועברות
         forwarded: Boolean(m.extendedTextMessageData?.isForwarded || m.fileMessageData?.isForwarded || m.isForwarded),
         // הודעה קולית: הכתובת שממנה מורידים אותה לתמלול
@@ -1640,6 +1643,7 @@ function emailText(p) {
   ] : [
     `✉️ *טיוטה ל${p.contact.name || p.contact.email}*${p.contact.email ? ` <${p.contact.email}>` : ''}${colleague ? ' · 👤 עובד/ת בארגון' : ''}`,
     `*נושא:* ${p.draft.subject}`,
+    p.replyThread ? `↩️ *בהמשך לשרשור* "${p.replyThread.subject}" — לא כמייל חדש. _("מייל חדש" — אם לא)_` : null,
     '',
     p.draft.body.slice(0, 2500),
     // החתימה עצמה מ-Gmail — לא מוצגת כאן במלואה, רק שהיא תצורף (או שאין)
@@ -1677,12 +1681,26 @@ async function draftEmail(actor, contact, instruction, { feedback = '', previous
   const via = contact.type === 'user' ? 'email' : channel ?? previous?.channel ?? 'email';
   // בבדיקה ממסך הניהול (‎dry‎) לא קוראים את התיבה של העובד
   const context = previous || dry || via !== 'email' || !contact.email ? '' : await AiTasks.mailContext(actor.id, contact.email);
+  // ↩️ בהמשך לשרשור (10.11.26): השרשורים האחרונים עם הנמען — ה-AI בוחר אם זה אותו עניין. "מייל חדש" — בלי שרשור
+  const wantNew = /מייל\s+חדש|שרשור\s+חדש|לא\s+בשרשור|בלי\s+(?:ה)?שרשור|לא\s+כתשובה/.test(feedback);
+  const wantThread = !wantNew && /בשרשור|בהמשך\s+ל|על\s+(?:ה)?מייל|כתשובה/.test(feedback);
+  const threads = !dry && via === 'email' && contact.email && (!previous || (wantThread && !previous.replyThread))
+    ? await MailThread.recentThreads(actor.id, contact.email) : [];
   const d = await AiTasks.draftInitial({
     owner, instruction, contact: via === 'whatsapp' ? { ...contact, phone: contact.mobile || contact.phone } : contact, channel: via, context,
+    threads: MailThread.threadsText(threads),
     cc: previous?.cc ?? [],
     feedback, previous: previous ? previous.draft : null
   });
-  const { cc, ccAsk } = resolveCc(actor, d.cc_names, { previous: previous?.cc ?? [], contact });
+  const picked = threads.length ? (threads[Number(d.reply_thread) - 1] ?? (wantThread ? threads[0] : null)) : null;
+  const replyThread = picked
+    ? { box: picked.box, threadId: picked.threadId, subject: picked.subject, inReplyTo: picked.inReplyTo, references: picked.references, lastAt: picked.lastAt }
+    : wantNew ? null : previous?.replyThread ?? null;
+  if (replyThread) d.subject = `Re: ${replyThread.subject}`;
+  const resolved = resolveCc(actor, d.cc_names, { previous: previous?.cc ?? [], contact });
+  const { ccAsk } = resolved;
+  // תשובה בשרשור — מי שכבר היה בו נשאר בהעתק (כמו "השב לכולם")
+  const cc = picked ? [...resolved.cc, ...MailThread.threadCc(actor.id, picked, contact.email).filter((p) => !resolved.cc.some((c) => c.email === p.email))] : resolved.cc;
   const suggestions = (Array.isArray(d.suggestions) ? d.suggestions : []).map((x) => String(x).trim()).filter(Boolean).slice(0, 4);
   return {
     kind: 'email',
@@ -1705,6 +1723,7 @@ async function draftEmail(actor, contact, instruction, { feedback = '', previous
     notes: String(d.notes ?? '').trim().slice(0, 300),
     cc: via === 'email' ? cc : [],
     ccAsk: via === 'email' ? ccAsk : [],
+    replyThread: via === 'email' ? replyThread : null,
     ...(via === 'email' ? await signatureFields(actor.id) : { signature: false, noSignature: null })
   };
 }
@@ -1728,6 +1747,39 @@ function resolveCc(actor, names, { previous = [], contact = {} } = {}) {
     else ccAsk.push({ name: raw, options: found.slice(0, 5).map((c) => ({ name: c.name, email: c.email, org: c.organization || '' })) });
   }
   return { cc: AiTasks.cleanCc(cc, { contactEmail: contact.email }), ccAsk };
+}
+
+// ➕ להוסיף אנשים לשרשור של מייל שכבר יצא (10.11.26, ישראל: "אפשר לעשות פלוס שרי הרשקוביץ — ולכתב אותה לשרשור,
+// שיענו בסופו של דבר לשניים"): "+שרי הרשקוביץ", "פלוס שרי", "תוסיף להתכתבות גם את שרי", "תכתב את דני למייל"
+const THREAD_PLUS = /^(?:\+|פלוס\s+)\s*(\S.*)$/;
+const THREAD_ADD_VERB = /^ו?(?:תוסיף|תוסיפי|הוסף|להוסיף|תכתב|תכתבי|לכתב|תצרף|תצרפי|צרף|לצרף|תשים|תשימי)(?:\s|$)/;
+const THREAD_WORD = /(?:^|\s)(?:ל|ב|ה)?(?:התכתבות|שרשור|מייל|העתק|כתב|cc)(?=\s|$|[,.!])/i;
+
+function parseThreadAdd(text) {
+  const t = String(text ?? '').trim().replace(/[.!?]+$/, '');
+  let names = null;
+  const plus = THREAD_PLUS.exec(t);
+  if (plus) names = plus[1];
+  else if (THREAD_ADD_VERB.test(t) && THREAD_WORD.test(t)) {
+    const m = /(?:^|\s)(?:גם\s+)?את\s+(.+)$/.exec(t);
+    if (!m) return { names: [] };
+    names = m[1];
+  } else return null;
+  // מה שאחרי השם ("בהעתק", "למייל ללייסנטק") — לא חלק מהשם
+  const cut = names.search(THREAD_WORD);
+  if (cut > 0) names = names.slice(0, cut);
+  const list = names.split(/\s*,\s*|\s+ו?את\s+|\s+\+\s*/).map((x) => x.replace(/^גם\s+/, '').trim()).filter((x) => x.length > 1);
+  return { names: list.slice(0, 5) };
+}
+
+/** השורה לאישור: את מי, לאיזה שרשור, ולמי התשובה */
+function threadAddText(d) {
+  const who = d.people.map((c) => `${c.name || c.email}${c.name ? ` <${c.email}>` : ''}`).join(', ');
+  const to = d.to ? `${d.to.name || d.to.email}` : '';
+  return [
+    `➕ *להוסיף את ${who}* לשרשור *"${d.thread.subject}"*?`,
+    `אשלח בשרשור תשובה לכולם${to ? ` (ל${/^[א-ת]/.test(to) ? '' : '-'}${to})` : ''} עם "+${d.people.map((c) => c.name || c.email).join(', +')}" ובהעתק — כך שהתשובה תגיע לכולם.`
+  ].join('\n');
 }
 
 /** הבקשה להוסיף הצעה לפי מספר: "תוסיף את 1", "1 ו-3", "2" */
@@ -1851,6 +1903,8 @@ async function confirmPending(actor, pending, dry) {
       const r = dry ? { taskId: null, sendError: null } : await hooks.mail.createAiTask(actor, {
         instruction: pending.instruction, draft: pending.draft, contact, channel: wa ? 'whatsapp' : 'email',
         cc: internal || wa ? [] : pending.cc ?? [],
+        // ↩️ בהמשך לשרשור עם הנמען — תשובה בו, לא מייל חדש
+        ...(!internal && !wa && pending.replyThread ? { replyThread: pending.replyThread } : {}),
         // מ"סגור א": המשימה נפתחת מההצעה (ונעלמת מ"ממתין לאישורך")
         ...(pending.suggestionId ? { suggestionId: pending.suggestionId } : {})
       });
@@ -2093,6 +2147,7 @@ function pendingSummary(d) {
   if (d.kind === 'complete') return `הבוט שאל אם לסמן כבוצעה את המשימה: ${d.title ?? ''}`;
   if (d.kind === 'comment') return `הבוט שאל אם להוסיף הערה למשימה "${d.title ?? ''}": ${d.text ?? ''}`;
   if (d.kind === 'menu') return 'הבוט הציג תפריט ממוספר';
+  if (d.kind === 'notice') return Notice.pendingSummary(d);
   return '';
 }
 
@@ -2134,7 +2189,7 @@ async function aboutPending(state, text) {
   }
 }
 
-const pendingLabel = (d) => (d.kind === 'email' ? `הטיוטה ל${d.contact?.name || d.contact?.email || 'נמען'} לא נשלחה`
+const pendingLabel = (d) => (d.kind === 'notice' ? Notice.pendingLabel(d) : d.kind === 'email' ? `הטיוטה ל${d.contact?.name || d.contact?.email || 'נמען'} לא נשלחה`
   : d.kind === 'mail_reply' ? `טיוטת התשובה ל${d.reply?.toName || d.reply?.to || 'מייל'} לא נשלחה`
     : d.kind === 'mail_task' ? `המשימה מהמייל${d.title ? ` "${d.title}"` : ''} לא נפתחה — היא מחכה ב"ממתין לאישורך"`
     : d.kind === 'email_pick' ? 'המייל הקודם לא נשלח'
@@ -2261,8 +2316,11 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
   }
   // 🎨 מודעה / ✉️ מכתב רשמי — "תעצב לי מודעה…", ובתוך הזרימה: סגנון, תיקונים, "מאשר"
   if (state.awaiting && state.draft?.kind === 'notice') {
-    if (!dry) reactNow(actor.id, '📝');
-    const r = await Notice.answer(actor.id, state.draft, t).catch((err) => ({ text: 'לא הצלחתי להכין את זה כרגע. נסו שוב בעוד רגע 🙏', draft: state.draft, awaiting: true, result: `שגיאה: ${err.message}`, error: true }));
+    // "תענה במייל ל…" כשמודעה מחכה ל"מאשר" — בקשה חדשה, לא תיקון למודעה: המודעה יורדת, וההודעה ממשיכה הלאה
+    const own = Notice.isOwn(state.draft, t) || (!Notice.parseRequest(t) && await aboutPending(state, t));
+    if (!own) notice = `ℹ️ ${pendingLabel(state.draft)} — עברתי לבקשה החדשה.`;
+    else if (!dry) reactNow(actor.id, '📝');
+    const r = !own ? null : await Notice.answer(actor.id, state.draft, t).catch((err) => ({ text: 'לא הצלחתי להכין את זה כרגע. נסו שוב בעוד רגע 🙏', draft: state.draft, awaiting: true, result: `שגיאה: ${err.message}`, error: true }));
     if (r) return out(r.text, { draft: r.draft ?? null, awaiting: Boolean(r.awaiting) }, { action: 'notices', status: r.error ? 'error' : 'ok', result: String(r.result ?? '').slice(0, 300), buttons: r.buttons, files: r.files });
     keep.draft = null;
     state = { ...state, draft: null, awaiting: false };
@@ -2290,6 +2348,55 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
     }
     keep.draft = null;
     state = { ...state, draft: null, awaiting: false };
+  }
+  // ➕ "+שרי הרשקוביץ" — אישור, או בחירה כשהשם לא חד-משמעי
+  if (state.awaiting && state.draft?.kind === 'thread_add') {
+    const d = state.draft;
+    const n = WaUi.normalize(t);
+    if (d.ask) {
+      const pick = d.ask.options.find((o) => WaUi.sameLabel(t, o.name) || n === WaUi.normalize(o.email) || n === WaUi.normalize(o.name));
+      if (pick) {
+        const next = { ...d, people: [...d.people, { name: pick.name, email: pick.email }], ask: null };
+        return out(threadAddText(next), { draft: next, awaiting: true }, { action: 'send_email', status: 'ok', result: 'להוסיף לשרשור?', buttons: [WaUi.BTN.yes, WaUi.BTN.no] });
+      }
+    } else if (WaUi.sameLabel(t, WaUi.BTN.yes) || WaUi.YES.test(n)) {
+      try {
+        const r = await MailThread.addPeople(actor.id, d.thread, d.people);
+        return out(`📧 נשלח בשרשור "${d.thread.subject}" — ${d.people.map((c) => c.name || c.email).join(', ')} בהעתק.${r.requestId ? ' גם התזכורות של המעקב יגיעו אליהם.' : ''}`,
+          { draft: null }, { action: 'send_email', status: 'ok', result: `נוספו לשרשור: ${d.people.map((c) => c.email).join(', ')}`, react: '✅' });
+      } catch (err) {
+        console.error('[משימון] הוספה לשרשור נכשלה:', err.message);
+        return out('⚠️ לא הצלחתי לשלוח בשרשור. אפשר להוסיף אותם ידנית ב-Gmail ("השב לכולם").', { draft: null }, { action: 'send_email', status: 'error', result: err.message.slice(0, 300) });
+      }
+    }
+    if (WaUi.NO.test(n) || WaUi.CANCEL.test(n)) return out('בסדר, לא נשלח 👍', { draft: null }, { action: 'send_email', status: 'ok', result: 'בוטל' });
+    keep.draft = null;
+    state = { ...state, draft: null, awaiting: false };
+  }
+  {
+    const add = state.draft?.kind === 'email' || actor.type !== 'user' || !WaActions.allowed(actor, 'send_email') ? null : parseThreadAdd(t);
+    if (add) {
+      if (dry) return out('(בדיקה) הייתי מוסיף לשרשור של המייל האחרון.', {}, { action: 'send_email', status: 'ok', result: 'בדיקה' });
+      if (!add.names.length) return out('את מי להוסיף לשרשור? כתבו למשל: *+שרי הרשקוביץ*', {}, { action: 'send_email', status: 'unclear', result: 'בלי שם' });
+      reactNow(actor.id, '👀');
+      const thread = await MailThread.latestSent(actor.id).catch(() => null);
+      if (!thread) return out('לא מצאתי מייל ששלחת ב-3 הימים האחרונים. כתבו למי לשלוח, ואשים אותם בהעתק.', {}, { action: 'send_email', status: 'unclear', result: 'אין מייל אחרון' });
+      const mine = MailThread.mineOf(actor.id);
+      const to = mine.has(thread.lastFrom.email) ? thread.lastTo.find((a) => !mine.has(a.email)) : thread.lastFrom;
+      const { cc, ccAsk } = resolveCc(actor, add.names, { contact: { email: to?.email ?? '' } });
+      const slim = { box: thread.box, threadId: thread.threadId, subject: thread.subject };
+      const d = { kind: 'thread_add', thread: slim, to: to ?? null, people: cc, ask: null, askedAt: D.nowIso() };
+      const a = ccAsk[0];
+      if (a) {
+        if (!a.options.length) return out(`לא מצאתי את "${a.name}" באנשי הקשר. כתבו את כתובת המייל: *+${a.name.split(/\s+/)[0]}@…*`, {}, { action: 'send_email', status: 'unclear', result: 'לא נמצא באנשי הקשר' });
+        const opts = a.options.slice(0, 3);
+        return out(`למי התכוונת ב"${a.name}"?\n${opts.map((o) => `• ${o.name} <${o.email}>${o.org ? ` · ${o.org}` : ''}`).join('\n')}`,
+          { draft: { ...d, ask: { name: a.name, options: opts } }, awaiting: true },
+          { action: 'send_email', status: 'unclear', result: 'שם לא חד-משמעי', buttons: WaUi.labels(opts.map((o) => o.name)) });
+      }
+      if (!cc.length) return out('האנשים האלה כבר בשרשור 👍', {}, { action: 'send_email', status: 'ok', result: 'כבר בשרשור' });
+      return out(threadAddText(d), { draft: d, awaiting: true }, { action: 'send_email', status: 'ok', result: `להוסיף לשרשור "${thread.subject}"?`, buttons: [WaUi.BTN.yes, WaUi.BTN.no] });
+    }
   }
   // 🔕 / 🔔 תזכורות מהמייל — "תפסיק להזכיר לי מהמייל", "תחזיר את התזכורות מהמייל", "… רק בבוקר", "… היום".
   // לפני "תזכיר לי …" — "תזכיר לי מהמייל" היא הפעלה, לא תזכורת חדשה
@@ -2810,7 +2917,10 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
     const m = menuReply();
     if (m) return m;
   }
-  if (u.intent === 'menu' || (u.intent === 'other' && firstToday)) {
+  // הודעה ראשונה ביום שהיא שיחה של ממש (שאלה, הקלטה, בקשה שאין לה פעולה) — עונים עליה בלבד; ה-Today לא
+  // מתערבב בתשובה (10.11.26, ישראל: "למה התערבב המייל ללייסנטק עם כל היומיום שלי"). רק ברכה קצרה פותחת את ה-Today
+  const smallTalk = !u.reply || t.split(/\s+/).length <= 3;
+  if (u.intent === 'menu' || (u.intent === 'other' && firstToday && smallTalk)) {
     if (WaActions.allowed(actor, 'today') || menuOptions(actor).length) {
       const hello = firstToday ? `${localDate().time < '12:00' ? 'בוקר טוב' : 'שלום'} ${firstName(user.full_name)} 👋` : '';
       return todayReply({ prefix: u.intent === 'other' && u.reply ? u.reply : hello, firstOfDay: firstToday });
@@ -3514,7 +3624,13 @@ async function handleDirect(msg) {
     text = withForwards(forwards, text);
   }
 
-  const state = chatOf(user.id);
+  let state = chatOf(user.id);
+  // ⏳ שאלת אישור שעברו עליה 15 דקות — יורדת, וההודעה מתחילה מההתחלה (אלא אם זו לחיצה על כפתור). בלי להודיע לעובד — רק ביומן
+  if (!/^(bot-|mail-goods-)/.test(String(msg.id ?? '')) && staleQuestion(user.id, state, text, msg)) {
+    log({ channel: 'summary', userId: user.id, action: 'other', status: 'ok', result: `שאלת אישור פגה אחרי ${questionTtlMin()} דקות: ${state.draft?.kind ?? ''}` });
+    releaseQuestion(state.draft);
+    state = { ...state, draft: null, awaiting: false, queue: [] };
+  }
   let r;
   // תשובה שמתעכבת (תמלול, Today ראשון של היום, ניסוח מייל) — קודם "רגע", כדי שלא ייראה שהבוט לא שמע
   // הודעה קולית — מ-✍️ (תמלול) ל-🤔 (הבנה) מיד; כתובה — 🤔 רק אם התשובה מתעכבת
@@ -3545,7 +3661,8 @@ async function handleDirect(msg) {
   const body = grNotice ? `${grNotice}\n\n${r.reply}` : r.reply;
   const reply = `${voice ? `🎙 *שמעתי:* "${said}"\n\n${body}` : body}${grNote ? `\n\n${grNote}` : ''}`;
   const history = [...state.history, { role: 'user', text: text.slice(0, 500) }, { role: 'bot', text: r.reply.slice(0, 500) }];
-  saveChat(user.id, { ...r.next, history });
+  // חותמת הזמן של השאלה — ממנה נספרות 15 הדקות (‎staleQuestion‎) והשעתיים (‎busyFor‎)
+  saveChat(user.id, { ...r.next, draft: r.next.draft ? { ...r.next.draft, askedAt: D.nowIso() } : r.next.draft, history });
   const fwdNote = forwards.length ? ` (+${forwards.filter((x) => x.kind === 'forward').length} מועברות)` : '';
   log({ ...base, text: `${voice ? `🎙 ${said}` : said}${fwdNote}`, action: r.action, status: r.status, result: r.result, taskId: r.taskId ?? null, reply });
   // הודעה ארוכה מדי — בכמה הודעות; כפתורי תשובה (התפריט) — על האחרונה
@@ -3838,6 +3955,29 @@ async function mailAlerts() {
  */
 const userLastAt = new Map(); // ‎userId‎ → מתי העובד כתב לבוט
 const STALE_QUESTION_MS = 2 * 60 * 60 * 1000;
+
+/*
+ * ⏳ "מאשר / ביטול" שלא נענה 15 דקות (הוחלט 10.11.26): מודעה שחיכתה ל"מאשר" בלעה בקשה אחרת שהגיעה אחר כך.
+ * עכשיו: שאלה שממתינה ועברו עליה 15 דקות בלי אישור ובלי ביטול — יורדת כשהעובד כותב שוב, וההודעה שלו מתחילה
+ * מההתחלה. לחיצה על כפתור (או 👍 / 👎, או "מאשר" / "ביטול" לבד) — תקפה גם אחרי 15 דקות: היא תשובה לשאלה הזו.
+ * תפריט אינו שאלת אישור. קבלת סחורה ודרישת רכש — מצב משלהן (‎goods-receipt.js‎), לא כאן.
+ */
+const questionTtlMin = () => Math.max(1, Number(D.getSetting('wa_question_ttl_min', 15)) || 15);
+
+function staleQuestion(userId, st, text, msg = {}) {
+  if (!st.draft || st.draft.kind === 'menu') return false;
+  const asked = Date.parse(st.draft.askedAt ?? '') || Date.parse(D.get('SELECT updated_at FROM wa_chats WHERE user_id = ?', userId)?.updated_at ?? '') || 0;
+  if (!asked || Date.now() - asked < questionTtlMin() * 60 * 1000) return false;
+  const n = WaUi.normalize(String(text ?? ''));
+  const short = n.split(/\s+/).filter(Boolean).length <= 3;
+  return !(msg.button || msg.kind === 'reactionMessage' || (short && (WaUi.YES.test(n) || WaUi.NO.test(n) || WaUi.CANCEL.test(n) || CANCEL.test(n))));
+}
+
+/** שאלה שירדה בלי תשובה — הפריט שמאחוריה חוזר לתור שלו */
+function releaseQuestion(draft) {
+  if (draft?.kind === 'goods_offer') D.run("UPDATE mail_goods_docs SET status = 'pending' WHERE id = ? AND status = 'asked'", draft.goodsId);
+  if (draft?.kind === 'form_fill' && draft.step === 'offer') D.run("UPDATE mail_forms SET status = 'pending' WHERE id = ? AND status = 'asked'", draft.formId);
+}
 
 function busyFor(userId) {
   const st = chatOf(userId);
@@ -4463,8 +4603,9 @@ module.exports = {
   // לשליחה ממודולים אחרים — התראה לפני פגישה (‎meetings.js‎), עם רישום ביומן הבוט
   sendText, sendButtons, log, notifyAssignment, assistant, deliver, sendFilesToUser, mailAlertUsers,
   _internal: {
+    parseThreadAdd, threadAddText,
     storeGroupMessage, processGroup, handleDirect, sanitizeGroup, resolveMentions, candidatesOf, converse, turn, withFollowUps, sendSummaries, YES,
     findRecipients, findContactCards, sourceOf, suggestionFeedback, flushOutbox, todayMessage, splitMessage, parseSuggestionCommand, businessCommand, chatOf, saveChat,
-    recordingReply, checkDraft, draftText, createFromDraft, mailAlertFor, closeAlerted, logoIntent, busyFor, userLastAt
+    recordingReply, checkDraft, draftText, createFromDraft, mailAlertFor, closeAlerted, logoIntent, busyFor, userLastAt, staleQuestion
   }
 };

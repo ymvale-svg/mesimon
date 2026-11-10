@@ -30,6 +30,19 @@ async function fonts(doc) {
   };
 }
 
+/** גופן אחד מ-‎server/fonts‎ לפי שם הקובץ בלי הסיומת ("Heebo-Black") — לעיצוב המודעות */
+async function embed(doc, name) {
+  doc.registerFontkit(L().fontkit);
+  return doc.embedFont(fontBytes(`${name}.ttf`), { subset: true });
+}
+
+/** מלבן עם פינות מעוגלות. ‎x, y‎ — הפינה השמאלית התחתונה (כמו ‎drawRectangle‎) */
+function roundRect(page, { x, y, width: w, height: h, radius = 10, color: fill = null, borderColor = null, borderWidth = 0 }) {
+  const r = Math.max(0, Math.min(radius, w / 2, h / 2));
+  const path = `M ${r} 0 H ${w - r} Q ${w} 0 ${w} ${r} V ${h - r} Q ${w} ${h} ${w - r} ${h} H ${r} Q 0 ${h} 0 ${h - r} V ${r} Q 0 0 ${r} 0 Z`;
+  page.drawSvgPath(path, { x, y: y + h, ...(fill ? { color: color(fill) } : {}), ...(borderColor ? { borderColor: color(borderColor), borderWidth } : {}) });
+}
+
 /** '#1f4e79' ← צבע של pdf-lib */
 function color(hex) {
   const h = String(hex ?? '#000').replace('#', '');
@@ -121,4 +134,4 @@ async function image(doc, buf) {
   return null;
 }
 
-module.exports = { L, fonts, color, clean, wrap, width, text, paragraph, image, visual, fieldText, drawVisual };
+module.exports = { L, fonts, embed, roundRect, color, clean, wrap, width, text, paragraph, image, visual, fieldText, drawVisual };

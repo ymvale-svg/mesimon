@@ -1157,10 +1157,14 @@ async function sendCalendarReminders() {
       if (!(at > now && at <= now + lead * MIN)) continue;
       // פגישה שמשימון קבע (גם בלי הסימון ביומן) — יש לה התראה משלה
       if (D.get("SELECT 1 FROM meetings WHERE google_event_id = ? AND status = 'scheduled'", ev.id)) continue;
+      // סטטוס ("במשרד", "יום ארוך", "פנוי", מיקום עבודה) — לא מתריעים לאף אחד; תזכורת אישית — לבעליה, לא למזכירות
+      if (Calendar.isStatus(ev)) continue;
       const people = peopleOf(ev);
       const owner = userById(userId);
       const targets = new Map();
-      if (owner?.phone) targets.set(owner.id, owner);
+      // 📅 מזכירות — רק פגישות אמיתיות: לא "במשרד", "יום ארוך" או תזכורות אישיות של העובדים שהיומנים שלהם אצלן
+      const ownerGets = owner?.phone && (!Secretariat.isSecretary(owner.id) || Calendar.isRealMeeting(ev, owner.email));
+      if (ownerGets) targets.set(owner.id, owner);
       for (const p of people) {
         if (p.response === 'declined') continue;
         const u = userByEmail(p.email);
