@@ -28,8 +28,8 @@ const SECRET_VARS = [
   'ADMIN_EMAIL', 'ADMIN_PASSWORD', 'ADMIN_NAME', 'PUBLIC_URL'
 ];
 for (const k of SECRET_VARS) delete process.env[k];
-// אף חברה של פריוריטי לא פתוחה לכתיבה — גם לא test11
-process.env.PRIORITY_COMPANIES = '';
+// אף חברה של פריוריטי לא פתוחה לכתיבה — גם לא test11. ערך ריק לא מספיק: ‎priority.allowed()‎ נופל אז ל-test11
+process.env.PRIORITY_COMPANIES = '__none__';
 process.env.MAIL_MEMORY_OFF = '1';
 
 const LOCAL = new Set(['localhost', '127.0.0.1', '::1', '[::1]']);

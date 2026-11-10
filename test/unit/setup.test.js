@@ -25,5 +25,7 @@ test('אין מפתחות לשירותים חיצוניים, ואין חברה �
   for (const k of ['ANTHROPIC_API_KEY', 'PRIORITY_USER', 'PRIORITY_PASSWORD', 'SMTP_HOST', 'GOOGLE_CLIENT_ID']) {
     assert.equal(process.env[k], undefined, k);
   }
-  assert.equal(process.env.PRIORITY_COMPANIES, '');
+  const Priority = require('../../server/priority');
+  assert.deepEqual(Priority.allowed(), ['__none__']);
+  assert.ok(!Priority.allowed().includes('test11'));
 });
