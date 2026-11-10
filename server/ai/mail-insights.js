@@ -462,6 +462,8 @@ async function sendReply(userId, reply) {
   const sent = await Gmail.send(who, built.raw, { threadId: reply.threadId });
   // 🧠 לומד מהתשובה (ברקע): עובדות קבועות שתחזורנה בתשובות הבאות
   if (sent?.gmailId) learnedSent.add(sent.gmailId);
+  // 📬 כשהצד השני יענה — הבוט יקפיץ "קיבלת תשובה"
+  try { require('./reply-watch').track(userId, reply, sent); } catch (err) { console.error('[משימון] רישום מעקב תשובה נכשל:', err.message); }
   if (reply.gmailId) learnFromReply(userId, { gmailId: reply.gmailId, box: reply.box ?? 0, body: reply.body, source: 'mesimon' });
   return sent;
 }
