@@ -39,9 +39,11 @@ const KEEP_DAYS = 7;           // מייל ישן משבוע — כבר לא מ�
  * "טופל" (ולא מזכירים): ענית / העברת מ-Gmail, העברת לארכיון או מחקת, או החלטת במשימון. **קריאה
  * אינה טיפול** — מייל שנקרא ולא טופל עדיין מקבל תזכורת.
  */
+// 10.11.26 (ישראל: "3 ביום, רק ראשי"): עד 3 הודעות יזומות על מיילים ביום — תזכורות, הודעה מיידית והמרוכזת
+// יחד (‎mail-push.js‎); "מעט" — אחת
 const PACE = {
-  normal: { gapMin: 30, max: 8 },
-  light: { gapMin: 120, max: 3 },
+  normal: { gapMin: 30, max: 3 },
+  light: { gapMin: 120, max: 1 },
   morning: { gapMin: 0, max: 0 },
   off: { gapMin: 0, max: 0 }
 };
@@ -227,7 +229,7 @@ const word = (list) => new RegExp(`(^|\\s)(?:${list})(?=\\s|$|[.,!?])`);
 const OFF = word('תפסיק|הפסק|תפסיקי|די|בלי|עצור|תעצור|השתק|תשתיק|כבה|תכבה|לא\\s+צריך|אל\\s+תזכיר|אל\\s+תזכירי');
 const ON = new RegExp(`${word('תחזיר|החזר|תחזירי|תפעיל|הפעל|תפתח|פתח|תמשיך|המשך|כן\\s+להזכיר').source}|^תזכיר(\\s+לי)?\\s+מה?מייל[.!]?$`);
 const PACE_WORDS = [[/רק\s+(?:ב)?בוקר|בסיכום\s+הבוקר/, 'morning'], [/פחות|מעט|לא\s+הרבה/, 'light'], [/כרגיל|רגיל|כמו\s+קודם|יותר/, 'normal']];
-const PACE_LABEL = { normal: 'רגיל — עד אחת לחצי שעה, 8 ביום', light: 'מעט — עד אחת לשעתיים, 3 ביום', morning: 'רק ברשימה של סיכום הבוקר', off: 'כבויות' };
+const PACE_LABEL = { normal: 'רגיל — רק החשובים, עד 3 ביום', light: 'מעט — רק החשוב ביותר, אחת ביום', morning: 'רק ברשימה של סיכום הבוקר', off: 'כבויות' };
 
 /** פקודת השתקה / הפעלה / קצב. ‎null‎ — לא פקודה כזו */
 function paceCommand(userId, text) {
@@ -258,7 +260,8 @@ function paceCommand(userId, text) {
 }
 
 /** התזכורות שהגיע זמנן — מיילים שלא טופלו (גם כאלה שנקראו), החשוב קודם */
-async function dueReminders(userId, { limit = 20 } = {}) {
+async function dueReminders(userId, { limit = 20, pushOnly = true } = {}) {
+  const MailPush = require('./mail-push');
   let since = D.getSetting('mail_remind_since', '');
   if (!since) { since = D.nowIso(); D.setSetting('mail_remind_since', since); }
   const rows = D.all(
@@ -276,6 +279,8 @@ async function dueReminders(userId, { limit = 20 } = {}) {
   const out = [];
   for (const row of rows) {
     if (seen.has(row.gmail_id) || remindAt(row) > Date.now()) continue;
+    // רק ראשי, לא אוטומטי, לא משולח מושתק, ומעל סף החשיבות — השאר ב"היום" (‎mail-push.js‎)
+    if (pushOnly && !MailPush.pushable(row)) continue;
     seen.add(row.gmail_id);
     out.push({ row, score: scoreOf(row) });
   }

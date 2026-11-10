@@ -62,10 +62,12 @@ async function morning(userId) {
     lines.push('', `📋 *משימות להיום* (${tasks.length}${overdue.length ? `, ${overdue.length} באיחור` : ''}):`, ...tasks.slice(0, 6).map((t) => `• ${oneLine(t.title, 70)}${t.due_date < startOfToday() ? ' ⚠️' : ''}`));
     if (tasks.length > 6) lines.push(`ועוד ${tasks.length - 6} — באפליקציה.`);
   }
+  // 📬 רק החשובים ברשימה; כמה מחכים בסך הכול — שורה אחת (‎mail-push.js‎, 10.11.26)
   if (mails.length) {
-    lines.push('', `📬 *מיילים שעוד מחכים לך* (${mails.length}${mails.length === 8 ? '+' : ''}):`, ...mails.slice(0, 5).map((m) => `• ${oneLine(parseJson(m.data, {}).title ?? m.subject, 60)} — ${m.from_name || m.from_email}`));
-    if (pace === 'normal' || pace === 'light') lines.push('_אזכיר עליהם במהלך היום, אחד-אחד — החשובים קודם._');
+    lines.push('', `📬 *מיילים חשובים שמחכים לך* (${mails.length}${mails.length === 8 ? '+' : ''}):`, ...mails.slice(0, 5).map((m) => `• ${oneLine(parseJson(m.data, {}).title ?? m.subject, 60)} — ${m.from_name || m.from_email}`));
   }
+  const mailLine = (() => { try { return require('./mail-push').morningLine(userId); } catch { return null; } })();
+  if (mailLine && pace !== 'off') lines.push('', mailLine);
   if (sentWaiting.length || assigned.length) {
     lines.push('', '⏳ *מחכה לך מאחרים:*',
       ...sentWaiting.map((s) => `• 📤 ${s.to_name || s.to_email}: ${oneLine(s.asked, 60)}`),

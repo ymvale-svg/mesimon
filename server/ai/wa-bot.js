@@ -49,6 +49,7 @@ const WaActions = require('./wa-actions');
 const MailInsights = require('./mail-insights');
 const VoiceRouter = require('./voice-router');
 const MailThread = require('./mail-thread');
+const MailPush = require('./mail-push');
 const Phonebook = require('../phonebook');
 const Solve = require('./solve');
 const ProjectHints = require('../project-hints');
@@ -1481,6 +1482,12 @@ function dayItems(t, insights = []) {
   }
   for (const x of t.suggestions?.items ?? []) {
     const d = x.data ?? {};
+    // 📧 מהמייל — "מייל שמחכה לך", אותו פריט כמו תובנה "דורש ממך" (‎mail-push.js‎, 10.11.26)
+    if (x.kind === 'task' && x.origin?.source === 'mail') {
+      const m = MailPush.mailItem({ sug: x });
+      items.push({ ...m, sub: `📧 ${m.fromName || m.fromEmail}`, hint: closureHint(d.closure)?.trim() ?? null, score: x.older ? 0.5 : 2 });
+      continue;
+    }
     const closure = usableClosure(d.closure) ? d.closure : null;
     items.push({
       t: 'sug', id: x.id, kind: x.kind, title: d.title ?? x.subject, sub: `${x.origin?.icon ?? ''} ${x.origin?.label ?? ''}`.trim(),
@@ -1489,9 +1496,15 @@ function dayItems(t, insights = []) {
     });
   }
   for (const x of insights) {
-    items.push({ t: 'ins', ref: x.ref, title: x.insight, sub: `${Insights.ICON[x.source] ?? '📧'} ${x.label}`, source: x.source, score: x.importance >= 3 ? 2.8 : 2.1 });
+    if (x.source === 'mail') {
+      const m = MailPush.mailItem({ ins: x });
+      items.push({ ...m, sub: `📧 ${x.label}`, score: x.importance >= 3 ? 2.8 : 2.1 });
+    } else {
+      items.push({ t: 'ins', ref: x.ref, title: x.insight, sub: `${Insights.ICON[x.source] ?? '💬'} ${x.label}`, source: x.source, score: x.importance >= 3 ? 2.8 : 2.1 });
+    }
   }
-  return items.sort((a, b) => b.score - a.score).slice(0, WALK_MAX);
+  // שרשור אחד — פריט אחד (ההצעה גוברת על התובנה)
+  return MailPush.onePerThread(items.sort((a, b) => b.score - a.score));
 }
 
 function todayMessage(t, now = new Date(), { insights = [] } = {}) {
@@ -1499,8 +1512,9 @@ function todayMessage(t, now = new Date(), { insights = [] } = {}) {
   const lines = [`☀️ *היום — ${t.dateLabel}*`];
   if (events.length) lines.push('', ...events.slice(0, 6).map((e) => `📅 ${e.allDay ? 'כל היום' : timeOf(e.start)} ${cut(e.title, 70)}`));
   if (t.counts.meetings) lines.push(`🗓 ${t.counts.meetings === 1 ? 'פגישה אחת מחכה' : `${t.counts.meetings} פגישות מחכות`} להחלטה.`);
-  const items = dayItems(t, insights);
-  const total = t.tasks.overdue.length + t.tasks.today.length + (t.suggestions?.items ?? []).length + insights.length;
+  const all = dayItems(t, insights);
+  const items = all.slice(0, WALK_MAX);
+  const total = all.length;
   const shown = items.slice(0, DAY_SHOWN);
   if (shown.length) {
     lines.push('', `🔥 *דורש ממך היום* (${total}):`, ...shown.map((x, i) => `${i + 1}. ${cut(x.title, 80)}${x.sub ? ` — ${x.sub}` : ''}`));
@@ -1516,12 +1530,14 @@ function todayMessage(t, now = new Date(), { insights = [] } = {}) {
 
 /** פריט אחד במעבר: מה הוא, ולמטה — הכפתורים (‎walkButtons‎) */
 function walkText(x, i, n) {
-  const head = `*${i + 1}/${n}* · ${x.t === 'task' ? '📋' : x.t === 'ins' ? '📬' : '💡'} *${cut(x.title, 160)}*`;
+  const head = `*${i + 1}/${n}* · ${x.t === 'task' ? '📋' : x.t === 'mail' ? '📧' : x.t === 'ins' ? '📬' : '💡'} *${cut(x.title, 160)}*`;
   return [head, x.sub || null, x.hint || null].filter(Boolean).join('\n');
 }
 
 function walkButtons(x) {
   if (x.t === 'task') return [WALK.done, WALK.tomorrow, WALK.next];
+  // 📧 מייל שמחכה לך — אותם כפתורים, מהצעה או מתובנה
+  if (x.t === 'mail') return [WALK.reply, x.closure ? WALK.handle : WALK.task, WALK.ignore];
   if (x.t === 'ins') return x.source === 'mail' ? [WALK.reply, WALK.task, WALK.next] : [WALK.task, WALK.next];
   if (x.kind !== 'task') return [WALK.approve, WALK.ignore, WALK.next];
   return x.closure ? [WALK.handle, WALK.task, WALK.ignore] : [WALK.task, WALK.ignore, WALK.next];
@@ -2275,7 +2291,8 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
 
   const startReply = async (item, request) => {
     // התשובה יוצאת מהתיבה שקיבלה את המייל
-    const box = Gmail.handle(actor.id, MailInsights.itemOf(actor.id, item.gmailId)?.box ?? 0);
+    const boxNo = item.box ?? MailInsights.itemOf(actor.id, item.gmailId)?.box ?? 0;
+    const box = Gmail.handle(actor.id, boxNo);
     if (!Gmail.canSend(box)) {
       return out('כדי לענות מהבוט צריך לחבר את תיבת ה-Gmail שלך עם הרשאת שליחה ("החשבון שלי ← Gmail ועוזר ה-AI").', { draft: null }, { action: 'mail_insights', status: 'error', result: 'אין הרשאת שליחה' });
     }
@@ -2285,7 +2302,7 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
      */
     const reply = request
       ? { ...await MailInsights.draftReply(actor.id, item.gmailId, request), ...await signatureFields(box) }
-      : { ...await MailInsights.suggestReply(actor.id, item.gmailId), ...await signatureFields(box) };
+      : { ...await MailInsights.suggestReply(actor.id, item.gmailId, { box: boxNo }), ...await signatureFields(box) };
     return out(replyText(reply), { draft: { kind: 'mail_reply', reply }, awaiting: true }, { action: 'mail_insights', status: 'ok', result: `טיוטת תשובה ל${reply.toName || reply.to}` });
   };
 
@@ -2336,6 +2353,28 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
           : await suggestionDecision(actor, { approve: walkAct !== 'ignore', letters: ['א'] }, st, { dry, out });
         if (r.next?.awaiting) return withNote({ ...r, reply: strip(r.reply) });
         return show(w.i + 1, walkAct === 'ignore' ? `🙈 ירד מהרשימה: ${cut(x.title, 80)}` : strip(r.reply));
+      }
+      // 📧 מייל שמחכה לך — מהצעה (‎id‎) או מתובנה (‎ref‎); "להתעלם" — מכל המקומות, ופעם שנייה מאותו שולח — "להשתיק?"
+      if (x.t === 'mail') {
+        if (dry) return show(w.i + 1, '(בדיקה — לא בוצע באמת)');
+        if (walkAct === 'ignore') {
+          const q = MailPush.ignoreMail(actor, x);
+          const head = `🙈 ירד מכל הרשימות: ${cut(x.title, 80)}`;
+          if (q) return out(`${head}\n\n${q.text}\n\n${note}`, { draft: { ...q.draft, fromWalk: true }, awaiting: true }, { action: 'today', status: 'ok', result: `התעלם: ${cut(x.title, 60)} — להשתיק?`, buttons: [WaUi.BTN.yes, WaUi.BTN.no, WALK.next] });
+          return show(w.i + 1, head);
+        }
+        if (walkAct === 'reply') {
+          const box = x.id ? D.get('SELECT box FROM ai_suggestions WHERE id = ?', x.id)?.box ?? 0 : undefined;
+          return withNote(await startReply({ gmailId: x.gmailId, ...(box !== undefined ? { box } : {}) }, ''));
+        }
+        if (x.id) {
+          const st = { ...state, suggestions: [x.id] };
+          const r = walkAct === 'handle'
+            ? await closureDecision(actor, { letter: 'א' }, st, { dry, out })
+            : await suggestionDecision(actor, { approve: true, letters: ['א'] }, st, { dry, out });
+          if (r.next?.awaiting) return withNote({ ...r, reply: strip(r.reply) });
+          return show(w.i + 1, strip(r.reply));
+        }
       }
       // מייל שמחכה לך (תובנה "דורש ממך")
       const item = Insights.itemOf(actor.id, x.ref);
@@ -2498,6 +2537,17 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
     keep.draft = null;
     state = { ...state, draft: null, awaiting: false };
   }
+  // 🔕 "לא להקפיץ יותר מיילים של X?" (‎mail-push.js‎)
+  if (state.awaiting && state.draft?.kind === 'mail_mute_sender') {
+    const r = dry ? null : MailPush.answerMute(actor.id, state.draft, t);
+    if (r) return out(r.text, { draft: null }, { action: 'mail_deadline', status: 'ok', result: r.result, buttons: state.walk && state.walk.i >= 0 ? [WALK.next] : [] });
+    keep.draft = null;
+    state = { ...state, draft: null, awaiting: false };
+  }
+  {
+    const r = dry ? null : MailPush.unmuteCommand(actor.id, t);
+    if (r) return out(r.text, {}, { action: 'mail_deadline', status: 'ok', result: r.result });
+  }
   // ➕ "+שרי הרשקוביץ" — אישור, או בחירה כשהשם לא חד-משמעי
   if (state.awaiting && state.draft?.kind === 'thread_add') {
     const d = state.draft;
@@ -2593,7 +2643,13 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
         const c = await confirmPending(actor, { kind: 'mail_task', alert: true, suggestionIds: [d.suggestionId], title: d.title }, dry);
         return out(c.reply, { draft: null }, { action: 'mail_deadline', status: c.status, result: String(c.result ?? r.result).slice(0, 300), taskId: c.taskId ?? null });
       }
-      if (r) return out(r.text, { draft: null }, { action: 'mail_deadline', status: 'ok', result: r.result.slice(0, 300) });
+      if (r) {
+        // "התעלם" — גם מהתובנות ומ"היום"; פעם שנייה מאותו שולח — "לא להקפיץ יותר?"
+        const sug = !dry && /^התעלם/.test(r.result) ? D.get('SELECT id, gmail_id, from_email, from_name FROM ai_suggestions WHERE id = ?', d.suggestionId) : null;
+        const q = sug ? MailPush.ignoreMail(actor, { id: sug.id, gmailId: sug.gmail_id, fromEmail: sug.from_email, fromName: sug.from_name }) : null;
+        if (q) return out(`${r.text}\n\n${q.text}`, { draft: q.draft, awaiting: true }, { action: 'mail_deadline', status: 'ok', result: `${r.result.slice(0, 200)} — להשתיק?`, buttons: [WaUi.BTN.yes, WaUi.BTN.no] });
+        return out(r.text, { draft: null }, { action: 'mail_deadline', status: 'ok', result: r.result.slice(0, 300) });
+      }
     } else {
       const r = dry ? null : MailActions.answerGoods(d, t);
       if (r) {
@@ -3998,9 +4054,17 @@ async function mailAlertFor(userId) {
   if (!u?.phone || busyFor(userId) || GoodsReceipt.active(userId) || PurchaseDemand.active(userId)) return;
   let since = D.getSetting('wa_mail_alert_since', '');
   if (!since) { since = D.nowIso(); D.setSetting('wa_mail_alert_since', since); }
+  // 🌊 בתקרה היומית (3 הודעות על מיילים), בשעות, לא בפגישה — לפני שמסמנים את המייל כ"נשאל"
+  if (!(await MailActions.mayRemindNow(userId))) return;
   const rows = nextAlert(userId, since);
   if (!rows?.length) return;
   const head = rows[0];
+  // רק ראשי, לא אוטומטי, לא משולח מושתק; הצעת תשובה / משימה — רק מייל חשוב מאוד. השאר — ב"היום" (‎mail-push.js‎)
+  const direct = head.d.toMe !== false && !head.d.auto && !MailPush.mutedSenders(userId).has(String(head.from_email ?? '').toLowerCase());
+  if (!direct || (!head.d.meeting && !MailPush.pushable(head, { now: true }))) {
+    log({ channel: 'summary', chatId: `${u.phone}@c.us`, userId, who: u.full_name, action: 'mail_alert', status: 'ok', result: `📧 ${head.from_name}: ${oneLine(head.subject, 100)} — לא הוקפץ (${direct ? 'מתחת לסף' : 'העתק / אוטומטי / מושתק'}); ב"היום"` });
+    return;
+  }
   const withReply = rows.find((r) => r.d.reply?.body && !r.d.reply.sent && !r.d.reply.dismissed);
   const ids = rows.map((r) => r.id);
   const chatId = `${u.phone}@c.us`;
@@ -4022,6 +4086,7 @@ async function mailAlertFor(userId) {
       const now = chatOf(userId);
       if (!now.awaiting && !(now.draft && now.draft.kind !== 'menu')) saveChat(userId, { ...now, draft: { ...offer.draft, askedAt: D.nowIso() }, awaiting: true });
       MailActions.noteProactive(userId);
+      MailActions.paceTick(userId);
       log({ channel: 'summary', chatId, userId, who: u.full_name, action: 'meet_coord', status: 'ok', result: `📧 ${head.from_name}: בקשה לפגישה — ${oneLine(head.subject, 100)}` });
     } catch (err) {
       log({ channel: 'summary', chatId, userId, who: u.full_name, action: 'meet_coord', status: 'error', result: err.message });
@@ -4054,6 +4119,7 @@ async function mailAlertFor(userId) {
     const now = chatOf(userId);
     if (!now.awaiting && !(now.draft && now.draft.kind !== 'menu')) saveChat(userId, { ...now, draft: { ...draft, askedAt: D.nowIso() }, awaiting: true });
     MailActions.noteProactive(userId);
+    MailActions.paceTick(userId);
     log({ channel: 'summary', chatId, userId, who: u.full_name, action: 'mail_alert', status: 'ok', result: `📧 ${head.from_name}: ${oneLine(head.subject, 120)} — ${reply ? 'הצעת תשובה' : 'משימה'}` });
   } catch (err) {
     log({ channel: 'summary', chatId, userId, who: u.full_name, action: 'mail_alert', status: 'error', result: err.message });
@@ -4246,6 +4312,25 @@ async function mailActionAlerts() {
     // באמצע שיחה מול הבוט — לא קוטעים; השאלה מחכה לסבב הבא
     const st = chatOf(u.id);
     if (busyFor(u.id) || GoodsReceipt.active(u.id) || PurchaseDemand.active(u.id)) continue;
+    // 📬 פעם ביום בצהריים — "N מיילים מחכים לך" [לעבור עליהם 👉], במקום תזכורת לכל אחד (‎mail-push.js‎)
+    if (allow.deadline && await MailActions.mayRemindNow(u.id)) {
+      const dg = MailPush.digestFor(u.id);
+      if (dg) {
+        const chatId = `${u.phone}@c.us`;
+        try {
+          await sendButtons(chatId, dg.text, [WALK.start]);
+          rememberBot(u.id, dg.text);
+          const now = chatOf(u.id);
+          saveChat(u.id, { ...now, walk: { items: dg.items, i: -1, at: D.nowIso() } });
+          MailActions.noteProactive(u.id);
+          MailActions.paceTick(u.id);
+          log({ channel: 'summary', chatId, userId: u.id, who: u.full_name, action: 'mail_deadline', status: 'ok', result: `📬 הודעה מרוכזת: ${dg.items.length} מיילים` });
+        } catch (err) {
+          log({ channel: 'summary', chatId, userId: u.id, who: u.full_name, action: 'mail_deadline', status: 'error', result: err.message });
+        }
+        continue;
+      }
+    }
     const q = await MailActions.nextQuestion(u.id, allow).catch(() => null);
     if (!q) continue;
     const chatId = `${u.phone}@c.us`;
