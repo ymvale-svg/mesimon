@@ -31,4 +31,30 @@ function secretariesFor(actor) {
   return new Set(D.all("SELECT id FROM users WHERE status = 'active' AND is_secretary = 1 AND id <> ?", actor.id).map((u) => u.id));
 }
 
-module.exports = { isSecretary, isRequester, mayRequest, secretariesFor };
+/*
+ * 📅 המזכירות אינן משתתפות בפגישות (הוחלט 10.11.26, ישראל: "במשתתפים ביומן לא אמורים להיות המזכירות — הן אף פעם
+ * לא משתתפות בפגישות. וזה שהמזכירות שלחו מייל — לא רלוונטי לפגישה, אלא אם זה נוגע לתוכן שלה"). הן קובעות, מזמינות
+ * ומעבירות קישורים — ולכן מופיעות ביומן. בכל מה שנבנה מרשימת המשתתפים (תדריך, "איך היה?", משימות מהקלטה, "פגישה
+ * אמיתית") — הן לא נספרות. לפי כתובת: המייל, מייל העבודה והתיבות המחוברות שלהן.
+ */
+let cache = { at: 0, emails: new Set() };
+function secretaryEmails() {
+  if (Date.now() - cache.at < 5 * 60 * 1000) return cache.emails;
+  const ids = D.all("SELECT id, email, work_email FROM users WHERE status = 'active' AND is_secretary = 1");
+  const emails = new Set();
+  for (const u of ids) {
+    for (const e of [u.email, u.work_email]) if (e) emails.add(String(e).toLowerCase());
+    for (const r of D.all('SELECT email FROM mail_connections WHERE user_id = ? UNION SELECT email FROM mail_accounts WHERE user_id = ?', u.id, u.id)) {
+      if (r.email) emails.add(String(r.email).toLowerCase());
+    }
+  }
+  cache = { at: Date.now(), emails };
+  return emails;
+}
+const isSecretaryEmail = (email) => Boolean(email) && secretaryEmails().has(String(email).toLowerCase().trim());
+/** הכתובת שבתוך "שם <a@b>" או ‎{email}‎ */
+const emailIn = (p) => String((typeof p === 'string' ? (p.match(/[^\s<>"']+@[^\s<>"']+/) ?? [''])[0] : p?.email) ?? '').toLowerCase();
+/** רשימת משתתפים בלי המזכירות (אובייקטים עם ‎email‎, או מחרוזות "שם <מייל>") */
+const withoutSecretaries = (list) => (list ?? []).filter((p) => !isSecretaryEmail(emailIn(p)));
+
+module.exports = { isSecretary, isRequester, mayRequest, secretariesFor, secretaryEmails, isSecretaryEmail, withoutSecretaries };
