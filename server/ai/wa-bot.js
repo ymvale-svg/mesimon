@@ -224,6 +224,29 @@ function buttonReplyText(m) {
  * ✅ על ההודעה בקבוצה שהפכה למשימה — סימן לכולם שהבקשה נקלטה, בלי לכתוב
  * בקבוצה. ניסיון בלבד: תגובה שנכשלה אינה מבטלת את המשימה.
  */
+/*
+ * 😀 אימוג'י על ההודעה של העובד במקום הודעות "רגע…" (הוחלט 10.11.26, ישראל):
+ *   ✍️ מתמלל · 🤔 חושב · 👀 מחפש · 🧐 קורא מסמך · 📝 מנסח · 📅 ביומן · 📤 שולח · ⏳ עבודה ארוכה ברקע
+ *   📥 קיבלתי (מועברות) · ✅ בוצע · 👌 "לא" / "התעלם" · ⚠️ תקלה (ואז גם טקסט קצר)
+ * אימוג'י אחד בכל רגע — מתחלף לפי השלב; כשהתשובה מגיעה הוא יורד, או מתחלף ל-✅ כשבוצעה פעולה.
+ * ניסיון בלבד: תגובה שנכשלה לא עוצרת כלום.
+ */
+const currentMsg = new Map(); // ‎userId‎ → ‎{ chatId, id }‎ — ההודעה האחרונה של העובד, שעליה מגיבים
+const reacted = new Map();    // ‎messageId‎ → האימוג'י שעליה עכשיו (בלי "להסיר" כשאין מה להסיר)
+async function react(ref, emoji) {
+  const ch = channel();
+  if (!ch || !ref?.id || !ref?.chatId || /^(bot-|mail-goods-|sim)/.test(String(ref.id))) return;
+  if ((reacted.get(ref.id) ?? '') === emoji) return;
+  if (emoji) reacted.set(ref.id, emoji); else reacted.delete(ref.id);
+  if (reacted.size > 500) reacted.delete(reacted.keys().next().value);
+  try {
+    await WhatsApp.call(ch, 'sendReaction', { http: 'POST', body: { chatId: ref.chatId, idMessage: ref.id, reaction: emoji } });
+  } catch { /* רק סימון */ }
+}
+const reactNow = (userId, emoji) => { void react(currentMsg.get(userId), emoji); };
+/** האימוג'י בסוף עבודה ברקע: ✅ כשבוצעה פעולה, ⚠️ בתקלה, אחרת יורד */
+const doneEmoji = (text, error = false) => (error ? '⚠️' : /^\s*✅/.test(String(text ?? '')) ? '✅' : '');
+
 async function markDone(messageId, chatId = null, { taskId = null, title = '', by = null, groupName = '' } = {}) {
   const chat = chatId ?? D.get('SELECT chat_id FROM wa_messages WHERE message_id = ?', messageId)?.chat_id;
   const entry = { channel: 'group', chatId: chat ?? '', chatName: groupName, userId: by?.id ?? null, who: by?.name ?? '', action: 'approved', taskId };
@@ -2171,7 +2194,7 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
     if (r) {
       if (r.send) meetCoordRun(actor, () => MeetCoord.send(actor, r.coordId));
       if (r.book) meetCoordRun(actor, () => MeetCoord.book(actor, r.coordId, r.start));
-      return out(r.text, { draft: r.draft ?? null, awaiting: Boolean(r.awaiting) }, { action: 'meet_coord', status: r.error ? 'error' : 'ok', result: String(r.result ?? '').slice(0, 300), buttons: r.buttons });
+      return out(r.text, { draft: r.draft ?? null, awaiting: Boolean(r.awaiting) }, { action: 'meet_coord', status: r.error ? 'error' : 'ok', result: String(r.result ?? '').slice(0, 300), buttons: r.buttons, react: r.react });
     }
     keep.draft = null;
     state = { ...state, draft: null, awaiting: false };
@@ -2186,17 +2209,21 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
     const r = dry ? null : FormFill.answer(actor.id, state.draft, t);
     if (r) {
       if (r.work) {
+        const ref = currentMsg.get(actor.id);
         setImmediate(async () => {
           try {
-            await pushToUser(actor.id, await r.work(), 'form_fill');
+            const m = await r.work();
+            void react(ref, doneEmoji(m.text));
+            await pushToUser(actor.id, m, 'form_fill');
           } catch (err) {
+            void react(ref, '⚠️');
             console.error('[משימון] מילוי טופס נכשל:', err.message);
             log({ channel: 'summary', userId: actor.id, action: 'form_fill', status: 'error', result: err.message.slice(0, 300) });
             await pushToUser(actor.id, { text: 'לא הצלחתי להשלים את הטופס 😕 נסו שוב מאוחר יותר, או מלאו אותו ידנית.' }, 'form_fill');
           }
         });
       }
-      return out(r.text, { draft: r.draft ?? null, awaiting: Boolean(r.awaiting) }, { action: 'form_fill', status: 'ok', result: String(r.result ?? '').slice(0, 300), buttons: r.buttons });
+      return out(r.text, { draft: r.draft ?? null, awaiting: Boolean(r.awaiting) }, { action: 'form_fill', status: 'ok', result: String(r.result ?? '').slice(0, 300), buttons: r.buttons, react: r.react });
     }
     if (state.draft.step === 'offer') D.run("UPDATE mail_forms SET status = 'pending' WHERE id = ? AND status = 'asked'", state.draft.formId);
     keep.draft = null;
@@ -2215,7 +2242,7 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
       if (r.search) rfqPrepare(actor, r.rfqId);
       if (r.send) rfqSend(actor, r.rfqId);
       if (r.demand && WaActions.allowed(actor, 'purchase_demand')) setImmediate(() => enqueueAs(actor.id, { text: r.demand }));
-      return out(r.text, { draft: r.draft ?? null, awaiting: Boolean(r.awaiting) }, { action: 'rfq', status: r.error ? 'error' : 'ok', result: String(r.result ?? '').slice(0, 300), buttons: r.buttons });
+      return out(r.text, { draft: r.draft ?? null, awaiting: Boolean(r.awaiting) }, { action: 'rfq', status: r.error ? 'error' : 'ok', result: String(r.result ?? '').slice(0, 300), buttons: r.buttons, react: r.react });
     }
     keep.draft = null;
     state = { ...state, draft: null, awaiting: false };
@@ -2229,11 +2256,12 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
     const r = await Rfq.start(actor.id, t).catch((err) => ({ text: 'משהו השתבש בפנייה לספקים. נסו שוב בעוד רגע 🙏', result: `שגיאה: ${err.message}`, error: true }));
     if (r) {
       if (r.search) rfqPrepare(actor, r.rfqId);
-      return out(r.text, { draft: r.draft ?? null, awaiting: Boolean(r.awaiting) }, { action: 'rfq', status: r.error ? 'error' : 'ok', result: String(r.result ?? '').slice(0, 300), buttons: r.buttons });
+      return out(r.text, { draft: r.draft ?? null, awaiting: Boolean(r.awaiting) }, { action: 'rfq', status: r.error ? 'error' : 'ok', result: String(r.result ?? '').slice(0, 300), buttons: r.buttons, react: r.react });
     }
   }
   // 🎨 מודעה / ✉️ מכתב רשמי — "תעצב לי מודעה…", ובתוך הזרימה: סגנון, תיקונים, "מאשר"
   if (state.awaiting && state.draft?.kind === 'notice') {
+    if (!dry) reactNow(actor.id, '📝');
     const r = await Notice.answer(actor.id, state.draft, t).catch((err) => ({ text: 'לא הצלחתי להכין את זה כרגע. נסו שוב בעוד רגע 🙏', draft: state.draft, awaiting: true, result: `שגיאה: ${err.message}`, error: true }));
     if (r) return out(r.text, { draft: r.draft ?? null, awaiting: Boolean(r.awaiting) }, { action: 'notices', status: r.error ? 'error' : 'ok', result: String(r.result ?? '').slice(0, 300), buttons: r.buttons, files: r.files });
     keep.draft = null;
@@ -2241,6 +2269,7 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
   }
   if (WaActions.allowed(actor, 'notices') && Notice.parseRequest(t)) {
     if (dry) return out('(בדיקה) הייתי מכין PDF.', {}, { action: 'notices', status: 'ok', result: 'בדיקה' });
+    reactNow(actor.id, '📝');
     const r = await Notice.start(actor.id, t).catch((err) => ({ text: 'לא הצלחתי להכין את זה כרגע. נסו שוב בעוד רגע 🙏', result: `שגיאה: ${err.message}`, error: true }));
     return out(r.text, { draft: r.draft ?? null, awaiting: Boolean(r.awaiting) }, { action: 'notices', status: r.error ? 'error' : 'ok', result: String(r.result ?? '').slice(0, 300), buttons: r.buttons, files: r.files });
   }
@@ -2257,7 +2286,7 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
     const r = dry ? null : SentFollowup.answer(actor.id, d, t);
     if (r) {
       if (r.send) meetCoordRun(actor, () => SentFollowup.send(actor.id, d.followupId));
-      return out(r.text, { draft: null }, { action: 'sent_followup', status: 'ok', result: r.result.slice(0, 300) });
+      return out(r.text, { draft: null }, { action: 'sent_followup', status: 'ok', result: r.result.slice(0, 300), react: r.react });
     }
     keep.draft = null;
     state = { ...state, draft: null, awaiting: false };
@@ -2266,7 +2295,7 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
   // לפני "תזכיר לי …" — "תזכיר לי מהמייל" היא הפעלה, לא תזכורת חדשה
   {
     const r = dry ? null : MailActions.paceCommand(actor.id, t);
-    if (r) return out(r.text, {}, { action: 'mail_deadline', status: 'ok', result: r.result });
+    if (r) return out(r.text, {}, { action: 'mail_deadline', status: 'ok', result: r.result, react: '✅' });
   }
   // 🌐 תרגום: "תתרגם לאנגלית: …" (או בלי טקסט — ההודעה האחרונה של הבוט)
   if (WaActions.allowed(actor, 'translate') && !(state.awaiting && state.draft)) {
@@ -2293,7 +2322,8 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
   }
   if (WaActions.allowed(actor, 'reminders') && !(state.awaiting && state.draft)) {
     const r = dry ? null : await Reminders.command(actor.id, t).catch((err) => ({ text: 'לא הצלחתי לרשום את התזכורת. נסו שוב בעוד רגע 🙏', result: `שגיאה: ${err.message}`, error: true }));
-    if (r) return out(r.text, {}, { action: 'reminders', status: r.error ? 'error' : 'ok', result: r.result });
+    // ✅ על ההודעה כשנרשמה / בוטלה תזכורת (הטקסט נשאר — יש בו את המועד)
+    if (r) return out(r.text, {}, { action: 'reminders', status: r.error ? 'error' : 'ok', result: r.result, react: /^(תזכורת|בוטלה)/.test(r.result ?? '') ? '✅' : undefined });
   }
   // 📬 "זכרת? 🐣" על מייל שלא טופל, ו"לבצע קבלת סחורה?" על חשבונית מהמייל
   if (state.awaiting && ['mail_remind', 'goods_offer'].includes(state.draft?.kind)) {
@@ -2312,7 +2342,7 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
       const r = dry ? null : MailActions.answerGoods(d, t);
       if (r) {
         if (r.start) startGoodsFromMail(user, d.goodsId);
-        return out(r.text, { draft: null }, { action: 'goods_offer', status: 'ok', result: r.result.slice(0, 300) });
+        return out(r.text, { draft: null }, { action: 'goods_offer', status: 'ok', result: r.result.slice(0, 300), react: r.react });
       }
     }
     // כל דבר אחר — נושא חדש; השאלה יורדת (ותישאל שוב: דדליין — מחר, חשבונית — בסבב הבא)
@@ -3133,6 +3163,7 @@ const meetingAudioDeps = (actor) => ({
 
 /** ברקע: תמלול, סיכום ומשימת הפגישה — ובסוף הודעה לעובד */
 function processMeetingAudio(actor, audioId) {
+  const ref = currentMsg.get(actor.id);
   setImmediate(async () => {
     const u = D.get('SELECT id, full_name, phone FROM users WHERE id = ?', actor.id);
     const chatId = `${u.phone}@c.us`;
@@ -3149,7 +3180,9 @@ function processMeetingAudio(actor, audioId) {
       rememberBot(actor.id, text);
       if (r.draft && !busy) saveChat(actor.id, { ...chatOf(actor.id), draft: r.draft, awaiting: true });
       log({ channel: 'summary', chatId, userId: actor.id, who: u.full_name, action: 'meeting_audio', status: 'ok', result: text.split('\n')[0].slice(0, 300) });
+      void react(ref, '✅');
     } catch (err) {
+      void react(ref, '⚠️');
       console.error('[משימון] עיבוד הקלטת פגישה נכשל:', err.message);
       D.run("UPDATE meeting_audio SET status = 'error', error = ? WHERE id = ?", String(err.message).slice(0, 500), audioId);
       log({ channel: 'summary', chatId, userId: actor.id, who: u.full_name, action: 'meeting_audio', status: 'error', result: err.message.slice(0, 300) });
@@ -3193,8 +3226,9 @@ async function meetingAudioTurn(user, actor, t, state, { dry, out }) {
     D.run("UPDATE meeting_audio SET meeting = ?, status = 'transcribing' WHERE id = ? AND user_id = ?", JSON.stringify(m), d.audioId, actor.id);
     processMeetingAudio(actor, d.audioId);
     const who = m.people.length ? `\n👥 ${m.people.map((p) => p.name || p.email).slice(0, 8).join(', ')}` : '\n_לא זיהיתי משתתפים מהארגון — המשימות ייפתחו אצלך, עם השם שנאמר._';
-    return out(`✅ שייכתי ל*${m.title}*.${who}\n\n⏳ מתמלל ומסכם — בהקלטה ארוכה זה לוקח כמה דקות. אודיע כשמוכן.`, { draft: null },
-      { action: 'meeting_audio', status: 'ok', result: `שויכה ל"${m.title}" (${m.source})`.slice(0, 300) });
+    // ⏳ על ההודעה עד שהסיכום מוכן — בלי הודעת "מתמלל ומסכם"
+    return out(`📎 שייכתי ל*${m.title}*.${who}`, { draft: null },
+      { action: 'meeting_audio', status: 'ok', result: `שויכה ל"${m.title}" (${m.source})`.slice(0, 300), react: '⏳' });
   }
   if (d.kind === 'meeting_audio_tasks') {
     const only = /^(?:רק\s+|לפתוח\s+(?:רק\s+)?)?([\d\s,ו\-]+)$/.exec(n);
@@ -3263,6 +3297,9 @@ async function handleDirect(msg) {
   const actor = Auth.loadActor('user', user.id);
   if (!actor) return;
   const base = { channel: 'private', chatId: msg.chatId, userId: user.id, who: user.full_name, text: msg.text, forwarded: msg.forwarded };
+  const ref = { chatId: msg.chatId, id: msg.id };
+  // הודעה פנימית (‎enqueueAs‎) — לא דורסת את ההודעה האמיתית שעליה מגיבים
+  if (!/^(bot-|mail-goods-)/.test(String(msg.id ?? ''))) currentMsg.set(user.id, ref);
 
   // הודעה קולית — מתומללת, ומשם בדיוק כמו הודעה כתובה
   let text = msg.text;
@@ -3307,7 +3344,7 @@ async function handleDirect(msg) {
   if (voice && Speech.isEnabled() && WaActions.allowed(actor, 'voice_notes')) {
     // התמלול לבדו לוקח כמה שניות — מודיעים מיד שההקלטה התקבלה, בלי לחכות
     // לשליחה: ההורדה והתמלול רצים במקביל (ההודעה תמיד יוצאת לפני התשובה)
-    notice = sendText(msg.chatId, '🎧 קיבלתי את ההקלטה, מתמלל…').catch(() => {});
+    notice = react(ref, '✍️');
   }
   if (voice) {
     if (!Speech.isEnabled() || !WaActions.allowed(actor, 'voice_notes')) {
@@ -3355,7 +3392,7 @@ async function handleDirect(msg) {
       GoodsReceipt.dropMenu(user.id);
       if (GoodsReceipt.pending(user.id)) pre = await GoodsReceipt.abandon(user).catch(() => '');
     }
-    const slowPd = setTimeout(() => sendText(msg.chatId, '⏳ רגע, מחפש בקטלוג של פריוריטי…').catch(() => {}), SLOW_NOTICE_MS);
+    const slowPd = setTimeout(() => react(ref, '👀'), SLOW_NOTICE_MS);
     let r;
     try {
       r = await PurchaseDemand.handle({ user, text, file: msg.file, reaction: msg.kind === 'reactionMessage', voice });
@@ -3387,7 +3424,7 @@ async function handleDirect(msg) {
   let grNotice = '';
   const prioMenuOnly = !grAllowed && pdAllowed && !msg.file && (GoodsReceipt.isPriority(text) || GoodsReceipt.inMenu(user.id));
   if (prioMenuOnly || (grAllowed && (GoodsReceipt.active(user.id) || GoodsReceipt.opens(text, msg.file) || GoodsReceipt.wantsUndoFinal(user.id, text)))) {
-    const slowGr = setTimeout(() => sendText(msg.chatId, '⏳ רגע, קורא ובודק מול פריוריטי…').catch(() => {}), SLOW_NOTICE_MS);
+    const slowGr = setTimeout(() => react(ref, '🧐'), SLOW_NOTICE_MS);
     let r;
     try {
       r = await GoodsReceipt.handle({ user, text, file: msg.file, reaction: msg.kind === 'reactionMessage', allow: { gr: grAllowed, pd: pdAllowed } });
@@ -3439,7 +3476,9 @@ async function handleDirect(msg) {
     const content = text || (msg.file ? `[📎 ${msg.file.name || msg.kind || 'קובץ'}]` : `[${msg.kind || 'הודעה'}]`);
     addForward(user.id, 'forward', voice ? `🎙 ${content}` : content);
     // מאשרים רק את הראשונה — כמה הודעות מועברות ברצף לא מקבלות כמה תשובות
-    const ack = before ? '' : '📥 קיבלתי. אפשר להעביר עוד, ואז לכתוב או להקליט מה לעשות ולמי (משימה, מייל, הערה).';
+    // 📥 על ההודעה — בלי הודעת "קיבלתי". את ההוראה כותבים אחרי כל ההעברות
+    const ack = '';
+    void react(ref, '📥');
     log({ ...base, text: voice ? `🎙 ${content}` : content, action: 'forward', status: 'ok', result: `הודעה מועברת נאספה (${before + 1})`, reply: ack });
     await notice;
     if (ack) await sendText(msg.chatId, ack);
@@ -3476,9 +3515,9 @@ async function handleDirect(msg) {
   const state = chatOf(user.id);
   let r;
   // תשובה שמתעכבת (תמלול, Today ראשון של היום, ניסוח מייל) — קודם "רגע", כדי שלא ייראה שהבוט לא שמע
-  const slow = setTimeout(() => {
-    if (!voice) sendText(msg.chatId, '⏳ רגע, בודק…').catch(() => {});
-  }, SLOW_NOTICE_MS);
+  // הודעה קולית — מ-✍️ (תמלול) ל-🤔 (הבנה) מיד; כתובה — 🤔 רק אם התשובה מתעכבת
+  if (voice) void react(ref, '🤔');
+  const slow = setTimeout(() => { void react(ref, '🤔'); }, SLOW_NOTICE_MS);
   try {
     r = await turn(user, actor, text, state, { voice });
   } catch (err) {
@@ -3508,6 +3547,10 @@ async function handleDirect(msg) {
   const fwdNote = forwards.length ? ` (+${forwards.filter((x) => x.kind === 'forward').length} מועברות)` : '';
   log({ ...base, text: `${voice ? `🎙 ${said}` : said}${fwdNote}`, action: r.action, status: r.status, result: r.result, taskId: r.taskId ?? null, reply });
   // הודעה ארוכה מדי — בכמה הודעות; כפתורי תשובה (התפריט) — על האחרונה
+  // 😀 האימוג'י הסופי על ההודעה: ⚠️ תקלה · ✅ בוצע · 👌 "בסדר, לא…" (ואז בלי טקסט) · עבודה שממשיכה ברקע (📤 📅 📝 ⏳ 🧐 👀) · אחרת יורד
+  const okNo = r.status !== 'error' && /^בסדר[\s,!.👍]/.test(String(r.reply ?? '').trim()) && String(r.reply).length < 90 && !r.buttons?.length;
+  void react(ref, r.status === 'error' ? '⚠️' : r.react ?? (/^\s*✅/.test(String(r.reply ?? '')) ? '✅' : okNo ? '👌' : ''));
+  const quiet = okNo || !String(r.reply ?? '').trim();
   // קובץ (מודעה, מכתב) — לפני הטקסט, כדי שהשאלה "מאשר?" תהיה ההודעה האחרונה
   for (const f of r.files ?? []) {
     try {
@@ -3518,7 +3561,8 @@ async function handleDirect(msg) {
       log({ ...base, text: `[📄 ${f.fileName}]`, action: r.action, status: 'error', result: err.message });
     }
   }
-  const replyParts = splitMessage(reply);
+  // אין מה לכתוב (רק אימוג'י) — בהודעה קולית עדיין "🎙 שמעתי", כדי שיראו מה הובן
+  const replyParts = quiet ? (voice ? [`🎙 *שמעתי:* "${said}"`] : []) : splitMessage(reply);
   for (let i = 0; i < replyParts.length; i++) {
     if (i === replyParts.length - 1 && r.buttons?.length) await sendButtons(msg.chatId, replyParts[i], r.buttons);
     else await sendText(msg.chatId, replyParts[i]);
@@ -3817,14 +3861,19 @@ function enqueueAs(userId, m) {
     .catch((err) => console.error('[משימון] הודעה פנימית לבוט נכשלה:', err.message))
     .finally(() => { if (chains.get(msg.phone) === next) chains.delete(msg.phone); });
   chains.set(msg.phone, next);
+  return next;
 }
 
 // 📅 תיאום פגישה — שליחה / קביעה ברקע, ותשובות שמגיעות
 function meetCoordRun(actor, fn) {
+  const ref = currentMsg.get(actor.id);
   setImmediate(async () => {
     try {
-      await pushToUser(actor.id, { text: await fn() }, 'meet_coord');
+      const text = await fn();
+      void react(ref, doneEmoji(text));
+      await pushToUser(actor.id, { text }, 'meet_coord');
     } catch (err) {
+      void react(ref, '⚠️');
       console.error('[משימון] תיאום פגישה נכשל:', err.message);
       await pushToUser(actor.id, { text: `לא הצלחתי להשלים את תיאום הפגישה: ${err.message}` }, 'meet_coord');
     }
@@ -3839,22 +3888,28 @@ async function meetCoordTick() {
 
 // 🛒 פנייה לספקים — החיפוש והשליחה ברקע (חיפוש ברשת לוקח זמן)
 function rfqPrepare(actor, rfqId) {
+  const ref = currentMsg.get(actor.id);
   setImmediate(async () => {
     try {
       const r = await Rfq.prepare(actor.id, rfqId);
+      void react(ref, '');
       await pushToUser(actor.id, { text: r.text, buttons: r.buttons ?? [], draft: r.draft ?? null }, 'rfq');
     } catch (err) {
+      void react(ref, '⚠️');
       console.error('[משימון] חיפוש ספקים נכשל:', err.message);
       await pushToUser(actor.id, { text: 'לא הצלחתי למצוא ספקים כרגע 😕 נסו שוב בעוד כמה דקות.' }, 'rfq');
     }
   });
 }
 function rfqSend(actor, rfqId) {
+  const ref = currentMsg.get(actor.id);
   setImmediate(async () => {
     try {
       const text = await Rfq.send(actor.id, rfqId, { createTask: hooks.createTask, actor });
+      void react(ref, doneEmoji(text));
       await pushToUser(actor.id, { text }, 'rfq');
     } catch (err) {
+      void react(ref, '⚠️');
       console.error('[משימון] שליחה לספקים נכשלה:', err.message);
       await pushToUser(actor.id, { text: `השליחה לספקים נכשלה: ${err.message}` }, 'rfq');
     }
@@ -3917,6 +3972,7 @@ async function mailActionAlerts() {
 
 /** "קבלת סחורה" על חשבונית מהמייל — הקובץ יורד מ-Gmail ונכנס לקבלת הסחורה כאילו נשלח לבוט */
 function startGoodsFromMail(user, goodsId) {
+  const ref = currentMsg.get(user.id);
   setImmediate(async () => {
     const row = D.get('SELECT * FROM mail_goods_docs WHERE id = ? AND user_id = ?', goodsId, user.id);
     const u = D.get('SELECT id, full_name, phone FROM users WHERE id = ?', user.id);
@@ -3926,8 +3982,10 @@ function startGoodsFromMail(user, goodsId) {
       const file = await MailActions.goodsFile(row);
       // אחרי התשובה הנוכחית (אותו תור לכל עובד) — בדיוק כמו קובץ שנשלח עם "קבלת סחורה"
       // לא דרך ‎dispatch‎: מחוץ לשעות הוא דוחה לתור שנשמר במסד, והקובץ (‎buf‎) לא נשמר שם
-      enqueueAs(u.id, { text: 'קבלת סחורה', kind: 'documentMessage', file, id: `mail-goods-${row.id}` });
+      // 🧐 על "קבלת סחורה" עד שקבלת הסחורה עונה; אחר כך יורד
+      enqueueAs(u.id, { text: 'קבלת סחורה', kind: 'documentMessage', file, id: `mail-goods-${row.id}` })?.then(() => react(ref, ''));
     } catch (err) {
+      void react(ref, '⚠️');
       console.error('[משימון] הורדת חשבונית מהמייל נכשלה:', err.message);
       log({ channel: 'summary', chatId, userId: u.id, who: u.full_name, action: 'goods_offer', status: 'error', result: `הורדה מ-Gmail: ${err.message}`.slice(0, 300) });
       D.run("UPDATE mail_goods_docs SET status = 'pending' WHERE id = ?", row.id);

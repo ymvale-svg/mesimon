@@ -282,7 +282,8 @@ async function next(userId, id, it) {
   if (it.source === 'unspecified') {
     return { text: `🛒 *${itemLine(it)}*\nלפנות ל-${it.count} ספקים — מאיפה?`, buttons: [BTN.mine, BTN.web, BTN.both], draft: { kind: 'rfq', step: 'source', rfqId: id }, awaiting: true, result: 'מאיפה הספקים?' };
   }
-  return { search: true, rfqId: id, text: `🔎 מחפש ${it.source === 'web' ? 'ברשת' : it.source === 'mine' ? 'בספקים שלך (פריוריטי, האלפון והמיילים)' : 'בספקים שלך וברשת'} — דקה או שתיים…`, draft: null, result: `חיפוש ספקים (${it.source})` };
+  // 👀 על ההודעה בזמן החיפוש — בלי הודעת "מחפש…"
+  return { search: true, rfqId: id, text: '', react: '👀', draft: null, result: `חיפוש ספקים (${it.source})` };
 }
 
 /** החיפוש והטיוטה — ברקע (חיפוש ברשת לוקח זמן). מחזיר את הודעת האישור */
@@ -330,7 +331,7 @@ async function answer(userId, d, text) {
     return next(userId, r.id, { ...r.item, source });
   }
   if (d.step === 'review') {
-    if (WaUi.sameLabel(t, BTN.send) || /^(כן|שלח|לשלוח|מאשר|אשר)(\s|$)/.test(n)) return { send: true, rfqId: r.id, text: '📤 שולח…', draft: null, result: 'אושר לשליחה' };
+    if (WaUi.sameLabel(t, BTN.send) || /^(כן|שלח|לשלוח|מאשר|אשר)(\s|$)/.test(n)) return { send: true, rfqId: r.id, text: '', react: '📤', draft: null, result: 'אושר לשליחה' };
     if (WaUi.sameLabel(t, BTN.edit)) return { text: 'מה לשנות? ספק להוריד ("בלי 3"), ספק להוסיף ("תוסיף את כלי בע"מ sales@…"), או מה לשנות בנוסח.', draft: d, awaiting: true, result: 'עריכה' };
     const drop = /^(?:בלי|תוריד|הורד|להוריד|מחק|תמחק)\s+(?:את\s+)?([\d\s,ו\-]+)$/.exec(n);
     if (drop) {
