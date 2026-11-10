@@ -260,7 +260,7 @@ const inPilot = (actor) => actor?.type === 'user' && PILOT_ROLES.includes(actor.
 
 function allowed(actor, key) {
   const a = byKey(key);
-  if (PILOT_KEYS.has(key) && D.getSetting('bot_pilot', true) && !inPilot(actor)) return false;
+  if (PILOT_KEYS.has(key) && D.getSetting('bot_pilot', false) && !inPilot(actor)) return false;
   return Boolean(a?.enabled && (a.audience === 'all' || isManager(actor)));
 }
 

@@ -1668,7 +1668,7 @@ const DEFAULT_SETTINGS = {
   meeting_followup_minutes: 15,            // כמה דקות אחרי סוף פגישה מוקלטת — הבוט שואל את המשתתפים מה לשלוח
   meeting_audio_min_kb: 1024,              // הודעה קולית גדולה מזה (כ-8 דקות) לבוט = הקלטת פגישה, והבוט שואל לאיזו פגישה לשייך
   rfq_daily_max: 20,                       // פנייה לספקים: כמה מיילים לכל היותר לעובד ביום (לא להיחשב דואר זבל)
-  bot_pilot: true,                         // 🧪 היכולות החדשות בבוט (סבב Instinct) — רק למנהלי המערכת, עד "פתח את היכולות החדשות לכולם"
+  bot_pilot: false,                        // 🧪 true — היכולות החדשות בבוט (סבב Instinct) רק למנהלי המערכת. נפתח לכולם 10.11.26; "החזר את היכולות החדשות לפיילוט" — סוגר שוב
   remind_hours: '08:30-18:00',             // 🌊 שעות התזכורות מהמייל (מחוץ להן — לא מזכירים, גם לא בשעות הבוט)
   briefing_minutes: 20,                    // 📋 כמה דקות לפני פגישה — התדריך בבוט
   meeting_ai_alternatives: true,           // הצעות AI להזזת פגישות חופפות
@@ -2083,6 +2083,13 @@ function migrate() {
     setSetting('mail_memory_night_hours', '22:00-06:00');
     if (Number(getSetting('mail_memory_nightly_threads', 300)) > 300) setSetting('mail_memory_nightly_threads', 300);
     setSetting('migr_memory_conservative', true);
+  }
+
+  // 🧪 היכולות החדשות בבוט נפתחו לכולם (הוחלט 10.11.26, ישראל) — פעם אחת: מסד שעלה עם הפיילוט (‎bot_pilot = true‎)
+  // נפתח. אחר כך מנהל מערכת יכול להחזיר לפיילוט מהבוט, וזה לא נדרס בעלייה הבאה
+  if (!getSetting('migr_bot_pilot_open', false)) {
+    setSetting('bot_pilot', false);
+    setSetting('migr_bot_pilot_open', true);
   }
 
   // ‎ogg‎…‎webm‎ — הקלטות פגישה מוואטסאפ (‎ai/meeting-audio.js‎), מצורפות למשימת הפגישה

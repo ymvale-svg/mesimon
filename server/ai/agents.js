@@ -207,7 +207,7 @@ const PRIORITY_TOOLS = [
 /** מי רואה נתוני רכש מפריוריטי: מנהלי מערכת, ומי שמורשה לקבלת סחורה / דרישת רכש בבוט (ובפיילוט — רק מנהלי מערכת) */
 function priorityAllowed(actor) {
   const WaActions = require('./wa-actions');
-  if (D.getSetting('bot_pilot', true) && !WaActions.inPilot(actor)) return false;
+  if (D.getSetting('bot_pilot', false) && !WaActions.inPilot(actor)) return false;
   return isAdmin(actor) || WaActions.allowed(actor, 'goods_receipt') || WaActions.allowed(actor, 'purchase_demand');
 }
 
