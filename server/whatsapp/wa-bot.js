@@ -1002,6 +1002,41 @@ function formatList(heading, tasks, { showProject = true, showAssignee = false, 
   return [heading, ...lines, more, hint ? '' : null, hint].filter((l) => l !== null).join('\n');
 }
 
+/*
+ * 🔊 הקראה: "תקריא לי את המשימות", "אני בנהיגה — מה יש לי היום?" — הרשימה נשלחת גם כהודעה קולית.
+ * פיילוט: רק למנהלי המערכת (‎WaActions.inPilot‎), ורק כשיש מפתח OpenAI. כל השאר — הטקסט בלבד, כמו תמיד.
+ */
+const READ_ALOUD = /(תקריא|להקריא|הקרא|תקרא לי|תקראי לי|בנהיגה|אני נוהג|אני נוהגת|בזמן נסיעה)/;
+const READ_ALOUD_MAX = 8;
+const readAloudAllowed = (actor) => actor?.type === 'user' && WaActions.inPilot(actor) && Speech.canSpeak();
+const SPOKEN_NUM = ['אחת', 'שתיים', 'שלוש', 'ארבע', 'חמש', 'שש', 'שבע', 'שמונה'];
+
+/** מה שמוקרא: כותרות ותאריכים בלבד — בלי אימוג'י, קישורים ומספרי משימה */
+function readAloudText(actor, tasks, title) {
+  const first = String(actor?.name ?? '').trim().split(/\s+/)[0];
+  const shown = tasks.slice(0, READ_ALOUD_MAX);
+  const count = tasks.length === 1 ? 'משימה אחת' : `${tasks.length} משימות`;
+  const clean = (x) => String(x ?? '').replace(/https?:\/\/\S+/g, '').replace(/[\p{Extended_Pictographic}\uFE0F*_~]/gu, '').replace(/\s+/g, ' ').trim();
+  const lines = shown.map((t, i) => {
+    const due = dueLabel(t);
+    const when = t.overdue ? 'באיחור' : due === 'היום' || due === 'מחר' ? due : due ? `עד ה-${due}` : '';
+    return `${SPOKEN_NUM[i]}. ${clean(t.title)}${when ? `, ${when}` : ''}.`;
+  });
+  const more = tasks.length > shown.length ? `ועוד ${tasks.length - shown.length} באפליקציה.` : '';
+  return [`${first ? `${first}, ` : ''}יש לך ${count} ${title}.`, ...lines, more].filter(Boolean).join('\n');
+}
+
+/** קובץ ההקראה לרשימה, או ‎null‎ (לא ביקשו / לא מורשה / נכשל — ואז הטקסט לבדו, והתקלה ביומן) */
+async function readAloudFile(actor, text, tasks, title) {
+  if (!tasks.length || !READ_ALOUD.test(String(text ?? '')) || !readAloudAllowed(actor)) return null;
+  try {
+    return { buf: await Speech.speak(readAloudText(actor, tasks, title)), fileName: 'משימות.ogg', mime: 'audio/ogg' };
+  } catch (err) {
+    console.error('[משימון] הקראה נכשלה:', err.message);
+    return null;
+  }
+}
+
 const RANGES = {
   today: { title: 'להיום', pick: (t) => dueDay(t) && dueDay(t) <= localDay(0), empty: 'אין לך משימות להיום 🎉' },
   overdue: { title: 'באיחור', pick: (t) => t.overdue, empty: 'אין לך משימות באיחור 👏' },
@@ -2829,6 +2864,12 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
     return out(formatList(`📋 המשימות שלך ${r.title} (${tasks.length}):`, tasks, { actor }), { lastList: tasks.slice(0, LIST_SHOWN).map((x) => x.id) },
       { action: 'my_tasks', status: 'ok', result: `נשלחה רשימה ${r.title}: ${tasks.length} משימות` });
   };
+  // 🔊 "תקריא לי" — אותה רשימה, ובנוסף הודעה קולית (לפני הטקסט)
+  const withReadAloud = async (r, range) => {
+    const R = RANGES[range] ?? RANGES.all;
+    const file = dry ? null : await readAloudFile(actor, t, myOpen.filter(R.pick), R.title === 'הפתוחות' ? 'פתוחות' : R.title);
+    return file ? { ...r, files: [file], result: `${r.result} · 🔊 הוקרא` } : r;
+  };
   if (kind === 'menu' && /^\d{1,2}$/.test(t) && ['my_tasks', 'overdue'].includes(state.draft.options?.[Number(t) - 1])) {
     const key = state.draft.options[Number(t) - 1];
     const r = listReply(key === 'overdue' ? 'overdue' : 'all');
@@ -3126,7 +3167,7 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
       return todayReply({ withMenu: firstOfDay, firstOfDay });
     }
     if (PLAIN_INSIGHTS.test(t) && WaActions.allowed(actor, 'mail_insights')) return insightsReply({ range: Range.parseRange(t) });
-    if (PLAIN_LIST.test(t) && WaActions.allowed(actor, 'my_tasks')) return listReply('all');
+    if ((PLAIN_LIST.test(t) || READ_ALOUD.test(t)) && WaActions.allowed(actor, 'my_tasks')) return withReadAloud(listReply('all'), 'all');
     return out('חיבור ה-AI אינו מוגדר כרגע במשימון. אפשר לכתוב "המשימות שלי" או "עזרה".', {}, { action: 'other', status: 'error', result: 'אין AI' });
   }
 
@@ -3316,7 +3357,7 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
     }
 
     case 'my_tasks':
-      return listReply(u.range);
+      return withReadAloud(listReply(u.range), u.range);
 
     case 'project_tasks': {
       const project = projects.find((p) => p.id === u.projectId);
@@ -4885,6 +4926,7 @@ module.exports = {
     featuresText, PLAIN_FEATURES, parseThreadAdd, threadAddText, dayItems, walkText, walkButtons, walkAction, WALK,
     storeGroupMessage, processGroup, handleDirect, sanitizeGroup, resolveMentions, candidatesOf, converse, turn, withFollowUps, sendSummaries, YES,
     findRecipients, findContactCards, sourceOf, suggestionFeedback, flushOutbox, todayMessage, splitMessage, parseSuggestionCommand, businessCommand, chatOf, saveChat,
-    recordingReply, checkDraft, draftText, createFromDraft, mailAlertFor, closeAlerted, logoIntent, busyFor, userLastAt, staleQuestion
+    recordingReply, checkDraft, draftText, createFromDraft, mailAlertFor, closeAlerted, logoIntent, busyFor, userLastAt, staleQuestion,
+    READ_ALOUD, readAloudText, readAloudFile, hooks
   }
 };
