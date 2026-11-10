@@ -42,7 +42,7 @@ function setup(t, { key = true } = {}) {
 const say = (phone, text) => Bot._internal.handleDirect({ phone, chatId: `${phone}@c.us`, text, id: `ra${++seq}` });
 
 test('READ_ALOUD — "תקריא", "אני בנהיגה"; לא כל בקשה', () => {
-  for (const s of ['תקריא לי את המשימות', 'אני בנהיגה, מה יש לי היום?', 'אפשר להקריא לי את הרשימה']) assert.match(s, Bot._internal.READ_ALOUD);
+  for (const s of ['תקריא לי את המשימות', 'אני בנהיגה, מה יש לי היום?', 'אפשר להקריא לי את הרשימה', 'תכירי לי תפסימות שיש לי פתוחות.', 'תגיד לי בקול מה פתוח']) assert.match(s, Bot._internal.READ_ALOUD);
   for (const s of ['המשימות שלי', 'מה באיחור?', 'תקרא את המייל של דני']) assert.doesNotMatch(s, Bot._internal.READ_ALOUD);
 });
 
