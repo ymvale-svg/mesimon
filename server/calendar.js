@@ -33,11 +33,25 @@ function selectedCalendars(userId) {
  */
 const safeLink = (url) => (/^https:\/\//i.test(String(url ?? '')) ? String(url) : null);
 
+/*
+ * קישור לפגישה מקוונת — רק לדומיין של ספק מוכר (בדיקת host מדויקת). הבוט שולח את הקישור בוואטסאפ,
+ * ואירוע מהזמנה חיצונית יכול להכיל ‎https://secure-zoom.us/…‎ או ‎https://evil.example/zoom.us/…‎.
+ */
+const VIDEO_HOSTS = ['zoom.us', 'meet.google.com', 'teams.microsoft.com', 'teams.live.com', 'webex.com'];
+function videoLink(url, hosts = VIDEO_HOSTS) {
+  const link = safeLink(url);
+  if (!link) return null;
+  let host;
+  try { host = new URL(link).hostname.toLowerCase(); } catch { return null; }
+  return hosts.some((h) => host === h || host.endsWith(`.${h}`)) ? link : null;
+}
+
 /** קישור Zoom מהאירוע — מתוסף ה-Zoom (‎conferenceData‎), מהמיקום או מהתיאור */
 function zoomOf(e) {
-  const fromConf = (e.conferenceData?.entryPoints ?? []).find((p) => p.entryPointType === 'video' && /zoom\.us\//i.test(p.uri ?? ''))?.uri;
-  const inText = /https:\/\/[\w.-]*zoom\.us\/[^\s<>"')]+/i.exec(`${e.location ?? ''} ${e.description ?? ''}`)?.[0];
-  return safeLink(fromConf || inText);
+  const fromConf = (e.conferenceData?.entryPoints ?? []).find((p) => p.entryPointType === 'video' && videoLink(p.uri, ['zoom.us']))?.uri;
+  const inText = [...`${e.location ?? ''} ${e.description ?? ''}`.matchAll(/https:\/\/[\w.-]*zoom\.us\/[^\s<>"')]+/gi)]
+    .map((m) => m[0]).find((u) => videoLink(u, ['zoom.us']));
+  return videoLink(fromConf || inText, ['zoom.us']);
 }
 
 function shapeEvent(e, calendar) {
@@ -52,7 +66,7 @@ function shapeEvent(e, calendar) {
     end: allDay ? e.end?.date : e.end?.dateTime,
     allDay,
     location: String(e.location ?? ''),
-    meetLink: safeLink(e.hangoutLink ?? e.conferenceData?.entryPoints?.find((p) => p.entryPointType === 'video')?.uri),
+    meetLink: videoLink(e.hangoutLink ?? e.conferenceData?.entryPoints?.find((p) => p.entryPointType === 'video')?.uri),
     zoomLink: zoomOf(e),
     // מי משתתף — לשאלה "מי בפגישה?" בבוט. מארגן מסומן; חדרים ומשאבים — לא
     people: (e.attendees ?? []).filter((a) => !a.resource && a.email).map((a) => ({
@@ -151,4 +165,5 @@ function forget(userId) {
   namesCache.delete(userId);
 }
 
-module.exports = { isConnected, eventsForDay, listCalendars, selectedCalendars, forget, _internal: { shapeEvent } };
+module.exports = {
+  videoLink, isConnected, eventsForDay, listCalendars, selectedCalendars, forget, _internal: { shapeEvent } };
