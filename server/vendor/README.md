@@ -7,6 +7,6 @@
 | קובץ | חבילה | גרסה | רישיון | למה |
 |---|---|---|---|---|
 | `pdf-lib.min.js` | pdf-lib | 1.17.1 | MIT (`LICENSE-pdf-lib.md`) | מילוי טפסי PDF קיימים, ומודעות ומכתבים עם לוגו (`server/pdf-kit.js`) |
-| `fontkit.umd.min.js` | @pdf-lib/fontkit | 1.1.1 | MIT (`LICENSE-fontkit.md`) | גופן עברי (Liberation) בתוך PDF של pdf-lib |
+| `fontkit.umd.min.js` | @pdf-lib/fontkit | 1.1.1 | MIT (`LICENSE-fontkit.md`) | גופנים עבריים (Liberation; Heebo, Frank Ruhl Libre, Rubik למודעות ולמכתבים — OFL, ב-`server/fonts`) בתוך PDF של pdf-lib |
 
 הוחלט 09.11.26 (ישראל): להוסיף ספרייה חיצונית למילוי PDF.

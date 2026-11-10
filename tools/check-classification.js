@@ -11,8 +11,8 @@ const path = require('node:path');
 process.env.DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'mesimon-cls-'));
 process.env.ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || 'test';
 
-const D = require('../server/db');
-const Claude = require('../server/ai/claude');
+const D = require('../server/core/db');
+const Claude = require('../server/integrations/claude');
 D.bootstrap();
 
 let failures = 0;
@@ -51,8 +51,8 @@ const actor = (id) => ({ type: 'user', id, role: D.get('SELECT role FROM users W
 D.db.exec(`CREATE TABLE IF NOT EXISTS org_knowledge (id INTEGER PRIMARY KEY AUTOINCREMENT, domain TEXT NOT NULL, dept TEXT NOT NULL DEFAULT 'other', project TEXT NOT NULL DEFAULT '', text TEXT NOT NULL, cases INTEGER NOT NULL DEFAULT 0, contributors INTEGER NOT NULL DEFAULT 0, edited INTEGER NOT NULL DEFAULT 0, hidden INTEGER NOT NULL DEFAULT 0, dept_only INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, level TEXT NOT NULL DEFAULT 'pro', classified INTEGER NOT NULL DEFAULT 0, scheme INTEGER NOT NULL DEFAULT 0)`);
 D.run("INSERT INTO org_knowledge (domain, text, level, classified, scheme, created_at, updated_at) VALUES ('מנהל פרויקט אלעד', 'מנהל הפרויקט של אלעד קיבל רכב שכור מהחברה', 'pro', 1, 2, ?, ?)", now, now);
 
-const Org = require('../server/ai/org-knowledge');
-const Cls = require('../server/ai/classification');
+const Org = require('../server/agents/org-knowledge');
+const Cls = require('../server/core/classification');
 
 const legacy = D.get('SELECT * FROM org_knowledge WHERE id = 1');
 check('מעבר: ערך "מקצועי" ישן ננעל (לא מסווג)', legacy.classified === 0);
