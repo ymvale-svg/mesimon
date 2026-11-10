@@ -301,3 +301,25 @@ test('בטיחות: ערך ב-PRIORITY_COMPANIES שאינו קוד חברה מו
   assert.match(r.text, /לאיזה פרויקט/, 'סביבה אחת מוכרת — נבחרת לבד, בלי לשאול על סביבה');
   assert.doesNotMatch(r.text, /tset11/);
 });
+
+test('"לא" בשאלת סוג הדרישה — הפרויקט שהוצג לא נכון: חוזרים לבחירת פרויקט, ואחריו שוב שאלת הדרישה', async (t) => {
+  H.companies(t, 'test11');
+  const u = H.worker();
+  const pr = priority(t);
+  ai(t);
+  const { say } = H.chat(t, u);
+
+  let r = await say('דרישת רכש');
+  r = await say('אלעד 49 צפון');
+  assert.match(r.text, /איזו דרישה\?/);
+
+  r = await say('לא');
+  assert.match(r.text, /לאיזה פרויקט, אם כך\?/);
+  assert.doesNotMatch(r.text, /איזו דרישה\?/);
+
+  r = await say('נהריה מגרש 12');
+  assert.match(r.text, /איזו דרישה\?/, 'הפרויקט החדש — ואחריו שוב סוג הדרישה');
+  r = await say('אתרי');
+  assert.match(r.text, /פרויקט: \*נהריה מגרש 12\* \(PR2\)/);
+  assert.deepEqual(pr.writes, []);
+});

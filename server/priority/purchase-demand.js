@@ -827,6 +827,11 @@ async function step(user, s, t, file, { reaction }) {
     case 'code': {
       const codes = await codesOf(s);
       const c = pickCode(s, t, codes);
+      // "לא" על שאלת הדרישה — הכוונה לפרויקט שהוצג מעליה ("📁 פרויקט: …"), לא לרשימת המאשרים: חוזרים לפרויקט
+      if (!c && NO.test(t)) {
+        s.project = null; s.projectFrom = null; s.warehouse = null; s.demandCode = undefined;
+        return askProject(s, await projectsOf(s.company), [], null, '📁 לאיזה פרויקט, אם כך?');
+      }
       if (!c) return t.split(/\s+/).length >= 6 ? null : askCode(s, codes);
       s.demandCode = c; s.codeFrom = 'user';
       Prefs.set(s.uid, s.company, 'demandCode', c.code);
