@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const T = require('../../../server/mail-templates');
+const T = require('../../../server/core/mail-templates');
 
 test('escape — תווים מיוחדים ב-HTML', () => {
   assert.equal(T.escape(`<a href="x">'&'</a>`), '&lt;a href=&quot;x&quot;&gt;&#39;&amp;&#39;&lt;/a&gt;');

@@ -3,7 +3,7 @@
  * מסד נתונים לבדיקה: הקובץ הזמני שהוגדר ב-test/setup.js, אחרי bootstrap.
  * ‎fresh()‎ מוחק את נתוני הבדיקה הקודמת (משתמשים, משימות…) ומשאיר הגדרות וכללים מובנים.
  */
-const D = require('../../server/db');
+const D = require('../../server/core/db');
 
 let booted = false;
 function boot() {

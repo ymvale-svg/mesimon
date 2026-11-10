@@ -5,8 +5,8 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { boot, user: rawUser, D } = require('../../helpers/db');
-const WhatsApp = require('../../../server/whatsapp');
-const Bot = require('../../../server/ai/wa-bot');
+const WhatsApp = require('../../../server/integrations/whatsapp');
+const Bot = require('../../../server/whatsapp/wa-bot');
 
 boot();
 const user = (o = {}) => rawUser({ full_name: 'עובד', ...o });

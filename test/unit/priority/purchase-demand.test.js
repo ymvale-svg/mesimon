@@ -2,9 +2,9 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { boot, D } = require('../../helpers/db');
-const Priority = require('../../../server/priority');
-const UI = require('../../../server/ai/wa-ui');
-const PD = require('../../../server/ai/purchase-demand');
+const Priority = require('../../../server/integrations/priority');
+const UI = require('../../../server/whatsapp/wa-ui');
+const PD = require('../../../server/priority/purchase-demand');
 
 boot();
 let next = 8000;
@@ -165,7 +165,7 @@ test('resolveItems — פריוריטי לא זמין: מק"ט כללי', async 
 });
 
 test('resolveItems — AI מוחלף: "זהה" לפי הקוד, ותת פרק מהזוגות', async (t) => {
-  const Claude = require('../../../server/ai/claude');
+  const Claude = require('../../../server/integrations/claude');
   mockCatalog(t, { search: { 'צבע לבן': [part('C-1', 'צבע סופרקריל לבן'), part('C-2', 'צבע שמן')] , 'שונות': [] } });
   t.mock.method(Priority, 'budgetPairs', async () => [{ chapter: '400', chapterDes: 'גמר', topic: '50-1', topicDes: 'צבע' }]);
   t.mock.method(Claude, 'isEnabled', () => true);

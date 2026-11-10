@@ -2,7 +2,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { boot, user, D } = require('../../helpers/db');
-const RFQ = require('../../../server/ai/rfq');
+const RFQ = require('../../../server/priority/rfq');
 
 boot();
 const { itemLine, reviewText } = RFQ._internal;

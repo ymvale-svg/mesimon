@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const Mailer = require('../../../server/mailer');
+const Mailer = require('../../../server/integrations/mailer');
 
 const b64decode = (s) => Buffer.from(s.replace(/\r\n/g, ''), 'base64').toString('utf8');
 /** החלקים בבסיס 64 שבהודעה, לפי הסדר */

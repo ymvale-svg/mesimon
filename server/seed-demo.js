@@ -5,7 +5,7 @@
  *
  *   node server/seed-demo.js
  */
-const D = require('./db');
+const D = require('./core').Db;
 
 D.bootstrap();
 

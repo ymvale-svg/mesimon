@@ -2,7 +2,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { boot, D } = require('../../helpers/db');
-const Prefs = require('../../../server/ai/priority-prefs');
+const Prefs = require('../../../server/priority/priority-prefs');
 
 boot();
 let next = 9000;

@@ -2,7 +2,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { boot, D } = require('../../helpers/db');
-const A = require('../../../server/ai/wa-actions');
+const A = require('../../../server/whatsapp/wa-actions');
 
 boot();
 const emp = { type: 'user', id: 1, role: 'employee' };

@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const UI = require('../../../server/ai/wa-ui');
+const UI = require('../../../server/whatsapp/wa-ui');
 
 test('BTN — הכיתובים לפי המוסכמה', () => {
   assert.equal(UI.BTN.yes, 'כן ✅');

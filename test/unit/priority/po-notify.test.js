@@ -2,8 +2,8 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { boot, user, D } = require('../../helpers/db');
-const Priority = require('../../../server/priority');
-const PO = require('../../../server/ai/po-notify');
+const Priority = require('../../../server/integrations/priority');
+const PO = require('../../../server/priority/po-notify');
 
 boot();
 const { waText, mailOf, recipientsOf, scanCompany, subjectOf } = PO._internal;

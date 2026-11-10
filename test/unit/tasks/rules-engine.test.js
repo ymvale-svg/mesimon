@@ -2,7 +2,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { boot, D, mkUser, mkDept, mkProject, mkVendor, mkTask, HOUR, DAY, ago, ahead } = require('./fixtures');
-const R = require('../../../server/rules-engine');
+const R = require('../../../server/tasks/rules-engine');
 
 boot();
 const internal = D.internalBoard();

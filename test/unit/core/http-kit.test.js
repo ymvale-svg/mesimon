@@ -5,7 +5,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { Readable, Writable } = require('node:stream');
-const H = require('../../../server/http-kit');
+const H = require('../../../server/core/http-kit');
 
 /** בקשה מזויפת: זרם עם כותרות */
 function fakeReq(chunks = [], headers = {}) {

@@ -1,12 +1,1 @@
-[
-  "fetch: ai/claude.js",
-  "fetch: gmail.js",
-  "fetch: google-auth.js",
-  "fetch: priority.js",
-  "fetch: push.js",
-  "fetch: speech.js",
-  "fetch: tiful360.js",
-  "fetch: timeless.js",
-  "fetch: whatsapp.js",
-  "fetch: zoom.js"
-]
+[]

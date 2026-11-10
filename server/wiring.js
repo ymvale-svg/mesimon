@@ -11,12 +11,12 @@
  *   waBot          — סריקת המייל ותור המסמכים שולחים בוואטסאפ, והבוט קורא לסריקת המייל
  * בבדיקות מחברים זיופים במקום: ‎Ports.provide('waBot', fake)‎.
  */
-const Ports = require('./ports');
+const Ports = require('./core').Ports;
 
-Ports.provide('classification', require('./ai/classification'));
-Ports.provide('mailMemory', require('./ai/mail-memory'));
-Ports.provide('whatsappScan', require('./ai/whatsapp-scan'));
-Ports.provide('agents', require('./ai/agents'));
-Ports.provide('waBot', require('./ai/wa-bot'));
+Ports.provide('classification', require('./core').Classification);
+Ports.provide('mailMemory', require('./mail').MailMemory);
+Ports.provide('whatsappScan', require('./whatsapp').WhatsappScan);
+Ports.provide('agents', require('./agents').Agents);
+Ports.provide('waBot', require('./whatsapp').WaBot);
 
 module.exports = Ports;

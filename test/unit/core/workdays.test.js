@@ -2,7 +2,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { boot, user, D } = require('../../helpers/db');
-const W = require('../../../server/workdays');
+const W = require('../../../server/core/workdays');
 
 boot();
 

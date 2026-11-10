@@ -2,8 +2,8 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { boot, D } = require('../../helpers/db');
-const Priority = require('../../../server/priority');
-const GR = require('../../../server/ai/goods-receipt');
+const Priority = require('../../../server/integrations/priority');
+const GR = require('../../../server/priority/goods-receipt');
 
 boot();
 let next = 7000;
@@ -339,7 +339,7 @@ test('findProjects — אין התאמה ואין AI: רשימה ריקה', asyn
 });
 
 test('findProjects — AI מוחלף: קודים קיימים בלבד, בלי כפילויות', async (t) => {
-  const Claude = require('../../../server/ai/claude');
+  const Claude = require('../../../server/integrations/claude');
   t.mock.method(Claude, 'isEnabled', () => true);
   t.mock.method(GR._ai, 'project', async () => ({ codes: ['P3', 'P3', 'NOPE'], question: '', unrelated: false }));
   const r = await GR._findProjects(PROJ, 'הפרויקט בנתניה הדרומית');
@@ -348,7 +348,7 @@ test('findProjects — AI מוחלף: קודים קיימים בלבד, בלי �
 });
 
 test('findProjects — AI נכשל: רשימה ריקה', async (t) => {
-  const Claude = require('../../../server/ai/claude');
+  const Claude = require('../../../server/integrations/claude');
   t.mock.method(Claude, 'isEnabled', () => true);
   t.mock.method(GR._ai, 'project', async () => { throw new Error('overloaded'); });
   t.mock.method(console, 'error', () => {});

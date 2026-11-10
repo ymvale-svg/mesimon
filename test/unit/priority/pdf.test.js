@@ -2,8 +2,8 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const zlib = require('node:zlib');
-const { orderPdf } = require('../../../server/ai/po-pdf');
-const { receiptPdf } = require('../../../server/ai/gr-pdf');
+const { orderPdf } = require('../../../server/priority/po-pdf');
+const { receiptPdf } = require('../../../server/priority/gr-pdf');
 
 const pageCount = (buf) => Number(buf.toString('latin1').match(/\/Type \/Pages \/Kids \[[^\]]*\] \/Count (\d+)/)[1]);
 const titleHex = (t) => [...t].map((c) => c.codePointAt(0).toString(16).padStart(4, '0')).join('');

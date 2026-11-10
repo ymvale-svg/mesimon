@@ -2,7 +2,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { boot, user, D } = require('../../helpers/db');
-const PH = require('../../../server/project-hints');
+const PH = require('../../../server/tasks/project-hints');
 
 boot();
 const board = D.get("SELECT id FROM boards WHERE type = 'internal' LIMIT 1").id;

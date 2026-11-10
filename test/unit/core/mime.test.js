@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const M = require('../../../server/mime');
+const M = require('../../../server/core/mime');
 
 const raw = (lines) => Buffer.from(lines.join('\r\n'), 'utf8');
 const SHALOM_1255 = Buffer.from([0xf9, 0xec, 0xe5, 0xed]); // "שלום" ב-windows-1255

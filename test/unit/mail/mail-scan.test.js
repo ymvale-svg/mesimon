@@ -2,7 +2,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { boot } = require('../../helpers/db');
-const Scan = require('../../../server/ai/mail-scan');
+const Scan = require('../../../server/mail/mail-scan');
 
 boot();
 const { sanitize } = Scan._internal;

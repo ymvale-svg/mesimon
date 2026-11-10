@@ -2,8 +2,8 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { boot, user: rawUser, D } = require('../../helpers/db');
-const TaskMail = require('../../../server/task-mail');
-const Mailer = require('../../../server/mailer');
+const TaskMail = require('../../../server/mail/task-mail');
+const Mailer = require('../../../server/integrations/mailer');
 
 boot();
 const user = (o = {}) => rawUser({ full_name: 'עובד בדיקה', ...o });

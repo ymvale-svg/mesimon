@@ -2,7 +2,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { boot, user: rawUser, D } = require('../../helpers/db');
-const B = require('../../../server/ai/wa-business');
+const B = require('../../../server/whatsapp/wa-business');
 
 boot();
 const user = (o = {}) => rawUser({ full_name: 'עובד', ...o });

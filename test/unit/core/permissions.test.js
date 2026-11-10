@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const P = require('../../../server/permissions');
+const P = require('../../../server/core/permissions');
 
 const u = (role, extra = {}) => ({ type: 'user', id: 10, role, departmentId: 1, ...extra });
 const vendor = (extra = {}) => ({ type: 'vendor', id: 50, role: 'vendor', ...extra });

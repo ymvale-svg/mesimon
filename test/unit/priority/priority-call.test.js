@@ -5,7 +5,7 @@
  */
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const Priority = require('../../../server/priority');
+const Priority = require('../../../server/integrations/priority');
 
 const HOST = 'https://p.priority-connect.online/odata/Priority/tabb2121.ini';
 

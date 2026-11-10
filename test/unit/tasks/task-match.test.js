@@ -1,9 +1,9 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const M = require('../../../server/ai/task-match');
+const M = require('../../../server/tasks/task-match');
 const { boot, D, mkTask } = require('./fixtures');
-const Dupes = require('../../../server/ai/task-dupes');
+const Dupes = require('../../../server/tasks/task-dupes');
 
 const sim = (a, b) => M.similarity(typeof a === 'string' ? { title: a } : a, typeof b === 'string' ? { title: b } : b);
 

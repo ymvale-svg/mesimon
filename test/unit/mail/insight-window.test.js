@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const R = require('../../../server/ai/insight-window');
+const R = require('../../../server/mail/insight-window');
 
 const WEEK = [0, 1, 2, 3, 4]; // ראשון–חמישי
 // 08.11.2026 — יום ראשון, 09:00 בישראל (שעון חורף, ‎+02:00‎)

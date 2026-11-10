@@ -5,8 +5,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 delete process.env.TOKEN_ENCRYPTION_KEY; // מפתח מקובץ — כמו במחשב מקומי
-const D = require('../../../server/db');
-const S = require('../../../server/secrets');
+const D = require('../../../server/core/db');
+const S = require('../../../server/core/secrets');
 
 test('encrypt/decrypt — הלוך ושוב, כולל עברית', () => {
   for (const plain of ['1//0abc-refresh-token', 'סוד בעברית 🔒', 'x'.repeat(5000)]) {

@@ -2,8 +2,8 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { boot, user, D } = require('../../helpers/db');
-const Priority = require('../../../server/priority');
-const A = require('../../../server/ai/priority-approvals');
+const Priority = require('../../../server/integrations/priority');
+const A = require('../../../server/priority/priority-approvals');
 
 boot();
 const PR_USERS = [

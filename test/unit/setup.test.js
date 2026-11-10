@@ -7,7 +7,7 @@ const os = require('node:os');
 
 test('מסד הנתונים בתיקייה זמנית', () => {
   assert.ok(process.env.DATA_DIR.startsWith(os.tmpdir()));
-  const D = require('../../server/db');
+  const D = require('../../server/core/db');
   assert.ok(D.DB_PATH.startsWith(os.tmpdir()));
 });
 
@@ -25,7 +25,7 @@ test('אין מפתחות לשירותים חיצוניים, ואין חברה �
   for (const k of ['ANTHROPIC_API_KEY', 'PRIORITY_USER', 'PRIORITY_PASSWORD', 'SMTP_HOST', 'GOOGLE_CLIENT_ID']) {
     assert.equal(process.env[k], undefined, k);
   }
-  const Priority = require('../../server/priority');
+  const Priority = require('../../server/integrations/priority');
   assert.deepEqual(Priority.allowed(), ['__none__']);
   assert.ok(!Priority.allowed().includes('test11'));
 });

@@ -2,8 +2,8 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const zlib = require('node:zlib');
-const X = require('../../../server/xlsx-write');
-const S = require('../../../server/spreadsheet');
+const X = require('../../../server/core/xlsx-write');
+const S = require('../../../server/core/spreadsheet');
 
 const sheetXml = (buf) => S.readZip(buf, (n) => n === 'xl/worksheets/sheet1.xml').get('xl/worksheets/sheet1.xml').toString('utf8');
 

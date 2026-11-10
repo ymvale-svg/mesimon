@@ -2,7 +2,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { boot, user: rawUser, D } = require('../../helpers/db');
-const M = require('../../../server/ai/mail-memory');
+const M = require('../../../server/mail/mail-memory');
 
 boot();
 const user = (o = {}) => rawUser({ full_name: 'עובד', ...o });

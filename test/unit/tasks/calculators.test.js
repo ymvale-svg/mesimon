@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const C = require('../../../server/ai/calculators');
+const C = require('../../../server/agents/calculators');
 
 const pay = (input) => C.run('calc_payroll', input);
 const ptax = (input) => C.run('calc_purchase_tax', input);

@@ -1,8 +1,8 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const Claude = require('../../../server/ai/claude');
-const V = require('../../../server/ai/voice-router');
+const Claude = require('../../../server/integrations/claude');
+const V = require('../../../server/whatsapp/voice-router');
 
 const LONG = 'תפתח משימה לשושנה לבדוק את הלוח בקומה השנייה, ותשלח מייל לאורן שיביא את ההסכם עד מחר';
 

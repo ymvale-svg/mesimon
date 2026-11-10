@@ -2,7 +2,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { boot, user, D } = require('../../helpers/db');
-const A = require('../../../server/auth');
+const A = require('../../../server/core/auth');
 
 boot();
 

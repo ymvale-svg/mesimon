@@ -2,9 +2,9 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { boot, D, mkUser, mkVendor, mkTask, DAY, ago, ahead } = require('./fixtures');
-const Today = require('../../../server/today');
-const Calendar = require('../../../server/calendar');
-const Invites = require('../../../server/invites');
+const Today = require('../../../server/today/today');
+const Calendar = require('../../../server/meetings/calendar');
+const Invites = require('../../../server/core/invites');
 
 boot();
 
