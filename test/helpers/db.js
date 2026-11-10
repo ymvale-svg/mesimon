@@ -18,7 +18,7 @@ function user(overrides = {}) {
   seq += 1;
   const now = new Date().toISOString();
   const row = {
-    name: `משתמש ${seq}`,
+    full_name: `משתמש ${seq}`,
     email: `user${seq}-${Date.now()}@test.local`,
     role: 'member',
     ...overrides

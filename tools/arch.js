@@ -50,38 +50,81 @@ function stripComments(src) {
     .replace(/(^|[^:'"`\\])\/\/[^\n]*/g, (m, p1) => p1 + ' '.repeat(m.length - p1.length));
 }
 
+/** קובץ כניסה של תחום (‎<תחום>/index.js‎): ‎get Name() { return require('./x'); }‎ → { Name: קובץ } */
+function facadeOf(file, src) {
+  if (path.basename(file) !== 'index.js' || path.dirname(file) === SERVER) return null;
+  const map = {};
+  for (const m of src.matchAll(/get\s+(\w+)\s*\(\)\s*\{\s*return\s+require\(\s*['"](\.\/[^'"]+)['"]\s*\)/g)) {
+    const target = resolve(file, m[2]);
+    if (target) map[m[1]] = target;
+  }
+  return map;
+}
+
+/** אילו שמות נלקחים מה-require: ‎require(x).A‎ או ‎const { A, B } = require(x)‎. ‎null‎ — כל המודול */
+function membersAt(src, at, end) {
+  const after = /^\s*\.\s*(\w+)/.exec(src.slice(end));
+  if (after) return [after[1]];
+  const before = /const\s*\{([^}]*)\}\s*=\s*$/.exec(src.slice(Math.max(0, at - 2000), at));
+  if (before) return before[1].split(',').map((x) => x.split(':')[0].trim()).filter(Boolean);
+  return null;
+}
+
 /** ניתוח קובץ: ייבואים (עם סימון אם בראש הקובץ) ופניות רשת */
 function analyzeFile(file) {
   const src = stripComments(fs.readFileSync(file, 'utf8'));
   const lines = src.split('\n');
-  const imports = [];
   const network = [];
-  let depth = 0; // עומק סוגריים מסולסלים — 0 = רמת הקובץ
+  // העומק (סוגריים מסולסלים) בתחילת כל שורה — 0 = רמת הקובץ
+  const depthAt = [];
+  let depth = 0;
   lines.forEach((line, i) => {
-    const re = /require\(\s*['"](\.{1,2}\/[^'"]+)['"]\s*\)/g;
-    // שורה שנפתחת ב-} (סוף של ‎const { a, b } = require(…)‎ על כמה שורות) — העומק שלה הוא של תחילת ההצהרה
-    const lineDepth = /^\s*\}/.test(line) ? Math.max(0, depth - 1) : depth;
-    let m;
-    while ((m = re.exec(line))) {
-      const target = resolve(file, m[1]);
-      if (!target || rel(target).startsWith('vendor/')) continue; // ספריות צד שלישי — טעינה עצלה מותרת
-      // ‎() => require(…)‎ — טעינה עצלה, גם כשהיא בראש הקובץ
-      const lazy = /=>\s*$/.test(line.slice(0, m.index));
-      imports.push({ target, line: i + 1, top: lineDepth === 0 && !lazy });
-    }
+    depthAt[i] = depth;
     if (/(^|[^.\w])fetch\(|\bhttps?\.(request|get)\(/.test(line)) network.push(i + 1);
     for (const ch of line.replace(/(['"`])(?:\\.|(?!\1).)*\1/g, '""')) {
       if (ch === '{') depth++;
       else if (ch === '}') depth = Math.max(0, depth - 1);
     }
   });
-  return { imports, network };
+  const lineStarts = [0];
+  for (let i = 0; i < src.length; i++) if (src[i] === '\n') lineStarts.push(i + 1);
+  const lineOf = (pos) => { let lo = 0; let hi = lineStarts.length - 1; while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (lineStarts[mid] <= pos) lo = mid; else hi = mid - 1; } return lo; };
+
+  const facade = facadeOf(file, src);
+  const facadeTargets = new Set(Object.values(facade ?? {}));
+  const imports = [];
+  for (const m of src.matchAll(/require\(\s*['"](\.{1,2}\/[^'"]+)['"]\s*\)/g)) {
+    const target = resolve(file, m[1]);
+    if (!target || rel(target).startsWith('vendor/')) continue; // ספריות צד שלישי — טעינה עצלה מותרת
+    const li = lineOf(m.index);
+    const line = lines[li];
+    // שורה שנפתחת ב-} (סוף של ‎const { a, b } = require(…)‎ על כמה שורות) — העומק שלה הוא של תחילת ההצהרה
+    const lineDepth = /^\s*\}/.test(line) ? Math.max(0, depthAt[li] - 1) : depthAt[li];
+    // ‎() => require(…)‎ — טעינה עצלה, גם כשהיא בראש הקובץ
+    const lazy = /=>\s*$/.test(src.slice(lineStarts[li], m.index));
+    // הגטרים של קובץ כניסה הם ה-require של התחום — לא טעינה עצלה
+    const top = facadeTargets.has(target) || (lineDepth === 0 && !lazy);
+    imports.push({ target, line: li + 1, top, members: membersAt(src, m.index, m.index + m[0].length) });
+  }
+  return { imports, network, facade };
 }
 
 function graph() {
   const files = listFiles();
   const nodes = {};
   for (const f of files) nodes[rel(f)] = analyzeFile(f);
+  // ייבוא דרך קובץ כניסה של תחום — הקשת היא לקבצים שבאמת נלקחים ממנו (‎require('../mail').MailScan‎)
+  for (const info of Object.values(nodes)) {
+    info.edges = [];
+    for (const imp of info.imports) {
+      const t = rel(imp.target);
+      const fac = nodes[t]?.facade;
+      if (fac && imp.members) {
+        for (const name of imp.members) info.edges.push(fac[name] ? rel(fac[name]) : t);
+      } else info.edges.push(t);
+    }
+    info.edges = [...new Set(info.edges)];
+  }
   return nodes;
 }
 
@@ -89,7 +132,7 @@ function graph() {
 function cycles(nodes) {
   let index = 0;
   const idx = {}; const low = {}; const on = new Set(); const stack = []; const out = [];
-  const edges = (n) => [...new Set(nodes[n].imports.map((x) => rel(x.target)))].filter((t) => nodes[t]);
+  const edges = (n) => nodes[n].edges.filter((t) => nodes[t]);
   function strong(v) {
     idx[v] = low[v] = index++; stack.push(v); on.add(v);
     for (const w of edges(v)) {
@@ -137,7 +180,22 @@ function violations(nodes = graph()) {
   return [...new Set(out)].sort();
 }
 
-module.exports = { graph, cycles, violations, domains, analyzeFile, listFiles, rel, SERVER };
+
+/** תלויות בין תחומים (‎{ priority: ['core', 'integrations', …] }‎) — לדוח */
+function domainGraph(nodes = graph()) {
+  const doms = domains();
+  const out = {};
+  for (const [file, info] of Object.entries(nodes)) {
+    const from = domainOf(file, doms)?.slice(0, -1) ?? '(שורש)';
+    for (const t of info.edges) {
+      const to = domainOf(t, doms)?.slice(0, -1) ?? '(שורש)';
+      if (to !== from) (out[from] ??= new Set()).add(to);
+    }
+  }
+  return Object.fromEntries(Object.entries(out).sort().map(([k, v]) => [k, [...v].sort()]));
+}
+
+module.exports = { graph, cycles, violations, domains, analyzeFile, listFiles, rel, SERVER, domainGraph };
 
 if (require.main === module) {
   const v = violations();
@@ -151,5 +209,9 @@ if (require.main === module) {
       for (const x of list) console.log(`  ${x.slice(k.length + 2)}`);
     }
     console.log(`\nסה"כ ${v.length} הפרות`);
+    if (process.argv.includes('--domains')) {
+      console.log('\nתלויות בין תחומים:');
+      for (const [k, list] of Object.entries(domainGraph())) console.log(`  ${k} → ${list.join(', ')}`);
+    }
   }
 }
