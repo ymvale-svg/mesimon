@@ -60,3 +60,12 @@ for (const mod of [http, https]) {
     };
   }
 }
+
+// טיימרים קבועים של השרת (ניקוי סשנים, רענון אסימונים…) לא מחזיקים את תהליך הבדיקה בחיים.
+// במקום ‎--test-force-exit‎, שקוטע את הדיווח ומעלים בדיקות מהספירה.
+const realSetInterval = globalThis.setInterval;
+globalThis.setInterval = function unrefInterval(...args) {
+  const t = realSetInterval.apply(this, args);
+  t?.unref?.();
+  return t;
+};
