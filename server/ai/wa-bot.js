@@ -1037,6 +1037,29 @@ function findContactCards(actor, q, only = 'any') {
   return { cards, google: fromGoogle, phonebook: fromBook };
 }
 
+/*
+ * 📖 "תן לי את כל התכונות שלך" — ההודעה המלאה, נבנית מקטלוג הפעולות (‎wa-actions.js‎: ‎section‎, ‎feature‎, ‎control‎),
+ * כך שהיא מתעדכנת עם הבוט: פעולה חדשה נכנסת, פעולה שכובתה או לא מורשית לכותב — יורדת (הוחלט 10.11.26, ישראל).
+ * ההודעה הקצרה ("עזרה") — ‎helpText‎.
+ */
+const PLAIN_FEATURES = /^(?:(?:תן|תני|תראה|תראי|שלח|תשלח)\s+לי\s+)?(?:את\s+)?(?:כל\s+)?(?:ה)?(?:תכונות|יכולות|אפשרויות)(?:\s+(?:שלך|של\s+הבוט|החדשות))?[?!.]*$|^מה\s+(?:אתה\s+(?:יודע|יכול)|אפשר)\s+לעשות[?!.]*$|^מה\s+חדש\s+(?:בבוט|אצלך)[?!.]*$|^(?:כל\s+)?(?:ה)?תכונות\s+(?:החדשות\s+)?(?:של\s+)?(?:ה)?בוט[?!.]*$/;
+
+function featuresText(actor) {
+  // מהקטלוג (‎wa-actions.js‎): כל פעולה מופעלת ומורשית לכותב — בפרק שלה. חדשה בלי שורה — התווית והדוגמה הראשונה
+  const actions = WaActions.list().filter((a) => a.key !== 'help' && WaActions.allowed(actor, a.key) && (!a.requires || WaActions.allowed(actor, a.requires)));
+  const lineOf = (a) => a.feature || `${a.icon} *${a.label}*${a.examples?.[0] ? ` — "${a.examples[0]}"` : ''}`;
+  const lines = ['📖 *כל מה שאפשר לעשות איתי*'];
+  const known = new Set(WaActions.SECTIONS.map(([k]) => k));
+  for (const [key, title] of WaActions.SECTIONS) {
+    const rows = actions.filter((a) => (known.has(a.section) ? a.section : 'other') === key).map((a) => `• ${lineOf(a)}`);
+    if (rows.length) lines.push('', title, ...rows);
+  }
+  const control = actions.flatMap((a) => a.control ?? []);
+  if (control.length) lines.push('', '🔕 *יותר מדי? אתם בשליטה*', ...control.map((x) => `• ${x}`));
+  lines.push('', '👀 אני מגיב באימוג\'י במקום "רגע…": ✍️ כותב · 🔍 מחפש · 📅 ביומן · ✅ בוצע', '', 'אפשר לכתוב או להקליט בשפה חופשית 🙂 בכל שלב — "ביטול".');
+  return lines.join('\n');
+}
+
 function helpText(actor) {
   const actions = WaActions.forActor(actor);
   if (!actions.length) return 'כרגע אין פעולות זמינות לך בוואטסאפ.';
@@ -1044,7 +1067,7 @@ function helpText(actor) {
     'אני הבוט של משימון. אפשר לכתוב לי:',
     ...actions.filter((a) => a.key !== 'help').map((a) => `${a.icon} *${a.label}*${a.examples[0] ? ` — "${a.examples[0]}"` : ''}`),
     '',
-    'בכל שלב: "ביטול".'
+    'בכל שלב: "ביטול". כל התכונות, בפירוט: "תן לי את כל התכונות שלך".'
   ].join('\n');
 }
 
@@ -3073,6 +3096,8 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
     }
   }
 
+  // 📖 "תן לי את כל התכונות שלך" — ההודעה המלאה, בלי AI
+  if (PLAIN_FEATURES.test(t) && actor.type === 'user') return out(featuresText(actor), {}, { action: 'help', status: 'ok', result: 'כל התכונות' });
   // "סוכנים" — הרשימה, בלי AI
   if (PLAIN_AGENTS.test(t) && actor.type === 'user' && WaActions.allowed(actor, 'mail_ask')) return out(agentsText(actor), {}, { action: 'mail_ask', status: 'ok', result: 'רשימת הסוכנים' });
 
@@ -4846,7 +4871,7 @@ module.exports = {
   // לשליחה ממודולים אחרים — התראה לפני פגישה (‎meetings.js‎), עם רישום ביומן הבוט
   sendText, sendButtons, log, notifyAssignment, assistant, deliver, sendFilesToUser, mailAlertUsers,
   _internal: {
-    parseThreadAdd, threadAddText, dayItems, walkText, walkButtons, walkAction, WALK,
+    featuresText, PLAIN_FEATURES, parseThreadAdd, threadAddText, dayItems, walkText, walkButtons, walkAction, WALK,
     storeGroupMessage, processGroup, handleDirect, sanitizeGroup, resolveMentions, candidatesOf, converse, turn, withFollowUps, sendSummaries, YES,
     findRecipients, findContactCards, sourceOf, suggestionFeedback, flushOutbox, todayMessage, splitMessage, parseSuggestionCommand, businessCommand, chatOf, saveChat,
     recordingReply, checkDraft, draftText, createFromDraft, mailAlertFor, closeAlerted, logoIntent, busyFor, userLastAt, staleQuestion
