@@ -153,10 +153,26 @@ function paceTick(userId) {
   userId, today, cur.count + 1, D.nowIso());
 }
 
-/** אפשר לשלוח עכשיו תזכורת לעובד הזה? (השתקה, שעות, קצב, תקרה, פגישה ביומן) */
+/*
+ * "לא על חשבון שום דבר אחר" (הוחלט 10.11.26): התזכורות הן בעדיפות האחרונה. הבוט רושם כל הודעה יזומה
+ * אחרת (תדריך, "איך היה?", חשבונית, טופס, סיכום, התראה לפני פגישה) וכל הודעה של העובד — ותזכורת מחכה:
+ *   • חצי שעה (לפי הקצב) אחרי כל הודעה יזומה — לא רק אחרי תזכורת קודמת;
+ *   • 5 דקות אחרי שהעובד כתב לבוט — לא נכנסים באמצע שיחה;
+ *   • לא בפגישה, וגם לא ב-15 הדקות שלפני פגישה (שם מגיעים התדריך וההתראה).
+ */
+const lastAny = new Map();   // ‎userId‎ → מתי נשלחה אליו הודעה יזומה כלשהי
+const lastUser = new Map();  // ‎userId‎ → מתי כתב לבוט
+const noteProactive = (userId) => lastAny.set(Number(userId), Date.now());
+const noteUser = (userId) => lastUser.set(Number(userId), Date.now());
+const USER_QUIET_MS = 5 * 60 * 1000;
+const BEFORE_MEETING_MS = 15 * 60 * 1000;
+
+/** אפשר לשלוח עכשיו תזכורת לעובד הזה? (השתקה, שעות, קצב, תקרה, הודעות אחרות, פגישה ביומן) */
 async function mayRemindNow(userId) {
   const pace = paceOf(userId);
   if (!pace.max) return false;
+  if (Date.now() - (lastUser.get(Number(userId)) ?? 0) < USER_QUIET_MS) return false;
+  if (Date.now() - (lastAny.get(Number(userId)) ?? 0) < pace.gapMin * 60000) return false;
   const mute = D.userPrefs(userId)?.botPrefs?.remindMuteUntil;
   if (mute && W.todayIL() < mute) return false;
   const now = new Date();
@@ -171,7 +187,8 @@ async function mayRemindNow(userId) {
     const Calendar = require('../calendar');
     if (Calendar.isConnected(userId)) {
       const day = await Calendar.eventsForDay(userId);
-      if ((day.events ?? []).some((e) => !e.allDay && !e.declined && new Date(e.start) <= now && new Date(e.end) > now)) return false;
+      // בפגישה, או שהיא מתחילה בעוד פחות מ-15 דקות
+      if ((day.events ?? []).some((e) => !e.allDay && !e.declined && new Date(e.start).getTime() - BEFORE_MEETING_MS <= now.getTime() && new Date(e.end) > now)) return false;
     }
   } catch { /* בלי יומן */ }
   return true;
@@ -340,6 +357,15 @@ function goodsQuestion(row, { after = false } = {}) {
  * @param {{deadline: boolean, followup: boolean, goods: boolean, form: boolean}} allow
  */
 async function nextQuestion(userId, allow) {
+  // קודם שאלות על פעולה (טופס, חשבונית) — התזכורות בעדיפות האחרונה, "לא על חשבון שום דבר אחר"
+  if (allow.form) {
+    const row = require('./form-fill').nextForm(userId);
+    if (row) return require('./form-fill').question(row);
+  }
+  if (allow.goods) {
+    const row = nextGoods(userId);
+    if (row) { D.run("UPDATE mail_goods_docs SET status = 'asked', asked_at = ? WHERE id = ?", D.nowIso(), row.id); return { ...goodsQuestion(row), action: 'goods_offer', log: `📄 ${row.supplier || row.from_name}: ${row.filename}` }; }
+  }
   // תזכורות (מייל שלא טופל, שאלה ששלחת ולא נענתה) — בקצב אחד משותף, בלי הצפה
   const paced = (allow.deadline || allow.followup) && await mayRemindNow(userId);
   if (paced && allow.deadline) {
@@ -354,14 +380,6 @@ async function nextQuestion(userId, allow) {
   if (paced && allow.followup) {
     const q = await require('./sent-followup').next(userId);
     if (q) { paceTick(userId); return q; }
-  }
-  if (allow.form) {
-    const row = require('./form-fill').nextForm(userId);
-    if (row) return require('./form-fill').question(row);
-  }
-  if (allow.goods) {
-    const row = nextGoods(userId);
-    if (row) { D.run("UPDATE mail_goods_docs SET status = 'asked', asked_at = ? WHERE id = ?", D.nowIso(), row.id); return { ...goodsQuestion(row), action: 'goods_offer', log: `📄 ${row.supplier || row.from_name}: ${row.filename}` }; }
   }
   return null;
 }
@@ -421,6 +439,6 @@ function prune() {
 }
 
 module.exports = {
-  GOODS_SCHEMA, BTN, goodsDocFrom, goodsFile, nextQuestion, answerReminder, answerGoods, prune, dueReminders, mayRemindNow, paceTick, PACE, paceCommand,
+  GOODS_SCHEMA, BTN, goodsDocFrom, goodsFile, nextQuestion, answerReminder, answerGoods, prune, dueReminders, mayRemindNow, paceTick, PACE, paceCommand, noteProactive, noteUser,
   _internal: { nextReminder, nextGoods, reminderQuestion, goodsQuestion, setRemind, remindAt, scoreOf, handledInGmail, paceState }
 };

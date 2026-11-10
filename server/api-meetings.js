@@ -27,10 +27,14 @@ function register(router, h) {
     // 📅 התראה מהיומן — עם כפתור "מי משתתף?"
     sendButtons: async (chatId, text, buttons) => {
       await WaBot.sendButtons(chatId, text, buttons);
+      // התראה לפני פגישה — תזכורות מהמייל לא באות מיד אחריה (‎mail-actions.mayRemindNow‎)
+      require('./ai/mail-actions').noteProactive(WaBot.userByPhone(String(chatId).replace(/@c\.us$/, ''))?.id);
       WaBot.log({ channel: 'summary', chatId, action: 'meeting_reminder', status: 'ok', result: `${text.split('\n')[0]} (מהיומן)` });
     },
     sendWhatsApp: async (chatId, text) => {
       await WaBot.sendText(chatId, text);
+      // התראה לפני פגישה — תזכורות מהמייל לא באות מיד אחריה (‎mail-actions.mayRemindNow‎)
+      require('./ai/mail-actions').noteProactive(WaBot.userByPhone(String(chatId).replace(/@c\.us$/, ''))?.id);
       WaBot.log({ channel: 'summary', chatId, action: 'meeting_reminder', status: 'ok', result: text.split('\n')[0] });
     }
   });
