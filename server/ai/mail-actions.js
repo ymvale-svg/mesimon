@@ -244,17 +244,100 @@ function paceCommand(userId, text) {
       save({ remindMuteUntil: until });
       return { text: '🔕 בסדר, היום בלי תזכורות מהמייל. מחר הן חוזרות לבד 🌼', result: 'השתקה להיום' };
     }
-    save({ remindPace: 'off', remindMuteUntil: null });
+    save({ remindPace: 'off', remindMuteUntil: null, remindPaceSetAt: D.nowIso() });
     return { text: '🔕 הפסקתי את התזכורות מהמייל.\nלהחזיר — "תחזיר את התזכורות מהמייל". רק בבוקר — "תזכורות מהמייל רק בבוקר".', result: 'תזכורות מהמייל — כבוי' };
   }
   if (pace) {
-    save({ remindPace: pace, remindMuteUntil: null });
+    save({ remindPace: pace, remindMuteUntil: null, remindPaceSetAt: D.nowIso() });
     return { text: `🌊 התזכורות מהמייל: *${PACE_LABEL[pace]}*.`, result: `קצב: ${pace}` };
   }
   if (ON.test(t)) {
     const was = prefs.remindPace;
-    save({ remindPace: was && was !== 'off' ? was : 'normal', remindMuteUntil: null, mailDeadline: true });
+    save({ remindPace: was && was !== 'off' ? was : 'normal', remindMuteUntil: null, mailDeadline: true, remindPaceSetAt: D.nowIso() });
     return { text: `🔔 התזכורות מהמייל חזרו (${PACE_LABEL[was && was !== 'off' ? was : 'normal']}).\nלהפסיק — "תפסיק להזכיר לי מהמייל".`, result: 'תזכורות מהמייל — פועל' };
+  }
+  return null;
+}
+
+// ---------------------------------------------------------------------------
+// 🌊 קצב מותאם (הוחלט 10.11.26, ישראל: "תבנה את ההצעה האוטומטית לעובדים עמוסים")
+// ---------------------------------------------------------------------------
+
+/*
+ * עובד עמוס לא עונה לתזכורות — והן ממשיכות להגיע. הבוט שם לב ומציע פעם אחת להוריד קצב:
+ *   • ב-3 ימי העבודה האחרונים נשאלו לפחות ‎OFFER_MIN_ASKED‎ תזכורות "זכרת?", ו-70% ומעלה מהן לא נענו
+ *     (לא "לפתוח משימה" ולא טיפול ב-Gmail) או נענו ב"התעלם".
+ *   • רק בקצב "רגיל"; לא למי שבחר קצב בעצמו בשבועיים האחרונים; הצעה אחת לכל ‎OFFER_EVERY_DAYS‎ ימים.
+ *   • במקום התזכורת הבאה (לא הודעה נוספת): [רק בבוקר ☀️] [פחות 🌊] [להשאיר 👍]. "להשאיר" — לא מציעים שוב חודש.
+ */
+const OFFER_MIN_ASKED = 4;
+const OFFER_RATIO = 0.7;
+const OFFER_EVERY_DAYS = 14;
+const PACE_BTN = Object.freeze({ morning: 'רק בבוקר ☀️', light: 'פחות 🌊', keep: 'להשאיר 👍' });
+
+/** כמה תזכורות נשאלו בימים האחרונים, וכמה מהן לא קיבלו מענה של ממש */
+async function engagement(userId, days = 3) {
+  const since = W.ilWallToUtc(W.addDays(W.todayIL(), -days), 0, 0).toISOString();
+  const rows = D.all(
+    `SELECT id, user_id, gmail_id, received_at, created_at, data FROM ai_suggestions
+      WHERE user_id = ? AND json_extract(data, '$.remind.askedAt') >= ?`, userId, since
+  ).map((x) => ({ row: x, r: parseJson(x.data, {}).remind ?? {} }));
+  // נשאלה בשעתיים האחרונות — עוד מוקדם לדעת
+  const asked = rows.filter(({ r }) => Date.now() - Date.parse(r.askedAt) > 2 * HOUR);
+  let engaged = 0;
+  for (const { row, r } of asked) {
+    if (['task', 'answered', 'archived'].includes(r.closed)) { engaged++; continue; }
+    if (r.closed) continue;
+    // טיפל ב-Gmail אחרי התזכורת (ענה / ארכב) — זה מענה, לא התעלמות
+    const handled = await handledInGmail(row);
+    if (handled) { setRemind(row.id, { closed: handled, at: D.nowIso() }); engaged++; }
+  }
+  return { asked: asked.length, engaged, cold: asked.length - engaged };
+}
+
+/** להציע עכשיו להוריד קצב? ‎null‎ — לא */
+async function paceOffer(userId) {
+  const p = D.userPrefs(userId)?.botPrefs ?? {};
+  if ((p.remindPace ?? 'normal') !== 'normal') return null;
+  const recent = (iso, d) => iso && Date.now() - Date.parse(iso) < d * DAY;
+  if (recent(p.remindPaceSetAt, 14) || recent(p.paceOfferAt, p.paceOfferKept ? 30 : OFFER_EVERY_DAYS)) return null;
+  const e = await engagement(userId);
+  if (e.asked < OFFER_MIN_ASKED || e.cold / e.asked < OFFER_RATIO) return null;
+  D.setUserPref(userId, 'botPrefs', { ...p, paceOfferAt: D.nowIso(), paceOfferKept: false });
+  const u = D.get('SELECT full_name FROM users WHERE id = ?', userId);
+  return {
+    text: [
+      `${firstName(u?.full_name) ? `${firstName(u.full_name)}, ` : ''}נראה שאת/ה בעומס 🙂`,
+      `מ-${e.asked} התזכורות מהמייל בימים האחרונים, ${e.cold} נשארו בלי טיפול. אולי פחות מדי מועיל, ויותר מדי רעש?`,
+      '',
+      '*להוריד קצב?*',
+      `• *${PACE_BTN.morning}* — רק רשימה אחת בסיכום הבוקר`,
+      `• *${PACE_BTN.light}* — רק החשוב ביותר, אחת ביום`
+    ].join('\n'),
+    buttons: [PACE_BTN.morning, PACE_BTN.light, PACE_BTN.keep],
+    draft: { kind: 'pace_offer' },
+    action: 'mail_deadline',
+    log: `🌊 הצעה להוריד קצב: ${e.cold}/${e.asked} תזכורות בלי מענה`
+  };
+}
+
+/** תשובה להצעה. ‎null‎ — לא שייך */
+function answerPaceOffer(userId, text) {
+  const t = String(text ?? '').trim();
+  const n = WaUi.normalize(t);
+  const p = D.userPrefs(userId)?.botPrefs ?? {};
+  const set = (pace) => D.setUserPref(userId, 'botPrefs', { ...p, remindPace: pace, remindMuteUntil: null, remindPaceSetAt: D.nowIso() });
+  if (WaUi.sameLabel(t, PACE_BTN.morning) || /^(רק\s+(?:ב)?בוקר|בבוקר|בוקר)([\s,.!]|$)/.test(n)) {
+    set('morning');
+    return { text: '☀️ סגור — מעכשיו המיילים רק ברשימה של סיכום הבוקר, ובמהלך היום שקט.\nלחזור: "תזכורות מהמייל כרגיל".', result: 'קצב: רק בבוקר' };
+  }
+  if (WaUi.sameLabel(t, PACE_BTN.light) || /^(פחות|מעט|כן)([\s,.!]|$)/.test(n)) {
+    set('light');
+    return { text: '🌊 סגור — רק המייל החשוב ביותר, אחד ביום.\nלחזור: "תזכורות מהמייל כרגיל".', result: 'קצב: מעט' };
+  }
+  if (WaUi.sameLabel(t, PACE_BTN.keep) || /^(להשאיר|תשאיר|לא|כרגיל|זה\s+בסדר)([\s,.!]|$)/.test(n)) {
+    D.setUserPref(userId, 'botPrefs', { ...p, paceOfferKept: true });
+    return { text: '👍 בסדר, ממשיכים כרגיל.', result: 'קצב: נשאר רגיל' };
   }
   return null;
 }
@@ -377,6 +460,9 @@ async function nextQuestion(userId, allow) {
   const paced = (allow.deadline || allow.followup) && await mayRemindNow(userId);
   if (paced && allow.deadline) {
     const row = (await dueReminders(userId, { limit: 1 }))[0];
+    // 🌊 עובד שלא עונה לתזכורות — במקום התזכורת הבאה, הצעה להוריד קצב (פעם אחת)
+    const offer = row ? await paceOffer(userId) : null;
+    if (offer) { paceTick(userId); return offer; }
     if (row) {
       setRemind(row.id, { askedAt: D.nowIso() });
       paceTick(userId);
@@ -446,6 +532,6 @@ function prune() {
 }
 
 module.exports = {
-  GOODS_SCHEMA, BTN, goodsDocFrom, goodsFile, nextQuestion, answerReminder, answerGoods, prune, dueReminders, mayRemindNow, paceTick, PACE, paceCommand, noteProactive, noteUser,
-  _internal: { nextReminder, nextGoods, reminderQuestion, goodsQuestion, setRemind, remindAt, scoreOf, handledInGmail, paceState }
+  GOODS_SCHEMA, BTN, PACE_BTN, answerPaceOffer, goodsDocFrom, goodsFile, nextQuestion, answerReminder, answerGoods, prune, dueReminders, mayRemindNow, paceTick, PACE, paceCommand, noteProactive, noteUser,
+  _internal: { engagement, paceOffer, nextReminder, nextGoods, reminderQuestion, goodsQuestion, setRemind, remindAt, scoreOf, handledInGmail, paceState }
 };

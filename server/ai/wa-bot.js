@@ -2632,6 +2632,13 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
     if (r) return out(r.text, {}, { action: 'reminders', status: r.error ? 'error' : 'ok', result: r.result, react: /^(תזכורת|בוטלה)/.test(r.result ?? '') ? '✅' : undefined });
   }
   // 📬 "זכרת? 🐣" על מייל שלא טופל, ו"לבצע קבלת סחורה?" על חשבונית מהמייל
+  // 🌊 "להוריד קצב?" — הצעה אוטומטית לעובד שלא עונה לתזכורות (‎mail-actions.js‎)
+  if (state.awaiting && state.draft?.kind === 'pace_offer') {
+    const r = dry ? null : MailActions.answerPaceOffer(actor.id, t);
+    if (r) return out(r.text, { draft: null }, { action: 'mail_deadline', status: 'ok', result: r.result, react: '👌' });
+    keep.draft = null;
+    state = { ...state, draft: null, awaiting: false };
+  }
   if (state.awaiting && ['mail_remind', 'goods_offer'].includes(state.draft?.kind)) {
     const d = state.draft;
     if (d.kind === 'mail_remind') {
