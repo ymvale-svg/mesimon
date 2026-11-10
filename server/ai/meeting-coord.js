@@ -275,7 +275,7 @@ async function answer(actor, d, text, { searchContacts, closeAlerted } = {}) {
   if (!row) return null;
   if (d.step === 'review') {
     if (cancel) { D.run("UPDATE meet_coord SET status = 'cancelled' WHERE id = ?", row.id); return { text: 'בסדר, לא נשלח כלום 👍', draft: null, result: 'בוטל' }; }
-    if (WaUi.sameLabel(t, BTN.send) || /^(כן|שלח|לשלוח|מאשר|אשר)(\s|$)/.test(n)) return { send: true, coordId: row.id, text: '📤 שולח…', draft: null, result: 'לשלוח' };
+    if (WaUi.sameLabel(t, BTN.send) || /^(כן|שלח|לשלוח|מאשר|אשר)(\s|$)/.test(n)) return { send: true, coordId: row.id, text: '', react: '📤', draft: null, result: 'לשלוח' };
     const prefs = { ...row.prefs };
     if (/בוקר/.test(n)) prefs.part_of_day = 'morning';
     if (/(אחה"?צ|אחר\s+הצהריים|צהריים)/.test(n)) prefs.part_of_day = 'afternoon';
@@ -299,7 +299,7 @@ async function answer(actor, d, text, { searchContacts, closeAlerted } = {}) {
   }
   if (d.step === 'confirm_other') {
     if (cancel || WaUi.NO.test(n)) { D.run("UPDATE meet_coord SET status = 'needs_user' WHERE id = ?", row.id); return { text: `בסדר. כדאי לענות ל${row.contact.name} ישירות 👍`, draft: null, result: 'לא אושר מועד אחר' }; }
-    if (WaUi.sameLabel(t, BTN.approve) || WaUi.YES.test(n)) return { book: true, coordId: row.id, start: d.start, text: '📅 קובע…', draft: null, result: 'אישר מועד אחר' };
+    if (WaUi.sameLabel(t, BTN.approve) || WaUi.YES.test(n)) return { book: true, coordId: row.id, start: d.start, text: '', react: '📅', draft: null, result: 'אישר מועד אחר' };
   }
   return null;
 }

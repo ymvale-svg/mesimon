@@ -401,7 +401,7 @@ function answerGoods(draft, text) {
   const t = String(text ?? '').trim();
   if (is(t, BTN.receive, RECEIVE) || WaUi.YES.test(WaUi.normalize(t))) {
     D.run("UPDATE mail_goods_docs SET status = 'started', decided_at = ? WHERE id = ?", D.nowIso(), draft.goodsId);
-    return { start: true, text: `📥 מוריד את ${draft.filename} מהמייל ומתחיל קבלת סחורה…`, result: `קבלת סחורה מהמייל: ${draft.filename}` };
+    return { start: true, text: '', react: '🧐', result: `קבלת סחורה מהמייל: ${draft.filename}` };
   }
   if (is(t, BTN.later, TOMORROW)) {
     const next = W.addDays(W.todayIL(), 1);

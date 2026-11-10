@@ -447,14 +447,14 @@ function answer(userId, d, text) {
   }
   if (d.step === 'offer') {
     if (WaUi.sameLabel(t, BTN.fill) || WaUi.YES.test(n) || /^(למלא|תמלא|מלא)/.test(n)) {
-      return { text: '📝 ממלא את הטופס — דקה…', draft: null, result: 'למלא', work: () => produce(row, user) };
+      return { text: '', react: '📝', draft: null, result: 'למלא', work: () => produce(row, user) };
     }
     return null;
   }
   if (d.step === 'review') {
     if (WaUi.sameLabel(t, BTN.send) || /^(לשלוח|שלח|תשלח)/.test(n)) {
       return {
-        text: `📤 שולח ל${row.from_name || row.from_email}…`, draft: null, result: 'לשלוח לשולח',
+        text: '', react: '📤', draft: null, result: 'לשלוח לשולח',
         work: async () => {
           const fresh = D.get('SELECT * FROM mail_forms WHERE id = ?', row.id);
           await sendBack(fresh, user, { buf: fs.readFileSync(storedPath(row.id)), fileName: fresh.out_name || `${row.filename}.pdf`, mime: 'application/pdf' });
@@ -464,7 +464,7 @@ function answer(userId, d, text) {
     }
     if (WaUi.sameLabel(t, BTN.fix)) return { text: 'מה לתקן? למשל: "מספר העובדים 40", "איש הקשר — רותי לוי 050-…".', draft: d, awaiting: true, result: 'לתקן' };
     const prev = parseJson(row.fill, null);
-    return { text: '✏️ מעדכן…', draft: null, result: `תיקון: ${t}`.slice(0, 300), work: () => produce(row, user, prev, t) };
+    return { text: '', react: '📝', draft: null, result: `תיקון: ${t}`.slice(0, 300), work: () => produce(row, user, prev, t) };
   }
   return null;
 }

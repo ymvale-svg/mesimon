@@ -139,7 +139,7 @@ function answer(userId, d, text) {
   const n = WaUi.normalize(t);
   const row = D.get('SELECT * FROM sent_followups WHERE id = ? AND user_id = ?', d.followupId, userId);
   if (!row) return null;
-  if (WaUi.sameLabel(t, BTN.send) || /^(לשלוח|שלח|תשלח|כן|👍)([\s,.!]|$)/.test(n)) return { send: true, text: '📤 שולח…', result: `תזכורת ל${row.to_name || row.to_email}` };
+  if (WaUi.sameLabel(t, BTN.send) || /^(לשלוח|שלח|תשלח|כן|👍)([\s,.!]|$)/.test(n)) return { send: true, text: '', react: '📤', result: `תזכורת ל${row.to_name || row.to_email}` };
   if (WaUi.sameLabel(t, BTN.ignore) || /^(התעלם|לא|עזוב|👎)([\s,.!]|$)/.test(n)) {
     D.run("UPDATE sent_followups SET status = 'ignored' WHERE id = ?", row.id);
     return { text: 'בסדר, לא אזכיר על זה שוב 🙂', result: `התעלם: ${row.to_email}` };
