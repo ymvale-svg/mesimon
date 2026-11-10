@@ -16,7 +16,7 @@ const AiTaskView = (() => {
 
   const CHANNEL_ICON = { email: '📧', whatsapp: '💬', note: '📝', system: '🔔' };
   const KIND_LABEL = {
-    initial: 'פנייה', reminder: 'תזכורת', reply: 'תשובה', thanks: 'תודה', inbound: 'תשובה התקבלה',
+    initial: 'פנייה', reminder: 'תזכורת', reply: 'תשובה', thanks: 'תודה', cc_added: 'הוספה לשרשור', inbound: 'תשובה התקבלה',
     manual: 'עדכון שלך', owner_contact: 'כתבת לנמען בעצמך', internal: 'הועבר במשימון'
   };
   const EVENT_LABEL = {

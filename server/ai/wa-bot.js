@@ -48,6 +48,7 @@ const Speech = require('../speech');
 const WaActions = require('./wa-actions');
 const MailInsights = require('./mail-insights');
 const VoiceRouter = require('./voice-router');
+const MailThread = require('./mail-thread');
 const Phonebook = require('../phonebook');
 const Solve = require('./solve');
 const ProjectHints = require('../project-hints');
@@ -1642,6 +1643,7 @@ function emailText(p) {
   ] : [
     `✉️ *טיוטה ל${p.contact.name || p.contact.email}*${p.contact.email ? ` <${p.contact.email}>` : ''}${colleague ? ' · 👤 עובד/ת בארגון' : ''}`,
     `*נושא:* ${p.draft.subject}`,
+    p.replyThread ? `↩️ *בהמשך לשרשור* "${p.replyThread.subject}" — לא כמייל חדש. _("מייל חדש" — אם לא)_` : null,
     '',
     p.draft.body.slice(0, 2500),
     // החתימה עצמה מ-Gmail — לא מוצגת כאן במלואה, רק שהיא תצורף (או שאין)
@@ -1679,12 +1681,26 @@ async function draftEmail(actor, contact, instruction, { feedback = '', previous
   const via = contact.type === 'user' ? 'email' : channel ?? previous?.channel ?? 'email';
   // בבדיקה ממסך הניהול (‎dry‎) לא קוראים את התיבה של העובד
   const context = previous || dry || via !== 'email' || !contact.email ? '' : await AiTasks.mailContext(actor.id, contact.email);
+  // ↩️ בהמשך לשרשור (10.11.26): השרשורים האחרונים עם הנמען — ה-AI בוחר אם זה אותו עניין. "מייל חדש" — בלי שרשור
+  const wantNew = /מייל\s+חדש|שרשור\s+חדש|לא\s+בשרשור|בלי\s+(?:ה)?שרשור|לא\s+כתשובה/.test(feedback);
+  const wantThread = !wantNew && /בשרשור|בהמשך\s+ל|על\s+(?:ה)?מייל|כתשובה/.test(feedback);
+  const threads = !dry && via === 'email' && contact.email && (!previous || (wantThread && !previous.replyThread))
+    ? await MailThread.recentThreads(actor.id, contact.email) : [];
   const d = await AiTasks.draftInitial({
     owner, instruction, contact: via === 'whatsapp' ? { ...contact, phone: contact.mobile || contact.phone } : contact, channel: via, context,
+    threads: MailThread.threadsText(threads),
     cc: previous?.cc ?? [],
     feedback, previous: previous ? previous.draft : null
   });
-  const { cc, ccAsk } = resolveCc(actor, d.cc_names, { previous: previous?.cc ?? [], contact });
+  const picked = threads.length ? (threads[Number(d.reply_thread) - 1] ?? (wantThread ? threads[0] : null)) : null;
+  const replyThread = picked
+    ? { box: picked.box, threadId: picked.threadId, subject: picked.subject, inReplyTo: picked.inReplyTo, references: picked.references, lastAt: picked.lastAt }
+    : wantNew ? null : previous?.replyThread ?? null;
+  if (replyThread) d.subject = `Re: ${replyThread.subject}`;
+  const resolved = resolveCc(actor, d.cc_names, { previous: previous?.cc ?? [], contact });
+  const { ccAsk } = resolved;
+  // תשובה בשרשור — מי שכבר היה בו נשאר בהעתק (כמו "השב לכולם")
+  const cc = picked ? [...resolved.cc, ...MailThread.threadCc(actor.id, picked, contact.email).filter((p) => !resolved.cc.some((c) => c.email === p.email))] : resolved.cc;
   const suggestions = (Array.isArray(d.suggestions) ? d.suggestions : []).map((x) => String(x).trim()).filter(Boolean).slice(0, 4);
   return {
     kind: 'email',
@@ -1707,6 +1723,7 @@ async function draftEmail(actor, contact, instruction, { feedback = '', previous
     notes: String(d.notes ?? '').trim().slice(0, 300),
     cc: via === 'email' ? cc : [],
     ccAsk: via === 'email' ? ccAsk : [],
+    replyThread: via === 'email' ? replyThread : null,
     ...(via === 'email' ? await signatureFields(actor.id) : { signature: false, noSignature: null })
   };
 }
@@ -1730,6 +1747,39 @@ function resolveCc(actor, names, { previous = [], contact = {} } = {}) {
     else ccAsk.push({ name: raw, options: found.slice(0, 5).map((c) => ({ name: c.name, email: c.email, org: c.organization || '' })) });
   }
   return { cc: AiTasks.cleanCc(cc, { contactEmail: contact.email }), ccAsk };
+}
+
+// ➕ להוסיף אנשים לשרשור של מייל שכבר יצא (10.11.26, ישראל: "אפשר לעשות פלוס שרי הרשקוביץ — ולכתב אותה לשרשור,
+// שיענו בסופו של דבר לשניים"): "+שרי הרשקוביץ", "פלוס שרי", "תוסיף להתכתבות גם את שרי", "תכתב את דני למייל"
+const THREAD_PLUS = /^(?:\+|פלוס\s+)\s*(\S.*)$/;
+const THREAD_ADD_VERB = /^ו?(?:תוסיף|תוסיפי|הוסף|להוסיף|תכתב|תכתבי|לכתב|תצרף|תצרפי|צרף|לצרף|תשים|תשימי)(?:\s|$)/;
+const THREAD_WORD = /(?:^|\s)(?:ל|ב|ה)?(?:התכתבות|שרשור|מייל|העתק|כתב|cc)(?=\s|$|[,.!])/i;
+
+function parseThreadAdd(text) {
+  const t = String(text ?? '').trim().replace(/[.!?]+$/, '');
+  let names = null;
+  const plus = THREAD_PLUS.exec(t);
+  if (plus) names = plus[1];
+  else if (THREAD_ADD_VERB.test(t) && THREAD_WORD.test(t)) {
+    const m = /(?:^|\s)(?:גם\s+)?את\s+(.+)$/.exec(t);
+    if (!m) return { names: [] };
+    names = m[1];
+  } else return null;
+  // מה שאחרי השם ("בהעתק", "למייל ללייסנטק") — לא חלק מהשם
+  const cut = names.search(THREAD_WORD);
+  if (cut > 0) names = names.slice(0, cut);
+  const list = names.split(/\s*,\s*|\s+ו?את\s+|\s+\+\s*/).map((x) => x.replace(/^גם\s+/, '').trim()).filter((x) => x.length > 1);
+  return { names: list.slice(0, 5) };
+}
+
+/** השורה לאישור: את מי, לאיזה שרשור, ולמי התשובה */
+function threadAddText(d) {
+  const who = d.people.map((c) => `${c.name || c.email}${c.name ? ` <${c.email}>` : ''}`).join(', ');
+  const to = d.to ? `${d.to.name || d.to.email}` : '';
+  return [
+    `➕ *להוסיף את ${who}* לשרשור *"${d.thread.subject}"*?`,
+    `אשלח בשרשור תשובה לכולם${to ? ` (ל${/^[א-ת]/.test(to) ? '' : '-'}${to})` : ''} עם "+${d.people.map((c) => c.name || c.email).join(', +')}" ובהעתק — כך שהתשובה תגיע לכולם.`
+  ].join('\n');
 }
 
 /** הבקשה להוסיף הצעה לפי מספר: "תוסיף את 1", "1 ו-3", "2" */
@@ -1853,6 +1903,8 @@ async function confirmPending(actor, pending, dry) {
       const r = dry ? { taskId: null, sendError: null } : await hooks.mail.createAiTask(actor, {
         instruction: pending.instruction, draft: pending.draft, contact, channel: wa ? 'whatsapp' : 'email',
         cc: internal || wa ? [] : pending.cc ?? [],
+        // ↩️ בהמשך לשרשור עם הנמען — תשובה בו, לא מייל חדש
+        ...(!internal && !wa && pending.replyThread ? { replyThread: pending.replyThread } : {}),
         // מ"סגור א": המשימה נפתחת מההצעה (ונעלמת מ"ממתין לאישורך")
         ...(pending.suggestionId ? { suggestionId: pending.suggestionId } : {})
       });
@@ -2296,6 +2348,55 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
     }
     keep.draft = null;
     state = { ...state, draft: null, awaiting: false };
+  }
+  // ➕ "+שרי הרשקוביץ" — אישור, או בחירה כשהשם לא חד-משמעי
+  if (state.awaiting && state.draft?.kind === 'thread_add') {
+    const d = state.draft;
+    const n = WaUi.normalize(t);
+    if (d.ask) {
+      const pick = d.ask.options.find((o) => WaUi.sameLabel(t, o.name) || n === WaUi.normalize(o.email) || n === WaUi.normalize(o.name));
+      if (pick) {
+        const next = { ...d, people: [...d.people, { name: pick.name, email: pick.email }], ask: null };
+        return out(threadAddText(next), { draft: next, awaiting: true }, { action: 'send_email', status: 'ok', result: 'להוסיף לשרשור?', buttons: [WaUi.BTN.yes, WaUi.BTN.no] });
+      }
+    } else if (WaUi.sameLabel(t, WaUi.BTN.yes) || WaUi.YES.test(n)) {
+      try {
+        const r = await MailThread.addPeople(actor.id, d.thread, d.people);
+        return out(`📧 נשלח בשרשור "${d.thread.subject}" — ${d.people.map((c) => c.name || c.email).join(', ')} בהעתק.${r.requestId ? ' גם התזכורות של המעקב יגיעו אליהם.' : ''}`,
+          { draft: null }, { action: 'send_email', status: 'ok', result: `נוספו לשרשור: ${d.people.map((c) => c.email).join(', ')}`, react: '✅' });
+      } catch (err) {
+        console.error('[משימון] הוספה לשרשור נכשלה:', err.message);
+        return out('⚠️ לא הצלחתי לשלוח בשרשור. אפשר להוסיף אותם ידנית ב-Gmail ("השב לכולם").', { draft: null }, { action: 'send_email', status: 'error', result: err.message.slice(0, 300) });
+      }
+    }
+    if (WaUi.NO.test(n) || WaUi.CANCEL.test(n)) return out('בסדר, לא נשלח 👍', { draft: null }, { action: 'send_email', status: 'ok', result: 'בוטל' });
+    keep.draft = null;
+    state = { ...state, draft: null, awaiting: false };
+  }
+  {
+    const add = state.draft?.kind === 'email' || actor.type !== 'user' || !WaActions.allowed(actor, 'send_email') ? null : parseThreadAdd(t);
+    if (add) {
+      if (dry) return out('(בדיקה) הייתי מוסיף לשרשור של המייל האחרון.', {}, { action: 'send_email', status: 'ok', result: 'בדיקה' });
+      if (!add.names.length) return out('את מי להוסיף לשרשור? כתבו למשל: *+שרי הרשקוביץ*', {}, { action: 'send_email', status: 'unclear', result: 'בלי שם' });
+      reactNow(actor.id, '👀');
+      const thread = await MailThread.latestSent(actor.id).catch(() => null);
+      if (!thread) return out('לא מצאתי מייל ששלחת ב-3 הימים האחרונים. כתבו למי לשלוח, ואשים אותם בהעתק.', {}, { action: 'send_email', status: 'unclear', result: 'אין מייל אחרון' });
+      const mine = MailThread.mineOf(actor.id);
+      const to = mine.has(thread.lastFrom.email) ? thread.lastTo.find((a) => !mine.has(a.email)) : thread.lastFrom;
+      const { cc, ccAsk } = resolveCc(actor, add.names, { contact: { email: to?.email ?? '' } });
+      const slim = { box: thread.box, threadId: thread.threadId, subject: thread.subject };
+      const d = { kind: 'thread_add', thread: slim, to: to ?? null, people: cc, ask: null, askedAt: D.nowIso() };
+      const a = ccAsk[0];
+      if (a) {
+        if (!a.options.length) return out(`לא מצאתי את "${a.name}" באנשי הקשר. כתבו את כתובת המייל: *+${a.name.split(/\s+/)[0]}@…*`, {}, { action: 'send_email', status: 'unclear', result: 'לא נמצא באנשי הקשר' });
+        const opts = a.options.slice(0, 3);
+        return out(`למי התכוונת ב"${a.name}"?\n${opts.map((o) => `• ${o.name} <${o.email}>${o.org ? ` · ${o.org}` : ''}`).join('\n')}`,
+          { draft: { ...d, ask: { name: a.name, options: opts } }, awaiting: true },
+          { action: 'send_email', status: 'unclear', result: 'שם לא חד-משמעי', buttons: WaUi.labels(opts.map((o) => o.name)) });
+      }
+      if (!cc.length) return out('האנשים האלה כבר בשרשור 👍', {}, { action: 'send_email', status: 'ok', result: 'כבר בשרשור' });
+      return out(threadAddText(d), { draft: d, awaiting: true }, { action: 'send_email', status: 'ok', result: `להוסיף לשרשור "${thread.subject}"?`, buttons: [WaUi.BTN.yes, WaUi.BTN.no] });
+    }
   }
   // 🔕 / 🔔 תזכורות מהמייל — "תפסיק להזכיר לי מהמייל", "תחזיר את התזכורות מהמייל", "… רק בבוקר", "… היום".
   // לפני "תזכיר לי …" — "תזכיר לי מהמייל" היא הפעלה, לא תזכורת חדשה
@@ -4502,6 +4603,7 @@ module.exports = {
   // לשליחה ממודולים אחרים — התראה לפני פגישה (‎meetings.js‎), עם רישום ביומן הבוט
   sendText, sendButtons, log, notifyAssignment, assistant, deliver, sendFilesToUser, mailAlertUsers,
   _internal: {
+    parseThreadAdd, threadAddText,
     storeGroupMessage, processGroup, handleDirect, sanitizeGroup, resolveMentions, candidatesOf, converse, turn, withFollowUps, sendSummaries, YES,
     findRecipients, findContactCards, sourceOf, suggestionFeedback, flushOutbox, todayMessage, splitMessage, parseSuggestionCommand, businessCommand, chatOf, saveChat,
     recordingReply, checkDraft, draftText, createFromDraft, mailAlertFor, closeAlerted, logoIntent, busyFor, userLastAt, staleQuestion
