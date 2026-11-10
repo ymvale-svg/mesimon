@@ -188,7 +188,9 @@ async function mayRemindNow(userId) {
     if (Calendar.isConnected(userId)) {
       const day = await Calendar.eventsForDay(userId);
       // בפגישה, או שהיא מתחילה בעוד פחות מ-15 דקות
-      if ((day.events ?? []).some((e) => !e.allDay && !e.declined && new Date(e.start).getTime() - BEFORE_MEETING_MS <= now.getTime() && new Date(e.end) > now)) return false;
+      // רק פגישות של העובד עצמו — לא "במשרד" / "יום ארוך" ולא יומנים של אחרים שהוא עוקב אחריהם
+      const me = D.get('SELECT email FROM users WHERE id = ?', userId)?.email ?? '';
+      if ((day.events ?? []).some((e) => Calendar.isRealMeeting(e, me) && Calendar.isOwnEvent(e, me) && new Date(e.start).getTime() - BEFORE_MEETING_MS <= now.getTime() && new Date(e.end) > now)) return false;
     }
   } catch { /* בלי יומן */ }
   return true;

@@ -66,6 +66,9 @@ function shapeEvent(e, calendar) {
       .map((x) => String(x ?? '').trim().toLowerCase()).filter((x) => x.includes('@')))],
     // נוצר על ידי משימון — מסומן לפיצ'רים שכותבים ליומן
     mesimon: Boolean(e.extendedProperties?.private?.mesimon),
+    // סוג האירוע ב-Google (‎workingLocation‎ / ‎outOfOffice‎ / ‎focusTime‎ — סטטוס, לא פגישה), ו"פנוי" (‎transparent‎)
+    eventType: String(e.eventType ?? 'default'),
+    transparent: e.transparency === 'transparent',
     uid: e.iCalUID ?? e.id
   };
 }
@@ -151,4 +154,30 @@ function forget(userId) {
   namesCache.delete(userId);
 }
 
-module.exports = { isConnected, eventsForDay, listCalendars, selectedCalendars, forget, _internal: { shapeEvent } };
+/*
+ * 📅 פגישה אמיתית — לא סטטוס ולא תזכורת אישית (הוחלט 10.11.26, ישראל: "למזכירות — רק פגישות, לא סטטוסים של
+ * עובדים: במשרד כל היום, יום ארוך, תזכורות אישיות שלהם ביומן"):
+ *   • לא יום שלם, לא נדחה, לא מסומן "פנוי";
+ *   • לא סטטוס של Google (מיקום עבודה, מחוץ למשרד, זמן מיקוד);
+ *   • לא כותרת של סטטוס ("במשרד", "עבודה מהבית", "יום ארוך", "חופש", "מחלה", "מילואים", "OOO"…);
+ *   • ויש בה עוד מישהו (משתתף נוסף) או קישור לשיחה (Zoom / Meet). אירוע בלי אף אחד מהם — תזכורת אישית.
+ */
+const STATUS_TYPES = new Set(['workingLocation', 'outOfOffice', 'focusTime', 'birthday']);
+const STATUS_TITLE = /^\s*(?:ב?משרד|ב?בית|מהבית|עבודה\s+מה?בית|עובד(?:ת)?\s+מה?בית|יום\s+(?:ארוך|קצר|חופש|מחלה)|חופש(?:ה)?|מחלה|מילואים|לא\s+זמי(?:ן|נה)|לא\s+במשרד|בחוץ|ooo|out\s+of\s+office|wfh|office|home|vacation|sick)(?:\s|$|[-–—:,.!(])|כל\s+היום/i;
+/** סטטוס ולא אירוע: יום שלם, "פנוי", סוג סטטוס של Google, או כותרת של סטטוס — לא מתריעים עליו לאף אחד */
+const isStatus = (ev) => Boolean(ev) && (ev.allDay || ev.transparent || STATUS_TYPES.has(ev.eventType) || STATUS_TITLE.test(String(ev.title ?? '')));
+
+function isRealMeeting(ev, ownerEmail = '') {
+  if (!ev || ev.declined || isStatus(ev)) return false;
+  const me = String(ownerEmail ?? '').toLowerCase();
+  const others = (ev.people ?? []).filter((p) => p.email && p.email !== me && p.email !== String(ev.organizer?.email ?? '').toLowerCase());
+  return others.length > 0 || (ev.people ?? []).length > 1 || Boolean(ev.zoomLink || ev.meetLink);
+}
+
+/** האירוע הוא של העובד עצמו: ביומן הראשי שלו, או שהוא משתתף / מארגן (ולא רק יומן של מישהו אחר שהוא עוקב אחריו) */
+function isOwnEvent(ev, ownerEmail = '') {
+  const me = String(ownerEmail ?? '').toLowerCase();
+  return !ev.calendarName || (Boolean(me) && (ev.organizer?.email === me || (ev.people ?? []).some((p) => p.email === me)));
+}
+
+module.exports = { isConnected, eventsForDay, listCalendars, selectedCalendars, forget, isRealMeeting, isOwnEvent, isStatus, _internal: { shapeEvent } };
