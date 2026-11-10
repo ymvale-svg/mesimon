@@ -167,6 +167,12 @@ const STATUS_TITLE = /^\s*(?:ב?משרד|ב?בית|מהבית|עבודה\s+מה?
 /** סטטוס ולא אירוע: יום שלם, "פנוי", סוג סטטוס של Google, או כותרת של סטטוס — לא מתריעים עליו לאף אחד */
 const isStatus = (ev) => Boolean(ev) && (ev.allDay || ev.transparent || STATUS_TYPES.has(ev.eventType) || STATUS_TITLE.test(String(ev.title ?? '')));
 
+/**
+ * ב"היום" בבוט: מה מוצג ביומן. יום שלם — כן (דיון בבית משפט, יום עיון), אלא אם הוא סטטוס ("משרד", "חופש");
+ * אירוע עם שעה שמסומן "פנוי" — סטטוס (ביום שלם "פנוי" היא ברירת המחדל של Google, ולא אומרת כלום)
+ */
+const isDayStatus = (ev) => Boolean(ev) && (STATUS_TYPES.has(ev.eventType) || STATUS_TITLE.test(String(ev.title ?? '')) || (!ev.allDay && ev.transparent));
+
 function isRealMeeting(ev, ownerEmail = '') {
   if (!ev || ev.declined || isStatus(ev)) return false;
   const me = String(ownerEmail ?? '').toLowerCase();
@@ -180,4 +186,4 @@ function isOwnEvent(ev, ownerEmail = '') {
   return !ev.calendarName || (Boolean(me) && (ev.organizer?.email === me || (ev.people ?? []).some((p) => p.email === me)));
 }
 
-module.exports = { isConnected, eventsForDay, listCalendars, selectedCalendars, forget, isRealMeeting, isOwnEvent, isStatus, _internal: { shapeEvent } };
+module.exports = { isConnected, eventsForDay, listCalendars, selectedCalendars, forget, isRealMeeting, isOwnEvent, isStatus, isDayStatus, _internal: { shapeEvent } };
