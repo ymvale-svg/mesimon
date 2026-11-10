@@ -2552,7 +2552,7 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
     keep.draft = null;
     state = { ...state, draft: null, awaiting: false };
   }
-  if (WaActions.byKey('form_fill')?.enabled && /^כרטיס\s+(?:ה)?חברה/.test(t)) {
+  if (WaActions.allowed(actor, 'form_fill') && /^כרטיס\s+(?:ה)?חברה/.test(t)) {
     const r = dry ? { text: '(בדיקה) כרטיס חברה', result: 'בדיקה' } : await FormFill.cardCommand(actor, t).catch((err) => ({ text: `לא הצלחתי לעדכן: ${err.message}`, result: err.message }));
     if (r) return out(r.text, {}, { action: 'form_fill', status: 'ok', result: r.result });
   }
