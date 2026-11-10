@@ -3752,13 +3752,17 @@ async function handleDirect(msg) {
   // בקשה אחרת (או הודעה אחרי הפסקה ארוכה) עוברת לבוט הרגיל — ולפי ההגדרה הקליטה מבוטלת או מושהית.
   // "קבלת סחורה" בלי קובץ, דקות אחרי קובץ שלא נקלט — הקובץ ההוא הוא המסמך
   const grAllowed = WaActions.allowed(actor, 'goods_receipt');
-  const recentFile = grAllowed && !msg.file && GoodsReceipt.isTrigger(text) && !GoodsReceipt.active(user.id, late) ? takeRecentFile(user.id) : null;
+  // "קבלת סחורה 📦" / "אחר כך ⏰" על "הגיעה חשבונית במייל" — תשובה להצעה (בשיחה הרגילה, עם הקובץ מהמייל),
+  // ולא פתיחה של קבלת סחורה ריקה שמחכה לצילום
+  const offerAnswer = !msg.file && [MailActions.BTN.receive, MailActions.BTN.later].includes(String(text ?? '').trim())
+    && (() => { const c = chatOf(user.id); return c.awaiting && c.draft?.kind === 'goods_offer'; })();
+  const recentFile = grAllowed && !offerAnswer && !msg.file && GoodsReceipt.isTrigger(text) && !GoodsReceipt.active(user.id, late) ? takeRecentFile(user.id) : null;
   if (recentFile) msg = { ...msg, file: recentFile };
   if (msg.file && !(grAllowed && (GoodsReceipt.active(user.id, late) || GoodsReceipt.opens(text, msg.file)))) rememberFile(user.id, msg.file);
   let grPassed = false;
   let grNotice = '';
   const prioMenuOnly = !grAllowed && pdAllowed && !msg.file && (GoodsReceipt.isPriority(text) || GoodsReceipt.inMenu(user.id));
-  if (prioMenuOnly || (grAllowed && (GoodsReceipt.active(user.id, late) || GoodsReceipt.opens(text, msg.file) || GoodsReceipt.wantsUndoFinal(user.id, text)))) {
+  if (!offerAnswer && (prioMenuOnly || (grAllowed && (GoodsReceipt.active(user.id, late) || GoodsReceipt.opens(text, msg.file) || GoodsReceipt.wantsUndoFinal(user.id, text))))) {
     const slowGr = setTimeout(() => react(ref, '🧐'), SLOW_NOTICE_MS);
     let r;
     try {
