@@ -38,6 +38,16 @@ const status = () => ({ enabled: isEnabled(), model: model(), botModel: botModel
 class AiError extends Error {}
 
 /*
+ * חצי אימוג'י (surrogate בודד) — נוצר כשחותכים טקסט באמצע תו (‎slice‎ על היסטוריית השיחה, כותרת ארוכה).
+ * ‎JSON.stringify‎ כותב אותו כ-‎\\udXXX‎ בלי בן הזוג, והשירות דוחה את כל הבקשה ("not valid JSON:
+ * unexpected end of hex escape"). מכיוון שבקשה שנכשלה לא שומרת היסטוריה — אותו חצי נשלח שוב ושוב, והבוט
+ * נתקע לעובד (10.11.26). כאן הוא מוחלף ב-� לפני כל שליחה, לכל מי שקורא ל-AI.
+ */
+const LONE_SURROGATE = /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/g;
+const wellFormed = (s) => s.replace(LONE_SURROGATE, '\ufffd');
+const toJson = (body) => JSON.stringify(body, (k, v) => (typeof v === 'string' ? wellFormed(v) : v));
+
+/*
  * 🩺 בריאות השירות — מי שרוצה לדעת כשה-AI נפל או חזר (הבוט: התראה למנהלים, ובקשות שנשמרו לניסיון חוזר).
  * ‎fn({ ok: true })‎ אחרי כל תשובה תקינה; ‎fn({ ok: false, err })‎ כשאין חיבור או שהשירות החזיר שגיאה.
  */
@@ -117,7 +127,7 @@ async function requestOnce({ system, messages, schema, effort, model: modelId, f
         'anthropic-version': '2023-06-01',
         ...(betas.length ? { 'anthropic-beta': betas.join(',') } : {})
       },
-      body: JSON.stringify(body),
+      body: toJson(body),
       signal: AbortSignal.timeout(180000)
     });
   } catch (err) {
@@ -213,7 +223,7 @@ async function withTools({ system, content, tools, onTool, effort = 'medium', mo
           'anthropic-version': '2023-06-01',
           ...(betas.length ? { 'anthropic-beta': betas.join(',') } : {})
         },
-        body: JSON.stringify(body),
+        body: toJson(body),
         signal: AbortSignal.timeout(180000)
       });
     } catch (err) {
@@ -275,4 +285,4 @@ const PRICES = {
 };
 const priceOf = (id) => PRICES[String(id ?? '').trim()] ?? null;
 
-module.exports = { json, withTools, isEnabled, status, model, botModel, priceOf, AiError, onHealth, DEFAULT_MODEL, WEB_SEARCH };
+module.exports = { json, withTools, isEnabled, status, model, botModel, priceOf, AiError, onHealth, DEFAULT_MODEL, WEB_SEARCH, _toJson: toJson };
