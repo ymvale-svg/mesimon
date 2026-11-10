@@ -2816,7 +2816,10 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
     const m = menuReply();
     if (m) return m;
   }
-  if (u.intent === 'menu' || (u.intent === 'other' && firstToday)) {
+  // הודעה ראשונה ביום שהיא שיחה של ממש (שאלה, הקלטה, בקשה שאין לה פעולה) — עונים עליה בלבד; ה-Today לא
+  // מתערבב בתשובה (10.11.26, ישראל: "למה התערבב המייל ללייסנטק עם כל היומיום שלי"). רק ברכה קצרה פותחת את ה-Today
+  const smallTalk = !u.reply || t.split(/\s+/).length <= 3;
+  if (u.intent === 'menu' || (u.intent === 'other' && firstToday && smallTalk)) {
     if (WaActions.allowed(actor, 'today') || menuOptions(actor).length) {
       const hello = firstToday ? `${localDate().time < '12:00' ? 'בוקר טוב' : 'שלום'} ${firstName(user.full_name)} 👋` : '';
       return todayReply({ prefix: u.intent === 'other' && u.reply ? u.reply : hello, firstOfDay: firstToday });
