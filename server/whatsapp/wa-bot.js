@@ -1006,7 +1006,8 @@ function formatList(heading, tasks, { showProject = true, showAssignee = false, 
  * 🔊 הקראה: "תקריא לי את המשימות", "אני בנהיגה — מה יש לי היום?" — הרשימה נשלחת גם כהודעה קולית.
  * פיילוט: רק למנהלי המערכת (‎WaActions.inPilot‎), ורק כשיש מפתח OpenAI. כל השאר — הטקסט בלבד, כמו תמיד.
  */
-const READ_ALOUD = /(תקריא|להקריא|הקרא|תקרא לי|תקראי לי|בנהיגה|אני נוהג|אני נוהגת|בזמן נסיעה)/;
+// גם מה שהתמלול עושה ל"תקריאי לי" ("תכירי לי", "תקרי לי") — זה נבדק רק כשהבקשה כבר זוהתה כ"המשימות שלי"
+const READ_ALOUD = /(תקריא|להקריא|הקרא|תקרא לי|תקראי לי|תכירי לי|תקרי לי|בקול|בנהיגה|אני נוהג|אני נוהגת|בזמן נסיעה)/;
 const READ_ALOUD_MAX = 8;
 const readAloudAllowed = (actor) => actor?.type === 'user' && WaActions.inPilot(actor) && Speech.canSpeak();
 const SPOKEN_NUM = ['אחת', 'שתיים', 'שלוש', 'ארבע', 'חמש', 'שש', 'שבע', 'שמונה'];
@@ -1026,14 +1027,20 @@ function readAloudText(actor, tasks, title) {
   return [`${first ? `${first}, ` : ''}יש לך ${count} ${title}.`, ...lines, more].filter(Boolean).join('\n');
 }
 
-/** קובץ ההקראה לרשימה, או ‎null‎ (לא ביקשו / לא מורשה / נכשל — ואז הטקסט לבדו, והתקלה ביומן) */
+/** לעובד, כשביקש הקראה והיא לא יצאה — הודעה קצרה בלבד, בלי הרשימה (ביקש לשמוע, לא לקרוא) */
+const READ_ALOUD_DOWN = '🔇 ההקראה לא זמינה כרגע. נסו שוב בעוד כמה דקות.';
+
+/**
+ * קובץ ההקראה לרשימה: ‎{ file }‎ · ‎{ failed: true }‎ (ביקשו ונכשל — העובד מקבל ‎READ_ALOUD_DOWN‎, התקלה ביומן)
+ * · ‎null‎ (לא ביקשו / לא מורשה — הרשימה בכתב, כרגיל)
+ */
 async function readAloudFile(actor, text, tasks, title) {
   if (!tasks.length || !READ_ALOUD.test(String(text ?? '')) || !readAloudAllowed(actor)) return null;
   try {
-    return { buf: await Speech.speak(readAloudText(actor, tasks, title)), fileName: 'משימות.ogg', mime: 'audio/ogg' };
+    return { file: { buf: await Speech.speak(readAloudText(actor, tasks, title)), fileName: 'משימות.ogg', mime: 'audio/ogg' } };
   } catch (err) {
     console.error('[משימון] הקראה נכשלה:', err.message);
-    return null;
+    return { failed: true, error: err.message };
   }
 }
 
@@ -2869,8 +2876,10 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
   // 🔊 "תקריא לי" — אותה רשימה, ובנוסף הודעה קולית (לפני הטקסט)
   const withReadAloud = async (r, range) => {
     const R = RANGES[range] ?? RANGES.all;
-    const file = dry ? null : await readAloudFile(actor, t, myOpen.filter(R.pick), R.title === 'הפתוחות' ? 'פתוחות' : R.title);
-    return file ? { ...r, files: [file], result: `${r.result} · 🔊 הוקרא` } : r;
+    const a = dry ? null : await readAloudFile(actor, t, myOpen.filter(R.pick), R.title === 'הפתוחות' ? 'פתוחות' : R.title);
+    // ההודעה הקולית היא התשובה — בלי הרשימה בכתב. נכשלה — רק "ההקראה לא זמינה", גם כאן בלי הרשימה
+    if (a?.failed) return { ...r, reply: READ_ALOUD_DOWN, status: 'error', result: `${r.result} · 🔇 הקראה נכשלה: ${a.error}`.slice(0, 300) };
+    return a ? { ...r, reply: '', fallback: READ_ALOUD_DOWN, files: [a.file], react: '🔊', result: `${r.result} · 🔊 הוקרא` } : r;
   };
   if (kind === 'menu' && /^\d{1,2}$/.test(t) && ['my_tasks', 'overdue'].includes(state.draft.options?.[Number(t) - 1])) {
     const key = state.draft.options[Number(t) - 1];
@@ -3929,8 +3938,10 @@ async function handleDirect(msg) {
   let r;
   // תשובה שמתעכבת (תמלול, Today ראשון של היום, ניסוח מייל) — קודם "רגע", כדי שלא ייראה שהבוט לא שמע
   // הודעה קולית — מ-✍️ (תמלול) ל-🤔 (הבנה) מיד; כתובה — 🤔 רק אם התשובה מתעכבת
-  if (voice) void react(ref, '🤔');
-  const slow = setTimeout(() => { void react(ref, '🤔'); }, SLOW_NOTICE_MS);
+  // 🔊 "תקריא לי" — הרמקול מיד, כדי שיהיה ברור שהתשובה תגיע בקול
+  const thinking = READ_ALOUD.test(text) && readAloudAllowed(actor) ? '🔊' : '🤔';
+  if (voice || thinking === '🔊') void react(ref, thinking);
+  const slow = setTimeout(() => { void react(ref, thinking); }, SLOW_NOTICE_MS);
   try {
     r = await turn(user, actor, text, state, { voice });
   } catch (err) {
@@ -3973,10 +3984,13 @@ async function handleDirect(msg) {
     } catch (err) {
       console.error('[משימון] שליחת קובץ מהבוט נכשלה:', err.message);
       log({ ...base, text: `[📄 ${f.fileName}]`, action: r.action, status: 'error', result: err.message });
+      // ההקראה לא נשלחה — הודעה קצרה, כדי שהעובד לא יישאר בלי תשובה
+      if (r.fallback) await sendText(msg.chatId, r.fallback);
     }
   }
   // אין מה לכתוב (רק אימוג'י) — בהודעה קולית עדיין "🎙 שמעתי", כדי שיראו מה הובן
-  const replyParts = quiet ? (voice ? [`🎙 *שמעתי:* "${said}"`] : []) : splitMessage(reply);
+  // הקראה (קובץ קולי בלבד) — בלי "שמעתי": ההודעה הקולית היא התשובה
+  const replyParts = quiet ? (voice && !r.files?.length ? [`🎙 *שמעתי:* "${said}"`] : []) : splitMessage(reply);
   for (let i = 0; i < replyParts.length; i++) {
     if (i === replyParts.length - 1 && r.buttons?.length) await sendButtons(msg.chatId, replyParts[i], r.buttons);
     else await sendText(msg.chatId, replyParts[i]);
@@ -4958,6 +4972,6 @@ module.exports = {
     storeGroupMessage, processGroup, handleDirect, sanitizeGroup, resolveMentions, candidatesOf, converse, turn, withFollowUps, sendSummaries, YES,
     findRecipients, findContactCards, sourceOf, suggestionFeedback, flushOutbox, todayMessage, splitMessage, parseSuggestionCommand, businessCommand, chatOf, saveChat,
     recordingReply, checkDraft, draftText, createFromDraft, mailAlertFor, closeAlerted, logoIntent, busyFor, userLastAt, staleQuestion,
-    READ_ALOUD, readAloudText, readAloudFile, hooks, flowReply
+    READ_ALOUD, READ_ALOUD_DOWN, readAloudText, readAloudFile, hooks, flowReply
   }
 };
