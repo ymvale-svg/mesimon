@@ -2871,7 +2871,8 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
   const withReadAloud = async (r, range) => {
     const R = RANGES[range] ?? RANGES.all;
     const file = dry ? null : await readAloudFile(actor, t, myOpen.filter(R.pick), R.title === 'הפתוחות' ? 'פתוחות' : R.title);
-    return file ? { ...r, files: [file], result: `${r.result} · 🔊 הוקרא` } : r;
+    // ההודעה הקולית היא התשובה — בלי הרשימה בכתב (נכשלה ההקראה — הרשימה בכתב, כמו תמיד)
+    return file ? { ...r, reply: '', fallback: r.reply, files: [file], react: '🔊', result: `${r.result} · 🔊 הוקרא` } : r;
   };
   if (kind === 'menu' && /^\d{1,2}$/.test(t) && ['my_tasks', 'overdue'].includes(state.draft.options?.[Number(t) - 1])) {
     const key = state.draft.options[Number(t) - 1];
@@ -3930,8 +3931,10 @@ async function handleDirect(msg) {
   let r;
   // תשובה שמתעכבת (תמלול, Today ראשון של היום, ניסוח מייל) — קודם "רגע", כדי שלא ייראה שהבוט לא שמע
   // הודעה קולית — מ-✍️ (תמלול) ל-🤔 (הבנה) מיד; כתובה — 🤔 רק אם התשובה מתעכבת
-  if (voice) void react(ref, '🤔');
-  const slow = setTimeout(() => { void react(ref, '🤔'); }, SLOW_NOTICE_MS);
+  // 🔊 "תקריא לי" — הרמקול מיד, כדי שיהיה ברור שהתשובה תגיע בקול
+  const thinking = READ_ALOUD.test(text) && readAloudAllowed(actor) ? '🔊' : '🤔';
+  if (voice || thinking === '🔊') void react(ref, thinking);
+  const slow = setTimeout(() => { void react(ref, thinking); }, SLOW_NOTICE_MS);
   try {
     r = await turn(user, actor, text, state, { voice });
   } catch (err) {
@@ -3974,10 +3977,13 @@ async function handleDirect(msg) {
     } catch (err) {
       console.error('[משימון] שליחת קובץ מהבוט נכשלה:', err.message);
       log({ ...base, text: `[📄 ${f.fileName}]`, action: r.action, status: 'error', result: err.message });
+      // ההקראה לא נשלחה — הרשימה בכתב במקומה, כדי שהעובד לא יישאר בלי תשובה
+      if (r.fallback) for (const part of splitMessage(r.fallback)) await sendText(msg.chatId, part);
     }
   }
   // אין מה לכתוב (רק אימוג'י) — בהודעה קולית עדיין "🎙 שמעתי", כדי שיראו מה הובן
-  const replyParts = quiet ? (voice ? [`🎙 *שמעתי:* "${said}"`] : []) : splitMessage(reply);
+  // הקראה (קובץ קולי בלבד) — בלי "שמעתי": ההודעה הקולית היא התשובה
+  const replyParts = quiet ? (voice && !r.files?.length ? [`🎙 *שמעתי:* "${said}"`] : []) : splitMessage(reply);
   for (let i = 0; i < replyParts.length; i++) {
     if (i === replyParts.length - 1 && r.buttons?.length) await sendButtons(msg.chatId, replyParts[i], r.buttons);
     else await sendText(msg.chatId, replyParts[i]);

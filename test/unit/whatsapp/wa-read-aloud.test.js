@@ -56,7 +56,7 @@ test('readAloudText — שם פרטי, מספרים במילים, בלי אימ�
   assert.match(Bot._internal.readAloudText({ name: 'א' }, many, ''), /ועוד 3 באפליקציה\.$/);
 });
 
-test('מנהל מערכת: "תקריא לי את המשימות" — הודעה קולית ואחריה הרשימה בטקסט', async (t) => {
+test('מנהל מערכת: "תקריא לי את המשימות" — 🔊 מיד, והודעה קולית בלבד (בלי הרשימה בכתב)', async (t) => {
   const { spoken, files, calls } = setup(t);
   const u = user({ phone: '972507000001', role: 'admin', full_name: 'ישראל וייל' });
   await say('972507000001', 'תקריא לי את המשימות שלי');
@@ -65,8 +65,10 @@ test('מנהל מערכת: "תקריא לי את המשימות" — הודעה 
   assert.equal(files.length, 1);
   assert.equal(files[0].mime, 'audio/ogg');
   assert.ok(files[0].fileName.endsWith('.ogg'));
-  const text = calls.find((c) => c.method === 'sendMessage');
-  assert.match(text.body.message, /📋 המשימות שלך/);
+  assert.equal(calls.filter((c) => c.method === 'sendMessage').length, 0, 'ההודעה הקולית היא התשובה');
+  const reactions = calls.filter((c) => c.method === 'sendReaction').map((c) => c.body.reaction);
+  assert.equal(reactions[0], '🔊', 'הרמקול מיד');
+  assert.equal(reactions.at(-1), '🔊', 'ונשאר בסוף');
   const row = Bot.readLog({}).find((r) => r.userId === u.id);
   assert.equal(row.action, 'my_tasks');
   assert.match(row.result, /🔊 הוקרא/);
@@ -105,4 +107,20 @@ test('ההקראה נכשלה — הרשימה בטקסט בכל זאת', async 
   await say('972507000005', 'תקריא לי את המשימות');
   assert.equal(files.length, 0);
   assert.match(calls.find((c) => c.method === 'sendMessage').body.message, /📋 המשימות שלך/);
+});
+
+test('שליחת ההודעה הקולית נכשלה — הרשימה בכתב במקומה', async (t) => {
+  const { calls } = setup(t);
+  WhatsApp.sendFile.mock.mockImplementation(async () => { throw new Error('500'); });
+  t.mock.method(console, 'error', () => {});
+  user({ phone: '972507000006', role: 'admin' });
+  await say('972507000006', 'תקריא לי את המשימות');
+  assert.match(calls.find((c) => c.method === 'sendMessage').body.message, /📋 המשימות שלך/);
+});
+
+test('עובד שלא בפיילוט — בלי 🔊', async (t) => {
+  const { calls } = setup(t);
+  user({ phone: '972507000007', role: 'employee' });
+  await say('972507000007', 'תקריא לי את המשימות');
+  assert.ok(!calls.some((c) => c.method === 'sendReaction' && c.body.reaction === '🔊'));
 });
