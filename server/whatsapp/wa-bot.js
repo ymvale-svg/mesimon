@@ -75,6 +75,7 @@ const MeetingFollowup = require('../meetings').MeetingFollowup;
 const MeetingAudio = require('../meetings').MeetingAudio;
 const MailActions = require('../mail').MailActions;
 const Notice = require('./notice');
+const AiOutage = require('./ai-outage');
 const Rfq = require('../priority').Rfq;
 const FormFill = require('../mail').FormFill;
 const MeetCoord = require('../meetings').MeetingCoord;
@@ -3947,11 +3948,27 @@ async function handleDirect(msg) {
   } catch (err) {
     clearTimeout(slow);
     console.error('[משימון] בוט הוואטסאפ לא הבין הודעה:', err.message);
+    // 🩺 שירות ה-AI לא זמין — הבקשה נשמרת ומטופלת לבד כשהוא חוזר (‎ai-outage.js‎). ניסיון חוזר שנכשל — בשקט
+    if (AiOutage.isOutage(err.message)) {
+      if (msg.retryOf) {
+        AiOutage.failed(msg.retryOf);
+        log({ ...base, text, action: 'other', status: 'error', result: `ניסיון חוזר נכשל: ${err.message}`.slice(0, 300) });
+        return;
+      }
+      AiOutage.save(user.id, text, { voice });
+      log({ ...base, text: voice ? `🎙 ${text}` : text, action: 'other', status: 'error', result: err.message, reply: AiOutage.SAVED_TEXT });
+      await sendText(msg.chatId, `${voice ? `🎙 *שמעתי:* "${text}"\n\n` : ''}${AiOutage.SAVED_TEXT}`);
+      return;
+    }
+    if (msg.retryOf) AiOutage.done(msg.retryOf);
     log({ ...base, text: voice ? `🎙 ${text}` : text, action: 'other', status: 'error', result: err.message });
     await sendText(msg.chatId, 'משהו השתבש אצלי. נסו שוב בעוד רגע.');
     return;
   }
   clearTimeout(slow);
+  // ניסיון חוזר שהצליח — הבקשה יורדת מהרשימה, והתשובה נפתחת בשורה "↩️ השירות חזר — מטפל בבקשה…"
+  const retried = msg.retryOf ? AiOutage.pending().find((x) => x.id === msg.retryOf) : null;
+  if (msg.retryOf) AiOutage.done(msg.retryOf);
   await notice;
   if (forwards.length) {
     // ההוראה עוד לא הובנה ("לשושנה" בלי מה לעשות) — ההודעות נשארות, עם מה שכבר נאמר
@@ -3965,7 +3982,7 @@ async function handleDirect(msg) {
   // וקליטה שבוטלה במעבר נושא — שורה לפני התשובה
   const grNote = grAllowed ? GoodsReceipt.pausedNote(user.id) : '';
   const body = grNotice ? `${grNotice}\n\n${r.reply}` : r.reply;
-  const reply = `${voice ? `🎙 *שמעתי:* "${said}"\n\n${body}` : body}${grNote ? `\n\n${grNote}` : ''}`;
+  const reply = `${retried ? `${AiOutage.retryHeader(retried)}\n\n` : ''}${voice ? `🎙 *שמעתי:* "${said}"\n\n${body}` : body}${grNote ? `\n\n${grNote}` : ''}`;
   const history = [...state.history, { role: 'user', text: text.slice(0, 500) }, { role: 'bot', text: r.reply.slice(0, 500) }];
   // חותמת הזמן של השאלה — ממנה נספרות 15 הדקות (‎staleQuestion‎) והשעתיים (‎busyFor‎)
   saveChat(user.id, { ...r.next, draft: r.next.draft ? { ...r.next.draft, askedAt: D.nowIso() } : r.next.draft, history });
@@ -4900,6 +4917,40 @@ async function personalHousekeeping() {
   }
 }
 
+/** 🩺 התראה למנהלי המערכת בוואטסאפ — מיד, גם מחוץ לשעות (זו תקלה, לא עדכון) */
+function alertAdminsAi(text) {
+  if (!text || !D.getSetting('wa_bot_enabled', true) || !isConfigured()) return;
+  for (const a of D.all("SELECT id, full_name, phone FROM users WHERE status = 'active' AND role IN ('superadmin','admin') AND COALESCE(phone, '') <> ''")) {
+    const chatId = `${a.phone}@c.us`;
+    sendText(chatId, text)
+      .then(() => log({ channel: 'summary', chatId, userId: a.id, who: a.full_name, action: 'ai_outage', status: 'ok', result: text.split('\n')[0].slice(0, 300) }))
+      .catch((err) => console.error('[משימון] התראת AI למנהל נכשלה:', err.message));
+  }
+}
+Claude.onHealth(({ ok, err }) => alertAdminsAi(ok ? AiOutage.noteRecovery() : AiOutage.noteFailure(err?.message)));
+
+/**
+ * 🩺 בקשות שנשמרו: בזמן תקלה — אחת כל 5 דקות (היא גם הבדיקה אם השירות חזר); אחרי שחזר — עד 5 בסבב.
+ * כל בקשה עוברת שוב את הבוט כאילו העובד שלח אותה עכשיו (‎enqueueAs‎, ‎retryOf‎).
+ */
+async function retryTick() {
+  if (!Claude.isEnabled()) return;
+  const { expired } = AiOutage.due();
+  for (const x of expired) {
+    const u = D.get("SELECT phone FROM users WHERE id = ? AND status = 'active'", x.userId);
+    if (u?.phone) await sendText(`${u.phone}@c.us`, AiOutage.EXPIRED_TEXT(x)).catch(() => {});
+  }
+  for (let i = 0; i < 5; i++) {
+    const { next } = AiOutage.due();
+    if (!next) return;
+    // הניסיון נרשם לפני הריצה: בקשה שלא הגיעה ל-AI (עובד שכבר לא פעיל, זרימה אחרת שתפסה אותה) לא תנוסה שוב מיד
+    AiOutage.failed(next.id);
+    await enqueueAs(next.userId, { text: next.text, id: `retry-${next.id}`, retryOf: next.id });
+    // עדיין ברשימה — נכשל שוב: לא ממשיכים לבאות בסבב הזה
+    if (AiOutage.pending().some((x) => x.id === next.id)) return;
+  }
+}
+
 async function tick() {
   if (!busy) await personalHousekeeping();
   // קבלות סחורה שלא אושרו — תזכורת וביטול (פעם ב-10 דקות לכל היותר)
@@ -4915,6 +4966,8 @@ async function tick() {
   if (!ch) return;
   busy = true;
   try {
+    // 🩺 בקשות שנשמרו כשה-AI לא היה זמין — גם מחוץ לשעות: העובד שלח אותן ומחכה
+    await retryTick();
     // ההודעות עצמן מגיעות דרך המאזין (‎listen‎); כאן — מה שנדחה לשעות הפעילות
     if (inHours()) {
       for (const m of takeDeferred()) dispatch(m);
@@ -4972,6 +5025,6 @@ module.exports = {
     storeGroupMessage, processGroup, handleDirect, sanitizeGroup, resolveMentions, candidatesOf, converse, turn, withFollowUps, sendSummaries, YES,
     findRecipients, findContactCards, sourceOf, suggestionFeedback, flushOutbox, todayMessage, splitMessage, parseSuggestionCommand, businessCommand, chatOf, saveChat,
     recordingReply, checkDraft, draftText, createFromDraft, mailAlertFor, closeAlerted, logoIntent, busyFor, userLastAt, staleQuestion,
-    READ_ALOUD, READ_ALOUD_DOWN, readAloudText, readAloudFile, hooks, flowReply
+    READ_ALOUD, READ_ALOUD_DOWN, readAloudText, readAloudFile, hooks, flowReply, retryTick, alertAdminsAi
   }
 };
