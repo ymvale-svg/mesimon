@@ -1037,6 +1037,64 @@ function findContactCards(actor, q, only = 'any') {
   return { cards, google: fromGoogle, phonebook: fromBook };
 }
 
+/*
+ * 📖 "תן לי את כל התכונות שלך" — ההודעה המלאה (הוחלט 10.11.26, ישראל). כל שורה — רק אם הפעולה שלה מותרת לכותב
+ * (‎WaActions.allowed‎); פרק שנשאר ריק — יורד. ההודעה הקצרה ("עזרה") — ‎helpText‎.
+ */
+const PLAIN_FEATURES = /^(?:(?:תן|תני|תראה|תראי|שלח|תשלח)\s+לי\s+)?(?:את\s+)?(?:כל\s+)?(?:ה)?(?:תכונות|יכולות|אפשרויות)(?:\s+(?:שלך|של\s+הבוט|החדשות))?[?!.]*$|^מה\s+(?:אתה\s+(?:יודע|יכול)|אפשר)\s+לעשות[?!.]*$|^מה\s+חדש\s+(?:בבוט|אצלך)[?!.]*$|^(?:כל\s+)?(?:ה)?תכונות\s+(?:החדשות\s+)?(?:של\s+)?(?:ה)?בוט[?!.]*$/;
+
+function featuresText(actor) {
+  const ok = (key) => !key || WaActions.allowed(actor, key);
+  const S = [
+    ['☀️ *היום שלך — בהודעה אחת*', [
+      ['today', 'כתבו "היי" או "מה יש לי היום": 📅 הפגישות (בלי "משרד" / "יום ארוך"), ו-🔥 *דורש ממך היום* — משימות, מיילים שמחכים לתשובה והצעות, ברשימה אחת לפי דחיפות'],
+      ['today', 'לחצו *לעבור עליהם 👉* — פריט אחר פריט, עם כפתורים: משימה — *סיימתי ✅ / למחר ➡️* · מייל — *לענות ✍️ / למשימה ✅ / להתעלם 🙈*'],
+      ['day_digest', 'סיכום פתיחה בבוקר, ובסוף היום: מה נסגר, ו"להעביר את הפתוחות למחר?"']
+    ]],
+    ['📧 *מיילים — רק מה שחשוב*', [
+      ['mail_deadline', 'תזכורת רק על מיילים חשובים שנשלחו *אליכם ישירות* (לא בהעתק, לא דיוורים) — *עד 3 ביום*. מייל שלא טופל — למחרת "זכרת? 🐣"'],
+      ['mail_deadline', 'בצהריים — הודעה מרוכזת אחת: "📬 4 מיילים מחכים לך". השאר — ב"היום"'],
+      ['mail_alert', '💡 על מייל שמחכה לתשובה — נוסח תשובה מוכן. *כן* — ונשלח'],
+      ['sent_followup', 'שאלתם מישהו במייל ולא ענו? הבוט יציע לשלוח תזכורת'],
+      ['send_email', '"מייל ל…" — יוצא *בהמשך לשרשור* הקיים עם הנמען, לא כמייל חדש'],
+      ['send_email', 'להוסיף מישהו להתכתבות: *"+שרי הרשקוביץ"* — והיא בשרשור, בהעתק'],
+      ['mail_insights', '"תובנות" — מה חדש במייל ובוואטסאפ']
+    ]],
+    ['📅 *פגישות*', [
+      ['briefing', '📋 *תדריך לפני פגישה* — מי המשתתפים, מה פתוח מולם, מה סוכם בפעם הקודמת'],
+      ['meeting_followup', '🎥 *אחרי פגישה מוקלטת* — "איך היה?": סיכום, החלטות ומשימות לכל משתתף'],
+      ['meeting_audio', '🎙 *הקלטה מהוואטסאפ* — שלחו הקלטה של פגישה, והיא תשויך לפגישה ביומן עם משימות'],
+      ['meet_coord', '🤝 *"תקבע לי פגישה עם…"* — מועדים פנויים מהיומן, ותיאום מול הצד השני']
+    ]],
+    ['✍️ *מסמכים ופניות*', [
+      ['notices', '🎨 *"תעצב לי מודעה…"* — PDF מעוצב עם הלוגו · *"תכתוב מכתב רשמי ל…"* — על נייר פירמה'],
+      ['form_fill', '📝 *טופס שהגיע במייל* — הבוט ממלא ושולח לאישורכם'],
+      ['rfq', '📦 *"תבקש הצעות מחיר מ-10 ספקים…"* — פנייה לספקים וטבלת השוואה'],
+      ['goods_offer', '📄 *חשבונית במייל* — "לבצע קבלת סחורה בפריוריטי?", עם השוואה להזמנה הפתוחה'],
+      ['goods_receipt', '🗂 *פריוריטי* — קבלת סחורה מצילום תעודה, ודרישת רכש'],
+      ['mail_ask', '✨ *שאלה חופשית* — "מה לינור כתבה לי?", "מה ההזמנות הפתוחות של פרויקט…", "איך עושים אצלנו…"'],
+      ['translate', '🌐 תרגום: "באנגלית" / "בערבית" · 🎙 הקלטה קולית ← מייל מנוסח']
+    ]],
+    ['📝 *משימות ותזכורות*', [
+      ['create_task', '"משימה ל… לבדוק את…" — משימה חדשה'],
+      ['my_tasks', '"המשימות שלי" · "סיימתי את 2" · "מה פתוח בפרויקט…"'],
+      ['reminders', '⏰ *"תזכיר לי מחר ב-10 להתקשר לאבי"*']
+    ]],
+    ['🔕 *יותר מדי? אתם בשליטה*', [
+      ['mail_deadline', '*"תפסיק להזכיר לי מהמייל"* · *"בלי תזכורות מהמייל היום"* · *"תזכורות מהמייל רק בבוקר"* · *"פחות תזכורות מהמייל"* · *"תחזיר את התזכורות מהמייל"*'],
+      ['mail_deadline', '"להתעלם" פעמיים מאותו שולח — הבוט ישאל אם להפסיק להקפיץ ממנו · *"תקפיץ מיילים מ…"* — מחזיר'],
+      ['mail_deadline', 'עמוסים ולא מגיבים לתזכורות? הבוט יציע לבד להוריד קצב 🌊']
+    ]]
+  ];
+  const lines = ['📖 *כל מה שאפשר לעשות איתי*'];
+  for (const [title, rows] of S) {
+    const shown = rows.filter(([key]) => ok(key)).map(([, text]) => `• ${text}`);
+    if (shown.length) lines.push('', title, ...shown);
+  }
+  lines.push('', '👀 אני מגיב באימוג\'י במקום "רגע…": ✍️ כותב · 🔍 מחפש · 📅 ביומן · ✅ בוצע', '', 'אפשר לכתוב או להקליט בשפה חופשית 🙂 בכל שלב — "ביטול".');
+  return lines.join('\n');
+}
+
 function helpText(actor) {
   const actions = WaActions.forActor(actor);
   if (!actions.length) return 'כרגע אין פעולות זמינות לך בוואטסאפ.';
@@ -1044,7 +1102,7 @@ function helpText(actor) {
     'אני הבוט של משימון. אפשר לכתוב לי:',
     ...actions.filter((a) => a.key !== 'help').map((a) => `${a.icon} *${a.label}*${a.examples[0] ? ` — "${a.examples[0]}"` : ''}`),
     '',
-    'בכל שלב: "ביטול".'
+    'בכל שלב: "ביטול". כל התכונות, בפירוט: "תן לי את כל התכונות שלך".'
   ].join('\n');
 }
 
@@ -3073,6 +3131,8 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
     }
   }
 
+  // 📖 "תן לי את כל התכונות שלך" — ההודעה המלאה, בלי AI
+  if (PLAIN_FEATURES.test(t) && actor.type === 'user') return out(featuresText(actor), {}, { action: 'help', status: 'ok', result: 'כל התכונות' });
   // "סוכנים" — הרשימה, בלי AI
   if (PLAIN_AGENTS.test(t) && actor.type === 'user' && WaActions.allowed(actor, 'mail_ask')) return out(agentsText(actor), {}, { action: 'mail_ask', status: 'ok', result: 'רשימת הסוכנים' });
 
@@ -4846,7 +4906,7 @@ module.exports = {
   // לשליחה ממודולים אחרים — התראה לפני פגישה (‎meetings.js‎), עם רישום ביומן הבוט
   sendText, sendButtons, log, notifyAssignment, assistant, deliver, sendFilesToUser, mailAlertUsers,
   _internal: {
-    parseThreadAdd, threadAddText, dayItems, walkText, walkButtons, walkAction, WALK,
+    featuresText, PLAIN_FEATURES, parseThreadAdd, threadAddText, dayItems, walkText, walkButtons, walkAction, WALK,
     storeGroupMessage, processGroup, handleDirect, sanitizeGroup, resolveMentions, candidatesOf, converse, turn, withFollowUps, sendSummaries, YES,
     findRecipients, findContactCards, sourceOf, suggestionFeedback, flushOutbox, todayMessage, splitMessage, parseSuggestionCommand, businessCommand, chatOf, saveChat,
     recordingReply, checkDraft, draftText, createFromDraft, mailAlertFor, closeAlerted, logoIntent, busyFor, userLastAt, staleQuestion
