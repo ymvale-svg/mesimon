@@ -272,3 +272,41 @@ test('MIME — סוגים חשובים', () => {
   assert.equal(H.MIME['.pdf'], 'application/pdf');
   assert.equal(H.MIME['.csv'], 'text/csv; charset=utf-8');
 });
+
+// ---------------------------------------------------------------------------
+// באגים שנמצאו בבדיקות
+// ---------------------------------------------------------------------------
+
+test('serveStatic — תיקייה שכנה ששמה מתחיל בשם השורש (public-secret) חסומה ב-403', async () => {
+  fs.mkdirSync(path.join(base, 'public-secret'), { recursive: true });
+  fs.writeFileSync(path.join(base, 'public-secret', 'keys.txt'), 'מפתחות');
+  for (const p of ['/../public-secret/keys.txt', '/%2e%2e/public-secret/keys.txt']) {
+    const res = fakeRes();
+    assert.equal(H.serveStatic(res, root, p), true, p);
+    await res.done;
+    assert.equal(res.status, 403, p);
+    assert.equal(res.body().length, 0, p);
+  }
+});
+
+test('serveStatic — קידוד אחוזים שבור הוא 400, לא חריגה כללית', () => {
+  assert.throws(() => H.serveStatic(fakeRes(), root, '/%E0%A4%A'), (e) => e instanceof H.HttpError && e.status === 400);
+});
+
+test('Router — קידוד אחוזים שבור בפרמטר הוא 400', () => {
+  const r = new H.Router().get('/api/tasks/:id', () => 0);
+  assert.throws(() => r.match('GET', '/api/tasks/%E0%A4%A'), (e) => e instanceof H.HttpError && e.status === 400);
+});
+
+test('parseCookies — עוגייה בקידוד שבור לא מפילה את השאר, ונשמרת כמו שהיא', () => {
+  const out = H.parseCookies({ headers: { cookie: 'bad=%E0%A4%A; mesimon_sid=abc' } });
+  assert.equal(out.mesimon_sid, 'abc');
+  assert.equal(out.bad, '%E0%A4%A');
+});
+
+test('readJson — גוף שאינו אובייקט או מערך (null, מספר, מחרוזת) הוא 400', async () => {
+  for (const body of ['null', '42', '"text"', 'true']) {
+    await assert.rejects(H.readJson(fakeReq([body])), (e) => e instanceof H.HttpError && e.status === 400, body);
+  }
+  assert.deepEqual(await H.readJson(fakeReq(['[1,2]'])), [1, 2], 'מערך עדיין מותר');
+});

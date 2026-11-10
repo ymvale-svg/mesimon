@@ -122,7 +122,9 @@ function parseDate(text) {
   let ymd = `${y}-${String(mo).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
   // בלי שנה, ותאריך שעבר לפני יותר מחודש — כנראה השנה הבאה
   if (!m[3] && ymd < plusDays(now, -30)) { y += 1; ymd = `${y}-${ymd.slice(5)}`; }
-  return Number.isNaN(Date.parse(ymd)) ? null : ymd;
+  // יום שאינו קיים בחודש (31.02) — ‎Date.parse‎ אינו נכשל עליו, ולכן בודקים שהתאריך חוזר כמו שהוא
+  const dt = new Date(Date.UTC(y, mo - 1, d));
+  return dt.getUTCFullYear() === y && dt.getUTCMonth() === mo - 1 && dt.getUTCDate() === d ? ymd : null;
 }
 
 async function saveFile(userId, file) {
@@ -226,7 +228,8 @@ async function resolveItems(s, items) {
     const found = await Priority.searchParts(s.company, it.description).catch(() => []);
     const seen = new Set();
     it.candidates = [exact, ...found.slice(0, 12).map((c) => c.p)].filter((p) => p && (p.STATDES ?? 'פעיל') === 'פעיל' && !seen.has(p.PARTNAME) && seen.add(p.PARTNAME));
-    it.exactHit = exact?.PARTNAME ?? null;
+    // התאמה מלאה — רק לפריט פעיל (שנשאר במועמדים)
+    it.exactHit = exact && it.candidates.some((p) => p.PARTNAME === exact.PARTNAME) ? exact.PARTNAME : null;
   });
   const pairs = await Priority.budgetPairs(s.company).catch(() => []);
   const gen = await generalPair(s);
@@ -322,7 +325,8 @@ function showList(s, pre = []) {
 // כותרת: סביבה, פרויקט, מחסן
 // ---------------------------------------------------------------------------
 
-const writable = () => Priority.allowed();
+// רק קודים של חברות מוכרות — ערך אחר ב-PRIORITY_COMPANIES (שגיאת הקלדה, ‎__none__‎) אינו סביבה
+const writable = () => Priority.allowed().filter((c) => Priority.COMPANIES.some((x) => x.code === c));
 
 /**
  * באיזו סביבה (חברה)? כשפתוחות הרבה חברות — כפתורים לשלוש: החברות שבהן העובד פתח דרישות לאחרונה (לפי שם המשתמש שלו

@@ -278,9 +278,7 @@ test('בטיחות: בלי חיבור לפריוריטי — הודעה לעוב
   assert.deepEqual(pr.writes, []);
 });
 
-test('בטיחות: PRIORITY_COMPANIES בלי אף חברה מוכרת (ברירת המחדל של הבדיקות, ‎__none__‎) — אין סביבה לדרישה, ואין כתיבה', {
-  todo: 'purchase-demand.js:325 (writable = Priority.allowed(), priority.js:55) — ערך שאינו קוד חברה מוכר ("__none__", שגיאת הקלדה) נבחר לבד כסביבה ("סביבת אמת"), ו"סיום" כותב אליו'
-}, async (t) => {
+test('בטיחות: PRIORITY_COMPANIES בלי אף חברה מוכרת (ברירת המחדל של הבדיקות, ‎__none__‎) — אין סביבה לדרישה, ואין כתיבה', async (t) => {
   const u = H.worker();
   const pr = priority(t);
   ai(t);
