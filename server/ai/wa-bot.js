@@ -399,6 +399,8 @@ async function receiveOne(ch, timeout = LISTEN_TIMEOUT) {
         text: m.typeMessage === 'reactionMessage' ? String(m.extendedTextMessageData?.text ?? '').trim()
           : m.typeMessage === 'documentMessage' && fname && raw === fname ? '' : raw,
         kind: m.typeMessage ?? '',
+        // לחיצה על כפתור תשובה — תקפה גם אחרי שהשאלה פגה (‎staleQuestion‎)
+        button: Boolean(buttonReplyText(m)),
         // הודעה שהועברה (Forward) — לסקירה הלילית ולאיסוף הודעות מועברות
         forwarded: Boolean(m.extendedTextMessageData?.isForwarded || m.fileMessageData?.isForwarded || m.isForwarded),
         // הודעה קולית: הכתובת שממנה מורידים אותה לתמלול
@@ -3518,7 +3520,14 @@ async function handleDirect(msg) {
     text = withForwards(forwards, text);
   }
 
-  const state = chatOf(user.id);
+  let state = chatOf(user.id);
+  // ⏳ שאלת אישור שעברו עליה 15 דקות — יורדת, וההודעה מתחילה מההתחלה (אלא אם זו לחיצה על כפתור)
+  if (!/^(bot-|mail-goods-)/.test(String(msg.id ?? '')) && staleQuestion(user.id, state, text, msg)) {
+    log({ channel: 'summary', userId: user.id, action: 'other', status: 'ok', result: `שאלת אישור פגה אחרי ${questionTtlMin()} דקות: ${state.draft?.kind ?? ''}` });
+    releaseQuestion(state.draft);
+    state = { ...state, draft: null, awaiting: false, queue: [] };
+    grNotice = [grNotice, `⏳ עברו יותר מ-${questionTtlMin()} דקות בלי אישור או ביטול, אז הבקשה הקודמת ירדה — מתחילים מההתחלה.`].filter(Boolean).join('\n');
+  }
   let r;
   // תשובה שמתעכבת (תמלול, Today ראשון של היום, ניסוח מייל) — קודם "רגע", כדי שלא ייראה שהבוט לא שמע
   // הודעה קולית — מ-✍️ (תמלול) ל-🤔 (הבנה) מיד; כתובה — 🤔 רק אם התשובה מתעכבת
@@ -3549,7 +3558,8 @@ async function handleDirect(msg) {
   const body = grNotice ? `${grNotice}\n\n${r.reply}` : r.reply;
   const reply = `${voice ? `🎙 *שמעתי:* "${said}"\n\n${body}` : body}${grNote ? `\n\n${grNote}` : ''}`;
   const history = [...state.history, { role: 'user', text: text.slice(0, 500) }, { role: 'bot', text: r.reply.slice(0, 500) }];
-  saveChat(user.id, { ...r.next, history });
+  // חותמת הזמן של השאלה — ממנה נספרות 15 הדקות (‎staleQuestion‎) והשעתיים (‎busyFor‎)
+  saveChat(user.id, { ...r.next, draft: r.next.draft ? { ...r.next.draft, askedAt: D.nowIso() } : r.next.draft, history });
   const fwdNote = forwards.length ? ` (+${forwards.filter((x) => x.kind === 'forward').length} מועברות)` : '';
   log({ ...base, text: `${voice ? `🎙 ${said}` : said}${fwdNote}`, action: r.action, status: r.status, result: r.result, taskId: r.taskId ?? null, reply });
   // הודעה ארוכה מדי — בכמה הודעות; כפתורי תשובה (התפריט) — על האחרונה
@@ -3842,6 +3852,29 @@ async function mailAlerts() {
  */
 const userLastAt = new Map(); // ‎userId‎ → מתי העובד כתב לבוט
 const STALE_QUESTION_MS = 2 * 60 * 60 * 1000;
+
+/*
+ * ⏳ "מאשר / ביטול" שלא נענה 15 דקות (הוחלט 10.11.26): מודעה שחיכתה ל"מאשר" בלעה בקשה אחרת שהגיעה אחר כך.
+ * עכשיו: שאלה שממתינה ועברו עליה 15 דקות בלי אישור ובלי ביטול — יורדת כשהעובד כותב שוב, וההודעה שלו מתחילה
+ * מההתחלה. לחיצה על כפתור (או 👍 / 👎, או "מאשר" / "ביטול" לבד) — תקפה גם אחרי 15 דקות: היא תשובה לשאלה הזו.
+ * תפריט אינו שאלת אישור. קבלת סחורה ודרישת רכש — מצב משלהן (‎goods-receipt.js‎), לא כאן.
+ */
+const questionTtlMin = () => Math.max(1, Number(D.getSetting('wa_question_ttl_min', 15)) || 15);
+
+function staleQuestion(userId, st, text, msg = {}) {
+  if (!st.draft || st.draft.kind === 'menu') return false;
+  const asked = Date.parse(st.draft.askedAt ?? '') || Date.parse(D.get('SELECT updated_at FROM wa_chats WHERE user_id = ?', userId)?.updated_at ?? '') || 0;
+  if (!asked || Date.now() - asked < questionTtlMin() * 60 * 1000) return false;
+  const n = WaUi.normalize(String(text ?? ''));
+  const short = n.split(/\s+/).filter(Boolean).length <= 3;
+  return !(msg.button || msg.kind === 'reactionMessage' || (short && (WaUi.YES.test(n) || WaUi.NO.test(n) || WaUi.CANCEL.test(n) || CANCEL.test(n))));
+}
+
+/** שאלה שירדה בלי תשובה — הפריט שמאחוריה חוזר לתור שלו */
+function releaseQuestion(draft) {
+  if (draft?.kind === 'goods_offer') D.run("UPDATE mail_goods_docs SET status = 'pending' WHERE id = ? AND status = 'asked'", draft.goodsId);
+  if (draft?.kind === 'form_fill' && draft.step === 'offer') D.run("UPDATE mail_forms SET status = 'pending' WHERE id = ? AND status = 'asked'", draft.formId);
+}
 
 function busyFor(userId) {
   const st = chatOf(userId);
@@ -4469,6 +4502,6 @@ module.exports = {
   _internal: {
     storeGroupMessage, processGroup, handleDirect, sanitizeGroup, resolveMentions, candidatesOf, converse, turn, withFollowUps, sendSummaries, YES,
     findRecipients, findContactCards, sourceOf, suggestionFeedback, flushOutbox, todayMessage, splitMessage, parseSuggestionCommand, businessCommand, chatOf, saveChat,
-    recordingReply, checkDraft, draftText, createFromDraft, mailAlertFor, closeAlerted, logoIntent, busyFor, userLastAt
+    recordingReply, checkDraft, draftText, createFromDraft, mailAlertFor, closeAlerted, logoIntent, busyFor, userLastAt, staleQuestion
   }
 };
