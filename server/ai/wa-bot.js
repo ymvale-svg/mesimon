@@ -4091,7 +4091,7 @@ async function mailAlertFor(userId) {
       await sendButtons(chatId, offer.text, offer.buttons);
       rememberBot(userId, offer.text);
       const now = chatOf(userId);
-      if (!now.awaiting && !(now.draft && now.draft.kind !== 'menu')) saveChat(userId, { ...now, draft: { ...offer.draft, askedAt: D.nowIso() }, awaiting: true });
+      if (freeToAsk(userId, now)) saveChat(userId, { ...now, draft: { ...offer.draft, askedAt: D.nowIso() }, awaiting: true });
       MailActions.noteProactive(userId);
       MailActions.paceTick(userId);
       log({ channel: 'summary', chatId, userId, who: u.full_name, action: 'meet_coord', status: 'ok', result: `📧 ${head.from_name}: בקשה לפגישה — ${oneLine(head.subject, 100)}` });
@@ -4124,7 +4124,7 @@ async function mailAlertFor(userId) {
     rememberBot(userId, text);
     // המצב נקרא שוב רגע לפני השמירה — הודעה שהגיעה בינתיים מהעובד גוברת
     const now = chatOf(userId);
-    if (!now.awaiting && !(now.draft && now.draft.kind !== 'menu')) saveChat(userId, { ...now, draft: { ...draft, askedAt: D.nowIso() }, awaiting: true });
+    if (freeToAsk(userId, now)) saveChat(userId, { ...now, draft: { ...draft, askedAt: D.nowIso() }, awaiting: true });
     MailActions.noteProactive(userId);
     MailActions.paceTick(userId);
     log({ channel: 'summary', chatId, userId, who: u.full_name, action: 'mail_alert', status: 'ok', result: `📧 ${head.from_name}: ${oneLine(head.subject, 120)} — ${reply ? 'הצעת תשובה' : 'משימה'}` });
@@ -4168,6 +4168,14 @@ function staleQuestion(userId, st, text, msg = {}) {
   return !(msg.button || msg.kind === 'reactionMessage' || (short && (WaUi.YES.test(n) || WaUi.NO.test(n) || WaUi.CANCEL.test(n) || CANCEL.test(n))));
 }
 
+/** אפשר לשמור שאלה יזומה חדשה: אין שאלה פתוחה, או שהיא כבר לא חוסמת (‎busyFor‎) — ואז היא מוחלפת */
+function freeToAsk(userId, st) {
+  if (!st.awaiting && !(st.draft && st.draft.kind !== 'menu')) return true;
+  if (busyFor(userId)) return false;
+  releaseQuestion(st.draft);
+  return true;
+}
+
 /** שאלה שירדה בלי תשובה — הפריט שמאחוריה חוזר לתור שלו */
 function releaseQuestion(draft) {
   if (draft?.kind === 'goods_offer') D.run("UPDATE mail_goods_docs SET status = 'pending' WHERE id = ? AND status = 'asked'", draft.goodsId);
@@ -4182,7 +4190,10 @@ function busyFor(userId) {
   // שאלה בלי חותמת זמן (מלפני העדכון) ועובד שלא כתב מאז שהשרת עלה — לפי השמירה האחרונה
   const asked = Date.parse(st.draft?.askedAt ?? '') || 0;
   const since = Math.max(userLastAt.get(userId) ?? 0, asked || chatAt);
-  if (Date.now() - since < STALE_QUESTION_MS) return true;
+  // אחרי 15 דקות בלי אישור / ביטול השאלה כבר לא חוסמת הודעות יזומות (היא נשארת, למקרה שילחצו על הכפתור —
+  // ושאלה יזומה חדשה מחליפה אותה: ‎freeToAsk‎). אחרי שעתיים — יורדת
+  if (Date.now() - since < questionTtlMin() * 60 * 1000) return true;
+  if (Date.now() - since < STALE_QUESTION_MS) return false;
   if (st.draft?.kind === 'goods_offer') D.run("UPDATE mail_goods_docs SET status = 'pending' WHERE id = ? AND status = 'asked'", st.draft.goodsId);
   saveChat(userId, { ...st, draft: null, awaiting: false });
   log({ channel: 'summary', userId, action: 'other', status: 'ok', result: `שאלה פתוחה פגה אחרי שעתיים בלי תשובה: ${st.draft?.kind ?? ''}` });
@@ -4251,6 +4262,16 @@ async function meetCoordTick() {
   if (!WaActions.byKey('meet_coord')?.enabled || Date.now() - meetCoordAt < 5 * 60 * 1000) return;
   meetCoordAt = Date.now();
   await MeetCoord.tick({ push: (userId, m) => pushToUser(userId, m, 'meet_coord') }).catch((err) => console.error('[משימון] מעקב תיאום פגישות נכשל:', err.message));
+}
+
+// 📬 "קיבלת תשובה" — למייל שיצא ממשימון (‎reply-watch.js‎). מידע בלבד, לכן לא מחכה לשאלה פתוחה
+async function replyWatchTick() {
+  if (!D.getSetting('wa_bot_enabled', true) || !isConfigured() || !WaActions.byKey('mail_alert')?.enabled || !inHours()) return;
+  const allowed = new Set(mailAlertUsers());
+  await require('./reply-watch').tick({
+    may: (userId) => allowed.has(userId),
+    push: (userId, m) => pushToUser(userId, m, 'mail_alert')
+  }).catch((err) => console.error('[משימון] מעקב תשובות למייל נכשל:', err.message));
 }
 
 // 🛒 פנייה לספקים — החיפוש והשליחה ברקע (חיפוש ברשת לוקח זמן)
@@ -4345,7 +4366,7 @@ async function mailActionAlerts() {
       await sendButtons(chatId, q.text, q.buttons);
       rememberBot(u.id, q.text);
       const now = chatOf(u.id);
-      if (!now.awaiting && !(now.draft && now.draft.kind !== 'menu')) saveChat(u.id, { ...now, draft: { ...q.draft, askedAt: D.nowIso() }, awaiting: true });
+      if (freeToAsk(u.id, now)) saveChat(u.id, { ...now, draft: { ...q.draft, askedAt: D.nowIso() }, awaiting: true });
       MailActions.noteProactive(u.id);
       log({ channel: 'summary', chatId, userId: u.id, who: u.full_name, action: q.action, status: 'ok', result: q.log.slice(0, 300) });
     } catch (err) {
@@ -4775,6 +4796,7 @@ async function tick() {
       await mailActionAlerts();
       await rfqTick();
       await meetCoordTick();
+      await replyWatchTick();
       if (WaActions.byKey('day_digest')?.enabled) {
         await DayDigest.tick({
           users: () => orgUsers().filter((u) => u.phone && D.userPrefs(u.id)?.botPrefs?.dayDigest !== false && WaActions.allowed(Auth.loadActor('user', u.id), 'day_digest')),
