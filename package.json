@@ -7,7 +7,11 @@
   "main": "server/index.js",
   "scripts": {
     "start": "node server/index.js",
-    "reset": "node server/reset.js"
+    "reset": "node server/reset.js",
+    "test": "node --test --test-force-exit --require ./test/setup.js \"test/**/*.test.js\"",
+    "test:unit": "node --test --test-force-exit --require ./test/setup.js \"test/unit/**/*.test.js\"",
+    "test:coverage": "node --test --test-force-exit --experimental-test-coverage --require ./test/setup.js \"test/**/*.test.js\"",
+    "arch": "node tools/arch.js"
   },
   "engines": {
     "node": ">=22.5.0"
