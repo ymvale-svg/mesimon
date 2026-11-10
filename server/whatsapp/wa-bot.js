@@ -3005,6 +3005,11 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
     const candidates = email
       ? [{ name: name || email, email, type: 'external' }]
       : findRecipients(actor, name, org, { only }).map(contactOf);
+    const selfKey = (x) => GContacts.fold(x).replace(/[\s\-–־'"״׳]+/g, '');
+    // "תכתוב לי מייל עם תזכורת…" — ה-AI שם את השם של העובד עצמו כנמען, והוא לא באנשי הקשר שלו: המייל שלו במשימון
+    if (!candidates.length && !email && name && actor.email && selfKey(name) === selfKey(actor.name)) {
+      candidates.push({ name: actor.name, email: actor.email, type: 'external' });
+    }
     if (!candidates.length) {
       const g = GContacts.status(actor.id);
       const where = only === 'phonebook' ? 'באלפון' : only === 'google' ? 'באנשי הקשר שלך ב-Google' : 'באנשי הקשר שלך ב-Google, במשימון ובאלפון';
