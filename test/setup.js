@@ -28,7 +28,8 @@ const SECRET_VARS = [
   'ADMIN_EMAIL', 'ADMIN_PASSWORD', 'ADMIN_NAME', 'PUBLIC_URL'
 ];
 for (const k of SECRET_VARS) delete process.env[k];
-// אף חברה של פריוריטי לא פתוחה לכתיבה — גם לא test11. ערך ריק לא מספיק: ‎priority.allowed()‎ נופל אז ל-test11
+// אף חברה אמיתית של פריוריטי לא פתוחה לכתיבה — גם לא test11. ערך ריק לא מספיק: ‎priority.allowed()‎ נופל אז ל-test11.
+// (דרישת רכש מקבלת גם ערך שאינו קוד חברה — לכן ההגנה האמיתית היא הרשת החסומה כאן והזיופים ב-test/fakes.)
 process.env.PRIORITY_COMPANIES = '__none__';
 process.env.MAIL_MEMORY_OFF = '1';
 
