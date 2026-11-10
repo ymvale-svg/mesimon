@@ -42,7 +42,7 @@ function setup(t, { key = true } = {}) {
 const say = (phone, text) => Bot._internal.handleDirect({ phone, chatId: `${phone}@c.us`, text, id: `ra${++seq}` });
 
 test('READ_ALOUD — "תקריא", "אני בנהיגה"; לא כל בקשה', () => {
-  for (const s of ['תקריא לי את המשימות', 'אני בנהיגה, מה יש לי היום?', 'אפשר להקריא לי את הרשימה']) assert.match(s, Bot._internal.READ_ALOUD);
+  for (const s of ['תקריא לי את המשימות', 'אני בנהיגה, מה יש לי היום?', 'אפשר להקריא לי את הרשימה', 'תכירי לי תפסימות שיש לי פתוחות.', 'תגיד לי בקול מה פתוח']) assert.match(s, Bot._internal.READ_ALOUD);
   for (const s of ['המשימות שלי', 'מה באיחור?', 'תקרא את המייל של דני']) assert.doesNotMatch(s, Bot._internal.READ_ALOUD);
 });
 
@@ -56,7 +56,7 @@ test('readAloudText — שם פרטי, מספרים במילים, בלי אימ�
   assert.match(Bot._internal.readAloudText({ name: 'א' }, many, ''), /ועוד 3 באפליקציה\.$/);
 });
 
-test('מנהל מערכת: "תקריא לי את המשימות" — הודעה קולית ואחריה הרשימה בטקסט', async (t) => {
+test('מנהל מערכת: "תקריא לי את המשימות" — 🔊 מיד, והודעה קולית בלבד (בלי הרשימה בכתב)', async (t) => {
   const { spoken, files, calls } = setup(t);
   const u = user({ phone: '972507000001', role: 'admin', full_name: 'ישראל וייל' });
   await say('972507000001', 'תקריא לי את המשימות שלי');
@@ -65,8 +65,10 @@ test('מנהל מערכת: "תקריא לי את המשימות" — הודעה 
   assert.equal(files.length, 1);
   assert.equal(files[0].mime, 'audio/ogg');
   assert.ok(files[0].fileName.endsWith('.ogg'));
-  const text = calls.find((c) => c.method === 'sendMessage');
-  assert.match(text.body.message, /📋 המשימות שלך/);
+  assert.equal(calls.filter((c) => c.method === 'sendMessage').length, 0, 'ההודעה הקולית היא התשובה');
+  const reactions = calls.filter((c) => c.method === 'sendReaction').map((c) => c.body.reaction);
+  assert.equal(reactions[0], '🔊', 'הרמקול מיד');
+  assert.equal(reactions.at(-1), '🔊', 'ונשאר בסוף');
   const row = Bot.readLog({}).find((r) => r.userId === u.id);
   assert.equal(row.action, 'my_tasks');
   assert.match(row.result, /🔊 הוקרא/);
@@ -97,12 +99,32 @@ test('"המשימות שלי" בלי בקשת הקראה — טקסט בלבד, 
   assert.equal(files.length, 0);
 });
 
-test('ההקראה נכשלה — הרשימה בטקסט בכל זאת', async (t) => {
+test('ההקראה נכשלה — רק "ההקראה לא זמינה", בלי הרשימה', async (t) => {
   const { files, calls } = setup(t);
   Speech.speak.mock.mockImplementation(async () => { throw new Error('429'); });
   t.mock.method(console, 'error', () => {});
-  user({ phone: '972507000005', role: 'admin' });
+  const u = user({ phone: '972507000005', role: 'admin' });
   await say('972507000005', 'תקריא לי את המשימות');
   assert.equal(files.length, 0);
-  assert.match(calls.find((c) => c.method === 'sendMessage').body.message, /📋 המשימות שלך/);
+  const texts = calls.filter((c) => c.method === 'sendMessage').map((c) => c.body.message);
+  assert.deepEqual(texts, [Bot._internal.READ_ALOUD_DOWN]);
+  const row = Bot.readLog({}).find((r) => r.userId === u.id);
+  assert.equal(row.status, 'error');
+  assert.match(row.result, /🔇 הקראה נכשלה: 429/);
+});
+
+test('שליחת ההודעה הקולית נכשלה — רק "ההקראה לא זמינה", בלי הרשימה', async (t) => {
+  const { calls } = setup(t);
+  WhatsApp.sendFile.mock.mockImplementation(async () => { throw new Error('500'); });
+  t.mock.method(console, 'error', () => {});
+  user({ phone: '972507000006', role: 'admin' });
+  await say('972507000006', 'תקריא לי את המשימות');
+  assert.deepEqual(calls.filter((c) => c.method === 'sendMessage').map((c) => c.body.message), [Bot._internal.READ_ALOUD_DOWN]);
+});
+
+test('עובד שלא בפיילוט — בלי 🔊', async (t) => {
+  const { calls } = setup(t);
+  user({ phone: '972507000007', role: 'employee' });
+  await say('972507000007', 'תקריא לי את המשימות');
+  assert.ok(!calls.some((c) => c.method === 'sendReaction' && c.body.reaction === '🔊'));
 });
