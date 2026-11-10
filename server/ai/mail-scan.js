@@ -266,7 +266,7 @@ function sanitize(out, user, users) {
             contactName: String(ai.contact_name ?? '').trim(),
             contactEmail: String(ai.contact_email ?? '').trim().toLowerCase(),
             contactPhone: String(ai.contact_phone ?? '').trim(),
-            instruction: String(ai.instruction ?? '').trim().slice(0, 1000)
+            instruction: String(ai.instruction ?? '').trim().slice(0, 2000)
           }
         : null
     };

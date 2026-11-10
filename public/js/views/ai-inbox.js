@@ -305,6 +305,21 @@ const AiInboxView = (() => {
     ]);
   }
 
+  /**
+   * ההוראה לעוזר כשהמשימה היא לפנות לגורם אחר (✨ משימת AI). גוף המייל המקורי
+   * אינו נשמר — ולכן כל מה שהעוזר צריך לכלול בפנייה עובר כאן: ההוראה, התקציר
+   * וכל סעיפי הצ'קליסט ("כל מה ש-BDO מבקשים"), ולא רק כותרת.
+   */
+  function outreachInstruction({ title = '', summary = '', checklist = [], aiRequest = null }) {
+    const head = (aiRequest?.instruction || title).trim();
+    const lines = [head];
+    if (summary.trim() && !head.includes(summary.trim())) lines.push(`רקע: ${summary.trim()}`);
+    const items = checklist.map((x) => String(x).trim()).filter(Boolean);
+    if (items.length) lines.push('', 'לכלול בפנייה את כל הסעיפים:', ...items.map((x) => `• ${x}`));
+    return lines.join('\n');
+  }
+  const outreachContact = (d) => (d.aiRequest ? { name: d.aiRequest.contactName, email: d.aiRequest.contactEmail, phone: d.aiRequest.contactPhone } : {});
+
   function suggestionRow(s, reload) {
     if (s.kind === 'meeting_cancelled' || s.kind === 'meeting_move') return meetingRow(s, reload);
     if (TaskSyncView.handles(s)) return TaskSyncView.row(s, { reload });
@@ -333,8 +348,10 @@ const AiInboxView = (() => {
     toAi.title = 'לבקש את זה ממישהו — העוזר ינסח פנייה לאישורך ויעקוב';
     toAi.addEventListener('click', () => AiTaskView.openDialog({
       suggestionId: s.id,
-      instruction: d.aiRequest?.instruction || `${d.title}. ${d.summary}`,
-      contact: d.aiRequest ? { name: d.aiRequest.contactName, email: d.aiRequest.contactEmail, phone: d.aiRequest.contactPhone } : {},
+      instruction: outreachInstruction(d),
+      contact: outreachContact(d),
+      projectId: d.projectId ?? '',
+      dueDate: d.dueDate ?? '',
       onCreated: () => reload()
     }));
 
@@ -634,6 +651,33 @@ const AiInboxView = (() => {
     checklist.value = (d.checklist ?? []).join('\n');
     const trust = el('input', { type: 'checkbox', checked: s.trusted });
 
+    /*
+     * ✨ "לנסח מייל ל…" — כשהמשימה היא לפנות לגורם אחר (להעביר לספק שאלות,
+     * לבקש מסמכים), העוזר מנסח את הפנייה מהשדות כפי שהם עכשיו, כולל הצ'קליסט,
+     * מציג אותה לאישור לפני שליחה ועוקב אחרי התשובה. במקום משימה רגילה — לא בנוסף.
+     */
+    const contactName = d.aiRequest?.contactName;
+    const reach = chat ? null : el('div.ai-reach', { style: { margin: '0 0 10px' } }, [
+      el('button.btn' + (d.aiRequest ? '.btn-primary' : ''), {
+        type: 'button',
+        onclick: () => {
+          m.close();
+          AiTaskView.openDialog({
+            suggestionId: s.id,
+            instruction: outreachInstruction({
+              title: title.value, summary: summary.value, aiRequest: d.aiRequest,
+              checklist: checklist.value.split('\n')
+            }),
+            contact: outreachContact(d),
+            projectId: project.value || '',
+            dueDate: due.value || '',
+            onCreated: () => reload()
+          });
+        }
+      }, [contactName ? `✨ לנסח מייל ל${contactName}` : '✨ לנסח פנייה לגורם אחר']),
+      el('div.mute-sm', { text: 'העוזר ינסח את הפנייה עם כל הפרטים שלמעלה, יציג אותה לאישורך לפני שליחה ויעקוב אחרי התשובה — במקום משימה רגילה.', style: { marginTop: '4px' } })
+    ]);
+
     const ok = el('button.btn.btn-primary', {}, ['✓ יצירת המשימה']);
     const m = UI.modal({
       title: chat ? '💬 משימה מקבוצת וואטסאפ' : '📧 משימה מהמייל',
@@ -652,6 +696,7 @@ const AiInboxView = (() => {
         d.ambiguous?.length ? el('div.mute-sm', { text: `❓ לא ברור למי הכוונה: ${d.ambiguous.join(', ')} — הוסיפו ידנית אם צריך`, style: { marginBottom: '6px' } }) : null,
         peopleBox,
         el('div.mute-sm', { text: 'אחראי/ת — המשימה אצלו/ה, ואת/ה נשאר/ת שותף/ה. שותף/ה — אחראי/ת נוסף/ת. לידיעה — מתויג/ת בהערה ומקבל/ת עדכונים.', style: { margin: '6px 0 10px' } }),
+        reach,
         chat ? null : el('label.checkbox', {}, [trust, ` מ-${s.from.email} — ליצור ישר בפעם הבאה (רק משימות שכולן שלך)`])
       ]),
       footer: [ok, el('div.spacer'), el('button.btn', { onclick: () => m.close() }, ['ביטול'])]
