@@ -573,14 +573,29 @@ function refresh() {
 const DEPT_LABEL = { office: 'משרד ומינהלה', realestate: 'נדל"ן', finance: 'כספים', hr: 'משאבי אנוש', marketing: 'שיווק ומכירות', other: '' };
 
 /** כל הערכים הגלויים שמתאימים לחיפוש — בלי סינון הרשאה. רק לשימוש פנימי */
+/*
+ * התאמה של מילים שלמות — לא תת-מחרוזת (10.11.26: "לינור" ← "ינור" נמצא בתוך "צינורות", והשאלה "מה לינור כתבה לי"
+ * הביאה ידע על נזילות). מילה מהשאלה — בצורתה וגם בלי אות שימוש בהתחלה; מילה בטקסט — בצורתה ובלי אות שימוש, וגם
+ * מתחילה במילה מהשאלה כשזו ארוכה (4+): "צינור" ← "צינורות".
+ */
+// ‏"הצפות" / "הצפה" ← "הצפ"; "צינורות" ← "צינור" — סיומות רבים ונקבה, במילים של 4 אותיות ומעלה
+const stem = (w) => (w.length >= 4 ? w.replace(/(ות|ים|ה)$/, '') : w);
+const variants = (w) => {
+  const n = Memory.normalize(w);
+  const base = n.length > 3 && /^[והבלמש]/.test(n) ? [n, n.slice(1)] : [n];
+  return [...new Set(base.flatMap((x) => [x, stem(x)]))];
+};
+const tokensOf = (s) => new Set(Memory.terms(s).flatMap(variants).filter((w) => w.length >= 2));
+const hit = (tokens, vs) => vs.some((v) => v.length >= 3 && [...tokens].some((t) => t === v || (v.length >= 4 && t.startsWith(v))));
+
 function rank(query, rows, limit) {
-  const ws = words(query);
-  if (!ws.length) return [];
+  const qs = Memory.terms(query).map(variants).filter((vs) => vs.some((v) => v.length >= 3));
+  if (!qs.length) return [];
   return rows
     .map((e) => {
-      const dom = Memory.normalize(`${e.domain} ${e.project}`);
-      const txt = Memory.normalize(e.text);
-      return { e, s: ws.reduce((n, w) => n + (dom.includes(w) ? 3 : 0) + (txt.includes(w) ? 1 : 0), 0) };
+      const dom = tokensOf(`${e.domain} ${e.project}`);
+      const txt = tokensOf(e.text);
+      return { e, s: qs.reduce((n, vs) => n + (hit(dom, vs) ? 3 : 0) + (hit(txt, vs) ? 1 : 0), 0) };
     })
     .filter((x) => x.s >= 2)
     .sort((a, b) => b.s - a.s || b.e.cases - a.e.cases)
@@ -681,4 +696,4 @@ function sources(id, actor = null) {
   return D.all('SELECT user_name, happened_at, summary FROM org_knowledge_sources WHERE knowledge_id = ? ORDER BY happened_at DESC LIMIT 100', id);
 }
 
-module.exports = { daily, refresh, distillUser, mergeAll, classifyPending, reformatOld, monthLabel, isManagement, forViewer, sourceText, search, list, edit, remove, sources, scrub, _internal: { validTz, luhn, matchEntry } };
+module.exports = { daily, refresh, distillUser, mergeAll, classifyPending, reformatOld, monthLabel, isManagement, forViewer, sourceText, search, list, edit, remove, sources, scrub, _internal: { validTz, luhn, matchEntry, rank } };
