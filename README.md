@@ -60,7 +60,7 @@ node server/index.js
 | `ZOOM_ACCOUNT_ID` · `ZOOM_CLIENT_ID` · `ZOOM_CLIENT_SECRET` | אפליקציית Server-to-Server OAuth של חשבון ה-Zoom של החברה — קישור Zoom אוטומטי לפגישות. בלעדיהם הפגישות נקבעות בלי Zoom (מקום / קישור משלי) |
 | `ANTHROPIC_API_KEY` | משימות AI וסריקת מיילים (Claude). בלעדיו האפשרויות אינן זמינות |
 | `RUNPOD_API_KEY` · `RUNPOD_ENDPOINT_ID` | תמלול הודעות קוליות במודל העברית של ivrit.ai, ב-endpoint בחשבון ה-RunPod של הארגון (Hub ← `ivrit-ai/runpod-serverless` ← Deploy). **ראשון בסדר**; OpenAI ו-Google — גיבוי לפי הסדר. אופציונלי: `RUNPOD_TRANSCRIBE_MODEL` (ברירת מחדל `ivrit-ai/whisper-large-v3-turbo-ct2`), `RUNPOD_TIMEOUT_SECONDS` (ברירת מחדל 90 — כולל "התעוררות" של endpoint, ואחריו עוברים לגיבוי) |
-| `OPENAI_API_KEY` | תמלול הודעות קוליות לבוט הוואטסאפ (מומלץ — מפתח אחד מ-platform.openai.com, בלי פרויקט ענן). המודל: `OPENAI_TRANSCRIBE_MODEL`, ברירת מחדל `gpt-4o-transcribe`. ההקלטה באפליקציה אינה צריכה אותו (הדפדפן מתמלל) |
+| `OPENAI_API_KEY` | תמלול הודעות קוליות לבוט הוואטסאפ (מומלץ — מפתח אחד מ-platform.openai.com, בלי פרויקט ענן). המודל: `OPENAI_TRANSCRIBE_MODEL`, ברירת מחדל `gpt-4o-transcribe`. ההקלטה באפליקציה אינה צריכה אותו (הדפדפן מתמלל). גם 🔊 הקראה ("תקריא לי את המשימות" — פיילוט למנהלי המערכת): `OPENAI_TTS_MODEL` (ברירת מחדל `gpt-4o-mini-tts`), `OPENAI_TTS_VOICE` (ברירת מחדל `alloy`) |
 | `GOOGLE_SPEECH_API_KEY` | חלופה ל-OpenAI: מפתח API מפרויקט Google Cloud שבו מופעל Cloud Speech-to-Text. כששניהם מוגדרים — OpenAI. בלי אף אחד מהם הבוט מבקש לכתוב בטקסט |
 | `TOKEN_ENCRYPTION_KEY` | הצפנת חיבורי ה-Gmail האישיים במסד. בלעדיו נוצר קובץ מפתח ליד מסד הנתונים. לא להחליף אחרי שחוברו תיבות |
 | `TIFUL360_INBOUND_KEY` | חיבור לתפעול 360: המפתח שתפעול 360 שולח כדי להפוך קריאת שירות למשימה. בלעדיו החיבור כבוי |

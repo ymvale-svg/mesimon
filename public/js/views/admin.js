@@ -404,8 +404,9 @@ const AdminView = (() => {
       ])
     );
 
+    // תיק העובד נפתח בהקלקה על השורה שלו
     function userRow(u) {
-      return el('tr', {}, [
+      return el('tr.row-link', { title: `תיק עובד — ${u.name}`, onclick: () => userDialog(u, data) }, [
           el('td', {}, [el('div.flex', {}, [UI.avatar(u.name, { small: true }), el('b', { text: u.name })])]),
           el('td', { text: u.email }),
           // עמודת טלפון — כך רואים במבט מי עוד חסר לבוט הוואטסאפ
@@ -421,10 +422,10 @@ const AdminView = (() => {
           })]),
           el('td', {}, [
             el('div.flex', {}, [
-              el('button.btn.btn-sm', { onclick: () => userDialog(u, data) }, ['עריכה']),
               el('button.btn.btn-sm', {
                 title: 'שליחה חוזרת של הזמנה לקביעת סיסמה',
-                onclick: async () => {
+                onclick: async (e) => {
+                  e.stopPropagation(); // לא לפתוח גם את תיק העובד
                   try {
                     const r = await API.resendInvite('user', u.id);
                     showInviteResult(r.invite, u.name);
@@ -619,6 +620,7 @@ const AdminView = (() => {
           el('span', { text: '⚠️' }),
           el('div', { text: 'המחיקה אינה הפיכה: החשבון, החיבורים וההגדרות האישיות יימחקו. מי שרק עזב — אפשר במקום זאת לשנות את הסטטוס ל"לא פעיל", וההיסטוריה תישמר.' })
         ]),
+        el('p.muted', { text: 'נשמרים יומן הפעולות במערכת, התגובות וההיסטוריה במשימות והקבצים שצורפו להן — הם חלק מתיעוד העבודה של הארגון; הודעות הוואטסאפ, יומני הבוט וההגדרות האישיות נמחקים.' }),
         facts.length ? el('p', { text: `ל${user.name} יש: ${facts.join(', ')}.` }) : null,
         facts.length
           ? UI.field('העברת המשימות והפרויקטים אל', heirSelect, load.openTasks ? 'חובה — משימות פתוחות לא יישארו בלי אחראי' : 'רשות')
@@ -733,6 +735,25 @@ const AdminView = (() => {
     // מזכירות — קובעות פגישות ביומנים שהעובדים שיתפו איתן, ורואות את מסך היומן
     const secretaryCheck = el('input', { type: 'checkbox', checked: Boolean(user?.secretary) });
     /*
+     * מסך "בקרת משימות" ותתי-משימות. ברירת המחדל לפי המחלקה (מחלקת תכנון —
+     * פתוח); נשמר כבחירה מפורשת רק כשסימנו כאן, כדי שעובד שיעבור מחלקה ימשיך
+     * לקבל את ברירת המחדל של המחלקה החדשה.
+     */
+    const trackerCheck = el('input', { type: 'checkbox', checked: Boolean(user?.tracker) });
+    let trackerTouched = false;
+    trackerCheck.addEventListener('change', () => { trackerTouched = true; });
+    const trackerHint = el('div.hint');
+    const syncTrackerDefault = () => {
+      const opt = deptSelect.selectedOptions[0];
+      const byDept = /תכנון/.test(opt?.textContent ?? '');
+      if (!trackerTouched && (!isEdit || user.trackerByDefault)) trackerCheck.checked = byDept;
+      trackerHint.textContent = 'משימות-אב ותתי-משימות, והפעולה הבאה בכל אחת. פתוח רק למי שמסמנים — כדי לא לבלבל את כולם. '
+        + 'ברירת המחדל: פתוח למחלקת תכנון.'
+        + (isEdit && !user.trackerByDefault ? ' (נקבע ידנית לעובד הזה)' : '');
+    };
+    deptSelect.addEventListener('change', syncTrackerDefault);
+    syncTrackerDefault();
+    /*
      * משתמש ה-Zoom שמארח את הפגישות של העובד — מחשבון ה-Zoom של החברה, לא
      * בהכרח המייל שלו. הרשימה נטענת מהשרת; בלי חיבור Zoom השדה מוסתר.
      */
@@ -749,7 +770,7 @@ const AdminView = (() => {
 
     const saveBtn = el('button.btn.btn-primary', {}, ['שמירה']);
     const m = UI.modal({
-      title: isEdit ? `עריכת משתמש — ${user.name}` : 'משתמש חדש',
+      title: isEdit ? `תיק עובד — ${user.name}` : 'משתמש חדש',
       body: el('div', {}, [
         UI.field('שם מלא', nameInput),
         UI.field('אימייל', emailInput, 'משמש גם לכניסה למערכת'),
@@ -771,6 +792,10 @@ const AdminView = (() => {
         el('div.field', {}, [
           el('label.checkbox', {}, [secretaryCheck, ' 📅 מזכירות החברה — קובעת פגישות, רואה את מסך היומן, ומנהלי המחלקות פותחים לה משימות']),
           el('div.hint', { text: 'הגישה ליומן של כל עובד — רק לפי מה שהוא שיתף איתה ב-Google. כדי לראות את המשימות שמחכות לקביעה של כולם — גם "צפייה בכל משימות המחלקה".' })
+        ]),
+        el('div.field', {}, [
+          el('label.checkbox', {}, [trackerCheck, ' 📊 בקרת משימות — משימות-אב ותתי-משימות']),
+          trackerHint
         ]),
         zoomField,
         grantsBox,
@@ -802,6 +827,7 @@ const AdminView = (() => {
         role: roleSelect.value,
         status: statusSelect.value,
         fieldWorker: fieldWorkerCheck.checked,
+        ...(trackerTouched ? { tracker: trackerCheck.checked } : {}),
         secretary: secretaryCheck.checked
       };
       if (zoomField.style.display !== 'none') payload.zoomUserId = zoomSelect.value || null;
@@ -1381,6 +1407,9 @@ const AdminView = (() => {
     meeting_reminder_minutes: ['פגישות: התראה לפני (דקות)', 'במשימון ובבוט הוואטסאפ, עם קישור ה-Zoom — לבעל היומן, למי שקבע ולמוזמנים שהם משתמשי משימון'],
     meeting_ai_alternatives: ['פגישות: הצעות AI להזזת פגישות חופפות', 'כבוי = החלופות מסודרות לפי כללים קבועים, בלי AI'],
     meeting_record_default: ['פגישות: הקלטה אוטומטית לענן — מסומן מראש', 'בפגישת Zoom חדשה. בכל פגישה אפשר לשנות. ההקלטות — במסך "🎥 הקלטות Zoom" ובבוט'],
+    meeting_office_address: ['פגישות: כתובת המשרד', 'בקביעת פגישה "🏢 במשרד" — הכתובת נכנסת למיקום ביומן ובהזמנה למשתתפים'],
+    timeless_unrecorded_alert: ['🎥 Timeless: פגישה שלא מוקלטת — הודעה למזכירות', 'בתחילת כל פגישה מקוונת (Zoom / Meet / Teams) ביומני העובדים שלא מוקלטת ב-Timeless: וואטסאפ והתראה למזכירות, עם הקישור להכנסה ל-Timeless. גם פגישות שלא נקבעו במשימון'],
+    timeless_unrecorded_delay: ['🎥 Timeless: כמה דקות אחרי תחילת הפגישה לבדוק', 'הזמן ש-Timeless מקבל להצטרף לפגישה לפני ההודעה'],
   };
 
   /**
@@ -2188,6 +2217,7 @@ const AdminView = (() => {
       always.addEventListener('change', () => { hFrom.disabled = hTo.disabled = always.checked; });
       const shabbat = el('input', { type: 'checkbox', checked: s.shabbat });
       const speechCompare = el('input', { type: 'checkbox', checked: s.speechCompare });
+      const topicSwitch = el('input', { type: 'checkbox', checked: s.topicSwitchCancels !== false });
       const check = (input, label, hint) => el('label.wa-check', {}, [input, el('div', {}, [el('b', { text: label }), hint ? el('div.mute-sm', { text: hint }) : null])]);
 
       const save = el('button.btn.btn-primary', {}, ['שמירת ההגדרות']);
@@ -2197,7 +2227,7 @@ const AdminView = (() => {
           draw(await API.put('/api/admin/wa-bot/settings', {
             enabled: enabled.checked, quietMinutes: Number(quiet.value), summaryTime: summary.value,
             hours: always.checked ? '' : `${hFrom.value}-${hTo.value}`, shabbat: shabbat.checked,
-            speechCompare: speechCompare.checked
+            speechCompare: speechCompare.checked, topicSwitchCancels: topicSwitch.checked
           }));
           UI.success('ההגדרות נשמרו');
         } catch (err) { save.disabled = false; UI.error(err); }
@@ -2209,6 +2239,9 @@ const AdminView = (() => {
           UI.field('דקות שקט לפני ניתוח קבוצה', quiet, 'רצף הודעות נקרא יחד, אחרי הפסקה בשיחה — כך "וגם את זה עד חמישי" מובן בהקשר'),
           UI.field('שעת סיכום הבוקר', summary, 'בימים א׳–ה׳. הפעלה וכיבוי — בלשונית "פעולות"')
         ]),
+        el('h4.mt', { text: 'שיחה בפרטי' }),
+        check(topicSwitch, 'מעבר לנושא אחר מבטל את הקודם (ברירת מחדל)',
+          'הבוט תמיד עושה את מה שמבקשים ממנו עכשיו. עובד שבאמצע טיוטת מייל, משימה, אישור או קבלת סחורה שולח בקשה אחרת ("תפתח משימה לדני…") — הפריט הקודם מבוטל בלי לכתוב "ביטול", ואין חזרה אליו (בקבלת סחורה — גם הטיוטא בפריוריטי). כבוי — רק טיוטות מייל יורדות, וקבלת סחורה מושהית עד "קבלת סחורה".'),
         el('h4.mt', { text: 'מתי הבוט שולח הודעות' }),
         check(always, 'כל שעות היום'),
         el('div.row', {}, [UI.field('מהשעה', hFrom), UI.field('עד השעה', hTo)]),

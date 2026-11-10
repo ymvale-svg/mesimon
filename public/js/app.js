@@ -163,6 +163,19 @@ const App = (() => {
   const userName = (id) => state.users.find((u) => u.id === id)?.name ?? null;
   const vendorName = (id) => state.vendors.find((v) => v.id === id)?.name ?? null;
   const project = (id) => state.projects.find((p) => p.id === id) ?? null;
+
+  /**
+   * הפרויקטים שלי — אותו עולם בכל בורר ומסנן פרויקט במערכת: פרויקט שאני מנהל
+   * או פתחתי, שנעצתי, שיש לי בו משימות, או של המחלקה שלי (‎canAddTask‎ מהשרת,
+   * אותו כלל ש-‎assertMayUseProject‎ אוכף). לא כל פרויקט בארגון — גם למנהל
+   * מערכת, שרשימה של כל הארגון רק מבלבלת אותו.
+   *
+   * ‎keep‎ — פרויקט שכבר נבחר נשאר ברשימה גם אם אינו "שלי", כדי שבורר לא
+   * יוצג ריק ולא ישנה ערך בשקט.
+   */
+  const myProjects = ({ keep = null, openOnly = false } = {}) => state.projects.filter((p) =>
+    (p.canAddTask || p.mine || (keep !== null && keep !== '' && String(p.id) === String(keep)))
+    && (!openOnly || p.status !== 'done' || String(p.id) === String(keep)));
   const internalBoard = () => state.boards.find((b) => b.type === 'internal') ?? null;
   const vendorBoards = () => state.boards.filter((b) => b.type === 'vendor');
 
@@ -209,6 +222,7 @@ const App = (() => {
        */
       navigate(isVendor() ? 'vendor' : (isPhone() || params.get('view') === 'today') ? 'today' : 'home');
       openTaskFromUrl();
+      if (!isVendor()) openRecordingFromUrl();
       if (!isVendor()) {
         // באנר "מה חדש" — רק כשיש גרסה שעוד לא נראתה, או מקישור במייל
         WhatsNewView.maybeShow();
@@ -328,6 +342,18 @@ const App = (() => {
     if (!id) return;
     history.replaceState(null, '', location.pathname);
     TaskCardView.open(id);
+  }
+
+  /**
+   * ‎?rec=mtg_abc&t=760‎ — קישור לרגע בהקלטה (מהנגן, ממשימה שנפתחה מפגישה): הנגן
+   * נפתח ומתחיל מהשנייה הזו. גם כאן הפרמטרים נמחקים מהכתובת.
+   */
+  function openRecordingFromUrl() {
+    const q = new URLSearchParams(location.search);
+    const id = q.get('rec');
+    if (!id || !/^[\w-]{1,80}$/.test(id) || typeof RecordingPlayer === 'undefined') return;
+    history.replaceState(null, '', location.pathname);
+    RecordingPlayer.open(id, { t: Number(q.get('t')) || 0 });
   }
 
   /**
@@ -670,15 +696,15 @@ const App = (() => {
     today: { label: 'Today', icon: 'my-tasks', render: (c) => TodayView.render(c) },
     calendar: { label: 'יומן', icon: 'my-tasks', render: (c) => CalendarView.render(c) },
     // הקלטות Zoom — לשונית במסך היומן; קישור ישן לכאן מגיע לדף הבית
-    recordings: { label: 'הקלטות Zoom', icon: 'my-tasks', hidden: true, render: (c) => RecordingsView.render(c) },
+    recordings: { label: 'הקלטות', icon: 'my-tasks', hidden: true, render: (c) => RecordingsView.render(c) },
     home: { label: 'דף הבית', icon: 'home', render: (c) => HomeView.render(c) },
     board: { label: 'לוח המשימות', icon: 'board', render: (c, p) => BoardView.render(c, { ...p, scope: 'internal' }) },
     vendorBoards: { label: 'כל משימות הספקים', icon: 'vendors', render: (c, p) => BoardView.render(c, { ...p, scope: 'vendors' }) },
     /*
-     * מוסתר מכולם, גם ממנהל המערכת, עד שישופר: אינו בתפריט, וניווט אליו
-     * (קישור שנשמר) מגיע לדף הבית. הקוד נשאר — ‎TrackerView‎.
+     * פתוח רק למי שנפתח לו בתיק העובד (ברירת המחדל — מחלקת תכנון), כדי שלא
+     * יבלבל את כולם. לשאר אינו בתפריט, וניווט אליו מגיע לדף הבית.
      */
-    tracker: { label: 'בקרת משימות', icon: 'reports', hidden: true, render: (c, p) => TrackerView.render(c, p) },
+    tracker: { label: 'בקרת משימות', icon: 'reports', allowed: () => hasTracker(), render: (c, p) => TrackerView.render(c, p) },
     archive: { label: 'ארכיון', icon: 'archive', render: (c, p) => BoardView.render(c, { ...p, scope: 'internal', archived: true }) },
     reports: { label: 'דוחות', icon: 'reports', render: (c) => ReportsView.render(c) },
     // אלפון ארגוני — מ"החשבון שלי" ומהחלון בדשבורד, לכל העובדים
@@ -687,8 +713,11 @@ const App = (() => {
     vendor: { label: 'המשימות שלי', icon: 'my-tasks', render: (c) => VendorPortalView.render(c) }
   };
 
+  /** מסך "בקרת משימות" ותתי-משימות — רק למי שנפתח לו (‎publicActor.tracker‎ בשרת) */
+  const hasTracker = () => !isVendor() && Boolean(state.actor?.tracker);
+
   function navigate(name, params = {}) {
-    if (ROUTES[name]?.hidden) name = 'home';
+    if (ROUTES[name]?.hidden || ROUTES[name]?.allowed?.() === false) name = 'home';
     if (name === 'phonebook' && isVendor()) name = 'vendor';
     state.route = { name, params };
     closeDrawer();
@@ -1211,6 +1240,40 @@ const App = (() => {
       box.addEventListener('change', () => {
         setPref('botPrefs', { ...(getPref('botPrefs', {}) ?? {}), insightsInToday: box.checked });
       });
+      // 📬 מייל חדש — הבוט פונה ושואל מה לענות. דלוק כברירת מחדל
+      const alert = el('input', { type: 'checkbox', checked: getPref('botPrefs', {})?.mailAlert !== false });
+      alert.addEventListener('change', () => {
+        setPref('botPrefs', { ...(getPref('botPrefs', {}) ?? {}), mailAlert: alert.checked });
+      });
+      // 🎥 אחרי פגישה מוקלטת — הבוט שואל מה לשלוח. דלוק כברירת מחדל
+      const followup = el('input', { type: 'checkbox', checked: getPref('botPrefs', {})?.meetingFollowup !== false });
+      followup.addEventListener('change', () => {
+        setPref('botPrefs', { ...(getPref('botPrefs', {}) ?? {}), meetingFollowup: followup.checked });
+      });
+      // ⏰ דדליין ממייל — "זכרת?", ו-📄 חשבונית במייל ← קבלת סחורה. דלוקים כברירת מחדל
+      const deadline = el('input', { type: 'checkbox', checked: getPref('botPrefs', {})?.mailDeadline !== false });
+      deadline.addEventListener('change', () => {
+        setPref('botPrefs', { ...(getPref('botPrefs', {}) ?? {}), mailDeadline: deadline.checked });
+      });
+      const goods = el('input', { type: 'checkbox', checked: getPref('botPrefs', {})?.goodsOffer !== false });
+      goods.addEventListener('change', () => {
+        setPref('botPrefs', { ...(getPref('botPrefs', {}) ?? {}), goodsOffer: goods.checked });
+      });
+      // 📝 טופס ריק במייל — להציע למלא. דלוק כברירת מחדל
+      const formOffer = el('input', { type: 'checkbox', checked: getPref('botPrefs', {})?.formOffer !== false });
+      formOffer.addEventListener('change', () => {
+        setPref('botPrefs', { ...(getPref('botPrefs', {}) ?? {}), formOffer: formOffer.checked });
+      });
+      // 🌊 קצב התזכורות מהמייל — כדי לא להציף מי שמקבל עשרות מיילים ביום
+      const pace = el('select', {}, [
+        ['normal', 'רגיל — עד אחת לחצי שעה, 8 ביום'],
+        ['light', 'מעט — עד אחת לשעתיים, 3 ביום'],
+        ['morning', 'רק בסיכום הבוקר'],
+        ['off', 'בלי תזכורות']
+      ].map(([v, t]) => el('option', { value: v, text: t, selected: (getPref('botPrefs', {})?.remindPace ?? 'normal') === v })));
+      pace.addEventListener('change', () => {
+        setPref('botPrefs', { ...(getPref('botPrefs', {}) ?? {}), remindPace: pace.value });
+      });
       return el('div', {}, [
         el('h4', { text: 'בוט הוואטסאפ', style: { margin: '16px 0 8px', fontSize: '13px' } }),
         el('div.table-wrap', {}, [
@@ -1222,6 +1285,49 @@ const App = (() => {
                   el('div.mute-sm', { text: 'החלק האחרון של Today: במסך, בבוט (בהודעת המשך) ובמייל הבוקר. את הרשימה המלאה מקבלים תמיד לפי בקשה: "תובנות", "תובנות מהיומיים האחרונים".' })
                 ]),
                 el('td', { style: { textAlign: 'center', width: '110px' } }, [el('label.checkbox', {}, [box])])
+              ]),
+              el('tr', {}, [
+                el('td', {}, [
+                  el('div', { text: '📧 מייל חדש — הבוט פונה אליי' }),
+                  el('div.mute-sm', { text: 'על כל מייל שמחכה ממך למשהו: "קיבלת מייל מ… — לענות לו כך?" עם כן / לא. מייל שכבר קראת — לא נשאל עליו.' })
+                ]),
+                el('td', { style: { textAlign: 'center', width: '110px' } }, [el('label.checkbox', {}, [alert])])
+              ]),
+              el('tr', {}, [
+                el('td', {}, [
+                  el('div', { text: '🎥 אחרי פגישה מוקלטת — הבוט שואל אותי' }),
+                  el('div.mute-sm', { text: '"הפגישה הסתיימה והוקלטה. איך היה? מה לשלוח לך?" — סיכום, המשימות שלי מהפגישה או ההקלטה. רק בפגישות שהשתתפתי בהן.' })
+                ]),
+                el('td', { style: { textAlign: 'center', width: '110px' } }, [el('label.checkbox', {}, [followup])])
+              ]),
+              el('tr', {}, [
+                el('td', {}, [
+                  el('div', { text: '🐣 תזכורת ממייל — "זכרת?"' }),
+                  el('div.mute-sm', { text: 'מייל עם דדליין או קריאה לפעולה שלא טופל — יום אחרי שהגיע (או בבוקר יום הדדליין): "זכרת?" עם לפתוח משימה / התעלם. במקום השאלה "לפתוח משימה?" כשהמייל מגיע.' })
+                ]),
+                el('td', { style: { textAlign: 'center', width: '110px' } }, [el('label.checkbox', {}, [deadline])])
+              ]),
+              el('tr', {}, [
+                el('td', {}, [
+                  el('div', { text: '🌊 קצב התזכורות' }),
+                  el('div.mute-sm', { text: 'כמה תזכורות על מיילים שלא טופלו במהלך היום — החשובות קודם (דדליין קרוב, עדיפות). לא באמצע פגישה, ורק בשעות העבודה.' }),
+                  pace
+                ]),
+                el('td', {}, [])
+              ]),
+              el('tr', {}, [
+                el('td', {}, [
+                  el('div', { text: '📄 חשבונית במייל — להציע קבלת סחורה' }),
+                  el('div.mute-sm', { text: 'כשמגיעה חשבונית או תעודת משלוח: "לבצע קבלת סחורה?" — הבוט מוריד את הקובץ מהמייל ומתחיל. רק למי שמורשה לקבלת סחורה.' })
+                ]),
+                el('td', { style: { textAlign: 'center', width: '110px' } }, [el('label.checkbox', {}, [goods])])
+              ]),
+              el('tr', {}, [
+                el('td', {}, [
+                  el('div', { text: '📝 טופס ריק במייל — להציע למלא' }),
+                  el('div.mute-sm', { text: 'רק כשאני הנמען הראשי (לא בהעתק): הבוט ממלא מכרטיס החברה ומהפרטים שלי, מראה לי, ושולח לשולח רק אחרי אישור.' })
+                ]),
+                el('td', { style: { textAlign: 'center', width: '110px' } }, [el('label.checkbox', {}, [formOffer])])
               ])
             ])
           ])
@@ -1548,8 +1654,7 @@ const App = (() => {
    * הצד ומה מופיע בסרגל העליון. פעולה שמוצעת כאן ונכשלת ב-403 גרועה
    * מפעולה שלא הוצעה.
    *
-   * מסך "בקרת משימות" אינו כאן — הוא מוסתר מכולם (‎hidden‎ ב-‎ROUTES‎), וניווט
-   * אליו מגיע ממילא לדף הבית.
+   * מסך "בקרת משימות" — רק למי שנפתח לו, כמו בתפריט הצד.
    */
   function paletteActions() {
     const route = (name, keys) => ({ kind: 'route', title: ROUTES[name].label, keys, run: () => navigate(name, {}) });
@@ -1568,6 +1673,7 @@ const App = (() => {
       // יומן — לכל העובדים, כמו בתפריט הצד
       route('calendar', ['יומן', 'פגישות', 'לוח שנה', 'calendar']),
       route('board', ['לוח', 'משימות', 'רשימה', 'בורד', 'board']),
+      hasTracker() ? route('tracker', ['בקרה', 'בקרת משימות', 'תתי-משימות', 'משימות אב', 'tracker']) : null,
       may('view_vendor_boards') ? route('vendorBoards', ['ספקים', 'ספק', 'vendors']) : null,
       route('archive', ['ארכיון', 'שהושלמו', 'archive']),
       route('phonebook', ['אלפון', 'טלפונים', 'אנשי קשר', 'עובדים', 'phonebook', 'contacts']),
@@ -2430,6 +2536,7 @@ const App = (() => {
     // יומן — לכל העובדים: היומן שלי. מזכירות — גם היומנים ששותפו איתן ו"מחכות לקביעה"
     add('calendar', {}, { icon: el('span.nav-emoji', { text: '📅' }) });
     add('board');
+    if (hasTracker()) add('tracker');
     if (may('view_vendor_boards')) add('vendorBoards');
 
     // הבלוק הזה כולו לא נבנה לספק — מסלול הספק חזר כבר למעלה עם רשימת הניווט שלו
@@ -2473,7 +2580,8 @@ const App = (() => {
      * השרת כבר מחזיר את הנעוצים בראש, אך את החלוקה מחשבים כאן מחדש כדי שהחוצץ
      * יישאר במקום הנכון גם אחרי סינון הפרויקטים שהושלמו.
      */
-    const live = state.projects.filter((p) => p.status !== 'done');
+    // "הכול" בתפריט הוא הפרויקטים שלי ושל המחלקה — לא כל הארגון (‎myProjects‎)
+    const live = myProjects({ openOnly: true });
 
     /**
      * למנהל מערכת יש גם עבודה משלו, ורשימה שמערבבת את הפרויקטים שלו עם כל
@@ -3100,7 +3208,7 @@ const App = (() => {
   return {
     state, boot, navigate, refresh, refreshNotifications, logout, render,
     refreshChrome, refreshView, isPhone, closeDrawer, setPref, getPref, setTodayCount, refreshTodayCount,
-    may, can, isVendor, userName, vendorName, project, internalBoard, vendorBoards,
+    may, can, isVendor, hasTracker, userName, vendorName, project, myProjects, internalBoard, vendorBoards,
     reloadReference
   };
 })();

@@ -485,7 +485,7 @@ const VoiceView = (() => {
       }
       if (field === 'dueDate') return ['היום', 'מחר', 'מחרתיים', 'סוף השבוע', 'שבוע הבא'].map((t) => ({ say: t, label: t }));
       // שלי קודם, ואחריהם שאר הפעילים — למי שעוד לא מנהל פרויקט משלו
-      const open = App.state.projects.filter((p) => p.status !== 'done');
+      const open = App.state.projects.filter((p) => p.status !== 'done' && p.canAddTask);
       const ordered = [...open.filter((p) => p.mine), ...open.filter((p) => !p.mine)];
       return [
         ...ordered.slice(0, 5).map((p) => ({ value: p.id, label: p.name })),
