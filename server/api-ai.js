@@ -37,7 +37,14 @@ function register(router, h) {
   AiTasks.setHooks({ saveFile: saveAttachment, scanWhatsApp: WaScan.handle, scanningUsers: WaScan.scanningUsers });
   MailScan.init({ createTask });
   Agents.init({ listProjectsFor, projectTasks: (actor, projectId) => botTaskOps.projectTasks(actor, projectId) });
-  WaBot.init({ createTask, listProjectsFor, newTaskProjects, assignableUserIds, assignBlockReason, taskTemplates, tasks: botTaskOps, mail: { searchContacts, createAiTask, sendOutreach } });
+  WaBot.init({
+    createTask, listProjectsFor, newTaskProjects, assignableUserIds, assignBlockReason, taskTemplates, tasks: botTaskOps, mail: { searchContacts, createAiTask, sendOutreach },
+    // 🎙 הקלטת פגישה מוואטסאפ — מצורפת למשימת הפגישה. משימה שהשולח אינו רואה — ‎null‎
+    files: {
+      saveAttachment, actorRef,
+      getTask: (actor, id) => { try { const t = getTaskOr404(id); assertVisible(actor, t); return t; } catch { return null; } }
+    }
+  });
   TaskOutreach.init({ searchContacts });
 
   const internalOnly = (actor) => {
@@ -752,6 +759,16 @@ function register(router, h) {
       throw userError(err);
     }
   };
+  // 🧠 מה העוזר למד מהתשובות שלי ("התשלום ב-15 לחודש") — לצפייה ולמחיקה
+  // כל עובד — את שלו בלבד (לא רק מנהל המערכת, כמו זיכרון העבודה)
+  router.get('/api/me/reply-rules', async (req, res, ctx) => {
+    const actor = userOnly(ctx);
+    sendJson(res, 200, { rules: require('./ai/reply-memory').list(actor.id) });
+  });
+  router.delete('/api/me/reply-rules/:id', async (req, res, ctx) => {
+    const actor = userOnly(ctx);
+    sendJson(res, 200, { ok: require('./ai/reply-memory').remove(actor.id, ctx.params.id) });
+  });
   router.get('/api/me/mail-memory', memoryCall((user) => Memory.status(user)));
   router.post('/api/me/mail-memory/start', memoryCall((user, b) => Memory.start(user, {
     fromDate: b.fromDate || null, withDocs: b.withDocs !== false, internal: b.internal !== false,
@@ -849,6 +866,8 @@ function register(router, h) {
         subject: /^(re|תשובה)\s*:/i.test(mail.subject) ? mail.subject : `Re: ${mail.subject}`,
         inReplyTo: mail.messageId,
         references: [...mail.references.slice(-9), mail.messageId].filter(Boolean),
+        // 🧠 כדי ללמוד מהתשובה מול המייל שעליו ענינו
+        gmailId: String(b.gmailId ?? ''),
         body
       });
       sendJson(res, 200, { ok: true });

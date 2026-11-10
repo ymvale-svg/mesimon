@@ -2739,6 +2739,13 @@ router.post('/api/tasks/:id/comments', async (req, res, ctx) => {
  */
 const MIME_BY_EXT = {
   wav: 'audio/wav',
+  ogg: 'audio/ogg',
+  opus: 'audio/ogg',
+  m4a: 'audio/mp4',
+  mp3: 'audio/mpeg',
+  aac: 'audio/aac',
+  amr: 'audio/amr',
+  webm: 'audio/webm',
   eml: 'message/rfc822',
   msg: 'application/vnd.ms-outlook'
 };
@@ -4401,6 +4408,21 @@ function userWorkload(userId) {
   return { openTasks, allTasks, projects };
 }
 
+/** קבצי קבלת הסחורה של המשתמש בדיסק (‎uploads/goods-receipt/u<id>-*‎) */
+function removeGoodsReceiptFiles(userId) {
+  if (!Number.isInteger(userId) || userId <= 0) return;
+  const dir = path.join(D.UPLOADS_DIR, 'goods-receipt');
+  let names;
+  try { names = fs.readdirSync(dir); } catch { return; } // אין תיקייה — אין קבצים
+  const prefix = `u${userId}-`;
+  for (const name of names) {
+    if (!name.startsWith(prefix) || name !== path.basename(name)) continue;
+    try { fs.unlinkSync(path.join(dir, name)); } catch (err) {
+      console.error(`[משימון] מחיקת קובץ קבלת סחורה של משתמש #${userId}:`, err.message);
+    }
+  }
+}
+
 router.get('/api/admin/users/:id/delete-check', async (req, res, ctx) => {
   const actor = ctx.requireActor();
   requireFullPerm(actor, 'manage_users');
@@ -4417,6 +4439,9 @@ router.get('/api/admin/users/:id/delete-check', async (req, res, ctx) => {
  * לקבל מחליף (‎transferTo‎), אחרת המשימות נשארות בלי אחראי ואיש אינו רואה
  * אותן. משימות סגורות בלי מחליף נשארות עם השם שנמחק ריק. התגובות וההיסטוריה
  * נשמרות כפי שהן — היומן מחזיק את השם בזמן הפעולה.
+ *
+ * מידע אישי נמחק: הודעות הוואטסאפ שלו, יומן הבוט ויומן הסוכנים, ההגדרות
+ * האישיות וקבצי קבלת הסחורה. בקשות ה-AI עוברות למחליף; בלי מחליף — נמחקות.
  *
  * מי שרק עזב — עדיף להשבית (סטטוס "לא פעיל"): הכניסה נחסמת וההיסטוריה נשמרת.
  */
@@ -4463,7 +4488,21 @@ router.delete('/api/admin/users/:id', async (req, res, ctx) => {
     D.run('UPDATE tasks SET created_by = NULL WHERE created_by = ?', id);
     D.run('UPDATE task_assignees SET added_by = NULL WHERE added_by = ?', id);
     D.run('UPDATE project_images SET uploaded_by = NULL WHERE uploaded_by = ?', id);
-    D.run('UPDATE ai_requests SET owner_id = ? WHERE owner_id = ?', heirId ?? actor.id, id);
+    if (heirId) {
+      D.run('UPDATE ai_requests SET owner_id = ? WHERE owner_id = ?', heirId, id);
+    } else {
+      // בלי מחליף — בקשות ה-AI וההודעות שלהן נמחקות, ולא עוברות למנהל המוחק (המשימה עצמה נשארת)
+      D.run('DELETE FROM ai_messages WHERE request_id IN (SELECT id FROM ai_requests WHERE owner_id = ?)', id);
+      D.run('DELETE FROM ai_requests WHERE owner_id = ?', id);
+    }
+    // מידע אישי בבוט ובסוכנים — נמחק ולא רק מנותק מהמשתמש
+    D.run("DELETE FROM wa_messages WHERE user_id = ? OR (? <> '' AND sender_phone = ?)", id, user.phone ?? '', user.phone ?? '');
+    D.run('DELETE FROM wa_log WHERE user_id = ?', id);
+    D.run('DELETE FROM agent_log WHERE user_id = ?', id);
+    // הגדרות לפי משתמש (קבלת סחורה, דרישת רכש, העדפות פריוריטי, ידע ארגוני)
+    D.run('DELETE FROM settings WHERE key IN (?, ?, ?, ?, ?)',
+      `goods_receipt:${id}`, `goods_receipt_done:${id}`, `goods_receipt_prefs:${id}`,
+      `purchase_demand:${id}`, `org_distill_${id}`);
     // שורות שמזוהות לפי סוג ומזהה, בלי מפתח זר
     D.run("DELETE FROM sessions WHERE actor_type = 'user' AND actor_id = ?", id);
     D.run("DELETE FROM notifications WHERE target_type = 'user' AND target_id = ?", id);
@@ -4475,9 +4514,11 @@ router.delete('/api/admin/users/:id', async (req, res, ctx) => {
     throw err;
   }
 
+  removeGoodsReceiptFiles(id);
+
   D.audit(null, actorRef(actor), 'user_deleted',
     `נמחק המשתמש ${user.full_name} <${user.email}>` + (heir ? `; המשימות הועברו ל${heir.full_name}` : ''));
-  console.log(`[משימון] נמחק משתמש: ${user.full_name} <${user.email}>`);
+  console.log(`[משימון] נמחק משתמש #${id}`);
   sendJson(res, 200, { ok: true, transferred: heir ? load.allTasks : 0 });
 });
 

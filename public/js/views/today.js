@@ -389,20 +389,34 @@ const TodayView = (() => {
       } catch (err) { reject.disabled = false; UI.error(err); }
     });
 
+    /*
+     * שורה אחת (הוחלט 09.11.26): הכותרת, מקור וזמן, ושלושה כפתורים. התקציר, 💡 איך
+     * לסגור ומשימת AI — ב"▾".
+     */
+    const closure = AiInboxView.closureLine(s, () => reload());
+    const details = el('div.today-details', { hidden: true, onclick: (e) => e.stopPropagation() }, [
+      d.summary ? el('div.today-sum', { text: d.summary }) : null,
+      closure,
+      el('div', {}, [toAi])
+    ]);
+    const more = el('button.btn-link.ai-more', { type: 'button', title: 'תקציר, איך לסגור ומשימת AI' }, [closure ? '💡 ▾' : '▾']);
+    more.addEventListener('click', (e) => { e.stopPropagation(); details.hidden = !details.hidden; more.classList.toggle('is-open', !details.hidden); });
+    later.textContent = '📅';
+    reject.textContent = '✕';
+
     return el('div.today-row.today-mail', { onclick: () => AiInboxView.editSuggestion(s, () => reload()) }, [
       el('div.today-main', {}, [
-        el('div.today-title', { text: d.title ?? s.subject }),
-        d.summary ? el('div.today-sum', { text: d.summary }) : null,
+        el('div.today-title.ai-line', { text: d.title ?? s.subject, title: d.summary || d.title || '' }),
         el('div.mute-sm', {}, [
           el('span.today-origin', { text: originText(s) }),
           s.receivedAt ? ` · ${UI.relative(s.receivedAt)}` : '',
           s.older ? el('span.today-older', { text: ' · מחכה מלפני כן' }) : null,
-          s.link ? el('a', { href: s.link, target: '_blank', rel: 'noopener', onclick: (e) => e.stopPropagation() }, [' · פתיחת המייל ↗']) : null
+          s.link ? el('a', { href: s.link, target: '_blank', rel: 'noopener', title: 'פתיחת המייל ב-Gmail', onclick: (e) => e.stopPropagation() }, [' · המייל ↗']) : null,
+          ' ', more
         ]),
-        // 💡 איך לסגור — אותה שורה כמו ב"ממתין לאישורך"
-        AiInboxView.closureLine(s, () => reload()),
-        el('div.today-mail-actions', {}, [approve, later, toAi, reject])
-      ])
+        details
+      ]),
+      el('div.today-mail-actions', {}, [approve, later, reject])
     ]);
   }
 
@@ -422,7 +436,9 @@ const TodayView = (() => {
     const notes = [
       w.unit === 'workdays' ? w.label : null,
       insights.mail && insights.mail.total > insights.mail.analyzed ? `מוצגים ${insights.mail.analyzed} המיילים האחרונים מתוך ${insights.mail.total}` : null,
-      insights.mailError ? 'המייל אינו זמין כרגע' : null
+      insights.mailError ? 'המייל אינו זמין כרגע' : null,
+      // מה שכבר נקרא — לא כאן; את הרשימה המלאה מקבלים מהבוט ("תובנות")
+      insights.readHidden ? `${insights.readHidden} מיילים שכבר קראת — לא מוצגים` : null
     ].filter(Boolean);
     return section(`${insights.heading}`, insights.count, [
       el('div.mute-sm.today-pad', { text: [w.span, ...notes].join(' · ') }),

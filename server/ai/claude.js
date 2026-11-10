@@ -46,28 +46,46 @@ class AiError extends Error {}
  * @param {boolean} [opts.live]          מישהו מחכה לתשובה — מודל הבוט ומצב מהיר
  * @param {string} [opts.model]          מודל אחר מברירת המחדל — לעבודה רבה וזולה (זיכרון המייל, ניתוב)
  * @param {(usage: object) => void} [opts.onUsage]  כמה טוקנים נצרכו — למעקב עלות
+ * @param {Array}  [opts.serverTools]    כלים שרצים בצד של Anthropic (חיפוש ברשת — ‎WEB_SEARCH‎). התשובה הסופית — עדיין לפי הסכמה
  * @returns {Promise<object>}            התשובה כאובייקט שעבר את הסכמה
  */
-async function json({ system, content, schema, effort = 'medium', live = false, model: modelId = null, onUsage = null }) {
+async function json({ system, content, schema, effort = 'medium', live = false, model: modelId = null, onUsage = null, serverTools = null }) {
   if (!isEnabled()) throw new AiError('חיבור ה-AI אינו מוגדר בשרת (ANTHROPIC_API_KEY)');
   const m = String(modelId || (live ? botModel() : model())).trim();
   const fast = live && !modelId && fastMode() && FAST_MODELS.has(m);
   try {
-    return await request({ system, content, schema, effort, model: m, fast, onUsage });
+    return await request({ system, content, schema, effort, model: m, fast, onUsage, serverTools });
   } catch (err) {
     // המצב המהיר נדחה (מכסה נפרדת, חשבון בלי גישה) — אותה בקשה במהירות רגילה
-    if (fast && err.status && err.status < 500) return request({ system, content, schema, effort, model: m, fast: false, onUsage });
+    if (fast && err.status && err.status < 500) return request({ system, content, schema, effort, model: m, fast: false, onUsage, serverTools });
     throw err;
   }
 }
 
-async function request({ system, content, schema, effort, model: modelId, fast, onUsage = null }) {
+/** חיפוש ברשת — כלי שרץ אצל Anthropic. ‎max‎ — כמה חיפושים לכל היותר בבקשה אחת */
+const WEB_SEARCH = (max = 6) => ({ type: 'web_search_20250305', name: 'web_search', max_uses: max, user_location: { type: 'approximate', country: 'IL', timezone: 'Asia/Jerusalem' } });
+
+async function request({ system, content, schema, effort, model: modelId, fast, onUsage = null, serverTools = null }) {
+  // חיפוש ארוך עוצר באמצע (‎pause_turn‎) — שולחים שוב עם מה שנעשה עד עכשיו, עד 4 פעמים
+  const messages = [{ role: 'user', content }];
+  for (let round = 0; ; round++) {
+    const data = await requestOnce({ system, messages, schema, effort, model: modelId, fast, onUsage, serverTools });
+    if (data?.stop_reason === 'pause_turn' && round < 4) {
+      messages.push({ role: 'assistant', content: data.content });
+      continue;
+    }
+    return parseOutput(data);
+  }
+}
+
+async function requestOnce({ system, messages, schema, effort, model: modelId, fast, onUsage, serverTools }) {
   const body = {
     model: modelId,
     max_tokens: 16000,
     // ההנחיות זהות בכל קריאה — מטמון הפרומפט חוסך את רובן מהקריאה השנייה
     system: [{ type: 'text', text: system, cache_control: { type: 'ephemeral' } }],
-    messages: [{ role: 'user', content }],
+    messages,
+    ...(serverTools?.length ? { tools: serverTools } : {}),
     output_config: {
       effort,
       format: { type: 'json_schema', schema }
@@ -111,7 +129,10 @@ async function request({ system, content, schema, effort, model: modelId, fast, 
   if (onUsage && data?.usage) {
     try { onUsage(data.usage); } catch { /* מעקב בלבד */ }
   }
+  return data;
+}
 
+function parseOutput(data) {
   if (data?.stop_reason === 'refusal') {
     throw new AiError('ה-AI סירב לטפל בבקשה הזו');
   }
@@ -119,7 +140,10 @@ async function request({ system, content, schema, effort, model: modelId, fast, 
     throw new AiError('תשובת ה-AI נקטעה באמצע');
   }
 
-  const out = (data?.content ?? []).filter((b) => b.type === 'text').map((b) => b.text).join('');
+  // עם חיפוש ברשת יש טקסט ביניים לפני החיפושים — התשובה היא הטקסט שאחרי הכלי האחרון
+  const blocks = data?.content ?? [];
+  const lastTool = blocks.map((b) => /tool_use|tool_result/.test(b.type)).lastIndexOf(true);
+  const out = blocks.slice(lastTool + 1).filter((b) => b.type === 'text').map((b) => b.text).join('');
   try {
     return JSON.parse(out);
   } catch {
@@ -237,4 +261,4 @@ const PRICES = {
 };
 const priceOf = (id) => PRICES[String(id ?? '').trim()] ?? null;
 
-module.exports = { json, withTools, isEnabled, status, model, botModel, priceOf, AiError, DEFAULT_MODEL };
+module.exports = { json, withTools, isEnabled, status, model, botModel, priceOf, AiError, DEFAULT_MODEL, WEB_SEARCH };

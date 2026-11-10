@@ -486,7 +486,7 @@
   .today-actions .btn { min-height: 36px; justify-content: center; }
   .today-event { flex-wrap: wrap; }
   .today-event .today-actions { flex-direction: row; width: 100%; justify-content: flex-end; }
-  .today-mail-actions .btn { min-height: 38px; flex: 1 1 auto; justify-content: center; }
+  .today-mail-actions .btn { min-height: 38px; justify-content: center; }
   .today-pick-other { flex-direction: column; align-items: stretch; }
 
   /* מסך ההקלטה — מסך מלא */

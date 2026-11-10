@@ -321,7 +321,8 @@ async function suggest(actor, { ownerId, emails = [], minutes, days = 7, max = 8
   for (const a of avoid) busy.push([new Date(a.start).getTime(), new Date(a.end).getTime()]);
 
   const h = meetingHours();
-  const now = Date.now() + 15 * MIN;
+  // מהרבע שעה הנוכחי — ב-15:47 גם 15:45 מוצע (כמו שהדיאלוג מאפשר לקבוע)
+  const now = quarterStart();
   const slots = [];
   for (const d of dates) {
     let perDay = 0;
@@ -334,10 +335,10 @@ async function suggest(actor, { ownerId, emails = [], minutes, days = 7, max = 8
       slots.push({ start: new Date(t).toISOString(), end: new Date(end).toISOString() });
       perDay++;
       t += 45 * MIN; // הצעות מפוזרות, לא רבע שעה אחרי רבע שעה
-      if (slots.length >= max) return { slots, people: internal.length, unknown: [...fb.entries()].filter(([, v]) => v.error).map(([k]) => k) };
+      if (slots.length >= max) return { slots, people: internal.length, buffer: buffer / MIN, unknown: [...fb.entries()].filter(([, v]) => v.error).map(([k]) => k) };
     }
   }
-  return { slots, people: internal.length, unknown: [...fb.entries()].filter(([, v]) => v.error).map(([k]) => k) };
+  return { slots, people: internal.length, buffer: buffer / MIN, unknown: [...fb.entries()].filter(([, v]) => v.error).map(([k]) => k) };
 }
 
 // ---------------------------------------------------------------------------
@@ -527,6 +528,29 @@ function shape(m) {
 }
 
 /**
+ * מועד שכבר עבר — לא קובעים. מותר מתחילת הרבע שעה הנוכחי: ב-15:47 אפשר עוד
+ * לקבוע ל-15:45 (פגישה שמתחילה עכשיו), לא ל-15:30.
+ */
+/** Zoom סירב ליצור פגישה — התראה למנהלי המערכת, עם מה ש-Zoom החזיר */
+function zoomAlert(actor, zoomUser, title, startIso, err) {
+  console.error(`[משימון] יצירת פגישת Zoom נכשלה (${zoomUser?.email ?? zoomUser?.id}):`, err.firstError ?? '', err.message);
+  const body = [`קבע/ה: ${actor?.name ?? ''}`, `פגישה: ${title} · ${fmtWhen(startIso)}`, `משתמש Zoom: ${zoomUser?.name ?? ''} ${zoomUser?.email ?? ''}`,
+    err.firstError ? `ניסיון ראשון: ${err.firstError}` : null, `שגיאה: ${err.message}`].filter(Boolean).join('\n');
+  try {
+    for (const u of D.all("SELECT id FROM users WHERE status = 'active' AND role IN ('superadmin','admin')")) {
+      D.notify({ targetType: 'user', targetId: u.id, kind: 'meeting', title: '🎥 Zoom: יצירת פגישה נכשלה', body });
+    }
+  } catch (e) {
+    console.error('[משימון] התראה למנהלים על Zoom:', e.message);
+  }
+}
+
+const quarterStart = (ms = Date.now()) => Math.floor(ms / (15 * MIN)) * 15 * MIN;
+function assertNotPast(startMs) {
+  if (startMs < quarterStart()) throw new MeetingError('המועד כבר עבר — בחרו מועד מעכשיו והלאה');
+}
+
+/**
  * ‎input‎: ‎{ taskId, ownerId, title, attendees: [{email,name}], start (ISO),
  * minutes, locationType: zoom|place|link|none, location, notes, sendInvites,
  * record }‎ — ‎record‎: הקלטה אוטומטית לענן ב-Zoom
@@ -537,6 +561,7 @@ async function create(actor, input) {
   if (!title) throw new MeetingError('נדרש נושא לפגישה');
   const startMs = new Date(input.start).getTime();
   if (!Number.isFinite(startMs)) throw new MeetingError('נדרש מועד לפגישה');
+  assertNotPast(startMs);
   const minutes = Math.max(5, Math.min(12 * 60, Math.round(Number(input.minutes) || 30)));
   const startIso = new Date(startMs).toISOString();
   const endIso = new Date(startMs + minutes * MIN).toISOString();
@@ -560,8 +585,16 @@ async function create(actor, input) {
     const pick = Zoom.pickHost(cal.owner.id, startIso, endIso, { prefer });
     if (!pick.zoomUser) throw new MeetingError(`${pick.reason}. בחרו ${prefer && canChooseZoomHost(actor) ? 'משתמש Zoom אחר, ' : ''}מועד אחר, או מיקום אחר.`);
     zoomNote = pick.swapped || pick.reason ? `הפגישה ב-Zoom של ${pick.zoomUser.name}${pick.reason ? ` (${pick.reason})` : ''}` : '';
-    const z = await Zoom.createMeeting(pick.zoomUser.id, { title, startIso, minutes, agenda: String(input.notes ?? ''), record });
-    zoom = { userId: pick.zoomUser.id, ...z };
+    let z;
+    try {
+      z = await Zoom.createMeeting(pick.zoomUser.id, { title, startIso, minutes, agenda: String(input.notes ?? ''), record });
+    } catch (err) {
+      // לעובד — מה אפשר לעשות; הפרטים הטכניים — למנהלי המערכת
+      zoomAlert(actor, pick.zoomUser, title, startIso, err);
+      throw new MeetingError('לא הצלחנו ליצור את קישור ה-Zoom, והפגישה לא נקבעה. אפשר לנסות שוב, לבחור מארח Zoom אחר, או לקבוע ב"במשרד" / "קישור משלי" — מנהלי המערכת קיבלו את פרטי התקלה.');
+    }
+    if (z.warning) zoomNote = [zoomNote, z.warning].filter(Boolean).join(' · ');
+    zoom = { userId: pick.zoomUser.id, id: z.id, joinUrl: z.joinUrl, password: z.password };
   }
 
   const r = D.run(
@@ -664,6 +697,7 @@ async function update(actor, id, input) {
   const attendees = input.attendees !== undefined ? cleanAttendees(input.attendees, userById(m.owner_id)?.email) : parseJson(m.attendees, []);
   const notes = input.notes !== undefined ? String(input.notes).slice(0, 4000) : m.notes;
   const moved = startIso !== m.start_at || endIso !== m.end_at;
+  if (input.start !== undefined && startIso !== m.start_at) assertNotPast(startMs);
   const record = input.record !== undefined && m.zoom_meeting_id ? Boolean(input.record) : Boolean(m.zoom_record);
   const recordChanged = record !== Boolean(m.zoom_record);
 
@@ -1069,6 +1103,123 @@ async function sendReminders() {
 }
 
 // ---------------------------------------------------------------------------
+// 📅 התראה לפני פגישה מיומן Google — גם כשלא נקבעה ממשימון (הוחלט 09.11.26)
+// ---------------------------------------------------------------------------
+
+/*
+ * לכל עובד עם יומן מחובר: האירועים של היום (מטמון 5 דקות ב-‎calendar.js‎). אירוע
+ * שמתחיל בתוך זמן ההתראה — הודעה בבוט לכל משתתף שהוא משתמש משימון עם טלפון
+ * (גם מי שלא חיבר יומן), פעם אחת לכל אחד (‎calendar_reminders‎). פגישה שמשימון
+ * קבע — ההתראה הרגילה למעלה. מי שדחה את ההזמנה — לא מקבל. אירוע יום שלם — לא.
+ */
+const Calendar = require('./calendar');
+
+const RESPONSE = { accepted: '✅', declined: '✕', tentative: '❔', needsAction: '⏳' };
+
+function shortPeople(people, n = 4) {
+  const names = people.map((p) => p.name).filter(Boolean);
+  return names.length ? `${names.slice(0, n).join(', ')}${names.length > n ? ` ועוד ${names.length - n}` : ''}` : '';
+}
+
+/** המשתתפים — בשמות משימון כשיש, אחרת השם מהיומן או הכתובת */
+function peopleOf(ev) {
+  const all = [...(ev.organizer?.email && !ev.people.some((p) => p.email === ev.organizer.email) ? [{ ...ev.organizer, organizer: true, response: 'accepted' }] : []), ...ev.people];
+  return all.map((p) => ({ ...p, name: userByEmail(p.email)?.full_name || p.name || p.email }));
+}
+
+function calendarReminderText(ev, people) {
+  const until = Math.max(1, Math.round((new Date(ev.start) - Date.now()) / MIN));
+  const hhmm = (iso) => new Intl.DateTimeFormat('he-IL', { timeZone: TZ, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(iso));
+  const where = ev.zoomLink ? `🎥 Zoom: ${ev.zoomLink}`
+    : ev.meetLink ? `🎥 Meet: ${ev.meetLink}`
+      : ev.location ? `📍 ${ev.location}` : null;
+  const going = people.filter((p) => p.response !== 'declined');
+  return [
+    `📅 בעוד ${until} דקות: *${ev.title}*`,
+    `🕐 ${hhmm(ev.start)}–${hhmm(ev.end)}`,
+    where,
+    going.length ? `👥 ${going.length} משתתפים${shortPeople(going) ? `: ${shortPeople(going)}` : ''}` : null
+  ].filter(Boolean).join('\n');
+}
+
+async function sendCalendarReminders() {
+  if (!hooks.botReady() || !hooks.botAllowed()) return;
+  const lead = Math.max(1, Number(D.getSetting('meeting_reminder_minutes', 15)));
+  const now = Date.now();
+  D.run('DELETE FROM calendar_reminders WHERE sent_at < ?', new Date(now - 2 * 24 * 60 * MIN).toISOString());
+  const users = D.all("SELECT id FROM users WHERE status = 'active' AND role <> 'vendor'").map((r) => r.id).filter((id) => Calendar.isConnected(id));
+  for (const userId of users) {
+    let day;
+    try { day = await Calendar.eventsForDay(userId); } catch { continue; }
+    for (const ev of day.events ?? []) {
+      if (ev.allDay || ev.mesimon || !ev.start) continue;
+      const at = new Date(ev.start).getTime();
+      if (!(at > now && at <= now + lead * MIN)) continue;
+      // פגישה שמשימון קבע (גם בלי הסימון ביומן) — יש לה התראה משלה
+      if (D.get("SELECT 1 FROM meetings WHERE google_event_id = ? AND status = 'scheduled'", ev.id)) continue;
+      const people = peopleOf(ev);
+      const owner = userById(userId);
+      const targets = new Map();
+      if (owner?.phone) targets.set(owner.id, owner);
+      for (const p of people) {
+        if (p.response === 'declined') continue;
+        const u = userByEmail(p.email);
+        if (u?.phone) targets.set(u.id, u);
+      }
+      const text = calendarReminderText(ev, people);
+      const data = JSON.stringify({ title: ev.title, start: ev.start, end: ev.end, zoom: ev.zoomLink, meet: ev.meetLink, location: ev.location, people });
+      for (const u of targets.values()) {
+        // מי שדחה בעצמו — לא; אחד לכל משתתף, גם כשהאירוע מופיע בכמה יומנים
+        if (people.find((p) => p.email === String(u.email ?? '').toLowerCase())?.response === 'declined') continue;
+        const fresh = D.run('INSERT OR IGNORE INTO calendar_reminders (uid, start_at, user_id, data, sent_at) VALUES (?,?,?,?,?)', ev.uid, ev.start, u.id, data, D.nowIso()).changes;
+        if (!fresh) continue;
+        try {
+          await (hooks.sendButtons ?? ((c, t) => hooks.sendWhatsApp(c, t)))(`${u.phone}@c.us`, text, ['👥 מי משתתף?']);
+        } catch (err) {
+          console.error('[משימון] התראת פגישה מהיומן בוואטסאפ נכשלה:', err.message);
+        }
+      }
+    }
+  }
+}
+
+const PARTICIPANTS_Q = /^(?:מי\s+(?:משתתף|משתתפת|משתתפים|מוזמן|מוזמנים|מגיע|מגיעים|יהיה|יהיו|בפגישה)|משתתפים|מוזמנים)(?=[\s?!.,]|$)/;
+
+/**
+ * "מי משתתף?" בבוט — הפגישה שעליה הגיעה ההתראה האחרונה (3 שעות אחורה), ואם אין —
+ * מהיומן של היום: זו שהשם שלה בהודעה, או זו שמתקיימת עכשיו / הבאה.
+ * ‎null‎ — ההודעה אינה שאלה כזו.
+ */
+async function participantsAnswer(userId, text) {
+  const t = String(text ?? '').replace(/[👥]/gu, '').trim();
+  if (!PARTICIPANTS_Q.test(t) || t.length > 120) return null;
+  const words = t.replace(PARTICIPANTS_Q, ' ').replace(/[?!.,]/g, ' ').split(/\s+/).filter((w) => w.length > 2 && !['בפגישה', 'בפגישת', 'הפגישה', 'עם', 'של', 'היום', 'הבאה'].includes(w));
+  let meeting = null;
+  if (Calendar.isConnected(userId)) {
+    const day = await Calendar.eventsForDay(userId).catch(() => ({ events: [] }));
+    const timed = (day.events ?? []).filter((e) => !e.allDay && !e.mesimon);
+    const byName = words.length ? timed.find((e) => words.some((w) => e.title.includes(w))) : null;
+    const now = Date.now();
+    const current = timed.find((e) => new Date(e.start).getTime() - 20 * MIN <= now && new Date(e.end).getTime() > now)
+      ?? timed.find((e) => new Date(e.start).getTime() > now);
+    const ev = byName ?? (words.length ? null : current);
+    if (ev) meeting = { title: ev.title, start: ev.start, people: peopleOf(ev) };
+  }
+  if (!meeting && !words.length) {
+    const last = D.get('SELECT data FROM calendar_reminders WHERE user_id = ? AND sent_at > ? ORDER BY sent_at DESC LIMIT 1', userId, new Date(Date.now() - 3 * 60 * MIN).toISOString());
+    if (last) meeting = parseJson(last.data, null);
+  }
+  if (!meeting) return words.length ? `לא מצאתי היום פגישה בשם "${words.join(' ')}" ביומן.` : 'לא מצאתי פגישה קרובה ביומן שלך היום.';
+  const hhmm = new Intl.DateTimeFormat('he-IL', { timeZone: TZ, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(meeting.start));
+  const list = (meeting.people ?? []).map((p) => `${RESPONSE[p.response] ?? '⏳'} ${p.name}${p.organizer ? ' (מארגן/ת)' : ''}`);
+  return [
+    `👥 *${meeting.title}* · ${hhmm}`,
+    list.length ? list.join('\n') : 'אין משתתפים ברשימה — רק את/ה.',
+    list.length ? '\n✅ אישר/ה · ⏳ לא ענה/תה · ❔ אולי · ✕ דחה/תה' : null
+  ].filter(Boolean).join('\n');
+}
+
+// ---------------------------------------------------------------------------
 // מתזמן
 // ---------------------------------------------------------------------------
 
@@ -1081,6 +1232,7 @@ async function tick() {
   running = true;
   try {
     await sendReminders();
+    await sendCalendarReminders().catch((err) => console.error('[משימון] התראות מהיומן נכשלו:', err.message));
     if (Date.now() - lastSync > 5 * MIN) {
       lastSync = Date.now();
       await syncAll();
@@ -1106,6 +1258,6 @@ module.exports = {
   init, MeetingError, isSecretary, isZoomManager, canChooseZoomHost, ownZoomUser, accessMap, accessError, forgetAccess, calendarsFor, resolveCalendar, canWrite,
   freeBusy, availability, suggest, alternatives, create, update, cancel, declineReschedule, markRescheduled,
   moveEvent, requestMove, previewMove, approveMove, forTask, joinLink, recording, shape, meetingById, syncOne, syncAll, sendReminders,
-  recipientsOf, reminderText, start, stop, tick,
+  recipientsOf, reminderText, sendCalendarReminders, participantsAnswer, start, stop, tick,
   _internal: { splitPeople, cleanAttendees, eventBody, shapeEvent, ruleScore, rank, meetingHours }
 };
