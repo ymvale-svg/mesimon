@@ -37,6 +37,17 @@ const status = () => ({ enabled: isEnabled(), model: model(), botModel: botModel
 
 class AiError extends Error {}
 
+/*
+ * 🩺 בריאות השירות — מי שרוצה לדעת כשה-AI נפל או חזר (הבוט: התראה למנהלים, ובקשות שנשמרו לניסיון חוזר).
+ * ‎fn({ ok: true })‎ אחרי כל תשובה תקינה; ‎fn({ ok: false, err })‎ כשאין חיבור או שהשירות החזיר שגיאה.
+ */
+const healthListeners = [];
+const onHealth = (fn) => { healthListeners.push(fn); };
+function health(ok, err = null) {
+  for (const fn of healthListeners) { try { fn(ok ? { ok: true } : { ok: false, err }); } catch { /* מאזין לא מפיל קריאה */ } }
+}
+const fail = (err) => { health(false, err); return err; };
+
 /**
  * @param {object} opts
  * @param {string} opts.system           ההנחיות הקבועות (הסקיל)
@@ -110,7 +121,7 @@ async function requestOnce({ system, messages, schema, effort, model: modelId, f
       signal: AbortSignal.timeout(180000)
     });
   } catch (err) {
-    throw new AiError(`אין חיבור לשירות ה-AI: ${err.message}`);
+    throw fail(new AiError(`אין חיבור לשירות ה-AI: ${err.message}`));
   }
 
   const text = await res.text();
@@ -123,8 +134,9 @@ async function requestOnce({ system, messages, schema, effort, model: modelId, f
     const err = new AiError(`שירות ה-AI החזיר שגיאה ${res.status}: ${msg}`);
     err.retryable = res.status === 429 || res.status >= 500;
     err.status = res.status;
-    throw err;
+    throw fail(err);
   }
+  health(true);
 
   if (onUsage && data?.usage) {
     try { onUsage(data.usage); } catch { /* מעקב בלבד */ }
@@ -205,7 +217,7 @@ async function withTools({ system, content, tools, onTool, effort = 'medium', mo
         signal: AbortSignal.timeout(180000)
       });
     } catch (err) {
-      throw new AiError(`אין חיבור לשירות ה-AI: ${err.message}`);
+      throw fail(new AiError(`אין חיבור לשירות ה-AI: ${err.message}`));
     }
     const raw = await res.text();
     let data = null;
@@ -219,8 +231,10 @@ async function withTools({ system, content, tools, onTool, effort = 'medium', mo
     if (!res.ok) {
       const err = new AiError(`שירות ה-AI החזיר שגיאה ${res.status}: ${data?.error?.message ?? raw.slice(0, 300)}`);
       err.retryable = res.status === 429 || res.status >= 500;
-      throw err;
+      err.status = res.status;
+      throw fail(err);
     }
+    health(true);
     if (onUsage && data?.usage) { try { onUsage(data.usage); } catch { /* מעקב בלבד */ } }
     if (data?.stop_reason === 'refusal') throw new AiError('ה-AI סירב לטפל בבקשה הזו');
 
@@ -261,4 +275,4 @@ const PRICES = {
 };
 const priceOf = (id) => PRICES[String(id ?? '').trim()] ?? null;
 
-module.exports = { json, withTools, isEnabled, status, model, botModel, priceOf, AiError, DEFAULT_MODEL, WEB_SEARCH };
+module.exports = { json, withTools, isEnabled, status, model, botModel, priceOf, AiError, onHealth, DEFAULT_MODEL, WEB_SEARCH };
