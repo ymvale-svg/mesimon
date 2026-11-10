@@ -16,5 +16,6 @@ module.exports = {
   get BotReview() { return require('./bot-review'); },
   get Reminders() { return require('./reminders'); },
   get Notice() { return require('./notice'); },
+  get NoticeDesign() { return require('./notice-design'); },
   get Solve() { return require('./solve'); }
 };

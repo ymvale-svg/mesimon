@@ -10,6 +10,7 @@
  *   3. fetch      — פנייה לרשת (fetch / http.request / https.request) רק בשכבת integrations.
  *   4. boundary   — תחום (תיקייה עם index.js תחת server/) נגיש מבחוץ רק דרך ה-index.js שלו.
  *   5. layer      — core/ ו-integrations/ לא מייבאים תחומים.
+ *   6. missing    — require לקובץ שלא קיים.
  */
 const fs = require('node:fs');
 const path = require('node:path');
@@ -93,9 +94,11 @@ function analyzeFile(file) {
   const facade = facadeOf(file, src);
   const facadeTargets = new Set(Object.values(facade ?? {}));
   const imports = [];
+  const unresolved = [];
   for (const m of src.matchAll(/require\(\s*['"](\.{1,2}\/[^'"]+)['"]\s*\)/g)) {
     const target = resolve(file, m[1]);
-    if (!target || rel(target).startsWith('vendor/')) continue; // ספריות צד שלישי — טעינה עצלה מותרת
+    if (!target) { unresolved.push({ spec: m[1], line: lineOf(m.index) + 1 }); continue; }
+    if (rel(target).startsWith('vendor/')) continue; // ספריות צד שלישי — טעינה עצלה מותרת
     const li = lineOf(m.index);
     const line = lines[li];
     // שורה שנפתחת ב-} (סוף של ‎const { a, b } = require(…)‎ על כמה שורות) — העומק שלה הוא של תחילת ההצהרה
@@ -106,7 +109,7 @@ function analyzeFile(file) {
     const top = facadeTargets.has(target) || (lineDepth === 0 && !lazy);
     imports.push({ target, line: li + 1, top, members: membersAt(src, m.index, m.index + m[0].length) });
   }
-  return { imports, network, facade };
+  return { imports, network, facade, unresolved };
 }
 
 function graph() {
@@ -175,6 +178,8 @@ function violations(nodes = graph()) {
       if (to && from !== to && t !== `${to}index.js`) out.push(`boundary: ${file} -> ${t}`);
       if (to && BASE_LAYERS.some((b) => file.startsWith(b)) && !BASE_LAYERS.includes(to)) out.push(`layer: ${file} -> ${t}`);
     }
+    // require לנתיב שלא קיים — ייפול רק כשהשורה תרוץ (קורה אחרי העברת קבצים)
+    for (const u of info.unresolved) out.push(`missing: ${file} -> ${u.spec}`);
     if (info.network.length && !NETWORK_LAYERS.some((l) => file.startsWith(l))) out.push(`fetch: ${file}`);
   }
   return [...new Set(out)].sort();

@@ -85,29 +85,30 @@ test('todayMessage — יום ריק', () => {
   assert.deepEqual(r.suggestions, []);
 });
 
-test('todayMessage — משימות ממוספרות, באיחור קודם, והצעות באותיות', () => {
+test('todayMessage — "דורש ממך היום": באיחור קודם, 3 ראשונים ממוספרים, ההצעות באותה רשימה', () => {
   const t = emptyToday();
   t.tasks.today = [{ id: 11, title: 'להתקשר', projectName: 'מגדל' }];
   t.tasks.overdue = [{ id: 10, title: 'לשלוח הצעה', dueDate: '2026-11-01T15:00:00Z' }];
   t.counts.overdue = 1;
   t.suggestions.items = [
-    { id: 100, data: { title: 'לבדוק חשבונית' }, origin: { icon: '📧', label: 'מייל' } },
-    { id: 101, subject: 'פגישה', origin: { icon: '💬', label: 'וואטסאפ' } },
-    { id: 102, older: true, origin: { icon: '📧', label: 'מייל' } }
+    { id: 100, kind: 'task', data: { title: 'לבדוק חשבונית' }, origin: { icon: '💬', label: 'וואטסאפ' } },
+    { id: 102, kind: 'task', older: true, data: { title: 'ישנה' }, origin: { icon: '💬', label: 'וואטסאפ' } }
   ];
   const r = X.todayMessage(t, new Date('2026-11-10T08:00:00Z'));
-  assert.deepEqual(r.ids, [10, 11]);
-  assert.deepEqual(r.suggestions, [100, 101]);
-  assert.ok(r.text.includes('📋 *משימות* (2, מהן 1 באיחור):'));
-  assert.ok(r.text.includes('1. לשלוח הצעה · ⚠️ 1.11'));
-  assert.ok(r.text.includes('2. להתקשר · 📁 מגדל'));
-  assert.ok(r.text.includes('א. לבדוק חשבונית — 📧 מייל'));
-  assert.ok(r.text.includes('ב. פגישה — 💬 וואטסאפ'));
-  assert.ok(r.text.includes('עוד הצעה ישנה אחת מחכה'));
-  assert.ok(r.text.includes('לאשר: "אשר א" · לדחות: "דחה ב"'));
+  assert.ok(r.text.includes('🔥 *דורש ממך היום* (4):'));
+  const lines = r.text.split('\n');
+  const i = lines.findIndex((l) => l.startsWith('🔥'));
+  assert.match(lines[i + 1], /^1\. לשלוח הצעה — באיחור מ-/);
+  assert.equal(lines[i + 2], '2. לבדוק חשבונית — 💬 וואטסאפ');
+  assert.equal(lines[i + 3], '3. להתקשר — להיום · 📁 מגדל');
+  assert.ok(r.text.includes('ועוד 1.'));
+  // "סיימתי את 2" — רק כשבמקום 2 יש משימה
+  assert.deepEqual(r.ids, [10, 0, 11]);
+  assert.deepEqual(r.suggestions, []);
+  assert.equal(r.items.length, 4);
 });
 
-test('todayMessage — אירוע שהסתיים לא מוצג; יותר מ-15 משימות — "ועוד"', () => {
+test('todayMessage — אירוע שהסתיים לא מוצג; יותר מ-12 פריטים — "ועוד … באפליקציה"', () => {
   const t = emptyToday();
   t.calendar.events = [
     { title: 'עבר', start: '2026-11-10T05:00:00Z', end: '2026-11-10T06:00:00Z' },
@@ -117,11 +118,12 @@ test('todayMessage — אירוע שהסתיים לא מוצג; יותר מ-15 �
   t.tasks.today = Array.from({ length: 18 }, (_, i) => ({ id: i + 1, title: `משימה ${i}` }));
   const r = X.todayMessage(t, new Date('2026-11-10T08:00:00Z'));
   assert.ok(!r.text.includes('עבר'));
-  assert.ok(r.text.includes('📅 *ביומן* (2):'));
-  assert.ok(r.text.includes('• 14:00 בהמשך'));
-  assert.ok(r.text.includes('• כל היום חג'));
-  assert.equal(r.ids.length, 15);
-  assert.ok(r.text.includes('ועוד 3 — באפליקציה.'));
+  assert.ok(r.text.includes('📅 14:00 בהמשך'));
+  assert.ok(r.text.includes('📅 כל היום חג'));
+  assert.ok(r.text.includes('🔥 *דורש ממך היום* (18):'));
+  assert.equal(r.ids.length, 3);
+  assert.equal(r.items.length, 12);
+  assert.ok(r.text.includes('ועוד 15 — באפליקציה.'));
 });
 
 test('userByPhone ו-resolveMentions — תיוג מוחלף בשם העובד', () => {
@@ -140,7 +142,7 @@ test('userByPhone — ספק ועובד לא פעיל לא מזוהים', () => 
 
 test('chatOf / saveChat — שמירה וקריאה, היסטוריה מקוצרת ל-8', () => {
   const u = user();
-  assert.deepEqual(X.chatOf(u.id), { draft: null, awaiting: false, history: [], lastList: [], greetedOn: '', insights: [], suggestions: [], queue: [] });
+  assert.deepEqual(X.chatOf(u.id), { draft: null, awaiting: false, history: [], lastList: [], greetedOn: '', insights: [], suggestions: [], queue: [], walk: null });
   const history = Array.from({ length: 12 }, (_, i) => ({ role: 'user', text: String(i) }));
   X.saveChat(u.id, { draft: { kind: 'x' }, awaiting: true, history, lastList: [5, 6], greetedOn: '2026-11-10', insights: ['g1'], queue: ['עוד'], suggestions: [1] });
   const c = X.chatOf(u.id);

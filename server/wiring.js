@@ -9,6 +9,7 @@
  *   whatsappScan   — משימות AI מסמנות שיחות וואטסאפ שנענו
  *   agents         — תור מסמכי המייל והצעת סגירת משימה קוראים לסוכנים, והסוכנים לתור
  *   waBot          — סריקת המייל ותור המסמכים שולחים בוואטסאפ, והבוט קורא לסריקת המייל
+ *   mailPush       — תזכורות המייל מסננות לפי "מותר להקפיץ", והקפצת המייל משתמשת בתזכורות
  * בבדיקות מחברים זיופים במקום: ‎Ports.provide('waBot', fake)‎.
  */
 const Ports = require('./core').Ports;
@@ -18,5 +19,6 @@ Ports.provide('mailMemory', require('./mail').MailMemory);
 Ports.provide('whatsappScan', require('./whatsapp').WhatsappScan);
 Ports.provide('agents', require('./agents').Agents);
 Ports.provide('waBot', require('./whatsapp').WaBot);
+Ports.provide('mailPush', require('./mail').MailPush);
 
 module.exports = Ports;

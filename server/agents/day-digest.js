@@ -15,6 +15,7 @@ const D = require('../core').Db;
 const W = require('../core').Workdays;
 const MailActions = require('../mail').MailActions;
 const WaUi = require('../whatsapp').WaUi;
+const MailPush = require('../mail').MailPush;
 
 const TZ = 'Asia/Jerusalem';
 const BTN = Object.freeze({ move: 'להעביר למחר ✅', keep: 'להשאיר 👍' });
@@ -64,10 +65,12 @@ async function morning(userId) {
     lines.push('', `📋 *משימות להיום* (${tasks.length}${overdue.length ? `, ${overdue.length} באיחור` : ''}):`, ...tasks.slice(0, 6).map((t) => `• ${oneLine(t.title, 70)}${t.due_date < startOfToday() ? ' ⚠️' : ''}`));
     if (tasks.length > 6) lines.push(`ועוד ${tasks.length - 6} — באפליקציה.`);
   }
+  // 📬 רק החשובים ברשימה; כמה מחכים בסך הכול — שורה אחת (‎mail-push.js‎, 10.11.26)
   if (mails.length) {
-    lines.push('', `📬 *מיילים שעוד מחכים לך* (${mails.length}${mails.length === 8 ? '+' : ''}):`, ...mails.slice(0, 5).map((m) => `• ${oneLine(parseJson(m.data, {}).title ?? m.subject, 60)} — ${m.from_name || m.from_email}`));
-    if (pace === 'normal' || pace === 'light') lines.push('_אזכיר עליהם במהלך היום, אחד-אחד — החשובים קודם._');
+    lines.push('', `📬 *מיילים חשובים שמחכים לך* (${mails.length}${mails.length === 8 ? '+' : ''}):`, ...mails.slice(0, 5).map((m) => `• ${oneLine(parseJson(m.data, {}).title ?? m.subject, 60)} — ${m.from_name || m.from_email}`));
   }
+  const mailLine = (() => { try { return MailPush.morningLine(userId); } catch { return null; } })();
+  if (mailLine && pace !== 'off') lines.push('', mailLine);
   if (sentWaiting.length || assigned.length) {
     lines.push('', '⏳ *מחכה לך מאחרים:*',
       ...sentWaiting.map((s) => `• 📤 ${s.to_name || s.to_email}: ${oneLine(s.asked, 60)}`),
@@ -97,19 +100,25 @@ function evening(userId) {
   return { text: lines.join('\n') };
 }
 
+/** תאריך היעד של משימות פתוחות שלי ← ‎to‎ (17:00), עם רישום ביומן המשימה. מחזיר כמה הועברו */
+function moveTo(userId, ids, to, where) {
+  const due = W.ilWallToUtc(to, 17, 0).toISOString();
+  const u = D.get('SELECT full_name FROM users WHERE id = ?', userId);
+  let n = 0;
+  for (const id of ids) {
+    const ok = D.run(`UPDATE tasks SET due_date = ? WHERE id = ? AND assignee_type = 'user' AND assignee_id = ? AND ${OPEN.replace(/t\./g, 'tasks.')}`, due, id, userId).changes;
+    if (ok) { D.audit(id, { type: 'user', id: userId, name: u?.full_name ?? '' }, 'due_date', `תאריך היעד הועבר ל-${to.split('-').reverse().join('.')} ${where}`); n++; }
+  }
+  return n;
+}
+
 /** "להעביר למחר" — תאריך היעד של המשימות הפתוחות ליום העבודה הבא (17:00), עם רישום ביומן המשימה */
 function answer(userId, d, text) {
   const t = String(text ?? '').trim();
   const n = WaUi.normalize(t);
   if (WaUi.sameLabel(t, BTN.keep) || /^(להשאיר|לא|👎)([\s,.!]|$)/.test(n)) return { text: 'בסדר, נשארות כמו שהן 👍', result: 'להשאיר' };
   if (!(WaUi.sameLabel(t, BTN.move) || /^(להעביר|כן|העבר|👍)([\s,.!]|$)/.test(n))) return null;
-  const due = W.ilWallToUtc(d.to, 17, 0).toISOString();
-  const u = D.get('SELECT full_name FROM users WHERE id = ?', userId);
-  let n2 = 0;
-  for (const id of d.taskIds ?? []) {
-    const ok = D.run(`UPDATE tasks SET due_date = ? WHERE id = ? AND assignee_type = 'user' AND assignee_id = ? AND ${OPEN.replace(/t\./g, 'tasks.')}`, due, id, userId).changes;
-    if (ok) { D.audit(id, { type: 'user', id: userId, name: u?.full_name ?? '' }, 'due_date', `תאריך היעד הועבר ל-${d.to.split('-').reverse().join('.')} מסיכום סוף היום בבוט`); n2++; }
-  }
+  const n2 = moveTo(userId, d.taskIds ?? [], d.to, 'מסיכום סוף היום בבוט');
   return { text: `➡️ הועברו ${n2 === 1 ? 'משימה אחת' : `${n2} משימות`} למחר. ערב טוב! 🌙`, result: `הועברו ${n2} למחר` };
 }
 
@@ -138,4 +147,4 @@ async function tick(io) {
   }
 }
 
-module.exports = { tick, answer, morning, evening, BTN };
+module.exports = { tick, answer, morning, evening, moveTo, BTN };

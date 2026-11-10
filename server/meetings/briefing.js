@@ -112,8 +112,10 @@ async function tick(io) {
     if (!Calendar.isConnected(u.id)) continue;
     let day;
     try { day = await Calendar.eventsForDay(u.id); } catch { continue; }
+    const me = D.get('SELECT email FROM users WHERE id = ?', u.id)?.email ?? '';
     for (const ev of day.events ?? []) {
-      if (ev.allDay || ev.declined || !ev.start || !(ev.people ?? []).length) continue;
+      // רק פגישה אמיתית של העובד עצמו — לא אירוע ביומן של מישהו אחר שהוא עוקב אחריו (מזכירות), לא סטטוס
+      if (!ev.start || !Calendar.isRealMeeting(ev, me) || !Calendar.isOwnEvent(ev, me)) continue;
       const at = new Date(ev.start).getTime();
       if (!(at > now && at <= now + lead * MIN)) continue;
       if (!D.run('INSERT OR IGNORE INTO meeting_briefs (uid, start_at, user_id, sent_at) VALUES (?,?,?,?)', ev.uid ?? ev.id, ev.start, u.id, D.nowIso()).changes) continue;

@@ -17,5 +17,7 @@ module.exports = {
   get SentFollowup() { return require('./sent-followup'); },
   get ReplyMemory() { return require('./reply-memory'); },
   get InsightWindow() { return require('./insight-window'); },
-  get FormFill() { return require('./form-fill'); }
+  get FormFill() { return require('./form-fill'); },
+  get MailThread() { return require('./mail-thread'); },
+  get MailPush() { return require('./mail-push'); }
 };

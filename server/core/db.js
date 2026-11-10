@@ -2036,6 +2036,8 @@ function migrate() {
   addColumn('ai_suggestions', 'box', 'INTEGER NOT NULL DEFAULT 0');
   addColumn('google_contacts', 'box', 'INTEGER NOT NULL DEFAULT 0');
   addColumn('ai_requests', 'from_box', 'INTEGER NOT NULL DEFAULT 0');
+  // הפנייה יוצאת כתשובה בשרשור קיים עם הנמען (‎mail-thread.js‎): ‎{box, threadId, subject, inReplyTo, references}‎. ריק — מייל חדש
+  addColumn('ai_requests', 'reply_thread', "TEXT NOT NULL DEFAULT ''");
   // התקרה היומית של הסריקה — לכל תיבה בנפרד
   addColumn('mail_scanned', 'box', 'INTEGER NOT NULL DEFAULT 0');
   // הרשימה האחרונה שהבוט שלח בפרטי — כדי ש"סיימתי את 2" יידע מה זה 2

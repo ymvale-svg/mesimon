@@ -23,6 +23,8 @@ module.exports = {
   AGENTS_MANIFEST: path.join(AI, 'agents.json'),
   AGENTS_MCP: path.join(SERVER, 'agents-mcp.json'),
   TOPICS: path.join(AI, 'topics.json'),
+  /** פלטות וסגנונות למודעות ולמכתבים (‎whatsapp/notice-design.js‎) */
+  DESIGN: path.join(AI, 'design'),
   /** קובץ הנחיה לפי שם */
   skill: (name) => path.join(AI, 'skills', name)
 };

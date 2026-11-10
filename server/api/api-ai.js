@@ -420,7 +420,15 @@ function register(router, h) {
     let sendError = null;
     try {
       const owner = D.get('SELECT id, full_name, email FROM users WHERE id = ?', actor.id);
-      await AiTasks.launch({ taskId, owner, instruction, draft, contact, cc, policy, channel, fromBox });
+      // מהבוט: בהמשך לשרשור קיים עם הנמען (‎mail-thread.js‎) — רק השדות שצריך, כמחרוזות
+      const rt = b.replyThread && typeof b.replyThread.threadId === 'string' ? {
+        box: Number(b.replyThread.box) || 0,
+        threadId: b.replyThread.threadId.slice(0, 64),
+        subject: String(b.replyThread.subject ?? '').slice(0, 300),
+        inReplyTo: b.replyThread.inReplyTo ? String(b.replyThread.inReplyTo).slice(0, 300) : null,
+        references: (Array.isArray(b.replyThread.references) ? b.replyThread.references : []).map((x) => String(x).slice(0, 300)).slice(-10)
+      } : null;
+      await AiTasks.launch({ taskId, owner, instruction, draft, contact, cc, policy, channel, fromBox, replyThread: rt });
     } catch (err) {
       // המשימה והטיוטה נשמרו; אפשר לנסות לשלוח שוב מהכרטיס אחרי תיקון התקלה
       sendError = err.message;

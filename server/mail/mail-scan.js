@@ -460,7 +460,9 @@ async function processMessage(user, conn, gmailId) {
   const autoAll = D.userPrefs(user.id).mailAutoCreate === true;
   let created = 0;
   for (const t of result.tasks) {
-    const data = { ...t, warning: result.warning, alsoSuggestedTo: others, receivedAt: meta.receivedAt };
+    // ‎toMe‎ — אני הנמען הראשי (לא רק בהעתק); ‎auto‎ — דיוור / הודעה אוטומטית. רק כאלה קופצים בוואטסאפ (‎mail-push.js‎)
+    const toMe = (String(mail.to ?? '').match(/[^\s<>,;"']+@[^\s<>,;"']+/g) ?? []).some((e) => mine.has(e.toLowerCase()));
+    const data = { ...t, warning: result.warning, alsoSuggestedTo: others, receivedAt: meta.receivedAt, toMe, auto: Boolean(mail.autoSubmitted) };
     // לבד רק משימה שכולה שלי: בלי עובדים אחרים, בלי פנייה החוצה ובלי סימן אזהרה
     const solo = !t.people.length && !t.aiRequest && !t.ambiguous.length && !result.warning;
     if ((trusted || autoAll) && solo && !others.length) {
