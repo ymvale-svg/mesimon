@@ -32,7 +32,9 @@ const { BTN, YES, NO, CANCEL, normalize, label, labels, sameLabel } = require('.
 const SKILL = Paths.skill('purchase-demand.md');
 const TZ = 'Asia/Jerusalem';
 const TTL = 24 * 60 * 60 * 1000;
-const IDLE = 20 * 60 * 1000;
+// שיחה פעילה — רק כל עוד העובד באמת עונה: 15 דקות מההודעה האחרונה (הוחלט 10.11.26; אותה הגדרה של שאר
+// הבוט — ‎wa_question_ttl_min‎). אחרי זה הודעה חדשה מתחילה מההתחלה; רק לחיצה על כפתור (‎late‎) עוד עונה לשאלה
+const idleMs = () => Math.max(1, Number(D.getSetting('wa_question_ttl_min', 15)) || 15) * 60 * 1000;
 const FILES_DIR = () => path.join(D.UPLOADS_DIR, 'purchase-demand');
 
 const TRIGGER = /דרישת\s*רכש|דרישות\s*רכש/;
@@ -75,7 +77,7 @@ function clear(userId, s) {
 }
 const fresh = (s) => s && Date.now() - (s.at ?? 0) < TTL;
 /** באמצע שיחה — ההודעה הבאה הולכת לדרישה (רק כשהשיחה טרייה ולא הושהתה) */
-const active = (userId) => { const s = load(userId); return Boolean(fresh(s) && !s.paused && Date.now() - (s.at ?? 0) < IDLE); };
+const active = (userId, late = false) => { const s = load(userId); return Boolean(fresh(s) && !s.paused && (late || Date.now() - (s.at ?? 0) < idleMs())); };
 const pending = (userId) => Boolean(fresh(load(userId)));
 const isTrigger = (text) => TRIGGER.test(String(text ?? ''));
 const opens = (text) => isTrigger(text);
@@ -84,8 +86,10 @@ const opens = (text) => isTrigger(text);
 function abandon(user) {
   const s = load(user.id);
   if (!fresh(s)) return '';
+  // פגה אחרי 15 דקות בלי תשובה — יורדת בשקט (עוד לא נכתב כלום בפריוריטי)
+  const expired = !s.paused && Date.now() - (s.at ?? 0) >= idleMs();
   clear(user.id, s);
-  return (s.items ?? []).length ? 'ℹ️ דרישת הרכש שהתחלת לא נשלחה — עברתי לבקשה החדשה.' : '';
+  return (s.items ?? []).length && !expired ? 'ℹ️ דרישת הרכש שהתחלת לא נשלחה — עברתי לבקשה החדשה.' : '';
 }
 
 // ---------------------------------------------------------------------------

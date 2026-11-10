@@ -30,6 +30,7 @@ const Timeless = require('../integrations').Timeless;
 const Claude = require('../integrations').Claude;
 const WaUi = require('../whatsapp').WaUi;
 const Meetings = require('./meetings');
+const Secretariat = require('../core').Secretariat;
 
 const MIN = 60000;
 const HOUR = 60 * MIN;
@@ -105,7 +106,8 @@ async function zoomCandidates(now) {
     out.push({
       source: 'zoom', ref: String(m.id), title: m.title, start: m.start_at, end: m.end_at,
       data: { meetingId: m.id, taskId: m.task_id, uuid: rec.uuid },
-      users: Meetings.recipientsOf(m).map((u) => u.id)
+      // מי ששואלים "איך היה?" — בלי המזכירה שקבעה (אלא אם היא בעלת הפגישה)
+      users: Meetings.recipientsOf(m).filter((u) => u.id === m.owner_id || !Secretariat.isSecretary(u.id)).map((u) => u.id)
     });
   }
   return out;
@@ -237,7 +239,7 @@ async function zoomSource(row, userId) {
   const d = parseJson(row.data, {});
   const m = D.get('SELECT * FROM meetings WHERE id = ?', d.meetingId);
   if (!m?.zoom_meeting_id) return null;
-  const people = parseJson(m.attendees, []).map((a) => `${a.name || ''} <${a.email}>`);
+  const people = Secretariat.withoutSecretaries(parseJson(m.attendees, [])).map((a) => `${a.name || ''} <${a.email}>`);
   // קודם Timeless — שם התמליל וסיכום ה-AI
   const tl = await timelessMatch(userId, m.start_at);
   if (tl) {
@@ -267,7 +269,7 @@ async function timelessSource(row, userId) {
   const tr = await Timeless.transcript(userId, row.ref, { maxChars: 60000 }).catch(() => null);
   if (tr?.text) parts.push(`תמליל:\n${tr.text}`);
   if (!parts.length) return null;
-  return { people: d.participants ?? [], text: parts.join('\n\n') };
+  return { people: Secretariat.withoutSecretaries(d.participants ?? []), text: parts.join('\n\n') };
 }
 
 /** הסיכום של הפגישה — מהמטמון, או מה-AI (פעם אחת). ‎null‎ — אין תמליל */

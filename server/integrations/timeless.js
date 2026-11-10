@@ -24,6 +24,7 @@
  *  GET /documents/{id}?format=markdown → { id, title, format, content, created_at }
  *  GET /rooms               → { data: [{ id, title, meeting_count, ... }], next_cursor, has_more }
  */
+const crypto = require('crypto');
 const D = require('../core').Db;
 const secrets = require('../core').Secrets;
 const Permissions = require('../core').Permissions;
@@ -138,13 +139,57 @@ function apiError(message, { status = 0, retryable = false, code = '' } = {}) {
   return err;
 }
 
-/** קריאה עם אסימון נתון (לא קורא מהמסד) — משמש גם לאימות לפני שמירה */
+// ---------- הגנה על מגבלת הקצב (429) ----------
+// כל הזרימות (מסך ההקלטות, מעקב הבוט אחרי פגישות, בדיקת "לא מוקלטת", כרטיס המשימה)
+// חולקות בדרך כלל את האסימון הארגוני. רשימת הפגישות נשמרת לזמן קצר, ובקשות זהות
+// שרצות במקביל מתאחדות לבקשה אחת — כך סבב על כל העובדים עולה כמעט כמו בקשה אחת.
+const LIST_CACHE_MS = 60000;
+const LIST_CACHE_MAX = 300;
+const RETRY_429_MAX_SEC = 8;   // ניסיון חוזר אחד, רק כשההמתנה קצרה
+const listCache = new Map();   // ‎key‎ ← ‎{ at, body }‎
+const inflight = new Map();    // ‎key‎ ← ‎Promise‎
+const cacheKey = (token, url) => `${crypto.createHash('sha256').update(token).digest('hex').slice(0, 16)}|${url}`;
+
+/**
+ * קריאה עם אסימון נתון (לא קורא מהמסד) — משמש גם לאימות לפני שמירה.
+ * ‎GET /meetings‎ נשמר דקה ומאוחד; ‎429‎ — ניסיון חוזר אחד אחרי ‎Retry-After‎.
+ */
 async function rawCall(token, path, query) {
   const url = new URL(BASE_URL + path);
   for (const [k, v] of Object.entries(query || {})) {
     if (v === undefined || v === null || v === '') continue;
     url.searchParams.set(k, String(v));
   }
+  if (path !== '/meetings') return fetchWithRetry(token, url);
+  const key = cacheKey(token, url.toString());
+  const hit = listCache.get(key);
+  if (hit && Date.now() - hit.at < LIST_CACHE_MS) return hit.body;
+  if (inflight.has(key)) return inflight.get(key);
+  const p = fetchWithRetry(token, url).then((body) => {
+    listCache.set(key, { at: Date.now(), body });
+    if (listCache.size > LIST_CACHE_MAX) {
+      for (const [k, v] of listCache) if (Date.now() - v.at >= LIST_CACHE_MS || listCache.size > LIST_CACHE_MAX) listCache.delete(k);
+    }
+    return body;
+  }).finally(() => inflight.delete(key));
+  inflight.set(key, p);
+  return p;
+}
+
+async function fetchWithRetry(token, url) {
+  try {
+    return await fetchOnce(token, url);
+  } catch (err) {
+    if (err.status !== 429) throw err;
+    const wait = err.retryAfterSeconds ?? 2;
+    if (wait > RETRY_429_MAX_SEC) throw err;
+    console.warn(`[משימון] Timeless החזיר 429 (${url.pathname}) — ניסיון חוזר בעוד ${wait} שניות`);
+    await new Promise((r) => setTimeout(r, wait * 1000));
+    return fetchOnce(token, url);
+  }
+}
+
+async function fetchOnce(token, url) {
   let res;
   try {
     res = await fetch(url, {
