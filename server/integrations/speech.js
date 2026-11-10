@@ -320,7 +320,40 @@ async function transcribeUrl(url, mime) {
   return transcribe(file.buf, file.mime);
 }
 
+// ---------------------------------------------------------------------------
+// 🔊 הקראה — טקסט ← הודעה קולית (OpenAI, ‎OPENAI_API_KEY‎)
+//
+// הכיוון ההפוך מהתמלול: הבוט מקריא תשובה קצרה (למשל רשימת משימות בזמן נהיגה).
+// המודל: ‎OPENAI_TTS_MODEL‎ (ברירת מחדל: ‎gpt-4o-mini-tts‎), הקול: ‎OPENAI_TTS_VOICE‎ (‎alloy‎).
+// הפלט — ogg/opus, הפורמט של הודעה קולית בוואטסאפ.
+// ---------------------------------------------------------------------------
+
+const TTS_URL = 'https://api.openai.com/v1/audio/speech';
+const TTS_MAX_CHARS = 4000; // ‎4096‎ אצל OpenAI
+const ttsModel = () => String(process.env.OPENAI_TTS_MODEL ?? '').trim() || 'gpt-4o-mini-tts';
+const ttsVoice = () => String(process.env.OPENAI_TTS_VOICE ?? '').trim() || 'alloy';
+const TTS_INSTRUCTIONS = 'הקרא בעברית טבעית, בקצב רגוע וברור, כמו עוזר אישי שמקריא לנהג. שמות של אנשים, מקומות ופרויקטים — בהגייה עברית.';
+
+const canSpeak = () => Boolean(openaiKey());
+
+/** טקסט ← ‎Buffer‎ של ogg/opus. בלי מפתח, או טקסט ריק — שגיאה */
+async function speak(text) {
+  const input = String(text ?? '').replace(/\s+/g, ' ').trim().slice(0, TTS_MAX_CHARS);
+  if (!input) throw new Error('אין מה להקריא');
+  if (!canSpeak()) throw new Error('הקראה דורשת OPENAI_API_KEY');
+  const res = await fetch(TTS_URL, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${openaiKey()}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ model: ttsModel(), voice: ttsVoice(), input, instructions: TTS_INSTRUCTIONS, response_format: 'opus' }),
+    signal: AbortSignal.timeout(60000)
+  });
+  if (!res.ok) throw new Error(`OpenAI (הקראה) החזיר ${res.status}: ${(await res.text()).slice(0, 200)}`);
+  const buf = Buffer.from(await res.arrayBuffer());
+  if (!buf.length) throw new Error('OpenAI (הקראה) החזיר קובץ ריק');
+  return buf;
+}
+
 module.exports = {
-  isEnabled, providers, nameOf, transcribe, transcribeDetailed, transcribeUrl, download,
+  isEnabled, providers, nameOf, transcribe, transcribeDetailed, transcribeUrl, download, canSpeak, speak,
   _internal: { configFor, opusRate, extOf, transcribeRunPod, notHebrew, ordered }
 };
