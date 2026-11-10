@@ -99,23 +99,27 @@ test('"המשימות שלי" בלי בקשת הקראה — טקסט בלבד, 
   assert.equal(files.length, 0);
 });
 
-test('ההקראה נכשלה — הרשימה בטקסט בכל זאת', async (t) => {
+test('ההקראה נכשלה — רק "ההקראה לא זמינה", בלי הרשימה', async (t) => {
   const { files, calls } = setup(t);
   Speech.speak.mock.mockImplementation(async () => { throw new Error('429'); });
   t.mock.method(console, 'error', () => {});
-  user({ phone: '972507000005', role: 'admin' });
+  const u = user({ phone: '972507000005', role: 'admin' });
   await say('972507000005', 'תקריא לי את המשימות');
   assert.equal(files.length, 0);
-  assert.match(calls.find((c) => c.method === 'sendMessage').body.message, /📋 המשימות שלך/);
+  const texts = calls.filter((c) => c.method === 'sendMessage').map((c) => c.body.message);
+  assert.deepEqual(texts, [Bot._internal.READ_ALOUD_DOWN]);
+  const row = Bot.readLog({}).find((r) => r.userId === u.id);
+  assert.equal(row.status, 'error');
+  assert.match(row.result, /🔇 הקראה נכשלה: 429/);
 });
 
-test('שליחת ההודעה הקולית נכשלה — הרשימה בכתב במקומה', async (t) => {
+test('שליחת ההודעה הקולית נכשלה — רק "ההקראה לא זמינה", בלי הרשימה', async (t) => {
   const { calls } = setup(t);
   WhatsApp.sendFile.mock.mockImplementation(async () => { throw new Error('500'); });
   t.mock.method(console, 'error', () => {});
   user({ phone: '972507000006', role: 'admin' });
   await say('972507000006', 'תקריא לי את המשימות');
-  assert.match(calls.find((c) => c.method === 'sendMessage').body.message, /📋 המשימות שלך/);
+  assert.deepEqual(calls.filter((c) => c.method === 'sendMessage').map((c) => c.body.message), [Bot._internal.READ_ALOUD_DOWN]);
 });
 
 test('עובד שלא בפיילוט — בלי 🔊', async (t) => {

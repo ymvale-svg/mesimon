@@ -1027,14 +1027,20 @@ function readAloudText(actor, tasks, title) {
   return [`${first ? `${first}, ` : ''}יש לך ${count} ${title}.`, ...lines, more].filter(Boolean).join('\n');
 }
 
-/** קובץ ההקראה לרשימה, או ‎null‎ (לא ביקשו / לא מורשה / נכשל — ואז הטקסט לבדו, והתקלה ביומן) */
+/** לעובד, כשביקש הקראה והיא לא יצאה — הודעה קצרה בלבד, בלי הרשימה (ביקש לשמוע, לא לקרוא) */
+const READ_ALOUD_DOWN = '🔇 ההקראה לא זמינה כרגע. נסו שוב בעוד כמה דקות.';
+
+/**
+ * קובץ ההקראה לרשימה: ‎{ file }‎ · ‎{ failed: true }‎ (ביקשו ונכשל — העובד מקבל ‎READ_ALOUD_DOWN‎, התקלה ביומן)
+ * · ‎null‎ (לא ביקשו / לא מורשה — הרשימה בכתב, כרגיל)
+ */
 async function readAloudFile(actor, text, tasks, title) {
   if (!tasks.length || !READ_ALOUD.test(String(text ?? '')) || !readAloudAllowed(actor)) return null;
   try {
-    return { buf: await Speech.speak(readAloudText(actor, tasks, title)), fileName: 'משימות.ogg', mime: 'audio/ogg' };
+    return { file: { buf: await Speech.speak(readAloudText(actor, tasks, title)), fileName: 'משימות.ogg', mime: 'audio/ogg' } };
   } catch (err) {
     console.error('[משימון] הקראה נכשלה:', err.message);
-    return null;
+    return { failed: true, error: err.message };
   }
 }
 
@@ -2870,9 +2876,10 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
   // 🔊 "תקריא לי" — אותה רשימה, ובנוסף הודעה קולית (לפני הטקסט)
   const withReadAloud = async (r, range) => {
     const R = RANGES[range] ?? RANGES.all;
-    const file = dry ? null : await readAloudFile(actor, t, myOpen.filter(R.pick), R.title === 'הפתוחות' ? 'פתוחות' : R.title);
-    // ההודעה הקולית היא התשובה — בלי הרשימה בכתב (נכשלה ההקראה — הרשימה בכתב, כמו תמיד)
-    return file ? { ...r, reply: '', fallback: r.reply, files: [file], react: '🔊', result: `${r.result} · 🔊 הוקרא` } : r;
+    const a = dry ? null : await readAloudFile(actor, t, myOpen.filter(R.pick), R.title === 'הפתוחות' ? 'פתוחות' : R.title);
+    // ההודעה הקולית היא התשובה — בלי הרשימה בכתב. נכשלה — רק "ההקראה לא זמינה", גם כאן בלי הרשימה
+    if (a?.failed) return { ...r, reply: READ_ALOUD_DOWN, status: 'error', result: `${r.result} · 🔇 הקראה נכשלה: ${a.error}`.slice(0, 300) };
+    return a ? { ...r, reply: '', fallback: READ_ALOUD_DOWN, files: [a.file], react: '🔊', result: `${r.result} · 🔊 הוקרא` } : r;
   };
   if (kind === 'menu' && /^\d{1,2}$/.test(t) && ['my_tasks', 'overdue'].includes(state.draft.options?.[Number(t) - 1])) {
     const key = state.draft.options[Number(t) - 1];
@@ -3977,8 +3984,8 @@ async function handleDirect(msg) {
     } catch (err) {
       console.error('[משימון] שליחת קובץ מהבוט נכשלה:', err.message);
       log({ ...base, text: `[📄 ${f.fileName}]`, action: r.action, status: 'error', result: err.message });
-      // ההקראה לא נשלחה — הרשימה בכתב במקומה, כדי שהעובד לא יישאר בלי תשובה
-      if (r.fallback) for (const part of splitMessage(r.fallback)) await sendText(msg.chatId, part);
+      // ההקראה לא נשלחה — הודעה קצרה, כדי שהעובד לא יישאר בלי תשובה
+      if (r.fallback) await sendText(msg.chatId, r.fallback);
     }
   }
   // אין מה לכתוב (רק אימוג'י) — בהודעה קולית עדיין "🎙 שמעתי", כדי שיראו מה הובן
@@ -4965,6 +4972,6 @@ module.exports = {
     storeGroupMessage, processGroup, handleDirect, sanitizeGroup, resolveMentions, candidatesOf, converse, turn, withFollowUps, sendSummaries, YES,
     findRecipients, findContactCards, sourceOf, suggestionFeedback, flushOutbox, todayMessage, splitMessage, parseSuggestionCommand, businessCommand, chatOf, saveChat,
     recordingReply, checkDraft, draftText, createFromDraft, mailAlertFor, closeAlerted, logoIntent, busyFor, userLastAt, staleQuestion,
-    READ_ALOUD, readAloudText, readAloudFile, hooks, flowReply
+    READ_ALOUD, READ_ALOUD_DOWN, readAloudText, readAloudFile, hooks, flowReply
   }
 };
