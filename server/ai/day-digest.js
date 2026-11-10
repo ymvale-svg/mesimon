@@ -95,6 +95,18 @@ function evening(userId) {
   return { text: lines.join('\n') };
 }
 
+/** תאריך היעד של משימות פתוחות שלי ← ‎to‎ (17:00), עם רישום ביומן המשימה. מחזיר כמה הועברו */
+function moveTo(userId, ids, to, where) {
+  const due = W.ilWallToUtc(to, 17, 0).toISOString();
+  const u = D.get('SELECT full_name FROM users WHERE id = ?', userId);
+  let n = 0;
+  for (const id of ids) {
+    const ok = D.run(`UPDATE tasks SET due_date = ? WHERE id = ? AND assignee_type = 'user' AND assignee_id = ? AND ${OPEN.replace(/t\./g, 'tasks.')}`, due, id, userId).changes;
+    if (ok) { D.audit(id, { type: 'user', id: userId, name: u?.full_name ?? '' }, 'due_date', `תאריך היעד הועבר ל-${to.split('-').reverse().join('.')} ${where}`); n++; }
+  }
+  return n;
+}
+
 /** "להעביר למחר" — תאריך היעד של המשימות הפתוחות ליום העבודה הבא (17:00), עם רישום ביומן המשימה */
 function answer(userId, d, text) {
   const t = String(text ?? '').trim();
@@ -102,13 +114,7 @@ function answer(userId, d, text) {
   const n = WaUi.normalize(t);
   if (WaUi.sameLabel(t, BTN.keep) || /^(להשאיר|לא|👎)([\s,.!]|$)/.test(n)) return { text: 'בסדר, נשארות כמו שהן 👍', result: 'להשאיר' };
   if (!(WaUi.sameLabel(t, BTN.move) || /^(להעביר|כן|העבר|👍)([\s,.!]|$)/.test(n))) return null;
-  const due = W.ilWallToUtc(d.to, 17, 0).toISOString();
-  const u = D.get('SELECT full_name FROM users WHERE id = ?', userId);
-  let n2 = 0;
-  for (const id of d.taskIds ?? []) {
-    const ok = D.run(`UPDATE tasks SET due_date = ? WHERE id = ? AND assignee_type = 'user' AND assignee_id = ? AND ${OPEN.replace(/t\./g, 'tasks.')}`, due, id, userId).changes;
-    if (ok) { D.audit(id, { type: 'user', id: userId, name: u?.full_name ?? '' }, 'due_date', `תאריך היעד הועבר ל-${d.to.split('-').reverse().join('.')} מסיכום סוף היום בבוט`); n2++; }
-  }
+  const n2 = moveTo(userId, d.taskIds ?? [], d.to, 'מסיכום סוף היום בבוט');
   return { text: `➡️ הועברו ${n2 === 1 ? 'משימה אחת' : `${n2} משימות`} למחר. ערב טוב! 🌙`, result: `הועברו ${n2} למחר` };
 }
 
@@ -137,4 +143,4 @@ async function tick(io) {
   }
 }
 
-module.exports = { tick, answer, morning, evening, BTN };
+module.exports = { tick, answer, morning, evening, moveTo, BTN };
