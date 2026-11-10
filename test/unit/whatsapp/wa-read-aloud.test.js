@@ -1,6 +1,6 @@
 'use strict';
 /**
- * 🔊 "תקריא לי את המשימות" — הרשימה נשלחת גם כהודעה קולית. פיילוט: רק למנהלי המערכת, ורק עם מפתח OpenAI.
+ * 🔊 "תקריא לי את המשימות" — הרשימה נשלחת כהודעה קולית. לכל מי שמותר לו "המשימות שלי", כשיש מפתח OpenAI.
  * בלי AI ובלי רשת: המשימות מ-‎hooks.tasks‎ מזויף, ההקראה מ-‎Speech.speak‎ מזויף, הוואטסאפ מזויף.
  */
 const test = require('node:test');
@@ -74,13 +74,23 @@ test('מנהל מערכת: "תקריא לי את המשימות" — 🔊 מיד
   assert.match(row.result, /🔊 הוקרא/);
 });
 
-test('עובד (לא בפיילוט) — הרשימה בטקסט בלבד, בלי הקראה', async (t) => {
+test('עובד מן השורה — גם הוא מקבל הקראה (פתוח לכולם)', async (t) => {
   const { spoken, files, calls } = setup(t);
   user({ phone: '972507000002', role: 'employee' });
   await say('972507000002', 'תקריא לי את המשימות שלי');
+  assert.equal(spoken.length, 1);
+  assert.equal(files.length, 1);
+  assert.equal(calls.filter((c) => c.method === 'sendMessage').length, 0);
+});
+
+test('"המשימות שלי" כבוי במסך הניהול — בלי הקראה', async (t) => {
+  const { spoken, files } = setup(t);
+  D.setSetting('wa_actions', { my_tasks: { enabled: false } });
+  t.after(() => D.setSetting('wa_actions', {}));
+  user({ phone: '972507000008', role: 'employee' });
+  await say('972507000008', 'תקריא לי את המשימות שלי');
   assert.equal(spoken.length, 0);
   assert.equal(files.length, 0);
-  assert.match(calls.find((c) => c.method === 'sendMessage').body.message, /📋 המשימות שלך/);
 });
 
 test('בלי מפתח OpenAI, או "המשימות שלי" רגיל — בלי הקראה', async (t) => {
@@ -122,9 +132,9 @@ test('שליחת ההודעה הקולית נכשלה — רק "ההקראה ל�
   assert.deepEqual(calls.filter((c) => c.method === 'sendMessage').map((c) => c.body.message), [Bot._internal.READ_ALOUD_DOWN]);
 });
 
-test('עובד שלא בפיילוט — בלי 🔊', async (t) => {
+test('עובד — 🔊 מיד, כמו למנהל', async (t) => {
   const { calls } = setup(t);
   user({ phone: '972507000007', role: 'employee' });
   await say('972507000007', 'תקריא לי את המשימות');
-  assert.ok(!calls.some((c) => c.method === 'sendReaction' && c.body.reaction === '🔊'));
+  assert.equal(calls.find((c) => c.method === 'sendReaction')?.body.reaction, '🔊');
 });
