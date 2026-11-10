@@ -48,6 +48,15 @@ const unauthorized = (msg = 'נדרשת התחברות מחדש') => new HttpErr
 const forbidden = (msg = 'אין לך הרשאה לבצע פעולה זו') => new HttpError(403, msg);
 const notFound = (msg = 'הפריט המבוקש לא נמצא') => new HttpError(404, msg);
 
+/** פענוח קידוד אחוזים בנתיב; קידוד שבור (‎%E0%A4%A‎) הוא 400 ולא חריגה כללית שהופכת ל-500 */
+function decodePath(s) {
+  try {
+    return decodeURIComponent(s);
+  } catch {
+    throw badRequest('כתובת לא תקינה');
+  }
+}
+
 class Router {
   constructor() {
     this.routes = [];
@@ -86,7 +95,7 @@ class Router {
       if (!m) continue;
       const params = {};
       route.keys.forEach((key, i) => {
-        params[key] = decodeURIComponent(m[i + 1]);
+        params[key] = decodePath(m[i + 1]);
       });
       return { handler: route.handler, params };
     }
@@ -101,7 +110,11 @@ function parseCookies(req) {
   for (const part of header.split(';')) {
     const idx = part.indexOf('=');
     if (idx < 0) continue;
-    out[part.slice(0, idx).trim()] = decodeURIComponent(part.slice(idx + 1).trim());
+    const raw = part.slice(idx + 1).trim();
+    // עוגייה אחת בקידוד שבור לא מפילה את כל הבקשה — נשמרת כמו שהיא
+    let value = raw;
+    try { value = decodeURIComponent(raw); } catch { /* קידוד שבור */ }
+    out[part.slice(0, idx).trim()] = value;
   }
   return out;
 }
@@ -129,11 +142,15 @@ function readBody(req) {
 async function readJson(req) {
   const buf = await readBody(req);
   if (!buf.length) return {};
+  let data;
   try {
-    return JSON.parse(buf.toString('utf8'));
+    data = JSON.parse(buf.toString('utf8'));
   } catch {
     throw badRequest('גוף הבקשה אינו JSON תקין');
   }
+  // ‎null‎, מספר או מחרוזת — כל נקודות הקצה מצפות לאובייקט; בלי זה הן קורסות ב-500
+  if (data === null || typeof data !== 'object') throw badRequest('גוף הבקשה אינו JSON תקין');
+  return data;
 }
 
 function sendJson(res, status, payload) {
@@ -169,11 +186,12 @@ const SECURITY_HEADERS = {
  * הסרטון פשוט לא מתחיל.
  */
 function serveStatic(res, rootDir, urlPath, req = null) {
-  const clean = decodeURIComponent(urlPath.split('?')[0]);
+  const clean = decodePath(urlPath.split('?')[0]);
   const rel = clean === '/' ? 'index.html' : clean.replace(/^\/+/, '');
   const target = path.resolve(rootDir, rel);
   const rootResolved = path.resolve(rootDir);
-  if (!target.startsWith(rootResolved)) {
+  // ‎rootResolved + path.sep‎ — אחרת תיקייה שכנה כמו ‎public-secret‎ עוברת את הבדיקה
+  if (target !== rootResolved && !target.startsWith(rootResolved + path.sep)) {
     res.writeHead(403).end();
     return true;
   }

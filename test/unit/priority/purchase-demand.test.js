@@ -51,8 +51,7 @@ test('parseDate — לא תאריך: null', (t) => {
   for (const x of ['13.13', '0.5', '32.1', 'בלי תאריך', '', null]) assert.equal(PD._parseDate(x), null, String(x));
 });
 
-// באג ידוע: ‎Date.parse('2027-02-31')‎ אינו NaN ב-V8, ולכן תאריך שאינו קיים עובר (purchase-demand.js, parseDate)
-test('parseDate — יום שאינו קיים בחודש: null', { todo: 'באג: 31.02 מחזיר 2027-02-31' }, (t) => {
+test('parseDate — יום שאינו קיים בחודש: null', (t) => {
   fixNow(t);
   assert.equal(PD._parseDate('31.02'), null);
   assert.equal(PD._parseDate('31.4.2027'), null);
@@ -123,8 +122,7 @@ test('resolveItems — קרובים: שואלים, עד 3', async (t) => {
   assert.deepEqual(items[0].options.map((o) => o.code), ['B-1', 'B-2', 'B-3']);
 });
 
-// באג ידוע: ‎exactHit‎ נקבע גם כשהפריט הזהה אינו פעיל, ואז ‎partOf(undefined)‎ נופל (purchase-demand.js, resolveItems)
-test('resolveItems — פריט זהה לא פעיל אינו משויך', { todo: 'באג: exactHit לפריט לא פעיל' }, async (t) => {
+test('resolveItems — פריט זהה לא פעיל אינו משויך', async (t) => {
   mockCatalog(t, { exact: { 'ברז': part('X-1', 'ברז', 'לא פעיל') }, search: { 'ברז': [part('X-1', 'ברז', 'לא פעיל')] } });
   const items = [{ n: 1, description: 'ברז', qty: 1 }];
   await PD._resolveItems({ company: 'test11' }, items);

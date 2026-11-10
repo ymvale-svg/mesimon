@@ -278,9 +278,7 @@ test('בטיחות: בלי חיבור לפריוריטי — הודעה לעוב
   assert.deepEqual(pr.writes, []);
 });
 
-test('בטיחות: PRIORITY_COMPANIES בלי אף חברה מוכרת (ברירת המחדל של הבדיקות, ‎__none__‎) — אין סביבה לדרישה, ואין כתיבה', {
-  todo: 'purchase-demand.js:325 (writable = Priority.allowed(), priority.js:55) — ערך שאינו קוד חברה מוכר ("__none__", שגיאת הקלדה) נבחר לבד כסביבה ("סביבת אמת"), ו"סיום" כותב אליו'
-}, async (t) => {
+test('בטיחות: PRIORITY_COMPANIES בלי אף חברה מוכרת (ברירת המחדל של הבדיקות, ‎__none__‎) — אין סביבה לדרישה, ואין כתיבה', async (t) => {
   const u = H.worker();
   const pr = priority(t);
   ai(t);
@@ -291,4 +289,15 @@ test('בטיחות: PRIORITY_COMPANIES בלי אף חברה מוכרת (בריר
   await say('אף אחד ❌');
   await say(BTN.done);
   assert.deepEqual(pr.writes, []);
+});
+
+test('בטיחות: ערך ב-PRIORITY_COMPANIES שאינו קוד חברה מוכר (שגיאת הקלדה) אינו מוצע כסביבה — רק החברה המוכרת', async (t) => {
+  H.companies(t, 'test11,tset11');
+  const u = H.worker();
+  priority(t);
+  ai(t);
+  const { say } = H.chat(t, u);
+  const r = await say('דרישת רכש');
+  assert.match(r.text, /לאיזה פרויקט/, 'סביבה אחת מוכרת — נבחרת לבד, בלי לשאול על סביבה');
+  assert.doesNotMatch(r.text, /tset11/);
 });

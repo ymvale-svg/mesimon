@@ -55,7 +55,7 @@ const vendorsOf = (id) => D.all('SELECT * FROM rfq_vendors WHERE rfq_id = ? ORDE
 
 const TRIGGER = /הצע(?:ת|ות)\s+מחיר|פני(?:ה|יה)\s+ל(?:ה)?ספקים/;
 const ACT = /(תפנה|תפני|לפנות|פנה|תבקש|תבקשי|לבקש|בקש|צריך|צריכה|תשיג|תשלח|לשלוח|שלח|תוציא|להוציא|תמצא|תחפש)/;
-const isRequest = (text) => TRIGGER.test(text) && ACT.test(text) && !/^(מה|איפה|האם|מתי)\b/.test(String(text).trim());
+const isRequest = (text) => TRIGGER.test(text) && ACT.test(text) && !/^(מה|איפה|האם|מתי)(?=[\s?!.,:;"'״׳-]|$)/.test(String(text).trim());
 
 const ITEM_SCHEMA = {
   type: 'object',

@@ -79,6 +79,13 @@ test('מעבר תיקיות לא מקודד מנורמל לתוך public — ל�
   }
 });
 
+test('קידוד אחוזים שבור בנתיב — 400 ולא 500', async () => {
+  for (const p of ['/%E0%A4%A', '/js/%E0%A4%A.js']) {
+    const r = await srv.raw('GET', p);
+    assert.equal(r.status, 400, p);
+  }
+});
+
 test('נתיב API לא קיים — 404 JSON, גם עם התחברות', async () => {
   for (const [method, p, cookie] of [['GET', '/api/nope'], ['GET', '/api/nope', admin], ['POST', '/api/tasks/1/teleport', admin], ['GET', '/api/']]) {
     const r = await srv.api(method, p, { cookie });

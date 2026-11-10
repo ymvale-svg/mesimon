@@ -1083,7 +1083,7 @@ function helpText(actor) {
  * ("מהאלפון", "מגוגל") גובר גם אם ה-AI פספס.
  */
 const FROM_PHONEBOOK = /(?:^|\s)(?:מה|ב|ל)?אלפון/;
-const FROM_GOOGLE = /(?:מ|ב)(?:-)?(?:גוגל|google)|אנשי\s+(?:ה)?קשר\s+(?:של|ב|מ)(?:-)?(?:גוגל|google)/i;
+const FROM_GOOGLE = /(?:מ|ב)(?:-)?(?:גוגל|google)|אנשי\s+(?:ה)?קשר\s+(?:של\s*|ב|מ)(?:-)?(?:גוגל|google)/i;
 function sourceOf(aiSource, text) {
   const t = String(text ?? '');
   if (FROM_PHONEBOOK.test(t)) return 'phonebook';
@@ -1609,9 +1609,21 @@ function splitMessage(text, max = 3500) {
     }
     cur = cur ? `${cur}${sep}${chunk}` : chunk;
   };
+  // שורה ארוכה מהמקסימום — בחלקים משלה, נחתכת ברווח (או באמצע, כשאין רווח סביר); שום תו לא אובד
+  const pushLong = (ln) => {
+    if (cur) parts.push(cur);
+    let rest = ln;
+    while (rest.length > max) {
+      let cut = rest.lastIndexOf(' ', max);
+      if (cut < max / 2) cut = max;
+      parts.push(rest.slice(0, cut));
+      rest = rest[cut] === ' ' ? rest.slice(cut + 1) : rest.slice(cut);
+    }
+    cur = rest;
+  };
   for (const para of t.split('\n\n')) {
     if (para.length <= max) push(para, '\n\n');
-    else for (const ln of para.split('\n')) push(ln.length > max ? ln.slice(0, max) : ln, '\n');
+    else for (const ln of para.split('\n')) (ln.length > max ? pushLong(ln) : push(ln, '\n'));
   }
   if (cur) parts.push(cur);
   return parts;

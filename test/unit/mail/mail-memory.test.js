@@ -65,6 +65,36 @@ test('isNight — כבוי בהגדרה, או חלון לא תקין', (t) => {
   D.setSetting('mail_memory_night_hours', '19:00-07:00');
 });
 
+test('isNight — בלי הגדרה: כמו ברירת המחדל של ההתקנה (כבוי, 22:00-06:00)', (t) => {
+  t.mock.timers.enable(at('2026-11-10T21:00:00Z')); // 23:00 בישראל
+  const saved = ['mail_memory_night', 'mail_memory_night_hours'].map((k) => [k, D.getSetting(k, null)]);
+  D.run("DELETE FROM settings WHERE key IN ('mail_memory_night', 'mail_memory_night_hours')");
+  try {
+    assert.equal(M.isNight(), false, 'ברירת המחדל — כבוי');
+    D.setSetting('mail_memory_night', true);
+    assert.equal(M.isNight(), true, '23:00 — בתוך 22:00-06:00');
+    t.mock.timers.setTime(new Date('2026-11-10T18:00:00Z').getTime()); // 20:00
+    assert.equal(M.isNight(), false, '20:00 — מחוץ ל-22:00-06:00');
+  } finally {
+    for (const [k, v] of saved) if (v !== null) D.setSetting(k, v);
+  }
+});
+
+test('readToday — מחצות בשעון ישראל: חורף +02:00, קיץ +03:00', (t) => {
+  const u = user();
+  const add = (id, at) => D.run("INSERT INTO mail_memory_threads (user_id, thread_id, last_at, status, processed_at) VALUES (?,?,?,'done',?)", u.id, id, at, at);
+  // חורף: חצות = 22:00Z של היום הקודם
+  add('w1', '2026-01-14T21:30:00.000Z'); // 23:30 אתמול
+  add('w2', '2026-01-14T22:30:00.000Z'); // 00:30 היום
+  // קיץ: חצות = 21:00Z של היום הקודם
+  add('s1', '2026-07-14T20:30:00.000Z'); // 23:30 אתמול
+  add('s2', '2026-07-14T21:30:00.000Z'); // 00:30 היום
+  t.mock.timers.enable(at('2026-01-15T10:00:00Z'));
+  assert.equal(M._internal.readToday(u.id), 3, 'w2 ושני הקיץ (אחרי) — לא w1');
+  t.mock.timers.setTime(new Date('2026-07-15T10:00:00Z').getTime());
+  assert.equal(M._internal.readToday(u.id), 1, 'רק s2');
+});
+
 test('inHours — ריק: תמיד; חלון רגיל לפי השעה', (t) => {
   t.mock.timers.enable(at('2026-11-10T10:00:00Z')); // 12:00
   D.setSetting('mail_memory_hours', '');

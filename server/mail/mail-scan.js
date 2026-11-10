@@ -68,8 +68,8 @@ function localDate(date = new Date()) {
   return { date: `${p.year}-${p.month}-${p.day}`, minutes: Number(p.hour) * 60 + Number(p.minute) };
 }
 
-/** תחילת יום מקומי (בקירוב של שעה — מספיק לחיפוש ב-Gmail, שמדויק לשנייה ממילא) */
-const startOfLocalDay = (ymd) => new Date(`${ymd}T00:00:00+03:00`);
+/** תחילת יום מקומי — חצות בשעון ישראל, לפי שעון הקיץ/חורף של אותו יום */
+const startOfLocalDay = (ymd) => W.ilWallToUtc(ymd, 0, 0);
 
 /**
  * טווח הסריקה. ‎to‎ ריק = עד עכשיו.
@@ -84,7 +84,7 @@ function rangeOf({ range, from, to }) {
     case 'month': return { from: shift(30), to: null };
     case 'custom': {
       if (!/^\d{4}-\d{2}-\d{2}$/.test(String(from ?? ''))) throw new Error('נדרש תאריך התחלה');
-      const end = /^\d{4}-\d{2}-\d{2}$/.test(String(to ?? '')) ? new Date(startOfLocalDay(to).getTime() + DAY) : null;
+      const end = /^\d{4}-\d{2}-\d{2}$/.test(String(to ?? '')) ? startOfLocalDay(W.addDays(to, 1)) : null;
       return { from: startOfLocalDay(from), to: end };
     }
     default: return { from: startOfLocalDay(today), to: null };

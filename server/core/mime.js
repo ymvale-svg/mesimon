@@ -137,7 +137,8 @@ function walk(buf, out, depth = 0) {
     const pieces = raw.split(boundary).slice(1);
     for (const piece of pieces) {
       if (piece.startsWith('--')) break;
-      walk(Buffer.from(piece.replace(/^\r?\n/, ''), 'latin1'), out, depth + 1);
+      // שבירת השורה שאחרי הגבול, וזו שלפני הגבול הבא — שייכות לגבול (RFC 2046) ולא לחלק
+      walk(Buffer.from(piece.replace(/^\r?\n/, '').replace(/\r?\n$/, ''), 'latin1'), out, depth + 1);
     }
     return;
   }

@@ -216,18 +216,22 @@ test('המסמך גובר: "לא ❌" להצעה מהמסמך — שואלים �
   assert.equal(pr.writes.length, 0);
 });
 
-test('אחרי "לא ❌" להצעה מהמסמך — הפרויקטים של החברה (2) מוצעים בכפתורים', {
-  todo: 'goods-receipt.js:2137 — "לאיזה פרויקט, אם כך?" נשלח בלי כפתורים, גם כשבחברה רק 2 פרויקטים (CLAUDE.md: בחירה — בכפתורים)'
-}, async (t) => {
+test('אחרי "לא ❌" להצעה מהמסמך — הפרויקטים של החברה (2) מוצעים בכפתורים', async (t) => {
   H.companies(t, 'test11');
   const u = H.worker();
   Prefs.remember(u.id, { company: 'test11', project: { code: 'PR1', des: 'אלעד 49 צפון' }, warehouse: 'W1' });
-  priority(t);
+  const pr = priority(t);
   ai(t, doc({ project_hint: 'נהריה' }));
   const { say } = H.chat(t, u);
   await toProject(say);
-  const r = await say(BTN.no);
-  H.assertButtons(r.buttons);
+  let r = await say(BTN.no);
+  assert.match(r.text, /לאיזה פרויקט, אם כך/);
+  // הבחירה האחרונה מוצעת; הפרויקט שנדחה (נהריה) — לא
+  H.assertButtons(r.buttons, ['אלעד 49 צפון']);
+  r = await say('אלעד 49 צפון');
+  assert.match(r.text, /נספחים/);
+  await say(BTN.done);
+  assert.equal(pr.wrote('createReceipt')[0].args[1].project, 'PR1');
 });
 
 test('המסמך גובר: רמז שמתאים לבחירה האחרונה — היא נקבעת בלי לעצור', async (t) => {
@@ -324,9 +328,7 @@ test('ביטול טיוטא: 👎 כתגובה (Reaction) גם הוא שואל �
   assert.equal(pr.wrote('finalizeReceipt').length, 0, '"חזרה" אינה אישור');
 });
 
-test('ביטול טיוטא: "ביטול 🗑️" בבדיקת הטיוטא — שואל "כן, לבטל 🗑️" לפני cancelReceipt', {
-  todo: 'goods-receipt.js:1745 — "ביטול" (גם הכפתור שעל הטיוטא) מבטל מיד בפריוריטי, בלי שאלת אישור (CLAUDE.md: ביטול של משהו שנכתב לפריוריטי — רק אחרי "כן, לבטל 🗑️")'
-}, async (t) => {
+test('ביטול טיוטא: "ביטול 🗑️" בבדיקת הטיוטא — שואל "כן, לבטל 🗑️" לפני cancelReceipt', async (t) => {
   H.companies(t, 'test11');
   const u = H.worker();
   const pr = priority(t);
@@ -336,9 +338,32 @@ test('ביטול טיוטא: "ביטול 🗑️" בבדיקת הטיוטא — 
   await say('אלעד 49 צפון');
   await say(BTN.done);
 
-  const r = await say(BTN.cancel);
+  let r = await say(BTN.cancel);
+  assert.match(r.text, /לבטל את הטיוטא \*GR26000123\*/);
   assert.equal(pr.wrote('cancelReceipt').length, 0, 'לא מבטלים לפני אישור');
   H.assertButtons(r.buttons, [BTN.confirmCancel, 'חזרה לטיוטא']);
+
+  r = await say(BTN.confirmCancel);
+  assert.match(r.text, /הטיוטא GR26000123 בוטלה בפריוריטי/);
+  assert.deepEqual(pr.wrote('cancelReceipt').map((w) => w.args), [['test11', 'GR26000123']]);
+});
+
+test('ביטול טיוטא: "ביטול" ואז "חזרה לטיוטא" — לא מבטל', async (t) => {
+  H.companies(t, 'test11');
+  const u = H.worker();
+  const pr = priority(t);
+  ai(t, doc());
+  const { say } = H.chat(t, u);
+  await toProject(say);
+  await say('אלעד 49 צפון');
+  await say(BTN.done);
+
+  await say('ביטול');
+  const r = await say('חזרה לטיוטא');
+  assert.match(r.text, /GR26000123\* — טיוטא לבדיקה/);
+  assert.match(r.text, /\*ביטול\* 👎 — מבטל את הטיוטא \(אחרי שאלת אישור\)/);
+  H.assertButtons(r.buttons, [BTN.approve, BTN.cancel]);
+  assert.equal(pr.wrote('cancelReceipt').length, 0);
 });
 
 test('ביטול לפני הטיוטא — אין מה לבטל בפריוריטי: נסגר בלי שום כתיבה', async (t) => {
@@ -417,9 +442,7 @@ test('בטיחות: חברה אמיתית פתוחה ועותק הבדיקה ס�
   assert.deepEqual(pr.writes, []);
 });
 
-test('בטיחות: החברה נסגרה (PRIORITY_COMPANIES) בין הקריאה לקליטה — "סיום" לא מנסה לכתוב, והעובד מקבל הסבר', {
-  todo: 'goods-receipt.js:1140 (createDraft) — אין בדיקה של Priority.allowed() לפני הכתיבה; ההגנה היחידה היא companyUrl בשכבת האינטגרציה, ואז העובד נשאל "לאיזה מחסן לשייך" (draftAndShow) במקום הסבר'
-}, async (t) => {
+test('בטיחות: החברה נסגרה (PRIORITY_COMPANIES) בין הקריאה לקליטה — "סיום" לא מנסה לכתוב, והעובד מקבל הסבר', async (t) => {
   H.companies(t, 'test11');
   const u = H.worker();
   const pr = priority(t);
@@ -428,7 +451,14 @@ test('בטיחות: החברה נסגרה (PRIORITY_COMPANIES) בין הקריא
   await toProject(say);
   await say('אלעד 49 צפון');
   process.env.PRIORITY_COMPANIES = 'elad1';
-  const r = await say(BTN.done);
+  let r = await say(BTN.done);
   assert.deepEqual(pr.writes, []);
-  assert.match(r.text, /אינה פתוחה/);
+  assert.match(r.text, /\(test11\) עדיין לא פתוחה לקליטה מהבוט/);
+  assert.doesNotMatch(r.text, /PRIORITY_COMPANIES|מחסן/, 'בלי פרטים טכניים, ובלי לשאול על מחסן');
+  H.assertButtons(r.buttons, [BTN.done]);
+  // נפתחה שוב — "סיום" כותב
+  process.env.PRIORITY_COMPANIES = 'test11';
+  r = await say(BTN.done);
+  assert.equal(pr.wrote('createReceipt').length, 1);
+  assert.match(r.text, /טיוטא לבדיקה/);
 });

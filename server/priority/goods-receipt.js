@@ -542,7 +542,7 @@ function summaryText(s, gr) {
   const detailLine = s.doc?.detail ? `📋 הפירוט מ${detailName(s.doc.detail)}` : null;
   const files = [detailLine, `📎 נספחים: ${gr.files.length}`].filter(Boolean).join('\n');
   return [...header, '', ...lines, '', ...totals, check, files, '',
-    '*מאשר* 👍 — הופך את ה-GR לסופי.', 'תיקון — כתבו מה לשנות ("שורה 2: 5 ולא 6").', '*ביטול* — מבטל את הטיוטא (👎 — שואל קודם).'].filter((x) => x !== null).join('\n');
+    '*מאשר* 👍 — הופך את ה-GR לסופי.', 'תיקון — כתבו מה לשנות ("שורה 2: 5 ולא 6").', '*ביטול* 👎 — מבטל את הטיוטא (אחרי שאלת אישור).'].filter((x) => x !== null).join('\n');
 }
 
 // ---------------------------------------------------------------------------
@@ -1085,6 +1085,21 @@ async function askProject(s) {
 }
 
 /**
+ * "לא ❌" לפרויקט שהוצע — שואלים לאיזה, עם כפתורים: הבחירה האחרונה של העובד קודם, ואז שאר הפרויקטים (כשבחברה
+ * עד 9 — כולם ברשימה; יותר — רק הבחירה האחרונה בכפתור, והשאר בשפה חופשית). הפרויקט שנדחה אינו מוצע שוב.
+ */
+async function askOtherProject(s, rejected) {
+  const all = await projectsOf(s.company).catch(() => []);
+  const last = !s.noPref && prefsOf(s.uid, s.company)?.project;
+  const lastP = last && all.find((p) => p.code === last.code);
+  const seen = new Set([rejected?.code]);
+  s.projectOptions = [lastP, ...(all.length <= 9 ? all : [])].filter((p) => p && !seen.has(p.code) && seen.add(p.code)).slice(0, 9);
+  offer(s, s.projectOptions.map((p) => p.des));
+  return reply(s, ['לאיזה פרויקט, אם כך?', ...s.projectOptions.map((p) => bullet(`${p.des} (${p.code})`)),
+    `${s.projectOptions.length ? 'בחרו בכפתור, או כתבו' : 'כתבו'} במילים שלכם, או קוד (PR…).`].join('\n'));
+}
+
+/**
  * המחסן: מההזמנה, כשיש (ורק אם קיים במסך המחסנים); המחסנים של הפרויקט — ממסך המחסנים, ואם אין
  * שם שיוך, מהקבלות הקודמות — אחד הוא ברירת המחדל, כמה — שואלים עם השמות; אף אחד — מחסן הפרויקט
  * אם קיים, אחרת מחסן ברירת המחדל של החברה (‎warehouseOf‎).
@@ -1142,6 +1157,8 @@ async function listWarehouses(s) {
 
 async function createDraft(user, s) {
   const c = s.company;
+  // החברה נסגרה לכתיבה (PRIORITY_COMPANIES) מאז שהקליטה התחילה — לא כותבים כלום, וגם לא מנסים מחסנים אחרים
+  if (!Priority.allowed().includes(c)) return { closed: true };
   // המחסן — נבדק מול מסך המחסנים לפני הקליטה; פריוריטי בכל זאת דוחה אותו — Main
   if (!s.warehouse || !(await Priority.warehouseExists(c, s.warehouse).catch(() => true))) s.warehouse = await Priority.warehouseOf(c, s.project?.code);
   const head = { supname: s.supplier.code, booknum: s.doc.doc_number, date: s.doc.date || null, project: s.project?.code, warehouse: s.warehouse, payCode: s.payCode ?? Priority.DEFAULT_PAY };
@@ -1284,6 +1301,13 @@ function writeDialog(user, s) {
  */
 async function draftAndShow(user, s) {
   const r = await createDraft(user, s);
+  if (r?.closed) {
+    alertAdmins(user, s, 'החברה אינה פתוחה לכתיבה', [`${s.company} אינה ב-PRIORITY_COMPANIES (${process.env.PRIORITY_COMPANIES ?? ''}) — הקבלה לא נכתבה לפריוריטי.`]);
+    s.step = 'files';
+    const c = Priority.companyOf(s.company);
+    return reply(s, `הקבלה לא נקלטה: *${c.name.replace(/ — .*/, '')}* (${s.company}) עדיין לא פתוחה לקליטה מהבוט. מנהל המערכת קיבל הודעה. הכל שמור — כתבו *סיום* כדי לנסות שוב מאוחר יותר, או *ביטול*.`,
+      { status: 'denied', result: `חברה סגורה לכתיבה: ${s.company}` });
+  }
   if (!r?.failed) return showDraft(s, r, user);
   alertAdmins(user, s, 'הטיוטא לא נפתחה בפריוריטי', [`מחסנים שנוסו: ${r.tried.join(', ')}`, r.failed.message]);
   if (s.warehouseRetry) {
@@ -1636,6 +1660,15 @@ async function sweep(send, { force = false } = {}) {
 // הכניסה
 // ---------------------------------------------------------------------------
 
+/**
+ * ביטול של טיוטא שכבר נכתבה לפריוריטי — רק אחרי שאלת אישור ("כן, לבטל 🗑️" / "חזרה לטיוטא"). גם ל"ביטול" וגם ל-👎.
+ */
+function askCancel(user, s, { mark = '🗑️', result = 'ביטול: שאלת אישור' } = {}) {
+  s.confirmCancel = true;
+  save(user.id, s);
+  return { replies: [`${mark} לבטל את הטיוטא *${s.docno}*? *כן* 👍 — לבטל · או כתבו מה לתקן (כמות, תיאור, שורה שחסרה).`], status: 'ok', result, buttons: buttonsFor(s) };
+}
+
 async function cancel(user, s, why = 'בוטלה') {
   let note = '';
   if (s?.docno) {
@@ -1746,6 +1779,8 @@ async function handle({ user, text = '', file = null, reaction = false, allow = 
   }
 
   if (CANCEL.test(t) && !file) {
+    // טיוטא שכבר נכתבה לפריוריטי — קודם שואלים (כמו 👎); לפני הכתיבה — מבטלים מיד
+    if (s?.docno && !s.confirmCancel) return askCancel(user, s);
     if (!queueOf(s).length) return cancel(user, s);
     // ביטול של הנוכחית, ומעבר למסמך שחיכה בתור
     const r = await cancel(user, s);
@@ -1796,11 +1831,8 @@ async function handle({ user, text = '', file = null, reaction = false, allow = 
     if (s.pendingList || s.pendingNew || ['offer', 'doctype'].includes(s.step)) t = 'לא';
     else if (s.step === 'order') t = 'בלי הזמנה';      // "יש מספר הזמנה?" — 👎 = אין, בלי הזמנה
     else if (s.step === 'files') t = 'סיום';           // "יש עוד נספחים?" — 👎 = אין
-    else if (s.step === 'review') {
-      s.confirmCancel = true;
-      save(user.id, s);
-      return { replies: [`👎 לבטל את הטיוטא *${s.docno}*? *כן* 👍 — לבטל · או כתבו מה לתקן (כמות, תיאור, שורה שחסרה).`], status: 'ok', result: '👎 בבדיקת הטיוטא', buttons: buttonsFor(s) };
-    } else {
+    else if (s.step === 'review') return askCancel(user, s, { mark: '👎', result: '👎 בבדיקת הטיוטא' });
+    else {
       save(user.id, s);
       return { replies: [`👎 מה לא נכון? כתבו מה לתקן, או *ביטול* לביטול הקליטה.${s.lastPrompt ? `\n\n${s.lastPrompt}` : ''}`], status: 'ok', result: `👎 בשלב ${s.step}` };
     }
@@ -2137,7 +2169,7 @@ async function step(user, s, t, file, allow = { gr: true, pd: false }) {
         const pend = s.projectPending;
         if (YES.test(t)) { s.projectPending = null; s.project = pend; return chooseWarehouse(s); }
         s.projectPending = null;
-        if (/^(לא|no)([\s,.!]|$)/i.test(t)) return reply(s, 'לאיזה פרויקט, אם כך? כתבו במילים שלכם, או קוד (PR…).');
+        if (/^(לא|no)([\s,.!]|$)/i.test(t)) return askOtherProject(s, pend);
       }
       // מספר מהרשימה — רק כשנכתב מספר קטן לבד, והרשימה הוצגה ("2"). "49" או "207" הם מספרי מגרש
       const n = /^\d{1,2}$/.test(t) ? Number(t) : null;

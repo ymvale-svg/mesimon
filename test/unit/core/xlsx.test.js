@@ -90,6 +90,17 @@ test('build — שם גיליון נחתך ל-31 תווים ומוברח', () =>
   assert.equal(nameOf(X.build([['x']])), 'גיליון1');
 });
 
+test('build — שם גיליון נחתך לפני ההברחה: ישות לא נקטעת באמצע (XML תקין)', () => {
+  const nameOf = (buf) => /<sheet name="([^"]*)"/.exec(
+    S.readZip(buf, (n) => n === 'xl/workbook.xml').get('xl/workbook.xml').toString('utf8'))[1];
+  // "&" בתו ה-30: אחרי ההברחה "&amp;" חוצה את גבול 31 התווים
+  const name = `${'א'.repeat(29)}&ב${'ג'.repeat(5)}`;
+  const got = nameOf(X.build([['x']], { sheetName: name }));
+  assert.equal(got, `${'א'.repeat(29)}&amp;ב`);
+  assert.equal(S.decodeXml(got), name.slice(0, 31));
+  assert.doesNotMatch(got, /&(?!amp;|lt;|gt;|quot;|apos;)/, 'אין ישות קטועה');
+});
+
 test('build — תווי בקרה מסוננים מהתאים', () => {
   assert.deepEqual(S.parseXlsx(X.build([['a\u0001b']])), [['ab']]);
 });

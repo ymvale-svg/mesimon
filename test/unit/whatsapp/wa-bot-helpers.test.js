@@ -34,6 +34,29 @@ test('splitMessage — פסקה ארוכה מתפצלת בין שורות', () =
   assert.deepEqual(parts.join('\n').split('\n'), lines);
 });
 
+test('splitMessage — שורה אחת ארוכה מהמקסימום: מתפצלת, בלי לאבד תווים', () => {
+  const parts = X.splitMessage('a'.repeat(5000));
+  assert.equal(parts.length, 2);
+  for (const p of parts) assert.ok(p.length <= 3500, p.length);
+  assert.equal(parts.join(''), 'a'.repeat(5000));
+});
+
+test('splitMessage — שורה ארוכה עם רווחים: נחתכת ברווח, כל המילים נשמרות', () => {
+  const words = Array.from({ length: 60 }, (_, i) => `מילה${i}`);
+  const line = words.join(' ');
+  const parts = X.splitMessage(`כותרת\n${line}\nסוף`, 100);
+  for (const p of parts) assert.ok(p.length <= 100, p.length);
+  const all = parts.join(' ').split(/\s+/);
+  assert.deepEqual(all, ['כותרת', ...words, 'סוף']);
+  for (const p of parts) for (const w of p.split(/\s+/)) assert.ok(w === 'כותרת' || w === 'סוף' || words.includes(w), `מילה חתוכה: ${w}`);
+});
+
+test('sourceOf — "מאנשי הקשר של google" (עם רווח)', () => {
+  assert.equal(X.sourceOf('any', 'דני מאנשי הקשר של google'), 'google');
+  assert.equal(X.sourceOf('any', 'דני מאנשי הקשר של גוגל'), 'google');
+  assert.equal(X.sourceOf('any', 'דני מאנשי הקשר של Google'), 'google');
+});
+
 test('parseSuggestionCommand — אשר ודחה עם אותיות', () => {
   assert.deepEqual(X.parseSuggestionCommand('אשר א'), { approve: true, letters: ['א'] });
   assert.deepEqual(X.parseSuggestionCommand('תאשרי את ב ו-ג'), { approve: true, letters: ['ב', 'ג'] });
