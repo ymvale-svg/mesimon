@@ -19,6 +19,8 @@ const fs = require('node:fs');
 const { monitorEventLoopDelay } = require('node:perf_hooks');
 
 const D = require('./db');
+const Ports = require('./ports');
+const Mcp = require('./ai/mcp-client');
 
 const SAMPLE_MS = 30 * 1000;
 const WINDOW = 10;                 // 10 דגימות = 5 דקות
@@ -158,11 +160,11 @@ function snapshot() {
 function background() {
   const parts = [];
   try {
-    const mem = require('./ai/mail-memory').load?.();
+    const mem = Ports.get('mailMemory').load?.();
     if (mem?.reading) parts.push(`סריקת זיכרון המייל קוראת ${mem.reading} שרשורים${mem.waiting ? ` (${mem.waiting} ממתינים)` : ''}`);
   } catch { /* המודול לא זמין */ }
   try {
-    const st = require('./ai/mcp-client').status();
+    const st = Mcp.status();
     const live = Object.values(st).filter((x) => x.started).map((x) => x.label);
     if (live.length) parts.push(`מקורות נתונים פעילים: ${live.join(', ')}`);
   } catch { /* המודול לא זמין */ }

@@ -13,6 +13,8 @@
  */
 const D = require('../db');
 const W = require('../workdays');
+const MailActions = require('./mail-actions');
+const WaUi = require('./wa-ui');
 
 const TZ = 'Asia/Jerusalem';
 const BTN = Object.freeze({ move: 'להעביר למחר ✅', keep: 'להשאיר 👍' });
@@ -51,7 +53,7 @@ async function morning(userId) {
   const tasks = myOpenDue(userId);
   const overdue = tasks.filter((t) => t.due_date < startOfToday());
   let mails = [];
-  try { mails = await require('./mail-actions').dueReminders(userId, { limit: 8 }); } catch { /* בלי מייל */ }
+  try { mails = await MailActions.dueReminders(userId, { limit: 8 }); } catch { /* בלי מייל */ }
   const sentWaiting = D.all("SELECT to_name, to_email, asked FROM sent_followups WHERE user_id = ? AND status IN ('pending', 'asked') ORDER BY sent_at LIMIT 5", userId);
   const assigned = waitingTasks(userId);
   const reminders = D.all("SELECT text, due_at FROM reminders WHERE user_id = ? AND status = 'active' AND due_at < ? ORDER BY due_at", userId, endOfToday());
@@ -98,7 +100,6 @@ function evening(userId) {
 /** "להעביר למחר" — תאריך היעד של המשימות הפתוחות ליום העבודה הבא (17:00), עם רישום ביומן המשימה */
 function answer(userId, d, text) {
   const t = String(text ?? '').trim();
-  const WaUi = require('./wa-ui');
   const n = WaUi.normalize(t);
   if (WaUi.sameLabel(t, BTN.keep) || /^(להשאיר|לא|👎)([\s,.!]|$)/.test(n)) return { text: 'בסדר, נשארות כמו שהן 👍', result: 'להשאיר' };
   if (!(WaUi.sameLabel(t, BTN.move) || /^(להעביר|כן|העבר|👍)([\s,.!]|$)/.test(n))) return null;

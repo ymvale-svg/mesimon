@@ -40,6 +40,9 @@ const Claude = require('./claude');
 const WhatsApp = require('../whatsapp');
 const Secrets = require('../secrets');
 const Auth = require('../auth');
+const Agents = require('./agents');
+const Today = require('../today');
+const MailScan = require('./mail-scan');
 const P = require('../permissions');
 const Gmail = require('../gmail');
 const AiTasks = require('../ai-tasks');
@@ -73,6 +76,7 @@ const Reminders = require('./reminders');
 const SentFollowup = require('./sent-followup');
 const DayDigest = require('./day-digest');
 const Briefing = require('./briefing');
+const Meetings = require('../meetings');
 
 const GROUP_SKILL = path.join(__dirname, 'skills', 'whatsapp-group-to-tasks.md');
 const CHAT_SKILL = path.join(__dirname, 'skills', 'whatsapp-chat.md');
@@ -1318,7 +1322,6 @@ const MENU_FREE_HINT = '_אפשר גם לכתוב או להקליט חופשי: 
  * שואלים את אשל, והוא מעביר לסוכן המתאים.
  */
 function agentsText(actor) {
-  const Agents = require('./agents');
   const list = Agents.allowedFor(actor);
   if (!list.length) return 'כרגע אין סוכנים זמינים לך.';
   const byDept = new Map();
@@ -1489,7 +1492,6 @@ function todayMessage(t, now = new Date()) {
 }
 
 async function todayText(actor) {
-  const Today = require('../today'); // בעצלתיים: ‎today.js‎ טוען את סריקת המיילים, שטוענת את הבוט
   const t = await Today.build(actor);
   return { ...todayMessage(t), t };
 }
@@ -1799,7 +1801,6 @@ async function confirmPending(actor, pending, dry) {
       return { reply: `📧 התשובה נשלחה ל${r.toName || r.to}.${test}`, action, status: 'ok', result: `תשובה ל${r.toName || r.to}: ${r.subject}` };
     }
     if (kind === 'mail_task') {
-      const MailScan = require('./mail-scan');
       const lines = [];
       let taskId = null;
       for (const id of pending.suggestionIds ?? []) {
@@ -1887,7 +1888,6 @@ async function confirmPending(actor, pending, dry) {
  * כמו כל פנייה החוצה: שום דבר לא נשלח בלי "כן".
  */
 async function closureDecision(actor, { letter }, state, { dry, out }) {
-  const MailScan = require('./mail-scan'); // בעצלתיים: סריקת המיילים טוענת את הבוט
   const test = dry ? ' (בדיקה — לא בוצע באמת)' : '';
   const id = (state.suggestions ?? [])[LETTERS.indexOf(letter)];
   const sug = id ? D.get('SELECT * FROM ai_suggestions WHERE id = ? AND user_id = ?', id, actor.id) : null;
@@ -1943,7 +1943,6 @@ async function suggestionDecision(actor, { approve, letters }, state, { dry, out
   if (!WaActions.allowed(actor, 'today')) {
     return out('החלטה על הצעות אינה זמינה לך בוואטסאפ.', {}, { action: 'today', status: 'denied', result: 'פעולת Today כבויה' });
   }
-  const MailScan = require('./mail-scan'); // בעצלתיים: סריקת המיילים טוענת את הבוט
   const test = dry ? ' (בדיקה — לא בוצע באמת)' : '';
   const lines = [];
   const done = [];
@@ -2399,7 +2398,7 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
 
   // 📅 "מי משתתף בפגישה?" — מהיומן (גם פגישות שלא נקבעו ממשימון)
   if (WaActions.byKey('meeting_reminder')?.enabled && !(state.awaiting && state.draft)) {
-    const who = await require('../meetings').participantsAnswer(actor.id, t).catch(() => null);
+    const who = await Meetings.participantsAnswer(actor.id, t).catch(() => null);
     if (who) return out(who, {}, { action: 'meeting_reminder', status: 'ok', result: who.split('\n')[0] });
   }
 
@@ -2491,7 +2490,6 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
    * רלוונטי — שורה אחת "לחיבור Gmail".
    */
   const todayReply = async ({ withMenu = true, prefix = '', firstOfDay = false } = {}) => {
-    const Today = require('../today');
     const options = menuOptions(actor);
     let today = null;
     if (WaActions.allowed(actor, 'today')) {
@@ -2601,7 +2599,6 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
 
   const sendTodayEmail = async () => {
     if (dry) return out('📧 ה-Today נשלח אליך במייל (בדיקה — לא נשלח באמת)', {}, { action: 'today', status: 'ok', result: 'Today במייל' });
-    const Today = require('../today');
     const r = await Today.sendDigest(actor.id, { force: true }).catch((err) => ({ sent: false, reason: err.message }));
     if (r.sent) return out('📧 שלחתי לך את ה-Today במייל.', {}, { action: 'today', status: 'ok', result: 'Today במייל' });
     return out(`לא הצלחתי לשלוח את ה-Today במייל: ${r.reason}`, {}, { action: 'today', status: 'error', result: r.reason });
@@ -2843,7 +2840,6 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
       const question = u.request || text;
       if (dry) return out(`(בדיקה) הייתי מחפש במיילים: "${question}"`, {}, { action: 'mail_ask', status: 'ok', result: 'בדיקה' });
       // ✨ שאל — מיילים, סוכן המחלקה והידע הארגוני, באותה תשובה כמו באפליקציה
-      const Agents = require('./agents'); // בעצלתיים: טוען את זיכרון המייל
       try {
         const user = D.get('SELECT id, full_name, email, role FROM users WHERE id = ?', actor.id);
         const r = await Agents.ask(user, actor, question, { channel: 'whatsapp', history: pairsOf(state.history) });
@@ -3719,7 +3715,7 @@ function closeAlerted(userId, ids, status) {
     const sug = D.get("SELECT * FROM ai_suggestions WHERE id = ? AND user_id = ? AND status = 'pending'", id, userId);
     if (!sug) continue;
     if (status === 'rejected') {
-      require('./mail-scan').reject(id, { type: 'user', id: userId });
+      MailScan.reject(id, { type: 'user', id: userId });
       continue;
     }
     const d = parseJson(sug.data, {});

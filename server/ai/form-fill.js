@@ -26,6 +26,8 @@ const Mailer = require('../mailer');
 const K = require('../pdf-kit');
 const Claude = require('./claude');
 const WaUi = require('./wa-ui');
+const DocText = require('../doc-text');
+const Org = require('./org-knowledge');
 
 const DAY = 24 * 60 * 60 * 1000;
 const OFFER_DAYS = 3;
@@ -170,8 +172,7 @@ async function discoverCard(userId, actor = null) {
     }
   }
   try {
-    const Org = require('./org-knowledge');
-    const who = actor ?? Auth().loadActor('user', userId);
+    const who = actor ?? Auth.loadActor('user', userId);
     for (const e of Org.search('ח.פ. מספר חברה כתובת החברה טלפון פרטי בנק חשבון סניף', { limit: 4, actor: who })) snippets.push(`[ידע ארגוני]\n${String(e.text ?? '').slice(0, 1500)}`);
   } catch { /* בלי ידע ארגוני */ }
   const org = String(D.getSetting('org_name', '') || '');
@@ -202,7 +203,7 @@ async function discoverCard(userId, actor = null) {
   D.setSetting('company_card', next);
   return next;
 }
-const Auth = () => require('../auth');
+const Auth = require('../auth');
 
 // ---------------------------------------------------------------------------
 // המילוי
@@ -266,7 +267,7 @@ async function mapValues(row, file, fields, user, { previous = null, change = ''
   if (isImg) blocks.push({ type: 'image', source: { type: 'base64', media_type: /png/i.test(file.mime) ? 'image/png' : 'image/jpeg', data: file.buf.toString('base64') } });
   let docText = '';
   if (!isPdf && !isImg) {
-    try { docText = require('../doc-text').prepare([{ filename: row.filename, mime: file.mime, data: file.buf }], { limit: 1 }).docs[0]?.text ?? ''; } catch { /* בלי טקסט */ }
+    try { docText = DocText.prepare([{ filename: row.filename, mime: file.mime, data: file.buf }], { limit: 1 }).docs[0]?.text ?? ''; } catch { /* בלי טקסט */ }
   }
   const c = card();
   return Claude.json({

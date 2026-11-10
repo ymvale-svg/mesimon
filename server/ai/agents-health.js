@@ -14,6 +14,10 @@ const fs = require('node:fs');
 const path = require('node:path');
 const D = require('../db');
 const Claude = require('./claude');
+const Timeless = require('../timeless');
+const Agents = require('./agents');
+const Calc = require('./calculators');
+const Mcp = require('./mcp-client');
 
 const CFG = path.join(__dirname, '..', 'agents-mcp.json');
 const cfg = () => JSON.parse(fs.readFileSync(CFG, 'utf8'));
@@ -23,7 +27,6 @@ const FAILED = /fetch failed|ECONN|ENOTFOUND|ETIMEDOUT|ProxyError|Max retries|re
 const WARMING = /loading|please wait|נטען/i;
 
 async function checkMcp(key, server) {
-  const Mcp = require('./mcp-client');
   const started = Date.now();
   const r = { key, label: server.label ?? key, ok: false, state: 'error', ms: 0, tools: 0, sample: '', error: '' };
   try {
@@ -71,7 +74,6 @@ const CALC_PROBES = {
 };
 
 function checkCalculators() {
-  const Calc = require('./calculators');
   return Object.entries(CALC_PROBES).map(([name, input]) => {
     try {
       const out = Calc.run(name, input);
@@ -83,7 +85,6 @@ function checkCalculators() {
 }
 
 async function checkTimeless(userId) {
-  const Timeless = require('../timeless');
   const connected = D.get("SELECT COUNT(*) c FROM user_channels WHERE provider = 'timeless' AND api_token <> '' AND state <> 'revoked'")?.c ?? 0;
   const org = Timeless.hasOrgToken();
   if (!Timeless.isConnected(userId)) return { ok: null, org, connectedUsers: connected, error: 'לא מחובר אצלך — אי אפשר לבדוק מכאן. העובדים שחיברו: ' + connected };
@@ -105,7 +106,6 @@ async function run(actor) {
   const calc = checkCalculators();
   const byMcp = new Map(mcp.map((m) => [m.key, m]));
   const byCalc = new Map(calc.map((c) => [c.key, c]));
-  const Agents = require('./agents');
   const agents = Agents.catalog().map((a) => {
     const deps = [
       { name: 'AI', ok: claude.ok },

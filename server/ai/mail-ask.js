@@ -21,6 +21,7 @@ const Gmail = require('../gmail');
 const Mime = require('../mime');
 const Docs = require('../doc-text');
 const Memory = require('./mail-memory');
+const Org = require('./org-knowledge');
 
 const SKILL_PATH = path.join(__dirname, 'skills', 'mail-ask.md');
 const skill = () => fs.readFileSync(SKILL_PATH, 'utf8');
@@ -242,7 +243,6 @@ async function ask(user, question, history = [], { context = '' } = {}) {
   // 📚 הידע הארגוני — "איך עושים אצלנו", מכל העובדים
   let org = [];
   // לעובד — רק ידע מקצועי ובלי מקור; להנהלה — גם ניהולי, עם מקור כטקסט
-  const Org = require('./org-knowledge');
   const viewer = { type: 'user', id: user.id, role: user.role };
   try { org = Org.search(`${plan.memory_query} ${q}`, { limit: 3, actor: viewer }).map((e) => Org.forViewer(e, viewer)); } catch { org = []; }
   org.forEach((e, i) => {

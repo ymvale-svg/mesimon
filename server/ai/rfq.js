@@ -25,6 +25,9 @@ const Phonebook = require('../phonebook');
 const Xlsx = require('../xlsx-write');
 const Claude = require('./claude');
 const WaUi = require('./wa-ui');
+const Priority = require('../priority');
+const MailMemory = require('./mail-memory');
+const PriorityPrefs = require('./priority-prefs');
 
 const MIN = 60000;
 const DAY = 24 * 60 * MIN;
@@ -119,9 +122,8 @@ async function mineFor(userId, it, limit) {
     cand.push({ ...c, email: EMAIL.test(email) ? email : '' });
   };
   try {
-    const Priority = require('../priority');
     if (Priority.isEnabled()) {
-      const company = require('./priority-prefs').lastCompany(userId) || Priority.allowed()[0];
+      const company = PriorityPrefs.lastCompany(userId) || Priority.allowed()[0];
       for (const s of await Priority.suppliersByWords(company, words).catch(() => [])) {
         // מייל חסר בכרטיס — מהאלפון לפי השם
         const pb = s.email ? null : Phonebook.search(s.name, { limit: 1 })[0];
@@ -135,7 +137,7 @@ async function mineFor(userId, it, limit) {
   }
   if (Gmail.boxesOf(userId, 'mail').length) {
     try {
-      for (const p of require('./mail-memory').search(userId, words.join(' '), { limit: 12 }).people ?? []) {
+      for (const p of MailMemory.search(userId, words.join(' '), { limit: 12 }).people ?? []) {
         add({ name: [p.company, p.name].filter(Boolean).join(' · ') || p.email, email: p.email ?? '', phone: p.phoneVerified ? p.phone ?? '' : '', source: '🧠 המיילים', note: p.role ?? '' });
       }
     } catch { /* בלי זיכרון */ }

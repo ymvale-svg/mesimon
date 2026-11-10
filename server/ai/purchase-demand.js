@@ -413,8 +413,8 @@ function pickCode(s, t, codes) {
   return (s.codeOptions ?? codes).find((c) => sameLabel(t, c.btn ?? label(c.des)) || n === c.code || (n.length >= 3 && normalize(c.des).includes(n))) ?? null;
 }
 
-const GR = () => require('./goods-receipt');
-const projectsOf = (company) => GR()._projectsOf(company);
+const GR = require('./goods-receipt');
+const projectsOf = (company) => GR._projectsOf(company);
 
 /**
  * "לאיזה פרויקט?" — בכפתורים: עד 3 פרויקטים בחברה — כולם; יותר — שני הפרויקטים הנפוצים בדרישות האחרונות של החברה,
@@ -516,7 +516,7 @@ async function projectAnswer(s, t, all) {
     if (!p && NO.test(t)) return askProject(s, all, [], null, '📁 לאיזה פרויקט, אם כך?');
   }
   if (!p) {
-    const found = await GR()._findProjects(all, t);
+    const found = await GR._findProjects(all, t);
     if (!found.list.length && found.unrelated) return null;
     if (found.list.length === 1 && found.by === 'code') p = found.list[0];
     else if (found.list.length === 1) {

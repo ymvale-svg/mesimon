@@ -43,7 +43,8 @@ const slotLabel = (iso) => {
 };
 const hourIL = (iso) => Number(new Intl.DateTimeFormat('en-GB', { timeZone: TZ, hour: '2-digit', hourCycle: 'h23' }).format(new Date(iso)));
 const rowById = (id) => { const r = D.get('SELECT * FROM meet_coord WHERE id = ?', id); return r ? { ...r, contact: parseJson(r.contact, {}), slots: parseJson(r.slots, []), prefs: parseJson(r.prefs, {}) } : null; };
-const Meetings = () => require('../meetings');
+const Meetings = require('../meetings');
+const Zoom = require('../zoom');
 
 // ---------------------------------------------------------------------------
 // הבקשה
@@ -84,7 +85,7 @@ async function understand(text) {
 async function pickSlots(actor, prefs, skip = []) {
   const minutes = prefs.minutes || Number(D.getSetting('meeting_default_minutes', 30));
   const internal = (prefs.internalEmails ?? []);
-  const r = await Meetings().suggest(actor, { ownerId: actor.id, emails: internal, minutes, days: 12, max: 40 });
+  const r = await Meetings.suggest(actor, { ownerId: actor.id, emails: internal, minutes, days: 12, max: 40 });
   const nextSunday = (() => { let d = W.todayIL(); for (let i = 0; i < 7; i++) { d = W.addDays(d, 1); if (W.weekdayOf(d) === 0) return d; } return d; })();
   const ok = (s) => {
     if (skip.includes(s.start)) return false;
@@ -111,7 +112,7 @@ async function pickSlots(actor, prefs, skip = []) {
 
 async function stillFree(actor, startIso, minutes) {
   try {
-    const av = await Meetings().availability(actor, { ownerId: actor.id, date: W.ilDateOf(startIso) });
+    const av = await Meetings.availability(actor, { ownerId: actor.id, date: W.ilDateOf(startIso) });
     const s = new Date(startIso).getTime();
     const e = s + minutes * MIN;
     const me = av.rows.find((x) => x.userId === actor.id) ?? av.rows[0];
@@ -356,7 +357,7 @@ async function readReply(row, mail) {
 const locationOf = (actor, p) => {
   if (p.location_type === 'place') return { locationType: 'place', location: p.location || 'משרדי החברה' };
   if (p.location_type === 'phone') return { locationType: 'none', location: '' };
-  const zoomOk = require('../zoom').isEnabled() && (Meetings().canChooseZoomHost(actor) || Meetings().ownZoomUser(actor.id));
+  const zoomOk = Zoom.isEnabled() && (Meetings.canChooseZoomHost(actor) || Meetings.ownZoomUser(actor.id));
   return zoomOk ? { locationType: 'zoom', location: '' } : { locationType: 'none', location: '' };
 };
 
@@ -371,7 +372,7 @@ async function book(actor, id, startIso) {
   const loc = locationOf(actor, p);
   let r;
   try {
-    r = await Meetings().create(actor, {
+    r = await Meetings.create(actor, {
       taskId: row.task_id ?? null, ownerId: actor.id,
       title: p.topic ? `${p.topic} — ${row.contact.name}` : `פגישה עם ${row.contact.name || row.contact.email}`,
       attendees: [{ email: row.contact.email, name: row.contact.name }], start: startIso, minutes: p.minutes,
@@ -380,7 +381,7 @@ async function book(actor, id, startIso) {
   } catch (err) {
     if (loc.locationType !== 'zoom') throw err;
     // Zoom לא הסתדר — אותה פגישה בלי Zoom
-    r = await Meetings().create(actor, {
+    r = await Meetings.create(actor, {
       taskId: row.task_id ?? null, ownerId: actor.id, title: p.topic ? `${p.topic} — ${row.contact.name}` : `פגישה עם ${row.contact.name || row.contact.email}`,
       attendees: [{ email: row.contact.email, name: row.contact.name }], start: startIso, minutes: p.minutes, locationType: 'none', notes: 'נקבעה בתיאום מהבוט של משימון', sendInvites: true
     });

@@ -29,6 +29,7 @@ const Mailer = require('./mailer');
 const Gmail = require('./gmail');
 const Mime = require('./mime');
 const WhatsApp = require('./whatsapp');
+const Ports = require('./ports');
 
 const SKILL_PATH = path.join(__dirname, 'ai', 'skills', 'request-followup.md');
 const TZ = 'Asia/Jerusalem';
@@ -1124,7 +1125,7 @@ async function pollWhatsApp() {
     }
 
     if (answered.length) {
-      try { require('./ai/whatsapp-scan').markAnswered(ownerId, answered); } catch (err) {
+      try { Ports.get('whatsappScan').markAnswered(ownerId, answered); } catch (err) {
         console.error('[משימון] סימון שיחות שנענו נכשל:', err.message);
       }
     }

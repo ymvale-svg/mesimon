@@ -33,6 +33,8 @@ const D = require('../db');
 const W = require('../workdays');
 const Claude = require('./claude');
 const Match = require('./task-match');
+const Gmail = require('../gmail');
+const Mime = require('../mime');
 
 const SKILL = path.join(__dirname, 'skills', 'task-sync.md');
 const MAX_CANDIDATES = 6;
@@ -353,8 +355,6 @@ function sourceLine(sug, d, link) {
 async function mailFiles(sug) {
   if (!sug.gmail_id) return [];
   try {
-    const Gmail = require('../gmail');
-    const Mime = require('../mime');
     const mail = Mime.parse((await Gmail.raw(Gmail.handle(sug.user_id, sug.box ?? 0), sug.gmail_id)).raw);
     return mail.attachments.map((a) => ({ filename: a.filename, mime: a.mime, data: a.data.toString('base64') }));
   } catch (err) {
@@ -388,8 +388,8 @@ async function approve(sug, actor, edits = {}) {
   // ההערה — ההודעה עצמה (או מה שהמשתמש ערך), עם המקור והקישור
   let link = null;
   if (d.channel === 'mail' && sug.gmail_id) {
-    const conn = require('../gmail').connectionOf(sug.user_id);
-    if (conn?.email) link = require('../gmail').webLink(conn.email, sug.gmail_id);
+    const conn = Gmail.connectionOf(sug.user_id);
+    if (conn?.email) link = Gmail.webLink(conn.email, sug.gmail_id);
   }
   const text = String(edits.comment ?? d.comment ?? '').trim();
   const body = [text, '', sourceLine(sug, d, link)].join('\n').trim();

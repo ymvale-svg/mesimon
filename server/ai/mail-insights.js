@@ -28,6 +28,8 @@ const Mailer = require('../mailer');
 const AiTasks = require('../ai-tasks');
 const Range = require('./insight-window');
 const ReplyMemory = require('./reply-memory');
+const Memory = require('./mail-memory');
+const Org = require('./org-knowledge');
 
 const SKILL = path.join(__dirname, 'skills', 'email-insights.md');
 const TZ = 'Asia/Jerusalem';
@@ -380,8 +382,6 @@ async function suggestReply(userId, gmailId, { box = null } = {}) {
   const { msg, mail } = await readMail(userId, gmailId, box);
   const from = String(mail.from.address ?? '').toLowerCase();
   // בעצלתיים — הזיכרון והידע הארגוני טוענים את מנועי הרקע שלהם
-  const Memory = require('./mail-memory');
-  const Org = require('./org-knowledge');
   const topic = `${mail.subject} ${String(mail.newText || mail.text).slice(0, 300)}`;
 
   const person = Memory.personByEmail(userId, from);

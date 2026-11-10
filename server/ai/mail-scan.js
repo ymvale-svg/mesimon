@@ -35,6 +35,13 @@ const Memory = require('./mail-memory');
 const Closure = require('./task-closure');
 const MailActions = require('./mail-actions');
 const FormFill = require('./form-fill');
+const Ports = require('../ports');
+const Classification = require('./classification');
+const MailInsights = require('./mail-insights');
+const MeetingCoord = require('./meeting-coord');
+const OrgKnowledge = require('./org-knowledge');
+const Rfq = require('./rfq');
+const WhatsappScan = require('./whatsapp-scan');
 
 const SKILL_PATH = path.join(__dirname, 'skills', 'email-to-tasks.md');
 const TZ = 'Asia/Jerusalem';
@@ -364,9 +371,9 @@ async function processMessage(user, conn, gmailId) {
   if (!mail.from.address || mine.has(mail.from.address)) return record(user.id, gmailId, headerId, 'skipped', meta.box), 'skipped';
   if (await routeReply(user, mail)) return record(user.id, gmailId, headerId, 'reply', meta.box), 'reply';
   // תשובה של ספק לפנייה להצעת מחיר — נקראת שם (‎rfq.js‎), לא הצעת משימה
-  if (require('./rfq').ownsReply(mail)) return record(user.id, gmailId, headerId, 'reply', meta.box), 'reply';
+  if (Rfq.ownsReply(mail)) return record(user.id, gmailId, headerId, 'reply', meta.box), 'reply';
   // תשובה למייל עם מועדים לפגישה — נקראת שם (‎meeting-coord.js‎)
-  if (require('./meeting-coord').ownsReply(mail)) return record(user.id, gmailId, headerId, 'reply', meta.box), 'reply';
+  if (MeetingCoord.ownsReply(mail)) return record(user.id, gmailId, headerId, 'reply', meta.box), 'reply';
   if (senderMode(user.id, mail.from.address) === 'ignore') return record(user.id, gmailId, headerId, 'skipped', meta.box), 'skipped';
 
   /*
@@ -388,7 +395,7 @@ async function processMessage(user, conn, gmailId) {
   if (existing) {
     if (!involvedIn(user.id, existing)) {
       // 🔒 משימה מסווגת שהמשתמש לא רשאי לראות — "כבר קיימת" בלי הכותרת
-      const readable = require('./classification').mayReadTask({ type: 'user', id: user.id }, D.get('SELECT * FROM tasks WHERE id = ?', existing.id));
+      const readable = Classification.mayReadTask({ type: 'user', id: user.id }, D.get('SELECT * FROM tasks WHERE id = ?', existing.id));
       insertSuggestion(user, meta, 'duplicate', { ownerName: existing.owner_name, taskTitle: readable ? existing.title : '🔒 משימה מסווגת' }, { taskId: existing.id });
     }
     record(user.id, gmailId, headerId, 'duplicate', meta.box);
@@ -440,7 +447,7 @@ async function processMessage(user, conn, gmailId) {
    */
   if (result.replyExpected && D.getSetting('mail_reply_suggest', true) && Gmail.canSend(Gmail.handle(user.id, meta.box))) {
     try {
-      const r = await require('./mail-insights').suggestReply(user.id, gmailId, { box: meta.box });
+      const r = await MailInsights.suggestReply(user.id, gmailId, { box: meta.box });
       // כל השדות — גם השרשור והכותרות, כדי שהבוט יוכל לשלוח את התשובה ב"כן" (‎mailAlerts‎ ב-‎wa-bot.js‎)
       if (r.body) result.tasks[0].reply = { ...r, gmailId, box: meta.box };
     } catch (err) {
@@ -605,7 +612,7 @@ async function morningRun() {
     // זיכרון העבודה: מה שנוסף מאתמול, ומסמכים שתוקפם מתקרב
     Memory.morning()
       // 📚 הידע הארגוני — אחרי שהזיכרון התעדכן: זיקוק של מה שנוסף, ופעם בשבוע איחוד
-      .then(() => require('./org-knowledge').daily())
+      .then(() => OrgKnowledge.daily())
       .catch((err) => console.error('[משימון] עדכון הבוקר של זיכרון המייל והידע הארגוני נכשל:', err.message));
 
     if (!D.getSetting('ai_mail_scan_enabled', true) || !Claude.isEnabled()) return;
@@ -641,7 +648,7 @@ async function liveRun() {
   liveAt = Date.now();
   liveBusy = true;
   try {
-    for (const userId of require('./wa-bot').mailAlertUsers()) {
+    for (const userId of Ports.get('waBot').mailAlertUsers()) {
       for (const who of Gmail.boxesOf(userId, 'mail')) {
         const conn = Gmail.connectionOf(who);
         if (!conn || conn.state !== 'ok' || conn.scan_running) continue;
@@ -709,7 +716,6 @@ async function dropAnswered() {
        * 🧠 עניתי בעצמי מ-Gmail / Outlook — לומדים מהתשובה מה אני נוהג לענות
        * (‎reply-memory.js‎). מה שיצא ממשימון כבר נלמד בשליחה.
        */
-      const MailInsights = require('./mail-insights');
       if (changed && answered && !MailInsights.alreadyLearned(answered.id)) {
         const sent = Mime.parse((await Gmail.raw(who, answered.id)).raw);
         MailInsights.learnFromReply(s.user_id, { gmailId: s.gmail_id, box: s.box ?? 0, body: sent.newText || sent.text, source: 'gmail' });
@@ -850,7 +856,7 @@ function createFromSuggestion(sug, actor, edits = {}) {
     D.notify({ targetType: 'user', targetId: data.requester.id, kind: 'assignment', title: `${actor.name} פתח/ה משימה ממה שביקשת בקבוצה`, body: data.title, taskId });
   }
   // ✅ על ההודעה בקבוצה. נטען כאן ולא בראש הקובץ: הבוט אינו חלק מסריקת המייל
-  if (fromWhatsApp) require('./wa-bot').markDone(String(sug.header_id).replace(/^wa:/, ''), data.chatId, { taskId, title: data.title, by: actor, groupName: data.groupName });
+  if (fromWhatsApp) Ports.get('waBot').markDone(String(sug.header_id).replace(/^wa:/, ''), data.chatId, { taskId, title: data.title, by: actor, groupName: data.groupName });
 
   // מי שרק צריך לדעת — תיוג בהערה פנימית, ומשם ההתראה הרגילה של תיוג
   const watchers = people.filter((p) => p.role === 'watcher').map((p) => p.userId).filter((id) => id !== actor.id);
@@ -919,7 +925,7 @@ function reject(id, actor, { ignoreSender = false } = {}) {
   if (!ignoreSender) return;
   const data = parseJson(sug.data, {});
   // מהוואטסאפ האישי: "לא לסרוק את X מעכשיו" — המספר עובר ל"לא לסרוק"
-  if (data.personal && data.chatPhone) require('./whatsapp-scan').mark(actor.id, data.chatPhone, 'personal');
+  if (data.personal && data.chatPhone) WhatsappScan.mark(actor.id, data.chatPhone, 'personal');
   else setSender(actor.id, sug.from_email, 'ignore');
 }
 
@@ -939,7 +945,7 @@ function restore(id, actor) {
 function ignoreSenderOf(id, actor) {
   const sug = ownSuggestion(id, actor.id);
   const data = parseJson(sug.data, {});
-  if (data.personal && data.chatPhone) require('./whatsapp-scan').mark(actor.id, data.chatPhone, 'personal');
+  if (data.personal && data.chatPhone) WhatsappScan.mark(actor.id, data.chatPhone, 'personal');
   else if (sug.from_email) setSender(actor.id, sug.from_email, 'ignore');
 }
 
@@ -1063,7 +1069,7 @@ function shape(sug, conn) {
     gmailId: sug.gmail_id || null,
     headerId: sug.header_id || null,
     // מהוואטסאפ האישי: כמה הצעות מהשולח כבר נדחו — מהשנייה מציעים "לא לסרוק אותו"
-    senderRejections: data.personal && data.chatPhone ? require('./whatsapp-scan').rejectionsFrom(sug.user_id, data.chatPhone) : 0,
+    senderRejections: data.personal && data.chatPhone ? WhatsappScan.rejectionsFrom(sug.user_id, data.chatPhone) : 0,
     trusted: senderMode(sug.user_id, sug.from_email) === 'trust',
     taskId: sug.task_id,
     data,
@@ -1118,7 +1124,7 @@ function init({ createTask }) {
       // זיכרון המייל רץ ברקע ובקצב משלו — לא מעכב את ריצת הבוקר
       Memory.tick().catch((err) => console.error('[משימון] זיכרון המייל:', err.message));
       // 📚 הידע הארגוני מתעדכן ממה שהזיכרון קרא — כל כמה שעות, לא רק בבוקר
-      require('./org-knowledge').refresh();
+      OrgKnowledge.refresh();
       // 📬 הסריקה השוטפת רצה ברקע — לא מעכבת את ריצת הבוקר
       liveRun().catch((err) => console.error('[משימון] הסריקה השוטפת נכשלה:', err.message));
       return morningRun();

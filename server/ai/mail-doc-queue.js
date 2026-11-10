@@ -19,6 +19,11 @@ const Gmail = require('../gmail');
 const Mime = require('../mime');
 const Docs = require('../doc-text');
 const Claude = require('./claude');
+const Auth = require('../auth');
+const DocWorker = require('../doc-worker');
+const LoadMonitor = require('../load-monitor');
+const Memory = require('./mail-memory');
+const Ports = require('../ports');
 
 const MAX_PER_HOUR = 3;
 const TICK_MS = 60 * 1000;
@@ -34,7 +39,6 @@ const mb = (n) => `${(Number(n) / MB).toFixed(1)}MB`;
 
 /** קבצים גדולים (לא מפוענחים) שמתאימים לחיפוש — לכלי ‎search_my_memory‎ */
 function candidates(userId, query, { limit = 5 } = {}) {
-  const Memory = require('./mail-memory');
   const words = Memory.terms(query).map((w) => Memory.normalize(w.length > 3 ? w.replace(/^[והבלמש]/, '') : w)).filter(Boolean);
   if (!words.length) return [];
   const hits = [];
@@ -115,7 +119,7 @@ function kick() {
   setTimeout(() => tick().catch(() => {}), 100).unref?.();
 }
 
-const pressure = () => { try { return require('../load-monitor').pressure(); } catch { return { busy: false }; } };
+const pressure = () => { try { return LoadMonitor.pressure(); } catch { return { busy: false }; } };
 
 async function tick() {
   if (working || !Claude.isEnabled()) return;
@@ -194,7 +198,7 @@ async function processOne(a) {
     if (!Docs.classify(file, { maxFile: Docs.LAZY_MAX_FILE }).kind) {
       throw new DocQueueError(Docs.classify(file, { maxFile: Docs.LAZY_MAX_FILE }).reason || 'סוג קובץ שאינו נקרא');
     }
-    const prepared = await require('../doc-worker').prepareOff(file);
+    const prepared = await DocWorker.prepareOff(file);
     doc = prepared.docs[0];
     if (!doc) throw new DocQueueError(prepared.skipped[0]?.reason || 'הקובץ לא נקרא');
   } catch (err) {
@@ -218,8 +222,7 @@ async function processOne(a) {
   // השאלות שחיכו — כל אחת מורצת שוב, עם המסמך מצורף
   const attachment = { filename: file.filename, mime: file.mime, data: file.data, block: doc.block };
   await notifyWaiters(a, async (w) => {
-    const Agents = require('./agents');
-    const Auth = require('../auth');
+    const Agents = Ports.get('agents');
     const user = D.get('SELECT id, full_name, email, role FROM users WHERE id = ?', w.user_id);
     const actor = Auth.loadActor('user', w.user_id);
     if (!user || !actor) return null;
@@ -250,7 +253,7 @@ async function notifyWaiters(a, textOf, status) {
 async function deliver(w, text, a) {
   if (w.channel === 'whatsapp') {
     try {
-      if (await require('./wa-bot').deliver(w.user_id, text)) return;
+      if (await Ports.get('waBot').deliver(w.user_id, text)) return;
     } catch (err) {
       console.error('[משימון] שליחת התשובה בוואטסאפ נכשלה:', err.message);
     }

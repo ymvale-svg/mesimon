@@ -41,6 +41,7 @@ const {
   Router, badRequest, forbidden, notFound,
   readJson, sendJson, sendText, parseUrl
 } = require('./http-kit');
+const TaskClosure = require('./ai/task-closure');
 
 const router = new Router();
 
@@ -1795,7 +1796,7 @@ function createTask(actor, body) {
    * מהסריקה). למי לפנות, ועצה מסוכן המחלקה כשיש מתאים. מוצג בכרטיס המשימה.
    */
   if (actor.type === 'user' && body.source !== 'email' && D.getSetting('task_closure_all', true)) {
-    setImmediate(() => require('./ai/task-closure').forTask(id).catch((err) => console.error('[משימון] הצעת סגירה למשימה נכשלה:', err.message)));
+    setImmediate(() => TaskClosure.forTask(id).catch((err) => console.error('[משימון] הצעת סגירה למשימה נכשלה:', err.message)));
   }
 
   if (Array.isArray(body.dupChecked)) {
@@ -4547,7 +4548,7 @@ function workEmailOf(raw, userId) {
   const v = String(raw ?? '').trim().toLowerCase();
   if (!v) return '';
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)) throw badRequest('המייל הארגוני אינו תקין');
-  if (require('./gmail').isPersonalEmail(v)) throw badRequest(`${v} היא כתובת פרטית — המייל הארגוני הוא של הארגון או של המחלקה`);
+  if (Gmail.isPersonalEmail(v)) throw badRequest(`${v} היא כתובת פרטית — המייל הארגוני הוא של הארגון או של המחלקה`);
   if (D.get('SELECT id FROM users WHERE id <> ? AND (lower(work_email) = ? OR lower(email) = ?)', userId ?? 0, v, v)) throw badRequest('המייל הארגוני הזה כבר משויך לעובד אחר');
   return v;
 }

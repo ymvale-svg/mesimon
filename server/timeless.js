@@ -26,6 +26,7 @@
  */
 const D = require('./db');
 const secrets = require('./secrets');
+const OrgKnowledge = require('./ai/org-knowledge');
 
 const BASE_URL = 'https://api.timeless.day/v1';
 const PROVIDER = 'timeless';
@@ -69,7 +70,7 @@ function orgAccess(userId) {
   if (!orgToken()) return null;
   const u = D.get('SELECT * FROM users WHERE id = ?', userId);
   if (!u || u.status !== 'active') return null;
-  const { isManagement } = require('./ai/org-knowledge');
+  const { isManagement } = OrgKnowledge;
   if (isManagement(u)) return { all: true };
   const emails = new Set([u.email, u.work_email].map(normEmail).filter((e) => e.includes('@')));
   return emails.size ? { all: false, emails } : null;

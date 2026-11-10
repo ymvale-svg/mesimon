@@ -24,6 +24,10 @@ const Claude = require('./claude');
 const Gmail = require('../gmail');
 const Mime = require('../mime');
 const Memory = require('./mail-memory');
+const Ports = require('../ports');
+const Auth = require('../auth');
+const P = require('../permissions');
+const OrgKnowledge = require('./org-knowledge');
 
 const SKILL_PATH = path.join(__dirname, 'skills', 'task-closure.md');
 const skill = () => fs.readFileSync(SKILL_PATH, 'utf8');
@@ -326,7 +330,7 @@ function detailsFor(user, row) {
 async function suggest(user, task, { mayVendors = false, actor = null } = {}) {
   if (!D.getSetting('task_closure_enabled', true) || !Claude.isEnabled()) return null;
   const agent = actor
-    ? require('./agents').advise(user, actor, task).catch((err) => { console.error('[משימון] עצת סוכן למשימה נכשלה:', err.message); return null; })
+    ? Ports.get('agents').advise(user, actor, task).catch((err) => { console.error('[משימון] עצת סוכן למשימה נכשלה:', err.message); return null; })
     : Promise.resolve(null);
   const [closure, advice] = await Promise.all([closureOf(user, task, { mayVendors }), agent]);
   if (!advice) return closure;
@@ -356,7 +360,7 @@ async function closureOf(user, task, { mayVendors = false } = {}) {
    * למועמד עם הפרטים מהאלפון; הטקסט עצמו נכנס להקשר.
    */
   let org = [];
-  try { org = require('./org-knowledge').search([task.title, need, ...keywords].join(' '), { limit: 3, actor: { type: 'user', id: user.id, role: user.role } }); } catch { org = []; }
+  try { org = OrgKnowledge.search([task.title, need, ...keywords].join(' '), { limit: 3, actor: { type: 'user', id: user.id, role: user.role } }); } catch { org = []; }
   const fromOrg = [];
   for (const e of org) {
     for (const m of e.text.matchAll(/📒 באלפון: ([^\n·,]+)/g)) {
@@ -451,8 +455,6 @@ async function forTask(taskId) {
   const user = userId ? D.get("SELECT id, full_name, email, role FROM users WHERE id = ? AND status = 'active'", userId) : null;
   if (!user || user.role === 'vendor') return null;
   if (D.get('SELECT 1 FROM ai_requests WHERE task_id = ?', taskId)) return null;
-  const Auth = require('../auth');
-  const P = require('../permissions');
   const actor = Auth.loadActor('user', user.id);
   const c = await suggest(user, { title: t.title, summary: String(t.description ?? '').slice(0, 1500), keywords: [] }, { mayVendors: Boolean(actor && P.may(actor, 'view_vendor_boards')), actor });
   if (!c) return null;

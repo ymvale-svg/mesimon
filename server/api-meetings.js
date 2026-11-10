@@ -17,6 +17,7 @@ const Gmail = require('./gmail');
 const WaBot = require('./ai/wa-bot');
 const WaActions = require('./ai/wa-actions');
 const { HttpError, badRequest, forbidden, notFound, readJson, sendJson, parseUrl } = require('./http-kit');
+const MailActions = require('./ai/mail-actions');
 
 function register(router, h) {
   const { getTaskOr404, assertVisible, shapeTask, canSeeTask } = h;
@@ -28,13 +29,13 @@ function register(router, h) {
     sendButtons: async (chatId, text, buttons) => {
       await WaBot.sendButtons(chatId, text, buttons);
       // התראה לפני פגישה — תזכורות מהמייל לא באות מיד אחריה (‎mail-actions.mayRemindNow‎)
-      require('./ai/mail-actions').noteProactive(WaBot.userByPhone(String(chatId).replace(/@c\.us$/, ''))?.id);
+      MailActions.noteProactive(WaBot.userByPhone(String(chatId).replace(/@c\.us$/, ''))?.id);
       WaBot.log({ channel: 'summary', chatId, action: 'meeting_reminder', status: 'ok', result: `${text.split('\n')[0]} (מהיומן)` });
     },
     sendWhatsApp: async (chatId, text) => {
       await WaBot.sendText(chatId, text);
       // התראה לפני פגישה — תזכורות מהמייל לא באות מיד אחריה (‎mail-actions.mayRemindNow‎)
-      require('./ai/mail-actions').noteProactive(WaBot.userByPhone(String(chatId).replace(/@c\.us$/, ''))?.id);
+      MailActions.noteProactive(WaBot.userByPhone(String(chatId).replace(/@c\.us$/, ''))?.id);
       WaBot.log({ channel: 'summary', chatId, action: 'meeting_reminder', status: 'ok', result: text.split('\n')[0] });
     }
   });

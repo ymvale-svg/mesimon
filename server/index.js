@@ -32,10 +32,16 @@ const GContacts = require('./google-contacts');
 const Meetings = require('./meetings');
 const Dupes = require('./ai/task-dupes');
 const { HttpError, sendJson, serveStatic, parseUrl, unauthorized } = require('./http-kit');
+const MailDocQueue = require('./ai/mail-doc-queue');
+const PoNotify = require('./ai/po-notify');
+const TimelessMedia = require('./timeless-media');
 
 const PORT = Number(process.env.PORT ?? 3000);
 const HOST = process.env.HOST ?? '0.0.0.0';
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
+
+// חיבור השקעים בין המודולים — לפני כל עבודה (‎wiring.js‎)
+require('./wiring');
 
 D.bootstrap();
 Auth.purgeExpired();
@@ -114,14 +120,14 @@ server.listen(PORT, HOST, () => {
     GContacts.start();
     Meetings.start();
     // 🎥 פגישה מקוונת שהתחילה ולא מוקלטת ב-Timeless — הודעה למזכירות
-    require('./timeless-media').start();
+    TimelessMedia.start();
     WaBot.start();
     // משימות כפולות במחלקה — סריקה פעם ביום (פרק 11ב)
     Dupes.start();
     // 📎 פענוח קבצים גדולים מהמייל לפי בקשה — קובץ אחד בכל פעם
-    require('./ai/mail-doc-queue').start();
+    MailDocQueue.start();
     // 🧾 הזמנת רכש שהפכה לסופית בפריוריטי — למנהל הפרויקט וליוזם הדרישה (וואטסאפ ומייל)
-    require('./ai/po-notify').start();
+    PoNotify.start();
   }
   // התראה למנהלים כשתקרת המעבד מאטה את הסוכנים
   LoadMonitor.start();
@@ -168,7 +174,7 @@ const shutdown = () => {
   Today.stop();
   GContacts.stop();
   Meetings.stop();
-  require('./ai/mail-doc-queue').stop();
+  MailDocQueue.stop();
   server.close(() => process.exit(0));
   setTimeout(() => process.exit(0), 2000).unref();
 };

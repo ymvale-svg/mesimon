@@ -62,6 +62,7 @@ const OPEN_SQL = `SELECT t.* FROM tasks t
  * תוכן רגיש למשימה רגילה.
  */
 const Cls = require('./classification');
+const W = require('../workdays');
 const sensitive = (t) => {
   const c = Cls.taskClass(t);
   return !!c && Cls.effectiveLevel(c.topic, c.sens) >= 2;
@@ -500,7 +501,6 @@ let scanning = false;
 /** פעם ביום, מהשעה שהוגדרה (ברירת מחדל 06:30): כל מחלקה, זוגות חדשים בלבד */
 async function dailyScan({ force = false } = {}) {
   if (scanning) return null;
-  const W = require('../workdays');
   const now = W.ilParts();
   const m = /^(\d{1,2}):(\d{2})$/.exec(String(D.getSetting('dup_scan_time', '06:30')));
   const at = m ? Number(m[1]) * 60 + Number(m[2]) : 390;

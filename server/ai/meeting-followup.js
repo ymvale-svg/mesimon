@@ -29,6 +29,7 @@ const Zoom = require('../zoom');
 const Timeless = require('../timeless');
 const Claude = require('./claude');
 const WaUi = require('./wa-ui');
+const Meetings = require('../meetings');
 
 const MIN = 60000;
 const HOUR = 60 * MIN;
@@ -104,7 +105,7 @@ async function zoomCandidates(now) {
     out.push({
       source: 'zoom', ref: String(m.id), title: m.title, start: m.start_at, end: m.end_at,
       data: { meetingId: m.id, taskId: m.task_id, uuid: rec.uuid },
-      users: require('../meetings').recipientsOf(m).map((u) => u.id)
+      users: Meetings.recipientsOf(m).map((u) => u.id)
     });
   }
   return out;

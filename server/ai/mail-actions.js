@@ -23,6 +23,9 @@ const W = require('../workdays');
 const Gmail = require('../gmail');
 const Mime = require('../mime');
 const WaUi = require('./wa-ui');
+const Calendar = require('../calendar');
+const FormFill = require('./form-fill');
+const SentFollowup = require('./sent-followup');
 
 const DAY = 24 * 60 * 60 * 1000;
 const HOUR = 60 * 60 * 1000;
@@ -184,7 +187,6 @@ async function mayRemindNow(userId) {
   if (st.lastAt && Date.now() - new Date(st.lastAt).getTime() < pace.gapMin * 60000) return false;
   // באמצע פגישה ביומן — מחכים שתסתיים
   try {
-    const Calendar = require('../calendar');
     if (Calendar.isConnected(userId)) {
       const day = await Calendar.eventsForDay(userId);
       // בפגישה, או שהיא מתחילה בעוד פחות מ-15 דקות
@@ -359,8 +361,8 @@ function goodsQuestion(row, { after = false } = {}) {
 async function nextQuestion(userId, allow) {
   // קודם שאלות על פעולה (טופס, חשבונית) — התזכורות בעדיפות האחרונה, "לא על חשבון שום דבר אחר"
   if (allow.form) {
-    const row = require('./form-fill').nextForm(userId);
-    if (row) return require('./form-fill').question(row);
+    const row = FormFill.nextForm(userId);
+    if (row) return FormFill.question(row);
   }
   if (allow.goods) {
     const row = nextGoods(userId);
@@ -378,7 +380,7 @@ async function nextQuestion(userId, allow) {
     }
   }
   if (paced && allow.followup) {
-    const q = await require('./sent-followup').next(userId);
+    const q = await SentFollowup.next(userId);
     if (q) { paceTick(userId); return q; }
   }
   return null;

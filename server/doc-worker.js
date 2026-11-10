@@ -7,9 +7,9 @@
  * מקבל ‎{ att: {filename, mime, data} }‎ ומחזיר את התוצאה של ‎Docs.prepare‎.
  */
 const { parentPort, workerData, isMainThread, Worker } = require('node:worker_threads');
+const Docs = require('./doc-text');
 
 if (!isMainThread && parentPort && workerData?.att) {
-  const Docs = require('./doc-text');
   const { att } = workerData;
   try {
     const out = Docs.prepare([{ filename: att.filename, mime: att.mime, data: Buffer.from(att.data) }], { limit: 1 });

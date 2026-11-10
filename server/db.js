@@ -8,6 +8,7 @@ const { DatabaseSync } = require('node:sqlite');
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
+const Ports = require('./ports');
 
 const ROOT = path.join(__dirname, '..');
 
@@ -1575,8 +1576,9 @@ function notify({ targetType, targetId, kind, title, body = '', taskId = null, p
   if (taskId) {
     const task = get('SELECT * FROM tasks WHERE id = ?', taskId);
     if (task && (Number(task.sens) > 0 || task.project_id)) {
-      const Cls = require('./ai/classification');
-      if (Cls.taskClass(task) && !Cls.mayReadTask({ type: targetType, id: targetId }, task)) {
+      // הסיווג מגיע דרך שקע (‎ports.js‎) — הוא תלוי במסד, והמסד לא מייבא אותו. לא חובר — נוהגים כבמסווגת
+      const Cls = Ports.has('classification') ? Ports.get('classification') : null;
+      if (!Cls || (Cls.taskClass(task) && !Cls.mayReadTask({ type: targetType, id: targetId }, task))) {
         title = '🔒 עדכון במשימה מסווגת';
         body = '';
         push = null;

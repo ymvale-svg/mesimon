@@ -59,10 +59,15 @@ function analyzeFile(file) {
   let depth = 0; // עומק סוגריים מסולסלים — 0 = רמת הקובץ
   lines.forEach((line, i) => {
     const re = /require\(\s*['"](\.{1,2}\/[^'"]+)['"]\s*\)/g;
+    // שורה שנפתחת ב-} (סוף של ‎const { a, b } = require(…)‎ על כמה שורות) — העומק שלה הוא של תחילת ההצהרה
+    const lineDepth = /^\s*\}/.test(line) ? Math.max(0, depth - 1) : depth;
     let m;
     while ((m = re.exec(line))) {
       const target = resolve(file, m[1]);
-      if (target) imports.push({ target, line: i + 1, top: depth === 0 });
+      if (!target || rel(target).startsWith('vendor/')) continue; // ספריות צד שלישי — טעינה עצלה מותרת
+      // ‎() => require(…)‎ — טעינה עצלה, גם כשהיא בראש הקובץ
+      const lazy = /=>\s*$/.test(line.slice(0, m.index));
+      imports.push({ target, line: i + 1, top: lineDepth === 0 && !lazy });
     }
     if (/(^|[^.\w])fetch\(|\bhttps?\.(request|get)\(/.test(line)) network.push(i + 1);
     for (const ch of line.replace(/(['"`])(?:\\.|(?!\1).)*\1/g, '""')) {

@@ -14,6 +14,7 @@ const D = require('../db');
 const Calendar = require('../calendar');
 const Auth = require('../auth');
 const Claude = require('./claude');
+const Org = require('./org-knowledge');
 
 const MIN = 60000;
 const TZ = 'Asia/Jerusalem';
@@ -60,7 +61,6 @@ function collect(userId, ev) {
   }
   // הידע הארגוני — לפי שם הפגישה והחברות
   try {
-    const Org = require('./org-knowledge');
     const actor = Auth.loadActor('user', userId);
     const q = [ev.title, ...people.map((p) => D.get('SELECT company FROM mail_people WHERE user_id = ? AND email = ?', userId, p.email.toLowerCase())?.company)].filter(Boolean).join(' ');
     const hits = q ? Org.search(q, { limit: 3, actor }) : [];

@@ -30,6 +30,7 @@ const crypto = require('node:crypto');
 const D = require('./db');
 const Google = require('./google-auth');
 const Secrets = require('./secrets');
+const Mime = require('./mime');
 
 const SCOPE = 'https://www.googleapis.com/auth/gmail.readonly';
 const SEND_SCOPE = 'https://www.googleapis.com/auth/gmail.send';
@@ -676,7 +677,7 @@ async function signatureInfo(userId, { fresh = false } = {}) {
       ?? list.find((x) => x.isPrimary) ?? list.find((x) => x.isDefault);
     const html = String(mine?.signature ?? '').trim();
     // בלי ‎require‎ בראש הקובץ: ‎mime.js‎ עצמאי, וכך אין סיכוי לתלות מעגלית
-    const text = html ? require('./mime').htmlToText(html).trim() : '';
+    const text = html ? Mime.htmlToText(html).trim() : '';
     return done(html && text ? { state: 'ok', html, text } : { state: 'none' });
   } catch (err) {
     console.error(`[משימון] קריאת החתימה מ-Gmail למשתמש ${userId} נכשלה:`, err.message);

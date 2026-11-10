@@ -31,7 +31,7 @@ const MAX_ATTEMPTS = 5;
 const PENDING_DAYS = 3;
 const BACKOFF = 6 * 60 * 60 * 1000;
 
-const WaBot = () => require('./wa-bot');
+const WaBot = require('./wa-bot');
 
 const finalStatuses = () => String(process.env.PO_FINAL_STATUSES || 'אושרה,נשלחה לספק').split(',').map((s) => s.trim()).filter(Boolean);
 const companies = () => {
@@ -65,7 +65,7 @@ function alertAdmins(title, body) {
 }
 
 function log(result, status = 'ok', text = '') {
-  try { WaBot().log({ channel: 'summary', action: 'po_notify', who: 'פריוריטי', text, result, status }); } catch { /* בלי יומן */ }
+  try { WaBot.log({ channel: 'summary', action: 'po_notify', who: 'פריוריטי', text, result, status }); } catch { /* בלי יומן */ }
 }
 
 // ---------------------------------------------------------------------------
@@ -212,7 +212,7 @@ async function prepare(company, ordname, { updated = false } = {}) {
 }
 
 async function sendWa(r, prep) {
-  const ok = await WaBot().sendFilesToUser(r.userId, {
+  const ok = await WaBot.sendFilesToUser(r.userId, {
     files: [{ ...prep.file, caption: '' }], text: waText(prep.po, r, prep.ctx),
     action: 'po_notify', result: `🧾 ${prep.po.ORDNAME} (${roleText(r.roles)})`
   });
@@ -225,7 +225,7 @@ async function notifyOrder(company, ordname, { updated = false } = {}) {
   const done = [];
   const failed = [];
   const waPending = [];
-  const waNow = WaBot().inHours();
+  const waNow = WaBot.inHours();
   for (const r of prep.recipients) {
     const m = mailOf(prep.po, r, prep.ctx);
     if (Mailer.isEnabled() && r.email) {
@@ -290,7 +290,7 @@ async function handle(company, o, row) {
 
 /** וואטסאפ שחיכה לשעות הפעילות */
 async function flushPending() {
-  if (!WaBot().inHours()) return;
+  if (!WaBot.inHours()) return;
   const since = new Date(Date.now() - PENDING_DAYS * 86400000).toISOString();
   for (const row of D.all("SELECT * FROM po_notices WHERE wa_pending <> '[]' LIMIT 10")) {
     if ((row.sent_at ?? row.created_at) < since) { D.run("UPDATE po_notices SET wa_pending = '[]' WHERE company = ? AND ordname = ?", row.company, row.ordname); continue; }

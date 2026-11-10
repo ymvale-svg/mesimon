@@ -30,6 +30,11 @@ const MailInsights = require('./ai/mail-insights');
 const Mime = require('./mime');
 const TaskOutreach = require('./ai/task-outreach');
 const { badRequest, forbidden, notFound, readJson, sendJson, parseUrl } = require('./http-kit');
+const AgentsHealth = require('./ai/agents-health');
+const McpClient = require('./ai/mcp-client');
+const ReplyMemory = require('./ai/reply-memory');
+const TaskClosure = require('./ai/task-closure');
+const LoadMonitor = require('./load-monitor');
 
 function register(router, h) {
   const { getTaskOr404, assertVisible, mayOnTask, shapeTask, actorRef, saveAttachment, createTask, assertMayAssignTo, assertMayUseProject, listProjectsFor, newTaskProjects, assignableUserIds, assignBlockReason, botTaskOps, taskTemplates } = h;
@@ -763,11 +768,11 @@ function register(router, h) {
   // כל עובד — את שלו בלבד (לא רק מנהל המערכת, כמו זיכרון העבודה)
   router.get('/api/me/reply-rules', async (req, res, ctx) => {
     const actor = userOnly(ctx);
-    sendJson(res, 200, { rules: require('./ai/reply-memory').list(actor.id) });
+    sendJson(res, 200, { rules: ReplyMemory.list(actor.id) });
   });
   router.delete('/api/me/reply-rules/:id', async (req, res, ctx) => {
     const actor = userOnly(ctx);
-    sendJson(res, 200, { ok: require('./ai/reply-memory').remove(actor.id, ctx.params.id) });
+    sendJson(res, 200, { ok: ReplyMemory.remove(actor.id, ctx.params.id) });
   });
   router.get('/api/me/mail-memory', memoryCall((user) => Memory.status(user)));
   router.post('/api/me/mail-memory/start', memoryCall((user, b) => Memory.start(user, {
@@ -805,7 +810,7 @@ function register(router, h) {
       context = `המשימה: ${task.title}${task.description ? `\n${task.description}` : ''}`;
     }
     try {
-      sendJson(res, 200, await require('./load-monitor').track(() => MailAsk.ask(meUser(actor), b.question, Array.isArray(b.history) ? b.history : [], { context })));
+      sendJson(res, 200, await LoadMonitor.track(() => MailAsk.ask(meUser(actor), b.question, Array.isArray(b.history) ? b.history : [], { context })));
     } catch (err) {
       throw userError(err);
     }
@@ -956,18 +961,18 @@ function register(router, h) {
   router.get('/api/admin/agents', async (req, res, ctx) => {
     aiAdmin(ctx);
     let mcp = {};
-    try { mcp = require('./ai/mcp-client').status(); } catch { mcp = {}; }
+    try { mcp = McpClient.status(); } catch { mcp = {}; }
     sendJson(res, 200, { agents: Agents.catalog(), mcp, log: Agents.recentLog({ limit: 100 }), dailyLimit: Number(D.getSetting('agents_daily_limit', 40)) });
   });
   /** 🩺 בדיקת סוכנים — מהשרת החי: כל מקור נתונים בקריאה אמיתית, ה-AI, המחשבונים ו-Timeless */
   router.get('/api/admin/agents/health', async (req, res, ctx) => {
     aiAdmin(ctx);
-    sendJson(res, 200, { last: require('./ai/agents-health').last() });
+    sendJson(res, 200, { last: AgentsHealth.last() });
   });
   router.post('/api/admin/agents/health', async (req, res, ctx) => {
     const actor = aiAdmin(ctx);
     try {
-      sendJson(res, 200, { last: await require('./ai/agents-health').run(meUser(actor)) });
+      sendJson(res, 200, { last: await AgentsHealth.run(meUser(actor)) });
     } catch (err) {
       throw userError(err);
     }
@@ -1081,7 +1086,7 @@ function register(router, h) {
   // 💡 על משימה שלא נולדה ממייל — "✕" מוריד את ההצעה
   router.post('/api/tasks/:taskId/closure-dismiss', async (req, res, ctx) => {
     const actor = userOnly(ctx);
-    try { require('./ai/task-closure').dismissTask(Number(ctx.params.taskId), actor.id); } catch (err) { throw badRequest(err.message); }
+    try { TaskClosure.dismissTask(Number(ctx.params.taskId), actor.id); } catch (err) { throw badRequest(err.message); }
     sendJson(res, 200, { ok: true });
   });
 

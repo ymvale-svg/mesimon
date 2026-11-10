@@ -42,7 +42,12 @@ const Calc = () => optional('./calculators');
 const Mcp = () => optional('./mcp-client');
 const Timeless = () => optional('../timeless');
 const Org = () => optional('./org-knowledge');
-const DocQueue = () => require('./mail-doc-queue');
+const DocQueue = require('./mail-doc-queue');
+const LoadMonitor = require('../load-monitor');
+const P = require('../priority');
+const MailAsk = require('./mail-ask');
+const PriorityPrefs = require('./priority-prefs');
+const WaActions = require('./wa-actions');
 
 // ---------------------------------------------------------------------------
 // הקטלוג
@@ -206,7 +211,6 @@ const PRIORITY_TOOLS = [
 
 /** מי רואה נתוני רכש מפריוריטי: מנהלי מערכת, ומי שמורשה לקבלת סחורה / דרישת רכש בבוט (ובפיילוט — רק מנהלי מערכת) */
 function priorityAllowed(actor) {
-  const WaActions = require('./wa-actions');
   if (D.getSetting('bot_pilot', false) && !WaActions.inPilot(actor)) return false;
   return isAdmin(actor) || WaActions.allowed(actor, 'goods_receipt') || WaActions.allowed(actor, 'purchase_demand');
 }
@@ -291,7 +295,7 @@ async function toolsFor(def, key, user, actor, state) {
       if (r.events.length || r.people.length || r.documents.length) state.sources.add('🧠 זיכרון המייל שלך');
       // 📎 קבצים גדולים שלא פוענחו בסריקה — הסוכן רואה אותם, ומבקש פענוח כשצריך
       if (!state.followUp) {
-        const large = DocQueue().candidates(user.id, String(i.query ?? ''));
+        const large = DocQueue.candidates(user.id, String(i.query ?? ''));
         if (large.length) {
           r.largeFiles = large;
           r.largeFilesNote = 'קבצים גדולים שעוד לא נקראו — רק השם והפרטים ידועים. אם התוכן של אחד מהם נחוץ לתשובה: request_document_read.';
@@ -304,7 +308,7 @@ async function toolsFor(def, key, user, actor, state) {
       handlers.set('request_document_read', (i) => {
         if (state.docRequests.length >= 2) return { error: 'כבר התבקשו 2 קבצים לשאלה הזו' };
         try {
-          const r = DocQueue().request(user, i.file_id, { question: state.question, channel: state.channel, history: state.history, context: state.context });
+          const r = DocQueue.request(user, i.file_id, { question: state.question, channel: state.channel, history: state.history, context: state.context });
           state.docRequests.push({ fileId: Number(i.file_id), filename: r.filename, size: r.size, ahead: r.ahead });
           return { queued: true, note: 'נכנס לתור. אל תכתוב לשואל שהמסמך בפענוח — המערכת מוסיפה את זה לתשובה. ענה עכשיו על מה שאפשר בלי המסמך.' };
         } catch (err) {
@@ -315,8 +319,7 @@ async function toolsFor(def, key, user, actor, state) {
   }
   // 🗂 נתוני רכש מפריוריטי — קריאה בלבד, רק למי שמורשה לרכש בבוט (‎priorityAllowed‎)
   if (def.priority && priorityAllowed(actor)) {
-    const P = require('../priority');
-    const companyOf = (name) => (name && P.companiesByName(name)[0]?.code) || require('./priority-prefs').lastCompany(user.id) || P.COMPANIES[0].code;
+    const companyOf = (name) => (name && P.companiesByName(name)[0]?.code) || PriorityPrefs.lastCompany(user.id) || P.COMPANIES[0].code;
     const short = (o) => ({
       order: o.ORDNAME, supplier: o.CDES ?? o.SUPNAME, date: String(o.CURDATE ?? '').slice(0, 10), project: o.PROJDES ?? o.PROJDOCNO,
       lines: (o.lines ?? []).slice(0, 15).map((l) => ({ item: l.PDES, ordered: l.TQUANT, still_to_receive: l.TBALANCE, unit: l.TUNITNAME, due: String(l.DUEDATE ?? '').slice(0, 10) || null }))
@@ -586,7 +589,7 @@ function logAsk(userId, row) {
  */
 async function ask(user, actor, question, opts = {}) {
   // ניטור עומס: כמה שאלות רצות במקביל וכמה זמן כל אחת (‎load-monitor.js‎)
-  return require('../load-monitor').track(() => askInner(user, actor, question, opts));
+  return LoadMonitor.track(() => askInner(user, actor, question, opts));
 }
 
 async function askInner(user, actor, question, opts = {}) {
@@ -611,7 +614,6 @@ async function askInner(user, actor, question, opts = {}) {
     console.error('[משימון] ניתוב השאלה נכשל:', err.message);
   }
 
-  const MailAsk = require('./mail-ask');
   const mailOn = routed.mail && MailAsk.available(user.id);
   const keys = routed.agents?.length ? routed.agents : routed.agent ? [routed.agent] : [];
   /*
@@ -743,7 +745,7 @@ function asText(r) {
   if (r.clarify && !r.agent?.text && !r.mail?.answer) return r.clarify;
   if (r.mail?.answer && !r.merged) {
     parts.push(`📧 *מהמיילים:* ${r.mail.answer}`);
-    const src = r.mail.sources?.slice(0, 2).map(require('./mail-ask').sourceLine).filter(Boolean);
+    const src = r.mail.sources?.slice(0, 2).map(MailAsk.sourceLine).filter(Boolean);
     if (src?.length) parts.push(src.join('\n'));
   }
   if (r.agent?.text) {
@@ -751,7 +753,7 @@ function asText(r) {
     if (r.contributors?.length) parts.push(`ענו יחד: ${r.contributors.map((c) => `${c.icon ?? '🤖'} ${c.title}`).join(' · ')}`);
     else if (r.agent.sources?.length) parts.push(`מקורות: ${r.agent.sources.join(' · ')}`);
     if (r.merged && r.mail?.sources?.length) {
-      const src = r.mail.sources.slice(0, 2).map(require('./mail-ask').sourceLine).filter(Boolean);
+      const src = r.mail.sources.slice(0, 2).map(MailAsk.sourceLine).filter(Boolean);
       if (src.length) parts.push(src.join('\n'));
     }
     if (r.agent.proposed?.length) parts.push(`📌 הצעתי ${r.agent.proposed.length === 1 ? 'משימה' : `${r.agent.proposed.length} משימות`}: ${r.agent.proposed.map((p) => p.title).join(' · ')} — לאישור ב"היום".`);
