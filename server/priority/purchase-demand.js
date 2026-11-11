@@ -647,13 +647,39 @@ async function submit(user, s) {
   let prdno;
   // הבעלים בפריוריטי — העובד עצמו (לפי המייל / השם במסך המשתמשים); לא נמצא — משתמש ה-API, והשם בדו-שיח
   const owner = await Approvals.priorityLoginFor(user).catch(() => null);
-  try {
-    prdno = await Priority.createDemand(c, { date: s.date, project: s.project?.code, warehouse: s.warehouse, details: detailsOf(user), owner, approvalCode: s.demandCode?.code ?? null });
-  } catch (err) {
-    // מחסן שנדחה — בלי מחסן (פריוריטי ממלא את מחסן הפרויקט)
-    try { prdno = await Priority.createDemand(c, { date: s.date, project: s.project?.code, details: detailsOf(user), approvalCode: s.demandCode?.code ?? null }); s.notes = [...(s.notes ?? []), `הכותרת נדחתה (${err.message}) — נפתחה בלי מחסן${owner ? ' ובלי בעלים' : ''}`]; } catch (err2) {
-      alertAdmins(user, s, 'הדרישה לא נפתחה בפריוריטי', [err2.message]);
-      return reply(s, 'לא הצלחתי לפתוח את הדרישה בפריוריטי. מנהל המערכת קיבל פירוט. הרשימה שמורה — נסו *סיום* שוב בעוד כמה דקות, או *ביטול*.', [BTN.done, BTN.cancel], { status: 'error', result: `פתיחה נכשלה: ${err2.message}` });
+  /*
+   * פריוריטי דוחה כותרת — מנסים שוב בלי מה שנדחה: קודם בלי הבעלים (משתמש פריוריטי לא פעיל — למשל ShazarN, PD26000052),
+   * אחר כך גם בלי המחסן (פריוריטי ממלא את מחסן הפרויקט). מה שירד — בדו-שיח הפנימי; העובד לא צריך לטפל בזה.
+   */
+  const head = { date: s.date, project: s.project?.code, details: detailsOf(user), approvalCode: s.demandCode?.code ?? null };
+  const tries = [
+    { warehouse: s.warehouse, owner },
+    owner ? { warehouse: s.warehouse, owner: null, drop: `בלי בעלים — ${owner} לא התקבל כבעלים בפריוריטי` } : null,
+    { warehouse: null, owner: null, drop: `בלי מחסן${owner ? ' ובלי בעלים' : ''} — פריוריטי ממלא את מחסן הפרויקט` }
+  ].filter(Boolean);
+  const errors = [];
+  for (const t of tries) {
+    try {
+      prdno = await Priority.createDemand(c, { ...head, warehouse: t.warehouse, owner: t.owner });
+      if (t.drop) s.notes = [...(s.notes ?? []), `הכותרת נפתחה ${t.drop} (${errors[errors.length - 1]})`];
+      break;
+    } catch (err) {
+      errors.push(err.message);
+    }
+  }
+  if (!prdno) {
+    alertAdmins(user, s, 'הדרישה לא נפתחה בפריוריטי', errors);
+    return reply(s, 'לא הצלחתי לפתוח את הדרישה בפריוריטי. מנהל המערכת קיבל פירוט. הרשימה שמורה — נסו *סיום* שוב בעוד כמה דקות, או *ביטול*.', [BTN.done, BTN.cancel], { status: 'error', result: `פתיחה נכשלה: ${errors.join(' | ')}` });
+  }
+  // הבעלים נדחה — מנהלי המערכת יודעים (פעם אחת לכל משתמש), כדי להפעיל אותו בפריוריטי
+  if (owner && errors.length && /לא פעיל|inactive/i.test(errors[0])) {
+    const k = 'pd_owner_inactive';
+    const seen = D.getSetting(k, {}) ?? {};
+    if (!seen[owner]) {
+      seen[owner] = Date.now();
+      D.setSetting(k, seen);
+      alertAdmins(user, s, `המשתמש ${owner} לא פעיל בפריוריטי`, [`הדרישה ${prdno} נפתחה בלי בעלים (משתמש ה-API), כי פריוריטי דחה את ${owner}: ${errors[0]}`,
+        'כדי שהדרישות של העובד יירשמו עליו — להפעיל את המשתמש בפריוריטי.']);
     }
   }
   s.prdno = prdno;
