@@ -169,6 +169,15 @@ function register(router, h) {
   const attended = (actor, m) => [m.owner_id, m.created_by, m.via_user_id].includes(actor.id)
     || JSON.parse(m.attendees || '[]').some((a) => String(a.email ?? '').toLowerCase() === String(actor.email ?? '').toLowerCase() && Boolean(actor.email));
 
+  // פגישה של משימון (לעריכה מהיומן) — למי שקשור אליה
+  router.get('/api/meetings/one/:id', async (req, res, ctx) => {
+    const actor = userOnly(ctx);
+    const m = Meetings.meetingById(Number(ctx.params.id));
+    if (!m) throw notFound();
+    if (!involved(actor, m) && !(await Meetings.canWrite(actor, m.owner_id))) throw forbidden();
+    sendJson(res, 200, { meeting: Meetings.shape(m) });
+  });
+
   router.get('/api/meetings/:id/join', async (req, res, ctx) => {
     const actor = userOnly(ctx);
     const m = Meetings.meetingById(Number(ctx.params.id));
@@ -202,6 +211,13 @@ function register(router, h) {
     const actor = userOnly(ctx);
     const b = await readJson(req);
     await run(res, () => Meetings.moveEvent(actor, { ownerId: Number(b.ownerId), eventId: String(b.eventId), start: b.start, end: b.end }));
+  });
+
+  // המוזמנים של אירוע ביומן — גם פגישה שלא נקבעה במשימון (בעל היומן מארגן, ויומן לעריכה)
+  router.post('/api/meetings/attendees', async (req, res, ctx) => {
+    const actor = userOnly(ctx);
+    const b = await readJson(req);
+    await run(res, () => Meetings.setEventAttendees(actor, { ownerId: Number(b.ownerId), eventId: String(b.eventId ?? ''), attendees: b.attendees, sendUpdates: b.sendUpdates !== false }));
   });
 
   router.post('/api/meetings/request-move', async (req, res, ctx) => {
