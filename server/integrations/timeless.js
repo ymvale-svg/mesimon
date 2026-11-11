@@ -140,47 +140,99 @@ function apiError(message, { status = 0, retryable = false, code = '' } = {}) {
 }
 
 // ---------- הגנה על מגבלת הקצב (429) ----------
-// כל הזרימות (מסך ההקלטות, מעקב הבוט אחרי פגישות, בדיקת "לא מוקלטת", כרטיס המשימה)
-// חולקות בדרך כלל את האסימון הארגוני. רשימת הפגישות נשמרת לזמן קצר, ובקשות זהות
-// שרצות במקביל מתאחדות לבקשה אחת — כך סבב על כל העובדים עולה כמעט כמו בקשה אחת.
-const LIST_CACHE_MS = 60000;
-const LIST_CACHE_MAX = 300;
-const RETRY_429_MAX_SEC = 8;   // ניסיון חוזר אחד, רק כשההמתנה קצרה
-const listCache = new Map();   // ‎key‎ ← ‎{ at, body }‎
-const inflight = new Map();    // ‎key‎ ← ‎Promise‎
-const cacheKey = (token, url) => `${crypto.createHash('sha256').update(token).digest('hex').slice(0, 16)}|${url}`;
+// כל הזרימות (מסך ההקלטות, הנגן, מעקב הבוט אחרי פגישות, בדיקת "לא מוקלטת", כרטיס המשימה)
+// חולקות בדרך כלל את האסימון הארגוני, ול-Timeless יש מגבלה של 60 בקשות בדקה לאסימון:
+//  1. תור לכל אסימון — לא יותר מ-RATE_MAX בקשות בדקה; בקשה עודפת מחכה בתור ולא נכשלת.
+//  2. מטמון — רשימות פגישות 3 דקות; תמליל ומסמכים (לא משתנים אחרי שהפגישה עובדה) חצי שעה;
+//     קישור צפייה דקה. בקשות זהות שרצות במקביל מתאחדות לבקשה אחת.
+//  3. Timeless מגביל בכל זאת (429) או נופל (5xx) — מוגשת התשובה האחרונה שנשמרה (עד שעתיים),
+//     ורק כשאין — ניסיון חוזר אחד אחרי ‎Retry-After‎ קצר, ואחר כך הודעה.
+const RATE_MAX = 45;            // מתחת ל-60 — מרווח לסוכנים ולאסימונים אישיים של אותו חשבון
+const RATE_WINDOW_MS = 60000;
+const QUEUE_MAX_WAIT_MS = 25000; // יותר מזה — לא מחזיקים את המסך; מוגש מהמטמון או הודעה
+const CACHE_MAX = 600;
+const STALE_MS = 2 * 60 * 60000;
+const RETRY_429_MAX_SEC = 8;
+const cache = new Map();        // ‎key‎ ← ‎{ at, body, ttl }‎
+const inflight = new Map();     // ‎key‎ ← ‎Promise‎
+const sent = new Map();         // ‎tokenKey‎ ← זמני הבקשות בדקה האחרונה
+const tokenKey = (token) => crypto.createHash('sha256').update(token).digest('hex').slice(0, 16);
+
+/** כמה זמן תשובה נשמרת, לפי סוג הבקשה */
+function ttlOf(path) {
+  if (path === '/meetings') return 3 * 60000;
+  if (/^\/meetings\/[^/]+\/recording$/.test(path)) return 60000;  // כתובת חתומה לזמן קצר
+  if (/^\/meetings\/[^/]+\/transcript$/.test(path) || /^\/documents\//.test(path)) return 30 * 60000;
+  return 0;
+}
+
+/** מחכה לתור הפנוי הבא של האסימון; ‎false‎ — ההמתנה ארוכה מדי */
+async function takeSlot(tk) {
+  for (;;) {
+    const now = Date.now();
+    const list = (sent.get(tk) ?? []).filter((t) => now - t < RATE_WINDOW_MS);
+    if (list.length < RATE_MAX) {
+      list.push(now);
+      sent.set(tk, list);
+      return true;
+    }
+    const wait = list[0] + RATE_WINDOW_MS - now + 50;
+    if (wait > QUEUE_MAX_WAIT_MS) { sent.set(tk, list); return false; }
+    await new Promise((r) => setTimeout(r, wait));
+  }
+}
+
+function remember(key, body, ttl) {
+  cache.set(key, { at: Date.now(), body, ttl });
+  if (cache.size > CACHE_MAX) {
+    const now = Date.now();
+    for (const [k, v] of cache) if (now - v.at > STALE_MS || cache.size > CACHE_MAX) cache.delete(k);
+  }
+}
 
 /**
- * קריאה עם אסימון נתון (לא קורא מהמסד) — משמש גם לאימות לפני שמירה.
- * ‎GET /meetings‎ נשמר דקה ומאוחד; ‎429‎ — ניסיון חוזר אחד אחרי ‎Retry-After‎.
+ * קריאה עם אסימון נתון (לא קורא מהמסד) — משמש גם לאימות לפני שמירה (‎fresh‎: בלי מטמון).
  */
-async function rawCall(token, path, query) {
+async function rawCall(token, path, query, { fresh = false } = {}) {
   const url = new URL(BASE_URL + path);
   for (const [k, v] of Object.entries(query || {})) {
     if (v === undefined || v === null || v === '') continue;
     url.searchParams.set(k, String(v));
   }
-  if (path !== '/meetings') return fetchWithRetry(token, url);
-  const key = cacheKey(token, url.toString());
-  const hit = listCache.get(key);
-  if (hit && Date.now() - hit.at < LIST_CACHE_MS) return hit.body;
+  const tk = tokenKey(token);
+  const key = `${tk}|${url.toString()}`;
+  const ttl = fresh ? 0 : ttlOf(path);
+  const hit = cache.get(key);
+  if (ttl && hit && Date.now() - hit.at < ttl) return hit.body;
   if (inflight.has(key)) return inflight.get(key);
-  const p = fetchWithRetry(token, url).then((body) => {
-    listCache.set(key, { at: Date.now(), body });
-    if (listCache.size > LIST_CACHE_MAX) {
-      for (const [k, v] of listCache) if (Date.now() - v.at >= LIST_CACHE_MS || listCache.size > LIST_CACHE_MAX) listCache.delete(k);
+  const p = (async () => {
+    try {
+      const body = await limited(token, tk, url);
+      if (ttl) remember(key, body, ttl);
+      return body;
+    } catch (err) {
+      // Timeless מגביל או לא זמין — התשובה האחרונה שנשמרה עדיפה על מסך שגיאה
+      if (hit && (err.status === 429 || err.retryable) && Date.now() - hit.at < STALE_MS) {
+        console.warn(`[משימון] Timeless (${url.pathname}): ${err.status || 'שגיאה'} — מוגש מהמטמון`);
+        return hit.body;
+      }
+      throw err;
     }
-    return body;
-  }).finally(() => inflight.delete(key));
+  })().finally(() => inflight.delete(key));
   inflight.set(key, p);
   return p;
 }
 
-async function fetchWithRetry(token, url) {
+async function limited(token, tk, url) {
+  if (!(await takeSlot(tk))) {
+    throw apiError('Timeless עמוס כרגע — נסו שוב בעוד דקה.', { status: 429, retryable: true });
+  }
   try {
     return await fetchOnce(token, url);
   } catch (err) {
     if (err.status !== 429) throw err;
+    // מגביל למרות התור (סוכן או מערכת אחרת על אותו חשבון) — מסמנים את הדקה כמלאה
+    sent.set(tk, Array.from({ length: RATE_MAX }, () => Date.now()));
     const wait = err.retryAfterSeconds ?? 2;
     if (wait > RETRY_429_MAX_SEC) throw err;
     console.warn(`[משימון] Timeless החזיר 429 (${url.pathname}) — ניסיון חוזר בעוד ${wait} שניות`);
@@ -256,7 +308,7 @@ async function connect(userId, token) {
   const clean = String(token ?? '').trim().replace(/^Bearer\s+/i, '');
   if (!clean) throw apiError('יש להזין אסימון API של Timeless.', { status: 400 });
   // אימות בקריאה זולה אמיתית; 401 כאן לא נוגע בחיבור קיים
-  await rawCall(clean, '/meetings', { limit: 1 });
+  await rawCall(clean, '/meetings', { limit: 1 }, { fresh: true });
   const now = D.nowIso();
   D.run(
     `INSERT INTO user_channels (user_id, provider, api_token, state, checked_at, created_at)
@@ -345,19 +397,29 @@ async function listMeetings(userId, { search, from, to, limit = 20, status, scop
   const term = search ? String(search).trim() : '';
   if (term) query[semantic ? 'q' : 'search'] = term;
 
-  // עובד באסימון הארגוני — רק פגישות שלו; מבקשים דפים מלאים כי חלק מסוננים
+  /*
+   * עובד באסימון הארגוני — רק פגישות שלו. Timeless מסנן לפי משתתף (‎participant‎) כבר
+   * בבקשה, אז לא מדפדפים בכל פגישות הארגון כדי למצוא את שלו; הסינון כאן נשאר בכל מקרה.
+   * גודל הדף קבוע (100) — כך כל הזרימות מבקשות אותה כתובת, והמטמון משותף להן.
+   */
   const emails = restrictionOf(userId);
   const out = [];
-  let cursor;
-  for (let page = 0; page < MAX_PAGES && out.length < want; page++) {
-    const body = await call(userId, '/meetings', { ...query, limit: emails ? PAGE_MAX : Math.min(PAGE_MAX, want - out.length), cursor });
-    const items = Array.isArray(body.data) ? body.data : [];
-    for (const m of items) {
-      if (m && m.id && out.length < want && (!emails || attended(m, emails))) out.push(normalizeMeeting(m));
+  const seen = new Set();
+  for (const participant of emails ? [...emails] : [undefined]) {
+    let cursor;
+    for (let page = 0; page < MAX_PAGES && out.length < want; page++) {
+      const body = await call(userId, '/meetings', { ...query, participant, limit: PAGE_MAX, cursor });
+      const items = Array.isArray(body.data) ? body.data : [];
+      for (const m of items) {
+        if (!m || !m.id || seen.has(m.id) || out.length >= want || (emails && !attended(m, emails))) continue;
+        seen.add(m.id);
+        out.push(normalizeMeeting(m));
+      }
+      if (!body.has_more || !body.next_cursor || body.next_cursor === cursor || !items.length) break;
+      cursor = body.next_cursor;
     }
-    if (!body.has_more || !body.next_cursor || body.next_cursor === cursor || !items.length) break;
-    cursor = body.next_cursor;
   }
+  if (emails && out.length > 1) out.sort((a, b) => String(b.start ?? '').localeCompare(String(a.start ?? '')));
   return out;
 }
 
