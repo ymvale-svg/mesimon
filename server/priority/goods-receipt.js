@@ -733,10 +733,31 @@ function docWithoutVat(d) {
  * טיוטא קיימת לאותו מסמך — הקליטה ממשיכה ממנה, בשלב בדיקת הטיוטא: הפרויקט, המחסן ותנאי התשלום מה-GR, השורות
  * והסכומים של המסמך מהקריאה החדשה (לבדיקה מול המסמך, ולעדכון לפי צילום). המסמך כבר בנספחים — לא מצורף שוב.
  */
+/*
+ * 📦 מי פתח אי פעם קבלת סחורה בפריוריטי (הוחלט 11.11.26, ישראל: "רק עובד שפתח אי פעם קבלת סחורה בפריוריטי יקבל
+ * הצעות לבצע קבלת סחורה מחשבונית"). נרשם כשנפתח GR (טיוטא) מהבוט; מלפני הרישום — מיומן הבוט: GR שנפתח, נמשך,
+ * נסגר כסופי או בוטל אחרי שנפתח.
+ */
+const openedKey = (userId) => `goods_receipt_opened:${userId}`;
+function markOpened(userId) {
+  if (userId && !D.getSetting(openedKey(userId), null)) D.setSetting(openedKey(userId), D.nowIso());
+}
+function everOpened(userId) {
+  if (!userId) return false;
+  if (D.getSetting(openedKey(userId), null)) return true;
+  const hit = D.get(
+    `SELECT 1 FROM wa_log WHERE user_id = ? AND action = 'goods_receipt'
+       AND (result LIKE 'GR סופי %' OR result LIKE 'המשך טיוטא %' OR result LIKE 'טיוטא %' OR result GLOB 'ביטול [A-Za-z0-9]*')
+     LIMIT 1`, userId);
+  if (hit) markOpened(userId);
+  return Boolean(hit);
+}
+
 async function resumeDraft(s, dup) {
   const gr = await Priority.readReceipt(s.company, dup.DOCNO);
   s.docno = dup.DOCNO;
   s.resumed = true;
+  markOpened(s.uid);
   s.project = gr.PROJDOCNO ? { code: gr.PROJDOCNO, des: gr.PROJDES ?? '' } : null;
   s.warehouse = gr.TOWARHSNAME || null;
   s.payCode = gr.MED_MXPAYCODE || s.payCode;
@@ -1191,6 +1212,7 @@ async function createDraft(user, s) {
     if (!docno) return { failed: err, tried: [first, ...alt] };
   }
   s.docno = docno;
+  markOpened(user.id);
   // פריוריטי מציב בפתיחה את מחסן הפרויקט, גם כשנשלח מחסן אחר — מעדכנים למחסן שנבחר (לפני השורות, שיורשות אותו)
   if (s.warehouse) await Priority.setHeader(c, docno, { TOWARHSNAME: s.warehouse }).catch((err) => console.error(`[משימון] מחסן ${s.warehouse} ל-${docno}:`, err.message));
   rememberPrefs(user.id, s);
@@ -2347,4 +2369,4 @@ const inMenu = (userId) => { const s = load(userId); return Boolean(fresh(s) && 
 /** בחירה בזרימה אחרת (דרישת רכש) — התפריט יורד */
 function dropMenu(userId) { const s = load(userId); if (s?.step === 'menu') clear(userId, s); }
 
-module.exports = { inMenu, dropMenu, isTrigger, isPriority, opens, active, pending, pausedNote, abandon, switchCancels, wantsUndoFinal, handle, sweep, _jpegToPdf: jpegToPdf, _codeLines: codeLines, _orderDiffs: orderDiffs, _similarLines: similarLines, _askParts: askParts, _projectsOf: projectsOf, _findProjects: findProjects, _ai: ai, _load: load, _clear: (userId) => clear(userId, load(userId)) };
+module.exports = { everOpened, markOpened, inMenu, dropMenu, isTrigger, isPriority, opens, active, pending, pausedNote, abandon, switchCancels, wantsUndoFinal, handle, sweep, _jpegToPdf: jpegToPdf, _codeLines: codeLines, _orderDiffs: orderDiffs, _similarLines: similarLines, _askParts: askParts, _projectsOf: projectsOf, _findProjects: findProjects, _ai: ai, _load: load, _clear: (userId) => clear(userId, load(userId)) };
