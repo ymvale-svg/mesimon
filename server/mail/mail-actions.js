@@ -417,6 +417,55 @@ const goodsAskedToday = (userId) => D.get(
   userId, W.ilWallToUtc(W.todayIL(), 0, 0).toISOString()
 )?.n ?? 0;
 
+/*
+ * 🔕 5 התעלמויות — הצעה להפסיק (הוחלט 11.11.26, ישראל: "אחרי 5 פעמים שאדם מתעלם מקבלות סחורה — הצע לו להפסיק
+ * לקבל התרעות על קבלת סחורה"). התעלמות = הצעה שלא נענתה (‎ignored‎). נספרות ברצף: תשובה של ממש (קבלת סחורה,
+ * אחר כך, לא) מאפסת, וגם השאלה עצמה — "לא" עליה, או שלא נענתה — מתחילה ספירה חדשה. במקום ההצעה הבאה, לא בנוסף.
+ */
+const GOODS_IGNORE_LIMIT = 5;
+const GOODS_STOP_BTN = Object.freeze({ stop: 'להפסיק 🔕', keep: 'להמשיך 👍' });
+
+/** כמה הצעות ברצף לא נענו — מאז התשובה האחרונה ומאז שנשאל אם להפסיק */
+function goodsIgnoredStreak(userId) {
+  const askedStop = D.userPrefs(userId)?.botPrefs?.goodsStopAskedAt ?? '';
+  const lastAnswer = D.get(
+    "SELECT MAX(asked_at) AS at FROM mail_goods_docs WHERE user_id = ? AND status IN ('started', 'declined', 'later') AND asked_at IS NOT NULL", userId
+  )?.at ?? '';
+  const since = [askedStop, lastAnswer].sort().pop() || '';
+  return D.get("SELECT COUNT(*) AS n FROM mail_goods_docs WHERE user_id = ? AND status = 'ignored' AND COALESCE(asked_at, '') > ?", userId, since)?.n ?? 0;
+}
+
+function goodsStopQuestion(userId) {
+  const p = D.userPrefs(userId)?.botPrefs ?? {};
+  D.setUserPref(userId, 'botPrefs', { ...p, goodsStopAskedAt: D.nowIso() });
+  return {
+    text: [
+      `📄 נראה שההצעות לקבלת סחורה מחשבוניות במייל לא מתאימות לך — ${GOODS_IGNORE_LIMIT} האחרונות נשארו בלי תשובה.`,
+      '',
+      '*להפסיק לשלוח לך אותן?* קבלת סחורה עצמה נשארת — שולחים לי צילום או קובץ וכותבים "קבלת סחורה".'
+    ].join('\n'),
+    buttons: [GOODS_STOP_BTN.stop, GOODS_STOP_BTN.keep],
+    draft: { kind: 'goods_stop' },
+    action: 'goods_offer',
+    log: `🔕 ${GOODS_IGNORE_LIMIT} הצעות לקבלת סחורה בלי תשובה — להפסיק?`
+  };
+}
+
+/** תשובה ל"להפסיק?". ‎null‎ — נושא חדש */
+function answerGoodsStop(userId, text) {
+  const t = String(text ?? '').trim();
+  const n = WaUi.normalize(t);
+  const p = D.userPrefs(userId)?.botPrefs ?? {};
+  if (WaUi.sameLabel(t, GOODS_STOP_BTN.stop) || WaUi.sameLabel(t, WaUi.BTN.yes) || /^(להפסיק|תפסיק|הפסק|כן|די|👍)([\s,.!]|$)/.test(n)) {
+    D.setUserPref(userId, 'botPrefs', { ...p, goodsOffer: false });
+    return { text: '🔕 בסדר — לא אציע יותר קבלת סחורה על חשבוניות מהמייל.\nלהחזיר: בהגדרות ההתראות, "חשבונית במייל ← קבלת סחורה".', result: 'הצעות קבלת סחורה — כבוי' };
+  }
+  if (WaUi.sameLabel(t, GOODS_STOP_BTN.keep) || WaUi.sameLabel(t, WaUi.BTN.no) || /^(להמשיך|תמשיך|לא|להשאיר|👎)([\s,.!]|$)/.test(n)) {
+    return { text: '👍 בסדר, ממשיכים להציע.', result: 'הצעות קבלת סחורה — ממשיכים' };
+  }
+  return null;
+}
+
 function nextGoods(userId) {
   const today = W.todayIL();
   if (goodsAskedToday(userId) >= GOODS_PER_DAY) return null;
@@ -488,6 +537,7 @@ async function nextQuestion(userId, allow) {
   }
   if (allow.goods) {
     const row = nextGoods(userId);
+    if (row && goodsIgnoredStreak(userId) >= GOODS_IGNORE_LIMIT) return goodsStopQuestion(userId);
     if (row) { D.run("UPDATE mail_goods_docs SET status = 'asked', asked_at = ? WHERE id = ?", D.nowIso(), row.id); return { ...goodsQuestion(row), action: 'goods_offer', log: `📄 ${row.supplier || row.from_name}: ${row.filename}` }; }
   }
   // תזכורות (מייל שלא טופל, שאלה ששלחת ולא נענתה) — בקצב אחד משותף, בלי הצפה
@@ -566,6 +616,6 @@ function prune() {
 }
 
 module.exports = {
-  GOODS_SCHEMA, BTN, PACE_BTN, answerPaceOffer, goodsDocFrom, goodsFile, nextQuestion, answerReminder, answerGoods, prune, dueReminders, mayRemindNow, mayAlertNow, paceTick, PACE, paceCommand, noteProactive, noteUser,
-  _internal: { engagement, paceOffer, nextReminder, nextGoods, GOODS_PER_DAY, reminderQuestion, goodsQuestion, setRemind, remindAt, scoreOf, handledInGmail, paceState }
+  GOODS_SCHEMA, BTN, PACE_BTN, GOODS_STOP_BTN, GOODS_IGNORE_LIMIT, answerGoodsStop, answerPaceOffer, goodsDocFrom, goodsFile, nextQuestion, answerReminder, answerGoods, prune, dueReminders, mayRemindNow, mayAlertNow, paceTick, PACE, paceCommand, noteProactive, noteUser,
+  _internal: { engagement, paceOffer, nextReminder, nextGoods, GOODS_PER_DAY, goodsIgnoredStreak, reminderQuestion, goodsQuestion, setRemind, remindAt, scoreOf, handledInGmail, paceState }
 };

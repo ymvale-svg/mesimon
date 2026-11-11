@@ -91,3 +91,43 @@ test('📦 הצעה על חשבונית — רק למי שפתח אי פעם ק�
   GR.markOpened(fresh.id);
   assert.equal(GR.everOpened(fresh.id), true);
 });
+
+test('🔕 אחרי 5 הצעות לקבלת סחורה בלי תשובה — שאלה אחת: להפסיק?', async () => {
+  const u = user();
+  const at = (h) => new Date(Date.now() - h * 3600 * 1000).toISOString();
+  const add = (g, status, askedH) => D.run(
+    `INSERT INTO mail_goods_docs (user_id, gmail_id, box, kind, filename, mime, supplier, from_name, from_email, subject, status, asked_at, created_at)
+     VALUES (?, ?, 0, 'invoice', 'inv.pdf', 'application/pdf', 'ספק', 'ספק', 's@x.co', 'חשבונית', ?, ?, ?)`,
+    u.id, g, status, askedH == null ? null : at(askedH), at(askedH ?? 1)
+  );
+  add('answered', 'started', 200);
+  for (let i = 0; i < 4; i++) add(`i${i}`, 'ignored', 100 - i);
+  assert.equal(MailActions._internal.goodsIgnoredStreak(u.id), 4);
+  add('new', 'pending', null);
+  let q = await MailActions.nextQuestion(u.id, { goods: true });
+  assert.equal(q.draft.kind, 'goods_offer', '4 התעלמויות — עוד מציעים');
+  D.run("UPDATE mail_goods_docs SET status = 'ignored' WHERE user_id = ? AND gmail_id = 'new'", u.id);
+  add('next', 'pending', null);
+  q = await MailActions.nextQuestion(u.id, { goods: true });
+  assert.equal(q.draft.kind, 'goods_stop', 'החמישית — במקום ההצעה הבאה');
+  assert.deepEqual(q.buttons, [MailActions.GOODS_STOP_BTN.stop, MailActions.GOODS_STOP_BTN.keep]);
+  // לא נשאלים שוב מיד — הספירה מתחילה מחדש
+  assert.equal(MailActions._internal.goodsIgnoredStreak(u.id), 0);
+
+  const r = MailActions.answerGoodsStop(u.id, MailActions.GOODS_STOP_BTN.stop);
+  assert.match(r.text, /לא אציע יותר/);
+  assert.equal(D.userPrefs(u.id).botPrefs.goodsOffer, false);
+  assert.equal(MailActions.answerGoodsStop(u.id, 'מה עם הפגישה מחר?'), null, 'נושא אחר — לא תשובה');
+});
+
+test('🔕 תשובה של ממש להצעה מאפסת את הספירה', () => {
+  const u = user();
+  const at = (h) => new Date(Date.now() - h * 3600 * 1000).toISOString();
+  const add = (g, status, h) => D.run(
+    `INSERT INTO mail_goods_docs (user_id, gmail_id, box, kind, filename, status, asked_at, created_at) VALUES (?, ?, 0, 'invoice', 'f.pdf', ?, ?, ?)`,
+    u.id, g, status, at(h), at(h));
+  for (let i = 0; i < 4; i++) add(`a${i}`, 'ignored', 50 - i);
+  add('yes', 'declined', 10);
+  add('b', 'ignored', 5);
+  assert.equal(MailActions._internal.goodsIgnoredStreak(u.id), 1);
+});

@@ -2755,6 +2755,13 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
     keep.draft = null;
     state = { ...state, draft: null, awaiting: false };
   }
+  // 🔕 "להפסיק לשלוח לך הצעות לקבלת סחורה?" — אחרי 5 הצעות בלי תשובה
+  if (state.awaiting && state.draft?.kind === 'goods_stop') {
+    const r = dry ? null : MailActions.answerGoodsStop(actor.id, t);
+    if (r) return out(r.text, { draft: null }, { action: 'goods_offer', status: 'ok', result: r.result });
+    keep.draft = null;
+    state = { ...state, draft: null, awaiting: false };
+  }
   if (state.awaiting && ['mail_remind', 'goods_offer'].includes(state.draft?.kind)) {
     const d = state.draft;
     if (d.kind === 'mail_remind') {
