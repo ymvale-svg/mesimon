@@ -34,7 +34,8 @@ test('אזור הגרירה הוא כפתור (נגיש מהמקלדת) ופות
 test('הודעת סטטוס נשארת ב-DOM עם role="status"; התוכן הראשי אינו אזור חי', () => {
   assert.match(html, /id="toast" role="status" aria-live="polite"/);
   assert.doesNotMatch(html, /<main[^>]*aria-live/);
-  assert.doesNotMatch(js, /\.hidden = (true|false)/, 'הודעה מוסתרת לא תמיד מוקראת');
+  const toast = js.slice(js.indexOf('function toast('), js.indexOf('function toast(') + 400);
+  assert.doesNotMatch(toast, /\.hidden = /, 'הודעה מוסתרת לא תמיד מוקראת');
 });
 
 test('בלי אימוג׳י כאייקונים בממשק — SVG בלבד', () => {

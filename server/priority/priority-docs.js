@@ -31,6 +31,7 @@ const STAGES = require('./priority-chain').LABELS;
 
 const dir = () => path.join(D.UPLOADS_DIR, 'priority-docs', String(ORG));
 const fail = (status, message) => Object.assign(new Error(message), { status });
+const parseJson = (s, d) => { try { return JSON.parse(s) ?? d; } catch { return d; } };
 const actorOf = (user) => ({ type: 'user', id: user.id, role: user.role });
 
 function assertDoc(user, doc) {
@@ -58,7 +59,8 @@ function inbox(user, { limit = 60 } = {}) {
 const shape = (r) => r && ({
   id: r.id, doc: r.doc, source: r.source, filename: r.filename, mime: r.mime, size: r.size,
   supplier: r.supplier, fromName: r.from_name, fromEmail: r.from_email, subject: r.subject,
-  stage: r.stage, stageLabel: STAGES[r.stage] ?? r.stage, docno: r.docno, company: r.company, note: r.note, at: r.created_at, updatedAt: r.updated_at
+  stage: r.stage, stageLabel: STAGES[r.stage] ?? r.stage, docno: r.docno, company: r.company, note: r.note,
+  pages: parseJson(r.pages, []).length, at: r.created_at, updatedAt: r.updated_at
 });
 
 function insert(user, fields) {
@@ -102,9 +104,8 @@ function dismiss(user, mailId) {
 
 const safeName = (n) => String(n ?? '').replace(/[\\/\0]/g, '_').replace(/\s+/g, ' ').trim().slice(0, 150) || 'מסמך';
 
-/** קובץ שנגרר למסך. ‎data‎ — base64 (אפשר עם ‎data:…;base64,‎ בתחילה) */
-function upload(user, { doc, filename, mime, data }) {
-  assertDoc(user, doc);
+/** קובץ מהדפדפן ← ‎{buf, mime, name}‎. ‎data‎ — base64 (אפשר עם ‎data:…;base64,‎ בתחילה). PDF או תמונה, עד 15MB */
+function decode({ filename, mime, data }) {
   const name = safeName(filename);
   const raw = String(data ?? '');
   const buf = Buffer.from(raw.includes(',') ? raw.slice(raw.indexOf(',') + 1) : raw, 'base64');
@@ -112,10 +113,46 @@ function upload(user, { doc, filename, mime, data }) {
   if (buf.length > MAX_BYTES) throw fail(413, 'הקובץ גדול מ-15MB');
   const type = String(mime || MIME_BY_EXT[path.extname(name).toLowerCase()] || '').toLowerCase();
   if (!DOC_MIME.test(type)) throw fail(400, 'אפשר להעלות PDF או תמונה בלבד');
+  return { buf, mime: type, name };
+}
+
+function store(f) {
   fs.mkdirSync(dir(), { recursive: true });
-  const file = `${crypto.randomUUID()}${EXT[type] ?? ''}`;
-  fs.writeFileSync(path.join(dir(), file), buf);
-  return insert(user, { doc, source: 'upload', filename: name, mime: type, size: buf.length, filePath: path.join('priority-docs', String(ORG), file) });
+  const file = `${crypto.randomUUID()}${EXT[f.mime] ?? ''}`;
+  fs.writeFileSync(path.join(dir(), file), f.buf);
+  return path.join('priority-docs', String(ORG), file);
+}
+
+/** קובץ שנגרר למסך — מסמך חדש בתור */
+function upload(user, { doc, filename, mime, data }) {
+  assertDoc(user, doc);
+  const f = decode({ filename, mime, data });
+  return insert(user, { doc, source: 'upload', filename: f.name, mime: f.mime, size: f.buf.length, filePath: store(f) });
+}
+
+/** עמוד נוסף של אותו מסמך (כמה קבצים = מסמך אחד). נשלח למנוע אחרי העמוד הראשון */
+function addPage(user, id, input) {
+  const r = rowOf(user, id);
+  if (!['new', 'bot'].includes(r.stage)) throw fail(400, 'אפשר להוסיף עמודים רק למסמך שעוד לא בפריוריטי');
+  const f = decode(input);
+  const pages = parseJson(r.pages, []);
+  if (pages.length >= 10) throw fail(400, 'עד 10 עמודים למסמך');
+  pages.push({ path: store(f), mime: f.mime, name: f.name });
+  D.run('UPDATE priority_docs SET pages = ?, updated_at = ? WHERE id = ?', JSON.stringify(pages), D.nowIso(), r.id);
+  return get(user, id);
+}
+
+/** העמודים הנוספים — הקבצים עצמם */
+function pages(user, id) {
+  return parseJson(rowOf(user, id).pages, []).map((p) => {
+    try { return { buf: fs.readFileSync(path.join(D.UPLOADS_DIR, p.path)), mime: p.mime, name: p.name }; } catch { return null; }
+  }).filter(Boolean);
+}
+
+/** המסמך הבא בתור לאותה פעולה (חוץ מ-‎except‎) — לכפתור "המסמך הבא" */
+function nextOf(user, doc, except = null) {
+  const r = D.get("SELECT * FROM priority_docs WHERE org_id = ? AND user_id = ? AND doc = ? AND stage = 'new' AND id != ? ORDER BY created_at ASC LIMIT 1", ORG, user.id, doc, except ?? 0);
+  return r ? shape(r) : null;
 }
 
 /** המסמכים שלי בתור, לפעולה ‎doc‎ (בלי מה שנדחה) */
@@ -171,8 +208,10 @@ async function toBot(user, id) {
   const f = await file(user, id);
   const sent = WaBot.handOver(user.id, { text: BOT_TEXT[r.doc], file: f, id: `priority-doc-${r.id}` });
   if (!sent) throw fail(400, 'אין טלפון בפרופיל שלך במשימון — הבוט לא יודע לאן לענות');
+  // עמודים נוספים — אחרי המסמך, בלי כיתוב (כמו אלבום בוואטסאפ: הבוט מסווג)
+  pages(user, id).forEach((p, i) => WaBot.handOver(user.id, { text: '', file: p, id: `priority-doc-${r.id}-p${i + 1}` }));
   D.run("UPDATE priority_docs SET stage = 'bot', updated_at = ? WHERE id = ?", D.nowIso(), r.id);
   return get(user, id);
 }
 
-module.exports = { STAGES, BOT_TEXT, inbox, take, dismiss, upload, list, counts, get, file, remove, toBot, _guessOf: guessOf };
+module.exports = { STAGES, BOT_TEXT, inbox, take, dismiss, decode, upload, addPage, pages, nextOf, list, counts, get, file, remove, toBot, _guessOf: guessOf };

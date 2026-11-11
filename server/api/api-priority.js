@@ -169,6 +169,18 @@ function register(router) {
     sendJson(res, 200, await docs(() => Desk.state(actor, ctx.params.flow)));
   });
 
+  router.post('/api/priority/desk/:flow/file', async (req, res, ctx) => {
+    const actor = userOnly(ctx);
+    const b = await readJson(req);
+    sendJson(res, 200, await docs(() => Desk.sendFile(actor, ctx.params.flow, b, { attach: b.attach !== false })));
+  });
+
+  router.post('/api/priority/docs/:id/pages', async (req, res, ctx) => {
+    const actor = userOnly(ctx);
+    const b = await readJson(req);
+    sendJson(res, 200, { doc: await docs(() => Docs.addPage(actor, ctx.params.id, b)) });
+  });
+
   router.post('/api/priority/desk/:flow/say', async (req, res, ctx) => {
     const actor = userOnly(ctx);
     const b = await readJson(req);

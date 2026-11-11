@@ -833,6 +833,7 @@ CREATE TABLE IF NOT EXISTS priority_docs (
   stage         TEXT    NOT NULL DEFAULT 'new',
   docno         TEXT    NOT NULL DEFAULT '',
   company       TEXT    NOT NULL DEFAULT '',
+  pages         TEXT    NOT NULL DEFAULT '[]',   -- עמודים נוספים של אותו מסמך: ‎[{path, mime, name}]‎
   note          TEXT    NOT NULL DEFAULT '',
   created_at    TEXT    NOT NULL,
   updated_at    TEXT    NOT NULL

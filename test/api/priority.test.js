@@ -132,3 +132,13 @@ test('עבודה מתוך המסך: מצב ריק, בלי הרשאה — 403, פ
   assert.equal((await as(emp)('POST', '/api/priority/desk/start', { id: 999999 })).status, 404);
   assert.equal((await as(emp)('GET', '/api/priority/desk/file/1-x.pdf')).status, 404);
 });
+
+test('נספחים ועמודים: בלי קליטה פתוחה — 400; עמוד למסמך לא קיים — 404', async () => {
+  const pdf = Buffer.from('%PDF-1.4\n%p\n').toString('base64');
+  assert.equal((await as(emp)('POST', '/api/priority/desk/receipt/file', { filename: 'a.pdf', mime: 'application/pdf', data: pdf })).status, 400);
+  assert.equal((await as(emp)('POST', '/api/priority/docs/999999/pages', { filename: 'a.pdf', mime: 'application/pdf', data: pdf })).status, 404);
+  const up = await as(emp)('POST', '/api/priority/docs', { doc: 'receipt', filename: 'a.pdf', mime: 'application/pdf', data: pdf });
+  const p = await as(emp)('POST', `/api/priority/docs/${up.json.doc.id}/pages`, { filename: 'b.pdf', mime: 'application/pdf', data: pdf });
+  assert.equal(p.status, 200, p.text);
+  assert.equal(p.json.doc.pages, 1);
+});

@@ -138,3 +138,79 @@ test('התצוגה של דרישת הרכש', () => {
   assert.equal(v.project, 'אלעד סנטר');
   assert.deepEqual(v.lines.map((l) => [l.part, l.open]), [['000', false], ['', true]]);
 });
+
+test('נספח מהמסך: המנוע מקבל "נספח" + הקובץ (בלי ניחוש); בדרישת רכש — בלי כיתוב (דף נוסף לרשימה)', async (t) => {
+  const a = worker();
+  const calls = fakeEngine(t, GoodsReceipt);
+  await Desk.start(a, upload(a).id);
+  const s = await Desk.sendFile(a, 'receipt', { filename: 'סחורה.jpg', mime: 'image/jpeg', data: PDF.toString('base64') });
+  assert.equal(calls.at(-1).text, 'נספח');
+  assert.equal(calls.at(-1).file.name, 'סחורה.jpg');
+  assert.match(s.messages.at(-2).texts[0], /נספח: סחורה\.jpg/);
+  await assert.rejects(Desk.sendFile(a, 'receipt', { filename: 'x.exe', mime: 'application/x-msdownload', data: 'TVo=' }), /PDF או תמונה/);
+
+  const b = worker();
+  const pd = fakeEngine(t, PurchaseDemand);
+  await Desk.start(b, upload(b, 'demand').id);
+  await Desk.sendFile(b, 'demand', { filename: 'דף2.jpg', mime: 'image/jpeg', data: PDF.toString('base64') });
+  assert.equal(pd.at(-1).text, '');
+});
+
+test('נספח בלי קליטה פתוחה — 400', async (t) => {
+  const a = worker();
+  fakeEngine(t, GoodsReceipt);
+  await assert.rejects(Desk.sendFile(a, 'receipt', { filename: 'a.pdf', mime: 'application/pdf', data: PDF.toString('base64') }), (e) => e.status === 400);
+});
+
+test('מסמך אחד של כמה עמודים: העמוד הראשון עם "קבלת סחורה", השאר אחריו בלי כיתוב — המנוע מסווג', async (t) => {
+  const a = worker();
+  const calls = fakeEngine(t, GoodsReceipt);
+  const d = upload(a);
+  Docs.addPage(a, d.id, { filename: 'עמוד2.pdf', mime: 'application/pdf', data: PDF.toString('base64') });
+  Docs.addPage(a, d.id, { filename: 'עמוד3.pdf', mime: 'application/pdf', data: PDF.toString('base64') });
+  assert.equal(Docs.get(a, d.id).pages, 2);
+  await Desk.start(a, d.id);
+  assert.deepEqual(calls.map((c) => [c.text, c.file?.name ?? null]), [['קבלת סחורה', 'תעודה.pdf'], ['', 'עמוד2.pdf'], ['', 'עמוד3.pdf']]);
+});
+
+test('עמודים: רק למסמך שעוד לא בפריוריטי, עד 10', () => {
+  const a = worker();
+  const d = upload(a);
+  for (let i = 0; i < 10; i++) Docs.addPage(a, d.id, { filename: `p${i}.pdf`, mime: 'application/pdf', data: PDF.toString('base64') });
+  assert.throws(() => Docs.addPage(a, d.id, { filename: 'p.pdf', mime: 'application/pdf', data: PDF.toString('base64') }), /עד 10/);
+  D.run("UPDATE priority_docs SET stage = 'draft' WHERE id = ?", d.id);
+  assert.throws(() => Docs.addPage(a, d.id, { filename: 'p.pdf', mime: 'application/pdf', data: PDF.toString('base64') }), /עוד לא בפריוריטי/);
+});
+
+test('הקליטה נגמרה — המסמך הבא בתור מוצע (לא מתחיל לבד)', async (t) => {
+  const a = worker();
+  const calls = fakeEngine(t, GoodsReceipt);
+  const first = upload(a);
+  const second = upload(a);
+  await Desk.start(a, first.id);
+  assert.equal(Desk.state(a, 'receipt').next, null, 'באמצע קליטה — אין "הבא"');
+  const s = await Desk.say(a, 'receipt', 'ביטול');
+  assert.equal(s.active, false);
+  assert.equal(s.next.id, second.id);
+  assert.equal(calls.filter((c) => c.text === 'קבלת סחורה').length, 1, 'הבא לא התחיל לבד');
+});
+
+test('לבוט עם עמודים — המסמך, ואחריו כל עמוד בלי כיתוב', async (t) => {
+  const a = worker();
+  const sent = [];
+  t.mock.method(require('../../../server/whatsapp').WaBot, 'handOver', (uid, m) => { sent.push(m); return true; });
+  const d = upload(a);
+  Docs.addPage(a, d.id, { filename: 'עמוד2.pdf', mime: 'application/pdf', data: PDF.toString('base64') });
+  await Docs.toBot(a, d.id);
+  assert.deepEqual(sent.map((m) => [m.text, m.file.name]), [['קבלת סחורה', 'תעודה.pdf'], ['', 'עמוד2.pdf']]);
+});
+
+test('התצוגה: מתי אפשר לצרף, וכמה נספחים', () => {
+  const u = user({ role: 'employee' });
+  D.setSetting(`goods_receipt:${u.id}`, { step: 'files', at: Date.now(), files: [{ path: '/x/main.jpg' }, { path: '/x/a1.jpg' }], doc: {}, lines: [] });
+  const v = GoodsReceipt.view(u.id);
+  assert.equal(v.canAttach, true);
+  assert.equal(v.attachments, 1);
+  D.setSetting(`goods_receipt:${u.id}`, { step: 'supplier', at: Date.now(), files: [{ path: '/x/main.jpg' }], doc: {}, lines: [] });
+  assert.equal(GoodsReceipt.view(u.id).canAttach, false);
+});

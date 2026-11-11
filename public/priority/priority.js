@@ -161,6 +161,7 @@
             <b>גררו לכאן PDF או תמונה</b><span id="drop-hint">או לחצו לבחירת קובץ · עד 15MB</span><span class="prog" id="drop-prog"></span>
           </button>
           <input type="file" id="file-in" accept="application/pdf,image/*" multiple hidden>
+          <div class="drop-choice" id="drop-choice" hidden></div>
           <div class="inbox-h"><h2>מהמייל שלך</h2><span class="pill p-warn num" id="mail-n"></span></div>
           <div class="mails" id="mails"></div>
         </aside>
@@ -229,9 +230,22 @@
     function drawDesk() {
       const box = $('#desk');
       if (!box) return;
-      $('#split').classList.toggle('desk-on', Boolean(desk?.active || deskConflict));
-      box.hidden = !(desk?.active || deskConflict);
+      const finished = Boolean(desk && !desk.active && desk.next && desk.messages?.length);
+      $('#split').classList.toggle('desk-on', Boolean(desk?.active || deskConflict || finished));
+      box.hidden = !(desk?.active || deskConflict || finished);
       if (box.hidden) return;
+      if (finished) {
+        // הקליטה נגמרה — מה שהמנוע אמר אחרון, והמסמך הבא בתור בכפתור (לא מתחיל לבד)
+        const lastBot = [...desk.messages].reverse().find((m) => m.from === 'bot');
+        const n = desk.next;
+        box.innerHTML = `<div class="desk-done">
+          ${lastBot ? `<div class="msg bot">${lastBot.texts.map((t) => `<p>${fmtWa(t)}</p>`).join('')}</div>` : ''}
+          <p class="muted">${esc(d.label)} הבאה בתור:</p>
+          <div class="next-doc"><b>${esc(n.supplier || n.fromName || n.filename)}</b><span class="muted">${esc(n.filename)}${n.pages ? ` · ${n.pages + 1} עמודים` : ''}</span></div>
+          <button type="button" class="btn pri" data-start="${n.id}">להתחיל את המסמך הבא</button>
+        </div>`;
+        return;
+      }
       if (deskConflict) {
         const o = deskConflict.open;
         box.innerHTML = `<div class="desk-conflict" role="alert"><b>יש ${esc(d.label)} פתוחה</b>
@@ -266,6 +280,11 @@
         <div class="desk-h"><span class="pill p-brand">${esc(v.stepLabel)}</span>${v.paused ? '<span class="pill p-warn">מושהה</span>' : ''}</div>
         <div class="fields">${fields.join('')}</div>
         ${lines}${totals}
+        ${v.canAttach ? `<div class="attach">
+          <button type="button" class="btn small" id="attach-btn" ${deskBusy ? 'disabled' : ''}>${ui('clip')} ${d.key === 'receipt' ? 'צירוף נספח' : 'עוד דף לרשימה'}</button>
+          <span class="muted">${v.attachments ? (d.key === 'receipt' ? (v.attachments === 1 ? 'נספח אחד צורף' : `${v.attachments} נספחים צורפו`) : (v.attachments === 1 ? 'קובץ אחד' : `${v.attachments} קבצים`)) : (d.key === 'receipt' ? 'תמונות של הסחורה, דף נוסף — אפשר גם לגרור לכאן' : 'דף נוסף של הרשימה — אפשר גם לגרור לכאן')}</span>
+          <input type="file" id="attach-in" accept="application/pdf,image/*" multiple hidden>
+        </div>` : ''}
         <ol class="talk" id="talk" aria-label="השיחה עם המערכת">
           ${desk.messages.map((m) => `<li class="msg ${m.from}">${m.texts.map((t) => `<p>${fmtWa(t)}</p>`).join('')}${(m.files ?? []).map((f) => `<a class="msg-file" href="/api/priority/desk/file/${encodeURIComponent(f.id)}" target="_blank" rel="noopener">${ui('clip')} ${esc(f.caption || f.name)}</a>`).join('')}</li>`).join('')}
         </ol>
@@ -342,6 +361,58 @@
       drawQueue(); drawMails();
     }
 
+    // ---------------- כמה קבצים: נספח לקליטה הפתוחה, מסמך חדש, או מסמך אחד של כמה עמודים
+    let pendingFiles = null;
+    function askDrop(files) {
+      pendingFiles = files;
+      const open = desk?.active;
+      const many = files.length > 1;
+      const opts = open
+        ? [['attach', d.key === 'receipt' ? 'נספח לקליטה הזו' : 'דף נוסף לרשימה הזו'], ['new', many ? 'מסמכים חדשים לתור' : 'מסמך חדש לתור']]
+        : [['one', 'מסמך אחד (כמה עמודים)'], ['each', 'כל קובץ מסמך נפרד']];
+      $('#drop-choice').innerHTML = `<p><b>${files.length === 1 ? esc(files[0].name) : `${files.length} קבצים`}</b> — מה לעשות?</p>
+        <div class="row-actions" role="group" aria-label="מה לעשות בקבצים">${opts.map(([k, l], i) => `<button type="button" class="btn small${i === 0 ? ' pri' : ''}" data-drop="${k}">${esc(l)}</button>`).join('')}
+        <button type="button" class="btn small" data-drop="cancel">ביטול</button></div>`;
+      $('#drop-choice').hidden = false;
+      $('#drop-choice').querySelector('[data-drop]')?.focus();
+    }
+    async function dropChoice(k) {
+      const files = pendingFiles ?? [];
+      pendingFiles = null;
+      $('#drop-choice').hidden = true;
+      if (k === 'attach') return attachFiles(files);
+      if (k === 'one') return uploadOneDoc(files);
+      if (k === 'new' || k === 'each') return uploadFiles(files);
+    }
+    async function attachFiles(files) {
+      for (const f of files) {
+        if (deskBusy) break;
+        deskBusy = true; drawDesk();
+        try {
+          const data = await readAsDataUrl(f);
+          desk = await api('POST', `/api/priority/desk/${d.key}/file`, { filename: f.name, mime: f.type, data, attach: true });
+        } catch (e) { toast(`${f.name}: ${e.message}`, true); }
+        deskBusy = false; drawDesk();
+      }
+      load();
+    }
+    async function uploadOneDoc(files) {
+      const dz = $('#drop');
+      dz.setAttribute('aria-busy', 'true');
+      try {
+        $('#drop-prog').textContent = `מעלה עמוד 1 מתוך ${files.length}…`;
+        const first = await api('POST', '/api/priority/docs', { doc: d.key, filename: files[0].name, mime: files[0].type, data: await readAsDataUrl(files[0]) });
+        for (let i = 1; i < files.length; i++) {
+          $('#drop-prog').textContent = `מעלה עמוד ${i + 1} מתוך ${files.length}…`;
+          await api('POST', `/api/priority/docs/${first.doc.id}/pages`, { filename: files[i].name, mime: files[i].type, data: await readAsDataUrl(files[i]) });
+        }
+        await load(); preview(first.doc.id);
+        toast(`נוסף לתור: מסמך אחד, ${files.length} עמודים`);
+      } catch (e) { toast(e.message, true); }
+      dz.removeAttribute('aria-busy');
+      $('#drop-prog').textContent = '';
+    }
+
     async function uploadFiles(files) {
       const dz = $('#drop');
       dz.setAttribute('aria-busy', 'true');
@@ -365,9 +436,22 @@
     const ws = main.querySelector('.ws');
     ['dragenter', 'dragover'].forEach((ev) => ws.addEventListener(ev, (e) => { if (e.dataTransfer?.types?.includes('Files')) { e.preventDefault(); drop.classList.add('over'); } }));
     ['dragleave', 'drop'].forEach((ev) => ws.addEventListener(ev, (e) => { if (ev === 'dragleave' && ws.contains(e.relatedTarget)) return; drop.classList.remove('over'); }));
-    ws.addEventListener('drop', (e) => { if (!e.dataTransfer?.files?.length) return; e.preventDefault(); uploadFiles([...e.dataTransfer.files]); });
+    const incoming = (files) => {
+      if (!files.length) return;
+      // נגרר על אזור הנספחים בעבודה — נספח, בלי שאלה
+      if (desk?.active || files.length > 1) return askDrop(files);
+      return uploadFiles(files);
+    };
+    ws.addEventListener('drop', (e) => {
+      if (!e.dataTransfer?.files?.length) return;
+      e.preventDefault();
+      const files = [...e.dataTransfer.files];
+      if (e.target.closest?.('.attach') && desk?.view?.canAttach) return attachFiles(files);
+      incoming(files);
+    });
     drop.addEventListener('click', () => { if (drop.getAttribute('aria-busy') !== 'true') $('#file-in').click(); });
-    $('#file-in').addEventListener('change', (e) => { uploadFiles([...e.target.files]); e.target.value = ''; });
+    $('#file-in').addEventListener('change', (e) => { incoming([...e.target.files]); e.target.value = ''; });
+    ws.addEventListener('change', (e) => { if (e.target.id === 'attach-in') { attachFiles([...e.target.files]); e.target.value = ''; } });
 
     main.querySelector('.ws').addEventListener('change', (e) => { if (e.target.matches('.cell-in')) commitCell(e.target); });
     main.querySelector('.ws').addEventListener('keydown', (e) => {
@@ -387,6 +471,9 @@
       const fo = e.target.closest('[data-force]');
       if (fo) return deskStart(Number(fo.dataset.force), true);
       if (e.target.closest('[data-continue]')) { deskConflict = null; return deskLoad(); }
+      const dc = e.target.closest('[data-drop]');
+      if (dc) return dropChoice(dc.dataset.drop);
+      if (e.target.closest('#attach-btn')) return $('#attach-in')?.click();
       const sy = e.target.closest('[data-say]');
       if (sy) return deskSend(sy.dataset.say);
       const dl = e.target.closest('[data-del-line]');

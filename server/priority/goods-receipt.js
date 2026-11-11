@@ -2372,6 +2372,9 @@ function view(userId) {
     totals: { beforeVat: t.before_vat ?? null, vat: t.vat ?? null, total: t.total ?? null },
     // עריכה ישירה בטבלה (‎line-commands.js‎): בהשוואת השורות ובטיוטא. תיאור בטיוטא — רק בשורות על המק"ט הכללי
     editable: ['lines', 'review'].includes(s.step) && !s.paused ? { qty: true, description: true, remove: false } : null,
+    // נספחים: הקובץ הראשון הוא המסמך עצמו. מתי אפשר לצרף מהמסך — בשלב הנספחים ובטיוטא
+    attachments: Math.max(0, (s.files ?? []).length - 1),
+    canAttach: ['files', 'review'].includes(s.step) && !s.paused,
     lines
   };
 }

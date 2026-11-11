@@ -10,6 +10,10 @@
  *   • התשובות מגיעות למסך ולא לוואטסאפ; לצידן — התצוגה המובנית של המנוע (‎view‎): חברה, ספק, הזמנה, שורות, GR.
  *   • המצב של הקליטה הוא אחד לעובד: מה שהתחיל בוואטסאפ ממשיך כאן, ולהפך.
  *
+ * נספחים ועמודים (11.11.26): קובץ שמצורף מהמסך נשלח למנוע כמו תמונה נוספת בוואטסאפ — עם הכיתוב "נספח" (בלי ניחוש),
+ * או בלי כיתוב (עמוד נוסף של אותו מסמך — המנוע מסווג, ורשימת פריטים בעמוד הבא מעדכנת את השורות). כשהקליטה
+ * נגמרת — המסמך הבא בתור מוצע בכפתור (לא מתחיל לבד).
+ *
  * כאן נשמר רק התמליל של המסך (‎priority_desk:<userId>:<flow>‎) — כדי שרענון הדף לא יאבד את השיחה.
  */
 const fs = require('node:fs');
@@ -99,7 +103,25 @@ function state(user, flow) {
   const f = flowOf(user, flow);
   const t = transcript(user.id, flow);
   const view = f.engine().view(user.id);
-  return { flow, active: Boolean(view), view, docId: view ? t.docId : null, messages: view ? t.messages : t.messages.slice(-6) };
+  // הקליטה נגמרה (סופי / בוטל) — המסמך הבא בתור, לכפתור
+  const next = view ? null : Docs.nextOf(user, flow, t.docId);
+  return { flow, active: Boolean(view), view, docId: view ? t.docId : null, messages: view ? t.messages : t.messages.slice(-6), next };
+}
+
+/**
+ * קובץ לקליטה הפתוחה. ‎attach: true‎ — נספח (הכיתוב "נספח": בלי ניחוש); ‎false‎ — עמוד נוסף / מסמך שהמנוע יסווג.
+ */
+function sendFile(user, flow, input, { attach = true } = {}) {
+  return serial(user.id, async () => {
+    const f = flowOf(user, flow);
+    if (!f.engine().view(user.id)) throw fail(400, 'אין קליטה פתוחה — התחילו ממסמך בתור');
+    const file = Docs.decode(input);
+    const t = transcript(user.id, flow);
+    t.messages.push({ from: 'user', texts: [`📎 ${attach && flow === 'receipt' ? 'נספח' : 'עמוד נוסף'}: ${file.name}`], at: D.nowIso() });
+    t.messages.push(await run(user, flow, { text: attach && flow === 'receipt' ? 'נספח' : '', file }));
+    saveTranscript(user.id, flow, t);
+    return state(user, flow);
+  });
 }
 
 /**
@@ -122,6 +144,12 @@ function start(user, docId, { force = false } = {}) {
     const file = await Docs.file(user, doc.id);
     messages.push({ from: 'user', texts: [`${f.trigger}: ${doc.filename || 'מסמך'}`], at: D.nowIso() });
     messages.push(await run(user, flow, { text: f.trigger, file }));
+    // עמודים נוספים של אותו מסמך — בלי כיתוב: המנוע מחליט (דף המשך, רשימת פריטים)
+    for (const p of Docs.pages(user, doc.id)) {
+      if (!f.engine().view(user.id)) break;
+      messages.push({ from: 'user', texts: [`📎 עמוד נוסף: ${p.name}`], at: D.nowIso() });
+      messages.push(await run(user, flow, { text: '', file: p }));
+    }
     D.run("UPDATE priority_docs SET stage = 'bot', updated_at = ? WHERE id = ? AND stage IN ('new', 'bot')", D.nowIso(), doc.id);
     saveTranscript(user.id, flow, { docId: doc.id, messages });
     return state(user, flow);
@@ -142,4 +170,4 @@ function say(user, flow, text) {
   });
 }
 
-module.exports = { FLOWS, state, start, say, fileOf, _key: key };
+module.exports = { FLOWS, state, start, say, sendFile, fileOf, _key: key };

@@ -883,6 +883,9 @@ function view(userId) {
     company: s.company ? { code: s.company, name: Priority.companyOf(s.company).name, test: Priority.isTest(s.company) } : null,
     date: s.date ?? '', project: s.project ? (s.project.des || s.project.code) : '', warehouse: s.warehouse ?? '', docno: s.prdno ?? '',
     editable: ['items', 'review'].includes(s.step) && !s.paused && !s.prdno ? { qty: true, description: true, remove: true } : null,
+    // דף נוסף של הרשימה — נקרא ומוסיף פריטים (וגם נשמר כנספח לדרישה)
+    attachments: (s.files ?? []).length,
+    canAttach: ['items', 'review'].includes(s.step) && !s.paused && !s.prdno,
     lines: (s.items ?? []).map((x) => ({ n: x.n, description: x.description, qty: x.qty, unit: x.unit ?? '', part: x.part?.code ?? '', open: x.status === 'ask' }))
   };
 }

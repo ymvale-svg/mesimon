@@ -269,3 +269,10 @@ table.lines tr.unclear td { background: var(--warn-bg); }
 .cell-in.num { width: 84px; text-align: left; direction: ltr; font-variant-numeric: tabular-nums; }
 td.qty { white-space: nowrap; }
 td.qty .unit { color: var(--mute); font-size: 13px; }
+
+/* נספחים, כמה קבצים, והמסמך הבא */
+.attach { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; border: 1px dashed var(--mute); border-radius: 8px; padding: 6px 8px; font-size: 13px; }
+.drop-choice { margin: 0 12px 10px; border: 1px solid var(--brand); background: var(--surface); border-radius: var(--r); padding: 10px; display: flex; flex-direction: column; gap: 8px; font-size: 14px; }
+.desk-done { display: flex; flex-direction: column; gap: 10px; }
+.desk-done .msg { max-width: 100%; }
+.next-doc { display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; }
