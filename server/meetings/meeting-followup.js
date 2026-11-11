@@ -157,6 +157,11 @@ function askText(u, m) {
  * @param {object} io  ‎{ eligible(userId) → bool, busy(userId) → bool, send(userId, text, buttons) }‎
  */
 async function sweep(io) {
+  // עבודת רקע מול Timeless: תור הרקע, ורשימה ארגונית אחת לכל העובדים (לא בקשה לכל עובד)
+  return Timeless.background(() => sweepOnce(io));
+}
+
+async function sweepOnce(io) {
   const now = Date.now();
   const candidates = await zoomCandidates(now).catch(() => []);
   const users = D.all("SELECT id FROM users WHERE status = 'active' AND phone IS NOT NULL AND phone <> ''").map((r) => r.id).filter((id) => io.eligible(id));
