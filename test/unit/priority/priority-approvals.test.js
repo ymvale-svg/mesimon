@@ -142,12 +142,45 @@ test('notifyDemand — שליחה נכשלה: לא נרשם, ינסה שוב', a
   assert.equal(r2.sent, true);
 });
 
-test('notifyDemand — אין טלפון', async (t) => {
+const alerts = (like) => D.get('SELECT COUNT(*) AS n FROM notifications WHERE title LIKE ?', `%${like}%`).n;
+
+test('notifyDemand — אין טלפון: לא שולח, והמנהלים מקבלים התראה פעם אחת', async (t) => {
   usersMock(t);
   let called = false;
+  const before = alerts('אין טלפון');
   const r = await A.notifyDemand('test11', { PRDNO: 'PD-D', USERLOGIN: 'MatanR' }, async () => { called = true; return true; });
   assert.equal(r.why, 'אין טלפון בפרופיל');
   assert.equal(called, false);
+  const after = alerts('אין טלפון');
+  assert.ok(after > before, 'מנהל המערכת קיבל התראה');
+  await A.notifyDemand('test11', { PRDNO: 'PD-D2', USERLOGIN: 'MatanR' }, async () => true);
+  assert.equal(alerts('אין טלפון'), after, 'פעם אחת לכל משתמש');
+});
+
+test('notifyDemand — מחוץ לשעות הפעילות: לא נרשם כ"קיבל", נשלח בסבב הבא', async (t) => {
+  usersMock(t);
+  const d = { PRDNO: 'PD-G', USERLOGIN: 'Eladh' };
+  const r = await A.notifyDemand('test11', d, async () => 'later');
+  assert.equal(r.sent, false);
+  assert.equal(r.later, true);
+  const r2 = await A.notifyDemand('test11', d, async () => true);
+  assert.equal(r2.sent, true);
+});
+
+test('notifyDemand — השליחה נכשלה שוב ושוב: התראה למנהלים אחרי MAX_FAILS, פעם אחת', async (t) => {
+  usersMock(t);
+  const d = { PRDNO: 'PD-H', USERLOGIN: 'Eladh' };
+  const before = alerts('לא נשלחה');
+  for (let i = 1; i < A.MAX_FAILS; i++) await A.notifyDemand('test11', d, async () => false);
+  assert.equal(alerts('לא נשלחה'), before, 'עוד לא');
+  await A.notifyDemand('test11', d, async () => false);
+  const after = alerts('לא נשלחה');
+  assert.ok(after > before, 'מנהל המערכת קיבל התראה');
+  await A.notifyDemand('test11', d, async () => false);
+  assert.equal(alerts('לא נשלחה'), after, 'פעם אחת');
+  const ok = await A.notifyDemand('test11', d, async () => true);
+  assert.equal(ok.sent, true);
+  assert.equal(D.getSetting('pd_approval_failed', {})['test11:PD-H:Eladh'], undefined);
 });
 
 test('notifyDemand — חותם לא ממופה: התראה למנהלים פעם אחת', async (t) => {

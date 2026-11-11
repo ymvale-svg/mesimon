@@ -186,3 +186,13 @@ test('resolveItems — רשימה ריקה: בלי פניות', async (t) => {
   await PD._resolveItems({ company: 'test11' }, []);
   assert.equal(g.mock.callCount(), 0);
 });
+
+test('signerNote — העובד יודע אם החותם הבא קיבל הודעה', () => {
+  const n = PD._signerNote;
+  assert.equal(n({ signer: null }, ''), '');
+  assert.match(n({ signer: 'Eladh', sent: true }, 'אלעד'), /אלעד\* — קיבל הודעה בוואטסאפ/);
+  assert.match(n({ signer: 'Eladh', later: true }, 'אלעד'), /בשעות הפעילות/);
+  assert.match(n({ signer: 'Eladh', why: 'הבוט לא שלח' }, 'אלעד'), /ינסה שוב/);
+  assert.match(n({ signer: 'Eladh', why: 'אין טלפון בפרופיל' }, 'אלעד'), /לא קיבל הודעה.*מנהל המערכת עודכן/);
+  assert.match(n({ signer: 'Eladh', why: 'לא נמצא במשימון' }, 'Eladh'), /לא קיבל הודעה/);
+});
