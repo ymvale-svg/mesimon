@@ -53,7 +53,7 @@ const PACE = {
   off: { gapMin: 0, max: 0 }
 };
 const paceOf = (userId) => PACE[D.userPrefs(userId)?.botPrefs?.remindPace] ?? PACE.normal;
-const GOODS_DAYS = 3;          // חשבונית שלא נשאלה תוך 3 ימים — כבר לא מציעים
+const GOODS_DAYS = 1;          // חשבונית שלא נשאלה תוך יממה — כבר לא מציעים (11.11.26; היה 3)
 const DOC_MIME = /^(application\/pdf|image\/)/i;
 const DOC_NAME = /\.(pdf|jpe?g|png|heic|tiff?)$/i;
 
@@ -406,8 +406,20 @@ async function nextReminder(userId) {
   return (await dueReminders(userId, { limit: 1 }))[0] ?? null;
 }
 
+/*
+ * 🚨 11.11.26 — תקלה: עובדים קיבלו עשרות הודעות על חשבוניות. הסיבה: הצעה שלא נענתה חזרה לתור ("pending") ונשאלה
+ * שוב בכל סבב, לכל חשבונית. מעכשיו: כל חשבונית — שאלה אחת (לא נענתה — "ignored", ‎wa-bot.releaseQuestion‎),
+ * רק חשבוניות מהיממה האחרונה, ולכל היותר ‎GOODS_PER_DAY‎ הצעות ביום לעובד. השאר — ב"היום" / בשליחה ידנית לבוט.
+ */
+const GOODS_PER_DAY = 2;
+const goodsAskedToday = (userId) => D.get(
+  'SELECT COUNT(*) AS n FROM mail_goods_docs WHERE user_id = ? AND asked_at >= ?',
+  userId, W.ilWallToUtc(W.todayIL(), 0, 0).toISOString()
+)?.n ?? 0;
+
 function nextGoods(userId) {
   const today = W.todayIL();
+  if (goodsAskedToday(userId) >= GOODS_PER_DAY) return null;
   return D.get(
     `SELECT * FROM mail_goods_docs WHERE user_id = ? AND (status = 'pending' OR (status = 'later' AND COALESCE(snooze_until, '') <= ?))
        AND created_at >= ? ORDER BY created_at, id LIMIT 1`,
@@ -555,5 +567,5 @@ function prune() {
 
 module.exports = {
   GOODS_SCHEMA, BTN, PACE_BTN, answerPaceOffer, goodsDocFrom, goodsFile, nextQuestion, answerReminder, answerGoods, prune, dueReminders, mayRemindNow, mayAlertNow, paceTick, PACE, paceCommand, noteProactive, noteUser,
-  _internal: { engagement, paceOffer, nextReminder, nextGoods, reminderQuestion, goodsQuestion, setRemind, remindAt, scoreOf, handledInGmail, paceState }
+  _internal: { engagement, paceOffer, nextReminder, nextGoods, GOODS_PER_DAY, reminderQuestion, goodsQuestion, setRemind, remindAt, scoreOf, handledInGmail, paceState }
 };

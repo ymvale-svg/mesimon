@@ -2584,7 +2584,7 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
       }
       return out(r.text, { draft: r.draft ?? null, awaiting: Boolean(r.awaiting) }, { action: 'form_fill', status: 'ok', result: String(r.result ?? '').slice(0, 300), buttons: r.buttons, react: r.react });
     }
-    if (state.draft.step === 'offer') D.run("UPDATE mail_forms SET status = 'pending' WHERE id = ? AND status = 'asked'", state.draft.formId);
+    if (state.draft.step === 'offer') D.run("UPDATE mail_forms SET status = 'ignored' WHERE id = ? AND status = 'asked'", state.draft.formId);
     keep.draft = null;
     state = { ...state, draft: null, awaiting: false };
   }
@@ -4535,7 +4535,8 @@ async function mailActionAlerts() {
     if (!actor) continue;
     const allow = {
       deadline: Boolean(on.deadline && prefs.mailDeadline !== false && WaActions.allowed(actor, 'mail_deadline')),
-      goods: Boolean(on.goods && prefs.goodsOffer !== false && WaActions.allowed(actor, 'goods_offer') && WaActions.allowed(actor, 'goods_receipt')),
+      // 📦 רק מי שפתח אי פעם קבלת סחורה בפריוריטי (11.11.26)
+      goods: Boolean(on.goods && prefs.goodsOffer !== false && WaActions.allowed(actor, 'goods_offer') && WaActions.allowed(actor, 'goods_receipt') && GoodsReceipt.everOpened(u.id)),
       form: Boolean(on.form && prefs.formOffer !== false && WaActions.allowed(actor, 'form_fill') && Gmail.canSend(u.id)),
       followup: Boolean(on.followup && prefs.sentFollowup !== false && WaActions.allowed(actor, 'sent_followup') && Gmail.canSend(u.id))
     };
@@ -4601,7 +4602,8 @@ function startGoodsFromMail(user, goodsId) {
       void react(ref, '⚠️');
       console.error('[משימון] הורדת חשבונית מהמייל נכשלה:', err.message);
       log({ channel: 'summary', chatId, userId: u.id, who: u.full_name, action: 'goods_offer', status: 'error', result: `הורדה מ-Gmail: ${err.message}`.slice(0, 300) });
-      D.run("UPDATE mail_goods_docs SET status = 'pending' WHERE id = ?", row.id);
+      // 🚨 לא חוזרת לתור — אחרת נשאלת שוב ושוב (11.11.26)
+      D.run("UPDATE mail_goods_docs SET status = 'error', decided_at = ? WHERE id = ?", D.nowIso(), row.id);
       await sendText(chatId, `לא הצלחתי להוריד את ${row.filename} מהמייל 😕 אפשר להעביר לי את הקובץ ישירות, ואתחיל קבלת סחורה.`).catch(() => {});
     }
   });

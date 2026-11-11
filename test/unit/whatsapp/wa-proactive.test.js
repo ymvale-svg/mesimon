@@ -56,3 +56,38 @@ test('הצעה לקבלת סחורה שלא נענתה — נסגרת ולא נ�
   assert.equal(MailActions._internal.nextGoods(u.id), null, 'לא נשאלת שוב');
 });
 
+
+test('🚨 חשבוניות במייל — לא יותר מ-2 הצעות ביום לעובד, ורק מהיממה האחרונה', () => {
+  const u = user();
+  const add = (g, hoursAgo = 1) => D.run(
+    `INSERT INTO mail_goods_docs (user_id, gmail_id, box, kind, filename, mime, supplier, from_name, from_email, subject, status, created_at)
+     VALUES (?, ?, 0, 'invoice', 'inv.pdf', 'application/pdf', 'ספק', 'ספק', 's@x.co', 'חשבונית', 'pending', ?)`,
+    u.id, g, new Date(Date.now() - hoursAgo * 3600 * 1000).toISOString()
+  );
+  add('old', 30);
+  for (const g of ['a', 'b', 'c', 'd']) add(g);
+  const asked = [];
+  for (let i = 0; i < 10; i++) {
+    const row = MailActions._internal.nextGoods(u.id);
+    if (!row) break;
+    asked.push(row.gmail_id);
+    D.run("UPDATE mail_goods_docs SET status = 'asked', asked_at = ? WHERE id = ?", D.nowIso(), row.id);
+  }
+  assert.equal(asked.length, MailActions._internal.GOODS_PER_DAY);
+  assert.ok(!asked.includes('old'), 'חשבונית בת יותר מיממה — לא מציעים');
+});
+
+test('📦 הצעה על חשבונית — רק למי שפתח אי פעם קבלת סחורה בפריוריטי', () => {
+  const GR = require('../../../server/priority').GoodsReceipt;
+  const never = user();
+  const old = user();
+  const fresh = user();
+  assert.equal(GR.everOpened(never.id), false);
+  // מלפני הרישום — מיומן הבוט
+  D.run(`INSERT INTO wa_log (at, channel, user_id, action, result, status) VALUES (?, 'private', ?, 'goods_receipt', 'GR סופי GR2600123', 'ok')`, D.nowIso(), old.id);
+  D.run(`INSERT INTO wa_log (at, channel, user_id, action, result, status) VALUES (?, 'private', ?, 'goods_receipt', 'קבלת סחורה — לא מורשה', 'ok')`, D.nowIso(), never.id);
+  assert.equal(GR.everOpened(old.id), true);
+  assert.equal(GR.everOpened(never.id), false, 'ניסה ולא פתח — לא נחשב');
+  GR.markOpened(fresh.id);
+  assert.equal(GR.everOpened(fresh.id), true);
+});
