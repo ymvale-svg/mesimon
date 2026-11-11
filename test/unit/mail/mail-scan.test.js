@@ -102,3 +102,17 @@ test('sourceLink — רק למי שהמשימה נוצרה מהמייל שלו',
   assert.equal(Scan.sourceLink({ id: 1, source: 'manual', source_user_id: 5 }, 5), null);
   assert.equal(Scan.sourceLink({ id: 1, source: 'email', source_user_id: 5 }, 6), null);
 });
+
+test('liveBoxes — הסריקה השוטפת: כל התיבות המחוברות (ברירת מחדל); "alerts" — רק מי שמקבל התראות מייל בבוט', (t) => {
+  const { D } = require('../../helpers/db');
+  const Gmail = require('../../../server/integrations/gmail');
+  const Ports = require('../../../server/core/ports');
+  t.mock.method(Gmail, 'allBoxes', () => [1, 2, '2:5']);
+  t.mock.method(Gmail, 'boxesOf', (userId) => [userId]);
+  const undo = Ports.provide('waBot', { mailAlertUsers: () => [2] });
+  t.after(() => { undo(); D.setSetting('ai_mail_live_scope', null); });
+  D.setSetting('ai_mail_live_scope', null);
+  assert.deepEqual(Scan._internal.liveBoxes(), [1, 2, '2:5'], 'כולם — גם מי שלא מקבל התראות בבוט');
+  D.setSetting('ai_mail_live_scope', 'alerts');
+  assert.deepEqual(Scan._internal.liveBoxes(), [2]);
+});

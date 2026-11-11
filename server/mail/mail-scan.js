@@ -637,11 +637,19 @@ async function morningRun() {
 }
 
 /**
- * 📬 סריקה שוטפת — למי שהבוט פונה אליו על כל מייל חדש (‎mail_alert‎ בפעולות
- * הבוט; הרשימה מ-‎wa-bot.mailAlertUsers‎). כל ‎ai_mail_live_minutes‎ דקות
- * (ברירת מחדל 10), מהסריקה הקודמת ולא יותר מיממה אחורה. אותה תקרה יומית של
- * הסריקה הרגילה; מייל שכבר נסרק אינו נסרק שוב.
+ * 📬 סריקה שוטפת — כל תיבה מחוברת של כל עובד (הוחלט 11.11.26: "מייל מלפני חצי שעה לא מופיע בהצעות" —
+ * עד אז רק מי שמקבל התראות מייל בבוט, ‎mail_alert‎, ושאר העובדים קיבלו הצעות רק בסריקת הבוקר).
+ * כל ‎ai_mail_live_minutes‎ דקות (ברירת מחדל 10), מהסריקה הקודמת ולא יותר מיממה אחורה. אותה תקרה יומית של
+ * הסריקה הרגילה; מייל שכבר נסרק אינו נסרק שוב — ולכן העלות כמו בסריקת הבוקר, רק מוקדם יותר.
+ * ‎ai_mail_live_scope = 'alerts'‎ — כמו קודם: רק מי שמקבל התראות מייל בבוט.
  */
+function liveBoxes() {
+  if (D.getSetting('ai_mail_live_scope', 'all') === 'alerts') {
+    return Ports.get('waBot').mailAlertUsers().flatMap((userId) => Gmail.boxesOf(userId, 'mail'));
+  }
+  return Gmail.allBoxes('mail');
+}
+
 let liveAt = 0;
 let liveBusy = false;
 async function liveRun() {
@@ -651,14 +659,12 @@ async function liveRun() {
   liveAt = Date.now();
   liveBusy = true;
   try {
-    for (const userId of Ports.get('waBot').mailAlertUsers()) {
-      for (const who of Gmail.boxesOf(userId, 'mail')) {
-        const conn = Gmail.connectionOf(who);
-        if (!conn || conn.state !== 'ok' || conn.scan_running) continue;
-        const last = conn.last_scan_at ? new Date(conn.last_scan_at).getTime() : 0;
-        const from = new Date(Math.max(last - 30 * 60000, Date.now() - DAY));
-        await runScan(who, { from, trigger: 'live' }).catch((err) => console.error(`[משימון] סריקה שוטפת של משתמש ${userId} נכשלה:`, err.message));
-      }
+    for (const who of liveBoxes()) {
+      const conn = Gmail.connectionOf(who);
+      if (!conn || conn.state !== 'ok' || conn.scan_running) continue;
+      const last = conn.last_scan_at ? new Date(conn.last_scan_at).getTime() : 0;
+      const from = new Date(Math.max(last - 30 * 60000, Date.now() - DAY));
+      await runScan(who, { from, trigger: 'live' }).catch((err) => console.error(`[משימון] סריקה שוטפת של ${who} נכשלה:`, err.message));
     }
   } finally {
     liveBusy = false;
@@ -1140,5 +1146,5 @@ module.exports = {
   approve, approveAll, reject, restore, ignoreSenderOf, join, skip, undo, markConverted, setSender, senders,
   dismissClosure, closureForTask, markReply,
   listFor, sourceLink, suggestionById,
-  _internal: { sanitize, processMessage, createFromSuggestion }
+  _internal: { sanitize, processMessage, createFromSuggestion, liveBoxes }
 };
