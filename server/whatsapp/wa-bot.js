@@ -3837,7 +3837,8 @@ async function handleDirect(msg) {
     if (how !== 'free') { forceChat = true; WaQuestions.markAnswered(user.id, pressed.id); }
   } else if (pressed && ['goods_receipt', 'purchase_demand'].includes(pressed.owner)) {
     // כפתור של קבלת סחורה / דרישת רכש — לזרימה שלו, כשהיא פתוחה. סגורה (או תפריט פריוריטי) — הניתוב הרגיל
-    const open = pressed.owner === 'goods_receipt' ? GoodsReceipt.active(user.id, true) : PurchaseDemand.active(user.id, true);
+    // תפריט פריוריטי אינו קליטה — הוא מנתב: "🛒 דרישת רכש" עליו הולך לדרישת הרכש (באג 11.11: נענה "לא פתוחה לך")
+    const open = pressed.owner === 'goods_receipt' ? GoodsReceipt.active(user.id, true) && !GoodsReceipt.inMenu(user.id) : PurchaseDemand.active(user.id, true);
     if (open) forceFlow = pressed.owner;
   }
   if (!forceChat && forceFlow !== 'goods_receipt' && pdAllowed && (PurchaseDemand.active(user.id, late) || forceFlow === 'purchase_demand' || (PurchaseDemand.opens(text) && !(msg.file && !text)))) {
