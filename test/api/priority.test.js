@@ -113,3 +113,12 @@ test('טור המיילים: ריק כשאין מה שזוהה, ומייל לא 
   assert.equal((await as(emp)('POST', '/api/priority/inbox/999999/take', { doc: 'receipt' })).status, 404);
   assert.equal((await as(emp)('POST', '/api/priority/inbox/999999/dismiss', {})).status, 404);
 });
+
+test('השרשרת: עובד רואה את שלו; "כל הארגון" — רק למנהל', async () => {
+  const w = await as(emp)('GET', '/api/priority/chain');
+  assert.equal(w.status, 200);
+  assert.deepEqual(w.json.stages.map((s) => s.key), ['new', 'bot', 'draft', 'waiting', 'done']);
+  assert.equal((await as(emp)('GET', '/api/priority/chain?all=1')).json.all, false, 'עובד לא מקבל את כל הארגון');
+  assert.equal((await as(admin)('GET', '/api/priority/chain?all=1')).json.all, true);
+  assert.equal((await srv.api('GET', '/api/priority/chain')).status, 401);
+});

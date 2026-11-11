@@ -27,7 +27,7 @@ const DOC_MIME = /^(application\/pdf|image\/(jpeg|png|heic|heif|tiff|webp))$/i;
 const EXT = { 'application/pdf': '.pdf', 'image/jpeg': '.jpg', 'image/png': '.png', 'image/heic': '.heic', 'image/heif': '.heif', 'image/tiff': '.tif', 'image/webp': '.webp' };
 const MIME_BY_EXT = { '.pdf': 'application/pdf', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.heic': 'image/heic', '.tif': 'image/tiff', '.tiff': 'image/tiff', '.webp': 'image/webp' };
 const BOT_TEXT = { receipt: 'קבלת סחורה', demand: 'דרישת רכש' };
-const STAGES = { new: 'התקבל', bot: 'בטיפול בבוט', done: 'הסתיים', rejected: 'נדחה' };
+const STAGES = require('./priority-chain').LABELS;
 
 const dir = () => path.join(D.UPLOADS_DIR, 'priority-docs', String(ORG));
 const fail = (status, message) => Object.assign(new Error(message), { status });
@@ -58,7 +58,7 @@ function inbox(user, { limit = 60 } = {}) {
 const shape = (r) => r && ({
   id: r.id, doc: r.doc, source: r.source, filename: r.filename, mime: r.mime, size: r.size,
   supplier: r.supplier, fromName: r.from_name, fromEmail: r.from_email, subject: r.subject,
-  stage: r.stage, stageLabel: STAGES[r.stage] ?? r.stage, note: r.note, at: r.created_at, updatedAt: r.updated_at
+  stage: r.stage, stageLabel: STAGES[r.stage] ?? r.stage, docno: r.docno, company: r.company, note: r.note, at: r.created_at, updatedAt: r.updated_at
 });
 
 function insert(user, fields) {
@@ -156,7 +156,7 @@ async function file(user, id) {
 /** הוצאה מהתור (לא נוגע בפריוריטי). מייל שהגיע ממנו חוזר לטור */
 function remove(user, id) {
   const r = rowOf(user, id);
-  if (r.stage === 'done') throw fail(400, 'מסמך שהסתיים לא נמחק מהתור');
+  if (['draft', 'waiting', 'done'].includes(r.stage)) throw fail(400, 'המסמך כבר בפריוריטי — מבטלים אותו שם או בבוט, לא מהתור');
   if (r.file_path) { try { fs.unlinkSync(path.join(D.UPLOADS_DIR, r.file_path)); } catch { /* כבר נמחק */ } }
   D.run('DELETE FROM priority_docs WHERE id = ?', r.id);
   if (r.mail_goods_id) D.run("UPDATE mail_goods_docs SET status = 'pending' WHERE id = ? AND status = 'started'", r.mail_goods_id);

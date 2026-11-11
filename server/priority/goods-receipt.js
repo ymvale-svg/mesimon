@@ -33,6 +33,7 @@ const Claude = require('../integrations').Claude;
 const { BTN, labels, sameLabel } = require('../whatsapp').WaUi;
 const Prefs = require('./priority-prefs');
 const Access = require('./priority-access');
+const Chain = require('./priority-chain');
 const Priority = require('../integrations').Priority;
 const WhatsApp = require('../integrations').Whatsapp;
 const { receiptPdf } = require('./gr-pdf');
@@ -1196,6 +1197,7 @@ async function createDraft(user, s) {
     if (!docno) return { failed: err, tried: [first, ...alt] };
   }
   s.docno = docno;
+  Chain.progress(user.id, 'receipt', { stage: 'draft', docno, company: c, supplier: s.supplier?.name ?? '' });
   // פריוריטי מציב בפתיחה את מחסן הפרויקט, גם כשנשלח מחסן אחר — מעדכנים למחסן שנבחר (לפני השורות, שיורשות אותו)
   if (s.warehouse) await Priority.setHeader(c, docno, { TOWARHSNAME: s.warehouse }).catch((err) => console.error(`[משימון] מחסן ${s.warehouse} ל-${docno}:`, err.message));
   rememberPrefs(user.id, s);
@@ -1686,6 +1688,8 @@ async function cancel(user, s, why = 'בוטלה') {
       alertAdmins(user, s, 'טיוטא לא בוטלה', [`הטיוטא נשארה בפריוריטי; שורות מהזמנה תופסות יתרה עד שתבוטל.`, err.message]);
     }
   }
+  // גם בלי טיוטא — מסמך שנשלח לבוט מהמסך יוצא מ"בטיפול בבוט"
+  Chain.progress(user.id, 'receipt', { stage: 'cancelled', docno: s?.docno ?? '', company: s?.company ?? '' });
   clear(user.id, s);
   return { replies: [`קבלת הסחורה ${why}.${note}`], status: 'ok', result: `ביטול${s?.docno ? ` ${s.docno}` : ''}` };
 }
@@ -2258,6 +2262,7 @@ async function step(user, s, t, file, allow = { gr: true, pd: false }) {
         }
         // ה-GR האחרון שהפך לסופי — ל-👎 שנשלח מיד אחר כך (פריוריטי לא מחזיר סופית לטיוטא דרך ה-API)
         D.setSetting(doneKey(user.id), { docno: s.docno, company: s.company, supplier: s.supplier?.name ?? '', at: Date.now() });
+        Chain.progress(user.id, 'receipt', { stage: 'done', docno: s.docno, company: s.company, supplier: s.supplier?.name ?? '' });
         const done = `✅ *קבלת סחורה ${s.docno}* נקלטה כסופית.\n${companyLine(s)}\nספק: ${s.supplier.name}${s.order ? ` · הזמנה ${s.order.ordname}` : ''}`;
         if (queueOf(s).length) return startQueued(user, s, [done]);
         return { s: null, replies: [done], status: 'ok', result: `GR סופי ${s.docno}` };

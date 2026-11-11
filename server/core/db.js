@@ -811,7 +811,9 @@ CREATE TABLE IF NOT EXISTS mail_goods_docs (
  * 🗂 תור המסמכים של משימון פריוריטי (‎server/priority/priority-docs.js‎): כל מסמך שנכנס לעבודה — ממייל,
  * מגרירה במסך — עם הסוג (‎doc‎), המקור והשלב בשרשרת. הקובץ: ‎file_path‎ (יחסי לתיקיית ההעלאות),
  * ובמסמך ממייל — יורד מ-Gmail בפעם הראשונה שצריך אותו.
- * ‎stage‎: new (התקבל) · bot (נשלח לבוט, בטיפול בוואטסאפ) · done · rejected.
+ * ‎stage‎: new (התקבל) · bot (בטיפול בבוט) · draft (טיוטא בפריוריטי) · waiting (מחכה לאישור בפריוריטי)
+ *         · done (סופי) · cancelled (בוטל) · rejected (הוצא מהתור). ‎docno‎ — המספר בפריוריטי (GR / PD).
+ * ‎source‎: mail · upload · whatsapp (נפתח ישר בבוט — נרשם כדי שהשרשרת תראה הכל).
  */
 CREATE TABLE IF NOT EXISTS priority_docs (
   id            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -829,6 +831,8 @@ CREATE TABLE IF NOT EXISTS priority_docs (
   from_email    TEXT    NOT NULL DEFAULT '',
   subject       TEXT    NOT NULL DEFAULT '',
   stage         TEXT    NOT NULL DEFAULT 'new',
+  docno         TEXT    NOT NULL DEFAULT '',
+  company       TEXT    NOT NULL DEFAULT '',
   note          TEXT    NOT NULL DEFAULT '',
   created_at    TEXT    NOT NULL,
   updated_at    TEXT    NOT NULL

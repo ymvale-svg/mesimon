@@ -27,6 +27,7 @@ const Auth = require('../core').Auth;
 const P = require('../core').Permissions;
 const Prefs = require('./priority-prefs');
 const Access = require('./priority-access');
+const Chain = require('./priority-chain');
 const Approvals = require('./priority-approvals');
 const { BTN, YES, NO, CANCEL, normalize, label, labels, sameLabel } = require('../whatsapp').WaUi;
 
@@ -660,6 +661,7 @@ async function submit(user, s) {
   }
   s.prdno = prdno;
   save(user.id, s);
+  Chain.progress(user.id, 'demand', { stage: 'draft', docno: prdno, company: c, supplier: s.project?.des ?? '' });
   const problems = [];
   const gen = await generalPair(s);
   for (const it of s.items) {
@@ -714,6 +716,7 @@ async function submit(user, s) {
     return { s: null, replies: [[`📝 *דרישת רכש ${prdno}* נפתחה בפריוריטי (${s.items.length} ${s.items.length === 1 ? 'פריט' : 'פריטים'}), אבל עוד *לא עברה לאישור* — חסרה הגדרה בפריוריטי.`,
       'מנהל המערכת קיבל פירוט ויעביר אותה לאישור.', companyLine(c)].join('\n')], buttons: [], status: 'error', result: `${prdno} טיוטא: ${err.message}` };
   }
+  Chain.progress(user.id, 'demand', { stage: 'waiting', docno: prdno, company: c });
   // החותם הבא — הודעה בוואטסאפ
   let signerLine = '';
   try {
