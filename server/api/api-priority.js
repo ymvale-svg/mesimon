@@ -14,6 +14,7 @@ const Settings = require('../priority').PrioritySettings;
 const Access = require('../priority').PriorityAccess;
 const Docs = require('../priority').PriorityDocs;
 const Chain = require('../priority').PriorityChain;
+const Desk = require('../priority').PriorityDesk;
 const Priority = require('../integrations').Priority;
 const { HttpError, badRequest, forbidden, readJson, sendJson, parseUrl } = require('../core').HttpKit;
 
@@ -142,6 +143,36 @@ function register(router) {
   router.post('/api/priority/docs/:id/bot', async (req, res, ctx) => {
     const actor = userOnly(ctx);
     sendJson(res, 200, { doc: await docs(() => Docs.toBot(actor, ctx.params.id)) });
+  });
+
+  // ---------------------------------------------------------------- עבודה מתוך המסך (אותו מנוע כמו הבוט)
+  router.post('/api/priority/desk/start', async (req, res, ctx) => {
+    const actor = userOnly(ctx);
+    const b = await readJson(req);
+    try {
+      sendJson(res, 200, await Desk.start(actor, Number(b.id), { force: Boolean(b.force) }));
+    } catch (err) {
+      if (err?.status === 409) return sendJson(res, 409, { error: err.message, open: err.open });
+      throw docErr(err);
+    }
+  });
+
+  router.get('/api/priority/desk/file/:id', async (req, res, ctx) => {
+    const actor = userOnly(ctx);
+    const f = await docs(() => Desk.fileOf(actor, ctx.params.id));
+    res.writeHead(200, { 'content-type': f.mime, 'content-length': f.buf.length, 'cache-control': 'private, no-cache', 'x-content-type-options': 'nosniff', 'content-security-policy': "frame-ancestors 'self'" });
+    res.end(f.buf);
+  });
+
+  router.get('/api/priority/desk/:flow', async (req, res, ctx) => {
+    const actor = userOnly(ctx);
+    sendJson(res, 200, await docs(() => Desk.state(actor, ctx.params.flow)));
+  });
+
+  router.post('/api/priority/desk/:flow/say', async (req, res, ctx) => {
+    const actor = userOnly(ctx);
+    const b = await readJson(req);
+    sendJson(res, 200, await docs(() => Desk.say(actor, ctx.params.flow, b.text)));
   });
 
   // ---------------------------------------------------------------- השרשרת

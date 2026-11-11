@@ -867,4 +867,19 @@ async function step(user, s, t, file, { reaction }) {
   }
 }
 
-module.exports = { isTrigger, opens, active, pending, abandon, handle, setHooks, _parseDate: parseDate, _resolveItems: resolveItems, _ai: ai, _load: load, _clear: (userId) => clear(userId, load(userId)), _label: label, _labels: labels, _sameLabel: sameLabel };
+/**
+ * 🗂 תצוגה למסך של משימון פריוריטי (‎priority-desk.js‎) — הדרישה כפי שהיא עכשיו, כנתונים. קריאה בלבד.
+ */
+const VIEW_STEP = { start: 'פתיחה', company: 'חברה', project: 'פרויקט', warehouse: 'מחסן', code: 'סוג דרישה', items: 'רשימת הפריטים', pick: 'בחירת פריט', review: 'לפני שליחה לאישור' };
+function view(userId) {
+  const s = load(userId);
+  if (!s || !fresh(s)) return null;
+  return {
+    flow: 'demand', step: s.step, stepLabel: VIEW_STEP[s.step] ?? s.step, paused: Boolean(s.paused),
+    company: s.company ? { code: s.company, name: Priority.companyOf(s.company).name, test: Priority.isTest(s.company) } : null,
+    date: s.date ?? '', project: s.project ? (s.project.des || s.project.code) : '', warehouse: s.warehouse ?? '', docno: s.prdno ?? '',
+    lines: (s.items ?? []).map((x) => ({ n: x.n, description: x.description, qty: x.qty, unit: x.unit ?? '', part: x.part?.code ?? '', open: x.status === 'ask' }))
+  };
+}
+
+module.exports = { view, isTrigger, opens, active, pending, abandon, handle, setHooks, _parseDate: parseDate, _resolveItems: resolveItems, _ai: ai, _load: load, _clear: (userId) => clear(userId, load(userId)), _label: label, _labels: labels, _sameLabel: sameLabel };

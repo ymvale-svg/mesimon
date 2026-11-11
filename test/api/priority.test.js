@@ -122,3 +122,13 @@ test('השרשרת: עובד רואה את שלו; "כל הארגון" — רק 
   assert.equal((await as(admin)('GET', '/api/priority/chain?all=1')).json.all, true);
   assert.equal((await srv.api('GET', '/api/priority/chain')).status, 401);
 });
+
+test('עבודה מתוך המסך: מצב ריק, בלי הרשאה — 403, פעולה שלא עובדת מהמסך — 400, מסמך לא קיים — 404', async () => {
+  const s = await as(emp)('GET', '/api/priority/desk/receipt');
+  assert.equal(s.status, 200, s.text);
+  assert.equal(s.json.active, false);
+  assert.equal((await as(emp)('GET', '/api/priority/desk/demand')).status, 403);
+  assert.equal((await as(emp)('GET', '/api/priority/desk/invoice')).status, 400);
+  assert.equal((await as(emp)('POST', '/api/priority/desk/start', { id: 999999 })).status, 404);
+  assert.equal((await as(emp)('GET', '/api/priority/desk/file/1-x.pdf')).status, 404);
+});

@@ -2341,4 +2341,33 @@ const inMenu = (userId) => { const s = load(userId); return Boolean(fresh(s) && 
 /** בחירה בזרימה אחרת (דרישת רכש) — התפריט יורד */
 function dropMenu(userId) { const s = load(userId); if (s?.step === 'menu') clear(userId, s); }
 
-module.exports = { inMenu, dropMenu, isTrigger, isPriority, opens, active, pending, pausedNote, abandon, switchCancels, wantsUndoFinal, handle, sweep, _jpegToPdf: jpegToPdf, _codeLines: codeLines, _orderDiffs: orderDiffs, _similarLines: similarLines, _askParts: askParts, _projectsOf: projectsOf, _findProjects: findProjects, _ai: ai, _load: load, _clear: (userId) => clear(userId, load(userId)) };
+/**
+ * 🗂 תצוגה למסך של משימון פריוריטי (‎priority-desk.js‎) — מה שהבוט יודע עכשיו על הקליטה, כנתונים ולא כטקסט.
+ * קריאה בלבד: לא משנה את המצב. ‎null‎ — אין קליטה פתוחה.
+ */
+const VIEW_STEP = {
+  offer: 'מסמך מהמייל', doc: 'קריאת המסמך', doctype: 'סוג המסמך', company: 'חברה', supplier: 'ספק', order: 'הזמנה',
+  lines: 'השוואת שורות', parts: 'פריטים בלי הזמנה', project: 'פרויקט', warehouse: 'מחסן', header: 'פרטי הכותרת',
+  files: 'נספחים', review: 'טיוטא בפריוריטי — מחכה ל"מאשר"'
+};
+function view(userId) {
+  const s = load(userId);
+  if (!s || !fresh(s)) return null;
+  const d = s.doc ?? {};
+  const t = d.totals ?? {};
+  const lines = s.step === 'review' && s.reviewLines?.length
+    ? s.reviewLines.map((l) => ({ n: l.n, description: l.description, qty: l.qty }))
+    : (s.lines ?? []).map((l) => ({ n: l.n, description: l.description, qty: l.qty, unit: l.unit ?? '', price: l.price ?? null, unclear: Boolean(l.unclear || l.handwritten) }));
+  return {
+    flow: 'receipt', step: s.step, stepLabel: VIEW_STEP[s.step] ?? s.step, paused: Boolean(s.paused),
+    docType: s.doc ? docName(d) : '', docNumber: d.doc_number ?? '', date: d.date ?? '',
+    company: s.company ? { code: s.company, name: Priority.companyOf(s.company).name, test: Priority.isTest(s.company) } : null,
+    supplier: s.supplier ? { code: s.supplier.code, name: s.supplier.name } : (d.supplier_name ? { code: '', name: d.supplier_name, guess: true } : null),
+    order: s.order?.ordname ?? '', project: s.project ? (s.project.des || s.project.code) : (s.order?.projectDes ?? ''), warehouse: s.warehouse ?? '',
+    pay: s.payCode ? Priority.payLabel(s.payCode) : '', noVat: Boolean(s.noVat), docno: s.docno ?? '',
+    totals: { beforeVat: t.before_vat ?? null, vat: t.vat ?? null, total: t.total ?? null },
+    lines
+  };
+}
+
+module.exports = { view, inMenu, dropMenu, isTrigger, isPriority, opens, active, pending, pausedNote, abandon, switchCancels, wantsUndoFinal, handle, sweep, _jpegToPdf: jpegToPdf, _codeLines: codeLines, _orderDiffs: orderDiffs, _similarLines: similarLines, _askParts: askParts, _projectsOf: projectsOf, _findProjects: findProjects, _ai: ai, _load: load, _clear: (userId) => clear(userId, load(userId)) };

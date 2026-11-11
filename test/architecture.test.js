@@ -60,3 +60,10 @@ test('משימון פריוריטי: רק מודול ההגדרות (ובשכב�
   walk(path.join(ROOT, 'server'));
   assert.deepEqual(hits, []);
 });
+
+test('משימון פריוריטי: העבודה מהמסך (‎priority-desk.js‎) — אותו מנוע, בלי תלות בוואטסאפ', () => {
+  const src = fs.readFileSync(path.join(ROOT, 'server/priority/priority-desk.js'), 'utf8');
+  assert.doesNotMatch(src, /require\(['"]\.\.\/whatsapp['"]\)|require\(['"]\.\.\/integrations['"]\)\.Whatsapp/);
+  assert.match(src, /require\('\.\/goods-receipt'\)/);
+  assert.match(src, /require\('\.\/purchase-demand'\)/);
+});

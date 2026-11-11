@@ -18,7 +18,7 @@ const D = require('../core').Db;
 const ORG = 1;
 const STAGES = Object.freeze([
   { key: 'new', label: 'התקבל', hint: 'מהמייל או מהמסך' },
-  { key: 'bot', label: 'בטיפול בבוט', hint: 'השיחה בוואטסאפ' },
+  { key: 'bot', label: 'בעבודה', hint: 'במסך או בבוט' },
   { key: 'draft', label: 'טיוטא בפריוריטי', hint: 'מחכה ל"מאשר"' },
   { key: 'waiting', label: 'מחכה לאישור', hint: 'אצל החותם בפריוריטי' },
   { key: 'done', label: 'סופי', hint: '14 הימים האחרונים' }

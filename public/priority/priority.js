@@ -18,7 +18,7 @@
     const text = await res.text();
     let data = null;
     try { data = text ? JSON.parse(text) : null; } catch { data = null; }
-    if (!res.ok) { const e = new Error(data?.error ?? `שגיאה ${res.status}`); e.status = res.status; throw e; }
+    if (!res.ok) { const e = new Error(data?.error ?? `שגיאה ${res.status}`); e.status = res.status; e.data = data; throw e; }
     return data;
   }
 
@@ -133,6 +133,11 @@
     let mails = [];
     let selected = null;
     let confirmDel = null;   // ui-ux-pro-max: פעולה הרסנית — לחיצה שנייה לאישור (קובץ שהועלה נמחק)
+    let previewTicket = 0;
+    let previewUrl = null;
+    let desk = null;         // המצב של המנוע (‎/api/priority/desk/<flow>‎) — אותו מנוע כמו בבוט
+    let deskBusy = false;
+    let deskConflict = null; // קליטה אחרת פתוחה — מה לעשות איתה
 
     main.classList.add('wide');
     main.innerHTML = `
@@ -143,9 +148,10 @@
         </nav>
         <section class="center">
           <div class="ctx"><div><h1>${esc(d.label)}</h1><span class="muted" id="ws-meta"></span></div>
-            ${d.ready ? `<span class="pill p-ok ctx-note">${ui('bot')} "לבוט" — הבוט קורא את המסמך וממשיך איתך בוואטסאפ</span>` : `<span class="pill p-mute ctx-note">איסוף בלבד — הקליטה תיבנה בהמשך (${NEXT[d.key]} בתור)</span>`}</div>
-          <div class="split">
+            ${d.ready ? `<span class="pill p-ok ctx-note">"להתחיל כאן" — עובדים על המסמך במסך · "לבוט" — ממשיכים בוואטסאפ</span>` : `<span class="pill p-mute ctx-note">איסוף בלבד — הקליטה תיבנה בהמשך (${NEXT[d.key]} בתור)</span>`}</div>
+          <div class="split" id="split">
             <div class="queue" id="queue"></div>
+            ${d.ready ? '<section class="desk" id="desk" aria-label="עבודה על המסמך" hidden></section>' : ''}
             <div class="preview" id="preview"><p class="muted">בחרו מסמך מהתור כדי לראות אותו כאן.</p></div>
           </div>
         </section>
@@ -170,7 +176,8 @@
             <span class="qs muted">${x.docno ? `<b class="ltr-inline">${esc(x.docno)}</b> · ` : ''}${x.source === 'mail' ? esc(x.subject || x.fromEmail) : x.source === 'whatsapp' ? 'נפתח בוואטסאפ' : 'הועלה במסך'} · ${fmtAt(x.at)}</span>
           </button>
           <span class="qa">
-            ${d.ready && x.stage === 'new' ? `<button type="button" class="btn small pri" data-bot="${x.id}" aria-label="לשלוח לבוט: ${esc(x.filename)}">${ui('bot')} לבוט</button>` : ''}
+            ${d.ready && ['new', 'bot'].includes(x.stage) && desk?.docId !== x.id ? `<button type="button" class="btn small pri" data-start="${x.id}" aria-label="להתחיל כאן: ${esc(x.filename)}">להתחיל כאן</button>` : ''}
+            ${d.ready && x.stage === 'new' ? `<button type="button" class="btn small" data-bot="${x.id}" aria-label="לשלוח לבוט: ${esc(x.filename)}">${ui('bot')} לבוט</button>` : ''}
             ${['new', 'bot'].includes(x.stage) ? (confirmDel === x.id
               ? `<button type="button" class="btn small confirm" data-del="${x.id}">${x.source === 'upload' ? 'למחוק?' : 'להוציא?'}</button>`
               : `<button type="button" class="btn small" data-del="${x.id}" aria-label="הוצאה מהתור: ${esc(x.filename)}">${ui('x')}</button>`) : ''}
@@ -201,8 +208,97 @@
       drawQueue();
       if (!x) { $('#preview').innerHTML = '<p class="muted">בחרו מסמך מהתור כדי לראות אותו כאן.</p>'; return; }
       const src = `/api/priority/docs/${x.id}/file`;
-      $('#preview').innerHTML = `<div class="pv-h"><span>${esc(x.filename)}</span><a class="pv-open" href="${src}" target="_blank" rel="noopener">פתיחה בחלון<span class="sr-only"> (חלון חדש)</span></a></div>
-        ${/^image\//.test(x.mime) ? `<img src="${src}" alt="${esc(x.filename)}">` : `<iframe src="${src}" title="${esc(x.filename)}"></iframe>`}`;
+      if (!x.filename) { $('#preview').innerHTML = '<p class="muted">למסמך הזה אין קובץ במשימון — הוא נפתח ישר בוואטסאפ.</p>'; return; }
+      $('#preview').innerHTML = `<div class="pv-h"><span>${esc(x.filename)}</span><a class="pv-open" href="${src}" target="_blank" rel="noopener">פתיחה בחלון<span class="sr-only"> (חלון חדש)</span></a></div><p class="muted" aria-busy="true">טוען את המסמך…</p>`;
+      // טעינה קודם: קובץ שלא ירד (Gmail) — הודעה ברורה, לא שגיאה גולמית בתוך המסגרת
+      const ticket = (previewTicket = (previewTicket || 0) + 1);
+      fetch(src, { credentials: 'same-origin' }).then(async (r) => {
+        if (ticket !== previewTicket) return;
+        if (!r.ok) { const j = await r.json().catch(() => null); throw new Error(j?.error ?? `שגיאה ${r.status}`); }
+        const url = URL.createObjectURL(await r.blob());
+        if (ticket !== previewTicket) return URL.revokeObjectURL(url);
+        if (previewUrl) URL.revokeObjectURL(previewUrl);
+        previewUrl = url;
+        $('#preview').lastElementChild.outerHTML = /^image\//.test(x.mime) ? `<img src="${url}" alt="${esc(x.filename)}">` : `<iframe src="${url}" title="${esc(x.filename)}"></iframe>`;
+      }).catch((e) => { if (ticket === previewTicket) $('#preview').lastElementChild.outerHTML = `<p class="note" role="alert">לא הצלחתי להציג את הקובץ: ${esc(e.message)}</p>`; });
+    }
+
+    // ---------------- עבודה על המסמך מתוך המסך
+    const fmtWa = (t) => esc(t).replace(/\*([^*\n]+)\*/g, '<b>$1</b>').replace(/(^|\s)_([^_\n]+)_(?=\s|$)/g, '$1<i>$2</i>').replace(/~([^~\n]+)~/g, '<s>$1</s>').replace(/\n/g, '<br>');
+    const num = (v) => (v === null || v === undefined || v === '' ? '' : Number(v).toLocaleString('he-IL', { maximumFractionDigits: 2 }));
+    function drawDesk() {
+      const box = $('#desk');
+      if (!box) return;
+      $('#split').classList.toggle('desk-on', Boolean(desk?.active || deskConflict));
+      box.hidden = !(desk?.active || deskConflict);
+      if (box.hidden) return;
+      if (deskConflict) {
+        const o = deskConflict.open;
+        box.innerHTML = `<div class="desk-conflict" role="alert"><b>יש ${esc(d.label)} פתוחה</b>
+          <p>${esc(o?.stepLabel ?? '')}${o?.supplier?.name ? ` · ${esc(o.supplier.name)}` : ''}${o?.docno ? ` · ${esc(o.docno)}` : ''} — התחילה בוואטסאפ או ממסמך אחר.</p>
+          <div class="row-actions"><button type="button" class="btn pri" data-continue>להמשיך אותה כאן</button>
+          <button type="button" class="btn" data-force="${deskConflict.id}">לבטל אותה ולהתחיל את זו</button></div></div>`;
+        return;
+      }
+      const v = desk.view;
+      const field = (k, val, cls = '') => (val ? `<div class="field ${cls}"><span class="fl">${k}</span><span class="fv">${val}</span></div>` : '');
+      const company = v.company ? `${esc(v.company.name)}${v.company.test ? ' <span class="pill p-warn">סביבת בדיקה</span>' : ''}` : '';
+      const fields = d.key === 'receipt'
+        ? [field('מסמך', esc([v.docType, v.docNumber].filter(Boolean).join(' '))), field('תאריך', esc(v.date)), field('חברה', company), field('ספק', v.supplier ? `${esc(v.supplier.name)}${v.supplier.guess ? ' <span class="pill p-warn">מהמסמך — לא אושר</span>' : ''}` : ''),
+           field('הזמנה', esc(v.order), 'ltr-f'), field('פרויקט', esc(v.project)), field('מחסן', esc(v.warehouse), 'ltr-f'), field('תנאי תשלום', esc(v.pay)), field('GR בפריוריטי', esc(v.docno), 'ltr-f strong')]
+        : [field('חברה', company), field('תאריך', esc(v.date)), field('פרויקט', esc(v.project)), field('מחסן', esc(v.warehouse), 'ltr-f'), field('דרישה בפריוריטי', esc(v.docno), 'ltr-f strong')];
+      const lines = v.lines?.length ? `<div class="scroll"><table class="t lines"><thead><tr><th>#</th><th>פריט</th><th>כמות</th>${d.key === 'receipt' ? '<th>מחיר</th>' : '<th>מק"ט</th>'}</tr></thead><tbody>
+        ${v.lines.map((l) => `<tr${l.unclear || l.open ? ' class="unclear"' : ''}><td class="num">${l.n}</td><td class="wrap">${esc(l.description)}${l.unclear ? ' <span class="pill p-warn">לא ברור</span>' : ''}${l.open ? ' <span class="pill p-warn">לבחור</span>' : ''}</td><td class="num">${num(l.qty)} ${esc(l.unit ?? '')}</td><td class="num">${d.key === 'receipt' ? num(l.price) : esc(l.part ?? '')}</td></tr>`).join('')}
+        </tbody></table></div>` : '';
+      const totals = v.totals && v.totals.total !== null ? `<p class="totals num">לפני מע"מ ${num(v.totals.beforeVat)} · מע"מ ${num(v.totals.vat)} · <b>סה"כ ${num(v.totals.total)} ₪</b></p>` : '';
+      const last = [...desk.messages].reverse().find((m) => m.from === 'bot');
+      box.innerHTML = `
+        <div class="desk-h"><span class="pill p-brand">${esc(v.stepLabel)}</span>${v.paused ? '<span class="pill p-warn">מושהה</span>' : ''}</div>
+        <div class="fields">${fields.join('')}</div>
+        ${lines}${totals}
+        <ol class="talk" id="talk" aria-label="השיחה עם המערכת">
+          ${desk.messages.map((m) => `<li class="msg ${m.from}">${m.texts.map((t) => `<p>${fmtWa(t)}</p>`).join('')}${(m.files ?? []).map((f) => `<a class="msg-file" href="/api/priority/desk/file/${encodeURIComponent(f.id)}" target="_blank" rel="noopener">${ui('clip')} ${esc(f.caption || f.name)}</a>`).join('')}</li>`).join('')}
+        </ol>
+        <form class="say" id="say-form">
+          ${last?.buttons?.length ? `<div class="answers" role="group" aria-label="תשובות מהירות">${last.buttons.map((b) => `<button type="button" class="btn ${/✅/.test(b) ? 'pri' : ''}" data-say="${esc(b)}">${esc(b)}</button>`).join('')}</div>` : ''}
+          <div class="say-row"><label class="sr-only" for="say-in">תשובה או תיקון</label>
+            <input id="say-in" autocomplete="off" placeholder="לענות או לתקן בשפה חופשית: ״מלט קיבלתי רק 100״, ״ספק אחר: …״" ${deskBusy ? 'disabled' : ''}>
+            <button type="submit" class="btn pri" ${deskBusy ? 'disabled' : ''}>שליחה</button></div>
+          <p class="hint" id="desk-busy" role="status">${deskBusy ? 'המערכת עובדת על זה… קריאת מסמך יכולה לקחת עד דקה.' : ''}</p>
+        </form>`;
+      const talk = $('#talk'); talk.scrollTop = talk.scrollHeight;
+    }
+
+    async function deskLoad() {
+      if (!d.ready) return;
+      try { desk = await api('GET', `/api/priority/desk/${d.key}`); } catch { desk = null; }
+      drawDesk();
+    }
+
+    async function deskSend(text) {
+      if (deskBusy || !text) return;
+      deskBusy = true;
+      desk.messages = [...desk.messages, { from: 'user', texts: [text] }];
+      drawDesk();
+      try { desk = await api('POST', `/api/priority/desk/${d.key}/say`, { text }); } catch (e) { toast(e.message, true); }
+      deskBusy = false;
+      drawDesk();
+      $('#say-in')?.focus();
+      load();
+    }
+
+    async function deskStart(id, force = false) {
+      if (deskBusy) return;
+      deskBusy = true; deskConflict = null;
+      desk = { active: true, docId: id, messages: [{ from: 'bot', texts: ['קורא את המסמך…'] }], view: { stepLabel: 'קריאת המסמך', lines: [] } };
+      drawDesk(); drawQueue();
+      try {
+        desk = await api('POST', '/api/priority/desk/start', { id, force });
+      } catch (e) {
+        if (e.status === 409) { deskConflict = { id, open: e.data?.open }; desk = null; } else { toast(e.message, true); desk = null; }
+      }
+      deskBusy = false;
+      drawDesk(); load();
     }
 
     async function load() {
@@ -240,7 +336,20 @@
     drop.addEventListener('click', () => { if (drop.getAttribute('aria-busy') !== 'true') $('#file-in').click(); });
     $('#file-in').addEventListener('change', (e) => { uploadFiles([...e.target.files]); e.target.value = ''; });
 
+    main.querySelector('.ws').addEventListener('submit', (e) => {
+      if (e.target.id !== 'say-form') return;
+      e.preventDefault();
+      const t = $('#say-in').value.trim();
+      if (t) deskSend(t);
+    });
     main.querySelector('.ws').addEventListener('click', async (e) => {
+      const st = e.target.closest('[data-start]');
+      if (st) { preview(Number(st.dataset.start)); return deskStart(Number(st.dataset.start)); }
+      const fo = e.target.closest('[data-force]');
+      if (fo) return deskStart(Number(fo.dataset.force), true);
+      if (e.target.closest('[data-continue]')) { deskConflict = null; return deskLoad(); }
+      const sy = e.target.closest('[data-say]');
+      if (sy) return deskSend(sy.dataset.say);
       const v = e.target.closest('[data-view]');
       if (v) return preview(Number(v.dataset.view));
       const t = e.target.closest('[data-take]');
@@ -286,9 +395,11 @@
     });
 
     await load();
-    // מהשרשרת: ‎?id=‎ — המסמך הזה פתוח
+    await deskLoad();
+    // מהשרשרת: ‎?id=‎ — המסמך הזה פתוח; אחרת — המסמך שבעבודה
     const want = Number(new URLSearchParams(location.search).get('id'));
     if (want && items.some((i) => i.id === want)) preview(want);
+    else if (desk?.active && desk.docId && items.some((i) => i.id === desk.docId)) preview(desk.docId);
     else if (items[0]) preview(items[0].id);
   }
 
