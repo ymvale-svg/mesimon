@@ -662,10 +662,11 @@ function shapeTask(task, actor, { withDetails = false } = {}) {
     ...base,
     // ההתכתבות המלאה של משימת AI, לפאנל בכרטיס המשימה
     aiDetail: isVendor(actor) ? null : AiTasks.detailFor(task.id),
-    // משימה שנולדה ממייל: הקישור אליו — רק למי שהמייל בתיבה שלו
+    // משימה שנולדה ממייל: הקישור אליו — רק למי שהמייל בתיבה שלו; העותק של המייל (‎mail‎) — לכל מי שרואה את המשימה
     source: isVendor(actor) || !task.source ? null : {
       type: task.source,
-      link: actor.type === 'user' ? MailScan.sourceLink(task, actor.id) : null
+      link: actor.type === 'user' ? MailScan.sourceLink(task, actor.id) : null,
+      mail: task.source === 'email' ? MailScan.sourceMailOf(task) : null
     },
     // 💡 איך לסגור — רק לבעל התיבה שממנה נוצרה המשימה
     closure: actor.type === 'user' ? MailScan.closureForTask(task.id, actor.id) : null,

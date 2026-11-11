@@ -194,11 +194,12 @@ const TaskCardView = (() => {
         await reload();
         refreshBackground();
       }),
-      // משימה שנולדה ממייל — הקישור למייל עצמו רק אצל מי שהוא בתיבה שלו
+      // משימה שנולדה ממייל — הקישור למייל עצמו רק אצל מי שהוא בתיבה שלו; המייל עצמו (עותק) — לכל מי שעובד עליה
       task.source?.type === 'email'
         ? el('div.mute-sm', { style: { marginBottom: '10px' } }, [
             '📧 נוצרה ממייל',
-            task.source.link ? el('a', { href: task.source.link, target: '_blank', rel: 'noopener' }, [' · פתיחת המייל המקורי ↗']) : null
+            task.source.link ? el('a', { href: task.source.link, target: '_blank', rel: 'noopener' }, [' · פתיחת המייל המקורי ↗']) : null,
+            sourceMailNode(task.source.mail)
           ])
         : null,
       closurePanel(),
@@ -230,6 +231,20 @@ const TaskCardView = (() => {
    * 💡 איך לסגור — ההצעה שהגיעה עם המשימה מהמייל. אותו כפתור כמו ב"ממתין
    * לאישורך": פותח פנייה עם מעקב AI על המשימה הזו עצמה, והנוסח מוצג לפני שליחה.
    */
+  /** 📧 המייל שממנו נוצרה המשימה — מקופל: מאת, נושא, תאריך והטקסט (עותק, כדי שכל מי שעובד עליה יבין על מה מדובר) */
+  function sourceMailNode(mail) {
+    if (!mail) return null;
+    const when = mail.date ? new Date(mail.date).toLocaleString('he-IL', { day: 'numeric', month: 'numeric', hour: '2-digit', minute: '2-digit' }) : '';
+    return el('details.source-mail', { style: { marginTop: '6px' } }, [
+      el('summary', { text: `המייל עצמו: ${mail.subject || '(ללא נושא)'}` }),
+      el('div', { style: { marginTop: '6px', padding: '8px 10px', border: '1px solid var(--border, #e2e8f0)', borderRadius: '8px', background: 'var(--surface-2, transparent)' } }, [
+        el('div', { text: [`מאת: ${mail.from || mail.fromEmail || ''}${mail.from && mail.fromEmail ? ` <${mail.fromEmail}>` : ''}`, when].filter(Boolean).join(' · ') }),
+        el('div', { style: { whiteSpace: 'pre-wrap', marginTop: '6px', maxHeight: '320px', overflow: 'auto' }, text: mail.text || '' }),
+        mail.files?.length ? el('div', { style: { marginTop: '6px' }, text: `📎 ${mail.files.join(' · ')}` }) : null
+      ])
+    ]);
+  }
+
   function closurePanel() {
     const c = task.closure;
     if (!c) return null;
