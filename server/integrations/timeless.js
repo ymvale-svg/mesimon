@@ -645,6 +645,85 @@ function backgroundToken(userId) {
   return hasPersonal(row) ? secrets.decrypt(row.api_token) : null;
 }
 
+// ---------- לשמירה המקומית (‎meetings/timeless-store.js‎) ----------
+// הצינור היחיד מ-Timeless: הפגישות נמשכות פעם אחת ונשמרות במשימון, וכל המסכים והבוט קוראים משם.
+// כאן — רק הפניות עצמן, באסימון נתון ובלי סינון משתמש (הסינון בשמירה המקומית, ‎scopeOf‎).
+
+/** מה המשתמש רואה מההקלטות השמורות: ‎{ all: true }‎ (הנהלה), ‎{ all: false, emails }‎, או ‎null‎ */
+function scopeOf(userId) {
+  if (!isConnected(userId)) return null;
+  const u = D.get('SELECT * FROM users WHERE id = ?', userId);
+  if (!u || u.status !== 'active') return null;
+  if (Permissions.isManagement(u)) return { all: true };
+  const emails = new Set([u.email, u.work_email].map(normEmail).filter((e) => e.includes('@')));
+  return emails.size ? { all: false, emails } : null;
+}
+
+/** האסימונים שמהם מושכים: הארגוני, ואם אין — האישיים של מי שחיבר */
+function syncTokens() {
+  if (orgToken()) return [orgToken()];
+  const out = new Set();
+  for (const r of D.all("SELECT api_token FROM user_channels WHERE provider = ? AND api_token <> '' AND state <> 'revoked'", PROVIDER)) {
+    const t = secrets.decrypt(r.api_token);
+    if (t) out.add(t);
+  }
+  return [...out];
+}
+
+const org = {
+  /** כל הפגישות בטווח, בכל סטטוס, עם מסמכי ה-AI (הפניות) */
+  async meetings(token, from, to, { fresh = false } = {}) {
+    const out = [];
+    let cursor;
+    for (let page = 0; page < MAX_PAGES * 3; page++) {
+      const body = await rawCall(token, '/meetings', { scope: 'all', start_date: from, end_date: to, expand: 'documents', limit: PAGE_MAX, cursor }, { fresh });
+      const items = Array.isArray(body.data) ? body.data : [];
+      for (const m of items) if (m && m.id) out.push(m);
+      if (!body.has_more || !body.next_cursor || body.next_cursor === cursor || !items.length) break;
+      cursor = body.next_cursor;
+    }
+    return out;
+  },
+  async meeting(token, id) {
+    const body = await rawCall(token, '/meetings', { id, scope: 'all', limit: 1, expand: 'documents' }, { fresh: true });
+    return (Array.isArray(body.data) ? body.data : []).find((x) => x && x.id === id) ?? null;
+  },
+  async transcript(token, id) {
+    const body = await rawCall(token, `/meetings/${encodeURIComponent(id)}/transcript`, {}, { fresh: true });
+    return {
+      language: body.language || null,
+      speakers: (Array.isArray(body.speakers) ? body.speakers : []).map((x) => ({ id: String(x.id), name: x.name || String(x.id) })),
+      segments: (Array.isArray(body.segments) ? body.segments : []).filter((x) => x && x.text)
+        .map((x) => ({ s: Number(x.start_time) || 0, e: Number(x.end_time) || Number(x.start_time) || 0, speaker: String(x.speaker_id ?? ''), text: String(x.text).trim() }))
+    };
+  },
+  /** קישור צפייה — כתובת חתומה לזמן קצר (נשמרת דקה במטמון של ‎rawCall‎) */
+  async recordingUrl(token, id) {
+    const body = await rawCall(token, `/meetings/${encodeURIComponent(id)}/recording`, {});
+    const url = body.recording_url;
+    return typeof url === 'string' && /^https:\/\//.test(url) ? url : null;
+  },
+  async document(token, docId) {
+    const body = await rawCall(token, `/documents/${encodeURIComponent(docId)}`, { format: 'markdown' }, { fresh: true });
+    return typeof body.content === 'string' ? body.content : '';
+  },
+  /** ‎webhook‎ — Timeless מודיע כשתמליל / סיכום מוכן. מחזיר ‎{ id, secret }‎ (הסוד מגיע רק עכשיו) */
+  async createWebhook(token, url, events) {
+    const res = await fetch(`${BASE_URL}/webhooks`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, Accept: 'application/json', 'content-type': 'application/json' },
+      body: JSON.stringify({ url, events }),
+      signal: AbortSignal.timeout(TIMEOUT_MS)
+    });
+    const text = await res.text().catch(() => '');
+    let body = {};
+    try { body = JSON.parse(text); } catch { /* ריק */ }
+    if (!res.ok) throw apiError(`Timeless לא יצר webhook (${res.status})${body?.error?.message ? `: ${body.error.message}` : ''}`, { status: res.status });
+    const w = body.data ?? body;
+    return { id: w.id ?? null, secret: w.secret ?? '' };
+  }
+};
+
 // ---------- כלים למודל ----------
 
 const TOOLS = [
@@ -741,6 +820,6 @@ async function runTool(userId, name, input = {}) {
 module.exports = {
   connect, disconnect, isConnected, publicStatus, hasOrgToken: () => Boolean(orgToken()),
   listMeetings, transcript, documents, document, listRooms, recordings, recordingUrl, segments, meeting, meetingsOnDay, backgroundToken,
-  background, status, TOOLS, runTool,
+  background, status, scopeOf, syncTokens, org, normalizeMeeting, TOOLS, runTool,
   BASE_URL
 };
