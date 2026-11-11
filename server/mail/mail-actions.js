@@ -43,10 +43,11 @@ const KEEP_DAYS = 7;           // מייל ישן משבוע — כבר לא מ�
  * "טופל" (ולא מזכירים): ענית / העברת מ-Gmail, העברת לארכיון או מחקת, או החלטת במשימון. **קריאה
  * אינה טיפול** — מייל שנקרא ולא טופל עדיין מקבל תזכורת.
  */
-// 10.11.26 (ישראל: "3 ביום, רק ראשי"): עד 3 הודעות יזומות על מיילים ביום — תזכורות, הודעה מיידית והמרוכזת
-// יחד (‎mail-push.js‎); "מעט" — אחת
+// 10.11.26 (ישראל: "3 ביום, רק ראשי"): עד 3 תזכורות ביום. 11.11.26 (ישראל: "בוא נעלה את המינון לחמש
+// תזכורות ביום"): עד 5 — תזכורות "זכרת?", "עוד אין תשובה" וההודעה המרוכזת יחד (‎mail-push.js‎); "מעט" — אחת.
+// הצעת תשובה למייל חדש אינה תזכורת ואינה נספרת כאן (‎mayAlertNow‎)
 const PACE = {
-  normal: { gapMin: 30, max: 3 },
+  normal: { gapMin: 30, max: 5 },
   light: { gapMin: 120, max: 1 },
   morning: { gapMin: 0, max: 0 },
   off: { gapMin: 0, max: 0 }
@@ -173,21 +174,39 @@ const noteUser = (userId) => lastUser.set(Number(userId), Date.now());
 const USER_QUIET_MS = 5 * 60 * 1000;
 const BEFORE_MEETING_MS = 15 * 60 * 1000;
 
+/*
+ * 📧 הצעת תשובה למייל חדש (הוחלט 11.11.26, ישראל: "על כל מייל ... שיש לך הצעה קונקרטית לתשובה — תביא את זה")
+ * אינה תזכורת: לא נספרת בתקרה היומית. כן שומרים על השקט — שעות התזכורות, לא באמצע שיחה ולא בפגישה,
+ * ‎ALERT_GAP_MIN‎ דקות אחרי הודעה יזומה אחרת, ולא למי שבחר "רק בבוקר" / כיבה / השתיק להיום.
+ */
+const ALERT_GAP_MIN = 10;
+
+/** אפשר לשלוח עכשיו הצעת תשובה למייל חדש? */
+async function mayAlertNow(userId) {
+  if (!paceOf(userId).max) return false;
+  return quietOk(userId, ALERT_GAP_MIN);
+}
+
 /** אפשר לשלוח עכשיו תזכורת לעובד הזה? (השתקה, שעות, קצב, תקרה, הודעות אחרות, פגישה ביומן) */
 async function mayRemindNow(userId) {
   const pace = paceOf(userId);
   if (!pace.max) return false;
+  const st = paceState(userId);
+  if (st.count >= pace.max) return false;
+  if (st.lastAt && Date.now() - new Date(st.lastAt).getTime() < pace.gapMin * 60000) return false;
+  return quietOk(userId, pace.gapMin);
+}
+
+/** השתקה, שעות, שיחה פעילה, הודעה יזומה אחרונה ופגישה ביומן — משותף לתזכורות ולהצעות תשובה */
+async function quietOk(userId, gapMin) {
   if (Date.now() - (lastUser.get(Number(userId)) ?? 0) < USER_QUIET_MS) return false;
-  if (Date.now() - (lastAny.get(Number(userId)) ?? 0) < pace.gapMin * 60000) return false;
+  if (Date.now() - (lastAny.get(Number(userId)) ?? 0) < gapMin * 60000) return false;
   const mute = D.userPrefs(userId)?.botPrefs?.remindMuteUntil;
   if (mute && W.todayIL() < mute) return false;
   const now = new Date();
   const hm = new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Jerusalem', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(now);
   const m = /^(\d{2}:\d{2})-(\d{2}:\d{2})$/.exec(String(D.getSetting('remind_hours', '08:30-18:00') ?? ''));
   if (m && !(hm >= m[1] && hm < m[2])) return false;
-  const st = paceState(userId);
-  if (st.count >= pace.max) return false;
-  if (st.lastAt && Date.now() - new Date(st.lastAt).getTime() < pace.gapMin * 60000) return false;
   // באמצע פגישה ביומן — מחכים שתסתיים
   try {
     if (Calendar.isConnected(userId)) {
@@ -232,7 +251,7 @@ const word = (list) => new RegExp(`(^|\\s)(?:${list})(?=\\s|$|[.,!?])`);
 const OFF = word('תפסיק|הפסק|תפסיקי|די|בלי|עצור|תעצור|השתק|תשתיק|כבה|תכבה|לא\\s+צריך|אל\\s+תזכיר|אל\\s+תזכירי');
 const ON = new RegExp(`${word('תחזיר|החזר|תחזירי|תפעיל|הפעל|תפתח|פתח|תמשיך|המשך|כן\\s+להזכיר').source}|^תזכיר(\\s+לי)?\\s+מה?מייל[.!]?$`);
 const PACE_WORDS = [[/רק\s+(?:ב)?בוקר|בסיכום\s+הבוקר/, 'morning'], [/פחות|מעט|לא\s+הרבה/, 'light'], [/כרגיל|רגיל|כמו\s+קודם|יותר/, 'normal']];
-const PACE_LABEL = { normal: 'רגיל — רק החשובים, עד 3 ביום', light: 'מעט — רק החשוב ביותר, אחת ביום', morning: 'רק ברשימה של סיכום הבוקר', off: 'כבויות' };
+const PACE_LABEL = { normal: 'רגיל — רק החשובים, עד 5 ביום', light: 'מעט — רק החשוב ביותר, אחת ביום', morning: 'רק ברשימה של סיכום הבוקר', off: 'כבויות' };
 
 /** פקודת השתקה / הפעלה / קצב. ‎null‎ — לא פקודה כזו */
 function paceCommand(userId, text) {
@@ -535,6 +554,6 @@ function prune() {
 }
 
 module.exports = {
-  GOODS_SCHEMA, BTN, PACE_BTN, answerPaceOffer, goodsDocFrom, goodsFile, nextQuestion, answerReminder, answerGoods, prune, dueReminders, mayRemindNow, paceTick, PACE, paceCommand, noteProactive, noteUser,
+  GOODS_SCHEMA, BTN, PACE_BTN, answerPaceOffer, goodsDocFrom, goodsFile, nextQuestion, answerReminder, answerGoods, prune, dueReminders, mayRemindNow, mayAlertNow, paceTick, PACE, paceCommand, noteProactive, noteUser,
   _internal: { engagement, paceOffer, nextReminder, nextGoods, reminderQuestion, goodsQuestion, setRemind, remindAt, scoreOf, handledInGmail, paceState }
 };

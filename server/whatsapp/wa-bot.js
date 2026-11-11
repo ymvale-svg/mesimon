@@ -4179,10 +4179,10 @@ async function sendSummaries() {
 // ---------------------------------------------------------------------------
 
 /*
- * על כל מייל חדש שהסריקה מצאה בו משהו בשבילי — הודעה אחת, מייל אחד בכל פעם:
- *   "שלום <שם> 👋 קיבלת מייל מדני: … לענות לו כך? «…»"   [כן ✅] [לא ❌]
- * כשאין למה לענות (או שאי אפשר לשלוח מהתיבה) — "לפתוח משימה: …?".
- * *כן* — התשובה יוצאת (או המשימה נפתחת) וההצעה יורדת מ"ממתין לאישורך";
+ * על כל מייל חדש שנשלח אליי ויש לו הצעת תשובה קונקרטית — הודעה אחת, מייל אחד בכל פעם (11.11.26):
+ *   "📧 קיבלת מייל מדני: <במשפט מה ביקש>. לענות כך? «…»"   [כן ✅] [לא ❌]
+ * בלי הצעת תשובה — אין הודעה עכשיו (תזכורת "זכרת?" למחרת, אם לא טופל). בקשה לפגישה — "לשלוח 3 מועדים?".
+ * *כן* — התשובה יוצאת וההצעה יורדת מ"ממתין לאישורך";
  * *לא* — יורדת בלי כלום; כל דבר אחר — תיקון לנוסח, כמו כל טיוטת תשובה.
  * לא דורסים שיחה פעילה: עובד שבאמצע משהו מול הבוט — המייל מחכה לסבב הבא.
  * מייל שנקרא ב-Gmail יורד מהרשימה (‎mail-scan.dropAnswered‎) ולא נשאל עליו.
@@ -4246,29 +4246,19 @@ async function mailAlertFor(userId) {
   if (!u?.phone || busyFor(userId) || GoodsReceipt.active(userId) || PurchaseDemand.active(userId)) return;
   let since = D.getSetting('wa_mail_alert_since', '');
   if (!since) { since = D.nowIso(); D.setSetting('wa_mail_alert_since', since); }
-  // 🌊 בתקרה היומית (3 הודעות על מיילים), בשעות, לא בפגישה — לפני שמסמנים את המייל כ"נשאל"
-  if (!(await MailActions.mayRemindNow(userId))) return;
+  // 🌊 בשעות, לא באמצע שיחה ולא בפגישה — לפני שמסמנים את המייל כ"נשאל". הצעת תשובה אינה נספרת בתקרת התזכורות
+  if (!(await MailActions.mayAlertNow(userId))) return;
   const rows = nextAlert(userId, since);
   if (!rows?.length) return;
   const head = rows[0];
-  // רק ראשי, לא אוטומטי, לא משולח מושתק; הצעת תשובה / משימה — רק מייל חשוב מאוד. השאר — ב"היום" (‎mail-push.js‎)
-  const direct = head.d.toMe !== false && !head.d.auto && !MailPush.mutedSenders(userId).has(String(head.from_email ?? '').toLowerCase());
-  if (!direct || (!head.d.meeting && !MailPush.pushable(head, { now: true }))) {
-    log({ channel: 'summary', chatId: `${u.phone}@c.us`, userId, who: u.full_name, action: 'mail_alert', status: 'ok', result: `📧 ${head.from_name}: ${oneLine(head.subject, 100)} — לא הוקפץ (${direct ? 'מתחת לסף' : 'העתק / אוטומטי / מושתק'}); ב"היום"` });
+  const chatId = `${u.phone}@c.us`;
+  const ids = rows.map((r) => r.id);
+  // רק ראשי, לא אוטומטי, לא משולח מושתק. השאר — ב"היום" (‎mail-push.js‎)
+  if (!MailPush.direct(head)) {
+    log({ channel: 'summary', chatId, userId, who: u.full_name, action: 'mail_alert', status: 'ok', result: `📧 ${head.from_name}: ${oneLine(head.subject, 100)} — לא הוקפץ (העתק / אוטומטי / מושתק); ב"היום"` });
     return;
   }
-  const withReply = rows.find((r) => r.d.reply?.body && !r.d.reply.sent && !r.d.reply.dismissed);
-  const ids = rows.map((r) => r.id);
-  const chatId = `${u.phone}@c.us`;
-  const intro = [
-    `שלום ${firstName(u.full_name)} 👋`,
-    `📧 קיבלת מייל מ*${head.from_name || head.from_email}*${head.subject ? `: ${oneLine(head.subject, 90)}` : ''}`,
-    head.d.summary ? oneLine(head.d.summary, 220) : null
-  ].filter(Boolean);
-  let text;
-  let draft;
-  let reply = null;
-  // 📅 מייל שמבקש להיפגש — "לשלוח לו 3 מועדים?" במקום "לפתוח משימה?"
+  // 📅 מייל שמבקש להיפגש — "לשלוח לו 3 מועדים?"
   const actorU = Auth.loadActor('user', userId);
   if (head.d.meeting && actorU && WaActions.allowed(actorU, 'meet_coord') && Gmail.canSend(userId) && (Gmail.has(userId, 'freebusy') || Gmail.has(userId, 'calendar'))) {
     const offer = MeetCoord.offerForMail(head, ids);
@@ -4278,32 +4268,30 @@ async function mailAlertFor(userId) {
       const now = chatOf(userId);
       if (freeToAsk(userId, now)) saveChat(userId, { ...now, draft: { ...offer.draft, askedAt: D.nowIso() }, awaiting: true });
       MailActions.noteProactive(userId);
-      MailActions.paceTick(userId);
       log({ channel: 'summary', chatId, userId, who: u.full_name, action: 'meet_coord', status: 'ok', result: `📧 ${head.from_name}: בקשה לפגישה — ${oneLine(head.subject, 100)}` });
     } catch (err) {
       log({ channel: 'summary', chatId, userId, who: u.full_name, action: 'meet_coord', status: 'error', result: err.message });
     }
     return;
   }
+  /*
+   * 💡 רק כשיש הצעת תשובה קונקרטית (הוחלט 11.11.26, ישראל: "התראה על כל מייל — מטריד"): "קיבלת מייל מדני:
+   * <במשפט מה ביקש>. לענות כך? «…»". בלי הצעה — אין הודעה עכשיו; אם המייל לא יטופל, תגיע תזכורת "זכרת? 🐣"
+   */
+  const withReply = rows.find((r) => MailPush.concreteReply(r.d.reply));
+  let reply = null;
   if (withReply && Gmail.canSend(Gmail.handle(userId, withReply.d.reply.box ?? 0))) {
     reply = await MailInsights.completeReply(userId, withReply.d.reply).catch((err) => {
       log({ channel: 'summary', chatId, userId, who: u.full_name, action: 'mail_alert', status: 'error', result: `השלמת התשובה: ${err.message}` });
       return null;
     });
   }
-  if (reply) {
-    text = [...intro, '', '*לענות לו כך?*', `_${oneLine(reply.body, 700)}_`, reply.missing ? `⚠️ ${reply.missing}` : null, '', '*כן* 👍 שולח · *לא* 👎 לא עונים · או כתבו מה לשנות.'].filter((l) => l !== null).join('\n');
-    draft = { kind: 'mail_reply', reply, alert: true, suggestionIds: ids, subject: head.subject };
-  } else if (actorU && WaActions.allowed(actorU, 'mail_deadline') && D.userPrefs(userId)?.botPrefs?.mailDeadline !== false) {
-    // 🐣 בלי מה לענות — לא שואלים עכשיו "לפתוח משימה?". אם המייל לא יטופל, תגיע מחר תזכורת "זכרת?"
-    // עם "לפתוח משימה" / "התעלם" (‎mail-actions.js‎) — שאלה אחת על כל מייל, לא שתיים (הוחלט 09.11.26)
-    log({ channel: 'summary', chatId, userId, who: u.full_name, action: 'mail_alert', status: 'ok', result: `📧 ${head.from_name}: ${oneLine(head.subject, 120)} — תזכורת מחר, אם לא יטופל` });
+  if (!reply?.body) {
+    log({ channel: 'summary', chatId, userId, who: u.full_name, action: 'mail_alert', status: 'ok', result: `📧 ${head.from_name}: ${oneLine(head.subject, 120)} — בלי הצעת תשובה; תזכורת אם לא יטופל` });
     return;
-  } else {
-    const titles = rows.map((r) => r.d.title).filter(Boolean);
-    text = [...intro, '', titles.length > 1 ? `*לפתוח ${titles.length} משימות?*\n${titles.map((x) => `• ${x}`).join('\n')}` : `*לפתוח משימה:* ${titles[0] ?? head.subject}?`, '', '*כן* 👍 · *לא* 👎'].join('\n');
-    draft = { kind: 'mail_task', alert: true, suggestionIds: ids, title: titles[0] ?? head.subject, subject: head.subject };
   }
+  const text = MailPush.replyAlert(head, reply);
+  const draft = { kind: 'mail_reply', reply, alert: true, suggestionIds: ids, subject: head.subject };
   try {
     await sendButtons(chatId, text, [WaUi.BTN.yes, WaUi.BTN.no], { owner: 'chat', draft, awaiting: true });
     rememberBot(userId, text);
@@ -4311,8 +4299,7 @@ async function mailAlertFor(userId) {
     const now = chatOf(userId);
     if (freeToAsk(userId, now)) saveChat(userId, { ...now, draft: { ...draft, askedAt: D.nowIso() }, awaiting: true });
     MailActions.noteProactive(userId);
-    MailActions.paceTick(userId);
-    log({ channel: 'summary', chatId, userId, who: u.full_name, action: 'mail_alert', status: 'ok', result: `📧 ${head.from_name}: ${oneLine(head.subject, 120)} — ${reply ? 'הצעת תשובה' : 'משימה'}` });
+    log({ channel: 'summary', chatId, userId, who: u.full_name, action: 'mail_alert', status: 'ok', result: `📧 ${head.from_name}: ${oneLine(head.subject, 120)} — הצעת תשובה` });
   } catch (err) {
     log({ channel: 'summary', chatId, userId, who: u.full_name, action: 'mail_alert', status: 'error', result: err.message });
   }
