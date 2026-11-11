@@ -296,6 +296,11 @@ async function isRecorded(c) {
   // קודם השמירה המקומית (הסבב כל 5 דקות שומר גם פגישות ש-Timeless מתכונן להקליט)
   const local = Store.near(c.start, c.emails, { statuses: null, title: c.title });
   if (local && local.status !== 'failed') return true;
+  // השמורה טרייה (סבב מוצלח ב-45 הדקות האחרונות) — מה שלא בה, לא מתוכנן להקלטה. לא פונים ל-Timeless.
+  if (Date.now() - Store.lastSweepAt() < 45 * MIN) return false;
+  // השמורה ישנה — בדיקה אחת מול Timeless, רק כשנשאר מרווח במכסה
+  const left = Timeless.quotaLeft();
+  if (left !== null && left < Timeless.BG_RESERVE) return null;
   const date = W.ilDateOf(c.start);
   const tokens = [...new Set([...c.owners].map((id) => Timeless.backgroundToken(id)).filter(Boolean))];
   if (!tokens.length) return null;

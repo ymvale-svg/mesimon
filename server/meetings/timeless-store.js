@@ -7,8 +7,11 @@
  * שליחת סיכום) קוראים רק מכאן, ולא פונים ל-Timeless בעצמם.
  *
  * מתי פונים ל-Timeless:
- *   • סבב כל 5 דקות — רשימה ארגונית אחת (שלושת הימים האחרונים ומחר), ותמליל וסיכום רק לפגישה
- *     שהסתיימה ועוד לא נשמרה (עד 6 בסבב). סיכום שעוד לא מוכן — נבדק שוב כל 15 דקות, עד 12 שעות.
+ *   • סבב — רשימה ארגונית אחת (שלושת הימים האחרונים ומחר), ותמליל וסיכום רק לפגישה שהסתיימה ועוד
+ *     לא נשמרה (עד 6 בסבב). סיכום שעוד לא מוכן — נבדק שוב בסבבים הבאים, עד 12 שעות.
+ *     כל כמה זמן: ‎timeless_sweep_minutes‎ (30) בשעות העבודה, כל 3 שעות בלילה, וכל שעתיים כשה-webhook
+ *     מחובר (רק רשת ביטחון). לחשבון יש מכסה של 250 בקשות לכמה שעות (נמדד 11.11.26) — כשנשארו פחות
+ *     מ-‎Timeless.BG_RESERVE‎, הסבב מדלג, והשאר שמור ל"▶ צפייה".
  *   • webhook — Timeless מודיע כשתמליל או סיכום מוכן (‎meeting.transcript_ready‎,
  *     ‎meeting.initial_summary_ready‎), והפגישה נמשכת מיד.
  *   • חודש ישן שנפתח במסך — הרשימה שלו נמשכת פעם אחת (‎timeless_months‎); תמליל וסיכום של פגישה
@@ -26,7 +29,7 @@ const Timeless = require('../integrations').Timeless;
 const MIN = 60000;
 const HOUR = 60 * MIN;
 const DAY = 24 * HOUR;
-const SWEEP_MS = 5 * MIN;
+const TICK_MS = 5 * MIN;
 const DETAILS_PER_SWEEP = 6;
 const DOCS_RECHECK_MS = 15 * MIN;
 const DOCS_GIVE_UP_MS = 12 * HOUR;
@@ -263,6 +266,50 @@ function near(startIso, emails, { withinMs = 20 * MIN, statuses = ['completed'],
 }
 
 // ---------------------------------------------------------------------------
+// כלים לסוכנים ("שאל את אשל") — אותם כלים של Timeless, מהשמירה המקומית
+// ---------------------------------------------------------------------------
+
+/** מריץ כלי Timeless של הסוכן (‎timeless_list_meetings‎ וכו׳) על השמירה המקומית, בשם המשתמש */
+async function runTool(userId, name, input = {}) {
+  const args = input && typeof input === 'object' ? input : {};
+  try {
+    const scope = Timeless.scopeOf(userId);
+    if (!scope) return { error: 'Timeless אינו מחובר.', needsReconnect: true };
+    if (name === 'timeless_list_meetings') {
+      const to = /^\d{4}-\d{2}-\d{2}$/.test(args.to ?? '') ? args.to : ymd(Date.now() + DAY);
+      const from = /^\d{4}-\d{2}-\d{2}$/.test(args.from ?? '') ? args.from : ymd(Date.now() - 60 * DAY);
+      const q = String(args.search ?? '').trim().toLowerCase();
+      const rows = D.all('SELECT * FROM timeless_meetings WHERE start_at >= ? AND start_at < ? ORDER BY start_at DESC',
+        W.ilWallToUtc(from, 0, 0).toISOString(), W.ilWallToUtc(W.addDays(to, 1), 0, 0).toISOString())
+        .filter((r) => canSee(scope, r))
+        .filter((r) => !args.status || r.status === args.status)
+        // חיפוש בכותרת ובמשתתפים; "סמנטי" — גם בסיכום ובתמליל השמורים
+        .filter((r) => !q || [r.title, r.participants, args.semantic ? `${r.documents ?? ''} ${r.transcript ?? ''}` : ''].join(' ').toLowerCase().includes(q));
+      const meetings = rows.slice(0, Math.min(50, Math.max(1, Number(args.limit) || 20))).map((r) => {
+        const m = shape(r);
+        return { id: m.id, title: m.title, start: m.start, end: m.end, durationMinutes: m.durationMinutes, participants: m.participants, status: m.status, documents: m.documents };
+      });
+      return { count: meetings.length, meetings };
+    }
+    if (name === 'timeless_get_transcript') {
+      const d = await details(userId, args.meeting_id);
+      if (!d) return { error: 'הפגישה לא נמצאה ב-Timeless, או שלא השתתפת בה.' };
+      return { meetingId: d.meeting.id, title: d.meeting.title, text: transcriptText(d.transcript, Math.min(120000, Number(args.max_chars) || 60000)) };
+    }
+    if (name === 'timeless_get_document') {
+      const d = await details(userId, args.meeting_id);
+      if (!d) return { error: 'כדי לקרוא מסמך יש לתת את מזהה הפגישה (meeting_id) של פגישה שהשתתפת בה.' };
+      const docs = args.document_id ? d.documents.filter((x) => x.id === args.document_id) : d.documents;
+      if (!docs.length) return { error: 'המסמך לא נמצא בפגישה הזו.' };
+      return { meetingId: d.meeting.id, count: docs.length, documents: docs.slice(0, 5).map((x) => ({ id: x.id, title: x.title, markdown: String(x.markdown ?? '').slice(0, 60000) })) };
+    }
+    return { error: `כלי לא מוכר: ${name}` };
+  } catch (err) {
+    return { error: err.message, retryable: Boolean(err.retryable) };
+  }
+}
+
+// ---------------------------------------------------------------------------
 // webhook
 // ---------------------------------------------------------------------------
 
@@ -321,23 +368,44 @@ async function handleWebhook(rawBody, signature) {
 
 let timer = null;
 let running = false;
-async function tick() {
+let lastSweep = 0;
+
+/** כמה זמן בין סבבים — לפי שעה ביום ולפי ה-webhook */
+function sweepEveryMs(now = Date.now()) {
+  if (webhookStatus().registered) return 2 * HOUR;
+  const hour = Number(new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Jerusalem', hour: '2-digit', hourCycle: 'h23' }).format(new Date(now)));
+  if (hour < 7 || hour >= 22) return 3 * HOUR;
+  return Math.max(10, Number(D.getSetting('timeless_sweep_minutes', 30)) || 30) * MIN;
+}
+
+/** מתי היה הסבב המוצלח האחרון — לבדיקת "לא מוקלטת" (שמורה טרייה = אפשר לסמוך עליה) */
+const lastSweepAt = () => lastSweep;
+
+async function tick({ force = false } = {}) {
   if (running) return;
+  const now = Date.now();
+  if (!force && now - lastSweep < sweepEveryMs(now)) return;
+  // המכסה נמוכה — לא מבזבזים אותה על סבב רקע
+  const left = Timeless.quotaLeft();
+  if (!force && left !== null && left < Timeless.BG_RESERVE) return;
   running = true;
-  try { await Timeless.background(() => sweep()); } catch (err) {
+  try {
+    await Timeless.background(() => sweep());
+    lastSweep = Date.now();
+  } catch (err) {
     console.error('[משימון] סבב Timeless נכשל:', err.message);
   } finally { running = false; }
 }
 
 function start() {
   if (timer) clearInterval(timer);
-  timer = setInterval(tick, SWEEP_MS);
+  timer = setInterval(() => tick(), TICK_MS);
   timer.unref?.();
-  setTimeout(tick, 20000).unref?.();
+  setTimeout(() => tick(), 20000).unref?.();
 }
 
 module.exports = {
-  start, tick, sweep, syncMeeting, list, get, details, transcriptText, endedBetween, near, canSee,
-  registerWebhook, webhookStatus, handleWebhook, verifySignature,
+  start, tick, sweep, syncMeeting, lastSweepAt, sweepEveryMs, list, get, details, transcriptText, endedBetween, near, canSee,
+  registerWebhook, webhookStatus, handleWebhook, verifySignature, runTool,
   _internal: { upsert, shape, needDetails, ensureRange, fetchDetails }
 };

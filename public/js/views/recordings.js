@@ -268,6 +268,8 @@ const RecordingsView = (() => {
       size: 'wide',
       body: el('div', {}, [
         el('div', { style: { marginBottom: '6px' }, text: `שמורות במשימון: ${stored.n ?? 0} פגישות · תמלילים ${stored.transcripts ?? 0} · סיכומים ${stored.summaries ?? 0}${stored.lastSync ? ` · עודכן ${new Date(stored.lastSync).toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit' })}` : ''} · עדכונים מיידיים (webhook): ${st.webhook?.registered ? 'מחובר ✓' : 'לא מחובר'}` }),
+        // המכסה של החשבון ב-Timeless — כמה נשאר ומתי מתחדשת
+        st.timelessSays ? el('div', { style: { marginBottom: '6px', fontWeight: '700' }, text: `מכסת Timeless: נשארו ${st.timelessSays.remaining}${st.timelessSays.limit ? ` מתוך ${st.timelessSays.limit}` : ''} · מתחדשת ב-${new Date(st.timelessSays.resetAt).toLocaleString('he-IL', { weekday: 'short', hour: '2-digit', minute: '2-digit' })}` }) : null,
         el('div.mute-sm', { text: `בדקה האחרונה: ${st.lastMinute.total} בקשות (מסכים ${st.lastMinute.screens}, רקע ${st.lastMinute.background}) · התור התמלא ${st.queueFull} פעמים · הוגש מהמטמון ${st.staleServed} פעמים${st.blockedFor ? ` · Timeless ביקש לחכות עוד ${st.blockedFor} שניות` : ''}` }),
         el('pre', { style: { whiteSpace: 'pre-wrap', direction: 'ltr', textAlign: 'left', fontSize: '12px', maxHeight: '60vh', overflow: 'auto' }, text })
       ]),

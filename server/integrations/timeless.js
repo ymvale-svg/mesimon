@@ -153,6 +153,14 @@ const BG_MAX = 20;              // עבודות רקע (סבב "איך היה?",
 const RATE_WINDOW_MS = 60000;
 const QUEUE_MAX_WAIT_MS = 25000; // יותר מזה — לא מחזיקים את המסך; מוגש מהמטמון או הודעה
 const BG_MAX_WAIT_MS = 10 * 60000; // עבודת רקע מחכה בסבלנות
+/*
+ * המכסה של החשבון (נמדד 11.11.26): 250 בקשות לחלון של כמה שעות, לא רק 60 בדקה. כשנגמרת — 429
+ * עם ‎Retry-After‎ של שעות. לכן: עבודות רקע עוצרות כשנשארו פחות מ-‎BG_RESERVE‎ (השאר שמור ל"▶ צפייה"
+ * ולפתיחה ממסך), וחסימה מכובדת עד הסוף — לא נוקשים כל דקה שתיים על חשבון שנגמרה לו המכסה.
+ */
+const BG_RESERVE = 50;
+const BLOCK_MAX_MS = 24 * 60 * 60000;
+const quota = new Map();         // ‎tokenKey‎ ← ‎{ remaining, limit, resetAt }‎ — מה ש-Timeless אמר בתשובה האחרונה
 const bgContext = new AsyncLocalStorage();
 const blockedUntil = new Map();  // ‎tokenKey‎ ← עד מתי Timeless ביקש לחכות (‎Retry-After‎)
 
@@ -183,6 +191,9 @@ function ttlOf(path) {
  * האחרונה היו פחות מ-‎BG_MAX‎ בקשות, כך שתמיד נשאר מקום לבקשה ממסך פתוח.
  */
 async function takeSlot(tk, bg = false) {
+  // רקע — רק כשנשאר מרווח במכסה של החשבון
+  const q = quota.get(tk);
+  if (bg && q && q.resetAt > Date.now() && q.remaining < BG_RESERVE) return false;
   const limit = bg ? BG_MAX : RATE_MAX;
   const deadline = Date.now() + (bg ? BG_MAX_WAIT_MS : QUEUE_MAX_WAIT_MS);
   for (;;) {
@@ -282,14 +293,32 @@ function syncFromHeaders(tk, headers) {
   // ‎Reset‎ — זמן Unix בשניות, או מספר שניות עד האיפוס
   const resetAt = Number.isFinite(resetRaw) ? (resetRaw > 1e9 ? resetRaw * 1000 : now + resetRaw * 1000) : now + 60000;
   diag.server = { remaining, limit: Number.isFinite(limit) ? limit : null, resetAt: new Date(resetAt).toISOString(), at: new Date(now).toISOString() };
-  if (remaining <= 3 && resetAt > now) blockedUntil.set(tk, Math.max(blockedUntil.get(tk) ?? 0, Math.min(resetAt, now + 120000)));
+  quota.set(tk, { remaining, limit: Number.isFinite(limit) ? limit : null, resetAt });
+  if (remaining <= 3 && resetAt > now) blockedUntil.set(tk, Math.max(blockedUntil.get(tk) ?? 0, Math.min(resetAt, now + BLOCK_MAX_MS)));
+}
+
+/** ההודעה למשתמש: עמוס לרגע, או שנגמרה המכסה ומתי היא מתחדשת */
+function busyMessage(tk) {
+  const until = Math.max(blockedUntil.get(tk) ?? 0, (quota.get(tk)?.remaining ?? 1) <= 0 ? quota.get(tk).resetAt : 0);
+  if (until - Date.now() > 10 * 60000) {
+    const at = new Intl.DateTimeFormat('he-IL', { timeZone: 'Asia/Jerusalem', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(until));
+    return `נגמרה המכסה של Timeless — מתחדשת ב-${at}. ההקלטות שכבר נשמרו במשימון זמינות.`;
+  }
+  return 'Timeless עמוס כרגע — נסו שוב בעוד דקה.';
+}
+
+/** כמה נשאר במכסה — לעבודות הרקע (‎null‎ כשעוד לא ידוע) */
+function quotaLeft(token = orgToken()) {
+  const q = token ? quota.get(tokenKey(token)) : null;
+  if (!q || q.resetAt <= Date.now()) return null;
+  return q.remaining;
 }
 
 async function limited(token, tk, url) {
   const bg = inBackground();
   if (!(await takeSlot(tk, bg))) {
     diag.queueFull += 1;
-    throw apiError('Timeless עמוס כרגע — נסו שוב בעוד דקה.', { status: 429, retryable: true });
+    throw apiError(busyMessage(tk), { status: 429, retryable: true });
   }
   try {
     const body = await fetchOnce(token, url, tk);
@@ -302,7 +331,8 @@ async function limited(token, tk, url) {
     if (diag.limited.length > 50) diag.limited.splice(0, diag.limited.length - 50);
     // מגביל למרות התור (סוכן או מערכת אחרת על אותו חשבון) — כל הבקשות מחכות כמה ש-Timeless ביקש
     const wait = err.retryAfterSeconds ?? 2;
-    blockedUntil.set(tk, Date.now() + Math.min(wait, 120) * 1000);
+    blockedUntil.set(tk, Date.now() + Math.min(wait * 1000, BLOCK_MAX_MS));
+    if (wait > RETRY_429_MAX_SEC) err.message = busyMessage(tk);
     if (wait > RETRY_429_MAX_SEC) throw err;
     console.warn(`[משימון] Timeless החזיר 429 (${url.pathname}) — ניסיון חוזר בעוד ${wait} שניות`);
     await new Promise((r) => setTimeout(r, wait * 1000));
@@ -820,6 +850,6 @@ async function runTool(userId, name, input = {}) {
 module.exports = {
   connect, disconnect, isConnected, publicStatus, hasOrgToken: () => Boolean(orgToken()),
   listMeetings, transcript, documents, document, listRooms, recordings, recordingUrl, segments, meeting, meetingsOnDay, backgroundToken,
-  background, status, scopeOf, syncTokens, org, normalizeMeeting, TOOLS, runTool,
+  background, status, quotaLeft, BG_RESERVE, scopeOf, syncTokens, org, normalizeMeeting, TOOLS, runTool,
   BASE_URL
 };
