@@ -8,7 +8,7 @@
  * מקורות:
  *   • פגישה שמשימון קבע עם Zoom (‎meetings‎) — כשההקלטה בענן של Zoom מוכנה.
  *     המשתתפים — ‎Meetings.recipientsOf‎ (בעל היומן, מי שקבע, ומוזמנים מהארגון).
- *   • פגישה ב-Timeless — לכל עובד לפי הגישה שלו (‎Timeless.listMeetings‎), רק
+ *   • פגישה ב-Timeless — מהשמירה המקומית (‎timeless-store.js‎, הצינור היחיד מ-Timeless), רק
  *     פגישה שהשתתף בה, ורק כשמסמך ה-AI שלה כבר מוכן.
  *   אותה פגישה משני המקורות — פנייה אחת (לפי שעת ההתחלה).
  *   • הקלטה ששלחו לבוט (‎source = wa‎, ‎meeting-audio.js‎) — בלי פנייה: הסיכום מוכן
@@ -27,6 +27,7 @@
 const D = require('../core').Db;
 const Zoom = require('../integrations').Zoom;
 const Timeless = require('../integrations').Timeless;
+const Store = require('./timeless-store');
 const Claude = require('../integrations').Claude;
 const Gmail = require('../integrations').Gmail;
 const Mailer = require('../integrations').Mailer;
@@ -37,11 +38,9 @@ const Secretariat = require('../core').Secretariat;
 
 const MIN = 60000;
 const HOUR = 60 * MIN;
-const DAY_MS = 24 * HOUR;
 const GIVE_UP_MS = 24 * HOUR;          // אחרי יממה מסוף הפגישה — לא פונים
 const ANSWER_WINDOW_MS = 48 * HOUR;    // עד מתי "סיכום" מתייחס לפגישה שנשאלה
 const ZOOM_RECHECK_MS = 10 * MIN;      // בדיקת הקלטה ב-Zoom לכל פגישה
-const TIMELESS_RECHECK_MS = 15 * MIN;  // רשימת הפגישות ב-Timeless לכל עובד
 const SAME_MEETING_MS = 15 * MIN;      // Zoom ו-Timeless על אותה פגישה
 const TZ = 'Asia/Jerusalem';
 
@@ -88,7 +87,6 @@ function record(userId, m) {
 // ---------------------------------------------------------------------------
 
 const zoomChecked = new Map();   // ‎meetings.id‎ → מתי נבדק
-const timelessChecked = new Map(); // ‎users.id‎ → מתי נבדק
 
 /** פגישות משימון עם Zoom שהסתיימו, וההקלטה שלהן מוכנה */
 async function zoomCandidates(now) {
@@ -117,29 +115,18 @@ async function zoomCandidates(now) {
   return out;
 }
 
-/** פגישות Timeless של העובד שהסתיימו, ומסמך ה-AI שלהן מוכן */
-async function timelessCandidates(userId, now) {
-  if (!Timeless.isConnected(userId)) return [];
-  if ((timelessChecked.get(userId) ?? 0) > now - TIMELESS_RECHECK_MS) return [];
-  timelessChecked.set(userId, now);
-  const ymd = (ms) => new Date(ms).toISOString().slice(0, 10);
-  let list;
-  try {
-    list = await Timeless.listMeetings(userId, { from: ymd(now - GIVE_UP_MS), to: ymd(now + 24 * HOUR), limit: 30, expandDocuments: true, scope: 'all' });
-  } catch {
-    return [];
-  }
-  const mine = emailsOf(userRow(userId));
-  return list.filter((m) => {
-    const end = new Date(m.end ?? 0).getTime();
-    if (!end || end > now - delayMs() || end < now - GIVE_UP_MS) return false;
-    if (!(m.documents ?? []).length) return false;
-    // גם מי שרואה את כל הארגון (הנהלה) — רק פגישות שהשתתף בהן
-    return m.participants.some((p) => (String(p).match(/[^\s<>"']+@[^\s<>"']+/g) ?? []).some((e) => mine.has(normEmail(e))));
-  }).map((m) => ({
+/**
+ * פגישות Timeless שהסתיימו וסיכום ה-AI שלהן מוכן — מהשמירה המקומית (‎timeless-store.js‎), בלי
+ * לפנות ל-Timeless. לכל פגישה — העובדים שהשתתפו בה (לפי המייל), גם מי שרואה את כל הארגון.
+ */
+function timelessCandidates(now) {
+  const users = D.all("SELECT id, email, work_email FROM users WHERE status = 'active' AND phone IS NOT NULL AND phone <> ''")
+    .map((u) => ({ id: u.id, emails: emailsOf(u) }));
+  return Store.endedBetween(now - GIVE_UP_MS, now - delayMs()).map(({ meeting: m, emails }) => ({
     source: 'timeless', ref: String(m.id), title: m.title || 'פגישה', start: m.start, end: m.end,
-    data: { participants: m.participants }, users: [userId]
-  }));
+    data: { participants: m.participants },
+    users: users.filter((u) => Timeless.isConnected(u.id) && emails.some((e) => u.emails.has(e))).map((u) => u.id)
+  })).filter((c) => c.users.length);
 }
 
 // ---------------------------------------------------------------------------
@@ -161,10 +148,17 @@ function askText(u, m) {
  * @param {object} io  ‎{ eligible(userId) → bool, busy(userId) → bool, send(userId, text, buttons) }‎
  */
 async function sweep(io) {
+  // עבודת רקע מול Timeless: תור הרקע, ורשימה ארגונית אחת לכל העובדים (לא בקשה לכל עובד)
+  return Timeless.background(() => sweepOnce(io));
+}
+
+async function sweepOnce(io) {
   const now = Date.now();
   const candidates = await zoomCandidates(now).catch(() => []);
-  const users = D.all("SELECT id FROM users WHERE status = 'active' AND phone IS NOT NULL AND phone <> ''").map((r) => r.id).filter((id) => io.eligible(id));
-  for (const userId of users) candidates.push(...await timelessCandidates(userId, now).catch(() => []));
+  for (const c of timelessCandidates(now)) {
+    c.users = c.users.filter((id) => io.eligible(id));
+    if (c.users.length) candidates.push(c);
+  }
   // הוותיקה קודם — פנייה אחת לעובד בכל סבב
   candidates.sort((a, b) => String(a.start).localeCompare(String(b.start)));
   const done = new Set();
@@ -230,16 +224,10 @@ function vttText(vtt) {
  */
 async function timelessMatch(userId, startIso, emails) {
   if (!Timeless.isConnected(userId) || !startIso || !emails?.size) return null;
-  const t = new Date(startIso).getTime();
-  const ymd = (ms) => new Date(ms).toISOString().slice(0, 10);
-  const list = await Timeless.listMeetings(userId, { from: ymd(t - DAY_MS), to: ymd(t + DAY_MS), limit: 50, scope: 'all' }).catch(() => []);
   // רק פגישה שמשתתף בה לפחות אחד ממשתתפי פגישת ה-Zoom — הסיכום נשמר לכל משתתפי ה-Zoom,
-  // ובשעה הזו יכולה להיות פגישה אחרת בארגון (הנהלה רואה את כל הארגון)
-  const shares = (m) => (m.participants ?? []).some((p) => (String(p).match(/[^\s<>"']+@[^\s<>"']+/g) ?? []).some((e) => emails.has(normEmail(e))));
-  return list
-    .map((m) => ({ m, diff: Math.abs(new Date(m.start ?? 0).getTime() - t) }))
-    .filter((x) => x.diff <= 20 * MIN && shares(x.m))
-    .sort((a, b) => a.diff - b.diff)[0]?.m ?? null;
+  // ובשעה הזו יכולה להיות פגישה אחרת בארגון. מהשמירה המקומית.
+  const row = Store.near(startIso, emails);
+  return row ? Store.get(userId, row.id) : null;
 }
 
 async function zoomSource(row, userId) {
@@ -271,13 +259,12 @@ async function zoomSource(row, userId) {
 async function timelessSource(row, userId) {
   const d = parseJson(row.data, {});
   const parts = [];
-  const docs = await Timeless.documents(userId, row.ref).catch(() => []);
-  if (docs[0]) {
-    const content = await Timeless.document(userId, docs[0].id, { meetingId: row.ref, verified: true }).catch(() => '');
-    if (content) parts.push(`סיכום ה-AI של Timeless:\n${content.slice(0, 15000)}`);
-  }
-  const tr = await Timeless.transcript(userId, row.ref, { maxChars: 60000 }).catch(() => null);
-  if (tr?.text) parts.push(`תמליל:\n${tr.text}`);
+  // מהשמירה המקומית (תמליל וסיכום שנמשכו פעם אחת)
+  const det = await Store.details(userId, row.ref).catch(() => null);
+  const content = det?.documents?.[0]?.markdown ?? '';
+  if (content) parts.push(`סיכום ה-AI של Timeless:\n${content.slice(0, 15000)}`);
+  const text = det ? Store.transcriptText(det.transcript, 60000) : '';
+  if (text) parts.push(`תמליל:\n${text}`);
   if (!parts.length) return null;
   return { people: Secretariat.withoutSecretaries(d.participants ?? []), text: parts.join('\n\n') };
 }
@@ -583,5 +570,5 @@ function prune() {
 
 module.exports = {
   sweep, answer, openTasks, isOpenButton, digest, prune, BTN, sendSummaryMail,
-  _internal: { vttText, myItems, followupFor, askText, alreadyAsked, record, ASK, BARE, norm, timelessMatch, invitees, summaryMailText, shareDraft }
+  _internal: { vttText, myItems, followupFor, askText, alreadyAsked, record, ASK, BARE, norm, timelessMatch, timelessCandidates, invitees, summaryMailText, shareDraft }
 };

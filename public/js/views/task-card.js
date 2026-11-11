@@ -911,6 +911,10 @@ const TaskCardView = (() => {
                   onclick: () => saveAsTemplateDialog(task)
                 }, ['💾 שמירה כתבנית'])
               : null,
+            // 🔀 איחוד ידני — רק למשימה פתוחה (העריכה של שתיהן נבדקת בשרת)
+            !task.isFinal && !task.archived
+              ? el('button.btn.btn-block', { onclick: () => mergeDialog() }, ['🔀 איחוד לתוך משימה אחרת…'])
+              : null,
             el('button.btn.btn-block', {
               onclick: async () => {
                 const id = task.id;
@@ -938,6 +942,53 @@ const TaskCardView = (() => {
           ])
         : null
     ]);
+  }
+
+  // ------------------------------------------------------------- 🔀 איחוד
+
+  /**
+   * "איחוד לתוך משימה אחרת": חיפוש משימה פתוחה ← אישור ← המשימה הזו נסגרת, והאחראים, ההערות, הקבצים
+   * והצ'קליסט עוברים לזו שנבחרה (‎POST /api/tasks/:id/merge‎). בסוף נפתחת המשימה שנשארה.
+   */
+  function mergeDialog() {
+    const input = el('input', { type: 'search', placeholder: 'שם המשימה שאליה לאחד…', 'aria-label': 'חיפוש משימה', style: { width: '100%' } });
+    const list = el('div', { style: { marginTop: '10px', maxHeight: '320px', overflow: 'auto' } });
+    let seq = 0;
+    const search = async () => {
+      const q = input.value.trim();
+      const mine = ++seq;
+      if (q.length < 2) { UI.mount(list, el('div.mute-sm', { text: 'הקלידו לפחות 2 אותיות.' })); return; }
+      try {
+        const r = await API.search(q, 'all');
+        if (mine !== seq) return;
+        const hits = (r.results ?? []).filter((x) => x.type === 'task' && x.id !== task.id && !/הושלם|בארכיון/.test(x.subtitle ?? '')).slice(0, 12);
+        UI.mount(list, hits.length ? hits.map((h) => el('button.btn.btn-block', {
+          style: { textAlign: 'start', marginBottom: '6px' },
+          onclick: () => confirmMerge(h)
+        }, [el('div', { text: h.title }), el('div.mute-sm', { text: h.subtitle ?? '' })])) : el('div.mute-sm', { text: 'לא נמצאו משימות פתוחות.' }));
+      } catch (err) { UI.error(err); }
+    };
+    let timer = null;
+    input.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(search, 250); });
+    const m = UI.modal({
+      title: '🔀 איחוד לתוך משימה אחרת',
+      body: el('div', {}, [
+        el('p.mute-sm', { style: { marginTop: 0 }, text: `"${task.title}" תיסגר, וכל מה שבה — אחראים, הערות, קבצים וצ'קליסט — יעבור למשימה שתבחרו.` }),
+        input, list
+      ])
+    });
+    async function confirmMerge(h) {
+      // חלון החיפוש נסגר קודם — אחרת האישור נפתח מאחוריו
+      m.close();
+      const ok = await UI.confirm(`לאחד את "${task.title}" לתוך "${h.title}"? "${task.title}" תיסגר, וההמשך יהיה ב"${h.title}".`, { title: 'איחוד משימות', okText: 'איחוד' });
+      if (!ok) return;
+      try {
+        const r = await API.mergeTask(task.id, h.id);
+        UI.success('המשימות אוחדו');
+        refreshBackground();
+        open(r.task.id);
+      } catch (err) { UI.error(err); }
+    }
   }
 
   // ------------------------------------------------------------- עריכה מהירה

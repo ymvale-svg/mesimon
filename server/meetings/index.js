@@ -13,5 +13,6 @@ module.exports = {
   get MeetingAudio() { return require('./meeting-audio'); },
   get Calendar() { return require('./calendar'); },
   get TimelessMedia() { return require('./timeless-media'); },
+  get TimelessStore() { return require('./timeless-store'); },
   get Briefing() { return require('./briefing'); }
 };

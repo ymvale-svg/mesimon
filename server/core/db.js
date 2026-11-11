@@ -1168,6 +1168,32 @@ CREATE INDEX IF NOT EXISTS idx_meetings_task ON meetings(task_id);
 CREATE INDEX IF NOT EXISTS idx_meetings_start ON meetings(status, start_at);
 
 /*
+ * 🎥 הפגישות מ-Timeless, שמורות במשימון — הצינור היחיד (‎meetings/timeless-store.js‎): נמשכות פעם
+ * אחת (סבב כל 5 דקות + webhook כש-Timeless מסיים), וכל המסכים והבוט קוראים מכאן. ‎emails‎ — כל
+ * המיילים של המארח והמשתתפים, לסינון מי רואה. ‎documents‎ / ‎transcript‎ — ‎NULL‎ עד שנמשכו.
+ * ‎timeless_months‎: חודשים שכבר נמשכו במלואם (מעבר לחודש ישן במסך — פעם אחת).
+ */
+CREATE TABLE IF NOT EXISTS timeless_meetings (
+  id           TEXT PRIMARY KEY,
+  title        TEXT NOT NULL DEFAULT '',
+  status       TEXT NOT NULL DEFAULT '',
+  start_at     TEXT,
+  end_at       TEXT,
+  duration_min INTEGER,
+  participants TEXT NOT NULL DEFAULT '[]',
+  emails       TEXT NOT NULL DEFAULT '[]',
+  doc_refs     TEXT NOT NULL DEFAULT '[]',
+  documents    TEXT,
+  transcript   TEXT,
+  details_at   TEXT,
+  synced_at    TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_timeless_meetings_start ON timeless_meetings(start_at);
+CREATE TABLE IF NOT EXISTS timeless_months (
+  month TEXT PRIMARY KEY,
+  at    TEXT NOT NULL
+);
+/*
  * 🎥 Timeless — ‎timeless_alerts‎: פגישה שהמזכירות כבר קיבלו עליה "לא מוקלטת" (פעם אחת
  * לפגישה, לפי ‎iCalUID‎ והמועד); ‎timeless_digests‎: הסיכום המובנה (החלטות, משימות,
  * נקודות פתוחות) — נבנה פעם אחת לפגישה; ‎timeless_tasks‎: משימות שנפתחו מפגישה.

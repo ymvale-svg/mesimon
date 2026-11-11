@@ -13,10 +13,11 @@ const Meetings = require('../meetings').Meetings;
 const Zoom = require('../integrations').Zoom;
 const Timeless = require('../integrations').Timeless;
 const TimelessMedia = require('../meetings').TimelessMedia;
+const TimelessStore = require('../meetings').TimelessStore;
 const Gmail = require('../integrations').Gmail;
 const WaBot = require('../whatsapp').WaBot;
 const WaActions = require('../whatsapp').WaActions;
-const { HttpError, badRequest, forbidden, notFound, readJson, sendJson, parseUrl } = require('../core').HttpKit;
+const { HttpError, badRequest, forbidden, notFound, readJson, readBody, sendJson, parseUrl } = require('../core').HttpKit;
 const MailActions = require('../mail').MailActions;
 
 function register(router, h) {
@@ -169,6 +170,15 @@ function register(router, h) {
   const attended = (actor, m) => [m.owner_id, m.created_by, m.via_user_id].includes(actor.id)
     || JSON.parse(m.attendees || '[]').some((a) => String(a.email ?? '').toLowerCase() === String(actor.email ?? '').toLowerCase() && Boolean(actor.email));
 
+  // פגישה של משימון (לעריכה מהיומן) — למי שקשור אליה
+  router.get('/api/meetings/one/:id', async (req, res, ctx) => {
+    const actor = userOnly(ctx);
+    const m = Meetings.meetingById(Number(ctx.params.id));
+    if (!m) throw notFound();
+    if (!involved(actor, m) && !(await Meetings.canWrite(actor, m.owner_id))) throw forbidden();
+    sendJson(res, 200, { meeting: Meetings.shape(m) });
+  });
+
   router.get('/api/meetings/:id/join', async (req, res, ctx) => {
     const actor = userOnly(ctx);
     const m = Meetings.meetingById(Number(ctx.params.id));
@@ -202,6 +212,13 @@ function register(router, h) {
     const actor = userOnly(ctx);
     const b = await readJson(req);
     await run(res, () => Meetings.moveEvent(actor, { ownerId: Number(b.ownerId), eventId: String(b.eventId), start: b.start, end: b.end }));
+  });
+
+  // המוזמנים של אירוע ביומן — גם פגישה שלא נקבעה במשימון (בעל היומן מארגן, ויומן לעריכה)
+  router.post('/api/meetings/attendees', async (req, res, ctx) => {
+    const actor = userOnly(ctx);
+    const b = await readJson(req);
+    await run(res, () => Meetings.setEventAttendees(actor, { ownerId: Number(b.ownerId), eventId: String(b.eventId ?? ''), attendees: b.attendees, sendUpdates: b.sendUpdates !== false }));
   });
 
   router.post('/api/meetings/request-move', async (req, res, ctx) => {
@@ -328,6 +345,26 @@ function register(router, h) {
     return actor;
   };
 
+  // 🎥 אבחון Timeless — כמה בקשות יוצאות, מה Timeless אומר על המכסה, וה-429 האחרונים
+  router.get('/api/admin/timeless/status', async (req, res, ctx) => {
+    zoomAdmin(ctx);
+    sendJson(res, 200, { ...Timeless.status(), webhook: TimelessStore.webhookStatus(),
+      stored: D.get("SELECT COUNT(*) AS n, SUM(transcript IS NOT NULL) AS transcripts, SUM(documents IS NOT NULL) AS summaries, MAX(synced_at) AS lastSync FROM timeless_meetings") });
+  });
+
+  // 🎥 רישום ה-webhook ב-Timeless — Timeless מודיע כשתמליל / סיכום מוכן, והפגישה נמשכת מיד
+  router.post('/api/admin/timeless/webhook', async (req, res, ctx) => {
+    zoomAdmin(ctx);
+    await run(res, () => TimelessStore.registerWebhook(D.getSetting('public_url', '') || process.env.PUBLIC_URL || ''));
+  });
+
+  // הודעה מ-Timeless (בלי התחברות — מאומתת בחתימה ‎X-Webhook-Signature‎)
+  router.post('/api/hooks/timeless', async (req, res) => {
+    const raw = await readBody(req);
+    const r = await TimelessStore.handleWebhook(raw, req.headers['x-webhook-signature']);
+    sendJson(res, r.status, { ok: r.ok });
+  });
+
   router.get('/api/admin/zoom/users', async (req, res, ctx) => {
     zoomAdmin(ctx);
     sendJson(res, 200, { enabled: Zoom.isEnabled(), missing: Zoom.missing(), accounts: Zoom.accounts(), users: Zoom.listUsers() });
@@ -383,7 +420,8 @@ function register(router, h) {
     const from = day.test(q.get('from') ?? '') ? q.get('from') : new Date(Date.parse(to) - 30 * 86400000).toISOString().slice(0, 10);
     if (from > to) throw badRequest('טווח תאריכים לא תקין');
     try {
-      sendJson(res, 200, { from, to, status: Timeless.publicStatus(actor.id), recordings: await Timeless.recordings(actor.id, from, to) });
+      // מהשמירה המקומית — לא פונים ל-Timeless על כל פתיחה של המסך
+      sendJson(res, 200, { from, to, status: Timeless.publicStatus(actor.id), recordings: await TimelessStore.list(actor.id, from, to) });
     } catch (err) {
       throw tlError(err);
     }
@@ -394,7 +432,10 @@ function register(router, h) {
     const actor = userOnly(ctx);
     let url;
     try {
-      url = await Timeless.recordingUrl(actor.id, ctx.params.id);
+      // ההרשאה — מהשמירה המקומית; ל-Timeless רק בשביל הקישור החתום
+      if (!(await TimelessStore.get(actor.id, ctx.params.id))) throw new HttpError(404, 'הפגישה לא נמצאה ב-Timeless, או שאין לך גישה אליה');
+      const [token] = Timeless.syncTokens();
+      url = token ? await Timeless.org.recordingUrl(token, ctx.params.id) : null;
     } catch (err) {
       throw tlError(err);
     }
@@ -406,7 +447,9 @@ function register(router, h) {
   router.get('/api/timeless/recordings/:id/transcript', async (req, res, ctx) => {
     const actor = userOnly(ctx);
     try {
-      sendJson(res, 200, await Timeless.transcript(actor.id, ctx.params.id, { maxChars: 200000 }));
+      const d = await TimelessStore.details(actor.id, ctx.params.id);
+      if (!d) throw new HttpError(404, 'הפגישה לא נמצאה ב-Timeless, או שאין לך גישה אליה');
+      sendJson(res, 200, { meetingId: d.meeting.id, title: d.meeting.title, text: TimelessStore.transcriptText(d.transcript, 200000) });
     } catch (err) {
       throw tlError(err);
     }
@@ -416,10 +459,9 @@ function register(router, h) {
   router.get('/api/timeless/recordings/:id/summary', async (req, res, ctx) => {
     const actor = userOnly(ctx);
     try {
-      const refs = await Timeless.documents(actor.id, ctx.params.id);
-      const docs = [];
-      for (const ref of refs.slice(0, 5)) docs.push({ ...ref, markdown: await Timeless.document(actor.id, ref.id, { verified: true }) });
-      sendJson(res, 200, { documents: docs });
+      const d = await TimelessStore.details(actor.id, ctx.params.id);
+      if (!d) throw new HttpError(404, 'הפגישה לא נמצאה ב-Timeless, או שאין לך גישה אליה');
+      sendJson(res, 200, { documents: d.documents });
     } catch (err) {
       throw tlError(err);
     }
@@ -434,7 +476,7 @@ function register(router, h) {
   router.get('/api/timeless/recordings/:id', async (req, res, ctx) => {
     const actor = userOnly(ctx);
     await tl(res, async () => {
-      const m = await Timeless.meeting(actor.id, ctx.params.id);
+      const m = await TimelessStore.get(actor.id, ctx.params.id);
       if (!m) throw new HttpError(404, 'הפגישה לא נמצאה ב-Timeless, או שאין לך גישה אליה');
       return { meeting: m, tasks: TimelessMedia.tasksOf(m.id, (t) => canSeeTask(actor, t)) };
     });
@@ -442,7 +484,11 @@ function register(router, h) {
 
   router.get('/api/timeless/recordings/:id/segments', async (req, res, ctx) => {
     const actor = userOnly(ctx);
-    await tl(res, () => Timeless.segments(actor.id, ctx.params.id));
+    await tl(res, async () => {
+      const d = await TimelessStore.details(actor.id, ctx.params.id);
+      if (!d) throw new HttpError(404, 'הפגישה לא נמצאה ב-Timeless, או שאין לך גישה אליה');
+      return { meetingId: d.meeting.id, language: d.transcript?.language ?? null, speakers: d.transcript?.speakers ?? [], segments: d.transcript?.segments ?? [] };
+    });
   });
 
   router.get('/api/timeless/recordings/:id/digest', async (req, res, ctx) => {
@@ -462,7 +508,7 @@ function register(router, h) {
     const actor = userOnly(ctx);
     const b = await readJson(req);
     await tl(res, async () => {
-      const m = await Timeless.meeting(actor.id, ctx.params.id);
+      const m = await TimelessStore.get(actor.id, ctx.params.id);
       if (!m) throw new HttpError(404, 'הפגישה לא נמצאה ב-Timeless, או שאין לך גישה אליה');
       const links = (Array.isArray(b.links) ? b.links : []).slice(0, 20).filter((x) => {
         const t = D.get('SELECT * FROM tasks WHERE id = ?', Number(x.taskId));

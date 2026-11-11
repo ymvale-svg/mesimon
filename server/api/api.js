@@ -1858,6 +1858,30 @@ router.post('/api/tasks/similar', async (req, res, ctx) => {
   sendJson(res, 200, { matches });
 });
 
+/**
+ * 🔀 "לאחד לתוך משימה אחרת": המשימה ‎:id‎ נסגרת, וכל מה שבה (אחראים, הערות, קבצים, צ'קליסט) עובר ל-‎intoId‎.
+ * רק מי שרשאי לערוך את שתיהן, ולא ספק.
+ */
+router.post('/api/tasks/:id/merge', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  if (isVendor(actor)) throw forbidden();
+  const body = await readJson(req);
+  const drop = getTaskOr404(ctx.params.id);
+  const keep = getTaskOr404(Number(body.intoId));
+  for (const t of [drop, keep]) {
+    assertVisible(actor, t);
+    if (!mayOnTask(actor, 'edit_delete_task', t, projectOf(t))) throw forbidden('אין לך הרשאה לערוך את שתי המשימות');
+  }
+  let out;
+  try {
+    out = Dupes.manualMerge(keep.id, drop.id, actor);
+  } catch (err) {
+    if (err.status === 403) throw forbidden(err.message);
+    throw badRequest(err.message);
+  }
+  sendJson(res, 200, { task: shapeTask(getTaskOr404(out.keepId), actor, { withDetails: true }), moved: out.moved });
+});
+
 /** "להצטרף למשימה של יוסי" — אחראי נוסף על המשימה הקיימת, בלי משימה חדשה */
 router.post('/api/tasks/:id/join', async (req, res, ctx) => {
   const actor = ctx.requireActor();

@@ -37,15 +37,16 @@ test('meetingLink (התראה למזכירות) — מדלג על דומיין �
   assert.equal(meetingLink({ conferenceData: { entryPoints: [{ entryPointType: 'video', uri: 'https://zoom-us.example/j/1' }] } }), '');
 });
 
-test('timelessMatch — רק פגישה עם משתתף משותף, לא הקרובה בזמן בארגון', async (t) => {
+test('timelessMatch — רק פגישה עם משתתף משותף, לא הקרובה בזמן בארגון (מהשמירה המקומית)', async (t) => {
   const { timelessMatch } = Followup._internal;
+  const Store = require('../../../server/meetings').TimelessStore;
+  require('../../helpers/db').boot();
   t.mock.method(Timeless, 'isConnected', () => true);
-  t.mock.method(Timeless, 'listMeetings', async () => [
-    { id: 1, start: '2026-11-11T10:01:00Z', participants: ['הנהלה <ceo@corp.test>'] },
-    { id: 2, start: '2026-11-11T10:10:00Z', participants: ['Dana <dana@corp.test>'] }
-  ]);
+  t.mock.method(Timeless, 'scopeOf', () => ({ all: true }));
+  Store._internal.upsert({ id: 'mtg_m1', status: 'completed', start_time: '2026-11-11T10:01:00Z', host: { name: 'הנהלה', email: 'ceo@corp.test' }, participants: [] });
+  Store._internal.upsert({ id: 'mtg_m2', status: 'completed', start_time: '2026-11-11T10:10:00Z', participants: [{ name: 'Dana', email: 'dana@corp.test' }] });
   const start = '2026-11-11T10:00:00Z';
-  assert.equal((await timelessMatch(7, start, new Set(['dana@corp.test'])))?.id, 2);
+  assert.equal((await timelessMatch(7, start, new Set(['dana@corp.test'])))?.id, 'mtg_m2');
   assert.equal(await timelessMatch(7, start, new Set(['other@corp.test'])), null);
   assert.equal(await timelessMatch(7, start, new Set()), null);
 });
