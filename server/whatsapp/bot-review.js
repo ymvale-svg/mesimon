@@ -82,41 +82,58 @@ const usageLine = (u) => (u.ok || u.failed
   : '');
 
 /*
- * 📧 הערות על משימון במייל (הוחלט 11.11.26): הסוקר עובר גם על המיילים של מנהלי המערכת, ומחפש הערות, באגים
- * ובקשות על משימון — מהעובדים או מאנשים מבחוץ. ‎bot_review_mailboxes‎ (מזהי משתמשים) — את מי לקרוא;
- * ברירת המחדל: מנהלי המערכת העליונים (‎superadmin‎) עם Gmail מחובר. מוסווה כמו היומן.
- * לא נכללים: מיילים שמשימון עצמו שלח (‎SMTP_FROM‎, הדו"ח הלילי, התראות), ומענה אוטומטי.
+ * 📧 הערות על משימון במייל (הוחלט 11.11.26): הסוקר עובר גם על המייל של ישראל — רק מיילים שמזכירים את משימון,
+ * כולל צילומי המסך שמצורפים אליהם (שם יש הרבה רעיונות). איזו תיבה — רק מה שהסוקר מבקש במפורש
+ * (‎?mailbox=<מזהה משתמש>‎ בייצוא), ואחרת ההגדרה ‎bot_review_mailboxes‎; בלי אחת מהן — לא קוראים מייל.
+ * הטקסט מוסווה כמו היומן. לא נכללים: מה שמשימון עצמו שלח (‎SMTP_FROM‎, הדו"ח הלילי), ומענה אוטומטי.
  */
-const MAIL_QUERY = '(משימון OR mesimon OR "אשל שלי" OR "בוט הוואטסאפ")';
+const MAIL_QUERY = '(משימון OR mesimon)';
 const MAIL_MAX = 15;
 const MAIL_TEXT = 2500;
+const IMG_PER_MAIL = 4;
+const IMG_MAX_BYTES = 3 * 1024 * 1024;
+const IMG_TOTAL_BYTES = 12 * 1024 * 1024;
 
-function mailboxUsers() {
+function mailboxUsers(requested = []) {
+  const ids = (Array.isArray(requested) ? requested : []).map(Number).filter(Boolean);
+  if (ids.length) return ids;
   const set = D.getSetting('bot_review_mailboxes', null);
-  if (Array.isArray(set) && set.length) return set.map(Number).filter(Boolean);
-  return D.all("SELECT id FROM users WHERE status = 'active' AND role = 'superadmin'").map((r) => r.id);
+  return Array.isArray(set) ? set.map(Number).filter(Boolean) : [];
 }
 
-async function mailFeedback(from) {
+async function mailFeedback(from, { users = [] } = {}) {
   const after = Math.floor(new Date(from).getTime() / 1000);
   const self = String(Mailer.CONFIG?.from ?? '').trim();
   const q = `after:${after} ${MAIL_QUERY} -subject:"סקירת הבוט"${self ? ` -from:${self}` : ''}`;
   const out = [];
   const errors = [];
-  for (const userId of mailboxUsers()) {
+  let imgBytes = 0;
+  for (const userId of mailboxUsers(users)) {
     for (const who of Gmail.boxesOf(userId, 'mail')) {
       try {
         for (const id of await Gmail.search(who, q, { max: MAIL_MAX })) {
           if (out.length >= MAIL_MAX) break;
           const msg = await Gmail.messageFull(who, id);
-          const m = Mime.finishGmail(Mime.fromGmail(msg.payload));
+          const parts = Mime.fromGmail(msg.payload);
+          const m = Mime.finishGmail(parts);
           if (m.autoSubmitted) continue;
+          // 🖼 צילומי מסך — התמונות שמצורפות למייל (בגבולות גודל), כדי שהסוקר יראה מה הראו לו
+          const images = [];
+          for (const a of (parts.attachments ?? []).filter((x) => /^image\//i.test(x.mime ?? '') && (x.size ?? 0) <= IMG_MAX_BYTES).slice(0, IMG_PER_MAIL)) {
+            if (imgBytes + (a.size ?? 0) > IMG_TOTAL_BYTES) break;
+            try {
+              const buf = a.data ?? (a.attachmentId ? await Gmail.attachment(who, id, a.attachmentId) : null);
+              if (!buf?.length) continue;
+              imgBytes += buf.length;
+              images.push({ name: String(a.filename ?? 'image').slice(0, 120), mime: a.mime, data: Buffer.from(buf).toString('base64') });
+            } catch { /* תמונה שלא נמשכה — המייל עדיין נכלל */ }
+          }
           out.push({
             at: m.date && !Number.isNaN(m.date.getTime()) ? m.date.toISOString() : null,
             from: mask(m.from?.name || m.from?.address || ''),
-            to: userId,
             subject: mask(m.subject),
-            text: mask(String(m.newText || m.text || '').slice(0, MAIL_TEXT))
+            text: mask(String(m.newText || m.text || '').slice(0, MAIL_TEXT)),
+            images
           });
         }
       } catch (err) {
@@ -311,10 +328,12 @@ const isConfigured = () => Boolean(String(process.env.BOT_REVIEW_KEY ?? '').trim
 function register(router) {
   router.get('/api/integrations/bot-review/export', async (req, res) => {
     authenticate(req);
-    const since = new URL(req.url, 'http://local').searchParams.get('since') ?? '';
+    const params = new URL(req.url, 'http://local').searchParams;
+    const since = params.get('since') ?? '';
     const out = exportSince(since);
-    // 📧 הערות על משימון מהמייל — תקלה כאן לא מפילה את הייצוא
-    out.mail = await mailFeedback(out.since).catch((err) => ({ mails: [], errors: [err.message] }));
+    // 📧 הערות על משימון מהמייל — רק מהתיבה שביקשו (‎mailbox‎). תקלה כאן לא מפילה את הייצוא
+    const users = String(params.get('mailbox') ?? '').split(',').map(Number).filter(Boolean);
+    out.mail = await mailFeedback(out.since, { users }).catch((err) => ({ mails: [], errors: [err.message] }));
     sendJson(res, 200, out);
   });
 
