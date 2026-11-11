@@ -603,6 +603,34 @@ function mailAlertUsers() {
   }).map((u) => u.id);
 }
 
+
+/*
+ * מי מטפל בהודעה פרטית — ‎handleDirect‎ של ‎wa-bot.js‎, שנרשם בטעינה (‎onDirect‎).
+ * כך זרימה בשכבה נמוכה (קבלת סחורה ממייל, דרישת רכש, ניסיון חוזר) מכניסה הודעה לתור של העובד בלי לייבא את הניתוב.
+ */
+let directHandler = () => { throw new Error('הבוט עוד לא נרשם לטיפול בהודעות (wa-bot.js)'); };
+function onDirect(fn) { directHandler = fn; }
+
+/** הודעה מדומה לתור של העובד (אחרי התשובה הנוכחית) — "קבלת סחורה" עם קובץ, "דרישת רכש …" */
+function enqueueAs(userId, m) {
+  const u = D.get('SELECT phone FROM users WHERE id = ?', userId);
+  if (!u?.phone) return;
+  const msg = { chatId: `${u.phone}@c.us`, phone: u.phone, kind: 'textMessage', forwarded: false, audio: null, file: null, id: `bot-${Date.now()}`, ...m };
+  const prev = chains.get(msg.phone) ?? Promise.resolve();
+  const next = prev.then(() => directHandler(msg))
+    .catch((err) => console.error('[משימון] הודעה פנימית לבוט נכשלה:', err.message))
+    .finally(() => { if (chains.get(msg.phone) === next) chains.delete(msg.phone); });
+  chains.set(msg.phone, next);
+  return next;
+}
+
+
+/*
+ * הודעות פרטיות מטופלות מיד, בשרשרת נפרדת לכל עובד: הודעות של אותו עובד —
+ * לפי הסדר; של עובדים שונים — במקביל, כך שתשובה ארוכה לאחד אינה מעכבת אחר.
+ */
+const chains = new Map();
+
 module.exports = {
-  BACKLOG_DAYS, BATCH_MAX, CHAT_SKILL, CONTEXT_MESSAGES, DAY, DIGEST_GRACE_MIN, GROUP_SKILL, HISTORY_TURNS, KEEP_DAYS, LETTERS, LOG_DAYS, PICK_SHOWN, TZ, WALK, appRoot, buttonReplyText, candidatesOf, channel, checkState, currentMsg, doneEmoji, emailText, firstName, hooks, inHours, isConfigured, localDate, log, mailAlertUsers, markDone, needsLook, orgUsers, parseJson, pickText, publicStatus, qr, react, reactNow, readLog, recentFiles, remove, resolveMentions, save, sendButtons, sendText, setState, signatureFields, signatureLine, splitMessage, taskLink, todayStats, usableClosure, userByPhone, workHours
+  appRoot, BACKLOG_DAYS, BATCH_MAX, buttonReplyText, candidatesOf, chains, channel, CHAT_SKILL, checkState, CONTEXT_MESSAGES, currentMsg, DAY, DIGEST_GRACE_MIN, doneEmoji, emailText, enqueueAs, firstName, GROUP_SKILL, HISTORY_TURNS, hooks, inHours, isConfigured, KEEP_DAYS, LETTERS, localDate, log, LOG_DAYS, mailAlertUsers, markDone, needsLook, onDirect, orgUsers, parseJson, PICK_SHOWN, pickText, publicStatus, qr, react, reactNow, readLog, recentFiles, remove, resolveMentions, save, sendButtons, sendText, setState, signatureFields, signatureLine, splitMessage, taskLink, todayStats, TZ, usableClosure, userByPhone, WALK, workHours
 };
