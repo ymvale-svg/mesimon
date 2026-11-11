@@ -353,7 +353,7 @@ function existingTaskFor(headerId) {
 const involvedIn = (userId, task) => task.created_by === userId || task.assignee_id === userId
   || Boolean(D.get("SELECT 1 FROM task_assignees WHERE task_id = ? AND assignee_type = 'user' AND assignee_id = ?", task.id, userId));
 
-async function processMessage(user, conn, gmailId) {
+async function processMessage(user, conn, gmailId, { wasRead = false } = {}) {
   const msg = await Gmail.raw(Gmail.handle(user.id, conn.box ?? 0), gmailId);
   const mail = Mime.parse(msg.raw);
   const headerId = mail.messageId || `gmail:${gmailId}`;
@@ -364,7 +364,8 @@ async function processMessage(user, conn, gmailId) {
     fromEmail: mail.from.address,
     subject: mail.subject.slice(0, 300),
     receivedAt: (mail.date && !Number.isNaN(mail.date.getTime()) ? mail.date : msg.internalDate ?? new Date()).toISOString(),
-    box: conn.box ?? 0
+    box: conn.box ?? 0,
+    wasRead
   };
   // כל הכתובות שלי — מייל שעובר ביני לבין עצמי (מתיבה לתיבה) אינו משימה
   const mine = new Set([conn.email, user.email, ...Gmail.emailsOf(user.id)].filter(Boolean).map((a) => a.toLowerCase()));
@@ -462,7 +463,7 @@ async function processMessage(user, conn, gmailId) {
   for (const t of result.tasks) {
     // ‎toMe‎ — אני הנמען הראשי (לא רק בהעתק); ‎auto‎ — דיוור / הודעה אוטומטית. רק כאלה קופצים בוואטסאפ (‎mail-push.js‎)
     const toMe = (String(mail.to ?? '').match(/[^\s<>,;"']+@[^\s<>,;"']+/g) ?? []).some((e) => mine.has(e.toLowerCase()));
-    const data = { ...t, warning: result.warning, alsoSuggestedTo: others, receivedAt: meta.receivedAt, toMe, auto: Boolean(mail.autoSubmitted) };
+    const data = { ...t, warning: result.warning, alsoSuggestedTo: others, receivedAt: meta.receivedAt, toMe, auto: Boolean(mail.autoSubmitted), ...(meta.wasRead ? { scannedRead: true } : {}) };
     // לבד רק משימה שכולה שלי: בלי עובדים אחרים, בלי פנייה החוצה ובלי סימן אזהרה
     const solo = !t.people.length && !t.aiRequest && !t.ambiguous.length && !result.warning;
     if ((trusted || autoAll) && solo && !others.length) {
@@ -498,7 +499,14 @@ function setProgress(who, progress) {
  * מייל אחד הוא קריאה ל-AI, ו-50 מיילים הם דקות — הממשק מציג התקדמות ולא
  * ממתין. התקרה היומית משותפת לכל התיבות של העובד.
  */
-async function runScan(who, { from, to = null, trigger = 'manual' }) {
+/*
+ * 🔍 "סרוק עכשיו" — גם מיילים שכבר נקראו, מהיממה האחרונה (הוחלט 11.11.26: עובדת פתחה מייל, רצתה להפוך אותו
+ * למשימה, והוא לא הופיע — הסריקה בודקת רק מיילים שלא נקראו). רק בסריקה ידנית; הצעה כזו מסומנת ‎scannedRead‎,
+ * ולכן לא יורדת מ"ממתין לאישורך" בגלל שהמייל נקרא (‎dropAnswered‎), והבוט לא פונה עליה כמייל חדש.
+ */
+const READ_WINDOW_MS = DAY;
+
+async function runScan(who, { from, to = null, trigger = 'manual', includeRead = false }) {
   const userId = Gmail.userOf(who);
   const user = userOf(userId);
   const conn = Gmail.connectionOf(who);
@@ -514,8 +522,16 @@ async function runScan(who, { from, to = null, trigger = 'manual' }) {
     const budget = Math.max(0, limit - scannedToday(userId, Gmail.boxOf(who)));
     progress.limit = limit;
     const q = ['is:unread', 'in:inbox', '-category:promotions', '-category:social', `after:${epoch(from)}`, to ? `before:${epoch(to)}` : null].filter(Boolean).join(' ');
-    const ids = (await Gmail.search(who, q, { max: 300 }))
-      .filter((id) => !D.get('SELECT 1 FROM mail_scanned WHERE user_id = ? AND gmail_id = ?', userId, id));
+    const found = await Gmail.search(who, q, { max: 300 });
+    const readIds = new Set();
+    if (includeRead) {
+      const since = new Date(Math.max(from.getTime(), Date.now() - READ_WINDOW_MS));
+      if (!to || to > since) {
+        const qr = ['is:read', 'in:inbox', '-category:promotions', '-category:social', `after:${epoch(since)}`, to ? `before:${epoch(to)}` : null].filter(Boolean).join(' ');
+        for (const id of await Gmail.search(who, qr, { max: 100 })) if (!found.includes(id)) { readIds.add(id); found.push(id); }
+      }
+    }
+    const ids = found.filter((id) => !D.get('SELECT 1 FROM mail_scanned WHERE user_id = ? AND gmail_id = ?', userId, id));
     const batch = ids.slice(0, budget);
     progress.total = batch.length;
     progress.capped = ids.length > batch.length;
@@ -524,7 +540,7 @@ async function runScan(who, { from, to = null, trigger = 'manual' }) {
     for (let i = 0; i < batch.length; i += CONCURRENCY) {
       await Promise.all(batch.slice(i, i + CONCURRENCY).map(async (id) => {
         try {
-          const outcome = await processMessage(user, conn, id);
+          const outcome = await processMessage(user, conn, id, { wasRead: readIds.has(id) });
           if (outcome === 'suggested') progress.suggested++;
           else if (outcome === 'auto') progress.auto++;
           else if (outcome === 'reply') progress.replies++;
@@ -569,7 +585,7 @@ function startScan(userId, range) {
   if (boxes.some((who) => Gmail.connectionOf(who)?.scan_running)) throw new Error('סריקה כבר רצה');
   (async () => {
     for (const who of boxes) {
-      await runScan(who, { from, to, trigger: 'manual' }).catch((err) => {
+      await runScan(who, { from, to, trigger: 'manual', includeRead: true }).catch((err) => {
         Gmail.setConn(who, { scan_running: 0, error: err.message });
         console.error('[משימון] סריקת התיבה נכשלה:', err.message);
       });
@@ -712,7 +728,8 @@ async function dropAnswered() {
       const thread = await Gmail.threadOf(who, s.gmail_id);
       const answered = thread.find((m) => m.id !== s.gmail_id && m.labels.includes('SENT') && m.at && m.at.getTime() > received - 60000);
       const source = thread.find((m) => m.id === s.gmail_id);
-      const read = source && !source.labels.includes('UNREAD');
+      // הצעה ממייל שנסרק כשכבר היה נקרא ("סרוק עכשיו") — הקריאה אינה סימן שטופל
+      const read = source && !source.labels.includes('UNREAD') && !JSON.parse(s.data || '{}').scannedRead;
       if (!answered && !read) continue;
       const changed = D.run("UPDATE ai_suggestions SET status = ?, decided_at = ? WHERE id = ? AND status = 'pending'", answered ? 'replied' : 'read', D.nowIso(), s.id).changes;
       /*

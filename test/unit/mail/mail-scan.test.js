@@ -102,3 +102,33 @@ test('sourceLink — רק למי שהמשימה נוצרה מהמייל שלו',
   assert.equal(Scan.sourceLink({ id: 1, source: 'manual', source_user_id: 5 }, 5), null);
   assert.equal(Scan.sourceLink({ id: 1, source: 'email', source_user_id: 5 }, 6), null);
 });
+
+test('🔍 "סרוק עכשיו" — גם מיילים שנקראו, מהיממה האחרונה; הסריקה האוטומטית — רק שלא נקראו', async (t) => {
+  const { user, D } = require('../../helpers/db');
+  const Gmail = require('../../../server/integrations').Gmail;
+  const Claude = require('../../../server/integrations').Claude;
+  const u = user({ status: 'active' });
+  const queries = [];
+  t.mock.method(Claude, 'isEnabled', () => true);
+  t.mock.method(Gmail, 'userOf', () => u.id);
+  t.mock.method(Gmail, 'boxOf', () => 0);
+  t.mock.method(Gmail, 'connectionOf', () => ({ state: 'ok', email: 'me@x.co', box: 0 }));
+  t.mock.method(Gmail, 'has', () => true);
+  t.mock.method(Gmail, 'claimScan', () => true);
+  t.mock.method(Gmail, 'setConn', () => {});
+  t.mock.method(Gmail, 'search', async (who, q) => { queries.push(q); return []; });
+  const from = new Date(Date.now() - 7 * 864e5);
+
+  await Scan.runScan(u.id, { from, trigger: 'morning' });
+  assert.equal(queries.length, 1);
+  assert.match(queries[0], /is:unread/);
+
+  queries.length = 0;
+  await Scan.runScan(u.id, { from, trigger: 'manual', includeRead: true });
+  assert.equal(queries.length, 2);
+  const read = queries.find((q) => /is:read/.test(q));
+  assert.ok(read, 'חיפוש גם במיילים שנקראו');
+  const after = Number(/after:(\d+)/.exec(read)[1]) * 1000;
+  assert.ok(Date.now() - after <= 864e5 + 60000, 'רק מהיממה האחרונה, לא מכל הטווח');
+  D.run('SELECT 1');
+});

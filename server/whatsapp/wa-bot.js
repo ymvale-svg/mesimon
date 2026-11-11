@@ -4255,7 +4255,7 @@ function nextAlert(userId, since) {
       WHERE user_id = ? AND status = 'pending' AND kind = 'task' AND gmail_id <> ''
         AND COALESCE(json_extract(data, '$.source'), 'email') = 'email'
         AND header_id NOT LIKE 'doc:%' AND json_extract(data, '$.expiry') IS NULL
-        AND json_extract(data, '$.waAlert') IS NULL AND created_at >= ?
+        AND json_extract(data, '$.waAlert') IS NULL AND json_extract(data, '$.scannedRead') IS NULL AND created_at >= ?
       ORDER BY received_at, id LIMIT 1`,
     userId, new Date(Math.max(Date.now() - ALERT_WINDOW_MS, new Date(since).getTime())).toISOString()
   );
