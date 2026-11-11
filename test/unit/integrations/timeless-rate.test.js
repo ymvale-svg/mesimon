@@ -70,3 +70,64 @@ test('429 בלי תשובה שמורה — הודעה ברורה', async (t) => 
   fakeFetch(t, () => new Response('{}', { status: 429, headers: { 'retry-after': '30' } }));
   await assert.rejects(Timeless.listMeetings(boss.id, { from: '2026-09-01', to: '2026-09-30' }), (err) => err.status === 429 && /Timeless/.test(err.message));
 });
+
+test('עבודת רקע — עד 20 בקשות בדקה, ובקשה ממסך פתוח עוברת מיד גם כשהרקע מלא', async (t) => {
+  process.env.TIMELESS_ACCESS_TOKEN = 'org-5';
+  t.after(() => { delete process.env.TIMELESS_ACCESS_TOKEN; });
+  t.mock.timers.enable({ apis: ['setTimeout'] }); // תור שמחכה — בלי לעכב את הבדיקה
+  const boss = user({ role: 'admin' });
+  const calls = fakeFetch(t, () => page([]));
+  const day = (i) => `2026-08-${String(i + 1).padStart(2, '0')}`;
+  await Promise.all(Array.from({ length: 20 }, (_, i) => Timeless.background(() => Timeless.listMeetings(boss.id, { from: day(i), to: day(i) }))));
+  assert.equal(calls.length, 20);
+  let extraDone = false;
+  Timeless.background(() => Timeless.listMeetings(boss.id, { from: '2026-08-25', to: '2026-08-25' })).then(() => { extraDone = true; }, () => {});
+  await Timeless.listMeetings(boss.id, { from: '2026-08-26', to: '2026-08-26' }); // מסך פתוח
+  await new Promise((r) => setImmediate(r));
+  assert.equal(calls.length, 21, 'הבקשה מהמסך יצאה, בקשת הרקע ה-21 מחכה בתור');
+  assert.equal(extraDone, false);
+});
+
+test('סבב רקע על עובדים — רשימה ארגונית אחת משותפת, מסוננת לכל עובד', async (t) => {
+  process.env.TIMELESS_ACCESS_TOKEN = 'org-6';
+  t.after(() => { delete process.env.TIMELESS_ACCESS_TOKEN; });
+  const a = user({ role: 'member', email: 'a@eshel.test' });
+  const b = user({ role: 'member', email: 'b@eshel.test' });
+  const calls = fakeFetch(t, () => page([mtg('mtg_a', 'a@eshel.test'), mtg('mtg_b', 'b@eshel.test')]));
+  const [la, lb] = await Timeless.background(() => Promise.all([
+    Timeless.listMeetings(a.id, { from: '2026-07-01', to: '2026-07-02', limit: 30 }),
+    Timeless.listMeetings(b.id, { from: '2026-07-01', to: '2026-07-02', limit: 30 })
+  ]));
+  assert.deepEqual(la.map((m) => m.id), ['mtg_a']);
+  assert.deepEqual(lb.map((m) => m.id), ['mtg_b']);
+  assert.equal(calls.length, 1, 'בקשה אחת לשני העובדים');
+  assert.equal(calls[0].searchParams.get('participant'), null);
+});
+
+test('המונה של Timeless אומר שנשארו 2 — מחכים לאיפוס במקום לקבל 429, והאבחון מראה את זה', async (t) => {
+  process.env.TIMELESS_ACCESS_TOKEN = 'org-7';
+  t.after(() => { delete process.env.TIMELESS_ACCESS_TOKEN; });
+  const boss = user({ role: 'admin' });
+  const reset = Math.floor(Date.now() / 1000) + 90;
+  const calls = fakeFetch(t, () => new Response(JSON.stringify(page([])), { status: 200, headers: { 'x-ratelimit-remaining': '2', 'x-ratelimit-limit': '60', 'x-ratelimit-reset': String(reset) } }));
+  await Timeless.listMeetings(boss.id, { from: '2026-06-01', to: '2026-06-01' });
+  const st = Timeless.status();
+  assert.equal(st.timelessSays.remaining, 2);
+  assert.ok(st.blockedFor > 25, 'חוסם עד האיפוס');
+  // בקשה ממסך — ההמתנה ארוכה מ-25 שניות: הודעה מיד, בלי לשלוח עוד בקשה ל-Timeless
+  await assert.rejects(Timeless.listMeetings(boss.id, { from: '2026-06-02', to: '2026-06-02' }), (err) => err.status === 429);
+  assert.equal(calls.length, 1);
+});
+
+test('429 נרשם באבחון עם הכותרות של Timeless (בלי האסימון)', async (t) => {
+  process.env.TIMELESS_ACCESS_TOKEN = 'org-secret-8';
+  t.after(() => { delete process.env.TIMELESS_ACCESS_TOKEN; });
+  const boss = user({ role: 'admin' });
+  fakeFetch(t, () => new Response('{"error":{"code":"rate_limited"}}', { status: 429, headers: { 'retry-after': '45', 'x-ratelimit-limit': '60' } }));
+  await assert.rejects(Timeless.listMeetings(boss.id, { from: '2026-05-01', to: '2026-05-01' }));
+  const last = Timeless.status().recent429.at(-1);
+  assert.equal(last.retryAfter, 45);
+  assert.equal(last.headers['x-ratelimit-limit'], '60');
+  assert.match(last.body, /rate_limited/);
+  assert.ok(!JSON.stringify(Timeless.status()).includes('org-secret-8'));
+});

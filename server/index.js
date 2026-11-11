@@ -36,6 +36,7 @@ const { HttpError, sendJson, serveStatic, parseUrl, unauthorized } = require('./
 const MailDocQueue = require('./mail').MailDocQueue;
 const PoNotify = require('./priority').PoNotify;
 const TimelessMedia = require('./meetings').TimelessMedia;
+const TimelessStore = require('./meetings').TimelessStore;
 
 const PORT = Number(process.env.PORT ?? 3000);
 const HOST = process.env.HOST ?? '0.0.0.0';
@@ -122,6 +123,8 @@ server.listen(PORT, HOST, () => {
     Meetings.start();
     // 🎥 פגישה מקוונת שהתחילה ולא מוקלטת ב-Timeless — הודעה למזכירות
     TimelessMedia.start();
+    // 🎥 הצינור היחיד מ-Timeless: סבב כל 5 דקות, והפגישות נשמרות במשימון
+    TimelessStore.start();
     WaBot.start();
     // משימות כפולות במחלקה — סריקה פעם ביום (פרק 11ב)
     Dupes.start();

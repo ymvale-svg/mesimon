@@ -558,6 +558,9 @@ const CalendarView = (() => {
     }
     if (e.link) buttons.push(el('a.btn.btn-sm', { href: e.link, target: '_blank', rel: 'noopener' }, ['פתיחה ב-Google ↗']));
     if (e.editable && e.organizerIsOwner && !e.busyOnly && !e.allDay) {
+      // פגישה של משימון — הדיאלוג המלא (מוזמנים, מועד, מיקום, Zoom); אחרת — רק המוזמנים
+      if (e.meetingId) buttons.push(el('button.btn.btn-sm.btn-primary', { onclick: () => { m.close(); editMeeting(e); } }, ['✎ עריכה']));
+      else buttons.push(el('button.btn.btn-sm', { onclick: () => { m.close(); attendeesDialog(e); } }, ['👥 מוזמנים']));
       buttons.push(el('button.btn.btn-sm', { onclick: () => { m.close(); moveDialog(e); } }, ['🔀 הזזה']));
     }
     const m = UI.modal({
@@ -571,6 +574,69 @@ const CalendarView = (() => {
         e.editable && !e.organizerIsOwner && !e.busyOnly ? el('div.mute-sm', { text: 'את הפגישה הזו ארגן מישהו אחר — רק הוא יכול להזיז אותה.' }) : null,
         el('div.flex.mt', { style: { flexWrap: 'wrap', gap: '6px' } }, buttons)
       ])
+    });
+  }
+
+  /** פגישה של משימון — דיאלוג הפגישה במצב שינוי (גם מוזמנים) */
+  async function editMeeting(e) {
+    try {
+      const { meeting } = await API.get(`/api/meetings/one/${e.meetingId}`);
+      MeetingView.openDialog({ meeting, onDone: () => { reload(); refreshPending(); } });
+    } catch (err) { UI.error(err); }
+  }
+
+  /**
+   * המוזמנים של פגישה שלא נקבעה במשימון (נקבעה ב-Google, בטלפון…): הוספה מאנשי הקשר או לפי
+   * מייל, הסרה. מי שנשאר שומר את התשובה שלו; Google שולח הזמנה למצטרפים וביטול למי שהוסר.
+   */
+  function attendeesDialog(e) {
+    const owner = info.calendars.find((c) => c.userId === e.userId);
+    let list = (e.attendees ?? [])
+      .filter((a) => String(a.email ?? '').toLowerCase() !== String(owner?.email ?? '').toLowerCase())
+      .map((a) => ({ email: String(a.email).toLowerCase(), name: a.name ?? '', response: a.response }));
+    const RESP = { accepted: '✓ ', declined: '✗ ', tentative: '? ' };
+    const chips = el('div');
+    const drawChips = () => UI.mount(chips, list.length
+      ? el('div.mt-chips', {}, list.map((a) => el('span.chip.chip-assignee', { title: a.email }, [
+          el('span', { text: `${RESP[a.response] ?? ''}${a.name ? `${a.name} · ${a.email}` : a.email}` }),
+          el('button.chip-x', { type: 'button', title: 'הסרה', 'aria-label': `הסרת ${a.name || a.email}`, onclick: () => { list = list.filter((x) => x.email !== a.email); drawChips(); } }, ['✕'])
+        ])))
+      : el('div.mute-sm', { text: 'אין מוזמנים — רק בעל היומן.' }));
+    const picker = ContactPicker.multi({
+      selected: () => list.map((a) => a.email),
+      onToggle: (c, on) => {
+        const email = String(c.email || c.emails?.[0]?.value || '').toLowerCase();
+        if (!email) return;
+        list = on ? [...list.filter((a) => a.email !== email), { email, name: c.name || '' }] : list.filter((a) => a.email !== email);
+        drawChips();
+      },
+      onAddEmail: (email) => { if (!list.some((a) => a.email === email)) list.push({ email, name: '' }); drawChips(); }
+    });
+    picker.refresh();
+    drawChips();
+    const notify = el('input', { type: 'checkbox', checked: true });
+    const ok = el('button.btn.btn-primary', {}, ['שמירה']);
+    const dlg = UI.modal({
+      title: `👥 מוזמנים — ${e.title ?? 'פגישה'}`,
+      size: 'wide',
+      body: el('div', {}, [
+        el('div.mute-sm', { text: `${new Date(e.start).toLocaleString('he-IL', { weekday: 'long', day: 'numeric', month: 'numeric', hour: '2-digit', minute: '2-digit' })} · ביומן של ${owner?.name ?? ''}` }),
+        UI.field('מוזמנים', el('div', {}, [picker.node, chips])),
+        el('label.checkbox', {}, [notify, ' לשלוח עדכון במייל — הזמנה למצטרפים, ביטול למי שהוסר'])
+      ]),
+      footer: [ok, el('div.spacer'), el('button.btn', { onclick: () => dlg.close() }, ['ביטול'])]
+    });
+    ok.addEventListener('click', async () => {
+      ok.disabled = true;
+      try {
+        const r = await API.post('/api/meetings/attendees', { ownerId: e.userId, eventId: e.eventId, attendees: list, sendUpdates: notify.checked });
+        dlg.close();
+        UI.success(r.added || r.removed ? `המוזמנים עודכנו${r.added ? ` · נוספו ${r.added}` : ''}${r.removed ? ` · הוסרו ${r.removed}` : ''}` : 'המוזמנים נשמרו');
+        reload();
+      } catch (err) {
+        ok.disabled = false;
+        UI.error(err);
+      }
     });
   }
 

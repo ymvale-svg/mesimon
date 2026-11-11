@@ -25,6 +25,7 @@
  *  GET /rooms               → { data: [{ id, title, meeting_count, ... }], next_cursor, has_more }
  */
 const crypto = require('crypto');
+const { AsyncLocalStorage } = require('async_hooks');
 const D = require('../core').Db;
 const secrets = require('../core').Secrets;
 const Permissions = require('../core').Permissions;
@@ -148,8 +149,19 @@ function apiError(message, { status = 0, retryable = false, code = '' } = {}) {
 //  3. Timeless מגביל בכל זאת (429) או נופל (5xx) — מוגשת התשובה האחרונה שנשמרה (עד שעתיים),
 //     ורק כשאין — ניסיון חוזר אחד אחרי ‎Retry-After‎ קצר, ואחר כך הודעה.
 const RATE_MAX = 45;            // מתחת ל-60 — מרווח לסוכנים ולאסימונים אישיים של אותו חשבון
+const BG_MAX = 20;              // עבודות רקע (סבב "איך היה?", בדיקת "לא מוקלטת") — רק עד כאן; השאר שמור למסכים
 const RATE_WINDOW_MS = 60000;
 const QUEUE_MAX_WAIT_MS = 25000; // יותר מזה — לא מחזיקים את המסך; מוגש מהמטמון או הודעה
+const BG_MAX_WAIT_MS = 10 * 60000; // עבודת רקע מחכה בסבלנות
+const bgContext = new AsyncLocalStorage();
+const blockedUntil = new Map();  // ‎tokenKey‎ ← עד מתי Timeless ביקש לחכות (‎Retry-After‎)
+
+/**
+ * עבודת רקע: הבקשות שבתוך ‎fn‎ נכנסות לתור הרקע (עד ‎BG_MAX‎ בדקה, ותמיד אחרי מסכים פתוחים),
+ * ורשימות הפגישות של עובדים נמשכות ברשימה ארגונית אחת שמשותפת לכולם (ראו ‎listMeetings‎).
+ */
+const background = (fn) => bgContext.run(true, fn);
+const inBackground = () => bgContext.getStore() === true;
 const CACHE_MAX = 600;
 const STALE_MS = 2 * 60 * 60000;
 const RETRY_429_MAX_SEC = 8;
@@ -166,18 +178,24 @@ function ttlOf(path) {
   return 0;
 }
 
-/** מחכה לתור הפנוי הבא של האסימון; ‎false‎ — ההמתנה ארוכה מדי */
-async function takeSlot(tk) {
+/**
+ * מחכה לתור הפנוי הבא של האסימון; ‎false‎ — ההמתנה ארוכה מדי. בקשת רקע נכנסת רק כשבדקה
+ * האחרונה היו פחות מ-‎BG_MAX‎ בקשות, כך שתמיד נשאר מקום לבקשה ממסך פתוח.
+ */
+async function takeSlot(tk, bg = false) {
+  const limit = bg ? BG_MAX : RATE_MAX;
+  const deadline = Date.now() + (bg ? BG_MAX_WAIT_MS : QUEUE_MAX_WAIT_MS);
   for (;;) {
     const now = Date.now();
     const list = (sent.get(tk) ?? []).filter((t) => now - t < RATE_WINDOW_MS);
-    if (list.length < RATE_MAX) {
+    sent.set(tk, list);
+    const blocked = blockedUntil.get(tk) ?? 0;
+    if (blocked <= now && list.length < limit) {
       list.push(now);
-      sent.set(tk, list);
       return true;
     }
-    const wait = list[0] + RATE_WINDOW_MS - now + 50;
-    if (wait > QUEUE_MAX_WAIT_MS) { sent.set(tk, list); return false; }
+    const wait = Math.max(blocked - now, list.length >= limit ? list[list.length - limit] + RATE_WINDOW_MS - now : 0) + 50;
+    if (now + wait > deadline) return false;
     await new Promise((r) => setTimeout(r, wait));
   }
 }
@@ -213,6 +231,7 @@ async function rawCall(token, path, query, { fresh = false } = {}) {
     } catch (err) {
       // Timeless מגביל או לא זמין — התשובה האחרונה שנשמרה עדיפה על מסך שגיאה
       if (hit && (err.status === 429 || err.retryable) && Date.now() - hit.at < STALE_MS) {
+        diag.staleServed += 1;
         console.warn(`[משימון] Timeless (${url.pathname}): ${err.status || 'שגיאה'} — מוגש מהמטמון`);
         return hit.body;
       }
@@ -223,25 +242,77 @@ async function rawCall(token, path, query, { fresh = false } = {}) {
   return p;
 }
 
+// ---------- אבחון: מה קורה מול Timeless (‎/api/admin/timeless/status‎) ----------
+// בזיכרון בלבד, בלי האסימון ובלי תוכן פגישות: כמה בקשות יצאו בדקה (מסך / רקע), מה Timeless
+// אמר על המכסה (‎X-RateLimit-*‎), ו-20 ה-429 האחרונים עם הכותרות שלהם.
+const diag = { since: Date.now(), requests: [], limited: [], queueFull: 0, staleServed: 0, server: null };
+function noteRequest(url, bg, status) {
+  const now = Date.now();
+  diag.requests.push({ at: now, path: url.pathname.replace(/\/(mtg|doc)_[\w-]+/g, '/$1_…'), bg, status });
+  while (diag.requests.length && now - diag.requests[0].at > 10 * 60000) diag.requests.shift();
+}
+function status() {
+  const now = Date.now();
+  const lastMin = diag.requests.filter((r) => now - r.at < 60000);
+  const byPath = {};
+  for (const r of diag.requests) byPath[r.path] = (byPath[r.path] ?? 0) + 1;
+  return {
+    since: new Date(diag.since).toISOString(),
+    orgToken: Boolean(orgToken()),
+    lastMinute: { total: lastMin.length, background: lastMin.filter((r) => r.bg).length, screens: lastMin.filter((r) => !r.bg).length },
+    last10MinByPath: byPath,
+    queueFull: diag.queueFull,
+    staleServed: diag.staleServed,
+    timelessSays: diag.server,
+    blockedFor: Math.max(0, ...[...blockedUntil.values()].map((t) => Math.round((t - now) / 1000))),
+    recent429: diag.limited.slice(-20)
+  };
+}
+
+/**
+ * המונה של Timeless עצמו (‎X-RateLimit-Remaining/Reset‎) — כולל בקשות מתהליכים אחרים על אותו
+ * אסימון (סוכנים, שרת נוסף). נשארו מעט — מחכים לאיפוס במקום לקבל 429.
+ */
+function syncFromHeaders(tk, headers) {
+  const remaining = Number(headers?.get?.('x-ratelimit-remaining'));
+  const limit = Number(headers?.get?.('x-ratelimit-limit'));
+  const resetRaw = Number(headers?.get?.('x-ratelimit-reset'));
+  if (!Number.isFinite(remaining)) return;
+  const now = Date.now();
+  // ‎Reset‎ — זמן Unix בשניות, או מספר שניות עד האיפוס
+  const resetAt = Number.isFinite(resetRaw) ? (resetRaw > 1e9 ? resetRaw * 1000 : now + resetRaw * 1000) : now + 60000;
+  diag.server = { remaining, limit: Number.isFinite(limit) ? limit : null, resetAt: new Date(resetAt).toISOString(), at: new Date(now).toISOString() };
+  if (remaining <= 3 && resetAt > now) blockedUntil.set(tk, Math.max(blockedUntil.get(tk) ?? 0, Math.min(resetAt, now + 120000)));
+}
+
 async function limited(token, tk, url) {
-  if (!(await takeSlot(tk))) {
+  const bg = inBackground();
+  if (!(await takeSlot(tk, bg))) {
+    diag.queueFull += 1;
     throw apiError('Timeless עמוס כרגע — נסו שוב בעוד דקה.', { status: 429, retryable: true });
   }
   try {
-    return await fetchOnce(token, url);
+    const body = await fetchOnce(token, url, tk);
+    noteRequest(url, bg, 200);
+    return body;
   } catch (err) {
+    noteRequest(url, bg, err.status || 0);
     if (err.status !== 429) throw err;
-    // מגביל למרות התור (סוכן או מערכת אחרת על אותו חשבון) — מסמנים את הדקה כמלאה
-    sent.set(tk, Array.from({ length: RATE_MAX }, () => Date.now()));
+    diag.limited.push({ at: new Date().toISOString(), path: url.pathname.replace(/\/(mtg|doc)_[\w-]+/g, '/$1_…'), background: bg, retryAfter: err.retryAfterSeconds ?? null, headers: err.rateHeaders ?? null, body: err.bodySnippet ?? '' });
+    if (diag.limited.length > 50) diag.limited.splice(0, diag.limited.length - 50);
+    // מגביל למרות התור (סוכן או מערכת אחרת על אותו חשבון) — כל הבקשות מחכות כמה ש-Timeless ביקש
     const wait = err.retryAfterSeconds ?? 2;
+    blockedUntil.set(tk, Date.now() + Math.min(wait, 120) * 1000);
     if (wait > RETRY_429_MAX_SEC) throw err;
     console.warn(`[משימון] Timeless החזיר 429 (${url.pathname}) — ניסיון חוזר בעוד ${wait} שניות`);
     await new Promise((r) => setTimeout(r, wait * 1000));
-    return fetchOnce(token, url);
+    const body = await fetchOnce(token, url, tk);
+    noteRequest(url, bg, 200);
+    return body;
   }
 }
 
-async function fetchOnce(token, url) {
+async function fetchOnce(token, url, tk = null) {
   let res;
   try {
     res = await fetch(url, {
@@ -256,6 +327,7 @@ async function fetchOnce(token, url) {
   let body = null;
   const text = await res.text().catch(() => '');
   if (text) { try { body = JSON.parse(text); } catch { body = null; } }
+  if (tk) syncFromHeaders(tk, res.headers);
   if (res.ok) return body ?? {};
 
   const apiMsg = body?.error?.message || '';
@@ -265,6 +337,10 @@ async function fetchOnce(token, url) {
     const err = apiError('Timeless מגביל כרגע את קצב הבקשות. נסו שוב בעוד דקה.', { status: 429, retryable: true, code });
     const ra = Number(res.headers.get('retry-after'));
     if (Number.isFinite(ra) && ra > 0) err.retryAfterSeconds = ra;
+    // לאבחון: כותרות המכסה ותחילת התשובה (בלי האסימון)
+    err.rateHeaders = Object.fromEntries(['retry-after', 'x-ratelimit-limit', 'x-ratelimit-remaining', 'x-ratelimit-reset']
+      .map((h) => [h, res.headers.get(h)]).filter(([, v]) => v !== null));
+    err.bodySnippet = text.slice(0, 200);
     throw err;
   }
   if (res.status >= 500) throw apiError(`שגיאה זמנית בשרת Timeless (${res.status}). נסו שוב מאוחר יותר.`, { status: res.status, retryable: true, code });
@@ -405,7 +481,9 @@ async function listMeetings(userId, { search, from, to, limit = 20, status, scop
   const emails = restrictionOf(userId);
   const out = [];
   const seen = new Set();
-  for (const participant of emails ? [...emails] : [undefined]) {
+  // עבודת רקע (סבב על כל העובדים) — רשימה ארגונית אחת, אותה כתובת לכולם, מסוננת כאן לכל עובד
+  const byParticipant = emails && !inBackground();
+  for (const participant of byParticipant ? [...emails] : [undefined]) {
     let cursor;
     for (let page = 0; page < MAX_PAGES && out.length < want; page++) {
       const body = await call(userId, '/meetings', { ...query, participant, limit: PAGE_MAX, cursor });
@@ -567,6 +645,85 @@ function backgroundToken(userId) {
   return hasPersonal(row) ? secrets.decrypt(row.api_token) : null;
 }
 
+// ---------- לשמירה המקומית (‎meetings/timeless-store.js‎) ----------
+// הצינור היחיד מ-Timeless: הפגישות נמשכות פעם אחת ונשמרות במשימון, וכל המסכים והבוט קוראים משם.
+// כאן — רק הפניות עצמן, באסימון נתון ובלי סינון משתמש (הסינון בשמירה המקומית, ‎scopeOf‎).
+
+/** מה המשתמש רואה מההקלטות השמורות: ‎{ all: true }‎ (הנהלה), ‎{ all: false, emails }‎, או ‎null‎ */
+function scopeOf(userId) {
+  if (!isConnected(userId)) return null;
+  const u = D.get('SELECT * FROM users WHERE id = ?', userId);
+  if (!u || u.status !== 'active') return null;
+  if (Permissions.isManagement(u)) return { all: true };
+  const emails = new Set([u.email, u.work_email].map(normEmail).filter((e) => e.includes('@')));
+  return emails.size ? { all: false, emails } : null;
+}
+
+/** האסימונים שמהם מושכים: הארגוני, ואם אין — האישיים של מי שחיבר */
+function syncTokens() {
+  if (orgToken()) return [orgToken()];
+  const out = new Set();
+  for (const r of D.all("SELECT api_token FROM user_channels WHERE provider = ? AND api_token <> '' AND state <> 'revoked'", PROVIDER)) {
+    const t = secrets.decrypt(r.api_token);
+    if (t) out.add(t);
+  }
+  return [...out];
+}
+
+const org = {
+  /** כל הפגישות בטווח, בכל סטטוס, עם מסמכי ה-AI (הפניות) */
+  async meetings(token, from, to, { fresh = false } = {}) {
+    const out = [];
+    let cursor;
+    for (let page = 0; page < MAX_PAGES * 3; page++) {
+      const body = await rawCall(token, '/meetings', { scope: 'all', start_date: from, end_date: to, expand: 'documents', limit: PAGE_MAX, cursor }, { fresh });
+      const items = Array.isArray(body.data) ? body.data : [];
+      for (const m of items) if (m && m.id) out.push(m);
+      if (!body.has_more || !body.next_cursor || body.next_cursor === cursor || !items.length) break;
+      cursor = body.next_cursor;
+    }
+    return out;
+  },
+  async meeting(token, id) {
+    const body = await rawCall(token, '/meetings', { id, scope: 'all', limit: 1, expand: 'documents' }, { fresh: true });
+    return (Array.isArray(body.data) ? body.data : []).find((x) => x && x.id === id) ?? null;
+  },
+  async transcript(token, id) {
+    const body = await rawCall(token, `/meetings/${encodeURIComponent(id)}/transcript`, {}, { fresh: true });
+    return {
+      language: body.language || null,
+      speakers: (Array.isArray(body.speakers) ? body.speakers : []).map((x) => ({ id: String(x.id), name: x.name || String(x.id) })),
+      segments: (Array.isArray(body.segments) ? body.segments : []).filter((x) => x && x.text)
+        .map((x) => ({ s: Number(x.start_time) || 0, e: Number(x.end_time) || Number(x.start_time) || 0, speaker: String(x.speaker_id ?? ''), text: String(x.text).trim() }))
+    };
+  },
+  /** קישור צפייה — כתובת חתומה לזמן קצר (נשמרת דקה במטמון של ‎rawCall‎) */
+  async recordingUrl(token, id) {
+    const body = await rawCall(token, `/meetings/${encodeURIComponent(id)}/recording`, {});
+    const url = body.recording_url;
+    return typeof url === 'string' && /^https:\/\//.test(url) ? url : null;
+  },
+  async document(token, docId) {
+    const body = await rawCall(token, `/documents/${encodeURIComponent(docId)}`, { format: 'markdown' }, { fresh: true });
+    return typeof body.content === 'string' ? body.content : '';
+  },
+  /** ‎webhook‎ — Timeless מודיע כשתמליל / סיכום מוכן. מחזיר ‎{ id, secret }‎ (הסוד מגיע רק עכשיו) */
+  async createWebhook(token, url, events) {
+    const res = await fetch(`${BASE_URL}/webhooks`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, Accept: 'application/json', 'content-type': 'application/json' },
+      body: JSON.stringify({ url, events }),
+      signal: AbortSignal.timeout(TIMEOUT_MS)
+    });
+    const text = await res.text().catch(() => '');
+    let body = {};
+    try { body = JSON.parse(text); } catch { /* ריק */ }
+    if (!res.ok) throw apiError(`Timeless לא יצר webhook (${res.status})${body?.error?.message ? `: ${body.error.message}` : ''}`, { status: res.status });
+    const w = body.data ?? body;
+    return { id: w.id ?? null, secret: w.secret ?? '' };
+  }
+};
+
 // ---------- כלים למודל ----------
 
 const TOOLS = [
@@ -663,6 +820,6 @@ async function runTool(userId, name, input = {}) {
 module.exports = {
   connect, disconnect, isConnected, publicStatus, hasOrgToken: () => Boolean(orgToken()),
   listMeetings, transcript, documents, document, listRooms, recordings, recordingUrl, segments, meeting, meetingsOnDay, backgroundToken,
-  TOOLS, runTool,
+  background, status, scopeOf, syncTokens, org, normalizeMeeting, TOOLS, runTool,
   BASE_URL
 };

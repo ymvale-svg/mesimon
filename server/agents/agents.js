@@ -23,7 +23,8 @@ const Paths = require('../core').Paths;
 const path = require('node:path');
 
 const D = require('../core').Db;
-const Claude = require('../integrations').Claude;
+const Integrations = require('../integrations');
+const Claude = Integrations.Claude;
 const Gmail = require('../integrations').Gmail;
 const Docs = require('../core').DocText;
 const Memory = require('../mail').MailMemory;
@@ -40,8 +41,10 @@ function init(h) { Object.assign(hooks, h); }
 // מודולים שנבנו בנפרד — נטענים כשהם קיימים. בלעדיהם הסוכן עובד בלי הכלים שלהם
 const optional = (name) => { try { return require(name); } catch { return null; } };
 const Calc = () => optional('./calculators');
-const Mcp = () => optional('./mcp-client');
-const Timeless = () => optional('../timeless');
+// אחרי החלוקה לתחומים (10.11.26) הם ב-integrations/ — הנתיבים הישנים ('./mcp-client', '../timeless')
+// החזירו null בשקט, והסוכנים עבדו בלי Timeless ובלי MCP
+const Mcp = () => Integrations.McpClient;
+const Timeless = () => Integrations.Timeless;
 const Org = () => optional('./org-knowledge');
 const DocQueue = require('../mail').MailDocQueue;
 const LoadMonitor = require('../core').LoadMonitor;
