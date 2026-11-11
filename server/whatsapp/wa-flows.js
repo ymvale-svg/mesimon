@@ -481,9 +481,23 @@ async function flowMeetingAudioRequest({ actor, out, t }) {
   return NEXT;
 }
 
-// 🎥 אחרי פגישה מוקלטת: "לפתוח משימות ✅" / "לא" על המשימות שהוצעו
+// 🎥 אחרי פגישה מוקלטת: "לפתוח משימות ✅" / "לא" על המשימות שהוצעו, ו"כן" / "לא" על שליחת הסיכום למשתתפים
 async function flowOnMeetingTasks(ctx) {
   let { actor, dry, keep, out, state, t } = ctx;
+  if (state.draft?.kind === 'meeting_summary_mail' && state.awaiting) {
+    const n = WaUi.normalize(t);
+    if (WaUi.YES.test(n)) {
+      const reply = await MeetingFollowup.sendSummaryMail(actor, state.draft, { dry })
+        .catch((err) => ({ error: err.message }));
+      if (reply?.error) return out('לא הצלחתי לשלוח את הסיכום כרגע. נסו שוב בעוד כמה דקות 🙏', { draft: state.draft, awaiting: true }, { action: 'meeting_followup', status: 'error', result: `שליחת סיכום נכשלה: ${reply.error}`.slice(0, 300) });
+      return out(reply, { draft: null }, { action: 'meeting_followup', status: 'ok', result: `סיכום נשלח ל-${state.draft.to.length} משתתפים: ${state.draft.title}`.slice(0, 300) });
+    }
+    if (WaUi.NO.test(n) || CANCEL.test(t)) {
+      return out('בסדר, הסיכום לא נשלח 👍', { draft: null }, { action: 'meeting_followup', status: 'ok', result: `לא: סיכום למשתתפים של "${state.draft.title}"`.slice(0, 300) });
+    }
+    keep.draft = null;
+    state = { ...state, draft: null, awaiting: false };
+  }
   if (state.draft?.kind === 'meeting_tasks' && state.awaiting) {
     const n = WaUi.normalize(t);
     if (MeetingFollowup.isOpenButton(t) || WaUi.YES.test(n)) {
