@@ -643,7 +643,7 @@ const UI = (() => {
   // --- הודעות ---
 
   function toast(message, kind = '') {
-    const node = el(`div.toast${kind ? `.${kind}` : ''}`, { text: message });
+    const node = el(`div.toast${kind ? `.${kind}` : ''}`, { text: message, role: kind === 'error' ? 'alert' : null });
     document.getElementById('toast-root').appendChild(node);
     setTimeout(() => {
       node.style.transition = 'opacity .25s, transform .25s';

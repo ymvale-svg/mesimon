@@ -360,7 +360,7 @@ const LoginView = (() => {
   function render(root, onSuccess) {
     const emailInput = el('input', { type: 'email', placeholder: 'name@eshel.co.il', autocomplete: 'username' });
     const passInput = el('input', { type: 'password', placeholder: '••••••••', autocomplete: 'current-password' });
-    const errorBox = el('div.alert.alert-danger', { style: { display: 'none' } });
+    const errorBox = el('div.alert.alert-danger', { role: 'alert', style: { display: 'none' } });
     const button = el('button.btn.btn-primary.btn-block', { type: 'submit' }, ['כניסה למערכת']);
     let hero = null;
 
