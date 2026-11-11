@@ -23,6 +23,11 @@ const crypto = require('node:crypto');
 const D = require('../core').Db;
 const Auth = require('../core').Auth;
 const Mailer = require('../integrations').Mailer;
+const Gmail = require('../integrations').Gmail;
+const Mime = require('../core').Mime;
+const MailThread = require('../mail').MailThread;
+const { pushToUser } = require('./wa-proactive');
+const WaUi = require('./wa-ui');
 const { escape, shell, button } = require('../core').MailTemplates;
 const { badRequest, unauthorized, readJson, sendJson } = require('../core').HttpKit;
 
@@ -79,6 +84,71 @@ const usageLine = (u) => (u.ok || u.failed
   ? `🔊 הקראות: ${u.ok}${u.ok ? ` (${u.users === 1 ? 'עובד אחד' : `${u.users} עובדים`})` : ''}${u.failed ? ` · נכשלו: ${u.failed}` : ''}`
   : '');
 
+/*
+ * 📧 הערות על משימון במייל (הוחלט 11.11.26): הסוקר עובר גם על המייל של ישראל — רק מיילים שמזכירים את משימון או הבוט ("אשל שלי"),
+ * כולל צילומי המסך שמצורפים אליהם (שם יש הרבה רעיונות). איזו תיבה — רק מה שהסוקר מבקש במפורש
+ * (‎?mailbox=<מזהה משתמש>‎ בייצוא), ואחרת ההגדרה ‎bot_review_mailboxes‎; בלי אחת מהן — לא קוראים מייל.
+ * הטקסט מוסווה כמו היומן. לא נכללים: מה שמשימון עצמו שלח (‎SMTP_FROM‎, הדו"ח הלילי), ומענה אוטומטי.
+ */
+// "בוט" ו"הבוט" — Gmail מחפש מילה שלמה, והה"א צמודה
+const MAIL_QUERY = '(משימון OR mesimon OR "אשל שלי" OR בוט OR הבוט)';
+const MAIL_MAX = 15;
+const MAIL_TEXT = 2500;
+const IMG_PER_MAIL = 4;
+const IMG_MAX_BYTES = 3 * 1024 * 1024;
+const IMG_TOTAL_BYTES = 12 * 1024 * 1024;
+
+function mailboxUsers(requested = []) {
+  const ids = (Array.isArray(requested) ? requested : []).map(Number).filter(Boolean);
+  if (ids.length) return ids;
+  const set = D.getSetting('bot_review_mailboxes', null);
+  return Array.isArray(set) ? set.map(Number).filter(Boolean) : [];
+}
+
+async function mailFeedback(from, { users = [] } = {}) {
+  const after = Math.floor(new Date(from).getTime() / 1000);
+  const self = String(Mailer.CONFIG?.from ?? '').trim();
+  const q = `after:${after} ${MAIL_QUERY} -subject:"סקירת הבוט"${self ? ` -from:${self}` : ''}`;
+  const out = [];
+  const errors = [];
+  let imgBytes = 0;
+  for (const userId of mailboxUsers(users)) {
+    for (const who of Gmail.boxesOf(userId, 'mail')) {
+      try {
+        for (const id of await Gmail.search(who, q, { max: MAIL_MAX })) {
+          if (out.length >= MAIL_MAX) break;
+          const msg = await Gmail.messageFull(who, id);
+          const parts = Mime.fromGmail(msg.payload);
+          const m = Mime.finishGmail(parts);
+          if (m.autoSubmitted) continue;
+          // 🖼 צילומי מסך — התמונות שמצורפות למייל (בגבולות גודל), כדי שהסוקר יראה מה הראו לו
+          const images = [];
+          for (const a of (parts.attachments ?? []).filter((x) => /^image\//i.test(x.mime ?? '') && (x.size ?? 0) <= IMG_MAX_BYTES).slice(0, IMG_PER_MAIL)) {
+            if (imgBytes + (a.size ?? 0) > IMG_TOTAL_BYTES) break;
+            try {
+              const buf = a.data ?? (a.attachmentId ? await Gmail.attachment(who, id, a.attachmentId) : null);
+              if (!buf?.length) continue;
+              imgBytes += buf.length;
+              images.push({ name: String(a.filename ?? 'image').slice(0, 120), mime: a.mime, data: Buffer.from(buf).toString('base64') });
+            } catch { /* תמונה שלא נמשכה — המייל עדיין נכלל */ }
+          }
+          out.push({
+            at: m.date && !Number.isNaN(m.date.getTime()) ? m.date.toISOString() : null,
+            from: mask(m.from?.name || m.from?.address || ''),
+            subject: mask(m.subject),
+            text: mask(String(m.newText || m.text || '').slice(0, MAIL_TEXT)),
+            images
+          });
+        }
+      } catch (err) {
+        errors.push(`תיבה של משתמש ${userId}: ${String(err.message).slice(0, 120)}`);
+      }
+    }
+  }
+  out.sort((a, b) => String(a.at).localeCompare(String(b.at)));
+  return { query: MAIL_QUERY, mails: out, ...(errors.length ? { errors } : {}) };
+}
+
 /** השיחות הפרטיות (וואטסאפ והעוזר באפליקציה) מאז ‎since‎, מקובצות לשיחות */
 function exportSince(since) {
   const floor = new Date(Date.now() - MAX_DAYS * 86400000);
@@ -129,7 +199,12 @@ function feedback() {
   const out = [];
   for (const r of D.all('SELECT id, created_at, fixes FROM bot_reviews WHERE created_at >= ? ORDER BY id', since)) {
     for (const f of parse(r.fixes)) {
-      out.push({ reviewId: r.id, date: r.created_at.slice(0, 10), title: f.title, url: f.url, status: f.status ?? 'new', note: f.note ?? '' });
+      out.push({
+        reviewId: r.id, n: out.filter((x) => x.reviewId === r.id).length + 1, date: r.created_at.slice(0, 10), title: f.title, url: f.url, kind: f.kind ?? '',
+        status: f.status ?? 'new', note: f.note ?? '',
+        // ✉️ מי העיר (משתמש במשימון) — כדי להציע לו תשובה כשזה טופל; ‎replyProposedAt‎ — כבר הוצעה, לא שוב
+        requester: f.requester ?? '', threadHint: f.threadHint ?? '', replyProposedAt: f.replyProposedAt ?? null
+      });
     }
   }
   return out;
@@ -161,7 +236,10 @@ async function sendReport(body) {
     problem: clean(f.problem, 1500),
     example: clean(f.example, 1500),
     url: isHttps(clean(f.url, 500)) ? clean(f.url, 500) : '',
-    kind: clean(f.kind, 30)
+    kind: clean(f.kind, 30),
+    // ✉️ מי העיר — השם המלא של משתמש במשימון (מהמייל שממנו עלה הרעיון), ומילה מהנושא לשרשור התשובה
+    requester: clean(f.requester, 120),
+    threadHint: clean(f.threadHint, 120)
   })).filter((f) => f.title).map((f, i) => ({ ...f, n: i + 1 }));
   const reportUrl = isHttps(clean(body.reportUrl, 500)) ? clean(body.reportUrl, 500) : '';
   if (!summary && !fixes.length) throw badRequest('הדו"ח ריק');
@@ -182,7 +260,8 @@ async function sendReport(body) {
      VALUES (?,?,?,?,?,?,?,?,?)`,
     D.nowIso(), clean(body.since, 40), clean(body.until, 40), subject, mask(summary), conversations, succeeded,
     JSON.stringify(patterns),
-    JSON.stringify(fixes.map((f) => ({ title: mask(f.title), problem: mask(f.problem), example: mask(f.example), kind: f.kind, url: f.url, status: 'new', note: '' })))
+    JSON.stringify(fixes.map((f) => ({ title: mask(f.title), problem: mask(f.problem), example: mask(f.example), kind: f.kind, url: f.url, status: 'new', note: '',
+      ...(f.requester ? { requester: f.requester, threadHint: mask(f.threadHint) } : {}) })))
   ).lastInsertRowid;
 
   const para = (t) => escape(t).replace(/\n/g, '<br>');
@@ -259,11 +338,73 @@ function setFixStatus(reviewId, n, { status, note = '' }, actor) {
 
 const isConfigured = () => Boolean(String(process.env.BOT_REVIEW_KEY ?? '').trim());
 
+/**
+ * ✉️ "לענות לה במייל דרך משימון" (הוחלט 11.11.26): הסוקר מכין תשובה לעובד/ת בארגון על הערה שלו/ה, והבוט שולח
+ * אותה למנהל בוואטסאפ לאישור — ‎plain_mail‎ — ו"כן" שולח מתיבת ה-Gmail של המנהל, בהמשך לשרשור עם הנמען.
+ * בטיחות: הנמען — רק משתמש פעיל במשימון (לפי השם המלא, לא כתובת חופשית); המאשר — רק מנהל מערכת; ושום
+ * דבר לא יוצא בלי "כן" שלו.
+ */
+async function mailForApproval(body) {
+  const approver = D.get("SELECT id, full_name, phone FROM users WHERE id = ? AND status = 'active' AND role IN ('superadmin','admin')", Number(body.userId));
+  if (!approver) throw badRequest('המאשר חייב להיות מנהל מערכת פעיל');
+  if (!approver.phone) throw badRequest('למאשר אין טלפון — אין לאן לשלוח את האישור');
+  const to = D.get("SELECT id, full_name, email FROM users WHERE status = 'active' AND full_name = ?", clean(body.toName, 120));
+  if (!to?.email) throw badRequest('הנמען לא נמצא בין המשתמשים הפעילים (לפי השם המלא)');
+  const text = clean(body.body, 5000);
+  if (!text) throw badRequest('אין תוכן למייל');
+  const hint = clean(body.threadHint, 120);
+  const threads = await MailThread.recentThreads(approver.id, to.email, { max: 5 }).catch(() => []);
+  const rt = (hint && threads.find((x) => String(x.subject ?? '').includes(hint))) || threads[0] || null;
+  const replyThread = rt ? { box: rt.box, threadId: rt.threadId, subject: rt.subject, inReplyTo: rt.inReplyTo, references: rt.references } : null;
+  const subject = replyThread ? (/^re:/i.test(replyThread.subject) ? replyThread.subject : `Re: ${replyThread.subject}`) : (clean(body.subject, 200) || 'משימון');
+  const draft = { kind: 'plain_mail', to: { name: to.full_name, email: to.email }, subject, body: text, replyThread };
+  const preview = [
+    `✉️ *מייל מוכן לאישור — ל${to.full_name}*`,
+    `*נושא:* ${subject}`,
+    replyThread ? `↩️ בהמשך לשרשור "${replyThread.subject}"` : null,
+    '',
+    text,
+    '',
+    'לשלוח מהמייל שלך? *כן* 👍 · *לא* 👎'
+  ].filter((l) => l !== null).join('\n');
+  const sent = await pushToUser(approver.id, { text: preview, buttons: [WaUi.BTN.yes, WaUi.BTN.no], draft }, 'send_email', { requested: true });
+  // ✉️ ההצעות שהתשובה מדווחת עליהן — מסומנות "הוצעה תשובה", כדי שהסקירה הבאה לא תציע שוב
+  if (sent) markReplyProposed(body.fixes);
+  return { sent: Boolean(sent), to: to.full_name, subject, inThread: Boolean(replyThread) };
+}
+
+/** ‎refs‎: ‎[{ reviewId, n }]‎ — ההצעות שהוצעה עליהן תשובה למי שהעיר */
+function markReplyProposed(refs) {
+  const now = D.nowIso();
+  const byReview = new Map();
+  for (const r of Array.isArray(refs) ? refs.slice(0, 50) : []) {
+    const id = Number(r?.reviewId); const n = Number(r?.n);
+    if (id && n) byReview.set(id, [...(byReview.get(id) ?? []), n]);
+  }
+  for (const [id, ns] of byReview) {
+    const row = D.get('SELECT fixes FROM bot_reviews WHERE id = ?', id);
+    if (!row) continue;
+    const fixes = parse(row.fixes);
+    for (const n of ns) if (fixes[n - 1]) fixes[n - 1].replyProposedAt = now;
+    D.run('UPDATE bot_reviews SET fixes = ? WHERE id = ?', JSON.stringify(fixes), id);
+  }
+}
+
 function register(router) {
+  router.post('/api/integrations/bot-review/mail-for-approval', async (req, res) => {
+    authenticate(req);
+    sendJson(res, 200, await mailForApproval(await readJson(req)));
+  });
+
   router.get('/api/integrations/bot-review/export', async (req, res) => {
     authenticate(req);
-    const since = new URL(req.url, 'http://local').searchParams.get('since') ?? '';
-    sendJson(res, 200, exportSince(since));
+    const params = new URL(req.url, 'http://local').searchParams;
+    const since = params.get('since') ?? '';
+    const out = exportSince(since);
+    // 📧 הערות על משימון מהמייל — רק מהתיבה שביקשו (‎mailbox‎). תקלה כאן לא מפילה את הייצוא
+    const users = String(params.get('mailbox') ?? '').split(',').map(Number).filter(Boolean);
+    out.mail = await mailFeedback(out.since, { users }).catch((err) => ({ mails: [], errors: [err.message] }));
+    sendJson(res, 200, out);
   });
 
   router.post('/api/integrations/bot-review/report', async (req, res) => {
@@ -272,4 +413,4 @@ function register(router) {
   });
 }
 
-module.exports = { register, mask, exportSince, sendReport, listReviews, setFixStatus, isConfigured, readAloudUsage };
+module.exports = { register, mask, exportSince, sendReport, listReviews, setFixStatus, isConfigured, readAloudUsage, mailFeedback, mailForApproval };

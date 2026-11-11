@@ -663,10 +663,11 @@ function shapeTask(task, actor, { withDetails = false } = {}) {
     ...base,
     // ההתכתבות המלאה של משימת AI, לפאנל בכרטיס המשימה
     aiDetail: isVendor(actor) ? null : AiTasks.detailFor(task.id),
-    // משימה שנולדה ממייל: הקישור אליו — רק למי שהמייל בתיבה שלו
+    // משימה שנולדה ממייל: הקישור אליו — רק למי שהמייל בתיבה שלו; העותק של המייל (‎mail‎) — לכל מי שרואה את המשימה
     source: isVendor(actor) || !task.source ? null : {
       type: task.source,
-      link: actor.type === 'user' ? MailScan.sourceLink(task, actor.id) : null
+      link: actor.type === 'user' ? MailScan.sourceLink(task, actor.id) : null,
+      mail: task.source === 'email' ? MailScan.sourceMailOf(task) : null
     },
     // 💡 איך לסגור — רק לבעל התיבה שממנה נוצרה המשימה
     closure: actor.type === 'user' ? MailScan.closureForTask(task.id, actor.id) : null,
@@ -1856,6 +1857,30 @@ router.post('/api/tasks/similar', async (req, res, ctx) => {
     title: body.title, description: body.description, projectId: body.projectId, departmentId: newTaskDepartment(actor, body)
   });
   sendJson(res, 200, { matches });
+});
+
+/**
+ * 🔀 "לאחד לתוך משימה אחרת": המשימה ‎:id‎ נסגרת, וכל מה שבה (אחראים, הערות, קבצים, צ'קליסט) עובר ל-‎intoId‎.
+ * רק מי שרשאי לערוך את שתיהן, ולא ספק.
+ */
+router.post('/api/tasks/:id/merge', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  if (isVendor(actor)) throw forbidden();
+  const body = await readJson(req);
+  const drop = getTaskOr404(ctx.params.id);
+  const keep = getTaskOr404(Number(body.intoId));
+  for (const t of [drop, keep]) {
+    assertVisible(actor, t);
+    if (!mayOnTask(actor, 'edit_delete_task', t, projectOf(t))) throw forbidden('אין לך הרשאה לערוך את שתי המשימות');
+  }
+  let out;
+  try {
+    out = Dupes.manualMerge(keep.id, drop.id, actor);
+  } catch (err) {
+    if (err.status === 403) throw forbidden(err.message);
+    throw badRequest(err.message);
+  }
+  sendJson(res, 200, { task: shapeTask(getTaskOr404(out.keepId), actor, { withDetails: true }), moved: out.moved });
 });
 
 /** "להצטרף למשימה של יוסי" — אחראי נוסף על המשימה הקיימת, בלי משימה חדשה */
@@ -4436,6 +4461,32 @@ function userWorkload(userId) {
   return { openTasks, allTasks, projects };
 }
 
+/**
+ * הקלטות פגישה (‎uploads/meeting-audio‎) וטפסים ממולאים (‎uploads/forms/form_<id>.pdf‎) של המשתמש.
+ * השורות נמחקות ב-CASCADE עם המשתמש, ובלעדיהן הניקוי התקופתי לא מוצא את הקבצים.
+ */
+function userUploadFiles(userId) {
+  const audioDir = path.join(D.UPLOADS_DIR, 'meeting-audio');
+  const formsDir = path.join(D.UPLOADS_DIR, 'forms');
+  const files = [];
+  for (const r of D.all('SELECT stored_name FROM meeting_audio WHERE user_id = ?', userId)) {
+    const name = String(r.stored_name ?? '');
+    if (name && name === path.basename(name)) files.push(path.join(audioDir, name));
+  }
+  for (const r of D.all('SELECT id FROM mail_forms WHERE user_id = ?', userId)) {
+    if (Number.isInteger(r.id)) files.push(path.join(formsDir, `form_${r.id}.pdf`));
+  }
+  return files;
+}
+
+function removeFiles(files, userId) {
+  for (const file of files) {
+    try { fs.unlinkSync(file); } catch (err) {
+      if (err.code !== 'ENOENT') console.error(`[משימון] מחיקת קובץ של משתמש #${userId}:`, err.message);
+    }
+  }
+}
+
 /** קבצי קבלת הסחורה של המשתמש בדיסק (‎uploads/goods-receipt/u<id>-*‎) */
 function removeGoodsReceiptFiles(userId) {
   if (!Number.isInteger(userId) || userId <= 0) return;
@@ -4469,7 +4520,7 @@ router.get('/api/admin/users/:id/delete-check', async (req, res, ctx) => {
  * נשמרות כפי שהן — היומן מחזיק את השם בזמן הפעולה.
  *
  * מידע אישי נמחק: הודעות הוואטסאפ שלו, יומן הבוט ויומן הסוכנים, ההגדרות
- * האישיות וקבצי קבלת הסחורה. בקשות ה-AI עוברות למחליף; בלי מחליף — נמחקות.
+ * האישיות, קבצי קבלת הסחורה, הקלטות הפגישה והטפסים הממולאים. בקשות ה-AI עוברות למחליף; בלי מחליף — נמחקות.
  *
  * מי שרק עזב — עדיף להשבית (סטטוס "לא פעיל"): הכניסה נחסמת וההיסטוריה נשמרת.
  */
@@ -4498,6 +4549,8 @@ router.delete('/api/admin/users/:id', async (req, res, ctx) => {
 
   const id = user.id;
   const heirId = heir?.id ?? null;
+  // קבצים בדיסק שהשורות שלהם נמחקות ב-CASCADE — נאספים לפני המחיקה, ונמחקים אחריה
+  const userFiles = userUploadFiles(id);
   D.db.exec('BEGIN');
   try {
     if (heirId) {
@@ -4543,6 +4596,7 @@ router.delete('/api/admin/users/:id', async (req, res, ctx) => {
   }
 
   removeGoodsReceiptFiles(id);
+  removeFiles(userFiles, id);
 
   D.audit(null, actorRef(actor), 'user_deleted',
     `נמחק המשתמש ${user.full_name} <${user.email}>` + (heir ? `; המשימות הועברו ל${heir.full_name}` : ''));

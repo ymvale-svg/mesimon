@@ -41,22 +41,27 @@ function record(userId, id, { owner = 'chat', draft = null, awaiting = false } =
 
 const find = (userId, id) => (id ? list(userId).find((q) => q.id === String(id)) ?? null : null);
 
-function markAnswered(userId, id) {
+/** ‎answer‎ — הכפתור שנלחץ: לחיצה אחרת על אותה שאלה ("לא" ואז "קבלת סחורה") היא שינוי דעה, לא כפילות */
+function markAnswered(userId, id, answer = '') {
   if (!userId || !id) return;
-  D.setSetting(keyOf(userId), list(userId).map((q) => (q.id === String(id) ? { ...q, answered: true } : q)));
+  D.setSetting(keyOf(userId), list(userId).map((q) => (q.id === String(id) ? { ...q, answered: true, answer: String(answer ?? '').trim() } : q)));
 }
 
 /**
  * מה לעשות בלחיצה על כפתור של שאלה בשיחה הרגילה:
  *   'free' — לא שאלת כן/לא (תפריט, "עוד אפשרויות") — כמו קודם
  *   'current' — זו השאלה הפתוחה עכשיו
- *   'restore' — שאלה יזומה שנדחקה ועוד לא נענתה — מחזירים אותה
- *   'closed' — כבר נענתה, או שעברה ואי אפשר להחזיר
+ *   'restore' — מחזירים אותה:
+ *       • שאלה יזומה (חשבונית מהמייל, תזכורת) שעוד לא נענתה — או שנענתה בכפתור אחר (שינוי דעה). התשובה בודקת במסד.
+ *       • התראה על מייל ("לשלוח את התשובה?", "לפתוח משימה?") שהמייל שלה עוד לא טופל (‎alertOpen‎) —
+ *         גם אם התראה אחרת הגיעה אחריה. אחרי שטופל, היא כבר לא "פתוחה" במסד — ולא נשלח פעמיים.
+ *   'closed' — כבר נענתה (אותו כפתור), או שעברה ואי אפשר להחזיר
  */
-function decide(q, currentDraft) {
+function decide(q, currentDraft, { text = '', alertOpen = () => false } = {}) {
   if (!q || q.owner !== 'chat' || !q.awaiting || !q.draft) return 'free';
   if (draftKey(currentDraft) === q.key) return 'current';
-  if (!q.answered && RESTORABLE.has(q.draft.kind)) return 'restore';
+  if (RESTORABLE.has(q.draft.kind) && (!q.answered || (q.answer && q.answer !== String(text ?? '').trim()))) return 'restore';
+  if (q.draft.alert && q.draft.suggestionIds?.length && alertOpen(q.draft)) return 'restore';
   return 'closed';
 }
 

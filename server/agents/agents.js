@@ -23,7 +23,9 @@ const Paths = require('../core').Paths;
 const path = require('node:path');
 
 const D = require('../core').Db;
-const Claude = require('../integrations').Claude;
+const Ports = require('../core').Ports;
+const Integrations = require('../integrations');
+const Claude = Integrations.Claude;
 const Gmail = require('../integrations').Gmail;
 const Docs = require('../core').DocText;
 const Memory = require('../mail').MailMemory;
@@ -40,8 +42,10 @@ function init(h) { Object.assign(hooks, h); }
 // מודולים שנבנו בנפרד — נטענים כשהם קיימים. בלעדיהם הסוכן עובד בלי הכלים שלהם
 const optional = (name) => { try { return require(name); } catch { return null; } };
 const Calc = () => optional('./calculators');
-const Mcp = () => optional('./mcp-client');
-const Timeless = () => optional('../timeless');
+// אחרי החלוקה לתחומים (10.11.26) הם ב-integrations/ — הנתיבים הישנים ('./mcp-client', '../timeless')
+// החזירו null בשקט, והסוכנים עבדו בלי Timeless ובלי MCP
+const Mcp = () => Integrations.McpClient;
+const Timeless = () => Integrations.Timeless;
 const Org = () => optional('./org-knowledge');
 const DocQueue = require('../mail').MailDocQueue;
 const LoadMonitor = require('../core').LoadMonitor;
@@ -372,7 +376,11 @@ async function toolsFor(def, key, user, actor, state) {
   if (tl && def.timeless && tl.isConnected(user.id)) {
     for (const t of tl.TOOLS) {
       tools.push(t);
-      handlers.set(t.name, async (i) => { state.sources.add('🎥 Timeless'); return tl.runTool(user.id, t.name, i); });
+      // מהשמירה המקומית במשימון — לא פונים ל-Timeless על כל שאלה (מכסה של 250 בקשות לחשבון)
+      handlers.set(t.name, async (i) => {
+        state.sources.add('🎥 Timeless');
+        return Ports.has('timelessStore') ? Ports.get('timelessStore').runTool(user.id, t.name, i) : tl.runTool(user.id, t.name, i);
+      });
     }
   }
   const mcp = Mcp();

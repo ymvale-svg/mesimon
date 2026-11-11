@@ -14,6 +14,8 @@ const BTN = Object.freeze({
   approve: 'מאשר ✅',
   cancel: 'ביטול 🗑️',
   confirmCancel: 'כן, לבטל 🗑️',
+  confirmFinal: 'כן, לסגור ✅',
+  backToDraft: 'חזרה לטיוטא',
   done: 'סיום 🏁'
 });
 

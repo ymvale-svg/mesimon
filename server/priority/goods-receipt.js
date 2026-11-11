@@ -96,7 +96,8 @@ const bullet = (x) => `• ${x}`;
 
 function buttonsFor(s) {
   if (!s) return [];
-  if (s.confirmCancel) return [BTN.confirmCancel, 'חזרה לטיוטא'];
+  if (s.confirmCancel) return [BTN.confirmCancel, BTN.backToDraft];
+  if (s.confirmFinal) return [BTN.confirmFinal, BTN.backToDraft];
   if (s.pendingNew) return ['צרף כנספח', 'קבלה חדשה', 'להתעלם ❌'];
   if (s.pendingList) return [BTN.yes, BTN.no];
   if (s.choices?.step === s.step && s.choices.list?.length) return s.choices.list;
@@ -740,10 +741,31 @@ function docWithoutVat(d) {
  * טיוטא קיימת לאותו מסמך — הקליטה ממשיכה ממנה, בשלב בדיקת הטיוטא: הפרויקט, המחסן ותנאי התשלום מה-GR, השורות
  * והסכומים של המסמך מהקריאה החדשה (לבדיקה מול המסמך, ולעדכון לפי צילום). המסמך כבר בנספחים — לא מצורף שוב.
  */
+/*
+ * 📦 מי פתח אי פעם קבלת סחורה בפריוריטי (הוחלט 11.11.26, ישראל: "רק עובד שפתח אי פעם קבלת סחורה בפריוריטי יקבל
+ * הצעות לבצע קבלת סחורה מחשבונית"). נרשם כשנפתח GR (טיוטא) מהבוט; מלפני הרישום — מיומן הבוט: GR שנפתח, נמשך,
+ * נסגר כסופי או בוטל אחרי שנפתח.
+ */
+const openedKey = (userId) => `goods_receipt_opened:${userId}`;
+function markOpened(userId) {
+  if (userId && !D.getSetting(openedKey(userId), null)) D.setSetting(openedKey(userId), D.nowIso());
+}
+function everOpened(userId) {
+  if (!userId) return false;
+  if (D.getSetting(openedKey(userId), null)) return true;
+  const hit = D.get(
+    `SELECT 1 FROM wa_log WHERE user_id = ? AND action = 'goods_receipt'
+       AND (result LIKE 'GR סופי %' OR result LIKE 'המשך טיוטא %' OR result LIKE 'טיוטא %' OR result GLOB 'ביטול [A-Za-z0-9]*')
+     LIMIT 1`, userId);
+  if (hit) markOpened(userId);
+  return Boolean(hit);
+}
+
 async function resumeDraft(s, dup) {
   const gr = await Priority.readReceipt(s.company, dup.DOCNO);
   s.docno = dup.DOCNO;
   s.resumed = true;
+  markOpened(s.uid);
   s.project = gr.PROJDOCNO ? { code: gr.PROJDOCNO, des: gr.PROJDES ?? '' } : null;
   s.warehouse = gr.TOWARHSNAME || null;
   s.payCode = gr.MED_MXPAYCODE || s.payCode;
@@ -1198,6 +1220,7 @@ async function createDraft(user, s) {
     if (!docno) return { failed: err, tried: [first, ...alt] };
   }
   s.docno = docno;
+  markOpened(user.id);
   Chain.progress(user.id, 'receipt', { stage: 'draft', docno, company: c, supplier: s.supplier?.name ?? '' });
   // פריוריטי מציב בפתיחה את מחסן הפרויקט, גם כשנשלח מחסן אחר — מעדכנים למחסן שנבחר (לפני השורות, שיורשות אותו)
   if (s.warehouse) await Priority.setHeader(c, docno, { TOWARHSNAME: s.warehouse }).catch((err) => console.error(`[משימון] מחסן ${s.warehouse} ל-${docno}:`, err.message));
@@ -1824,6 +1847,13 @@ async function handle({ user, text = '', file = null, reaction = false, allow = 
     save(user.id, back);
     return { replies: [`↩️ חזרתי שלב אחד אחורה.${back.lastPrompt ? `\n\n${back.lastPrompt}` : ''}`], status: 'ok', result: `שלב אחורה: ${s.step} ← ${back.step}`, buttons: buttonsFor(back) };
   }
+  // תשובה לשאלה "להפוך לסופית?" — כן / 👍 / מאשר: סוגרים; "חזרה לטיוטא" — הטיוטא; כל דבר אחר — ממשיכים בבדיקה
+  if (s.confirmFinal) {
+    const ok = !file && (YES.test(t) || /^(מאשר|מאשרת|אישור|אשר|👍|👌|✅|✔)([\s,.!]|$)/.test(t));
+    if (!ok) s.confirmFinal = false;
+    if (!file && /^חזרה לטיוטא/.test(t)) { const out = await showDraft(s, [], user); save(user.id, out.s ?? s); return { ...out, buttons: buttonsFor(out.s ?? s) }; }
+    if (ok) t = 'מאשר';
+  }
   // תשובה לשאלה "לבטל את הטיוטא?" — 👍 / כן מבטל (לא מאשר!); כל דבר אחר — ממשיכים בבדיקה
   if (s.confirmCancel) {
     s.confirmCancel = false;
@@ -1909,7 +1939,8 @@ async function step(user, s, t, file, allow = { gr: true, pd: false }) {
       // "קבלת סחורה" (הכפתור) — מתחילים. "דרישת רכש" — הבוט מעביר לדרישת הרכש (wa-bot), וכאן רק כשאינה פתוחה לעובד.
       // כל דבר אחר — לא לפריוריטי: יוצאים מהתפריט, והבוט הרגיל מטפל
       if (isPriority(t) && !isTrigger(t) && !file) return reply(s, MENU);
-      if (/דרישת\s*רכש/.test(t)) return { s: null, replies: ['דרישת רכש עוד לא פתוחה לך בבוט. אם צריך — פנו למנהל המערכת.'], status: 'ok', result: 'דרישת רכש — לא מורשה' };
+      // דרישת רכש מגיעה לכאן רק כשאינה פתוחה לעובד (אחרת wa-bot מעביר אותה לדרישת הרכש). ליתר ביטחון — לא "לא פתוחה" למי שמורשה
+      if (/דרישת\s*רכש/.test(t)) return { s: null, replies: [allow.pd ? 'כתבו *דרישת רכש* כדי להתחיל.' : 'דרישת רכש עוד לא פתוחה לך בבוט. אם צריך — פנו למנהל המערכת.'], status: 'ok', result: allow.pd ? 'דרישת רכש — הפניה' : 'דרישת רכש — לא מורשה' };
       if (!allow.gr && (file || isTrigger(t) || /^(1|אחת|אחד)([\s,.!]|$)/.test(t))) return { s: null, replies: ['קבלת סחורה עוד לא פתוחה לך בבוט. אם צריך — פנו למנהל המערכת.'], status: 'ok', result: 'קבלת סחורה — לא מורשה' };
       if (file || isTrigger(t) || /^(1|אחת|אחד)([\s,.!]|$)/.test(t)) {
         s.step = 'doc';
@@ -2256,6 +2287,14 @@ async function step(user, s, t, file, allow = { gr: true, pd: false }) {
         return showDraft(s);
       }
       if (/^(מאשר|מאשרת|אישור|אשר|👍|👌|✅|✔)([\s,.!]|$)/.test(t)) {
+        // שאלת אישור לפני סגירה — אחרי "סופית" אי אפשר לבטל מהבוט
+        if (!s.confirmFinal) {
+          s.confirmFinal = true;
+          return { s, replies: [[`🔒 להפוך את *${s.docno}* לסופית?`,
+            'אחרי הסגירה אי אפשר לבטל מהבוט — רק בפריוריטי (פעולות ← פתיחת תעודה סופית לעריכה).',
+            '*כן* 👍 — לסגור · *חזרה לטיוטא* — להמשיך לבדוק'].join('\n')], result: 'שאלת אישור לפני סגירה' };
+        }
+        s.confirmFinal = false;
         try {
           // כבר סופית (אושרה במחשב) — לא מאשרים שוב
           if ((await Priority.receiptStatus(s.company, s.docno)) !== 'סופית') await Priority.finalizeReceipt(s.company, s.docno);
@@ -2379,4 +2418,4 @@ function view(userId) {
   };
 }
 
-module.exports = { view, inMenu, dropMenu, isTrigger, isPriority, opens, active, pending, pausedNote, abandon, switchCancels, wantsUndoFinal, handle, sweep, _jpegToPdf: jpegToPdf, _codeLines: codeLines, _orderDiffs: orderDiffs, _similarLines: similarLines, _askParts: askParts, _projectsOf: projectsOf, _findProjects: findProjects, _ai: ai, _load: load, _clear: (userId) => clear(userId, load(userId)) };
+module.exports = { view, everOpened, markOpened, inMenu, dropMenu, isTrigger, isPriority, opens, active, pending, pausedNote, abandon, switchCancels, wantsUndoFinal, handle, sweep, _jpegToPdf: jpegToPdf, _codeLines: codeLines, _orderDiffs: orderDiffs, _similarLines: similarLines, _askParts: askParts, _projectsOf: projectsOf, _findProjects: findProjects, _ai: ai, _load: load, _clear: (userId) => clear(userId, load(userId)) };

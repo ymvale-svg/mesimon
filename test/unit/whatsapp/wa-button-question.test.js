@@ -71,3 +71,35 @@ test('לחיצה על השאלה הפתוחה עכשיו — כרגיל', async 
   assert.equal(Bot.readLog({}).find((r) => r.userId === u.id).action, 'goods_offer');
   assert.equal(Bot._internal.chatOf(u.id).draft, null);
 });
+
+test('"לא" ואז "קבלת סחורה" על אותה הצעה — שינוי דעה: הקליטה מתחילה', async (t) => {
+  const { texts } = fake(t);
+  const u = user({ phone: '972509100005', role: 'employee' });
+  const offer = { kind: 'goods_offer', goodsId: 123458, filename: 'c.pdf' };
+  Bot._internal.saveChat(u.id, { ...Bot._internal.chatOf(u.id), draft: offer, awaiting: true });
+  Q.record(u.id, 'OFFER3', { owner: 'chat', draft: offer, awaiting: true });
+  await press('972509100005', 'לא ❌', 'OFFER3');
+  await press('972509100005', 'קבלת סחורה 📦', 'OFFER3');
+  assert.ok(!texts('972509100005').includes(Q.CLOSED_TEXT), 'לא "השאלה כבר לא פתוחה"');
+  const newest = Bot.readLog({}).find((r) => r.userId === u.id); // היומן — החדשה ראשונה
+  assert.match(newest.result, /קבלת סחורה מהמייל: c\.pdf/);
+});
+
+test('התראה על מייל שנדחקה על ידי התראה חדשה — "לא ❌" עליה עונה לה, והחדשה נשארת פתוחה', async (t) => {
+  fake(t);
+  const u = user({ phone: '972509100006', role: 'employee' });
+  const sug = (subject) => Number(D.run(
+    "INSERT INTO ai_suggestions (user_id, kind, status, gmail_id, from_name, from_email, subject, data, created_at) VALUES (?, 'task', 'pending', ?, 'x', 'x@test.local', ?, '{}', ?)",
+    u.id, `g-${subject}`, subject, D.nowIso()).lastInsertRowid);
+  const older = { kind: 'mail_task', alert: true, suggestionIds: [sug('ישן')], title: 'ישן', subject: 'ישן' };
+  const newer = { kind: 'mail_task', alert: true, suggestionIds: [sug('חדש')], title: 'חדש', subject: 'חדש' };
+  Q.record(u.id, 'ALERT_OLD', { owner: 'chat', draft: older, awaiting: true });
+  Q.record(u.id, 'ALERT_NEW', { owner: 'chat', draft: newer, awaiting: true });
+  Bot._internal.saveChat(u.id, { ...Bot._internal.chatOf(u.id), draft: newer, awaiting: true });
+  await press('972509100006', 'לא ❌', 'ALERT_OLD');
+  assert.notEqual(D.get('SELECT status FROM ai_suggestions WHERE id = ?', older.suggestionIds[0]).status, 'pending', 'הישנה טופלה');
+  assert.equal(D.get('SELECT status FROM ai_suggestions WHERE id = ?', newer.suggestionIds[0]).status, 'pending', 'החדשה לא נגעה');
+  assert.equal(Bot._internal.chatOf(u.id).draft.subject, 'חדש', 'החדשה חזרה להיות הפתוחה');
+  await press('972509100006', 'לא ❌', 'ALERT_OLD');
+  assert.match(Bot.readLog({}).find((r) => r.userId === u.id).result, /כבר לא פתוחה/);
+});

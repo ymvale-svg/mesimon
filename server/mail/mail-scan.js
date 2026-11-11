@@ -637,11 +637,19 @@ async function morningRun() {
 }
 
 /**
- * 📬 סריקה שוטפת — למי שהבוט פונה אליו על כל מייל חדש (‎mail_alert‎ בפעולות
- * הבוט; הרשימה מ-‎wa-bot.mailAlertUsers‎). כל ‎ai_mail_live_minutes‎ דקות
- * (ברירת מחדל 10), מהסריקה הקודמת ולא יותר מיממה אחורה. אותה תקרה יומית של
- * הסריקה הרגילה; מייל שכבר נסרק אינו נסרק שוב.
+ * 📬 סריקה שוטפת — כל תיבה מחוברת של כל עובד (הוחלט 11.11.26: "מייל מלפני חצי שעה לא מופיע בהצעות" —
+ * עד אז רק מי שמקבל התראות מייל בבוט, ‎mail_alert‎, ושאר העובדים קיבלו הצעות רק בסריקת הבוקר).
+ * כל ‎ai_mail_live_minutes‎ דקות (ברירת מחדל 10), מהסריקה הקודמת ולא יותר מיממה אחורה. אותה תקרה יומית של
+ * הסריקה הרגילה; מייל שכבר נסרק אינו נסרק שוב — ולכן העלות כמו בסריקת הבוקר, רק מוקדם יותר.
+ * ‎ai_mail_live_scope = 'alerts'‎ — כמו קודם: רק מי שמקבל התראות מייל בבוט.
  */
+function liveBoxes() {
+  if (D.getSetting('ai_mail_live_scope', 'all') === 'alerts') {
+    return Ports.get('waBot').mailAlertUsers().flatMap((userId) => Gmail.boxesOf(userId, 'mail'));
+  }
+  return Gmail.allBoxes('mail');
+}
+
 let liveAt = 0;
 let liveBusy = false;
 async function liveRun() {
@@ -651,14 +659,12 @@ async function liveRun() {
   liveAt = Date.now();
   liveBusy = true;
   try {
-    for (const userId of Ports.get('waBot').mailAlertUsers()) {
-      for (const who of Gmail.boxesOf(userId, 'mail')) {
-        const conn = Gmail.connectionOf(who);
-        if (!conn || conn.state !== 'ok' || conn.scan_running) continue;
-        const last = conn.last_scan_at ? new Date(conn.last_scan_at).getTime() : 0;
-        const from = new Date(Math.max(last - 30 * 60000, Date.now() - DAY));
-        await runScan(who, { from, trigger: 'live' }).catch((err) => console.error(`[משימון] סריקה שוטפת של משתמש ${userId} נכשלה:`, err.message));
-      }
+    for (const who of liveBoxes()) {
+      const conn = Gmail.connectionOf(who);
+      if (!conn || conn.state !== 'ok' || conn.scan_running) continue;
+      const last = conn.last_scan_at ? new Date(conn.last_scan_at).getTime() : 0;
+      const from = new Date(Math.max(last - 30 * 60000, Date.now() - DAY));
+      await runScan(who, { from, trigger: 'live' }).catch((err) => console.error(`[משימון] סריקה שוטפת של ${who} נכשלה:`, err.message));
     }
   } finally {
     liveBusy = false;
@@ -800,6 +806,34 @@ function ownSuggestion(id, userId) {
  * יצירת המשימה מהצעה, עם התיקונים של המשתמש. עובר דרך ‎createTask‎ של
  * ‎api.js‎ — אותן בדיקות הרשאה כמו בכל משימה, כולל שיוך לאדם אחר.
  */
+/*
+ * 📧 המייל המקורי בתוך המשימה (הוחלט 11.11.26, מהערה של עובדת: "קיבלתי משימה ממייל ולא יודעת על מה היא").
+ * הקישור למייל ב-Gmail עובד רק למי שהמייל בתיבה שלו — ולכן נשמר עותק (מאת, נושא, תאריך, הטקסט החדש עד 8,000
+ * תווים) ב-‎tasks.source_mail‎, ומוצג לכל מי שרואה את המשימה (לא לספקים). רקע: תקלה לא מעכבת את יצירת המשימה.
+ */
+const SOURCE_MAIL_TEXT = 8000;
+async function captureSourceMail(taskId, sug) {
+  if (!taskId || !sug?.gmail_id) return null;
+  const who = Gmail.handle(sug.user_id, sug.box ?? 0);
+  const m = Mime.parse((await Gmail.raw(who, sug.gmail_id)).raw);
+  const snap = {
+    from: m.from?.name || sug.from_name || '',
+    fromEmail: m.from?.address || sug.from_email || '',
+    subject: m.subject || sug.subject || '',
+    date: m.date && !Number.isNaN(m.date.getTime()) ? m.date.toISOString() : sug.received_at ?? null,
+    text: String(m.newText || m.text || '').trim().slice(0, SOURCE_MAIL_TEXT),
+    files: (m.attachments ?? []).map((a) => a.filename).filter(Boolean).slice(0, 20)
+  };
+  D.run('UPDATE tasks SET source_mail = ? WHERE id = ?', JSON.stringify(snap), taskId);
+  return snap;
+}
+
+/** העותק של המייל המקורי, לכרטיס המשימה. ‎null‎ — אין */
+function sourceMailOf(task) {
+  const v = parseJson(task?.source_mail || '', null);
+  return v && typeof v === 'object' && (v.text || v.subject) ? v : null;
+}
+
 function createFromSuggestion(sug, actor, edits = {}) {
   const data = parseJson(sug.data, {});
   // מה שהגיע מהלקוח נבדק שוב: רק עובדים פעילים, ובתפקיד מוכר
@@ -853,6 +887,8 @@ function createFromSuggestion(sug, actor, edits = {}) {
   });
   // בקשה לפגישה — מהמייל, מקבוצה או מהוואטסאפ האישי: "📅 פגישה לקביעה"
   if (data.meeting) D.run('UPDATE tasks SET meeting_pending = 1 WHERE id = ?', taskId);
+  // 📧 עותק של המייל במשימה — לכל מי שעובד עליה (ברקע)
+  if (!fromWhatsApp && !fromAgent) captureSourceMail(taskId, sug).catch((err) => console.error('[משימון] שמירת המייל המקורי במשימה נכשלה:', err.message));
 
   // מי שביקש בקבוצה — יודע שהבקשה התקבלה ונפתחה
   if (fromWhatsApp && data.requester?.id && data.requester.id !== actor.id) {
@@ -1031,6 +1067,9 @@ function markConverted(id, userId, taskId) {
   const sug = ownSuggestion(id, userId);
   if (sug.status !== 'pending') return null;
   D.run("UPDATE ai_suggestions SET status = 'approved', task_id = ?, decided_at = ? WHERE id = ?", taskId, D.nowIso(), id);
+  // משימת AI שנפתחה מהצעה מהמייל — גם בה עותק של המייל, כמו במשימה רגילה (ברקע)
+  const src = parseJson(sug.data, {}).source;
+  if (src !== 'whatsapp' && src !== 'agent') captureSourceMail(taskId, sug).catch((err) => console.error('[משימון] שמירת המייל המקורי במשימה נכשלה:', err.message));
   return sug;
 }
 
@@ -1139,6 +1178,6 @@ module.exports = {
   init, startScan, runScan, rangeOf, morningRun, liveRun, pollMailbox,
   approve, approveAll, reject, restore, ignoreSenderOf, join, skip, undo, markConverted, setSender, senders,
   dismissClosure, closureForTask, markReply,
-  listFor, sourceLink, suggestionById,
-  _internal: { sanitize, processMessage, createFromSuggestion }
+  listFor, sourceLink, suggestionById, captureSourceMail, sourceMailOf,
+  _internal: { sanitize, processMessage, createFromSuggestion, liveBoxes }
 };

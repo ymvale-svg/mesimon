@@ -2000,7 +2000,7 @@ const AdminView = (() => {
     // ---- סקירה לילית: מה עבד, מה לא, ומה מוצע לתקן
 
     const FIX_STATUS = { new: ['ממתין להחלטה', 'ai-chip-warn'], done: ['טופל', 'wa-chip-ok'], dismissed: ['לא רלוונטי', ''] };
-    const FIX_KIND = { skill: 'ניסוח לבוט', code: 'כלל בקוד', alias: 'שמות וכינויים', feature: 'יכולת חדשה' };
+    const FIX_KIND = { skill: 'ניסוח לבוט', code: 'כלל בקוד', alias: 'שמות וכינויים', feature: 'יכולת חדשה', idea: '💡 רעיון מהמייל' };
     const pct = (r) => (r.conversations ? Math.round((r.succeeded / r.conversations) * 100) : null);
 
     async function reviewSection() {
@@ -2024,6 +2024,8 @@ const AdminView = (() => {
           el('div.flex', { style: { flexWrap: 'wrap', gap: '6px', alignItems: 'center' } }, [
             el('b', { text: fix.title }),
             fix.kind && FIX_KIND[fix.kind] ? el('span.ai-chip.ai-chip-ai', { text: FIX_KIND[fix.kind] }) : null,
+            // ✉️ מי העיר, והאם כבר הוצעה לו תשובה על מה שטופל
+            fix.requester ? el('span.ai-chip', { text: fix.replyProposedAt ? `✉️ ${fix.requester} · הוצעה תשובה` : `✉️ ${fix.requester}` }) : null,
             el(`span.ai-chip${cls ? `.${cls}` : ''}`, { text: label })
           ]),
           fix.problem ? el('div.rv-text', { text: fix.problem }) : null,

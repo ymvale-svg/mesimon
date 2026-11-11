@@ -49,6 +49,8 @@ const RecordingsView = (() => {
   };
 
   let embedded = false;
+  let retries = 0;
+  let retryTimer = null;
 
   /** ‎embedded‎ — בתוך מסך היומן, מתחת ללשוניות: בלי כותרת משלו */
   async function render(container, opts = {}) {
@@ -76,10 +78,18 @@ const RecordingsView = (() => {
       if (!sources.timeless) { data = { recordings: [], connect: true }; return draw(); }
       try {
         data = await API.get(`/api/timeless/recordings?from=${from}&to=${to}`);
+        retries = 0;
       } catch (err) {
-        data = { recordings: [], errors: [err.message] };
+        data = { recordings: [], errors: [err.message], busy: err.status === 429 };
       }
-      return draw();
+      draw();
+      // Timeless עמוס — ניסיון חוזר לבד (20, 40, 60 שניות), בלי שצריך ללחוץ "רענון"
+      clearTimeout(retryTimer);
+      if (data.busy && retries < 3 && containerRef?.isConnected) {
+        retries += 1;
+        retryTimer = setTimeout(() => { if (containerRef?.isConnected && view.source === 'timeless') load(); }, retries * 20000);
+      }
+      return;
     }
     try {
       data = await API.get(`/api/zoom/recordings?from=${from}&to=${to}`);
@@ -111,6 +121,7 @@ const RecordingsView = (() => {
       el('button.btn.btn-sm', { onclick: () => { view.month = new Date(); load(); } }, ['החודש']),
       el('div.spacer'),
       search,
+      view.source === 'timeless' && App.can?.('manage_users') ? el('button.btn.btn-sm.btn-ghost', { title: 'מצב החיבור ל-Timeless — למנהלי מערכת', onclick: timelessDiag }, ['⚙ Timeless']) : null,
       el('button.btn.btn-sm', { title: view.source === 'timeless' ? 'רענון מ-Timeless' : 'רענון מ-Zoom', onclick: async (e) => { e.currentTarget.disabled = true; await load(); UI.success('ההקלטות עודכנו'); } }, ['⟳ רענון'])
     ]);
   }
@@ -121,7 +132,12 @@ const RecordingsView = (() => {
     listBox = el('div.rec-list');
     UI.mount(containerRef, el('div.rec', {}, [
       head(),
-      ...(data.errors ?? []).map((e) => el('div.alert.alert-warn', {}, [el('span', { text: '⚠️' }), el('div', { text: e })])),
+      ...(data.errors ?? []).map((e) => el('div.alert.alert-warn', {}, [el('span', { text: '⚠️' }), el('div', {}, [
+        e,
+        data.busy && retries && retries <= 3 ? el('div.mute-sm', { text: `מנסה שוב לבד בעוד ${retries * 20} שניות…` }) : null,
+        // מנהל מערכת — מה בדיוק Timeless החזיר
+        data.busy && App.can?.('manage_users') ? el('a', { href: '#', onclick: (ev) => { ev.preventDefault(); timelessDiag(); } }, ['פרטים טכניים']) : null
+      ])])),
       listBox
     ]));
     drawList();
@@ -231,6 +247,34 @@ const RecordingsView = (() => {
         el('button.btn.btn-sm.btn-ghost', { onclick: () => RecordingPlayer.open(r.id, { tab: 'ask' }) }, ['✨ שאל על הפגישה'])
       ])
     ]);
+  }
+
+  /** אבחון למנהל מערכת: כמה בקשות יצאו, מה Timeless אומר על המכסה, וה-429 האחרונים */
+  async function timelessDiag() {
+    let st;
+    try { st = await API.get('/api/admin/timeless/status'); } catch (err) { return UI.error(err); }
+    const text = JSON.stringify(st, null, 2);
+    const copy = el('button.btn.btn-sm', {}, ['העתקה']);
+    copy.addEventListener('click', async () => { try { await navigator.clipboard.writeText(text); UI.success('הועתק'); } catch { /* ריק */ } });
+    // webhook — Timeless מודיע כשתמליל / סיכום מוכן, והפגישה נכנסת מיד (בלי לחכות לסבב של 5 דקות)
+    const hook = st.webhook?.registered ? null : el('button.btn.btn-sm.btn-primary', {}, ['🔔 עדכונים מיידיים מ-Timeless']);
+    hook?.addEventListener('click', async () => {
+      hook.disabled = true;
+      try { await API.post('/api/admin/timeless/webhook', {}); UI.success('Timeless יודיע למשימון כשפגישה מוכנה'); dlg.close(); } catch (err) { hook.disabled = false; UI.error(err); }
+    });
+    const stored = st.stored ?? {};
+    const dlg = UI.modal({
+      title: '🎥 Timeless — אבחון',
+      size: 'wide',
+      body: el('div', {}, [
+        el('div', { style: { marginBottom: '6px' }, text: `שמורות במשימון: ${stored.n ?? 0} פגישות · תמלילים ${stored.transcripts ?? 0} · סיכומים ${stored.summaries ?? 0}${stored.lastSync ? ` · עודכן ${new Date(stored.lastSync).toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit' })}` : ''} · עדכונים מיידיים (webhook): ${st.webhook?.registered ? 'מחובר ✓' : 'לא מחובר'}` }),
+        // המכסה של החשבון ב-Timeless — כמה נשאר ומתי מתחדשת
+        st.timelessSays ? el('div', { style: { marginBottom: '6px', fontWeight: '700' }, text: `מכסת Timeless: נשארו ${st.timelessSays.remaining}${st.timelessSays.limit ? ` מתוך ${st.timelessSays.limit}` : ''} · מתחדשת ב-${new Date(st.timelessSays.resetAt).toLocaleString('he-IL', { weekday: 'short', hour: '2-digit', minute: '2-digit' })}` }) : null,
+        el('div.mute-sm', { text: `בדקה האחרונה: ${st.lastMinute.total} בקשות (מסכים ${st.lastMinute.screens}, רקע ${st.lastMinute.background}) · התור התמלא ${st.queueFull} פעמים · הוגש מהמטמון ${st.staleServed} פעמים${st.blockedFor ? ` · Timeless ביקש לחכות עוד ${st.blockedFor} שניות` : ''}` }),
+        el('pre', { style: { whiteSpace: 'pre-wrap', direction: 'ltr', textAlign: 'left', fontSize: '12px', maxHeight: '60vh', overflow: 'auto' }, text })
+      ]),
+      footer: [hook, copy].filter(Boolean)
+    });
   }
 
   /** Timeless עוד לא מחובר — חיבור כאן, עם האסימון האישי */

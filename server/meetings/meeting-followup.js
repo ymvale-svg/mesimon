@@ -8,7 +8,7 @@
  * מקורות:
  *   • פגישה שמשימון קבע עם Zoom (‎meetings‎) — כשההקלטה בענן של Zoom מוכנה.
  *     המשתתפים — ‎Meetings.recipientsOf‎ (בעל היומן, מי שקבע, ומוזמנים מהארגון).
- *   • פגישה ב-Timeless — לכל עובד לפי הגישה שלו (‎Timeless.listMeetings‎), רק
+ *   • פגישה ב-Timeless — מהשמירה המקומית (‎timeless-store.js‎, הצינור היחיד מ-Timeless), רק
  *     פגישה שהשתתף בה, ורק כשמסמך ה-AI שלה כבר מוכן.
  *   אותה פגישה משני המקורות — פנייה אחת (לפי שעת ההתחלה).
  *   • הקלטה ששלחו לבוט (‎source = wa‎, ‎meeting-audio.js‎) — בלי פנייה: הסיכום מוכן
@@ -27,18 +27,20 @@
 const D = require('../core').Db;
 const Zoom = require('../integrations').Zoom;
 const Timeless = require('../integrations').Timeless;
+const Store = require('./timeless-store');
 const Claude = require('../integrations').Claude;
+const Gmail = require('../integrations').Gmail;
+const Mailer = require('../integrations').Mailer;
 const WaUi = require('../whatsapp').WaUi;
 const Meetings = require('./meetings');
+const Calendar = require('./calendar');
 const Secretariat = require('../core').Secretariat;
 
 const MIN = 60000;
 const HOUR = 60 * MIN;
-const DAY_MS = 24 * HOUR;
 const GIVE_UP_MS = 24 * HOUR;          // אחרי יממה מסוף הפגישה — לא פונים
 const ANSWER_WINDOW_MS = 48 * HOUR;    // עד מתי "סיכום" מתייחס לפגישה שנשאלה
 const ZOOM_RECHECK_MS = 10 * MIN;      // בדיקת הקלטה ב-Zoom לכל פגישה
-const TIMELESS_RECHECK_MS = 15 * MIN;  // רשימת הפגישות ב-Timeless לכל עובד
 const SAME_MEETING_MS = 15 * MIN;      // Zoom ו-Timeless על אותה פגישה
 const TZ = 'Asia/Jerusalem';
 
@@ -46,7 +48,8 @@ const BTN = Object.freeze({
   summary: '📝 סיכום הפגישה',
   tasks: '📋 משימות מהפגישה',
   recording: '🎥 הקלטת הפגישה',
-  open: 'לפתוח משימות ✅'
+  open: 'לפתוח משימות ✅',
+  share: '📤 לשלוח למשתתפים'
 });
 
 const parseJson = (t, f) => { try { return JSON.parse(t); } catch { return f; } };
@@ -84,7 +87,6 @@ function record(userId, m) {
 // ---------------------------------------------------------------------------
 
 const zoomChecked = new Map();   // ‎meetings.id‎ → מתי נבדק
-const timelessChecked = new Map(); // ‎users.id‎ → מתי נבדק
 
 /** פגישות משימון עם Zoom שהסתיימו, וההקלטה שלהן מוכנה */
 async function zoomCandidates(now) {
@@ -113,29 +115,18 @@ async function zoomCandidates(now) {
   return out;
 }
 
-/** פגישות Timeless של העובד שהסתיימו, ומסמך ה-AI שלהן מוכן */
-async function timelessCandidates(userId, now) {
-  if (!Timeless.isConnected(userId)) return [];
-  if ((timelessChecked.get(userId) ?? 0) > now - TIMELESS_RECHECK_MS) return [];
-  timelessChecked.set(userId, now);
-  const ymd = (ms) => new Date(ms).toISOString().slice(0, 10);
-  let list;
-  try {
-    list = await Timeless.listMeetings(userId, { from: ymd(now - GIVE_UP_MS), to: ymd(now + 24 * HOUR), limit: 30, expandDocuments: true, scope: 'all' });
-  } catch {
-    return [];
-  }
-  const mine = emailsOf(userRow(userId));
-  return list.filter((m) => {
-    const end = new Date(m.end ?? 0).getTime();
-    if (!end || end > now - delayMs() || end < now - GIVE_UP_MS) return false;
-    if (!(m.documents ?? []).length) return false;
-    // גם מי שרואה את כל הארגון (הנהלה) — רק פגישות שהשתתף בהן
-    return m.participants.some((p) => (String(p).match(/[^\s<>"']+@[^\s<>"']+/g) ?? []).some((e) => mine.has(normEmail(e))));
-  }).map((m) => ({
+/**
+ * פגישות Timeless שהסתיימו וסיכום ה-AI שלהן מוכן — מהשמירה המקומית (‎timeless-store.js‎), בלי
+ * לפנות ל-Timeless. לכל פגישה — העובדים שהשתתפו בה (לפי המייל), גם מי שרואה את כל הארגון.
+ */
+function timelessCandidates(now) {
+  const users = D.all("SELECT id, email, work_email FROM users WHERE status = 'active' AND phone IS NOT NULL AND phone <> ''")
+    .map((u) => ({ id: u.id, emails: emailsOf(u) }));
+  return Store.endedBetween(now - GIVE_UP_MS, now - delayMs()).map(({ meeting: m, emails }) => ({
     source: 'timeless', ref: String(m.id), title: m.title || 'פגישה', start: m.start, end: m.end,
-    data: { participants: m.participants }, users: [userId]
-  }));
+    data: { participants: m.participants },
+    users: users.filter((u) => Timeless.isConnected(u.id) && emails.some((e) => u.emails.has(e))).map((u) => u.id)
+  })).filter((c) => c.users.length);
 }
 
 // ---------------------------------------------------------------------------
@@ -157,10 +148,17 @@ function askText(u, m) {
  * @param {object} io  ‎{ eligible(userId) → bool, busy(userId) → bool, send(userId, text, buttons) }‎
  */
 async function sweep(io) {
+  // עבודת רקע מול Timeless: תור הרקע, ורשימה ארגונית אחת לכל העובדים (לא בקשה לכל עובד)
+  return Timeless.background(() => sweepOnce(io));
+}
+
+async function sweepOnce(io) {
   const now = Date.now();
   const candidates = await zoomCandidates(now).catch(() => []);
-  const users = D.all("SELECT id FROM users WHERE status = 'active' AND phone IS NOT NULL AND phone <> ''").map((r) => r.id).filter((id) => io.eligible(id));
-  for (const userId of users) candidates.push(...await timelessCandidates(userId, now).catch(() => []));
+  for (const c of timelessCandidates(now)) {
+    c.users = c.users.filter((id) => io.eligible(id));
+    if (c.users.length) candidates.push(c);
+  }
   // הוותיקה קודם — פנייה אחת לעובד בכל סבב
   candidates.sort((a, b) => String(a.start).localeCompare(String(b.start)));
   const done = new Set();
@@ -224,24 +222,24 @@ function vttText(vtt) {
  * הפגישה ב-Timeless שמתאימה לפגישת Zoom — לפי שעת ההתחלה (עד 20 דקות הפרש), מהפגישות שהעובד רואה.
  * Timeless מקליט ומתמלל את פגישות ה-Zoom, ולכן לא צריך תמלול של Zoom עצמו (הוחלט 09.11.26).
  */
-async function timelessMatch(userId, startIso) {
-  if (!Timeless.isConnected(userId) || !startIso) return null;
-  const t = new Date(startIso).getTime();
-  const ymd = (ms) => new Date(ms).toISOString().slice(0, 10);
-  const list = await Timeless.listMeetings(userId, { from: ymd(t - DAY_MS), to: ymd(t + DAY_MS), limit: 50, scope: 'all' }).catch(() => []);
-  return list
-    .map((m) => ({ m, diff: Math.abs(new Date(m.start ?? 0).getTime() - t) }))
-    .filter((x) => x.diff <= 20 * MIN)
-    .sort((a, b) => a.diff - b.diff)[0]?.m ?? null;
+async function timelessMatch(userId, startIso, emails) {
+  if (!Timeless.isConnected(userId) || !startIso || !emails?.size) return null;
+  // רק פגישה שמשתתף בה לפחות אחד ממשתתפי פגישת ה-Zoom — הסיכום נשמר לכל משתתפי ה-Zoom,
+  // ובשעה הזו יכולה להיות פגישה אחרת בארגון. מהשמירה המקומית.
+  const row = Store.near(startIso, emails);
+  return row ? Store.get(userId, row.id) : null;
 }
 
 async function zoomSource(row, userId) {
   const d = parseJson(row.data, {});
   const m = D.get('SELECT * FROM meetings WHERE id = ?', d.meetingId);
   if (!m?.zoom_meeting_id) return null;
-  const people = Secretariat.withoutSecretaries(parseJson(m.attendees, [])).map((a) => `${a.name || ''} <${a.email}>`);
+  const attendees = Secretariat.withoutSecretaries(parseJson(m.attendees, []));
+  const people = attendees.map((a) => `${a.name || ''} <${a.email}>`);
+  const emails = new Set([...attendees.map((a) => normEmail(a.email)).filter((e) => e.includes('@')),
+    ...(m.owner_id ? emailsOf(userRow(m.owner_id)) : [])]);
   // קודם Timeless — שם התמליל וסיכום ה-AI
-  const tl = await timelessMatch(userId, m.start_at);
+  const tl = await timelessMatch(userId, m.start_at, emails);
   if (tl) {
     const src = await timelessSource({ ...row, ref: String(tl.id), data: JSON.stringify({ participants: tl.participants }) }, userId);
     if (src) return { people: [...people, ...src.people], text: src.text };
@@ -261,13 +259,12 @@ async function zoomSource(row, userId) {
 async function timelessSource(row, userId) {
   const d = parseJson(row.data, {});
   const parts = [];
-  const docs = await Timeless.documents(userId, row.ref).catch(() => []);
-  if (docs[0]) {
-    const content = await Timeless.document(userId, docs[0].id, { meetingId: row.ref, verified: true }).catch(() => '');
-    if (content) parts.push(`סיכום ה-AI של Timeless:\n${content.slice(0, 15000)}`);
-  }
-  const tr = await Timeless.transcript(userId, row.ref, { maxChars: 60000 }).catch(() => null);
-  if (tr?.text) parts.push(`תמליל:\n${tr.text}`);
+  // מהשמירה המקומית (תמליל וסיכום שנמשכו פעם אחת)
+  const det = await Store.details(userId, row.ref).catch(() => null);
+  const content = det?.documents?.[0]?.markdown ?? '';
+  if (content) parts.push(`סיכום ה-AI של Timeless:\n${content.slice(0, 15000)}`);
+  const text = det ? Store.transcriptText(det.transcript, 60000) : '';
+  if (text) parts.push(`תמליל:\n${text}`);
   if (!parts.length) return null;
   return { people: Secretariat.withoutSecretaries(d.participants ?? []), text: parts.join('\n\n') };
 }
@@ -311,8 +308,10 @@ function myItems(dig, u) {
 // התשובות בבוט
 // ---------------------------------------------------------------------------
 
-const norm = (t) => WaUi.normalize(t).replace(/[📝📋🎥]/gu, '').replace(/\s+/g, ' ').trim();
+const norm = (t) => WaUi.normalize(t).replace(/[📝📋🎥📤]/gu, '').replace(/\s+/g, ' ').trim();
 const ASK = {
+  // 📤 "לשלוח למשתתפים", "תשלח את הסיכום לכל המשתתפים" — מהמייל של העובד, לכל מי שהוזמן לפגישה ביומן
+  share: /^(?:לשלוח|תשלח|שלח|תשלחי|להעביר|תעביר)\s+(?:את\s+)?(?:ה?סיכום(?:\s+(?:של\s+)?ה?פגישה)?\s+)?(?:ל|אל\s+)(?:כל\s+)?ה?משתתפים(?:\s+(?:בפגישה|של\s+ה?פגישה))?(?:\s+(?:עם|של)\s+(.+))?[?.!]*$/,
   summary: /^(?:סיכום(?:\s+(?:של\s+)?ה?פגישה)?|תסכם(?:\s+לי)?(?:\s+את)?\s+ה?פגישה|מה\s+היה\s+בפגישה)(?:\s+(?:עם|של)\s+(.+))?[?.!]*$/,
   tasks: /^(?:משימות(?:\s+מה?פגישה)?|המשימות\s+שלי\s+מה?פגישה|מה\s+(?:עליי|עלי|אני\s+צריך)\s+(?:לעשות\s+)?מה?פגישה)(?:\s+(?:עם|של)\s+(.+))?[?.!]*$/,
   recording: /^(?:הקלטת\s+ה?פגישה)(?:\s+(?:עם|של)\s+(.+))?[?.!]*$/
@@ -396,8 +395,10 @@ async function answer(actor, text, { appRoot = '', dry = false, createTask = nul
       dig.decisions.length ? '\n*הוחלט:*' : null, ...dig.decisions.map((s) => `✔ ${s}`),
       dig.items.length ? `\n📋 ${dig.items.length} משימות להמשך${mine.length ? `, ${mine.length} מהן שלך` : ''}.` : null
     ].filter((l) => l !== null);
-    return { text: lines.join('\n'), buttons: [BTN.tasks, ...(row.source === 'zoom' ? [BTN.recording] : [])], result: `סיכום: ${row.title}` };
+    return { text: lines.join('\n'), buttons: [BTN.tasks, BTN.share, ...(row.source === 'zoom' ? [BTN.recording] : [])], result: `סיכום: ${row.title}` };
   }
+
+  if (kind === 'share') return shareDraft(u, row, dig, head);
 
   // הקלטה מוואטסאפ, ומי ששלח אותה — המשימות של כל המשתתפים, כל אחת אצל האחראי שלה
   if (row.source === 'wa' && dig.items.length && typeof createTask === 'function') {
@@ -440,6 +441,96 @@ async function answer(actor, text, { appRoot = '', dry = false, createTask = nul
   };
 }
 
+// ---------------------------------------------------------------------------
+// 📤 שליחת הסיכום למשתתפים (הוחלט 11.11.26) — מהמייל של העובד, לכל מי שבזימון ביומן שלו
+// ---------------------------------------------------------------------------
+
+const ddmm = (iso) => new Intl.DateTimeFormat('he-IL', { timeZone: TZ, day: 'numeric', month: 'numeric' }).format(new Date(iso));
+const ymdIL = (iso) => new Intl.DateTimeFormat('en-CA', { timeZone: TZ }).format(new Date(iso));
+
+/** המשתתפים מהזימון ביומן של העובד — אותו אירוע לפי שעת ההתחלה (±20 דקות) או השם. בלי העובד עצמו */
+async function invitees(u, row) {
+  if (!Calendar.isConnected(u.id)) return { error: 'calendar' };
+  const day = await Calendar.eventsForDay(u.id, ymdIL(row.start_at)).catch(() => ({ events: [] }));
+  const t = new Date(row.start_at).getTime();
+  const ev = (day.events ?? []).filter((e) => !e.allDay)
+    .find((e) => Math.abs(new Date(e.start).getTime() - t) <= 20 * MIN || (row.title && e.title === row.title));
+  if (!ev) return { error: 'event' };
+  const mine = emailsOf(u);
+  const seen = new Set();
+  const people = [...(ev.people ?? []), ev.organizer].filter((p) => p?.email && !mine.has(normEmail(p.email)))
+    .filter((p) => { const e = normEmail(p.email); if (seen.has(e)) return false; seen.add(e); return true; })
+    .map((p) => ({ email: normEmail(p.email), name: String(p.name ?? '').trim() }));
+  return { people };
+}
+
+/** גוף המייל: סיכום, החלטות, ומשימות להמשך לפי אחראי. החתימה — של Gmail */
+function summaryMailText(row, dig) {
+  const fmtDue = (d) => (/^\d{4}-\d{2}-\d{2}$/.test(d ?? '') ? ` (עד ${d.split('-').reverse().slice(0, 2).join('.')})` : '');
+  return [
+    'שלום לכולם,',
+    '',
+    `מצורף סיכום הפגישה "${row.title}" מ-${ddmm(row.start_at)}.`,
+    '',
+    'על מה דיברנו:',
+    ...dig.summary.map((x) => `• ${x}`),
+    ...(dig.decisions.length ? ['', 'הוחלט:', ...dig.decisions.map((x) => `• ${x}`)] : []),
+    ...(dig.items.length ? ['', 'משימות להמשך:', ...dig.items.map((it) => `• ${it.task}${it.owner_name ? ` — ${it.owner_name}` : ''}${fmtDue(it.due)}`)] : []),
+    '',
+    'אם משהו חסר או לא מדויק — אשמח לתיקון.'
+  ].join('\n');
+}
+
+/** "לשלוח למשתתפים?" — טיוטה לאישור, או הסבר מה חסר (Gmail / יומן / הזימון) */
+async function shareDraft(u, row, dig, head) {
+  if (!Gmail.canSend(u.id)) {
+    return { text: `${head}\nכדי לשלוח את הסיכום מהמייל שלך צריך לחבר את תיבת ה-Gmail באפליקציה: "החשבון שלי ← Gmail ועוזר ה-AI".`, buttons: [BTN.tasks], result: `שליחה למשתתפים — Gmail לא מחובר: ${row.title}` };
+  }
+  const inv = await invitees(u, row);
+  if (inv.error) {
+    const why = inv.error === 'calendar' ? 'כדי לדעת מי הוזמן צריך לחבר את היומן (Google) באפליקציה.' : 'לא מצאתי את הזימון לפגישה הזו ביומן שלך, ולכן אני לא יודע למי לשלוח.';
+    return { text: `${head}\n${why}`, buttons: [BTN.tasks], result: `שליחה למשתתפים — ${inv.error === 'calendar' ? 'אין יומן' : 'הזימון לא נמצא'}: ${row.title}` };
+  }
+  if (!inv.people.length) return { text: `${head}\nבזימון ביומן אין משתתפים מלבדך — אין למי לשלוח.`, buttons: [BTN.tasks], result: `שליחה למשתתפים — אין משתתפים: ${row.title}` };
+  const subject = `סיכום פגישה: ${row.title} · ${ddmm(row.start_at)}`;
+  const text = summaryMailText(row, dig);
+  const names = inv.people.map((p) => p.name || p.email);
+  return {
+    text: [
+      head, '',
+      `📤 *לשלוח את הסיכום מהמייל שלך ל-${inv.people.length} ${inv.people.length === 1 ? 'משתתף' : 'משתתפים'}?*`,
+      `*אל:* ${names.slice(0, 12).join(', ')}${names.length > 12 ? ` ועוד ${names.length - 12}` : ''}`,
+      `*נושא:* ${subject}`,
+      '',
+      text,
+      '',
+      'לשלוח? *כן* 👍 · *לא* 👎'
+    ].join('\n'),
+    buttons: [WaUi.BTN.yes, WaUi.BTN.no],
+    draft: { kind: 'meeting_summary_mail', title: row.title, to: inv.people, subject, text },
+    awaiting: true,
+    result: `טיוטת סיכום למשתתפים (${inv.people.length}): ${row.title}`
+  };
+}
+
+const htmlOf = (text) => `<div dir="rtl" style="font-family:Arial,sans-serif;line-height:1.5">${String(text)
+  .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '<br>')}</div>`;
+
+/** "כן" על "לשלוח את הסיכום?" — נשלח מתיבת ה-Gmail של העובד, לכל המשתתפים יחד. מחזיר את הטקסט לעובד */
+async function sendSummaryMail(actor, draft, { dry = false } = {}) {
+  const to = (draft.to ?? []).map((p) => p.email).filter((e) => e.includes('@'));
+  if (!to.length) return 'אין למי לשלוח.';
+  if (dry) return `(בדיקה) הייתי שולח את הסיכום ל-${to.length} משתתפים.`;
+  const who = Gmail.handle(actor.id, 0);
+  const sender = Gmail.connectionOf(who);
+  if (!Gmail.canSend(who) || !sender?.email) return 'כדי לשלוח מהמייל שלך צריך לחבר את תיבת ה-Gmail באפליקציה: "החשבון שלי ← Gmail ועוזר ה-AI".';
+  const owner = userRow(actor.id);
+  const body = await Gmail.signed(who, { text: draft.text, html: htmlOf(draft.text) });
+  const built = Mailer.buildMessage({ from: sender.email, fromName: owner?.full_name, to: to.join(', '), subject: draft.subject, text: body.text, html: body.html });
+  await Gmail.send(who, built.raw);
+  return `📧 הסיכום נשלח מהמייל שלך ל-${to.length} ${to.length === 1 ? 'משתתף' : 'משתתפים'}.`;
+}
+
 /** "כן" על "לפתוח משימות?" — נפתחות אצל הכותב. מחזיר את הטקסט לעובד */
 function openTasks(actor, draft, { createTask, taskLink = () => null, dry = false }) {
   const opened = [];
@@ -478,6 +569,6 @@ function prune() {
 }
 
 module.exports = {
-  sweep, answer, openTasks, isOpenButton, digest, prune, BTN,
-  _internal: { vttText, myItems, followupFor, askText, alreadyAsked, record, ASK, BARE, norm }
+  sweep, answer, openTasks, isOpenButton, digest, prune, BTN, sendSummaryMail,
+  _internal: { vttText, myItems, followupFor, askText, alreadyAsked, record, ASK, BARE, norm, timelessMatch, timelessCandidates, invitees, summaryMailText, shareDraft }
 };

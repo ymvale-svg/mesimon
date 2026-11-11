@@ -38,21 +38,22 @@ const KEEP_DAYS = 7;           // מייל ישן משבוע — כבר לא מ�
  * 🌊 בלי הצפה (הוחלט 09.11.26 — "המנכ"ל מקבל 40–50 מיילים ביום, 30 מהם קריאה לפעולה"):
  *   • קצב לפי העובד (‎botPrefs.remindPace‎): רגיל — תזכורת אחת לכל היותר כל 30 דקות, עד 8 ביום;
  *     מעט — כל שעתיים, עד 3; רק בבוקר — אף אחת במהלך היום (רק הרשימה בסיכום הבוקר); כבוי.
- *   • רק בשעות התזכורות (‎remind_hours‎, ברירת מחדל 08:30–18:00), ולא באמצע פגישה ביומן.
+ *   • רק בשעות התזכורות (‎remind_hours‎, ברירת מחדל 08:30–17:00; וממילא רק בשעות העבודה — ‎workHours‎ בבוט), ולא באמצע פגישה ביומן.
  *   • קודם החשוב: דדליין קרוב, עדיפות, שולח שעונים לו בדרך כלל, ואז הוותיק.
  * "טופל" (ולא מזכירים): ענית / העברת מ-Gmail, העברת לארכיון או מחקת, או החלטת במשימון. **קריאה
  * אינה טיפול** — מייל שנקרא ולא טופל עדיין מקבל תזכורת.
  */
-// 10.11.26 (ישראל: "3 ביום, רק ראשי"): עד 3 הודעות יזומות על מיילים ביום — תזכורות, הודעה מיידית והמרוכזת
-// יחד (‎mail-push.js‎); "מעט" — אחת
+// 10.11.26 (ישראל: "3 ביום, רק ראשי"): עד 3 תזכורות ביום. 11.11.26 (ישראל: "בוא נעלה את המינון לחמש
+// תזכורות ביום"): עד 5 — תזכורות "זכרת?", "עוד אין תשובה" וההודעה המרוכזת יחד (‎mail-push.js‎); "מעט" — אחת.
+// הצעת תשובה למייל חדש אינה תזכורת ואינה נספרת כאן (‎mayAlertNow‎)
 const PACE = {
-  normal: { gapMin: 30, max: 3 },
+  normal: { gapMin: 30, max: 5 },
   light: { gapMin: 120, max: 1 },
   morning: { gapMin: 0, max: 0 },
   off: { gapMin: 0, max: 0 }
 };
 const paceOf = (userId) => PACE[D.userPrefs(userId)?.botPrefs?.remindPace] ?? PACE.normal;
-const GOODS_DAYS = 3;          // חשבונית שלא נשאלה תוך 3 ימים — כבר לא מציעים
+const GOODS_DAYS = 1;          // חשבונית שלא נשאלה תוך יממה — כבר לא מציעים (11.11.26; היה 3)
 const DOC_MIME = /^(application\/pdf|image\/)/i;
 const DOC_NAME = /\.(pdf|jpe?g|png|heic|tiff?)$/i;
 
@@ -173,21 +174,39 @@ const noteUser = (userId) => lastUser.set(Number(userId), Date.now());
 const USER_QUIET_MS = 5 * 60 * 1000;
 const BEFORE_MEETING_MS = 15 * 60 * 1000;
 
+/*
+ * 📧 הצעת תשובה למייל חדש (הוחלט 11.11.26, ישראל: "על כל מייל ... שיש לך הצעה קונקרטית לתשובה — תביא את זה")
+ * אינה תזכורת: לא נספרת בתקרה היומית. כן שומרים על השקט — שעות התזכורות, לא באמצע שיחה ולא בפגישה,
+ * ‎ALERT_GAP_MIN‎ דקות אחרי הודעה יזומה אחרת, ולא למי שבחר "רק בבוקר" / כיבה / השתיק להיום.
+ */
+const ALERT_GAP_MIN = 10;
+
+/** אפשר לשלוח עכשיו הצעת תשובה למייל חדש? */
+async function mayAlertNow(userId) {
+  if (!paceOf(userId).max) return false;
+  return quietOk(userId, ALERT_GAP_MIN);
+}
+
 /** אפשר לשלוח עכשיו תזכורת לעובד הזה? (השתקה, שעות, קצב, תקרה, הודעות אחרות, פגישה ביומן) */
 async function mayRemindNow(userId) {
   const pace = paceOf(userId);
   if (!pace.max) return false;
+  const st = paceState(userId);
+  if (st.count >= pace.max) return false;
+  if (st.lastAt && Date.now() - new Date(st.lastAt).getTime() < pace.gapMin * 60000) return false;
+  return quietOk(userId, pace.gapMin);
+}
+
+/** השתקה, שעות, שיחה פעילה, הודעה יזומה אחרונה ופגישה ביומן — משותף לתזכורות ולהצעות תשובה */
+async function quietOk(userId, gapMin) {
   if (Date.now() - (lastUser.get(Number(userId)) ?? 0) < USER_QUIET_MS) return false;
-  if (Date.now() - (lastAny.get(Number(userId)) ?? 0) < pace.gapMin * 60000) return false;
+  if (Date.now() - (lastAny.get(Number(userId)) ?? 0) < gapMin * 60000) return false;
   const mute = D.userPrefs(userId)?.botPrefs?.remindMuteUntil;
   if (mute && W.todayIL() < mute) return false;
   const now = new Date();
   const hm = new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Jerusalem', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(now);
-  const m = /^(\d{2}:\d{2})-(\d{2}:\d{2})$/.exec(String(D.getSetting('remind_hours', '08:30-18:00') ?? ''));
+  const m = /^(\d{2}:\d{2})-(\d{2}:\d{2})$/.exec(String(D.getSetting('remind_hours', '08:30-17:00') ?? ''));
   if (m && !(hm >= m[1] && hm < m[2])) return false;
-  const st = paceState(userId);
-  if (st.count >= pace.max) return false;
-  if (st.lastAt && Date.now() - new Date(st.lastAt).getTime() < pace.gapMin * 60000) return false;
   // באמצע פגישה ביומן — מחכים שתסתיים
   try {
     if (Calendar.isConnected(userId)) {
@@ -232,7 +251,7 @@ const word = (list) => new RegExp(`(^|\\s)(?:${list})(?=\\s|$|[.,!?])`);
 const OFF = word('תפסיק|הפסק|תפסיקי|די|בלי|עצור|תעצור|השתק|תשתיק|כבה|תכבה|לא\\s+צריך|אל\\s+תזכיר|אל\\s+תזכירי');
 const ON = new RegExp(`${word('תחזיר|החזר|תחזירי|תפעיל|הפעל|תפתח|פתח|תמשיך|המשך|כן\\s+להזכיר').source}|^תזכיר(\\s+לי)?\\s+מה?מייל[.!]?$`);
 const PACE_WORDS = [[/רק\s+(?:ב)?בוקר|בסיכום\s+הבוקר/, 'morning'], [/פחות|מעט|לא\s+הרבה/, 'light'], [/כרגיל|רגיל|כמו\s+קודם|יותר/, 'normal']];
-const PACE_LABEL = { normal: 'רגיל — רק החשובים, עד 3 ביום', light: 'מעט — רק החשוב ביותר, אחת ביום', morning: 'רק ברשימה של סיכום הבוקר', off: 'כבויות' };
+const PACE_LABEL = { normal: 'רגיל — רק החשובים, עד 5 ביום', light: 'מעט — רק החשוב ביותר, אחת ביום', morning: 'רק ברשימה של סיכום הבוקר', off: 'כבויות' };
 
 /** פקודת השתקה / הפעלה / קצב. ‎null‎ — לא פקודה כזו */
 function paceCommand(userId, text) {
@@ -387,8 +406,69 @@ async function nextReminder(userId) {
   return (await dueReminders(userId, { limit: 1 }))[0] ?? null;
 }
 
+/*
+ * 🚨 11.11.26 — תקלה: עובדים קיבלו עשרות הודעות על חשבוניות. הסיבה: הצעה שלא נענתה חזרה לתור ("pending") ונשאלה
+ * שוב בכל סבב, לכל חשבונית. מעכשיו: כל חשבונית — שאלה אחת (לא נענתה — "ignored", ‎wa-bot.releaseQuestion‎),
+ * רק חשבוניות מהיממה האחרונה, ולכל היותר ‎GOODS_PER_DAY‎ הצעות ביום לעובד. השאר — ב"היום" / בשליחה ידנית לבוט.
+ */
+const GOODS_PER_DAY = 2;
+const goodsAskedToday = (userId) => D.get(
+  'SELECT COUNT(*) AS n FROM mail_goods_docs WHERE user_id = ? AND asked_at >= ?',
+  userId, W.ilWallToUtc(W.todayIL(), 0, 0).toISOString()
+)?.n ?? 0;
+
+/*
+ * 🔕 5 התעלמויות — הצעה להפסיק (הוחלט 11.11.26, ישראל: "אחרי 5 פעמים שאדם מתעלם מקבלות סחורה — הצע לו להפסיק
+ * לקבל התרעות על קבלת סחורה"). התעלמות = הצעה שלא נענתה (‎ignored‎). נספרות ברצף: תשובה של ממש (קבלת סחורה,
+ * אחר כך, לא) מאפסת, וגם השאלה עצמה — "לא" עליה, או שלא נענתה — מתחילה ספירה חדשה. במקום ההצעה הבאה, לא בנוסף.
+ */
+const GOODS_IGNORE_LIMIT = 5;
+const GOODS_STOP_BTN = Object.freeze({ stop: 'להפסיק 🔕', keep: 'להמשיך 👍' });
+
+/** כמה הצעות ברצף לא נענו — מאז התשובה האחרונה ומאז שנשאל אם להפסיק */
+function goodsIgnoredStreak(userId) {
+  const askedStop = D.userPrefs(userId)?.botPrefs?.goodsStopAskedAt ?? '';
+  const lastAnswer = D.get(
+    "SELECT MAX(asked_at) AS at FROM mail_goods_docs WHERE user_id = ? AND status IN ('started', 'declined', 'later') AND asked_at IS NOT NULL", userId
+  )?.at ?? '';
+  const since = [askedStop, lastAnswer].sort().pop() || '';
+  return D.get("SELECT COUNT(*) AS n FROM mail_goods_docs WHERE user_id = ? AND status = 'ignored' AND COALESCE(asked_at, '') > ?", userId, since)?.n ?? 0;
+}
+
+function goodsStopQuestion(userId) {
+  const p = D.userPrefs(userId)?.botPrefs ?? {};
+  D.setUserPref(userId, 'botPrefs', { ...p, goodsStopAskedAt: D.nowIso() });
+  return {
+    text: [
+      `📄 נראה שההצעות לקבלת סחורה מחשבוניות במייל לא מתאימות לך — ${GOODS_IGNORE_LIMIT} האחרונות נשארו בלי תשובה.`,
+      '',
+      '*להפסיק לשלוח לך אותן?* קבלת סחורה עצמה נשארת — שולחים לי צילום או קובץ וכותבים "קבלת סחורה".'
+    ].join('\n'),
+    buttons: [GOODS_STOP_BTN.stop, GOODS_STOP_BTN.keep],
+    draft: { kind: 'goods_stop' },
+    action: 'goods_offer',
+    log: `🔕 ${GOODS_IGNORE_LIMIT} הצעות לקבלת סחורה בלי תשובה — להפסיק?`
+  };
+}
+
+/** תשובה ל"להפסיק?". ‎null‎ — נושא חדש */
+function answerGoodsStop(userId, text) {
+  const t = String(text ?? '').trim();
+  const n = WaUi.normalize(t);
+  const p = D.userPrefs(userId)?.botPrefs ?? {};
+  if (WaUi.sameLabel(t, GOODS_STOP_BTN.stop) || WaUi.sameLabel(t, WaUi.BTN.yes) || /^(להפסיק|תפסיק|הפסק|כן|די|👍)([\s,.!]|$)/.test(n)) {
+    D.setUserPref(userId, 'botPrefs', { ...p, goodsOffer: false });
+    return { text: '🔕 בסדר — לא אציע יותר קבלת סחורה על חשבוניות מהמייל.\nלהחזיר: בהגדרות ההתראות, "חשבונית במייל ← קבלת סחורה".', result: 'הצעות קבלת סחורה — כבוי' };
+  }
+  if (WaUi.sameLabel(t, GOODS_STOP_BTN.keep) || WaUi.sameLabel(t, WaUi.BTN.no) || /^(להמשיך|תמשיך|לא|להשאיר|👎)([\s,.!]|$)/.test(n)) {
+    return { text: '👍 בסדר, ממשיכים להציע.', result: 'הצעות קבלת סחורה — ממשיכים' };
+  }
+  return null;
+}
+
 function nextGoods(userId) {
   const today = W.todayIL();
+  if (goodsAskedToday(userId) >= GOODS_PER_DAY) return null;
   return D.get(
     `SELECT * FROM mail_goods_docs WHERE user_id = ? AND (status = 'pending' OR (status = 'later' AND COALESCE(snooze_until, '') <= ?))
        AND created_at >= ? ORDER BY created_at, id LIMIT 1`,
@@ -457,6 +537,7 @@ async function nextQuestion(userId, allow) {
   }
   if (allow.goods) {
     const row = nextGoods(userId);
+    if (row && goodsIgnoredStreak(userId) >= GOODS_IGNORE_LIMIT) return goodsStopQuestion(userId);
     if (row) { D.run("UPDATE mail_goods_docs SET status = 'asked', asked_at = ? WHERE id = ?", D.nowIso(), row.id); return { ...goodsQuestion(row), action: 'goods_offer', log: `📄 ${row.supplier || row.from_name}: ${row.filename}` }; }
   }
   // תזכורות (מייל שלא טופל, שאלה ששלחת ולא נענתה) — בקצב אחד משותף, בלי הצפה
@@ -535,6 +616,6 @@ function prune() {
 }
 
 module.exports = {
-  GOODS_SCHEMA, BTN, PACE_BTN, answerPaceOffer, goodsDocFrom, goodsFile, nextQuestion, answerReminder, answerGoods, prune, dueReminders, mayRemindNow, paceTick, PACE, paceCommand, noteProactive, noteUser,
-  _internal: { engagement, paceOffer, nextReminder, nextGoods, reminderQuestion, goodsQuestion, setRemind, remindAt, scoreOf, handledInGmail, paceState }
+  GOODS_SCHEMA, BTN, PACE_BTN, GOODS_STOP_BTN, GOODS_IGNORE_LIMIT, answerGoodsStop, answerPaceOffer, goodsDocFrom, goodsFile, nextQuestion, answerReminder, answerGoods, prune, dueReminders, mayRemindNow, mayAlertNow, paceTick, PACE, paceCommand, noteProactive, noteUser,
+  _internal: { engagement, paceOffer, nextReminder, nextGoods, GOODS_PER_DAY, goodsIgnoredStreak, reminderQuestion, goodsQuestion, setRemind, remindAt, scoreOf, handledInGmail, paceState }
 };

@@ -835,6 +835,44 @@ async function moveEvent(actor, { ownerId, eventId, start, end }) {
   return { title: ev.summary ?? '', start, end };
 }
 
+/**
+ * עריכת המוזמנים של אירוע ביומן — גם פגישה שלא נקבעה במשימון. רק כשבעל היומן הוא המארגן,
+ * ורק ביומן ששותף לעריכה. מי שנשאר — שומר את התשובה שלו (אישר / דחה); חדר וציוד (‎resource‎)
+ * ובעל היומן עצמו — לא נוגעים. ‎sendUpdates‎: הזמנה למצטרפים וביטול למי שהוסר, מ-Google.
+ */
+async function setEventAttendees(actor, { ownerId, eventId, attendees, sendUpdates = true }) {
+  if (!(await canWrite(actor, ownerId))) throw new MeetingError('אין לך גישת עריכה ליומן הזה', 403);
+  const owner = userById(ownerId);
+  if (!owner) throw new MeetingError('העובד שנבחר אינו פעיל');
+  const calendarId = ownerId === actor.id ? 'primary' : owner.email;
+  const ev = await Gmail.googleCall(actor.id, eventUrl(calendarId, eventId));
+  const organizer = String(ev.organizer?.email ?? '').toLowerCase();
+  if (!(ev.organizer?.self || organizer === owner.email.toLowerCase())) {
+    throw new MeetingError('אפשר לערוך מוזמנים רק בפגישה שבעל היומן הוא המארגן שלה');
+  }
+  const wanted = cleanAttendees(attendees, owner.email);
+  const before = new Map((ev.attendees ?? []).map((a) => [String(a.email ?? '').toLowerCase(), a]));
+  const kept = (ev.attendees ?? []).filter((a) => a.resource || a.self || a.organizer || String(a.email ?? '').toLowerCase() === owner.email.toLowerCase());
+  const list = [
+    ...kept,
+    ...wanted.map((a) => {
+      const prev = before.get(a.email);
+      return prev ? { ...prev, displayName: a.name || prev.displayName } : { email: a.email, ...(a.name ? { displayName: a.name } : {}) };
+    })
+  ];
+  const updated = await Gmail.googleCall(actor.id, eventUrl(calendarId, eventId), { sendUpdates: sendUpdates === false ? 'none' : 'all' }, {
+    method: 'PATCH', body: { attendees: list }
+  });
+  const shaped = (updated.attendees ?? []).filter((a) => !a.resource && String(a.email ?? '').toLowerCase() !== owner.email.toLowerCase())
+    .map((a) => ({ email: String(a.email).toLowerCase(), name: a.displayName ?? '', response: a.responseStatus ?? 'needsAction' }));
+  // פגישה של משימון — גם הרשומה אצלנו (התראות, כרטיס המשימה)
+  const ours = D.get("SELECT * FROM meetings WHERE google_event_id = ? AND status = 'scheduled'", eventId);
+  if (ours) D.run('UPDATE meetings SET attendees = ?, etag = ?, updated_at = ? WHERE id = ?', JSON.stringify(shaped), updated.etag ?? null, D.nowIso(), ours.id);
+  const added = wanted.filter((a) => !before.has(a.email)).length;
+  const removed = [...before.keys()].filter((e) => e && !wanted.some((a) => a.email === e) && !kept.some((k) => String(k.email ?? '').toLowerCase() === e)).length;
+  return { attendees: shaped, added, removed };
+}
+
 /** טקסט מהיומן להודעה: שורה אחת, קצר, בלי סימני עיצוב של וואטסאפ */
 const cleanTitle = (t) => String(t ?? '').replace(/[\u0000-\u001f\u007f\u200b-\u200f\u202a-\u202e*_~`]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 60) || 'פגישה';
 
@@ -1262,7 +1300,7 @@ function stop() {
 module.exports = {
   init, MeetingError, isSecretary, isZoomManager, canChooseZoomHost, ownZoomUser, accessMap, accessError, forgetAccess, calendarsFor, resolveCalendar, canWrite,
   freeBusy, availability, suggest, alternatives, create, update, cancel, declineReschedule, markRescheduled,
-  moveEvent, requestMove, previewMove, approveMove, forTask, joinLink, recording, shape, meetingById, syncOne, syncAll, sendReminders,
+  moveEvent, setEventAttendees, requestMove, previewMove, approveMove, forTask, joinLink, recording, shape, meetingById, syncOne, syncAll, sendReminders,
   recipientsOf, reminderText, sendCalendarReminders, participantsAnswer, start, stop, tick,
   _internal: { splitPeople, cleanAttendees, eventBody, shapeEvent, ruleScore, rank, meetingHours }
 };

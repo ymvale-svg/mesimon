@@ -218,13 +218,13 @@ async function sendWa(r, prep) {
   return ok;
 }
 
-/** הזמנה אחת: מייל לכל נמען עכשיו, וואטסאפ — בשעות הפעילות (אחרת ממתין) */
+/** הזמנה אחת: מייל לכל נמען עכשיו, וואטסאפ — בשעות העבודה, 08:15–17:00 (אחרת ממתין) */
 async function notifyOrder(company, ordname, { updated = false } = {}) {
   const prep = await prepare(company, ordname, { updated });
   const done = [];
   const failed = [];
   const waPending = [];
-  const waNow = WaBot.inHours();
+  const waNow = WaBot.workHours();
   for (const r of prep.recipients) {
     const m = mailOf(prep.po, r, prep.ctx);
     if (Mailer.isEnabled() && r.email) {
@@ -289,7 +289,7 @@ async function handle(company, o, row) {
 
 /** וואטסאפ שחיכה לשעות הפעילות */
 async function flushPending() {
-  if (!WaBot.inHours()) return;
+  if (!WaBot.workHours()) return;
   const since = new Date(Date.now() - PENDING_DAYS * 86400000).toISOString();
   for (const row of D.all("SELECT * FROM po_notices WHERE wa_pending <> '[]' LIMIT 10")) {
     if ((row.sent_at ?? row.created_at) < since) { D.run("UPDATE po_notices SET wa_pending = '[]' WHERE company = ? AND ordname = ?", row.company, row.ordname); continue; }

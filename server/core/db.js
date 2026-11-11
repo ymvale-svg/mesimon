@@ -1201,6 +1201,32 @@ CREATE INDEX IF NOT EXISTS idx_meetings_task ON meetings(task_id);
 CREATE INDEX IF NOT EXISTS idx_meetings_start ON meetings(status, start_at);
 
 /*
+ * 🎥 הפגישות מ-Timeless, שמורות במשימון — הצינור היחיד (‎meetings/timeless-store.js‎): נמשכות פעם
+ * אחת (סבב כל 5 דקות + webhook כש-Timeless מסיים), וכל המסכים והבוט קוראים מכאן. ‎emails‎ — כל
+ * המיילים של המארח והמשתתפים, לסינון מי רואה. ‎documents‎ / ‎transcript‎ — ‎NULL‎ עד שנמשכו.
+ * ‎timeless_months‎: חודשים שכבר נמשכו במלואם (מעבר לחודש ישן במסך — פעם אחת).
+ */
+CREATE TABLE IF NOT EXISTS timeless_meetings (
+  id           TEXT PRIMARY KEY,
+  title        TEXT NOT NULL DEFAULT '',
+  status       TEXT NOT NULL DEFAULT '',
+  start_at     TEXT,
+  end_at       TEXT,
+  duration_min INTEGER,
+  participants TEXT NOT NULL DEFAULT '[]',
+  emails       TEXT NOT NULL DEFAULT '[]',
+  doc_refs     TEXT NOT NULL DEFAULT '[]',
+  documents    TEXT,
+  transcript   TEXT,
+  details_at   TEXT,
+  synced_at    TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_timeless_meetings_start ON timeless_meetings(start_at);
+CREATE TABLE IF NOT EXISTS timeless_months (
+  month TEXT PRIMARY KEY,
+  at    TEXT NOT NULL
+);
+/*
  * 🎥 Timeless — ‎timeless_alerts‎: פגישה שהמזכירות כבר קיבלו עליה "לא מוקלטת" (פעם אחת
  * לפגישה, לפי ‎iCalUID‎ והמועד); ‎timeless_digests‎: הסיכום המובנה (החלטות, משימות,
  * נקודות פתוחות) — נבנה פעם אחת לפגישה; ‎timeless_tasks‎: משימות שנפתחו מפגישה.
@@ -1721,7 +1747,7 @@ const DEFAULT_SETTINGS = {
   meeting_audio_min_kb: 1024,              // הודעה קולית גדולה מזה (כ-8 דקות) לבוט = הקלטת פגישה, והבוט שואל לאיזו פגישה לשייך
   rfq_daily_max: 20,                       // פנייה לספקים: כמה מיילים לכל היותר לעובד ביום (לא להיחשב דואר זבל)
   bot_pilot: false,                        // 🧪 true — היכולות החדשות בבוט (סבב Instinct) רק למנהלי המערכת. נפתח לכולם 10.11.26; "החזר את היכולות החדשות לפיילוט" — סוגר שוב
-  remind_hours: '08:30-18:00',             // 🌊 שעות התזכורות מהמייל (מחוץ להן — לא מזכירים, גם לא בשעות הבוט)
+  remind_hours: '08:30-17:00',             // 🌊 שעות התזכורות מהמייל (מחוץ להן — לא מזכירים, גם לא בשעות הבוט)
   briefing_minutes: 20,                    // 📋 כמה דקות לפני פגישה — התדריך בבוט
   meeting_ai_alternatives: true,           // הצעות AI להזזת פגישות חופפות
   meeting_record_default: false,           // "הקלטה אוטומטית לענן" מסומן מראש בפגישת Zoom חדשה
@@ -1770,8 +1796,9 @@ const DEFAULT_SETTINGS = {
   wa_bot_enabled: true,
   wa_quiet_minutes: 3,                     // כמה דקות שקט בקבוצה לפני ניתוח
   wa_actions: {},                          // מה הבוט עושה בפרטי: { key: { enabled, audience, examples } }
-  wa_summary_time: '08:00',                // סיכום הבוקר בפרטי, שעון ישראל
+  wa_summary_time: '08:15',                // סיכום הבוקר בפרטי, שעון ישראל — ההודעה היזומה הראשונה של היום
   wa_hours: '',                            // שעות שבהן הבוט שולח הודעות ("07:00-22:00"). ריק = תמיד
+  wa_proactive_hours: '08:15-17:00',        // 🕗 הודעות יזומות (הצעות, תזכורות, מיילים) — רק בשעות אלה, בימי העבודה של העובד. 17:00 — סיכום סוף היום, האחרון
   wa_shabbat: true                         // בשישי מהערב ובשבת הבוט אינו שולח, ועונה במוצאי שבת
 };
 
@@ -2027,6 +2054,8 @@ function migrate() {
   relaxAiMessagesChannel();
 
   addColumn('users', 'department_id', 'INTEGER REFERENCES departments(id) ON DELETE SET NULL');
+  // 📧 משימה שנולדה ממייל — עותק של המייל (מאת, נושא, תאריך, טקסט), כדי שכל מי שעובד עליה יראה על מה מדובר
+  addColumn('tasks', 'source_mail', "TEXT NOT NULL DEFAULT ''");
   // קובץ שצורף לתגובה בשיחה — כדי שיוצג בתוך ההודעה שבה נשלח, ולא רק ברשימה
   addColumn('attachments', 'comment_id', 'INTEGER REFERENCES comments(id) ON DELETE SET NULL');
   // הערה: מסדי נתונים שנוצרו בגרסה קודמת מכילים עמודת tasks.level מהרמה

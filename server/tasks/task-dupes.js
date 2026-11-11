@@ -458,6 +458,25 @@ function approve(sug, actor) {
   return out.keepId;
 }
 
+/**
+ * 🔀 איחוד ידני (הוחלט 11.11.26, מבקשה של עובדת: "יש אפשרות לאחד בין משימות?"): העובד בוחר משימה ואיחוד
+ * "לתוך" משימה אחרת. אותו מיזוג כמו בהצעה האוטומטית (‎mergeInto‎) — רק שכאן נשארת המשימה שהעובד בחר,
+ * לא בהכרח הוותיקה. ההרשאות נבדקות בנקודת הקצה (עריכה בשתיהן); כאן — שתיהן קיימות, פתוחות ושונות.
+ */
+function manualMerge(keepId, dropId, actor) {
+  if (Number(keepId) === Number(dropId)) throw Object.assign(new Error('אי אפשר לאחד משימה עם עצמה'), { status: 400 });
+  const keep = taskById(keepId);
+  const drop = taskById(dropId);
+  if (!keep || !drop) throw Object.assign(new Error('המשימה לא נמצאה'), { status: 404 });
+  if (!isOpen(keep) || !isOpen(drop)) throw Object.assign(new Error('אפשר לאחד רק משימות פתוחות'), { status: 400 });
+  const out = mergeInto(keep.id, drop.id, actor);
+  for (const uid of assigneeUsers(taskById(keep.id))) {
+    if (uid === actor?.id) continue;
+    D.notify({ targetType: 'user', targetId: uid, kind: 'assignment', title: `${actor?.name ?? 'מישהו'} איחד/ה משימות`, body: `"${drop.title}" אוחדה לתוך "${keep.title}"`, taskId: keep.id });
+  }
+  return out;
+}
+
 /** "לא כפולות" — הזוג לא יוצע שוב, אצל אף אחד */
 function reject(sug, actor) {
   if (sug.status !== 'pending') return;
@@ -544,7 +563,7 @@ function start() {
 }
 
 module.exports = {
-  setHooks, similarForNew, join, keepApart, checkCreated, raise, approve, reject, restore, mergeInto, dailyScan, start,
+  setHooks, similarForNew, join, keepApart, checkCreated, raise, approve, reject, restore, mergeInto, manualMerge, dailyScan, start,
   pairKey, decision, PREFILTER, HEURISTIC_MIN,
   _internal: { candidates, departmentPairs, sanitizeJudgement, judge, related, order, openInDepartment, assigneeUsers }
 };
