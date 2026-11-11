@@ -25,8 +25,8 @@
   let toastTimer = null;
   function toast(text, bad = false) {
     const t = $('#toast');
-    t.textContent = text; t.className = bad ? 'toast bad' : 'toast'; t.hidden = false;
-    clearTimeout(toastTimer); toastTimer = setTimeout(() => { t.hidden = true; }, 3500);
+    t.className = bad ? 'toast bad' : 'toast'; t.textContent = text;
+    clearTimeout(toastTimer); toastTimer = setTimeout(() => { t.textContent = ''; }, bad ? 6000 : 3500);
   }
 
   const ICONS = {
@@ -37,6 +37,14 @@
     invoice: '<path d="M6 2h9l5 5v14a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1z"/><path d="M14 2v6h6M9 13h6M9 17h6"/>',
     income: '<rect x="2" y="6" width="20" height="12" rx="2"/><circle cx="12" cy="12" r="2.5"/><path d="M6 10v4M18 10v4"/>'
   };
+  const UI = {
+    bot: '<rect x="4" y="8" width="16" height="12" rx="3"/><path d="M12 4v4M9 13h.01M15 13h.01M9 17h6"/>',
+    mail: '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/>',
+    upload: '<path d="M12 16V4M7 9l5-5 5 5"/><path d="M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"/>',
+    clip: '<path d="m21 11-8.5 8.5a5 5 0 0 1-7-7L14 4a3.5 3.5 0 0 1 5 5l-8.5 8.5a2 2 0 0 1-3-3L15 7"/>',
+    x: '<path d="M18 6 6 18M6 6l12 12"/>'
+  };
+  const ui = (k) => `<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${UI[k]}</svg>`;
   const icon = (k) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[k] ?? ''}</svg>`;
   const SUB = {
     demand: 'רשימה מהשטח ← דרישה לחתימה',
@@ -68,7 +76,7 @@
     const tabs = [['/priority', 'בית', '']];
     if (me.admin) tabs.push(['/priority/settings', 'הגדרות', 'settings'], ['/priority/access', 'הרשאות', 'access']);
     $('#tabs').innerHTML = tabs.map(([href, label, key]) => `<a href="${href}" data-nav ${r === key ? 'aria-current="page"' : ''}>${label}</a>`).join('');
-    $('#who').innerHTML = `${me.connected ? '' : '<span class="pill p-warn">החיבור לפריוריטי לא הוגדר</span>'} ${esc(me.name)} · <a href="/" style="color:inherit">משימון</a>`;
+    $('#who').innerHTML = `${me.connected ? '' : '<span class="pill p-warn">החיבור לפריוריטי לא הוגדר</span>'} ${esc(me.name)} · <a href="/" class="back-link">משימון</a>`;
   }
 
   async function render() {
@@ -102,7 +110,7 @@
         const n = q.counts[d.key] ?? 0;
         const m = d.allowed ? fromMail(d.key) : 0;
         const counts = d.allowed ? `<span class="count num">${n}<small>בתור</small></span>${m ? `<span class="pill p-warn">${m} במייל</span>` : ''}` : '';
-        const body = `<span class="ic">${icon(d.key)}</span><h3>${esc(d.label)}</h3><span class="sub">${SUB[d.key] ?? ''}</span><span class="foot">${counts}${status}</span>`;
+        const body = `<span class="ic">${icon(d.key)}</span><h2>${esc(d.label)}</h2><span class="sub">${SUB[d.key] ?? ''}</span><span class="foot">${counts}${status}</span>`;
         return d.allowed ? `<a class="tile" href="/priority/${d.key}" data-nav>${body}</a>` : `<div class="tile off">${body}</div>`;
       }).join('')}</div>
       <p class="note">לחצו על פעולה: בצד שמאל המיילים שהגיעו אליכם עם חשבונית או תעודת משלוח, ואפשר לגרור לשם קבצים. דרישת רכש וקבלת סחורה — המסמך נשלח לבוט, והשיחה ממשיכה בוואטסאפ.</p>`;
@@ -124,27 +132,28 @@
     let items = [];
     let mails = [];
     let selected = null;
+    let confirmDel = null;   // ui-ux-pro-max: פעולה הרסנית — לחיצה שנייה לאישור (קובץ שהועלה נמחק)
 
     main.classList.add('wide');
     main.innerHTML = `
       <div class="ws">
         <nav class="rail" aria-label="פעולות">
-          <a href="/priority" data-nav title="בית">${'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/></svg>'}</a>
-          ${me.docs.filter((x) => x.allowed).map((x) => `<a href="/priority/${x.key}" data-nav title="${esc(x.label)}" ${x.key === d.key ? 'aria-current="page"' : ''}>${icon(x.key)}</a>`).join('')}
+          <a href="/priority" data-nav title="בית" aria-label="בית">${'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/></svg>'}</a>
+          ${me.docs.filter((x) => x.allowed).map((x) => `<a href="/priority/${x.key}" data-nav title="${esc(x.label)}" aria-label="${esc(x.label)}" ${x.key === d.key ? 'aria-current="page"' : ''}>${icon(x.key)}</a>`).join('')}
         </nav>
         <section class="center">
           <div class="ctx"><div><h1>${esc(d.label)}</h1><span class="muted" id="ws-meta"></span></div>
-            ${d.ready ? '<span class="pill p-ok">"לבוט 🤖" — הבוט קורא את המסמך וממשיך איתך בוואטסאפ</span>' : `<span class="pill p-mute">איסוף בלבד — הקליטה תיבנה בהמשך (${NEXT[d.key]} בתור)</span>`}</div>
+            ${d.ready ? `<span class="pill p-ok ctx-note">${ui('bot')} "לבוט" — הבוט קורא את המסמך וממשיך איתך בוואטסאפ</span>` : `<span class="pill p-mute ctx-note">איסוף בלבד — הקליטה תיבנה בהמשך (${NEXT[d.key]} בתור)</span>`}</div>
           <div class="split">
             <div class="queue" id="queue"></div>
             <div class="preview" id="preview"><p class="muted">בחרו מסמך מהתור כדי לראות אותו כאן.</p></div>
           </div>
         </section>
         <aside class="inbox">
-          <label class="drop" id="drop" for="file-in">
+          <button type="button" class="drop" id="drop" aria-describedby="drop-hint">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 16V4M7 9l5-5 5 5"/><path d="M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"/></svg>
-            <b>גררו לכאן PDF או תמונה</b><span>או לחצו לבחירת קובץ</span>
-          </label>
+            <b>גררו לכאן PDF או תמונה</b><span id="drop-hint">או לחצו לבחירת קובץ · עד 15MB</span><span class="prog" id="drop-prog"></span>
+          </button>
           <input type="file" id="file-in" accept="application/pdf,image/*" multiple hidden>
           <div class="inbox-h"><h2>מהמייל שלך</h2><span class="pill p-warn num" id="mail-n"></span></div>
           <div class="mails" id="mails"></div>
@@ -157,12 +166,14 @@
         <article class="qcard${selected === x.id ? ' sel' : ''}" data-id="${x.id}">
           <button class="qmain" data-view="${x.id}">
             <span class="qt"><b>${esc(x.supplier || x.fromName || x.filename)}</b><span class="pill ${STAGE_CLS[x.stage] ?? 'p-mute'}">${esc(x.stageLabel)}</span></span>
-            <span class="qs">${x.source === 'mail' ? '✉' : '⤓'} ${esc(x.filename)}</span>
+            <span class="qs">${ui(x.source === 'mail' ? 'mail' : 'upload')} ${esc(x.filename)}</span>
             <span class="qs muted">${x.source === 'mail' ? esc(x.subject || x.fromEmail) : 'הועלה במסך'} · ${fmtAt(x.at)}</span>
           </button>
           <span class="qa">
-            ${d.ready && x.stage === 'new' ? `<button class="btn small pri" data-bot="${x.id}">לבוט 🤖</button>` : ''}
-            ${x.stage !== 'done' ? `<button class="btn small" data-del="${x.id}" aria-label="הוצאה מהתור">✕</button>` : ''}
+            ${d.ready && x.stage === 'new' ? `<button type="button" class="btn small pri" data-bot="${x.id}" aria-label="לשלוח לבוט: ${esc(x.filename)}">${ui('bot')} לבוט</button>` : ''}
+            ${x.stage !== 'done' ? (confirmDel === x.id
+              ? `<button type="button" class="btn small confirm" data-del="${x.id}">${x.source === 'upload' ? 'למחוק?' : 'להוציא?'}</button>`
+              : `<button type="button" class="btn small" data-del="${x.id}" aria-label="הוצאה מהתור: ${esc(x.filename)}">${ui('x')}</button>`) : ''}
           </span>
         </article>`).join('')
         : '<p class="muted empty">התור ריק. קחו מסמך מהמייל, או גררו קובץ לאזור שבצד.</p>';
@@ -171,13 +182,14 @@
     function drawMails() {
       $('#mail-n').textContent = mails.length || '';
       $('#mails').innerHTML = mails.length ? mails.map((m) => {
-        const btns = [`<button class="btn small pri" data-take="${m.id}" data-doc="${d.key}">${esc(d.label)}</button>`];
-        if (m.guess !== d.key && allowed(m.guess)) btns.push(`<button class="btn small" data-take="${m.id}" data-doc="${m.guess}">${esc(label(m.guess))}</button>`);
-        btns.push(`<button class="btn small" data-dismiss="${m.id}">לא רלוונטי</button>`);
+        const who = `<span class="sr-only"> — ${esc(m.supplier || m.fromName || m.fromEmail)}, ${esc(m.filename)}</span>`;
+        const btns = [`<button type="button" class="btn small pri" data-take="${m.id}" data-doc="${d.key}">${esc(d.label)}${who}</button>`];
+        if (m.guess !== d.key && allowed(m.guess)) btns.push(`<button type="button" class="btn small" data-take="${m.id}" data-doc="${m.guess}">${esc(label(m.guess))}${who}</button>`);
+        btns.push(`<button type="button" class="btn small" data-dismiss="${m.id}">לא רלוונטי${who}</button>`);
         return `<div class="mail">
           <span class="mfrom"><b>${esc(m.supplier || m.fromName || m.fromEmail)}</b><time>${fmtAt(m.at)}</time></span>
           <span class="msubj">${esc(m.subject)}</span>
-          <span class="matt">📎 ${esc(m.filename)} <span class="pill ${m.guess === d.key ? 'p-brand' : 'p-mute'}">${esc(m.kindLabel)} · נראה כמו ${esc(label(m.guess))}</span></span>
+          <span class="matt">${ui('clip')} ${esc(m.filename)} <span class="pill ${m.guess === d.key ? 'p-brand' : 'p-mute'}">${esc(m.kindLabel)} · נראה כמו ${esc(label(m.guess))}</span></span>
           <span class="mbtns">${btns.join('')}</span>
         </div>`;
       }).join('') : '<p class="muted empty">אין מיילים חדשים עם חשבונית או תעודת משלוח. מה שסריקת המייל מזהה יופיע כאן.</p>';
@@ -189,7 +201,7 @@
       drawQueue();
       if (!x) { $('#preview').innerHTML = '<p class="muted">בחרו מסמך מהתור כדי לראות אותו כאן.</p>'; return; }
       const src = `/api/priority/docs/${x.id}/file`;
-      $('#preview').innerHTML = `<div class="pv-h"><span>${esc(x.filename)}</span><a href="${src}" target="_blank" rel="noopener">פתיחה בחלון ↗</a></div>
+      $('#preview').innerHTML = `<div class="pv-h"><span>${esc(x.filename)}</span><a class="pv-open" href="${src}" target="_blank" rel="noopener">פתיחה בחלון<span class="sr-only"> (חלון חדש)</span></a></div>
         ${/^image\//.test(x.mime) ? `<img src="${src}" alt="${esc(x.filename)}">` : `<iframe src="${src}" title="${esc(x.filename)}"></iframe>`}`;
     }
 
@@ -202,7 +214,12 @@
     }
 
     async function uploadFiles(files) {
+      const dz = $('#drop');
+      dz.setAttribute('aria-busy', 'true');
+      let n = 0;
       for (const f of files) {
+        n += 1;
+        $('#drop-prog').textContent = files.length > 1 ? `מעלה ${n} מתוך ${files.length}…` : `מעלה את ${f.name}…`;
         try {
           const data = await readAsDataUrl(f);
           const r = await api('POST', '/api/priority/docs', { doc: d.key, filename: f.name, mime: f.type, data });
@@ -210,6 +227,8 @@
           toast(`נוסף לתור: ${f.name}`);
         } catch (e) { toast(`${f.name}: ${e.message}`, true); }
       }
+      dz.removeAttribute('aria-busy');
+      $('#drop-prog').textContent = '';
     }
 
     // גרירה לכל המסך (לא רק לאזור) — המאזינים מתחלפים בכל כניסה לפעולה
@@ -218,6 +237,7 @@
     ['dragenter', 'dragover'].forEach((ev) => ws.addEventListener(ev, (e) => { if (e.dataTransfer?.types?.includes('Files')) { e.preventDefault(); drop.classList.add('over'); } }));
     ['dragleave', 'drop'].forEach((ev) => ws.addEventListener(ev, (e) => { if (ev === 'dragleave' && ws.contains(e.relatedTarget)) return; drop.classList.remove('over'); }));
     ws.addEventListener('drop', (e) => { if (!e.dataTransfer?.files?.length) return; e.preventDefault(); uploadFiles([...e.dataTransfer.files]); });
+    drop.addEventListener('click', () => { if (drop.getAttribute('aria-busy') !== 'true') $('#file-in').click(); });
     $('#file-in').addEventListener('change', (e) => { uploadFiles([...e.target.files]); e.target.value = ''; });
 
     main.querySelector('.ws').addEventListener('click', async (e) => {
@@ -249,7 +269,13 @@
         return;
       }
       const del = e.target.closest('[data-del]');
+      if (del && confirmDel !== Number(del.dataset.del)) {
+        confirmDel = Number(del.dataset.del); drawQueue();
+        main.querySelector(`[data-del="${confirmDel}"]`)?.focus();
+        return;
+      }
       if (del) {
+        confirmDel = null;
         try {
           await api('DELETE', `/api/priority/docs/${del.dataset.del}`);
           items = items.filter((i) => i.id !== Number(del.dataset.del));
@@ -314,7 +340,8 @@
         ${log.items.length ? `<ul class="log">${log.items.map((x) => `<li><span class="num muted">${new Date(x.at).toLocaleString('he-IL')}</span> · ${esc(x.by?.name ?? '—')}: ${x.changes.map(esc).join(' · ')}</li>`).join('')}</ul>` : '<p class="muted">אין שינויים עדיין.</p>'}
       </section>`;
 
-    const tg = (on, f, i) => `<button class="tg" aria-pressed="${Boolean(on)}" data-f="${f}" data-i="${i}" aria-label="${f}"></button>`;
+    const F = { test: 'סביבת בדיקה', write: 'כתיבה', poNotify: 'התראות הזמנות רכש', pdNotify: 'התראה לחותם' };
+    const tg = (on, f, i) => `<button type="button" class="tg" role="switch" aria-checked="${Boolean(on)}" data-f="${f}" data-i="${i}" aria-label="${F[f]} — ${esc(companies[i].name || companies[i].code || 'חברה חדשה')}"></button>`;
     function drawCompanies() {
       const codes = companies.map((c) => c.code);
       $('#co').innerHTML = '<tr><th>קוד</th><th>שם</th><th>ח.פ.</th><th>עותק בדיקה</th><th>סביבת בדיקה</th><th>כתיבה</th><th>התראות הזמנות</th><th>התראה לחותם</th><th></th></tr>' +
@@ -324,14 +351,14 @@
           <td><input type="text" class="ltr num" data-k="vat" data-i="${i}" value="${esc(c.vat)}" aria-label="ח.פ."></td>
           <td><select data-k="sandbox" data-i="${i}" aria-label="עותק בדיקה"><option value="">—</option>${codes.filter((x) => x !== c.code).map((x) => `<option ${x === c.sandbox ? 'selected' : ''}>${esc(x)}</option>`).join('')}</select></td>
           <td>${tg(c.test, 'test', i)}</td><td>${tg(c.write, 'write', i)}</td><td>${tg(c.poNotify, 'poNotify', i)}</td><td>${tg(c.pdNotify, 'pdNotify', i)}</td>
-          <td><button class="btn small" data-del="${i}" aria-label="הסרה">✕</button></td></tr>`).join('');
+          <td><button class="btn small" data-del="${i}" aria-label="הסרת ${esc(c.name || c.code || 'השורה')}">${ui('x')}</button></td></tr>`).join('');
     }
     drawCompanies();
     $('#co').addEventListener('input', (e) => { const el = e.target.closest('[data-k]'); if (el) companies[+el.dataset.i][el.dataset.k] = el.value; });
     $('#co').addEventListener('change', (e) => { const el = e.target.closest('select[data-k]'); if (el) companies[+el.dataset.i][el.dataset.k] = el.value; });
     $('#co').addEventListener('click', (e) => {
       const t = e.target.closest('.tg');
-      if (t) { const c = companies[+t.dataset.i]; c[t.dataset.f] = !c[t.dataset.f]; t.setAttribute('aria-pressed', String(c[t.dataset.f])); return; }
+      if (t) { const c = companies[+t.dataset.i]; c[t.dataset.f] = !c[t.dataset.f]; t.setAttribute('aria-checked', String(c[t.dataset.f])); return; }
       const d = e.target.closest('[data-del]');
       if (d) { companies.splice(+d.dataset.del, 1); drawCompanies(); }
     });
@@ -378,11 +405,15 @@
       </section>`;
 
     function draw() {
+      // שמירת המיקום של המקלדת אחרי ציור מחדש (ui-ux-pro-max: focus management)
+      const f = document.activeElement;
+      const keep = f && $('#mtx')?.contains(f) ? ['data-u', 'data-d', 'data-co', 'data-pick'].filter((k) => f.hasAttribute(k)).map((k) => `[${k}="${CSS.escape(f.getAttribute(k))}"]`).join('') : '';
       $('#mtx').innerHTML = `<thead><tr><th>משתמש</th>${m.docs.map((d) => `<th>${esc(d.label)}${d.ready ? '' : '<br><span class="pill p-mute">בקרוב</span>'}</th>`).join('')}<th>חברות</th></tr></thead><tbody>` +
         users.map((u, i) => `<tr><td><b>${esc(u.name)}</b><span>${esc([u.department, ROLE[u.role] ?? u.role].filter(Boolean).join(' · '))}</span></td>
-          ${m.docs.map((d) => `<td><button class="ck" aria-pressed="${u.docs.includes(d.key)}" aria-label="${esc(u.name)} — ${esc(d.label)}" data-u="${i}" data-d="${d.key}" ${u.admin ? 'disabled' : ''}>✓</button></td>`).join('')}
-          <td><button class="cobtn" data-pick="${i}" ${u.admin ? 'disabled' : ''} aria-label="החברות של ${esc(u.name)}">${u.companies === null ? '<span class="pill p-ok">כל החברות</span>' : u.companies.length ? u.companies.map((c) => `<span class="pill p-brand">${esc(coName(c))}</span>`).join('') : '<span class="pill p-warn">אף חברה</span>'}</button></td></tr>
+          ${m.docs.map((d) => `<td><button type="button" class="ck" role="checkbox" aria-checked="${u.docs.includes(d.key)}" aria-label="${esc(u.name)} — ${esc(d.label)}" data-u="${i}" data-d="${d.key}" ${u.admin ? 'disabled' : ''}>✓</button></td>`).join('')}
+          <td><button type="button" class="cobtn" data-pick="${i}" ${u.admin ? 'disabled' : ''} aria-expanded="${picking === i}" aria-label="החברות של ${esc(u.name)}: ${u.companies === null ? 'כל החברות' : u.companies.length ? esc(u.companies.map(coName).join(', ')) : 'אף חברה'}">${u.companies === null ? '<span class="pill p-ok">כל החברות</span>' : u.companies.length ? u.companies.map((c) => `<span class="pill p-brand">${esc(coName(c))}</span>`).join('') : '<span class="pill p-warn">אף חברה</span>'}</button></td></tr>
           ${picking === i ? `<tr class="copick"><td colspan="${m.docs.length + 2}"><div class="pk"><button data-co="*" data-u="${i}" aria-pressed="${u.companies === null}">כל החברות</button>${m.companies.map((c) => `<button data-co="${esc(c.code)}" data-u="${i}" aria-pressed="${Boolean(u.companies?.includes(c.code))}">${esc(c.name)}</button>`).join('')}</div><span class="hint">חברה חדשה בפריוריטי נוספת אוטומטית רק למי שמסומן "כל החברות".</span></td></tr>` : ''}`).join('') + '</tbody>';
+      if (keep) $('#mtx').querySelector(keep)?.focus();
       $('#save').disabled = !dirty.size;
       $('#dirty').textContent = dirty.size ? `${dirty.size} שינויים שלא נשמרו` : '';
     }
