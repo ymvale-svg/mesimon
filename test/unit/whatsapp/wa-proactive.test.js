@@ -55,3 +55,15 @@ test('הצעה לקבלת סחורה שלא נענתה — נסגרת ולא נ�
   assert.equal(D.get('SELECT status FROM mail_goods_docs WHERE id = ?', goodsId).status, 'ignored');
   assert.equal(MailActions._internal.nextGoods(u.id), null, 'לא נשאלת שוב');
 });
+
+test('הצעה לקבלת סחורה — רק למי שמורשה לקבלת סחורה בבוט', (t) => {
+  const Auth = require('../../../server/core').Auth;
+  const actor = Auth.loadActor('user', user({ role: 'admin' }).id);
+  const prev = D.getSetting('wa_actions', {});
+  t.after(() => D.setSetting('wa_actions', prev));
+  D.setSetting('wa_actions', { ...prev, goods_receipt: { enabled: false } });
+  assert.equal(X.mayGoodsOffer(actor), false, 'קבלת סחורה כבויה — אין הצעה');
+  D.setSetting('wa_actions', { ...prev, goods_receipt: { enabled: true, audience: 'all' }, goods_offer: { enabled: true, audience: 'all' } });
+  assert.equal(X.mayGoodsOffer(actor), true);
+  assert.equal(X.mayGoodsOffer(null), false);
+});

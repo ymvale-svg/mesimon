@@ -4522,6 +4522,16 @@ async function rfqTick() {
 // 📬 פעולות לפי המיילים: "זכרת?" על דדליין, וחשבונית ← קבלת סחורה (‎mail-actions.js‎)
 // ---------------------------------------------------------------------------
 
+/*
+ * 📦 מי מקבל "לבצע קבלת סחורה?" על חשבונית במייל (הוחלט 11.11.26): רק מי שמורשה לקבלת סחורה.
+ * ההרשאה תיקבע במטריצת ההרשאות של משימון פריוריטי (‎אפיון — משימון פריוריטי (דשבורד).md‎, "הרשאות": משתמש × סוג
+ * מסמך, "קבלת סחורה" ברמת קליטה ומעלה), ולא במטריצה הכללית של משימון. עד שהמסך ייבנה — לפי מה שקובע היום מי
+ * עושה קבלת סחורה בבוט: הפעולה "קבלת סחורה לפריוריטי" (‎wa_actions‎ — דלוקה, קהל, פיילוט).
+ */
+function mayGoodsOffer(actor) {
+  return Boolean(actor && WaActions.allowed(actor, 'goods_offer') && WaActions.allowed(actor, 'goods_receipt'));
+}
+
 let mailActionsAt = 0;
 async function mailActionAlerts() {
   if (Date.now() - mailActionsAt < 2 * 60 * 1000) return;
@@ -4535,8 +4545,8 @@ async function mailActionAlerts() {
     if (!actor) continue;
     const allow = {
       deadline: Boolean(on.deadline && prefs.mailDeadline !== false && WaActions.allowed(actor, 'mail_deadline')),
-      // 📦 רק למי שמורשה לקבלת סחורה במטריצת ההרשאות (‎priority_goods_receipt‎) — וגם בבוט
-      goods: Boolean(on.goods && prefs.goodsOffer !== false && P.may(actor, 'priority_goods_receipt') && WaActions.allowed(actor, 'goods_offer') && WaActions.allowed(actor, 'goods_receipt')),
+      // 📦 רק למי שמורשה לקבלת סחורה (‎mayGoodsOffer‎) — לא למטריצה הכללית של משימון
+      goods: Boolean(on.goods && prefs.goodsOffer !== false && mayGoodsOffer(actor)),
       form: Boolean(on.form && prefs.formOffer !== false && WaActions.allowed(actor, 'form_fill') && Gmail.canSend(u.id)),
       followup: Boolean(on.followup && prefs.sentFollowup !== false && WaActions.allowed(actor, 'sent_followup') && Gmail.canSend(u.id))
     };
@@ -5094,7 +5104,7 @@ module.exports = {
     featuresText, PLAIN_FEATURES, parseThreadAdd, threadAddText, dayItems, walkText, walkButtons, walkAction, WALK,
     storeGroupMessage, processGroup, handleDirect, sanitizeGroup, resolveMentions, candidatesOf, converse, turn, withFollowUps, sendSummaries, YES,
     findRecipients, findContactCards, sourceOf, suggestionFeedback, flushOutbox, todayMessage, splitMessage, parseSuggestionCommand, businessCommand, chatOf, saveChat,
-    recordingReply, checkDraft, draftText, createFromDraft, mailAlertFor, closeAlerted, logoIntent, busyFor, userLastAt, staleQuestion,
+    recordingReply, checkDraft, draftText, mayGoodsOffer, createFromDraft, mailAlertFor, closeAlerted, logoIntent, busyFor, userLastAt, staleQuestion,
     READ_ALOUD, READ_ALOUD_DOWN, readAloudText, readAloudFile, hooks, flowReply, retryTick, alertAdminsAi
   }
 };

@@ -58,10 +58,7 @@ const MATRIX = {
   // הפיד מציג את כל הארגון, ולכן הוא כלי ניהול מערכת ולא חלון אישי
   view_activity_feed:       { superadmin: true, admin: true,  executive: false, manager: false,       employee: false, vendor: false },
   // הודעה שנפתחת לכל משתמש בכניסה — קול אחד מדבר אל כולם, ולכן רק אדמין על
-  manage_release_notes:     { superadmin: true, admin: false, executive: false, manager: false,       employee: false, vendor: false },
-  // 📦 קבלת סחורה בפריוריטי (הוחלט 11.11.26): הבוט מציע "לבצע קבלת סחורה?" על חשבונית במייל רק למי שמורשה כאן.
-  // עובד פנימי — רק בהרשאה אישית (מחסנאי, מנהל עבודה)
-  priority_goods_receipt:   { superadmin: true, admin: true,  executive: true,  manager: true,        employee: false, vendor: false }
+  manage_release_notes:     { superadmin: true, admin: false, executive: false, manager: false,       employee: false, vendor: false }
 };
 
 const MATRIX_LABELS = {
@@ -83,8 +80,7 @@ const MATRIX_LABELS = {
   vendor_upload_deliverable:'העלאת תוצרים / הערות (בפורטל הספק)',
   view_internal_comments:   'צפייה בהערות ובשדות פנימיים',
   view_activity_feed:       'צפייה בפיד העדכונים (כל הארגון)',
-  manage_release_notes:     'פרסום הודעות "מה חדש" ומייל לכל המשתמשים',
-  priority_goods_receipt:   'קבלת סחורה בפריוריטי (והצעה בבוט על חשבונית במייל)'
+  manage_release_notes:     'פרסום הודעות "מה חדש" ומייל לכל המשתמשים'
 };
 
 const MATRIX_NOTES = {
@@ -101,8 +97,7 @@ const MATRIX_NOTES = {
   'view_internal_board.employee': 'רק משימות שהוא חלק מהן, או כל המחלקה אם הוענקה לו הרשאה',
   'create_project.employee': 'פותח פרויקטים, ועורך את אלה שפתח או שהוא מנהלם',
   'view_reports.manager': 'חתך המחלקה שלו',
-  'manage_organizations.superadmin': 'הקמת חברות — יופעל בהמשך',
-  'priority_goods_receipt.employee': 'רק אם הוענקה לו הרשאה אישית'
+  'manage_organizations.superadmin': 'הקמת חברות — יופעל בהמשך'
 };
 
 /**
@@ -118,10 +113,6 @@ const GRANTS = {
   assign_department_tasks: {
     label: 'הקצאת משימות לחברי המחלקה',
     hint: 'יכול ליצור משימה ולהקצות אותה לעובד אחר במחלקה'
-  },
-  priority_goods_receipt: {
-    label: 'קבלת סחורה בפריוריטי',
-    hint: 'מחסנאי / מנהל עבודה: הבוט יציע לבצע קבלת סחורה כשמגיעה אליו חשבונית או תעודת משלוח במייל'
   }
 };
 
@@ -141,7 +132,6 @@ function level(actor, action) {
   if (role === 'employee') {
     if (action === 'view_internal_board' && hasGrant(actor, 'view_department_tasks')) return 'department';
     if (action === 'assign_department_task' && hasGrant(actor, 'assign_department_tasks')) return 'department';
-    if (action === 'priority_goods_receipt' && hasGrant(actor, 'priority_goods_receipt')) return true;
   }
   return row[role] ?? false;
 }

@@ -70,14 +70,7 @@ test('hasGrant — רק למשתמש עם מערך', () => {
   assert.ok(!P.hasGrant(u('employee'), 'x'));
   assert.ok(!P.hasGrant(vendor({ grants: ['x'] }), 'x'));
   assert.ok(!P.hasGrant(u('employee', { grants: 'x' }), 'x'));
-  assert.deepEqual(P.GRANT_KEYS, ['view_department_tasks', 'assign_department_tasks', 'priority_goods_receipt']);
-});
-
-test('קבלת סחורה בפריוריטי — לפי המטריצה; עובד פנימי רק בהרשאה אישית, ספק אף פעם', () => {
-  for (const role of ['superadmin', 'admin', 'executive', 'manager']) assert.equal(P.may(u(role), 'priority_goods_receipt'), true, role);
-  assert.equal(P.may(u('employee'), 'priority_goods_receipt'), false);
-  assert.equal(P.may(u('employee', { grants: ['priority_goods_receipt'] }), 'priority_goods_receipt'), true);
-  assert.equal(P.may(vendor({ grants: ['priority_goods_receipt'] }), 'priority_goods_receipt'), false);
+  assert.deepEqual(P.GRANT_KEYS, ['view_department_tasks', 'assign_department_tasks']);
 });
 
 test('may ו-can — הבדל בין מוגבל למלא', () => {
