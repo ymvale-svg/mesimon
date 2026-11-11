@@ -328,6 +328,12 @@ function register(router, h) {
     return actor;
   };
 
+  // 🎥 אבחון Timeless — כמה בקשות יוצאות, מה Timeless אומר על המכסה, וה-429 האחרונים
+  router.get('/api/admin/timeless/status', async (req, res, ctx) => {
+    zoomAdmin(ctx);
+    sendJson(res, 200, Timeless.status());
+  });
+
   router.get('/api/admin/zoom/users', async (req, res, ctx) => {
     zoomAdmin(ctx);
     sendJson(res, 200, { enabled: Zoom.isEnabled(), missing: Zoom.missing(), accounts: Zoom.accounts(), users: Zoom.listUsers() });

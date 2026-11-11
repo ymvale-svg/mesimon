@@ -231,6 +231,7 @@ async function rawCall(token, path, query, { fresh = false } = {}) {
     } catch (err) {
       // Timeless מגביל או לא זמין — התשובה האחרונה שנשמרה עדיפה על מסך שגיאה
       if (hit && (err.status === 429 || err.retryable) && Date.now() - hit.at < STALE_MS) {
+        diag.staleServed += 1;
         console.warn(`[משימון] Timeless (${url.pathname}): ${err.status || 'שגיאה'} — מוגש מהמטמון`);
         return hit.body;
       }
@@ -241,25 +242,77 @@ async function rawCall(token, path, query, { fresh = false } = {}) {
   return p;
 }
 
+// ---------- אבחון: מה קורה מול Timeless (‎/api/admin/timeless/status‎) ----------
+// בזיכרון בלבד, בלי האסימון ובלי תוכן פגישות: כמה בקשות יצאו בדקה (מסך / רקע), מה Timeless
+// אמר על המכסה (‎X-RateLimit-*‎), ו-20 ה-429 האחרונים עם הכותרות שלהם.
+const diag = { since: Date.now(), requests: [], limited: [], queueFull: 0, staleServed: 0, server: null };
+function noteRequest(url, bg, status) {
+  const now = Date.now();
+  diag.requests.push({ at: now, path: url.pathname.replace(/\/(mtg|doc)_[\w-]+/g, '/$1_…'), bg, status });
+  while (diag.requests.length && now - diag.requests[0].at > 10 * 60000) diag.requests.shift();
+}
+function status() {
+  const now = Date.now();
+  const lastMin = diag.requests.filter((r) => now - r.at < 60000);
+  const byPath = {};
+  for (const r of diag.requests) byPath[r.path] = (byPath[r.path] ?? 0) + 1;
+  return {
+    since: new Date(diag.since).toISOString(),
+    orgToken: Boolean(orgToken()),
+    lastMinute: { total: lastMin.length, background: lastMin.filter((r) => r.bg).length, screens: lastMin.filter((r) => !r.bg).length },
+    last10MinByPath: byPath,
+    queueFull: diag.queueFull,
+    staleServed: diag.staleServed,
+    timelessSays: diag.server,
+    blockedFor: Math.max(0, ...[...blockedUntil.values()].map((t) => Math.round((t - now) / 1000))),
+    recent429: diag.limited.slice(-20)
+  };
+}
+
+/**
+ * המונה של Timeless עצמו (‎X-RateLimit-Remaining/Reset‎) — כולל בקשות מתהליכים אחרים על אותו
+ * אסימון (סוכנים, שרת נוסף). נשארו מעט — מחכים לאיפוס במקום לקבל 429.
+ */
+function syncFromHeaders(tk, headers) {
+  const remaining = Number(headers?.get?.('x-ratelimit-remaining'));
+  const limit = Number(headers?.get?.('x-ratelimit-limit'));
+  const resetRaw = Number(headers?.get?.('x-ratelimit-reset'));
+  if (!Number.isFinite(remaining)) return;
+  const now = Date.now();
+  // ‎Reset‎ — זמן Unix בשניות, או מספר שניות עד האיפוס
+  const resetAt = Number.isFinite(resetRaw) ? (resetRaw > 1e9 ? resetRaw * 1000 : now + resetRaw * 1000) : now + 60000;
+  diag.server = { remaining, limit: Number.isFinite(limit) ? limit : null, resetAt: new Date(resetAt).toISOString(), at: new Date(now).toISOString() };
+  if (remaining <= 3 && resetAt > now) blockedUntil.set(tk, Math.max(blockedUntil.get(tk) ?? 0, Math.min(resetAt, now + 120000)));
+}
+
 async function limited(token, tk, url) {
-  if (!(await takeSlot(tk, inBackground()))) {
+  const bg = inBackground();
+  if (!(await takeSlot(tk, bg))) {
+    diag.queueFull += 1;
     throw apiError('Timeless עמוס כרגע — נסו שוב בעוד דקה.', { status: 429, retryable: true });
   }
   try {
-    return await fetchOnce(token, url);
+    const body = await fetchOnce(token, url, tk);
+    noteRequest(url, bg, 200);
+    return body;
   } catch (err) {
+    noteRequest(url, bg, err.status || 0);
     if (err.status !== 429) throw err;
+    diag.limited.push({ at: new Date().toISOString(), path: url.pathname.replace(/\/(mtg|doc)_[\w-]+/g, '/$1_…'), background: bg, retryAfter: err.retryAfterSeconds ?? null, headers: err.rateHeaders ?? null, body: err.bodySnippet ?? '' });
+    if (diag.limited.length > 50) diag.limited.splice(0, diag.limited.length - 50);
     // מגביל למרות התור (סוכן או מערכת אחרת על אותו חשבון) — כל הבקשות מחכות כמה ש-Timeless ביקש
     const wait = err.retryAfterSeconds ?? 2;
     blockedUntil.set(tk, Date.now() + Math.min(wait, 120) * 1000);
     if (wait > RETRY_429_MAX_SEC) throw err;
     console.warn(`[משימון] Timeless החזיר 429 (${url.pathname}) — ניסיון חוזר בעוד ${wait} שניות`);
     await new Promise((r) => setTimeout(r, wait * 1000));
-    return fetchOnce(token, url);
+    const body = await fetchOnce(token, url, tk);
+    noteRequest(url, bg, 200);
+    return body;
   }
 }
 
-async function fetchOnce(token, url) {
+async function fetchOnce(token, url, tk = null) {
   let res;
   try {
     res = await fetch(url, {
@@ -274,6 +327,7 @@ async function fetchOnce(token, url) {
   let body = null;
   const text = await res.text().catch(() => '');
   if (text) { try { body = JSON.parse(text); } catch { body = null; } }
+  if (tk) syncFromHeaders(tk, res.headers);
   if (res.ok) return body ?? {};
 
   const apiMsg = body?.error?.message || '';
@@ -283,6 +337,10 @@ async function fetchOnce(token, url) {
     const err = apiError('Timeless מגביל כרגע את קצב הבקשות. נסו שוב בעוד דקה.', { status: 429, retryable: true, code });
     const ra = Number(res.headers.get('retry-after'));
     if (Number.isFinite(ra) && ra > 0) err.retryAfterSeconds = ra;
+    // לאבחון: כותרות המכסה ותחילת התשובה (בלי האסימון)
+    err.rateHeaders = Object.fromEntries(['retry-after', 'x-ratelimit-limit', 'x-ratelimit-remaining', 'x-ratelimit-reset']
+      .map((h) => [h, res.headers.get(h)]).filter(([, v]) => v !== null));
+    err.bodySnippet = text.slice(0, 200);
     throw err;
   }
   if (res.status >= 500) throw apiError(`שגיאה זמנית בשרת Timeless (${res.status}). נסו שוב מאוחר יותר.`, { status: res.status, retryable: true, code });
@@ -683,6 +741,6 @@ async function runTool(userId, name, input = {}) {
 module.exports = {
   connect, disconnect, isConnected, publicStatus, hasOrgToken: () => Boolean(orgToken()),
   listMeetings, transcript, documents, document, listRooms, recordings, recordingUrl, segments, meeting, meetingsOnDay, backgroundToken,
-  background, TOOLS, runTool,
+  background, status, TOOLS, runTool,
   BASE_URL
 };
