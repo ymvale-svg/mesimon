@@ -18,6 +18,8 @@ Ports.provide('classification', require('./core').Classification);
 Ports.provide('mailMemory', require('./mail').MailMemory);
 Ports.provide('whatsappScan', require('./whatsapp').WhatsappScan);
 Ports.provide('agents', require('./agents').Agents);
+// כלי Timeless של הסוכנים — מהשמירה המקומית (הצינור היחיד מ-Timeless)
+Ports.provide('timelessStore', require('./meetings').TimelessStore);
 Ports.provide('waBot', require('./whatsapp').WaBot);
 Ports.provide('mailPush', require('./mail').MailPush);
 

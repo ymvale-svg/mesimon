@@ -23,6 +23,7 @@ const Paths = require('../core').Paths;
 const path = require('node:path');
 
 const D = require('../core').Db;
+const Ports = require('../core').Ports;
 const Integrations = require('../integrations');
 const Claude = Integrations.Claude;
 const Gmail = require('../integrations').Gmail;
@@ -375,7 +376,11 @@ async function toolsFor(def, key, user, actor, state) {
   if (tl && def.timeless && tl.isConnected(user.id)) {
     for (const t of tl.TOOLS) {
       tools.push(t);
-      handlers.set(t.name, async (i) => { state.sources.add('🎥 Timeless'); return tl.runTool(user.id, t.name, i); });
+      // מהשמירה המקומית במשימון — לא פונים ל-Timeless על כל שאלה (מכסה של 250 בקשות לחשבון)
+      handlers.set(t.name, async (i) => {
+        state.sources.add('🎥 Timeless');
+        return Ports.has('timelessStore') ? Ports.get('timelessStore').runTool(user.id, t.name, i) : tl.runTool(user.id, t.name, i);
+      });
     }
   }
   const mcp = Mcp();

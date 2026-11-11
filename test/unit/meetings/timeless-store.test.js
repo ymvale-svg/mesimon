@@ -119,3 +119,31 @@ test('סיכום שהגיע אחרי התמליל — מסמך חדש נמשך �
   const docs = JSON.parse(D.get("SELECT documents FROM timeless_meetings WHERE id = 'mtg_s'").documents);
   assert.equal(docs[0].id, 'doc_mtg_s');
 });
+
+test('סבב לפי המכסה: לא לפני הזמן, כל שעתיים כשה-webhook מחובר', async (t) => {
+  setup(t);
+  process.env.TIMELESS_WEBHOOK_SECRET = 'whsec-x';
+  t.after(() => { delete process.env.TIMELESS_WEBHOOK_SECRET; });
+  assert.equal(Store.sweepEveryMs(), 2 * 3600000);
+  const { calls } = timeless(t, [MTG('mtg_t')]);
+  await Store.tick({ force: true });
+  const n = calls.length;
+  assert.ok(n > 0);
+  await Store.tick();
+  assert.equal(calls.length, n, 'הסבב הבא רק בעוד שעתיים');
+});
+
+test('כלי הסוכנים — מהשמירה המקומית, בלי פנייה ל-Timeless', async (t) => {
+  setup(t);
+  const api = timeless(t, [MTG('mtg_g', { title: 'ישיבה עם רזבר' })]);
+  await Store.sweep(NOW);
+  api.calls.length = 0;
+  const boss = user({ role: 'admin', email: `boss-${Date.now()}@eshel.test` });
+  const list = await Store.runTool(boss.id, 'timeless_list_meetings', { search: 'רזבר' });
+  assert.deepEqual(list.meetings.map((m) => m.id), ['mtg_g']);
+  const tr = await Store.runTool(boss.id, 'timeless_get_transcript', { meeting_id: 'mtg_g' });
+  assert.match(tr.text, /הצעת מחיר/);
+  const doc = await Store.runTool(boss.id, 'timeless_get_document', { meeting_id: 'mtg_g' });
+  assert.match(doc.documents[0].markdown, /ממשיכים/);
+  assert.equal(api.calls.length, 0);
+});

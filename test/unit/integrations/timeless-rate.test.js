@@ -131,3 +131,28 @@ test('429 נרשם באבחון עם הכותרות של Timeless (בלי האס
   assert.match(last.body, /rate_limited/);
   assert.ok(!JSON.stringify(Timeless.status()).includes('org-secret-8'));
 });
+
+test('מכסה של החשבון: נשארו 40 — עבודת רקע מדלגת בלי לפנות, פתיחה ממסך עוברת', async (t) => {
+  process.env.TIMELESS_ACCESS_TOKEN = 'org-9';
+  t.after(() => { delete process.env.TIMELESS_ACCESS_TOKEN; });
+  const boss = user({ role: 'admin' });
+  const reset = Math.floor(Date.now() / 1000) + 4 * 3600;
+  const calls = fakeFetch(t, () => new Response(JSON.stringify(page([])), { status: 200, headers: { 'x-ratelimit-remaining': '40', 'x-ratelimit-limit': '250', 'x-ratelimit-reset': String(reset) } }));
+  await Timeless.listMeetings(boss.id, { from: '2026-04-01', to: '2026-04-01' });
+  assert.equal(Timeless.quotaLeft(), 40);
+  await assert.rejects(Timeless.background(() => Timeless.listMeetings(boss.id, { from: '2026-04-02', to: '2026-04-02' })));
+  assert.equal(calls.length, 1, 'הרקע לא פנה');
+  await Timeless.listMeetings(boss.id, { from: '2026-04-03', to: '2026-04-03' });
+  assert.equal(calls.length, 2, 'המסך כן');
+});
+
+test('המכסה נגמרה (429 ל-8 שעות) — לא נוקשים שוב, וההודעה אומרת מתי היא מתחדשת', async (t) => {
+  process.env.TIMELESS_ACCESS_TOKEN = 'org-10';
+  t.after(() => { delete process.env.TIMELESS_ACCESS_TOKEN; });
+  const boss = user({ role: 'admin' });
+  const calls = fakeFetch(t, () => new Response('{"error":{"message":"This account has reached its API limit."}}', { status: 429, headers: { 'retry-after': '29080', 'x-ratelimit-limit': '250', 'x-ratelimit-remaining': '0' } }));
+  await assert.rejects(Timeless.listMeetings(boss.id, { from: '2026-03-01', to: '2026-03-01' }), (err) => /נגמרה המכסה של Timeless — מתחדשת ב-/.test(err.message));
+  await assert.rejects(Timeless.listMeetings(boss.id, { from: '2026-03-02', to: '2026-03-02' }), (err) => /נגמרה המכסה/.test(err.message));
+  assert.equal(calls.length, 1, 'הבקשה השנייה לא יצאה בכלל');
+  assert.ok(Timeless.status().blockedFor > 8 * 3600 - 60);
+});
