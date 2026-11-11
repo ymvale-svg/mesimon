@@ -93,7 +93,8 @@ const bullet = (x) => `• ${x}`;
 
 function buttonsFor(s) {
   if (!s) return [];
-  if (s.confirmCancel) return [BTN.confirmCancel, 'חזרה לטיוטא'];
+  if (s.confirmCancel) return [BTN.confirmCancel, BTN.backToDraft];
+  if (s.confirmFinal) return [BTN.confirmFinal, BTN.backToDraft];
   if (s.pendingNew) return ['צרף כנספח', 'קבלה חדשה', 'להתעלם ❌'];
   if (s.pendingList) return [BTN.yes, BTN.no];
   if (s.choices?.step === s.step && s.choices.list?.length) return s.choices.list;
@@ -1813,6 +1814,13 @@ async function handle({ user, text = '', file = null, reaction = false, allow = 
     save(user.id, back);
     return { replies: [`↩️ חזרתי שלב אחד אחורה.${back.lastPrompt ? `\n\n${back.lastPrompt}` : ''}`], status: 'ok', result: `שלב אחורה: ${s.step} ← ${back.step}`, buttons: buttonsFor(back) };
   }
+  // תשובה לשאלה "להפוך לסופית?" — כן / 👍 / מאשר: סוגרים; "חזרה לטיוטא" — הטיוטא; כל דבר אחר — ממשיכים בבדיקה
+  if (s.confirmFinal) {
+    const ok = !file && (YES.test(t) || /^(מאשר|מאשרת|אישור|אשר|👍|👌|✅|✔)([\s,.!]|$)/.test(t));
+    if (!ok) s.confirmFinal = false;
+    if (!file && /^חזרה לטיוטא/.test(t)) { const out = await showDraft(s, [], user); save(user.id, out.s ?? s); return { ...out, buttons: buttonsFor(out.s ?? s) }; }
+    if (ok) t = 'מאשר';
+  }
   // תשובה לשאלה "לבטל את הטיוטא?" — 👍 / כן מבטל (לא מאשר!); כל דבר אחר — ממשיכים בבדיקה
   if (s.confirmCancel) {
     s.confirmCancel = false;
@@ -2243,6 +2251,14 @@ async function step(user, s, t, file, allow = { gr: true, pd: false }) {
         return showDraft(s);
       }
       if (/^(מאשר|מאשרת|אישור|אשר|👍|👌|✅|✔)([\s,.!]|$)/.test(t)) {
+        // שאלת אישור לפני סגירה — אחרי "סופית" אי אפשר לבטל מהבוט
+        if (!s.confirmFinal) {
+          s.confirmFinal = true;
+          return { s, replies: [[`🔒 להפוך את *${s.docno}* לסופית?`,
+            'אחרי הסגירה אי אפשר לבטל מהבוט — רק בפריוריטי (פעולות ← פתיחת תעודה סופית לעריכה).',
+            '*כן* 👍 — לסגור · *חזרה לטיוטא* — להמשיך לבדוק'].join('\n')], result: 'שאלת אישור לפני סגירה' };
+        }
+        s.confirmFinal = false;
         try {
           // כבר סופית (אושרה במחשב) — לא מאשרים שוב
           if ((await Priority.receiptStatus(s.company, s.docno)) !== 'סופית') await Priority.finalizeReceipt(s.company, s.docno);
