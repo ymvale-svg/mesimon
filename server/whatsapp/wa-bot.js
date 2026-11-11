@@ -4674,8 +4674,10 @@ function sendProactive(userId, chatId, text, { taskId = null, action = 'assignme
     rememberBot(userId, text);
     log({ channel: 'summary', chatId, userId, who, action, status: 'ok', result: text.split('\n')[0].slice(0, 300), taskId });
     if (taskId && action === 'assignment_notice') await offerOutreach(userId, chatId, taskId, who);
+    return true;
   }).catch((err) => {
     log({ channel: 'summary', chatId, userId, who, action, status: 'error', result: err.message, taskId });
+    return false;
   });
 }
 
@@ -4830,7 +4832,18 @@ function messageUser(userId, text, action) {
   else D.run('INSERT INTO wa_outbox (user_id, chat_id, text, task_id, action, created_at) VALUES (?,?,?,?,?,?)', u.id, chatId, text, null, action, D.nowIso());
   return true;
 }
-PurchaseDemand.setHooks({ send: (userId, text) => messageUser(userId, text, 'purchase_demand') });
+/**
+ * הודעה יזומה שהשולח צריך לדעת אם יצאה (החותם הבא בפריוריטי): ‎true‎ — יצאה; ‎'later'‎ — מחוץ לשעות הפעילות,
+ * לא נכנסת לתור (השולח ינסה שוב בסבב); ‎false‎ — לא יצאה (הבוט כבוי, אין טלפון, השליחה נכשלה — ביומן).
+ */
+async function messageUserNow(userId, text, action) {
+  if (!D.getSetting('wa_bot_enabled', true) || !isConfigured() || !channel()) return false;
+  const u = D.get("SELECT id, full_name, phone FROM users WHERE id = ? AND status = 'active'", userId);
+  if (!u?.phone) return false;
+  if (!workHours(u.id)) return 'later';
+  return sendProactive(u.id, `${u.phone}@c.us`, text, { action, who: u.full_name });
+}
+PurchaseDemand.setHooks({ send: (userId, text) => messageUserNow(userId, text, 'purchase_demand') });
 WaScan.setHooks({
   ask: (userId, text) => messageUser(userId, text, 'wa_scan_ask'),
   notice: (userId, text) => messageUser(userId, text, 'wa_scan_notice')
@@ -5033,7 +5046,7 @@ async function tick() {
   }
   // דרישות רכש שמחכות לאישור — הודעה לחותם הבא (פעם ב-10 דקות לכל היותר)
   if (!busy && WaActions.byKey('purchase_demand')?.enabled) {
-    await Approvals.sweep((userId, text) => messageUser(userId, text, 'purchase_demand')).catch((err) => console.error('[משימון] הודעות לחותמים בפריוריטי:', err.message));
+    await Approvals.sweep((userId, text) => messageUserNow(userId, text, 'purchase_demand')).catch((err) => console.error('[משימון] הודעות לחותמים בפריוריטי:', err.message));
   }
   if (busy || !D.getSetting('wa_bot_enabled', true)) return;
   const ch = channel();

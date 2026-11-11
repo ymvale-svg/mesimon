@@ -11,7 +11,8 @@
  *   1. מיפוי ידני — ההגדרה ‎priority_user_map‎: ‎{ "Eladh": 12 }‎ (קודם לכל השאר);
  *   2. המייל — זהה למייל של משתמש משימון;
  *   3. השם — שם פרטי ומשפחה (בכל סדר) זהים לשם המלא במשימון.
- * לא נמצא — מנהלי המערכת מקבלים התראה (פעם אחת לכל שם משתמש).
+ * לא נמצא, או שאין לו טלפון — מנהלי המערכת מקבלים התראה (פעם אחת לכל משתמש).
+ * "קיבל" נרשם רק כשההודעה יצאה בפועל; מחוץ לשעות הפעילות — הסבב שולח כשהחלון נפתח.
  *
  * באילו חברות (הוחלט 08.11.26): כל החברות המוכרות — האמיתיות (קריאה בלבד; אין צורך בהגדרה) ועותק הבדיקה כשהוא פתוח.
  * ההגדרה ‎pd_notify_companies‎ (מערך קודים) — רק אם רוצים לצמצם.
@@ -23,6 +24,9 @@ const P = require('../core').Permissions;
 
 const NOTIFIED = 'pd_approval_notified';
 const UNMAPPED = 'pd_approval_unmapped';
+const NO_PHONE = 'pd_approval_nophone';
+const FAILED = 'pd_approval_failed';
+const MAX_FAILS = 3;
 const EVERY = 10 * 60 * 1000;
 const KEEP = 60 * 24 * 60 * 60 * 1000;
 
@@ -111,9 +115,20 @@ async function ownerName(login) {
   return pr?.SNAME || login;
 }
 
+/** פעם אחת לכל מפתח (נשמר בהגדרה ‎setting‎) — ‎true‎ כשזו הפעם הראשונה */
+function firstTime(setting, key) {
+  const seen = D.getSetting(setting, {}) ?? {};
+  if (seen[key]) return false;
+  seen[key] = Date.now();
+  D.setSetting(setting, seen);
+  return true;
+}
+
 /**
- * הודעה לחותם הבא של דרישה אחת — אם עוד לא קיבל עליה. ‎send(userId, text)‎ ← ‎true‎ כשנשלח (או נכנס לתור).
- * ‎{ signer, user, sent, why }‎
+ * הודעה לחותם הבא של דרישה אחת — אם עוד לא קיבל עליה. ‎send(userId, text)‎ ←
+ *   ‎true‎ — ההודעה יצאה; ‎'later'‎ — מחוץ לשעות הפעילות (הסבב ינסה שוב כשהחלון נפתח); ‎false‎ — לא יצאה.
+ * רק הודעה שיצאה נרשמת כ"קיבל". נכשלה — ניסיון בכל סבב, ואחרי ‎MAX_FAILS‎ — התראה למנהלי המערכת (פעם אחת).
+ * ‎{ signer, user, sent, later, why }‎
  */
 async function notifyDemand(company, d, send) {
   const signer = Priority.nextSigner(d);
@@ -123,24 +138,40 @@ async function notifyDemand(company, d, send) {
   const m = await mesimonUserFor(signer);
   if (done[k]) return { signer, user: m.user, sent: false, why: 'כבר קיבל' };
   if (!m.user) {
-    const un = D.getSetting(UNMAPPED, {}) ?? {};
-    if (!un[signer]) {
-      un[signer] = Date.now();
-      D.setSetting(UNMAPPED, un);
+    if (firstTime(UNMAPPED, signer)) {
       alertAdmins(`החותם הבא ${signer} לא נמצא במשימון`, [`דרישת רכש ${d.PRDNO} (${company}) מחכה לאישור של ${signer}${m.pr?.SNAME ? ` (${m.pr.SNAME})` : ''}.`,
         'לא נמצא משתמש משימון עם אותו מייל או אותו שם, ולכן לא נשלחה לו הודעה בוואטסאפ.',
         'לתיקון: מייל זהה בשני המקומות, או מיפוי ידני בהגדרה priority_user_map.'].join('\n'));
     }
     return { signer, user: null, sent: false, why: 'לא נמצא במשימון' };
   }
-  if (!m.user.phone) return { signer, user: m.user, sent: false, why: 'אין טלפון בפרופיל' };
-  const ok = await send(m.user.id, messageFor(company, d, await ownerName(d.OWNERLOGIN || d.INITUSERLOGIN)));
-  if (ok) {
+  if (!m.user.phone) {
+    // בלי טלפון אין לאן לשלוח — מנהלי המערכת יודעים (פעם אחת לכל משתמש), כדי להשלים את הפרופיל
+    if (firstTime(NO_PHONE, String(m.user.id))) {
+      alertAdmins(`לחותם ${m.user.full_name} אין טלפון במשימון`, [`דרישת רכש ${d.PRDNO} (${company}) מחכה לאישור של ${m.user.full_name} (${signer}),`,
+        'אבל בפרופיל שלו במשימון אין מספר טלפון, ולכן לא נשלחה לו הודעה בוואטסאפ.',
+        'לתיקון: להוסיף טלפון בפרופיל — ההודעה תצא בסבב הבא (עד 10 דקות).'].join('\n'));
+    }
+    return { signer, user: m.user, sent: false, why: 'אין טלפון בפרופיל' };
+  }
+  const res = await send(m.user.id, messageFor(company, d, await ownerName(d.OWNERLOGIN || d.INITUSERLOGIN)));
+  if (res === 'later') return { signer, user: m.user, sent: false, later: true, why: 'מחוץ לשעות הפעילות' };
+  const fails = D.getSetting(FAILED, {}) ?? {};
+  if (res === true) {
     done[k] = Date.now();
     for (const [x, at] of Object.entries(done)) if (Date.now() - at > KEEP) delete done[x];
     D.setSetting(NOTIFIED, done);
+    if (fails[k]) { delete fails[k]; D.setSetting(FAILED, fails); }
+    return { signer, user: m.user, sent: true, why: '' };
   }
-  return { signer, user: m.user, sent: Boolean(ok), why: ok ? '' : 'הבוט לא שלח' };
+  fails[k] = (fails[k] ?? 0) + 1;
+  D.setSetting(FAILED, fails);
+  if (fails[k] === MAX_FAILS) {
+    alertAdmins(`ההודעה לחותם ${m.user.full_name} לא נשלחה`, [`דרישת רכש ${d.PRDNO} (${company}) מחכה לאישור של ${m.user.full_name} (${signer}).`,
+      `הבוט ניסה ${MAX_FAILS} פעמים לשלוח לו הודעה בוואטסאפ, ולא הצליח (הפירוט ביומן הבוט, פעולה purchase_demand).`,
+      'הבוט ממשיך לנסות כל 10 דקות.'].join('\n'));
+  }
+  return { signer, user: m.user, sent: false, why: 'הבוט לא שלח' };
 }
 
 let lastRun = 0;
@@ -159,4 +190,4 @@ async function sweep(send, { force = false } = {}) {
   return out;
 }
 
-module.exports = { mesimonUserFor, priorityLoginFor, mapping, notifyDemand, sweep, messageFor, _words: words };
+module.exports = { mesimonUserFor, priorityLoginFor, mapping, notifyDemand, sweep, messageFor, MAX_FAILS, _words: words };

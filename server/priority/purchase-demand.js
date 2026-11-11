@@ -669,6 +669,16 @@ async function onPick(user, s, t, { reaction = false } = {}) {
 /** "ישראל כהן" — לשדה ‎DETAILS‎ (עד 24 תווים) */
 const detailsOf = (user) => `בוט: ${String(user?.full_name ?? '').trim()}`.slice(0, 24);
 
+/** שורת "החותם הבא" לעובד — גם כשההודעה לא יצאה, כדי שידע */
+function signerNote(r, name) {
+  if (!r.signer) return '';
+  if (r.sent) return `✍️ החותם הבא: *${name}* — קיבל הודעה בוואטסאפ.`;
+  if (r.later) return `✍️ החותם הבא: *${name}* — יקבל הודעה בוואטסאפ בשעות הפעילות.`;
+  if (r.why === 'הבוט לא שלח') return `✍️ החותם הבא: *${name}* — ההודעה אליו לא יצאה; הבוט ינסה שוב בעוד כמה דקות.`;
+  if (r.why === 'לא נמצא במשימון' || r.why === 'אין טלפון בפרופיל') return `✍️ החותם הבא: *${name}* — לא קיבל הודעה בוואטסאפ (מנהל המערכת עודכן).`;
+  return `✍️ החותם הבא: *${name}*.`;
+}
+
 async function submit(user, s) {
   const open = s.items.filter((x) => x.status === 'ask');
   if (open.length) return nextQuestion(s, ['קודם צריך לבחור לפריטים שנשארו פתוחים:', '']);
@@ -774,7 +784,7 @@ async function submit(user, s) {
     const d = await Priority.readDemand(c, prdno);
     const r = hooks.send ? await Approvals.notifyDemand(c, d, hooks.send) : { signer: Priority.nextSigner(d), user: null, sent: false };
     const name = r.user?.full_name || r.signer;
-    signerLine = !r.signer ? '' : r.sent ? `✍️ החותם הבא: *${name}* — קיבל הודעה בוואטסאפ.` : `✍️ החותם הבא: *${name}*.`;
+    signerLine = signerNote(r, name);
   } catch (err) {
     console.error('[משימון] החותם הבא לדרישת רכש:', err.message);
   }
@@ -917,4 +927,4 @@ async function step(user, s, t, file, { reaction }) {
   }
 }
 
-module.exports = { isTrigger, opens, active, pending, abandon, handle, setHooks, _parseDate: parseDate, _resolveItems: resolveItems, _ai: ai, _load: load, _clear: (userId) => clear(userId, load(userId)), _label: label, _labels: labels, _sameLabel: sameLabel };
+module.exports = { isTrigger, opens, active, pending, abandon, handle, setHooks, _parseDate: parseDate, _resolveItems: resolveItems, _ai: ai, _load: load, _clear: (userId) => clear(userId, load(userId)), _label: label, _labels: labels, _sameLabel: sameLabel, _signerNote: signerNote };
