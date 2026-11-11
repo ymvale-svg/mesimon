@@ -25,6 +25,7 @@
  *  GET /rooms               → { data: [{ id, title, meeting_count, ... }], next_cursor, has_more }
  */
 const crypto = require('crypto');
+const { AsyncLocalStorage } = require('async_hooks');
 const D = require('../core').Db;
 const secrets = require('../core').Secrets;
 const Permissions = require('../core').Permissions;
@@ -148,8 +149,19 @@ function apiError(message, { status = 0, retryable = false, code = '' } = {}) {
 //  3. Timeless מגביל בכל זאת (429) או נופל (5xx) — מוגשת התשובה האחרונה שנשמרה (עד שעתיים),
 //     ורק כשאין — ניסיון חוזר אחד אחרי ‎Retry-After‎ קצר, ואחר כך הודעה.
 const RATE_MAX = 45;            // מתחת ל-60 — מרווח לסוכנים ולאסימונים אישיים של אותו חשבון
+const BG_MAX = 20;              // עבודות רקע (סבב "איך היה?", בדיקת "לא מוקלטת") — רק עד כאן; השאר שמור למסכים
 const RATE_WINDOW_MS = 60000;
 const QUEUE_MAX_WAIT_MS = 25000; // יותר מזה — לא מחזיקים את המסך; מוגש מהמטמון או הודעה
+const BG_MAX_WAIT_MS = 10 * 60000; // עבודת רקע מחכה בסבלנות
+const bgContext = new AsyncLocalStorage();
+const blockedUntil = new Map();  // ‎tokenKey‎ ← עד מתי Timeless ביקש לחכות (‎Retry-After‎)
+
+/**
+ * עבודת רקע: הבקשות שבתוך ‎fn‎ נכנסות לתור הרקע (עד ‎BG_MAX‎ בדקה, ותמיד אחרי מסכים פתוחים),
+ * ורשימות הפגישות של עובדים נמשכות ברשימה ארגונית אחת שמשותפת לכולם (ראו ‎listMeetings‎).
+ */
+const background = (fn) => bgContext.run(true, fn);
+const inBackground = () => bgContext.getStore() === true;
 const CACHE_MAX = 600;
 const STALE_MS = 2 * 60 * 60000;
 const RETRY_429_MAX_SEC = 8;
@@ -166,18 +178,24 @@ function ttlOf(path) {
   return 0;
 }
 
-/** מחכה לתור הפנוי הבא של האסימון; ‎false‎ — ההמתנה ארוכה מדי */
-async function takeSlot(tk) {
+/**
+ * מחכה לתור הפנוי הבא של האסימון; ‎false‎ — ההמתנה ארוכה מדי. בקשת רקע נכנסת רק כשבדקה
+ * האחרונה היו פחות מ-‎BG_MAX‎ בקשות, כך שתמיד נשאר מקום לבקשה ממסך פתוח.
+ */
+async function takeSlot(tk, bg = false) {
+  const limit = bg ? BG_MAX : RATE_MAX;
+  const deadline = Date.now() + (bg ? BG_MAX_WAIT_MS : QUEUE_MAX_WAIT_MS);
   for (;;) {
     const now = Date.now();
     const list = (sent.get(tk) ?? []).filter((t) => now - t < RATE_WINDOW_MS);
-    if (list.length < RATE_MAX) {
+    sent.set(tk, list);
+    const blocked = blockedUntil.get(tk) ?? 0;
+    if (blocked <= now && list.length < limit) {
       list.push(now);
-      sent.set(tk, list);
       return true;
     }
-    const wait = list[0] + RATE_WINDOW_MS - now + 50;
-    if (wait > QUEUE_MAX_WAIT_MS) { sent.set(tk, list); return false; }
+    const wait = Math.max(blocked - now, list.length >= limit ? list[list.length - limit] + RATE_WINDOW_MS - now : 0) + 50;
+    if (now + wait > deadline) return false;
     await new Promise((r) => setTimeout(r, wait));
   }
 }
@@ -224,16 +242,16 @@ async function rawCall(token, path, query, { fresh = false } = {}) {
 }
 
 async function limited(token, tk, url) {
-  if (!(await takeSlot(tk))) {
+  if (!(await takeSlot(tk, inBackground()))) {
     throw apiError('Timeless עמוס כרגע — נסו שוב בעוד דקה.', { status: 429, retryable: true });
   }
   try {
     return await fetchOnce(token, url);
   } catch (err) {
     if (err.status !== 429) throw err;
-    // מגביל למרות התור (סוכן או מערכת אחרת על אותו חשבון) — מסמנים את הדקה כמלאה
-    sent.set(tk, Array.from({ length: RATE_MAX }, () => Date.now()));
+    // מגביל למרות התור (סוכן או מערכת אחרת על אותו חשבון) — כל הבקשות מחכות כמה ש-Timeless ביקש
     const wait = err.retryAfterSeconds ?? 2;
+    blockedUntil.set(tk, Date.now() + Math.min(wait, 120) * 1000);
     if (wait > RETRY_429_MAX_SEC) throw err;
     console.warn(`[משימון] Timeless החזיר 429 (${url.pathname}) — ניסיון חוזר בעוד ${wait} שניות`);
     await new Promise((r) => setTimeout(r, wait * 1000));
@@ -405,7 +423,9 @@ async function listMeetings(userId, { search, from, to, limit = 20, status, scop
   const emails = restrictionOf(userId);
   const out = [];
   const seen = new Set();
-  for (const participant of emails ? [...emails] : [undefined]) {
+  // עבודת רקע (סבב על כל העובדים) — רשימה ארגונית אחת, אותה כתובת לכולם, מסוננת כאן לכל עובד
+  const byParticipant = emails && !inBackground();
+  for (const participant of byParticipant ? [...emails] : [undefined]) {
     let cursor;
     for (let page = 0; page < MAX_PAGES && out.length < want; page++) {
       const body = await call(userId, '/meetings', { ...query, participant, limit: PAGE_MAX, cursor });
@@ -663,6 +683,6 @@ async function runTool(userId, name, input = {}) {
 module.exports = {
   connect, disconnect, isConnected, publicStatus, hasOrgToken: () => Boolean(orgToken()),
   listMeetings, transcript, documents, document, listRooms, recordings, recordingUrl, segments, meeting, meetingsOnDay, backgroundToken,
-  TOOLS, runTool,
+  background, TOOLS, runTool,
   BASE_URL
 };

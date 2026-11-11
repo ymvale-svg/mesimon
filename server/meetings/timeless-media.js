@@ -377,7 +377,7 @@ function start() {
   const tick = async () => {
     if (running) return;
     running = true;
-    try { await checkUnrecorded(); } catch (err) { console.error('[משימון] בדיקת הקלטות Timeless נכשלה:', err.message); } finally { running = false; }
+    try { await Timeless.background(checkUnrecorded); } catch (err) { console.error('[משימון] בדיקת הקלטות Timeless נכשלה:', err.message); } finally { running = false; }
   };
   timer = setInterval(tick, MIN);
   timer.unref?.();
