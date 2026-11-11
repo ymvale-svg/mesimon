@@ -34,6 +34,7 @@ const { BTN, labels, sameLabel } = require('../whatsapp').WaUi;
 const Prefs = require('./priority-prefs');
 const Access = require('./priority-access');
 const Chain = require('./priority-chain');
+const LineCmd = require('./line-commands');
 const Priority = require('../integrations').Priority;
 const WhatsApp = require('../integrations').Whatsapp;
 const { receiptPdf } = require('./gr-pdf');
@@ -2042,7 +2043,9 @@ async function step(user, s, t, file, allow = { gr: true, pd: false }) {
         if (l) l.order = null;
         return askLines(s);
       }
-      const out = await understandReply(s, t);
+      // "שורה 2 כמות 100" — עריכה ישירה מהמסך (או מוקלדת): בלי AI, אותו מסלול
+      const exact = LineCmd.parse(t);
+      const out = (exact && LineCmd.asReceiptReply(exact)) || await understandReply(s, t);
       if (out.action === 'unrelated') return pass(s, 'לא תשובה על השורות');
       if (out.action === 'confirm') return step(user, s, 'כן', null);
       if (out.action === 'cancel') return cancel(user, s).then((r) => ({ s: null, ...r }));
@@ -2267,7 +2270,8 @@ async function step(user, s, t, file, allow = { gr: true, pd: false }) {
         if (queueOf(s).length) return startQueued(user, s, [done]);
         return { s: null, replies: [done], status: 'ok', result: `GR סופי ${s.docno}` };
       }
-      const out = await ai.reply(s.reviewLines.map((l) => ({ line: l.n, description: l.description, qty: l.qty, options: [] })), t);
+      const exact = LineCmd.parse(t);
+      const out = (exact && LineCmd.asReceiptReply(exact)) || await ai.reply(s.reviewLines.map((l) => ({ line: l.n, description: l.description, qty: l.qty, options: [] })), t);
       if (out.action === 'unrelated') return pass(s, 'לא תשובה על הטיוטא');
       if (out.action === 'confirm') return step(user, s, 'מאשר', null);
       if (out.action === 'cancel') {
@@ -2366,6 +2370,8 @@ function view(userId) {
     order: s.order?.ordname ?? '', project: s.project ? (s.project.des || s.project.code) : (s.order?.projectDes ?? ''), warehouse: s.warehouse ?? '',
     pay: s.payCode ? Priority.payLabel(s.payCode) : '', noVat: Boolean(s.noVat), docno: s.docno ?? '',
     totals: { beforeVat: t.before_vat ?? null, vat: t.vat ?? null, total: t.total ?? null },
+    // עריכה ישירה בטבלה (‎line-commands.js‎): בהשוואת השורות ובטיוטא. תיאור בטיוטא — רק בשורות על המק"ט הכללי
+    editable: ['lines', 'review'].includes(s.step) && !s.paused ? { qty: true, description: true, remove: false } : null,
     lines
   };
 }

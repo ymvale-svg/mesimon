@@ -247,8 +247,18 @@
         ? [field('מסמך', esc([v.docType, v.docNumber].filter(Boolean).join(' '))), field('תאריך', esc(v.date)), field('חברה', company), field('ספק', v.supplier ? `${esc(v.supplier.name)}${v.supplier.guess ? ' <span class="pill p-warn">מהמסמך — לא אושר</span>' : ''}` : ''),
            field('הזמנה', esc(v.order), 'ltr-f'), field('פרויקט', esc(v.project)), field('מחסן', esc(v.warehouse), 'ltr-f'), field('תנאי תשלום', esc(v.pay)), field('GR בפריוריטי', esc(v.docno), 'ltr-f strong')]
         : [field('חברה', company), field('תאריך', esc(v.date)), field('פרויקט', esc(v.project)), field('מחסן', esc(v.warehouse), 'ltr-f'), field('דרישה בפריוריטי', esc(v.docno), 'ltr-f strong')];
-      const lines = v.lines?.length ? `<div class="scroll"><table class="t lines"><thead><tr><th>#</th><th>פריט</th><th>כמות</th>${d.key === 'receipt' ? '<th>מחיר</th>' : '<th>מק"ט</th>'}</tr></thead><tbody>
-        ${v.lines.map((l) => `<tr${l.unclear || l.open ? ' class="unclear"' : ''}><td class="num">${l.n}</td><td class="wrap">${esc(l.description)}${l.unclear ? ' <span class="pill p-warn">לא ברור</span>' : ''}${l.open ? ' <span class="pill p-warn">לבחור</span>' : ''}</td><td class="num">${num(l.qty)} ${esc(l.unit ?? '')}</td><td class="num">${d.key === 'receipt' ? num(l.price) : esc(l.part ?? '')}</td></tr>`).join('')}
+      // עריכה ישירה: כל שינוי נשלח למנוע כפקודה מדויקת ("שורה 2 כמות 100") — אותו מסלול כמו תיקון מוקלד
+      const ed = v.editable && !deskBusy ? v.editable : null;
+      const qtyCell = (l) => (ed?.qty
+        ? `<input class="cell-in num" type="number" inputmode="decimal" min="0" step="any" value="${esc(l.qty)}" data-orig="${esc(l.qty)}" data-cell="qty" data-line="${l.n}" aria-label="כמות — שורה ${l.n}: ${esc(l.description)}"> <span class="unit">${esc(l.unit ?? '')}</span>`
+        : `${num(l.qty)} ${esc(l.unit ?? '')}`);
+      const desCell = (l) => (ed?.description
+        ? `<input class="cell-in" type="text" maxlength="120" value="${esc(l.description)}" data-orig="${esc(l.description)}" data-cell="des" data-line="${l.n}" aria-label="תיאור — שורה ${l.n}">`
+        : esc(l.description));
+      const delCell = (l) => (ed?.remove
+        ? `<td><button type="button" class="btn small${confirmLine === l.n ? ' confirm' : ''}" data-del-line="${l.n}" aria-label="הסרת שורה ${l.n}: ${esc(l.description)}">${confirmLine === l.n ? 'להסיר?' : ui('x')}</button></td>` : '');
+      const lines = v.lines?.length ? `${ed ? '<p class="hint">אפשר לתקן כמות או תיאור ישירות בטבלה — Enter שומר, Esc מחזיר.</p>' : ''}<div class="scroll"><table class="t lines"><thead><tr><th>#</th><th>פריט</th><th>כמות</th>${d.key === 'receipt' ? '<th>מחיר</th>' : '<th>מק"ט</th>'}${ed?.remove ? '<th><span class="sr-only">הסרה</span></th>' : ''}</tr></thead><tbody>
+        ${v.lines.map((l) => `<tr${l.unclear || l.open ? ' class="unclear"' : ''}><td class="num">${l.n}</td><td class="wrap">${desCell(l)}${l.unclear ? ' <span class="pill p-warn">לא ברור</span>' : ''}${l.open ? ' <span class="pill p-warn">לבחור</span>' : ''}</td><td class="num qty">${qtyCell(l)}</td><td class="num">${d.key === 'receipt' ? num(l.price) : esc(l.part ?? '')}</td>${delCell(l)}</tr>`).join('')}
         </tbody></table></div>` : '';
       const totals = v.totals && v.totals.total !== null ? `<p class="totals num">לפני מע"מ ${num(v.totals.beforeVat)} · מע"מ ${num(v.totals.vat)} · <b>סה"כ ${num(v.totals.total)} ₪</b></p>` : '';
       const last = [...desk.messages].reverse().find((m) => m.from === 'bot');
@@ -267,6 +277,29 @@
           <p class="hint" id="desk-busy" role="status">${deskBusy ? 'המערכת עובדת על זה… קריאת מסמך יכולה לקחת עד דקה.' : ''}</p>
         </form>`;
       const talk = $('#talk'); talk.scrollTop = talk.scrollHeight;
+      // אחרי ציור מחדש — המקלדת חוזרת לתא שנערך
+      if (refocus) { box.querySelector(refocus)?.focus(); refocus = null; }
+    }
+
+    let confirmLine = null;
+    let refocus = null;
+    function commitCell(el) {
+      const line = Number(el.dataset.line);
+      const val = el.value.trim();
+      if (val === String(el.dataset.orig) || deskBusy) return;
+      // Enter ו-change יורים שניהם — שליחה אחת בלבד
+      const orig = el.dataset.orig;
+      el.dataset.orig = val;
+      if (el.dataset.cell === 'qty') {
+        const q = Number(val);
+        if (!val || !Number.isFinite(q) || q < 0) { el.value = orig; el.dataset.orig = orig; toast('כמות לא תקינה', true); return; }
+        refocus = `[data-cell="qty"][data-line="${line}"]`;
+        deskSend(`שורה ${line} כמות ${q}`);
+      } else {
+        if (!val) { el.value = orig; el.dataset.orig = orig; return; }
+        refocus = `[data-cell="des"][data-line="${line}"]`;
+        deskSend(`שורה ${line} תיאור: ${val.replace(/[;\n]+/g, ' ')}`);
+      }
     }
 
     async function deskLoad() {
@@ -336,6 +369,12 @@
     drop.addEventListener('click', () => { if (drop.getAttribute('aria-busy') !== 'true') $('#file-in').click(); });
     $('#file-in').addEventListener('change', (e) => { uploadFiles([...e.target.files]); e.target.value = ''; });
 
+    main.querySelector('.ws').addEventListener('change', (e) => { if (e.target.matches('.cell-in')) commitCell(e.target); });
+    main.querySelector('.ws').addEventListener('keydown', (e) => {
+      if (!e.target.matches('.cell-in')) return;
+      if (e.key === 'Escape') { e.target.value = e.target.dataset.orig; e.target.blur(); }
+      if (e.key === 'Enter') { e.preventDefault(); commitCell(e.target); }
+    });
     main.querySelector('.ws').addEventListener('submit', (e) => {
       if (e.target.id !== 'say-form') return;
       e.preventDefault();
@@ -350,6 +389,13 @@
       if (e.target.closest('[data-continue]')) { deskConflict = null; return deskLoad(); }
       const sy = e.target.closest('[data-say]');
       if (sy) return deskSend(sy.dataset.say);
+      const dl = e.target.closest('[data-del-line]');
+      if (dl) {
+        const n = Number(dl.dataset.delLine);
+        if (confirmLine !== n) { confirmLine = n; refocus = `[data-del-line="${n}"]`; return drawDesk(); }
+        confirmLine = null;
+        return deskSend(`שורה ${n} הסרה`);
+      }
       const v = e.target.closest('[data-view]');
       if (v) return preview(Number(v.dataset.view));
       const t = e.target.closest('[data-take]');

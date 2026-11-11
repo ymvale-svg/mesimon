@@ -337,3 +337,27 @@ test('יומן הבוט: מה שהזרימה ענתה נשמר (הטקסט וה�
   assert.match(row.reply, /לאיזה פרויקט/);
   assert.match(row.reply, /\[אלעד 49 צפון · נהריה מגרש 12 · /);
 });
+
+test('עריכה ישירה בטבלה: "שורה 1 כמות 4" ו"שורה 2 הסרה" — הרשימה מתעדכנת בלי AI', async (t) => {
+  H.companies(t, 'test11');
+  const u = H.worker();
+  priority(t);
+  let edits = 0;
+  H.claude(t, {
+    edit: () => { edits += 1; return { action: 'add', adds: [{ description: 'שק מלט', qty: 10, unit: 'שק', note: '' }, { description: 'בטון', qty: 5, unit: 'קוב', note: 'לתקרה' }], updates: [], removes: [], question: '' }; },
+    match: (input) => ({ results: input.items.map((it) => (it.description === 'בטון'
+      ? { line: it.line, kind: 'close', codes: ['C-30', 'C-40'], chapter: '20', topic: '20-10', why: '' }
+      : { line: it.line, kind: 'exact', codes: [it.candidates[0]?.code ?? ''], chapter: '20', topic: '20-10', why: '' })) })
+  });
+  const { say } = H.chat(t, u);
+  await toItems(say);
+  await toReview(say);
+  const before = edits;
+
+  let r = await say('שורה 1 כמות 4');
+  assert.match(r.text, /שק מלט — 4 שק/);
+  r = await say('שורה 2 הסרה');
+  assert.match(r.text, /הוסרו: שורה 2/);
+  assert.doesNotMatch(r.text, /בטון — 5 קוב/);
+  assert.equal(edits, before, 'לא נקרא AI לעריכה');
+});

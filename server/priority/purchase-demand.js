@@ -28,6 +28,7 @@ const P = require('../core').Permissions;
 const Prefs = require('./priority-prefs');
 const Access = require('./priority-access');
 const Chain = require('./priority-chain');
+const LineCmd = require('./line-commands');
 const Approvals = require('./priority-approvals');
 const { BTN, YES, NO, CANCEL, normalize, label, labels, sameLabel } = require('../whatsapp').WaUi;
 
@@ -581,8 +582,8 @@ async function onFile(user, s, file) {
   return nextQuestion(s, [`📷 קראתי ${added.length} ${added.length === 1 ? 'פריט' : 'פריטים'} מהצילום.`, '']);
 }
 
-async function onText(user, s, t) {
-  const out = await ai.edit(s.items ?? [], t);
+async function onText(user, s, t, exact = null) {
+  const out = exact ? LineCmd.asDemandEdit(exact) : await ai.edit(s.items ?? [], t);
   if (out.action === 'unrelated') return null;
   if (out.action === 'cancel') return { s: null, replies: ['דרישת הרכש בוטלה. לא נכתב דבר בפריוריטי.'], buttons: [], result: 'ביטול' };
   if (out.action === 'done' && (s.items ?? []).length) return submit(user, s);
@@ -859,6 +860,9 @@ async function step(user, s, t, file, { reaction }) {
       if (!t) return reply(s, s.lastPrompt ?? 'שלחו את רשימת הפריטים.', s.lastButtons ?? []);
       if (s.step === 'review' && (DONE.test(t) || sameLabel(t, BTN.done) || t === '👍')) return submit(user, s);
       if (s.step === 'items' && (DONE.test(t) || sameLabel(t, BTN.done))) return reply(s, 'עוד אין פריטים ברשימה. שלחו צילום, הקלטה או הקלדה של מה שצריך.', [BTN.cancel]);
+      // "שורה 2 כמות 10" — עריכה ישירה מהמסך (או מוקלדת): בלי AI
+      const exact = LineCmd.parse(t);
+      if (exact) return onText(user, s, t, exact);
       if (!Claude.isEnabled()) return reply(s, 'הבנת הרשימה דורשת חיבור AI, שעוד לא הוגדר בשרת.', [BTN.cancel]);
       return onText(user, s, t);
     }
@@ -878,6 +882,7 @@ function view(userId) {
     flow: 'demand', step: s.step, stepLabel: VIEW_STEP[s.step] ?? s.step, paused: Boolean(s.paused),
     company: s.company ? { code: s.company, name: Priority.companyOf(s.company).name, test: Priority.isTest(s.company) } : null,
     date: s.date ?? '', project: s.project ? (s.project.des || s.project.code) : '', warehouse: s.warehouse ?? '', docno: s.prdno ?? '',
+    editable: ['items', 'review'].includes(s.step) && !s.paused && !s.prdno ? { qty: true, description: true, remove: true } : null,
     lines: (s.items ?? []).map((x) => ({ n: x.n, description: x.description, qty: x.qty, unit: x.unit ?? '', part: x.part?.code ?? '', open: x.status === 'ask' }))
   };
 }
