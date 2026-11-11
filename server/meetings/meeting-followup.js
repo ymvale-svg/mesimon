@@ -485,5 +485,5 @@ function prune() {
 
 module.exports = {
   sweep, answer, openTasks, isOpenButton, digest, prune, BTN,
-  _internal: { vttText, myItems, followupFor, askText, alreadyAsked, record, ASK, BARE, norm }
+  _internal: { vttText, myItems, followupFor, askText, alreadyAsked, record, ASK, BARE, norm, timelessMatch }
 };
