@@ -138,7 +138,12 @@ test('קבלת סחורה מלאה בכפתורים: כל שאלה עם עד 3 �
   assert.equal(pr.wrote('finalizeReceipt').length, 0, 'עוד לא סופית');
   assert.equal(pr.wrote('cancelReceipt').length, 0);
 
+  // "מאשר" — שאלת אישור לפני סגירה (אחרי הסגירה אי אפשר לבטל מהבוט), ורק אחריה סופית
   r = await say(BTN.approve);
+  assert.match(r.text, /להפוך את \*GR26000123\* לסופית\?/);
+  H.assertButtons(r.buttons, [BTN.confirmFinal, BTN.backToDraft]);
+  assert.equal(pr.wrote('finalizeReceipt').length, 0, 'עוד לא נסגרה — מחכה לאישור');
+  r = await say(BTN.confirmFinal);
   assert.match(r.text, /קבלת סחורה GR26000123\* נקלטה כסופית/);
   assert.deepEqual(pr.wrote('finalizeReceipt').map((w) => w.args), [['test11', 'GR26000123']]);
   assert.equal(pr.wrote('cancelReceipt').length, 0);
@@ -148,7 +153,7 @@ test('קבלת סחורה מלאה בכפתורים: כל שאלה עם עד 3 �
   assert.equal(Prefs.warehouseFor(u.id, 'test11', 'PR2'), 'W2');
 });
 
-test('👍 על הטיוטא = מאשר: ה-GR הופך לסופי', async (t) => {
+test('👍 על הטיוטא = מאשר, ו-👍 על "להפוך לסופית?" = כן: ה-GR הופך לסופי', async (t) => {
   H.companies(t, 'test11');
   const u = H.worker();
   const pr = priority(t);
@@ -157,7 +162,10 @@ test('👍 על הטיוטא = מאשר: ה-GR הופך לסופי', async (t) =
   await toProject(say);
   await say('אלעד 49 צפון');
   await say('סיום');
-  const r = await say('👍');
+  let r = await say('👍');
+  assert.match(r.text, /לסופית\?/);
+  assert.equal(pr.wrote('finalizeReceipt').length, 0);
+  r = await say('👍');
   assert.match(r.text, /נקלטה כסופית/);
   assert.equal(pr.wrote('finalizeReceipt').length, 1);
 });
@@ -278,6 +286,7 @@ test('ברירת המחדל נלמדת: קבלה שנייה של אותו עוב
   await say('אלעד 49 צפון');
   await say(BTN.done);
   await say(BTN.approve);
+  await say(BTN.confirmFinal);
 
   r = await toProject(say);
   assert.match(r.text, /אלעד 49 צפון\* \(PR1\) — הבחירה האחרונה שלך/);
