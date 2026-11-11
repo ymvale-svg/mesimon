@@ -23,6 +23,7 @@ const WaActions = require('../whatsapp').WaActions;
 const Auth = require('../core').Auth;
 const P = require('../core').Permissions;
 const { orderPdf } = require('./po-pdf');
+const Settings = require('./priority-settings');
 const { escape, shell } = require('../core').MailTemplates;
 
 const TICK = 10 * 60 * 1000;
@@ -33,11 +34,9 @@ const BACKOFF = 6 * 60 * 60 * 1000;
 
 const WaBot = require('../whatsapp').WaBot;
 
-const finalStatuses = () => String(process.env.PO_FINAL_STATUSES || 'אושרה,נשלחה לספק').split(',').map((s) => s.trim()).filter(Boolean);
-const companies = () => {
-  const env = String(process.env.PO_NOTIFY_COMPANIES ?? '').split(',').map((s) => s.trim()).filter(Boolean);
-  return env.length ? env : Priority.COMPANIES.map((c) => c.code);
-};
+// מסך ההגדרות (‎priority-settings.js‎); עד השמירה הראשונה — ‎PO_FINAL_STATUSES‎ / ‎PO_NOTIFY_COMPANIES‎ כמו קודם
+const finalStatuses = () => Settings.defaults().poFinalStatuses;
+const companies = () => Settings.poNotifyCompanies();
 /** משתמשי מערכת / ספק התוכנה — אינם מנהלי פרויקט אמיתיים */
 const SYSTEM_LOGIN = /^(master|medatech|tabula|api\b|api\s)/i;
 const SYSTEM_MAIL = /@medatech\.com$/i;

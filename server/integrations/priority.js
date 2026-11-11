@@ -14,9 +14,14 @@
  *
  * כל הקליטות נרשמות בפריוריטי על משתמש ה-API. מי באמת קלט — בדו-שיח הפנימי
  * של המסמך ובלוג הבוט.
+ *
+ * **מסך ההגדרות (‎server/priority/priority-settings.js‎, מ-11.11.26):** כשהוא מחובר (‎configure‎ ב-‎wiring.js‎),
+ * החיבור (שרת, משתמש, סיסמה), החברות הפתוחות לכתיבה ורשימת החברות מגיעים ממנו, ולא ממשתני הסביבה.
+ * בלי חיבור (בדיקות יחידה, סקריפטים) — משתני הסביבה כמו קודם.
  */
 
-const HOST = 'https://p.priority-connect.online/odata/Priority/tabb2121.ini';
+const DEFAULT_HOST = 'p.priority-connect.online';
+const DEFAULT_INI = 'tabb2121.ini';
 const TIMEOUT = 120000;
 
 /**
@@ -51,8 +56,39 @@ const COMPANIES = [
   { code: 'test11', name: 'אשל הירדן יזום ובנין — סביבת בדיקה', vat: '', test: true }
 ];
 
-const isEnabled = () => Boolean(process.env.PRIORITY_USER && process.env.PRIORITY_PASSWORD);
-const allowed = () => String(process.env.PRIORITY_COMPANIES || 'test11').split(',').map((s) => s.trim()).filter(Boolean);
+/**
+ * ספק ההגדרות (מסך ההגדרות). ‎{ credentials() → {host, ini, user, password}, writable() → [codes] }‎.
+ * ‎null‎ — משתני הסביבה.
+ */
+let provider = null;
+function configure(p) { provider = p ?? null; }
+
+const credentials = () => {
+  const c = provider?.credentials?.() ?? null;
+  if (c) return c;
+  return { host: DEFAULT_HOST, ini: DEFAULT_INI, user: process.env.PRIORITY_USER ?? '', password: process.env.PRIORITY_PASSWORD ?? '' };
+};
+const base = () => {
+  const c = credentials();
+  return `https://${c.host || DEFAULT_HOST}/odata/Priority/${c.ini || DEFAULT_INI}`;
+};
+const isEnabled = () => { const c = credentials(); return Boolean(c.user && c.password); };
+const allowed = () => (provider?.writable
+  ? [...provider.writable()]
+  : String(process.env.PRIORITY_COMPANIES || 'test11').split(',').map((s) => s.trim()).filter(Boolean));
+
+/**
+ * רשימת החברות מתעדכנת במקום (אותו מערך שמיוצא), כדי שכל מי שמחזיק ‎COMPANIES‎ יראה את מה שנשמר במסך.
+ * ‎list‎ — ‎[{code, name, vat, sandbox?, test?}]‎.
+ */
+function syncCompanies(list) {
+  const clean = (Array.isArray(list) ? list : []).filter((c) => c?.code).map((c) => ({
+    code: String(c.code), name: String(c.name || c.code), vat: String(c.vat ?? '').replace(/\D/g, ''),
+    ...(c.sandbox ? { sandbox: String(c.sandbox) } : {}), ...(c.test ? { test: true } : {})
+  }));
+  if (!clean.length) return;
+  COMPANIES.splice(0, COMPANIES.length, ...clean);
+}
 const companyOf = (code) => COMPANIES.find((c) => c.code === code) ?? { code, name: code, vat: '' };
 const isTest = (code) => Boolean(companyOf(code).test);
 
@@ -106,7 +142,7 @@ function companyUrl(company, method = 'GET') {
   if (method === 'GET' ? !(known || allowed().includes(company)) : !allowed().includes(company)) {
     throw new Error(`החברה ${company} אינה פתוחה ${method === 'GET' ? 'לבוט' : 'לכתיבה מהבוט'} (PRIORITY_COMPANIES)`);
   }
-  return `${HOST}/${encodeURIComponent(company)}/`;
+  return `${base()}/${encodeURIComponent(company)}/`;
 }
 
 class PriorityError extends Error {}
@@ -117,8 +153,9 @@ function errorText(data, raw) {
 }
 
 async function call(company, method, path, body = null) {
-  if (!isEnabled()) throw new PriorityError('החיבור לפריוריטי אינו מוגדר בשרת (PRIORITY_USER, PRIORITY_PASSWORD)');
-  const auth = Buffer.from(`${process.env.PRIORITY_USER}:${process.env.PRIORITY_PASSWORD}`).toString('base64');
+  if (!isEnabled()) throw new PriorityError('החיבור לפריוריטי אינו מוגדר (מסך ההגדרות של משימון פריוריטי)');
+  const c = credentials();
+  const auth = Buffer.from(`${c.user}:${c.password}`).toString('base64');
   const url = companyUrl(company, method) + path;
   let res;
   try {
@@ -140,6 +177,12 @@ async function call(company, method, path, body = null) {
     throw err;
   }
   return data;
+}
+
+/** בדיקת חיבור: קריאה אחת, קטנה, מחברה מוכרת. זורק ‎PriorityError‎ כשאין חיבור או הזדהות */
+async function ping(company) {
+  await call(company, 'GET', 'SUPPLIERS?$top=1&$select=SUPNAME');
+  return true;
 }
 
 const q = (s) => String(s ?? '').replace(/'/g, "''");
@@ -976,7 +1019,7 @@ async function ordersByProject(company, projdocno, { item = '', top = 25 } = {})
 
 module.exports = {
   suppliersByWords, ordersByProject,
-  COMPANIES, isEnabled, allowed, companyOf, isTest, resolveCompany, companiesByName, PriorityError,
+  COMPANIES, DEFAULT_HOST, DEFAULT_INI, configure, syncCompanies, ping, isEnabled, allowed, companyOf, isTest, resolveCompany, companiesByName, PriorityError,
   GENERAL, NO_VAT_CODE, TAX_CODES, PAY_TERMS, DEFAULT_PAY, payTerm, payLabel, payFromText, dueDate, projectWarehouses, warehouses, warehouseExists, defaultWarehouse, supplierHistory, recentLines, partByCode, findPartsByText, searchParts, generalCoding, warehouseOf, findSuppliers, supplierByCode, findReceiptByBooknum, getOrder, openOrders, findPartExact, lastSubchapter, projects, matchProjects, readReceipt,
   finalOrders, orderForNotice, demandInitiator, projectManager, priorityUser,
   readDialog, createReceipt, addOrderLine, addFreeLine, setLineQty, setLineDes, setHeader, attach, deleteAttachment, setDialog, finalizeReceipt, cancelReceipt, receiptStatus, deleteLines,

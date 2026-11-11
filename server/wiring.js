@@ -21,4 +21,7 @@ Ports.provide('agents', require('./agents').Agents);
 Ports.provide('waBot', require('./whatsapp').WaBot);
 Ports.provide('mailPush', require('./mail').MailPush);
 
+// החיבור לפריוריטי קורא את החיבור והחברות ממסך ההגדרות של משימון פריוריטי (‎priority-settings.js‎)
+require('./priority').PrioritySettings.apply();
+
 module.exports = Ports;

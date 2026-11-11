@@ -20,6 +20,7 @@ const AiTasks = require('../tasks').AiTasks;
 const AiApi = require('./api-ai');
 const TodayApi = require('./api-today');
 const PhonebookApi = require('./api-phonebook');
+const PriorityApi = require('./api-priority');
 const MeetingsApi = require('./api-meetings');
 const WhatsNew = require('./api-whats-new');
 const Zoom = require('../integrations').Zoom;
@@ -5617,6 +5618,7 @@ AiApi.register(router, { getTaskOr404, assertVisible, mayOnTask, shapeTask, acto
   taskTemplates: (actor) => visibleTemplates(actor).filter((t) => t.kind === 'task').map(shapeTemplate) });
 TodayApi.register(router, { shapeTask, createTask, getTaskOr404, listProjectsFor, newTaskProjects, assertMayAssignTo });
 PhonebookApi.register(router);
+PriorityApi.register(router);
 WhatsNew.register(router);
 MeetingsApi.register(router, { getTaskOr404, assertVisible, shapeTask, canSeeTask });
 Tiful360.register(router, { createTask, saveAttachment, getTaskOr404 });

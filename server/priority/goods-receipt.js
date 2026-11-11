@@ -32,6 +32,7 @@ const D = require('../core').Db;
 const Claude = require('../integrations').Claude;
 const { BTN, labels, sameLabel } = require('../whatsapp').WaUi;
 const Prefs = require('./priority-prefs');
+const Access = require('./priority-access');
 const Priority = require('../integrations').Priority;
 const WhatsApp = require('../integrations').Whatsapp;
 const { receiptPdf } = require('./gr-pdf');
@@ -678,6 +679,10 @@ async function afterDocType(s) {
 
 async function resolveCompany(s) {
   const r = companyMatch(s.doc);
+  // החברה שעל המסמך אינה משויכת לעובד (מטריצת ההרשאות) — לא קולטים אליה
+  if (r.company && !Access.filterForUser(s.uid, [r.company]).length) {
+    return { s: null, replies: [`המסמך מופנה ל*${Priority.companyOf(r.company).name}* (${r.company}), ואינך משויך לחברה הזו בפריוריטי. קבלת הסחורה בוטלה — פנו למנהל המערכת.`], status: 'denied', result: `חברה לא משויכת לעובד: ${r.company}` };
+  }
   if (r.company) {
     s.company = r.company;
     s.via = r.via;
@@ -688,7 +693,8 @@ async function resolveCompany(s) {
     return { s: null, replies: [`המסמך מופנה ל*${r.matched.name}* (${r.matched.code}), שעדיין לא פתוחה לקליטה מהבוט. קבלת הסחורה בוטלה.`], status: 'denied', result: `חברה סגורה: ${r.matched.code}` };
   }
   // עותק הבדיקה אינו אפשרות לעובד (רק כשהוא היחיד שפתוח). חברות ששמן דומה לנמען — ראשונות
-  const all = Priority.allowed();
+  const all = Access.filterForUser(s.uid, Priority.allowed());
+  if (!all.length) return { s: null, replies: ['אינך משויך לאף חברה בפריוריטי. פנו למנהל המערכת.'], status: 'denied', result: 'אין חברות למשתמש (מטריצת ההרשאות)' };
   const real = all.filter((c) => !Priority.isTest(c));
   const near = new Set(Priority.companiesByName(String(s.doc.recipient_name ?? '').split(/\s+/).slice(0, 2).join(' ')).map((c) => c.code));
   const open = (real.length ? real : all).sort((a, b) => Number(near.has(b)) - Number(near.has(a)));
@@ -1158,7 +1164,7 @@ async function listWarehouses(s) {
 async function createDraft(user, s) {
   const c = s.company;
   // החברה נסגרה לכתיבה (PRIORITY_COMPANIES) מאז שהקליטה התחילה — לא כותבים כלום, וגם לא מנסים מחסנים אחרים
-  if (!Priority.allowed().includes(c)) return { closed: true };
+  if (!Priority.allowed().includes(c) || !Access.filterForUser(s.uid, [c]).length) return { closed: true };
   // המחסן — נבדק מול מסך המחסנים לפני הקליטה; פריוריטי בכל זאת דוחה אותו — Main
   if (!s.warehouse || !(await Priority.warehouseExists(c, s.warehouse).catch(() => true))) s.warehouse = await Priority.warehouseOf(c, s.project?.code);
   const head = { supname: s.supplier.code, booknum: s.doc.doc_number, date: s.doc.date || null, project: s.project?.code, warehouse: s.warehouse, payCode: s.payCode ?? Priority.DEFAULT_PAY };
@@ -1302,7 +1308,7 @@ function writeDialog(user, s) {
 async function draftAndShow(user, s) {
   const r = await createDraft(user, s);
   if (r?.closed) {
-    alertAdmins(user, s, 'החברה אינה פתוחה לכתיבה', [`${s.company} אינה ב-PRIORITY_COMPANIES (${process.env.PRIORITY_COMPANIES ?? ''}) — הקבלה לא נכתבה לפריוריטי.`]);
+    alertAdmins(user, s, 'החברה אינה פתוחה לכתיבה', [`${s.company} אינה פתוחה לכתיבה במסך ההגדרות של משימון פריוריטי, או שאינה משויכת לעובד (פתוחות: ${Priority.allowed().join(',') || '—'}) — הקבלה לא נכתבה לפריוריטי.`]);
     s.step = 'files';
     const c = Priority.companyOf(s.company);
     return reply(s, `הקבלה לא נקלטה: *${c.name.replace(/ — .*/, '')}* (${s.company}) עדיין לא פתוחה לקליטה מהבוט. מנהל המערכת קיבל הודעה. הכל שמור — כתבו *סיום* כדי לנסות שוב מאוחר יותר, או *ביטול*.`,

@@ -20,6 +20,7 @@ const D = require('../core').Db;
 const Priority = require('../integrations').Priority;
 const Auth = require('../core').Auth;
 const P = require('../core').Permissions;
+const Settings = require('./priority-settings');
 
 const NOTIFIED = 'pd_approval_notified';
 const UNMAPPED = 'pd_approval_unmapped';
@@ -86,11 +87,8 @@ async function mapping() {
   return out;
 }
 
-const companies = () => {
-  const v = D.getSetting('pd_notify_companies', null);
-  if (Array.isArray(v) && v.length) return v;
-  return [...new Set([...Priority.COMPANIES.filter((c) => !c.test).map((c) => c.code), ...Priority.allowed()])];
-};
+// מסך ההגדרות (‎priority-settings.js‎); עד השמירה הראשונה — ‎pd_notify_companies‎, או כל האמיתיות + הפתוחות לכתיבה
+const companies = () => Settings.pdNotifyCompanies();
 
 function messageFor(company, d, owner) {
   const c = Priority.companyOf(company);

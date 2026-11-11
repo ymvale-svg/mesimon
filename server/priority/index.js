@@ -11,6 +11,8 @@ module.exports = {
   get GrPdf() { return require('./gr-pdf'); },
   get PurchaseDemand() { return require('./purchase-demand'); },
   get PriorityPrefs() { return require('./priority-prefs'); },
+  get PrioritySettings() { return require('./priority-settings'); },
+  get PriorityAccess() { return require('./priority-access'); },
   get PriorityApprovals() { return require('./priority-approvals'); },
   get PoNotify() { return require('./po-notify'); },
   get PoPdf() { return require('./po-pdf'); },

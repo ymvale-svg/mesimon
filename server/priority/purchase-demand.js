@@ -26,6 +26,7 @@ const WhatsApp = require('../integrations').Whatsapp;
 const Auth = require('../core').Auth;
 const P = require('../core').Permissions;
 const Prefs = require('./priority-prefs');
+const Access = require('./priority-access');
 const Approvals = require('./priority-approvals');
 const { BTN, YES, NO, CANCEL, normalize, label, labels, sameLabel } = require('../whatsapp').WaUi;
 
@@ -330,7 +331,8 @@ function showList(s, pre = []) {
 // ---------------------------------------------------------------------------
 
 // רק קודים של חברות מוכרות — ערך אחר ב-PRIORITY_COMPANIES (שגיאת הקלדה, ‎__none__‎) אינו סביבה
-const writable = () => Priority.allowed().filter((c) => Priority.COMPANIES.some((x) => x.code === c));
+// ועם ‎uid‎ — רק החברות שהעובד משויך אליהן (מטריצת ההרשאות, ‎priority-access.js‎)
+const writable = (uid = null) => Access.filterForUser(uid, Priority.allowed().filter((c) => Priority.COMPANIES.some((x) => x.code === c)));
 
 /**
  * באיזו סביבה (חברה)? כשפתוחות הרבה חברות — כפתורים לשלוש: החברות שבהן העובד פתח דרישות לאחרונה (לפי שם המשתמש שלו
@@ -338,7 +340,7 @@ const writable = () => Priority.allowed().filter((c) => Priority.COMPANIES.some(
  */
 const companyName = (c) => (Priority.isTest(c) ? `🧪 ${c}` : Priority.companyOf(c).name.replace(/ — .*/, ''));
 async function suggestCompanies(s) {
-  const list = writable();
+  const list = writable(s.uid);
   if (list.length <= 3) return list;
   const login = await Approvals.priorityLoginFor({ id: s.uid }).catch(() => null);
   if (login) {
@@ -358,7 +360,7 @@ async function askCompany(s, pre = [], options = null, head = '🏢 *באיזו 
   const opts = (options ?? await suggestCompanies(s)).slice(0, 3);
   const btns = labels(opts.map(companyName));
   s.companyOptions = opts.map((c, i) => ({ code: c, btn: btns[i] }));
-  const many = !options && writable().length > 3;
+  const many = !options && writable(s.uid).length > 3;
   return reply(s, [...pre, head, ...opts.map((c) => `• ${companyName(c)} (${c})`), many ? 'או כתבו את שם החברה ("אלעד", "דניה", "מורדות").' : null].filter(Boolean).join('\n'), btns);
 }
 
@@ -367,7 +369,7 @@ function pickCompany(s, t) {
   const n = String(t ?? '').trim();
   const byBtn = (s.companyOptions ?? []).find((x) => sameLabel(n, x.btn));
   if (byBtn) return { code: byBtn.code };
-  const list = writable();
+  const list = writable(s.uid);
   if (list.includes(n)) return { code: n };
   if (n.length < 2) return null;
   const norm = (x) => normalize(x).replace(/["'״׳]/g, '').replace(/יי/g, 'י').replace(/וו/g, 'ו');
@@ -475,7 +477,7 @@ async function headerCommand(s, t) {
     return back(s, `📅 התאריך עודכן ל-*${ymdHe(d)}*.`);
   }
   if (COMPANY_CMD.test(t)) {
-    if (writable().length < 2) return back(s, `${companyLine(s.company)}\nזו הסביבה היחידה שפתוחה לדרישות מהבוט.`);
+    if (writable(s.uid).length < 2) return back(s, `${companyLine(s.company)}\nזו הסביבה היחידה שפתוחה לדרישות מהבוט.`);
     s.company = null; s.project = null; s.warehouse = null; s.noPref = false; s.demandCode = undefined;
     return askCompany(s);
   }
@@ -643,7 +645,7 @@ async function submit(user, s) {
   const open = s.items.filter((x) => x.status === 'ask');
   if (open.length) return nextQuestion(s, ['קודם צריך לבחור לפריטים שנשארו פתוחים:', '']);
   const c = s.company;
-  if (!writable().includes(c)) return reply(s, 'הסביבה הזו אינה פתוחה לכתיבה מהבוט. כתבו *סביבה* לבחירת סביבה אחרת, או *ביטול*.', [BTN.cancel]);
+  if (!writable(user.id).includes(c)) return reply(s, 'הסביבה הזו אינה פתוחה לכתיבה מהבוט. כתבו *סביבה* לבחירת סביבה אחרת, או *ביטול*.', [BTN.cancel]);
   let prdno;
   // הבעלים בפריוריטי — העובד עצמו (לפי המייל / השם במסך המשתמשים); לא נמצא — משתמש ה-API, והשם בדו-שיח
   const owner = await Approvals.priorityLoginFor(user).catch(() => null);
@@ -733,7 +735,7 @@ async function submit(user, s) {
 
 async function start(user, pre = []) {
   const s = { step: 'start', uid: user.id, startedAt: Date.now(), date: today(), items: [], files: [] };
-  const list = writable();
+  const list = writable(user.id);
   const last = Prefs.lastCompany(user.id);
   if (last && list.includes(last)) s.company = last;
   else if (list.length === 1) s.company = list[0];
@@ -750,7 +752,8 @@ async function handle({ user, text = '', file = null, reaction = false, voice = 
   let s = load(user.id);
   if (s && !fresh(s)) { clear(user.id, s); s = null; }
   if (!Priority.isEnabled()) return { replies: ['החיבור לפריוריטי עוד לא הוגדר בשרת. פנו למנהל המערכת.'], status: 'error', result: 'פריוריטי לא מוגדר' };
-  if (!writable().length) return { replies: ['אין סביבה שפתוחה לכתיבה מהבוט. פנו למנהל המערכת.'], status: 'error', result: `PRIORITY_COMPANIES בלי חברה מוכרת (${process.env.PRIORITY_COMPANIES ?? ''})` };
+  if (!writable().length) return { replies: ['אין סביבה שפתוחה לכתיבה מהבוט. פנו למנהל המערכת.'], status: 'error', result: `אין חברה פתוחה לכתיבה (${Priority.allowed().join(',') || '—'})` };
+  if (!writable(user.id).length) return { replies: ['אינך משויך לאף חברה בפריוריטי. פנו למנהל המערכת.'], status: 'denied', result: 'אין חברות למשתמש (מטריצת ההרשאות)' };
   const heard = voice && t ? [`🎙 *שמעתי:* "${t}"`, ''] : [];
 
   // "דרישת רכש" — התחלה (או המשך של דרישה פתוחה)
