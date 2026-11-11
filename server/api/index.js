@@ -11,6 +11,7 @@ module.exports = {
   get ApiAi() { return require('./api-ai'); },
   get ApiMeetings() { return require('./api-meetings'); },
   get ApiPhonebook() { return require('./api-phonebook'); },
+  get ApiPriority() { return require('./api-priority'); },
   get ApiToday() { return require('./api-today'); },
   get ApiWhatsNew() { return require('./api-whats-new'); }
 };

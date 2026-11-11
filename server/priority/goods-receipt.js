@@ -32,6 +32,9 @@ const D = require('../core').Db;
 const Claude = require('../integrations').Claude;
 const { BTN, labels, sameLabel } = require('../whatsapp').WaUi;
 const Prefs = require('./priority-prefs');
+const Access = require('./priority-access');
+const Chain = require('./priority-chain');
+const LineCmd = require('./line-commands');
 const Priority = require('../integrations').Priority;
 const WhatsApp = require('../integrations').Whatsapp;
 const { receiptPdf } = require('./gr-pdf');
@@ -679,6 +682,10 @@ async function afterDocType(s) {
 
 async function resolveCompany(s) {
   const r = companyMatch(s.doc);
+  // החברה שעל המסמך אינה משויכת לעובד (מטריצת ההרשאות) — לא קולטים אליה
+  if (r.company && !Access.filterForUser(s.uid, [r.company]).length) {
+    return { s: null, replies: [`המסמך מופנה ל*${Priority.companyOf(r.company).name}* (${r.company}), ואינך משויך לחברה הזו בפריוריטי. קבלת הסחורה בוטלה — פנו למנהל המערכת.`], status: 'denied', result: `חברה לא משויכת לעובד: ${r.company}` };
+  }
   if (r.company) {
     s.company = r.company;
     s.via = r.via;
@@ -689,7 +696,8 @@ async function resolveCompany(s) {
     return { s: null, replies: [`המסמך מופנה ל*${r.matched.name}* (${r.matched.code}), שעדיין לא פתוחה לקליטה מהבוט. קבלת הסחורה בוטלה.`], status: 'denied', result: `חברה סגורה: ${r.matched.code}` };
   }
   // עותק הבדיקה אינו אפשרות לעובד (רק כשהוא היחיד שפתוח). חברות ששמן דומה לנמען — ראשונות
-  const all = Priority.allowed();
+  const all = Access.filterForUser(s.uid, Priority.allowed());
+  if (!all.length) return { s: null, replies: ['אינך משויך לאף חברה בפריוריטי. פנו למנהל המערכת.'], status: 'denied', result: 'אין חברות למשתמש (מטריצת ההרשאות)' };
   const real = all.filter((c) => !Priority.isTest(c));
   const near = new Set(Priority.companiesByName(String(s.doc.recipient_name ?? '').split(/\s+/).slice(0, 2).join(' ')).map((c) => c.code));
   const open = (real.length ? real : all).sort((a, b) => Number(near.has(b)) - Number(near.has(a)));
@@ -1180,7 +1188,7 @@ async function listWarehouses(s) {
 async function createDraft(user, s) {
   const c = s.company;
   // החברה נסגרה לכתיבה (PRIORITY_COMPANIES) מאז שהקליטה התחילה — לא כותבים כלום, וגם לא מנסים מחסנים אחרים
-  if (!Priority.allowed().includes(c)) return { closed: true };
+  if (!Priority.allowed().includes(c) || !Access.filterForUser(s.uid, [c]).length) return { closed: true };
   // המחסן — נבדק מול מסך המחסנים לפני הקליטה; פריוריטי בכל זאת דוחה אותו — Main
   if (!s.warehouse || !(await Priority.warehouseExists(c, s.warehouse).catch(() => true))) s.warehouse = await Priority.warehouseOf(c, s.project?.code);
   const head = { supname: s.supplier.code, booknum: s.doc.doc_number, date: s.doc.date || null, project: s.project?.code, warehouse: s.warehouse, payCode: s.payCode ?? Priority.DEFAULT_PAY };
@@ -1213,6 +1221,7 @@ async function createDraft(user, s) {
   }
   s.docno = docno;
   markOpened(user.id);
+  Chain.progress(user.id, 'receipt', { stage: 'draft', docno, company: c, supplier: s.supplier?.name ?? '' });
   // פריוריטי מציב בפתיחה את מחסן הפרויקט, גם כשנשלח מחסן אחר — מעדכנים למחסן שנבחר (לפני השורות, שיורשות אותו)
   if (s.warehouse) await Priority.setHeader(c, docno, { TOWARHSNAME: s.warehouse }).catch((err) => console.error(`[משימון] מחסן ${s.warehouse} ל-${docno}:`, err.message));
   rememberPrefs(user.id, s);
@@ -1325,7 +1334,7 @@ function writeDialog(user, s) {
 async function draftAndShow(user, s) {
   const r = await createDraft(user, s);
   if (r?.closed) {
-    alertAdmins(user, s, 'החברה אינה פתוחה לכתיבה', [`${s.company} אינה ב-PRIORITY_COMPANIES (${process.env.PRIORITY_COMPANIES ?? ''}) — הקבלה לא נכתבה לפריוריטי.`]);
+    alertAdmins(user, s, 'החברה אינה פתוחה לכתיבה', [`${s.company} אינה פתוחה לכתיבה במסך ההגדרות של משימון פריוריטי, או שאינה משויכת לעובד (פתוחות: ${Priority.allowed().join(',') || '—'}) — הקבלה לא נכתבה לפריוריטי.`]);
     s.step = 'files';
     const c = Priority.companyOf(s.company);
     return reply(s, `הקבלה לא נקלטה: *${c.name.replace(/ — .*/, '')}* (${s.company}) עדיין לא פתוחה לקליטה מהבוט. מנהל המערכת קיבל הודעה. הכל שמור — כתבו *סיום* כדי לנסות שוב מאוחר יותר, או *ביטול*.`,
@@ -1703,6 +1712,8 @@ async function cancel(user, s, why = 'בוטלה') {
       alertAdmins(user, s, 'טיוטא לא בוטלה', [`הטיוטא נשארה בפריוריטי; שורות מהזמנה תופסות יתרה עד שתבוטל.`, err.message]);
     }
   }
+  // גם בלי טיוטא — מסמך שנשלח לבוט מהמסך יוצא מ"בטיפול בבוט"
+  Chain.progress(user.id, 'receipt', { stage: 'cancelled', docno: s?.docno ?? '', company: s?.company ?? '' });
   clear(user.id, s);
   return { replies: [`קבלת הסחורה ${why}.${note}`], status: 'ok', result: `ביטול${s?.docno ? ` ${s.docno}` : ''}` };
 }
@@ -2063,7 +2074,9 @@ async function step(user, s, t, file, allow = { gr: true, pd: false }) {
         if (l) l.order = null;
         return askLines(s);
       }
-      const out = await understandReply(s, t);
+      // "שורה 2 כמות 100" — עריכה ישירה מהמסך (או מוקלדת): בלי AI, אותו מסלול
+      const exact = LineCmd.parse(t);
+      const out = (exact && LineCmd.asReceiptReply(exact)) || await understandReply(s, t);
       if (out.action === 'unrelated') return pass(s, 'לא תשובה על השורות');
       if (out.action === 'confirm') return step(user, s, 'כן', null);
       if (out.action === 'cancel') return cancel(user, s).then((r) => ({ s: null, ...r }));
@@ -2291,11 +2304,13 @@ async function step(user, s, t, file, allow = { gr: true, pd: false }) {
         }
         // ה-GR האחרון שהפך לסופי — ל-👎 שנשלח מיד אחר כך (פריוריטי לא מחזיר סופית לטיוטא דרך ה-API)
         D.setSetting(doneKey(user.id), { docno: s.docno, company: s.company, supplier: s.supplier?.name ?? '', at: Date.now() });
+        Chain.progress(user.id, 'receipt', { stage: 'done', docno: s.docno, company: s.company, supplier: s.supplier?.name ?? '' });
         const done = `✅ *קבלת סחורה ${s.docno}* נקלטה כסופית.\n${companyLine(s)}\nספק: ${s.supplier.name}${s.order ? ` · הזמנה ${s.order.ordname}` : ''}`;
         if (queueOf(s).length) return startQueued(user, s, [done]);
         return { s: null, replies: [done], status: 'ok', result: `GR סופי ${s.docno}` };
       }
-      const out = await ai.reply(s.reviewLines.map((l) => ({ line: l.n, description: l.description, qty: l.qty, options: [] })), t);
+      const exact = LineCmd.parse(t);
+      const out = (exact && LineCmd.asReceiptReply(exact)) || await ai.reply(s.reviewLines.map((l) => ({ line: l.n, description: l.description, qty: l.qty, options: [] })), t);
       if (out.action === 'unrelated') return pass(s, 'לא תשובה על הטיוטא');
       if (out.action === 'confirm') return step(user, s, 'מאשר', null);
       if (out.action === 'cancel') {
@@ -2369,4 +2384,38 @@ const inMenu = (userId) => { const s = load(userId); return Boolean(fresh(s) && 
 /** בחירה בזרימה אחרת (דרישת רכש) — התפריט יורד */
 function dropMenu(userId) { const s = load(userId); if (s?.step === 'menu') clear(userId, s); }
 
-module.exports = { everOpened, markOpened, inMenu, dropMenu, isTrigger, isPriority, opens, active, pending, pausedNote, abandon, switchCancels, wantsUndoFinal, handle, sweep, _jpegToPdf: jpegToPdf, _codeLines: codeLines, _orderDiffs: orderDiffs, _similarLines: similarLines, _askParts: askParts, _projectsOf: projectsOf, _findProjects: findProjects, _ai: ai, _load: load, _clear: (userId) => clear(userId, load(userId)) };
+/**
+ * 🗂 תצוגה למסך של משימון פריוריטי (‎priority-desk.js‎) — מה שהבוט יודע עכשיו על הקליטה, כנתונים ולא כטקסט.
+ * קריאה בלבד: לא משנה את המצב. ‎null‎ — אין קליטה פתוחה.
+ */
+const VIEW_STEP = {
+  offer: 'מסמך מהמייל', doc: 'קריאת המסמך', doctype: 'סוג המסמך', company: 'חברה', supplier: 'ספק', order: 'הזמנה',
+  lines: 'השוואת שורות', parts: 'פריטים בלי הזמנה', project: 'פרויקט', warehouse: 'מחסן', header: 'פרטי הכותרת',
+  files: 'נספחים', review: 'טיוטא בפריוריטי — מחכה ל"מאשר"'
+};
+function view(userId) {
+  const s = load(userId);
+  if (!s || !fresh(s)) return null;
+  const d = s.doc ?? {};
+  const t = d.totals ?? {};
+  const lines = s.step === 'review' && s.reviewLines?.length
+    ? s.reviewLines.map((l) => ({ n: l.n, description: l.description, qty: l.qty }))
+    : (s.lines ?? []).map((l) => ({ n: l.n, description: l.description, qty: l.qty, unit: l.unit ?? '', price: l.price ?? null, unclear: Boolean(l.unclear || l.handwritten) }));
+  return {
+    flow: 'receipt', step: s.step, stepLabel: VIEW_STEP[s.step] ?? s.step, paused: Boolean(s.paused),
+    docType: s.doc ? docName(d) : '', docNumber: d.doc_number ?? '', date: d.date ?? '',
+    company: s.company ? { code: s.company, name: Priority.companyOf(s.company).name, test: Priority.isTest(s.company) } : null,
+    supplier: s.supplier ? { code: s.supplier.code, name: s.supplier.name } : (d.supplier_name ? { code: '', name: d.supplier_name, guess: true } : null),
+    order: s.order?.ordname ?? '', project: s.project ? (s.project.des || s.project.code) : (s.order?.projectDes ?? ''), warehouse: s.warehouse ?? '',
+    pay: s.payCode ? Priority.payLabel(s.payCode) : '', noVat: Boolean(s.noVat), docno: s.docno ?? '',
+    totals: { beforeVat: t.before_vat ?? null, vat: t.vat ?? null, total: t.total ?? null },
+    // עריכה ישירה בטבלה (‎line-commands.js‎): בהשוואת השורות ובטיוטא. תיאור בטיוטא — רק בשורות על המק"ט הכללי
+    editable: ['lines', 'review'].includes(s.step) && !s.paused ? { qty: true, description: true, remove: false } : null,
+    // נספחים: הקובץ הראשון הוא המסמך עצמו. מתי אפשר לצרף מהמסך — בשלב הנספחים ובטיוטא
+    attachments: Math.max(0, (s.files ?? []).length - 1),
+    canAttach: ['files', 'review'].includes(s.step) && !s.paused,
+    lines
+  };
+}
+
+module.exports = { view, everOpened, markOpened, inMenu, dropMenu, isTrigger, isPriority, opens, active, pending, pausedNote, abandon, switchCancels, wantsUndoFinal, handle, sweep, _jpegToPdf: jpegToPdf, _codeLines: codeLines, _orderDiffs: orderDiffs, _similarLines: similarLines, _askParts: askParts, _projectsOf: projectsOf, _findProjects: findProjects, _ai: ai, _load: load, _clear: (userId) => clear(userId, load(userId)) };

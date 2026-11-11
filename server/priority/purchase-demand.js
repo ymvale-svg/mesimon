@@ -26,6 +26,9 @@ const WhatsApp = require('../integrations').Whatsapp;
 const Auth = require('../core').Auth;
 const P = require('../core').Permissions;
 const Prefs = require('./priority-prefs');
+const Access = require('./priority-access');
+const Chain = require('./priority-chain');
+const LineCmd = require('./line-commands');
 const Approvals = require('./priority-approvals');
 const { BTN, YES, NO, CANCEL, normalize, label, labels, sameLabel } = require('../whatsapp').WaUi;
 
@@ -360,7 +363,8 @@ function showList(s, pre = []) {
 // ---------------------------------------------------------------------------
 
 // רק קודים של חברות מוכרות — ערך אחר ב-PRIORITY_COMPANIES (שגיאת הקלדה, ‎__none__‎) אינו סביבה
-const writable = () => Priority.allowed().filter((c) => Priority.COMPANIES.some((x) => x.code === c));
+// ועם ‎uid‎ — רק החברות שהעובד משויך אליהן (מטריצת ההרשאות, ‎priority-access.js‎)
+const writable = (uid = null) => Access.filterForUser(uid, Priority.allowed().filter((c) => Priority.COMPANIES.some((x) => x.code === c)));
 
 /**
  * באיזו סביבה (חברה)? כשפתוחות הרבה חברות — כפתורים לשלוש: החברות שבהן העובד פתח דרישות לאחרונה (לפי שם המשתמש שלו
@@ -368,7 +372,7 @@ const writable = () => Priority.allowed().filter((c) => Priority.COMPANIES.some(
  */
 const companyName = (c) => (Priority.isTest(c) ? `🧪 ${c}` : Priority.companyOf(c).name.replace(/ — .*/, ''));
 async function suggestCompanies(s) {
-  const list = writable();
+  const list = writable(s.uid);
   if (list.length <= 3) return list;
   const login = await Approvals.priorityLoginFor({ id: s.uid }).catch(() => null);
   if (login) {
@@ -388,7 +392,7 @@ async function askCompany(s, pre = [], options = null, head = '🏢 *באיזו 
   const opts = (options ?? await suggestCompanies(s)).slice(0, 3);
   const btns = labels(opts.map(companyName));
   s.companyOptions = opts.map((c, i) => ({ code: c, btn: btns[i] }));
-  const many = !options && writable().length > 3;
+  const many = !options && writable(s.uid).length > 3;
   return reply(s, [...pre, head, ...opts.map((c) => `• ${companyName(c)} (${c})`), many ? 'או כתבו את שם החברה ("אלעד", "דניה", "מורדות").' : null].filter(Boolean).join('\n'), btns);
 }
 
@@ -397,7 +401,7 @@ function pickCompany(s, t) {
   const n = String(t ?? '').trim();
   const byBtn = (s.companyOptions ?? []).find((x) => sameLabel(n, x.btn));
   if (byBtn) return { code: byBtn.code };
-  const list = writable();
+  const list = writable(s.uid);
   if (list.includes(n)) return { code: n };
   if (n.length < 2) return null;
   const norm = (x) => normalize(x).replace(/["'״׳]/g, '').replace(/יי/g, 'י').replace(/וו/g, 'ו');
@@ -505,7 +509,7 @@ async function headerCommand(s, t) {
     return back(s, `📅 התאריך עודכן ל-*${ymdHe(d)}*.`);
   }
   if (COMPANY_CMD.test(t)) {
-    if (writable().length < 2) return back(s, `${companyLine(s.company)}\nזו הסביבה היחידה שפתוחה לדרישות מהבוט.`);
+    if (writable(s.uid).length < 2) return back(s, `${companyLine(s.company)}\nזו הסביבה היחידה שפתוחה לדרישות מהבוט.`);
     s.company = null; s.project = null; s.warehouse = null; s.noPref = false; s.demandCode = undefined;
     return askCompany(s);
   }
@@ -608,8 +612,8 @@ async function onFile(user, s, file) {
   return nextQuestion(s, [`📷 קראתי ${added.length} ${added.length === 1 ? 'פריט' : 'פריטים'} מהצילום.`, '']);
 }
 
-async function onText(user, s, t) {
-  const out = await ai.edit(s.items ?? [], t);
+async function onText(user, s, t, exact = null) {
+  const out = exact ? LineCmd.asDemandEdit(exact) : await ai.edit(s.items ?? [], t);
   if (out.action === 'unrelated') return null;
   if (out.action === 'cancel') return { s: null, replies: ['דרישת הרכש בוטלה. לא נכתב דבר בפריוריטי.'], buttons: [], result: 'ביטול' };
   if (out.action === 'done' && (s.items ?? []).length) return submit(user, s);
@@ -673,7 +677,7 @@ async function submit(user, s) {
   const open = s.items.filter((x) => x.status === 'ask');
   if (open.length) return nextQuestion(s, ['קודם צריך לבחור לפריטים שנשארו פתוחים:', '']);
   const c = s.company;
-  if (!writable().includes(c)) return reply(s, 'הסביבה הזו אינה פתוחה לכתיבה מהבוט. כתבו *סביבה* לבחירת סביבה אחרת, או *ביטול*.', [BTN.cancel]);
+  if (!writable(user.id).includes(c)) return reply(s, 'הסביבה הזו אינה פתוחה לכתיבה מהבוט. כתבו *סביבה* לבחירת סביבה אחרת, או *ביטול*.', [BTN.cancel]);
   let prdno;
   // הבעלים בפריוריטי — העובד עצמו (לפי המייל / השם במסך המשתמשים); לא נמצא — משתמש ה-API, והשם בדו-שיח
   const owner = await Approvals.priorityLoginFor(user).catch(() => null);
@@ -714,6 +718,7 @@ async function submit(user, s) {
   }
   s.prdno = prdno;
   save(user.id, s);
+  Chain.progress(user.id, 'demand', { stage: 'draft', docno: prdno, company: c, supplier: s.project?.des ?? '' });
   const problems = [];
   const gen = await generalPair(s);
   for (const it of s.items) {
@@ -768,6 +773,7 @@ async function submit(user, s) {
     return { s: null, replies: [[`📝 *דרישת רכש ${prdno}* נפתחה בפריוריטי (${s.items.length} ${s.items.length === 1 ? 'פריט' : 'פריטים'}), אבל עוד *לא עברה לאישור* — חסרה הגדרה בפריוריטי.`,
       'מנהל המערכת קיבל פירוט ויעביר אותה לאישור.', companyLine(c)].join('\n')], buttons: [], status: 'error', result: `${prdno} טיוטא: ${err.message}` };
   }
+  Chain.progress(user.id, 'demand', { stage: 'waiting', docno: prdno, company: c });
   // החותם הבא — הודעה בוואטסאפ
   let signerLine = '';
   try {
@@ -789,7 +795,7 @@ async function submit(user, s) {
 
 async function start(user, pre = []) {
   const s = { step: 'start', uid: user.id, startedAt: Date.now(), date: today(), items: [], files: [] };
-  const list = writable();
+  const list = writable(user.id);
   const last = Prefs.lastCompany(user.id);
   if (last && list.includes(last)) s.company = last;
   else if (list.length === 1) s.company = list[0];
@@ -806,7 +812,8 @@ async function handle({ user, text = '', file = null, reaction = false, voice = 
   let s = load(user.id);
   if (s && !fresh(s)) { clear(user.id, s); s = null; }
   if (!Priority.isEnabled()) return { replies: ['החיבור לפריוריטי עוד לא הוגדר בשרת. פנו למנהל המערכת.'], status: 'error', result: 'פריוריטי לא מוגדר' };
-  if (!writable().length) return { replies: ['אין סביבה שפתוחה לכתיבה מהבוט. פנו למנהל המערכת.'], status: 'error', result: `PRIORITY_COMPANIES בלי חברה מוכרת (${process.env.PRIORITY_COMPANIES ?? ''})` };
+  if (!writable().length) return { replies: ['אין סביבה שפתוחה לכתיבה מהבוט. פנו למנהל המערכת.'], status: 'error', result: `אין חברה פתוחה לכתיבה (${Priority.allowed().join(',') || '—'})` };
+  if (!writable(user.id).length) return { replies: ['אינך משויך לאף חברה בפריוריטי. פנו למנהל המערכת.'], status: 'denied', result: 'אין חברות למשתמש (מטריצת ההרשאות)' };
   const heard = voice && t ? [`🎙 *שמעתי:* "${t}"`, ''] : [];
 
   // "דרישת רכש" — התחלה (או המשך של דרישה פתוחה)
@@ -909,6 +916,9 @@ async function step(user, s, t, file, { reaction }) {
       if (!t) return reply(s, s.lastPrompt ?? 'שלחו את רשימת הפריטים.', s.lastButtons ?? []);
       if (s.step === 'review' && (DONE.test(t) || sameLabel(t, BTN.done) || t === '👍')) return submit(user, s);
       if (s.step === 'items' && (DONE.test(t) || sameLabel(t, BTN.done))) return reply(s, 'עוד אין פריטים ברשימה. שלחו צילום, הקלטה או הקלדה של מה שצריך.', [BTN.cancel]);
+      // "שורה 2 כמות 10" — עריכה ישירה מהמסך (או מוקלדת): בלי AI
+      const exact = LineCmd.parse(t);
+      if (exact) return onText(user, s, t, exact);
       if (!Claude.isEnabled()) return reply(s, 'הבנת הרשימה דורשת חיבור AI, שעוד לא הוגדר בשרת.', [BTN.cancel]);
       return onText(user, s, t);
     }
@@ -917,4 +927,23 @@ async function step(user, s, t, file, { reaction }) {
   }
 }
 
-module.exports = { isTrigger, opens, active, pending, abandon, handle, setHooks, _parseDate: parseDate, _resolveItems: resolveItems, _ai: ai, _load: load, _clear: (userId) => clear(userId, load(userId)), _label: label, _labels: labels, _sameLabel: sameLabel };
+/**
+ * 🗂 תצוגה למסך של משימון פריוריטי (‎priority-desk.js‎) — הדרישה כפי שהיא עכשיו, כנתונים. קריאה בלבד.
+ */
+const VIEW_STEP = { start: 'פתיחה', company: 'חברה', project: 'פרויקט', warehouse: 'מחסן', code: 'סוג דרישה', items: 'רשימת הפריטים', pick: 'בחירת פריט', review: 'לפני שליחה לאישור' };
+function view(userId) {
+  const s = load(userId);
+  if (!s || !fresh(s)) return null;
+  return {
+    flow: 'demand', step: s.step, stepLabel: VIEW_STEP[s.step] ?? s.step, paused: Boolean(s.paused),
+    company: s.company ? { code: s.company, name: Priority.companyOf(s.company).name, test: Priority.isTest(s.company) } : null,
+    date: s.date ?? '', project: s.project ? (s.project.des || s.project.code) : '', warehouse: s.warehouse ?? '', docno: s.prdno ?? '',
+    editable: ['items', 'review'].includes(s.step) && !s.paused && !s.prdno ? { qty: true, description: true, remove: true } : null,
+    // דף נוסף של הרשימה — נקרא ומוסיף פריטים (וגם נשמר כנספח לדרישה)
+    attachments: (s.files ?? []).length,
+    canAttach: ['items', 'review'].includes(s.step) && !s.paused && !s.prdno,
+    lines: (s.items ?? []).map((x) => ({ n: x.n, description: x.description, qty: x.qty, unit: x.unit ?? '', part: x.part?.code ?? '', open: x.status === 'ask' }))
+  };
+}
+
+module.exports = { view, isTrigger, opens, active, pending, abandon, handle, setHooks, _parseDate: parseDate, _resolveItems: resolveItems, _ai: ai, _load: load, _clear: (userId) => clear(userId, load(userId)), _label: label, _labels: labels, _sameLabel: sameLabel };

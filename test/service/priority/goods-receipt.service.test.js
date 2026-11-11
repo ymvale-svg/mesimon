@@ -471,3 +471,36 @@ test('בטיחות: החברה נסגרה (PRIORITY_COMPANIES) בין הקריא
   assert.equal(pr.wrote('createReceipt').length, 1);
   assert.match(r.text, /טיוטא לבדיקה/);
 });
+
+test('עריכה ישירה בטבלה: "שורה 1 כמות 3" בטיוטא — הכמות מתעדכנת בפריוריטי, בלי AI', async (t) => {
+  H.companies(t, 'test11');
+  const u = H.worker();
+  const pr = priority(t);
+  ai(t, doc());                                  // אין מטפל למשימה "reply" — קריאה ל-AI תכשיל את הבדיקה
+  const { say } = H.chat(t, u);
+  await toProject(say);
+  await say('נהריה מגרש 12');
+  let r = await say(BTN.done);
+  assert.match(r.text, /GR26000123\* — טיוטא לבדיקה/);
+
+  r = await say('שורה 1 כמות 3');
+  const [q] = pr.wrote('setLineQty');
+  assert.deepEqual(q.args.slice(1), ['GR26000123', 1, 3], 'הכמות נכתבה לשורה 1 בטיוטא');
+  H.assertButtons(r.buttons, [BTN.approve, BTN.cancel]);
+});
+
+test('נספח (כמו מהמסך): "נספח" + תמונה בשלב הנספחים — מצורף בלי סיווג AI, ו"סיום" פותח טיוטא עם שניהם', async (t) => {
+  H.companies(t, 'test11');
+  const u = H.worker();
+  const pr = priority(t);
+  ai(t, doc());                                  // אין מטפל ל-"classify" — סיווג יכשיל את הבדיקה
+  const { say } = H.chat(t, u);
+  await toProject(say);
+  let r = await say('נהריה מגרש 12');
+  assert.match(r.text, /נספחים/);
+  r = await say('נספח', { file: H.photo() });
+  assert.doesNotMatch(r.text, /מסמך חדש/);
+  r = await say(BTN.done);
+  assert.match(r.text, /GR26000123\* — טיוטא לבדיקה/);
+  assert.equal(pr.wrote('attach').length, 2, 'המסמך והנספח צורפו לטיוטא');
+});

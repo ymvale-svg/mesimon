@@ -8,6 +8,7 @@
  * ה-AI. ההגדרות נשמרות ב-‎wa_actions‎.
  */
 const D = require('../core').Db;
+const PriorityAccess = require('../priority').PriorityAccess;
 
 const ACTIONS = [
   {
@@ -307,9 +308,16 @@ const PILOT_KEYS = new Set(['reminders', 'sent_followup', 'day_digest', 'briefin
 const PILOT_ROLES = ['superadmin', 'admin'];
 const inPilot = (actor) => actor?.type === 'user' && PILOT_ROLES.includes(actor.role);
 
+/**
+ * פעולות פריוריטי: מי רשאי — לפי מטריצת ההרשאות של משימון פריוריטי (‎priority-access.js‎, הוחלט 11.11.26),
+ * ולא לפי "כולם / מנהלים". ההדלקה והכיבוי — כאן, כמו קודם.
+ */
+const PRIORITY_DOC = { goods_receipt: 'receipt', goods_offer: 'receipt', purchase_demand: 'demand' };
+
 function allowed(actor, key) {
   const a = byKey(key);
   if (PILOT_KEYS.has(key) && D.getSetting('bot_pilot', false) && !inPilot(actor)) return false;
+  if (PRIORITY_DOC[key]) return Boolean(a?.enabled && PriorityAccess.can(actor, PRIORITY_DOC[key]));
   return Boolean(a?.enabled && (a.audience === 'all' || isManager(actor)));
 }
 

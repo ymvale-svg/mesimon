@@ -808,6 +808,39 @@ CREATE TABLE IF NOT EXISTS mail_goods_docs (
 );
 
 /*
+ * 🗂 תור המסמכים של משימון פריוריטי (‎server/priority/priority-docs.js‎): כל מסמך שנכנס לעבודה — ממייל,
+ * מגרירה במסך — עם הסוג (‎doc‎), המקור והשלב בשרשרת. הקובץ: ‎file_path‎ (יחסי לתיקיית ההעלאות),
+ * ובמסמך ממייל — יורד מ-Gmail בפעם הראשונה שצריך אותו.
+ * ‎stage‎: new (התקבל) · bot (בטיפול בבוט) · draft (טיוטא בפריוריטי) · waiting (מחכה לאישור בפריוריטי)
+ *         · done (סופי) · cancelled (בוטל) · rejected (הוצא מהתור). ‎docno‎ — המספר בפריוריטי (GR / PD).
+ * ‎source‎: mail · upload · whatsapp (נפתח ישר בבוט — נרשם כדי שהשרשרת תראה הכל).
+ */
+CREATE TABLE IF NOT EXISTS priority_docs (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  org_id        INTEGER NOT NULL DEFAULT 1,
+  user_id       INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  doc           TEXT    NOT NULL,
+  source        TEXT    NOT NULL DEFAULT 'upload',
+  mail_goods_id INTEGER,
+  filename      TEXT    NOT NULL DEFAULT '',
+  mime          TEXT    NOT NULL DEFAULT '',
+  size          INTEGER NOT NULL DEFAULT 0,
+  file_path     TEXT    NOT NULL DEFAULT '',
+  supplier      TEXT    NOT NULL DEFAULT '',
+  from_name     TEXT    NOT NULL DEFAULT '',
+  from_email    TEXT    NOT NULL DEFAULT '',
+  subject       TEXT    NOT NULL DEFAULT '',
+  stage         TEXT    NOT NULL DEFAULT 'new',
+  docno         TEXT    NOT NULL DEFAULT '',
+  company       TEXT    NOT NULL DEFAULT '',
+  pages         TEXT    NOT NULL DEFAULT '[]',   -- עמודים נוספים של אותו מסמך: ‎[{path, mime, name}]‎
+  note          TEXT    NOT NULL DEFAULT '',
+  created_at    TEXT    NOT NULL,
+  updated_at    TEXT    NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_priority_docs_user ON priority_docs(org_id, user_id, doc, created_at);
+
+/*
  * 🛒 פנייה לספקים להצעת מחיר (‎ai/rfq.js‎). ‎item‎ — מה מבוקש (JSON), ‎draft‎ — נושא וגוף המייל.
  * ‎status‎: draft / review / sent / summarized / closed / cancelled.
  */

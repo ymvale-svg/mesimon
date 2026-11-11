@@ -73,6 +73,9 @@ const server = http.createServer(async (req, res) => {
 
     if (serveStatic(res, PUBLIC_DIR, url.pathname, req)) return;
 
+    // 🗂 משימון פריוריטי — תוכנה נפרדת באותו אתר (‎public/priority/‎), עם ניווט צד-לקוח משלה
+    if (/^\/priority(\/|$)/.test(url.pathname) && serveStatic(res, PUBLIC_DIR, '/priority/index.html')) return;
+
     // כל נתיב אחר מוגש כאפליקציה (ניווט צד-לקוח)
     if (serveStatic(res, PUBLIC_DIR, '/index.html')) return;
     sendJson(res, 404, { error: 'לא נמצא' });
