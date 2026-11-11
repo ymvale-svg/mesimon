@@ -867,6 +867,29 @@ function inHours(date = new Date()) {
   return from <= to ? t.time >= from && t.time < to : t.time >= from || t.time < to;
 }
 
+/*
+ * 🕗 הודעות יזומות — רק בשעות העבודה (הוחלט 11.11.26, ישראל: "תרכז את כל ההודעות היזומות רק לשעות העבודה, 8–5.
+ * 8:15 ההודעה הראשונה של הבוקר, 5 ההודעה האחרונה — מה נשאר לך למחר — וזהו"):
+ *   • בימי העבודה של העובד (‎Workdays.isWorkDay‎), 08:15–17:00 (‎wa_proactive_hours‎). הראשונה — סיכום הבוקר
+ *     ב-08:15; האחרונה — סיכום סוף היום ב-17:00 (לו בלבד ‎DIGEST_GRACE_MIN‎ דקות, שלא ייפול בין שני סבבים).
+ *   • מחוץ להן — שום הצעה, תזכורת או הודעה על מייל. הודעה שחייבת להגיע ("קיבלת משימה") — נשמרת לבוקר.
+ *   • חוץ מזה: תשובה למי שפנה לבוט, תשובה שהוא ביקש וחיכה לה (‎deliver‎), ותזכורת שהוא ביקש בעצמו בשעה שקבע.
+ */
+const PROACTIVE_HOURS = '08:15-17:00';
+const DIGEST_GRACE_MIN = 30;
+const plusMin = (hhmm, n) => { const [h, m] = hhmm.split(':').map(Number); const t = Math.min(h * 60 + m + n, 24 * 60 - 1); return `${String(Math.floor(t / 60)).padStart(2, '0')}:${String(t % 60).padStart(2, '0')}`; };
+
+/** אפשר לשלוח עכשיו הודעה יזומה? ‎userId‎ — גם יום העבודה שלו; ‎graceMin‎ — לסיכום סוף היום */
+function workHours(userId = null, { graceMin = 0, date = new Date() } = {}) {
+  if (!inHours(date)) return false;
+  const t = localDate(date);
+  const m = /^(\d{2}:\d{2})-(\d{2}:\d{2})$/.exec(String(D.getSetting('wa_proactive_hours', PROACTIVE_HOURS) || PROACTIVE_HOURS).trim())
+    ?? /^(\d{2}:\d{2})-(\d{2}:\d{2})$/.exec(PROACTIVE_HOURS);
+  if (!(t.time >= m[1] && t.time < plusMin(m[2], graceMin))) return false;
+  if (userId == null) return true;
+  try { return Workdays.isWorkDay(userId, t.date); } catch { return true; }
+}
+
 // ---------------------------------------------------------------------------
 // שיחה פרטית — הפעולות
 // ---------------------------------------------------------------------------
@@ -2757,8 +2780,8 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
         return out(r.text, { draft: null }, { action: 'goods_offer', status: 'ok', result: r.result.slice(0, 300), react: r.react });
       }
     }
-    // כל דבר אחר — נושא חדש; השאלה יורדת (ותישאל שוב: דדליין — מחר, חשבונית — בסבב הבא)
-    if (d.kind === 'goods_offer') D.run("UPDATE mail_goods_docs SET status = 'pending' WHERE id = ? AND status = 'asked'", d.goodsId);
+    // כל דבר אחר — נושא חדש; השאלה יורדת. חשבונית שלא נענתה — לא שואלים שוב (הוחלט 11.11.26: "התעלם — אז התעלם")
+    if (d.kind === 'goods_offer') D.run("UPDATE mail_goods_docs SET status = 'ignored' WHERE id = ? AND status = 'asked'", d.goodsId);
     keep.draft = null;
     state = { ...state, draft: null, awaiting: false };
   }
@@ -4152,12 +4175,12 @@ async function sendSummaries() {
   if (!WaActions.byKey('summary')?.enabled || !hooks.tasks) return;
   const now = localDate();
   if (now.weekday === 'Friday' || now.weekday === 'Saturday') return;
-  if (now.time < String(D.getSetting('wa_summary_time', '08:00'))) return;
+  if (now.time < String(D.getSetting('wa_summary_time', '08:15'))) return;
   if (D.getSetting('wa_summary_sent', '') === now.date) return;
   // מסמנים לפני השליחה: תקלה באמצע לא תשלח לחצי מהעובדים פעמיים
   D.setSetting('wa_summary_sent', now.date);
 
-  for (const u of orgUsers().filter((x) => x.phone)) {
+  for (const u of orgUsers().filter((x) => x.phone && workHours(x.id))) {
     const actor = Auth.loadActor('user', u.id);
     if (!actor || !WaActions.allowed(actor, 'summary')) continue;
     const tasks = hooks.tasks.myTasks(actor).filter(RANGES.today.pick);
@@ -4194,7 +4217,7 @@ const ALERT_WINDOW_MS = DAY;
 function mailAlertUsers() {
   if (!D.getSetting('wa_bot_enabled', true) || !isConfigured() || !WaActions.byKey('mail_alert')?.enabled || !inHours()) return [];
   return orgUsers().filter((u) => {
-    if (!u.phone || D.userPrefs(u.id)?.botPrefs?.mailAlert === false || !Gmail.boxesOf(u.id, 'mail').length) return false;
+    if (!u.phone || !workHours(u.id) || D.userPrefs(u.id)?.botPrefs?.mailAlert === false || !Gmail.boxesOf(u.id, 'mail').length) return false;
     const actor = Auth.loadActor('user', u.id);
     return Boolean(actor && WaActions.allowed(actor, 'mail_alert'));
   }).map((u) => u.id);
@@ -4353,10 +4376,13 @@ function freeToAsk(userId, st) {
   return true;
 }
 
-/** שאלה שירדה בלי תשובה — הפריט שמאחוריה חוזר לתור שלו */
+/**
+ * שאלה שירדה בלי תשובה — לא חוזרת (הוחלט 11.11.26, ישראל: "אם הוא לא ענה — אל תשגע אותו. אם הוא יתעלם, אז הוא
+ * יתעלם"). הצעה לקבלת סחורה / למילוי טופס שלא נענתה — נסגרת כ"התעלם"; הפריט עצמו נשאר ב"היום".
+ */
 function releaseQuestion(draft) {
-  if (draft?.kind === 'goods_offer') D.run("UPDATE mail_goods_docs SET status = 'pending' WHERE id = ? AND status = 'asked'", draft.goodsId);
-  if (draft?.kind === 'form_fill' && draft.step === 'offer') D.run("UPDATE mail_forms SET status = 'pending' WHERE id = ? AND status = 'asked'", draft.formId);
+  if (draft?.kind === 'goods_offer') D.run("UPDATE mail_goods_docs SET status = 'ignored' WHERE id = ? AND status = 'asked'", draft.goodsId);
+  if (draft?.kind === 'form_fill' && draft.step === 'offer') D.run("UPDATE mail_forms SET status = 'ignored' WHERE id = ? AND status = 'asked'", draft.formId);
 }
 
 function busyFor(userId) {
@@ -4371,7 +4397,7 @@ function busyFor(userId) {
   // ושאלה יזומה חדשה מחליפה אותה: ‎freeToAsk‎). אחרי שעתיים — יורדת
   if (Date.now() - since < questionTtlMin() * 60 * 1000) return true;
   if (Date.now() - since < STALE_QUESTION_MS) return false;
-  if (st.draft?.kind === 'goods_offer') D.run("UPDATE mail_goods_docs SET status = 'pending' WHERE id = ? AND status = 'asked'", st.draft.goodsId);
+  releaseQuestion(st.draft);
   saveChat(userId, { ...st, draft: null, awaiting: false });
   log({ channel: 'summary', userId, action: 'other', status: 'ok', result: `שאלה פתוחה פגה אחרי שעתיים בלי תשובה: ${st.draft?.kind ?? ''}` });
   return false;
@@ -4381,7 +4407,9 @@ function busyFor(userId) {
 // הודעה יזומה עם קבצים וכפתורים — וטיוטה שמחכה לתשובה (כשהעובד לא באמצע משהו אחר)
 // ---------------------------------------------------------------------------
 
-async function pushToUser(userId, { text, files = [], buttons = [], draft = null }, action) {
+async function pushToUser(userId, { text, files = [], buttons = [], draft = null }, action, { requested = false, graceMin = 0 } = {}) {
+  // 🕗 רק בשעות העבודה — חוץ מתזכורת שהעובד ביקש בעצמו (‎requested‎)
+  if (!requested && !workHours(userId, { graceMin })) return false;
   const u = D.get("SELECT id, full_name, phone FROM users WHERE id = ? AND status = 'active'", userId);
   const ch = channel();
   if (!u?.phone || !ch) return false;
@@ -4501,13 +4529,14 @@ async function mailActionAlerts() {
   const on = { deadline: WaActions.byKey('mail_deadline')?.enabled, followup: WaActions.byKey('sent_followup')?.enabled, goods: WaActions.byKey('goods_offer')?.enabled, form: WaActions.byKey('form_fill')?.enabled };
   if (!on.deadline && !on.followup && !on.goods && !on.form) return;
   for (const u of orgUsers()) {
-    if (!u.phone) continue;
+    if (!u.phone || !workHours(u.id)) continue;
     const prefs = D.userPrefs(u.id)?.botPrefs ?? {};
     const actor = Auth.loadActor('user', u.id);
     if (!actor) continue;
     const allow = {
       deadline: Boolean(on.deadline && prefs.mailDeadline !== false && WaActions.allowed(actor, 'mail_deadline')),
-      goods: Boolean(on.goods && prefs.goodsOffer !== false && WaActions.allowed(actor, 'goods_offer') && WaActions.allowed(actor, 'goods_receipt')),
+      // 📦 רק למי שמורשה לקבלת סחורה במטריצת ההרשאות (‎priority_goods_receipt‎) — וגם בבוט
+      goods: Boolean(on.goods && prefs.goodsOffer !== false && P.may(actor, 'priority_goods_receipt') && WaActions.allowed(actor, 'goods_offer') && WaActions.allowed(actor, 'goods_receipt')),
       form: Boolean(on.form && prefs.formOffer !== false && WaActions.allowed(actor, 'form_fill') && Gmail.canSend(u.id)),
       followup: Boolean(on.followup && prefs.sentFollowup !== false && WaActions.allowed(actor, 'sent_followup') && Gmail.canSend(u.id))
     };
@@ -4737,7 +4766,7 @@ function notifyAssignment({ taskId, userId, assigner = null, extra = false }) {
       hints.length ? `${hints.join(' · ')}.` : null
     ].filter((l) => l !== null).join('\n');
     const chatId = `${u.phone}@c.us`;
-    if (inHours()) {
+    if (workHours(u.id)) {
       void sendProactive(u.id, chatId, text, { taskId: task.id, who: u.full_name });
     } else {
       D.run('INSERT INTO wa_outbox (user_id, chat_id, text, task_id, action, created_at) VALUES (?,?,?,?,?,?)',
@@ -4788,7 +4817,7 @@ function messageUser(userId, text, action) {
   const u = D.get("SELECT id, full_name, phone FROM users WHERE id = ? AND status = 'active'", userId);
   if (!u?.phone) return false;
   const chatId = `${u.phone}@c.us`;
-  if (inHours()) void sendProactive(u.id, chatId, text, { action, who: u.full_name });
+  if (workHours(u.id)) void sendProactive(u.id, chatId, text, { action, who: u.full_name });
   else D.run('INSERT INTO wa_outbox (user_id, chat_id, text, task_id, action, created_at) VALUES (?,?,?,?,?,?)', u.id, chatId, text, null, action, D.nowIso());
   return true;
 }
@@ -4801,7 +4830,12 @@ WaScan.setHooks({
 /** מה שנשמר מחוץ לשעות — נשלח כשהחלון נפתח. ישן מדי כבר אינו חדשות */
 async function flushOutbox() {
   D.run('DELETE FROM wa_outbox WHERE created_at < ?', new Date(Date.now() - OUTBOX_DAYS * DAY).toISOString());
-  for (const row of D.all('SELECT * FROM wa_outbox ORDER BY id LIMIT 30')) {
+  let sent = 0;
+  for (const row of D.all('SELECT * FROM wa_outbox ORDER BY id')) {
+    if (sent >= 30) break;
+    // לא יום העבודה של העובד — מחכה לשלו
+    if (!workHours(row.user_id)) continue;
+    sent++;
     D.run('DELETE FROM wa_outbox WHERE id = ?', row.id);
     await sendProactive(row.user_id, row.chat_id, row.text, { taskId: row.task_id, action: row.action, who: nameOf(row.user_id) });
   }
@@ -5002,27 +5036,32 @@ async function tick() {
     // ההודעות עצמן מגיעות דרך המאזין (‎listen‎); כאן — מה שנדחה לשעות הפעילות
     if (inHours()) {
       for (const m of takeDeferred()) dispatch(m);
-      await sendSummaries();
-      await flushOutbox();
-      await mailAlerts();
-      await meetingFollowups();
-      await mailActionAlerts();
-      await rfqTick();
-      await meetCoordTick();
-      await replyWatchTick();
-      if (WaActions.byKey('day_digest')?.enabled) {
+      // ⏰ תזכורת שהעובד ביקש בעצמו — בשעה שקבע, גם מחוץ לשעות העבודה
+      if (WaActions.byKey('reminders')?.enabled) await Reminders.tick((userId, m) => pushToUser(userId, m, 'reminders', { requested: true })).catch((err) => console.error('[משימון] תזכורות נכשלו:', err.message));
+      // 🌙 סיכום סוף היום (17:00) — ההודעה האחרונה של היום; קודם לכל השאר, כדי שסיכום הבוקר יהיה הראשון
+      if (WaActions.byKey('day_digest')?.enabled && workHours(null, { graceMin: DIGEST_GRACE_MIN })) {
         await DayDigest.tick({
-          users: () => orgUsers().filter((u) => u.phone && D.userPrefs(u.id)?.botPrefs?.dayDigest !== false && WaActions.allowed(Auth.loadActor('user', u.id), 'day_digest')),
-          push: (userId, m) => pushToUser(userId, m, 'day_digest')
+          users: () => orgUsers().filter((u) => u.phone && workHours(u.id, { graceMin: DIGEST_GRACE_MIN }) && D.userPrefs(u.id)?.botPrefs?.dayDigest !== false && WaActions.allowed(Auth.loadActor('user', u.id), 'day_digest')),
+          push: (userId, m) => pushToUser(userId, m, 'day_digest', { graceMin: DIGEST_GRACE_MIN })
         }).catch((err) => console.error('[משימון] סיכום יומי נכשל:', err.message));
       }
-      if (WaActions.byKey('briefing')?.enabled) {
-        await Briefing.tick({
-          users: () => orgUsers().filter((u) => u.phone && D.userPrefs(u.id)?.botPrefs?.briefing !== false && WaActions.allowed(Auth.loadActor('user', u.id), 'briefing')),
-          push: (userId, m) => pushToUser(userId, m, 'briefing')
-        }).catch((err) => console.error('[משימון] תדריכים נכשלו:', err.message));
+      // 🕗 כל השאר — רק בשעות העבודה
+      if (workHours()) {
+        await sendSummaries();
+        await flushOutbox();
+        await mailAlerts();
+        await meetingFollowups();
+        await mailActionAlerts();
+        await rfqTick();
+        await meetCoordTick();
+        await replyWatchTick();
+        if (WaActions.byKey('briefing')?.enabled) {
+          await Briefing.tick({
+            users: () => orgUsers().filter((u) => u.phone && workHours(u.id) && D.userPrefs(u.id)?.botPrefs?.briefing !== false && WaActions.allowed(Auth.loadActor('user', u.id), 'briefing')),
+            push: (userId, m) => pushToUser(userId, m, 'briefing')
+          }).catch((err) => console.error('[משימון] תדריכים נכשלו:', err.message));
+        }
       }
-      if (WaActions.byKey('reminders')?.enabled) await Reminders.tick((userId, m) => pushToUser(userId, m, 'reminders')).catch((err) => console.error('[משימון] תזכורות נכשלו:', err.message));
       await warmInsights();
     }
     if (Claude.isEnabled() && WaActions.byKey('group_tasks')?.enabled) await processGroups();
@@ -5048,7 +5087,7 @@ function start() {
 
 module.exports = {
   init, start, tick, publicStatus, save, remove, checkState, qr, isConfigured,
-  listGroups, bindGroup, userByPhone, markDone, readLog, todayStats, simulate, simulateGroup, inHours,
+  listGroups, bindGroup, userByPhone, markDone, readLog, todayStats, simulate, simulateGroup, inHours, workHours,
   // לשליחה ממודולים אחרים — התראה לפני פגישה (‎meetings.js‎), עם רישום ביומן הבוט
   sendText, sendButtons, log, notifyAssignment, assistant, deliver, sendFilesToUser, mailAlertUsers,
   _internal: {
