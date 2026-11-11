@@ -1097,7 +1097,9 @@ async function handleDirect(msg) {
   let displaced = null; // מה שהיה פתוח לפני ששאלה ישנה הוחזרה — חוזר להיות פתוח אחרי התשובה
   if (pressed?.owner === 'chat') {
     const cur = chatOf(user.id);
-    const how = WaQuestions.decide(pressed, cur.awaiting ? cur.draft : null);
+    // התראה על מייל — "פתוחה" כל עוד ההצעות שלה עדיין ממתינות במסד (אחרי "כן"/"לא" הן כבר לא)
+    const alertOpen = (d) => d.suggestionIds.every((id) => D.get("SELECT 1 AS ok FROM ai_suggestions WHERE id = ? AND user_id = ? AND status = 'pending'", id, user.id));
+    const how = WaQuestions.decide(pressed, cur.awaiting ? cur.draft : null, { text, alertOpen });
     if (how === 'closed') {
       log({ ...base, text, action: 'other', status: 'unclear', result: `כפתור על שאלה שכבר לא פתוחה: ${pressed.draft?.kind ?? ''}`, reply: WaQuestions.CLOSED_TEXT });
       await sendText(msg.chatId, WaQuestions.CLOSED_TEXT);
@@ -1107,7 +1109,7 @@ async function handleDirect(msg) {
       if (cur.awaiting && cur.draft) displaced = { draft: cur.draft, awaiting: true };
       saveChat(user.id, { ...cur, draft: { ...pressed.draft, askedAt: D.nowIso() }, awaiting: true });
     }
-    if (how !== 'free') { forceChat = true; WaQuestions.markAnswered(user.id, pressed.id); }
+    if (how !== 'free') { forceChat = true; WaQuestions.markAnswered(user.id, pressed.id, text); }
   } else if (pressed && ['goods_receipt', 'purchase_demand'].includes(pressed.owner)) {
     // כפתור של קבלת סחורה / דרישת רכש — לזרימה שלו, כשהיא פתוחה. סגורה (או תפריט פריוריטי) — הניתוב הרגיל
     // תפריט פריוריטי אינו קליטה — הוא מנתב: "🛒 דרישת רכש" עליו הולך לדרישת הרכש (באג 11.11: נענה "לא פתוחה לך")

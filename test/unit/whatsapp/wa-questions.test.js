@@ -48,3 +48,18 @@ test('replyToOf — מזהה ההודעה מכל צורת כפתור, וציטו
   assert.deepEqual(Q.replyToOf({ textMessageData: { textMessage: 'לבטל' }, quotedMessage: { stanzaId: 'Q9', textMessage: 'x' } }), { id: 'Q9', button: false });
   assert.deepEqual(Q.replyToOf({ textMessageData: { textMessage: 'שלום' } }), { id: '', button: false });
 });
+
+test('decide — שינוי דעה על שאלה יזומה: כפתור אחר על אותה שאלה מחזיר אותה; אותו כפתור — סגורה', () => {
+  const offer = { kind: 'goods_offer', goodsId: 5 };
+  const q = { owner: 'chat', awaiting: true, draft: offer, key: Q.draftKey(offer), answered: true, answer: 'לא ❌' };
+  assert.equal(Q.decide(q, null, { text: 'קבלת סחורה 📦' }), 'restore');
+  assert.equal(Q.decide(q, null, { text: 'לא ❌' }), 'closed');
+});
+
+test('decide — התראה על מייל שנדחקה: חוזרת כל עוד המייל לא טופל במסד', () => {
+  const alert = { kind: 'mail_reply', alert: true, suggestionIds: [11, 12] };
+  const q = { owner: 'chat', awaiting: true, draft: alert, key: Q.draftKey(alert), answered: false };
+  assert.equal(Q.decide(q, { kind: 'mail_task', alert: true, suggestionIds: [13] }, { alertOpen: () => true }), 'restore');
+  assert.equal(Q.decide(q, null, { alertOpen: () => false }), 'closed', 'כבר נענתה — לא שולחים פעמיים');
+  assert.equal(Q.decide({ ...q, draft: { kind: 'email' }, key: Q.draftKey({ kind: 'email' }) }, null, { alertOpen: () => true }), 'closed', 'טיוטת מייל רגילה — לא מוחזרת');
+});

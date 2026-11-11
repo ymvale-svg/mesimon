@@ -29,8 +29,11 @@ const Zoom = require('../integrations').Zoom;
 const Timeless = require('../integrations').Timeless;
 const Store = require('./timeless-store');
 const Claude = require('../integrations').Claude;
+const Gmail = require('../integrations').Gmail;
+const Mailer = require('../integrations').Mailer;
 const WaUi = require('../whatsapp').WaUi;
 const Meetings = require('./meetings');
+const Calendar = require('./calendar');
 const Secretariat = require('../core').Secretariat;
 
 const MIN = 60000;
@@ -45,7 +48,8 @@ const BTN = Object.freeze({
   summary: '📝 סיכום הפגישה',
   tasks: '📋 משימות מהפגישה',
   recording: '🎥 הקלטת הפגישה',
-  open: 'לפתוח משימות ✅'
+  open: 'לפתוח משימות ✅',
+  share: '📤 לשלוח למשתתפים'
 });
 
 const parseJson = (t, f) => { try { return JSON.parse(t); } catch { return f; } };
@@ -304,8 +308,10 @@ function myItems(dig, u) {
 // התשובות בבוט
 // ---------------------------------------------------------------------------
 
-const norm = (t) => WaUi.normalize(t).replace(/[📝📋🎥]/gu, '').replace(/\s+/g, ' ').trim();
+const norm = (t) => WaUi.normalize(t).replace(/[📝📋🎥📤]/gu, '').replace(/\s+/g, ' ').trim();
 const ASK = {
+  // 📤 "לשלוח למשתתפים", "תשלח את הסיכום לכל המשתתפים" — מהמייל של העובד, לכל מי שהוזמן לפגישה ביומן
+  share: /^(?:לשלוח|תשלח|שלח|תשלחי|להעביר|תעביר)\s+(?:את\s+)?(?:ה?סיכום(?:\s+(?:של\s+)?ה?פגישה)?\s+)?(?:ל|אל\s+)(?:כל\s+)?ה?משתתפים(?:\s+(?:בפגישה|של\s+ה?פגישה))?(?:\s+(?:עם|של)\s+(.+))?[?.!]*$/,
   summary: /^(?:סיכום(?:\s+(?:של\s+)?ה?פגישה)?|תסכם(?:\s+לי)?(?:\s+את)?\s+ה?פגישה|מה\s+היה\s+בפגישה)(?:\s+(?:עם|של)\s+(.+))?[?.!]*$/,
   tasks: /^(?:משימות(?:\s+מה?פגישה)?|המשימות\s+שלי\s+מה?פגישה|מה\s+(?:עליי|עלי|אני\s+צריך)\s+(?:לעשות\s+)?מה?פגישה)(?:\s+(?:עם|של)\s+(.+))?[?.!]*$/,
   recording: /^(?:הקלטת\s+ה?פגישה)(?:\s+(?:עם|של)\s+(.+))?[?.!]*$/
@@ -389,8 +395,10 @@ async function answer(actor, text, { appRoot = '', dry = false, createTask = nul
       dig.decisions.length ? '\n*הוחלט:*' : null, ...dig.decisions.map((s) => `✔ ${s}`),
       dig.items.length ? `\n📋 ${dig.items.length} משימות להמשך${mine.length ? `, ${mine.length} מהן שלך` : ''}.` : null
     ].filter((l) => l !== null);
-    return { text: lines.join('\n'), buttons: [BTN.tasks, ...(row.source === 'zoom' ? [BTN.recording] : [])], result: `סיכום: ${row.title}` };
+    return { text: lines.join('\n'), buttons: [BTN.tasks, BTN.share, ...(row.source === 'zoom' ? [BTN.recording] : [])], result: `סיכום: ${row.title}` };
   }
+
+  if (kind === 'share') return shareDraft(u, row, dig, head);
 
   // הקלטה מוואטסאפ, ומי ששלח אותה — המשימות של כל המשתתפים, כל אחת אצל האחראי שלה
   if (row.source === 'wa' && dig.items.length && typeof createTask === 'function') {
@@ -433,6 +441,96 @@ async function answer(actor, text, { appRoot = '', dry = false, createTask = nul
   };
 }
 
+// ---------------------------------------------------------------------------
+// 📤 שליחת הסיכום למשתתפים (הוחלט 11.11.26) — מהמייל של העובד, לכל מי שבזימון ביומן שלו
+// ---------------------------------------------------------------------------
+
+const ddmm = (iso) => new Intl.DateTimeFormat('he-IL', { timeZone: TZ, day: 'numeric', month: 'numeric' }).format(new Date(iso));
+const ymdIL = (iso) => new Intl.DateTimeFormat('en-CA', { timeZone: TZ }).format(new Date(iso));
+
+/** המשתתפים מהזימון ביומן של העובד — אותו אירוע לפי שעת ההתחלה (±20 דקות) או השם. בלי העובד עצמו */
+async function invitees(u, row) {
+  if (!Calendar.isConnected(u.id)) return { error: 'calendar' };
+  const day = await Calendar.eventsForDay(u.id, ymdIL(row.start_at)).catch(() => ({ events: [] }));
+  const t = new Date(row.start_at).getTime();
+  const ev = (day.events ?? []).filter((e) => !e.allDay)
+    .find((e) => Math.abs(new Date(e.start).getTime() - t) <= 20 * MIN || (row.title && e.title === row.title));
+  if (!ev) return { error: 'event' };
+  const mine = emailsOf(u);
+  const seen = new Set();
+  const people = [...(ev.people ?? []), ev.organizer].filter((p) => p?.email && !mine.has(normEmail(p.email)))
+    .filter((p) => { const e = normEmail(p.email); if (seen.has(e)) return false; seen.add(e); return true; })
+    .map((p) => ({ email: normEmail(p.email), name: String(p.name ?? '').trim() }));
+  return { people };
+}
+
+/** גוף המייל: סיכום, החלטות, ומשימות להמשך לפי אחראי. החתימה — של Gmail */
+function summaryMailText(row, dig) {
+  const fmtDue = (d) => (/^\d{4}-\d{2}-\d{2}$/.test(d ?? '') ? ` (עד ${d.split('-').reverse().slice(0, 2).join('.')})` : '');
+  return [
+    'שלום לכולם,',
+    '',
+    `מצורף סיכום הפגישה "${row.title}" מ-${ddmm(row.start_at)}.`,
+    '',
+    'על מה דיברנו:',
+    ...dig.summary.map((x) => `• ${x}`),
+    ...(dig.decisions.length ? ['', 'הוחלט:', ...dig.decisions.map((x) => `• ${x}`)] : []),
+    ...(dig.items.length ? ['', 'משימות להמשך:', ...dig.items.map((it) => `• ${it.task}${it.owner_name ? ` — ${it.owner_name}` : ''}${fmtDue(it.due)}`)] : []),
+    '',
+    'אם משהו חסר או לא מדויק — אשמח לתיקון.'
+  ].join('\n');
+}
+
+/** "לשלוח למשתתפים?" — טיוטה לאישור, או הסבר מה חסר (Gmail / יומן / הזימון) */
+async function shareDraft(u, row, dig, head) {
+  if (!Gmail.canSend(u.id)) {
+    return { text: `${head}\nכדי לשלוח את הסיכום מהמייל שלך צריך לחבר את תיבת ה-Gmail באפליקציה: "החשבון שלי ← Gmail ועוזר ה-AI".`, buttons: [BTN.tasks], result: `שליחה למשתתפים — Gmail לא מחובר: ${row.title}` };
+  }
+  const inv = await invitees(u, row);
+  if (inv.error) {
+    const why = inv.error === 'calendar' ? 'כדי לדעת מי הוזמן צריך לחבר את היומן (Google) באפליקציה.' : 'לא מצאתי את הזימון לפגישה הזו ביומן שלך, ולכן אני לא יודע למי לשלוח.';
+    return { text: `${head}\n${why}`, buttons: [BTN.tasks], result: `שליחה למשתתפים — ${inv.error === 'calendar' ? 'אין יומן' : 'הזימון לא נמצא'}: ${row.title}` };
+  }
+  if (!inv.people.length) return { text: `${head}\nבזימון ביומן אין משתתפים מלבדך — אין למי לשלוח.`, buttons: [BTN.tasks], result: `שליחה למשתתפים — אין משתתפים: ${row.title}` };
+  const subject = `סיכום פגישה: ${row.title} · ${ddmm(row.start_at)}`;
+  const text = summaryMailText(row, dig);
+  const names = inv.people.map((p) => p.name || p.email);
+  return {
+    text: [
+      head, '',
+      `📤 *לשלוח את הסיכום מהמייל שלך ל-${inv.people.length} ${inv.people.length === 1 ? 'משתתף' : 'משתתפים'}?*`,
+      `*אל:* ${names.slice(0, 12).join(', ')}${names.length > 12 ? ` ועוד ${names.length - 12}` : ''}`,
+      `*נושא:* ${subject}`,
+      '',
+      text,
+      '',
+      'לשלוח? *כן* 👍 · *לא* 👎'
+    ].join('\n'),
+    buttons: [WaUi.BTN.yes, WaUi.BTN.no],
+    draft: { kind: 'meeting_summary_mail', title: row.title, to: inv.people, subject, text },
+    awaiting: true,
+    result: `טיוטת סיכום למשתתפים (${inv.people.length}): ${row.title}`
+  };
+}
+
+const htmlOf = (text) => `<div dir="rtl" style="font-family:Arial,sans-serif;line-height:1.5">${String(text)
+  .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '<br>')}</div>`;
+
+/** "כן" על "לשלוח את הסיכום?" — נשלח מתיבת ה-Gmail של העובד, לכל המשתתפים יחד. מחזיר את הטקסט לעובד */
+async function sendSummaryMail(actor, draft, { dry = false } = {}) {
+  const to = (draft.to ?? []).map((p) => p.email).filter((e) => e.includes('@'));
+  if (!to.length) return 'אין למי לשלוח.';
+  if (dry) return `(בדיקה) הייתי שולח את הסיכום ל-${to.length} משתתפים.`;
+  const who = Gmail.handle(actor.id, 0);
+  const sender = Gmail.connectionOf(who);
+  if (!Gmail.canSend(who) || !sender?.email) return 'כדי לשלוח מהמייל שלך צריך לחבר את תיבת ה-Gmail באפליקציה: "החשבון שלי ← Gmail ועוזר ה-AI".';
+  const owner = userRow(actor.id);
+  const body = await Gmail.signed(who, { text: draft.text, html: htmlOf(draft.text) });
+  const built = Mailer.buildMessage({ from: sender.email, fromName: owner?.full_name, to: to.join(', '), subject: draft.subject, text: body.text, html: body.html });
+  await Gmail.send(who, built.raw);
+  return `📧 הסיכום נשלח מהמייל שלך ל-${to.length} ${to.length === 1 ? 'משתתף' : 'משתתפים'}.`;
+}
+
 /** "כן" על "לפתוח משימות?" — נפתחות אצל הכותב. מחזיר את הטקסט לעובד */
 function openTasks(actor, draft, { createTask, taskLink = () => null, dry = false }) {
   const opened = [];
@@ -471,6 +569,6 @@ function prune() {
 }
 
 module.exports = {
-  sweep, answer, openTasks, isOpenButton, digest, prune, BTN,
-  _internal: { vttText, myItems, followupFor, askText, alreadyAsked, record, ASK, BARE, norm, timelessMatch, timelessCandidates }
+  sweep, answer, openTasks, isOpenButton, digest, prune, BTN, sendSummaryMail,
+  _internal: { vttText, myItems, followupFor, askText, alreadyAsked, record, ASK, BARE, norm, timelessMatch, timelessCandidates, invitees, summaryMailText, shareDraft }
 };

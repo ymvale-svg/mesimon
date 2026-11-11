@@ -23,6 +23,8 @@ const crypto = require('node:crypto');
 const D = require('../core').Db;
 const Auth = require('../core').Auth;
 const Mailer = require('../integrations').Mailer;
+const Gmail = require('../integrations').Gmail;
+const Mime = require('../core').Mime;
 const { escape, shell, button } = require('../core').MailTemplates;
 const { badRequest, unauthorized, readJson, sendJson } = require('../core').HttpKit;
 
@@ -78,6 +80,71 @@ function readAloudUsage(from, to = new Date().toISOString()) {
 const usageLine = (u) => (u.ok || u.failed
   ? `🔊 הקראות: ${u.ok}${u.ok ? ` (${u.users === 1 ? 'עובד אחד' : `${u.users} עובדים`})` : ''}${u.failed ? ` · נכשלו: ${u.failed}` : ''}`
   : '');
+
+/*
+ * 📧 הערות על משימון במייל (הוחלט 11.11.26): הסוקר עובר גם על המייל של ישראל — רק מיילים שמזכירים את משימון או הבוט ("אשל שלי"),
+ * כולל צילומי המסך שמצורפים אליהם (שם יש הרבה רעיונות). איזו תיבה — רק מה שהסוקר מבקש במפורש
+ * (‎?mailbox=<מזהה משתמש>‎ בייצוא), ואחרת ההגדרה ‎bot_review_mailboxes‎; בלי אחת מהן — לא קוראים מייל.
+ * הטקסט מוסווה כמו היומן. לא נכללים: מה שמשימון עצמו שלח (‎SMTP_FROM‎, הדו"ח הלילי), ומענה אוטומטי.
+ */
+// "בוט" ו"הבוט" — Gmail מחפש מילה שלמה, והה"א צמודה
+const MAIL_QUERY = '(משימון OR mesimon OR "אשל שלי" OR בוט OR הבוט)';
+const MAIL_MAX = 15;
+const MAIL_TEXT = 2500;
+const IMG_PER_MAIL = 4;
+const IMG_MAX_BYTES = 3 * 1024 * 1024;
+const IMG_TOTAL_BYTES = 12 * 1024 * 1024;
+
+function mailboxUsers(requested = []) {
+  const ids = (Array.isArray(requested) ? requested : []).map(Number).filter(Boolean);
+  if (ids.length) return ids;
+  const set = D.getSetting('bot_review_mailboxes', null);
+  return Array.isArray(set) ? set.map(Number).filter(Boolean) : [];
+}
+
+async function mailFeedback(from, { users = [] } = {}) {
+  const after = Math.floor(new Date(from).getTime() / 1000);
+  const self = String(Mailer.CONFIG?.from ?? '').trim();
+  const q = `after:${after} ${MAIL_QUERY} -subject:"סקירת הבוט"${self ? ` -from:${self}` : ''}`;
+  const out = [];
+  const errors = [];
+  let imgBytes = 0;
+  for (const userId of mailboxUsers(users)) {
+    for (const who of Gmail.boxesOf(userId, 'mail')) {
+      try {
+        for (const id of await Gmail.search(who, q, { max: MAIL_MAX })) {
+          if (out.length >= MAIL_MAX) break;
+          const msg = await Gmail.messageFull(who, id);
+          const parts = Mime.fromGmail(msg.payload);
+          const m = Mime.finishGmail(parts);
+          if (m.autoSubmitted) continue;
+          // 🖼 צילומי מסך — התמונות שמצורפות למייל (בגבולות גודל), כדי שהסוקר יראה מה הראו לו
+          const images = [];
+          for (const a of (parts.attachments ?? []).filter((x) => /^image\//i.test(x.mime ?? '') && (x.size ?? 0) <= IMG_MAX_BYTES).slice(0, IMG_PER_MAIL)) {
+            if (imgBytes + (a.size ?? 0) > IMG_TOTAL_BYTES) break;
+            try {
+              const buf = a.data ?? (a.attachmentId ? await Gmail.attachment(who, id, a.attachmentId) : null);
+              if (!buf?.length) continue;
+              imgBytes += buf.length;
+              images.push({ name: String(a.filename ?? 'image').slice(0, 120), mime: a.mime, data: Buffer.from(buf).toString('base64') });
+            } catch { /* תמונה שלא נמשכה — המייל עדיין נכלל */ }
+          }
+          out.push({
+            at: m.date && !Number.isNaN(m.date.getTime()) ? m.date.toISOString() : null,
+            from: mask(m.from?.name || m.from?.address || ''),
+            subject: mask(m.subject),
+            text: mask(String(m.newText || m.text || '').slice(0, MAIL_TEXT)),
+            images
+          });
+        }
+      } catch (err) {
+        errors.push(`תיבה של משתמש ${userId}: ${String(err.message).slice(0, 120)}`);
+      }
+    }
+  }
+  out.sort((a, b) => String(a.at).localeCompare(String(b.at)));
+  return { query: MAIL_QUERY, mails: out, ...(errors.length ? { errors } : {}) };
+}
 
 /** השיחות הפרטיות (וואטסאפ והעוזר באפליקציה) מאז ‎since‎, מקובצות לשיחות */
 function exportSince(since) {
@@ -262,8 +329,13 @@ const isConfigured = () => Boolean(String(process.env.BOT_REVIEW_KEY ?? '').trim
 function register(router) {
   router.get('/api/integrations/bot-review/export', async (req, res) => {
     authenticate(req);
-    const since = new URL(req.url, 'http://local').searchParams.get('since') ?? '';
-    sendJson(res, 200, exportSince(since));
+    const params = new URL(req.url, 'http://local').searchParams;
+    const since = params.get('since') ?? '';
+    const out = exportSince(since);
+    // 📧 הערות על משימון מהמייל — רק מהתיבה שביקשו (‎mailbox‎). תקלה כאן לא מפילה את הייצוא
+    const users = String(params.get('mailbox') ?? '').split(',').map(Number).filter(Boolean);
+    out.mail = await mailFeedback(out.since, { users }).catch((err) => ({ mails: [], errors: [err.message] }));
+    sendJson(res, 200, out);
   });
 
   router.post('/api/integrations/bot-review/report', async (req, res) => {
@@ -272,4 +344,4 @@ function register(router) {
   });
 }
 
-module.exports = { register, mask, exportSince, sendReport, listReviews, setFixStatus, isConfigured, readAloudUsage };
+module.exports = { register, mask, exportSince, sendReport, listReviews, setFixStatus, isConfigured, readAloudUsage, mailFeedback };
