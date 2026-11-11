@@ -32,7 +32,7 @@ const Range = require('../mail').InsightWindow;
 const { appRoot, currentMsg, doneEmoji, emailText, enqueueAs, firstName, hooks, localDate, log, react, reactNow, signatureFields, taskLink, WALK } = require('./wa-base');
 const { actionOf, CANCEL, checkDraft, draftText, featuresText, helpText, localDay, PLAIN_FEATURES, PLAIN_GREETING, PLAIN_HELP, PLAIN_INSIGHTS, PLAIN_LIST, PLAIN_TODAY, READ_ALOUD, shortDate, YES } = require('./wa-private');
 const { meetCoordRun, pushToUser, rfqPrepare, rfqSend } = require('./wa-proactive');
-const { businessCommand, closeAlerted, closureDecision, confirmPending, contactOf, draftEmail, findRecipients, startGoodsFromMail, suggestionDecision, suggestionFeedback, threadAddText, VIA_EMAIL, VIA_MESIMON } = require('./wa-mail');
+const { businessCommand, closeAlerted, closureDecision, confirmPending, contactOf, draftEmail, findRecipients, sendPlainMail, startGoodsFromMail, suggestionDecision, suggestionFeedback, threadAddText, VIA_EMAIL, VIA_MESIMON } = require('./wa-mail');
 const { agentsText, cut, menuButtons, menuOptions, menuText, parseClosureCommand, parseSuggestionCommand, PLAIN_AGENTS, walkAction, walkButtons, walkText } = require('./wa-menu');
 const { meetingAudioAllowed, meetingAudioTurn, TRANSLATE } = require('./wa-meeting');
 
@@ -481,6 +481,29 @@ async function flowMeetingAudioRequest({ actor, out, t }) {
   return NEXT;
 }
 
+// ✉️ מייל מוכן לאישור (‎plain_mail‎): "כן" — נשלח מה-Gmail של העובד; "לא" — לא נשלח; משהו אחר — נושא חדש
+async function flowOnPlainMail(ctx) {
+  let { actor, dry, keep, out, state, t } = ctx;
+  if (state.draft?.kind === 'plain_mail' && state.awaiting) {
+    const n = WaUi.normalize(t);
+    if (WaUi.YES.test(n)) {
+      try {
+        const reply = await sendPlainMail(actor, state.draft, { dry });
+        return out(reply, { draft: null }, { action: 'send_email', status: 'ok', result: `נשלח מייל (מוכן לאישור) ל${state.draft.to.name}: ${state.draft.subject}`.slice(0, 300) });
+      } catch (err) {
+        return out(`⚠️ המייל לא נשלח: ${err.message}`, { draft: state.draft, awaiting: true }, { action: 'send_email', status: 'error', result: `מייל מוכן לאישור נכשל: ${err.message}`.slice(0, 300) });
+      }
+    }
+    if (WaUi.NO.test(n) || CANCEL.test(t)) {
+      return out('בסדר, המייל לא נשלח 👍', { draft: null }, { action: 'send_email', status: 'ok', result: `לא: מייל ל${state.draft.to.name}`.slice(0, 300) });
+    }
+    keep.draft = null;
+    state = { ...state, draft: null, awaiting: false };
+  }
+  ctx.state = state;
+  return NEXT;
+}
+
 // 🎥 אחרי פגישה מוקלטת: "לפתוח משימות ✅" / "לא" על המשימות שהוצעו, ו"כן" / "לא" על שליחת הסיכום למשתתפים
 async function flowOnMeetingTasks(ctx) {
   let { actor, dry, keep, out, state, t } = ctx;
@@ -816,5 +839,5 @@ const switchCancels = () => Boolean(D.getSetting('wa_topic_switch_cancels', true
 const DRAFT_ONLY = /(?:(?:בלי|לא\s+משנה|אין\s+לי\s+(?:את\s+)?|עזוב(?:\s+את)?)\s*ה?(?:כתובת|מייל|נמען)|רק\s+ת?(?:נסח|כתוב)|ת?נסח\s+(?:לי\s+)?(?:רק\s+)?(?:את\s+)?ה?(?:מלל|טקסט|נוסח))/;
 
 module.exports = {
-  DRAFT_ONLY, flowAgentsList, flowAlertNo, flowApproval, flowBusinessCommand, flowCancel, flowClosureCommand, flowEmailEdit, flowEmailPick, flowEmailSolve, flowEmailVia, flowFeaturesRequest, flowFormFillRequest, flowGreeting, flowIntentCancel, flowIntentDenied, flowIntentMenu, flowIntentOther, flowMailReplyEdit, flowMeetCoordRequest, flowMeetingAudioAnswer, flowMeetingAudioRequest, flowMeetingFollowupRequest, flowMeetingReminderRequest, flowMenuList, flowMenuPick, flowNoAi, flowNoticeRequest, flowOnClosureAddress, flowOnDayEvening, flowOnFormFill, flowOnGoodsStop, flowOnMailMuteSender, flowOnMailRemindOrGoods, flowOnMeetCoord, flowOnMeetingTasks, flowOnPaceOffer, flowOnReminder, flowOnRfq, flowOnSentFollowup, flowOnThreadAdd, flowRemindersRequest, flowReplyAsk, flowRfqRequest, flowRfqSummary, flowSuggestionCommand, flowTranslateRequest, flowWalk, NEXT, switchCancels
+  DRAFT_ONLY, flowAgentsList, flowAlertNo, flowApproval, flowBusinessCommand, flowCancel, flowClosureCommand, flowEmailEdit, flowEmailPick, flowEmailSolve, flowEmailVia, flowFeaturesRequest, flowFormFillRequest, flowGreeting, flowIntentCancel, flowIntentDenied, flowIntentMenu, flowIntentOther, flowMailReplyEdit, flowMeetCoordRequest, flowMeetingAudioAnswer, flowMeetingAudioRequest, flowMeetingFollowupRequest, flowMeetingReminderRequest, flowMenuList, flowMenuPick, flowNoAi, flowNoticeRequest, flowOnClosureAddress, flowOnDayEvening, flowOnFormFill, flowOnGoodsStop, flowOnMailMuteSender, flowOnMailRemindOrGoods, flowOnMeetCoord, flowOnMeetingTasks, flowOnPaceOffer, flowOnPlainMail, flowOnReminder, flowOnRfq, flowOnSentFollowup, flowOnThreadAdd, flowRemindersRequest, flowReplyAsk, flowRfqRequest, flowRfqSummary, flowSuggestionCommand, flowTranslateRequest, flowWalk, NEXT, switchCancels
 };

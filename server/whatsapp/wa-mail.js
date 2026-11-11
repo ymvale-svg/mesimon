@@ -9,6 +9,7 @@ const Auth = require('../core').Auth;
 const MailScan = require('../mail').MailScan;
 const P = require('../core').Permissions;
 const Gmail = require('../integrations').Gmail;
+const Mailer = require('../integrations').Mailer;
 const AiTasks = require('../tasks').AiTasks;
 const GContacts = require('../phonebook').GoogleContacts;
 const WaActions = require('./wa-actions');
@@ -773,6 +774,29 @@ function startGoodsFromMail(user, goodsId) {
   });
 }
 
+/**
+ * ✉️ מייל מוכן לאישור (‎plain_mail‎, מהסקירה הלילית — "לענות לה במייל דרך משימון"): "כן" שולח אותו מתיבת
+ * ה-Gmail של העובד, בהמשך לשרשור כשיש, בחתימה שלו — בלי משימת מעקב (זו תשובה, לא פנייה שמחכה לתשובה).
+ */
+async function sendPlainMail(actor, d, { dry = false } = {}) {
+  if (dry) return `(בדיקה) הייתי שולח ל${d.to?.name ?? ''}.`;
+  const rt = d.replyThread ?? null;
+  const who = Gmail.handle(actor.id, rt?.box ?? 0);
+  const sender = Gmail.connectionOf(who);
+  if (!Gmail.canSend(who) || !sender?.email) throw new Error('תיבת ה-Gmail לא מחוברת לשליחה ("החשבון שלי ← Gmail ועוזר ה-AI")');
+  const owner = D.get('SELECT full_name FROM users WHERE id = ?', actor.id);
+  const html = `<div dir="rtl" style="font-family:Arial,sans-serif;line-height:1.5">${String(d.body)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '<br>')}</div>`;
+  const body = await Gmail.signed(who, { text: d.body, html });
+  const built = Mailer.buildMessage({
+    from: sender.email, fromName: owner?.full_name, to: d.to.email, toName: d.to.name, subject: d.subject,
+    inReplyTo: rt?.inReplyTo || undefined, references: rt?.references ?? [], text: body.text, html: body.html
+  });
+  await Gmail.send(who, built.raw, { threadId: rt?.threadId ?? null });
+  return `📧 נשלח ל${d.to.name}${rt ? ' — בהמשך לשרשור' : ''}.`;
+}
+
 module.exports = {
+  sendPlainMail,
   businessCommand, closeAlerted, closureDecision, confirmPending, contactOf, createFromDraft, draftEmail, findRecipients, mailActionAlerts, mailAlertFor, mailAlerts, parseThreadAdd, resolveCc, solveText, startGoodsFromMail, suggestionDecision, suggestionFeedback, threadAddText, VIA_EMAIL, VIA_MESIMON
 };
