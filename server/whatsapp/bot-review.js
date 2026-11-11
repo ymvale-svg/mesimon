@@ -25,6 +25,9 @@ const Auth = require('../core').Auth;
 const Mailer = require('../integrations').Mailer;
 const Gmail = require('../integrations').Gmail;
 const Mime = require('../core').Mime;
+const MailThread = require('../mail').MailThread;
+const { pushToUser } = require('./wa-proactive');
+const WaUi = require('./wa-ui');
 const { escape, shell, button } = require('../core').MailTemplates;
 const { badRequest, unauthorized, readJson, sendJson } = require('../core').HttpKit;
 
@@ -326,7 +329,45 @@ function setFixStatus(reviewId, n, { status, note = '' }, actor) {
 
 const isConfigured = () => Boolean(String(process.env.BOT_REVIEW_KEY ?? '').trim());
 
+/**
+ * ✉️ "לענות לה במייל דרך משימון" (הוחלט 11.11.26): הסוקר מכין תשובה לעובד/ת בארגון על הערה שלו/ה, והבוט שולח
+ * אותה למנהל בוואטסאפ לאישור — ‎plain_mail‎ — ו"כן" שולח מתיבת ה-Gmail של המנהל, בהמשך לשרשור עם הנמען.
+ * בטיחות: הנמען — רק משתמש פעיל במשימון (לפי השם המלא, לא כתובת חופשית); המאשר — רק מנהל מערכת; ושום
+ * דבר לא יוצא בלי "כן" שלו.
+ */
+async function mailForApproval(body) {
+  const approver = D.get("SELECT id, full_name, phone FROM users WHERE id = ? AND status = 'active' AND role IN ('superadmin','admin')", Number(body.userId));
+  if (!approver) throw badRequest('המאשר חייב להיות מנהל מערכת פעיל');
+  if (!approver.phone) throw badRequest('למאשר אין טלפון — אין לאן לשלוח את האישור');
+  const to = D.get("SELECT id, full_name, email FROM users WHERE status = 'active' AND full_name = ?", clean(body.toName, 120));
+  if (!to?.email) throw badRequest('הנמען לא נמצא בין המשתמשים הפעילים (לפי השם המלא)');
+  const text = clean(body.body, 5000);
+  if (!text) throw badRequest('אין תוכן למייל');
+  const hint = clean(body.threadHint, 120);
+  const threads = await MailThread.recentThreads(approver.id, to.email, { max: 5 }).catch(() => []);
+  const rt = (hint && threads.find((x) => String(x.subject ?? '').includes(hint))) || threads[0] || null;
+  const replyThread = rt ? { box: rt.box, threadId: rt.threadId, subject: rt.subject, inReplyTo: rt.inReplyTo, references: rt.references } : null;
+  const subject = replyThread ? (/^re:/i.test(replyThread.subject) ? replyThread.subject : `Re: ${replyThread.subject}`) : (clean(body.subject, 200) || 'משימון');
+  const draft = { kind: 'plain_mail', to: { name: to.full_name, email: to.email }, subject, body: text, replyThread };
+  const preview = [
+    `✉️ *מייל מוכן לאישור — ל${to.full_name}*`,
+    `*נושא:* ${subject}`,
+    replyThread ? `↩️ בהמשך לשרשור "${replyThread.subject}"` : null,
+    '',
+    text,
+    '',
+    'לשלוח מהמייל שלך? *כן* 👍 · *לא* 👎'
+  ].filter((l) => l !== null).join('\n');
+  const sent = await pushToUser(approver.id, { text: preview, buttons: [WaUi.BTN.yes, WaUi.BTN.no], draft }, 'send_email', { requested: true });
+  return { sent: Boolean(sent), to: to.full_name, subject, inThread: Boolean(replyThread) };
+}
+
 function register(router) {
+  router.post('/api/integrations/bot-review/mail-for-approval', async (req, res) => {
+    authenticate(req);
+    sendJson(res, 200, await mailForApproval(await readJson(req)));
+  });
+
   router.get('/api/integrations/bot-review/export', async (req, res) => {
     authenticate(req);
     const params = new URL(req.url, 'http://local').searchParams;
@@ -344,4 +385,4 @@ function register(router) {
   });
 }
 
-module.exports = { register, mask, exportSince, sendReport, listReviews, setFixStatus, isConfigured, readAloudUsage, mailFeedback };
+module.exports = { register, mask, exportSince, sendReport, listReviews, setFixStatus, isConfigured, readAloudUsage, mailFeedback, mailForApproval };
