@@ -1995,6 +1995,8 @@ function migrate() {
   relaxAiMessagesChannel();
 
   addColumn('users', 'department_id', 'INTEGER REFERENCES departments(id) ON DELETE SET NULL');
+  // 📧 משימה שנולדה ממייל — עותק של המייל (מאת, נושא, תאריך, טקסט), כדי שכל מי שעובד עליה יראה על מה מדובר
+  addColumn('tasks', 'source_mail', "TEXT NOT NULL DEFAULT ''");
   // קובץ שצורף לתגובה בשיחה — כדי שיוצג בתוך ההודעה שבה נשלח, ולא רק ברשימה
   addColumn('attachments', 'comment_id', 'INTEGER REFERENCES comments(id) ON DELETE SET NULL');
   // הערה: מסדי נתונים שנוצרו בגרסה קודמת מכילים עמודת tasks.level מהרמה

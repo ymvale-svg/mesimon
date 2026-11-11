@@ -800,6 +800,34 @@ function ownSuggestion(id, userId) {
  * יצירת המשימה מהצעה, עם התיקונים של המשתמש. עובר דרך ‎createTask‎ של
  * ‎api.js‎ — אותן בדיקות הרשאה כמו בכל משימה, כולל שיוך לאדם אחר.
  */
+/*
+ * 📧 המייל המקורי בתוך המשימה (הוחלט 11.11.26, מהערה של עובדת: "קיבלתי משימה ממייל ולא יודעת על מה היא").
+ * הקישור למייל ב-Gmail עובד רק למי שהמייל בתיבה שלו — ולכן נשמר עותק (מאת, נושא, תאריך, הטקסט החדש עד 8,000
+ * תווים) ב-‎tasks.source_mail‎, ומוצג לכל מי שרואה את המשימה (לא לספקים). רקע: תקלה לא מעכבת את יצירת המשימה.
+ */
+const SOURCE_MAIL_TEXT = 8000;
+async function captureSourceMail(taskId, sug) {
+  if (!taskId || !sug?.gmail_id) return null;
+  const who = Gmail.handle(sug.user_id, sug.box ?? 0);
+  const m = Mime.parse((await Gmail.raw(who, sug.gmail_id)).raw);
+  const snap = {
+    from: m.from?.name || sug.from_name || '',
+    fromEmail: m.from?.address || sug.from_email || '',
+    subject: m.subject || sug.subject || '',
+    date: m.date && !Number.isNaN(m.date.getTime()) ? m.date.toISOString() : sug.received_at ?? null,
+    text: String(m.newText || m.text || '').trim().slice(0, SOURCE_MAIL_TEXT),
+    files: (m.attachments ?? []).map((a) => a.filename).filter(Boolean).slice(0, 20)
+  };
+  D.run('UPDATE tasks SET source_mail = ? WHERE id = ?', JSON.stringify(snap), taskId);
+  return snap;
+}
+
+/** העותק של המייל המקורי, לכרטיס המשימה. ‎null‎ — אין */
+function sourceMailOf(task) {
+  const v = parseJson(task?.source_mail || '', null);
+  return v && typeof v === 'object' && (v.text || v.subject) ? v : null;
+}
+
 function createFromSuggestion(sug, actor, edits = {}) {
   const data = parseJson(sug.data, {});
   // מה שהגיע מהלקוח נבדק שוב: רק עובדים פעילים, ובתפקיד מוכר
@@ -853,6 +881,8 @@ function createFromSuggestion(sug, actor, edits = {}) {
   });
   // בקשה לפגישה — מהמייל, מקבוצה או מהוואטסאפ האישי: "📅 פגישה לקביעה"
   if (data.meeting) D.run('UPDATE tasks SET meeting_pending = 1 WHERE id = ?', taskId);
+  // 📧 עותק של המייל במשימה — לכל מי שעובד עליה (ברקע)
+  if (!fromWhatsApp && !fromAgent) captureSourceMail(taskId, sug).catch((err) => console.error('[משימון] שמירת המייל המקורי במשימה נכשלה:', err.message));
 
   // מי שביקש בקבוצה — יודע שהבקשה התקבלה ונפתחה
   if (fromWhatsApp && data.requester?.id && data.requester.id !== actor.id) {
@@ -1031,6 +1061,9 @@ function markConverted(id, userId, taskId) {
   const sug = ownSuggestion(id, userId);
   if (sug.status !== 'pending') return null;
   D.run("UPDATE ai_suggestions SET status = 'approved', task_id = ?, decided_at = ? WHERE id = ?", taskId, D.nowIso(), id);
+  // משימת AI שנפתחה מהצעה מהמייל — גם בה עותק של המייל, כמו במשימה רגילה (ברקע)
+  const src = parseJson(sug.data, {}).source;
+  if (src !== 'whatsapp' && src !== 'agent') captureSourceMail(taskId, sug).catch((err) => console.error('[משימון] שמירת המייל המקורי במשימה נכשלה:', err.message));
   return sug;
 }
 
@@ -1139,6 +1172,6 @@ module.exports = {
   init, startScan, runScan, rangeOf, morningRun, liveRun, pollMailbox,
   approve, approveAll, reject, restore, ignoreSenderOf, join, skip, undo, markConverted, setSender, senders,
   dismissClosure, closureForTask, markReply,
-  listFor, sourceLink, suggestionById,
+  listFor, sourceLink, suggestionById, captureSourceMail, sourceMailOf,
   _internal: { sanitize, processMessage, createFromSuggestion }
 };
