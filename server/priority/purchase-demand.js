@@ -190,9 +190,11 @@ const ai = {
       : { type: 'image', source: { type: 'base64', media_type: file.mime.includes('png') ? 'image/png' : 'image/jpeg', data } };
     return Claude.json({ system: skill(), content: [block, { type: 'text', text: 'task: items' }], schema: ITEMS_SCHEMA, effort: 'high', live: true });
   },
-  async match(items, pairs) {
+  async match(items, pairs, siblings = []) {
     const text = JSON.stringify({
       task: 'match',
+      // הקידוד של שאר הפריטים בדרישה — פריט שלא נמצא מאותו סוג (ציוד משרד, כלי עבודה) מקבל בדרך כלל אותו קידוד
+      request_codings: siblings,
       items: items.map((it) => ({ line: it.n, description: it.description, qty: it.qty, unit: it.unit,
         candidates: (it.candidates ?? []).map((c) => ({ code: c.PARTNAME, description: c.PARTDES, chapter: c.BUD_SUBCHAPTERDES ?? '', resource: c.BUD_SUBTOPICDES ?? '' })) })),
       pairs: pairs.slice(0, 150).map((p) => ({ chapter: p.chapter, chapter_name: p.chapterDes, topic: p.topic, topic_name: p.topicDes }))
@@ -237,22 +239,50 @@ async function resolveItems(s, items) {
   });
   const pairs = await Priority.budgetPairs(s.company).catch(() => []);
   const gen = await generalPair(s);
+  // הקידוד של הפריטים שכבר בדרישה, ושל המועמדים מהקטלוג לפריטים החדשים — הקשר ל-AI
+  const siblings = codingsOf([...(s.items ?? []).filter((x) => !items.includes(x) && x.part && x.part.code !== '000').map((x) => x.part),
+    ...items.flatMap((it) => (it.exactHit ? [partOf(it.candidates.find((p) => p.PARTNAME === it.exactHit))] : []))]);
   let res = [];
   if (Claude.isEnabled()) {
-    try { res = (await ai.match(items, pairs)).results ?? []; } catch (err) { console.error('[משימון] התאמת פריטים לדרישת רכש:', err.message); }
+    try { res = (await ai.match(items, pairs, siblings.map((x) => ({ chapter: x.chapter, chapter_name: x.chapterDes, topic: x.topic, topic_name: x.topicDes, items: x.n })))).results ?? []; } catch (err) { console.error('[משימון] התאמת פריטים לדרישת רכש:', err.message); }
   }
   for (const it of items) {
     const r = res.find((x) => x.line === it.n);
     const byCode = (c) => it.candidates.find((p) => p.PARTNAME === c);
-    const pair = (r?.chapter && r?.topic && pairs.find((p) => p.chapter === r.chapter && p.topic === r.topic)) || null;
+    // הצירוף שה-AI בחר — כמו שהוא, ואם לא קיים כך — לפי המשאב לבד (קוד המשאב כולל את תת הפרק, למשל 150-40)
+    const pair = (r?.chapter && r?.topic && pairs.find((p) => p.chapter === r.chapter && p.topic === r.topic))
+      || (r?.topic && pairs.filter((p) => p.topic === r.topic).length === 1 && pairs.find((p) => p.topic === r.topic)) || null;
     it.general = pair ? { chapter: pair.chapter, chapterDes: pair.chapterDes, topic: pair.topic, topicDes: pair.topicDes } : { ...gen };
+    it.generalFrom = pair ? 'ai' : 'default';
     if (it.exactHit) { it.part = partOf(byCode(it.exactHit), 'תיאור זהה בקטלוג'); it.status = 'ok'; continue; }
     if (r?.kind === 'exact' && byCode(r.codes?.[0])) { it.part = partOf(byCode(r.codes[0]), r.why || 'אותו פריט בקטלוג'); it.status = 'ok'; continue; }
     const close = (r ? (r.codes ?? []).map(byCode) : it.candidates.slice(0, 3)).filter(Boolean).slice(0, 3);
     if (close.length && r?.kind !== 'none') { it.options = close.map((p) => partOf(p, 'נבחר ע"י העובד')); it.status = 'ask'; it.why = r?.why ?? ''; continue; }
     setGeneral(it, r?.why || 'לא נמצא בקטלוג');
   }
+  // פריט בלי קידוד מתאים (ה-AI לא בחר, או בחר צירוף שלא קיים) — הקידוד הנפוץ בשאר הפריטים בדרישה, לפני הכללי של החברה.
+  // כך "מיקרוגל" בדרישה של ציוד משרד נקלט על ציוד משרדי ולא על 101 / 98-10 (PD26000052)
+  const common = codingsOf((s.items ?? []).filter((x) => x.status === 'ok' && x.part && x.part.code !== '000').map((x) => x.part))[0];
+  for (const it of (s.items ?? []).filter((x) => x.generalFrom === 'default')) {
+    if (!common) break;
+    it.general = { chapter: common.chapter, chapterDes: common.chapterDes, topic: common.topic, topicDes: common.topicDes };
+    it.generalFrom = 'siblings';
+    if (it.status === 'general') it.part = { ...it.part, ...it.general, why: 'כמו שאר הפריטים בדרישה' };
+  }
   for (const it of items) { delete it.candidates; delete it.exactHit; }
+}
+
+/** צירופי תת פרק ומשאב של רשימת פריטים, הנפוץ קודם: ‎[{ chapter, chapterDes, topic, topicDes, n }]‎ */
+function codingsOf(parts) {
+  const m = new Map();
+  for (const p of parts) {
+    if (!p?.chapter || !p?.topic) continue;
+    const k = `${p.chapter}|${p.topic}`;
+    const e = m.get(k) ?? { chapter: p.chapter, chapterDes: p.chapterDes ?? '', topic: p.topic, topicDes: p.topicDes ?? '', n: 0 };
+    e.n += 1;
+    m.set(k, e);
+  }
+  return [...m.values()].sort((a, b) => b.n - a.n);
 }
 
 function setGeneral(it, why) {
@@ -647,13 +677,39 @@ async function submit(user, s) {
   let prdno;
   // הבעלים בפריוריטי — העובד עצמו (לפי המייל / השם במסך המשתמשים); לא נמצא — משתמש ה-API, והשם בדו-שיח
   const owner = await Approvals.priorityLoginFor(user).catch(() => null);
-  try {
-    prdno = await Priority.createDemand(c, { date: s.date, project: s.project?.code, warehouse: s.warehouse, details: detailsOf(user), owner, approvalCode: s.demandCode?.code ?? null });
-  } catch (err) {
-    // מחסן שנדחה — בלי מחסן (פריוריטי ממלא את מחסן הפרויקט)
-    try { prdno = await Priority.createDemand(c, { date: s.date, project: s.project?.code, details: detailsOf(user), approvalCode: s.demandCode?.code ?? null }); s.notes = [...(s.notes ?? []), `הכותרת נדחתה (${err.message}) — נפתחה בלי מחסן${owner ? ' ובלי בעלים' : ''}`]; } catch (err2) {
-      alertAdmins(user, s, 'הדרישה לא נפתחה בפריוריטי', [err2.message]);
-      return reply(s, 'לא הצלחתי לפתוח את הדרישה בפריוריטי. מנהל המערכת קיבל פירוט. הרשימה שמורה — נסו *סיום* שוב בעוד כמה דקות, או *ביטול*.', [BTN.done, BTN.cancel], { status: 'error', result: `פתיחה נכשלה: ${err2.message}` });
+  /*
+   * פריוריטי דוחה כותרת — מנסים שוב בלי מה שנדחה: קודם בלי הבעלים (משתמש פריוריטי לא פעיל — למשל ShazarN, PD26000052),
+   * אחר כך גם בלי המחסן (פריוריטי ממלא את מחסן הפרויקט). מה שירד — בדו-שיח הפנימי; העובד לא צריך לטפל בזה.
+   */
+  const head = { date: s.date, project: s.project?.code, details: detailsOf(user), approvalCode: s.demandCode?.code ?? null };
+  const tries = [
+    { warehouse: s.warehouse, owner },
+    owner ? { warehouse: s.warehouse, owner: null, drop: `בלי בעלים — ${owner} לא התקבל כבעלים בפריוריטי` } : null,
+    { warehouse: null, owner: null, drop: `בלי מחסן${owner ? ' ובלי בעלים' : ''} — פריוריטי ממלא את מחסן הפרויקט` }
+  ].filter(Boolean);
+  const errors = [];
+  for (const t of tries) {
+    try {
+      prdno = await Priority.createDemand(c, { ...head, warehouse: t.warehouse, owner: t.owner });
+      if (t.drop) s.notes = [...(s.notes ?? []), `הכותרת נפתחה ${t.drop} (${errors[errors.length - 1]})`];
+      break;
+    } catch (err) {
+      errors.push(err.message);
+    }
+  }
+  if (!prdno) {
+    alertAdmins(user, s, 'הדרישה לא נפתחה בפריוריטי', errors);
+    return reply(s, 'לא הצלחתי לפתוח את הדרישה בפריוריטי. מנהל המערכת קיבל פירוט. הרשימה שמורה — נסו *סיום* שוב בעוד כמה דקות, או *ביטול*.', [BTN.done, BTN.cancel], { status: 'error', result: `פתיחה נכשלה: ${errors.join(' | ')}` });
+  }
+  // הבעלים נדחה — מנהלי המערכת יודעים (פעם אחת לכל משתמש), כדי להפעיל אותו בפריוריטי
+  if (owner && errors.length && /לא פעיל|inactive/i.test(errors[0])) {
+    const k = 'pd_owner_inactive';
+    const seen = D.getSetting(k, {}) ?? {};
+    if (!seen[owner]) {
+      seen[owner] = Date.now();
+      D.setSetting(k, seen);
+      alertAdmins(user, s, `המשתמש ${owner} לא פעיל בפריוריטי`, [`הדרישה ${prdno} נפתחה בלי בעלים (משתמש ה-API), כי פריוריטי דחה את ${owner}: ${errors[0]}`,
+        'כדי שהדרישות של העובד יירשמו עליו — להפעיל את המשתמש בפריוריטי.']);
     }
   }
   s.prdno = prdno;

@@ -224,14 +224,17 @@ function vttText(vtt) {
  * הפגישה ב-Timeless שמתאימה לפגישת Zoom — לפי שעת ההתחלה (עד 20 דקות הפרש), מהפגישות שהעובד רואה.
  * Timeless מקליט ומתמלל את פגישות ה-Zoom, ולכן לא צריך תמלול של Zoom עצמו (הוחלט 09.11.26).
  */
-async function timelessMatch(userId, startIso) {
-  if (!Timeless.isConnected(userId) || !startIso) return null;
+async function timelessMatch(userId, startIso, emails) {
+  if (!Timeless.isConnected(userId) || !startIso || !emails?.size) return null;
   const t = new Date(startIso).getTime();
   const ymd = (ms) => new Date(ms).toISOString().slice(0, 10);
   const list = await Timeless.listMeetings(userId, { from: ymd(t - DAY_MS), to: ymd(t + DAY_MS), limit: 50, scope: 'all' }).catch(() => []);
+  // רק פגישה שמשתתף בה לפחות אחד ממשתתפי פגישת ה-Zoom — הסיכום נשמר לכל משתתפי ה-Zoom,
+  // ובשעה הזו יכולה להיות פגישה אחרת בארגון (הנהלה רואה את כל הארגון)
+  const shares = (m) => (m.participants ?? []).some((p) => (String(p).match(/[^\s<>"']+@[^\s<>"']+/g) ?? []).some((e) => emails.has(normEmail(e))));
   return list
     .map((m) => ({ m, diff: Math.abs(new Date(m.start ?? 0).getTime() - t) }))
-    .filter((x) => x.diff <= 20 * MIN)
+    .filter((x) => x.diff <= 20 * MIN && shares(x.m))
     .sort((a, b) => a.diff - b.diff)[0]?.m ?? null;
 }
 
@@ -239,9 +242,12 @@ async function zoomSource(row, userId) {
   const d = parseJson(row.data, {});
   const m = D.get('SELECT * FROM meetings WHERE id = ?', d.meetingId);
   if (!m?.zoom_meeting_id) return null;
-  const people = Secretariat.withoutSecretaries(parseJson(m.attendees, [])).map((a) => `${a.name || ''} <${a.email}>`);
+  const attendees = Secretariat.withoutSecretaries(parseJson(m.attendees, []));
+  const people = attendees.map((a) => `${a.name || ''} <${a.email}>`);
+  const emails = new Set([...attendees.map((a) => normEmail(a.email)).filter((e) => e.includes('@')),
+    ...(m.owner_id ? emailsOf(userRow(m.owner_id)) : [])]);
   // קודם Timeless — שם התמליל וסיכום ה-AI
-  const tl = await timelessMatch(userId, m.start_at);
+  const tl = await timelessMatch(userId, m.start_at, emails);
   if (tl) {
     const src = await timelessSource({ ...row, ref: String(tl.id), data: JSON.stringify({ participants: tl.participants }) }, userId);
     if (src) return { people: [...people, ...src.people], text: src.text };
@@ -479,5 +485,5 @@ function prune() {
 
 module.exports = {
   sweep, answer, openTasks, isOpenButton, digest, prune, BTN,
-  _internal: { vttText, myItems, followupFor, askText, alreadyAsked, record, ASK, BARE, norm }
+  _internal: { vttText, myItems, followupFor, askText, alreadyAsked, record, ASK, BARE, norm, timelessMatch }
 };

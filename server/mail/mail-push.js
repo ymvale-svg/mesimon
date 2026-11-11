@@ -3,10 +3,12 @@
  * 📬 מה מהמייל מגיע לוואטסאפ, ואיך מייל הוא פריט אחד (הוחלט 10.11.26, ישראל: "לא להקפיץ כל מייל לוואטסאפ —
  * אחרת מה עשינו? זה ישגע את הבן אדם ויפסיק להסתכל". "3 ביום, רק ראשי"):
  *
- *   • קופץ בוואטסאפ רק מייל שאני **הנמען הראשי** בו (לא בהעתק), לא דיוור / אוטומטי, לא משולח שהשתקתי,
- *     ומעל סף חשיבות (‎scoreOf‎ ב-‎mail-actions.js‎: דדליין קרוב, עדיפות, שולח שעונים לו, ותק).
- *     הודעה מיידית (מייל שזה עתה הגיע) — רק מעל סף גבוה יותר.
- *   • עד 3 הודעות יזומות על מיילים ביום (‎PACE‎ ב-‎mail-actions.js‎; "מעט" — אחת), כולל ההודעה המרוכזת.
+ *   • קופץ בוואטסאפ רק מייל שאני **הנמען הראשי** בו (לא בהעתק), לא דיוור / אוטומטי, לא משולח שהשתקתי.
+ *   • 💡 מייל חדש — רק כשיש לו הצעת תשובה קונקרטית (הוחלט 11.11.26, ישראל: "התראה על כל מייל — מטריד. מגיע
+ *     מייל ויש לך הצעה קונקרטית לתשובה — תביא את זה"): משפט מי כתב ומה ביקש, והתשובה המוצעת (‎replyAlert‎).
+ *     בלי הצעה כזו — אין הודעה עכשיו; אם המייל לא יטופל, תגיע תזכורת "זכרת?". הצעות התשובה לא נספרות בתקרה.
+ *   • תזכורות — מעל סף חשיבות (‎scoreOf‎ ב-‎mail-actions.js‎: דדליין קרוב, עדיפות, שולח שעונים לו, ותק),
+ *     עד 5 ביום (‎PACE‎ ב-‎mail-actions.js‎, מ-11.11.26; "מעט" — אחת), כולל ההודעה המרוכזת. מייל שענית עליו — לא מזכירים.
  *   • כל השאר — ב"היום" ([לעבור עליהם 👉]), ופעם אחת בצהריים: "📬 4 מיילים מחכים לך" (‎digestFor‎).
  *   • "להתעלם" — המייל יורד מכל המקומות (הצעה, תובנה, תזכורת). פעמיים מאותו שולח — שאלה אחת: "לא להקפיץ
  *     יותר מיילים של X?" — ואז הם רק ב"היום".
@@ -19,7 +21,6 @@ const MailInsights = require('./mail-insights');
 const WaUi = require('../whatsapp').WaUi;
 
 const PUSH_MIN = 4;   // תזכורת "זכרת?" / הודעה מרוכזת
-const NOW_MIN = 6;    // הודעה מיידית על מייל שזה עתה הגיע
 const DIGEST_AT = '13:00';
 const DIGEST_MIN = 2; // פחות משני מיילים — אין טעם בהודעה מרוכזת
 
@@ -31,14 +32,57 @@ const savePrefs = (userId, patch) => D.setUserPref(userId, 'botPrefs', { ...pref
 const mutedSenders = (userId) => new Set((prefsOf(userId).mailMutedSenders ?? []).map((e) => String(e).toLowerCase()));
 
 /**
- * מותר להקפיץ את המייל הזה בוואטסאפ? ‎now‎ — הודעה מיידית (סף גבוה יותר).
+ * המייל נשלח אליי ישירות — ראשי, לא אוטומטי, לא משולח מושתק.
  * הצעה ישנה, מלפני שנרשם ‎toMe‎ — כמו ראשי (הן יורדות ממילא אחרי שבוע).
  */
-function pushable(row, { now = false } = {}) {
-  const d = parseJson(row.data, {});
+function direct(row) {
+  const d = typeof row.data === 'object' && row.data ? row.data : parseJson(row.data, {});
   if (d.toMe === false || d.auto) return false;
-  if (mutedSenders(row.user_id).has(String(row.from_email ?? '').toLowerCase())) return false;
-  return MailActions._internal.scoreOf(row) >= (now ? NOW_MIN : PUSH_MIN);
+  return !mutedSenders(row.user_id).has(String(row.from_email ?? '').toLowerCase());
+}
+
+/** מותר להזכיר על המייל הזה בוואטסאפ? ישיר ומעל סף החשיבות */
+function pushable(row) {
+  return direct(row) && MailActions._internal.scoreOf(row) >= PUSH_MIN;
+}
+
+const oneLine = (x, n) => { const v = String(x ?? '').replace(/\s+/g, ' ').trim(); return v.length > n ? `${v.slice(0, n - 1)}…` : v; };
+
+/** המשפט הראשון — "בקצרה, במשפט" */
+function firstSentence(text, n = 220) {
+  const v = oneLine(text, 2000);
+  const m = /^(.+?[.!?؟])(?:\s|$)/.exec(v);
+  return oneLine(m && m[1].length >= 15 ? m[1] : v, n);
+}
+
+/**
+ * הצעת תשובה שכדאי להביא: יש נוסח, לא נשלח / נדחה, והמודל לא אמר שהמייל לא מצפה לתשובה.
+ */
+function concreteReply(reply) {
+  if (!reply?.body || reply.sent || reply.dismissed) return false;
+  if (/לא\s+מצפה\s+לתשובה/.test(String(reply.missing ?? ''))) return false;
+  return String(reply.body).replace(/\[[^\]]*\]/g, '').replace(/\s+/g, '').length >= 10;
+}
+
+/**
+ * 💡 ההודעה על מייל חדש עם הצעת תשובה — קצרה: מי כתב, במשפט מה ביקש, והתשובה המוצעת.
+ *   📧 קיבלת מייל מ*דני כהן*: מבקש לאשר את הצעת המחיר לפרויקט עד יום ה׳.
+ *   *לענות כך?*
+ *   _שלום דני, …_
+ */
+function replyAlert(head, reply) {
+  const d = typeof head.data === 'object' && head.data ? head.data : (head.d ?? parseJson(head.data, {}));
+  const who = head.from_name || head.from_email;
+  const what = firstSentence(d.summary || d.title || head.subject || '');
+  return [
+    `📧 קיבלת מייל מ*${who}*${what ? `: ${what}` : ''}`,
+    '',
+    '*לענות כך?*',
+    `_${oneLine(reply.body, 700)}_`,
+    reply.missing ? `⚠️ ${reply.missing}` : null,
+    '',
+    '*כן* 👍 שולח · *לא* 👎 לא עונים · או כתבו מה לשנות.'
+  ].filter((l) => l !== null).join('\n');
 }
 
 /** פריט מייל ל"היום" ולמעבר אחד-אחד — מהצעה (‎ai_suggestions‎) או מתובנה "דורש ממך" */
@@ -191,4 +235,4 @@ function digestFor(userId) {
   };
 }
 
-module.exports = { pushable, mailItem, onePerThread, ignoreMail, answerMute, unmuteCommand, morningLine, digestFor, waitingMail, mutedSenders, PUSH_MIN, NOW_MIN };
+module.exports = { pushable, direct, concreteReply, replyAlert, mailItem, onePerThread, ignoreMail, answerMute, unmuteCommand, morningLine, digestFor, waitingMail, mutedSenders, PUSH_MIN };

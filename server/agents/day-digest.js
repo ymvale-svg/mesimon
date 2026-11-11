@@ -6,7 +6,7 @@
  *   📋 משימות להיום (ובאיחור) · 📬 מיילים מאתמול שעוד מחכים לך (מה שלא טופל — ענית / ארכיון / החלטת)
  *   · ⏳ מחכה לך מאחרים (מיילים ששלחת ולא נענו, משימות שהטלת ובאיחור) · ⏰ תזכורות להיום.
  *   מי שבחר קצב "רק בסיכום הבוקר" — זו התזכורת היחידה על המיילים.
- * סוף יום (‎digest_evening‎, ברירת מחדל 17:30):
+ * סוף יום (‎digest_evening‎, ברירת מחדל 17:00 — ההודעה היזומה האחרונה של היום):
  *   ✅ מה נסגר היום · ➡️ מה עוד פתוח להיום — [להעביר למחר ✅] מעביר את תאריך היעד ליום העבודה הבא.
  *
  * הודעה אחת בבוקר ואחת בערב. יום בלי כלום — בלי הודעה.
@@ -130,7 +130,7 @@ async function tick(io) {
   const wd = W.weekdayOf(today);
   if (wd === 5 || wd === 6) return;
   const now = hm();
-  for (const [key, at, build] of [['morning', String(D.getSetting('digest_morning', '08:15')), morning], ['evening', String(D.getSetting('digest_evening', '17:30')), evening]]) {
+  for (const [key, at, build] of [['morning', String(D.getSetting('digest_morning', '08:15')), morning], ['evening', String(D.getSetting('digest_evening', '17:00')), evening]]) {
     if (now < at) continue;
     const sent = D.getSetting(`digest_sent_${key}`, {}) ?? {};
     for (const u of io.users()) {
