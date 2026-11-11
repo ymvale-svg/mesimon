@@ -308,7 +308,7 @@ async function findPartExact(company, description) {
   const d = String(description ?? '').trim();
   if (!d) return null;
   const list = rows(await call(company, 'GET',
-    `LOGPART?$filter=${enc(`PARTDES eq '${q(d)}'`)}&$select=PARTNAME,PARTDES,BUD_SUBCHAPTERNAME,BUD_SUBTOPICNAME&$top=2`));
+    `LOGPART?$filter=${enc(`PARTDES eq '${q(d)}'`)}&$select=PARTNAME,PARTDES,STATDES,BUD_SUBCHAPTERNAME,BUD_SUBCHAPTERDES,BUD_SUBTOPICNAME,BUD_SUBTOPICDES&$top=2`));
   return list.length === 1 ? list[0] : null;
 }
 
