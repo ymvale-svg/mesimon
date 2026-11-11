@@ -37,7 +37,7 @@ test('mailFeedback — בלי תיבה מבוקשת: לא קוראים מייל 
   assert.equal(read, 0);
 });
 
-test('mailFeedback — רק התיבה שביקשו, רק "משימון"; מוסווה; מענה אוטומטי — לא; צילום מסך מצורף', async (t) => {
+test('mailFeedback — רק התיבה שביקשו, רק משימון והבוט; מוסווה; מענה אוטומטי — לא; צילום מסך מצורף', async (t) => {
   D.setSetting('bot_review_mailboxes', null);
   const admin = user({ role: 'superadmin', full_name: 'מנהל' });
   user({ role: 'superadmin', full_name: 'מנהל אחר' });
@@ -62,8 +62,7 @@ test('mailFeedback — רק התיבה שביקשו, רק "משימון"; מוס
   assert.match(r.mails[0].text, /\[טלפון\]/);
   assert.doesNotMatch(r.mails[0].text, /050-1234567/);
   assert.match(queries[0], /^after:\d+ /);
-  assert.match(queries[0], /\(משימון OR mesimon\)/);
-  assert.doesNotMatch(queries[0], /אשל שלי|בוט הוואטסאפ/);
+  assert.match(queries[0], /\(משימון OR mesimon OR "אשל שלי" OR בוט OR הבוט\)/);
   assert.match(queries[0], /-subject:"סקירת הבוט"/);
 });
 
