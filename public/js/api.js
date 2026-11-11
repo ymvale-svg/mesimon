@@ -76,6 +76,8 @@ const API = (() => {
     deleteProjectImage: (imageId) => call('DELETE', `/api/project-images/${imageId}`),
 
     reports: () => call('GET', '/api/reports'),
+    // 🔀 איחוד: המשימה ‎id‎ נסגרת, והתוכן שלה עובר ל-‎intoId‎
+    mergeTask: (id, intoId) => call('POST', `/api/tasks/${id}/merge`, { intoId }),
     // ‎scope‎ ריק הוא "שלי" — ברירת המחדל נקבעת בשרת ולא נשכפלת לכאן
     search: (q, scope) => call('GET',
       `/api/search?q=${encodeURIComponent(q)}${scope ? `&scope=${encodeURIComponent(scope)}` : ''}`),
