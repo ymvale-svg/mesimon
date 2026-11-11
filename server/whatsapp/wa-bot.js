@@ -4432,6 +4432,17 @@ function enqueueAs(userId, m) {
   return next;
 }
 
+/**
+ * 🗂 מסמך ממשימון פריוריטי (‎/priority‎) לבוט — כאילו העובד שלח אותו עם "קבלת סחורה" / "דרישת רכש".
+ * מחזיר ‎false‎ כשאין לעובד טלפון בפרופיל (אין לאן לענות).
+ */
+function handOver(userId, { text, file, id }) {
+  const u = D.get('SELECT phone FROM users WHERE id = ?', userId);
+  if (!u?.phone) return false;
+  enqueueAs(userId, { text, kind: 'documentMessage', file, id: id ?? `priority-${Date.now()}` });
+  return true;
+}
+
 // 📅 תיאום פגישה — שליחה / קביעה ברקע, ותשובות שמגיעות
 function meetCoordRun(actor, fn) {
   const ref = currentMsg.get(actor.id);
@@ -5063,7 +5074,7 @@ module.exports = {
   init, start, tick, publicStatus, save, remove, checkState, qr, isConfigured,
   listGroups, bindGroup, userByPhone, markDone, readLog, todayStats, simulate, simulateGroup, inHours,
   // לשליחה ממודולים אחרים — התראה לפני פגישה (‎meetings.js‎), עם רישום ביומן הבוט
-  sendText, sendButtons, log, notifyAssignment, assistant, deliver, sendFilesToUser, mailAlertUsers,
+  sendText, sendButtons, log, notifyAssignment, assistant, deliver, sendFilesToUser, mailAlertUsers, handOver,
   _internal: {
     featuresText, PLAIN_FEATURES, parseThreadAdd, threadAddText, dayItems, walkText, walkButtons, walkAction, WALK,
     storeGroupMessage, processGroup, handleDirect, sanitizeGroup, resolveMentions, candidatesOf, converse, turn, withFollowUps, sendSummaries, YES,

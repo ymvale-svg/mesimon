@@ -87,3 +87,29 @@ test('מנהל: מטריצת ההרשאות — מסמך וחברות לעובד
   assert.equal(me.json.allCompanies, false);
   assert.equal((await as(admin)('PUT', '/api/priority/access', { rows: [{ id: 999999, docs: [] }] })).status, 400);
 });
+
+test('גרירה ותור מקצה לקצה: העלאה, רשימה, הקובץ עצמו, הוצאה — ורק למסמך שמורשים לו', async () => {
+  const pdf = Buffer.from('%PDF-1.4\n%api\n');
+  const up = await as(emp)('POST', '/api/priority/docs', { doc: 'receipt', filename: 'תעודה.pdf', mime: 'application/pdf', data: pdf.toString('base64') });
+  assert.equal(up.status, 201, up.text);
+  const list = await as(emp)('GET', '/api/priority/docs?doc=receipt');
+  assert.equal(list.json.items[0].id, up.json.doc.id);
+  assert.equal(list.json.counts.receipt, 1);
+  const f = await srv.api('GET', `/api/priority/docs/${up.json.doc.id}/file`, { cookie: emp });
+  assert.equal(f.status, 200);
+  assert.equal(f.headers.get('content-type'), 'application/pdf');
+  assert.equal(f.text, pdf.toString('utf8'));
+  assert.equal((await srv.api('GET', `/api/priority/docs/${up.json.doc.id}/file`, { cookie: admin })).status, 404, 'רק של העובד');
+  assert.equal((await as(emp)('POST', '/api/priority/docs', { doc: 'invoice', filename: 'x.pdf', data: pdf.toString('base64') })).status, 403);
+  assert.equal((await as(emp)('POST', '/api/priority/docs', { doc: 'receipt', filename: 'x.exe', mime: 'application/x-msdownload', data: 'TVo=' })).status, 400);
+  assert.equal((await as(emp)('DELETE', `/api/priority/docs/${up.json.doc.id}`)).status, 200);
+  assert.equal((await as(emp)('GET', '/api/priority/docs?doc=receipt')).json.items.length, 0);
+});
+
+test('טור המיילים: ריק כשאין מה שזוהה, ומייל לא קיים — 404', async () => {
+  const r = await as(emp)('GET', '/api/priority/inbox');
+  assert.equal(r.status, 200);
+  assert.deepEqual(r.json.items, []);
+  assert.equal((await as(emp)('POST', '/api/priority/inbox/999999/take', { doc: 'receipt' })).status, 404);
+  assert.equal((await as(emp)('POST', '/api/priority/inbox/999999/dismiss', {})).status, 404);
+});

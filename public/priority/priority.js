@@ -3,7 +3,8 @@
  * משימון פריוריטי — תוכנה נפרדת בתוך משימון (‎/priority‎). לא טוען שום קוד של האתר הראשי.
  * האפיון: "אפיון — משימון פריוריטי (דשבורד).md".
  *
- * מסכים: הבית (‎/priority‎) · הגדרות (‎/priority/settings‎) · הרשאות (‎/priority/access‎). הגדרות והרשאות — מנהלי מערכת.
+ * מסכים: הבית (‎/priority‎) · עבודה על פעולה (‎/priority/receipt‎ וכו' — התור, טור המיילים והגרירה)
+ *        · הגדרות (‎/priority/settings‎) · הרשאות (‎/priority/access‎). הגדרות והרשאות — מנהלי מערכת.
  */
 (() => {
   const $ = (sel, root = document) => root.querySelector(sel);
@@ -78,8 +79,11 @@
       main.innerHTML = `<div class="note">${esc(e.message)}</div>`; return;
     }
     header();
-    const view = ROUTES[routeOf()] ?? home;
+    const r = routeOf();
+    const docRoute = me.docs.find((d) => d.key === r);
+    const view = docRoute ? () => workspace(docRoute) : ROUTES[r] ?? home;
     if ((view === settings || view === access) && !me.admin) { main.innerHTML = '<div class="note">רק מנהלי מערכת נכנסים למסך הזה.</div>'; return; }
+    main.classList.remove('wide');
     main.innerHTML = '<p class="muted pad">טוען…</p>';
     try { await view(); } catch (e) { main.innerHTML = `<div class="note">${esc(e.message)}</div>`; }
   }
@@ -87,15 +91,176 @@
   // ---------------------------------------------------------------- בית
   async function home() {
     const cos = me.allCompanies ? 'כל החברות' : me.companies.map((c) => c.name).join(' · ') || 'אף חברה';
+    const [q, inbox] = await Promise.all([api('GET', '/api/priority/docs'), api('GET', '/api/priority/inbox')]);
+    const fromMail = (k) => inbox.items.filter((m) => m.guess === k || (k === 'receipt' && m.guess === 'invoice')).length;
     main.innerHTML = `
-      <div class="greet"><h1>שלום, ${esc(me.name)}</h1><p>החברות שלך: ${esc(cos)}</p></div>
+      <div class="greet"><h1>שלום, ${esc(me.name)}</h1><p>החברות שלך: ${esc(cos)}${inbox.items.length ? ` · <b>${inbox.items.length}</b> מסמכים חדשים במייל` : ''}</p></div>
       <div class="tiles">${me.docs.map((d) => {
         const status = !d.allowed ? '<span class="pill p-mute">אין לך הרשאה</span>'
-          : d.ready ? '<span class="pill p-ok">עובד בבוט</span><span class="pill p-mute">המסך — בבנייה</span>'
-            : `<span class="pill p-mute">בקרוב · ${NEXT[d.key]} בתור</span>`;
-        return `<div class="tile${d.allowed && d.ready ? '' : ' off'}"><span class="ic">${icon(d.key)}</span><h3>${esc(d.label)}</h3><span class="sub">${SUB[d.key] ?? ''}</span><span class="foot">${status}</span></div>`;
+          : d.ready ? '<span class="pill p-ok">עובד דרך הבוט</span>'
+            : `<span class="pill p-mute">איסוף בלבד · ${NEXT[d.key]} בתור לבנייה</span>`;
+        const n = q.counts[d.key] ?? 0;
+        const m = d.allowed ? fromMail(d.key) : 0;
+        const counts = d.allowed ? `<span class="count num">${n}<small>בתור</small></span>${m ? `<span class="pill p-warn">${m} במייל</span>` : ''}` : '';
+        const body = `<span class="ic">${icon(d.key)}</span><h3>${esc(d.label)}</h3><span class="sub">${SUB[d.key] ?? ''}</span><span class="foot">${counts}${status}</span>`;
+        return d.allowed ? `<a class="tile" href="/priority/${d.key}" data-nav>${body}</a>` : `<div class="tile off">${body}</div>`;
       }).join('')}</div>
-      <p class="note">דרישת רכש וקבלת סחורה עובדות היום בוואטסאפ: כתבו לבוט "דרישת רכש" או "קבלת סחורה". העבודה עליהן מתוך המסך הזה — השלב הבא.</p>`;
+      <p class="note">לחצו על פעולה: בצד שמאל המיילים שהגיעו אליכם עם חשבונית או תעודת משלוח, ואפשר לגרור לשם קבצים. דרישת רכש וקבלת סחורה — המסמך נשלח לבוט, והשיחה ממשיכה בוואטסאפ.</p>`;
+  }
+
+  // ---------------------------------------------------------------- עבודה על פעולה: התור, המיילים והגרירה
+  const fmtAt = (iso) => {
+    const d = new Date(iso);
+    const today = new Date().toDateString() === d.toDateString();
+    return today ? d.toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit' }) : d.toLocaleDateString('he-IL', { day: '2-digit', month: '2-digit' });
+  };
+  const STAGE_CLS = { new: 'p-warn', bot: 'p-brand', done: 'p-ok', rejected: 'p-mute' };
+  const readAsDataUrl = (f) => new Promise((resolve, reject) => { const r = new FileReader(); r.onload = () => resolve(r.result); r.onerror = () => reject(r.error); r.readAsDataURL(f); });
+
+  async function workspace(d) {
+    const label = (k) => me.docs.find((x) => x.key === k)?.label ?? k;
+    const allowed = (k) => Boolean(me.docs.find((x) => x.key === k)?.allowed);
+    if (!d.allowed) { main.innerHTML = '<div class="note">אין לך הרשאה לפעולה הזו. פנו למנהל המערכת.</div>'; return; }
+    let items = [];
+    let mails = [];
+    let selected = null;
+
+    main.classList.add('wide');
+    main.innerHTML = `
+      <div class="ws">
+        <nav class="rail" aria-label="פעולות">
+          <a href="/priority" data-nav title="בית">${'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/></svg>'}</a>
+          ${me.docs.filter((x) => x.allowed).map((x) => `<a href="/priority/${x.key}" data-nav title="${esc(x.label)}" ${x.key === d.key ? 'aria-current="page"' : ''}>${icon(x.key)}</a>`).join('')}
+        </nav>
+        <section class="center">
+          <div class="ctx"><div><h1>${esc(d.label)}</h1><span class="muted" id="ws-meta"></span></div>
+            ${d.ready ? '<span class="pill p-ok">"לבוט 🤖" — הבוט קורא את המסמך וממשיך איתך בוואטסאפ</span>' : `<span class="pill p-mute">איסוף בלבד — הקליטה תיבנה בהמשך (${NEXT[d.key]} בתור)</span>`}</div>
+          <div class="split">
+            <div class="queue" id="queue"></div>
+            <div class="preview" id="preview"><p class="muted">בחרו מסמך מהתור כדי לראות אותו כאן.</p></div>
+          </div>
+        </section>
+        <aside class="inbox">
+          <label class="drop" id="drop" for="file-in">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 16V4M7 9l5-5 5 5"/><path d="M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"/></svg>
+            <b>גררו לכאן PDF או תמונה</b><span>או לחצו לבחירת קובץ</span>
+          </label>
+          <input type="file" id="file-in" accept="application/pdf,image/*" multiple hidden>
+          <div class="inbox-h"><h2>מהמייל שלך</h2><span class="pill p-warn num" id="mail-n"></span></div>
+          <div class="mails" id="mails"></div>
+        </aside>
+      </div>`;
+
+    function drawQueue() {
+      $('#ws-meta').textContent = items.length ? `${items.length} מסמכים בתור` : '';
+      $('#queue').innerHTML = items.length ? items.map((x) => `
+        <article class="qcard${selected === x.id ? ' sel' : ''}" data-id="${x.id}">
+          <button class="qmain" data-view="${x.id}">
+            <span class="qt"><b>${esc(x.supplier || x.fromName || x.filename)}</b><span class="pill ${STAGE_CLS[x.stage] ?? 'p-mute'}">${esc(x.stageLabel)}</span></span>
+            <span class="qs">${x.source === 'mail' ? '✉' : '⤓'} ${esc(x.filename)}</span>
+            <span class="qs muted">${x.source === 'mail' ? esc(x.subject || x.fromEmail) : 'הועלה במסך'} · ${fmtAt(x.at)}</span>
+          </button>
+          <span class="qa">
+            ${d.ready && x.stage === 'new' ? `<button class="btn small pri" data-bot="${x.id}">לבוט 🤖</button>` : ''}
+            ${x.stage !== 'done' ? `<button class="btn small" data-del="${x.id}" aria-label="הוצאה מהתור">✕</button>` : ''}
+          </span>
+        </article>`).join('')
+        : '<p class="muted empty">התור ריק. קחו מסמך מהמייל, או גררו קובץ לאזור שבצד.</p>';
+    }
+
+    function drawMails() {
+      $('#mail-n').textContent = mails.length || '';
+      $('#mails').innerHTML = mails.length ? mails.map((m) => {
+        const btns = [`<button class="btn small pri" data-take="${m.id}" data-doc="${d.key}">${esc(d.label)}</button>`];
+        if (m.guess !== d.key && allowed(m.guess)) btns.push(`<button class="btn small" data-take="${m.id}" data-doc="${m.guess}">${esc(label(m.guess))}</button>`);
+        btns.push(`<button class="btn small" data-dismiss="${m.id}">לא רלוונטי</button>`);
+        return `<div class="mail">
+          <span class="mfrom"><b>${esc(m.supplier || m.fromName || m.fromEmail)}</b><time>${fmtAt(m.at)}</time></span>
+          <span class="msubj">${esc(m.subject)}</span>
+          <span class="matt">📎 ${esc(m.filename)} <span class="pill ${m.guess === d.key ? 'p-brand' : 'p-mute'}">${esc(m.kindLabel)} · נראה כמו ${esc(label(m.guess))}</span></span>
+          <span class="mbtns">${btns.join('')}</span>
+        </div>`;
+      }).join('') : '<p class="muted empty">אין מיילים חדשים עם חשבונית או תעודת משלוח. מה שסריקת המייל מזהה יופיע כאן.</p>';
+    }
+
+    function preview(id) {
+      selected = id;
+      const x = items.find((i) => i.id === id);
+      drawQueue();
+      if (!x) { $('#preview').innerHTML = '<p class="muted">בחרו מסמך מהתור כדי לראות אותו כאן.</p>'; return; }
+      const src = `/api/priority/docs/${x.id}/file`;
+      $('#preview').innerHTML = `<div class="pv-h"><span>${esc(x.filename)}</span><a href="${src}" target="_blank" rel="noopener">פתיחה בחלון ↗</a></div>
+        ${/^image\//.test(x.mime) ? `<img src="${src}" alt="${esc(x.filename)}">` : `<iframe src="${src}" title="${esc(x.filename)}"></iframe>`}`;
+    }
+
+    async function load() {
+      const [q, inbox] = await Promise.all([api('GET', `/api/priority/docs?doc=${d.key}`), api('GET', '/api/priority/inbox')]);
+      items = q.items;
+      // המיילים: קודם מה שנראה כמו הפעולה הזו
+      mails = inbox.items.sort((a, b) => Number(b.guess === d.key) - Number(a.guess === d.key));
+      drawQueue(); drawMails();
+    }
+
+    async function uploadFiles(files) {
+      for (const f of files) {
+        try {
+          const data = await readAsDataUrl(f);
+          const r = await api('POST', '/api/priority/docs', { doc: d.key, filename: f.name, mime: f.type, data });
+          items.unshift(r.doc); drawQueue(); preview(r.doc.id);
+          toast(`נוסף לתור: ${f.name}`);
+        } catch (e) { toast(`${f.name}: ${e.message}`, true); }
+      }
+    }
+
+    // גרירה לכל המסך (לא רק לאזור) — המאזינים מתחלפים בכל כניסה לפעולה
+    const drop = $('#drop');
+    const ws = main.querySelector('.ws');
+    ['dragenter', 'dragover'].forEach((ev) => ws.addEventListener(ev, (e) => { if (e.dataTransfer?.types?.includes('Files')) { e.preventDefault(); drop.classList.add('over'); } }));
+    ['dragleave', 'drop'].forEach((ev) => ws.addEventListener(ev, (e) => { if (ev === 'dragleave' && ws.contains(e.relatedTarget)) return; drop.classList.remove('over'); }));
+    ws.addEventListener('drop', (e) => { if (!e.dataTransfer?.files?.length) return; e.preventDefault(); uploadFiles([...e.dataTransfer.files]); });
+    $('#file-in').addEventListener('change', (e) => { uploadFiles([...e.target.files]); e.target.value = ''; });
+
+    main.querySelector('.ws').addEventListener('click', async (e) => {
+      const v = e.target.closest('[data-view]');
+      if (v) return preview(Number(v.dataset.view));
+      const t = e.target.closest('[data-take]');
+      if (t) {
+        t.disabled = true;
+        try {
+          const r = await api('POST', `/api/priority/inbox/${t.dataset.take}/take`, { doc: t.dataset.doc });
+          mails = mails.filter((m) => m.id !== Number(t.dataset.take)); drawMails();
+          if (r.doc.doc === d.key) { items.unshift(r.doc); preview(r.doc.id); toast('נוסף לתור'); } else toast(`נוסף לתור של ${label(r.doc.doc)}`);
+        } catch (err) { t.disabled = false; toast(err.message, true); }
+        return;
+      }
+      const x = e.target.closest('[data-dismiss]');
+      if (x) {
+        try { await api('POST', `/api/priority/inbox/${x.dataset.dismiss}/dismiss`); mails = mails.filter((m) => m.id !== Number(x.dataset.dismiss)); drawMails(); } catch (err) { toast(err.message, true); }
+        return;
+      }
+      const b = e.target.closest('[data-bot]');
+      if (b) {
+        b.disabled = true;
+        try {
+          const r = await api('POST', `/api/priority/docs/${b.dataset.bot}/bot`);
+          items = items.map((i) => (i.id === r.doc.id ? r.doc : i)); drawQueue();
+          toast('נשלח לבוט — המשך בוואטסאפ');
+        } catch (err) { b.disabled = false; toast(err.message, true); }
+        return;
+      }
+      const del = e.target.closest('[data-del]');
+      if (del) {
+        try {
+          await api('DELETE', `/api/priority/docs/${del.dataset.del}`);
+          items = items.filter((i) => i.id !== Number(del.dataset.del));
+          if (selected === Number(del.dataset.del)) preview(null); else drawQueue();
+          load();
+        } catch (err) { toast(err.message, true); }
+      }
+    });
+
+    await load();
+    if (items[0]) preview(items[0].id);
   }
 
   // ---------------------------------------------------------------- הגדרות

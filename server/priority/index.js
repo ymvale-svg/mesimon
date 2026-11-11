@@ -13,6 +13,7 @@ module.exports = {
   get PriorityPrefs() { return require('./priority-prefs'); },
   get PrioritySettings() { return require('./priority-settings'); },
   get PriorityAccess() { return require('./priority-access'); },
+  get PriorityDocs() { return require('./priority-docs'); },
   get PriorityApprovals() { return require('./priority-approvals'); },
   get PoNotify() { return require('./po-notify'); },
   get PoPdf() { return require('./po-pdf'); },

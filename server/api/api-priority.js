@@ -8,11 +8,13 @@
  *   • ‎POST /api/priority/settings/test‎ — בדיקת חיבור (קריאה בלבד).
  *   • ‎GET|PUT /api/priority/access‎  — מנהלי מערכת: מטריצת ההרשאות.
  *   • ‎GET  /api/priority/log‎       — יומן השינויים בהגדרות ובהרשאות.
+ *   • טור המיילים והגרירה (‎priority-docs.js‎): ‎/api/priority/inbox‎, ‎/api/priority/docs‎ — כל עובד, רק שלו.
  */
 const Settings = require('../priority').PrioritySettings;
 const Access = require('../priority').PriorityAccess;
+const Docs = require('../priority').PriorityDocs;
 const Priority = require('../integrations').Priority;
-const { badRequest, forbidden, readJson, sendJson } = require('../core').HttpKit;
+const { HttpError, badRequest, forbidden, readJson, sendJson, parseUrl } = require('../core').HttpKit;
 
 const userOnly = (ctx) => {
   const actor = ctx.requireActor();
@@ -28,6 +30,9 @@ const asBad = (fn) => {
   try { return fn(); } catch (err) { throw err?.status ? err : badRequest(err.message); }
 };
 const who = (actor) => ({ id: actor.id, name: actor.name });
+/** שגיאה עם ‎status‎ מ-‎priority-docs.js‎ — כמו שהיא; אחרת 400 */
+const docErr = (err) => (err instanceof HttpError ? err : new HttpError(err?.status ?? 400, err?.message ?? 'שגיאה'));
+const docs = async (fn) => { try { return await fn(); } catch (err) { throw docErr(err); } };
 
 function register(router) {
   router.get('/api/priority/me', async (req, res, ctx) => {
@@ -81,6 +86,61 @@ function register(router) {
     const changes = asBad(() => Access.save(b?.rows));
     Settings.note(Settings.DEFAULT_ORG, who(actor), changes);
     sendJson(res, 200, { ...Access.matrix(), companies: Settings.companies().filter((c) => !c.test), changes });
+  });
+
+  // ---------------------------------------------------------------- טור המיילים והגרירה
+  router.get('/api/priority/inbox', async (req, res, ctx) => {
+    const actor = userOnly(ctx);
+    sendJson(res, 200, { items: Docs.inbox(actor) });
+  });
+
+  router.post('/api/priority/inbox/:id/take', async (req, res, ctx) => {
+    const actor = userOnly(ctx);
+    const b = await readJson(req);
+    sendJson(res, 201, { doc: await docs(() => Docs.take(actor, ctx.params.id, String(b.doc ?? ''))) });
+  });
+
+  router.post('/api/priority/inbox/:id/dismiss', async (req, res, ctx) => {
+    const actor = userOnly(ctx);
+    await docs(() => Docs.dismiss(actor, ctx.params.id));
+    sendJson(res, 200, { ok: true });
+  });
+
+  router.get('/api/priority/docs', async (req, res, ctx) => {
+    const actor = userOnly(ctx);
+    const doc = parseUrl(req).searchParams.get('doc') || null;
+    sendJson(res, 200, { items: Docs.list(actor, { doc }), counts: Docs.counts(actor) });
+  });
+
+  router.post('/api/priority/docs', async (req, res, ctx) => {
+    const actor = userOnly(ctx);
+    const b = await readJson(req);
+    sendJson(res, 201, { doc: await docs(() => Docs.upload(actor, b)) });
+  });
+
+  router.get('/api/priority/docs/:id/file', async (req, res, ctx) => {
+    const actor = userOnly(ctx);
+    const f = await docs(() => Docs.file(actor, ctx.params.id));
+    res.writeHead(200, {
+      'content-type': f.mime,
+      'content-length': f.buf.length,
+      'content-disposition': `inline; filename*=UTF-8''${encodeURIComponent(f.name)}`,
+      'cache-control': 'private, no-cache',
+      'x-content-type-options': 'nosniff',
+      'content-security-policy': "frame-ancestors 'self'"
+    });
+    res.end(f.buf);
+  });
+
+  router.delete('/api/priority/docs/:id', async (req, res, ctx) => {
+    const actor = userOnly(ctx);
+    await docs(() => Docs.remove(actor, ctx.params.id));
+    sendJson(res, 200, { ok: true });
+  });
+
+  router.post('/api/priority/docs/:id/bot', async (req, res, ctx) => {
+    const actor = userOnly(ctx);
+    sendJson(res, 200, { doc: await docs(() => Docs.toBot(actor, ctx.params.id)) });
   });
 
   router.get('/api/priority/log', async (req, res, ctx) => {
