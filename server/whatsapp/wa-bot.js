@@ -71,14 +71,14 @@ const SentFollowup = require('../mail').SentFollowup;
 const DayDigest = require('../agents').DayDigest;
 const Briefing = require('../meetings').Briefing;
 const Meetings = require('../meetings').Meetings;
-const { DAY, DIGEST_GRACE_MIN, HISTORY_TURNS, PICK_SHOWN, WALK, appRoot, buttonReplyText, candidatesOf, channel, checkState, currentMsg, doneEmoji, emailText, firstName, hooks, inHours, isConfigured, localDate, log, mailAlertUsers, markDone, orgUsers, parseJson, pickText, publicStatus, qr, react, reactNow, readLog, recentFiles, remove, resolveMentions, save, sendButtons, sendText, setState, signatureFields, signatureLine, splitMessage, taskLink, todayStats, userByPhone, workHours } = require('./wa-base');
+const { appRoot, buttonReplyText, candidatesOf, chains, channel, checkState, currentMsg, DAY, DIGEST_GRACE_MIN, doneEmoji, emailText, enqueueAs, firstName, HISTORY_TURNS, hooks, inHours, isConfigured, localDate, log, mailAlertUsers, markDone, onDirect, orgUsers, parseJson, PICK_SHOWN, pickText, publicStatus, qr, react, reactNow, readLog, recentFiles, remove, resolveMentions, save, sendButtons, sendText, setState, signatureFields, signatureLine, splitMessage, taskLink, todayStats, userByPhone, WALK, workHours } = require('./wa-base');
 const { analyzeGroup, bindGroup, listGroups, notifyAdmins, processGroup, processGroups, prune, recipientOf, sanitizeGroup } = require('./wa-groups');
 const { CANCEL, FORWARD_MAX, LIST_SHOWN, PLAIN_FEATURES, PLAIN_GREETING, PLAIN_HELP, PLAIN_INSIGHTS, PLAIN_LIST, PLAIN_TODAY, RANGES, READ_ALOUD, READ_ALOUD_DOWN, YES, actionOf, addForward, chatOf, checkDraft, clearForwards, draftText, emptyChat, featuresText, findContactCards, formatList, forwardsOf, helpText, localDay, readAloudAllowed, readAloudFile, readAloudText, saveChat, shortDate, sourceOf, understand, unknownReplied, withForwards } = require('./wa-private');
 const { deliver, flushOutbox, messageUser, notifyAssignment, sendFilesToUser } = require('./wa-tasks');
 const { answerLike, busyFor, meetCoordRun, meetCoordTick, pushToUser, questionTtlMin, releaseQuestion, replyWatchTick, rfqPrepare, rfqSend, rfqTick, sendSummaries, staleQuestion, userLastAt } = require('./wa-proactive');
-const { VIA_EMAIL, VIA_MESIMON, businessCommand, closeAlerted, closureDecision, confirmPending, contactOf, createFromDraft, draftEmail, findRecipients, mailActionAlerts, mailAlertFor, mailAlerts, parseThreadAdd, resolveCc, solveText, suggestionDecision, suggestionFeedback, threadAddText } = require('./wa-mail');
+const { businessCommand, closeAlerted, closureDecision, confirmPending, contactOf, createFromDraft, draftEmail, findRecipients, mailActionAlerts, mailAlertFor, mailAlerts, parseThreadAdd, resolveCc, solveText, startGoodsFromMail, suggestionDecision, suggestionFeedback, threadAddText, VIA_EMAIL, VIA_MESIMON } = require('./wa-mail');
 const { MENU, MENU_FREE_HINT, MENU_MORE, PLAIN_AGENTS, agentsText, cut, dayItems, isMenuButton, menuButtonOf, menuButtons, menuOptions, menuPick, menuText, moreMenuGroups, pairsOf, parseClosureCommand, parseSuggestionCommand, recordingReply, todayMessage, walkAction, walkButtons, walkText } = require('./wa-menu');
-const { TRANSLATE, flowReply, logoIntent, meetingAudioAllowed, meetingFollowups, processMeetingAudio, receiveMeetingAudio } = require('./wa-meeting');
+const { flowReply, logoIntent, meetingAudioAllowed, meetingAudioTurn, meetingFollowups, processMeetingAudio, receiveMeetingAudio, TRANSLATE } = require('./wa-meeting');
 
 const RECENT_FILE_MS = 15 * 60 * 1000;
 
@@ -696,7 +696,7 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
   }
   // 🎙 הקלטת פגישה מוואטסאפ: "לאיזו פגישה?", "לפתוח את המשימות?", ו"הקלטת פגישה" (ההקלטה הבאה)
   if (['meeting_audio_pick', 'meeting_audio_tasks'].includes(state.draft?.kind)) {
-    const r = await meetingAudioTurn(user, actor, t, state, { dry, out });
+    const r = await meetingAudioTurn(user, actor, t, state, { dry, out, converse });
     if (r) return r;
     // כל דבר אחר — נושא חדש; השאלה יורדת
     keep.draft = null;
@@ -1432,57 +1432,6 @@ async function withFollowUps(r) {
 }
 
 
-/** תשובה לשאלות של הקלטת הפגישה — "לאיזו פגישה?" ו"לפתוח את המשימות?". ‎null‎ — לא שלנו */
-async function meetingAudioTurn(user, actor, t, state, { dry, out }) {
-  const d = state.draft;
-  if (!d || !state.awaiting) return null;
-  const n = WaUi.normalize(t);
-  if (d.kind === 'meeting_audio_pick') {
-    if (CANCEL.test(t) || WaUi.CANCEL.test(n)) {
-      return out('בסדר, ההקלטה לא שויכה 👍', { draft: null }, { action: 'meeting_audio', status: 'ok', result: 'בוטל' });
-    }
-    const pick = MeetingAudio.resolvePick(d, t);
-    if (!pick) {
-      return out('לא הבנתי לאיזו פגישה 🤔 בחרו בכפתור, או כתבו נושא ומשתתפים.', { draft: d, awaiting: true },
-        { action: 'meeting_audio', status: 'unclear', result: `לא זוהתה פגישה: ${t}`.slice(0, 300), buttons: [...d.options.map((o) => o.label), MeetingAudio.BTN.other] });
-    }
-    if (pick.ask) return out(pick.ask, { draft: d, awaiting: true }, { action: 'meeting_audio', status: 'ok', result: 'פגישה אחרת' });
-    if (pick.voice) {
-      // בכל זאת הודעה קולית רגילה — מתמללים ומטפלים בה כמו בכל הודעה
-      const row = D.get('SELECT * FROM meeting_audio WHERE id = ? AND user_id = ?', d.audioId, actor.id);
-      const file = row ? require('node:path').join(D.UPLOADS_DIR, 'meeting-audio', row.stored_name) : null;
-      let said = '';
-      try { said = file ? await Speech.transcribe(require('node:fs').readFileSync(file), row.mime) : ''; } catch { /* ריק */ }
-      if (row) { D.run("UPDATE meeting_audio SET status = 'expired' WHERE id = ?", row.id); try { require('node:fs').unlinkSync(file); } catch { /* */ } }
-      if (!said) return out('לא שמעתי דיבור בהודעה. נסו שוב, או כתבו לי.', { draft: null }, { action: 'voice', status: 'unclear', result: 'לא נשמע דיבור' });
-      const r = await converse(user, actor, said, { ...state, draft: null, awaiting: false }, { dry });
-      return { ...r, reply: `🎙 _${said.slice(0, 300)}_\n\n${r.reply}` };
-    }
-    const m = pick.meeting;
-    if (dry) return out(`(בדיקה) הייתי משייך את ההקלטה ל"${m.title}" ומתמלל.`, { draft: null }, { action: 'meeting_audio', status: 'ok', result: 'בדיקה' });
-    D.run("UPDATE meeting_audio SET meeting = ?, status = 'transcribing' WHERE id = ? AND user_id = ?", JSON.stringify(m), d.audioId, actor.id);
-    processMeetingAudio(actor, d.audioId);
-    const who = m.people.length ? `\n👥 ${m.people.map((p) => p.name || p.email).slice(0, 8).join(', ')}` : '\n_לא זיהיתי משתתפים מהארגון — המשימות ייפתחו אצלך, עם השם שנאמר._';
-    // ⏳ על ההודעה עד שהסיכום מוכן — בלי הודעת "מתמלל ומסכם"
-    return out(`📎 שייכתי ל*${m.title}*.${who}`, { draft: null },
-      { action: 'meeting_audio', status: 'ok', result: `שויכה ל"${m.title}" (${m.source})`.slice(0, 300), react: '⏳' });
-  }
-  if (d.kind === 'meeting_audio_tasks') {
-    const only = /^(?:רק\s+|לפתוח\s+(?:רק\s+)?)?([\d\s,ו\-]+)$/.exec(n);
-    const yes = MeetingAudio.BTN.open && (WaUi.normalize(MeetingAudio.BTN.open) === n || /^לפתוח(\s+(אותן|משימות|את\s+המשימות))?$/.test(n) || WaUi.YES.test(n));
-    if (yes || only) {
-      const reply = MeetingAudio.openTasks(actor, d, {
-        createTask: hooks.createTask, assignBlockReason: hooks.assignBlockReason, taskLink, dry,
-        only: only ? [...new Set((only[1].match(/\d+/g) ?? []).map(Number))] : null
-      });
-      return out(reply, { draft: null }, { action: 'meeting_audio', status: 'ok', result: `משימות מהפגישה "${d.title}": ${reply.split('\n')[0]}`.slice(0, 300) });
-    }
-    if (WaUi.NO.test(n) || CANCEL.test(t)) return out('בסדר, לא נפתחו משימות. ההקלטה והסיכום נשארים במשימון 👍', { draft: null }, { action: 'meeting_audio', status: 'ok', result: `לא: משימות מ"${d.title}"`.slice(0, 300) });
-  }
-  return null;
-}
-
-
 let buttonShapeLogged = false;
 
 async function handleDirect(msg) {
@@ -1931,46 +1880,6 @@ function takeDeferred() {
 }
 
 
-/** הודעה מדומה לתור של העובד (אחרי התשובה הנוכחית) — "קבלת סחורה" עם קובץ, "דרישת רכש …" */
-function enqueueAs(userId, m) {
-  const u = D.get('SELECT phone FROM users WHERE id = ?', userId);
-  if (!u?.phone) return;
-  const msg = { chatId: `${u.phone}@c.us`, phone: u.phone, kind: 'textMessage', forwarded: false, audio: null, file: null, id: `bot-${Date.now()}`, ...m };
-  const prev = chains.get(msg.phone) ?? Promise.resolve();
-  const next = prev.then(() => handleDirect(msg))
-    .catch((err) => console.error('[משימון] הודעה פנימית לבוט נכשלה:', err.message))
-    .finally(() => { if (chains.get(msg.phone) === next) chains.delete(msg.phone); });
-  chains.set(msg.phone, next);
-  return next;
-}
-
-
-/** "קבלת סחורה" על חשבונית מהמייל — הקובץ יורד מ-Gmail ונכנס לקבלת הסחורה כאילו נשלח לבוט */
-function startGoodsFromMail(user, goodsId) {
-  const ref = currentMsg.get(user.id);
-  setImmediate(async () => {
-    const row = D.get('SELECT * FROM mail_goods_docs WHERE id = ? AND user_id = ?', goodsId, user.id);
-    const u = D.get('SELECT id, full_name, phone FROM users WHERE id = ?', user.id);
-    if (!row || !u?.phone) return;
-    const chatId = `${u.phone}@c.us`;
-    try {
-      const file = await MailActions.goodsFile(row);
-      // אחרי התשובה הנוכחית (אותו תור לכל עובד) — בדיוק כמו קובץ שנשלח עם "קבלת סחורה"
-      // לא דרך ‎dispatch‎: מחוץ לשעות הוא דוחה לתור שנשמר במסד, והקובץ (‎buf‎) לא נשמר שם
-      // 🧐 על "קבלת סחורה" עד שקבלת הסחורה עונה; אחר כך יורד
-      enqueueAs(u.id, { text: 'קבלת סחורה', kind: 'documentMessage', file, id: `mail-goods-${row.id}` })?.then(() => react(ref, ''));
-    } catch (err) {
-      void react(ref, '⚠️');
-      console.error('[משימון] הורדת חשבונית מהמייל נכשלה:', err.message);
-      log({ channel: 'summary', chatId, userId: u.id, who: u.full_name, action: 'goods_offer', status: 'error', result: `הורדה מ-Gmail: ${err.message}`.slice(0, 300) });
-      // 🚨 לא חוזרת לתור — אחרת נשאלת שוב ושוב (11.11.26)
-      D.run("UPDATE mail_goods_docs SET status = 'error', decided_at = ? WHERE id = ?", D.nowIso(), row.id);
-      await sendText(chatId, `לא הצלחתי להוריד את ${row.filename} מהמייל 😕 אפשר להעביר לי את הקובץ ישירות, ואתחיל קבלת סחורה.`).catch(() => {});
-    }
-  });
-}
-
-
 // ---------------------------------------------------------------------------
 // בדיקה ממסך הניהול — בלי וואטסאפ ובלי לבצע
 // ---------------------------------------------------------------------------
@@ -2043,11 +1952,7 @@ const WARM_EVERY_MS = 30 * 60000;
 const sleep = (ms) => new Promise((r) => { setTimeout(r, ms).unref?.(); });
 
 
-/*
- * הודעות פרטיות מטופלות מיד, בשרשרת נפרדת לכל עובד: הודעות של אותו עובד —
- * לפי הסדר; של עובדים שונים — במקביל, כך שתשובה ארוכה לאחד אינה מעכבת אחר.
- */
-const chains = new Map(); // phone → Promise
+ // phone → Promise
 
 
 function dispatch(m) {
@@ -2237,6 +2142,10 @@ function start() {
   stopped = false;
   void listen();
 }
+
+
+// התור של העובד (‎wa-base.enqueueAs‎) מגיע לכאן — הניתוב נרשם, ולא מיובא משכבה נמוכה
+onDirect(handleDirect);
 
 module.exports = {
   init, start, tick, publicStatus, save, remove, checkState, qr, isConfigured,

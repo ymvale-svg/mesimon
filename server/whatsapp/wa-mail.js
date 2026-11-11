@@ -24,7 +24,7 @@ const MailActions = require('../mail').MailActions;
 const FormFill = require('../mail').FormFill;
 const MeetCoord = require('../meetings').MeetingCoord;
 const SentFollowup = require('../mail').SentFollowup;
-const { DAY, LETTERS, WALK, appRoot, emailText, hooks, log, mailAlertUsers, needsLook, orgUsers, parseJson, sendButtons, signatureFields, taskLink, usableClosure, workHours } = require('./wa-base');
+const { appRoot, currentMsg, DAY, emailText, enqueueAs, hooks, LETTERS, log, mailAlertUsers, needsLook, orgUsers, parseJson, react, sendButtons, sendText, signatureFields, taskLink, usableClosure, WALK, workHours } = require('./wa-base');
 const { chatOf, checkDraft, localDay, mergedChecklist, saveChat, shortDate } = require('./wa-private');
 const { rememberBot } = require('./wa-tasks');
 const { busyFor, freeToAsk } = require('./wa-proactive');
@@ -747,6 +747,32 @@ async function mailActionAlerts() {
   SentFollowup.prune();
 }
 
+
+/** "קבלת סחורה" על חשבונית מהמייל — הקובץ יורד מ-Gmail ונכנס לקבלת הסחורה כאילו נשלח לבוט */
+function startGoodsFromMail(user, goodsId) {
+  const ref = currentMsg.get(user.id);
+  setImmediate(async () => {
+    const row = D.get('SELECT * FROM mail_goods_docs WHERE id = ? AND user_id = ?', goodsId, user.id);
+    const u = D.get('SELECT id, full_name, phone FROM users WHERE id = ?', user.id);
+    if (!row || !u?.phone) return;
+    const chatId = `${u.phone}@c.us`;
+    try {
+      const file = await MailActions.goodsFile(row);
+      // אחרי התשובה הנוכחית (אותו תור לכל עובד) — בדיוק כמו קובץ שנשלח עם "קבלת סחורה"
+      // לא דרך ‎dispatch‎: מחוץ לשעות הוא דוחה לתור שנשמר במסד, והקובץ (‎buf‎) לא נשמר שם
+      // 🧐 על "קבלת סחורה" עד שקבלת הסחורה עונה; אחר כך יורד
+      enqueueAs(u.id, { text: 'קבלת סחורה', kind: 'documentMessage', file, id: `mail-goods-${row.id}` })?.then(() => react(ref, ''));
+    } catch (err) {
+      void react(ref, '⚠️');
+      console.error('[משימון] הורדת חשבונית מהמייל נכשלה:', err.message);
+      log({ channel: 'summary', chatId, userId: u.id, who: u.full_name, action: 'goods_offer', status: 'error', result: `הורדה מ-Gmail: ${err.message}`.slice(0, 300) });
+      // 🚨 לא חוזרת לתור — אחרת נשאלת שוב ושוב (11.11.26)
+      D.run("UPDATE mail_goods_docs SET status = 'error', decided_at = ? WHERE id = ?", D.nowIso(), row.id);
+      await sendText(chatId, `לא הצלחתי להוריד את ${row.filename} מהמייל 😕 אפשר להעביר לי את הקובץ ישירות, ואתחיל קבלת סחורה.`).catch(() => {});
+    }
+  });
+}
+
 module.exports = {
-  VIA_EMAIL, VIA_MESIMON, businessCommand, closeAlerted, closureDecision, confirmPending, contactOf, createFromDraft, draftEmail, findRecipients, mailActionAlerts, mailAlertFor, mailAlerts, parseThreadAdd, resolveCc, solveText, suggestionDecision, suggestionFeedback, threadAddText
+  businessCommand, closeAlerted, closureDecision, confirmPending, contactOf, createFromDraft, draftEmail, findRecipients, mailActionAlerts, mailAlertFor, mailAlerts, parseThreadAdd, resolveCc, solveText, startGoodsFromMail, suggestionDecision, suggestionFeedback, threadAddText, VIA_EMAIL, VIA_MESIMON
 };
