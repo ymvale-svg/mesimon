@@ -1,0 +1,5625 @@
+'use strict';
+/** כל נקודות הקצה של המערכת. */
+const fs = require('node:fs');
+const path = require('node:path');
+const crypto = require('node:crypto');
+
+const D = require('../core').Db;
+const P = require('../core').Permissions;
+const Cls = require('../core').Classification;
+const Auth = require('../core').Auth;
+const Rules = require('../tasks').RulesEngine;
+const Google = require('../integrations').GoogleAuth;
+const Invites = require('../core').Invites;
+const Mailer = require('../integrations').Mailer;
+const TaskMail = require('../mail').TaskMail;
+const Push = require('../integrations').Push;
+const Xlsx = require('../core').XlsxWrite;
+const Spreadsheet = require('../core').Spreadsheet;
+const AiTasks = require('../tasks').AiTasks;
+const AiApi = require('./api-ai');
+const TodayApi = require('./api-today');
+const PhonebookApi = require('./api-phonebook');
+const MeetingsApi = require('./api-meetings');
+const WhatsNew = require('./api-whats-new');
+const Zoom = require('../integrations').Zoom;
+const W = require('../core').Workdays;
+const GContacts = require('../phonebook').GoogleContacts;
+const Calendar = require('../meetings').Calendar;
+const Gmail = require('../integrations').Gmail;
+const MailScan = require('../mail').MailScan;
+const Claude = require('../integrations').Claude;
+const WhatsApp = require('../integrations').Whatsapp;
+const WaBot = require('../whatsapp').WaBot;
+const TaskOutreach = require('../tasks').TaskOutreach;
+const Dupes = require('../tasks').TaskDupes;
+const TaskSync = require('../tasks').TaskSync;
+const Tiful360 = require('../integrations').Tiful360;
+const Secretariat = require('../core').Secretariat;
+const BotReview = require('../whatsapp').BotReview;
+const {
+  Router, badRequest, forbidden, notFound,
+  readJson, sendJson, sendText, parseUrl
+} = require('../core').HttpKit;
+const TaskClosure = require('../tasks').TaskClosure;
+
+const router = new Router();
+
+const PRIORITIES = [
+  { key: 'low', label: 'נמוכה', color: '#94a3b8' },
+  { key: 'normal', label: 'רגילה', color: '#3b82f6' },
+  { key: 'high', label: 'גבוהה', color: '#f59e0b' },
+  { key: 'urgent', label: 'דחוף', color: '#dc2626' }
+];
+
+/**
+ * סטטוסי בקרה.
+ *
+ * נבדלים מהסטטוס של הבורד (חדש / בטיפול / הושלם), שהוא מקומו של הכרטיס
+ * בזרימת העבודה. זה מצב הבקרה של הנושא — האם קיים, האם לבחינה, האם לא
+ * רלוונטי — וזו השאלה שנשאלת במבט מאקרו על פרויקט.
+ *
+ * הרשימה אינה בקוד אלא בטבלה שהמשתמש בונה. מה שנשאר כאן: לוח הצבעים שמוצע
+ * בבורר, והרשימה שממנה נזרעת רשימה חדשה — כדי שמי שמתחיל לא יתחיל מדף חלק.
+ */
+const STATUS_PALETTE = [
+  '#a9d08e', '#e2efda', '#bfbfbf', '#cc7a7a',
+  '#d9e1f2', '#f8cbad', '#fff2cc', '#b4a7d6'
+];
+
+const DEFAULT_STATUS_LIST = [
+  { label: 'אישור', color: '#a9d08e' },
+  { label: 'קיים להעלות', color: '#e2efda' },
+  { label: 'לא להתייחס', color: '#bfbfbf' },
+  { label: 'לבחינה', color: '#cc7a7a' },
+  { label: 'כמעט קיים', color: '#d9e1f2' },
+  { label: 'בפעילות', color: '#f8cbad' },
+  { label: 'הצהרה אפשר במיידי', color: '#fff2cc' },
+  { label: 'מכון בקרה', color: '#b4a7d6' }
+];
+
+const statusList = (userId) => (userId
+  ? D.all('SELECT * FROM task_statuses WHERE user_id = ? ORDER BY position, id', userId)
+    .map((s) => ({ id: s.id, label: s.label, color: s.color, position: s.position }))
+  : []);
+
+/**
+ * הסטטוס שיוצג למשימה — ורק אם הוא שייך לרשימה שהוחלה על הפרויקט שלה.
+ *
+ * זו האכיפה של "השימוש ברמת פרויקט": משימה שסומנה בסטטוס, ואחר כך הפרויקט
+ * שלה עבר לרשימה אחרת או שהרשימה בוטלה, לא תיצבע בצבע שאינו קיים יותר
+ * בהקשר שלה. הסימון נשמר במסד ויחזור אם הרשימה תוחל שוב.
+ */
+function taskTrackStatus(task) {
+  if (!task.track_status_id || !task.project_id) return null;
+  const owner = D.get('SELECT status_owner_id FROM projects WHERE id = ?', task.project_id)?.status_owner_id;
+  if (!owner) return null;
+  const row = D.get('SELECT * FROM task_statuses WHERE id = ? AND user_id = ?', task.track_status_id, owner);
+  return row ? { id: row.id, label: row.label, color: row.color } : null;
+}
+
+// ---------------------------------------------------------------------------
+// עזרים
+// ---------------------------------------------------------------------------
+
+const isVendor = (actor) => actor.type === 'vendor';
+const isManagerial = (actor) => actor.type === 'user' && (actor.role === 'admin' || actor.role === 'manager');
+
+function requirePerm(actor, action) {
+  if (!P.may(actor, action)) throw forbidden();
+}
+
+function requireFullPerm(actor, action) {
+  if (!P.can(actor, action)) throw forbidden();
+}
+
+function getTaskOr404(id) {
+  const task = D.get('SELECT * FROM tasks WHERE id = ?', Number(id));
+  if (!task) throw notFound('המשימה לא נמצאה');
+  return task;
+}
+
+const projectOf = (task) => (task.project_id ? D.get('SELECT * FROM projects WHERE id = ?', task.project_id) : null);
+
+/**
+ * צבע הפרויקט. כשלא נבחר צבע נגזר אחד יציב מהמזהה, כדי שכל פרויקט יהיה
+ * מובחן במבט כבר מהרגע הראשון — צבע שנשאר קבוע בין טעינות ובין משתמשים.
+ */
+const PROJECT_COLORS = ['#0f766e', '#c2410c', '#2563eb', '#7c3aed', '#be123c', '#0891b2', '#65a30d', '#a16207'];
+const projectColor = (project) => (project ? project.color || PROJECT_COLORS[project.id % PROJECT_COLORS.length] : null);
+
+/** צבע מתקבל רק בתבנית hex — הערך נכנס ישירות ל-style בממשק */
+const hexColor = (value) => (/^#[0-9a-fA-F]{6}$/.test(String(value ?? '')) ? String(value) : '');
+const boardOf = (task) => D.get('SELECT * FROM boards WHERE id = ?', task.board_id);
+
+/**
+ * "המחלקה שלי" בשאילתה: המחלקה ותתי-המחלקות שלה, כפרמטר אחד בתבנית JSON —
+ * ‎`t.department_id ${DEPT_IN}`‎ עם ‎deptsParam(actor)‎. כך מנהל של מחלקה
+ * ראשית רואה גם את תתי-המחלקות שלה, בלי לבנות רשימת סימני שאלה משתנה.
+ */
+const DEPT_IN = 'IN (SELECT value FROM json_each(?))';
+const deptsParam = (actor) => JSON.stringify(P.actorDepartmentIds(actor));
+const subtreeParam = (id) => JSON.stringify(D.departmentSubtree(id));
+
+/** המחלקה של האחראי על המשימה — נדרש להכרעה על משימות ארגוניות */
+function assigneeDepartmentId(task) {
+  if (task.assignee_type !== 'user' || !task.assignee_id) return null;
+  return D.get('SELECT department_id FROM users WHERE id = ?', task.assignee_id)?.department_id ?? null;
+}
+
+/**
+ * מי מותר לי להטיל עליו אחריות על משימה.
+ *
+ * הבדיקה הייתה מוטבעת ב-POST בלבד, ו-PATCH ופעולת האצווה שינו אחראי בלי
+ * לבדוק אותה כלל: עובד שאין לו ‎assign_department_task‎ יכול היה לפתוח
+ * משימה לעצמו — מה שמותר — ומיד אחר כך להעביר אותה בעריכה לכל אדם בארגון.
+ * חילוץ לפונקציה אחת סוגר את הפער ומחיל אותו גם על האחראים הנוספים.
+ *
+ * הקצאה לספק נבדקת גם היא כאן, וכך אין מסלול כתיבה שמדלג עליה.
+ */
+function assertMayAssignTo(actor, type, id) {
+  if (!id) return;
+  if (type === 'vendor') {
+    requirePerm(actor, 'assign_task_to_vendor');
+    if (!D.get('SELECT id FROM vendors WHERE id = ?', id)) throw badRequest('הספק שנבחר אינו קיים');
+    return;
+  }
+  if (type !== 'user' || actor.type !== 'user' || id === actor.id) return;
+
+  /*
+   * מזכירות החברה: מנהל מחלקה (ומעלה) פותח משימה למזכירה — גם כשהיא יושבת
+   * במחלקה אחרת, ומעבר להיררכיה הרגילה (‎server/secretariat.js‎).
+   */
+  if (Secretariat.mayRequest(actor, Number(id))) return;
+
+  // הקצאה לאדם אחר אינה מובנת מאליה: עובד פנימי יוצר משימות לעצמו, ורק אם
+  // הוענקה לו הרשאה אישית (או שהוא מנהל ומעלה) הוא מקצה לאחרים במחלקתו.
+  const lvl = P.level(actor, 'assign_department_task');
+  if (lvl === false) throw forbidden('אין לך הרשאה להקצות משימה לאדם אחר');
+  const target = D.get('SELECT id, full_name, role, department_id FROM users WHERE id = ?', Number(id));
+  if (!target) throw badRequest('המשתמש שנבחר אינו קיים');
+
+  /*
+   * היררכיה, בכל המערכת — גם לתפקידים שההרשאה שלהם רחבה לכל הארגון:
+   *   • הנהלה מטילה משימות רק על המנהלים שמתחתיה, והם מחליטים אם להעביר
+   *     הלאה — לא ישירות על עובד מן השורה. "מתחתיה": מנהלי המחלקה שלה
+   *     ותתי-המחלקות; חבר הנהלה בלי מחלקה — מנהלי כל המחלקות.
+   *   • כל השאר (כולל מנהל מערכת ואדמין-על) — רק לעובדים שמתחתיהם: המחלקה
+   *     שלהם ותתי-המחלקות שלה.
+   */
+  if (actor.role === 'executive') {
+    const isManager = target.role === 'manager'
+      || Boolean(D.get('SELECT 1 FROM departments WHERE manager_user_id = ?', target.id));
+    if (!isManager) throw forbidden(`הנהלה משייכת משימות רק למנהלים שמתחתיה, והם מעבירים הלאה — ל${target.full_name} אין תפקיד ניהולי`);
+    if (actor.departmentId && !P.inActorDepartments(actor, target.department_id ?? null)) {
+      throw forbidden(`${target.full_name} לא מהמנהלים שמתחתיך`);
+    }
+    return;
+  }
+  if (!P.inActorDepartments(actor, target.department_id ?? null)) {
+    throw forbidden(`${target.full_name} לא בצוות שלך — אפשר לשייך משימה רק לעובדים שמתחתיך`);
+  }
+}
+
+/**
+ * קליטת רשימת האחראים הנוספים מהבקשה.
+ *
+ * מתקבלת גם כמערך אובייקטים וגם כמערך מחרוזות בתבנית ‎'user:3'‎ — זו התבנית
+ * שהבוררים בממשק עובדים בה ממילא, ותרגום בלקוח היה מזמין אי-התאמה.
+ *
+ * האחראי הראשי מסונן מהרשימה: אותו אדם פעמיים אינו שתי אחריויות, והוא היה
+ * מייצר גם התראה כפולה.
+ */
+function parseExtraAssignees(raw, primaryType, primaryId) {
+  if (!Array.isArray(raw)) return null;   // ‎null‎ = השדה לא נשלח, אין לגעת
+  const seen = new Set();
+  const out = [];
+  for (const entry of raw) {
+    let type; let id;
+    if (typeof entry === 'string') {
+      const [t, i] = entry.split(':');
+      type = t; id = Number(i);
+    } else {
+      type = entry?.type ?? entry?.assigneeType;
+      id = Number(entry?.id ?? entry?.assigneeId);
+    }
+    if (!['user', 'vendor'].includes(type) || !Number.isInteger(id) || id <= 0) continue;
+    if (type === primaryType && id === Number(primaryId)) continue;
+    const key = `${type}:${id}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({ type, id });
+  }
+  return out;
+}
+
+/** כתיבת האחראים הנוספים — החלפה מלאה, ולא מיזוג */
+function setExtraAssignees(taskId, list, actor) {
+  for (const e of list) assertMayAssignTo(actor, e.type, e.id);
+  D.run('DELETE FROM task_assignees WHERE task_id = ?', taskId);
+  for (const e of list) {
+    D.run(
+      `INSERT INTO task_assignees (task_id, assignee_type, assignee_id, added_at, added_by)
+       VALUES (?, ?, ?, ?, ?)`,
+      taskId, e.type, e.id, D.nowIso(), actor.type === 'user' ? actor.id : null
+    );
+  }
+}
+
+// --- תבניות ---
+
+/**
+ * אילו תבניות השחקן רואה.
+ *
+ * תבנית שייכת למחלקה, ועובדי מחלקה אחת אינם רואים את של השנייה: בורר
+ * תבניות שמערבב את כל הארגון הוא רשימה שאי אפשר למצוא בה דבר, ותבנית של
+ * מחלקה אחרת גם אינה רלוונטית למי שאינו בה.
+ *
+ * מנהל מערכת ואדמין רואים הכול — הם אלה שמנהלים את התבניות במסך ההגדרות.
+ * תבנית ללא מחלקה היא ארגונית ונראית לכולם, וזה גם מצבן של תבניות שנוצרו
+ * לפני ההפרדה.
+ */
+function visibleTemplates(actor) {
+  if (P.isOrgWide(actor)) return D.all('SELECT * FROM templates ORDER BY kind, name');
+  return D.all(
+    `SELECT * FROM templates
+      WHERE department_id IS NULL OR department_id = ?
+      ORDER BY kind, name`,
+    actor.departmentId ?? -1
+  );
+}
+
+const shapeTemplate = (t) => ({
+  id: t.id,
+  kind: t.kind,
+  name: t.name,
+  payload: JSON.parse(t.payload),
+  departmentId: t.department_id ?? null,
+  departmentName: t.department_id
+    ? (D.get('SELECT name FROM departments WHERE id = ?', t.department_id)?.name ?? null)
+    : null,
+  updatedAt: t.updated_at ?? null,
+  updatedBy: t.updated_by ? (D.get('SELECT full_name FROM users WHERE id = ?', t.updated_by)?.full_name ?? null) : null,
+  createdAt: t.created_at
+});
+
+/** תבנית לפי מזהה, בגבול הראייה של השחקן — 404 ולא 403, כדי לא לאשר קיום */
+function templateOr404(actor, id) {
+  const tpl = D.get('SELECT * FROM templates WHERE id = ?', Number(id));
+  if (!tpl) throw notFound('התבנית לא נמצאה');
+  if (!P.isOrgWide(actor)
+      && tpl.department_id !== null
+      && tpl.department_id !== (actor.departmentId ?? null)) {
+    throw notFound('התבנית לא נמצאה');
+  }
+  return tpl;
+}
+
+/** האחראים הנוספים על המשימה, מעבר לאחראי הראשי שיושב על השורה עצמה */
+const extraAssigneesOf = (task) => (task?.id
+  ? D.all('SELECT assignee_type, assignee_id FROM task_assignees WHERE task_id = ?', task.id)
+  : []);
+
+/**
+ * "אני אחראי נוסף על המשימה הזו", כפרדיקט SQL.
+ *
+ * תת-שאילתת ‎EXISTS‎ ולא ‎JOIN‎, וזה לא עניין של טעם: ‎/api/tasks‎ אינה
+ * ‎SELECT DISTINCT‎, ו-JOIN לטבלת הקישור היה משכפל כל משימה לפי מספר
+ * האחראים עליה — משימה עם שני אחראים הייתה מופיעה פעמיים בלוח, בטבלת
+ * הבקרה ובייצוא.
+ *
+ * שני סימני שאלה: הסוג והמזהה.
+ */
+const EXTRA_ASSIGNEE_SQL = `EXISTS (
+  SELECT 1 FROM task_assignees ta
+   WHERE ta.task_id = t.id AND ta.assignee_type = ? AND ta.assignee_id = ?
+)`;
+
+/**
+ * מה כל שחקן רשאי לראות: ההרשאות הרגילות, ומעליהן הסיווג לפי נושא ורמת
+ * רגישות (‎ai/classification.js‎). הסיווג רק מצמצם — משימה מסווגת נשארת
+ * גלויה למשתתפים בה ולמי שטבלת הרגישות מתירה, גם אם הוא בהנהלה או מנהל מערכת.
+ */
+function canSeeTask(actor, task) {
+  return canSeeTaskByRole(actor, task) && Cls.mayReadTask(actor, task);
+}
+
+/** מה כל שחקן רשאי לראות לפי התפקיד — הבורדים נפרדים, וההיקף נקבע לפי התפקיד */
+function canSeeTaskByRole(actor, task) {
+  const board = boardOf(task);
+  if (!board) return false;
+  const extras = extraAssigneesOf(task);
+
+  if (isVendor(actor)) {
+    /*
+     * ספק רואה את הבורד שלו ואת המשימות שהוקצו לו — או משימה בבורד הפנימי
+     * שהוא אחראי נוסף עליה. השנייה היא מה שמאפשר "עובד פנימי אחראי, וספק
+     * אחראי איתו": המשימה נשארת בבורד הפנימי, ולכן היא אינה מגיעה לספק דרך
+     * הבורד שלו אלא דרך השיוך בלבד.
+     */
+    if (extras.some((e) => e.assignee_type === 'vendor' && e.assignee_id === actor.id)) return true;
+    return board.type === 'vendor' && board.vendor_id === actor.id && task.assignee_id === actor.id;
+  }
+
+  // הנהלה ומעלה רואים את כל הארגון
+  if (P.isOrgWide(actor)) return true;
+
+  if (actor.role === 'manager') {
+    // מנהל מחלקה: משימות המחלקה שלו, ומשימות ארגוניות של אנשיה
+    if (board.type === 'vendor') return P.may(actor, 'view_vendor_boards');
+    return P.isInActorDepartment(actor, task, assigneeDepartmentId(task))
+      || P.isTaskParticipant(actor, task, projectOf(task), extras);
+  }
+
+  // עובד פנימי: רק בבורד הפנימי, ורק משימות שהוא חלק מהן — אלא אם הוענקה לו
+  // הרשאה אישית לראות את כל המחלקה, ואז אותו היקף כמו למנהל המחלקה
+  if (board.type !== 'internal') return false;
+  if (P.isTaskParticipant(actor, task, projectOf(task), extras)) return true;
+  return P.level(actor, 'view_internal_board') === 'department'
+    && P.isInActorDepartment(actor, task, assigneeDepartmentId(task));
+}
+
+/**
+ * בדיקת הרשאה על משימה, עם המחלקה של האחראי — הכרחית להכרעה על משימות
+ * ארגוניות. עוטף את P.canOnTask כדי שאף קורא לא ישכח את הפרמטר הזה.
+ */
+function mayOnTask(actor, action, task, project = null) {
+  return Cls.mayReadTask(actor, task)
+    && P.canOnTask(actor, action, task, project, assigneeDepartmentId(task), extraAssigneesOf(task));
+}
+
+function assertVisible(actor, task) {
+  if (!canSeeTask(actor, task)) throw forbidden('אין לך הרשאה לצפות במשימה זו');
+}
+
+const columnsOf = (boardId) => D.boardColumns(boardId);
+const columnMeta = (boardId, key) => D.get('SELECT * FROM board_columns WHERE board_id = ? AND key = ?', boardId, key);
+
+function assigneeName(task) {
+  if (!task.assignee_id) return null;
+  if (task.assignee_type === 'vendor') {
+    const v = D.get('SELECT name FROM vendors WHERE id = ?', task.assignee_id);
+    return v ? v.name : null;
+  }
+  const u = D.get('SELECT full_name FROM users WHERE id = ?', task.assignee_id);
+  return u ? u.full_name : null;
+}
+
+/** שם של אחראי לפי סוג ומזהה — אותה גזירה כמו assigneeName, בלי שורת משימה */
+function partyName(type, id) {
+  if (!id) return null;
+  const row = type === 'vendor'
+    ? D.get('SELECT name AS n FROM vendors WHERE id = ?', id)
+    : D.get('SELECT full_name AS n FROM users WHERE id = ?', id);
+  return row ? row.n : null;
+}
+
+/** האחראים הנוספים בצורה שהלקוח מציג — סוג, מזהה ושם */
+const shapeExtraAssignees = (taskId) => D.all(
+  `SELECT assignee_type, assignee_id FROM task_assignees
+    WHERE task_id = ? ORDER BY assignee_type, assignee_id`, taskId
+).map((r) => ({
+  type: r.assignee_type,
+  id: r.assignee_id,
+  name: partyName(r.assignee_type, r.assignee_id)
+})).filter((r) => r.name);   // אחראי שנמחק מהמערכת אינו מוצג כשורה ריקה
+
+const isOverdue = (task, final) =>
+  !!task.due_date && !final && !task.archived && new Date(task.due_date).getTime() < Date.now();
+
+/**
+ * ייצוג מקוצר של תת-משימה — רק מה שנדרש לשורה בטבלה ולרשימה בכרטיס האב.
+ *
+ * לא ‎shapeTask‎ המלא: הוא מריץ כתריסר שאילתות לכל משימה (קבצים, תגובות,
+ * צ'קליסט, תלות), ובטבלת בקרה עם חמישים שורות זה מאות שאילתות למסך אחד.
+ */
+function shapeSubtask(task) {
+  const col = columnMeta(task.board_id, task.status);
+  const final = col ? !!col.is_final : false;
+  return {
+    id: task.id,
+    title: task.title,
+    assigneeType: task.assignee_type,
+    assigneeId: task.assignee_id,
+    assigneeName: assigneeName(task),
+    extraAssignees: shapeExtraAssignees(task.id),
+    status: task.status,
+    statusLabel: col ? col.label : task.status,
+    statusColor: col ? col.color : '#94a3b8',
+    statusShort: task.status_short ?? '',
+    isFinal: final,
+    priority: task.priority,
+    dueDate: task.due_date,
+    overdue: isOverdue(task, final),
+    // לתת-משימה ברמה השנייה — כמה תתי-משימות יש תחתיה
+    subtasksTotal: D.get('SELECT COUNT(*) c FROM tasks WHERE parent_task_id = ? AND archived = 0', task.id).c
+  };
+}
+
+/** עומק ההיררכיה: משימת-אב = 1, משימה תחתיה = 2, תת-משימה = 3 */
+const MAX_TASK_DEPTH = 3;
+function taskDepth(task) {
+  let depth = 1;
+  const seen = new Set([task.id]);
+  for (let cur = task.parent_task_id; cur && !seen.has(cur) && depth < 10; depth += 1) {
+    seen.add(cur);
+    cur = D.get('SELECT parent_task_id FROM tasks WHERE id = ?', cur)?.parent_task_id ?? null;
+  }
+  return depth;
+}
+
+/** גובה הענף מתחת למשימה: בלי ילדים = 1, עם ילדים = 2, עם נכדים = 3 */
+function subtreeHeight(taskId, guard = 0) {
+  if (guard > MAX_TASK_DEPTH) return guard;
+  const kids = D.all('SELECT id FROM tasks WHERE parent_task_id = ?', taskId);
+  return 1 + kids.reduce((m, k) => Math.max(m, subtreeHeight(k.id, guard + 1)), 0);
+}
+
+/**
+ * קביעת משימת-אב למשימה קיימת (עריכה). נבדק: האב גלוי לי, אינו המשימה עצמה
+ * או אחת מצאצאיה (מעגל), והעץ שנוצר אינו עמוק משלוש רמות.
+ */
+function assertMayReparent(actor, task, parentId) {
+  if (!parentId) return null;
+  const parent = getTaskOr404(parentId);
+  assertVisible(actor, parent);
+  for (let cur = parent, i = 0; cur && i < 10; i += 1) {
+    if (cur.id === task.id) throw badRequest('אי אפשר לשים משימה תחת עצמה או תחת תת-משימה שלה');
+    cur = cur.parent_task_id ? D.get('SELECT id, parent_task_id FROM tasks WHERE id = ?', cur.parent_task_id) : null;
+  }
+  if (taskDepth(parent) + subtreeHeight(task.id) > MAX_TASK_DEPTH) {
+    throw badRequest('עד שלוש רמות: משימת-אב ← משימה ← תת-משימה. למשימה הזו יש תתי-משימות, ולכן היא לא יכולה לרדת לרמה הזו');
+  }
+  return parent.id;
+}
+
+/** ייצוג משימה לממשק, כולל שדות נגזרים */
+function shapeTask(task, actor, { withDetails = false } = {}) {
+  const board = boardOf(task);
+  const col = columnMeta(task.board_id, task.status);
+  const final = col ? !!col.is_final : false;
+  const project = projectOf(task);
+
+  const checklist = D.all('SELECT * FROM checklist_items WHERE task_id = ? ORDER BY position, id', task.id);
+  const checklistDone = checklist.filter((c) => c.done).length;
+  const track = taskTrackStatus(task);
+
+  const dependency = task.depends_on_task_id
+    ? D.get('SELECT id, title, status, board_id FROM tasks WHERE id = ?', task.depends_on_task_id)
+    : null;
+  let dependencyBlocking = false;
+  if (dependency) {
+    const depCol = columnMeta(dependency.board_id, dependency.status);
+    dependencyBlocking = !(depCol && depCol.is_final);
+  }
+
+  const base = {
+    id: task.id,
+    title: task.title,
+    description: task.description,
+    projectId: task.project_id,
+    projectName: project ? project.name : null,
+    projectColor: projectColor(project),
+    boardId: task.board_id,
+    boardType: board ? board.type : null,
+    boardName: board ? board.name : null,
+    assigneeType: task.assignee_type,
+    assigneeId: task.assignee_id,
+    assigneeName: assigneeName(task),
+    extraAssignees: shapeExtraAssignees(task.id),
+    status: task.status,
+    statusLabel: col ? col.label : task.status,
+    statusColor: col ? col.color : '#94a3b8',
+    isFinal: final,
+    priority: task.priority,
+    priorityLabel: PRIORITIES.find((p) => p.key === task.priority)?.label ?? task.priority,
+    dueDate: task.due_date,
+    createdAt: task.created_at,
+    completedAt: task.completed_at,
+    activateAt: task.activate_at,
+    scheduled: !!task.activate_at && new Date(task.activate_at).getTime() > Date.now(),
+    isRecurring: !!task.is_recurring,
+    recurrenceFreq: task.recurrence_freq,
+    recurrencePolicy: task.recurrence_policy,
+    archived: !!task.archived,
+    escalated: !!task.escalated,
+    overdue: isOverdue(task, final),
+    checklistTotal: checklist.length,
+    checklistDone,
+    dependsOnTaskId: task.depends_on_task_id,
+    dependency: dependency ? { id: dependency.id, title: dependency.title, blocking: dependencyBlocking } : null,
+    statusShort: task.status_short ?? '',
+    // "📅 פגישה לקביעה" — מחכה שתיקבע לה פגישה (‎meetings.js‎)
+    meetingPending: Boolean(task.meeting_pending),
+    // משימה למזכירות — נסגרת לבד כשנקבעה מתוכה פגישה
+    secretaryRequest: Boolean(task.secretary_request),
+    // מי ביקש — במשימה למזכירות, הפגישה נקבעת כברירת מחדל ביומן שלו
+    requestedBy: task.secretary_request ? task.created_by : null,
+    requestedByName: task.secretary_request && task.created_by
+      ? D.get('SELECT full_name FROM users WHERE id = ?', task.created_by)?.full_name ?? null
+      : null,
+    // מוזגה לתוך משימה ותיקה (פרק 11ב) — הכרטיס מפנה אליה
+    mergedInto: task.merged_into_task_id
+      ? { id: task.merged_into_task_id, title: D.get('SELECT title FROM tasks WHERE id = ?', task.merged_into_task_id)?.title ?? '' }
+      : null,
+    trackStatusId: track?.id ?? null,
+    trackStatusLabel: track?.label ?? null,
+    trackStatusColor: track?.color ?? null,
+    // אילו סטטוסים אפשר לבחור למשימה הזו — נגזר מהרשימה שהוחלה על הפרויקט
+    trackOptions: project?.status_owner_id ? statusList(project.status_owner_id) : [],
+    parentTaskId: task.parent_task_id ?? null,
+    // רמה בעץ (1–3) — מתחת לרמה 3 אין "＋ תת-משימה"
+    depth: taskDepth(task),
+    parentTitle: task.parent_task_id
+      ? D.get('SELECT title FROM tasks WHERE id = ?', task.parent_task_id)?.title ?? null
+      : null,
+    // מונה בלבד בתצוגה המקוצרת; הרשימה עצמה נשלחת רק ב-withDetails
+    subtasksTotal: D.get('SELECT COUNT(*) c FROM tasks WHERE parent_task_id = ?', task.id).c,
+    subtasksOpen: D.get(
+      `SELECT COUNT(*) c FROM tasks t
+         LEFT JOIN board_columns bc ON bc.board_id = t.board_id AND bc.key = t.status
+        WHERE t.parent_task_id = ? AND t.archived = 0 AND COALESCE(bc.is_final, 0) = 0`,
+      task.id
+    ).c,
+    /*
+     * "הפעולה הבאה" — תת-המשימה הפתוחה עם היעד הקרוב. זו השורה שמופיעה
+     * בטבלת הבקרה לצד משימת-האב, וזה מה שהמשתמש ביקש: משימה מתמשכת שהסטטוס
+     * של הפעולה הבאה בה מתעדכן כל הזמן.
+     *
+     * משימה בלי יעד נופלת לסוף ולא לראש, אחרת היא הייתה מסתירה תת-משימה
+     * דחופה עם תאריך.
+     */
+    activeSubtask: (() => {
+      const row = D.get(
+        `SELECT t.* FROM tasks t
+           LEFT JOIN board_columns bc ON bc.board_id = t.board_id AND bc.key = t.status
+          WHERE t.parent_task_id = ? AND t.archived = 0 AND COALESCE(bc.is_final, 0) = 0
+          ORDER BY COALESCE(t.due_date, '9999-12-31'), t.id LIMIT 1`,
+        task.id
+      );
+      return row && Cls.mayReadTask(actor, row) ? shapeSubtask(row) : null;
+    })(),
+    // 🔒 הסיווג של המשימה עצמה, ומה שהיא יורשת מהפרויקט כשאין לה משלה
+    classification: Cls.classView(task),
+    inheritedClassification: !Cls.classView(task) && project ? Cls.classView(project) : null,
+    departmentId: task.department_id ?? null,
+    departmentName: task.department_id
+      ? D.get('SELECT name FROM departments WHERE id = ?', task.department_id)?.name ?? null
+      : null,
+    // רמזי הרשאה ברמת המשימה — מאפשרים לטבלה להציג עריכה במקום רק למי שרשאי
+    canEdit: mayOnTask(actor, 'edit_delete_task', task, project),
+    canChangeStatus: mayOnTask(actor, 'change_task_status', task, project)
+      && !(isVendor(actor) && actor.readOnly),
+    attachmentsCount: D.get('SELECT COUNT(*) c FROM attachments WHERE task_id = ?', task.id).c,
+    // מספר הקבצים השונים (ולא הגרסאות) — לחישוב "+N" מדויק בשורת המשימה
+    filesCount: D.get('SELECT COUNT(DISTINCT filename) c FROM attachments WHERE task_id = ?', task.id).c,
+    // הגרסה האחרונה של כל קובץ — כדי שהקובץ יוצג בשורת המשימה עצמה ולא רק במקום נפרד
+    attachments: D.all(
+      `SELECT id, filename, mime, size, version FROM attachments a
+        WHERE task_id = ? AND version = (SELECT MAX(version) FROM attachments WHERE task_id = a.task_id AND filename = a.filename)
+        ORDER BY created_at DESC LIMIT 4`, task.id
+    ).map((a) => ({ id: a.id, filename: a.filename, mime: a.mime, size: a.size, version: a.version })),
+    commentsCount: D.get(
+      `SELECT COUNT(*) c FROM comments
+        WHERE task_id = ? AND checklist_item_id IS NULL${isVendor(actor) ? ' AND internal = 0' : ''}`,
+      task.id
+    ).c,
+    // משימת AI — מצב המעקב בקצרה, לתגית בשורה. ‎null‎ במשימה רגילה
+    ai: isVendor(actor) ? null : AiTasks.summaryFor(task.id)
+  };
+
+  if (!withDetails) return base;
+
+  const hideInternal = isVendor(actor);
+  const comments = D.all(
+    `SELECT * FROM comments
+      WHERE task_id = ? AND checklist_item_id IS NULL${hideInternal ? ' AND internal = 0' : ''}
+      ORDER BY created_at`,
+    task.id
+  ).map((c) => ({
+    id: c.id,
+    body: c.body,
+    internal: !!c.internal,
+    createdAt: c.created_at,
+    authorType: c.author_type,
+    authorId: c.author_id,
+    authorName:
+      c.author_type === 'vendor'
+        ? D.get('SELECT name FROM vendors WHERE id = ?', c.author_id)?.name ?? 'ספק'
+        : c.author_type === 'user'
+          ? D.get('SELECT full_name FROM users WHERE id = ?', c.author_id)?.full_name ?? 'משתמש'
+          : 'המערכת',
+    // הקבצים שצורפו להודעה הזו — מוצגים בתוכה ולא רק ברשימת הקבצים הכללית
+    attachments: D.all(
+      'SELECT id, filename, size, mime, version FROM attachments WHERE comment_id = ? ORDER BY id', c.id
+    )
+  }));
+
+  const attachments = D.all('SELECT * FROM attachments WHERE task_id = ? ORDER BY filename, version DESC', task.id).map((a) => ({
+    id: a.id,
+    filename: a.filename,
+    version: a.version,
+    size: a.size,
+    mime: a.mime,
+    createdAt: a.created_at,
+    uploaderType: a.uploader_type,
+    uploaderName:
+      a.uploader_type === 'vendor'
+        ? D.get('SELECT name FROM vendors WHERE id = ?', a.uploader_id)?.name ?? 'ספק'
+        : D.get('SELECT full_name FROM users WHERE id = ?', a.uploader_id)?.full_name ?? 'משתמש',
+    // ההרשאה נגזרת בשרת ולא בלקוח, אחרת כל מסך היה מחשב אותה מחדש אחרת
+    canDelete: mayDeleteAttachment(actor, a, task),
+    // קובץ שצורף להודעה בשרשור — המחיקה תסיר אותו גם משם, ויש לומר זאת
+    commentId: a.comment_id ?? null
+  }));
+
+  // הספק אינו רואה את לוג הבקרה הפנימי
+  const history = hideInternal
+    ? []
+    : D.all('SELECT * FROM audit_log WHERE task_id = ? ORDER BY created_at DESC, id DESC', task.id);
+
+  return {
+    ...base,
+    // ההתכתבות המלאה של משימת AI, לפאנל בכרטיס המשימה
+    aiDetail: isVendor(actor) ? null : AiTasks.detailFor(task.id),
+    // משימה שנולדה ממייל: הקישור אליו — רק למי שהמייל בתיבה שלו
+    source: isVendor(actor) || !task.source ? null : {
+      type: task.source,
+      link: actor.type === 'user' ? MailScan.sourceLink(task, actor.id) : null
+    },
+    // 💡 איך לסגור — רק לבעל התיבה שממנה נוצרה המשימה
+    closure: actor.type === 'user' ? MailScan.closureForTask(task.id, actor.id) : null,
+    checklist: checklist.map((c) => ({
+      id: c.id, text: c.text, done: !!c.done, note: c.note ?? '',
+      commentsCount: D.get(
+        `SELECT COUNT(*) c FROM comments
+          WHERE checklist_item_id = ?${isVendor(actor) ? ' AND internal = 0' : ''}`, c.id
+      ).c
+    })),
+    comments,
+    attachments,
+    history: history.map((h) => ({
+      id: h.id,
+      action: h.action,
+      details: h.details,
+      actorName: h.actor_name || 'המערכת',
+      actorType: h.actor_type,
+      createdAt: h.created_at
+    })),
+    columns: columnsOf(task.board_id).map((c) => ({ key: c.key, label: c.label, color: c.color, isFinal: !!c.is_final })),
+    /*
+     * תתי-המשימות, בסדר שבו הן נקראות: הפתוחות לפי יעד ואחריהן הסגורות.
+     * מסוננות לפי מה שהצופה רשאי לראות — תת-משימה היא משימה, וייתכן שהיא
+     * הוקצתה למחלקה אחרת שאינה בתחומו.
+     */
+    subtasks: D.all(
+      `SELECT t.*, COALESCE(bc.is_final, 0) fin FROM tasks t
+         LEFT JOIN board_columns bc ON bc.board_id = t.board_id AND bc.key = t.status
+        WHERE t.parent_task_id = ?
+        ORDER BY fin, COALESCE(t.due_date, '9999'), t.id`,
+      task.id
+    ).filter((s) => canSeeTask(actor, s)).map((s) => shapeSubtask(s)),
+    permissions: {
+      edit: mayOnTask(actor, 'edit_delete_task', task, project),
+      changeStatus: mayOnTask(actor, 'change_task_status', task, project) && !(isVendor(actor) && actor.readOnly),
+      approve: P.may(actor, 'approve_vendor_output'),
+      comment: !(isVendor(actor) && actor.readOnly),
+      upload: !(isVendor(actor) && actor.readOnly),
+      seeInternal: !hideInternal
+    }
+  };
+}
+
+function actorRef(actor) {
+  return { type: actor.type === 'vendor' ? 'vendor' : 'user', id: actor.id, name: actor.name };
+}
+
+/** ניקוי תיוגים @שם והפקת רשימת משתמשים מתויגים */
+function extractMentions(body) {
+  const users = D.all("SELECT id, full_name FROM users WHERE status = 'active'");
+  const found = new Set();
+  for (const u of users) {
+    if (body.includes(`@${u.full_name}`)) found.add(u.id);
+  }
+  return [...found];
+}
+
+// ---------------------------------------------------------------------------
+// מיתוג — איתור לוגו החברה
+// ---------------------------------------------------------------------------
+
+const IMG_DIR = path.join(D.ROOT, 'public', 'img');
+const LOGO_EXT = new Set(['.png', '.svg', '.jpg', '.jpeg', '.webp', '.gif']);
+
+/**
+ * מאתר את קובץ הלוגו בתיקיית התמונות, בלי תלות בשם שניתן לו.
+ * כך אפשר פשוט לשמור לשם קובץ תמונה והוא ייקלט מעצמו.
+ */
+function findCompanyLogo() {
+  if (!fs.existsSync(IMG_DIR)) return null;
+  const files = fs.readdirSync(IMG_DIR).filter((f) => LOGO_EXT.has(path.extname(f).toLowerCase()));
+  if (!files.length) return null;
+  const preferred = files.find((f) => /eshel|logo|אשל|לוגו/i.test(f)) ?? files.sort()[0];
+  return `/img/${encodeURIComponent(preferred)}`;
+}
+
+// זמין גם לפני התחברות — מסך הכניסה מציג את הלוגו ואת אמצעי הכניסה
+router.get('/api/branding', async (req, res) => {
+  sendJson(res, 200, { companyLogo: findCompanyLogo(), googleLogin: Google.isEnabled() });
+});
+
+// ---------------------------------------------------------------------------
+// כניסה עם Google
+// ---------------------------------------------------------------------------
+
+const redirectTo = (res, location) => {
+  res.writeHead(302, { location, 'cache-control': 'no-store' });
+  res.end();
+};
+
+router.get('/api/auth/google/start', async (req, res) => {
+  if (!Google.isEnabled()) throw badRequest('כניסה עם Google אינה מוגדרת במערכת');
+  redirectTo(res, Google.authorizeUrl(req));
+});
+
+router.get('/api/auth/google/callback', async (req, res, ctx) => {
+  const params = parseUrl(req).searchParams;
+  const fail = (message) => redirectTo(res, `/?googleError=${encodeURIComponent(message)}`);
+
+  /*
+   * חיבור תיבת Gmail חוזר לאותה כתובת כמו הכניסה — כך אין צורך לרשום ב-Google
+   * כתובת חזרה נוספת. ה-state מבחין ביניהם, והוא קשור למשתמש שהתחיל את החיבור.
+   */
+  if (Gmail.isGmailState(params.get('state'))) {
+    const back = (key, value) => redirectTo(res, `/?${key}=${encodeURIComponent(value)}`);
+    const entry = Gmail.consumeStateFull(params.get('state'));
+    const userId = entry?.userId ?? null;
+    if (params.get('error')) return back('gmailError', 'החיבור בוטל');
+    if (!userId || !ctx.actor || ctx.actor.type !== 'user' || ctx.actor.id !== userId) return back('gmailError', 'הבקשה פגה או אינה תקינה. נסו לחבר שוב.');
+    try {
+      const r = await Gmail.connect(userId, params.get('code'), req, { add: entry.add, expect: entry.expect });
+      // החיבור כולל עכשיו גם יומן ואנשי קשר — סנכרון ראשון ברקע, ומטמון יומן נקי
+      Calendar.forget(userId);
+      GContacts.syncSoon(userId);
+      return back('gmail', r.added ? `added:${r.email}` : 'connected');
+    } catch (err) {
+      console.error('[משימון] חיבור Gmail נכשל:', err.message);
+      return back('gmailError', err.message);
+    }
+  }
+
+  if (!Google.isEnabled()) return fail('כניסה עם Google אינה מוגדרת במערכת');
+  if (params.get('error')) return fail('הכניסה בוטלה');
+
+  const code = params.get('code');
+  const state = params.get('state');
+  if (!code || !state) return fail('חסרים פרטים בחזרה מ-Google');
+  // מונע זיוף בקשה: המצב חייב להיות כזה שהמערכת עצמה יצרה ולא נוצל עדיין
+  if (!Google.consumeState(state)) return fail('הבקשה פגה או אינה תקינה. נסה להתחבר שוב.');
+
+  try {
+    const profile = await Google.exchangeCodeForProfile(code, req);
+    const match = Google.matchAccount(profile);
+    const actor = Auth.loadActor(match.actorType, match.id);
+    if (!actor) return fail('החשבון אינו פעיל במערכת');
+
+    const { token, expires } = Auth.createSession(match.actorType, match.id);
+    res.writeHead(302, {
+      location: '/',
+      'set-cookie': Auth.cookieHeader(token, expires, req),
+      'cache-control': 'no-store'
+    });
+    res.end();
+  } catch (err) {
+    console.error('[משימון] כניסה עם Google נכשלה:', err.message);
+    fail(err.message);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// אימות
+// ---------------------------------------------------------------------------
+
+router.post('/api/auth/login', async (req, res) => {
+  Auth.checkLoginRate(req);
+  const { email, password } = await readJson(req);
+  Auth.checkLoginRate(req, email);
+
+  let result;
+  try {
+    result = Auth.login(email, password);
+  } catch (err) {
+    Auth.noteFailedLogin(req, email);
+    throw err;
+  }
+
+  Auth.clearLoginRate(req, email);
+  const { actorType, actor } = result;
+  const { token, expires } = Auth.createSession(actorType, actor.id);
+  res.setHeader('set-cookie', Auth.cookieHeader(token, expires, req));
+  sendJson(res, 200, { actor: publicActor(actor), permissions: P.permissionsFor(actor) });
+});
+
+router.post('/api/auth/logout', async (req, res, ctx) => {
+  Auth.destroySession(ctx.actor?.token);
+  res.setHeader('set-cookie', Auth.clearCookieHeader());
+  sendJson(res, 200, { ok: true });
+});
+
+function publicActor(actor) {
+  return {
+    type: actor.type,
+    id: actor.id,
+    name: actor.name,
+    email: actor.email,
+    role: actor.role,
+    // רמת הגישה מוצגת רק למי שרשאי לראות רמות; לשאר אין לה שימוש בממשק
+    roleLabel: P.seesRoles(actor) ? P.ROLE_LABELS[actor.role] : null,
+    seesRoles: P.seesRoles(actor),
+    department: actor.department ?? null,
+    departmentId: actor.departmentId ?? null,
+    // המחלקה ותתי-המחלקות שלה — הלקוח מסנן לפיהן את בוררי האחראי
+    departmentIds: P.actorDepartmentIds(actor),
+    boardId: actor.boardId ?? null,
+    readOnly: !!actor.readOnly,
+    phone: actor.type === 'user' ? D.get('SELECT phone FROM users WHERE id = ?', actor.id)?.phone ?? '' : '',
+    // טלפון במשרד / שלוחה — לאלפון. טקסט חופשי, בלי אימות
+    officePhone: actor.type === 'user' ? D.get('SELECT office_phone FROM users WHERE id = ?', actor.id)?.office_phone ?? '' : '',
+    // ימי העבודה (0=ראשון) — "מחר" בבורר דחיית היעד הוא יום העבודה הבא שלו
+    workDays: actor.type === 'user' ? W.workDaysOf(actor.id) : [0, 1, 2, 3, 4],
+    // מזכירה — רואה את מסך היומן וקובעת ביומנים שהעובדים שיתפו איתה
+    secretary: actor.type === 'user' && Secretariat.isSecretary(actor.id),
+    // מסך "בקרת משימות" ותתי-משימות — רק למי שנפתח לו (‎D.trackerAccess‎)
+    tracker: actor.type === 'user' && D.trackerAccess(actor.id),
+    // מסך הקלטות ה-Zoom — כשיש חיבור Zoom
+    zoomRecordings: actor.type === 'user' && Zoom.isEnabled()
+  };
+}
+
+/**
+ * הטלפון של עצמי — מ"החשבון שלי", כדי שבוט הוואטסאפ יזהה אותי. הבוט מזהה
+ * עובד לפי המספר בלבד, ולכן מספר נשמר רק אחרי שהעובד הוכיח שהוא שלו: הבוט
+ * שולח קוד למספר, והקוד מוקלד כאן. מחיקה — בלי קוד. מנהל קובע במסך המשתמשים.
+ */
+const phoneCodes = new Map(); // userId → { phone, hash, expires, tries, sentAt }
+const PHONE_CODE_TTL = 10 * 60000;
+const hashCode = (code) => crypto.createHash('sha256').update(String(code)).digest('hex');
+
+router.put('/api/me/phone', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  if (actor.type !== 'user') throw forbidden();
+  const b = await readJson(req);
+  const phone = userPhone(b.phone, actor.id);
+  if (!phone) {
+    phoneCodes.delete(actor.id);
+    D.run("UPDATE users SET phone = '' WHERE id = ?", actor.id);
+    sendJson(res, 200, { phone: '' });
+    return;
+  }
+  if (phone === D.get('SELECT phone FROM users WHERE id = ?', actor.id)?.phone) {
+    sendJson(res, 200, { phone });
+    return;
+  }
+  if (!WaBot.isConfigured() || !D.getSetting('wa_bot_enabled', true)) {
+    throw badRequest('בוט הוואטסאפ אינו פעיל, ולכן אי אפשר לאמת את המספר. בקשו ממנהל המערכת להזין אותו במסך המשתמשים');
+  }
+  const prev = phoneCodes.get(actor.id);
+  if (prev && Date.now() - prev.sentAt < 60000) throw badRequest('קוד נשלח לפני רגע — המתינו דקה לפני שליחה נוספת');
+  const code = String(crypto.randomInt(100000, 1000000));
+  try {
+    await WaBot.sendText(`${phone}@c.us`, `קוד האימות שלך במשימון: ${code}\nהקוד תקף ל-10 דקות. אם לא ביקשת — התעלם/י מההודעה.`);
+  } catch (err) {
+    throw badRequest(`שליחת הקוד בוואטסאפ נכשלה: ${err.message}`);
+  }
+  phoneCodes.set(actor.id, { phone, hash: hashCode(code), expires: Date.now() + PHONE_CODE_TTL, tries: 0, sentAt: Date.now() });
+  sendJson(res, 200, { pending: true, phone });
+});
+
+/**
+ * הטלפון במשרד / השלוחה של עצמי — מופיע באלפון. בלי קוד אימות: הבוט אינו
+ * מזהה לפיו איש, וקווי במשרד ממילא אינו מקבל וואטסאפ.
+ */
+router.put('/api/me/office-phone', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  if (actor.type !== 'user') throw forbidden();
+  const b = await readJson(req);
+  const officePhone = officePhoneOf(b.officePhone);
+  D.run('UPDATE users SET office_phone = ? WHERE id = ?', officePhone, actor.id);
+  sendJson(res, 200, { officePhone });
+});
+
+/** הקוד שהבוט שלח — רק אז המספר נשמר */
+router.post('/api/me/phone/verify', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  if (actor.type !== 'user') throw forbidden();
+  const b = await readJson(req);
+  const p = phoneCodes.get(actor.id);
+  if (!p || Date.now() > p.expires) {
+    phoneCodes.delete(actor.id);
+    throw badRequest('תוקף הקוד פג — בקשו קוד חדש');
+  }
+  if (++p.tries > 5) {
+    phoneCodes.delete(actor.id);
+    throw badRequest('יותר מדי ניסיונות — בקשו קוד חדש');
+  }
+  const given = Buffer.from(hashCode(String(b.code ?? '').replace(/\D/g, '')));
+  if (!crypto.timingSafeEqual(given, Buffer.from(p.hash))) throw badRequest('הקוד שגוי');
+  phoneCodes.delete(actor.id);
+  // ייתכן שמישהו אחר קיבל את המספר בינתיים
+  const phone = userPhone(p.phone, actor.id);
+  D.run('UPDATE users SET phone = ? WHERE id = ?', phone, actor.id);
+  sendJson(res, 200, { phone });
+});
+
+/**
+ * למי אני מטיל משימות — לעיגולי האחראי בדיאלוג המשימה. משימות שפתחתי ב-90
+ * הימים האחרונים, לפי האחראי הראשי, ומשימה מהשבועיים האחרונים שווה כפול:
+ * כך עובד חדש שאני עובד איתו עכשיו עולה מהר, ומי שעבדתי איתו לפני חודשיים
+ * יורד. ההרשאה לשבץ נבדקת בדפדפן מול רשימת האפשרויות, ובשמירה — בשרת.
+ */
+router.get('/api/me/frequent-assignees', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  if (actor.type !== 'user') throw forbidden();
+  const day = 86400000;
+  const since = new Date(Date.now() - 90 * day).toISOString();
+  const recent = new Date(Date.now() - 14 * day).toISOString();
+  const rows = D.all(
+    `SELECT assignee_type AS type, assignee_id AS id,
+            SUM(CASE WHEN created_at >= ? THEN 2 ELSE 1 END) AS score, MAX(created_at) AS last
+       FROM tasks
+      WHERE created_by = ? AND created_at >= ? AND assignee_id IS NOT NULL
+      GROUP BY assignee_type, assignee_id
+      ORDER BY score DESC, last DESC
+      LIMIT 12`,
+    recent, actor.id, since
+  );
+  sendJson(res, 200, { items: rows.map((r) => ({ value: `${r.type}:${r.id}`, score: r.score })) });
+});
+
+// ---------------------------------------------------------------------------
+// מימוש הזמנה — פתוח ללא התחברות, מוגן באמצעות האסימון שבקישור
+// ---------------------------------------------------------------------------
+
+router.get('/api/invite/:token', async (req, res, ctx) => {
+  const found = Invites.find(ctx.params.token);
+  if (found.error) return sendJson(res, 200, { valid: false, error: found.error });
+
+  sendJson(res, 200, {
+    valid: true,
+    name: found.account.name,
+    email: found.account.email,
+    isVendor: found.invite.target_type === 'vendor',
+    inviter: found.inviter,
+    orgName: D.getSetting('org_name', ''),
+    expiresAt: found.invite.expires_at
+  });
+});
+
+router.post('/api/invite/:token', async (req, res, ctx) => {
+  const { password } = await readJson(req);
+  const clean = String(password ?? '');
+  if (clean.length < 8) throw badRequest('הסיסמה חייבת להכיל לפחות 8 תווים');
+
+  const result = Invites.redeem(ctx.params.token, clean);
+  if (result.error) throw badRequest(result.error);
+
+  const actor = Auth.loadActor(result.actorType, result.id);
+  if (!actor) throw badRequest('החשבון אינו פעיל');
+
+  const { token, expires } = Auth.createSession(result.actorType, result.id);
+  res.setHeader('set-cookie', Auth.cookieHeader(token, expires, req));
+  sendJson(res, 200, { actor: publicActor(actor), permissions: P.permissionsFor(actor) });
+});
+
+// ---------------------------------------------------------------------------
+// טעינה ראשונית
+// ---------------------------------------------------------------------------
+
+router.get('/api/bootstrap', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  const boards = isVendor(actor)
+    ? D.all("SELECT * FROM boards WHERE type='vendor' AND vendor_id = ?", actor.id)
+    : P.may(actor, 'view_vendor_boards')
+      ? D.all('SELECT * FROM boards ORDER BY type DESC, id')
+      : D.all("SELECT * FROM boards WHERE type='internal'");
+
+  const assignableIds = isVendor(actor) ? new Set() : assignableUserIds(actor);
+  // מזכירות החברה, כשאני מנהל מחלקה ומעלה — מסומנות בבוררי האחראי ("משימה למזכירות")
+  const mySecretaries = isVendor(actor) ? new Set() : Secretariat.secretariesFor(actor);
+  const payload = {
+    actor: publicActor(actor),
+    permissions: P.permissionsFor(actor),
+    priorities: PRIORITIES,
+    // 🔒 נושאי הסיווג לבורר במשימה ובפרויקט — שם ורמת מינימום בלבד, בלי המחלקות
+    classTopics: isVendor(actor) ? [] : Object.entries(Cls.topics()).map(([key, t]) => ({ key, label: t.label, floor: t.floor })),
+    // הרשימה האישית של המשתמש ולוח הצבעים — הבורר בטבלה נבנה מהפרויקט עצמו
+    myStatuses: isVendor(actor) ? [] : statusList(actor.id),
+    statusPalette: STATUS_PALETTE,
+    roleLabels: P.ROLE_LABELS,
+    /*
+     * העדפות התצוגה נשלחות כאן ולא בקריאה נפרדת, כדי שהלוח ייפתח ישר בחתך
+     * הנכון. קריאה נוספת הייתה מציגה קודם לוח ריק ואז מקפיצה אותו.
+     */
+    prefs: isVendor(actor) ? {} : D.userPrefs(actor.id),
+    // כמה גרסאות "מה חדש" עוד לא נסגרו אצלו — הבאנר נפתח רק אם יש
+    whatsNewPending: WhatsNew.pendingCount(actor),
+    // אנשי הקשר מ-Google לא עובדים אצלו — מה לעשות (חלון בפתיחה, פעם ביום)
+    contactsNotice: actor.type === 'user' ? GContacts.notice(actor.id) : null,
+    settings: {
+      orgName: D.getSetting('org_name', 'MESIMON'),
+      maxUploadMb: D.getSetting('max_upload_mb', 25),
+      allowedExtensions: D.getSetting('allowed_extensions', [])
+    },
+    boards: boards.map((b) => ({
+      id: b.id,
+      name: b.name,
+      type: b.type,
+      vendorId: b.vendor_id,
+      // המזהה נדרש למסך ניהול הסטטוסים — המפתח אינו ניתן לשינוי ואינו מזהה שורה
+      columns: columnsOf(b.id).map((c) => ({ id: c.id, key: c.key, label: c.label, color: c.color, isFinal: !!c.is_final }))
+    })),
+    projects: isVendor(actor) ? [] : listProjectsFor(actor),
+    users: isVendor(actor)
+      ? []
+      : D.all("SELECT id, full_name, email, role, department, department_id, status FROM users WHERE status='active' ORDER BY full_name")
+          .map((u) => ({
+            id: u.id, name: u.full_name, email: u.email,
+            // האם מותר לי לשייך אליו משימה — בוררי האחראי מציגים רק את אלה (‎assertMayAssignTo‎)
+            assignable: assignableIds.has(u.id),
+            secretaryForMe: mySecretaries.has(u.id),
+            role: P.seesRoles(actor) ? u.role : null,
+            roleLabel: P.seesRoles(actor) ? P.ROLE_LABELS[u.role] : null,
+            // המחלקה אינה רמת הרשאה אלא שיוך ארגוני, ולכן היא גלויה לכולם —
+            // רשימת התיוג מקדימה בעזרתה את חברי המחלקה של הכותב
+            department: u.department ?? null,
+            departmentId: u.department_id ?? null
+          })),
+    vendors: P.may(actor, 'view_vendor_boards') && !isVendor(actor)
+      ? D.all('SELECT id, name, contact_name, email, phone, status, read_only FROM vendors ORDER BY name')
+          .map((v) => ({
+            id: v.id, name: v.name, contactName: v.contact_name, email: v.email,
+            phone: v.phone, status: v.status, readOnly: !!v.read_only,
+            boardId: D.get("SELECT id FROM boards WHERE type='vendor' AND vendor_id = ?", v.id)?.id ?? null
+          }))
+      : [],
+    savedFilters: isVendor(actor)
+      ? []
+      : D.all('SELECT id, name, payload FROM saved_filters WHERE user_id = ? ORDER BY name', actor.id)
+          .map((f) => ({ id: f.id, name: f.name, payload: JSON.parse(f.payload) }))
+  };
+  sendJson(res, 200, payload);
+});
+
+/**
+ * אילו פרויקטים שייכים למשתמש. ‎null‎ פירושו "הכול" — הנהלה ומעלה רואים את
+ * כל הארגון. לשאר, פרויקט הוא שלהם אם פתחו אותו, אם הם מנהליו, או אם יש בו
+ * משימה שהם רואים. זהו בדיוק היקף הראייה של המשימות, רק בהיטל של פרויקטים,
+ * כדי שלא ייווצר מצב שברשימה מופיע פרויקט שכל תוכנו חסום.
+ */
+function visibleProjectIds(actor) {
+  if (isVendor(actor)) return new Set();
+  if (P.isOrgWide(actor)) return null;
+
+  const mine = ['p.created_by = ?', 'p.manager_id = ?'];
+  const params = [actor.id, actor.id];
+
+  // היקף מחלקתי — מנהל מחלקה, או עובד שקיבל הרשאה אישית לראות את המחלקה
+  if (P.level(actor, 'view_internal_board') === 'department' && actor.departmentId) {
+    mine.push(`t.department_id ${DEPT_IN}`);
+    params.push(deptsParam(actor));
+    // משימה ללא שיוך מחלקתי נחשבת למחלקת האחראי עליה
+    mine.push(`(t.department_id IS NULL AND t.assignee_type = 'user'
+                AND t.assignee_id IN (SELECT id FROM users WHERE department_id ${DEPT_IN}))`);
+    params.push(deptsParam(actor));
+  }
+
+  mine.push("(t.assignee_type = 'user' AND t.assignee_id = ?)", 't.created_by = ?');
+  params.push(actor.id, actor.id);
+  // גם משימה שאני אחראי נוסף עליה פותחת את הפרויקט שלה לראייה
+  mine.push(EXTRA_ASSIGNEE_SQL);
+  params.push('user', actor.id);
+
+  const rows = D.all(
+    `SELECT DISTINCT p.id FROM projects p
+       LEFT JOIN tasks t ON t.project_id = p.id
+      WHERE ${mine.join(' OR ')}`,
+    ...params
+  );
+  return new Set(rows.map((r) => r.id));
+}
+
+/**
+ * אילו פרויקטים הם "שלי" בתפריט — להבדיל מאילו מותר לי לראות.
+ *
+ * שתי שאלות שונות, ופעם אחת הן נענו באותה פונקציה: מי שפתח פרויקט נחשב
+ * בעליו לתמיד. זה עבד עד שהתברר שמנהל המערכת הוא זה שפותח את כל הפרויקטים
+ * בחברה — וכך *כל* פרויקט היה "שלו", והמעבר "שלי / כל הארגון" איבד את
+ * תוכנו.
+ *
+ * לכן "שלי" הוא אחראיות בפועל: פרויקט שאני מנהל, שיש בו משימה שהוקצתה לי,
+ * או שפתחתי אותו. פתיחת משימה בשביל מישהו אחר אינה נחשבת — להעביר עבודה
+ * למישהו זה לא להחזיק בה.
+ *
+ * הפותח נכלל, ובגרסה קודמת לא — בהנחה שפרויקט חדש נשאר שלי בלי מאמץ, כי
+ * ברירת המחדל של מנהל המשימות היא מי שפתח. ההנחה אינה נכונה: אפשר לפתוח
+ * פרויקט בלי מנהל, וזה מה שעובד עושה. התוצאה הייתה שפרויקט שעובד פתח נעדר
+ * מרשימת "שלי" שלו — ומכיוון שזו ברירת המחדל של הסרגל, הוא לא מצא אותו כדי
+ * למחוק אותו. ההרשאה למחיקה הייתה תקינה כל העת; הפרויקט פשוט לא היה על המסך.
+ *
+ * אדמין-על ומנהל מערכת נשארים מחוץ לכלל הזה, לפי אותה הגדרה שקובעת מי נחשב
+ * פותח לצורך התראות: הם פותחים פרויקטים בשביל אחרים, ורשימת "שלי" שלהם
+ * הייתה מתמלאת בפרויקטים שאינם שלהם — וזו הבעיה שהחריגה נועדה למנוע.
+ *
+ * ההפרדה מהראייה היא קריטית: ‎visibleProjectIds‎ הוא גבול הרשאה, וצמצום שלו
+ * היה מסתיר מעובד ומנהל מחלקה פרויקטים שהם כן רשאים לראות.
+ */
+function ownedProjectIds(actor) {
+  if (isVendor(actor)) return new Set();
+  const opener = D.countsAsOpener(actor.id) ? 1 : 0;
+  const rows = D.all(
+    `SELECT DISTINCT p.id FROM projects p
+       LEFT JOIN tasks t ON t.project_id = p.id AND t.archived = 0
+      WHERE p.manager_id = ?
+         OR (t.assignee_type = 'user' AND t.assignee_id = ?)
+         OR (? = 1 AND p.created_by = ?)
+         OR ${EXTRA_ASSIGNEE_SQL}`,
+    actor.id, actor.id, opener, actor.id, 'user', actor.id
+  );
+  return new Set(rows.map((r) => r.id));
+}
+
+/**
+ * הפרויקטים שאפשר לפתוח בהם משימה מהבוט ומההקלטה — רק פעילים, ורק "שלי":
+ * פרויקט שאני מנהל, פתחתי, נעצתי או שיש לי בו עבודה, או פרויקט של המחלקה
+ * שלי (המחלקה של מנהל הפרויקט, כולל תתי-מחלקות). לא כל מה שמותר לי לראות:
+ * מנהל מערכת רואה את כל הארגון, ומשימה שנפתחת בקול או בוואטסאפ בפרויקט של
+ * מחלקה אחרת היא כמעט תמיד טעות בזיהוי השם. בדיאלוג המשימה באפליקציה —
+ * שם הבחירה גלויה על המסך — נשארת הרשימה המלאה.
+ */
+function newTaskProjects(actor) {
+  return listProjectsFor(actor).filter((p) => p.status === 'active' && p.canAddTask);
+}
+
+/**
+ * אפשר לפתוח משימה (או להעביר משימה) רק בפרויקט שלי או של המחלקה שלי — בכל
+ * המערכת, גם לתפקידים שרואים את כל הארגון. ‎projectId‎ ריק — בלי פרויקט, מותר.
+ */
+function assertMayUseProject(actor, projectId) {
+  if (!projectId || actor.type !== 'user') return;
+  const p = listProjectsFor(actor).find((x) => x.id === Number(projectId));
+  if (!p) throw badRequest('הפרויקט לא נמצא');
+  if (!p.canAddTask) throw forbidden(`הפרויקט "${p.name}" אינו שלך או של המחלקה שלך — משימה בו פותח רק מי שעובד בו או במחלקה שלו`);
+}
+
+/**
+ * משימה למזכירות — מנהל מחלקה פתח (או העביר) משימה למזכירת החברה.
+ * הסימון קובע שכשהמזכירה תקבע מתוכה פגישה ביומן — המשימה תיסגר לבד.
+ */
+function markSecretaryRequest(taskId, actor, assigneeType, assigneeId) {
+  const yes = actor.type === 'user' && assigneeType === 'user' && Boolean(assigneeId)
+    && Number(assigneeId) !== actor.id && Secretariat.mayRequest(actor, Number(assigneeId));
+  D.run('UPDATE tasks SET secretary_request = ? WHERE id = ?', yes ? 1 : 0, taskId);
+  return yes;
+}
+
+/** למה אסור לשייך — הסיבה לתצוגה, או ‎null‎ כשמותר (‎assertMayAssignTo‎) */
+function assignBlockReason(actor, id) {
+  try { assertMayAssignTo(actor, 'user', id); return null; } catch (err) { return err.message; }
+}
+
+/** מי מותר לי לשייך אליו משימה (‎assertMayAssignTo‎) — לבוררי האחראי, לבוט ולהקלטה */
+function assignableUserIds(actor) {
+  const ids = new Set([actor.id]);
+  for (const u of D.all("SELECT id FROM users WHERE status = 'active' AND role <> 'vendor'")) {
+    try { assertMayAssignTo(actor, 'user', u.id); ids.add(u.id); } catch { /* אין הרשאה */ }
+  }
+  return ids;
+}
+
+function listProjectsFor(actor) {
+  const pinned = new Set(
+    actor.type === 'user'
+      ? D.all('SELECT project_id FROM project_pins WHERE user_id = ?', actor.id).map((r) => r.project_id)
+      : []
+  );
+  const visible = visibleProjectIds(actor);
+
+  /*
+   * כמה אני עובד בפועל בכל פרויקט — המספר שמדרג את בורר הפרויקטים.
+   *
+   * "שלי" הוא דגל כן/לא, ובארגון שבו מנהל המערכת מוגדר מנהל של כמעט כל
+   * פרויקט הוא אינו מצמצם דבר. תדירות היא שאלה אחרת: באילו פרויקטים יש לי
+   * עבודה פתוחה, וכמה. היא מדרגת גם כשהדגל דולק אצל כולם.
+   *
+   * שאילתה מקובצת אחת ולא תת-שאילתה לכל פרויקט: זו הספירה היחידה כאן
+   * שסורקת את טבלת המשימות כולה.
+   */
+  const myTaskCounts = new Map(
+    (actor.type === 'user'
+      ? D.all(
+          `SELECT t.project_id AS pid, COUNT(*) AS c
+             FROM tasks t
+            WHERE t.archived = 0 AND t.project_id IS NOT NULL
+              AND ((t.assignee_type = 'user' AND t.assignee_id = ?) OR ${EXTRA_ASSIGNEE_SQL})
+            GROUP BY t.project_id`,
+          actor.id, 'user', actor.id
+        )
+      : []).map((r) => [r.pid, r.c])
+  );
+
+  /**
+   * מנהל מערכת רואה את כל הפרויקטים בארגון, אבל יש לו גם עבודה משלו — ורשימה
+   * שמערבבת את השתיים אינה שימושית לאף אחד מהתפקידים. לכן כל פרויקט מסומן
+   * אם הוא שלו, והממשק מציג כברירת מחדל את שלו בלבד עם מעבר לכל הארגון.
+   *
+   * אותה הגדרה לכל התפקידים: "שלי" הוא מה שאני אחראי עליו, ולא מה שמותר לי
+   * לראות. עובד שרואה שלושה פרויקטים אך אחראי על אחד יקבל גם הוא את המעבר.
+   */
+  const mineIds = ownedProjectIds(actor);
+
+  const rows = D.all('SELECT * FROM projects ORDER BY status, name')
+    .filter((p) => visible === null || visible.has(p.id))
+    // 🔒 פרויקט מסווג — רק למי שהטבלה מתירה, למנהלו, לפותחו ולמי שיש לו בו משימה
+    .filter((p) => Cls.mayReadProject(actor, p));
+  const shaped = rows.map((p) => {
+    const stats = D.get(
+      `SELECT COUNT(*) total,
+              SUM(CASE WHEN c.is_final = 1 THEN 1 ELSE 0 END) done
+         FROM tasks t LEFT JOIN board_columns c ON c.board_id = t.board_id AND c.key = t.status
+        WHERE t.project_id = ? AND t.archived = 0`,
+      p.id
+    );
+    /*
+     * משימות בארכיון נספרות בנפרד ואינן נכנסות למונה שבתפריט — הוא מתאר
+     * עבודה פעילה. אבל מחיקת פרויקט מנתקת גם אותן, ולכן אישור המחיקה חייב
+     * לדעת עליהן: בלי זה הוא מבטיח "4 משימות יעברו" ומדווח אחריו על 5.
+     */
+    const archived = D.get(
+      'SELECT COUNT(*) c FROM tasks WHERE project_id = ? AND archived = 1', p.id
+    ).c;
+    return {
+      id: p.id,
+      name: p.name,
+      description: p.description,
+      managerId: p.manager_id,
+      managerName: p.manager_id ? D.get('SELECT full_name FROM users WHERE id = ?', p.manager_id)?.full_name ?? null : null,
+      startDate: p.start_date,
+      dueDate: p.due_date,
+      status: p.status,
+      color: projectColor(p),
+      // הצבע שנבחר בפועל, להבדיל מהנגזר — כדי שבורר הצבע יידע אם יש בחירה
+      colorChosen: p.color || null,
+      mine: mineIds.has(p.id),
+      /*
+       * האם מותר למחוק — מחושב בשרת ולא נגזר בלקוח. הלקוח שמנחש הרשאות
+       * מציג כפתור שנכשל ב-403, וזה גרוע מכפתור שאינו קיים. אותו כלל בדיוק
+       * שנאכף ב-DELETE.
+       */
+      canDelete: !isVendor(actor)
+        && P.may(actor, 'create_project')
+        && (visible === null || visible.has(p.id))
+        && (P.level(actor, 'create_project') === true || p.created_by === actor.id),
+      /*
+       * האם מותר לערוך — אותו כלל בדיוק ש-‎assertMayEditProject‎ אוכף, מאותה
+       * סיבה. רחב מ-‎canDelete‎ במכוון: גם מנהל הפרויקט עורך אותו, אבל מוחק
+       * אותו רק מי שפתח אותו.
+       */
+      canEdit: !isVendor(actor)
+        && P.may(actor, 'create_project')
+        && (visible === null || visible.has(p.id))
+        && (P.level(actor, 'create_project') === true
+            || p.created_by === actor.id || p.manager_id === actor.id),
+      /*
+       * המחלקה של הפרויקט נגזרת ממנהל המשימות שלו — אין לפרויקט שדה מחלקה
+       * משלו, וזו ההשתייכות היחידה שקיימת בפועל. פרויקט בלי מנהל אינו שייך
+       * לאיש, ולכן הוא מוצע לכולם ולא נעלם מאף אחד.
+       */
+      departmentId: p.manager_id
+        ? D.get('SELECT department_id FROM users WHERE id = ?', p.manager_id)?.department_id ?? null
+        : null,
+      parentProjectId: p.parent_project_id ?? null,
+      statusOwnerId: p.status_owner_id ?? null,
+      classification: Cls.classView(p),
+      /*
+       * האם אפשר לפתוח בו משימה: פרויקט שלי (מנהל, פתחתי, נעצתי, יש לי בו
+       * עבודה) או של המחלקה שלי. גם למי שרואה את כל הארגון — בורר הפרויקט
+       * במשימה מציג רק את אלה, והשרת אוכף (‎assertMayUseProject‎).
+       */
+      canAddTask: !isVendor(actor) && (mineIds.has(p.id) || pinned.has(p.id) || (myTaskCounts.get(p.id) ?? 0) > 0
+        || P.inActorDepartments(actor, p.manager_id ? D.get('SELECT department_id FROM users WHERE id = ?', p.manager_id)?.department_id ?? null : null)),
+      statusOwnerName: p.status_owner_id
+        ? D.get('SELECT full_name FROM users WHERE id = ?', p.status_owner_id)?.full_name ?? null
+        : null,
+      trackOptions: p.status_owner_id ? statusList(p.status_owner_id) : [],
+      parentProjectName: p.parent_project_id
+        ? D.get('SELECT name FROM projects WHERE id = ?', p.parent_project_id)?.name ?? null
+        : null,
+      subProjectsCount: D.get('SELECT COUNT(*) c FROM projects WHERE parent_project_id = ?', p.id).c,
+      logoId: D.get("SELECT id FROM project_images WHERE project_id = ? AND kind = 'logo'", p.id)?.id ?? null,
+      imagesCount: D.get("SELECT COUNT(*) c FROM project_images WHERE project_id = ? AND kind = 'gallery'", p.id).c,
+      tasksTotal: stats.total ?? 0,
+      tasksDone: stats.done ?? 0,
+      tasksArchived: archived,
+      // כמה משימות פתוחות שלי יש בפרויקט — הדירוג של בורר הפרויקטים
+      myTaskCount: myTaskCounts.get(p.id) ?? 0,
+      pinned: pinned.has(p.id)
+    };
+  });
+
+  // נעוצים ראשונים, ובתוך כל קבוצה הסדר המקורי נשמר
+  return [...shaped.filter((p) => p.pinned), ...shaped.filter((p) => !p.pinned)];
+}
+
+router.post('/api/projects/:id/pin', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  if (isVendor(actor)) throw forbidden();
+  const project = D.get('SELECT id FROM projects WHERE id = ?', Number(ctx.params.id));
+  if (!project) throw notFound('הפרויקט לא נמצא');
+  D.run('INSERT OR IGNORE INTO project_pins (user_id, project_id, created_at) VALUES (?,?,?)',
+    actor.id, project.id, D.nowIso());
+  sendJson(res, 200, { pinned: true });
+});
+
+router.delete('/api/projects/:id/pin', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  if (isVendor(actor)) throw forbidden();
+  D.run('DELETE FROM project_pins WHERE user_id = ? AND project_id = ?', actor.id, Number(ctx.params.id));
+  sendJson(res, 200, { pinned: false });
+});
+
+// ---------------------------------------------------------------------------
+// משימות
+// ---------------------------------------------------------------------------
+
+router.get('/api/tasks', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  const q = parseUrl(req).searchParams;
+
+  const where = ['1=1'];
+  const params = [];
+
+  // הפרדת הבורדים — הבורד הפנימי ובורדי הספקים אינם נחשפים זה לזה
+  if (isVendor(actor)) {
+    /*
+     * הספק רואה את הבורד שלו, או משימה כלשהי שהוא אחראי נוסף עליה. השנייה
+     * חיונית: משימה שבה עובד פנימי הוא האחראי הראשי נשארת בבורד הפנימי,
+     * ולכן בלי התנאי הזה הספק לא היה רואה אותה כלל.
+     */
+    where.push(`((b.type = 'vendor' AND b.vendor_id = ? AND t.assignee_id = ?) OR ${EXTRA_ASSIGNEE_SQL})`);
+    params.push(actor.id, actor.id, 'vendor', actor.id);
+  } else {
+    const scope = q.get('scope') ?? 'internal'; // internal | vendors | all
+    if (scope === 'internal') {
+      where.push("b.type = 'internal'");
+    } else if (scope === 'vendors') {
+      if (!P.may(actor, 'view_vendor_boards')) throw forbidden('אין לך הרשאה לתצוגת בורדי הספקים');
+      where.push("b.type = 'vendor'");
+      const vendorId = q.get('vendorId');
+      if (vendorId) { where.push('b.vendor_id = ?'); params.push(Number(vendorId)); }
+    } else if (!P.may(actor, 'view_vendor_boards')) {
+      where.push("b.type = 'internal'");
+    }
+
+    /*
+     * בכל שלושת החתכים נוסף אותו תנאי: משימה שאני אחראי נוסף עליה היא שלי.
+     * בלי זה אחראי נוסף היה מקבל התראה ויכול לפתוח את המשימה מקישור, אבל
+     * היא לא הייתה מופיעה לו בלוח ובדף הבית — כלומר בדיוק במקום שבו הוא
+     * אמור לעבוד איתה.
+     */
+    if (actor.role === 'employee' && P.hasGrant(actor, 'view_department_tasks')) {
+      // הרשאה אישית: כל משימות המחלקה, ומשימות ארגוניות של אנשיה
+      where.push(`(
+        t.department_id ${DEPT_IN}
+        OR (t.assignee_type = 'user' AND t.assignee_id = ?)
+        OR t.created_by = ?
+        OR p.manager_id = ?
+        OR ${EXTRA_ASSIGNEE_SQL}
+      )`);
+      params.push(deptsParam(actor), actor.id, actor.id, actor.id, 'user', actor.id);
+    } else if (actor.role === 'employee') {
+      where.push(`((t.assignee_id = ? AND t.assignee_type = 'user') OR t.created_by = ? OR p.manager_id = ?
+        OR ${EXTRA_ASSIGNEE_SQL})`);
+      params.push(actor.id, actor.id, actor.id, 'user', actor.id);
+    } else if (actor.role === 'manager' && scope !== 'vendors') {
+      // מנהל מחלקה: המחלקה שלו, משימות ארגוניות של אנשיה, ומה שהוא עצמו חלק ממנו
+      where.push(`(
+        t.department_id ${DEPT_IN}
+        OR (t.assignee_type = 'user' AND t.assignee_id = ?)
+        OR t.created_by = ?
+        OR p.manager_id = ?
+        OR ${EXTRA_ASSIGNEE_SQL}
+      )`);
+      params.push(deptsParam(actor), actor.id, actor.id, actor.id, 'user', actor.id);
+    }
+
+    // חתך מחלקתי — למי שרואה יותר ממחלקה אחת
+    const deptFilter = q.get('departmentId');
+    if (deptFilter && P.isOrgWide(actor)) {
+      // מחלקה ראשית כוללת את תתי-המחלקות שלה
+      where.push(`(t.department_id ${DEPT_IN} OR (t.assignee_type = 'user' AND t.assignee_id IN (SELECT id FROM users WHERE department_id ${DEPT_IN})))`);
+      params.push(subtreeParam(Number(deptFilter)), subtreeParam(Number(deptFilter)));
+    }
+    // "משימות שנתתי" — ברירת המחדל של מנהל מחלקה בלוח: מה שהוא פתח, מתוך
+    // כל מה שהוא רשאי לראות. צמצום בלבד, ולכן אינו דורש בדיקת הרשאה.
+    if (q.get('reach') === 'given') {
+      where.push('t.created_by = ?');
+      params.push(actor.id);
+    }
+  }
+
+  const archived = q.get('archived') === '1';
+  where.push(archived ? 't.archived = 1' : 't.archived = 0');
+
+  // משימות עתידיות מתוזמנות אינן מופיעות ברשימות הפעילות
+  if (q.get('includeScheduled') !== '1') {
+    where.push('(t.activate_at IS NULL OR t.activate_at <= ?)');
+    params.push(D.nowIso());
+  }
+
+  const simpleFilters = [
+    ['projectId', 't.project_id = ?', Number],
+    ['boardId', 't.board_id = ?', Number],
+    ['status', 't.status = ?', String],
+    ['priority', 't.priority = ?', String]
+  ];
+  for (const [key, clause, cast] of simpleFilters) {
+    const v = q.get(key);
+    if (v) { where.push(clause); params.push(cast(v)); }
+  }
+
+  /*
+   * סינון לפי היררכיה. ‎none‎ מחזיר משימות-אב בלבד — זה מה שטבלת הבקרה
+   * צריכה, שורה לכל משימה. בלי הפרמטר הרשימה מוחזרת כמו קודם, כולל
+   * תתי-משימות, כדי שמי שקיבל תת-משימה יראה אותה בלוח ובדף הבית כרגיל.
+   */
+  const parent = q.get('parent');
+  if (parent === 'none') where.push('t.parent_task_id IS NULL');
+  else if (parent) { where.push('t.parent_task_id = ?'); params.push(Number(parent)); }
+
+  const assignee = q.get('assignee'); // "user:3" / "vendor:1"
+  if (assignee) {
+    const [type, id] = assignee.split(':');
+    where.push('t.assignee_type = ? AND t.assignee_id = ?');
+    params.push(type, Number(id));
+  }
+
+  const dueBefore = q.get('dueBefore');
+  if (dueBefore) { where.push('t.due_date IS NOT NULL AND t.due_date <= ?'); params.push(dueBefore); }
+  const dueAfter = q.get('dueAfter');
+  if (dueAfter) { where.push('t.due_date IS NOT NULL AND t.due_date >= ?'); params.push(dueAfter); }
+
+  const search = q.get('q');
+  if (search) {
+    where.push('(t.title LIKE ? OR t.description LIKE ?)');
+    params.push(`%${search}%`, `%${search}%`);
+  }
+
+  /*
+   * סדר ברירת המחדל שונה בארכיון.
+   *
+   * בלוח החי הסדר הוא עדיפות ואז תאריך יעד — מה דחוף לעשות עכשיו. בארכיון
+   * שתי השאלות האלה כבר נענו: הכול הושלם, ועדיפות של משימה סגורה אינה
+   * אומרת דבר. מה שמחפשים שם הוא מה נסגר לאחרונה, ולכן הסדר הוא לפי מועד
+   * ההשלמה מהחדש לישן. משימה שהועברה לארכיון בלי מועד השלמה נופלת לסוף
+   * לפי מזהה, ולא לראש הרשימה.
+   */
+  const order = archived
+    ? `t.completed_at IS NULL, t.completed_at DESC, t.id DESC`
+    : `CASE t.priority WHEN 'urgent' THEN 0 WHEN 'high' THEN 1 WHEN 'normal' THEN 2 ELSE 3 END,
+       t.due_date IS NULL, t.due_date, t.id DESC`;
+
+  const rows = D.all(
+    `SELECT t.* FROM tasks t
+       JOIN boards b ON b.id = t.board_id
+       LEFT JOIN projects p ON p.id = t.project_id
+      WHERE ${where.join(' AND ')}
+      ORDER BY ${order}`,
+    ...params
+  );
+
+  // 🔒 הסיווג — אחרי השאילתה: הוא נשען על טבלת הנושאים, לא על עמודות בלבד
+  sendJson(res, 200, { tasks: rows.filter((t) => Cls.mayReadTask(actor, t)).map((t) => shapeTask(t, actor)) });
+});
+
+/**
+ * המשימות שאפשר לשים תחתן משימה — לבורר "משימת אב" בטופס המשימה.
+ *
+ * פתוחות, לא בארכיון, גלויות לי, ולא ברמה השלישית (מתחתיה אין רמה נוספת).
+ * לפי הפרויקט שנבחר בטופס; בלי פרויקט — מהפרויקטים שלי ושל המחלקה ומה שבלי
+ * פרויקט. ‎exclude‎ — המשימה הנערכת, שלא תוצע כאב של עצמה.
+ */
+router.get('/api/tasks/parent-options', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  if (isVendor(actor) || !D.trackerAccess(actor.id)) throw forbidden();
+  const q = parseUrl(req).searchParams;
+  const projectId = Number(q.get('projectId')) || null;
+  const exclude = Number(q.get('exclude')) || null;
+  const rows = D.all(
+    `SELECT t.*, p2.parent_task_id AS grand FROM tasks t
+       JOIN boards b ON b.id = t.board_id AND b.type = 'internal'
+       LEFT JOIN board_columns bc ON bc.board_id = t.board_id AND bc.key = t.status
+       LEFT JOIN tasks p2 ON p2.id = t.parent_task_id
+      WHERE t.archived = 0 AND COALESCE(bc.is_final, 0) = 0
+        AND (t.parent_task_id IS NULL OR p2.parent_task_id IS NULL)
+        ${projectId ? 'AND t.project_id = ?' : ''}
+      ORDER BY COALESCE(t.parent_task_id, t.id), t.parent_task_id IS NOT NULL, t.title
+      LIMIT 600`, ...(projectId ? [projectId] : []));
+  const exclTree = new Set(exclude ? [exclude] : []);
+  if (exclude) for (const r of D.all('SELECT id FROM tasks WHERE parent_task_id = ?', exclude)) exclTree.add(r.id);
+  const tasks = rows
+    .filter((t) => !exclTree.has(t.id) && canSeeTask(actor, t))
+    .map((t) => ({ id: t.id, title: t.title, parentId: t.parent_task_id ?? null, projectId: t.project_id ?? null }));
+  sendJson(res, 200, { tasks });
+});
+
+router.get('/api/tasks/:id', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  const task = getTaskOr404(ctx.params.id);
+  assertVisible(actor, task);
+  sendJson(res, 200, { task: shapeTask(task, actor, { withDetails: true }) });
+});
+
+/**
+ * תרשים הזרימה של משימה — כל העץ שלה, מהשורש (משימת-האב) ועד תתי-המשימות.
+ *
+ * מבקשים מכל צומת בעץ ומקבלים את העץ כולו, עם הצומת המבוקש מסומן: מי שפתח
+ * את התרשים מתוך תת-משימה רוצה לראות איפה היא עומדת ביחס לכל השאר. השורש
+ * הוא האב הגבוה ביותר שהצופה רשאי לראות. צמתים שאינם בתחומו נשמטים יחד עם
+ * הענף שלהם. ניתוח הנתיב הקריטי והחסמים נעשה בממשק (‎public/js/views/flow.js‎).
+ */
+router.get('/api/tasks/:id/flow', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  if (isVendor(actor) || !D.trackerAccess(actor.id)) throw forbidden();
+  const task = getTaskOr404(ctx.params.id);
+  assertVisible(actor, task);
+
+  let root = task;
+  for (let i = 0; i < MAX_TASK_DEPTH && root.parent_task_id; i += 1) {
+    const up = D.get('SELECT * FROM tasks WHERE id = ?', root.parent_task_id);
+    if (!up || !canSeeTask(actor, up)) break;
+    root = up;
+  }
+
+  const nodes = [];
+  const seen = new Set();
+  const visit = (t, parentId, depth) => {
+    if (seen.has(t.id) || depth > MAX_TASK_DEPTH + 1) return;
+    seen.add(t.id);
+    const col = columnMeta(t.board_id, t.status);
+    const final = col ? !!col.is_final : false;
+    const track = taskTrackStatus(t);
+    const dep = t.depends_on_task_id
+      ? D.get('SELECT id, title, status, board_id FROM tasks WHERE id = ?', t.depends_on_task_id)
+      : null;
+    const depCol = dep ? columnMeta(dep.board_id, dep.status) : null;
+    nodes.push({
+      id: t.id,
+      parentId,
+      depth,
+      title: t.title,
+      assigneeType: t.assignee_type,
+      assigneeName: assigneeName(t),
+      extraAssignees: shapeExtraAssignees(t.id).map((e) => e.name).filter(Boolean),
+      dueDate: t.due_date,
+      overdue: isOverdue(t, final),
+      isFinal: final,
+      statusLabel: col ? col.label : t.status,
+      statusColor: col ? col.color : '#94a3b8',
+      trackLabel: track?.label ?? null,
+      trackColor: track?.color ?? null,
+      statusShort: t.status_short ?? '',
+      dependsOn: dep ? { id: dep.id, title: dep.title, isFinal: !!depCol?.is_final } : null
+    });
+    const kids = D.all(
+      `SELECT t.*, COALESCE(bc.is_final, 0) fin FROM tasks t
+         LEFT JOIN board_columns bc ON bc.board_id = t.board_id AND bc.key = t.status
+        WHERE t.parent_task_id = ? AND t.archived = 0
+        ORDER BY COALESCE(t.due_date, '9999'), t.id`, t.id);
+    for (const k of kids) if (canSeeTask(actor, k)) visit(k, t.id, depth + 1);
+  };
+  visit(root, null, 1);
+
+  const project = projectOf(root);
+  sendJson(res, 200, {
+    rootId: root.id,
+    focusId: task.id,
+    project: project ? { id: project.id, name: project.name, color: project.color } : null,
+    nodes
+  });
+});
+
+router.post('/api/tasks', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  const body = await readJson(req);
+  assertMayUseProject(actor, body.projectId);
+  const id = createTask(actor, body);
+  sendJson(res, 201, { task: shapeTask(getTaskOr404(id), actor, { withDetails: true }) });
+});
+
+/**
+ * יצירת משימה — כל הכללים במקום אחד: הרשאה, בורד, שיוך, מחלקה, צ'קליסט,
+ * אחראים נוספים והתראות. משמש גם את משימות ה-AI ואת ההצעות מהמייל, כדי
+ * שמשימה שנוצרה משם לא תעקוף בדיקה שחלה על משימה רגילה.
+ *
+ * ‎body.source‎ — מאיפה המשימה הגיעה (‎email‎), ‎sourceRef‎ — מזהה המייל,
+ * ‎sourceUserId‎ — בתיבה של מי. ‎auditNote‎ — הנוסח ביומן הפעולות.
+ *
+ * @returns {number} מזהה המשימה
+ */
+// ‎\b‎ אינו עובד עם אותיות עבריות ב-JavaScript — הגבול הוא רווח, פיסוק או סוף
+const MEETING_TITLE = /^\s*(?:פגישה|פגישת|קביעת\s+פגישה|לקבוע\s+פגישה|לתאם\s+פגישה|תיאום\s+פגישה|ישיבה\s+עם)(?=$|[\s,.:;!?-])/;
+
+/**
+ * בדיקת השדות שהמסד אוכף באילוץ (‎CHECK‎ / ‎NOT NULL‎) או שנשמרים כמו שהם —
+ * לפני הכתיבה, כדי שערך שגוי יחזיר 400 עם הסבר ולא 500. תאריך יעד שאינו
+ * תאריך נשמר בעבר כמו שהוא, והייצוא הראה ‎NaN.NaN.NaN‎.
+ * ‎create‎ — ביצירה עדיפות ריקה היא ברירת המחדל; בעריכה היא שגיאה.
+ */
+const isPriority = (v) => PRIORITIES.some((p) => p.key === v);
+function validateTaskFields(body, { create = false } = {}) {
+  const emptyPriority = body.priority === null || body.priority === '';
+  if (body.priority !== undefined && !(create && emptyPriority) && !isPriority(body.priority)) {
+    throw badRequest('עדיפות לא מוכרת');
+  }
+  if (!create && body.title !== undefined && !String(body.title ?? '').trim()) throw badRequest('נדרשת כותרת למשימה');
+  if (body.assigneeType !== undefined && ![null, '', 'user', 'vendor'].includes(body.assigneeType)) {
+    throw badRequest('סוג אחראי לא מוכר');
+  }
+  const due = body.dueDate;
+  if (due !== undefined && due !== null && due !== '' && (typeof due !== 'string' || Number.isNaN(Date.parse(due)))) {
+    throw badRequest('תאריך יעד לא תקין');
+  }
+}
+
+function createTask(actor, body) {
+  requirePerm(actor, 'create_task');
+  const title = String(body.title ?? '').trim();
+  if (!title) throw badRequest('נדרשת כותרת למשימה');
+  validateTaskFields(body, { create: true });
+
+  let boardId = D.internalBoard().id;
+  let assigneeType = body.assigneeType || null;
+  let assigneeId = body.assigneeId ? Number(body.assigneeId) : null;
+
+  // הקצאה לספק מחייבת הרשאה, ומעבירה את המשימה לבורד של אותו ספק
+  if (assigneeType === 'vendor') {
+    requirePerm(actor, 'assign_task_to_vendor');
+    const vendorBoard = D.get("SELECT id FROM boards WHERE type='vendor' AND vendor_id = ?", assigneeId);
+    if (!vendorBoard) throw badRequest('לספק אין בורד ייעודי');
+    boardId = vendorBoard.id;
+  } else if (body.boardId) {
+    // בורד מפורש מתקבל רק אחרי בדיקת סוגו — אחרת אפשר היה לשתול משימה
+    // בבורד ספק בלי הרשאת הקצאה לספק
+    const board = D.get('SELECT * FROM boards WHERE id = ?', Number(body.boardId));
+    if (!board) throw badRequest('הבורד המבוקש לא קיים');
+    if (board.type === 'vendor') {
+      requirePerm(actor, 'assign_task_to_vendor');
+      // משימה בבורד ספק תמיד משויכת לאותו ספק — אין משימות ספק ללא אחראי
+      assigneeType = 'vendor';
+      assigneeId = board.vendor_id;
+    }
+    boardId = board.id;
+  }
+
+  const status = String(body.status ?? '') || Rules.firstColumnKey(boardId);
+  if (!columnMeta(boardId, status)) throw badRequest('סטטוס לא קיים בבורד זה');
+
+  assertMayAssignTo(actor, assigneeType, assigneeId);
+
+  // המשימה משויכת למחלקת האחראי, ואם אין אחראי — למחלקת היוצר
+  let taskDepartmentId = null;
+  if (assigneeType === 'user' && assigneeId) {
+    taskDepartmentId = D.get('SELECT department_id FROM users WHERE id = ?', assigneeId)?.department_id ?? null;
+  }
+  if (!taskDepartmentId && body.departmentId) taskDepartmentId = Number(body.departmentId);
+  if (!taskDepartmentId && actor.type === 'user') taskDepartmentId = actor.departmentId ?? null;
+  // מנהל מחלקה אינו יוצר משימות מחוץ למחלקה שלו ולתתי-המחלקות שלה
+  if (isDeptManager(actor) && !P.inActorDepartments(actor, taskDepartmentId)) {
+    taskDepartmentId = actor.departmentId ?? null;
+  }
+
+  /*
+   * תת-משימה. הבדיקה היא על הראייה בלבד ולא על הרשאה נוספת: כדי להגיע לכאן
+   * נדרש ‎create_task‎ ממילא, וזה בדיוק מה שמאפשר גם למי שקיבל תת-משימה
+   * לפתוח את הבאה בשרשרת — הזרימה שביקש המשתמש.
+   *
+   * שלוש רמות: משימת-אב ← משימות ← תתי-משימות (כך נבנה תרשים הזרימה
+   * בבקרת המשימות). תת-משימה של תת-משימה נתלית בהורה שלה, באותה רמה — עץ
+   * עמוק יותר כבר אינו נקרא במבט אחד.
+   */
+  let parentTaskId = null;
+  if (body.parentTaskId) {
+    const parent = getTaskOr404(body.parentTaskId);
+    assertVisible(actor, parent);
+    parentTaskId = taskDepth(parent) >= MAX_TASK_DEPTH ? parent.parent_task_id : parent.id;
+    // תת-משימה בלי פרויקט — בפרויקט של האב, כדי שתופיע איתו בלוח ובבקרה
+    if (!body.projectId && parent.project_id) body.projectId = parent.project_id;
+  }
+
+  const res1 = D.run(
+    `INSERT INTO tasks
+      (title, description, project_id, board_id, assignee_type, assignee_id, status, priority,
+       due_date, created_at, created_by, status_changed_at, activate_at, depends_on_task_id,
+       is_recurring, recurrence_freq, recurrence_policy, department_id, parent_task_id, status_short)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+    title,
+    String(body.description ?? ''),
+    body.projectId ? Number(body.projectId) : null,
+    boardId,
+    assigneeType,
+    assigneeId,
+    status,
+    body.priority || 'normal',
+    body.dueDate || null,
+    D.nowIso(),
+    actor.type === 'user' ? actor.id : null,
+    D.nowIso(),
+    body.activateAt || null,
+    body.dependsOnTaskId ? Number(body.dependsOnTaskId) : null,
+    body.isRecurring ? 1 : 0,
+    body.isRecurring ? (body.recurrenceFreq ?? 'weekly') : null,
+    body.recurrencePolicy ?? 'inherit',
+    taskDepartmentId,
+    parentTaskId,
+    String(body.statusShort ?? '').slice(0, 200)
+  );
+  const id = Number(res1.lastInsertRowid);
+  // 🔒 סיווג מהטופס (נושא ורמה). בלי — המשימה יורשת מהפרויקט, ואם גם לו אין: רגילה
+  if (body.topic) {
+    const c = Cls.parseClass(body.topic, body.sens);
+    if (c.sens) D.run('UPDATE tasks SET topic = ?, sens = ? WHERE id = ?', c.topic, c.sens, id);
+  }
+  /*
+   * "📅 פגישה לקביעה" — משימה שהכותרת שלה היא בקשה לפגישה, מכל מקור (ידני,
+   * הקלטה, בוט, מייל). אפשר להסיר את הסימון מהכרטיס.
+   */
+  if (body.meetingPending === true || (body.meetingPending !== false && MEETING_TITLE.test(title))) {
+    D.run('UPDATE tasks SET meeting_pending = 1 WHERE id = ?', id);
+  }
+  markSecretaryRequest(id, actor, assigneeType, assigneeId);
+  if (body.source) {
+    D.run('UPDATE tasks SET source = ?, source_ref = ?, source_user_id = ? WHERE id = ?',
+      String(body.source), body.sourceRef ?? null, body.sourceUserId ?? null, id);
+  }
+
+  /**
+   * הצ'קליסט מתקבל כרשימת מחרוזות (הקלדה חופשית בדיאלוג) או כרשימת אובייקטים
+   * ‎{ text, note }‎ (מתבנית שנשמרה ממשימה קיימת) — שני המקורות נתמכים כאן,
+   * כדי שהתבנית תשחזר גם את ההערות שבסעיפים ולא רק את שמותיהם.
+   */
+  for (const [i, entry] of (body.checklist ?? []).entries()) {
+    const text = String(typeof entry === 'string' ? entry : entry?.text ?? '').trim();
+    if (!text) continue;
+    const note = typeof entry === 'object' && entry ? String(entry.note ?? '') : '';
+    D.run('INSERT INTO checklist_items (task_id, text, position, note) VALUES (?,?,?,?)', id, text, i, note);
+  }
+
+  /*
+   * אחראים נוספים. נכתבים אחרי יצירת המשימה ולא לפניה — הם תלויים במזהה
+   * שלה — ומאומתים באותו כלל שחל על האחראי הראשי.
+   */
+  const extras = parseExtraAssignees(body.extraAssignees, assigneeType, assigneeId) ?? [];
+  if (extras.length) {
+    setExtraAssignees(id, extras, actor);
+    D.audit(id, actorRef(actor), 'assignees', `אחראים נוספים: ${extras.map((e) => partyName(e.type, e.id)).filter(Boolean).join(', ')}`);
+  }
+
+  D.audit(id, actorRef(actor), 'created', body.auditNote || 'המשימה נוצרה');
+  if (assigneeId) notifyAssignment(id, assigneeType, assigneeId, title, actor);
+  for (const e of extras) notifyAssignment(id, e.type, e.id, title, actor, { extra: true });
+
+  /*
+   * משימה כפולה במחלקה (פרק 11ב). בדיאלוג "משימה חדשה" המשתמש כבר ראה את
+   * הדומות ובחר "לפתוח בכל זאת" (‎dupChecked‎ — המזהים שהוצגו): הזוגות האלה לא
+   * יוצעו כמיזוג. בכל מסלול אחר — הצעה, הקלטה, בוט, משימת AI — אין את מי
+   * לשאול עכשיו: הבדיקה רצה ברקע, ואם נמצאה כפולה — הצעת מיזוג לאחראים.
+   */
+  /*
+   * 💡 איך לסגור — ברקע, לכל משימה שלא נולדה ממייל (לזו ממייל כבר יש הצעה
+   * מהסריקה). למי לפנות, ועצה מסוכן המחלקה כשיש מתאים. מוצג בכרטיס המשימה.
+   */
+  if (actor.type === 'user' && body.source !== 'email' && D.getSetting('task_closure_all', true)) {
+    setImmediate(() => TaskClosure.forTask(id).catch((err) => console.error('[משימון] הצעת סגירה למשימה נכשלה:', err.message)));
+  }
+
+  if (Array.isArray(body.dupChecked)) {
+    Dupes.keepApart(id, body.dupChecked, actor.type === 'user' ? actor.id : null);
+  } else if (actor.type === 'user' && body.dupCheck !== false) {
+    setImmediate(() => Dupes.checkCreated(id).catch((err) => console.error('[משימון] בדיקת משימה כפולה נכשלה:', err.message)));
+  }
+  return id;
+}
+
+/** המחלקה שמשימה חדשה תיפתח בה — אותו כלל של ‎createTask‎ */
+function newTaskDepartment(actor, body) {
+  let dept = null;
+  if ((body.assigneeType ?? 'user') === 'user' && body.assigneeId) {
+    dept = D.get('SELECT department_id FROM users WHERE id = ?', Number(body.assigneeId))?.department_id ?? null;
+  }
+  if (!dept && actor.type === 'user') dept = actor.departmentId ?? null;
+  if (isDeptManager(actor) && !P.inActorDepartments(actor, dept)) dept = actor.departmentId ?? null;
+  return dept;
+}
+
+/**
+ * "יש כבר משימה דומה" — לפני היצירה, מהדיאלוג. רק משימות פתוחות באותה מחלקה.
+ * מוחזרים כותרת ואצל מי — גם למי שאינו רואה את המשימה עצמה: בתוך המחלקה זה
+ * בדיוק מה שצריך לדעת כדי לא לפתוח עבודה כפולה (ולהצטרף אליה).
+ */
+router.post('/api/tasks/similar', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  if (isVendor(actor)) return sendJson(res, 200, { matches: [] });
+  const body = await readJson(req);
+  if (body.assigneeType === 'vendor') return sendJson(res, 200, { matches: [] });
+  const matches = await Dupes.similarForNew(actor, {
+    title: body.title, description: body.description, projectId: body.projectId, departmentId: newTaskDepartment(actor, body)
+  });
+  sendJson(res, 200, { matches });
+});
+
+/** "להצטרף למשימה של יוסי" — אחראי נוסף על המשימה הקיימת, בלי משימה חדשה */
+router.post('/api/tasks/:id/join', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  if (isVendor(actor)) throw forbidden();
+  try {
+    const id = Dupes.join(actor, Number(ctx.params.id));
+    sendJson(res, 200, { task: shapeTask(getTaskOr404(id), actor, { withDetails: true }) });
+  } catch (err) {
+    if (err.status === 403) throw forbidden(err.message);
+    throw badRequest(err.message);
+  }
+});
+
+/**
+ * מי שהוגדר אחראי מקבל התראה בתוך המערכת וגם דואר.
+ *
+ * ההתראה לבדה אינה מספיקה: מי שאינו מחובר באותו רגע לא ידע שהוקצתה לו משימה
+ * עד שייכנס. הדואר נשלח בלי ‎await‎ במכוון — יצירת משימה לא תמתין לשרת דואר,
+ * ולא תיכשל בגללו. השליחה עצמה אינה זורקת ורק רושמת ליומן.
+ */
+function notifyAssignment(taskId, assigneeType, assigneeId, title, assigner = null, { extra = false } = {}) {
+  /**
+   * מי שהקצה משימה לעצמו יודע עליה — הוא בדיוק כתב אותה. התראה על כך היא
+   * רעש שמכשיר את המשתמש להתעלם מהפעמון, ובדיוק בגללו הוא יפספס את המקרה
+   * שחשוב: מישהו אחר, מזכירה או מנהל, הכניס לו משימה.
+   */
+  const selfAssigned = assigner && assigneeType !== 'vendor' && assigner.id === assigneeId;
+  if (selfAssigned) return;
+
+  D.notify({
+    targetType: assigneeType === 'vendor' ? 'vendor' : 'user',
+    targetId: assigneeId,
+    kind: 'assignment',
+    // הנוסח מבחין, כי המשמעות שונה: אחראי נוסף אינו לבד על המשימה
+    title: extra ? 'הוגדרת אחראי נוסף על משימה' : 'הוקצתה לך משימה חדשה',
+    body: title,
+    taskId
+  });
+  const task = D.get('SELECT * FROM tasks WHERE id = ?', taskId);
+  if (task) TaskMail.sendAssignment({ task, assigneeType, assigneeId, assigner });
+  // ועוד הודעה מבוט הוואטסאפ — לעובד עם טלפון, לפי ההגדרות שלו
+  if (task && assigneeType === 'user') WaBot.notifyAssignment({ taskId, userId: assigneeId, assigner, extra });
+  /*
+   * משימה שהיא פנייה ("לבקש הצעת מחיר מ…") — הנוסח מוכן עוד לפני שהכרטיס נפתח.
+   * בלי ‎await‎, ולא זורק; ההחלטה אם בכלל — ב-TaskOutreach (כולל סינון זול לפני ה-AI)
+   */
+  if (task && assigneeType === 'user') {
+    const assignee = Auth.loadActor('user', assigneeId);
+    if (assignee && TaskOutreach.eligible(task, assignee)) void TaskOutreach.prepare(task.id, assignee);
+  }
+}
+
+router.patch('/api/tasks/:id', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  const task = getTaskOr404(ctx.params.id);
+  assertVisible(actor, task);
+  const body = await readJson(req);
+  const project = projectOf(task);
+
+  if (isVendor(actor) && actor.readOnly) throw forbidden('לחשבון שלך הוגדרה הרשאת צפייה בלבד');
+  // לפני כל כתיבה — שגיאה באחד השדות לא משאירה שינוי חלקי
+  validateTaskFields(body);
+
+  // שינוי סטטוס — מסלול נפרד עם כללי הזרימה בין הסטטוסים
+  if (body.status !== undefined && body.status !== task.status) {
+    if (!mayOnTask(actor, 'change_task_status', task, project)) throw forbidden('אין לך הרשאה לשנות את סטטוס המשימה');
+    changeStatus(task, body.status, actor);
+  }
+
+  const editableByAll = new Set(['status']);
+  const wantsMore = Object.keys(body).some((k) => !editableByAll.has(k));
+  if (wantsMore) {
+    if (isVendor(actor)) throw forbidden('ספק אינו רשאי לערוך את שדות המשימה');
+    if (!mayOnTask(actor, 'edit_delete_task', task, project)) throw forbidden('אין לך הרשאה לערוך משימה זו');
+
+    const changes = [];
+    const setField = (field, column, value, label, formatter = (v) => v) => {
+      if (value === undefined) return;
+      const current = task[column];
+      const next = value === '' ? null : value;
+      if (String(current ?? '') === String(next ?? '')) return;
+      D.run(`UPDATE tasks SET ${column} = ? WHERE id = ?`, next, task.id);
+      changes.push(`${label}: ${formatter(current) || '—'} ← ${formatter(next) || '—'}`);
+    };
+
+    // 🔒 סיווג: כל מי שעורך רשאי להחמיר. להקל או לבטל — רק מי שהטבלה מתירה לו את הסיווג
+    // הנוכחי, ולא רק כמשתתף: אחרת מי שהוסף למשימה רגישה יכול היה לפתוח אותה לכולם
+    if (body.topic !== undefined || body.sens !== undefined) {
+      const next = Cls.parseClass(body.topic ?? task.topic, body.sens ?? task.sens);
+      // הסיווג בפועל — גם זה שעובר בירושה מהפרויקט: סיווג משלה נמוך ממנו היה פותח אותה
+      const cur = Cls.classView(Cls.taskClass(task) ?? {});
+      if (next.topic !== (task.topic || '') || next.sens !== Number(task.sens || 0)) {
+        const lowering = cur && (!next.sens || next.sens < cur.sens || next.topic !== cur.topic);
+        if (lowering && !Cls.mayRead(Cls.scopeOf(actor), cur.topic, cur.sens)) {
+          throw forbidden('רק מי שטבלת הרגישות מתירה לו את הסיווג הנוכחי רשאי להקל אותו');
+        }
+        D.run('UPDATE tasks SET topic = ?, sens = ? WHERE id = ?', next.topic, next.sens, task.id);
+        const after = Cls.classView({ topic: next.topic, sens: next.sens });
+        changes.push(`סיווג: ${cur?.label ?? 'רגיל'} ← ${after?.label ?? 'רגיל'}`);
+      }
+    }
+
+    setField('title', 'title', body.title !== undefined ? String(body.title).trim() : undefined, 'כותרת');
+    setField('description', 'description', body.description !== undefined ? String(body.description) : undefined, 'תיאור');
+    setField('priority', 'priority', body.priority, 'עדיפות', (v) => PRIORITIES.find((p) => p.key === v)?.label ?? v);
+    setField('dueDate', 'due_date', body.dueDate, 'תאריך יעד', Rules.formatDate);
+    /*
+     * הסטטוס המקוצר לא עובר ב-‎setField‎: הוא הופך מחרוזת ריקה ל-NULL, והעמודה
+     * מוגדרת NOT NULL — ניקוי השדה היה נכשל. הוא כן נרשם בלוג הבקרה כמו כל
+     * שדה אחר, וזה מה שהופך את הטבלה לכלי מעקב: אפשר לראות בכרטיס מה היה
+     * הסטטוס קודם ומתי השתנה, גם כשהשדה מחזיק רק את הנוכחי.
+     */
+    if (body.statusShort !== undefined) {
+      const next = String(body.statusShort).trim().slice(0, 200);
+      const current = task.status_short ?? '';
+      if (next !== current) {
+        D.run('UPDATE tasks SET status_short = ? WHERE id = ?', next, task.id);
+        changes.push(`סטטוס מקוצר: ${current || '—'} ← ${next || '—'}`);
+      }
+    }
+
+    /*
+     * סטטוס הבקרה. מאומת מול הרשימה שהוחלה על הפרויקט של המשימה ולא מול
+     * רשימה גלובלית: סטטוס מרשימה של פרויקט אחר היה נשמר ואז לא מוצג, וזה
+     * נראה כתקלה. פרויקט בלי רשימה אינו מקבל סטטוס בכלל.
+     */
+    if (body.trackStatusId !== undefined) {
+      const next = body.trackStatusId ? Number(body.trackStatusId) : null;
+      if (next) {
+        const owner = project?.status_owner_id;
+        if (!owner) throw badRequest('לפרויקט לא הוחלה רשימת סטטוסים');
+        if (!D.get('SELECT 1 FROM task_statuses WHERE id = ? AND user_id = ?', next, owner)) {
+          throw badRequest('הסטטוס אינו שייך לרשימה של הפרויקט');
+        }
+      }
+      const current = task.track_status_id ?? null;
+      if (next !== current) {
+        D.run('UPDATE tasks SET track_status_id = ? WHERE id = ?', next, task.id);
+        const nameOf = (id) => (id ? D.get('SELECT label FROM task_statuses WHERE id = ?', id)?.label ?? '—' : '—');
+        changes.push(`סטטוס בקרה: ${nameOf(current)} ← ${nameOf(next)}`);
+      }
+    }
+    // העברה לפרויקט אחר — רק לפרויקט שלי או של המחלקה שלי
+    if (body.projectId && Number(body.projectId) !== task.project_id) assertMayUseProject(actor, body.projectId);
+    setField('projectId', 'project_id', body.projectId !== undefined ? (body.projectId ? Number(body.projectId) : null) : undefined, 'פרויקט',
+      (v) => (v ? D.get('SELECT name FROM projects WHERE id = ?', v)?.name ?? '' : ''));
+    setField('activateAt', 'activate_at', body.activateAt, 'תאריך הפעלה', Rules.formatDate);
+    setField('dependsOn', 'depends_on_task_id',
+      body.dependsOnTaskId !== undefined ? (body.dependsOnTaskId ? Number(body.dependsOnTaskId) : null) : undefined,
+      'תלות במשימה', (v) => (v ? `#${v}` : ''));
+    // משימת-אב — רק למי שנפתחה לו בקרת המשימות (שם העץ מוצג)
+    if (body.parentTaskId !== undefined && (Number(body.parentTaskId) || null) !== (task.parent_task_id ?? null)) {
+      if (isVendor(actor) || !D.trackerAccess(actor.id)) throw forbidden();
+      setField('parentTask', 'parent_task_id', assertMayReparent(actor, task, Number(body.parentTaskId) || null),
+        'משימת אב', (v) => (v ? `#${v} ${D.get('SELECT title FROM tasks WHERE id = ?', v)?.title ?? ''}` : ''));
+    }
+
+    if (body.isRecurring !== undefined) {
+      D.run('UPDATE tasks SET is_recurring = ?, recurrence_freq = ? WHERE id = ?',
+        body.isRecurring ? 1 : 0, body.isRecurring ? (body.recurrenceFreq ?? 'weekly') : null, task.id);
+      changes.push(body.isRecurring ? `הוגדרה חזרתיות (${body.recurrenceFreq ?? 'weekly'})` : 'בוטלה החזרתיות');
+    }
+    if (body.recurrencePolicy !== undefined) {
+      D.run('UPDATE tasks SET recurrence_policy = ? WHERE id = ?', body.recurrencePolicy, task.id);
+      changes.push('עודכנה מדיניות המופע החוזר');
+    }
+
+    // שינוי אחראי — כולל מעבר בין בורדים
+    if (body.assigneeType !== undefined || body.assigneeId !== undefined) {
+      const newType = body.assigneeType === '' ? null : body.assigneeType ?? task.assignee_type;
+      const newId = body.assigneeId === null || body.assigneeId === '' ? null : Number(body.assigneeId ?? task.assignee_id);
+      if (newType !== task.assignee_type || newId !== task.assignee_id) {
+        /*
+         * אותה בדיקה שחלה ביצירה. כאן היא נעדרה, והפער היה אמיתי: השער
+         * לעריכה הוא ‎edit_delete_task‎, שלעובד הוא 'own' ומסתפק בהיותו
+         * משויך למשימה — ולכן עובד ללא הרשאת הקצאה יכול היה לפתוח משימה
+         * לעצמו ומיד להעביר אותה בעריכה לכל אדם בארגון.
+         */
+        assertMayAssignTo(actor, newType, newId);
+        let boardId = task.board_id;
+        if (newType === 'vendor' && newId) {
+          const vb = D.get("SELECT id FROM boards WHERE type='vendor' AND vendor_id = ?", newId);
+          if (!vb) throw badRequest('לספק אין בורד ייעודי');
+          boardId = vb.id;
+        } else if (newType === 'user') {
+          boardId = D.internalBoard().id;
+        }
+        const prevName = assigneeName(task) ?? '—';
+        let status = task.status;
+        if (boardId !== task.board_id) status = Rules.firstColumnKey(boardId);
+        // המשימה עוברת עם האחראי למחלקה שלו
+        if (newType === 'user' && newId) {
+          const dept = D.get('SELECT department_id FROM users WHERE id = ?', newId)?.department_id ?? null;
+          D.run('UPDATE tasks SET department_id = ? WHERE id = ?', dept, task.id);
+        }
+        D.run('UPDATE tasks SET assignee_type = ?, assignee_id = ?, board_id = ?, status = ?, status_changed_at = ? WHERE id = ?',
+          newType, newId, boardId, status, D.nowIso(), task.id);
+        markSecretaryRequest(task.id, actor, newType, newId);
+        const updated = getTaskOr404(task.id);
+        changes.push(`אחראי: ${prevName} ← ${assigneeName(updated) ?? '—'}`);
+        if (newId) notifyAssignment(task.id, newType, newId, task.title, actor);
+      }
+    }
+
+    /*
+     * אחראים נוספים בעריכה. החלפה מלאה של הרשימה ולא מיזוג, כי זה מה
+     * שהממשק שולח — הרשימה שעל המסך היא הרשימה. התראה נשלחת רק למי שנוסף
+     * עכשיו, ולא לכל הרשימה: שמירה של שינוי בתאריך היעד לא תפציץ בהתראות
+     * את מי שהיה אחראי כבר קודם.
+     */
+    if (body.extraAssignees !== undefined) {
+      const fresh = getTaskOr404(task.id);
+      const next = parseExtraAssignees(body.extraAssignees, fresh.assignee_type, fresh.assignee_id) ?? [];
+      const before = new Set(extraAssigneesOf(task).map((e) => `${e.assignee_type}:${e.assignee_id}`));
+      setExtraAssignees(task.id, next, actor);
+      const added = next.filter((e) => !before.has(`${e.type}:${e.id}`));
+      const names = next.map((e) => partyName(e.type, e.id)).filter(Boolean);
+      if (added.length || before.size !== next.length) {
+        changes.push(names.length ? `אחראים נוספים: ${names.join(', ')}` : 'הוסרו האחראים הנוספים');
+      }
+      for (const e of added) notifyAssignment(task.id, e.type, e.id, task.title, actor, { extra: true });
+    }
+
+    if (body.archived !== undefined) {
+      D.run('UPDATE tasks SET archived = ? WHERE id = ?', body.archived ? 1 : 0, task.id);
+      changes.push(body.archived ? 'המשימה הועברה לארכיון' : 'המשימה הוחזרה מהארכיון');
+    }
+
+    if (changes.length) D.audit(task.id, actorRef(actor), 'updated', changes.join(' | '));
+  }
+
+  sendJson(res, 200, { task: shapeTask(getTaskOr404(task.id), actor, { withDetails: true }) });
+});
+
+/** מימוש חוקי המעבר בין הסטטוסים + בדיקת תלות */
+function changeStatus(task, newStatus, actor, note = '') {
+  const target = columnMeta(task.board_id, newStatus);
+  if (!target) throw badRequest('סטטוס לא קיים בבורד זה');
+  const current = columnMeta(task.board_id, task.status);
+
+  // אזהרת תלות — לא ניתן לסגור משימה שתלויה במשימה שטרם הושלמה
+  if (target.is_final && task.depends_on_task_id) {
+    const dep = D.get('SELECT * FROM tasks WHERE id = ?', task.depends_on_task_id);
+    if (dep) {
+      const depCol = columnMeta(dep.board_id, dep.status);
+      if (!depCol?.is_final) {
+        throw badRequest(`לא ניתן לסגור: המשימה תלויה במשימה "${dep.title}" שטרם הושלמה`);
+      }
+    }
+  }
+
+  const board = boardOf(task);
+  if (board.type === 'vendor') {
+    if (isVendor(actor)) {
+      // הספק רשאי רק לדווח על תוצר ולסמן שסיים מצדו
+      const allowed = ['uploaded', 'pending_team_review'];
+      if (!allowed.includes(newStatus)) throw forbidden('ספק רשאי לסמן רק העלאת תוצרים או סיום מצדו');
+    } else if (newStatus === 'approved') {
+      // 5א — אישור סופי בלבד למי שמורשה
+      requirePerm(actor, 'approve_vendor_output');
+    }
+  }
+
+  D.run('UPDATE tasks SET status = ?, status_changed_at = ?, escalated = 0 WHERE id = ?', newStatus, D.nowIso(), task.id);
+  if (target.is_final) {
+    D.run('UPDATE tasks SET completed_at = ? WHERE id = ?', D.nowIso(), task.id);
+    // משימה מקריאת שירות — הקריאה נסגרת בתפעול 360 (רק במעבר לסיום, לא בין שני סטטוסי סיום)
+    if (!current?.is_final) Tiful360.onTaskCompleted(task, actor);
+  } else if (current?.is_final) {
+    D.run('UPDATE tasks SET completed_at = NULL WHERE id = ?', task.id);
+  }
+
+  D.audit(task.id, actorRef(actor), 'status_changed',
+    `סטטוס: ${current?.label ?? task.status} ← ${target.label}${note ? ` | ${note}` : ''}`);
+
+  // התראות לצדדים הרלוונטיים
+  if (board.type === 'vendor') {
+    if (newStatus === 'needs_fix' && task.assignee_id) {
+      D.notify({
+        targetType: 'vendor', targetId: task.assignee_id, kind: 'status_change',
+        title: 'נדרש תיקון בתוצר שהוגש',
+        body: note || `המשימה "${task.title}" הוחזרה לטיפולך עם הערות הצוות.`,
+        taskId: task.id
+      });
+    } else if (newStatus === 'approved' && task.assignee_id) {
+      D.notify({
+        targetType: 'vendor', targetId: task.assignee_id, kind: 'status_change',
+        title: 'התוצר אושר סופית', body: task.title, taskId: task.id
+      });
+    } else if (isVendor(actor)) {
+      // רק מי שהמשימה בתחומו, ולא כל מנהל בארגון
+      for (const m of Rules.alertTargets(task)) {
+        D.notify({
+          targetType: 'user', targetId: m.id, kind: 'status_change',
+          title: newStatus === 'pending_team_review' ? 'ספק סיים משימה — ממתין לבדיקה' : 'ספק העלה תוצרים',
+          body: `${task.title} — ${actor.name}`, taskId: task.id
+        });
+      }
+    }
+  } else if (task.assignee_type === 'user' && task.assignee_id && task.assignee_id !== actor.id) {
+    D.notify({
+      targetType: 'user', targetId: task.assignee_id, kind: 'status_change',
+      title: 'שינוי סטטוס במשימה שלך', body: `${task.title} — ${target.label}`, taskId: task.id
+    });
+  }
+
+  /*
+   * מי שפתח את המשימה צריך לדעת שהיא נסגרה. הוא ביקש שמשהו ייעשה, ובלי
+   * ההודעה הזאת הוא נשאר שואל "מה קרה עם זה" או בודק ידנית בלוח.
+   *
+   * רק בסגירה ורק כשמישהו אחר סגר: פותח שסוגר בעצמו יודע, והאחראי כבר קיבל
+   * את התראת שינוי הסטטוס שלמעלה ואינו צריך שנייה עליה.
+   */
+  if (target.is_final && task.created_by
+      && task.created_by !== actor.id
+      && D.countsAsOpener(task.created_by)
+      && !(task.assignee_type === 'user' && task.assignee_id === task.created_by)) {
+    if (D.get("SELECT 1 FROM users WHERE id = ? AND status = 'active'", task.created_by)) {
+      D.notify({
+        targetType: 'user', targetId: task.created_by, kind: 'completed',
+        title: `${actor.name} השלים/ה משימה שפתחת`,
+        body: task.title, taskId: task.id
+      });
+    }
+  }
+}
+
+/** 5ב — דחייה והחזרה לספק עם הערות */
+router.post('/api/tasks/:id/review', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  requirePerm(actor, 'approve_vendor_output');
+  const task = getTaskOr404(ctx.params.id);
+  assertVisible(actor, task);
+  const { decision, note } = await readJson(req);
+
+  if (!['approve', 'reject', 'start_review'].includes(decision)) throw badRequest('החלטה לא מוכרת');
+  const nextStatus = decision === 'approve' ? 'approved' : decision === 'reject' ? 'needs_fix' : 'in_team_review';
+
+  if (note) {
+    D.run('INSERT INTO comments (task_id, author_type, author_id, body, internal, created_at) VALUES (?,?,?,?,0,?)',
+      task.id, 'user', actor.id, note, D.nowIso());
+  }
+  changeStatus(task, nextStatus, actor, note);
+  sendJson(res, 200, { task: shapeTask(getTaskOr404(task.id), actor, { withDetails: true }) });
+});
+
+/** פעולות אצווה */
+router.post('/api/tasks/bulk', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  if (isVendor(actor)) throw forbidden();
+  const { ids, action, value } = await readJson(req);
+  if (!Array.isArray(ids) || !ids.length) throw badRequest('לא נבחרו משימות');
+  if (action === 'priority' && !isPriority(value)) throw badRequest('עדיפות לא מוכרת');
+
+  let affected = 0;
+  const errors = [];
+  for (const id of ids) {
+    try {
+      const task = getTaskOr404(id);
+      assertVisible(actor, task);
+      const project = projectOf(task);
+      if (action === 'status') {
+        if (!mayOnTask(actor, 'change_task_status', task, project)) throw forbidden();
+        changeStatus(task, value, actor);
+      } else if (action === 'assignee') {
+        if (!mayOnTask(actor, 'edit_delete_task', task, project)) throw forbidden();
+        const [type, rawId] = String(value).split(':');
+        // אותה בדיקה שביצירה ובעריכה — כאן היא נעדרה כמו ב-PATCH
+        assertMayAssignTo(actor, type, Number(rawId));
+        const boardId = type === 'vendor'
+          ? D.get("SELECT id FROM boards WHERE type='vendor' AND vendor_id = ?", Number(rawId))?.id
+          : D.internalBoard().id;
+        if (!boardId) throw badRequest('לספק אין בורד ייעודי');
+        const status = boardId !== task.board_id ? Rules.firstColumnKey(boardId) : task.status;
+        D.run('UPDATE tasks SET assignee_type = ?, assignee_id = ?, board_id = ?, status = ?, status_changed_at = ? WHERE id = ?',
+          type, Number(rawId), boardId, status, D.nowIso(), task.id);
+        D.audit(task.id, actorRef(actor), 'updated', `שינוי אחראי (פעולת אצווה)`);
+        notifyAssignment(task.id, type, Number(rawId), task.title, actor);
+      } else if (action === 'project') {
+        /**
+         * העברה בין פרויקטים. ‎value‎ ריק פירושו הסרה מפרויקט, ולכן נבדק
+         * במפורש ולא דרך ‎if (value)‎ — אחרת לא הייתה דרך להוציא משימה
+         * מפרויקט בפעולת אצווה.
+         */
+        if (!mayOnTask(actor, 'edit_delete_task', task, project)) throw forbidden();
+        const target = value ? Number(value) : null;
+        if (target && !D.get('SELECT 1 FROM projects WHERE id = ?', target)) throw badRequest('הפרויקט לא נמצא');
+        if (target && target !== task.project_id) assertMayUseProject(actor, target);
+        D.run('UPDATE tasks SET project_id = ? WHERE id = ?', target, task.id);
+        D.audit(task.id, actorRef(actor), 'updated',
+          target ? `הועברה לפרויקט "${D.get('SELECT name FROM projects WHERE id = ?', target).name}"` : 'הוסרה מהפרויקט');
+      } else if (action === 'priority') {
+        if (!mayOnTask(actor, 'edit_delete_task', task, project)) throw forbidden();
+        D.run('UPDATE tasks SET priority = ? WHERE id = ?', value, task.id);
+        D.audit(task.id, actorRef(actor), 'updated', `עדיפות שונתה ל-${PRIORITIES.find((p) => p.key === value)?.label}`);
+      } else if (action === 'archive') {
+        if (!mayOnTask(actor, 'edit_delete_task', task, project)) throw forbidden();
+        D.run('UPDATE tasks SET archived = ? WHERE id = ?', value ? 1 : 0, task.id);
+        D.audit(task.id, actorRef(actor), 'updated', value ? 'הועברה לארכיון' : 'הוחזרה מהארכיון');
+      } else if (action === 'delete') {
+        /**
+         * מחיקה היא הפעולה היחידה כאן שאינה ניתנת לביטול, ולכן היא נבדקת לכל
+         * משימה בנפרד: מי שבחר עשר משימות ורשאי למחוק שמונה מהן ימחק שמונה,
+         * והשתיים האחרות יחזרו כשגיאה ולא יימחקו בשקט.
+         */
+        if (!mayOnTask(actor, 'edit_delete_task', task, project)) throw forbidden();
+        D.run('DELETE FROM tasks WHERE id = ?', task.id);
+      } else {
+        throw badRequest('פעולת אצווה לא מוכרת');
+      }
+      affected++;
+    } catch (err) {
+      errors.push({ id, message: err.message });
+    }
+  }
+  sendJson(res, 200, { affected, errors });
+});
+
+router.delete('/api/tasks/:id', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  const task = getTaskOr404(ctx.params.id);
+  assertVisible(actor, task);
+  if (!mayOnTask(actor, 'edit_delete_task', task, projectOf(task))) throw forbidden('אין לך הרשאה למחוק משימה זו');
+  D.run('DELETE FROM tasks WHERE id = ?', task.id);
+  sendJson(res, 200, { ok: true });
+});
+
+// --- צ'קליסט ---
+
+/**
+ * צ'קליסט מלא סוגר את המשימה מעצמו.
+ *
+ * מי שמסמן את הסעיף האחרון סיים את העבודה — ולדרוש ממנו לחזור לדף הבית
+ * ולסמן שוב "הושלמה" זו אותה הצהרה פעמיים. וההפך גם נכון: סעיף שנפתח מחדש
+ * במשימה סגורה אומר שהעבודה לא נגמרה, ומשימה שנשארת "הושלם" עם סעיף פתוח
+ * היא שקר בלוח.
+ *
+ * הכלל אחד: המשימה סגורה אם ורק אם כל סעיפי הצ'קליסט שלה מסומנים. לכן הוא
+ * נאכף אחרי כל שינוי בצ'קליסט — סימון, ביטול סימון, הוספת סעיף ומחיקתו —
+ * ולא רק בסימון. סעיף חדש במשימה שנסגרה פותח אותה מחדש, ומחיקת הסעיף
+ * הפתוח האחרון סוגרת אותה.
+ *
+ * מה במכוון *אינו* נכלל:
+ *
+ * • משימה בלי צ'קליסט. אפס סעיפים אינם "כל הסעיפים הושלמו" — הם משימה
+ *   שלא הוגדר לה צ'קליסט, והיא נסגרת ביד כמו קודם.
+ *
+ * • בורד ספקים. שם הסטטוס הסופי הוא "הושלם ואושר", והוא שער אישור שדורש
+ *   ‎approve_vendor_output‎: ספק שסיים את הצ'קליסט שלו לא אישר את התוצר
+ *   של עצמו. הזרימה מול ספק נשארת ידנית.
+ *
+ * • משימה בארכיון. שינוי בצ'קליסט של משימה שהורדה מהלוח אינו אמור להחזיר
+ *   אותה אליו.
+ *
+ * ההרשאה אינה נעקפת ואינה נדרשת בנפרד: ‎PATCH /api/checklist/:id‎ ממילא
+ * דורש ‎change_task_status‎ כדי לסמן סעיף, ולכן מי שהגיע לכאן רשאי לשנות
+ * את הסטטוס בעצמו. אין כאן הרחבת הרשאה, רק חיסכון בלחיצה.
+ */
+function syncChecklistCompletion(taskId, actor) {
+  if (D.getSetting('auto_done_on_checklist', true) === false) return null;
+
+  const task = getTaskOr404(taskId);
+  if (task.archived) return null;
+  if (boardOf(task).type !== 'internal') return null;
+
+  const stats = D.get(
+    'SELECT COUNT(*) total, SUM(CASE WHEN done = 1 THEN 1 ELSE 0 END) done FROM checklist_items WHERE task_id = ?',
+    task.id
+  );
+  const total = Number(stats?.total ?? 0);
+  if (!total) return null;
+  const allDone = Number(stats?.done ?? 0) === total;
+
+  const columns = columnsOf(task.board_id);
+  const current = columns.find((c) => c.key === task.status);
+  const isFinal = !!current?.is_final;
+  if (allDone === isFinal) return null;   // הסטטוס כבר תואם — אין מה לעשות
+
+  let target;
+  if (allDone) {
+    target = columns.find((c) => c.is_final);
+  } else {
+    /*
+     * פתיחה מחדש חוזרת ל"בטיפול" ולא ל"חדש": המשימה הזו כבר עבדו עליה, ורוב
+     * הסעיפים בה מסומנים. אין בטבלה שדה שזוכר מה היה הסטטוס לפני הסגירה,
+     * ומבין העמודות הקיימות "בטיפול" היא התיאור הנכון. אם הבורד שונה ואין
+     * בו עמודה כזו — העמודה הראשונה שאינה סופית.
+     */
+    target = columns.find((c) => c.key === 'in_progress' && !c.is_final)
+      ?? columns.find((c) => !c.is_final);
+  }
+  if (!target || target.key === task.status) return null;
+
+  const note = allDone ? 'הצ׳קליסט הושלם במלואו' : 'סעיף בצ׳קליסט נפתח מחדש';
+  try {
+    changeStatus(task, target.key, actor, note);
+  } catch (err) {
+    /*
+     * ‎changeStatus‎ חוסם סגירת משימה שתלויה במשימה שטרם הושלמה. הסימון
+     * עצמו תקף ואין להפיל אותו בגלל זה — הסעיף סומן, המשימה פשוט לא נסגרה,
+     * והסיבה חוזרת ללקוח כדי שתוצג למי שסימן.
+     */
+    return { changed: false, reason: err?.message ?? 'הסטטוס לא עודכן' };
+  }
+  return { changed: true, done: allDone, status: target.key, label: target.label };
+}
+
+router.post('/api/tasks/:id/checklist', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  const task = getTaskOr404(ctx.params.id);
+  assertVisible(actor, task);
+  if (isVendor(actor)) throw forbidden();
+  if (!mayOnTask(actor, 'edit_delete_task', task, projectOf(task))) throw forbidden();
+  const { text } = await readJson(req);
+  const clean = String(text ?? '').trim();
+  if (!clean) throw badRequest('נדרש טקסט');
+  const pos = D.get('SELECT COALESCE(MAX(position), -1) + 1 p FROM checklist_items WHERE task_id = ?', task.id).p;
+  D.run('INSERT INTO checklist_items (task_id, text, position) VALUES (?,?,?)', task.id, clean, pos);
+  D.audit(task.id, actorRef(actor), 'checklist', `נוסף סעיף: ${clean}`);
+  // סעיף חדש הוא עבודה שנוספה — במשימה שנסגרה הוא פותח אותה מחדש
+  const autoStatus = syncChecklistCompletion(task.id, actor);
+  sendJson(res, 200, { task: shapeTask(getTaskOr404(task.id), actor, { withDetails: true }), autoStatus });
+});
+
+/** סעיף עם המשימה שהוא שייך לה — נקודת הכניסה לכל פעולה על סעיף */
+function checklistItemOr404(actor, id) {
+  const item = D.get('SELECT * FROM checklist_items WHERE id = ?', Number(id));
+  if (!item) throw notFound('הסעיף לא נמצא');
+  const task = getTaskOr404(item.task_id);
+  assertVisible(actor, task);
+  return { item, task };
+}
+
+/** תוכן הסעיף עצמו: ההערה שבו והשרשור שלו */
+function shapeChecklistItem(item, actor) {
+  const hideInternal = isVendor(actor);
+  return {
+    id: item.id,
+    taskId: item.task_id,
+    text: item.text,
+    note: item.note ?? '',
+    done: !!item.done,
+    comments: D.all(
+      `SELECT * FROM comments
+        WHERE checklist_item_id = ?${hideInternal ? ' AND internal = 0' : ''}
+        ORDER BY created_at`,
+      item.id
+    ).map((c) => ({
+      id: c.id,
+      body: c.body,
+      internal: !!c.internal,
+      createdAt: c.created_at,
+      authorType: c.author_type,
+      authorId: c.author_id,
+      authorName:
+        c.author_type === 'vendor'
+          ? D.get('SELECT name FROM vendors WHERE id = ?', c.author_id)?.name ?? 'ספק'
+          : c.author_type === 'user'
+            ? D.get('SELECT full_name FROM users WHERE id = ?', c.author_id)?.full_name ?? 'משתמש'
+            : 'המערכת',
+      attachments: D.all(
+        'SELECT id, filename, size, mime, version FROM attachments WHERE comment_id = ? ORDER BY id', c.id
+      )
+    }))
+  };
+}
+
+/**
+ * מסך הסעיף. סעיף בצ'קליסט אינו תמיד שורה אחת — לפעמים יש בו תהליך משל
+ * עצמו, ואז הוא נפתח לעצמו עם הערה ושרשור תגובות.
+ */
+router.get('/api/checklist/:id', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  const { item, task } = checklistItemOr404(actor, ctx.params.id);
+  sendJson(res, 200, {
+    item: shapeChecklistItem(item, actor),
+    taskTitle: task.title,
+    permissions: {
+      edit: mayOnTask(actor, 'edit_delete_task', task, projectOf(task)) && !isVendor(actor),
+      changeStatus: mayOnTask(actor, 'change_task_status', task, projectOf(task)) && !(isVendor(actor) && actor.readOnly),
+      comment: !(isVendor(actor) && actor.readOnly),
+      seeInternal: !isVendor(actor)
+    }
+  });
+});
+
+router.patch('/api/checklist/:id', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  const { item, task } = checklistItemOr404(actor, ctx.params.id);
+  const b = await readJson(req);
+  const project = projectOf(task);
+
+  // סימון "בוצע" הוא שינוי סטטוס; שינוי הטקסט או ההערה הוא עריכת תוכן המשימה
+  if (b.done !== undefined) {
+    if (!mayOnTask(actor, 'change_task_status', task, project)) throw forbidden();
+    D.run('UPDATE checklist_items SET done = ? WHERE id = ?', b.done ? 1 : 0, item.id);
+    D.audit(task.id, actorRef(actor), 'checklist', `${b.done ? 'הושלם' : 'בוטל'} סעיף: ${item.text}`);
+  }
+
+  if (b.text !== undefined || b.note !== undefined) {
+    if (isVendor(actor) || !mayOnTask(actor, 'edit_delete_task', task, project)) throw forbidden();
+    const text = b.text !== undefined ? String(b.text).trim() : item.text;
+    if (!text) throw badRequest('נדרש טקסט לסעיף');
+    const note = b.note !== undefined ? String(b.note) : item.note;
+    D.run('UPDATE checklist_items SET text = ?, note = ? WHERE id = ?', text, note, item.id);
+    if (b.text !== undefined && text !== item.text) {
+      D.audit(task.id, actorRef(actor), 'checklist', `שם הסעיף שונה ל"${text}"`);
+    }
+    if (b.note !== undefined && note !== item.note) {
+      D.audit(task.id, actorRef(actor), 'checklist', `עודכנה ההערה בסעיף "${text}"`);
+    }
+  }
+
+  // רק סימון משנה את שלמות הצ'קליסט; שינוי טקסט או הערה אינו נוגע בזה
+  const autoStatus = b.done !== undefined ? syncChecklistCompletion(task.id, actor) : null;
+
+  const fresh = D.get('SELECT * FROM checklist_items WHERE id = ?', item.id);
+  sendJson(res, 200, {
+    item: shapeChecklistItem(fresh, actor),
+    task: shapeTask(getTaskOr404(task.id), actor, { withDetails: true }),
+    autoStatus
+  });
+});
+
+/** תגובה על סעיף — אותו שרשור כמו במשימה, כולל תיוגים וקבצים */
+router.post('/api/checklist/:id/comments', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  const { item, task } = checklistItemOr404(actor, ctx.params.id);
+  if (isVendor(actor) && actor.readOnly) throw forbidden('לחשבון שלך הוגדרה הרשאת צפייה בלבד');
+  const { body, internal, files } = await readJson(req);
+  const text = String(body ?? '').trim();
+  const attached = Array.isArray(files) ? files.filter((f) => f && f.filename && f.data) : [];
+  if (!text && !attached.length) throw badRequest('נדרש תוכן לתגובה או קובץ מצורף');
+
+  const isInternal = !isVendor(actor) && !!internal;
+  const result = D.run(
+    `INSERT INTO comments (task_id, checklist_item_id, author_type, author_id, body, internal, created_at)
+     VALUES (?,?,?,?,?,?,?)`,
+    task.id, item.id, isVendor(actor) ? 'vendor' : 'user', actor.id, text, isInternal ? 1 : 0, D.nowIso()
+  );
+  const commentId = Number(result.lastInsertRowid);
+
+  // הקבצים נקשרים לתגובה, ולכן נשמרים אחריה
+  for (const f of attached.map((f) => saveAttachment(task, actor, f, commentId))) {
+    D.audit(task.id, actorRef(actor), 'attachment', `צורף קובץ "${f.name}" לסעיף "${item.text}"`);
+  }
+
+  for (const uid of extractMentions(text)) {
+    D.run('INSERT OR IGNORE INTO comment_mentions (comment_id, user_id) VALUES (?,?)', commentId, uid);
+    if (uid !== actor.id || isVendor(actor)) {
+      D.notify({
+        targetType: 'user', targetId: uid, kind: 'mention',
+        title: `${actor.name} תייג/ה אותך בסעיף`, body: `${item.text} — ${text.slice(0, 100)}`, taskId: task.id
+      });
+    }
+  }
+
+  D.audit(task.id, actorRef(actor), 'comment', `תגובה בסעיף "${item.text}"`);
+  const fresh = D.get('SELECT * FROM checklist_items WHERE id = ?', item.id);
+  sendJson(res, 200, {
+    item: shapeChecklistItem(fresh, actor),
+    task: shapeTask(getTaskOr404(task.id), actor, { withDetails: true })
+  });
+});
+
+router.delete('/api/checklist/:id', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  const item = D.get('SELECT * FROM checklist_items WHERE id = ?', Number(ctx.params.id));
+  if (!item) throw notFound();
+  const task = getTaskOr404(item.task_id);
+  assertVisible(actor, task);
+  if (isVendor(actor) || !mayOnTask(actor, 'edit_delete_task', task, projectOf(task))) throw forbidden();
+  D.run('DELETE FROM checklist_items WHERE id = ?', item.id);
+  /*
+   * מחיקת הסעיף הפתוח האחרון משאירה צ'קליסט שכולו מסומן, וזה סוגר את
+   * המשימה — אותו כלל, בלי חור שדרכו נשארת משימה פתוחה בלי סעיף פתוח.
+   * מחיקת הסעיף היחיד מותירה אפס סעיפים, ואז הכלל אינו חל כלל.
+   */
+  const autoStatus = syncChecklistCompletion(task.id, actor);
+  sendJson(res, 200, { task: shapeTask(getTaskOr404(task.id), actor, { withDetails: true }), autoStatus });
+});
+
+/**
+ * שכפול משימה בתוך אותו פרויקט. מועתקים המבנה והתוכן שמגדירים "מה צריך
+ * לעשות" — כותרת, תיאור, עדיפות, פרויקט, אחראי והצ'קליסט על הערותיו.
+ * לא מועתקים ההיסטוריה של המקור: השיחה, הקבצים, הסטטוס ותאריך ההשלמה.
+ * משימה משוכפלת מתחילה בעמודה הראשונה של הבורד, כי היא טרם נעשתה.
+ */
+router.post('/api/tasks/:id/duplicate', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  requirePerm(actor, 'create_task');
+  const source = getTaskOr404(ctx.params.id);
+  assertVisible(actor, source);
+  if (isVendor(actor)) throw forbidden();
+
+  const b = await readJson(req).catch(() => ({}));
+  const title = String(b.title ?? '').trim() || `${source.title} — עותק`;
+
+  // האחראי נשמר רק אם למשכפל יש הרשאה להקצות לאחרים; אחרת המשימה נשארת ללא אחראי
+  let keepAssignee = source.assignee_type === 'user' && !!source.assignee_id;
+  try { if (keepAssignee) assertMayAssignTo(actor, 'user', source.assignee_id); } catch { keepAssignee = false; }
+
+  const result = D.run(
+    `INSERT INTO tasks (title, description, project_id, board_id, assignee_type, assignee_id,
+                        status, priority, due_date, created_at, created_by, status_changed_at,
+                        department_id)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+    title, source.description, source.project_id, source.board_id,
+    keepAssignee ? 'user' : null, keepAssignee ? source.assignee_id : null,
+    Rules.firstColumnKey(source.board_id), source.priority,
+    b.dueDate !== undefined ? (b.dueDate || null) : source.due_date,
+    D.nowIso(), actor.id, D.nowIso(), source.department_id
+  );
+  const id = Number(result.lastInsertRowid);
+
+  // הצ'קליסט מועתק כשלא-בוצע, עם ההערות שבו — הן חלק מהגדרת העבודה
+  for (const item of D.all('SELECT * FROM checklist_items WHERE task_id = ? ORDER BY position, id', source.id)) {
+    D.run('INSERT INTO checklist_items (task_id, text, position, note) VALUES (?,?,?,?)',
+      id, item.text, item.position, item.note ?? '');
+  }
+
+  D.audit(id, actorRef(actor), 'created', `שוכפלה ממשימה #${source.id}`);
+  if (keepAssignee) notifyAssignment(id, 'user', source.assignee_id, title, actor);
+
+  sendJson(res, 201, { task: shapeTask(getTaskOr404(id), actor, { withDetails: true }) });
+});
+
+/**
+ * שמירת המשימה כתבנית. המקרה שבגללו זה קיים: נבנתה משימה עם צ'קליסט מלא
+ * ("קליטת רכב חדש"), והיא חוזרת שוב ושוב — ואין סיבה לבנות אותה מחדש בכל פעם.
+ *
+ * דורש create_task ולא הרשאה מלאה: שמירת תבנית היא פעולה מוסיפה, ומי שרשאי
+ * לפתוח משימה רשאי גם לשמור את הצורה שלה. המחיקה נשארה בהרשאה מלאה.
+ */
+router.post('/api/tasks/:id/template', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  requirePerm(actor, 'create_task');
+  const task = getTaskOr404(ctx.params.id);
+  assertVisible(actor, task);
+  if (isVendor(actor)) throw forbidden();
+
+  const b = await readJson(req).catch(() => ({}));
+  const name = String(b.name ?? '').trim() || task.title;
+
+  const payload = {
+    title: task.title,
+    description: task.description,
+    priority: task.priority,
+    checklist: D.all('SELECT text, note FROM checklist_items WHERE task_id = ? ORDER BY position, id', task.id)
+      .map((c) => ({ text: c.text, note: c.note ?? '' }))
+  };
+
+  /*
+   * המחלקה של התבנית היא זו של המשימה, ואם אין לה — של מי ששומר. כך תבנית
+   * שנולדה מעבודה של התפעול נשארת אצל התפעול.
+   */
+  const departmentId = task.department_id ?? (actor.type === 'user' ? actor.departmentId ?? null : null);
+
+  /*
+   * החלפת תבנית קיימת במקום יצירת עוד אחת בשם דומה.
+   *
+   * בלי זה כל תיקון בצ'קליסט הוליד "בקרת תכן", "בקרת תכן חדש", "בקרת תכן
+   * סופי", והבורר התמלא בגרסאות של אותה תבנית שאיש אינו יודע איזו מהן
+   * העדכנית. ההחלפה מוגבלת לתבניות שהשומר רואה — אי אפשר לדרוס תבנית של
+   * מחלקה אחרת.
+   */
+  if (b.replaceId) {
+    const target = templateOr404(actor, b.replaceId);
+    if (target.kind !== 'task') throw badRequest('אפשר להחליף רק תבנית משימה');
+    D.run(
+      `UPDATE templates SET name = ?, payload = ?, department_id = ?, updated_at = ?, updated_by = ?
+        WHERE id = ?`,
+      name, JSON.stringify(payload), target.department_id ?? departmentId,
+      D.nowIso(), actor.type === 'user' ? actor.id : null, target.id
+    );
+    D.audit(task.id, actorRef(actor), 'updated', `התבנית "${name}" עודכנה מהמשימה`);
+    return sendJson(res, 200, {
+      template: shapeTemplate(D.get('SELECT * FROM templates WHERE id = ?', target.id)),
+      checklistCount: payload.checklist.length,
+      replaced: true
+    });
+  }
+
+  const result = D.run(
+    'INSERT INTO templates (kind, name, payload, department_id, created_at) VALUES (?,?,?,?,?)',
+    'task', name, JSON.stringify(payload), departmentId, D.nowIso()
+  );
+
+  D.audit(task.id, actorRef(actor), 'updated', `נשמרה כתבנית "${name}"`);
+  sendJson(res, 201, {
+    template: shapeTemplate(D.get('SELECT * FROM templates WHERE id = ?', Number(result.lastInsertRowid))),
+    checklistCount: payload.checklist.length,
+    replaced: false
+  });
+});
+
+// --- תגובות ---
+
+router.post('/api/tasks/:id/comments', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  const task = getTaskOr404(ctx.params.id);
+  assertVisible(actor, task);
+  if (isVendor(actor) && actor.readOnly) throw forbidden('לחשבון שלך הוגדרה הרשאת צפייה בלבד');
+  const { body, internal, files } = await readJson(req);
+  const text = String(body ?? '').trim();
+  const attached = Array.isArray(files) ? files.filter((f) => f && f.filename && f.data) : [];
+  // הודעה עם קובץ בלבד היא שימוש לגיטימי — לא מחייבים טקסט כשיש מה לצרף
+  if (!text && !attached.length) throw badRequest('נדרש תוכן לתגובה או קובץ מצורף');
+
+  // הערה פנימית זמינה רק לצוות הפנימי
+  const isInternal = !isVendor(actor) && !!internal;
+  const result = D.run(
+    'INSERT INTO comments (task_id, author_type, author_id, body, internal, created_at) VALUES (?,?,?,?,?,?)',
+    task.id, isVendor(actor) ? 'vendor' : 'user', actor.id, text, isInternal ? 1 : 0, D.nowIso()
+  );
+  const commentId = Number(result.lastInsertRowid);
+
+  // הקבצים נשמרים אחרי התגובה כדי שיהיה להם מזהה להיקשר אליו.
+  // כישלון באחד מהם לא משאיר תגובה בלי הסבר — השגיאה עולה למשתמש.
+  const savedFiles = attached.map((f) => saveAttachment(task, actor, f, commentId));
+  for (const f of savedFiles) {
+    D.audit(task.id, actorRef(actor), 'attachment', `צורף קובץ "${f.name}" לתגובה (גרסה ${f.version})`);
+  }
+
+  const mentioned = new Set();
+  for (const uid of extractMentions(text)) {
+    D.run('INSERT OR IGNORE INTO comment_mentions (comment_id, user_id) VALUES (?,?)', commentId, uid);
+    mentioned.add(uid);
+    if (uid !== actor.id || isVendor(actor)) {
+      D.notify({
+        targetType: 'user', targetId: uid, kind: 'mention',
+        title: `${actor.name} תייג/ה אותך בתגובה`, body: text.slice(0, 120), taskId: task.id,
+        push: { canReply: true, internal: isInternal }
+      });
+    }
+  }
+
+  D.audit(task.id, actorRef(actor), 'comment', isInternal ? 'נוספה הערה פנימית' : 'נוספה תגובה');
+
+  // עדכון הצד השני
+  if (isVendor(actor)) {
+    // רק מי שהמשימה בתחומו, ולא כל מנהל בארגון
+    for (const m of Rules.alertTargets(task)) {
+      D.notify({ targetType: 'user', targetId: m.id, kind: 'status_change', title: 'תגובה חדשה מספק', body: `${task.title} — ${actor.name}`, taskId: task.id });
+    }
+  } else if (!isInternal && task.assignee_type === 'vendor' && task.assignee_id) {
+    D.notify({ targetType: 'vendor', targetId: task.assignee_id, kind: 'status_change', title: 'תגובה חדשה מהצוות', body: task.title, taskId: task.id });
+  }
+
+  /*
+   * הודעה פנימית בין אנשי הצוות לא יצרה עד כה שום התראה, אלא אם היה בה תיוג
+   * ‎@‎. כלומר מי שנכתב לו בתוך משימה לא ידע על כך עד שנכנס אליה במקרה —
+   * וזה הופך את השרשור לתיבת דואר שאף אחד לא פותח.
+   *
+   * למי כן: לאחראי המשימה, ולמי שכבר כתב בשרשור. אלה בדיוק המשתתפים
+   * בשיחה. במכוון לא לכל מנהל בארגון — הצפה של התראות לא רלוונטיות היא
+   * הדרך הבטוחה לגרום לאנשים להפסיק להסתכל עליהן.
+   *
+   * המתייגים כבר קיבלו התראת תיוג, ולכן הם מוחרגים כאן: שתי התראות על
+   * אותה הודעה הן באג, לא הדגשה.
+   */
+  if (!isVendor(actor)) {
+    const audience = new Set();
+    if (task.assignee_type === 'user' && task.assignee_id) audience.add(task.assignee_id);
+    for (const row of D.all(
+      "SELECT DISTINCT author_id FROM comments WHERE task_id = ? AND author_type = 'user'", task.id
+    )) {
+      audience.add(row.author_id);
+    }
+    audience.delete(actor.id);          // הכותב אינו מקבל התראה על עצמו
+    for (const uid of mentioned) audience.delete(uid);
+
+    for (const uid of audience) {
+      // עובד שהושבת או ממתין לאישור אינו נמען. הסינון לפי מה שמותר לו לראות
+      // נעשה בכל מקרה בהצגת רשימת ההתראות, דרך canSeeTask
+      if (D.get("SELECT 1 FROM users WHERE id = ? AND status = 'active'", uid) === undefined) continue;
+      D.notify({
+        targetType: 'user', targetId: uid, kind: 'comment',
+        title: `${actor.name} כתב/ה במשימה`,
+        body: `${task.title} — ${text.slice(0, 120) || 'צורף קובץ'}`,
+        taskId: task.id,
+        // מאפשר להשיב מתוך ההתראה, באותה רמת חשיפה כמו ההודעה עצמה
+        push: { canReply: true, internal: isInternal }
+      });
+    }
+  }
+
+  sendJson(res, 200, { task: shapeTask(getTaskOr404(task.id), actor, { withDetails: true }) });
+});
+
+// --- קבצים מצורפים ---
+
+/**
+ * סוג התוכן לפי הסיומת, כשהדפדפן לא אמר אותו או אמר משהו כללי.
+ *
+ * הסוג מגיע מהלקוח (‎file.type‎), ובהקלטות קול הוא אינו אמין: דפדפנים
+ * שונים מדווחים ‎audio/wav‎, ‎audio/wave‎, ‎audio/x-wav‎, ולעיתים מחרוזת
+ * ריקה. הסיומת היא הנתון היציב, והנרמול כאן חוסך את הבדיקה הכפולה בכל
+ * מקום שמציג או מגיש את הקובץ.
+ */
+/*
+ * סוגים שהדפדפן אינו מזהה בעקביות, ולכן הסיומת היא שקובעת.
+ *
+ * קובצי מייל הם המקרה המובהק: גרירת הודעה מ-Outlook מוסרת סוג ריק או
+ * ‎application/octet-stream‎, ואז הקובץ נשמר כזרם בתים אנונימי ואי אפשר
+ * לדעת מהרשומה שמדובר במייל.
+ */
+const MIME_BY_EXT = {
+  wav: 'audio/wav',
+  ogg: 'audio/ogg',
+  opus: 'audio/ogg',
+  m4a: 'audio/mp4',
+  mp3: 'audio/mpeg',
+  aac: 'audio/aac',
+  amr: 'audio/amr',
+  webm: 'audio/webm',
+  eml: 'message/rfc822',
+  msg: 'application/vnd.ms-outlook'
+};
+const normalizeMime = (name, mime) => {
+  const ext = path.extname(String(name ?? '')).replace('.', '').toLowerCase();
+  const known = MIME_BY_EXT[ext];
+  // סיומת מוכרת גוברת על מה שהדפדפן הצהיר; אחרת מה שהגיע, ואם כלום — זרם בתים
+  return known ?? (mime || 'application/octet-stream');
+};
+
+/**
+ * שומר קובץ מצורף למשימה ומחזיר את מזהה הרשומה.
+ * משותף להעלאה מלשונית הקבצים ולצירוף קובץ לתגובה בשיחה — כך המגבלות
+ * (סוגי קבצים, גודל, ניהול גרסאות) נאכפות במקום אחד בלבד.
+ */
+function saveAttachment(task, actor, { filename, mime, data }, commentId = null) {
+  const name = String(filename ?? '').trim();
+  if (!name || !data) throw badRequest('חסר קובץ');
+
+  const ext = path.extname(name).replace('.', '').toLowerCase();
+  const allowed = D.getSetting('allowed_extensions', []);
+  if (allowed.length && !allowed.includes(ext)) {
+    throw badRequest(`סוג הקובץ .${ext} אינו מורשה. מותרים: ${allowed.join(', ')}`);
+  }
+
+  const buffer = Buffer.from(String(data).split(',').pop(), 'base64');
+  const maxMb = Number(D.getSetting('max_upload_mb', 25));
+  if (buffer.length > maxMb * 1024 * 1024) throw badRequest(`הקובץ חורג מהמגבלה (${maxMb}MB)`);
+
+  // גרסאות היסטוריות — הקובץ הקודם נשמר ואינו נדרס
+  const prev = D.get('SELECT MAX(version) v FROM attachments WHERE task_id = ? AND filename = ?', task.id, name);
+  const version = (prev?.v ?? 0) + 1;
+
+  const stored = `${task.id}_${crypto.randomBytes(8).toString('hex')}${path.extname(name)}`;
+  fs.writeFileSync(path.join(D.UPLOADS_DIR, stored), buffer);
+
+  const inserted = D.run(
+    `INSERT INTO attachments (task_id, comment_id, filename, stored_name, version, size, mime, uploader_type, uploader_id, created_at)
+     VALUES (?,?,?,?,?,?,?,?,?,?)`,
+    task.id, commentId, name, stored, version, buffer.length, normalizeMime(name, mime),
+    isVendor(actor) ? 'vendor' : 'user', actor.id, D.nowIso()
+  );
+  return { id: Number(inserted.lastInsertRowid), name, version };
+}
+
+router.post('/api/tasks/:id/attachments', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  const task = getTaskOr404(ctx.params.id);
+  assertVisible(actor, task);
+  if (isVendor(actor) && actor.readOnly) throw forbidden('לחשבון שלך הוגדרה הרשאת צפייה בלבד');
+
+  const payload = await readJson(req);
+  const { name, version } = saveAttachment(task, actor, payload);
+  D.audit(task.id, actorRef(actor), 'attachment', `הועלה קובץ "${name}" (גרסה ${version})`);
+
+  // העלאת תוצרים מקדמת את הסטטוס אוטומטית
+  const advanced = isVendor(actor) && task.status === 'awaiting_upload';
+  if (advanced) {
+    changeStatus(getTaskOr404(task.id), 'uploaded', actor, 'עודכן אוטומטית בעקבות העלאת תוצר');
+  } else if (isVendor(actor)) {
+    /*
+     * ספק שהעלה קובץ נוסף לא הודיע לאף אחד: ההתראה הייתה תלויה בקידום
+     * הסטטוס, וזה קורה רק בהעלאה הראשונה. גרסה מתוקנת של תוצר, או קובץ
+     * שנשלח אחרי בקשת תיקון, נכנסו בשקט — ומי שחיכה להם לא ידע.
+     */
+    for (const m of Rules.alertTargets(task)) {
+      D.notify({
+        targetType: 'user', targetId: m.id, kind: 'status_change',
+        title: 'ספק העלה קובץ',
+        body: `${task.title} — ${actor.name}: ${name}`, taskId: task.id
+      });
+    }
+  }
+
+  sendJson(res, 200, { task: shapeTask(getTaskOr404(task.id), actor, { withDetails: true }) });
+});
+
+/**
+ * הסוגים היחידים שמותר להגיש לצפייה בתוך הדפדפן. זו רשימה סגורה ולא סינון
+ * שלילי, כי הגשה בתוך המקור של המערכת פירושה שהקובץ רץ עם הרשאותיה: קובץ
+ * HTML — ו-SVG, שהוא מסמך שאפשר לשתול בו סקריפט — היו יכולים לקרוא את
+ * הסשן של מי שפותח אותם. הם נשארים בהורדה בלבד.
+ */
+/*
+ * מה מוגש לצפייה בתוך המערכת ולא כהורדה. אודיו נכלל כדי שהקלטת קול
+ * תתנגן בתוך המשימה — קובץ שחייבים להוריד כדי לשמוע אותו הוא חצי פיצ'ר.
+ */
+const INLINE_MIMES = new Set([
+  'image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/bmp', 'application/pdf',
+  'audio/wav'
+]);
+const isPreviewable = (mime) => INLINE_MIMES.has(String(mime ?? '').toLowerCase());
+
+function sendAttachment(res, att, { inline = false } = {}) {
+  const filePath = path.join(D.UPLOADS_DIR, att.stored_name);
+  if (!fs.existsSync(filePath)) throw notFound('הקובץ אינו קיים בשרת');
+  const buf = fs.readFileSync(filePath);
+  res.writeHead(200, {
+    'content-type': att.mime,
+    'content-length': buf.length,
+    'content-disposition': `${inline ? 'inline' : 'attachment'}; filename*=UTF-8''${encodeURIComponent(att.filename)}`,
+    // הדפדפן לא ינחש סוג תוכן אחר מזה שהוצהר — בלי זה קובץ HTML שהועלה
+    // בתחפושת של תמונה עדיין היה מתפרש כדף
+    'x-content-type-options': 'nosniff'
+  });
+  res.end(buf);
+}
+
+function attachmentFor(ctx) {
+  const actor = ctx.requireActor();
+  const att = D.get('SELECT * FROM attachments WHERE id = ?', Number(ctx.params.id));
+  if (!att) throw notFound('הקובץ לא נמצא');
+  assertVisible(actor, getTaskOr404(att.task_id));
+  return att;
+}
+
+router.get('/api/attachments/:id/download', async (req, res, ctx) => {
+  sendAttachment(res, attachmentFor(ctx));
+});
+
+/** צפייה בתוך המערכת — תמונות ו-PDF בלבד, בלי הורדה למחשב */
+router.get('/api/attachments/:id/view', async (req, res, ctx) => {
+  const att = attachmentFor(ctx);
+  if (!isPreviewable(att.mime)) throw badRequest('סוג הקובץ אינו נתמך לתצוגה מקדימה');
+  sendAttachment(res, att, { inline: true });
+});
+
+/**
+ * מי רשאי למחוק קובץ מהמשימה.
+ *
+ * מי שהעלה אותו — קובץ שהועלה בטעות, בשם שגוי או בגרסה לא נכונה, צריך
+ * להיות בר-הסרה בידי מי שעשה את הטעות. ובנוסף מי שרשאי לערוך את המשימה:
+ * הוא האחראי על תוכנה, וקובץ שגוי שנתקע בה הוא בעיה שלו.
+ *
+ * ספק מוחק את שלו בלבד, ואינו נוגע בקבצים של הצוות.
+ *
+ * בשונה מתגובה, שמנהל מערכת אינו מוחק בכוונה — שיחה שאפשר לערוך בדיעבד
+ * אינה תיעוד — קובץ הוא תוצר עבודה ולא אמירה, ותיקונו אינו שינוי של מה
+ * שנאמר. המחיקה עצמה נרשמת ביומן ואינה נעלמת.
+ */
+function mayDeleteAttachment(actor, att, task) {
+  const myType = isVendor(actor) ? 'vendor' : 'user';
+  if (att.uploader_type === myType && att.uploader_id === actor.id) return true;
+  if (isVendor(actor)) return false;
+  return mayOnTask(actor, 'edit_delete_task', task, projectOf(task));
+}
+
+router.delete('/api/attachments/:id', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  const att = D.get('SELECT * FROM attachments WHERE id = ?', Number(ctx.params.id));
+  if (!att) throw notFound('הקובץ לא נמצא');
+  const task = getTaskOr404(att.task_id);
+  assertVisible(actor, task);
+  if (isVendor(actor) && actor.readOnly) throw forbidden('לחשבון שלך הוגדרה הרשאת צפייה בלבד');
+  if (!mayDeleteAttachment(actor, att, task)) {
+    throw forbidden('אפשר למחוק קובץ שהעלית, או קובץ במשימה שאתה רשאי לערוך');
+  }
+
+  /*
+   * הקובץ עצמו נמחק מהדיסק ולא רק השורה. שורה שנמחקת בלי הקובץ משאירה
+   * אחריה תיקיית העלאות שגדלה בלי גבול ובלי שאיש יודע מה בתוכה.
+   *
+   * ‎stored_name‎ ייחודי לכל העלאה (מזהה מקרי), ולכן אין סיכון למחוק קובץ
+   * שגרסה אחרת עוד מפנה אליו.
+   */
+  try { fs.unlinkSync(path.join(D.UPLOADS_DIR, att.stored_name)); } catch { /* אולי כבר נמחק */ }
+  D.run('DELETE FROM attachments WHERE id = ?', att.id);
+
+  /*
+   * הסטטוס אינו מוחזר לאחור. העלאת תוצר בידי ספק מקדמת את הסטטוס
+   * אוטומטית, אבל החזרתו בעקבות מחיקה הייתה עלולה לבטל אישור שהצוות
+   * כבר נתן. המחיקה נרשמת ביומן, ורשימת הקבצים הריקה מדברת בעד עצמה.
+   */
+  D.audit(task.id, actorRef(actor), 'attachment',
+    `הקובץ "${att.filename}" (גרסה ${att.version}) נמחק`);
+
+  sendJson(res, 200, { task: shapeTask(getTaskOr404(task.id), actor, { withDetails: true }) });
+});
+
+// ---------------------------------------------------------------------------
+// פרויקטים
+// ---------------------------------------------------------------------------
+
+router.get('/api/projects', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  if (isVendor(actor)) throw forbidden();
+  sendJson(res, 200, { projects: listProjectsFor(actor) });
+});
+
+/**
+ * הודעה למי שמונה אחראי המשימות בפרויקט.
+ *
+ * זו מינוי לתפקיד, לא שורה בטבלה: הפרויקט נכנס לרשימה "שלי" שלו, והוא זה
+ * שיישאלו אותו על ההתקדמות. עד כה זה קרה בשקט לגמרי — מישהו בחר שם ברשימה
+ * נפתחת, והממונה גילה זאת אם וכאשר הבחין בפרויקט חדש בתפריט.
+ *
+ * מי שמינה את עצמו אינו מקבל הודעה, כמו בכל שאר ההתראות במערכת.
+ */
+/**
+ * מתרגם בחירת פרויקט אב למזהה תקף, או ‎null‎.
+ *
+ * שומר על שתי רמות ומונע מעגל: פרויקט אינו יכול להיות אב של עצמו, ותת-פרויקט
+ * שנבחר כאב מתורגם לאב שלו. בלי זה אפשר היה לבנות שרשרת שהצגתה בתפריט נכנסת
+ * ללופ אינסופי.
+ */
+function resolveParentProject(actor, raw, selfId = null) {
+  if (!raw) return null;
+  const parent = D.get('SELECT * FROM projects WHERE id = ?', Number(raw));
+  if (!parent) throw badRequest('פרויקט האב אינו קיים');
+  if (selfId && parent.id === selfId) throw badRequest('פרויקט אינו יכול להיות אב של עצמו');
+  const rootId = parent.parent_project_id ?? parent.id;
+  if (selfId && rootId === selfId) throw badRequest('לא ניתן לשייך פרויקט תחת תת-פרויקט שלו');
+  // מי שרשאי לראות את האב רשאי לתלות תחתיו; ההרשאה ליצור פרויקט נבדקה ממילא
+  const visible = visibleProjectIds(actor);
+  if (visible !== null && !visible.has(rootId)) throw forbidden('אין לך גישה לפרויקט האב');
+  return rootId;
+}
+
+function notifyProjectManager(projectId, managerId, projectName, actor) {
+  if (!managerId || managerId === actor.id) return;
+  if (D.get("SELECT 1 FROM users WHERE id = ? AND status = 'active'", managerId) === undefined) return;
+  D.notify({
+    targetType: 'user', targetId: managerId, kind: 'assignment',
+    title: `${actor.name} מינה/תה אותך לאחראי משימות בפרויקט`,
+    body: projectName
+  });
+}
+
+router.post('/api/projects', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  requirePerm(actor, 'create_project');
+  const b = await readJson(req);
+  const name = String(b.name ?? '').trim();
+  if (!name) throw badRequest('נדרש שם פרויקט');
+  /*
+   * תת-פרויקט. שתי רמות בלבד, כמו בתתי-משימות: תת-פרויקט של תת-פרויקט נתלה
+   * בפרויקט האב המקורי. עץ עמוק היה מחייב תפריט צד רקורסיבי, ובפועל מה
+   * שנדרש הוא פרויקט וחלקיו.
+   */
+  const parentProjectId = resolveParentProject(actor, b.parentProjectId);
+
+  const r = D.run(
+    `INSERT INTO projects (name, description, manager_id, start_date, due_date, status, created_at, created_by, color, parent_project_id, status_owner_id)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+    name, String(b.description ?? ''), b.managerId ? Number(b.managerId) : null,
+    b.startDate || null, b.dueDate || null, b.status ?? 'active', D.nowIso(), actor.id, hexColor(b.color),
+    parentProjectId,
+    b.statusOwnerId ? Number(b.statusOwnerId) : null
+  );
+  const id = Number(r.lastInsertRowid);
+  if (b.topic) {
+    const c = Cls.parseClass(b.topic, b.sens);
+    if (c.sens) D.run('UPDATE projects SET topic = ?, sens = ? WHERE id = ?', c.topic, c.sens, id);
+  }
+
+  // יצירה מתבנית
+  if (b.templateId) {
+    // בגבול הראייה: תבנית של מחלקה אחרת אינה זמינה גם אם המזהה שלה נשלח ידנית
+    const tpl = visibleTemplates(actor).find((t) => t.id === Number(b.templateId) && t.kind === 'project');
+    if (tpl) {
+      const payload = JSON.parse(tpl.payload);
+      const boardId = D.internalBoard().id;
+      for (const title of payload.tasks ?? []) {
+        const tr = D.run(
+          `INSERT INTO tasks (title, project_id, board_id, status, priority, created_at, created_by, status_changed_at)
+           VALUES (?,?,?,?,'normal',?,?,?)`,
+          title, id, boardId, Rules.firstColumnKey(boardId), D.nowIso(), actor.id, D.nowIso()
+        );
+        D.audit(Number(tr.lastInsertRowid), actorRef(actor), 'created', `נוצרה מתבנית "${tpl.name}"`);
+      }
+    }
+  }
+  notifyProjectManager(id, b.managerId ? Number(b.managerId) : null, name, actor);
+  sendJson(res, 201, { projects: listProjectsFor(actor) });
+});
+
+router.patch('/api/projects/:id', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  requirePerm(actor, 'create_project');
+  const project = D.get('SELECT * FROM projects WHERE id = ?', Number(ctx.params.id));
+  if (!project) throw notFound();
+
+  assertMayEditProject(actor, project);
+  const b = await readJson(req);
+  const nextManager = b.managerId !== undefined
+    ? (b.managerId ? Number(b.managerId) : null)
+    : project.manager_id;
+  const nextParent = b.parentProjectId !== undefined
+    ? resolveParentProject(actor, b.parentProjectId, project.id)
+    : (project.parent_project_id ?? null);
+
+  // 🔒 סיווג הפרויקט — חל על כל משימה בו שאין לה סיווג משלה. להקל — רק מי שהטבלה מתירה לו
+  let classNext = null;
+  if (b.topic !== undefined || b.sens !== undefined) {
+    const next = Cls.parseClass(b.topic ?? project.topic, b.sens ?? project.sens);
+    const cur = Cls.classView(project);
+    const lowering = cur && (!next.sens || next.sens < cur.sens || next.topic !== cur.topic);
+    if (lowering && !Cls.mayRead(Cls.scopeOf(actor), cur.topic, cur.sens)) {
+      throw forbidden('רק מי שטבלת הרגישות מתירה לו את הסיווג הנוכחי רשאי להקל אותו');
+    }
+    classNext = next;
+  }
+  D.run(
+    `UPDATE projects SET name = ?, description = ?, manager_id = ?, start_date = ?, due_date = ?,
+                         status = ?, color = ?, parent_project_id = ?, status_owner_id = ? WHERE id = ?`,
+    b.name ?? project.name, b.description ?? project.description,
+    nextManager,
+    b.startDate !== undefined ? (b.startDate || null) : project.start_date,
+    b.dueDate !== undefined ? (b.dueDate || null) : project.due_date,
+    b.status ?? project.status,
+    b.color !== undefined ? hexColor(b.color) : (project.color ?? ''),
+    nextParent,
+    b.statusOwnerId !== undefined
+      ? (b.statusOwnerId ? Number(b.statusOwnerId) : null)
+      : (project.status_owner_id ?? null),
+    project.id
+  );
+  if (classNext) D.run('UPDATE projects SET topic = ?, sens = ? WHERE id = ?', classNext.topic, classNext.sens, project.id);
+  // רק כשהאחראי באמת התחלף — שמירת הפרויקט בלי לגעת בו אינה מינוי מחדש
+  if (nextManager !== project.manager_id) {
+    notifyProjectManager(project.id, nextManager, b.name ?? project.name, actor);
+  }
+  sendJson(res, 200, { projects: listProjectsFor(actor) });
+});
+
+/**
+ * מחיקת פרויקט.
+ *
+ * מה שקורה בפועל, ולמה זה בטוח יחסית: המשימות אינן נמחקות — ‎project_id‎
+ * מוגדר ‎ON DELETE SET NULL‎, והן עוברות ל"ללא פרויקט" בלוח. תתי-פרויקטים
+ * עולים לרמה הראשית. מה שכן נמחק לצמיתות: הנעיצות והתמונות של הפרויקט.
+ *
+ * המספרים נספרים לפני המחיקה ומוחזרים ללקוח, כדי שההודעה תאמר מה קרה
+ * בפועל ולא נוסח כללי. מחיקה שקטה של פרויקט עם ארבעים משימות היא בדיוק
+ * הפעולה שאסור שתיראה כמו הצלחה חלקה.
+ */
+router.delete('/api/projects/:id', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  const id = Number(ctx.params.id);
+  const project = D.get('SELECT * FROM projects WHERE id = ?', id);
+  if (!project) throw notFound('הפרויקט לא נמצא');
+
+  /*
+   * שתי בדיקות נפרדות, ושתיהן נדרשות.
+   *
+   * ‎assertMayEditProject‎ קובע על *מה* מותר לגעת: ראייה, ובעלות לרמת 'own'.
+   * בלעדיו מנהל מחלקה מחק פרויקטים של מחלקות אחרות, שלא הופיעו אצלו ברשימה
+   * כלל — בדיקת ההרשאה לבדה עברה, כי היא אינה יודעת על איזה פרויקט מדובר.
+   *
+   * ואחריה כלל המחיקה עצמו: עובד פנימי מוחק פרויקט שהוא פתח. מי שפתח פרויקט
+   * ואינו יכול להסירו נזקק לאדמין כדי לנקות שם שהוקלד בטעות, ואז נשארות
+   * במערכת שורות שאיש אינו מוחק.
+   *
+   * צר יותר מהעריכה במכוון: עריכה מותרת גם למי שמונה מנהל הפרויקט, ומחיקה
+   * רק למי שפתח אותו. מינוי לתפקיד אינו רשות למחוק את מה שאחר הקים.
+   */
+  assertMayEditProject(actor, project);
+  if (P.level(actor, 'create_project') !== true && project.created_by !== actor.id) {
+    throw forbidden('אפשר למחוק רק פרויקט שפתחת');
+  }
+
+  const tasks = D.get('SELECT COUNT(*) c FROM tasks WHERE project_id = ?', id).c;
+  const subs = D.get('SELECT COUNT(*) c FROM projects WHERE parent_project_id = ?', id).c;
+
+  D.run('DELETE FROM projects WHERE id = ?', id);
+  console.log(`[משימון] נמחק פרויקט "${project.name}" (#${id}) — ${tasks} משימות נותקו`);
+
+  sendJson(res, 200, {
+    projects: listProjectsFor(actor),
+    name: project.name,
+    tasksDetached: tasks,
+    subProjectsDetached: subs
+  });
+});
+
+// ---------------------------------------------------------------------------
+// התראות
+// ---------------------------------------------------------------------------
+
+router.get('/api/notifications', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  const rows = D.all(
+    'SELECT * FROM notifications WHERE target_type = ? AND target_id = ? ORDER BY created_at DESC LIMIT 100',
+    actor.type === 'vendor' ? 'vendor' : 'user', actor.id
+  ).filter((n) => {
+    /**
+     * שכבת הגנה שנייה: התראה על משימה שהמשתמש אינו רשאי לראות אינה מוצגת.
+     * זה מנקה גם התראות שנוצרו בעבר, כשהמנוע שלח כל התראה לכל מנהל בארגון,
+     * ומונע דליפה של כותרת משימה של מחלקה אחרת דרך רשימת ההתראות.
+     */
+    if (!n.task_id) return true;
+    const task = D.get('SELECT * FROM tasks WHERE id = ?', n.task_id);
+    return !task || canSeeTask(actor, task);
+  });
+  // שם המשימה נשלח עם ההתראה. בלעדיו הממשק נאלץ לשלוח בקשה נפרדת לכל
+  // משימה כדי להציג את שמה בכרטיס המוקפץ — בקשה לכל התראה.
+  const titles = new Map();
+  const taskTitle = (id) => {
+    if (id === null || id === undefined) return null;
+    if (!titles.has(id)) titles.set(id, D.get('SELECT title FROM tasks WHERE id = ?', id)?.title ?? null);
+    return titles.get(id);
+  };
+
+  sendJson(res, 200, {
+    notifications: rows.map((n) => ({
+      id: n.id, kind: n.kind, title: n.title, body: n.body,
+      taskId: n.task_id, taskTitle: taskTitle(n.task_id),
+      isRead: !!n.is_read, createdAt: n.created_at
+    })),
+    unread: rows.filter((n) => !n.is_read).length
+  });
+});
+
+router.post('/api/notifications/read', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  const { id } = await readJson(req);
+  const targetType = actor.type === 'vendor' ? 'vendor' : 'user';
+  if (id) D.run('UPDATE notifications SET is_read = 1 WHERE id = ? AND target_type = ? AND target_id = ?', Number(id), targetType, actor.id);
+  else D.run('UPDATE notifications SET is_read = 1 WHERE target_type = ? AND target_id = ?', targetType, actor.id);
+  sendJson(res, 200, { ok: true });
+});
+
+// ---------------------------------------------------------------------------
+// דף הבית
+// ---------------------------------------------------------------------------
+
+router.get('/api/home', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  const now = Date.now();
+
+  // "המשימות שלי" בדף הבית — גם אלה שאני אחראי נוסף עליהן. אחראי שאינו רואה
+  // את המשימה במסך שהוא פותח בבוקר אינו אחראי בפועל.
+  const actorParty = actor.type === 'vendor' ? 'vendor' : 'user';
+  const mine = D.all(
+    `SELECT t.* FROM tasks t
+       JOIN boards b ON b.id = t.board_id
+       LEFT JOIN board_columns c ON c.board_id = t.board_id AND c.key = t.status
+      WHERE t.archived = 0
+        AND (t.activate_at IS NULL OR t.activate_at <= ?)
+        AND ((t.assignee_type = ? AND t.assignee_id = ?) OR ${EXTRA_ASSIGNEE_SQL})`,
+    D.nowIso(), actorParty, actor.id, actorParty, actor.id
+  ).map((t) => shapeTask(t, actor));
+
+  const openMine = mine.filter((t) => !t.isFinal);
+
+  /**
+   * משימות שהושלמו ועדיין לא ירדו לארכיון. משימה שסומנה כהושלמה נעלמה עד כה
+   * מהמסך באותו רגע, ולא היה שום מקום לראות מה נסגר או לחזור אליו — ומכאן
+   * התחושה שהמשימה נמחקה. הן נשארות כאן עד שהאוטומציה מעבירה אותן לארכיון
+   * (ברירת המחדל: שלושה ימים מההשלמה).
+   */
+  const recentlyDone = mine
+    .filter((t) => t.isFinal && t.completedAt)
+    .sort((a, b) => new Date(b.completedAt) - new Date(a.completedAt));
+
+  /**
+   * משימות המחלקה שאינן שלי. מנהל מחלקה צריך לראות במה הצוות שלו עסוק בלי
+   * לעבור ללוח ולסנן — זה מה שהופך את דף הבית שלו לכלי ניהול ולא רק לרשימה
+   * אישית. ההיקף נגזר מאותה הרשאה שקובעת מה הוא רואה בכל מקום אחר, ולכן גם
+   * עובד שקיבל הרשאה אישית לראות את המחלקה מקבל את הכרטיס.
+   */
+  /*
+   * מי רואה את חלון משימות המחלקה: כל מי שמשויך למחלקה ורשאי לראות את
+   * הבורד הפנימי ברמת מחלקה או רחבה ממנה.
+   *
+   * ‎=== 'department'‎ בלבד היה כאן, וזה היה באג: ההרשאה היא ‎'department'‎
+   * למנהל מחלקה אבל ‎true‎ למנהל מערכת ולהנהלה — כלומר דווקא מי שרשאי
+   * לראות הכי הרבה ננעל החוצה מהחלון. ההנחה הייתה ש"המחלקה שלי" ו"כל
+   * הארגון" חופפים אצלו; היא נכונה רק בארגון עם מחלקה אחת, ומרגע שנוספה
+   * מחלקה שנייה היא מטעה. מנהל מערכת שמנהל גם מחלקה הוא המקרה הרגיל כאן.
+   */
+  const seesDepartment = !isVendor(actor)
+    && !!actor.departmentId
+    && ['department', true].includes(P.level(actor, 'view_internal_board'));
+
+  /*
+   * משימות המחלקה — עבודת הצוות, ולא שלי.
+   *
+   * המשימות האישיות שלי מסוננות: הן יושבות ב"המשימות שלי", וחזרתן לכאן
+   * הופכת את החלון מתמונת מצב של הצוות לרשימה שאני מופיע בה פעמיים.
+   *
+   * החריג הוא משימה שיש עליה אחראי נוסף. שם אני לא לבד — זו עבודה משותפת
+   * שהצוות שותף לה, וההסתרה הייתה מעלימה ממנהל המחלקה בדיוק את המשימות
+   * שיש בהן יותר מאדם אחד, כלומר את אלה שהתיאום בהן חשוב מכול.
+   */
+  const departmentTasks = seesDepartment
+    ? D.all(
+        `SELECT t.* FROM tasks t
+           JOIN boards b ON b.id = t.board_id
+          WHERE b.type = 'internal' AND t.archived = 0
+            AND (t.activate_at IS NULL OR t.activate_at <= ?)
+            AND NOT (
+              t.assignee_type = 'user' AND t.assignee_id = ?
+              AND NOT EXISTS (SELECT 1 FROM task_assignees ta WHERE ta.task_id = t.id)
+            )
+            AND (
+              t.department_id = ?
+              OR (t.department_id IS NULL AND t.assignee_type = 'user'
+                  AND t.assignee_id IN (SELECT id FROM users WHERE department_id = ?))
+            )`,
+        D.nowIso(), actor.id, actor.departmentId, actor.departmentId
+      ).filter((t) => Cls.mayReadTask(actor, t)).map((t) => shapeTask(t, actor)).filter((t) => !t.isFinal)
+    : [];
+
+  let awaitingApproval = [];
+  if (P.may(actor, 'approve_vendor_output')) {
+    awaitingApproval = D.all(
+      `SELECT t.* FROM tasks t JOIN boards b ON b.id = t.board_id
+        WHERE b.type = 'vendor' AND t.archived = 0
+          AND t.status IN ('pending_team_review','in_team_review','uploaded')`
+    ).filter((t) => Cls.mayReadTask(actor, t)).map((t) => shapeTask(t, actor));
+  } else if (isVendor(actor)) {
+    awaitingApproval = mine.filter((t) => ['pending_team_review', 'in_team_review', 'uploaded'].includes(t.status));
+  }
+
+  /**
+   * פיד העדכונים — כלי של מנהל המערכת, על כל הארגון.
+   *
+   * בעבר הוצג לכל העובדים, מצומצם למשימות ולפרויקטים של כל אחד. בפועל רק מי
+   * שאחראי על המערכת כולה צריך לראות "מה זז בארגון" ברצף אחד; לעובד יש את
+   * ההתראות ואת ההיסטוריה בכרטיס המשימה. לכן ההרשאה היא שורה במטריצה
+   * (‎view_activity_feed‎), ומי שאין לו אותה מקבל מערך ריק — והשאילתה כלל
+   * אינה רצה, כך שאי אפשר לחלץ את המידע גם בעקיפין.
+   *
+   * מה שאני עצמי עשיתי אינו עדכון בשבילי: הפיד נועד לומר מה קרה בלי
+   * שהסתכלתי, ושורה על כל פעולה שלי הייתה בולעת את מה שאחרים עשו.
+   */
+  let feed = [];
+  if (P.may(actor, 'view_activity_feed')) {
+    feed = D.all(
+      `SELECT a.*, t.title AS task_title FROM audit_log a
+         JOIN tasks t ON t.id = a.task_id
+        WHERE NOT (a.actor_type = ? AND a.actor_id = ?)
+        ORDER BY a.created_at DESC, a.id DESC LIMIT 120`,
+      'user', actor.id
+    ).filter((row) => {
+      // שכבת הגנה שנייה: ההרשאה לפיד אינה תחליף להרשאה על המשימה
+      const task = D.get('SELECT * FROM tasks WHERE id = ?', row.task_id);
+      return task && canSeeTask(actor, task);
+    }).slice(0, 60).map((row) => ({
+      id: row.id, action: row.action, details: row.details,
+      actorName: row.actor_name || 'המערכת',
+      // הממשק מבדיל חזותית בין עדכון של אדם לעדכון של המערכת
+      actorType: row.actor_type ?? 'system',
+      taskId: row.task_id,
+      taskTitle: row.task_title, createdAt: row.created_at
+    }));
+  }
+
+  /**
+   * הודעות שתויגתי בהן. זה מה שאדם אחר ביקש ממני במפורש, ולכן הוא הדבר
+   * שהכי לא צריך להיעלם — ובפיד הכללי הוא נבלע בין עדכוני סטטוס.
+   *
+   * הערה פנימית אינה נשלחת לספק, גם אם תויג בה בטעות.
+   */
+  const mentions = isVendor(actor) ? [] : D.all(
+    `SELECT c.id, c.body, c.internal, c.created_at, c.author_type, c.author_id,
+            c.task_id, t.title AS task_title
+       FROM comment_mentions m
+       JOIN comments c ON c.id = m.comment_id
+       JOIN tasks t ON t.id = c.task_id
+      WHERE m.user_id = ?
+      ORDER BY c.created_at DESC, c.id DESC LIMIT 40`,
+    actor.id
+  ).filter((row) => {
+    const task = D.get('SELECT * FROM tasks WHERE id = ?', row.task_id);
+    return task && canSeeTask(actor, task);
+  }).slice(0, 8).map((row) => ({
+    id: row.id,
+    body: row.body,
+    internal: !!row.internal,
+    createdAt: row.created_at,
+    taskId: row.task_id,
+    taskTitle: row.task_title,
+    authorName: row.author_type === 'vendor'
+      ? D.get('SELECT name FROM vendors WHERE id = ?', row.author_id)?.name ?? 'ספק'
+      : D.get('SELECT full_name FROM users WHERE id = ?', row.author_id)?.full_name ?? 'משתמש'
+  }));
+
+  const weekAhead = openMine
+    .filter((t) => t.dueDate && new Date(t.dueDate).getTime() <= now + 7 * 24 * 60 * 60 * 1000)
+    .sort((a, b) => new Date(a.dueDate) - new Date(b.dueDate));
+
+  sendJson(res, 200, {
+    widgets: {
+      mine: openMine.length,
+      overdue: openMine.filter((t) => t.overdue).length,
+      urgent: openMine.filter((t) => t.priority === 'urgent').length,
+      awaitingApproval: awaitingApproval.length
+    },
+    tasks: { mine: openMine, awaitingApproval, recentlyDone, department: departmentTasks },
+    // כמה ימים משימה שהושלמה נשארת כאן — הממשק אומר זאת למשתמש במקום להסתיר
+    archiveAfterDays: Number(D.getSetting('archive_done_after_days', 3)),
+    feed,
+    mentions,
+    weekAhead
+  });
+});
+
+// ---------------------------------------------------------------------------
+// דוחות
+// ---------------------------------------------------------------------------
+
+router.get('/api/reports', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  requirePerm(actor, 'view_reports');
+
+  // מנהל מחלקה מקבל את חתך המחלקה שלו בלבד. האכיפה כאן ולא בתצוגה —
+  // סינון בצד הלקוח היה מסתיר נתונים שכבר נשלחו אליו.
+  const scoped = !P.isOrgWide(actor);
+  const scopeId = scoped ? (actor.departmentId ?? null) : null;
+
+  const workload = D.all(
+    scoped
+      ? `SELECT id, full_name, department, department_id, role
+         FROM users WHERE status='active' AND department_id ${DEPT_IN} ORDER BY full_name`
+      : `SELECT id, full_name, department, department_id, role
+         FROM users WHERE status='active' ORDER BY full_name`,
+    ...(scoped ? [deptsParam(actor)] : [])
+  ).map((u) => {
+    const rows = D.all(
+      `SELECT t.*, c.is_final FROM tasks t
+         LEFT JOIN board_columns c ON c.board_id = t.board_id AND c.key = t.status
+        WHERE t.assignee_type='user' AND t.assignee_id = ? AND t.archived = 0`, u.id
+    );
+    const open = rows.filter((r) => !r.is_final);
+    return {
+      id: u.id, name: u.full_name,
+      role: P.seesRoles(actor) ? u.role : null,
+      roleLabel: P.seesRoles(actor) ? P.ROLE_LABELS[u.role] : null,
+      departmentId: u.department_id,
+      department: String(u.department ?? '').trim() || 'ללא שיוך',
+      open: open.length,
+      overdue: open.filter((r) => r.due_date && new Date(r.due_date).getTime() < Date.now()).length,
+      urgent: open.filter((r) => r.priority === 'urgent').length,
+      done: rows.filter((r) => r.is_final).length
+    };
+  });
+
+  const vendors = D.all('SELECT id, name FROM vendors ORDER BY name').map((v) => {
+    const rows = D.all(
+      `SELECT t.*, c.is_final FROM tasks t
+         LEFT JOIN board_columns c ON c.board_id = t.board_id AND c.key = t.status
+        WHERE t.assignee_type='vendor' AND t.assignee_id = ?`, v.id
+    );
+    const done = rows.filter((r) => r.is_final && r.completed_at);
+    const onTime = done.filter((r) => !r.due_date || new Date(r.completed_at) <= new Date(r.due_date));
+    const durations = done
+      .filter((r) => r.created_at && r.completed_at)
+      .map((r) => (new Date(r.completed_at) - new Date(r.created_at)) / (24 * 60 * 60 * 1000));
+    return {
+      id: v.id, name: v.name,
+      total: rows.length,
+      open: rows.filter((r) => !r.is_final && !r.archived).length,
+      done: done.length,
+      overdue: rows.filter((r) => !r.is_final && r.due_date && new Date(r.due_date).getTime() < Date.now()).length,
+      onTimeRate: done.length ? Math.round((onTime.length / done.length) * 100) : null,
+      avgDays: durations.length ? Math.round((durations.reduce((a, b) => a + b, 0) / durations.length) * 10) / 10 : null
+    };
+  });
+
+  // חתך מחלקתי — תמונת הארגון לפי מחלקות
+  const byDept = new Map();
+  const bucket = (id, name) => {
+    const key = id ?? 'none';
+    if (!byDept.has(key)) {
+      byDept.set(key, { id: id ?? null, name, people: 0, open: 0, overdue: 0, urgent: 0, done: 0 });
+    }
+    return byDept.get(key);
+  };
+  for (const d of D.all("SELECT id, name FROM departments WHERE status = 'active' ORDER BY name")) {
+    bucket(d.id, D.departmentPath(d.id));
+  }
+  for (const row of workload) {
+    const entry = bucket(row.departmentId, row.department);
+    entry.people++;
+    entry.open += row.open;
+    entry.overdue += row.overdue;
+    entry.urgent += row.urgent;
+    entry.done += row.done;
+  }
+  const departments = [...byDept.values()]
+    .filter((d) => d.people > 0 || d.id !== null)
+    .sort((a, b) => b.open - a.open || a.name.localeCompare(b.name, 'he'));
+
+  const projects = listProjectsFor(actor).map((p) => {
+    const rows = D.all(
+      `SELECT t.*, c.is_final FROM tasks t
+         LEFT JOIN board_columns c ON c.board_id = t.board_id AND c.key = t.status
+        WHERE t.project_id = ? AND t.archived = 0`, p.id
+    );
+    return {
+      ...p,
+      overdue: rows.filter((r) => !r.is_final && r.due_date && new Date(r.due_date).getTime() < Date.now()).length
+    };
+  });
+
+  const statusBreakdown = D.all(
+    `SELECT b.type AS board_type, c.label AS label, c.color AS color, COUNT(t.id) AS count
+       FROM tasks t
+       JOIN boards b ON b.id = t.board_id
+       JOIN board_columns c ON c.board_id = t.board_id AND c.key = t.status
+       LEFT JOIN users u ON u.id = t.assignee_id AND t.assignee_type = 'user'
+      WHERE t.archived = 0
+        AND (? IS NULL OR t.department_id ${DEPT_IN} OR u.department_id ${DEPT_IN})
+      GROUP BY b.type, c.key ORDER BY b.type, c.position`,
+    scoped ? 1 : null, deptsParam(actor), deptsParam(actor)
+  );
+
+  sendJson(res, 200, {
+    workload,
+    departments,
+    vendors,
+    projects,
+    statusBreakdown,
+    scope: scoped ? 'department' : 'organization',
+    departmentId: scopeId,
+    departmentName: scoped ? (actor.department || 'ללא שיוך') : null
+  });
+});
+
+router.get('/api/export/tasks.csv', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  requirePerm(actor, 'export_data');
+
+  const rows = D.all(
+    `SELECT t.* FROM tasks t JOIN boards b ON b.id = t.board_id ORDER BY t.id`
+  ).filter((t) => canSeeTask(actor, t)).map((t) => shapeTask(t, actor));
+
+  const header = ['מזהה', 'כותרת', 'פרויקט', 'בורד', 'אחראי', 'סטטוס', 'עדיפות', 'תאריך יעד', 'תאריך יצירה', 'הושלם בתאריך', 'באיחור'];
+  const esc = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
+  const lines = [header.map(esc).join(',')];
+  for (const t of rows) {
+    lines.push([
+      t.id, t.title, t.projectName ?? '', t.boardName ?? '', t.assigneeName ?? '',
+      t.statusLabel, t.priorityLabel, Rules.formatDate(t.dueDate), Rules.formatDate(t.createdAt),
+      t.completedAt ? Rules.formatDate(t.completedAt) : '', t.overdue ? 'כן' : 'לא'
+    ].map(esc).join(','));
+  }
+  // BOM כדי ש-Excel יזהה עברית
+  sendText(res, 200, '﻿' + lines.join('\r\n'), 'text/csv; charset=utf-8', {
+    'content-disposition': `attachment; filename*=UTF-8''${encodeURIComponent('משימון-משימות.csv')}`
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ניהול משתמשים — מנהל מערכת בלבד
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// מחלקות
+// ---------------------------------------------------------------------------
+
+const shapeDepartment = (d) => ({
+  id: d.id,
+  name: d.name,
+  // תת-מחלקה: ההורה, והשם המלא לתצוגה — "הנדסה וביצוע › אתר אלעד"
+  parentId: d.parent_id ?? null,
+  label: D.departmentPath(d.id),
+  status: d.status,
+  managerUserId: d.manager_user_id,
+  managerName: d.manager_user_id
+    ? D.get('SELECT full_name FROM users WHERE id = ?', d.manager_user_id)?.full_name ?? null
+    : null,
+  peopleCount: D.get('SELECT COUNT(*) c FROM users WHERE department_id = ? AND status = ?', d.id, 'active').c,
+  // ימי העבודה — ‎server/workdays.js‎. ריק בשמירה = ברירת המחדל א׳–ה׳
+  workDays: W.parseDays(d.work_days),
+  workDaysLabel: W.daysLabel(W.parseDays(d.work_days))
+});
+
+/** רשימת המחלקות — נדרשת לכל מי שממלא טופס משתמש או מסנן לפי מחלקה */
+router.get('/api/departments', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  if (isVendor(actor)) throw forbidden();
+  // includeInactive=1 נדרש למסך ניהול המחלקות; טפסי שיוך מקבלים פעילות בלבד
+  const all = parseUrl(req).searchParams.get('includeInactive') === '1';
+  const rows = all
+    ? D.all('SELECT * FROM departments ORDER BY name')
+    : D.all("SELECT * FROM departments WHERE status = 'active' ORDER BY name");
+  sendJson(res, 200, { departments: sortedDepartments(rows.map(shapeDepartment)) });
+});
+
+/** סדר לפי השם המלא — כל תת-מחלקה מיד אחרי ההורה שלה */
+const sortedDepartments = (list) => list.sort((a, b) => a.label.localeCompare(b.label, 'he'));
+
+/**
+ * מחלקת-אם שנבחרה. ‎undefined‎ = לא נשלח; ‎null‎ = מחלקה ראשית. מחלקה אינה
+ * יכולה להיות תת-מחלקה של עצמה או של אחת מתתי-המחלקות שלה — זה היה יוצר
+ * מעגל, והמחלקה הייתה נעלמת מהעץ.
+ */
+function parseParentDepartment(raw, selfId = null) {
+  if (raw === undefined) return undefined;
+  if (raw === null || raw === '') return null;
+  const id = Number(raw);
+  if (!D.get('SELECT 1 FROM departments WHERE id = ?', id)) throw badRequest('מחלקת האם שנבחרה אינה קיימת');
+  if (selfId && D.departmentSubtree(selfId).includes(id)) {
+    throw badRequest('מחלקה אינה יכולה להיות תת-מחלקה של עצמה או של תת-מחלקה שלה');
+  }
+  return id;
+}
+
+router.post('/api/departments', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  requirePerm(actor, 'manage_departments');
+  const b = await readJson(req);
+  const name = String(b.name ?? '').trim();
+  if (!name) throw badRequest('נדרש שם מחלקה');
+  if (D.get('SELECT 1 FROM departments WHERE name = ?', name)) throw badRequest('מחלקה בשם זה כבר קיימת');
+
+  const parentId = parseParentDepartment(b.parentId) ?? null;
+  const r = D.run('INSERT INTO departments (name, created_at, work_days, parent_id) VALUES (?,?,?,?)', name, D.nowIso(),
+    Array.isArray(b.workDays) ? W.serializeDays(b.workDays) : '', parentId);
+  const id = Number(r.lastInsertRowid);
+  if (b.managerUserId) setDepartmentManager(id, Number(b.managerUserId));
+
+  sendJson(res, 201, { department: shapeDepartment(D.get('SELECT * FROM departments WHERE id = ?', id)) });
+});
+
+router.patch('/api/departments/:id', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  requirePerm(actor, 'manage_departments');
+  const dept = D.get('SELECT * FROM departments WHERE id = ?', Number(ctx.params.id));
+  if (!dept) throw notFound('המחלקה לא נמצאה');
+  const b = await readJson(req);
+
+  if (b.name !== undefined) {
+    const name = String(b.name).trim();
+    if (!name) throw badRequest('נדרש שם מחלקה');
+    const clash = D.get('SELECT 1 FROM departments WHERE name = ? AND id <> ?', name, dept.id);
+    if (clash) throw badRequest('מחלקה בשם זה כבר קיימת');
+    D.run('UPDATE departments SET name = ? WHERE id = ?', name, dept.id);
+    // המחלקה נשמרת גם כטקסט על המשתמש, לתצוגה ולייצוא
+    D.run('UPDATE users SET department = ? WHERE department_id = ?', name, dept.id);
+  }
+  const parentId = parseParentDepartment(b.parentId, dept.id);
+  if (parentId !== undefined) D.run('UPDATE departments SET parent_id = ? WHERE id = ?', parentId, dept.id);
+  if (b.status !== undefined) {
+    if (!['active', 'inactive'].includes(b.status)) throw badRequest('סטטוס לא תקין');
+    D.run('UPDATE departments SET status = ? WHERE id = ?', b.status, dept.id);
+  }
+  if (b.managerUserId !== undefined) {
+    setDepartmentManager(dept.id, b.managerUserId ? Number(b.managerUserId) : null);
+  }
+  // שבת לעולם אינה נשמרת כיום עבודה — ‎serializeDays‎ מסיר אותה
+  if (Array.isArray(b.workDays)) D.run('UPDATE departments SET work_days = ? WHERE id = ?', W.serializeDays(b.workDays), dept.id);
+
+  sendJson(res, 200, { department: shapeDepartment(D.get('SELECT * FROM departments WHERE id = ?', dept.id)) });
+});
+
+router.delete('/api/departments/:id', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  requirePerm(actor, 'manage_departments');
+  const dept = D.get('SELECT * FROM departments WHERE id = ?', Number(ctx.params.id));
+  if (!dept) throw notFound('המחלקה לא נמצאה');
+
+  const people = D.get('SELECT COUNT(*) c FROM users WHERE department_id = ?', dept.id).c;
+  if (people > 0) throw badRequest(`למחלקה משויכים ${people} משתמשים. יש להעביר אותם למחלקה אחרת קודם.`);
+  const children = D.get('SELECT COUNT(*) c FROM departments WHERE parent_id = ?', dept.id).c;
+  if (children > 0) throw badRequest(`למחלקה ${children} תתי-מחלקות. יש להעביר או למחוק אותן קודם.`);
+
+  D.run('DELETE FROM departments WHERE id = ?', dept.id);
+  sendJson(res, 200, { ok: true });
+});
+
+/** קובע את מנהל המחלקה, ומשייך אותו אליה כמנהל מחלקה */
+function setDepartmentManager(departmentId, userId) {
+  if (userId === null) {
+    D.run('UPDATE departments SET manager_user_id = NULL WHERE id = ?', departmentId);
+    return;
+  }
+  const user = D.get('SELECT * FROM users WHERE id = ?', userId);
+  if (!user) throw badRequest('המשתמש שנבחר כמנהל אינו קיים');
+
+  const name = D.get('SELECT name FROM departments WHERE id = ?', departmentId).name;
+  D.run('UPDATE departments SET manager_user_id = ? WHERE id = ?', userId, departmentId);
+  D.run('UPDATE users SET department_id = ?, department = ? WHERE id = ?', departmentId, name, userId);
+}
+
+/**
+ * מנהל מערכת מנהל את כל המשתמשים.
+ * מנהל מחלקה מנהל אך ורק עובדים פנימיים במחלקה שלו — לא מנהלים אחרים,
+ * לא משתמשים ממחלקה אחרת, ואינו יכול להעניק רמת גישה גבוהה משלו.
+ */
+const isDeptManager = (actor) => actor.type === 'user' && actor.role === 'manager';
+
+/** האם actor רשאי לנהל את המשתמש הקיים target */
+function assertMayManageUser(actor, target) {
+  if (!P.mayManageRole(actor, target.role)) {
+    throw forbidden(`אין לך הרשאה לנהל חשבון ברמת ${P.ROLE_LABELS[target.role] ?? target.role}`);
+  }
+  if (isDeptManager(actor) && !P.inActorDepartments(actor, target.department_id ?? null)) {
+    throw forbidden('מנהל מחלקה רשאי לנהל משתמשים במחלקה שלו בלבד');
+  }
+}
+
+/** מתרגם קלט מחלקה — מזהה קיים או שם חדש — למזהה מחלקה */
+function resolveDepartment(actor, body) {
+  if (body.newDepartmentName) {
+    requirePerm(actor, 'manage_departments');
+    const name = String(body.newDepartmentName).trim();
+    if (!name) throw badRequest('נדרש שם למחלקה החדשה');
+    const existing = D.get('SELECT id FROM departments WHERE name = ?', name);
+    if (existing) return existing.id;
+    return Number(D.run('INSERT INTO departments (name, created_at) VALUES (?,?)', name, D.nowIso()).lastInsertRowid);
+  }
+  if (body.departmentId) {
+    const id = Number(body.departmentId);
+    const dept = D.get('SELECT status FROM departments WHERE id = ?', id);
+    if (!dept) throw badRequest('המחלקה שנבחרה אינה קיימת');
+    if (dept.status !== 'active') throw badRequest('לא ניתן לשייך משתמש למחלקה מושבתת');
+    return id;
+  }
+  return null;
+}
+
+/**
+ * המחלקה שמנהל מחלקה משייך אליה עובד: המבוקשת אם היא בתחומו (המחלקה שלו
+ * או תת-מחלקה שלה), אחרת ‎fallback‎ אם הוא בתחומו, ואחרת המחלקה שלו.
+ */
+function managerDepartmentChoice(actor, requested, fallback) {
+  const id = requested ? Number(requested) : null;
+  if (id && P.inActorDepartments(actor, id)) {
+    const dept = D.get('SELECT status FROM departments WHERE id = ?', id);
+    if (dept?.status === 'active') return id;
+  }
+  if (fallback && P.inActorDepartments(actor, fallback)) return fallback;
+  return actor.departmentId;
+}
+
+const departmentName = (id) => (id ? D.get('SELECT name FROM departments WHERE id = ?', id)?.name ?? '' : '');
+
+/**
+ * עובד פנימי פותח פרויקטים ברמת 'own', ולכן עורך רק את אלה שפתח או שהוא
+ * מנהלם. בלי הבדיקה הזו ההרשאה לפתוח פרויקט הייתה גם הרשאה לשנות את שמו,
+ * את מנהלו ואת תמונותיו של כל פרויקט אחר בארגון.
+ */
+/**
+ * האם ‎actor‎ רשאי לגעת בפרויקט הזה.
+ *
+ * שתי בדיקות, ולא אחת:
+ *
+ * 1. ראייה. מי שאינו רשאי לראות את הפרויקט אינו רשאי לגעת בו. בלי זה נפער
+ *    חור אמיתי: מנהל מחלקה מחזיק ‎create_project: true‎, ולכן עבר את בדיקת
+ *    ההרשאה וערך ומחק פרויקטים של מחלקות אחרות — פרויקטים שלא הופיעו אצלו
+ *    ברשימה בכלל. רמת הרשאה אומרת *מה* מותר לעשות, לא *על מה*.
+ *
+ * 2. בעלות, לרמה ‎'own'‎ בלבד. עובד פנימי עורך את מה שפתח או שהוא מנהלו.
+ */
+function assertMayEditProject(actor, project) {
+  requirePerm(actor, 'create_project');
+
+  const visible = visibleProjectIds(actor);
+  if (visible !== null && !visible.has(project.id)) {
+    throw forbidden('אין לך גישה לפרויקט הזה');
+  }
+  // 🔒 פרויקט מסווג — מי שהסיווג אינו מתיר לו לראות אותו גם אינו עורך, מוחק או מחליף את מנהלו
+  if (!Cls.mayReadProject(actor, project)) {
+    throw forbidden('אין לך גישה לפרויקט הזה');
+  }
+
+  if (P.level(actor, 'create_project') === 'own'
+      && project.created_by !== actor.id && project.manager_id !== actor.id) {
+    throw forbidden('אפשר לערוך רק פרויקט שפתחת או שאתה מנהלו');
+  }
+}
+
+// ---------------------------------------------------------------------------
+// תמונות של פרויקט — לוגו וגלריית הדמיות
+// ---------------------------------------------------------------------------
+
+const shapeProjectImage = (r) => ({
+  id: r.id, kind: r.kind, filename: r.filename, mime: r.mime, size: r.size,
+  caption: r.caption ?? '', createdAt: r.created_at
+});
+
+const projectImages = (projectId) =>
+  D.all('SELECT * FROM project_images WHERE project_id = ? ORDER BY kind, id', projectId).map(shapeProjectImage);
+
+router.get('/api/projects/:id/images', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  if (isVendor(actor)) throw forbidden();
+  const project = D.get('SELECT * FROM projects WHERE id = ?', Number(ctx.params.id));
+  if (!project) throw notFound('הפרויקט לא נמצא');
+  // הרשאת הצפייה זהה לזו של רשימת הפרויקטים — פרויקט שאינו נראה, גם תמונותיו לא
+  const visible = visibleProjectIds(actor);
+  if (visible !== null && !visible.has(project.id)) throw forbidden();
+  if (!Cls.mayReadProject(actor, project)) throw forbidden();
+  sendJson(res, 200, { images: projectImages(project.id) });
+});
+
+/**
+ * העלאת תמונה. רק תמונות — הגלריה נועדה להדמיות ולחומר חזותי, וקובץ שאינו
+ * תמונה אינו ניתן להצגה בה. לוגו הוא יחיד: העלאה חדשה מחליפה את הקודם.
+ */
+router.post('/api/projects/:id/images', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  if (isVendor(actor)) throw forbidden();
+  const project = D.get('SELECT * FROM projects WHERE id = ?', Number(ctx.params.id));
+  if (!project) throw notFound('הפרויקט לא נמצא');
+  assertMayEditProject(actor, project);
+
+  const b = await readJson(req);
+  const kind = b.kind === 'logo' ? 'logo' : 'gallery';
+  const name = String(b.filename ?? '').trim();
+  if (!name || !b.data) throw badRequest('חסר קובץ');
+  const mime = String(b.mime ?? '').toLowerCase();
+  if (!isPreviewable(mime) || !mime.startsWith('image/')) {
+    throw badRequest('נדרשת תמונה (PNG, JPG, GIF או WEBP)');
+  }
+
+  const buffer = Buffer.from(String(b.data).split(',').pop(), 'base64');
+  const maxMb = Number(D.getSetting('max_upload_mb', 25));
+  if (!buffer.length) throw badRequest('הקובץ ריק');
+  if (buffer.length > maxMb * 1024 * 1024) throw badRequest(`הקובץ חורג מהמגבלה (${maxMb}MB)`);
+
+  const stored = `proj${project.id}_${crypto.randomBytes(8).toString('hex')}${path.extname(name)}`;
+  fs.writeFileSync(path.join(D.UPLOADS_DIR, stored), buffer);
+
+  // לוגו יחיד: הקודם נמחק מהדיסק ומהטבלה, אחרת נערמים קבצים שאין להם דרך תצוגה
+  if (kind === 'logo') {
+    for (const old of D.all("SELECT * FROM project_images WHERE project_id = ? AND kind = 'logo'", project.id)) {
+      try { fs.unlinkSync(path.join(D.UPLOADS_DIR, old.stored_name)); } catch { /* אולי כבר נמחק */ }
+      D.run('DELETE FROM project_images WHERE id = ?', old.id);
+    }
+  }
+
+  const r = D.run(
+    `INSERT INTO project_images (project_id, kind, filename, stored_name, size, mime, caption, uploaded_by, created_at)
+     VALUES (?,?,?,?,?,?,?,?,?)`,
+    project.id, kind, name, stored, buffer.length, mime, String(b.caption ?? ''), actor.id, D.nowIso()
+  );
+
+  sendJson(res, 201, {
+    image: shapeProjectImage(D.get('SELECT * FROM project_images WHERE id = ?', Number(r.lastInsertRowid))),
+    images: projectImages(project.id),
+    projects: listProjectsFor(actor)
+  });
+});
+
+router.delete('/api/project-images/:id', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  if (isVendor(actor)) throw forbidden();
+  const image = D.get('SELECT * FROM project_images WHERE id = ?', Number(ctx.params.id));
+  if (!image) throw notFound('התמונה לא נמצאה');
+  const project = D.get('SELECT * FROM projects WHERE id = ?', image.project_id);
+  assertMayEditProject(actor, project);
+
+  try { fs.unlinkSync(path.join(D.UPLOADS_DIR, image.stored_name)); } catch { /* אולי כבר נמחק */ }
+  D.run('DELETE FROM project_images WHERE id = ?', image.id);
+  sendJson(res, 200, { images: projectImages(project.id), projects: listProjectsFor(actor) });
+});
+
+/** הגשת התמונה עצמה. תמונות בלבד, ולכן תמיד inline ובלי הורדה כפויה. */
+router.get('/api/project-images/:id/view', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  const image = D.get('SELECT * FROM project_images WHERE id = ?', Number(ctx.params.id));
+  if (!image) throw notFound('התמונה לא נמצאה');
+  const visible = visibleProjectIds(actor);
+  if (visible !== null && !visible.has(image.project_id)) throw forbidden();
+  if (!Cls.mayReadProject(actor, D.get('SELECT * FROM projects WHERE id = ?', image.project_id))) throw forbidden();
+
+  const filePath = path.join(D.UPLOADS_DIR, image.stored_name);
+  if (!fs.existsSync(filePath)) throw notFound('הקובץ אינו קיים בשרת');
+  const buf = fs.readFileSync(filePath);
+  res.writeHead(200, {
+    'content-type': image.mime,
+    'content-length': buf.length,
+    'content-disposition': `inline; filename*=UTF-8''${encodeURIComponent(image.filename)}`,
+    'x-content-type-options': 'nosniff'
+  });
+  res.end(buf);
+});
+
+router.get('/api/admin/users', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  requirePerm(actor, 'manage_users');
+
+  /*
+   * בקשות הרשמה שממתינות לאישור אינן משתמשים — הן מוצגות בפאנל נפרד עם
+   * אישור ודחייה. בטבלה הראשית הן נראו כ"לא פעיל" בלי הקשר, ומי שהיה עורך
+   * אותן שם היה מאשר חשבון בלי לקבוע לו מחלקה ורמת גישה.
+   */
+  const rows = P.isOrgWide(actor)
+    ? D.all(`SELECT id, full_name, email, work_email, phone, office_phone, role, department, department_id, status, field_worker, is_secretary, tracker_access, zoom_user_id FROM users
+             WHERE signup_at IS NULL ORDER BY full_name`)
+    : D.all(`SELECT id, full_name, email, work_email, phone, office_phone, role, department, department_id, status, field_worker, is_secretary, tracker_access, zoom_user_id FROM users
+             WHERE department_id ${DEPT_IN} AND role = 'employee' AND signup_at IS NULL ORDER BY full_name`,
+      deptsParam(actor));
+
+  const departments = sortedDepartments(D.all("SELECT * FROM departments WHERE status = 'active' ORDER BY name").map(shapeDepartment));
+
+  sendJson(res, 200, {
+    scope: P.isOrgWide(actor) ? 'all' : 'department',
+    seesRoles: P.seesRoles(actor),
+    department: actor.department,
+    departmentId: actor.departmentId,
+    departments,
+    assignableRoles: P.assignableRoles(actor).map((role) => ({ value: role, label: P.ROLE_LABELS[role] })),
+    grantCatalog: P.GRANT_KEYS.map((key) => ({ key, ...P.GRANTS[key] })),
+    mayManageDepartments: P.may(actor, 'manage_departments'),
+    users: rows.map((u) => ({
+      id: u.id, name: u.full_name, email: u.email, workEmail: u.work_email ?? '', phone: u.phone, officePhone: u.office_phone ?? '', role: u.role,
+      roleLabel: P.seesRoles(actor) ? P.ROLE_LABELS[u.role] : null, department: u.department,
+      departmentId: u.department_id, status: u.status,
+      // עובד שטח — עובד גם בשישי (‎server/workdays.js‎)
+      fieldWorker: Boolean(u.field_worker),
+      // מזכירות — קובעות פגישות ביומנים שהעובדים שיתפו איתן, ורואות את מסך היומן
+      secretary: Boolean(u.is_secretary),
+      // "בקרת משימות": הערך בפועל, והאם הוא ברירת המחדל של המחלקה ולא בחירה מפורשת
+      tracker: D.trackerAccess(u.id),
+      trackerByDefault: u.tracker_access === null,
+      zoomUserId: u.zoom_user_id ?? null,
+      grants: D.all('SELECT grant_key FROM user_grants WHERE user_id = ?', u.id).map((g) => g.grant_key)
+    }))
+  });
+});
+
+// ---------------------------------------------------------------------------
+// הרשמה עצמית בלינק, בכפוף לאישור
+// ---------------------------------------------------------------------------
+
+/*
+ * הזרימה: מנהל מייצר לינק ומפיץ אותו בחברה. מי שנרשם בו נכנס כ"ממתין
+ * לאישור" — ‎status='inactive'‎ עם ‎signup_at‎ — ולכן אינו יכול להיכנס ואינו
+ * מופיע באף רשימה, כי כל השאילתות במערכת מסננות ל-‎status='active'‎. רק אחרי
+ * שהמנהל מאשר, קובע לו רמת גישה ומחלקה, החשבון נפתח.
+ *
+ * למה בכלל לינק פתוח: הוספה ידנית של חמישים עובדים אינה מעשית. למה בכפוף
+ * לאישור: לינק שמסתובב בוואטסאפ מגיע גם למי שעזב ולמי שאינו בחברה.
+ */
+
+const signupToken = () => String(D.getSetting('signup_token', '') ?? '').trim();
+
+/** האם הבקשה נושאת את האסימון הנוכחי. השוואה באורך קבוע, נגד ניחוש בזמן. */
+function signupTokenMatches(candidate) {
+  const real = signupToken();
+  if (!real) return false;
+  const a = Buffer.from(String(candidate ?? ''));
+  const b = Buffer.from(real);
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
+/** מסך ההרשמה — ציבורי, ולכן מחזיר את המינימום: שם הארגון בלבד */
+router.get('/api/signup/:token', async (req, res, ctx) => {
+  if (!signupTokenMatches(ctx.params.token)) throw notFound('קישור ההרשמה אינו תקף');
+  sendJson(res, 200, { orgName: D.getSetting('org_name', 'הארגון') });
+});
+
+router.post('/api/signup/:token', async (req, res, ctx) => {
+  if (!signupTokenMatches(ctx.params.token)) throw notFound('קישור ההרשמה אינו תקף');
+  // אותה הגנה מפני הצפה שיש בכניסה — נקודת קצה ציבורית שכותבת שורות
+  Auth.checkLoginRate(req);
+
+  const b = await readJson(req);
+  const name = String(b.name ?? '').trim();
+  const email = String(b.email ?? '').trim().toLowerCase();
+  const password = String(b.password ?? '');
+
+  if (!name || !email) throw badRequest('נדרשים שם מלא וכתובת אימייל');
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email)) throw badRequest('כתובת האימייל אינה תקינה');
+  if (password.length < 6) throw badRequest('הסיסמה חייבת להיות באורך 6 תווים לפחות');
+
+  /*
+   * כתובת שכבר קיימת מקבלת את אותה תשובה כמו הרשמה מוצלחת. תשובה שאומרת
+   * "הכתובת קיימת" הופכת את הלינק לכלי לבדוק מי עובד בחברה.
+   */
+  const exists = D.get('SELECT 1 FROM users WHERE lower(email)=?', email)
+    || D.get('SELECT 1 FROM vendors WHERE lower(email)=?', email);
+
+  if (!exists) {
+    const result = D.run(
+      `INSERT INTO users (full_name, email, password_hash, role, department, status, created_at, signup_at)
+       VALUES (?,?,?,?,?,?,?,?)`,
+      name, email, D.hashPassword(password), 'employee', '', 'inactive', D.nowIso(), D.nowIso()
+    );
+    const userId = Number(result.lastInsertRowid);
+
+    // מי שמנהל משתמשים צריך לדעת שיש בקשה, אחרת היא תשכב עד שייכנס למסך
+    for (const admin of D.all("SELECT id FROM users WHERE status='active' AND role IN ('superadmin','admin')")) {
+      D.notify({
+        targetType: 'user', targetId: admin.id, kind: 'manager_alert',
+        title: 'בקשת הרשמה חדשה', body: `${name} (${email}) ממתין לאישור`
+      });
+    }
+    console.log(`[משימון] בקשת הרשמה חדשה: ${name} <${email}> (#${userId})`);
+  }
+
+  sendJson(res, 201, { ok: true });
+});
+
+/** ניהול הלינק — מנהל מערכת בלבד */
+router.get('/api/admin/signup-link', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  requireFullPerm(actor, 'manage_users');
+  const token = signupToken();
+  const base = Google.publicBase(req);
+  sendJson(res, 200, {
+    open: !!token,
+    link: token ? `${base}/signup/${token}` : null,
+    pending: D.all(
+      `SELECT id, full_name, email, signup_at FROM users
+        WHERE status = 'inactive' AND signup_at IS NOT NULL ORDER BY signup_at`
+    ).map((u) => ({ id: u.id, name: u.full_name, email: u.email, signupAt: u.signup_at })),
+    // רמת הגישה והמחלקה נקבעות באישור, ולכן נשלחות יחד עם הבקשות
+    assignableRoles: P.assignableRoles(actor).map((role) => ({ value: role, label: P.ROLE_LABELS[role] })),
+    departments: D.all("SELECT id FROM departments WHERE status = 'active'")
+      .map((d) => ({ id: d.id, name: D.departmentPath(d.id) }))
+      .sort((a, b) => a.name.localeCompare(b.name, 'he'))
+  });
+});
+
+router.post('/api/admin/signup-link', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  requireFullPerm(actor, 'manage_users');
+  // אסימון חדש מבטל את הקודם — זו גם הדרך לנטרל לינק שדלף
+  const token = crypto.randomBytes(18).toString('base64url');
+  D.setSetting('signup_token', token);
+  sendJson(res, 200, { open: true, link: `${Google.publicBase(req)}/signup/${token}` });
+});
+
+router.delete('/api/admin/signup-link', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  requireFullPerm(actor, 'manage_users');
+  D.setSetting('signup_token', '');
+  sendJson(res, 200, { open: false, link: null });
+});
+
+/**
+ * אישור בקשה — כאן נקבעות רמת הגישה והמחלקה, ורק אז החשבון נפתח.
+ *
+ * דורש הרשאה מלאה, לא מחלקתית: הנרשם עדיין ללא שיוך, ולכן מנהל מחלקה אינו
+ * יכול לדעת אם הוא שלו. סינון הכניסה לחברה נשאר אצל מי שרואה את כל הארגון.
+ */
+router.post('/api/admin/pending/:id/approve', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  requireFullPerm(actor, 'manage_users');
+  const user = D.get("SELECT * FROM users WHERE id = ? AND status = 'inactive' AND signup_at IS NOT NULL", Number(ctx.params.id));
+  if (!user) throw notFound('הבקשה לא נמצאה');
+
+  const b = await readJson(req).catch(() => ({}));
+  const role = P.INTERNAL_ROLES.includes(b.role) ? b.role : 'employee';
+  if (!P.mayManageRole(actor, role)) throw forbidden(`אין לך הרשאה להעניק רמת גישה ${P.ROLE_LABELS[role]}`);
+
+  const departmentId = resolveDepartment(actor, b);
+  if (role === 'manager' && !departmentId) throw badRequest('מנהל מחלקה חייב שיוך למחלקה');
+
+  D.run(
+    "UPDATE users SET status = 'active', role = ?, department = ?, department_id = ?, signup_at = NULL WHERE id = ?",
+    role, departmentName(departmentId), departmentId, user.id
+  );
+  if (role === 'manager' && departmentId) {
+    D.run('UPDATE departments SET manager_user_id = ? WHERE id = ?', user.id, departmentId);
+  }
+
+  D.notify({
+    targetType: 'user', targetId: user.id, kind: 'manager_alert',
+    title: 'החשבון שלך אושר', body: 'אפשר להיכנס למשימון עם האימייל והסיסמה שקבעת בהרשמה.'
+  });
+  console.log(`[משימון] אושרה בקשת הרשמה: ${user.full_name} <${user.email}>`);
+  sendJson(res, 200, { ok: true });
+});
+
+router.delete('/api/admin/pending/:id', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  requireFullPerm(actor, 'manage_users');
+  const user = D.get("SELECT * FROM users WHERE id = ? AND status = 'inactive' AND signup_at IS NOT NULL", Number(ctx.params.id));
+  if (!user) throw notFound('הבקשה לא נמצאה');
+  // דחייה מוחקת את השורה — חשבון שלא אושר אינו אמור להישאר במסד
+  D.run('DELETE FROM users WHERE id = ?', user.id);
+  sendJson(res, 200, { ok: true });
+});
+
+// --- ייבוא משתמשים מגיליון ---
+
+/**
+ * שמות העמודות שהמערכת מזהה. השם בגיליון אינו חייב להיות זהה — הוא מנוקה
+ * מרווחים, מנקודתיים ומסימני שאלה, כי כותרת אמיתית באקסל כתובה בחופשיות
+ * ("שם מלא:", "כתובת מייל", "Email").
+ */
+const IMPORT_COLUMNS = {
+  name: { label: 'שם מלא', required: true, aliases: ['שם מלא', 'שם', 'שםמלא', 'name', 'fullname', 'full name'] },
+  email: { label: 'אימייל', required: true, aliases: ['אימייל', 'מייל', 'אימייל', 'דואראלקטרוני', 'דואר אלקטרוני', 'כתובתמייל', 'כתובת מייל', 'email', 'mail', 'e-mail'] },
+  // לטלפון יש אינספור ניסוחים ("מס' טלפון", "טל'", "נייד עבודה", "Phone Number"),
+  // ולכן מספיק שהכותרת תכיל אחת המילים — ולא רק תהיה זהה לה
+  phone: { label: 'טלפון', required: false, aliases: ['טל', 'מסטל', 'phone', 'mobile', 'cell', 'tel'], contains: ['טלפון', 'נייד', 'פלאפון', 'סלולר', 'phone', 'mobile'], excludes: ['משרד', 'שלוחה', 'office', 'ext'] },
+  // "טלפון במשרד" מכיל "טלפון" — ולכן לעמודת הנייד יש ‎excludes‎, וזו נבדקת לפי ‎contains‎ משלה
+  officePhone: { label: 'טלפון במשרד', required: false, aliases: ['שלוחה', 'משרד', 'office', 'ext', 'extension'], contains: ['משרד', 'שלוחה', 'office'] },
+  department: { label: 'מחלקה', required: false, aliases: ['מחלקה', 'department', 'dept'] },
+  role: { label: 'רמת גישה', required: false, aliases: ['רמת גישה', 'רמתגישה', 'הרשאה', 'תפקיד', 'role'] }
+};
+
+const normaliseHeader = (value) =>
+  String(value ?? '').trim().toLowerCase().replace(/[\s:?"'׳״.\-_]/g, '');
+
+/** מזהה איזו עמודה בגיליון היא איזה שדה. מחזיר ‎{ name: 0, email: 2, … }‎ */
+function mapHeaders(headerRow) {
+  const map = {};
+  headerRow.forEach((cell, index) => {
+    const key = normaliseHeader(cell);
+    if (!key) return;
+    for (const [field, spec] of Object.entries(IMPORT_COLUMNS)) {
+      if (map[field] !== undefined) continue;
+      if (spec.excludes?.some((x) => key.includes(normaliseHeader(x)))) continue;
+      if (spec.aliases.some((a) => normaliseHeader(a) === key)
+        || spec.contains?.some((c) => key.includes(normaliseHeader(c)))) map[field] = index;
+    }
+  });
+  return map;
+}
+
+/** תווית רמת גישה מהגיליון חזרה למפתח הפנימי — בעברית או באנגלית */
+function roleFromLabel(value) {
+  const key = normaliseHeader(value);
+  if (!key) return null;
+  for (const role of P.INTERNAL_ROLES) {
+    if (normaliseHeader(P.ROLE_LABELS[role]) === key || normaliseHeader(role) === key) return role;
+  }
+  return undefined;   // הוזן משהו, אך אינו רמה מוכרת
+}
+
+const EMAIL_SHAPE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
+
+/**
+ * בודק את הגיליון שורה-שורה ומחזיר תמונת מצב. אינו כותב דבר — הייבוא הוא
+ * שני שלבים במכוון: קודם רואים מה עומד להיכנס ומה נפסל, ורק אחר כך מאשרים.
+ * קובץ של חמישים אנשים שנכתב חצי הוא בלגן שאין ממנו חזרה.
+ */
+function analyseImport(actor, rows) {
+  if (!rows.length) throw badRequest('הקובץ ריק');
+  const headers = mapHeaders(rows[0]);
+
+  const missing = Object.entries(IMPORT_COLUMNS)
+    .filter(([field, spec]) => spec.required && headers[field] === undefined)
+    .map(([, spec]) => spec.label);
+  if (missing.length) {
+    throw badRequest(`בקובץ חסרות עמודות חובה: ${missing.join(', ')}. השורה הראשונה חייבת להיות שורת כותרות.`);
+  }
+
+  const departments = D.all("SELECT id, name FROM departments WHERE status = 'active'");
+  const byName = new Map(departments.map((d) => [normaliseHeader(d.name), d]));
+  const assignable = P.assignableRoles(actor);
+  const scoped = !P.isOrgWide(actor);
+
+  // כתובות שכבר קיימות, וגם כאלה שחוזרות פעמיים בתוך הקובץ עצמו
+  const seen = new Set();
+  const seenPhones = new Set();
+  const out = [];
+
+  rows.slice(1).forEach((row, i) => {
+    const cell = (field) => String(row[headers[field]] ?? '').trim();
+    const line = i + 2;   // מספר השורה בגיליון, כולל הכותרת
+    const name = cell('name');
+    const email = cell('email').toLowerCase();
+    if (!name && !email) return;   // שורה ריקה אינה שגיאה
+
+    const errors = [];
+    if (!name) errors.push('חסר שם');
+    if (!email) errors.push('חסר אימייל');
+    else if (!EMAIL_SHAPE.test(email)) errors.push('כתובת אימייל אינה תקינה');
+    else if (seen.has(email)) errors.push('הכתובת חוזרת פעמיים בקובץ');
+    else if (D.get('SELECT 1 FROM users WHERE lower(email)=?', email)) errors.push('משתמש עם הכתובת הזו כבר קיים');
+    else if (D.get('SELECT 1 FROM vendors WHERE lower(email)=?', email)) errors.push('הכתובת שייכת לספק במערכת');
+    if (email) seen.add(email);
+
+    // טלפון: אופציונלי. אקסל שומר מספר כמספר ומשמיט את האפס המוביל
+    // (‎0501234567 ← 501234567‎), ולכן תשע ספרות שמתחילות ב-5 מקבלות אפס בחזרה
+    let phone = '';
+    const rawPhone = headers.phone !== undefined ? cell('phone') : '';
+    if (rawPhone) {
+      const digits = rawPhone.replace(/\D/g, '');
+      phone = WhatsApp.normalizePhone(/^5\d{8}$/.test(digits) ? `0${digits}` : rawPhone) ?? '';
+      if (!phone) errors.push(`מספר הטלפון "${rawPhone}" אינו תקין`);
+      else if (seenPhones.has(phone)) errors.push('מספר הטלפון חוזר פעמיים בקובץ');
+      else {
+        const other = D.get('SELECT full_name FROM users WHERE phone = ?', phone);
+        if (other) errors.push(`מספר הטלפון כבר רשום אצל ${other.full_name}`);
+      }
+      if (phone) seenPhones.add(phone);
+    }
+
+    let officePhone = '';
+    if (headers.officePhone !== undefined && cell('officePhone')) {
+      try { officePhone = officePhoneOf(cell('officePhone')); } catch (err) { errors.push(err.message); }
+    }
+
+    // רמת גישה: ברירת המחדל היא עובד פנימי, וזו גם היחידה שמנהל מחלקה מעניק
+    let role = 'employee';
+    if (headers.role !== undefined && cell('role')) {
+      const parsed = roleFromLabel(cell('role'));
+      if (parsed === undefined) errors.push(`רמת גישה "${cell('role')}" אינה מוכרת`);
+      else if (!assignable.includes(parsed)) errors.push(`אין לך הרשאה להעניק רמת גישה ${P.ROLE_LABELS[parsed]}`);
+      else role = parsed;
+    }
+
+    // מחלקה: מנהל מחלקה מייבא למחלקה שלו בלבד, והשרת כופה זאת
+    let departmentId = scoped ? actor.departmentId : null;
+    let departmentLabel = scoped ? actor.department : null;
+    if (!scoped && headers.department !== undefined && cell('department')) {
+      const found = byName.get(normaliseHeader(cell('department')));
+      if (!found) errors.push(`המחלקה "${cell('department')}" אינה קיימת במערכת`);
+      else { departmentId = found.id; departmentLabel = found.name; }
+    }
+    // מנהל מחלקה חייב שיוך, בדיוק כמו בהוספה ידנית
+    if (role === 'manager' && !departmentId) errors.push('מנהל מחלקה חייב שיוך למחלקה — יש למלא עמודת מחלקה');
+
+    out.push({ line, name, email, phone, officePhone, role, roleLabel: P.ROLE_LABELS[role], departmentId, department: departmentLabel, errors });
+  });
+
+  if (!out.length) throw badRequest('לא נמצאו שורות נתונים בקובץ');
+  return {
+    columns: Object.fromEntries(Object.entries(IMPORT_COLUMNS).map(([f, s]) => [f, { label: s.label, found: headers[f] !== undefined }])),
+    rows: out,
+    validCount: out.filter((r) => !r.errors.length).length,
+    errorCount: out.filter((r) => r.errors.length).length
+  };
+}
+
+/**
+ * ‎commit=false‎ (ברירת המחדל) — בדיקה בלבד, ואין כתיבה.
+ * ‎commit=true‎ — יצירת השורות התקינות. שורות פסולות מדולגות ומדווחות, ולא
+ * מפילות את כל הייבוא: מי שהעלה קובץ של חמישים אנשים לא צריך להתחיל מחדש
+ * בגלל כתובת שגויה אחת.
+ */
+router.post('/api/admin/users/import', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  requirePerm(actor, 'manage_users');
+  const b = await readJson(req);
+
+  const raw = String(b.data ?? '');
+  const base64 = raw.includes(',') ? raw.slice(raw.indexOf(',') + 1) : raw;
+  const buffer = Buffer.from(base64, 'base64');
+  if (!buffer.length) throw badRequest('לא נשלח קובץ');
+  const maxMb = Number(D.getSetting('max_upload_mb', 25));
+  if (buffer.length > maxMb * 1024 * 1024) throw badRequest(`הקובץ גדול מ-${maxMb}MB`);
+
+  let rows;
+  try {
+    rows = Spreadsheet.parse(buffer, String(b.filename ?? ''));
+  } catch (err) {
+    throw badRequest(`לא ניתן לקרוא את הקובץ: ${err.message}`);
+  }
+
+  const analysis = analyseImport(actor, rows);
+  if (!b.commit) return sendJson(res, 200, { ...analysis, committed: false });
+
+  const created = [];
+  const failed = [];
+  for (const row of analysis.rows) {
+    if (row.errors.length) { failed.push({ line: row.line, email: row.email, reason: row.errors[0] }); continue; }
+    try {
+      // סיסמה אקראית שאיש אינו יודע — הכניסה דרך קישור ההזמנה
+      const password = crypto.randomBytes(24).toString('base64url');
+      const result = D.run(
+        'INSERT INTO users (full_name, email, password_hash, role, department, status, created_at) VALUES (?,?,?,?,?,?,?)',
+        row.name, row.email, D.hashPassword(password), row.role, departmentName(row.departmentId), 'active', D.nowIso()
+      );
+      const userId = Number(result.lastInsertRowid);
+      D.run('UPDATE users SET department_id = ?, phone = ?, office_phone = ? WHERE id = ?', row.departmentId, row.phone, row.officePhone ?? '', userId);
+      if (row.role === 'manager' && row.departmentId) {
+        D.run('UPDATE departments SET manager_user_id = ? WHERE id = ?', userId, row.departmentId);
+      }
+
+      const invite = b.invite === false ? null : await Invites.createAndSend({
+        targetType: 'user',
+        targetId: userId,
+        email: row.email,
+        recipientName: row.name,
+        inviter: { id: actor.id, name: actor.name, email: actor.email },
+        baseUrl: Google.publicBase(req)
+      });
+      created.push({ line: row.line, userId, name: row.name, email: row.email, emailSent: !!invite?.emailSent, link: invite?.link ?? null });
+    } catch (err) {
+      failed.push({ line: row.line, email: row.email, reason: err.message });
+    }
+  }
+
+  sendJson(res, 200, { committed: true, created, failed, createdCount: created.length, failedCount: failed.length });
+});
+
+router.post('/api/admin/users', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  requirePerm(actor, 'manage_users');
+  const b = await readJson(req);
+  const name = String(b.name ?? '').trim();
+  const email = String(b.email ?? '').trim().toLowerCase();
+  if (!name || !email) throw badRequest('נדרשים שם ואימייל');
+  if (D.get('SELECT 1 FROM users WHERE lower(email)=?', email) || D.get('SELECT 1 FROM vendors WHERE lower(email)=?', email)) {
+    throw badRequest('כתובת האימייל כבר קיימת במערכת');
+  }
+  if (!P.INTERNAL_ROLES.includes(b.role)) throw badRequest('רמת גישה לא תקינה');
+  if (!P.mayManageRole(actor, b.role)) {
+    throw forbidden(`אין לך הרשאה להעניק רמת גישה ${P.ROLE_LABELS[b.role]}`);
+  }
+
+  // מנהל מחלקה — רק במחלקה שלו או בתת-מחלקה שלה. נכפה ולא רק נבדק.
+  let departmentId = isDeptManager(actor)
+    ? managerDepartmentChoice(actor, b.departmentId, actor.departmentId)
+    : resolveDepartment(actor, b);
+
+  // מנהל מחלקה חייב מחלקה: או קיימת שנבחרה, או חדשה שהוא יהיה המנהל שלה
+  if (b.role === 'manager' && !departmentId) {
+    throw badRequest('משתמש ברמת מנהל מחלקה חייב להיות משויך למחלקה. יש לבחור מחלקה קיימת או להגדיר מחלקה חדשה.');
+  }
+
+  // נבדק לפני היצירה — מספר שגוי לא אמור להשאיר משתמש חצי-שמור
+  const phone = userPhone(b.phone, 0);
+  const officePhone = officePhoneOf(b.officePhone);
+  const workEmail = workEmailOf(b.workEmail, 0);
+
+  // בלי סיסמה מפורשת נקבעת סיסמה אקראית שאיש אינו יודע —
+  // הכניסה נעשית דרך קישור ההזמנה, שבו המשתמש קובע סיסמה בעצמו
+  const password = b.password || crypto.randomBytes(24).toString('base64url');
+  const result = D.run(
+    'INSERT INTO users (full_name, email, password_hash, role, department, status, created_at) VALUES (?,?,?,?,?,?,?)',
+    name, email, D.hashPassword(password), b.role, departmentName(departmentId), 'active', D.nowIso()
+  );
+  const newUserId = Number(result.lastInsertRowid);
+  D.run('UPDATE users SET department_id = ?, phone = ?, office_phone = ?, work_email = ? WHERE id = ?', departmentId, phone, officePhone, workEmail, newUserId);
+  if (b.fieldWorker === true) D.run('UPDATE users SET field_worker = 1 WHERE id = ?', newUserId);
+  if (b.secretary === true) D.run('UPDATE users SET is_secretary = 1 WHERE id = ?', newUserId);
+  if (typeof b.tracker === 'boolean') D.run('UPDATE users SET tracker_access = ? WHERE id = ?', b.tracker ? 1 : 0, newUserId);
+  if (b.zoomUserId && D.get('SELECT 1 FROM zoom_users WHERE id = ?', String(b.zoomUserId))) D.run('UPDATE users SET zoom_user_id = ? WHERE id = ?', String(b.zoomUserId), newUserId);
+
+  // מנהל מחלקה נרשם כמנהל של אותה מחלקה
+  if (b.role === 'manager' && departmentId) {
+    D.run('UPDATE departments SET manager_user_id = ? WHERE id = ?', newUserId, departmentId);
+  }
+
+  const invite = b.invite === false ? null : await Invites.createAndSend({
+    targetType: 'user',
+    targetId: newUserId,
+    email,
+    recipientName: name,
+    inviter: { id: actor.id, name: actor.name, email: actor.email },
+    baseUrl: Google.publicBase(req)
+  });
+
+  sendJson(res, 201, { ok: true, userId: newUserId, invite });
+});
+
+/**
+ * ההרשאות האישיות של משתמש. מנהל מחלקה מעניק אותן לעובדים שלו, ומנהל
+ * מערכת ומעלה לכל אחד. ההגבלה זהה לזו של עריכת המשתמש עצמו.
+ */
+router.put('/api/admin/users/:id/grants', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  requirePerm(actor, 'manage_users');
+  const user = D.get('SELECT * FROM users WHERE id = ?', Number(ctx.params.id));
+  if (!user) throw notFound('המשתמש לא נמצא');
+  assertMayManageUser(actor, user);
+
+  const { grants } = await readJson(req);
+  const wanted = Array.isArray(grants) ? grants.filter((g) => P.GRANT_KEYS.includes(g)) : [];
+
+  // הרשאות אישיות נועדו להרחיב עובד פנימי; לתפקידים גבוהים הן חסרות משמעות.
+  // ניקוי מותר תמיד — עובד שהועלה לתפקיד גבוה נשאר אחרת עם הרשאות ישנות,
+  // והשמירה בכרטיס שלו נכשלת
+  if (user.role !== 'employee' && wanted.length) throw badRequest('הרשאות אישיות ניתנות לעובד פנימי בלבד');
+
+  D.run('DELETE FROM user_grants WHERE user_id = ?', user.id);
+  for (const key of wanted) {
+    D.run('INSERT INTO user_grants (user_id, grant_key, granted_by, created_at) VALUES (?,?,?,?)',
+      user.id, key, actor.id, D.nowIso());
+  }
+
+  sendJson(res, 200, { grants: wanted });
+});
+
+/** שליחה חוזרת של הזמנה למשתמש או לספק קיים */
+router.post('/api/admin/invite', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  const b = await readJson(req);
+  const targetType = b.targetType === 'vendor' ? 'vendor' : 'user';
+
+  if (targetType === 'user') requireFullPerm(actor, 'manage_users');
+  else requirePerm(actor, 'assign_task_to_vendor');
+
+  const account = targetType === 'user'
+    ? D.get('SELECT id, full_name AS name, email FROM users WHERE id = ?', Number(b.id))
+    : D.get('SELECT id, name, email FROM vendors WHERE id = ?', Number(b.id));
+  if (!account) throw notFound('החשבון לא נמצא');
+
+  const invite = await Invites.createAndSend({
+    targetType,
+    targetId: account.id,
+    email: account.email,
+    recipientName: account.name,
+    inviter: { id: actor.id, name: actor.name, email: actor.email },
+    baseUrl: Google.publicBase(req)
+  });
+
+  sendJson(res, 200, { invite });
+});
+
+router.patch('/api/admin/users/:id', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  requirePerm(actor, 'manage_users');
+  const user = D.get('SELECT * FROM users WHERE id = ?', Number(ctx.params.id));
+  if (!user) throw notFound();
+  const b = await readJson(req);
+  if (b.role && !P.INTERNAL_ROLES.includes(b.role)) throw badRequest('רמת גישה לא תקינה');
+  if (user.id === actor.id && b.status === 'inactive') throw badRequest('לא ניתן להשבית את החשבון שלך');
+
+  assertMayManageUser(actor, user);
+  if (b.role && b.role !== user.role && !P.mayManageRole(actor, b.role)) {
+    throw forbidden(`אין לך הרשאה להעניק רמת גישה ${P.ROLE_LABELS[b.role]}`);
+  }
+
+  // מנהל מחלקה אינו משנה תפקיד ואינו מעביר בין מחלקות
+  let targetDepartmentId = isDeptManager(actor)
+    ? managerDepartmentChoice(actor, b.departmentId, user.department_id)
+    : (b.departmentId !== undefined || b.newDepartmentName ? resolveDepartment(actor, b) : user.department_id);
+  if (isDeptManager(actor)) b.role = 'employee';
+
+  const nextRole = b.role ?? user.role;
+  if (nextRole === 'manager' && !targetDepartmentId) {
+    throw badRequest('משתמש ברמת מנהל מחלקה חייב להיות משויך למחלקה.');
+  }
+  D.run(
+    'UPDATE users SET full_name = ?, email = ?, role = ?, department = ?, department_id = ?, status = ? WHERE id = ?',
+    b.name ?? user.full_name, (b.email ?? user.email).toLowerCase(), nextRole,
+    departmentName(targetDepartmentId), targetDepartmentId, b.status ?? user.status, user.id
+  );
+
+  // שינוי תפקיד לניהול מחלקה רושם אותו כמנהל שלה; ירידה מהתפקיד משחררת
+  if (nextRole === 'manager' && targetDepartmentId) {
+    D.run('UPDATE departments SET manager_user_id = ? WHERE id = ?', user.id, targetDepartmentId);
+  } else if (user.role === 'manager' && nextRole !== 'manager') {
+    D.run('UPDATE departments SET manager_user_id = NULL WHERE manager_user_id = ?', user.id);
+  }
+  if (b.password) D.run('UPDATE users SET password_hash = ? WHERE id = ?', D.hashPassword(b.password), user.id);
+  if (typeof b.fieldWorker === 'boolean') D.run('UPDATE users SET field_worker = ? WHERE id = ?', b.fieldWorker ? 1 : 0, user.id);
+  if (typeof b.secretary === 'boolean') D.run('UPDATE users SET is_secretary = ? WHERE id = ?', b.secretary ? 1 : 0, user.id);
+  if (typeof b.tracker === 'boolean') D.run('UPDATE users SET tracker_access = ? WHERE id = ?', b.tracker ? 1 : 0, user.id);
+  if (b.zoomUserId !== undefined) {
+    const z = b.zoomUserId ? D.get('SELECT id FROM zoom_users WHERE id = ?', String(b.zoomUserId)) : null;
+    if (b.zoomUserId && !z) throw badRequest('משתמש ה-Zoom שנבחר אינו קיים — רעננו את רשימת משתמשי ה-Zoom');
+    D.run('UPDATE users SET zoom_user_id = ? WHERE id = ?', z?.id ?? null, user.id);
+  }
+  if (b.phone !== undefined) D.run('UPDATE users SET phone = ? WHERE id = ?', userPhone(b.phone, user.id), user.id);
+  if (b.officePhone !== undefined) D.run('UPDATE users SET office_phone = ? WHERE id = ?', officePhoneOf(b.officePhone), user.id);
+  if (b.workEmail !== undefined) D.run('UPDATE users SET work_email = ? WHERE id = ?', workEmailOf(b.workEmail, user.id), user.id);
+  sendJson(res, 200, { ok: true });
+});
+
+/**
+ * מה יקרה למחיקת משתמש — כדי שהמסך ישאל על העברת משימות רק כשיש מה להעביר.
+ */
+function userWorkload(userId) {
+  const openTasks = D.get(
+    `SELECT COUNT(*) c FROM tasks t
+       LEFT JOIN board_columns bc ON bc.board_id = t.board_id AND bc.key = t.status
+      WHERE t.archived = 0 AND COALESCE(bc.is_final, 0) = 0
+        AND ((t.assignee_type = 'user' AND t.assignee_id = ?)
+          OR t.id IN (SELECT task_id FROM task_assignees WHERE assignee_type = 'user' AND assignee_id = ?))`,
+    userId, userId).c;
+  const allTasks = D.get(
+    "SELECT COUNT(*) c FROM tasks WHERE assignee_type = 'user' AND assignee_id = ?", userId).c;
+  const projects = D.get('SELECT COUNT(*) c FROM projects WHERE manager_id = ?', userId).c;
+  return { openTasks, allTasks, projects };
+}
+
+/** קבצי קבלת הסחורה של המשתמש בדיסק (‎uploads/goods-receipt/u<id>-*‎) */
+function removeGoodsReceiptFiles(userId) {
+  if (!Number.isInteger(userId) || userId <= 0) return;
+  const dir = path.join(D.UPLOADS_DIR, 'goods-receipt');
+  let names;
+  try { names = fs.readdirSync(dir); } catch { return; } // אין תיקייה — אין קבצים
+  const prefix = `u${userId}-`;
+  for (const name of names) {
+    if (!name.startsWith(prefix) || name !== path.basename(name)) continue;
+    try { fs.unlinkSync(path.join(dir, name)); } catch (err) {
+      console.error(`[משימון] מחיקת קובץ קבלת סחורה של משתמש #${userId}:`, err.message);
+    }
+  }
+}
+
+router.get('/api/admin/users/:id/delete-check', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  requireFullPerm(actor, 'manage_users');
+  const user = D.get('SELECT * FROM users WHERE id = ?', Number(ctx.params.id));
+  if (!user) throw notFound('המשתמש לא נמצא');
+  assertMayManageUser(actor, user);
+  sendJson(res, 200, userWorkload(user.id));
+});
+
+/**
+ * מחיקת משתמש לצמיתות.
+ *
+ * המשימות שלו אינן נמחקות — הן של הארגון. מי שיש לו משימות פתוחות חייב
+ * לקבל מחליף (‎transferTo‎), אחרת המשימות נשארות בלי אחראי ואיש אינו רואה
+ * אותן. משימות סגורות בלי מחליף נשארות עם השם שנמחק ריק. התגובות וההיסטוריה
+ * נשמרות כפי שהן — היומן מחזיק את השם בזמן הפעולה.
+ *
+ * מידע אישי נמחק: הודעות הוואטסאפ שלו, יומן הבוט ויומן הסוכנים, ההגדרות
+ * האישיות וקבצי קבלת הסחורה. בקשות ה-AI עוברות למחליף; בלי מחליף — נמחקות.
+ *
+ * מי שרק עזב — עדיף להשבית (סטטוס "לא פעיל"): הכניסה נחסמת וההיסטוריה נשמרת.
+ */
+router.delete('/api/admin/users/:id', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  requireFullPerm(actor, 'manage_users');
+  const user = D.get('SELECT * FROM users WHERE id = ?', Number(ctx.params.id));
+  if (!user) throw notFound('המשתמש לא נמצא');
+  if (user.id === actor.id) throw badRequest('לא ניתן למחוק את החשבון שלך');
+  assertMayManageUser(actor, user);
+
+  const b = await readJson(req).catch(() => ({}));
+  let heir = null;
+  if (b?.transferTo) {
+    heir = D.get("SELECT * FROM users WHERE id = ? AND status = 'active' AND signup_at IS NULL", Number(b.transferTo));
+    if (!heir || heir.id === user.id) throw badRequest('המשתמש שנבחר לקבלת המשימות אינו תקין');
+    if (isDeptManager(actor) && !P.inActorDepartments(actor, heir.department_id ?? null)) {
+      throw forbidden('מנהל מחלקה רשאי להעביר משימות רק לעובדים במחלקה שלו');
+    }
+  }
+
+  const load = userWorkload(user.id);
+  if (load.openTasks && !heir) {
+    throw badRequest(`ל${user.full_name} יש ${load.openTasks} משימות פתוחות — יש לבחור למי להעביר אותן`);
+  }
+
+  const id = user.id;
+  const heirId = heir?.id ?? null;
+  D.db.exec('BEGIN');
+  try {
+    if (heirId) {
+      // אחראי נוסף שכבר רשום גם אצל המחליף — נמחק ולא מועבר, אחרת המפתח מתנגש
+      D.run(`DELETE FROM task_assignees WHERE assignee_type = 'user' AND assignee_id = ?
+               AND task_id IN (SELECT task_id FROM task_assignees WHERE assignee_type = 'user' AND assignee_id = ?)`, id, heirId);
+      D.run("UPDATE task_assignees SET assignee_id = ? WHERE assignee_type = 'user' AND assignee_id = ?", heirId, id);
+      D.run("UPDATE tasks SET assignee_id = ? WHERE assignee_type = 'user' AND assignee_id = ?", heirId, id);
+    } else {
+      D.run("DELETE FROM task_assignees WHERE assignee_type = 'user' AND assignee_id = ?", id);
+      D.run("UPDATE tasks SET assignee_type = NULL, assignee_id = NULL WHERE assignee_type = 'user' AND assignee_id = ?", id);
+    }
+    // הפניות בלי ‎ON DELETE‎ — היו חוסמות את המחיקה
+    D.run('UPDATE projects SET manager_id = ? WHERE manager_id = ?', heirId, id);
+    D.run('UPDATE projects SET created_by = NULL WHERE created_by = ?', id);
+    D.run('UPDATE tasks SET created_by = NULL WHERE created_by = ?', id);
+    D.run('UPDATE task_assignees SET added_by = NULL WHERE added_by = ?', id);
+    D.run('UPDATE project_images SET uploaded_by = NULL WHERE uploaded_by = ?', id);
+    if (heirId) {
+      D.run('UPDATE ai_requests SET owner_id = ? WHERE owner_id = ?', heirId, id);
+    } else {
+      // בלי מחליף — בקשות ה-AI וההודעות שלהן נמחקות, ולא עוברות למנהל המוחק (המשימה עצמה נשארת)
+      D.run('DELETE FROM ai_messages WHERE request_id IN (SELECT id FROM ai_requests WHERE owner_id = ?)', id);
+      D.run('DELETE FROM ai_requests WHERE owner_id = ?', id);
+    }
+    // מידע אישי בבוט ובסוכנים — נמחק ולא רק מנותק מהמשתמש
+    D.run("DELETE FROM wa_messages WHERE user_id = ? OR (? <> '' AND sender_phone = ?)", id, user.phone ?? '', user.phone ?? '');
+    D.run('DELETE FROM wa_log WHERE user_id = ?', id);
+    D.run('DELETE FROM agent_log WHERE user_id = ?', id);
+    // הגדרות לפי משתמש (קבלת סחורה, דרישת רכש, העדפות פריוריטי, ידע ארגוני)
+    D.run('DELETE FROM settings WHERE key IN (?, ?, ?, ?, ?)',
+      `goods_receipt:${id}`, `goods_receipt_done:${id}`, `goods_receipt_prefs:${id}`,
+      `purchase_demand:${id}`, `org_distill_${id}`);
+    // שורות שמזוהות לפי סוג ומזהה, בלי מפתח זר
+    D.run("DELETE FROM sessions WHERE actor_type = 'user' AND actor_id = ?", id);
+    D.run("DELETE FROM notifications WHERE target_type = 'user' AND target_id = ?", id);
+    D.run("DELETE FROM invites WHERE target_type = 'user' AND target_id = ?", id);
+    D.run('DELETE FROM users WHERE id = ?', id);
+    D.db.exec('COMMIT');
+  } catch (err) {
+    D.db.exec('ROLLBACK');
+    throw err;
+  }
+
+  removeGoodsReceiptFiles(id);
+
+  D.audit(null, actorRef(actor), 'user_deleted',
+    `נמחק המשתמש ${user.full_name} <${user.email}>` + (heir ? `; המשימות הועברו ל${heir.full_name}` : ''));
+  console.log(`[משימון] נמחק משתמש #${id}`);
+  sendJson(res, 200, { ok: true, transferred: heir ? load.allTasks : 0 });
+});
+
+/**
+ * הטלפון של עובד נשמר מנורמל (‎972541234567‎), כי כך בוט הוואטסאפ מקבל אותו.
+ * אותו מספר אצל שני עובדים היה מערבב ביניהם — הבוט לא היה יודע מי כתב.
+ */
+function userPhone(raw, userId) {
+  if (!String(raw ?? '').trim()) return '';
+  const phone = WhatsApp.normalizePhone(raw);
+  if (!phone) throw badRequest(`מספר הטלפון "${raw}" אינו תקין`);
+  const other = D.get('SELECT full_name FROM users WHERE phone = ? AND id <> ?', phone, userId);
+  if (other) throw badRequest(`המספר כבר רשום אצל ${other.full_name}`);
+  return phone;
+}
+
+/**
+ * טלפון במשרד / שלוחה — טקסט חופשי, כי כך הוא נאמר: "03-1234567 שלוחה 12",
+ * או רק "212". נשמר כפי שהוקלד; נדרשת רק ספרה אחת לפחות, שלא ייכנס "אין".
+ */
+/**
+ * המייל הארגוני / המחלקתי — התיבה שמחוברת למשימון. ריק מותר (= כמו מייל
+ * הכניסה). לא כתובת פרטית, ולא של עובד אחר.
+ */
+function workEmailOf(raw, userId) {
+  const v = String(raw ?? '').trim().toLowerCase();
+  if (!v) return '';
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)) throw badRequest('המייל הארגוני אינו תקין');
+  if (Gmail.isPersonalEmail(v)) throw badRequest(`${v} היא כתובת פרטית — המייל הארגוני הוא של הארגון או של המחלקה`);
+  if (D.get('SELECT id FROM users WHERE id <> ? AND (lower(work_email) = ? OR lower(email) = ?)', userId ?? 0, v, v)) throw badRequest('המייל הארגוני הזה כבר משויך לעובד אחר');
+  return v;
+}
+
+function officePhoneOf(raw) {
+  const value = String(raw ?? '').replace(/\s+/g, ' ').trim().slice(0, 40);
+  if (value && !/\d/.test(value)) throw badRequest(`הטלפון במשרד "${value}" אינו תקין`);
+  return value;
+}
+
+// ---------------------------------------------------------------------------
+// ניהול ספקים
+// ---------------------------------------------------------------------------
+
+router.post('/api/vendors', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  requirePerm(actor, 'assign_task_to_vendor');
+  const b = await readJson(req);
+  const name = String(b.name ?? '').trim();
+  const email = String(b.email ?? '').trim().toLowerCase();
+  if (!name || !email) throw badRequest('נדרשים שם ספק ואימייל');
+  if (D.get('SELECT 1 FROM vendors WHERE lower(email)=?', email) || D.get('SELECT 1 FROM users WHERE lower(email)=?', email)) {
+    throw badRequest('כתובת האימייל כבר קיימת במערכת');
+  }
+  const password = b.password || crypto.randomBytes(24).toString('base64url');
+  const r = D.run(
+    'INSERT INTO vendors (name, contact_name, email, phone, password_hash, status, read_only, created_at) VALUES (?,?,?,?,?,?,?,?)',
+    name, b.contactName ?? '', email, b.phone ?? '', D.hashPassword(password),
+    'active', b.readOnly ? 1 : 0, D.nowIso()
+  );
+  const vendorId = Number(r.lastInsertRowid);
+  // כל ספק מקבל בורד ייעודי משלו
+  D.createVendorBoard(vendorId, name);
+
+  const invite = b.invite === false ? null : await Invites.createAndSend({
+    targetType: 'vendor',
+    targetId: vendorId,
+    email,
+    recipientName: b.contactName || name,
+    inviter: { id: actor.id, name: actor.name, email: actor.email },
+    baseUrl: Google.publicBase(req)
+  });
+
+  sendJson(res, 201, { ok: true, invite });
+});
+
+router.patch('/api/vendors/:id', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  requirePerm(actor, 'assign_task_to_vendor');
+  const vendor = D.get('SELECT * FROM vendors WHERE id = ?', Number(ctx.params.id));
+  if (!vendor) throw notFound();
+  const b = await readJson(req);
+  D.run(
+    'UPDATE vendors SET name = ?, contact_name = ?, email = ?, phone = ?, status = ?, read_only = ? WHERE id = ?',
+    b.name ?? vendor.name, b.contactName ?? vendor.contact_name,
+    (b.email ?? vendor.email).toLowerCase(), b.phone ?? vendor.phone,
+    b.status ?? vendor.status, b.readOnly !== undefined ? (b.readOnly ? 1 : 0) : vendor.read_only, vendor.id
+  );
+  if (b.password) D.run('UPDATE vendors SET password_hash = ? WHERE id = ?', D.hashPassword(b.password), vendor.id);
+  if (b.name && b.name !== vendor.name) {
+    D.run("UPDATE boards SET name = ? WHERE type='vendor' AND vendor_id = ?", `בורד ספק — ${b.name}`, vendor.id);
+  }
+  sendJson(res, 200, { ok: true });
+});
+
+// ---------------------------------------------------------------------------
+// הגדרות ומנוע כללים — מנהל מערכת בלבד
+// ---------------------------------------------------------------------------
+
+router.get('/api/admin/settings', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  requireFullPerm(actor, 'manage_automations');
+  let dbSizeKb = null;
+  try {
+    dbSizeKb = Math.round(fs.statSync(D.DB_PATH).size / 1024);
+  } catch { /* עדיין לא נוצר */ }
+
+  sendJson(res, 200, {
+    settings: D.allSettings(),
+    defaults: D.DEFAULT_SETTINGS,
+    // מצב החיבורים החיצוניים. בלי התצוגה הזו, מפתח שנמחק בשרת מבטל תכונה
+    // שלמה בלי שום סימן בממשק — בדיוק מה שקרה לכניסה עם Google.
+    integrations: {
+      google: {
+        enabled: Google.isEnabled(),
+        missing: (process.env.GOOGLE_LOGIN_CLIENT_ID
+          ? ['GOOGLE_LOGIN_CLIENT_ID', 'GOOGLE_LOGIN_CLIENT_SECRET']
+          : ['GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET']).filter((k) => !process.env[k])
+      },
+      mail: {
+        ...Mailer.status(),
+        missing: ['SMTP_HOST', 'SMTP_USER', 'SMTP_PASS'].filter((k) => !process.env[k])
+      },
+      publicUrl: D.getSetting('public_url', '') || process.env.PUBLIC_URL || null,
+      // משימות AI: המודל
+      ai: {
+        ...Claude.status(),
+        missing: ['ANTHROPIC_API_KEY'].filter((k) => !process.env[k])
+      },
+      gmail: {
+        enabled: Gmail.isEnabled(),
+        connected: D.get("SELECT COUNT(*) c FROM mail_connections WHERE state = 'ok'").c
+      },
+      // Zoom של החברה — קישורים לפגישות שנקבעות ממשימון
+      zoom: {
+        enabled: Zoom.isEnabled(),
+        missing: Zoom.missing(),
+        accounts: Zoom.accounts(),
+        users: D.get('SELECT COUNT(*) c FROM zoom_users').c,
+        linked: D.get("SELECT COUNT(*) c FROM users WHERE zoom_user_id IS NOT NULL AND status = 'active'").c
+      }
+    },
+    storage: {
+      ...D.STORAGE,
+      dbSizeKb,
+      installedAt: D.getSetting('installed_at', null),
+      bootCount: Number(D.getSetting('boot_count', 0))
+    },
+    rules: D.all('SELECT * FROM automation_rules ORDER BY id').map((r) => ({
+      id: r.id, name: r.name, triggerKey: r.trigger_key, actionKey: r.action_key,
+      params: JSON.parse(r.params), enabled: !!r.enabled, builtIn: !!r.built_in, lastRunAt: r.last_run_at
+    })),
+    catalog: Rules.catalog(),
+    matrix: P.matrixForDisplay(),
+    roles: P.ROLES,
+    roleLabels: P.ROLE_LABELS
+  });
+});
+
+router.put('/api/admin/settings', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  requireFullPerm(actor, 'manage_automations');
+  const b = await readJson(req);
+  for (const [key, value] of Object.entries(b.settings ?? {})) {
+    if (!(key in D.DEFAULT_SETTINGS)) continue;
+    // כתובת המערכת נכנסת לקישורי ההזמנות — סלאש עודף או כתובת בלי סכימה
+    // היו מייצרים קישור שבור אצל הנמען
+    if (key === 'public_url') {
+      const clean = String(value ?? '').trim().replace(/\/+$/, '');
+      if (clean && !/^https?:\/\/[^\s/]+/.test(clean)) {
+        throw badRequest('כתובת המערכת חייבת להתחיל ב-https:// או ב-http://');
+      }
+      D.setSetting(key, clean);
+      continue;
+    }
+    D.setSetting(key, value);
+  }
+  if (b.settings?.scheduler_interval_minutes) Rules.start();
+  if (b.settings?.ai_poll_minutes) AiTasks.start();
+  sendJson(res, 200, { settings: D.allSettings() });
+});
+
+router.post('/api/admin/rules', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  requireFullPerm(actor, 'manage_automations');
+  const b = await readJson(req);
+  const cat = Rules.catalog();
+  if (!cat.triggers.some((t) => t.key === b.triggerKey)) throw badRequest('טריגר לא מוכר');
+  if (!cat.actions.some((a) => a.key === b.actionKey)) throw badRequest('פעולה לא מוכרת');
+  D.run(
+    'INSERT INTO automation_rules (name, trigger_key, params, action_key, enabled, built_in, created_at) VALUES (?,?,?,?,?,0,?)',
+    String(b.name ?? 'כלל חדש').trim(), b.triggerKey, JSON.stringify(b.params ?? {}), b.actionKey,
+    b.enabled === false ? 0 : 1, D.nowIso()
+  );
+  sendJson(res, 201, { ok: true });
+});
+
+router.patch('/api/admin/rules/:id', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  requireFullPerm(actor, 'manage_automations');
+  const rule = D.get('SELECT * FROM automation_rules WHERE id = ?', Number(ctx.params.id));
+  if (!rule) throw notFound();
+  const b = await readJson(req);
+  D.run(
+    'UPDATE automation_rules SET name = ?, params = ?, enabled = ? WHERE id = ?',
+    b.name ?? rule.name, JSON.stringify(b.params ?? JSON.parse(rule.params)),
+    b.enabled === undefined ? rule.enabled : (b.enabled ? 1 : 0), rule.id
+  );
+  sendJson(res, 200, { ok: true });
+});
+
+router.delete('/api/admin/rules/:id', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  requireFullPerm(actor, 'manage_automations');
+  const rule = D.get('SELECT * FROM automation_rules WHERE id = ?', Number(ctx.params.id));
+  if (!rule) throw notFound();
+  if (rule.built_in) throw badRequest('לא ניתן למחוק כלל מובנה — ניתן לכבות אותו');
+  D.run('DELETE FROM automation_rules WHERE id = ?', rule.id);
+  sendJson(res, 200, { ok: true });
+});
+
+/**
+ * אתחול תוכן המערכת — מוחק את כל המשימות, הפרויקטים, הספקים והמשתמשים
+ * למעט המשתמש המבצע. ההגדרות וכללי האוטומציה נשמרים.
+ * מיועד לניקוי נתוני ההדגמה לפני תחילת עבודה אמיתית.
+ */
+router.post('/api/admin/wipe', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  requireFullPerm(actor, 'manage_users');
+  const { confirm } = await readJson(req);
+  if (String(confirm ?? '').trim() !== 'אתחול') {
+    throw badRequest('נדרש אישור מפורש כדי לאתחל את המערכת');
+  }
+
+  const before = {
+    tasks: D.get('SELECT COUNT(*) c FROM tasks').c,
+    projects: D.get('SELECT COUNT(*) c FROM projects').c,
+    vendors: D.get('SELECT COUNT(*) c FROM vendors').c,
+    users: D.get('SELECT COUNT(*) c FROM users').c
+  };
+
+  // מחיקת הקבצים מהדיסק — מחיקת השורות לבדה משאירה אותם יתומים
+  for (const att of D.all('SELECT stored_name FROM attachments')) {
+    try {
+      fs.rmSync(path.join(D.UPLOADS_DIR, att.stored_name), { force: true });
+    } catch { /* הקובץ כבר אינו קיים */ }
+  }
+
+  // סדר המחיקה: המשימות תחילה, כדי שהמחיקה המדורגת תשחרר את לוג הבקרה
+  D.run('DELETE FROM tasks');
+  D.run('DELETE FROM audit_log');
+  D.run('DELETE FROM notifications');
+  D.run('DELETE FROM projects');
+  D.run('DELETE FROM vendors');          // גורר גם את בורדי הספקים
+  D.run('DELETE FROM templates');
+  D.run('DELETE FROM saved_filters');
+  D.run('DELETE FROM users WHERE id != ?', actor.id);
+  D.run("DELETE FROM sessions WHERE NOT (actor_type = 'user' AND actor_id = ?)", actor.id);
+
+  D.audit(null, actorRef(actor), 'system_wipe',
+    `אותחל תוכן המערכת: ${before.tasks} משימות, ${before.projects} פרויקטים, ${before.vendors} ספקים, ${before.users - 1} משתמשים`);
+
+  sendJson(res, 200, { ok: true, removed: { ...before, users: before.users - 1 } });
+});
+
+router.post('/api/admin/rules/run', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  requireFullPerm(actor, 'manage_automations');
+  sendJson(res, 200, { summary: Rules.runOnce() });
+});
+
+// --- עמודות מותאמות אישית לבורד ---
+
+router.post('/api/boards/:id/columns', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  requireFullPerm(actor, 'manage_automations');
+  const board = D.get('SELECT * FROM boards WHERE id = ?', Number(ctx.params.id));
+  if (!board) throw notFound();
+  const b = await readJson(req);
+  const label = String(b.label ?? '').trim();
+  if (!label) throw badRequest('נדרשת כותרת לעמודה');
+  const key = String(b.key ?? '').trim() || `col_${crypto.randomBytes(3).toString('hex')}`;
+  const maxPos = D.get('SELECT COALESCE(MAX(position), -1) p FROM board_columns WHERE board_id = ?', board.id).p;
+  const finalCol = D.get('SELECT position FROM board_columns WHERE board_id = ? AND is_final = 1', board.id);
+  const position = finalCol ? finalCol.position : maxPos + 1;
+  if (finalCol) D.run('UPDATE board_columns SET position = position + 1 WHERE board_id = ? AND position >= ?', board.id, position);
+  D.run('INSERT INTO board_columns (board_id, key, label, position, is_final, color) VALUES (?,?,?,?,0,?)',
+    board.id, key, label, position, hexColor(b.color) || '#8b5cf6');
+  sendJson(res, 201, { columns: columnsOf(board.id) });
+});
+
+/**
+ * שינוי סטטוס קיים — שם, צבע ומיקום בזרימה. המפתח עצמו אינו ניתן לשינוי:
+ * הוא שמור בכל משימה, בכל כלל אוטומציה ובכל מסנן שמור, ושינויו היה מנתק
+ * אותם מהסטטוס בלי שדבר על המסך ירמז על כך.
+ */
+router.patch('/api/boards/:boardId/columns/:id', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  requireFullPerm(actor, 'manage_automations');
+  const col = D.get('SELECT * FROM board_columns WHERE id = ? AND board_id = ?',
+    Number(ctx.params.id), Number(ctx.params.boardId));
+  if (!col) throw notFound('הסטטוס לא נמצא');
+  const b = await readJson(req);
+
+  const label = b.label !== undefined ? String(b.label).trim() : col.label;
+  if (!label) throw badRequest('נדרשת כותרת לסטטוס');
+  D.run('UPDATE board_columns SET label = ?, color = ? WHERE id = ?',
+    label, b.color !== undefined ? (hexColor(b.color) || col.color) : col.color, col.id);
+
+  // הזזה בזרימה: הסטטוס הסופי נשאר אחרון, אחרת הסדר מפסיק לתאר את התהליך
+  if (b.move === 'up' || b.move === 'down') {
+    const dir = b.move === 'up' ? -1 : 1;
+    const neighbour = D.get(
+      `SELECT * FROM board_columns WHERE board_id = ? AND is_final = ? AND position ${dir < 0 ? '<' : '>'} ?
+        ORDER BY position ${dir < 0 ? 'DESC' : 'ASC'} LIMIT 1`,
+      col.board_id, col.is_final, col.position
+    );
+    if (neighbour) {
+      D.run('UPDATE board_columns SET position = ? WHERE id = ?', neighbour.position, col.id);
+      D.run('UPDATE board_columns SET position = ? WHERE id = ?', col.position, neighbour.id);
+    }
+  }
+  sendJson(res, 200, { columns: columnsOf(col.board_id) });
+});
+
+/**
+ * מחיקת סטטוס. משימות שיושבות בו מועברות לסטטוס אחר שנבחר במפורש — מחיקה
+ * שמשאירה משימות עם סטטוס שאינו קיים מוציאה אותן מכל תצוגה ומכל דוח, והן
+ * נעלמות בלי שאיש שם לב.
+ */
+router.delete('/api/boards/:boardId/columns/:id', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  requireFullPerm(actor, 'manage_automations');
+  const col = D.get('SELECT * FROM board_columns WHERE id = ? AND board_id = ?',
+    Number(ctx.params.id), Number(ctx.params.boardId));
+  if (!col) throw notFound('הסטטוס לא נמצא');
+  if (col.is_final) throw badRequest('לא ניתן למחוק את הסטטוס הסופי — בלעדיו אי אפשר לסגור משימה');
+  if (D.get('SELECT COUNT(*) c FROM board_columns WHERE board_id = ?', col.board_id).c <= 2) {
+    throw badRequest('בבורד חייבים להישאר לפחות שני סטטוסים');
+  }
+
+  const inUse = D.get('SELECT COUNT(*) c FROM tasks WHERE board_id = ? AND status = ?', col.board_id, col.key).c;
+  const moveTo = String(new URL(req.url, 'http://x').searchParams.get('moveTo') ?? '');
+  if (inUse) {
+    const target = D.get('SELECT key FROM board_columns WHERE board_id = ? AND key = ? AND id <> ?',
+      col.board_id, moveTo, col.id);
+    if (!target) throw badRequest(`${inUse} משימות נמצאות בסטטוס הזה — יש לבחור לאיזה סטטוס להעביר אותן`);
+    D.run('UPDATE tasks SET status = ?, status_changed_at = ? WHERE board_id = ? AND status = ?',
+      target.key, D.nowIso(), col.board_id, col.key);
+  }
+  D.run('DELETE FROM board_columns WHERE id = ?', col.id);
+  sendJson(res, 200, { columns: columnsOf(col.board_id), moved: inUse });
+});
+
+// --- רשימת סטטוסי הבקרה ---
+
+/*
+ * הרשימה אישית: כל אחד בונה את שלו, ומחיל אותה על פרויקטים. אין כאן הרשאת
+ * ניהול — משתמש עורך את הרשימה שלו ואינו נוגע באחרת, וזה נאכף בכל שאילתה
+ * דרך ‎user_id‎.
+ */
+const hexOk = (v) => /^#[0-9a-fA-F]{6}$/.test(String(v ?? ''));
+
+router.get('/api/status-list', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  if (isVendor(actor)) throw forbidden();
+  sendJson(res, 200, {
+    statuses: statusList(actor.id),
+    palette: STATUS_PALETTE,
+    // הרשימות הקיימות בארגון, לבחירה בפרויקט
+    lists: D.all(
+      `SELECT u.id, u.full_name, COUNT(s.id) c
+         FROM users u JOIN task_statuses s ON s.user_id = u.id
+        WHERE u.status = 'active'
+        GROUP BY u.id ORDER BY u.full_name`
+    ).map((r) => ({ ownerId: r.id, ownerName: r.full_name, count: r.c }))
+  });
+});
+
+router.post('/api/status-list', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  if (isVendor(actor)) throw forbidden();
+  const b = await readJson(req);
+
+  // זריעה מהרשימה המוצעת, כדי שלא להתחיל מדף חלק
+  if (b.seed) {
+    if (statusList(actor.id).length) throw badRequest('לרשימה שלך יש כבר סטטוסים');
+    DEFAULT_STATUS_LIST.forEach((s, i) => D.run(
+      'INSERT INTO task_statuses (user_id, label, color, position, created_at) VALUES (?,?,?,?,?)',
+      actor.id, s.label, s.color, i, D.nowIso()
+    ));
+    return sendJson(res, 201, { statuses: statusList(actor.id) });
+  }
+
+  const label = String(b.label ?? '').trim();
+  if (!label) throw badRequest('נדרש שם לסטטוס');
+  if (!hexOk(b.color)) throw badRequest('נדרש צבע תקין');
+  const pos = D.get('SELECT COALESCE(MAX(position), -1) + 1 p FROM task_statuses WHERE user_id = ?', actor.id).p;
+  D.run('INSERT INTO task_statuses (user_id, label, color, position, created_at) VALUES (?,?,?,?,?)',
+    actor.id, label.slice(0, 60), String(b.color), pos, D.nowIso());
+  sendJson(res, 201, { statuses: statusList(actor.id) });
+});
+
+router.patch('/api/status-list/:id', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  const row = D.get('SELECT * FROM task_statuses WHERE id = ? AND user_id = ?', Number(ctx.params.id), actor.id);
+  if (!row) throw notFound('הסטטוס לא נמצא');
+  const b = await readJson(req);
+  const label = b.label !== undefined ? String(b.label).trim().slice(0, 60) : row.label;
+  if (!label) throw badRequest('נדרש שם לסטטוס');
+  const color = b.color !== undefined ? String(b.color) : row.color;
+  if (!hexOk(color)) throw badRequest('נדרש צבע תקין');
+  D.run('UPDATE task_statuses SET label = ?, color = ?, position = ? WHERE id = ?',
+    label, color, b.position !== undefined ? Number(b.position) : row.position, row.id);
+  sendJson(res, 200, { statuses: statusList(actor.id) });
+});
+
+router.delete('/api/status-list/:id', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  const row = D.get('SELECT * FROM task_statuses WHERE id = ? AND user_id = ?', Number(ctx.params.id), actor.id);
+  if (!row) throw notFound('הסטטוס לא נמצא');
+  /*
+   * מחיקה מותרת גם כשהסטטוס בשימוש. ‎ON DELETE SET NULL‎ מחזיר את המשימות
+   * ללא סטטוס במקום למנוע את המחיקה — חסימה הייתה מכריחה לעבור משימה-משימה
+   * כדי לתקן טעות בשם של סטטוס.
+   */
+  const inUse = D.get('SELECT COUNT(*) c FROM tasks WHERE track_status_id = ?', row.id).c;
+  D.run('DELETE FROM task_statuses WHERE id = ?', row.id);
+  sendJson(res, 200, { statuses: statusList(actor.id), cleared: inUse });
+});
+
+// --- ייצוא מסך הבקרה לאקסל ---
+
+/**
+ * אותה טבלה שעל המסך, כקובץ.
+ *
+ * נבנה בשרת ולא בדפדפן: הסינון לפי מה שהמשתמש רשאי לראות חייב להיאכף במקום
+ * שבו הוא נאכף בכל מקום אחר, וקובץ שנבנה בלקוח מכיל בהכרח רק את מה שכבר
+ * הגיע אליו — כלומר גם את מגבלות התצוגה, וגם אין בו ערובה לנכונות.
+ *
+ * החתכים זהים למסך במכוון: משימות-אב בלבד, בלי מה שהושלם, ולפי היקף
+ * "שלי" או כל הארגון. קובץ שמכיל משהו אחר ממה שנראה על המסך הוא מלכודת.
+ */
+router.get('/api/tracker/export', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  if (isVendor(actor) || !D.trackerAccess(actor.id)) throw forbidden();
+  const q = parseUrl(req).searchParams;
+  const projectId = q.get('projectId') ? Number(q.get('projectId')) : null;
+  /*
+   * שלושה חתכים, כמו במסך: שלי, המחלקה שלי, וכל הארגון. הקובץ חייב לצאת
+   * זהה למה שמוצג — אחרת מי שמוריד אקסל מקבל טבלה אחרת מזו שהסתכל עליה.
+   */
+  const scope = q.get('scope') === 'all' ? 'all'
+    : q.get('scope') === 'department' ? 'department' : 'mine';
+
+  const owned = scope === 'mine' ? ownedProjectIds(actor) : null;
+  // חתך המחלקה נמדד לפי האחראי, בדיוק כמו בלקוח
+  const team = scope === 'department'
+    ? new Set(D.all(`SELECT id FROM users WHERE department_id ${DEPT_IN}`, deptsParam(actor)).map((u) => u.id))
+    : null;
+  /*
+   * אותו כלל שבמסך: המחלקה היא העבודה של הצוות, בנפרד מהעבודה שלי. משימה
+   * שאני האחראי היחיד עליה כבר נמצאת בחתך "שלי", ומקומה אינו כאן — אלא אם
+   * יש עליה אחראי נוסף מהצוות, ואז זו עבודה משותפת.
+   */
+  const forTeam = (t) => {
+    const others = D.all(
+      'SELECT assignee_id FROM task_assignees WHERE task_id = ? AND assignee_type = ?', t.id, 'user'
+    ).filter((e) => team.has(e.assignee_id) && e.assignee_id !== actor.id);
+    if (t.assignee_type === 'user' && t.assignee_id === actor.id) return others.length > 0;
+    return team.has(t.assignee_id) || others.length > 0;
+  };
+
+  const rows = D.all(
+    `SELECT t.* FROM tasks t
+       JOIN boards b ON b.id = t.board_id
+      WHERE b.type = 'internal' AND t.archived = 0 AND t.parent_task_id IS NULL
+        ${projectId ? 'AND t.project_id = ?' : ''}
+      ORDER BY t.due_date IS NULL, t.due_date, t.id`,
+    ...(projectId ? [projectId] : [])
+  ).filter((t) => canSeeTask(actor, t))
+    .filter((t) => !columnMeta(t.board_id, t.status)?.is_final)
+    .filter((t) => !owned || owned.has(t.project_id))
+    .filter((t) => !team || forTeam(t));
+
+  const header = ['פרויקט', 'משימה', 'תאריך יעד', 'סטטוס בקרה', 'סטטוס מקוצר', 'סטטוס',
+    'תת-משימה', 'אחראי', 'אחראים נוספים', 'ספק', 'תאריך יעד של תת-המשימה'];
+  const body = rows.map((t) => {
+    const shaped = shapeTask(t, actor);
+    const sub = shaped.activeSubtask;
+    /*
+     * הספק, משני מקורות: אחראי נוסף על המשימה (המשימה נשארת בבורד הפנימי),
+     * או האחראי על תת-המשימה הפעילה. אותה גזירה שהעמודה במסך עושה.
+     */
+    const vendors = [
+      ...(shaped.extraAssignees ?? []).filter((e) => e.type === 'vendor').map((e) => e.name),
+      ...(sub?.assigneeType === 'vendor' ? [sub.assigneeName] : []),
+      ...(sub?.extraAssignees ?? []).filter((e) => e.type === 'vendor').map((e) => e.name)
+    ].filter(Boolean);
+    return [
+      shaped.projectName ?? 'ללא פרויקט',
+      shaped.title,
+      Rules.formatDate(t.due_date),
+      shaped.trackStatusLabel ?? '',
+      shaped.statusShort,
+      shaped.statusLabel,
+      sub ? sub.title : '',
+      sub ? (sub.assigneeName ?? '') : '',
+      (shaped.extraAssignees ?? []).filter((e) => e.type === 'user').map((e) => e.name).join(', '),
+      [...new Set(vendors)].join(', '),
+      sub ? Rules.formatDate(sub.dueDate) : ''
+    ];
+  });
+
+  const file = Xlsx.build([header, ...body], {
+    // מספר הרוחבים חייב להישאר זהה למספר הכותרות
+    sheetName: 'בקרת משימות',
+    widths: [20, 38, 14, 18, 30, 16, 34, 20, 24, 22, 16]
+  });
+  // התאריך בשם הקובץ, כדי ששני דוחות בתיקיית ההורדות לא יידרסו זה על זה
+  const stamp = D.nowIso().slice(0, 10);
+  res.writeHead(200, {
+    'content-type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    'content-length': file.length,
+    'content-disposition': `attachment; filename*=UTF-8''${encodeURIComponent(`בקרת משימות ${stamp}.xlsx`)}`,
+    'x-content-type-options': 'nosniff'
+  });
+  res.end(file);
+});
+
+// --- הרשמה להתראות דחיפה ---
+
+/*
+ * המפתח הציבורי גלוי בכוונה — הוא נמסר לדפדפן בהרשמה, וזה תפקידו. הפרטי
+ * לעולם אינו יוצא מהשרת.
+ */
+router.get('/api/push/key', async (req, res, ctx) => {
+  ctx.requireActor();
+  sendJson(res, 200, { key: Push.publicKey() });
+});
+
+router.post('/api/push/subscribe', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  // לספק אין אפליקציה מותקנת, ואין לו מסכים שמצדיקים דחיפה
+  if (isVendor(actor)) throw forbidden();
+  const b = await readJson(req);
+  if (!Push.saveSubscription(actor.id, b.subscription ?? b)) {
+    throw badRequest('פרטי ההרשמה להתראות אינם תקינים');
+  }
+  sendJson(res, 200, { ok: true });
+});
+
+router.delete('/api/push/subscribe', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  const b = await readJson(req).catch(() => ({}));
+  const endpoint = String(b.endpoint ?? '').trim();
+  if (!endpoint) throw badRequest('נדרש מזהה ההרשמה');
+  /*
+   * מוגבל להרשמות של המבקש: ‎endpoint‎ הוא כתובת ציבורית, ובלי התנאי הזה
+   * מי שהשיג אחת היה יכול לבטל התראות של אדם אחר.
+   */
+  D.run('DELETE FROM push_subscriptions WHERE endpoint = ? AND user_id = ?', endpoint, actor.id);
+  sendJson(res, 200, { ok: true });
+});
+
+// --- העדפות תצוגה אישיות ---
+
+/*
+ * העדפות ממשק, לא נתונים: חתך הלוח שהמשתמש עבד בו, מצב התצוגה וכדומה.
+ * נשמרות בשרת כדי שיילכו אחריו בין מכשירים ובין דפדפנים — ‎localStorage‎
+ * לבדו נשאר במכשיר אחד, וזו הייתה הסיבה שההעדפה "לא נשמרה".
+ *
+ * המפתחות מוגבלים לרשימה סגורה כדי שנקודת הקצה לא תהפוך לאחסון חופשי
+ * שכל אחד יכול למלא, והערך מוגבל בגודל מאותה סיבה.
+ */
+const PREF_KEYS = [
+  'boardFilters', 'boardView', 'projectScope', 'sidebar', 'mobileFilter', 'projectOrder',
+  // אילו סוגי התראות קופצים כהתראת מערכת ההפעלה — בחירה אישית לכל משתמש
+  'notifyKinds',
+  // לחיצה על מייל באלפון: 'gmail' או 'outlook', כשבחרו "לזכור את הבחירה"
+  'mailClient',
+  // משימה ששויכה לי: גם במייל, גם מבוט הוואטסאפ — ‎{ email, whatsapp }‎
+  'assignChannels',
+  // "תובנות ב-Today" — במסך, בבוט ובמייל הבוקר — ‎{ insightsInToday }‎
+  'botPrefs',
+  // חתך הפרויקט וההיקף במסך בקרת המשימות
+  'trackerProject', 'trackerScope',
+  // בחירת העמודות, סדרן והמיון בטבלת הבקרה
+  'trackerColumns',
+  // אילו קבוצות פרויקט-אב מקופלות בטבלת הבקרה
+  'trackerCollapsed',
+  // לוח החלונות בדף הבית — מיקום וגודל לכל חלון (מחשב, מסך בינוני, טלפון) ומה מוסתר
+  'homeLayout',
+  // חתך הפרויקט ברשימת "המשימות שלי" בדף הבית
+  'homeProject',
+  // אילו עובדים מוצגים במסך היומן של המזכירה
+  'calendarUsers',
+  // הלוח הצף "מחכות לקביעה" במסך היומן של המזכירה — 'open' או 'min'
+  'calendarDock',
+  // מראה המערכת — 'light', 'dark' או 'system' (מצב לילה, ב"החשבון שלי")
+  'theme'
+];
+const PREF_MAX_BYTES = 4096;
+
+router.put('/api/prefs', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  // לספק אין העדפות בשרת — הוא נשאר עם מה שנשמר במכשיר שלו
+  if (isVendor(actor)) return sendJson(res, 200, { prefs: {} });
+
+  const b = await readJson(req);
+  const patch = b && typeof b === 'object' ? (b.prefs ?? b) : {};
+  for (const [key, value] of Object.entries(patch)) {
+    if (!PREF_KEYS.includes(key)) throw badRequest(`העדפה לא מוכרת: ${key}`);
+    if (value !== null && Buffer.byteLength(JSON.stringify(value)) > PREF_MAX_BYTES) {
+      throw badRequest('ההעדפה גדולה מדי');
+    }
+    D.setUserPref(actor.id, key, value);
+  }
+  sendJson(res, 200, { prefs: D.userPrefs(actor.id) });
+});
+
+// --- מסננים שמורים ותבניות ---
+
+router.post('/api/saved-filters', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  if (isVendor(actor)) throw forbidden();
+  const b = await readJson(req);
+  const name = String(b.name ?? '').trim();
+  if (!name) throw badRequest('נדרש שם למסנן');
+  D.run('INSERT INTO saved_filters (user_id, name, payload, created_at) VALUES (?,?,?,?)',
+    actor.id, name, JSON.stringify(b.payload ?? {}), D.nowIso());
+  sendJson(res, 201, {
+    savedFilters: D.all('SELECT id, name, payload FROM saved_filters WHERE user_id = ? ORDER BY name', actor.id)
+      .map((f) => ({ id: f.id, name: f.name, payload: JSON.parse(f.payload) }))
+  });
+});
+
+router.delete('/api/saved-filters/:id', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  D.run('DELETE FROM saved_filters WHERE id = ? AND user_id = ?', Number(ctx.params.id), actor.id);
+  sendJson(res, 200, {
+    savedFilters: D.all('SELECT id, name, payload FROM saved_filters WHERE user_id = ? ORDER BY name', actor.id)
+      .map((f) => ({ id: f.id, name: f.name, payload: JSON.parse(f.payload) }))
+  });
+});
+
+router.get('/api/templates', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  if (isVendor(actor)) throw forbidden();
+  sendJson(res, 200, {
+    templates: visibleTemplates(actor).map(shapeTemplate),
+    // האם המשתמש רואה תבניות של יותר ממחלקה אחת — הממשק מציג תווית מחלקה רק אז
+    seesAllDepartments: P.isOrgWide(actor)
+  });
+});
+
+router.post('/api/templates', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  // תבנית היא נכס משותף ולא של מי שיצר אותה, ולכן נדרשת הרשאה מלאה
+  requireFullPerm(actor, 'create_project');
+  const b = await readJson(req);
+  if (!['task', 'project'].includes(b.kind)) throw badRequest('סוג תבנית לא תקין');
+  /*
+   * המחלקה נבחרת מפורשות בידי מנהל המערכת, כי הוא זה שרואה את כולן. ריק
+   * פירושו תבנית ארגונית — זו הבחירה, ולא היעדר בחירה.
+   */
+  const departmentId = b.departmentId === '' || b.departmentId === null || b.departmentId === undefined
+    ? null : Number(b.departmentId);
+  D.run(
+    'INSERT INTO templates (kind, name, payload, department_id, created_at) VALUES (?,?,?,?,?)',
+    b.kind, String(b.name ?? '').trim() || 'תבנית', JSON.stringify(b.payload ?? {}),
+    departmentId, D.nowIso()
+  );
+  sendJson(res, 201, { ok: true });
+});
+
+/** עריכת תבנית — שם, מחלקה ותוכן. עד כה אפשר היה רק ליצור ולמחוק */
+router.patch('/api/templates/:id', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  requireFullPerm(actor, 'create_project');
+  const tpl = templateOr404(actor, ctx.params.id);
+  const b = await readJson(req);
+
+  if (b.name !== undefined) {
+    const name = String(b.name).trim();
+    if (!name) throw badRequest('נדרש שם לתבנית');
+    D.run('UPDATE templates SET name = ? WHERE id = ?', name, tpl.id);
+  }
+  if (b.departmentId !== undefined) {
+    const dep = b.departmentId === '' || b.departmentId === null ? null : Number(b.departmentId);
+    D.run('UPDATE templates SET department_id = ? WHERE id = ?', dep, tpl.id);
+  }
+  if (b.payload !== undefined) {
+    D.run('UPDATE templates SET payload = ? WHERE id = ?', JSON.stringify(b.payload ?? {}), tpl.id);
+  }
+  D.run('UPDATE templates SET updated_at = ?, updated_by = ? WHERE id = ?',
+    D.nowIso(), actor.type === 'user' ? actor.id : null, tpl.id);
+
+  sendJson(res, 200, { template: shapeTemplate(D.get('SELECT * FROM templates WHERE id = ?', tpl.id)) });
+});
+
+router.delete('/api/templates/:id', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  requireFullPerm(actor, 'create_project');
+  const tpl = templateOr404(actor, ctx.params.id);
+  D.run('DELETE FROM templates WHERE id = ?', tpl.id);
+  sendJson(res, 200, { ok: true });
+});
+
+/**
+ * מחיקת תגובה. רק הכותב שלה, ובלי חלון זמן: הודעה שנשלחה בטעות או עם טעות
+ * צריכה להיות ניתנת להסרה גם כמה שעות אחר כך.
+ *
+ * מנהל מערכת אינו מוחק תגובות של אחרים — שיחה שמנהל יכול לערוך בדיעבד אינה
+ * תיעוד שאפשר להסתמך עליו, וכל המערכת נשענת על כך שהשרשור הוא מה שנאמר.
+ * מי שצריך להסיר תוכן פוגעני יכול למחוק את המשימה כולה.
+ */
+router.delete('/api/comments/:id', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  const comment = D.get('SELECT * FROM comments WHERE id = ?', Number(ctx.params.id));
+  if (!comment) throw notFound('התגובה לא נמצאה');
+  const task = getTaskOr404(comment.task_id);
+  assertVisible(actor, task);
+
+  const myType = isVendor(actor) ? 'vendor' : 'user';
+  if (comment.author_type !== myType || comment.author_id !== actor.id) {
+    throw forbidden('אפשר למחוק רק תגובות שכתבת');
+  }
+
+  // הקבצים שצורפו להודעה נמחקים איתה — הם היו חלק ממנה ולא של המשימה
+  for (const att of D.all('SELECT * FROM attachments WHERE comment_id = ?', comment.id)) {
+    try { fs.unlinkSync(path.join(D.UPLOADS_DIR, att.stored_name)); } catch { /* אולי כבר נמחק */ }
+    D.run('DELETE FROM attachments WHERE id = ?', att.id);
+  }
+  D.run('DELETE FROM comments WHERE id = ?', comment.id);
+  D.audit(task.id, actorRef(actor), 'comment', 'תגובה נמחקה על ידי כותבה');
+
+  // אותה תשובה שמחזירה הוספת תגובה, כדי שהקורא יצייר מחדש באותה דרך
+  const item = comment.checklist_item_id
+    ? shapeChecklistItem(D.get('SELECT * FROM checklist_items WHERE id = ?', comment.checklist_item_id), actor)
+    : null;
+  sendJson(res, 200, { task: shapeTask(getTaskOr404(task.id), actor, { withDetails: true }), item });
+});
+
+// --- חיפוש גלובלי (כולל ארכיון) ---
+
+/**
+ * חיפוש כללי — כל איזכור של המילה, מהתו הראשון.
+ *
+ * הגרסה הראשונה חיפשה בכותרת ובתיאור של משימה ובשם של פרויקט בלבד, ודרשה
+ * שני תווים. התוצאה: מי שחיפש מילה שנאמרה בתגובה או שנכתבה בסעיף צ'קליסט לא
+ * מצא אותה, והסיק שהיא אינה במערכת.
+ *
+ * מחפש עכשיו בשישה מקומות, וכל תוצאה אומרת *איפה* נמצאה ההתאמה — בלעדיו
+ * משימה שצצה בגלל מילה שקבורה בתגובה נראית כתוצאה מוטעית.
+ *
+ * מגבלה לכל מקור בנפרד ולא רק על הסך: בחיפוש של תו אחד ‎LIKE '%א%'‎ על
+ * טבלת התגובות מחזיר הכול, ובלי תקרה מקומית מקור אחד היה גורף את כל
+ * התוצאות ומשאיר את השאר בחוץ.
+ */
+const SEARCH_PER_SOURCE = 40;
+const SEARCH_TOTAL = 30;
+
+router.get('/api/search', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  const params0 = parseUrl(req).searchParams;
+  const q = String(params0.get('q') ?? '').trim();
+  if (!q) return sendJson(res, 200, { results: [], query: '' });
+
+  /*
+   * היקף החיפוש — "שלי" או "כל הארגון".
+   *
+   * ההרשאה לבדה אינה תשובה מספקת כאן. מנהל מערכת *רשאי* לראות את כל הארגון,
+   * ולכן חיפוש שמסתמך על ההרשאה בלבד החזיר לו את העבודה של כל המחלקות
+   * מעורבבת בשלו — וזו בדיוק התלונה. אותה הבחנה שכבר נעשית בתפריט הצד
+   * ובבורר הפרויקטים: "מותר לי לראות" ו"זה שלי" הן שתי שאלות שונות.
+   *
+   * ברירת המחדל היא שלי, והמעבר לכל הארגון מוצע בתחתית התוצאות עם מספר
+   * ההתאמות שנשארו בחוץ — הסתרה שקטה הייתה גרועה מהערבוב, כי מי שמחפש
+   * משהו שהוא יודע שקיים היה מקבל "לא נמצא".
+   *
+   * ספק מוחרג: היקף הראייה שלו ממילא מצומצם למשימות שלו, ו"שלי" לפי
+   * ‎ownedProjectIds‎ ריק עבורו — כלומר הסינון היה מרוקן לו את החיפוש.
+   */
+  const scopeAll = params0.get('scope') === 'all' || isVendor(actor);
+
+  const like = `%${q}%`;
+  /*
+   * ‎matchIn‎ לכל משימה, לפי סדר חשיבות: התאמה בכותרת חזקה מהתאמה בתגובה,
+   * ולכן היא אינה נדרסת. ‎Map‎ שומר גם על ייחוד — משימה שנמצאה בשני מקורות
+   * מופיעה פעם אחת.
+   */
+  const taskHits = new Map();
+  const addTask = (id, label, rank) => {
+    const prev = taskHits.get(id);
+    if (!prev || rank < prev.rank) taskHits.set(id, { label, rank });
+  };
+
+  /*
+   * התקרה לכל מקור חתכה את המועמדים *לפני* סינון ההרשאות, ולכן ארבעים
+   * המשימות הראשונות שהתאימו בטבלה — של מי שלא יהיו — דחקו החוצה את אלה
+   * של המחפש עצמו. עובד שחיפש מילה נפוצה קיבל "לא נמצא" בזמן שהייתה לו
+   * משימה מתאימה, והכשל הזה שקט: הוא נראה כמו היעדר תוצאה ולא כמו קיצוץ.
+   *
+   * המיון מקדים את השורות של המחפש בתוך אותה תקרה, ולכן שלו לעולם אינן
+   * נדחקות. אינו מחליף את סינון ההרשאות שאחריו — רק קובע מי נכנס לתור.
+   */
+  const MINE_FIRST = `ORDER BY (
+       (t.assignee_type = 'user' AND t.assignee_id = ?)
+    OR t.created_by = ?
+  ) DESC, t.id DESC`;
+
+  // ‎likes‎ הוא מספר הפעמים שהמחרוזת מופיעה בשאילתה — יש שאילתות עם שני שדות
+  const collect = (sql, label, rank, likes = 1) => {
+    const params = [...Array(likes).fill(like), actor.id, actor.id, SEARCH_PER_SOURCE];
+    for (const row of D.all(`${sql} ${MINE_FIRST} LIMIT ?`, ...params)) addTask(row.id, label, rank);
+  };
+
+  collect('SELECT t.id, t.assignee_type, t.assignee_id, t.created_by FROM tasks t WHERE t.title LIKE ?', 'בכותרת', 0);
+  collect('SELECT t.id, t.assignee_type, t.assignee_id, t.created_by FROM tasks t WHERE t.description LIKE ?', 'בתיאור', 1);
+  collect(
+    `SELECT t.id, t.assignee_type, t.assignee_id, t.created_by FROM tasks t
+      WHERE t.status_short <> '' AND t.status_short LIKE ?`,
+    'בסטטוס', 2
+  );
+  collect(
+    `SELECT DISTINCT t.id, t.assignee_type, t.assignee_id, t.created_by
+       FROM tasks t JOIN checklist_items c ON c.task_id = t.id
+      WHERE c.text LIKE ? OR c.note LIKE ?`,
+    'בצ׳קליסט', 3, 2
+  );
+  collect(
+    `SELECT DISTINCT t.id, t.assignee_type, t.assignee_id, t.created_by
+       FROM tasks t JOIN comments cm ON cm.task_id = t.id
+      WHERE cm.body LIKE ?${isVendor(actor) ? ' AND cm.internal = 0' : ''}`,
+    'בתגובה', 4
+  );
+
+  const tasks = [...taskHits.entries()]
+    .map(([id, hit]) => ({ row: D.get('SELECT * FROM tasks WHERE id = ?', id), hit }))
+    .filter((x) => x.row && canSeeTask(actor, x.row));
+
+  /*
+   * החיפוש אינו עוקף את היקף הראייה — פרויקט שאינו של המשתמש לא יופיע בו.
+   *
+   * בלי תקרה בשאילתה: טבלת הפרויקטים קטנה בסדרי גודל מטבלת המשימות, ותקרה
+   * שחותכת לפני סינון ההרשאות הייתה מסתירה פרויקט שמותר לראות רק מפני
+   * שפרויקטים של אחרים קדמו לו בטבלה.
+   */
+  const visibleProjects = visibleProjectIds(actor);
+  const projects = D.all(
+    'SELECT id, name, description, status, topic, sens, manager_id, created_by FROM projects WHERE name LIKE ? OR description LIKE ?',
+    like, like
+  ).filter((p) => visibleProjects === null || visibleProjects.has(p.id))
+    // 🔒 פרויקט מסווג — אותו כלל כמו ברשימת הפרויקטים (‎listProjectsFor‎)
+    .filter((p) => Cls.mayReadProject(actor, p))
+    .map(({ topic, sens, manager_id, created_by, ...p }) => p);
+
+  /*
+   * דירוג: התאמה בתחילת השם קודמת להתאמה באמצעו, ופרויקט קודם למשימה בדירוג
+   * שווה — פרויקט הוא ההקשר הרחב, ומי שהקליד את שמו כנראה מחפש אותו ולא
+   * אחת מארבעים המשימות שבתוכו.
+   */
+  const lower = q.toLowerCase();
+  const startsRank = (text) => (String(text ?? '').toLowerCase().startsWith(lower) ? 0 : 1);
+
+  /*
+   * "שלי" — אותה הגדרה בדיוק שקובעת את חתך הסרגל, ולא הגדרה שנייה שתיפרד
+   * ממנה עם הזמן: פרויקט שאני מנהל, שיש בו משימה שלי, או שפתחתי אותו.
+   * משימה היא שלי אם אני האחראי עליה, אחראי נוסף, או שהיא בפרויקט שלי.
+   *
+   * הפותח נספר רק למי שנחשב פותח — מנהל מערכת פותח משימות בשביל אחרים,
+   * וספירתן כשלו הייתה מחזירה בדיוק את הערבוב שהחתך בא למנוע.
+   */
+  const mineProjects = ownedProjectIds(actor);
+  const opener = D.countsAsOpener(actor.id);
+  const taskIsMine = (row) =>
+    (row.assignee_type === 'user' && row.assignee_id === actor.id)
+    || (opener && row.created_by === actor.id)
+    || extraAssigneesOf(row).some((a) => a.assignee_type === 'user' && a.assignee_id === actor.id)
+    || (!!row.project_id && mineProjects.has(row.project_id));
+
+  const results = [
+    ...projects.map((p) => ({
+      type: 'project',
+      id: p.id,
+      title: p.name,
+      subtitle: p.status === 'done' ? 'פרויקט שהושלם' : (p.description || ''),
+      matchIn: String(p.name ?? '').toLowerCase().includes(lower) ? 'בשם' : 'בתיאור',
+      mine: mineProjects.has(p.id),
+      sort: [startsRank(p.name), 0]
+    })),
+    ...tasks.map(({ row, hit }) => {
+      const shaped = shapeTask(row, actor);
+      return {
+        type: 'task',
+        id: row.id,
+        title: shaped.title,
+        subtitle: [shaped.statusLabel, shaped.projectName ?? 'ללא פרויקט', shaped.archived ? 'בארכיון' : null]
+          .filter(Boolean).join(' · '),
+        matchIn: hit.label,
+        archived: shaped.archived,
+        mine: taskIsMine(row),
+        sort: [startsRank(shaped.title), 1 + hit.rank]
+      };
+    })
+  ].sort((a, b) => (a.sort[0] - b.sort[0]) || (a.sort[1] - b.sort[1]) || a.title.localeCompare(b.title, 'he'));
+
+  // בחתך "שלי" השאר אינו נמחק אלא נספר, והלקוח מציע לפתוח אליו את החיפוש
+  const shown = scopeAll ? results : results.filter((r) => r.mine);
+  const others = scopeAll ? 0 : results.length - shown.length;
+
+  sendJson(res, 200, {
+    query: q,
+    scope: scopeAll ? 'all' : 'mine',
+    total: shown.length,
+    othersCount: others,
+    results: shown.slice(0, SEARCH_TOTAL).map(({ sort, ...rest }) => rest)
+  });
+});
+
+// ---------------------------------------------------------------------------
+// פעולות על משימות עבור בוט הוואטסאפ — אותן הרשאות כמו באפליקציה
+// ---------------------------------------------------------------------------
+
+const BOT_LIST_MAX = 50; // הבוט מציג עד 15 — השאר נספרים
+
+/** משימות פתוחות בבורד הפנימי, עם ‎where‎ נוסף, רק מה שהעובד רשאי לראות */
+function openTasksWhere(actor, extra, params) {
+  return D.all(
+    `SELECT t.* FROM tasks t
+       JOIN boards b ON b.id = t.board_id
+       LEFT JOIN board_columns bc ON bc.board_id = t.board_id AND bc.key = t.status
+      WHERE b.type = 'internal' AND t.archived = 0 AND COALESCE(bc.is_final, 0) = 0
+        AND (t.activate_at IS NULL OR t.activate_at <= ?)
+        AND ${extra}
+      ORDER BY t.due_date IS NULL, t.due_date, CASE t.priority WHEN 'urgent' THEN 0 WHEN 'high' THEN 1 ELSE 2 END, t.id`,
+    D.nowIso(), ...params
+  ).filter((t) => canSeeTask(actor, t));
+}
+
+const botTask = (t) => ({
+  id: t.id,
+  title: t.title,
+  dueDate: t.due_date,
+  priority: t.priority,
+  projectName: projectOf(t)?.name ?? null,
+  assignee: assigneeName(t),
+  overdue:Boolean(t.due_date && t.due_date < D.nowIso())
+});
+
+const botTaskOps = {
+  /** המשימות הפתוחות שהעובד אחראי עליהן, ראשי או נוסף — לפי יעד. הסינון לפי יום נעשה בבוט */
+  myTasks(actor) {
+    return openTasksWhere(actor, `((t.assignee_type = 'user' AND t.assignee_id = ?) OR ${EXTRA_ASSIGNEE_SQL})`, [actor.id, 'user', actor.id])
+      .slice(0, BOT_LIST_MAX).map(botTask);
+  },
+
+  projectTasks(actor, projectId) {
+    return openTasksWhere(actor, 't.project_id = ?', [projectId]).slice(0, BOT_LIST_MAX).map(botTask);
+  },
+
+  /** מה העובד רשאי לסגור — ממנו בוחר הבוט כשכותבים "סיימתי את היועץ" */
+  complete(actor, taskId) {
+    const task = getTaskOr404(taskId);
+    assertVisible(actor, task);
+    if (!mayOnTask(actor, 'change_task_status', task, projectOf(task))) throw forbidden('אין לך הרשאה לשנות את סטטוס המשימה');
+    const final = D.get('SELECT key FROM board_columns WHERE board_id = ? AND is_final = 1 ORDER BY position LIMIT 1', task.board_id);
+    if (!final) throw badRequest('אין בבורד סטטוס סגירה');
+    if (task.status === final.key) throw badRequest('המשימה כבר סגורה');
+    changeStatus(task, final.key, actor, 'סומן כבוצע מוואטסאפ');
+    return botTask(task);
+  },
+
+  comment(actor, taskId, text) {
+    const task = getTaskOr404(taskId);
+    assertVisible(actor, task);
+    const body = String(text ?? '').trim().slice(0, 2000);
+    if (!body) throw badRequest('נדרש תוכן להערה');
+    D.run('INSERT INTO comments (task_id, author_type, author_id, body, internal, created_at) VALUES (?,?,?,?,1,?)',
+      task.id, 'user', actor.id, `${body}\n💬 מוואטסאפ`, D.nowIso());
+    D.audit(task.id, actorRef(actor), 'comment', 'נוספה הערה מוואטסאפ');
+    if (task.assignee_type === 'user' && task.assignee_id && task.assignee_id !== actor.id) {
+      D.notify({ targetType: 'user', targetId: task.assignee_id, kind: 'comment', title: `${actor.name} כתב/ה במשימה`, body: `${task.title} — ${body.slice(0, 120)}`, taskId: task.id });
+    }
+    return botTask(task);
+  },
+
+  canSee: (actor, taskId) => {
+    const task = D.get('SELECT * FROM tasks WHERE id = ?', taskId);
+    return Boolean(task && canSeeTask(actor, task));
+  }
+};
+
+/**
+ * פעולות על משימה עבור "לסגור?" / "לעדכן?" מהמייל ומהוואטסאפ (פרק 11א) —
+ * אותם כללים כמו באפליקציה: ההרשאות של המאשר, יומן והתראות.
+ */
+const syncOps = {
+  canSee: (actor, task) => canSeeTask(actor, task),
+
+  /** ההודעה כהערה פנימית, והקבצים מהמייל מצורפים אליה. קובץ שנכשל — לא מפיל את השאר */
+  comment(actor, task, body, files = []) {
+    const c = D.run('INSERT INTO comments (task_id, author_type, author_id, body, internal, created_at) VALUES (?,?,?,?,1,?)',
+      task.id, 'user', actor.id, String(body).slice(0, 6000), D.nowIso());
+    const commentId = Number(c.lastInsertRowid);
+    const skipped = [];
+    let saved = 0;
+    for (const f of files) {
+      try {
+        const r = saveAttachment(task, actor, f, commentId);
+        D.audit(task.id, actorRef(actor), 'attachment', `צורף קובץ "${r.name}" מההודעה (גרסה ${r.version})`);
+        saved++;
+      } catch (err) {
+        skipped.push(`${f.filename} (${err.message})`);
+      }
+    }
+    D.audit(task.id, actorRef(actor), 'comment', 'נוספה הערה מהודעה שהתקבלה');
+    if (task.assignee_type === 'user' && task.assignee_id && task.assignee_id !== actor.id) {
+      D.notify({ targetType: 'user', targetId: task.assignee_id, kind: 'comment', title: `${actor.name} הוסיף/ה עדכון למשימה`, body: `${task.title} — ${String(body).slice(0, 120)}`, taskId: task.id });
+    }
+    return { commentId, saved, skipped };
+  },
+
+  complete(actor, taskId, note) {
+    const task = getTaskOr404(taskId);
+    if (!mayOnTask(actor, 'change_task_status', task, projectOf(task))) throw forbidden('אין לך הרשאה לשנות את סטטוס המשימה');
+    const final = D.get('SELECT key FROM board_columns WHERE board_id = ? AND is_final = 1 ORDER BY position LIMIT 1', task.board_id);
+    if (!final) throw badRequest('אין בבורד סטטוס סגירה');
+    changeStatus(task, final.key, actor, note);
+  },
+
+  setStatus(actor, taskId, key) {
+    const task = getTaskOr404(taskId);
+    if (task.status === key) return;
+    if (!mayOnTask(actor, 'change_task_status', task, projectOf(task))) throw forbidden('אין לך הרשאה לשנות את סטטוס המשימה');
+    changeStatus(task, key, actor, 'לפי הודעה שהתקבלה');
+  },
+
+  /** יעד חדש — 17:00 ביום שנבחר, שעון ישראל, כמו בדיאלוג */
+  setDue(actor, taskId, ymd) {
+    const task = getTaskOr404(taskId);
+    if (!mayOnTask(actor, 'edit_delete_task', task, projectOf(task))) throw forbidden('אין לך הרשאה לשנות את תאריך היעד');
+    const next = W.dueIso(ymd);
+    if (task.due_date === next) return;
+    D.run('UPDATE tasks SET due_date = ? WHERE id = ?', next, task.id);
+    D.audit(task.id, actorRef(actor), 'updated', `תאריך יעד: ${Rules.formatDate(task.due_date) || '—'} ← ${Rules.formatDate(next)} (לפי הודעה שהתקבלה)`);
+    if (task.assignee_type === 'user' && task.assignee_id && task.assignee_id !== actor.id) {
+      D.notify({ targetType: 'user', targetId: task.assignee_id, kind: 'status_change', title: 'תאריך היעד במשימה שלך עודכן', body: `${task.title} — ${Rules.formatDate(next)}`, taskId: task.id });
+    }
+  }
+};
+TaskSync.setHooks(syncOps);
+
+/*
+ * מיזוג משימות כפולות: המשימה שמוזגה נסגרת במסלול הרגיל של שינוי סטטוס
+ * (יומן, התראה לפותח). ההרשאה כבר נבדקה — האישור של אחד האחראים הוא ההרשאה.
+ */
+Dupes.setHooks({
+  canSeeTask,
+  closeTask(actor, taskId, note) {
+    const task = getTaskOr404(taskId);
+    const final = D.get('SELECT key FROM board_columns WHERE board_id = ? AND is_final = 1 ORDER BY position LIMIT 1', task.board_id);
+    if (final && task.status !== final.key) changeStatus(task, final.key, actor ?? { type: 'system', id: null, name: 'המערכת' }, note);
+  }
+});
+
+AiApi.register(router, { getTaskOr404, assertVisible, mayOnTask, shapeTask, actorRef, saveAttachment, createTask, assertMayAssignTo, assertMayUseProject, listProjectsFor, newTaskProjects, assignableUserIds, assignBlockReason, botTaskOps,
+  // תבניות המשימה שהשחקן רואה — הבוט מציע אותן בפתיחת משימה
+  taskTemplates: (actor) => visibleTemplates(actor).filter((t) => t.kind === 'task').map(shapeTemplate) });
+TodayApi.register(router, { shapeTask, createTask, getTaskOr404, listProjectsFor, newTaskProjects, assertMayAssignTo });
+PhonebookApi.register(router);
+WhatsNew.register(router);
+MeetingsApi.register(router, { getTaskOr404, assertVisible, shapeTask, canSeeTask });
+Tiful360.register(router, { createTask, saveAttachment, getTaskOr404 });
+BotReview.register(router);
+
+module.exports = { router, PRIORITIES, shapeTask, canSeeTask };

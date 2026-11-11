@@ -6,10 +6,11 @@
  *   node server/reset.js --demo   — כולל נתוני הדגמה
  */
 const fs = require('node:fs');
+const Paths = require('./core').Paths;
 const path = require('node:path');
 
-const dataDir = process.env.DATA_DIR ?? path.join(__dirname, '..', 'data');
-const uploadsDir = process.env.UPLOADS_DIR ?? path.join(__dirname, '..', 'uploads');
+const dataDir = process.env.DATA_DIR ?? path.join(Paths.ROOT, 'data');
+const uploadsDir = process.env.UPLOADS_DIR ?? path.join(Paths.ROOT, 'uploads');
 
 for (const dir of [dataDir, uploadsDir]) {
   if (!fs.existsSync(dir)) continue;
@@ -17,7 +18,7 @@ for (const dir of [dataDir, uploadsDir]) {
 }
 
 const demo = process.argv.includes('--demo');
-const D = require('./db');
+const D = require('./core').Db;
 D.bootstrap({ demo });
 
 if (demo) {

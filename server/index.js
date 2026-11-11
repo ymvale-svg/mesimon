@@ -3,6 +3,7 @@
  * משימון — נקודת הכניסה לשרת.
  */
 const http = require('node:http');
+const Paths = require('./core').Paths;
 const path = require('node:path');
 const os = require('node:os');
 
@@ -19,28 +20,34 @@ try {
   process.exit(1);
 }
 
-const D = require('./db');
-const Auth = require('./auth');
-const Rules = require('./rules-engine');
-const Push = require('./push');
-const LoadMonitor = require('./load-monitor');
-const AiTasks = require('./ai-tasks');
-const WaBot = require('./ai/wa-bot');
-const { router } = require('./api');
-const Today = require('./today');
-const GContacts = require('./google-contacts');
-const Meetings = require('./meetings');
-const Dupes = require('./ai/task-dupes');
-const { HttpError, sendJson, serveStatic, parseUrl, unauthorized } = require('./http-kit');
+const D = require('./core').Db;
+const Auth = require('./core').Auth;
+const Rules = require('./tasks').RulesEngine;
+const Push = require('./integrations').Push;
+const LoadMonitor = require('./core').LoadMonitor;
+const AiTasks = require('./tasks').AiTasks;
+const WaBot = require('./whatsapp').WaBot;
+const { router } = require('./api').Api;
+const Today = require('./today').Today;
+const GContacts = require('./phonebook').GoogleContacts;
+const Meetings = require('./meetings').Meetings;
+const Dupes = require('./tasks').TaskDupes;
+const { HttpError, sendJson, serveStatic, parseUrl, unauthorized } = require('./core').HttpKit;
+const MailDocQueue = require('./mail').MailDocQueue;
+const PoNotify = require('./priority').PoNotify;
+const TimelessMedia = require('./meetings').TimelessMedia;
 
 const PORT = Number(process.env.PORT ?? 3000);
 const HOST = process.env.HOST ?? '0.0.0.0';
-const PUBLIC_DIR = path.join(__dirname, '..', 'public');
+const PUBLIC_DIR = Paths.PUBLIC;
+
+// חיבור השקעים בין המודולים — לפני כל עבודה (‎wiring.js‎)
+require('./wiring');
 
 D.bootstrap();
 Auth.purgeExpired();
 // ההודעה הראשונה של "מה חדש" — טיוטה אחת, פעם אחת, אחרי שהטבלה קיימת
-require('./api-whats-new').seedFirstRelease();
+require('./api').ApiWhatsNew.seedFirstRelease();
 
 const server = http.createServer(async (req, res) => {
   const url = parseUrl(req);
@@ -113,13 +120,15 @@ server.listen(PORT, HOST, () => {
     Today.start();
     GContacts.start();
     Meetings.start();
+    // 🎥 פגישה מקוונת שהתחילה ולא מוקלטת ב-Timeless — הודעה למזכירות
+    TimelessMedia.start();
     WaBot.start();
     // משימות כפולות במחלקה — סריקה פעם ביום (פרק 11ב)
     Dupes.start();
     // 📎 פענוח קבצים גדולים מהמייל לפי בקשה — קובץ אחד בכל פעם
-    require('./ai/mail-doc-queue').start();
+    MailDocQueue.start();
     // 🧾 הזמנת רכש שהפכה לסופית בפריוריטי — למנהל הפרויקט וליוזם הדרישה (וואטסאפ ומייל)
-    require('./ai/po-notify').start();
+    PoNotify.start();
   }
   // התראה למנהלים כשתקרת המעבד מאטה את הסוכנים
   LoadMonitor.start();
@@ -166,7 +175,7 @@ const shutdown = () => {
   Today.stop();
   GContacts.stop();
   Meetings.stop();
-  require('./ai/mail-doc-queue').stop();
+  MailDocQueue.stop();
   server.close(() => process.exit(0));
   setTimeout(() => process.exit(0), 2000).unref();
 };
