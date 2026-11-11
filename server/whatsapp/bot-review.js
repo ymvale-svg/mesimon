@@ -23,6 +23,8 @@ const crypto = require('node:crypto');
 const D = require('../core').Db;
 const Auth = require('../core').Auth;
 const Mailer = require('../integrations').Mailer;
+const Gmail = require('../integrations').Gmail;
+const Mime = require('../core').Mime;
 const { escape, shell, button } = require('../core').MailTemplates;
 const { badRequest, unauthorized, readJson, sendJson } = require('../core').HttpKit;
 
@@ -78,6 +80,53 @@ function readAloudUsage(from, to = new Date().toISOString()) {
 const usageLine = (u) => (u.ok || u.failed
   ? `🔊 הקראות: ${u.ok}${u.ok ? ` (${u.users === 1 ? 'עובד אחד' : `${u.users} עובדים`})` : ''}${u.failed ? ` · נכשלו: ${u.failed}` : ''}`
   : '');
+
+/*
+ * 📧 הערות על משימון במייל (הוחלט 11.11.26): הסוקר עובר גם על המיילים של מנהלי המערכת, ומחפש הערות, באגים
+ * ובקשות על משימון — מהעובדים או מאנשים מבחוץ. ‎bot_review_mailboxes‎ (מזהי משתמשים) — את מי לקרוא;
+ * ברירת המחדל: מנהלי המערכת העליונים (‎superadmin‎) עם Gmail מחובר. מוסווה כמו היומן.
+ * לא נכללים: מיילים שמשימון עצמו שלח (‎SMTP_FROM‎, הדו"ח הלילי, התראות), ומענה אוטומטי.
+ */
+const MAIL_QUERY = '(משימון OR mesimon OR "אשל שלי" OR "בוט הוואטסאפ")';
+const MAIL_MAX = 15;
+const MAIL_TEXT = 2500;
+
+function mailboxUsers() {
+  const set = D.getSetting('bot_review_mailboxes', null);
+  if (Array.isArray(set) && set.length) return set.map(Number).filter(Boolean);
+  return D.all("SELECT id FROM users WHERE status = 'active' AND role = 'superadmin'").map((r) => r.id);
+}
+
+async function mailFeedback(from) {
+  const after = Math.floor(new Date(from).getTime() / 1000);
+  const self = String(Mailer.CONFIG?.from ?? '').trim();
+  const q = `after:${after} ${MAIL_QUERY} -subject:"סקירת הבוט"${self ? ` -from:${self}` : ''}`;
+  const out = [];
+  const errors = [];
+  for (const userId of mailboxUsers()) {
+    for (const who of Gmail.boxesOf(userId, 'mail')) {
+      try {
+        for (const id of await Gmail.search(who, q, { max: MAIL_MAX })) {
+          if (out.length >= MAIL_MAX) break;
+          const msg = await Gmail.messageFull(who, id);
+          const m = Mime.finishGmail(Mime.fromGmail(msg.payload));
+          if (m.autoSubmitted) continue;
+          out.push({
+            at: m.date && !Number.isNaN(m.date.getTime()) ? m.date.toISOString() : null,
+            from: mask(m.from?.name || m.from?.address || ''),
+            to: userId,
+            subject: mask(m.subject),
+            text: mask(String(m.newText || m.text || '').slice(0, MAIL_TEXT))
+          });
+        }
+      } catch (err) {
+        errors.push(`תיבה של משתמש ${userId}: ${String(err.message).slice(0, 120)}`);
+      }
+    }
+  }
+  out.sort((a, b) => String(a.at).localeCompare(String(b.at)));
+  return { query: MAIL_QUERY, mails: out, ...(errors.length ? { errors } : {}) };
+}
 
 /** השיחות הפרטיות (וואטסאפ והעוזר באפליקציה) מאז ‎since‎, מקובצות לשיחות */
 function exportSince(since) {
@@ -263,7 +312,10 @@ function register(router) {
   router.get('/api/integrations/bot-review/export', async (req, res) => {
     authenticate(req);
     const since = new URL(req.url, 'http://local').searchParams.get('since') ?? '';
-    sendJson(res, 200, exportSince(since));
+    const out = exportSince(since);
+    // 📧 הערות על משימון מהמייל — תקלה כאן לא מפילה את הייצוא
+    out.mail = await mailFeedback(out.since).catch((err) => ({ mails: [], errors: [err.message] }));
+    sendJson(res, 200, out);
   });
 
   router.post('/api/integrations/bot-review/report', async (req, res) => {
@@ -272,4 +324,4 @@ function register(router) {
   });
 }
 
-module.exports = { register, mask, exportSince, sendReport, listReviews, setFixStatus, isConfigured, readAloudUsage };
+module.exports = { register, mask, exportSince, sendReport, listReviews, setFixStatus, isConfigured, readAloudUsage, mailFeedback };

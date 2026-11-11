@@ -2000,7 +2000,7 @@ const AdminView = (() => {
     // ---- סקירה לילית: מה עבד, מה לא, ומה מוצע לתקן
 
     const FIX_STATUS = { new: ['ממתין להחלטה', 'ai-chip-warn'], done: ['טופל', 'wa-chip-ok'], dismissed: ['לא רלוונטי', ''] };
-    const FIX_KIND = { skill: 'ניסוח לבוט', code: 'כלל בקוד', alias: 'שמות וכינויים', feature: 'יכולת חדשה' };
+    const FIX_KIND = { skill: 'ניסוח לבוט', code: 'כלל בקוד', alias: 'שמות וכינויים', feature: 'יכולת חדשה', idea: '💡 רעיון מהמייל' };
     const pct = (r) => (r.conversations ? Math.round((r.succeeded / r.conversations) * 100) : null);
 
     async function reviewSection() {
