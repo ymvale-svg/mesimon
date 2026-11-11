@@ -71,3 +71,21 @@ test('בטיחות: נמען שאינו משתמש פעיל, או מאשר שא�
   await assert.rejects(() => Review.mailForApproval({ userId: emp.id, toName: naama.full_name, body: 'x' }), /מנהל מערכת/);
   assert.equal(calls.length, 0);
 });
+
+test('מי שהעיר: נשמר בדו"ח, חוזר בייצוא; אחרי הצעת תשובה — מסומן, כדי שלא יוצע שוב', async (t) => {
+  const { admin, naama } = setup(t);
+  const rep = await Review.sendReport({ subject: 'סקירה', summary: 'x', fixes: [
+    { title: 'איחוד משימות', problem: 'p', kind: 'idea', requester: naama.full_name, threadHint: 'איחוד' },
+    { title: 'משהו אחר', problem: 'p', kind: 'code', url: 'https://github.com/x/y/pull/1' }
+  ] });
+  let fb = Review.exportSince(new Date(Date.now() - 3600000).toISOString()).feedback.filter((f) => f.reviewId === rep.id);
+  assert.equal(fb[0].requester, naama.full_name);
+  assert.equal(fb[0].threadHint, 'איחוד');
+  assert.equal(fb[0].n, 1);
+  assert.equal(fb[0].replyProposedAt, null);
+  assert.equal(fb[1].requester, '');
+  await Review.mailForApproval({ userId: admin.id, toName: naama.full_name, body: 'טופל', fixes: [{ reviewId: rep.id, n: 1 }] });
+  fb = Review.exportSince(new Date(Date.now() - 3600000).toISOString()).feedback.filter((f) => f.reviewId === rep.id);
+  assert.ok(fb[0].replyProposedAt, 'סומן "הוצעה תשובה"');
+  assert.equal(fb[1].replyProposedAt, null);
+});
