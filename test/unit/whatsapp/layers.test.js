@@ -9,7 +9,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const DIR = path.join(__dirname, '../../../server/whatsapp');
-const LAYERS = ['wa-base', 'wa-groups', 'wa-private', 'wa-tasks', 'wa-proactive', 'wa-mail', 'wa-menu', 'wa-meeting', 'wa-bot'];
+const LAYERS = ['wa-base', 'wa-groups', 'wa-private', 'wa-tasks', 'wa-proactive', 'wa-mail', 'wa-menu', 'wa-meeting', 'wa-flows', 'wa-bot'];
 
 for (const [i, name] of LAYERS.entries()) {
   test(`${name} — מייבא רק משכבות שמתחתיו`, () => {
