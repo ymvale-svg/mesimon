@@ -199,7 +199,12 @@ function feedback() {
   const out = [];
   for (const r of D.all('SELECT id, created_at, fixes FROM bot_reviews WHERE created_at >= ? ORDER BY id', since)) {
     for (const f of parse(r.fixes)) {
-      out.push({ reviewId: r.id, date: r.created_at.slice(0, 10), title: f.title, url: f.url, status: f.status ?? 'new', note: f.note ?? '' });
+      out.push({
+        reviewId: r.id, n: out.filter((x) => x.reviewId === r.id).length + 1, date: r.created_at.slice(0, 10), title: f.title, url: f.url, kind: f.kind ?? '',
+        status: f.status ?? 'new', note: f.note ?? '',
+        // ✉️ מי העיר (משתמש במשימון) — כדי להציע לו תשובה כשזה טופל; ‎replyProposedAt‎ — כבר הוצעה, לא שוב
+        requester: f.requester ?? '', threadHint: f.threadHint ?? '', replyProposedAt: f.replyProposedAt ?? null
+      });
     }
   }
   return out;
@@ -231,7 +236,10 @@ async function sendReport(body) {
     problem: clean(f.problem, 1500),
     example: clean(f.example, 1500),
     url: isHttps(clean(f.url, 500)) ? clean(f.url, 500) : '',
-    kind: clean(f.kind, 30)
+    kind: clean(f.kind, 30),
+    // ✉️ מי העיר — השם המלא של משתמש במשימון (מהמייל שממנו עלה הרעיון), ומילה מהנושא לשרשור התשובה
+    requester: clean(f.requester, 120),
+    threadHint: clean(f.threadHint, 120)
   })).filter((f) => f.title).map((f, i) => ({ ...f, n: i + 1 }));
   const reportUrl = isHttps(clean(body.reportUrl, 500)) ? clean(body.reportUrl, 500) : '';
   if (!summary && !fixes.length) throw badRequest('הדו"ח ריק');
@@ -252,7 +260,8 @@ async function sendReport(body) {
      VALUES (?,?,?,?,?,?,?,?,?)`,
     D.nowIso(), clean(body.since, 40), clean(body.until, 40), subject, mask(summary), conversations, succeeded,
     JSON.stringify(patterns),
-    JSON.stringify(fixes.map((f) => ({ title: mask(f.title), problem: mask(f.problem), example: mask(f.example), kind: f.kind, url: f.url, status: 'new', note: '' })))
+    JSON.stringify(fixes.map((f) => ({ title: mask(f.title), problem: mask(f.problem), example: mask(f.example), kind: f.kind, url: f.url, status: 'new', note: '',
+      ...(f.requester ? { requester: f.requester, threadHint: mask(f.threadHint) } : {}) })))
   ).lastInsertRowid;
 
   const para = (t) => escape(t).replace(/\n/g, '<br>');
@@ -359,7 +368,26 @@ async function mailForApproval(body) {
     'לשלוח מהמייל שלך? *כן* 👍 · *לא* 👎'
   ].filter((l) => l !== null).join('\n');
   const sent = await pushToUser(approver.id, { text: preview, buttons: [WaUi.BTN.yes, WaUi.BTN.no], draft }, 'send_email', { requested: true });
+  // ✉️ ההצעות שהתשובה מדווחת עליהן — מסומנות "הוצעה תשובה", כדי שהסקירה הבאה לא תציע שוב
+  if (sent) markReplyProposed(body.fixes);
   return { sent: Boolean(sent), to: to.full_name, subject, inThread: Boolean(replyThread) };
+}
+
+/** ‎refs‎: ‎[{ reviewId, n }]‎ — ההצעות שהוצעה עליהן תשובה למי שהעיר */
+function markReplyProposed(refs) {
+  const now = D.nowIso();
+  const byReview = new Map();
+  for (const r of Array.isArray(refs) ? refs.slice(0, 50) : []) {
+    const id = Number(r?.reviewId); const n = Number(r?.n);
+    if (id && n) byReview.set(id, [...(byReview.get(id) ?? []), n]);
+  }
+  for (const [id, ns] of byReview) {
+    const row = D.get('SELECT fixes FROM bot_reviews WHERE id = ?', id);
+    if (!row) continue;
+    const fixes = parse(row.fixes);
+    for (const n of ns) if (fixes[n - 1]) fixes[n - 1].replyProposedAt = now;
+    D.run('UPDATE bot_reviews SET fixes = ? WHERE id = ?', JSON.stringify(fixes), id);
+  }
 }
 
 function register(router) {
