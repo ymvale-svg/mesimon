@@ -103,3 +103,40 @@ test('התראה על מייל שנדחקה על ידי התראה חדשה — 
   await press('972509100006', 'לא ❌', 'ALERT_OLD');
   assert.match(Bot.readLog({}).find((r) => r.userId === u.id).result, /כבר לא פתוחה/);
 });
+
+// סקירה לילית 12.11: "התעלם 🙈" על "לשלוח תזכורת?" שנדחקה — נענה "השאלה כבר לא פתוחה" (פעמיים, אצל שני עובדים)
+test('"התעלם 🙈" על תזכורת למייל ששלחת, שנדחקה — חוזרת ונענית, ומה שהיה פתוח נשאר', async (t) => {
+  const { texts, calls } = fake(t);
+  const u = user({ phone: '972509100011', role: 'employee' });
+  const fid = D.run("INSERT INTO sent_followups (user_id, gmail_id, thread_id, to_email, subject, sent_at, nudge, status, created_at) VALUES (?, 'g1', 't1', 'x@example.test', 'נושא', ?, 'תזכורת', 'asked', ?)", u.id, D.nowIso(), D.nowIso()).lastInsertRowid;
+  const current = { kind: 'complete', taskId: 79, title: 'משימה אחרת' };
+  Bot._internal.saveChat(u.id, { ...Bot._internal.chatOf(u.id), draft: current, awaiting: true });
+  Q.record(u.id, 'FU1', { owner: 'chat', draft: { kind: 'sent_followup', followupId: fid }, awaiting: true });
+  await press('972509100011', 'התעלם 🙈', 'FU1');
+  assert.deepEqual(texts('972509100011'), [], '"בסדר, לא…" קצר — רק 👌');
+  assert.equal(calls.find((c) => c.method === 'sendReaction')?.body?.reaction, '👌');
+  assert.equal(D.get('SELECT status FROM sent_followups WHERE id = ?', fid).status, 'ignored');
+  assert.equal(Bot._internal.chatOf(u.id).draft.taskId, 79);
+});
+
+test('"לשלוח תזכורת ✅" על תזכורת שכבר טופלה — לא נשלחת פעמיים', async (t) => {
+  const { texts, calls } = fake(t);
+  const u = user({ phone: '972509100012', role: 'employee' });
+  const fid = D.run("INSERT INTO sent_followups (user_id, gmail_id, thread_id, to_email, subject, sent_at, nudge, status, created_at) VALUES (?, 'g2', 't2', 'y@example.test', 'נושא', ?, 'תזכורת', 'sent', ?)", u.id, D.nowIso(), D.nowIso()).lastInsertRowid;
+  Q.record(u.id, 'FU2', { owner: 'chat', draft: { kind: 'sent_followup', followupId: fid }, awaiting: true });
+  Bot._internal.saveChat(u.id, { ...Bot._internal.chatOf(u.id), draft: { kind: 'complete', taskId: 80, title: 'x' }, awaiting: true });
+  await press('972509100012', 'לשלוח תזכורת ✅', 'FU2');
+  assert.match(texts('972509100012')[0], /כבר נשלחה/);
+  assert.equal(calls.filter((c) => /gmail/i.test(c.method)).length, 0);
+});
+
+// סקירה לילית 12.11: "לא ❌" על טיוטת תשובה למייל שכבר לא פתוחה — נענה "השאלה כבר לא פתוחה" (פעמיים ברצף)
+test('"לא ❌" על שאלה שכבר לא פתוחה — "בסדר, לא שלחתי ולא שיניתי כלום", ולא "השאלה כבר לא פתוחה"', async (t) => {
+  const { texts } = fake(t);
+  const u = user({ phone: '972509100013', role: 'employee' });
+  Bot._internal.saveChat(u.id, { ...Bot._internal.chatOf(u.id), draft: { kind: 'complete', taskId: 81, title: 'x' }, awaiting: true });
+  Q.record(u.id, 'MR1', { owner: 'chat', draft: { kind: 'mail_reply', reply: { to: 'z@example.test', subject: 's', body: 'b' } }, awaiting: true });
+  await press('972509100013', 'לא ❌', 'MR1');
+  assert.deepEqual(texts('972509100013'), [Q.CLOSED_NO_TEXT]);
+  assert.equal(Bot._internal.chatOf(u.id).draft.taskId, 81, 'מה שפתוח עכשיו לא נגע');
+});
