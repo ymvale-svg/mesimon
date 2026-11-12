@@ -388,10 +388,12 @@ async function flowOnReminder(ctx) {
 }
 
 async function flowRemindersRequest({ actor, dry, out, state, t }) {
-  if (WaActions.allowed(actor, 'reminders') && !(state.awaiting && state.draft)) {
-    const r = dry ? null : await Reminders.command(actor.id, t).catch((err) => ({ text: 'לא הצלחתי לרשום את התזכורת. נסו שוב בעוד רגע 🙏', result: `שגיאה: ${err.message}`, error: true }));
+  // טיוטת משימה מחכה, והעובד אומר "לא משימה — תזכיר לי" — הטיוטה הופכת לתזכורת (סקירה 12.11)
+  const fromTask = state.awaiting && (state.draft?.kind ?? 'task') === 'task' && state.draft?.title && Reminders.isRequest(t);
+  if (WaActions.allowed(actor, 'reminders') && (!(state.awaiting && state.draft) || fromTask)) {
+    const r = dry ? null : await Reminders.command(actor.id, t, { about: fromTask ? state.draft.title : '' }).catch((err) => ({ text: 'לא הצלחתי לרשום את התזכורת. נסו שוב בעוד רגע 🙏', result: `שגיאה: ${err.message}`, error: true }));
     // ✅ על ההודעה כשנרשמה / בוטלה תזכורת (הטקסט נשאר — יש בו את המועד)
-    if (r) return out(r.text, {}, { action: 'reminders', status: r.error ? 'error' : 'ok', result: r.result, react: /^(תזכורת|בוטלה)/.test(r.result ?? '') ? '✅' : undefined });
+    if (r) return out(r.text, fromTask && !r.error ? { draft: null, awaiting: false } : {}, { action: 'reminders', status: r.error ? 'error' : 'ok', result: r.result, react: /^(תזכורת|בוטלה)/.test(r.result ?? '') ? '✅' : undefined });
   }
   return NEXT;
 }
