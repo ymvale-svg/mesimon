@@ -80,8 +80,8 @@ const ai = (t, d) => H.claude(t, {
 });
 
 /** מהצילום ועד שאלת הפרויקט (או מה שבא אחריה), דרך כל הכפתורים — כל כפתור נלחץ בכיתוב שלו */
-async function toProject(say) {
-  let r = await say('קבלת סחורה', { file: H.photo() });
+async function toProject(say, file = H.photo()) {
+  let r = await say('קבלת סחורה', { file });
   assert.match(r.text, /קבלת סחורה\* — תעודת משלוח 5501/);
   assert.match(r.text, /סביבת בדיקה/);
   assert.match(r.text, /בטון הצפון/);
@@ -503,4 +503,41 @@ test('נספח (כמו מהמסך): "נספח" + תמונה בשלב הנספח�
   r = await say(BTN.done);
   assert.match(r.text, /GR26000123\* — טיוטא לבדיקה/);
   assert.equal(pr.wrote('attach').length, 2, 'המסמך והנספח צורפו לטיוטא');
+});
+
+test('🏷️ סופית — מספר ה-GR נכתב על המסמך (במקום הריק שבצד שמאל), נשמר כנספח ב-GR ונשלח לעובד', async (t) => {
+  H.companies(t, 'test11');
+  const u = H.worker();
+  const pr = priority(t);
+  ai(t, doc({ blank_area: { x: 0.04, y: 0.04, w: 0.4, h: 0.15 } }));
+  const { say } = H.chat(t, u);
+  await toProject(say, { buf: require('../../helpers/png').png(), mime: 'image/png', name: 'תעודה.png' });
+  await say('נהריה מגרש 12');
+  await say(BTN.done);
+  await say(BTN.approve);
+  const r = await say(BTN.confirmFinal);
+  assert.match(r.text, /נקלטה כסופית/);
+  assert.match(r.text, /מספר ה-GR נכתב על ה/);
+  const att = pr.wrote('attach').map((w) => w.args[2]);
+  const st = att.find((a) => /עם מספר ה-GR/.test(a.description));
+  assert.ok(st, 'החותמת צורפה ל-GR');
+  assert.equal(st.mime, 'application/pdf');
+  // ‎sendFile(channel, chatId, file)‎ — הקובץ החתום נשלח לעובד בוואטסאפ
+  assert.ok(r.files.some((c) => /GR26000123/.test(c.body[2]?.fileName ?? '')), 'נשלחה לעובד');
+});
+
+test('🏷️ החותמת לא הצליחה (קובץ שאי אפשר לקרוא) — הקבלה סופית כרגיל, בלי חותמת', async (t) => {
+  H.companies(t, 'test11');
+  const u = H.worker();
+  const pr = priority(t);
+  ai(t, doc());
+  const { say } = H.chat(t, u);
+  await toProject(say);
+  await say('נהריה מגרש 12');
+  await say(BTN.done);
+  await say(BTN.approve);
+  const r = await say(BTN.confirmFinal);
+  assert.match(r.text, /נקלטה כסופית/);
+  assert.doesNotMatch(r.text, /מספר ה-GR נכתב/);
+  assert.equal(pr.wrote('attach').filter((w) => /עם מספר ה-GR/.test(w.args[2].description)).length, 0);
 });

@@ -137,6 +137,45 @@
     let previewUrl = null;
     let desk = null;         // המצב של המנוע (‎/api/priority/desk/<flow>‎) — אותו מנוע כמו בבוט
     let deskBusy = false;
+    /*
+     * "המערכת קוראת" — כמו "מקליד…" בוואטסאפ: בועה עם נקודות שזזות, השלב שהמערכת בו, פס התקדמות,
+     * וקו סריקה שרץ על המסמך. השלבים — הסדר שבו המנוע עובד באמת; הזמנים — הערכה (המנוע לא מדווח באמצע).
+     */
+    const BUSY = {
+      read: ['פותח את המסמך', 'קורא את השורות, הכמויות והמחירים', 'מזהה את החברה ואת הספק', 'מחפש הזמנה פתוחה בפריוריטי', 'משווה את השורות להזמנה', 'מכין את הסיכום'],
+      attach: ['קורא את הקובץ', 'בודק אם הוא שייך לקליטה הזו', 'מצרף'],
+      answer: ['מעבד את התשובה', 'מעדכן את הקליטה']
+    };
+    let busyKind = 'answer';
+    let busyStep = 0;
+    let busyTimer = null;
+    let busyStarted = 0;
+    function busyOn(kind) {
+      busyKind = kind; busyStep = 0; busyStarted = Date.now();
+      clearInterval(busyTimer);
+      busyTimer = setInterval(() => {
+        if (busyStep < BUSY[busyKind].length - 1) busyStep += 1;
+        paintBusy();
+      }, kind === 'read' ? 3500 : 2500);
+      $('#preview')?.classList.toggle('scanning', kind !== 'answer');
+    }
+    function busyOff() {
+      clearInterval(busyTimer); busyTimer = null;
+      $('#preview')?.classList.remove('scanning');
+    }
+    const busyHtml = () => {
+      const steps = BUSY[busyKind];
+      const sec = Math.round((Date.now() - busyStarted) / 1000);
+      return `<div class="typing" aria-hidden="true"><i></i><i></i><i></i></div>
+        <p class="busy-step">${esc(steps[busyStep])}…</p>
+        <ol class="busy-steps">${steps.map((t, i) => `<li class="${i < busyStep ? 'done' : i === busyStep ? 'now' : ''}">${esc(t)}</li>`).join('')}</ol>
+        <div class="busy-bar"><span style="width:${Math.min(95, Math.round(((busyStep + 1) / steps.length) * 100))}%"></span></div>
+        ${sec >= 20 ? `<p class="hint">${sec} שניות — מסמך ארוך לוקח קצת יותר. אפשר להמשיך לעבוד במסך.</p>` : ''}`;
+    };
+    function paintBusy() {
+      const b = $('#busy-bubble');
+      if (b) b.innerHTML = busyHtml();
+    }
     let deskConflict = null; // קליטה אחרת פתוחה — מה לעשות איתה
 
     main.classList.add('wide');
@@ -177,7 +216,7 @@
             <span class="qs muted">${x.docno ? `<b class="ltr-inline">${esc(x.docno)}</b> · ` : ''}${x.source === 'mail' ? esc(x.subject || x.fromEmail) : x.source === 'whatsapp' ? 'נפתח בוואטסאפ' : 'הועלה במסך'} · ${fmtAt(x.at)}</span>
           </button>
           <span class="qa">
-            ${d.ready && ['new', 'bot'].includes(x.stage) && desk?.docId !== x.id ? `<button type="button" class="btn small pri" data-start="${x.id}" aria-label="להתחיל כאן: ${esc(x.filename)}">להתחיל כאן</button>` : ''}
+            ${d.ready && !deskBusy && ['new', 'bot'].includes(x.stage) && desk?.openDocId !== x.id ? `<button type="button" class="btn small pri" data-start="${x.id}" aria-label="להתחיל כאן: ${esc(x.filename)}">להתחיל כאן</button>` : ''}
             ${d.ready && x.stage === 'new' ? `<button type="button" class="btn small" data-bot="${x.id}" aria-label="לשלוח לבוט: ${esc(x.filename)}">${ui('bot')} לבוט</button>` : ''}
             ${['new', 'bot'].includes(x.stage) ? (confirmDel === x.id
               ? `<button type="button" class="btn small confirm" data-del="${x.id}">${x.source === 'upload' ? 'למחוק?' : 'להוציא?'}</button>`
@@ -227,23 +266,35 @@
     // ---------------- עבודה על המסמך מתוך המסך
     const fmtWa = (t) => esc(t).replace(/\*([^*\n]+)\*/g, '<b>$1</b>').replace(/(^|\s)_([^_\n]+)_(?=\s|$)/g, '$1<i>$2</i>').replace(/~([^~\n]+)~/g, '<s>$1</s>').replace(/\n/g, '<br>');
     const num = (v) => (v === null || v === undefined || v === '' ? '' : Number(v).toLocaleString('he-IL', { maximumFractionDigits: 2 }));
+    const talkHtml = (messages) => messages.map((m) => `<li class="msg ${m.from}">${m.texts.map((t) => `<p>${fmtWa(t)}</p>`).join('')}${(m.files ?? []).map((f) => `<a class="msg-file" href="/api/priority/desk/file/${encodeURIComponent(f.id)}" target="_blank" rel="noopener">${ui('clip')} ${esc(f.caption || f.name)}</a>`).join('')}</li>`).join('');
     function drawDesk() {
       const box = $('#desk');
       if (!box) return;
-      const finished = Boolean(desk && !desk.active && desk.next && desk.messages?.length);
-      $('#split').classList.toggle('desk-on', Boolean(desk?.active || deskConflict || finished));
-      box.hidden = !(desk?.active || deskConflict || finished);
+      // מה מוצג: קליטה פתוחה, שאלה על קליטה אחרת, או שיחה של מסמך לקריאה בלבד (הסתיימה / מסמך אחר מהתור)
+      const readOnly = Boolean(desk && desk.readOnly && !deskBusy);
+      const show = Boolean(desk?.active || deskConflict || deskBusy || (readOnly && (desk.messages?.length || desk.doc)));
+      $('#split').classList.toggle('desk-on', show);
+      box.hidden = !show;
       if (box.hidden) return;
-      if (finished) {
-        // הקליטה נגמרה — מה שהמנוע אמר אחרון, והמסמך הבא בתור בכפתור (לא מתחיל לבד)
-        const lastBot = [...desk.messages].reverse().find((m) => m.from === 'bot');
+      if (readOnly && !deskConflict) {
         const n = desk.next;
-        box.innerHTML = `<div class="desk-done">
-          ${lastBot ? `<div class="msg bot">${lastBot.texts.map((t) => `<p>${fmtWa(t)}</p>`).join('')}</div>` : ''}
-          <p class="muted">${esc(d.label)} הבאה בתור:</p>
-          <div class="next-doc"><b>${esc(n.supplier || n.fromName || n.filename)}</b><span class="muted">${esc(n.filename)}${n.pages ? ` · ${n.pages + 1} עמודים` : ''}</span></div>
-          <button type="button" class="btn pri" data-start="${n.id}">להתחיל את המסמך הבא</button>
-        </div>`;
+        const doc = desk.doc;
+        const status = desk.ended
+          ? '<span class="pill p-mute">השיחה הסתיימה — לקריאה בלבד</span>'
+          : '<span class="pill p-mute">לקריאה בלבד</span>';
+        const empty = !desk.messages?.length
+          ? (doc?.source === 'whatsapp' ? '<p class="muted">המסמך הזה נקלט בוואטסאפ — השיחה שמורה ביומן הבוט.</p>'
+            : doc?.stage === 'new' ? `<p class="muted">המסמך עוד לא התחיל.</p><button type="button" class="btn pri" data-start="${doc.id}">להתחיל כאן</button>`
+              : doc?.stage === 'bot' ? '<p class="muted">המסמך נשלח לבוט — השיחה בוואטסאפ.</p>' : '<p class="muted">אין שיחה שמורה למסמך הזה.</p>')
+          : '';
+        box.innerHTML = `<div class="desk-h">${status}${doc?.docno ? `<span class="pill p-brand ltr-inline">${esc(doc.docno)}</span>` : ''}</div>
+          ${empty}
+          ${desk.messages?.length ? `<ol class="talk ro" id="talk" aria-label="השיחה על המסמך">${talkHtml(desk.messages)}</ol>` : ''}
+          ${desk.openDocId && desk.openDocId !== desk.docId ? `<button type="button" class="btn" data-view-doc="${desk.openDocId}">חזרה למסמך שבעבודה</button>` : ''}
+          ${n ? `<div class="desk-done"><p class="muted">${esc(d.label)} הבאה בתור:</p>
+            <div class="next-doc"><b>${esc(n.supplier || n.fromName || n.filename)}</b><span class="muted">${esc(n.filename)}${n.pages ? ` · ${n.pages + 1} עמודים` : ''}</span></div>
+            <button type="button" class="btn pri" data-start="${n.id}">להתחיל את המסמך הבא</button></div>` : ''}`;
+        const talk = $('#talk'); if (talk) talk.scrollTop = talk.scrollHeight;
         return;
       }
       if (deskConflict) {
@@ -254,7 +305,7 @@
           <button type="button" class="btn" data-force="${deskConflict.id}">לבטל אותה ולהתחיל את זו</button></div></div>`;
         return;
       }
-      const v = desk.view;
+      const v = desk.view ?? { stepLabel: '', lines: [] };
       const field = (k, val, cls = '') => (val ? `<div class="field ${cls}"><span class="fl">${k}</span><span class="fv">${val}</span></div>` : '');
       const company = v.company ? `${esc(v.company.name)}${v.company.test ? ' <span class="pill p-warn">סביבת בדיקה</span>' : ''}` : '';
       const fields = d.key === 'receipt'
@@ -286,14 +337,15 @@
           <input type="file" id="attach-in" accept="application/pdf,image/*" multiple hidden>
         </div>` : ''}
         <ol class="talk" id="talk" aria-label="השיחה עם המערכת">
-          ${desk.messages.map((m) => `<li class="msg ${m.from}">${m.texts.map((t) => `<p>${fmtWa(t)}</p>`).join('')}${(m.files ?? []).map((f) => `<a class="msg-file" href="/api/priority/desk/file/${encodeURIComponent(f.id)}" target="_blank" rel="noopener">${ui('clip')} ${esc(f.caption || f.name)}</a>`).join('')}</li>`).join('')}
+          ${talkHtml(desk.messages)}
+          ${deskBusy ? `<li class="msg bot busy" id="busy-bubble">${busyHtml()}</li>` : ''}
         </ol>
         <form class="say" id="say-form">
           ${last?.buttons?.length ? `<div class="answers" role="group" aria-label="תשובות מהירות">${last.buttons.map((b) => `<button type="button" class="btn ${/✅/.test(b) ? 'pri' : ''}" data-say="${esc(b)}">${esc(b)}</button>`).join('')}</div>` : ''}
           <div class="say-row"><label class="sr-only" for="say-in">תשובה או תיקון</label>
             <input id="say-in" autocomplete="off" placeholder="לענות או לתקן בשפה חופשית: ״מלט קיבלתי רק 100״, ״ספק אחר: …״" ${deskBusy ? 'disabled' : ''}>
             <button type="submit" class="btn pri" ${deskBusy ? 'disabled' : ''}>שליחה</button></div>
-          <p class="hint" id="desk-busy" role="status">${deskBusy ? 'המערכת עובדת על זה… קריאת מסמך יכולה לקחת עד דקה.' : ''}</p>
+          <p class="sr-only" id="desk-busy" role="status">${deskBusy ? (busyKind === 'read' ? 'המערכת קוראת את המסמך' : 'המערכת עובדת על זה') : ''}</p>
         </form>`;
       const talk = $('#talk'); talk.scrollTop = talk.scrollHeight;
       // אחרי ציור מחדש — המקלדת חוזרת לתא שנערך
@@ -321,19 +373,20 @@
       }
     }
 
-    async function deskLoad() {
+    /** ‎docId‎ — השיחה של מסמך מסוים מהתור; בלי — המסמך שבעבודה */
+    async function deskLoad(docId = null) {
       if (!d.ready) return;
-      try { desk = await api('GET', `/api/priority/desk/${d.key}`); } catch { desk = null; }
+      try { desk = await api('GET', `/api/priority/desk/${d.key}${docId ? `?doc=${docId}` : ''}`); } catch { desk = null; }
       drawDesk();
     }
 
     async function deskSend(text) {
       if (deskBusy || !text) return;
-      deskBusy = true;
+      deskBusy = true; busyOn('answer');
       desk.messages = [...desk.messages, { from: 'user', texts: [text] }];
       drawDesk();
-      try { desk = await api('POST', `/api/priority/desk/${d.key}/say`, { text }); } catch (e) { toast(e.message, true); }
-      deskBusy = false;
+      try { desk = await api('POST', `/api/priority/desk/${d.key}/say`, { text }); } catch (e) { toast(e.message, true); if (e.status === 409) await deskLoad(); }
+      deskBusy = false; busyOff();
       drawDesk();
       $('#say-in')?.focus();
       load();
@@ -341,15 +394,16 @@
 
     async function deskStart(id, force = false) {
       if (deskBusy) return;
-      deskBusy = true; deskConflict = null;
-      desk = { active: true, docId: id, messages: [{ from: 'bot', texts: ['קורא את המסמך…'] }], view: { stepLabel: 'קריאת המסמך', lines: [] } };
+      deskBusy = true; deskConflict = null; busyOn('read');
+      const name = items.find((i) => i.id === id)?.filename ?? 'מסמך';
+      desk = { active: true, docId: id, openDocId: id, messages: [{ from: 'user', texts: [`${d.key === 'receipt' ? 'קבלת סחורה' : 'דרישת רכש'}: ${name}`] }], view: { stepLabel: 'קריאת המסמך', lines: [] } };
       drawDesk(); drawQueue();
       try {
         desk = await api('POST', '/api/priority/desk/start', { id, force });
       } catch (e) {
         if (e.status === 409) { deskConflict = { id, open: e.data?.open }; desk = null; } else { toast(e.message, true); desk = null; }
       }
-      deskBusy = false;
+      deskBusy = false; busyOff();
       drawDesk(); load();
     }
 
@@ -387,12 +441,12 @@
     async function attachFiles(files) {
       for (const f of files) {
         if (deskBusy) break;
-        deskBusy = true; drawDesk();
+        deskBusy = true; busyOn('attach'); drawDesk();
         try {
           const data = await readAsDataUrl(f);
           desk = await api('POST', `/api/priority/desk/${d.key}/file`, { filename: f.name, mime: f.type, data, attach: true });
         } catch (e) { toast(`${f.name}: ${e.message}`, true); }
-        deskBusy = false; drawDesk();
+        deskBusy = false; busyOff(); drawDesk();
       }
       load();
     }
@@ -484,7 +538,9 @@
         return deskSend(`שורה ${n} הסרה`);
       }
       const v = e.target.closest('[data-view]');
-      if (v) return preview(Number(v.dataset.view));
+      if (v) { const id = Number(v.dataset.view); preview(id); if (!deskBusy && !deskConflict) deskLoad(id); return; }
+      const vd = e.target.closest('[data-view-doc]');
+      if (vd) { const id = Number(vd.dataset.viewDoc); preview(id); return deskLoad(id); }
       const t = e.target.closest('[data-take]');
       if (t) {
         t.disabled = true;

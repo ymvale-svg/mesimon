@@ -166,7 +166,8 @@ function register(router) {
 
   router.get('/api/priority/desk/:flow', async (req, res, ctx) => {
     const actor = userOnly(ctx);
-    sendJson(res, 200, await docs(() => Desk.state(actor, ctx.params.flow)));
+    const docId = parseUrl(req).searchParams.get('doc');
+    sendJson(res, 200, await docs(() => Desk.state(actor, ctx.params.flow, { docId: docId ? Number(docId) : null })));
   });
 
   router.post('/api/priority/desk/:flow/file', async (req, res, ctx) => {

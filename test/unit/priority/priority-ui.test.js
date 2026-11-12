@@ -59,3 +59,11 @@ test('כותרות קפואות: מטריצת ההרשאות וטבלת החבר
   assert.match(css, /\.sticky-wrap \{[^}]*max-height[^}]*overflow: auto/);
   assert.match(css, /\.sticky-wrap th \{[^}]*position: sticky; top: 0/);
 });
+
+test('"המערכת קוראת": בועה עם נקודות, השלב, רשימת השלבים, פס התקדמות וקו סריקה — ובלי תנועה למי שביקש פחות תנועה', () => {
+  assert.match(js, /BUSY = \{\s*read: \[/);
+  assert.match(js, /class="msg bot busy" id="busy-bubble"/);
+  assert.match(js, /classList\.toggle\('scanning'/);
+  assert.match(css, /\.preview\.scanning::after \{[^}]*animation: scan/);
+  assert.match(css, /prefers-reduced-motion: reduce\) \{\s*\.typing i, \.busy-bar span::after, \.preview\.scanning::after \{ animation: none; \}/);
+});
