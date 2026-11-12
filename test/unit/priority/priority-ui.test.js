@@ -52,3 +52,10 @@ test('ניגודיות: אדום במצב בהיר #b91c1c (4.5:1 מול הרק�
   assert.match(css, /--bad: #b91c1c/);
   assert.doesNotMatch(css, /\.tile\.off\s*\{[^}]*opacity/);
 });
+
+test('כותרות קפואות: מטריצת ההרשאות וטבלת החברות גוללות במסגרת, ושורת הכותרות נשארת', () => {
+  assert.match(js, /class="scroll sticky-wrap"[^>]*><table class="mtx"/);
+  assert.match(js, /class="scroll sticky-wrap"[^>]*><table class="t" id="co"/);
+  assert.match(css, /\.sticky-wrap \{[^}]*max-height[^}]*overflow: auto/);
+  assert.match(css, /\.sticky-wrap th \{[^}]*position: sticky; top: 0/);
+});

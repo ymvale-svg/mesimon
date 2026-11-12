@@ -618,7 +618,7 @@
 
       <section class="panel">
         <div class="panel-h"><h2>חברות</h2><p>כל החברות בפריוריטי. כתיבה — לאן מותר לקלוט מהבוט ומהמסך. התראות — באילו חברות שולחים "הזמנה הועברה לספק" והודעה לחותם הבא על דרישה.</p></div>
-        <div class="scroll"><table class="t" id="co"></table></div>
+        <div class="scroll sticky-wrap" tabindex="0" role="region" aria-label="טבלת החברות"><table class="t" id="co"></table></div>
         <div class="row-actions"><button class="btn small" id="co-add">+ חברה</button></div>
       </section>
 
@@ -706,7 +706,7 @@
       <section class="panel">
         <div class="panel-h"><h2>מי יכול מה בפריוריטי</h2>
           <p>לכל משתמש: סוגי המסמכים (כן או לא — מי שמורשה למסמך מורשה לכל מה שבו, בבוט ובמסך), והחברות שהוא שייך אליהן. מנהלי מערכת מורשים תמיד לכל דבר.</p></div>
-        <div class="scroll"><table class="mtx" id="mtx"></table></div>
+        <div class="scroll sticky-wrap" tabindex="0" role="region" aria-label="מטריצת ההרשאות"><table class="mtx" id="mtx"></table></div>
         <div class="row-actions"><button class="btn pri" id="save" disabled>שמירה</button><span class="dirty" id="dirty"></span></div>
       </section>`;
 
