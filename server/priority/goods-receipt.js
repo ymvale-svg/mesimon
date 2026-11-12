@@ -35,6 +35,7 @@ const Prefs = require('./priority-prefs');
 const Access = require('./priority-access');
 const Chain = require('./priority-chain');
 const LineCmd = require('./line-commands');
+const GrStamp = require('./gr-stamp');
 const Priority = require('../integrations').Priority;
 const WhatsApp = require('../integrations').Whatsapp;
 const { receiptPdf } = require('./gr-pdf');
@@ -274,10 +275,18 @@ const EXTRACT_SCHEMA = {
       required: ['subtotal', 'doc_discount_pct', 'doc_discount', 'before_vat', 'vat', 'total'],
       additionalProperties: false
     },
+    // 🏷️ איפה לכתוב את מספר ה-GR על המסמך (‎gr-stamp.js‎): אזור לבן וריק בעמוד הראשון, עדיף בצד שמאל
+    blank_area: {
+      type: 'object',
+      description: 'אזור לבן וריק לגמרי (בלי טקסט, קווים או חותמות) בעמוד הראשון, לפחות 20% מהרוחב ו-6% מהגובה, עדיף בצד שמאל של הדף. קואורדינטות יחסיות 0–1 מהפינה השמאלית העליונה. אין — הכל 0',
+      properties: { x: num, y: num, w: num, h: num },
+      required: ['x', 'y', 'w', 'h'],
+      additionalProperties: false
+    },
     warnings: { type: 'array', items: str }
   },
   required: ['doc_type', 'doc_label', 'recipient_name', 'recipient_vat', 'other_ids', 'supplier_name', 'supplier_vat', 'doc_number', 'po_number', 'supplier_order_ref',
-    'date', 'doc_date', 'delivery_place', 'project_hint', 'purchase_type', 'lines', 'totals', 'warnings'],
+    'date', 'doc_date', 'delivery_place', 'project_hint', 'purchase_type', 'lines', 'totals', 'blank_area', 'warnings'],
   additionalProperties: false
 };
 const MATCH_SCHEMA = {
@@ -1701,6 +1710,22 @@ function askCancel(user, s, { mark = '🗑️', result = 'ביטול: שאלת �
   return { replies: [`${mark} לבטל את הטיוטא *${s.docno}*? *כן* 👍 — לבטל · או כתבו מה לתקן (כמות, תיאור, שורה שחסרה).`], status: 'ok', result, buttons: buttonsFor(s) };
 }
 
+/**
+ * 🏷️ מספר ה-GR על המסמך המקורי (‎gr-stamp.js‎) — אחרי שהקבלה סופית. נשמר כנספח ב-GR ומוחזר לעובד.
+ * תקלה כאן לא פוגעת בקליטה: בלי חותמת, והפרטים למנהל המערכת.
+ */
+async function stampDoc(user, s) {
+  const main = (s.files ?? [])[0];
+  if (!main?.path || !s.docno) return null;
+  let buf;
+  try { buf = fs.readFileSync(main.path); } catch { return null; }
+  const out = await GrStamp.stamp({ buf, mime: main.mime }, { docno: s.docno, area: s.doc?.blank_area ?? null });
+  if (!out) return null;
+  await Priority.attach(s.company, s.docno, { buf: out.buf, mime: out.mime, description: `${docName(s.doc)} עם מספר ה-GR` })
+    .catch((err) => alertAdmins(user, s, 'החותמת לא צורפה ל-GR', [`${s.docno}: ${err.message}`]));
+  return { buf: out.buf, fileName: out.fileName, mime: out.mime, caption: `🏷️ ${s.docno} על ה${docName(s.doc)}` };
+}
+
 async function cancel(user, s, why = 'בוטלה') {
   let note = '';
   if (s?.docno) {
@@ -2305,9 +2330,10 @@ async function step(user, s, t, file, allow = { gr: true, pd: false }) {
         // ה-GR האחרון שהפך לסופי — ל-👎 שנשלח מיד אחר כך (פריוריטי לא מחזיר סופית לטיוטא דרך ה-API)
         D.setSetting(doneKey(user.id), { docno: s.docno, company: s.company, supplier: s.supplier?.name ?? '', at: Date.now() });
         Chain.progress(user.id, 'receipt', { stage: 'done', docno: s.docno, company: s.company, supplier: s.supplier?.name ?? '' });
-        const done = `✅ *קבלת סחורה ${s.docno}* נקלטה כסופית.\n${companyLine(s)}\nספק: ${s.supplier.name}${s.order ? ` · הזמנה ${s.order.ordname}` : ''}`;
-        if (queueOf(s).length) return startQueued(user, s, [done]);
-        return { s: null, replies: [done], status: 'ok', result: `GR סופי ${s.docno}` };
+        const stamped = await stampDoc(user, s);
+        const done = `✅ *קבלת סחורה ${s.docno}* נקלטה כסופית.\n${companyLine(s)}\nספק: ${s.supplier.name}${s.order ? ` · הזמנה ${s.order.ordname}` : ''}${stamped ? `\n🏷️ מספר ה-GR נכתב על ה${docName(s.doc)} — מצורף, ונשמר כנספח בפריוריטי.` : ''}`;
+        if (queueOf(s).length) { const q = await startQueued(user, s, [done]); return stamped ? { ...q, files: [stamped, ...(q.files ?? [])] } : q; }
+        return { s: null, replies: [done], files: stamped ? [stamped] : [], status: 'ok', result: `GR סופי ${s.docno}` };
       }
       const exact = LineCmd.parse(t);
       const out = (exact && LineCmd.asReceiptReply(exact)) || await ai.reply(s.reviewLines.map((l) => ({ line: l.n, description: l.description, qty: l.qty, options: [] })), t);

@@ -214,3 +214,46 @@ test('התצוגה: מתי אפשר לצרף, וכמה נספחים', () => {
   D.setSetting(`goods_receipt:${u.id}`, { step: 'supplier', at: Date.now(), files: [{ path: '/x/main.jpg' }], doc: {}, lines: [] });
   assert.equal(GoodsReceipt.view(u.id).canAttach, false);
 });
+
+test('באג: אחרי שהקליטה הסתיימה, "כן, לסגור" שני לא פותח קבלת סחורה חדשה — 409, והמנוע לא נקרא', async (t) => {
+  const a = worker();
+  const calls = fakeEngine(t, GoodsReceipt);
+  await Desk.start(a, upload(a).id);
+  await Desk.say(a, 'receipt', 'ביטול');                 // הקליטה הסתיימה
+  const n = calls.length;
+  await assert.rejects(Desk.say(a, 'receipt', 'כן, לסגור ✅'), (e) => e.status === 409 && /הסתיימה/.test(e.message));
+  assert.equal(calls.length, n, 'לא נשלח למנוע');
+  const s = Desk.state(a, 'receipt');
+  assert.equal(s.active, false);
+  assert.equal(s.ended, true);
+  assert.equal(s.readOnly, true);
+  assert.ok(s.messages.some((m) => m.texts.includes('בוטל.')), 'כל השיחה נשארת לקריאה, כולל הסוף');
+});
+
+test('לחיצה על מסמך בתור — השיחה שלו (לקריאה בלבד אם אינו המסמך שבעבודה); של עובד אחר — 404', async (t) => {
+  const a = worker();
+  const b = worker();
+  fakeEngine(t, GoodsReceipt);
+  const first = upload(a);
+  const second = upload(a);
+  await Desk.start(a, first.id);
+  await Desk.say(a, 'receipt', 'ביטול');
+  await Desk.start(a, second.id);
+  await Desk.say(a, 'receipt', 'כן ✅');
+
+  const old = Desk.state(a, 'receipt', { docId: first.id });
+  assert.equal(old.readOnly, true);
+  assert.equal(old.active, false);
+  assert.equal(old.docId, first.id);
+  assert.equal(old.openDocId, second.id, 'אפשר לחזור למסמך שבעבודה');
+  assert.ok(old.messages.some((m) => m.texts.includes('בוטל.')), 'השיחה של המסמך הראשון');
+  assert.equal(old.messages.some((m) => m.texts.includes('כן ✅')), false, 'לא של השני');
+
+  const cur = Desk.state(a, 'receipt', { docId: second.id });
+  assert.equal(cur.active, true);
+  assert.ok(cur.messages.some((m) => m.texts.includes('כן ✅')));
+  assert.throws(() => Desk.state(b, 'receipt', { docId: first.id }), (e) => e.status === 404);
+  const fresh = upload(a);
+  const nw = Desk.state(a, 'receipt', { docId: fresh.id });
+  assert.deepEqual([nw.readOnly, nw.messages.length, nw.doc.stage], [true, 0, 'new'], 'מסמך שעוד לא התחיל');
+});

@@ -47,7 +47,17 @@ const transcript = (userId, flow) => {
   return v && Array.isArray(v.messages) ? v : { docId: null, messages: [] };
 };
 function saveTranscript(userId, flow, t) {
-  D.setSetting(key(userId, flow), { docId: t.docId ?? null, messages: t.messages.slice(-MAX_MESSAGES) });
+  const messages = t.messages.slice(-MAX_MESSAGES);
+  D.setSetting(key(userId, flow), { docId: t.docId ?? null, messages });
+  // לכל מסמך — השיחה שלו (לחיצה על מסמך בתור מראה את השיחה שלו, גם אחרי שהסתיים)
+  if (t.docId) D.setSetting(docKey(t.docId), { userId, flow, messages });
+}
+const docKey = (docId) => `priority_desk_doc:${docId}`;
+/** השיחה של מסמך מסוים (רק של בעליו) */
+function docTranscript(user, docId) {
+  const v = D.getSetting(docKey(docId), null);
+  if (v && v.userId === user.id && Array.isArray(v.messages)) return v.messages;
+  return [];
 }
 
 /** קובץ שהמנוע מחזיר (ה-PDF לבדיקה) — נשמר, ומוגש רק לבעליו */
@@ -98,14 +108,23 @@ async function run(user, flow, input) {
   };
 }
 
-/** המצב למסך: התמליל, התצוגה של המנוע, ואיזה מסמך מהתור בעבודה */
-function state(user, flow) {
+/**
+ * המצב למסך. בלי ‎docId‎ — המסמך שבעבודה (או האחרון שהסתיים). עם ‎docId‎ של מסמך אחר — השיחה שלו, לקריאה בלבד.
+ * ‎active‎ — אפשר לענות (הקליטה פתוחה, ושל המסמך הזה). ‎ended‎ — השיחה הסתיימה (סופי / בוטל).
+ */
+function state(user, flow, { docId = null } = {}) {
   const f = flowOf(user, flow);
   const t = transcript(user.id, flow);
   const view = f.engine().view(user.id);
-  // הקליטה נגמרה (סופי / בוטל) — המסמך הבא בתור, לכפתור
-  const next = view ? null : Docs.nextOf(user, flow, t.docId);
-  return { flow, active: Boolean(view), view, docId: view ? t.docId : null, messages: view ? t.messages : t.messages.slice(-6), next };
+  const current = t.docId ?? null;
+  const want = docId ? Number(docId) : current;
+  if (want && want !== current) {
+    const doc = Docs.get(user, want);   // 404 — לא שלו
+    return { flow, active: false, readOnly: true, ended: !['new'].includes(doc.stage), view: null, docId: want, doc, messages: docTranscript(user, want), next: null, openDocId: view ? current : null };
+  }
+  // הקליטה נגמרה (סופי / בוטל) — כל השיחה נשארת לקריאה, והמסמך הבא בתור מוצע בכפתור
+  const next = view ? null : Docs.nextOf(user, flow, current);
+  return { flow, active: Boolean(view), readOnly: !view, ended: !view && t.messages.length > 0, view, docId: current, messages: t.messages, next, openDocId: view ? current : null };
 }
 
 /**
@@ -161,7 +180,9 @@ function say(user, flow, text) {
   return serial(user.id, async () => {
     const msg = String(text ?? '').trim().slice(0, 2000);
     if (!msg) throw fail(400, 'ריק');
-    flowOf(user, flow);
+    const f = flowOf(user, flow);
+    // הקליטה הסתיימה — לא שולחים למנוע (בלי קליטה פתוחה הוא היה פותח קבלת סחורה חדשה). מסמך חדש — "להתחיל כאן"
+    if (!f.engine().view(user.id)) throw fail(409, 'הקליטה הזו כבר הסתיימה. למסמך הבא — "להתחיל כאן" בתור.');
     const t = transcript(user.id, flow);
     t.messages.push({ from: 'user', texts: [msg], at: D.nowIso() });
     t.messages.push(await run(user, flow, { text: msg }));
@@ -170,4 +191,4 @@ function say(user, flow, text) {
   });
 }
 
-module.exports = { FLOWS, state, start, say, sendFile, fileOf, _key: key };
+module.exports = { FLOWS, state, start, say, sendFile, fileOf, _key: key, _docKey: docKey };

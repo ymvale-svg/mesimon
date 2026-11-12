@@ -25,6 +25,8 @@
   }
 }
 * { box-sizing: border-box; }
+/* ‎hidden‎ גובר על ‎display‎ של המחלקה (אזור הבחירה, העבודה על המסמך) */
+[hidden] { display: none !important; }
 html, body { margin: 0; }
 body { background: var(--bg); color: var(--text); font-size: 15px; line-height: 1.5; min-height: 100vh; }
 button, input, select { font: inherit; color: inherit; }
@@ -285,3 +287,32 @@ td.qty .unit { color: var(--mute); font-size: 13px; }
 /* הפינה (עמודת המשתמש, שקפואה גם לרוחב) — מעל שתיהן */
 .sticky-wrap .mtx thead th:first-child { z-index: 3; }
 .sticky-wrap:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+
+/* ---------- "המערכת קוראת" — כמו "מקליד…" בוואטסאפ ---------- */
+.msg.busy { min-width: 240px; gap: 6px; border-color: var(--brand); }
+.typing { display: inline-flex; gap: 4px; padding: 2px 0; }
+.typing i { width: 7px; height: 7px; border-radius: 50%; background: var(--brand); opacity: .35; animation: dot 1.2s infinite ease-in-out; }
+.typing i:nth-child(2) { animation-delay: .15s; }
+.typing i:nth-child(3) { animation-delay: .3s; }
+@keyframes dot { 0%, 80%, 100% { opacity: .3; transform: translateY(0); } 40% { opacity: 1; transform: translateY(-4px); } }
+.busy-step { font-weight: 700; color: var(--brand-ink); }
+.busy-steps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; font-size: 12.5px; color: var(--mute); }
+.busy-steps li::before { content: '○'; margin-inline-end: 6px; }
+.busy-steps li.done { color: var(--ok); }
+.busy-steps li.done::before { content: '✓'; }
+.busy-steps li.now { color: var(--text); font-weight: 600; }
+.busy-steps li.now::before { content: '●'; color: var(--brand); }
+.busy-bar { height: 4px; border-radius: 4px; background: var(--surface-2); overflow: hidden; }
+.busy-bar span { display: block; height: 100%; background: var(--brand); border-radius: 4px; transition: width .6s ease; position: relative; overflow: hidden; }
+.busy-bar span::after { content: ''; position: absolute; inset: 0; background: linear-gradient(90deg, transparent, rgba(255, 255, 255, .55), transparent); animation: shimmer 1.4s infinite; }
+@keyframes shimmer { from { transform: translateX(-100%); } to { transform: translateX(100%); } }
+/* קו סריקה שרץ על המסמך בזמן הקריאה */
+.preview { position: relative; }
+.preview.scanning::after { content: ''; position: absolute; inset-inline: 10px; top: 40px; height: 3px; border-radius: 3px; background: var(--brand); box-shadow: 0 0 18px 6px color-mix(in srgb, var(--brand) 45%, transparent); animation: scan 2.4s infinite ease-in-out; pointer-events: none; }
+.preview.scanning::before { content: ''; position: absolute; inset: 0; background: color-mix(in srgb, var(--brand) 6%, transparent); border-radius: var(--r); pointer-events: none; }
+@keyframes scan { 0% { top: 40px; } 50% { top: calc(100% - 16px); } 100% { top: 40px; } }
+@media (prefers-reduced-motion: reduce) {
+  .typing i, .busy-bar span::after, .preview.scanning::after { animation: none; }
+  .typing i { opacity: .8; }
+  .preview.scanning::after { top: 40px; }
+}
