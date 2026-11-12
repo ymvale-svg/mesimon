@@ -21,6 +21,7 @@ const AiApi = require('./api-ai');
 const TodayApi = require('./api-today');
 const PhonebookApi = require('./api-phonebook');
 const PriorityApi = require('./api-priority');
+const PriorityAccess = require('../priority').PriorityAccess;
 const MeetingsApi = require('./api-meetings');
 const WhatsNew = require('./api-whats-new');
 const Zoom = require('../integrations').Zoom;
@@ -874,7 +875,9 @@ function publicActor(actor) {
     // מסך "בקרת משימות" ותתי-משימות — רק למי שנפתח לו (‎D.trackerAccess‎)
     tracker: actor.type === 'user' && D.trackerAccess(actor.id),
     // מסך הקלטות ה-Zoom — כשיש חיבור Zoom
-    zoomRecordings: actor.type === 'user' && Zoom.isEnabled()
+    zoomRecordings: actor.type === 'user' && Zoom.isEnabled(),
+    // 🗂 משימון פריוריטי (‎/priority‎) — קישור בתפריט למי שמורשה לפחות לסוג מסמך אחד (או מנהל מערכת)
+    priority: actor.type === 'user' && (PriorityAccess.isAdmin(actor) || PriorityAccess.of({ id: actor.id, role: actor.role }).docs.length > 0)
   };
 }
 

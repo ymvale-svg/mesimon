@@ -142,3 +142,12 @@ test('נספחים ועמודים: בלי קליטה פתוחה — 400; עמו�
   assert.equal(p.status, 200, p.text);
   assert.equal(p.json.doc.pages, 1);
 });
+
+test('קישור "משימון פריוריטי" בתפריט: מנהל — כן; עובד בלי הרשאה לאף מסמך — לא', async () => {
+  const b = await as(admin)('GET', '/api/bootstrap');
+  assert.equal(b.json.actor.priority, true);
+  await as(admin)('PUT', '/api/priority/access', { rows: [{ id: empId, docs: [], companies: null }] });
+  assert.equal((await as(emp)('GET', '/api/bootstrap')).json.actor.priority, false);
+  await as(admin)('PUT', '/api/priority/access', { rows: [{ id: empId, docs: ['receipt'], companies: ['elad1'] }] });
+  assert.equal((await as(emp)('GET', '/api/bootstrap')).json.actor.priority, true);
+});
