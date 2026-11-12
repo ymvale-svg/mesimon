@@ -95,6 +95,24 @@ test('קובץ ממייל — יורד מ-Gmail בפעם הראשונה ונשמ
   assert.equal(fetch.mock.callCount(), 1);
 });
 
+test('קובץ ממייל שהשולח הצהיר עליו HTML או SVG — לא מוגש inline (XSS מאותו אתר)', async (t) => {
+  for (const mime of ['text/html', 'image/svg+xml']) {
+    const u = worker();
+    const d = Docs.take(u, mail(u), 'receipt');
+    t.mock.method(MailActions, 'goodsFile', async () => ({ buf: Buffer.from('<svg onload=alert(1)>'), mime, name: 'x.pdf' }));
+    const first = await Docs.file(u, d.id);
+    const again = await Docs.file(u, d.id);
+    for (const f of [first, again]) {
+      assert.equal(f.mime, 'application/octet-stream', mime);
+      assert.equal(f.inline, false, mime);
+    }
+    t.mock.restoreAll();
+  }
+  const u = worker();
+  const d = Docs.upload(u, { doc: 'receipt', filename: 'תעודה.pdf', mime: 'application/pdf', data: b64(PDF) });
+  assert.equal((await Docs.file(u, d.id)).inline, true, 'PDF — inline כרגיל');
+});
+
 test('הוצאה מהתור — מייל חוזר לטור', () => {
   const u = worker();
   const m = mail(u);
