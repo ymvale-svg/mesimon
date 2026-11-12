@@ -440,6 +440,12 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
   // הודעה ארוכה שפותחת במילת אישור — אישור רק אם היא על הפריט שממתין
   let about = null;
   const isAbout = async () => (about ??= await aboutPending(state, t));
+  // "?" / "." לבד כשמשהו מחכה — לא בקשה חדשה: מזכירים מה מחכה, והטיוטה נשארת (סקירה 12.11: "?" הוריד טיוטת מייל)
+  if (state.awaiting && state.draft && [...PENDING_KINDS, 'task', 'complete', 'comment'].includes(state.draft.kind ?? 'task') && /^[?？!.…\s]+$/.test(t)) {
+    const what = pendingSummary(state.draft).split('\n')[0];
+    return out(`⏳ מחכה לתשובה שלך — ${what}\n\n*כן* 👍 — לאשר · *לא* 👎 — לוותר · או כתבו מה לתקן.`, { draft: state.draft, awaiting: true },
+      { action: 'other', status: 'ok', result: `"${t}" — הזכרתי מה מחכה`, buttons: [WaUi.BTN.yes, WaUi.BTN.no] });
+  }
   // "לא ❌" על פנייה יזומה על מייל — לא לענות / לא משימה: ההצעה יורדת מ"ממתין לאישורך"
   { const r = await flowAlertNo({ actor, dry, out, state, t }); if (r !== NEXT) return r; }
   // אחרי "לבטל את המשימה?" — גם "לבטל"/"ביטול" הם אישור, ולא ביטול של השאלה
