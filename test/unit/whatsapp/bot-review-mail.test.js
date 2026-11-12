@@ -85,3 +85,15 @@ test('sendReport — רעיון מהמייל (kind: idea) נשמר כהצעה ב
   assert.equal(saved[0].kind, 'idea');
   assert.equal(saved[0].url, '');
 });
+
+test('mailFeedback — תיבה מבוקשת של עובד רגיל (לא מנהל מערכת ולא בהגדרה) — לא נקראת', async (t) => {
+  D.setSetting('bot_review_mailboxes', null);
+  const worker = user({ role: 'employee', full_name: 'עובד' });
+  const listed = user({ role: 'employee', full_name: 'עובד שאושר' });
+  D.setSetting('bot_review_mailboxes', [listed.id]);
+  t.after(() => D.setSetting('bot_review_mailboxes', null));
+  const boxes = [];
+  t.mock.method(Gmail, 'boxesOf', (id) => { boxes.push(id); return []; });
+  await Review.mailFeedback('2026-11-10T19:40:00.000Z', { users: [worker.id, listed.id] });
+  assert.deepEqual(boxes, [listed.id], 'רק תיבה שבהגדרה או של מנהל מערכת');
+});

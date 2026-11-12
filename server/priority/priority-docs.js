@@ -171,11 +171,17 @@ function counts(user) {
 }
 
 /** הקובץ עצמו: מהדיסק, ובמסמך ממייל — מ-Gmail בפעם הראשונה (ונשמר לפעמים הבאות) */
+// 🔒 מוגש בדפדפן רק PDF או תמונה רגילה. סוג אחר (HTML, ‏SVG — מה שהשולח של המייל הצהיר) יורד כקובץ,
+// אחרת סקריפט בו רץ באתר של משימון בשם העובד
+const served = (f) => (DOC_MIME.test(f.mime ?? '')
+  ? { ...f, inline: true }
+  : { ...f, mime: 'application/octet-stream', inline: false });
+
 async function file(user, id) {
   const r = rowOf(user, id);
   if (r.file_path) {
     const p = path.join(D.UPLOADS_DIR, r.file_path);
-    if (fs.existsSync(p)) return { buf: fs.readFileSync(p), mime: r.mime || 'application/octet-stream', name: r.filename };
+    if (fs.existsSync(p)) return served({ buf: fs.readFileSync(p), mime: r.mime || 'application/octet-stream', name: r.filename });
   }
   if (r.source !== 'mail' || !r.mail_goods_id) throw fail(404, 'הקובץ לא נמצא');
   const m = D.get('SELECT * FROM mail_goods_docs WHERE id = ?', r.mail_goods_id);
@@ -187,7 +193,7 @@ async function file(user, id) {
   const name = `${crypto.randomUUID()}${EXT[type] ?? path.extname(r.filename)}`;
   fs.writeFileSync(path.join(dir(), name), f.buf);
   D.run('UPDATE priority_docs SET file_path = ?, mime = ?, size = ?, updated_at = ? WHERE id = ?', path.join('priority-docs', String(ORG), name), type, f.buf.length, D.nowIso(), r.id);
-  return { buf: f.buf, mime: type || 'application/octet-stream', name: r.filename };
+  return served({ buf: f.buf, mime: type || 'application/octet-stream', name: r.filename });
 }
 
 /** הוצאה מהתור (לא נוגע בפריוריטי). מייל שהגיע ממנו חוזר לטור */

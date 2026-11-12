@@ -126,7 +126,7 @@ function register(router) {
     res.writeHead(200, {
       'content-type': f.mime,
       'content-length': f.buf.length,
-      'content-disposition': `inline; filename*=UTF-8''${encodeURIComponent(f.name)}`,
+      'content-disposition': `${f.inline ? 'inline' : 'attachment'}; filename*=UTF-8''${encodeURIComponent(f.name)}`,
       'cache-control': 'private, no-cache',
       'x-content-type-options': 'nosniff',
       'content-security-policy': "frame-ancestors 'self'"

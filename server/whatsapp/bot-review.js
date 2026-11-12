@@ -98,11 +98,15 @@ const IMG_PER_MAIL = 4;
 const IMG_MAX_BYTES = 3 * 1024 * 1024;
 const IMG_TOTAL_BYTES = 12 * 1024 * 1024;
 
+// 🔒 תיבה מבוקשת (‎?mailbox=‎) נקראת רק אם היא של מנהל מערכת (superadmin) או מופיעה בהגדרה ‎bot_review_mailboxes‎ —
+// כך מי שמחזיק את ‎BOT_REVIEW_KEY‎ לא יכול לקרוא את המייל של כל עובד
 function mailboxUsers(requested = []) {
-  const ids = (Array.isArray(requested) ? requested : []).map(Number).filter(Boolean);
-  if (ids.length) return ids;
   const set = D.getSetting('bot_review_mailboxes', null);
-  return Array.isArray(set) ? set.map(Number).filter(Boolean) : [];
+  const listed = Array.isArray(set) ? set.map(Number).filter(Boolean) : [];
+  const ids = (Array.isArray(requested) ? requested : []).map(Number).filter(Boolean);
+  if (!ids.length) return listed;
+  return ids.filter((id) => listed.includes(id)
+    || D.get("SELECT 1 FROM users WHERE id = ? AND role = 'superadmin' AND status = 'active'", id));
 }
 
 async function mailFeedback(from, { users = [] } = {}) {
