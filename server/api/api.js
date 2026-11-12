@@ -2121,7 +2121,11 @@ router.patch('/api/tasks/:id', async (req, res, ctx) => {
 });
 
 /** מימוש חוקי המעבר בין הסטטוסים + בדיקת תלות */
-function changeStatus(task, newStatus, actor, note = '') {
+/*
+ * ‎opts.fromTiful360‎ — הסגירה הגיעה מתפעול 360 (הקריאה נסגרה שם), ולכן לא שולחים
+ * אליו בחזרה בקשה לסגור אותה.
+ */
+function changeStatus(task, newStatus, actor, note = '', opts = {}) {
   const target = columnMeta(task.board_id, newStatus);
   if (!target) throw badRequest('סטטוס לא קיים בבורד זה');
   const current = columnMeta(task.board_id, task.status);
@@ -2153,7 +2157,7 @@ function changeStatus(task, newStatus, actor, note = '') {
   if (target.is_final) {
     D.run('UPDATE tasks SET completed_at = ? WHERE id = ?', D.nowIso(), task.id);
     // משימה מקריאת שירות — הקריאה נסגרת בתפעול 360 (רק במעבר לסיום, לא בין שני סטטוסי סיום)
-    if (!current?.is_final) Tiful360.onTaskCompleted(task, actor);
+    if (!current?.is_final && !opts.fromTiful360) Tiful360.onTaskCompleted(task, actor);
   } else if (current?.is_final) {
     D.run('UPDATE tasks SET completed_at = NULL WHERE id = ?', task.id);
   }
@@ -5678,7 +5682,18 @@ PhonebookApi.register(router);
 PriorityApi.register(router);
 WhatsNew.register(router);
 MeetingsApi.register(router, { getTaskOr404, assertVisible, shapeTask, canSeeTask });
-Tiful360.register(router, { createTask, saveAttachment, getTaskOr404 });
+Tiful360.register(router, {
+  createTask, saveAttachment, getTaskOr404,
+  // קריאה שנסגרה בתפעול 360 — המשימה נסגרת במסלול הרגיל (יומן, התראות), בלי לשלוח את הסגירה בחזרה
+  closeTask(task, actor, note) {
+    const final = D.get('SELECT key FROM board_columns WHERE board_id = ? AND is_final = 1 ORDER BY position LIMIT 1', task.board_id);
+    if (!final) throw badRequest('אין בבורד של המשימה סטטוס סגירה');
+    changeStatus(task, final.key, actor, note, { fromTiful360: true });
+  },
+  isFinal(task) {
+    return !!D.get('SELECT 1 FROM board_columns WHERE board_id = ? AND key = ? AND is_final = 1', task.board_id, task.status);
+  }
+});
 BotReview.register(router);
 
 module.exports = { router, PRIORITIES, shapeTask, canSeeTask };

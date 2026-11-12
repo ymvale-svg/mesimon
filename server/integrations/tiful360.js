@@ -155,7 +155,7 @@ function actorFor(dept, assigneeId) {
 // פרויקט בלי סיווג (כמו ‎ownClass‎ ב-classification.js)
 const UNCLASSIFIED = "(COALESCE(topic, '') = '' OR COALESCE(sens, 0) = 0)";
 
-function register(router, { createTask, saveAttachment, getTaskOr404 }) {
+function register(router, { createTask, saveAttachment, getTaskOr404, closeTask, isFinal }) {
   /**
    * מה שתפעול 360 מציג בחלון השליחה: המשתמשים הפעילים לבחירת אחראי, הפרויקטים
    * הפעילים, הפרויקט שיוצע לנושא הקריאה, ומגבלות הקבצים.
@@ -241,6 +241,29 @@ function register(router, { createTask, saveAttachment, getTaskOr404 }) {
       D.audit(id, { type: 'user', id: actor.id, name: actor.name }, 'attachment', `הועלה קובץ "${name}" (גרסה ${version}) מתפעול 360`);
     }
     sendJson(res, 201, { taskId: id, url: taskLink(id), existing: false, assigned: !!assigneeId, files: files.length });
+  });
+
+  /**
+   * הקריאה נסגרה בתפעול 360 (גם ע"י איש ה-IT) — המשימה שנוצרה ממנה נסגרת כאן.
+   * הסגירה לא נשלחת בחזרה לתפעול 360, כדי שלא תיווצר לולאה. משימה שכבר
+   * סגורה — לא משתנה.
+   */
+  router.post('/api/integrations/tiful360/tasks/close', async (req, res) => {
+    authenticate(req);
+    const body = await readJson(req);
+    const ticketCode = clean(body.ticketCode, 50);
+    if (!ticketCode) throw badRequest('נדרש מספר קריאה');
+    const row = D.get('SELECT id FROM tasks WHERE source = ? AND source_ref = ? ORDER BY id LIMIT 1', SOURCE, ticketCode);
+    if (!row) return sendJson(res, 404, { error: 'לא נמצאה במשימון משימה מהקריאה הזאת' });
+    const task = getTaskOr404(row.id);
+    if (isFinal(task)) return sendJson(res, 200, { ok: true, taskId: task.id, alreadyClosed: true });
+
+    const actor = systemActor(department());
+    const closedBy = clean(body.closedBy, 200);
+    const message = clean(body.message, 500);
+    const note = `הקריאה ${ticketCode} נסגרה בתפעול 360${closedBy ? ` ע"י ${closedBy}` : ''}${message ? `: ${message}` : ''}`;
+    closeTask(task, actor, note);
+    sendJson(res, 200, { ok: true, taskId: task.id, alreadyClosed: false });
   });
 }
 
