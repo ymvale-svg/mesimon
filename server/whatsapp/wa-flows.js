@@ -388,14 +388,17 @@ async function flowOnReminder(ctx) {
 }
 
 async function flowRemindersRequest({ actor, dry, out, state, t }) {
-  // טיוטת משימה מחכה, והעובד אומר "לא משימה — תזכיר לי" — הטיוטה הופכת לתזכורת (סקירה 12.11)
-  const fromTask = state.awaiting && (state.draft?.kind ?? 'task') === 'task' && state.draft?.title && Reminders.isRequest(t);
-  if (WaActions.allowed(actor, 'reminders') && (!(state.awaiting && state.draft) || fromTask)) {
-    const r = dry ? null : await Reminders.command(actor.id, t, { about: fromTask ? state.draft.title : '' }).catch((err) => ({ text: 'לא הצלחתי לרשום את התזכורת. נסו שוב בעוד רגע 🙏', result: `שגיאה: ${err.message}`, error: true }));
-    // ✅ על ההודעה כשנרשמה / בוטלה תזכורת (הטקסט נשאר — יש בו את המועד)
-    if (r) return out(r.text, fromTask && !r.error ? { draft: null, awaiting: false } : {}, { action: 'reminders', status: r.error ? 'error' : 'ok', result: r.result, react: /^(תזכורת|בוטלה)/.test(r.result ?? '') ? '✅' : undefined });
-  }
-  return NEXT;
+  if (!WaActions.allowed(actor, 'reminders')) return NEXT;
+  // "תזכיר לי" — תמיד תזכורת, גם כשמשהו אחר מחכה (הוחלט 12.11.26). טיוטה / שאלה אחרת — רק הבקשות, לא "התזכורות שלי"
+  const waiting = state.awaiting && state.draft;
+  if (waiting && !Reminders.isRequest(t)) return NEXT;
+  const task = waiting && (state.draft.kind ?? 'task') === 'task' && state.draft.title ? state.draft.title : '';
+  const r = dry ? null : await Reminders.command(actor.id, t, { about: task }).catch((err) => ({ text: 'לא הצלחתי לרשום את התזכורת. נסו שוב בעוד רגע 🙏', result: `שגיאה: ${err.message}`, error: true }));
+  if (!r) return NEXT;
+  // "לא משימה — תזכיר לי" על טיוטת משימה: הטיוטה הפכה לתזכורת ויורדת. אחרת מה שחיכה — ממשיך לחכות
+  const next = !waiting ? {} : r.fromAbout ? { draft: null, awaiting: false } : { draft: state.draft, awaiting: true };
+  // ✅ על ההודעה כשנרשמה / בוטלה תזכורת (הטקסט נשאר — יש בו את המועד)
+  return out(r.text, next, { action: 'reminders', status: r.error ? 'error' : 'ok', result: r.result, react: /^(תזכורת|בוטלה)/.test(r.result ?? '') ? '✅' : undefined });
 }
 
 // 📬 "זכרת? 🐣" על מייל שלא טופל, ו"לבצע קבלת סחורה?" על חשבונית מהמייל

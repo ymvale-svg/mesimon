@@ -19,11 +19,22 @@ const HOUR = 60 * 60 * 1000;
 const BTN = Object.freeze({ done: 'בוצע ✅', hour: 'בעוד שעה ⏰', tomorrow: 'מחר ⏰' });
 
 // "תזכור" — כך התמלול שומע לפעמים "תזכיר" (סקירה 12.11)
-const TRIGGER = /^(?:תזכיר|תזכירי|תזכרי|תזכר|תזכור|הזכר|תזכורת)\s+(?:לי\s+)?\S/;
-// "אני רוצה שתזכיר לי…", "…שאתה תזכיר לי מחר" — באמצע ההודעה
-const WANTS = /(?:^|[\s,])ש?(?:אתה\s+|את\s+)?(?:תזכיר|תזכירי|תזכור)\s+לי(?=[\s,.!?]|$)/;
+// לא: "תזכיר לו אם לא עונה" (מעקב אחרי אחר), ולא שאלה ("תזכיר לי מה סיכמנו")
+const TRIGGER = /^(?:תזכיר|תזכירי|תזכרי|תזכר|הזכר|תזכורת)\s+(?!(?:לו|לה|להם|להן)(?:\s|$))(?!(?:לי\s+)?(?:מה|מי|איפה|כמה|מתי|איך|למה)(?:\s|$))(?:לי\s+)?\S/;
+/*
+ * "תזכיר לי …" בכל מקום בהודעה — מי שאומר "תזכיר לי" מקבל תזכורת, לא משימה (הוחלט 12.11.26):
+ * "אני רוצה שתזכיר לי…", "טלית תזכור את מחר…" (התמלול הוסיף מילה), "שלח לי תזכורת…".
+ * לא: שאלה ("תזכיר לי מה סיכמנו?"), ולא תזכורת לאחר ("תזכיר לו").
+ */
+const VERB = '(?:תזכיר|תזכירי|תזכרי|תזכר|תזכור|תזכירו)';
+const NOT_Q = '(?!\\s*(?:מה|מי|איפה|כמה|מתי|איך|למה|על\\s+מה|את\\s+מה)(?:[\\s?]|$))';
+const TO_ME = new RegExp(`(?:^|[\\s,])ש?(?:אתה\\s+|את\\s+)?${VERB}\\s+לי${NOT_Q}(?=[\\s,.!]|$)`);
+// "תזכור את מחר ב-8…" — רק כשיש מועד, אחרת זה "תזכור את זה" (זיכרון, לא תזכורת)
+const TO_ME_AT = new RegExp(`(?:^|[\\s,])${VERB}\\s+(?:את\\s+)?(?:מחר|היום|בעוד|בשעה|ב-?\\d|ביום|בבוקר|בערב|בצהריים|לפני)`);
+const SEND_ME = /(?:שלח|תשלח|שלחי|תשלחי)\s+לי\s+תזכורת/;
+const WANTS = { test: (t) => TO_ME.test(t) || TO_ME_AT.test(t) || SEND_ME.test(t) };
 /** בקשת תזכורת (ולא הרשימה / ביטול) */
-const isRequest = (text) => { const t = WaUi.normalize(text); return TRIGGER.test(t) || WANTS.test(t); };
+const isRequest = (text) => { const t = WaUi.normalize(text); return !/\?\s*$/.test(t) && (TRIGGER.test(t) || WANTS.test(t)); };
 const LIST = /^(?:ה)?תזכורות(?:\s+שלי)?[?.!]*$/;
 const CANCEL = /^(?:בטל|תבטל|מחק|תמחק)\s+(?:את\s+)?(?:ה)?תזכורת\s+(\d+)$/;
 
@@ -77,10 +88,10 @@ async function command(userId, text, { about = '' } = {}) {
     D.run("UPDATE reminders SET status = 'cancelled', done_at = ? WHERE id = ?", D.nowIso(), r.id);
     return { text: `🗑️ ביטלתי: ${r.text}`, result: `בוטלה: ${r.text}` };
   }
-  if (!TRIGGER.test(t) && !WANTS.test(t)) return null;
+  if (!isRequest(text)) return null;
   const p = await parse(text, about);
   D.run("INSERT INTO reminders (user_id, text, due_at, status, source, created_at) VALUES (?,?,?, 'active', 'bot', ?)", userId, p.text, p.at, D.nowIso());
-  return { text: `⏰ אזכיר לך ב*${when(p.at)}*: ${p.text}\n_"התזכורות שלי" — הרשימה._`, result: `תזכורת ${when(p.at)}: ${p.text}`.slice(0, 300) };
+  return { text: `⏰ אזכיר לך ב*${when(p.at)}*: ${p.text}\n_"התזכורות שלי" — הרשימה._`, result: `תזכורת ${when(p.at)}: ${p.text}`.slice(0, 300), fromAbout: Boolean(about) && p.text === String(about).trim().slice(0, 300) };
 }
 
 /** תזכורות שהגיע זמנן — נשלחות ב-‎push‎ (עם כפתורים וטיוטה) */
