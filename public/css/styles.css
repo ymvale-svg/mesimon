@@ -1049,6 +1049,8 @@ table.data td.wrap { white-space: normal; min-width: 240px; }
 /* ---------------------------------------------------------------- נעיצת פרויקטים */
 
 .nav-item { position: relative; }
+/* קישור למסך נפרד (משימון פריוריטי) — נראה כמו שאר הפריטים */
+a.nav-item { text-decoration: none; color: inherit; }
 .nav-pin {
   border: 0; background: none; cursor: pointer; flex: none;
   font-size: 12px; line-height: 1; padding: 3px 4px; border-radius: 5px;

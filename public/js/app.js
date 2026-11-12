@@ -2535,6 +2535,13 @@ const App = (() => {
     add('home');
     // יומן — לכל העובדים: היומן שלי. מזכירות — גם היומנים ששותפו איתן ו"מחכות לקביעה"
     add('calendar', {}, { icon: el('span.nav-emoji', { text: '📅' }) });
+    // 🗂 משימון פריוריטי — מסך נפרד (‎/priority‎), למי שמורשה בו
+    if (state.actor?.priority) {
+      items.push(el('a.nav-item', { href: '/priority', 'aria-label': 'משימון פריוריטי', title: 'משימון פריוריטי — מסמכי רכש וכספים' }, [
+        el('span.ico', {}, [el('span.nav-emoji', { text: '🗂' })]),
+        el('span', { text: 'משימון פריוריטי' })
+      ]));
+    }
     add('board');
     if (hasTracker()) add('tracker');
     if (may('view_vendor_boards')) add('vendorBoards');
