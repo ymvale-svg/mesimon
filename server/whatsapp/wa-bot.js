@@ -1102,8 +1102,10 @@ async function handleDirect(msg) {
     const alertOpen = (d) => d.suggestionIds.every((id) => D.get("SELECT 1 AS ok FROM ai_suggestions WHERE id = ? AND user_id = ? AND status = 'pending'", id, user.id));
     const how = WaQuestions.decide(pressed, cur.awaiting ? cur.draft : null, { text, alertOpen });
     if (how === 'closed') {
-      log({ ...base, text, action: 'other', status: 'unclear', result: `כפתור על שאלה שכבר לא פתוחה: ${pressed.draft?.kind ?? ''}`, reply: WaQuestions.CLOSED_TEXT });
-      await sendText(msg.chatId, WaQuestions.CLOSED_TEXT);
+      const no = WaQuestions.isNo(text);
+      const reply = no ? WaQuestions.CLOSED_NO_TEXT : WaQuestions.CLOSED_TEXT;
+      log({ ...base, text, action: 'other', status: no ? 'ok' : 'unclear', result: `כפתור על שאלה שכבר לא פתוחה: ${pressed.draft?.kind ?? ''}${no ? ' (תשובה שלילית)' : ''}`, reply });
+      await sendText(msg.chatId, reply);
       return;
     }
     if (how === 'restore') {

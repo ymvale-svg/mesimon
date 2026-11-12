@@ -11,6 +11,7 @@
  *   • השאלה היא הפתוחה עכשיו — ממשיכים, ובטוח לשיחה הנכונה (לא נבלעת בקבלת סחורה / דרישת רכש).
  *   • שאלה יזומה (חשבונית מהמייל, תזכורת על מייל) שנדחקה על ידי הודעה אחרת — חוזרת להיות הפתוחה, והתשובה הולכת אליה.
  *   • שאלה שכבר נענתה או שעברה — "השאלה הזו כבר לא פתוחה", ולא מאשרים בטעות משהו אחר.
+ *     "לא" / "התעלם" עליה — "בסדר, לא שיניתי כלום" (זה מה שהעובד ביקש).
  * לחיצה בלי מזהה (או על הודעה מלפני השינוי) — כמו קודם.
  */
 const D = require('../core').Db;
@@ -18,7 +19,7 @@ const D = require('../core').Db;
 const KEEP = 15;                          // שאלות אחרונות לכל עובד
 const TTL_MS = 2 * 24 * 60 * 60 * 1000;   // יומיים
 /** שאלות יזומות שבטוח להחזיר: התשובה להן בודקת במסד אם כבר טופלו */
-const RESTORABLE = new Set(['goods_offer', 'mail_remind']);
+const RESTORABLE = new Set(['goods_offer', 'mail_remind', 'sent_followup']);
 
 const keyOf = (userId) => `wa_questions:${userId}`;
 const list = (userId) => { const v = D.getSetting(keyOf(userId), []); return Array.isArray(v) ? v : []; };
@@ -80,5 +81,8 @@ function replyToOf(m) {
 }
 
 const CLOSED_TEXT = 'ℹ️ השאלה הזו כבר לא פתוחה, אז לא עשיתי כלום. אם עדיין צריך — כתבו לי מה לעשות.';
+/** "לא" / "התעלם" / "ביטול" על שאלה שכבר לא פתוחה — זה בדיוק מה שקרה (כלום), אז עונים כך ולא "לא פתוחה" (סקירה 12.11) */
+const CLOSED_NO_TEXT = 'בסדר 👍 לא שלחתי ולא שיניתי כלום.';
+const isNo = (text) => /^(לא|התעלם|ביטול|בטל|עזוב|👎)(?=[\s,.!❌🙈🗑️]|$)/u.test(String(text ?? '').trim());
 
-module.exports = { record, find, markAnswered, decide, draftKey, replyToOf, RESTORABLE, CLOSED_TEXT };
+module.exports = { record, find, markAnswered, decide, draftKey, replyToOf, isNo, RESTORABLE, CLOSED_TEXT, CLOSED_NO_TEXT };
