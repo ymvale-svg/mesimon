@@ -1600,6 +1600,14 @@ function allSettings() {
   return out;
 }
 
+/**
+ * הגדרות המערכת בלבד, למסך ההגדרות. מפתחות בצורת ‎<סוג>:<משתמש>‎ (‎wa_questions:7‎, ‎goods_receipt:7‎ …)
+ * הם מצב אישי של עובד — טיוטות מייל, קבלות סחורה, דרישות רכש — ולא נחשפים למנהלי האוטומציות.
+ */
+function systemSettings() {
+  return Object.fromEntries(Object.entries(allSettings()).filter(([k]) => !k.includes(':')));
+}
+
 function audit(taskId, actor, action, details = '') {
   run(
     'INSERT INTO audit_log (task_id, actor_type, actor_id, actor_name, action, details, created_at) VALUES (?,?,?,?,?,?,?)',
@@ -2627,7 +2635,7 @@ module.exports = {
   db, DB_PATH, UPLOADS_DIR, ROOT, STORAGE,
   all, get, run,
   nowIso, hashPassword, verifyPassword,
-  getSetting, setSetting, allSettings,
+  getSetting, setSetting, allSettings, systemSettings,
   userPrefs, setUserPref,
   audit, notify, onNotify, countsAsOpener,
   internalBoard, createVendorBoard, boardColumns, ensureBoardColumns,
