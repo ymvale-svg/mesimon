@@ -1635,7 +1635,9 @@ router.get('/api/tasks/:id/flow', async (req, res, ctx) => {
 
 router.post('/api/tasks', async (req, res, ctx) => {
   const actor = ctx.requireActor();
-  const body = await readJson(req);
+  // מקור המשימה (מייל, תפעול 360) נקבע רק בזרימות השרת — לא מהדפדפן. אחרת אפשר ליצור משימה
+  // "מתפעול 360" עם קוד של קריאה אחרת, ולסגור אותה שם בסגירת המשימה
+  const { source, sourceRef, sourceUserId, ...body } = await readJson(req);
   assertMayUseProject(actor, body.projectId);
   const id = createTask(actor, body);
   sendJson(res, 201, { task: shapeTask(getTaskOr404(id), actor, { withDetails: true }) });
