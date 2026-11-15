@@ -32,7 +32,8 @@ const DEFAULT_PHONE = '16508702892';
 
 const cfg = {
   TIMEOUT_MS: 6 * 60 * 1000,         // בלי תשובה — העובד מקבל הודעה. עיצוב לוקח לאינסטינקט דקות (15.11.26: 90 שניות היו קצרות מדי)
-  CONTINUE_MS: 30 * 1000,            // הודעה בלי ציטוט מיד אחרי תשובה — המשך שלה (קובץ אחרי טקסט)
+  CONTINUE_MS: 2 * 60 * 1000,        // הודעה בלי ציטוט מיד אחרי מה שהועבר לעובד — המשך שלו (קישור / קובץ אחרי טקסט)
+  SOLE_MS: 30 * 60 * 1000,           // רק עובד אחד ביקש בחצי השעה האחרונה — הודעה לא ברורה היא שלו
   LATE_MS: 30 * 60 * 1000,           // תשובה אחרי שפג הזמן — עדיין לבקשה, כשאין אחרת בטיפול
   FOLLOW_MS: 10 * 60 * 1000,         // בקשה אחרי תשובה — המשך שלה: ההקשר נשלח איתה
   FILE_MS: 5 * 60 * 1000,            // קובץ שנשלח לבוט — זמין לבקשה שאחריו
@@ -245,9 +246,12 @@ function targetOf(msg) {
     const row = D.get('SELECT * FROM instinct_requests WHERE out_id = ? AND kind IN (\'request\', \'answer\')', quoted);
     if (row) return row;
   }
-  // המשך של תשובה שהגיעה עכשיו (קובץ אחרי הטקסט)
-  if (lastDelivery.id && Date.now() - lastDelivery.at < cfg.CONTINUE_MS) return rowById(lastDelivery.id);
   const open = D.all("SELECT * FROM instinct_requests WHERE status = 'sent' AND kind IN ('request', 'answer') ORDER BY id DESC");
+  // המשך של מה שהועבר לעובד עכשיו (קישור או קובץ אחרי הטקסט) — כשאין בקשה פתוחה של עובד אחר
+  if (lastDelivery.id && Date.now() - lastDelivery.at < cfg.CONTINUE_MS) {
+    const last = rowById(lastDelivery.id);
+    if (last && open.every((r) => r.user_id === last.user_id)) return last;
+  }
   // בקשה אחת בטיפול, או כמה — כולן של אותו עובד (בקשה ואחריה "בצבע כחול"): לו, לאחרונה
   if (open.length && open.every((r) => r.user_id === open[0].user_id)) return open[0];
   if (!open.length) {
@@ -345,25 +349,35 @@ async function classify(text) {
   }
 }
 
+/** הבקשה האחרונה, כשכל הבקשות של חצי השעה האחרונה הן של עובד אחד — אחרת ‎null‎ */
+function soleRecent() {
+  const rows = D.all("SELECT * FROM instinct_requests WHERE kind IN ('request', 'answer') AND status <> 'blocked' AND created_at >= ? ORDER BY id DESC",
+    new Date(Date.now() - cfg.SOLE_MS).toISOString());
+  return rows.length && rows.every((r) => r.user_id === rows[0].user_id) ? rows[0] : null;
+}
+
 async function unsolicited(msg) {
   const text = String(msg.text ?? '').trim();
   const base = { channel: 'private', chatId: msg.chatId, who: 'אינסטינקט', text: (text || `[📎 ${msg.file?.name || 'קובץ'}]`).slice(0, 500), action: 'instinct' };
-  // קובץ יזום — לא מעבירים
+  // קובץ — אין טקסט לסווג: רק לפי מי ביקש לאחרונה (‎soleRecent‎)
   const c = text && !msg.file ? await classify(text) : { requestId: 0, asksForInfo: false, reason: 'קובץ יזום' };
   if (c.asksForInfo) {
     log({ ...base, status: 'denied', result: `אינסטינקט ביקש מידע — לא נענה. ${c.reason}` });
     alertAdmins(`⚠️ אינסטינקט ביקש מידע, ולא נענה:\n«${text.slice(0, 400)}»`);
     return;
   }
-  const row = c.requestId ? rowById(c.requestId) : null;
+  // ה-AI לא זיהה למי (קישור בודד לא אומר כלום) — ורק עובד אחד ביקש בחצי השעה האחרונה: שלו
+  const row = c.requestId ? rowById(c.requestId) : soleRecent();
   const to = row ? row.user_chat_id || userChat(row.user_id) : null;
   if (!row || !to) {
     log({ ...base, status: 'denied', result: `הודעה יזומה שלא קשורה לבקשה — לא נענתה. ${c.reason}` });
     alertAdmins(`⚠️ אינסטינקט שלח הודעה שלא קשורה לבקשה, ולא נענה:\n«${(text || `[📎 ${msg.file?.name || 'קובץ'}]`).slice(0, 400)}»`);
     return;
   }
+  if (msg.file) return deliver(row, msg);
   // שאלה רגילה לעובד — בלי כותרת ובלי כפתורים. מה שיענה חוזר לאינסטינקט (‎openQuestion‎)
   await sendText(to, text);
+  lastDelivery = { id: row.id, at: Date.now() };
   D.run(
     `INSERT INTO instinct_requests (user_id, kind, status, text, in_id, user_chat_id, created_at) VALUES (?,?,?,?,?,?,?)`,
     row.user_id, 'question', 'open', text.slice(0, 1000), String(msg.id ?? ''), to, D.nowIso()

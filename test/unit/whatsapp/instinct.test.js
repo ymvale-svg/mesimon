@@ -337,3 +337,60 @@ test('הודעה יזומה — ה-AI רואה גם בקשה שעוד בטיפו
   const prompt = claude.calls.at(-1).opts.content[0].text;
   assert.match(prompt, /הזמנה לכנס דיירים/);
 });
+
+/*
+ * באג 15.11.26 (פטישון מילווקי): אינסטינקט שאל, ענה, ושלח קישור לטבלה ("https://files.instinct.com/…") — שלוש
+ * הודעות בלי ציטוט. הקישור לבדו לא אמר ל-AI כלום, ונחשב "לא קשור". עכשיו: הודעה מיד אחרי מה שהועבר לעובד — המשך;
+ * ובקשות רק של עובד אחד בחצי השעה האחרונה — אליו.
+ */
+test('שאלה, תשובה וקישור מאינסטינקט, בלי ציטוט — הכול לעובד שביקש', async (t) => {
+  const wa = setup(t);
+  const u = person();
+  let reqId = 0;
+  ai(t, { related: (opts) => (/files\.instinct/.test(opts.content[0].text.split('ההודעה מהעוזר')[1]) ? { request_id: 0, asks_for_info: false, reason: 'רק קישור' } : { request_id: reqId, asks_for_info: false, reason: 'פטישון' }) });
+  await say(u.phone, 'אינסטינקט, חפש לי הצעות מחיר הכי זולות לפטישון מילווקי');
+  await settle();
+  reqId = D.get('SELECT id FROM instinct_requests WHERE user_id = ?', u.id).id;
+  await fromInstinct('אתה מחפש פטישון עם כבל או נטען?', outIdOf(u));
+  t.mock.method(Date, 'now', () => Date.prototype.valueOf.call(new Date()) + 3 * 60 * 1000);
+  await fromInstinct('מבין ההצעות שבדקתי, הזול ביותר הוא PH26 ב-874 ₪');
+  await fromInstinct('https://files.instinct.com/ygw1fhynl9i3?via=wa');
+  Date.now.mock.restore();
+  const got = toUser(wa, u).map((c) => c.body.message);
+  assert.equal(got.length, 3);
+  assert.equal(got[2], 'https://files.instinct.com/ygw1fhynl9i3?via=wa');
+  assert.equal(wa.calls.filter((c) => /לא קשורה לבקשה/.test(c.body?.message ?? '')).length, 0, 'בלי התראה למנהלים');
+});
+
+test('קישור בודד אחרי כמה דקות — רק עובד אחד ביקש בחצי השעה האחרונה: אליו', async (t) => {
+  const wa = setup(t);
+  ai(t, { related: { request_id: 0, asks_for_info: false, reason: 'רק קישור' } });
+  const u = person();
+  await say(u.phone, 'אינסטינקט, תשווה לי מחירים של מקדחה');
+  await settle();
+  await fromInstinct('הנה ההשוואה', outIdOf(u));
+  t.mock.method(Date, 'now', () => Date.prototype.valueOf.call(new Date()) + 10 * 60 * 1000);
+  await fromInstinct('https://files.instinct.com/abc');
+  Date.now.mock.restore();
+  assert.ok(toUser(wa, u).some((c) => c.body.message === 'https://files.instinct.com/abc'), 'הקישור עצמו — לא רק בהתראה');
+});
+
+test('שני עובדים ביקשו לאחרונה, והודעה לא ברורה — לא לאף אחד, התראה למנהלים', async (t) => {
+  const wa = setup(t);
+  ai(t, { related: { request_id: 0, asks_for_info: false, reason: 'לא ברור' } });
+  const a = person();
+  const b = person();
+  await say(a.phone, 'אינסטינקט, מתכון לחלה');
+  await say(b.phone, 'אינסטינקט, מתכון לעוגה');
+  await settle();
+  await fromInstinct('קודם', outIdOf(a));
+  await fromInstinct('קודם', outIdOf(b));
+  wa.clear();
+  t.mock.method(Date, 'now', () => Date.prototype.valueOf.call(new Date()) + 10 * 60 * 1000);
+  await fromInstinct('https://files.instinct.com/xyz');
+  Date.now.mock.restore();
+  // (שניהם מנהלי מערכת — מקבלים את ההתראה, אבל לא את ההודעה עצמה)
+  assert.equal(toUser(wa, a).filter((c) => c.body.message === 'https://files.instinct.com/xyz').length, 0);
+  assert.equal(toUser(wa, b).filter((c) => c.body.message === 'https://files.instinct.com/xyz').length, 0);
+  assert.ok(toUser(wa, a).some((c) => /לא קשורה לבקשה/.test(c.body.message)));
+});
