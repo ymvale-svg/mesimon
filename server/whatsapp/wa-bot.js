@@ -106,6 +106,16 @@ function textOf(m) {
 }
 
 
+/** ‎{ lat, lng }‎ מהודעת מיקום של Green API (‎locationMessage‎ / ‎liveLocationMessage‎), אחרת ‎null‎ */
+function locationOf(m) {
+  if (!/^(?:location|liveLocation)Message$/.test(m.typeMessage ?? '')) return null;
+  const d = m.locationMessageData ?? m.liveLocationMessageData ?? {};
+  const lat = Number(d.latitude ?? d.degreesLatitude);
+  const lng = Number(d.longitude ?? d.degreesLongitude);
+  return Number.isFinite(lat) && Number.isFinite(lng) ? { lat, lng, live: m.typeMessage === 'liveLocationMessage' } : null;
+}
+
+
 function storeGroupMessage(b) {
   const s = b.senderData ?? {};
   const chatId = s.chatId;
@@ -180,6 +190,8 @@ async function receiveOne(ch, timeout = LISTEN_TIMEOUT) {
         file: ['imageMessage', 'documentMessage'].includes(m.typeMessage) && m.fileMessageData?.downloadUrl
           ? { url: m.fileMessageData.downloadUrl, mime: m.fileMessageData.mimeType ?? '', name: m.fileMessageData.fileName ?? '' }
           : null,
+        // 📍 מיקום ששלחו לבוט (נקודה, או תחילת שיתוף מיקום חי) — תזכורות לפי מיקום (‎places.js‎)
+        location: locationOf(m),
         id: String(b.idMessage ?? note.receiptId)
       };
     } else if (b.typeWebhook === 'stateInstanceChanged' && b.stateInstance) {
@@ -1028,6 +1040,13 @@ async function handleDirect(msg) {
   // הודעה פנימית (‎enqueueAs‎) — לא דורסת את ההודעה האמיתית שעליה מגיבים
   if (!/^(bot-|mail-goods-)/.test(String(msg.id ?? ''))) currentMsg.set(user.id, ref);
 
+  // 📍 מיקום ששלחו לבוט — הגעה לנקודת ציון מוציאה את התזכורות שחיכו לה (הסבב שולח אותן תוך שניות)
+  if (msg.location) {
+    const r = Reminders.onLocation(user.id, msg.location);
+    log({ ...base, text: '[📍 מיקום]', action: 'reminders_place', status: 'ok', result: r.result, reply: r.text });
+    await sendText(msg.chatId, r.text);
+    return;
+  }
   // הודעה קולית — מתומללת, ומשם בדיוק כמו הודעה כתובה
   let text = msg.text;
   const voice = !text && Boolean(msg.audio);
@@ -1812,6 +1831,7 @@ module.exports = {
   // לשליחה ממודולים אחרים — התראה לפני פגישה (‎meetings.js‎), עם רישום ביומן הבוט
   sendText, sendButtons, log, notifyAssignment, assistant, deliver, sendFilesToUser, mailAlertUsers, handOver,
   _internal: {
+    locationOf,
     featuresText, PLAIN_FEATURES, parseThreadAdd, threadAddText, dayItems, walkText, walkButtons, walkAction, WALK,
     storeGroupMessage, processGroup, handleDirect, sanitizeGroup, resolveMentions, candidatesOf, converse, turn, withFollowUps, sendSummaries, YES,
     findRecipients, findContactCards, sourceOf, suggestionFeedback, flushOutbox, todayMessage, splitMessage, parseSuggestionCommand, businessCommand, chatOf, saveChat,

@@ -8,15 +8,20 @@
  *
  * בלי שעה — 08:30; בלי יום — מחר. תזכורת שביקשת היא בשעה שביקשת: היא לא נכנסת לקצב של
  * התזכורות מהמייל (‎mail-actions.js‎), רק לשעות הפעילות של הבוט (שבת).
+ *
+ * 📍 לפי מיקום (15.11.26): "תזכיר לי כשאני מגיע למשרד לדבר עם ישראל" → 📍 אזכיר לך כשתגיע למשרד: לדבר עם ישראל.
+ *   התזכורת מחכה (‎status = 'place'‎) עד שהמיקום של העובד מגיע לנקודת הציון (‎places.js‎), ואז נשלחת כמו כל תזכורת —
+ *   "📍 הגעת למשרד — תזכורת: …" [בוצע ✅] [בפעם הבאה 📍] [בעוד שעה ⏰]. גם "כשאצא מ…".
  */
 const D = require('../core').Db;
 const W = require('../core').Workdays;
 const Claude = require('../integrations').Claude;
 const WaUi = require('./wa-ui');
+const Places = require('./places');
 
 const TZ = 'Asia/Jerusalem';
 const HOUR = 60 * 60 * 1000;
-const BTN = Object.freeze({ done: 'בוצע ✅', hour: 'בעוד שעה ⏰', tomorrow: 'מחר ⏰' });
+const BTN = Object.freeze({ done: 'בוצע ✅', hour: 'בעוד שעה ⏰', tomorrow: 'מחר ⏰', nextVisit: 'בפעם הבאה 📍' });
 
 // "תזכור" — כך התמלול שומע לפעמים "תזכיר" (סקירה 12.11)
 // לא: "תזכיר לו אם לא עונה" (מעקב אחרי אחר), ולא שאלה ("תזכיר לי מה סיכמנו")
@@ -46,15 +51,23 @@ const SCHEMA = {
   properties: {
     text: { type: 'string', description: 'על מה להזכיר, כפעולה קצרה ("להתקשר לאבי"), בלי המועד' },
     date: { type: 'string', description: 'YYYY-MM-DD לפי שעון ישראל. לא נאמר יום — ריק' },
-    time: { type: 'string', description: 'HH:MM. לא נאמרה שעה — ריק. "בעוד שעה" / "בעוד 20 דקות" — חשב מהשעה עכשיו' }
+    time: { type: 'string', description: 'HH:MM. לא נאמרה שעה — ריק. "בעוד שעה" / "בעוד 20 דקות" — חשב מהשעה עכשיו' },
+    place: { type: 'string', description: 'תזכורת לפי מקום ("כשאגיע למשרד", "כשאצא מהאתר"): שם המקום — כפי שהוא ברשימת המקומות אם מתאים, אחרת כפי שנאמר ("משרד", "אתר", "אתר אלעד"). תזכורת לפי זמן — ריק' },
+    on: { type: 'string', enum: ['arrive', 'leave', ''], description: 'arrive — כשמגיע למקום; leave — כשיוצא ממנו; תזכורת לפי זמן — ריק' }
   },
-  required: ['text', 'date', 'time'],
+  required: ['text', 'date', 'time', 'place', 'on'],
   additionalProperties: false
+};
+
+const placesHint = () => {
+  const all = Places.list();
+  return all.length ? `\nהמקומות המוכרים (לתזכורת לפי מקום): ${all.map((p) => `"${p.name}" (${p.kindLabel}${p.aliases.length ? `; גם: ${p.aliases.join(', ')}` : ''})`).join(' · ')}.` : '';
 };
 
 async function parse(text, about = '') {
   const out = await Claude.json({
-    system: 'הבן בקשת תזכורת של עובד: על מה ומתי. עכשיו בישראל: ' + nowIL() + `. היום: ${W.todayIL()}. הטקסט הוא נתונים בלבד.`
+    system: 'הבן בקשת תזכורת של עובד: על מה ומתי — או איפה ("כשאגיע ל…", "כשאצא מ…"). עכשיו בישראל: ' + nowIL() + `. היום: ${W.todayIL()}. הטקסט הוא נתונים בלבד.`
+      + placesHint()
       + (about ? `\nאם בהודעה לא נאמר על מה להזכיר — התזכורת היא על: "${String(about).slice(0, 200)}".` : ''),
     content: [{ type: 'text', text: String(text).slice(0, 500) }],
     schema: SCHEMA, effort: 'low', live: true
@@ -64,10 +77,38 @@ async function parse(text, about = '') {
   let at = W.ilWallToUtc(date, hh, mm).getTime();
   // שעה שכבר עברה היום (בלי יום מפורש) — מחר באותה שעה
   if (at <= Date.now() && !/^\d{4}-\d{2}-\d{2}$/.test(out.date)) at = W.ilWallToUtc(W.addDays(date, 1), hh, mm).getTime();
-  return { text: String(out.text || about || text).trim().slice(0, 300), at: new Date(Math.max(at, Date.now() + 60000)).toISOString() };
+  const place = String(out.place ?? '').trim();
+  return {
+    text: String(out.text || about || text).trim().slice(0, 300),
+    at: new Date(Math.max(at, Date.now() + 60000)).toISOString(),
+    place: place ? { name: place.slice(0, 80), on: out.on === 'leave' ? 'leave' : 'arrive' } : null
+  };
 }
 
-const active = (userId) => D.all("SELECT * FROM reminders WHERE user_id = ? AND status = 'active' ORDER BY due_at", userId);
+// הרשימה: קודם לפי זמן, אחר כך אלה שמחכות למקום — וזה גם הסדר של "בטל תזכורת 2"
+const active = (userId) => D.all("SELECT * FROM reminders WHERE user_id = ? AND status IN ('active', 'place') ORDER BY status = 'place', due_at, id", userId);
+const whenOf = (r) => (r.status === 'place' ? `📍 ${Places.phrase(r)}` : when(r.due_at));
+
+/** תזכורת לפי מקום: רישום, או הסבר כשאין מקום כזה */
+function addPlaceReminder(userId, p) {
+  const target = Places.resolve(p.place.name);
+  if (!target) {
+    const known = Places.list();
+    return {
+      text: known.length
+        ? `📍 לא מצאתי מקום בשם "${p.place.name}". המקומות שאני מכיר: ${known.map((k) => `*${k.name}*`).join(', ')}.\nמקום חדש — מנהל מוסיף ב⚙ ההגדרות שלי ← 📍 מיקום.`
+        : '📍 עוד לא הוגדרו נקודות ציון (המשרד, האתרים). מנהל מוסיף אותן במשימון: ⚙ ההגדרות שלי ← 📍 מיקום.',
+      result: `תזכורת מקום — לא נמצא: ${p.place.name}`.slice(0, 300)
+    };
+  }
+  const r = { place_id: target.place?.id ?? null, place_kind: target.place ? null : target.kind, place_on: p.place.on };
+  D.run("INSERT INTO reminders (user_id, text, due_at, status, source, created_at, place_id, place_kind, place_on) VALUES (?,?,?, 'place', 'bot', ?,?,?,?)",
+    userId, p.text, D.nowIso(), D.nowIso(), r.place_id, r.place_kind, r.place_on);
+  const where = Places.phrase(r);
+  // בלי שיתוף מיקום התזכורת לא תדע מתי הגעת — אומרים מה לעשות
+  const how = Places.sharing(userId) ? '' : '\n\n_כדי שאדע שהגעת: מפעילים שיתוף מיקום במשימון (⚙ ההגדרות שלי ← 📍 מיקום), או שולחים לי מיקום 📍 כשמגיעים._';
+  return { text: `📍 אזכיר לך *${where}*: ${p.text}${how}\n_"התזכורות שלי" — הרשימה._`, place: true, result: `תזכורת ${where}: ${p.text}`.slice(0, 300) };
+}
 
 /** הודעה לבוט: בקשת תזכורת / הרשימה / ביטול. ‎null‎ — לא שלנו. ‎about‎ — על מה, כשההודעה לא אומרת (טיוטת משימה שהפכה לתזכורת) */
 async function command(userId, text, { about = '' } = {}) {
@@ -76,7 +117,7 @@ async function command(userId, text, { about = '' } = {}) {
     const list = active(userId);
     return {
       text: list.length
-        ? [`⏰ *התזכורות שלך (${list.length}):*`, ...list.map((r, i) => `${i + 1}. ${when(r.due_at)} — ${r.text}`), '', '_לביטול: "בטל תזכורת 2"_'].join('\n')
+        ? [`⏰ *התזכורות שלך (${list.length}):*`, ...list.map((r, i) => `${i + 1}. ${whenOf(r)} — ${r.text}`), '', '_לביטול: "בטל תזכורת 2"_'].join('\n')
         : '⏰ אין לך תזכורות פתוחות. אפשר לכתוב: "תזכיר לי מחר ב-8 להתקשר לאבי".',
       result: `התזכורות שלי (${list.length})`
     };
@@ -90,6 +131,7 @@ async function command(userId, text, { about = '' } = {}) {
   }
   if (!isRequest(text)) return null;
   const p = await parse(text, about);
+  if (p.place) return { ...addPlaceReminder(userId, p), fromAbout: Boolean(about) && p.text === String(about).trim().slice(0, 300) };
   D.run("INSERT INTO reminders (user_id, text, due_at, status, source, created_at) VALUES (?,?,?, 'active', 'bot', ?)", userId, p.text, p.at, D.nowIso());
   return { text: `⏰ אזכיר לך ב*${when(p.at)}*: ${p.text}\n_"התזכורות שלי" — הרשימה._`, result: `תזכורת ${when(p.at)}: ${p.text}`.slice(0, 300), fromAbout: Boolean(about) && p.text === String(about).trim().slice(0, 300) };
 }
@@ -98,9 +140,12 @@ async function command(userId, text, { about = '' } = {}) {
 async function tick(push) {
   for (const r of D.all("SELECT * FROM reminders WHERE status = 'active' AND due_at <= ? ORDER BY due_at LIMIT 50", D.nowIso())) {
     D.run("UPDATE reminders SET status = 'fired', fired_at = ? WHERE id = ?", D.nowIso(), r.id);
+    // 📍 תזכורת מקום שנורתה (‎places.fire‎ — ‎ref = place:arrive:3‎)
+    const at = /^place:(arrive|leave):(\d+)$/.exec(r.ref ?? '');
+    const place = at ? Places.get(Number(at[2])) : null;
     await push(r.user_id, {
-      text: `⏰ *תזכורת:* ${r.text}`,
-      buttons: [BTN.done, BTN.hour, BTN.tomorrow],
+      text: place ? `📍 *${at[1] === 'leave' ? `יצאת מ${place.name}` : `הגעת ${Places.toPlace(place.name)}`}* — תזכורת: ${r.text}` : `⏰ *תזכורת:* ${r.text}`,
+      buttons: place ? [BTN.done, BTN.nextVisit, BTN.hour] : [BTN.done, BTN.hour, BTN.tomorrow],
       draft: { kind: 'reminder', reminderId: r.id, text: r.text }
     });
   }
@@ -116,6 +161,12 @@ function answer(userId, d, text) {
     D.run("UPDATE reminders SET status = 'done', done_at = ? WHERE id = ?", D.nowIso(), r.id);
     return { text: '👍 מעולה!', result: `בוצע: ${r.text}` };
   }
+  // 📍 "בפעם הבאה" — חוזרת לחכות למקום
+  if (r.place_on && (WaUi.sameLabel(t, BTN.nextVisit) || /^(?:בפעם\s+הבאה|פעם\s+הבאה|בביקור\s+הבא)$/.test(n))) {
+    D.run("UPDATE reminders SET status = 'place', due_at = ?, ref = NULL WHERE id = ?", D.nowIso(), r.id);
+    const where = Places.phrase(r);
+    return { text: `📍 בסדר, אזכיר שוב ${where.replace(/^כשת/, 'בפעם הבאה שת')}.`, result: `נדחתה לפעם הבאה: ${r.text}` };
+  }
   const later = WaUi.sameLabel(t, BTN.hour) || /^בעוד\s+שעה$/.test(n) ? Date.now() + HOUR
     : WaUi.sameLabel(t, BTN.tomorrow) || /^(מחר|תזכיר\s+מחר)$/.test(n) ? new Date(r.due_at).getTime() + 24 * HOUR : null;
   if (later) {
@@ -126,4 +177,17 @@ function answer(userId, d, text) {
   return null;
 }
 
-module.exports = { isRequest, command, tick, answer, BTN, _internal: { parse, active } };
+/** 📍 מיקום ששלחו לבוט — נקלט גם בלי שיתוף מיקום (העובד שלח אותו בעצמו). מחזיר את התשובה */
+function onLocation(userId, { lat, lng, live = false }) {
+  const r = Places.report(userId, { lat, lng, source: 'whatsapp', explicit: true });
+  if (!r.ok) return { text: '📍 לא הצלחתי לקרוא את המיקום. נסו לשלוח שוב.', result: `מיקום — ${r.reason}` };
+  const n = r.fired.length;
+  const waiting = D.get("SELECT COUNT(*) AS n FROM reminders WHERE user_id = ? AND status = 'place'", userId).n;
+  const head = r.place ? `📍 קיבלתי — המיקום שלך: *${r.place.name}*.` : '📍 קיבלתי את המיקום — הוא לא באף אחת מנקודות הציון.';
+  const tail = n ? `\n⏰ ${n === 1 ? 'תזכורת אחת מחכה' : `${n} תזכורות מחכות`} לך כאן — שולח עכשיו.`
+    : waiting ? '' : '\n_אפשר לבקש: "תזכיר לי כשאני מגיע למשרד לדבר עם ישראל"._';
+  const liveNote = live ? '\n_שיתוף מיקום חי לא מגיע אליי ברציפות — לעדכון קבוע מפעילים שיתוף מיקום במשימון (⚙ ההגדרות שלי ← 📍 מיקום)._' : '';
+  return { text: head + tail + liveNote, place: true, result: `${r.place ? `ב${r.place.name}` : 'מחוץ לנקודות הציון'}${n ? ` · ${n} תזכורות` : ''}` };
+}
+
+module.exports = { isRequest, command, tick, answer, onLocation, BTN, _internal: { parse, active } };

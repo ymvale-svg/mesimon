@@ -15,6 +15,7 @@ module.exports = {
   get VoiceRouter() { return require('./voice-router'); },
   get BotReview() { return require('./bot-review'); },
   get Reminders() { return require('./reminders'); },
+  get Places() { return require('./places'); },
   get Notice() { return require('./notice'); },
   get NoticeDesign() { return require('./notice-design'); },
   get Solve() { return require('./solve'); },
