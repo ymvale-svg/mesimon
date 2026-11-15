@@ -103,7 +103,7 @@ function buttonsFor(s) {
   if (s.pendingList) return [BTN.yes, BTN.no];
   if (s.choices?.step === s.step && s.choices.list?.length) return s.choices.list;
   switch (s.step) {
-    case 'menu': return [MENU_GR, MENU_PD];
+    case 'menu': return menuOf(s.allow).buttons;
     case 'project': return s.projectPending ? [BTN.yes, BTN.no] : [];
     case 'offer': case 'doctype': return [BTN.yes, BTN.no];
     case 'doc': return s.files?.[0] ? ['נסה שוב 🔄', BTN.cancel] : [BTN.cancel];
@@ -574,10 +574,23 @@ function dueText(s, code) {
 /** תפריט פריוריטי — בכפתורים. הכיתוב של כל כפתור הוא הטריגר של הזרימה ("קבלת סחורה", "דרישת רכש") */
 const MENU_GR = '📦 קבלת סחורה';
 const MENU_PD = '🛒 דרישת רכש';
-const MENU = ['🗂 *פריוריטי* — מה לעשות?',
-  '📦 *קבלת סחורה* — תעודת משלוח או חשבונית ← GR',
-  '🛒 *דרישת רכש* — רשימת פריטים (צילום, הקלטה או הקלדה) ← דרישה לאישור',
-  '_או פשוט המשיכו במה שרציתם — זה יגיע למשימות כרגיל._'].join('\n');
+const MENU_LINES = {
+  gr: '📦 *קבלת סחורה* — תעודת משלוח או חשבונית ← GR',
+  pd: '🛒 *דרישת רכש* — רשימת פריטים (צילום, הקלטה או הקלדה) ← דרישה לאישור'
+};
+/**
+ * תפריט פריוריטי — רק מה שמותר לעובד (מטריצת ההרשאות, ‎priority-access.js‎; הוחלט 13.11.26).
+ * ‎allow‎ חסר (מצב ישן שנשמר לפני השינוי) — כמו קודם, שני הכפתורים; ההרשאה נבדקת שוב בבחירה.
+ */
+function menuOf(allow) {
+  const a = allow ?? { gr: true, pd: true };
+  const keys = ['gr', 'pd'].filter((k) => a[k]);
+  return {
+    text: ['🗂 *פריוריטי* — מה לעשות?', ...keys.map((k) => MENU_LINES[k]), '_או פשוט המשיכו במה שרציתם — זה יגיע למשימות כרגיל._'].join('\n'),
+    buttons: keys.map((k) => (k === 'gr' ? MENU_GR : MENU_PD))
+  };
+}
+const GR_START = '📦 *קבלת סחורה* — שלחו צילום של תעודת המשלוח או החשבונית (המסמך הראשי, שממנו נקראים הנתונים).';
 
 const reply = (s, text, extra = {}) => { if (s && s.step) s.lastPrompt = text; return { s, replies: [text], ...extra }; };
 
@@ -1806,9 +1819,16 @@ async function handle({ user, text = '', file = null, reaction = false, allow = 
   if (s?.paused) s.paused = false;
 
   // "פריוריטי" בלי "קבלת סחורה" — תפריט. היום יש בו רק קבלת סחורה; בהמשך גם חשבוניות חלקיות ועוד
+  // 🔐 רק מה שמותר: קבלת סחורה בלבד — ישר אליה, בלי תפריט; דרישת רכש בלבד — כפתור אחד; כלום — לא פתוח
   if (!s && !file && isPriority(t) && !isTrigger(t)) {
-    save(user.id, { step: 'menu', startedAt: Date.now() });
-    return { replies: [MENU], status: 'ok', result: 'תפריט פריוריטי', buttons: [MENU_GR, MENU_PD] };
+    if (!allow.gr && !allow.pd) return { s: null, replies: [Access.NO_ACCESS], status: 'ok', result: 'פריוריטי — לא מורשה' };
+    if (allow.gr && !allow.pd) {
+      save(user.id, { step: 'doc', startedAt: Date.now(), lastPrompt: GR_START });
+      return { replies: [GR_START], status: 'ok', result: 'פריוריטי ← קבלת סחורה (המסמך היחיד שמותר)', buttons: [BTN.cancel] };
+    }
+    const m = menuOf(allow);
+    save(user.id, { step: 'menu', startedAt: Date.now(), allow: { gr: Boolean(allow.gr), pd: Boolean(allow.pd) } });
+    return { replies: [m.text], status: 'ok', result: 'תפריט פריוריטי', buttons: m.buttons };
   }
 
   // תמונה או מסמך בלי "קבלת סחורה" — כנראה מסמך לקליטה. שואלים, ושומרים את הקובץ עד התשובה
@@ -1963,14 +1983,14 @@ async function step(user, s, t, file, allow = { gr: true, pd: false }) {
     case 'menu': {
       // "קבלת סחורה" (הכפתור) — מתחילים. "דרישת רכש" — הבוט מעביר לדרישת הרכש (wa-bot), וכאן רק כשאינה פתוחה לעובד.
       // כל דבר אחר — לא לפריוריטי: יוצאים מהתפריט, והבוט הרגיל מטפל
-      if (isPriority(t) && !isTrigger(t) && !file) return reply(s, MENU);
+      if (isPriority(t) && !isTrigger(t) && !file) return reply(s, menuOf(s.allow).text);
       // דרישת רכש מגיעה לכאן רק כשאינה פתוחה לעובד (אחרת wa-bot מעביר אותה לדרישת הרכש). ליתר ביטחון — לא "לא פתוחה" למי שמורשה
       if (/דרישת\s*רכש/.test(t)) return { s: null, replies: [allow.pd ? 'כתבו *דרישת רכש* כדי להתחיל.' : 'דרישת רכש עוד לא פתוחה לך בבוט. אם צריך — פנו למנהל המערכת.'], status: 'ok', result: allow.pd ? 'דרישת רכש — הפניה' : 'דרישת רכש — לא מורשה' };
       if (!allow.gr && (file || isTrigger(t) || /^(1|אחת|אחד)([\s,.!]|$)/.test(t))) return { s: null, replies: ['קבלת סחורה עוד לא פתוחה לך בבוט. אם צריך — פנו למנהל המערכת.'], status: 'ok', result: 'קבלת סחורה — לא מורשה' };
       if (file || isTrigger(t) || /^(1|אחת|אחד)([\s,.!]|$)/.test(t)) {
         s.step = 'doc';
         if (file) return onMainDoc(user, s, file);
-        return reply(s, '📦 *קבלת סחורה* — שלחו צילום של תעודת המשלוח או החשבונית (המסמך הראשי, שממנו נקראים הנתונים).');
+        return reply(s, GR_START);
       }
       return { s: null, pass: true, replies: [], status: 'ok', result: 'יציאה מתפריט פריוריטי' };
     }

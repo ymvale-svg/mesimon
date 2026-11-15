@@ -64,6 +64,7 @@ const Notice = require('./notice');
 const AiOutage = require('./ai-outage');
 const WaQuestions = require('./wa-questions');
 const Rfq = require('../priority').Rfq;
+const PriorityAccess = require('../priority').PriorityAccess;
 const FormFill = require('../mail').FormFill;
 const MeetCoord = require('../meetings').MeetingCoord;
 const Reminders = require('./reminders');
@@ -1166,6 +1167,17 @@ async function handleDirect(msg) {
   if (msg.file && !(grAllowed && (GoodsReceipt.active(user.id, late) || GoodsReceipt.opens(text, msg.file)))) rememberFile(user.id, msg.file);
   let grPassed = false;
   let grNotice = '';
+  // 🔐 פריוריטי לא פתוח לעובד (אין לו אף מסמך במטריצה) — "פריוריטי" / "קבלת סחורה" / "דרישת רכש" (גם כפתור מהודעה ישנה):
+  // תשובה אחת ברורה, ולא תפריט ולא בקשה ל-AI (הוחלט 13.11.26)
+  const shortAsk = String(text ?? '').trim().split(/\s+/).filter(Boolean).length <= 3;
+  if (!forceChat && !forceFlow && !grAllowed && !pdAllowed && !msg.file
+    && ((shortAsk && (GoodsReceipt.isPriority(text) || GoodsReceipt.isTrigger(text) || PurchaseDemand.opens(text)))
+      || /^\P{L}*(?:קבלת\s*סחורה|דרישת\s*רכש)/u.test(String(text ?? '')))) {
+    await notice;
+    log({ ...base, text, action: 'goods_receipt', status: 'denied', result: 'פריוריטי — לא מורשה', reply: PriorityAccess.NO_ACCESS });
+    await sendText(msg.chatId, PriorityAccess.NO_ACCESS);
+    return;
+  }
   const prioMenuOnly = !grAllowed && pdAllowed && !msg.file && (GoodsReceipt.isPriority(text) || GoodsReceipt.inMenu(user.id));
   if (!offerAnswer && !forceChat && (prioMenuOnly || forceFlow === 'goods_receipt' || (grAllowed && (GoodsReceipt.active(user.id, late) || GoodsReceipt.opens(text, msg.file) || GoodsReceipt.wantsUndoFinal(user.id, text))))) {
     const slowGr = setTimeout(() => react(ref, '🧐'), SLOW_NOTICE_MS);
