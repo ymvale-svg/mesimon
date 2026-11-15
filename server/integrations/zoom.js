@@ -79,11 +79,19 @@ async function accessToken(key) {
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new ZoomError(`Zoom דחה את החיבור לחשבון ${key} (${res.status}): ${data.reason ?? data.error ?? ''}`.trim());
-  tokens.set(key, { value: data.access_token, expires: Date.now() + (Number(data.expires_in ?? 3600) - 60) * 1000 });
+  // ‎scope‎ — ההרשאות שבתוך האסימון (נקבעות כשהוא נוצר). לבדיקת המנהל: האם מה שהוסיפו ב-Marketplace באמת כאן
+  tokens.set(key, { value: data.access_token, expires: Date.now() + (Number(data.expires_in ?? 3600) - 60) * 1000, scope: String(data.scope ?? ''), at: Date.now() });
   return data.access_token;
 }
 
-async function call(key, method, path, body = null) {
+/** ההרשאות שבאסימון הנוכחי של החשבון (אחרי ‎accessToken‎) */
+const tokenScopes = (key) => (tokens.get(key)?.scope ?? '').split(/\s+/).filter(Boolean);
+
+/**
+ * ‎retried‎ — שגיאת הרשאות (4711) עם אסימון ישן: הרשאות שנוספו ב-Marketplace נכנסות רק לאסימון חדש,
+ * והאסימון נשמר עד שעה. מבקשים אסימון חדש ומנסים פעם אחת.
+ */
+async function call(key, method, path, body = null, retried = false) {
   if (!accountEnabled(key)) throw new ZoomError(key === '1' ? 'חיבור Zoom אינו מוגדר בשרת' : `חשבון Zoom ${key} אינו מוגדר בשרת`);
   const res = await fetch(`${API}${path}`, {
     method,
@@ -95,9 +103,18 @@ async function call(key, method, path, body = null) {
   const text = await res.text();
   if (!res.ok) {
     let msg = text.slice(0, 200);
-    try { msg = JSON.parse(text).message ?? msg; } catch { /* טקסט */ }
-    const err = new ZoomError(`Zoom החזיר ${res.status}: ${msg}`);
+    let code = null;
+    try { const j = JSON.parse(text); msg = j.message ?? msg; code = j.code ?? null; } catch { /* טקסט */ }
+    if (!retried && (Number(code) === 4711 || /does not contain scopes/i.test(msg))) {
+      console.warn(`[משימון] Zoom: לאסימון של חשבון ${key} חסרות הרשאות — מבקש אסימון חדש ומנסה שוב`);
+      tokens.delete(key);
+      return call(key, method, path, body, true);
+    }
+    const err = new ZoomError(`Zoom החזיר ${res.status}${code ? ` (קוד ${code})` : ''}: ${msg}`);
     err.status = res.status;
+    err.code = code;
+    err.zoomMessage = msg;
+    err.account = key;
     throw err;
   }
   return text ? JSON.parse(text) : {};
@@ -269,6 +286,29 @@ function meetingBody({ title, startIso, minutes, agenda = '', record }) {
  * לענן במשתמש חינמי, "כניסה לפני המארח" שנעולה בחשבון) או על מועד שכבר
  * התחיל — אז מנסים שוב: מועד מעכשיו, ובלי ההגדרות האלה. ‎warning‎ — מה ירד.
  */
+/**
+ * מה לעשות עם שגיאה של Zoom — בעברית, למנהל המערכת (העובד מקבל רק "נסו מארח אחר / מיקום אחר").
+ * ‎kind‎: ‎scopes‎ / ‎user‎ / ‎host‎ / ‎auth‎ / ‎params‎ / ‎other‎. ניסיון חוזר בלי הגדרות — רק כשזה עשוי לעזור.
+ */
+function explain(err) {
+  const m = String(err?.zoomMessage ?? err?.message ?? '');
+  const code = Number(err?.code);
+  if (code === 4711 || /does not contain scopes|scope/i.test(m)) {
+    return { kind: 'scopes', text: 'לאפליקציית ה-Zoom של החברה (Server-to-Server OAuth) חסרות הרשאות. ב-Zoom Marketplace ← Manage ← האפליקציה ← Scopes: להוסיף meeting:write:meeting:admin ו-meeting:read:meeting:admin (באפליקציה ישנה: meeting:write:admin), לשמור ולהפעיל מחדש (Activate).' };
+  }
+  if (code === 1001 || err?.status === 404 || /user does not exist|user not exist/i.test(m)) {
+    return { kind: 'user', text: 'משתמש ה-Zoom הזה כבר לא קיים בחשבון. במסך הניהול ← משתמשי Zoom ← "⟳ רענון מ-Zoom", ולשייך מחדש את העובד.' };
+  }
+  if (code === 3161 || code === 3000 || /not allowed|hosting|capabilit/i.test(m)) {
+    return { kind: 'host', text: 'למשתמש ה-Zoom הזה אין הרשאה לארח או לתזמן פגישות (סוג רישיון או הגדרת חשבון). לבחור מארח אחר, או לבדוק ב-Zoom ← User Management את המשתמש.' };
+  }
+  if (code === 124 || err?.status === 401 || /access token|invalid client|credentials/i.test(m)) {
+    return { kind: 'auth', text: 'החיבור לאפליקציית ה-Zoom נדחה — לבדוק את ZOOM_ACCOUNT_ID / ZOOM_CLIENT_ID / ZOOM_CLIENT_SECRET בשרת, ושהאפליקציה מופעלת (Activated).' };
+  }
+  if (code === 300 || /invalid/i.test(m)) return { kind: 'params', text: `Zoom דחה את פרטי הפגישה: ${m}` };
+  return { kind: 'other', text: m || 'שגיאה לא מוכרת מ-Zoom' };
+}
+
 async function createMeeting(zoomUserId, opts) {
   const key = accountOfUser(zoomUserId);
   const path = `/users/${encodeURIComponent(zoomUserId)}/meetings`;
@@ -280,7 +320,8 @@ async function createMeeting(zoomUserId, opts) {
   try {
     m = await call(key, 'POST', path, body);
   } catch (err) {
-    if (err.status !== 400) throw err;
+    // הרשאות, משתמש שלא קיים, חיבור — ניסיון בלי הגדרות לא יעזור
+    if (err.status !== 400 || ['scopes', 'user', 'auth'].includes(explain(err).kind)) throw err;
     console.error(`[משימון] Zoom דחה יצירת פגישה (${zoomUserId}): ${err.message} — מנסה שוב בלי הגדרות נוספות`);
     const plain = { ...body, settings: {} };
     try {
@@ -292,6 +333,24 @@ async function createMeeting(zoomUserId, opts) {
     warning = opts.record ? 'Zoom לא אפשר הקלטה אוטומטית לענן במשתמש הזה — הפגישה נוצרה בלי הקלטה' : '';
   }
   return { id: String(m.id), joinUrl: m.join_url, password: m.password ?? '', warning };
+}
+
+/**
+ * בדיקה למנהל המערכת: פגישה קצרה בעוד שעה אצל משתמש ה-Zoom, ומחיקה מיד. מחזיר מה ש-Zoom ענה.
+ */
+async function testCreate(zoomUserId) {
+  const startIso = new Date(Date.now() + 60 * 60000).toISOString();
+  const key = accountOfUser(zoomUserId);
+  // תמיד באסימון טרי — כדי לראות את ההרשאות כפי שהן עכשיו ב-Marketplace
+  tokens.delete(key);
+  const scopesNow = async () => { try { await accessToken(key); } catch { /* ריק */ } return tokenScopes(key); };
+  try {
+    const z = await createMeeting(zoomUserId, { title: 'בדיקת משימון — אפשר למחוק', startIso, minutes: 15, agenda: '', record: false });
+    await deleteMeeting(z.id).catch(() => {});
+    return { ok: true, warning: z.warning || '', account: key, scopes: tokenScopes(key) };
+  } catch (err) {
+    return { ok: false, account: key, status: err.status ?? null, code: err.code ?? null, message: err.zoomMessage ?? err.message, firstError: err.firstError ?? null, explain: explain(err).text, scopes: await scopesNow() };
+  }
 }
 
 async function updateMeeting(meetingId, opts) {
@@ -520,6 +579,7 @@ async function recordingFileText(uuid, fileId, { timeoutMs = 30000 } = {}) {
 }
 
 module.exports = {
+  explain, testCreate,
   isEnabled, missing, accounts, syncUsers, listUsers, pickHost, hostsAt, createMeeting, updateMeeting, deleteMeeting, startUrl,
   listRecordings, recordingFileUrl, recordingFileText, meetingRecording, recordingScope, mayWatch, recordingsFor, ZoomError,
   _internal: { meetingBody, call }

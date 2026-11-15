@@ -365,6 +365,15 @@ function register(router, h) {
     sendJson(res, r.status, { ok: r.ok });
   });
 
+  // 🧪 בדיקת יצירת פגישה במשתמש Zoom — פגישה קצרה שנמחקת מיד; מחזיר בדיוק מה ש-Zoom ענה
+  router.post('/api/admin/zoom/test', async (req, res, ctx) => {
+    zoomAdmin(ctx);
+    const b = await readJson(req);
+    const id = String(b.zoomUserId ?? '');
+    if (!D.get('SELECT 1 FROM zoom_users WHERE id = ?', id)) throw badRequest('משתמש Zoom לא מוכר — "רענון מ-Zoom"');
+    sendJson(res, 200, await Zoom.testCreate(id));
+  });
+
   router.get('/api/admin/zoom/users', async (req, res, ctx) => {
     zoomAdmin(ctx);
     sendJson(res, 200, { enabled: Zoom.isEnabled(), missing: Zoom.missing(), accounts: Zoom.accounts(), users: Zoom.listUsers() });

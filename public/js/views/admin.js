@@ -1399,6 +1399,31 @@ const AdminView = (() => {
     ]);
   }
 
+  /** 🧪 בדיקה: פגישה קצרה במשתמש ה-Zoom, שנמחקת מיד — ומה בדיוק Zoom ענה, עם מה לתקן */
+  function zoomTestButton(u) {
+    const b = el('button.btn.btn-sm.btn-ghost', { type: 'button', title: 'יוצר פגישת בדיקה ומוחק אותה מיד' }, ['🧪 בדיקה']);
+    b.addEventListener('click', async () => {
+      b.disabled = true;
+      try {
+        const r = await API.post('/api/admin/zoom/test', { zoomUserId: u.id });
+        if (r.ok) UI.success(`✓ ${u.name}: Zoom יצר פגישה ומחק אותה${r.warning ? ` (${r.warning})` : ''}`);
+        else {
+          UI.modal({
+            title: `🧪 Zoom — ${u.name}`,
+            body: el('div', {}, [
+              el('div.alert.alert-warn', {}, [el('span', { text: '⚠️' }), el('div', { text: r.explain })]),
+              el('div.mute-sm', { text: `חשבון Zoom ${r.account} · ההרשאות שבאסימון עכשיו (מה ש-Zoom נותן לאפליקציה בפועל):` }),
+              el('pre', { style: { whiteSpace: 'pre-wrap', direction: 'ltr', textAlign: 'left', fontSize: '12px' }, text: (r.scopes ?? []).join('\n') || '(אין — האפליקציה לא מחזירה הרשאות)' }),
+              el('pre', { style: { whiteSpace: 'pre-wrap', direction: 'ltr', textAlign: 'left', fontSize: '12px' }, text: JSON.stringify({ status: r.status, code: r.code, message: r.message, firstError: r.firstError }, null, 2) })
+            ])
+          });
+        }
+      } catch (err) { UI.error(err); }
+      b.disabled = false;
+    });
+    return b;
+  }
+
   /** משתמשי ה-Zoom של החברה — רענון מ-Zoom, ומי משויך לכל אחד */
   function zoomUsersBox() {
     const box = el('div', { style: { padding: '10px 0' } });
@@ -1424,9 +1449,10 @@ const AdminView = (() => {
           })()
         ]),
         z.users.length
-          ? el('div', {}, z.users.map((u) => el('div.mute-sm', {
-              text: `${u.name} · ${u.email}${multi ? ` · חשבון ${u.account}` : ''}${u.license === 'basic' ? ' · חינמי (40 דק׳)' : ''} — ${u.linked.length ? u.linked.map((x) => x.name).join(', ') : 'לא משויך'}`
-            })))
+          ? el('div', {}, z.users.map((u) => el('div.flex', { style: { gap: '6px', alignItems: 'center', flexWrap: 'wrap' } }, [
+              el('span.mute-sm', { text: `${u.name} · ${u.email}${multi ? ` · חשבון ${u.account}` : ''}${u.license === 'basic' ? ' · חינמי (40 דק׳)' : ''} — ${u.linked.length ? u.linked.map((x) => x.name).join(', ') : 'לא משויך'}` }),
+              zoomTestButton(u)
+            ])))
           : el('div.mute-sm', { text: 'עוד לא נטענו משתמשים — "רענון מ-Zoom".' }));
     };
     API.get('/api/admin/zoom/users').then(draw).catch(() => {});
