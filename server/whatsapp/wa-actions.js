@@ -259,6 +259,13 @@ const ACTIONS = [
     enabled: true
   },
   {
+    key: 'instinct', icon: '🤖', label: 'עוזר כללי (אינסטינקט)', channel: 'private',
+    section: 'other', feature: '🤖 *שירותים כלליים* — "תעצב לי את התמונה", "תמיר לי את הקובץ", "תחפש לי ברשת", "מה הקישור הזה?"',
+    description: 'פיילוט — רק למנהלי המערכת, עד ‎instinct_open‎. בקשה שאינה קשורה לעבודה (עיצוב תמונה, המרת קובץ, תמלול, חיפוש כללי ברשת, הסבר קישור, מתכון) עוברת לאינסטינקט — עוזר חיצוני — מהמספר של הבוט, והתשובה חוזרת לעובד כמו כל תשובה של הבוט. יוצא רק מה שהעובד כתב או צירף, בלי פרטים מזהים (ת"ז, כרטיס, חשבון, טלפון, מייל); קובץ עם פרטים מזהים — לא נשלח. אינסטינקט לא מקבל מידע מהמערכת לעולם; שאלה יזומה שלו שלא קשורה לבקשה — לא נענית, ומנהלי המערכת מקבלים התראה. "אינסטינקט, …" — ישר אליו.',
+    examples: ['תעצב לי את התמונה הזו כמו פוסטר', 'תחפש לי ברשת מתכון לעוגת גבינה', 'מה הקישור הזה עושה?'],
+    enabled: true
+  },
+  {
     key: 'help', icon: '❓', label: 'עזרה', channel: 'private',
     description: 'מה הבוט יודע לעשות — הפעולות שמופעלות לכותב, עם הדוגמאות שכאן.',
     examples: ['מה אתה יודע לעשות?'],
@@ -316,6 +323,8 @@ const PRIORITY_DOC = { goods_receipt: 'receipt', goods_offer: 'receipt', purchas
 
 function allowed(actor, key) {
   const a = byKey(key);
+  // 🤖 אינסטינקט — פיילוט משלו (15.11.26): רק למנהלי המערכת, עד שההגדרה ‎instinct_open‎ פותחת לכולם
+  if (key === 'instinct' && !D.getSetting('instinct_open', false) && !inPilot(actor)) return false;
   if (PILOT_KEYS.has(key) && D.getSetting('bot_pilot', false) && !inPilot(actor)) return false;
   if (PRIORITY_DOC[key]) return Boolean(a?.enabled && PriorityAccess.can(actor, PRIORITY_DOC[key]));
   return Boolean(a?.enabled && (a.audience === 'all' || isManager(actor)));

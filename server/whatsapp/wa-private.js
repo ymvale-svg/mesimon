@@ -21,7 +21,7 @@ const { nameOf } = require('./wa-groups');
 // שיחה פרטית — הפעולות
 // ---------------------------------------------------------------------------
 
-const INTENTS = ['create_task', 'my_tasks', 'complete', 'comment', 'project_tasks', 'send_email', 'mail_insights', 'mail_ask', 'solve', 'contact', 'recording', 'today', 'today_email', 'menu', 'help', 'cancel', 'other'];
+const INTENTS = ['create_task', 'my_tasks', 'complete', 'comment', 'project_tasks', 'send_email', 'mail_insights', 'mail_ask', 'solve', 'contact', 'recording', 'today', 'today_email', 'menu', 'help', 'instinct', 'cancel', 'other'];
 
 const INSIGHT_ACTIONS = ['list', 'detail', 'reply', 'task', 'follow'];
 
@@ -403,7 +403,8 @@ async function understand(user, actor, state, text, projects, myOpen) {
   const projectIds = new Set(projects.map((p) => p.id));
   const d = out.draft ?? {};
   return {
-    intent: INTENTS.includes(out.intent) ? out.intent : 'other',
+    // 🤖 בקשה כללית ממי שאינסטינקט לא פתוח לו — כמו קודם: "אחר"
+    intent: !INTENTS.includes(out.intent) || (out.intent === 'instinct' && !WaActions.allowed(actor, 'instinct')) ? 'other' : out.intent,
     ready: Boolean(out.ready),
     reply: String(out.reply ?? '').trim().slice(0, 1000),
     range: RANGES[out.range] ? out.range : 'today',

@@ -29,6 +29,7 @@ const Meetings = require('../meetings').Meetings;
 const Solve = require('./solve');
 const MailInsights = require('../mail').MailInsights;
 const Range = require('../mail').InsightWindow;
+const Instinct = require('./instinct');
 const { appRoot, currentMsg, doneEmoji, emailText, enqueueAs, firstName, hooks, localDate, log, react, reactNow, signatureFields, taskLink, WALK } = require('./wa-base');
 const { actionOf, CANCEL, checkDraft, draftText, featuresText, helpText, localDay, PLAIN_FEATURES, PLAIN_GREETING, PLAIN_HELP, PLAIN_INSIGHTS, PLAIN_LIST, PLAIN_TODAY, READ_ALOUD, shortDate, YES } = require('./wa-private');
 const { meetCoordRun, pushToUser, rfqPrepare, rfqSend } = require('./wa-proactive');
@@ -824,6 +825,32 @@ async function flowIntentOther({ actor, out, u }) {
   return NEXT;
 }
 
+/*
+ * 🤖 אינסטינקט — העוזר הכללי (‎instinct.js‎). הבקשה יוצאת ברקע והתשובה מגיעה לבד: כאן רק ⏳ על ההודעה, בלי טקסט —
+ * הבוט לא מחכה, והעובד ממשיך בשיחה. ‎explicit‎ — "אינסטינקט, …" (לפני ה-AI). שאלה של אינסטינקט שהועברה לעובד
+ * ועוד פתוחה — הבקשה הכללית הבאה (‎instinct‎) היא התשובה עליה, ויוצאת בציטוט שלה.
+ */
+function instinctSend({ user, actor, dry, out, text, explicit = false }) {
+  const question = explicit ? null : Instinct.openQuestion(user.id);
+  const file = question ? null : Instinct.takeFile(user.id);
+  const what = question ? 'תשובה לשאלה של אינסטינקט' : `בקשה לאינסטינקט${file ? ' + קובץ' : ''}`;
+  if (dry) return out(`🤖 (בדיקה) ${what}: "${Instinct.redact(text)}"`, {}, { action: 'instinct', status: 'ok', result: `${what} (בדיקה — לא נשלח)` });
+  Instinct.request(user, text, { file, question, ref: currentMsg.get(actor.id) });
+  return out('', {}, { action: 'instinct', status: 'ok', result: `${what} — ברקע`, react: question ? '📤' : '⏳' });
+}
+
+async function flowInstinctExplicit({ user, actor, dry, out, t }) {
+  if (!Instinct.TRIGGER.test(t) || !Instinct.allowed(actor)) return NEXT;
+  const text = t.replace(Instinct.TRIGGER, '').trim();
+  if (!text) return out('מה לבקש? כתבו למשל "אינסטינקט, תחפש לי מתכון לעוגת גבינה".', {}, { action: 'instinct', status: 'unclear', result: 'בקשה ריקה' });
+  return instinctSend({ user, actor, dry, out, text, explicit: true });
+}
+
+async function flowInstinct({ user, actor, dry, out, t, u }) {
+  if (u.intent !== 'instinct' || !Instinct.allowed(actor)) return NEXT;
+  return instinctSend({ user, actor, dry, out, text: u.request || t });
+}
+
 async function flowIntentDenied({ actor, out, u }) {
   if (!WaActions.allowed(actor, actionOf(u.intent))) {
     const label = WaActions.byKey(actionOf(u.intent))?.label ?? u.intent;
@@ -844,5 +871,5 @@ const switchCancels = () => Boolean(D.getSetting('wa_topic_switch_cancels', true
 const DRAFT_ONLY = /(?:(?:בלי|לא\s+משנה|אין\s+לי\s+(?:את\s+)?|עזוב(?:\s+את)?)\s*ה?(?:כתובת|מייל|נמען)|רק\s+ת?(?:נסח|כתוב)|ת?נסח\s+(?:לי\s+)?(?:רק\s+)?(?:את\s+)?ה?(?:מלל|טקסט|נוסח))/;
 
 module.exports = {
-  DRAFT_ONLY, flowAgentsList, flowAlertNo, flowApproval, flowBusinessCommand, flowCancel, flowClosureCommand, flowEmailEdit, flowEmailPick, flowEmailSolve, flowEmailVia, flowFeaturesRequest, flowFormFillRequest, flowGreeting, flowIntentCancel, flowIntentDenied, flowIntentMenu, flowIntentOther, flowMailReplyEdit, flowMeetCoordRequest, flowMeetingAudioAnswer, flowMeetingAudioRequest, flowMeetingFollowupRequest, flowMeetingReminderRequest, flowMenuList, flowMenuPick, flowNoAi, flowNoticeRequest, flowOnClosureAddress, flowOnDayEvening, flowOnFormFill, flowOnGoodsStop, flowOnMailMuteSender, flowOnMailRemindOrGoods, flowOnMeetCoord, flowOnMeetingTasks, flowOnPaceOffer, flowOnPlainMail, flowOnReminder, flowOnRfq, flowOnSentFollowup, flowOnThreadAdd, flowRemindersRequest, flowReplyAsk, flowRfqRequest, flowRfqSummary, flowSuggestionCommand, flowTranslateRequest, flowWalk, NEXT, switchCancels
+  DRAFT_ONLY, flowAgentsList, flowAlertNo, flowApproval, flowBusinessCommand, flowCancel, flowClosureCommand, flowEmailEdit, flowEmailPick, flowEmailSolve, flowEmailVia, flowFeaturesRequest, flowFormFillRequest, flowGreeting, flowInstinct, flowInstinctExplicit, flowIntentCancel, flowIntentDenied, flowIntentMenu, flowIntentOther, flowMailReplyEdit, flowMeetCoordRequest, flowMeetingAudioAnswer, flowMeetingAudioRequest, flowMeetingFollowupRequest, flowMeetingReminderRequest, flowMenuList, flowMenuPick, flowNoAi, flowNoticeRequest, flowOnClosureAddress, flowOnDayEvening, flowOnFormFill, flowOnGoodsStop, flowOnMailMuteSender, flowOnMailRemindOrGoods, flowOnMeetCoord, flowOnMeetingTasks, flowOnPaceOffer, flowOnPlainMail, flowOnReminder, flowOnRfq, flowOnSentFollowup, flowOnThreadAdd, flowRemindersRequest, flowReplyAsk, flowRfqRequest, flowRfqSummary, flowSuggestionCommand, flowTranslateRequest, flowWalk, NEXT, switchCancels
 };

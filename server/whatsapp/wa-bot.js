@@ -71,6 +71,7 @@ const SentFollowup = require('../mail').SentFollowup;
 const DayDigest = require('../agents').DayDigest;
 const Briefing = require('../meetings').Briefing;
 const Meetings = require('../meetings').Meetings;
+const Instinct = require('./instinct');
 const { appRoot, buttonReplyText, candidatesOf, chains, channel, checkState, currentMsg, DAY, DIGEST_GRACE_MIN, doneEmoji, emailText, enqueueAs, firstName, HISTORY_TURNS, hooks, inHours, isConfigured, localDate, log, mailAlertUsers, markDone, onDirect, orgUsers, parseJson, PICK_SHOWN, pickText, publicStatus, qr, react, reactNow, readLog, recentFiles, remove, resolveMentions, save, sendButtons, sendText, setState, signatureFields, signatureLine, splitMessage, taskLink, todayStats, userByPhone, WALK, workHours } = require('./wa-base');
 const { analyzeGroup, bindGroup, listGroups, notifyAdmins, processGroup, processGroups, prune, recipientOf, sanitizeGroup } = require('./wa-groups');
 const { CANCEL, FORWARD_MAX, LIST_SHOWN, PLAIN_FEATURES, PLAIN_GREETING, PLAIN_HELP, PLAIN_INSIGHTS, PLAIN_LIST, PLAIN_TODAY, RANGES, READ_ALOUD, READ_ALOUD_DOWN, YES, actionOf, addForward, chatOf, checkDraft, clearForwards, draftText, emptyChat, featuresText, findContactCards, formatList, forwardsOf, helpText, localDay, readAloudAllowed, readAloudFile, readAloudText, saveChat, shortDate, sourceOf, understand, unknownReplied, withForwards } = require('./wa-private');
@@ -79,7 +80,7 @@ const { answerLike, busyFor, meetCoordRun, meetCoordTick, pushToUser, questionTt
 const { businessCommand, closeAlerted, closureDecision, confirmPending, contactOf, createFromDraft, draftEmail, findRecipients, mailActionAlerts, mailAlertFor, mailAlerts, parseThreadAdd, resolveCc, solveText, startGoodsFromMail, suggestionDecision, suggestionFeedback, threadAddText, VIA_EMAIL, VIA_MESIMON } = require('./wa-mail');
 const { MENU, MENU_FREE_HINT, MENU_MORE, PLAIN_AGENTS, agentsText, cut, dayItems, isMenuButton, menuButtonOf, menuButtons, menuOptions, menuPick, menuText, moreMenuGroups, pairsOf, parseClosureCommand, parseSuggestionCommand, recordingReply, todayMessage, walkAction, walkButtons, walkText } = require('./wa-menu');
 const { flowReply, logoIntent, meetingAudioAllowed, meetingAudioTurn, meetingFollowups, processMeetingAudio, receiveMeetingAudio, TRANSLATE } = require('./wa-meeting');
-const { DRAFT_ONLY, flowAgentsList, flowAlertNo, flowApproval, flowBusinessCommand, flowCancel, flowClosureCommand, flowEmailEdit, flowEmailPick, flowEmailSolve, flowEmailVia, flowFeaturesRequest, flowFormFillRequest, flowGreeting, flowIntentCancel, flowIntentDenied, flowIntentMenu, flowIntentOther, flowMailReplyEdit, flowMeetCoordRequest, flowMeetingAudioAnswer, flowMeetingAudioRequest, flowMeetingFollowupRequest, flowMeetingReminderRequest, flowMenuList, flowMenuPick, flowNoAi, flowNoticeRequest, flowOnClosureAddress, flowOnDayEvening, flowOnFormFill, flowOnGoodsStop, flowOnMailMuteSender, flowOnMailRemindOrGoods, flowOnMeetCoord, flowOnMeetingTasks, flowOnPaceOffer, flowOnPlainMail, flowOnReminder, flowOnRfq, flowOnSentFollowup, flowOnThreadAdd, flowRemindersRequest, flowReplyAsk, flowRfqRequest, flowRfqSummary, flowSuggestionCommand, flowTranslateRequest, flowWalk, NEXT, switchCancels } = require('./wa-flows');
+const { DRAFT_ONLY, flowAgentsList, flowAlertNo, flowApproval, flowBusinessCommand, flowCancel, flowClosureCommand, flowEmailEdit, flowEmailPick, flowEmailSolve, flowEmailVia, flowFeaturesRequest, flowFormFillRequest, flowGreeting, flowInstinct, flowInstinctExplicit, flowIntentCancel, flowIntentDenied, flowIntentMenu, flowIntentOther, flowMailReplyEdit, flowMeetCoordRequest, flowMeetingAudioAnswer, flowMeetingAudioRequest, flowMeetingFollowupRequest, flowMeetingReminderRequest, flowMenuList, flowMenuPick, flowNoAi, flowNoticeRequest, flowOnClosureAddress, flowOnDayEvening, flowOnFormFill, flowOnGoodsStop, flowOnMailMuteSender, flowOnMailRemindOrGoods, flowOnMeetCoord, flowOnMeetingTasks, flowOnPaceOffer, flowOnPlainMail, flowOnReminder, flowOnRfq, flowOnSentFollowup, flowOnThreadAdd, flowRemindersRequest, flowReplyAsk, flowRfqRequest, flowRfqSummary, flowSuggestionCommand, flowTranslateRequest, flowWalk, NEXT, switchCancels } = require('./wa-flows');
 
 const RECENT_FILE_MS = 15 * 60 * 1000;
 
@@ -702,10 +703,15 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
   // "סוכנים" — הרשימה, בלי AI
   { const r = await flowAgentsList({ actor, out, t }); if (r !== NEXT) return r; }
 
+  // 🤖 "אינסטינקט, …" — ישר לעוזר הכללי, בלי AI
+  { const r = await flowInstinctExplicit({ actor, dry, out, t, user }); if (r !== NEXT) return r; }
+
   { const r = await flowNoAi({ actor, insightsReply, listReply, menuReply, out, state, t, todayReply, withReadAloud }); if (r !== NEXT) return r; }
 
   const u = await understand(user, actor, state, t, projects, myOpen);
   { const r = await flowIntentCancel({ out, u }); if (r !== NEXT) return r; }
+  // 🤖 בקשה כללית (לא עבודה) — לאינסטינקט, ברקע
+  { const r = await flowInstinct({ actor, dry, out, t, u, user }); if (r !== NEXT) return r; }
   // "היי", "מה נשמע", או משהו שאינו פעולה — בהודעה הראשונה של היום: ה-Today המלא והתפריט.
   // אחר כך — התפריט בלבד (☀️ מה יש לי היום · 🗂 פריוריטי · עוד אפשרויות); תובנות — כשמבקשים
   const firstToday = state.greetedOn !== localDay(0);
@@ -987,6 +993,8 @@ async function withFollowUps(r) {
 let buttonShapeLogged = false;
 
 async function handleDirect(msg) {
+  // 🤖 אינסטינקט לעולם לא מגיע לניתוב (גם אם המספר נרשם בטעות אצל עובד) — ‎instinct.js‎
+  if (Instinct.isInstinct(msg.phone)) return Instinct.receive(msg);
   const user = userByPhone(msg.phone);
   if (!user) {
     log({ channel: 'private', chatId: msg.chatId, who: msg.phone, text: msg.text, action: 'unknown', status: 'denied', result: 'מספר לא מוכר' });
@@ -1226,6 +1234,14 @@ async function handleDirect(msg) {
     log({ ...base, text: voice ? `🎙 ${content}` : content, action: 'forward', status: 'ok', result: `הודעה מועברת נאספה (${before + 1})`, reply: ack });
     await notice;
     if (ack) await sendText(msg.chatId, ack);
+    return;
+  }
+  // 🤖 קובץ — זמין לבקשה הכללית שאיתו או אחריו ("תמיר לי את זה ל-PDF")
+  const instinctOn = Instinct.allowed(actor);
+  if (instinctOn && msg.file && !msg.forwarded) Instinct.offerFile(user.id, msg.file);
+  if (!text && msg.file && instinctOn) {
+    log({ ...base, text: `[📎 ${msg.file.name || msg.kind || 'קובץ'}]`, action: 'instinct', status: 'unclear', result: 'קובץ בלי הוראה — נשאל מה לעשות' });
+    await sendText(msg.chatId, 'קיבלתי את הקובץ 📎 מה לעשות איתו?');
     return;
   }
   if (!text && msg.file) {
@@ -1512,6 +1528,11 @@ const sleep = (ms) => new Promise((r) => { setTimeout(r, ms).unref?.(); });
 
 
 function dispatch(m) {
+  // 🤖 אינסטינקט — לא עובד ולא ניתוב: רק למודול שלו, גם מחוץ לשעות (התשובה שייכת לבקשה שכבר יצאה)
+  if (Instinct.isInstinct(m.phone)) {
+    Instinct.receive(m).catch((err) => console.error('[משימון] הודעה מאינסטינקט לא טופלה:', err.message));
+    return;
+  }
   if (!inHours()) {
     defer([m]);
     return;
@@ -1724,6 +1745,6 @@ module.exports = {
     storeGroupMessage, processGroup, handleDirect, sanitizeGroup, resolveMentions, candidatesOf, converse, turn, withFollowUps, sendSummaries, YES,
     findRecipients, findContactCards, sourceOf, suggestionFeedback, flushOutbox, todayMessage, splitMessage, parseSuggestionCommand, businessCommand, chatOf, saveChat,
     recordingReply, checkDraft, draftText, createFromDraft, mailAlertFor, closeAlerted, logoIntent, busyFor, userLastAt, staleQuestion,
-    READ_ALOUD, READ_ALOUD_DOWN, readAloudText, readAloudFile, hooks, flowReply, retryTick, alertAdminsAi
+    READ_ALOUD, READ_ALOUD_DOWN, readAloudText, readAloudFile, hooks, flowReply, retryTick, alertAdminsAi, dispatch
   }
 };
