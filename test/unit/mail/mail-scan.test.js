@@ -46,7 +46,7 @@ test('rangeOf — טווח מותאם שחוצה מעבר לשעון חורף', 
 
 test('sanitize — ברירות מחדל לתשובה ריקה', () => {
   const s = sanitize({}, me, users);
-  assert.deepEqual(s, { forMe: true, replyExpected: false, addressedTo: '', skipReason: '', warning: '', tasks: [], goods: null, form: null });
+  assert.deepEqual(s, { forMe: true, replyExpected: false, addressedTo: '', departmentId: null, skipReason: '', warning: '', tasks: [], goods: null, form: null });
 });
 
 test('sanitize — אחראי ראשי אחד; עובד לא מוכר ואני עצמי יוצאים', () => {

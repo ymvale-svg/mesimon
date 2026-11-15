@@ -18,5 +18,6 @@ module.exports = {
   get Notice() { return require('./notice'); },
   get NoticeDesign() { return require('./notice-design'); },
   get Solve() { return require('./solve'); },
-  get AiOutage() { return require('./ai-outage'); }
+  get AiOutage() { return require('./ai-outage'); },
+  get BotTips() { return require('./bot-tips'); }
 };

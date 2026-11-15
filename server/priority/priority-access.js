@@ -28,6 +28,9 @@ const DOCS = Object.freeze([
 ]);
 const DOC_KEYS = DOCS.map((d) => d.key);
 
+/** מה שעובד בלי הרשאה רואה כשביקש פריוריטי — רק מה שהוא יכול לפתור (‎CLAUDE.md‎) */
+const NO_ACCESS = '🗂 פריוריטי לא פתוח לך בבוט. אם צריך — פנו למנהל המערכת.';
+
 const key = (org) => `priority_access:${org}`;
 const isAdmin = (actor) => Boolean(actor && actor.type === 'user' && ADMIN_ROLES.includes(actor.role));
 const stored = (org) => { const v = D.getSetting(key(org), null); return v && typeof v === 'object' ? v : { users: {} }; };
@@ -69,6 +72,11 @@ function can(actor, doc, company = null, org = DEFAULT_ORG) {
   const a = of({ id: actor.id, role: actor.role }, org);
   if (!a.docs.includes(doc)) return false;
   return !company || a.companies === null || a.companies.includes(company);
+}
+
+/** האם מותר לו לפחות מסמך אחד שכבר עובד (‎ready‎) — כלומר, האם להראות לו את פריוריטי בכלל */
+function any(actor, org = DEFAULT_ORG) {
+  return DOCS.some((d) => d.ready && can(actor, d.key, null, org));
 }
 
 /** מסנן רשימת קודי חברות למה שהמשתמש רשאי בו */
@@ -129,4 +137,4 @@ function save(rows, { org = DEFAULT_ORG } = {}) {
   return changes;
 }
 
-module.exports = { DEFAULT_ORG, DOCS, DOC_KEYS, isAdmin, of, can, filterCompanies, filterForUser, matrix, save, _key: key };
+module.exports = { DEFAULT_ORG, DOCS, DOC_KEYS, NO_ACCESS, isAdmin, of, can, any, filterCompanies, filterForUser, matrix, save, _key: key };

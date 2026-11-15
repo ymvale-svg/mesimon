@@ -358,6 +358,8 @@ const AiInboxView = (() => {
       d.warning ? el('div.alert.alert-warn.ai-mini', {}, [el('span', { text: '⚠️' }), el('div', { text: `שימו לב: ${d.warning}` })]) : null,
       d.ambiguous?.length ? el('div.mute-sm', { text: `❓ לא ברור למי הכוונה: ${d.ambiguous.join(', ')} — בחרו בעריכה` }) : null,
       d.alsoSuggestedTo?.length ? el('div.mute-sm', { text: `👥 הוצע גם ל${d.alsoSuggestedTo.join(', ')}` }) : null,
+      // 👤 המייל נשלח לכמה אנשים — האחראי עליו מקבל את התזכורות בבוט (‎server/mail/mail-owner.js‎)
+      d.ownerName ? el('div.mute-sm', { text: `👤 האחראי על המייל: ${d.ownerName} — הוא מקבל את התזכורות` }) : null,
       d.routedAsManager ? el('div.mute-sm', { text: '👤 לא היה ברור למי הבקשה — הגיעה אליך כמנהל/ת הפרויקט. אפשר להעביר בעריכה' }) : null,
       replyLine(s, reload),
       closureLine(s, reload),

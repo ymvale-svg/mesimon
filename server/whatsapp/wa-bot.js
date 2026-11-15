@@ -64,12 +64,15 @@ const Notice = require('./notice');
 const AiOutage = require('./ai-outage');
 const WaQuestions = require('./wa-questions');
 const Rfq = require('../priority').Rfq;
+const PriorityAccess = require('../priority').PriorityAccess;
+const BotTips = require('./bot-tips');
 const FormFill = require('../mail').FormFill;
 const MeetCoord = require('../meetings').MeetingCoord;
 const Reminders = require('./reminders');
 const SentFollowup = require('../mail').SentFollowup;
 const DayDigest = require('../agents').DayDigest;
 const Briefing = require('../meetings').Briefing;
+const Calendar = require('../meetings').Calendar;
 const Meetings = require('../meetings').Meetings;
 const Instinct = require('./instinct');
 const { appRoot, buttonReplyText, candidatesOf, chains, channel, checkState, currentMsg, DAY, DIGEST_GRACE_MIN, doneEmoji, emailText, enqueueAs, firstName, HISTORY_TURNS, hooks, inHours, isConfigured, localDate, log, mailAlertUsers, markDone, onDirect, orgUsers, parseJson, PICK_SHOWN, pickText, publicStatus, qr, react, reactNow, readLog, recentFiles, remove, resolveMentions, save, sendButtons, sendText, setState, signatureFields, signatureLine, splitMessage, taskLink, todayStats, userByPhone, WALK, workHours } = require('./wa-base');
@@ -80,7 +83,7 @@ const { answerLike, busyFor, meetCoordRun, meetCoordTick, pushToUser, questionTt
 const { businessCommand, closeAlerted, closureDecision, confirmPending, contactOf, createFromDraft, draftEmail, findRecipients, mailActionAlerts, mailAlertFor, mailAlerts, parseThreadAdd, resolveCc, solveText, startGoodsFromMail, suggestionDecision, suggestionFeedback, threadAddText, VIA_EMAIL, VIA_MESIMON } = require('./wa-mail');
 const { MENU, MENU_FREE_HINT, MENU_MORE, PLAIN_AGENTS, agentsText, cut, dayItems, isMenuButton, menuButtonOf, menuButtons, menuOptions, menuPick, menuText, moreMenuGroups, pairsOf, parseClosureCommand, parseSuggestionCommand, recordingReply, todayMessage, walkAction, walkButtons, walkText } = require('./wa-menu');
 const { flowReply, logoIntent, meetingAudioAllowed, meetingAudioTurn, meetingFollowups, processMeetingAudio, receiveMeetingAudio, TRANSLATE } = require('./wa-meeting');
-const { DRAFT_ONLY, flowAgentsList, flowAlertNo, flowApproval, flowBusinessCommand, flowCancel, flowClosureCommand, flowEmailEdit, flowEmailPick, flowEmailSolve, flowEmailVia, flowFeaturesRequest, flowFormFillRequest, flowGreeting, flowInstinct, flowInstinctExplicit, flowInstinctPilot, flowNoticeToInstinct, flowIntentCancel, flowIntentDenied, flowIntentMenu, flowIntentOther, flowMailReplyEdit, flowMeetCoordRequest, flowMeetingAudioAnswer, flowMeetingAudioRequest, flowMeetingFollowupRequest, flowMeetingReminderRequest, flowMenuList, flowMenuPick, flowNoAi, flowNoticeRequest, flowOnClosureAddress, flowOnDayEvening, flowOnFormFill, flowOnGoodsStop, flowOnMailMuteSender, flowOnMailRemindOrGoods, flowOnMeetCoord, flowOnMeetingTasks, flowOnPaceOffer, flowOnPlainMail, flowOnReminder, flowOnRfq, flowOnSentFollowup, flowOnThreadAdd, flowRemindersRequest, flowReplyAsk, flowRfqRequest, flowRfqSummary, flowSuggestionCommand, flowTranslateRequest, flowWalk, NEXT, switchCancels } = require('./wa-flows');
+const { DRAFT_ONLY, flowAgentsList, flowAlertNo, flowApproval, flowBusinessCommand, flowCancel, flowClosureCommand, flowEmailEdit, flowEmailPick, flowEmailSolve, flowEmailVia, flowFeaturesRequest, flowFormFillRequest, flowGreeting, flowInstinct, flowInstinctExplicit, flowInstinctPilot, flowNoticeToInstinct, flowIntentCancel, flowIntentDenied, flowIntentMenu, flowIntentOther, flowMailReplyEdit, flowMailWalk, flowMeetCoordRequest, flowMeetingAudioAnswer, flowMeetingAudioRequest, flowMeetingFollowupRequest, flowMeetingReminderRequest, flowMenuList, flowMenuPick, flowNoAi, flowNoticeRequest, flowOnClosureAddress, flowOnDayEvening, flowOnFormFill, flowOnGoodsStop, flowOnMailMuteSender, flowOnMailRemindOrGoods, flowOnMeetCoord, flowOnMeetingTasks, flowOnPaceOffer, flowOnPlainMail, flowOnReminder, flowOnRfq, flowOnSentFollowup, flowOnThreadAdd, flowRemindersRequest, flowReplyAsk, flowRfqRequest, flowRfqSummary, flowSuggestionCommand, flowTranslateRequest, flowWalk, NEXT, switchCancels } = require('./wa-flows');
 
 const RECENT_FILE_MS = 15 * 60 * 1000;
 
@@ -323,6 +326,8 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
    * אחרת מחכה לתשובה (קבלת סחורה וכו') — רק מטיוטה שנפתחה מהמעבר.
    */
   { const r = await flowWalk({ actor, dry, out, startReply, state, t, user }); if (r !== NEXT) return r; }
+  // 📬 "מיילים לענות" — מייל אחרי מייל, תמיד עם הצעת תשובה
+  { const r = await flowMailWalk({ actor, dry, out, state, t }); if (r !== NEXT) return r; }
 
 
   /*
@@ -409,6 +414,11 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
   }
   // 🔕 / 🔔 תזכורות מהמייל — "תפסיק להזכיר לי מהמייל", "תחזיר את התזכורות מהמייל", "… רק בבוקר", "… היום".
   // לפני "תזכיר לי …" — "תזכיר לי מהמייל" היא הפעלה, לא תזכורת חדשה
+  // 💡 "מספיק טיפים" / "תחזיר את הטיפים"
+  {
+    const r = dry ? null : BotTips.command(actor.id, t);
+    if (r) return out(r.text, {}, { action: 'tips', status: 'ok', result: r.result, react: '✅' });
+  }
   {
     const r = dry ? null : MailActions.paceCommand(actor.id, t);
     if (r) return out(r.text, {}, { action: 'mail_deadline', status: 'ok', result: r.result, react: '✅' });
@@ -1178,6 +1188,17 @@ async function handleDirect(msg) {
   if (msg.file && !(grAllowed && (GoodsReceipt.active(user.id, late) || GoodsReceipt.opens(text, msg.file)))) rememberFile(user.id, msg.file);
   let grPassed = false;
   let grNotice = '';
+  // 🔐 פריוריטי לא פתוח לעובד (אין לו אף מסמך במטריצה) — "פריוריטי" / "קבלת סחורה" / "דרישת רכש" (גם כפתור מהודעה ישנה):
+  // תשובה אחת ברורה, ולא תפריט ולא בקשה ל-AI (הוחלט 13.11.26)
+  const shortAsk = String(text ?? '').trim().split(/\s+/).filter(Boolean).length <= 3;
+  if (!forceChat && !forceFlow && !grAllowed && !pdAllowed && !msg.file
+    && ((shortAsk && (GoodsReceipt.isPriority(text) || GoodsReceipt.isTrigger(text) || PurchaseDemand.opens(text)))
+      || /^\P{L}*(?:קבלת\s*סחורה|דרישת\s*רכש)/u.test(String(text ?? '')))) {
+    await notice;
+    log({ ...base, text, action: 'goods_receipt', status: 'denied', result: 'פריוריטי — לא מורשה', reply: PriorityAccess.NO_ACCESS });
+    await sendText(msg.chatId, PriorityAccess.NO_ACCESS);
+    return;
+  }
   const prioMenuOnly = !grAllowed && pdAllowed && !msg.file && (GoodsReceipt.isPriority(text) || GoodsReceipt.inMenu(user.id));
   if (!offerAnswer && !forceChat && (prioMenuOnly || forceFlow === 'goods_receipt' || (grAllowed && (GoodsReceipt.active(user.id, late) || GoodsReceipt.opens(text, msg.file) || GoodsReceipt.wantsUndoFinal(user.id, text))))) {
     const slowGr = setTimeout(() => react(ref, '🧐'), SLOW_NOTICE_MS);
@@ -1653,6 +1674,16 @@ async function retryTick() {
 }
 
 
+/** ☀️ לסיכום הבוקר: הפגישות של העובד שעוד לא נגמרו היום (בלי "במשרד" / יומנים של אחרים) */
+async function todayMeetings(userId) {
+  if (!Calendar.isConnected(userId)) return [];
+  const me = D.get('SELECT email FROM users WHERE id = ?', userId)?.email ?? '';
+  const day = await Calendar.eventsForDay(userId);
+  const now = Date.now();
+  return (day.events ?? []).filter((e) => !e.declined && !Calendar.isDayStatus(e) && Calendar.isOwnEvent(e, me) && (e.allDay || new Date(e.end).getTime() > now));
+}
+
+
 async function tick() {
   if (!busy) await personalHousekeeping();
   // קבלות סחורה שלא אושרו — תזכורת וביטול (פעם ב-10 דקות לכל היותר)
@@ -1679,7 +1710,8 @@ async function tick() {
       if (WaActions.byKey('day_digest')?.enabled && workHours(null, { graceMin: DIGEST_GRACE_MIN })) {
         await DayDigest.tick({
           users: () => orgUsers().filter((u) => u.phone && workHours(u.id, { graceMin: DIGEST_GRACE_MIN }) && D.userPrefs(u.id)?.botPrefs?.dayDigest !== false && WaActions.allowed(Auth.loadActor('user', u.id), 'day_digest')),
-          push: (userId, m) => pushToUser(userId, m, 'day_digest', { graceMin: DIGEST_GRACE_MIN })
+          push: (userId, m) => pushToUser(userId, m, 'day_digest', { graceMin: DIGEST_GRACE_MIN }),
+          events: (userId) => todayMeetings(userId)
         }).catch((err) => console.error('[משימון] סיכום יומי נכשל:', err.message));
       }
       // 🕗 כל השאר — רק בשעות העבודה
@@ -1692,6 +1724,14 @@ async function tick() {
         await rfqTick();
         await meetCoordTick();
         await replyWatchTick();
+        // 💡 הטיפ היומי (09:00–10:00) — "ידעת שהבוט יודע…?", לא באמצע שיחה ולא בפגישה
+        if (WaActions.byKey('tips')?.enabled) {
+          await BotTips.tick({
+            users: () => orgUsers().filter((u) => u.phone && workHours(u.id)).map((u) => ({ ...u, role: Auth.loadActor('user', u.id)?.role })).filter((u) => u.role),
+            push: (userId, m) => pushToUser(userId, m, 'tips'),
+            quiet: async (userId) => !busyFor(userId) && MailActions.quietOk(userId, 10, { mailMute: false })
+          }).catch((err) => console.error('[משימון] הטיפ היומי נכשל:', err.message));
+        }
         if (WaActions.byKey('briefing')?.enabled) {
           await Briefing.tick({
             users: () => orgUsers().filter((u) => u.phone && workHours(u.id) && D.userPrefs(u.id)?.botPrefs?.briefing !== false && WaActions.allowed(Auth.loadActor('user', u.id), 'briefing')),

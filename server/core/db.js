@@ -808,6 +808,19 @@ CREATE TABLE IF NOT EXISTS mail_goods_docs (
 );
 
 /*
+ * 👤 בעל המייל (‎server/mail/mail-owner.js‎): לכל מייל (‎Message-ID‎) בעלים אחד בארגון — רק לו הבוט מזכיר, מציע תשובה
+ * ומציע קבלת סחורה. ‎bulk‎ — תפוצה (יותר מ-6 ב-"אל"): בלי תזכורות. ‎handled_at‎ — מישהו מהארגון כבר ענה: לאף אחד.
+ */
+CREATE TABLE IF NOT EXISTS mail_owner (
+  header_id   TEXT    PRIMARY KEY,
+  user_id     INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  reason      TEXT    NOT NULL DEFAULT '',
+  bulk        INTEGER NOT NULL DEFAULT 0,
+  handled_at  TEXT,
+  created_at  TEXT    NOT NULL
+);
+
+/*
  * 🗂 תור המסמכים של משימון פריוריטי (‎server/priority/priority-docs.js‎): כל מסמך שנכנס לעבודה — ממייל,
  * מגרירה במסך — עם הסוג (‎doc‎), המקור והשלב בשרשרת. הקובץ: ‎file_path‎ (יחסי לתיקיית ההעלאות),
  * ובמסמך ממייל — יורד מ-Gmail בפעם הראשונה שצריך אותו.
@@ -1822,6 +1835,11 @@ const DEFAULT_SETTINGS = {
   wa_actions: {},                          // מה הבוט עושה בפרטי: { key: { enabled, audience, examples } }
   wa_summary_time: '08:15',                // סיכום הבוקר בפרטי, שעון ישראל — ההודעה היזומה הראשונה של היום
   wa_hours: '',                            // שעות שבהן הבוט שולח הודעות ("07:00-22:00"). ריק = תמיד
+  digest_morning: '08:15',                 // ☀️ סיכום הבוקר — ההודעה היזומה הראשונה (‎agents/day-digest.js‎)
+  digest_evening: '17:00',                 // 🌙 סיכום סוף היום — האחרונה
+  bot_tip_time: '09:00',                   // 💡 הטיפ היומי — משעה (‎whatsapp/bot-tips.js‎)
+  bot_tip_until: '10:00',                  // 💡 … עד שעה
+  mail_digest_time: '13:00',               // 📬 "N מיילים מחכים לך" — פעם ביום, משעה
   wa_proactive_hours: '08:15-17:00',        // 🕗 הודעות יזומות (הצעות, תזכורות, מיילים) — רק בשעות אלה, בימי העבודה של העובד. 17:00 — סיכום סוף היום, האחרון
   wa_shabbat: true                         // בשישי מהערב ובשבת הבוט אינו שולח, ועונה במוצאי שבת
 };

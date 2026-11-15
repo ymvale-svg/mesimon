@@ -39,6 +39,7 @@ const FormFill = require('./form-fill');
 const Ports = require('../core').Ports;
 const Classification = require('../core').Classification;
 const MailInsights = require('./mail-insights');
+const MailOwner = require('./mail-owner');
 const MeetingCoord = require('../meetings').MeetingCoord;
 const OrgKnowledge = require('../agents').OrgKnowledge;
 const Rfq = require('../priority').Rfq;
@@ -98,6 +99,7 @@ const epoch = (d) => Math.floor(d.getTime() / 1000);
 // ---------------------------------------------------------------------------
 
 const userOf = (id) => D.get("SELECT id, full_name, email, department_id FROM users WHERE id = ? AND status = 'active'", id);
+const activeDepartments = () => D.all("SELECT id, name FROM departments WHERE status = 'active' ORDER BY name");
 const orgUsers = () => D.all("SELECT u.id, u.full_name, u.email, d.name AS department FROM users u LEFT JOIN departments d ON d.id = u.department_id WHERE u.status = 'active' AND u.role <> 'vendor' ORDER BY u.full_name");
 
 function senderMode(userId, email) {
@@ -178,9 +180,11 @@ const ANALYSIS_SCHEMA = {
       }
     }
   },
-  required: ['for_me', 'reply_expected', 'addressed_to_email', 'skip_reason', 'warning', 'tasks', 'goods_document'],
+  required: ['for_me', 'reply_expected', 'addressed_to_email', 'skip_reason', 'warning', 'tasks', 'goods_document', 'department'],
   additionalProperties: false
 };
+// 👤 המחלקה שהנושא שלה — כדי שתזכורת על מייל לכמה נמענים תגיע רק למנהל המחלקה (‎mail-owner.js‎)
+ANALYSIS_SCHEMA.properties.department = { type: 'string', description: 'שם המחלקה שהנושא של המייל שייך לה — בדיוק כפי שמופיע ברשימת המחלקות, או מחרוזת ריקה אם לא ברור' };
 // 📄 חשבונית / תעודת משלוח בקובץ המצורף — הבוט יציע קבלת סחורה (‎mail-actions.js‎)
 ANALYSIS_SCHEMA.properties.goods_document = MailActions.GOODS_SCHEMA;
 // 📝 טופס ריק למילוי בקובץ המצורף — הבוט יציע למלא (‎form-fill.js‎)
@@ -206,6 +210,7 @@ async function analyze(user, mail, conn = null) {
     `בעל התיבה: ${user.full_name} <${own[0]}>`,
     own.length > 1 ? `כל הכתובות של בעל התיבה (מייל לכל אחת מהן — אליו): ${own.join(', ')}` : null,
     '',
+    `המחלקות בארגון: ${activeDepartments().map((d) => d.name).join(', ') || 'אין'}`,
     'העובדים בארגון (מזהה · שם · מייל · מחלקה):',
     ...users.map((u) => `${u.id} · ${u.full_name} · ${u.email} · ${u.department ?? ''}`),
     '',
@@ -283,6 +288,7 @@ function sanitize(out, user, users) {
     forMe: out.for_me !== false,
     replyExpected: out.reply_expected === true && !out.warning,
     addressedTo: String(out.addressed_to_email ?? '').trim().toLowerCase(),
+    departmentId: activeDepartments().find((d) => d.name === String(out.department ?? '').trim())?.id ?? null,
     skipReason: String(out.skip_reason ?? ''),
     warning: String(out.warning ?? '').trim(),
     tasks,
@@ -369,6 +375,8 @@ async function processMessage(user, conn, gmailId) {
   // כל הכתובות שלי — מייל שעובר ביני לבין עצמי (מתיבה לתיבה) אינו משימה
   const mine = new Set([conn.email, user.email, ...Gmail.emailsOf(user.id)].filter(Boolean).map((a) => a.toLowerCase()));
 
+  // 👤 עובד מהארגון ענה בשרשור — המייל טופל, ולא מזכירים עליו לאף אחד (‎mail-owner.js‎)
+  try { MailOwner.noteOrgReply(mail.from.address, [...mail.inReplyTo, ...mail.references]); } catch (err) { console.error('[משימון] סימון תשובה מהארגון נכשל:', err.message); }
   if (!mail.from.address || mine.has(mail.from.address)) return record(user.id, gmailId, headerId, 'skipped', meta.box), 'skipped';
   if (await routeReply(user, mail)) return record(user.id, gmailId, headerId, 'reply', meta.box), 'reply';
   // תשובה של ספק לפנייה להצעת מחיר — נקראת שם (‎rfq.js‎), לא הצעת משימה
@@ -404,10 +412,13 @@ async function processMessage(user, conn, gmailId) {
   }
 
   const result = await analyze(user, mail, conn);
+  // 👤 בעל המייל — רק לו הבוט יפנה (תזכורת, הצעת תשובה, קבלת סחורה, טופס). ההכרעה הראשונה נשמרת לכל התיבות
+  const owner = MailOwner.assign(headerId, MailOwner.decide({ to: mail.to, addressedTo: result.addressedTo, departmentId: result.departmentId, fromEmail: mail.from.address }));
+  const isOwner = MailOwner.isOwner(user.id, headerId);
   // 📄 חשבונית / תעודת משלוח מצורפת — הצעה לקבלת סחורה בבוט, גם כשאין במייל משימה
-  try { MailActions.goodsDocFrom(user, meta, mail, result.goods); } catch (err) { console.error('[משימון] רישום חשבונית מהמייל נכשל:', err.message); }
+  if (isOwner) try { MailActions.goodsDocFrom(user, meta, mail, result.goods); } catch (err) { console.error('[משימון] רישום חשבונית מהמייל נכשל:', err.message); }
   // 📝 טופס ריק — רק כשבעל התיבה הוא הנמען הראשי (לא בהעתק)
-  try { FormFill.formFrom(user, meta, mail, result.form, [...mine]); } catch (err) { console.error('[משימון] רישום טופס מהמייל נכשל:', err.message); }
+  if (isOwner) try { FormFill.formFrom(user, meta, mail, result.form, [...mine]); } catch (err) { console.error('[משימון] רישום טופס מהמייל נכשל:', err.message); }
 
   // הבקשה מופנית לעמית שמחובר בעצמו — היא תוצע לו, לא לי
   if (!result.forMe && result.addressedTo && !mine.has(result.addressedTo)) {
@@ -462,7 +473,8 @@ async function processMessage(user, conn, gmailId) {
   for (const t of result.tasks) {
     // ‎toMe‎ — אני הנמען הראשי (לא רק בהעתק); ‎auto‎ — דיוור / הודעה אוטומטית. רק כאלה קופצים בוואטסאפ (‎mail-push.js‎)
     const toMe = (String(mail.to ?? '').match(/[^\s<>,;"']+@[^\s<>,;"']+/g) ?? []).some((e) => mine.has(e.toLowerCase()));
-    const data = { ...t, warning: result.warning, alsoSuggestedTo: others, receivedAt: meta.receivedAt, toMe, auto: Boolean(mail.autoSubmitted) };
+    const ownerName = owner?.user_id && owner.user_id !== user.id ? D.get('SELECT full_name FROM users WHERE id = ?', owner.user_id)?.full_name ?? '' : '';
+    const data = { ...t, warning: result.warning, alsoSuggestedTo: others, receivedAt: meta.receivedAt, toMe, auto: Boolean(mail.autoSubmitted), ...(ownerName ? { ownerName } : {}) };
     // לבד רק משימה שכולה שלי: בלי עובדים אחרים, בלי פנייה החוצה ובלי סימן אזהרה
     const solo = !t.people.length && !t.aiRequest && !t.ambiguous.length && !result.warning;
     if ((trusted || autoAll) && solo && !others.length) {

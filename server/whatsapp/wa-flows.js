@@ -30,10 +30,10 @@ const Solve = require('./solve');
 const MailInsights = require('../mail').MailInsights;
 const Range = require('../mail').InsightWindow;
 const Instinct = require('./instinct');
-const { appRoot, currentMsg, doneEmoji, emailText, enqueueAs, firstName, hooks, localDate, log, react, reactNow, signatureFields, taskLink, WALK } = require('./wa-base');
+const { appRoot, currentMsg, doneEmoji, emailText, enqueueAs, firstName, hooks, localDate, log, react, reactNow, signatureFields, taskLink, WALK, MSG_BREAK } = require('./wa-base');
 const { actionOf, CANCEL, checkDraft, draftText, featuresText, helpText, localDay, PLAIN_FEATURES, PLAIN_GREETING, PLAIN_HELP, PLAIN_INSIGHTS, PLAIN_LIST, PLAIN_TODAY, READ_ALOUD, shortDate, YES } = require('./wa-private');
 const { meetCoordRun, pushToUser, rfqPrepare, rfqSend } = require('./wa-proactive');
-const { businessCommand, closeAlerted, closureDecision, confirmPending, contactOf, draftEmail, findRecipients, sendPlainMail, startGoodsFromMail, suggestionDecision, suggestionFeedback, threadAddText, VIA_EMAIL, VIA_MESIMON } = require('./wa-mail');
+const { businessCommand, closeAlerted, closureDecision, confirmPending, contactOf, draftEmail, findRecipients, sendPlainMail, replyOffer, MAIL_WALK_BTN, isMailWalkStart, mailWalkIntro, mailWalkAt, mailWalkEnd, startGoodsFromMail, suggestionDecision, suggestionFeedback, threadAddText, VIA_EMAIL, VIA_MESIMON } = require('./wa-mail');
 const { agentsText, cut, menuButtons, menuOptions, menuText, parseClosureCommand, parseSuggestionCommand, PLAIN_AGENTS, walkAction, walkButtons, walkText } = require('./wa-menu');
 const { meetingAudioAllowed, meetingAudioTurn, TRANSLATE } = require('./wa-meeting');
 
@@ -64,7 +64,9 @@ async function flowWalk({ actor, dry, out, startReply, state, t, user }) {
     const x = w.items[w.i];
     if (!x || walkAct === 'next') return show(w.i + 1);
     // לא שייך לסוג הפריט — מציגים אותו שוב, עם הכפתורים הנכונים
-    if (!walkButtons(x).some((b) => walkAction(b) === walkAct)) return show(w.i);
+    // מייל — "תפתח משימה" במילים עדיין עובד, גם בלי כפתור (הבוט מציע תשובה; משימה — רק כשמבקשים)
+    const askedTask = walkAct === 'task' && ['mail', 'ins'].includes(x.t);
+    if (!askedTask && !walkButtons(x).some((b) => walkAction(b) === walkAct)) return show(w.i);
     const note = '_אחר כך — *הבא ⏭️* ממשיך ברשימה._';
     // טיוטה שנפתחה מהמעבר — "הבא" עדיין עובד עליה
     const withNote = (r) => ({ ...r, reply: `${r.reply}\n\n${note}`, next: { ...r.next, draft: r.next.draft ? { ...r.next.draft, fromWalk: true } : r.next.draft },
@@ -438,6 +440,16 @@ async function flowOnMailRemindOrGoods(ctx) {
     const d = state.draft;
     if (d.kind === 'mail_remind') {
       const r = dry ? null : MailActions.answerReminder(actor.id, d, t, { closeAlerted });
+      if (r?.reply) {
+        // 💡 "זכרת?" ← הצעת תשובה מוכנה (תמיד עם נוסח). ‎כן‎ שולח — כמו בהתראה על מייל חדש
+        const row = D.get('SELECT * FROM ai_suggestions WHERE id = ? AND user_id = ?', d.suggestionId, actor.id);
+        const o = row ? await replyOffer(actor.id, row).catch((err) => ({ error: err.message })) : { error: 'no_row' };
+        if (o.error) {
+          const why = o.error === 'cannot_send' ? 'אין לי הרשאה לשלוח מהתיבה הזו — אפשר לחבר מחדש ב"🔗 חיבור Google" במשימון.' : 'לא הצלחתי להכין תשובה למייל הזה — אפשר לענות ישירות ב-Gmail.';
+          return out(why, { draft: null }, { action: 'mail_deadline', status: 'error', result: `הצעת תשובה: ${o.error}`.slice(0, 300) });
+        }
+        return out(o.text, { draft: o.draft, awaiting: true }, { action: 'mail_deadline', status: 'ok', result: r.result.slice(0, 300), buttons: o.buttons });
+      }
       if (r?.openTask) {
         // אותו מסלול כמו "כן" על "לפתוח משימה?" — עם כל הבדיקות (אנשים נוספים, פנייה החוצה).
         // מייל שנקרא ב-Gmail ירד מ"ממתין" — קריאה אינה טיפול, אז הוא חוזר להצעה פתוחה
@@ -674,13 +686,61 @@ async function flowEmailEdit({ actor, dry, kind, out, state, t }) {
   return NEXT;
 }
 
+/*
+ * 📬 "מיילים לענות" — מייל אחרי מייל, תמיד עם הצעת תשובה (סעיף 3.1 בתוכנית). פתיחה: הכפתור בתפריט / "תעבור איתי על
+ * המיילים". במעבר: *כן* שולח והבא · *לא* — לא עונים (יורד, בלי תזכורת) והבא · 🏁 סיום — עוצרים · טקסט חופשי — ‎NEXT‎,
+ * ותיקון הטיוטה (‎flowMailReplyEdit‎) שומר עליה את סימן המעבר.
+ */
+const MAIL_WALK_TTL = 12 * 60 * 60 * 1000;
+async function flowMailWalk({ actor, dry, out, state, t }) {
+  const meta = (result, extra = {}) => ({ action: 'mail_walk', status: 'ok', result: String(result).slice(0, 300), ...extra });
+  const show = (prefix, r) => (r.done
+    ? out([prefix, mailWalkEnd(r.w)].filter(Boolean).join(MSG_BREAK), { draft: null, awaiting: false, mailWalk: null }, meta('המעבר על המיילים הסתיים'))
+    : out([prefix, r.text].filter(Boolean).join(MSG_BREAK), { draft: r.draft, awaiting: true, mailWalk: r.w }, meta(`מייל ${r.w.i + 1}/${r.w.ids.length}`, { buttons: r.buttons })));
+
+  if (isMailWalkStart(t) && WaActions.allowed(actor, 'mail_insights')) {
+    if (dry) return out('(בדיקה) הייתי עובר איתך על המיילים שמחכים לתשובה.', {}, meta('בדיקה'));
+    const ids = MailPush.toAnswer(actor.id).map((r) => r.id);
+    if (!ids.length) return out('📬 אין מיילים שמחכים לתשובה ממך 🎉', { mailWalk: null }, meta('אין מיילים'));
+    const w = { ids, i: 0, sent: 0, dropped: 0, at: D.nowIso() };
+    return show(mailWalkIntro(ids.length), await mailWalkAt(actor.id, w, 0));
+  }
+
+  const w = state.mailWalk;
+  if (!w || !state.awaiting || !state.draft?.walk || Date.now() - Date.parse(w.at) > MAIL_WALK_TTL) return NEXT;
+  const n = WaUi.normalize(t);
+  if (WaUi.sameLabel(t, MAIL_WALK_BTN.stop) || /^(?:🏁\s*)?(?:סיום|לסיים|סיימנו|עצור|די|מספיק)[.!]?$/.test(n)) {
+    const left = MailPush.toAnswer(actor.id).length;
+    return out(`🏁 עצרנו.${left ? ` ${left === 1 ? 'נשאר מייל אחד' : `נשארו ${left} מיילים`} — *מיילים לענות* כדי להמשיך.` : ''}`, { draft: null, awaiting: false, mailWalk: null }, meta('עצר את המעבר'));
+  }
+  const d = state.draft;
+  if (d.kind === 'mail_walk_skip') {
+    if (WaUi.sameLabel(t, MAIL_WALK_BTN.next) || WaUi.YES.test(n) || /^(?:הבא|דלג|המשך)$/.test(n)) return show('', await mailWalkAt(actor.id, w, w.i + 1));
+    return NEXT;
+  }
+  if (d.kind !== 'mail_reply') return NEXT;
+  if (WaUi.sameLabel(t, MAIL_WALK_BTN.send) || WaUi.YES.test(n)) {
+    const c = await confirmPending(actor, d, dry);
+    const ok = c.status === 'ok';
+    return show(c.reply, await mailWalkAt(actor.id, { ...w, sent: w.sent + (ok ? 1 : 0) }, w.i + 1));
+  }
+  if (WaUi.sameLabel(t, MAIL_WALK_BTN.no) || WaUi.NO.test(n)) {
+    if (!dry) {
+      for (const id of d.suggestionIds ?? []) MailActions._internal.setRemind(id, { closed: 'no_reply', at: D.nowIso() });
+      closeAlerted(actor.id, d.suggestionIds ?? [], 'skipped');
+    }
+    return show('👌 לא עונים על זה — ירד מהרשימה.', await mailWalkAt(actor.id, { ...w, dropped: w.dropped + 1 }, w.i + 1));
+  }
+  return NEXT;
+}
+
 // טיוטת תשובה למייל שממתינה: כל הודעה שאינה "כן" או "ביטול" היא תיקון
 async function flowMailReplyEdit({ actor, dry, kind, out, replyText, state, t }) {
   if (kind === 'mail_reply' && !dry && state.awaiting && Claude.isEnabled() && WaActions.allowed(actor, 'mail_insights')) {
     const prev = state.draft.reply;
     const reply = { ...await MailInsights.draftReply(actor.id, prev.gmailId, prev.request, { feedback: t, previous: prev, box: prev.box ?? null }), signature: prev.signature, noSignature: prev.noSignature ?? null };
     // מהפנייה היזומה — ההצעות שעליהן נשאלה השאלה נשארות קשורות לטיוטה
-    return out(replyText(reply), { draft: { ...state.draft, kind: 'mail_reply', reply }, awaiting: true }, { action: 'mail_insights', status: 'ok', result: `תיקון תשובה: ${t.slice(0, 200)}`, buttons: state.draft.alert ? [WaUi.BTN.yes, WaUi.BTN.no] : undefined });
+    return out(replyText(reply), { draft: { ...state.draft, kind: 'mail_reply', reply }, awaiting: true }, { action: 'mail_insights', status: 'ok', result: `תיקון תשובה: ${t.slice(0, 200)}`, buttons: state.draft.buttons ?? (state.draft.alert ? [WaUi.BTN.yes, WaUi.BTN.no] : undefined) });
   }
   return NEXT;
 }
@@ -913,5 +973,5 @@ const switchCancels = () => Boolean(D.getSetting('wa_topic_switch_cancels', true
 const DRAFT_ONLY = /(?:(?:בלי|לא\s+משנה|אין\s+לי\s+(?:את\s+)?|עזוב(?:\s+את)?)\s*ה?(?:כתובת|מייל|נמען)|רק\s+ת?(?:נסח|כתוב)|ת?נסח\s+(?:לי\s+)?(?:רק\s+)?(?:את\s+)?ה?(?:מלל|טקסט|נוסח))/;
 
 module.exports = {
-  DRAFT_ONLY, flowAgentsList, flowAlertNo, flowApproval, flowBusinessCommand, flowCancel, flowClosureCommand, flowEmailEdit, flowEmailPick, flowEmailSolve, flowEmailVia, flowFeaturesRequest, flowFormFillRequest, flowGreeting, flowInstinct, flowInstinctExplicit, flowInstinctPilot, flowNoticeToInstinct, flowIntentCancel, flowIntentDenied, flowIntentMenu, flowIntentOther, flowMailReplyEdit, flowMeetCoordRequest, flowMeetingAudioAnswer, flowMeetingAudioRequest, flowMeetingFollowupRequest, flowMeetingReminderRequest, flowMenuList, flowMenuPick, flowNoAi, flowNoticeRequest, flowOnClosureAddress, flowOnDayEvening, flowOnFormFill, flowOnGoodsStop, flowOnMailMuteSender, flowOnMailRemindOrGoods, flowOnMeetCoord, flowOnMeetingTasks, flowOnPaceOffer, flowOnPlainMail, flowOnReminder, flowOnRfq, flowOnSentFollowup, flowOnThreadAdd, flowRemindersRequest, flowReplyAsk, flowRfqRequest, flowRfqSummary, flowSuggestionCommand, flowTranslateRequest, flowWalk, NEXT, switchCancels
+  DRAFT_ONLY, flowAgentsList, flowAlertNo, flowApproval, flowBusinessCommand, flowCancel, flowClosureCommand, flowEmailEdit, flowEmailPick, flowEmailSolve, flowEmailVia, flowFeaturesRequest, flowFormFillRequest, flowGreeting, flowInstinct, flowInstinctExplicit, flowInstinctPilot, flowNoticeToInstinct, flowIntentCancel, flowIntentDenied, flowIntentMenu, flowIntentOther, flowMailReplyEdit, flowMailWalk, flowMeetCoordRequest, flowMeetingAudioAnswer, flowMeetingAudioRequest, flowMeetingFollowupRequest, flowMeetingReminderRequest, flowMenuList, flowMenuPick, flowNoAi, flowNoticeRequest, flowOnClosureAddress, flowOnDayEvening, flowOnFormFill, flowOnGoodsStop, flowOnMailMuteSender, flowOnMailRemindOrGoods, flowOnMeetCoord, flowOnMeetingTasks, flowOnPaceOffer, flowOnPlainMail, flowOnReminder, flowOnRfq, flowOnSentFollowup, flowOnThreadAdd, flowRemindersRequest, flowReplyAsk, flowRfqRequest, flowRfqSummary, flowSuggestionCommand, flowTranslateRequest, flowWalk, NEXT, switchCancels
 };

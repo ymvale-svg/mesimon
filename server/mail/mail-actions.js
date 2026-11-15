@@ -57,7 +57,13 @@ const GOODS_DAYS = 1;          // חשבונית שלא נשאלה תוך יממ
 const DOC_MIME = /^(application\/pdf|image\/)/i;
 const DOC_NAME = /\.(pdf|jpe?g|png|heic|tiff?)$/i;
 
+/*
+ * "זכרת?" — הבוט הוא המזכירה: מציע תשובה, לא משימה (הוחלט 15.11.26, "תוכנית — חלוקת תפקידים בוט ומשימון.md" סעיף 0).
+ * ‎open‎ נשאר רק כמילים ("תפתח משימה") — מי שמבקש במפורש, מקבל.
+ */
 const BTN = Object.freeze({
+  reply: '💡 הצעת תשובה',
+  done: 'טיפלתי ✅',
   open: 'לפתוח משימה ✅',
   ignore: 'התעלם 🙈',
   receive: 'קבלת סחורה 📦',
@@ -198,11 +204,11 @@ async function mayRemindNow(userId) {
 }
 
 /** השתקה, שעות, שיחה פעילה, הודעה יזומה אחרונה ופגישה ביומן — משותף לתזכורות ולהצעות תשובה */
-async function quietOk(userId, gapMin) {
+async function quietOk(userId, gapMin, { mailMute = true } = {}) {
   if (Date.now() - (lastUser.get(Number(userId)) ?? 0) < USER_QUIET_MS) return false;
   if (Date.now() - (lastAny.get(Number(userId)) ?? 0) < gapMin * 60000) return false;
   const mute = D.userPrefs(userId)?.botPrefs?.remindMuteUntil;
-  if (mute && W.todayIL() < mute) return false;
+  if (mailMute && mute && W.todayIL() < mute) return false;
   const now = new Date();
   const hm = new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Jerusalem', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(now);
   const m = /^(\d{2}:\d{2})-(\d{2}:\d{2})$/.exec(String(D.getSetting('remind_hours', '08:30-17:00') ?? ''));
@@ -505,7 +511,7 @@ function reminderQuestion(row, userName = '') {
       'זכרת? 🐣',
       '_להשתיק: "תפסיק להזכיר לי מהמייל" · להיום: "בלי תזכורות מהמייל היום"_'
     ].join('\n'),
-    buttons: [BTN.open, BTN.ignore],
+    buttons: [BTN.reply, BTN.done, BTN.ignore],
     draft: { kind: 'mail_remind', suggestionId: row.id, title: d.title, gmailId: row.gmail_id }
   };
 }
@@ -566,16 +572,26 @@ async function nextQuestion(userId, allow) {
 // ---------------------------------------------------------------------------
 
 const is = (t, btn, re) => WaUi.sameLabel(t, btn) || re.test(WaUi.normalize(t));
-const OPEN = /^(לפתוח(\s+משימה)?|תפתח(\s+משימה)?|פתח|כן|משימה|👍)([\s,.!?]|$)/;
+// "לפתוח משימה" — רק במילים מפורשות. "כן" / 👍 על "זכרת?" = הצעת תשובה (הבוט הוא המזכירה)
+const OPEN = /^(לפתוח\s+משימה|תפתח(\s+(לי\s+)?משימה)|פתח\s+משימה|משימה)([\s,.!?]|$)/;
+const REPLY = /^(הצעת\s+תשובה|תציע(\s+לי)?\s+תשובה|לענות|תענה|תשובה|כן|👍)([\s,.!?]|$)/;
+const DONE = /^(טיפלתי|עניתי|כבר\s+(עניתי|טיפלתי)|סגור|בוצע|✅)([\s,.!?]|$)/;
 const IGNORE = /^(התעלם|תתעלם|לא\s+צריך|לא|עזוב|👎|🙈)([\s,.!]|$)/;
 const TOMORROW = /^(תזכיר(\s+לי)?\s+מחר|מחר|אחר\s+כך|אח"כ|לא\s+עכשיו|תזכיר)([\s,.!]|$)/;
 const RECEIVE = /^(קבלת\s+סחורה|כן|לבצע|יאללה|קדימה|👍)([\s,.!]|$)/;
 
 /**
- * תשובה ל"זכרת?". ‎openTask: true‎ — לפתוח משימה מההצעה (‎confirmPending‎ בבוט). ‎null‎ — נושא חדש.
+ * תשובה ל"זכרת?". ‎reply: true‎ — להציע תשובה (‎replyOffer‎ בבוט); ‎openTask: true‎ — רק כשביקש משימה במילים;
+ * ‎null‎ — נושא חדש.
  */
 function answerReminder(userId, draft, text, { closeAlerted } = {}) {
   const t = String(text ?? '').trim();
+  if (is(t, BTN.reply, REPLY)) return { reply: true, result: `הצעת תשובה: ${draft.title}` };
+  if (is(t, BTN.done, DONE)) {
+    setRemind(draft.suggestionId, { closed: 'handled', at: D.nowIso() });
+    closeAlerted?.(userId, [draft.suggestionId], 'skipped');
+    return { text: 'מעולה 👏 סימנתי שטופל, לא אזכיר על זה שוב.', result: `טופל: ${draft.title}` };
+  }
   if (is(t, BTN.open, OPEN)) {
     setRemind(draft.suggestionId, { closed: 'task', at: D.nowIso() });
     return { openTask: true, result: `לפתוח משימה: ${draft.title}` };
@@ -616,6 +632,6 @@ function prune() {
 }
 
 module.exports = {
-  GOODS_SCHEMA, BTN, PACE_BTN, GOODS_STOP_BTN, GOODS_IGNORE_LIMIT, answerGoodsStop, answerPaceOffer, goodsDocFrom, goodsFile, nextQuestion, answerReminder, answerGoods, prune, dueReminders, mayRemindNow, mayAlertNow, paceTick, PACE, paceCommand, noteProactive, noteUser,
+  GOODS_SCHEMA, BTN, PACE_BTN, GOODS_STOP_BTN, GOODS_IGNORE_LIMIT, answerGoodsStop, answerPaceOffer, goodsDocFrom, goodsFile, nextQuestion, answerReminder, answerGoods, prune, dueReminders, mayRemindNow, mayAlertNow, quietOk, paceTick, PACE, paceCommand, noteProactive, noteUser,
   _internal: { engagement, paceOffer, nextReminder, nextGoods, GOODS_PER_DAY, goodsIgnoredStreak, reminderQuestion, goodsQuestion, setRemind, remindAt, scoreOf, handledInGmail, paceState }
 };
