@@ -1516,6 +1516,30 @@ CREATE TABLE IF NOT EXISTS task_closures (
   dismissed   INTEGER NOT NULL DEFAULT 0,
   created_at  TEXT    NOT NULL
 );
+
+/*
+ * 🤖 אינסטינקט — העוזר הכללי (‎server/whatsapp/instinct.js‎). כל בקשה שיצאה אליו, ולמי התשובה שייכת.
+ * ‎kind‎: request — בקשה של עובד · answer — תשובה של עובד לשאלה שלו · question — שאלה יזומה שלו שהועברה לעובד.
+ * ‎out_id‎ — מזהה ההודעה שלנו אצל וואטסאפ: אינסטינקט עונה בציטוט שלה, וכך יודעים של מי התשובה.
+ * ‎in_id‎ — מזהה ההודעה שלו (בשאלה), כדי שתשובת העובד תצא בציטוט שלה.
+ */
+CREATE TABLE IF NOT EXISTS instinct_requests (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id       INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  kind          TEXT    NOT NULL DEFAULT 'request',   -- request | answer | question
+  status        TEXT    NOT NULL DEFAULT 'queued',    -- queued | sent | answered | timeout | blocked | error | open | expired
+  text          TEXT    NOT NULL DEFAULT '',
+  reply         TEXT    NOT NULL DEFAULT '',
+  out_id        TEXT    NOT NULL DEFAULT '',
+  in_id         TEXT    NOT NULL DEFAULT '',
+  user_msg_id   TEXT    NOT NULL DEFAULT '',
+  user_chat_id  TEXT    NOT NULL DEFAULT '',
+  created_at    TEXT    NOT NULL,
+  sent_at       TEXT,
+  answered_at   TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_instinct_out ON instinct_requests(out_id);
+CREATE INDEX IF NOT EXISTS idx_instinct_user ON instinct_requests(user_id, kind, status);
 `);
 
 // ---------------------------------------------------------------------------
