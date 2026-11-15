@@ -15,6 +15,7 @@ const Zoom = require('../integrations').Zoom;
 const WaUi = require('./wa-ui');
 const { DAY, LETTERS, TZ, WALK, appRoot, localDate, usableClosure } = require('./wa-base');
 const { dueLabel, localDay } = require('./wa-private');
+const { mailWalkLabel } = require('./wa-mail');
 
 
 // ---------------------------------------------------------------------------
@@ -93,10 +94,11 @@ async function recordingReply(actor, query, date) {
  */
 const MENU = [
   ['today', 'today', '☀️ מה יש לי היום'],
-  ['priority', 'goods_receipt', '🗂 פריוריטי — קבלת סחורה ודרישת רכש'],
   ['insights', 'mail_insights', '📬 תובנות — מה חדש (ו-💡 הצעת תשובה)'],
   ['my_tasks', 'my_tasks', '📋 כל המשימות הפתוחות שלי'],
-  ['ask', 'mail_ask', '✨ לשאול את אשל — שאלה או בעיה']
+  ['ask', 'mail_ask', '✨ לשאול את אשל — שאלה או בעיה'],
+  // 🗂 פריוריטי — אחרון, ורק למורשים (מטריצת ההרשאות). מי שאין לו — לא רואה (הוחלט 13.11.26)
+  ['priority', 'goods_receipt', '🗂 פריוריטי — קבלת סחורה ודרישת רכש']
 ];
 
 const MENU_FREE_HINT = '_אפשר גם לכתוב או להקליט חופשי: "משימה ל…", "מייל ל…", "מה פתוח בפרויקט…", "יש לי בעיה…"_';
@@ -138,10 +140,16 @@ function menuOptions(actor) {
     const h = Insights.headings({ mail: sources.mail && MailInsights.available(actor.id), whatsapp: sources.whatsapp });
     return `${h.insights} (${Range.forUser(actor.id).span})`;
   };
-  return MENU.filter(([key, action]) => (key === 'priority' ? WaActions.allowed(actor, 'goods_receipt') || WaActions.allowed(actor, 'purchase_demand')
+  /*
+   * 📬 הכפתור הראשון — מה שמחכה לך עכשיו (הוחלט 15.11.26): יש מיילים שמחכים לתשובה ממך ← "📬 3 מיילים לענות",
+   * שפותח מעבר מייל-אחרי-מייל עם הצעת תשובה (‎flowMailWalk‎). המפתח הוא הכיתוב עצמו (‎menuButtonOf‎ מחזיר אותו).
+   */
+  const waiting = WaActions.allowed(actor, 'mail_insights') ? MailPush.toAnswer(actor.id).length : 0;
+  const first = waiting ? [{ key: mailWalkLabel(waiting), label: mailWalkLabel(waiting) }] : [];
+  return [...first, ...MENU.filter(([key, action]) => (key === 'priority' ? WaActions.allowed(actor, 'goods_receipt') || WaActions.allowed(actor, 'purchase_demand')
     : key === 'ask' ? WaActions.allowed(actor, 'mail_ask') || WaActions.allowed(actor, 'solve') : WaActions.allowed(actor, action))
     && (key !== 'insights' || MailInsights.available(actor.id) || sources.whatsapp))
-    .map(([key, , label]) => ({ key, label: key === 'insights' ? insightLabel() : label }));
+    .map(([key, , label]) => ({ key, label: key === 'insights' ? insightLabel() : label }))];
 }
 
 

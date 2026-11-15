@@ -239,4 +239,16 @@ function digestFor(userId) {
   };
 }
 
-module.exports = { pushable, direct, concreteReply, replyAlert, mailItem, onePerThread, ignoreMail, answerMute, unmuteCommand, morningLine, digestFor, waitingMail, mutedSenders, PUSH_MIN };
+/**
+ * 📬 המיילים שמחכים לתשובה ממך — לתפריט ולמעבר מייל-אחרי-מייל (‎wa-mail.js‎): רק כשאתה ב-"אל", רק מיילים שאתה
+ * הבעלים שלהם (‎mail-owner.js‎), לא משולח מושתק, מייל אחד לשרשור; החשוב קודם, ואז החדש.
+ */
+function toAnswer(userId) {
+  const scoreOf = MailActions._internal.scoreOf;
+  const seen = new Set();
+  return waitingMail(userId)
+    .filter((r) => direct(r) && !seen.has(r.gmail_id) && seen.add(r.gmail_id))
+    .sort((a, b) => scoreOf(b) - scoreOf(a) || String(b.received_at ?? '').localeCompare(String(a.received_at ?? '')));
+}
+
+module.exports = { toAnswer, pushable, direct, concreteReply, replyAlert, mailItem, onePerThread, ignoreMail, answerMute, unmuteCommand, morningLine, digestFor, waitingMail, mutedSenders, PUSH_MIN };

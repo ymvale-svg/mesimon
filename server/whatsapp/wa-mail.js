@@ -694,10 +694,56 @@ async function replyOffer(userId, row) {
   if (!reply?.body) return { error: 'no_reply' };
   return {
     text: MailPush.replyAlert({ ...row, d }, reply),
-    draft: { kind: 'mail_reply', reply, alert: true, suggestionIds: [row.id], subject: row.subject },
+    draft: { kind: 'mail_reply', reply, suggestionIds: [row.id], subject: row.subject, buttons: [WaUi.BTN.yes, WaUi.BTN.no] },
     buttons: [WaUi.BTN.yes, WaUi.BTN.no]
   };
 }
+
+/*
+ * 📬 "מיילים לענות" — מעבר מייל-אחרי-מייל, תמיד עם הצעת תשובה (הוחלט 15.11.26,
+ * "תוכנית — חלוקת תפקידים בוט ומשימון.md" סעיף 3.1). הודעת פתיחה, ואז מייל: *כן* שולח, *לא* מוריד, טקסט חופשי מתקן,
+ * 🏁 סיום עוצר. אחרי כל תשובה — המייל הבא. הזרימה עצמה: ‎flowMailWalk‎ ב-‎wa-flows.js‎.
+ */
+const MAIL_WALK_BTN = Object.freeze({ send: 'כן, לשלוח ✅', no: 'לא ❌', stop: '🏁 סיום', next: 'הבא ⏭️' });
+const mailWalkLabel = (n) => `📬 ${n} ${n === 1 ? 'מייל' : 'מיילים'} לענות`;
+const MAIL_WALK_START = /^(?:\d+\s+)?(?:מיילים|מייל)\s+לענות$|^לענות\s+(?:על|ל)\s*(?:ה)?מיילים$|^(?:תעבור|נעבור|לעבור|בוא\s+נעבור)\s+(?:איתי\s+|יחד\s+)?על\s+(?:ה)?מיילים(?:\s+שמחכים(?:\s+לי)?)?$/;
+const isMailWalkStart = (text) => MAIL_WALK_START.test(WaUi.normalize(text).replace(/^📬\s*/u, '').replace(/[.!?]+$/, '').trim());
+
+function mailWalkIntro(n) {
+  return [
+    `📬 *יש לך ${n === 1 ? 'מייל אחד שמחכה' : `${n} מיילים שמחכים`} לתשובה ממך.*`,
+    n === 1 ? 'אכין לו תשובה:' : 'נעבור עליהם אחד-אחד, ולכל מייל אכין תשובה.',
+    '*כן* 👍 — נשלחת מה-Gmail שלך · *לא* 👎 — עוברים לבא · אפשר גם לכתוב מה לשנות.'
+  ].join('\n');
+}
+
+/**
+ * המייל הבא במעבר, מ-‎from‎ והלאה — רק מה שעדיין מחכה (מה שנענה בינתיים, גם ב-Gmail, יורד מהרשימה).
+ * מחזיר ‎{ w, text, draft, buttons }‎, או ‎{ w, done: true }‎ כשנגמר.
+ */
+async function mailWalkAt(userId, w, from) {
+  const waiting = new Map(MailPush.toAnswer(userId).map((r) => [r.id, r]));
+  for (let i = from; i < w.ids.length; i++) {
+    const row = waiting.get(w.ids[i]);
+    if (!row) continue;
+    const pos = `*${i + 1} מתוך ${w.ids.length}*`;
+    // בזמן שהעובד קורא — מכינים כבר את התשובה לבא (נשמרת בהצעה), כדי שלא יחכה
+    const nextId = w.ids.slice(i + 1).find((id) => waiting.has(id));
+    if (nextId) setImmediate(() => replyOffer(userId, waiting.get(nextId)).catch(() => {}));
+    const o = await replyOffer(userId, row).catch((err) => ({ error: err.message }));
+    const nw = { ...w, i, at: D.nowIso() };
+    if (o.error) {
+      const why = o.error === 'cannot_send' ? 'אין לי הרשאה לשלוח מהתיבה הזו (אפשר לחבר מחדש ב"🔗 חיבור Google" במשימון).' : 'לא הצלחתי להכין תשובה למייל הזה — אפשר לענות ישירות ב-Gmail.';
+      return { w: nw, text: `${pos} · 📧 *${oneLine(row.subject, 120)}* — ${row.from_name || row.from_email}\n\n⚠️ ${why}`,
+        draft: { kind: 'mail_walk_skip', walk: true }, buttons: [MAIL_WALK_BTN.next, MAIL_WALK_BTN.stop] };
+    }
+    const buttons = [MAIL_WALK_BTN.send, MAIL_WALK_BTN.no, MAIL_WALK_BTN.stop];
+    return { w: nw, text: `${pos}\n${o.text}`, draft: { ...o.draft, walk: true, buttons }, buttons };
+  }
+  return { w: { ...w, i: w.ids.length }, done: true };
+}
+
+const mailWalkEnd = (w) => `🏁 עברנו על כולם 👏${w.sent || w.dropped ? ` — ${[w.sent ? `נשלחו ${w.sent}` : null, w.dropped ? `ירדו ${w.dropped}` : null].filter(Boolean).join(', ')}` : ''}.`;
 
 
 async function mailAlerts() {
@@ -824,5 +870,5 @@ async function sendPlainMail(actor, d, { dry = false } = {}) {
 
 module.exports = {
   sendPlainMail,
-  businessCommand, closeAlerted, closureDecision, confirmPending, contactOf, createFromDraft, draftEmail, findRecipients, mailActionAlerts, mailAlertFor, mailAlerts, parseThreadAdd, replyOffer, resolveCc, solveText, startGoodsFromMail, suggestionDecision, suggestionFeedback, threadAddText, VIA_EMAIL, VIA_MESIMON
+  businessCommand, closeAlerted, closureDecision, confirmPending, contactOf, createFromDraft, draftEmail, findRecipients, mailActionAlerts, mailAlertFor, mailAlerts, parseThreadAdd, replyOffer, MAIL_WALK_BTN, mailWalkLabel, isMailWalkStart, mailWalkIntro, mailWalkAt, mailWalkEnd, resolveCc, solveText, startGoodsFromMail, suggestionDecision, suggestionFeedback, threadAddText, VIA_EMAIL, VIA_MESIMON
 };
