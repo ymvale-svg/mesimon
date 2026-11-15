@@ -272,7 +272,10 @@ async function flowRfqRequest({ actor, dry, out, t }) {
   return NEXT;
 }
 
-async function flowNoticeRequest({ actor, dry, out, t }) {
+async function flowNoticeRequest({ actor, dry, out, t, user }) {
+  // 🤖 עיצוב מודעה — לאינסטינקט, למי שהוא פתוח לו (15.11.26, ישראל: "כל מה שאינסטינקט יודע — תן לו לעשות").
+  // מכתב רשמי על נייר הפירמה — נשאר אצלנו: זה פנים החברה
+  if (user && Instinct.allowed(actor) && Notice.parseRequest(t)?.kind === 'notice') return instinctSend({ user, actor, dry, out, text: t });
   if (WaActions.allowed(actor, 'notices') && Notice.parseRequest(t)) {
     if (dry) return out('(בדיקה) הייתי מכין PDF.', {}, { action: 'notices', status: 'ok', result: 'בדיקה' });
     reactNow(actor.id, '📝');
@@ -802,8 +805,11 @@ async function flowIntentMenu({ firstToday, menuReply, u }) {
 
 // הודעה ראשונה ביום שהיא שיחה של ממש (שאלה, הקלטה, בקשה שאין לה פעולה) — עונים עליה בלבד; ה-Today לא
 // מתערבב בתשובה (10.11.26, ישראל: "למה התערבב המייל ללייסנטק עם כל היומיום שלי"). רק ברכה קצרה פותחת את ה-Today
+// ברכה — "היי", "בוקר טוב", "מה נשמע" (ואחריה אולי שם). לא כל שלוש מילים: "שעה 15.00" אינה ברכה (באג 15.11.26)
+const GREETING = /^(?:היי+|הי|הלו|שלום|אהלן|בוקר\s+טוב|צהריים\s+טובים|ערב\s+טוב|מה\s+נשמע|מה\s+קורה|מה\s+המצב|מה\s+שלומך)(?:[\s,!.?👋🙂]+\S+)?[\s,!.?👋🙂]*$/;
+
 async function flowGreeting({ actor, firstToday, t, todayReply, u, user }) {
-  const smallTalk = !u.reply || t.split(/\s+/).length <= 3;
+  const smallTalk = !u.reply || GREETING.test(t.trim());
   if (u.intent === 'menu' || (u.intent === 'other' && firstToday && smallTalk)) {
     if (WaActions.allowed(actor, 'today') || menuOptions(actor).length) {
       const hello = firstToday ? `${localDate().time < '12:00' ? 'בוקר טוב' : 'שלום'} ${firstName(user.full_name)} 👋` : '';
@@ -815,6 +821,8 @@ async function flowGreeting({ actor, firstToday, t, todayReply, u, user }) {
 
 async function flowIntentOther({ actor, out, u }) {
   if (u.intent === 'other') {
+    // יש תשובה — רק היא, בלי התפריט (באג 15.11.26, ישראל: "למה אני מקבל את כל התפריט עוד הפעם ועוד הפעם?")
+    if (u.reply) return out(u.reply, {}, { action: 'other', status: 'unclear', result: 'לא זוהתה פעולה — ענה בלי התפריט' });
     const options = menuOptions(actor);
     if (options.length) {
       return out([u.reply, menuText(options)].filter(Boolean).join('\n\n'), { draft: { kind: 'menu', options: options.map((o) => o.key) } },

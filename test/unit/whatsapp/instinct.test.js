@@ -242,3 +242,28 @@ test('עובד שאינו בפיילוט — בקשה כללית לא יוצאת
   await settle();
   assert.equal(toInstinct(wa).length, 0);
 });
+
+test('"תן לי מודעה…" — למי שאינסטינקט פתוח לו, העיצוב אצל אינסטינקט; מכתב רשמי נשאר אצלנו', async (t) => {
+  const wa = setup(t);
+  ai(t);
+  const u = person();
+  await say(u.phone, "תן לי מודעה לכנס דיירים היום ב-15:00 בבית החייל, רח' האזוב 3");
+  await settle();
+  const out = toInstinct(wa);
+  assert.equal(out.length, 1);
+  assert.match(out[0].body.message, /מודעה לכנס דיירים/);
+  assert.equal(toUser(wa, u).length, 0);
+  wa.clear();
+  await say(u.phone, 'תכתוב לי מכתב רשמי לעירייה בבקשה להארכת היתר');
+  await settle();
+  assert.equal(toInstinct(wa).length, 0, 'מכתב על נייר הפירמה — פנים החברה');
+});
+
+test('מודעה ממי שאינו בפיילוט — נשארת אצלנו', async (t) => {
+  const wa = setup(t);
+  ai(t);
+  const u = person('employee');
+  await say(u.phone, 'תעצב לי מודעה לכנס דיירים');
+  await settle();
+  assert.equal(toInstinct(wa).length, 0);
+});

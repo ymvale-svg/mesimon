@@ -367,7 +367,7 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
     keep.draft = null;
     state = { ...state, draft: null, awaiting: false };
   }
-  { const r = await flowNoticeRequest({ actor, dry, out, t }); if (r !== NEXT) return r; }
+  { const r = await flowNoticeRequest({ actor, dry, out, t, user }); if (r !== NEXT) return r; }
   // 🌙 סוף יום: "להעביר למחר?"
   { const c = { actor, dry, keep, out, state, t }; const r = await flowOnDayEvening(c); if (r !== NEXT) return r; state = c.state; }
   // 📤 "לשלוח תזכורת עדינה?" על מייל ששלחת ולא נענה
