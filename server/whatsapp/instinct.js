@@ -41,7 +41,9 @@ const cfg = {
   ALERTS_PER_HOUR: 10                // התראות למנהלים — לא להציף
 };
 
-const TRIGGER = /^(?:אינסטינקט|instinct)[\s,:\-–]+/i;
+// "אינסטינקט, …" — גם בשגיאת כתיב ("אינסטקט", "אינסטיקט"). ‎MENTION‎ — "באינסטינקט", "דרך אינסטקט", בכל מקום בהודעה
+const TRIGGER = /^(?:אינסט[א-ת]*|instinct)[\s,:\-–]+/i;
+const MENTION = /(?:^|[\s,.])(?:ב|ל|דרך\s+)?(?:אינסט[א-ת]*|instinct)(?=$|[\s,.!?])/i;
 
 const phone = () => WhatsApp.normalizePhone(D.getSetting('instinct_phone', '') || DEFAULT_PHONE);
 const chatId = () => `${phone()}@c.us`;
@@ -398,6 +400,6 @@ function reset() {
 }
 
 module.exports = {
-  DEFAULT_PHONE, TRIGGER, phone, isInstinct, allowed, redact, checkFile, offerFile, takeFile, request, receive, openQuestion,
+  DEFAULT_PHONE, TRIGGER, MENTION, phone, isInstinct, allowed, redact, checkFile, offerFile, takeFile, request, receive, openQuestion,
   _internal: { cfg, reset, targetOf, classify, expire }
 };
