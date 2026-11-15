@@ -267,3 +267,28 @@ test('מודעה ממי שאינו בפיילוט — נשארת אצלנו', as
   await settle();
   assert.equal(toInstinct(wa).length, 0);
 });
+
+test('מודעה של הבוט מחכה ל"מאשר", והעובד כותב "תעצב באינסטקט" (גם בשגיאת כתיב) — המודעה עוברת לאינסטינקט', async (t) => {
+  const wa = setup(t);
+  ai(t);
+  const u = person();
+  Bot._internal.saveChat(u.id, { ...Bot._internal.chatOf(u.id), awaiting: true,
+    draft: { kind: 'notice', type: 'notice', style: 'designed', request: 'כנס דיירים ברחוב האזוב 5, בבית החייל, בשעה 15:15', step: 'review' } });
+  await say(u.phone, 'תעצב באינסטקט');
+  await settle();
+  const out = toInstinct(wa);
+  assert.equal(out.length, 1, 'לא עוצב שוב אצלנו');
+  assert.match(out[0].body.message, /מודעה/);
+  assert.match(out[0].body.message, /כנס דיירים ברחוב האזוב 5/);
+  assert.equal(wa.calls.filter((c) => c.method === 'sendFile').length, 0);
+  assert.equal(Bot._internal.chatOf(u.id).draft, null);
+});
+
+test('"אינסטקט, …" — גם בשגיאת כתיב, ישר לאינסטינקט', async (t) => {
+  const wa = setup(t);
+  ai(t);
+  const u = person();
+  await say(u.phone, 'אינסטקט, תחפש לי מתכון לחלה');
+  await settle();
+  assert.match(toInstinct(wa)[0]?.body.message ?? '', /מתכון לחלה/);
+});

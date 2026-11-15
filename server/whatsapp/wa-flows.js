@@ -866,6 +866,21 @@ async function flowInstinctPilot({ actor, dry, out, t }) {
   return out(reply, {}, { action: 'instinct', status: 'ok', result: `פיילוט אינסטינקט: ${only ? 'רק ל' + actor.name : open ? 'לכולם' : 'חזר לפיילוט'}` });
 }
 
+/**
+ * מודעה של הבוט מחכה (סגנון / "מאשר"), והעובד מבקש אותה מאינסטינקט ("תעצב באינסטינקט") — המודעה עוברת אליו עם
+ * התוכן שכבר נאסף, והטיוטה שלנו יורדת. בלי זה "תעצב באינסטקט" היה תיקון למודעה, והבוט עיצב אותה שוב (באג 15.11.26).
+ */
+async function flowNoticeToInstinct({ user, actor, dry, keep, out, state, t }) {
+  const d = state.draft;
+  if (!state.awaiting || d?.kind !== 'notice' || d.type !== 'notice' || !Instinct.MENTION.test(t) || !Instinct.allowed(actor)) return NEXT;
+  const extra = t.replace(/\S*(?:אינסט[א-ת]*|instinct)\S*/gi, '').replace(/^\s*(?:ת?עצב(?:י)?|תעשה|תכין|דרך|את\s+זה|אותה)\s*/g, '').trim();
+  const style = d.style === 'minimal' ? ' בסגנון מינימלי' : d.style === 'designed' ? ' מעוצבת' : '';
+  const text = [`תעצב לי מודעה${style}: ${d.request}`, extra.split(/\s+/).length > 1 ? extra : ''].filter(Boolean).join('\n');
+  keep.draft = null;
+  keep.awaiting = false;
+  return instinctSend({ user, actor, dry, out, text, explicit: true });
+}
+
 async function flowInstinctExplicit({ user, actor, dry, out, t }) {
   if (!Instinct.TRIGGER.test(t) || !Instinct.allowed(actor)) return NEXT;
   const text = t.replace(Instinct.TRIGGER, '').trim();
@@ -898,5 +913,5 @@ const switchCancels = () => Boolean(D.getSetting('wa_topic_switch_cancels', true
 const DRAFT_ONLY = /(?:(?:בלי|לא\s+משנה|אין\s+לי\s+(?:את\s+)?|עזוב(?:\s+את)?)\s*ה?(?:כתובת|מייל|נמען)|רק\s+ת?(?:נסח|כתוב)|ת?נסח\s+(?:לי\s+)?(?:רק\s+)?(?:את\s+)?ה?(?:מלל|טקסט|נוסח))/;
 
 module.exports = {
-  DRAFT_ONLY, flowAgentsList, flowAlertNo, flowApproval, flowBusinessCommand, flowCancel, flowClosureCommand, flowEmailEdit, flowEmailPick, flowEmailSolve, flowEmailVia, flowFeaturesRequest, flowFormFillRequest, flowGreeting, flowInstinct, flowInstinctExplicit, flowInstinctPilot, flowIntentCancel, flowIntentDenied, flowIntentMenu, flowIntentOther, flowMailReplyEdit, flowMeetCoordRequest, flowMeetingAudioAnswer, flowMeetingAudioRequest, flowMeetingFollowupRequest, flowMeetingReminderRequest, flowMenuList, flowMenuPick, flowNoAi, flowNoticeRequest, flowOnClosureAddress, flowOnDayEvening, flowOnFormFill, flowOnGoodsStop, flowOnMailMuteSender, flowOnMailRemindOrGoods, flowOnMeetCoord, flowOnMeetingTasks, flowOnPaceOffer, flowOnPlainMail, flowOnReminder, flowOnRfq, flowOnSentFollowup, flowOnThreadAdd, flowRemindersRequest, flowReplyAsk, flowRfqRequest, flowRfqSummary, flowSuggestionCommand, flowTranslateRequest, flowWalk, NEXT, switchCancels
+  DRAFT_ONLY, flowAgentsList, flowAlertNo, flowApproval, flowBusinessCommand, flowCancel, flowClosureCommand, flowEmailEdit, flowEmailPick, flowEmailSolve, flowEmailVia, flowFeaturesRequest, flowFormFillRequest, flowGreeting, flowInstinct, flowInstinctExplicit, flowInstinctPilot, flowNoticeToInstinct, flowIntentCancel, flowIntentDenied, flowIntentMenu, flowIntentOther, flowMailReplyEdit, flowMeetCoordRequest, flowMeetingAudioAnswer, flowMeetingAudioRequest, flowMeetingFollowupRequest, flowMeetingReminderRequest, flowMenuList, flowMenuPick, flowNoAi, flowNoticeRequest, flowOnClosureAddress, flowOnDayEvening, flowOnFormFill, flowOnGoodsStop, flowOnMailMuteSender, flowOnMailRemindOrGoods, flowOnMeetCoord, flowOnMeetingTasks, flowOnPaceOffer, flowOnPlainMail, flowOnReminder, flowOnRfq, flowOnSentFollowup, flowOnThreadAdd, flowRemindersRequest, flowReplyAsk, flowRfqRequest, flowRfqSummary, flowSuggestionCommand, flowTranslateRequest, flowWalk, NEXT, switchCancels
 };
