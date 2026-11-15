@@ -12,7 +12,7 @@
  *      • הכל נכון — הסבר קצר, שנשלח לרכש ונרשם בדו-שיח, והדרישה חוזרת לאישור כמו שהיא.
  *   4. מי שהחזיר מקבל הודעה כשהדרישה תוקנה (או הוסברה).
  *
- * מצב השיחה — ‎pd_return:<userId>‎ (למחזיר ולמסביר); החזרות פתוחות — ‎pd_returned‎ (‎company:prdno‎ ← פותח, מחזיר, שאלה).
+ * מצב השיחה — ‎pd_return_chats‎ (למחזיר ולמסביר, לפי עובד); החזרות פתוחות — ‎pd_returned‎ (‎company:prdno‎ ← פותח, מחזיר, שאלה).
  */
 const D = require('../core').Db;
 const Auth = require('../core').Auth;
@@ -51,13 +51,25 @@ function alertAdmins(title, body) {
 // מצב
 // ---------------------------------------------------------------------------
 
-const key = (userId) => `pd_return:${userId}`;
+// שיחות פתוחות (המחזיר / המסביר) — מפה אחת לפי עובד, מצב פנימי (לא מפתח לכל עובד בטבלת ההגדרות)
+const CHATS = 'pd_return_chats';
+const chats = () => D.getSetting(CHATS, {}) ?? {};
 function load(userId) {
-  const s = D.getSetting(key(userId), null);
+  const s = chats()[userId];
   return s && typeof s === 'object' && s.step && Date.now() - (s.at ?? 0) < STATE_TTL ? s : null;
 }
-const save = (userId, s) => D.setSetting(key(userId), { ...s, at: Date.now() });
-const clear = (userId) => D.run('DELETE FROM settings WHERE key = ?', key(userId));
+function save(userId, s) {
+  const all = chats();
+  all[userId] = { ...s, at: Date.now() };
+  for (const [k, v] of Object.entries(all)) if (Date.now() - (v?.at ?? 0) > STATE_TTL) delete all[k];
+  D.setSetting(CHATS, all);
+}
+function clear(userId) {
+  const all = chats();
+  if (!(userId in all)) return;
+  delete all[userId];
+  D.setSetting(CHATS, all);
+}
 
 const RETURNED = 'pd_returned';
 const recKey = (company, prdno) => `${company}:${prdno}`;

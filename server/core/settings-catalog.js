@@ -159,7 +159,9 @@ const INTERNAL = new Set([
   'org_topics_migrated', 'po_notify_baseline', 'sent_fu_scanned', 'vapid_private_pem', 'vapid_public', 'wa_mail_alert_since',
   'wa_summary_sent', 'whats_new_anchors_seeded', 'whats_new_files', 'whats_new_seeded', 'mail_rescan_multibox_v1', 'timeless_webhook',
   'pd_approval_notified', 'pd_approval_unmapped', 'ai_outage', 'ai_retry',
-  'pd_openers' // מי פתח כל דרישת רכש מהבוט (לפי חברה ומספר) — להודעת "אושרה"
+  'pd_openers', // מי פתח כל דרישת רכש מהבוט (לפי חברה ומספר) — להודעת "אושרה"
+  'pd_returned', // דרישות שהוחזרו לבדיקה ומחכות לפותח (לפי חברה ומספר) — pd-return.js
+  'pd_return_chats' // שיחות פתוחות של החזרה לבדיקה (המחזיר / המסביר), לפי עובד, 30 דקות — pd-return.js
 ]);
 
 /** מצב פנימי — לפי תחילית (‎digest_sent_morning‎, ‎priority_settings:1‎) */
