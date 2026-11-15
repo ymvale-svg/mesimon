@@ -31,9 +31,9 @@ const { chatOf, saveChat } = require('./wa-private');
 const DEFAULT_PHONE = '16508702892';
 
 const cfg = {
-  TIMEOUT_MS: 90 * 1000,             // בלי תשובה — העובד מקבל הודעה
+  TIMEOUT_MS: 6 * 60 * 1000,         // בלי תשובה — העובד מקבל הודעה. עיצוב לוקח לאינסטינקט דקות (15.11.26: 90 שניות היו קצרות מדי)
   CONTINUE_MS: 30 * 1000,            // הודעה בלי ציטוט מיד אחרי תשובה — המשך שלה (קובץ אחרי טקסט)
-  LATE_MS: 10 * 60 * 1000,           // תשובה אחרי שפג הזמן — עדיין לבקשה, כשאין אחרת בטיפול
+  LATE_MS: 30 * 60 * 1000,           // תשובה אחרי שפג הזמן — עדיין לבקשה, כשאין אחרת בטיפול
   FOLLOW_MS: 10 * 60 * 1000,         // בקשה אחרי תשובה — המשך שלה: ההקשר נשלח איתה
   FILE_MS: 5 * 60 * 1000,            // קובץ שנשלח לבוט — זמין לבקשה שאחריו
   RELATED_MS: 24 * 60 * 60 * 1000,   // שאלה יזומה — נבדקת מול הבקשות של היממה האחרונה
@@ -203,9 +203,9 @@ async function expire(id) {
   const row = rowById(id);
   if (row?.status !== 'sent') return;
   D.run("UPDATE instinct_requests SET status = 'timeout' WHERE id = ?", id);
-  log({ channel: 'private', userId: row.user_id, action: 'instinct', status: 'error', result: `אינסטינקט לא ענה תוך ${Math.round(cfg.TIMEOUT_MS / 1000)} שניות` });
+  log({ channel: 'private', userId: row.user_id, action: 'instinct', status: 'error', result: `אינסטינקט לא ענה תוך ${Math.round(cfg.TIMEOUT_MS / 60000)} דקות` });
   if (row.kind === 'request') await tellUser(id, '⌛ לא קיבלתי תשובה הפעם. נסו שוב בעוד כמה דקות 🙏', '');
-  alertAdmins(`⌛ אינסטינקט לא ענה על בקשה תוך ${Math.round(cfg.TIMEOUT_MS / 1000)} שניות.`);
+  alertAdmins(`⌛ אינסטינקט לא ענה על בקשה תוך ${Math.round(cfg.TIMEOUT_MS / 60000)} דקות.`);
 }
 
 /** הודעה לעובד של הבקשה, והאימוג'י על ההודעה שלו מתחלף */
@@ -225,7 +225,21 @@ async function tellUser(id, text, emoji = '') {
 let lastDelivery = { id: 0, at: 0 };
 
 /** איזו בקשה ההודעה עונה עליה — או ‎null‎ (יזומה) */
+/**
+ * בקשה שנשארה "בטיפול" אחרי שעבר הזמן — השעון שלה נעלם בהפעלה מחדש של השרת. מסומנת "פג זמנה" (בלי הודעה לעובד:
+ * כבר מאוחר), כדי שלא תיראה כבקשה פתוחה ותסתיר את מי שבאמת מחכה (באג 15.11.26).
+ */
+function sweep() {
+  const cutoff = new Date(Date.now() - cfg.TIMEOUT_MS).toISOString();
+  for (const r of D.all("SELECT id, user_id FROM instinct_requests WHERE status = 'sent' AND sent_at < ?", cutoff)) {
+    if (timers.has(r.id)) continue;
+    D.run("UPDATE instinct_requests SET status = 'timeout' WHERE id = ?", r.id);
+    log({ channel: 'private', userId: r.user_id, action: 'instinct', status: 'error', result: 'בקשה שנשארה בטיפול (אחרי הפעלה מחדש) — סומנה שפג זמנה' });
+  }
+}
+
 function targetOf(msg) {
+  sweep();
   const quoted = msg.replyTo?.id;
   if (quoted) {
     const row = D.get('SELECT * FROM instinct_requests WHERE out_id = ? AND kind IN (\'request\', \'answer\')', quoted);
@@ -233,9 +247,9 @@ function targetOf(msg) {
   }
   // המשך של תשובה שהגיעה עכשיו (קובץ אחרי הטקסט)
   if (lastDelivery.id && Date.now() - lastDelivery.at < cfg.CONTINUE_MS) return rowById(lastDelivery.id);
-  const open = D.all("SELECT * FROM instinct_requests WHERE status = 'sent' AND kind IN ('request', 'answer')");
-  if (quoted) return null; // ציטוט של הודעה שאינה בקשה — יזומה
-  if (open.length === 1) return open[0];
+  const open = D.all("SELECT * FROM instinct_requests WHERE status = 'sent' AND kind IN ('request', 'answer') ORDER BY id DESC");
+  // בקשה אחת בטיפול, או כמה — כולן של אותו עובד (בקשה ואחריה "בצבע כחול"): לו, לאחרונה
+  if (open.length && open.every((r) => r.user_id === open[0].user_id)) return open[0];
   if (!open.length) {
     // תשובה מאוחרת — לבקשה שפג זמנה לאחרונה
     const late = D.get("SELECT * FROM instinct_requests WHERE status = 'timeout' AND kind = 'request' ORDER BY id DESC LIMIT 1");
@@ -302,7 +316,7 @@ const RELATED = {
  */
 async function classify(text) {
   const recent = D.all(
-    "SELECT id, text, reply FROM instinct_requests WHERE kind = 'request' AND status IN ('answered', 'timeout') AND created_at >= ? ORDER BY id DESC LIMIT 20",
+    "SELECT id, text, reply FROM instinct_requests WHERE kind = 'request' AND status IN ('sent', 'answered', 'timeout') AND created_at >= ? ORDER BY id DESC LIMIT 20",
     new Date(Date.now() - cfg.RELATED_MS).toISOString()
   );
   if (!Claude.isEnabled()) return { requestId: 0, asksForInfo: false, reason: 'אין AI' };
