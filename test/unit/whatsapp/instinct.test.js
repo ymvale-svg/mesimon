@@ -426,3 +426,72 @@ test('תמונה בלי כיתוב כשאין שיחה עם אינסטינקט �
   await settle();
   assert.equal(toInstinct(wa).length, 0);
 });
+
+/*
+ * 📷 תמונה בלי כיתוב (15.11.26, ישראל: "תבנה את הבדיקה האוטומטית"): קודם בודקים מה בתמונה. מסמך (חשבונית, תעודת
+ * משלוח) — "לקלוט כקבלת סחורה?" כמו קודם. תמונה רגילה (אנשים, משרד) — "מה לעשות עם התמונה?", והבקשה שאחריה
+ * יוצאת לאינסטינקט עם התמונה. כפתור "קבלת סחורה 📦" — למקרה שהבדיקה טעתה.
+ */
+const GoodsReceipt = require('../../../server/priority/goods-receipt');
+
+function photoAi(t, { document, intent = 'instinct', request = '' }) {
+  return Fakes.claude(t, (opts) => {
+    const keys = Object.keys(opts.schema?.properties ?? {});
+    if (keys.includes('document')) return { document, what: document ? 'חשבונית' : 'אדם במשרד' };
+    if (keys.includes('identifying')) return { identifying: false, what: '' };
+    if (keys.includes('request_id')) return { request_id: 0, asks_for_info: false, reason: '' };
+    return { intent, request, ready: true, reply: '' };
+  });
+}
+
+function grOn(t) {
+  const real = WaActions.allowed;
+  t.mock.method(WaActions, 'allowed', (actor, key) => (key === 'goods_receipt' ? true : real(actor, key)));
+  const calls = [];
+  t.mock.method(GoodsReceipt, 'handle', async (a) => { calls.push(a); return { replies: ['📦 לקלוט את המסמך כ*קבלת סחורה* בפריוריטי?'], status: 'ok', result: 'הצעה', buttons: ['כן ✅', 'לא ❌'] }; });
+  return calls;
+}
+
+const PHOTO = { kind: 'imageMessage', file: { url: 'https://x/office.jpg', mime: 'image/jpeg', name: 'office.jpg' } };
+
+test('📷 תמונה רגילה בלי כיתוב — "מה לעשות עם התמונה?", לא קבלת סחורה; הבקשה שאחריה יוצאת עם התמונה', async (t) => {
+  const wa = setup(t);
+  photoAi(t, { document: false, request: 'תשנה את הרקע לחוף הים' });
+  t.mock.method(Speech, 'download', async () => ({ buf: Buffer.alloc(20000, 1), mime: 'image/jpeg' }));
+  const gr = grOn(t);
+  const u = person();
+  await say(u.phone, '', PHOTO);
+  assert.equal(gr.length, 0, 'לא נשאל על קבלת סחורה');
+  const ask = toUser(wa, u).at(-1);
+  assert.match(ask.body.message ?? ask.body.body, /מה לעשות עם התמונה/);
+  assert.ok(wa.buttons().includes('קבלת סחורה 📦'), 'כפתור למקרה שהבדיקה טעתה');
+  wa.clear();
+  await say(u.phone, 'תשנה את הרקע לחוף הים');
+  await settle();
+  const out = toInstinct(wa);
+  assert.equal(out.length, 1);
+  assert.equal(out[0].method, 'sendFileByUrl');
+  assert.equal(out[0].body.urlFile, 'https://x/office.jpg');
+  assert.match(out[0].body.caption, /חוף הים/);
+});
+
+test('📷 צילום של חשבונית בלי כיתוב — קבלת סחורה, כמו קודם', async (t) => {
+  const wa = setup(t);
+  photoAi(t, { document: true });
+  t.mock.method(Speech, 'download', async () => ({ buf: Buffer.alloc(20000, 1), mime: 'image/jpeg' }));
+  const gr = grOn(t);
+  const u = person();
+  await say(u.phone, '', PHOTO);
+  assert.equal(gr.length, 1);
+  assert.equal(toInstinct(wa).length, 0);
+});
+
+test('📷 הבדיקה נכשלה (אין AI) — כמו קודם: קבלת סחורה', async (t) => {
+  setup(t);
+  t.mock.method(console, 'error', () => {});
+  t.mock.method(Speech, 'download', async () => { throw new Error('אין רשת'); });
+  const gr = grOn(t);
+  const u = person();
+  await say(u.phone, '', PHOTO);
+  assert.equal(gr.length, 1);
+});

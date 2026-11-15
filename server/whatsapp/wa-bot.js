@@ -1122,6 +1122,22 @@ async function handleDirect(msg) {
     log({ ...base, text: `[📎 ${msg.file.name || msg.kind || 'קובץ'}] ${text ?? ''}`.trim(), action: 'instinct', status: 'ok', result: 'קובץ באמצע שיחה עם אינסטינקט — נשלח אליו' });
     return;
   }
+  // 📷 תמונה בלי כיתוב (לא באמצע קבלת סחורה / דרישת רכש) — קודם מה בתמונה: מסמך ← "קבלת סחורה?" כמו קודם;
+  // תמונה רגילה ← "מה לעשות עם התמונה?", והבקשה שאחריה יוצאת לאינסטינקט עם התמונה (15.11.26)
+  if (msg.kind === 'imageMessage' && msg.file && !String(text ?? '').trim() && !msg.forwarded && Instinct.allowed(actor)
+    && !GoodsReceipt.active(user.id, true) && !PurchaseDemand.active(user.id, true)) {
+    const slowPhoto = setTimeout(() => react(ref, '👀'), SLOW_NOTICE_MS);
+    const doc = await Instinct.looksLikeDocument(msg.file);
+    clearTimeout(slowPhoto);
+    if (!doc) {
+      Instinct.offerFile(user.id, msg.file);
+      rememberFile(user.id, msg.file); // "קבלת סחורה 📦" — אם הבדיקה טעתה
+      const ask = '📷 מה לעשות עם התמונה?';
+      log({ ...base, text: `[📷 ${msg.file.name || 'תמונה'}]`, action: 'instinct', status: 'unclear', result: 'תמונה רגילה בלי כיתוב — נשאל מה לעשות', reply: ask });
+      await sendButtons(msg.chatId, ask, WaActions.allowed(actor, 'goods_receipt') ? [MailActions.BTN.receive] : []);
+      return;
+    }
+  }
   const pdAllowed = WaActions.allowed(actor, 'purchase_demand');
   // ⏳ 15 דקות בלי תשובה — דרישת הרכש / קבלת הסחורה כבר לא "פעילה", והודעה חדשה מתחילה מההתחלה. לחיצה על כפתור — עוד עונה
   const late = !msg.file && answerLike(text, msg);
