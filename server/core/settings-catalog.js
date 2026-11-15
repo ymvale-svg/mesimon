@@ -146,7 +146,10 @@ const HIDDEN = {
   notice_logos: 'מודעות ומכתבים — לוגואים (נקבע בבוט)',
   org_logo_note: 'הערה על הלוגו',
   signup_token: 'קוד הרשמה',
-  timezone: 'אזור הזמן (ברירת מחדל Asia/Jerusalem)'
+  timezone: 'אזור הזמן (ברירת מחדל Asia/Jerusalem)',
+  instinct_phone: 'אינסטינקט — המספר שלו (ברירת מחדל בקוד)',
+  instinct_users: 'אינסטינקט — מי בפיילוט (נקבע בבוט: "אינסטינקט רק לי")',
+  instinct_open: 'אינסטינקט — פתוח לכולם (נקבע בבוט: "תפתח את אינסטינקט לכולם")'
 };
 
 /** מצב פנימי של הקוד — לא הגדרה. מפתחות מדויקים */
@@ -155,7 +158,8 @@ const INTERNAL = new Set([
   'migr_bot_pilot_open', 'migr_memory_always_on', 'migr_memory_conservative', 'org_merge_last', 'org_merge_rounds', 'org_refresh_last',
   'org_topics_migrated', 'po_notify_baseline', 'sent_fu_scanned', 'vapid_private_pem', 'vapid_public', 'wa_mail_alert_since',
   'wa_summary_sent', 'whats_new_anchors_seeded', 'whats_new_files', 'whats_new_seeded', 'mail_rescan_multibox_v1', 'timeless_webhook',
-  'pd_approval_notified', 'pd_approval_unmapped', 'ai_outage', 'ai_retry'
+  'pd_approval_notified', 'pd_approval_unmapped', 'ai_outage', 'ai_retry',
+  'pd_openers' // מי פתח כל דרישת רכש מהבוט (לפי חברה ומספר) — להודעת "אושרה"
 ]);
 
 /** מצב פנימי — לפי תחילית (‎digest_sent_morning‎, ‎priority_settings:1‎) */

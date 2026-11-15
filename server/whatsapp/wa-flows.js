@@ -29,6 +29,7 @@ const Meetings = require('../meetings').Meetings;
 const Solve = require('./solve');
 const MailInsights = require('../mail').MailInsights;
 const Range = require('../mail').InsightWindow;
+const Instinct = require('./instinct');
 const { appRoot, currentMsg, doneEmoji, emailText, enqueueAs, firstName, hooks, localDate, log, react, reactNow, signatureFields, taskLink, WALK, MSG_BREAK } = require('./wa-base');
 const { actionOf, CANCEL, checkDraft, draftText, featuresText, helpText, localDay, PLAIN_FEATURES, PLAIN_GREETING, PLAIN_HELP, PLAIN_INSIGHTS, PLAIN_LIST, PLAIN_TODAY, READ_ALOUD, shortDate, YES } = require('./wa-private');
 const { meetCoordRun, pushToUser, rfqPrepare, rfqSend } = require('./wa-proactive');
@@ -273,7 +274,10 @@ async function flowRfqRequest({ actor, dry, out, t }) {
   return NEXT;
 }
 
-async function flowNoticeRequest({ actor, dry, out, t }) {
+async function flowNoticeRequest({ actor, dry, out, t, user }) {
+  // 🤖 עיצוב מודעה — לאינסטינקט, למי שהוא פתוח לו (15.11.26, ישראל: "כל מה שאינסטינקט יודע — תן לו לעשות").
+  // מכתב רשמי על נייר הפירמה — נשאר אצלנו: זה פנים החברה
+  if (user && Instinct.allowed(actor) && Notice.parseRequest(t)?.kind === 'notice') return instinctSend({ user, actor, dry, out, text: t });
   if (WaActions.allowed(actor, 'notices') && Notice.parseRequest(t)) {
     if (dry) return out('(בדיקה) הייתי מכין PDF.', {}, { action: 'notices', status: 'ok', result: 'בדיקה' });
     reactNow(actor.id, '📝');
@@ -861,8 +865,11 @@ async function flowIntentMenu({ firstToday, menuReply, u }) {
 
 // הודעה ראשונה ביום שהיא שיחה של ממש (שאלה, הקלטה, בקשה שאין לה פעולה) — עונים עליה בלבד; ה-Today לא
 // מתערבב בתשובה (10.11.26, ישראל: "למה התערבב המייל ללייסנטק עם כל היומיום שלי"). רק ברכה קצרה פותחת את ה-Today
+// ברכה — "היי", "בוקר טוב", "מה נשמע" (ואחריה אולי שם). לא כל שלוש מילים: "שעה 15.00" אינה ברכה (באג 15.11.26)
+const GREETING = /^(?:היי+|הי|הלו|שלום|אהלן|בוקר\s+טוב|צהריים\s+טובים|ערב\s+טוב|מה\s+נשמע|מה\s+קורה|מה\s+המצב|מה\s+שלומך)(?:[\s,!.?👋🙂]+\S+)?[\s,!.?👋🙂]*$/;
+
 async function flowGreeting({ actor, firstToday, t, todayReply, u, user }) {
-  const smallTalk = !u.reply || t.split(/\s+/).length <= 3;
+  const smallTalk = !u.reply || GREETING.test(t.trim());
   if (u.intent === 'menu' || (u.intent === 'other' && firstToday && smallTalk)) {
     if (WaActions.allowed(actor, 'today') || menuOptions(actor).length) {
       const hello = firstToday ? `${localDate().time < '12:00' ? 'בוקר טוב' : 'שלום'} ${firstName(user.full_name)} 👋` : '';
@@ -874,6 +881,8 @@ async function flowGreeting({ actor, firstToday, t, todayReply, u, user }) {
 
 async function flowIntentOther({ actor, out, u }) {
   if (u.intent === 'other') {
+    // יש תשובה — רק היא, בלי התפריט (באג 15.11.26, ישראל: "למה אני מקבל את כל התפריט עוד הפעם ועוד הפעם?")
+    if (u.reply) return out(u.reply, {}, { action: 'other', status: 'unclear', result: 'לא זוהתה פעולה — ענה בלי התפריט' });
     const options = menuOptions(actor);
     if (options.length) {
       return out([u.reply, menuText(options)].filter(Boolean).join('\n\n'), { draft: { kind: 'menu', options: options.map((o) => o.key) } },
@@ -882,6 +891,66 @@ async function flowIntentOther({ actor, out, u }) {
     return out(u.reply || helpText(actor), {}, { action: 'other', status: 'unclear', result: 'לא זוהתה פעולה' });
   }
   return NEXT;
+}
+
+/*
+ * 🤖 אינסטינקט — העוזר הכללי (‎instinct.js‎). הבקשה יוצאת ברקע והתשובה מגיעה לבד: כאן רק ⏳ על ההודעה, בלי טקסט —
+ * הבוט לא מחכה, והעובד ממשיך בשיחה. ‎explicit‎ — "אינסטינקט, …" (לפני ה-AI). שאלה של אינסטינקט שהועברה לעובד
+ * ועוד פתוחה — הבקשה הכללית הבאה (‎instinct‎) היא התשובה עליה, ויוצאת בציטוט שלה.
+ */
+function instinctSend({ user, actor, dry, out, text, explicit = false }) {
+  const question = explicit ? null : Instinct.openQuestion(user.id);
+  const file = question ? null : Instinct.takeFile(user.id);
+  const what = question ? 'תשובה לשאלה של אינסטינקט' : `בקשה לאינסטינקט${file ? ' + קובץ' : ''}`;
+  if (dry) return out(`🤖 (בדיקה) ${what}: "${Instinct.redact(text)}"`, {}, { action: 'instinct', status: 'ok', result: `${what} (בדיקה — לא נשלח)` });
+  Instinct.request(user, text, { file, question, ref: currentMsg.get(actor.id) });
+  return out('', {}, { action: 'instinct', status: 'ok', result: `${what} — ברקע`, react: question ? '📤' : '⏳' });
+}
+
+/**
+ * 🤖 מי בפיילוט — רק מנהל מערכת: "אינסטינקט רק לי" (הוא בלבד), "תפתח את אינסטינקט לכולם", "תחזיר את אינסטינקט לפיילוט"
+ * (חוזר למי שברשימה). לפני "אינסטינקט, …" — אחרת "אינסטינקט רק לי" היה יוצא אליו כבקשה.
+ */
+async function flowInstinctPilot({ actor, dry, out, t }) {
+  const only = /^אינסטינקט\s+רק\s+לי[.!]?$/.test(t);
+  const open = /^(?:תפתח|פתח)\s+(?:את\s+)?אינסטינקט\s+לכולם[.!]?$/.test(t);
+  const back = /^(?:תחזיר|החזר)\s+(?:את\s+)?אינסטינקט\s+לפיילוט[.!]?$/.test(t);
+  if (!only && !open && !back) return NEXT;
+  if (!WaActions.inPilot(actor)) return out('רק מנהל מערכת יכול לשנות את זה.', {}, { action: 'instinct', status: 'denied', result: 'פיילוט אינסטינקט — אין הרשאה' });
+  if (!dry) {
+    if (only) { D.setSetting('instinct_users', [actor.id]); D.setSetting('instinct_open', false); }
+    if (open) D.setSetting('instinct_open', true);
+    if (back) D.setSetting('instinct_open', false);
+  }
+  const reply = only ? '✅ אינסטינקט פתוח עכשיו רק לך.' : open ? '✅ אינסטינקט פתוח עכשיו לכל העובדים.' : '✅ אינסטינקט חזר לפיילוט — רק למי שבו.';
+  return out(reply, {}, { action: 'instinct', status: 'ok', result: `פיילוט אינסטינקט: ${only ? 'רק ל' + actor.name : open ? 'לכולם' : 'חזר לפיילוט'}` });
+}
+
+/**
+ * מודעה של הבוט מחכה (סגנון / "מאשר"), והעובד מבקש אותה מאינסטינקט ("תעצב באינסטינקט") — המודעה עוברת אליו עם
+ * התוכן שכבר נאסף, והטיוטה שלנו יורדת. בלי זה "תעצב באינסטקט" היה תיקון למודעה, והבוט עיצב אותה שוב (באג 15.11.26).
+ */
+async function flowNoticeToInstinct({ user, actor, dry, keep, out, state, t }) {
+  const d = state.draft;
+  if (!state.awaiting || d?.kind !== 'notice' || d.type !== 'notice' || !Instinct.MENTION.test(t) || !Instinct.allowed(actor)) return NEXT;
+  const extra = t.replace(/\S*(?:אינסט[א-ת]*|instinct)\S*/gi, '').replace(/^\s*(?:ת?עצב(?:י)?|תעשה|תכין|דרך|את\s+זה|אותה)\s*/g, '').trim();
+  const style = d.style === 'minimal' ? ' בסגנון מינימלי' : d.style === 'designed' ? ' מעוצבת' : '';
+  const text = [`תעצב לי מודעה${style}: ${d.request}`, extra.split(/\s+/).length > 1 ? extra : ''].filter(Boolean).join('\n');
+  keep.draft = null;
+  keep.awaiting = false;
+  return instinctSend({ user, actor, dry, out, text, explicit: true });
+}
+
+async function flowInstinctExplicit({ user, actor, dry, out, t }) {
+  if (!Instinct.TRIGGER.test(t) || !Instinct.allowed(actor)) return NEXT;
+  const text = t.replace(Instinct.TRIGGER, '').trim();
+  if (!text) return out('מה לבקש? כתבו למשל "אינסטינקט, תחפש לי מתכון לעוגת גבינה".', {}, { action: 'instinct', status: 'unclear', result: 'בקשה ריקה' });
+  return instinctSend({ user, actor, dry, out, text, explicit: true });
+}
+
+async function flowInstinct({ user, actor, dry, out, t, u }) {
+  if (u.intent !== 'instinct' || !Instinct.allowed(actor)) return NEXT;
+  return instinctSend({ user, actor, dry, out, text: u.request || t });
 }
 
 async function flowIntentDenied({ actor, out, u }) {
@@ -904,5 +973,5 @@ const switchCancels = () => Boolean(D.getSetting('wa_topic_switch_cancels', true
 const DRAFT_ONLY = /(?:(?:בלי|לא\s+משנה|אין\s+לי\s+(?:את\s+)?|עזוב(?:\s+את)?)\s*ה?(?:כתובת|מייל|נמען)|רק\s+ת?(?:נסח|כתוב)|ת?נסח\s+(?:לי\s+)?(?:רק\s+)?(?:את\s+)?ה?(?:מלל|טקסט|נוסח))/;
 
 module.exports = {
-  DRAFT_ONLY, flowAgentsList, flowAlertNo, flowApproval, flowBusinessCommand, flowCancel, flowClosureCommand, flowEmailEdit, flowEmailPick, flowEmailSolve, flowEmailVia, flowFeaturesRequest, flowFormFillRequest, flowGreeting, flowIntentCancel, flowIntentDenied, flowIntentMenu, flowIntentOther, flowMailReplyEdit, flowMailWalk, flowMeetCoordRequest, flowMeetingAudioAnswer, flowMeetingAudioRequest, flowMeetingFollowupRequest, flowMeetingReminderRequest, flowMenuList, flowMenuPick, flowNoAi, flowNoticeRequest, flowOnClosureAddress, flowOnDayEvening, flowOnFormFill, flowOnGoodsStop, flowOnMailMuteSender, flowOnMailRemindOrGoods, flowOnMeetCoord, flowOnMeetingTasks, flowOnPaceOffer, flowOnPlainMail, flowOnReminder, flowOnRfq, flowOnSentFollowup, flowOnThreadAdd, flowRemindersRequest, flowReplyAsk, flowRfqRequest, flowRfqSummary, flowSuggestionCommand, flowTranslateRequest, flowWalk, NEXT, switchCancels
+  DRAFT_ONLY, flowAgentsList, flowAlertNo, flowApproval, flowBusinessCommand, flowCancel, flowClosureCommand, flowEmailEdit, flowEmailPick, flowEmailSolve, flowEmailVia, flowFeaturesRequest, flowFormFillRequest, flowGreeting, flowInstinct, flowInstinctExplicit, flowInstinctPilot, flowNoticeToInstinct, flowIntentCancel, flowIntentDenied, flowIntentMenu, flowIntentOther, flowMailReplyEdit, flowMailWalk, flowMeetCoordRequest, flowMeetingAudioAnswer, flowMeetingAudioRequest, flowMeetingFollowupRequest, flowMeetingReminderRequest, flowMenuList, flowMenuPick, flowNoAi, flowNoticeRequest, flowOnClosureAddress, flowOnDayEvening, flowOnFormFill, flowOnGoodsStop, flowOnMailMuteSender, flowOnMailRemindOrGoods, flowOnMeetCoord, flowOnMeetingTasks, flowOnPaceOffer, flowOnPlainMail, flowOnReminder, flowOnRfq, flowOnSentFollowup, flowOnThreadAdd, flowRemindersRequest, flowReplyAsk, flowRfqRequest, flowRfqSummary, flowSuggestionCommand, flowTranslateRequest, flowWalk, NEXT, switchCancels
 };

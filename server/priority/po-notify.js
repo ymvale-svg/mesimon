@@ -7,8 +7,11 @@
  *   "אושרה", "נשלחה לספק") שעוד לא נשלחה עליה התראה. מעבר בין שני הסטטוסים — התראה אחת. גרסה חדשה של הזמנה
  *   (‎CURVERSION‎ — "פתיחה חוזרת" ואישור מחדש) — התראה נוספת, "עודכנה".
  * • **הסריקה הראשונה** (וכל הפעלה מחדש של הפעולה בהגדרות הבוט) רושמת את ההזמנות הסופיות הקיימות בלי לשלוח.
- * • **למי:** מנהל הפרויקט — ‎MUSERLOGIN‎ במסך הפרויקטים; יוזם הדרישה — ‎INITUSERLOGIN‎ בדרישת הרכש (מהכותרת
- *   ומהשורות). המשתמש בפריוריטי ← שם ומייל (‎USERSB‎). מייל — לכתובת הזו; וואטסאפ — למשתמש משימון עם אותו מייל
+ * • **למי:** מנהל הפרויקט — ‎MUSERLOGIN‎ במסך הפרויקטים; פותח הדרישה — ‎INITUSERLOGIN‎ בדרישת הרכש (מהכותרת
+ *   ומהשורות), ואם הוא משתמש מערכת (דרישה מהבוט — "API VPLANS") — בעל הדרישה, שם המשתמש שבדו-שיח הפנימי, או העובד
+ *   שהבוט רשם כשפתח אותה (‎rememberOpener‎); המאשר — מי שחתם ברשימת המאשרים (הוחלט 15.11.26). לפותח הדרישה:
+ *   "דרישת הרכש שלך אושרה והועברה לספק", וכשההזמנה שונה מהדרישה — מה שונה (‎demandDiffs‎).
+ *   מנהל הפרויקט — כשהפעולה "הזמנת רכש הועברה לספק" מופעלת; פותח הדרישה והמאשר — גם כש"דרישת רכש לפריוריטי" מופעלת. המשתמש בפריוריטי ← שם ומייל (‎USERSB‎). מייל — לכתובת הזו; וואטסאפ — למשתמש משימון עם אותו מייל
  *   וטלפון בפרופיל, בשעות הפעילות של הבוט (מחוץ להן — ממתין). משתמשי מערכת (‎master‎ וכו') — לא.
  * • **סביבת בדיקה** (‎test11‎): רק למנהלי המערכת, עם "במקום: …".
  * • **קריאה בלבד** מפריוריטי. כשל — ליומן הבוט ולמנהלי המערכת, לא לעובד.
@@ -18,6 +21,8 @@
  */
 const D = require('../core').Db;
 const Priority = require('../integrations').Priority;
+const Claude = require('../integrations').Claude;
+const Prefs = require('./priority-prefs');
 const Mailer = require('../integrations').Mailer;
 const WaActions = require('../whatsapp').WaActions;
 const Auth = require('../core').Auth;
@@ -31,6 +36,8 @@ const PER_TICK = 10;
 const MAX_ATTEMPTS = 5;
 const PENDING_DAYS = 3;
 const BACKOFF = 6 * 60 * 60 * 1000;
+/** בסריקה הראשונה — הזמנה מדרישה מהימים האחרונים עוד נשלחת */
+const RECENT_DAYS = 3;
 
 const WaBot = require('../whatsapp').WaBot;
 
@@ -41,7 +48,13 @@ const companies = () => Settings.poNotifyCompanies();
 const SYSTEM_LOGIN = /^(master|medatech|tabula|api\b|api\s)/i;
 const SYSTEM_MAIL = /@medatech\.com$/i;
 
-const enabled = () => Priority.isEnabled() && Boolean(WaActions.byKey('po_notify')?.enabled);
+const actionOn = (key) => Boolean(WaActions.byKey(key)?.enabled);
+const enabled = () => Priority.isEnabled() && (actionOn('po_notify') || actionOn('purchase_demand'));
+/** איזה תפקיד מקבל הודעה: מנהל הפרויקט — רק עם "הזמנת רכש הועברה לספק"; פותח הדרישה והמאשר — גם עם "דרישת רכש" */
+const roleOn = (role) => (role === 'manager' ? actionOn('po_notify') : actionOn('po_notify') || actionOn('purchase_demand'));
+
+const rememberOpener = (company, prdno, userId) => Prefs.rememberOpener(company, prdno, userId);
+const openerOf = (company, prdno) => Prefs.openerOf(company, prdno);
 
 const money = (n) => Number(n ?? 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const qty = (n) => Number(n ?? 0).toLocaleString('en-US', { maximumFractionDigits: 3 });
@@ -82,17 +95,30 @@ async function recipientsOf(company, po) {
     if (!e.roles.includes(role)) e.roles.push(role);
     people.set(login, e);
   };
+  const real = (l) => (l && !SYSTEM_LOGIN.test(l) ? l : null);
   if (po.PROJDOCNO) add(await Priority.projectManager(company, po.PROJDOCNO), 'manager');
-  const demands = [...new Set([po.PRDNO, ...po.lines.map((l) => l.PRDNO)].filter(Boolean))];
-  for (const prdno of demands) add(await Priority.demandInitiator(company, prdno), 'initiator');
+  const prdnos = [...new Set([po.PRDNO, ...po.lines.map((l) => l.PRDNO)].filter(Boolean))];
+  const demands = [];
+  const direct = new Map(); // userId → roles — פותח הדרישה כפי שהבוט רשם
+  for (const prdno of prdnos) {
+    const d = await Priority.demandForNotice(company, prdno);
+    if (!d) continue;
+    demands.push(d);
+    add(real(d.INITUSERLOGIN) || real(d.OWNERLOGIN) || real(d.dialogLogin), 'initiator');
+    for (const a of d.approvers ?? []) add(a, 'approver');
+    const uid = openerOf(company, prdno);
+    if (uid) direct.set(uid, ['initiator']);
+  }
 
   const byEmail = new Map();
   let manager = null;
   const initiators = [];
+  const approvers = [];
   for (const p of people.values()) {
     const u = await Priority.priorityUser(company, p.login);
     if (p.roles.includes('manager')) manager = u ?? { login: p.login, name: p.login };
     if (p.roles.includes('initiator')) initiators.push(u ?? { login: p.login, name: p.login });
+    if (p.roles.includes('approver')) approvers.push(u ?? { login: p.login, name: p.login });
     if (!u?.active || !u.email || SYSTEM_MAIL.test(u.email) || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(u.email)) continue;
     const key = u.email.toLowerCase();
     const m = D.get("SELECT id, full_name, phone FROM users WHERE lower(email) = ? AND status = 'active'", key);
@@ -100,7 +126,71 @@ async function recipientsOf(company, po) {
     for (const r of p.roles) if (!e.roles.includes(r)) e.roles.push(r);
     byEmail.set(key, e);
   }
-  return { manager, initiators, recipients: [...byEmail.values()] };
+  // פותח הדרישה שהבוט רשם — משתמש משימון ישירות (אותו אדם כבר ברשימה — לפי המייל — רק מוסיפים לו את התפקיד)
+  for (const [uid, roles] of direct) {
+    const m = D.get("SELECT id, full_name, email, phone FROM users WHERE id = ? AND status = 'active'", uid);
+    if (!m) continue;
+    const key = String(m.email ?? `user:${m.id}`).toLowerCase();
+    const e = byEmail.get(key) ?? [...byEmail.values()].find((x) => x.userId === m.id)
+      ?? { name: m.full_name, email: m.email ?? '', login: '', roles: [], userId: m.id, phone: m.phone ?? '' };
+    for (const r of roles) if (!e.roles.includes(r)) e.roles.push(r);
+    if (!e.userId) { e.userId = m.id; e.phone = m.phone ?? ''; }
+    byEmail.set(String(e.email || key).toLowerCase(), e);
+    if (!initiators.length) initiators.push({ login: '', name: m.full_name });
+  }
+  return { manager, initiators, approvers, demands, recipients: [...byEmail.values()] };
+}
+
+// ---------------------------------------------------------------------------
+// ההזמנה מול הדרישה
+// ---------------------------------------------------------------------------
+
+const unitOf = (l) => `${qty(l.TQUANT)} ${l.TUNITNAME ?? ''}`.trim();
+/** שורת מילוי בהזמנה ("מוצר כללי", בלי מחיר) — לא פריט שהוזמן */
+const filler = (l) => l.PARTNAME === '000' && /^מוצר כללי$/.test(String(l.PDES ?? '').trim()) && !Number(l.QPRICE);
+const COMPARE_SCHEMA = { type: 'object', properties: { diffs: { type: 'array', items: { type: 'string' } } }, required: ['diffs'], additionalProperties: false };
+const COMPARE_SYSTEM = [
+  'אתה משווה דרישת רכש (מה שהעובד ביקש) להזמנת הרכש שהרכש שלח לספק. כתוב בעברית רק הבדלים של ממש:',
+  'פריט אחר או מפרט אחר (חומר, מידה, עובי, סוג, דגם), כמות אחרת (גם אחרי המרת יחידות — "50 מטר × 5" = 250 מ"א זה אותו דבר),',
+  'פריט שביקשו ולא הוזמן, ופריט שהוזמן ולא ביקשו. ניסוח אחר, קוד פריט חדש או תיאור מפורט יותר של אותו פריט — אינם הבדל.',
+  'כל הבדל — שורה אחת: "ביקשת: <פריט> — <כמות> ← הוזמן: <פריט> — <כמות>", "<פריט> — <כמות> — לא הוזמן", או "נוסף בהזמנה: <פריט> — <כמות>".',
+  'אין הבדלים — רשימה ריקה.'
+].join('\n');
+
+/** הבדלים בין הדרישה להזמנה, כשורות לעובד. שורות מקושרות (‎PRDI‎) — השוואה ישירה; בלי קישור — ה-AI (ובלעדיו — הרשימות זו מול זו) */
+async function demandDiffs(d, po) {
+  const want = d?.lines ?? [];
+  const got = (po.lines ?? []).filter((l) => (!l.PRDNO || l.PRDNO === d.PRDNO) && !filler(l));
+  if (!want.length) return [];
+  const isLinked = (l) => l.PRDI && want.some((w) => w.PRDI === l.PRDI);
+  if (got.some(isLinked)) {
+    const out = [];
+    for (const w of want) {
+      const g = got.find((l) => l.PRDI === w.PRDI);
+      if (!g) { out.push(`${w.PDES} — ${unitOf(w)} — לא הוזמן`); continue; }
+      const otherItem = w.PARTNAME !== '000' && g.PARTNAME !== w.PARTNAME;
+      if (otherItem || Number(g.TQUANT) !== Number(w.TQUANT) || (g.TUNITNAME ?? '') !== (w.TUNITNAME ?? '')) {
+        out.push(`${w.PDES} — ${unitOf(w)} ← הוזמן: ${otherItem ? `${g.PDES} — ` : ''}${unitOf(g)}`);
+      }
+    }
+    for (const g of got.filter((l) => !isLinked(l))) out.push(`נוסף בהזמנה: ${g.PDES} — ${unitOf(g)}`);
+    return out;
+  }
+  // בלי קישור: זהים (אותו פריט ואותה כמות) — אין מה לומר
+  const sig = (l) => `${l.PARTNAME !== '000' ? l.PARTNAME : String(l.PDES ?? '').trim()}|${Number(l.TQUANT)}|${l.TUNITNAME ?? ''}`;
+  if (want.length === got.length && want.map(sig).sort().join('\n') === got.map(sig).sort().join('\n')) return [];
+  if (Claude.isEnabled()) {
+    try {
+      const r = await Claude.json({ system: COMPARE_SYSTEM, schema: COMPARE_SCHEMA, effort: 'low', content: [{ type: 'text', text: JSON.stringify({
+        requested: want.map((l) => ({ item: l.PDES, code: l.PARTNAME, qty: l.TQUANT, unit: l.TUNITNAME })),
+        ordered: got.map((l) => ({ item: l.PDES, code: l.PARTNAME, qty: l.TQUANT, unit: l.TUNITNAME }))
+      }) }] });
+      return (r?.diffs ?? []).map((x) => String(x).trim()).filter(Boolean).slice(0, 12);
+    } catch (err) {
+      console.error('[משימון] השוואת הזמנה לדרישה:', err.message);
+    }
+  }
+  return [`ביקשת: ${want.map((l) => `${l.PDES} — ${unitOf(l)}`).join('; ')}`, `הוזמן: ${got.map((l) => `${l.PDES} — ${unitOf(l)}`).join('; ') || '—'}`];
 }
 
 /** בסביבת בדיקה — מנהלי המערכת במקום הנמענים האמיתיים */
@@ -117,10 +207,19 @@ const roleText = (roles) => {
   const t = [];
   if (roles.includes('manager')) t.push('כמנהל הפרויקט');
   if (roles.includes('initiator')) t.push('כיוזם דרישת הרכש');
+  if (roles.includes('approver')) t.push('כמאשר דרישת הרכש');
   return t.join(' ו');
 };
 
-function subjectOf(po, { updated, test }) {
+/** פותח הדרישה / המאשר בלבד (לא מנהל הפרויקט) — ההודעה היא על הדרישה */
+const aboutDemand = (r) => Boolean(r?.roles && !r.roles.includes('manager') && !r.roles.includes('test') && (r.roles.includes('initiator') || r.roles.includes('approver')));
+function demandHeadline(po, r, ctx) {
+  const prd = ctx.prdno || po.PRDNO || '';
+  return r.roles.includes('initiator') ? `דרישת הרכש שלך ${prd} אושרה והועברה לספק` : `דרישת הרכש שאישרת ${prd} הועברה לספק`;
+}
+
+function subjectOf(po, { updated, test }, r = null, ctx = {}) {
+  if (aboutDemand(r)) return `${demandHeadline(po, r, ctx)} — ${po.ORDNAME}`;
   return `${test ? '[בדיקה] ' : ''}הזמנת הרכש בפרויקט שלך ${updated ? 'עודכנה והועברה' : 'הועברה'} לספק — ${po.ORDNAME}${po.PROJDES ? ` · ${po.PROJDES}` : ''}`;
 }
 
@@ -130,16 +229,21 @@ const MAX_LINES_WA = 15;
 function waText(po, r, ctx) {
   const c = cur(po.CODE);
   const due = [...new Set(po.lines.map((l) => ymd(l.DUEDATE || l.REQDATE)).filter(Boolean))];
+  const initiator = r.roles?.includes('initiator');
+  const diffs = initiator ? ctx.diffs ?? [] : [];
   return [
-    `🧾 *הזמנת הרכש בפרויקט שלך ${ctx.updated ? 'עודכנה והועברה' : 'הועברה'} לספק*${ctx.test ? ' (סביבת בדיקה)' : ''}`,
+    aboutDemand(r) ? `✅ *${demandHeadline(po, r, ctx)}*` : `🧾 *הזמנת הרכש בפרויקט שלך ${ctx.updated ? 'עודכנה והועברה' : 'הועברה'} לספק*${ctx.test ? ' (סביבת בדיקה)' : ''}`,
     `${po.ORDNAME}${po.PROJDES ? ` · 📁 ${po.PROJDES}` : ''}`,
     `🏪 ספק: *${po.CDES ?? po.SUPNAME ?? ''}*`,
+    initiator && ctx.approvedBy ? `✍️ אישר: ${ctx.approvedBy}` : null,
     due.length ? `📅 אספקה: ${due.slice(0, 3).join(', ')}` : null,
+    ...(diffs.length ? ['', '⚠️ *ההזמנה שונה מהדרישה:*', ...diffs.map((d) => `• ${d}`)] : []),
     '',
     ...po.lines.slice(0, MAX_LINES_WA).map((l) => lineText(l, c)),
     po.lines.length > MAX_LINES_WA ? `…ועוד ${po.lines.length - MAX_LINES_WA} שורות — בקובץ` : null,
     '',
     `💰 לפני מע"מ: *${money(po.DISPRICE)} ${c}* · כולל מע"מ: ${money(po.TOTPRICE)} ${c}`,
+    initiator && ctx.buyer ? `📞 לשאלות — ${ctx.buyer} (רכש)` : null,
     ctx.test ? `👥 במקום: ${ctx.realNames || 'אין נמענים'}` : `👤 קיבלת את ההודעה ${roleText(r.roles)}.`,
     '📄 ההזמנה המלאה — בקובץ המצורף.'
   ].filter((x) => x !== null).join('\n');
@@ -154,11 +258,12 @@ function mailOf(po, r, ctx) {
   const field = (k, v) => (v ? `<tr><td style="padding:2px 0;color:#475569;width:110px;">${escape(k)}</td><td style="padding:2px 0;">${escape(v)}</td></tr>` : '');
   const due = [...new Set(po.lines.map((l) => ymd(l.DUEDATE || l.REQDATE)).filter(Boolean))].join(', ');
   const bodyHtml = `
-          <div style="font-size:20px;font-weight:800;margin-bottom:6px;">הזמנת הרכש בפרויקט שלך ${ctx.updated ? 'עודכנה והועברה' : 'הועברה'} לספק</div>
+          <div style="font-size:20px;font-weight:800;margin-bottom:6px;">${aboutDemand(r) ? escape(demandHeadline(po, r, ctx)) : `הזמנת הרכש בפרויקט שלך ${ctx.updated ? 'עודכנה והועברה' : 'הועברה'} לספק`}</div>
+          ${r.roles?.includes('initiator') && (ctx.diffs ?? []).length ? `<div style="margin:10px 0;padding:10px 12px;background:#fff7ed;border:1px solid #fdba74;border-radius:8px;"><div style="font-weight:800;margin-bottom:4px;">⚠️ ההזמנה שונה מהדרישה:</div>${ctx.diffs.map((d) => `<div>• ${escape(d)}</div>`).join('')}</div>` : ''}
           ${ctx.test ? '<div style="color:#a33;font-weight:700;">סביבת בדיקה — אינה הזמנה אמיתית</div>' : ''}
           <table role="presentation" cellpadding="0" cellspacing="0" style="margin:14px 0;font-size:14px;">
             ${field('הזמנה', `${po.ORDNAME} · ${po.STATDES ?? ''}`)}${field('פרויקט', po.PROJDES)}${field('ספק', po.CDES ?? po.SUPNAME)}
-            ${field('אספקה', due)}${field('מנהל הפרויקט', ctx.managerName)}${field('יוזם הדרישה', ctx.initiatorNames)}${field('חברה', ctx.companyLabel)}
+            ${field('אספקה', due)}${field('מנהל הפרויקט', ctx.managerName)}${field('יוזם הדרישה', ctx.initiatorNames)}${field('אישר', ctx.approvedBy)}${field('רכש', ctx.buyer)}${field('חברה', ctx.companyLabel)}
           </table>
           <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="font-size:13px;border-collapse:collapse;">
             <tr style="background:#f1f5f9;font-weight:700;"><td style="${td}">#</td><td style="${td}">פריט</td><td style="${num}">כמות</td><td style="${num}">מחיר</td><td style="${num}">סה"כ</td></tr>
@@ -171,16 +276,17 @@ function mailOf(po, r, ctx) {
           </table>
           <div style="margin-top:16px;color:#475569;font-size:13px;">${ctx.test ? `במקום: ${escape(ctx.realNames || 'אין נמענים')}` : `קיבלת את ההודעה ${escape(roleText(r.roles))}.`} ההזמנה המלאה — ב-PDF המצורף.</div>`;
   const text = [
-    `הזמנת הרכש בפרויקט שלך ${ctx.updated ? 'עודכנה והועברה' : 'הועברה'} לספק${ctx.test ? ' (סביבת בדיקה)' : ''}`,
+    aboutDemand(r) ? demandHeadline(po, r, ctx) : `הזמנת הרכש בפרויקט שלך ${ctx.updated ? 'עודכנה והועברה' : 'הועברה'} לספק${ctx.test ? ' (סביבת בדיקה)' : ''}`,
     `הזמנה: ${po.ORDNAME} · פרויקט: ${po.PROJDES ?? ''} · ספק: ${po.CDES ?? po.SUPNAME ?? ''}`,
+    ...(r.roles?.includes('initiator') && (ctx.diffs ?? []).length ? ['', 'ההזמנה שונה מהדרישה:', ...ctx.diffs.map((d) => `• ${d}`)] : []),
     '',
     ...po.lines.map((l) => lineText(l, c)),
     '',
     `לפני מע"מ: ${money(po.DISPRICE)} ${c} · כולל מע"מ: ${money(po.TOTPRICE)} ${c}`
   ].join('\n');
   return {
-    subject: subjectOf(po, ctx),
-    html: shell({ title: subjectOf(po, ctx), bodyHtml, footerHtml: 'הודעה אוטומטית ממשימון, לפי הזמנת הרכש בפריוריטי. אינה טופס ההזמנה הרשמי.' }),
+    subject: subjectOf(po, ctx, r, ctx),
+    html: shell({ title: subjectOf(po, ctx, r, ctx), bodyHtml, footerHtml: 'הודעה אוטומטית ממשימון, לפי הזמנת הרכש בפריוריטי. אינה טופס ההזמנה הרשמי.' }),
     text
   };
 }
@@ -202,7 +308,14 @@ async function prepare(company, ordname, { updated = false } = {}) {
     initiatorNames: who.initiators.map(label).join(', '),
     realNames: who.recipients.map((r) => `${r.name} (${roleText(r.roles).replace(/^כ/, '')})`).join(', ')
   };
-  const recipients = test ? testRecipients() : who.recipients;
+  // מי אישר, ומי ברכש — לפותח הדרישה; וההבדלים בין הדרישה להזמנה
+  ctx.prdno = po.PRDNO || who.demands[0]?.PRDNO || '';
+  ctx.approvedBy = who.approvers.map(label).join(', ');
+  const buyer = po.OWNERLOGIN && !SYSTEM_LOGIN.test(po.OWNERLOGIN) ? await Priority.priorityUser(company, po.OWNERLOGIN).catch(() => null) : null;
+  ctx.buyer = buyer?.name || '';
+  ctx.diffs = [];
+  for (const d of who.demands) ctx.diffs.push(...await demandDiffs(d, po));
+  const recipients = test ? testRecipients() : who.recipients.map((r) => ({ ...r, roles: r.roles.filter(roleOn) })).filter((r) => r.roles.length);
   const file = {
     buf: orderPdf(po, { companyLabel: ctx.companyLabel, test, manager: ctx.managerName, initiators: who.initiators.map(label), updated }),
     fileName: `${po.ORDNAME}.pdf`, mime: 'application/pdf'
@@ -330,7 +443,9 @@ async function scanCompany(company) {
   const baseline = D.getSetting('po_notify_baseline', {}) ?? {};
   const known = new Map(D.all('SELECT * FROM po_notices WHERE company = ?', company).map((r) => [r.ordname, r]));
   if (!baseline[company]) {
-    for (const o of list) if (!known.has(o.ORDNAME)) record(company, o.ORDNAME, Number(o.CURVERSION) || 1, { status: 'baseline' });
+    // הזמנה מדרישה מהימים האחרונים — לא נרשמת בשקט: פותח הדרישה עוד מחכה לה (בהפעלה של 15.11 — PO26000119 לשזר)
+    const recent = (o) => o.PRDNO && o.CURDATE && Date.now() - Date.parse(o.CURDATE) < RECENT_DAYS * 86400000;
+    for (const o of list) if (!known.has(o.ORDNAME) && !recent(o)) record(company, o.ORDNAME, Number(o.CURVERSION) || 1, { status: 'baseline' });
     D.setSetting('po_notify_baseline', { ...baseline, [company]: D.nowIso() });
     return;
   }
@@ -373,4 +488,4 @@ function start() {
   setTimeout(() => void tick(), 60000).unref?.();
 }
 
-module.exports = { start, tick, notifyOrder, prepare, _internal: { waText, mailOf, recipientsOf, scanCompany, subjectOf } };
+module.exports = { start, tick, notifyOrder, prepare, rememberOpener, _internal: { waText, mailOf, recipientsOf, scanCompany, subjectOf, demandDiffs } };

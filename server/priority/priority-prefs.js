@@ -74,4 +74,22 @@ function set(userId, company, field, value) {
   }
 }
 
-module.exports = { of, lastCompany, remember, warehouseFor, set };
+/*
+ * מי פתח דרישת רכש מהבוט — משתמש משימון, לפי חברה ומספר הדרישה (נרשם כשהדרישה נפתחת, ‎purchase-demand.js‎). כך פותח
+ * הדרישה מקבל "הדרישה אושרה והועברה לספק" (‎po-notify.js‎) גם כשבפריוריטי היא רשומה על משתמש ה-API. נשמר לשנה.
+ */
+const OPENERS = 'pd_openers';
+function rememberOpener(company, prdno, userId) {
+  if (!company || !prdno || !userId) return;
+  try {
+    const m = D.getSetting(OPENERS, {}) ?? {};
+    m[`${company}:${prdno}`] = { userId, at: Date.now() };
+    for (const [k, v] of Object.entries(m)) if (Date.now() - (v?.at ?? 0) > 365 * 86400000) delete m[k];
+    D.setSetting(OPENERS, m);
+  } catch (err) {
+    console.error('[משימון] פותח דרישת רכש:', err.message);
+  }
+}
+const openerOf = (company, prdno) => (D.getSetting(OPENERS, {}) ?? {})[`${company}:${prdno}`]?.userId ?? null;
+
+module.exports = { of, lastCompany, remember, warehouseFor, set, rememberOpener, openerOf };

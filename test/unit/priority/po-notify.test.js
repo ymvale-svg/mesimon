@@ -74,7 +74,7 @@ test('mailOf — הנחת מסמך', () => {
 test('recipientsOf — מנהל ויוזם, בלי משתמשי מערכת ומיילים לא תקינים', async (t) => {
   const u = user({ full_name: 'דנה מנהלת', email: 'dana@corp.test', phone: '0501234567' });
   t.mock.method(Priority, 'projectManager', async () => 'Dana');
-  t.mock.method(Priority, 'demandInitiator', async (c, prdno) => ({ PD1: 'Yossi', PD2: 'master', PD3: 'Dana' }[prdno]));
+  t.mock.method(Priority, 'demandForNotice', async (c, prdno) => ({ PRDNO: prdno, INITUSERLOGIN: { PD1: 'Yossi', PD2: 'master', PD3: 'Dana' }[prdno], approvers: [], lines: [] }));
   t.mock.method(Priority, 'priorityUser', async (c, login) => ({
     Dana: { login: 'Dana', name: 'דנה', email: 'DANA@corp.test', active: true },
     Yossi: { login: 'Yossi', name: 'יוסי', email: 'not-an-email', active: true }
@@ -91,7 +91,7 @@ test('recipientsOf — מנהל ויוזם, בלי משתמשי מערכת ומ�
 
 test('recipientsOf — עובד לא פעיל או מייל של ספק התוכנה: לא נמען', async (t) => {
   t.mock.method(Priority, 'projectManager', async () => 'Ex');
-  t.mock.method(Priority, 'demandInitiator', async () => 'Vendor');
+  t.mock.method(Priority, 'demandForNotice', async (c, prdno) => ({ PRDNO: prdno, INITUSERLOGIN: 'Vendor', approvers: [], lines: [] }));
   t.mock.method(Priority, 'priorityUser', async (c, login) => ({
     Ex: { login: 'Ex', name: 'לשעבר', email: 'ex@corp.test', active: false },
     Vendor: { login: 'Vendor', name: 'ספק התוכנה', email: 'x@medatech.com', active: true }
@@ -103,7 +103,7 @@ test('recipientsOf — עובד לא פעיל או מייל של ספק התוכ
 
 test('recipientsOf — משתמש לא קיים בפריוריטי: השם הוא שם המשתמש', async (t) => {
   t.mock.method(Priority, 'projectManager', async () => 'Unknown');
-  t.mock.method(Priority, 'demandInitiator', async () => null);
+  t.mock.method(Priority, 'demandForNotice', async () => null);
   t.mock.method(Priority, 'priorityUser', async () => null);
   const r = await recipientsOf('mordot', order({ PRDNO: null, lines: [] }));
   assert.deepEqual(r.manager, { login: 'Unknown', name: 'Unknown' });
@@ -154,4 +154,115 @@ test('tick — כבוי בלי חיבור: מאפס את הסריקה הראשו
   await PO.tick();
   assert.equal(fo.mock.callCount(), 0);
   assert.deepEqual(D.getSetting('po_notify_baseline', null), {});
+});
+
+// ---------------------------------------------------------------------------
+// דרישת רכש שאושרה והועברה לספק — פותח הדרישה והמאשר (באג 15.11: PD26000053 ← PO26000119, אף אחד מהם לא קיבל)
+// ---------------------------------------------------------------------------
+
+const { demandDiffs } = PO._internal;
+const demand53 = (over = {}) => ({
+  PRDNO: 'PD26000053', INITUSERLOGIN: 'API VPLANS', OWNERLOGIN: 'ShazarN', approvers: ['Eladh'], dialogLogin: 'ShazarN',
+  lines: [{ PRDI: 172, PARTNAME: '000', PDES: 'יריעות איטום PRE-B · משטח', TQUANT: 4, TUNITNAME: "יח'" }],
+  ...over
+});
+const order119 = (over = {}) => order({
+  ORDNAME: 'PO26000119', PRDNO: 'PD26000053', PROJDOCNO: 'PR-50', PROJDES: 'אלעד סנטר מגרש 50', CDES: 'פזקר בע"מ', OWNERLOGIN: 'ShikmaB',
+  lines: [{ LINE: 1, PRDI: 0, PARTNAME: '10-61-0069', PDES: 'יריעה ביטומנית בעובי 3 מ"מ - גליל', TQUANT: 4, TUNITNAME: 'גלי', PRICE: 175, QPRICE: 700 }],
+  ...over
+});
+const people = {
+  ShazarN: { login: 'ShazarN', name: 'שזר נחמיאס', email: 'shazarn@corp.test', active: true },
+  Eladh: { login: 'Eladh', name: 'אלעד הוד', email: 'eladh@corp.test', active: true },
+  Tengiz: { login: 'Tengiz', name: 'טנגיז', email: 'tengiz@corp.test', active: true }
+};
+
+test('recipientsOf — דרישה מהבוט: היוזם הוא משתמש ה-API, פותח הדרישה הוא הבעלים; המאשר שחתם — גם הוא', async (t) => {
+  const shazar = user({ full_name: 'שזר נחמיאס', email: 'shazarn@corp.test', phone: '0559391365' });
+  const elad = user({ full_name: 'אלעד הוד', email: 'eladh@corp.test', phone: '0500000001' });
+  t.mock.method(Priority, 'projectManager', async () => 'Tengiz');
+  t.mock.method(Priority, 'demandForNotice', async () => demand53());
+  t.mock.method(Priority, 'priorityUser', async (c, login) => people[login] ?? null);
+  const r = await recipientsOf('a160226', order119());
+  const by = Object.fromEntries(r.recipients.map((x) => [x.userId ?? x.email, x.roles.sort()]));
+  assert.deepEqual(by[shazar.id], ['initiator']);
+  assert.deepEqual(by[elad.id], ['approver']);
+  assert.deepEqual(r.initiators.map((x) => x.login), ['ShazarN']);
+});
+
+test('recipientsOf — דרישה ישנה מהבוט בלי בעלים: פותח הדרישה מהדו-שיח הפנימי, או מהרישום של הבוט', async (t) => {
+  const shazar = user({ full_name: 'שזר נחמיאס ב', email: 'shazar2@corp.test', phone: '0559391366' });
+  t.mock.method(Priority, 'projectManager', async () => null);
+  t.mock.method(Priority, 'priorityUser', async (c, login) => people[login] ?? null);
+  t.mock.method(Priority, 'demandForNotice', async () => demand53({ OWNERLOGIN: 'API VPLANS', dialogLogin: 'ShazarN', approvers: [] }));
+  let r = await recipientsOf('a160226', order119());
+  assert.deepEqual(r.initiators.map((x) => x.login), ['ShazarN']);
+  // הבוט רשם מי פתח (גם כשבפריוריטי אין שום סימן) — משתמש משימון ישירות
+  t.mock.method(Priority, 'demandForNotice', async () => demand53({ OWNERLOGIN: 'API VPLANS', dialogLogin: '', approvers: [] }));
+  PO.rememberOpener('a160226', 'PD26000053', shazar.id);
+  r = await recipientsOf('a160226', order119());
+  assert.deepEqual(r.recipients.map((x) => [x.userId, x.roles]), [[shazar.id, ['initiator']]]);
+});
+
+test('demandDiffs — שורות מקושרות: כמות ויחידה; שורה שלא הוזמנה; שורה שנוספה', async () => {
+  const d = demand53({ lines: [
+    { PRDI: 1, PARTNAME: 'M-1', PDES: 'מלט', TQUANT: 10, TUNITNAME: 'שק' },
+    { PRDI: 2, PARTNAME: 'B-2', PDES: 'בלוק 20', TQUANT: 3, TUNITNAME: 'משטח' },
+    { PRDI: 3, PARTNAME: 'H-3', PDES: 'פטיש', TQUANT: 1, TUNITNAME: 'יח' }
+  ] });
+  const po = order({ lines: [
+    { PRDI: 1, PARTNAME: 'M-1', PDES: 'מלט', TQUANT: 10, TUNITNAME: 'שק' },
+    { PRDI: 2, PARTNAME: 'B-2', PDES: 'בלוק 20', TQUANT: 2, TUNITNAME: 'משטח' },
+    { PRDI: 0, PARTNAME: 'X-9', PDES: 'דבק', TQUANT: 5, TUNITNAME: 'שק' }
+  ] });
+  const out = await demandDiffs(d, po);
+  assert.equal(out.length, 3);
+  assert.match(out.join('\n'), /בלוק 20 — 3 משטח ← הוזמן: 2 משטח/);
+  assert.match(out.join('\n'), /פטיש — 1 יח — לא הוזמן/);
+  assert.match(out.join('\n'), /נוסף בהזמנה: דבק — 5 שק/);
+});
+
+test('demandDiffs — בלי קישור בין השורות: ה-AI משווה (יריעות PRE-B ← יריעה ביטומנית)', async (t) => {
+  const Claude = require('../../../server/integrations/claude');
+  t.mock.method(Claude, 'isEnabled', () => true);
+  const ai = t.mock.method(Claude, 'json', async () => ({ diffs: ['ביקשת: יריעות איטום PRE-B — 4 משטח ← הוזמן: יריעה ביטומנית 3 מ"מ — 4 גליל'] }));
+  const out = await demandDiffs(demand53(), order119());
+  assert.equal(ai.mock.callCount(), 1);
+  assert.deepEqual(out, ['ביקשת: יריעות איטום PRE-B — 4 משטח ← הוזמן: יריעה ביטומנית 3 מ"מ — 4 גליל']);
+});
+
+test('demandDiffs — בלי קישור ובלי AI: הרשימות זו מול זו, רק כשהן שונות', async (t) => {
+  const Claude = require('../../../server/integrations/claude');
+  t.mock.method(Claude, 'isEnabled', () => false);
+  const out = await demandDiffs(demand53(), order119());
+  assert.match(out.join('\n'), /ביקשת: יריעות איטום PRE-B · משטח — 4 יח'/);
+  assert.match(out.join('\n'), /הוזמן: יריעה ביטומנית/);
+  const same = demand53({ lines: [{ PRDI: 9, PARTNAME: 'Z', PDES: 'זהה', TQUANT: 1, TUNITNAME: 'יח' }] });
+  assert.deepEqual(await demandDiffs(same, order({ lines: [{ PRDI: 0, PARTNAME: 'Z', PDES: 'זהה', TQUANT: 1, TUNITNAME: 'יח' }] })), []);
+});
+
+test('waText — לפותח הדרישה: "אושרה והועברה לספק", וההבדלים מהדרישה', () => {
+  const t = waText(order119(), { roles: ['initiator'] }, { prdno: 'PD26000053', approvedBy: 'אלעד הוד', buyer: 'שקמה בסר', diffs: ['ביקשת: X ← הוזמן: Y'] });
+  assert.match(t, /✅ \*דרישת הרכש שלך PD26000053 אושרה והועברה לספק\*/);
+  assert.match(t, /אישר: אלעד הוד/);
+  assert.match(t, /⚠️ \*ההזמנה שונה מהדרישה:\*\n• ביקשת: X ← הוזמן: Y/);
+  assert.match(t, /לשאלות — שקמה בסר \(רכש\)/);
+});
+
+test('waText — למאשר: "שאישרת", בלי ההבדלים', () => {
+  const t = waText(order119(), { roles: ['approver'] }, { prdno: 'PD26000053', diffs: ['ביקשת: X ← הוזמן: Y'] });
+  assert.match(t, /✅ \*דרישת הרכש שאישרת PD26000053 הועברה לספק\*/);
+  assert.doesNotMatch(t, /שונה מהדרישה/);
+});
+
+test('scanCompany — סריקה ראשונה: הזמנה מדרישה מהימים האחרונים לא נרשמת בשקט (פותח הדרישה מחכה)', async (t) => {
+  const recent = new Date(Date.now() - 86400000).toISOString();
+  t.mock.method(Priority, 'finalOrders', async () => [
+    { ORDNAME: 'PO-NEW', PRDNO: 'PD9', CURDATE: recent },
+    { ORDNAME: 'PO-OLD', PRDNO: 'PD8', CURDATE: '2026-01-01T00:00:00Z' },
+    { ORDNAME: 'PO-NOPD', CURDATE: recent }
+  ]);
+  await scanCompany('kedma1');
+  const rows = D.all("SELECT ordname FROM po_notices WHERE company = 'kedma1' ORDER BY ordname").map((r) => r.ordname);
+  assert.deepEqual(rows, ['PO-NOPD', 'PO-OLD']);
 });

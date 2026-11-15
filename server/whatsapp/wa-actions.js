@@ -266,6 +266,13 @@ const ACTIONS = [
     enabled: true
   },
   {
+    key: 'instinct', icon: '🤖', label: 'עוזר כללי (אינסטינקט)', channel: 'private',
+    section: 'other', feature: '🤖 *שירותים כלליים* — "תעצב לי את התמונה", "תמיר לי את הקובץ", "תחפש לי ברשת", "מה הקישור הזה?"',
+    description: 'פיילוט — רק מי שב-‎instinct_users‎ (מנהל מערכת כותב בבוט "אינסטינקט רק לי"), עד ‎instinct_open‎ ("תפתח את אינסטינקט לכולם"). בקשה שאינה קשורה לעבודה (עיצוב תמונה, המרת קובץ, תמלול, חיפוש כללי ברשת, הסבר קישור, מתכון) עוברת לאינסטינקט — עוזר חיצוני — מהמספר של הבוט, והתשובה חוזרת לעובד כמו כל תשובה של הבוט. יוצא רק מה שהעובד כתב או צירף, בלי פרטים מזהים (ת"ז, כרטיס, חשבון, טלפון, מייל); קובץ עם פרטים מזהים — לא נשלח. אינסטינקט לא מקבל מידע מהמערכת לעולם; שאלה יזומה שלו שלא קשורה לבקשה — לא נענית, ומנהלי המערכת מקבלים התראה. "אינסטינקט, …" — ישר אליו.',
+    examples: ['תעצב לי את התמונה הזו כמו פוסטר', 'תחפש לי ברשת מתכון לעוגת גבינה', 'מה הקישור הזה עושה?'],
+    enabled: true
+  },
+  {
     key: 'help', icon: '❓', label: 'עזרה', channel: 'private',
     description: 'מה הבוט יודע לעשות — הפעולות שמופעלות לכותב, עם הדוגמאות שכאן.',
     examples: ['מה אתה יודע לעשות?'],
@@ -315,6 +322,9 @@ const PILOT_KEYS = new Set(['reminders', 'sent_followup', 'day_digest', 'briefin
 const PILOT_ROLES = ['superadmin', 'admin'];
 const inPilot = (actor) => actor?.type === 'user' && PILOT_ROLES.includes(actor.role);
 
+/** 🤖 מי בפיילוט של אינסטינקט — מזהי משתמשים. מנהל מערכת קובע בבוט: "אינסטינקט רק לי" */
+const instinctPilot = () => { const v = D.getSetting('instinct_users', []); return Array.isArray(v) ? v.map(Number) : []; };
+
 /**
  * פעולות פריוריטי: מי רשאי — לפי מטריצת ההרשאות של משימון פריוריטי (‎priority-access.js‎, הוחלט 11.11.26),
  * ולא לפי "כולם / מנהלים". ההדלקה והכיבוי — כאן, כמו קודם.
@@ -323,6 +333,8 @@ const PRIORITY_DOC = { goods_receipt: 'receipt', goods_offer: 'receipt', purchas
 
 function allowed(actor, key) {
   const a = byKey(key);
+  // 🤖 אינסטינקט — פיילוט משלו (15.11.26, ישראל: "רק לי, לא לכל המנהלים"): רק מי שב-‎instinct_users‎, עד ‎instinct_open‎
+  if (key === 'instinct' && !D.getSetting('instinct_open', false) && !instinctPilot().includes(actor?.id)) return false;
   if (PILOT_KEYS.has(key) && D.getSetting('bot_pilot', false) && !inPilot(actor)) return false;
   if (PRIORITY_DOC[key]) return Boolean(a?.enabled && PriorityAccess.can(actor, PRIORITY_DOC[key]));
   return Boolean(a?.enabled && (a.audience === 'all' || isManager(actor)));
@@ -345,4 +357,4 @@ function save(input) {
 }
 
 module.exports = {
-  PILOT_KEYS, SECTIONS, inPilot, list, byKey, allowed, forActor, save, isManager };
+  PILOT_KEYS, SECTIONS, inPilot, instinctPilot, list, byKey, allowed, forActor, save, isManager };
