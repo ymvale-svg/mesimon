@@ -536,7 +536,7 @@ function shape(m) {
 function zoomAlert(actor, zoomUser, title, startIso, err) {
   console.error(`[משימון] יצירת פגישת Zoom נכשלה (${zoomUser?.email ?? zoomUser?.id}):`, err.firstError ?? '', err.message);
   const body = [`קבע/ה: ${actor?.name ?? ''}`, `פגישה: ${title} · ${fmtWhen(startIso)}`, `משתמש Zoom: ${zoomUser?.name ?? ''} ${zoomUser?.email ?? ''}`,
-    err.firstError ? `ניסיון ראשון: ${err.firstError}` : null, `שגיאה: ${err.message}`].filter(Boolean).join('\n');
+    err.firstError ? `ניסיון ראשון: ${err.firstError}` : null, `שגיאה: ${err.message}`, `מה לעשות: ${Zoom.explain(err).text}`].filter(Boolean).join('\n');
   try {
     for (const u of D.all("SELECT id FROM users WHERE status = 'active' AND role IN ('superadmin','admin')")) {
       D.notify({ targetType: 'user', targetId: u.id, kind: 'meeting', title: '🎥 Zoom: יצירת פגישה נכשלה', body });
@@ -592,7 +592,9 @@ async function create(actor, input) {
     } catch (err) {
       // לעובד — מה אפשר לעשות; הפרטים הטכניים — למנהלי המערכת
       zoomAlert(actor, pick.zoomUser, title, startIso, err);
-      throw new MeetingError('לא הצלחנו ליצור את קישור ה-Zoom, והפגישה לא נקבעה. אפשר לנסות שוב, לבחור מארח Zoom אחר, או לקבוע ב"במשרד" / "קישור משלי" — מנהלי המערכת קיבלו את פרטי התקלה.');
+      // מנהל מערכת — גם מה לתקן (הוא היחיד שיכול); עובד — רק מה אפשר לעשות עכשיו
+      const admin = ['superadmin', 'admin'].includes(actor?.role);
+      throw new MeetingError(`לא הצלחנו ליצור את קישור ה-Zoom, והפגישה לא נקבעה. אפשר לנסות שוב, לבחור מארח Zoom אחר, או לקבוע ב"במשרד" / "קישור משלי"${admin ? `.\n\nלמנהל המערכת (משתמש ${pick.zoomUser.name}): ${Zoom.explain(err).text}` : ' — מנהלי המערכת קיבלו את פרטי התקלה.'}`);
     }
     if (z.warning) zoomNote = [zoomNote, z.warning].filter(Boolean).join(' · ');
     zoom = { userId: pick.zoomUser.id, id: z.id, joinUrl: z.joinUrl, password: z.password };
