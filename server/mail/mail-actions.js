@@ -566,17 +566,33 @@ async function nextQuestion(userId, allow) {
 // ---------------------------------------------------------------------------
 
 const is = (t, btn, re) => WaUi.sameLabel(t, btn) || re.test(WaUi.normalize(t));
-const OPEN = /^(לפתוח(\s+משימה)?|תפתח(\s+משימה)?|פתח|כן|משימה|👍)([\s,.!?]|$)/;
+// בקשה מפורשת לפתוח משימה. "כן" / 👍 על "זכרת?" פירושם "זכרתי" — לא "לפתוח" (‎YES_REMEMBER‎)
+const OPEN = /^(לפתוח(\s+משימה)?|תפתח(\s+משימה)?|פתח(\s+משימה)?|משימה)([\s,.!?]|$)/;
+const YES_REMEMBER = /^(כן|זכרתי|זוכר|זוכרת|ברור|בטח|👍)([\s,.!?]|$)/;
 const IGNORE = /^(התעלם|תתעלם|לא\s+צריך|לא|עזוב|👎|🙈)([\s,.!]|$)/;
 const TOMORROW = /^(תזכיר(\s+לי)?\s+מחר|מחר|אחר\s+כך|אח"כ|לא\s+עכשיו|תזכיר)([\s,.!]|$)/;
 const RECEIVE = /^(קבלת\s+סחורה|כן|לבצע|יאללה|קדימה|👍)([\s,.!]|$)/;
 
 /**
- * תשובה ל"זכרת?". ‎openTask: true‎ — לפתוח משימה מההצעה (‎confirmPending‎ בבוט). ‎null‎ — נושא חדש.
+ * תשובה ל"זכרת?". ‎openTask: true‎ — לפתוח משימה מההצעה (‎confirmPending‎ בבוט). ‎ask: true‎ — לשאול "לפתוח משימה?"
+ * (הטיוטה נשארת, עם ‎confirm‎). ‎null‎ — נושא חדש.
  */
 function answerReminder(userId, draft, text, { closeAlerted } = {}) {
   const t = String(text ?? '').trim();
-  if (is(t, BTN.open, OPEN)) {
+  /*
+   * "כן" / 👍 — על "זכרת?" זה "כן, זכרתי", לא אישור לפתוח משימה (באג: משימה ממייל נפתחה בלי
+   * שהעובד ביקש, 15.11.26). שואלים במפורש "לפתוח משימה?" — ורק על השאלה הזו "כן" / 👍 פותח.
+   */
+  if (!draft.confirm && YES_REMEMBER.test(WaUi.normalize(t))) {
+    return {
+      ask: true,
+      text: 'מעולה 👍 *לפתוח לזה משימה?*',
+      buttons: [BTN.open, BTN.ignore],
+      draft: { ...draft, confirm: true },
+      result: `זכר — לפתוח משימה? ${draft.title ?? ''}`.trim()
+    };
+  }
+  if (is(t, BTN.open, OPEN) || (draft.confirm && YES_REMEMBER.test(WaUi.normalize(t)))) {
     setRemind(draft.suggestionId, { closed: 'task', at: D.nowIso() });
     return { openTask: true, result: `לפתוח משימה: ${draft.title}` };
   }

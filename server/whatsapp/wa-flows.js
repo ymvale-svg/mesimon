@@ -442,6 +442,10 @@ async function flowOnMailRemindOrGoods(ctx) {
         const c = await confirmPending(actor, { kind: 'mail_task', alert: true, suggestionIds: [d.suggestionId], title: d.title }, dry);
         return out(c.reply, { draft: null }, { action: 'mail_deadline', status: c.status, result: String(c.result ?? r.result).slice(0, 300), taskId: c.taskId ?? null });
       }
+      if (r?.ask) {
+        // "כן" על "זכרת?" — עוד לא פותחים; שואלים במפורש, והשאלה ממתינה
+        return out(r.text, { draft: r.draft, awaiting: true }, { action: 'mail_deadline', status: 'ok', result: r.result.slice(0, 300), buttons: r.buttons });
+      }
       if (r) {
         // "התעלם" — גם מהתובנות ומ"היום"; פעם שנייה מאותו שולח — "לא להקפיץ יותר?"
         const sug = !dry && /^התעלם/.test(r.result) ? D.get('SELECT id, gmail_id, from_email, from_name FROM ai_suggestions WHERE id = ?', d.suggestionId) : null;
