@@ -10,6 +10,7 @@ module.exports = {
   get GoodsReceipt() { return require('./goods-receipt'); },
   get GrPdf() { return require('./gr-pdf'); },
   get PurchaseDemand() { return require('./purchase-demand'); },
+  get PdReturn() { return require('./pd-return'); },
   get PriorityPrefs() { return require('./priority-prefs'); },
   get PrioritySettings() { return require('./priority-settings'); },
   get PriorityAccess() { return require('./priority-access'); },

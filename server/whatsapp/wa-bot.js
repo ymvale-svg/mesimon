@@ -1137,7 +1137,7 @@ async function handleDirect(msg) {
     const open = pressed.owner === 'goods_receipt' ? GoodsReceipt.active(user.id, true) && !GoodsReceipt.inMenu(user.id) : PurchaseDemand.active(user.id, true);
     if (open) forceFlow = pressed.owner;
   }
-  if (!forceChat && forceFlow !== 'goods_receipt' && pdAllowed && (PurchaseDemand.active(user.id, late) || forceFlow === 'purchase_demand' || (PurchaseDemand.opens(text) && !(msg.file && !text)))) {
+  if (!forceChat && forceFlow !== 'goods_receipt' && pdAllowed && (PurchaseDemand.active(user.id, late) || forceFlow === 'purchase_demand' || (PurchaseDemand.opens(text, user.id) && !(msg.file && !text)))) {
     let pre = '';
     if (!PurchaseDemand.active(user.id, late)) {
       // דרישה חדשה — תפריט פריוריטי יורד, וקבלת סחורה פתוחה — לפי ההגדרה (מבוטלת / מושהית)

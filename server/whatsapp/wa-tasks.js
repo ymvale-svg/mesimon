@@ -205,7 +205,34 @@ function messageUser(userId, text, action) {
   return true;
 }
 
-PurchaseDemand.setHooks({ send: (userId, text) => messageUser(userId, text, 'purchase_demand') });
+/**
+ * הודעה יזומה עם כפתורים שחוזרים לדרישת הרכש (החזרה לבדיקה: "✏️ לתקן" / "✅ הכל נכון"). מחוץ לשעות — לתור כטקסט,
+ * עם האפשרויות כשורות (הכיתוב עצמו הוא התשובה, גם כשמקלידים אותו).
+ */
+async function askUser(userId, text, buttons, action) {
+  if (!D.getSetting('wa_bot_enabled', true) || !isConfigured()) return false;
+  const u = D.get("SELECT id, full_name, phone FROM users WHERE id = ? AND status = 'active'", userId);
+  if (!u?.phone) return false;
+  if (!workHours(u.id)) return messageUser(userId, `${text}\n\n${buttons.map((b) => `▫️ ${b}`).join('\n')}`, action);
+  const chatId = `${u.phone}@c.us`;
+  try {
+    const parts = splitMessage(text);
+    for (let i = 0; i < parts.length; i++) {
+      if (i === parts.length - 1) await sendButtons(chatId, parts[i], buttons, { owner: 'purchase_demand' });
+      else await sendText(chatId, parts[i]);
+    }
+    log({ channel: 'summary', chatId, userId: u.id, who: u.full_name, action, status: 'ok', result: text.split('\n')[0].slice(0, 300) });
+    return true;
+  } catch (err) {
+    log({ channel: 'summary', chatId, userId: u.id, who: u.full_name, action, status: 'error', result: err.message });
+    return false;
+  }
+}
+
+PurchaseDemand.setHooks({
+  send: (userId, text) => messageUser(userId, text, 'purchase_demand'),
+  ask: (userId, text, buttons) => askUser(userId, text, buttons, 'purchase_demand')
+});
 
 WaScan.setHooks({
   ask: (userId, text) => messageUser(userId, text, 'wa_scan_ask'),
