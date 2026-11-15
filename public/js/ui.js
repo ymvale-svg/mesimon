@@ -937,8 +937,16 @@ const UI = (() => {
 
   const spinner = () => el('div.spinner');
 
-  const field = (label, control, hint) =>
-    el('div.field', {}, [el('label', { text: label }), control, hint ? el('span.hint', { text: hint }) : null]);
+  // התווית מקושרת לשדה (for/id), כדי שקורא מסך יקריא את שם השדה כשמגיעים אליו
+  let fieldSeq = 0;
+  const field = (label, control, hint) => {
+    let forId = null;
+    if (control instanceof Element && /^(INPUT|SELECT|TEXTAREA)$/.test(control.tagName)) {
+      if (!control.id) control.id = `fld-${++fieldSeq}`;
+      forId = control.id;
+    }
+    return el('div.field', {}, [el('label', { text: label, for: forId }), control, hint ? el('span.hint', { text: hint }) : null]);
+  };
 
   /**
    * רשימה נפתחת. פריט שיש בו ‎options‎ הוא קבוצה ומתורגם ל-‎optgroup‎ — כך
