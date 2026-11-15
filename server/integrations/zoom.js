@@ -79,11 +79,19 @@ async function accessToken(key) {
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new ZoomError(`Zoom דחה את החיבור לחשבון ${key} (${res.status}): ${data.reason ?? data.error ?? ''}`.trim());
-  tokens.set(key, { value: data.access_token, expires: Date.now() + (Number(data.expires_in ?? 3600) - 60) * 1000 });
+  // ‎scope‎ — ההרשאות שבתוך האסימון (נקבעות כשהוא נוצר). לבדיקת המנהל: האם מה שהוסיפו ב-Marketplace באמת כאן
+  tokens.set(key, { value: data.access_token, expires: Date.now() + (Number(data.expires_in ?? 3600) - 60) * 1000, scope: String(data.scope ?? ''), at: Date.now() });
   return data.access_token;
 }
 
-async function call(key, method, path, body = null) {
+/** ההרשאות שבאסימון הנוכחי של החשבון (אחרי ‎accessToken‎) */
+const tokenScopes = (key) => (tokens.get(key)?.scope ?? '').split(/\s+/).filter(Boolean);
+
+/**
+ * ‎retried‎ — שגיאת הרשאות (4711) עם אסימון ישן: הרשאות שנוספו ב-Marketplace נכנסות רק לאסימון חדש,
+ * והאסימון נשמר עד שעה. מבקשים אסימון חדש ומנסים פעם אחת.
+ */
+async function call(key, method, path, body = null, retried = false) {
   if (!accountEnabled(key)) throw new ZoomError(key === '1' ? 'חיבור Zoom אינו מוגדר בשרת' : `חשבון Zoom ${key} אינו מוגדר בשרת`);
   const res = await fetch(`${API}${path}`, {
     method,
@@ -97,10 +105,16 @@ async function call(key, method, path, body = null) {
     let msg = text.slice(0, 200);
     let code = null;
     try { const j = JSON.parse(text); msg = j.message ?? msg; code = j.code ?? null; } catch { /* טקסט */ }
+    if (!retried && (Number(code) === 4711 || /does not contain scopes/i.test(msg))) {
+      console.warn(`[משימון] Zoom: לאסימון של חשבון ${key} חסרות הרשאות — מבקש אסימון חדש ומנסה שוב`);
+      tokens.delete(key);
+      return call(key, method, path, body, true);
+    }
     const err = new ZoomError(`Zoom החזיר ${res.status}${code ? ` (קוד ${code})` : ''}: ${msg}`);
     err.status = res.status;
     err.code = code;
     err.zoomMessage = msg;
+    err.account = key;
     throw err;
   }
   return text ? JSON.parse(text) : {};
@@ -326,12 +340,16 @@ async function createMeeting(zoomUserId, opts) {
  */
 async function testCreate(zoomUserId) {
   const startIso = new Date(Date.now() + 60 * 60000).toISOString();
+  const key = accountOfUser(zoomUserId);
+  // תמיד באסימון טרי — כדי לראות את ההרשאות כפי שהן עכשיו ב-Marketplace
+  tokens.delete(key);
+  const scopesNow = async () => { try { await accessToken(key); } catch { /* ריק */ } return tokenScopes(key); };
   try {
     const z = await createMeeting(zoomUserId, { title: 'בדיקת משימון — אפשר למחוק', startIso, minutes: 15, agenda: '', record: false });
     await deleteMeeting(z.id).catch(() => {});
-    return { ok: true, warning: z.warning || '' };
+    return { ok: true, warning: z.warning || '', account: key, scopes: tokenScopes(key) };
   } catch (err) {
-    return { ok: false, status: err.status ?? null, code: err.code ?? null, message: err.zoomMessage ?? err.message, firstError: err.firstError ?? null, explain: explain(err).text };
+    return { ok: false, account: key, status: err.status ?? null, code: err.code ?? null, message: err.zoomMessage ?? err.message, firstError: err.firstError ?? null, explain: explain(err).text, scopes: await scopesNow() };
   }
 }
 
