@@ -308,7 +308,7 @@ async function engagement(userId, days = 3) {
   const asked = rows.filter(({ r }) => Date.now() - Date.parse(r.askedAt) > 2 * HOUR);
   let engaged = 0;
   for (const { row, r } of asked) {
-    if (['task', 'answered', 'archived'].includes(r.closed)) { engaged++; continue; }
+    if (['task', 'answered', 'archived', 'declined'].includes(r.closed)) { engaged++; continue; }
     if (r.closed) continue;
     // טיפל ב-Gmail אחרי התזכורת (ענה / ארכב) — זה מענה, לא התעלמות
     const handled = await handledInGmail(row);
@@ -569,7 +569,9 @@ const is = (t, btn, re) => WaUi.sameLabel(t, btn) || re.test(WaUi.normalize(t));
 // בקשה מפורשת לפתוח משימה. "כן" / 👍 על "זכרת?" פירושם "זכרתי" — לא "לפתוח" (‎YES_REMEMBER‎)
 const OPEN = /^(לפתוח(\s+משימה)?|תפתח(\s+משימה)?|פתח(\s+משימה)?|משימה)([\s,.!?]|$)/;
 const YES_REMEMBER = /^(כן|זכרתי|זוכר|זוכרת|ברור|בטח|👍)([\s,.!?]|$)/;
-const IGNORE = /^(התעלם|תתעלם|לא\s+צריך|לא|עזוב|👎|🙈)([\s,.!]|$)/;
+// "לא" לבד על "זכרת?" — "לא זכרתי", כלומר צריך את התזכורת; לא "התעלם" (‎NO_REMEMBER‎)
+const IGNORE = /^(התעלם|תתעלם|לא\s+צריך|עזוב|👎|🙈)([\s,.!]|$)/;
+const NO_REMEMBER = /^(לא|לא\s+זכרתי|שכחתי|אופס)([\s,.!]|$)/;
 const TOMORROW = /^(תזכיר(\s+לי)?\s+מחר|מחר|אחר\s+כך|אח"כ|לא\s+עכשיו|תזכיר)([\s,.!]|$)/;
 const RECEIVE = /^(קבלת\s+סחורה|כן|לבצע|יאללה|קדימה|👍)([\s,.!]|$)/;
 
@@ -590,6 +592,24 @@ function answerReminder(userId, draft, text, { closeAlerted } = {}) {
       buttons: [BTN.open, BTN.ignore],
       draft: { ...draft, confirm: true },
       result: `זכר — לפתוח משימה? ${draft.title ?? ''}`.trim()
+    };
+  }
+  /*
+   * "לא" / "שכחתי" על "זכרת?" — דווקא אז צריך את המייל: עד עכשיו זה נחשב "התעלם" והמייל ירד מכל
+   * הרשימות (15.11.26). מציעים לפתוח משימה. "לא" על השאלה "לפתוח משימה?" — בלי משימה ובלי עוד
+   * תזכורות, אבל המייל נשאר ב"היום" (רק "התעלם" מוריד אותו).
+   */
+  if (NO_REMEMBER.test(WaUi.normalize(t))) {
+    if (draft.confirm) {
+      setRemind(draft.suggestionId, { closed: 'declined', at: D.nowIso() });
+      return { text: 'בסדר, בלי משימה 👍 המייל נשאר ב"היום".', result: `לא לפתוח משימה: ${draft.title}` };
+    }
+    return {
+      ask: true,
+      text: 'קורה 🙂 *לפתוח לזה משימה,* כדי שלא יישכח?',
+      buttons: [BTN.open, BTN.ignore],
+      draft: { ...draft, confirm: true },
+      result: `לא זכר — לפתוח משימה? ${draft.title ?? ''}`.trim()
     };
   }
   if (is(t, BTN.open, OPEN) || (draft.confirm && YES_REMEMBER.test(WaUi.normalize(t)))) {

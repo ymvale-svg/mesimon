@@ -49,3 +49,40 @@ test('"התעלם" אחרי "כן" — לא נפתחת משימה', () => {
   const r = MailActions.answerReminder(u.id, first.draft, MailActions.BTN.ignore);
   assert.ok(!r.openTask);
 });
+
+/*
+ * "לא" על "זכרת?" — "לא זכרתי": דווקא אז צריך את המייל. עד 15.11.26 זה נחשב "התעלם" והמייל ירד.
+ */
+const remindOf = (id) => JSON.parse(D.get('SELECT data FROM ai_suggestions WHERE id = ?', id).data).remind ?? {};
+
+for (const answer of ['לא', 'לא זכרתי', 'שכחתי']) {
+  test(`"${answer}" על "זכרת?" — לא "התעלם": מציע לפתוח משימה, והמייל לא יורד`, () => {
+    const u = user();
+    const d = draftFor(u);
+    const r = MailActions.answerReminder(u.id, d, answer);
+    assert.ok(!r.openTask);
+    assert.equal(r.ask, true);
+    assert.equal(r.draft.confirm, true);
+    assert.equal(remindOf(d.suggestionId).closed, undefined, 'לא סומן "התעלם"');
+  });
+}
+
+test('"לא" על "לפתוח משימה?" — בלי משימה ובלי עוד תזכורות, אבל לא "התעלם"', () => {
+  const u = user();
+  const d = draftFor(u);
+  const first = MailActions.answerReminder(u.id, d, 'לא');
+  const r = MailActions.answerReminder(u.id, first.draft, 'לא');
+  assert.ok(!r.openTask && !r.ask);
+  assert.equal(remindOf(d.suggestionId).closed, 'declined');
+  assert.equal(D.get('SELECT status FROM ai_suggestions WHERE id = ?', d.suggestionId).status, 'pending', 'נשאר ב"היום"');
+});
+
+test('"התעלם" ו-👎 — עדיין מתעלמים', () => {
+  const u = user();
+  const a = draftFor(u);
+  MailActions.answerReminder(u.id, a, MailActions.BTN.ignore);
+  assert.equal(remindOf(a.suggestionId).closed, 'ignored');
+  const b = draftFor(u);
+  MailActions.answerReminder(u.id, b, '👎');
+  assert.equal(remindOf(b.suggestionId).closed, 'ignored');
+});
