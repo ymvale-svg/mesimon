@@ -286,6 +286,18 @@ const UI = (() => {
    * שואלים קודם. ‎sticky‎ מחרוזת — שאלת האישור. ‎close()‎ סוגר בלי לשאול —
    * לסיום מוצלח.
    */
+  /**
+   * חלון — או אותו תוכן בתוך מסך אחר (‎into‎, למשל לשונית ב"⚙ ההגדרות שלי"). כך כל הגדרה נבנית במקום אחד,
+   * ונפתחת גם לבד וגם כחלק מהמסך המאוחד. בתוך מסך: בלי כותרת וכפתור סגירה (‎data-close‎ בכפתורי התחתית).
+   * מחזיר ‎{ close() }‎ בשני המקרים.
+   */
+  function modalOrInline(into, opts) {
+    if (!into) return modal(opts);
+    const foot = (opts.footer ?? []).filter((n) => n && !n.dataset?.close && !n.classList?.contains('spacer'));
+    mount(into, opts.body, foot.length ? el('div.flex.mt', { style: { gap: '8px', flexWrap: 'wrap' } }, foot) : null);
+    return { close() {} };
+  }
+
   function modal({ title, body, footer, size = '', onClose, side = false, autofocus = true, label = null, ignoreOutside = null, sticky = false }) {
     const root = modalRoot();
     const asSide = side && !PHONE_MQ.matches;
@@ -1885,7 +1897,7 @@ const UI = (() => {
     el, clear, mount,
     formatDate, formatDateTime, relative, dueLabel, toInputDate, fromInputDate,
     initials, avatar, priorityTag, statusTag, taskTags,
-    modal, sheet, openLayers, confirm, prompt, pickDueDate, toast, undoToast, error, success, taskCreated, notifyPop, clearNotifyPops,
+    modal, modalOrInline, sheet, openLayers, confirm, prompt, pickDueDate, toast, undoToast, error, success, taskCreated, notifyPop, clearNotifyPops,
     empty, spinner, field, select, phone, projectPicker, rankProjects,
     renderMentions, fileSize, fileIcon, announceAutoStatus,
     usersByDepartment,

@@ -94,3 +94,10 @@ test('הגדרה אישית שנשמרת מהמסך (‎/api/prefs‎) מוכר�
   const tabs = new Set(C.PERSONAL_TABS.map((t) => t.key));
   for (const [k, p] of Object.entries(C.PERSONAL)) if (p.ui !== false) assert.ok(tabs.has(p.tab), `${k}: לשונית ${p.tab}`);
 });
+
+test('"⚙ ההגדרות שלי" — הלשוניות במסך הן בדיוק הלשוניות בקטלוג, באותו סדר', () => {
+  const src = fs.readFileSync(path.join(ROOT, 'public/js/app.js'), 'utf8');
+  const block = /const MY_TABS = \[([\s\S]*?)\];/.exec(src)[1];
+  const ui = [...block.matchAll(/key: '([a-z]+)', label: '([^']+)'/g)].map((m) => ({ key: m[1], label: m[2] }));
+  assert.deepEqual(ui, C.PERSONAL_TABS.map(({ key, label }) => ({ key, label })));
+});

@@ -1073,7 +1073,8 @@ const App = (() => {
     return rows;
   }
 
-  function notifSettingsDialog() {
+  /** ‎into‎ — בתוך לשונית ב"⚙ ההגדרות שלי" במקום חלון */
+  function notifSettingsDialog({ into = null } = {}) {
     const body = el('div');
 
     const draw = () => {
@@ -1238,12 +1239,12 @@ const App = (() => {
     draw();
     // סגירה דרך ‎m.close()‎ ולא הסרת ‎.modal-backdrop‎ הראשון במסמך: כשנפתחים
     // שני חלונות זה מעל זה, "הראשון" הוא דווקא זה שמתחת
-    const m = UI.modal({
+    const m = UI.modalOrInline(into, {
       title: 'ניהול התראות',
       body,
       footer: [
         el('div.spacer'),
-        el('button.btn', { onclick: () => m.close() }, ['סגירה'])
+        el('button.btn', { 'data-close': '1', onclick: () => m.close() }, ['סגירה'])
       ]
     });
   }
@@ -1580,7 +1581,7 @@ const App = (() => {
       may('view_reports') ? route('reports', ['דוח', 'דוחות', 'סטטיסטיקה', 'עומס', 'reports']) : null,
       // אותו תנאי בדיוק כמו פריט "ניהול המערכת" בתפריט הצד
       // ⚙ "הגדרות" — קודם ההגדרות של העובד עצמו (החשבון שלי). הגדרות המערכת — "ניהול" / "הגדרות מערכת" (15.11.26)
-      { kind: 'action', title: '⚙ ההגדרות שלי', keys: ['הגדרות', 'ההגדרות שלי', 'החשבון שלי', 'פרופיל', 'העדפות', 'settings'], run: () => userMenu() },
+      { kind: 'action', title: '⚙ ההגדרות שלי', keys: ['הגדרות', 'ההגדרות שלי', 'החשבון שלי', 'פרופיל', 'העדפות', 'settings'], run: () => openMySettings() },
       may('manage_users') || may('manage_automations') || may('assign_task_to_vendor') || can('create_project')
         ? route('admin', ['ניהול', 'הגדרות מערכת', 'משתמשים', 'הרשאות', 'אוטומציות', 'admin', 'system settings'])
         : null,
@@ -2974,70 +2975,95 @@ const App = (() => {
     ]);
   }
 
-  /** ⚙ ההגדרות שלי ← 🤖 הבוט: מה הבוט שולח לי. כל אחד קובע לעצמו (‎user_prefs.botPrefs‎) */
-  function openBotPrefs() {
-    const m = UI.modal({
-      title: '🤖 הבוט שלי — מה הוא שולח לי',
-      body: el('div', {}, [
-        el('div.mute-sm', { text: 'הבוט הוא המזכירה: מזכיר, מציע תשובות למיילים ומביא נתונים כשמבקשים. משימות — במשימון.' }),
-        botPrefsBox()
-      ]),
-      footer: [el('div.spacer'), el('button.btn', { onclick: () => m.close() }, ['סגירה'])]
-    });
-  }
 
-  function userMenu() {
-    const m = UI.modal({
-      title: 'החשבון שלי',
-      body: el('div', {}, [
-        el('div.flex', { style: { gap: '12px', marginBottom: '16px' } }, [
-          UI.avatar(state.actor.name, { vendor: isVendor() }),
-          el('div', {}, [
-            el('b', { text: state.actor.name }),
-            el('div.mute-sm', { text: state.actor.email })
-          ])
-        ]),
-        el('table.data', { style: { width: '100%' } }, [
-          el('tbody', {}, [
-            state.actor.roleLabel
-              ? el('tr', {}, [el('th', { text: 'רמת גישה' }), el('td', { text: state.actor.roleLabel })])
-              : null,
-            state.actor.department ? el('tr', {}, [el('th', { text: 'מחלקה' }), el('td', { text: state.actor.department })]) : null,
-            isVendor() ? null : phoneRow(),
-            isVendor() ? null : officePhoneRow(),
-            isVendor() ? el('tr', {}, [el('th', { text: 'הרשאת עדכון' }), el('td', { text: state.actor.readOnly ? 'צפייה בלבד' : 'מלאה' })]) : null,
-            themeRow()
-          ])
-        ]),
-        // הוואטסאפ האישי משמש את משימות ה-AI להמשך מעקב מהמספר של המשתמש
-        isVendor() ? null : el('button.btn.mt', { onclick: () => AiTaskView.openWhatsApp() }, ['💬 חיבור הוואטסאפ שלי']),
-        // חיבור Google: Gmail (סריקה ותשובות), יומן ל-Today, ואנשי קשר למשימת AI
-        isVendor() ? null : el('button.btn.mt', { style: { marginInlineStart: '8px' }, 'data-anchor': 'account.google', onclick: () => AiInboxView.openGmail(() => refreshView()) }, ['🔗 חיבור Google ועוזר ה-AI']),
-        isVendor() ? null : el('button.btn.mt', { style: { marginInlineStart: '8px' }, onclick: () => TodayView.openSettings() }, ['☀ Today והקלטה']),
-        isVendor() ? null : el('button.btn.mt', { style: { marginInlineStart: '8px' }, onclick: () => openBotPrefs() }, ['🤖 הבוט שלי']),
-        isVendor() ? null : el('button.btn.mt', {
-          style: { marginInlineStart: '8px' },
-          onclick: () => { m.close(); navigate('phonebook'); }
-        }, ['📒 אלפון ארגוני']),
-        isVendor() ? null : el('button.btn.mt', {
-          style: { marginInlineStart: '8px' },
-          'data-anchor': 'account.whats-new',
-          onclick: () => { m.close(); WhatsNewView.open({ force: true }); }
-        }, ['✨ מה חדש במערכת']),
-        el('div.alert.alert-info.mt', {}, [
-          el('div', {}, [
-            el('b', { text: 'מה מותר לי במערכת?' }),
-            el('div', { text: 'ההרשאות נקבעות לפי מטריצת ההרשאות של המחלקה. לשינוי — יש לפנות למנהל המערכת.' })
-          ])
+
+  /*
+   * ⚙ ההגדרות שלי — מסך אחד עם לשוניות (15.11.26, "תוכנית — חלוקת תפקידים בוט ומשימון.md" סעיף 5.1). כל לשונית מציגה את
+   * אותו תוכן שנפתח גם כחלון לבד (‎UI.modalOrInline‎) — כל הגדרה נבנית במקום אחד. הלשוניות תואמות את
+   * ‎PERSONAL_TABS‎ בקטלוג ההגדרות (‎server/core/settings-catalog.js‎; נבדק ב-‎settings-catalog.test.js‎).
+   */
+  const MY_TABS = [
+    { key: 'profile', label: '👤 פרטים' },
+    { key: 'bot', label: '🤖 הבוט', staff: true },
+    { key: 'google', label: '🔗 Google ומייל', staff: true },
+    { key: 'whatsapp', label: '💬 הוואטסאפ שלי', staff: true },
+    { key: 'today', label: '☀️ Today והקלטה', staff: true },
+    { key: 'notify', label: '🔔 התראות' },
+    { key: 'view', label: '🎨 תצוגה' }
+  ];
+  const MY_TAB_KEY = 'mesimon.mySettingsTab';
+
+  function profilePane(close) {
+    return el('div', {}, [
+      el('div.flex', { style: { gap: '12px', marginBottom: '16px' } }, [
+        UI.avatar(state.actor.name, { vendor: isVendor() }),
+        el('div', {}, [el('b', { text: state.actor.name }), el('div.mute-sm', { text: state.actor.email })])
+      ]),
+      el('table.data', { style: { width: '100%' } }, [
+        el('tbody', {}, [
+          state.actor.roleLabel ? el('tr', {}, [el('th', { text: 'רמת גישה' }), el('td', { text: state.actor.roleLabel })]) : null,
+          state.actor.department ? el('tr', {}, [el('th', { text: 'מחלקה' }), el('td', { text: state.actor.department })]) : null,
+          isVendor() ? null : phoneRow(),
+          isVendor() ? null : officePhoneRow(),
+          isVendor() ? el('tr', {}, [el('th', { text: 'הרשאת עדכון' }), el('td', { text: state.actor.readOnly ? 'צפייה בלבד' : 'מלאה' })]) : null
         ])
       ]),
+      isVendor() ? null : el('div.flex.mt', { style: { gap: '8px', flexWrap: 'wrap' } }, [
+        el('button.btn', { onclick: () => { close(); navigate('phonebook'); } }, ['📒 אלפון ארגוני']),
+        el('button.btn', { 'data-anchor': 'account.whats-new', onclick: () => { close(); WhatsNewView.open({ force: true }); } }, ['✨ מה חדש במערכת'])
+      ]),
+      el('div.alert.alert-info.mt', {}, [el('div', {}, [
+        el('b', { text: 'מה מותר לי במערכת?' }),
+        el('div', { text: 'ההרשאות נקבעות לפי מטריצת ההרשאות של המחלקה. לשינוי — יש לפנות למנהל המערכת.' })
+      ])])
+    ]);
+  }
+
+  function openMySettings(tab = null) {
+    const tabs = MY_TABS.filter((t) => !t.staff || !isVendor());
+    let saved = null;
+    try { saved = localStorage.getItem(MY_TAB_KEY); } catch { /* בלי אחסון */ }
+    let current = tabs.find((t) => t.key === (tab || saved))?.key ?? 'profile';
+    const strip = el('div.my-tabs', { role: 'tablist', style: { display: 'flex', flexWrap: 'wrap', gap: '6px', marginBottom: '14px' } });
+    const pane = el('div', { role: 'tabpanel' });
+    const show = (key) => {
+      current = key;
+      try { localStorage.setItem(MY_TAB_KEY, key); } catch { /* בלי אחסון */ }
+      UI.mount(strip, tabs.map((t) => el(`button.btn.btn-sm${t.key === key ? '.btn-primary' : ''}`, {
+        type: 'button', role: 'tab', 'aria-selected': String(t.key === key), text: t.label, onclick: () => show(t.key)
+      })));
+      // מכל לשונית — מיכל חדש: לשונית שנטענת לאט (Google, Today) כותבת למיכל שלה, ולא דורסת את הלשונית שנבחרה אחריה
+      const box = el('div');
+      UI.mount(pane, box);
+      if (key === 'profile') UI.mount(box, profilePane(() => m.close()));
+      else if (key === 'bot') UI.mount(box, el('div', {}, [
+        el('div.mute-sm', { text: 'הבוט הוא המזכירה: מזכיר, מציע תשובות למיילים ומביא נתונים כשמבקשים. משימות — במשימון.' }),
+        botPrefsBox()
+      ]));
+      else if (key === 'google') AiInboxView.openGmail(() => refreshView(), { into: box });
+      else if (key === 'whatsapp') AiTaskView.openWhatsApp({ into: box });
+      else if (key === 'today') TodayView.openSettings({ into: box });
+      else if (key === 'notify') notifSettingsDialog({ into: box });
+      else if (key === 'view') UI.mount(box, el('table.data', { style: { width: '100%' } }, [el('tbody', {}, [themeRow()])]));
+    };
+    const m = UI.modal({
+      title: '⚙ ההגדרות שלי',
+      size: 'wide',
+      body: el('div', {}, [strip, pane]),
       footer: [
         el('button.btn.btn-danger', { onclick: () => { m.close(); logout(); } }, ['התנתקות']),
         el('div.spacer'),
         el('button.btn', { onclick: () => m.close() }, ['סגירה'])
       ]
     });
+    show(current);
   }
+
+  /** "החשבון שלי" (עיגול השם, ⚙ בטלפון) — מסך ההגדרות שלי, בלשונית הפרטים */
+  function userMenu() { openMySettings('profile'); }
+
+  /** ⚙ ההגדרות שלי ← 🤖 הבוט (מקישור בהתראות) */
+  function openBotPrefs() { openMySettings('bot'); }
 
   /** סגירת מגירת הניווט. נקראת גם בניווט, גם בלחיצה על הרקע וגם ב-Escape. */
   /**

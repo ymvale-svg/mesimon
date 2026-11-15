@@ -719,7 +719,8 @@ const AiInboxView = (() => {
 
   // ------------------------------------------------------------ חיבור Gmail והעדפות
 
-  async function openGmail(onChange = () => {}) {
+  /** ‎into‎ — בתוך לשונית ב"⚙ ההגדרות שלי" במקום חלון */
+  async function openGmail(onChange = () => {}, { into = null } = {}) {
     let info;
     try {
       info = await API.get('/api/me/gmail');
@@ -727,7 +728,7 @@ const AiInboxView = (() => {
       return UI.error(err);
     }
     const body = el('div');
-    const m = UI.modal({ title: '🔗 חיבור Google ועוזר ה-AI', body, size: 'wide' });
+    const m = UI.modalOrInline(into, { title: '🔗 חיבור Google ועוזר ה-AI', body, size: 'wide' });
 
     const refresh = (next) => { info = next; draw(); onChange(); };
     const pref = (key, label, hint) => {
