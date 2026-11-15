@@ -233,6 +233,13 @@ async function expire(id) {
   const row = rowById(id);
   if (row?.status !== 'sent') return;
   D.run("UPDATE instinct_requests SET status = 'timeout' WHERE id = ?", id);
+  // העובד כבר קיבל תשובה מאינסטינקט אחרי הבקשה הזו (על בקשה אחרת שלו, או בלי ציטוט) — לא מבהילים אותו ולא את המנהלים
+  const since = D.get("SELECT 1 AS ok FROM instinct_requests WHERE user_id = ? AND id <> ? AND answered_at IS NOT NULL AND answered_at >= ?", row.user_id, id, row.sent_at || row.created_at);
+  if (since) {
+    log({ channel: 'private', userId: row.user_id, action: 'instinct', status: 'ok', result: 'פג הזמן, אבל העובד כבר קיבל תשובה אחריה — בלי הודעה' });
+    if (row.user_msg_id) void tellUser(id, '', '');
+    return;
+  }
   log({ channel: 'private', userId: row.user_id, action: 'instinct', status: 'error', result: `אינסטינקט לא ענה תוך ${Math.round(cfg.TIMEOUT_MS / 60000)} דקות` });
   if (row.kind === 'request') await tellUser(id, '⌛ לא קיבלתי תשובה הפעם. נסו שוב בעוד כמה דקות 🙏', '');
   alertAdmins(`⌛ אינסטינקט לא ענה על בקשה תוך ${Math.round(cfg.TIMEOUT_MS / 60000)} דקות.`);
