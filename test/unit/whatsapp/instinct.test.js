@@ -495,3 +495,46 @@ test('📷 הבדיקה נכשלה (אין AI) — כמו קודם: קבלת ס�
   await say(u.phone, '', PHOTO);
   assert.equal(gr.length, 1);
 });
+
+/*
+ * באג 15.11.26: "תפתח את האינסטקטנט לכל העובדים" (שגיאת כתיב, ו"לכל העובדים" במקום "לכולם") — לא זוהה כפקודה, יצא
+ * לאינסטינקט כבקשה, ואחרי 6 דקות: פעמיים "לא קיבלתי תשובה" — אף שתשובה כבר הגיעה.
+ */
+for (const cmd of ['תפתח את האינסטקטנט לכל העובדים', 'תפתח את אינסטינקט לכל העובדים', 'פתח אינסטינקט לכולם']) {
+  test(`"${cmd}" — פקודה: נפתח לכולם, ולא יוצא לאינסטינקט`, async (t) => {
+    const wa = setup(t);
+    ai(t);
+    const me = person('superadmin');
+    await say(me.phone, cmd);
+    await settle();
+    assert.equal(toInstinct(wa).length, 0);
+    assert.equal(D.getSetting('instinct_open', false), true);
+    D.setSetting('instinct_open', false);
+  });
+}
+
+test('"תחזיר את האינסטינקט לפיילוט" / "אינסטקט רק לי" — גם עם ה׳ ובשגיאת כתיב', async (t) => {
+  setup(t);
+  ai(t);
+  const me = person('superadmin');
+  D.setSetting('instinct_open', true);
+  await say(me.phone, 'תחזיר את האינסטינקט לפיילוט');
+  assert.equal(D.getSetting('instinct_open', true), false);
+  await say(me.phone, 'אינסטקט רק לי');
+  assert.deepEqual(WaActions.instinctPilot(), [me.id]);
+});
+
+test('פג הזמן של בקשה, אבל העובד כבר קיבל תשובה מאינסטינקט אחריה — בלי "לא קיבלתי תשובה" ובלי התראה', async (t) => {
+  const wa = setup(t);
+  ai(t);
+  const u = person();
+  await say(u.phone, 'אינסטינקט, תשנה את הרקע לחוף הים');
+  await say(u.phone, 'אינסטינקט, ובלי אנשים ברקע');
+  await settle();
+  const rows = D.all('SELECT id, out_id FROM instinct_requests WHERE user_id = ? ORDER BY id', u.id);
+  await fromInstinct('הנה התמונה עם רקע של חוף הים', rows[1].out_id);
+  wa.clear();
+  await Instinct._internal.expire(rows[0].id);
+  assert.equal(wa.calls.filter((c) => /לא קיבלתי תשובה|לא ענה/.test(c.body?.message ?? '')).length, 0);
+  assert.equal(D.get('SELECT status FROM instinct_requests WHERE id = ?', rows[0].id).status, 'timeout');
+});

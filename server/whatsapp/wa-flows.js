@@ -912,9 +912,11 @@ function instinctSend({ user, actor, dry, out, text, explicit = false }) {
  * (חוזר למי שברשימה). לפני "אינסטינקט, …" — אחרת "אינסטינקט רק לי" היה יוצא אליו כבקשה.
  */
 async function flowInstinctPilot({ actor, dry, out, t }) {
-  const only = /^אינסטינקט\s+רק\s+לי[.!]?$/.test(t);
-  const open = /^(?:תפתח|פתח)\s+(?:את\s+)?אינסטינקט\s+לכולם[.!]?$/.test(t);
-  const back = /^(?:תחזיר|החזר)\s+(?:את\s+)?אינסטינקט\s+לפיילוט[.!]?$/.test(t);
+  // גם בשגיאת כתיב ("האינסטקטנט") ו"לכל העובדים" (באג 15.11.26: לא זוהה, ויצא לאינסטינקט כבקשה)
+  const NAME = '(?:ה)?(?:אינסט[א-ת]*|instinct)';
+  const only = new RegExp(`^${NAME}\\s+רק\\s+(?:לי|אצלי|בשבילי)[.!]?$`, 'i').test(t);
+  const open = new RegExp(`^(?:תפתח|פתח|תפתחי)\\s+(?:את\\s+)?${NAME}\\s+(?:לכולם|לכל\\s+(?:ה)?עובדים|לכל\\s+החברה|לכל\\s+המשתמשים)[.!]?$`, 'i').test(t);
+  const back = new RegExp(`^(?:תחזיר|החזר|תחזירי)\\s+(?:את\\s+)?${NAME}\\s+לפיילוט[.!]?$`, 'i').test(t);
   if (!only && !open && !back) return NEXT;
   if (!WaActions.inPilot(actor)) return out('רק מנהל מערכת יכול לשנות את זה.', {}, { action: 'instinct', status: 'denied', result: 'פיילוט אינסטינקט — אין הרשאה' });
   if (!dry) {
