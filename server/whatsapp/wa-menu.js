@@ -323,9 +323,9 @@ function walkText(x, i, n) {
 
 function walkButtons(x) {
   if (x.t === 'task') return [WALK.done, WALK.tomorrow, WALK.next];
-  // 📧 מייל שמחכה לך — אותם כפתורים, מהצעה או מתובנה
-  if (x.t === 'mail') return [WALK.reply, x.closure ? WALK.handle : WALK.task, WALK.ignore];
-  if (x.t === 'ins') return x.source === 'mail' ? [WALK.reply, WALK.task, WALK.next] : [WALK.task, WALK.next];
+  // 📧 מייל שמחכה לך — הבוט מציע תשובה, לא משימה (הוחלט 15.11.26). משימה — במשימון, או במילים "תפתח משימה"
+  if (x.t === 'mail') return [WALK.reply, WALK.ignore, WALK.next];
+  if (x.t === 'ins') return x.source === 'mail' ? [WALK.reply, WALK.next] : [WALK.task, WALK.next];
   if (x.kind !== 'task') return [WALK.approve, WALK.ignore, WALK.next];
   return x.closure ? [WALK.handle, WALK.task, WALK.ignore] : [WALK.task, WALK.ignore, WALK.next];
 }

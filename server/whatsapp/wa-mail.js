@@ -674,6 +674,32 @@ async function mailAlertFor(userId) {
 }
 
 
+/**
+ * 💡 הצעת תשובה למייל שמחכה (מהצעה ב-‎ai_suggestions‎) — תמיד עם נוסח: יש שמור — משלימים אותו לשליחה; אין — מכינים עכשיו
+ * ושומרים, כדי שלא יוכן פעמיים. משמש את "זכרת?" ואת המעבר על המיילים שמחכים.
+ * מחזיר ‎{ text, draft, buttons }‎, או ‎{ error }‎ — ‎'cannot_send'‎ (אין הרשאת שליחה מהתיבה) / ‎'no_reply'‎ (לא הוכנה הצעה).
+ */
+async function replyOffer(userId, row) {
+  const d = parseJson(row.data, {});
+  const box = d.reply?.box ?? row.box ?? 0;
+  if (!Gmail.canSend(Gmail.handle(userId, box))) return { error: 'cannot_send' };
+  let reply = MailPush.concreteReply(d.reply) ? d.reply : null;
+  if (!reply) {
+    const r = await MailInsights.suggestReply(userId, row.gmail_id, { box });
+    if (!r?.body) return { error: 'no_reply' };
+    reply = { ...r, gmailId: row.gmail_id, box };
+    D.run('UPDATE ai_suggestions SET data = ? WHERE id = ?', JSON.stringify({ ...d, reply }), row.id);
+  }
+  reply = await MailInsights.completeReply(userId, reply);
+  if (!reply?.body) return { error: 'no_reply' };
+  return {
+    text: MailPush.replyAlert({ ...row, d }, reply),
+    draft: { kind: 'mail_reply', reply, alert: true, suggestionIds: [row.id], subject: row.subject },
+    buttons: [WaUi.BTN.yes, WaUi.BTN.no]
+  };
+}
+
+
 async function mailAlerts() {
   for (const userId of mailAlertUsers()) {
     await mailAlertFor(userId).catch((err) => console.error('[משימון] פנייה על מייל חדש נכשלה:', err.message));
@@ -798,5 +824,5 @@ async function sendPlainMail(actor, d, { dry = false } = {}) {
 
 module.exports = {
   sendPlainMail,
-  businessCommand, closeAlerted, closureDecision, confirmPending, contactOf, createFromDraft, draftEmail, findRecipients, mailActionAlerts, mailAlertFor, mailAlerts, parseThreadAdd, resolveCc, solveText, startGoodsFromMail, suggestionDecision, suggestionFeedback, threadAddText, VIA_EMAIL, VIA_MESIMON
+  businessCommand, closeAlerted, closureDecision, confirmPending, contactOf, createFromDraft, draftEmail, findRecipients, mailActionAlerts, mailAlertFor, mailAlerts, parseThreadAdd, replyOffer, resolveCc, solveText, startGoodsFromMail, suggestionDecision, suggestionFeedback, threadAddText, VIA_EMAIL, VIA_MESIMON
 };

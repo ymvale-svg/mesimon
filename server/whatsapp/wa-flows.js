@@ -32,7 +32,7 @@ const Range = require('../mail').InsightWindow;
 const { appRoot, currentMsg, doneEmoji, emailText, enqueueAs, firstName, hooks, localDate, log, react, reactNow, signatureFields, taskLink, WALK } = require('./wa-base');
 const { actionOf, CANCEL, checkDraft, draftText, featuresText, helpText, localDay, PLAIN_FEATURES, PLAIN_GREETING, PLAIN_HELP, PLAIN_INSIGHTS, PLAIN_LIST, PLAIN_TODAY, READ_ALOUD, shortDate, YES } = require('./wa-private');
 const { meetCoordRun, pushToUser, rfqPrepare, rfqSend } = require('./wa-proactive');
-const { businessCommand, closeAlerted, closureDecision, confirmPending, contactOf, draftEmail, findRecipients, sendPlainMail, startGoodsFromMail, suggestionDecision, suggestionFeedback, threadAddText, VIA_EMAIL, VIA_MESIMON } = require('./wa-mail');
+const { businessCommand, closeAlerted, closureDecision, confirmPending, contactOf, draftEmail, findRecipients, sendPlainMail, replyOffer, startGoodsFromMail, suggestionDecision, suggestionFeedback, threadAddText, VIA_EMAIL, VIA_MESIMON } = require('./wa-mail');
 const { agentsText, cut, menuButtons, menuOptions, menuText, parseClosureCommand, parseSuggestionCommand, PLAIN_AGENTS, walkAction, walkButtons, walkText } = require('./wa-menu');
 const { meetingAudioAllowed, meetingAudioTurn, TRANSLATE } = require('./wa-meeting');
 
@@ -63,7 +63,9 @@ async function flowWalk({ actor, dry, out, startReply, state, t, user }) {
     const x = w.items[w.i];
     if (!x || walkAct === 'next') return show(w.i + 1);
     // לא שייך לסוג הפריט — מציגים אותו שוב, עם הכפתורים הנכונים
-    if (!walkButtons(x).some((b) => walkAction(b) === walkAct)) return show(w.i);
+    // מייל — "תפתח משימה" במילים עדיין עובד, גם בלי כפתור (הבוט מציע תשובה; משימה — רק כשמבקשים)
+    const askedTask = walkAct === 'task' && ['mail', 'ins'].includes(x.t);
+    if (!askedTask && !walkButtons(x).some((b) => walkAction(b) === walkAct)) return show(w.i);
     const note = '_אחר כך — *הבא ⏭️* ממשיך ברשימה._';
     // טיוטה שנפתחה מהמעבר — "הבא" עדיין עובד עליה
     const withNote = (r) => ({ ...r, reply: `${r.reply}\n\n${note}`, next: { ...r.next, draft: r.next.draft ? { ...r.next.draft, fromWalk: true } : r.next.draft },
@@ -434,6 +436,16 @@ async function flowOnMailRemindOrGoods(ctx) {
     const d = state.draft;
     if (d.kind === 'mail_remind') {
       const r = dry ? null : MailActions.answerReminder(actor.id, d, t, { closeAlerted });
+      if (r?.reply) {
+        // 💡 "זכרת?" ← הצעת תשובה מוכנה (תמיד עם נוסח). ‎כן‎ שולח — כמו בהתראה על מייל חדש
+        const row = D.get('SELECT * FROM ai_suggestions WHERE id = ? AND user_id = ?', d.suggestionId, actor.id);
+        const o = row ? await replyOffer(actor.id, row).catch((err) => ({ error: err.message })) : { error: 'no_row' };
+        if (o.error) {
+          const why = o.error === 'cannot_send' ? 'אין לי הרשאה לשלוח מהתיבה הזו — אפשר לחבר מחדש ב"🔗 חיבור Google" במשימון.' : 'לא הצלחתי להכין תשובה למייל הזה — אפשר לענות ישירות ב-Gmail.';
+          return out(why, { draft: null }, { action: 'mail_deadline', status: 'error', result: `הצעת תשובה: ${o.error}`.slice(0, 300) });
+        }
+        return out(o.text, { draft: o.draft, awaiting: true }, { action: 'mail_deadline', status: 'ok', result: r.result.slice(0, 300), buttons: o.buttons });
+      }
       if (r?.openTask) {
         // אותו מסלול כמו "כן" על "לפתוח משימה?" — עם כל הבדיקות (אנשים נוספים, פנייה החוצה).
         // מייל שנקרא ב-Gmail ירד מ"ממתין" — קריאה אינה טיפול, אז הוא חוזר להצעה פתוחה
