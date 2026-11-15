@@ -24,7 +24,12 @@ const fromInstinct = (text, quoted = '', extra = {}) => Instinct.receive({ phone
 const settle = async () => { for (let i = 0; i < 30; i++) await new Promise((r) => setImmediate(r)); };
 
 let phoneSeq = 0;
-const person = (role = 'admin') => user({ full_name: `בודק ${++phoneSeq}`, role, phone: `9725071${String(phoneSeq).padStart(5, '0')}` });
+/** עובד לבדיקה — מנהל מערכת בפיילוט של אינסטינקט (‎instinct_users‎), או עובד מן השורה בלי */
+function person(role = 'admin', pilot = role !== 'employee') {
+  const u = user({ full_name: `בודק ${++phoneSeq}`, role, phone: `9725071${String(phoneSeq).padStart(5, '0')}` });
+  if (pilot) D.setSetting('instinct_users', [...WaActions.instinctPilot(), u.id]);
+  return u;
+}
 
 /** ה-AI המזויף: הבנת הבקשה (‎intent‎), שאלה יזומה (‎request_id‎), בדיקת קובץ (‎identifying‎) */
 function ai(t, { intent = 'instinct', request = '', related = { request_id: 0, asks_for_info: false, reason: '' }, identifying = false } = {}) {
@@ -54,13 +59,35 @@ test('redact — ת"ז, כרטיס, טלפון ומייל לא יוצאים', ()
   assert.match(out, /תעשה גרף/);
 });
 
-test('פיילוט — רק מנהלי המערכת, עד instinct_open', () => {
-  const admin = { type: 'user', role: 'admin' };
-  const emp = { type: 'user', role: 'employee' };
-  assert.equal(WaActions.allowed(admin, 'instinct'), true);
+test('פיילוט — רק מי שב-instinct_users (לא כל המנהלים), עד instinct_open', () => {
+  D.setSetting('instinct_users', [901]);
+  const me = { type: 'user', id: 901, role: 'superadmin' };
+  const otherAdmin = { type: 'user', id: 902, role: 'admin' };
+  const emp = { type: 'user', id: 903, role: 'employee' };
+  assert.equal(WaActions.allowed(me, 'instinct'), true);
+  assert.equal(WaActions.allowed(otherAdmin, 'instinct'), false, 'מנהל אחר — לא בפיילוט');
   assert.equal(WaActions.allowed(emp, 'instinct'), false);
   D.setSetting('instinct_open', true);
   try { assert.equal(WaActions.allowed(emp, 'instinct'), true); } finally { D.setSetting('instinct_open', false); }
+  D.setSetting('instinct_users', []);
+});
+
+test('"אינסטינקט רק לי" — מנהל מערכת קובע שהפיילוט רק שלו; עובד לא יכול', async (t) => {
+  const wa = setup(t);
+  ai(t);
+  const me = person('superadmin', false);
+  const other = person('admin');
+  const emp = person('employee');
+  await say(me.phone, 'אינסטינקט רק לי');
+  assert.match(toUser(wa, me).at(-1).body.message, /רק לך/);
+  assert.deepEqual(WaActions.instinctPilot(), [me.id]);
+  assert.equal(toInstinct(wa).length, 0, 'הפקודה לא יוצאת לאינסטינקט');
+  await say(other.phone, 'אינסטינקט, תן לי מתכון');
+  await settle();
+  assert.equal(toInstinct(wa).length, 0, 'מנהל אחר כבר לא בפיילוט');
+  await say(emp.phone, 'תפתח את אינסטינקט לכולם');
+  assert.match(toUser(wa, emp).at(-1).body.message, /רק מנהל מערכת/);
+  assert.equal(D.getSetting('instinct_open', false), false);
 });
 
 test('בקשה כללית — יוצאת לאינסטינקט ברקע, בלי טקסט לעובד (רק ⏳), ובלי פרטים מזהים', async (t) => {
