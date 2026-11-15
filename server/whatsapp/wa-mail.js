@@ -705,7 +705,6 @@ async function replyOffer(userId, row) {
  * 🏁 סיום עוצר. אחרי כל תשובה — המייל הבא. הזרימה עצמה: ‎flowMailWalk‎ ב-‎wa-flows.js‎.
  */
 const MAIL_WALK_BTN = Object.freeze({ send: 'כן, לשלוח ✅', no: 'לא ❌', stop: '🏁 סיום', next: 'הבא ⏭️' });
-const mailWalkLabel = (n) => `📬 ${n} ${n === 1 ? 'מייל' : 'מיילים'} לענות`;
 const MAIL_WALK_START = /^(?:\d+\s+)?(?:מיילים|מייל)\s+לענות$|^לענות\s+(?:על|ל)\s*(?:ה)?מיילים$|^(?:תעבור|נעבור|לעבור|בוא\s+נעבור)\s+(?:איתי\s+|יחד\s+)?על\s+(?:ה)?מיילים(?:\s+שמחכים(?:\s+לי)?)?$/;
 const isMailWalkStart = (text) => MAIL_WALK_START.test(WaUi.normalize(text).replace(/^📬\s*/u, '').replace(/[.!?]+$/, '').trim());
 
@@ -870,5 +869,5 @@ async function sendPlainMail(actor, d, { dry = false } = {}) {
 
 module.exports = {
   sendPlainMail,
-  businessCommand, closeAlerted, closureDecision, confirmPending, contactOf, createFromDraft, draftEmail, findRecipients, mailActionAlerts, mailAlertFor, mailAlerts, parseThreadAdd, replyOffer, MAIL_WALK_BTN, mailWalkLabel, isMailWalkStart, mailWalkIntro, mailWalkAt, mailWalkEnd, resolveCc, solveText, startGoodsFromMail, suggestionDecision, suggestionFeedback, threadAddText, VIA_EMAIL, VIA_MESIMON
+  businessCommand, closeAlerted, closureDecision, confirmPending, contactOf, createFromDraft, draftEmail, findRecipients, mailActionAlerts, mailAlertFor, mailAlerts, parseThreadAdd, replyOffer, MAIL_WALK_BTN, isMailWalkStart, mailWalkIntro, mailWalkAt, mailWalkEnd, resolveCc, solveText, startGoodsFromMail, suggestionDecision, suggestionFeedback, threadAddText, VIA_EMAIL, VIA_MESIMON
 };

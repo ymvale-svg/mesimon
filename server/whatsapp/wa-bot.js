@@ -72,6 +72,7 @@ const Reminders = require('./reminders');
 const SentFollowup = require('../mail').SentFollowup;
 const DayDigest = require('../agents').DayDigest;
 const Briefing = require('../meetings').Briefing;
+const Calendar = require('../meetings').Calendar;
 const Meetings = require('../meetings').Meetings;
 const { appRoot, buttonReplyText, candidatesOf, chains, channel, checkState, currentMsg, DAY, DIGEST_GRACE_MIN, doneEmoji, emailText, enqueueAs, firstName, HISTORY_TURNS, hooks, inHours, isConfigured, localDate, log, mailAlertUsers, markDone, onDirect, orgUsers, parseJson, PICK_SHOWN, pickText, publicStatus, qr, react, reactNow, readLog, recentFiles, remove, resolveMentions, save, sendButtons, sendText, setState, signatureFields, signatureLine, splitMessage, taskLink, todayStats, userByPhone, WALK, workHours } = require('./wa-base');
 const { analyzeGroup, bindGroup, listGroups, notifyAdmins, processGroup, processGroups, prune, recipientOf, sanitizeGroup } = require('./wa-groups');
@@ -1648,6 +1649,16 @@ async function retryTick() {
 }
 
 
+/** ☀️ לסיכום הבוקר: הפגישות של העובד שעוד לא נגמרו היום (בלי "במשרד" / יומנים של אחרים) */
+async function todayMeetings(userId) {
+  if (!Calendar.isConnected(userId)) return [];
+  const me = D.get('SELECT email FROM users WHERE id = ?', userId)?.email ?? '';
+  const day = await Calendar.eventsForDay(userId);
+  const now = Date.now();
+  return (day.events ?? []).filter((e) => !e.declined && !Calendar.isDayStatus(e) && Calendar.isOwnEvent(e, me) && (e.allDay || new Date(e.end).getTime() > now));
+}
+
+
 async function tick() {
   if (!busy) await personalHousekeeping();
   // קבלות סחורה שלא אושרו — תזכורת וביטול (פעם ב-10 דקות לכל היותר)
@@ -1674,7 +1685,8 @@ async function tick() {
       if (WaActions.byKey('day_digest')?.enabled && workHours(null, { graceMin: DIGEST_GRACE_MIN })) {
         await DayDigest.tick({
           users: () => orgUsers().filter((u) => u.phone && workHours(u.id, { graceMin: DIGEST_GRACE_MIN }) && D.userPrefs(u.id)?.botPrefs?.dayDigest !== false && WaActions.allowed(Auth.loadActor('user', u.id), 'day_digest')),
-          push: (userId, m) => pushToUser(userId, m, 'day_digest', { graceMin: DIGEST_GRACE_MIN })
+          push: (userId, m) => pushToUser(userId, m, 'day_digest', { graceMin: DIGEST_GRACE_MIN }),
+          events: (userId) => todayMeetings(userId)
         }).catch((err) => console.error('[משימון] סיכום יומי נכשל:', err.message));
       }
       // 🕗 כל השאר — רק בשעות העבודה

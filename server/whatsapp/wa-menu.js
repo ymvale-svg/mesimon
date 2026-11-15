@@ -15,7 +15,7 @@ const Zoom = require('../integrations').Zoom;
 const WaUi = require('./wa-ui');
 const { DAY, LETTERS, TZ, WALK, appRoot, localDate, usableClosure } = require('./wa-base');
 const { dueLabel, localDay } = require('./wa-private');
-const { mailWalkLabel } = require('./wa-mail');
+const { mailWalkLabel } = WaUi;
 
 
 // ---------------------------------------------------------------------------

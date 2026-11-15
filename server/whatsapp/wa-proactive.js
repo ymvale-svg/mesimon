@@ -33,6 +33,8 @@ async function sendSummaries() {
   for (const u of orgUsers().filter((x) => x.phone && workHours(x.id))) {
     const actor = Auth.loadActor('user', u.id);
     if (!actor || !WaActions.allowed(actor, 'summary')) continue;
+    // ☀️ סיכום בוקר אחד (הוחלט 15.11.26): מי שמקבל את סיכום הבוקר החדש (‎day_digest‎) — לא מקבל גם את הישן
+    if (WaActions.byKey('day_digest')?.enabled && WaActions.allowed(actor, 'day_digest') && D.userPrefs(u.id)?.botPrefs?.dayDigest !== false) continue;
     const tasks = hooks.tasks.myTasks(actor).filter(RANGES.today.pick);
     if (!tasks.length) continue;
     const text = formatList(`☀️ בוקר טוב ${firstName(u.full_name)}! להיום ${tasks.length === 1 ? 'משימה אחת' : `${tasks.length} משימות`}:`, tasks, { actor });
