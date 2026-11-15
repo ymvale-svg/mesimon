@@ -475,18 +475,38 @@ function summaryMailText(row, dig) {
     'על מה דיברנו:',
     ...dig.summary.map((x) => `• ${x}`),
     ...(dig.decisions.length ? ['', 'הוחלט:', ...dig.decisions.map((x) => `• ${x}`)] : []),
-    ...(dig.items.length ? ['', 'משימות להמשך:', ...dig.items.map((it) => `• ${it.task}${it.owner_name ? ` — ${it.owner_name}` : ''}${fmtDue(it.due)}`)] : []),
+    ...(dig.items.length ? ['', 'משימות להמשך:', ...dig.items.map((it) => `• ${it.task}${ownerLabel(it) ? ` — ${ownerLabel(it)}` : ''}${fmtDue(it.due)}`)] : []),
     '',
     'אם משהו חסר או לא מדויק — אשמח לתיקון.'
   ].join('\n');
 }
 
-/** "לשלוח למשתתפים?" — טיוטה לאישור, או הסבר מה חסר (Gmail / יומן / הזימון) */
-async function shareDraft(u, row, dig, head) {
+/** האחראי כפי שזוהה במשימון (הקלטה מוואטסאפ), ואם לא — כפי שנאמר */
+const ownerLabel = (it) => String(it._ownerName || it.owner_name || '').trim();
+
+/** הקלטה מוואטסאפ: המשתתפים שהעובד שייך אליהם את ההקלטה (מהיומן או "פגישה אחרת"). בלי העובד עצמו. ‎null‎ — אין */
+function audioPeople(u, row) {
+  if (row.source !== 'wa') return null;
+  const audio = D.get('SELECT meeting FROM meeting_audio WHERE id = ?', Number(row.ref));
+  const mine = emailsOf(u);
+  const seen = new Set();
+  const people = (parseJson(audio?.meeting, {})?.people ?? [])
+    .map((p) => ({ email: normEmail(p.email), name: String(p.name ?? '').trim() }))
+    .filter((p) => p.email.includes('@') && !mine.has(p.email) && !seen.has(p.email) && seen.add(p.email));
+  return people.length ? people : null;
+}
+
+/**
+ * "לשלוח למשתתפים?" — טיוטה לאישור, או הסבר מה חסר (Gmail / יומן / הזימון).
+ * ‎to‎ — נמענים מסוימים ("שלח לגולן את הסיכום"); אחרת כל המשתתפים: בהקלטה מוואטסאפ — מי ששויך להקלטה, אחרת — מהזימון ביומן.
+ * ‎then‎ — הטיוטה שחוזרים אליה אחרי השליחה (למשל "לפתוח את המשימות?")
+ */
+async function shareDraft(u, row, dig, head, { to = null, then = null } = {}) {
   if (!Gmail.canSend(u.id)) {
     return { text: `${head}\nכדי לשלוח את הסיכום מהמייל שלך צריך לחבר את תיבת ה-Gmail באפליקציה: "החשבון שלי ← Gmail ועוזר ה-AI".`, buttons: [BTN.tasks], result: `שליחה למשתתפים — Gmail לא מחובר: ${row.title}` };
   }
-  const inv = await invitees(u, row);
+  const fixed = to ?? audioPeople(u, row);
+  const inv = fixed ? { people: fixed } : await invitees(u, row);
   if (inv.error) {
     const why = inv.error === 'calendar' ? 'כדי לדעת מי הוזמן צריך לחבר את היומן (Google) באפליקציה.' : 'לא מצאתי את הזימון לפגישה הזו ביומן שלך, ולכן אני לא יודע למי לשלוח.';
     return { text: `${head}\n${why}`, buttons: [BTN.tasks], result: `שליחה למשתתפים — ${inv.error === 'calendar' ? 'אין יומן' : 'הזימון לא נמצא'}: ${row.title}` };
@@ -507,7 +527,7 @@ async function shareDraft(u, row, dig, head) {
       'לשלוח? *כן* 👍 · *לא* 👎'
     ].join('\n'),
     buttons: [WaUi.BTN.yes, WaUi.BTN.no],
-    draft: { kind: 'meeting_summary_mail', title: row.title, to: inv.people, subject, text },
+    draft: { kind: 'meeting_summary_mail', title: row.title, to: inv.people, subject, text, ...(then ? { then } : {}) },
     awaiting: true,
     result: `טיוטת סיכום למשתתפים (${inv.people.length}): ${row.title}`
   };
@@ -515,6 +535,35 @@ async function shareDraft(u, row, dig, head) {
 
 const htmlOf = (text) => `<div dir="rtl" style="font-family:Arial,sans-serif;line-height:1.5">${String(text)
   .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '<br>')}</div>`;
+
+/** "לשלוח למשתתפים" על פגישה מסוימת (‎source‎/‎ref‎ ב-‎meeting_followups‎) — מהשאלה שאחרי הקלטה מוואטסאפ */
+async function shareFor(actor, { source, ref }, opts = {}) {
+  const row = D.get('SELECT * FROM meeting_followups WHERE user_id = ? AND source = ? AND ref = ?', actor.id, source, String(ref));
+  if (!row) return null;
+  const dig = await digest(row, actor.id);
+  if (!dig) return null;
+  return shareDraft(userRow(actor.id), row, dig, `🎥 *${row.title}* · ${hhmm(row.start_at)}`, opts);
+}
+
+// "הסיכום" (הידוע — של הפגישה שעכשיו הייתה), או "סיכום" עם "פגישה" / "ישיבה"
+const isSummaryAsk = (t) => /(?:^|\s)(?:את\s+)?הסיכום(?:\s|$|[.,!?])/.test(t) || (/(?:^|\s)(?:ה|את\s+ה?)?סיכום(?:\s|$|[.,!?])/.test(t) && /פגיש|ישיב/.test(t));
+
+/**
+ * "שלח לגולן את הסיכום" — כשנשלח מייל לאיש קשר, והבקשה היא סיכום של פגישה מוקלטת מהיומיים האחרונים:
+ * הסיכום המלא (נושאים, החלטות ומשימות לפי אחראי) כמו שהוא — לא טיוטה שה-AI כותב מהמילים של הבקשה.
+ * ‎null‎ — זו לא בקשה כזו, או שאין פגישה מוקלטת עם סיכום.
+ */
+async function summaryRequest(actor, request, contact) {
+  const t = norm(request);
+  if (!isSummaryAsk(t) || !contact?.email) return null;
+  const words = t.replace(/(?:^|\s)(?:ה?סיכום|של|את|ה?פגישה|מה?פגישה|לשלוח|שלח|תשלח|לו|לה|להם)(?=\s|$)/g, ' ').trim();
+  const row = (words && followupFor(actor.id, words)) || followupFor(actor.id, null);
+  if (!row) return null;
+  const dig = await digest(row, actor.id).catch(() => null);
+  if (!dig) return null;
+  const to = [{ email: normEmail(contact.email), name: String(contact.name ?? '').trim() }];
+  return shareDraft(userRow(actor.id), row, dig, `🎥 *${row.title}* · ${hhmm(row.start_at)}`, { to });
+}
 
 /** "כן" על "לשלוח את הסיכום?" — נשלח מתיבת ה-Gmail של העובד, לכל המשתתפים יחד. מחזיר את הטקסט לעובד */
 async function sendSummaryMail(actor, draft, { dry = false } = {}) {
@@ -569,6 +618,6 @@ function prune() {
 }
 
 module.exports = {
-  sweep, answer, openTasks, isOpenButton, digest, prune, BTN, sendSummaryMail,
+  sweep, answer, openTasks, isOpenButton, digest, prune, BTN, sendSummaryMail, shareFor, summaryRequest,
   _internal: { vttText, myItems, followupFor, askText, alreadyAsked, record, ASK, BARE, norm, timelessMatch, timelessCandidates, invitees, summaryMailText, shareDraft }
 };

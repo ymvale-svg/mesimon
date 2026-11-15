@@ -525,6 +525,18 @@ async function flowOnPlainMail(ctx) {
   return NEXT;
 }
 
+/**
+ * אחרי "לשלוח את הסיכום?" — ואם הגיעו לשם מהשאלה שאחרי הקלטה מוואטסאפ (‎then‎), חוזרים אליה: "לפתוח את המשימות?"
+ * מחזיר את הארגומנטים ל-‎out‎
+ */
+function afterSummary(reply, draft, result) {
+  const then = draft.then;
+  const log = { action: 'meeting_followup', status: 'ok', result: result.slice(0, 300) };
+  if (!then || then.n === 0) return [reply, { draft: null }, log];
+  return [`${reply}\n\n*לפתוח את המשימות מהפגישה, כל אחת אצל האחראי שלה?* *כן* 👍 · *לא* 👎 · או רק חלק: "רק 1 ו-3"`,
+    { draft: then, awaiting: true }, { ...log, buttons: [MeetingAudio.BTN.open, WaUi.BTN.no] }];
+}
+
 // 🎥 אחרי פגישה מוקלטת: "לפתוח משימות ✅" / "לא" על המשימות שהוצעו, ו"כן" / "לא" על שליחת הסיכום למשתתפים
 async function flowOnMeetingTasks(ctx) {
   let { actor, dry, keep, out, state, t } = ctx;
@@ -534,10 +546,10 @@ async function flowOnMeetingTasks(ctx) {
       const reply = await MeetingFollowup.sendSummaryMail(actor, state.draft, { dry })
         .catch((err) => ({ error: err.message }));
       if (reply?.error) return out('לא הצלחתי לשלוח את הסיכום כרגע. נסו שוב בעוד כמה דקות 🙏', { draft: state.draft, awaiting: true }, { action: 'meeting_followup', status: 'error', result: `שליחת סיכום נכשלה: ${reply.error}`.slice(0, 300) });
-      return out(reply, { draft: null }, { action: 'meeting_followup', status: 'ok', result: `סיכום נשלח ל-${state.draft.to.length} משתתפים: ${state.draft.title}`.slice(0, 300) });
+      return out(...afterSummary(reply, state.draft, `סיכום נשלח ל-${state.draft.to.length} משתתפים: ${state.draft.title}`));
     }
     if (WaUi.NO.test(n) || CANCEL.test(t)) {
-      return out('בסדר, הסיכום לא נשלח 👍', { draft: null }, { action: 'meeting_followup', status: 'ok', result: `לא: סיכום למשתתפים של "${state.draft.title}"`.slice(0, 300) });
+      return out(...afterSummary('בסדר, הסיכום לא נשלח 👍', state.draft, `לא: סיכום למשתתפים של "${state.draft.title}"`));
     }
     keep.draft = null;
     state = { ...state, draft: null, awaiting: false };
