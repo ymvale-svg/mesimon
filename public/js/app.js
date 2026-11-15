@@ -1230,120 +1230,8 @@ const App = (() => {
             ])
           ])
         ]),
-        botPrefsBox()
-      ]);
-    }
-
-    /** האם Today כולל את התובנות (מסך, בוט ומייל הבוקר). דלוק כברירת מחדל */
-    function botPrefsBox() {
-      const box = el('input', { type: 'checkbox', checked: getPref('botPrefs', {})?.insightsInToday !== false });
-      box.addEventListener('change', () => {
-        setPref('botPrefs', { ...(getPref('botPrefs', {}) ?? {}), insightsInToday: box.checked });
-      });
-      // 📬 מייל חדש — הבוט פונה ושואל מה לענות. דלוק כברירת מחדל
-      const alert = el('input', { type: 'checkbox', checked: getPref('botPrefs', {})?.mailAlert !== false });
-      alert.addEventListener('change', () => {
-        setPref('botPrefs', { ...(getPref('botPrefs', {}) ?? {}), mailAlert: alert.checked });
-      });
-      // 🎥 אחרי פגישה מוקלטת — הבוט שואל מה לשלוח. דלוק כברירת מחדל
-      const followup = el('input', { type: 'checkbox', checked: getPref('botPrefs', {})?.meetingFollowup !== false });
-      followup.addEventListener('change', () => {
-        setPref('botPrefs', { ...(getPref('botPrefs', {}) ?? {}), meetingFollowup: followup.checked });
-      });
-      // ⏰ דדליין ממייל — "זכרת?", ו-📄 חשבונית במייל ← קבלת סחורה. דלוקים כברירת מחדל
-      const deadline = el('input', { type: 'checkbox', checked: getPref('botPrefs', {})?.mailDeadline !== false });
-      deadline.addEventListener('change', () => {
-        setPref('botPrefs', { ...(getPref('botPrefs', {}) ?? {}), mailDeadline: deadline.checked });
-      });
-      const goods = el('input', { type: 'checkbox', checked: getPref('botPrefs', {})?.goodsOffer !== false });
-      goods.addEventListener('change', () => {
-        setPref('botPrefs', { ...(getPref('botPrefs', {}) ?? {}), goodsOffer: goods.checked });
-      });
-      // 📝 טופס ריק במייל — להציע למלא. דלוק כברירת מחדל
-      const formOffer = el('input', { type: 'checkbox', checked: getPref('botPrefs', {})?.formOffer !== false });
-      formOffer.addEventListener('change', () => {
-        setPref('botPrefs', { ...(getPref('botPrefs', {}) ?? {}), formOffer: formOffer.checked });
-      });
-      // 💡 הטיפ היומי ב-9 בבוקר — "ידעת שהבוט יודע…?". דלוק כברירת מחדל (‎server/whatsapp/bot-tips.js‎)
-      const tips = el('input', { type: 'checkbox', checked: getPref('botPrefs', {})?.tips !== false });
-      tips.addEventListener('change', () => {
-        setPref('botPrefs', { ...(getPref('botPrefs', {}) ?? {}), tips: tips.checked });
-      });
-      // 🌊 קצב התזכורות מהמייל — כדי לא להציף מי שמקבל עשרות מיילים ביום
-      const pace = el('select', {}, [
-        ['normal', 'רגיל — עד אחת לחצי שעה, 8 ביום'],
-        ['light', 'מעט — עד אחת לשעתיים, 3 ביום'],
-        ['morning', 'רק בסיכום הבוקר'],
-        ['off', 'בלי תזכורות']
-      ].map(([v, t]) => el('option', { value: v, text: t, selected: (getPref('botPrefs', {})?.remindPace ?? 'normal') === v })));
-      pace.addEventListener('change', () => {
-        setPref('botPrefs', { ...(getPref('botPrefs', {}) ?? {}), remindPace: pace.value });
-      });
-      return el('div', {}, [
-        el('h4', { text: 'בוט הוואטסאפ', style: { margin: '16px 0 8px', fontSize: '13px' } }),
-        el('div.table-wrap', {}, [
-          el('table.data', {}, [
-            el('tbody', {}, [
-              el('tr', {}, [
-                el('td', {}, [
-                  el('div', { text: '📬 תובנות ב-Today — מהמייל ומהוואטסאפ' }),
-                  el('div.mute-sm', { text: 'החלק האחרון של Today: במסך, בבוט (בהודעת המשך) ובמייל הבוקר. את הרשימה המלאה מקבלים תמיד לפי בקשה: "תובנות", "תובנות מהיומיים האחרונים".' })
-                ]),
-                el('td', { style: { textAlign: 'center', width: '110px' } }, [el('label.checkbox', {}, [box])])
-              ]),
-              el('tr', {}, [
-                el('td', {}, [
-                  el('div', { text: '💡 טיפ יומי — "ידעת שהבוט יודע…?"' }),
-                  el('div.mute-sm', { text: 'פעם ביום, ב-9 בבוקר: משהו שעוד לא ניסית שהבוט יודע לעשות, עם כפתור "נסו עכשיו". גם בבוט: "מספיק טיפים".' })
-                ]),
-                el('td', { style: { textAlign: 'center', width: '110px' } }, [el('label.checkbox', {}, [tips])])
-              ]),
-              el('tr', {}, [
-                el('td', {}, [
-                  el('div', { text: '📧 מייל חדש — הבוט פונה אליי' }),
-                  el('div.mute-sm', { text: 'על כל מייל שמחכה ממך למשהו: "קיבלת מייל מ… — לענות לו כך?" עם כן / לא. מייל שכבר קראת — לא נשאל עליו.' })
-                ]),
-                el('td', { style: { textAlign: 'center', width: '110px' } }, [el('label.checkbox', {}, [alert])])
-              ]),
-              el('tr', {}, [
-                el('td', {}, [
-                  el('div', { text: '🎥 אחרי פגישה מוקלטת — הבוט שואל אותי' }),
-                  el('div.mute-sm', { text: '"הפגישה הסתיימה והוקלטה. איך היה? מה לשלוח לך?" — סיכום, המשימות שלי מהפגישה או ההקלטה. רק בפגישות שהשתתפתי בהן.' })
-                ]),
-                el('td', { style: { textAlign: 'center', width: '110px' } }, [el('label.checkbox', {}, [followup])])
-              ]),
-              el('tr', {}, [
-                el('td', {}, [
-                  el('div', { text: '🐣 תזכורת ממייל — "זכרת?"' }),
-                  el('div.mute-sm', { text: 'מייל עם דדליין או קריאה לפעולה שלא טופל — יום אחרי שהגיע (או בבוקר יום הדדליין): "זכרת?" עם לפתוח משימה / התעלם. במקום השאלה "לפתוח משימה?" כשהמייל מגיע.' })
-                ]),
-                el('td', { style: { textAlign: 'center', width: '110px' } }, [el('label.checkbox', {}, [deadline])])
-              ]),
-              el('tr', {}, [
-                el('td', {}, [
-                  el('div', { text: '🌊 קצב התזכורות' }),
-                  el('div.mute-sm', { text: 'כמה תזכורות על מיילים שלא טופלו במהלך היום — החשובות קודם (דדליין קרוב, עדיפות). לא באמצע פגישה, ורק בשעות העבודה.' }),
-                  pace
-                ]),
-                el('td', {}, [])
-              ]),
-              el('tr', {}, [
-                el('td', {}, [
-                  el('div', { text: '📄 חשבונית במייל — להציע קבלת סחורה' }),
-                  el('div.mute-sm', { text: 'כשמגיעה חשבונית או תעודת משלוח: "לבצע קבלת סחורה?" — הבוט מוריד את הקובץ מהמייל ומתחיל. רק למי שמורשה לקבלת סחורה.' })
-                ]),
-                el('td', { style: { textAlign: 'center', width: '110px' } }, [el('label.checkbox', {}, [goods])])
-              ]),
-              el('tr', {}, [
-                el('td', {}, [
-                  el('div', { text: '📝 טופס ריק במייל — להציע למלא' }),
-                  el('div.mute-sm', { text: 'רק כשאני הנמען הראשי (לא בהעתק): הבוט ממלא מכרטיס החברה ומהפרטים שלי, מראה לי, ושולח לשולח רק אחרי אישור.' })
-                ]),
-                el('td', { style: { textAlign: 'center', width: '110px' } }, [el('label.checkbox', {}, [formOffer])])
-              ])
-            ])
-          ])
-        ])
+        // 🤖 מה הבוט שולח לי — עבר ל"החשבון שלי ← 🤖 הבוט" (15.11.26), כאן רק קישור
+        el('div.mute-sm.mt', {}, ['מה הבוט שולח לך (תזכורות, הצעות תשובה, טיפ יומי) — ', el('a', { href: '#', text: '🤖 הבוט שלי', onclick: (e) => { e.preventDefault(); openBotPrefs(); } })])
       ]);
     }
 
@@ -1691,8 +1579,10 @@ const App = (() => {
       route('phonebook', ['אלפון', 'טלפונים', 'אנשי קשר', 'עובדים', 'phonebook', 'contacts']),
       may('view_reports') ? route('reports', ['דוח', 'דוחות', 'סטטיסטיקה', 'עומס', 'reports']) : null,
       // אותו תנאי בדיוק כמו פריט "ניהול המערכת" בתפריט הצד
+      // ⚙ "הגדרות" — קודם ההגדרות של העובד עצמו (החשבון שלי). הגדרות המערכת — "ניהול" / "הגדרות מערכת" (15.11.26)
+      { kind: 'action', title: '⚙ ההגדרות שלי', keys: ['הגדרות', 'ההגדרות שלי', 'החשבון שלי', 'פרופיל', 'העדפות', 'settings'], run: () => userMenu() },
       may('manage_users') || may('manage_automations') || may('assign_task_to_vendor') || can('create_project')
-        ? route('admin', ['ניהול', 'הגדרות', 'משתמשים', 'הרשאות', 'אוטומציות', 'admin', 'settings'])
+        ? route('admin', ['ניהול', 'הגדרות מערכת', 'משתמשים', 'הרשאות', 'אוטומציות', 'admin', 'system settings'])
         : null,
       notifications
     ].filter(Boolean);
@@ -2970,6 +2860,132 @@ const App = (() => {
     ]);
   }
 
+  /** האם Today כולל את התובנות (מסך, בוט ומייל הבוקר). דלוק כברירת מחדל */
+  function botPrefsBox() {
+    const box = el('input', { type: 'checkbox', checked: getPref('botPrefs', {})?.insightsInToday !== false });
+    box.addEventListener('change', () => {
+      setPref('botPrefs', { ...(getPref('botPrefs', {}) ?? {}), insightsInToday: box.checked });
+    });
+    // 📬 מייל חדש — הבוט פונה ושואל מה לענות. דלוק כברירת מחדל
+    const alert = el('input', { type: 'checkbox', checked: getPref('botPrefs', {})?.mailAlert !== false });
+    alert.addEventListener('change', () => {
+      setPref('botPrefs', { ...(getPref('botPrefs', {}) ?? {}), mailAlert: alert.checked });
+    });
+    // 🎥 אחרי פגישה מוקלטת — הבוט שואל מה לשלוח. דלוק כברירת מחדל
+    const followup = el('input', { type: 'checkbox', checked: getPref('botPrefs', {})?.meetingFollowup !== false });
+    followup.addEventListener('change', () => {
+      setPref('botPrefs', { ...(getPref('botPrefs', {}) ?? {}), meetingFollowup: followup.checked });
+    });
+    // ⏰ דדליין ממייל — "זכרת?", ו-📄 חשבונית במייל ← קבלת סחורה. דלוקים כברירת מחדל
+    const deadline = el('input', { type: 'checkbox', checked: getPref('botPrefs', {})?.mailDeadline !== false });
+    deadline.addEventListener('change', () => {
+      setPref('botPrefs', { ...(getPref('botPrefs', {}) ?? {}), mailDeadline: deadline.checked });
+    });
+    const goods = el('input', { type: 'checkbox', checked: getPref('botPrefs', {})?.goodsOffer !== false });
+    goods.addEventListener('change', () => {
+      setPref('botPrefs', { ...(getPref('botPrefs', {}) ?? {}), goodsOffer: goods.checked });
+    });
+    // 📝 טופס ריק במייל — להציע למלא. דלוק כברירת מחדל
+    const formOffer = el('input', { type: 'checkbox', checked: getPref('botPrefs', {})?.formOffer !== false });
+    formOffer.addEventListener('change', () => {
+      setPref('botPrefs', { ...(getPref('botPrefs', {}) ?? {}), formOffer: formOffer.checked });
+    });
+    // 💡 הטיפ היומי ב-9 בבוקר — "ידעת שהבוט יודע…?". דלוק כברירת מחדל (‎server/whatsapp/bot-tips.js‎)
+    const tips = el('input', { type: 'checkbox', checked: getPref('botPrefs', {})?.tips !== false });
+    tips.addEventListener('change', () => {
+      setPref('botPrefs', { ...(getPref('botPrefs', {}) ?? {}), tips: tips.checked });
+    });
+    // 🌊 קצב התזכורות מהמייל — כדי לא להציף מי שמקבל עשרות מיילים ביום
+    const pace = el('select', {}, [
+      ['normal', 'רגיל — עד 5 ביום, חצי שעה לפחות ביניהן'],
+      ['light', 'מעט — רק החשובה ביותר, אחת ביום'],
+      ['morning', 'רק בסיכום הבוקר'],
+      ['off', 'בלי תזכורות']
+    ].map(([v, t]) => el('option', { value: v, text: t, selected: (getPref('botPrefs', {})?.remindPace ?? 'normal') === v })));
+    pace.addEventListener('change', () => {
+      setPref('botPrefs', { ...(getPref('botPrefs', {}) ?? {}), remindPace: pace.value });
+    });
+    return el('div', {}, [
+      el('h4', { text: 'בוט הוואטסאפ', style: { margin: '16px 0 8px', fontSize: '13px' } }),
+      el('div.table-wrap', {}, [
+        el('table.data', { style: { whiteSpace: 'normal' } }, [
+          el('tbody', {}, [
+            el('tr', {}, [
+              el('td', {}, [
+                el('div', { text: '📬 תובנות ב-Today — מהמייל ומהוואטסאפ' }),
+                el('div.mute-sm', { text: 'החלק האחרון של Today: במסך, בבוט (בהודעת המשך) ובמייל הבוקר. את הרשימה המלאה מקבלים תמיד לפי בקשה: "תובנות", "תובנות מהיומיים האחרונים".' })
+              ]),
+              el('td', { style: { textAlign: 'center', width: '110px' } }, [el('label.checkbox', {}, [box])])
+            ]),
+            el('tr', {}, [
+              el('td', {}, [
+                el('div', { text: '💡 טיפ יומי — "ידעת שהבוט יודע…?"' }),
+                el('div.mute-sm', { text: 'פעם ביום, ב-9 בבוקר: משהו שעוד לא ניסית שהבוט יודע לעשות, עם כפתור "נסו עכשיו". גם בבוט: "מספיק טיפים".' })
+              ]),
+              el('td', { style: { textAlign: 'center', width: '110px' } }, [el('label.checkbox', {}, [tips])])
+            ]),
+            el('tr', {}, [
+              el('td', {}, [
+                el('div', { text: '📧 מייל חדש — הבוט פונה אליי' }),
+                el('div.mute-sm', { text: 'על כל מייל שמחכה ממך למשהו: "קיבלת מייל מ… — לענות לו כך?" עם כן / לא. מייל שכבר קראת — לא נשאל עליו.' })
+              ]),
+              el('td', { style: { textAlign: 'center', width: '110px' } }, [el('label.checkbox', {}, [alert])])
+            ]),
+            el('tr', {}, [
+              el('td', {}, [
+                el('div', { text: '🎥 אחרי פגישה מוקלטת — הבוט שואל אותי' }),
+                el('div.mute-sm', { text: '"הפגישה הסתיימה והוקלטה. איך היה? מה לשלוח לך?" — סיכום, המשימות שלי מהפגישה או ההקלטה. רק בפגישות שהשתתפתי בהן.' })
+              ]),
+              el('td', { style: { textAlign: 'center', width: '110px' } }, [el('label.checkbox', {}, [followup])])
+            ]),
+            el('tr', {}, [
+              el('td', {}, [
+                el('div', { text: '🐣 תזכורת ממייל — "זכרת?"' }),
+                el('div.mute-sm', { text: 'מייל שמחכה ממך ולא טופל — יום אחרי שהגיע (או בבוקר יום הדדליין): "זכרת?" עם 💡 הצעת תשובה / טיפלתי / התעלם. רק על מייל שאתה האחראי עליו.' })
+              ]),
+              el('td', { style: { textAlign: 'center', width: '110px' } }, [el('label.checkbox', {}, [deadline])])
+            ]),
+            el('tr', {}, [
+              el('td', {}, [
+                el('div', { text: '🌊 קצב התזכורות' }),
+                el('div.mute-sm', { text: 'כמה תזכורות על מיילים שלא טופלו במהלך היום — החשובות קודם (דדליין קרוב, עדיפות). לא באמצע פגישה, ורק בשעות העבודה.' }),
+                pace
+              ]),
+              el('td', {}, [])
+            ]),
+            // 🗂 רק למי שמורשה בפריוריטי — מי שלא, לא רואה את האפשרות בכלל (13.11.26)
+            !state.actor?.priority ? null : el('tr', {}, [
+              el('td', {}, [
+                el('div', { text: '📄 חשבונית במייל — להציע קבלת סחורה' }),
+                el('div.mute-sm', { text: 'כשמגיעה חשבונית או תעודת משלוח: "לבצע קבלת סחורה?" — הבוט מוריד את הקובץ מהמייל ומתחיל. רק למי שמורשה לקבלת סחורה.' })
+              ]),
+              el('td', { style: { textAlign: 'center', width: '110px' } }, [el('label.checkbox', {}, [goods])])
+            ]),
+            el('tr', {}, [
+              el('td', {}, [
+                el('div', { text: '📝 טופס ריק במייל — להציע למלא' }),
+                el('div.mute-sm', { text: 'רק כשאני הנמען הראשי (לא בהעתק): הבוט ממלא מכרטיס החברה ומהפרטים שלי, מראה לי, ושולח לשולח רק אחרי אישור.' })
+              ]),
+              el('td', { style: { textAlign: 'center', width: '110px' } }, [el('label.checkbox', {}, [formOffer])])
+            ])
+          ])
+        ])
+      ])
+    ]);
+  }
+
+  /** ⚙ ההגדרות שלי ← 🤖 הבוט: מה הבוט שולח לי. כל אחד קובע לעצמו (‎user_prefs.botPrefs‎) */
+  function openBotPrefs() {
+    const m = UI.modal({
+      title: '🤖 הבוט שלי — מה הוא שולח לי',
+      body: el('div', {}, [
+        el('div.mute-sm', { text: 'הבוט הוא המזכירה: מזכיר, מציע תשובות למיילים ומביא נתונים כשמבקשים. משימות — במשימון.' }),
+        botPrefsBox()
+      ]),
+      footer: [el('div.spacer'), el('button.btn', { onclick: () => m.close() }, ['סגירה'])]
+    });
+  }
+
   function userMenu() {
     const m = UI.modal({
       title: 'החשבון שלי',
@@ -2998,6 +3014,7 @@ const App = (() => {
         // חיבור Google: Gmail (סריקה ותשובות), יומן ל-Today, ואנשי קשר למשימת AI
         isVendor() ? null : el('button.btn.mt', { style: { marginInlineStart: '8px' }, 'data-anchor': 'account.google', onclick: () => AiInboxView.openGmail(() => refreshView()) }, ['🔗 חיבור Google ועוזר ה-AI']),
         isVendor() ? null : el('button.btn.mt', { style: { marginInlineStart: '8px' }, onclick: () => TodayView.openSettings() }, ['☀ Today והקלטה']),
+        isVendor() ? null : el('button.btn.mt', { style: { marginInlineStart: '8px' }, onclick: () => openBotPrefs() }, ['🤖 הבוט שלי']),
         isVendor() ? null : el('button.btn.mt', {
           style: { marginInlineStart: '8px' },
           onclick: () => { m.close(); navigate('phonebook'); }

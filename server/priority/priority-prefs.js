@@ -4,17 +4,25 @@
  * הסביבה (החברה) האחרונה, ולכל חברה — הפרויקט והמחסן האחרונים. הבחירה האחרונה היא ברירת המחדל
  * בפעם הבאה; מציגים אותה ("הבחירה האחרונה שלך") וממשיכים בלי לעצור.
  *
- * נשמר בהגדרה ‎goods_receipt_prefs:<userId>‎ (השם ההיסטורי — כך נשמרות גם ההעדפות שכבר נאספו בקבלת הסחורה):
+ * הגדרה אישית — נשמרת בהעדפות של העובד (‎user_prefs.priorityPrefs‎, 15.11.26; קטלוג ההגדרות: ‎PERSONAL‎):
  * ‎{ _company, [company]: { project: {code, des}, warehouse, byProject: {[code]: warehouse}, at } }‎
+ * עד 15.11.26 נשמרה בטבלת ההגדרות של המערכת (‎goods_receipt_prefs:<userId>‎) — בקריאה הראשונה עוברת, והשורה הישנה נמחקת.
  */
 const D = require('../core').Db;
 
-const key = (userId) => `goods_receipt_prefs:${userId}`;
+const PREF = 'priorityPrefs';
+const OLD_PREFIX = 'goods_receipt_prefs:';
 
 function all(userId) {
   try {
-    const row = D.get('SELECT value FROM settings WHERE key = ?', key(userId));
-    return row ? JSON.parse(row.value) ?? {} : {};
+    const cur = D.userPrefs(userId)?.[PREF];
+    if (cur && typeof cur === 'object') return cur;
+    const row = D.get('SELECT value FROM settings WHERE key = ?', OLD_PREFIX + userId);
+    if (!row) return {};
+    const moved = JSON.parse(row.value) ?? {};
+    D.setUserPref(userId, PREF, moved);
+    D.run('DELETE FROM settings WHERE key = ?', OLD_PREFIX + userId);
+    return moved;
   } catch { return {}; }
 }
 
@@ -42,7 +50,7 @@ function remember(userId, { company, project = null, warehouse = null }) {
       c.at = Date.now();
       a[company] = c;
     }
-    D.setSetting(key(userId), a);
+    D.setUserPref(userId, PREF, a);
   } catch (err) {
     console.error('[משימון] העדפות פריוריטי:', err.message);
   }
@@ -60,7 +68,7 @@ function set(userId, company, field, value) {
   try {
     const a = all(userId);
     a[company] = { ...(a[company] ?? {}), [field]: value, at: Date.now() };
-    D.setSetting(key(userId), a);
+    D.setUserPref(userId, PREF, a);
   } catch (err) {
     console.error('[משימון] העדפות פריוריטי:', err.message);
   }

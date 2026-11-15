@@ -11,6 +11,7 @@ const Auth = require('../core').Auth;
 const Rules = require('../tasks').RulesEngine;
 const Google = require('../integrations').GoogleAuth;
 const Invites = require('../core').Invites;
+const SettingsCatalog = require('../core').SettingsCatalog;
 const Mailer = require('../integrations').Mailer;
 const TaskMail = require('../mail').TaskMail;
 const Push = require('../integrations').Push;
@@ -4587,10 +4588,9 @@ router.delete('/api/admin/users/:id', async (req, res, ctx) => {
     D.run("DELETE FROM wa_messages WHERE user_id = ? OR (? <> '' AND sender_phone = ?)", id, user.phone ?? '', user.phone ?? '');
     D.run('DELETE FROM wa_log WHERE user_id = ?', id);
     D.run('DELETE FROM agent_log WHERE user_id = ?', id);
-    // הגדרות לפי משתמש (קבלת סחורה, דרישת רכש, העדפות פריוריטי, ידע ארגוני)
-    D.run('DELETE FROM settings WHERE key IN (?, ?, ?, ?, ?)',
-      `goods_receipt:${id}`, `goods_receipt_done:${id}`, `goods_receipt_prefs:${id}`,
-      `purchase_demand:${id}`, `org_distill_${id}`);
+    // נתונים לפי משתמש שעוד בטבלת ההגדרות (‎SettingsCatalog.LEGACY_PER_USER‎; העדפות פריוריטי — מ-15.11.26 ב-user_prefs)
+    for (const prefix of SettingsCatalog.LEGACY_PER_USER) D.run('DELETE FROM settings WHERE key = ? OR key LIKE ?', `${prefix}${id}`, `${prefix}${id}:%`);
+    D.run('DELETE FROM settings WHERE key = ?', `goods_receipt_prefs:${id}`);
     // שורות שמזוהות לפי סוג ומזהה, בלי מפתח זר
     D.run("DELETE FROM sessions WHERE actor_type = 'user' AND actor_id = ?", id);
     D.run("DELETE FROM notifications WHERE target_type = 'user' AND target_id = ?", id);
@@ -4717,6 +4717,8 @@ router.get('/api/admin/settings', async (req, res, ctx) => {
   sendJson(res, 200, {
     settings: D.allSettings(),
     defaults: D.DEFAULT_SETTINGS,
+    // 🗂 הטופס לפי לשוניות — מהקטלוג (‎core/settings-catalog.js‎), המקור היחיד לשם ולהסבר של כל הגדרה
+    form: SettingsCatalog.formTabs(),
     // מצב החיבורים החיצוניים. בלי התצוגה הזו, מפתח שנמחק בשרת מבטל תכונה
     // שלמה בלי שום סימן בממשק — בדיוק מה שקרה לכניסה עם Google.
     integrations: {
