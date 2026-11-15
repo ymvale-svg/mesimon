@@ -1111,6 +1111,17 @@ async function handleDirect(msg) {
   }
   // דרישת רכש — "דרישת רכש" (כתוב, בהקלטה, או הכפתור בתפריט פריוריטי), ובאמצע דרישה — התשובות לשאלות שלה.
   // לא לדרישה (קבלת סחורה, בקשה אחרת) — ממשיכים לקבלת הסחורה / לבוט הרגיל
+  // 🤖 קובץ באמצע שיחה עם אינסטינקט ("צרף את התמונה כאן") — אליו, עם ההקשר; לא "לקלוט כקבלת סחורה?" (באג 15.11.26).
+  // "קבלת סחורה" בכיתוב — קבלת סחורה, כרגיל
+  // באמצע קבלת סחורה / דרישת רכש (נספחים, צילום רשימה) — הקובץ שלהן
+  if (msg.file && !msg.forwarded && Instinct.allowed(actor) && !GoodsReceipt.isTrigger(text) && !GoodsReceipt.active(user.id, true)
+    && !PurchaseDemand.active(user.id, true) && Instinct.inConversation(user.id)) {
+    const question = Instinct.openQuestion(user.id);
+    Instinct.request(user, text ?? '', { file: msg.file, question, ref });
+    void react(ref, '⏳');
+    log({ ...base, text: `[📎 ${msg.file.name || msg.kind || 'קובץ'}] ${text ?? ''}`.trim(), action: 'instinct', status: 'ok', result: 'קובץ באמצע שיחה עם אינסטינקט — נשלח אליו' });
+    return;
+  }
   const pdAllowed = WaActions.allowed(actor, 'purchase_demand');
   // ⏳ 15 דקות בלי תשובה — דרישת הרכש / קבלת הסחורה כבר לא "פעילה", והודעה חדשה מתחילה מההתחלה. לחיצה על כפתור — עוד עונה
   const late = !msg.file && answerLike(text, msg);

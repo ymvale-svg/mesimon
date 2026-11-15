@@ -183,10 +183,10 @@ async function send(id, user, text, { file, question }) {
   }
   // המשך לבקשה שנענתה עכשיו — ההקשר שלה נשלח איתה: השיחה עם אינסטינקט משותפת לכל העובדים
   const prev = question ? null : previousOf(user.id);
-  if (prev && body) body = `בהמשך לבקשה הקודמת: "${prev.text.slice(0, 300)}"\nעכשיו: ${body}`;
+  if (prev) body = body ? `בהמשך לבקשה הקודמת: "${prev.text.slice(0, 300)}"\nעכשיו: ${body}` : `בהמשך לבקשה הקודמת: "${prev.text.slice(0, 300)}"`;
   let sent;
   if (file) {
-    sent = await WhatsApp.call(ch, 'sendFileByUrl', { http: 'POST', body: { chatId: chatId(), urlFile: file.url, fileName: file.name || 'file', caption: body } });
+    sent = await WhatsApp.call(ch, 'sendFileByUrl', { http: 'POST', body: { chatId: chatId(), urlFile: file.url, fileName: file.name || 'file', caption: body, ...(question ? { quotedMessageId: question.in_id } : {}) } });
   } else {
     if (!body) throw new Error('בקשה ריקה');
     sent = await WhatsApp.call(ch, 'sendMessage', { http: 'POST', body: { chatId: chatId(), message: body, ...(question ? { quotedMessageId: question.in_id } : {}) } });
@@ -386,6 +386,18 @@ async function unsolicited(msg) {
   log({ ...base, chatId: to, userId: row.user_id, status: 'ok', result: `שאלת המשך לבקשה ${row.id} — הועברה לעובד` });
 }
 
+/**
+ * העובד באמצע שיחה עם אינסטינקט — שאלה שלו פתוחה, בקשה בטיפול, או תשובה בעשר הדקות האחרונות ("צרף את התמונה").
+ * קובץ שמגיע עכשיו — אליו, ולא "לקלוט כקבלת סחורה?" (באג 15.11.26).
+ */
+function inConversation(userId) {
+  if (openQuestion(userId)) return true;
+  const last = D.get("SELECT * FROM instinct_requests WHERE user_id = ? AND kind IN ('request', 'answer') ORDER BY id DESC LIMIT 1", userId);
+  if (!last) return false;
+  if (['queued', 'sent'].includes(last.status)) return true;
+  return last.status === 'answered' && Date.now() - new Date(last.answered_at).getTime() < cfg.FOLLOW_MS;
+}
+
 /** שאלה מאינסטינקט שהועברה לעובד ועוד לא נענתה — ‎null‎ אם אין, או שעבר הזמן */
 function openQuestion(userId) {
   const q = D.get("SELECT * FROM instinct_requests WHERE user_id = ? AND kind = 'question' AND status = 'open' ORDER BY id DESC LIMIT 1", userId);
@@ -428,6 +440,6 @@ function reset() {
 }
 
 module.exports = {
-  DEFAULT_PHONE, TRIGGER, MENTION, phone, isInstinct, allowed, redact, checkFile, offerFile, takeFile, request, receive, openQuestion,
+  DEFAULT_PHONE, TRIGGER, MENTION, phone, isInstinct, allowed, redact, checkFile, offerFile, takeFile, request, receive, openQuestion, inConversation,
   _internal: { cfg, reset, targetOf, classify, expire }
 };

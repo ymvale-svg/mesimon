@@ -394,3 +394,35 @@ test('שני עובדים ביקשו לאחרונה, והודעה לא ברור�
   assert.equal(toUser(wa, b).filter((c) => c.body.message === 'https://files.instinct.com/xyz').length, 0);
   assert.ok(toUser(wa, a).some((c) => /לא קשורה לבקשה/.test(c.body.message)));
 });
+
+/*
+ * באג 15.11.26: "תשנה את הרקע של התמונה לחוף הים" ← אינסטינקט: "צרף את התמונה כאן". העובד שלח תמונה בלי כיתוב —
+ * והבוט שאל "לקלוט כקבלת סחורה בפריוריטי?". קובץ שמגיע בזמן שיחה עם אינסטינקט — אליו, עם ההקשר.
+ */
+test('תמונה בלי כיתוב אחרי שאינסטינקט ביקש אותה — יוצאת אליו עם ההקשר, בלי "קבלת סחורה?"', async (t) => {
+  const wa = setup(t);
+  ai(t, { identifying: false });
+  t.mock.method(Speech, 'download', async () => ({ buf: Buffer.alloc(20000, 1), mime: 'image/jpeg' }));
+  const u = person();
+  await say(u.phone, 'אינסטינקט, תשנה את הרקע של התמונה לחוף הים');
+  await settle();
+  await fromInstinct('לאיזו תמונה? צרף אותה כאן כדי שאחליף לה את הרקע לחוף הים.', outIdOf(u));
+  wa.clear();
+  await say(u.phone, '', { kind: 'imageMessage', file: { url: 'https://x/office.jpg', mime: 'image/jpeg', name: 'office.jpg' } });
+  await settle();
+  const out = toInstinct(wa);
+  assert.equal(out.length, 1);
+  assert.equal(out[0].method, 'sendFileByUrl');
+  assert.equal(out[0].body.urlFile, 'https://x/office.jpg');
+  assert.match(out[0].body.caption, /הרקע של התמונה לחוף הים/, 'עם ההקשר של הבקשה');
+  assert.equal(toUser(wa, u).filter((c) => /קבלת סחורה|מה לעשות איתו/.test(c.body?.message ?? c.body?.body ?? '')).length, 0);
+});
+
+test('תמונה בלי כיתוב כשאין שיחה עם אינסטינקט — לא יוצאת אליו', async (t) => {
+  const wa = setup(t);
+  ai(t);
+  const u = person();
+  await say(u.phone, '', { kind: 'imageMessage', file: { url: 'https://x/inv.jpg', mime: 'image/jpeg', name: 'inv.jpg' } });
+  await settle();
+  assert.equal(toInstinct(wa).length, 0);
+});
