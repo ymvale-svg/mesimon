@@ -297,14 +297,14 @@ async function getOrder(company, ordname) {
 /** הזמנות בסטטוס סופי, החדשות קודם */
 async function finalOrders(company, statuses, top = 200) {
   const f = statuses.map((s) => `STATDES eq '${q(s)}'`).join(' or ');
-  return rows(await call(company, 'GET', `PORDERS?$filter=${enc(f)}&$select=ORDNAME,STATDES,CURVERSION&$orderby=ORD desc&$top=${top}`));
+  return rows(await call(company, 'GET', `PORDERS?$filter=${enc(f)}&$select=ORDNAME,STATDES,CURVERSION,CURDATE,PRDNO&$orderby=ORD desc&$top=${top}`));
 }
 
 /** הזמנה מלאה להתראה: כותרת, שורות עם מחירים, ואיש הקשר / כתובת האספקה */
 async function orderForNotice(company, ordname) {
   const k = `PORDERS('${q(ordname)}')`;
   const h = strip(await call(company, 'GET', `${k}?$select=ORDNAME,SUPNAME,CDES,STATDES,CURDATE,PRDNO,PROJDOCNO,PROJDES,OWNERLOGIN,TYPEDES,WARHSNAME,PAYDES,QPRICE,PERCENT,DISPRICE,VAT,TOTPRICE,CODE,DETAILS,CURVERSION`));
-  const lines = rows(await call(company, 'GET', `${k}/PORDERITEMS_SUBFORM?$select=LINE,PARTNAME,PDES,TQUANT,TUNITNAME,PRICE,PERCENT,QPRICE,ICODE,DUEDATE,REQDATE,PRDNO,REMARK`));
+  const lines = rows(await call(company, 'GET', `${k}/PORDERITEMS_SUBFORM?$select=LINE,PARTNAME,PDES,TQUANT,TUNITNAME,PRICE,PERCENT,QPRICE,ICODE,DUEDATE,REQDATE,PRDNO,PRDI,REMARK`));
   const ship = await call(company, 'GET', `${k}/SHIPTO_SUBFORM`).then(strip).catch(() => null);
   return { ...h, lines: lines.sort((a, b) => (a.LINE ?? 0) - (b.LINE ?? 0)), ship };
 }
@@ -313,6 +313,24 @@ async function orderForNotice(company, ordname) {
 async function demandInitiator(company, prdno) {
   const d = rows(await call(company, 'GET', `PURDEMANDS?$filter=${enc(`PRDNO eq '${q(prdno)}'`)}&$select=PRDNO,INITUSERLOGIN,OWNERLOGIN&$top=1`))[0];
   return d ? (d.INITUSERLOGIN || d.OWNERLOGIN || null) : null;
+}
+
+/**
+ * דרישת הרכש של הזמנה — להודעה "הדרישה אושרה והועברה לספק": מי פתח (‎INITUSERLOGIN‎, ‎OWNERLOGIN‎, ובדרישה מהבוט —
+ * שם המשתמש שבדו-שיח הפנימי, "נפתחה ע"י: שם (Login)"), מי אישר (‎PDUSER_SUBFORM‎ עם ‎UFLAG = Y‎ — מי שחתם בפועל),
+ * והשורות — להשוואה להזמנה. ‎null‎ — לא נמצאה.
+ */
+async function demandForNotice(company, prdno) {
+  const d = rows(await call(company, 'GET', `PURDEMANDS?$filter=${enc(`PRDNO eq '${q(prdno)}'`)}&$select=PRDNO,INITUSERLOGIN,OWNERLOGIN,STATDES`
+    + '&$expand=PDUSER_SUBFORM($select=USERLOGIN,CUSERLOGIN,UFLAG),PRDITEMS_SUBFORM($select=PRDI,PARTNAME,PDES,TQUANT,TUNITNAME),INTERNALDIALOGTEXT_SUBFORM&$top=1'))[0];
+  if (!d) return null;
+  const dialog = String(d.INTERNALDIALOGTEXT_SUBFORM?.TEXT ?? '').replace(/<[^>]+>/g, ' ');
+  return {
+    PRDNO: d.PRDNO, INITUSERLOGIN: d.INITUSERLOGIN ?? null, OWNERLOGIN: d.OWNERLOGIN ?? null, STATDES: d.STATDES ?? '',
+    approvers: [...new Set((d.PDUSER_SUBFORM ?? []).filter((u) => u.UFLAG === 'Y').map((u) => u.CUSERLOGIN || u.USERLOGIN).filter(Boolean))],
+    dialogLogin: dialog.match(/נפתחה ע["״]י:[^(|]*\(([A-Za-z][\w.]*)\)/)?.[1] ?? '',
+    lines: (d.PRDITEMS_SUBFORM ?? []).map((l) => ({ PRDI: l.PRDI, PARTNAME: l.PARTNAME, PDES: l.PDES, TQUANT: l.TQUANT, TUNITNAME: l.TUNITNAME }))
+  };
 }
 
 /** מנהל הפרויקט בפריוריטי (‎MUSERLOGIN‎ במסך הפרויקטים) */
@@ -1021,7 +1039,7 @@ module.exports = {
   suppliersByWords, ordersByProject,
   COMPANIES, DEFAULT_HOST, DEFAULT_INI, configure, syncCompanies, ping, isEnabled, allowed, companyOf, isTest, resolveCompany, companiesByName, PriorityError,
   GENERAL, NO_VAT_CODE, TAX_CODES, PAY_TERMS, DEFAULT_PAY, payTerm, payLabel, payFromText, dueDate, projectWarehouses, warehouses, warehouseExists, defaultWarehouse, supplierHistory, recentLines, partByCode, findPartsByText, searchParts, generalCoding, warehouseOf, findSuppliers, supplierByCode, findReceiptByBooknum, getOrder, openOrders, findPartExact, lastSubchapter, projects, matchProjects, readReceipt,
-  finalOrders, orderForNotice, demandInitiator, projectManager, priorityUser,
+  finalOrders, orderForNotice, demandInitiator, demandForNotice, projectManager, priorityUser,
   readDialog, createReceipt, addOrderLine, addFreeLine, setLineQty, setLineDes, setHeader, attach, deleteAttachment, setDialog, finalizeReceipt, cancelReceipt, receiptStatus, deleteLines,
   PD_TYPES, demandCodes, recentDemandProjects, createDemand, addDemandLine, setDemand, submitDemand, isNoApproversError, readDemand, waitingDemands, nextSigner, cancelDemand, setDemandDialog, attachDemand, priorityUsers, budgetPairs,
   _call: call
