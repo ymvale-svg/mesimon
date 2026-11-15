@@ -18,6 +18,7 @@ const W = require('../core').Workdays;
 const MailActions = require('./mail-actions');
 const MailScan = require('./mail-scan');
 const MailInsights = require('./mail-insights');
+const MailOwner = require('./mail-owner');
 const WaUi = require('../whatsapp').WaUi;
 
 const PUSH_MIN = 4;   // תזכורת "זכרת?" / הודעה מרוכזת
@@ -38,6 +39,8 @@ const mutedSenders = (userId) => new Set((prefsOf(userId).mailMutedSenders ?? []
 function direct(row) {
   const d = typeof row.data === 'object' && row.data ? row.data : parseJson(row.data, {});
   if (d.toMe === false || d.auto) return false;
+  // 👤 מייל לכמה נמענים — רק לבעלים; תפוצה או שמישהו מהארגון כבר ענה — לאף אחד (‎mail-owner.js‎)
+  if (!MailOwner.mayPush(row.user_id, row.header_id)) return false;
   return !mutedSenders(row.user_id).has(String(row.from_email ?? '').toLowerCase());
 }
 
@@ -219,6 +222,7 @@ function digestFor(userId) {
   const seen = new Set();
   const muted = mutedSenders(userId);
   const rows = waitingMail(userId).filter((r) => parseJson(r.data, {}).toMe !== false && !muted.has(String(r.from_email ?? '').toLowerCase())
+    && MailOwner.mayPush(userId, r.header_id)
     && !seen.has(r.gmail_id) && seen.add(r.gmail_id));
   if (rows.length < DIGEST_MIN) return null;
   savePrefs(userId, { mailDigestOn: today });

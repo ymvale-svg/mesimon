@@ -20,5 +20,6 @@ module.exports = {
   get FormFill() { return require('./form-fill'); },
   get MailThread() { return require('./mail-thread'); },
   get MailPush() { return require('./mail-push'); },
-  get ReplyWatch() { return require('./reply-watch'); }
+  get ReplyWatch() { return require('./reply-watch'); },
+  get MailOwner() { return require('./mail-owner'); }
 };
