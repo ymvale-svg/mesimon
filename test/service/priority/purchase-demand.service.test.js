@@ -115,6 +115,8 @@ test('דרישת רכש מלאה בכפתורים: פרויקט, רשימת מא
   assert.equal(Prefs.lastCompany(u.id), 'test11');
   assert.equal(Prefs.of(u.id, 'test11').project.code, 'PR1');
   assert.equal(Prefs.of(u.id, 'test11').demandCode, '01');
+  // מי פתח — בשביל "הדרישה שלך אושרה והועברה לספק" (בפריוריטי הדרישה רשומה על משתמש ה-API)
+  assert.equal(Prefs.openerOf('test11', 'PRD26000007'), u.id);
 });
 
 test('ברירות מחדל: דרישה שנייה — פרויקט, מחסן ורשימת מאשרים מהפעם הקודמת, בלי לעצור', async (t) => {

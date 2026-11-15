@@ -718,6 +718,8 @@ async function submit(user, s) {
   }
   s.prdno = prdno;
   save(user.id, s);
+  // מי פתח — לפריוריטי הדרישה רשומה לפעמים על משתמש ה-API; כך הוא יקבל "הדרישה אושרה והועברה לספק" (po-notify)
+  Prefs.rememberOpener(c, prdno, user.id);
   Chain.progress(user.id, 'demand', { stage: 'draft', docno: prdno, company: c, supplier: s.project?.des ?? '' });
   const problems = [];
   const gen = await generalPair(s);
