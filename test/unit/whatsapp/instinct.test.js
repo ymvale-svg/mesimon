@@ -292,3 +292,48 @@ test('"אינסטקט, …" — גם בשגיאת כתיב, ישר לאינסט�
   await settle();
   assert.match(toInstinct(wa)[0]?.body.message ?? '', /מתכון לחלה/);
 });
+
+/*
+ * באג 15.11.26: "ההזמנה מוכנה להפצה, עם השעה והנוסח שביקשת" — נחשבה הודעה שלא קשורה לבקשה, והעובד לא קיבל אותה.
+ * בקשות שנשארו "בטיפול" מלפני הפעלה מחדש של השרת (השעון של 90 השניות נעלם איתה) — עשו כאילו יש כמה בקשות פתוחות,
+ * ו-AI הסיווג לא ראה בכלל בקשות שעוד "בטיפול". ועיצוב לוקח לאינסטינקט יותר מ-90 שניות.
+ */
+test('בקשה שנתקעה "בטיפול" מלפני הפעלה מחדש — לא מסתירה את הבקשה החדשה; התשובה בלי ציטוט מגיעה לעובד', async (t) => {
+  const wa = setup(t);
+  ai(t);
+  const old = person();
+  D.run("INSERT INTO instinct_requests (user_id, kind, status, text, out_id, created_at, sent_at) VALUES (?, 'request', 'sent', 'ישן', 'old-1', ?, ?)",
+    old.id, new Date(Date.now() - 2 * 3600e3).toISOString(), new Date(Date.now() - 2 * 3600e3).toISOString());
+  const u = person();
+  await say(u.phone, 'אינסטינקט, תעצב לי הזמנה לכנס דיירים');
+  await settle();
+  await fromInstinct('ההזמנה מוכנה להפצה, עם השעה והנוסח שביקשת.');
+  assert.deepEqual(toUser(wa, u).map((c) => c.body.message), ['ההזמנה מוכנה להפצה, עם השעה והנוסח שביקשת.']);
+  assert.equal(toUser(wa, old).length, 0);
+});
+
+test('שתי בקשות פתוחות של אותו עובד — תשובה בלי ציטוט מגיעה אליו', async (t) => {
+  const wa = setup(t);
+  ai(t);
+  const u = person();
+  await say(u.phone, 'אינסטינקט, תעצב לי הזמנה');
+  await say(u.phone, 'אינסטינקט, בצבע כחול');
+  await settle();
+  await fromInstinct('הנה ההזמנה בכחול');
+  assert.deepEqual(toUser(wa, u).map((c) => c.body.message), ['הנה ההזמנה בכחול']);
+});
+
+test('עיצוב לוקח זמן — 90 שניות אינן "לא ענה"; הזמן הקצוב הוא דקות', () => {
+  assert.ok(Instinct._internal.cfg.TIMEOUT_MS >= 5 * 60 * 1000);
+});
+
+test('הודעה יזומה — ה-AI רואה גם בקשה שעוד בטיפול', async (t) => {
+  setup(t);
+  const u = person();
+  D.run("INSERT INTO instinct_requests (user_id, kind, status, text, out_id, created_at, sent_at) VALUES (?, 'request', 'sent', 'הזמנה לכנס דיירים', 's-1', ?, ?)", u.id, D.nowIso(), D.nowIso());
+  D.run("INSERT INTO instinct_requests (user_id, kind, status, text, out_id, created_at, sent_at) VALUES (?, 'request', 'sent', 'מתכון', 's-2', ?, ?)", person().id, D.nowIso(), D.nowIso());
+  const claude = ai(t);
+  await Instinct._internal.classify('ההזמנה מוכנה');
+  const prompt = claude.calls.at(-1).opts.content[0].text;
+  assert.match(prompt, /הזמנה לכנס דיירים/);
+});
