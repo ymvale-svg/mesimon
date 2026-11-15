@@ -204,11 +204,11 @@ async function mayRemindNow(userId) {
 }
 
 /** השתקה, שעות, שיחה פעילה, הודעה יזומה אחרונה ופגישה ביומן — משותף לתזכורות ולהצעות תשובה */
-async function quietOk(userId, gapMin) {
+async function quietOk(userId, gapMin, { mailMute = true } = {}) {
   if (Date.now() - (lastUser.get(Number(userId)) ?? 0) < USER_QUIET_MS) return false;
   if (Date.now() - (lastAny.get(Number(userId)) ?? 0) < gapMin * 60000) return false;
   const mute = D.userPrefs(userId)?.botPrefs?.remindMuteUntil;
-  if (mute && W.todayIL() < mute) return false;
+  if (mailMute && mute && W.todayIL() < mute) return false;
   const now = new Date();
   const hm = new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Jerusalem', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(now);
   const m = /^(\d{2}:\d{2})-(\d{2}:\d{2})$/.exec(String(D.getSetting('remind_hours', '08:30-17:00') ?? ''));
@@ -632,6 +632,6 @@ function prune() {
 }
 
 module.exports = {
-  GOODS_SCHEMA, BTN, PACE_BTN, GOODS_STOP_BTN, GOODS_IGNORE_LIMIT, answerGoodsStop, answerPaceOffer, goodsDocFrom, goodsFile, nextQuestion, answerReminder, answerGoods, prune, dueReminders, mayRemindNow, mayAlertNow, paceTick, PACE, paceCommand, noteProactive, noteUser,
+  GOODS_SCHEMA, BTN, PACE_BTN, GOODS_STOP_BTN, GOODS_IGNORE_LIMIT, answerGoodsStop, answerPaceOffer, goodsDocFrom, goodsFile, nextQuestion, answerReminder, answerGoods, prune, dueReminders, mayRemindNow, mayAlertNow, quietOk, paceTick, PACE, paceCommand, noteProactive, noteUser,
   _internal: { engagement, paceOffer, nextReminder, nextGoods, GOODS_PER_DAY, goodsIgnoredStreak, reminderQuestion, goodsQuestion, setRemind, remindAt, scoreOf, handledInGmail, paceState }
 };

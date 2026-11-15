@@ -1264,6 +1264,11 @@ const App = (() => {
       formOffer.addEventListener('change', () => {
         setPref('botPrefs', { ...(getPref('botPrefs', {}) ?? {}), formOffer: formOffer.checked });
       });
+      // 💡 הטיפ היומי ב-9 בבוקר — "ידעת שהבוט יודע…?". דלוק כברירת מחדל (‎server/whatsapp/bot-tips.js‎)
+      const tips = el('input', { type: 'checkbox', checked: getPref('botPrefs', {})?.tips !== false });
+      tips.addEventListener('change', () => {
+        setPref('botPrefs', { ...(getPref('botPrefs', {}) ?? {}), tips: tips.checked });
+      });
       // 🌊 קצב התזכורות מהמייל — כדי לא להציף מי שמקבל עשרות מיילים ביום
       const pace = el('select', {}, [
         ['normal', 'רגיל — עד אחת לחצי שעה, 8 ביום'],
@@ -1285,6 +1290,13 @@ const App = (() => {
                   el('div.mute-sm', { text: 'החלק האחרון של Today: במסך, בבוט (בהודעת המשך) ובמייל הבוקר. את הרשימה המלאה מקבלים תמיד לפי בקשה: "תובנות", "תובנות מהיומיים האחרונים".' })
                 ]),
                 el('td', { style: { textAlign: 'center', width: '110px' } }, [el('label.checkbox', {}, [box])])
+              ]),
+              el('tr', {}, [
+                el('td', {}, [
+                  el('div', { text: '💡 טיפ יומי — "ידעת שהבוט יודע…?"' }),
+                  el('div.mute-sm', { text: 'פעם ביום, ב-9 בבוקר: משהו שעוד לא ניסית שהבוט יודע לעשות, עם כפתור "נסו עכשיו". גם בבוט: "מספיק טיפים".' })
+                ]),
+                el('td', { style: { textAlign: 'center', width: '110px' } }, [el('label.checkbox', {}, [tips])])
               ]),
               el('tr', {}, [
                 el('td', {}, [

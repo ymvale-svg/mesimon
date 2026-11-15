@@ -65,6 +65,7 @@ const AiOutage = require('./ai-outage');
 const WaQuestions = require('./wa-questions');
 const Rfq = require('../priority').Rfq;
 const PriorityAccess = require('../priority').PriorityAccess;
+const BotTips = require('./bot-tips');
 const FormFill = require('../mail').FormFill;
 const MeetCoord = require('../meetings').MeetingCoord;
 const Reminders = require('./reminders');
@@ -409,6 +410,11 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
   }
   // 🔕 / 🔔 תזכורות מהמייל — "תפסיק להזכיר לי מהמייל", "תחזיר את התזכורות מהמייל", "… רק בבוקר", "… היום".
   // לפני "תזכיר לי …" — "תזכיר לי מהמייל" היא הפעלה, לא תזכורת חדשה
+  // 💡 "מספיק טיפים" / "תחזיר את הטיפים"
+  {
+    const r = dry ? null : BotTips.command(actor.id, t);
+    if (r) return out(r.text, {}, { action: 'tips', status: 'ok', result: r.result, react: '✅' });
+  }
   {
     const r = dry ? null : MailActions.paceCommand(actor.id, t);
     if (r) return out(r.text, {}, { action: 'mail_deadline', status: 'ok', result: r.result, react: '✅' });
@@ -1681,6 +1687,14 @@ async function tick() {
         await rfqTick();
         await meetCoordTick();
         await replyWatchTick();
+        // 💡 הטיפ היומי (09:00–10:00) — "ידעת שהבוט יודע…?", לא באמצע שיחה ולא בפגישה
+        if (WaActions.byKey('tips')?.enabled) {
+          await BotTips.tick({
+            users: () => orgUsers().filter((u) => u.phone && workHours(u.id)).map((u) => ({ ...u, role: Auth.loadActor('user', u.id)?.role })).filter((u) => u.role),
+            push: (userId, m) => pushToUser(userId, m, 'tips'),
+            quiet: async (userId) => !busyFor(userId) && MailActions.quietOk(userId, 10, { mailMute: false })
+          }).catch((err) => console.error('[משימון] הטיפ היומי נכשל:', err.message));
+        }
         if (WaActions.byKey('briefing')?.enabled) {
           await Briefing.tick({
             users: () => orgUsers().filter((u) => u.phone && workHours(u.id) && D.userPrefs(u.id)?.botPrefs?.briefing !== false && WaActions.allowed(Auth.loadActor('user', u.id), 'briefing')),
