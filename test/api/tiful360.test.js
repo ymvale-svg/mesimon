@@ -88,3 +88,21 @@ test('קריאה שאין לה משימה — 404; מפתח שגוי — 401', a
   assert.equal((await inbound('/tasks/close', { ticketCode: 'IT-0000' })).status, 404);
   assert.equal((await inbound('/tasks/close', { ticketCode: 'IT-9001' }, 'wrong')).status, 401);
 });
+
+test('אבטחה: משימה שנוצרה מהאתר לא יכולה להתחזות לקריאה של תפעול 360', async () => {
+  // משתמש מחובר שולח source/sourceRef בעצמו — אסור שסגירת המשימה תסגור קריאה של מישהו אחר בתפעול 360
+  const c = await srv.api('POST', '/api/tasks', {
+    cookie, body: { title: 'מזויפת', source: 'tiful360', sourceRef: 'IT-9005', sourceUserId: 1 }
+  });
+  assert.equal(c.status, 201, c.text);
+  const fakeId = c.json.task.id;
+
+  // הקריאה האמיתית מגיעה אחר כך — נוצרת לה משימה משלה, לא המזויפת
+  const realId = await ticketTask('IT-9005');
+  assert.notEqual(realId, fakeId);
+
+  const r = await srv.api('PATCH', `/api/tasks/${fakeId}`, { cookie, body: { status: 'done' } });
+  assert.equal(r.status, 200, r.text);
+  await sleep(300);
+  assert.equal(closeCalls.filter((x) => x.ticket_code === 'IT-9005').length, 0, 'לא נשלחה סגירה לתפעול 360');
+});
