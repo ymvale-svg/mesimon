@@ -41,6 +41,8 @@ function record(userId, id, { owner = 'chat', draft = null, awaiting = false } =
 }
 
 const find = (userId, id) => (id ? list(userId).find((q) => q.id === String(id)) ?? null : null);
+/** ההודעה האחרונה עם כפתורים של ‎owner‎ (‎null‎ — אין). תגובה (Reaction) בקבלת סחורה / דרישת רכש נחשבת תשובה רק עליה (#171) */
+const latest = (userId, owner) => list(userId).filter((q) => q.owner === owner).at(-1) ?? null;
 
 /** ‎answer‎ — הכפתור שנלחץ: לחיצה אחרת על אותה שאלה ("לא" ואז "קבלת סחורה") היא שינוי דעה, לא כפילות */
 function markAnswered(userId, id, answer = '') {
@@ -85,4 +87,4 @@ const CLOSED_TEXT = 'ℹ️ השאלה הזו כבר לא פתוחה, אז לא 
 const CLOSED_NO_TEXT = 'בסדר 👍 לא שלחתי ולא שיניתי כלום.';
 const isNo = (text) => /^(לא|התעלם|ביטול|בטל|עזוב|👎)(?=[\s,.!❌🙈🗑️]|$)/u.test(String(text ?? '').trim());
 
-module.exports = { record, find, markAnswered, decide, draftKey, replyToOf, isNo, RESTORABLE, CLOSED_TEXT, CLOSED_NO_TEXT };
+module.exports = { record, find, latest, markAnswered, decide, draftKey, replyToOf, isNo, RESTORABLE, CLOSED_TEXT, CLOSED_NO_TEXT };

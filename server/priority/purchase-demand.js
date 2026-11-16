@@ -83,6 +83,8 @@ const fresh = (s) => s && Date.now() - (s.at ?? 0) < TTL;
 /** באמצע שיחה — ההודעה הבאה הולכת לדרישה (רק כשהשיחה טרייה ולא הושהתה) */
 const active = (userId, late = false) => { const s = load(userId); return Boolean(fresh(s) && !s.paused && (late || Date.now() - (s.at ?? 0) < idleMs())); };
 const pending = (userId) => Boolean(fresh(load(userId)));
+/** 🔒 הדרישה שהשיחה עליה עכשיו (מספר הדרישה, ולפניו — מתי התחילה), ‎null‎ — אין. נרשם עם הכפתורים (‎WaQuestions‎, #171) */
+const docId = (userId) => { const s = load(userId); return fresh(s) ? String(s.prdno || s.editOf || s.startedAt || '') || null : null; };
 const isTrigger = (text) => TRIGGER.test(String(text ?? ''));
 /** פותח דרישה ("דרישת רכש"); וגם החזרה לבדיקה ("החזר לבדיקה PD…") ותשובה של פותח הדרישה (לתקן / הכל נכון) */
 const opens = (text, userId = null) => isTrigger(text) || Boolean(userId && Return.owns(userId, text));
@@ -614,11 +616,16 @@ async function onFile(user, s, file) {
   return nextQuestion(s, [`📷 קראתי ${added.length} ${added.length === 1 ? 'פריט' : 'פריטים'} מהצילום.`, '']);
 }
 
-async function onText(user, s, t, exact = null) {
+/** ⏳ "סיום" / 👍 אחרי 15 דקות בלי תנועה — לא שולחים; הדרישה מוצגת שוב, ו"סיום" עכשיו שולח (#171) */
+function staleAgain(s) {
+  return { ...showList(s, ['⏳ עבר זמן מאז ההודעה האחרונה בדרישה, ולכן עוד לא שלחתי. הנה הדרישה שוב — לבדוק ולאשר מחדש:', '']), result: 'סיום אחרי 15 דקות — הדרישה הוצגה שוב' };
+}
+
+async function onText(user, s, t, exact = null, { stale = false } = {}) {
   const out = exact ? LineCmd.asDemandEdit(exact) : await ai.edit(s.items ?? [], t);
   if (out.action === 'unrelated') return null;
   if (out.action === 'cancel') return { s: null, replies: ['דרישת הרכש בוטלה. לא נכתב דבר בפריוריטי.'], buttons: [], result: 'ביטול' };
-  if (out.action === 'done' && (s.items ?? []).length) return submit(user, s);
+  if (out.action === 'done' && (s.items ?? []).length) return stale ? staleAgain(s) : submit(user, s);
   const notes = [];
   const removes = [...new Set(out.removes ?? [])].filter((n) => s.items?.some((x) => x.n === n));
   if (removes.length) { s.items = s.items.filter((x) => !removes.includes(x.n)); notes.push(`🗑️ הוסרו: שורה ${removes.join(', ')}.`); renumber(s); }
@@ -930,6 +937,8 @@ async function handle({ user, text = '', file = null, reaction = false, voice = 
     return finish(user, out.s, out, 'התחלה');
   }
   s.uid = user.id;
+  // ⏳ 15 דקות בלי תנועה — 👍 / "סיום" לא שולחים: מציגים שוב את הדרישה ושואלים מחדש (#171)
+  const stale = Date.now() - (s.at ?? 0) >= idleMs();
   if (s.paused) s.paused = false;
   if (isTrigger(t) && !file && s.step !== 'code') return finish(user, s, s.lastPrompt ? reply(s, `🛒 ממשיכים בדרישת הרכש:\n\n${s.lastPrompt}`, s.lastButtons ?? []) : showList(s), 'המשך');
   if (GR_TRIGGER.test(t)) { save(user.id, { ...s, paused: true }); return { pass: true, replies: [], status: 'ok', result: 'מעבר לקבלת סחורה' }; }
@@ -944,7 +953,7 @@ async function handle({ user, text = '', file = null, reaction = false, voice = 
   const snap = JSON.stringify({ ...s, prev: null });
   let out;
   try {
-    out = await step(user, s, t, file, { reaction });
+    out = await step(user, s, t, file, { reaction, stale });
   } catch (err) {
     console.error('[משימון] דרישת רכש:', err.message);
     save(user.id, s);
@@ -967,7 +976,7 @@ function finish(user, s, out, result = null) {
   return { replies: out.replies ?? [], files: out.files ?? [], buttons: out.s === null ? [] : out.buttons ?? [], status: out.status ?? 'ok', result: out.result ?? result ?? `שלב ${out.s?.step ?? 'סיום'}`, prdno: out.s?.prdno ?? s?.prdno ?? null };
 }
 
-async function step(user, s, t, file, { reaction }) {
+async function step(user, s, t, file, { reaction, stale = false }) {
   // שינוי כותרת — בכל שלב (חוץ מבחירת סביבה)
   if (!file && s.company && s.step !== 'company' && !s.editOf) {
     const h = await headerCommand(s, t);
@@ -1013,13 +1022,13 @@ async function step(user, s, t, file, { reaction }) {
     case 'review': {
       if (file) return onFile(user, s, file);
       if (!t) return reply(s, s.lastPrompt ?? 'שלחו את רשימת הפריטים.', s.lastButtons ?? []);
-      if (s.step === 'review' && (DONE.test(t) || sameLabel(t, BTN.done) || t === '👍')) return submit(user, s);
+      if (s.step === 'review' && (DONE.test(t) || sameLabel(t, BTN.done) || t === '👍')) return stale ? staleAgain(s) : submit(user, s);
       if (s.step === 'items' && (DONE.test(t) || sameLabel(t, BTN.done))) return reply(s, 'עוד אין פריטים ברשימה. שלחו צילום, הקלטה או הקלדה של מה שצריך.', [BTN.cancel]);
       // "שורה 2 כמות 10" — עריכה ישירה מהמסך (או מוקלדת): בלי AI
       const exact = LineCmd.parse(t);
       if (exact) return onText(user, s, t, exact);
       if (!Claude.isEnabled()) return reply(s, 'הבנת הרשימה דורשת חיבור AI, שעוד לא הוגדר בשרת.', [BTN.cancel]);
-      return onText(user, s, t);
+      return onText(user, s, t, null, { stale });
     }
     default:
       return afterCompany(s);
@@ -1045,4 +1054,4 @@ function view(userId) {
   };
 }
 
-module.exports = { view, isTrigger, opens, startEdit, active, pending, abandon, handle, setHooks, _parseDate: parseDate, _resolveItems: resolveItems, _ai: ai, _load: load, _clear: (userId) => clear(userId, load(userId)), _label: label, _labels: labels, _sameLabel: sameLabel };
+module.exports = { view, isTrigger, opens, startEdit, active, pending, docId, abandon, handle, setHooks, _parseDate: parseDate, _resolveItems: resolveItems, _ai: ai, _load: load, _clear: (userId) => clear(userId, load(userId)), _label: label, _labels: labels, _sameLabel: sameLabel };

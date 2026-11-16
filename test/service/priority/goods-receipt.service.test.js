@@ -541,3 +541,86 @@ test('🏷️ החותמת לא הצליחה (קובץ שאי אפשר לקרו�
   assert.doesNotMatch(r.text, /מספר ה-GR נכתב/);
   assert.equal(pr.wrote('attach').filter((w) => /עם מספר ה-GR/.test(w.args[2].description)).length, 0);
 });
+
+// ---------------------------------------------------------------------------
+// 🔒 תשובה מאוחרת או על הודעה אחרת לא הופכת קבלה לסופית (#171)
+// ---------------------------------------------------------------------------
+
+const Q = require('../../../server/whatsapp/wa-questions');
+
+/** מהצילום עד "להפוך לסופית?" */
+async function toConfirmFinal(say) {
+  await toProject(say);
+  await say('אלעד 49 צפון');
+  await say('סיום');
+  const r = await say('👍');
+  assert.match(r.text, /לסופית\?/);
+  return r;
+}
+
+/** המצב השמור "התיישן": ‎min‎ דקות בלי תנועה (וגם שאלת "סופית?" נשאלה אז) */
+function age(u, min) {
+  const k = `goods_receipt:${u.id}`;
+  const s = H.D.getSetting(k);
+  const at = Date.now() - min * 60 * 1000;
+  H.D.setSetting(k, { ...s, at, ...(s.confirmFinal ? { confirmFinalAt: at } : {}) });
+}
+
+test('🔒 👍 כתגובה על הודעה אחרת (לא על "להפוך לסופית?") — לא סוגר; על השאלה עצמה — סוגר', async (t) => {
+  H.companies(t, 'test11');
+  const u = H.worker();
+  const pr = priority(t);
+  ai(t, doc());
+  const { say } = H.chat(t, u);
+  await toConfirmFinal(say);
+
+  let r = await say('👍', { reaction: true, on: 'some-other-message' });
+  assert.match(r.text, /על הודעה אחרת/);
+  assert.equal(pr.wrote('finalizeReceipt').length, 0, '👍 על הודעה אחרת אינו תשובה');
+
+  r = await say('👍', { reaction: true });
+  assert.match(r.text, /נקלטה כסופית/);
+  assert.equal(pr.wrote('finalizeReceipt').length, 1);
+});
+
+test('🔒 הכפתורים נרשמים עם מספר ה-GR — "כן ✅" ישן של קבלה אחרת: "השאלה כבר לא פתוחה", ולא נסגר', async (t) => {
+  H.companies(t, 'test11');
+  const u = H.worker();
+  const pr = priority(t);
+  ai(t, doc());
+  const { say } = H.chat(t, u);
+  const asked = await toConfirmFinal(say);
+  assert.equal(Q.find(u.id, asked.questionId).draft.doc, 'GR26000123');
+
+  Q.record(u.id, 'OLD-GR-BTN', { owner: 'goods_receipt', draft: { doc: 'GR25000999' } });
+  let r = await say(BTN.confirmFinal, { press: 'OLD-GR-BTN' });
+  assert.deepEqual(r.texts, [Q.CLOSED_TEXT]);
+  assert.equal(pr.wrote('finalizeReceipt').length, 0);
+
+  r = await say(BTN.confirmFinal, { press: asked.questionId });
+  assert.match(r.text, /נקלטה כסופית/);
+  assert.equal(pr.wrote('finalizeReceipt').length, 1);
+});
+
+test('⏳ "להפוך לסופית?" לפני 20 דקות — 👍 לא סוגר: הטיוטא מוצגת שוב, ושואלים מחדש', async (t) => {
+  H.companies(t, 'test11');
+  const u = H.worker();
+  const pr = priority(t);
+  ai(t, doc());
+  const { say } = H.chat(t, u);
+  await toConfirmFinal(say);
+  age(u, 20);
+
+  let r = await say('👍', { reaction: true });
+  assert.match(r.text, /עבר זמן/);
+  assert.match(r.text, /GR26000123\* — טיוטא לבדיקה/);
+  H.assertButtons(r.buttons, [BTN.approve, BTN.cancel]);
+  assert.equal(pr.wrote('finalizeReceipt').length, 0, 'תשובה מאוחרת אינה אישור סופי');
+
+  r = await say('👍');
+  assert.match(r.text, /לסופית\?/);
+  assert.equal(pr.wrote('finalizeReceipt').length, 0);
+  r = await say('👍');
+  assert.match(r.text, /נקלטה כסופית/);
+  assert.equal(pr.wrote('finalizeReceipt').length, 1);
+});

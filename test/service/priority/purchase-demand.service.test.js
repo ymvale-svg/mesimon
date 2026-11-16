@@ -363,3 +363,80 @@ test('עריכה ישירה בטבלה: "שורה 1 כמות 4" ו"שורה 2 ה
   assert.doesNotMatch(r.text, /בטון — 5 קוב/);
   assert.equal(edits, before, 'לא נקרא AI לעריכה');
 });
+
+// ---------------------------------------------------------------------------
+// 🔒 תשובה מאוחרת או על הודעה אחרת לא שולחת דרישת רכש (#171)
+// ---------------------------------------------------------------------------
+
+const Q = require('../../../server/whatsapp/wa-questions');
+
+/** הדרישה "התיישנה": ‎min‎ דקות בלי תנועה */
+function age(u, min) {
+  const k = `purchase_demand:${u.id}`;
+  H.D.setSetting(k, { ...H.D.getSetting(k), at: Date.now() - min * 60 * 1000 });
+}
+
+test('⏳ דרישה שנשארה 20 דקות בסיכום — 👍 לא שולח: הסיכום מוצג שוב, ו"סיום" אחריו שולח', async (t) => {
+  H.companies(t, 'test11');
+  const u = H.worker();
+  const pr = priority(t);
+  ai(t);
+  const { say } = H.chat(t, u);
+  await toItems(say);
+  await toReview(say);
+  age(u, 20);
+
+  let r = await say('👍', { reaction: true });
+  assert.match(r.text, /עבר זמן/);
+  assert.match(r.text, /דרישת רכש — 2 פריטים/);
+  H.assertButtons(r.buttons, [BTN.done, BTN.cancel]);
+  assert.equal(pr.writes.length, 0, 'תשובה מאוחרת לא שולחת');
+
+  r = await say(BTN.done);
+  assert.match(r.text, /נפתחה ועברה \*לאישור\*/);
+});
+
+test('⏳ כפתור "סיום 🏁" שנלחץ אחרי 20 דקות — לא שולח, הסיכום מוצג שוב', async (t) => {
+  H.companies(t, 'test11');
+  const u = H.worker();
+  const pr = priority(t);
+  ai(t);
+  const { say } = H.chat(t, u);
+  await toItems(say);
+  const shown = await toReview(say);
+  age(u, 20);
+
+  const r = await say(BTN.done, { press: shown.questionId });
+  assert.match(r.text, /עבר זמן/);
+  assert.equal(pr.writes.length, 0);
+});
+
+test('🔒 👍 כתגובה על הודעה אחרת בסיכום — לא שולח', async (t) => {
+  H.companies(t, 'test11');
+  const u = H.worker();
+  const pr = priority(t);
+  ai(t);
+  const { say } = H.chat(t, u);
+  await toItems(say);
+  await toReview(say);
+
+  const r = await say('👍', { reaction: true, on: 'some-other-message' });
+  assert.match(r.text, /על הודעה אחרת/);
+  assert.equal(pr.writes.length, 0);
+});
+
+test('🔒 הכפתורים נרשמים עם מזהה הדרישה — "סיום 🏁" של דרישה אחרת: "השאלה כבר לא פתוחה", ולא נשלח', async (t) => {
+  H.companies(t, 'test11');
+  const u = H.worker();
+  const pr = priority(t);
+  ai(t);
+  const { say } = H.chat(t, u);
+  await toItems(say);
+  const shown = await toReview(say);
+  assert.ok(Q.find(u.id, shown.questionId).draft?.doc, 'הכפתור נרשם עם מזהה הדרישה');
+
+  Q.record(u.id, 'OLD-PD-BTN', { owner: 'purchase_demand', draft: { doc: 'PRD25000001' } });
+  const r = await say(BTN.done, { press: 'OLD-PD-BTN' });
+  assert.deepEqual(r.texts, [Q.CLOSED_TEXT]);
+  assert.equal(pr.writes.length, 0);
+});

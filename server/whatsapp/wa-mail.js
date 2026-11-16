@@ -252,6 +252,9 @@ function createFromDraft(actor, original) {
 }
 
 
+/** תוקף הצעת תשובה למייל: אחרי שעתיים "כן" כבר לא שולח (#171) */
+const MAIL_REPLY_TTL_MS = 2 * 60 * 60 * 1000;
+
 /** ביצוע מה שהעובד אישר ב"כן". בבדיקה ממסך הניהול (‎dry‎) — רק מתארים */
 async function confirmPending(actor, pending, dry) {
   const kind = pending.kind ?? 'task';
@@ -277,6 +280,11 @@ async function confirmPending(actor, pending, dry) {
     }
     if (kind === 'mail_reply') {
       const r = pending.reply;
+      // ⏳ הצעת תשובה ישנה (יותר משעתיים) — "כן" כבר לא שולח (#171). ההצעה נשארת ב"ממתין לאישורך"
+      const offered = Date.parse(pending.offeredAt ?? pending.askedAt ?? '') || 0;
+      if (!dry && Date.now() - offered > MAIL_REPLY_TTL_MS) {
+        return { reply: `⏳ הצעת התשובה ל${r?.toName || r?.to || 'מייל'} ישנה מדי (יותר משעתיים), אז לא שלחתי. אם עדיין צריך לענות — בקשו ממני לענות על המייל, ואכין נוסח מעודכן.`, action, status: 'ok', result: `הצעת תשובה פגה — לא נשלחה: ${r?.subject ?? ''}` };
+      }
       if (!dry) await MailInsights.sendReply(actor.id, r);
       // מהפנייה היזומה: ההצעה מהמייל נענתה — יורדת מ"ממתין לאישורך"
       if (!dry && pending.suggestionIds?.length) closeAlerted(actor.id, pending.suggestionIds, 'replied');
@@ -659,7 +667,7 @@ async function mailAlertFor(userId) {
     return;
   }
   const text = MailPush.replyAlert(head, reply);
-  const draft = { kind: 'mail_reply', reply, alert: true, suggestionIds: ids, subject: head.subject };
+  const draft = { kind: 'mail_reply', reply, alert: true, suggestionIds: ids, subject: head.subject, offeredAt: D.nowIso() };
   try {
     await sendButtons(chatId, text, [WaUi.BTN.yes, WaUi.BTN.no], { owner: 'chat', draft, awaiting: true });
     rememberBot(userId, text);
@@ -694,7 +702,7 @@ async function replyOffer(userId, row) {
   if (!reply?.body) return { error: 'no_reply' };
   return {
     text: MailPush.replyAlert({ ...row, d }, reply),
-    draft: { kind: 'mail_reply', reply, suggestionIds: [row.id], subject: row.subject, buttons: [WaUi.BTN.yes, WaUi.BTN.no] },
+    draft: { kind: 'mail_reply', reply, suggestionIds: [row.id], subject: row.subject, buttons: [WaUi.BTN.yes, WaUi.BTN.no], offeredAt: D.nowIso() },
     buttons: [WaUi.BTN.yes, WaUi.BTN.no]
   };
 }

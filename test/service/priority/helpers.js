@@ -51,24 +51,31 @@ function claude(t, handlers) {
 
 let msgSeq = 0;
 /**
- * שיחה עם הבוט בשם העובד. ‎say(text, { file, reaction })‎ ← מה הבוט שלח בתגובה לתור הזה:
- * ‎{ texts, text, buttons, last, files }‎ — ‎buttons‎: הכפתורים שעל ההודעה האחרונה ([] — ההודעה האחרונה בלי כפתורים).
+ * שיחה עם הבוט בשם העובד. ‎say(text, { file, reaction, on })‎ ← מה הבוט שלח בתגובה לתור הזה:
+ * ‎{ texts, text, buttons, last, files, questionId }‎ — ‎buttons‎: הכפתורים שעל ההודעה האחרונה ([] — ההודעה האחרונה בלי כפתורים).
+ * תגובה (‎reaction‎) — על ההודעה האחרונה עם כפתורים (השאלה), או על ‎on‎ (מזהה הודעה אחרת). ‎press‎ — לחיצה על כפתור של הודעה מסוימת.
  */
 function chat(t, u) {
   const wa = Fakes.whatsapp(t);
-  async function say(text, { file = null, reaction = false } = {}) {
+  let questionId = null;
+  async function say(text, { file = null, reaction = false, on = undefined, press = undefined } = {}) {
     wa.clear();
     msgSeq += 1;
-    await Bot._internal.handleDirect({ phone: u.phone, chatId: `${u.phone}@c.us`, text, id: `svc${msgSeq}`, file, kind: reaction ? 'reactionMessage' : 'textMessage' });
+    // ‎press‎ — לחיצה על כפתור של הודעה מסוימת (המזהה שלה)
+    const replyTo = press !== undefined ? { id: press, button: true } : reaction ? { id: on === undefined ? questionId ?? '' : on, button: false } : undefined;
+    await Bot._internal.handleDirect({ phone: u.phone, chatId: `${u.phone}@c.us`, text, id: `svc${msgSeq}`, file, kind: reaction ? 'reactionMessage' : 'textMessage', replyTo, ...(press !== undefined ? { button: true } : {}) });
     const out = wa.calls.filter((c) => c.method !== 'sendReaction');
     const last = out.at(-1) ?? null;
+    const asked = out.filter((c) => c.method === 'sendInteractiveButtonsReply').at(-1);
+    if (asked) questionId = asked.id;
     const texts = out.map((c) => c.body?.message ?? c.body?.body ?? '').filter((x) => typeof x === 'string' && x);
     return {
       texts,
       text: texts.join('\n'),
       buttons: last?.method === 'sendInteractiveButtonsReply' ? last.body.buttons.map((b) => b.buttonText) : [],
       last,
-      files: out.filter((c) => c.method === 'sendFile')
+      files: out.filter((c) => c.method === 'sendFile'),
+      questionId
     };
   }
   return { say, wa };
