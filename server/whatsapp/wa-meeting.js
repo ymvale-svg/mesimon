@@ -60,7 +60,8 @@ function processMeetingAudio(actor, audioId) {
       const r = await MeetingAudio.processAudio(audioId, meetingAudioDeps(actor));
       const st = chatOf(actor.id);
       const busy = st.awaiting && st.draft;
-      const text = r.draft && busy ? `${r.text.replace(/\n\*מה עכשיו\?\*[\s\S]*$/, '')}\n\nכדי לפתוח את המשימות — כתבו *משימות מהפגישה*; לשלוח את הסיכום — *לשלוח למשתתפים*.` : r.text;
+      // באמצע שאלה אחרת — בלי השאלה בסוף (היא תופסת תשובות); אפשר לחזור אליה: "משימות מהפגישה" / "לשלוח למשתתפים"
+      const text = r.draft && busy ? `${r.text.replace(/\n(?:📤 \*לשלוח את כל הסיכום|✏️ \*לשנות אחראי)[\s\S]*$/, '')}\n\nלשלוח את הסיכום — כתבו *לשלוח למשתתפים*; לשנות אחראי — *משימות מהפגישה*.` : r.text;
       const parts = splitMessage(text);
       for (let i = 0; i < parts.length; i++) {
         if (i === parts.length - 1 && r.draft && !busy) await sendButtons(chatId, parts[i], r.buttons);
@@ -178,6 +179,9 @@ async function meetingFollowups() {
 }
 
 
+// "תפתח את המשימות", "לפתוח אותן", "תפתח רק 1 ו-3" — ‎[1]‎ המשימות, ‎[2]‎ המספרים
+const OPEN_WORDS = /^(?:תפתח|פתח|לפתוח|תפתחי)(?:\s+לי)?(?:\s+(אותן|את\s+(?:כל\s+)?ה?משימות|(?:כל\s+)?ה?משימות)(?:\s+מה?פגישה)?)?(?:\s+(?:רק\s+)?(\d[\d\s,ו\-]*))?$/;
+
 /**
  * תשובה לשאלות של הקלטת הפגישה — "לאיזו פגישה?" ו"לפתוח את המשימות?". ‎null‎ — לא שלנו.
  * ‎converse‎ — מהניתוב (‎wa-bot.js‎): הודעה קולית רגילה מתומללת ומטופלת כמו כל הודעה.
@@ -218,43 +222,36 @@ async function meetingAudioTurn(user, actor, t, state, { dry, out, converse }) {
   }
   if (d.kind === 'meeting_audio_tasks') {
     const log = (result, extra = {}) => ({ action: 'meeting_audio', status: 'ok', result: String(result).slice(0, 300), ...extra });
-    // 📤 כל הסיכום במייל למשתתפים (מהמייל של העובד, אחרי אישור) — ואחר כך חוזרים לשאלה על המשימות
-    const share = WaUi.sameLabel?.(n, MeetingAudio.BTN.share) || WaUi.normalize(MeetingAudio.BTN.share) === n
-      || /^(?:לשלוח|תשלח|שלח)(?:\s+את)?(?:\s+ה?סיכום)?(?:\s+(?:ל|אל\s+)(?:כל\s+)?ה?משתתפים)?$/.test(n)
-      || (d.opened && WaUi.YES.test(n));
+    // 📤 כל הסיכום במייל למשתתפים (מהמייל של העובד, אחרי אישור)
+    const share = WaUi.sameLabel(n, MeetingAudio.BTN.share)
+      || /^(?:לשלוח|תשלח|שלח)(?:\s+את)?(?:\s+ה?סיכום)?(?:\s+(?:ל|אל\s+)(?:כל\s+)?ה?משתתפים)?$/.test(n);
     if (share) {
-      const then = d.opened ? null : { ...d, shared: true };
-      const r = await MeetingFollowup.shareFor(actor, { source: 'wa', ref: d.audioId }, { then });
+      const r = await MeetingFollowup.shareFor(actor, { source: 'wa', ref: d.audioId });
       if (!r) return out('לא מצאתי את הסיכום של הפגישה הזו.', { draft: null }, log(`אין סיכום לשליחה: ${d.title}`));
       return out(r.text, r.draft ? { draft: r.draft, awaiting: true } : { draft: d, awaiting: true }, log(r.result, { buttons: r.buttons }));
     }
-    // ✏️ "2, 5 לגולן" — שינוי אחראי לפני שפותחים
+    if (WaUi.sameLabel(n, MeetingAudio.BTN.reassign)) {
+      return out('למי להעביר? כתבו את מספרי המשימות ואת השם, למשל: *"2, 5 לגולן"*, *"1 לי"*, *"השאר לישראל"*.', { draft: d, awaiting: true }, log('לשנות אחראי — שאלה'));
+    }
+    // ✏️ "2, 5 לגולן" — האחראי משתנה בסיכום, וההצעה במשימון עוברת אליו
     const re = MeetingAudio.parseReassign(t);
     if (re) {
       const r = MeetingAudio.reassign(actor, d, re);
       const row = D.get('SELECT meeting, digest FROM meeting_audio WHERE id = ?', d.audioId);
-      const buttons = row ? MeetingAudio.nextButtons(JSON.parse(row.meeting || '{}'), JSON.parse(row.digest || '{"items":[]}'), actor) : [MeetingAudio.BTN.open, WaUi.BTN.no];
+      const buttons = row ? MeetingAudio.nextButtons(JSON.parse(row.meeting || '{}'), JSON.parse(row.digest || '{"items":[]}'), actor) : [];
       return out(r.text, { draft: d, awaiting: true }, log(`שינוי אחראי (${r.changed}): ${t}`, { buttons }));
     }
-    const only = /^(?:רק\s+|לפתוח\s+(?:רק\s+)?)?([\d\s,ו\-]+)$/.exec(n);
-    const yes = !d.opened && (WaUi.normalize(MeetingAudio.BTN.open) === n || /^לפתוח(\s+(אותן|משימות|את\s+המשימות))?$/.test(n) || WaUi.YES.test(n));
-    if (!d.opened && (yes || only)) {
+    // "תפתח את המשימות" / "לפתוח רק 1 ו-3" — רק כשהעובד מבקש במילים; הבוט לא מציע (16.11.26)
+    const open = OPEN_WORDS.exec(n);
+    if (open && (open[1] || open[2])) {
       const reply = MeetingAudio.openTasks(actor, d, {
         createTask: hooks.createTask, assignBlockReason: hooks.assignBlockReason, taskLink, dry,
-        only: only ? [...new Set((only[1].match(/\d+/g) ?? []).map(Number))] : null
+        only: open[2] ? [...new Set((open[2].match(/\d+/g) ?? []).map(Number))] : null
       });
-      // עוד לא נשלח הסיכום, ויש למי — מציעים
-      const row = D.get('SELECT meeting FROM meeting_audio WHERE id = ?', d.audioId);
-      const people = d.shared ? [] : (JSON.parse(row?.meeting || '{}').people ?? []).filter((p) => p.email && !(actor.email && p.email.toLowerCase() === actor.email.toLowerCase()));
-      if (people.length) {
-        return out(`${reply}\n\n📤 *לשלוח גם את כל הסיכום במייל ל${people.map((p) => p.name || p.email).slice(0, 6).join(', ')}?* *כן* 👍 · *לא* 👎`,
-          { draft: { ...d, opened: true }, awaiting: true }, log(`משימות מהפגישה "${d.title}": ${reply.split('\n')[0]}`, { buttons: [MeetingAudio.BTN.share, WaUi.BTN.no] }));
-      }
       return out(reply, { draft: null }, log(`משימות מהפגישה "${d.title}": ${reply.split('\n')[0]}`));
     }
     if (WaUi.NO.test(n) || CANCEL.test(t)) {
-      const msg = d.opened ? 'בסדר, הסיכום לא נשלח 👍' : 'בסדר, לא נפתחו משימות. ההקלטה והסיכום נשארים במשימון 👍';
-      return out(msg, { draft: null }, log(`לא: ${d.opened ? 'שליחת סיכום' : 'משימות'} מ"${d.title}"`));
+      return out('בסדר 👍 ההצעות מהפגישה מחכות לך במשימון.', { draft: null }, log(`לא: שליחת סיכום / שינוי אחראי מ"${d.title}"`));
     }
   }
   return null;

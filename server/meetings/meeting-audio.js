@@ -11,8 +11,10 @@
  *      משתתף.
  *   3. במשימון: משימת פגישה ("🎥 פגישה: …") עם הסיכום, ההקלטה והתמליל בקבצים
  *      המצורפים. פגישה שמשימון קבע מתוך משימה — הכול נכנס למשימה ההיא.
- *   4. בוואטסאפ: הסיכום והמשימות לפי משתתף — "לפתוח משימות ✅" פותח תת-משימה
- *      לכל אחד, אצל המשתתף עצמו (כשמותר לשייך אליו; אחרת אצל השולח, עם השם).
+ *   4. בוואטסאפ: הסיכום והמשימות לפי משתתף — לקריאה. הבוט לא מציע לפתוח משימות (16.11.26):
+ *      כל משימה נכנסת כהצעה ל"ממתין לאישורך" במשימון, אצל האחראי שלה (‎meeting-suggestions.js‎).
+ *      בבוט: "📤 לשלוח למשתתפים" (כל הסיכום במייל) ו"✏️ לשנות אחראי" ("2, 5 לגולן" — ההצעה עוברת).
+ *      "תפתח את המשימות" במילים — עדיין פותח מיד.
  *
  * מה נחשב הקלטת פגישה: קובץ שמע, או הודעה קולית גדולה מ-‎meeting_audio_min_kb‎
  * (ברירת מחדל 1MB — כ-8 דקות; פקודה לבוט לא נמשכת כך), או הודעה קולית אחרי
@@ -33,6 +35,7 @@ const Speech = require('../integrations').Speech;
 const Calendar = require('./calendar');
 const Claude = require('../integrations').Claude;
 const WaUi = require('../whatsapp').WaUi;
+const Suggestions = require('./meeting-suggestions');
 
 const MIN = 60000;
 const HOUR = 60 * MIN;
@@ -42,7 +45,7 @@ const ARM_MS = 15 * MIN;               // "הקלטת פגישה" — ההודע
 const AUDIO_EXT = { 'audio/ogg': 'ogg', 'audio/opus': 'opus', 'audio/mpeg': 'mp3', 'audio/mp3': 'mp3', 'audio/mp4': 'm4a', 'audio/x-m4a': 'm4a', 'audio/m4a': 'm4a', 'audio/aac': 'aac', 'audio/amr': 'amr', 'audio/wav': 'wav', 'audio/x-wav': 'wav', 'audio/webm': 'webm' };
 const AUDIO_NAME = /\.(ogg|opus|mp3|m4a|aac|amr|wav|webm)$/i;
 
-const BTN = Object.freeze({ other: 'פגישה אחרת ✏️', open: 'לפתוח משימות ✅', voice: 'הודעה רגילה 💬', share: '📤 לשלוח למשתתפים' });
+const BTN = Object.freeze({ other: 'פגישה אחרת ✏️', open: 'לפתוח משימות ✅', voice: 'הודעה רגילה 💬', share: '📤 לשלוח למשתתפים', reassign: '✏️ לשנות אחראי' });
 
 const parseJson = (t, f) => { try { return JSON.parse(t); } catch { return f; } };
 const normEmail = (e) => String(e ?? '').trim().toLowerCase();
@@ -440,7 +443,8 @@ function reassign(actor, draft, { nums, name }) {
   if (!u) return { text: `לא מצאתי את "${name}" בין העובדים. כתבו את השם כמו שהוא במשימון, למשל: "2, 5 לגולן".`, changed: 0 };
   const targets = dig.items.map((it, i) => ({ it, n: i + 1 })).filter(({ it, n }) => (nums ? nums.includes(n) : !it._ownerId));
   if (!targets.length) return { text: nums ? 'לא מצאתי משימות במספרים האלה.' : 'אין משימות שנשארו בלי אחראי 👍', changed: 0 };
-  for (const { it } of targets) {
+  for (const { it, n } of targets) {
+    Suggestions.move('wa', row.id, n, u.id);
     it._ownerId = u.id;
     it._ownerName = u.full_name;
     it.owner_name = u.full_name;
@@ -449,7 +453,7 @@ function reassign(actor, draft, { nums, name }) {
   D.run('UPDATE meeting_audio SET digest = ? WHERE id = ?', JSON.stringify(dig), row.id);
   D.run('UPDATE meeting_digests SET data = ? WHERE source = ? AND ref = ?', JSON.stringify(dig), 'wa', String(row.id));
   const head = `✏️ ${targets.length === 1 ? `משימה ${targets[0].n} עברה` : `משימות ${targets.map((x) => x.n).join(', ')} עברו`} ל*${u.full_name}*.`;
-  return { text: [head, '', tasksText(dig), '', nextQuestion(meeting, dig, actor)].join('\n'), changed: targets.length };
+  return { text: [head, '', tasksText(dig), '', inboxLine(row.id), '', nextQuestion(meeting, dig, actor)].join('\n'), changed: targets.length };
 }
 
 /** המשימות לפי אחראי, ממוספרות ברצף */
@@ -475,22 +479,34 @@ function shareTargets(meeting, actor) {
   return (meeting?.people ?? []).filter((p) => normEmail(p.email).includes('@') && !mine.has(normEmail(p.email)));
 }
 
-/** השאלה בסוף: לפתוח את המשימות / לשלוח את הסיכום למשתתפים / לשנות אחראי */
+/** המשימות מהפגישה ← הצעות ב"ממתין לאישורך" (מה שכבר הוצע — לא שוב). גם להקלטות מלפני 16.11.26 */
+function suggestFor(actor, audioId, title, dig) {
+  return Suggestions.suggest({ source: 'wa', ref: audioId, title, items: dig.items, fromId: actor.id });
+}
+
+/** 💡 שורה אחת: כמה הצעות משימה מהפגישה מחכות במשימון, ואצל מי — לא עוברים עליהן בבוט */
+function inboxLine(audioId) {
+  const rows = Suggestions.pending('wa', audioId);
+  const total = rows.reduce((a, r) => a + r.n, 0);
+  if (!total) return '';
+  const who = rows.map((r) => `${r.full_name} ${r.n}`).join(' · ');
+  return `💡 ${total === 1 ? 'הצעת משימה אחת' : `${total} הצעות משימה`} ב"ממתין לאישורך" במשימון, כל אחת אצל האחראי שלה (${who}).`;
+}
+
+/** מה אפשר עכשיו: לשלוח את הסיכום למשתתפים / לשנות אחראי. לא "לפתוח משימות" — זה במשימון */
 function nextQuestion(meeting, dig, actor) {
   const to = shareTargets(meeting, actor);
   const names = to.map((p) => p.name || p.email).slice(0, 6).join(', ');
   const unowned = dig.items.filter((it) => !it._ownerId).length;
   return [
-    '*מה עכשיו?*',
-    dig.items.length ? '✅ *לפתוח את המשימות*, כל אחת אצל האחראי שלה — או רק חלק: "רק 1 ו-3"' : null,
-    to.length ? `📤 *לשלוח את כל הסיכום* (נושאים, החלטות ומשימות לפי אחראי) במייל ל${names}` : null,
+    to.length ? `📤 *לשלוח את כל הסיכום* (נושאים, החלטות ומשימות לפי אחראי) במייל ל${names}?` : null,
     dig.items.length ? `✏️ *לשנות אחראי:* "2, 5 ל${firstName(to[0]?.name) || 'גולן'}" · "1 לי"${unowned ? ' · "השאר לי"' : ''}` : null
   ].filter(Boolean).join('\n');
 }
 
-/** הכפתורים לשאלה שבסוף */
+/** הכפתורים */
 function nextButtons(meeting, dig, actor) {
-  return [dig.items.length ? BTN.open : null, shareTargets(meeting, actor).length ? BTN.share : null, WaUi.BTN.no].filter(Boolean);
+  return [shareTargets(meeting, actor).length ? BTN.share : null, dig.items.length ? BTN.reassign : null].filter(Boolean);
 }
 
 function digestText(meeting, dig) {
@@ -587,16 +603,20 @@ async function processAudio(audioId, deps) {
     String(audioId), actor.id, meeting.title, meeting.start ?? D.nowIso(), meeting.end ?? D.nowIso(), JSON.stringify({ taskId, audioId }), D.nowIso()
   );
 
+  // המשימות — הצעות ב"ממתין לאישורך", כל אחת אצל האחראי שלה (בלי אחראי — אצל השולח)
+  Suggestions.suggest({ source: 'wa', ref: audioId, title: meeting.title, items: dig.items, fromId: actor.id });
   const link = deps.taskLink(taskId);
   const buttons = nextButtons(meeting, dig, actor);
-  const ask = buttons.length > 1;
+  const ask = buttons.length > 0;
+  const inbox = inboxLine(audioId);
   const text = [
     `🎥 *${meeting.title}* — ההקלטה במשימון ✅${link ? `\n${link}` : ''}`,
     '',
     digestText(meeting, dig),
+    inbox ? `\n${inbox}` : null,
     ask ? `\n${nextQuestion(meeting, dig, actor)}` : null,
     // הסיכום לא נשלח לאיש מעצמו — רק כשהעובד מאשר
-    ask && shareTargets(meeting, actor).length ? '_הסיכום לא נשלח למשתתפים בלי אישור שלך._' : null
+    shareTargets(meeting, actor).length ? '_הסיכום לא נשלח למשתתפים בלי אישור שלך._' : null
   ].filter((l) => l !== null).join('\n');
   return ask
     ? { text, buttons, draft: { kind: 'meeting_audio_tasks', audioId, title: meeting.title, taskId, n: dig.items.length } }
@@ -632,6 +652,7 @@ function openTasks(actor, draft, { createTask, assignBlockReason, taskLink, only
       sourceUserId: actor.id,
       auditNote: `המשימה נפתחה מהקלטת הפגישה "${draft.title}" שנשלחה בוואטסאפ`
     });
+    if (id) Suggestions.markOpened('wa', draft.audioId, it.n, id);
     const who = assignee === actor.id ? 'אצלך' : `אצל ${userRow(assignee)?.full_name ?? ''}`;
     lines.push(`• ${title} — ${who}${id && taskLink(id) ? `\n  ${taskLink(id)}` : ''}`);
   }
@@ -651,6 +672,6 @@ function prune() {
 
 module.exports = {
   arm, isAudioFile, isMeetingVoice, receive, resolvePick, processAudio, openTasks, prune, candidates, BTN,
-  parseReassign, reassign, nextQuestion, nextButtons,
+  parseReassign, reassign, nextQuestion, nextButtons, inboxLine, suggestFor,
   _internal: { splitOgg, oggCrc, peopleFromText, ownerOf, digestText, tasksText, extOf, armed, personFor }
 };

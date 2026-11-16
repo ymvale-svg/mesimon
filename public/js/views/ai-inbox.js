@@ -106,7 +106,12 @@ const AiInboxView = (() => {
     // מוואטסאפ ומהמייל — שני מקורות, אותה הצעה ואותן פעולות
     const rest = pending.filter((s) => !String(s.kind).startsWith('meeting_') && !TaskSyncView.handles(s));
     const fromChat = rest.filter((s) => s.data.source === 'whatsapp');
-    const fromMail = rest.filter((s) => s.data.source !== 'whatsapp');
+    // 🎥 המשימות מפגישה מוקלטת — כל אחת אצל האחראי שלה
+    const fromMeeting = rest.filter((s) => s.data.source === 'meeting');
+    const fromMail = rest.filter((s) => s.data.source !== 'whatsapp' && s.data.source !== 'meeting');
+    if (fromMeeting.length) {
+      sections.push(section('🎥 מפגישות', 'המשימות שהוטלו עליך בפגישה', fromMeeting.map((s) => suggestionRow(s, reload))));
+    }
     if (fromChat.length) {
       sections.push(section('💬 מקבוצות הוואטסאפ', null, fromChat.map((s) => suggestionRow(s, reload))));
     }
@@ -236,6 +241,14 @@ const AiInboxView = (() => {
   }
 
   function fromLine(s) {
+    if (s.data?.source === 'meeting') {
+      return el('div.mute-sm', {}, [
+        `🎥 ${s.data.meetingTitle}`,
+        s.from.name ? ` · הסיכום מ${s.from.name}` : '',
+        s.receivedAt ? ` · ${UI.relative(s.receivedAt)}` : '',
+        s.data.unowned ? ' · לא נאמר מי אחראי' : ''
+      ]);
+    }
     if (s.data?.source === 'whatsapp') {
       return el('div.mute-sm', {}, [
         s.data.personal ? `💬 ${s.from.name}` : `👥 ${s.data.groupName} · ${s.from.name}`,
@@ -364,7 +377,7 @@ const AiInboxView = (() => {
       replyLine(s, reload),
       closureLine(s, reload),
       // משימת AI נפתחת בדיאלוג משלה, בלי הפרויקט של הקבוצה — לכן רק ממייל
-      d.source === 'whatsapp' ? null : el('div', {}, [toAi])
+      d.source === 'whatsapp' || d.source === 'meeting' ? null : el('div', {}, [toAi])
     ]);
     const more = el('button.btn-link.ai-more', { type: 'button', title: 'תקציר, הצעת תשובה ואיך לסגור' }, [reply ? '📧 ▾' : closure ? '💡 ▾' : '▾']);
     more.addEventListener('click', (e) => {
@@ -600,6 +613,7 @@ const AiInboxView = (() => {
     ], d.priority ?? 'normal');
     // מקבוצת וואטסאפ — הפרויקט של הקבוצה, נעול: אין ערבוב בין פרויקטים
     const chat = d.source === 'whatsapp';
+    const meeting = d.source === 'meeting';
     const project = chat
       ? UI.select([{ value: d.projectId, label: d.projectName }], d.projectId, { disabled: true })
       : UI.select([{ value: '', label: 'ללא פרויקט' }, ...App.state.projects.filter((p) => p.mine).map((p) => ({ value: p.id, label: p.name }))], '');
@@ -638,11 +652,11 @@ const AiInboxView = (() => {
 
     const ok = el('button.btn.btn-primary', {}, ['✓ יצירת המשימה']);
     const m = UI.modal({
-      title: chat ? '💬 משימה מקבוצת וואטסאפ' : '📧 משימה מהמייל',
+      title: meeting ? '🎥 משימה מפגישה' : chat ? '💬 משימה מקבוצת וואטסאפ' : '📧 משימה מהמייל',
       size: 'wide',
       body: el('div', {}, [
         el('div.ai-letter', {}, [
-          el('div', {}, [el('b', { text: chat ? d.groupName : (s.subject || '(ללא נושא)') })]),
+          el('div', {}, [el('b', { text: meeting ? d.meetingTitle : chat ? d.groupName : (s.subject || '(ללא נושא)') })]),
           fromLine(s)
         ]),
         d.warning ? el('div.alert.alert-warn', {}, [el('span', { text: '⚠️' }), el('div', { text: d.warning })]) : null,
@@ -654,7 +668,7 @@ const AiInboxView = (() => {
         d.ambiguous?.length ? el('div.mute-sm', { text: `❓ לא ברור למי הכוונה: ${d.ambiguous.join(', ')} — הוסיפו ידנית אם צריך`, style: { marginBottom: '6px' } }) : null,
         peopleBox,
         el('div.mute-sm', { text: 'אחראי/ת — המשימה אצלו/ה, ואת/ה נשאר/ת שותף/ה. שותף/ה — אחראי/ת נוסף/ת. לידיעה — מתויג/ת בהערה ומקבל/ת עדכונים.', style: { margin: '6px 0 10px' } }),
-        chat ? null : el('label.checkbox', {}, [trust, ` מ-${s.from.email} — ליצור ישר בפעם הבאה (רק משימות שכולן שלך)`])
+        chat || meeting ? null : el('label.checkbox', {}, [trust, ` מ-${s.from.email} — ליצור ישר בפעם הבאה (רק משימות שכולן שלך)`])
       ]),
       footer: [ok, el('div.spacer'), el('button.btn', { onclick: () => m.close() }, ['ביטול'])]
     });

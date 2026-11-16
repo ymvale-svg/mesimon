@@ -525,19 +525,12 @@ async function flowOnPlainMail(ctx) {
   return NEXT;
 }
 
-/**
- * אחרי "לשלוח את הסיכום?" — ואם הגיעו לשם מהשאלה שאחרי הקלטה מוואטסאפ (‎then‎), חוזרים אליה: "לפתוח את המשימות?"
- * מחזיר את הארגומנטים ל-‎out‎
- */
+/** אחרי "לשלוח את הסיכום?" — מחזיר את הארגומנטים ל-‎out‎ */
 function afterSummary(reply, draft, result) {
-  const then = draft.then;
-  const log = { action: 'meeting_followup', status: 'ok', result: result.slice(0, 300) };
-  if (!then || then.n === 0) return [reply, { draft: null }, log];
-  return [`${reply}\n\n*לפתוח את המשימות מהפגישה, כל אחת אצל האחראי שלה?* *כן* 👍 · *לא* 👎 · או רק חלק: "רק 1 ו-3"`,
-    { draft: then, awaiting: true }, { ...log, buttons: [MeetingAudio.BTN.open, WaUi.BTN.no] }];
+  return [reply, { draft: null }, { action: 'meeting_followup', status: 'ok', result: result.slice(0, 300) }];
 }
 
-// 🎥 אחרי פגישה מוקלטת: "לפתוח משימות ✅" / "לא" על המשימות שהוצעו, ו"כן" / "לא" על שליחת הסיכום למשתתפים
+// 🎥 אחרי פגישה מוקלטת: "תפתח אותן" (במילים — הבוט לא מציע) על המשימות, ו"כן" / "לא" על שליחת הסיכום למשתתפים
 async function flowOnMeetingTasks(ctx) {
   let { actor, dry, keep, out, state, t } = ctx;
   if (state.draft?.kind === 'meeting_summary_mail' && state.awaiting) {
@@ -556,13 +549,14 @@ async function flowOnMeetingTasks(ctx) {
   }
   if (state.draft?.kind === 'meeting_tasks' && state.awaiting) {
     const n = WaUi.normalize(t);
-    if (MeetingFollowup.isOpenButton(t) || WaUi.YES.test(n)) {
+    // רק כשהעובד מבקש במילים ("תפתח אותן") — הבוט לא מציע לפתוח משימות (16.11.26); ההצעות במשימון
+    if (MeetingFollowup.isOpenButton(t)) {
       if (!WaActions.allowed(actor, 'create_task')) return out('פתיחת משימות כבויה לך בוואטסאפ.', { draft: null }, { action: 'meeting_followup', status: 'denied', result: 'פתיחת משימות כבויה' });
       const reply = MeetingFollowup.openTasks(actor, state.draft, { createTask: hooks.createTask, taskLink, dry });
       return out(reply, { draft: null }, { action: 'meeting_followup', status: 'ok', result: `נפתחו ${state.draft.items.length} משימות מהפגישה "${state.draft.title}"`.slice(0, 300) });
     }
     // "רק 1 ו-3" — חלק מהמשימות
-    const picks = /^(?:רק\s+|לפתוח\s+(?:רק\s+)?)?([\d\s,ו\-]+)$/.exec(n);
+    const picks = /^(?:תפתח|לפתוח)\s+(?:רק\s+)?([\d\s,ו\-]+)$/.exec(n);
     if (picks) {
       const items = [...new Set((picks[1].match(/\d+/g) ?? []).map(Number))].map((i) => state.draft.items[i - 1]).filter(Boolean);
       if (items.length && WaActions.allowed(actor, 'create_task')) {
@@ -571,7 +565,7 @@ async function flowOnMeetingTasks(ctx) {
       }
     }
     if (WaUi.NO.test(n) || CANCEL.test(t)) {
-      return out('בסדר, לא נפתחו משימות 👍', { draft: null }, { action: 'meeting_followup', status: 'ok', result: `לא: משימות מ"${state.draft.title}"`.slice(0, 300) });
+      return out('בסדר 👍 ההצעות מחכות לך במשימון.', { draft: null }, { action: 'meeting_followup', status: 'ok', result: `לא: משימות מ"${state.draft.title}"`.slice(0, 300) });
     }
     // כל דבר אחר — נושא חדש; ההצעה לפתוח משימות יורדת
     keep.draft = null;
