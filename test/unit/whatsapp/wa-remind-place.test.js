@@ -37,7 +37,7 @@ test('"תזכיר לי כשאני מגיע לעבודה לדבר עם ישראל
   const { u, r, system } = await ask(t, 'תזכיר לי כשאני מגיע לעבודה לדבר עם ישראל', { text: 'לדבר עם ישראל', place: 'העבודה', on: 'arrive' });
   assert.equal(r.action, 'reminders_place');
   assert.match(r.reply, /📍 אזכיר לך \*כשתגיע למשרד\*: לדבר עם ישראל/);
-  assert.match(r.reply, /שיתוף מיקום/, 'בלי שיתוף — אומרים איך הבוט ידע שהגעת');
+  assert.match(r.reply, /שתף איתי מיקום בזמן אמת/, 'מבקשים לשתף מיקום בזמן אמת');
   assert.match(system, /"המשרד" \(משרד; גם: העבודה\)/);
   const rem = D.get('SELECT * FROM reminders WHERE user_id = ?', u.id);
   assert.equal(rem.status, 'place');
@@ -56,20 +56,21 @@ test('מקום שלא מוגדר — לא נרשם, ומקבלים את רשימ
 test('הגעה למשרד ← הבוט שולח "📍 הגעת ל…" עם הכפתורים; "בפעם הבאה" — חוזרת לחכות', async (t) => {
   setup();
   const { u } = await ask(t, 'תזכיר לי כשאני מגיע למשרד לדבר עם ישראל', { text: 'לדבר עם ישראל', place: 'המשרד', on: 'arrive' });
-  Places.setSharing(u.id, true);
-  Places.report(u.id, { lat: 32.2, lng: 34.9 });
+  Places.report(u.id, { lat: 32.2, lng: 34.9, source: 'whatsapp_live' });
   const pushed = [];
   await Reminders.tick(async (userId, m) => { pushed.push({ userId, ...m }); });
   assert.equal(pushed.length, 0, 'עוד לא הגיע');
-  Places.report(u.id, OFFICE);
+  Places.report(u.id, { ...OFFICE, source: 'whatsapp_live' });
   await Reminders.tick(async (userId, m) => { pushed.push({ userId, ...m }); });
   assert.equal(pushed.length, 1);
   assert.equal(pushed[0].userId, u.id);
   assert.match(pushed[0].text, /📍 \*הגעת למשרד\*/);
   assert.match(pushed[0].text, /לדבר עם ישראל/);
   assert.deepEqual(pushed[0].buttons, [Reminders.BTN.done, Reminders.BTN.nextVisit, Reminders.BTN.hour]);
+  assert.match(pushed[0].text, /אפשר להפסיק את שיתוף המיקום/, 'אין עוד תזכורות שמחכות');
   const back = Reminders.answer(u.id, pushed[0].draft, Reminders.BTN.nextVisit);
   assert.match(back.text, /אזכיר שוב בפעם הבאה שתגיע למשרד/);
+  assert.doesNotMatch(back.text, /שתף איתי/, 'כבר משתף — לא מבקשים שוב');
   assert.equal(D.get('SELECT status FROM reminders WHERE user_id = ?', u.id).status, 'place');
 });
 
@@ -107,7 +108,33 @@ test('תזכורת לפי זמן — כמו קודם (בלי מקום)', async (
 
 test('הודעת מיקום מ-Green API — נקודה ומיקום חי; הודעה רגילה — לא מיקום', () => {
   const { locationOf } = Bot._internal;
-  assert.deepEqual(locationOf({ typeMessage: 'locationMessage', locationMessageData: { latitude: 32.0853, longitude: 34.7818, nameLocation: 'משרד' } }), { lat: 32.0853, lng: 34.7818, live: false });
+  const pin = locationOf({ typeMessage: 'locationMessage', locationMessageData: { latitude: 32.0853, longitude: 34.7818, nameLocation: 'משרד' } });
+  assert.deepEqual({ lat: pin.lat, lng: pin.lng, live: pin.live }, { lat: 32.0853, lng: 34.7818, live: false });
+  assert.match(pin.shape, /locationMessageData\{latitude,longitude,nameLocation\}/, 'ביומן — השדות בלבד');
   assert.equal(locationOf({ typeMessage: 'liveLocationMessage', liveLocationMessageData: { latitude: 32.1, longitude: 34.8 } }).live, true);
   assert.equal(locationOf({ typeMessage: 'textMessage', textMessageData: { textMessage: '32.1, 34.8' } }), null);
+});
+
+test('שיתוף בזמן אמת: על ההודעה הראשונה — "תודה, אזכיר לך כשתגיע למשרד"; על העדכונים — שקט, עד שמגיעים', async () => {
+  const office = setup();
+  const u = user({ role: 'employee' });
+  D.run("INSERT INTO reminders (user_id, text, due_at, status, source, created_at, place_id, place_on) VALUES (?, 'לדבר עם ישראל', ?, 'place', 'bot', ?, ?, 'arrive')", u.id, D.nowIso(), D.nowIso(), office.id);
+  const start = Reminders.onLocation(u.id, { lat: 32.2, lng: 34.9, live: true });
+  assert.match(start.text, /קיבלתי את שיתוף המיקום/);
+  assert.match(start.text, /אזכיר לך כשתגיע למשרד/);
+  const update = Reminders.onLocation(u.id, { lat: 32.15, lng: 34.85, live: true });
+  assert.equal(update.text, null);
+  assert.equal(update.quiet, true);
+  const arrive = Reminders.onLocation(u.id, { ...OFFICE, live: true });
+  assert.equal(arrive.text, null, 'התזכורת עצמה יוצאת מהסבב');
+  assert.equal(arrive.quiet, false);
+  assert.equal(D.get('SELECT status FROM reminders WHERE user_id = ?', u.id).status, 'active');
+});
+
+test('עדכון מיקום בזמן אמת שמגיע בצורה אחרת (הודעה ערוכה) — עדיין מיקום, מסומן כשיתוף בזמן אמת', () => {
+  const { locationOf } = Bot._internal;
+  const r = locationOf({ typeMessage: 'editedMessage', editedMessageData: { liveLocationMessageData: { latitude: 32.1, longitude: 34.8 } } }, 'editedMessage');
+  assert.equal(r.lat, 32.1);
+  assert.equal(r.live, true);
+  assert.match(r.shape, /editedMessage/);
 });

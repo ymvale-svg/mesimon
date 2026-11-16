@@ -6,13 +6,9 @@
  *   POST   /api/places                 — הוספה (מנהל / מנהל מערכת)
  *   PUT    /api/places/:id             — עריכה (מנהל)
  *   DELETE /api/places/:id             — מחיקה (מנהל) — תזכורות שחיכו לה מתבטלות
- *   GET    /api/me/location            — מצב השיתוף שלי
- *   PUT    /api/me/location/share      — הפעלה / כיבוי של שיתוף המיקום
- *   POST   /api/me/location            — מיקום מהאפליקציה (רק כשהשיתוף דלוק)
- *   POST   /api/me/location/token      — קישור אישי חדש לאפליקציית מעקב ברקע (מוצג פעם אחת)
- *   POST   /api/location/ping/:token   — מיקום מאפליקציית מעקב (OwnTracks / קיצורי דרך), בלי התחברות — האסימון הוא ההרשאה
+ *   GET    /api/me/location            — המצב שלי: משתף מיקום בזמן אמת עם הבוט? באיזו נקודת ציון? כמה תזכורות מחכות
  *
- * המיקום עצמו לא חוזר לאף אחד — רק באיזו נקודת ציון העובד נמצא, ולו בלבד.
+ * המיקום עצמו מגיע רק מוואטסאפ (‎whatsapp/places.js‎) — שיתוף מהאפליקציה הוסר (16.11.26: היא לא פתוחה אצל העובדים כל הזמן).
  */
 const Places = require('../whatsapp').Places;
 const { badRequest, forbidden, notFound, readJson, sendJson } = require('../core').HttpKit;
@@ -63,42 +59,6 @@ function register(router) {
   router.get('/api/me/location', async (req, res, ctx) => {
     const actor = userOnly(ctx);
     sendJson(res, 200, Places.status(actor.id));
-  });
-
-  router.put('/api/me/location/share', async (req, res, ctx) => {
-    const actor = userOnly(ctx);
-    const b = await readJson(req);
-    sendJson(res, 200, Places.setSharing(actor.id, b.share === true));
-  });
-
-  router.post('/api/me/location', async (req, res, ctx) => {
-    const actor = userOnly(ctx);
-    const b = await readJson(req);
-    const r = Places.report(actor.id, { lat: b.lat, lng: b.lng, accuracy: b.accuracy, source: 'app' });
-    if (r.reason === 'bad') throw badRequest('מיקום לא תקין');
-    sendJson(res, 200, { ok: r.ok, reason: r.reason ?? null, place: r.place ? { id: r.place.id, name: r.place.name } : null, fired: r.fired.length });
-  });
-
-  router.post('/api/me/location/token', async (req, res, ctx) => {
-    const actor = userOnly(ctx);
-    sendJson(res, 200, { token: Places.newToken(actor.id) });
-  });
-
-  /*
-   * אפליקציית מעקב ברקע. גוף בפורמט של OwnTracks (‎{ _type: 'location', lat, lon, acc, tst }‎) או פשוט (‎{ lat, lng, accuracy }‎).
-   * OwnTracks מצפה למערך בתשובה. אסימון לא מוכר / שיתוף כבוי — 404, בלי לגלות למה.
-   */
-  router.post('/api/location/ping/:token', async (req, res, ctx) => {
-    const userId = Places.userByToken(ctx.params.token);
-    if (!userId) throw notFound('לא נמצא');
-    const b = await readJson(req).catch(() => ({}));
-    if (b._type && b._type !== 'location') return sendJson(res, 200, []);
-    const r = Places.report(userId, {
-      lat: b.lat ?? b.latitude, lng: b.lng ?? b.lon ?? b.longitude, accuracy: b.acc ?? b.accuracy, source: 'tracker',
-      at: Number.isFinite(Number(b.tst)) && b.tst ? new Date(Number(b.tst) * 1000).toISOString() : null
-    });
-    if (r.reason === 'bad') throw badRequest('מיקום לא תקין');
-    sendJson(res, 200, []);
   });
 }
 

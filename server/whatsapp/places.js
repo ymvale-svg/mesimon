@@ -4,15 +4,14 @@
  *
  *   • נקודות ציון (‎places‎): המשרד והאתרים — שם, סוג (משרד / אתר), כינויים, נ"צ ורדיוס. מנהל מגדיר
  *     ב"⚙ ההגדרות שלי ← 📍 מיקום" ("המיקום הנוכחי שלי", או נ"צ / קישור מגוגל מפות).
- *   • המיקום של העובד (‎user_locations‎): רק האחרון, ורק ממי שבחר לשתף — מהאפליקציה (כשהיא פתוחה),
- *     ממיקום 📍 ששלח לבוט, או מקישור אישי לאפליקציית מעקב ברקע (OwnTracks / קיצורי דרך). אף אחד לא רואה אותו —
- *     הוא משמש רק לבדוק אם העובד הגיע לנקודת ציון או יצא ממנה.
+ *   • המיקום של העובד — רק מוואטסאפ (הוחלט 16.11.26: משימון לא פתוח אצל העובדים כל הזמן, אז מיקום מהאפליקציה לא רלוונטי):
+ *     כשנרשמת תזכורת מקום, הבוט מבקש מהעובד לשתף איתו *מיקום בזמן אמת*, וכל עדכון של השיתוף נבדק מול נקודות הציון.
+ *     גם מיקום 📍 רגיל ששולחים לבוט נבדק. נשמר רק באיזו נקודת ציון העובד נמצא, ומתי (‎user_locations‎) — לא הנקודה עצמה.
  *   • הגעה / יציאה: ‎update‎ משווה למקום הקודם. מיקום ישן (יותר מ-‎STALE_MS‎) — כאילו לא היה, כך שמיקום 📍
  *     ששולחים מהמשרד בבוקר הוא "הגעה" גם אם אתמול שלחו מאותו מקום. יציאה — רק כשראינו אותה.
  *   • תזכורת מקום (‎reminders.status = 'place'‎) שהגיע המקום שלה הופכת לתזכורת רגילה שמועדה עכשיו —
  *     והסבב של הבוט (‎Reminders.tick‎) שולח אותה תוך שניות.
  */
-const crypto = require('node:crypto');
 const D = require('../core').Db;
 
 const KINDS = Object.freeze({ office: 'משרד', site: 'אתר' });
@@ -105,53 +104,27 @@ function placeAt(point, stay = null) {
 }
 
 // ---------------------------------------------------------------------------
-// שיתוף המיקום (‎user_prefs.location‎ — ‎{ share, tokenHash }‎)
+// מצב העובד
 // ---------------------------------------------------------------------------
 
-const prefsOf = (userId) => D.userPrefs(userId)?.location ?? {};
-const sharing = (userId) => prefsOf(userId).share === true;
-const hashToken = (token) => crypto.createHash('sha256').update(String(token)).digest('hex');
+// שיתוף מיקום בזמן אמת "פעיל" — כשהעדכון האחרון ממנו הגיע לפני פחות מזה
+const LIVE_FRESH_MS = 30 * 60 * 1000;
 
-/** הפעלה / כיבוי. כיבוי מוחק את המיקום האחרון ואת הקישור האישי */
-function setSharing(userId, on) {
-  const prev = prefsOf(userId);
-  D.setUserPref(userId, 'location', on ? { ...prev, share: true } : { share: false });
-  if (!on) D.run('DELETE FROM user_locations WHERE user_id = ?', userId);
-  return status(userId);
-}
-
-/** קישור אישי לאפליקציית מעקב ברקע. האסימון מוצג פעם אחת; נשמר רק הגיבוב שלו. קישור חדש מבטל את הקודם */
-function newToken(userId) {
-  const token = crypto.randomBytes(24).toString('base64url');
-  D.setUserPref(userId, 'location', { ...prefsOf(userId), share: true, tokenHash: hashToken(token) });
-  return token;
-}
-
-/** מי בעל האסימון (רק כשהשיתוף דלוק) */
-function userByToken(token) {
-  if (!/^[\w-]{20,64}$/.test(String(token ?? ''))) return null;
-  const h = hashToken(token);
-  const row = D.all("SELECT user_id, value FROM user_prefs WHERE key = 'location'").find((r) => { try { const v = JSON.parse(r.value); return v.share === true && v.tokenHash === h; } catch { return false; } });
-  return row ? row.user_id : null;
-}
+const lastOf = (userId) => D.get('SELECT * FROM user_locations WHERE user_id = ?', userId);
+/** העובד משתף עכשיו מיקום בזמן אמת עם הבוט */
+const liveActive = (userId) => { const l = lastOf(userId); return Boolean(l && l.source === 'whatsapp_live' && Date.now() - Date.parse(l.at) < LIVE_FRESH_MS); };
+const waitingCount = (userId) => D.get("SELECT COUNT(*) AS n FROM reminders WHERE user_id = ? AND status = 'place'", userId).n;
 
 function status(userId) {
-  const loc = D.get('SELECT * FROM user_locations WHERE user_id = ?', userId);
+  const loc = lastOf(userId);
   const fresh = loc && Date.now() - Date.parse(loc.at) < STALE_MS;
   const place = fresh && loc.place_id ? get(loc.place_id) : null;
-  return {
-    share: sharing(userId),
-    hasToken: Boolean(prefsOf(userId).tokenHash),
-    lastAt: loc?.at ?? null,
-    source: loc?.source ?? null,
-    place: place ? { id: place.id, name: place.name } : null,
-    waiting: D.get("SELECT COUNT(*) AS n FROM reminders WHERE user_id = ? AND status = 'place'", userId).n
-  };
+  return { lastAt: loc?.at ?? null, live: liveActive(userId), place: place ? { id: place.id, name: place.name } : null, waiting: waitingCount(userId) };
 }
 
 /** המקום הנוכחי של העובד — רק כשהמיקום עדכני */
 function currentPlace(userId) {
-  const loc = D.get('SELECT place_id, at FROM user_locations WHERE user_id = ?', userId);
+  const loc = lastOf(userId);
   return loc?.place_id && Date.now() - Date.parse(loc.at) < STALE_MS ? get(loc.place_id) : null;
 }
 
@@ -170,20 +143,21 @@ function fire(userId, place, on) {
 }
 
 /**
- * מיקום חדש של העובד. ‎source‎: ‎app‎ / ‎whatsapp‎ / ‎tracker‎. ‎explicit‎ — העובד שלח אותו בעצמו (מיקום 📍 בבוט),
- * ואז נקלט גם בלי שהשיתוף דלוק (רק לרגע הזה — לא נשמר).
- * @returns {{ok: boolean, place: object|null, arrived: object|null, left: object|null, fired: object[], reason?: string}}
+ * מיקום חדש של העובד מוואטסאפ. ‎source‎: ‎whatsapp‎ (מיקום 📍) / ‎whatsapp_live‎ (שיתוף בזמן אמת).
+ * @returns {{ok: boolean, place: object|null, arrived: object|null, left: object|null, fired: object[], first: boolean, reason?: string}}
+ *   ‎first‎ — ההודעה הראשונה של שיתוף בזמן אמת (לפניה לא היה שיתוף פעיל) — רק עליה עונים; על העדכונים — שקט.
  */
-function report(userId, { lat, lng, accuracy = null, source = 'app', explicit = false, at = null } = {}) {
+function report(userId, { lat, lng, accuracy = null, source = 'whatsapp', at = null } = {}) {
+  const none = { place: null, arrived: null, left: null, fired: [], first: false };
   lat = Number(lat); lng = Number(lng);
-  if (!validCoord(lat, lng)) return { ok: false, reason: 'bad', place: null, arrived: null, left: null, fired: [] };
-  if (!explicit && !sharing(userId)) return { ok: false, reason: 'off', place: null, arrived: null, left: null, fired: [] };
+  if (!validCoord(lat, lng)) return { ok: false, reason: 'bad', ...none };
   const acc = Number(accuracy);
-  if (Number.isFinite(acc) && acc > MAX_ACCURACY_M) return { ok: false, reason: 'inaccurate', place: null, arrived: null, left: null, fired: [] };
+  if (Number.isFinite(acc) && acc > MAX_ACCURACY_M) return { ok: false, reason: 'inaccurate', ...none };
   const when = at && Number.isFinite(Date.parse(at)) && Date.parse(at) <= Date.now() ? new Date(at).toISOString() : D.nowIso();
-  const prev = D.get('SELECT * FROM user_locations WHERE user_id = ?', userId);
-  // מיקום ישן יותר ממה שכבר יש (אפליקציית מעקב ששולחת באיחור) — לא מחזיר אחורה
-  if (prev && Date.parse(when) < Date.parse(prev.at)) return { ok: true, reason: 'old', place: currentPlace(userId), arrived: null, left: null, fired: [] };
+  const first = source === 'whatsapp_live' && !liveActive(userId);
+  const prev = lastOf(userId);
+  // עדכון ישן יותר ממה שכבר יש (הגיע באיחור) — לא מחזיר אחורה
+  if (prev && Date.parse(when) < Date.parse(prev.at)) return { ok: true, reason: 'old', ...none, place: currentPlace(userId) };
   const prevPlace = prev?.place_id && Date.parse(when) - Date.parse(prev.at) < STALE_MS ? get(prev.place_id) : null;
   const here = placeAt({ lat, lng }, prevPlace?.id ?? null);
   const fired = [];
@@ -191,16 +165,11 @@ function report(userId, { lat, lng, accuracy = null, source = 'app', explicit = 
   let left = null;
   if (prevPlace && prevPlace.id !== here?.id) { left = prevPlace; fired.push(...fire(userId, prevPlace, 'leave')); }
   if (here && here.id !== prevPlace?.id) { arrived = here; fired.push(...fire(userId, here, 'arrive')); }
-  if (explicit && !sharing(userId)) {
-    // מיקום חד-פעמי ממי שלא משתף: זוכרים רק באיזה מקום הוא (בלי הנקודה עצמה) — כדי שהמיקום הבא לא ייחשב שוב "הגעה"
-    D.run(`INSERT INTO user_locations (user_id, lat, lng, accuracy, source, place_id, at) VALUES (?,NULL,NULL,NULL,?,?,?)
-      ON CONFLICT(user_id) DO UPDATE SET lat = NULL, lng = NULL, accuracy = NULL, source = excluded.source, place_id = excluded.place_id, at = excluded.at`, userId, source, here?.id ?? null, when);
-  } else {
-    D.run(`INSERT INTO user_locations (user_id, lat, lng, accuracy, source, place_id, at) VALUES (?,?,?,?,?,?,?)
-      ON CONFLICT(user_id) DO UPDATE SET lat = excluded.lat, lng = excluded.lng, accuracy = excluded.accuracy, source = excluded.source, place_id = excluded.place_id, at = excluded.at`,
-    userId, lat, lng, Number.isFinite(acc) ? acc : null, source, here?.id ?? null, when);
-  }
-  return { ok: true, place: here ? get(here.id) : null, arrived, left, fired };
+  // רק באיזו נקודת ציון ומתי — בלי הנקודה עצמה
+  D.run(`INSERT INTO user_locations (user_id, lat, lng, accuracy, source, place_id, at) VALUES (?,NULL,NULL,NULL,?,?,?)
+    ON CONFLICT(user_id) DO UPDATE SET lat = NULL, lng = NULL, accuracy = NULL, source = excluded.source, place_id = excluded.place_id, at = excluded.at`,
+  userId, source, here?.id ?? null, when);
+  return { ok: true, place: here ? get(here.id) : null, arrived, left, fired, first };
 }
 
 /**
@@ -241,5 +210,5 @@ function phrase(r) {
 module.exports = {
   KINDS, DEFAULT_RADIUS, STALE_MS,
   distance, parseCoords, toPlace, list, get, create, update, remove, placeAt, resolve, phrase,
-  sharing, setSharing, newToken, userByToken, status, currentPlace, report
+  LIVE_FRESH_MS, liveActive, waitingCount, status, currentPlace, report
 };

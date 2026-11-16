@@ -106,13 +106,29 @@ function textOf(m) {
 }
 
 
-/** ‎{ lat, lng }‎ מהודעת מיקום של Green API (‎locationMessage‎ / ‎liveLocationMessage‎), אחרת ‎null‎ */
-function locationOf(m) {
-  if (!/^(?:location|liveLocation)Message$/.test(m.typeMessage ?? '')) return null;
-  const d = m.locationMessageData ?? m.liveLocationMessageData ?? {};
-  const lat = Number(d.latitude ?? d.degreesLatitude);
-  const lng = Number(d.longitude ?? d.degreesLongitude);
-  return Number.isFinite(lat) && Number.isFinite(lng) ? { lat, lng, live: m.typeMessage === 'liveLocationMessage' } : null;
+/*
+ * ‎{ lat, lng, live, shape }‎ מהודעת מיקום של Green API, אחרת ‎null‎. מיקום 📍 — ‎locationMessage‎; שיתוף בזמן אמת —
+ * ‎liveLocationMessage‎. איך מגיעים *העדכונים* של שיתוף בזמן אמת לא אומת מול התיעוד (16.11.26) — לכן מחפשים קואורדינטות
+ * בכל צורה (גם בתוך הודעה ערוכה / מעודכנת), ו-‎shape‎ (השדות בלבד, בלי תוכן) נרשם ביומן הבוט לבדיקה.
+ */
+function locationOf(m, typeWebhook = 'incomingMessageReceived') {
+  const coords = (d) => {
+    if (!d || typeof d !== 'object') return null;
+    const lat = Number(d.latitude ?? d.degreesLatitude);
+    const lng = Number(d.longitude ?? d.degreesLongitude);
+    return Number.isFinite(lat) && Number.isFinite(lng) && (d.latitude ?? d.degreesLatitude) !== undefined ? { lat, lng } : null;
+  };
+  let found = null;
+  let path = '';
+  for (const [k, v] of Object.entries(m ?? {})) {
+    if (!v || typeof v !== 'object') continue;
+    const c = coords(v) ?? Object.entries(v).map(([k2, v2]) => { const x = coords(v2); if (x) path = `${k}.${k2}`; return x; }).find(Boolean);
+    if (c) { found = c; path ||= k; break; }
+  }
+  if (!found) return null;
+  const live = /live/i.test(`${m.typeMessage ?? ''} ${path}`) || typeWebhook !== 'incomingMessageReceived';
+  const keys = (o) => Object.keys(o ?? {}).join(',');
+  return { ...found, live, shape: `${typeWebhook}/${m.typeMessage ?? '?'} ${path}{${keys(path.split('.').reduce((o, k) => o?.[k], m))}}` };
 }
 
 
@@ -194,6 +210,9 @@ async function receiveOne(ch, timeout = LISTEN_TIMEOUT) {
         location: locationOf(m),
         id: String(b.idMessage ?? note.receiptId)
       };
+    } else if (chatId.endsWith('@c.us') && /message/i.test(b.typeWebhook ?? '') && !/outgoing/i.test(b.typeWebhook ?? '') && locationOf(b.messageData ?? {}, b.typeWebhook)) {
+      // 📍 עדכון של שיתוף מיקום בזמן אמת שהגיע כהתראה אחרת (הודעה ערוכה / מעודכנת) — מיקום בלבד
+      direct = { chatId, phone: chatId.replace(/@c\.us$/, ''), text: '', kind: 'location_update', location: locationOf(b.messageData ?? {}, b.typeWebhook), id: String(b.idMessage ?? note.receiptId) };
     } else if (b.typeWebhook === 'stateInstanceChanged' && b.stateInstance) {
       setState(b.stateInstance);
     }
@@ -1018,6 +1037,8 @@ async function withFollowUps(r) {
 
 let buttonShapeLogged = false;
 
+const quietLocationLog = new Map(); // ‎userId‎ → מתי נרשם עדכון מיקום שקט אחרון
+
 async function handleDirect(msg) {
   // 🤖 אינסטינקט לעולם לא מגיע לניתוב (גם אם המספר נרשם בטעות אצל עובד) — ‎instinct.js‎
   if (Instinct.isInstinct(msg.phone)) return Instinct.receive(msg);
@@ -1035,18 +1056,25 @@ async function handleDirect(msg) {
   if (!actor) return;
   const base = { channel: 'private', chatId: msg.chatId, userId: user.id, who: user.full_name, text: msg.text, forwarded: msg.forwarded };
   const ref = { chatId: msg.chatId, id: msg.id };
+  /*
+   * 📍 מיקום — מיקום 📍 או שיתוף בזמן אמת. הגעה לנקודת ציון מוציאה את התזכורות שחיכו לה (הסבב שולח אותן תוך שניות).
+   * לפני "העובד כתב": עדכוני מיקום מגיעים כל כמה שניות, והם לא שיחה. על העדכונים — לא עונים (‎text: null‎)
+   */
+  if (msg.location) {
+    const r = Reminders.onLocation(user.id, msg.location);
+    // עדכון שקט — ליומן פעם בחצי שעה לכל היותר (כדי לראות שהעדכונים מגיעים, ובאיזו צורה)
+    const quietLogged = quietLocationLog.get(user.id) ?? 0;
+    if (r.quiet && Date.now() - quietLogged < 30 * 60000) return;
+    if (r.quiet) quietLocationLog.set(user.id, Date.now());
+    log({ ...base, text: `[📍 ${msg.location.live ? 'מיקום בזמן אמת' : 'מיקום'}]`, action: 'reminders_place', status: 'ok', result: `${r.result} · ${msg.location.shape ?? ''}`.slice(0, 300), reply: r.text ?? undefined });
+    if (r.text) await sendText(msg.chatId, r.text);
+    return;
+  }
   // העובד כתב — תזכורות מחכות שהשיחה תירגע (‎mail-actions.mayRemindNow‎), ושאלה פתוחה "מתעוררת"
   if (!/^(bot-|mail-goods-)/.test(String(msg.id ?? ''))) { MailActions.noteUser(user.id); userLastAt.set(user.id, Date.now()); }
   // הודעה פנימית (‎enqueueAs‎) — לא דורסת את ההודעה האמיתית שעליה מגיבים
   if (!/^(bot-|mail-goods-)/.test(String(msg.id ?? ''))) currentMsg.set(user.id, ref);
 
-  // 📍 מיקום ששלחו לבוט — הגעה לנקודת ציון מוציאה את התזכורות שחיכו לה (הסבב שולח אותן תוך שניות)
-  if (msg.location) {
-    const r = Reminders.onLocation(user.id, msg.location);
-    log({ ...base, text: '[📍 מיקום]', action: 'reminders_place', status: 'ok', result: r.result, reply: r.text });
-    await sendText(msg.chatId, r.text);
-    return;
-  }
   // הודעה קולית — מתומללת, ומשם בדיוק כמו הודעה כתובה
   let text = msg.text;
   const voice = !text && Boolean(msg.audio);

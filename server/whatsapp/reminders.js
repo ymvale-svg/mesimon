@@ -12,6 +12,7 @@
  * 📍 לפי מיקום (15.11.26): "תזכיר לי כשאני מגיע למשרד לדבר עם ישראל" → 📍 אזכיר לך כשתגיע למשרד: לדבר עם ישראל.
  *   התזכורת מחכה (‎status = 'place'‎) עד שהמיקום של העובד מגיע לנקודת הציון (‎places.js‎), ואז נשלחת כמו כל תזכורת —
  *   "📍 הגעת למשרד — תזכורת: …" [בוצע ✅] [בפעם הבאה 📍] [בעוד שעה ⏰]. גם "כשאצא מ…".
+ *   כדי לדעת מתי הגעת — הבוט מבקש לשתף איתו מיקום בזמן אמת בוואטסאפ (הוחלט 16.11.26; ‎onLocation‎).
  */
 const D = require('../core').Db;
 const W = require('../core').Workdays;
@@ -89,6 +90,9 @@ async function parse(text, about = '') {
 const active = (userId) => D.all("SELECT * FROM reminders WHERE user_id = ? AND status IN ('active', 'place') ORDER BY status = 'place', due_at, id", userId);
 const whenOf = (r) => (r.status === 'place' ? `📍 ${Places.phrase(r)}` : when(r.due_at));
 
+// הבקשה לשתף מיקום בזמן אמת — אחרי תזכורת מקום, ואחרי "בפעם הבאה 📍"
+const LIVE_ASK = '👉 *כדי שאדע כשתגיע — שתף איתי מיקום בזמן אמת:*\n📎 ← מיקום ← *שיתוף מיקום בזמן אמת* ← 8 שעות.\n_אני רואה רק אם הגעת לנקודת ציון — לא את המסלול._';
+
 /** תזכורת לפי מקום: רישום, או הסבר כשאין מקום כזה */
 function addPlaceReminder(userId, p) {
   const target = Places.resolve(p.place.name);
@@ -106,8 +110,8 @@ function addPlaceReminder(userId, p) {
     userId, p.text, D.nowIso(), D.nowIso(), r.place_id, r.place_kind, r.place_on);
   const where = Places.phrase(r);
   // בלי שיתוף מיקום התזכורת לא תדע מתי הגעת — אומרים מה לעשות
-  const how = Places.sharing(userId) ? '' : '\n\n_כדי שאדע שהגעת: מפעילים שיתוף מיקום במשימון (⚙ ההגדרות שלי ← 📍 מיקום), או שולחים לי מיקום 📍 כשמגיעים._';
-  return { text: `📍 אזכיר לך *${where}*: ${p.text}${how}\n_"התזכורות שלי" — הרשימה._`, place: true, result: `תזכורת ${where}: ${p.text}`.slice(0, 300) };
+  // כדי לדעת מתי הגעת — שיתוף מיקום בזמן אמת בוואטסאפ (הוחלט 16.11.26). כבר משתף — לא מבקשים שוב
+  return { text: `📍 אזכיר לך *${where}*: ${p.text}${Places.liveActive(userId) ? '' : `\n\n${LIVE_ASK}`}`, place: true, result: `תזכורת ${where}: ${p.text}`.slice(0, 300) };
 }
 
 /** הודעה לבוט: בקשת תזכורת / הרשימה / ביטול. ‎null‎ — לא שלנו. ‎about‎ — על מה, כשההודעה לא אומרת (טיוטת משימה שהפכה לתזכורת) */
@@ -143,8 +147,10 @@ async function tick(push) {
     // 📍 תזכורת מקום שנורתה (‎places.fire‎ — ‎ref = place:arrive:3‎)
     const at = /^place:(arrive|leave):(\d+)$/.exec(r.ref ?? '');
     const place = at ? Places.get(Number(at[2])) : null;
+    // אין עוד תזכורות שמחכות למקום — אפשר להפסיק לשתף
+    const stop = place && Places.liveActive(r.user_id) && !Places.waitingCount(r.user_id) ? '\n_אפשר להפסיק את שיתוף המיקום._' : '';
     await push(r.user_id, {
-      text: place ? `📍 *${at[1] === 'leave' ? `יצאת מ${place.name}` : `הגעת ${Places.toPlace(place.name)}`}* — תזכורת: ${r.text}` : `⏰ *תזכורת:* ${r.text}`,
+      text: place ? `📍 *${at[1] === 'leave' ? `יצאת מ${place.name}` : `הגעת ${Places.toPlace(place.name)}`}* — תזכורת: ${r.text}${stop}` : `⏰ *תזכורת:* ${r.text}`,
       buttons: place ? [BTN.done, BTN.nextVisit, BTN.hour] : [BTN.done, BTN.hour, BTN.tomorrow],
       draft: { kind: 'reminder', reminderId: r.id, text: r.text }
     });
@@ -165,7 +171,7 @@ function answer(userId, d, text) {
   if (r.place_on && (WaUi.sameLabel(t, BTN.nextVisit) || /^(?:בפעם\s+הבאה|פעם\s+הבאה|בביקור\s+הבא)$/.test(n))) {
     D.run("UPDATE reminders SET status = 'place', due_at = ?, ref = NULL WHERE id = ?", D.nowIso(), r.id);
     const where = Places.phrase(r);
-    return { text: `📍 בסדר, אזכיר שוב ${where.replace(/^כשת/, 'בפעם הבאה שת')}.`, result: `נדחתה לפעם הבאה: ${r.text}` };
+    return { text: `📍 בסדר, אזכיר שוב ${where.replace(/^כשת/, 'בפעם הבאה שת')}.${Places.liveActive(userId) ? '' : `\n\n${LIVE_ASK}`}`, result: `נדחתה לפעם הבאה: ${r.text}` };
   }
   const later = WaUi.sameLabel(t, BTN.hour) || /^בעוד\s+שעה$/.test(n) ? Date.now() + HOUR
     : WaUi.sameLabel(t, BTN.tomorrow) || /^(מחר|תזכיר\s+מחר)$/.test(n) ? new Date(r.due_at).getTime() + 24 * HOUR : null;
@@ -177,17 +183,26 @@ function answer(userId, d, text) {
   return null;
 }
 
-/** 📍 מיקום ששלחו לבוט — נקלט גם בלי שיתוף מיקום (העובד שלח אותו בעצמו). מחזיר את התשובה */
+/**
+ * 📍 מיקום מוואטסאפ: מיקום 📍 רגיל, או שיתוף בזמן אמת (‎live‎ — ההודעה הראשונה והעדכונים שאחריה).
+ * ‎text: null‎ — לא עונים (עדכון של שיתוף בזמן אמת: התזכורת עצמה תצא מהסבב כשמגיעים)
+ */
 function onLocation(userId, { lat, lng, live = false }) {
-  const r = Places.report(userId, { lat, lng, source: 'whatsapp', explicit: true });
-  if (!r.ok) return { text: '📍 לא הצלחתי לקרוא את המיקום. נסו לשלוח שוב.', result: `מיקום — ${r.reason}` };
+  const r = Places.report(userId, { lat, lng, source: live ? 'whatsapp_live' : 'whatsapp' });
+  const where = r.place ? `ב${r.place.name}` : 'מחוץ לנקודות הציון';
+  if (!r.ok) return { text: live ? null : '📍 לא הצלחתי לקרוא את המיקום. נסו לשלוח שוב.', result: `מיקום — ${r.reason}` };
   const n = r.fired.length;
-  const waiting = D.get("SELECT COUNT(*) AS n FROM reminders WHERE user_id = ? AND status = 'place'", userId).n;
+  const sending = n ? `⏰ ${n === 1 ? 'תזכורת אחת מחכה' : `${n} תזכורות מחכות`} לך כאן — שולח עכשיו.` : '';
+  // ‎quiet‎ — עדכון שלא שינה כלום (לא נכנס ליומן הבוט בכל פעם)
+  if (live && !r.first) return { text: null, quiet: !n && !r.arrived && !r.left, result: `עדכון מיקום בזמן אמת · ${where}${n ? ` · ${n} תזכורות` : ''}` };
+  const waiting = active(userId).filter((x) => x.status === 'place');
+  if (live) {
+    const watch = waiting.length ? `אזכיר לך ${[...new Set(waiting.map((x) => Places.phrase(x)))].join(' / ')}.` : 'אין כרגע תזכורות שמחכות למקום — אפשר להפסיק את השיתוף.';
+    return { text: ['📍 תודה! קיבלתי את שיתוף המיקום.', sending || watch].join('\n'), result: `התחיל שיתוף מיקום בזמן אמת · ${where}${n ? ` · ${n} תזכורות` : ''}` };
+  }
   const head = r.place ? `📍 קיבלתי — המיקום שלך: *${r.place.name}*.` : '📍 קיבלתי את המיקום — הוא לא באף אחת מנקודות הציון.';
-  const tail = n ? `\n⏰ ${n === 1 ? 'תזכורת אחת מחכה' : `${n} תזכורות מחכות`} לך כאן — שולח עכשיו.`
-    : waiting ? '' : '\n_אפשר לבקש: "תזכיר לי כשאני מגיע למשרד לדבר עם ישראל"._';
-  const liveNote = live ? '\n_שיתוף מיקום חי לא מגיע אליי ברציפות — לעדכון קבוע מפעילים שיתוף מיקום במשימון (⚙ ההגדרות שלי ← 📍 מיקום)._' : '';
-  return { text: head + tail + liveNote, place: true, result: `${r.place ? `ב${r.place.name}` : 'מחוץ לנקודות הציון'}${n ? ` · ${n} תזכורות` : ''}` };
+  const tail = sending ? `\n${sending}` : waiting.length ? `\n_כדי שאזכיר לך בדיוק כשתגיע — עדיף לשתף מיקום *בזמן אמת*._` : '\n_אפשר לבקש: "תזכיר לי כשאני מגיע למשרד לדבר עם ישראל"._';
+  return { text: head + tail, result: `מיקום · ${where}${n ? ` · ${n} תזכורות` : ''}` };
 }
 
 module.exports = { isRequest, command, tick, answer, onLocation, BTN, _internal: { parse, active } };

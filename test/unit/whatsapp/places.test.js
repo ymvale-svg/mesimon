@@ -1,6 +1,6 @@
 'use strict';
 /**
- * 📍 נקודות ציון ומיקום (‎server/whatsapp/places.js‎) — הגעה / יציאה, מיקום ישן, שיתוף כבוי, וקישור אישי.
+ * 📍 נקודות ציון ומיקום (‎server/whatsapp/places.js‎) — הגעה / יציאה, מיקום ישן, ושיתוף מיקום בזמן אמת בוואטסאפ.
  */
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -22,7 +22,7 @@ const fresh = () => {
   const site = Places.create({ id: null }, { name: 'אתר אלעד', kind: 'site', ...SITE });
   return { office, site };
 };
-const sharer = () => { const u = user({ role: 'employee' }); Places.setSharing(u.id, true); return u; };
+const sharer = () => user({ role: 'employee' });
 const placeReminder = (userId, placeId, on = 'arrive', text = 'לדבר עם ישראל') => Number(D.run(
   "INSERT INTO reminders (user_id, text, due_at, status, source, created_at, place_id, place_on) VALUES (?,?,?, 'place', 'bot', ?,?,?)",
   userId, text, D.nowIso(), D.nowIso(), placeId, on).lastInsertRowid);
@@ -116,17 +116,26 @@ test('"כשאגיע לאתר" (בלי שם) — כל אתר; המשרד לא', (
   assert.deepEqual(Places.report(u.id, SITE).fired.map((x) => x.id), [id]);
 });
 
-test('שיתוף כבוי — מיקום מהאפליקציה לא נקלט; מיקום שהעובד שלח בעצמו — כן, בלי לשמור את הנקודה', () => {
+test('נשמר רק באיזו נקודת ציון העובד נמצא — לא הנקודה עצמה', () => {
   const { office } = fresh();
-  const u = user({ role: 'employee' });
-  const a = placeReminder(u.id, office.id);
-  assert.equal(Places.report(u.id, OFFICE).reason, 'off');
-  assert.equal(D.get('SELECT status FROM reminders WHERE id = ?', a).status, 'place');
-  const r = Places.report(u.id, { ...OFFICE, source: 'whatsapp', explicit: true });
-  assert.deepEqual(r.fired.map((x) => x.id), [a]);
+  const u = sharer();
+  Places.report(u.id, { ...OFFICE, source: 'whatsapp_live' });
   const loc = D.get('SELECT * FROM user_locations WHERE user_id = ?', u.id);
   assert.equal(loc.lat, null);
+  assert.equal(loc.lng, null);
   assert.equal(loc.place_id, office.id);
+});
+
+test('שיתוף בזמן אמת: ההודעה הראשונה "first", העדכונים אחריה לא; אחרי חצי שעה בלי עדכון — כבר לא פעיל', () => {
+  fresh();
+  const u = sharer();
+  assert.equal(Places.liveActive(u.id), false);
+  assert.equal(Places.report(u.id, { ...near(OFFICE, 3000), source: 'whatsapp_live' }).first, true);
+  assert.equal(Places.liveActive(u.id), true);
+  assert.equal(Places.report(u.id, { ...near(OFFICE, 2000), source: 'whatsapp_live' }).first, false);
+  D.run('UPDATE user_locations SET at = ? WHERE user_id = ?', new Date(Date.now() - Places.LIVE_FRESH_MS - 60000).toISOString(), u.id);
+  assert.equal(Places.liveActive(u.id), false);
+  assert.equal(Places.report(u.id, { lat: 32, lng: 34.7, source: 'whatsapp' }).first, false, 'מיקום 📍 רגיל — לא שיתוף בזמן אמת');
 });
 
 test('מיקום לא מדויק (רשת סלולרית) — לא מחליטים לפיו', () => {
@@ -134,29 +143,6 @@ test('מיקום לא מדויק (רשת סלולרית) — לא מחליטים
   const u = sharer();
   placeReminder(u.id, office.id);
   assert.equal(Places.report(u.id, { ...OFFICE, accuracy: 3000 }).reason, 'inaccurate');
-});
-
-test('כיבוי השיתוף מוחק את המיקום האחרון ואת הקישור האישי', () => {
-  fresh();
-  const u = sharer();
-  const token = Places.newToken(u.id);
-  assert.equal(Places.userByToken(token), u.id);
-  Places.report(u.id, OFFICE);
-  Places.setSharing(u.id, false);
-  assert.equal(D.get('SELECT COUNT(*) AS n FROM user_locations WHERE user_id = ?', u.id).n, 0);
-  assert.equal(Places.userByToken(token), null);
-  assert.equal(Places.status(u.id).hasToken, false);
-});
-
-test('קישור חדש מבטל את הקודם; האסימון לא נשמר כמו שהוא', () => {
-  fresh();
-  const u = sharer();
-  const first = Places.newToken(u.id);
-  const second = Places.newToken(u.id);
-  assert.equal(Places.userByToken(first), null);
-  assert.equal(Places.userByToken(second), u.id);
-  assert.ok(!JSON.stringify(D.userPrefs(u.id)).includes(second));
-  assert.equal(Places.userByToken('קצר'), null);
 });
 
 test('מחיקת נקודת ציון — התזכורות שחיכו לה מתבטלות', () => {

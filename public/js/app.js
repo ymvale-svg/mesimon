@@ -232,8 +232,6 @@ const App = (() => {
         refreshTodayCount();
         clearInterval(todayTimer);
         todayTimer = setInterval(refreshTodayCount, 5 * 60000);
-        // 📍 שיתוף מיקום (תזכורות לפי מיקום) — כשהעובד הפעיל אותו, בזמן שהאפליקציה פתוחה
-        LocationView.start(state.prefs?.location);
       }
       registerServiceWorker();
       /*
@@ -687,7 +685,6 @@ const App = (() => {
     resetNotifSession();
     clearInterval(todayTimer);
     VoiceWake.stop();
-    LocationView.stop();
     await API.logout();
     state.actor = null;
     LoginView.render(root(), boot);
@@ -3047,7 +3044,7 @@ const App = (() => {
       else if (key === 'google') AiInboxView.openGmail(() => refreshView(), { into: box });
       else if (key === 'whatsapp') AiTaskView.openWhatsApp({ into: box });
       else if (key === 'today') TodayView.openSettings({ into: box });
-      else if (key === 'location') LocationView.openSettings({ into: box, onPref: (v) => { state.prefs = { ...(state.prefs ?? {}), location: { ...(state.prefs?.location ?? {}), ...v } }; } });
+      else if (key === 'location') LocationView.openSettings({ into: box });
       else if (key === 'notify') notifSettingsDialog({ into: box });
       else if (key === 'view') UI.mount(box, el('table.data', { style: { width: '100%' } }, [el('tbody', {}, [themeRow()])]));
     };

@@ -200,7 +200,6 @@ const PERSONAL = {
   mailAutoCreate: { tab: 'google', label: 'מייל ← משימה בלי אישור' },
   waScan: { tab: 'whatsapp', label: 'סריקת הוואטסאפ האישי' },
   mailClient: { tab: 'view', label: 'פתיחת מייל מהאלפון — Gmail / Outlook' },
-  location: { tab: 'location', label: 'שיתוף מיקום — לתזכורות לפי מיקום (‎/api/me/location‎)' },
   priorityPrefs: { label: 'פריוריטי — הבחירה האחרונה (סביבה, פרויקט, מחסן)', ui: false },
   boardFilters: { ui: false }, boardView: { ui: false }, projectScope: { ui: false }, sidebar: { ui: false }, mobileFilter: { ui: false },
   projectOrder: { ui: false }, trackerProject: { ui: false }, trackerScope: { ui: false }, trackerColumns: { ui: false },

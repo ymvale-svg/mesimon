@@ -1,7 +1,6 @@
 'use strict';
 /**
- * 📍 מיקום ונקודות ציון דרך השרת האמיתי: מנהל מוסיף את המשרד, עובד משתף מיקום מהאפליקציה,
- * ואפליקציית מעקב ברקע מדווחת בקישור האישי (בפורמט של OwnTracks) — בלי התחברות.
+ * 📍 נקודות ציון דרך השרת האמיתי: מנהל מוסיף את המשרד; המיקום עצמו מגיע רק מוואטסאפ (‎whatsapp/places.js‎).
  */
 const { test, before, after } = require('node:test');
 const assert = require('node:assert/strict');
@@ -32,32 +31,13 @@ test('נקודת ציון: הוספה מקישור של גוגל מפות, ער�
 
 test('בלי התחברות — אין גישה לנקודות הציון ולמיקום', async () => {
   assert.equal((await srv.api('GET', '/api/places')).status, 401);
-  assert.equal((await srv.api('POST', '/api/me/location', { body: { lat: 32, lng: 34 } })).status, 401);
+  assert.equal((await srv.api('GET', '/api/me/location')).status, 401);
 });
 
-test('מיקום מהאפליקציה — רק אחרי שהעובד הפעיל שיתוף; כיבוי מוחק', async () => {
-  const off = await srv.api('POST', '/api/me/location', { cookie, body: { lat: 32.0853, lng: 34.7818 } });
-  assert.equal(off.json.ok, false);
-  assert.equal(off.json.reason, 'off');
-  await srv.api('PUT', '/api/me/location/share', { cookie, body: { share: true } });
-  const on = await srv.api('POST', '/api/me/location', { cookie, body: { lat: 32.0854, lng: 34.7818, accuracy: 15 } });
-  assert.equal(on.json.ok, true);
-  assert.equal(on.json.place.name, 'המשרד');
+test('המצב שלי — בלי שיתוף בזמן אמת; שיתוף מהאפליקציה כבר לא קיים', async () => {
   const me = await srv.api('GET', '/api/me/location', { cookie });
-  assert.equal(me.json.place.name, 'המשרד');
-  assert.equal(me.json.lat, undefined, 'הנקודה עצמה לא חוזרת');
-  await srv.api('PUT', '/api/me/location/share', { cookie, body: { share: false } });
-  assert.equal((await srv.api('GET', '/api/me/location', { cookie })).json.lastAt, null);
-});
-
-test('קישור אישי לאפליקציית מעקב — מדווח בלי התחברות; אסימון לא מוכר — 404', async () => {
-  await srv.api('PUT', '/api/me/location/share', { cookie, body: { share: true } });
-  const { token } = (await srv.api('POST', '/api/me/location/token', { cookie })).json;
-  const ping = await srv.api('POST', `/api/location/ping/${token}`, { body: { _type: 'location', lat: 32.0853, lon: 34.7818, acc: 20, tst: Math.floor(Date.now() / 1000) } });
-  assert.equal(ping.status, 200, ping.text);
-  assert.deepEqual(ping.json, []);
-  const me = await srv.api('GET', '/api/me/location', { cookie });
-  assert.equal(me.json.source, 'tracker');
-  assert.equal(me.json.place.name, 'המשרד');
-  assert.equal((await srv.api('POST', '/api/location/ping/not-a-real-token-123456789', { body: { lat: 32, lng: 34 } })).status, 404);
+  assert.equal(me.status, 200);
+  assert.equal(me.json.live, false);
+  assert.equal(me.json.waiting, 0);
+  assert.equal((await srv.api('PUT', '/api/me/location/share', { cookie, body: { share: true } })).status, 404);
 });
