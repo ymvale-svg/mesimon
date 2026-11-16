@@ -418,7 +418,8 @@ async function unsolicited(msg) {
     `INSERT INTO instinct_requests (user_id, kind, status, text, in_id, user_chat_id, created_at) VALUES (?,?,?,?,?,?,?)`,
     row.user_id, 'question', 'open', text.slice(0, 1000), String(msg.id ?? ''), to, D.nowIso()
   );
-  note(row.user_id, `[שאלה מהעוזר הכללי, בהמשך לבקשה "${row.text.slice(0, 100)}" — מה שהעובד עונה חוזר אליו]: ${text.slice(0, 150)}`);
+  // רק סימון — בלי הטקסט של אינסטינקט: תוכן חיצוני לא נכנס להיסטוריה שמגיעה להבנת הבקשה
+  note(row.user_id, `[שאלה מהעוזר הכללי, בהמשך לבקשה "${row.text.slice(0, 100)}" — מה שהעובד עונה חוזר אליו]`);
   log({ ...base, chatId: to, userId: row.user_id, status: 'ok', result: `שאלת המשך לבקשה ${row.id} — הועברה לעובד` });
 }
 
