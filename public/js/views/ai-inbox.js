@@ -136,6 +136,7 @@ const AiInboxView = (() => {
         g.connection?.state === 'ok' && g.scanEnabled
           ? el('button.btn.btn-sm', { disabled: scanning.length > 0, onclick: () => scanDialog(reload) }, ['🔍 סרוק עכשיו'])
           : null,
+        el('button.btn.btn-sm', { title: 'בחירת מייל מהתיבה שלך — גם כזה שלא הוצע — ויצירת משימה ממנו', onclick: () => pickMailDialog(reload) }, ['📧 משימה ממייל שאני בוחר/ת…']),
         el('button.btn.btn-sm.btn-ghost', { title: 'חיבור Gmail והעדפות', onclick: () => openGmail(reload) }, ['⚙'])
       ]),
       el('div.card-pad', {}, [el('div.feed-scroll', {}, sections)])
@@ -678,6 +679,84 @@ const AiInboxView = (() => {
     }, reload));
   }
 
+  // ------------------------------------------------------------ משימה ממייל שבוחרים
+
+  /**
+   * 📧 בחירת מייל מהתיבה (חיפוש חופשי; ריק — הדואר הנכנס של השבוע) ← הניתוח של הסריקה ← חלון העריכה
+   * הרגיל (‎editSuggestion‎). מייל שכבר יש לו הצעה — היא נפתחת; כבר יש עליו משימה — המשימה.
+   */
+  function pickMailDialog(reload) {
+    const q = el('input', { type: 'search', placeholder: 'חיפוש: שם השולח, נושא, מילה מהמייל…' });
+    const go = el('button.btn', { type: 'button' }, ['🔍 חיפוש']);
+    const list = el('div', { style: { marginTop: '10px', maxHeight: '55vh', overflowY: 'auto' } });
+    const STATE = { pending: '💡 יש כבר הצעה', task: '✅ יש כבר משימה' };
+    let busy = false;
+
+    async function search() {
+      UI.mount(list, el('div.mute-sm', {}, [el('span.spinner-sm'), ' טוען מיילים…']));
+      try {
+        const r = await API.get(`/api/ai/mail-pick${q.value.trim() ? `?q=${encodeURIComponent(q.value.trim())}` : ''}`);
+        UI.mount(list, r.mails.length
+          ? el('div', {}, r.mails.map(row))
+          : UI.empty(q.value.trim() ? 'לא נמצאו מיילים בחיפוש הזה' : 'אין מיילים בדואר הנכנס מהשבוע האחרון', '📭'));
+      } catch (err) {
+        UI.mount(list, el('div.alert.alert-warn', {}, [el('span', { text: '📭' }), el('div', { text: err.message })]));
+      }
+    }
+
+    function row(mail) {
+      const main = el('div.ai-row-main', {}, [
+        el('b', { text: mail.subject || '(ללא נושא)' }),
+        el('div.mute-sm', {}, [
+          `מאת ${mail.from.name}`,
+          mail.date ? ` · ${UI.relative(mail.date)}` : '',
+          mail.mailbox ? el('span', { dir: 'ltr', text: ` · 📬 ${mail.mailbox}` }) : null,
+          mail.state ? ` · ${STATE[mail.state]}` : ''
+        ])
+      ]);
+      const r = el('div.ai-row', {}, [main]);
+      main.addEventListener('click', async () => {
+        if (busy) return;
+        busy = true;
+        r.style.opacity = '0.6';
+        UI.mount(main.lastChild, el('span', {}, [el('span.spinner-sm'), ' קורא את המייל ומכין משימה…']));
+        try {
+          const res = await API.post(`/api/ai/mail-pick/${encodeURIComponent(mail.gmailId)}`, { box: mail.box });
+          m.close();
+          await reload();
+          if (res.task) {
+            if (res.task.mine) TaskCardView.open(res.task.id);
+            else UI.success(`על המייל הזה כבר קיימת משימה${res.task.ownerName ? ` אצל ${res.task.ownerName}` : ''}`);
+            return;
+          }
+          if (res.created > 1) UI.success(`במייל נמצאו ${res.created} משימות — השאר ממתינות ב"ממתין לאישורך"`);
+          editSuggestion(res.suggestion, reload);
+        } catch (err) {
+          busy = false;
+          r.style.opacity = '';
+          UI.error(err);
+          search();
+        }
+      });
+      return r;
+    }
+
+    go.addEventListener('click', search);
+    q.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); search(); } });
+    const m = UI.modal({
+      title: '📧 משימה ממייל שאני בוחר/ת',
+      size: 'wide',
+      body: el('div', {}, [
+        el('p', { style: { marginTop: 0 }, text: 'בחרו מייל מהתיבה שלכם — גם כזה שלא הוצע — והעוזר יכין ממנו משימה לעריכה ואישור.' }),
+        el('div.row', {}, [q, go]),
+        list
+      ]),
+      footer: [el('div.spacer'), el('button.btn', { onclick: () => m.close() }, ['סגירה'])]
+    });
+    search();
+    q.focus();
+  }
+
   // ------------------------------------------------------------ סריקה
 
   function scanDialog(reload) {
@@ -1067,5 +1146,5 @@ const AiInboxView = (() => {
     setTimeout(() => scanDialog(() => HomeView.reload()), 300);
   }
 
-  return { load, card, openGmail, scanDialog, handleReturn, editSuggestion, rejectDialog, rejectNow, meetingRow, closureLine, agentAdvice };
+  return { load, card, openGmail, scanDialog, pickMailDialog, handleReturn, editSuggestion, rejectDialog, rejectNow, meetingRow, closureLine, agentAdvice };
 })();

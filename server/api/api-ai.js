@@ -14,6 +14,7 @@ const WhatsApp = require('../integrations').Whatsapp;
 const Phonebook = require('../phonebook').Phonebook;
 const Gmail = require('../integrations').Gmail;
 const MailScan = require('../mail').MailScan;
+const MailPick = require('../mail').MailPick;
 const GContacts = require('../phonebook').GoogleContacts;
 const WaScan = require('../whatsapp').WhatsappScan;
 const Calendar = require('../meetings').Calendar;
@@ -1096,6 +1097,26 @@ function register(router, h) {
     const actor = userOnly(ctx);
     try { TaskClosure.dismissTask(Number(ctx.params.taskId), actor.id); } catch (err) { throw badRequest(err.message); }
     sendJson(res, 200, { ok: true });
+  });
+
+  // 📧 משימה ממייל שהעובד בוחר בעצמו — רק מהתיבות שלו (‎mail-pick.js‎)
+  router.get('/api/ai/mail-pick', async (req, res, ctx) => {
+    const actor = userOnly(ctx);
+    const q = parseUrl(req).searchParams.get('q') ?? '';
+    try {
+      sendJson(res, 200, await MailPick.list(actor.id, { q }));
+    } catch (err) {
+      throw userError(err);
+    }
+  });
+  router.post('/api/ai/mail-pick/:gmailId', async (req, res, ctx) => {
+    const actor = userOnly(ctx);
+    const b = await readJson(req);
+    try {
+      sendJson(res, 200, await MailPick.pick(actor.id, ctx.params.gmailId, { box: Number(b.box) || 0 }));
+    } catch (err) {
+      throw userError(err);
+    }
   });
 
   router.post('/api/ai/suggestions/approve-all', async (req, res, ctx) => {
