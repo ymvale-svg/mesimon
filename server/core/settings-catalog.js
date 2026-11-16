@@ -42,6 +42,8 @@ const FORM = {
   mail_digest_time: { tab: 'hours', label: "📬 \"N מיילים מחכים לך\" — משעה", hint: "ההודעה המרוכזת של הצהריים, פעם ביום" },
   // 📧 מייל
   ai_mail_scan_enabled: { tab: 'mail', label: "סריקת מיילים: פעילה", hint: "מיילים שלא נקראו בתיבת ה-Gmail של כל משתמש שחיבר אותה הופכים להצעות משימה" },
+  ai_dose_enabled: { tab: 'mail', label: "📉 מינון לפי שימוש", hint: "מי שלא משתמש בהצעות המייל בבוט ובמשימון — כל שבוע עבודה יורד מדרגה: 100% ← 50% ← 20% ← הפסקה (בלי סריקה ובלי הצעות). כל שימוש מחזיר ל-100%. הכנה לפגישה ויומן — תמיד" },
+  ai_dose_week_days: { tab: 'mail', label: "📉 מינון: ימי עבודה למדרגה", hint: "כמה ימי עבודה בלי שימוש מורידים מדרגה. 5 = שבוע עבודה" },
   ai_scan_daily_limit: { tab: 'mail', label: "סריקת מיילים: תקרה יומית למשתמש", hint: "כל מייל הוא קריאה ל-AI. מה שמעבר לתקרה נסרק למחרת" },
   mail_reply_suggest: { tab: 'mail', label: "📧 הצעת תשובה מוכנה למייל", hint: "למייל שאדם מחכה בו לתשובה — טיוטה ב\"ממתין לאישורך\", לפי תשובות קודמות, הזיכרון והידע הארגוני. נשלחת רק בלחיצה" },
   mail_memory_enabled: { tab: 'mail', label: "🧠 זיכרון העבודה: פעיל", hint: "סריקת כל היסטוריית המייל של המשתמש, אחרי שאישר את הערכת העלות" },
@@ -200,6 +202,7 @@ const PERSONAL = {
   mailAutoCreate: { tab: 'google', label: 'מייל ← משימה בלי אישור' },
   waScan: { tab: 'whatsapp', label: 'סריקת הוואטסאפ האישי' },
   mailClient: { tab: 'view', label: 'פתיחת מייל מהאלפון — Gmail / Outlook' },
+  mailDose: { label: '📉 מינון המייל — מתי השתמש לאחרונה, מדרגה (‎mail-dose.js‎)', ui: false },
   priorityPrefs: { label: 'פריוריטי — הבחירה האחרונה (סביבה, פרויקט, מחסן)', ui: false },
   boardFilters: { ui: false }, boardView: { ui: false }, projectScope: { ui: false }, sidebar: { ui: false }, mobileFilter: { ui: false },
   projectOrder: { ui: false }, trackerProject: { ui: false }, trackerScope: { ui: false }, trackerColumns: { ui: false },

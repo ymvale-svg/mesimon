@@ -14,6 +14,7 @@ const WhatsApp = require('../integrations').Whatsapp;
 const Phonebook = require('../phonebook').Phonebook;
 const Gmail = require('../integrations').Gmail;
 const MailScan = require('../mail').MailScan;
+const MailDose = require('../mail').MailDose;
 const GContacts = require('../phonebook').GoogleContacts;
 const WaScan = require('../whatsapp').WhatsappScan;
 const Calendar = require('../meetings').Calendar;
@@ -1076,6 +1077,8 @@ function register(router, h) {
     try {
       // אישור "לסגור?" / "לעדכן?" ממתין לקבצים מ-Gmail — לכן ‎await‎ תמיד
       const taskId = await fn(Number(ctx.params.id), actor, b);
+      // 📉 טיפול בהצעה במשימון — שימוש: המייל ממשיך להיסרק (‎mail-dose.js‎)
+      MailDose.noteUse(actor.id, 'app');
       sendJson(res, 200, { ok: true, taskId: typeof taskId === 'number' ? taskId : null });
     } catch (err) {
       throw userError(err);
@@ -1091,6 +1094,8 @@ function register(router, h) {
   suggestionAction('closure-dismiss', (id, actor) => MailScan.dismissClosure(id, actor));
   suggestionAction('reply-sent', (id, actor) => MailScan.markReply(id, actor, 'sent'));
   suggestionAction('reply-dismiss', (id, actor) => MailScan.markReply(id, actor, 'dismissed'));
+  // 📉 מתחת ל-100% התשובה לא הוכנה מראש — נכתבת כשמבקשים (‎mail-dose.js‎)
+  suggestionAction('reply-prepare', (id, actor) => MailScan.prepareReply(id, actor));
   // 💡 על משימה שלא נולדה ממייל — "✕" מוריד את ההצעה
   router.post('/api/tasks/:taskId/closure-dismiss', async (req, res, ctx) => {
     const actor = userOnly(ctx);
@@ -1100,6 +1105,7 @@ function register(router, h) {
 
   router.post('/api/ai/suggestions/approve-all', async (req, res, ctx) => {
     const actor = userOnly(ctx);
+    MailDose.noteUse(actor.id, 'app');
     sendJson(res, 200, MailScan.approveAll(actor));
   });
 

@@ -16,6 +16,7 @@ const WaActions = require('./wa-actions');
 const MailInsights = require('../mail').MailInsights;
 const MailThread = require('../mail').MailThread;
 const MailPush = require('../mail').MailPush;
+const MailDose = require('../mail').MailDose;
 const WaScan = require('./whatsapp-scan');
 const Business = require('./wa-business');
 const GoodsReceipt = require('../priority').GoodsReceipt;
@@ -278,6 +279,8 @@ async function confirmPending(actor, pending, dry) {
     if (kind === 'mail_reply') {
       const r = pending.reply;
       if (!dry) await MailInsights.sendReply(actor.id, r);
+      // 📉 תשובה למייל מהבוט — שימוש (‎mail-dose.js‎)
+      if (!dry) MailDose.noteUse(actor.id, 'reply_sent');
       // מהפנייה היזומה: ההצעה מהמייל נענתה — יורדת מ"ממתין לאישורך"
       if (!dry && pending.suggestionIds?.length) closeAlerted(actor.id, pending.suggestionIds, 'replied');
       return { reply: `📧 התשובה נשלחה ל${r.toName || r.to}.${test}`, action, status: 'ok', result: `תשובה ל${r.toName || r.to}: ${r.subject}` };
@@ -646,7 +649,27 @@ async function mailAlertFor(userId) {
    * 💡 רק כשיש הצעת תשובה קונקרטית (הוחלט 11.11.26, ישראל: "התראה על כל מייל — מטריד"): "קיבלת מייל מדני:
    * <במשפט מה ביקש>. לענות כך? «…»". בלי הצעה — אין הודעה עכשיו; אם המייל לא יטופל, תגיע תזכורת "זכרת? 🐣"
    */
-  const withReply = rows.find((r) => MailPush.concreteReply(r.d.reply));
+  const wantsReply = rows.some((r) => MailPush.concreteReply(r.d.reply) || r.d.replyWanted);
+  // 📉 מינון לפי שימוש (‎mail-dose.js‎): 50% — דחוף תמיד והשאר לסירוגין; 20% — אחת ביום, רק דחוף; מושהה — לא
+  if (wantsReply && !MailDose.mayOffer(userId, head.d.priority)) {
+    log({ channel: 'summary', chatId, userId, who: u.full_name, action: 'mail_alert', status: 'ok', result: `📧 ${head.from_name}: ${oneLine(head.subject, 100)} — לא הוקפץ (מינון ${MailDose.percent(userId)}%); ב"היום"` });
+    return;
+  }
+  let withReply = rows.find((r) => MailPush.concreteReply(r.d.reply));
+  // 📉 מתחת ל-100% התשובה לא הוכנה בסריקה — נכתבת עכשיו, רק למייל שמוצע
+  const wanted = !withReply && rows.find((r) => r.d.replyWanted);
+  const wantedBox = wanted ? Number(wanted.d.replyBox ?? 0) : 0;
+  if (wanted && Gmail.canSend(Gmail.handle(userId, wantedBox))) {
+    const r = await MailInsights.suggestReply(userId, wanted.gmail_id, { box: wantedBox }).catch((err) => {
+      log({ channel: 'summary', chatId, userId, who: u.full_name, action: 'mail_alert', status: 'error', result: `הכנת התשובה: ${err.message}` });
+      return null;
+    });
+    if (r?.body) {
+      wanted.d.reply = { ...r, gmailId: wanted.gmail_id, box: wantedBox };
+      D.run('UPDATE ai_suggestions SET data = ? WHERE id = ?', JSON.stringify(wanted.d), wanted.id);
+      withReply = wanted;
+    }
+  }
   let reply = null;
   if (withReply && Gmail.canSend(Gmail.handle(userId, withReply.d.reply.box ?? 0))) {
     reply = await MailInsights.completeReply(userId, withReply.d.reply).catch((err) => {
@@ -681,7 +704,7 @@ async function mailAlertFor(userId) {
  */
 async function replyOffer(userId, row) {
   const d = parseJson(row.data, {});
-  const box = d.reply?.box ?? row.box ?? 0;
+  const box = d.reply?.box ?? d.replyBox ?? row.box ?? 0;
   if (!Gmail.canSend(Gmail.handle(userId, box))) return { error: 'cannot_send' };
   let reply = MailPush.concreteReply(d.reply) ? d.reply : null;
   if (!reply) {
@@ -728,7 +751,7 @@ async function mailWalkAt(userId, w, from) {
     const pos = `*${i + 1} מתוך ${w.ids.length}*`;
     // בזמן שהעובד קורא — מכינים כבר את התשובה לבא (נשמרת בהצעה), כדי שלא יחכה
     const nextId = w.ids.slice(i + 1).find((id) => waiting.has(id));
-    if (nextId) setImmediate(() => replyOffer(userId, waiting.get(nextId)).catch(() => {}));
+    if (nextId && MailDose.level(userId) === 0) setImmediate(() => replyOffer(userId, waiting.get(nextId)).catch(() => {}));
     const o = await replyOffer(userId, row).catch((err) => ({ error: err.message }));
     const nw = { ...w, i, at: D.nowIso() };
     if (o.error) {
@@ -747,7 +770,35 @@ const mailWalkEnd = (w) => `🏁 עברנו על כולם 👏${w.sent || w.drop
 
 async function mailAlerts() {
   for (const userId of mailAlertUsers()) {
+    if (MailDose.paused(userId)) {
+      await pauseNoticeFor(userId).catch((err) => console.error('[משימון] הודעת השהיית המייל נכשלה:', err.message));
+      continue;
+    }
     await mailAlertFor(userId).catch((err) => console.error('[משימון] פנייה על מייל חדש נכשלה:', err.message));
+  }
+}
+
+/**
+ * 📭 עובד שלא השתמש בהצעות המייל שלושה שבועות (‎mail-dose.js‎) — הודעה אחת: "הפסקתי להציע. רוצה שאחזור?"
+ * בשעות, לא באמצע שיחה ולא בפגישה — כמו כל פנייה יזומה. "כן" — חוזרים ל-100% (‎flowOnMailDose‎).
+ */
+async function pauseNoticeFor(userId) {
+  const u = D.get("SELECT id, full_name, phone FROM users WHERE id = ? AND status = 'active'", userId);
+  if (!u?.phone || busyFor(userId) || GoodsReceipt.active(userId) || PurchaseDemand.active(userId)) return;
+  if (!(await MailActions.mayAlertNow(userId))) return;
+  if (!MailDose.takePauseNotice(userId)) return;
+  const chatId = `${u.phone}@c.us`;
+  const buttons = [MailDose.PAUSE_BTN.resume, MailDose.PAUSE_BTN.stay];
+  const draft = { kind: 'mail_dose_resume', buttons };
+  try {
+    await sendButtons(chatId, MailDose.PAUSE_TEXT, buttons);
+    rememberBot(userId, MailDose.PAUSE_TEXT);
+    const now = chatOf(userId);
+    if (freeToAsk(userId, now)) saveChat(userId, { ...now, draft: { ...draft, askedAt: D.nowIso() }, awaiting: true });
+    MailActions.noteProactive(userId);
+    log({ channel: 'summary', chatId, userId, who: u.full_name, action: 'mail_dose', status: 'ok', result: '📭 הצעות המייל הושהו — נשלחה הודעה' });
+  } catch (err) {
+    log({ channel: 'summary', chatId, userId, who: u.full_name, action: 'mail_dose', status: 'error', result: err.message });
   }
 }
 
@@ -768,12 +819,14 @@ async function mailActionAlerts() {
     const prefs = D.userPrefs(u.id)?.botPrefs ?? {};
     const actor = Auth.loadActor('user', u.id);
     if (!actor) continue;
+    // 📉 מושהה (‎mail-dose.js‎) — בלי תזכורות על מיילים ובלי מעקב אחרי מיילים שנשלחו; חשבונית וטופס — כרגיל
+    const mailOn = !MailDose.paused(u.id);
     const allow = {
-      deadline: Boolean(on.deadline && prefs.mailDeadline !== false && WaActions.allowed(actor, 'mail_deadline')),
+      deadline: Boolean(mailOn && on.deadline && prefs.mailDeadline !== false && WaActions.allowed(actor, 'mail_deadline')),
       // 📦 רק מי שפתח אי פעם קבלת סחורה בפריוריטי (11.11.26)
       goods: Boolean(on.goods && prefs.goodsOffer !== false && WaActions.allowed(actor, 'goods_offer') && WaActions.allowed(actor, 'goods_receipt') && GoodsReceipt.everOpened(u.id)),
       form: Boolean(on.form && prefs.formOffer !== false && WaActions.allowed(actor, 'form_fill') && Gmail.canSend(u.id)),
-      followup: Boolean(on.followup && prefs.sentFollowup !== false && WaActions.allowed(actor, 'sent_followup') && Gmail.canSend(u.id))
+      followup: Boolean(mailOn && on.followup && prefs.sentFollowup !== false && WaActions.allowed(actor, 'sent_followup') && Gmail.canSend(u.id))
     };
     if (!allow.deadline && !allow.goods && !allow.form && !allow.followup) continue;
     // 📤 פעם ביום — המיילים ששלחת ולא נענו
@@ -869,5 +922,5 @@ async function sendPlainMail(actor, d, { dry = false } = {}) {
 
 module.exports = {
   sendPlainMail,
-  businessCommand, closeAlerted, closureDecision, confirmPending, contactOf, createFromDraft, draftEmail, findRecipients, mailActionAlerts, mailAlertFor, mailAlerts, parseThreadAdd, replyOffer, MAIL_WALK_BTN, isMailWalkStart, mailWalkIntro, mailWalkAt, mailWalkEnd, resolveCc, solveText, startGoodsFromMail, suggestionDecision, suggestionFeedback, threadAddText, VIA_EMAIL, VIA_MESIMON
+  businessCommand, closeAlerted, pauseNoticeFor, closureDecision, confirmPending, contactOf, createFromDraft, draftEmail, findRecipients, mailActionAlerts, mailAlertFor, mailAlerts, parseThreadAdd, replyOffer, MAIL_WALK_BTN, isMailWalkStart, mailWalkIntro, mailWalkAt, mailWalkEnd, resolveCc, solveText, startGoodsFromMail, suggestionDecision, suggestionFeedback, threadAddText, VIA_EMAIL, VIA_MESIMON
 };

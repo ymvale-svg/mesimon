@@ -11,6 +11,7 @@ const WaUi = require('./wa-ui');
 const Workdays = require('../core').Workdays;
 const DayDigest = require('../agents').DayDigest;
 const MailPush = require('../mail').MailPush;
+const MailDose = require('../mail').MailDose;
 const D = require('../core').Db;
 const Insights = require('../agents').Insights;
 const WaActions = require('./wa-actions');
@@ -601,11 +602,31 @@ async function flowBusinessCommand({ actor, dry, out, t }) {
   return NEXT;
 }
 
+/**
+ * 📭 תשובה ל"הפסקתי להציע תשובות למיילים. רוצה שאחזור?" (‎mail-dose.js‎). "כן" — חוזרים ל-100%; "לא" — נשאר מושהה.
+ * בלי השאלה הזו — ‎NEXT‎.
+ */
+async function flowOnMailDose({ actor, dry, out, state, t }) {
+  if (state.draft?.kind !== 'mail_dose_resume' || !state.awaiting) return NEXT;
+  const n = WaUi.normalize(t);
+  const meta = (result) => ({ action: 'mail_dose', status: 'ok', result });
+  if (WaUi.sameLabel(t, MailDose.PAUSE_BTN.resume) || WaUi.YES.test(n)) {
+    if (!dry) MailDose.noteUse(actor.id, 'resume');
+    return out('📬 חזרתי — אציע שוב תשובות למיילים חשובים שמחכים לך.', { draft: null, awaiting: false }, meta('חזר להצעות המייל'));
+  }
+  if (WaUi.sameLabel(t, MailDose.PAUSE_BTN.stay) || WaUi.NO.test(n)) {
+    return out('👍 בסדר. כשתרצה — *מיילים לענות*.', { draft: null, awaiting: false }, meta('נשאר מושהה'));
+  }
+  return NEXT;
+}
+
 // "לא ❌" על פנייה יזומה על מייל — לא לענות / לא משימה: ההצעה יורדת מ"ממתין לאישורך"
 async function flowAlertNo({ actor, dry, out, state, t }) {
   if (state.awaiting && state.draft?.alert && (WaUi.NO.test(WaUi.normalize(t)) || CANCEL.test(t))) {
     const d = state.draft;
     if (!dry) closeAlerted(actor.id, d.suggestionIds ?? [], d.kind === 'mail_task' ? 'rejected' : 'skipped');
+    // 📉 "לא" על הצעת תשובה — 3 ברצף מורידים מדרגה (‎mail-dose.js‎)
+    if (!dry && d.kind === 'mail_reply') MailDose.noteReject(actor.id);
     return out(d.kind === 'mail_task' ? 'בסדר, לא נפתחה משימה 👍' : 'בסדר, לא עונים 👍', { draft: null }, { action: 'mail_alert', status: 'ok', result: `לא: ${d.subject ?? d.title ?? ''}`.slice(0, 300) });
   }
   return NEXT;
@@ -708,6 +729,8 @@ async function flowMailWalk({ actor, dry, out, state, t }) {
 
   if (isMailWalkStart(t) && WaActions.allowed(actor, 'mail_insights')) {
     if (dry) return out('(בדיקה) הייתי עובר איתך על המיילים שמחכים לתשובה.', {}, meta('בדיקה'));
+    // 📉 בקשה של העובד — שימוש (‎mail-dose.js‎)
+    MailDose.noteUse(actor.id, 'walk');
     const ids = MailPush.toAnswer(actor.id).map((r) => r.id);
     if (!ids.length) return out('📬 אין מיילים שמחכים לתשובה ממך 🎉', { mailWalk: null }, meta('אין מיילים'));
     const w = { ids, i: 0, sent: 0, dropped: 0, at: D.nowIso() };
@@ -745,6 +768,7 @@ async function flowMailWalk({ actor, dry, out, state, t }) {
 // טיוטת תשובה למייל שממתינה: כל הודעה שאינה "כן" או "ביטול" היא תיקון
 async function flowMailReplyEdit({ actor, dry, kind, out, replyText, state, t }) {
   if (kind === 'mail_reply' && !dry && state.awaiting && Claude.isEnabled() && WaActions.allowed(actor, 'mail_insights')) {
+    MailDose.noteUse(actor.id, 'edit');
     const prev = state.draft.reply;
     const reply = { ...await MailInsights.draftReply(actor.id, prev.gmailId, prev.request, { feedback: t, previous: prev, box: prev.box ?? null }), signature: prev.signature, noSignature: prev.noSignature ?? null };
     // מהפנייה היזומה — ההצעות שעליהן נשאלה השאלה נשארות קשורות לטיוטה
@@ -983,5 +1007,5 @@ const switchCancels = () => Boolean(D.getSetting('wa_topic_switch_cancels', true
 const DRAFT_ONLY = /(?:(?:בלי|לא\s+משנה|אין\s+לי\s+(?:את\s+)?|עזוב(?:\s+את)?)\s*ה?(?:כתובת|מייל|נמען)|רק\s+ת?(?:נסח|כתוב)|ת?נסח\s+(?:לי\s+)?(?:רק\s+)?(?:את\s+)?ה?(?:מלל|טקסט|נוסח))/;
 
 module.exports = {
-  SEND_NOW, DRAFT_ONLY, flowAgentsList, flowAlertNo, flowApproval, flowBusinessCommand, flowCancel, flowClosureCommand, flowEmailEdit, flowEmailPick, flowEmailSolve, flowEmailVia, flowFeaturesRequest, flowFormFillRequest, flowGreeting, flowInstinct, flowInstinctExplicit, flowInstinctPilot, flowNoticeToInstinct, flowIntentCancel, flowIntentDenied, flowIntentMenu, flowIntentOther, flowMailReplyEdit, flowMailWalk, flowMeetCoordRequest, flowMeetingAudioAnswer, flowMeetingAudioRequest, flowMeetingFollowupRequest, flowMeetingReminderRequest, flowMenuList, flowMenuPick, flowNoAi, flowNoticeRequest, flowOnClosureAddress, flowOnDayEvening, flowOnFormFill, flowOnGoodsStop, flowOnMailMuteSender, flowOnMailRemindOrGoods, flowOnMeetCoord, flowOnMeetingTasks, flowOnPaceOffer, flowOnPlainMail, flowOnReminder, flowOnRfq, flowOnSentFollowup, flowOnThreadAdd, flowRemindersRequest, flowReplyAsk, flowRfqRequest, flowRfqSummary, flowSuggestionCommand, flowTranslateRequest, flowWalk, NEXT, switchCancels
+  SEND_NOW, DRAFT_ONLY, flowAgentsList, flowAlertNo, flowOnMailDose, flowApproval, flowBusinessCommand, flowCancel, flowClosureCommand, flowEmailEdit, flowEmailPick, flowEmailSolve, flowEmailVia, flowFeaturesRequest, flowFormFillRequest, flowGreeting, flowInstinct, flowInstinctExplicit, flowInstinctPilot, flowNoticeToInstinct, flowIntentCancel, flowIntentDenied, flowIntentMenu, flowIntentOther, flowMailReplyEdit, flowMailWalk, flowMeetCoordRequest, flowMeetingAudioAnswer, flowMeetingAudioRequest, flowMeetingFollowupRequest, flowMeetingReminderRequest, flowMenuList, flowMenuPick, flowNoAi, flowNoticeRequest, flowOnClosureAddress, flowOnDayEvening, flowOnFormFill, flowOnGoodsStop, flowOnMailMuteSender, flowOnMailRemindOrGoods, flowOnMeetCoord, flowOnMeetingTasks, flowOnPaceOffer, flowOnPlainMail, flowOnReminder, flowOnRfq, flowOnSentFollowup, flowOnThreadAdd, flowRemindersRequest, flowReplyAsk, flowRfqRequest, flowRfqSummary, flowSuggestionCommand, flowTranslateRequest, flowWalk, NEXT, switchCancels
 };

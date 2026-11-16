@@ -33,6 +33,7 @@ const GContacts = require('../phonebook').GoogleContacts;
 const Calendar = require('../meetings').Calendar;
 const Gmail = require('../integrations').Gmail;
 const MailScan = require('../mail').MailScan;
+const MailDose = require('../mail').MailDose;
 const Claude = require('../integrations').Claude;
 const WhatsApp = require('../integrations').Whatsapp;
 const WaBot = require('../whatsapp').WaBot;
@@ -4715,7 +4716,10 @@ router.get('/api/admin/ai-usage', async (req, res, ctx) => {
   const actor = ctx.requireActor();
   requireFullPerm(actor, 'manage_automations');
   const days = Number(parseUrl(req).searchParams.get('days') ?? 30);
-  sendJson(res, 200, AiUsage.report({ days }));
+  const report = AiUsage.report({ days });
+  // 📉 המדרגה של כל עובד במינון המייל (‎mail-dose.js‎) — לראות מי ירד ולמה
+  report.byUser = report.byUser.map((u) => (u.userId ? { ...u, dose: MailDose.summary(u.userId) } : u));
+  sendJson(res, 200, report);
 });
 
 router.get('/api/admin/settings', async (req, res, ctx) => {

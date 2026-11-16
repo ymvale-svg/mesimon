@@ -48,6 +48,7 @@ const MailInsights = require('../mail').MailInsights;
 const VoiceRouter = require('./voice-router');
 const MailThread = require('../mail').MailThread;
 const MailPush = require('../mail').MailPush;
+const MailDose = require('../mail').MailDose;
 const Solve = require('./solve');
 const Insights = require('../agents').Insights;
 const Range = require('../mail').InsightWindow;
@@ -83,7 +84,7 @@ const { answerLike, busyFor, meetCoordRun, meetCoordTick, pushToUser, questionTt
 const { businessCommand, closeAlerted, closureDecision, confirmPending, contactOf, createFromDraft, draftEmail, findRecipients, mailActionAlerts, mailAlertFor, mailAlerts, parseThreadAdd, resolveCc, solveText, startGoodsFromMail, suggestionDecision, suggestionFeedback, threadAddText, VIA_EMAIL, VIA_MESIMON } = require('./wa-mail');
 const { MENU, MENU_FREE_HINT, MENU_MORE, PLAIN_AGENTS, agentsText, cut, dayItems, isMenuButton, menuButtonOf, menuButtons, menuOptions, menuPick, menuText, moreMenuGroups, pairsOf, parseClosureCommand, parseSuggestionCommand, recordingReply, todayMessage, walkAction, walkButtons, walkText } = require('./wa-menu');
 const { flowReply, logoIntent, meetingAudioAllowed, meetingAudioTurn, meetingFollowups, processMeetingAudio, receiveMeetingAudio, TRANSLATE } = require('./wa-meeting');
-const { DRAFT_ONLY, flowAgentsList, flowAlertNo, flowApproval, flowBusinessCommand, flowCancel, flowClosureCommand, flowEmailEdit, flowEmailPick, flowEmailSolve, flowEmailVia, flowFeaturesRequest, flowFormFillRequest, flowGreeting, flowInstinct, flowInstinctExplicit, flowInstinctPilot, flowNoticeToInstinct, flowIntentCancel, flowIntentDenied, flowIntentMenu, flowIntentOther, flowMailReplyEdit, flowMailWalk, flowMeetCoordRequest, flowMeetingAudioAnswer, flowMeetingAudioRequest, flowMeetingFollowupRequest, flowMeetingReminderRequest, flowMenuList, flowMenuPick, flowNoAi, flowNoticeRequest, flowOnClosureAddress, flowOnDayEvening, flowOnFormFill, flowOnGoodsStop, flowOnMailMuteSender, flowOnMailRemindOrGoods, flowOnMeetCoord, flowOnMeetingTasks, flowOnPaceOffer, flowOnPlainMail, flowOnReminder, flowOnRfq, flowOnSentFollowup, flowOnThreadAdd, flowRemindersRequest, flowReplyAsk, flowRfqRequest, flowRfqSummary, flowSuggestionCommand, flowTranslateRequest, flowWalk, NEXT, switchCancels } = require('./wa-flows');
+const { DRAFT_ONLY, flowAgentsList, flowAlertNo, flowOnMailDose, flowApproval, flowBusinessCommand, flowCancel, flowClosureCommand, flowEmailEdit, flowEmailPick, flowEmailSolve, flowEmailVia, flowFeaturesRequest, flowFormFillRequest, flowGreeting, flowInstinct, flowInstinctExplicit, flowInstinctPilot, flowNoticeToInstinct, flowIntentCancel, flowIntentDenied, flowIntentMenu, flowIntentOther, flowMailReplyEdit, flowMailWalk, flowMeetCoordRequest, flowMeetingAudioAnswer, flowMeetingAudioRequest, flowMeetingFollowupRequest, flowMeetingReminderRequest, flowMenuList, flowMenuPick, flowNoAi, flowNoticeRequest, flowOnClosureAddress, flowOnDayEvening, flowOnFormFill, flowOnGoodsStop, flowOnMailMuteSender, flowOnMailRemindOrGoods, flowOnMeetCoord, flowOnMeetingTasks, flowOnPaceOffer, flowOnPlainMail, flowOnReminder, flowOnRfq, flowOnSentFollowup, flowOnThreadAdd, flowRemindersRequest, flowReplyAsk, flowRfqRequest, flowRfqSummary, flowSuggestionCommand, flowTranslateRequest, flowWalk, NEXT, switchCancels } = require('./wa-flows');
 
 const RECENT_FILE_MS = 15 * 60 * 1000;
 
@@ -346,6 +347,8 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
      * בלי "מה לענות" — 💡 הצעה: לפי המייל, התשובות הקודמות לשולח, הזיכרון
      * והידע הארגוני. כמו כל טיוטה: "כן" שולח, כל דבר אחר מתקן.
      */
+    // 📉 העובד ביקש תשובה למייל — שימוש (‎mail-dose.js‎)
+    if (!dry) MailDose.noteUse(actor.id, 'ask');
     const reply = request
       ? { ...await MailInsights.draftReply(actor.id, item.gmailId, request), ...await signatureFields(box) }
       : { ...await MailInsights.suggestReply(actor.id, item.gmailId, { box: boxNo }), ...await signatureFields(box) };
@@ -492,6 +495,8 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
       { action: 'other', status: 'ok', result: `"${t}" — הזכרתי מה מחכה`, buttons: [WaUi.BTN.yes, WaUi.BTN.no] });
   }
   // "לא ❌" על פנייה יזומה על מייל — לא לענות / לא משימה: ההצעה יורדת מ"ממתין לאישורך"
+  // 📭 "רוצה שאחזור להציע תשובות למיילים?" (‎mail-dose.js‎)
+  { const r = await flowOnMailDose({ actor, dry, out, state, t }); if (r !== NEXT) return r; }
   { const r = await flowAlertNo({ actor, dry, out, state, t }); if (r !== NEXT) return r; }
   // אחרי "לבטל את המשימה?" — גם "לבטל"/"ביטול" הם אישור, ולא ביטול של השאלה
   const cancelYes = Boolean(state.draft?.cancel) && /^(ת?בטל[יו]?|לבטל|ביטול|תמחק[יו]?|למחוק|מחק)([\s,.!]|$)/.test(t);

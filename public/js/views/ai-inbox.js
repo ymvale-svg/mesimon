@@ -484,8 +484,17 @@ const AiInboxView = (() => {
    */
   function replyLine(s, reload) {
     const r = s.data?.reply;
-    if (!r || r.sent || r.dismissed || !r.body) return null;
     const stop = (e) => e.stopPropagation();
+    // 📉 השולח מחכה לתשובה, והיא לא הוכנה מראש (מינון לפי שימוש) — מכינים בלחיצה
+    if (!r && s.data?.replyWanted) {
+      const prep = el('button.btn.btn-sm', { type: 'button' }, ['💡 להכין הצעת תשובה']);
+      prep.addEventListener('click', (e) => { stop(e); run(prep, () => API.post(`/api/ai/suggestions/${s.id}/reply-prepare`), reload)(); });
+      return el('div.ai-closure.ai-reply', { onclick: stop }, [
+        el('div.ai-closure-main', {}, [el('b', { text: '📧 השולח מחכה לתשובה ממך' })]),
+        el('div.ai-closure-actions', {}, [prep])
+      ]);
+    }
+    if (!r || r.sent || r.dismissed || !r.body) return null;
     const dismiss = el('button.btn.btn-sm.btn-ghost', { type: 'button', title: 'לא צריך לענות — ההצעה יורדת, המשימה נשארת' }, ['✕']);
     dismiss.addEventListener('click', (e) => { stop(e); run(dismiss, () => API.post(`/api/ai/suggestions/${s.id}/reply-dismiss`), reload)(); });
     const open = el('button.btn.btn-sm.btn-primary', { type: 'button' }, ['✏️ עריכה ושליחה']);

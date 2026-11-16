@@ -40,6 +40,7 @@ const Ports = require('../core').Ports;
 const Classification = require('../core').Classification;
 const MailInsights = require('./mail-insights');
 const MailOwner = require('./mail-owner');
+const MailDose = require('./mail-dose');
 const MeetingCoord = require('../meetings').MeetingCoord;
 const OrgKnowledge = require('../agents').OrgKnowledge;
 const Rfq = require('../priority').Rfq;
@@ -456,8 +457,12 @@ async function processMessage(user, conn, gmailId) {
    * 📧 הצעת תשובה מוכנה — כשהשולח מחכה לתשובה במייל: לפי המייל, איך ענית לו
    * בעבר, זיכרון העבודה והידע הארגוני. נשמרת עם ההצעה הראשונה של המייל;
    * נשלחת רק בלחיצה ("✏️ עריכה ושליחה"). כשל — ההצעה נשארת בלי תשובה.
+   * 📉 מתחת ל-100% (‎mail-dose.js‎) — לא מכינים מראש: ‎replyWanted‎, והתשובה נכתבת רק כשהמייל מוצע או כשמבקשים.
    */
-  if (result.replyExpected && D.getSetting('mail_reply_suggest', true) && Gmail.canSend(Gmail.handle(user.id, meta.box))) {
+  if (result.replyExpected && result.tasks[0] && !MailDose.prepareReplies(user.id)) {
+    result.tasks[0].replyWanted = true;
+    result.tasks[0].replyBox = meta.box ?? 0;
+  } else if (result.replyExpected && D.getSetting('mail_reply_suggest', true) && Gmail.canSend(Gmail.handle(user.id, meta.box))) {
     try {
       const r = await MailInsights.suggestReply(user.id, gmailId, { box: meta.box });
       // כל השדות — גם השרשור והכותרות, כדי שהבוט יוכל לשלוח את התשובה ב"כן" (‎mailAlerts‎ ב-‎wa-bot.js‎)
@@ -579,6 +584,8 @@ function startScan(userId, range) {
   const boxes = Gmail.boxesOf(userId, 'mail');
   if (!boxes.length) throw new Error('תיבת ה-Gmail אינה מחוברת');
   if (boxes.some((who) => Gmail.connectionOf(who)?.scan_running)) throw new Error('סריקה כבר רצה');
+  // 📉 "סרוק עכשיו" — בקשה של העובד: שימוש (‎mail-dose.js‎)
+  MailDose.noteUse(userId, 'app');
   (async () => {
     for (const who of boxes) {
       await runScan(who, { from, to, trigger: 'manual' }).catch((err) => {
@@ -633,6 +640,8 @@ async function morningRun() {
     if (!D.getSetting('ai_mail_scan_enabled', true) || !Claude.isEnabled()) return;
     // כל תיבה של כל עובד — הראשית והנוספות
     for (const userId of Gmail.allBoxes('mail')) {
+      // 📉 עובד מושהה (לא השתמש בהצעות המייל שלושה שבועות) — לא נסרק (‎mail-dose.js‎)
+      if (!MailDose.morningScan(Gmail.userOf(userId))) continue;
       const conn = Gmail.connectionOf(userId);
       // מהסריקה הקודמת, ולא יותר משבוע אחורה — מי שחזר מחופשה לא יקבל חודש של הצעות בבת אחת
       const last = conn.last_scan_at ? new Date(conn.last_scan_at) : rangeOf({ range: 'yesterday' }).from;
@@ -674,6 +683,8 @@ async function liveRun() {
     for (const who of liveBoxes()) {
       const conn = Gmail.connectionOf(who);
       if (!conn || conn.state !== 'ok' || conn.scan_running) continue;
+      // 📉 לפי המדרגה: 100% — כל סבב, 50% — כל 30 דק', 20% ומושהה — לא בסריקה השוטפת (‎mail-dose.js‎)
+      if (!MailDose.liveDue(Gmail.userOf(who), conn.last_scan_at, { baseMinutes: every })) continue;
       const last = conn.last_scan_at ? new Date(conn.last_scan_at).getTime() : 0;
       const from = new Date(Math.max(last - 30 * 60000, Date.now() - DAY));
       await runScan(who, { from, trigger: 'live' }).catch((err) => console.error(`[משימון] סריקה שוטפת של ${who} נכשלה:`, err.message));
@@ -1047,6 +1058,23 @@ function dismissClosure(id, actor) {
 }
 
 /** 📧 הצעת התשובה שעל ההצעה: נשלחה (מהחלון) או נדחתה — יורדת מהשורה */
+/**
+ * 💡 "להכין הצעת תשובה" — למייל שהשולח מחכה בו לתשובה, כשהתשובה לא הוכנה מראש (📉 מינון מתחת ל-100%, ‎mail-dose.js‎).
+ * נכתבת עכשיו ונשמרת בהצעה, כמו בסריקה.
+ */
+async function prepareReply(id, actor) {
+  const sug = ownSuggestion(id, actor.id);
+  const data = parseJson(sug.data, {});
+  if (data.reply?.body) return;
+  if (!data.replyWanted) throw new Error('אין במייל הזה בקשה לתשובה');
+  const box = Number(data.replyBox ?? 0);
+  if (!Gmail.canSend(Gmail.handle(actor.id, box))) throw new Error('כדי לענות צריך לחבר את תיבת ה-Gmail עם הרשאת שליחה');
+  const r = await MailInsights.suggestReply(actor.id, sug.gmail_id, { box });
+  if (!r?.body) throw new Error('לא הצלחתי להכין תשובה — אפשר לענות ישירות ב-Gmail');
+  data.reply = { ...r, gmailId: sug.gmail_id, box };
+  D.run('UPDATE ai_suggestions SET data = ? WHERE id = ?', JSON.stringify(data), sug.id);
+}
+
 function markReply(id, actor, state) {
   const sug = ownSuggestion(id, actor.id);
   const data = parseJson(sug.data, {});
@@ -1189,7 +1217,7 @@ function init({ createTask }) {
 module.exports = {
   init, startScan, runScan, rangeOf, morningRun, liveRun, pollMailbox,
   approve, approveAll, reject, restore, ignoreSenderOf, join, skip, undo, markConverted, setSender, senders,
-  dismissClosure, closureForTask, markReply,
+  dismissClosure, closureForTask, markReply, prepareReply,
   listFor, sourceLink, suggestionById, captureSourceMail, sourceMailOf,
   _internal: { sanitize, processMessage, createFromSuggestion, liveBoxes }
 };
