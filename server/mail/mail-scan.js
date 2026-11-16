@@ -949,6 +949,26 @@ function approve(id, actor, edits = {}) {
   return taskId;
 }
 
+/**
+ * "לסגור?" / "לעדכן?" כשהמערכת בחרה משימה לא נכונה: 🔀 ההודעה למשימה אחרת שהעובד בחר,
+ * או ➕ משימה חדשה ממנה (‎task-sync.js‎). המשימה שהוצעה — ללא שינוי.
+ * @returns {Promise<number>} מזהה המשימה שאליה הלכה ההודעה
+ */
+async function attachToOther(id, actor, edits = {}) {
+  const sug = ownSuggestion(id, actor.id);
+  if (!TaskSync.KINDS.includes(sug.kind)) throw new Error('אפשר לצרף למשימה אחרת רק הודעה שהוצעה על משימה');
+  return (await TaskSync.attachToOther(sug, actor, edits.taskId, edits)).taskId;
+}
+
+async function newTaskFromMessage(id, actor, edits = {}) {
+  const sug = ownSuggestion(id, actor.id);
+  if (!TaskSync.KINDS.includes(sug.kind)) throw new Error('אפשר לפתוח משימה כך רק מהודעה שהוצעה על משימה');
+  const { taskId } = await TaskSync.createFromMessage(sug, actor, edits);
+  // 📧 עותק של המייל במשימה — כמו במשימה מהצעה רגילה (ברקע)
+  if (parseJson(sug.data, {}).channel === 'mail') captureSourceMail(taskId, sug).catch((err) => console.error('[משימון] שמירת המייל המקורי במשימה נכשלה:', err.message));
+  return taskId;
+}
+
 /** "אשר הכול" — רק הצעות שאין בהן אנשים אחרים, פנייה החוצה או ספק */
 function approveAll(actor) {
   const out = { approved: 0, left: 0 };
@@ -1188,7 +1208,7 @@ function init({ createTask }) {
 
 module.exports = {
   init, startScan, runScan, rangeOf, morningRun, liveRun, pollMailbox,
-  approve, approveAll, reject, restore, ignoreSenderOf, join, skip, undo, markConverted, setSender, senders,
+  approve, approveAll, attachToOther, newTaskFromMessage, reject, restore, ignoreSenderOf, join, skip, undo, markConverted, setSender, senders,
   dismissClosure, closureForTask, markReply,
   listFor, sourceLink, suggestionById, captureSourceMail, sourceMailOf,
   _internal: { sanitize, processMessage, createFromSuggestion, liveBoxes }
