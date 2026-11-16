@@ -824,20 +824,62 @@ function ownSuggestion(id, userId) {
  * תווים) ב-‎tasks.source_mail‎, ומוצג לכל מי שרואה את המשימה (לא לספקים). רקע: תקלה לא מעכבת את יצירת המשימה.
  */
 const SOURCE_MAIL_TEXT = 8000;
-async function captureSourceMail(taskId, sug) {
-  if (!taskId || !sug?.gmail_id) return null;
+/**
+ * עותק של המייל שממנו נולדה ההצעה, מ-Gmail: מאת, אל, נושא, תאריך, הטקסט החדש וקבצים.
+ * ‎sent‎ — המייל נשלח מהתיבה של העובד עצמו (ולא התקבל אצלו) — "📤 מייל ששלחת".
+ * משותף לעותק שנשמר במשימה ולתצוגה בדיאלוג "📧 משימה מהמייל" (הוחלט 16.11.26).
+ */
+/** השולח הוא העובד עצמו — הכתובת של התיבה שההצעה ממנה, או של אחת התיבות שלו */
+function sentByOwner(sug, fromEmail = sug.from_email) {
+  const addr = String(fromEmail || '').trim().toLowerCase();
+  if (!addr) return false;
+  const own = [Gmail.connectionOf(Gmail.handle(sug.user_id, sug.box ?? 0))?.email, ...Gmail.emailsOf(sug.user_id)];
+  return own.filter(Boolean).some((e) => String(e).toLowerCase() === addr);
+}
+
+async function mailSnapshot(sug) {
   const who = Gmail.handle(sug.user_id, sug.box ?? 0);
   const m = Mime.parse((await Gmail.raw(who, sug.gmail_id)).raw);
-  const snap = {
+  const fromEmail = m.from?.address || sug.from_email || '';
+  return {
     from: m.from?.name || sug.from_name || '',
-    fromEmail: m.from?.address || sug.from_email || '',
+    fromEmail,
+    to: String(m.to || '').trim(),
     subject: m.subject || sug.subject || '',
     date: m.date && !Number.isNaN(m.date.getTime()) ? m.date.toISOString() : sug.received_at ?? null,
     text: String(m.newText || m.text || '').trim().slice(0, SOURCE_MAIL_TEXT),
-    files: (m.attachments ?? []).map((a) => a.filename).filter(Boolean).slice(0, 20)
+    files: (m.attachments ?? []).map((a) => a.filename).filter(Boolean).slice(0, 20),
+    sent: sentByOwner(sug, fromEmail)
   };
+}
+
+async function captureSourceMail(taskId, sug) {
+  if (!taskId || !sug?.gmail_id) return null;
+  const snap = await mailSnapshot(sug);
   D.run('UPDATE tasks SET source_mail = ? WHERE id = ?', JSON.stringify(snap), taskId);
   return snap;
+}
+
+/**
+ * 📧 "המייל עצמו" בדיאלוג של הצעה — רק לבעל ההצעה, רק להצעה ממייל.
+ * תקלה ב-Gmail — הודעה ברורה, לא קריסה.
+ */
+async function suggestionMail(id, userId) {
+  const sug = ownSuggestion(id, userId);
+  const data = parseJson(sug.data, {});
+  if (data.source === 'whatsapp' || data.source === 'agent' || !sug.gmail_id) {
+    const err = new Error('להצעה הזו אין מייל');
+    err.status = 404;
+    throw err;
+  }
+  try {
+    return await mailSnapshot(sug);
+  } catch (e) {
+    console.error(`[משימון] קריאת המייל של הצעה ${id} נכשלה:`, e.message);
+    const err = new Error('לא הצלחנו להביא את המייל מ-Gmail כרגע. אפשר לפתוח אותו בקישור "המייל ↗" או לנסות שוב מאוחר יותר.');
+    err.status = 502;
+    throw err;
+  }
 }
 
 /** העותק של המייל המקורי, לכרטיס המשימה. ‎null‎ — אין */
@@ -1116,6 +1158,8 @@ function shape(sug, conn) {
     from: { name: sug.from_name, email: sug.from_email },
     subject: sug.subject,
     receivedAt: sug.received_at,
+    // 📤 מייל ששלחתי / 📥 מייל שקיבלתי — לדיאלוג "משימה מהמייל"
+    sent: data.source === 'whatsapp' || data.source === 'agent' ? false : sentByOwner(sug),
     link: conn?.email && sug.gmail_id ? Gmail.webLink(conn.email, sug.gmail_id) : null,
     // מאיזו תיבה — רק כשיש לעובד יותר מאחת
     mailbox: conn?.email && Gmail.boxesOf(sug.user_id, null).length > 1 ? conn.email : null,
@@ -1190,6 +1234,6 @@ module.exports = {
   init, startScan, runScan, rangeOf, morningRun, liveRun, pollMailbox,
   approve, approveAll, reject, restore, ignoreSenderOf, join, skip, undo, markConverted, setSender, senders,
   dismissClosure, closureForTask, markReply,
-  listFor, sourceLink, suggestionById, captureSourceMail, sourceMailOf,
+  listFor, sourceLink, suggestionById, captureSourceMail, sourceMailOf, mailSnapshot, suggestionMail,
   _internal: { sanitize, processMessage, createFromSuggestion, liveBoxes }
 };
