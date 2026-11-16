@@ -24,6 +24,7 @@ const D = require('./core').Db;
 const Auth = require('./core').Auth;
 const Rules = require('./tasks').RulesEngine;
 const Push = require('./integrations').Push;
+const Claude = require('./integrations').Claude;
 const LoadMonitor = require('./core').LoadMonitor;
 const AiTasks = require('./tasks').AiTasks;
 const WaBot = require('./whatsapp').WaBot;
@@ -67,7 +68,9 @@ const server = http.createServer(async (req, res) => {
           return actor;
         }
       };
-      await match.handler(req, res, ctx);
+      // 💰 קריאות ל-AI בבקשה הזו נרשמות לעובד שביקש (‎ai-usage.js‎)
+      const run = () => match.handler(req, res, ctx);
+      await (actor?.type === 'user' ? Claude.forUser(actor.id, run) : run());
       return;
     }
 

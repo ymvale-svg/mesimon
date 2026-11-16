@@ -229,7 +229,7 @@ async function analyze(user, mail, conn = null) {
     'החלט לפי ההנחיות.'
   ].filter((l) => l !== null).join('\n');
 
-  const out = await Claude.json({ system: skill(), content: [...docs.map((d) => d.block), { type: 'text', text }], schema: ANALYSIS_SCHEMA, effort: 'low' });
+  const out = await Claude.json({ feature: 'mail.scan', userId: user?.id, system: skill(), content: [...docs.map((d) => d.block), { type: 'text', text }], schema: ANALYSIS_SCHEMA, effort: 'low' });
   return sanitize(out, user, users);
 }
 
@@ -536,7 +536,7 @@ async function runScan(who, { from, to = null, trigger = 'manual' }) {
     for (let i = 0; i < batch.length; i += CONCURRENCY) {
       await Promise.all(batch.slice(i, i + CONCURRENCY).map(async (id) => {
         try {
-          const outcome = await processMessage(user, conn, id);
+          const outcome = await Claude.forUser(userId, () => processMessage(user, conn, id));
           if (outcome === 'suggested') progress.suggested++;
           else if (outcome === 'auto') progress.auto++;
           else if (outcome === 'reply') progress.replies++;

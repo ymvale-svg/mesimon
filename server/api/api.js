@@ -15,6 +15,7 @@ const SettingsCatalog = require('../core').SettingsCatalog;
 const Mailer = require('../integrations').Mailer;
 const TaskMail = require('../mail').TaskMail;
 const Push = require('../integrations').Push;
+const AiUsage = require('../integrations').AiUsage;
 const Xlsx = require('../core').XlsxWrite;
 const Spreadsheet = require('../core').Spreadsheet;
 const AiTasks = require('../tasks').AiTasks;
@@ -4708,6 +4709,14 @@ router.patch('/api/vendors/:id', async (req, res, ctx) => {
 // ---------------------------------------------------------------------------
 // הגדרות ומנוע כללים — מנהל מערכת בלבד
 // ---------------------------------------------------------------------------
+
+/** 💰 עלות ה-AI — לפי תכונה, עובד, יום ומודל (‎?days=30‎). "תוכנית — חיסכון בקרדיטי AI.md", שלב 0 */
+router.get('/api/admin/ai-usage', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  requireFullPerm(actor, 'manage_automations');
+  const days = Number(parseUrl(req).searchParams.get('days') ?? 30);
+  sendJson(res, 200, AiUsage.report({ days }));
+});
 
 router.get('/api/admin/settings', async (req, res, ctx) => {
   const actor = ctx.requireActor();

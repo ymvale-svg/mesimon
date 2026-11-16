@@ -271,7 +271,7 @@ async function handle(userId, items) {
     });
     let out;
     try {
-      out = await Claude.json({ system: fs.readFileSync(SKILL, 'utf8'), content: [{ type: 'text', text }], schema: SCHEMA, effort: 'low' });
+      out = await Claude.json({ feature: 'bot.wa_scan', userId, system: fs.readFileSync(SKILL, 'utf8'), content: [{ type: 'text', text }], schema: SCHEMA, effort: 'low' });
     } catch (err) {
       console.error('[משימון] ניתוח הודעת וואטסאפ נכשל:', err.message);
       continue;

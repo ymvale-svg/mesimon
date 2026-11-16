@@ -385,5 +385,57 @@ const AdminAiView = (() => {
     }
   }
 
-  return { tab };
+  // ------------------------------------------------------------ 💰 עלות AI
+
+  /**
+   * 💰 כמה ה-AI עולה — לפי תכונה, לפי עובד (ולכל עובד — על מה), לפי יום ולפי מודל. הערכה לפי המחירון, לא חשבונית.
+   * "תוכנית — חיסכון בקרדיטי AI.md", שלב 0.
+   */
+  async function costTab(body) {
+    let days = 30;
+    const holder = el('div');
+    const seg = el('div.seg', {}, [[7, '7 ימים'], [30, '30 יום'], [90, '90 יום']].map(([n, label]) => {
+      const b = el(`button${n === days ? '.active' : ''}`, { type: 'button' }, [label]);
+      b.addEventListener('click', () => { days = n; for (const x of seg.children) x.classList.toggle('active', x === b); load(); });
+      return b;
+    }));
+    UI.mount(body, el('div.card', {}, [el('div.card-pad', {}, [
+      el('p.mute-sm', { text: 'כל קריאה ל-AI נרשמת: מי (העובד שבשבילו רצה, או "הארגון" לעבודת רקע), איזו תכונה, איזה מודל וכמה טוקנים. הסכומים הם הערכה לפי המחירון — החשבונית האמיתית ב-Anthropic Console. הרישום התחיל עם הגרסה הזו, ולכן ימים קודמים ריקים.' }),
+      seg, holder
+    ])]));
+    const money = (x) => `$${Number(x ?? 0).toFixed(2)}`;
+    const k = (n) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${Math.round(n / 1e3)}K` : String(n ?? 0));
+    const table = (heads, rows) => el('div', { style: { overflowX: 'auto' } }, [el('table.data', {}, [
+      el('thead', {}, [el('tr', {}, heads.map((h) => el('th', { text: h })))]),
+      el('tbody', {}, rows.map((r) => el('tr', {}, r.map((c) => el('td', { text: String(c) })))))
+    ])]);
+    async function load() {
+      UI.mount(holder, UI.spinner());
+      let r;
+      try { r = await API.get(`/api/admin/ai-usage?days=${days}`); } catch (err) { UI.mount(holder, UI.empty(err.message, '⚠️')); return; }
+      if (!r.total.calls) { UI.mount(holder, UI.empty('עוד אין קריאות רשומות בתקופה הזו', '💰')); return; }
+      const perDay = r.total.usd / Math.max(1, r.byDay.length);
+      UI.mount(holder,
+        el('div.mm-row', { style: { marginTop: '12px' } }, [el('div.mm-row-main', {}, [
+          el('b', { text: `${money(r.total.usd)} ב-${r.byDay.length} ימים עם פעילות` }),
+          el('div.mute-sm', { text: `ממוצע ${money(perDay)} ליום · ${r.total.calls} קריאות · קלט ${k(r.total.input)} · מהמטמון ${k(r.total.cacheRead)} · פלט ${k(r.total.output)}` })
+        ])]),
+        el('h4', { text: '🧩 לפי תכונה', style: { marginTop: '16px' } }),
+        table(['תכונה', 'עלות', '%', 'קריאות', 'קלט', 'מהמטמון', 'פלט'], r.byFeature.map((f) => [
+          f.label, money(f.usd), `${r.total.usd ? Math.round((f.usd / r.total.usd) * 100) : 0}%`, f.calls, k(f.input), k(f.cacheRead), k(f.output)
+        ])),
+        el('h4', { text: '👤 לפי עובד', style: { marginTop: '16px' } }),
+        table(['עובד', 'עלות', 'קריאות', 'על מה בעיקר'], r.byUser.map((u) => [
+          u.name, money(u.usd), u.calls, u.features.slice(0, 3).map((f) => `${f.label} ${money(f.usd)}`).join(' · ')
+        ])),
+        el('h4', { text: '🧠 לפי מודל', style: { marginTop: '16px' } }),
+        table(['מודל', 'עלות', 'קריאות', 'קלט', 'פלט'], r.byModel.map((m) => [`${m.model}${m.fast ? ' ⚡ מהיר' : ''}`, money(m.usd), m.calls, k(m.input), k(m.output)])),
+        el('h4', { text: '📅 לפי יום', style: { marginTop: '16px' } }),
+        table(['יום', 'עלות', 'קריאות'], [...r.byDay].reverse().map((d) => [d.day, money(d.usd), d.calls]))
+      );
+    }
+    load();
+  }
+
+  return { tab, costTab };
 })();

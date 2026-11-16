@@ -151,6 +151,7 @@ function contextText(actor, ctx, { aiRequested }) {
 
 async function understand(actor, text, ctx, { aiRequested }) {
   return Claude.json({
+    feature: 'tasks.voice', userId: actor?.id,
     system: fs.readFileSync(SKILL_PATH, 'utf8'),
     content: [{
       type: 'text',

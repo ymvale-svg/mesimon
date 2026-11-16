@@ -195,7 +195,7 @@ const ai = {
     const block = file.mime.includes('pdf')
       ? { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data } }
       : { type: 'image', source: { type: 'base64', media_type: file.mime.includes('png') ? 'image/png' : 'image/jpeg', data } };
-    return Claude.json({ system: skill(), content: [block, { type: 'text', text: 'task: items' }], schema: ITEMS_SCHEMA, effort: 'high', live: true });
+    return Claude.json({ feature: 'priority.demand', system: skill(), content: [block, { type: 'text', text: 'task: items' }], schema: ITEMS_SCHEMA, effort: 'high', live: true });
   },
   async match(items, pairs, siblings = []) {
     const text = JSON.stringify({
@@ -206,11 +206,11 @@ const ai = {
         candidates: (it.candidates ?? []).map((c) => ({ code: c.PARTNAME, description: c.PARTDES, chapter: c.BUD_SUBCHAPTERDES ?? '', resource: c.BUD_SUBTOPICDES ?? '' })) })),
       pairs: pairs.slice(0, 150).map((p) => ({ chapter: p.chapter, chapter_name: p.chapterDes, topic: p.topic, topic_name: p.topicDes }))
     });
-    return Claude.json({ system: skill(), content: [{ type: 'text', text }], schema: MATCH_SCHEMA, effort: 'medium', live: true });
+    return Claude.json({ feature: 'priority.demand', system: skill(), content: [{ type: 'text', text }], schema: MATCH_SCHEMA, effort: 'medium', live: true });
   },
   async edit(lines, text) {
     const content = JSON.stringify({ task: 'edit', lines: lines.map((l) => ({ line: l.n, description: l.description, qty: l.qty, unit: l.unit })), text });
-    return Claude.json({ system: skill(), content: [{ type: 'text', text: content }], schema: EDIT_SCHEMA, effort: 'low', live: true });
+    return Claude.json({ feature: 'priority.demand', system: skill(), content: [{ type: 'text', text: content }], schema: EDIT_SCHEMA, effort: 'low', live: true });
   }
 };
 

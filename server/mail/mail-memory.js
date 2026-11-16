@@ -689,6 +689,7 @@ async function readThread(userId, who, threadId, run) {
   const content = [...docs.map((d) => d.block), { type: 'text', text: lines.filter((l) => l !== '').join('\n') }];
   const usage = { input: 0, output: 0 };
   const out = await Claude.json({
+    feature: 'mail.memory', userId: user?.id,
     system: skill(), content, schema: MEMORY_SCHEMA, effort: 'low', model: model(),
     onUsage: (u) => { usage.input += (u.input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0); usage.output += u.output_tokens ?? 0; }
   });

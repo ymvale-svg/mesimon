@@ -13,6 +13,7 @@
  * והממשק אומר זאת במפורש.
  */
 const D = require('../core').Db;
+const AiUsage = require('./ai-usage');
 
 const API_URL = 'https://api.anthropic.com/v1/messages';
 const DEFAULT_MODEL = 'claude-opus-5-5';
@@ -66,19 +67,21 @@ const fail = (err) => { health(false, err); return err; };
  * @param {string} [opts.effort]         low | medium | high
  * @param {boolean} [opts.live]          מישהו מחכה לתשובה — מודל הבוט ומצב מהיר
  * @param {string} [opts.model]          מודל אחר מברירת המחדל — לעבודה רבה וזולה (זיכרון המייל, ניתוב)
+ * @param {string} opts.feature         איזו תכונה קוראת — לרישום הצריכה (‎ai-usage.js‎ ‎FEATURES‎). חובה
+ * @param {number} [opts.userId]         בשביל איזה עובד. בלי — מההקשר (‎forUser‎)
  * @param {(usage: object) => void} [opts.onUsage]  כמה טוקנים נצרכו — למעקב עלות
  * @param {Array}  [opts.serverTools]    כלים שרצים בצד של Anthropic (חיפוש ברשת — ‎WEB_SEARCH‎). התשובה הסופית — עדיין לפי הסכמה
  * @returns {Promise<object>}            התשובה כאובייקט שעבר את הסכמה
  */
-async function json({ system, content, schema, effort = 'medium', live = false, model: modelId = null, onUsage = null, serverTools = null }) {
+async function json({ system, content, schema, effort = 'medium', live = false, model: modelId = null, onUsage = null, serverTools = null, feature = null, userId = null }) {
   if (!isEnabled()) throw new AiError('חיבור ה-AI אינו מוגדר בשרת (ANTHROPIC_API_KEY)');
   const m = String(modelId || (live ? botModel() : model())).trim();
   const fast = live && !modelId && fastMode() && FAST_MODELS.has(m);
   try {
-    return await request({ system, content, schema, effort, model: m, fast, onUsage, serverTools });
+    return await request({ system, content, schema, effort, model: m, fast, onUsage, serverTools, feature, userId });
   } catch (err) {
     // המצב המהיר נדחה (מכסה נפרדת, חשבון בלי גישה) — אותה בקשה במהירות רגילה
-    if (fast && err.status && err.status < 500) return request({ system, content, schema, effort, model: m, fast: false, onUsage, serverTools });
+    if (fast && err.status && err.status < 500) return request({ system, content, schema, effort, model: m, fast: false, onUsage, serverTools, feature, userId });
     throw err;
   }
 }
@@ -86,11 +89,11 @@ async function json({ system, content, schema, effort = 'medium', live = false, 
 /** חיפוש ברשת — כלי שרץ אצל Anthropic. ‎max‎ — כמה חיפושים לכל היותר בבקשה אחת */
 const WEB_SEARCH = (max = 6) => ({ type: 'web_search_20250305', name: 'web_search', max_uses: max, user_location: { type: 'approximate', country: 'IL', timezone: 'Asia/Jerusalem' } });
 
-async function request({ system, content, schema, effort, model: modelId, fast, onUsage = null, serverTools = null }) {
+async function request({ system, content, schema, effort, model: modelId, fast, onUsage = null, serverTools = null, feature = null, userId = null }) {
   // חיפוש ארוך עוצר באמצע (‎pause_turn‎) — שולחים שוב עם מה שנעשה עד עכשיו, עד 4 פעמים
   const messages = [{ role: 'user', content }];
   for (let round = 0; ; round++) {
-    const data = await requestOnce({ system, messages, schema, effort, model: modelId, fast, onUsage, serverTools });
+    const data = await requestOnce({ system, messages, schema, effort, model: modelId, fast, onUsage, serverTools, feature, userId });
     if (data?.stop_reason === 'pause_turn' && round < 4) {
       messages.push({ role: 'assistant', content: data.content });
       continue;
@@ -99,7 +102,7 @@ async function request({ system, content, schema, effort, model: modelId, fast, 
   }
 }
 
-async function requestOnce({ system, messages, schema, effort, model: modelId, fast, onUsage, serverTools }) {
+async function requestOnce({ system, messages, schema, effort, model: modelId, fast, onUsage, serverTools, feature, userId }) {
   const body = {
     model: modelId,
     max_tokens: 16000,
@@ -148,6 +151,7 @@ async function requestOnce({ system, messages, schema, effort, model: modelId, f
   }
   health(true);
 
+  if (data?.usage) AiUsage.record({ feature, userId, model: data.model || modelId, fast, usage: data.usage });
   if (onUsage && data?.usage) {
     try { onUsage(data.usage); } catch { /* מעקב בלבד */ }
   }
@@ -190,7 +194,7 @@ function parseOutput(data) {
  * @param {boolean} [opts.live]              מישהו מחכה (✨ שאל, הבוט) — מצב מהיר, כמו ב-‎json‎
  * @returns {Promise<{text: string, calls: Array<{name, input, ok, ms}>}>}
  */
-async function withTools({ system, content, tools, onTool, effort = 'medium', model: modelId = null, maxTurns = 6, onUsage = null, live = false }) {
+async function withTools({ system, content, tools, onTool, effort = 'medium', model: modelId = null, maxTurns = 6, onUsage = null, live = false, feature = null, userId = null }) {
   if (!isEnabled()) throw new AiError('חיבור ה-AI אינו מוגדר בשרת (ANTHROPIC_API_KEY)');
   const chosen = String(modelId || model()).trim();
   const fallback = withFallback(chosen);
@@ -245,6 +249,7 @@ async function withTools({ system, content, tools, onTool, effort = 'medium', mo
       throw fail(err);
     }
     health(true);
+    if (data?.usage) AiUsage.record({ feature, userId, model: data.model || chosen, fast, usage: data.usage });
     if (onUsage && data?.usage) { try { onUsage(data.usage); } catch { /* מעקב בלבד */ } }
     if (data?.stop_reason === 'refusal') throw new AiError('ה-AI סירב לטפל בבקשה הזו');
 
@@ -274,15 +279,10 @@ async function withTools({ system, content, tools, onTool, effort = 'medium', mo
   }
 }
 
-/*
- * מחירון לכל מיליון טוקנים (דולר), לחישוב הערכת עלות בלבד — לא לחיוב.
- * מודל שאינו כאן: ההערכה מוצגת בטוקנים בלי סכום.
- */
-const PRICES = {
-  'claude-haiku-5-5': { input: 0.10, output: 0.50 },
-  'claude-sonnet-5-5': { input: 2, output: 10 },
-  'claude-opus-5-5': { input: 4, output: 20 }
-};
-const priceOf = (id) => PRICES[String(id ?? '').trim()] ?? null;
+/* המחירון — ב-‎ai-usage.js‎ (הערכת עלות בלבד). מודל שאינו שם: ההערכה מוצגת בטוקנים בלי סכום */
+const priceOf = AiUsage.priceOf;
 
-module.exports = { json, withTools, isEnabled, status, model, botModel, priceOf, AiError, onHealth, DEFAULT_MODEL, WEB_SEARCH, _toJson: toJson };
+/** 💰 ‎forUser(userId, fn)‎ — קריאות ל-AI בתוך ‎fn‎ נרשמות לעובד הזה (‎ai-usage.js‎) */
+const forUser = AiUsage.forUser;
+
+module.exports = { json, withTools, isEnabled, status, model, botModel, priceOf, forUser, AiError, onHealth, DEFAULT_MODEL, WEB_SEARCH, _toJson: toJson };

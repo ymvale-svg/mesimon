@@ -94,7 +94,7 @@ async function analyzeGroup(group, project, fresh, users) {
     'החלט לפי ההנחיות.'
   ].join('\n');
 
-  const out = await Claude.json({ system: fs.readFileSync(GROUP_SKILL, 'utf8'), content: [{ type: 'text', text }], schema: GROUP_SCHEMA, effort: 'low' });
+  const out = await Claude.json({ feature: 'bot.groups', system: fs.readFileSync(GROUP_SKILL, 'utf8'), content: [{ type: 'text', text }], schema: GROUP_SCHEMA, effort: 'low' });
   return sanitizeGroup(out, users, fresh.length);
 }
 

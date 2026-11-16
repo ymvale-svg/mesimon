@@ -1402,6 +1402,27 @@ CREATE TABLE IF NOT EXISTS mail_memory_runs (
   updated_at    TEXT    NOT NULL
 );
 
+/*
+ * 💰 צריכת ה-AI — שורה לכל יום × עובד × תכונה × מודל × מהירות (‎integrations/ai-usage.js‎). מצטבר, לא שורה לכל קריאה.
+ * ‎user_id = 0‎ — עבודת רקע שאינה של עובד אחד (ידע ארגוני, בדיקת בריאות). ‎cost_micro‎ — הערכה במיליוניות דולר.
+ * ("תוכנית — חיסכון בקרדיטי AI.md", שלב 0)
+ */
+CREATE TABLE IF NOT EXISTS ai_usage (
+  day          TEXT    NOT NULL,              -- יום בשעון ישראל
+  user_id      INTEGER NOT NULL DEFAULT 0,
+  feature      TEXT    NOT NULL,
+  model        TEXT    NOT NULL,
+  fast         INTEGER NOT NULL DEFAULT 0,
+  calls        INTEGER NOT NULL DEFAULT 0,
+  input        INTEGER NOT NULL DEFAULT 0,
+  cache_write  INTEGER NOT NULL DEFAULT 0,
+  cache_read   INTEGER NOT NULL DEFAULT 0,
+  output       INTEGER NOT NULL DEFAULT 0,
+  searches     INTEGER NOT NULL DEFAULT 0,
+  cost_micro   INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (day, user_id, feature, model, fast)
+);
+
 /* תור השרשורים: מה שמופה בשלב 1, ומה שנקרא בשלב 3 */
 CREATE TABLE IF NOT EXISTS mail_memory_threads (
   user_id       INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,

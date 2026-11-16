@@ -280,6 +280,7 @@ async function aboutPending(state, text) {
   const lastBot = [...(state.history ?? [])].reverse().find((h) => h.role === 'bot')?.text ?? '';
   try {
     const r = await Claude.json({
+      feature: 'bot.chat',
       system: [
         'אתה מסווג הודעות בשיחת וואטסאפ עם בוט משימות. לעובד יש פריט שממתין לתגובה שלו (טיוטה לאישור, או שאלה של הבוט).',
         'החזר same_topic=true אם ההודעה החדשה מתייחסת לפריט הזה: אישור, תיקון, תוספת, הוראה על הנוסח, תשובה לשאלה, בחירת נמען, או המשך ישיר שלו.',
@@ -1039,7 +1040,13 @@ let buttonShapeLogged = false;
 
 const quietLocationLog = new Map(); // ‎userId‎ → מתי נרשם עדכון מיקום שקט אחרון
 
-async function handleDirect(msg) {
+/** הודעה פרטית לבוט — קריאות ל-AI בטיפול בה נרשמות לעובד ששלח (💰 ‎ai-usage.js‎) */
+function handleDirect(msg) {
+  const user = Instinct.isInstinct(msg.phone) ? null : userByPhone(msg.phone);
+  return user ? Claude.forUser(user.id, () => handleDirectAs(msg)) : handleDirectAs(msg);
+}
+
+async function handleDirectAs(msg) {
   // 🤖 אינסטינקט לעולם לא מגיע לניתוב (גם אם המספר נרשם בטעות אצל עובד) — ‎instinct.js‎
   if (Instinct.isInstinct(msg.phone)) return Instinct.receive(msg);
   const user = userByPhone(msg.phone);

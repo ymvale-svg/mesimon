@@ -415,12 +415,12 @@ function jpegToPdf(jpg) {
 const ai = {
   async extract(file) {
     const block = fileBlock(file);
-    const first = await Claude.json({ system: skill(), content: [block, { type: 'text', text: 'task: extract' }], schema: EXTRACT_SCHEMA, effort: 'high', live: true });
+    const first = await Claude.json({ feature: 'priority.goods', system: skill(), content: [block, { type: 'text', text: 'task: extract' }], schema: EXTRACT_SCHEMA, effort: 'high', live: true });
     // בדיקה עצמית: סכום השורות לא תואם לסה"כ השורות במסמך — קוראים שוב את הטבלה, שורה אחרי שורה
     const want = Number(first.totals?.subtotal || (Number(first.totals?.before_vat || 0) + Number(first.totals?.doc_discount || 0)) || 0);
     const gap = (d) => Math.abs(lineSum(d.lines) - want);
     if (!(want > 0) || !(first.lines ?? []).length || gap(first) <= 1) return first;
-    const again = await Claude.json({ system: skill(), schema: EXTRACT_SCHEMA, effort: 'high', live: true, content: [block, { type: 'text', text: [
+    const again = await Claude.json({ feature: 'priority.goods', system: skill(), schema: EXTRACT_SCHEMA, effort: 'high', live: true, content: [block, { type: 'text', text: [
       'task: extract',
       `בדיקה: סכום השורות שקראת (${lineSum(first.lines)}) אינו תואם לסה"כ השורות במסמך (${want}). קראת ${first.lines.length} שורות.`,
       'קרא שוב את כל טבלת השורות, שורה אחרי שורה: גם שורות דומות זו לזו, שורות עם אותו מק"ט, שורות שנמשכות על שתי שורות טקסט, ושורות בסוף הטבלה. בדוק כמות × מחיר = סכום בכל שורה.'
@@ -433,26 +433,26 @@ const ai = {
       doc_lines: docLines.map((l, i) => ({ doc_line: i + 1, description: l.description, supplier_code: l.supplier_code, qty: l.qty, unit: l.unit, unit_price: l.unit_price })),
       open_order_lines: orders.flatMap((o) => o.lines.map((l) => ({ order: o.ORDNAME, line: l.LINE, part: l.PARTNAME, description: l.PDES, balance: l.TBALANCE, unit: l.TUNITNAME, price: l.PRICE })))
     });
-    return Claude.json({ system: skill(), content: [{ type: 'text', text }], schema: MATCH_SCHEMA, effort: 'medium', live: true });
+    return Claude.json({ feature: 'priority.goods', system: skill(), content: [{ type: 'text', text }], schema: MATCH_SCHEMA, effort: 'medium', live: true });
   },
   async classify(current, file) {
     const block = fileBlock(file);
-    return Claude.json({ system: skill(), content: [block, { type: 'text', text: JSON.stringify({ task: 'classify', current }) }], schema: CLASSIFY_SCHEMA, effort: 'low', live: true });
+    return Claude.json({ feature: 'priority.goods', system: skill(), content: [block, { type: 'text', text: JSON.stringify({ task: 'classify', current }) }], schema: CLASSIFY_SCHEMA, effort: 'low', live: true });
   },
   async partTerms(text, line) {
     const content = JSON.stringify({ task: 'part_terms', text, line });
-    return Claude.json({ system: skill(), content: [{ type: 'text', text: content }], schema: TERMS_SCHEMA, effort: 'low', live: true });
+    return Claude.json({ feature: 'priority.goods', system: skill(), content: [{ type: 'text', text: content }], schema: TERMS_SCHEMA, effort: 'low', live: true });
   },
   async parts(text, line, candidates) {
     const content = JSON.stringify({ task: 'parts', text, line, candidates: candidates.map((c) => ({ code: c.PARTNAME, description: c.PARTDES, chapter: c.BUD_SUBCHAPTERDES ?? '', resource: c.BUD_SUBTOPICDES ?? '' })) });
-    return Claude.json({ system: skill(), content: [{ type: 'text', text: content }], schema: PARTS_SCHEMA, effort: 'low', live: true });
+    return Claude.json({ feature: 'priority.goods', system: skill(), content: [{ type: 'text', text: content }], schema: PARTS_SCHEMA, effort: 'low', live: true });
   },
   async project(projects, text) {
     const content = JSON.stringify({ task: 'project', text, projects: projects.map((p) => ({ code: p.code, name: p.des, aliases: p.alias ?? '' })) });
-    return Claude.json({ system: skill(), content: [{ type: 'text', text: content }], schema: PROJECT_SCHEMA, effort: 'low', live: true });
+    return Claude.json({ feature: 'priority.goods', system: skill(), content: [{ type: 'text', text: content }], schema: PROJECT_SCHEMA, effort: 'low', live: true });
   },
   async reply(shown, text) {
-    return Claude.json({ system: skill(), content: [{ type: 'text', text: JSON.stringify({ task: 'reply', shown, text }) }], schema: REPLY_SCHEMA, effort: 'low', live: true });
+    return Claude.json({ feature: 'priority.goods', system: skill(), content: [{ type: 'text', text: JSON.stringify({ task: 'reply', shown, text }) }], schema: REPLY_SCHEMA, effort: 'low', live: true });
   }
 };
 
