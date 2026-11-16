@@ -18,6 +18,7 @@ module.exports = {
   get PriorityChain() { return require('./priority-chain'); },
   get PriorityDesk() { return require('./priority-desk'); },
   get PriorityApprovals() { return require('./priority-approvals'); },
+  get OpensGuard() { return require('./opens-guard'); },
   get PoNotify() { return require('./po-notify'); },
   get PoPdf() { return require('./po-pdf'); },
   get Rfq() { return require('./rfq'); }
