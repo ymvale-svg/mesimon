@@ -962,7 +962,7 @@ CREATE TABLE IF NOT EXISTS mail_reply_watch (
 );
 CREATE INDEX IF NOT EXISTS idx_mail_reply_watch ON mail_reply_watch(status, user_id);
 
-/* ⏰ "תזכיר לי" (‎ai/reminders.js‎). ‎status‎: active / fired / done / cancelled */
+/* ⏰ "תזכיר לי" (‎whatsapp/reminders.js‎). ‎status‎: active / fired / done / cancelled / place (מחכה למיקום — ‎whatsapp/places.js‎) */
 CREATE TABLE IF NOT EXISTS reminders (
   id         INTEGER PRIMARY KEY AUTOINCREMENT,
   user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -976,6 +976,38 @@ CREATE TABLE IF NOT EXISTS reminders (
   created_at TEXT    NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_reminders_due ON reminders(status, due_at);
+
+/*
+ * 📍 נקודות ציון — המשרד והאתרים (‎whatsapp/places.js‎). ‎kind‎: office / site. ‎aliases‎ — ‎JSON‎ של כינויים ("העבודה").
+ * ‎active = 0‎ — נמחק (התזכורות שחיכו לו בוטלו).
+ */
+CREATE TABLE IF NOT EXISTS places (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  name       TEXT    NOT NULL,
+  kind       TEXT    NOT NULL DEFAULT 'site',
+  lat        REAL    NOT NULL,
+  lng        REAL    NOT NULL,
+  radius_m   INTEGER NOT NULL DEFAULT 200,
+  aliases    TEXT    NOT NULL DEFAULT '[]',
+  active     INTEGER NOT NULL DEFAULT 1,
+  created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT    NOT NULL,
+  updated_at TEXT
+);
+
+/*
+ * 📍 המיקום האחרון של עובד שבחר לשתף — שורה אחת, נדרסת בכל עדכון (אין היסטוריה). ‎place_id‎ — נקודת הציון שבה היה.
+ * מיקום חד-פעמי ממי שלא משתף (מיקום 📍 בבוט) — בלי הנקודה, רק המקום.
+ */
+CREATE TABLE IF NOT EXISTS user_locations (
+  user_id  INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  lat      REAL,
+  lng      REAL,
+  accuracy REAL,
+  source   TEXT,
+  place_id INTEGER REFERENCES places(id) ON DELETE SET NULL,
+  at       TEXT    NOT NULL
+);
 
 /* 📤 מייל ששלחת עם שאלה ולא נענה (‎ai/sent-followup.js‎). ‎status‎: pending / asked / sent / ignored / answered */
 CREATE TABLE IF NOT EXISTS sent_followups (
@@ -2266,6 +2298,13 @@ function migrate() {
   addColumn('templates', 'updated_by', 'INTEGER REFERENCES users(id) ON DELETE SET NULL');
   // משימה שמוזגה לתוך משימה ותיקה (פרק 11ב) — נסגרת, ומצביעה על זו שנשארה
   addColumn('tasks', 'merged_into_task_id', 'INTEGER REFERENCES tasks(id) ON DELETE SET NULL');
+  /*
+   * 📍 תזכורת לפי מיקום (‎whatsapp/places.js‎): ‎status = 'place'‎ — מחכה להגעה (‎place_on = 'arrive'‎) או ליציאה (‎'leave'‎)
+   * מנקודת הציון ‎place_id‎, או מכל מקום מהסוג ‎place_kind‎ ("כשאגיע לאתר"). ‎due_at‎ שלה — מועד הרישום, עד שהיא נורית
+   */
+  addColumn('reminders', 'place_id', 'INTEGER REFERENCES places(id) ON DELETE SET NULL');
+  addColumn('reminders', 'place_kind', 'TEXT');
+  addColumn('reminders', 'place_on', 'TEXT');
 
   /**
    * סדר העמודות הוא סדר הזרימה, ולכן העמודה הסופית חייבת להיות אחרונה.

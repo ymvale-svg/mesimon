@@ -21,6 +21,7 @@ const AiTasks = require('../tasks').AiTasks;
 const AiApi = require('./api-ai');
 const TodayApi = require('./api-today');
 const PhonebookApi = require('./api-phonebook');
+const PlacesApi = require('./api-places');
 const PriorityApi = require('./api-priority');
 const PriorityAccess = require('../priority').PriorityAccess;
 const MeetingsApi = require('./api-meetings');
@@ -5683,6 +5684,7 @@ AiApi.register(router, { getTaskOr404, assertVisible, mayOnTask, shapeTask, acto
   taskTemplates: (actor) => visibleTemplates(actor).filter((t) => t.kind === 'task').map(shapeTemplate) });
 TodayApi.register(router, { shapeTask, createTask, getTaskOr404, listProjectsFor, newTaskProjects, assertMayAssignTo });
 PhonebookApi.register(router);
+PlacesApi.register(router);
 PriorityApi.register(router);
 WhatsNew.register(router);
 MeetingsApi.register(router, { getTaskOr404, assertVisible, shapeTask, canSeeTask });

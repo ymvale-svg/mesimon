@@ -106,6 +106,32 @@ function textOf(m) {
 }
 
 
+/*
+ * ‎{ lat, lng, live, shape }‎ מהודעת מיקום של Green API, אחרת ‎null‎. מיקום 📍 — ‎locationMessage‎; שיתוף בזמן אמת —
+ * ‎liveLocationMessage‎. איך מגיעים *העדכונים* של שיתוף בזמן אמת לא אומת מול התיעוד (16.11.26) — לכן מחפשים קואורדינטות
+ * בכל צורה (גם בתוך הודעה ערוכה / מעודכנת), ו-‎shape‎ (השדות בלבד, בלי תוכן) נרשם ביומן הבוט לבדיקה.
+ */
+function locationOf(m, typeWebhook = 'incomingMessageReceived') {
+  const coords = (d) => {
+    if (!d || typeof d !== 'object') return null;
+    const lat = Number(d.latitude ?? d.degreesLatitude);
+    const lng = Number(d.longitude ?? d.degreesLongitude);
+    return Number.isFinite(lat) && Number.isFinite(lng) && (d.latitude ?? d.degreesLatitude) !== undefined ? { lat, lng } : null;
+  };
+  let found = null;
+  let path = '';
+  for (const [k, v] of Object.entries(m ?? {})) {
+    if (!v || typeof v !== 'object') continue;
+    const c = coords(v) ?? Object.entries(v).map(([k2, v2]) => { const x = coords(v2); if (x) path = `${k}.${k2}`; return x; }).find(Boolean);
+    if (c) { found = c; path ||= k; break; }
+  }
+  if (!found) return null;
+  const live = /live/i.test(`${m.typeMessage ?? ''} ${path}`) || typeWebhook !== 'incomingMessageReceived';
+  const keys = (o) => Object.keys(o ?? {}).join(',');
+  return { ...found, live, shape: `${typeWebhook}/${m.typeMessage ?? '?'} ${path}{${keys(path.split('.').reduce((o, k) => o?.[k], m))}}` };
+}
+
+
 function storeGroupMessage(b) {
   const s = b.senderData ?? {};
   const chatId = s.chatId;
@@ -180,8 +206,13 @@ async function receiveOne(ch, timeout = LISTEN_TIMEOUT) {
         file: ['imageMessage', 'documentMessage'].includes(m.typeMessage) && m.fileMessageData?.downloadUrl
           ? { url: m.fileMessageData.downloadUrl, mime: m.fileMessageData.mimeType ?? '', name: m.fileMessageData.fileName ?? '' }
           : null,
+        // 📍 מיקום ששלחו לבוט (נקודה, או תחילת שיתוף מיקום חי) — תזכורות לפי מיקום (‎places.js‎)
+        location: locationOf(m),
         id: String(b.idMessage ?? note.receiptId)
       };
+    } else if (chatId.endsWith('@c.us') && /message/i.test(b.typeWebhook ?? '') && !/outgoing/i.test(b.typeWebhook ?? '') && locationOf(b.messageData ?? {}, b.typeWebhook)) {
+      // 📍 עדכון של שיתוף מיקום בזמן אמת שהגיע כהתראה אחרת (הודעה ערוכה / מעודכנת) — מיקום בלבד
+      direct = { chatId, phone: chatId.replace(/@c\.us$/, ''), text: '', kind: 'location_update', location: locationOf(b.messageData ?? {}, b.typeWebhook), id: String(b.idMessage ?? note.receiptId) };
     } else if (b.typeWebhook === 'stateInstanceChanged' && b.stateInstance) {
       setState(b.stateInstance);
     }
@@ -1006,6 +1037,8 @@ async function withFollowUps(r) {
 
 let buttonShapeLogged = false;
 
+const quietLocationLog = new Map(); // ‎userId‎ → מתי נרשם עדכון מיקום שקט אחרון
+
 async function handleDirect(msg) {
   // 🤖 אינסטינקט לעולם לא מגיע לניתוב (גם אם המספר נרשם בטעות אצל עובד) — ‎instinct.js‎
   if (Instinct.isInstinct(msg.phone)) return Instinct.receive(msg);
@@ -1023,6 +1056,20 @@ async function handleDirect(msg) {
   if (!actor) return;
   const base = { channel: 'private', chatId: msg.chatId, userId: user.id, who: user.full_name, text: msg.text, forwarded: msg.forwarded };
   const ref = { chatId: msg.chatId, id: msg.id };
+  /*
+   * 📍 מיקום — מיקום 📍 או שיתוף בזמן אמת. הגעה לנקודת ציון מוציאה את התזכורות שחיכו לה (הסבב שולח אותן תוך שניות).
+   * לפני "העובד כתב": עדכוני מיקום מגיעים כל כמה שניות, והם לא שיחה. על העדכונים — לא עונים (‎text: null‎)
+   */
+  if (msg.location) {
+    const r = Reminders.onLocation(user.id, msg.location);
+    // עדכון שקט — ליומן פעם בחצי שעה לכל היותר (כדי לראות שהעדכונים מגיעים, ובאיזו צורה)
+    const quietLogged = quietLocationLog.get(user.id) ?? 0;
+    if (r.quiet && Date.now() - quietLogged < 30 * 60000) return;
+    if (r.quiet) quietLocationLog.set(user.id, Date.now());
+    log({ ...base, text: `[📍 ${msg.location.live ? 'מיקום בזמן אמת' : 'מיקום'}]`, action: 'reminders_place', status: 'ok', result: `${r.result} · ${msg.location.shape ?? ''}`.slice(0, 300), reply: r.text ?? undefined });
+    if (r.text) await sendText(msg.chatId, r.text);
+    return;
+  }
   // העובד כתב — תזכורות מחכות שהשיחה תירגע (‎mail-actions.mayRemindNow‎), ושאלה פתוחה "מתעוררת"
   if (!/^(bot-|mail-goods-)/.test(String(msg.id ?? ''))) { MailActions.noteUser(user.id); userLastAt.set(user.id, Date.now()); }
   // הודעה פנימית (‎enqueueAs‎) — לא דורסת את ההודעה האמיתית שעליה מגיבים
@@ -1812,6 +1859,7 @@ module.exports = {
   // לשליחה ממודולים אחרים — התראה לפני פגישה (‎meetings.js‎), עם רישום ביומן הבוט
   sendText, sendButtons, log, notifyAssignment, assistant, deliver, sendFilesToUser, mailAlertUsers, handOver,
   _internal: {
+    locationOf,
     featuresText, PLAIN_FEATURES, parseThreadAdd, threadAddText, dayItems, walkText, walkButtons, walkAction, WALK,
     storeGroupMessage, processGroup, handleDirect, sanitizeGroup, resolveMentions, candidatesOf, converse, turn, withFollowUps, sendSummaries, YES,
     findRecipients, findContactCards, sourceOf, suggestionFeedback, flushOutbox, todayMessage, splitMessage, parseSuggestionCommand, businessCommand, chatOf, saveChat,
