@@ -50,3 +50,22 @@ test('פגישה קודמת מלפני חצי שנה — לא נכנסת לתד�
   const { text } = Briefing._internal.collect(me.id, { title: 'פגישת המשך', start: ago(-0.01), people: [{ email: x }] });
   assert.doesNotMatch(text, /סוכם משהו ישן/);
 });
+
+test('שם ותואר — מהמשתמש במשימון (שם ומחלקה), לא מה ש-Claude ממציא', async (t) => {
+  const Fakes = require('../../fakes');
+  const me = user({ email: `me3-${Date.now()}@eshel.test` });
+  const depName = `כספים-${Date.now()}`;
+  const amit = user({ full_name: 'עמית לנג', email: `amit-${Date.now()}@eshel.test` });
+  const dep = D.run("INSERT INTO departments (name, manager_user_id, created_at) VALUES (?,?,?)", depName, amit.id, ago(1)).lastInsertRowid;
+  D.run('UPDATE users SET department_id = ? WHERE id = ?', dep, amit.id);
+  D.run('INSERT INTO mail_people (user_id, email, name, company, role, updated_at) VALUES (?,?,?,?,?,?)', me.id, amit.email.toLowerCase(), 'לנג עמית', 'אשל', 'רו"ח, חשב החברה', ago(1));
+  mail(me.id, amit.email.toLowerCase(), 'שלח טבלת בקרה תקציבית', 3);
+  const fake = Fakes.claude(t, () => ({
+    who: [{ email: amit.email.toLowerCase(), about: 'שלח את טבלת הבקרה' }],
+    background: [], open_items: [], last_agreed: [], talking_points: []
+  }));
+  const text = await Briefing.build(me.id, { title: 'בקרה תקציבית', start: ago(-0.01), people: [{ email: amit.email, name: 'לנג עמית' }] });
+  assert.match(text, new RegExp(`עמית לנג — מנהל/ת ${depName} — שלח את טבלת הבקרה`));
+  assert.doesNotMatch(text, /חשב החברה|רו"ח|לנג עמית/);
+  assert.doesNotMatch(fake.calls[0].opts.content[0].text, /חשב החברה/, 'התואר המנוחש מהמיילים לא נשלח ל-Claude');
+});
