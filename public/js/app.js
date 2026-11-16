@@ -710,6 +710,8 @@ const App = (() => {
     // אלפון ארגוני — מ"החשבון שלי" ומהחלון בדשבורד, לכל העובדים
     phonebook: { label: 'אלפון', icon: 'my-tasks', render: (c) => PhonebookView.render(c) },
     admin: { label: 'ניהול המערכת', icon: 'admin', render: (c, p) => AdminView.render(c, p) },
+    // ⚙ ההגדרות שלי — מסך עם תפריט צד (15.11.26). מעיגול השם, מ-⚙ בטלפון ומחיפוש "הגדרות"
+    settings: { label: 'ההגדרות שלי', icon: 'admin', render: (c, p) => renderMySettings(c, p) },
     vendor: { label: 'המשימות שלי', icon: 'my-tasks', render: (c) => VendorPortalView.render(c) }
   };
 
@@ -2983,14 +2985,14 @@ const App = (() => {
    * ‎PERSONAL_TABS‎ בקטלוג ההגדרות (‎server/core/settings-catalog.js‎; נבדק ב-‎settings-catalog.test.js‎).
    */
   const MY_TABS = [
-    { key: 'profile', label: '👤 פרטים' },
-    { key: 'bot', label: '🤖 הבוט', staff: true },
-    { key: 'google', label: '🔗 Google ומייל', staff: true },
-    { key: 'whatsapp', label: '💬 הוואטסאפ שלי', staff: true },
-    { key: 'today', label: '☀️ Today והקלטה', staff: true },
-    { key: 'location', label: '📍 מיקום', staff: true },
-    { key: 'notify', label: '🔔 התראות' },
-    { key: 'view', label: '🎨 תצוגה' }
+    { key: 'profile', label: '👤 פרטים', hint: 'טלפון, מחלקה והרשאות' },
+    { key: 'bot', label: '🤖 הבוט', hint: 'מה הבוט שולח לי', staff: true },
+    { key: 'google', label: '🔗 Google ומייל', hint: 'Gmail, יומן והעדפות AI', staff: true },
+    { key: 'whatsapp', label: '💬 הוואטסאפ שלי', hint: 'חיבור והצעות מהוואטסאפ', staff: true },
+    { key: 'today', label: '☀️ Today והקלטה', hint: 'Today במייל, הקלטה ויומנים', staff: true },
+    { key: 'location', label: '📍 מיקום', hint: 'נקודות ציון ותזכורת לפי מיקום', staff: true },
+    { key: 'notify', label: '🔔 התראות', hint: 'מה קופץ, ומתי במייל ובוואטסאפ' },
+    { key: 'view', label: '🎨 תצוגה', hint: 'בהיר, כהה או לפי המכשיר' }
   ];
   const MY_TAB_KEY = 'mesimon.mySettingsTab';
 
@@ -3013,6 +3015,7 @@ const App = (() => {
         el('button.btn', { onclick: () => { close(); navigate('phonebook'); } }, ['📒 אלפון ארגוני']),
         el('button.btn', { 'data-anchor': 'account.whats-new', onclick: () => { close(); WhatsNewView.open({ force: true }); } }, ['✨ מה חדש במערכת'])
       ]),
+      el('div.mt', {}, [el('button.btn.btn-danger', { type: 'button', onclick: () => logout() }, ['🚪 התנתקות'])]),
       el('div.alert.alert-info.mt', {}, [el('div', {}, [
         el('b', { text: 'מה מותר לי במערכת?' }),
         el('div', { text: 'ההרשאות נקבעות לפי מטריצת ההרשאות של המחלקה. לשינוי — יש לפנות למנהל המערכת.' })
@@ -3020,46 +3023,50 @@ const App = (() => {
     ]);
   }
 
-  function openMySettings(tab = null) {
+  /** המסך: תפריט צד (הלשוניות) ותוכן הלשונית. ‎params.tab‎ — לשונית לפתוח */
+  function renderMySettings(container, params = {}) {
     const tabs = MY_TABS.filter((t) => !t.staff || !isVendor());
     let saved = null;
     try { saved = localStorage.getItem(MY_TAB_KEY); } catch { /* בלי אחסון */ }
-    let current = tabs.find((t) => t.key === (tab || saved))?.key ?? 'profile';
-    const strip = el('div.my-tabs', { role: 'tablist', style: { display: 'flex', flexWrap: 'wrap', gap: '6px', marginBottom: '14px' } });
-    const pane = el('div', { role: 'tabpanel' });
-    const show = (key) => {
-      current = key;
-      try { localStorage.setItem(MY_TAB_KEY, key); } catch { /* בלי אחסון */ }
-      UI.mount(strip, tabs.map((t) => el(`button.btn.btn-sm${t.key === key ? '.btn-primary' : ''}`, {
-        type: 'button', role: 'tab', 'aria-selected': String(t.key === key), text: t.label, onclick: () => show(t.key)
-      })));
-      // מכל לשונית — מיכל חדש: לשונית שנטענת לאט (Google, Today) כותבת למיכל שלה, ולא דורסת את הלשונית שנבחרה אחריה
-      const box = el('div');
-      UI.mount(pane, box);
-      if (key === 'profile') UI.mount(box, profilePane(() => m.close()));
-      else if (key === 'bot') UI.mount(box, el('div', {}, [
-        el('div.mute-sm', { text: 'הבוט הוא המזכירה: מזכיר, מציע תשובות למיילים ומביא נתונים כשמבקשים. משימות — במשימון.' }),
-        botPrefsBox()
-      ]));
-      else if (key === 'google') AiInboxView.openGmail(() => refreshView(), { into: box });
-      else if (key === 'whatsapp') AiTaskView.openWhatsApp({ into: box });
-      else if (key === 'today') TodayView.openSettings({ into: box });
-      else if (key === 'location') LocationView.openSettings({ into: box });
-      else if (key === 'notify') notifSettingsDialog({ into: box });
-      else if (key === 'view') UI.mount(box, el('table.data', { style: { width: '100%' } }, [el('tbody', {}, [themeRow()])]));
-    };
-    const m = UI.modal({
-      title: '⚙ ההגדרות שלי',
-      size: 'wide',
-      body: el('div', {}, [strip, pane]),
-      footer: [
-        el('button.btn.btn-danger', { onclick: () => { m.close(); logout(); } }, ['התנתקות']),
-        el('div.spacer'),
-        el('button.btn', { onclick: () => m.close() }, ['סגירה'])
-      ]
-    });
-    show(current);
+    const current = tabs.find((t) => t.key === (params.tab || saved))?.key ?? 'profile';
+    try { localStorage.setItem(MY_TAB_KEY, current); } catch { /* בלי אחסון */ }
+    const tab = tabs.find((t) => t.key === current);
+
+    const nav = el('nav.my-settings-nav', { 'aria-label': 'ההגדרות שלי' }, [
+      el('ul', { role: 'list' }, tabs.map((t) => el('li', {}, [
+        el(`button.my-settings-item${t.key === current ? '.active' : ''}`, {
+          type: 'button', 'aria-current': t.key === current ? 'page' : null,
+          onclick: () => navigate('settings', { tab: t.key })
+        }, [el('span.my-settings-label', { text: t.label }), el('span.my-settings-hint', { text: t.hint })])
+      ])))
+    ]);
+    const box = el('div');
+    UI.mount(container,
+      el('div.page-head', {}, [el('div', {}, [
+        el('h1', { text: '⚙ ההגדרות שלי' }),
+        el('div.sub', { text: 'ההגדרות האישיות שלך. הגדרות המערכת — אצל מנהל המערכת.' })
+      ])]),
+      el('div.my-settings', {}, [
+        nav,
+        el('section.card.my-settings-pane', { 'aria-labelledby': 'my-settings-title' }, [
+          el('div.card-pad', {}, [el('h2#my-settings-title', { text: tab.label }), box])
+        ])
+      ])
+    );
+    if (current === 'profile') UI.mount(box, profilePane(() => {}));
+    else if (current === 'bot') UI.mount(box, el('div', {}, [
+      el('div.mute-sm', { text: 'הבוט הוא המזכירה: מזכיר, מציע תשובות למיילים ומביא נתונים כשמבקשים. משימות — במשימון.' }),
+      botPrefsBox()
+    ]));
+    else if (current === 'google') AiInboxView.openGmail(() => refreshView(), { into: box });
+    else if (current === 'whatsapp') AiTaskView.openWhatsApp({ into: box });
+    else if (current === 'today') TodayView.openSettings({ into: box });
+    else if (current === 'location') LocationView.openSettings({ into: box });
+    else if (current === 'notify') notifSettingsDialog({ into: box });
+    else if (current === 'view') UI.mount(box, el('table.data', { style: { width: '100%' } }, [el('tbody', {}, [themeRow()])]));
   }
+
+  function openMySettings(tab = null) { navigate('settings', tab ? { tab } : {}); }
 
   /** "החשבון שלי" (עיגול השם, ⚙ בטלפון) — מסך ההגדרות שלי, בלשונית הפרטים */
   function userMenu() { openMySettings('profile'); }

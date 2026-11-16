@@ -24,6 +24,7 @@
  * מצב השיחה נשמר בהגדרה ‎goods_receipt:<userId>‎, והקבצים — בתיקיית ההעלאות
  * עד סוף הקליטה.
  */
+const { notOpening } = require('./opens-guard');
 const fs = require('node:fs');
 const Paths = require('../core').Paths;
 const path = require('node:path');
@@ -177,7 +178,8 @@ const pending = (userId) => Boolean(fresh(load(userId)));
  * הודעה שנכנסת לפריוריטי — רק במפורש: "קבלת סחורה", "פריוריטי",
  * או קובץ בלי טקסט (הבוט אינו מטפל בקבצים אחרת, ושואל קודם).
  */
-const opens = (text, file) => isTrigger(text) || isPriority(text) || Boolean(file && !String(text ?? '').trim());
+// בקשה אחרת או שאלה שמזכירה את פריוריטי ("שלח מייל ל… בעניין פריוריטי") — לא פותחת (‎opens-guard.js‎)
+const opens = (text, file) => ((isTrigger(text) || isPriority(text)) && !notOpening(text)) || Boolean(file && !String(text ?? '').trim());
 const isTrigger = (text) => TRIGGER.test(String(text ?? ''));
 const isPriority = (text) => PRIORITY.test(String(text ?? ''));
 /** תשובה לשאלה של קבלת הסחורה קצרה. משפט ארוך שלא התאים לשלב — כנראה בקשה אחרת (משימה) */
