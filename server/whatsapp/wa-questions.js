@@ -19,7 +19,8 @@ const D = require('../core').Db;
 const KEEP = 15;                          // שאלות אחרונות לכל עובד
 const TTL_MS = 2 * 24 * 60 * 60 * 1000;   // יומיים
 /** שאלות יזומות שבטוח להחזיר: התשובה להן בודקת במסד אם כבר טופלו */
-const RESTORABLE = new Set(['goods_offer', 'mail_remind', 'sent_followup']);
+// ‎plain_mail‎ — "מייל מוכן לאישור" שנשלח כשהיה פתוח משהו אחר; אחרי שנענה (גם בטקסט) — ‎markAnsweredKey‎, ולא נשלח פעמיים
+const RESTORABLE = new Set(['goods_offer', 'mail_remind', 'sent_followup', 'plain_mail']);
 
 const keyOf = (userId) => `wa_questions:${userId}`;
 const list = (userId) => { const v = D.getSetting(keyOf(userId), []); return Array.isArray(v) ? v : []; };
@@ -46,6 +47,14 @@ const find = (userId, id) => (id ? list(userId).find((q) => q.id === String(id))
 function markAnswered(userId, id, answer = '') {
   if (!userId || !id) return;
   D.setSetting(keyOf(userId), list(userId).map((q) => (q.id === String(id) ? { ...q, answered: true, answer: String(answer ?? '').trim() } : q)));
+}
+
+/** הטיוטה נסגרה (נענתה, תוקנה, בוטלה) — כל שאלה עליה כבר לא תחזור, גם אם נענתה בטקסט ולא בכפתור */
+function markAnsweredKey(userId, key, answer = '') {
+  if (!userId || !key) return;
+  const all = list(userId);
+  if (!all.some((q) => q.key === key && !q.answered)) return;
+  D.setSetting(keyOf(userId), all.map((q) => (q.key === key && !q.answered ? { ...q, answered: true, answer: String(answer ?? '').trim() } : q)));
 }
 
 /**
@@ -82,7 +91,8 @@ function replyToOf(m) {
 
 const CLOSED_TEXT = 'ℹ️ השאלה הזו כבר לא פתוחה, אז לא עשיתי כלום. אם עדיין צריך — כתבו לי מה לעשות.';
 /** "לא" / "התעלם" / "ביטול" על שאלה שכבר לא פתוחה — זה בדיוק מה שקרה (כלום), אז עונים כך ולא "לא פתוחה" (סקירה 12.11) */
+const OLD_REACTION_TEXT = 'ℹ️ סימנת הודעה קודמת, ולא ברור לי על מה — אז לא עשיתי כלום. כדי לאשר את השאלה האחרונה: *כן* 👍 עליה, או כתבו *כן*.';
 const CLOSED_NO_TEXT = 'בסדר 👍 לא שלחתי ולא שיניתי כלום.';
 const isNo = (text) => /^(לא|התעלם|ביטול|בטל|עזוב|👎)(?=[\s,.!❌🙈🗑️]|$)/u.test(String(text ?? '').trim());
 
-module.exports = { record, find, markAnswered, decide, draftKey, replyToOf, isNo, RESTORABLE, CLOSED_TEXT, CLOSED_NO_TEXT };
+module.exports = { record, find, markAnswered, markAnsweredKey, decide, draftKey, replyToOf, isNo, RESTORABLE, CLOSED_TEXT, CLOSED_NO_TEXT, OLD_REACTION_TEXT };
