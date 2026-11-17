@@ -586,3 +586,20 @@ for (const [name, first] of [['קובץ עם כיתוב', true], ['קובץ וא
     assert.doesNotMatch(toUser(wa, u).map((c) => c.body?.message ?? '').join('\n'), /תאריך היעד/);
   });
 }
+
+test('📎 PDF עם "תתקן את המסמך…", וה-AI בכל זאת ענה "אחר" — יוצא לאינסטינקט עם הקובץ; הודעה שלא על הקובץ — לא', async (t) => {
+  const wa = setup(t);
+  ai(t, { intent: 'other' });
+  t.mock.method(Speech, 'download', async () => ({ buf: Buffer.alloc(20000, 1), mime: 'application/pdf' }));
+  const u = person();
+  const pdf = { kind: 'documentMessage', file: { url: 'https://x/loan.pdf', mime: 'application/pdf', name: 'loan.PDF' } };
+  await say(u.phone, 'מה שלום הצוות', pdf);
+  await settle();
+  assert.equal(toInstinct(wa).length, 0, 'לא על הקובץ — לא לאינסטינקט');
+  await say(u.phone, 'תתקן את המסמך לתאריך-30.09.2026', pdf);
+  await settle();
+  const out = toInstinct(wa);
+  assert.equal(out.length, 1);
+  assert.equal(out[0].body.urlFile, 'https://x/loan.pdf');
+  assert.match(out[0].body.caption, /30\.09\.2026/);
+});

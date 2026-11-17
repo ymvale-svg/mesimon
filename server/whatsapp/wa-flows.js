@@ -963,8 +963,15 @@ async function flowInstinctExplicit({ user, actor, dry, out, t }) {
   return instinctSend({ user, actor, dry, out, text, explicit: true });
 }
 
+/** בקשה שמדברת על הקובץ ששלחו ("תתקן את המסמך", "תעשה אותה כהה") */
+const FILE_REF = /מסמך|קובץ|תמונ|pdf|צילום|סריקה|הזה|הזאת|אותו|אותה/i;
+
 async function flowInstinct({ user, actor, dry, out, t, u }) {
-  if (u.intent !== 'instinct' || !Instinct.allowed(actor)) return NEXT;
+  if (!Instinct.allowed(actor)) return NEXT;
+  // 📎 קובץ שנשלח עכשיו, והבקשה עליו — לאינסטינקט גם כשה-AI לא זיהה ("אחר"): אצלנו אין מה לעשות בקובץ, והתשובה
+  // "אין לי גישה למסמך" שגויה (באג 17.11.26 — גם עם שורת הקובץ בפרומפט, ה-AI ענה כך כשבשיחה כבר נאמר שאין גישה)
+  const aboutFile = u.intent === 'other' && FILE_REF.test(t) && Boolean(Instinct.peekFile(user.id));
+  if (u.intent !== 'instinct' && !aboutFile) return NEXT;
   return instinctSend({ user, actor, dry, out, text: u.request || t });
 }
 
