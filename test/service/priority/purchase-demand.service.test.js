@@ -488,7 +488,7 @@ test('מק"טים לבנייה: "לחכות לרכש" ← נבנה ← בבוט 
   const note = wa.texts().join('\n');
   assert.match(note, /המק"טים החסרים נבנו בפריוריטי — להלן הרשימה/);
   assert.match(note, /בטון — 5 קוב ← \*בטון מובא ב-30 לתקרות\* \(C-77\)/);
-  assert.match(note, /להמשיך בדרישת הרכש — כל הדרישה, עם הכמויות שביקשת והמק"טים שנבנו\?/);
+  assert.match(note, /להמשיך בדרישת הרכש\? \(כל הדרישה, עם הכמויות שביקשת והמק"טים שנבנו\)/);
   const mail = sent.at(-1);
   assert.equal(mail.to, u.email);
   assert.match(mail.subject, /המק"טים החסרים נבנו/);
@@ -569,4 +569,100 @@ test('מק"טים לבנייה — זיהוי: רק מק"ט חדש (שלא הי�
   assert.equal((await Parts._findBuilt('test11', { description: 'בורג פח', known: ['OLD'] })).PARTNAME, 'NEW');
   t.mock.method(Priority, 'findPartExact', async () => part('EX', 'בורג פח'));
   assert.equal((await Parts._findBuilt('test11', { description: 'בורג פח', known: ['OLD'] })).PARTNAME, 'EX', 'תיאור זהה — קודם');
+});
+
+test('מק"טים לבנייה: "רק המזוהים" ← נבנה ← "לבנות דרישה חדשה נוספת מהמק"טים שנבנו?" ← כן ← רק החסרים', async (t) => {
+  H.companies(t, 'test11');
+  const u = buyerWorker();
+  const B77 = part('C-77', 'בטון מובא ב-30 לתקרות');
+  let built = false;
+  const pr = priority(t, { searchParts: async (c, des) => (/בטון/.test(des) ? [B30, B40, ...(built ? [B77] : [])].map((p) => ({ p, score: 1 })) : []) });
+  ai(t);
+  buyer(t);
+  const { say, wa } = H.chat(t, u);
+
+  await toMissing(say);
+  await say(BTN.done);
+  let r = await say('רק המזוהים ✅');
+  assert.match(r.text, /אשאל אם לבנות מהם דרישה חדשה נוספת/);
+  D.run("UPDATE pd_part_requests SET status = 'expired' WHERE user_id != ?", u.id);
+  built = true;
+  wa.clear();
+  await Parts.tick();
+  const note = wa.texts().join('\n');
+  assert.match(note, /לבנות דרישה חדשה נוספת מהמק"טים שנבנו, עם הכמויות שביקשת\?/);
+  assert.match(note, /PRD26000007 כבר נשלחה עם הפריטים שזוהו/);
+  assert.doesNotMatch(note, /להמשיך בדרישת הרכש/);
+
+  r = await say('כן, דרישה נוספת ✅');
+  assert.match(r.text, /דרישה חדשה נוספת\* מהמק"טים שנבנו \(PRD26000007 כבר נשלחה עם השאר\)/);
+  assert.match(r.text, /דרישת רכש — 1 פריט/);
+  assert.match(r.text, /בטון — 5 קוב _\(לתקרה\)_\n {3}✅ C-77/);
+  assert.doesNotMatch(r.text, /שק מלט/);
+  const before = pr.wrote('addDemandLine').length;
+  await say(BTN.done);
+  assert.deepEqual(pr.wrote('addDemandLine').slice(before).map((w) => [w.args[2].part, w.args[2].qty]), [['C-77', 5]]);
+});
+
+test('💬 מנהלת הרכש עונה "המק"ט כבר קיים" — העובד מקבל בבוט, ואם זה הפריט האחרון — "להמשיך בדרישה?"', async (t) => {
+  H.companies(t, 'test11');
+  const u = buyerWorker();
+  const pr = priority(t, { partByCode: async (c, code) => (code === 'C-30' ? B30 : null) });
+  ai(t);
+  const sent = buyer(t);
+  D.setSetting('public_url', 'https://mesimon.example');
+  t.after(() => D.setSetting('public_url', ''));
+  const { say, wa } = H.chat(t, u);
+
+  await toMissing(say);
+  await say(BTN.done);
+  await say('לחכות לרכש ⏳');
+  const link = sent[0].text.match(/https:\/\/mesimon\.example\/parts\.html\?t=([0-9a-f]{36})/);
+  assert.ok(link, 'בקישור במייל — דף התשובה');
+  const token = link[1];
+
+  const v = Parts.forBuyer(token);
+  const line = v.items[0].n;
+  assert.equal(line, 2, 'מספר השורה בדרישה');
+  assert.equal(v.worker, u.full_name);
+  assert.equal(v.open, true);
+  assert.deepEqual(v.items.map((x) => [x.description, x.built]), [['בטון', null]]);
+
+  await assert.rejects(Parts.buyerAnswer(token, { n: line, code: 'NOPE-1' }), /אין מק"ט פעיל NOPE-1/);
+  await assert.rejects(Parts.buyerAnswer(token, { n: line }), /כתבו מק"ט או הערה/);
+  await assert.rejects(Parts.buyerAnswer('f'.repeat(36), { n: line, code: 'C-30' }), /הקישור אינו תקין/);
+
+  wa.clear();
+  const after = await Parts.buyerAnswer(token, { n: line, code: 'c-30', note: 'זה הבטון שאנחנו מזמינים תמיד' });
+  assert.deepEqual(after.items[0].built, { code: 'C-30', des: 'בטון ב-30' });
+  assert.equal(after.open, false);
+  const note = wa.texts().join('\n');
+  assert.match(note, /רותי רכש \(רכש\)\* על "בטון":\n✅ המק"ט כבר קיים: \*בטון ב-30\* \(C-30\)\n"זה הבטון שאנחנו מזמינים תמיד"/);
+  assert.match(note, /להמשיך בדרישת הרכש\?/);
+  await assert.rejects(Parts.buyerAnswer(token, { n: line, note: 'עוד' }), /הבקשה כבר טופלה/);
+
+  const r = await say('כן, להמשיך ✅');
+  assert.match(r.text, /בטון — 5 קוב _\(לתקרה\)_\n {3}✅ C-30/);
+  await say(BTN.done);
+  assert.deepEqual(pr.wrote('addDemandLine').map((w) => w.args[2].part), ['M-1', 'C-30']);
+});
+
+test('💬 מנהלת הרכש — הערה בלבד: העובד מקבל אותה, והבקשה נשארת פתוחה', async (t) => {
+  H.companies(t, 'test11');
+  const u = buyerWorker();
+  priority(t);
+  ai(t);
+  buyer(t);
+  const { say, wa } = H.chat(t, u);
+  await toMissing(say);
+  await say(BTN.done);
+  await say('לחכות לרכש ⏳');
+  const { token } = D.get('SELECT token FROM pd_part_requests WHERE user_id = ?', u.id);
+  const line = Parts.forBuyer(token).items[0].n;
+  wa.clear();
+  const v = await Parts.buyerAnswer(token, { n: line, note: 'איזה סוג בטון? ב-30 או ב-40?' });
+  assert.equal(v.open, true);
+  assert.equal(v.items[0].built, null);
+  assert.match(wa.texts().join('\n'), /"איזה סוג בטון\? ב-30 או ב-40\?"/);
+  assert.doesNotMatch(wa.texts().join('\n'), /להמשיך/);
 });

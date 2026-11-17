@@ -393,8 +393,8 @@ function askMode(s, pre = []) {
   }
   return reply(s, [...pre, ...list,
     `📧 הרשימה תישלח ל${to.name} (רכש) לבניית מק"טים בהקדם. *איך להמשיך?*`,
-    known ? `• *רק המזוהים* — הדרישה יוצאת עכשיו עם ${known === 1 ? 'הפריט שזוהה' : `${known} הפריטים שזוהו`}; כשהמק"טים ייבנו — אשאל אם להמשיך עם החסרים.` : null,
-    '• *לחכות לרכש* — שום דבר לא נשלח עכשיו; כשהמק"טים ייבנו — אשאל אם להמשיך, וכל הדרישה תצא עם הכמויות שביקשת.'].filter((x) => x !== null).join('\n'),
+    known ? `• *רק המזוהים* — הדרישה יוצאת עכשיו עם ${known === 1 ? 'הפריט שזוהה' : `${known} הפריטים שזוהו`}; כשהמק"טים ייבנו — אשאל אם לבנות מהם דרישה חדשה נוספת.` : null,
+    '• *לחכות לרכש* — שום דבר לא נשלח עכשיו; כשהמק"טים ייבנו — אשאל אם להמשיך בדרישה, וכל הדרישה תצא עם הכמויות שביקשת.'].filter((x) => x !== null).join('\n'),
   [known ? BTN_ONLY : null, BTN_WAIT, BTN.cancel].filter(Boolean));
 }
 
@@ -439,7 +439,7 @@ async function startRebuild(user, rb) {
     project: h.project ?? null, projectFrom: 'user', warehouse: h.warehouse ?? null, warehouseName: h.warehouseName ?? '', warehouseFrom: 'user',
     demandCode: h.demandCode ?? null, codeFrom: 'user', items: rb.items, files: [], rebuildOf: rb.from };
   renumber(s);
-  return showList(s, [rb.partial ? `▶️ *ממשיכים בדרישת הרכש* — דרישה נוספת לפריטים שנבנו (${rb.prdno} כבר נשלחה עם השאר):` : '▶️ *ממשיכים בדרישת הרכש* — כל הדרישה, עם הכמויות שביקשת והמק"טים שנבנו:', '']);
+  return showList(s, [rb.partial ? `🆕 *דרישה חדשה נוספת* מהמק"טים שנבנו (${rb.prdno} כבר נשלחה עם השאר):` : '▶️ *ממשיכים בדרישת הרכש* — כל הדרישה, עם הכמויות שביקשת והמק"טים שנבנו:', '']);
 }
 
 // ---------------------------------------------------------------------------
@@ -969,7 +969,7 @@ async function submit(user, s) {
   const held = (s.held ?? []).length;
   return { s: null, replies: [[`✅ *דרישת רכש ${prdno}* נפתחה ועברה *לאישור*.`, companyLine(c),
     `📁 ${s.project?.des ?? ''} · ${s.items.length} ${s.items.length === 1 ? 'פריט' : 'פריטים'} · 📅 ${ymdHe(s.date)}`, signerLine,
-    held && s.sentTo ? `📧 ${held === 1 ? 'פריט אחד נשלח' : `${held} פריטים נשלחו`} ל*${s.sentTo}* לבניית מק"ט — כשייבנו תקבל הודעה כאן ובמייל, ואשאל אם להמשיך איתם.` : null,
+    held && s.sentTo ? `📧 ${held === 1 ? 'פריט אחד נשלח' : `${held} פריטים נשלחו`} ל*${s.sentTo}* לבניית מק"ט — כשייבנו תקבל הודעה כאן ובמייל, ואשאל אם לבנות מהם דרישה חדשה נוספת.` : null,
     held && !s.sentTo ? `🆕 ${held === 1 ? 'פריט אחד לא נשלח' : `${held} פריטים לא נשלחו`} (אין מק"ט) — מנהל המערכת קיבל את הרשימה.` : null].filter(Boolean).join('\n')], buttons: [], status: 'ok', result: `${prdno} — מחכה לאישור` };
 }
 

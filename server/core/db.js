@@ -889,6 +889,7 @@ CREATE TABLE IF NOT EXISTS pd_part_requests (
   prdno       TEXT,
   status      TEXT    NOT NULL DEFAULT 'open',
   sent_to     TEXT    NOT NULL DEFAULT '',
+  token       TEXT,
   checked_at  TEXT,
   asked_at    TEXT,
   created_at  TEXT    NOT NULL
@@ -2150,6 +2151,9 @@ function migrate() {
   relaxUserRoleConstraint();
   relaxAiMessagesChannel();
 
+  // 💬 מק"טים לבנייה — אסימון לדף התשובה של הרכש (‎priority/pd-parts.js‎)
+  addColumn('pd_part_requests', 'token', 'TEXT');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_pd_part_token ON pd_part_requests(token)');
   addColumn('users', 'department_id', 'INTEGER REFERENCES departments(id) ON DELETE SET NULL');
   // 📧 משימה שנולדה ממייל — עותק של המייל (מאת, נושא, תאריך, טקסט), כדי שכל מי שעובד עליה יראה על מה מדובר
   addColumn('tasks', 'source_mail', "TEXT NOT NULL DEFAULT ''");
