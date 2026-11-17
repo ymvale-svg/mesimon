@@ -875,7 +875,7 @@ CREATE TABLE IF NOT EXISTS rfq (
  * 🆕 מק"טים לבנייה — פריטים מדרישת רכש שאין להם מק"ט, שנשלחו במייל למנהלת הרכש (‎priority/pd-parts.js‎).
  * ‎header‎ — כותרת הדרישה (פרויקט, מחסן, רשימת מאשרים, תאריך); ‎items‎ — כל שורות הדרישה (כמויות ומק"טים);
  * ‎missing‎ — הפריטים בלי מק"ט: מה ביקשו, אילו מק"טים כבר היו בקטלוג (‎known‎), ומה נבנה (‎built‎).
- * ‎mode‎: draft (הדרישה עוד בבנייה) / wait (מחכה לרכש) / partial (נשלחה רק עם המזוהים) / general (נשלחה עם 000).
+ * ‎mode‎: draft (הדרישה עוד בבנייה) / wait (מחכה לרכש) / partial (נשלחה רק עם המזוהים) / general (נשלחה עם 000) / receipt (קבלת סחורה, נקלטה על 000 — רק הודעה כשנבנה).
  * ‎status‎: open (מחכה לבנייה) / asked (נשאל אם לבנות מחדש) / done / expired.
  */
 CREATE TABLE IF NOT EXISTS pd_part_requests (

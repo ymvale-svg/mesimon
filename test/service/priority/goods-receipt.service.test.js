@@ -541,3 +541,102 @@ test('🏷️ החותמת לא הצליחה (קובץ שאי אפשר לקרו�
   assert.doesNotMatch(r.text, /מספר ה-GR נכתב/);
   assert.equal(pr.wrote('attach').filter((w) => /עם מספר ה-GR/.test(w.args[2].description)).length, 0);
 });
+
+// ---------------------------------------------------------------------------
+// 🆕 מק"טים לבנייה (‎pd-parts.js‎): שורה בלי מק"ט ← "לשלוח למנהלת הרכש?" ← מייל; הקליטה ממשיכה על 000
+// ---------------------------------------------------------------------------
+
+const Settings = require('../../../server/priority/priority-settings');
+const Mailer = require('../../../server/integrations/mailer');
+const Parts = require('../../../server/priority/pd-parts');
+const { D } = require('../../helpers/db');
+
+let grPhone = 0;
+const grWorker = () => { grPhone += 1; return H.worker({ phone: `97259${String(4000000 + grPhone)}` }); };
+function buyer(t) {
+  t.mock.method(Settings, 'defaults', () => ({ ...Settings.DEFAULTS, buyerName: 'רותי רכש', buyerEmail: 'ruti@example.com' }));
+  t.mock.method(Mailer, 'isEnabled', () => true);
+  const sent = [];
+  t.mock.method(Mailer, 'send', async (m) => { sent.push(m); return {}; });
+  return sent;
+}
+/** עד שאלת המק"טים, כשאין לבטון מק"ט בקטלוג (מק"ט כללי 000) */
+async function toParts(say) {
+  await say('קבלת סחורה', { file: H.photo() });
+  await say('👍');
+  await say('בלי הזמנה ❌');
+  const r = await say(BTN.yes);
+  assert.match(r.text, /000/);
+  return say(BTN.yes);
+}
+const noPart = { findPartExact: async () => null, searchParts: async () => [] };
+
+test('מק"טים לבנייה בקבלת סחורה: "לא נמצא מק"ט — לשלוח לרכש?" ← כן: מייל, והקליטה ממשיכה על 000 עד טיוטא', async (t) => {
+  H.companies(t, 'test11');
+  const u = grWorker();
+  let built = false;
+  const NEW = { PARTNAME: 'B-31', PARTDES: 'בטון ב-30 מובא', STATDES: 'פעיל', BUD_SUBCHAPTERNAME: '20', BUD_SUBCHAPTERDES: 'שלד', BUD_SUBTOPICNAME: '20-10', BUD_SUBTOPICDES: 'בטון' };
+  const pr = priority(t, { reads: { findPartExact: async () => null, searchParts: async () => (built ? [{ p: NEW, score: 2, full: true }] : []) } });
+  ai(t, doc());
+  const sent = buyer(t);
+  const { say, wa } = H.chat(t, u);
+
+  let r = await toParts(say);
+  assert.match(r.text, /לא נמצא מק"ט לשורה/);
+  assert.match(r.text, /בטון ב-30 — 5 קוב/);
+  assert.match(r.text, /לשלוח לרותי רכש \(רכש\) לבניית מק"טים\?/);
+  assert.match(r.text, /הקליטה ממשיכה בכל מקרה על מק"ט כללי 000/);
+  H.assertButtons(r.buttons, [BTN.yes, BTN.no]);
+
+  r = await say(BTN.yes);
+  assert.match(r.text, /נשלח ל\*רותי רכש\* במייל/);
+  assert.match(r.text, /לאיזה פרויקט לשייך/);
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].subject, `מק"טים נדרשים לבנייה בהקדם — לבקשת ${u.full_name}`);
+  assert.match(sent[0].text, /קבלת סחורה מבוט משימון/);
+  assert.match(sent[0].text, /ספק: בטון הצפון \(S100\)/);
+  assert.match(sent[0].text, /1\. בטון ב-30 — 5 קוב/);
+  assert.equal(pr.writes.length, 0);
+
+  await say('נהריה מגרש 12');
+  r = await say(BTN.done);
+  assert.match(r.text, /GR26000123\* — טיוטא לבדיקה/);
+  assert.equal(pr.wrote('addFreeLine')[0].args[2].part, '000', 'הקבלה נקלטת על 000 — לא מחכים לרכש');
+
+  // הרכש בנה — רק הודעה, בלי שאלה על בנייה מחדש
+  D.run("UPDATE pd_part_requests SET status = 'expired' WHERE user_id != ?", u.id);
+  built = true;
+  wa.clear();
+  assert.deepEqual(await Parts.tick(), { checked: 1, told: 1 });
+  const note = wa.texts().join('\n');
+  assert.match(note, /המק"טים שביקשת נבנו בפריוריטי/);
+  assert.match(note, /בטון ב-30 — 5 קוב ← \*בטון ב-30 מובא\* \(B-31\)/);
+  assert.match(note, /הסחורה מבטון הצפון כבר נקלטה על מק"ט כללי 000/);
+  assert.doesNotMatch(note, /לבנות/);
+  assert.equal(D.get('SELECT status FROM pd_part_requests WHERE user_id = ?', u.id).status, 'done');
+});
+
+test('מק"טים לבנייה בקבלת סחורה: "לא" — בלי מייל, ממשיכים לפרויקט; בלי מנהלת רכש — בלי השאלה', async (t) => {
+  H.companies(t, 'test11');
+  const u = grWorker();
+  priority(t, { reads: noPart });
+  ai(t, doc());
+  const sent = buyer(t);
+  const { say } = H.chat(t, u);
+  await toParts(say);
+  const r = await say(BTN.no);
+  assert.match(r.text, /ממשיכים על מק"ט כללי 000/);
+  assert.match(r.text, /לאיזה פרויקט לשייך/);
+  assert.equal(sent.length, 0);
+});
+
+test('מק"טים לבנייה בקבלת סחורה: בלי מנהלת רכש מוגדרת — ישר לפרויקט, כמו קודם', async (t) => {
+  H.companies(t, 'test11');
+  const u = grWorker();
+  priority(t, { reads: noPart });
+  ai(t, doc());
+  const { say } = H.chat(t, u);
+  const r = await toParts(say);
+  assert.doesNotMatch(r.text, /לבניית מק"טים/);
+  assert.match(r.text, /לאיזה פרויקט לשייך/);
+});
