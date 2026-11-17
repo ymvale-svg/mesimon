@@ -114,3 +114,21 @@ test('lastSummary — הפנייה האחרונה של המשתמש', () => {
   assert.equal(RFQ.lastSummary(u.id).draft.rfqId, id);
   assert.equal(RFQ.lastSummary(999999), null);
 });
+
+// סקירה 16.11: "צריך משימה למחר … ולפתוח קריאה אצל איציק על הצעת מחיר למחשבים" (בהקלטה) — נפתחה פנייה לספקים,
+// וגם "תכתבי משימה…" / "אני רוצה שתפתח לי משימה" נבלעו בה ארבע פעמים
+test('isRequest — בקשה למשימה שמזכירה הצעת מחיר: לא פנייה לספקים', () => {
+  for (const t of ['צריך משימה בבקשה למחר בבוקר לשלוח לאמיר את הקבלה ולפתוח קריאה אצל איציק על הצעת מחיר למחשבים',
+    'צריך למסימה בבקשה למחר בבוקר, לשלוח לאמיר את הקבלה, ולפתוח קריאה אצל איציק על הצעת מחיר למחשבים',
+    'תפתח לי משימה לבקש הצעת מחיר על מזגן', 'תזכיר לי מחר לבקש הצעת מחיר'])
+    assert.ok(!RFQ.isRequest(t), t);
+  assert.ok(RFQ.isRequest('תפנה לספקים להצעת מחיר על מחשבים'), 'בקשה רגילה — כמו קודם');
+});
+
+test('answer — בקשה למשימה באמצע הפנייה: הפנייה מתבטלת, וההודעה ממשיכה הלאה (null)', async () => {
+  const u = user({ role: 'employee' });
+  const id = D.run("INSERT INTO rfq (user_id, item, status, draft, created_at) VALUES (?, '{}', 'draft', '{}', ?)", u.id, D.nowIso()).lastInsertRowid;
+  const r = await RFQ.answer(u.id, { kind: 'rfq', rfqId: id, step: 'details' }, 'תכתבי בבקשה משימה להביא לאמיר את החשבונית');
+  assert.equal(r, null);
+  assert.equal(D.get('SELECT status FROM rfq WHERE id = ?', id).status, 'cancelled');
+});
