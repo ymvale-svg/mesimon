@@ -348,3 +348,11 @@ test('השרת לא נפל, לא החזיר 500 ולא ניסה לפנות לר�
   assert.doesNotMatch(srv.output(), /שרת הבדיקה ניסה לפנות לרשת/);
   assert.doesNotMatch(srv.output(), /שגיאת שרת/);
 });
+
+test('📧 המייל של הצעה — הצעה שאינה קיימת / של אחר: 404 (לא 500)', async () => {
+  const r = await call('GET', '/api/ai/suggestions/987654/mail');
+  assert.equal(r.status, 404, r.text);
+  assert.equal(r.json.error, 'ההצעה לא נמצאה');
+  const a = await call('POST', '/api/ai/suggestions/987654/skip', {});
+  assert.equal(a.status, 404, 'גם בפעולות על הצעה — 404 ולא שגיאת שרת');
+});
