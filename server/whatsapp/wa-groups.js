@@ -286,6 +286,8 @@ function prune() {
   D.run("DELETE FROM wa_messages WHERE chat_id IN (SELECT chat_id FROM wa_groups WHERE status = 'ignored')");
   D.run('DELETE FROM wa_log WHERE at < ?', new Date(Date.now() - LOG_DAYS * DAY).toISOString());
   D.run('DELETE FROM wa_forwards WHERE at < ?', new Date(Date.now() - DAY).toISOString());
+  // אינסטינקט: הבקשות והתשובות של העוזר החיצוני — לא נשמרות יותר מיומן הבוט (בקשה שעוד בטיפול — נשארת)
+  D.run("DELETE FROM instinct_requests WHERE created_at < ? AND status NOT IN ('queued','sent','open')", new Date(Date.now() - LOG_DAYS * DAY).toISOString());
 }
 
 
