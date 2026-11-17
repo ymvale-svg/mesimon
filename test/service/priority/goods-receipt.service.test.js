@@ -609,7 +609,7 @@ test('מק"טים לבנייה בקבלת סחורה: "לא נמצא מק"ט —
   wa.clear();
   assert.deepEqual(await Parts.tick(), { checked: 1, told: 1 });
   const note = wa.texts().join('\n');
-  assert.match(note, /המק"טים שביקשת נבנו בפריוריטי/);
+  assert.match(note, /המק"טים החסרים נבנו בפריוריטי/);
   assert.match(note, /בטון ב-30 — 5 קוב ← \*בטון ב-30 מובא\* \(B-31\)/);
   assert.match(note, /הסחורה מבטון הצפון כבר נקלטה על מק"ט כללי 000/);
   assert.doesNotMatch(note, /לבנות/);

@@ -679,7 +679,7 @@
       </section>
 
       <section class="panel">
-        <div class="panel-h"><h2>🆕 רכש — מק"טים לבנייה</h2><p>פריט בדרישת רכש שאין לו מק"ט: הבוט מציע לשלוח אותו במייל לבניית מק"ט, ומודיע ליוזם כשהמק"ט נבנה. ריק — הפריט נקלט על מק"ט כללי, בלי לשאול.</p></div>
+        <div class="panel-h"><h2>🆕 רכש — מק"טים לבנייה</h2><p>פריט בדרישת רכש שאין לו מק"ט נשלח במייל לבניית מק"ט (דרישה לא יוצאת עם מק"ט כללי), והיוזם מקבל הודעה כשהמק"ט נבנה. בקבלת סחורה — הבוט שואל אם לשלוח. ריק — בדרישה: רק המזוהים, והרשימה למנהלי המערכת.</p></div>
         <div class="grid-form">
           <label for="b-name">מנהלת הרכש — שם<input id="b-name" value="${esc(s.defaults.buyerName ?? '')}"></label>
           <label for="b-email">מנהלת הרכש — מייל<input id="b-email" class="ltr" type="email" value="${esc(s.defaults.buyerEmail ?? '')}"></label>
