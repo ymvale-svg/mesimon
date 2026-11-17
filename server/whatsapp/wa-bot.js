@@ -1066,7 +1066,8 @@ async function handleDirect(msg) {
     const quietLogged = quietLocationLog.get(user.id) ?? 0;
     if (r.quiet && Date.now() - quietLogged < 30 * 60000) return;
     if (r.quiet) quietLocationLog.set(user.id, Date.now());
-    log({ ...base, text: `[📍 ${msg.location.live ? 'מיקום בזמן אמת' : 'מיקום'}]`, action: 'reminders_place', status: 'ok', result: `${r.result} · ${msg.location.shape ?? ''}`.slice(0, 300), reply: r.text ?? undefined });
+    // ביומן — בלי שם המקום ובלי התשובה (שבה שם המקום): היומן נשמר 90 יום ומנהלים רואים אותו (אבטחה 17.11.26)
+    log({ ...base, text: `[📍 ${msg.location.live ? 'מיקום בזמן אמת' : 'מיקום'}]`, action: 'reminders_place', status: 'ok', result: `${r.log ?? r.result} · ${msg.location.shape ?? ''}`.slice(0, 300) });
     if (r.text) await sendText(msg.chatId, r.text);
     return;
   }
