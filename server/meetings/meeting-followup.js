@@ -34,6 +34,8 @@ const Mailer = require('../integrations').Mailer;
 const WaUi = require('../whatsapp').WaUi;
 const Meetings = require('./meetings');
 const Calendar = require('./calendar');
+const MeetingAudio = require('./meeting-audio');
+const Suggestions = require('./meeting-suggestions');
 const Secretariat = require('../core').Secretariat;
 
 const MIN = 60000;
@@ -401,31 +403,38 @@ async function answer(actor, text, { appRoot = '', dry = false, createTask = nul
 
   if (kind === 'share') return shareDraft(u, row, dig, head);
 
-  // הקלטה מוואטסאפ, ומי ששלח אותה — המשימות של כל המשתתפים, כל אחת אצל האחראי שלה
-  if (row.source === 'wa' && dig.items.length && typeof createTask === 'function') {
-    const audio = D.get('SELECT user_id FROM meeting_audio WHERE id = ?', Number(row.ref));
+  /*
+   * המשימות — לקריאה. הבוט לא מציע לפתוח משימות (16.11.26): הן הצעות ב"ממתין לאישורך" במשימון.
+   * "תפתח אותן" במילים — עדיין פותח (‎openTasks‎).
+   */
+  const fmtDue = (d) => (/^\d{4}-\d{2}-\d{2}$/.test(d) ? ` · עד ${d.split('-').reverse().slice(0, 2).join('.')}` : '');
+  // הקלטה מוואטסאפ, ומי ששלח אותה — כל המשימות לפי אחראי, ו"📤 לשלוח למשתתפים" / "✏️ לשנות אחראי"
+  if (row.source === 'wa' && dig.items.length) {
+    const audio = D.get('SELECT user_id, meeting FROM meeting_audio WHERE id = ?', Number(row.ref));
     if (audio?.user_id === actor.id) {
-      let n = 0;
+      const meeting = parseJson(audio.meeting, {});
+      MeetingAudio.suggestFor(actor, Number(row.ref), meeting.title ?? row.title, dig);
+      const inbox = MeetingAudio.inboxLine(Number(row.ref));
       return {
-        text: [head, '', `*המשימות מהפגישה (${dig.items.length}):*`, ...dig.items.map((it) => `${++n}. ${it.task}${it._ownerName || it.owner_name ? ` — ${it._ownerName || it.owner_name}` : ''}`),
-          '\n*לפתוח אותן, כל אחת אצל האחראי שלה?* *כן* 👍 · *לא* 👎 · או רק חלק: "רק 1 ו-3"'].join('\n'),
-        buttons: ['לפתוח משימות ✅', WaUi.BTN.no],
-        draft: { kind: 'meeting_audio_tasks', audioId: Number(row.ref), title: row.title, taskId: parseJson(row.data, {}).taskId ?? null },
+        text: [head, '', MeetingAudio._internal.tasksText(dig), inbox ? `\n${inbox}` : null, `\n${MeetingAudio.nextQuestion(meeting, dig, actor)}`].filter((l) => l !== null).join('\n'),
+        buttons: MeetingAudio.nextButtons(meeting, dig, actor),
+        draft: { kind: 'meeting_audio_tasks', audioId: Number(row.ref), title: row.title, taskId: parseJson(row.data, {}).taskId ?? null, n: dig.items.length },
         awaiting: true,
         result: `${dig.items.length} משימות (הקלטה מוואטסאפ): ${row.title}`
       };
     }
   }
-  // משימות
-  const mine = myItems(dig, u);
-  const others = dig.items.filter((it) => !mine.includes(it));
-  const fmtDue = (d) => (/^\d{4}-\d{2}-\d{2}$/.test(d) ? ` · עד ${d.split('-').reverse().slice(0, 2).join('.')}` : '');
+  // המשימות שלי — לקריאה, ובמשימון כהצעות אצלי
+  const numbered = dig.items.map((it, i) => ({ ...it, n: i + 1 }));
+  const mine = myItems({ items: numbered }, u);
+  const others = numbered.filter((it) => !mine.includes(it));
   if (!mine.length) {
     return {
       text: [head, '', 'לא מצאתי משימות שהוטלו עלייך בפגישה 👍', others.length ? `\n*משימות של אחרים:*\n${others.slice(0, 8).map((it) => `• ${it.task}${it.owner_name ? ` — ${it.owner_name}` : ''}`).join('\n')}` : null].filter(Boolean).join('\n'),
       buttons: [BTN.summary], result: `אין משימות: ${row.title}`
     };
   }
+  if (!dry) Suggestions.suggest({ source: row.source, ref: row.ref, title: row.title, items: dig.items, fromId: actor.id, ownerOf: () => actor.id, only: mine.map((it) => it.n) });
   const can = typeof createTask === 'function';
   return {
     text: [
@@ -433,10 +442,11 @@ async function answer(actor, text, { appRoot = '', dry = false, createTask = nul
       `*המשימות שלך מהפגישה (${mine.length}):*`,
       ...mine.map((it, i) => `${i + 1}. ${it.task}${fmtDue(it.due)}`),
       others.length ? `\n_ועוד ${others.length} של משתתפים אחרים — "סיכום" מציג הכול._` : null,
-      can ? `\n*לפתוח אותן כמשימות במשימון?* *כן* 👍 · *לא* 👎${mine.length > 1 ? ' · או רק חלק: "רק 1 ו-3"' : ''}` : null
+      `\n💡 הן מחכות לך ב"ממתין לאישורך" במשימון — שם מאשרים, משנים או דוחים.`
     ].filter((l) => l !== null).join('\n'),
-    buttons: can ? [BTN.open, WaUi.BTN.no] : [BTN.summary],
-    draft: can ? { kind: 'meeting_tasks', ref: `${row.source}:${row.ref}`, title: row.title, items: mine, taskId: parseJson(row.data, {}).taskId ?? null } : null,
+    buttons: [BTN.summary, BTN.share],
+    // "תפתח אותן" במילים — נפתחות מיד
+    draft: can ? { kind: 'meeting_tasks', ref: `${row.source}:${row.ref}`, title: row.title, items: mine.map((it, i) => ({ ...it, n: it.n ?? i + 1 })), taskId: parseJson(row.data, {}).taskId ?? null } : null,
     awaiting: can,
     result: `${mine.length} משימות: ${row.title}`
   };
@@ -476,18 +486,37 @@ function summaryMailText(row, dig) {
     'על מה דיברנו:',
     ...dig.summary.map((x) => `• ${x}`),
     ...(dig.decisions.length ? ['', 'הוחלט:', ...dig.decisions.map((x) => `• ${x}`)] : []),
-    ...(dig.items.length ? ['', 'משימות להמשך:', ...dig.items.map((it) => `• ${it.task}${it.owner_name ? ` — ${it.owner_name}` : ''}${fmtDue(it.due)}`)] : []),
+    ...(dig.items.length ? ['', 'משימות להמשך:', ...dig.items.map((it) => `• ${it.task}${ownerLabel(it) ? ` — ${ownerLabel(it)}` : ''}${fmtDue(it.due)}`)] : []),
     '',
     'אם משהו חסר או לא מדויק — אשמח לתיקון.'
   ].join('\n');
 }
 
-/** "לשלוח למשתתפים?" — טיוטה לאישור, או הסבר מה חסר (Gmail / יומן / הזימון) */
-async function shareDraft(u, row, dig, head) {
+/** האחראי כפי שזוהה במשימון (הקלטה מוואטסאפ), ואם לא — כפי שנאמר */
+const ownerLabel = (it) => String(it._ownerName || it.owner_name || '').trim();
+
+/** הקלטה מוואטסאפ: המשתתפים שהעובד שייך אליהם את ההקלטה (מהיומן או "פגישה אחרת"). בלי העובד עצמו. ‎null‎ — אין */
+function audioPeople(u, row) {
+  if (row.source !== 'wa') return null;
+  const audio = D.get('SELECT meeting FROM meeting_audio WHERE id = ?', Number(row.ref));
+  const mine = emailsOf(u);
+  const seen = new Set();
+  const people = (parseJson(audio?.meeting, {})?.people ?? [])
+    .map((p) => ({ email: normEmail(p.email), name: String(p.name ?? '').trim() }))
+    .filter((p) => p.email.includes('@') && !mine.has(p.email) && !seen.has(p.email) && seen.add(p.email));
+  return people.length ? people : null;
+}
+
+/**
+ * "לשלוח למשתתפים?" — טיוטה לאישור, או הסבר מה חסר (Gmail / יומן / הזימון).
+ * ‎to‎ — נמענים מסוימים ("שלח לגולן את הסיכום"); אחרת כל המשתתפים: בהקלטה מוואטסאפ — מי ששויך להקלטה, אחרת — מהזימון ביומן.
+ */
+async function shareDraft(u, row, dig, head, { to = null } = {}) {
   if (!Gmail.canSend(u.id)) {
     return { text: `${head}\nכדי לשלוח את הסיכום מהמייל שלך צריך לחבר את תיבת ה-Gmail באפליקציה: "החשבון שלי ← Gmail ועוזר ה-AI".`, buttons: [BTN.tasks], result: `שליחה למשתתפים — Gmail לא מחובר: ${row.title}` };
   }
-  const inv = await invitees(u, row);
+  const fixed = to ?? audioPeople(u, row);
+  const inv = fixed ? { people: fixed } : await invitees(u, row);
   if (inv.error) {
     const why = inv.error === 'calendar' ? 'כדי לדעת מי הוזמן צריך לחבר את היומן (Google) באפליקציה.' : 'לא מצאתי את הזימון לפגישה הזו ביומן שלך, ולכן אני לא יודע למי לשלוח.';
     return { text: `${head}\n${why}`, buttons: [BTN.tasks], result: `שליחה למשתתפים — ${inv.error === 'calendar' ? 'אין יומן' : 'הזימון לא נמצא'}: ${row.title}` };
@@ -516,6 +545,35 @@ async function shareDraft(u, row, dig, head) {
 
 const htmlOf = (text) => `<div dir="rtl" style="font-family:Arial,sans-serif;line-height:1.5">${String(text)
   .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '<br>')}</div>`;
+
+/** "לשלוח למשתתפים" על פגישה מסוימת (‎source‎/‎ref‎ ב-‎meeting_followups‎) — מהשאלה שאחרי הקלטה מוואטסאפ */
+async function shareFor(actor, { source, ref }, opts = {}) {
+  const row = D.get('SELECT * FROM meeting_followups WHERE user_id = ? AND source = ? AND ref = ?', actor.id, source, String(ref));
+  if (!row) return null;
+  const dig = await digest(row, actor.id);
+  if (!dig) return null;
+  return shareDraft(userRow(actor.id), row, dig, `🎥 *${row.title}* · ${hhmm(row.start_at)}`, opts);
+}
+
+// "הסיכום" (הידוע — של הפגישה שעכשיו הייתה), או "סיכום" עם "פגישה" / "ישיבה"
+const isSummaryAsk = (t) => /(?:^|\s)(?:את\s+)?הסיכום(?:\s|$|[.,!?])/.test(t) || (/(?:^|\s)(?:ה|את\s+ה?)?סיכום(?:\s|$|[.,!?])/.test(t) && /פגיש|ישיב/.test(t));
+
+/**
+ * "שלח לגולן את הסיכום" — כשנשלח מייל לאיש קשר, והבקשה היא סיכום של פגישה מוקלטת מהיומיים האחרונים:
+ * הסיכום המלא (נושאים, החלטות ומשימות לפי אחראי) כמו שהוא — לא טיוטה שה-AI כותב מהמילים של הבקשה.
+ * ‎null‎ — זו לא בקשה כזו, או שאין פגישה מוקלטת עם סיכום.
+ */
+async function summaryRequest(actor, request, contact) {
+  const t = norm(request);
+  if (!isSummaryAsk(t) || !contact?.email) return null;
+  const words = t.replace(/(?:^|\s)(?:ה?סיכום|של|את|ה?פגישה|מה?פגישה|לשלוח|שלח|תשלח|לו|לה|להם)(?=\s|$)/g, ' ').trim();
+  const row = (words && followupFor(actor.id, words)) || followupFor(actor.id, null);
+  if (!row) return null;
+  const dig = await digest(row, actor.id).catch(() => null);
+  if (!dig) return null;
+  const to = [{ email: normEmail(contact.email), name: String(contact.name ?? '').trim() }];
+  return shareDraft(userRow(actor.id), row, dig, `🎥 *${row.title}* · ${hhmm(row.start_at)}`, { to });
+}
 
 /** "כן" על "לשלוח את הסיכום?" — נשלח מתיבת ה-Gmail של העובד, לכל המשתתפים יחד. מחזיר את הטקסט לעובד */
 async function sendSummaryMail(actor, draft, { dry = false } = {}) {
@@ -551,6 +609,10 @@ function openTasks(actor, draft, { createTask, taskLink = () => null, dry = fals
       sourceUserId: actor.id,
       auditNote: `המשימה נפתחה מוואטסאפ, מהמשימות של הפגישה "${draft.title}"`
     });
+    if (id && draft.ref && it.n) {
+      const [src, ...rest] = String(draft.ref).split(':');
+      Suggestions.markOpened(src, rest.join(':'), it.n, id);
+    }
     opened.push({ title: it.task, id });
   }
   const test = dry ? ' (בדיקה — לא נפתחו באמת)' : '';
@@ -560,7 +622,8 @@ function openTasks(actor, draft, { createTask, taskLink = () => null, dry = fals
   ].join('\n');
 }
 
-const isOpenButton = (t) => WaUi.normalize(t) === WaUi.normalize(BTN.open) || /^לפתוח(\s+(אותן|משימות))?$/.test(WaUi.normalize(t));
+// "תפתח אותן" / "לפתוח את המשימות" — במילים. אין כפתור: הבוט לא מציע לפתוח משימות (16.11.26)
+const isOpenButton = (t) => WaUi.normalize(t) === WaUi.normalize(BTN.open) || /^(?:לפתוח|תפתח|פתח|תפתחי)(?:\s+לי)?(?:\s+(?:אותן|את\s+(?:כל\s+)?ה?משימות|(?:כל\s+)?ה?משימות))(?:\s+מה?פגישה)?$/.test(WaUi.normalize(t));
 
 /** ניקוי — פניות ותקצירים בני יותר מחודש */
 function prune() {
@@ -570,6 +633,6 @@ function prune() {
 }
 
 module.exports = {
-  sweep, answer, openTasks, isOpenButton, digest, prune, BTN, sendSummaryMail,
+  sweep, answer, openTasks, isOpenButton, digest, prune, BTN, sendSummaryMail, shareFor, summaryRequest,
   _internal: { vttText, myItems, followupFor, askText, alreadyAsked, record, ASK, BARE, norm, timelessMatch, timelessCandidates, invitees, summaryMailText, shareDraft }
 };

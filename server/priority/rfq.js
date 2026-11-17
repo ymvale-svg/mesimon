@@ -56,7 +56,11 @@ const vendorsOf = (id) => D.all('SELECT * FROM rfq_vendors WHERE rfq_id = ? ORDE
 
 const TRIGGER = /הצע(?:ת|ות)\s+מחיר|פני(?:ה|יה)\s+ל(?:ה)?ספקים/;
 const ACT = /(תפנה|תפני|לפנות|פנה|תבקש|תבקשי|לבקש|בקש|צריך|צריכה|תשיג|תשלח|לשלוח|שלח|תוציא|להוציא|תמצא|תחפש)/;
-const isRequest = (text) => TRIGGER.test(text) && ACT.test(text) && !/^(מה|איפה|האם|מתי)(?=[\s?!.,:;"'״׳-]|$)/.test(String(text).trim());
+// בקשה למשימה / תזכורת / קריאה — גם כשהיא מזכירה הצעת מחיר ("…ולפתוח קריאה על הצעת מחיר למחשבים"): לא פנייה לספקים.
+// "מסימה" — כך התמלול שומע לפעמים "משימה" (סקירה 16.11)
+const TASK_ASK = /(?:^|[\s,])(?:ה|ל|ב|ו)?(?:משימ|מסימ)(?:ה|ות)(?=[\s,.!?]|$)|(?:^|[\s,])ו?(?:ל|ת)?פתוח\s+(?:לי\s+)?קריאה|(?:^|[\s,])ש?ת?זכיר(?:י)?\s+לי/;
+const isRequest = (text) => TRIGGER.test(text) && ACT.test(text) && !TASK_ASK.test(String(text))
+  && !/^(מה|איפה|האם|מתי)(?=[\s?!.,:;"'״׳-]|$)/.test(String(text).trim());
 
 const ITEM_SCHEMA = {
   type: 'object',
@@ -324,6 +328,11 @@ async function answer(userId, d, text) {
   if (WaUi.sameLabel(t, BTN.cancel) || WaUi.CANCEL.test(n)) {
     D.run("UPDATE rfq SET status = 'cancelled' WHERE id = ?", r.id);
     return { text: 'בסדר, ביטלתי — לא נשלח כלום 👍', draft: null, result: 'בוטל' };
+  }
+  // בקשה למשימה באמצע הפנייה — העובד רצה משימה, לא פנייה לספקים: הפנייה (שעוד לא נשלחה) יורדת, וההודעה ממשיכה הלאה
+  if (TASK_ASK.test(t) && r.status !== 'sent') {
+    D.run("UPDATE rfq SET status = 'cancelled' WHERE id = ?", r.id);
+    return null;
   }
   if (d.step === 'details') {
     if (/^(תמשיך|המשך|לא\s+משנה|אין|לא\s+יודע|דלג)$/.test(n)) return next(userId, r.id, { ...r.item, missing_question: '' });

@@ -191,19 +191,21 @@ function answer(userId, d, text) {
 function onLocation(userId, { lat, lng, live = false }) {
   const r = Places.report(userId, { lat, lng, source: live ? 'whatsapp_live' : 'whatsapp' });
   const where = r.place ? `ב${r.place.name}` : 'מחוץ לנקודות הציון';
-  if (!r.ok) return { text: live ? null : '📍 לא הצלחתי לקרוא את המיקום. נסו לשלוח שוב.', result: `מיקום — ${r.reason}` };
+  if (!r.ok) return { text: live ? null : '📍 לא הצלחתי לקרוא את המיקום. נסו לשלוח שוב.', result: `מיקום — ${r.reason}`, log: `מיקום — ${r.reason}` };
   const n = r.fired.length;
+  // ‎log‎ — מה שנכנס ליומן הבוט: בלי המקום (אבטחה 17.11.26)
+  const log = `${live ? 'עדכון מיקום בזמן אמת' : 'מיקום'}${n ? ` · ${n} תזכורות` : ''}`;
   const sending = n ? `⏰ ${n === 1 ? 'תזכורת אחת מחכה' : `${n} תזכורות מחכות`} לך כאן — שולח עכשיו.` : '';
   // ‎quiet‎ — עדכון שלא שינה כלום (לא נכנס ליומן הבוט בכל פעם)
-  if (live && !r.first) return { text: null, quiet: !n && !r.arrived && !r.left, result: `עדכון מיקום בזמן אמת · ${where}${n ? ` · ${n} תזכורות` : ''}` };
+  if (live && !r.first) return { text: null, log, quiet: !n && !r.arrived && !r.left, result: `עדכון מיקום בזמן אמת · ${where}${n ? ` · ${n} תזכורות` : ''}` };
   const waiting = active(userId).filter((x) => x.status === 'place');
   if (live) {
     const watch = waiting.length ? `אזכיר לך ${[...new Set(waiting.map((x) => Places.phrase(x)))].join(' / ')}.` : 'אין כרגע תזכורות שמחכות למקום — אפשר להפסיק את השיתוף.';
-    return { text: ['📍 תודה! קיבלתי את שיתוף המיקום.', sending || watch].join('\n'), result: `התחיל שיתוף מיקום בזמן אמת · ${where}${n ? ` · ${n} תזכורות` : ''}` };
+    return { text: ['📍 תודה! קיבלתי את שיתוף המיקום.', sending || watch].join('\n'), log, result: `התחיל שיתוף מיקום בזמן אמת · ${where}${n ? ` · ${n} תזכורות` : ''}` };
   }
   const head = r.place ? `📍 קיבלתי — המיקום שלך: *${r.place.name}*.` : '📍 קיבלתי את המיקום — הוא לא באף אחת מנקודות הציון.';
   const tail = sending ? `\n${sending}` : waiting.length ? `\n_כדי שאזכיר לך בדיוק כשתגיע — עדיף לשתף מיקום *בזמן אמת*._` : '\n_אפשר לבקש: "תזכיר לי כשאני מגיע למשרד לדבר עם ישראל"._';
-  return { text: head + tail, result: `מיקום · ${where}${n ? ` · ${n} תזכורות` : ''}` };
+  return { text: head + tail, log, result: `מיקום · ${where}${n ? ` · ${n} תזכורות` : ''}` };
 }
 
 module.exports = { isRequest, command, tick, answer, onLocation, BTN, _internal: { parse, active } };

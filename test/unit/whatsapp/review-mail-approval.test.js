@@ -89,3 +89,34 @@ test('מי שהעיר: נשמר בדו"ח, חוזר בייצוא; אחרי הצ�
   assert.ok(fb[0].replyProposedAt, 'סומן "הוצעה תשובה"');
   assert.equal(fb[1].replyProposedAt, null);
 });
+
+// 16.11: רמז שלא תאם אף שרשור — הטיוטה הוצמדה לשרשור האחרון, שהיה על נושא אחר לגמרי
+test('רמז לשרשור שלא נמצא — לא נשלח בכלל (ולא לשרשור אחר)', async (t) => {
+  const { admin, naama, calls } = setup(t);
+  await assert.rejects(Review.mailForApproval({ userId: admin.id, toName: naama.full_name, body: 'היי', threadHint: 'איחוד משימות' }), /לא נמצא שרשור/);
+  assert.equal(calls.filter((c) => c.method === 'sendInteractiveButtonsReply').length, 0);
+});
+
+test('רמז שלא בחמשת השרשורים האחרונים — מחפשים לפי הנושא', async (t) => {
+  const { admin, naama } = setup(t);
+  const asked = [];
+  MailThread.recentThreads.mock.mockImplementation(async (uid, email, opts = {}) => {
+    asked.push(opts);
+    return opts.subject ? [{ box: 0, threadId: 'T-merge', subject: 'משימון איחוד משימות', inReplyTo: '<m@x>', references: ['<m@x>'] }] : [];
+  });
+  const r = await Review.mailForApproval({ userId: admin.id, toName: naama.full_name, body: 'היי', threadHint: 'איחוד משימות' });
+  assert.equal(r.subject, 'Re: משימון איחוד משימות');
+  assert.equal(asked.at(-1).subject, 'איחוד משימות');
+  assert.equal(Bot._internal.chatOf(admin.id).draft.replyThread.threadId, 'T-merge');
+});
+
+test('threadId — בדיוק השרשור הזה, רק אם הנמען בו', async (t) => {
+  const { admin, naama } = setup(t);
+  t.mock.method(Gmail, 'boxesOf', () => ['b0']);
+  t.mock.method(MailThread, 'threadRef', async (who, id) => (id === 'T-exact'
+    ? { box: 0, threadId: 'T-exact', subject: 'משימון- משימה ממייל', inReplyTo: '<e@x>', references: ['<e@x>'], lastFrom: { email: naama.email }, lastTo: [], lastCc: [] }
+    : { box: 0, threadId: id, subject: 'זר', inReplyTo: '<z@x>', references: [], lastFrom: { email: 'someone@else.test' }, lastTo: [], lastCc: [] }));
+  const r = await Review.mailForApproval({ userId: admin.id, toName: naama.full_name, body: 'היי', threadId: 'T-exact' });
+  assert.equal(r.subject, 'Re: משימון- משימה ממייל');
+  await assert.rejects(Review.mailForApproval({ userId: admin.id, toName: naama.full_name, body: 'היי', threadId: 'T-foreign' }), /לא נמצא שרשור/);
+});

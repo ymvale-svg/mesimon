@@ -22,5 +22,6 @@ module.exports = {
   get MailPush() { return require('./mail-push'); },
   get MailDose() { return require('./mail-dose'); },
   get ReplyWatch() { return require('./reply-watch'); },
-  get MailOwner() { return require('./mail-owner'); }
+  get MailOwner() { return require('./mail-owner'); },
+  get MailPick() { return require('./mail-pick'); }
 };

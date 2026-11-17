@@ -11,6 +11,7 @@ module.exports = {
   get MeetingCoord() { return require('./meeting-coord'); },
   get MeetingFollowup() { return require('./meeting-followup'); },
   get MeetingAudio() { return require('./meeting-audio'); },
+  get MeetingSuggestions() { return require('./meeting-suggestions'); },
   get Calendar() { return require('./calendar'); },
   get TimelessMedia() { return require('./timeless-media'); },
   get TimelessStore() { return require('./timeless-store'); },

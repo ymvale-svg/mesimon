@@ -71,6 +71,7 @@ const BotTips = require('./bot-tips');
 const FormFill = require('../mail').FormFill;
 const MeetCoord = require('../meetings').MeetingCoord;
 const Reminders = require('./reminders');
+const Places = require('./places');
 const SentFollowup = require('../mail').SentFollowup;
 const DayDigest = require('../agents').DayDigest;
 const Briefing = require('../meetings').Briefing;
@@ -123,7 +124,8 @@ function locationOf(m, typeWebhook = 'incomingMessageReceived') {
   let found = null;
   let path = '';
   for (const [k, v] of Object.entries(m ?? {})) {
-    if (!v || typeof v !== 'object') continue;
+    // מיקום מצוטט (תשובה על הודעת מיקום) או מועבר — לא המיקום של העובד (אבטחה 17.11.26)
+    if (!v || typeof v !== 'object' || /quoted/i.test(k) || v.isForwarded) continue;
     const c = coords(v) ?? Object.entries(v).map(([k2, v2]) => { const x = coords(v2); if (x) path = `${k}.${k2}`; return x; }).find(Boolean);
     if (c) { found = c; path ||= k; break; }
   }
@@ -479,7 +481,7 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
   // 🎙 הקלטת פגישה מוואטסאפ: "לאיזו פגישה?", "לפתוח את המשימות?", ו"הקלטת פגישה" (ההקלטה הבאה)
   { const c = { actor, converse, dry, keep, out, state, t, user }; const r = await flowMeetingAudioAnswer(c); if (r !== NEXT) return r; state = c.state; }
   { const r = await flowMeetingAudioRequest({ actor, out, t }); if (r !== NEXT) return r; }
-  // 🎥 אחרי פגישה מוקלטת: "לפתוח משימות ✅" / "לא" על המשימות שהוצעו
+  // 🎥 אחרי פגישה מוקלטת: "תפתח אותן" (במילים) על המשימות, ו"כן" / "לא" על שליחת הסיכום
   { const c = { actor, dry, keep, out, state, t }; const r = await flowOnMeetingTasks(c); if (r !== NEXT) return r; state = c.state; }
   { const c = { actor, dry, keep, out, state, t }; const r = await flowOnPlainMail(c); if (r !== NEXT) return r; state = c.state; }
   // 🎥 אחרי פגישה מוקלטת: "סיכום הפגישה", "משימות מהפגישה", "הקלטת הפגישה"
@@ -725,6 +727,11 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
     if (!request) {
       return out(`מה לכתוב ל${contact.name || contact.email}?`, { draft: { kind: 'email_pick', name: contact.name, request: '', candidates: [contact], taskId } },
         { action: 'send_email', status: 'unclear', result: 'חסר תוכן' });
+    }
+    // "שלח לגולן את סיכום הפגישה" — הסיכום המלא של הפגישה המוקלטת, כמו שהוא (לא נוסח שה-AI כותב מהמילים של הבקשה)
+    if (!taskId && !dry) {
+      const sum = await MeetingFollowup.summaryRequest(actor, request, picked).catch(() => null);
+      if (sum) return out(sum.text, sum.draft ? { draft: sum.draft, awaiting: true } : { draft: null }, { action: 'meeting_followup', status: 'ok', result: sum.result, buttons: sum.buttons });
     }
     const pending = { ...await draftEmail(actor, contact, request, { dry }), taskId };
     return out(emailText(pending), { draft: pending, awaiting: true },
@@ -1080,12 +1087,15 @@ async function handleDirectAs(msg) {
    * לפני "העובד כתב": עדכוני מיקום מגיעים כל כמה שניות, והם לא שיחה. על העדכונים — לא עונים (‎text: null‎)
    */
   if (msg.location) {
+    // מי שתזכורות כבויות אצלו — המיקום לא נבדק ולא נשמר (אבטחה 17.11.26)
+    if (!WaActions.allowed(actor, 'reminders')) return;
     const r = Reminders.onLocation(user.id, msg.location);
     // עדכון שקט — ליומן פעם בחצי שעה לכל היותר (כדי לראות שהעדכונים מגיעים, ובאיזו צורה)
     const quietLogged = quietLocationLog.get(user.id) ?? 0;
     if (r.quiet && Date.now() - quietLogged < 30 * 60000) return;
     if (r.quiet) quietLocationLog.set(user.id, Date.now());
-    log({ ...base, text: `[📍 ${msg.location.live ? 'מיקום בזמן אמת' : 'מיקום'}]`, action: 'reminders_place', status: 'ok', result: `${r.result} · ${msg.location.shape ?? ''}`.slice(0, 300), reply: r.text ?? undefined });
+    // ביומן — בלי שם המקום ובלי התשובה (שבה שם המקום): היומן נשמר 90 יום ומנהלים רואים אותו (אבטחה 17.11.26)
+    log({ ...base, text: `[📍 ${msg.location.live ? 'מיקום בזמן אמת' : 'מיקום'}]`, action: 'reminders_place', status: 'ok', result: `${r.log ?? r.result} · ${msg.location.shape ?? ''}`.slice(0, 300) });
     if (r.text) await sendText(msg.chatId, r.text);
     return;
   }
@@ -1836,6 +1846,7 @@ async function tick() {
     }
     if (Claude.isEnabled() && WaActions.byKey('group_tasks')?.enabled) await processGroups();
     prune();
+    Places.prune();
   } catch (err) {
     console.error('[משימון] סבב בוט הוואטסאפ נכשל:', err.message);
   } finally {
