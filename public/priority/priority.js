@@ -679,6 +679,14 @@
       </section>
 
       <section class="panel">
+        <div class="panel-h"><h2>🆕 רכש — מק"טים לבנייה</h2><p>פריט בדרישת רכש שאין לו מק"ט: הבוט מציע לשלוח אותו במייל לבניית מק"ט, ומודיע ליוזם כשהמק"ט נבנה. ריק — הפריט נקלט על מק"ט כללי, בלי לשאול.</p></div>
+        <div class="grid-form">
+          <label for="b-name">מנהלת הרכש — שם<input id="b-name" value="${esc(s.defaults.buyerName ?? '')}"></label>
+          <label for="b-email">מנהלת הרכש — מייל<input id="b-email" class="ltr" type="email" value="${esc(s.defaults.buyerEmail ?? '')}"></label>
+        </div>
+      </section>
+
+      <section class="panel">
         <div class="panel-h"><h2>ברירות מחדל לקליטה</h2><p>מה שהמערכת ממלאת כשהמסמך לא אומר. כרגע לקריאה בלבד; יהיו ניתנות לעריכה כשקבלת הסחורה ודרישת הרכש יעברו למסך.</p></div>
         <div class="scroll"><table class="t">
           <tr><td>תנאי תשלום</td><td>${esc(pay(s.defaults.payCode))}</td></tr>
@@ -741,7 +749,7 @@
         $('#confirm').innerHTML = `<span class="dirty">פותחים כתיבה לחברה אמיתית: ${esc(opened.join(', '))}. ללחוץ שוב על "שמירה" כדי לאשר.</span>`;
         confirmed = true; return;
       }
-      const body = { connection: { host: $('#c-host').value, ini: $('#c-ini').value, user: $('#c-user').value }, companies };
+      const body = { connection: { host: $('#c-host').value, ini: $('#c-ini').value, user: $('#c-user').value }, companies, defaults: { buyerName: $('#b-name').value, buyerEmail: $('#b-email').value } };
       if ($('#c-pass').value) body.connection.password = $('#c-pass').value;
       try {
         await api('PUT', '/api/priority/settings', body);

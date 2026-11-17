@@ -363,3 +363,209 @@ test('עריכה ישירה בטבלה: "שורה 1 כמות 4" ו"שורה 2 ה
   assert.doesNotMatch(r.text, /בטון — 5 קוב/);
   assert.equal(edits, before, 'לא נקרא AI לעריכה');
 });
+
+// ---------------------------------------------------------------------------
+// 🆕 מק"טים לבנייה (‎pd-parts.js‎): פריט בלי מק"ט ← מייל למנהלת הרכש ← "רק המזוהים" / "לחכות" ← נבנה ← בנייה מחדש
+// ---------------------------------------------------------------------------
+
+const Settings = require('../../../server/priority/priority-settings');
+const Mailer = require('../../../server/integrations/mailer');
+const Parts = require('../../../server/priority/pd-parts');
+const Priority = require('../../../server/integrations/priority');
+const { D } = require('../../helpers/db');
+
+/** עובד עם טלפון משלו — שלא יתנגש בעובדים של בדיקות אחרות (הבוט מזהה לפי הטלפון) */
+let phoneSeq = 0;
+const buyerWorker = () => { phoneSeq += 1; return H.worker({ phone: `97258${String(3000000 + phoneSeq)}` }); };
+
+/** מנהלת הרכש מוגדרת, והמייל "יוצא" (נרשם) */
+function buyer(t) {
+  t.mock.method(Settings, 'defaults', () => ({ ...Settings.DEFAULTS, buyerName: 'רותי רכש', buyerEmail: 'ruti@example.com' }));
+  t.mock.method(Mailer, 'isEnabled', () => true);
+  const sent = [];
+  t.mock.method(Mailer, 'send', async (m) => { sent.push(m); return {}; });
+  return sent;
+}
+
+/** עד הסיכום, כשה"בטון" לא בקטלוג ("אף אחד") */
+async function toMissing(say) {
+  await toItems(say);
+  await say('10 שקי מלט, 5 קוב בטון לתקרה');
+  return say('אף אחד ❌');
+}
+
+test('מק"טים לבנייה: בטיוטא — "לשלוח לרכש?" ← כן: מייל "מק"טים נדרשים לבנייה בהקדם" לבקשת העובד, בלי כתיבה לפריוריטי', async (t) => {
+  H.companies(t, 'test11');
+  const u = buyerWorker();
+  const pr = priority(t);
+  ai(t);
+  const sent = buyer(t);
+  const { say } = H.chat(t, u);
+
+  let r = await toMissing(say);
+  assert.match(r.text, /\*בטון\* לא נמצא בקטלוג\. \*לשלוח לרותי רכש \(רכש\) לבניית מק"ט בהקדם\?\*/);
+  H.assertButtons(r.buttons, [BTN.yes, BTN.no, BTN.done]);
+
+  r = await say('👍');                           // 👍 = כן (לא "סיום")
+  assert.match(r.text, /נשלח ל\*רותי רכש\* במייל: מק"ט אחד לבנייה בהקדם/);
+  assert.match(r.text, /בטון — 5 קוב _\(לתקרה\)_\n {3}📧 לא בקטלוג — נשלח לרכש/);
+  H.assertButtons(r.buttons, [BTN.done, BTN.cancel]);
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].to, 'ruti@example.com');
+  assert.equal(sent[0].subject, `מק"טים נדרשים לבנייה בהקדם — לבקשת ${u.full_name}`);
+  assert.match(sent[0].text, /להלן מק"טים נדרשים לבנייה בהקדם/);
+  assert.match(sent[0].text, /1\. בטון — 5 קוב \(לתקרה\)/);
+  assert.doesNotMatch(sent[0].text, /שק מלט/, 'רק מה שלא זוהה');
+  assert.deepEqual(pr.writes, [], 'עד "סיום" שום דבר לא נכתב בפריוריטי');
+});
+
+test('מק"טים לבנייה: "לא" — בלי מייל, והפריט על מק"ט כללי כמו קודם; "סיום" שולח בלי שאלה נוספת', async (t) => {
+  H.companies(t, 'test11');
+  const u = buyerWorker();
+  const pr = priority(t);
+  ai(t);
+  const sent = buyer(t);
+  const { say } = H.chat(t, u);
+
+  await toMissing(say);
+  let r = await say(BTN.no);
+  assert.match(r.text, /יישארו על מק"ט כללי 000/);
+  H.assertButtons(r.buttons, [BTN.done, BTN.cancel]);
+  r = await say(BTN.done);
+  assert.match(r.text, /נפתחה ועברה \*לאישור\*/);
+  assert.equal(sent.length, 0);
+  assert.equal(pr.wrote('addDemandLine')[1].args[2].part, '000');
+});
+
+test('מק"טים לבנייה: "סיום" ← "רק המזוהים" — הדרישה יוצאת בלי החסרים, והבקשה ממתינה עם מספר הדרישה', async (t) => {
+  H.companies(t, 'test11');
+  const u = buyerWorker();
+  const pr = priority(t);
+  ai(t);
+  buyer(t);
+  const { say } = H.chat(t, u);
+
+  await toMissing(say);
+  await say(BTN.yes);
+  let r = await say(BTN.done);
+  assert.match(r.text, /\*פריט אחד מחכה למק"ט מהרכש:\*\n• בטון — 5 קוב/);
+  assert.match(r.text, /איך לשלוח את הדרישה\?/);
+  H.assertButtons(r.buttons, ['רק המזוהים ✅', 'לחכות לרכש ⏳', 'עם מק"ט כללי']);
+  assert.deepEqual(pr.writes, []);
+
+  r = await say('רק המזוהים ✅');
+  assert.match(r.text, /PRD26000007\* נפתחה ועברה \*לאישור\*/);
+  assert.match(r.text, /1 פריט/);
+  assert.match(r.text, /פריט אחד מחכה למק"ט מהרכש — כשייבנו אשאל אם לפתוח דרישה נוספת/);
+  assert.deepEqual(pr.wrote('addDemandLine').map((w) => w.args[2].part), ['M-1']);
+  const rec = D.get('SELECT * FROM pd_part_requests WHERE user_id = ?', u.id);
+  assert.equal(rec.mode, 'partial');
+  assert.equal(rec.prdno, 'PRD26000007');
+  assert.equal(rec.status, 'open');
+});
+
+test('מק"טים לבנייה: "לחכות לרכש" ← המק"ט נבנה ← הודעה ליוזם ← "כן, לבנות" ← הדרישה מוכנה עם הכמויות והמק"ט החדש ← "סיום"', async (t) => {
+  H.companies(t, 'test11');
+  const u = buyerWorker();
+  const B77 = part('C-77', 'בטון מובא ב-30 לתקרות');
+  let built = false;
+  const pr = priority(t, {
+    searchParts: async (c, des) => (/בטון/.test(des) ? [B30, B40, ...(built ? [B77] : [])].map((p) => ({ p, score: 1 })) : []),
+    partByCode: async (c, code) => (code === 'C-77' ? B77 : null)
+  });
+  ai(t);
+  buyer(t);
+  const { say, wa } = H.chat(t, u);
+
+  await toMissing(say);
+  await say(BTN.yes);
+  await say(BTN.done);
+  let r = await say('לחכות לרכש ⏳');
+  assert.match(r.text, /הדרישה נשמרה ומחכה לרכש/);
+  assert.match(r.text, /עוד לא נכתב דבר בפריוריטי/);
+  assert.deepEqual(r.buttons, []);
+  assert.deepEqual(pr.writes, []);
+
+  // סבב — עוד לא נבנה: שקט (רק הבקשה של הבדיקה הזו פתוחה)
+  D.run("UPDATE pd_part_requests SET status = 'expired' WHERE user_id != ?", u.id);
+  wa.clear();
+  assert.deepEqual(await Parts.tick(), { checked: 1, told: 0 });
+  assert.equal(wa.texts().length, 0);
+
+  // הרכש בנה כרטיס פריט בשם דומה
+  built = true;
+  assert.deepEqual(await Parts.tick(), { checked: 1, told: 1 });
+  const note = wa.texts().join('\n');
+  assert.match(note, /המק"טים שביקשת נבנו בפריוריטי/);
+  assert.match(note, /בטון — 5 קוב ← \*בטון מובא ב-30 לתקרות\* \(C-77\)/);
+  assert.match(note, /לבנות את הדרישה מחדש עם הכמויות שביקשת והמק"טים המדויקים\?/);
+  assert.deepEqual(await Parts.tick(), { checked: 0, told: 0 }, 'שואלים פעם אחת');
+
+  r = await say('כן, לבנות ✅');
+  assert.match(r.text, /בונים מחדש את הדרישה/);
+  assert.match(r.text, /שק מלט — 10 שק\n {3}✅ M-1/);
+  assert.match(r.text, /בטון — 5 קוב _\(לתקרה\)_\n {3}✅ C-77/);
+  assert.match(r.text, /פרויקט: \*אלעד 49 צפון\* \(PR1\)/);
+  H.assertButtons(r.buttons, [BTN.done, BTN.cancel]);
+
+  r = await say(BTN.done);
+  assert.match(r.text, /נפתחה ועברה \*לאישור\*/);
+  assert.deepEqual(pr.wrote('addDemandLine').map((w) => [w.args[2].part, w.args[2].qty]), [['M-1', 10], ['C-77', 5]]);
+  assert.equal(pr.wrote('createDemand')[0].args[1].approvalCode, '01');
+});
+
+test('מק"טים לבנייה: "לא, תודה" על "לבנות מחדש?" — שום דבר לא נפתח, והשאלה נסגרת', async (t) => {
+  H.companies(t, 'test11');
+  const u = buyerWorker();
+  const pr = priority(t, { searchParts: async (c, des) => (/בטון/.test(des) ? [{ p: part('C-88', 'בטון חדש'), score: 1 }] : []) });
+  ai(t);
+  buyer(t);
+  const { say } = H.chat(t, u);
+  const id = Number(D.run("INSERT INTO pd_part_requests (user_id, company, header, items, missing, mode, status, asked_at, created_at) VALUES (?, 'test11', '{}', '[]', ?, 'wait', 'asked', ?, ?)",
+    u.id, JSON.stringify([{ n: 1, description: 'בטון', qty: 5, unit: 'קוב', known: [], built: { code: 'C-88', des: 'בטון חדש' } }]), D.nowIso(), D.nowIso()).lastInsertRowid);
+
+  const r = await say('לא, תודה ❌');
+  assert.match(r.text, /לא נפתחה דרישה/);
+  assert.equal(D.get('SELECT status FROM pd_part_requests WHERE id = ?', id).status, 'done');
+  assert.deepEqual(pr.writes, []);
+  assert.equal(Parts.owns(u.id, 'כן'), false);
+});
+
+test('מק"טים לבנייה: בלי מנהלת רכש מוגדרת — אין שאלה, כמו קודם', async (t) => {
+  H.companies(t, 'test11');
+  const u = buyerWorker();
+  priority(t);
+  ai(t);
+  const { say } = H.chat(t, u);
+  const r = await toMissing(say);
+  assert.doesNotMatch(r.text, /לבניית מק"ט/);
+  H.assertButtons(r.buttons, [BTN.done, BTN.cancel]);
+});
+
+test('מק"טים לבנייה — זיהוי: רק מק"ט חדש (שלא היה בבקשה), פעיל ובשם דומה', async (t) => {
+  t.mock.method(Priority, 'findPartExact', async () => null);
+  t.mock.method(Priority, 'searchParts', async () => [{ p: part('OLD', 'בורג פח 8'), score: 2, full: true }, { p: part('NEW', 'בורג עץ 6'), score: 1 }]);
+  assert.equal(await Parts._findBuilt('test11', { description: 'בורג פח', known: ['OLD'] }), null, 'מילה אחת מתוך שתיים — לא מספיק');
+  t.mock.method(Priority, 'searchParts', async () => [{ p: part('OLD', 'בורג פח 8'), score: 2, full: true }, { p: part('NEW', 'בורג פח 10'), score: 2, full: true }]);
+  assert.equal((await Parts._findBuilt('test11', { description: 'בורג פח', known: ['OLD'] })).PARTNAME, 'NEW');
+  t.mock.method(Priority, 'findPartExact', async () => part('EX', 'בורג פח'));
+  assert.equal((await Parts._findBuilt('test11', { description: 'בורג פח', known: ['OLD'] })).PARTNAME, 'EX', 'תיאור זהה — קודם');
+});
+
+test('מק"טים לבנייה: המייל לא יצא (אין שרת דואר ואין Gmail) — העובד יודע, מנהל המערכת מקבל פירוט, והפריט על 000', async (t) => {
+  H.companies(t, 'test11');
+  const u = buyerWorker();
+  priority(t);
+  ai(t);
+  t.mock.method(Settings, 'defaults', () => ({ ...Settings.DEFAULTS, buyerName: 'רותי רכש', buyerEmail: 'ruti@example.com' }));
+  t.mock.method(Mailer, 'isEnabled', () => false);
+  const { say } = H.chat(t, u);
+
+  await toMissing(say);
+  const r = await say(BTN.yes);
+  assert.match(r.text, /לא הצלחתי לשלוח את המייל לרכש — מנהל המערכת קיבל פירוט/);
+  assert.doesNotMatch(r.text, /Gmail|SMTP/, 'בלי פרטים טכניים לעובד');
+  assert.match(r.text, /בטון — 5 קוב _\(לתקרה\)_\n {3}🆕 לא בקטלוג — מק"ט כללי 000/);
+  H.assertButtons(r.buttons, [BTN.done, BTN.cancel]);
+  assert.equal(D.get('SELECT COUNT(*) n FROM pd_part_requests WHERE user_id = ?', u.id).n, 0);
+});

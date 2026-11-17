@@ -871,6 +871,29 @@ CREATE TABLE IF NOT EXISTS rfq (
   task_id       INTEGER REFERENCES tasks(id) ON DELETE SET NULL,
   created_at    TEXT    NOT NULL
 );
+/*
+ * 🆕 מק"טים לבנייה — פריטים מדרישת רכש שאין להם מק"ט, שנשלחו במייל למנהלת הרכש (‎priority/pd-parts.js‎).
+ * ‎header‎ — כותרת הדרישה (פרויקט, מחסן, רשימת מאשרים, תאריך); ‎items‎ — כל שורות הדרישה (כמויות ומק"טים);
+ * ‎missing‎ — הפריטים בלי מק"ט: מה ביקשו, אילו מק"טים כבר היו בקטלוג (‎known‎), ומה נבנה (‎built‎).
+ * ‎mode‎: draft (הדרישה עוד בבנייה) / wait (מחכה לרכש) / partial (נשלחה רק עם המזוהים) / general (נשלחה עם 000).
+ * ‎status‎: open (מחכה לבנייה) / asked (נשאל אם לבנות מחדש) / done / expired.
+ */
+CREATE TABLE IF NOT EXISTS pd_part_requests (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  company     TEXT    NOT NULL,
+  header      TEXT    NOT NULL DEFAULT '{}',
+  items       TEXT    NOT NULL DEFAULT '[]',
+  missing     TEXT    NOT NULL DEFAULT '[]',
+  mode        TEXT    NOT NULL DEFAULT 'draft',
+  prdno       TEXT,
+  status      TEXT    NOT NULL DEFAULT 'open',
+  sent_to     TEXT    NOT NULL DEFAULT '',
+  checked_at  TEXT,
+  asked_at    TEXT,
+  created_at  TEXT    NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_pd_part_requests ON pd_part_requests(status, user_id);
 /* ספק בפנייה — ‎status‎: pending / no_email / sent / replied / declined / failed / skipped. ‎offer‎ — מה חולץ מהתשובה */
 CREATE TABLE IF NOT EXISTS rfq_vendors (
   id             INTEGER PRIMARY KEY AUTOINCREMENT,
