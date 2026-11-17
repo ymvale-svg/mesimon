@@ -1833,7 +1833,8 @@ const DEFAULT_SETTINGS = {
    */
   ai_model: 'claude-opus-5-5',
   ai_bot_model: '',                        // הבוט וההקלטה — ריק = המודל הראשי
-  ai_fast_mode: true,                      // מצב מהיר לשיחה חיה (בוט, הקלטה)
+  ai_fast_mode: false,                     // מצב מהיר לשיחה חיה (בוט, הקלטה) — כבוי מ-17.11.26: פי 2 במחיר
+  ai_scan_model: 'claude-haiku-5-5',       // מיון המיילים בסריקה (משימה / תשובה / כלום) — זול; התשובה עצמה במודל הראשי
   ai_email_attempts: 2,                    // כמה מיילים שלא נענו לפני מעבר לוואטסאפ
   ai_days_between_emails: 2,
   ai_whatsapp_enabled: true,
@@ -2267,6 +2268,15 @@ function migrate() {
    * קריאה בכל שעה ולא רק בלילה, יותר שרשורים ביום, ואיחוד לקחים יומי. רק
    * מה שעדיין על ברירת המחדל הישנה מתעדכן — מנהל ששינה ידנית שומר על בחירתו.
    */
+  /*
+   * 💰 חיסכון בקרדיטי AI (17.11.26, "תוכנית — חיסכון בקרדיטי AI.md" סעיף 5.2): מצב מהיר כבוי — פעם אחת, גם אם נשמר
+   * דלוק בטופס ההגדרות. מנהל יכול להדליק שוב ב"🧠 מודלים".
+   */
+  if (getSetting('migr_fast_mode_off', null) === null) {
+    setSetting('ai_fast_mode', false);
+    setSetting('migr_fast_mode_off', true);
+  }
+
   if (getSetting('migr_memory_always_on', null) === null) {
     if (getSetting('mail_memory_hours', null) === '19:00-07:00') setSetting('mail_memory_hours', '');
     if (getSetting('mail_memory_nightly_threads', null) === 400) setSetting('mail_memory_nightly_threads', 1500);

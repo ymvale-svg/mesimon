@@ -230,7 +230,21 @@ async function analyze(user, mail, conn = null) {
     'החלט לפי ההנחיות.'
   ].filter((l) => l !== null).join('\n');
 
-  const out = await Claude.json({ feature: 'mail.scan', userId: user?.id, system: skill(), content: [...docs.map((d) => d.block), { type: 'text', text }], schema: ANALYSIS_SCHEMA, effort: 'low' });
+  const content = [...docs.map((d) => d.block), { type: 'text', text }];
+  const ask = (model) => Claude.json({ feature: 'mail.scan', userId: user?.id, system: skill(), content, schema: ANALYSIS_SCHEMA, effort: 'low', model });
+  /*
+   * 💰 מיון המיילים — במודל זול (‎ai_scan_model‎, ברירת מחדל Haiku; הוחלט 17.11.26). השירות דחה אותו (מודל לא זמין,
+   * בקשה שלא נתמכת בו) — אותה בקשה במודל הראשי, כדי שמייל לא ייפול בגלל המודל. תקלה זמנית (429 / 5xx) — כמו תמיד.
+   */
+  const scanModel = String(D.getSetting('ai_scan_model', 'claude-haiku-5-5') || '').trim() || null;
+  let out;
+  try {
+    out = await ask(scanModel);
+  } catch (err) {
+    if (!scanModel || !(err.status >= 400 && err.status < 500 && err.status !== 429)) throw err;
+    console.error(`[משימון] מיון המייל ב-${scanModel} נדחה (${err.status}) — במודל הראשי:`, err.message);
+    out = await ask(null);
+  }
   return sanitize(out, user, users);
 }
 

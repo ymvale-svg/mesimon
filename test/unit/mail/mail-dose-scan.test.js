@@ -70,3 +70,37 @@ test('50% — בלי תשובה מראש: ‎replyWanted‎ ונכתבת רק ב
   await MailScan.prepareReply(id, { type: 'user', id: u.id });
   assert.equal(drafted(), 1, 'כבר מוכנה — לא שוב');
 });
+
+// ---------------------------------------------------------------- 💰 מודל המיון (סעיף 5.1)
+
+test('המיון בסריקה — ב-Haiku (‎ai_scan_model‎); התשובה עצמה לא', async (t) => {
+  const { u, conn, gmailId } = setup(t);
+  const { calls } = Fakes.claude(t, (opts) => (opts.feature === 'mail.scan' ? ANALYSIS : {}));
+  D.setUserPref(u.id, 'mailDose', { lastUse: new Date().toISOString(), drops: 0 });
+  await MailScan._internal.processMessage(u, conn, gmailId);
+  const scan = calls.filter((c) => c.opts.feature === 'mail.scan');
+  assert.equal(scan.length, 1);
+  assert.equal(scan[0].opts.model, 'claude-haiku-5-5');
+});
+
+test('Haiku נדחה (400) — אותו מייל במודל הראשי, ולא נופל', async (t) => {
+  const { u, conn, gmailId } = setup(t);
+  const models = [];
+  Fakes.claude(t, (opts) => {
+    if (opts.feature !== 'mail.scan') return {};
+    models.push(opts.model ?? null);
+    if (opts.model) { const err = new Error('model not available'); err.status = 400; throw err; }
+    return ANALYSIS;
+  });
+  assert.equal(await MailScan._internal.processMessage(u, conn, gmailId), 'suggested');
+  assert.deepEqual(models, ['claude-haiku-5-5', null]);
+});
+
+test('ריק ב-‎ai_scan_model‎ — המודל הראשי', async (t) => {
+  const { u, conn, gmailId } = setup(t);
+  const { calls } = Fakes.claude(t, (opts) => (opts.feature === 'mail.scan' ? ANALYSIS : {}));
+  D.setSetting('ai_scan_model', '');
+  t.after(() => D.setSetting('ai_scan_model', 'claude-haiku-5-5'));
+  await MailScan._internal.processMessage(u, conn, gmailId);
+  assert.equal(calls.find((c) => c.opts.feature === 'mail.scan').opts.model, null);
+});
