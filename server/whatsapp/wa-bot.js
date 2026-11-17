@@ -69,6 +69,7 @@ const BotTips = require('./bot-tips');
 const FormFill = require('../mail').FormFill;
 const MeetCoord = require('../meetings').MeetingCoord;
 const Reminders = require('./reminders');
+const Places = require('./places');
 const SentFollowup = require('../mail').SentFollowup;
 const DayDigest = require('../agents').DayDigest;
 const Briefing = require('../meetings').Briefing;
@@ -121,7 +122,8 @@ function locationOf(m, typeWebhook = 'incomingMessageReceived') {
   let found = null;
   let path = '';
   for (const [k, v] of Object.entries(m ?? {})) {
-    if (!v || typeof v !== 'object') continue;
+    // מיקום מצוטט (תשובה על הודעת מיקום) או מועבר — לא המיקום של העובד (אבטחה 17.11.26)
+    if (!v || typeof v !== 'object' || /quoted/i.test(k) || v.isForwarded) continue;
     const c = coords(v) ?? Object.entries(v).map(([k2, v2]) => { const x = coords(v2); if (x) path = `${k}.${k2}`; return x; }).find(Boolean);
     if (c) { found = c; path ||= k; break; }
   }
@@ -1066,12 +1068,15 @@ async function handleDirect(msg) {
    * לפני "העובד כתב": עדכוני מיקום מגיעים כל כמה שניות, והם לא שיחה. על העדכונים — לא עונים (‎text: null‎)
    */
   if (msg.location) {
+    // מי שתזכורות כבויות אצלו — המיקום לא נבדק ולא נשמר (אבטחה 17.11.26)
+    if (!WaActions.allowed(actor, 'reminders')) return;
     const r = Reminders.onLocation(user.id, msg.location);
     // עדכון שקט — ליומן פעם בחצי שעה לכל היותר (כדי לראות שהעדכונים מגיעים, ובאיזו צורה)
     const quietLogged = quietLocationLog.get(user.id) ?? 0;
     if (r.quiet && Date.now() - quietLogged < 30 * 60000) return;
     if (r.quiet) quietLocationLog.set(user.id, Date.now());
-    log({ ...base, text: `[📍 ${msg.location.live ? 'מיקום בזמן אמת' : 'מיקום'}]`, action: 'reminders_place', status: 'ok', result: `${r.result} · ${msg.location.shape ?? ''}`.slice(0, 300), reply: r.text ?? undefined });
+    // ביומן — בלי שם המקום ובלי התשובה (שבה שם המקום): היומן נשמר 90 יום ומנהלים רואים אותו (אבטחה 17.11.26)
+    log({ ...base, text: `[📍 ${msg.location.live ? 'מיקום בזמן אמת' : 'מיקום'}]`, action: 'reminders_place', status: 'ok', result: `${r.log ?? r.result} · ${msg.location.shape ?? ''}`.slice(0, 300) });
     if (r.text) await sendText(msg.chatId, r.text);
     return;
   }
@@ -1822,6 +1827,7 @@ async function tick() {
     }
     if (Claude.isEnabled() && WaActions.byKey('group_tasks')?.enabled) await processGroups();
     prune();
+    Places.prune();
   } catch (err) {
     console.error('[משימון] סבב בוט הוואטסאפ נכשל:', err.message);
   } finally {
