@@ -154,6 +154,12 @@ const files = new Map(); // userId → { file, at }
 
 function offerFile(userId, file) { if (file?.url) files.set(userId, { file, at: Date.now() }); }
 
+/** הקובץ שממתין לבקשה — בלי לקחת אותו (להבנת הבקשה: "תתקן את המסמך" מתייחס אליו) */
+function peekFile(userId) {
+  const f = files.get(userId);
+  return f && Date.now() - f.at < cfg.FILE_MS ? f.file : null;
+}
+
 function takeFile(userId) {
   const f = files.get(userId);
   files.delete(userId);
@@ -477,6 +483,6 @@ function reset() {
 }
 
 module.exports = {
-  DEFAULT_PHONE, TRIGGER, MENTION, phone, isInstinct, allowed, redact, checkFile, offerFile, takeFile, request, receive, openQuestion, inConversation, looksLikeDocument,
+  DEFAULT_PHONE, TRIGGER, MENTION, phone, isInstinct, allowed, redact, checkFile, offerFile, peekFile, takeFile, request, receive, openQuestion, inConversation, looksLikeDocument,
   _internal: { cfg, reset, targetOf, classify, expire }
 };

@@ -760,7 +760,9 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
 
   { const r = await flowNoAi({ actor, insightsReply, listReply, menuReply, out, state, t, todayReply, withReadAloud }); if (r !== NEXT) return r; }
 
-  const u = await understand(user, actor, state, t, projects, myOpen);
+  // 📎 קובץ שנשלח עם ההודעה (או ממש לפניה) — ה-AI צריך לדעת שהוא קיים: "תתקן את המסמך לתאריך …" הוא בקשה על הקובץ,
+  // לא שינוי תאריך של משימה (באג 17.11.26)
+  const u = await understand(user, actor, state, t, projects, myOpen, { file: Instinct.allowed(actor) ? Instinct.peekFile(user.id) : null });
   { const r = await flowIntentCancel({ out, u }); if (r !== NEXT) return r; }
   // 🤖 בקשה כללית (לא עבודה) — לאינסטינקט, ברקע
   { const r = await flowInstinct({ actor, dry, out, t, u, user }); if (r !== NEXT) return r; }
