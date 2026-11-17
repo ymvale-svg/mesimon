@@ -75,7 +75,7 @@ async function toReview(say) {
   let r = await say('10 שקי מלט, 5 קוב בטון לתקרה');
   assert.match(r.text, /בטון\* — 5 קוב/);
   assert.match(r.text, /התכוונת ל/);
-  H.assertButtons(r.buttons, ['בטון ב-30', 'בטון ב-40', 'אף אחד ❌']);
+  H.assertButtons(r.buttons, ['בטון ב-30', 'בטון ב-40', 'שלח לבנייה לרכש 🆕']);
 
   r = await say('בטון ב-30');
   assert.match(r.text, /דרישת רכש — 2 פריטים/);
@@ -396,7 +396,7 @@ function buyer(t) {
 async function toMissing(say) {
   await toItems(say);
   await say('10 שקי מלט, 5 קוב בטון לתקרה');
-  return say('אף אחד ❌');
+  return say('שלח לבנייה לרכש 🆕');
 }
 
 test('מק"טים לבנייה: "אף אחד" — בלי שאלה בטיוטא; ב"סיום" — רק המזוהים / לחכות (בלי מק"ט כללי)', async (t) => {
@@ -665,4 +665,68 @@ test('💬 מנהלת הרכש — הערה בלבד: העובד מקבל אות
   assert.equal(v.items[0].built, null);
   assert.match(wa.texts().join('\n'), /"איזה סוג בטון\? ב-30 או ב-40\?"/);
   assert.doesNotMatch(wa.texts().join('\n'), /להמשיך/);
+});
+
+// ---------------------------------------------------------------------------
+// 🆕 לרכש — רק בתיאור מדויק: "פטיש" לא יוצא לבנייה, "פטיש 5 ק"ג" כן
+// ---------------------------------------------------------------------------
+
+/** ה-AI: "פטיש" — לא בקטלוג; בדיקת התיאור: בלי משקל — לא מדויק */
+function hammerAi(t, seen = []) {
+  return H.claude(t, {
+    edit: () => ({ action: 'add', adds: [{ description: 'שק מלט', qty: 10, unit: 'שק', note: '' }, { description: 'פטיש', qty: 2, unit: "יח'", note: '' }], updates: [], removes: [], question: '' }),
+    match: (input) => ({ results: input.items.map((it) => (it.description === 'שק מלט'
+      ? { line: it.line, kind: 'exact', codes: ['M-1'], chapter: '20', topic: '20-10', why: '' }
+      : { line: it.line, kind: 'none', codes: [], chapter: '20', topic: '20-10', why: 'אין פטישים בקטלוג' })) }),
+    detail: (input) => { seen.push(...input.items.map((x) => x.description)); return { results: input.items.map((x) => ({ line: x.line, specific: /\d/.test(x.description), question: 'איזה פטיש? משקל וסוג — למשל "פטיש 5 ק"ג ידית עץ"' })) }; }
+  });
+}
+
+test('לרכש רק בתיאור מדויק: "פטיש" ← הבוט מבקש תיאור ← "5 ק"ג" ← "פטיש 5 ק"ג" יוצא לרכש', async (t) => {
+  H.companies(t, 'test11');
+  const u = buyerWorker();
+  const pr = priority(t);
+  const seen = [];
+  hammerAi(t, seen);
+  const sent = buyer(t);
+  const { say } = H.chat(t, u);
+
+  await toItems(say);
+  let r = await say('10 שקי מלט, 2 פטישים');
+  assert.match(r.text, /🆕 \*פטיש\* — 2 יח'/);
+  assert.match(r.text, /כדי שיוכלו לבנות אותו צריך תיאור מדויק/);
+  assert.match(r.text, /איזה פטיש\? משקל וסוג/);
+  H.assertButtons(r.buttons, ['להסיר את הפריט', BTN.cancel]);
+
+  r = await say(BTN.done);                       // "סיום" לא עוקף
+  assert.match(r.text, /קודם — תיאור מדויק ל\*פטיש\*/);
+
+  r = await say('5 ק"ג');                        // תוספת לתיאור
+  assert.match(r.text, /✏️ פטיש 5 ק"ג/);
+  assert.match(r.text, /פטיש 5 ק"ג — 2 יח'\n {3}🆕 לא בקטלוג — יישלח לרכש לבניית מק"ט/);
+  H.assertButtons(r.buttons, [BTN.done, BTN.cancel]);
+  assert.deepEqual(seen, ['פטיש', 'פטיש 5 ק"ג']);
+
+  await say(BTN.done);
+  await say('לחכות לרכש ⏳');
+  assert.match(sent[0].text, /1\. פטיש 5 ק"ג — 2 יח'/);
+  assert.doesNotMatch(sent[0].text, /1\. פטיש — /);
+  assert.deepEqual(pr.writes, []);
+});
+
+test('לרכש רק בתיאור מדויק: "להסיר את הפריט" — הפריט יורד, והדרישה יוצאת עם השאר', async (t) => {
+  H.companies(t, 'test11');
+  const u = buyerWorker();
+  const pr = priority(t);
+  hammerAi(t);
+  buyer(t);
+  const { say } = H.chat(t, u);
+  await toItems(say);
+  await say('10 שקי מלט, 2 פטישים');
+  let r = await say('להסיר את הפריט');
+  assert.match(r.text, /הוסר: פטיש/);
+  assert.match(r.text, /דרישת רכש — 1 פריט/);
+  r = await say(BTN.done);
+  assert.match(r.text, /נפתחה ועברה \*לאישור\*/);
+  assert.deepEqual(pr.wrote('addDemandLine').map((w) => w.args[2].part), ['M-1']);
 });
