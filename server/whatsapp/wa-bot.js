@@ -1063,6 +1063,8 @@ async function handleDirect(msg) {
    * לפני "העובד כתב": עדכוני מיקום מגיעים כל כמה שניות, והם לא שיחה. על העדכונים — לא עונים (‎text: null‎)
    */
   if (msg.location) {
+    // מי שתזכורות כבויות אצלו — המיקום לא נבדק ולא נשמר (אבטחה 17.11.26)
+    if (!WaActions.allowed(actor, 'reminders')) return;
     const r = Reminders.onLocation(user.id, msg.location);
     // עדכון שקט — ליומן פעם בחצי שעה לכל היותר (כדי לראות שהעדכונים מגיעים, ובאיזו צורה)
     const quietLogged = quietLocationLog.get(user.id) ?? 0;
@@ -1820,10 +1822,10 @@ async function tick() {
     }
     if (Claude.isEnabled() && WaActions.byKey('group_tasks')?.enabled) await processGroups();
     prune();
+    Places.prune();
   } catch (err) {
     console.error('[משימון] סבב בוט הוואטסאפ נכשל:', err.message);
   } finally {
-    Places.prune();
     busy = false;
   }
 }
