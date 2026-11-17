@@ -583,6 +583,8 @@ for (const [name, first] of [['קובץ עם כיתוב', true], ['קובץ וא
     assert.equal(out[0].method, 'sendFileByUrl');
     assert.equal(out[0].body.urlFile, 'https://x/AutoLIELLO.pdf');
     assert.match(out[0].body.caption, /30\.09\.2026/);
+    // מסמך — "אם אין לך נתון בוודאות, אל תשלים" (17.11.26: יתרה "טעונה אימות" נכתבה למסמך)
+    assert.ok(out[0].body.caption.endsWith(Instinct.NO_GUESS));
     assert.doesNotMatch(toUser(wa, u).map((c) => c.body?.message ?? '').join('\n'), /תאריך היעד/);
   });
 }
@@ -602,4 +604,49 @@ test('📎 PDF עם "תתקן את המסמך…", וה-AI בכל זאת ענה 
   assert.equal(out.length, 1);
   assert.equal(out[0].body.urlFile, 'https://x/loan.pdf');
   assert.match(out[0].body.caption, /30\.09\.2026/);
+});
+
+test('התשובה של אינסטינקט נגמרת בשאלה ("להכין כך?") — "כן, אבל על העמוד השני" חוזר אליו בציטוט, גם כשה-AI לא מזהה', async (t) => {
+  // באג 17.11.26: "תתקן במסמך" ← אינסטינקט שאל "להכין כך?" ← "כן, אבל אל תרשום על העמ' הראשון אלא על השני" לא הגיע אליו
+  const wa = setup(t);
+  const u = person();
+  ai(t, { intent: 'other' });
+  await say(u.phone, 'אינסטינקט, תתקן במסמך את התאריך');
+  await settle();
+  await fromInstinct('אוכל להכין עותק עם התאריך המבוקש. להכין כך?', outIdOf(u), { id: 'ask-1' });
+  wa.clear();
+  await say(u.phone, "כן, אבל אל תרשום את זה על העמ' הראשון אלא על העמ' השני");
+  await settle();
+  const back = toInstinct(wa);
+  assert.equal(back.length, 1);
+  assert.match(back[0].body.message, /העמ' השני/);
+  assert.equal(back[0].body.quotedMessageId, 'ask-1');
+});
+
+test('התשובה של אינסטינקט בלי שאלה — ההודעה הבאה לא נשלחת אליו מעצמה', async (t) => {
+  const wa = setup(t);
+  const u = person();
+  ai(t, { intent: 'other' });
+  await say(u.phone, 'אינסטינקט, תתרגם לי את המשפט');
+  await settle();
+  await fromInstinct('הנה התרגום.', outIdOf(u));
+  wa.clear();
+  await say(u.phone, 'מה המשימות שלי');
+  await settle();
+  assert.equal(toInstinct(wa).length, 0);
+});
+
+test('תשובה לשאלה בבקשה על מסמך — גם היא יוצאת עם "אל תשלים נתון שאין לך בוודאות"; בקשה בלי מסמך — בלי', async (t) => {
+  const wa = setup(t);
+  const u = person();
+  ai(t, { intent: 'other' });
+  await say(u.phone, 'אינסטינקט, תתרגם לי את המשפט');
+  await settle();
+  assert.doesNotMatch(toInstinct(wa)[0].body.message, /בוודאות/);
+  D.run("UPDATE instinct_requests SET text = '[📎 אישור.pdf] ' || text WHERE user_id = ?", u.id);
+  await fromInstinct('להכין כך?', outIdOf(u), { id: 'ask-2' });
+  wa.clear();
+  await say(u.phone, 'כן');
+  await settle();
+  assert.ok(toInstinct(wa)[0].body.message.endsWith(Instinct.NO_GUESS));
 });

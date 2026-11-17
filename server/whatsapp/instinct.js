@@ -51,6 +51,12 @@ const chatId = () => `${phone()}@c.us`;
 const isInstinct = (p) => Boolean(p) && WhatsApp.normalizePhone(p) === phone();
 const allowed = (actor) => WaActions.allowed(actor, 'instinct');
 
+/**
+ * בקשה על מסמך (קובץ שצורף, או המשך / תשובה בבקשה שהיה בה קובץ) — שורה קבועה בסוף, בלי שום פרט עלינו: נתון שאין
+ * לו בוודאות — לא להשלים. באג 17.11.26: בתיקון אישור יתרה ל-30.09 אינסטינקט הכין מסמך עם יתרה ש"עדיין טעונה אימות".
+ */
+const NO_GUESS = '⚠️ חשוב: אם אין לך נתון בוודאות (סכום, תאריך, יתרה) — אל תשלים, אל תעגל ואל תעתיק אותו מתאריך או ממסמך אחר. השאר אותו ריק או סמן "לבדיקה", ושאל אותי.';
+const aboutFile = (row) => String(row?.text ?? '').startsWith('[📎');
 const rowById = (id) => D.get('SELECT * FROM instinct_requests WHERE id = ?', id);
 const userChat = (userId) => {
   const p = D.get('SELECT phone FROM users WHERE id = ?', userId)?.phone;
@@ -219,6 +225,7 @@ async function send(id, user, text, { file, question }) {
   // המשך לבקשה שנענתה עכשיו — ההקשר שלה נשלח איתה: השיחה עם אינסטינקט משותפת לכל העובדים
   const prev = question ? null : previousOf(user.id);
   if (prev) body = body ? `בהמשך לבקשה הקודמת: "${prev.text.slice(0, 300)}"\nעכשיו: ${body}` : `בהמשך לבקשה הקודמת: "${prev.text.slice(0, 300)}"`;
+  if (file || aboutFile(prev) || aboutFile(question)) body = body ? `${body}\n\n${NO_GUESS}` : NO_GUESS;
   let sent;
   if (file) {
     sent = await WhatsApp.call(ch, 'sendFileByUrl', { http: 'POST', body: { chatId: chatId(), urlFile: file.url, fileName: file.name || 'file', caption: body, ...(question ? { quotedMessageId: question.in_id } : {}) } });
@@ -329,8 +336,9 @@ async function deliver(row, msg) {
     await sendText(to, text);
   }
   const first = row.status !== 'answered';
-  D.run("UPDATE instinct_requests SET status = 'answered', answered_at = ?, reply = ? WHERE id = ?",
-    D.nowIso(), first ? text.slice(0, 1000) : `${row.reply}\n${text}`.slice(0, 1000), row.id);
+  // ‎in_id‎ — ההודעה האחרונה של אינסטינקט בבקשה: תשובת העובד עליה ("כן, אבל…") יוצאת בציטוט שלה (‎awaitingReply‎)
+  D.run("UPDATE instinct_requests SET status = 'answered', answered_at = ?, reply = ?, in_id = COALESCE(?, in_id) WHERE id = ?",
+    D.nowIso(), first ? text.slice(0, 1000) : `${row.reply}\n${text}`.slice(0, 1000), msg.id ? String(msg.id) : null, row.id);
   lastDelivery = { id: row.id, at: Date.now() };
   if (row.user_msg_id) void react({ chatId: to, id: row.user_msg_id }, '');
   // בהיסטוריה של השיחה — רק סימון, לא התוכן: מה שאינסטינקט כתב אינו הוראה לבוט שלנו
@@ -441,6 +449,16 @@ function inConversation(userId) {
   return last.status === 'answered' && Date.now() - new Date(last.answered_at).getTime() < cfg.FOLLOW_MS;
 }
 
+/**
+ * התשובה האחרונה של אינסטינקט לעובד הסתיימה בשאלה ("…להכין כך?"), ועוד לא עברו עשר דקות — ההודעה הבאה של העובד
+ * ("כן, אבל על העמוד השני") היא התשובה עליה. באג 17.11.26: התשובה הלכה להבנת הבקשה, שלא ראתה את השאלה, ולא חזרה לאינסטינקט.
+ */
+function awaitingReply(userId) {
+  const last = D.get("SELECT * FROM instinct_requests WHERE user_id = ? AND kind IN ('request', 'answer') ORDER BY id DESC LIMIT 1", userId);
+  if (last?.status !== 'answered' || !last.answered_at || Date.now() - new Date(last.answered_at).getTime() > cfg.FOLLOW_MS) return null;
+  return /\?\s*\S{0,3}\s*$/.test(String(last.reply ?? '').trim()) ? last : null;
+}
+
 /** שאלה מאינסטינקט שהועברה לעובד ועוד לא נענתה — ‎null‎ אם אין, או שעבר הזמן */
 function openQuestion(userId) {
   const q = D.get("SELECT * FROM instinct_requests WHERE user_id = ? AND kind = 'question' AND status = 'open' ORDER BY id DESC LIMIT 1", userId);
@@ -483,6 +501,7 @@ function reset() {
 }
 
 module.exports = {
-  DEFAULT_PHONE, TRIGGER, MENTION, phone, isInstinct, allowed, redact, checkFile, offerFile, peekFile, takeFile, request, receive, openQuestion, inConversation, looksLikeDocument,
+  DEFAULT_PHONE, TRIGGER, MENTION, phone, isInstinct, allowed, redact, checkFile, offerFile, peekFile, takeFile, request, receive, openQuestion, awaitingReply, inConversation, looksLikeDocument,
+  NO_GUESS,
   _internal: { cfg, reset, targetOf, classify, expire }
 };
