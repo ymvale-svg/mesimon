@@ -906,19 +906,23 @@ function createFromSuggestion(sug, actor, edits = {}) {
   const summary = String(edits.summary ?? data.summary ?? '').trim();
   const fromWhatsApp = data.source === 'whatsapp';
   const fromAgent = data.source === 'agent';
+  // 🎥 מפגישה מוקלטת (‎meetings/meeting-suggestions.js‎)
+  const fromMeeting = data.source === 'meeting';
   const description = [
     summary,
     '',
-    fromAgent
+    fromMeeting
+      ? `🎥 מהמשימות של הפגישה "${data.meetingTitle}"${sug.from_name ? ` · הסיכום מ${sug.from_name}` : ''} · ${shortDate(sug.received_at)}`
+      : fromAgent
       ? `🤖 הוצע על ידי ${sug.from_name} · מהשאלה: "${sug.subject}" · ${shortDate(sug.received_at)}`
       : fromWhatsApp
       ? `💬 מקבוצת הוואטסאפ "${data.groupName}" · ${sug.from_name} · ${shortDate(sug.received_at)}`
       : `📧 מהמייל של ${sug.from_name}${sug.from_email && sug.from_email !== sug.from_name ? ` · ${sug.from_email}` : ''} · ${shortDate(sug.received_at)}`,
-    !fromWhatsApp && !fromAgent && sug.subject ? `נושא: ${sug.subject}` : null
+    !fromWhatsApp && !fromAgent && !fromMeeting && sug.subject ? `נושא: ${sug.subject}` : null
   ].filter((l) => l !== null).join('\n').trim();
 
   const taskId = hooks.createTask(actor, {
-    title: String(edits.title ?? data.title ?? sug.subject).trim().slice(0, 120) || 'משימה מהמייל',
+    title: String(edits.title ?? data.title ?? sug.subject).trim().slice(0, 120) || (fromMeeting ? 'משימה מהפגישה' : 'משימה מהמייל'),
     description,
     // מקבוצה — תמיד הפרויקט שהקבוצה קשורה אליו, גם אם נשלח אחר: אין ערבוב בין פרויקטים
     projectId: fromWhatsApp ? data.projectId : (edits.projectId || (fromAgent ? data.projectId : null) || null),
@@ -932,17 +936,17 @@ function createFromSuggestion(sug, actor, edits = {}) {
       const owner = people.find((p) => p.role === 'checklist' && p.checklistIndex === i + 1);
       return { text, note: owner ? `באחריות: ${nameOf(owner.userId)}` : '' };
     }),
-    source: fromWhatsApp ? 'whatsapp' : fromAgent ? 'agent' : 'email',
+    source: fromWhatsApp ? 'whatsapp' : fromAgent ? 'agent' : fromMeeting ? 'meeting' : 'email',
     sourceRef: sug.header_id,
     sourceUserId: sug.user_id,
-    auditNote: fromWhatsApp
+    auditNote: fromMeeting ? `המשימה נוצרה מהמשימות של הפגישה "${data.meetingTitle}"` : fromWhatsApp
       ? (data.personal ? `המשימה נוצרה מהודעת וואטסאפ של ${sug.from_name}` : `המשימה נוצרה מבקשה של ${sug.from_name} בקבוצת "${data.groupName}"`)
       : fromAgent ? `המשימה נוצרה מהצעה של הסוכן "${sug.from_name}"` : `המשימה נוצרה ממייל של ${sug.from_name}`
   });
   // בקשה לפגישה — מהמייל, מקבוצה או מהוואטסאפ האישי: "📅 פגישה לקביעה"
   if (data.meeting) D.run('UPDATE tasks SET meeting_pending = 1 WHERE id = ?', taskId);
   // 📧 עותק של המייל במשימה — לכל מי שעובד עליה (ברקע)
-  if (!fromWhatsApp && !fromAgent) captureSourceMail(taskId, sug).catch((err) => console.error('[משימון] שמירת המייל המקורי במשימה נכשלה:', err.message));
+  if (!fromWhatsApp && !fromAgent && !fromMeeting) captureSourceMail(taskId, sug).catch((err) => console.error('[משימון] שמירת המייל המקורי במשימה נכשלה:', err.message));
 
   // מי שביקש בקבוצה — יודע שהבקשה התקבלה ונפתחה
   if (fromWhatsApp && data.requester?.id && data.requester.id !== actor.id) {
@@ -954,7 +958,7 @@ function createFromSuggestion(sug, actor, edits = {}) {
   // מי שרק צריך לדעת — תיוג בהערה פנימית, ומשם ההתראה הרגילה של תיוג
   const watchers = people.filter((p) => p.role === 'watcher').map((p) => p.userId).filter((id) => id !== actor.id);
   if (watchers.length) {
-    const body = `${watchers.map((id) => `@${nameOf(id)}`).join(' ')} לידיעתך — משימה מהמייל של ${sug.from_name}`;
+    const body = `${watchers.map((id) => `@${nameOf(id)}`).join(' ')} לידיעתך — ${fromMeeting ? `משימה מהפגישה "${data.meetingTitle}"` : `משימה מהמייל של ${sug.from_name}`}`;
     const c = D.run('INSERT INTO comments (task_id, author_type, author_id, body, internal, created_at) VALUES (?,?,?,?,1,?)',
       taskId, 'user', actor.id, body, D.nowIso());
     for (const uid of watchers) {

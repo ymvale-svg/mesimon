@@ -468,7 +468,7 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
   // 🎙 הקלטת פגישה מוואטסאפ: "לאיזו פגישה?", "לפתוח את המשימות?", ו"הקלטת פגישה" (ההקלטה הבאה)
   { const c = { actor, converse, dry, keep, out, state, t, user }; const r = await flowMeetingAudioAnswer(c); if (r !== NEXT) return r; state = c.state; }
   { const r = await flowMeetingAudioRequest({ actor, out, t }); if (r !== NEXT) return r; }
-  // 🎥 אחרי פגישה מוקלטת: "לפתוח משימות ✅" / "לא" על המשימות שהוצעו
+  // 🎥 אחרי פגישה מוקלטת: "תפתח אותן" (במילים) על המשימות, ו"כן" / "לא" על שליחת הסיכום
   { const c = { actor, dry, keep, out, state, t }; const r = await flowOnMeetingTasks(c); if (r !== NEXT) return r; state = c.state; }
   { const c = { actor, dry, keep, out, state, t }; const r = await flowOnPlainMail(c); if (r !== NEXT) return r; state = c.state; }
   // 🎥 אחרי פגישה מוקלטת: "סיכום הפגישה", "משימות מהפגישה", "הקלטת הפגישה"
@@ -712,6 +712,11 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
     if (!request) {
       return out(`מה לכתוב ל${contact.name || contact.email}?`, { draft: { kind: 'email_pick', name: contact.name, request: '', candidates: [contact], taskId } },
         { action: 'send_email', status: 'unclear', result: 'חסר תוכן' });
+    }
+    // "שלח לגולן את סיכום הפגישה" — הסיכום המלא של הפגישה המוקלטת, כמו שהוא (לא נוסח שה-AI כותב מהמילים של הבקשה)
+    if (!taskId && !dry) {
+      const sum = await MeetingFollowup.summaryRequest(actor, request, picked).catch(() => null);
+      if (sum) return out(sum.text, sum.draft ? { draft: sum.draft, awaiting: true } : { draft: null }, { action: 'meeting_followup', status: 'ok', result: sum.result, buttons: sum.buttons });
     }
     const pending = { ...await draftEmail(actor, contact, request, { dry }), taskId };
     return out(emailText(pending), { draft: pending, awaiting: true },
