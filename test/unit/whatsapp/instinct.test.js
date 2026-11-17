@@ -583,6 +583,8 @@ for (const [name, first] of [['קובץ עם כיתוב', true], ['קובץ וא
     assert.equal(out[0].method, 'sendFileByUrl');
     assert.equal(out[0].body.urlFile, 'https://x/AutoLIELLO.pdf');
     assert.match(out[0].body.caption, /30\.09\.2026/);
+    // מסמך — "אם אין לך נתון בוודאות, אל תשלים" (17.11.26: יתרה "טעונה אימות" נכתבה למסמך)
+    assert.ok(out[0].body.caption.endsWith(Instinct.NO_GUESS));
     assert.doesNotMatch(toUser(wa, u).map((c) => c.body?.message ?? '').join('\n'), /תאריך היעד/);
   });
 }
@@ -615,4 +617,19 @@ test('התשובה של אינסטינקט בלי שאלה — ההודעה הב
   await say(u.phone, 'מה המשימות שלי');
   await settle();
   assert.equal(toInstinct(wa).length, 0);
+});
+
+test('תשובה לשאלה בבקשה על מסמך — גם היא יוצאת עם "אל תשלים נתון שאין לך בוודאות"; בקשה בלי מסמך — בלי', async (t) => {
+  const wa = setup(t);
+  const u = person();
+  ai(t, { intent: 'other' });
+  await say(u.phone, 'אינסטינקט, תתרגם לי את המשפט');
+  await settle();
+  assert.doesNotMatch(toInstinct(wa)[0].body.message, /בוודאות/);
+  D.run("UPDATE instinct_requests SET text = '[📎 אישור.pdf] ' || text WHERE user_id = ?", u.id);
+  await fromInstinct('להכין כך?', outIdOf(u), { id: 'ask-2' });
+  wa.clear();
+  await say(u.phone, 'כן');
+  await settle();
+  assert.ok(toInstinct(wa)[0].body.message.endsWith(Instinct.NO_GUESS));
 });

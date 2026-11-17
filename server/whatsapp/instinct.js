@@ -51,6 +51,12 @@ const chatId = () => `${phone()}@c.us`;
 const isInstinct = (p) => Boolean(p) && WhatsApp.normalizePhone(p) === phone();
 const allowed = (actor) => WaActions.allowed(actor, 'instinct');
 
+/**
+ * בקשה על מסמך (קובץ שצורף, או המשך / תשובה בבקשה שהיה בה קובץ) — שורה קבועה בסוף, בלי שום פרט עלינו: נתון שאין
+ * לו בוודאות — לא להשלים. באג 17.11.26: בתיקון אישור יתרה ל-30.09 אינסטינקט הכין מסמך עם יתרה ש"עדיין טעונה אימות".
+ */
+const NO_GUESS = '⚠️ חשוב: אם אין לך נתון בוודאות (סכום, תאריך, יתרה) — אל תשלים, אל תעגל ואל תעתיק אותו מתאריך או ממסמך אחר. השאר אותו ריק או סמן "לבדיקה", ושאל אותי.';
+const aboutFile = (row) => String(row?.text ?? '').startsWith('[📎');
 const rowById = (id) => D.get('SELECT * FROM instinct_requests WHERE id = ?', id);
 const userChat = (userId) => {
   const p = D.get('SELECT phone FROM users WHERE id = ?', userId)?.phone;
@@ -219,6 +225,7 @@ async function send(id, user, text, { file, question }) {
   // המשך לבקשה שנענתה עכשיו — ההקשר שלה נשלח איתה: השיחה עם אינסטינקט משותפת לכל העובדים
   const prev = question ? null : previousOf(user.id);
   if (prev) body = body ? `בהמשך לבקשה הקודמת: "${prev.text.slice(0, 300)}"\nעכשיו: ${body}` : `בהמשך לבקשה הקודמת: "${prev.text.slice(0, 300)}"`;
+  if (file || aboutFile(prev) || aboutFile(question)) body = body ? `${body}\n\n${NO_GUESS}` : NO_GUESS;
   let sent;
   if (file) {
     sent = await WhatsApp.call(ch, 'sendFileByUrl', { http: 'POST', body: { chatId: chatId(), urlFile: file.url, fileName: file.name || 'file', caption: body, ...(question ? { quotedMessageId: question.in_id } : {}) } });
@@ -495,5 +502,6 @@ function reset() {
 
 module.exports = {
   DEFAULT_PHONE, TRIGGER, MENTION, phone, isInstinct, allowed, redact, checkFile, offerFile, peekFile, takeFile, request, receive, openQuestion, awaitingReply, inConversation, looksLikeDocument,
+  NO_GUESS,
   _internal: { cfg, reset, targetOf, classify, expire }
 };

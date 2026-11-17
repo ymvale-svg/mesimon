@@ -77,3 +77,27 @@ test('פגישה בלי נושא (רק שם) — מה שפתוח מול המשת
   Fakes.claude(t, () => ({ who: ['רזבר'], background: [{ text: 'הצעת מחיר לשיפוץ', on_topic: false }], open_items: [], last_agreed: [], talking_points: [] }));
   assert.match(await Briefing.build(me.id, ev('פגישה עם רזבר', email, 'רזבר שיפוצים')), /הצעת מחיר לשיפוץ/);
 });
+
+// באג 17.11.26 (2): "פגישת שכר" עם יו"ר הוועד ומשאבי אנוש — התדריך הביא את מדריך מערכת השכר ודוח נוכחות, רק כי מופיעה בהם המילה "שכר"
+test('נושא של מילה אחת בלי תיאור — הידע הארגוני לא נאסף (רק חולק את המילה)', () => {
+  const me = user();
+  const email = `alex-${Date.now()}@example.test`;
+  D.run(`INSERT INTO org_knowledge (domain, dept, project, text, topic, sens, classified, scheme, created_at, updated_at) VALUES (?,?,?,?,?,?,1,1,?,?)`,
+    'שכר', 'finance', '', 'מדריך תפעול מערכת השכר 360 — תלושי שכר ונוכחות', '', 1, D.nowIso(), D.nowIso());
+  mail(me.id, email, 'סיכום ישיבת ועד', 3);
+  const c = Briefing._internal.collect(me.id, { ...ev('פגישת שכר', email, 'אלכס'), description: '' });
+  assert.doesNotMatch(c.text, /מדריך תפעול/);
+});
+
+test('תיאור האירוע ביומן נכנס לתדריך, וה-AI קובע קודם על מה הפגישה; "לא ברור" — אין תדריך', async (t) => {
+  const me = user();
+  const email = `alex2-${Date.now()}@example.test`;
+  mail(me.id, email, 'דוח נוכחות עם מיקומי חתימה', 3);
+  const ai = Fakes.claude(t, () => ({ about: 'לא ברור', who: ['אלכס'], background: [{ text: 'דוח נוכחות', on_topic: true }], open_items: [], last_agreed: [], talking_points: [] }));
+  const text = await Briefing.build(me.id, { ...ev('פגישת שכר', email, 'אלכס'), description: 'דיון על תוספת יוקר המחיה לעובדי השטח' });
+  assert.equal(text, null);
+  const { system, content, schema } = ai.calls[0].opts;
+  assert.match(content[0].text, /תיאור האירוע ביומן: דיון על תוספת יוקר המחיה/);
+  assert.ok(schema.required.includes('about'));
+  assert.match(system, /אינה על מדריך מערכת השכר/);
+});
