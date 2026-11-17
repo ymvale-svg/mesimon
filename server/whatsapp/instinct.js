@@ -329,8 +329,9 @@ async function deliver(row, msg) {
     await sendText(to, text);
   }
   const first = row.status !== 'answered';
-  D.run("UPDATE instinct_requests SET status = 'answered', answered_at = ?, reply = ? WHERE id = ?",
-    D.nowIso(), first ? text.slice(0, 1000) : `${row.reply}\n${text}`.slice(0, 1000), row.id);
+  // ‎in_id‎ — ההודעה האחרונה של אינסטינקט בבקשה: תשובת העובד עליה ("כן, אבל…") יוצאת בציטוט שלה (‎awaitingReply‎)
+  D.run("UPDATE instinct_requests SET status = 'answered', answered_at = ?, reply = ?, in_id = COALESCE(?, in_id) WHERE id = ?",
+    D.nowIso(), first ? text.slice(0, 1000) : `${row.reply}\n${text}`.slice(0, 1000), msg.id ? String(msg.id) : null, row.id);
   lastDelivery = { id: row.id, at: Date.now() };
   if (row.user_msg_id) void react({ chatId: to, id: row.user_msg_id }, '');
   // בהיסטוריה של השיחה — רק סימון, לא התוכן: מה שאינסטינקט כתב אינו הוראה לבוט שלנו
@@ -441,6 +442,16 @@ function inConversation(userId) {
   return last.status === 'answered' && Date.now() - new Date(last.answered_at).getTime() < cfg.FOLLOW_MS;
 }
 
+/**
+ * התשובה האחרונה של אינסטינקט לעובד הסתיימה בשאלה ("…להכין כך?"), ועוד לא עברו עשר דקות — ההודעה הבאה של העובד
+ * ("כן, אבל על העמוד השני") היא התשובה עליה. באג 17.11.26: התשובה הלכה להבנת הבקשה, שלא ראתה את השאלה, ולא חזרה לאינסטינקט.
+ */
+function awaitingReply(userId) {
+  const last = D.get("SELECT * FROM instinct_requests WHERE user_id = ? AND kind IN ('request', 'answer') ORDER BY id DESC LIMIT 1", userId);
+  if (last?.status !== 'answered' || !last.answered_at || Date.now() - new Date(last.answered_at).getTime() > cfg.FOLLOW_MS) return null;
+  return /\?\s*\S{0,3}\s*$/.test(String(last.reply ?? '').trim()) ? last : null;
+}
+
 /** שאלה מאינסטינקט שהועברה לעובד ועוד לא נענתה — ‎null‎ אם אין, או שעבר הזמן */
 function openQuestion(userId) {
   const q = D.get("SELECT * FROM instinct_requests WHERE user_id = ? AND kind = 'question' AND status = 'open' ORDER BY id DESC LIMIT 1", userId);
@@ -483,6 +494,6 @@ function reset() {
 }
 
 module.exports = {
-  DEFAULT_PHONE, TRIGGER, MENTION, phone, isInstinct, allowed, redact, checkFile, offerFile, peekFile, takeFile, request, receive, openQuestion, inConversation, looksLikeDocument,
+  DEFAULT_PHONE, TRIGGER, MENTION, phone, isInstinct, allowed, redact, checkFile, offerFile, peekFile, takeFile, request, receive, openQuestion, awaitingReply, inConversation, looksLikeDocument,
   _internal: { cfg, reset, targetOf, classify, expire }
 };

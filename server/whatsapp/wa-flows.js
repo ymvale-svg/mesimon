@@ -963,6 +963,21 @@ async function flowInstinctExplicit({ user, actor, dry, out, t }) {
   return instinctSend({ user, actor, dry, out, text, explicit: true });
 }
 
+/**
+ * 🤖 אינסטינקט שאל בסוף התשובה שלו ("…להכין כך?") — מה שהעובד כותב עכשיו הוא התשובה, ויוצא אליו בציטוט של השאלה, בלי
+ * לעבור בהבנת הבקשה (באג 17.11.26: "כן, אבל על העמוד השני" לא הגיע לאינסטינקט). לא כשהבוט עצמו שאל משהו אחר מאז,
+ * ולא "ביטול" / "תפריט".
+ */
+const NOT_A_REPLY = /^(?:ביטול|בטל|תפריט|עזרה|🗑️|👎)\s*$/;
+async function flowInstinctReply({ user, actor, dry, out, state, t }) {
+  if (!user || state.awaiting || NOT_A_REPLY.test(t) || !Instinct.allowed(actor)) return NEXT;
+  const asked = Instinct.awaitingReply(user.id);
+  if (!asked) return NEXT;
+  if (dry) return out(`🤖 (בדיקה) תשובה לאינסטינקט: "${Instinct.redact(t)}"`, {}, { action: 'instinct', status: 'ok', result: 'תשובה לשאלה (בדיקה — לא נשלח)' });
+  Instinct.request(user, t, { question: asked, ref: currentMsg.get(actor.id) });
+  return out('', {}, { action: 'instinct', status: 'ok', result: 'תשובה לשאלה שבסוף התשובה של אינסטינקט — ברקע', react: '📤' });
+}
+
 async function flowInstinct({ user, actor, dry, out, t, u }) {
   if (u.intent !== 'instinct' || !Instinct.allowed(actor)) return NEXT;
   return instinctSend({ user, actor, dry, out, text: u.request || t });
@@ -988,5 +1003,5 @@ const switchCancels = () => Boolean(D.getSetting('wa_topic_switch_cancels', true
 const DRAFT_ONLY = /(?:(?:בלי|לא\s+משנה|אין\s+לי\s+(?:את\s+)?|עזוב(?:\s+את)?)\s*ה?(?:כתובת|מייל|נמען)|רק\s+ת?(?:נסח|כתוב)|ת?נסח\s+(?:לי\s+)?(?:רק\s+)?(?:את\s+)?ה?(?:מלל|טקסט|נוסח))/;
 
 module.exports = {
-  SEND_NOW, DRAFT_ONLY, flowAgentsList, flowAlertNo, flowApproval, flowBusinessCommand, flowCancel, flowClosureCommand, flowEmailEdit, flowEmailPick, flowEmailSolve, flowEmailVia, flowFeaturesRequest, flowFormFillRequest, flowGreeting, flowInstinct, flowInstinctExplicit, flowInstinctPilot, flowNoticeToInstinct, flowIntentCancel, flowIntentDenied, flowIntentMenu, flowIntentOther, flowMailReplyEdit, flowMailWalk, flowMeetCoordRequest, flowMeetingAudioAnswer, flowMeetingAudioRequest, flowMeetingFollowupRequest, flowMeetingReminderRequest, flowMenuList, flowMenuPick, flowNoAi, flowNoticeRequest, flowOnClosureAddress, flowOnDayEvening, flowOnFormFill, flowOnGoodsStop, flowOnMailMuteSender, flowOnMailRemindOrGoods, flowOnMeetCoord, flowOnMeetingTasks, flowOnPaceOffer, flowOnPlainMail, flowOnReminder, flowOnRfq, flowOnSentFollowup, flowOnThreadAdd, flowRemindersRequest, flowReplyAsk, flowRfqRequest, flowRfqSummary, flowSuggestionCommand, flowTranslateRequest, flowWalk, NEXT, switchCancels
+  SEND_NOW, DRAFT_ONLY, flowAgentsList, flowAlertNo, flowApproval, flowBusinessCommand, flowCancel, flowClosureCommand, flowEmailEdit, flowEmailPick, flowEmailSolve, flowEmailVia, flowFeaturesRequest, flowFormFillRequest, flowGreeting, flowInstinct, flowInstinctExplicit, flowInstinctReply, flowInstinctPilot, flowNoticeToInstinct, flowIntentCancel, flowIntentDenied, flowIntentMenu, flowIntentOther, flowMailReplyEdit, flowMailWalk, flowMeetCoordRequest, flowMeetingAudioAnswer, flowMeetingAudioRequest, flowMeetingFollowupRequest, flowMeetingReminderRequest, flowMenuList, flowMenuPick, flowNoAi, flowNoticeRequest, flowOnClosureAddress, flowOnDayEvening, flowOnFormFill, flowOnGoodsStop, flowOnMailMuteSender, flowOnMailRemindOrGoods, flowOnMeetCoord, flowOnMeetingTasks, flowOnPaceOffer, flowOnPlainMail, flowOnReminder, flowOnRfq, flowOnSentFollowup, flowOnThreadAdd, flowRemindersRequest, flowReplyAsk, flowRfqRequest, flowRfqSummary, flowSuggestionCommand, flowTranslateRequest, flowWalk, NEXT, switchCancels
 };

@@ -586,3 +586,33 @@ for (const [name, first] of [['קובץ עם כיתוב', true], ['קובץ וא
     assert.doesNotMatch(toUser(wa, u).map((c) => c.body?.message ?? '').join('\n'), /תאריך היעד/);
   });
 }
+
+test('התשובה של אינסטינקט נגמרת בשאלה ("להכין כך?") — "כן, אבל על העמוד השני" חוזר אליו בציטוט, גם כשה-AI לא מזהה', async (t) => {
+  // באג 17.11.26: "תתקן במסמך" ← אינסטינקט שאל "להכין כך?" ← "כן, אבל אל תרשום על העמ' הראשון אלא על השני" לא הגיע אליו
+  const wa = setup(t);
+  const u = person();
+  ai(t, { intent: 'other' });
+  await say(u.phone, 'אינסטינקט, תתקן במסמך את התאריך');
+  await settle();
+  await fromInstinct('אוכל להכין עותק עם התאריך המבוקש. להכין כך?', outIdOf(u), { id: 'ask-1' });
+  wa.clear();
+  await say(u.phone, "כן, אבל אל תרשום את זה על העמ' הראשון אלא על העמ' השני");
+  await settle();
+  const back = toInstinct(wa);
+  assert.equal(back.length, 1);
+  assert.match(back[0].body.message, /העמ' השני/);
+  assert.equal(back[0].body.quotedMessageId, 'ask-1');
+});
+
+test('התשובה של אינסטינקט בלי שאלה — ההודעה הבאה לא נשלחת אליו מעצמה', async (t) => {
+  const wa = setup(t);
+  const u = person();
+  ai(t, { intent: 'other' });
+  await say(u.phone, 'אינסטינקט, תתרגם לי את המשפט');
+  await settle();
+  await fromInstinct('הנה התרגום.', outIdOf(u));
+  wa.clear();
+  await say(u.phone, 'מה המשימות שלי');
+  await settle();
+  assert.equal(toInstinct(wa).length, 0);
+});
