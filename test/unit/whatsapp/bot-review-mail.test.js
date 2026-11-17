@@ -97,3 +97,24 @@ test('mailFeedback — תיבה מבוקשת של עובד רגיל (לא מנה
   await Review.mailFeedback('2026-11-10T19:40:00.000Z', { users: [worker.id, listed.id] });
   assert.deepEqual(boxes, [listed.id], 'רק תיבה שבהגדרה או של מנהל מערכת');
 });
+
+// סקירה 16.11: 15 המיילים האחרונים היו רובם דוחות אוטומטיים — מייל של עובדת מלפני כמה ימים נדחק החוצה, בלי סימן
+test('mailFeedback — מיילים של עובדים קודם; דוחות אוטומטיים ממלאים עד 15; מה שנחתך — נספר', async (t) => {
+  D.setSetting('bot_review_mailboxes', null);
+  const admin = user({ role: 'superadmin' });
+  const staff = user({ role: 'employee', email: 'staff.member@example.com', full_name: 'עובדת' });
+  t.mock.method(Gmail, 'boxesOf', (userId) => [`${userId}:0`]);
+  // החדשים קודם (כמו Gmail): 20 דוחות, ואחריהם מייל אחד של עובדת
+  const ids = [...Array.from({ length: 20 }, (_, i) => `r${i}`), 'staff1'];
+  t.mock.method(Gmail, 'search', async () => ids);
+  t.mock.method(Gmail, 'messageFull', async (who, id) => (id === 'staff1'
+    ? mail({ from: `עובדת <${staff.email.toUpperCase()}>`, subject: 'משימון - משימה ממייל', text: 'לא ברור לי על מה המשימה', date: 'Tue, 10 Nov 2026 15:10:00 +0200' })
+    : mail({ from: 'Security Guard <reports@example.com>', subject: `דוח — משימון ${id}`, text: 'דוח' })));
+  const r = await Review.mailFeedback('2026-11-09T19:40:00.000Z', { users: [admin.id] });
+  assert.equal(r.mails.length, 15);
+  const s = r.mails.find((m) => m.subject === 'משימון - משימה ממייל');
+  assert.ok(s, 'המייל של העובדת נכלל');
+  assert.equal(s.employee, true);
+  assert.equal(r.mails.filter((m) => !m.employee).length, 14);
+  assert.equal(r.omitted, 6);
+});
