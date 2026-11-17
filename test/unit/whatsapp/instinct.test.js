@@ -394,3 +394,147 @@ test('שני עובדים ביקשו לאחרונה, והודעה לא ברור�
   assert.equal(toUser(wa, b).filter((c) => c.body.message === 'https://files.instinct.com/xyz').length, 0);
   assert.ok(toUser(wa, a).some((c) => /לא קשורה לבקשה/.test(c.body.message)));
 });
+
+/*
+ * באג 15.11.26: "תשנה את הרקע של התמונה לחוף הים" ← אינסטינקט: "צרף את התמונה כאן". העובד שלח תמונה בלי כיתוב —
+ * והבוט שאל "לקלוט כקבלת סחורה בפריוריטי?". קובץ שמגיע בזמן שיחה עם אינסטינקט — אליו, עם ההקשר.
+ */
+test('תמונה בלי כיתוב אחרי שאינסטינקט ביקש אותה — יוצאת אליו עם ההקשר, בלי "קבלת סחורה?"', async (t) => {
+  const wa = setup(t);
+  ai(t, { identifying: false });
+  t.mock.method(Speech, 'download', async () => ({ buf: Buffer.alloc(20000, 1), mime: 'image/jpeg' }));
+  const u = person();
+  await say(u.phone, 'אינסטינקט, תשנה את הרקע של התמונה לחוף הים');
+  await settle();
+  await fromInstinct('לאיזו תמונה? צרף אותה כאן כדי שאחליף לה את הרקע לחוף הים.', outIdOf(u));
+  wa.clear();
+  await say(u.phone, '', { kind: 'imageMessage', file: { url: 'https://x/office.jpg', mime: 'image/jpeg', name: 'office.jpg' } });
+  await settle();
+  const out = toInstinct(wa);
+  assert.equal(out.length, 1);
+  assert.equal(out[0].method, 'sendFileByUrl');
+  assert.equal(out[0].body.urlFile, 'https://x/office.jpg');
+  assert.match(out[0].body.caption, /הרקע של התמונה לחוף הים/, 'עם ההקשר של הבקשה');
+  assert.equal(toUser(wa, u).filter((c) => /קבלת סחורה|מה לעשות איתו/.test(c.body?.message ?? c.body?.body ?? '')).length, 0);
+});
+
+test('תמונה בלי כיתוב כשאין שיחה עם אינסטינקט — לא יוצאת אליו', async (t) => {
+  const wa = setup(t);
+  ai(t);
+  const u = person();
+  await say(u.phone, '', { kind: 'imageMessage', file: { url: 'https://x/inv.jpg', mime: 'image/jpeg', name: 'inv.jpg' } });
+  await settle();
+  assert.equal(toInstinct(wa).length, 0);
+});
+
+/*
+ * 📷 תמונה בלי כיתוב (15.11.26, ישראל: "תבנה את הבדיקה האוטומטית"): קודם בודקים מה בתמונה. מסמך (חשבונית, תעודת
+ * משלוח) — "לקלוט כקבלת סחורה?" כמו קודם. תמונה רגילה (אנשים, משרד) — "מה לעשות עם התמונה?", והבקשה שאחריה
+ * יוצאת לאינסטינקט עם התמונה. כפתור "קבלת סחורה 📦" — למקרה שהבדיקה טעתה.
+ */
+const GoodsReceipt = require('../../../server/priority/goods-receipt');
+
+function photoAi(t, { document, intent = 'instinct', request = '' }) {
+  return Fakes.claude(t, (opts) => {
+    const keys = Object.keys(opts.schema?.properties ?? {});
+    if (keys.includes('document')) return { document, what: document ? 'חשבונית' : 'אדם במשרד' };
+    if (keys.includes('identifying')) return { identifying: false, what: '' };
+    if (keys.includes('request_id')) return { request_id: 0, asks_for_info: false, reason: '' };
+    return { intent, request, ready: true, reply: '' };
+  });
+}
+
+function grOn(t) {
+  const real = WaActions.allowed;
+  t.mock.method(WaActions, 'allowed', (actor, key) => (key === 'goods_receipt' ? true : real(actor, key)));
+  const calls = [];
+  t.mock.method(GoodsReceipt, 'handle', async (a) => { calls.push(a); return { replies: ['📦 לקלוט את המסמך כ*קבלת סחורה* בפריוריטי?'], status: 'ok', result: 'הצעה', buttons: ['כן ✅', 'לא ❌'] }; });
+  return calls;
+}
+
+const PHOTO = { kind: 'imageMessage', file: { url: 'https://x/office.jpg', mime: 'image/jpeg', name: 'office.jpg' } };
+
+test('📷 תמונה רגילה בלי כיתוב — "מה לעשות עם התמונה?", לא קבלת סחורה; הבקשה שאחריה יוצאת עם התמונה', async (t) => {
+  const wa = setup(t);
+  photoAi(t, { document: false, request: 'תשנה את הרקע לחוף הים' });
+  t.mock.method(Speech, 'download', async () => ({ buf: Buffer.alloc(20000, 1), mime: 'image/jpeg' }));
+  const gr = grOn(t);
+  const u = person();
+  await say(u.phone, '', PHOTO);
+  assert.equal(gr.length, 0, 'לא נשאל על קבלת סחורה');
+  const ask = toUser(wa, u).at(-1);
+  assert.match(ask.body.message ?? ask.body.body, /מה לעשות עם התמונה/);
+  assert.ok(wa.buttons().includes('קבלת סחורה 📦'), 'כפתור למקרה שהבדיקה טעתה');
+  wa.clear();
+  await say(u.phone, 'תשנה את הרקע לחוף הים');
+  await settle();
+  const out = toInstinct(wa);
+  assert.equal(out.length, 1);
+  assert.equal(out[0].method, 'sendFileByUrl');
+  assert.equal(out[0].body.urlFile, 'https://x/office.jpg');
+  assert.match(out[0].body.caption, /חוף הים/);
+});
+
+test('📷 צילום של חשבונית בלי כיתוב — קבלת סחורה, כמו קודם', async (t) => {
+  const wa = setup(t);
+  photoAi(t, { document: true });
+  t.mock.method(Speech, 'download', async () => ({ buf: Buffer.alloc(20000, 1), mime: 'image/jpeg' }));
+  const gr = grOn(t);
+  const u = person();
+  await say(u.phone, '', PHOTO);
+  assert.equal(gr.length, 1);
+  assert.equal(toInstinct(wa).length, 0);
+});
+
+test('📷 הבדיקה נכשלה (אין AI) — כמו קודם: קבלת סחורה', async (t) => {
+  setup(t);
+  t.mock.method(console, 'error', () => {});
+  t.mock.method(Speech, 'download', async () => { throw new Error('אין רשת'); });
+  const gr = grOn(t);
+  const u = person();
+  await say(u.phone, '', PHOTO);
+  assert.equal(gr.length, 1);
+});
+
+/*
+ * באג 15.11.26: "תפתח את האינסטקטנט לכל העובדים" (שגיאת כתיב, ו"לכל העובדים" במקום "לכולם") — לא זוהה כפקודה, יצא
+ * לאינסטינקט כבקשה, ואחרי 6 דקות: פעמיים "לא קיבלתי תשובה" — אף שתשובה כבר הגיעה.
+ */
+for (const cmd of ['תפתח את האינסטקטנט לכל העובדים', 'תפתח את אינסטינקט לכל העובדים', 'פתח אינסטינקט לכולם']) {
+  test(`"${cmd}" — פקודה: נפתח לכולם, ולא יוצא לאינסטינקט`, async (t) => {
+    const wa = setup(t);
+    ai(t);
+    const me = person('superadmin');
+    await say(me.phone, cmd);
+    await settle();
+    assert.equal(toInstinct(wa).length, 0);
+    assert.equal(D.getSetting('instinct_open', false), true);
+    D.setSetting('instinct_open', false);
+  });
+}
+
+test('"תחזיר את האינסטינקט לפיילוט" / "אינסטקט רק לי" — גם עם ה׳ ובשגיאת כתיב', async (t) => {
+  setup(t);
+  ai(t);
+  const me = person('superadmin');
+  D.setSetting('instinct_open', true);
+  await say(me.phone, 'תחזיר את האינסטינקט לפיילוט');
+  assert.equal(D.getSetting('instinct_open', true), false);
+  await say(me.phone, 'אינסטקט רק לי');
+  assert.deepEqual(WaActions.instinctPilot(), [me.id]);
+});
+
+test('פג הזמן של בקשה, אבל העובד כבר קיבל תשובה מאינסטינקט אחריה — בלי "לא קיבלתי תשובה" ובלי התראה', async (t) => {
+  const wa = setup(t);
+  ai(t);
+  const u = person();
+  await say(u.phone, 'אינסטינקט, תשנה את הרקע לחוף הים');
+  await say(u.phone, 'אינסטינקט, ובלי אנשים ברקע');
+  await settle();
+  const rows = D.all('SELECT id, out_id FROM instinct_requests WHERE user_id = ? ORDER BY id', u.id);
+  await fromInstinct('הנה התמונה עם רקע של חוף הים', rows[1].out_id);
+  wa.clear();
+  await Instinct._internal.expire(rows[0].id);
+  assert.equal(wa.calls.filter((c) => /לא קיבלתי תשובה|לא ענה/.test(c.body?.message ?? '')).length, 0);
+  assert.equal(D.get('SELECT status FROM instinct_requests WHERE id = ?', rows[0].id).status, 'timeout');
+});

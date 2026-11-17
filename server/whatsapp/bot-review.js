@@ -93,6 +93,9 @@ const usageLine = (u) => (u.ok || u.failed
 // "בוט" ו"הבוט" — Gmail מחפש מילה שלמה, והה"א צמודה
 const MAIL_QUERY = '(משימון OR mesimon OR "אשל שלי" OR בוט OR הבוט)';
 const MAIL_MAX = 15;
+// כמה מיילים נבדקים כדי לבחור מהם (סקירה 16.11: 15 האחרונים היו רובם דוחות אוטומטיים, ומיילים של עובדת נדחקו החוצה)
+const MAIL_SCAN = 60;
+const MAIL_EMPLOYEES_MAX = 30;
 const MAIL_TEXT = 2500;
 const IMG_PER_MAIL = 4;
 const IMG_MAX_BYTES = 3 * 1024 * 1024;
@@ -109,22 +112,40 @@ function mailboxUsers(requested = []) {
     || D.get("SELECT 1 FROM users WHERE id = ? AND role = 'superadmin' AND status = 'active'", id));
 }
 
+/** כתובת של עובד/ת פעיל/ה בארגון (לא בעל התיבה עצמו) */
+function employeeOf(address, ownerId) {
+  const a = String(address ?? '').trim().toLowerCase();
+  if (!a) return null;
+  return D.get("SELECT id FROM users WHERE status = 'active' AND id != ? AND (lower(email) = ? OR lower(work_email) = ?)", ownerId, a, a) ?? null;
+}
+
+/*
+ * בחירת המיילים: קודם כל מה שכתבו עובדי הארגון (עד ‎MAIL_EMPLOYEES_MAX‎) — הם ההערות שחשובות; אחר כך השאר
+ * (דוחות אוטומטיים, גורמים מבחוץ) עד ‎MAIL_MAX‎ בסך הכול. מה שנחתך — נספר ב-‎omitted‎, כדי שהסוקר יידע.
+ */
 async function mailFeedback(from, { users = [] } = {}) {
   const after = Math.floor(new Date(from).getTime() / 1000);
   const self = String(Mailer.CONFIG?.from ?? '').trim();
   const q = `after:${after} ${MAIL_QUERY} -subject:"סקירת הבוט"${self ? ` -from:${self}` : ''}`;
   const out = [];
   const errors = [];
+  let omitted = 0;
   let imgBytes = 0;
   for (const userId of mailboxUsers(users)) {
     for (const who of Gmail.boxesOf(userId, 'mail')) {
       try {
-        for (const id of await Gmail.search(who, q, { max: MAIL_MAX })) {
-          if (out.length >= MAIL_MAX) break;
+        const found = [];
+        for (const id of await Gmail.search(who, q, { max: MAIL_SCAN })) {
           const msg = await Gmail.messageFull(who, id);
           const parts = Mime.fromGmail(msg.payload);
           const m = Mime.finishGmail(parts);
           if (m.autoSubmitted) continue;
+          found.push({ id, parts, m, employee: Boolean(employeeOf(m.from?.address, userId)) });
+        }
+        const staff = found.filter((f) => f.employee).slice(0, MAIL_EMPLOYEES_MAX);
+        const rest = found.filter((f) => !f.employee).slice(0, Math.max(0, MAIL_MAX - staff.length));
+        omitted += found.length - staff.length - rest.length;
+        for (const { id, parts, m, employee } of [...staff, ...rest]) {
           // 🖼 צילומי מסך — התמונות שמצורפות למייל (בגבולות גודל), כדי שהסוקר יראה מה הראו לו
           const images = [];
           for (const a of (parts.attachments ?? []).filter((x) => /^image\//i.test(x.mime ?? '') && (x.size ?? 0) <= IMG_MAX_BYTES).slice(0, IMG_PER_MAIL)) {
@@ -139,6 +160,7 @@ async function mailFeedback(from, { users = [] } = {}) {
           out.push({
             at: m.date && !Number.isNaN(m.date.getTime()) ? m.date.toISOString() : null,
             from: mask(m.from?.name || m.from?.address || ''),
+            employee,
             subject: mask(m.subject),
             text: mask(String(m.newText || m.text || '').slice(0, MAIL_TEXT)),
             images
@@ -150,7 +172,7 @@ async function mailFeedback(from, { users = [] } = {}) {
     }
   }
   out.sort((a, b) => String(a.at).localeCompare(String(b.at)));
-  return { query: MAIL_QUERY, mails: out, ...(errors.length ? { errors } : {}) };
+  return { query: MAIL_QUERY, mails: out, ...(omitted ? { omitted } : {}), ...(errors.length ? { errors } : {}) };
 }
 
 /** השיחות הפרטיות (וואטסאפ והעוזר באפליקציה) מאז ‎since‎, מקובצות לשיחות */
@@ -348,6 +370,31 @@ const isConfigured = () => Boolean(String(process.env.BOT_REVIEW_KEY ?? '').trim
  * בטיחות: הנמען — רק משתמש פעיל במשימון (לפי השם המלא, לא כתובת חופשית); המאשר — רק מנהל מערכת; ושום
  * דבר לא יוצא בלי "כן" שלו.
  */
+/*
+ * באיזה שרשור לענות (16.11.26: רמז שלא תאם הוצמד לשרשור האחרון — שהיה על נושא אחר לגמרי):
+ *   ‎threadId‎ — בדיוק השרשור הזה, רק אם הנמען בו · ‎hint‎ — שרשור שהנושא שלו מכיל את הרמז: מהאחרונים,
+ *   ואם לא — חיפוש לפי הנושא (חצי שנה אחורה). לא נמצא — שגיאה; לעולם לא שרשור אחר.
+ *   בלי אף אחד מהם — השרשור האחרון עם הנמען (כמו קודם).
+ */
+async function replyThreadFor(userId, email, { threadId = '', hint = '' } = {}) {
+  const mail = String(email).toLowerCase();
+  if (threadId) {
+    for (const who of Gmail.boxesOf(userId, 'mail')) {
+      const ref = await MailThread.threadRef(who, threadId).catch(() => null);
+      const people = ref ? [ref.lastFrom, ...(ref.lastTo ?? []), ...(ref.lastCc ?? [])].map((p) => String(p?.email ?? '').toLowerCase()) : [];
+      if (ref && people.includes(mail)) return ref;
+    }
+    throw badRequest('לא נמצא שרשור כזה עם הנמען');
+  }
+  const threads = await MailThread.recentThreads(userId, email, { max: 5 }).catch(() => []);
+  if (!hint) return threads[0] ?? null;
+  const has = (x) => String(x.subject ?? '').includes(hint);
+  const found = threads.find(has)
+    ?? (await MailThread.recentThreads(userId, email, { max: 5, subject: hint, days: 180 }).catch(() => [])).find(has);
+  if (!found) throw badRequest(`לא נמצא שרשור עם הנמען שהנושא שלו "${hint}"`);
+  return found;
+}
+
 async function mailForApproval(body) {
   const approver = D.get("SELECT id, full_name, phone FROM users WHERE id = ? AND status = 'active' AND role IN ('superadmin','admin')", Number(body.userId));
   if (!approver) throw badRequest('המאשר חייב להיות מנהל מערכת פעיל');
@@ -356,9 +403,7 @@ async function mailForApproval(body) {
   if (!to?.email) throw badRequest('הנמען לא נמצא בין המשתמשים הפעילים (לפי השם המלא)');
   const text = clean(body.body, 5000);
   if (!text) throw badRequest('אין תוכן למייל');
-  const hint = clean(body.threadHint, 120);
-  const threads = await MailThread.recentThreads(approver.id, to.email, { max: 5 }).catch(() => []);
-  const rt = (hint && threads.find((x) => String(x.subject ?? '').includes(hint))) || threads[0] || null;
+  const rt = await replyThreadFor(approver.id, to.email, { threadId: clean(body.threadId, 80), hint: clean(body.threadHint, 120) });
   const replyThread = rt ? { box: rt.box, threadId: rt.threadId, subject: rt.subject, inReplyTo: rt.inReplyTo, references: rt.references } : null;
   const subject = replyThread ? (/^re:/i.test(replyThread.subject) ? replyThread.subject : `Re: ${replyThread.subject}`) : (clean(body.subject, 200) || 'משימון');
   const draft = { kind: 'plain_mail', to: { name: to.full_name, email: to.email }, subject, body: text, replyThread };

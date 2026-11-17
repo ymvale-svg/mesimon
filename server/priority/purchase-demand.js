@@ -15,6 +15,7 @@
  * הבוט כותב רק לחברות שב-‎PRIORITY_COMPANIES‎. עד "סיום" שום דבר לא נכתב בפריוריטי.
  * מצב השיחה — בהגדרה ‎purchase_demand:<userId>‎, וצילומי הרשימה — בתיקיית ההעלאות עד הסוף.
  */
+const { notOpening } = require('./opens-guard');
 const fs = require('node:fs');
 const Paths = require('../core').Paths;
 const path = require('node:path');
@@ -85,7 +86,8 @@ const active = (userId, late = false) => { const s = load(userId); return Boolea
 const pending = (userId) => Boolean(fresh(load(userId)));
 const isTrigger = (text) => TRIGGER.test(String(text ?? ''));
 /** פותח דרישה ("דרישת רכש"); וגם החזרה לבדיקה ("החזר לבדיקה PD…") ותשובה של פותח הדרישה (לתקן / הכל נכון) */
-const opens = (text, userId = null) => isTrigger(text) || Boolean(userId && Return.owns(userId, text));
+// שאלה על דרישות קיימות ("מה הדרישות הפתוחות?") או בקשה אחרת — לא פותחת דרישה חדשה (‎opens-guard.js‎)
+const opens = (text, userId = null) => (isTrigger(text) && !notOpening(text)) || Boolean(userId && Return.owns(userId, text));
 
 /** הודעה בנושא אחר כשיש דרישה פתוחה — הדרישה יורדת (עוד לא נכתב כלום בפריוריטי). מחזיר שורת הודעה */
 function abandon(user) {

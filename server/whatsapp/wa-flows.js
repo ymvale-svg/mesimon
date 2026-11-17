@@ -404,7 +404,8 @@ async function flowRemindersRequest({ actor, dry, out, state, t }) {
   // "לא משימה — תזכיר לי" על טיוטת משימה: הטיוטה הפכה לתזכורת ויורדת. אחרת מה שחיכה — ממשיך לחכות
   const next = !waiting ? {} : r.fromAbout ? { draft: null, awaiting: false } : { draft: state.draft, awaiting: true };
   // ✅ על ההודעה כשנרשמה / בוטלה תזכורת (הטקסט נשאר — יש בו את המועד)
-  return out(r.text, next, { action: 'reminders', status: r.error ? 'error' : 'ok', result: r.result, react: /^(תזכורת|בוטלה)/.test(r.result ?? '') ? '✅' : undefined });
+  // 📍 תזכורת לפי מיקום — ביומן בנפרד (הטיפ "הבוט יודע להזכיר כשמגיעים למקום" — רק למי שעוד לא ניסה)
+  return out(r.text, next, { action: r.place ? 'reminders_place' : 'reminders', status: r.error ? 'error' : 'ok', result: r.result, react: /^(תזכורת|בוטלה)/.test(r.result ?? '') ? '✅' : undefined });
 }
 
 // 📬 "זכרת? 🐣" על מייל שלא טופל, ו"לבצע קבלת סחורה?" על חשבונית מהמייל
@@ -615,8 +616,14 @@ async function flowAlertNo({ actor, dry, out, state, t }) {
   return NEXT;
 }
 
+// "שלח" / "שלח את זה" / "שלח מייל. אל תוסיף מה שהצעת" על טיוטת מייל — אישור (סקירה 15.11: הטיוטה נוסחה שוב ולא נשלחה).
+// לא: "שלח מייל לדני" (בקשה חדשה), "שלח לו גם…" (תיקון)
+const SEND_NOW = /^(?:שלח|תשלח|תשלחי|שלחי|לשלוח)(?:\s+(?:את\s+)?(?:זה|אותו|אותה|ה?מייל|ה?תשובה|ה?הודעה))?(?:[\s.,!-]+(?:אל\s+תוסיף[^\n]{0,40}|בלי\s+(?:ה?תוספות|ה?הצעות|מה\s+שהצעת)[^\n]{0,20}|כמו\s+שה(?:וא|יא)|ככה|עכשיו))?[\s.!👍]*$/;
+const SEND_KINDS = ['email', 'mail_reply'];
+
 async function flowApproval({ actor, cancelYes, dry, isAbout, out, state, t }) {
-  const approval = state.awaiting && state.draft && (cancelYes || (YES.test(t)
+  const sendNow = SEND_KINDS.includes(state.draft?.kind) && SEND_NOW.test(t);
+  const approval = state.awaiting && state.draft && (cancelYes || sendNow || (YES.test(t)
     && (!switchCancels() || t.split(/\s+/).filter(Boolean).length <= 3 || await isAbout())));
   if (approval) {
     const r = await confirmPending(actor, state.draft, dry);
@@ -918,9 +925,11 @@ function instinctSend({ user, actor, dry, out, text, explicit = false }) {
  * (חוזר למי שברשימה). לפני "אינסטינקט, …" — אחרת "אינסטינקט רק לי" היה יוצא אליו כבקשה.
  */
 async function flowInstinctPilot({ actor, dry, out, t }) {
-  const only = /^אינסטינקט\s+רק\s+לי[.!]?$/.test(t);
-  const open = /^(?:תפתח|פתח)\s+(?:את\s+)?אינסטינקט\s+לכולם[.!]?$/.test(t);
-  const back = /^(?:תחזיר|החזר)\s+(?:את\s+)?אינסטינקט\s+לפיילוט[.!]?$/.test(t);
+  // גם בשגיאת כתיב ("האינסטקטנט") ו"לכל העובדים" (באג 15.11.26: לא זוהה, ויצא לאינסטינקט כבקשה)
+  const NAME = '(?:ה)?(?:אינסט[א-ת]*|instinct)';
+  const only = new RegExp(`^${NAME}\\s+רק\\s+(?:לי|אצלי|בשבילי)[.!]?$`, 'i').test(t);
+  const open = new RegExp(`^(?:תפתח|פתח|תפתחי)\\s+(?:את\\s+)?${NAME}\\s+(?:לכולם|לכל\\s+(?:ה)?עובדים|לכל\\s+החברה|לכל\\s+המשתמשים)[.!]?$`, 'i').test(t);
+  const back = new RegExp(`^(?:תחזיר|החזר|תחזירי)\\s+(?:את\\s+)?${NAME}\\s+לפיילוט[.!]?$`, 'i').test(t);
   if (!only && !open && !back) return NEXT;
   if (!WaActions.inPilot(actor)) return out('רק מנהל מערכת יכול לשנות את זה.', {}, { action: 'instinct', status: 'denied', result: 'פיילוט אינסטינקט — אין הרשאה' });
   if (!dry) {
@@ -979,5 +988,5 @@ const switchCancels = () => Boolean(D.getSetting('wa_topic_switch_cancels', true
 const DRAFT_ONLY = /(?:(?:בלי|לא\s+משנה|אין\s+לי\s+(?:את\s+)?|עזוב(?:\s+את)?)\s*ה?(?:כתובת|מייל|נמען)|רק\s+ת?(?:נסח|כתוב)|ת?נסח\s+(?:לי\s+)?(?:רק\s+)?(?:את\s+)?ה?(?:מלל|טקסט|נוסח))/;
 
 module.exports = {
-  DRAFT_ONLY, flowAgentsList, flowAlertNo, flowApproval, flowBusinessCommand, flowCancel, flowClosureCommand, flowEmailEdit, flowEmailPick, flowEmailSolve, flowEmailVia, flowFeaturesRequest, flowFormFillRequest, flowGreeting, flowInstinct, flowInstinctExplicit, flowInstinctPilot, flowNoticeToInstinct, flowIntentCancel, flowIntentDenied, flowIntentMenu, flowIntentOther, flowMailReplyEdit, flowMailWalk, flowMeetCoordRequest, flowMeetingAudioAnswer, flowMeetingAudioRequest, flowMeetingFollowupRequest, flowMeetingReminderRequest, flowMenuList, flowMenuPick, flowNoAi, flowNoticeRequest, flowOnClosureAddress, flowOnDayEvening, flowOnFormFill, flowOnGoodsStop, flowOnMailMuteSender, flowOnMailRemindOrGoods, flowOnMeetCoord, flowOnMeetingTasks, flowOnPaceOffer, flowOnPlainMail, flowOnReminder, flowOnRfq, flowOnSentFollowup, flowOnThreadAdd, flowRemindersRequest, flowReplyAsk, flowRfqRequest, flowRfqSummary, flowSuggestionCommand, flowTranslateRequest, flowWalk, NEXT, switchCancels
+  SEND_NOW, DRAFT_ONLY, flowAgentsList, flowAlertNo, flowApproval, flowBusinessCommand, flowCancel, flowClosureCommand, flowEmailEdit, flowEmailPick, flowEmailSolve, flowEmailVia, flowFeaturesRequest, flowFormFillRequest, flowGreeting, flowInstinct, flowInstinctExplicit, flowInstinctPilot, flowNoticeToInstinct, flowIntentCancel, flowIntentDenied, flowIntentMenu, flowIntentOther, flowMailReplyEdit, flowMailWalk, flowMeetCoordRequest, flowMeetingAudioAnswer, flowMeetingAudioRequest, flowMeetingFollowupRequest, flowMeetingReminderRequest, flowMenuList, flowMenuPick, flowNoAi, flowNoticeRequest, flowOnClosureAddress, flowOnDayEvening, flowOnFormFill, flowOnGoodsStop, flowOnMailMuteSender, flowOnMailRemindOrGoods, flowOnMeetCoord, flowOnMeetingTasks, flowOnPaceOffer, flowOnPlainMail, flowOnReminder, flowOnRfq, flowOnSentFollowup, flowOnThreadAdd, flowRemindersRequest, flowReplyAsk, flowRfqRequest, flowRfqSummary, flowSuggestionCommand, flowTranslateRequest, flowWalk, NEXT, switchCancels
 };

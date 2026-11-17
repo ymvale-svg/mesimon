@@ -21,6 +21,7 @@ const AiTasks = require('../tasks').AiTasks;
 const AiApi = require('./api-ai');
 const TodayApi = require('./api-today');
 const PhonebookApi = require('./api-phonebook');
+const PlacesApi = require('./api-places');
 const PriorityApi = require('./api-priority');
 const PriorityAccess = require('../priority').PriorityAccess;
 const MeetingsApi = require('./api-meetings');
@@ -5611,6 +5612,10 @@ const botTaskOps = {
  */
 const syncOps = {
   canSee: (actor, task) => canSeeTask(actor, task),
+  // 🔀 צירוף ההודעה למשימה אחרת — כמו באיחוד: רק מי שרשאי לערוך אותה
+  mayEdit: (actor, task) => canSeeTask(actor, task) && mayOnTask(actor, 'edit_delete_task', task, projectOf(task)),
+  // ➕ משימה חדשה מההודעה — אותה יצירה כמו בכל משימה
+  createTask: (actor, body) => createTask(actor, body),
 
   /** ההודעה כהערה פנימית, והקבצים מהמייל מצורפים אליה. קובץ שנכשל — לא מפיל את השאר */
   comment(actor, task, body, files = []) {
@@ -5683,6 +5688,7 @@ AiApi.register(router, { getTaskOr404, assertVisible, mayOnTask, shapeTask, acto
   taskTemplates: (actor) => visibleTemplates(actor).filter((t) => t.kind === 'task').map(shapeTemplate) });
 TodayApi.register(router, { shapeTask, createTask, getTaskOr404, listProjectsFor, newTaskProjects, assertMayAssignTo });
 PhonebookApi.register(router);
+PlacesApi.register(router);
 PriorityApi.register(router);
 WhatsNew.register(router);
 MeetingsApi.register(router, { getTaskOr404, assertVisible, shapeTask, canSeeTask });

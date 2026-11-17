@@ -196,11 +196,11 @@ const PERSONAL = {
   todayDigest: { tab: 'today', label: 'Today במייל — שעה וימים' },
   todayCalendars: { tab: 'today', label: 'אילו יומנים ב-Today' },
   voice: { tab: 'today', label: 'הקלטה ומילת הפעלה' },
-  aiApproveReminders: { tab: 'mail', label: 'משימות AI — כל תזכורת באישורי' },
-  mailAutoCreate: { tab: 'mail', label: 'מייל ← משימה בלי אישור' },
-  waScan: { tab: 'bot', label: 'סריקת הוואטסאפ האישי' },
+  aiApproveReminders: { tab: 'google', label: 'משימות AI — כל תזכורת באישורי' },
+  mailAutoCreate: { tab: 'google', label: 'מייל ← משימה בלי אישור' },
+  waScan: { tab: 'whatsapp', label: 'סריקת הוואטסאפ האישי' },
   mailClient: { tab: 'view', label: 'פתיחת מייל מהאלפון — Gmail / Outlook' },
-  priorityPrefs: { tab: 'priority', label: 'פריוריטי — הבחירה האחרונה (סביבה, פרויקט, מחסן)', ui: false },
+  priorityPrefs: { label: 'פריוריטי — הבחירה האחרונה (סביבה, פרויקט, מחסן)', ui: false },
   boardFilters: { ui: false }, boardView: { ui: false }, projectScope: { ui: false }, sidebar: { ui: false }, mobileFilter: { ui: false },
   projectOrder: { ui: false }, trackerProject: { ui: false }, trackerScope: { ui: false }, trackerColumns: { ui: false },
   trackerCollapsed: { ui: false }, homeLayout: { ui: false }, homeProject: { ui: false }, calendarUsers: { ui: false }, calendarDock: { ui: false },
@@ -209,8 +209,9 @@ const PERSONAL = {
 
 /** הלשוניות של "ההגדרות שלי" */
 const PERSONAL_TABS = Object.freeze([
-  { key: 'profile', label: '👤 פרטים' }, { key: 'bot', label: '🤖 הבוט' }, { key: 'mail', label: '📧 מייל ו-Google' },
-  { key: 'today', label: '☀️ Today' }, { key: 'notify', label: '🔔 התראות' }, { key: 'view', label: '🎨 תצוגה' }, { key: 'priority', label: '🗂 פריוריטי' }
+  { key: 'profile', label: '👤 פרטים' }, { key: 'bot', label: '🤖 הבוט' }, { key: 'google', label: '🔗 Google ומייל' },
+  { key: 'whatsapp', label: '💬 הוואטסאפ שלי' }, { key: 'today', label: '☀️ Today והקלטה' }, { key: 'location', label: '📍 מיקום' },
+  { key: 'notify', label: '🔔 התראות' }, { key: 'view', label: '🎨 תצוגה' }
 ]);
 
 const SYSTEM_KEYS = new Set([...Object.keys(FORM), ...Object.keys(SCREEN), ...Object.keys(HIDDEN)]);

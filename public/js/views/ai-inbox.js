@@ -598,6 +598,44 @@ const AiInboxView = (() => {
     }, reload));
   }
 
+  /** 📤 / 📥 — האם העובד שלח את המייל או קיבל אותו, עם התאריך המלא (מהערה של עובד: "לא ברור אם זה מייל שנשלח") */
+  function mailKindLine(s) {
+    const when = s.receivedAt ? new Date(s.receivedAt).toLocaleString('he-IL', { weekday: 'long', day: 'numeric', month: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '';
+    return el('div.mute-sm', { text: [s.sent ? '📤 מייל ששלחת' : '📥 מייל שקיבלת', when].filter(Boolean).join(' · ') });
+  }
+
+  /**
+   * 📧 המייל עצמו — מקופל, נטען מ-Gmail רק בפתיחה הראשונה (כמו "המייל עצמו" בכרטיס המשימה).
+   * תקלה — ההודעה מהשרת, ואפשר לסגור ולפתוח שוב כדי לנסות שוב.
+   */
+  function mailPreview(s) {
+    const box = el('div', { style: { marginTop: '6px', padding: '8px 10px', border: '1px solid var(--border, #e2e8f0)', borderRadius: '8px', background: 'var(--surface-2, transparent)' } }, [
+      el('div.mute-sm', { text: 'טוען את המייל…' })
+    ]);
+    let state = 'idle';
+    const details = el('details.source-mail', { style: { marginTop: '6px' } }, [el('summary', { text: '📧 המייל עצמו' }), box]);
+    details.addEventListener('toggle', async () => {
+      if (!details.open || state === 'loading' || state === 'done') return;
+      state = 'loading';
+      UI.mount(box, el('div.mute-sm', { text: 'טוען את המייל…' }));
+      try {
+        const m = await API.get(`/api/ai/suggestions/${s.id}/mail`);
+        const when = m.date ? new Date(m.date).toLocaleString('he-IL', { day: 'numeric', month: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '';
+        UI.mount(box, el('div', {}, [
+          el('div', { text: [`מאת: ${m.from || m.fromEmail || ''}${m.from && m.fromEmail ? ` <${m.fromEmail}>` : ''}`, when].filter(Boolean).join(' · ') }),
+          m.to ? el('div', { text: `אל: ${m.to}` }) : null,
+          el('div', { style: { whiteSpace: 'pre-wrap', marginTop: '6px', maxHeight: '320px', overflow: 'auto' }, text: m.text || '(המייל ריק)' }),
+          m.files?.length ? el('div', { style: { marginTop: '6px' }, text: `📎 ${m.files.join(' · ')}` }) : null
+        ]));
+        state = 'done';
+      } catch (err) {
+        UI.mount(box, el('div.mute-sm', { text: `⚠️ ${err.message || 'לא הצלחנו להביא את המייל'}` }));
+        state = 'idle';
+      }
+    });
+    return details;
+  }
+
   /**
    * עריכה ואישור — כותרת, תקציר, יעד, צ'קליסט ומי מעורב. כל שיוך לעובד אחר
    * נבדק בשרת לפי ההרשאות; מה שלא מורשה ייכשל עם הסבר ולא ייווצר בשקט.
@@ -614,6 +652,8 @@ const AiInboxView = (() => {
     // מקבוצת וואטסאפ — הפרויקט של הקבוצה, נעול: אין ערבוב בין פרויקטים
     const chat = d.source === 'whatsapp';
     const meeting = d.source === 'meeting';
+    // 📧 הצעה ממייל (לא מקבוצה, לא מסוכן ולא מפגישה) — "מייל ששלחת / שקיבלת" והמייל עצמו
+    const mail = !chat && !meeting && d.source !== 'agent' && Boolean(s.gmailId);
     const project = chat
       ? UI.select([{ value: d.projectId, label: d.projectName }], d.projectId, { disabled: true })
       : UI.select([{ value: '', label: 'ללא פרויקט' }, ...App.state.projects.filter((p) => p.mine).map((p) => ({ value: p.id, label: p.name }))], '');
@@ -657,7 +697,9 @@ const AiInboxView = (() => {
       body: el('div', {}, [
         el('div.ai-letter', {}, [
           el('div', {}, [el('b', { text: meeting ? d.meetingTitle : chat ? d.groupName : (s.subject || '(ללא נושא)') })]),
-          fromLine(s)
+          fromLine(s),
+          mail ? mailKindLine(s) : null,
+          mail ? mailPreview(s) : null
         ]),
         d.warning ? el('div.alert.alert-warn', {}, [el('span', { text: '⚠️' }), el('div', { text: d.warning })]) : null,
         UI.field('כותרת', title),
@@ -733,7 +775,8 @@ const AiInboxView = (() => {
 
   // ------------------------------------------------------------ חיבור Gmail והעדפות
 
-  async function openGmail(onChange = () => {}) {
+  /** ‎into‎ — בתוך לשונית ב"⚙ ההגדרות שלי" במקום חלון */
+  async function openGmail(onChange = () => {}, { into = null } = {}) {
     let info;
     try {
       info = await API.get('/api/me/gmail');
@@ -741,7 +784,7 @@ const AiInboxView = (() => {
       return UI.error(err);
     }
     const body = el('div');
-    const m = UI.modal({ title: '🔗 חיבור Google ועוזר ה-AI', body, size: 'wide' });
+    const m = UI.modalOrInline(into, { title: '🔗 חיבור Google ועוזר ה-AI', body, size: 'wide' });
 
     const refresh = (next) => { info = next; draw(); onChange(); };
     const pref = (key, label, hint) => {

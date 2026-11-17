@@ -29,7 +29,7 @@ const Timeless = require('../integrations').Timeless;
 const MailInsights = require('../mail').MailInsights;
 const Mime = require('../core').Mime;
 const TaskOutreach = require('../tasks').TaskOutreach;
-const { badRequest, forbidden, notFound, readJson, sendJson, parseUrl } = require('../core').HttpKit;
+const { HttpError, badRequest, forbidden, notFound, readJson, sendJson, parseUrl } = require('../core').HttpKit;
 const AgentsHealth = require('../agents').AgentsHealth;
 const McpClient = require('../integrations').McpClient;
 const ReplyMemory = require('../mail').ReplyMemory;
@@ -75,7 +75,8 @@ function register(router, h) {
     sendJson(res, 200, { task: shapeTask(getTaskOr404(task.id), actor, { withDetails: true }) });
 
   /** שגיאת AI או ערוץ היא שגיאה שהמשתמש צריך לקרוא, לא "שגיאה פנימית" */
-  const userError = (err) => (err?.status ? err : badRequest(err.message));
+  // שגיאה עם status מהתחום (למשל "ההצעה לא נמצאה" — 404) עוברת עם הקוד שלה, ולא הופכת ל-500
+  const userError = (err) => (err instanceof HttpError ? err : err?.status ? new HttpError(err.status, err.message) : badRequest(err.message));
 
   /**
    * אנשי קשר מוצעים: ספקים, עובדים, ומי שכבר פנו אליו במשימות AI קודמות.
@@ -1082,6 +1083,9 @@ function register(router, h) {
     }
   });
   suggestionAction('approve', (id, actor, b) => MailScan.approve(id, actor, b ?? {}));
+  // "לסגור?" / "לעדכן?" על משימה לא נכונה: 🔀 ההודעה למשימה אחרת (‎taskId‎), או ➕ משימה חדשה ממנה
+  suggestionAction('attach', (id, actor, b) => MailScan.attachToOther(id, actor, b ?? {}));
+  suggestionAction('new-task', (id, actor, b) => MailScan.newTaskFromMessage(id, actor, b ?? {}));
   suggestionAction('reject', (id, actor, b) => MailScan.reject(id, actor, { ignoreSender: Boolean(b?.ignoreSender) }));
   suggestionAction('join', (id, actor) => MailScan.join(id, actor));
   suggestionAction('skip', (id, actor) => MailScan.skip(id, actor));
@@ -1096,6 +1100,16 @@ function register(router, h) {
     const actor = userOnly(ctx);
     try { TaskClosure.dismissTask(Number(ctx.params.taskId), actor.id); } catch (err) { throw badRequest(err.message); }
     sendJson(res, 200, { ok: true });
+  });
+
+  // 📧 המייל עצמו — לדיאלוג "משימה מהמייל"; רק לבעל ההצעה
+  router.get('/api/ai/suggestions/:id/mail', async (req, res, ctx) => {
+    const actor = userOnly(ctx);
+    try {
+      sendJson(res, 200, await MailScan.suggestionMail(Number(ctx.params.id), actor.id));
+    } catch (err) {
+      throw userError(err);
+    }
   });
 
   router.post('/api/ai/suggestions/approve-all', async (req, res, ctx) => {
