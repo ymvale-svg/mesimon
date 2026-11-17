@@ -403,6 +403,34 @@ test('👎 כהודעה נפרדת לפני הטיוטא — שלב אחד אח�
   assert.equal(pr.writes.length, 0);
 });
 
+test('תנאי תשלום אחרי אישור הכותרת ("תעשה שוטף" בשאלת ההזמנה) — מתעדכנים, והשאלה נשארת', async (t) => {
+  // מהסקירה של 17.11: העובד אישר את הכותרת, ובשאלת ההזמנה כתב "תעשה שוטף". הבוט חזר על השאלה, 👎 לא החזיר לכותרת,
+  // והעובד ביטל ושלח את המסמך מחדש רק כדי לשנות את תנאי התשלום
+  H.companies(t, 'test11');
+  const u = H.worker();
+  const pr = priority(t);
+  ai(t, doc());
+  const { say } = H.chat(t, u);
+  await say('קבלת סחורה', { file: H.photo() });
+  let r = await say(BTN.yes);                   // ← "יש מספר הזמנה?"
+  assert.match(r.text, /אין הזמנות פתוחות/);
+  r = await say('תעשה שוטף');
+  assert.match(r.text, /תנאי התשלום עודכנו: \*שוטף\*/);
+  assert.match(r.text, /אין הזמנות פתוחות/, 'שאלת ההזמנה חוזרת');
+  H.assertButtons(r.buttons, ['בלי הזמנה ❌', BTN.cancel]);
+  r = await say('בלי הזמנה ❌');
+  assert.match(r.text, /זה מה שהתקבל בפועל/);
+  r = await say('שוטף 60');                     // גם בשלב השורות
+  assert.match(r.text, /תנאי התשלום עודכנו: \*שוטף \+ 60\*/);
+  assert.match(r.text, /זה מה שהתקבל בפועל/);
+  r = await say(BTN.yes);
+  r = await say(BTN.yes);
+  r = await say('נהריה מגרש 12');
+  r = await say(BTN.done);
+  assert.match(r.text, /טיוטא לבדיקה/);
+  assert.equal(pr.state.head.payCode, require('../../../server/integrations/priority').payFromText('שוטף 60').code);
+});
+
 test('👎 כתגובה (Reaction) = לא: בשאלת "יש מספר הזמנה?" — בלי הזמנה', async (t) => {
   H.companies(t, 'test11');
   const u = H.worker();
