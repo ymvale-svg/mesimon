@@ -557,3 +557,32 @@ test('שאלה יזומה מאינסטינקט — הטקסט שלו לא נכנ
   assert.match(history, /שאלה מהעוזר הכללי/);
   assert.doesNotMatch(history, /SECRET-MARKER/);
 });
+
+// באג 17.11.26: PDF עם הכיתוב "תתקן את המסמך לתאריך 30.09.2026" — ה-AI לא ידע שצורף קובץ, וענה על תאריך היעד של משימה
+for (const [name, first] of [['קובץ עם כיתוב', true], ['קובץ ואחריו הבקשה', false]]) {
+  test(`📎 ${name} — הבנת הבקשה יודעת על הקובץ, והבקשה יוצאת לאינסטינקט עם ה-PDF`, async (t) => {
+    const wa = setup(t);
+    const pdf = { kind: 'documentMessage', file: { url: 'https://x/AutoLIELLO.pdf', mime: 'application/pdf', name: 'AutoLIELLO--ADLIT-791533.PDF' } };
+    const ask = 'תתקן את המסמך לתאריך 30.09.2026';
+    Fakes.claude(t, (opts) => {
+      const keys = Object.keys(opts.schema?.properties ?? {});
+      if (keys.includes('identifying')) return { identifying: false, what: '' };
+      if (keys.includes('request_id')) return { request_id: 0, asks_for_info: false, reason: '' };
+      const prompt = (opts.content ?? []).map((c) => c.text).join('\n');
+      return /קובץ שצורף.*AutoLIELLO--ADLIT-791533\.PDF/.test(prompt)
+        ? { intent: 'instinct', request: ask, ready: true, reply: '' }
+        : { intent: 'other', ready: true, reply: 'את תאריך היעד של משימה אי אפשר לשנות מכאן' };
+    });
+    t.mock.method(Speech, 'download', async () => ({ buf: Buffer.alloc(20000, 1), mime: 'application/pdf' }));
+    const u = person();
+    if (first) await say(u.phone, ask, pdf);
+    else { await say(u.phone, '', pdf); await say(u.phone, ask); }
+    await settle();
+    const out = toInstinct(wa);
+    assert.equal(out.length, 1);
+    assert.equal(out[0].method, 'sendFileByUrl');
+    assert.equal(out[0].body.urlFile, 'https://x/AutoLIELLO.pdf');
+    assert.match(out[0].body.caption, /30\.09\.2026/);
+    assert.doesNotMatch(toUser(wa, u).map((c) => c.body?.message ?? '').join('\n'), /תאריך היעד/);
+  });
+}
