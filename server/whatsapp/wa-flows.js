@@ -404,7 +404,8 @@ async function flowRemindersRequest({ actor, dry, out, state, t }) {
   // "לא משימה — תזכיר לי" על טיוטת משימה: הטיוטה הפכה לתזכורת ויורדת. אחרת מה שחיכה — ממשיך לחכות
   const next = !waiting ? {} : r.fromAbout ? { draft: null, awaiting: false } : { draft: state.draft, awaiting: true };
   // ✅ על ההודעה כשנרשמה / בוטלה תזכורת (הטקסט נשאר — יש בו את המועד)
-  return out(r.text, next, { action: 'reminders', status: r.error ? 'error' : 'ok', result: r.result, react: /^(תזכורת|בוטלה)/.test(r.result ?? '') ? '✅' : undefined });
+  // 📍 תזכורת לפי מיקום — ביומן בנפרד (הטיפ "הבוט יודע להזכיר כשמגיעים למקום" — רק למי שעוד לא ניסה)
+  return out(r.text, next, { action: r.place ? 'reminders_place' : 'reminders', status: r.error ? 'error' : 'ok', result: r.result, react: /^(תזכורת|בוטלה)/.test(r.result ?? '') ? '✅' : undefined });
 }
 
 // 📬 "זכרת? 🐣" על מייל שלא טופל, ו"לבצע קבלת סחורה?" על חשבונית מהמייל

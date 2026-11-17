@@ -55,14 +55,16 @@ async function threadRef(who, threadId) {
 }
 
 /** השרשורים האחרונים עם הנמען (‎THREAD_DAYS‎), מהחדש לישן — לבחירה "בהמשך לשרשור" */
-async function recentThreads(userId, email, { max = 3 } = {}) {
+async function recentThreads(userId, email, { max = 3, subject = '', days = THREAD_DAYS } = {}) {
   const address = String(email ?? '').trim().toLowerCase();
   if (!/^[^\s@"]+@[^\s@"]+$/.test(address)) return [];
   const out = [];
   try {
     for (const who of Gmail.boxesOf(userId, 'mail')) {
       const seen = new Set();
-      for (const id of await Gmail.search(who, `{from:${address} to:${address} cc:${address}} newer_than:${THREAD_DAYS}d`, { max: 10 })) {
+      // ‎subject‎ — שרשור בנושא מסוים (גם אם אינו בין האחרונים)
+      const about = String(subject ?? '').replace(/["()]/g, ' ').trim();
+      for (const id of await Gmail.search(who, `{from:${address} to:${address} cc:${address}}${about ? ` subject:(${about})` : ''} newer_than:${days}d`, { max: 10 })) {
         const m = await Gmail.messageMeta(who, id);
         if (seen.has(m.threadId)) continue;
         seen.add(m.threadId);
