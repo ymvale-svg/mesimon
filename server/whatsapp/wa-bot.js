@@ -49,6 +49,7 @@ const VoiceRouter = require('./voice-router');
 const MailThread = require('../mail').MailThread;
 const MailPush = require('../mail').MailPush;
 const MailDose = require('../mail').MailDose;
+const WaReads = require('./wa-reads');
 const Solve = require('./solve');
 const Insights = require('../agents').Insights;
 const Range = require('../mail').InsightWindow;
@@ -214,6 +215,12 @@ async function receiveOne(ch, timeout = LISTEN_TIMEOUT) {
     } else if (chatId.endsWith('@c.us') && /message/i.test(b.typeWebhook ?? '') && !/outgoing/i.test(b.typeWebhook ?? '') && locationOf(b.messageData ?? {}, b.typeWebhook)) {
       // 📍 עדכון של שיתוף מיקום בזמן אמת שהגיע כהתראה אחרת (הודעה ערוכה / מעודכנת) — מיקום בלבד
       direct = { chatId, phone: chatId.replace(/@c\.us$/, ''), text: '', kind: 'location_update', location: locationOf(b.messageData ?? {}, b.typeWebhook), id: String(b.idMessage ?? note.receiptId) };
+    } else if (b.typeWebhook === 'outgoingMessageStatus') {
+      // 👁 נמסרה / נקראה — להצעות היזומות על מיילים (‎wa-reads.js‎)
+      const to = String(b.chatId ?? '');
+      if (to.endsWith('@c.us')) {
+        WaReads.onStatus({ idMessage: b.idMessage, status: b.status, at: b.timestamp ? new Date(b.timestamp * 1000) : new Date(), userId: userByPhone(to.replace(/@c\.us$/, ''))?.id ?? null });
+      }
     } else if (b.typeWebhook === 'stateInstanceChanged' && b.stateInstance) {
       setState(b.stateInstance);
     }
@@ -1871,7 +1878,7 @@ module.exports = {
   // לשליחה ממודולים אחרים — התראה לפני פגישה (‎meetings.js‎), עם רישום ביומן הבוט
   sendText, sendButtons, log, notifyAssignment, assistant, deliver, sendFilesToUser, mailAlertUsers, handOver,
   _internal: {
-    locationOf,
+    locationOf, receiveOne,
     featuresText, PLAIN_FEATURES, parseThreadAdd, threadAddText, dayItems, walkText, walkButtons, walkAction, WALK,
     storeGroupMessage, processGroup, handleDirect, sanitizeGroup, resolveMentions, candidatesOf, converse, turn, withFollowUps, sendSummaries, YES,
     findRecipients, findContactCards, sourceOf, suggestionFeedback, flushOutbox, todayMessage, splitMessage, parseSuggestionCommand, businessCommand, chatOf, saveChat,

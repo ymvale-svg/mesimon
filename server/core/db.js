@@ -1423,6 +1423,28 @@ CREATE TABLE IF NOT EXISTS ai_usage (
   PRIMARY KEY (day, user_id, feature, model, fast)
 );
 
+/*
+ * 👁 אישורי קריאה של הצעות יזומות על מיילים (‎whatsapp/wa-reads.js‎): נשלחה / נמסרה / נקראה. נמחק אחרי 30 יום.
+ * ‎counted‎ — כבר נספרה ברצף של "לא נקראו" (לא נספרת שוב).
+ */
+CREATE TABLE IF NOT EXISTS wa_reads (
+  id_message   TEXT    PRIMARY KEY,
+  user_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  kind         TEXT    NOT NULL DEFAULT 'mail_alert',
+  sent_at      TEXT    NOT NULL,
+  status       TEXT    NOT NULL DEFAULT 'sent',   -- sent | delivered | read
+  delivered_at TEXT,
+  read_at      TEXT,
+  counted      INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_wa_reads_user ON wa_reads(user_id, sent_at);
+
+/* 👁 מי שהטלפון שלו מדווח "נקרא" (אישורי קריאה דלוקים) — רק אצלו מסיקים משהו מהודעה שלא נקראה */
+CREATE TABLE IF NOT EXISTS wa_read_reporters (
+  user_id      INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  last_read_at TEXT    NOT NULL
+);
+
 /* תור השרשורים: מה שמופה בשלב 1, ומה שנקרא בשלב 3 */
 CREATE TABLE IF NOT EXISTS mail_memory_threads (
   user_id       INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,

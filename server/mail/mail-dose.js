@@ -20,6 +20,7 @@
  */
 const D = require('../core').Db;
 const W = require('../core').Workdays;
+const Gmail = require('../integrations').Gmail;
 
 const STEPS = Object.freeze([100, 50, 20, 0]);
 const PAUSED = STEPS.length - 1;
@@ -79,6 +80,55 @@ function noteReject(userId) {
   else save(userId, { rejects });
 }
 
+/** 👁 הצעות יזומות ברצף שנמסרו ולא נקראו (‎whatsapp/wa-reads.js‎) — מדרגה למטה מיד */
+function noteUnread(userId) {
+  if (!userId || !enabled()) return;
+  const s = stateOf(userId) ?? {};
+  save(userId, { drops: Number(s.drops ?? 0) + 1, unreadAt: D.nowIso() });
+}
+
+/**
+ * 📜 נקודת ההתחלה מההיסטוריה (הוחלט 17.11.26: "על סמך נתוני שימוש של לפני כשבועיים") — פעם אחת, בעלייה הראשונה
+ * של הגרסה. לכל עובד שחיבר תיבה: השימוש האחרון ב-‎days‎ הימים האחרונים —
+ *   • בבוט (‎wa_log‎): "מיילים לענות", טיוטת תשובה / תיקון שלה, תשובה שנשלחה מהצעה יזומה;
+ *   • במשימון (‎ai_suggestions‎): הצעה שאושרה או צורפה, תשובה מוכנה שנשלחה.
+ * נמצא — השעון מתחיל ממנו. לא נמצא — כאילו השתמש לפני ‎days‎ ימים (או ביום שנוסף למערכת, אם מאוחר יותר):
+ * שבועיים בלי שימוש הם 2 מדרגות (20%), ואף אחד לא מושהה ביום ההפעלה — רק אחרי עוד שבוע בלי שימוש.
+ * עובד שכבר השתמש מאז העלייה (‎noteUse‎) — לא נדרס. ‎force‎ — שוב (לבדיקות ולמנהל).
+ * @returns {{ users: number, used: number, levels: number[] } | null}  ‎null‎ — כבר רץ
+ */
+function seedFromHistory({ days = 14, now = new Date(), force = false } = {}) {
+  if (!force && D.getSetting('ai_dose_seeded_at', '')) return null;
+  const since = new Date(now.getTime() - days * 86400000).toISOString();
+  const users = D.all("SELECT id, created_at FROM users WHERE status = 'active'").filter((u) => Gmail.boxesOf(u.id, 'mail').length > 0);
+  const out = { users: 0, used: 0, levels: [0, 0, 0, 0] };
+  for (const u of users) {
+    const s = stateOf(u.id);
+    if (s?.lastKind && s.lastKind !== 'history') continue;
+    const bot = D.get(
+      `SELECT MAX(at) at FROM wa_log WHERE user_id = ? AND channel = 'private' AND status = 'ok' AND at >= ?
+         AND (action IN ('mail_walk', 'mail_insights') OR (action = 'mail_alert' AND result LIKE 'תשובה ל%'))`,
+      u.id, since
+    )?.at;
+    const app = D.get(
+      "SELECT MAX(decided_at) at FROM ai_suggestions WHERE user_id = ? AND status IN ('approved', 'joined') AND decided_at >= ?",
+      u.id, since
+    )?.at;
+    const replied = D.get(
+      "SELECT MAX(json_extract(data, '$.reply.sent')) at FROM ai_suggestions WHERE user_id = ? AND json_extract(data, '$.reply.sent') >= ?",
+      u.id, since
+    )?.at;
+    const last = [bot, app, replied].filter(Boolean).sort().pop() ?? null;
+    const start = last ?? [since, u.created_at].filter(Boolean).sort().pop();
+    save(u.id, { lastUse: start, lastKind: last ? 'history' : '', drops: 0, rejects: 0, pausedNotice: null, seeded: D.nowIso() });
+    out.users++;
+    if (last) out.used++;
+    out.levels[level(u.id, { today: W.ilDateOf(now.toISOString()) })]++;
+  }
+  D.setSetting('ai_dose_seeded_at', D.nowIso());
+  return out;
+}
+
 /** להכין תשובה מראש בסריקה — רק ב-100% */
 const prepareReplies = (userId) => level(userId) === 0;
 
@@ -133,5 +183,5 @@ function summary(userId) {
 
 module.exports = {
   STEPS, PAUSED, REJECT_LIMIT, LIVE_MINUTES, PAUSE_BTN, PAUSE_TEXT,
-  level, percent, paused, noteUse, noteReject, prepareReplies, liveDue, morningScan, mayOffer, takePauseNotice, summary, workDaysSince
+  level, percent, paused, noteUse, noteReject, noteUnread, seedFromHistory, prepareReplies, liveDue, morningScan, mayOffer, takePauseNotice, summary, workDaysSince
 };

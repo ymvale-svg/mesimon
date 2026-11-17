@@ -35,6 +35,7 @@ const Meetings = require('./meetings').Meetings;
 const Dupes = require('./tasks').TaskDupes;
 const { HttpError, sendJson, serveStatic, parseUrl, unauthorized } = require('./core').HttpKit;
 const MailDocQueue = require('./mail').MailDocQueue;
+const MailDose = require('./mail').MailDose;
 const PoNotify = require('./priority').PoNotify;
 const TimelessMedia = require('./meetings').TimelessMedia;
 const TimelessStore = require('./meetings').TimelessStore;
@@ -48,6 +49,13 @@ require('./wiring');
 
 D.bootstrap();
 Auth.purgeExpired();
+// 📉 מינון המייל — נקודת ההתחלה של כל עובד לפי השבועיים האחרונים, פעם אחת (‎mail/mail-dose.js‎)
+try {
+  const seeded = MailDose.seedFromHistory();
+  if (seeded) console.log(`[משימון] מינון המייל לפי השימוש בשבועיים האחרונים: ${seeded.users} עובדים, ${seeded.used} השתמשו · 100%: ${seeded.levels[0]} · 50%: ${seeded.levels[1]} · 20%: ${seeded.levels[2]} · מושהה: ${seeded.levels[3]}`);
+} catch (err) {
+  console.error('[משימון] חישוב המינון מההיסטוריה נכשל:', err.message);
+}
 // ההודעה הראשונה של "מה חדש" — טיוטה אחת, פעם אחת, אחרי שהטבלה קיימת
 require('./api').ApiWhatsNew.seedFirstRelease();
 

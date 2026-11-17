@@ -12,6 +12,7 @@ const MailInsights = require('../mail').MailInsights;
 const Insights = require('../agents').Insights;
 const TaskSync = require('../tasks').TaskSync;
 const { BACKLOG_DAYS, BATCH_MAX, CONTEXT_MESSAGES, DAY, GROUP_SKILL, KEEP_DAYS, LOG_DAYS, candidatesOf, localDate, log, orgUsers, parseJson } = require('./wa-base');
+const WaReads = require('./wa-reads');
 
 
 const GROUP_SCHEMA = {
@@ -286,6 +287,7 @@ function prune() {
   D.run("DELETE FROM wa_messages WHERE chat_id IN (SELECT chat_id FROM wa_groups WHERE status = 'ignored')");
   D.run('DELETE FROM wa_log WHERE at < ?', new Date(Date.now() - LOG_DAYS * DAY).toISOString());
   D.run('DELETE FROM wa_forwards WHERE at < ?', new Date(Date.now() - DAY).toISOString());
+  WaReads.prune();
 }
 
 

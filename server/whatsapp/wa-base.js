@@ -116,8 +116,8 @@ async function checkState() {
     const state = (await WhatsApp.call(ch, 'getStateInstance'))?.stateInstance ?? 'unknown';
     setState(state);
     if (state === 'authorized') {
-      // רק הודעות נכנסות. בלי דיווח על יוצאות — הבוט כותב רק בפרטי, ואת זה הוא יודע ממילא
-      await WhatsApp.call(ch, 'setSettings', { http: 'POST', body: { incomingWebhook: 'yes', outgoingMessageWebhook: 'no', outgoingAPIMessageWebhook: 'no' } })
+      // הודעות נכנסות, ו-👁 סטטוס של מה שהבוט שלח (נמסרה / נקראה — ‎wa-reads.js‎). בלי ההודעות היוצאות עצמן — הבוט יודע מה כתב
+      await WhatsApp.call(ch, 'setSettings', { http: 'POST', body: { incomingWebhook: 'yes', outgoingWebhook: 'yes', outgoingMessageWebhook: 'no', outgoingAPIMessageWebhook: 'no' } })
         .catch((err) => console.error('[משימון] הגדרת בוט הוואטסאפ נכשלה:', err.message));
     }
     return { state };
@@ -139,10 +139,12 @@ async function qr() {
 }
 
 
+/** מחזיר את מזהה ההודעה שוואטסאפ נתן (לאישורי קריאה — ‎wa-reads.js‎), או ‎null‎ */
 async function sendText(chatId, message) {
   const ch = channel();
-  if (!ch) return;
-  await WhatsApp.call(ch, 'sendMessage', { http: 'POST', body: { chatId, message } });
+  if (!ch) return null;
+  const sent = await WhatsApp.call(ch, 'sendMessage', { http: 'POST', body: { chatId, message } });
+  return sent?.idMessage ?? null;
 }
 
 
@@ -159,7 +161,7 @@ let buttonsOffUntil = 0;
  */
 async function sendButtons(chatId, message, buttons, q = null) {
   const ch = channel();
-  if (!ch) return;
+  if (!ch) return null;
   if (!buttons?.length) return sendText(chatId, message);
   // הכפתורים כבויים (נכשלו לאחרונה) — הטקסט, והאפשרויות כשורות, כדי שלא יאבדו
   if (Date.now() < buttonsOffUntil) return sendText(chatId, `${message}\n\n${buttons.slice(0, 3).map((b) => `▫️ ${b}`).join('\n')}`);
@@ -174,10 +176,11 @@ async function sendButtons(chatId, message, buttons, q = null) {
       const u = userByPhone(String(chatId).replace(/@c\.us$/, ''));
       if (u) WaQuestions.record(u.id, sent.idMessage, q);
     }
+    return sent?.idMessage ?? null;
   } catch (err) {
     console.error('[משימון] כפתורים בוואטסאפ לא נשלחו, נשלח טקסט:', err.message);
     buttonsOffUntil = Date.now() + 60 * 60 * 1000;
-    await sendText(chatId, `${body !== '👇' ? `${message}\n\n` : ''}${buttons.slice(0, 3).map((b) => `▫️ ${b}`).join('\n')}`);
+    return sendText(chatId, `${body !== '👇' ? `${message}\n\n` : ''}${buttons.slice(0, 3).map((b) => `▫️ ${b}`).join('\n')}`);
   }
 }
 

@@ -17,6 +17,7 @@ const MailInsights = require('../mail').MailInsights;
 const MailThread = require('../mail').MailThread;
 const MailPush = require('../mail').MailPush;
 const MailDose = require('../mail').MailDose;
+const WaReads = require('./wa-reads');
 const WaScan = require('./whatsapp-scan');
 const Business = require('./wa-business');
 const GoodsReceipt = require('../priority').GoodsReceipt;
@@ -684,7 +685,9 @@ async function mailAlertFor(userId) {
   const text = MailPush.replyAlert(head, reply);
   const draft = { kind: 'mail_reply', reply, alert: true, suggestionIds: ids, subject: head.subject };
   try {
-    await sendButtons(chatId, text, [WaUi.BTN.yes, WaUi.BTN.no], { owner: 'chat', draft, awaiting: true });
+    const sentId = await sendButtons(chatId, text, [WaUi.BTN.yes, WaUi.BTN.no], { owner: 'chat', draft, awaiting: true });
+    // 👁 נפתחה? (‎wa-reads.js‎) — הצעות שלא נקראות מורידות את המינון
+    WaReads.track(userId, sentId, 'mail_alert');
     rememberBot(userId, text);
     // המצב נקרא שוב רגע לפני השמירה — הודעה שהגיעה בינתיים מהעובד גוברת
     const now = chatOf(userId);
@@ -770,12 +773,21 @@ const mailWalkEnd = (w) => `🏁 עברנו על כולם 👏${w.sent || w.drop
 
 async function mailAlerts() {
   for (const userId of mailAlertUsers()) {
+    checkUnread(userId);
     if (MailDose.paused(userId)) {
       await pauseNoticeFor(userId).catch((err) => console.error('[משימון] הודעת השהיית המייל נכשלה:', err.message));
       continue;
     }
     await mailAlertFor(userId).catch((err) => console.error('[משימון] פנייה על מייל חדש נכשלה:', err.message));
   }
+}
+
+/** 👁 ‎STREAK‎ הצעות ברצף שנמסרו ולא נקראו ב-24 שעות — מדרגה למטה מיד (רק אצל מי שמדווח "נקרא", ‎wa-reads.js‎) */
+function checkUnread(userId) {
+  if (!WaReads.unreadStreak(userId)) return false;
+  MailDose.noteUnread(userId);
+  log({ channel: 'summary', userId, action: 'mail_dose', status: 'ok', result: `👁 ${WaReads.STREAK} הצעות מייל ברצף לא נקראו — המינון ירד ל-${MailDose.percent(userId)}%` });
+  return true;
 }
 
 /**
@@ -922,5 +934,5 @@ async function sendPlainMail(actor, d, { dry = false } = {}) {
 
 module.exports = {
   sendPlainMail,
-  businessCommand, closeAlerted, pauseNoticeFor, closureDecision, confirmPending, contactOf, createFromDraft, draftEmail, findRecipients, mailActionAlerts, mailAlertFor, mailAlerts, parseThreadAdd, replyOffer, MAIL_WALK_BTN, isMailWalkStart, mailWalkIntro, mailWalkAt, mailWalkEnd, resolveCc, solveText, startGoodsFromMail, suggestionDecision, suggestionFeedback, threadAddText, VIA_EMAIL, VIA_MESIMON
+  businessCommand, checkUnread, closeAlerted, pauseNoticeFor, closureDecision, confirmPending, contactOf, createFromDraft, draftEmail, findRecipients, mailActionAlerts, mailAlertFor, mailAlerts, parseThreadAdd, replyOffer, MAIL_WALK_BTN, isMailWalkStart, mailWalkIntro, mailWalkAt, mailWalkEnd, resolveCc, solveText, startGoodsFromMail, suggestionDecision, suggestionFeedback, threadAddText, VIA_EMAIL, VIA_MESIMON
 };

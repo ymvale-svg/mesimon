@@ -163,6 +163,7 @@ const INTERNAL = new Set([
   'pd_approval_notified', 'pd_approval_unmapped', 'ai_outage', 'ai_retry',
   'pd_openers', // מי פתח כל דרישת רכש מהבוט (לפי חברה ומספר) — להודעת "אושרה"
   'pd_returned', // דרישות שהוחזרו לבדיקה ומחכות לפותח (לפי חברה ומספר) — pd-return.js
+  'ai_dose_seeded_at', // 📉 מינון המייל — מתי חושבה נקודת ההתחלה מהשבועיים האחרונים (פעם אחת)
   'pd_return_chats' // שיחות פתוחות של החזרה לבדיקה (המחזיר / המסביר), לפי עובד, 30 דקות — pd-return.js
 ]);
 

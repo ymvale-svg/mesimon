@@ -144,3 +144,60 @@ test('מינון כבוי (‎ai_dose_enabled = false‎) — כולם 100%', (t
   assert.equal(MailDose.level(u.id), 0);
   assert.equal(MailDose.mayOffer(u.id, 'normal'), true);
 });
+
+// ---------------------------------------------------------------- 📜 נקודת ההתחלה מההיסטוריה
+
+const Gmail = require('../../../server/integrations').Gmail;
+
+/** שבועיים של היסטוריה עד 17.11.26 (שלישי) */
+const NOW = new Date('2026-11-17T10:00:00.000Z');
+const daysAgo = (n) => new Date(NOW.getTime() - n * 86400000).toISOString();
+const seed = (t, users) => {
+  const ids = new Set(users.map((u) => u.id));
+  t.mock.method(Gmail, 'boxesOf', (id) => (ids.has(id) ? [id] : []));
+  return MailDose.seedFromHistory({ now: NOW, force: true });
+};
+const levelNow = (u) => MailDose.level(u.id, { today: '2026-11-17' });
+
+test('מההיסטוריה: השתמש בבוט לפני 3 ימים — 100%; ב"ממתין לאישורך" לפני 9 ימים — 50%; לא השתמש — 20%, לא מושהה', (t) => {
+  const bot = user({ created_at: daysAgo(100) });
+  const app = user({ created_at: daysAgo(100) });
+  const none = user({ created_at: daysAgo(100) });
+  D.run("INSERT INTO wa_log (at, channel, user_id, action, result, status) VALUES (?, 'private', ?, 'mail_walk', 'מייל 1/3', 'ok')", daysAgo(3), bot.id);
+  D.run("INSERT INTO ai_suggestions (user_id, kind, status, gmail_id, header_id, subject, data, created_at, decided_at) VALUES (?, 'task', 'approved', 'h1', 'hh1', 'x', '{}', ?, ?)", app.id, daysAgo(10), daysAgo(9));
+  const r = seed(t, [bot, app, none]);
+  assert.equal(r.users, 3);
+  assert.equal(r.used, 2);
+  assert.equal(levelNow(bot), 0);
+  assert.equal(levelNow(app), 1);
+  assert.equal(levelNow(none), 2);
+  assert.equal(D.userPrefs(bot.id).mailDose.lastKind, 'history');
+});
+
+test('מההיסטוריה: "לא" על הצעה ושימוש מלפני יותר משבועיים — לא נחשבים', (t) => {
+  const u = user({ created_at: daysAgo(100) });
+  D.run("INSERT INTO wa_log (at, channel, user_id, action, result, status) VALUES (?, 'private', ?, 'mail_alert', 'לא: הצעת מחיר', 'ok')", daysAgo(1), u.id);
+  D.run("INSERT INTO wa_log (at, channel, user_id, action, result, status) VALUES (?, 'private', ?, 'mail_walk', 'מייל 1/3', 'ok')", daysAgo(30), u.id);
+  seed(t, [u]);
+  assert.equal(levelNow(u), 2);
+});
+
+test('מההיסטוריה: עובד שנוסף לפני 3 ימים — השעון מהיום שנוסף (100%)', (t) => {
+  const u = user({ created_at: daysAgo(3) });
+  seed(t, [u]);
+  assert.equal(levelNow(u), 0);
+});
+
+test('מההיסטוריה: עובד שהשתמש מאז העלייה — לא נדרס; ורץ פעם אחת בלבד', (t) => {
+  const u = user({ created_at: daysAgo(100) });
+  MailDose.noteUse(u.id, 'walk');
+  seed(t, [u]);
+  assert.equal(D.userPrefs(u.id).mailDose.lastKind, 'walk');
+  assert.equal(MailDose.seedFromHistory({ now: NOW }), null, 'כבר רץ');
+});
+
+test('מההיסטוריה: מי שלא חיבר תיבה — בלי מצב', (t) => {
+  const u = user({ created_at: daysAgo(100) });
+  seed(t, []);
+  assert.equal(D.userPrefs(u.id)?.mailDose, undefined);
+});

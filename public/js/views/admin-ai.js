@@ -425,9 +425,10 @@ const AdminAiView = (() => {
           f.label, money(f.usd), `${r.total.usd ? Math.round((f.usd / r.total.usd) * 100) : 0}%`, f.calls, k(f.input), k(f.cacheRead), k(f.output)
         ])),
         el('h4', { text: '👤 לפי עובד', style: { marginTop: '16px' } }),
-        el('p.mute-sm', { text: '📉 מינון המייל: מי שלא משתמש בהצעות המייל (בבוט או ב"ממתין לאישורך") יורד בכל שבוע עבודה מדרגה — 100% ← 50% ← 20% ← מושהה. כל שימוש מחזיר ל-100%.' }),
-        table(['עובד', 'עלות', 'קריאות', '📉 מינון מייל', 'על מה בעיקר'], r.byUser.map((u) => [
+        el('p.mute-sm', { text: '📉 מינון המייל: מי שלא משתמש בהצעות המייל (בבוט או ב"ממתין לאישורך") יורד בכל שבוע עבודה מדרגה — 100% ← 50% ← 20% ← מושהה, ו-5 הצעות ברצף שלא נפתחו — מדרגה מיד. כל שימוש מחזיר ל-100%.' }),
+        table(['עובד', 'עלות', 'קריאות', '📉 מינון מייל', '👁 הצעות שנקראו (30 יום)', 'על מה בעיקר'], r.byUser.map((u) => [
           u.name, money(u.usd), u.calls, u.dose ? (u.dose.percent ? `${u.dose.percent}%` : '⏸ מושהה') : '—',
+          !u.reads ? '—' : !u.reads.reports ? `${u.reads.sent} נשלחו · אישורי קריאה כבויים` : `${u.reads.read} מתוך ${u.reads.sent}`,
           u.features.slice(0, 3).map((f) => `${f.label} ${money(f.usd)}`).join(' · ')
         ])),
         el('h4', { text: '🧠 לפי מודל', style: { marginTop: '16px' } }),
