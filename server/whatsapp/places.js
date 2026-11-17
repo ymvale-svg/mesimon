@@ -65,7 +65,7 @@ function clean(input, prev = {}) {
   if (!validCoord(lat, lng)) throw new Error('חסר נ"צ תקין למקום');
   const radius = Math.round(Math.min(5000, Math.max(50, Number(input.radius ?? prev.radius) || DEFAULT_RADIUS[kind])));
   const raw = input.aliases ?? prev.aliases ?? [];
-  const aliases = (Array.isArray(raw) ? raw : String(raw).split(/[,\n]/)).map((a) => String(a).trim()).filter(Boolean).slice(0, 10);
+  const aliases = (Array.isArray(raw) ? raw : String(raw).split(/[,\n]/)).map((a) => String(a).trim().slice(0, 40)).filter(Boolean).slice(0, 10);
   return { name, kind, lat, lng, radius, aliases };
 }
 
