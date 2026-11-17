@@ -521,9 +521,9 @@ const MEMORY_SCHEMA = {
       items: {
         type: 'object',
         properties: {
-          email: { type: 'string' }, name: { type: 'string' }, company: { type: 'string' }, role: { type: 'string' }, phone: { type: 'string' }
+          email: { type: 'string' }, name: { type: 'string' }, company: { type: 'string' }, role: { type: 'string' }, title: { type: 'string' }, phone: { type: 'string' }
         },
-        required: ['email', 'name', 'company', 'role', 'phone'],
+        required: ['email', 'name', 'company', 'role', 'title', 'phone'],
         additionalProperties: false
       }
     },
@@ -705,7 +705,9 @@ async function readThread(userId, who, threadId, run) {
     if (!participants.has(email)) continue;
     // טלפון רק מהחתימה של האדם עצמו — כלומר, רק אם הוא שלח הודעה בשרשור
     const phone = senders.has(email) ? normPhone(c.phone) : '';
-    savePerson(userId, email, { name: c.name, company: c.company, role: c.role, phone: phone.length >= 9 ? phone : '', internal: org.has(email) });
+    // תואר — גם הוא רק מהחתימה שלו עצמו
+    const title = senders.has(email) ? String(c.title ?? '').trim() : '';
+    savePerson(userId, email, { name: c.name, company: c.company, role: c.role, title, phone: phone.length >= 9 ? phone : '', internal: org.has(email) });
   }
   for (const e of (out.events ?? []).slice(0, 3)) {
     const summary = String(e.summary ?? '').trim().slice(0, 600);
@@ -738,13 +740,13 @@ async function readThread(userId, who, threadId, run) {
   return 'done';
 }
 
-function savePerson(userId, email, { name, company, role, phone, internal }) {
+function savePerson(userId, email, { name, company, role, title = '', phone, internal }) {
   const cur = D.get('SELECT * FROM mail_people WHERE user_id = ? AND email = ?', userId, email);
   const clean = (x, n) => String(x ?? '').trim().slice(0, n);
   if (!cur) {
     D.run(
-      `INSERT INTO mail_people (user_id, email, name, company, role, phone, phone_hits, internal, updated_at) VALUES (?,?,?,?,?,?,?,?,?)`,
-      userId, email, clean(name, 120), clean(company, 120), clean(role, 120), phone, phone ? 1 : 0, internal ? 1 : 0, nowIso()
+      `INSERT INTO mail_people (user_id, email, name, company, role, title, phone, phone_hits, internal, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)`,
+      userId, email, clean(name, 120), clean(company, 120), clean(role, 120), clean(title, 120), phone, phone ? 1 : 0, internal ? 1 : 0, nowIso()
     );
     return;
   }
@@ -759,8 +761,9 @@ function savePerson(userId, email, { name, company, role, phone, internal }) {
     `UPDATE mail_people SET name = CASE WHEN ? <> '' AND (name = '' OR edited = 0) THEN ? ELSE name END,
        company = CASE WHEN edited = 1 OR ? = '' THEN company ELSE ? END,
        role = CASE WHEN edited = 1 OR ? = '' THEN role ELSE ? END,
+       title = CASE WHEN ? = '' THEN title ELSE ? END,
        phone = ?, phone_hits = ?, internal = ?, updated_at = ? WHERE id = ?`,
-    clean(name, 120), clean(name, 120), clean(company, 120), clean(company, 120), clean(role, 120), clean(role, 120),
+    clean(name, 120), clean(name, 120), clean(company, 120), clean(company, 120), clean(role, 120), clean(role, 120), clean(title, 120), clean(title, 120),
     ph, hits, internal ? 1 : 0, nowIso(), cur.id
   );
 }

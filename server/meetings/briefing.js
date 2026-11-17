@@ -45,19 +45,21 @@ const aboutTopic = (words, ...texts) => { const t = texts.map((x) => String(x ??
 const OPEN = `NOT EXISTS (SELECT 1 FROM board_columns c WHERE c.board_id = t.board_id AND c.key = t.status AND c.is_final = 1)`;
 
 /**
- * השם והתואר של משתתף — לא מניחוש של Claude (16.11.26: "התארים ממש לא מדויקים — קח אותם משמות המשתמשים במשימון"):
- * עובד בארגון — השם והמחלקה כפי שהם במשימון (ומנהל/ת המחלקה); מבחוץ — השם מהיומן / מהמיילים והחברה, בלי תפקיד.
+ * השם והתואר של משתתף — לא מניחוש של Claude (16.11.26: "התארים ממש לא מדויקים — קח אותם משמות המשתמשים במשימון";
+ * 17.11.26: "תיקח מחתימות המיילים"). התואר — כפי שכתוב בחתימה שלו עצמו (‎mail_people.title‎).
+ * עובד בארגון — השם כפי שהוא במשימון; בלי חתימה — המחלקה (ומנהל/ת המחלקה). מבחוץ — השם מהיומן / מהמיילים, והחברה.
  */
 function identity(userId, p, colleague) {
   const email = p.email.toLowerCase();
+  const mp = D.get('SELECT name, company, title FROM mail_people WHERE user_id = ? AND email = ?', userId, email);
+  const sig = String(mp?.title ?? '').trim();
   if (colleague) {
     const dep = colleague.department_id ? D.get('SELECT name, manager_user_id FROM departments WHERE id = ?', colleague.department_id) : null;
     const depName = dep?.name || colleague.department || '';
     const title = depName ? (dep?.manager_user_id === colleague.id ? `מנהל/ת ${depName}` : depName) : '';
-    return { email, name: colleague.full_name, title, internal: true };
+    return { email, name: colleague.full_name, title: sig || title, internal: true };
   }
-  const mp = D.get('SELECT name, company FROM mail_people WHERE user_id = ? AND email = ?', userId, email);
-  return { email, name: p.name || mp?.name || email, title: mp?.company || '', internal: false };
+  return { email, name: p.name || mp?.name || email, title: [sig, mp?.company].filter(Boolean).join(', '), internal: false };
 }
 
 /** כל מה שנאסף על המשתתפים — טקסט לסיכום. ריק — אין מה לתדרך */
