@@ -1255,5 +1255,7 @@ module.exports = {
   approve, approveAll, attachToOther, newTaskFromMessage, reject, restore, ignoreSenderOf, join, skip, undo, markConverted, setSender, senders,
   dismissClosure, closureForTask, markReply,
   listFor, sourceLink, suggestionById, captureSourceMail, sourceMailOf, mailSnapshot, suggestionMail,
+  // 📧 משימה ממייל שהעובד בוחר (‎mail-pick.js‎) — אותו ניתוח ואותה הצעה כמו בסריקה
+  analyze, insertSuggestion, existingTaskFor, involvedIn, shape, recordScanned: record,
   _internal: { sanitize, processMessage, createFromSuggestion, liveBoxes }
 };
