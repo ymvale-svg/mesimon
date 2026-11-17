@@ -5612,6 +5612,10 @@ const botTaskOps = {
  */
 const syncOps = {
   canSee: (actor, task) => canSeeTask(actor, task),
+  // 🔀 צירוף ההודעה למשימה אחרת — כמו באיחוד: רק מי שרשאי לערוך אותה
+  mayEdit: (actor, task) => canSeeTask(actor, task) && mayOnTask(actor, 'edit_delete_task', task, projectOf(task)),
+  // ➕ משימה חדשה מההודעה — אותה יצירה כמו בכל משימה
+  createTask: (actor, body) => createTask(actor, body),
 
   /** ההודעה כהערה פנימית, והקבצים מהמייל מצורפים אליה. קובץ שנכשל — לא מפיל את השאר */
   comment(actor, task, body, files = []) {

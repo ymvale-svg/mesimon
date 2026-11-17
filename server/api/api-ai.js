@@ -1083,6 +1083,9 @@ function register(router, h) {
     }
   });
   suggestionAction('approve', (id, actor, b) => MailScan.approve(id, actor, b ?? {}));
+  // "לסגור?" / "לעדכן?" על משימה לא נכונה: 🔀 ההודעה למשימה אחרת (‎taskId‎), או ➕ משימה חדשה ממנה
+  suggestionAction('attach', (id, actor, b) => MailScan.attachToOther(id, actor, b ?? {}));
+  suggestionAction('new-task', (id, actor, b) => MailScan.newTaskFromMessage(id, actor, b ?? {}));
   suggestionAction('reject', (id, actor, b) => MailScan.reject(id, actor, { ignoreSender: Boolean(b?.ignoreSender) }));
   suggestionAction('join', (id, actor) => MailScan.join(id, actor));
   suggestionAction('skip', (id, actor) => MailScan.skip(id, actor));
