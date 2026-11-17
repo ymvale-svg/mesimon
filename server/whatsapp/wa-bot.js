@@ -69,6 +69,7 @@ const BotTips = require('./bot-tips');
 const FormFill = require('../mail').FormFill;
 const MeetCoord = require('../meetings').MeetingCoord;
 const Reminders = require('./reminders');
+const Places = require('./places');
 const SentFollowup = require('../mail').SentFollowup;
 const DayDigest = require('../agents').DayDigest;
 const Briefing = require('../meetings').Briefing;
@@ -1821,6 +1822,7 @@ async function tick() {
   } catch (err) {
     console.error('[משימון] סבב בוט הוואטסאפ נכשל:', err.message);
   } finally {
+    Places.prune();
     busy = false;
   }
 }

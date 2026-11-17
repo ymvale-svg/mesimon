@@ -207,7 +207,13 @@ function phrase(r) {
   return r.place_on === 'leave' ? `כשתצא מ${where}` : `כשתגיע ${toPlace(where)}`;
 }
 
+/** ניקוי: מיקום ישן מ-‎STALE_MS‎ כבר לא נחשב (‎currentPlace‎) — לא שומרים אותו (אבטחה 17.11.26) */
+function prune() {
+  D.run('DELETE FROM user_locations WHERE at < ?', new Date(Date.now() - STALE_MS).toISOString());
+}
+
 module.exports = {
+  prune,
   KINDS, DEFAULT_RADIUS, STALE_MS,
   distance, parseCoords, toPlace, list, get, create, update, remove, placeAt, resolve, phrase,
   LIVE_FRESH_MS, liveActive, waitingCount, status, currentPlace, report
