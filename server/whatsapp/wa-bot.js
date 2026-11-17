@@ -122,7 +122,8 @@ function locationOf(m, typeWebhook = 'incomingMessageReceived') {
   let found = null;
   let path = '';
   for (const [k, v] of Object.entries(m ?? {})) {
-    if (!v || typeof v !== 'object') continue;
+    // מיקום מצוטט (תשובה על הודעת מיקום) או מועבר — לא המיקום של העובד (אבטחה 17.11.26)
+    if (!v || typeof v !== 'object' || /quoted/i.test(k) || v.isForwarded) continue;
     const c = coords(v) ?? Object.entries(v).map(([k2, v2]) => { const x = coords(v2); if (x) path = `${k}.${k2}`; return x; }).find(Boolean);
     if (c) { found = c; path ||= k; break; }
   }
