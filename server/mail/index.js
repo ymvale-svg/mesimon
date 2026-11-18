@@ -21,5 +21,6 @@ module.exports = {
   get MailThread() { return require('./mail-thread'); },
   get MailPush() { return require('./mail-push'); },
   get ReplyWatch() { return require('./reply-watch'); },
-  get MailOwner() { return require('./mail-owner'); }
+  get MailOwner() { return require('./mail-owner'); },
+  get SignatureBackfill() { return require('./signature-backfill'); }
 };

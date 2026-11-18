@@ -1206,5 +1206,5 @@ const load = () => ({ reading, waiting: waiting.length });
 module.exports = {
   load, init, tick, morning, allowed, status, start, approve, pause, update, forget, boxesFor, whoOf, adminOverview, adminAction, auto, isNight, memoryInfo,
   search, personByEmail, eventsWith, browse, editPerson, remove, terms, normalize,
-  _internal: { mapThread, readThread, estimate, inHours, isNight, readStep, expiryNotices, savePerson, readToday }
+  _internal: { fetchMail, withRetry, model, mapThread, readThread, estimate, inHours, isNight, readStep, expiryNotices, savePerson, readToday }
 };
