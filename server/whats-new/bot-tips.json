@@ -2,6 +2,18 @@
   "_doc": "💡 הטיפ היומי בבוט — 'ידעת שהבוט יודע…?' (server/whatsapp/bot-tips.js). כל טיפ: action — מפתח הפעולה ב-wa-actions (נשלח רק למי שמותר לו, ורק אם עוד לא השתמש בה); button — הכיתוב של הכפתור, שהוא בדיוק מה שהבוט מבין (עד 20 תווים; בלי — אין כפתור); added — מתי נוסף (החדשים קודם).",
   "tips": [
     {
+      "id": "meeting_summary_auto",
+      "action": "meeting_followup",
+      "used": "meeting_summary_auto",
+      "added": "2026-11-18",
+      "icon": "📝",
+      "title": "סיכום הפגישה מגיע לבד",
+      "lines": [
+        "פגישה שהוקלטה ב-Timeless — כשהסיכום מוכן הוא נשלח אליך כאן ובמייל, לכל המשתתפים מהארגון.",
+        "מי שקבע את הפגישה יכול לאשר שליחה גם למשתתפים מבחוץ. והסיכום נכנס לתדריך לפני הפגישה הבאה באותו נושא."
+      ]
+    },
+    {
       "id": "meeting_audio_timeless",
       "action": "meeting_audio",
       "used": "meeting_audio_timeless",

@@ -183,11 +183,13 @@ async function meetingFollowups() {
     },
     // באמצע שיחה מול הבוט — לא קוטעים; הפנייה מחכה לסבב הבא
     busy: (userId) => busyFor(userId) || GoodsReceipt.active(userId) || PurchaseDemand.active(userId),
-    send: async (userId, text, buttons, m) => {
+    // ‎draft‎ — 📝 "לשלוח את הסיכום גם למשתתפים מבחוץ?" למי שקבע: נשמר כשאלה שמחכה ל"כן" / "לא"
+    send: async (userId, text, buttons, m, { draft = null } = {}) => {
       const u = D.get("SELECT id, full_name, phone FROM users WHERE id = ?", userId);
       const chatId = `${u.phone}@c.us`;
       try {
-        await sendButtons(chatId, text, buttons);
+        await sendButtons(chatId, text, buttons, draft ? { owner: 'chat', draft, awaiting: true } : null);
+        if (draft) saveChat(userId, { ...chatOf(userId), draft: { ...draft, askedAt: D.nowIso() }, awaiting: true });
         rememberBot(userId, text);
         MailActions.noteProactive(userId);
         log({ channel: 'summary', chatId, userId, who: u.full_name, action: 'meeting_followup', status: 'ok', result: `🎥 ${m.title} (${m.source})`.slice(0, 300), taskId: m.data?.taskId ?? null });
