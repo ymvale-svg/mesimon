@@ -98,14 +98,14 @@ test('בבוט: הסיכום עצמו לכל משתתף; למי שקבע — ג�
   assert.deepEqual(c.users.sort(), [host.id, dana.id].sort(), 'כל המשתתפים מהארגון, גם בלי חיבור ל-Timeless');
   assert.ok(c.summary);
 
-  const forDana = Followup._internal.summaryMessage(dana, c);
+  const forDana = await Followup._internal.summaryMessage(dana, c);
   assert.match(forDana.text, /📝 \*סיכום הפגישה: פגישת איטום/);
   assert.match(forDana.text, /הוחלט להזמין איטום/);
   assert.match(forDana.text, /נשלח במייל/);
   assert.equal(forDana.draft, null);
   assert.doesNotMatch(forDana.text, /מבחוץ/);
 
-  const forHost = Followup._internal.summaryMessage(host, c);
+  const forHost = await Followup._internal.summaryMessage(host, c);
   assert.match(forHost.text, /לשלוח את הסיכום גם ל-1 משתתף מבחוץ\?/);
   assert.match(forHost.text, /אבי לוי/);
   assert.equal(forHost.draft.via, 'system');
@@ -158,4 +158,30 @@ test('תדריך: פגישה קודמת בנושא דומה שהעובד היה 
   assert.match(c.text, /סוכם על איטום עם אבי לוי/);
   assert.doesNotMatch(c.text, /לא אמור להגיע/);
   assert.doesNotMatch(c.text, /קמפיין/);
+});
+
+test('📄 עמוד אחד: במייל האוטומטי ובבוט — הסיכום המעובד; הסיכום המלא של Timeless מצורף כקובץ', async (t) => {
+  clean();
+  const host = user({ full_name: 'רונית', email: `h7${NOW}@eshel.test`, phone: '972501110007' });
+  const longSummary = `${SUMMARY}\n\n## סיכום הקסם\n${'- פרט משני שלא צריך להיכנס\n'.repeat(40)}`;
+  const id = meeting({ host: { name: 'רונית', email: host.email }, summary: longSummary });
+  Fakes.claude(t, (opts) => (opts.schema?.properties?.tldr
+    ? { tldr: 'הוחלט להזמין איטום; סיום עד סוף החודש.', decisions: ['איטום — אבי לוי, 050-1234567'], tasks: [{ who: 'רונית', what: 'להזמין את האיטום', due: 'סוף החודש' }], points: [], open: ['מי מפקח על העבודה'] }
+    : {}));
+  const m = mailer(t);
+  await Auto.sweep(NOW, { send: m.send });
+  const mail = m.sent.find((x) => x.to === host.email);
+  assert.match(mail.text, /בעמוד אחד\. הסיכום המלא של Timeless מצורף/);
+  assert.match(mail.text, /בשורה התחתונה:\nהוחלט להזמין איטום/);
+  assert.match(mail.text, /• רונית — להזמין את האיטום \(סוף החודש\)/);
+  assert.doesNotMatch(mail.text, /פרט משני/);
+  assert.equal(mail.attachments.length, 1);
+  assert.match(mail.attachments[0].fileName, /^סיכום מלא — פגישת איטום/);
+  assert.match(mail.attachments[0].buf.toString('utf8'), /פרט משני שלא צריך להיכנס/);
+
+  const c = Followup._internal.timelessCandidates(NOW).find((x) => x.ref === id);
+  const msg = await Followup._internal.summaryMessage(host, c);
+  assert.match(msg.text, /הוחלט להזמין איטום; סיום עד סוף החודש/);
+  assert.match(msg.text, /📋 \*משימות\*\n• רונית — להזמין את האיטום/);
+  assert.doesNotMatch(msg.text, /פרט משני/);
 });

@@ -11,6 +11,7 @@ module.exports = {
   get MeetingCoord() { return require('./meeting-coord'); },
   get MeetingFollowup() { return require('./meeting-followup'); },
   get MeetingSummaryAuto() { return require('./meeting-summary-auto'); },
+  get MeetingOnePage() { return require('./meeting-onepage'); },
   get MeetingAudio() { return require('./meeting-audio'); },
   get MeetingSuggestions() { return require('./meeting-suggestions'); },
   get Calendar() { return require('./calendar'); },
