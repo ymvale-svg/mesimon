@@ -3323,6 +3323,7 @@ button.txt-open:hover { color: var(--brand-ink); text-decoration: underline; }
 .rec-connect { max-width: 560px; margin: 0 auto; display: flex; flex-direction: column; gap: 8px; }
 .rec-why { max-width: 560px; margin: 0 auto; padding-inline-start: 18px; line-height: 1.7; }
 .rec-card { padding: 12px 14px; display: flex; flex-direction: column; gap: 4px; }
+.rec-summary { font-size: 13px; line-height: 1.5; color: var(--text-soft); display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
 .rec-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
 .cal-title { min-width: 120px; text-align: center; }
 .cal-access { font-size: 12.5px; color: var(--text-soft); }

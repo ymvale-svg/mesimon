@@ -83,7 +83,7 @@ const { deliver, flushOutbox, messageUser, notifyAssignment, sendFilesToUser } =
 const { answerLike, busyFor, meetCoordRun, meetCoordTick, pushToUser, questionTtlMin, releaseQuestion, replyWatchTick, rfqPrepare, rfqSend, rfqTick, sendSummaries, staleQuestion, userLastAt } = require('./wa-proactive');
 const { businessCommand, closeAlerted, closureDecision, confirmPending, contactOf, createFromDraft, draftEmail, findRecipients, mailActionAlerts, mailAlertFor, mailAlerts, parseThreadAdd, resolveCc, solveText, startGoodsFromMail, suggestionDecision, suggestionFeedback, threadAddText, VIA_EMAIL, VIA_MESIMON } = require('./wa-mail');
 const { MENU, MENU_FREE_HINT, MENU_MORE, PLAIN_AGENTS, agentsText, cut, dayItems, isMenuButton, menuButtonOf, menuButtons, menuOptions, menuPick, menuText, moreMenuGroups, pairsOf, parseClosureCommand, parseSuggestionCommand, recordingReply, todayMessage, walkAction, walkButtons, walkText } = require('./wa-menu');
-const { flowReply, logoIntent, meetingAudioAllowed, meetingAudioTurn, meetingFollowups, processMeetingAudio, receiveMeetingAudio, TRANSLATE } = require('./wa-meeting');
+const { flowReply, logoIntent, meetingAudioAllowed, meetingAudioTurn, meetingFollowups, processMeetingAudio, receiveMeetingAudio, timelessAudioTick, TRANSLATE } = require('./wa-meeting');
 const { DRAFT_ONLY, flowAgentsList, flowAlertNo, flowApproval, flowBusinessCommand, flowCancel, flowClosureCommand, flowEmailEdit, flowEmailPick, flowEmailSolve, flowEmailVia, flowFeaturesRequest, flowFormFillRequest, flowGreeting, flowInstinct, flowInstinctExplicit, flowInstinctReply, flowInstinctPilot, flowNoticeToInstinct, flowIntentCancel, flowIntentDenied, flowIntentMenu, flowIntentOther, flowMailReplyEdit, flowMailWalk, flowMeetCoordRequest, flowMeetingAudioAnswer, flowMeetingAudioRequest, flowMeetingFollowupRequest, flowMeetingReminderRequest, flowMenuList, flowMenuPick, flowNoAi, flowNoticeRequest, flowOnClosureAddress, flowOnDayEvening, flowOnFormFill, flowOnGoodsStop, flowOnMailMuteSender, flowOnMailRemindOrGoods, flowOnMeetCoord, flowOnMeetingTasks, flowOnPaceOffer, flowOnPlainMail, flowOnReminder, flowOnRfq, flowOnSentFollowup, flowOnThreadAdd, flowRemindersRequest, flowReplyAsk, flowRfqRequest, flowRfqSummary, flowSuggestionCommand, flowTranslateRequest, flowWalk, NEXT, switchCancels } = require('./wa-flows');
 
 const RECENT_FILE_MS = 15 * 60 * 1000;
@@ -1795,6 +1795,8 @@ async function tick() {
   try {
     // 🩺 בקשות שנשמרו כשה-AI לא היה זמין — גם מחוץ לשעות: העובד שלח אותן ומחכה
     await retryTick();
+    // 🎥 הקלטת פגישה ארוכה שהועלתה ל-Timeless — העובד מחכה לסיכום, גם מחוץ לשעות
+    await timelessAudioTick().catch((err) => console.error('[משימון] הקלטות ב-Timeless:', err.message));
     // ההודעות עצמן מגיעות דרך המאזין (‎listen‎); כאן — מה שנדחה לשעות הפעילות
     if (inHours()) {
       for (const m of takeDeferred()) dispatch(m);
