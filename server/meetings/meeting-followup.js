@@ -166,12 +166,12 @@ function askText(u, m) {
  */
 async function summaryMessage(u, m) {
   const st = AutoSummary.stateOf(m.ref);
-  // 📄 בעמוד אחד (הוחלט 18.11.26 — הסיכום של Timeless ארוך מדי); בלי AI — הסיכום של Timeless
-  const body = (await OnePage.forSending(m.summary, { title: m.title })).wa;
+  // 📄 רק הנוסח המקוצר, בעמוד אחד (הוחלט 18.11.26); בלי AI — תחילת הסיכום של Timeless
+  const body = (await OnePage.forSending(m.summary, { title: m.title, max: BOT_SUMMARY_MAX })).wa;
   const lines = [
     `📝 *סיכום הפגישה: ${m.title}* · ${hhmm(m.start)}`,
     '',
-    body.length > BOT_SUMMARY_MAX ? `${body.slice(0, BOT_SUMMARY_MAX).replace(/\s+\S*$/, '')}…\n_(הסיכום המלא — במייל)_` : body
+    body
   ];
   if (st?.mailed?.includes(u.id)) lines.push('', '📧 הסיכום נשלח במייל לכל המשתתפים מהארגון.');
   const draft = await AutoSummary.externalDraft(m.ref, u.id);
@@ -599,7 +599,7 @@ async function shareDraft(u, row, dig, head, { to = null } = {}) {
   const subject = `סיכום פגישה: ${row.title} · ${ddmm(row.start_at)}`;
   // 📄 הסיכום של Timeless — בעמוד אחד (‎meeting-onepage.js‎)
   const tl = await timelessSummaryFor(u, row).catch(() => '');
-  const text = summaryMailText(row, dig, tl ? (await OnePage.forSending(tl, { title: row.title })).text : '');
+  const text = summaryMailText(row, dig, tl ? (await OnePage.forSending(tl, { title: row.title, max: 3000 })).text : '');
   const names = inv.people.map((p) => p.name || p.email);
   return {
     text: [

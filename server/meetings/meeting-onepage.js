@@ -5,8 +5,9 @@
  *
  * מהסיכום של Timeless ← עמוד אחד: בשורה התחתונה · הוחלט · משימות (מי / מה / עד מתי) · עוד נקודות חשובות · פתוח.
  * ההנחיות — ‎meeting-onepage.md‎. נשמר לפי תוכן הסיכום (פעם אחת לכל סיכום, לא לכל משתתף), ומשמש בכל מקום שבו
- * הסיכום של Timeless נשלח: המייל האוטומטי, הבוט, ו"📤 לשלוח למשתתפים". הסיכום המלא — מצורף למייל כקובץ.
- * בלי AI, או כשהעיבוד נכשל — ‎null‎, והקוראים חוזרים לסיכום של Timeless כמו שהוא.
+ * הסיכום של Timeless נשלח: המייל האוטומטי, הבוט, ו"📤 לשלוח למשתתפים". **רק הנוסח המקוצר** נשלח (הוחלט 18.11.26) —
+ * בלי הסיכום המלא, גם לא כקובץ מצורף; המלא נשאר ב-Timeless ובמשימון. בלי AI, או כשהעיבוד נכשל — ‎null‎, והקוראים
+ * שולחים את תחילת הסיכום של Timeless (‎max‎ תווים).
  */
 const fs = require('node:fs');
 const crypto = require('node:crypto');
@@ -120,11 +121,11 @@ function asWhatsApp(p) {
  * הסיכום לשליחה: העמוד האחד, ובלעדיו — הסיכום של Timeless כטקסט (עד ‎max‎ תווים).
  * @returns {Promise<{ text: string, wa: string, short: boolean }>}
  */
-async function forSending(summaryMd, { title = '', max = 15000 } = {}) {
+async function forSending(summaryMd, { title = '', max = 3000 } = {}) {
   const p = await onePage(summaryMd, { title });
   if (p) return { text: asText(p), wa: asWhatsApp(p), short: true };
   const body = Store.plainText(summaryMd);
-  const cut = body.length > max ? `${body.slice(0, max)}…` : body;
+  const cut = body.length > max ? `${body.slice(0, max).replace(/\s+\S*$/, '')}…\n(הסיכום המלא — ב-Timeless)` : body;
   return { text: cut, wa: cut, short: false };
 }
 

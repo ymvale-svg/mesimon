@@ -24,7 +24,7 @@ const OnePage = require('./meeting-onepage');
 const MIN = 60000;
 const HOUR = 60 * MIN;
 const GIVE_UP_MS = 24 * HOUR;          // סיכום שהגיע יותר מיממה אחרי סוף הפגישה — כבר לא נשלח אוטומטית
-const MAX_BODY = 15000;
+const MAX_BODY = 3000;                 // בלי AI — עד כאן מהסיכום של Timeless (רק נוסח מקוצר, הוחלט 18.11.26)
 const TZ = 'Asia/Jerusalem';
 
 D.db.exec(`
@@ -90,28 +90,21 @@ async function peopleOf(m) {
 }
 
 /**
- * גוף המייל — 📄 הסיכום בעמוד אחד (‎meeting-onepage.js‎, הוחלט 18.11.26: "הסיכום של Timeless ארוך ולא יעיל").
- * בלי AI — הסיכום של Timeless כמו שהוא. ‎short‎ — יש עמוד אחד, והסיכום המלא מצורף כקובץ.
+ * גוף המייל — 📄 רק הנוסח המקוצר, בעמוד אחד (‎meeting-onepage.js‎; הוחלט 18.11.26: "הסיכום של Timeless ארוך ולא יעיל",
+ * ו"ישלח רק נוסח מקוצר בבוט ובמייל" — בלי הסיכום המלא, גם לא כקובץ מצורף). בלי AI — תחילת הסיכום של Timeless.
  */
 async function mailText(title, startIso, summaryMd) {
   const page = await OnePage.forSending(summaryMd, { title, max: MAX_BODY });
-  const text = [
+  return [
     'שלום לכולם,',
     '',
-    `סיכום הפגישה "${title}" מ-${ddmm(startIso)}${page.short ? ' — בעמוד אחד. הסיכום המלא של Timeless מצורף.' : ', כפי ש-Timeless סיכם אותה.'}`,
+    `סיכום הפגישה "${title}" מ-${ddmm(startIso)}:`,
     '',
     page.text,
     '',
     'אם משהו חסר או לא מדויק — אשמח לתיקון.'
   ].join('\n');
-  return { text, short: page.short };
 }
-
-/** הסיכום המלא של Timeless כקובץ מצורף — כשבגוף המייל יש רק העמוד האחד */
-const fullAttachment = (title, summaryMd) => [{
-  buf: Buffer.from(`${title}\n\n${Store.plainText(summaryMd)}\n`, 'utf8'),
-  fileName: `סיכום מלא — ${String(title).replace(/[\\/:*?"<>|]+/g, ' ').slice(0, 80)}.txt`, mime: 'text/plain; charset=utf-8'
-}];
 const subjectOf = (title, startIso) => `סיכום פגישה: ${title} · ${ddmm(startIso)}`;
 const htmlOf = (text) => `<div dir="rtl" style="font-family:Arial,sans-serif;line-height:1.5">${String(text)
   .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '<br>')}</div>`;
@@ -149,11 +142,10 @@ async function sweep(now = Date.now(), { send = (msg) => Mailer.send(msg) } = {}
     const subject = subjectOf(title, meeting.start);
     const mailed = [];
     if (Mailer.isEnabled()) {
-      const { text, short } = await mailText(title, meeting.start, m.summary);
-      const attachments = short ? fullAttachment(title, m.summary) : undefined;
+      const text = await mailText(title, meeting.start, m.summary);
       for (const u of ppl.org) {
         try {
-          await send({ to: u.email, toName: u.full_name, subject, text, html: htmlOf(text), attachments });
+          await send({ to: u.email, toName: u.full_name, subject, text, html: htmlOf(text) });
           mailed.push(u.id);
         } catch (err) {
           console.error(`[משימון] סיכום פגישה במייל ל-${u.id} נכשל:`, err.message);
@@ -185,10 +177,9 @@ async function externalDraft(ref, userId) {
   if (!s || s.organizer_id !== userId || !s.external.length) return null;
   const stored = Store.stored(ref);
   if (!stored?.summary) return null;
-  const { text, short } = await mailText(s.title, s.start_at, stored.summary);
   return {
-    kind: 'meeting_summary_mail', via: 'system', ref: String(ref), full: short, title: s.title, to: s.external,
-    subject: subjectOf(s.title, s.start_at), text
+    kind: 'meeting_summary_mail', via: 'system', title: s.title, to: s.external,
+    subject: subjectOf(s.title, s.start_at), text: await mailText(s.title, s.start_at, stored.summary)
   };
 }
 
@@ -196,11 +187,9 @@ async function externalDraft(ref, userId) {
 async function sendSystem(draft, { send = (msg) => Mailer.send(msg) } = {}) {
   if (!Mailer.isEnabled()) throw new Error('שליחת דואר אינה מוגדרת במערכת');
   let n = 0;
-  const summary = draft.full && draft.ref ? Store.stored(draft.ref)?.summary : '';
-  const attachments = summary ? fullAttachment(draft.title, summary) : undefined;
   for (const p of draft.to ?? []) {
     if (!String(p.email ?? '').includes('@')) continue;
-    await send({ to: p.email, toName: p.name || undefined, subject: draft.subject, text: draft.text, html: htmlOf(draft.text), attachments });
+    await send({ to: p.email, toName: p.name || undefined, subject: draft.subject, text: draft.text, html: htmlOf(draft.text) });
     n++;
   }
   return n;

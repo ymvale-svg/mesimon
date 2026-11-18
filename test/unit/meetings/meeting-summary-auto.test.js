@@ -160,7 +160,7 @@ test('תדריך: פגישה קודמת בנושא דומה שהעובד היה 
   assert.doesNotMatch(c.text, /קמפיין/);
 });
 
-test('📄 עמוד אחד: במייל האוטומטי ובבוט — הסיכום המעובד; הסיכום המלא של Timeless מצורף כקובץ', async (t) => {
+test('📄 עמוד אחד: במייל האוטומטי ובבוט — רק הנוסח המקוצר, בלי הסיכום המלא ובלי קובץ מצורף', async (t) => {
   clean();
   const host = user({ full_name: 'רונית', email: `h7${NOW}@eshel.test`, phone: '972501110007' });
   const longSummary = `${SUMMARY}\n\n## סיכום הקסם\n${'- פרט משני שלא צריך להיכנס\n'.repeat(40)}`;
@@ -171,17 +171,27 @@ test('📄 עמוד אחד: במייל האוטומטי ובבוט — הסיכ�
   const m = mailer(t);
   await Auto.sweep(NOW, { send: m.send });
   const mail = m.sent.find((x) => x.to === host.email);
-  assert.match(mail.text, /בעמוד אחד\. הסיכום המלא של Timeless מצורף/);
   assert.match(mail.text, /בשורה התחתונה:\nהוחלט להזמין איטום/);
   assert.match(mail.text, /• רונית — להזמין את האיטום \(סוף החודש\)/);
   assert.doesNotMatch(mail.text, /פרט משני/);
-  assert.equal(mail.attachments.length, 1);
-  assert.match(mail.attachments[0].fileName, /^סיכום מלא — פגישת איטום/);
-  assert.match(mail.attachments[0].buf.toString('utf8'), /פרט משני שלא צריך להיכנס/);
+  assert.equal(mail.attachments, undefined, 'בלי קובץ מצורף');
 
   const c = Followup._internal.timelessCandidates(NOW).find((x) => x.ref === id);
   const msg = await Followup._internal.summaryMessage(host, c);
   assert.match(msg.text, /הוחלט להזמין איטום; סיום עד סוף החודש/);
   assert.match(msg.text, /📋 \*משימות\*\n• רונית — להזמין את האיטום/);
   assert.doesNotMatch(msg.text, /פרט משני/);
+});
+
+test('בלי AI — רק תחילת הסיכום של Timeless (עד 3,000 תווים), לא כולו', async (t) => {
+  clean();
+  const host = user({ email: `h8${NOW}@eshel.test` });
+  const huge = `${SUMMARY}\n${'- עוד שורה ארוכה מאוד מהסיכום של Timeless שלא צריכה להישלח כולה\n'.repeat(200)}`;
+  meeting({ host: { name: 'מ', email: host.email }, summary: huge });
+  t.mock.method(require('../../../server/integrations').Claude, 'isEnabled', () => false);
+  const m = mailer(t);
+  await Auto.sweep(NOW, { send: m.send });
+  const mail = m.sent.find((x) => x.to === host.email);
+  assert.ok(mail.text.length < 3500, `${mail.text.length}`);
+  assert.match(mail.text, /\(הסיכום המלא — ב-Timeless\)/);
 });
