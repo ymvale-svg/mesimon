@@ -44,10 +44,22 @@ const emailsIn = (p) => (typeof p === 'string' ? (p.match(/[^\s<>"'(),;]+@[^\s<>
 // שמירה
 // ---------------------------------------------------------------------------
 
+/**
+ * הקלטה מוואטסאפ שהועלתה ל-Timeless (‎meeting_audio.timeless_id‎): ב-Timeless אין לה משתתפים (רק החשבון שהעלה),
+ * ולכן מי ששלח אותה ומי ששויך אליה רואים אותה — לפי המייל, כמו בכל פגישה.
+ */
+function audioEmails(id) {
+  const out = [];
+  for (const a of D.all('SELECT u.*, a.meeting AS audio_meeting FROM meeting_audio a JOIN users u ON u.id = a.user_id WHERE a.timeless_id = ?', String(id))) {
+    out.push(a.email, a.work_email, ...(parseJson(a.audio_meeting, {})?.people ?? []).map((p) => p?.email));
+  }
+  return out.filter(Boolean);
+}
+
 /** פגישה כפי ש-Timeless מחזיר ← שורה בטבלה (בלי לגעת בתמליל ובמסמכים שכבר נשמרו) */
 function upsert(raw) {
   const n = Timeless.normalizeMeeting(raw);
-  const emails = [...new Set([raw.host, ...(Array.isArray(raw.participants) ? raw.participants : [])].flatMap(emailsIn))];
+  const emails = [...new Set([raw.host, ...(Array.isArray(raw.participants) ? raw.participants : []), ...audioEmails(n.id)].flatMap(emailsIn))];
   const refs = Array.isArray(raw.documents) ? raw.documents.map((d) => ({ id: d.id, title: d.title || '', createdAt: d.created_at || null })) : null;
   const prev = D.get('SELECT doc_refs FROM timeless_meetings WHERE id = ?', n.id);
   D.run(
@@ -79,7 +91,47 @@ function shape(row) {
     status: row.status || null,
     documents: parseJson(row.doc_refs, []),
     hasTranscript: row.transcript !== null && row.transcript !== undefined,
-    hasSummary: Boolean(parseJson(row.documents, []).length)
+    hasSummary: Boolean(parseJson(row.documents, []).length),
+    // תחילת הסיכום של Timeless — לכרטיס במסך ההקלטות ולחלון האירוע ביומן (בלי לפנות ל-Timeless)
+    summary: excerpt(summaryMarkdown(row))
+  };
+}
+
+/** הסיכום של Timeless (מסמכי ה-AI) כ-Markdown — מהשמירה המקומית */
+function summaryMarkdown(row) {
+  return parseJson(row?.documents, []).slice(0, 4).map((d) => String(d.markdown ?? '').trim()).filter(Boolean).join('\n\n');
+}
+
+/** Markdown ← טקסט פשוט: בלי כותרות, הדגשות וקישורים; רשימות — "• " */
+function plainText(md) {
+  return String(md ?? '')
+    .replace(/\r/g, '')
+    .replace(/^#{1,6}\s*/gm, '')
+    .replace(/^\s*[-*+]\s+/gm, '• ')
+    .replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g, '$1 ($2)')
+    .replace(/(\*\*|__)(.+?)\1/g, '$2')
+    .replace(/(^|[^*\w])\*([^*\n]+)\*/g, '$1$2')
+    .replace(/`([^`]+)`/g, '$1')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+/** משפט-שניים מתחילת הסיכום */
+function excerpt(md, max = 280) {
+  const t = plainText(md).split('\n').map((l) => l.replace(/^•\s*/, '').trim()).filter((l) => l.length > 2).join(' · ');
+  return t.length > max ? `${t.slice(0, max - 1).replace(/\s+\S*$/, '')}…` : t;
+}
+
+/**
+ * פגישה שמורה, בלי בדיקת משתמש — רק לקוד שכבר בדק הרשאה (הקלטה ששלח העובד, פגישה שנשאל עליה בבוט).
+ * ‎null‎ — לא נשמרה.
+ */
+function stored(id) {
+  const row = rowOf(id);
+  if (!row) return null;
+  return {
+    meeting: shape(row), status: row.status, transcript: parseJson(row.transcript, null),
+    summary: summaryMarkdown(row), docsDue: parseJson(row.doc_refs, []).length > 0 && row.documents === null
   };
 }
 
@@ -406,6 +458,7 @@ function start() {
 
 module.exports = {
   start, tick, sweep, syncMeeting, lastSweepAt, sweepEveryMs, list, get, details, transcriptText, endedBetween, near, canSee,
+  stored, plainText, excerpt,
   registerWebhook, webhookStatus, handleWebhook, verifySignature, runTool,
   _internal: { upsert, shape, needDetails, ensureRange, fetchDetails }
 };

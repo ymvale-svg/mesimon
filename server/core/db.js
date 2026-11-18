@@ -765,7 +765,7 @@ CREATE INDEX IF NOT EXISTS idx_meeting_followups_user ON meeting_followups (user
 /*
  * 🎙 הקלטת פגישה שנשלחה לבוט (‎ai/meeting-audio.js‎). הקובץ שמור ב-‎uploads/meeting-audio‎ עד
  * שהוא מצורף למשימת הפגישה (‎task_id‎), ואז נמחק משם. ‎meeting‎ — הפגישה שנבחרה (נושא, מועד, משתתפים).
- * ‎status‎: choose / transcribing / ready / empty / error / expired.
+ * ‎status‎: choose / transcribing / timeless (הועלתה ל-Timeless ומחכה לתמליל — ‎timeless_id‎) / ready / empty / error / expired.
  */
 CREATE TABLE IF NOT EXISTS meeting_audio (
   id               INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -780,6 +780,9 @@ CREATE TABLE IF NOT EXISTS meeting_audio (
   digest           TEXT,
   transcript_chars INTEGER,
   error            TEXT,
+  timeless_id      TEXT,
+  timeless_at      TEXT,
+  duration_sec     INTEGER,
   created_at       TEXT    NOT NULL
 );
 
@@ -1838,6 +1841,7 @@ const DEFAULT_SETTINGS = {
   meeting_reminder_minutes: 15,            // כמה דקות לפני — התראה ובוט הוואטסאפ, עם קישור הפגישה
   meeting_followup_minutes: 15,            // כמה דקות אחרי סוף פגישה מוקלטת — הבוט שואל את המשתתפים מה לשלוח
   meeting_audio_min_kb: 1024,              // הודעה קולית גדולה מזה (כ-8 דקות) לבוט = הקלטת פגישה, והבוט שואל לאיזו פגישה לשייך
+  meeting_audio_timeless_min: 20,          // הקלטת פגישה ארוכה מזה (דקות) — מועלית ל-Timeless, והתמליל והסיכום רק משם
   rfq_daily_max: 20,                       // פנייה לספקים: כמה מיילים לכל היותר לעובד ביום (לא להיחשב דואר זבל)
   bot_pilot: false,                        // 🧪 true — היכולות החדשות בבוט (סבב Instinct) רק למנהלי המערכת. נפתח לכולם 10.11.26; "החזר את היכולות החדשות לפיילוט" — סוגר שוב
   remind_hours: '08:30-17:00',             // 🌊 שעות התזכורות מהמייל (מחוץ להן — לא מזכירים, גם לא בשעות הבוט)
@@ -2153,6 +2157,10 @@ function migrate() {
 
   // 💬 מק"טים לבנייה — אסימון לדף התשובה של הרכש (‎priority/pd-parts.js‎)
   addColumn('pd_part_requests', 'token', 'TEXT');
+  // 🎙 הקלטת פגישה ארוכה מוואטסאפ — הועלתה ל-Timeless, והתמליל משם (‎meetings/meeting-audio.js‎, 18.11.26)
+  addColumn('meeting_audio', 'timeless_id', 'TEXT');
+  addColumn('meeting_audio', 'timeless_at', 'TEXT');
+  addColumn('meeting_audio', 'duration_sec', 'INTEGER');
   db.exec('CREATE INDEX IF NOT EXISTS idx_pd_part_token ON pd_part_requests(token)');
   addColumn('users', 'department_id', 'INTEGER REFERENCES departments(id) ON DELETE SET NULL');
   // 📧 משימה שנולדה ממייל — עותק של המייל (מאת, נושא, תאריך, טקסט), כדי שכל מי שעובד עליה יראה על מה מדובר

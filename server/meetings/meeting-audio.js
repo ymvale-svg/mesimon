@@ -7,8 +7,10 @@
  *   1. שומר את הקובץ מיד (הכתובת של Green API זמנית) ושואל לאיזו פגישה לשייך —
  *      כפתורים לפגישות האחרונות מהיומן ומהפגישות שמשימון קבע, ו"פגישה אחרת"
  *      (נושא ומשתתפים בשפה חופשית: "פגישה באתר הגפן עם דני ורותי").
- *   2. מתמלל ברקע (הקלטה ארוכה — בחלקים), ומסכם: נקודות, החלטות, ומשימות לפי
- *      משתתף.
+ *   2. מתמלל ברקע, ומסכם: נקודות, החלטות, ומשימות לפי משתתף. הקלטה ארוכה (מ-‎meeting_audio_timeless_min‎,
+ *      20 דקות) — מועלית ל-Timeless, והתמליל רק משם (הוחלט 18.11.26): הבוט עונה "⏳ ב-Timeless", וממשיך
+ *      כשהתמליל (והסיכום של Timeless) מוכנים — ‎timelessReady‎ / ‎finishFromTimeless‎. בלי Timeless, או
+ *      כשההעלאה נכשלה — התמלול שלנו, בחלקים של 10 דקות.
  *   3. במשימון: משימת פגישה ("🎥 פגישה: …") עם הסיכום, ההקלטה והתמליל בקבצים
  *      המצורפים. פגישה שמשימון קבע מתוך משימה — הכול נכנס למשימה ההיא.
  *   4. בוואטסאפ: הסיכום והמשימות לפי משתתף — לקריאה. הבוט לא מציע לפתוח משימות (16.11.26):
@@ -32,6 +34,8 @@ const { spawnSync } = require('node:child_process');
 const D = require('../core').Db;
 const W = require('../core').Workdays;
 const Speech = require('../integrations').Speech;
+const Timeless = require('../integrations').Timeless;
+const TimelessStore = require('./timeless-store');
 const Calendar = require('./calendar');
 const Claude = require('../integrations').Claude;
 const WaUi = require('../whatsapp').WaUi;
@@ -43,6 +47,9 @@ const TZ = 'Asia/Jerusalem';
 const CHUNK_BYTES = 6 * 1024 * 1024;   // מתחת למגבלה של RunPod (7MB) ושל Google (10MB)
 // וגם לפי משך: OpenAI עד 1400 שניות, ו-RunPod צריך לסיים תוך 90 שניות (באג 18.11.26: 45 דקות ב-‎5MB‎ נשלחו שלמות)
 const CHUNK_SEC = 600;
+const TL_PULL_MS = 10 * MIN;            // הקלטה שהועלתה ל-Timeless: כל כמה זמן לשאול אם התמליל מוכן (כשה-webhook לא הודיע)
+const TL_SUMMARY_WAIT_MS = 90 * MIN;   // התמליל מוכן והסיכום של Timeless עוד לא — עד כמה מחכים לו
+const TL_GIVE_UP_MS = 6 * HOUR;        // אין תמליל מ-Timeless — התמלול שלנו
 const ARM_MS = 15 * MIN;               // "הקלטת פגישה" — ההודעה הקולית הבאה בתוך רבע שעה
 const AUDIO_EXT = { 'audio/ogg': 'ogg', 'audio/opus': 'opus', 'audio/mpeg': 'mp3', 'audio/mp3': 'mp3', 'audio/mp4': 'm4a', 'audio/x-m4a': 'm4a', 'audio/m4a': 'm4a', 'audio/aac': 'aac', 'audio/amr': 'amr', 'audio/wav': 'wav', 'audio/x-wav': 'wav', 'audio/webm': 'webm' };
 const AUDIO_NAME = /\.(ogg|opus|mp3|m4a|aac|amr|wav|webm)$/i;
@@ -312,6 +319,25 @@ function splitFfmpeg(file) {
   }
 }
 
+/** משך הקלטה בשניות — ב-ogg מהמיקום (granule) של הדף האחרון (‎opus‎: 48kHz). ‎null‎ — לא ידוע */
+function durationSec(buf) {
+  if (!buf || buf.length < 27 || buf.toString('latin1', 0, 4) !== 'OggS') return null;
+  // הדף האחרון — מחפשים את "OggS" האחרון בסוף הקובץ
+  const from = Math.max(0, buf.length - 70000);
+  const i = buf.lastIndexOf(Buffer.from('OggS', 'latin1'));
+  if (i < from || i + 14 > buf.length) return null;
+  const g = buf.readBigInt64LE(i + 6);
+  return g > 0n ? Math.round(Number(g) / 48000) : null;
+}
+
+const timelessMinSec = () => Math.max(1, Number(D.getSetting('meeting_audio_timeless_min', 20)) || 20) * 60;
+
+/** הקלטה ארוכה — ל-Timeless. משך לא ידוע (m4a, mp3…) — לפי הגודל (מעל 10MB — כ-20 דקות ב-64kbps) */
+function isLong(buf) {
+  const sec = durationSec(buf);
+  return sec !== null ? sec >= timelessMinSec() : buf.length > 10 * 1024 * 1024;
+}
+
 async function transcribeFile(row) {
   const file = path.join(audioDir(), row.stored_name);
   const buf = fs.readFileSync(file);
@@ -533,10 +559,83 @@ function digestText(meeting, dig) {
 async function processAudio(audioId, deps) {
   const row = D.get('SELECT * FROM meeting_audio WHERE id = ?', audioId);
   const meeting = parseJson(row.meeting, null);
+  D.run("UPDATE meeting_audio SET status = 'transcribing' WHERE id = ?", audioId);
+  // ארוכה — ל-Timeless (התמליל והסיכום משם); ממשיכים כשמוכן (‎finishFromTimeless‎)
+  const sent = await toTimeless(row, meeting);
+  if (sent) return sent;
+  return complete(audioId, await transcribeFile(row), deps);
+}
+
+/** העלאה ל-Timeless כשההקלטה ארוכה. ‎null‎ — לא הועלתה (קצרה, אין Timeless, או שההעלאה נכשלה — ואז התמלול שלנו) */
+async function toTimeless(row, meeting) {
+  const [token] = Timeless.syncTokens();
+  if (!token) return null;
+  const file = path.join(audioDir(), row.stored_name);
+  const buf = fs.readFileSync(file);
+  if (!isLong(buf)) return null;
+  const sec = durationSec(buf);
+  try {
+    const id = await Timeless.org.upload(token, buf, row.mime, { title: meeting.title, language: 'he' });
+    D.run("UPDATE meeting_audio SET status = 'timeless', timeless_id = ?, timeless_at = ?, duration_sec = ? WHERE id = ?", id, D.nowIso(), sec, row.id);
+    const mins = sec ? ` (${Math.round(sec / 60)} דקות)` : '';
+    return {
+      pending: true,
+      text: `🎥 *${meeting.title}* — ההקלטה ארוכה${mins}, ולכן נשלחה לתמלול וסיכום ב-Timeless ⏳
+אשלח לך את הסיכום כשהוא מוכן — בדרך כלל תוך כמה דקות עד חצי שעה.`
+    };
+  } catch (err) {
+    console.error('[משימון] העלאת הקלטת פגישה ל-Timeless נכשלה — תמלול שלנו:', err.message);
+    D.run('UPDATE meeting_audio SET error = ? WHERE id = ?', `Timeless: ${String(err.message).slice(0, 400)}`, row.id);
+    return null;
+  }
+}
+
+/**
+ * הקלטות שהועלו ל-Timeless ומוכנות להמשך: יש תמליל, והסיכום של Timeless מוכן (או שחיכינו לו מספיק).
+ * כשה-webhook לא הודיע — שואלים את Timeless על הפגישה, פעם ב-‎TL_PULL_MS‎. אחרי ‎TL_GIVE_UP_MS‎ — התמלול שלנו.
+ * @returns {Promise<Array<{ id: number, user_id: number, fallback: boolean }>>}
+ */
+const lastPull = new Map(); // ‎audioId‎ ← מתי שאלנו את Timeless
+async function timelessReady(now = Date.now()) {
+  const out = [];
+  for (const r of D.all("SELECT id, user_id, timeless_id, timeless_at FROM meeting_audio WHERE status = 'timeless' AND timeless_id IS NOT NULL")) {
+    const age = now - new Date(r.timeless_at).getTime();
+    let st = TimelessStore.stored(r.timeless_id);
+    const waiting = !st || st.status !== 'completed' || !st.transcript?.segments?.length || (!st.summary && age < TL_SUMMARY_WAIT_MS);
+    if (waiting && now - (lastPull.get(r.id) ?? 0) >= TL_PULL_MS) {
+      lastPull.set(r.id, now);
+      await Timeless.background(() => TimelessStore.syncMeeting(r.timeless_id)).catch((err) => console.error('[משימון] Timeless — הקלטה שהועלתה:', err.message));
+      st = TimelessStore.stored(r.timeless_id);
+    }
+    const hasText = st?.status === 'completed' && st.transcript?.segments?.length > 0;
+    if (hasText && (st.summary || age >= TL_SUMMARY_WAIT_MS)) out.push({ id: r.id, user_id: r.user_id, fallback: false });
+    else if (age >= TL_GIVE_UP_MS) out.push({ id: r.id, user_id: r.user_id, fallback: true });
+  }
+  return out;
+}
+
+/** ההמשך של הקלטה שהועלתה ל-Timeless: התמליל משם (או, כשלא הגיע, התמלול שלנו) ← סיכום, משימה והודעה */
+async function finishFromTimeless(audioId, deps) {
+  const row = D.get("SELECT * FROM meeting_audio WHERE id = ? AND status = 'timeless'", audioId);
+  if (!row) return null;
+  lastPull.delete(audioId);
+  D.run("UPDATE meeting_audio SET status = 'transcribing' WHERE id = ?", audioId);
+  const st = TimelessStore.stored(row.timeless_id);
+  const text = st?.transcript?.segments?.length ? TimelessStore.transcriptText(st.transcript, 200000) : '';
+  if (!text) {
+    console.error(`[משימון] Timeless לא תמלל את הקלטה ${audioId} (${row.timeless_id}) — תמלול שלנו`);
+    D.run('UPDATE meeting_audio SET error = ? WHERE id = ?', `Timeless לא החזיר תמליל תוך ${TL_GIVE_UP_MS / HOUR} שעות`, audioId);
+    return complete(audioId, await transcribeFile(row), deps);
+  }
+  return complete(audioId, text, deps, { timelessId: row.timeless_id, timelessSummary: st.summary });
+}
+
+/** תמליל ← סיכום, משימת הפגישה במשימון, והטקסט לעובד */
+async function complete(audioId, transcript, deps, { timelessId = null, timelessSummary = '' } = {}) {
+  const row = D.get('SELECT * FROM meeting_audio WHERE id = ?', audioId);
+  const meeting = parseJson(row.meeting, null);
   const uploader = userRow(row.user_id);
   const { actor } = deps;
-  D.run("UPDATE meeting_audio SET status = 'transcribing' WHERE id = ?", audioId);
-  const transcript = await transcribeFile(row);
   if (!transcript) {
     D.run("UPDATE meeting_audio SET status = 'empty' WHERE id = ?", audioId);
     return { text: `🎙 *${meeting.title}*\nלא שמעתי דיבור בהקלטה, ולכן אין סיכום. ההקלטה לא נשמרה במשימון.` };
@@ -558,7 +657,7 @@ async function processAudio(audioId, deps) {
     dig.decisions.length ? '\nהוחלט:' : null, ...dig.decisions.map((s) => `✔ ${s}`),
     dig.items.length ? '\nמשימות:' : null, ...dig.items.map((it) => `• ${it.task}${it._ownerName ? ` — ${it._ownerName}` : ''}`),
     '',
-    `🎙 ההקלטה והתמליל — בקבצים המצורפים. נשלחו מוואטסאפ על ידי ${uploader.full_name}.`
+    `🎙 ההקלטה והתמליל — בקבצים המצורפים. נשלחו מוואטסאפ על ידי ${uploader.full_name}.${timelessId ? ' התמליל מ-Timeless.' : ''}`
   ].filter((l) => l !== null).join('\n');
   let taskId = meeting.taskId && deps.getTask(actor, meeting.taskId) ? meeting.taskId : null;
   if (taskId) {
@@ -595,6 +694,12 @@ async function processAudio(audioId, deps) {
     deps.saveAttachment(task, actor, { filename: `${base} — תמליל.txt`, mime: 'text/plain', data: Buffer.from(`${meeting.title}\n\n${transcript}`, 'utf8').toString('base64') });
     files.push('התמליל');
   } catch { /* בלי תמליל מצורף */ }
+  if (timelessSummary) {
+    try {
+      deps.saveAttachment(task, actor, { filename: `${base} — סיכום Timeless.md`, mime: 'text/markdown', data: Buffer.from(`# ${meeting.title}\n\n${timelessSummary}`, 'utf8').toString('base64') });
+      files.push('הסיכום של Timeless');
+    } catch { /* בלי סיכום מצורף */ }
+  }
   D.audit(taskId, deps.actorRef(actor), 'attachment', `הקלטת פגישה מוואטסאפ: ${files.join(', ')}`);
   // הקובץ שמור עכשיו במשימה — העותק הזמני נמחק
   try { fs.unlinkSync(path.join(audioDir(), row.stored_name)); } catch { /* אולי כבר נמחק */ }
@@ -668,14 +773,14 @@ function openTasks(actor, draft, { createTask, assignBlockReason, taskLink, only
 /** קבצים זמניים של הקלטות שלא שויכו — אחרי יומיים */
 function prune() {
   const old = new Date(Date.now() - 2 * 24 * HOUR).toISOString();
-  for (const r of D.all("SELECT id, stored_name FROM meeting_audio WHERE status IN ('choose', 'transcribing', 'error', 'empty') AND created_at < ?", old)) {
+  for (const r of D.all("SELECT id, stored_name FROM meeting_audio WHERE status IN ('choose', 'transcribing', 'timeless', 'error', 'empty') AND created_at < ?", old)) {
     try { fs.unlinkSync(path.join(audioDir(), r.stored_name)); } catch { /* כבר נמחק */ }
     D.run("UPDATE meeting_audio SET status = 'expired' WHERE id = ?", r.id);
   }
 }
 
 module.exports = {
-  arm, isAudioFile, isMeetingVoice, receive, resolvePick, processAudio, openTasks, prune, candidates, BTN,
+  arm, isAudioFile, isMeetingVoice, receive, resolvePick, processAudio, timelessReady, finishFromTimeless, openTasks, prune, candidates, BTN,
   parseReassign, reassign, nextQuestion, nextButtons, inboxLine, suggestFor,
-  _internal: { splitOgg, oggCrc, transcribeFile, CHUNK_SEC, peopleFromText, ownerOf, digestText, tasksText, extOf, armed, personFor }
+  _internal: { splitOgg, oggCrc, transcribeFile, CHUNK_SEC, durationSec, isLong, lastPull, peopleFromText, ownerOf, digestText, tasksText, extOf, armed, personFor }
 };

@@ -124,7 +124,9 @@ async function zoomCandidates(now) {
 function timelessCandidates(now) {
   const users = D.all("SELECT id, email, work_email FROM users WHERE status = 'active' AND phone IS NOT NULL AND phone <> ''")
     .map((u) => ({ id: u.id, emails: emailsOf(u) }));
-  return Store.endedBetween(now - GIVE_UP_MS, now - delayMs()).map(({ meeting: m, emails }) => ({
+  // הקלטה מוואטסאפ שהועלתה ל-Timeless — מי ששלח אותה כבר מקבל את הסיכום מהבוט (‎meeting-audio.js‎)
+  const fromWa = new Set(D.all('SELECT timeless_id FROM meeting_audio WHERE timeless_id IS NOT NULL').map((r) => r.timeless_id));
+  return Store.endedBetween(now - GIVE_UP_MS, now - delayMs()).filter(({ meeting: m }) => !fromWa.has(m.id)).map(({ meeting: m, emails }) => ({
     source: 'timeless', ref: String(m.id), title: m.title || 'פגישה', start: m.start, end: m.end,
     data: { participants: m.participants },
     users: users.filter((u) => Timeless.isConnected(u.id) && emails.some((e) => u.emails.has(e))).map((u) => u.id)
@@ -474,8 +476,37 @@ async function invitees(u, row) {
   return { people };
 }
 
-/** גוף המייל: סיכום, החלטות, ומשימות להמשך לפי אחראי. החתימה — של Gmail */
-function summaryMailText(row, dig) {
+/**
+ * הסיכום של Timeless לפגישה (הוחלט 18.11.26 — זה מה שנשלח למשתתפים): פגישת Timeless, הקלטה מוואטסאפ
+ * שהועלתה ל-Timeless, או פגישת Zoom שהוקלטה גם ב-Timeless (לפי שעה ומשתתפים). ‎''‎ — אין.
+ */
+async function timelessSummaryFor(u, row) {
+  let id = null;
+  if (row.source === 'timeless') id = row.ref;
+  else if (row.source === 'wa') id = D.get('SELECT timeless_id FROM meeting_audio WHERE id = ?', Number(row.ref))?.timeless_id ?? null;
+  else id = Store.near(row.start_at, emailsOf(u), { title: row.title })?.id ?? null;
+  if (!id) return '';
+  // הקלטה ששלח העובד עצמו — שלו; כל פגישה אחרת — רק אם הוא רואה אותה ב-Timeless
+  if (row.source !== 'wa' && !(await Store.get(u.id, id).catch(() => null))) return '';
+  return Store.stored(id)?.summary ?? '';
+}
+
+/**
+ * גוף המייל. יש סיכום של Timeless — הוא הסיכום; אחרת: סיכום, החלטות, ומשימות להמשך לפי אחראי. החתימה — של Gmail
+ */
+function summaryMailText(row, dig, timelessSummary = '') {
+  if (timelessSummary) {
+    const body = Store.plainText(timelessSummary);
+    return [
+      'שלום לכולם,',
+      '',
+      `מצורף סיכום הפגישה "${row.title}" מ-${ddmm(row.start_at)}.`,
+      '',
+      body.length > 15000 ? `${body.slice(0, 15000)}…` : body,
+      '',
+      'אם משהו חסר או לא מדויק — אשמח לתיקון.'
+    ].join('\n');
+  }
   const fmtDue = (d) => (/^\d{4}-\d{2}-\d{2}$/.test(d ?? '') ? ` (עד ${d.split('-').reverse().slice(0, 2).join('.')})` : '');
   return [
     'שלום לכולם,',
@@ -522,7 +553,7 @@ async function shareDraft(u, row, dig, head, { to = null } = {}) {
   }
   if (!inv.people.length) return { text: `${head}\nבזימון ביומן אין משתתפים מלבדך — אין למי לשלוח.`, buttons: [BTN.tasks], result: `שליחה למשתתפים — אין משתתפים: ${row.title}` };
   const subject = `סיכום פגישה: ${row.title} · ${ddmm(row.start_at)}`;
-  const text = summaryMailText(row, dig);
+  const text = summaryMailText(row, dig, await timelessSummaryFor(u, row).catch(() => ''));
   const names = inv.people.map((p) => p.name || p.email);
   return {
     text: [
@@ -633,5 +664,5 @@ function prune() {
 
 module.exports = {
   sweep, answer, openTasks, isOpenButton, digest, prune, BTN, sendSummaryMail, shareFor, summaryRequest,
-  _internal: { vttText, myItems, followupFor, askText, alreadyAsked, record, ASK, BARE, norm, timelessMatch, timelessCandidates, invitees, summaryMailText, shareDraft }
+  _internal: { vttText, myItems, followupFor, askText, alreadyAsked, record, ASK, BARE, norm, timelessMatch, timelessCandidates, invitees, summaryMailText, shareDraft, timelessSummaryFor }
 };

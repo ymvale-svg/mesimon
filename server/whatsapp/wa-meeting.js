@@ -53,36 +53,58 @@ const meetingAudioDeps = (actor) => ({
 /** ברקע: תמלול, סיכום ומשימת הפגישה — ובסוף הודעה לעובד */
 function processMeetingAudio(actor, audioId) {
   const ref = currentMsg.get(actor.id);
-  setImmediate(async () => {
-    const u = D.get('SELECT id, full_name, phone FROM users WHERE id = ?', actor.id);
-    const chatId = `${u.phone}@c.us`;
-    try {
-      const r = await MeetingAudio.processAudio(audioId, meetingAudioDeps(actor));
-      const st = chatOf(actor.id);
-      const busy = st.awaiting && st.draft;
-      // באמצע שאלה אחרת — בלי השאלה בסוף (היא תופסת תשובות); אפשר לחזור אליה: "משימות מהפגישה" / "לשלוח למשתתפים"
-      const text = r.draft && busy ? `${r.text.replace(/\n(?:📤 \*לשלוח את כל הסיכום|✏️ \*לשנות אחראי)[\s\S]*$/, '')}\n\nלשלוח את הסיכום — כתבו *לשלוח למשתתפים*; לשנות אחראי — *משימות מהפגישה*.` : r.text;
-      const parts = splitMessage(text);
-      for (let i = 0; i < parts.length; i++) {
-        if (i === parts.length - 1 && r.draft && !busy) await sendButtons(chatId, parts[i], r.buttons);
-        else await sendText(chatId, parts[i]);
-      }
-      rememberBot(actor.id, text);
-      if (r.draft && !busy) saveChat(actor.id, { ...chatOf(actor.id), draft: r.draft, awaiting: true });
-      log({ channel: 'summary', chatId, userId: actor.id, who: u.full_name, action: 'meeting_audio', status: 'ok', result: text.split('\n')[0].slice(0, 300) });
-      void react(ref, '✅');
-    } catch (err) {
-      void react(ref, '⚠️');
-      console.error('[משימון] עיבוד הקלטת פגישה נכשל:', err.message);
-      D.run("UPDATE meeting_audio SET status = 'error', error = ? WHERE id = ?", String(err.message).slice(0, 500), audioId);
-      log({ channel: 'summary', chatId, userId: actor.id, who: u.full_name, action: 'meeting_audio', status: 'error', result: err.message.slice(0, 300) });
-      // לעובד — רק מה שהוא יכול לעשות; הפרטים — ליומן ולמנהלי המערכת
-      for (const a of D.all("SELECT id FROM users WHERE status = 'active' AND role IN ('superadmin','admin')")) {
-        D.notify({ targetType: 'user', targetId: a.id, kind: 'ai', title: '🎙 הקלטת פגישה מוואטסאפ נכשלה', body: `${u.full_name}: ${err.message}`.slice(0, 500) });
-      }
-      await sendText(chatId, 'לא הצלחתי לתמלל ולסכם את ההקלטה 😕 מנהלי המערכת קיבלו הודעה. אפשר לנסות לשלוח אותה שוב מאוחר יותר.').catch(() => {});
+  setImmediate(() => deliverMeetingAudio(actor, audioId, ref, () => MeetingAudio.processAudio(audioId, meetingAudioDeps(actor))));
+}
+
+/**
+ * 🎥 הקלטות ארוכות שהועלו ל-Timeless: מה שמוכן (תמליל וסיכום) — ממשיך לסיכום, למשימה ולהודעה לעובד.
+ * מהסבב של הבוט; לכל היותר פעם בדקה.
+ */
+let lastTimelessAudio = 0;
+async function timelessAudioTick(now = Date.now()) {
+  if (now - lastTimelessAudio < 60000) return 0;
+  lastTimelessAudio = now;
+  let n = 0;
+  for (const r of await MeetingAudio.timelessReady(now)) {
+    const actor = Auth.loadActor('user', r.user_id);
+    if (!actor) continue;
+    await deliverMeetingAudio(actor, r.id, null, () => MeetingAudio.finishFromTimeless(r.id, meetingAudioDeps(actor)));
+    n++;
+  }
+  return n;
+}
+
+/** מריץ את העיבוד ושולח לעובד את התוצאה (או הודעת שגיאה) */
+async function deliverMeetingAudio(actor, audioId, ref, run) {
+  const u = D.get('SELECT id, full_name, phone FROM users WHERE id = ?', actor.id);
+  const chatId = `${u.phone}@c.us`;
+  try {
+    const r = await run();
+    if (!r) return;
+    const st = chatOf(actor.id);
+    const busy = st.awaiting && st.draft;
+    // באמצע שאלה אחרת — בלי השאלה בסוף (היא תופסת תשובות); אפשר לחזור אליה: "משימות מהפגישה" / "לשלוח למשתתפים"
+    const text = r.draft && busy ? `${r.text.replace(/\n(?:📤 \*לשלוח את כל הסיכום|✏️ \*לשנות אחראי)[\s\S]*$/, '')}\n\nלשלוח את הסיכום — כתבו *לשלוח למשתתפים*; לשנות אחראי — *משימות מהפגישה*.` : r.text;
+    const parts = splitMessage(text);
+    for (let i = 0; i < parts.length; i++) {
+      if (i === parts.length - 1 && r.draft && !busy) await sendButtons(chatId, parts[i], r.buttons);
+      else await sendText(chatId, parts[i]);
     }
-  });
+    rememberBot(actor.id, text);
+    if (r.draft && !busy) saveChat(actor.id, { ...chatOf(actor.id), draft: r.draft, awaiting: true });
+    log({ channel: 'summary', chatId, userId: actor.id, who: u.full_name, action: 'meeting_audio', status: 'ok', result: text.split('\n')[0].slice(0, 300) });
+    void react(ref, r.pending ? '⏳' : '✅');
+  } catch (err) {
+    void react(ref, '⚠️');
+    console.error('[משימון] עיבוד הקלטת פגישה נכשל:', err.message);
+    D.run("UPDATE meeting_audio SET status = 'error', error = ? WHERE id = ?", String(err.message).slice(0, 500), audioId);
+    log({ channel: 'summary', chatId, userId: actor.id, who: u.full_name, action: 'meeting_audio', status: 'error', result: err.message.slice(0, 300) });
+    // לעובד — רק מה שהוא יכול לעשות; הפרטים — ליומן ולמנהלי המערכת
+    for (const a of D.all("SELECT id FROM users WHERE status = 'active' AND role IN ('superadmin','admin')")) {
+      D.notify({ targetType: 'user', targetId: a.id, kind: 'ai', title: '🎙 הקלטת פגישה מוואטסאפ נכשלה', body: `${u.full_name}: ${err.message}`.slice(0, 500) });
+    }
+    await sendText(chatId, 'לא הצלחתי לתמלל ולסכם את ההקלטה 😕 מנהלי המערכת קיבלו הודעה. אפשר לנסות לשלוח אותה שוב מאוחר יותר.').catch(() => {});
+  }
 }
 
 
@@ -258,5 +280,5 @@ async function meetingAudioTurn(user, actor, t, state, { dry, out, converse }) {
 }
 
 module.exports = {
-  flowReply, logoIntent, meetingAudioAllowed, meetingAudioTurn, meetingFollowups, processMeetingAudio, receiveMeetingAudio, TRANSLATE
+  flowReply, logoIntent, meetingAudioAllowed, meetingAudioTurn, meetingFollowups, processMeetingAudio, receiveMeetingAudio, timelessAudioTick, TRANSLATE
 };
