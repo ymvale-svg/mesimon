@@ -41,6 +41,8 @@ const MIN = 60000;
 const HOUR = 60 * MIN;
 const TZ = 'Asia/Jerusalem';
 const CHUNK_BYTES = 6 * 1024 * 1024;   // מתחת למגבלה של RunPod (7MB) ושל Google (10MB)
+// וגם לפי משך: OpenAI עד 1400 שניות, ו-RunPod צריך לסיים תוך 90 שניות (באג 18.11.26: 45 דקות ב-‎5MB‎ נשלחו שלמות)
+const CHUNK_SEC = 600;
 const ARM_MS = 15 * MIN;               // "הקלטת פגישה" — ההודעה הקולית הבאה בתוך רבע שעה
 const AUDIO_EXT = { 'audio/ogg': 'ogg', 'audio/opus': 'opus', 'audio/mpeg': 'mp3', 'audio/mp3': 'mp3', 'audio/mp4': 'm4a', 'audio/x-m4a': 'm4a', 'audio/m4a': 'm4a', 'audio/aac': 'aac', 'audio/amr': 'amr', 'audio/wav': 'wav', 'audio/x-wav': 'wav', 'audio/webm': 'webm' };
 const AUDIO_NAME = /\.(ogg|opus|mp3|m4a|aac|amr|wav|webm)$/i;
@@ -254,8 +256,9 @@ function rewritePage(page, granule, seq) {
  * ogg (ההודעות הקוליות של וואטסאפ) ← חלקים של עד ‎max‎ בתים, בלי פענוח: כל חלק =
  * דפי הכותרת (OpusHead, OpusTags) + רצף דפי שמע. בכל חלק המיקומים מתחילים מאפס
  * (כמו קובץ עצמאי), ומספרי הרצף ממשיכים את הכותרת; ה-CRC מחושב מחדש.
+ * חלק — עד ‎max‎ בתים ועד ‎maxSec‎ שניות (המיקום ב-‎opus‎ תמיד ב-48kHz).
  */
-function splitOgg(buf, max = CHUNK_BYTES) {
+function splitOgg(buf, max = CHUNK_BYTES, maxSec = CHUNK_SEC) {
   const pages = [];
   for (let i = 0; i + 27 <= buf.length;) {
     if (buf.toString('latin1', i, i + 4) !== 'OggS') return null;
@@ -278,9 +281,11 @@ function splitOgg(buf, max = CHUNK_BYTES) {
   let from = h;
   while (from < pages.length) {
     let to = from;
-    while (to + 1 < pages.length && pages[to + 1].end - pages[from].start + head.length <= max) to++;
     // המיקום שלפני החלק — נקודת האפס שלו (בחלק הראשון: 0)
     const base = from === h ? 0n : pages[from - 1].granule;
+    const maxGranule = BigInt(Math.round(maxSec * 48000));
+    const fits = (i) => pages[i].end - pages[from].start + head.length <= max && (pages[i].granule < 0n || pages[i].granule - base <= maxGranule);
+    while (to + 1 < pages.length && fits(to + 1)) to++;
     const body = [];
     for (let i = from; i <= to; i++) {
       const g = pages[i].granule;
@@ -299,7 +304,7 @@ function splitFfmpeg(file) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mesimon-audio-'));
   try {
     const r = spawnSync('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-i', file, '-vn', '-ac', '1', '-c:a', 'libopus', '-b:a', '24k',
-      '-f', 'segment', '-segment_time', '600', path.join(dir, 'part%03d.ogg')], { timeout: 10 * MIN });
+      '-f', 'segment', '-segment_time', String(CHUNK_SEC), path.join(dir, 'part%03d.ogg')], { timeout: 10 * MIN });
     if (r.status !== 0) return null;
     return fs.readdirSync(dir).sort().map((f) => fs.readFileSync(path.join(dir, f)));
   } finally {
@@ -312,11 +317,10 @@ async function transcribeFile(row) {
   const buf = fs.readFileSync(file);
   let parts = [buf];
   let mime = row.mime;
-  if (buf.length > CHUNK_BYTES) {
-    const ogg = /ogg|opus/i.test(row.mime) || /\.(ogg|opus)$/i.test(row.stored_name) ? splitOgg(buf) : null;
-    const split = ogg ?? (hasFfmpeg() ? splitFfmpeg(file) : null);
-    if (split?.length) { parts = split; mime = 'audio/ogg'; }
-  }
+  // תמיד מנסים לחלק — גם קובץ קטן יכול להיות ארוך (הודעה קולית: ‎~1MB‎ ל-8 דקות)
+  const ogg = /ogg|opus/i.test(row.mime) || /\.(ogg|opus)$/i.test(row.stored_name) ? splitOgg(buf) : null;
+  const split = ogg ?? (hasFfmpeg() ? splitFfmpeg(file) : null);
+  if (split?.length > 1) { parts = split; mime = 'audio/ogg'; }
   const texts = [];
   for (const p of parts) {
     const r = await Speech.transcribeDetailed(p, mime);
@@ -673,5 +677,5 @@ function prune() {
 module.exports = {
   arm, isAudioFile, isMeetingVoice, receive, resolvePick, processAudio, openTasks, prune, candidates, BTN,
   parseReassign, reassign, nextQuestion, nextButtons, inboxLine, suggestFor,
-  _internal: { splitOgg, oggCrc, peopleFromText, ownerOf, digestText, tasksText, extOf, armed, personFor }
+  _internal: { splitOgg, oggCrc, transcribeFile, CHUNK_SEC, peopleFromText, ownerOf, digestText, tasksText, extOf, armed, personFor }
 };
