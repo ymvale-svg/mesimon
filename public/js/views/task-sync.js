@@ -4,7 +4,8 @@
  *
  *   • "לסגור?" / "לעדכן?" — מייל או וואטסאפ שעונה על משימה שפתחתי (‎task_close‎ /
  *     ‎task_update‎). אישור מוסיף את ההודעה כהערה; סגירה, יעד וסטטוס — רק מה
- *     שסומן. "לא קשור" — בלחיצה אחת, עם ביטול.
+ *     שסומן. "לא קשור" — בלחיצה אחת, עם ביטול. המשימה לא נכונה — בחלון: 🔀 לצרף את ההודעה
+ *     למשימה אחרת, או ➕ משימה חדשה ממנה.
  *   • "למזג?" — שתי משימות במחלקה שנראות אותה עבודה (‎task_merge‎). מספיק אישור
  *     של אחד האחראים. "לא כפולות" — לא יוצע שוב.
  *   • בדיאלוג "משימה חדשה": "יש כבר משימה דומה: '…' אצל יוסי" — לפתוח בכל זאת /
@@ -113,7 +114,18 @@ const TaskSyncView = (() => {
         UI.field('ההערה שתתווסף למשימה', comment, 'עם המקור והקישור אליו. קבצים מהמייל יצורפו אליה.'),
         el('div.ai-section-title', { text: 'ומה עוד לשנות במשימה' }),
         changes,
-        el('div.mute-sm', { text: 'רק מה שמסומן ישתנה.', style: { marginTop: '6px' } })
+        el('div.mute-sm', { text: 'רק מה שמסומן ישתנה.', style: { marginTop: '6px' } }),
+        el('div.ai-section-title', { text: 'המשימה לא נכונה?' }),
+        el('div.ts-redirect', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap' } }, [
+          el('button.btn.btn-sm', {
+            title: 'ההודעה תתווסף כהערה למשימה שתבחר/י. המשימה שהוצעה לא תשתנה',
+            onclick: () => { m.close(); attachOtherDialog(s, comment.value.trim(), reload); }
+          }, ['🔀 לצרף למשימה אחרת…']),
+          el('button.btn.btn-sm', {
+            title: 'משימה חדשה באחריותך, וההודעה נשמרת בה כהערה. המשימה שהוצעה לא תשתנה',
+            onclick: () => { m.close(); newTaskDialog(s, comment.value.trim(), reload); }
+          }, ['➕ משימה חדשה מההודעה'])
+        ])
       ]),
       footer: [ok, el('div.spacer'), el('button.btn', { onclick: () => m.close() }, ['ביטול'])]
     });
@@ -128,6 +140,80 @@ const TaskSyncView = (() => {
       });
       m.close();
       UI.success(closeBox.checked ? 'המשימה נסגרה — ההודעה נשמרה בה' : 'העדכון נוסף למשימה');
+      if (r.taskId) TaskCardView.open(r.taskId);
+    }, reload));
+  }
+
+  // ------------------------------------------------------------ המשימה לא נכונה
+
+  /**
+   * 🔀 ההודעה למשימה אחרת: חיפוש משימה פתוחה (כמו ב"איחוד" בכרטיס המשימה) ← אישור ← ההערה נכנסת לשם
+   * (‎POST /api/ai/suggestions/:id/attach‎). השרת בודק שמותר לערוך את המשימה שנבחרה.
+   */
+  function attachOtherDialog(s, comment, reload) {
+    const d = s.data ?? {};
+    const input = el('input', { type: 'search', placeholder: 'שם המשימה שאליה לצרף…', 'aria-label': 'חיפוש משימה', style: { width: '100%' } });
+    const list = el('div', { style: { marginTop: '10px', maxHeight: '320px', overflow: 'auto' } });
+    let seq = 0;
+    const search = async () => {
+      const q = input.value.trim();
+      const mine = ++seq;
+      if (q.length < 2) { UI.mount(list, el('div.mute-sm', { text: 'הקלידו לפחות 2 אותיות.' })); return; }
+      try {
+        const r = await API.search(q, 'all');
+        if (mine !== seq) return;
+        const hits = (r.results ?? []).filter((x) => x.type === 'task' && x.id !== s.taskId && !/הושלם|בארכיון/.test(x.subtitle ?? '')).slice(0, 12);
+        UI.mount(list, hits.length ? hits.map((h) => el('button.btn.btn-block', {
+          style: { textAlign: 'start', marginBottom: '6px' },
+          onclick: () => confirmAttach(h)
+        }, [el('div', { text: h.title }), el('div.mute-sm', { text: h.subtitle ?? '' })])) : el('div.mute-sm', { text: 'לא נמצאו משימות פתוחות.' }));
+      } catch (err) { UI.error(err); }
+    };
+    let timer = null;
+    input.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(search, 250); });
+    const m = UI.modal({
+      title: '🔀 לצרף את ההודעה למשימה אחרת',
+      body: el('div', {}, [
+        el('p.mute-sm', { style: { marginTop: 0 }, text: `ההודעה תתווסף כהערה למשימה שתבחרו, עם המקור והקבצים. "${d.taskTitle}" לא תשתנה.` }),
+        input, list
+      ])
+    });
+    setTimeout(() => input.focus(), 0);
+    async function confirmAttach(h) {
+      // חלון החיפוש נסגר קודם — אחרת האישור נפתח מאחוריו
+      m.close();
+      if (!await UI.confirm(`לצרף את ההודעה כהערה ל"${h.title}"?`, { title: 'צירוף למשימה אחרת', okText: 'לצרף' })) return;
+      await run(null, async () => {
+        const r = await API.post(`/api/ai/suggestions/${s.id}/attach`, { taskId: h.id, comment });
+        UI.success(`ההודעה נוספה ל"${h.title}"`);
+        if (r.taskId) TaskCardView.open(r.taskId);
+      }, reload)();
+    }
+  }
+
+  /** ➕ משימה חדשה מההודעה — כותרת ותיאור לעריכה; ההודעה עצמה נשמרת בה כהערה (‎POST …/new-task‎) */
+  function newTaskDialog(s, comment, reload) {
+    const d = s.data ?? {};
+    const title = el('input', { type: 'text', maxlength: 120, style: { width: '100%' } });
+    title.value = String(d.summary || s.subject || d.comment || '').trim().split('\n')[0].slice(0, 120);
+    const description = el('textarea', { rows: 3 });
+    description.value = d.summary ?? '';
+    const ok = el('button.btn.btn-primary', {}, ['➕ פתיחת המשימה']);
+    const m = UI.modal({
+      title: '➕ משימה חדשה מההודעה',
+      body: el('div', {}, [
+        el('div.ai-letter', {}, [originLine(s)]),
+        UI.field('כותרת', title),
+        UI.field('תיאור', description, 'המשימה תהיה באחריותך. ההודעה, המקור והקבצים יישמרו בה כהערה.'),
+        el('div.mute-sm', { text: `"${d.taskTitle}" לא תשתנה.` })
+      ]),
+      footer: [ok, el('div.spacer'), el('button.btn', { onclick: () => m.close() }, ['ביטול'])]
+    });
+    ok.addEventListener('click', run(ok, async () => {
+      if (!title.value.trim()) throw new Error('נדרשת כותרת למשימה');
+      const r = await API.post(`/api/ai/suggestions/${s.id}/new-task`, { title: title.value.trim(), description: description.value.trim(), comment });
+      m.close();
+      UI.success('נפתחה משימה חדשה — ההודעה נשמרה בה');
       if (r.taskId) TaskCardView.open(r.taskId);
     }, reload));
   }
@@ -309,5 +395,5 @@ const TaskSyncView = (() => {
     });
   }
 
-  return { handles, row, rejectNow, approveDialog, checkDuplicate, KINDS };
+  return { handles, row, rejectNow, approveDialog, attachOtherDialog, newTaskDialog, checkDuplicate, KINDS };
 })();

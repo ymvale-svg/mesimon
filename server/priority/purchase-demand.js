@@ -15,6 +15,7 @@
  * הבוט כותב רק לחברות שב-‎PRIORITY_COMPANIES‎. עד "סיום" שום דבר לא נכתב בפריוריטי.
  * מצב השיחה — בהגדרה ‎purchase_demand:<userId>‎, וצילומי הרשימה — בתיקיית ההעלאות עד הסוף.
  */
+const { notOpening } = require('./opens-guard');
 const fs = require('node:fs');
 const Paths = require('../core').Paths;
 const path = require('node:path');
@@ -31,6 +32,7 @@ const Chain = require('./priority-chain');
 const LineCmd = require('./line-commands');
 const Approvals = require('./priority-approvals');
 const Return = require('./pd-return');
+const Parts = require('./pd-parts');
 const { BTN, YES, NO, CANCEL, normalize, label, labels, sameLabel } = require('../whatsapp').WaUi;
 
 const SKILL = Paths.skill('purchase-demand.md');
@@ -47,6 +49,9 @@ const GR_TRIGGER = /קבלת\s*סחורה/;
 const DONE = /^(סיום|סיימתי|זהו|זה הכל|זה הכול|תשלח|שלח|לשלוח|שלח לאישור|תשלח לאישור|לאישור)\s*[!.🏁]*$/u;
 const NONE = /^(אף אחד|אף אחת|אף אחד מהם|לא אלה|אחר|כללי|מק"?ט כללי)([\s,.!❌]|$)/;
 const BTN_NONE = 'אף אחד ❌';
+// 🆕 מק"טים לבנייה (‎pd-parts.js‎): ב"סיום", כשיש פריטים בלי מק"ט
+const BTN_ONLY = 'רק המזוהים ✅';
+const BTN_WAIT = 'לחכות לרכש ⏳';
 
 /** הודעות טכניות — רק למנהלי המערכת; לעובד — רק מה שהוא יכול לפתור */
 function alertAdmins(user, s, title, details) {
@@ -63,7 +68,7 @@ function alertAdmins(user, s, title, details) {
 
 /** שליחת הודעה יזומה לעובד (החותם הבא) — נקבע ב-wa-bot (‎setHooks‎) */
 const hooks = { send: null };
-const setHooks = (h) => { Object.assign(hooks, h); Return.setHooks(h); };
+const setHooks = (h) => { Object.assign(hooks, h); Return.setHooks(h); Parts.setHooks(h); };
 
 // ---------------------------------------------------------------------------
 // מצב
@@ -87,7 +92,9 @@ const pending = (userId) => Boolean(fresh(load(userId)));
 const docId = (userId) => { const s = load(userId); return fresh(s) ? String(s.prdno || s.editOf || s.startedAt || '') || null : null; };
 const isTrigger = (text) => TRIGGER.test(String(text ?? ''));
 /** פותח דרישה ("דרישת רכש"); וגם החזרה לבדיקה ("החזר לבדיקה PD…") ותשובה של פותח הדרישה (לתקן / הכל נכון) */
-const opens = (text, userId = null) => isTrigger(text) || Boolean(userId && Return.owns(userId, text));
+// שאלה על דרישות קיימות ("מה הדרישות הפתוחות?") או בקשה אחרת — לא פותחת דרישה חדשה (‎opens-guard.js‎)
+// וגם תשובה ל"המק"טים נבנו — לבנות את הדרישה מחדש?" (‎pd-parts.js‎)
+const opens = (text, userId = null) => (isTrigger(text) && !notOpening(text)) || Boolean(userId && (Return.owns(userId, text) || Parts.owns(userId, text)));
 
 /** הודעה בנושא אחר כשיש דרישה פתוחה — הדרישה יורדת (עוד לא נכתב כלום בפריוריטי). מחזיר שורת הודעה */
 function abandon(user) {
@@ -316,9 +323,10 @@ function headerLines(s, { notes = [] } = {}) {
 }
 const CHANGE_HINT = '_לשנות — כתבו "תאריך 12.11", "פרויקט …", "מחסן …", "בדק" / "אתרי" או "סביבה"._';
 
-function itemLine(it) {
+function itemLine(it, edit = false) {
   const head = `*${it.n}.* ${it.description} — ${qtyText(it.qty)} ${it.unit || "יח'"}${it.note ? ` _(${it.note})_` : ''}`;
   if (it.status === 'ok') return `${head}\n   ✅ ${codeText(it.part)}`;
+  if (it.status === 'general' && !edit) return `${head}\n   🆕 לא בקטלוג — יישלח לרכש לבניית מק"ט`;
   if (it.status === 'general') return `${head}\n   🆕 לא בקטלוג — מק"ט כללי 000 · ${it.part.chapterDes || it.part.chapter} / ${it.part.topicDes || it.part.topic} _(צריך לפתוח לו מק"ט)_`;
   return `${head}\n   ❓ ממתין לבחירה`;
 }
@@ -344,22 +352,96 @@ function nextQuestion(s, pre = []) {
     'לא מצאתי בדיוק את זה בקטלוג. התכוונת ל:',
     ...it.options.map((p) => `• *${p.des}* (${p.code})${p.chapterDes ? ` · ${p.chapterDes}` : ''}`),
     '',
-    `אף אחד — נקלט כמק"ט כללי עם התיאור שלכם, על ${it.general.chapterDes || it.general.chapter} / ${it.general.topicDes || it.general.topic}. או כתבו תיאור אחר.`].join('\n'),
+    s.editOf ? `אף אחד — נקלט כמק"ט כללי עם התיאור שלכם, על ${it.general.chapterDes || it.general.chapter} / ${it.general.topicDes || it.general.topic}. או כתבו תיאור אחר.`
+      : 'אף אחד — הפריט יישלח לרכש לבניית מק"ט. או כתבו תיאור אחר.'].join('\n'),
   [...opts.map((p) => p.btn), BTN_NONE]);
 }
+
+/*
+ * 🆕 פריטים בלי מק"ט (הוחלט 17.11.26): דרישת רכש *לא* יוצאת עם מק"ט כללי 000. ב"סיום" — רק המזוהים עכשיו, או לחכות
+ * לבניית המק"טים ואז כל הדרישה. בשני המקרים רשימת החסרים נשלחת במייל למנהלת הרכש (‎pd-parts.js‎), בלי שאלה.
+ * תיקון דרישה שהוחזרה (‎editOf‎) — כמו קודם.
+ */
+const missing = (s) => (s.editOf ? [] : (s.items ?? []).filter((x) => x.status === 'general'));
 
 function showList(s, pre = []) {
   s.step = 'review';
   const items = s.items ?? [];
   if (!items.length) return askItems(s, pre);
-  const fresh = items.filter((x) => x.status === 'general').length;
+  const miss = missing(s).length;
+  const fresh = s.editOf ? items.filter((x) => x.status === 'general').length : 0;
   return reply(s, [...pre,
     `🛒 *${s.editOf ? `תיקון דרישת רכש ${s.editOf}` : 'דרישת רכש'} — ${items.length} ${items.length === 1 ? 'פריט' : 'פריטים'}*`, ...headerLines(s), '',
-    ...items.map(itemLine), '',
+    ...items.map((it) => itemLine(it, Boolean(s.editOf))), '',
+    miss ? `🆕 ${miss === 1 ? 'פריט אחד לא נמצא' : `${miss} פריטים לא נמצאו`} בקטלוג — דרישה לא יוצאת עם מק"ט כללי. ב*סיום* הרשימה נשלחת לרכש לבניית מק"ט, ותבחרו: לשלוח עכשיו רק את המזוהים, או לחכות ולשלוח את כל הדרישה.` : null,
     fresh ? `🆕 ${fresh === 1 ? 'פריט אחד לא נמצא' : `${fresh} פריטים לא נמצאו`} בקטלוג — נקלטים כמק"ט כללי, ובעתיד צריך לפתוח להם מק"ט.` : null,
     'אפשר להוסיף עוד (צילום, הקלטה או הקלדה), או לתקן ("שורה 2 — 20", "בלי שורה 3").',
-    s.editOf ? '*סיום* 🏁 — התיקון נשמר בפריוריטי, והדרישה חוזרת *לאישור*.' : '*סיום* 🏁 — הדרישה נפתחת בפריוריטי ועוברת *לאישור*.'].filter((x) => x !== null).join('\n'),
+    s.editOf ? '*סיום* 🏁 — התיקון נשמר בפריוריטי, והדרישה חוזרת *לאישור*.' : '*סיום* 🏁 — הדרישה נפתחת בפריוריטי ועוברת *לאישור*.'
+  ].filter((x) => x !== null).join('\n'),
   [BTN.done, BTN.cancel]);
+}
+
+/** ב"סיום", כשיש פריטים בלי מק"ט: רק המזוהים / לחכות לבנייה (בלי מנהלת רכש — רק המזוהים) */
+function askMode(s, pre = []) {
+  s.step = 'parts_mode';
+  const w = missing(s);
+  const known = s.items.length - w.length;
+  const to = Parts.contact();
+  const list = [`🆕 *${w.length === 1 ? 'פריט אחד לא נמצא' : `${w.length} פריטים לא נמצאו`} בקטלוג:*`, ...w.map((it) => `• ${it.description} — ${qtyText(it.qty)} ${it.unit || "יח'"}`), ''];
+  if (!to) {
+    return reply(s, [...pre, ...list, 'דרישה לא יוצאת עם מק"ט כללי, ועוד לא הוגדרה מנהלת רכש לבניית מק"טים — מנהל המערכת יקבל את הרשימה.',
+      known ? `*רק המזוהים* — הדרישה יוצאת עכשיו עם ${known === 1 ? 'הפריט שזוהה' : `${known} הפריטים שזוהו`}. או הסירו / תקנו את הפריטים, או *ביטול*.` : 'הסירו / תקנו את הפריטים, או *ביטול*.'].join('\n'),
+    [known ? BTN_ONLY : null, BTN.cancel].filter(Boolean));
+  }
+  return reply(s, [...pre, ...list,
+    `📧 הרשימה תישלח ל${to.name} (רכש) לבניית מק"טים בהקדם. *איך להמשיך?*`,
+    known ? `• *רק המזוהים* — הדרישה יוצאת עכשיו עם ${known === 1 ? 'הפריט שזוהה' : `${known} הפריטים שזוהו`}; כשהמק"טים ייבנו — אשאל אם לבנות מהם דרישה חדשה נוספת.` : null,
+    '• *לחכות לרכש* — שום דבר לא נשלח עכשיו; כשהמק"טים ייבנו — אשאל אם להמשיך בדרישה, וכל הדרישה תצא עם הכמויות שביקשת.'].filter((x) => x !== null).join('\n'),
+  [known ? BTN_ONLY : null, BTN_WAIT, BTN.cancel].filter(Boolean));
+}
+
+/** שולח את החסרים לרכש. ‎null‎ — יצא; אחרת — התשובה לעובד (נשארים בשאלה) */
+async function sendMissing(user, s, mode) {
+  const r = await Parts.requestBuild(user, s, missing(s), { mode });
+  if (r.ok) { s.sentTo = r.to.name; return null; }
+  return askMode(s, ['⚠️ לא הצלחתי לשלוח את הרשימה לרכש — מנהל המערכת קיבל פירוט. נסו שוב בעוד כמה דקות.', '']);
+}
+
+/** "לחכות לרכש" — שום דבר לא נכתב בפריוריטי; הבקשה נשמרת עם כל השורות, וכשהמק"טים ייבנו — שאלה */
+async function waitForParts(user, s) {
+  const err = await sendMissing(user, s, 'wait');
+  if (err) return err;
+  const w = missing(s).length;
+  return { s: null, replies: [[`📧 נשלח ל*${s.sentTo}* במייל: ${w === 1 ? 'מק"ט אחד' : `${w} מק"טים`} לבנייה בהקדם.`,
+    `⏳ *הדרישה נשמרה ומחכה לרכש* — ${s.items.length} ${s.items.length === 1 ? 'פריט' : 'פריטים'}. עוד לא נכתב דבר בפריוריטי.`,
+    'כשהמק"טים ייבנו תקבל הודעה כאן ובמייל, ואשאל אם להמשיך בדרישה עם הכמויות שביקשת והמק"טים שנבנו.'].join('\n')],
+  buttons: [], status: 'ok', result: `מחכה למק"טים מהרכש (${w})` };
+}
+
+/** "רק המזוהים" — החסרים לרכש (או, בלי מנהלת רכש, למנהלי המערכת), והדרישה יוצאת בלעדיהם */
+async function onlyKnown(user, s) {
+  if (Parts.contact()) {
+    const err = await sendMissing(user, s, 'partial');
+    if (err) return err;
+  } else {
+    alertAdmins(user, s, 'פריטים בלי מק"ט — אין מנהלת רכש מוגדרת', ['הדרישה נשלחה בלעדיהם. כדי שיישלחו לבניית מק"ט — להגדיר מנהלת רכש במסך פריוריטי ← הגדרות.',
+      ...missing(s).map((x) => `• ${x.description} — ${qtyText(x.qty)} ${x.unit}`)]);
+  }
+  s.partsMode = 'partial';
+  return submit(user, s);
+}
+
+/** "המק"טים נבנו — לבנות מחדש?" ← כן: הדרישה נטענת מוכנה לסיכום, עם הכמויות שביקש העובד והמק"טים החדשים */
+async function startRebuild(user, rb) {
+  if (!writable(user.id).includes(rb.company)) {
+    return { s: null, replies: ['הסביבה של הדרישה אינה פתוחה לכתיבה מהבוט. פנו למנהל המערכת.'], buttons: [], status: 'denied', result: `בנייה מחדש: ${rb.company} סגורה` };
+  }
+  const h = rb.header ?? {};
+  const s = { step: 'review', uid: user.id, startedAt: Date.now(), company: rb.company, date: today(),
+    project: h.project ?? null, projectFrom: 'user', warehouse: h.warehouse ?? null, warehouseName: h.warehouseName ?? '', warehouseFrom: 'user',
+    demandCode: h.demandCode ?? null, codeFrom: 'user', items: rb.items, files: [], rebuildOf: rb.from };
+  renumber(s);
+  return showList(s, [rb.partial ? `🆕 *דרישה חדשה נוספת* מהמק"טים שנבנו (${rb.prdno} כבר נשלחה עם השאר):` : '▶️ *ממשיכים בדרישת הרכש* — כל הדרישה, עם הכמויות שביקשת והמק"טים שנבנו:', '']);
 }
 
 // ---------------------------------------------------------------------------
@@ -655,7 +737,7 @@ async function onPick(user, s, t, { reaction = false } = {}) {
   if (opt) { const { btn, ...part } = opt; it.part = part; it.status = 'ok'; it.options = null; return nextQuestion(s, [`✅ ${it.description} ← ${opt.des} (${opt.code})`, '']); }
   if (NONE.test(t) || sameLabel(t, BTN_NONE) || (reaction && NO.test(t))) {
     setGeneral(it, 'לא בקטלוג — נבחר ע"י העובד');
-    return nextQuestion(s, [`🆕 ${it.description} ← מק"ט כללי 000 (${it.general.chapterDes || it.general.chapter} / ${it.general.topicDes || it.general.topic})`, '']);
+    return nextQuestion(s, [s.editOf ? `🆕 ${it.description} ← מק"ט כללי 000 (${it.general.chapterDes || it.general.chapter} / ${it.general.topicDes || it.general.topic})` : `🆕 ${it.description} ← לא בקטלוג, יישלח לרכש לבניית מק"ט`, '']);
   }
   if (YES.test(t)) return reply(s, 'בחרו אחד מהכפתורים, *אף אחד* ❌, או כתבו תיאור אחר.', s.lastButtons ?? []);
   if (DONE.test(t)) return reply(s, `קודם — *${it.description}*: בחרו אחד מהכפתורים, או *אף אחד* ❌.`, s.lastButtons ?? []);
@@ -794,6 +876,13 @@ async function submit(user, s) {
   if (open.length) return nextQuestion(s, ['קודם צריך לבחור לפריטים שנשארו פתוחים:', '']);
   const c = s.company;
   if (!writable(user.id).includes(c)) return reply(s, 'הסביבה הזו אינה פתוחה לכתיבה מהבוט. כתבו *סביבה* לבחירת סביבה אחרת, או *ביטול*.', [BTN.cancel]);
+  // 🆕 פריטים בלי מק"ט — לא יוצאים על 000: קודם "רק המזוהים" / "לחכות"
+  if (missing(s).length && s.partsMode !== 'partial') return askMode(s);
+  if (s.partsMode === 'partial' && !s.held) {
+    s.held = missing(s);
+    s.items = s.items.filter((x) => !s.held.includes(x));
+  }
+  if (!s.items.length) return askMode(s);
   let prdno;
   // הבעלים בפריוריטי — העובד עצמו (לפי המייל / השם במסך המשתמשים); לא נמצא — משתמש ה-API, והשם בדו-שיח
   const owner = await Approvals.priorityLoginFor(user).catch(() => null);
@@ -834,6 +923,7 @@ async function submit(user, s) {
   }
   s.prdno = prdno;
   save(user.id, s);
+  if (s.partsMode === 'partial') Parts.setMode({ ...s, items: [...s.items, ...(s.held ?? [])] }, 'partial', prdno);
   // מי פתח — לפריוריטי הדרישה רשומה לפעמים על משתמש ה-API; כך הוא יקבל "הדרישה אושרה והועברה לספק" (po-notify)
   Prefs.rememberOpener(c, prdno, user.id);
   Chain.progress(user.id, 'demand', { stage: 'draft', docno: prdno, company: c, supplier: s.project?.des ?? '' });
@@ -848,6 +938,7 @@ async function submit(user, s) {
     `נפתחה ע"י: ${user.full_name}${owner ? ` (${owner})` : ''} | ${nowHe()}`,
     s.files?.length ? 'רשימת הפריטים המקורית — בנספחים' : null,
     ...s.items.filter((x) => x.status === 'general').map((x) => `לא בקטלוג (צריך לפתוח מק"ט): ${x.description} — ${qtyText(x.qty)} ${x.unit}`),
+    ...(s.held ?? []).map((x) => `מחכה למק"ט מהרכש (לא בדרישה הזו): ${x.description} — ${qtyText(x.qty)} ${x.unit}`),
     ...s.items.filter((x) => x.note).map((x) => `הערה לשורה ${x.n}: ${x.note}`),
     ...(s.notes ?? [])
   ]).catch((err) => problems.push(`דו-שיח פנימי: ${err.message}`));
@@ -882,8 +973,11 @@ async function submit(user, s) {
     console.error('[משימון] החותם הבא לדרישת רכש:', err.message);
   }
   clear(user.id, s);
+  const held = (s.held ?? []).length;
   return { s: null, replies: [[`✅ *דרישת רכש ${prdno}* נפתחה ועברה *לאישור*.`, companyLine(c),
-    `📁 ${s.project?.des ?? ''} · ${s.items.length} ${s.items.length === 1 ? 'פריט' : 'פריטים'} · 📅 ${ymdHe(s.date)}`, signerLine].filter(Boolean).join('\n')], buttons: [], status: 'ok', result: `${prdno} — מחכה לאישור` };
+    `📁 ${s.project?.des ?? ''} · ${s.items.length} ${s.items.length === 1 ? 'פריט' : 'פריטים'} · 📅 ${ymdHe(s.date)}`, signerLine,
+    held && s.sentTo ? `📧 ${held === 1 ? 'פריט אחד נשלח' : `${held} פריטים נשלחו`} ל*${s.sentTo}* לבניית מק"ט — כשייבנו תקבל הודעה כאן ובמייל, ואשאל אם לבנות מהם דרישה חדשה נוספת.` : null,
+    held && !s.sentTo ? `🆕 ${held === 1 ? 'פריט אחד לא נשלח' : `${held} פריטים לא נשלחו`} (אין מק"ט) — מנהל המערכת קיבל את הרשימה.` : null].filter(Boolean).join('\n')], buttons: [], status: 'ok', result: `${prdno} — מחכה לאישור` };
 }
 
 // ---------------------------------------------------------------------------
@@ -920,6 +1014,15 @@ async function handle({ user, text = '', file = null, reaction = false, voice = 
     if (s) clear(user.id, s);
     const out = await startEdit(user, r.edit);
     return finish(user, out.s, out, `תיקון ${r.edit.prdno}`);
+  }
+
+  // 🆕 "המק"טים נבנו — לבנות מחדש?" (‎pd-parts.js‎) — רק כשאין דרישה פעילה (אחרת "כן" שייך לשאלה שלה)
+  if (!file && (!s || s.paused) && Parts.owns(user.id, t)) {
+    const r = Parts.answer(user, t);
+    if (!r.rebuild) return { ...r, replies: heard.length ? [`${heard.join('\n')}\n${r.replies[0]}`] : r.replies };
+    if (s) clear(user.id, s);
+    const out = await startRebuild(user, r.rebuild);
+    return finish(user, out.s, out, 'בנייה מחדש עם המק"טים מהרכש');
   }
 
   // "דרישת רכש" — התחלה (או המשך של דרישה פתוחה)
@@ -1015,6 +1118,16 @@ async function step(user, s, t, file, { reaction, stale = false }) {
       s.warehouse = w.code; s.warehouseName = w.name; s.warehouseFrom = 'user';
       return back(s, `🏬 המחסן עודכן ל-*${w.name || w.code}* (${w.code}).`);
     }
+    case 'parts_mode': {
+      if (file) return reply(s, 'קודם — איך לשלוח את הדרישה.', s.lastButtons ?? []);
+      const known = s.items.length > missing(s).length;
+      if (known && (sameLabel(t, BTN_ONLY) || /^רק\s*(ה)?מזוהים|^רק מה שזוהה|^בלעדיהם|^בלי החסרים/.test(t))) return onlyKnown(user, s);
+      if (Parts.contact() && (sameLabel(t, BTN_WAIT) || /^(לחכות|נחכה|חכה|תחכה|אחכה)/.test(t))) return waitForParts(user, s);
+      if (/כללי|000/.test(t)) return askMode(s, ['דרישת רכש לא יוצאת עם מק"ט כללי.', '']);
+      // חזרה לרשימה — להוסיף או לתקן
+      if (NO.test(t) || /^(חזרה|לרשימה|תיקון)/.test(t)) return showList(s);
+      return t.split(/\s+/).length >= 6 ? null : askMode(s);
+    }
     case 'pick':
       if (file) return onFile(user, s, file);
       return onPick(user, s, t, { reaction });
@@ -1038,7 +1151,7 @@ async function step(user, s, t, file, { reaction, stale = false }) {
 /**
  * 🗂 תצוגה למסך של משימון פריוריטי (‎priority-desk.js‎) — הדרישה כפי שהיא עכשיו, כנתונים. קריאה בלבד.
  */
-const VIEW_STEP = { start: 'פתיחה', company: 'חברה', project: 'פרויקט', warehouse: 'מחסן', code: 'סוג דרישה', items: 'רשימת הפריטים', pick: 'בחירת פריט', review: 'לפני שליחה לאישור' };
+const VIEW_STEP = { start: 'פתיחה', company: 'חברה', project: 'פרויקט', warehouse: 'מחסן', code: 'סוג דרישה', items: 'רשימת הפריטים', pick: 'בחירת פריט', review: 'לפני שליחה לאישור', parts_mode: 'מק"טים מהרכש' };
 function view(userId) {
   const s = load(userId);
   if (!s || !fresh(s)) return null;

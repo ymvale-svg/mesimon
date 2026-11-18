@@ -2990,6 +2990,7 @@ const App = (() => {
     { key: 'google', label: '🔗 Google ומייל', hint: 'Gmail, יומן והעדפות AI', staff: true },
     { key: 'whatsapp', label: '💬 הוואטסאפ שלי', hint: 'חיבור והצעות מהוואטסאפ', staff: true },
     { key: 'today', label: '☀️ Today והקלטה', hint: 'Today במייל, הקלטה ויומנים', staff: true },
+    { key: 'location', label: '📍 מיקום', hint: 'נקודות ציון ותזכורת לפי מיקום', staff: true },
     { key: 'notify', label: '🔔 התראות', hint: 'מה קופץ, ומתי במייל ובוואטסאפ' },
     { key: 'view', label: '🎨 תצוגה', hint: 'בהיר, כהה או לפי המכשיר' }
   ];
@@ -3060,6 +3061,7 @@ const App = (() => {
     else if (current === 'google') AiInboxView.openGmail(() => refreshView(), { into: box });
     else if (current === 'whatsapp') AiTaskView.openWhatsApp({ into: box });
     else if (current === 'today') TodayView.openSettings({ into: box });
+    else if (current === 'location') LocationView.openSettings({ into: box });
     else if (current === 'notify') notifSettingsDialog({ into: box });
     else if (current === 'view') UI.mount(box, el('table.data', { style: { width: '100%' } }, [el('tbody', {}, [themeRow()])]));
   }

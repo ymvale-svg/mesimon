@@ -69,6 +69,7 @@ const BotTips = require('./bot-tips');
 const FormFill = require('../mail').FormFill;
 const MeetCoord = require('../meetings').MeetingCoord;
 const Reminders = require('./reminders');
+const Places = require('./places');
 const SentFollowup = require('../mail').SentFollowup;
 const DayDigest = require('../agents').DayDigest;
 const Briefing = require('../meetings').Briefing;
@@ -83,7 +84,7 @@ const { answerLike, busyFor, meetCoordRun, meetCoordTick, pushToUser, questionTt
 const { businessCommand, closeAlerted, closureDecision, confirmPending, contactOf, createFromDraft, draftEmail, findRecipients, mailActionAlerts, mailAlertFor, mailAlerts, parseThreadAdd, resolveCc, solveText, startGoodsFromMail, suggestionDecision, suggestionFeedback, threadAddText, VIA_EMAIL, VIA_MESIMON } = require('./wa-mail');
 const { MENU, MENU_FREE_HINT, MENU_MORE, PLAIN_AGENTS, agentsText, cut, dayItems, isMenuButton, menuButtonOf, menuButtons, menuOptions, menuPick, menuText, moreMenuGroups, pairsOf, parseClosureCommand, parseSuggestionCommand, recordingReply, todayMessage, walkAction, walkButtons, walkText } = require('./wa-menu');
 const { flowReply, logoIntent, meetingAudioAllowed, meetingAudioTurn, meetingFollowups, processMeetingAudio, receiveMeetingAudio, TRANSLATE } = require('./wa-meeting');
-const { DRAFT_ONLY, flowAgentsList, flowAlertNo, flowApproval, flowBusinessCommand, flowCancel, flowClosureCommand, flowEmailEdit, flowEmailPick, flowEmailSolve, flowEmailVia, flowFeaturesRequest, flowFormFillRequest, flowGreeting, flowInstinct, flowInstinctExplicit, flowInstinctPilot, flowNoticeToInstinct, flowIntentCancel, flowIntentDenied, flowIntentMenu, flowIntentOther, flowMailReplyEdit, flowMailWalk, flowMeetCoordRequest, flowMeetingAudioAnswer, flowMeetingAudioRequest, flowMeetingFollowupRequest, flowMeetingReminderRequest, flowMenuList, flowMenuPick, flowNoAi, flowNoticeRequest, flowOnClosureAddress, flowOnDayEvening, flowOnFormFill, flowOnGoodsStop, flowOnMailMuteSender, flowOnMailRemindOrGoods, flowOnMeetCoord, flowOnMeetingTasks, flowOnPaceOffer, flowOnPlainMail, flowOnReminder, flowOnRfq, flowOnSentFollowup, flowOnThreadAdd, flowRemindersRequest, flowReplyAsk, flowRfqRequest, flowRfqSummary, flowSuggestionCommand, flowTranslateRequest, flowWalk, NEXT, switchCancels } = require('./wa-flows');
+const { DRAFT_ONLY, flowAgentsList, flowAlertNo, flowApproval, flowBusinessCommand, flowCancel, flowClosureCommand, flowEmailEdit, flowEmailPick, flowEmailSolve, flowEmailVia, flowFeaturesRequest, flowFormFillRequest, flowGreeting, flowInstinct, flowInstinctExplicit, flowInstinctReply, flowInstinctPilot, flowNoticeToInstinct, flowIntentCancel, flowIntentDenied, flowIntentMenu, flowIntentOther, flowMailReplyEdit, flowMailWalk, flowMeetCoordRequest, flowMeetingAudioAnswer, flowMeetingAudioRequest, flowMeetingFollowupRequest, flowMeetingReminderRequest, flowMenuList, flowMenuPick, flowNoAi, flowNoticeRequest, flowOnClosureAddress, flowOnDayEvening, flowOnFormFill, flowOnGoodsStop, flowOnMailMuteSender, flowOnMailRemindOrGoods, flowOnMeetCoord, flowOnMeetingTasks, flowOnPaceOffer, flowOnPlainMail, flowOnReminder, flowOnRfq, flowOnSentFollowup, flowOnThreadAdd, flowRemindersRequest, flowReplyAsk, flowRfqRequest, flowRfqSummary, flowSuggestionCommand, flowTranslateRequest, flowWalk, NEXT, switchCancels } = require('./wa-flows');
 
 const RECENT_FILE_MS = 15 * 60 * 1000;
 
@@ -103,6 +104,33 @@ function textOf(m) {
     ?? '';
   const quoted = m.quotedMessage?.textMessage ?? m.quotedMessage?.extendedTextMessageData?.text ?? m.quotedMessage?.caption ?? '';
   return quoted ? `${main}\n(בתגובה ל: "${String(quoted).slice(0, 200)}")` : main;
+}
+
+
+/*
+ * ‎{ lat, lng, live, shape }‎ מהודעת מיקום של Green API, אחרת ‎null‎. מיקום 📍 — ‎locationMessage‎; שיתוף בזמן אמת —
+ * ‎liveLocationMessage‎. איך מגיעים *העדכונים* של שיתוף בזמן אמת לא אומת מול התיעוד (16.11.26) — לכן מחפשים קואורדינטות
+ * בכל צורה (גם בתוך הודעה ערוכה / מעודכנת), ו-‎shape‎ (השדות בלבד, בלי תוכן) נרשם ביומן הבוט לבדיקה.
+ */
+function locationOf(m, typeWebhook = 'incomingMessageReceived') {
+  const coords = (d) => {
+    if (!d || typeof d !== 'object') return null;
+    const lat = Number(d.latitude ?? d.degreesLatitude);
+    const lng = Number(d.longitude ?? d.degreesLongitude);
+    return Number.isFinite(lat) && Number.isFinite(lng) && (d.latitude ?? d.degreesLatitude) !== undefined ? { lat, lng } : null;
+  };
+  let found = null;
+  let path = '';
+  for (const [k, v] of Object.entries(m ?? {})) {
+    // מיקום מצוטט (תשובה על הודעת מיקום) או מועבר — לא המיקום של העובד (אבטחה 17.11.26)
+    if (!v || typeof v !== 'object' || /quoted/i.test(k) || v.isForwarded) continue;
+    const c = coords(v) ?? Object.entries(v).map(([k2, v2]) => { const x = coords(v2); if (x) path = `${k}.${k2}`; return x; }).find(Boolean);
+    if (c) { found = c; path ||= k; break; }
+  }
+  if (!found) return null;
+  const live = /live/i.test(`${m.typeMessage ?? ''} ${path}`) || typeWebhook !== 'incomingMessageReceived';
+  const keys = (o) => Object.keys(o ?? {}).join(',');
+  return { ...found, live, shape: `${typeWebhook}/${m.typeMessage ?? '?'} ${path}{${keys(path.split('.').reduce((o, k) => o?.[k], m))}}` };
 }
 
 
@@ -180,8 +208,13 @@ async function receiveOne(ch, timeout = LISTEN_TIMEOUT) {
         file: ['imageMessage', 'documentMessage'].includes(m.typeMessage) && m.fileMessageData?.downloadUrl
           ? { url: m.fileMessageData.downloadUrl, mime: m.fileMessageData.mimeType ?? '', name: m.fileMessageData.fileName ?? '' }
           : null,
+        // 📍 מיקום ששלחו לבוט (נקודה, או תחילת שיתוף מיקום חי) — תזכורות לפי מיקום (‎places.js‎)
+        location: locationOf(m),
         id: String(b.idMessage ?? note.receiptId)
       };
+    } else if (chatId.endsWith('@c.us') && /message/i.test(b.typeWebhook ?? '') && !/outgoing/i.test(b.typeWebhook ?? '') && locationOf(b.messageData ?? {}, b.typeWebhook)) {
+      // 📍 עדכון של שיתוף מיקום בזמן אמת שהגיע כהתראה אחרת (הודעה ערוכה / מעודכנת) — מיקום בלבד
+      direct = { chatId, phone: chatId.replace(/@c\.us$/, ''), text: '', kind: 'location_update', location: locationOf(b.messageData ?? {}, b.typeWebhook), id: String(b.idMessage ?? note.receiptId) };
     } else if (b.typeWebhook === 'stateInstanceChanged' && b.stateInstance) {
       setState(b.stateInstance);
     }
@@ -437,7 +470,7 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
   // 🎙 הקלטת פגישה מוואטסאפ: "לאיזו פגישה?", "לפתוח את המשימות?", ו"הקלטת פגישה" (ההקלטה הבאה)
   { const c = { actor, converse, dry, keep, out, state, t, user }; const r = await flowMeetingAudioAnswer(c); if (r !== NEXT) return r; state = c.state; }
   { const r = await flowMeetingAudioRequest({ actor, out, t }); if (r !== NEXT) return r; }
-  // 🎥 אחרי פגישה מוקלטת: "לפתוח משימות ✅" / "לא" על המשימות שהוצעו
+  // 🎥 אחרי פגישה מוקלטת: "תפתח אותן" (במילים) על המשימות, ו"כן" / "לא" על שליחת הסיכום
   { const c = { actor, dry, keep, out, state, t }; const r = await flowOnMeetingTasks(c); if (r !== NEXT) return r; state = c.state; }
   { const c = { actor, dry, keep, out, state, t }; const r = await flowOnPlainMail(c); if (r !== NEXT) return r; state = c.state; }
   // 🎥 אחרי פגישה מוקלטת: "סיכום הפגישה", "משימות מהפגישה", "הקלטת הפגישה"
@@ -682,6 +715,11 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
       return out(`מה לכתוב ל${contact.name || contact.email}?`, { draft: { kind: 'email_pick', name: contact.name, request: '', candidates: [contact], taskId } },
         { action: 'send_email', status: 'unclear', result: 'חסר תוכן' });
     }
+    // "שלח לגולן את סיכום הפגישה" — הסיכום המלא של הפגישה המוקלטת, כמו שהוא (לא נוסח שה-AI כותב מהמילים של הבקשה)
+    if (!taskId && !dry) {
+      const sum = await MeetingFollowup.summaryRequest(actor, request, picked).catch(() => null);
+      if (sum) return out(sum.text, sum.draft ? { draft: sum.draft, awaiting: true } : { draft: null }, { action: 'meeting_followup', status: 'ok', result: sum.result, buttons: sum.buttons });
+    }
     const pending = { ...await draftEmail(actor, contact, request, { dry }), taskId };
     return out(emailText(pending), { draft: pending, awaiting: true },
       { action: 'send_email', status: 'ok', result: `טיוטת מייל ל${contact.name || contact.email}: ${pending.draft.subject}${pending.suggestions.length ? ` · ${pending.suggestions.length} הצעות` : ''}` });
@@ -719,10 +757,14 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
   { const r = await flowInstinctPilot({ actor, dry, out, t }); if (r !== NEXT) return r; }
   // 🤖 "אינסטינקט, …" — ישר לעוזר הכללי, בלי AI
   { const r = await flowInstinctExplicit({ actor, dry, out, t, user }); if (r !== NEXT) return r; }
+  // 🤖 אינסטינקט שאל בסוף התשובה ("להכין כך?") — התשובה של העובד אליו, בציטוט
+  { const r = await flowInstinctReply({ actor, dry, out, state, t, user }); if (r !== NEXT) return r; }
 
   { const r = await flowNoAi({ actor, insightsReply, listReply, menuReply, out, state, t, todayReply, withReadAloud }); if (r !== NEXT) return r; }
 
-  const u = await understand(user, actor, state, t, projects, myOpen);
+  // 📎 קובץ שנשלח עם ההודעה (או ממש לפניה) — ה-AI צריך לדעת שהוא קיים: "תתקן את המסמך לתאריך …" הוא בקשה על הקובץ,
+  // לא שינוי תאריך של משימה (באג 17.11.26)
+  const u = await understand(user, actor, state, t, projects, myOpen, { file: Instinct.allowed(actor) ? Instinct.peekFile(user.id) : null });
   { const r = await flowIntentCancel({ out, u }); if (r !== NEXT) return r; }
   // 🤖 בקשה כללית (לא עבודה) — לאינסטינקט, ברקע
   { const r = await flowInstinct({ actor, dry, out, t, u, user }); if (r !== NEXT) return r; }
@@ -1008,6 +1050,7 @@ let buttonShapeLogged = false;
 
 /** 🔒 המסמך שהכפתורים של קבלת סחורה / דרישת רכש שואלים עליו — כפתור של מסמך אחר לא עונה כאן (#171) */
 const docDraft = (doc) => (doc ? { doc } : null);
+const quietLocationLog = new Map(); // ‎userId‎ → מתי נרשם עדכון מיקום שקט אחרון
 
 async function handleDirect(msg) {
   // 🤖 אינסטינקט לעולם לא מגיע לניתוב (גם אם המספר נרשם בטעות אצל עובד) — ‎instinct.js‎
@@ -1026,6 +1069,23 @@ async function handleDirect(msg) {
   if (!actor) return;
   const base = { channel: 'private', chatId: msg.chatId, userId: user.id, who: user.full_name, text: msg.text, forwarded: msg.forwarded };
   const ref = { chatId: msg.chatId, id: msg.id };
+  /*
+   * 📍 מיקום — מיקום 📍 או שיתוף בזמן אמת. הגעה לנקודת ציון מוציאה את התזכורות שחיכו לה (הסבב שולח אותן תוך שניות).
+   * לפני "העובד כתב": עדכוני מיקום מגיעים כל כמה שניות, והם לא שיחה. על העדכונים — לא עונים (‎text: null‎)
+   */
+  if (msg.location) {
+    // מי שתזכורות כבויות אצלו — המיקום לא נבדק ולא נשמר (אבטחה 17.11.26)
+    if (!WaActions.allowed(actor, 'reminders')) return;
+    const r = Reminders.onLocation(user.id, msg.location);
+    // עדכון שקט — ליומן פעם בחצי שעה לכל היותר (כדי לראות שהעדכונים מגיעים, ובאיזו צורה)
+    const quietLogged = quietLocationLog.get(user.id) ?? 0;
+    if (r.quiet && Date.now() - quietLogged < 30 * 60000) return;
+    if (r.quiet) quietLocationLog.set(user.id, Date.now());
+    // ביומן — בלי שם המקום ובלי התשובה (שבה שם המקום): היומן נשמר 90 יום ומנהלים רואים אותו (אבטחה 17.11.26)
+    log({ ...base, text: `[📍 ${msg.location.live ? 'מיקום בזמן אמת' : 'מיקום'}]`, action: 'reminders_place', status: 'ok', result: `${r.log ?? r.result} · ${msg.location.shape ?? ''}`.slice(0, 300) });
+    if (r.text) await sendText(msg.chatId, r.text);
+    return;
+  }
   // העובד כתב — תזכורות מחכות שהשיחה תירגע (‎mail-actions.mayRemindNow‎), ושאלה פתוחה "מתעוררת"
   if (!/^(bot-|mail-goods-)/.test(String(msg.id ?? ''))) { MailActions.noteUser(user.id); userLastAt.set(user.id, Date.now()); }
   // הודעה פנימית (‎enqueueAs‎) — לא דורסת את ההודעה האמיתית שעליה מגיבים
@@ -1800,6 +1860,7 @@ async function tick() {
     }
     if (Claude.isEnabled() && WaActions.byKey('group_tasks')?.enabled) await processGroups();
     prune();
+    Places.prune();
   } catch (err) {
     console.error('[משימון] סבב בוט הוואטסאפ נכשל:', err.message);
   } finally {
@@ -1842,6 +1903,7 @@ module.exports = {
   // לשליחה ממודולים אחרים — התראה לפני פגישה (‎meetings.js‎), עם רישום ביומן הבוט
   sendText, sendButtons, log, notifyAssignment, assistant, deliver, sendFilesToUser, mailAlertUsers, handOver,
   _internal: {
+    locationOf,
     featuresText, PLAIN_FEATURES, parseThreadAdd, threadAddText, dayItems, walkText, walkButtons, walkAction, WALK,
     storeGroupMessage, processGroup, handleDirect, sanitizeGroup, resolveMentions, candidatesOf, converse, turn, withFollowUps, sendSummaries, YES,
     findRecipients, findContactCards, sourceOf, suggestionFeedback, flushOutbox, todayMessage, splitMessage, parseSuggestionCommand, businessCommand, chatOf, saveChat,

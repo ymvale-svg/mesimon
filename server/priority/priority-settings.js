@@ -37,7 +37,10 @@ const DEFAULTS = Object.freeze({
   pdType: '02',
   poFinalStatuses: ['אושרה', 'נשלחה לספק'],
   noVatCode: Priority.NO_VAT_CODE,
-  draftTtlHours: 24
+  draftTtlHours: 24,
+  // 🆕 מנהלת הרכש — מקבלת במייל מק"טים לבנייה מדרישות רכש (‎pd-parts.js‎). ריק — בלי שאלה, פריט בלי מק"ט נקלט על 000
+  buyerName: '',
+  buyerEmail: ''
 });
 
 /** מה שהיה נכון עד היום — ממשתני הסביבה ומההגדרות הישנות */
@@ -158,6 +161,12 @@ function save(input, { org = DEFAULT_ORG, by = null } = {}) {
       const v = Array.isArray(b.defaults.poFinalStatuses) ? b.defaults.poFinalStatuses : csv(b.defaults.poFinalStatuses);
       defs.poFinalStatuses = v.map((x) => str(x, 40)).filter(Boolean);
       if (!defs.poFinalStatuses.length) defs.poFinalStatuses = [...DEFAULTS.poFinalStatuses];
+    }
+    if ('buyerName' in b.defaults) defs.buyerName = str(b.defaults.buyerName, 80);
+    if ('buyerEmail' in b.defaults) {
+      const e = str(b.defaults.buyerEmail, 120);
+      if (e && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e)) throw new Error(`כתובת מייל לא תקינה למנהלת הרכש: "${e}"`);
+      defs.buyerEmail = e;
     }
     if ('draftTtlHours' in b.defaults) defs.draftTtlHours = Math.min(168, Math.max(1, Number(b.defaults.draftTtlHours) || DEFAULTS.draftTtlHours));
   }

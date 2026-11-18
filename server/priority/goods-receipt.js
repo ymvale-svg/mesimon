@@ -24,6 +24,7 @@
  * מצב השיחה נשמר בהגדרה ‎goods_receipt:<userId>‎, והקבצים — בתיקיית ההעלאות
  * עד סוף הקליטה.
  */
+const { notOpening } = require('./opens-guard');
 const fs = require('node:fs');
 const Paths = require('../core').Paths;
 const path = require('node:path');
@@ -34,6 +35,7 @@ const { BTN, labels, sameLabel } = require('../whatsapp').WaUi;
 const Prefs = require('./priority-prefs');
 const Access = require('./priority-access');
 const Chain = require('./priority-chain');
+const Parts = require('./pd-parts');
 const LineCmd = require('./line-commands');
 const GrStamp = require('./gr-stamp');
 const Priority = require('../integrations').Priority;
@@ -112,6 +114,7 @@ function buttonsFor(s) {
     case 'order': return ['בלי הזמנה ❌', BTN.cancel];
     case 'lines': return [BTN.yes, BTN.cancel];
     case 'parts': return [BTN.yes, 'כללי'];
+    case 'parts_build': return [BTN.yes, BTN.no];
     case 'files': return [BTN.done];
     case 'review': return [BTN.approve, BTN.cancel];
     default: return [];
@@ -182,7 +185,8 @@ const docId = (userId) => { const s = load(userId); return fresh(s) && s.step !=
  * הודעה שנכנסת לפריוריטי — רק במפורש: "קבלת סחורה", "פריוריטי",
  * או קובץ בלי טקסט (הבוט אינו מטפל בקבצים אחרת, ושואל קודם).
  */
-const opens = (text, file) => isTrigger(text) || isPriority(text) || Boolean(file && !String(text ?? '').trim());
+// בקשה אחרת או שאלה שמזכירה את פריוריטי ("שלח מייל ל… בעניין פריוריטי") — לא פותחת (‎opens-guard.js‎)
+const opens = (text, file) => ((isTrigger(text) || isPriority(text)) && !notOpening(text)) || Boolean(file && !String(text ?? '').trim());
 const isTrigger = (text) => TRIGGER.test(String(text ?? ''));
 const isPriority = (text) => PRIORITY.test(String(text ?? ''));
 /** תשובה לשאלה של קבלת הסחורה קצרה. משפט ארוך שלא התאים לשלב — כנראה בקשה אחרת (משימה) */
@@ -1064,6 +1068,35 @@ function askParts(s) {
     : free.map((l) => `*${l.n}.* ${l.description}\n   ← ${codeText(l.part)} (${l.part.why})`);
   return reply(s, ['🏷 *מק"ט, תת פרק ומשאב*', ...body, '',
     '*כן* 👍 — להמשיך. לשנות: מק"ט ("A120-035-010"), או במילים שלכם ("שורה 1 מיזוג אוויר", "שורה 2 עכבר אלחוטי"), או *כללי*.'].join('\n'));
+}
+
+/*
+ * 🆕 שורות שנשארו על מק"ט כללי 000 — "לשלוח למנהלת הרכש לבניית מק"טים?" (‎pd-parts.js‎, הוחלט 17.11.26).
+ * בשונה מדרישת רכש: הקליטה ממשיכה על 000 בכל מקרה; כשהמק"ט נבנה — רק הודעה למקבל.
+ * רק כשמוגדרת מנהלת רכש, ורק פעם אחת לכל שורה.
+ */
+const NO_WORD = /^(לא|אל|ממש לא|no|👎|❌)([\s,.!]|$)/i;
+const unbuilt = (s) => (Parts.contact() ? s.lines.filter((l) => !l.order && l.part?.code === '000' && !l.req) : []);
+function askBuild(s) {
+  const list = unbuilt(s);
+  if (!list.length) return null;
+  s.step = 'parts_build';
+  const to = Parts.contact();
+  return reply(s, [`🆕 *לא נמצא מק"ט ${list.length === 1 ? 'לשורה' : `ל-${list.length} שורות`}:*`, ...list.map((l) => bullet(`${l.description} — ${qtyText(l.qty)} ${l.unit || "יח'"}`)), '',
+    `*לשלוח ל${to.name} (רכש) לבניית מק"טים?* *כן* 👍 / *לא* 👎`, '_הקליטה ממשיכה בכל מקרה על מק"ט כללי 000._'].join('\n'));
+}
+async function answerBuild(user, s, yes) {
+  const list = unbuilt(s);
+  let note = 'בסדר — ממשיכים על מק"ט כללי 000.';
+  if (yes && list.length) {
+    const r = await Parts.requestBuild(user, s, list.map((l) => ({ n: l.n, description: l.description, qty: l.qty, unit: l.unit || "יח'", note: '', general: l.part })), { source: 'receipt' });
+    note = r.ok ? `📧 נשלח ל*${r.to.name}* במייל: ${list.length === 1 ? 'מק"ט אחד' : `${list.length} מק"טים`} לבנייה בהקדם. הקליטה ממשיכה על 000; כשייבנו — אודיע לך.`
+      : '⚠️ לא הצלחתי לשלוח את המייל לרכש — מנהל המערכת קיבל פירוט. הקליטה ממשיכה על 000.';
+  }
+  for (const l of list) l.req = yes ? 'sent' : 'no';
+  const out = await askProject(s);
+  if (out?.replies?.length) out.replies[0] = `${note}\n\n${out.replies[0]}`;
+  return out;
 }
 
 async function afterLines(s) {
@@ -2186,7 +2219,7 @@ async function step(user, s, t, file, allow = { gr: true, pd: false }) {
     }
 
     case 'parts': {
-      if (YES.test(t)) return askProject(s);
+      if (YES.test(t)) return askBuild(s) ?? askProject(s);
       const free = s.lines.filter((l) => !l.order);
       // "שורה 2 ..." — רק לשורה הזו; אחרת — לכל השורות
       const lm = t.match(/שורה\s*(\d+)\s*(.*)$/);
@@ -2249,6 +2282,13 @@ async function step(user, s, t, file, allow = { gr: true, pd: false }) {
         return reply(s, `לא מצאתי בקטלוג מק"ט שקרוב ל"${word}". כתבו תיאור אחר, מק"ט, או *כללי*.`);
       }
       return reply(s, '*כן* 👍 — להמשיך, או כתבו מק"ט / מילה מהתיאור / *כללי*.');
+    }
+
+    case 'parts_build': {
+      if (YES.test(t)) return answerBuild(user, s, true);
+      if (NO_WORD.test(t)) return answerBuild(user, s, false);
+      if (looksUnrelated(t)) return pass(s, 'לא תשובה לבניית מק"טים');
+      return reply(s, `${s.lastPrompt ?? ''}\n\n*כן* 👍 — לשלוח לרכש, *לא* 👎 — להמשיך בלי.`.trim());
     }
 
     case 'chapter': {
@@ -2450,7 +2490,7 @@ function dropMenu(userId) { const s = load(userId); if (s?.step === 'menu') clea
  */
 const VIEW_STEP = {
   offer: 'מסמך מהמייל', doc: 'קריאת המסמך', doctype: 'סוג המסמך', company: 'חברה', supplier: 'ספק', order: 'הזמנה',
-  lines: 'השוואת שורות', parts: 'פריטים בלי הזמנה', project: 'פרויקט', warehouse: 'מחסן', header: 'פרטי הכותרת',
+  lines: 'השוואת שורות', parts: 'פריטים בלי הזמנה', parts_build: 'מק"טים לבנייה', project: 'פרויקט', warehouse: 'מחסן', header: 'פרטי הכותרת',
   files: 'נספחים', review: 'טיוטא בפריוריטי — מחכה ל"מאשר"'
 };
 function view(userId) {

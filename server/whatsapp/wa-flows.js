@@ -404,7 +404,8 @@ async function flowRemindersRequest({ actor, dry, out, state, t }) {
   // "לא משימה — תזכיר לי" על טיוטת משימה: הטיוטה הפכה לתזכורת ויורדת. אחרת מה שחיכה — ממשיך לחכות
   const next = !waiting ? {} : r.fromAbout ? { draft: null, awaiting: false } : { draft: state.draft, awaiting: true };
   // ✅ על ההודעה כשנרשמה / בוטלה תזכורת (הטקסט נשאר — יש בו את המועד)
-  return out(r.text, next, { action: 'reminders', status: r.error ? 'error' : 'ok', result: r.result, react: /^(תזכורת|בוטלה)/.test(r.result ?? '') ? '✅' : undefined });
+  // 📍 תזכורת לפי מיקום — ביומן בנפרד (הטיפ "הבוט יודע להזכיר כשמגיעים למקום" — רק למי שעוד לא ניסה)
+  return out(r.text, next, { action: r.place ? 'reminders_place' : 'reminders', status: r.error ? 'error' : 'ok', result: r.result, react: /^(תזכורת|בוטלה)/.test(r.result ?? '') ? '✅' : undefined });
 }
 
 // 📬 "זכרת? 🐣" על מייל שלא טופל, ו"לבצע קבלת סחורה?" על חשבונית מהמייל
@@ -525,7 +526,12 @@ async function flowOnPlainMail(ctx) {
   return NEXT;
 }
 
-// 🎥 אחרי פגישה מוקלטת: "לפתוח משימות ✅" / "לא" על המשימות שהוצעו, ו"כן" / "לא" על שליחת הסיכום למשתתפים
+/** אחרי "לשלוח את הסיכום?" — מחזיר את הארגומנטים ל-‎out‎ */
+function afterSummary(reply, draft, result) {
+  return [reply, { draft: null }, { action: 'meeting_followup', status: 'ok', result: result.slice(0, 300) }];
+}
+
+// 🎥 אחרי פגישה מוקלטת: "תפתח אותן" (במילים — הבוט לא מציע) על המשימות, ו"כן" / "לא" על שליחת הסיכום למשתתפים
 async function flowOnMeetingTasks(ctx) {
   let { actor, dry, keep, out, state, t } = ctx;
   if (state.draft?.kind === 'meeting_summary_mail' && state.awaiting) {
@@ -534,23 +540,24 @@ async function flowOnMeetingTasks(ctx) {
       const reply = await MeetingFollowup.sendSummaryMail(actor, state.draft, { dry })
         .catch((err) => ({ error: err.message }));
       if (reply?.error) return out('לא הצלחתי לשלוח את הסיכום כרגע. נסו שוב בעוד כמה דקות 🙏', { draft: state.draft, awaiting: true }, { action: 'meeting_followup', status: 'error', result: `שליחת סיכום נכשלה: ${reply.error}`.slice(0, 300) });
-      return out(reply, { draft: null }, { action: 'meeting_followup', status: 'ok', result: `סיכום נשלח ל-${state.draft.to.length} משתתפים: ${state.draft.title}`.slice(0, 300) });
+      return out(...afterSummary(reply, state.draft, `סיכום נשלח ל-${state.draft.to.length} משתתפים: ${state.draft.title}`));
     }
     if (WaUi.NO.test(n) || CANCEL.test(t)) {
-      return out('בסדר, הסיכום לא נשלח 👍', { draft: null }, { action: 'meeting_followup', status: 'ok', result: `לא: סיכום למשתתפים של "${state.draft.title}"`.slice(0, 300) });
+      return out(...afterSummary('בסדר, הסיכום לא נשלח 👍', state.draft, `לא: סיכום למשתתפים של "${state.draft.title}"`));
     }
     keep.draft = null;
     state = { ...state, draft: null, awaiting: false };
   }
   if (state.draft?.kind === 'meeting_tasks' && state.awaiting) {
     const n = WaUi.normalize(t);
-    if (MeetingFollowup.isOpenButton(t) || WaUi.YES.test(n)) {
+    // רק כשהעובד מבקש במילים ("תפתח אותן") — הבוט לא מציע לפתוח משימות (16.11.26); ההצעות במשימון
+    if (MeetingFollowup.isOpenButton(t)) {
       if (!WaActions.allowed(actor, 'create_task')) return out('פתיחת משימות כבויה לך בוואטסאפ.', { draft: null }, { action: 'meeting_followup', status: 'denied', result: 'פתיחת משימות כבויה' });
       const reply = MeetingFollowup.openTasks(actor, state.draft, { createTask: hooks.createTask, taskLink, dry });
       return out(reply, { draft: null }, { action: 'meeting_followup', status: 'ok', result: `נפתחו ${state.draft.items.length} משימות מהפגישה "${state.draft.title}"`.slice(0, 300) });
     }
     // "רק 1 ו-3" — חלק מהמשימות
-    const picks = /^(?:רק\s+|לפתוח\s+(?:רק\s+)?)?([\d\s,ו\-]+)$/.exec(n);
+    const picks = /^(?:תפתח|לפתוח)\s+(?:רק\s+)?([\d\s,ו\-]+)$/.exec(n);
     if (picks) {
       const items = [...new Set((picks[1].match(/\d+/g) ?? []).map(Number))].map((i) => state.draft.items[i - 1]).filter(Boolean);
       if (items.length && WaActions.allowed(actor, 'create_task')) {
@@ -559,7 +566,7 @@ async function flowOnMeetingTasks(ctx) {
       }
     }
     if (WaUi.NO.test(n) || CANCEL.test(t)) {
-      return out('בסדר, לא נפתחו משימות 👍', { draft: null }, { action: 'meeting_followup', status: 'ok', result: `לא: משימות מ"${state.draft.title}"`.slice(0, 300) });
+      return out('בסדר 👍 ההצעות מחכות לך במשימון.', { draft: null }, { action: 'meeting_followup', status: 'ok', result: `לא: משימות מ"${state.draft.title}"`.slice(0, 300) });
     }
     // כל דבר אחר — נושא חדש; ההצעה לפתוח משימות יורדת
     keep.draft = null;
@@ -609,8 +616,14 @@ async function flowAlertNo({ actor, dry, out, state, t }) {
   return NEXT;
 }
 
+// "שלח" / "שלח את זה" / "שלח מייל. אל תוסיף מה שהצעת" על טיוטת מייל — אישור (סקירה 15.11: הטיוטה נוסחה שוב ולא נשלחה).
+// לא: "שלח מייל לדני" (בקשה חדשה), "שלח לו גם…" (תיקון)
+const SEND_NOW = /^(?:שלח|תשלח|תשלחי|שלחי|לשלוח)(?:\s+(?:את\s+)?(?:זה|אותו|אותה|ה?מייל|ה?תשובה|ה?הודעה))?(?:[\s.,!-]+(?:אל\s+תוסיף[^\n]{0,40}|בלי\s+(?:ה?תוספות|ה?הצעות|מה\s+שהצעת)[^\n]{0,20}|כמו\s+שה(?:וא|יא)|ככה|עכשיו))?[\s.!👍]*$/;
+const SEND_KINDS = ['email', 'mail_reply'];
+
 async function flowApproval({ actor, cancelYes, dry, isAbout, out, state, t }) {
-  const approval = state.awaiting && state.draft && (cancelYes || (YES.test(t)
+  const sendNow = SEND_KINDS.includes(state.draft?.kind) && SEND_NOW.test(t);
+  const approval = state.awaiting && state.draft && (cancelYes || sendNow || (YES.test(t)
     && (!switchCancels() || t.split(/\s+/).filter(Boolean).length <= 3 || await isAbout())));
   if (approval) {
     const r = await confirmPending(actor, state.draft, dry);
@@ -950,8 +963,30 @@ async function flowInstinctExplicit({ user, actor, dry, out, t }) {
   return instinctSend({ user, actor, dry, out, text, explicit: true });
 }
 
+/**
+ * 🤖 אינסטינקט שאל בסוף התשובה שלו ("…להכין כך?") — מה שהעובד כותב עכשיו הוא התשובה, ויוצא אליו בציטוט של השאלה, בלי
+ * לעבור בהבנת הבקשה (באג 17.11.26: "כן, אבל על העמוד השני" לא הגיע לאינסטינקט). לא כשהבוט עצמו שאל משהו אחר מאז,
+ * ולא "ביטול" / "תפריט".
+ */
+const NOT_A_REPLY = /^(?:ביטול|בטל|תפריט|עזרה|🗑️|👎)\s*$/;
+async function flowInstinctReply({ user, actor, dry, out, state, t }) {
+  if (!user || state.awaiting || NOT_A_REPLY.test(t) || !Instinct.allowed(actor)) return NEXT;
+  const asked = Instinct.awaitingReply(user.id);
+  if (!asked) return NEXT;
+  if (dry) return out(`🤖 (בדיקה) תשובה לאינסטינקט: "${Instinct.redact(t)}"`, {}, { action: 'instinct', status: 'ok', result: 'תשובה לשאלה (בדיקה — לא נשלח)' });
+  Instinct.request(user, t, { question: asked, ref: currentMsg.get(actor.id) });
+  return out('', {}, { action: 'instinct', status: 'ok', result: 'תשובה לשאלה שבסוף התשובה של אינסטינקט — ברקע', react: '📤' });
+}
+
+/** בקשה שמדברת על הקובץ ששלחו ("תתקן את המסמך", "תעשה אותה כהה") */
+const FILE_REF = /מסמך|קובץ|תמונ|pdf|צילום|סריקה|הזה|הזאת|אותו|אותה/i;
+
 async function flowInstinct({ user, actor, dry, out, t, u }) {
-  if (u.intent !== 'instinct' || !Instinct.allowed(actor)) return NEXT;
+  if (!Instinct.allowed(actor)) return NEXT;
+  // 📎 קובץ שנשלח עכשיו, והבקשה עליו — לאינסטינקט גם כשה-AI לא זיהה ("אחר"): אצלנו אין מה לעשות בקובץ, והתשובה
+  // "אין לי גישה למסמך" שגויה (באג 17.11.26 — גם עם שורת הקובץ בפרומפט, ה-AI ענה כך כשבשיחה כבר נאמר שאין גישה)
+  const aboutFile = u.intent === 'other' && FILE_REF.test(t) && Boolean(Instinct.peekFile(user.id));
+  if (u.intent !== 'instinct' && !aboutFile) return NEXT;
   return instinctSend({ user, actor, dry, out, text: u.request || t });
 }
 
@@ -975,5 +1010,5 @@ const switchCancels = () => Boolean(D.getSetting('wa_topic_switch_cancels', true
 const DRAFT_ONLY = /(?:(?:בלי|לא\s+משנה|אין\s+לי\s+(?:את\s+)?|עזוב(?:\s+את)?)\s*ה?(?:כתובת|מייל|נמען)|רק\s+ת?(?:נסח|כתוב)|ת?נסח\s+(?:לי\s+)?(?:רק\s+)?(?:את\s+)?ה?(?:מלל|טקסט|נוסח))/;
 
 module.exports = {
-  DRAFT_ONLY, flowAgentsList, flowAlertNo, flowApproval, flowBusinessCommand, flowCancel, flowClosureCommand, flowEmailEdit, flowEmailPick, flowEmailSolve, flowEmailVia, flowFeaturesRequest, flowFormFillRequest, flowGreeting, flowInstinct, flowInstinctExplicit, flowInstinctPilot, flowNoticeToInstinct, flowIntentCancel, flowIntentDenied, flowIntentMenu, flowIntentOther, flowMailReplyEdit, flowMailWalk, flowMeetCoordRequest, flowMeetingAudioAnswer, flowMeetingAudioRequest, flowMeetingFollowupRequest, flowMeetingReminderRequest, flowMenuList, flowMenuPick, flowNoAi, flowNoticeRequest, flowOnClosureAddress, flowOnDayEvening, flowOnFormFill, flowOnGoodsStop, flowOnMailMuteSender, flowOnMailRemindOrGoods, flowOnMeetCoord, flowOnMeetingTasks, flowOnPaceOffer, flowOnPlainMail, flowOnReminder, flowOnRfq, flowOnSentFollowup, flowOnThreadAdd, flowRemindersRequest, flowReplyAsk, flowRfqRequest, flowRfqSummary, flowSuggestionCommand, flowTranslateRequest, flowWalk, NEXT, switchCancels
+  SEND_NOW, DRAFT_ONLY, flowAgentsList, flowAlertNo, flowApproval, flowBusinessCommand, flowCancel, flowClosureCommand, flowEmailEdit, flowEmailPick, flowEmailSolve, flowEmailVia, flowFeaturesRequest, flowFormFillRequest, flowGreeting, flowInstinct, flowInstinctExplicit, flowInstinctReply, flowInstinctPilot, flowNoticeToInstinct, flowIntentCancel, flowIntentDenied, flowIntentMenu, flowIntentOther, flowMailReplyEdit, flowMailWalk, flowMeetCoordRequest, flowMeetingAudioAnswer, flowMeetingAudioRequest, flowMeetingFollowupRequest, flowMeetingReminderRequest, flowMenuList, flowMenuPick, flowNoAi, flowNoticeRequest, flowOnClosureAddress, flowOnDayEvening, flowOnFormFill, flowOnGoodsStop, flowOnMailMuteSender, flowOnMailRemindOrGoods, flowOnMeetCoord, flowOnMeetingTasks, flowOnPaceOffer, flowOnPlainMail, flowOnReminder, flowOnRfq, flowOnSentFollowup, flowOnThreadAdd, flowRemindersRequest, flowReplyAsk, flowRfqRequest, flowRfqSummary, flowSuggestionCommand, flowTranslateRequest, flowWalk, NEXT, switchCancels
 };
