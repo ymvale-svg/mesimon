@@ -241,6 +241,8 @@ const RecordingsView = (() => {
         el('span.mute-sm', { text: ` · ${date} ${time}${r.durationMinutes ? ` · ${MeetingView.durationLabel(r.durationMinutes)}` : ''}` })
       ]),
       people.length ? el('div.mute-sm', { text: `משתתפים: ${people.slice(0, 6).join(', ')}${people.length > 6 ? ` +${people.length - 6}` : ''}` }) : null,
+      // 📄 תחילת הסיכום של Timeless — המלא ב"📋 סיכום ומשימות"
+      r.summary ? el('div.rec-summary', {}, [el('b', { text: '📄 ' }), el('span', { text: r.summary })]) : null,
       el('div.rec-actions', {}, [
         el('button.btn.btn-sm.btn-primary', { onclick: () => RecordingPlayer.open(r.id) }, ['▶ צפייה ותמליל']),
         el('button.btn.btn-sm', { onclick: () => RecordingPlayer.open(r.id, { tab: 'summary' }) }, ['📋 סיכום ומשימות']),
