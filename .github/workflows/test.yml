@@ -1,0 +1,16 @@
+# בדיקות — מדווחות בלבד. לא חוסמות מיזוג ולא פרסום ל-Render (החלטה 09.11.26).
+# מה שנשבר מתוקן בריצת הערב היומית.
+name: בדיקות
+on:
+  push:
+  pull_request:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: npm test

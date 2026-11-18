@@ -16,7 +16,7 @@ const AiTaskView = (() => {
 
   const CHANNEL_ICON = { email: '📧', whatsapp: '💬', note: '📝', system: '🔔' };
   const KIND_LABEL = {
-    initial: 'פנייה', reminder: 'תזכורת', reply: 'תשובה', thanks: 'תודה', inbound: 'תשובה התקבלה',
+    initial: 'פנייה', reminder: 'תזכורת', reply: 'תשובה', thanks: 'תודה', cc_added: 'הוספה לשרשור', inbound: 'תשובה התקבלה',
     manual: 'עדכון שלך', owner_contact: 'כתבת לנמען בעצמך', internal: 'הועבר במשימון'
   };
   const EVENT_LABEL = {
@@ -1104,7 +1104,8 @@ const AiTaskView = (() => {
 
   // ------------------------------------------------------------- וואטסאפ
 
-  async function openWhatsApp() {
+  /** ‎into‎ — בתוך לשונית ב"⚙ ההגדרות שלי" במקום חלון */
+  async function openWhatsApp({ into = null } = {}) {
     let channel = null;
     try {
       channel = (await API.get('/api/me/whatsapp')).channel;
@@ -1160,7 +1161,7 @@ const AiTaskView = (() => {
       UI.success('הוואטסאפ נותק');
     });
 
-    const m = UI.modal({
+    const m = UI.modalOrInline(into, {
       title: '💬 חיבור הוואטסאפ שלי',
       body: el('div', {}, [
         el('p', { style: { marginTop: 0 } }, [

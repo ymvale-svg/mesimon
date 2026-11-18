@@ -123,6 +123,12 @@
       "mcp": [], "calc": [], "timeless": true, "project": true,
       "mesimon": "התמלול — מ-Timeless (timeless_list_meetings ואז timeless_get_transcript) או טקסט שהודבק. אין כתיבת קבצים. משימות שעולות מהשיחה — propose_tasks (לאישור). הודעת ההמשך — טיוטה; שליחה רק מהאפליקציה."
     },
+    "priority-data": {
+      "dept": "finance", "icon": "🗂", "title": "רכש ופריוריטי",
+      "short": "שאלות על נתוני רכש מפריוריטי ומשימון: מתי מגיעה הזמנה לאתר, כמה הזמנות פתוחות בפרויקט, מה נשאר לקבל מספק או מהזמנה, מה פתוח בפרויקט",
+      "mcp": [], "calc": [], "project": true, "priority": true,
+      "mesimon": "קריאה בלבד: priority_find_project, priority_open_orders, priority_order, mesimon_project_context, search_my_memory. רק למי שמורשה לקבלת סחורה או לדרישת רכש בבוט (ולמנהלי המערכת)."
+    },
     "client-context": {
       "dept": "marketing", "icon": "🧭", "title": "מצב לקוח",
       "short": "לוח מצב ללקוח אחד: שלב, קשר אחרון, מה סוכם, נושאים פתוחים, צעדים הבאים",

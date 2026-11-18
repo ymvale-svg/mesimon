@@ -163,6 +163,19 @@ const App = (() => {
   const userName = (id) => state.users.find((u) => u.id === id)?.name ?? null;
   const vendorName = (id) => state.vendors.find((v) => v.id === id)?.name ?? null;
   const project = (id) => state.projects.find((p) => p.id === id) ?? null;
+
+  /**
+   * הפרויקטים שלי — אותו עולם בכל בורר ומסנן פרויקט במערכת: פרויקט שאני מנהל
+   * או פתחתי, שנעצתי, שיש לי בו משימות, או של המחלקה שלי (‎canAddTask‎ מהשרת,
+   * אותו כלל ש-‎assertMayUseProject‎ אוכף). לא כל פרויקט בארגון — גם למנהל
+   * מערכת, שרשימה של כל הארגון רק מבלבלת אותו.
+   *
+   * ‎keep‎ — פרויקט שכבר נבחר נשאר ברשימה גם אם אינו "שלי", כדי שבורר לא
+   * יוצג ריק ולא ישנה ערך בשקט.
+   */
+  const myProjects = ({ keep = null, openOnly = false } = {}) => state.projects.filter((p) =>
+    (p.canAddTask || p.mine || (keep !== null && keep !== '' && String(p.id) === String(keep)))
+    && (!openOnly || p.status !== 'done' || String(p.id) === String(keep)));
   const internalBoard = () => state.boards.find((b) => b.type === 'internal') ?? null;
   const vendorBoards = () => state.boards.filter((b) => b.type === 'vendor');
 
@@ -209,6 +222,7 @@ const App = (() => {
        */
       navigate(isVendor() ? 'vendor' : (isPhone() || params.get('view') === 'today') ? 'today' : 'home');
       openTaskFromUrl();
+      if (!isVendor()) openRecordingFromUrl();
       if (!isVendor()) {
         // באנר "מה חדש" — רק כשיש גרסה שעוד לא נראתה, או מקישור במייל
         WhatsNewView.maybeShow();
@@ -328,6 +342,18 @@ const App = (() => {
     if (!id) return;
     history.replaceState(null, '', location.pathname);
     TaskCardView.open(id);
+  }
+
+  /**
+   * ‎?rec=mtg_abc&t=760‎ — קישור לרגע בהקלטה (מהנגן, ממשימה שנפתחה מפגישה): הנגן
+   * נפתח ומתחיל מהשנייה הזו. גם כאן הפרמטרים נמחקים מהכתובת.
+   */
+  function openRecordingFromUrl() {
+    const q = new URLSearchParams(location.search);
+    const id = q.get('rec');
+    if (!id || !/^[\w-]{1,80}$/.test(id) || typeof RecordingPlayer === 'undefined') return;
+    history.replaceState(null, '', location.pathname);
+    RecordingPlayer.open(id, { t: Number(q.get('t')) || 0 });
   }
 
   /**
@@ -669,25 +695,31 @@ const App = (() => {
   const ROUTES = {
     today: { label: 'Today', icon: 'my-tasks', render: (c) => TodayView.render(c) },
     calendar: { label: 'יומן', icon: 'my-tasks', render: (c) => CalendarView.render(c) },
-    recordings: { label: 'הקלטות Zoom', icon: 'my-tasks', render: (c) => RecordingsView.render(c) },
+    // הקלטות Zoom — לשונית במסך היומן; קישור ישן לכאן מגיע לדף הבית
+    recordings: { label: 'הקלטות', icon: 'my-tasks', hidden: true, render: (c) => RecordingsView.render(c) },
     home: { label: 'דף הבית', icon: 'home', render: (c) => HomeView.render(c) },
     board: { label: 'לוח המשימות', icon: 'board', render: (c, p) => BoardView.render(c, { ...p, scope: 'internal' }) },
     vendorBoards: { label: 'כל משימות הספקים', icon: 'vendors', render: (c, p) => BoardView.render(c, { ...p, scope: 'vendors' }) },
     /*
-     * מוסתר מכולם, גם ממנהל המערכת, עד שישופר: אינו בתפריט, וניווט אליו
-     * (קישור שנשמר) מגיע לדף הבית. הקוד נשאר — ‎TrackerView‎.
+     * פתוח רק למי שנפתח לו בתיק העובד (ברירת המחדל — מחלקת תכנון), כדי שלא
+     * יבלבל את כולם. לשאר אינו בתפריט, וניווט אליו מגיע לדף הבית.
      */
-    tracker: { label: 'בקרת משימות', icon: 'reports', hidden: true, render: (c, p) => TrackerView.render(c, p) },
+    tracker: { label: 'בקרת משימות', icon: 'reports', allowed: () => hasTracker(), render: (c, p) => TrackerView.render(c, p) },
     archive: { label: 'ארכיון', icon: 'archive', render: (c, p) => BoardView.render(c, { ...p, scope: 'internal', archived: true }) },
     reports: { label: 'דוחות', icon: 'reports', render: (c) => ReportsView.render(c) },
     // אלפון ארגוני — מ"החשבון שלי" ומהחלון בדשבורד, לכל העובדים
     phonebook: { label: 'אלפון', icon: 'my-tasks', render: (c) => PhonebookView.render(c) },
     admin: { label: 'ניהול המערכת', icon: 'admin', render: (c, p) => AdminView.render(c, p) },
+    // ⚙ ההגדרות שלי — מסך עם תפריט צד (15.11.26). מעיגול השם, מ-⚙ בטלפון ומחיפוש "הגדרות"
+    settings: { label: 'ההגדרות שלי', icon: 'admin', render: (c, p) => renderMySettings(c, p) },
     vendor: { label: 'המשימות שלי', icon: 'my-tasks', render: (c) => VendorPortalView.render(c) }
   };
 
+  /** מסך "בקרת משימות" ותתי-משימות — רק למי שנפתח לו (‎publicActor.tracker‎ בשרת) */
+  const hasTracker = () => !isVendor() && Boolean(state.actor?.tracker);
+
   function navigate(name, params = {}) {
-    if (ROUTES[name]?.hidden) name = 'home';
+    if (ROUTES[name]?.hidden || ROUTES[name]?.allowed?.() === false) name = 'home';
     if (name === 'phonebook' && isVendor()) name = 'vendor';
     state.route = { name, params };
     closeDrawer();
@@ -1043,7 +1075,8 @@ const App = (() => {
     return rows;
   }
 
-  function notifSettingsDialog() {
+  /** ‎into‎ — בתוך לשונית ב"⚙ ההגדרות שלי" במקום חלון */
+  function notifSettingsDialog({ into = null } = {}) {
     const body = el('div');
 
     const draw = () => {
@@ -1200,43 +1233,20 @@ const App = (() => {
             ])
           ])
         ]),
-        botPrefsBox()
-      ]);
-    }
-
-    /** האם Today כולל את התובנות (מסך, בוט ומייל הבוקר). דלוק כברירת מחדל */
-    function botPrefsBox() {
-      const box = el('input', { type: 'checkbox', checked: getPref('botPrefs', {})?.insightsInToday !== false });
-      box.addEventListener('change', () => {
-        setPref('botPrefs', { ...(getPref('botPrefs', {}) ?? {}), insightsInToday: box.checked });
-      });
-      return el('div', {}, [
-        el('h4', { text: 'בוט הוואטסאפ', style: { margin: '16px 0 8px', fontSize: '13px' } }),
-        el('div.table-wrap', {}, [
-          el('table.data', {}, [
-            el('tbody', {}, [
-              el('tr', {}, [
-                el('td', {}, [
-                  el('div', { text: '📬 תובנות ב-Today — מהמייל ומהוואטסאפ' }),
-                  el('div.mute-sm', { text: 'החלק האחרון של Today: במסך, בבוט (בהודעת המשך) ובמייל הבוקר. את הרשימה המלאה מקבלים תמיד לפי בקשה: "תובנות", "תובנות מהיומיים האחרונים".' })
-                ]),
-                el('td', { style: { textAlign: 'center', width: '110px' } }, [el('label.checkbox', {}, [box])])
-              ])
-            ])
-          ])
-        ])
+        // 🤖 מה הבוט שולח לי — עבר ל"החשבון שלי ← 🤖 הבוט" (15.11.26), כאן רק קישור
+        el('div.mute-sm.mt', {}, ['מה הבוט שולח לך (תזכורות, הצעות תשובה, טיפ יומי) — ', el('a', { href: '#', text: '🤖 הבוט שלי', onclick: (e) => { e.preventDefault(); openBotPrefs(); } })])
       ]);
     }
 
     draw();
     // סגירה דרך ‎m.close()‎ ולא הסרת ‎.modal-backdrop‎ הראשון במסמך: כשנפתחים
     // שני חלונות זה מעל זה, "הראשון" הוא דווקא זה שמתחת
-    const m = UI.modal({
+    const m = UI.modalOrInline(into, {
       title: 'ניהול התראות',
       body,
       footer: [
         el('div.spacer'),
-        el('button.btn', { onclick: () => m.close() }, ['סגירה'])
+        el('button.btn', { 'data-close': '1', onclick: () => m.close() }, ['סגירה'])
       ]
     });
   }
@@ -1547,8 +1557,7 @@ const App = (() => {
    * הצד ומה מופיע בסרגל העליון. פעולה שמוצעת כאן ונכשלת ב-403 גרועה
    * מפעולה שלא הוצעה.
    *
-   * מסך "בקרת משימות" אינו כאן — הוא מוסתר מכולם (‎hidden‎ ב-‎ROUTES‎), וניווט
-   * אליו מגיע ממילא לדף הבית.
+   * מסך "בקרת משימות" — רק למי שנפתח לו, כמו בתפריט הצד.
    */
   function paletteActions() {
     const route = (name, keys) => ({ kind: 'route', title: ROUTES[name].label, keys, run: () => navigate(name, {}) });
@@ -1564,17 +1573,19 @@ const App = (() => {
         : null,
       route('today', ['היום', 'מה להיום', 'יומי', 'today']),
       route('home', ['בית', 'המשימות שלי', 'דשבורד', 'ראשי', 'home']),
-      // יומן — למזכירות בלבד, כמו בתפריט הצד
-      state.actor?.secretary ? route('calendar', ['יומן', 'פגישות', 'לוח שנה', 'calendar']) : null,
-      state.actor?.zoomRecordings ? route('recordings', ['הקלטות', 'זום', 'Zoom', 'הקלטה', 'recordings']) : null,
+      // יומן — לכל העובדים, כמו בתפריט הצד
+      route('calendar', ['יומן', 'פגישות', 'לוח שנה', 'calendar']),
       route('board', ['לוח', 'משימות', 'רשימה', 'בורד', 'board']),
+      hasTracker() ? route('tracker', ['בקרה', 'בקרת משימות', 'תתי-משימות', 'משימות אב', 'tracker']) : null,
       may('view_vendor_boards') ? route('vendorBoards', ['ספקים', 'ספק', 'vendors']) : null,
       route('archive', ['ארכיון', 'שהושלמו', 'archive']),
       route('phonebook', ['אלפון', 'טלפונים', 'אנשי קשר', 'עובדים', 'phonebook', 'contacts']),
       may('view_reports') ? route('reports', ['דוח', 'דוחות', 'סטטיסטיקה', 'עומס', 'reports']) : null,
       // אותו תנאי בדיוק כמו פריט "ניהול המערכת" בתפריט הצד
+      // ⚙ "הגדרות" — קודם ההגדרות של העובד עצמו (החשבון שלי). הגדרות המערכת — "ניהול" / "הגדרות מערכת" (15.11.26)
+      { kind: 'action', title: '⚙ ההגדרות שלי', keys: ['הגדרות', 'ההגדרות שלי', 'החשבון שלי', 'פרופיל', 'העדפות', 'settings'], run: () => openMySettings() },
       may('manage_users') || may('manage_automations') || may('assign_task_to_vendor') || can('create_project')
-        ? route('admin', ['ניהול', 'הגדרות', 'משתמשים', 'הרשאות', 'אוטומציות', 'admin', 'settings'])
+        ? route('admin', ['ניהול', 'הגדרות מערכת', 'משתמשים', 'הרשאות', 'אוטומציות', 'admin', 'system settings'])
         : null,
       notifications
     ].filter(Boolean);
@@ -2427,11 +2438,17 @@ const App = (() => {
 
     add('today', {}, { icon: el('span.nav-emoji', { text: '☀' }), count: state.todayCount || undefined });
     add('home');
-    // יומן — למזכירות בלבד (הסימון בכרטיס העובד)
-    if (state.actor.secretary) add('calendar', {}, { icon: el('span.nav-emoji', { text: '📅' }) });
-    // הקלטות Zoom — כשיש חיבור Zoom; השרת מסנן מה כל אחד רואה
-    if (state.actor.zoomRecordings) add('recordings', {}, { icon: el('span.nav-emoji', { text: '🎥' }) });
+    // יומן — לכל העובדים: היומן שלי. מזכירות — גם היומנים ששותפו איתן ו"מחכות לקביעה"
+    add('calendar', {}, { icon: el('span.nav-emoji', { text: '📅' }) });
+    // 🗂 משימון פריוריטי — מסך נפרד (‎/priority‎), למי שמורשה בו
+    if (state.actor?.priority) {
+      items.push(el('a.nav-item', { href: '/priority', 'aria-label': 'משימון פריוריטי', title: 'משימון פריוריטי — מסמכי רכש וכספים' }, [
+        el('span.ico', {}, [el('span.nav-emoji', { text: '🗂' })]),
+        el('span', { text: 'משימון פריוריטי' })
+      ]));
+    }
     add('board');
+    if (hasTracker()) add('tracker');
     if (may('view_vendor_boards')) add('vendorBoards');
 
     // הבלוק הזה כולו לא נבנה לספק — מסלול הספק חזר כבר למעלה עם רשימת הניווט שלו
@@ -2475,7 +2492,8 @@ const App = (() => {
      * השרת כבר מחזיר את הנעוצים בראש, אך את החלוקה מחשבים כאן מחדש כדי שהחוצץ
      * יישאר במקום הנכון גם אחרי סינון הפרויקטים שהושלמו.
      */
-    const live = state.projects.filter((p) => p.status !== 'done');
+    // "הכול" בתפריט הוא הפרויקטים שלי ושל המחלקה — לא כל הארגון (‎myProjects‎)
+    const live = myProjects({ openOnly: true });
 
     /**
      * למנהל מערכת יש גם עבודה משלו, ורשימה שמערבבת את הפרויקטים שלו עם כל
@@ -2845,57 +2863,216 @@ const App = (() => {
     ]);
   }
 
-  function userMenu() {
-    const m = UI.modal({
-      title: 'החשבון שלי',
-      body: el('div', {}, [
-        el('div.flex', { style: { gap: '12px', marginBottom: '16px' } }, [
-          UI.avatar(state.actor.name, { vendor: isVendor() }),
-          el('div', {}, [
-            el('b', { text: state.actor.name }),
-            el('div.mute-sm', { text: state.actor.email })
-          ])
-        ]),
-        el('table.data', { style: { width: '100%' } }, [
+  /** האם Today כולל את התובנות (מסך, בוט ומייל הבוקר). דלוק כברירת מחדל */
+  function botPrefsBox() {
+    const box = el('input', { type: 'checkbox', checked: getPref('botPrefs', {})?.insightsInToday !== false });
+    box.addEventListener('change', () => {
+      setPref('botPrefs', { ...(getPref('botPrefs', {}) ?? {}), insightsInToday: box.checked });
+    });
+    // 📬 מייל חדש — הבוט פונה ושואל מה לענות. דלוק כברירת מחדל
+    const alert = el('input', { type: 'checkbox', checked: getPref('botPrefs', {})?.mailAlert !== false });
+    alert.addEventListener('change', () => {
+      setPref('botPrefs', { ...(getPref('botPrefs', {}) ?? {}), mailAlert: alert.checked });
+    });
+    // 🎥 אחרי פגישה מוקלטת — הבוט שואל מה לשלוח. דלוק כברירת מחדל
+    const followup = el('input', { type: 'checkbox', checked: getPref('botPrefs', {})?.meetingFollowup !== false });
+    followup.addEventListener('change', () => {
+      setPref('botPrefs', { ...(getPref('botPrefs', {}) ?? {}), meetingFollowup: followup.checked });
+    });
+    // ⏰ דדליין ממייל — "זכרת?", ו-📄 חשבונית במייל ← קבלת סחורה. דלוקים כברירת מחדל
+    const deadline = el('input', { type: 'checkbox', checked: getPref('botPrefs', {})?.mailDeadline !== false });
+    deadline.addEventListener('change', () => {
+      setPref('botPrefs', { ...(getPref('botPrefs', {}) ?? {}), mailDeadline: deadline.checked });
+    });
+    const goods = el('input', { type: 'checkbox', checked: getPref('botPrefs', {})?.goodsOffer !== false });
+    goods.addEventListener('change', () => {
+      setPref('botPrefs', { ...(getPref('botPrefs', {}) ?? {}), goodsOffer: goods.checked });
+    });
+    // 📝 טופס ריק במייל — להציע למלא. דלוק כברירת מחדל
+    const formOffer = el('input', { type: 'checkbox', checked: getPref('botPrefs', {})?.formOffer !== false });
+    formOffer.addEventListener('change', () => {
+      setPref('botPrefs', { ...(getPref('botPrefs', {}) ?? {}), formOffer: formOffer.checked });
+    });
+    // 💡 הטיפ היומי ב-9 בבוקר — "ידעת שהבוט יודע…?". דלוק כברירת מחדל (‎server/whatsapp/bot-tips.js‎)
+    const tips = el('input', { type: 'checkbox', checked: getPref('botPrefs', {})?.tips !== false });
+    tips.addEventListener('change', () => {
+      setPref('botPrefs', { ...(getPref('botPrefs', {}) ?? {}), tips: tips.checked });
+    });
+    // 🌊 קצב התזכורות מהמייל — כדי לא להציף מי שמקבל עשרות מיילים ביום
+    const pace = el('select', {}, [
+      ['normal', 'רגיל — עד 5 ביום, חצי שעה לפחות ביניהן'],
+      ['light', 'מעט — רק החשובה ביותר, אחת ביום'],
+      ['morning', 'רק בסיכום הבוקר'],
+      ['off', 'בלי תזכורות']
+    ].map(([v, t]) => el('option', { value: v, text: t, selected: (getPref('botPrefs', {})?.remindPace ?? 'normal') === v })));
+    pace.addEventListener('change', () => {
+      setPref('botPrefs', { ...(getPref('botPrefs', {}) ?? {}), remindPace: pace.value });
+    });
+    return el('div', {}, [
+      el('h4', { text: 'בוט הוואטסאפ', style: { margin: '16px 0 8px', fontSize: '13px' } }),
+      el('div.table-wrap', {}, [
+        el('table.data', { style: { whiteSpace: 'normal' } }, [
           el('tbody', {}, [
-            state.actor.roleLabel
-              ? el('tr', {}, [el('th', { text: 'רמת גישה' }), el('td', { text: state.actor.roleLabel })])
-              : null,
-            state.actor.department ? el('tr', {}, [el('th', { text: 'מחלקה' }), el('td', { text: state.actor.department })]) : null,
-            isVendor() ? null : phoneRow(),
-            isVendor() ? null : officePhoneRow(),
-            isVendor() ? el('tr', {}, [el('th', { text: 'הרשאת עדכון' }), el('td', { text: state.actor.readOnly ? 'צפייה בלבד' : 'מלאה' })]) : null,
-            themeRow()
-          ])
-        ]),
-        // הוואטסאפ האישי משמש את משימות ה-AI להמשך מעקב מהמספר של המשתמש
-        isVendor() ? null : el('button.btn.mt', { onclick: () => AiTaskView.openWhatsApp() }, ['💬 חיבור הוואטסאפ שלי']),
-        // חיבור Google: Gmail (סריקה ותשובות), יומן ל-Today, ואנשי קשר למשימת AI
-        isVendor() ? null : el('button.btn.mt', { style: { marginInlineStart: '8px' }, 'data-anchor': 'account.google', onclick: () => AiInboxView.openGmail(() => refreshView()) }, ['🔗 חיבור Google ועוזר ה-AI']),
-        isVendor() ? null : el('button.btn.mt', { style: { marginInlineStart: '8px' }, onclick: () => TodayView.openSettings() }, ['☀ Today והקלטה']),
-        isVendor() ? null : el('button.btn.mt', {
-          style: { marginInlineStart: '8px' },
-          onclick: () => { m.close(); navigate('phonebook'); }
-        }, ['📒 אלפון ארגוני']),
-        isVendor() ? null : el('button.btn.mt', {
-          style: { marginInlineStart: '8px' },
-          'data-anchor': 'account.whats-new',
-          onclick: () => { m.close(); WhatsNewView.open({ force: true }); }
-        }, ['✨ מה חדש במערכת']),
-        el('div.alert.alert-info.mt', {}, [
-          el('div', {}, [
-            el('b', { text: 'מה מותר לי במערכת?' }),
-            el('div', { text: 'ההרשאות נקבעות לפי מטריצת ההרשאות של המחלקה. לשינוי — יש לפנות למנהל המערכת.' })
+            el('tr', {}, [
+              el('td', {}, [
+                el('div', { text: '📬 תובנות ב-Today — מהמייל ומהוואטסאפ' }),
+                el('div.mute-sm', { text: 'החלק האחרון של Today: במסך, בבוט (בהודעת המשך) ובמייל הבוקר. את הרשימה המלאה מקבלים תמיד לפי בקשה: "תובנות", "תובנות מהיומיים האחרונים".' })
+              ]),
+              el('td', { style: { textAlign: 'center', width: '110px' } }, [el('label.checkbox', {}, [box])])
+            ]),
+            el('tr', {}, [
+              el('td', {}, [
+                el('div', { text: '💡 טיפ יומי — "ידעת שהבוט יודע…?"' }),
+                el('div.mute-sm', { text: 'פעם ביום, ב-9 בבוקר: משהו שעוד לא ניסית שהבוט יודע לעשות, עם כפתור "נסו עכשיו". גם בבוט: "מספיק טיפים".' })
+              ]),
+              el('td', { style: { textAlign: 'center', width: '110px' } }, [el('label.checkbox', {}, [tips])])
+            ]),
+            el('tr', {}, [
+              el('td', {}, [
+                el('div', { text: '📧 מייל חדש — הבוט פונה אליי' }),
+                el('div.mute-sm', { text: 'על כל מייל שמחכה ממך למשהו: "קיבלת מייל מ… — לענות לו כך?" עם כן / לא. מייל שכבר קראת — לא נשאל עליו.' })
+              ]),
+              el('td', { style: { textAlign: 'center', width: '110px' } }, [el('label.checkbox', {}, [alert])])
+            ]),
+            el('tr', {}, [
+              el('td', {}, [
+                el('div', { text: '🎥 אחרי פגישה מוקלטת — הבוט שואל אותי' }),
+                el('div.mute-sm', { text: '"הפגישה הסתיימה והוקלטה. איך היה? מה לשלוח לך?" — סיכום, המשימות שלי מהפגישה או ההקלטה. רק בפגישות שהשתתפתי בהן.' })
+              ]),
+              el('td', { style: { textAlign: 'center', width: '110px' } }, [el('label.checkbox', {}, [followup])])
+            ]),
+            el('tr', {}, [
+              el('td', {}, [
+                el('div', { text: '🐣 תזכורת ממייל — "זכרת?"' }),
+                el('div.mute-sm', { text: 'מייל שמחכה ממך ולא טופל — יום אחרי שהגיע (או בבוקר יום הדדליין): "זכרת?" עם 💡 הצעת תשובה / טיפלתי / התעלם. רק על מייל שאתה האחראי עליו.' })
+              ]),
+              el('td', { style: { textAlign: 'center', width: '110px' } }, [el('label.checkbox', {}, [deadline])])
+            ]),
+            el('tr', {}, [
+              el('td', {}, [
+                el('div', { text: '🌊 קצב התזכורות' }),
+                el('div.mute-sm', { text: 'כמה תזכורות על מיילים שלא טופלו במהלך היום — החשובות קודם (דדליין קרוב, עדיפות). לא באמצע פגישה, ורק בשעות העבודה.' }),
+                pace
+              ]),
+              el('td', {}, [])
+            ]),
+            // 🗂 רק למי שמורשה בפריוריטי — מי שלא, לא רואה את האפשרות בכלל (13.11.26)
+            !state.actor?.priority ? null : el('tr', {}, [
+              el('td', {}, [
+                el('div', { text: '📄 חשבונית במייל — להציע קבלת סחורה' }),
+                el('div.mute-sm', { text: 'כשמגיעה חשבונית או תעודת משלוח: "לבצע קבלת סחורה?" — הבוט מוריד את הקובץ מהמייל ומתחיל. רק למי שמורשה לקבלת סחורה.' })
+              ]),
+              el('td', { style: { textAlign: 'center', width: '110px' } }, [el('label.checkbox', {}, [goods])])
+            ]),
+            el('tr', {}, [
+              el('td', {}, [
+                el('div', { text: '📝 טופס ריק במייל — להציע למלא' }),
+                el('div.mute-sm', { text: 'רק כשאני הנמען הראשי (לא בהעתק): הבוט ממלא מכרטיס החברה ומהפרטים שלי, מראה לי, ושולח לשולח רק אחרי אישור.' })
+              ]),
+              el('td', { style: { textAlign: 'center', width: '110px' } }, [el('label.checkbox', {}, [formOffer])])
+            ])
           ])
         ])
-      ]),
-      footer: [
-        el('button.btn.btn-danger', { onclick: () => { m.close(); logout(); } }, ['התנתקות']),
-        el('div.spacer'),
-        el('button.btn', { onclick: () => m.close() }, ['סגירה'])
-      ]
-    });
+      ])
+    ]);
   }
+
+
+
+  /*
+   * ⚙ ההגדרות שלי — מסך אחד עם לשוניות (15.11.26, "תוכנית — חלוקת תפקידים בוט ומשימון.md" סעיף 5.1). כל לשונית מציגה את
+   * אותו תוכן שנפתח גם כחלון לבד (‎UI.modalOrInline‎) — כל הגדרה נבנית במקום אחד. הלשוניות תואמות את
+   * ‎PERSONAL_TABS‎ בקטלוג ההגדרות (‎server/core/settings-catalog.js‎; נבדק ב-‎settings-catalog.test.js‎).
+   */
+  const MY_TABS = [
+    { key: 'profile', label: '👤 פרטים', hint: 'טלפון, מחלקה והרשאות' },
+    { key: 'bot', label: '🤖 הבוט', hint: 'מה הבוט שולח לי', staff: true },
+    { key: 'google', label: '🔗 Google ומייל', hint: 'Gmail, יומן והעדפות AI', staff: true },
+    { key: 'whatsapp', label: '💬 הוואטסאפ שלי', hint: 'חיבור והצעות מהוואטסאפ', staff: true },
+    { key: 'today', label: '☀️ Today והקלטה', hint: 'Today במייל, הקלטה ויומנים', staff: true },
+    { key: 'location', label: '📍 מיקום', hint: 'נקודות ציון ותזכורת לפי מיקום', staff: true },
+    { key: 'notify', label: '🔔 התראות', hint: 'מה קופץ, ומתי במייל ובוואטסאפ' },
+    { key: 'view', label: '🎨 תצוגה', hint: 'בהיר, כהה או לפי המכשיר' }
+  ];
+  const MY_TAB_KEY = 'mesimon.mySettingsTab';
+
+  function profilePane(close) {
+    return el('div', {}, [
+      el('div.flex', { style: { gap: '12px', marginBottom: '16px' } }, [
+        UI.avatar(state.actor.name, { vendor: isVendor() }),
+        el('div', {}, [el('b', { text: state.actor.name }), el('div.mute-sm', { text: state.actor.email })])
+      ]),
+      el('table.data', { style: { width: '100%' } }, [
+        el('tbody', {}, [
+          state.actor.roleLabel ? el('tr', {}, [el('th', { text: 'רמת גישה' }), el('td', { text: state.actor.roleLabel })]) : null,
+          state.actor.department ? el('tr', {}, [el('th', { text: 'מחלקה' }), el('td', { text: state.actor.department })]) : null,
+          isVendor() ? null : phoneRow(),
+          isVendor() ? null : officePhoneRow(),
+          isVendor() ? el('tr', {}, [el('th', { text: 'הרשאת עדכון' }), el('td', { text: state.actor.readOnly ? 'צפייה בלבד' : 'מלאה' })]) : null
+        ])
+      ]),
+      isVendor() ? null : el('div.flex.mt', { style: { gap: '8px', flexWrap: 'wrap' } }, [
+        el('button.btn', { onclick: () => { close(); navigate('phonebook'); } }, ['📒 אלפון ארגוני']),
+        el('button.btn', { 'data-anchor': 'account.whats-new', onclick: () => { close(); WhatsNewView.open({ force: true }); } }, ['✨ מה חדש במערכת'])
+      ]),
+      el('div.mt', {}, [el('button.btn.btn-danger', { type: 'button', onclick: () => logout() }, ['🚪 התנתקות'])]),
+      el('div.alert.alert-info.mt', {}, [el('div', {}, [
+        el('b', { text: 'מה מותר לי במערכת?' }),
+        el('div', { text: 'ההרשאות נקבעות לפי מטריצת ההרשאות של המחלקה. לשינוי — יש לפנות למנהל המערכת.' })
+      ])])
+    ]);
+  }
+
+  /** המסך: תפריט צד (הלשוניות) ותוכן הלשונית. ‎params.tab‎ — לשונית לפתוח */
+  function renderMySettings(container, params = {}) {
+    const tabs = MY_TABS.filter((t) => !t.staff || !isVendor());
+    let saved = null;
+    try { saved = localStorage.getItem(MY_TAB_KEY); } catch { /* בלי אחסון */ }
+    const current = tabs.find((t) => t.key === (params.tab || saved))?.key ?? 'profile';
+    try { localStorage.setItem(MY_TAB_KEY, current); } catch { /* בלי אחסון */ }
+    const tab = tabs.find((t) => t.key === current);
+
+    const nav = el('nav.my-settings-nav', { 'aria-label': 'ההגדרות שלי' }, [
+      el('ul', { role: 'list' }, tabs.map((t) => el('li', {}, [
+        el(`button.my-settings-item${t.key === current ? '.active' : ''}`, {
+          type: 'button', 'aria-current': t.key === current ? 'page' : null,
+          onclick: () => navigate('settings', { tab: t.key })
+        }, [el('span.my-settings-label', { text: t.label }), el('span.my-settings-hint', { text: t.hint })])
+      ])))
+    ]);
+    const box = el('div');
+    UI.mount(container,
+      el('div.page-head', {}, [el('div', {}, [
+        el('h1', { text: '⚙ ההגדרות שלי' }),
+        el('div.sub', { text: 'ההגדרות האישיות שלך. הגדרות המערכת — אצל מנהל המערכת.' })
+      ])]),
+      el('div.my-settings', {}, [
+        nav,
+        el('section.card.my-settings-pane', { 'aria-labelledby': 'my-settings-title' }, [
+          el('div.card-pad', {}, [el('h2#my-settings-title', { text: tab.label }), box])
+        ])
+      ])
+    );
+    if (current === 'profile') UI.mount(box, profilePane(() => {}));
+    else if (current === 'bot') UI.mount(box, el('div', {}, [
+      el('div.mute-sm', { text: 'הבוט הוא המזכירה: מזכיר, מציע תשובות למיילים ומביא נתונים כשמבקשים. משימות — במשימון.' }),
+      botPrefsBox()
+    ]));
+    else if (current === 'google') AiInboxView.openGmail(() => refreshView(), { into: box });
+    else if (current === 'whatsapp') AiTaskView.openWhatsApp({ into: box });
+    else if (current === 'today') TodayView.openSettings({ into: box });
+    else if (current === 'location') LocationView.openSettings({ into: box });
+    else if (current === 'notify') notifSettingsDialog({ into: box });
+    else if (current === 'view') UI.mount(box, el('table.data', { style: { width: '100%' } }, [el('tbody', {}, [themeRow()])]));
+  }
+
+  function openMySettings(tab = null) { navigate('settings', tab ? { tab } : {}); }
+
+  /** "החשבון שלי" (עיגול השם, ⚙ בטלפון) — מסך ההגדרות שלי, בלשונית הפרטים */
+  function userMenu() { openMySettings('profile'); }
+
+  /** ⚙ ההגדרות שלי ← 🤖 הבוט (מקישור בהתראות) */
+  function openBotPrefs() { openMySettings('bot'); }
 
   /** סגירת מגירת הניווט. נקראת גם בניווט, גם בלחיצה על הרקע וגם ב-Escape. */
   /**
@@ -3079,7 +3256,6 @@ const App = (() => {
   const RELOADABLE = {
     today: () => TodayView.reload(),
     calendar: () => CalendarView.reload(),
-    recordings: () => RecordingsView.reload(),
     home: () => (isPhone() && !isVendor() ? MobileView.reload() : HomeView.reload()),
     board: () => BoardView.reload({ silent: true }),
     vendorBoards: () => BoardView.reload({ silent: true }),
@@ -3103,7 +3279,7 @@ const App = (() => {
   return {
     state, boot, navigate, refresh, refreshNotifications, logout, render,
     refreshChrome, refreshView, isPhone, closeDrawer, setPref, getPref, setTodayCount, refreshTodayCount,
-    may, can, isVendor, userName, vendorName, project, internalBoard, vendorBoards,
+    may, can, isVendor, hasTracker, userName, vendorName, project, myProjects, internalBoard, vendorBoards,
     reloadReference
   };
 })();

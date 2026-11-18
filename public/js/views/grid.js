@@ -358,7 +358,9 @@ const GridView = (() => {
       inner.title = 'לחיצה להעברה לפרויקט אחר';
       inner.addEventListener('click', (e) => {
         e.stopPropagation();
-        const options = [{ id: '', name: 'ללא פרויקט', color: null }, ...App.state.projects];
+        // העברה רק לפרויקט שמותר לפתוח בו משימה — השרת אוכף (‎assertMayUseProject‎)
+        const options = [{ id: '', name: 'ללא פרויקט', color: null },
+          ...App.state.projects.filter((p) => p.canAddTask || String(p.id) === String(task.projectId ?? ''))];
         popover(inner, el('div.popover-list', {}, options.map((p) =>
           el('button.popover-option', {
             onclick: () => patch(task, { projectId: p.id === '' ? null : p.id })

@@ -7,7 +7,7 @@
  * משימות זו לצד זו בלי לומר מה תלוי במה ומי הכדור אצלו כרגע.
  *
  * שורה אחת לכל משימת-אב, ובה תת-המשימה הפתוחה עם היעד הקרוב. חץ פותח את
- * שאר תתי-המשימות. הבחירה הזו נעשתה במכוון על פני שורה לכל תת-משימה: כאן
+ * שאר תתי-המשימות, ו-🔀 פותח תרשים זרימה של העץ כולו (‎flow.js‎). הבחירה הזו נעשתה במכוון על פני שורה לכל תת-משימה: כאן
  * אפשר לראות את מצב הפרויקט במבט אחד, ובשורה-לכל-תת-משימה שם האב חוזר
  * בעשרות שורות והטבלה הופכת לרשימה ארוכה שאי אפשר לסרוק.
  *
@@ -639,6 +639,8 @@ const TrackerView = (() => {
 
     return el('div.tr-title', {}, [
       toggle,
+      // ליד פותח העץ ולא בסוף: שם ארוך נחתך, והכפתור היה נחתך איתו
+      task.subtasksTotal ? flowButton(task.id) : null,
       statusIcons(task),
       el('button.txt.txt-open', {
         title: 'פתיחת המשימה',
@@ -646,6 +648,13 @@ const TrackerView = (() => {
       }, [task.title])
     ]);
   }
+
+  /** תרשים הזרימה של המשימה — העץ כולו, הנתיב הקריטי והחסמים (‎flow.js‎) */
+  const flowButton = (taskId) => el('button.btn.btn-sm.btn-ghost.tr-flow', {
+    type: 'button',
+    title: 'תרשים זרימה — איפה עומד כל דבר, מי אחראי, הנתיב הקריטי והחסמים',
+    onclick: (e) => { e.stopPropagation(); FlowView.open(taskId); }
+  }, ['🔀'])
 
   function parentRow(task) {
     const isOpen = expanded.has(task.id);
@@ -674,6 +683,13 @@ const TrackerView = (() => {
         el('span.dot-chip', { title: sub.statusLabel, style: { background: sub.statusColor } }),
         el('button.txt.txt-open', { onclick: () => TaskCardView.open(sub.id) }, [sub.title]),
         sub.statusShort ? el('span.tr-substatus', { text: sub.statusShort, title: sub.statusShort }) : null,
+        // הרמה השלישית אינה נפרשת בטבלה — היא בתרשים הזרימה
+        sub.subtasksTotal
+          ? el('button.btn.btn-sm.btn-ghost.tr-flow', {
+              type: 'button', title: `${sub.subtasksTotal} תתי-משימות — בתרשים הזרימה`,
+              onclick: () => FlowView.open(sub.id)
+            }, [`🔀 ${sub.subtasksTotal}`])
+          : null,
         el('div.spacer'),
         el('span.sub-field', {}, [assigneeCell(sub)]),
         el('span.sub-field', {}, [dueCell(sub, { muted: true })])
@@ -791,10 +807,11 @@ const TrackerView = (() => {
     const mine = myProjectIds();
     /*
      * רשימת הפרויקטים מצטמצמת לחתך הנבחר: הצעת פרויקט שאינו בחתך הייתה
-     * מייצרת טבלה ריקה בלי הסבר. בחתך המחלקה הרשימה אינה מצטמצמת — הוא
-     * נמדד לפי האחראי ולא לפי הפרויקט, ולכן כל פרויקט עשוי להופיע בו.
+     * מייצרת טבלה ריקה בלי הסבר. בשאר החתכים — הפרויקטים שלי ושל המחלקה
+     * (‎App.myProjects‎), כמו בכל בורר פרויקט במערכת, ולא כל הארגון.
      */
-    const live = App.state.projects.filter((p) => p.status !== 'done' && (!scoped || mine.has(p.id)));
+    const live = App.myProjects({ keep: savedProject(), openOnly: true })
+      .filter((p) => !scoped || mine.has(p.id) || String(p.id) === savedProject());
     const projectOptions = [{ value: '', label: 'כל הפרויקטים' },
       ...live.map((p) => ({ value: p.id, label: p.name }))];
 

@@ -404,8 +404,9 @@ const AdminView = (() => {
       ])
     );
 
+    // תיק העובד נפתח בהקלקה על השורה שלו
     function userRow(u) {
-      return el('tr', {}, [
+      return el('tr.row-link', { title: `תיק עובד — ${u.name}`, onclick: () => userDialog(u, data) }, [
           el('td', {}, [el('div.flex', {}, [UI.avatar(u.name, { small: true }), el('b', { text: u.name })])]),
           el('td', { text: u.email }),
           // עמודת טלפון — כך רואים במבט מי עוד חסר לבוט הוואטסאפ
@@ -421,10 +422,10 @@ const AdminView = (() => {
           })]),
           el('td', {}, [
             el('div.flex', {}, [
-              el('button.btn.btn-sm', { onclick: () => userDialog(u, data) }, ['עריכה']),
               el('button.btn.btn-sm', {
                 title: 'שליחה חוזרת של הזמנה לקביעת סיסמה',
-                onclick: async () => {
+                onclick: async (e) => {
+                  e.stopPropagation(); // לא לפתוח גם את תיק העובד
                   try {
                     const r = await API.resendInvite('user', u.id);
                     showInviteResult(r.invite, u.name);
@@ -592,6 +593,57 @@ const AdminView = (() => {
     });
   }
 
+  /**
+   * מחיקת משתמש לצמיתות. משימות פתוחות חייבות לעבור לעובד אחר — השרת
+   * אוכף את זה, והמסך שואל מראש כדי שהמנהל לא ייתקל בשגיאה.
+   */
+  async function deleteUserFlow(user, listData, parentModal) {
+    let load;
+    try { load = await API.userDeleteCheck(user.id); } catch (err) { return UI.error(err); }
+
+    const heirs = (listData.users ?? []).filter((u) => u.id !== user.id && u.status === 'active');
+    const heirSelect = UI.select([
+      { value: '', label: load.openTasks ? '— יש לבחור —' : 'לא להעביר' },
+      ...heirs.map((u) => ({ value: String(u.id), label: u.name }))
+    ], '');
+
+    const facts = [];
+    if (load.openTasks) facts.push(`${load.openTasks} משימות פתוחות`);
+    if (load.allTasks > load.openTasks) facts.push(`${load.allTasks - load.openTasks} משימות סגורות`);
+    if (load.projects) facts.push(`ניהול ${load.projects} פרויקטים`);
+
+    const okBtn = el('button.btn.btn-danger', {}, ['מחיקה לצמיתות']);
+    const m = UI.modal({
+      title: `מחיקת ${user.name}`,
+      body: el('div', {}, [
+        el('div.alert.alert-warn.mb', {}, [
+          el('span', { text: '⚠️' }),
+          el('div', { text: 'המחיקה אינה הפיכה: החשבון, החיבורים וההגדרות האישיות יימחקו. מי שרק עזב — אפשר במקום זאת לשנות את הסטטוס ל"לא פעיל", וההיסטוריה תישמר.' })
+        ]),
+        el('p.muted', { text: 'נשמרים יומן הפעולות במערכת, התגובות וההיסטוריה במשימות והקבצים שצורפו להן — הם חלק מתיעוד העבודה של הארגון; הודעות הוואטסאפ, יומני הבוט וההגדרות האישיות נמחקים.' }),
+        facts.length ? el('p', { text: `ל${user.name} יש: ${facts.join(', ')}.` }) : null,
+        facts.length
+          ? UI.field('העברת המשימות והפרויקטים אל', heirSelect, load.openTasks ? 'חובה — משימות פתוחות לא יישארו בלי אחראי' : 'רשות')
+          : null
+      ]),
+      footer: [okBtn, el('div.spacer')]
+    });
+
+    okBtn.addEventListener('click', async () => {
+      const transferTo = heirSelect.value ? Number(heirSelect.value) : null;
+      if (load.openTasks && !transferTo) return UI.toast('יש לבחור למי להעביר את המשימות הפתוחות', 'error');
+      okBtn.disabled = true;
+      try {
+        await API.deleteUser(user.id, transferTo);
+        m.close();
+        parentModal.close();
+        UI.success(`${user.name} נמחק`);
+        await App.reloadReference();
+        App.render();
+      } catch (err) { okBtn.disabled = false; UI.error(err); }
+    });
+  }
+
   /** בחירת "מחלקה חדשה" בתוך הרשימה הנפתחת — נשלח כ-newDepartmentName ולא כמזהה */
   const NEW_DEPT = '__new__';
 
@@ -683,6 +735,25 @@ const AdminView = (() => {
     // מזכירות — קובעות פגישות ביומנים שהעובדים שיתפו איתן, ורואות את מסך היומן
     const secretaryCheck = el('input', { type: 'checkbox', checked: Boolean(user?.secretary) });
     /*
+     * מסך "בקרת משימות" ותתי-משימות. ברירת המחדל לפי המחלקה (מחלקת תכנון —
+     * פתוח); נשמר כבחירה מפורשת רק כשסימנו כאן, כדי שעובד שיעבור מחלקה ימשיך
+     * לקבל את ברירת המחדל של המחלקה החדשה.
+     */
+    const trackerCheck = el('input', { type: 'checkbox', checked: Boolean(user?.tracker) });
+    let trackerTouched = false;
+    trackerCheck.addEventListener('change', () => { trackerTouched = true; });
+    const trackerHint = el('div.hint');
+    const syncTrackerDefault = () => {
+      const opt = deptSelect.selectedOptions[0];
+      const byDept = /תכנון/.test(opt?.textContent ?? '');
+      if (!trackerTouched && (!isEdit || user.trackerByDefault)) trackerCheck.checked = byDept;
+      trackerHint.textContent = 'משימות-אב ותתי-משימות, והפעולה הבאה בכל אחת. פתוח רק למי שמסמנים — כדי לא לבלבל את כולם. '
+        + 'ברירת המחדל: פתוח למחלקת תכנון.'
+        + (isEdit && !user.trackerByDefault ? ' (נקבע ידנית לעובד הזה)' : '');
+    };
+    deptSelect.addEventListener('change', syncTrackerDefault);
+    syncTrackerDefault();
+    /*
      * משתמש ה-Zoom שמארח את הפגישות של העובד — מחשבון ה-Zoom של החברה, לא
      * בהכרח המייל שלו. הרשימה נטענת מהשרת; בלי חיבור Zoom השדה מוסתר.
      */
@@ -699,7 +770,7 @@ const AdminView = (() => {
 
     const saveBtn = el('button.btn.btn-primary', {}, ['שמירה']);
     const m = UI.modal({
-      title: isEdit ? `עריכת משתמש — ${user.name}` : 'משתמש חדש',
+      title: isEdit ? `תיק עובד — ${user.name}` : 'משתמש חדש',
       body: el('div', {}, [
         UI.field('שם מלא', nameInput),
         UI.field('אימייל', emailInput, 'משמש גם לכניסה למערכת'),
@@ -719,8 +790,12 @@ const AdminView = (() => {
           el('div.hint', { text: 'ימי העבודה נקבעים לפי המחלקה. עובד שטח מוסיף את יום ו׳ — "מחר" של יום חמישי הוא שישי, ומייל הבוקר נשלח גם בשישי.' })
         ]),
         el('div.field', {}, [
-          el('label.checkbox', {}, [secretaryCheck, ' 📅 מזכירות — קובעת פגישות ורואה את מסך היומן']),
+          el('label.checkbox', {}, [secretaryCheck, ' 📅 מזכירות החברה — קובעת פגישות, רואה את מסך היומן, ומנהלי המחלקות פותחים לה משימות']),
           el('div.hint', { text: 'הגישה ליומן של כל עובד — רק לפי מה שהוא שיתף איתה ב-Google. כדי לראות את המשימות שמחכות לקביעה של כולם — גם "צפייה בכל משימות המחלקה".' })
+        ]),
+        el('div.field', {}, [
+          el('label.checkbox', {}, [trackerCheck, ' 📊 בקרת משימות — משימות-אב ותתי-משימות']),
+          trackerHint
         ]),
         zoomField,
         grantsBox,
@@ -732,7 +807,13 @@ const AdminView = (() => {
             ])
           : null
       ]),
-      footer: [saveBtn, el('div.spacer')]
+      footer: [
+        saveBtn,
+        el('div.spacer'),
+        isEdit && user.id !== App.state.actor?.id && App.can('manage_users')
+          ? el('button.btn.btn-danger', { onclick: () => deleteUserFlow(user, listData, m) }, ['🗑 מחיקת משתמש'])
+          : null
+      ]
     });
 
     saveBtn.addEventListener('click', async () => {
@@ -746,6 +827,7 @@ const AdminView = (() => {
         role: roleSelect.value,
         status: statusSelect.value,
         fieldWorker: fieldWorkerCheck.checked,
+        ...(trackerTouched ? { tracker: trackerCheck.checked } : {}),
         secretary: secretaryCheck.checked
       };
       if (zoomField.style.display !== 'none') payload.zoomUserId = zoomSelect.value || null;
@@ -1266,65 +1348,8 @@ const AdminView = (() => {
 
   // ------------------------------------------------------------- הגדרות
 
-  /** כל הגדרה והסבר קצר מה היא עושה בפועל */
-  const SETTING_LABELS = {
-    auto_done_on_checklist: ['צ׳קליסט מלא סוגר את המשימה',
-      'סימון הסעיף האחרון מעביר את המשימה ל"הושלם" בלי לסמן אותה שוב בדף הבית, וסעיף שנפתח מחדש מחזיר אותה ל"בטיפול". חל על משימות פנימיות שיש בהן צ׳קליסט; זרימת הספקים נשארת ידנית'],
-    archive_done_after_days: ['ימים עד שמשימה שהושלמה עוברת לארכיון',
-      'עד אז היא נשארת בכרטיס "הושלמו לאחרונה" בדף הבית, כדי שאפשר יהיה לראות מה נסגר ולחזור אם צריך'],
-    vendor_reminder_days_before: ['X — ימים לפני היעד לתזכורת ראשונה לספק', 'הערך שמנוע הכללים משתמש בו לתזכורת האוטומטית לספק'],
-    manager_alert_hours_before: ['Y — שעות לפני היעד להתראה מקדימה למנהל', 'ההתראה נשלחת למנהל לפני שהמשימה חורגת מהיעד'],
-    escalation_hours_urgent: ['שעות ללא שינוי סטטוס עד להקפצת משימה דחופה', 'משימה דחופה שאינה זזה מוקפצת אוטומטית לתשומת לב המנהל'],
-    scheduler_interval_minutes: ['תדירות הרצת מנוע הכללים (דקות)', ''],
-    max_upload_mb: ['גודל מרבי לקובץ (MB)', 'נאכף בכל העלאת קובץ — הן במשימות והן בפורטל הספקים'],
-    allowed_extensions: ['סוגי קבצים מותרים (מופרדים בפסיק)', 'קובץ מסוג שאינו ברשימה יידחה בהעלאה'],
-    recurring_default_policy: ['מדיניות ברירת מחדל למשימות חוזרות חופפות', 'קובע מה קורה כשמגיע מועד למופע חדש והמופע הקודם עדיין פתוח'],
-    org_name: ['שם הארגון', 'מופיע בכותרות המערכת ובהזמנות שנשלחות במייל'],
-    public_url: ['כתובת המערכת באינטרנט', 'הכתובת שממנה משתמשים נכנסים — קישורי ההזמנות במייל נבנים ממנה. לדוגמה https://mesimon.co.il. אם משאירים ריק, הקישור נבנה מהכתובת שדרכה נכנסתם.'],
-    // משימות AI — ברירות המחדל של מדיניות המעקב; כל משימה יכולה לשנות לעצמה
-    ai_email_attempts: ['משימות AI: מיילים שלא נענו לפני מעבר לוואטסאפ', 'כולל הפנייה הראשונה. 2 = פנייה ותזכורת אחת'],
-    ai_days_between_emails: ['משימות AI: ימי עבודה בין מיילים', ''],
-    ai_whatsapp_enabled: ['משימות AI: המשך מעקב בוואטסאפ', 'מהמספר האישי של מי שפתח את המשימה, אם חיבר את הוואטסאפ שלו'],
-    ai_whatsapp_attempts: ['משימות AI: הודעות וואטסאפ שלא נענו לפני עצירה', 'אחרי זה המעקב נעצר ומי שפתח את המשימה מקבל התראה'],
-    ai_days_between_whatsapp: ['משימות AI: ימי עבודה בין הודעות וואטסאפ', ''],
-    ai_send_window: ['משימות AI: שעות שליחה', 'שעון ישראל, בפורמט 08:30-18:00. תזכורת שמועדה נופל מחוץ לשעות תצא בתחילת החלון הבא'],
-    ai_work_days_only: ['משימות AI: שליחה בימי עבודה בלבד', 'בלי שישי ושבת'],
-    ai_auto_thanks: ['משימות AI: הודעת תודה כשהבקשה התקבלה', 'שורה או שתיים, באותו ערוץ שבו הגיעה התשובה'],
-    ai_poll_minutes: ['משימות AI: תדירות בדיקת תשובות (דקות)', ''],
-    ai_model: ['משימות AI: מודל', 'מזהה המודל של Claude. ברירת המחדל: claude-opus-5-5'],
-    ai_bot_model: ['בוט והקלטה: מודל', 'למה שמישהו מחכה לו (בוט הוואטסאפ, ההקלטה באפליקציה). ריק = המודל הראשי. claude-haiku-5-5 — המהיר ביותר, פחות מדויק בבקשות מורכבות'],
-    ai_fast_mode: ['בוט והקלטה: מצב מהיר', 'אותו מודל, תשובה מהירה עד פי 2.5, במחיר כפול לקריאות האלה. רק ב-Opus; כשאינו זמין — רגיל'],
-    ai_approve_reminders: ['משימות AI: כל תזכורת באישור', 'ברירת המחדל לכולם. כבוי = תזכורות יוצאות לבד לפי המדיניות. כל משתמש וכל משימה יכולים לשנות לעצמם'],
-    ai_internal_attempts: ['משימות AI לעובד: תזכורות במערכת לפני עצירה', 'כשהנמען הוא עובד בארגון, המעקב הוא התראות במשימון — בלי מייל ובלי וואטסאפ'],
-    ai_mail_scan_enabled: ['סריקת מיילים: פעילה', 'מיילים שלא נקראו בתיבת ה-Gmail של כל משתמש שחיבר אותה הופכים להצעות משימה'],
-    ai_scan_time: ['סריקת מיילים: שעת ריצת הבוקר', 'שעון ישראל, בפורמט 07:00. באותה שעה נשלחת גם ההודעה "היום יוצאים"'],
-    ai_scan_daily_limit: ['סריקת מיילים: תקרה יומית למשתמש', 'כל מייל הוא קריאה ל-AI. מה שמעבר לתקרה נסרק למחרת'],
-    task_closure_enabled: ['💡 איך לסגור: הצעה לכל משימה מהמייל', 'למי לפנות, באיזה ערוץ ומה לבקש — מזיכרון המייל, משימות AI קודמות, האלפון ואנשי הקשר. שום דבר לא נשלח בלי לחיצה'],
-    task_closure_all: ['💡 איך לסגור: גם למשימות שלא ממייל', 'משימה שנפתחה ידנית, מהבוט, מהקלטה או מוואטסאפ — ההצעה מופיעה בכרטיס המשימה של האחראי'],
-    task_closure_agents: ['💡 איך לסגור: עצה מסוכן המחלקה', 'כשיש סוכן מתאים (מס, שכר, נדל"ן…) — ההמלצה שלו מצטרפת להצעה. עולה יותר: קריאה נוספת ל-AI עם כלים'],
-    mail_reply_suggest: ['📧 הצעת תשובה מוכנה למייל', 'למייל שאדם מחכה בו לתשובה — טיוטה ב"ממתין לאישורך", לפי תשובות קודמות, הזיכרון והידע הארגוני. נשלחת רק בלחיצה'],
-    mail_memory_enabled: ['🧠 זיכרון העבודה: פעיל', 'סריקת כל היסטוריית המייל של המשתמש, אחרי שאישר את הערכת העלות'],
-    mail_memory_auto: ['🧠 זיכרון העבודה: סריקה אוטומטית', 'דלוק: כל עובד שחיבר Gmail נסרק לבד, בלי הפעלה ובלי אישור עלות, והעובדים אינם רואים את זה. השליטה — "ניהול ← 🤖 סוכנים וידע ארגוני ← 🧠 זיכרון"'],
-    mail_memory_users: ['🧠 זיכרון העבודה: מי משתתף', '* = כל העובדים (ברירת המחדל) · ריק = מנהלי מערכת בלבד · או רשימת כתובות מייל מופרדות בפסיק'],
-    mail_memory_model: ['🧠 זיכרון העבודה: מודל', 'ברירת המחדל claude-haiku-5-5 — זול, ומספיק לסיכום שרשורים'],
-    mail_memory_hours: ['🧠 זיכרון העבודה: שעות קריאת ההיסטוריה', 'שעון ישראל, בפורמט 19:00-07:00. ריק = כל שעה. עדכון הבוקר רץ בכל מקרה'],
-    mail_memory_nightly_threads: ['🧠 זיכרון העבודה: שרשורים ביום למשתמש', 'התקציב היומי של הקריאה בשעות היום. כל שרשור הוא קריאה אחת ל-AI. בלילה (מצב לילה) — בלי תקרה'],
-    mail_memory_night: ['🌙 זיכרון העבודה: מצב לילה', 'בשעות הלילה — בלי תקרה יומית וקריאה ברצף, כ-1,400 שרשורים בשעה לכל הארגון. זיכרון השרת לא משתנה (2 במקביל)'],
-    mail_memory_night_hours: ['🌙 שעות מצב הלילה', 'שעון ישראל, בפורמט 19:00-07:00'],
-    mail_memory_night_mem_mb: ['🌙 מצב לילה: תקרת זיכרון (MB)', 'בלילה נקראים עד 8 שרשורים במקביל — כל עוד זיכרון השרת מתחת לזה. 1400 מתאים לתוכנית של 2GB; בתוכנית של 512MB — 350'],
-    mail_doc_expiry_days: ['📎 מסמכים: ימים לפני תום תוקף', 'חוזה, היתר או ביטוח שתוקפם מתקרב — הצעה לחדש ב"ממתין לאישורך"'],
-    mail_ask_daily_limit: ['🔎 שאל את המיילים: שאלות ביום למשתמש', 'כל שאלה היא שתי קריאות ל-AI'],
-    agents_daily_limit: ['✨ שאל: שאלות ביום למשתמש', 'כל שאלה: ניתוב זול, ואז הסוכן (ולפעמים גם המיילים)'],
-    org_knowledge_enabled: ['📚 ידע ארגוני: פעיל', 'זיקוק כל בוקר מזיכרון העבודה של כל העובדים'],
-    org_merge_days: ['📚 ידע ארגוני: כל כמה ימים מאחדים', 'לקחים חדשים מצטרפים לערכים קיימים או יוצרים ערכים חדשים'],
-    org_refresh_hours: ['📚 ידע ארגוני: כל כמה שעות מתעדכן', 'זיקוק לקחים ממה שנוסף לזיכרון העבודה של כל העובדים. סבב בלי חדש — בלי עלות'],
-    meeting_hours: ['פגישות: שעות לפגישות', 'שעון ישראל, בפורמט 08:30-18:00. הצעת מועדים ושורת הזמינות — רק בתוך השעות האלה'],
-    meeting_default_minutes: ['פגישות: משך ברירת מחדל (דקות)', ''],
-    meeting_buffer_minutes: ['פגישות: מרווח מפגישה צמודה (דקות)', 'בהצעת מועדים — לא צמוד לפגישה אחרת'],
-    meeting_reminder_minutes: ['פגישות: התראה לפני (דקות)', 'במשימון ובבוט הוואטסאפ, עם קישור ה-Zoom — לבעל היומן, למי שקבע ולמוזמנים שהם משתמשי משימון'],
-    meeting_ai_alternatives: ['פגישות: הצעות AI להזזת פגישות חופפות', 'כבוי = החלופות מסודרות לפי כללים קבועים, בלי AI'],
-    meeting_record_default: ['פגישות: הקלטה אוטומטית לענן — מסומן מראש', 'בפגישת Zoom חדשה. בכל פגישה אפשר לשנות. ההקלטות — במסך "🎥 הקלטות Zoom" ובבוט'],
-  };
+  // שם והסבר לכל הגדרה, והלשונית שלה — מהשרת (‎server/core/settings-catalog.js‎), המקור היחיד. לא מגדירים כאן שוב.
+
 
   /**
    * מצב החיבורים החיצוניים. תכונה שתלויה במפתח בשרת נעלמת בשקט כשהמפתח
@@ -1374,6 +1399,31 @@ const AdminView = (() => {
     ]);
   }
 
+  /** 🧪 בדיקה: פגישה קצרה במשתמש ה-Zoom, שנמחקת מיד — ומה בדיוק Zoom ענה, עם מה לתקן */
+  function zoomTestButton(u) {
+    const b = el('button.btn.btn-sm.btn-ghost', { type: 'button', title: 'יוצר פגישת בדיקה ומוחק אותה מיד' }, ['🧪 בדיקה']);
+    b.addEventListener('click', async () => {
+      b.disabled = true;
+      try {
+        const r = await API.post('/api/admin/zoom/test', { zoomUserId: u.id });
+        if (r.ok) UI.success(`✓ ${u.name}: Zoom יצר פגישה ומחק אותה${r.warning ? ` (${r.warning})` : ''}`);
+        else {
+          UI.modal({
+            title: `🧪 Zoom — ${u.name}`,
+            body: el('div', {}, [
+              el('div.alert.alert-warn', {}, [el('span', { text: '⚠️' }), el('div', { text: r.explain })]),
+              el('div.mute-sm', { text: `חשבון Zoom ${r.account} · ההרשאות שבאסימון עכשיו (מה ש-Zoom נותן לאפליקציה בפועל):` }),
+              el('pre', { style: { whiteSpace: 'pre-wrap', direction: 'ltr', textAlign: 'left', fontSize: '12px' }, text: (r.scopes ?? []).join('\n') || '(אין — האפליקציה לא מחזירה הרשאות)' }),
+              el('pre', { style: { whiteSpace: 'pre-wrap', direction: 'ltr', textAlign: 'left', fontSize: '12px' }, text: JSON.stringify({ status: r.status, code: r.code, message: r.message, firstError: r.firstError }, null, 2) })
+            ])
+          });
+        }
+      } catch (err) { UI.error(err); }
+      b.disabled = false;
+    });
+    return b;
+  }
+
   /** משתמשי ה-Zoom של החברה — רענון מ-Zoom, ומי משויך לכל אחד */
   function zoomUsersBox() {
     const box = el('div', { style: { padding: '10px 0' } });
@@ -1399,9 +1449,10 @@ const AdminView = (() => {
           })()
         ]),
         z.users.length
-          ? el('div', {}, z.users.map((u) => el('div.mute-sm', {
-              text: `${u.name} · ${u.email}${multi ? ` · חשבון ${u.account}` : ''}${u.license === 'basic' ? ' · חינמי (40 דק׳)' : ''} — ${u.linked.length ? u.linked.map((x) => x.name).join(', ') : 'לא משויך'}`
-            })))
+          ? el('div', {}, z.users.map((u) => el('div.flex', { style: { gap: '6px', alignItems: 'center', flexWrap: 'wrap' } }, [
+              el('span.mute-sm', { text: `${u.name} · ${u.email}${multi ? ` · חשבון ${u.account}` : ''}${u.license === 'basic' ? ' · חינמי (40 דק׳)' : ''} — ${u.linked.length ? u.linked.map((x) => x.name).join(', ') : 'לא משויך'}` }),
+              zoomTestButton(u)
+            ])))
           : el('div.mute-sm', { text: 'עוד לא נטענו משתמשים — "רענון מ-Zoom".' }));
     };
     API.get('/api/admin/zoom/users').then(draw).catch(() => {});
@@ -1587,7 +1638,7 @@ const AdminView = (() => {
     const s = settingsData.settings;
     const inputs = {};
 
-    const fields = Object.entries(SETTING_LABELS).map(([key, [label, hint]]) => {
+    const field = ({ key, label, hint }) => {
       let control;
       if (key === 'recurring_default_policy') {
         control = UI.select([
@@ -1606,7 +1657,15 @@ const AdminView = (() => {
       }
       inputs[key] = control;
       return UI.field(label, control, hint || null);
-    });
+    };
+    // לשונית לכל תחום — "⏰ שעות וימים" ראשונה: כל השעות של המערכת במקום אחד
+    const sections = (settingsData.form ?? []).map((t) => el('section.settings-section', { id: `settings-${t.key}` }, [
+      el('h3', { text: t.label, style: { margin: '18px 0 10px', fontSize: '15px' } }),
+      el('div.grid.grid-2', {}, t.fields.map(field))
+    ]));
+    const jump = el('div.mb', { style: { display: 'flex', flexWrap: 'wrap', gap: '6px' } }, (settingsData.form ?? []).map((t) => el('button.btn.btn-sm', {
+      type: 'button', text: t.label, onclick: () => document.getElementById(`settings-${t.key}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    })));
 
     const saveBtn = el('button.btn.btn-primary', {}, ['שמירת הגדרות']);
     saveBtn.addEventListener('click', async () => {
@@ -1640,7 +1699,8 @@ const AdminView = (() => {
       ]),
       el('div.card', {}, [
         el('div.card-pad', {}, [
-          el('div.grid.grid-2', {}, fields),
+          jump,
+          ...sections,
           el('div.mt', {}, [saveBtn])
         ])
       ]),
@@ -1667,6 +1727,7 @@ const AdminView = (() => {
     { key: 'actions', label: 'פעולות' },
     { key: 'groups', label: 'קבוצות' },
     { key: 'log', label: 'יומן' },
+    { key: 'review', label: '🌙 סקירה לילית' },
     { key: 'test', label: 'בדיקה' },
     { key: 'settings', label: 'הגדרות' },
     { key: 'connection', label: 'חיבור' }
@@ -1702,7 +1763,7 @@ const AdminView = (() => {
       UI.mount(body, headerCard(), el('div.seg.mb', {}, WA_SECTIONS.map((s) =>
         el(`button${waSection === s.key ? '.active' : ''}`, { onclick: () => { waSection = s.key; draw(); } }, [s.label])
       )), host);
-      const sections = { actions: actionsSection, groups: groupsSection, log: logSection, test: testSection, settings: settingsSection, connection: connectionSection };
+      const sections = { actions: actionsSection, groups: groupsSection, log: logSection, review: reviewSection, test: testSection, settings: settingsSection, connection: connectionSection };
       Promise.resolve(sections[waSection]()).catch((err) => UI.mount(host, UI.empty(err.message, '⚠️')));
     };
 
@@ -1760,7 +1821,7 @@ const AdminView = (() => {
             el('div', {}, [el('span', { text: `${a.icon} ` }), el('b', { text: a.label }), ' ', el('span.ai-chip', { text: CHANNEL_CHIP[a.channel] })]),
             el('div.mute-sm', { text: a.description }),
             examples ? UI.field('דוגמאות — שורה לכל דוגמה. מוצגות ב"עזרה" ומכוונות את הבוט', examples) : null,
-            a.key === 'summary' ? el('div.mute-sm', { text: `נשלח בשעה ${info.settings.summaryTime} — משנים בלשונית "הגדרות".` }) : null,
+            a.key === 'summary' ? el('div.mute-sm', { text: 'הוחלף ב"סיכום בוקר וסוף יום" — מי שמקבל אותו לא מקבל גם את זה.' }) : null,
             a.key === 'voice_notes' && !info.speech?.length ? el('div.mute-sm.text-danger', { text: 'התמלול אינו מוגדר בשרת — מגדירים RUNPOD_API_KEY + RUNPOD_ENDPOINT_ID (ivrit.ai), OPENAI_API_KEY או GOOGLE_SPEECH_API_KEY. עד אז הבוט מבקש לכתוב בטקסט.' }) : null,
             a.key === 'voice_notes' && info.speech?.length ? el('div.mute-sm', { text: `סדר התמלול: ${info.speech.map((p) => p.name).join(' ← ')}${info.speech.length > 1 ? ' (כל אחד גיבוי לקודם)' : ''}${info.speechCompare ? ' · מצב השוואה פעיל' : ''}.` }) : null
           ]),
@@ -1885,7 +1946,12 @@ const AdminView = (() => {
           el('td', { title: UI.formatDateTime(e.at), text: UI.relative(e.at) }),
           el('td', {}, [WA_CHANNELS[e.channel] ?? e.channel, e.chatName ? el('div.mute-sm', { text: e.chatName }) : null]),
           el('td', { text: e.who || '—' }),
-          el('td.wrap', { text: e.text || '—' }),
+          el('td.wrap', {}, [
+            e.forwarded ? el('span.ai-chip', { text: '↪ הועברה', style: { marginInlineEnd: '6px' } }) : null,
+            e.text || '—',
+            // מה הבוט ענה — כך רואים ביומן אם התשובה התאימה לבקשה
+            e.reply ? el('div.mute-sm.rv-reply', { title: e.reply, text: `🤖 ${e.reply.length > 220 ? `${e.reply.slice(0, 220)}…` : e.reply}` }) : null
+          ]),
           el('td', {}, [actionLabel(e.action), ' ', el(`span.ai-chip${statusClass ? `.${statusClass}` : ''}`, { text: statusLabel })]),
           el('td.wrap', {}, [e.result, e.taskId ? el('span.mute-sm', { text: ` · #${e.taskId}` }) : null])
         ]);
@@ -1903,6 +1969,112 @@ const AdminView = (() => {
         el('div.mute-sm.mt', { text: 'היומן נשמר 90 יום. לחיצה על שורה עם משימה פותחת אותה.' })
       );
       await load();
+    }
+
+    // ---- סקירה לילית: מה עבד, מה לא, ומה מוצע לתקן
+
+    const FIX_STATUS = { new: ['ממתין להחלטה', 'ai-chip-warn'], done: ['טופל', 'wa-chip-ok'], dismissed: ['לא רלוונטי', ''] };
+    const FIX_KIND = { skill: 'ניסוח לבוט', code: 'כלל בקוד', alias: 'שמות וכינויים', feature: 'יכולת חדשה', idea: '💡 רעיון מהמייל' };
+    const pct = (r) => (r.conversations ? Math.round((r.succeeded / r.conversations) * 100) : null);
+
+    async function reviewSection() {
+      let data = await API.get('/api/admin/wa-bot/reviews');
+
+      const decide = async (review, fix, status) => {
+        let note = '';
+        if (status === 'dismissed') {
+          note = await UI.prompt('למה? (לא חובה — הסקירה הבאה תלמד מזה)', { title: 'לא רלוונטי', multiline: true, okText: 'סימון' });
+          if (note === null && !(await UI.confirm('לסמן בלי הסבר?', { okText: 'כן, בלי הסבר' }))) return;
+        }
+        try {
+          data = await API.put(`/api/admin/wa-bot/reviews/${review.id}/fixes/${fix.n}`, { status, note: note ?? '' });
+          paint();
+        } catch (err) { UI.error(err); }
+      };
+
+      const fixCard = (review, fix) => {
+        const [label, cls] = FIX_STATUS[fix.status] ?? FIX_STATUS.new;
+        return el(`div.rv-fix${fix.status === 'new' ? '' : '.rv-fix-closed'}`, {}, [
+          el('div.flex', { style: { flexWrap: 'wrap', gap: '6px', alignItems: 'center' } }, [
+            el('b', { text: fix.title }),
+            fix.kind && FIX_KIND[fix.kind] ? el('span.ai-chip.ai-chip-ai', { text: FIX_KIND[fix.kind] }) : null,
+            // ✉️ מי העיר, והאם כבר הוצעה לו תשובה על מה שטופל
+            fix.requester ? el('span.ai-chip', { text: fix.replyProposedAt ? `✉️ ${fix.requester} · הוצעה תשובה` : `✉️ ${fix.requester}` }) : null,
+            el(`span.ai-chip${cls ? `.${cls}` : ''}`, { text: label })
+          ]),
+          fix.problem ? el('div.rv-text', { text: fix.problem }) : null,
+          fix.example ? el('div.rv-example', {}, [el('span.mute-sm', { text: 'דוגמה מהיומן: ' }), fix.example]) : null,
+          fix.note ? el('div.mute-sm', { text: `📝 ${fix.note}${fix.decidedBy ? ` — ${fix.decidedBy}` : ''}` }) : null,
+          el('div.flex.rv-actions', {}, [
+            fix.url ? el('a.btn.btn-primary.btn-sm', { href: fix.url, target: '_blank', rel: 'noopener' }, ['לבדיקה ולמיזוג ↗']) : null,
+            fix.status === 'new' ? el('button.btn.btn-sm', { onclick: () => decide(review, fix, 'done') }, ['✓ טופל']) : null,
+            fix.status === 'new' ? el('button.btn.btn-ghost.btn-sm', { onclick: () => decide(review, fix, 'dismissed') }, ['✕ לא רלוונטי']) : null,
+            fix.status !== 'new' ? el('button.btn.btn-ghost.btn-sm', { onclick: () => decide(review, fix, 'new') }, ['↩ החזרה להחלטה']) : null
+          ])
+        ]);
+      };
+
+      const reviewBody = (r) => el('div', {}, [
+        el('div.wa-stats.mb', {}, [
+          el('div.wa-stat', {}, [el('b', { text: String(r.conversations) }), el('span', { text: 'שיחות' })]),
+          el('div.wa-stat', {}, [el('b', { text: String(r.succeeded) }), el('span', { text: 'קיבלו מה שביקשו' })]),
+          el('div.wa-stat', {}, [el('b', { text: pct(r) === null ? '—' : `${pct(r)}%` }), el('span', { text: 'הצלחה' })]),
+          el('div.wa-stat', {}, [el('b', { text: String(r.fixes.length) }), el('span', { text: 'הצעות לתיקון' })])
+        ]),
+        r.summary ? el('div.rv-text.mb', { text: r.summary }) : null,
+        r.patterns.length ? el('div.mb', {}, [
+          el('h4.rv-h', { text: '👥 מה למדנו על איך האנשים מבקשים' }),
+          el('ul.rv-list', {}, r.patterns.map((p) => el('li', {}, [p.who ? el('b', { text: `${p.who}: ` }) : null, p.pattern])))
+        ]) : null,
+        r.fixes.length ? el('div', {}, [el('h4.rv-h', { text: '🛠 הצעות לתיקון' }), ...r.fixes.map((f) => fixCard(r, f))])
+          : el('div.mute-sm', { text: 'אין הצעות לתיקון בסקירה הזו.' })
+      ]);
+
+      const when = (r) => `${UI.formatDate(r.createdAt)} · ${UI.relative(r.createdAt)}`;
+
+      function paint() {
+        const { reviews } = data;
+        const open = reviews.flatMap((r) => r.fixes.filter((f) => f.status === 'new').map((f) => ({ r, f })));
+        const [latest, ...older] = reviews;
+        // מגמה: אחוז ההצלחה בסקירות האחרונות, מהישנה לחדשה
+        const trend = reviews.slice(0, 14).reverse().filter((r) => pct(r) !== null);
+
+        UI.mount(host,
+          el('div.alert.alert-info.mb', {}, [el('span', { text: '🌙' }), el('div', {}, [
+            'כל ערב (א׳–ה׳, 21:40) עוברים על כל השיחות של היום עם הבוט: מי ביקש מה, ואם קיבל את זה — משימה שנפתחה, מייל שיצא, תשובה. איפה שאנשים ניסו ולא הצליחו, מוכן תיקון. ',
+            el('b', { text: 'תיקון נכנס רק אחרי "לבדיקה ולמיזוג".' }),
+            ' "טופל" או "לא רלוונטי" כאן — והסקירה הבאה לומדת מההחלטה ולא מציעה שוב. טלפונים, מיילים וסכומים מוסתרים לפני שהשיחות יוצאות מהמערכת.'
+          ])]),
+          !data.configured ? el('div.alert.alert-warn.mb', {}, [el('span', { text: '⚠️' }), el('div', { text: 'הסקירה עוד לא מחוברת: חסר המפתח BOT_REVIEW_KEY בהגדרות השרת (Render ← Environment).' })]) : null,
+          !reviews.length ? UI.empty('עוד אין סקירות. הראשונה תופיע כאן אחרי הערב הראשון שבו הסקירה רצה.', '🌙') : null,
+          trend.length > 1 ? el('div.card.mb', {}, [el('div.card-pad', {}, [
+            el('h4.rv-h', { text: 'אחוז השיחות שהצליחו — לאורך זמן' }),
+            el('div.rv-bars', {}, trend.map((r) => el('div.rv-bar', { title: `${UI.formatDate(r.createdAt)}: ${pct(r)}% (${r.succeeded}/${r.conversations})` }, [
+              el('div.rv-bar-fill', { style: { height: `${Math.max(4, pct(r))}%` } }),
+              el('span', { text: `${pct(r)}%` })
+            ])))
+          ])]) : null,
+          open.length ? el('div.card.mb', {}, [
+            el('div.card-head', {}, [el('h3', { text: `ממתינות להחלטה (${open.length})` })]),
+            el('div.card-pad', {}, open.map(({ r, f }) => el('div', {}, [el('div.mute-sm', { text: `מהסקירה של ${UI.formatDate(r.createdAt)}` }), fixCard(r, f)])))
+          ]) : null,
+          latest ? el('div.card.mb', {}, [
+            el('div.card-head', {}, [el('h3', { text: latest.subject || 'הסקירה האחרונה' }), el('span.mute-sm', { text: when(latest) })]),
+            el('div.card-pad', {}, [reviewBody(latest)])
+          ]) : null,
+          older.length ? el('div.card', {}, [
+            el('div.card-head', {}, [el('h3', { text: 'סקירות קודמות' })]),
+            el('div.card-pad', {}, older.map((r) => el('details.rv-old', {}, [
+              el('summary', {}, [
+                el('b', { text: UI.formatDate(r.createdAt) }),
+                el('span.mute-sm', { text: ` · ${r.conversations} שיחות · ${pct(r) === null ? '—' : `${pct(r)}% הצלחה`} · ${r.fixes.length} הצעות` })
+              ]),
+              reviewBody(r)
+            ])))
+          ]) : null
+        );
+      }
+      paint();
     }
 
     // ---- בדיקה
@@ -2013,14 +2185,10 @@ const AdminView = (() => {
       const s = info.settings;
       const enabled = el('input', { type: 'checkbox', checked: s.enabled });
       const quiet = el('input', { type: 'number', min: 0, max: 60, value: s.quietMinutes });
-      const summary = el('input', { type: 'time', value: s.summaryTime });
-      const [from, to] = s.hours ? s.hours.split('-') : ['07:00', '22:00'];
-      const always = el('input', { type: 'checkbox', checked: !s.hours });
-      const hFrom = el('input', { type: 'time', value: from, disabled: !s.hours });
-      const hTo = el('input', { type: 'time', value: to, disabled: !s.hours });
-      always.addEventListener('change', () => { hFrom.disabled = hTo.disabled = always.checked; });
+      // ⏰ השעות (פעילות הבוט, סיכום הבוקר, הודעות יזומות) — במקום אחד: הגדרות מערכת ← "שעות וימים" (15.11.26)
       const shabbat = el('input', { type: 'checkbox', checked: s.shabbat });
       const speechCompare = el('input', { type: 'checkbox', checked: s.speechCompare });
+      const topicSwitch = el('input', { type: 'checkbox', checked: s.topicSwitchCancels !== false });
       const check = (input, label, hint) => el('label.wa-check', {}, [input, el('div', {}, [el('b', { text: label }), hint ? el('div.mute-sm', { text: hint }) : null])]);
 
       const save = el('button.btn.btn-primary', {}, ['שמירת ההגדרות']);
@@ -2028,9 +2196,8 @@ const AdminView = (() => {
         save.disabled = true;
         try {
           draw(await API.put('/api/admin/wa-bot/settings', {
-            enabled: enabled.checked, quietMinutes: Number(quiet.value), summaryTime: summary.value,
-            hours: always.checked ? '' : `${hFrom.value}-${hTo.value}`, shabbat: shabbat.checked,
-            speechCompare: speechCompare.checked
+            enabled: enabled.checked, quietMinutes: Number(quiet.value), shabbat: shabbat.checked,
+            speechCompare: speechCompare.checked, topicSwitchCancels: topicSwitch.checked
           }));
           UI.success('ההגדרות נשמרו');
         } catch (err) { save.disabled = false; UI.error(err); }
@@ -2039,12 +2206,16 @@ const AdminView = (() => {
       UI.mount(host, el('div.card', {}, [el('div.card-pad', {}, [
         check(enabled, 'הבוט פעיל', 'כבוי — הבוט לא קורא קבוצות ולא עונה בפרטי. ההודעות נשמרות אצל Green API כ-24 שעות.'),
         el('div.grid.grid-2.mt', {}, [
-          UI.field('דקות שקט לפני ניתוח קבוצה', quiet, 'רצף הודעות נקרא יחד, אחרי הפסקה בשיחה — כך "וגם את זה עד חמישי" מובן בהקשר'),
-          UI.field('שעת סיכום הבוקר', summary, 'בימים א׳–ה׳. הפעלה וכיבוי — בלשונית "פעולות"')
+          UI.field('דקות שקט לפני ניתוח קבוצה', quiet, 'רצף הודעות נקרא יחד, אחרי הפסקה בשיחה — כך "וגם את זה עד חמישי" מובן בהקשר')
         ]),
+        el('h4.mt', { text: 'שיחה בפרטי' }),
+        check(topicSwitch, 'מעבר לנושא אחר מבטל את הקודם (ברירת מחדל)',
+          'הבוט תמיד עושה את מה שמבקשים ממנו עכשיו. עובד שבאמצע טיוטת מייל, משימה, אישור או קבלת סחורה שולח בקשה אחרת ("תפתח משימה לדני…") — הפריט הקודם מבוטל בלי לכתוב "ביטול", ואין חזרה אליו (בקבלת סחורה — גם הטיוטא בפריוריטי). כבוי — רק טיוטות מייל יורדות, וקבלת סחורה מושהית עד "קבלת סחורה".'),
         el('h4.mt', { text: 'מתי הבוט שולח הודעות' }),
-        check(always, 'כל שעות היום'),
-        el('div.row', {}, [UI.field('מהשעה', hFrom), UI.field('עד השעה', hTo)]),
+        el('div.alert.alert-info', {}, [el('span', { text: '⏰' }), el('div', {}, [
+          el('span', { text: `כל השעות — שעות הפעילות (${s.hours || 'כל היום'}), סיכום הבוקר, ההודעות היזומות והטיפ היומי — במקום אחד: ` }),
+          el('a', { href: '#', text: 'הגדרות מערכת ← ⏰ שעות וימים', onclick: (e) => { e.preventDefault(); App.navigate('admin', { tab: 'settings' }); } })
+        ])]),
         check(shabbat, 'לא בשבת', 'משישי ב-15:00 עד מוצאי שבת ב-20:30.'),
         el('div.mute-sm', { text: 'מחוץ לחלון הבוט לא שולח דבר. הודעות שנכתבו לו בפרטי נשמרות ונענות כשהחלון נפתח. הקבוצות ממשיכות להיקרא, וההצעות מחכות באפליקציה.' }),
         el('h4.mt', { text: 'תמלול הודעות קוליות' }),

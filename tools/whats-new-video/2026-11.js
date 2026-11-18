@@ -10,7 +10,7 @@
  * סצנה מקבלת ‎d‎ (‎director.js‎) ומשתמשת בו כמו משתמש. מה שתלוי בשירות
  * חיצוני (Gmail, AI) מבוים ב-‎setup‎ — תשובה קבועה מהשרת, רק בסרטון.
  */
-const W = require('../../server/workdays');
+const W = require('../../server/core/workdays');
 
 const iso = (minutesAgo = 0) => new Date(Date.now() - minutesAgo * 60000).toISOString();
 const day = (n) => W.addDays(W.todayIL(), n);

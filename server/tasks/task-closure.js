@@ -1,0 +1,478 @@
+'use strict';
+/**
+ * 💡 איך לסגור — לכל משימה שהוצעה מהמייל, הצעה איך סוגרים אותה בפועל: למי
+ * לפנות, באיזה ערוץ ומה לבקש (האפיון, חלק ב).
+ *
+ * הזרימה:
+ *   1. הסקיל ‎email-to-tasks.md‎ כבר החזיר צורך ומילות מפתח ("תיקון מזגן").
+ *   2. כאן נאספים מועמדים — רק מהמערכת של בעל התיבה: זיכרון המייל, משימות AI
+ *      קודמות, האלפון, ספקים, אנשי הקשר מ-Google, ועד שהזיכרון נבנה — גם חיפוש
+ *      ממוקד בדואר היוצא.
+ *   3. ה-AI (הסקיל ‎task-closure.md‎, שבו גם "אנשי המקצוע שלי") בוחר הצעה וערוץ.
+ *   4. ההצעה נשמרת ב-‎ai_suggestions.data.closure‎ — בלי טבלה חדשה.
+ *
+ * שום דבר לא נשלח מכאן. לחיצה על ההצעה פותחת את דיאלוג משימת ה-AI הקיים עם
+ * הנמען וההוראה, והמשתמש רואה את הנוסח לפני שליחה.
+ *
+ * פרטי קשר נלקחים רק מהמועמדים או מטבלת הסקיל — לעולם לא מגוף המייל הנכנס.
+ */
+const fs = require('node:fs');
+const Paths = require('../core').Paths;
+const path = require('node:path');
+
+const D = require('../core').Db;
+const Claude = require('../integrations').Claude;
+const Gmail = require('../integrations').Gmail;
+const Mime = require('../core').Mime;
+const Memory = require('../mail').MailMemory;
+const Ports = require('../core').Ports;
+const Auth = require('../core').Auth;
+const P = require('../core').Permissions;
+const OrgKnowledge = require('../agents').OrgKnowledge;
+
+const SKILL_PATH = Paths.skill('task-closure.md');
+const skill = () => fs.readFileSync(SKILL_PATH, 'utf8');
+const parseJson = (text, fallback) => { try { return JSON.parse(text); } catch { return fallback; } };
+
+const MAX_CANDIDATES = 8;
+
+const digits = (p) => String(p ?? '').replace(/\D/g, '');
+const fold = (s) => String(s ?? '').toLowerCase();
+
+/** מילים לחיפוש: הצורך ומילות המפתח, בלי תחיליות "ה/ו/ב/ל" */
+function wordsOf(need, keywords) {
+  return Memory.terms([need, ...(keywords ?? [])].join(' '))
+    .map((w) => Memory.normalize(w.length > 3 ? w.replace(/^[והבלמש]/, '') : w))
+    .filter((w) => w.length >= 2);
+}
+
+const hits = (text, words) => {
+  const t = Memory.normalize(text);
+  return words.reduce((n, w) => n + (t.includes(w) ? 1 : 0), 0);
+};
+
+/**
+ * דחיות קודמות: נמען שנדחה פעמיים להצעה בתחום דומה — לא מוצע שוב.
+ * הדחיות נשמרות על ההצעות עצמן (‎data.closure.dismissed‎).
+ */
+function rejectedKeys(userId, words) {
+  const count = new Map();
+  const rows = D.all(
+    `SELECT data FROM ai_suggestions WHERE user_id = ? AND json_extract(data, '$.closure.dismissed') = 1 AND created_at >= ?`,
+    userId, new Date(Date.now() - 365 * 24 * 3600000).toISOString()
+  );
+  for (const r of rows) {
+    const c = parseJson(r.data, {}).closure;
+    if (!c?.primary) continue;
+    if (hits(`${c.need} ${(c.keywords ?? []).join(' ')}`, words) === 0) continue;
+    const key = keyOf(c.primary);
+    count.set(key, (count.get(key) ?? 0) + 1);
+  }
+  return new Set([...count].filter(([, n]) => n >= 2).map(([k]) => k));
+}
+
+const keyOf = (c) => (c.email ? `e:${fold(c.email)}` : c.phone ? `p:${digits(c.phone).slice(-9)}` : `n:${fold(c.name)}`);
+
+/**
+ * המועמדים, מכל המקורות, עם מה שידוע על כל אחד. אותו אדם ממקורות שונים —
+ * שורה אחת, עם כל הסימנים.
+ */
+async function candidatesFor(user, { need, keywords, mayVendors }) {
+  const words = wordsOf(need, keywords);
+  if (!words.length) return [];
+  const byKey = new Map();
+  const org = new Map(D.all("SELECT id, lower(email) e, full_name FROM users WHERE status = 'active' AND role <> 'vendor'").map((u) => [u.e, u]));
+
+  const add = (c, score, note) => {
+    const keys = [c.email ? `e:${fold(c.email)}` : null, digits(c.phone).length >= 9 ? `p:${digits(c.phone).slice(-9)}` : null].filter(Boolean);
+    if (!keys.length) return;
+    let cur = keys.map((k) => byKey.get(k)).find(Boolean);
+    if (!cur) {
+      cur = { name: c.name || c.email || c.phone, email: fold(c.email), phone: c.phone || '', type: c.type ?? 'external', refId: c.refId ?? null, score: 0, notes: [], sources: new Set() };
+    }
+    if (!cur.email && c.email) cur.email = fold(c.email);
+    if (!cur.phone && c.phone) cur.phone = c.phone;
+    if (c.type && c.type !== 'external') { cur.type = c.type; cur.refId = c.refId ?? cur.refId; }
+    if (c.name && (cur.name === cur.email || cur.name === cur.phone)) cur.name = c.name;
+    cur.score += score;
+    if (note) cur.notes.push(note);
+    cur.sources.add(c.source);
+    for (const k of keys) byKey.set(k, cur);
+  };
+
+  // 1. זיכרון המייל: אנשים לפי תפקיד, ורשומות על מה שעשו
+  const mem = Memory.search(user.id, `${need} ${(keywords ?? []).join(' ')}`, { limit: 15 });
+  for (const p of mem.people) {
+    const u = org.get(p.email);
+    add({ name: p.name || p.email, email: p.email, phone: p.phoneVerified ? p.phone : '', type: u ? 'user' : 'external', refId: u?.id ?? null, source: 'memory' },
+      4, `${p.role ? `${p.role}${p.company ? ` · ${p.company}` : ''}` : p.company}${p.threads ? ` · ${p.threads} שרשורים` : ''}${p.replyHours !== null && p.replyHours !== undefined ? ` · עונה בדרך כלל תוך ${p.replyHours < 24 ? `${p.replyHours} שעות` : `${Math.round(p.replyHours / 24)} ימים`}` : ''}`);
+  }
+  const byPerson = new Map();
+  for (const e of mem.events) {
+    if (!e.contact_email) continue;
+    const list = byPerson.get(e.contact_email) ?? [];
+    list.push(e);
+    byPerson.set(e.contact_email, list);
+  }
+  for (const [email, list] of byPerson) {
+    const p = Memory.personByEmail(user.id, email);
+    const u = org.get(email);
+    const closed = list.filter((e) => e.outcome === 'closed').length;
+    add({ name: p?.name || email, email, phone: p?.phoneVerified ? p.phone : '', type: u ? 'user' : 'external', refId: u?.id ?? null, source: 'memory' },
+      3 * list.length + 2 * closed,
+      `במייל: ${list.length} פעמים על נושא דומה (${closed} נסגרו) · האחרונה ${list[0].happened_at ?? ''}: ${list[0].summary.slice(0, 140)}${list[0].amount ? ` · ${list[0].amount}` : ''}`);
+  }
+
+  // 2. משימות AI קודמות של בעל התיבה
+  const reqs = D.all(
+    `SELECT contact_name, contact_email, contact_phone, contact_type, contact_ref_id, instruction, goal, state, created_at
+       FROM ai_requests WHERE owner_id = ? ORDER BY created_at DESC LIMIT 400`, user.id
+  );
+  const reqGroups = new Map();
+  for (const r of reqs) {
+    if (hits(`${r.instruction} ${r.goal}`, words) === 0) continue;
+    const k = r.contact_email ? `e:${fold(r.contact_email)}` : `p:${digits(r.contact_phone).slice(-9)}`;
+    const g = reqGroups.get(k) ?? { r, n: 0, done: 0 };
+    g.n++;
+    if (r.state === 'completed') g.done++;
+    reqGroups.set(k, g);
+  }
+  for (const { r, n, done } of reqGroups.values()) {
+    add({ name: r.contact_name, email: r.contact_email, phone: r.contact_phone, type: r.contact_type, refId: r.contact_ref_id, source: 'ai_requests' },
+      4 * n + 3 * done, `משימות AI: פנית אליו ${n} פעמים על נושא דומה (${done} התקבלו) · האחרונה: ${r.goal || r.instruction}`.slice(0, 260));
+  }
+
+  // 3. האלפון הארגוני — שם, ארגון והערה ("מזגנים")
+  for (const e of D.all('SELECT name, phone, email, note FROM phonebook')) {
+    const s = hits(`${e.name} ${e.note}`, words);
+    if (!s) continue;
+    add({ name: e.name, email: e.email, phone: e.phone, source: 'phonebook' }, 3 * s, `באלפון${e.note ? `: ${e.note}` : ''}`);
+  }
+
+  // 4. ספקים — למי שרשאי לראות אותם
+  if (mayVendors) {
+    for (const v of D.all("SELECT id, name, contact_name, email, phone FROM vendors WHERE status = 'active'")) {
+      const s = hits(`${v.name} ${v.contact_name}`, words);
+      if (!s) continue;
+      add({ name: v.contact_name ? `${v.contact_name} (${v.name})` : v.name, email: v.email, phone: v.phone, type: 'vendor', refId: v.id, source: 'vendor' }, 3 * s, `ספק במשימון: ${v.name}`);
+    }
+  }
+
+  // 5. אנשי הקשר מ-Google — לפי חברה ותפקיד
+  for (const c of D.all('SELECT name, emails, phones, organization, title FROM google_contacts WHERE user_id = ?', user.id)) {
+    const s = hits(`${c.name} ${c.organization} ${c.title}`, words);
+    if (!s) continue;
+    const email = parseJson(c.emails, [])[0]?.value ?? '';
+    const phone = parseJson(c.phones, [])[0]?.value ?? '';
+    add({ name: c.name, email, phone, source: 'google' }, 2 * s, `באנשי הקשר: ${[c.title, c.organization].filter(Boolean).join(' · ')}`);
+  }
+
+  // 6. עד שהזיכרון נבנה — חיפוש חי בדואר היוצא, בכותרות בלבד
+  const run = D.get('SELECT state FROM mail_memory_runs WHERE user_id = ?', user.id);
+  const boxes = Gmail.boxesOf(user.id, 'mail');
+  if (run?.state !== 'done' && boxes.length) {
+    try {
+      const q = `in:sent {${words.slice(0, 5).map((w) => `"${w.replace(/"/g, '')}"`).join(' ')}} newer_than:180d`;
+      // הדואר היוצא של כל התיבות — הראשית והנוספות
+      const ids = (await Promise.all(boxes.map((who) => Gmail.search(who, q, { max: 10 }).then((l) => l.map((id) => ({ who, id }))).catch(() => [])))).flat().slice(0, 15);
+      const mine = new Set([...Gmail.emailsOf(user.id), user.email].filter(Boolean).map(fold));
+      const seen = new Map();
+      for (const { who, id } of ids) {
+        const m = await Gmail.messageMeta(who, id);
+        for (const part of String(m.headers.to ?? '').split(',')) {
+          const a = Mime.parseAddress(part);
+          if (!a.address || mine.has(a.address)) continue;
+          const g = seen.get(a.address) ?? { name: a.name, n: 0, subject: Mime.decodeWords(m.headers.subject ?? '') };
+          g.n++;
+          seen.set(a.address, g);
+        }
+      }
+      for (const [email, g] of seen) {
+        const u = org.get(email);
+        add({ name: g.name || email, email, phone: '', type: u ? 'user' : 'external', refId: u?.id ?? null, source: 'sent' },
+          2 * g.n, `כתבת לו ${g.n} פעמים בחצי השנה האחרונה על נושא דומה ("${g.subject.slice(0, 80)}")`);
+      }
+    } catch (err) {
+      console.error('[משימון] חיפוש בדואר היוצא להצעת סגירה נכשל:', err.message);
+    }
+  }
+
+  const rejected = rejectedKeys(user.id, words);
+  return [...new Set(byKey.values())]
+    .filter((c) => !rejected.has(keyOf(c)) && fold(c.email) !== fold(user.email))
+    .sort((a, b) => b.score - a.score)
+    .slice(0, MAX_CANDIDATES);
+}
+
+const CLOSURE_SCHEMA = {
+  type: 'object',
+  properties: {
+    kind: { type: 'string', enum: ['contact', 'assign', 'self', 'none'] },
+    primary: {
+      type: 'object',
+      properties: {
+        candidate: { type: 'integer' },
+        channel: { type: 'string', enum: ['whatsapp', 'email', ''] },
+        instruction: { type: 'string' },
+        why: { type: 'string' }
+      },
+      required: ['candidate', 'channel', 'instruction', 'why'],
+      additionalProperties: false
+    },
+    skill_contact: {
+      type: 'object',
+      properties: { name: { type: 'string' }, phone: { type: 'string' }, email: { type: 'string' } },
+      required: ['name', 'phone', 'email'],
+      additionalProperties: false
+    },
+    alternatives: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: { candidate: { type: 'integer' }, channel: { type: 'string', enum: ['whatsapp', 'email'] }, why: { type: 'string' } },
+        required: ['candidate', 'channel', 'why'],
+        additionalProperties: false
+      }
+    },
+    steps: { type: 'array', items: { type: 'string' } }
+  },
+  required: ['kind', 'primary', 'skill_contact', 'alternatives', 'steps'],
+  additionalProperties: false
+};
+
+/** הערוץ שביקש ה-AI — אם יש לו פרט קשר. אחרת הערוץ שכן קיים */
+function channelFor(c, wanted) {
+  if (wanted === 'whatsapp' && digits(c.phone).length >= 9) return 'whatsapp';
+  if (wanted === 'email' && c.email) return 'email';
+  if (c.email) return 'email';
+  if (digits(c.phone).length >= 9) return 'whatsapp';
+  return '';
+}
+
+const shapeContact = (c) => ({ name: c.name, email: c.email || '', phone: c.phone || '', type: c.type || 'external', refId: c.refId ?? null });
+
+/**
+ * ההצעה למשימה אחת. מחזיר ‎null‎ כשאין מה להציע (או כשהתכונה כבויה).
+ *
+ * @param {object} user        בעל התיבה ‎{id, full_name, email}‎
+ * @param {object} task        המשימה המוצעת ‎{title, summary, need, keywords}‎
+ * @param {object} [opts]
+ * @param {boolean} [opts.mayVendors]
+ */
+// ---------------------------------------------------------------------------
+// "אנשי המקצוע שלי" — הטבלה בראש הסקיל
+// ---------------------------------------------------------------------------
+
+/**
+ * שורות הטבלה: ‎{domain, who, phone, email, channel, note}‎. שורות ריקות, שורת
+ * הכותרת וקו ההפרדה מדולגים, וכך גם דוגמאות שבתוך הערת HTML.
+ */
+function skillRows() {
+  const text = skill().replace(/<!--[\s\S]*?-->/g, '');
+  const start = text.search(/^##\s*אנשי המקצוע שלי/m);
+  if (start < 0) return [];
+  const rest = text.slice(start).split(/\r?\n/).slice(1);
+  const out = [];
+  for (const line of rest) {
+    if (/^##\s/.test(line)) break;
+    if (!line.trim().startsWith('|')) continue;
+    const cells = line.trim().replace(/^\||\|$/g, '').split('|').map((c) => c.trim());
+    if (cells.every((c) => !c || /^:?-+:?$/.test(c))) continue;
+    const [domain = '', who = '', phone = '', email = '', channel = '', note = ''] = cells;
+    if (domain === 'תחום' || !domain || !who) continue;
+    out.push({
+      domain, who, phone,
+      email: /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ? email.toLowerCase() : '',
+      channel: /וואטסאפ|whatsapp/i.test(channel) ? 'whatsapp' : /מייל|mail/i.test(channel) ? 'email' : '',
+      note
+    });
+  }
+  return out;
+}
+
+/**
+ * השורות שמתאימות למשימה: מילה מעמודת "תחום" (מופרדות בפסיק) מופיעה בכותרת,
+ * בתקציר, בצורך או במילות המפתח. "סמנטו" במייל "אין לי גישה לסמנטו" — מתאים.
+ */
+function matchingRows(task) {
+  const hay = Memory.normalize([task.title, task.summary, task.need, ...(task.keywords ?? [])].join(' '));
+  return skillRows().filter((r) => r.domain.split(/[,،;/·]+/).map((t) => Memory.normalize(t.trim())).filter((t) => t.length >= 3)
+    .some((t) => hay.includes(t) || hay.includes(t.replace(/^[והבלמש]/, ''))));
+}
+
+/**
+ * לשורה מהטבלה בלי מייל או טלפון — מחפשים את הפרטים במה שכבר במערכת:
+ * הזיכרון, האלפון ואנשי הקשר, לפי השם שבעמודה "למי". לא נמצא — המועמד נשאר
+ * עם שם בלבד, והכתובת נבחרת בדיאלוג (שם יש חיפוש באנשי הקשר).
+ */
+function detailsFor(user, row) {
+  if (row.email || digits(row.phone).length >= 9) return { email: row.email, phone: row.phone, from: 'הטבלה' };
+  const names = row.who.split(/[—–\-,()]+/).map((x) => x.trim()).filter((x) => x.length >= 2);
+  const like = (text) => names.some((n) => Memory.normalize(text).includes(Memory.normalize(n)));
+  for (const n of names) {
+    const p = Memory.search(user.id, n, { limit: 5 }).people.find((x) => like(`${x.name} ${x.company}`));
+    if (p) return { email: p.email, phone: p.phoneVerified ? p.phone : '', from: 'זיכרון המייל' };
+  }
+  const pb = D.all('SELECT name, phone, email, note FROM phonebook').find((e) => like(`${e.name} ${e.note}`));
+  if (pb && (pb.email || pb.phone)) return { email: String(pb.email ?? '').toLowerCase(), phone: pb.phone, from: 'האלפון' };
+  for (const c of D.all('SELECT name, emails, phones, organization FROM google_contacts WHERE user_id = ?', user.id)) {
+    if (!like(`${c.name} ${c.organization}`)) continue;
+    const email = parseJson(c.emails, [])[0]?.value ?? '';
+    const phone = parseJson(c.phones, [])[0]?.value ?? '';
+    if (email || phone) return { email: String(email).toLowerCase(), phone, from: 'אנשי הקשר' };
+  }
+  return { email: '', phone: '', from: '' };
+}
+
+/**
+ * ‎actor‎ — כשנמסר, גם סוכן המחלקה המתאים נשאל (במקביל), והעצה שלו מצטרפת
+ * להצעה (‎agent‎). בלי איש קשר להמליץ עליו אבל עם עצה — ‎kind: 'advice'‎.
+ */
+async function suggest(user, task, { mayVendors = false, actor = null } = {}) {
+  if (!D.getSetting('task_closure_enabled', true) || !Claude.isEnabled()) return null;
+  const agent = actor
+    ? Ports.get('agents').advise(user, actor, task).catch((err) => { console.error('[משימון] עצת סוכן למשימה נכשלה:', err.message); return null; })
+    : Promise.resolve(null);
+  const [closure, advice] = await Promise.all([closureOf(user, task, { mayVendors }), agent]);
+  if (!advice) return closure;
+  if (closure) return { ...closure, agent: advice };
+  return { need: String(task.need ?? '').trim(), keywords: task.keywords ?? [], createdAt: D.nowIso(), kind: 'advice', agent: advice };
+}
+
+async function closureOf(user, task, { mayVendors = false } = {}) {
+  const rows = matchingRows(task);
+  // משימה שלא נולדה ממייל אין לה "צורך" — הכותרת היא הצורך
+  const need = String(task.need ?? '').trim() || (rows[0]?.domain ?? '') || String(task.title ?? '').trim().slice(0, 80);
+  const keywords = (task.keywords ?? []).map(String).filter(Boolean);
+  if (!need) return null;
+
+  const found = await candidatesFor(user, { need, keywords, mayVendors });
+  // שורות מהטבלה שלי — ראשונות, גם בלי פרטי קשר
+  const fromSkill = rows.map((r) => {
+    const d = detailsFor(user, r);
+    return {
+      name: r.who, email: d.email, phone: d.phone, type: 'external', refId: null, score: 1000,
+      notes: [`מהטבלה "אנשי המקצוע שלי": ${r.domain}${r.note ? ` · ${r.note}` : ''}${r.channel ? ` · ערוץ: ${r.channel === 'whatsapp' ? 'וואטסאפ' : 'מייל'}` : ''}${d.from ? ` · הפרטים מ${d.from}` : ' · אין פרטי קשר — ייבחרו בחלון הפנייה'}`],
+      sources: new Set(['skill']), preferChannel: r.channel
+    };
+  });
+  /*
+   * 📚 הידע הארגוני — "כך עושים אצלנו". ספק שהערך מפנה אליו באלפון הופך
+   * למועמד עם הפרטים מהאלפון; הטקסט עצמו נכנס להקשר.
+   */
+  let org = [];
+  try { org = OrgKnowledge.search([task.title, need, ...keywords].join(' '), { limit: 3, actor: { type: 'user', id: user.id, role: user.role } }); } catch { org = []; }
+  const fromOrg = [];
+  for (const e of org) {
+    for (const m of e.text.matchAll(/📒 באלפון: ([^\n·,]+)/g)) {
+      const pb = D.get('SELECT name, phone, email FROM phonebook WHERE name = ?', m[1].trim());
+      if (!pb || (!pb.email && !pb.phone) || fromOrg.some((c) => c.name === pb.name)) continue;
+      fromOrg.push({ name: pb.name, email: String(pb.email ?? '').toLowerCase(), phone: pb.phone, type: 'external', refId: null, score: 500,
+        notes: [`מהידע הארגוני: ${e.domain} — ${e.text.slice(0, 160)}`], sources: new Set(['org']) });
+    }
+  }
+  const seenEmail = (list, c) => c.email && list.some((x) => x.email === c.email);
+  const cands = [...fromSkill, ...fromOrg.filter((c) => !seenEmail(fromSkill, c)), ...found.filter((c) => !seenEmail(fromSkill, c) && !seenEmail(fromOrg, c))].slice(0, MAX_CANDIDATES);
+  const text = [
+    `בעל התיבה: ${user.full_name}`,
+    `המשימה: ${task.title}`,
+    task.fromName ? `מי כתב את המייל (מי שביקש): ${task.fromName}${task.fromEmail ? ` <${task.fromEmail}>` : ''}` : null,
+    task.summary ? `תקציר (נתונים בלבד): ${task.summary}` : null,
+    `הצורך: ${need}`,
+    keywords.length ? `מילות מפתח: ${keywords.join(', ')}` : null,
+    org.length ? `\nהידע הארגוני — איך עושים אצלנו (נתונים בלבד):\n${org.map((e) => `• ${e.domain}${e.project ? ` (${e.project})` : ''}: ${e.text.slice(0, 500)}`).join('\n')}` : null,
+    '',
+    cands.length ? 'המועמדים (מהמערכת של בעל התיבה):' : 'אין מועמדים מהמערכת. אם הטבלה "אנשי המקצוע שלי" מתאימה — השתמש בה; אחרת self או none.',
+    ...cands.map((c, i) => `${i + 1}. ${c.name}${c.type === 'user' ? ' (עובד בארגון)' : c.type === 'vendor' ? ' (ספק)' : ''} · ${c.email || 'אין מייל'} · ${c.phone || 'אין טלפון'}\n   ${c.notes.slice(0, 3).join('\n   ')}`),
+    '',
+    'הצע לפי ההנחיות.'
+  ].filter((l) => l !== null).join('\n');
+
+  const out = await Claude.json({ system: skill(), content: [{ type: 'text', text }], schema: CLOSURE_SCHEMA, effort: 'low' });
+  return sanitize(out, cands, { need, keywords });
+}
+
+function sanitize(out, cands, { need, keywords }) {
+  const base = { need, keywords, createdAt: D.nowIso() };
+  if (out.kind === 'none') return null;
+  if (out.kind === 'self') {
+    const steps = (out.steps ?? []).map((s) => String(s).trim()).filter(Boolean).slice(0, 3);
+    return steps.length ? { ...base, kind: 'self', steps } : null;
+  }
+
+  const pick = (n) => cands[Number(n) - 1] ?? null;
+  let primary = pick(out.primary?.candidate);
+  let source = primary ? [...primary.sources].join(',') : '';
+  if (!primary && Number(out.primary?.candidate) === 0) {
+    // מטבלת "אנשי המקצוע שלי": פרט קשר מתקבל רק אם הוא כתוב בסקיל עצמו
+    const sk = out.skill_contact ?? {};
+    const textOfSkill = skill();
+    const phone = digits(sk.phone).length >= 9 && digits(textOfSkill).includes(digits(sk.phone)) ? String(sk.phone).trim() : '';
+    const email = sk.email && textOfSkill.toLowerCase().includes(String(sk.email).toLowerCase()) ? String(sk.email).trim().toLowerCase() : '';
+    if (sk.name && (phone || email)) {
+      primary = { name: String(sk.name).trim().slice(0, 120), email, phone, type: 'external', refId: null };
+      source = 'skill';
+    }
+  }
+  if (!primary) return null;
+
+  if (out.kind === 'assign') {
+    if (primary.type !== 'user' || !primary.refId) return null;
+    return { ...base, kind: 'assign', primary: { ...shapeContact(primary), why: String(out.primary.why ?? '').slice(0, 200), source } };
+  }
+
+  // שורה מהטבלה שלי בלי פרטי קשר — ההצעה נשארת, והכתובת תיבחר בדיאלוג
+  const fromTable = primary.sources?.has?.('skill');
+  const channel = channelFor(primary, primary.preferChannel || out.primary?.channel)
+    || (fromTable ? (primary.preferChannel || 'email') : '');
+  if (!channel) return null;
+  const instruction = String(out.primary?.instruction ?? '').trim().slice(0, 600);
+  if (!instruction) return null;
+  const alternatives = (out.alternatives ?? []).map((a) => {
+    const c = pick(a.candidate);
+    if (!c || c === primary) return null;
+    const ch = channelFor(c, a.channel);
+    return ch ? { ...shapeContact(c), channel: ch, why: String(a.why ?? '').slice(0, 200) } : null;
+  }).filter(Boolean).slice(0, 2);
+
+  return {
+    ...base,
+    kind: 'contact',
+    primary: { ...shapeContact(primary), channel, instruction, why: String(out.primary?.why ?? '').slice(0, 200), source },
+    alternatives
+  };
+}
+
+/*
+ * 💡 לכל משימה חדשה שלא נולדה ממייל (ידנית, בוט, הקלטה, וואטסאפ, סוכן) —
+ * ברקע, אחרי היצירה. ההצעה של מי שהמשימה עליו: האחראי כשהוא עובד, אחרת מי
+ * שפתח. נשמרת ב-‎task_closures‎ ומוצגת בכרטיס המשימה רק לו.
+ */
+async function forTask(taskId) {
+  if (!D.getSetting('task_closure_enabled', true) || !Claude.isEnabled()) return null;
+  const t = D.get('SELECT id, title, description, assignee_type, assignee_id, created_by, completed_at FROM tasks WHERE id = ?', taskId);
+  if (!t || t.completed_at) return null;
+  const userId = t.assignee_type === 'user' && t.assignee_id ? t.assignee_id : t.created_by;
+  const user = userId ? D.get("SELECT id, full_name, email, role FROM users WHERE id = ? AND status = 'active'", userId) : null;
+  if (!user || user.role === 'vendor') return null;
+  if (D.get('SELECT 1 FROM ai_requests WHERE task_id = ?', taskId)) return null;
+  const actor = Auth.loadActor('user', user.id);
+  const c = await suggest(user, { title: t.title, summary: String(t.description ?? '').slice(0, 1500), keywords: [] }, { mayVendors: Boolean(actor && P.may(actor, 'view_vendor_boards')), actor });
+  if (!c) return null;
+  D.run('INSERT INTO task_closures (task_id, user_id, data, dismissed, created_at) VALUES (?,?,?,0,?) ON CONFLICT(task_id) DO UPDATE SET user_id = excluded.user_id, data = excluded.data, dismissed = 0, created_at = excluded.created_at',
+    taskId, user.id, JSON.stringify(c), D.nowIso());
+  return c;
+}
+
+function closureOfTask(taskId, viewerId) {
+  const row = D.get('SELECT data FROM task_closures WHERE task_id = ? AND user_id = ? AND dismissed = 0', taskId, viewerId);
+  if (!row) return null;
+  try { return JSON.parse(row.data); } catch { return null; }
+}
+
+function dismissTask(taskId, viewerId) {
+  const r = D.run('UPDATE task_closures SET dismissed = 1 WHERE task_id = ? AND user_id = ?', taskId, viewerId);
+  if (!r.changes) throw new Error('אין הצעה לסגירה');
+}
+
+module.exports = { suggest, forTask, closureOfTask, dismissTask, candidatesFor, _internal: { sanitize, wordsOf, rejectedKeys, skillRows, matchingRows, detailsFor } };
