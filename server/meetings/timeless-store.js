@@ -421,7 +421,11 @@ async function handleWebhook(rawBody, signature) {
   if (!verifySignature(rawBody, signature)) return { ok: false, status: 401 };
   let body = {};
   try { body = JSON.parse(String(rawBody)); } catch { return { ok: false, status: 400 }; }
-  const ids = [...new Set(JSON.stringify(body).match(/mtg_[\w-]{1,80}/g) ?? [])].slice(0, 3);
+  const raw = JSON.stringify(body);
+  // גם הקלטה ששלחו לבוט והועלתה — המזהה שלה לא בהכרח ‎mtg_…‎ (באג 18.11.26)
+  const uploads = D.all("SELECT timeless_id FROM meeting_audio WHERE status = 'timeless' AND timeless_id IS NOT NULL")
+    .map((r) => String(r.timeless_id)).filter((id) => id.length >= 6 && raw.includes(id));
+  const ids = [...new Set([...(raw.match(/mtg_[\w-]{1,80}/g) ?? []), ...uploads])].slice(0, 3);
   for (const id of ids) {
     await Timeless.background(() => syncMeeting(id)).catch((err) => console.error('[משימון] Timeless webhook — משיכת פגישה נכשלה:', err.message));
   }

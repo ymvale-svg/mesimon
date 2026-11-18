@@ -135,16 +135,18 @@ test('התמליל והסיכום מוכנים ב-Timeless — ממשיכים: �
   const { audioId, deps, speech, tasks, files, me } = setup(t, 25 * 60);
   t.mock.method(Timeless.org, 'upload', async () => `mtg_up_ready${audioId}`);
   await MeetingAudio.processAudio(audioId, deps);
-  // כל פנייה ל-Timeless אחרי ההעלאה — נכשלת בבדיקה: מחכים רק לשמירה המקומית (webhook / הסבב הארגוני)
-  const net = t.mock.method(globalThis, 'fetch', async () => { throw new Error('פנייה ל-Timeless'); });
   const pull = t.mock.method(Store, 'syncMeeting', async () => null);
+  const mine = () => pull.mock.calls.filter((c) => c.arguments[0] === `mtg_up_ready${audioId}`).length;
 
-  // עוד לא מוכן — לא ממשיכים, ולא שואלים את Timeless
+  // עוד לא מוכן — לא ממשיכים. באג 18.11.26: ההקלטה לא הגיעה לשמירה המקומית (ה-webhook והסבב לא הביאו אותה),
+  // ולכן שואלים עליה את Timeless ישירות — פעם אחת, ושוב רק אחרי רבע שעה
   let ready = await MeetingAudio.timelessReady();
   assert.ok(!ready.some((r) => r.id === audioId));
+  assert.equal(mine(), 1);
   await MeetingAudio.timelessReady();
-  assert.equal(pull.mock.callCount(), 0);
-  assert.equal(net.mock.callCount(), 0);
+  assert.equal(mine(), 1, 'לא שוב מיד');
+  await MeetingAudio.timelessReady(Date.now() + 16 * 60000);
+  assert.equal(mine(), 2, 'אחרי רבע שעה — שוב');
 
   storeMeeting(`mtg_up_ready${audioId}`);
   ready = await MeetingAudio.timelessReady();
@@ -204,4 +206,37 @@ test('פגישת Timeless שהיא הקלטה מוואטסאפ — בלי "אי�
   D.run("UPDATE meeting_audio SET timeless_id = ? WHERE id = ?", id, audioId);
   const ids = Followup._internal.timelessCandidates(Date.now()).map((c) => c.ref);
   assert.ok(!ids.includes(id));
+});
+
+test('"תבדוק" על הקלטה שמחכה — בודקים עכשיו ב-Timeless (באג 18.11.26: הבוט ענה "אין לי דרך לבדוק")', async (t) => {
+  const { audioId, me } = setup(t, 25 * 60);
+  const id = `mtg_check${audioId}`;
+  D.run("UPDATE meeting_audio SET status = 'timeless', timeless_id = ?, timeless_at = ? WHERE id = ?", id, D.nowIso(), audioId);
+  assert.ok(MeetingAudio.pendingTimeless(me.id).some((r) => r.id === audioId));
+  // Timeless עוד מעבד
+  t.mock.method(Store, 'syncMeeting', async (mid) => { Store._internal.upsert({ id: mid, title: 'פגישת ספקים', status: 'processing', start_time: new Date().toISOString(), end_time: new Date().toISOString(), host: { email: me.email }, participants: [] }); return null; });
+  let r = await MeetingAudio.checkTimelessNow(me.id);
+  assert.deepEqual(r.ready, []);
+  assert.equal(r.waiting[0].status, 'processing');
+  // מוכן — הסיכום והתמליל נשמרו
+  Store.syncMeeting.mock.mockImplementation(async (mid) => { storeMeeting(mid); return null; });
+  r = await MeetingAudio.checkTimelessNow(me.id);
+  assert.deepEqual(r.ready, [audioId]);
+});
+
+test('webhook על הקלטה שהועלתה — גם כשהמזהה שלה אינו mtg_…', async (t) => {
+  const { audioId } = setup(t, 25 * 60);
+  const id = `upl-${audioId}-abcdef`;
+  D.run("UPDATE meeting_audio SET status = 'timeless', timeless_id = ? WHERE id = ?", id, audioId);
+  const synced = [];
+  process.env.TIMELESS_WEBHOOK_SECRET = 'whsec-test';
+  t.after(() => { delete process.env.TIMELESS_WEBHOOK_SECRET; });
+  t.mock.method(Timeless, 'background', async (fn) => fn());
+  // ‎handleWebhook‎ קורא ל-‎syncMeeting‎ מתוך המודול — בודקים דרך הפנייה ל-Timeless
+  t.mock.method(Timeless.org, 'meeting', async (_tok, mid) => { synced.push(mid); return null; });
+  const raw = Buffer.from(JSON.stringify({ event: 'meeting.initial_summary_ready', data: { meeting_id: id } }));
+  const sig = `sha256=${require('node:crypto').createHmac('sha256', 'whsec-test').update(raw).digest('hex')}`;
+  const out = await Store.handleWebhook(raw, sig);
+  assert.equal(out.meetings, 1);
+  assert.deepEqual(synced, [id]);
 });
