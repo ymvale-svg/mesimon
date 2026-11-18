@@ -135,16 +135,16 @@ test('התמליל והסיכום מוכנים ב-Timeless — ממשיכים: �
   const { audioId, deps, speech, tasks, files, me } = setup(t, 25 * 60);
   t.mock.method(Timeless.org, 'upload', async () => `mtg_up_ready${audioId}`);
   await MeetingAudio.processAudio(audioId, deps);
+  // כל פנייה ל-Timeless אחרי ההעלאה — נכשלת בבדיקה: מחכים רק לשמירה המקומית (webhook / הסבב הארגוני)
+  const net = t.mock.method(globalThis, 'fetch', async () => { throw new Error('פנייה ל-Timeless'); });
   const pull = t.mock.method(Store, 'syncMeeting', async () => null);
 
-  // עוד לא מוכן — לא ממשיכים (ושואלים את Timeless פעם אחת)
+  // עוד לא מוכן — לא ממשיכים, ולא שואלים את Timeless
   let ready = await MeetingAudio.timelessReady();
   assert.ok(!ready.some((r) => r.id === audioId));
-  const mine = () => pull.mock.calls.filter((c) => c.arguments[0] === `mtg_up_ready${audioId}`).length;
-  assert.equal(mine(), 1);
-  // ושוב מיד — לא שואלים שוב (פעם ב-10 דקות)
   await MeetingAudio.timelessReady();
-  assert.equal(mine(), 1);
+  assert.equal(pull.mock.callCount(), 0);
+  assert.equal(net.mock.callCount(), 0);
 
   storeMeeting(`mtg_up_ready${audioId}`);
   ready = await MeetingAudio.timelessReady();

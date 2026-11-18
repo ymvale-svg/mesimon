@@ -47,7 +47,6 @@ const TZ = 'Asia/Jerusalem';
 const CHUNK_BYTES = 6 * 1024 * 1024;   // מתחת למגבלה של RunPod (7MB) ושל Google (10MB)
 // וגם לפי משך: OpenAI עד 1400 שניות, ו-RunPod צריך לסיים תוך 90 שניות (באג 18.11.26: 45 דקות ב-‎5MB‎ נשלחו שלמות)
 const CHUNK_SEC = 600;
-const TL_PULL_MS = 10 * MIN;            // הקלטה שהועלתה ל-Timeless: כל כמה זמן לשאול אם התמליל מוכן (כשה-webhook לא הודיע)
 const TL_SUMMARY_WAIT_MS = 90 * MIN;   // התמליל מוכן והסיכום של Timeless עוד לא — עד כמה מחכים לו
 const TL_GIVE_UP_MS = 6 * HOUR;        // אין תמליל מ-Timeless — התמלול שלנו
 const ARM_MS = 15 * MIN;               // "הקלטת פגישה" — ההודעה הקולית הבאה בתוך רבע שעה
@@ -592,21 +591,15 @@ async function toTimeless(row, meeting) {
 
 /**
  * הקלטות שהועלו ל-Timeless ומוכנות להמשך: יש תמליל, והסיכום של Timeless מוכן (או שחיכינו לו מספיק).
- * כשה-webhook לא הודיע — שואלים את Timeless על הפגישה, פעם ב-‎TL_PULL_MS‎. אחרי ‎TL_GIVE_UP_MS‎ — התמלול שלנו.
+ * רק מהשמירה המקומית — בלי לפנות ל-Timeless: הפגישה נמשכת פעם אחת, כמו כל פגישה (ה-webhook, והסבב הארגוני
+ * של ‎timeless-store.js‎ כרשת ביטחון). אחרי ‎TL_GIVE_UP_MS‎ בלי תמליל — התמלול שלנו.
  * @returns {Promise<Array<{ id: number, user_id: number, fallback: boolean }>>}
  */
-const lastPull = new Map(); // ‎audioId‎ ← מתי שאלנו את Timeless
 async function timelessReady(now = Date.now()) {
   const out = [];
   for (const r of D.all("SELECT id, user_id, timeless_id, timeless_at FROM meeting_audio WHERE status = 'timeless' AND timeless_id IS NOT NULL")) {
     const age = now - new Date(r.timeless_at).getTime();
-    let st = TimelessStore.stored(r.timeless_id);
-    const waiting = !st || st.status !== 'completed' || !st.transcript?.segments?.length || (!st.summary && age < TL_SUMMARY_WAIT_MS);
-    if (waiting && now - (lastPull.get(r.id) ?? 0) >= TL_PULL_MS) {
-      lastPull.set(r.id, now);
-      await Timeless.background(() => TimelessStore.syncMeeting(r.timeless_id)).catch((err) => console.error('[משימון] Timeless — הקלטה שהועלתה:', err.message));
-      st = TimelessStore.stored(r.timeless_id);
-    }
+    const st = TimelessStore.stored(r.timeless_id);
     const hasText = st?.status === 'completed' && st.transcript?.segments?.length > 0;
     if (hasText && (st.summary || age >= TL_SUMMARY_WAIT_MS)) out.push({ id: r.id, user_id: r.user_id, fallback: false });
     else if (age >= TL_GIVE_UP_MS) out.push({ id: r.id, user_id: r.user_id, fallback: true });
@@ -618,7 +611,6 @@ async function timelessReady(now = Date.now()) {
 async function finishFromTimeless(audioId, deps) {
   const row = D.get("SELECT * FROM meeting_audio WHERE id = ? AND status = 'timeless'", audioId);
   if (!row) return null;
-  lastPull.delete(audioId);
   D.run("UPDATE meeting_audio SET status = 'transcribing' WHERE id = ?", audioId);
   const st = TimelessStore.stored(row.timeless_id);
   const text = st?.transcript?.segments?.length ? TimelessStore.transcriptText(st.transcript, 200000) : '';
@@ -782,5 +774,5 @@ function prune() {
 module.exports = {
   arm, isAudioFile, isMeetingVoice, receive, resolvePick, processAudio, timelessReady, finishFromTimeless, openTasks, prune, candidates, BTN,
   parseReassign, reassign, nextQuestion, nextButtons, inboxLine, suggestFor,
-  _internal: { splitOgg, oggCrc, transcribeFile, CHUNK_SEC, durationSec, isLong, lastPull, peopleFromText, ownerOf, digestText, tasksText, extOf, armed, personFor }
+  _internal: { splitOgg, oggCrc, transcribeFile, CHUNK_SEC, durationSec, isLong, peopleFromText, ownerOf, digestText, tasksText, extOf, armed, personFor }
 };
