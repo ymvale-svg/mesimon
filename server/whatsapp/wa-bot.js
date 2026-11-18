@@ -974,6 +974,12 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
         return out(draftText(draft, user), { draft, awaiting: true },
           { action: 'create_task', status: draft.warnings.length ? 'denied' : 'ok', result: `טיוטה: ${draft.title}${draft.warnings.length ? ` · ${draft.warnings.join(' · ')}` : ''}` });
       }
+      // "לפתוח בלי פרויקט?" — שאלת כן/לא על טיוטה שלמה: "כן" פותח אותה, ולא מציג אותה שוב (באג 18.11.26)
+      if (u.draft.title && OPEN_ASK.test(u.reply ?? '')) {
+        const draft = checkDraft(actor, u.draft);
+        return out(u.reply, { draft, awaiting: true },
+          { action: 'create_task', status: 'unclear', result: `שאלה לפני פתיחה: ${draft.title}` });
+      }
       return out(u.reply || 'מה לכתוב בכותרת המשימה?', { draft: u.draft.title ? u.draft : null },
         { action: 'create_task', status: 'unclear', result: 'חסרים פרטים' });
   }
@@ -981,6 +987,9 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
 
 
 const CANCEL_ALL = /^ביטול\s+(?:הכו?ל|כל)/;
+
+/** שאלת ה-AI היא "לפתוח (את המשימה) …?" — כן/לא על הטיוטה עצמה */
+const OPEN_ASK = /(?:^|[\s,.])ל?פתוח(?=[\s?])[^?]*\?\s*$/;
 
 /** האם מחכים לתשובה של העובד — אז הבקשה הבאה בתור מחכה */
 const isPending = (next) => Boolean(next.awaiting || ['email_pick', 'reply_ask'].includes(next.draft?.kind));
