@@ -74,6 +74,28 @@ async function timelessAudioTick(now = Date.now()) {
   return n;
 }
 
+/*
+ * "תבדוק" / "מה עם הסיכום?" — כשיש לעובד הקלטה שמחכה ל-Timeless: בודקים עכשיו. באג 18.11.26: הבוט ענה (מה-AI)
+ * "אין לי דרך לבדוק את הסטטוס", והסיכום כבר היה מוכן ב-Timeless.
+ */
+const STATUS_ASK = /^(?:נו|תבדוק|תבדקי|בדוק|בדקי|תבדוק שוב|אפשר לבדוק|מה (?:עם|קורה עם|עם ה?|המצב (?:של|עם)) ?ה?(?:סיכום|הקלטה|תמליל)|ה?(?:סיכום|תמליל) (?:מוכן|הגיע)|יש (?:כבר )?(?:סיכום|תמליל)|(?:עדיין|עוד) לא (?:הגיע|קיבלתי)|למה (?:עוד )?לא (?:הגיע|קיבלתי)(?: את)? ?ה?(?:סיכום)?)(?: לי)?$/;
+
+/** ‎null‎ — לא בקשה כזו, או שאין הקלטה שמחכה. אחרת — הטקסט לעובד (ומה שמוכן נשלח מיד אחריו) */
+async function timelessAudioCheck(actor, t) {
+  const n = WaUi.normalize(t).replace(/[?!.…]+$/g, '').trim();
+  if (!STATUS_ASK.test(n) || !MeetingAudio.pendingTimeless(actor.id).length) return null;
+  const r = await MeetingAudio.checkTimelessNow(actor.id);
+  for (const id of r.ready) {
+    setImmediate(() => deliverMeetingAudio(actor, id, null, () => MeetingAudio.finishFromTimeless(id, meetingAudioDeps(actor))));
+  }
+  const lines = r.ready.length ? ['✅ בדקתי ב-Timeless — הסיכום מוכן. שולח לך אותו עכשיו.'] : [];
+  for (const w of r.waiting) {
+    const where = w.status && w.status !== 'completed' ? 'עדיין בעיבוד' : w.transcript ? 'התמליל מוכן, הסיכום עוד לא' : !w.status ? 'עוד לא מופיעה שם' : 'עדיין בעיבוד';
+    lines.push(`⏳ *${w.title}* — בדקתי עכשיו ב-Timeless: ${where}. אבדוק שוב בעצמי כל רבע שעה, ואשלח ברגע שמוכן.`);
+  }
+  return lines.join('\n');
+}
+
 /** מריץ את העיבוד ושולח לעובד את התוצאה (או הודעת שגיאה) */
 async function deliverMeetingAudio(actor, audioId, ref, run) {
   const u = D.get('SELECT id, full_name, phone FROM users WHERE id = ?', actor.id);
@@ -280,5 +302,5 @@ async function meetingAudioTurn(user, actor, t, state, { dry, out, converse }) {
 }
 
 module.exports = {
-  flowReply, logoIntent, meetingAudioAllowed, meetingAudioTurn, meetingFollowups, processMeetingAudio, receiveMeetingAudio, timelessAudioTick, TRANSLATE
+  flowReply, logoIntent, meetingAudioAllowed, meetingAudioTurn, meetingFollowups, processMeetingAudio, receiveMeetingAudio, timelessAudioCheck, timelessAudioTick, TRANSLATE
 };
