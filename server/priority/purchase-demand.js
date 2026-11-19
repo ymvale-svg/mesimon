@@ -786,8 +786,8 @@ function lineOf(it) {
 }
 
 /**
- * צירופים חלופיים למק"ט שתת הפרק שבכרטיס שלו נדחה (פרויקט בבקרת תקציב): מהצירופים שכבר נקלטו בפרויקט — אותו משאב,
- * אחר כך אותו תת פרק, הצירוף שה-AI בחר; ובסוף הכללי של החברה. בלי הצירוף שכבר נדחה.
+ * צירופים חלופיים למק"ט שתת הפרק שבכרטיס שלו נדחה (פרויקט בבקרת תקציב): עד 2 מהצירופים שכבר נקלטו בפרויקט — אותו משאב,
+ * אחר כך אותו תת פרק, הצירוף שה-AI בחר; ותמיד בסוף הכללי של החברה (נבדק ב-a160226: מק"ט על 101/98-10 נקלט). בלי הצירוף שנדחה.
  */
 function fallbackPairs(it, projectPairs, gen) {
   const { chapter, topic } = it.part;
@@ -796,8 +796,10 @@ function fallbackPairs(it, projectPairs, gen) {
   projectPairs.filter((p) => p.topic === topic).forEach(add);
   projectPairs.filter((p) => p.chapter === chapter).forEach(add);
   if (it.general && projectPairs.some((p) => p.chapter === it.general.chapter && p.topic === it.general.topic)) add(it.general);
-  add(gen);
-  return out.slice(0, 3);
+  // צירוף מההיסטוריה אינו בהכרח במהדורה העדכנית (98/85-01 נקלט 35 פעם ב-PR26000001 ונדחה ב-PD26000064) — הכללי תמיד בסוף
+  const pick = out.filter((p) => !(p.chapter === gen.chapter && p.topic === gen.topic)).slice(0, 2);
+  if (gen?.chapter && gen?.topic && !(gen.chapter === chapter && gen.topic === topic)) pick.push(gen);
+  return pick;
 }
 
 /**

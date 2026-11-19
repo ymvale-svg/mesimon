@@ -828,3 +828,27 @@ test('מק"ט שנדחה גם על הצירופים של הפרויקט — 000,
   assert.deepEqual(tried, ['20|20-10', '101|98-10'], 'מהכרטיס, ואז הכללי של החברה');
   assert.equal(pr.wrote('addDemandLine').filter((w) => w.args[2].part === '000').length, 2);
 });
+
+test('צירופים מההיסטוריה של הפרויקט שכבר לא במהדורה — אחרי 2 ניסיונות, תמיד הכללי עם אותו מק"ט (PD26000064)', async (t) => {
+  H.companies(t, 'test11');
+  const u = H.worker();
+  const old = [{ chapter: '98', topic: '20-10' }, { chapter: '97', topic: '20-10' }, { chapter: '20', topic: '20-20' }, { chapter: '20', topic: '20-30' }];
+  const pr = H.Fakes.priority(t, {
+    projects: async () => PROJECTS, recentDemandProjects: async () => [], demandCodes: async () => CODES, warehouses: async () => WAREHOUSES,
+    projectWarehouses: async () => [WAREHOUSES[0]], warehouseOf: async () => 'Main',
+    findPartExact: async (c, des) => (des === 'שק מלט' ? CEMENT : null),
+    searchParts: async (c, des) => (/בטון/.test(des) ? [B30, B40].map((p) => ({ p, score: 1 })) : []),
+    budgetPairs: async () => [{ chapter: '20', chapterDes: 'שלד', topic: '20-10', topicDes: 'בטון' }],
+    generalCoding: async () => ({ chapter: '101', chapterDes: 'כללי', topic: '98-10', topicDes: 'כללי' }),
+    partByCode: async () => null, priorityUsers: async () => [], readDemand: async (c, prdno) => ({ PRDNO: prdno }),
+    projectPairs: async () => old.map((p) => ({ ...p, n: 30 }))
+  }, { writes: { createDemand: async () => 'PRD26000007', addDemandLine: notInBudget(['101|98-10']) } });
+  ai(t);
+  const { say } = H.chat(t, u);
+  await toItems(say);
+  await toReview(say);
+  const r = await say(BTN.done);
+  assert.doesNotMatch(r.text, /מק"ט כללי 000/);
+  const tried = pr.wrote('addDemandLine').filter((w) => w.args[2].part === 'M-1').map((w) => `${w.args[2].chapter}|${w.args[2].topic}`);
+  assert.deepEqual(tried, ['20|20-10', '98|20-10', '97|20-10', '101|98-10']);
+});
