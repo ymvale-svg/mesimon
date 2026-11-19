@@ -785,58 +785,30 @@ function lineOf(it) {
   };
 }
 
-/**
- * צירופים חלופיים למק"ט שתת הפרק שבכרטיס שלו נדחה (פרויקט בבקרת תקציב): עד 2 מהצירופים שכבר נקלטו בפרויקט — אותו משאב,
- * אחר כך אותו תת פרק, הצירוף שה-AI בחר; ותמיד בסוף הכללי של החברה (נבדק ב-a160226: מק"ט על 101/98-10 נקלט). בלי הצירוף שנדחה.
- */
-function fallbackPairs(it, projectPairs, gen) {
-  const { chapter, topic } = it.part;
-  const out = [];
-  const add = (p) => { if (p?.chapter && p?.topic && !(p.chapter === chapter && p.topic === topic) && !out.some((x) => x.chapter === p.chapter && x.topic === p.topic)) out.push(p); };
-  projectPairs.filter((p) => p.topic === topic).forEach(add);
-  projectPairs.filter((p) => p.chapter === chapter).forEach(add);
-  if (it.general && projectPairs.some((p) => p.chapter === it.general.chapter && p.topic === it.general.topic)) add(it.general);
-  // צירוף מההיסטוריה אינו בהכרח במהדורה העדכנית (98/85-01 נקלט 35 פעם ב-PR26000001 ונדחה ב-PD26000064) — הכללי תמיד בסוף
-  const pick = out.filter((p) => !(p.chapter === gen.chapter && p.topic === gen.topic)).slice(0, 2);
-  if (gen?.chapter && gen?.topic && !(gen.chapter === chapter && gen.topic === topic)) pick.push(gen);
-  return pick;
-}
+/** "01 עבודות עפר / 01-20 מצעים" — הקידוד של השורה, לעובד ולרכש */
+const codingText = (part) => `${part.chapter ?? ''}${part.chapterDes ? ` ${part.chapterDes}` : ''} / ${part.topic ?? ''}${part.topicDes ? ` ${part.topicDes}` : ''}`;
 
 /**
- * שורה לדרישה. מק"ט שנדחה על תת הפרק (הפרויקט לא מתוקצב בתת הפרק שבכרטיס — PD26000062) — אותו מק"ט שוב, על צירוף שמתאים
- * לפרויקט. נדחה בכל זאת — על מק"ט כללי 000 עם התיאור, על הקידוד הכללי של החברה. ‎false‎ — לא נקלטה
+ * שורה לדרישה — כמו שהיא: המק"ט, ותת הפרק והמשאב מכרטיס הפריט. נדחתה — לא נכתבת שוב על קידוד אחר ולא על 000
+ * (הוחלט 19.11.26, PD26000062): השורה מסומנת ‎failed‎, והדרישה נשארת טיוטא. ‎budget‎ — תת הפרק אינו בתקציב הפרויקט.
  */
-async function addLine(c, prdno, it, gen, s, problems) {
-  const { desc, whole, line } = lineOf(it);
+async function addLine(c, prdno, it, s, problems) {
+  const { line } = lineOf(it);
   try {
     await Priority.addDemandLine(c, prdno, line);
     return true;
   } catch (err) {
-    if (line.part !== '000' && Priority.isCodingError(err)) {
-      const pairs = await Priority.projectPairs(c, s.project?.code).catch(() => []);
-      for (const p of fallbackPairs(it, pairs, gen)) {
-        try {
-          await Priority.addDemandLine(c, prdno, { ...line, chapter: p.chapter, topic: p.topic });
-          it.part = { ...it.part, chapter: p.chapter, chapterDes: p.chapterDes ?? '', topic: p.topic, topicDes: p.topicDes ?? '' };
-          (s.notes ??= []).push(`שורה ${it.n} (${it.description}): ${line.part} נקלט על ${p.chapter}/${p.topic} — ${line.chapter}/${line.topic} מהכרטיס אינו בתקציב הפרויקט`);
-          problems.push(`שורה ${it.n}: ${line.part} — ${line.chapter}/${line.topic} נדחה (${err.message}), נקלט על ${p.chapter}/${p.topic}`);
-          return true;
-        } catch { /* הצירוף הבא */ }
-      }
-    }
-    try {
-      await Priority.addDemandLine(c, prdno, { part: '000', description: desc, qty: whole ? it.qty : 1, chapter: gen.chapter, topic: gen.topic });
-      if (line.part !== '000') it.droppedCode = line.part;
-      (s.notes ??= []).push(`שורה ${it.n} (${it.description}) נקלטה על מק"ט כללי 000, ${gen.chapter}/${gen.topic}${it.part.code !== '000' ? ` — ${it.part.code} נדחה` : ''}`);
-      problems.push(`שורה ${it.n}: ${line.part} נדחה (${err.message}), נקלטה על 000 ${gen.chapter}/${gen.topic}`);
-      return true;
-    } catch (err2) {
-      problems.push(`שורה ${it.n} (${it.description}) לא נקלטה: ${err.message} / 000: ${err2.message}`);
-      it.failed = true;
-      return false;
-    }
+    const budget = Priority.isCodingError(err);
+    it.failed = true;
+    it.rejected = { code: line.part, budget, reason: err.message, coding: codingText(it.part) };
+    problems.push(`שורה ${it.n} (${it.description}${line.part !== '000' ? `, ${line.part}` : ''}): ${budget ? `אין תקציב בפרויקט לתת פרק ${codingText(it.part)}` : 'לא נקלטה'} — ${err.message}`);
+    return false;
   }
 }
+
+/** לעובד: מה לא נקלט ולמה — "חצץ" (01-20-0001): אין תקציב בפרויקט לתת פרק 01 עבודות עפר / 01-20 מצעים */
+const failedText = (items) => items.map((x) => `• "${x.description}"${x.rejected?.code && x.rejected.code !== '000' ? ` (${x.rejected.code})` : ''}: ${x.rejected?.budget
+  ? `*אין תקציב בפרויקט* לתת פרק ${x.rejected.coding}` : 'פריוריטי לא קיבל את השורה'}`).join('\n');
 
 // ---------------------------------------------------------------------------
 // 🔁 תיקון דרישה שהוחזרה לבדיקה (‎pd-return.js‎): הדרישה מפריוריטי כרשימה לעריכה, ו"סיום" מעדכן את השורות
@@ -869,7 +841,6 @@ async function submitEdit(user, s) {
   const prdno = s.editOf;
   const problems = [];
   const changes = [];
-  const gen = await generalPair(s);
   const byK = new Map(s.items.filter((x) => x.kline).map((x) => [x.kline, x]));
   for (const o of s.orig) {
     const it = byK.get(o.kline);
@@ -884,22 +855,27 @@ async function submitEdit(user, s) {
       }
       // פריט אחר (או כמות שבורה) — השורה מוחלפת
       await Priority.deleteDemandLine(c, prdno, o.kline);
-      if (await addLine(c, prdno, it, gen, s, problems)) changes.push(`${o.description} — ${qtyText(o.qty)} ${o.unit} ← ${it.description} — ${qtyText(it.qty)} ${it.unit}`);
+      if (await addLine(c, prdno, it, s, problems)) changes.push(`${o.description} — ${qtyText(o.qty)} ${o.unit} ← ${it.description} — ${qtyText(it.qty)} ${it.unit}`);
     } catch (err) {
       problems.push(`שורה ${o.kline} (${o.description}): ${err.message}`);
       if (it) it.failed = true;
     }
   }
   for (const it of s.items.filter((x) => !x.kline)) {
-    if (await addLine(c, prdno, it, gen, s, problems)) changes.push(`נוסף: ${it.description} — ${qtyText(it.qty)} ${it.unit}`);
+    if (await addLine(c, prdno, it, s, problems)) changes.push(`נוסף: ${it.description} — ${qtyText(it.qty)} ${it.unit}`);
   }
   await Priority.appendDemandDialog(c, prdno, [`תוקנה ע"י ${user.full_name} | ${nowHe()}`, ...(changes.length ? changes : ['לא שונה דבר בשורות']).map((x) => `• ${x}`), ...(s.notes ?? [])])
     .catch((err) => problems.push(`דו-שיח פנימי: ${err.message}`));
-  if (s.items.some((x) => x.failed) || problems.some((p) => !/נקלטה על 000|דו-שיח/.test(p))) {
-    alertAdmins(user, s, `תיקון ${prdno} — לא הכל נשמר`, problems);
+  const failedEdit = s.items.filter((x) => x.failed);
+  if (failedEdit.length || problems.some((p) => !/דו-שיח/.test(p))) {
+    const buyer = failedEdit.length
+      ? await Parts.notifyBuyer(user, s, failedEdit.some((x) => x.rejected?.budget) ? `תיקון ${prdno} — אין תקציב בפרויקט` : `תיקון ${prdno} — לא הכל נשמר`, problems)
+      : (alertAdmins(user, s, `תיקון ${prdno} — לא הכל נשמר`, problems), null);
     clear(user.id, s);
     await Return.afterEdit(user, c, prdno, changes, false);
-    return { s: null, replies: [`⚠️ חלק מהתיקון של *${prdno}* לא נשמר בפריוריטי, ולכן היא עוד לא חזרה לאישור. מנהל המערכת קיבל פירוט.`], buttons: [], status: 'error', result: `תיקון ${prdno}: ${problems.join(' | ')}` };
+    return { s: null, replies: [[`⚠️ חלק מהתיקון של *${prdno}* לא נשמר בפריוריטי, ולכן היא עוד לא חזרה לאישור.`,
+      failedEdit.some((x) => x.rejected) ? failedText(failedEdit.filter((x) => x.rejected)) : null,
+      buyer ? `📧 *${buyer}* (רכש) קיבלה פירוט.` : 'מנהל המערכת קיבל פירוט.'].filter(Boolean).join('\n')], buttons: [], status: 'error', result: `תיקון ${prdno}: ${problems.join(' | ')}` };
   }
   const sent = await Return.resubmit(user, c, prdno);
   await Return.afterEdit(user, c, prdno, changes, sent.ok);
@@ -968,8 +944,7 @@ async function submit(user, s) {
   Prefs.rememberOpener(c, prdno, user.id);
   Chain.progress(user.id, 'demand', { stage: 'draft', docno: prdno, company: c, supplier: s.project?.des ?? '' });
   const problems = [];
-  const gen = await generalPair(s);
-  for (const it of s.items) await addLine(c, prdno, it, gen, s, problems);
+  for (const it of s.items) await addLine(c, prdno, it, s, problems);
   for (const f of s.files ?? []) {
     try { await Priority.attachDemand(c, prdno, { buf: fs.readFileSync(f.path), mime: f.mime, description: 'רשימת הפריטים מהבוט' }); } catch (err) { problems.push(`נספח: ${err.message}`); }
   }
@@ -987,9 +962,12 @@ async function submit(user, s) {
 
   const failed = s.items.filter((x) => x.failed);
   if (failed.length) {
-    alertAdmins(user, s, 'חלק מהשורות לא נקלטו', problems);
-    return reply(s, `⚠️ *דרישת רכש ${prdno}* נפתחה בפריוריטי כטיוטא, אבל ${failed.map((x) => `"${x.description}"`).join(', ')} לא ${failed.length === 1 ? 'נקלט' : 'נקלטו'}, ולכן היא עוד לא נשלחה לאישור. מנהל המערכת קיבל פירוט.`,
-      [], { s: null, status: 'error', result: `${prdno} טיוטא; שורות נכשלו` });
+    // לא יוצאת עם שורה חסרה, ולא על 000 — טיוטא; לעובד ולמנהלת הרכש בלבד (הוחלט 19.11.26)
+    const budget = failed.some((x) => x.rejected?.budget);
+    const buyer = await Parts.notifyBuyer(user, s, budget ? 'דרישת רכש — אין תקציב בפרויקט' : 'דרישת רכש — שורות לא נקלטו', problems);
+    return { s: null, replies: [[`⚠️ *דרישת רכש ${prdno}* נשארה *טיוטא* ולא נשלחה לאישור — ${failed.length === 1 ? 'פריט אחד לא נקלט' : `${failed.length} פריטים לא נקלטו`} בפריוריטי:`,
+      failedText(failed), '', buyer ? `📧 *${buyer}* (רכש) קיבלה פירוט.` : 'מנהל המערכת קיבל פירוט.', companyLine(c)].join('\n')],
+      buttons: [], status: 'error', result: `${prdno} טיוטא; ${problems.join(' | ')}` };
   }
   if (problems.length) alertAdmins(user, s, 'הערות בקליטה', problems);
 
@@ -1014,11 +992,8 @@ async function submit(user, s) {
   }
   clear(user.id, s);
   const held = (s.held ?? []).length;
-  // מק"ט שפריוריטי דחה גם על צירוף אחר — העובד ראה ✅ עם המק"ט, ולכן יודע שהשורה נקלטה על 000
-  const dropped = s.items.filter((x) => x.droppedCode);
   return { s: null, replies: [[`✅ *דרישת רכש ${prdno}* נפתחה ועברה *לאישור*.`, companyLine(c),
     `📁 ${s.project?.des ?? ''} · ${s.items.length} ${s.items.length === 1 ? 'פריט' : 'פריטים'} · 📅 ${ymdHe(s.date)}`, signerLine,
-    dropped.length ? `⚠️ פריוריטי לא קיבל את המק"ט של ${dropped.map((x) => `"${x.description}" (${x.droppedCode})`).join(', ')} בפרויקט הזה — ${dropped.length === 1 ? 'נקלט' : 'נקלטו'} על מק"ט כללי 000 עם התיאור. מנהל המערכת קיבל פירוט.` : null,
     held && s.sentTo ? `📧 ${held === 1 ? 'פריט אחד נשלח' : `${held} פריטים נשלחו`} ל*${s.sentTo}* לבניית מק"ט — כשייבנו תקבל הודעה כאן ובמייל, ואשאל אם לבנות מהם דרישה חדשה נוספת.` : null,
     held && !s.sentTo ? `🆕 ${held === 1 ? 'פריט אחד לא נשלח' : `${held} פריטים לא נשלחו`} (אין מק"ט) — מנהל המערכת קיבל את הרשימה.` : null].filter(Boolean).join('\n')], buttons: [], status: 'ok', result: `${prdno} — מחכה לאישור` };
 }

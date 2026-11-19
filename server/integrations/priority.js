@@ -486,33 +486,9 @@ async function lastSubchapter(company, supname) {
 }
 
 /**
- * צירופי תת פרק ומשאב שכבר נקלטו בדרישות של הפרויקט, הנפוץ קודם: ‎[{ chapter, chapterDes, topic, topicDes, n }]‎.
- * פרויקט בבקרת תקציב (‎CHECKCONV‎) מקבל רק תת פרק שבמהדורת הביצוע שלו ("מהדורות תכנון"), ומסכי התקציב סגורים ל-API —
- * ולכן מההיסטוריה: מק"ט שתת הפרק שבכרטיס שלו נדחה נקלט על צירוף שכבר עבר בפרויקט (PD26000062). נשמר לשעה.
+ * פריוריטי דחה את תת הפרק / המשאב של השורה — בפרויקט בבקרת תקציב (‎CHECKCONV‎) תת הפרק אינו במהדורת הביצוע שלו ("יש לבחור
+ * תת פרק מרשימת הבחירה"), או "יש לקשר תת פרק"
  */
-const projectPairsCache = new Map();
-async function projectPairs(company, project) {
-  if (!project) return [];
-  const key = `${company}|${project}`;
-  const hit = projectPairsCache.get(key);
-  if (hit && Date.now() - hit.at < 3600000) return hit.list;
-  const docs = rows(await call(company, 'GET', `PURDEMANDS?$filter=${enc(`PROJDOCNO eq '${q(project)}' and STATDES ne 'מבוטלת'`)}`
-    + '&$select=PRDNO&$orderby=CURDATE%20desc&$top=40'
-    + '&$expand=PRDITEMS_SUBFORM($select=BUD_SUBCHAPTERNAME,BUD_SUBCHAPTERDES,BUD_SUBTOPICNAME,BUD_SUBTOPICDES)'));
-  const m = new Map();
-  for (const l of docs.flatMap((d) => d.PRDITEMS_SUBFORM ?? [])) {
-    if (!l.BUD_SUBCHAPTERNAME || !l.BUD_SUBTOPICNAME) continue;
-    const k = `${l.BUD_SUBCHAPTERNAME}|${l.BUD_SUBTOPICNAME}`;
-    const e = m.get(k) ?? { chapter: l.BUD_SUBCHAPTERNAME, chapterDes: l.BUD_SUBCHAPTERDES ?? '', topic: l.BUD_SUBTOPICNAME, topicDes: l.BUD_SUBTOPICDES ?? '', n: 0 };
-    e.n += 1;
-    m.set(k, e);
-  }
-  const list = [...m.values()].sort((a, b) => b.n - a.n);
-  projectPairsCache.set(key, { at: Date.now(), list });
-  return list;
-}
-
-/** פריוריטי דחה את תת הפרק / המשאב של השורה ("יש לבחור תת פרק מרשימת הבחירה", "יש לקשר תת פרק") */
 const isCodingError = (err) => /תת פרק|משאב/.test(String(err?.message ?? ''));
 
 /**
@@ -1115,6 +1091,6 @@ module.exports = {
   GENERAL, NO_VAT_CODE, TAX_CODES, PAY_TERMS, DEFAULT_PAY, payTerm, payLabel, payFromText, dueDate, projectWarehouses, warehouses, warehouseExists, defaultWarehouse, supplierHistory, recentLines, partByCode, findPartsByText, searchParts, generalCoding, warehouseOf, findSuppliers, supplierByCode, findReceiptByBooknum, getOrder, openOrders, findPartExact, lastSubchapter, projects, matchProjects, readReceipt,
   finalOrders, orderForNotice, demandInitiator, demandForNotice, projectManager, priorityUser,
   readDialog, createReceipt, addOrderLine, addFreeLine, setLineQty, setLineDes, setHeader, attach, deleteAttachment, setDialog, finalizeReceipt, cancelReceipt, receiptStatus, deleteLines,
-  PD_TYPES, demandCodes, recentDemandProjects, createDemand, addDemandLine, setDemand, submitDemand, isNoApproversError, readDemand, waitingDemands, nextSigner, cancelDemand, setDemandDialog, appendDemandDialog, setDemandLine, deleteDemandLine, reopenDemand, REOPEN_STATUS, purchaseOrderOwners, attachDemand, priorityUsers, budgetPairs, projectPairs, isCodingError,
+  PD_TYPES, demandCodes, recentDemandProjects, createDemand, addDemandLine, setDemand, submitDemand, isNoApproversError, readDemand, waitingDemands, nextSigner, cancelDemand, setDemandDialog, appendDemandDialog, setDemandLine, deleteDemandLine, reopenDemand, REOPEN_STATUS, purchaseOrderOwners, attachDemand, priorityUsers, budgetPairs, isCodingError,
   _call: call
 };
