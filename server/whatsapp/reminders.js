@@ -38,7 +38,10 @@ const TO_ME = new RegExp(`(?:^|[\\s,])ש?(?:אתה\\s+|את\\s+)?${VERB}\\s+לי
 // "תזכור את מחר ב-8…" — רק כשיש מועד, אחרת זה "תזכור את זה" (זיכרון, לא תזכורת)
 const TO_ME_AT = new RegExp(`(?:^|[\\s,])${VERB}\\s+(?:את\\s+)?(?:מחר|היום|בעוד|בשעה|ב-?\\d|ביום|בבוקר|בערב|בצהריים|לפני)`);
 const SEND_ME = /(?:שלח|תשלח|שלחי|תשלחי)\s+לי\s+תזכורת/;
-const WANTS = { test: (t) => TO_ME.test(t) || TO_ME_AT.test(t) || SEND_ME.test(t) };
+// "לתזכר אותי ב-22.11…", "להזכיר לי מחר…", "תזכיר אותי…" (סקירה 18.11: נפתח כטיוטת משימה). רק "אותי" / "לי" —
+// "להזכיר לדני" הוא מה שהתזכורת תגיד, לא בקשה לתזכורת
+const ME_INF = new RegExp(`(?:^|[\\s,])(?:לתזכר|תתזכר|להזכיר|${VERB})\\s+(?:אותי|לי)${NOT_Q}(?=[\\s,.!]|$)`);
+const WANTS = { test: (t) => TO_ME.test(t) || TO_ME_AT.test(t) || SEND_ME.test(t) || ME_INF.test(t) };
 /** בקשת תזכורת (ולא הרשימה / ביטול) */
 const isRequest = (text) => { const t = WaUi.normalize(text); return !/\?\s*$/.test(t) && (TRIGGER.test(t) || WANTS.test(t)); };
 const LIST = /^(?:ה)?תזכורות(?:\s+שלי)?[?.!]*$/;
