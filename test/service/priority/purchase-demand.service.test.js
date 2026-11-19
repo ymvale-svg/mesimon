@@ -453,6 +453,7 @@ test('מק"טים לבנייה: "רק המזוהים" — מייל לרכש (ב�
 });
 
 test('מק"טים לבנייה: "לחכות לרכש" ← נבנה ← בבוט ובמייל "המק"טים החסרים נבנו… להמשיך?" ← כן ← כל הדרישה עם הכמויות והמק"ט ← "סיום"', async (t) => {
+  H.at(t);                                      // שעות העבודה — ההודעות לעובד יוצאות מיד
   H.companies(t, 'test11');
   const u = buyerWorker();
   const B77 = part('C-77', 'בטון מובא ב-30 לתקרות');
@@ -572,6 +573,7 @@ test('מק"טים לבנייה — זיהוי: רק מק"ט חדש (שלא הי�
 });
 
 test('מק"טים לבנייה: "רק המזוהים" ← נבנה ← "לבנות דרישה חדשה נוספת מהמק"טים שנבנו?" ← כן ← רק החסרים', async (t) => {
+  H.at(t);                                      // שעות העבודה — ההודעות לעובד יוצאות מיד
   H.companies(t, 'test11');
   const u = buyerWorker();
   const B77 = part('C-77', 'בטון מובא ב-30 לתקרות');
@@ -605,6 +607,7 @@ test('מק"טים לבנייה: "רק המזוהים" ← נבנה ← "לבנו
 });
 
 test('💬 מנהלת הרכש עונה "המק"ט כבר קיים" — העובד מקבל בבוט, ואם זה הפריט האחרון — "להמשיך בדרישה?"', async (t) => {
+  H.at(t);                                      // שעות העבודה — ההודעות לעובד יוצאות מיד
   H.companies(t, 'test11');
   const u = buyerWorker();
   const pr = priority(t, { partByCode: async (c, code) => (code === 'C-30' ? B30 : null) });
@@ -648,6 +651,7 @@ test('💬 מנהלת הרכש עונה "המק"ט כבר קיים" — העוב
 });
 
 test('💬 מנהלת הרכש — הערה בלבד: העובד מקבל אותה, והבקשה נשארת פתוחה', async (t) => {
+  H.at(t);                                      // שעות העבודה — ההודעות לעובד יוצאות מיד
   H.companies(t, 'test11');
   const u = buyerWorker();
   priority(t);
@@ -665,4 +669,25 @@ test('💬 מנהלת הרכש — הערה בלבד: העובד מקבל אות
   assert.equal(v.items[0].built, null);
   assert.match(wa.texts().join('\n'), /"איזה סוג בטון\? ב-30 או ב-40\?"/);
   assert.doesNotMatch(wa.texts().join('\n'), /להמשיך/);
+});
+
+test('💬 מנהלת הרכש עונה בערב — ההודעה לעובד נשמרת לשעות העבודה, לא נשלחת ולא הולכת לאיבוד', async (t) => {
+  H.at(t);
+  H.companies(t, 'test11');
+  const u = buyerWorker();
+  priority(t);
+  ai(t);
+  buyer(t);
+  const { say, wa } = H.chat(t, u);
+  await toMissing(say);
+  await say(BTN.done);
+  await say('לחכות לרכש ⏳');
+  const { token } = D.get('SELECT token FROM pd_part_requests WHERE user_id = ?', u.id);
+  const line = Parts.forBuyer(token).items[0].n;
+  wa.clear();
+  t.mock.timers.setTime(new Date('2026-11-10T19:45:00Z').getTime()); // 21:45 בישראל
+  await Parts.buyerAnswer(token, { n: line, note: 'איזה סוג בטון? ב-30 או ב-40?' });
+  assert.doesNotMatch(wa.texts().join('\n'), /איזה סוג בטון/, 'בערב — לא נשלח');
+  const queued = D.all('SELECT text FROM wa_outbox WHERE user_id = ?', u.id).map((r) => r.text).join('\n');
+  assert.match(queued, /איזה סוג בטון\? ב-30 או ב-40\?/, 'נשמר בתור לבוקר');
 });

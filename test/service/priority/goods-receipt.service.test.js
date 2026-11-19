@@ -572,6 +572,7 @@ async function toParts(say) {
 const noPart = { findPartExact: async () => null, searchParts: async () => [] };
 
 test('מק"טים לבנייה בקבלת סחורה: "לא נמצא מק"ט — לשלוח לרכש?" ← כן: מייל, והקליטה ממשיכה על 000 עד טיוטא', async (t) => {
+  H.at(t);                                      // שעות העבודה — ההודעות לעובד יוצאות מיד
   H.companies(t, 'test11');
   const u = grWorker();
   let built = false;

@@ -23,6 +23,14 @@ function worker(o = {}) {
   return rawUser({ full_name: `עובד שטח ${seq}`, role: 'employee', phone: `97252${String(1000000 + seq)}`, ...o });
 }
 
+/**
+ * שעון קבוע לבדיקה אחת — ברירת המחדל: יום שלישי 10:00 בישראל, בתוך שעות העבודה. הודעה יזומה לעובד מחוץ לשעות
+ * נשמרת בתור (‎wa_outbox‎) ולא נשלחת מיד, ולכן בדיקה שמצפה לה בוואטסאפ לא תלויה בשעה שבה היא רצה (נכשלו בריצת הערב).
+ */
+function at(t, iso = '2026-11-10T08:00:00Z') {
+  t.mock.timers.enable({ apis: ['Date'], now: new Date(iso) });
+}
+
 /** ‎PRIORITY_COMPANIES‎ לבדיקה אחת — מוחזר בסוף הבדיקה */
 function companies(t, value) {
   const prev = process.env.PRIORITY_COMPANIES;
@@ -85,4 +93,4 @@ function assertButtons(buttons, expected = null) {
   if (expected) assert.deepEqual(buttons, expected);
 }
 
-module.exports = { setup, worker, companies, claude, chat, photo, assertButtons, taskOf, Fakes, D };
+module.exports = { setup, worker, companies, at, claude, chat, photo, assertButtons, taskOf, Fakes, D };
