@@ -80,10 +80,27 @@ async function timelessAudioTick(now = Date.now()) {
  */
 const STATUS_ASK = /^(?:נו|תבדוק|תבדקי|בדוק|בדקי|תבדוק שוב|אפשר לבדוק|מה (?:עם|קורה עם|עם ה?|המצב (?:של|עם)) ?ה?(?:סיכום|הקלטה|תמליל)|ה?(?:סיכום|תמליל) (?:מוכן|הגיע)|יש (?:כבר )?(?:סיכום|תמליל)|(?:עדיין|עוד) לא (?:הגיע|קיבלתי)|למה (?:עוד )?לא (?:הגיע|קיבלתי)(?: את)? ?ה?(?:סיכום)?)(?: לי)?$/;
 
+/*
+ * "תנסה שוב" — באג 18.11.26: עיבוד ההקלטה נכשל, העובד כתב "תנסה שוב" שלוש פעמים, והבוט (מה-AI) ענה "אין לי אפשרות
+ * להפעיל מחדש מכאן" — והעובד שלח את ההקלטה מחדש פעמיים. הקובץ של הקלטה שנכשלה שמור יומיים (‎prune‎): מריצים אותה שוב.
+ * הקלטה שמחכה ל-Timeless — כמו "תבדוק".
+ */
+const RETRY_ASK = /^(?:ת?נס(?:ה|י|ו)|לנסות)(?: (?:את זה|אותה|אותו))? (?:שוב|מחדש)(?: לי)?$|^(?:תעבד|תריץ|תסכם)(?: (?:אותה|את ההקלטה))? (?:שוב|מחדש)$/;
+const RETRY_WITHIN_MS = 24 * 60 * 60 * 1000;
+
 /** ‎null‎ — לא בקשה כזו, או שאין הקלטה שמחכה. אחרת — הטקסט לעובד (ומה שמוכן נשלח מיד אחריו) */
 async function timelessAudioCheck(actor, t) {
   const n = WaUi.normalize(t).replace(/[?!.…]+$/g, '').trim();
-  if (!STATUS_ASK.test(n) || !MeetingAudio.pendingTimeless(actor.id).length) return null;
+  const retry = RETRY_ASK.test(n);
+  if (retry && !MeetingAudio.pendingTimeless(actor.id).length) {
+    const since = new Date(Date.now() - RETRY_WITHIN_MS).toISOString();
+    const row = D.get("SELECT id, meeting FROM meeting_audio WHERE user_id = ? AND status = 'error' AND created_at > ? ORDER BY id DESC LIMIT 1", actor.id, since);
+    if (!row) return null;
+    const title = (() => { try { return JSON.parse(row.meeting)?.title ?? ''; } catch { return ''; } })();
+    processMeetingAudio(actor, row.id);
+    return `🔁 מנסה שוב לתמלל ולסכם את ההקלטה${title ? ` של *${title}*` : ''} ⏳ — לא צריך לשלוח אותה מחדש. אשלח לך את הסיכום כשהוא מוכן.`;
+  }
+  if (!(STATUS_ASK.test(n) || retry) || !MeetingAudio.pendingTimeless(actor.id).length) return null;
   const r = await MeetingAudio.checkTimelessNow(actor.id);
   for (const id of r.ready) {
     setImmediate(() => deliverMeetingAudio(actor, id, null, () => MeetingAudio.finishFromTimeless(id, meetingAudioDeps(actor))));
