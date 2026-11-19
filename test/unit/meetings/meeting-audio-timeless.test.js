@@ -240,3 +240,36 @@ test('webhook על הקלטה שהועלתה — גם כשהמזהה שלה אי
   assert.equal(out.meetings, 1);
   assert.deepEqual(synced, [id]);
 });
+
+// אבטחה 19.11.26: בלי אסימון ארגוני — ההקלטה עולה רק לחשבון ה-Timeless של מי ששלח אותה, לא של עובד אחר
+function personalToken(userId, token) {
+  const Secrets = require('../../../server/core').Secrets;
+  D.run("INSERT INTO user_channels (user_id, provider, api_token, state, checked_at, created_at) VALUES (?, 'timeless', ?, 'connected', ?, ?)",
+    userId, Secrets.encrypt(token), D.nowIso(), D.nowIso());
+}
+
+test('אבטחה: בלי אסימון ארגוני — לא מעלים לחשבון Timeless של עובד אחר; התמלול שלנו', async (t) => {
+  const { audioId, deps, speech, dana } = setup(t, 25 * 60);
+  delete process.env.TIMELESS_ACCESS_TOKEN;
+  personalToken(dana.id, `dana-personal-${audioId}`);
+  t.after(() => D.run("DELETE FROM user_channels WHERE user_id = ? AND provider = 'timeless'", dana.id));
+  const tokens = [];
+  t.mock.method(Timeless.org, 'upload', async (token) => { tokens.push(token); return `mtg_other${audioId}`; });
+  const r = await MeetingAudio.processAudio(audioId, deps);
+  assert.equal(tokens.length, 0, 'לא הועלתה לחשבון של דנה');
+  assert.ok(speech.mock.callCount() >= 1);
+  assert.ok(!r.pending);
+});
+
+test('אבטחה: בלי אסימון ארגוני — מעלים עם האסימון האישי של השולח', async (t) => {
+  const { audioId, deps, me, dana } = setup(t, 25 * 60);
+  delete process.env.TIMELESS_ACCESS_TOKEN;
+  personalToken(dana.id, `dana-personal2-${audioId}`);
+  personalToken(me.id, `me-personal-${audioId}`);
+  t.after(() => D.run("DELETE FROM user_channels WHERE user_id IN (?, ?) AND provider = 'timeless'", dana.id, me.id));
+  const tokens = [];
+  t.mock.method(Timeless.org, 'upload', async (token) => { tokens.push(token); return `mtg_mine${audioId}`; });
+  const r = await MeetingAudio.processAudio(audioId, deps);
+  assert.deepEqual(tokens, [`me-personal-${audioId}`]);
+  assert.equal(r.pending, true);
+});

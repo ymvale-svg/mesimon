@@ -568,7 +568,8 @@ async function processAudio(audioId, deps) {
 
 /** העלאה ל-Timeless כשההקלטה ארוכה. ‎null‎ — לא הועלתה (קצרה, אין Timeless, או שההעלאה נכשלה — ואז התמלול שלנו) */
 async function toTimeless(row, meeting) {
-  const [token] = Timeless.syncTokens();
+  // הארגוני, או האישי של מי ששלח את ההקלטה — לעולם לא לחשבון Timeless של עובד אחר (אבטחה 19.11.26)
+  const token = Timeless.backgroundToken(row.user_id);
   if (!token) return null;
   const file = path.join(audioDir(), row.stored_name);
   const buf = fs.readFileSync(file);
