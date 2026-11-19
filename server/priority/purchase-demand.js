@@ -785,15 +785,46 @@ function lineOf(it) {
   };
 }
 
-/** שורה לדרישה; נדחתה — שוב על מק"ט כללי 000 עם התיאור, על הקידוד הכללי של החברה. ‎false‎ — לא נקלטה */
+/**
+ * צירופים חלופיים למק"ט שתת הפרק שבכרטיס שלו נדחה (פרויקט בבקרת תקציב): מהצירופים שכבר נקלטו בפרויקט — אותו משאב,
+ * אחר כך אותו תת פרק, הצירוף שה-AI בחר; ובסוף הכללי של החברה. בלי הצירוף שכבר נדחה.
+ */
+function fallbackPairs(it, projectPairs, gen) {
+  const { chapter, topic } = it.part;
+  const out = [];
+  const add = (p) => { if (p?.chapter && p?.topic && !(p.chapter === chapter && p.topic === topic) && !out.some((x) => x.chapter === p.chapter && x.topic === p.topic)) out.push(p); };
+  projectPairs.filter((p) => p.topic === topic).forEach(add);
+  projectPairs.filter((p) => p.chapter === chapter).forEach(add);
+  if (it.general && projectPairs.some((p) => p.chapter === it.general.chapter && p.topic === it.general.topic)) add(it.general);
+  add(gen);
+  return out.slice(0, 3);
+}
+
+/**
+ * שורה לדרישה. מק"ט שנדחה על תת הפרק (הפרויקט לא מתוקצב בתת הפרק שבכרטיס — PD26000062) — אותו מק"ט שוב, על צירוף שמתאים
+ * לפרויקט. נדחה בכל זאת — על מק"ט כללי 000 עם התיאור, על הקידוד הכללי של החברה. ‎false‎ — לא נקלטה
+ */
 async function addLine(c, prdno, it, gen, s, problems) {
   const { desc, whole, line } = lineOf(it);
   try {
     await Priority.addDemandLine(c, prdno, line);
     return true;
   } catch (err) {
+    if (line.part !== '000' && Priority.isCodingError(err)) {
+      const pairs = await Priority.projectPairs(c, s.project?.code).catch(() => []);
+      for (const p of fallbackPairs(it, pairs, gen)) {
+        try {
+          await Priority.addDemandLine(c, prdno, { ...line, chapter: p.chapter, topic: p.topic });
+          it.part = { ...it.part, chapter: p.chapter, chapterDes: p.chapterDes ?? '', topic: p.topic, topicDes: p.topicDes ?? '' };
+          (s.notes ??= []).push(`שורה ${it.n} (${it.description}): ${line.part} נקלט על ${p.chapter}/${p.topic} — ${line.chapter}/${line.topic} מהכרטיס אינו בתקציב הפרויקט`);
+          problems.push(`שורה ${it.n}: ${line.part} — ${line.chapter}/${line.topic} נדחה (${err.message}), נקלט על ${p.chapter}/${p.topic}`);
+          return true;
+        } catch { /* הצירוף הבא */ }
+      }
+    }
     try {
       await Priority.addDemandLine(c, prdno, { part: '000', description: desc, qty: whole ? it.qty : 1, chapter: gen.chapter, topic: gen.topic });
+      if (line.part !== '000') it.droppedCode = line.part;
       (s.notes ??= []).push(`שורה ${it.n} (${it.description}) נקלטה על מק"ט כללי 000, ${gen.chapter}/${gen.topic}${it.part.code !== '000' ? ` — ${it.part.code} נדחה` : ''}`);
       problems.push(`שורה ${it.n}: ${line.part} נדחה (${err.message}), נקלטה על 000 ${gen.chapter}/${gen.topic}`);
       return true;
@@ -981,8 +1012,11 @@ async function submit(user, s) {
   }
   clear(user.id, s);
   const held = (s.held ?? []).length;
+  // מק"ט שפריוריטי דחה גם על צירוף אחר — העובד ראה ✅ עם המק"ט, ולכן יודע שהשורה נקלטה על 000
+  const dropped = s.items.filter((x) => x.droppedCode);
   return { s: null, replies: [[`✅ *דרישת רכש ${prdno}* נפתחה ועברה *לאישור*.`, companyLine(c),
     `📁 ${s.project?.des ?? ''} · ${s.items.length} ${s.items.length === 1 ? 'פריט' : 'פריטים'} · 📅 ${ymdHe(s.date)}`, signerLine,
+    dropped.length ? `⚠️ פריוריטי לא קיבל את המק"ט של ${dropped.map((x) => `"${x.description}" (${x.droppedCode})`).join(', ')} בפרויקט הזה — ${dropped.length === 1 ? 'נקלט' : 'נקלטו'} על מק"ט כללי 000 עם התיאור. מנהל המערכת קיבל פירוט.` : null,
     held && s.sentTo ? `📧 ${held === 1 ? 'פריט אחד נשלח' : `${held} פריטים נשלחו`} ל*${s.sentTo}* לבניית מק"ט — כשייבנו תקבל הודעה כאן ובמייל, ואשאל אם לבנות מהם דרישה חדשה נוספת.` : null,
     held && !s.sentTo ? `🆕 ${held === 1 ? 'פריט אחד לא נשלח' : `${held} פריטים לא נשלחו`} (אין מק"ט) — מנהל המערכת קיבל את הרשימה.` : null].filter(Boolean).join('\n')], buttons: [], status: 'ok', result: `${prdno} — מחכה לאישור` };
 }

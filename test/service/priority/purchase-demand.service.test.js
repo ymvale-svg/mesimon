@@ -768,3 +768,63 @@ test('💬 מנהלת הרכש עונה בערב — ההודעה לעובד נ�
   const queued = D.all('SELECT text FROM wa_outbox WHERE user_id = ?', u.id).map((r) => r.text).join('\n');
   assert.match(queued, /איזה סוג בטון\? ב-30 או ב-40\?/, 'נשמר בתור לבוקר');
 });
+
+/** פרויקט בבקרת תקציב: תת הפרק שבכרטיס הפריט (20 / 20-10) אינו במהדורת הביצוע של הפרויקט — כמו PD26000062 */
+const CODING_ERR = 'קוד תת פרק 20: יש לבחור תת פרק מרשימת הבחירה. כאשר הפרויקט לבקרה, תת הפרק צריך להופיע במהדורת הביצוע העדכנית';
+const notInBudget = (allowed) => async (c, prdno, line) => {
+  if (line.part !== '000' && !allowed.includes(`${line.chapter}|${line.topic}`)) throw new Error(CODING_ERR);
+  return 1;
+};
+
+test('מק"ט שתת הפרק שלו לא בתקציב הפרויקט — אותו מק"ט על צירוף שכבר נקלט בפרויקט, לא 000 (PD26000062)', async (t) => {
+  H.companies(t, 'test11');
+  const u = H.worker();
+  const pr = H.Fakes.priority(t, {
+    projects: async () => PROJECTS, recentDemandProjects: async () => [], demandCodes: async () => CODES, warehouses: async () => WAREHOUSES,
+    projectWarehouses: async () => [WAREHOUSES[0]], warehouseOf: async () => 'Main',
+    findPartExact: async (c, des) => (des === 'שק מלט' ? CEMENT : null),
+    searchParts: async (c, des) => (/בטון/.test(des) ? [B30, B40].map((p) => ({ p, score: 1 })) : []),
+    budgetPairs: async () => [{ chapter: '20', chapterDes: 'שלד', topic: '20-10', topicDes: 'בטון' }],
+    generalCoding: async () => ({ chapter: '101', chapterDes: 'כללי', topic: '98-10', topicDes: 'כללי' }),
+    partByCode: async () => null, priorityUsers: async () => [], readDemand: async (c, prdno) => ({ PRDNO: prdno }),
+    projectPairs: async (c, project) => (project === 'PR1' ? [{ chapter: '98', chapterDes: 'שונות', topic: '20-10', topicDes: 'בטון', n: 4 }, { chapter: '101', chapterDes: 'כללי', topic: '98-10', topicDes: 'כללי', n: 9 }] : [])
+  }, { writes: { createDemand: async () => 'PRD26000007', addDemandLine: notInBudget(['98|20-10', '101|98-10']) } });
+  ai(t);
+  const { say } = H.chat(t, u);
+  await toItems(say);
+  await toReview(say);
+  const r = await say(BTN.done);
+  assert.match(r.text, /נפתחה ועברה \*לאישור\*/);
+  assert.doesNotMatch(r.text, /מק"ט כללי 000/, 'המק"טים נקלטו — אין מה לומר לעובד');
+  const ok = pr.wrote('addDemandLine').map((w) => w.args[2]).filter((l) => l.chapter === '98');
+  assert.deepEqual(ok, [{ part: 'M-1', qty: 10, chapter: '98', topic: '20-10' }, { part: 'C-30', qty: 5, chapter: '98', topic: '20-10' }],
+    'אותו מק"ט, על הצירוף של הפרויקט עם אותו משאב');
+  assert.equal(pr.wrote('addDemandLine').filter((w) => w.args[2].part === '000').length, 0);
+  const dialog = pr.wrote('setDemandDialog')[0].args[2].join('\n');
+  assert.match(dialog, /M-1 נקלט על 98\/20-10 — 20\/20-10 מהכרטיס אינו בתקציב הפרויקט/);
+});
+
+test('מק"ט שנדחה גם על הצירופים של הפרויקט — 000, והעובד יודע שהמק"ט לא נקלט', async (t) => {
+  H.companies(t, 'test11');
+  const u = H.worker();
+  const pr = H.Fakes.priority(t, {
+    projects: async () => PROJECTS, recentDemandProjects: async () => [], demandCodes: async () => CODES, warehouses: async () => WAREHOUSES,
+    projectWarehouses: async () => [WAREHOUSES[0]], warehouseOf: async () => 'Main',
+    findPartExact: async (c, des) => (des === 'שק מלט' ? CEMENT : null),
+    searchParts: async (c, des) => (/בטון/.test(des) ? [B30, B40].map((p) => ({ p, score: 1 })) : []),
+    budgetPairs: async () => [{ chapter: '20', chapterDes: 'שלד', topic: '20-10', topicDes: 'בטון' }],
+    generalCoding: async () => ({ chapter: '101', chapterDes: 'כללי', topic: '98-10', topicDes: 'כללי' }),
+    partByCode: async () => null, priorityUsers: async () => [], readDemand: async (c, prdno) => ({ PRDNO: prdno }),
+    projectPairs: async () => []
+  }, { writes: { createDemand: async () => 'PRD26000007', addDemandLine: notInBudget([]) } });
+  ai(t);
+  const { say } = H.chat(t, u);
+  await toItems(say);
+  await toReview(say);
+  const r = await say(BTN.done);
+  assert.match(r.text, /נפתחה ועברה \*לאישור\*/);
+  assert.match(r.text, /פריוריטי לא קיבל את המק"ט של "שק מלט" \(M-1\), "בטון" \(C-30\) בפרויקט הזה — נקלטו על מק"ט כללי 000/);
+  const tried = pr.wrote('addDemandLine').filter((w) => w.args[2].part === 'M-1').map((w) => `${w.args[2].chapter}|${w.args[2].topic}`);
+  assert.deepEqual(tried, ['20|20-10', '101|98-10'], 'מהכרטיס, ואז הכללי של החברה');
+  assert.equal(pr.wrote('addDemandLine').filter((w) => w.args[2].part === '000').length, 2);
+});
