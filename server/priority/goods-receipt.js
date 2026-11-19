@@ -2011,7 +2011,23 @@ async function handle({ user, text = '', file = null, reaction = false, allow = 
     buttons: out.s === null ? [] : buttonsFor(out.s ?? s) };
 }
 
+/** השלבים שאחרי אישור הכותרת ולפני הטיוטא — תנאי תשלום ("תעשה שוטף", "שוטף 60") עדיין מתעדכנים בהם */
+const LATE_PAY_STEPS = ['order', 'lines', 'parts', 'project', 'warehouse', 'files'];
+
+/** תנאי תשלום בהודעה קצרה אחרי הכותרת: מעדכנים, והשאלה הפתוחה חוזרת כמו שהיא. ‎null‎ — לא תנאי תשלום */
+function latePayChange(s, t) {
+  if (!LATE_PAY_STEPS.includes(s.step) || s.docno) return null;
+  if (String(t).replace(/🎙/g, '').trim().split(/\s+/).length > 5) return null;
+  const pay = Priority.payFromText(t);
+  if (!pay) return null;
+  const again = s.lastPrompt ? `\n\n${s.lastPrompt}` : '';
+  if (pay.unknown !== undefined) return { s, replies: [`אין בפריוריטי תנאי תשלום שוטף + ${pay.unknown}. האפשרויות: ${Priority.PAY_TERMS.map((p) => Priority.payLabel(p.code)).join(', ')}.${again}`], result: `תנאי תשלום לא קיים: ${pay.unknown}` };
+  s.payCode = pay.code;
+  return { s, replies: [`💳 תנאי התשלום עודכנו: *${Priority.payLabel(pay.code)}*${dueText(s, pay.code)}.${again}`], result: `תנאי תשלום: ${Priority.payLabel(pay.code)} (בשלב ${s.step})` };
+}
+
 async function step(user, s, t, file, allow = { gr: true, pd: false }) {
+  if (!file) { const pay = latePayChange(s, t); if (pay) return pay; }
   switch (s.step) {
     case 'menu': {
       // "קבלת סחורה" (הכפתור) — מתחילים. "דרישת רכש" — הבוט מעביר לדרישת הרכש (wa-bot), וכאן רק כשאינה פתוחה לעובד.
