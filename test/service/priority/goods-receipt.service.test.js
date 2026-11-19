@@ -431,6 +431,23 @@ test('תנאי תשלום אחרי אישור הכותרת ("תעשה שוטף" 
   assert.equal(pr.state.head.payCode, require('../../../server/integrations/priority').payFromText('שוטף 60').code);
 });
 
+test('הערה לדו-שיח בעוד ניסוחים: "להכניס הערה ש…", "לציין בהערות …", "תכתבי בדו"ח שיח …"', async (t) => {
+  // מסקירה 05.11 (PR #112, הועבר לנתיב החדש ב-19.11): "להכניס הערה ש…" לא נרשם כהערה
+  H.companies(t, 'test11');
+  const u = H.worker();
+  priority(t);
+  ai(t, doc());
+  const { say } = H.chat(t, u);
+  await say('קבלת סחורה', { file: H.photo() });
+  await say(BTN.yes);                           // ← "יש מספר הזמנה?"
+  for (const [said, note] of [['להכניס הערה שהסחורה הגיעה רטובה', 'שהסחורה הגיעה רטובה'], ['לציין בהערות שחסר משטח', 'שחסר משטח'], ['תכתבי בדו"ח שיח: נהג איחר', 'נהג איחר']]) {
+    const r = await say(said);
+    assert.match(r.text, /📝 נרשם בדו-שיח הפנימי/, said);
+    assert.match(r.text, new RegExp(note), said);
+    assert.match(r.text, /אין הזמנות פתוחות/, 'השאלה הפתוחה חוזרת');
+  }
+});
+
 test('👎 כתגובה (Reaction) = לא: בשאלת "יש מספר הזמנה?" — בלי הזמנה', async (t) => {
   H.companies(t, 'test11');
   const u = H.worker();
