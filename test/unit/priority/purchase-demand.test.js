@@ -19,6 +19,11 @@ test('isTrigger / opens', () => {
   for (const t of ['קבלת סחורה', 'רכש', '', null]) assert.ok(!PD.isTrigger(t), String(t));
 });
 
+test('isTrigger — "דרישת רכס" מהתמלול (סקירה 19.11) פותח דרישה; "רכסים" (המקום) — לא', () => {
+  for (const t of ['בוקר טוב, אני רוצה לעשות דרישת רכס.', 'דרישת רכס לאתר', '🎙 דרישות רכס']) assert.ok(PD.isTrigger(t) && PD.opens(t), t);
+  for (const t of ['דרישת רכסים', 'פגישה ברכס']) assert.ok(!PD.isTrigger(t), t);
+});
+
 test('parseDate — היום, מחר, מחרתיים', (t) => {
   fixNow(t);
   assert.equal(PD._parseDate('היום'), '2026-11-10');
