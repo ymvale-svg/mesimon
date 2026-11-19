@@ -38,7 +38,9 @@ const DEFAULTS = Object.freeze({
   poFinalStatuses: ['אושרה', 'נשלחה לספק'],
   noVatCode: Priority.NO_VAT_CODE,
   draftTtlHours: 24,
-  // 🆕 מנהלת הרכש — מקבלת במייל מק"טים לבנייה מדרישות רכש (‎pd-parts.js‎). ריק — בלי שאלה, פריט בלי מק"ט נקלט על 000
+  // 🆕 מנהלת הרכש — משתמש משימון (‎buyerUserId‎, מ-19.11.26); השם והמייל נלקחים ממנו. מקבלת מק"טים לבנייה ודרישה שנשארה
+  // טיוטא כי שורה נדחתה (‎pd-parts.js‎). ‎buyerName‎ / ‎buyerEmail‎ — מה שהוקלד לפני כן (עד שבוחרים משתמש)
+  buyerUserId: null,
   buyerName: '',
   buyerEmail: ''
 });
@@ -100,6 +102,15 @@ const pdNotifyCompanies = (org = DEFAULT_ORG) => raw(org).companies.filter((c) =
 const defaults = (org = DEFAULT_ORG) => raw(org).defaults;
 const companies = (org = DEFAULT_ORG) => raw(org).companies.map((c) => ({ code: c.code, name: c.name, vat: c.vat, sandbox: c.sandbox || '', test: Boolean(c.test) }));
 
+/**
+ * מנהלת הרכש כמשתמש משימון פעיל: לפי ‎buyerUserId‎, ובהגדרה ישנה (שם ומייל שהוקלדו) — המשתמש עם אותו מייל. ‎null‎ — אין
+ */
+function buyerOf(defs = defaults()) {
+  if (defs.buyerUserId) return D.get("SELECT id, full_name, email FROM users WHERE id = ? AND status = 'active'", defs.buyerUserId) ?? null;
+  const e = String(defs.buyerEmail ?? '').trim();
+  return e ? D.get("SELECT id, full_name, email FROM users WHERE lower(email) = lower(?) AND status = 'active'", e) ?? null : null;
+}
+
 /** לתצוגה במסך: בלי הסיסמה — רק אם יש */
 function forDisplay(org = DEFAULT_ORG) {
   const r = raw(org);
@@ -112,7 +123,9 @@ function forDisplay(org = DEFAULT_ORG) {
       fromServer: { user: !r.connection.user && envUser, password: !r.connection.password && envPass }
     },
     companies: r.companies,
-    defaults: r.defaults,
+    defaults: { ...r.defaults, buyerUserId: buyerOf(r.defaults)?.id ?? null },
+    // לבחירת מנהלת הרכש — משתמשי משימון פעילים עם מייל
+    users: D.all("SELECT id, full_name AS name, email, department FROM users WHERE status = 'active' AND email LIKE '%@%' ORDER BY full_name"),
     testLock: testLock(),
     updatedAt: r.updatedAt ?? null,
     updatedBy: r.updatedBy ?? null
@@ -162,8 +175,17 @@ function save(input, { org = DEFAULT_ORG, by = null } = {}) {
       defs.poFinalStatuses = v.map((x) => str(x, 40)).filter(Boolean);
       if (!defs.poFinalStatuses.length) defs.poFinalStatuses = [...DEFAULTS.poFinalStatuses];
     }
-    if ('buyerName' in b.defaults) defs.buyerName = str(b.defaults.buyerName, 80);
-    if ('buyerEmail' in b.defaults) {
+    if ('buyerUserId' in b.defaults) {
+      const id = Number(b.defaults.buyerUserId) || null;
+      const u = id ? D.get("SELECT id, full_name, email FROM users WHERE id = ? AND status = 'active'", id) : null;
+      if (id && !u) throw new Error('מנהלת הרכש — המשתמש אינו פעיל במשימון');
+      if (u && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(u.email ?? ''))) throw new Error(`למשתמש ${u.full_name} אין מייל תקין במשימון`);
+      defs.buyerUserId = u?.id ?? null;
+      defs.buyerName = u?.full_name ?? '';
+      defs.buyerEmail = u?.email ?? '';
+    }
+    if ('buyerName' in b.defaults && !('buyerUserId' in b.defaults)) defs.buyerName = str(b.defaults.buyerName, 80);
+    if ('buyerEmail' in b.defaults && !('buyerUserId' in b.defaults)) {
       const e = str(b.defaults.buyerEmail, 120);
       if (e && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e)) throw new Error(`כתובת מייל לא תקינה למנהלת הרכש: "${e}"`);
       defs.buyerEmail = e;
@@ -219,6 +241,6 @@ function apply(org = DEFAULT_ORG) {
 module.exports = {
   DEFAULT_ORG, DEFAULTS,
   credentials, writable, poNotifyCompanies, pdNotifyCompanies, defaults, companies,
-  forDisplay, save, history, note, apply,
+  forDisplay, save, history, note, apply, buyerOf,
   _raw: raw, _seed: seed, _key: key
 };

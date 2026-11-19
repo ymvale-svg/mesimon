@@ -14,7 +14,7 @@
  *      החסרים בלבד (השאר כבר יצא). "סיום" שולח אותה.
  *   קבלת סחורה (‎goods-receipt.js‎): שאלה "לשלוח לרכש?" בשלב המק"טים; הקליטה ממשיכה על 000, וכשנבנו — רק הודעה (‎receipt‎).
  *
- * מנהלת הרכש — בהגדרות פריוריטי (‎/priority‎ ← הגדרות: ‎buyerName‎, ‎buyerEmail‎). לא הוגדרה — בדרישה: רק המזוהים, והרשימה
+ * מנהלת הרכש — בהגדרות פריוריטי (‎/priority‎ ← הגדרות): משתמש משימון (‎buyerUserId‎); בהגדרה ישנה — ‎buyerName‎, ‎buyerEmail‎. לא הוגדרה — בדרישה: רק המזוהים, והרשימה
  * למנהלי המערכת; בקבלת סחורה — בלי שאלה.
  */
 const crypto = require('node:crypto');
@@ -68,6 +68,11 @@ function alertAdmins(title, body) {
 /** ‎{ name, email, userId }‎ — מי שמוגדרת בהגדרות פריוריטי; ‎null‎ — לא הוגדרה (אין שאלות, הזרימה הישנה) */
 function contact() {
   const d = Settings.defaults();
+  // משתמש משימון שנבחר במסך (מ-19.11.26) — השם והמייל ממנו; לא פעיל עוד — אין מנהלת רכש
+  if (d.buyerUserId) {
+    const u = Settings.buyerOf(d);
+    return u && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(u.email ?? '')) ? { email: u.email, name: u.full_name, userId: u.id } : null;
+  }
   const email = String(d.buyerEmail ?? '').trim();
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return null;
   const u = D.get("SELECT id, full_name FROM users WHERE lower(email) = lower(?) AND status = 'active'", email);

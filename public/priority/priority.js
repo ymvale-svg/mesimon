@@ -681,8 +681,11 @@
       <section class="panel">
         <div class="panel-h"><h2>🆕 רכש — מק"טים לבנייה</h2><p>פריט בדרישת רכש שאין לו מק"ט נשלח במייל לבניית מק"ט (דרישה לא יוצאת עם מק"ט כללי), והיוזם מקבל הודעה כשהמק"ט נבנה. בקבלת סחורה — הבוט שואל אם לשלוח. היא מקבלת גם דרישה שנשארה טיוטא כי פריוריטי דחה שורה (למשל אין תקציב בפרויקט לתת הפרק). ריק — הכל למנהלי המערכת, ובדרישה: רק המזוהים.</p></div>
         <div class="grid-form">
-          <label for="b-name">מנהלת הרכש — שם<input id="b-name" value="${esc(s.defaults.buyerName ?? '')}"></label>
-          <label for="b-email">מנהלת הרכש — מייל<input id="b-email" class="ltr" type="email" value="${esc(s.defaults.buyerEmail ?? '')}"></label>
+          <label for="b-user">מנהלת הרכש — מתוך המשתמשים של משימון<select id="b-user">
+            <option value="">— לא הוגדרה —</option>
+            ${(s.users ?? []).map((u) => `<option value="${u.id}"${u.id === s.defaults.buyerUserId ? ' selected' : ''}>${esc(u.name)}${u.department ? ` · ${esc(u.department)}` : ''} — ${esc(u.email)}</option>`).join('')}
+          </select></label>
+          ${!s.defaults.buyerUserId && s.defaults.buyerEmail ? `<p class="hint">מוגדר היום: ${esc(s.defaults.buyerName || '')} ${esc(s.defaults.buyerEmail)} — אינו משתמש פעיל במשימון. בחרו משתמש מהרשימה.</p>` : ''}
         </div>
       </section>
 
@@ -749,7 +752,7 @@
         $('#confirm').innerHTML = `<span class="dirty">פותחים כתיבה לחברה אמיתית: ${esc(opened.join(', '))}. ללחוץ שוב על "שמירה" כדי לאשר.</span>`;
         confirmed = true; return;
       }
-      const body = { connection: { host: $('#c-host').value, ini: $('#c-ini').value, user: $('#c-user').value }, companies, defaults: { buyerName: $('#b-name').value, buyerEmail: $('#b-email').value } };
+      const body = { connection: { host: $('#c-host').value, ini: $('#c-ini').value, user: $('#c-user').value }, companies, defaults: { buyerUserId: Number($('#b-user').value) || null } };
       if ($('#c-pass').value) body.connection.password = $('#c-pass').value;
       try {
         await api('PUT', '/api/priority/settings', body);
