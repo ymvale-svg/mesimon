@@ -76,7 +76,7 @@ const Briefing = require('../meetings').Briefing;
 const Calendar = require('../meetings').Calendar;
 const Meetings = require('../meetings').Meetings;
 const Instinct = require('./instinct');
-const { appRoot, buttonReplyText, candidatesOf, chains, channel, checkState, currentMsg, DAY, DIGEST_GRACE_MIN, doneEmoji, emailText, enqueueAs, firstName, HISTORY_TURNS, hooks, inHours, isConfigured, localDate, log, mailAlertUsers, markDone, onDirect, orgUsers, parseJson, PICK_SHOWN, pickText, publicStatus, qr, react, reactNow, readLog, recentFiles, remove, resolveMentions, save, sendButtons, sendText, setState, signatureFields, signatureLine, splitMessage, taskLink, todayStats, userByPhone, WALK, workHours } = require('./wa-base');
+const { appRoot, lastOutId, buttonReplyText, candidatesOf, chains, channel, checkState, currentMsg, DAY, DIGEST_GRACE_MIN, doneEmoji, emailText, enqueueAs, firstName, HISTORY_TURNS, hooks, inHours, isConfigured, localDate, log, mailAlertUsers, markDone, onDirect, orgUsers, parseJson, PICK_SHOWN, pickText, publicStatus, qr, react, reactNow, readLog, recentFiles, remove, resolveMentions, save, sendButtons, sendText, setState, signatureFields, signatureLine, splitMessage, taskLink, todayStats, userByPhone, WALK, workHours } = require('./wa-base');
 const { analyzeGroup, bindGroup, listGroups, notifyAdmins, processGroup, processGroups, prune, recipientOf, sanitizeGroup } = require('./wa-groups');
 const { CANCEL, FORWARD_MAX, LIST_SHOWN, PLAIN_FEATURES, PLAIN_GREETING, PLAIN_HELP, PLAIN_INSIGHTS, PLAIN_LIST, PLAIN_TODAY, RANGES, READ_ALOUD, READ_ALOUD_DOWN, YES, actionOf, addForward, chatOf, checkDraft, clearForwards, draftText, emptyChat, featuresText, findContactCards, formatList, forwardsOf, helpText, localDay, readAloudAllowed, readAloudFile, readAloudText, saveChat, shortDate, sourceOf, understand, unknownReplied, withForwards } = require('./wa-private');
 const { deliver, flushOutbox, messageUser, notifyAssignment, sendFilesToUser } = require('./wa-tasks');
@@ -1220,6 +1220,7 @@ async function handleDirect(msg) {
   // ❓ לחיצה על כפתור של שאלה מסוימת — לשאלה הזו, ולא למה שפתוח עכשיו (‎wa-questions.js‎).
   // 🔒 תגובה (Reaction), או ציטוט עם "כן" / "לא" קצר — כמו לחיצה על ההודעה שעליה הם (#171)
   const reaction = msg.kind === 'reactionMessage';
+  const reacted = reaction && msg.replyTo?.id ? msg.replyTo.id : '';
   const quotedAnswer = !msg.button && !msg.file && Boolean(msg.replyTo?.id) && answerLike(text);
   const pressed = (msg.button && msg.replyTo?.button) || reaction || quotedAnswer ? WaQuestions.find(user.id, msg.replyTo?.id) : null;
   // מסמך אחר (קבלת סחורה / דרישת רכש) — הכפתור או התגובה של מסמך שכבר לא פתוח
@@ -1436,6 +1437,12 @@ async function handleDirect(msg) {
     releaseQuestion(state.draft);
     state = { ...state, draft: null, awaiting: false, queue: [] };
   }
+  // 👍 / 👎 על הודעה ישנה שאינה שאלה רשומה — לא תשובה לשאלה הפתוחה (היא נשאלה בהודעה אחרת). לא עושים כלום
+  if (reacted && !pressed && state.awaiting && state.draft && lastOutId(msg.chatId) && reacted !== lastOutId(msg.chatId)) {
+    log({ ...base, text, action: 'other', status: 'unclear', result: `סימון ${text} על הודעה ישנה — לא תשובה ל-${state.draft.kind ?? 'task'}` });
+    await sendText(msg.chatId, WaQuestions.OLD_REACTION_TEXT);
+    return;
+  }
   let r;
   // תשובה שמתעכבת (תמלול, Today ראשון של היום, ניסוח מייל) — קודם "רגע", כדי שלא ייראה שהבוט לא שמע
   // הודעה קולית — מ-✍️ (תמלול) ל-🤔 (הבנה) מיד; כתובה — 🤔 רק אם התשובה מתעכבת
@@ -1489,6 +1496,8 @@ async function handleDirect(msg) {
   // ענו על שאלה ישנה שהוחזרה — מה שהיה פתוח קודם (טיוטת מייל, משימה) חוזר להיות פתוח
   if (displaced && !r.next.draft) r = { ...r, next: { ...r.next, draft: displaced.draft, awaiting: displaced.awaiting } };
   saveChat(user.id, { ...r.next, draft: r.next.draft ? { ...r.next.draft, askedAt: D.nowIso() } : r.next.draft, history });
+  // השאלה שהייתה פתוחה נסגרה — 👍 מאוחר על ההודעה שלה לא יחזיר אותה (ולא ישלח פעמיים)
+  if (state.awaiting && state.draft && WaQuestions.draftKey(r.next.draft) !== WaQuestions.draftKey(state.draft)) WaQuestions.markAnsweredKey(user.id, WaQuestions.draftKey(state.draft));
   const fwdNote = forwards.length ? ` (+${forwards.filter((x) => x.kind === 'forward').length} מועברות)` : '';
   log({ ...base, text: `${voice ? `🎙 ${said}` : said}${fwdNote}`, action: r.action, status: r.status, result: r.result, taskId: r.taskId ?? null, reply });
   // הודעה ארוכה מדי — בכמה הודעות; כפתורי תשובה (התפריט) — על האחרונה

@@ -153,7 +153,8 @@ async function pushToUser(userId, { text, files = [], buttons = [], draft = null
     const parts = splitMessage(text);
     for (let i = 0; i < parts.length; i++) {
       if (i === parts.length - 1 && buttons.length && !busy) await sendButtons(chatId, parts[i], buttons, { owner: 'chat', draft, awaiting: Boolean(draft) });
-      else await sendText(chatId, parts[i]);
+      // שיחה אחרת פתוחה (‎busy‎) — בלי כפתורים, אבל השאלה נרשמת: 👍 עליה מגיע אליה, ולא לטיוטה הפתוחה (באג 17.11.26)
+      else await sendText(chatId, parts[i], i === parts.length - 1 && draft ? { owner: 'chat', draft, awaiting: true } : null);
     }
     rememberBot(userId, text);
     if (draft && !busy) saveChat(userId, { ...chatOf(userId), draft: { ...draft, askedAt: D.nowIso() }, awaiting: true });
