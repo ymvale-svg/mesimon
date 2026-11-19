@@ -350,7 +350,7 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
     const reply = request
       ? { ...await MailInsights.draftReply(actor.id, item.gmailId, request), ...await signatureFields(box) }
       : { ...await MailInsights.suggestReply(actor.id, item.gmailId, { box: boxNo }), ...await signatureFields(box) };
-    return out(replyText(reply), { draft: { kind: 'mail_reply', reply }, awaiting: true }, { action: 'mail_insights', status: 'ok', result: `טיוטת תשובה ל${reply.toName || reply.to}` });
+    return out(replyText(reply), { draft: { kind: 'mail_reply', reply, offeredAt: D.nowIso() }, awaiting: true }, { action: 'mail_insights', status: 'ok', result: `טיוטת תשובה ל${reply.toName || reply.to}` });
   };
 
   /*
@@ -1063,6 +1063,8 @@ async function withFollowUps(r) {
 
 let buttonShapeLogged = false;
 
+/** 🔒 המסמך שהכפתורים של קבלת סחורה / דרישת רכש שואלים עליו — כפתור של מסמך אחר לא עונה כאן (#171) */
+const docDraft = (doc) => (doc ? { doc } : null);
 const quietLocationLog = new Map(); // ‎userId‎ → מתי נרשם עדכון מיקום שקט אחרון
 
 async function handleDirect(msg) {
@@ -1215,10 +1217,37 @@ async function handleDirect(msg) {
     }
   }
   const pdAllowed = WaActions.allowed(actor, 'purchase_demand');
+  // ❓ לחיצה על כפתור של שאלה מסוימת — לשאלה הזו, ולא למה שפתוח עכשיו (‎wa-questions.js‎).
+  // 🔒 תגובה (Reaction), או ציטוט עם "כן" / "לא" קצר — כמו לחיצה על ההודעה שעליה הם (#171)
+  const reaction = msg.kind === 'reactionMessage';
+  const quotedAnswer = !msg.button && !msg.file && Boolean(msg.replyTo?.id) && answerLike(text);
+  const pressed = (msg.button && msg.replyTo?.button) || reaction || quotedAnswer ? WaQuestions.find(user.id, msg.replyTo?.id) : null;
+  // מסמך אחר (קבלת סחורה / דרישת רכש) — הכפתור או התגובה של מסמך שכבר לא פתוח
+  const flowDoc = pressed?.owner === 'goods_receipt' ? GoodsReceipt.docId(user.id) : pressed?.owner === 'purchase_demand' ? PurchaseDemand.docId(user.id) : null;
+  const otherDoc = Boolean(pressed?.draft?.doc) && pressed.draft.doc !== flowDoc;
+  // תגובה היא תשובה רק על ההודעה של השאלה: בשיחה — שאלת כן/לא (לא תפריט); בקבלת סחורה / דרישת רכש — ההודעה האחרונה שלהן
+  const onQuestion = Boolean(pressed) && (pressed.owner === 'chat'
+    ? Boolean(pressed.awaiting && pressed.draft)
+    : otherDoc || WaQuestions.latest(user.id, pressed.owner)?.id === pressed.id);
+  msg = { ...msg, onQuestion };
+  if (reaction && !onQuestion) {
+    // 👍 על הודעה אחרת — לא תשובה. יש שאלה פתוחה — אומרים מה לעשות; אין — כלום
+    const cur = chatOf(user.id);
+    const open = (cur.awaiting && cur.draft && cur.draft.kind !== 'menu') || GoodsReceipt.active(user.id, true) || PurchaseDemand.active(user.id, true);
+    const reply = open ? 'ℹ️ התגובה הייתה על הודעה אחרת, אז לא עשיתי כלום. כדי לענות — לחצו על כפתור בשאלה, או כתבו *כן* / *לא*.' : '';
+    log({ ...base, text, action: 'other', status: 'ok', result: `תגובה ${text || ''} על הודעה שאינה השאלה — לא נחשבה תשובה`.slice(0, 300), reply: reply || undefined });
+    if (reply) await sendText(msg.chatId, reply);
+    return;
+  }
+  if (otherDoc) {
+    const no = WaQuestions.isNo(text);
+    const reply = no ? WaQuestions.CLOSED_NO_TEXT : WaQuestions.CLOSED_TEXT;
+    log({ ...base, text, action: pressed.owner, status: no ? 'ok' : 'unclear', result: `כפתור / תגובה על מסמך אחר (${pressed.draft.doc})${no ? ' (תשובה שלילית)' : ''}`, reply });
+    await sendText(msg.chatId, reply);
+    return;
+  }
   // ⏳ 15 דקות בלי תשובה — דרישת הרכש / קבלת הסחורה כבר לא "פעילה", והודעה חדשה מתחילה מההתחלה. לחיצה על כפתור — עוד עונה
   const late = !msg.file && answerLike(text, msg);
-  // ❓ לחיצה על כפתור של שאלה מסוימת — לשאלה הזו, ולא למה שפתוח עכשיו (‎wa-questions.js‎)
-  const pressed = msg.button && msg.replyTo?.button ? WaQuestions.find(user.id, msg.replyTo.id) : null;
   // 🔍 פעם אחת לכל הפעלה: לחיצה שהגיעה בלי מזהה ההודעה — ביומן (לסקירה הלילית), עם שמות השדות בלבד
   if (msg.button && !msg.replyTo?.button && !buttonShapeLogged) {
     buttonShapeLogged = true;
@@ -1271,7 +1300,7 @@ async function handleDirect(msg) {
       await notice;
       const parts = r.replies.map((x, i) => (i === 0 && pre ? `${pre}\n\n${x}` : x)).flatMap((reply) => splitMessage(reply));
       for (let i = 0; i < parts.length; i++) {
-        if (i === parts.length - 1 && r.buttons?.length) await sendButtons(msg.chatId, parts[i], r.buttons, { owner: 'purchase_demand' });
+        if (i === parts.length - 1 && r.buttons?.length) await sendButtons(msg.chatId, parts[i], r.buttons, { owner: 'purchase_demand', draft: docDraft(PurchaseDemand.docId(user.id)) });
         else await sendText(msg.chatId, parts[i]);
       }
       return;
@@ -1332,7 +1361,7 @@ async function handleDirect(msg) {
       // כפתורי תשובה — על ההודעה האחרונה בלבד
       const parts = r.replies.flatMap((reply) => splitMessage(reply));
       for (let i = 0; i < parts.length; i++) {
-        if (i === parts.length - 1 && r.buttons?.length) await sendButtons(msg.chatId, parts[i], r.buttons, { owner: 'goods_receipt' });
+        if (i === parts.length - 1 && r.buttons?.length) await sendButtons(msg.chatId, parts[i], r.buttons, { owner: 'goods_receipt', draft: docDraft(GoodsReceipt.docId(user.id)) });
         else await sendText(msg.chatId, parts[i]);
       }
       return;

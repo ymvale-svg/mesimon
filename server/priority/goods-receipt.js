@@ -177,6 +177,11 @@ const active = (userId, late = false) => {
 /** יש קליטה פתוחה (גם מושהית) — לתזכורת ולהמשך ב"קבלת סחורה" */
 const pending = (userId) => Boolean(fresh(load(userId)));
 /**
+ * 🔒 המסמך שהקליטה עליו עכשיו (מספר ה-GR, ולפני הטיוטא — מתי התחילה), ‎null‎ — אין / תפריט. נרשם עם הכפתורים
+ * (‎WaQuestions‎), וכפתור או תגובה על הודעה של מסמך אחר — "השאלה כבר לא פתוחה" (#171)
+ */
+const docId = (userId) => { const s = load(userId); return fresh(s) && s.step !== 'menu' ? String(s.docno || s.startedAt || '') || null : null; };
+/**
  * הודעה שנכנסת לפריוריטי — רק במפורש: "קבלת סחורה", "פריוריטי",
  * או קובץ בלי טקסט (הבוט אינו מטפל בקבצים אחרת, ושואל קודם).
  */
@@ -1928,6 +1933,14 @@ async function handle({ user, text = '', file = null, reaction = false, allow = 
   // תשובה לשאלה "להפוך לסופית?" — כן / 👍 / מאשר: סוגרים; "חזרה לטיוטא" — הטיוטא; כל דבר אחר — ממשיכים בבדיקה
   if (s.confirmFinal) {
     const ok = !file && (YES.test(t) || /^(מאשר|מאשרת|אישור|אשר|👍|👌|✅|✔)([\s,.!]|$)/.test(t));
+    // ⏳ השאלה נשאלה לפני יותר מ-15 דקות — "כן" / 👍 לא סוגר: מציגים שוב את הטיוטא ושואלים מחדש (#171)
+    if (ok && Date.now() - (s.confirmFinalAt ?? 0) >= idleMs()) {
+      s.confirmFinal = false; s.confirmFinalAt = null;
+      const out = await showDraft(s, [], user);
+      save(user.id, out.s ?? s);
+      const again = `⏳ עבר זמן מאז השאלה "להפוך את *${s.docno}* לסופית?", ולכן לא סגרתי. הנה הטיוטא שוב — לבדוק ולאשר מחדש:`;
+      return { ...out, replies: [`${again}\n\n${out.replies?.[0] ?? ''}`, ...(out.replies ?? []).slice(1)], buttons: buttonsFor(out.s ?? s), result: 'אישור סופי אחרי 15 דקות — הטיוטא הוצגה שוב' };
+    }
     if (!ok) s.confirmFinal = false;
     if (!file && /^חזרה לטיוטא/.test(t)) { const out = await showDraft(s, [], user); save(user.id, out.s ?? s); return { ...out, buttons: buttonsFor(out.s ?? s) }; }
     if (ok) t = 'מאשר';
@@ -2391,6 +2404,7 @@ async function step(user, s, t, file, allow = { gr: true, pd: false }) {
         // שאלת אישור לפני סגירה — אחרי "סופית" אי אפשר לבטל מהבוט
         if (!s.confirmFinal) {
           s.confirmFinal = true;
+          s.confirmFinalAt = Date.now();
           return { s, replies: [[`🔒 להפוך את *${s.docno}* לסופית?`,
             'אחרי הסגירה אי אפשר לבטל מהבוט — רק בפריוריטי (פעולות ← פתיחת תעודה סופית לעריכה).',
             '*כן* 👍 — לסגור · *חזרה לטיוטא* — להמשיך לבדוק'].join('\n')], result: 'שאלת אישור לפני סגירה' };
@@ -2520,4 +2534,4 @@ function view(userId) {
   };
 }
 
-module.exports = { view, everOpened, markOpened, inMenu, dropMenu, isTrigger, isPriority, opens, active, pending, pausedNote, abandon, switchCancels, wantsUndoFinal, handle, sweep, _jpegToPdf: jpegToPdf, _codeLines: codeLines, _orderDiffs: orderDiffs, _similarLines: similarLines, _askParts: askParts, _projectsOf: projectsOf, _findProjects: findProjects, _ai: ai, _load: load, _clear: (userId) => clear(userId, load(userId)) };
+module.exports = { view, everOpened, markOpened, inMenu, dropMenu, isTrigger, isPriority, opens, active, pending, docId, pausedNote, abandon, switchCancels, wantsUndoFinal, handle, sweep, _jpegToPdf: jpegToPdf, _codeLines: codeLines, _orderDiffs: orderDiffs, _similarLines: similarLines, _askParts: askParts, _projectsOf: projectsOf, _findProjects: findProjects, _ai: ai, _load: load, _clear: (userId) => clear(userId, load(userId)) };

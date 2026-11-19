@@ -81,11 +81,19 @@ function staleQuestion(userId, st, text, msg = {}) {
 }
 
 
-/** לחיצה על כפתור, 👍 / 👎, או "מאשר" / "ביטול" לבד — תשובה לשאלה שממתינה, גם אחרי 15 דקות */
+/**
+ * לחיצה על כפתור, 👍 / 👎, או "מאשר" / "ביטול" לבד — תשובה לשאלה שממתינה, גם אחרי 15 דקות.
+ * 🔒 תגובה (Reaction) או ציטוט — רק כשהם על ההודעה של השאלה (‎msg.onQuestion‎, נקבע ב-‎handleDirect‎ מול
+ * ‎WaQuestions‎). 👍 על הודעה אחרת אינו תשובה (#171).
+ */
 function answerLike(text, msg = {}) {
+  if (msg.kind === 'reactionMessage' || (!msg.button && msg.replyTo?.id)) {
+    if (!msg.onQuestion) return false;
+    if (msg.kind === 'reactionMessage') return true;
+  }
   const n = WaUi.normalize(String(text ?? ''));
   const short = n.split(/\s+/).filter(Boolean).length <= 3;
-  return Boolean(msg.button || msg.kind === 'reactionMessage' || (n && short && (WaUi.YES.test(n) || WaUi.NO.test(n) || WaUi.CANCEL.test(n) || CANCEL.test(n))));
+  return Boolean(msg.button || (n && short && (WaUi.YES.test(n) || WaUi.NO.test(n) || WaUi.CANCEL.test(n) || CANCEL.test(n))));
 }
 
 

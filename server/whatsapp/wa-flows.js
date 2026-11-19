@@ -761,7 +761,7 @@ async function flowMailReplyEdit({ actor, dry, kind, out, replyText, state, t })
     const prev = state.draft.reply;
     const reply = { ...await MailInsights.draftReply(actor.id, prev.gmailId, prev.request, { feedback: t, previous: prev, box: prev.box ?? null }), signature: prev.signature, noSignature: prev.noSignature ?? null };
     // מהפנייה היזומה — ההצעות שעליהן נשאלה השאלה נשארות קשורות לטיוטה
-    return out(replyText(reply), { draft: { ...state.draft, kind: 'mail_reply', reply }, awaiting: true }, { action: 'mail_insights', status: 'ok', result: `תיקון תשובה: ${t.slice(0, 200)}`, buttons: state.draft.buttons ?? (state.draft.alert ? [WaUi.BTN.yes, WaUi.BTN.no] : undefined) });
+    return out(replyText(reply), { draft: { ...state.draft, kind: 'mail_reply', reply, offeredAt: D.nowIso() }, awaiting: true }, { action: 'mail_insights', status: 'ok', result: `תיקון תשובה: ${t.slice(0, 200)}`, buttons: state.draft.buttons ?? (state.draft.alert ? [WaUi.BTN.yes, WaUi.BTN.no] : undefined) });
   }
   return NEXT;
 }
