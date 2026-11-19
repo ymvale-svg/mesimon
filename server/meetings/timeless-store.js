@@ -296,6 +296,20 @@ function endedBetween(fromMs, toMs, { withSummary = true } = {}) {
     .map((r) => ({ meeting: shape(r), emails: parseJson(r.emails, []) }));
 }
 
+/**
+ * 📋 פגישות קודמות שהעובד השתתף בהן ויש להן סיכום — לתדריך לפני פגישה בנושא דומה (‎briefing.js‎).
+ * רק לפי המייל של העובד (הוא היה שם), מהחדשה לישנה. ‎[{ id, title, start, summary }]‎ — ‎summary‎ כטקסט פשוט.
+ */
+function pastWith(emails, { before = new Date().toISOString(), sinceDays = 180, limit = 200 } = {}) {
+  const set = new Set([...(emails ?? [])].map(normEmail).filter((e) => e.includes('@')));
+  if (!set.size) return [];
+  const since = new Date(new Date(before).getTime() - sinceDays * DAY).toISOString();
+  return D.all("SELECT * FROM timeless_meetings WHERE status = 'completed' AND documents IS NOT NULL AND start_at >= ? AND start_at < ? ORDER BY start_at DESC LIMIT ?", since, before, limit)
+    .filter((r) => parseJson(r.emails, []).some((e) => set.has(e)))
+    .map((r) => ({ id: r.id, title: r.title || '', start: r.start_at, summary: plainText(summaryMarkdown(r)) }))
+    .filter((r) => r.summary);
+}
+
 /** הפגישה ב-Timeless שמתאימה לשעה ולמשתתפים (פגישת Zoom, פגישת משימון, אירוע ביומן) */
 const normTitle = (x) => String(x ?? '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
 
@@ -461,7 +475,7 @@ function start() {
 }
 
 module.exports = {
-  start, tick, sweep, syncMeeting, lastSweepAt, sweepEveryMs, list, get, details, transcriptText, endedBetween, near, canSee,
+  start, tick, sweep, syncMeeting, lastSweepAt, sweepEveryMs, list, get, details, transcriptText, endedBetween, pastWith, near, canSee,
   stored, plainText, excerpt,
   registerWebhook, webhookStatus, handleWebhook, verifySignature, runTool,
   _internal: { upsert, shape, needDetails, ensureRange, fetchDetails }

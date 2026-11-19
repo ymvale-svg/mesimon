@@ -185,12 +185,38 @@ test('"לשלוח למשתתפים" — הסיכום במייל הוא הסיכ�
   D.run('INSERT INTO meeting_followups (source, ref, user_id, title, start_at, end_at, data, sent_at) VALUES (?,?,?,?,?,?,?,?)',
     'wa', String(audioId), me.id, meeting.title, meeting.start, meeting.end, '{}', D.nowIso());
   t.mock.method(Gmail, 'canSend', () => true);
+  // בלי AI — הסיכום של Timeless כמו שהוא (כטקסט)
+  const Claude = require('../../../server/integrations/claude');
+  t.mock.method(Claude, 'isEnabled', () => false);
   const r = await Followup.shareFor(Auth.loadActor('user', me.id), { source: 'wa', ref: audioId });
   assert.equal(r.draft.kind, 'meeting_summary_mail');
   assert.deepEqual(r.draft.to.map((p) => p.email), [dana.email]);
   assert.match(r.draft.text, /• הוחלט להתקדם עם הספק/);
   assert.doesNotMatch(r.draft.text, /על מה דיברנו|דיברנו על לוח הזמנים/, 'לא הסיכום שלנו');
   assert.doesNotMatch(r.draft.text, /##|\*\*/);
+});
+
+test('"לשלוח למשתתפים" עם AI — הסיכום של Timeless בעמוד אחד (הוחלט 18.11.26: "ארוך ולא יעיל")', async (t) => {
+  const { audioId, me, meeting } = setup(t, 25 * 60);
+  const id = `mtg_page${audioId}`;
+  storeMeeting(id, { emails: [me.email], summary: `${TL_SUMMARY}\n\nעוד פסקה ארוכה ${audioId}` });
+  D.run("UPDATE meeting_audio SET status = 'ready', timeless_id = ? WHERE id = ?", id, audioId);
+  D.run('INSERT OR REPLACE INTO meeting_digests (source, ref, data, created_at) VALUES (?,?,?,?)', 'wa', String(audioId), JSON.stringify(DIGEST), D.nowIso());
+  D.run('INSERT INTO meeting_followups (source, ref, user_id, title, start_at, end_at, data, sent_at) VALUES (?,?,?,?,?,?,?,?)',
+    'wa', String(audioId), me.id, meeting.title, meeting.start, meeting.end, '{}', D.nowIso());
+  t.mock.method(Gmail, 'canSend', () => true);
+  const ai = Fakes.claude(t, (opts) => (opts.schema?.properties?.tldr
+    ? { tldr: 'הוחלט להתקדם עם הספק.', decisions: ['ממשיכים עם הספק'], tasks: [{ who: 'דנה', what: 'לשלוח הצעת מחיר', due: 'יום חמישי' }], points: [], open: [] }
+    : DIGEST));
+  const r = await Followup.shareFor(Auth.loadActor('user', me.id), { source: 'wa', ref: audioId });
+  assert.match(r.draft.text, /בשורה התחתונה:\nהוחלט להתקדם עם הספק\./);
+  assert.match(r.draft.text, /משימות — מי, מה ועד מתי:\n• דנה — לשלוח הצעת מחיר \(יום חמישי\)/);
+  assert.doesNotMatch(r.draft.text, /עוד פסקה ארוכה/);
+  // פעם אחת לכל סיכום — לא שוב לכל משתתף
+  const pages = () => ai.calls.filter((c) => c.opts.schema?.properties?.tldr).length;
+  assert.equal(pages(), 1);
+  await Followup.shareFor(Auth.loadActor('user', me.id), { source: 'wa', ref: audioId });
+  assert.equal(pages(), 1, 'מהמטמון');
 });
 
 test('בלי סיכום של Timeless — המייל מהסיכום שלנו, כמו קודם', () => {

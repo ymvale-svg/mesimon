@@ -1839,6 +1839,7 @@ const DEFAULT_SETTINGS = {
   meeting_default_minutes: 30,             // משך ברירת מחדל
   meeting_buffer_minutes: 10,              // מרווח מפגישה צמודה בהצעת מועדים
   meeting_reminder_minutes: 15,            // כמה דקות לפני — התראה ובוט הוואטסאפ, עם קישור הפגישה
+  meeting_summary_auto: true,              // 📝 הסיכום של Timeless — במייל ובבוט למשתתפים מהארגון, ולידע הארגוני (מבחוץ — באישור מי שקבע)
   meeting_followup_minutes: 15,            // כמה דקות אחרי סוף פגישה מוקלטת — הבוט שואל את המשתתפים מה לשלוח
   meeting_audio_min_kb: 1024,              // הודעה קולית גדולה מזה (כ-8 דקות) לבוט = הקלטת פגישה, והבוט שואל לאיזו פגישה לשייך
   meeting_audio_timeless_min: 20,          // הקלטת פגישה ארוכה מזה (דקות) — מועלית ל-Timeless, והתמליל והסיכום רק משם
