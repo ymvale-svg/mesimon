@@ -2966,6 +2966,7 @@ button.txt-open:hover { color: var(--brand-ink); text-decoration: underline; }
 .mask-actions { display: flex; flex-wrap: wrap; gap: 6px; }
 .mask-foot { margin-top: 2px; }
 .mask-sec { display: grid; gap: 6px; padding-top: 8px; border-top: 1px solid var(--border); }
+.mask-draft .mask-a { padding: 10px 12px; border-radius: 8px; background: var(--surface-2, var(--bg)); border: 1px solid var(--border); }
 .mask-sec:first-child { border-top: 0; padding-top: 0; }
 .mask-sec-title { font-weight: 700; font-size: 13.5px; color: var(--text-soft); }
 .mask-item {
