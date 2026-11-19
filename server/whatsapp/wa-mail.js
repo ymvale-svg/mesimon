@@ -103,6 +103,9 @@ function solveText(r) {
 }
 
 
+/** "לכולם" / "השב לכולם" / "עם כולם בהעתק" — מי שהיה בשרשור נכנס להעתק */
+const TO_ALL = /(?:^|[\s,])(?:ל|את\s+|עם\s+)?כולם(?:[\s,.!]|$)|השב\s+לכולם|לכל\s+(?:המשתתפים|מי\s+שבשרשור|השרשור)/;
+
 /** טיוטה (או תיקון שלה) — עם ההתכתבות האחרונה עם הנמען, להצעות מה להוסיף */
 async function draftEmail(actor, contact, instruction, { feedback = '', previous = null, dry = false, channel = null, solve = null } = {}) {
   const owner = D.get('SELECT id, full_name, email FROM users WHERE id = ?', actor.id);
@@ -128,8 +131,13 @@ async function draftEmail(actor, contact, instruction, { feedback = '', previous
   if (replyThread) d.subject = `Re: ${replyThread.subject}`;
   const resolved = resolveCc(actor, d.cc_names, { previous: previous?.cc ?? [], contact });
   const { ccAsk } = resolved;
-  // תשובה בשרשור — מי שכבר היה בו נשאר בהעתק (כמו "השב לכולם")
-  const cc = picked ? [...resolved.cc, ...MailThread.threadCc(actor.id, picked, contact.email).filter((p) => !resolved.cc.some((c) => c.email === p.email))] : resolved.cc;
+  /*
+   * תשובה בשרשור — מי שהיה בו נכנס להעתק רק כשביקשו ("לכולם", "השב לכולם"). בלי זה — רק הנמען, והטיוטה מציינת
+   * כמה עוד היו בשרשור (סקירה 18.11: הודעה קצרה לאדם אחד יצאה עם כל ההעתק, ועובדים הורידו אותו או ביטלו)
+   */
+  const threadPeople = picked ? MailThread.threadCc(actor.id, picked, contact.email) : replyThread ? previous?.threadPeople ?? [] : [];
+  const toAll = TO_ALL.test(`${previous ? '' : instruction} ${feedback}`);
+  const cc = toAll ? [...resolved.cc, ...threadPeople.filter((p) => !resolved.cc.some((c) => c.email === p.email))] : resolved.cc;
   const suggestions = (Array.isArray(d.suggestions) ? d.suggestions : []).map((x) => String(x).trim()).filter(Boolean).slice(0, 4);
   return {
     kind: 'email',
@@ -153,6 +161,7 @@ async function draftEmail(actor, contact, instruction, { feedback = '', previous
     cc: via === 'email' ? cc : [],
     ccAsk: via === 'email' ? ccAsk : [],
     replyThread: via === 'email' ? replyThread : null,
+    threadPeople: via === 'email' ? threadPeople : [],
     ...(via === 'email' ? await signatureFields(actor.id) : { signature: false, noSignature: null })
   };
 }

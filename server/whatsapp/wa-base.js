@@ -566,6 +566,9 @@ function emailText(p) {
   if (!colleague && p.cc?.length) {
     lines.splice(1, 0, `📎 *בהעתק:* ${p.cc.map((c) => (c.name ? `${c.name} <${c.email}>` : c.email)).join(', ')}`);
   }
+  // בשרשור היו עוד אנשים, והם לא בהעתק — אפשר לצרף ב"לכולם"
+  const others = (!colleague && p.replyThread ? p.threadPeople ?? [] : []).filter((x) => !(p.cc ?? []).some((c) => c.email === x.email));
+  if (others.length) lines.push('', `👥 בשרשור יש עוד ${others.length === 1 ? 'אחד' : others.length} (${others.slice(0, 3).map((x) => x.name || x.email).join(', ')}${others.length > 3 ? '…' : ''}) — לא בהעתק. *לכולם* — לצרף אותם.`);
   // שם להעתק שלא ברור למי הכוונה — שואלים, ולא שולחים עותק לאדם הלא נכון
   for (const a of (!colleague && p.ccAsk) || []) {
     lines.push('', a.options.length
