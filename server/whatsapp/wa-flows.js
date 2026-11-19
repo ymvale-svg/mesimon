@@ -756,7 +756,14 @@ async function flowMailWalk({ actor, dry, out, state, t }) {
 }
 
 // טיוטת תשובה למייל שממתינה: כל הודעה שאינה "כן" או "ביטול" היא תיקון
+// "לא" על טיוטת תשובה למייל — לא עונים (17.11: "לא ❌" שלוש פעמים ניסח את התשובה מחדש). "לא, תכתוב ש…" — תיקון
+const NO_REPLY = /^(?:לא|לא\s+תודה|ממש\s+לא|לא\s+(?:צריך|לענות|לשלוח)|אל\s+תענה|אל\s+תשלח|no|👎|❌)(?:\s*❌)?[\s.!]*$/i;
+
 async function flowMailReplyEdit({ actor, dry, kind, out, replyText, state, t }) {
+  if (kind === 'mail_reply' && state.awaiting && NO_REPLY.test(t)) {
+    if (!dry && state.draft.suggestionIds?.length) closeAlerted(actor.id, state.draft.suggestionIds, 'skipped');
+    return out('בסדר, לא עונים 👍', { draft: null }, { action: 'mail_insights', status: 'ok', result: `לא עונים: ${state.draft.reply?.subject ?? ''}`.slice(0, 300) });
+  }
   if (kind === 'mail_reply' && !dry && state.awaiting && Claude.isEnabled() && WaActions.allowed(actor, 'mail_insights')) {
     const prev = state.draft.reply;
     const reply = { ...await MailInsights.draftReply(actor.id, prev.gmailId, prev.request, { feedback: t, previous: prev, box: prev.box ?? null }), signature: prev.signature, noSignature: prev.noSignature ?? null };
