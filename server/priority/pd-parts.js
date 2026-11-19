@@ -34,6 +34,9 @@ const BTN_MORE = 'כן, דרישה נוספת ✅';
 const BTN_SKIP = 'לא, תודה ❌';
 const PLAIN_HOURS = 12;
 const KEEP_DAYS = 60;
+/** 🔒 בקשה סגורה (‎done‎ / ‎expired‎ / ‎asked‎) — נמחקת אחרי ‎PURGE_DAYS‎ מיצירתה; תשובות לפריט דרך הקישור — עד ‎MAX_ANSWERS‎ */
+const PURGE_DAYS = 90;
+const MAX_ANSWERS = 20;
 const ASK_DAYS = 7;
 const TZ = 'Asia/Jerusalem';
 
@@ -256,6 +259,18 @@ async function tell(r) {
   await mailWorker(r, `${text}\n\nלענות — בבוט בוואטסאפ: "${yesBtn(r.mode)}" (או "${BTN_SKIP}").`);
 }
 
+/**
+ * 🔒 שמירת מידע: בקשה פתוחה ישנה מ-‎KEEP_DAYS‎ — ‎expired‎ והקישור (‎token‎) מתאפס; בקשה שאינה פתוחה ישנה מ-‎PURGE_DAYS‎ — נמחקת
+ * (שם העובד, הפרויקט, הספק והפריטים לא נשמרים לתמיד, והקישור במייל לא חי לנצח).
+ */
+function cleanup() {
+  const old = new Date(Date.now() - KEEP_DAYS * 86400000).toISOString();
+  D.run("UPDATE pd_part_requests SET status = 'expired', token = NULL WHERE status = 'open' AND created_at < ?", old);
+  D.run("UPDATE pd_part_requests SET token = NULL WHERE status = 'expired' AND token IS NOT NULL");
+  const purge = new Date(Date.now() - PURGE_DAYS * 86400000).toISOString();
+  D.run("DELETE FROM pd_part_requests WHERE status != 'open' AND created_at < ?", purge);
+}
+
 let running = false;
 async function tick() {
   if (running || !Priority.isEnabled()) return { checked: 0, told: 0 };
@@ -263,8 +278,7 @@ async function tick() {
   let checked = 0;
   let told = 0;
   try {
-    const old = new Date(Date.now() - KEEP_DAYS * 86400000).toISOString();
-    D.run("UPDATE pd_part_requests SET status = 'expired' WHERE status = 'open' AND created_at < ?", old);
+    cleanup();
     for (const { id } of D.all("SELECT id FROM pd_part_requests WHERE status = 'open' ORDER BY id")) {
       const r = row(id);
       checked += 1;
@@ -342,8 +356,11 @@ function answer(user, text) {
 
 const byToken = (token) => {
   if (!/^[0-9a-f]{36}$/.test(String(token ?? ''))) return null;
-  const r = D.get('SELECT id FROM pd_part_requests WHERE token = ?', token);
-  return r ? row(r.id) : null;
+  const r = D.get('SELECT id, status, created_at FROM pd_part_requests WHERE token = ?', token);
+  if (!r || r.status === 'expired') return null;
+  // 🔒 הקישור במייל תקף ‎KEEP_DAYS‎ מיצירת הבקשה — גם לצפייה בבקשה שכבר נסגרה
+  if (Date.parse(r.created_at) < Date.now() - KEEP_DAYS * 86400000) return null;
+  return row(r.id);
 };
 const nameOf = (id) => D.get('SELECT full_name FROM users WHERE id = ?', id)?.full_name ?? '';
 
@@ -379,6 +396,8 @@ async function buyerAnswer(token, { n, code = '', note = '' } = {}) {
     part = { ...partOf(p), why: 'לפי הרכש' };
     m.built = part;
   }
+  // 🔒 הקישור בלי התחברות — כל תשובה שולחת לעובד הודעה; לא בלי סוף
+  if ((m.answers?.length ?? 0) >= MAX_ANSWERS) throw Object.assign(new Error('יותר מדי תשובות לפריט הזה — כתבו לעובד ישירות'), { status: 429 });
   (m.answers ??= []).push({ code: part?.code ?? '', note: text, at: D.nowIso() });
   D.run('UPDATE pd_part_requests SET missing = ? WHERE id = ?', JSON.stringify(r.missing), r.id);
   const buyer = contact()?.name ?? 'הרכש';
@@ -389,4 +408,4 @@ async function buyerAnswer(token, { n, code = '', note = '' } = {}) {
   return forBuyer(token);
 }
 
-module.exports = { BTN_REBUILD, BTN_MORE, BTN_SKIP, forBuyer, buyerAnswer, contact, requestBuild, setMode, tick, start, owns, answer, setHooks, _findBuilt: findBuilt, _mailOf: mailOf, _row: row };
+module.exports = { BTN_REBUILD, BTN_MORE, BTN_SKIP, forBuyer, buyerAnswer, cleanup, contact, requestBuild, setMode, tick, start, owns, answer, setHooks, _findBuilt: findBuilt, _mailOf: mailOf, _row: row };
