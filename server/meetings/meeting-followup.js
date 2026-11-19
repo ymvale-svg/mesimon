@@ -36,6 +36,8 @@ const Meetings = require('./meetings');
 const Calendar = require('./calendar');
 const MeetingAudio = require('./meeting-audio');
 const Suggestions = require('./meeting-suggestions');
+const AutoSummary = require('./meeting-summary-auto');
+const OnePage = require('./meeting-onepage');
 const Secretariat = require('../core').Secretariat;
 
 const MIN = 60000;
@@ -44,6 +46,8 @@ const GIVE_UP_MS = 24 * HOUR;          // אחרי יממה מסוף הפגיש�
 const ANSWER_WINDOW_MS = 48 * HOUR;    // עד מתי "סיכום" מתייחס לפגישה שנשאלה
 const ZOOM_RECHECK_MS = 10 * MIN;      // בדיקת הקלטה ב-Zoom לכל פגישה
 const SAME_MEETING_MS = 15 * MIN;      // Zoom ו-Timeless על אותה פגישה
+const WAIT_SUMMARY_MS = 2 * HOUR;      // סיכום אוטומטי: מחכים לסיכום של Timeless עד שעתיים מסוף הפגישה, ואז — השאלה הרגילה
+const BOT_SUMMARY_MAX = 3000;          // הסיכום בבוט — עד כאן; המלא במייל
 const TZ = 'Asia/Jerusalem';
 
 const BTN = Object.freeze({
@@ -124,11 +128,21 @@ async function zoomCandidates(now) {
 function timelessCandidates(now) {
   const users = D.all("SELECT id, email, work_email FROM users WHERE status = 'active' AND phone IS NOT NULL AND phone <> ''")
     .map((u) => ({ id: u.id, emails: emailsOf(u) }));
-  return Store.endedBetween(now - GIVE_UP_MS, now - delayMs()).map(({ meeting: m, emails }) => ({
-    source: 'timeless', ref: String(m.id), title: m.title || 'פגישה', start: m.start, end: m.end,
-    data: { participants: m.participants },
-    users: users.filter((u) => Timeless.isConnected(u.id) && emails.some((e) => u.emails.has(e))).map((u) => u.id)
-  })).filter((c) => c.users.length);
+  const withPhone = new Set(users.map((u) => u.id));
+  // הקלטה מוואטסאפ שהועלתה ל-Timeless — מי ששלח אותה כבר מקבל את הסיכום מהבוט (‎meeting-audio.js‎)
+  const fromWa = new Set(D.all('SELECT timeless_id FROM meeting_audio WHERE timeless_id IS NOT NULL').map((r) => r.timeless_id));
+  const auto = AutoSummary.enabled();
+  return Store.endedBetween(now - GIVE_UP_MS, now - delayMs()).filter(({ meeting: m }) => !fromWa.has(m.id)).map(({ meeting: m, emails }) => {
+    const base = { source: 'timeless', ref: String(m.id), title: m.title || 'פגישה', start: m.start, end: m.end, data: { participants: m.participants } };
+    /*
+     * 📝 הסיכום כבר מוכן ונשלח במייל (‎meeting-summary-auto.js‎) — הבוט שולח אותו לכל המשתתפים מהארגון
+     * (גם מוזמנים מהיומן), בלי לשאול "מה לשלוח לך?". עוד לא מוכן — מחכים עד ‎WAIT_SUMMARY_MS‎.
+     */
+    const st = auto ? AutoSummary.stateOf(m.id) : null;
+    if (st) return { ...base, summary: Store.stored(m.id)?.summary ?? '', users: st.orgIds.filter((id) => withPhone.has(id)) };
+    if (auto && now - new Date(m.end).getTime() < WAIT_SUMMARY_MS) return { ...base, users: [] };
+    return { ...base, users: users.filter((u) => Timeless.isConnected(u.id) && emails.some((e) => u.emails.has(e))).map((u) => u.id) };
+  }).filter((c) => c.users.length);
 }
 
 // ---------------------------------------------------------------------------
@@ -146,6 +160,31 @@ function askText(u, m) {
 }
 
 /**
+ * 📝 הסיכום עצמו בבוט (הוחלט 18.11.26) — במקום "מה לשלוח לך?". למי שקבע, כשיש משתתפים מבחוץ —
+ * גם "לשלוח גם להם?" (‎draft‎ לאישור, מכתובת המערכת).
+ * @returns {{ text, buttons, draft }}
+ */
+async function summaryMessage(u, m) {
+  const st = AutoSummary.stateOf(m.ref);
+  // 📄 רק הנוסח המקוצר, בעמוד אחד (הוחלט 18.11.26); בלי AI — תחילת הסיכום של Timeless
+  const body = (await OnePage.forSending(m.summary, { title: m.title, max: BOT_SUMMARY_MAX })).wa;
+  const lines = [
+    `📝 *סיכום הפגישה: ${m.title}* · ${hhmm(m.start)}`,
+    '',
+    body
+  ];
+  if (st?.mailed?.includes(u.id)) lines.push('', '📧 הסיכום נשלח במייל לכל המשתתפים מהארגון.');
+  const draft = await AutoSummary.externalDraft(m.ref, u.id);
+  if (draft) {
+    const names = draft.to.map((p) => p.name || p.email);
+    lines.push('', `📤 *לשלוח את הסיכום גם ל-${names.length} ${names.length === 1 ? 'משתתף' : 'משתתפים'} מבחוץ?*`,
+      `${names.slice(0, 8).join(', ')}${names.length > 8 ? ` ועוד ${names.length - 8}` : ''}`, 'לשלוח? *כן* 👍 · *לא* 👎');
+    return { text: lines.join('\n'), buttons: [WaUi.BTN.yes, WaUi.BTN.no], draft };
+  }
+  return { text: lines.join('\n'), buttons: Timeless.isConnected(u.id) ? [BTN.tasks, BTN.recording] : [], draft: null };
+}
+
+/**
  * סבב אחד — נקרא מהסבב של הבוט, בשעות הפעילות.
  * @param {object} io  ‎{ eligible(userId) → bool, busy(userId) → bool, send(userId, text, buttons) }‎
  */
@@ -156,6 +195,8 @@ async function sweep(io) {
 
 async function sweepOnce(io) {
   const now = Date.now();
+  // 📝 סיכומים של Timeless שהגיעו — מייל למשתתפים מהארגון ולידע הארגוני, פעם אחת לפגישה
+  await AutoSummary.sweep(now).catch((err) => console.error('[משימון] סיכום פגישה אוטומטי נכשל:', err.message));
   const candidates = await zoomCandidates(now).catch(() => []);
   for (const c of timelessCandidates(now)) {
     c.users = c.users.filter((id) => io.eligible(id));
@@ -172,7 +213,12 @@ async function sweepOnce(io) {
       if (!u?.phone) continue;
       record(userId, m);
       done.add(userId);
-      await io.send(userId, askText(u, m), [BTN.summary, BTN.tasks, BTN.recording], m);
+      if (m.summary) {
+        const msg = await summaryMessage(u, m);
+        await io.send(userId, msg.text, msg.buttons, m, { draft: msg.draft });
+      } else {
+        await io.send(userId, askText(u, m), [BTN.summary, BTN.tasks, BTN.recording], m);
+      }
     }
   }
 }
@@ -474,8 +520,37 @@ async function invitees(u, row) {
   return { people };
 }
 
-/** גוף המייל: סיכום, החלטות, ומשימות להמשך לפי אחראי. החתימה — של Gmail */
-function summaryMailText(row, dig) {
+/**
+ * הסיכום של Timeless לפגישה (הוחלט 18.11.26 — זה מה שנשלח למשתתפים): פגישת Timeless, הקלטה מוואטסאפ
+ * שהועלתה ל-Timeless, או פגישת Zoom שהוקלטה גם ב-Timeless (לפי שעה ומשתתפים). ‎''‎ — אין.
+ */
+async function timelessSummaryFor(u, row) {
+  let id = null;
+  if (row.source === 'timeless') id = row.ref;
+  else if (row.source === 'wa') id = D.get('SELECT timeless_id FROM meeting_audio WHERE id = ?', Number(row.ref))?.timeless_id ?? null;
+  else id = Store.near(row.start_at, emailsOf(u), { title: row.title })?.id ?? null;
+  if (!id) return '';
+  // הקלטה ששלח העובד עצמו — שלו; כל פגישה אחרת — רק אם הוא רואה אותה ב-Timeless
+  if (row.source !== 'wa' && !(await Store.get(u.id, id).catch(() => null))) return '';
+  return Store.stored(id)?.summary ?? '';
+}
+
+/**
+ * גוף המייל. יש סיכום של Timeless — הוא הסיכום; אחרת: סיכום, החלטות, ומשימות להמשך לפי אחראי. החתימה — של Gmail
+ */
+function summaryMailText(row, dig, timelessSummary = '') {
+  if (timelessSummary) {
+    const body = Store.plainText(timelessSummary);
+    return [
+      'שלום לכולם,',
+      '',
+      `מצורף סיכום הפגישה "${row.title}" מ-${ddmm(row.start_at)}.`,
+      '',
+      body.length > 15000 ? `${body.slice(0, 15000)}…` : body,
+      '',
+      'אם משהו חסר או לא מדויק — אשמח לתיקון.'
+    ].join('\n');
+  }
   const fmtDue = (d) => (/^\d{4}-\d{2}-\d{2}$/.test(d ?? '') ? ` (עד ${d.split('-').reverse().slice(0, 2).join('.')})` : '');
   return [
     'שלום לכולם,',
@@ -522,7 +597,9 @@ async function shareDraft(u, row, dig, head, { to = null } = {}) {
   }
   if (!inv.people.length) return { text: `${head}\nבזימון ביומן אין משתתפים מלבדך — אין למי לשלוח.`, buttons: [BTN.tasks], result: `שליחה למשתתפים — אין משתתפים: ${row.title}` };
   const subject = `סיכום פגישה: ${row.title} · ${ddmm(row.start_at)}`;
-  const text = summaryMailText(row, dig);
+  // 📄 הסיכום של Timeless — בעמוד אחד (‎meeting-onepage.js‎)
+  const tl = await timelessSummaryFor(u, row).catch(() => '');
+  const text = summaryMailText(row, dig, tl ? (await OnePage.forSending(tl, { title: row.title, max: 3000 })).text : '');
   const names = inv.people.map((p) => p.name || p.email);
   return {
     text: [
@@ -579,6 +656,11 @@ async function sendSummaryMail(actor, draft, { dry = false } = {}) {
   const to = (draft.to ?? []).map((p) => p.email).filter((e) => e.includes('@'));
   if (!to.length) return 'אין למי לשלוח.';
   if (dry) return `(בדיקה) הייתי שולח את הסיכום ל-${to.length} משתתפים.`;
+  // 📝 סיכום אוטומטי — למשתתפים מבחוץ, מכתובת המערכת (הוחלט 18.11.26)
+  if (draft.via === 'system') {
+    const n = await AutoSummary.sendSystem(draft);
+    return `📧 הסיכום נשלח ל-${n} ${n === 1 ? 'משתתף' : 'משתתפים'} מבחוץ.`;
+  }
   const who = Gmail.handle(actor.id, 0);
   const sender = Gmail.connectionOf(who);
   if (!Gmail.canSend(who) || !sender?.email) return 'כדי לשלוח מהמייל שלך צריך לחבר את תיבת ה-Gmail באפליקציה: "החשבון שלי ← Gmail ועוזר ה-AI".';
@@ -626,6 +708,7 @@ const isOpenButton = (t) => WaUi.normalize(t) === WaUi.normalize(BTN.open) || /^
 
 /** ניקוי — פניות ותקצירים בני יותר מחודש */
 function prune() {
+  AutoSummary.prune();
   const old = new Date(Date.now() - 30 * 24 * HOUR).toISOString();
   D.run('DELETE FROM meeting_followups WHERE sent_at < ?', old);
   D.run('DELETE FROM meeting_digests WHERE created_at < ?', old);
@@ -633,5 +716,5 @@ function prune() {
 
 module.exports = {
   sweep, answer, openTasks, isOpenButton, digest, prune, BTN, sendSummaryMail, shareFor, summaryRequest,
-  _internal: { vttText, myItems, followupFor, askText, alreadyAsked, record, ASK, BARE, norm, timelessMatch, timelessCandidates, invitees, summaryMailText, shareDraft }
+  _internal: { summaryMessage, vttText, myItems, followupFor, askText, alreadyAsked, record, ASK, BARE, norm, timelessMatch, timelessCandidates, invitees, summaryMailText, shareDraft, timelessSummaryFor }
 };

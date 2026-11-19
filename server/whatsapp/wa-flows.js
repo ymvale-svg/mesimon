@@ -35,7 +35,7 @@ const { actionOf, CANCEL, checkDraft, draftText, featuresText, helpText, localDa
 const { meetCoordRun, pushToUser, rfqPrepare, rfqSend } = require('./wa-proactive');
 const { businessCommand, closeAlerted, closureDecision, confirmPending, contactOf, draftEmail, findRecipients, sendPlainMail, replyOffer, MAIL_WALK_BTN, isMailWalkStart, mailWalkIntro, mailWalkAt, mailWalkEnd, startGoodsFromMail, suggestionDecision, suggestionFeedback, threadAddText, VIA_EMAIL, VIA_MESIMON } = require('./wa-mail');
 const { agentsText, cut, menuButtons, menuOptions, menuText, parseClosureCommand, parseSuggestionCommand, PLAIN_AGENTS, walkAction, walkButtons, walkText } = require('./wa-menu');
-const { meetingAudioAllowed, meetingAudioTurn, TRANSLATE } = require('./wa-meeting');
+const { meetingAudioAllowed, meetingAudioTurn, timelessAudioCheck, TRANSLATE } = require('./wa-meeting');
 
 /** "לא שלי — הזרימה הבאה" */
 const NEXT = Symbol('NEXT');
@@ -495,6 +495,14 @@ async function flowMeetingAudioAnswer(ctx) {
   return NEXT;
 }
 
+// 🎥 "תבדוק" על הקלטה שמחכה ל-Timeless — בודקים עכשיו, ומה שמוכן נשלח
+async function flowMeetingAudioStatus({ actor, out, t }) {
+  if (actor?.type !== 'user') return NEXT;
+  const reply = await timelessAudioCheck(actor, t).catch((err) => { console.error('[משימון] בדיקת הקלטה ב-Timeless נכשלה:', err.message); return null; });
+  if (!reply) return NEXT;
+  return out(reply, { draft: null }, { action: 'meeting_audio', status: 'ok', result: reply.split('\n')[0].slice(0, 300) });
+}
+
 async function flowMeetingAudioRequest({ actor, out, t }) {
   if (meetingAudioAllowed(actor)) {
     const armed = MeetingAudio.arm(actor.id, t);
@@ -753,7 +761,7 @@ async function flowMailReplyEdit({ actor, dry, kind, out, replyText, state, t })
     const prev = state.draft.reply;
     const reply = { ...await MailInsights.draftReply(actor.id, prev.gmailId, prev.request, { feedback: t, previous: prev, box: prev.box ?? null }), signature: prev.signature, noSignature: prev.noSignature ?? null };
     // מהפנייה היזומה — ההצעות שעליהן נשאלה השאלה נשארות קשורות לטיוטה
-    return out(replyText(reply), { draft: { ...state.draft, kind: 'mail_reply', reply }, awaiting: true }, { action: 'mail_insights', status: 'ok', result: `תיקון תשובה: ${t.slice(0, 200)}`, buttons: state.draft.buttons ?? (state.draft.alert ? [WaUi.BTN.yes, WaUi.BTN.no] : undefined) });
+    return out(replyText(reply), { draft: { ...state.draft, kind: 'mail_reply', reply, offeredAt: D.nowIso() }, awaiting: true }, { action: 'mail_insights', status: 'ok', result: `תיקון תשובה: ${t.slice(0, 200)}`, buttons: state.draft.buttons ?? (state.draft.alert ? [WaUi.BTN.yes, WaUi.BTN.no] : undefined) });
   }
   return NEXT;
 }
@@ -1010,5 +1018,5 @@ const switchCancels = () => Boolean(D.getSetting('wa_topic_switch_cancels', true
 const DRAFT_ONLY = /(?:(?:בלי|לא\s+משנה|אין\s+לי\s+(?:את\s+)?|עזוב(?:\s+את)?)\s*ה?(?:כתובת|מייל|נמען)|רק\s+ת?(?:נסח|כתוב)|ת?נסח\s+(?:לי\s+)?(?:רק\s+)?(?:את\s+)?ה?(?:מלל|טקסט|נוסח))/;
 
 module.exports = {
-  SEND_NOW, DRAFT_ONLY, flowAgentsList, flowAlertNo, flowApproval, flowBusinessCommand, flowCancel, flowClosureCommand, flowEmailEdit, flowEmailPick, flowEmailSolve, flowEmailVia, flowFeaturesRequest, flowFormFillRequest, flowGreeting, flowInstinct, flowInstinctExplicit, flowInstinctReply, flowInstinctPilot, flowNoticeToInstinct, flowIntentCancel, flowIntentDenied, flowIntentMenu, flowIntentOther, flowMailReplyEdit, flowMailWalk, flowMeetCoordRequest, flowMeetingAudioAnswer, flowMeetingAudioRequest, flowMeetingFollowupRequest, flowMeetingReminderRequest, flowMenuList, flowMenuPick, flowNoAi, flowNoticeRequest, flowOnClosureAddress, flowOnDayEvening, flowOnFormFill, flowOnGoodsStop, flowOnMailMuteSender, flowOnMailRemindOrGoods, flowOnMeetCoord, flowOnMeetingTasks, flowOnPaceOffer, flowOnPlainMail, flowOnReminder, flowOnRfq, flowOnSentFollowup, flowOnThreadAdd, flowRemindersRequest, flowReplyAsk, flowRfqRequest, flowRfqSummary, flowSuggestionCommand, flowTranslateRequest, flowWalk, NEXT, switchCancels
+  SEND_NOW, DRAFT_ONLY, flowAgentsList, flowAlertNo, flowApproval, flowBusinessCommand, flowCancel, flowClosureCommand, flowEmailEdit, flowEmailPick, flowEmailSolve, flowEmailVia, flowFeaturesRequest, flowFormFillRequest, flowGreeting, flowInstinct, flowInstinctExplicit, flowInstinctReply, flowInstinctPilot, flowNoticeToInstinct, flowIntentCancel, flowIntentDenied, flowIntentMenu, flowIntentOther, flowMailReplyEdit, flowMailWalk, flowMeetCoordRequest, flowMeetingAudioAnswer, flowMeetingAudioRequest, flowMeetingAudioStatus, flowMeetingFollowupRequest, flowMeetingReminderRequest, flowMenuList, flowMenuPick, flowNoAi, flowNoticeRequest, flowOnClosureAddress, flowOnDayEvening, flowOnFormFill, flowOnGoodsStop, flowOnMailMuteSender, flowOnMailRemindOrGoods, flowOnMeetCoord, flowOnMeetingTasks, flowOnPaceOffer, flowOnPlainMail, flowOnReminder, flowOnRfq, flowOnSentFollowup, flowOnThreadAdd, flowRemindersRequest, flowReplyAsk, flowRfqRequest, flowRfqSummary, flowSuggestionCommand, flowTranslateRequest, flowWalk, NEXT, switchCancels
 };

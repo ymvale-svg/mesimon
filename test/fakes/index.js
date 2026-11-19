@@ -11,13 +11,15 @@ const WhatsApp = require('../../server/integrations/whatsapp');
 const Claude = require('../../server/integrations/claude');
 const Priority = require('../../server/integrations/priority');
 
-/** וואטסאפ: כל ‎call‎ נרשם ומחזיר הצלחה. ‎opts.fail‎ — שיטות שייכשלו (למשל כפתורים) */
+let waSeq = 0;
+/** וואטסאפ: כל ‎call‎ נרשם ומחזיר הצלחה (עם מזהה הודעה ייחודי — ‎id‎). ‎opts.fail‎ — שיטות שייכשלו (למשל כפתורים) */
 function whatsapp(t, { fail = [] } = {}) {
   const calls = [];
   t.mock.method(WhatsApp, 'call', async (channel, method, opts = {}) => {
-    calls.push({ method, body: opts.body ?? null });
+    const id = `fake-${++waSeq}`;
+    calls.push({ method, body: opts.body ?? null, id });
     if (fail.includes(method)) throw new Error(`${method} נכשל (זיוף)`);
-    return { idMessage: `fake-${calls.length}` };
+    return { idMessage: id };
   });
   t.mock.method(WhatsApp, 'sendFile', async (...args) => { calls.push({ method: 'sendFile', body: args }); return { idMessage: 'fake-file' }; });
   const out = () => calls.filter((c) => c.method !== 'sendReaction');

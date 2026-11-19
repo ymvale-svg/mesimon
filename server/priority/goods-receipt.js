@@ -35,6 +35,7 @@ const { BTN, labels, sameLabel } = require('../whatsapp').WaUi;
 const Prefs = require('./priority-prefs');
 const Access = require('./priority-access');
 const Chain = require('./priority-chain');
+const Parts = require('./pd-parts');
 const LineCmd = require('./line-commands');
 const GrStamp = require('./gr-stamp');
 const Priority = require('../integrations').Priority;
@@ -113,6 +114,7 @@ function buttonsFor(s) {
     case 'order': return ['בלי הזמנה ❌', BTN.cancel];
     case 'lines': return [BTN.yes, BTN.cancel];
     case 'parts': return [BTN.yes, 'כללי'];
+    case 'parts_build': return [BTN.yes, BTN.no];
     case 'files': return [BTN.done];
     case 'review': return [BTN.approve, BTN.cancel];
     default: return [];
@@ -174,6 +176,11 @@ const active = (userId, late = false) => {
 };
 /** יש קליטה פתוחה (גם מושהית) — לתזכורת ולהמשך ב"קבלת סחורה" */
 const pending = (userId) => Boolean(fresh(load(userId)));
+/**
+ * 🔒 המסמך שהקליטה עליו עכשיו (מספר ה-GR, ולפני הטיוטא — מתי התחילה), ‎null‎ — אין / תפריט. נרשם עם הכפתורים
+ * (‎WaQuestions‎), וכפתור או תגובה על הודעה של מסמך אחר — "השאלה כבר לא פתוחה" (#171)
+ */
+const docId = (userId) => { const s = load(userId); return fresh(s) && s.step !== 'menu' ? String(s.docno || s.startedAt || '') || null : null; };
 /**
  * הודעה שנכנסת לפריוריטי — רק במפורש: "קבלת סחורה", "פריוריטי",
  * או קובץ בלי טקסט (הבוט אינו מטפל בקבצים אחרת, ושואל קודם).
@@ -1063,6 +1070,35 @@ function askParts(s) {
     '*כן* 👍 — להמשיך. לשנות: מק"ט ("A120-035-010"), או במילים שלכם ("שורה 1 מיזוג אוויר", "שורה 2 עכבר אלחוטי"), או *כללי*.'].join('\n'));
 }
 
+/*
+ * 🆕 שורות שנשארו על מק"ט כללי 000 — "לשלוח למנהלת הרכש לבניית מק"טים?" (‎pd-parts.js‎, הוחלט 17.11.26).
+ * בשונה מדרישת רכש: הקליטה ממשיכה על 000 בכל מקרה; כשהמק"ט נבנה — רק הודעה למקבל.
+ * רק כשמוגדרת מנהלת רכש, ורק פעם אחת לכל שורה.
+ */
+const NO_WORD = /^(לא|אל|ממש לא|no|👎|❌)([\s,.!]|$)/i;
+const unbuilt = (s) => (Parts.contact() ? s.lines.filter((l) => !l.order && l.part?.code === '000' && !l.req) : []);
+function askBuild(s) {
+  const list = unbuilt(s);
+  if (!list.length) return null;
+  s.step = 'parts_build';
+  const to = Parts.contact();
+  return reply(s, [`🆕 *לא נמצא מק"ט ${list.length === 1 ? 'לשורה' : `ל-${list.length} שורות`}:*`, ...list.map((l) => bullet(`${l.description} — ${qtyText(l.qty)} ${l.unit || "יח'"}`)), '',
+    `*לשלוח ל${to.name} (רכש) לבניית מק"טים?* *כן* 👍 / *לא* 👎`, '_הקליטה ממשיכה בכל מקרה על מק"ט כללי 000._'].join('\n'));
+}
+async function answerBuild(user, s, yes) {
+  const list = unbuilt(s);
+  let note = 'בסדר — ממשיכים על מק"ט כללי 000.';
+  if (yes && list.length) {
+    const r = await Parts.requestBuild(user, s, list.map((l) => ({ n: l.n, description: l.description, qty: l.qty, unit: l.unit || "יח'", note: '', general: l.part })), { source: 'receipt' });
+    note = r.ok ? `📧 נשלח ל*${r.to.name}* במייל: ${list.length === 1 ? 'מק"ט אחד' : `${list.length} מק"טים`} לבנייה בהקדם. הקליטה ממשיכה על 000; כשייבנו — אודיע לך.`
+      : '⚠️ לא הצלחתי לשלוח את המייל לרכש — מנהל המערכת קיבל פירוט. הקליטה ממשיכה על 000.';
+  }
+  for (const l of list) l.req = yes ? 'sent' : 'no';
+  const out = await askProject(s);
+  if (out?.replies?.length) out.replies[0] = `${note}\n\n${out.replies[0]}`;
+  return out;
+}
+
 async function afterLines(s) {
   await codeLines(s);
   return askParts(s);
@@ -1897,6 +1933,14 @@ async function handle({ user, text = '', file = null, reaction = false, allow = 
   // תשובה לשאלה "להפוך לסופית?" — כן / 👍 / מאשר: סוגרים; "חזרה לטיוטא" — הטיוטא; כל דבר אחר — ממשיכים בבדיקה
   if (s.confirmFinal) {
     const ok = !file && (YES.test(t) || /^(מאשר|מאשרת|אישור|אשר|👍|👌|✅|✔)([\s,.!]|$)/.test(t));
+    // ⏳ השאלה נשאלה לפני יותר מ-15 דקות — "כן" / 👍 לא סוגר: מציגים שוב את הטיוטא ושואלים מחדש (#171)
+    if (ok && Date.now() - (s.confirmFinalAt ?? 0) >= idleMs()) {
+      s.confirmFinal = false; s.confirmFinalAt = null;
+      const out = await showDraft(s, [], user);
+      save(user.id, out.s ?? s);
+      const again = `⏳ עבר זמן מאז השאלה "להפוך את *${s.docno}* לסופית?", ולכן לא סגרתי. הנה הטיוטא שוב — לבדוק ולאשר מחדש:`;
+      return { ...out, replies: [`${again}\n\n${out.replies?.[0] ?? ''}`, ...(out.replies ?? []).slice(1)], buttons: buttonsFor(out.s ?? s), result: 'אישור סופי אחרי 15 דקות — הטיוטא הוצגה שוב' };
+    }
     if (!ok) s.confirmFinal = false;
     if (!file && /^חזרה לטיוטא/.test(t)) { const out = await showDraft(s, [], user); save(user.id, out.s ?? s); return { ...out, buttons: buttonsFor(out.s ?? s) }; }
     if (ok) t = 'מאשר';
@@ -1980,7 +2024,23 @@ async function handle({ user, text = '', file = null, reaction = false, allow = 
     buttons: out.s === null ? [] : buttonsFor(out.s ?? s) };
 }
 
+/** השלבים שאחרי אישור הכותרת ולפני הטיוטא — תנאי תשלום ("תעשה שוטף", "שוטף 60") עדיין מתעדכנים בהם */
+const LATE_PAY_STEPS = ['order', 'lines', 'parts', 'project', 'warehouse', 'files'];
+
+/** תנאי תשלום בהודעה קצרה אחרי הכותרת: מעדכנים, והשאלה הפתוחה חוזרת כמו שהיא. ‎null‎ — לא תנאי תשלום */
+function latePayChange(s, t) {
+  if (!LATE_PAY_STEPS.includes(s.step) || s.docno) return null;
+  if (String(t).replace(/🎙/g, '').trim().split(/\s+/).length > 5) return null;
+  const pay = Priority.payFromText(t);
+  if (!pay) return null;
+  const again = s.lastPrompt ? `\n\n${s.lastPrompt}` : '';
+  if (pay.unknown !== undefined) return { s, replies: [`אין בפריוריטי תנאי תשלום שוטף + ${pay.unknown}. האפשרויות: ${Priority.PAY_TERMS.map((p) => Priority.payLabel(p.code)).join(', ')}.${again}`], result: `תנאי תשלום לא קיים: ${pay.unknown}` };
+  s.payCode = pay.code;
+  return { s, replies: [`💳 תנאי התשלום עודכנו: *${Priority.payLabel(pay.code)}*${dueText(s, pay.code)}.${again}`], result: `תנאי תשלום: ${Priority.payLabel(pay.code)} (בשלב ${s.step})` };
+}
+
 async function step(user, s, t, file, allow = { gr: true, pd: false }) {
+  if (!file) { const pay = latePayChange(s, t); if (pay) return pay; }
   switch (s.step) {
     case 'menu': {
       // "קבלת סחורה" (הכפתור) — מתחילים. "דרישת רכש" — הבוט מעביר לדרישת הרכש (wa-bot), וכאן רק כשאינה פתוחה לעובד.
@@ -2175,7 +2235,7 @@ async function step(user, s, t, file, allow = { gr: true, pd: false }) {
     }
 
     case 'parts': {
-      if (YES.test(t)) return askProject(s);
+      if (YES.test(t)) return askBuild(s) ?? askProject(s);
       const free = s.lines.filter((l) => !l.order);
       // "שורה 2 ..." — רק לשורה הזו; אחרת — לכל השורות
       const lm = t.match(/שורה\s*(\d+)\s*(.*)$/);
@@ -2238,6 +2298,13 @@ async function step(user, s, t, file, allow = { gr: true, pd: false }) {
         return reply(s, `לא מצאתי בקטלוג מק"ט שקרוב ל"${word}". כתבו תיאור אחר, מק"ט, או *כללי*.`);
       }
       return reply(s, '*כן* 👍 — להמשיך, או כתבו מק"ט / מילה מהתיאור / *כללי*.');
+    }
+
+    case 'parts_build': {
+      if (YES.test(t)) return answerBuild(user, s, true);
+      if (NO_WORD.test(t)) return answerBuild(user, s, false);
+      if (looksUnrelated(t)) return pass(s, 'לא תשובה לבניית מק"טים');
+      return reply(s, `${s.lastPrompt ?? ''}\n\n*כן* 👍 — לשלוח לרכש, *לא* 👎 — להמשיך בלי.`.trim());
     }
 
     case 'chapter': {
@@ -2337,6 +2404,7 @@ async function step(user, s, t, file, allow = { gr: true, pd: false }) {
         // שאלת אישור לפני סגירה — אחרי "סופית" אי אפשר לבטל מהבוט
         if (!s.confirmFinal) {
           s.confirmFinal = true;
+          s.confirmFinalAt = Date.now();
           return { s, replies: [[`🔒 להפוך את *${s.docno}* לסופית?`,
             'אחרי הסגירה אי אפשר לבטל מהבוט — רק בפריוריטי (פעולות ← פתיחת תעודה סופית לעריכה).',
             '*כן* 👍 — לסגור · *חזרה לטיוטא* — להמשיך לבדוק'].join('\n')], result: 'שאלת אישור לפני סגירה' };
@@ -2438,7 +2506,7 @@ function dropMenu(userId) { const s = load(userId); if (s?.step === 'menu') clea
  */
 const VIEW_STEP = {
   offer: 'מסמך מהמייל', doc: 'קריאת המסמך', doctype: 'סוג המסמך', company: 'חברה', supplier: 'ספק', order: 'הזמנה',
-  lines: 'השוואת שורות', parts: 'פריטים בלי הזמנה', project: 'פרויקט', warehouse: 'מחסן', header: 'פרטי הכותרת',
+  lines: 'השוואת שורות', parts: 'פריטים בלי הזמנה', parts_build: 'מק"טים לבנייה', project: 'פרויקט', warehouse: 'מחסן', header: 'פרטי הכותרת',
   files: 'נספחים', review: 'טיוטא בפריוריטי — מחכה ל"מאשר"'
 };
 function view(userId) {
@@ -2466,4 +2534,4 @@ function view(userId) {
   };
 }
 
-module.exports = { view, everOpened, markOpened, inMenu, dropMenu, isTrigger, isPriority, opens, active, pending, pausedNote, abandon, switchCancels, wantsUndoFinal, handle, sweep, _jpegToPdf: jpegToPdf, _codeLines: codeLines, _orderDiffs: orderDiffs, _similarLines: similarLines, _askParts: askParts, _projectsOf: projectsOf, _findProjects: findProjects, _ai: ai, _load: load, _clear: (userId) => clear(userId, load(userId)) };
+module.exports = { view, everOpened, markOpened, inMenu, dropMenu, isTrigger, isPriority, opens, active, pending, docId, pausedNote, abandon, switchCancels, wantsUndoFinal, handle, sweep, _jpegToPdf: jpegToPdf, _codeLines: codeLines, _orderDiffs: orderDiffs, _similarLines: similarLines, _askParts: askParts, _projectsOf: projectsOf, _findProjects: findProjects, _ai: ai, _load: load, _clear: (userId) => clear(userId, load(userId)) };

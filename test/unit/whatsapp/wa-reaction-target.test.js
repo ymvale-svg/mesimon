@@ -66,7 +66,8 @@ test('👍 על הודעה ישנה שאינה שאלה — לא מאשר את �
   const old = lastId();
   await Bot.sendText('972509300002@c.us', 'לסמן כבוצעה? *כן* 👍');
   await react('972509300002', '👍', old);
-  assert.equal(texts('972509300002').at(-1), Q.OLD_REACTION_TEXT);
+  // אחרי #216 — תגובה שאינה על השאלה מקבלת את ההסבר שלו ("התגובה הייתה על הודעה אחרת"); העיקר — לא אושר כלום
+  assert.match(texts('972509300002').at(-1), /לא עשיתי כלום/);
   const st = Bot._internal.chatOf(u.id);
   assert.equal(st.draft?.taskId, 999001);
   assert.equal(st.awaiting, true);

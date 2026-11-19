@@ -199,6 +199,12 @@ const RecordingPlayer = (() => {
     const sideBody = el('div.rp-side-body');
     let digest = null;
     let digestErr = '';
+    // 📄 הסיכום של Timeless עצמו (מסמכי ה-AI) — הוא הסיכום; מהסיכום שלנו — המשימות (הוחלט 18.11.26)
+    let tlSummary = '';
+    API.get(`${base(id)}/summary`).then((r) => {
+      tlSummary = (r.documents ?? []).map((d) => String(d.markdown ?? '').trim()).filter(Boolean).join('\n\n');
+      if (tlSummary && tab === 'summary') drawSide();
+    }).catch(() => {});
 
     function drawTabs() {
       UI.mount(tabsEl, ...[['summary', 'סיכום'], ['ask', 'שאל על הפגישה']].map(([k, label]) =>
@@ -209,16 +215,20 @@ const RecordingPlayer = (() => {
 
     function drawSide() {
       if (tab === 'ask') return UI.mount(sideBody, askBox());
-      if (digestErr) return UI.mount(sideBody, el('div.alert.alert-warn', {}, [el('span', { text: '⚠️' }), el('div', { text: digestErr })]));
-      if (!digest) return UI.mount(sideBody, el('div.mute-sm.rp-loading', {}, [el('span.spinner-sm'), ' מכין סיכום מסודר — החלטות, משימות ונקודות פתוחות…']));
-      if (digest.noAi) return UI.mount(sideBody, digest.markdown ? mdView(digest.markdown) : UI.empty('אין סיכום', '📋'));
-      if (digest.empty) return UI.mount(sideBody, UI.empty('אין עדיין תמליל או סיכום לפגישה הזו', '📋'));
+      const tl = tlSummary;
+      const tlSec = tl ? el('div.rp-sec.rp-tl-summary', {}, [el('div.rp-sec-title', { text: '📄 הסיכום של Timeless' }), mdView(tl)]) : null;
+      if (digestErr) return UI.mount(sideBody, tlSec, el('div.alert.alert-warn', {}, [el('span', { text: '⚠️' }), el('div', { text: digestErr })]));
+      if (!digest) return UI.mount(sideBody, tlSec, el('div.mute-sm.rp-loading', {}, [el('span.spinner-sm'), tl ? ' מכין את המשימות מהפגישה…' : ' מכין סיכום מסודר — החלטות, משימות ונקודות פתוחות…']));
+      if (digest.noAi) return UI.mount(sideBody, tlSec ?? (digest.markdown ? mdView(digest.markdown) : UI.empty('אין סיכום', '📋')));
+      if (digest.empty) return UI.mount(sideBody, tlSec ?? UI.empty('אין עדיין תמליל או סיכום לפגישה הזו', '📋'));
       const done = linkedKeys();
       const openTasks = digest.tasks.filter((t) => !done.has(t.key));
       const section = (title, items) => items.length ? el('div.rp-sec', {}, [el('div.rp-sec-title', { text: title }), ...items]) : null;
+      // יש סיכום של Timeless — הוא הסיכום; מהסיכום שלנו רק המשימות (בלי לחזור על אותם דברים פעמיים)
       UI.mount(sideBody,
-        digest.brief ? el('div.rp-brief', { text: digest.brief }) : null,
-        section('החלטות', digest.decisions.map((d) => el('div.rp-bullet', { text: d }))),
+        tlSec,
+        !tl && digest.brief ? el('div.rp-brief', { text: digest.brief }) : null,
+        tl ? null : section('החלטות', digest.decisions.map((d) => el('div.rp-bullet', { text: d }))),
         el('div.rp-sec', {}, [
           el('div.rp-sec-head', {}, [
             el('div.rp-sec-title', { text: `משימות (${digest.tasks.length})` }),
@@ -226,7 +236,7 @@ const RecordingPlayer = (() => {
           ]),
           ...(digest.tasks.length ? digest.tasks.map((t) => taskCard(t, done.has(t.key))) : [el('div.mute-sm', { text: 'לא עלו משימות בפגישה' })])
         ]),
-        section('נקודות פתוחות', digest.open.map((d) => el('div.rp-bullet.is-open', { text: d }))),
+        tl ? null : section('נקודות פתוחות', digest.open.map((d) => el('div.rp-bullet.is-open', { text: d }))),
         linkedTasks.length ? el('div.rp-sec', {}, [
           el('div.rp-sec-title', { text: 'משימות שנפתחו מהפגישה' }),
           ...linkedTasks.map((t) => el('button.rp-linked', { type: 'button', onclick: () => TaskCardView.open(t.id) }, [
@@ -285,8 +295,8 @@ const RecordingPlayer = (() => {
     }
 
     async function shareSummary() {
-      if (!digest) return;
-      const text = [
+      if (!digest && !tlSummary) return;
+      const text = tlSummary ? `סיכום: ${meeting.title}\n\n${tlSummary}\n\nההקלטה: ${location.origin}/?rec=${enc(id)}` : [
         `סיכום: ${meeting.title}`,
         digest.brief,
         digest.decisions.length ? `\nהחלטות:\n${digest.decisions.map((d) => `• ${d}`).join('\n')}` : '',

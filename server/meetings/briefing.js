@@ -16,6 +16,7 @@ const Auth = require('../core').Auth;
 const Claude = require('../integrations').Claude;
 const Org = require('../agents').OrgKnowledge;
 const Secretariat = require('../core').Secretariat;
+const Store = require('./timeless-store');
 
 const MIN = 60000;
 const TZ = 'Asia/Jerusalem';
@@ -74,6 +75,7 @@ function collect(userId, ev) {
   }
   // הפגישה הקודמת עם אותם אנשים — הסיכום שנשמר
   const emails = people.map((p) => p.email.toLowerCase());
+  const used = new Set();
   for (const f of D.all("SELECT source, ref, title, start_at, data FROM meeting_followups WHERE user_id = ? ORDER BY start_at DESC LIMIT 40", userId)) {
     const d = parseJson(f.data, {});
     const who = JSON.stringify(d.participants ?? []).toLowerCase();
@@ -81,7 +83,18 @@ function collect(userId, ev) {
     const dig = parseJson(D.get('SELECT data FROM meeting_digests WHERE source = ? AND ref = ?', f.source, f.ref)?.data, null);
     if (!dig) continue;
     parts.push(`## הפגישה הקודמת איתם: ${f.title} (${dmy(f.start_at)})\n${[...(dig.summary ?? []), ...(dig.decisions ?? []).map((x) => `הוחלט: ${x}`), ...(dig.items ?? []).map((x) => `משימה: ${x.task}${x.owner_name ? ` — ${x.owner_name}` : ''}`)].join('\n')}`);
+    if (f.source === 'timeless') used.add(String(f.ref));
     break;
+  }
+  // 📝 פגישות קודמות בנושא דומה (הוחלט 18.11.26) — הסיכומים של Timeless מחצי השנה האחרונה, רק פגישות שהעובד היה בהן,
+  // גם עם אנשים אחרים. בנושא — כשמילה מהנושא בשם הפגישה, או לפחות שתיים בסיכום שלה
+  if (words.length) {
+    const u = D.get('SELECT email, work_email FROM users WHERE id = ?', userId);
+    const hitsIn = (text) => words.filter((w) => onTopic(text, [w])).length;
+    const similar = Store.pastWith([u?.email, u?.work_email], { before: ev.start || new Date().toISOString() })
+      .filter((m) => !used.has(String(m.id)) && (hitsIn(m.title) >= 1 || hitsIn(m.summary.slice(0, 3000)) >= 2))
+      .slice(0, 2);
+    for (const m of similar) parts.push(`## פגישה קודמת בנושא דומה: ${m.title} (${dmy(m.start)})\n${m.summary.slice(0, 1500)}`);
   }
   // מהמזכירות — רק מה שנוגע לתוכן הפגישה (לא תיאום, זימון או קישור): מילה משמעותית משם הפגישה בסיכום המייל
   if (words.length) {

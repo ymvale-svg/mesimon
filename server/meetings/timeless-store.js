@@ -44,10 +44,22 @@ const emailsIn = (p) => (typeof p === 'string' ? (p.match(/[^\s<>"'(),;]+@[^\s<>
 // שמירה
 // ---------------------------------------------------------------------------
 
+/**
+ * הקלטה מוואטסאפ שהועלתה ל-Timeless (‎meeting_audio.timeless_id‎): ב-Timeless אין לה משתתפים (רק החשבון שהעלה),
+ * ולכן מי ששלח אותה ומי ששויך אליה רואים אותה — לפי המייל, כמו בכל פגישה.
+ */
+function audioEmails(id) {
+  const out = [];
+  for (const a of D.all('SELECT u.*, a.meeting AS audio_meeting FROM meeting_audio a JOIN users u ON u.id = a.user_id WHERE a.timeless_id = ?', String(id))) {
+    out.push(a.email, a.work_email, ...(parseJson(a.audio_meeting, {})?.people ?? []).map((p) => p?.email));
+  }
+  return out.filter(Boolean);
+}
+
 /** פגישה כפי ש-Timeless מחזיר ← שורה בטבלה (בלי לגעת בתמליל ובמסמכים שכבר נשמרו) */
 function upsert(raw) {
   const n = Timeless.normalizeMeeting(raw);
-  const emails = [...new Set([raw.host, ...(Array.isArray(raw.participants) ? raw.participants : [])].flatMap(emailsIn))];
+  const emails = [...new Set([raw.host, ...(Array.isArray(raw.participants) ? raw.participants : []), ...audioEmails(n.id)].flatMap(emailsIn))];
   const refs = Array.isArray(raw.documents) ? raw.documents.map((d) => ({ id: d.id, title: d.title || '', createdAt: d.created_at || null })) : null;
   const prev = D.get('SELECT doc_refs FROM timeless_meetings WHERE id = ?', n.id);
   D.run(
@@ -79,7 +91,47 @@ function shape(row) {
     status: row.status || null,
     documents: parseJson(row.doc_refs, []),
     hasTranscript: row.transcript !== null && row.transcript !== undefined,
-    hasSummary: Boolean(parseJson(row.documents, []).length)
+    hasSummary: Boolean(parseJson(row.documents, []).length),
+    // תחילת הסיכום של Timeless — לכרטיס במסך ההקלטות ולחלון האירוע ביומן (בלי לפנות ל-Timeless)
+    summary: excerpt(summaryMarkdown(row))
+  };
+}
+
+/** הסיכום של Timeless (מסמכי ה-AI) כ-Markdown — מהשמירה המקומית */
+function summaryMarkdown(row) {
+  return parseJson(row?.documents, []).slice(0, 4).map((d) => String(d.markdown ?? '').trim()).filter(Boolean).join('\n\n');
+}
+
+/** Markdown ← טקסט פשוט: בלי כותרות, הדגשות וקישורים; רשימות — "• " */
+function plainText(md) {
+  return String(md ?? '')
+    .replace(/\r/g, '')
+    .replace(/^#{1,6}\s*/gm, '')
+    .replace(/^\s*[-*+]\s+/gm, '• ')
+    .replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g, '$1 ($2)')
+    .replace(/(\*\*|__)(.+?)\1/g, '$2')
+    .replace(/(^|[^*\w])\*([^*\n]+)\*/g, '$1$2')
+    .replace(/`([^`]+)`/g, '$1')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+/** משפט-שניים מתחילת הסיכום */
+function excerpt(md, max = 280) {
+  const t = plainText(md).split('\n').map((l) => l.replace(/^•\s*/, '').trim()).filter((l) => l.length > 2).join(' · ');
+  return t.length > max ? `${t.slice(0, max - 1).replace(/\s+\S*$/, '')}…` : t;
+}
+
+/**
+ * פגישה שמורה, בלי בדיקת משתמש — רק לקוד שכבר בדק הרשאה (הקלטה ששלח העובד, פגישה שנשאל עליה בבוט).
+ * ‎null‎ — לא נשמרה.
+ */
+function stored(id) {
+  const row = rowOf(id);
+  if (!row) return null;
+  return {
+    meeting: shape(row), status: row.status, transcript: parseJson(row.transcript, null),
+    summary: summaryMarkdown(row), docsDue: parseJson(row.doc_refs, []).length > 0 && row.documents === null
   };
 }
 
@@ -244,6 +296,20 @@ function endedBetween(fromMs, toMs, { withSummary = true } = {}) {
     .map((r) => ({ meeting: shape(r), emails: parseJson(r.emails, []) }));
 }
 
+/**
+ * 📋 פגישות קודמות שהעובד השתתף בהן ויש להן סיכום — לתדריך לפני פגישה בנושא דומה (‎briefing.js‎).
+ * רק לפי המייל של העובד (הוא היה שם), מהחדשה לישנה. ‎[{ id, title, start, summary }]‎ — ‎summary‎ כטקסט פשוט.
+ */
+function pastWith(emails, { before = new Date().toISOString(), sinceDays = 180, limit = 200 } = {}) {
+  const set = new Set([...(emails ?? [])].map(normEmail).filter((e) => e.includes('@')));
+  if (!set.size) return [];
+  const since = new Date(new Date(before).getTime() - sinceDays * DAY).toISOString();
+  return D.all("SELECT * FROM timeless_meetings WHERE status = 'completed' AND documents IS NOT NULL AND start_at >= ? AND start_at < ? ORDER BY start_at DESC LIMIT ?", since, before, limit)
+    .filter((r) => parseJson(r.emails, []).some((e) => set.has(e)))
+    .map((r) => ({ id: r.id, title: r.title || '', start: r.start_at, summary: plainText(summaryMarkdown(r)) }))
+    .filter((r) => r.summary);
+}
+
 /** הפגישה ב-Timeless שמתאימה לשעה ולמשתתפים (פגישת Zoom, פגישת משימון, אירוע ביומן) */
 const normTitle = (x) => String(x ?? '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
 
@@ -355,7 +421,11 @@ async function handleWebhook(rawBody, signature) {
   if (!verifySignature(rawBody, signature)) return { ok: false, status: 401 };
   let body = {};
   try { body = JSON.parse(String(rawBody)); } catch { return { ok: false, status: 400 }; }
-  const ids = [...new Set(JSON.stringify(body).match(/mtg_[\w-]{1,80}/g) ?? [])].slice(0, 3);
+  const raw = JSON.stringify(body);
+  // גם הקלטה ששלחו לבוט והועלתה — המזהה שלה לא בהכרח ‎mtg_…‎ (באג 18.11.26)
+  const uploads = D.all("SELECT timeless_id FROM meeting_audio WHERE status = 'timeless' AND timeless_id IS NOT NULL")
+    .map((r) => String(r.timeless_id)).filter((id) => id.length >= 6 && raw.includes(id));
+  const ids = [...new Set([...(raw.match(/mtg_[\w-]{1,80}/g) ?? []), ...uploads])].slice(0, 3);
   for (const id of ids) {
     await Timeless.background(() => syncMeeting(id)).catch((err) => console.error('[משימון] Timeless webhook — משיכת פגישה נכשלה:', err.message));
   }
@@ -405,7 +475,8 @@ function start() {
 }
 
 module.exports = {
-  start, tick, sweep, syncMeeting, lastSweepAt, sweepEveryMs, list, get, details, transcriptText, endedBetween, near, canSee,
+  start, tick, sweep, syncMeeting, lastSweepAt, sweepEveryMs, list, get, details, transcriptText, endedBetween, pastWith, near, canSee,
+  stored, plainText, excerpt,
   registerWebhook, webhookStatus, handleWebhook, verifySignature, runTool,
   _internal: { upsert, shape, needDetails, ensureRange, fetchDetails }
 };

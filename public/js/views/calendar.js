@@ -137,7 +137,7 @@ const CalendarView = (() => {
       const mails = new Set([owner, ...(e.attendees ?? []).map((a) => String(a.email ?? '').toLowerCase())].filter(Boolean));
       const hit = prepared.find((p) => Math.abs(p.t - t) <= 20 * 60000
         && ((title && p.title && (title.includes(p.title) || p.title.includes(title))) || [...p.mails].some((m) => mails.has(m))));
-      if (hit) e.rec = { id: hit.rec.id, title: hit.rec.title };
+      if (hit) e.rec = { id: hit.rec.id, title: hit.rec.title, summary: hit.rec.summary ?? '' };
     }
   }
 
@@ -550,8 +550,10 @@ const CalendarView = (() => {
     }
     if (e.taskId) buttons.push(el('button.btn.btn-sm', { onclick: () => { m.close(); TaskCardView.open(e.taskId); } }, ['פתיחת המשימה']));
     // פגישה שהוקלטה — משפט אחד מהסיכום (נטען כשהחלון נפתח)
-    const brief = e.rec ? el('div.cal-rec-brief.mute-sm', {}, [el('span.spinner-sm'), ' טוען סיכום…']) : null;
-    if (e.rec) {
+    // יש סיכום של Timeless — ממנו (כבר ברשימה, בלי בקשה); אחרת — המשפט מהסיכום שלנו
+    const brief = e.rec?.summary ? el('div.cal-rec-brief.mute-sm', {}, [el('b', { text: '📄 סיכום Timeless: ' }), el('span', { text: e.rec.summary })])
+      : e.rec ? el('div.cal-rec-brief.mute-sm', {}, [el('span.spinner-sm'), ' טוען סיכום…']) : null;
+    if (e.rec && !e.rec.summary) {
       API.get(`/api/timeless/recordings/${encodeURIComponent(e.rec.id)}/digest`)
         .then((d) => { if (d.brief) UI.mount(brief, el('b', { text: 'בקצרה: ' }), el('span', { text: d.brief })); else brief.remove(); })
         .catch(() => brief.remove());

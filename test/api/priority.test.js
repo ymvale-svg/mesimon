@@ -151,3 +151,13 @@ test('קישור "משימון פריוריטי" בתפריט: מנהל — כן
   await as(admin)('PUT', '/api/priority/access', { rows: [{ id: empId, docs: ['receipt'], companies: ['elad1'] }] });
   assert.equal((await as(emp)('GET', '/api/bootstrap')).json.actor.priority, true);
 });
+
+test('💬 מק"טים לבנייה: דף התשובה של הרכש מוגש בלי התחברות; אסימון לא תקין — 404, ובלי לחשוף כלום', async () => {
+  const page = await srv.api('GET', '/parts.html?t=abc');
+  assert.equal(page.status, 200);
+  assert.match(page.text, /מק"טים לבנייה/);
+  assert.equal((await srv.api('GET', '/api/priority/parts/abc')).status, 404);
+  assert.equal((await srv.api('GET', `/api/priority/parts/${'0'.repeat(36)}`)).status, 404);
+  const p = await srv.api('POST', `/api/priority/parts/${'0'.repeat(36)}`, { body: { n: 1, code: 'X-1' } });
+  assert.equal(p.status, 404);
+});

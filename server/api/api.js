@@ -4718,7 +4718,7 @@ router.get('/api/admin/settings', async (req, res, ctx) => {
   } catch { /* עדיין לא נוצר */ }
 
   sendJson(res, 200, {
-    settings: D.allSettings(),
+    settings: D.systemSettings(),
     defaults: D.DEFAULT_SETTINGS,
     // 🗂 הטופס לפי לשוניות — מהקטלוג (‎core/settings-catalog.js‎), המקור היחיד לשם ולהסבר של כל הגדרה
     form: SettingsCatalog.formTabs(),
@@ -4791,7 +4791,7 @@ router.put('/api/admin/settings', async (req, res, ctx) => {
   }
   if (b.settings?.scheduler_interval_minutes) Rules.start();
   if (b.settings?.ai_poll_minutes) AiTasks.start();
-  sendJson(res, 200, { settings: D.allSettings() });
+  sendJson(res, 200, { settings: D.systemSettings() });
 });
 
 router.post('/api/admin/rules', async (req, res, ctx) => {
