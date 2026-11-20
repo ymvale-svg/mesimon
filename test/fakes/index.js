@@ -11,13 +11,15 @@ const WhatsApp = require('../../server/integrations/whatsapp');
 const Claude = require('../../server/integrations/claude');
 const Priority = require('../../server/integrations/priority');
 
-/** וואטסאפ: כל ‎call‎ נרשם ומחזיר הצלחה. ‎opts.fail‎ — שיטות שייכשלו (למשל כפתורים) */
+let waSeq = 0;
+/** וואטסאפ: כל ‎call‎ נרשם ומחזיר הצלחה (עם מזהה הודעה ייחודי — ‎id‎). ‎opts.fail‎ — שיטות שייכשלו (למשל כפתורים) */
 function whatsapp(t, { fail = [] } = {}) {
   const calls = [];
   t.mock.method(WhatsApp, 'call', async (channel, method, opts = {}) => {
-    calls.push({ method, body: opts.body ?? null });
+    const id = `fake-${++waSeq}`;
+    calls.push({ method, body: opts.body ?? null, id });
     if (fail.includes(method)) throw new Error(`${method} נכשל (זיוף)`);
-    return { idMessage: `fake-${calls.length}` };
+    return { idMessage: id };
   });
   t.mock.method(WhatsApp, 'sendFile', async (...args) => { calls.push({ method: 'sendFile', body: args }); return { idMessage: 'fake-file' }; });
   const out = () => calls.filter((c) => c.method !== 'sendReaction');
@@ -45,7 +47,7 @@ function claude(t, responder = () => ({})) {
 /** פונקציות של פריוריטי שכותבות. בזיוף הן נרשמות ולא מגיעות לשום מקום */
 const WRITES = ['createReceipt', 'addOrderLine', 'addFreeLine', 'setLineQty', 'setLineDes', 'setHeader', 'attach', 'deleteAttachment',
   'setDialog', 'finalizeReceipt', 'cancelReceipt', 'deleteLines', 'createDemand', 'addDemandLine', 'setDemand', 'submitDemand',
-  'cancelDemand', 'setDemandDialog', 'attachDemand'];
+  'cancelDemand', 'setDemandDialog', 'attachDemand', 'appendDemandDialog', 'setDemandLine', 'deleteDemandLine', 'reopenDemand'];
 
 /**
  * פריוריטי: ‎reads‎ — מימושים לקריאות; ‎writes‎ — מימושים לכתיבות (ברירת מחדל: נרשם ומחזיר ‎{}‎).

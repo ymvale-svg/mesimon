@@ -21,6 +21,7 @@ const D = require('../core').Db;
 const Priority = require('../integrations').Priority;
 const Auth = require('../core').Auth;
 const P = require('../core').Permissions;
+const Settings = require('./priority-settings');
 
 const NOTIFIED = 'pd_approval_notified';
 const UNMAPPED = 'pd_approval_unmapped';
@@ -90,11 +91,8 @@ async function mapping() {
   return out;
 }
 
-const companies = () => {
-  const v = D.getSetting('pd_notify_companies', null);
-  if (Array.isArray(v) && v.length) return v;
-  return [...new Set([...Priority.COMPANIES.filter((c) => !c.test).map((c) => c.code), ...Priority.allowed()])];
-};
+// מסך ההגדרות (‎priority-settings.js‎); עד השמירה הראשונה — ‎pd_notify_companies‎, או כל האמיתיות + הפתוחות לכתיבה
+const companies = () => Settings.pdNotifyCompanies();
 
 function messageFor(company, d, owner) {
   const c = Priority.companyOf(company);
@@ -115,14 +113,15 @@ async function ownerName(login) {
   return pr?.SNAME || login;
 }
 
-/** פעם אחת לכל מפתח (נשמר בהגדרה ‎setting‎) — ‎true‎ כשזו הפעם הראשונה */
-function firstTime(setting, key) {
-  const seen = D.getSetting(setting, {}) ?? {};
+/** פעם אחת לכל מפתח — ‎true‎ כשזו הפעם הראשונה. המפתחות בקטלוג (מצב פנימי), לכן בלי שם הגדרה במשתנה */
+function onceIn(seen, key, save) {
   if (seen[key]) return false;
   seen[key] = Date.now();
-  D.setSetting(setting, seen);
+  save(seen);
   return true;
 }
+const firstTimeUnmapped = (key) => onceIn(D.getSetting(UNMAPPED, {}) ?? {}, key, (v) => D.setSetting(UNMAPPED, v));
+const firstTimeNoPhone = (key) => onceIn(D.getSetting(NO_PHONE, {}) ?? {}, key, (v) => D.setSetting(NO_PHONE, v));
 
 /**
  * הודעה לחותם הבא של דרישה אחת — אם עוד לא קיבל עליה. ‎send(userId, text)‎ ←
@@ -138,7 +137,7 @@ async function notifyDemand(company, d, send) {
   const m = await mesimonUserFor(signer);
   if (done[k]) return { signer, user: m.user, sent: false, why: 'כבר קיבל' };
   if (!m.user) {
-    if (firstTime(UNMAPPED, signer)) {
+    if (firstTimeUnmapped(signer)) {
       alertAdmins(`החותם הבא ${signer} לא נמצא במשימון`, [`דרישת רכש ${d.PRDNO} (${company}) מחכה לאישור של ${signer}${m.pr?.SNAME ? ` (${m.pr.SNAME})` : ''}.`,
         'לא נמצא משתמש משימון עם אותו מייל או אותו שם, ולכן לא נשלחה לו הודעה בוואטסאפ.',
         'לתיקון: מייל זהה בשני המקומות, או מיפוי ידני בהגדרה priority_user_map.'].join('\n'));
@@ -147,7 +146,7 @@ async function notifyDemand(company, d, send) {
   }
   if (!m.user.phone) {
     // בלי טלפון אין לאן לשלוח — מנהלי המערכת יודעים (פעם אחת לכל משתמש), כדי להשלים את הפרופיל
-    if (firstTime(NO_PHONE, String(m.user.id))) {
+    if (firstTimeNoPhone(String(m.user.id))) {
       alertAdmins(`לחותם ${m.user.full_name} אין טלפון במשימון`, [`דרישת רכש ${d.PRDNO} (${company}) מחכה לאישור של ${m.user.full_name} (${signer}),`,
         'אבל בפרופיל שלו במשימון אין מספר טלפון, ולכן לא נשלחה לו הודעה בוואטסאפ.',
         'לתיקון: להוסיף טלפון בפרופיל — ההודעה תצא בסבב הבא (עד 10 דקות).'].join('\n'));

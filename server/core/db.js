@@ -765,7 +765,7 @@ CREATE INDEX IF NOT EXISTS idx_meeting_followups_user ON meeting_followups (user
 /*
  * 🎙 הקלטת פגישה שנשלחה לבוט (‎ai/meeting-audio.js‎). הקובץ שמור ב-‎uploads/meeting-audio‎ עד
  * שהוא מצורף למשימת הפגישה (‎task_id‎), ואז נמחק משם. ‎meeting‎ — הפגישה שנבחרה (נושא, מועד, משתתפים).
- * ‎status‎: choose / transcribing / ready / empty / error / expired.
+ * ‎status‎: choose / transcribing / timeless (הועלתה ל-Timeless ומחכה לתמליל — ‎timeless_id‎) / ready / empty / error / expired.
  */
 CREATE TABLE IF NOT EXISTS meeting_audio (
   id               INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -780,6 +780,9 @@ CREATE TABLE IF NOT EXISTS meeting_audio (
   digest           TEXT,
   transcript_chars INTEGER,
   error            TEXT,
+  timeless_id      TEXT,
+  timeless_at      TEXT,
+  duration_sec     INTEGER,
   created_at       TEXT    NOT NULL
 );
 
@@ -808,6 +811,52 @@ CREATE TABLE IF NOT EXISTS mail_goods_docs (
 );
 
 /*
+ * 👤 בעל המייל (‎server/mail/mail-owner.js‎): לכל מייל (‎Message-ID‎) בעלים אחד בארגון — רק לו הבוט מזכיר, מציע תשובה
+ * ומציע קבלת סחורה. ‎bulk‎ — תפוצה (יותר מ-6 ב-"אל"): בלי תזכורות. ‎handled_at‎ — מישהו מהארגון כבר ענה: לאף אחד.
+ */
+CREATE TABLE IF NOT EXISTS mail_owner (
+  header_id   TEXT    PRIMARY KEY,
+  user_id     INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  reason      TEXT    NOT NULL DEFAULT '',
+  bulk        INTEGER NOT NULL DEFAULT 0,
+  handled_at  TEXT,
+  created_at  TEXT    NOT NULL
+);
+
+/*
+ * 🗂 תור המסמכים של משימון פריוריטי (‎server/priority/priority-docs.js‎): כל מסמך שנכנס לעבודה — ממייל,
+ * מגרירה במסך — עם הסוג (‎doc‎), המקור והשלב בשרשרת. הקובץ: ‎file_path‎ (יחסי לתיקיית ההעלאות),
+ * ובמסמך ממייל — יורד מ-Gmail בפעם הראשונה שצריך אותו.
+ * ‎stage‎: new (התקבל) · bot (בטיפול בבוט) · draft (טיוטא בפריוריטי) · waiting (מחכה לאישור בפריוריטי)
+ *         · done (סופי) · cancelled (בוטל) · rejected (הוצא מהתור). ‎docno‎ — המספר בפריוריטי (GR / PD).
+ * ‎source‎: mail · upload · whatsapp (נפתח ישר בבוט — נרשם כדי שהשרשרת תראה הכל).
+ */
+CREATE TABLE IF NOT EXISTS priority_docs (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  org_id        INTEGER NOT NULL DEFAULT 1,
+  user_id       INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  doc           TEXT    NOT NULL,
+  source        TEXT    NOT NULL DEFAULT 'upload',
+  mail_goods_id INTEGER,
+  filename      TEXT    NOT NULL DEFAULT '',
+  mime          TEXT    NOT NULL DEFAULT '',
+  size          INTEGER NOT NULL DEFAULT 0,
+  file_path     TEXT    NOT NULL DEFAULT '',
+  supplier      TEXT    NOT NULL DEFAULT '',
+  from_name     TEXT    NOT NULL DEFAULT '',
+  from_email    TEXT    NOT NULL DEFAULT '',
+  subject       TEXT    NOT NULL DEFAULT '',
+  stage         TEXT    NOT NULL DEFAULT 'new',
+  docno         TEXT    NOT NULL DEFAULT '',
+  company       TEXT    NOT NULL DEFAULT '',
+  pages         TEXT    NOT NULL DEFAULT '[]',   -- עמודים נוספים של אותו מסמך: ‎[{path, mime, name}]‎
+  note          TEXT    NOT NULL DEFAULT '',
+  created_at    TEXT    NOT NULL,
+  updated_at    TEXT    NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_priority_docs_user ON priority_docs(org_id, user_id, doc, created_at);
+
+/*
  * 🛒 פנייה לספקים להצעת מחיר (‎ai/rfq.js‎). ‎item‎ — מה מבוקש (JSON), ‎draft‎ — נושא וגוף המייל.
  * ‎status‎: draft / review / sent / summarized / closed / cancelled.
  */
@@ -825,6 +874,30 @@ CREATE TABLE IF NOT EXISTS rfq (
   task_id       INTEGER REFERENCES tasks(id) ON DELETE SET NULL,
   created_at    TEXT    NOT NULL
 );
+/*
+ * 🆕 מק"טים לבנייה — פריטים מדרישת רכש שאין להם מק"ט, שנשלחו במייל למנהלת הרכש (‎priority/pd-parts.js‎).
+ * ‎header‎ — כותרת הדרישה (פרויקט, מחסן, רשימת מאשרים, תאריך); ‎items‎ — כל שורות הדרישה (כמויות ומק"טים);
+ * ‎missing‎ — הפריטים בלי מק"ט: מה ביקשו, אילו מק"טים כבר היו בקטלוג (‎known‎), ומה נבנה (‎built‎).
+ * ‎mode‎: wait (הדרישה מחכה לרכש) / partial (נשלחה רק עם המזוהים) / receipt (קבלת סחורה, נקלטה על 000 — רק הודעה כשנבנה).
+ * ‎status‎: open (מחכה לבנייה) / asked (נשאל אם לבנות מחדש) / done / expired.
+ */
+CREATE TABLE IF NOT EXISTS pd_part_requests (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  company     TEXT    NOT NULL,
+  header      TEXT    NOT NULL DEFAULT '{}',
+  items       TEXT    NOT NULL DEFAULT '[]',
+  missing     TEXT    NOT NULL DEFAULT '[]',
+  mode        TEXT    NOT NULL DEFAULT 'wait',
+  prdno       TEXT,
+  status      TEXT    NOT NULL DEFAULT 'open',
+  sent_to     TEXT    NOT NULL DEFAULT '',
+  token       TEXT,
+  checked_at  TEXT,
+  asked_at    TEXT,
+  created_at  TEXT    NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_pd_part_requests ON pd_part_requests(status, user_id);
 /* ספק בפנייה — ‎status‎: pending / no_email / sent / replied / declined / failed / skipped. ‎offer‎ — מה חולץ מהתשובה */
 CREATE TABLE IF NOT EXISTS rfq_vendors (
   id             INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -916,7 +989,7 @@ CREATE TABLE IF NOT EXISTS mail_reply_watch (
 );
 CREATE INDEX IF NOT EXISTS idx_mail_reply_watch ON mail_reply_watch(status, user_id);
 
-/* ⏰ "תזכיר לי" (‎ai/reminders.js‎). ‎status‎: active / fired / done / cancelled */
+/* ⏰ "תזכיר לי" (‎whatsapp/reminders.js‎). ‎status‎: active / fired / done / cancelled / place (מחכה למיקום — ‎whatsapp/places.js‎) */
 CREATE TABLE IF NOT EXISTS reminders (
   id         INTEGER PRIMARY KEY AUTOINCREMENT,
   user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -930,6 +1003,38 @@ CREATE TABLE IF NOT EXISTS reminders (
   created_at TEXT    NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_reminders_due ON reminders(status, due_at);
+
+/*
+ * 📍 נקודות ציון — המשרד והאתרים (‎whatsapp/places.js‎). ‎kind‎: office / site. ‎aliases‎ — ‎JSON‎ של כינויים ("העבודה").
+ * ‎active = 0‎ — נמחק (התזכורות שחיכו לו בוטלו).
+ */
+CREATE TABLE IF NOT EXISTS places (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  name       TEXT    NOT NULL,
+  kind       TEXT    NOT NULL DEFAULT 'site',
+  lat        REAL    NOT NULL,
+  lng        REAL    NOT NULL,
+  radius_m   INTEGER NOT NULL DEFAULT 200,
+  aliases    TEXT    NOT NULL DEFAULT '[]',
+  active     INTEGER NOT NULL DEFAULT 1,
+  created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT    NOT NULL,
+  updated_at TEXT
+);
+
+/*
+ * 📍 המיקום האחרון של עובד שבחר לשתף — שורה אחת, נדרסת בכל עדכון (אין היסטוריה). ‎place_id‎ — נקודת הציון שבה היה.
+ * מיקום חד-פעמי ממי שלא משתף (מיקום 📍 בבוט) — בלי הנקודה, רק המקום.
+ */
+CREATE TABLE IF NOT EXISTS user_locations (
+  user_id  INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  lat      REAL,
+  lng      REAL,
+  accuracy REAL,
+  source   TEXT,
+  place_id INTEGER REFERENCES places(id) ON DELETE SET NULL,
+  at       TEXT    NOT NULL
+);
 
 /* 📤 מייל ששלחת עם שאלה ולא נענה (‎ai/sent-followup.js‎). ‎status‎: pending / asked / sent / ignored / answered */
 CREATE TABLE IF NOT EXISTS sent_followups (
@@ -1167,6 +1272,32 @@ CREATE TABLE IF NOT EXISTS meetings (
 CREATE INDEX IF NOT EXISTS idx_meetings_task ON meetings(task_id);
 CREATE INDEX IF NOT EXISTS idx_meetings_start ON meetings(status, start_at);
 
+/*
+ * 🎥 הפגישות מ-Timeless, שמורות במשימון — הצינור היחיד (‎meetings/timeless-store.js‎): נמשכות פעם
+ * אחת (סבב כל 5 דקות + webhook כש-Timeless מסיים), וכל המסכים והבוט קוראים מכאן. ‎emails‎ — כל
+ * המיילים של המארח והמשתתפים, לסינון מי רואה. ‎documents‎ / ‎transcript‎ — ‎NULL‎ עד שנמשכו.
+ * ‎timeless_months‎: חודשים שכבר נמשכו במלואם (מעבר לחודש ישן במסך — פעם אחת).
+ */
+CREATE TABLE IF NOT EXISTS timeless_meetings (
+  id           TEXT PRIMARY KEY,
+  title        TEXT NOT NULL DEFAULT '',
+  status       TEXT NOT NULL DEFAULT '',
+  start_at     TEXT,
+  end_at       TEXT,
+  duration_min INTEGER,
+  participants TEXT NOT NULL DEFAULT '[]',
+  emails       TEXT NOT NULL DEFAULT '[]',
+  doc_refs     TEXT NOT NULL DEFAULT '[]',
+  documents    TEXT,
+  transcript   TEXT,
+  details_at   TEXT,
+  synced_at    TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_timeless_meetings_start ON timeless_meetings(start_at);
+CREATE TABLE IF NOT EXISTS timeless_months (
+  month TEXT PRIMARY KEY,
+  at    TEXT NOT NULL
+);
 /*
  * 🎥 Timeless — ‎timeless_alerts‎: פגישה שהמזכירות כבר קיבלו עליה "לא מוקלטת" (פעם אחת
  * לפגישה, לפי ‎iCalUID‎ והמועד); ‎timeless_digests‎: הסיכום המובנה (החלטות, משימות,
@@ -1457,6 +1588,30 @@ CREATE TABLE IF NOT EXISTS task_closures (
   dismissed   INTEGER NOT NULL DEFAULT 0,
   created_at  TEXT    NOT NULL
 );
+
+/*
+ * 🤖 אינסטינקט — העוזר הכללי (‎server/whatsapp/instinct.js‎). כל בקשה שיצאה אליו, ולמי התשובה שייכת.
+ * ‎kind‎: request — בקשה של עובד · answer — תשובה של עובד לשאלה שלו · question — שאלה יזומה שלו שהועברה לעובד.
+ * ‎out_id‎ — מזהה ההודעה שלנו אצל וואטסאפ: אינסטינקט עונה בציטוט שלה, וכך יודעים של מי התשובה.
+ * ‎in_id‎ — מזהה ההודעה שלו (בשאלה), כדי שתשובת העובד תצא בציטוט שלה.
+ */
+CREATE TABLE IF NOT EXISTS instinct_requests (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id       INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  kind          TEXT    NOT NULL DEFAULT 'request',   -- request | answer | question
+  status        TEXT    NOT NULL DEFAULT 'queued',    -- queued | sent | answered | timeout | blocked | error | open | expired
+  text          TEXT    NOT NULL DEFAULT '',
+  reply         TEXT    NOT NULL DEFAULT '',
+  out_id        TEXT    NOT NULL DEFAULT '',
+  in_id         TEXT    NOT NULL DEFAULT '',
+  user_msg_id   TEXT    NOT NULL DEFAULT '',
+  user_chat_id  TEXT    NOT NULL DEFAULT '',
+  created_at    TEXT    NOT NULL,
+  sent_at       TEXT,
+  answered_at   TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_instinct_out ON instinct_requests(out_id);
+CREATE INDEX IF NOT EXISTS idx_instinct_user ON instinct_requests(user_id, kind, status);
 `);
 
 // ---------------------------------------------------------------------------
@@ -1539,6 +1694,14 @@ function allSettings() {
     }
   }
   return out;
+}
+
+/**
+ * הגדרות המערכת בלבד, למסך ההגדרות. מפתחות בצורת ‎<סוג>:<משתמש>‎ (‎wa_questions:7‎, ‎goods_receipt:7‎ …)
+ * הם מצב אישי של עובד — טיוטות מייל, קבלות סחורה, דרישות רכש — ולא נחשפים למנהלי האוטומציות.
+ */
+function systemSettings() {
+  return Object.fromEntries(Object.entries(allSettings()).filter(([k]) => !k.includes(':')));
 }
 
 function audit(taskId, actor, action, details = '') {
@@ -1684,8 +1847,10 @@ const DEFAULT_SETTINGS = {
   meeting_default_minutes: 30,             // משך ברירת מחדל
   meeting_buffer_minutes: 10,              // מרווח מפגישה צמודה בהצעת מועדים
   meeting_reminder_minutes: 15,            // כמה דקות לפני — התראה ובוט הוואטסאפ, עם קישור הפגישה
+  meeting_summary_auto: true,              // 📝 הסיכום של Timeless — במייל ובבוט למשתתפים מהארגון, ולידע הארגוני (מבחוץ — באישור מי שקבע)
   meeting_followup_minutes: 15,            // כמה דקות אחרי סוף פגישה מוקלטת — הבוט שואל את המשתתפים מה לשלוח
   meeting_audio_min_kb: 1024,              // הודעה קולית גדולה מזה (כ-8 דקות) לבוט = הקלטת פגישה, והבוט שואל לאיזו פגישה לשייך
+  meeting_audio_timeless_min: 20,          // הקלטת פגישה ארוכה מזה (דקות) — מועלית ל-Timeless, והתמליל והסיכום רק משם
   rfq_daily_max: 20,                       // פנייה לספקים: כמה מיילים לכל היותר לעובד ביום (לא להיחשב דואר זבל)
   bot_pilot: false,                        // 🧪 true — היכולות החדשות בבוט (סבב Instinct) רק למנהלי המערכת. נפתח לכולם 10.11.26; "החזר את היכולות החדשות לפיילוט" — סוגר שוב
   remind_hours: '08:30-17:00',             // 🌊 שעות התזכורות מהמייל (מחוץ להן — לא מזכירים, גם לא בשעות הבוט)
@@ -1739,6 +1904,11 @@ const DEFAULT_SETTINGS = {
   wa_actions: {},                          // מה הבוט עושה בפרטי: { key: { enabled, audience, examples } }
   wa_summary_time: '08:15',                // סיכום הבוקר בפרטי, שעון ישראל — ההודעה היזומה הראשונה של היום
   wa_hours: '',                            // שעות שבהן הבוט שולח הודעות ("07:00-22:00"). ריק = תמיד
+  digest_morning: '08:15',                 // ☀️ סיכום הבוקר — ההודעה היזומה הראשונה (‎agents/day-digest.js‎)
+  digest_evening: '17:00',                 // 🌙 סיכום סוף היום — האחרונה
+  bot_tip_time: '09:00',                   // 💡 הטיפ היומי — משעה (‎whatsapp/bot-tips.js‎)
+  bot_tip_until: '10:00',                  // 💡 … עד שעה
+  mail_digest_time: '13:00',               // 📬 "N מיילים מחכים לך" — פעם ביום, משעה
   wa_proactive_hours: '08:15-17:00',        // 🕗 הודעות יזומות (הצעות, תזכורות, מיילים) — רק בשעות אלה, בימי העבודה של העובד. 17:00 — סיכום סוף היום, האחרון
   wa_shabbat: true                         // בשישי מהערב ובשבת הבוט אינו שולח, ועונה במוצאי שבת
 };
@@ -1994,7 +2164,16 @@ function migrate() {
   relaxUserRoleConstraint();
   relaxAiMessagesChannel();
 
+  // 💬 מק"טים לבנייה — אסימון לדף התשובה של הרכש (‎priority/pd-parts.js‎)
+  addColumn('pd_part_requests', 'token', 'TEXT');
+  // 🎙 הקלטת פגישה ארוכה מוואטסאפ — הועלתה ל-Timeless, והתמליל משם (‎meetings/meeting-audio.js‎, 18.11.26)
+  addColumn('meeting_audio', 'timeless_id', 'TEXT');
+  addColumn('meeting_audio', 'timeless_at', 'TEXT');
+  addColumn('meeting_audio', 'duration_sec', 'INTEGER');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_pd_part_token ON pd_part_requests(token)');
   addColumn('users', 'department_id', 'INTEGER REFERENCES departments(id) ON DELETE SET NULL');
+  // 📧 משימה שנולדה ממייל — עותק של המייל (מאת, נושא, תאריך, טקסט), כדי שכל מי שעובד עליה יראה על מה מדובר
+  addColumn('tasks', 'source_mail', "TEXT NOT NULL DEFAULT ''");
   // קובץ שצורף לתגובה בשיחה — כדי שיוצג בתוך ההודעה שבה נשלח, ולא רק ברשימה
   addColumn('attachments', 'comment_id', 'INTEGER REFERENCES comments(id) ON DELETE SET NULL');
   // הערה: מסדי נתונים שנוצרו בגרסה קודמת מכילים עמודת tasks.level מהרמה
@@ -2145,6 +2324,10 @@ function migrate() {
   addColumn('users', 'tracker_access', 'INTEGER');
   // משתמש ה-Zoom בחשבון החברה שמארח את הפגישות של העובד (‎zoom_users.id‎)
   addColumn('users', 'zoom_user_id', 'TEXT');
+  // התואר כפי שכתוב בחתימה של האדם עצמו (לא ניחוש) — לתדריך לפני פגישה (17.11.26)
+  addColumn('mail_people', 'title', "TEXT NOT NULL DEFAULT ''");
+  // מתי נקראה החתימה מהמיילים הקיימים (‎mail/signature-backfill.js‎). ריק — עוד לא
+  addColumn('mail_people', 'title_checked_at', 'TEXT');
   // חשבון Zoom שני — לאיזה חשבון שייך כל משתמש Zoom
   addColumn('zoom_users', 'account', "TEXT NOT NULL DEFAULT '1'");
   // הקלטה אוטומטית לענן ב-Zoom — נבחר בקביעת הפגישה
@@ -2163,6 +2346,13 @@ function migrate() {
   addColumn('templates', 'updated_by', 'INTEGER REFERENCES users(id) ON DELETE SET NULL');
   // משימה שמוזגה לתוך משימה ותיקה (פרק 11ב) — נסגרת, ומצביעה על זו שנשארה
   addColumn('tasks', 'merged_into_task_id', 'INTEGER REFERENCES tasks(id) ON DELETE SET NULL');
+  /*
+   * 📍 תזכורת לפי מיקום (‎whatsapp/places.js‎): ‎status = 'place'‎ — מחכה להגעה (‎place_on = 'arrive'‎) או ליציאה (‎'leave'‎)
+   * מנקודת הציון ‎place_id‎, או מכל מקום מהסוג ‎place_kind‎ ("כשאגיע לאתר"). ‎due_at‎ שלה — מועד הרישום, עד שהיא נורית
+   */
+  addColumn('reminders', 'place_id', 'INTEGER REFERENCES places(id) ON DELETE SET NULL');
+  addColumn('reminders', 'place_kind', 'TEXT');
+  addColumn('reminders', 'place_on', 'TEXT');
 
   /**
    * סדר העמודות הוא סדר הזרימה, ולכן העמודה הסופית חייבת להיות אחרונה.
@@ -2566,7 +2756,7 @@ module.exports = {
   db, DB_PATH, UPLOADS_DIR, ROOT, STORAGE,
   all, get, run,
   nowIso, hashPassword, verifyPassword,
-  getSetting, setSetting, allSettings,
+  getSetting, setSetting, allSettings, systemSettings,
   userPrefs, setUserPref,
   audit, notify, onNotify, countsAsOpener,
   internalBoard, createVendorBoard, boardColumns, ensureBoardColumns,

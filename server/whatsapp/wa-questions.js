@@ -11,6 +11,7 @@
  *   • השאלה היא הפתוחה עכשיו — ממשיכים, ובטוח לשיחה הנכונה (לא נבלעת בקבלת סחורה / דרישת רכש).
  *   • שאלה יזומה (חשבונית מהמייל, תזכורת על מייל) שנדחקה על ידי הודעה אחרת — חוזרת להיות הפתוחה, והתשובה הולכת אליה.
  *   • שאלה שכבר נענתה או שעברה — "השאלה הזו כבר לא פתוחה", ולא מאשרים בטעות משהו אחר.
+ *     "לא" / "התעלם" עליה — "בסדר, לא שיניתי כלום" (זה מה שהעובד ביקש).
  * לחיצה בלי מזהה (או על הודעה מלפני השינוי) — כמו קודם.
  */
 const D = require('../core').Db;
@@ -18,7 +19,8 @@ const D = require('../core').Db;
 const KEEP = 15;                          // שאלות אחרונות לכל עובד
 const TTL_MS = 2 * 24 * 60 * 60 * 1000;   // יומיים
 /** שאלות יזומות שבטוח להחזיר: התשובה להן בודקת במסד אם כבר טופלו */
-const RESTORABLE = new Set(['goods_offer', 'mail_remind']);
+// ‎plain_mail‎ — "מייל מוכן לאישור" שנשלח כשהיה פתוח משהו אחר; אחרי שנענה (גם בטקסט) — ‎markAnsweredKey‎, ולא נשלח פעמיים
+const RESTORABLE = new Set(['goods_offer', 'mail_remind', 'sent_followup', 'plain_mail']);
 
 const keyOf = (userId) => `wa_questions:${userId}`;
 const list = (userId) => { const v = D.getSetting(keyOf(userId), []); return Array.isArray(v) ? v : []; };
@@ -40,23 +42,38 @@ function record(userId, id, { owner = 'chat', draft = null, awaiting = false } =
 }
 
 const find = (userId, id) => (id ? list(userId).find((q) => q.id === String(id)) ?? null : null);
+/** ההודעה האחרונה עם כפתורים של ‎owner‎ (‎null‎ — אין). תגובה (Reaction) בקבלת סחורה / דרישת רכש נחשבת תשובה רק עליה (#171) */
+const latest = (userId, owner) => list(userId).filter((q) => q.owner === owner).at(-1) ?? null;
 
-function markAnswered(userId, id) {
+/** ‎answer‎ — הכפתור שנלחץ: לחיצה אחרת על אותה שאלה ("לא" ואז "קבלת סחורה") היא שינוי דעה, לא כפילות */
+function markAnswered(userId, id, answer = '') {
   if (!userId || !id) return;
-  D.setSetting(keyOf(userId), list(userId).map((q) => (q.id === String(id) ? { ...q, answered: true } : q)));
+  D.setSetting(keyOf(userId), list(userId).map((q) => (q.id === String(id) ? { ...q, answered: true, answer: String(answer ?? '').trim() } : q)));
+}
+
+/** הטיוטה נסגרה (נענתה, תוקנה, בוטלה) — כל שאלה עליה כבר לא תחזור, גם אם נענתה בטקסט ולא בכפתור */
+function markAnsweredKey(userId, key, answer = '') {
+  if (!userId || !key) return;
+  const all = list(userId);
+  if (!all.some((q) => q.key === key && !q.answered)) return;
+  D.setSetting(keyOf(userId), all.map((q) => (q.key === key && !q.answered ? { ...q, answered: true, answer: String(answer ?? '').trim() } : q)));
 }
 
 /**
  * מה לעשות בלחיצה על כפתור של שאלה בשיחה הרגילה:
  *   'free' — לא שאלת כן/לא (תפריט, "עוד אפשרויות") — כמו קודם
  *   'current' — זו השאלה הפתוחה עכשיו
- *   'restore' — שאלה יזומה שנדחקה ועוד לא נענתה — מחזירים אותה
- *   'closed' — כבר נענתה, או שעברה ואי אפשר להחזיר
+ *   'restore' — מחזירים אותה:
+ *       • שאלה יזומה (חשבונית מהמייל, תזכורת) שעוד לא נענתה — או שנענתה בכפתור אחר (שינוי דעה). התשובה בודקת במסד.
+ *       • התראה על מייל ("לשלוח את התשובה?", "לפתוח משימה?") שהמייל שלה עוד לא טופל (‎alertOpen‎) —
+ *         גם אם התראה אחרת הגיעה אחריה. אחרי שטופל, היא כבר לא "פתוחה" במסד — ולא נשלח פעמיים.
+ *   'closed' — כבר נענתה (אותו כפתור), או שעברה ואי אפשר להחזיר
  */
-function decide(q, currentDraft) {
+function decide(q, currentDraft, { text = '', alertOpen = () => false } = {}) {
   if (!q || q.owner !== 'chat' || !q.awaiting || !q.draft) return 'free';
   if (draftKey(currentDraft) === q.key) return 'current';
-  if (!q.answered && RESTORABLE.has(q.draft.kind)) return 'restore';
+  if (RESTORABLE.has(q.draft.kind) && (!q.answered || (q.answer && q.answer !== String(text ?? '').trim()))) return 'restore';
+  if (q.draft.alert && q.draft.suggestionIds?.length && alertOpen(q.draft)) return 'restore';
   return 'closed';
 }
 
@@ -75,5 +92,9 @@ function replyToOf(m) {
 }
 
 const CLOSED_TEXT = 'ℹ️ השאלה הזו כבר לא פתוחה, אז לא עשיתי כלום. אם עדיין צריך — כתבו לי מה לעשות.';
+/** "לא" / "התעלם" / "ביטול" על שאלה שכבר לא פתוחה — זה בדיוק מה שקרה (כלום), אז עונים כך ולא "לא פתוחה" (סקירה 12.11) */
+const OLD_REACTION_TEXT = 'ℹ️ סימנת הודעה קודמת, ולא ברור לי על מה — אז לא עשיתי כלום. כדי לאשר את השאלה האחרונה: *כן* 👍 עליה, או כתבו *כן*.';
+const CLOSED_NO_TEXT = 'בסדר 👍 לא שלחתי ולא שיניתי כלום.';
+const isNo = (text) => /^(לא|התעלם|ביטול|בטל|עזוב|👎)(?=[\s,.!❌🙈🗑️]|$)/u.test(String(text ?? '').trim());
 
-module.exports = { record, find, markAnswered, decide, draftKey, replyToOf, RESTORABLE, CLOSED_TEXT };
+module.exports = { record, find, latest, markAnswered, markAnsweredKey, decide, draftKey, replyToOf, isNo, RESTORABLE, CLOSED_TEXT, CLOSED_NO_TEXT, OLD_REACTION_TEXT };

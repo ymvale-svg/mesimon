@@ -26,5 +26,6 @@ module.exports = {
   get Invites() { return require('./invites'); },
   get Secretariat() { return require('./secretariat'); },
   get Classification() { return require('./classification'); },
-  get MailTemplates() { return require('./mail-templates'); }
+  get MailTemplates() { return require('./mail-templates'); },
+  get SettingsCatalog() { return require('./settings-catalog'); }
 };

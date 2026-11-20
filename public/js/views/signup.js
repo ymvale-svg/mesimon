@@ -53,7 +53,7 @@ const SignupView = (() => {
     const emailInput = el('input', { type: 'email', autocomplete: 'email', placeholder: 'האימייל שלך בעבודה' });
     const passInput = el('input', { type: 'password', autocomplete: 'new-password', placeholder: 'לפחות 6 תווים' });
     const repeatInput = el('input', { type: 'password', autocomplete: 'new-password' });
-    const errorBox = el('div.alert.alert-danger', { style: { display: 'none' } });
+    const errorBox = el('div.alert.alert-danger', { role: 'alert', style: { display: 'none' } });
     const button = el('button.btn.btn-primary.btn-block', { type: 'submit' }, ['שליחת בקשת הרשמה']);
 
     const fail = (message) => {

@@ -14,9 +14,14 @@
  *
  * כל הקליטות נרשמות בפריוריטי על משתמש ה-API. מי באמת קלט — בדו-שיח הפנימי
  * של המסמך ובלוג הבוט.
+ *
+ * **מסך ההגדרות (‎server/priority/priority-settings.js‎, מ-11.11.26):** כשהוא מחובר (‎configure‎ ב-‎wiring.js‎),
+ * החיבור (שרת, משתמש, סיסמה), החברות הפתוחות לכתיבה ורשימת החברות מגיעים ממנו, ולא ממשתני הסביבה.
+ * בלי חיבור (בדיקות יחידה, סקריפטים) — משתני הסביבה כמו קודם.
  */
 
-const HOST = 'https://p.priority-connect.online/odata/Priority/tabb2121.ini';
+const DEFAULT_HOST = 'p.priority-connect.online';
+const DEFAULT_INI = 'tabb2121.ini';
 const TIMEOUT = 120000;
 
 /**
@@ -51,8 +56,39 @@ const COMPANIES = [
   { code: 'test11', name: 'אשל הירדן יזום ובנין — סביבת בדיקה', vat: '', test: true }
 ];
 
-const isEnabled = () => Boolean(process.env.PRIORITY_USER && process.env.PRIORITY_PASSWORD);
-const allowed = () => String(process.env.PRIORITY_COMPANIES || 'test11').split(',').map((s) => s.trim()).filter(Boolean);
+/**
+ * ספק ההגדרות (מסך ההגדרות). ‎{ credentials() → {host, ini, user, password}, writable() → [codes] }‎.
+ * ‎null‎ — משתני הסביבה.
+ */
+let provider = null;
+function configure(p) { provider = p ?? null; }
+
+const credentials = () => {
+  const c = provider?.credentials?.() ?? null;
+  if (c) return c;
+  return { host: DEFAULT_HOST, ini: DEFAULT_INI, user: process.env.PRIORITY_USER ?? '', password: process.env.PRIORITY_PASSWORD ?? '' };
+};
+const base = () => {
+  const c = credentials();
+  return `https://${c.host || DEFAULT_HOST}/odata/Priority/${c.ini || DEFAULT_INI}`;
+};
+const isEnabled = () => { const c = credentials(); return Boolean(c.user && c.password); };
+const allowed = () => (provider?.writable
+  ? [...provider.writable()]
+  : String(process.env.PRIORITY_COMPANIES || 'test11').split(',').map((s) => s.trim()).filter(Boolean));
+
+/**
+ * רשימת החברות מתעדכנת במקום (אותו מערך שמיוצא), כדי שכל מי שמחזיק ‎COMPANIES‎ יראה את מה שנשמר במסך.
+ * ‎list‎ — ‎[{code, name, vat, sandbox?, test?}]‎.
+ */
+function syncCompanies(list) {
+  const clean = (Array.isArray(list) ? list : []).filter((c) => c?.code).map((c) => ({
+    code: String(c.code), name: String(c.name || c.code), vat: String(c.vat ?? '').replace(/\D/g, ''),
+    ...(c.sandbox ? { sandbox: String(c.sandbox) } : {}), ...(c.test ? { test: true } : {})
+  }));
+  if (!clean.length) return;
+  COMPANIES.splice(0, COMPANIES.length, ...clean);
+}
 const companyOf = (code) => COMPANIES.find((c) => c.code === code) ?? { code, name: code, vat: '' };
 const isTest = (code) => Boolean(companyOf(code).test);
 
@@ -106,7 +142,7 @@ function companyUrl(company, method = 'GET') {
   if (method === 'GET' ? !(known || allowed().includes(company)) : !allowed().includes(company)) {
     throw new Error(`החברה ${company} אינה פתוחה ${method === 'GET' ? 'לבוט' : 'לכתיבה מהבוט'} (PRIORITY_COMPANIES)`);
   }
-  return `${HOST}/${encodeURIComponent(company)}/`;
+  return `${base()}/${encodeURIComponent(company)}/`;
 }
 
 class PriorityError extends Error {}
@@ -117,8 +153,9 @@ function errorText(data, raw) {
 }
 
 async function call(company, method, path, body = null) {
-  if (!isEnabled()) throw new PriorityError('החיבור לפריוריטי אינו מוגדר בשרת (PRIORITY_USER, PRIORITY_PASSWORD)');
-  const auth = Buffer.from(`${process.env.PRIORITY_USER}:${process.env.PRIORITY_PASSWORD}`).toString('base64');
+  if (!isEnabled()) throw new PriorityError('החיבור לפריוריטי אינו מוגדר (מסך ההגדרות של משימון פריוריטי)');
+  const c = credentials();
+  const auth = Buffer.from(`${c.user}:${c.password}`).toString('base64');
   const url = companyUrl(company, method) + path;
   let res;
   try {
@@ -140,6 +177,12 @@ async function call(company, method, path, body = null) {
     throw err;
   }
   return data;
+}
+
+/** בדיקת חיבור: קריאה אחת, קטנה, מחברה מוכרת. זורק ‎PriorityError‎ כשאין חיבור או הזדהות */
+async function ping(company) {
+  await call(company, 'GET', 'SUPPLIERS?$top=1&$select=SUPNAME');
+  return true;
 }
 
 const q = (s) => String(s ?? '').replace(/'/g, "''");
@@ -254,14 +297,14 @@ async function getOrder(company, ordname) {
 /** הזמנות בסטטוס סופי, החדשות קודם */
 async function finalOrders(company, statuses, top = 200) {
   const f = statuses.map((s) => `STATDES eq '${q(s)}'`).join(' or ');
-  return rows(await call(company, 'GET', `PORDERS?$filter=${enc(f)}&$select=ORDNAME,STATDES,CURVERSION&$orderby=ORD desc&$top=${top}`));
+  return rows(await call(company, 'GET', `PORDERS?$filter=${enc(f)}&$select=ORDNAME,STATDES,CURVERSION,CURDATE,PRDNO&$orderby=ORD desc&$top=${top}`));
 }
 
 /** הזמנה מלאה להתראה: כותרת, שורות עם מחירים, ואיש הקשר / כתובת האספקה */
 async function orderForNotice(company, ordname) {
   const k = `PORDERS('${q(ordname)}')`;
   const h = strip(await call(company, 'GET', `${k}?$select=ORDNAME,SUPNAME,CDES,STATDES,CURDATE,PRDNO,PROJDOCNO,PROJDES,OWNERLOGIN,TYPEDES,WARHSNAME,PAYDES,QPRICE,PERCENT,DISPRICE,VAT,TOTPRICE,CODE,DETAILS,CURVERSION`));
-  const lines = rows(await call(company, 'GET', `${k}/PORDERITEMS_SUBFORM?$select=LINE,PARTNAME,PDES,TQUANT,TUNITNAME,PRICE,PERCENT,QPRICE,ICODE,DUEDATE,REQDATE,PRDNO,REMARK`));
+  const lines = rows(await call(company, 'GET', `${k}/PORDERITEMS_SUBFORM?$select=LINE,PARTNAME,PDES,TQUANT,TUNITNAME,PRICE,PERCENT,QPRICE,ICODE,DUEDATE,REQDATE,PRDNO,PRDI,REMARK`));
   const ship = await call(company, 'GET', `${k}/SHIPTO_SUBFORM`).then(strip).catch(() => null);
   return { ...h, lines: lines.sort((a, b) => (a.LINE ?? 0) - (b.LINE ?? 0)), ship };
 }
@@ -270,6 +313,24 @@ async function orderForNotice(company, ordname) {
 async function demandInitiator(company, prdno) {
   const d = rows(await call(company, 'GET', `PURDEMANDS?$filter=${enc(`PRDNO eq '${q(prdno)}'`)}&$select=PRDNO,INITUSERLOGIN,OWNERLOGIN&$top=1`))[0];
   return d ? (d.INITUSERLOGIN || d.OWNERLOGIN || null) : null;
+}
+
+/**
+ * דרישת הרכש של הזמנה — להודעה "הדרישה אושרה והועברה לספק": מי פתח (‎INITUSERLOGIN‎, ‎OWNERLOGIN‎, ובדרישה מהבוט —
+ * שם המשתמש שבדו-שיח הפנימי, "נפתחה ע"י: שם (Login)"), מי אישר (‎PDUSER_SUBFORM‎ עם ‎UFLAG = Y‎ — מי שחתם בפועל),
+ * והשורות — להשוואה להזמנה. ‎null‎ — לא נמצאה.
+ */
+async function demandForNotice(company, prdno) {
+  const d = rows(await call(company, 'GET', `PURDEMANDS?$filter=${enc(`PRDNO eq '${q(prdno)}'`)}&$select=PRDNO,INITUSERLOGIN,OWNERLOGIN,STATDES`
+    + '&$expand=PDUSER_SUBFORM($select=USERLOGIN,CUSERLOGIN,UFLAG),PRDITEMS_SUBFORM($select=PRDI,PARTNAME,PDES,TQUANT,TUNITNAME),INTERNALDIALOGTEXT_SUBFORM&$top=1'))[0];
+  if (!d) return null;
+  const dialog = String(d.INTERNALDIALOGTEXT_SUBFORM?.TEXT ?? '').replace(/<[^>]+>/g, ' ');
+  return {
+    PRDNO: d.PRDNO, INITUSERLOGIN: d.INITUSERLOGIN ?? null, OWNERLOGIN: d.OWNERLOGIN ?? null, STATDES: d.STATDES ?? '',
+    approvers: [...new Set((d.PDUSER_SUBFORM ?? []).filter((u) => u.UFLAG === 'Y').map((u) => u.CUSERLOGIN || u.USERLOGIN).filter(Boolean))],
+    dialogLogin: dialog.match(/נפתחה ע["״]י:[^(|]*\(([A-Za-z][\w.]*)\)/)?.[1] ?? '',
+    lines: (d.PRDITEMS_SUBFORM ?? []).map((l) => ({ PRDI: l.PRDI, PARTNAME: l.PARTNAME, PDES: l.PDES, TQUANT: l.TQUANT, TUNITNAME: l.TUNITNAME }))
+  };
 }
 
 /** מנהל הפרויקט בפריוריטי (‎MUSERLOGIN‎ במסך הפרויקטים) */
@@ -881,6 +942,50 @@ async function setDemandDialog(company, prdno, lines) {
   try { await call(company, 'POST', k, { TEXT }); } catch { await call(company, 'PATCH', k, { TEXT }); }
 }
 
+/**
+ * הוספה לדו-שיח הפנימי של הדרישה (בלי למחוק את מה שכבר כתוב) — להחזרה לבדיקה ולתיקון.
+ * דו-שיח ריק — פריוריטי מחזיר 404, ואז זה הטקסט הראשון.
+ */
+async function appendDemandDialog(company, prdno, lines) {
+  const esc = (s) => String(s).replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+  const k = `${pdKey(prdno)}/INTERNALDIALOGTEXT_SUBFORM`;
+  let prev = '';
+  try { prev = String((await call(company, 'GET', k))?.TEXT ?? '').replace(/<style[\s\S]*?<\/style>/gi, ''); } catch (err) { if (err.status !== 404) throw err; }
+  const TEXT = `${prev}${lines.filter(Boolean).map((l) => `<p>${esc(l)}</p>`).join('')}`;
+  try { await call(company, 'PATCH', k, { TEXT }); } catch { await call(company, 'POST', k, { TEXT }); }
+}
+
+/** שורה בדרישה — עדכון (כמות, תיאור בפריט כללי) ומחיקה. ‎kline‎ — מספר השורה בדרישה */
+const setDemandLine = (company, prdno, kline, fields) => call(company, 'PATCH', `${pdKey(prdno)}/PRDITEMS_SUBFORM(KLINE=${Number(kline)})`, fields);
+const deleteDemandLine = (company, prdno, kline) => call(company, 'DELETE', `${pdKey(prdno)}/PRDITEMS_SUBFORM(KLINE=${Number(kline)})`);
+
+/**
+ * החזרה לבדיקה חוזרת: "פתיחה חוזרת" — כך עושה הרכש בפריוריטי (PD26000053, 15.11.26). מטיוטא פריוריטי חוסם
+ * ("מגבלות שהוגדרו בתהליך העבודה"); השגיאה עולה כמו שהיא.
+ */
+const REOPEN_STATUS = 'פתיחה חוזרת';
+const reopenDemand = (company, prdno) => call(company, 'PATCH', pdKey(prdno), { STATDES: REOPEN_STATUS });
+
+/**
+ * מי מוסמך להוציא הזמנות רכש — לפי פריוריטי. מסכי ההרשאות (‎EXECUSERPRIV‎, ‎MODULEUSERPRIV‎, ‎PRIVUSERS‎ ועוד) סגורים
+ * ל-API, ולכן: מי שפתח הזמנת רכש (‎PORDERS.OWNERLOGIN‎) בשנה האחרונה, בכל החברות. נשמר ל-6 שעות.
+ */
+let buyersCache = null;
+async function purchaseOrderOwners(companies) {
+  if (buyersCache && Date.now() - buyersCache.at < 6 * 3600000) return buyersCache.set;
+  const since = new Date(Date.now() - 365 * 86400000).toISOString().slice(0, 10);
+  const set = new Set();
+  for (const c of companies) {
+    try {
+      for (const r of rows(await call(c, 'GET', `PORDERS?$filter=${enc(`CURDATE ge ${since}T00:00:00Z and STATDES ne 'מבוטלת'`)}&$select=OWNERLOGIN&$top=2000`))) {
+        if (r.OWNERLOGIN) set.add(r.OWNERLOGIN);
+      }
+    } catch { /* חברה בלי גישה להזמנות — מדלגים */ }
+  }
+  buyersCache = { at: Date.now(), set };
+  return set;
+}
+
 /** נספח לדרישה — הצילום של הרשימה */
 async function attachDemand(company, prdno, { buf, mime, description }) {
   const uri = `data:${mime || 'image/jpeg'};base64,${buf.toString('base64')}`;
@@ -976,10 +1081,10 @@ async function ordersByProject(company, projdocno, { item = '', top = 25 } = {})
 
 module.exports = {
   suppliersByWords, ordersByProject,
-  COMPANIES, isEnabled, allowed, companyOf, isTest, resolveCompany, companiesByName, PriorityError,
+  COMPANIES, DEFAULT_HOST, DEFAULT_INI, configure, syncCompanies, ping, isEnabled, allowed, companyOf, isTest, resolveCompany, companiesByName, PriorityError,
   GENERAL, NO_VAT_CODE, TAX_CODES, PAY_TERMS, DEFAULT_PAY, payTerm, payLabel, payFromText, dueDate, projectWarehouses, warehouses, warehouseExists, defaultWarehouse, supplierHistory, recentLines, partByCode, findPartsByText, searchParts, generalCoding, warehouseOf, findSuppliers, supplierByCode, findReceiptByBooknum, getOrder, openOrders, findPartExact, lastSubchapter, projects, matchProjects, readReceipt,
-  finalOrders, orderForNotice, demandInitiator, projectManager, priorityUser,
+  finalOrders, orderForNotice, demandInitiator, demandForNotice, projectManager, priorityUser,
   readDialog, createReceipt, addOrderLine, addFreeLine, setLineQty, setLineDes, setHeader, attach, deleteAttachment, setDialog, finalizeReceipt, cancelReceipt, receiptStatus, deleteLines,
-  PD_TYPES, demandCodes, recentDemandProjects, createDemand, addDemandLine, setDemand, submitDemand, isNoApproversError, readDemand, waitingDemands, nextSigner, cancelDemand, setDemandDialog, attachDemand, priorityUsers, budgetPairs,
+  PD_TYPES, demandCodes, recentDemandProjects, createDemand, addDemandLine, setDemand, submitDemand, isNoApproversError, readDemand, waitingDemands, nextSigner, cancelDemand, setDemandDialog, appendDemandDialog, setDemandLine, deleteDemandLine, reopenDemand, REOPEN_STATUS, purchaseOrderOwners, attachDemand, priorityUsers, budgetPairs,
   _call: call
 };

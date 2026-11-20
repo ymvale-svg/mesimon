@@ -139,6 +139,11 @@ function answer(userId, d, text) {
   const n = WaUi.normalize(t);
   const row = D.get('SELECT * FROM sent_followups WHERE id = ? AND user_id = ?', d.followupId, userId);
   if (!row) return null;
+  // שאלה שנדחקה וחזרה (‎wa-questions.js‎) — אולי כבר טופלה: לא שולחים פעמיים ולא משנים
+  const yes = WaUi.sameLabel(t, BTN.send) || /^(לשלוח|שלח|תשלח|כן|👍)([\s,.!]|$)/.test(n);
+  const no = WaUi.sameLabel(t, BTN.ignore) || /^(התעלם|לא|עזוב|👎)([\s,.!]|$)/.test(n);
+  const done = { sent: 'התזכורת כבר נשלחה 👍', answered: `👍 בינתיים ${row.to_name || row.to_email} ענה/תה — אין צורך בתזכורת.`, ignored: 'בסדר, לא אזכיר על זה שוב 🙂' }[row.status];
+  if (done && (yes || no)) return { text: done, result: `כבר טופל (${row.status}): ${row.to_email}` };
   if (WaUi.sameLabel(t, BTN.send) || /^(לשלוח|שלח|תשלח|כן|👍)([\s,.!]|$)/.test(n)) return { send: true, text: '', react: '📤', result: `תזכורת ל${row.to_name || row.to_email}` };
   if (WaUi.sameLabel(t, BTN.ignore) || /^(התעלם|לא|עזוב|👎)([\s,.!]|$)/.test(n)) {
     D.run("UPDATE sent_followups SET status = 'ignored' WHERE id = ?", row.id);

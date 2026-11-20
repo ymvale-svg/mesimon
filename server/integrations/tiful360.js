@@ -155,7 +155,7 @@ function actorFor(dept, assigneeId) {
 // פרויקט בלי סיווג (כמו ‎ownClass‎ ב-classification.js)
 const UNCLASSIFIED = "(COALESCE(topic, '') = '' OR COALESCE(sens, 0) = 0)";
 
-function register(router, { createTask, saveAttachment, getTaskOr404 }) {
+function register(router, { createTask, saveAttachment, getTaskOr404, closeTask, isFinal }) {
   /**
    * מה שתפעול 360 מציג בחלון השליחה: המשתמשים הפעילים לבחירת אחראי, הפרויקטים
    * הפעילים, הפרויקט שיוצע לנושא הקריאה, ומגבלות הקבצים.
@@ -242,27 +242,55 @@ function register(router, { createTask, saveAttachment, getTaskOr404 }) {
     }
     sendJson(res, 201, { taskId: id, url: taskLink(id), existing: false, assigned: !!assigneeId, files: files.length });
   });
+
+  /**
+   * הקריאה נסגרה בתפעול 360 (גם ע"י איש ה-IT) — המשימה שנוצרה ממנה נסגרת כאן.
+   * הסגירה לא נשלחת בחזרה לתפעול 360, כדי שלא תיווצר לולאה. משימה שכבר
+   * סגורה — לא משתנה.
+   */
+  router.post('/api/integrations/tiful360/tasks/close', async (req, res) => {
+    authenticate(req);
+    const body = await readJson(req);
+    const ticketCode = clean(body.ticketCode, 50);
+    if (!ticketCode) throw badRequest('נדרש מספר קריאה');
+    const row = D.get('SELECT id FROM tasks WHERE source = ? AND source_ref = ? ORDER BY id LIMIT 1', SOURCE, ticketCode);
+    if (!row) return sendJson(res, 404, { error: 'לא נמצאה במשימון משימה מהקריאה הזאת' });
+    const task = getTaskOr404(row.id);
+    if (isFinal(task)) return sendJson(res, 200, { ok: true, taskId: task.id, alreadyClosed: true });
+
+    const actor = systemActor(department());
+    const closedBy = clean(body.closedBy, 200);
+    const message = clean(body.message, 500);
+    const note = `הקריאה ${ticketCode} נסגרה בתפעול 360${closedBy ? ` ע"י ${closedBy}` : ''}${message ? `: ${message}` : ''}`;
+    closeTask(task, actor, note);
+    sendJson(res, 200, { ok: true, taskId: task.id, alreadyClosed: false });
+  });
 }
 
 /**
- * משימה שהגיעה מתפעול 360 הסתיימה — סגירת הקריאה שם. תפעול 360 שולח את
- * הדואר למי שפתח את הקריאה.
+ * משימה שהגיעה מתפעול 360 הסתיימה — הקריאה מסומנת שם "טופלה", ותפעול 360
+ * שולח את הדואר למי שפתח אותה.
+ *
+ * חריג: קריאה שנשלחה (גם) לאיש IT באחריותו, ונשארת פתוחה עד שהוא יסגור אותה.
+ * תפעול 360 הוא שיודע אם הקריאה נשלחה לאיש IT — גם אם זה קרה אחרי שהועברה
+ * לכאן — ולכן משימון מבקש ‎keep_if_forwarded_to_it‎ ותפעול 360 מחליט.
  *
  * לא ממתינים ולא זורקים: סגירת משימה לא תיכשל ולא תתעכב בגלל מערכת אחרת.
  * התוצאה נרשמת ביומן המשימה, כדי שכשל ייראה ולא ייבלע.
  */
 function onTaskCompleted(task, actor) {
-  if (task.source !== SOURCE || !task.source_ref) return;
+  if (task.source !== SOURCE || !task.source_ref) return null;
   const url = env('TIFUL360_API_URL');
   const key = env('TIFUL360_API_KEY');
-  if (!url || !key) return;
+  if (!url || !key) return null;
   const ref = { type: 'system', id: null, name: 'תפעול 360' };
-  fetch(url, {
+  return fetch(url, {
     method: 'POST',
     headers: { 'content-type': 'application/json', authorization: `Bearer ${key}` },
     body: JSON.stringify({
       action: 'close_ticket',
       ticket_code: task.source_ref,
+      keep_if_forwarded_to_it: true,
       message: `הקריאה טופלה${actor?.name ? ` ע"י ${actor.name}` : ''}.`
     }),
     signal: AbortSignal.timeout(15000)
@@ -270,14 +298,21 @@ function onTaskCompleted(task, actor) {
     .then(async (r) => {
       const data = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
-      D.audit(task.id, ref, 'tiful360', data.already_closed
-        ? 'הקריאה בתפעול 360 כבר הייתה סגורה'
-        : `הקריאה נסגרה בתפעול 360${data.emailed ? ' ונשלח דואר לפותח' : ''}`);
+      D.audit(task.id, ref, 'tiful360', closeNote(data));
     })
     .catch((err) => {
       console.error('[משימון] סגירת קריאה בתפעול 360 נכשלה:', err.message);
       try { D.audit(task.id, ref, 'tiful360', `סגירת הקריאה בתפעול 360 נכשלה: ${err.message}`); } catch {}
     });
+}
+
+function closeNote(data) {
+  if (data.already_closed) return 'הקריאה בתפעול 360 כבר הייתה סגורה';
+  if (data.forwarded_to_it) {
+    const who = clean(data.it_person, 200);
+    return `הקריאה נשלחה לאיש IT${who ? ` (${who})` : ''} ונשארת פתוחה בתפעול 360 — באחריותו`;
+  }
+  return `הקריאה סומנה "טופלה" בתפעול 360${data.emailed ? ' ונשלח דואר לפותח' : ''}`;
 }
 
 module.exports = { register, onTaskCompleted, SOURCE };

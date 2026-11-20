@@ -22,6 +22,7 @@ const D = require('../core').Db;
 const W = require('../core').Workdays;
 const Gmail = require('../integrations').Gmail;
 const Timeless = require('../integrations').Timeless;
+const Store = require('./timeless-store');
 const Calendar = require('./calendar');
 const Claude = require('../integrations').Claude;
 
@@ -81,17 +82,12 @@ const DIGEST_SCHEMA = {
   }
 };
 
-/** הטקסט של מסמכי ה-AI ושל התמליל — בשם המשתמש (בדיקת ההרשאה שם) */
+/** הטקסט של מסמכי ה-AI ושל התמליל — מהשמירה המקומית, בשם המשתמש (בדיקת ההרשאה שם) */
 async function sources(userId, meetingId, { transcriptChars = 60000 } = {}) {
-  const m = await Timeless.meeting(userId, meetingId);
-  if (!m) throw Object.assign(new Error('הפגישה לא נמצאה ב-Timeless, או שאין לך גישה אליה.'), { status: 404 });
-  let summary = '';
-  for (const ref of (m.documents ?? []).slice(0, 4)) {
-    try { summary += `${ref.title ? `# ${ref.title}\n` : ''}${await Timeless.document(userId, ref.id, { verified: true })}\n\n`; } catch { /* מסמך שלא נקרא — בלעדיו */ }
-  }
-  let transcript = '';
-  try { transcript = (await Timeless.transcript(userId, meetingId, { maxChars: transcriptChars })).text; } catch { /* בלי תמליל */ }
-  return { m, summary: summary.trim(), transcript };
+  const d = await Store.details(userId, meetingId);
+  if (!d) throw Object.assign(new Error('הפגישה לא נמצאה ב-Timeless, או שאין לך גישה אליה.'), { status: 404 });
+  const summary = d.documents.slice(0, 4).map((x) => `${x.title ? `# ${x.title}\n` : ''}${x.markdown ?? ''}`).join('\n\n').trim();
+  return { m: d.meeting, summary, transcript: Store.transcriptText(d.transcript, transcriptChars) };
 }
 
 /** בצורה שהלקוח מציג: לכל משימה — העובד שזוהה במשימון, אם זוהה */
@@ -215,14 +211,12 @@ function sameMeeting(tl, ev) {
  */
 async function forMeeting(userId, m) {
   if (!Timeless.isConnected(userId) || new Date(m.start_at).getTime() > Date.now()) return null;
-  const date = W.ilDateOf(m.start_at);
-  const list = await Timeless.listMeetings(userId, { from: date, to: date, limit: 100, expandDocuments: true });
   const emails = new Set(parseJson(m.attendees, []).map((a) => String(a.email ?? '').toLowerCase()));
   const owner = D.get('SELECT email FROM users WHERE id = ?', m.owner_id)?.email;
   if (owner) emails.add(owner.toLowerCase());
-  const ev = { start: m.start_at, title: m.title, emails };
-  // ‎listMeetings‎ מחזיר מנורמל: ‎participants‎ כמחרוזות "שם <מייל>"
-  return list.find((x) => sameMeeting({ start_time: x.start, title: x.title, participants: x.participants }, ev)) ?? null;
+  // מהשמירה המקומית — שעה ומשתתפים; ורק פגישה שהמשתמש רואה
+  const row = Store.near(m.start_at, emails, { title: m.title });
+  return row ? Store.get(userId, row.id) : null;
 }
 
 // ---------------------------------------------------------------------------
@@ -299,6 +293,14 @@ async function timelessDay(token, date) {
 
 /** ‎true‎ — מוקלטת; ‎false‎ — לא; ‎null‎ — אי אפשר לדעת (אין אסימון, Timeless לא ענה) */
 async function isRecorded(c) {
+  // קודם השמירה המקומית (הסבב כל 5 דקות שומר גם פגישות ש-Timeless מתכונן להקליט)
+  const local = Store.near(c.start, c.emails, { statuses: null, title: c.title });
+  if (local && local.status !== 'failed') return true;
+  // השמורה טרייה (סבב מוצלח ב-45 הדקות האחרונות) — מה שלא בה, לא מתוכנן להקלטה. לא פונים ל-Timeless.
+  if (Date.now() - Store.lastSweepAt() < 45 * MIN) return false;
+  // השמורה ישנה — בדיקה אחת מול Timeless, רק כשנשאר מרווח במכסה
+  const left = Timeless.quotaLeft();
+  if (left !== null && left < Timeless.BG_RESERVE) return null;
   const date = W.ilDateOf(c.start);
   const tokens = [...new Set([...c.owners].map((id) => Timeless.backgroundToken(id)).filter(Boolean))];
   if (!tokens.length) return null;
@@ -377,7 +379,7 @@ function start() {
   const tick = async () => {
     if (running) return;
     running = true;
-    try { await checkUnrecorded(); } catch (err) { console.error('[משימון] בדיקת הקלטות Timeless נכשלה:', err.message); } finally { running = false; }
+    try { await Timeless.background(checkUnrecorded); } catch (err) { console.error('[משימון] בדיקת הקלטות Timeless נכשלה:', err.message); } finally { running = false; }
   };
   timer = setInterval(tick, MIN);
   timer.unref?.();

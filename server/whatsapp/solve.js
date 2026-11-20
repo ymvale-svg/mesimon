@@ -20,9 +20,11 @@ const Claude = require('../integrations').Claude;
 const Gmail = require('../integrations').Gmail;
 const Phonebook = require('../phonebook').Phonebook;
 const Memory = require('../mail').MailMemory;
+const Agents = require('../agents');
 
 const optional = (name) => { try { return require(name); } catch { return null; } };
-const Org = () => optional('./org-knowledge');
+// הידע הארגוני — בתחום agents/ (הנתיב הישן './org-knowledge' החזיר null בשקט אחרי החלוקה לתחומים)
+const Org = () => Agents.OrgKnowledge;
 const WhatsApp = () => optional('../whatsapp');
 
 const FAST_MODEL = () => String(D.getSetting('mail_memory_model', 'claude-haiku-5-5') || 'claude-haiku-5-5');

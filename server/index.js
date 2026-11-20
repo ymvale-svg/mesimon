@@ -35,7 +35,9 @@ const Dupes = require('./tasks').TaskDupes;
 const { HttpError, sendJson, serveStatic, parseUrl, unauthorized } = require('./core').HttpKit;
 const MailDocQueue = require('./mail').MailDocQueue;
 const PoNotify = require('./priority').PoNotify;
+const PdParts = require('./priority').PdParts;
 const TimelessMedia = require('./meetings').TimelessMedia;
+const TimelessStore = require('./meetings').TimelessStore;
 
 const PORT = Number(process.env.PORT ?? 3000);
 const HOST = process.env.HOST ?? '0.0.0.0';
@@ -71,6 +73,9 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (serveStatic(res, PUBLIC_DIR, url.pathname, req)) return;
+
+    // 🗂 משימון פריוריטי — תוכנה נפרדת באותו אתר (‎public/priority/‎), עם ניווט צד-לקוח משלה
+    if (/^\/priority(\/|$)/.test(url.pathname) && serveStatic(res, PUBLIC_DIR, '/priority/index.html')) return;
 
     // כל נתיב אחר מוגש כאפליקציה (ניווט צד-לקוח)
     if (serveStatic(res, PUBLIC_DIR, '/index.html')) return;
@@ -122,6 +127,8 @@ server.listen(PORT, HOST, () => {
     Meetings.start();
     // 🎥 פגישה מקוונת שהתחילה ולא מוקלטת ב-Timeless — הודעה למזכירות
     TimelessMedia.start();
+    // 🎥 הצינור היחיד מ-Timeless: סבב כל 5 דקות, והפגישות נשמרות במשימון
+    TimelessStore.start();
     WaBot.start();
     // משימות כפולות במחלקה — סריקה פעם ביום (פרק 11ב)
     Dupes.start();
@@ -129,6 +136,8 @@ server.listen(PORT, HOST, () => {
     MailDocQueue.start();
     // 🧾 הזמנת רכש שהפכה לסופית בפריוריטי — למנהל הפרויקט וליוזם הדרישה (וואטסאפ ומייל)
     PoNotify.start();
+    // 🆕 מק"טים שנשלחו לרכש לבנייה — כשנבנו בפריוריטי, היוזם נשאל בבוט אם לבנות את הדרישה מחדש
+    PdParts.start();
   }
   // התראה למנהלים כשתקרת המעבד מאטה את הסוכנים
   LoadMonitor.start();

@@ -47,4 +47,7 @@ const sameLabel = (a, b) => normalize(a).replace(/…$/, '') === normalize(b).re
 const yesNo = () => [BTN.yes, BTN.no];
 const yesCancel = () => [BTN.yes, BTN.cancel];
 
-module.exports = { BTN, YES, NO, CANCEL, normalize, label, labels, sameLabel, yesNo, yesCancel };
+/** 📬 הכפתור שפותח את המעבר על המיילים שמחכים (‎flowMailWalk‎) — בתפריט ובסיכום הבוקר */
+const mailWalkLabel = (n) => `📬 ${n} ${n === 1 ? 'מייל' : 'מיילים'} לענות`;
+
+module.exports = { BTN, YES, NO, CANCEL, normalize, label, labels, sameLabel, yesNo, yesCancel, mailWalkLabel };

@@ -11,6 +11,7 @@ const Auth = require('../core').Auth;
 const Rules = require('../tasks').RulesEngine;
 const Google = require('../integrations').GoogleAuth;
 const Invites = require('../core').Invites;
+const SettingsCatalog = require('../core').SettingsCatalog;
 const Mailer = require('../integrations').Mailer;
 const TaskMail = require('../mail').TaskMail;
 const Push = require('../integrations').Push;
@@ -20,6 +21,9 @@ const AiTasks = require('../tasks').AiTasks;
 const AiApi = require('./api-ai');
 const TodayApi = require('./api-today');
 const PhonebookApi = require('./api-phonebook');
+const PlacesApi = require('./api-places');
+const PriorityApi = require('./api-priority');
+const PriorityAccess = require('../priority').PriorityAccess;
 const MeetingsApi = require('./api-meetings');
 const WhatsNew = require('./api-whats-new');
 const Zoom = require('../integrations').Zoom;
@@ -662,10 +666,11 @@ function shapeTask(task, actor, { withDetails = false } = {}) {
     ...base,
     // ההתכתבות המלאה של משימת AI, לפאנל בכרטיס המשימה
     aiDetail: isVendor(actor) ? null : AiTasks.detailFor(task.id),
-    // משימה שנולדה ממייל: הקישור אליו — רק למי שהמייל בתיבה שלו
+    // משימה שנולדה ממייל: הקישור אליו — רק למי שהמייל בתיבה שלו; העותק של המייל (‎mail‎) — לכל מי שרואה את המשימה
     source: isVendor(actor) || !task.source ? null : {
       type: task.source,
-      link: actor.type === 'user' ? MailScan.sourceLink(task, actor.id) : null
+      link: actor.type === 'user' ? MailScan.sourceLink(task, actor.id) : null,
+      mail: task.source === 'email' ? MailScan.sourceMailOf(task) : null
     },
     // 💡 איך לסגור — רק לבעל התיבה שממנה נוצרה המשימה
     closure: actor.type === 'user' ? MailScan.closureForTask(task.id, actor.id) : null,
@@ -872,7 +877,9 @@ function publicActor(actor) {
     // מסך "בקרת משימות" ותתי-משימות — רק למי שנפתח לו (‎D.trackerAccess‎)
     tracker: actor.type === 'user' && D.trackerAccess(actor.id),
     // מסך הקלטות ה-Zoom — כשיש חיבור Zoom
-    zoomRecordings: actor.type === 'user' && Zoom.isEnabled()
+    zoomRecordings: actor.type === 'user' && Zoom.isEnabled(),
+    // 🗂 משימון פריוריטי (‎/priority‎) — קישור בתפריט למי שמורשה לפחות לסוג מסמך אחד (או מנהל מערכת)
+    priority: actor.type === 'user' && (PriorityAccess.isAdmin(actor) || PriorityAccess.of({ id: actor.id, role: actor.role }).docs.length > 0)
   };
 }
 
@@ -1630,7 +1637,9 @@ router.get('/api/tasks/:id/flow', async (req, res, ctx) => {
 
 router.post('/api/tasks', async (req, res, ctx) => {
   const actor = ctx.requireActor();
-  const body = await readJson(req);
+  // מקור המשימה (מייל, תפעול 360) נקבע רק בזרימות השרת — לא מהדפדפן. אחרת אפשר ליצור משימה
+  // "מתפעול 360" עם קוד של קריאה אחרת, ולסגור אותה שם בסגירת המשימה
+  const { source, sourceRef, sourceUserId, ...body } = await readJson(req);
   assertMayUseProject(actor, body.projectId);
   const id = createTask(actor, body);
   sendJson(res, 201, { task: shapeTask(getTaskOr404(id), actor, { withDetails: true }) });
@@ -1855,6 +1864,30 @@ router.post('/api/tasks/similar', async (req, res, ctx) => {
     title: body.title, description: body.description, projectId: body.projectId, departmentId: newTaskDepartment(actor, body)
   });
   sendJson(res, 200, { matches });
+});
+
+/**
+ * 🔀 "לאחד לתוך משימה אחרת": המשימה ‎:id‎ נסגרת, וכל מה שבה (אחראים, הערות, קבצים, צ'קליסט) עובר ל-‎intoId‎.
+ * רק מי שרשאי לערוך את שתיהן, ולא ספק.
+ */
+router.post('/api/tasks/:id/merge', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  if (isVendor(actor)) throw forbidden();
+  const body = await readJson(req);
+  const drop = getTaskOr404(ctx.params.id);
+  const keep = getTaskOr404(Number(body.intoId));
+  for (const t of [drop, keep]) {
+    assertVisible(actor, t);
+    if (!mayOnTask(actor, 'edit_delete_task', t, projectOf(t))) throw forbidden('אין לך הרשאה לערוך את שתי המשימות');
+  }
+  let out;
+  try {
+    out = Dupes.manualMerge(keep.id, drop.id, actor);
+  } catch (err) {
+    if (err.status === 403) throw forbidden(err.message);
+    throw badRequest(err.message);
+  }
+  sendJson(res, 200, { task: shapeTask(getTaskOr404(out.keepId), actor, { withDetails: true }), moved: out.moved });
 });
 
 /** "להצטרף למשימה של יוסי" — אחראי נוסף על המשימה הקיימת, בלי משימה חדשה */
@@ -2092,7 +2125,11 @@ router.patch('/api/tasks/:id', async (req, res, ctx) => {
 });
 
 /** מימוש חוקי המעבר בין הסטטוסים + בדיקת תלות */
-function changeStatus(task, newStatus, actor, note = '') {
+/*
+ * ‎opts.fromTiful360‎ — הסגירה הגיעה מתפעול 360 (הקריאה נסגרה שם), ולכן לא שולחים
+ * אליו בחזרה בקשה לסגור אותה.
+ */
+function changeStatus(task, newStatus, actor, note = '', opts = {}) {
   const target = columnMeta(task.board_id, newStatus);
   if (!target) throw badRequest('סטטוס לא קיים בבורד זה');
   const current = columnMeta(task.board_id, task.status);
@@ -2124,7 +2161,7 @@ function changeStatus(task, newStatus, actor, note = '') {
   if (target.is_final) {
     D.run('UPDATE tasks SET completed_at = ? WHERE id = ?', D.nowIso(), task.id);
     // משימה מקריאת שירות — הקריאה נסגרת בתפעול 360 (רק במעבר לסיום, לא בין שני סטטוסי סיום)
-    if (!current?.is_final) Tiful360.onTaskCompleted(task, actor);
+    if (!current?.is_final && !opts.fromTiful360) Tiful360.onTaskCompleted(task, actor);
   } else if (current?.is_final) {
     D.run('UPDATE tasks SET completed_at = NULL WHERE id = ?', task.id);
   }
@@ -4554,10 +4591,9 @@ router.delete('/api/admin/users/:id', async (req, res, ctx) => {
     D.run("DELETE FROM wa_messages WHERE user_id = ? OR (? <> '' AND sender_phone = ?)", id, user.phone ?? '', user.phone ?? '');
     D.run('DELETE FROM wa_log WHERE user_id = ?', id);
     D.run('DELETE FROM agent_log WHERE user_id = ?', id);
-    // הגדרות לפי משתמש (קבלת סחורה, דרישת רכש, העדפות פריוריטי, ידע ארגוני)
-    D.run('DELETE FROM settings WHERE key IN (?, ?, ?, ?, ?)',
-      `goods_receipt:${id}`, `goods_receipt_done:${id}`, `goods_receipt_prefs:${id}`,
-      `purchase_demand:${id}`, `org_distill_${id}`);
+    // נתונים לפי משתמש שעוד בטבלת ההגדרות (‎SettingsCatalog.LEGACY_PER_USER‎; העדפות פריוריטי — מ-15.11.26 ב-user_prefs)
+    for (const prefix of SettingsCatalog.LEGACY_PER_USER) D.run('DELETE FROM settings WHERE key = ? OR key LIKE ?', `${prefix}${id}`, `${prefix}${id}:%`);
+    D.run('DELETE FROM settings WHERE key = ?', `goods_receipt_prefs:${id}`);
     // שורות שמזוהות לפי סוג ומזהה, בלי מפתח זר
     D.run("DELETE FROM sessions WHERE actor_type = 'user' AND actor_id = ?", id);
     D.run("DELETE FROM notifications WHERE target_type = 'user' AND target_id = ?", id);
@@ -4682,8 +4718,10 @@ router.get('/api/admin/settings', async (req, res, ctx) => {
   } catch { /* עדיין לא נוצר */ }
 
   sendJson(res, 200, {
-    settings: D.allSettings(),
+    settings: D.systemSettings(),
     defaults: D.DEFAULT_SETTINGS,
+    // 🗂 הטופס לפי לשוניות — מהקטלוג (‎core/settings-catalog.js‎), המקור היחיד לשם ולהסבר של כל הגדרה
+    form: SettingsCatalog.formTabs(),
     // מצב החיבורים החיצוניים. בלי התצוגה הזו, מפתח שנמחק בשרת מבטל תכונה
     // שלמה בלי שום סימן בממשק — בדיוק מה שקרה לכניסה עם Google.
     integrations: {
@@ -4753,7 +4791,7 @@ router.put('/api/admin/settings', async (req, res, ctx) => {
   }
   if (b.settings?.scheduler_interval_minutes) Rules.start();
   if (b.settings?.ai_poll_minutes) AiTasks.start();
-  sendJson(res, 200, { settings: D.allSettings() });
+  sendJson(res, 200, { settings: D.systemSettings() });
 });
 
 router.post('/api/admin/rules', async (req, res, ctx) => {
@@ -5574,6 +5612,10 @@ const botTaskOps = {
  */
 const syncOps = {
   canSee: (actor, task) => canSeeTask(actor, task),
+  // 🔀 צירוף ההודעה למשימה אחרת — כמו באיחוד: רק מי שרשאי לערוך אותה
+  mayEdit: (actor, task) => canSeeTask(actor, task) && mayOnTask(actor, 'edit_delete_task', task, projectOf(task)),
+  // ➕ משימה חדשה מההודעה — אותה יצירה כמו בכל משימה
+  createTask: (actor, body) => createTask(actor, body),
 
   /** ההודעה כהערה פנימית, והקבצים מהמייל מצורפים אליה. קובץ שנכשל — לא מפיל את השאר */
   comment(actor, task, body, files = []) {
@@ -5646,9 +5688,22 @@ AiApi.register(router, { getTaskOr404, assertVisible, mayOnTask, shapeTask, acto
   taskTemplates: (actor) => visibleTemplates(actor).filter((t) => t.kind === 'task').map(shapeTemplate) });
 TodayApi.register(router, { shapeTask, createTask, getTaskOr404, listProjectsFor, newTaskProjects, assertMayAssignTo });
 PhonebookApi.register(router);
+PlacesApi.register(router);
+PriorityApi.register(router);
 WhatsNew.register(router);
 MeetingsApi.register(router, { getTaskOr404, assertVisible, shapeTask, canSeeTask });
-Tiful360.register(router, { createTask, saveAttachment, getTaskOr404 });
+Tiful360.register(router, {
+  createTask, saveAttachment, getTaskOr404,
+  // קריאה שנסגרה בתפעול 360 — המשימה נסגרת במסלול הרגיל (יומן, התראות), בלי לשלוח את הסגירה בחזרה
+  closeTask(task, actor, note) {
+    const final = D.get('SELECT key FROM board_columns WHERE board_id = ? AND is_final = 1 ORDER BY position LIMIT 1', task.board_id);
+    if (!final) throw badRequest('אין בבורד של המשימה סטטוס סגירה');
+    changeStatus(task, final.key, actor, note, { fromTiful360: true });
+  },
+  isFinal(task) {
+    return !!D.get('SELECT 1 FROM board_columns WHERE board_id = ? AND key = ? AND is_final = 1', task.board_id, task.status);
+  }
+});
 BotReview.register(router);
 
 module.exports = { router, PRIORITIES, shapeTask, canSeeTask };

@@ -33,12 +33,14 @@ const Dupes = require('../tasks').TaskDupes;
 const P = require('../core').Permissions;
 const Docs = require('../core').DocText;
 const Memory = require('./mail-memory');
+const SignatureBackfill = require('./signature-backfill');
 const Closure = require('../tasks').TaskClosure;
 const MailActions = require('./mail-actions');
 const FormFill = require('./form-fill');
 const Ports = require('../core').Ports;
 const Classification = require('../core').Classification;
 const MailInsights = require('./mail-insights');
+const MailOwner = require('./mail-owner');
 const MeetingCoord = require('../meetings').MeetingCoord;
 const OrgKnowledge = require('../agents').OrgKnowledge;
 const Rfq = require('../priority').Rfq;
@@ -98,6 +100,7 @@ const epoch = (d) => Math.floor(d.getTime() / 1000);
 // ---------------------------------------------------------------------------
 
 const userOf = (id) => D.get("SELECT id, full_name, email, department_id FROM users WHERE id = ? AND status = 'active'", id);
+const activeDepartments = () => D.all("SELECT id, name FROM departments WHERE status = 'active' ORDER BY name");
 const orgUsers = () => D.all("SELECT u.id, u.full_name, u.email, d.name AS department FROM users u LEFT JOIN departments d ON d.id = u.department_id WHERE u.status = 'active' AND u.role <> 'vendor' ORDER BY u.full_name");
 
 function senderMode(userId, email) {
@@ -178,9 +181,11 @@ const ANALYSIS_SCHEMA = {
       }
     }
   },
-  required: ['for_me', 'reply_expected', 'addressed_to_email', 'skip_reason', 'warning', 'tasks', 'goods_document'],
+  required: ['for_me', 'reply_expected', 'addressed_to_email', 'skip_reason', 'warning', 'tasks', 'goods_document', 'department'],
   additionalProperties: false
 };
+// 👤 המחלקה שהנושא שלה — כדי שתזכורת על מייל לכמה נמענים תגיע רק למנהל המחלקה (‎mail-owner.js‎)
+ANALYSIS_SCHEMA.properties.department = { type: 'string', description: 'שם המחלקה שהנושא של המייל שייך לה — בדיוק כפי שמופיע ברשימת המחלקות, או מחרוזת ריקה אם לא ברור' };
 // 📄 חשבונית / תעודת משלוח בקובץ המצורף — הבוט יציע קבלת סחורה (‎mail-actions.js‎)
 ANALYSIS_SCHEMA.properties.goods_document = MailActions.GOODS_SCHEMA;
 // 📝 טופס ריק למילוי בקובץ המצורף — הבוט יציע למלא (‎form-fill.js‎)
@@ -206,6 +211,7 @@ async function analyze(user, mail, conn = null) {
     `בעל התיבה: ${user.full_name} <${own[0]}>`,
     own.length > 1 ? `כל הכתובות של בעל התיבה (מייל לכל אחת מהן — אליו): ${own.join(', ')}` : null,
     '',
+    `המחלקות בארגון: ${activeDepartments().map((d) => d.name).join(', ') || 'אין'}`,
     'העובדים בארגון (מזהה · שם · מייל · מחלקה):',
     ...users.map((u) => `${u.id} · ${u.full_name} · ${u.email} · ${u.department ?? ''}`),
     '',
@@ -283,6 +289,7 @@ function sanitize(out, user, users) {
     forMe: out.for_me !== false,
     replyExpected: out.reply_expected === true && !out.warning,
     addressedTo: String(out.addressed_to_email ?? '').trim().toLowerCase(),
+    departmentId: activeDepartments().find((d) => d.name === String(out.department ?? '').trim())?.id ?? null,
     skipReason: String(out.skip_reason ?? ''),
     warning: String(out.warning ?? '').trim(),
     tasks,
@@ -369,6 +376,8 @@ async function processMessage(user, conn, gmailId) {
   // כל הכתובות שלי — מייל שעובר ביני לבין עצמי (מתיבה לתיבה) אינו משימה
   const mine = new Set([conn.email, user.email, ...Gmail.emailsOf(user.id)].filter(Boolean).map((a) => a.toLowerCase()));
 
+  // 👤 עובד מהארגון ענה בשרשור — המייל טופל, ולא מזכירים עליו לאף אחד (‎mail-owner.js‎)
+  try { MailOwner.noteOrgReply(mail.from.address, [...mail.inReplyTo, ...mail.references]); } catch (err) { console.error('[משימון] סימון תשובה מהארגון נכשל:', err.message); }
   if (!mail.from.address || mine.has(mail.from.address)) return record(user.id, gmailId, headerId, 'skipped', meta.box), 'skipped';
   if (await routeReply(user, mail)) return record(user.id, gmailId, headerId, 'reply', meta.box), 'reply';
   // תשובה של ספק לפנייה להצעת מחיר — נקראת שם (‎rfq.js‎), לא הצעת משימה
@@ -404,10 +413,13 @@ async function processMessage(user, conn, gmailId) {
   }
 
   const result = await analyze(user, mail, conn);
+  // 👤 בעל המייל — רק לו הבוט יפנה (תזכורת, הצעת תשובה, קבלת סחורה, טופס). ההכרעה הראשונה נשמרת לכל התיבות
+  const owner = MailOwner.assign(headerId, MailOwner.decide({ to: mail.to, addressedTo: result.addressedTo, departmentId: result.departmentId, fromEmail: mail.from.address }));
+  const isOwner = MailOwner.isOwner(user.id, headerId);
   // 📄 חשבונית / תעודת משלוח מצורפת — הצעה לקבלת סחורה בבוט, גם כשאין במייל משימה
-  try { MailActions.goodsDocFrom(user, meta, mail, result.goods); } catch (err) { console.error('[משימון] רישום חשבונית מהמייל נכשל:', err.message); }
+  if (isOwner) try { MailActions.goodsDocFrom(user, meta, mail, result.goods); } catch (err) { console.error('[משימון] רישום חשבונית מהמייל נכשל:', err.message); }
   // 📝 טופס ריק — רק כשבעל התיבה הוא הנמען הראשי (לא בהעתק)
-  try { FormFill.formFrom(user, meta, mail, result.form, [...mine]); } catch (err) { console.error('[משימון] רישום טופס מהמייל נכשל:', err.message); }
+  if (isOwner) try { FormFill.formFrom(user, meta, mail, result.form, [...mine]); } catch (err) { console.error('[משימון] רישום טופס מהמייל נכשל:', err.message); }
 
   // הבקשה מופנית לעמית שמחובר בעצמו — היא תוצע לו, לא לי
   if (!result.forMe && result.addressedTo && !mine.has(result.addressedTo)) {
@@ -462,7 +474,8 @@ async function processMessage(user, conn, gmailId) {
   for (const t of result.tasks) {
     // ‎toMe‎ — אני הנמען הראשי (לא רק בהעתק); ‎auto‎ — דיוור / הודעה אוטומטית. רק כאלה קופצים בוואטסאפ (‎mail-push.js‎)
     const toMe = (String(mail.to ?? '').match(/[^\s<>,;"']+@[^\s<>,;"']+/g) ?? []).some((e) => mine.has(e.toLowerCase()));
-    const data = { ...t, warning: result.warning, alsoSuggestedTo: others, receivedAt: meta.receivedAt, toMe, auto: Boolean(mail.autoSubmitted) };
+    const ownerName = owner?.user_id && owner.user_id !== user.id ? D.get('SELECT full_name FROM users WHERE id = ?', owner.user_id)?.full_name ?? '' : '';
+    const data = { ...t, warning: result.warning, alsoSuggestedTo: others, receivedAt: meta.receivedAt, toMe, auto: Boolean(mail.autoSubmitted), ...(ownerName ? { ownerName } : {}) };
     // לבד רק משימה שכולה שלי: בלי עובדים אחרים, בלי פנייה החוצה ובלי סימן אזהרה
     const solo = !t.people.length && !t.aiRequest && !t.ambiguous.length && !result.warning;
     if ((trusted || autoAll) && solo && !others.length) {
@@ -637,11 +650,19 @@ async function morningRun() {
 }
 
 /**
- * 📬 סריקה שוטפת — למי שהבוט פונה אליו על כל מייל חדש (‎mail_alert‎ בפעולות
- * הבוט; הרשימה מ-‎wa-bot.mailAlertUsers‎). כל ‎ai_mail_live_minutes‎ דקות
- * (ברירת מחדל 10), מהסריקה הקודמת ולא יותר מיממה אחורה. אותה תקרה יומית של
- * הסריקה הרגילה; מייל שכבר נסרק אינו נסרק שוב.
+ * 📬 סריקה שוטפת — כל תיבה מחוברת של כל עובד (הוחלט 11.11.26: "מייל מלפני חצי שעה לא מופיע בהצעות" —
+ * עד אז רק מי שמקבל התראות מייל בבוט, ‎mail_alert‎, ושאר העובדים קיבלו הצעות רק בסריקת הבוקר).
+ * כל ‎ai_mail_live_minutes‎ דקות (ברירת מחדל 10), מהסריקה הקודמת ולא יותר מיממה אחורה. אותה תקרה יומית של
+ * הסריקה הרגילה; מייל שכבר נסרק אינו נסרק שוב — ולכן העלות כמו בסריקת הבוקר, רק מוקדם יותר.
+ * ‎ai_mail_live_scope = 'alerts'‎ — כמו קודם: רק מי שמקבל התראות מייל בבוט.
  */
+function liveBoxes() {
+  if (D.getSetting('ai_mail_live_scope', 'all') === 'alerts') {
+    return Ports.get('waBot').mailAlertUsers().flatMap((userId) => Gmail.boxesOf(userId, 'mail'));
+  }
+  return Gmail.allBoxes('mail');
+}
+
 let liveAt = 0;
 let liveBusy = false;
 async function liveRun() {
@@ -651,14 +672,12 @@ async function liveRun() {
   liveAt = Date.now();
   liveBusy = true;
   try {
-    for (const userId of Ports.get('waBot').mailAlertUsers()) {
-      for (const who of Gmail.boxesOf(userId, 'mail')) {
-        const conn = Gmail.connectionOf(who);
-        if (!conn || conn.state !== 'ok' || conn.scan_running) continue;
-        const last = conn.last_scan_at ? new Date(conn.last_scan_at).getTime() : 0;
-        const from = new Date(Math.max(last - 30 * 60000, Date.now() - DAY));
-        await runScan(who, { from, trigger: 'live' }).catch((err) => console.error(`[משימון] סריקה שוטפת של משתמש ${userId} נכשלה:`, err.message));
-      }
+    for (const who of liveBoxes()) {
+      const conn = Gmail.connectionOf(who);
+      if (!conn || conn.state !== 'ok' || conn.scan_running) continue;
+      const last = conn.last_scan_at ? new Date(conn.last_scan_at).getTime() : 0;
+      const from = new Date(Math.max(last - 30 * 60000, Date.now() - DAY));
+      await runScan(who, { from, trigger: 'live' }).catch((err) => console.error(`[משימון] סריקה שוטפת של ${who} נכשלה:`, err.message));
     }
   } finally {
     liveBusy = false;
@@ -800,6 +819,76 @@ function ownSuggestion(id, userId) {
  * יצירת המשימה מהצעה, עם התיקונים של המשתמש. עובר דרך ‎createTask‎ של
  * ‎api.js‎ — אותן בדיקות הרשאה כמו בכל משימה, כולל שיוך לאדם אחר.
  */
+/*
+ * 📧 המייל המקורי בתוך המשימה (הוחלט 11.11.26, מהערה של עובדת: "קיבלתי משימה ממייל ולא יודעת על מה היא").
+ * הקישור למייל ב-Gmail עובד רק למי שהמייל בתיבה שלו — ולכן נשמר עותק (מאת, נושא, תאריך, הטקסט החדש עד 8,000
+ * תווים) ב-‎tasks.source_mail‎, ומוצג לכל מי שרואה את המשימה (לא לספקים). רקע: תקלה לא מעכבת את יצירת המשימה.
+ */
+const SOURCE_MAIL_TEXT = 8000;
+/**
+ * עותק של המייל שממנו נולדה ההצעה, מ-Gmail: מאת, אל, נושא, תאריך, הטקסט החדש וקבצים.
+ * ‎sent‎ — המייל נשלח מהתיבה של העובד עצמו (ולא התקבל אצלו) — "📤 מייל ששלחת".
+ * משותף לעותק שנשמר במשימה ולתצוגה בדיאלוג "📧 משימה מהמייל" (הוחלט 16.11.26).
+ */
+/** השולח הוא העובד עצמו — הכתובת של התיבה שההצעה ממנה, או של אחת התיבות שלו */
+function sentByOwner(sug, fromEmail = sug.from_email) {
+  const addr = String(fromEmail || '').trim().toLowerCase();
+  if (!addr) return false;
+  const own = [Gmail.connectionOf(Gmail.handle(sug.user_id, sug.box ?? 0))?.email, ...Gmail.emailsOf(sug.user_id)];
+  return own.filter(Boolean).some((e) => String(e).toLowerCase() === addr);
+}
+
+async function mailSnapshot(sug) {
+  const who = Gmail.handle(sug.user_id, sug.box ?? 0);
+  const m = Mime.parse((await Gmail.raw(who, sug.gmail_id)).raw);
+  const fromEmail = m.from?.address || sug.from_email || '';
+  return {
+    from: m.from?.name || sug.from_name || '',
+    fromEmail,
+    to: String(m.to || '').trim(),
+    subject: m.subject || sug.subject || '',
+    date: m.date && !Number.isNaN(m.date.getTime()) ? m.date.toISOString() : sug.received_at ?? null,
+    text: String(m.newText || m.text || '').trim().slice(0, SOURCE_MAIL_TEXT),
+    files: (m.attachments ?? []).map((a) => a.filename).filter(Boolean).slice(0, 20),
+    sent: sentByOwner(sug, fromEmail)
+  };
+}
+
+async function captureSourceMail(taskId, sug) {
+  if (!taskId || !sug?.gmail_id) return null;
+  const snap = await mailSnapshot(sug);
+  D.run('UPDATE tasks SET source_mail = ? WHERE id = ?', JSON.stringify(snap), taskId);
+  return snap;
+}
+
+/**
+ * 📧 "המייל עצמו" בדיאלוג של הצעה — רק לבעל ההצעה, רק להצעה ממייל.
+ * תקלה ב-Gmail — הודעה ברורה, לא קריסה.
+ */
+async function suggestionMail(id, userId) {
+  const sug = ownSuggestion(id, userId);
+  const data = parseJson(sug.data, {});
+  if (data.source === 'whatsapp' || data.source === 'agent' || !sug.gmail_id) {
+    const err = new Error('להצעה הזו אין מייל');
+    err.status = 404;
+    throw err;
+  }
+  try {
+    return await mailSnapshot(sug);
+  } catch (e) {
+    console.error(`[משימון] קריאת המייל של הצעה ${id} נכשלה:`, e.message);
+    const err = new Error('לא הצלחנו להביא את המייל מ-Gmail כרגע. אפשר לפתוח אותו בקישור "המייל ↗" או לנסות שוב מאוחר יותר.');
+    err.status = 502;
+    throw err;
+  }
+}
+
+/** העותק של המייל המקורי, לכרטיס המשימה. ‎null‎ — אין */
+function sourceMailOf(task) {
+  const v = parseJson(task?.source_mail || '', null);
+  return v && typeof v === 'object' && (v.text || v.subject) ? v : null;
+}
+
 function createFromSuggestion(sug, actor, edits = {}) {
   const data = parseJson(sug.data, {});
   // מה שהגיע מהלקוח נבדק שוב: רק עובדים פעילים, ובתפקיד מוכר
@@ -818,19 +907,23 @@ function createFromSuggestion(sug, actor, edits = {}) {
   const summary = String(edits.summary ?? data.summary ?? '').trim();
   const fromWhatsApp = data.source === 'whatsapp';
   const fromAgent = data.source === 'agent';
+  // 🎥 מפגישה מוקלטת (‎meetings/meeting-suggestions.js‎)
+  const fromMeeting = data.source === 'meeting';
   const description = [
     summary,
     '',
-    fromAgent
+    fromMeeting
+      ? `🎥 מהמשימות של הפגישה "${data.meetingTitle}"${sug.from_name ? ` · הסיכום מ${sug.from_name}` : ''} · ${shortDate(sug.received_at)}`
+      : fromAgent
       ? `🤖 הוצע על ידי ${sug.from_name} · מהשאלה: "${sug.subject}" · ${shortDate(sug.received_at)}`
       : fromWhatsApp
       ? `💬 מקבוצת הוואטסאפ "${data.groupName}" · ${sug.from_name} · ${shortDate(sug.received_at)}`
       : `📧 מהמייל של ${sug.from_name}${sug.from_email && sug.from_email !== sug.from_name ? ` · ${sug.from_email}` : ''} · ${shortDate(sug.received_at)}`,
-    !fromWhatsApp && !fromAgent && sug.subject ? `נושא: ${sug.subject}` : null
+    !fromWhatsApp && !fromAgent && !fromMeeting && sug.subject ? `נושא: ${sug.subject}` : null
   ].filter((l) => l !== null).join('\n').trim();
 
   const taskId = hooks.createTask(actor, {
-    title: String(edits.title ?? data.title ?? sug.subject).trim().slice(0, 120) || 'משימה מהמייל',
+    title: String(edits.title ?? data.title ?? sug.subject).trim().slice(0, 120) || (fromMeeting ? 'משימה מהפגישה' : 'משימה מהמייל'),
     description,
     // מקבוצה — תמיד הפרויקט שהקבוצה קשורה אליו, גם אם נשלח אחר: אין ערבוב בין פרויקטים
     projectId: fromWhatsApp ? data.projectId : (edits.projectId || (fromAgent ? data.projectId : null) || null),
@@ -844,15 +937,17 @@ function createFromSuggestion(sug, actor, edits = {}) {
       const owner = people.find((p) => p.role === 'checklist' && p.checklistIndex === i + 1);
       return { text, note: owner ? `באחריות: ${nameOf(owner.userId)}` : '' };
     }),
-    source: fromWhatsApp ? 'whatsapp' : fromAgent ? 'agent' : 'email',
+    source: fromWhatsApp ? 'whatsapp' : fromAgent ? 'agent' : fromMeeting ? 'meeting' : 'email',
     sourceRef: sug.header_id,
     sourceUserId: sug.user_id,
-    auditNote: fromWhatsApp
+    auditNote: fromMeeting ? `המשימה נוצרה מהמשימות של הפגישה "${data.meetingTitle}"` : fromWhatsApp
       ? (data.personal ? `המשימה נוצרה מהודעת וואטסאפ של ${sug.from_name}` : `המשימה נוצרה מבקשה של ${sug.from_name} בקבוצת "${data.groupName}"`)
       : fromAgent ? `המשימה נוצרה מהצעה של הסוכן "${sug.from_name}"` : `המשימה נוצרה ממייל של ${sug.from_name}`
   });
   // בקשה לפגישה — מהמייל, מקבוצה או מהוואטסאפ האישי: "📅 פגישה לקביעה"
   if (data.meeting) D.run('UPDATE tasks SET meeting_pending = 1 WHERE id = ?', taskId);
+  // 📧 עותק של המייל במשימה — לכל מי שעובד עליה (ברקע)
+  if (!fromWhatsApp && !fromAgent && !fromMeeting) captureSourceMail(taskId, sug).catch((err) => console.error('[משימון] שמירת המייל המקורי במשימה נכשלה:', err.message));
 
   // מי שביקש בקבוצה — יודע שהבקשה התקבלה ונפתחה
   if (fromWhatsApp && data.requester?.id && data.requester.id !== actor.id) {
@@ -864,7 +959,7 @@ function createFromSuggestion(sug, actor, edits = {}) {
   // מי שרק צריך לדעת — תיוג בהערה פנימית, ומשם ההתראה הרגילה של תיוג
   const watchers = people.filter((p) => p.role === 'watcher').map((p) => p.userId).filter((id) => id !== actor.id);
   if (watchers.length) {
-    const body = `${watchers.map((id) => `@${nameOf(id)}`).join(' ')} לידיעתך — משימה מהמייל של ${sug.from_name}`;
+    const body = `${watchers.map((id) => `@${nameOf(id)}`).join(' ')} לידיעתך — ${fromMeeting ? `משימה מהפגישה "${data.meetingTitle}"` : `משימה מהמייל של ${sug.from_name}`}`;
     const c = D.run('INSERT INTO comments (task_id, author_type, author_id, body, internal, created_at) VALUES (?,?,?,?,1,?)',
       taskId, 'user', actor.id, body, D.nowIso());
     for (const uid of watchers) {
@@ -898,6 +993,26 @@ function approve(id, actor, edits = {}) {
   const taskId = createFromSuggestion(sug, actor, edits);
   D.run("UPDATE ai_suggestions SET status = 'approved', task_id = ?, decided_at = ? WHERE id = ?", taskId, D.nowIso(), id);
   if (edits.trustSender) setSender(actor.id, sug.from_email, 'trust');
+  return taskId;
+}
+
+/**
+ * "לסגור?" / "לעדכן?" כשהמערכת בחרה משימה לא נכונה: 🔀 ההודעה למשימה אחרת שהעובד בחר,
+ * או ➕ משימה חדשה ממנה (‎task-sync.js‎). המשימה שהוצעה — ללא שינוי.
+ * @returns {Promise<number>} מזהה המשימה שאליה הלכה ההודעה
+ */
+async function attachToOther(id, actor, edits = {}) {
+  const sug = ownSuggestion(id, actor.id);
+  if (!TaskSync.KINDS.includes(sug.kind)) throw new Error('אפשר לצרף למשימה אחרת רק הודעה שהוצעה על משימה');
+  return (await TaskSync.attachToOther(sug, actor, edits.taskId, edits)).taskId;
+}
+
+async function newTaskFromMessage(id, actor, edits = {}) {
+  const sug = ownSuggestion(id, actor.id);
+  if (!TaskSync.KINDS.includes(sug.kind)) throw new Error('אפשר לפתוח משימה כך רק מהודעה שהוצעה על משימה');
+  const { taskId } = await TaskSync.createFromMessage(sug, actor, edits);
+  // 📧 עותק של המייל במשימה — כמו במשימה מהצעה רגילה (ברקע)
+  if (parseJson(sug.data, {}).channel === 'mail') captureSourceMail(taskId, sug).catch((err) => console.error('[משימון] שמירת המייל המקורי במשימה נכשלה:', err.message));
   return taskId;
 }
 
@@ -1031,6 +1146,9 @@ function markConverted(id, userId, taskId) {
   const sug = ownSuggestion(id, userId);
   if (sug.status !== 'pending') return null;
   D.run("UPDATE ai_suggestions SET status = 'approved', task_id = ?, decided_at = ? WHERE id = ?", taskId, D.nowIso(), id);
+  // משימת AI שנפתחה מהצעה מהמייל — גם בה עותק של המייל, כמו במשימה רגילה (ברקע)
+  const src = parseJson(sug.data, {}).source;
+  if (src !== 'whatsapp' && src !== 'agent') captureSourceMail(taskId, sug).catch((err) => console.error('[משימון] שמירת המייל המקורי במשימה נכשלה:', err.message));
   return sug;
 }
 
@@ -1065,6 +1183,8 @@ function shape(sug, conn) {
     from: { name: sug.from_name, email: sug.from_email },
     subject: sug.subject,
     receivedAt: sug.received_at,
+    // 📤 מייל ששלחתי / 📥 מייל שקיבלתי — לדיאלוג "משימה מהמייל"
+    sent: data.source === 'whatsapp' || data.source === 'agent' ? false : sentByOwner(sug),
     link: conn?.email && sug.gmail_id ? Gmail.webLink(conn.email, sug.gmail_id) : null,
     // מאיזו תיבה — רק כשיש לעובד יותר מאחת
     mailbox: conn?.email && Gmail.boxesOf(sug.user_id, null).length > 1 ? conn.email : null,
@@ -1126,6 +1246,8 @@ function init({ createTask }) {
     afterTick: () => {
       // זיכרון המייל רץ ברקע ובקצב משלו — לא מעכב את ריצת הבוקר
       Memory.tick().catch((err) => console.error('[משימון] זיכרון המייל:', err.message));
+      // ✍️ התארים מחתימות המיילים הקיימים — פעם אחת לכל איש קשר, ברקע
+      SignatureBackfill.tick().catch((err) => console.error('[משימון] קריאת החתימות:', err.message));
       // 📚 הידע הארגוני מתעדכן ממה שהזיכרון קרא — כל כמה שעות, לא רק בבוקר
       OrgKnowledge.refresh();
       // 📬 הסריקה השוטפת רצה ברקע — לא מעכבת את ריצת הבוקר
@@ -1137,8 +1259,10 @@ function init({ createTask }) {
 
 module.exports = {
   init, startScan, runScan, rangeOf, morningRun, liveRun, pollMailbox,
-  approve, approveAll, reject, restore, ignoreSenderOf, join, skip, undo, markConverted, setSender, senders,
+  approve, approveAll, attachToOther, newTaskFromMessage, reject, restore, ignoreSenderOf, join, skip, undo, markConverted, setSender, senders,
   dismissClosure, closureForTask, markReply,
-  listFor, sourceLink, suggestionById,
-  _internal: { sanitize, processMessage, createFromSuggestion }
+  listFor, sourceLink, suggestionById, captureSourceMail, sourceMailOf, mailSnapshot, suggestionMail,
+  // 📧 משימה ממייל שהעובד בוחר (‎mail-pick.js‎) — אותו ניתוח ואותה הצעה כמו בסריקה
+  analyze, insertSuggestion, existingTaskFor, involvedIn, shape, recordScanned: record,
+  _internal: { sanitize, processMessage, createFromSuggestion, liveBoxes }
 };

@@ -23,6 +23,14 @@ function worker(o = {}) {
   return rawUser({ full_name: `עובד שטח ${seq}`, role: 'employee', phone: `97252${String(1000000 + seq)}`, ...o });
 }
 
+/**
+ * שעון קבוע לבדיקה אחת — ברירת המחדל: יום שלישי 10:00 בישראל, בתוך שעות העבודה. הודעה יזומה לעובד מחוץ לשעות
+ * נשמרת בתור (‎wa_outbox‎) ולא נשלחת מיד, ולכן בדיקה שמצפה לה בוואטסאפ לא תלויה בשעה שבה היא רצה (נכשלו בריצת הערב).
+ */
+function at(t, iso = '2026-11-10T08:00:00Z') {
+  t.mock.timers.enable({ apis: ['Date'], now: new Date(iso) });
+}
+
 /** ‎PRIORITY_COMPANIES‎ לבדיקה אחת — מוחזר בסוף הבדיקה */
 function companies(t, value) {
   const prev = process.env.PRIORITY_COMPANIES;
@@ -51,24 +59,31 @@ function claude(t, handlers) {
 
 let msgSeq = 0;
 /**
- * שיחה עם הבוט בשם העובד. ‎say(text, { file, reaction })‎ ← מה הבוט שלח בתגובה לתור הזה:
- * ‎{ texts, text, buttons, last, files }‎ — ‎buttons‎: הכפתורים שעל ההודעה האחרונה ([] — ההודעה האחרונה בלי כפתורים).
+ * שיחה עם הבוט בשם העובד. ‎say(text, { file, reaction, on })‎ ← מה הבוט שלח בתגובה לתור הזה:
+ * ‎{ texts, text, buttons, last, files, questionId }‎ — ‎buttons‎: הכפתורים שעל ההודעה האחרונה ([] — ההודעה האחרונה בלי כפתורים).
+ * תגובה (‎reaction‎) — על ההודעה האחרונה עם כפתורים (השאלה), או על ‎on‎ (מזהה הודעה אחרת). ‎press‎ — לחיצה על כפתור של הודעה מסוימת.
  */
 function chat(t, u) {
   const wa = Fakes.whatsapp(t);
-  async function say(text, { file = null, reaction = false } = {}) {
+  let questionId = null;
+  async function say(text, { file = null, reaction = false, on = undefined, press = undefined } = {}) {
     wa.clear();
     msgSeq += 1;
-    await Bot._internal.handleDirect({ phone: u.phone, chatId: `${u.phone}@c.us`, text, id: `svc${msgSeq}`, file, kind: reaction ? 'reactionMessage' : 'textMessage' });
+    // ‎press‎ — לחיצה על כפתור של הודעה מסוימת (המזהה שלה)
+    const replyTo = press !== undefined ? { id: press, button: true } : reaction ? { id: on === undefined ? questionId ?? '' : on, button: false } : undefined;
+    await Bot._internal.handleDirect({ phone: u.phone, chatId: `${u.phone}@c.us`, text, id: `svc${msgSeq}`, file, kind: reaction ? 'reactionMessage' : 'textMessage', replyTo, ...(press !== undefined ? { button: true } : {}) });
     const out = wa.calls.filter((c) => c.method !== 'sendReaction');
     const last = out.at(-1) ?? null;
+    const asked = out.filter((c) => c.method === 'sendInteractiveButtonsReply').at(-1);
+    if (asked) questionId = asked.id;
     const texts = out.map((c) => c.body?.message ?? c.body?.body ?? '').filter((x) => typeof x === 'string' && x);
     return {
       texts,
       text: texts.join('\n'),
       buttons: last?.method === 'sendInteractiveButtonsReply' ? last.body.buttons.map((b) => b.buttonText) : [],
       last,
-      files: out.filter((c) => c.method === 'sendFile')
+      files: out.filter((c) => c.method === 'sendFile'),
+      questionId
     };
   }
   return { say, wa };
@@ -85,4 +100,4 @@ function assertButtons(buttons, expected = null) {
   if (expected) assert.deepEqual(buttons, expected);
 }
 
-module.exports = { setup, worker, companies, claude, chat, photo, assertButtons, taskOf, Fakes, D };
+module.exports = { setup, worker, companies, at, claude, chat, photo, assertButtons, taskOf, Fakes, D };
