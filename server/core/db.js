@@ -2380,6 +2380,10 @@ function migrate() {
   addColumn('users', 'tracker_access', 'INTEGER');
   // משתמש ה-Zoom בחשבון החברה שמארח את הפגישות של העובד (‎zoom_users.id‎)
   addColumn('users', 'zoom_user_id', 'TEXT');
+  // התואר כפי שכתוב בחתימה של האדם עצמו (לא ניחוש) — לתדריך לפני פגישה (17.11.26)
+  addColumn('mail_people', 'title', "TEXT NOT NULL DEFAULT ''");
+  // מתי נקראה החתימה מהמיילים הקיימים (‎mail/signature-backfill.js‎). ריק — עוד לא
+  addColumn('mail_people', 'title_checked_at', 'TEXT');
   // חשבון Zoom שני — לאיזה חשבון שייך כל משתמש Zoom
   addColumn('zoom_users', 'account', "TEXT NOT NULL DEFAULT '1'");
   // הקלטה אוטומטית לענן ב-Zoom — נבחר בקביעת הפגישה

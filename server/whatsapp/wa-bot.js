@@ -81,12 +81,12 @@ const Instinct = require('./instinct');
 const { appRoot, lastOutId, buttonReplyText, candidatesOf, chains, channel, checkState, currentMsg, DAY, DIGEST_GRACE_MIN, doneEmoji, emailText, enqueueAs, firstName, HISTORY_TURNS, hooks, inHours, isConfigured, localDate, log, mailAlertUsers, markDone, onDirect, orgUsers, parseJson, PICK_SHOWN, pickText, publicStatus, qr, react, reactNow, readLog, recentFiles, remove, resolveMentions, save, sendButtons, sendText, setState, signatureFields, signatureLine, splitMessage, taskLink, todayStats, userByPhone, WALK, workHours } = require('./wa-base');
 const { analyzeGroup, bindGroup, listGroups, notifyAdmins, processGroup, processGroups, prune, recipientOf, sanitizeGroup } = require('./wa-groups');
 const { CANCEL, FORWARD_MAX, LIST_SHOWN, PLAIN_FEATURES, PLAIN_GREETING, PLAIN_HELP, PLAIN_INSIGHTS, PLAIN_LIST, PLAIN_TODAY, RANGES, READ_ALOUD, READ_ALOUD_DOWN, YES, actionOf, addForward, chatOf, checkDraft, clearForwards, draftText, emptyChat, featuresText, findContactCards, formatList, forwardsOf, helpText, localDay, readAloudAllowed, readAloudFile, readAloudText, saveChat, shortDate, sourceOf, understand, unknownReplied, withForwards } = require('./wa-private');
-const { deliver, flushOutbox, messageUser, notifyAssignment, sendFilesToUser } = require('./wa-tasks');
+const { deliver, flushOutbox, messageUser, messageUserNow, notifyAssignment, sendFilesToUser } = require('./wa-tasks');
 const { answerLike, busyFor, meetCoordRun, meetCoordTick, pushToUser, questionTtlMin, releaseQuestion, replyWatchTick, rfqPrepare, rfqSend, rfqTick, sendSummaries, staleQuestion, userLastAt } = require('./wa-proactive');
 const { businessCommand, closeAlerted, closureDecision, confirmPending, contactOf, createFromDraft, draftEmail, findRecipients, mailActionAlerts, mailAlertFor, mailAlerts, parseThreadAdd, resolveCc, solveText, startGoodsFromMail, suggestionDecision, suggestionFeedback, threadAddText, VIA_EMAIL, VIA_MESIMON } = require('./wa-mail');
 const { MENU, MENU_FREE_HINT, MENU_MORE, PLAIN_AGENTS, agentsText, cut, dayItems, isMenuButton, menuButtonOf, menuButtons, menuOptions, menuPick, menuText, moreMenuGroups, pairsOf, parseClosureCommand, parseSuggestionCommand, recordingReply, todayMessage, walkAction, walkButtons, walkText } = require('./wa-menu');
 const { flowReply, logoIntent, meetingAudioAllowed, meetingAudioTurn, meetingFollowups, processMeetingAudio, receiveMeetingAudio, timelessAudioTick, TRANSLATE } = require('./wa-meeting');
-const { DRAFT_ONLY, flowAgentsList, flowAlertNo, flowOnMailDose, flowApproval, flowBusinessCommand, flowCancel, flowClosureCommand, flowEmailEdit, flowEmailPick, flowEmailSolve, flowEmailVia, flowFeaturesRequest, flowFormFillRequest, flowGreeting, flowInstinct, flowInstinctExplicit, flowInstinctReply, flowInstinctPilot, flowNoticeToInstinct, flowIntentCancel, flowIntentDenied, flowIntentMenu, flowIntentOther, flowMailReplyEdit, flowMailWalk, flowMeetCoordRequest, flowMeetingAudioAnswer, flowMeetingAudioRequest, flowMeetingAudioStatus, flowMeetingFollowupRequest, flowMeetingReminderRequest, flowMenuList, flowMenuPick, flowNoAi, flowNoticeRequest, flowOnClosureAddress, flowOnDayEvening, flowOnFormFill, flowOnGoodsStop, flowOnMailMuteSender, flowOnMailRemindOrGoods, flowOnMeetCoord, flowOnMeetingTasks, flowOnPaceOffer, flowOnPlainMail, flowOnReminder, flowOnRfq, flowOnSentFollowup, flowOnThreadAdd, flowRemindersRequest, flowReplyAsk, flowRfqRequest, flowRfqSummary, flowSuggestionCommand, flowTranslateRequest, flowWalk, NEXT, switchCancels } = require('./wa-flows');
+const { DRAFT_ONLY, flowAgentsList, flowAlertNo, flowOnMailDose, flowApproval, flowBusinessCommand, flowCancel, flowClosureCommand, flowEmailEdit, flowEmailPick, flowEmailSolve, flowEmailVia, flowFeaturesRequest, flowFormFillRequest, flowGreeting, flowInstinct, flowInstinctExplicit, flowInstinctReply, flowInstinctPilot, flowNoticeToInstinct, flowIntentCancel, flowIntentDenied, flowIntentMenu, flowIntentOther, flowMailFileRequest, flowMailReplyEdit, flowMailWalk, flowMeetCoordRequest, flowMeetingAudioAnswer, flowMeetingAudioRequest, flowMeetingAudioStatus, flowMeetingFollowupRequest, flowMeetingReminderRequest, flowMenuList, flowMenuPick, flowNoAi, flowNoticeRequest, flowOnClosureAddress, flowOnDayEvening, flowOnFormFill, flowOnGoodsStop, flowOnMailFile, flowOnMailMuteSender, flowOnMailRemindOrGoods, flowOnMeetCoord, flowOnMeetingTasks, flowOnPaceOffer, flowOnPlainMail, flowOnReminder, flowOnRfq, flowOnSentFollowup, flowOnThreadAdd, flowRemindersRequest, flowReplyAsk, flowRfqRequest, flowRfqSummary, flowSuggestionCommand, flowTranslateRequest, flowWalk, NEXT, switchCancels } = require('./wa-flows');
 
 const RECENT_FILE_MS = 15 * 60 * 1000;
 
@@ -482,6 +482,9 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
   { const c = { actor, converse, dry, keep, out, state, t, user }; const r = await flowMeetingAudioAnswer(c); if (r !== NEXT) return r; state = c.state; }
   { const r = await flowMeetingAudioRequest({ actor, out, t }); if (r !== NEXT) return r; }
   { const r = await flowMeetingAudioStatus({ actor, out, t }); if (r !== NEXT) return r; }
+  // 📎 "תמצא לי את המצגת של …" — הקובץ עצמו מהמייל; ולחיצה על קובץ אחר מהרשימה
+  { const c = { actor, keep, out, state, t }; const r = await flowOnMailFile(c); if (r !== NEXT) return r; state = c.state; }
+  { const r = await flowMailFileRequest({ actor, dry, out, t }); if (r !== NEXT) return r; }
   // 🎥 אחרי פגישה מוקלטת: "תפתח אותן" (במילים) על המשימות, ו"כן" / "לא" על שליחת הסיכום
   { const c = { actor, dry, keep, out, state, t }; const r = await flowOnMeetingTasks(c); if (r !== NEXT) return r; state = c.state; }
   { const c = { actor, dry, keep, out, state, t }; const r = await flowOnPlainMail(c); if (r !== NEXT) return r; state = c.state; }
@@ -1340,6 +1343,14 @@ async function handleDirectAs(msg) {
   if (msg.file && !(grAllowed && (GoodsReceipt.active(user.id, late) || GoodsReceipt.opens(text, msg.file)))) rememberFile(user.id, msg.file);
   let grPassed = false;
   let grNotice = '';
+  // 🔐 "דרישת רכש" ממי שאין לו הרשאה (הוחלט 20.11.26): תשובה ברורה, והבקשה עוברת למנהל המערכת בבוט, בשם העובד
+  if (!forceChat && !forceFlow && !pdAllowed && !msg.file && PurchaseDemand.opens(text)) {
+    await notice;
+    log({ ...base, text, action: 'purchase_demand', status: 'denied', result: 'דרישת רכש — אין הרשאה', reply: PD_DENIED });
+    await sendText(msg.chatId, PD_DENIED);
+    pdDeniedToAdmins(user, text);
+    return;
+  }
   // 🔐 פריוריטי לא פתוח לעובד (אין לו אף מסמך במטריצה) — "פריוריטי" / "קבלת סחורה" / "דרישת רכש" (גם כפתור מהודעה ישנה):
   // תשובה אחת ברורה, ולא תפריט ולא בקשה ל-AI (הוחלט 13.11.26)
   const shortAsk = String(text ?? '').trim().split(/\s+/).filter(Boolean).length <= 3;
@@ -1798,6 +1809,23 @@ async function personalHousekeeping() {
 }
 
 
+const PD_DENIED = '🛒 דרישת רכש — אין לך הרשאה ליצור דרישת רכש. העברתי את הבקשה למנהל המערכת.';
+
+/** 🔐 בקשת דרישת רכש בלי הרשאה — למנהלי המערכת בוואטסאפ, בשם העובד. פעם ביום לכל עובד */
+function pdDeniedToAdmins(user, text) {
+  // נתון של עובד אחד — ב-‎user_prefs‎ (CLAUDE.md), לא בטבלת ההגדרות
+  const day = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Jerusalem' });
+  if (D.userPrefs(user.id).pdDeniedNoticeOn === day || !isConfigured()) return;
+  D.setUserPref(user.id, 'pdDeniedNoticeOn', day);
+  const body = `🔐 *${user.full_name}* ביקש/ה בבוט לפתוח דרישת רכש, ואין הרשאה לדרישת רכש (מטריצת ההרשאות של פריוריטי).\n💬 "${String(text ?? '').trim().slice(0, 200)}"\nלפתוח — במסך ההרשאות של פריוריטי.`;
+  for (const a of D.all("SELECT id, full_name, phone FROM users WHERE status = 'active' AND role IN ('superadmin','admin') AND COALESCE(phone, '') <> '' AND id <> ?", user.id)) {
+    const chatId = `${a.phone}@c.us`;
+    sendText(chatId, body)
+      .then(() => log({ channel: 'summary', chatId, userId: a.id, who: a.full_name, action: 'purchase_demand', status: 'ok', result: `בקשת הרשאה לדרישת רכש: ${user.full_name}` }))
+      .catch((err) => console.error('[משימון] הודעה למנהל על בקשת דרישת רכש נכשלה:', err.message));
+  }
+}
+
 /** 🩺 התראה למנהלי המערכת בוואטסאפ — מיד, גם מחוץ לשעות (זו תקלה, לא עדכון) */
 function alertAdminsAi(text) {
   if (!text || !D.getSetting('wa_bot_enabled', true) || !isConfigured()) return;
@@ -1853,7 +1881,7 @@ async function tick() {
   }
   // דרישות רכש שמחכות לאישור — הודעה לחותם הבא (פעם ב-10 דקות לכל היותר)
   if (!busy && WaActions.byKey('purchase_demand')?.enabled) {
-    await Approvals.sweep((userId, text) => messageUser(userId, text, 'purchase_demand')).catch((err) => console.error('[משימון] הודעות לחותמים בפריוריטי:', err.message));
+    await Approvals.sweep((userId, text) => messageUserNow(userId, text, 'purchase_demand')).catch((err) => console.error('[משימון] הודעות לחותמים בפריוריטי:', err.message));
   }
   if (busy || !D.getSetting('wa_bot_enabled', true)) return;
   const ch = channel();
