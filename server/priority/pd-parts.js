@@ -145,6 +145,13 @@ async function sendMail(user, m, to) {
   return true;
 }
 
+/** מייל טקסט פשוט דרך משימון ל-‎to = { name, email }‎ — עם "שלום" ו"בברכה". זורק כשלא יצא */
+async function mailPerson(user, to, subject, body) {
+  const text = [`שלום ${to.name},`, '', body, '', 'בברכה,', 'משימון'].join('\n');
+  const html = `<div dir="rtl" style="font-family:Arial,sans-serif;font-size:14px">${text.split('\n').map((l) => esc(l) || '&nbsp;').join('<br>')}</div>`;
+  return sendMail(user, { subject, text, html }, to);
+}
+
 /**
  * 🛒 שורות בדרישת רכש שפריוריטי לא קיבל (למשל אין תקציב בפרויקט לתת הפרק) — הדרישה נשארה טיוטא. הודעה למנהלת הרכש:
  * התראה במשימון ומייל (הוחלט 19.11.26 — רק לה ולעובד). לא הוגדרה, או שהמייל לא יצא — למנהלי המערכת.
@@ -157,10 +164,8 @@ async function notifyBuyer(user, s, title, lines) {
     s.prdno || s.editOf ? `דרישה: ${s.prdno || s.editOf} — נשארה טיוטא, לא נשלחה לאישור` : null, '', ...lines].filter((x) => x !== null).join('\n');
   if (!to) { alertAdmins(title, `${body}\n\n(מנהלת הרכש לא הוגדרה בהגדרות פריוריטי)`); return null; }
   if (to.userId) D.notify({ targetType: 'user', targetId: to.userId, kind: 'ai', title: `🛒 ${title}`, body });
-  const text = [`שלום ${to.name},`, '', body, '', 'בברכה,', 'משימון'].join('\n');
-  const html = `<div dir="rtl" style="font-family:Arial,sans-serif;font-size:14px">${text.split('\n').map((l) => esc(l) || '&nbsp;').join('<br>')}</div>`;
   try {
-    await sendMail(user, { subject: `${title} — לבקשת ${user.full_name}`, text, html }, to);
+    await mailPerson(user, to, `${title} — לבקשת ${user.full_name}`, body);
   } catch (err) {
     if (!to.userId) { alertAdmins(title, `${body}\n\nהמייל למנהלת הרכש לא יצא: ${err.message}`); return null; }
   }
@@ -435,4 +440,4 @@ async function buyerAnswer(token, { n, code = '', note = '' } = {}) {
   return forBuyer(token);
 }
 
-module.exports = { BTN_REBUILD, BTN_MORE, BTN_SKIP, notifyBuyer, forBuyer, buyerAnswer, cleanup, contact, requestBuild, setMode, tick, start, owns, answer, setHooks, _findBuilt: findBuilt, _mailOf: mailOf, _row: row };
+module.exports = { BTN_REBUILD, BTN_MORE, BTN_SKIP, notifyBuyer, mailPerson, alertAdmins, forBuyer, buyerAnswer, cleanup, contact, requestBuild, setMode, tick, start, owns, answer, setHooks, _findBuilt: findBuilt, _mailOf: mailOf, _row: row };

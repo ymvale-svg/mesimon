@@ -810,6 +810,50 @@ async function addLine(c, prdno, it, s, problems) {
 const failedText = (items) => items.map((x) => `• "${x.description}"${x.rejected?.code && x.rejected.code !== '000' ? ` (${x.rejected.code})` : ''}: ${x.rejected?.budget
   ? `*אין תקציב בפרויקט* לתת פרק ${x.rejected.coding}` : 'פריוריטי לא קיבל את השורה'}`).join('\n');
 
+/**
+ * 🚫 אין תקציב — הודעה **למנהל הפרויקט** בלבד (הוחלט 20.11.26; לא לרכש ולא למנהלי המערכת): מנהל הפרויקט בפריוריטי
+ * (‎DOCUMENTS_p.MUSERLOGIN‎) ← המייל שלו ← משתמש משימון: וואטסאפ והתראה במשימון; בלי משתמש — מייל.
+ * ‎{ name }‎ — מי קיבל; ‎null‎ — לא נמצא מנהל פרויקט (אז — למנהלי המערכת, כי זו הגדרה חסרה בפריוריטי).
+ */
+async function notifyProjectManager(user, s, prdno, items) {
+  const login = s.project?.code ? await Priority.projectManager(s.company, s.project.code).catch(() => null) : null;
+  const pu = login ? await Priority.priorityUser(s.company, login).catch(() => null) : null;
+  const email = String(pu?.email ?? '').trim();
+  const m = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ? D.get("SELECT id, full_name FROM users WHERE lower(email) = lower(?) AND status = 'active'", email) : null;
+  const text = [`🚫 *אין תקציב* — דרישת רכש של *${user.full_name}* לא נשלחה לאישור`,
+    `📁 ${s.project?.des ?? ''} (${s.project?.code ?? ''}) · ${companyLine(s.company).replace(/^\S+ /, '')}`,
+    `📝 ${prdno} — נשארה טיוטא`, '',
+    ...items.map((x) => `• ${x.description} — ${qtyText(x.qty)} ${x.unit}${x.rejected?.code ? ` (${x.rejected.code})` : ''}: תת פרק ${x.rejected?.coding ?? ''} אינו בתקציב הפרויקט`), '',
+    'כדי שהפריטים ייקלטו — להוסיף את תת הפרק למהדורת התכנון של הפרויקט, ואז לשלוח את הדרישה שוב.'].join('\n');
+  if (m) {
+    D.notify({ targetType: 'user', targetId: m.id, kind: 'ai', title: `🚫 אין תקציב: דרישת רכש של ${user.full_name}`, body: text.replace(/\*/g, '') });
+    if (hooks.send) await Promise.resolve(hooks.send(m.id, text)).catch(() => false);
+    return { name: m.full_name };
+  }
+  if (email && pu?.active !== false) {
+    try { await Parts.mailPerson(user, { name: pu.name, email }, `אין תקציב — דרישת רכש של ${user.full_name} (${prdno})`, text.replace(/\*/g, '')); return { name: pu.name }; } catch { /* למטה */ }
+  }
+  Parts.alertAdmins('אין מנהל פרויקט לדרישה שנדחתה על תקציב', `${text.replace(/\*/g, '')}\n\n(לפרויקט ${s.project?.code ?? ''} לא מוגדר בפריוריטי מנהל פרויקט עם מייל${login ? ` — ${login}` : ''})`);
+  return null;
+}
+
+/** שורות שנדחו: אין תקציב ← מנהל הפרויקט; סיבה אחרת ← מנהלת הרכש. מחזיר את השורות לעובד */
+async function reportRejected(user, s, prdno, failed, problems, title) {
+  const budget = failed.filter((x) => x.rejected?.budget);
+  const other = failed.filter((x) => !x.rejected?.budget);
+  const lines = [];
+  if (budget.length) {
+    const pm = await notifyProjectManager(user, s, prdno, budget);
+    lines.push(pm ? `📣 מנהל הפרויקט *${pm.name}* קיבל הודעה שאין תקציב.` : 'לא מצאתי בפריוריטי את מנהל הפרויקט — מנהל המערכת קיבל פירוט.');
+  }
+  if (other.length) {
+    const mine = problems.filter((p) => other.some((x) => p.startsWith(`שורה ${x.n} (`))).concat(problems.filter((p) => !/^שורה \d+ \(/.test(p)));
+    const buyer = await Parts.notifyBuyer(user, s, title, mine.length ? mine : problems);
+    lines.push(buyer ? `📧 *${buyer}* (רכש) קיבלה פירוט.` : 'מנהל המערכת קיבל פירוט.');
+  }
+  return lines;
+}
+
 // ---------------------------------------------------------------------------
 // 🔁 תיקון דרישה שהוחזרה לבדיקה (‎pd-return.js‎): הדרישה מפריוריטי כרשימה לעריכה, ו"סיום" מעדכן את השורות
 // ומחזיר אותה לאישור
@@ -868,14 +912,13 @@ async function submitEdit(user, s) {
     .catch((err) => problems.push(`דו-שיח פנימי: ${err.message}`));
   const failedEdit = s.items.filter((x) => x.failed);
   if (failedEdit.length || problems.some((p) => !/דו-שיח/.test(p))) {
-    const buyer = failedEdit.length
-      ? await Parts.notifyBuyer(user, s, failedEdit.some((x) => x.rejected?.budget) ? `תיקון ${prdno} — אין תקציב בפרויקט` : `תיקון ${prdno} — לא הכל נשמר`, problems)
-      : (alertAdmins(user, s, `תיקון ${prdno} — לא הכל נשמר`, problems), null);
+    const who = failedEdit.length ? await reportRejected(user, s, prdno, failedEdit, problems, `תיקון ${prdno} — לא הכל נשמר`)
+      : (alertAdmins(user, s, `תיקון ${prdno} — לא הכל נשמר`, problems), ['מנהל המערכת קיבל פירוט.']);
     clear(user.id, s);
     await Return.afterEdit(user, c, prdno, changes, false);
     return { s: null, replies: [[`⚠️ חלק מהתיקון של *${prdno}* לא נשמר בפריוריטי, ולכן היא עוד לא חזרה לאישור.`,
       failedEdit.some((x) => x.rejected) ? failedText(failedEdit.filter((x) => x.rejected)) : null,
-      buyer ? `📧 *${buyer}* (רכש) קיבלה פירוט.` : 'מנהל המערכת קיבל פירוט.'].filter(Boolean).join('\n')], buttons: [], status: 'error', result: `תיקון ${prdno}: ${problems.join(' | ')}` };
+      ...who].filter(Boolean).join('\n')], buttons: [], status: 'error', result: `תיקון ${prdno}: ${problems.join(' | ')}` };
   }
   const sent = await Return.resubmit(user, c, prdno);
   await Return.afterEdit(user, c, prdno, changes, sent.ok);
@@ -962,11 +1005,10 @@ async function submit(user, s) {
 
   const failed = s.items.filter((x) => x.failed);
   if (failed.length) {
-    // לא יוצאת עם שורה חסרה, ולא על 000 — טיוטא; לעובד ולמנהלת הרכש בלבד (הוחלט 19.11.26)
-    const budget = failed.some((x) => x.rejected?.budget);
-    const buyer = await Parts.notifyBuyer(user, s, budget ? 'דרישת רכש — אין תקציב בפרויקט' : 'דרישת רכש — שורות לא נקלטו', problems);
+    // לא יוצאת עם שורה חסרה, ולא על 000 — טיוטא; אין תקציב ← מנהל הפרויקט, אחרת ← מנהלת הרכש (19–20.11.26)
+    const who = await reportRejected(user, s, prdno, failed, problems, 'דרישת רכש — שורות לא נקלטו');
     return { s: null, replies: [[`⚠️ *דרישת רכש ${prdno}* נשארה *טיוטא* ולא נשלחה לאישור — ${failed.length === 1 ? 'פריט אחד לא נקלט' : `${failed.length} פריטים לא נקלטו`} בפריוריטי:`,
-      failedText(failed), '', buyer ? `📧 *${buyer}* (רכש) קיבלה פירוט.` : 'מנהל המערכת קיבל פירוט.', companyLine(c)].join('\n')],
+      failedText(failed), '', ...who, companyLine(c)].join('\n')],
       buttons: [], status: 'error', result: `${prdno} טיוטא; ${problems.join(' | ')}` };
   }
   if (problems.length) alertAdmins(user, s, 'הערות בקליטה', problems);
