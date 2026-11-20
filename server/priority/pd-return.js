@@ -20,6 +20,7 @@ const P = require('../core').Permissions;
 const Priority = require('../integrations').Priority;
 const Approvals = require('./priority-approvals');
 const Prefs = require('./priority-prefs');
+const Access = require('./priority-access');
 const { BTN, YES, CANCEL, normalize, sameLabel } = require('../whatsapp').WaUi;
 
 const BTN_RETURN = 'כן, להחזיר ✅';
@@ -138,10 +139,10 @@ async function buyerLogin(user) {
   return set.has(login) ? login : null;
 }
 
-/** הדרישה בחברות הפתוחות לכתיבה (ההחזרה כותבת). ‎[{ company, d }]‎ */
-async function findDemand(prdno) {
+/** הדרישה בחברות הפתוחות לכתיבה (ההחזרה כותבת), ורק בחברות שהעובד מורשה בהן (מטריצת ההרשאות). ‎[{ company, d }]‎ */
+async function findDemand(user, prdno) {
   const out = [];
-  for (const c of Priority.allowed()) {
+  for (const c of Access.filterForUser(user.id, Priority.allowed())) {
     try {
       const d = await Priority.readDemand(c, prdno);
       if (d?.PRDNO) out.push({ company: c, d });
@@ -241,7 +242,7 @@ async function handle({ user, text = '' }) {
 
 async function pickDemand(user, s, prdno) {
   s.prdno = prdno;
-  const found = await findDemand(prdno);
+  const found = await findDemand(user, prdno);
   if (!found.length) { save(user.id, { ...s, step: 'number' }); return out(`לא מצאתי את ${prdno}. כתבו מספר אחר, או *ביטול*.`, [BTN.cancel], { result: `החזרת דרישה — ${prdno} לא נמצאה` }); }
   if (found.length > 1) {
     s.step = 'company';

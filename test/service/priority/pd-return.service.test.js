@@ -169,3 +169,19 @@ test('מספר הדרישה ומה לא ברור — מתוך שפה חופשי�
   assert.ok(Return.wants('תחזיר לבדיקה את PD26000053'));
   assert.ok(!Return.wants('דרישת רכש: 10 שקי מלט'));
 });
+
+test('החזרה לבדיקה — רק בחברה שהעובד מורשה בה (מטריצת ההרשאות)', async (t) => {
+  const { buyer, opener } = people();
+  const { pr } = world(t, { buyer, opener });
+  // הדרישה רק ב-test11; העובד מורשה רק בחברה אחרת
+  H.companies(t, 'test11,a160226');
+  const Priority = require('../../../server/integrations/priority');
+  t.mock.method(Priority, 'readDemand', async (c, prdno) => { if (c === 'test11' && prdno === PD) return demand(); throw new Error('404'); });
+  const Access = require('../../../server/priority/priority-access');
+  H.D.setSetting(Access._key(Access.DEFAULT_ORG), { users: { [buyer.id]: { docs: [...Access.DOC_KEYS], companies: ['a160226'] } } });
+  t.after(() => H.D.setSetting(Access._key(Access.DEFAULT_ORG), { users: {} }));
+  const b = H.chat(t, buyer);
+  const r = await b.say(`החזר לבדיקה ${PD} — שורה 1?`);
+  assert.match(r.text, /לא מצאתי את PD26000053/);
+  assert.equal(pr.writes.length, 0);
+});

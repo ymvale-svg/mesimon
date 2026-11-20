@@ -48,9 +48,10 @@ const parseJson = (text, fallback) => { try { return JSON.parse(text); } catch {
 /**
  * מוזרק מ-api.js — אותם מסלולים של האפליקציה, עם ההרשאות של המאשר:
  * ‎canSee(actor, task)‎, ‎comment(actor, task, body, files)‎, ‎complete(actor, taskId, note)‎,
- * ‎setDue(actor, taskId, ymd)‎, ‎setStatus(actor, taskId, key)‎.
+ * ‎setDue(actor, taskId, ymd)‎, ‎setStatus(actor, taskId, key)‎, ‎mayEdit(actor, task)‎ (צירוף למשימה אחרת),
+ * ‎createTask(actor, body)‎ (משימה חדשה מההודעה).
  */
-const hooks = { canSee: null, comment: null, complete: null, setDue: null, setStatus: null };
+const hooks = { canSee: null, mayEdit: null, comment: null, complete: null, setDue: null, setStatus: null, createTask: null };
 const setHooks = (h) => Object.assign(hooks, h);
 
 // ---------------------------------------------------------------------------
@@ -365,6 +366,22 @@ async function mailFiles(sug) {
 }
 
 /**
+ * ההערה — ההודעה עצמה (או מה שהמשתמש ערך), עם המקור והקישור, והקבצים מהמייל.
+ * משותף לאישור, לצירוף למשימה אחרת ולמשימה חדשה מההודעה.
+ */
+async function messageNote(sug, d, edits = {}) {
+  let link = null;
+  if (d.channel === 'mail' && sug.gmail_id) {
+    const conn = Gmail.connectionOf(sug.user_id);
+    if (conn?.email) link = Gmail.webLink(conn.email, sug.gmail_id);
+  }
+  const text = String(edits.comment ?? d.comment ?? '').trim();
+  const body = [text, '', sourceLine(sug, d, link)].join('\n').trim();
+  const files = d.channel === 'mail' ? await mailFiles(sug) : [];
+  return { body, files };
+}
+
+/**
  * אישור. ‎edits‎:
  *   ‎comment‎ — ההערה אחרי עריכה (ברירת מחדל: קטע ההודעה)
  *   ‎close‎ — בעדכון: לסגור בכל זאת; בסגירה: ‎false‎ = רק הערה
@@ -386,15 +403,7 @@ async function approve(sug, actor, edits = {}) {
   }
   const close = sug.kind === 'task_close' ? edits.close !== false : edits.close === true;
 
-  // ההערה — ההודעה עצמה (או מה שהמשתמש ערך), עם המקור והקישור
-  let link = null;
-  if (d.channel === 'mail' && sug.gmail_id) {
-    const conn = Gmail.connectionOf(sug.user_id);
-    if (conn?.email) link = Gmail.webLink(conn.email, sug.gmail_id);
-  }
-  const text = String(edits.comment ?? d.comment ?? '').trim();
-  const body = [text, '', sourceLine(sug, d, link)].join('\n').trim();
-  const files = d.channel === 'mail' ? await mailFiles(sug) : [];
+  const { body, files } = await messageNote(sug, d, edits);
   const result = hooks.comment(actor, task, body, files);
 
   const done = [];
@@ -420,7 +429,72 @@ async function approve(sug, actor, edits = {}) {
   return { taskId: task.id, done, files: result?.saved ?? 0, skippedFiles: result?.skipped ?? [] };
 }
 
+/*
+ * המערכת בחרה משימה לא נכונה (בקשה של עובדת, 16.11.26: "אני רוצה לצרף אותה למשימה קיימת אחרת או
+ * משימה חדשה"). ההודעה — אותה הערה, עם המקור, הקישור והקבצים — נכנסת למשימה שהעובד בחר, או
+ * למשימה חדשה שנפתחת ממנה. המשימה שהוצעה לא נוגעים בה. ההצעה יורדת מהממתינות (‎approved‎,
+ * ובנתונים ‎redirected‎ — לאן הלכה ההודעה).
+ */
+const fail = (message, status) => Object.assign(new Error(message), status ? { status } : {});
+
+function assertOpenSuggestion(sug) {
+  if (sug.status !== 'pending' || !KINDS.includes(sug.kind)) throw fail('ההצעה כבר טופלה');
+}
+
+function markRedirected(sug, d, target, mode) {
+  d.redirected = { mode, taskId: target.id, title: target.title, at: D.nowIso() };
+  D.run("UPDATE ai_suggestions SET status = 'approved', decided_at = ?, data = ? WHERE id = ?", D.nowIso(), JSON.stringify(d), sug.id);
+}
+
+/**
+ * 🔀 לצרף למשימה אחרת: ‎taskId‎ — המשימה שנבחרה; רק משימה פתוחה שהעובד רשאי לערוך.
+ * ‎edits.comment‎ — ההערה אחרי עריכה.
+ */
+async function attachToOther(sug, actor, taskId, edits = {}) {
+  assertOpenSuggestion(sug);
+  const target = D.get('SELECT * FROM tasks WHERE id = ?', Number(taskId));
+  if (!target) throw fail('המשימה לא נמצאה', 404);
+  if (target.id === sug.task_id) throw fail('זו המשימה שהוצעה — אפשר לאשר את ההצעה עצמה');
+  if (!hooks.mayEdit(actor, target)) throw fail('אין לך הרשאה לערוך את המשימה הזו', 403);
+  if (D.get('SELECT is_final FROM board_columns WHERE board_id = ? AND key = ?', target.board_id, target.status)?.is_final) {
+    throw fail('המשימה שנבחרה כבר סגורה');
+  }
+  const d = parseJson(sug.data, {});
+  const { body, files } = await messageNote(sug, d, edits);
+  const result = hooks.comment(actor, target, body, files);
+  markRedirected(sug, d, target, 'attach');
+  return { taskId: target.id, files: result?.saved ?? 0, skippedFiles: result?.skipped ?? [] };
+}
+
+/**
+ * ➕ משימה חדשה מההודעה: כותרת ותיאור מהחלון (ברירת מחדל: הסיכום של ההודעה), באחריות העובד;
+ * ההודעה עצמה נכנסת אליה כהערה, כמו באישור. היצירה — דרך ‎createTask‎ של האפליקציה, עם כל הבדיקות.
+ */
+async function createFromMessage(sug, actor, edits = {}) {
+  assertOpenSuggestion(sug);
+  const d = parseJson(sug.data, {});
+  const what = d.channel === 'mail' ? 'המייל' : 'ההודעה';
+  const title = String(edits.title ?? '').trim().slice(0, 120)
+    || String(d.summary || sug.subject || d.comment || '').trim().split('\n')[0].slice(0, 120)
+    || `${what} מ${sug.from_name}`;
+  const taskId = hooks.createTask(actor, {
+    title,
+    description: String(edits.description ?? d.summary ?? '').trim().slice(0, 4000),
+    assigneeType: 'user',
+    assigneeId: actor.id,
+    source: d.channel === 'mail' ? 'email' : 'whatsapp',
+    sourceRef: sug.header_id,
+    sourceUserId: sug.user_id,
+    auditNote: `המשימה נוצרה מ${what} של ${sug.from_name} (במקום ההצעה על "${d.taskTitle ?? ''}")`
+  });
+  const task = D.get('SELECT * FROM tasks WHERE id = ?', taskId);
+  const { body, files } = await messageNote(sug, d, edits);
+  const result = hooks.comment(actor, task, body, files);
+  markRedirected(sug, d, task, 'new');
+  return { taskId, files: result?.saved ?? 0, skippedFiles: result?.skipped ?? [] };
+}
+
 module.exports = {
-  setHooks, check, checkQuietly, approve, displayTitle, KINDS,
+  setHooks, check, checkQuietly, approve, attachToOther, createFromMessage, displayTitle, KINDS,
   _internal: { score, prefilter, sanitize, prompt, contextOf, openCreatedBy, phoneKey, sourceLine }
 };

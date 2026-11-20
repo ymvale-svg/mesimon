@@ -38,7 +38,10 @@ const TO_ME = new RegExp(`(?:^|[\\s,])ש?(?:אתה\\s+|את\\s+)?${VERB}\\s+לי
 // "תזכור את מחר ב-8…" — רק כשיש מועד, אחרת זה "תזכור את זה" (זיכרון, לא תזכורת)
 const TO_ME_AT = new RegExp(`(?:^|[\\s,])${VERB}\\s+(?:את\\s+)?(?:מחר|היום|בעוד|בשעה|ב-?\\d|ביום|בבוקר|בערב|בצהריים|לפני)`);
 const SEND_ME = /(?:שלח|תשלח|שלחי|תשלחי)\s+לי\s+תזכורת/;
-const WANTS = { test: (t) => TO_ME.test(t) || TO_ME_AT.test(t) || SEND_ME.test(t) };
+// "לתזכר אותי ב-22.11…", "להזכיר לי מחר…", "תזכיר אותי…" (סקירה 18.11: נפתח כטיוטת משימה). רק "אותי" / "לי" —
+// "להזכיר לדני" הוא מה שהתזכורת תגיד, לא בקשה לתזכורת
+const ME_INF = new RegExp(`(?:^|[\\s,])(?:לתזכר|תתזכר|להזכיר|${VERB})\\s+(?:אותי|לי)${NOT_Q}(?=[\\s,.!]|$)`);
+const WANTS = { test: (t) => TO_ME.test(t) || TO_ME_AT.test(t) || SEND_ME.test(t) || ME_INF.test(t) };
 /** בקשת תזכורת (ולא הרשימה / ביטול) */
 const isRequest = (text) => { const t = WaUi.normalize(text); return !/\?\s*$/.test(t) && (TRIGGER.test(t) || WANTS.test(t)); };
 const LIST = /^(?:ה)?תזכורות(?:\s+שלי)?[?.!]*$/;
@@ -190,19 +193,21 @@ function answer(userId, d, text) {
 function onLocation(userId, { lat, lng, live = false }) {
   const r = Places.report(userId, { lat, lng, source: live ? 'whatsapp_live' : 'whatsapp' });
   const where = r.place ? `ב${r.place.name}` : 'מחוץ לנקודות הציון';
-  if (!r.ok) return { text: live ? null : '📍 לא הצלחתי לקרוא את המיקום. נסו לשלוח שוב.', result: `מיקום — ${r.reason}` };
+  if (!r.ok) return { text: live ? null : '📍 לא הצלחתי לקרוא את המיקום. נסו לשלוח שוב.', result: `מיקום — ${r.reason}`, log: `מיקום — ${r.reason}` };
   const n = r.fired.length;
+  // ‎log‎ — מה שנכנס ליומן הבוט: בלי המקום (אבטחה 17.11.26)
+  const log = `${live ? 'עדכון מיקום בזמן אמת' : 'מיקום'}${n ? ` · ${n} תזכורות` : ''}`;
   const sending = n ? `⏰ ${n === 1 ? 'תזכורת אחת מחכה' : `${n} תזכורות מחכות`} לך כאן — שולח עכשיו.` : '';
   // ‎quiet‎ — עדכון שלא שינה כלום (לא נכנס ליומן הבוט בכל פעם)
-  if (live && !r.first) return { text: null, quiet: !n && !r.arrived && !r.left, result: `עדכון מיקום בזמן אמת · ${where}${n ? ` · ${n} תזכורות` : ''}` };
+  if (live && !r.first) return { text: null, log, quiet: !n && !r.arrived && !r.left, result: `עדכון מיקום בזמן אמת · ${where}${n ? ` · ${n} תזכורות` : ''}` };
   const waiting = active(userId).filter((x) => x.status === 'place');
   if (live) {
     const watch = waiting.length ? `אזכיר לך ${[...new Set(waiting.map((x) => Places.phrase(x)))].join(' / ')}.` : 'אין כרגע תזכורות שמחכות למקום — אפשר להפסיק את השיתוף.';
-    return { text: ['📍 תודה! קיבלתי את שיתוף המיקום.', sending || watch].join('\n'), result: `התחיל שיתוף מיקום בזמן אמת · ${where}${n ? ` · ${n} תזכורות` : ''}` };
+    return { text: ['📍 תודה! קיבלתי את שיתוף המיקום.', sending || watch].join('\n'), log, result: `התחיל שיתוף מיקום בזמן אמת · ${where}${n ? ` · ${n} תזכורות` : ''}` };
   }
   const head = r.place ? `📍 קיבלתי — המיקום שלך: *${r.place.name}*.` : '📍 קיבלתי את המיקום — הוא לא באף אחת מנקודות הציון.';
   const tail = sending ? `\n${sending}` : waiting.length ? `\n_כדי שאזכיר לך בדיוק כשתגיע — עדיף לשתף מיקום *בזמן אמת*._` : '\n_אפשר לבקש: "תזכיר לי כשאני מגיע למשרד לדבר עם ישראל"._';
-  return { text: head + tail, result: `מיקום · ${where}${n ? ` · ${n} תזכורות` : ''}` };
+  return { text: head + tail, log, result: `מיקום · ${where}${n ? ` · ${n} תזכורות` : ''}` };
 }
 
 module.exports = { isRequest, command, tick, answer, onLocation, BTN, _internal: { parse, active } };

@@ -83,6 +83,27 @@ test('abandon — עם פריטים: הודעה, והדרישה יורדת', () 
   assert.equal(PD._load(u), null);
 });
 
+test('abandon — דרישה עם פריטים שפגה (15 דקות בלי תשובה): לא נמחקת בשקט — נשמרת, ו"דרישת רכש" ממשיך', () => {
+  // מהסקירה של 18.11: עובד הקליד 5 פריטים, ענה על שאלת הבחירה אחרי 20 דקות — והדרישה ירדה בלי מילה
+  const u = uid();
+  put(u, { step: 'pick', at: Date.now() - 20 * 60 * 1000, items: [{ n: 1 }, { n: 2 }, { n: 3 }] });
+  const note = PD.abandon({ id: u });
+  assert.match(note, /דרישת הרכש שהתחלת \(3 פריטים\) שמורה/);
+  assert.match(note, /דרישת רכש/);
+  assert.equal(PD._load(u)?.paused, true, 'נשמרת, מושהית');
+  assert.equal(PD._load(u)?.items.length, 3);
+  // ההודעה הבאה בנושא אחר — כמו כל דרישה מושהית: יורדת, עם הודעה
+  assert.match(PD.abandon({ id: u }), /דרישת הרכש שהתחלת לא נשלחה/);
+  assert.equal(PD._load(u), null);
+});
+
+test('abandon — דרישה בלי פריטים שפגה: יורדת בשקט, כמו קודם', () => {
+  const u = uid();
+  put(u, { step: 'items', at: Date.now() - 20 * 60 * 1000, items: [] });
+  assert.equal(PD.abandon({ id: u }), '');
+  assert.equal(PD._load(u), null);
+});
+
 test('abandon — בלי פריטים או בלי דרישה: בלי הודעה', () => {
   const u = uid();
   put(u, { step: 'items', at: Date.now(), items: [] });

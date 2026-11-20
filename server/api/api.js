@@ -4718,7 +4718,7 @@ router.get('/api/admin/settings', async (req, res, ctx) => {
   } catch { /* עדיין לא נוצר */ }
 
   sendJson(res, 200, {
-    settings: D.allSettings(),
+    settings: D.systemSettings(),
     defaults: D.DEFAULT_SETTINGS,
     // 🗂 הטופס לפי לשוניות — מהקטלוג (‎core/settings-catalog.js‎), המקור היחיד לשם ולהסבר של כל הגדרה
     form: SettingsCatalog.formTabs(),
@@ -4791,7 +4791,7 @@ router.put('/api/admin/settings', async (req, res, ctx) => {
   }
   if (b.settings?.scheduler_interval_minutes) Rules.start();
   if (b.settings?.ai_poll_minutes) AiTasks.start();
-  sendJson(res, 200, { settings: D.allSettings() });
+  sendJson(res, 200, { settings: D.systemSettings() });
 });
 
 router.post('/api/admin/rules', async (req, res, ctx) => {
@@ -5612,6 +5612,10 @@ const botTaskOps = {
  */
 const syncOps = {
   canSee: (actor, task) => canSeeTask(actor, task),
+  // 🔀 צירוף ההודעה למשימה אחרת — כמו באיחוד: רק מי שרשאי לערוך אותה
+  mayEdit: (actor, task) => canSeeTask(actor, task) && mayOnTask(actor, 'edit_delete_task', task, projectOf(task)),
+  // ➕ משימה חדשה מההודעה — אותה יצירה כמו בכל משימה
+  createTask: (actor, body) => createTask(actor, body),
 
   /** ההודעה כהערה פנימית, והקבצים מהמייל מצורפים אליה. קובץ שנכשל — לא מפיל את השאר */
   comment(actor, task, body, files = []) {

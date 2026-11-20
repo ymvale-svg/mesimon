@@ -62,7 +62,7 @@ test('שם ותואר — מהמשתמש במשימון (שם ומחלקה), ל�
   mail(me.id, amit.email.toLowerCase(), 'שלח טבלת בקרה תקציבית', 3);
   const fake = Fakes.claude(t, () => ({
     who: [{ email: amit.email.toLowerCase(), about: 'שלח את טבלת הבקרה' }],
-    background: [], open_items: [], last_agreed: [], talking_points: []
+    background: [{ text: 'נתוני הבקרה התקציבית', on_topic: true }], open_items: [], last_agreed: [], talking_points: []
   }));
   const text = await Briefing.build(me.id, { title: 'בקרה תקציבית', start: ago(-0.01), people: [{ email: amit.email, name: 'לנג עמית' }] });
   assert.match(text, new RegExp(`עמית לנג — מנהל/ת ${depName} — שלח את טבלת הבקרה`));
@@ -81,7 +81,7 @@ test('תואר מהחתימה — גובר על המחלקה; מבחוץ — ת�
   add(ext, 'יוסי', 'רזבר', 'מנהל פרויקטים');
   mail(me.id, dana.email.toLowerCase(), 'בקרה תקציבית — נתונים', 2);
   mail(me.id, ext, 'בקרה תקציבית — הצעה', 2);
-  Fakes.claude(t, () => ({ who: [], background: [], open_items: [], last_agreed: [], talking_points: [] }));
+  Fakes.claude(t, () => ({ who: [], background: [{ text: 'נתוני הבקרה התקציבית', on_topic: true }], open_items: [], last_agreed: [], talking_points: [] }));
   const text = await Briefing.build(me.id, { title: 'בקרה תקציבית', start: ago(-0.01), people: [{ email: dana.email }, { email: ext, name: 'יוסי' }] });
   assert.match(text, /• דנה כהן — חשבת/);
   assert.match(text, /• יוסי — מנהל פרויקטים, רזבר/);
