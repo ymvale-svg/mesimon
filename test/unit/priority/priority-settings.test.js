@@ -5,7 +5,7 @@
  */
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { boot, D } = require('../../helpers/db');
+const { boot, D, user } = require('../../helpers/db');
 const Settings = require('../../../server/priority/priority-settings');
 const Priority = require('../../../server/integrations/priority');
 const Secrets = require('../../../server/core/secrets');
@@ -110,4 +110,34 @@ test('🆕 מנהלת הרכש (מק"טים לבנייה): נשמרת בבריר
   assert.equal(Settings.defaults().buyerEmail, 'ruti@example.com');
   Settings.save({ defaults: { buyerEmail: '' } });
   assert.equal(Settings.defaults().buyerEmail, '', 'ריק — מבטל');
+});
+
+test('🛒 מנהלת הרכש — משתמש משימון: השם והמייל ממנו, ו-contact של מק"טים לבנייה לפיו', () => {
+  reset();
+  const Parts = require('../../../server/priority/pd-parts');
+  const u = user({ full_name: 'שקמה בסר', email: 'shikma@example.com', status: 'active' });
+  const s = Settings.save({ defaults: { buyerUserId: u.id } });
+  assert.equal(s.defaults.buyerUserId, u.id);
+  assert.ok(s.users.some((x) => x.id === u.id && x.email === 'shikma@example.com'), 'המשתמשים לבחירה במסך');
+  assert.equal(Settings.defaults().buyerName, 'שקמה בסר');
+  assert.equal(Settings.defaults().buyerEmail, 'shikma@example.com');
+  assert.deepEqual(Parts.contact(), { email: 'shikma@example.com', name: 'שקמה בסר', userId: u.id });
+
+  // המייל במשימון השתנה — נלקח מהמשתמש
+  D.run('UPDATE users SET email = ? WHERE id = ?', 'shikma2@example.com', u.id);
+  assert.equal(Parts.contact().email, 'shikma2@example.com');
+  // לא פעיל — אין מנהלת רכש
+  D.run("UPDATE users SET status = 'inactive' WHERE id = ?", u.id);
+  assert.equal(Parts.contact(), null);
+  assert.throws(() => Settings.save({ defaults: { buyerUserId: u.id } }), /אינו פעיל/);
+  Settings.save({ defaults: { buyerUserId: null } });
+  assert.equal(Settings.defaults().buyerUserId, null);
+  assert.equal(Settings.defaults().buyerEmail, '', 'ריק — מבטל');
+});
+
+test('🛒 מנהלת הרכש — הגדרה ישנה (שם ומייל שהוקלדו): במסך נבחר המשתמש עם אותו מייל', () => {
+  reset();
+  const u = user({ full_name: 'רותי', email: 'Ruti.Old@example.com', status: 'active' });
+  Settings.save({ defaults: { buyerName: 'רותי', buyerEmail: 'ruti.old@example.com' } });
+  assert.equal(Settings.forDisplay().defaults.buyerUserId, u.id);
 });

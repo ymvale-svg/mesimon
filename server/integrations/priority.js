@@ -486,6 +486,12 @@ async function lastSubchapter(company, supname) {
 }
 
 /**
+ * פריוריטי דחה את תת הפרק / המשאב של השורה — בפרויקט בבקרת תקציב (‎CHECKCONV‎) תת הפרק אינו במהדורת הביצוע שלו ("יש לבחור
+ * תת פרק מרשימת הבחירה"), או "יש לקשר תת פרק"
+ */
+const isCodingError = (err) => /תת פרק|משאב/.test(String(err?.message ?? ''));
+
+/**
  * הפרויקטים של החברה — ממסך הפרויקטים, ‎DOCUMENTS_p‎ (p קטנה; ‎DOCPROJ‎ סגור ל-API).
  * בלי המבוטלים. נשמר לשעה. אם המסך אינו זמין — מהפרויקטים שבהזמנות ובקבלות.
  */
@@ -1085,6 +1091,6 @@ module.exports = {
   GENERAL, NO_VAT_CODE, TAX_CODES, PAY_TERMS, DEFAULT_PAY, payTerm, payLabel, payFromText, dueDate, projectWarehouses, warehouses, warehouseExists, defaultWarehouse, supplierHistory, recentLines, partByCode, findPartsByText, searchParts, generalCoding, warehouseOf, findSuppliers, supplierByCode, findReceiptByBooknum, getOrder, openOrders, findPartExact, lastSubchapter, projects, matchProjects, readReceipt,
   finalOrders, orderForNotice, demandInitiator, demandForNotice, projectManager, priorityUser,
   readDialog, createReceipt, addOrderLine, addFreeLine, setLineQty, setLineDes, setHeader, attach, deleteAttachment, setDialog, finalizeReceipt, cancelReceipt, receiptStatus, deleteLines,
-  PD_TYPES, demandCodes, recentDemandProjects, createDemand, addDemandLine, setDemand, submitDemand, isNoApproversError, readDemand, waitingDemands, nextSigner, cancelDemand, setDemandDialog, appendDemandDialog, setDemandLine, deleteDemandLine, reopenDemand, REOPEN_STATUS, purchaseOrderOwners, attachDemand, priorityUsers, budgetPairs,
+  PD_TYPES, demandCodes, recentDemandProjects, createDemand, addDemandLine, setDemand, submitDemand, isNoApproversError, readDemand, waitingDemands, nextSigner, cancelDemand, setDemandDialog, appendDemandDialog, setDemandLine, deleteDemandLine, reopenDemand, REOPEN_STATUS, purchaseOrderOwners, attachDemand, priorityUsers, budgetPairs, isCodingError,
   _call: call
 };

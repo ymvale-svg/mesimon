@@ -14,7 +14,7 @@
  *      החסרים בלבד (השאר כבר יצא). "סיום" שולח אותה.
  *   קבלת סחורה (‎goods-receipt.js‎): שאלה "לשלוח לרכש?" בשלב המק"טים; הקליטה ממשיכה על 000, וכשנבנו — רק הודעה (‎receipt‎).
  *
- * מנהלת הרכש — בהגדרות פריוריטי (‎/priority‎ ← הגדרות: ‎buyerName‎, ‎buyerEmail‎). לא הוגדרה — בדרישה: רק המזוהים, והרשימה
+ * מנהלת הרכש — בהגדרות פריוריטי (‎/priority‎ ← הגדרות): משתמש משימון (‎buyerUserId‎); בהגדרה ישנה — ‎buyerName‎, ‎buyerEmail‎. לא הוגדרה — בדרישה: רק המזוהים, והרשימה
  * למנהלי המערכת; בקבלת סחורה — בלי שאלה.
  */
 const crypto = require('node:crypto');
@@ -68,6 +68,11 @@ function alertAdmins(title, body) {
 /** ‎{ name, email, userId }‎ — מי שמוגדרת בהגדרות פריוריטי; ‎null‎ — לא הוגדרה (אין שאלות, הזרימה הישנה) */
 function contact() {
   const d = Settings.defaults();
+  // משתמש משימון שנבחר במסך (מ-19.11.26) — השם והמייל ממנו; לא פעיל עוד — אין מנהלת רכש
+  if (d.buyerUserId) {
+    const u = Settings.buyerOf(d);
+    return u && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(u.email ?? '')) ? { email: u.email, name: u.full_name, userId: u.id } : null;
+  }
   const email = String(d.buyerEmail ?? '').trim();
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return null;
   const u = D.get("SELECT id, full_name FROM users WHERE lower(email) = lower(?) AND status = 'active'", email);
@@ -138,6 +143,33 @@ async function sendMail(user, m, to) {
   const built = Mailer.buildMessage({ from: conn.email, fromName: user.full_name, to: to.email, toName: to.name, subject: m.subject, text: m.text, html: m.html });
   await Gmail.send(user.id, built.raw);
   return true;
+}
+
+/** מייל טקסט פשוט דרך משימון ל-‎to = { name, email }‎ — עם "שלום" ו"בברכה". זורק כשלא יצא */
+async function mailPerson(user, to, subject, body) {
+  const text = [`שלום ${to.name},`, '', body, '', 'בברכה,', 'משימון'].join('\n');
+  const html = `<div dir="rtl" style="font-family:Arial,sans-serif;font-size:14px">${text.split('\n').map((l) => esc(l) || '&nbsp;').join('<br>')}</div>`;
+  return sendMail(user, { subject, text, html }, to);
+}
+
+/**
+ * 🛒 שורות בדרישת רכש שפריוריטי לא קיבל (למשל אין תקציב בפרויקט לתת הפרק) — הדרישה נשארה טיוטא. הודעה למנהלת הרכש:
+ * התראה במשימון ומייל (הוחלט 19.11.26 — רק לה ולעובד). לא הוגדרה, או שהמייל לא יצא — למנהלי המערכת.
+ * מחזיר את שם מי שקיבלה, או ‎null‎.
+ */
+async function notifyBuyer(user, s, title, lines) {
+  const to = contact();
+  const company = Priority.companyOf(s.company);
+  const body = [`לבקשת: ${user.full_name}`, `חברה: ${company?.name ?? s.company} (${s.company})`, s.project ? `פרויקט: ${s.project.des} (${s.project.code})` : null,
+    s.prdno || s.editOf ? `דרישה: ${s.prdno || s.editOf} — נשארה טיוטא, לא נשלחה לאישור` : null, '', ...lines].filter((x) => x !== null).join('\n');
+  if (!to) { alertAdmins(title, `${body}\n\n(מנהלת הרכש לא הוגדרה בהגדרות פריוריטי)`); return null; }
+  if (to.userId) D.notify({ targetType: 'user', targetId: to.userId, kind: 'ai', title: `🛒 ${title}`, body });
+  try {
+    await mailPerson(user, to, `${title} — לבקשת ${user.full_name}`, body);
+  } catch (err) {
+    if (!to.userId) { alertAdmins(title, `${body}\n\nהמייל למנהלת הרכש לא יצא: ${err.message}`); return null; }
+  }
+  return to.name;
 }
 
 /** המק"טים שכבר בקטלוג לתיאור הזה — כדי לזהות בהמשך מק"ט *חדש* */
@@ -408,4 +440,4 @@ async function buyerAnswer(token, { n, code = '', note = '' } = {}) {
   return forBuyer(token);
 }
 
-module.exports = { BTN_REBUILD, BTN_MORE, BTN_SKIP, forBuyer, buyerAnswer, cleanup, contact, requestBuild, setMode, tick, start, owns, answer, setHooks, _findBuilt: findBuilt, _mailOf: mailOf, _row: row };
+module.exports = { BTN_REBUILD, BTN_MORE, BTN_SKIP, notifyBuyer, mailPerson, alertAdmins, forBuyer, buyerAnswer, cleanup, contact, requestBuild, setMode, tick, start, owns, answer, setHooks, _findBuilt: findBuilt, _mailOf: mailOf, _row: row };
