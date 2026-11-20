@@ -33,6 +33,7 @@ const Dupes = require('../tasks').TaskDupes;
 const P = require('../core').Permissions;
 const Docs = require('../core').DocText;
 const Memory = require('./mail-memory');
+const SignatureBackfill = require('./signature-backfill');
 const Closure = require('../tasks').TaskClosure;
 const MailActions = require('./mail-actions');
 const FormFill = require('./form-fill');
@@ -1245,6 +1246,8 @@ function init({ createTask }) {
     afterTick: () => {
       // זיכרון המייל רץ ברקע ובקצב משלו — לא מעכב את ריצת הבוקר
       Memory.tick().catch((err) => console.error('[משימון] זיכרון המייל:', err.message));
+      // ✍️ התארים מחתימות המיילים הקיימים — פעם אחת לכל איש קשר, ברקע
+      SignatureBackfill.tick().catch((err) => console.error('[משימון] קריאת החתימות:', err.message));
       // 📚 הידע הארגוני מתעדכן ממה שהזיכרון קרא — כל כמה שעות, לא רק בבוקר
       OrgKnowledge.refresh();
       // 📬 הסריקה השוטפת רצה ברקע — לא מעכבת את ריצת הבוקר

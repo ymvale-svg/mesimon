@@ -43,7 +43,8 @@ const TTL = 24 * 60 * 60 * 1000;
 const idleMs = () => Math.max(1, Number(D.getSetting('wa_question_ttl_min', 15)) || 15) * 60 * 1000;
 const FILES_DIR = () => path.join(D.UPLOADS_DIR, 'purchase-demand');
 
-const TRIGGER = /דרישת\s*רכש|דרישות\s*רכש/;
+// "רכס" — כך התמלול שומע לפעמים "רכש" (סקירה 19.11: "אני רוצה לעשות דרישת רכס" לא זוהה). לא "רכסים" — המקום
+const TRIGGER = /דרישת\s*רכ[שס](?!ים)|דרישות\s*רכ[שס](?!ים)/;
 const GR_TRIGGER = /קבלת\s*סחורה/;
 // רק כשזו כל ההודעה — "שלח גם 3 שקי מלט" הוא פריט, לא סיום
 const DONE = /^(סיום|סיימתי|זהו|זה הכל|זה הכול|תשלח|שלח|לשלוח|שלח לאישור|תשלח לאישור|לאישור)\s*[!.🏁]*$/u;
@@ -90,7 +91,14 @@ const active = (userId, late = false) => { const s = load(userId); return Boolea
 const pending = (userId) => Boolean(fresh(load(userId)));
 /** 🔒 הדרישה שהשיחה עליה עכשיו (מספר הדרישה, ולפניו — מתי התחילה), ‎null‎ — אין. נרשם עם הכפתורים (‎WaQuestions‎, #171) */
 const docId = (userId) => { const s = load(userId); return fresh(s) ? String(s.prdno || s.editOf || s.startedAt || '') || null : null; };
-const isTrigger = (text) => TRIGGER.test(String(text ?? ''));
+/*
+ * "דרישה" בתחילת הבקשה — תמיד דרישת רכש (הוחלט 20.11.26, ישראל: "כל עוד מופיעה המילה דרישה לפני — הכוונה לרכש"):
+ * "דרישה", "דרישת מלט 10 שקים", "בוקר טוב, אני רוצה לעשות דרישה", "תפתח לי דרישה". באמצע משפט ("יש דרישה של העירייה…") — לא
+ */
+const ASK = /^\P{L}*(?:(?:בוקר טוב|ערב טוב|צהריים טובים|היי|שלום|אהלן)\P{L}*)?(?:(?:אני\s+)?(?:רוצה|צריך|צריכה|מבקש|מבקשת)\s+(?:ל(?:עשות|פתוח|הוציא|בצע|הגיש)\s+)?|(?:ת?פתח|תפתחי|ת?עשה|תעשי|תוציא|תוציאי|לפתוח|לעשות|להוציא|לבצע)\s+(?:לי\s+)?)?(?:בבקשה\s+)?(?:עוד\s+)?דריש(?:ה|ת|ות)(?:\s*רכ[שס](?!ים))?(?=[\s,.!:\-–]|$)/u;
+const isTrigger = (text) => { const t = String(text ?? ''); return TRIGGER.test(t) || ASK.test(t); };
+/** הבקשה בלי מילות הפתיחה: "דרישת מלט 10 שקים" ← "מלט 10 שקים" */
+const afterTrigger = (t) => (ASK.test(t) ? t.replace(ASK, '') : t.replace(TRIGGER, ''));
 /** פותח דרישה ("דרישת רכש"); וגם החזרה לבדיקה ("החזר לבדיקה PD…") ותשובה של פותח הדרישה (לתקן / הכל נכון) */
 // שאלה על דרישות קיימות ("מה הדרישות הפתוחות?") או בקשה אחרת — לא פותחת דרישה חדשה (‎opens-guard.js‎)
 // וגם תשובה ל"המק"טים נבנו — לבנות את הדרישה מחדש?" (‎pd-parts.js‎)
@@ -1034,11 +1042,11 @@ async function handle({ user, text = '', file = null, reaction = false, voice = 
 
   // "דרישת רכש" — התחלה (או המשך של דרישה פתוחה)
   if (!s || (isTrigger(t) && !file && !s.items?.length && s.step !== 'code')) {
-    if (isTrigger(t) && CANCEL.test(t.replace(TRIGGER, '').trim())) { if (s) clear(user.id, s); return { replies: [s ? 'דרישת הרכש בוטלה.' : 'אין דרישת רכש פתוחה.'], status: 'ok', result: 'ביטול' }; }
+    if (isTrigger(t) && CANCEL.test(afterTrigger(t).trim())) { if (s) clear(user.id, s); return { replies: [s ? 'דרישת הרכש בוטלה.' : 'אין דרישת רכש פתוחה.'], status: 'ok', result: 'ביטול' }; }
     const out = await start(user, heard);
     if (out.s) save(user.id, out.s);
     // תמונה או רשימה כבר בהודעה הראשונה ("דרישת רכש: 10 שקי מלט…")
-    const rest = t.replace(TRIGGER, '').replace(/^[\s:\-–,]+/, '').trim();
+    const rest = afterTrigger(t).replace(/^[\s:\-–,]+/, '').trim();
     if (out.s?.step === 'items' && (file || rest.split(/\s+/).length >= 2)) {
       const r2 = await (file ? onFile(user, out.s, file) : onText(user, out.s, rest)) ?? out;
       if (heard.length && r2 !== out && r2.replies?.length) r2.replies[0] = `${heard.join('\n')}\n${r2.replies[0]}`;
