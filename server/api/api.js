@@ -11,6 +11,7 @@ const Auth = require('../core').Auth;
 const Rules = require('../tasks').RulesEngine;
 const Google = require('../integrations').GoogleAuth;
 const Invites = require('../core').Invites;
+const SettingsCatalog = require('../core').SettingsCatalog;
 const Mailer = require('../integrations').Mailer;
 const TaskMail = require('../mail').TaskMail;
 const Push = require('../integrations').Push;
@@ -20,6 +21,7 @@ const AiTasks = require('../tasks').AiTasks;
 const AiApi = require('./api-ai');
 const TodayApi = require('./api-today');
 const PhonebookApi = require('./api-phonebook');
+const PlacesApi = require('./api-places');
 const PriorityApi = require('./api-priority');
 const PriorityAccess = require('../priority').PriorityAccess;
 const MeetingsApi = require('./api-meetings');
@@ -1635,7 +1637,9 @@ router.get('/api/tasks/:id/flow', async (req, res, ctx) => {
 
 router.post('/api/tasks', async (req, res, ctx) => {
   const actor = ctx.requireActor();
-  const body = await readJson(req);
+  // מקור המשימה (מייל, תפעול 360) נקבע רק בזרימות השרת — לא מהדפדפן. אחרת אפשר ליצור משימה
+  // "מתפעול 360" עם קוד של קריאה אחרת, ולסגור אותה שם בסגירת המשימה
+  const { source, sourceRef, sourceUserId, ...body } = await readJson(req);
   assertMayUseProject(actor, body.projectId);
   const id = createTask(actor, body);
   sendJson(res, 201, { task: shapeTask(getTaskOr404(id), actor, { withDetails: true }) });
@@ -4587,10 +4591,9 @@ router.delete('/api/admin/users/:id', async (req, res, ctx) => {
     D.run("DELETE FROM wa_messages WHERE user_id = ? OR (? <> '' AND sender_phone = ?)", id, user.phone ?? '', user.phone ?? '');
     D.run('DELETE FROM wa_log WHERE user_id = ?', id);
     D.run('DELETE FROM agent_log WHERE user_id = ?', id);
-    // הגדרות לפי משתמש (קבלת סחורה, דרישת רכש, העדפות פריוריטי, ידע ארגוני)
-    D.run('DELETE FROM settings WHERE key IN (?, ?, ?, ?, ?)',
-      `goods_receipt:${id}`, `goods_receipt_done:${id}`, `goods_receipt_prefs:${id}`,
-      `purchase_demand:${id}`, `org_distill_${id}`);
+    // נתונים לפי משתמש שעוד בטבלת ההגדרות (‎SettingsCatalog.LEGACY_PER_USER‎; העדפות פריוריטי — מ-15.11.26 ב-user_prefs)
+    for (const prefix of SettingsCatalog.LEGACY_PER_USER) D.run('DELETE FROM settings WHERE key = ? OR key LIKE ?', `${prefix}${id}`, `${prefix}${id}:%`);
+    D.run('DELETE FROM settings WHERE key = ?', `goods_receipt_prefs:${id}`);
     // שורות שמזוהות לפי סוג ומזהה, בלי מפתח זר
     D.run("DELETE FROM sessions WHERE actor_type = 'user' AND actor_id = ?", id);
     D.run("DELETE FROM notifications WHERE target_type = 'user' AND target_id = ?", id);
@@ -4715,8 +4718,10 @@ router.get('/api/admin/settings', async (req, res, ctx) => {
   } catch { /* עדיין לא נוצר */ }
 
   sendJson(res, 200, {
-    settings: D.allSettings(),
+    settings: D.systemSettings(),
     defaults: D.DEFAULT_SETTINGS,
+    // 🗂 הטופס לפי לשוניות — מהקטלוג (‎core/settings-catalog.js‎), המקור היחיד לשם ולהסבר של כל הגדרה
+    form: SettingsCatalog.formTabs(),
     // מצב החיבורים החיצוניים. בלי התצוגה הזו, מפתח שנמחק בשרת מבטל תכונה
     // שלמה בלי שום סימן בממשק — בדיוק מה שקרה לכניסה עם Google.
     integrations: {
@@ -4786,7 +4791,7 @@ router.put('/api/admin/settings', async (req, res, ctx) => {
   }
   if (b.settings?.scheduler_interval_minutes) Rules.start();
   if (b.settings?.ai_poll_minutes) AiTasks.start();
-  sendJson(res, 200, { settings: D.allSettings() });
+  sendJson(res, 200, { settings: D.systemSettings() });
 });
 
 router.post('/api/admin/rules', async (req, res, ctx) => {
@@ -5607,6 +5612,10 @@ const botTaskOps = {
  */
 const syncOps = {
   canSee: (actor, task) => canSeeTask(actor, task),
+  // 🔀 צירוף ההודעה למשימה אחרת — כמו באיחוד: רק מי שרשאי לערוך אותה
+  mayEdit: (actor, task) => canSeeTask(actor, task) && mayOnTask(actor, 'edit_delete_task', task, projectOf(task)),
+  // ➕ משימה חדשה מההודעה — אותה יצירה כמו בכל משימה
+  createTask: (actor, body) => createTask(actor, body),
 
   /** ההודעה כהערה פנימית, והקבצים מהמייל מצורפים אליה. קובץ שנכשל — לא מפיל את השאר */
   comment(actor, task, body, files = []) {
@@ -5679,6 +5688,7 @@ AiApi.register(router, { getTaskOr404, assertVisible, mayOnTask, shapeTask, acto
   taskTemplates: (actor) => visibleTemplates(actor).filter((t) => t.kind === 'task').map(shapeTemplate) });
 TodayApi.register(router, { shapeTask, createTask, getTaskOr404, listProjectsFor, newTaskProjects, assertMayAssignTo });
 PhonebookApi.register(router);
+PlacesApi.register(router);
 PriorityApi.register(router);
 WhatsNew.register(router);
 MeetingsApi.register(router, { getTaskOr404, assertVisible, shapeTask, canSeeTask });

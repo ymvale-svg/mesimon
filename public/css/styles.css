@@ -2966,6 +2966,7 @@ button.txt-open:hover { color: var(--brand-ink); text-decoration: underline; }
 .mask-actions { display: flex; flex-wrap: wrap; gap: 6px; }
 .mask-foot { margin-top: 2px; }
 .mask-sec { display: grid; gap: 6px; padding-top: 8px; border-top: 1px solid var(--border); }
+.mask-draft .mask-a { padding: 10px 12px; border-radius: 8px; background: var(--surface-2, var(--bg)); border: 1px solid var(--border); }
 .mask-sec:first-child { border-top: 0; padding-top: 0; }
 .mask-sec-title { font-weight: 700; font-size: 13.5px; color: var(--text-soft); }
 .mask-item {
@@ -3322,6 +3323,7 @@ button.txt-open:hover { color: var(--brand-ink); text-decoration: underline; }
 .rec-connect { max-width: 560px; margin: 0 auto; display: flex; flex-direction: column; gap: 8px; }
 .rec-why { max-width: 560px; margin: 0 auto; padding-inline-start: 18px; line-height: 1.7; }
 .rec-card { padding: 12px 14px; display: flex; flex-direction: column; gap: 4px; }
+.rec-summary { font-size: 13px; line-height: 1.5; color: var(--text-soft); display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
 .rec-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
 .cal-title { min-width: 120px; text-align: center; }
 .cal-access { font-size: 12.5px; color: var(--text-soft); }
@@ -4672,3 +4674,26 @@ input.tp-input {
 .mt-tl-thumb { width: 72px; height: 44px; border-radius: 8px; border: 0; background: #0f172a; color: #fff; font-size: 16px; cursor: pointer; flex: none; }
 .mt-tl-main { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; }
 .mt-tl-tasks { display: flex; flex-direction: column; gap: 2px; }
+
+/* ⚙ ההגדרות שלי — תפריט צד ותוכן (‎renderMySettings‎ ב-app.js) */
+.my-settings { display: grid; grid-template-columns: 250px minmax(0, 1fr); gap: 18px; align-items: start; }
+.my-settings-nav { position: sticky; top: 76px; background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 8px; }
+.my-settings-nav ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.my-settings-item { width: 100%; display: flex; flex-direction: column; align-items: flex-start; gap: 2px; text-align: right;
+  border: 0; background: none; border-radius: 10px; padding: 9px 12px; cursor: pointer; color: var(--text); font: inherit; }
+.my-settings-item:hover { background: var(--surface-2); }
+.my-settings-item.active { background: var(--brand-light); color: var(--brand-dark); }
+.my-settings-item:focus-visible { outline: 2px solid var(--brand); outline-offset: 1px; }
+.my-settings-label { font-weight: 700; font-size: 14px; }
+.my-settings-hint { font-size: 12px; color: var(--text-soft); }
+.my-settings-item.active .my-settings-hint { color: inherit; opacity: .8; }
+.my-settings-pane h2 { font-size: 18px; margin: 0 0 14px; }
+@media (max-width: 820px) {
+  .my-settings { grid-template-columns: minmax(0, 1fr); gap: 12px; }
+  .my-settings > * { min-width: 0; }
+  .my-settings-nav { position: static; padding: 6px; }
+  .my-settings-nav ul { flex-direction: row; overflow-x: auto; scrollbar-width: none; gap: 4px; }
+  .my-settings-nav ul::-webkit-scrollbar { display: none; }
+  .my-settings-item { width: auto; white-space: nowrap; padding: 8px 12px; }
+  .my-settings-hint { display: none; }
+}

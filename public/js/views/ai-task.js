@@ -1104,7 +1104,8 @@ const AiTaskView = (() => {
 
   // ------------------------------------------------------------- וואטסאפ
 
-  async function openWhatsApp() {
+  /** ‎into‎ — בתוך לשונית ב"⚙ ההגדרות שלי" במקום חלון */
+  async function openWhatsApp({ into = null } = {}) {
     let channel = null;
     try {
       channel = (await API.get('/api/me/whatsapp')).channel;
@@ -1160,7 +1161,7 @@ const AiTaskView = (() => {
       UI.success('הוואטסאפ נותק');
     });
 
-    const m = UI.modal({
+    const m = UI.modalOrInline(into, {
       title: '💬 חיבור הוואטסאפ שלי',
       body: el('div', {}, [
         el('p', { style: { marginTop: 0 } }, [

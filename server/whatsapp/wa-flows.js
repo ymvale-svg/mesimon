@@ -30,12 +30,12 @@ const Solve = require('./solve');
 const MailInsights = require('../mail').MailInsights;
 const Range = require('../mail').InsightWindow;
 const Instinct = require('./instinct');
-const { appRoot, currentMsg, doneEmoji, emailText, enqueueAs, firstName, hooks, localDate, log, react, reactNow, signatureFields, taskLink, WALK } = require('./wa-base');
+const { appRoot, currentMsg, doneEmoji, emailText, enqueueAs, firstName, hooks, localDate, log, react, reactNow, signatureFields, taskLink, WALK, MSG_BREAK } = require('./wa-base');
 const { actionOf, CANCEL, checkDraft, draftText, featuresText, helpText, localDay, PLAIN_FEATURES, PLAIN_GREETING, PLAIN_HELP, PLAIN_INSIGHTS, PLAIN_LIST, PLAIN_TODAY, READ_ALOUD, shortDate, YES } = require('./wa-private');
 const { meetCoordRun, pushToUser, rfqPrepare, rfqSend } = require('./wa-proactive');
-const { businessCommand, closeAlerted, closureDecision, confirmPending, contactOf, draftEmail, findRecipients, sendPlainMail, startGoodsFromMail, suggestionDecision, suggestionFeedback, threadAddText, VIA_EMAIL, VIA_MESIMON } = require('./wa-mail');
+const { businessCommand, closeAlerted, closureDecision, confirmPending, contactOf, draftEmail, findRecipients, sendPlainMail, replyOffer, MAIL_WALK_BTN, isMailWalkStart, mailWalkIntro, mailWalkAt, mailWalkEnd, startGoodsFromMail, suggestionDecision, suggestionFeedback, threadAddText, VIA_EMAIL, VIA_MESIMON } = require('./wa-mail');
 const { agentsText, cut, menuButtons, menuOptions, menuText, parseClosureCommand, parseSuggestionCommand, PLAIN_AGENTS, walkAction, walkButtons, walkText } = require('./wa-menu');
-const { meetingAudioAllowed, meetingAudioTurn, TRANSLATE } = require('./wa-meeting');
+const { meetingAudioAllowed, meetingAudioTurn, timelessAudioCheck, TRANSLATE } = require('./wa-meeting');
 
 /** "לא שלי — הזרימה הבאה" */
 const NEXT = Symbol('NEXT');
@@ -64,7 +64,9 @@ async function flowWalk({ actor, dry, out, startReply, state, t, user }) {
     const x = w.items[w.i];
     if (!x || walkAct === 'next') return show(w.i + 1);
     // לא שייך לסוג הפריט — מציגים אותו שוב, עם הכפתורים הנכונים
-    if (!walkButtons(x).some((b) => walkAction(b) === walkAct)) return show(w.i);
+    // מייל — "תפתח משימה" במילים עדיין עובד, גם בלי כפתור (הבוט מציע תשובה; משימה — רק כשמבקשים)
+    const askedTask = walkAct === 'task' && ['mail', 'ins'].includes(x.t);
+    if (!askedTask && !walkButtons(x).some((b) => walkAction(b) === walkAct)) return show(w.i);
     const note = '_אחר כך — *הבא ⏭️* ממשיך ברשימה._';
     // טיוטה שנפתחה מהמעבר — "הבא" עדיין עובד עליה
     const withNote = (r) => ({ ...r, reply: `${r.reply}\n\n${note}`, next: { ...r.next, draft: r.next.draft ? { ...r.next.draft, fromWalk: true } : r.next.draft },
@@ -272,7 +274,10 @@ async function flowRfqRequest({ actor, dry, out, t }) {
   return NEXT;
 }
 
-async function flowNoticeRequest({ actor, dry, out, t }) {
+async function flowNoticeRequest({ actor, dry, out, t, user }) {
+  // 🤖 עיצוב מודעה — לאינסטינקט, למי שהוא פתוח לו (15.11.26, ישראל: "כל מה שאינסטינקט יודע — תן לו לעשות").
+  // מכתב רשמי על נייר הפירמה — נשאר אצלנו: זה פנים החברה
+  if (user && Instinct.allowed(actor) && Notice.parseRequest(t)?.kind === 'notice') return instinctSend({ user, actor, dry, out, text: t });
   if (WaActions.allowed(actor, 'notices') && Notice.parseRequest(t)) {
     if (dry) return out('(בדיקה) הייתי מכין PDF.', {}, { action: 'notices', status: 'ok', result: 'בדיקה' });
     reactNow(actor.id, '📝');
@@ -399,7 +404,8 @@ async function flowRemindersRequest({ actor, dry, out, state, t }) {
   // "לא משימה — תזכיר לי" על טיוטת משימה: הטיוטה הפכה לתזכורת ויורדת. אחרת מה שחיכה — ממשיך לחכות
   const next = !waiting ? {} : r.fromAbout ? { draft: null, awaiting: false } : { draft: state.draft, awaiting: true };
   // ✅ על ההודעה כשנרשמה / בוטלה תזכורת (הטקסט נשאר — יש בו את המועד)
-  return out(r.text, next, { action: 'reminders', status: r.error ? 'error' : 'ok', result: r.result, react: /^(תזכורת|בוטלה)/.test(r.result ?? '') ? '✅' : undefined });
+  // 📍 תזכורת לפי מיקום — ביומן בנפרד (הטיפ "הבוט יודע להזכיר כשמגיעים למקום" — רק למי שעוד לא ניסה)
+  return out(r.text, next, { action: r.place ? 'reminders_place' : 'reminders', status: r.error ? 'error' : 'ok', result: r.result, react: /^(תזכורת|בוטלה)/.test(r.result ?? '') ? '✅' : undefined });
 }
 
 // 📬 "זכרת? 🐣" על מייל שלא טופל, ו"לבצע קבלת סחורה?" על חשבונית מהמייל
@@ -435,16 +441,22 @@ async function flowOnMailRemindOrGoods(ctx) {
     const d = state.draft;
     if (d.kind === 'mail_remind') {
       const r = dry ? null : MailActions.answerReminder(actor.id, d, t, { closeAlerted });
+      if (r?.reply) {
+        // 💡 "זכרת?" ← הצעת תשובה מוכנה (תמיד עם נוסח). ‎כן‎ שולח — כמו בהתראה על מייל חדש
+        const row = D.get('SELECT * FROM ai_suggestions WHERE id = ? AND user_id = ?', d.suggestionId, actor.id);
+        const o = row ? await replyOffer(actor.id, row).catch((err) => ({ error: err.message })) : { error: 'no_row' };
+        if (o.error) {
+          const why = o.error === 'cannot_send' ? 'אין לי הרשאה לשלוח מהתיבה הזו — אפשר לחבר מחדש ב"🔗 חיבור Google" במשימון.' : 'לא הצלחתי להכין תשובה למייל הזה — אפשר לענות ישירות ב-Gmail.';
+          return out(why, { draft: null }, { action: 'mail_deadline', status: 'error', result: `הצעת תשובה: ${o.error}`.slice(0, 300) });
+        }
+        return out(o.text, { draft: o.draft, awaiting: true }, { action: 'mail_deadline', status: 'ok', result: r.result.slice(0, 300), buttons: o.buttons });
+      }
       if (r?.openTask) {
         // אותו מסלול כמו "כן" על "לפתוח משימה?" — עם כל הבדיקות (אנשים נוספים, פנייה החוצה).
         // מייל שנקרא ב-Gmail ירד מ"ממתין" — קריאה אינה טיפול, אז הוא חוזר להצעה פתוחה
         if (!dry) D.run("UPDATE ai_suggestions SET status = 'pending', decided_at = NULL WHERE id = ? AND status = 'read'", d.suggestionId);
         const c = await confirmPending(actor, { kind: 'mail_task', alert: true, suggestionIds: [d.suggestionId], title: d.title }, dry);
         return out(c.reply, { draft: null }, { action: 'mail_deadline', status: c.status, result: String(c.result ?? r.result).slice(0, 300), taskId: c.taskId ?? null });
-      }
-      if (r?.ask) {
-        // "כן" על "זכרת?" — עוד לא פותחים; שואלים במפורש, והשאלה ממתינה
-        return out(r.text, { draft: r.draft, awaiting: true }, { action: 'mail_deadline', status: 'ok', result: r.result.slice(0, 300), buttons: r.buttons });
       }
       if (r) {
         // "התעלם" — גם מהתובנות ומ"היום"; פעם שנייה מאותו שולח — "לא להקפיץ יותר?"
@@ -483,6 +495,14 @@ async function flowMeetingAudioAnswer(ctx) {
   return NEXT;
 }
 
+// 🎥 "תבדוק" על הקלטה שמחכה ל-Timeless — בודקים עכשיו, ומה שמוכן נשלח
+async function flowMeetingAudioStatus({ actor, out, t }) {
+  if (actor?.type !== 'user') return NEXT;
+  const reply = await timelessAudioCheck(actor, t).catch((err) => { console.error('[משימון] בדיקת הקלטה ב-Timeless נכשלה:', err.message); return null; });
+  if (!reply) return NEXT;
+  return out(reply, { draft: null }, { action: 'meeting_audio', status: 'ok', result: reply.split('\n')[0].slice(0, 300) });
+}
+
 async function flowMeetingAudioRequest({ actor, out, t }) {
   if (meetingAudioAllowed(actor)) {
     const armed = MeetingAudio.arm(actor.id, t);
@@ -514,7 +534,12 @@ async function flowOnPlainMail(ctx) {
   return NEXT;
 }
 
-// 🎥 אחרי פגישה מוקלטת: "לפתוח משימות ✅" / "לא" על המשימות שהוצעו, ו"כן" / "לא" על שליחת הסיכום למשתתפים
+/** אחרי "לשלוח את הסיכום?" — מחזיר את הארגומנטים ל-‎out‎ */
+function afterSummary(reply, draft, result) {
+  return [reply, { draft: null }, { action: 'meeting_followup', status: 'ok', result: result.slice(0, 300) }];
+}
+
+// 🎥 אחרי פגישה מוקלטת: "תפתח אותן" (במילים — הבוט לא מציע) על המשימות, ו"כן" / "לא" על שליחת הסיכום למשתתפים
 async function flowOnMeetingTasks(ctx) {
   let { actor, dry, keep, out, state, t } = ctx;
   if (state.draft?.kind === 'meeting_summary_mail' && state.awaiting) {
@@ -523,23 +548,24 @@ async function flowOnMeetingTasks(ctx) {
       const reply = await MeetingFollowup.sendSummaryMail(actor, state.draft, { dry })
         .catch((err) => ({ error: err.message }));
       if (reply?.error) return out('לא הצלחתי לשלוח את הסיכום כרגע. נסו שוב בעוד כמה דקות 🙏', { draft: state.draft, awaiting: true }, { action: 'meeting_followup', status: 'error', result: `שליחת סיכום נכשלה: ${reply.error}`.slice(0, 300) });
-      return out(reply, { draft: null }, { action: 'meeting_followup', status: 'ok', result: `סיכום נשלח ל-${state.draft.to.length} משתתפים: ${state.draft.title}`.slice(0, 300) });
+      return out(...afterSummary(reply, state.draft, `סיכום נשלח ל-${state.draft.to.length} משתתפים: ${state.draft.title}`));
     }
     if (WaUi.NO.test(n) || CANCEL.test(t)) {
-      return out('בסדר, הסיכום לא נשלח 👍', { draft: null }, { action: 'meeting_followup', status: 'ok', result: `לא: סיכום למשתתפים של "${state.draft.title}"`.slice(0, 300) });
+      return out(...afterSummary('בסדר, הסיכום לא נשלח 👍', state.draft, `לא: סיכום למשתתפים של "${state.draft.title}"`));
     }
     keep.draft = null;
     state = { ...state, draft: null, awaiting: false };
   }
   if (state.draft?.kind === 'meeting_tasks' && state.awaiting) {
     const n = WaUi.normalize(t);
-    if (MeetingFollowup.isOpenButton(t) || WaUi.YES.test(n)) {
+    // רק כשהעובד מבקש במילים ("תפתח אותן") — הבוט לא מציע לפתוח משימות (16.11.26); ההצעות במשימון
+    if (MeetingFollowup.isOpenButton(t)) {
       if (!WaActions.allowed(actor, 'create_task')) return out('פתיחת משימות כבויה לך בוואטסאפ.', { draft: null }, { action: 'meeting_followup', status: 'denied', result: 'פתיחת משימות כבויה' });
       const reply = MeetingFollowup.openTasks(actor, state.draft, { createTask: hooks.createTask, taskLink, dry });
       return out(reply, { draft: null }, { action: 'meeting_followup', status: 'ok', result: `נפתחו ${state.draft.items.length} משימות מהפגישה "${state.draft.title}"`.slice(0, 300) });
     }
     // "רק 1 ו-3" — חלק מהמשימות
-    const picks = /^(?:רק\s+|לפתוח\s+(?:רק\s+)?)?([\d\s,ו\-]+)$/.exec(n);
+    const picks = /^(?:תפתח|לפתוח)\s+(?:רק\s+)?([\d\s,ו\-]+)$/.exec(n);
     if (picks) {
       const items = [...new Set((picks[1].match(/\d+/g) ?? []).map(Number))].map((i) => state.draft.items[i - 1]).filter(Boolean);
       if (items.length && WaActions.allowed(actor, 'create_task')) {
@@ -548,7 +574,7 @@ async function flowOnMeetingTasks(ctx) {
       }
     }
     if (WaUi.NO.test(n) || CANCEL.test(t)) {
-      return out('בסדר, לא נפתחו משימות 👍', { draft: null }, { action: 'meeting_followup', status: 'ok', result: `לא: משימות מ"${state.draft.title}"`.slice(0, 300) });
+      return out('בסדר 👍 ההצעות מחכות לך במשימון.', { draft: null }, { action: 'meeting_followup', status: 'ok', result: `לא: משימות מ"${state.draft.title}"`.slice(0, 300) });
     }
     // כל דבר אחר — נושא חדש; ההצעה לפתוח משימות יורדת
     keep.draft = null;
@@ -598,8 +624,14 @@ async function flowAlertNo({ actor, dry, out, state, t }) {
   return NEXT;
 }
 
+// "שלח" / "שלח את זה" / "שלח מייל. אל תוסיף מה שהצעת" על טיוטת מייל — אישור (סקירה 15.11: הטיוטה נוסחה שוב ולא נשלחה).
+// לא: "שלח מייל לדני" (בקשה חדשה), "שלח לו גם…" (תיקון)
+const SEND_NOW = /^(?:שלח|תשלח|תשלחי|שלחי|לשלוח)(?:\s+(?:את\s+)?(?:זה|אותו|אותה|ה?מייל|ה?תשובה|ה?הודעה))?(?:[\s.,!-]+(?:אל\s+תוסיף[^\n]{0,40}|בלי\s+(?:ה?תוספות|ה?הצעות|מה\s+שהצעת)[^\n]{0,20}|כמו\s+שה(?:וא|יא)|ככה|עכשיו))?[\s.!👍]*$/;
+const SEND_KINDS = ['email', 'mail_reply'];
+
 async function flowApproval({ actor, cancelYes, dry, isAbout, out, state, t }) {
-  const approval = state.awaiting && state.draft && (cancelYes || (YES.test(t)
+  const sendNow = SEND_KINDS.includes(state.draft?.kind) && SEND_NOW.test(t);
+  const approval = state.awaiting && state.draft && (cancelYes || sendNow || (YES.test(t)
     && (!switchCancels() || t.split(/\s+/).filter(Boolean).length <= 3 || await isAbout())));
   if (approval) {
     const r = await confirmPending(actor, state.draft, dry);
@@ -675,13 +707,68 @@ async function flowEmailEdit({ actor, dry, kind, out, state, t }) {
   return NEXT;
 }
 
+/*
+ * 📬 "מיילים לענות" — מייל אחרי מייל, תמיד עם הצעת תשובה (סעיף 3.1 בתוכנית). פתיחה: הכפתור בתפריט / "תעבור איתי על
+ * המיילים". במעבר: *כן* שולח והבא · *לא* — לא עונים (יורד, בלי תזכורת) והבא · 🏁 סיום — עוצרים · טקסט חופשי — ‎NEXT‎,
+ * ותיקון הטיוטה (‎flowMailReplyEdit‎) שומר עליה את סימן המעבר.
+ */
+const MAIL_WALK_TTL = 12 * 60 * 60 * 1000;
+async function flowMailWalk({ actor, dry, out, state, t }) {
+  const meta = (result, extra = {}) => ({ action: 'mail_walk', status: 'ok', result: String(result).slice(0, 300), ...extra });
+  const show = (prefix, r) => (r.done
+    ? out([prefix, mailWalkEnd(r.w)].filter(Boolean).join(MSG_BREAK), { draft: null, awaiting: false, mailWalk: null }, meta('המעבר על המיילים הסתיים'))
+    : out([prefix, r.text].filter(Boolean).join(MSG_BREAK), { draft: r.draft, awaiting: true, mailWalk: r.w }, meta(`מייל ${r.w.i + 1}/${r.w.ids.length}`, { buttons: r.buttons })));
+
+  if (isMailWalkStart(t) && WaActions.allowed(actor, 'mail_insights')) {
+    if (dry) return out('(בדיקה) הייתי עובר איתך על המיילים שמחכים לתשובה.', {}, meta('בדיקה'));
+    const ids = MailPush.toAnswer(actor.id).map((r) => r.id);
+    if (!ids.length) return out('📬 אין מיילים שמחכים לתשובה ממך 🎉', { mailWalk: null }, meta('אין מיילים'));
+    const w = { ids, i: 0, sent: 0, dropped: 0, at: D.nowIso() };
+    return show(mailWalkIntro(ids.length), await mailWalkAt(actor.id, w, 0));
+  }
+
+  const w = state.mailWalk;
+  if (!w || !state.awaiting || !state.draft?.walk || Date.now() - Date.parse(w.at) > MAIL_WALK_TTL) return NEXT;
+  const n = WaUi.normalize(t);
+  if (WaUi.sameLabel(t, MAIL_WALK_BTN.stop) || /^(?:🏁\s*)?(?:סיום|לסיים|סיימנו|עצור|די|מספיק)[.!]?$/.test(n)) {
+    const left = MailPush.toAnswer(actor.id).length;
+    return out(`🏁 עצרנו.${left ? ` ${left === 1 ? 'נשאר מייל אחד' : `נשארו ${left} מיילים`} — *מיילים לענות* כדי להמשיך.` : ''}`, { draft: null, awaiting: false, mailWalk: null }, meta('עצר את המעבר'));
+  }
+  const d = state.draft;
+  if (d.kind === 'mail_walk_skip') {
+    if (WaUi.sameLabel(t, MAIL_WALK_BTN.next) || WaUi.YES.test(n) || /^(?:הבא|דלג|המשך)$/.test(n)) return show('', await mailWalkAt(actor.id, w, w.i + 1));
+    return NEXT;
+  }
+  if (d.kind !== 'mail_reply') return NEXT;
+  if (WaUi.sameLabel(t, MAIL_WALK_BTN.send) || WaUi.YES.test(n)) {
+    const c = await confirmPending(actor, d, dry);
+    const ok = c.status === 'ok';
+    return show(c.reply, await mailWalkAt(actor.id, { ...w, sent: w.sent + (ok ? 1 : 0) }, w.i + 1));
+  }
+  if (WaUi.sameLabel(t, MAIL_WALK_BTN.no) || WaUi.NO.test(n)) {
+    if (!dry) {
+      for (const id of d.suggestionIds ?? []) MailActions._internal.setRemind(id, { closed: 'no_reply', at: D.nowIso() });
+      closeAlerted(actor.id, d.suggestionIds ?? [], 'skipped');
+    }
+    return show('👌 לא עונים על זה — ירד מהרשימה.', await mailWalkAt(actor.id, { ...w, dropped: w.dropped + 1 }, w.i + 1));
+  }
+  return NEXT;
+}
+
 // טיוטת תשובה למייל שממתינה: כל הודעה שאינה "כן" או "ביטול" היא תיקון
+// "לא" על טיוטת תשובה למייל — לא עונים (17.11: "לא ❌" שלוש פעמים ניסח את התשובה מחדש). "לא, תכתוב ש…" — תיקון
+const NO_REPLY = /^(?:לא|לא\s+תודה|ממש\s+לא|לא\s+(?:צריך|לענות|לשלוח)|אל\s+תענה|אל\s+תשלח|no|👎|❌)(?:\s*❌)?[\s.!]*$/i;
+
 async function flowMailReplyEdit({ actor, dry, kind, out, replyText, state, t }) {
+  if (kind === 'mail_reply' && state.awaiting && NO_REPLY.test(t)) {
+    if (!dry && state.draft.suggestionIds?.length) closeAlerted(actor.id, state.draft.suggestionIds, 'skipped');
+    return out('בסדר, לא עונים 👍', { draft: null }, { action: 'mail_insights', status: 'ok', result: `לא עונים: ${state.draft.reply?.subject ?? ''}`.slice(0, 300) });
+  }
   if (kind === 'mail_reply' && !dry && state.awaiting && Claude.isEnabled() && WaActions.allowed(actor, 'mail_insights')) {
     const prev = state.draft.reply;
     const reply = { ...await MailInsights.draftReply(actor.id, prev.gmailId, prev.request, { feedback: t, previous: prev, box: prev.box ?? null }), signature: prev.signature, noSignature: prev.noSignature ?? null };
     // מהפנייה היזומה — ההצעות שעליהן נשאלה השאלה נשארות קשורות לטיוטה
-    return out(replyText(reply), { draft: { ...state.draft, kind: 'mail_reply', reply }, awaiting: true }, { action: 'mail_insights', status: 'ok', result: `תיקון תשובה: ${t.slice(0, 200)}`, buttons: state.draft.alert ? [WaUi.BTN.yes, WaUi.BTN.no] : undefined });
+    return out(replyText(reply), { draft: { ...state.draft, kind: 'mail_reply', reply, offeredAt: D.nowIso() }, awaiting: true }, { action: 'mail_insights', status: 'ok', result: `תיקון תשובה: ${t.slice(0, 200)}`, buttons: state.draft.buttons ?? (state.draft.alert ? [WaUi.BTN.yes, WaUi.BTN.no] : undefined) });
   }
   return NEXT;
 }
@@ -806,8 +893,11 @@ async function flowIntentMenu({ firstToday, menuReply, u }) {
 
 // הודעה ראשונה ביום שהיא שיחה של ממש (שאלה, הקלטה, בקשה שאין לה פעולה) — עונים עליה בלבד; ה-Today לא
 // מתערבב בתשובה (10.11.26, ישראל: "למה התערבב המייל ללייסנטק עם כל היומיום שלי"). רק ברכה קצרה פותחת את ה-Today
+// ברכה — "היי", "בוקר טוב", "מה נשמע" (ואחריה אולי שם). לא כל שלוש מילים: "שעה 15.00" אינה ברכה (באג 15.11.26)
+const GREETING = /^(?:היי+|הי|הלו|שלום|אהלן|בוקר\s+טוב|צהריים\s+טובים|ערב\s+טוב|מה\s+נשמע|מה\s+קורה|מה\s+המצב|מה\s+שלומך)(?:[\s,!.?👋🙂]+\S+)?[\s,!.?👋🙂]*$/;
+
 async function flowGreeting({ actor, firstToday, t, todayReply, u, user }) {
-  const smallTalk = !u.reply || t.split(/\s+/).length <= 3;
+  const smallTalk = !u.reply || GREETING.test(t.trim());
   if (u.intent === 'menu' || (u.intent === 'other' && firstToday && smallTalk)) {
     if (WaActions.allowed(actor, 'today') || menuOptions(actor).length) {
       const hello = firstToday ? `${localDate().time < '12:00' ? 'בוקר טוב' : 'שלום'} ${firstName(user.full_name)} 👋` : '';
@@ -819,6 +909,8 @@ async function flowGreeting({ actor, firstToday, t, todayReply, u, user }) {
 
 async function flowIntentOther({ actor, out, u }) {
   if (u.intent === 'other') {
+    // יש תשובה — רק היא, בלי התפריט (באג 15.11.26, ישראל: "למה אני מקבל את כל התפריט עוד הפעם ועוד הפעם?")
+    if (u.reply) return out(u.reply, {}, { action: 'other', status: 'unclear', result: 'לא זוהתה פעולה — ענה בלי התפריט' });
     const options = menuOptions(actor);
     if (options.length) {
       return out([u.reply, menuText(options)].filter(Boolean).join('\n\n'), { draft: { kind: 'menu', options: options.map((o) => o.key) } },
@@ -843,6 +935,42 @@ function instinctSend({ user, actor, dry, out, text, explicit = false }) {
   return out('', {}, { action: 'instinct', status: 'ok', result: `${what} — ברקע`, react: question ? '📤' : '⏳' });
 }
 
+/**
+ * 🤖 מי בפיילוט — רק מנהל מערכת: "אינסטינקט רק לי" (הוא בלבד), "תפתח את אינסטינקט לכולם", "תחזיר את אינסטינקט לפיילוט"
+ * (חוזר למי שברשימה). לפני "אינסטינקט, …" — אחרת "אינסטינקט רק לי" היה יוצא אליו כבקשה.
+ */
+async function flowInstinctPilot({ actor, dry, out, t }) {
+  // גם בשגיאת כתיב ("האינסטקטנט") ו"לכל העובדים" (באג 15.11.26: לא זוהה, ויצא לאינסטינקט כבקשה)
+  const NAME = '(?:ה)?(?:אינסט[א-ת]*|instinct)';
+  const only = new RegExp(`^${NAME}\\s+רק\\s+(?:לי|אצלי|בשבילי)[.!]?$`, 'i').test(t);
+  const open = new RegExp(`^(?:תפתח|פתח|תפתחי)\\s+(?:את\\s+)?${NAME}\\s+(?:לכולם|לכל\\s+(?:ה)?עובדים|לכל\\s+החברה|לכל\\s+המשתמשים)[.!]?$`, 'i').test(t);
+  const back = new RegExp(`^(?:תחזיר|החזר|תחזירי)\\s+(?:את\\s+)?${NAME}\\s+לפיילוט[.!]?$`, 'i').test(t);
+  if (!only && !open && !back) return NEXT;
+  if (!WaActions.inPilot(actor)) return out('רק מנהל מערכת יכול לשנות את זה.', {}, { action: 'instinct', status: 'denied', result: 'פיילוט אינסטינקט — אין הרשאה' });
+  if (!dry) {
+    if (only) { D.setSetting('instinct_users', [actor.id]); D.setSetting('instinct_open', false); }
+    if (open) D.setSetting('instinct_open', true);
+    if (back) D.setSetting('instinct_open', false);
+  }
+  const reply = only ? '✅ אינסטינקט פתוח עכשיו רק לך.' : open ? '✅ אינסטינקט פתוח עכשיו לכל העובדים.' : '✅ אינסטינקט חזר לפיילוט — רק למי שבו.';
+  return out(reply, {}, { action: 'instinct', status: 'ok', result: `פיילוט אינסטינקט: ${only ? 'רק ל' + actor.name : open ? 'לכולם' : 'חזר לפיילוט'}` });
+}
+
+/**
+ * מודעה של הבוט מחכה (סגנון / "מאשר"), והעובד מבקש אותה מאינסטינקט ("תעצב באינסטינקט") — המודעה עוברת אליו עם
+ * התוכן שכבר נאסף, והטיוטה שלנו יורדת. בלי זה "תעצב באינסטקט" היה תיקון למודעה, והבוט עיצב אותה שוב (באג 15.11.26).
+ */
+async function flowNoticeToInstinct({ user, actor, dry, keep, out, state, t }) {
+  const d = state.draft;
+  if (!state.awaiting || d?.kind !== 'notice' || d.type !== 'notice' || !Instinct.MENTION.test(t) || !Instinct.allowed(actor)) return NEXT;
+  const extra = t.replace(/\S*(?:אינסט[א-ת]*|instinct)\S*/gi, '').replace(/^\s*(?:ת?עצב(?:י)?|תעשה|תכין|דרך|את\s+זה|אותה)\s*/g, '').trim();
+  const style = d.style === 'minimal' ? ' בסגנון מינימלי' : d.style === 'designed' ? ' מעוצבת' : '';
+  const text = [`תעצב לי מודעה${style}: ${d.request}`, extra.split(/\s+/).length > 1 ? extra : ''].filter(Boolean).join('\n');
+  keep.draft = null;
+  keep.awaiting = false;
+  return instinctSend({ user, actor, dry, out, text, explicit: true });
+}
+
 async function flowInstinctExplicit({ user, actor, dry, out, t }) {
   if (!Instinct.TRIGGER.test(t) || !Instinct.allowed(actor)) return NEXT;
   const text = t.replace(Instinct.TRIGGER, '').trim();
@@ -850,8 +978,30 @@ async function flowInstinctExplicit({ user, actor, dry, out, t }) {
   return instinctSend({ user, actor, dry, out, text, explicit: true });
 }
 
+/**
+ * 🤖 אינסטינקט שאל בסוף התשובה שלו ("…להכין כך?") — מה שהעובד כותב עכשיו הוא התשובה, ויוצא אליו בציטוט של השאלה, בלי
+ * לעבור בהבנת הבקשה (באג 17.11.26: "כן, אבל על העמוד השני" לא הגיע לאינסטינקט). לא כשהבוט עצמו שאל משהו אחר מאז,
+ * ולא "ביטול" / "תפריט".
+ */
+const NOT_A_REPLY = /^(?:ביטול|בטל|תפריט|עזרה|🗑️|👎)\s*$/;
+async function flowInstinctReply({ user, actor, dry, out, state, t }) {
+  if (!user || state.awaiting || NOT_A_REPLY.test(t) || !Instinct.allowed(actor)) return NEXT;
+  const asked = Instinct.awaitingReply(user.id);
+  if (!asked) return NEXT;
+  if (dry) return out(`🤖 (בדיקה) תשובה לאינסטינקט: "${Instinct.redact(t)}"`, {}, { action: 'instinct', status: 'ok', result: 'תשובה לשאלה (בדיקה — לא נשלח)' });
+  Instinct.request(user, t, { question: asked, ref: currentMsg.get(actor.id) });
+  return out('', {}, { action: 'instinct', status: 'ok', result: 'תשובה לשאלה שבסוף התשובה של אינסטינקט — ברקע', react: '📤' });
+}
+
+/** בקשה שמדברת על הקובץ ששלחו ("תתקן את המסמך", "תעשה אותה כהה") */
+const FILE_REF = /מסמך|קובץ|תמונ|pdf|צילום|סריקה|הזה|הזאת|אותו|אותה/i;
+
 async function flowInstinct({ user, actor, dry, out, t, u }) {
-  if (u.intent !== 'instinct' || !Instinct.allowed(actor)) return NEXT;
+  if (!Instinct.allowed(actor)) return NEXT;
+  // 📎 קובץ שנשלח עכשיו, והבקשה עליו — לאינסטינקט גם כשה-AI לא זיהה ("אחר"): אצלנו אין מה לעשות בקובץ, והתשובה
+  // "אין לי גישה למסמך" שגויה (באג 17.11.26 — גם עם שורת הקובץ בפרומפט, ה-AI ענה כך כשבשיחה כבר נאמר שאין גישה)
+  const aboutFile = u.intent === 'other' && FILE_REF.test(t) && Boolean(Instinct.peekFile(user.id));
+  if (u.intent !== 'instinct' && !aboutFile) return NEXT;
   return instinctSend({ user, actor, dry, out, text: u.request || t });
 }
 
@@ -875,5 +1025,5 @@ const switchCancels = () => Boolean(D.getSetting('wa_topic_switch_cancels', true
 const DRAFT_ONLY = /(?:(?:בלי|לא\s+משנה|אין\s+לי\s+(?:את\s+)?|עזוב(?:\s+את)?)\s*ה?(?:כתובת|מייל|נמען)|רק\s+ת?(?:נסח|כתוב)|ת?נסח\s+(?:לי\s+)?(?:רק\s+)?(?:את\s+)?ה?(?:מלל|טקסט|נוסח))/;
 
 module.exports = {
-  DRAFT_ONLY, flowAgentsList, flowAlertNo, flowApproval, flowBusinessCommand, flowCancel, flowClosureCommand, flowEmailEdit, flowEmailPick, flowEmailSolve, flowEmailVia, flowFeaturesRequest, flowFormFillRequest, flowGreeting, flowInstinct, flowInstinctExplicit, flowIntentCancel, flowIntentDenied, flowIntentMenu, flowIntentOther, flowMailReplyEdit, flowMeetCoordRequest, flowMeetingAudioAnswer, flowMeetingAudioRequest, flowMeetingFollowupRequest, flowMeetingReminderRequest, flowMenuList, flowMenuPick, flowNoAi, flowNoticeRequest, flowOnClosureAddress, flowOnDayEvening, flowOnFormFill, flowOnGoodsStop, flowOnMailMuteSender, flowOnMailRemindOrGoods, flowOnMeetCoord, flowOnMeetingTasks, flowOnPaceOffer, flowOnPlainMail, flowOnReminder, flowOnRfq, flowOnSentFollowup, flowOnThreadAdd, flowRemindersRequest, flowReplyAsk, flowRfqRequest, flowRfqSummary, flowSuggestionCommand, flowTranslateRequest, flowWalk, NEXT, switchCancels
+  SEND_NOW, DRAFT_ONLY, flowAgentsList, flowAlertNo, flowApproval, flowBusinessCommand, flowCancel, flowClosureCommand, flowEmailEdit, flowEmailPick, flowEmailSolve, flowEmailVia, flowFeaturesRequest, flowFormFillRequest, flowGreeting, flowInstinct, flowInstinctExplicit, flowInstinctReply, flowInstinctPilot, flowNoticeToInstinct, flowIntentCancel, flowIntentDenied, flowIntentMenu, flowIntentOther, flowMailReplyEdit, flowMailWalk, flowMeetCoordRequest, flowMeetingAudioAnswer, flowMeetingAudioRequest, flowMeetingAudioStatus, flowMeetingFollowupRequest, flowMeetingReminderRequest, flowMenuList, flowMenuPick, flowNoAi, flowNoticeRequest, flowOnClosureAddress, flowOnDayEvening, flowOnFormFill, flowOnGoodsStop, flowOnMailMuteSender, flowOnMailRemindOrGoods, flowOnMeetCoord, flowOnMeetingTasks, flowOnPaceOffer, flowOnPlainMail, flowOnReminder, flowOnRfq, flowOnSentFollowup, flowOnThreadAdd, flowRemindersRequest, flowReplyAsk, flowRfqRequest, flowRfqSummary, flowSuggestionCommand, flowTranslateRequest, flowWalk, NEXT, switchCancels
 };

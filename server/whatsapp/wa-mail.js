@@ -103,6 +103,9 @@ function solveText(r) {
 }
 
 
+/** "לכולם" / "השב לכולם" / "עם כולם בהעתק" — מי שהיה בשרשור נכנס להעתק */
+const TO_ALL = /(?:^|[\s,])(?:ל|את\s+|עם\s+)?כולם(?:[\s,.!]|$)|השב\s+לכולם|לכל\s+(?:המשתתפים|מי\s+שבשרשור|השרשור)/;
+
 /** טיוטה (או תיקון שלה) — עם ההתכתבות האחרונה עם הנמען, להצעות מה להוסיף */
 async function draftEmail(actor, contact, instruction, { feedback = '', previous = null, dry = false, channel = null, solve = null } = {}) {
   const owner = D.get('SELECT id, full_name, email FROM users WHERE id = ?', actor.id);
@@ -128,8 +131,13 @@ async function draftEmail(actor, contact, instruction, { feedback = '', previous
   if (replyThread) d.subject = `Re: ${replyThread.subject}`;
   const resolved = resolveCc(actor, d.cc_names, { previous: previous?.cc ?? [], contact });
   const { ccAsk } = resolved;
-  // תשובה בשרשור — מי שכבר היה בו נשאר בהעתק (כמו "השב לכולם")
-  const cc = picked ? [...resolved.cc, ...MailThread.threadCc(actor.id, picked, contact.email).filter((p) => !resolved.cc.some((c) => c.email === p.email))] : resolved.cc;
+  /*
+   * תשובה בשרשור — מי שהיה בו נכנס להעתק רק כשביקשו ("לכולם", "השב לכולם"). בלי זה — רק הנמען, והטיוטה מציינת
+   * כמה עוד היו בשרשור (סקירה 18.11: הודעה קצרה לאדם אחד יצאה עם כל ההעתק, ועובדים הורידו אותו או ביטלו)
+   */
+  const threadPeople = picked ? MailThread.threadCc(actor.id, picked, contact.email) : replyThread ? previous?.threadPeople ?? [] : [];
+  const toAll = TO_ALL.test(`${previous ? '' : instruction} ${feedback}`);
+  const cc = toAll ? [...resolved.cc, ...threadPeople.filter((p) => !resolved.cc.some((c) => c.email === p.email))] : resolved.cc;
   const suggestions = (Array.isArray(d.suggestions) ? d.suggestions : []).map((x) => String(x).trim()).filter(Boolean).slice(0, 4);
   return {
     kind: 'email',
@@ -153,6 +161,7 @@ async function draftEmail(actor, contact, instruction, { feedback = '', previous
     cc: via === 'email' ? cc : [],
     ccAsk: via === 'email' ? ccAsk : [],
     replyThread: via === 'email' ? replyThread : null,
+    threadPeople: via === 'email' ? threadPeople : [],
     ...(via === 'email' ? await signatureFields(actor.id) : { signature: false, noSignature: null })
   };
 }
@@ -252,6 +261,9 @@ function createFromDraft(actor, original) {
 }
 
 
+/** תוקף הצעת תשובה למייל: אחרי שעתיים "כן" כבר לא שולח (#171) */
+const MAIL_REPLY_TTL_MS = 2 * 60 * 60 * 1000;
+
 /** ביצוע מה שהעובד אישר ב"כן". בבדיקה ממסך הניהול (‎dry‎) — רק מתארים */
 async function confirmPending(actor, pending, dry) {
   const kind = pending.kind ?? 'task';
@@ -277,6 +289,11 @@ async function confirmPending(actor, pending, dry) {
     }
     if (kind === 'mail_reply') {
       const r = pending.reply;
+      // ⏳ הצעת תשובה ישנה (יותר משעתיים) — "כן" כבר לא שולח (#171). ההצעה נשארת ב"ממתין לאישורך"
+      const offered = Date.parse(pending.offeredAt ?? pending.askedAt ?? '') || 0;
+      if (!dry && Date.now() - offered > MAIL_REPLY_TTL_MS) {
+        return { reply: `⏳ הצעת התשובה ל${r?.toName || r?.to || 'מייל'} ישנה מדי (יותר משעתיים), אז לא שלחתי. אם עדיין צריך לענות — בקשו ממני לענות על המייל, ואכין נוסח מעודכן.`, action, status: 'ok', result: `הצעת תשובה פגה — לא נשלחה: ${r?.subject ?? ''}` };
+      }
       if (!dry) await MailInsights.sendReply(actor.id, r);
       // מהפנייה היזומה: ההצעה מהמייל נענתה — יורדת מ"ממתין לאישורך"
       if (!dry && pending.suggestionIds?.length) closeAlerted(actor.id, pending.suggestionIds, 'replied');
@@ -659,7 +676,7 @@ async function mailAlertFor(userId) {
     return;
   }
   const text = MailPush.replyAlert(head, reply);
-  const draft = { kind: 'mail_reply', reply, alert: true, suggestionIds: ids, subject: head.subject };
+  const draft = { kind: 'mail_reply', reply, alert: true, suggestionIds: ids, subject: head.subject, offeredAt: D.nowIso() };
   try {
     await sendButtons(chatId, text, [WaUi.BTN.yes, WaUi.BTN.no], { owner: 'chat', draft, awaiting: true });
     rememberBot(userId, text);
@@ -672,6 +689,77 @@ async function mailAlertFor(userId) {
     log({ channel: 'summary', chatId, userId, who: u.full_name, action: 'mail_alert', status: 'error', result: err.message });
   }
 }
+
+
+/**
+ * 💡 הצעת תשובה למייל שמחכה (מהצעה ב-‎ai_suggestions‎) — תמיד עם נוסח: יש שמור — משלימים אותו לשליחה; אין — מכינים עכשיו
+ * ושומרים, כדי שלא יוכן פעמיים. משמש את "זכרת?" ואת המעבר על המיילים שמחכים.
+ * מחזיר ‎{ text, draft, buttons }‎, או ‎{ error }‎ — ‎'cannot_send'‎ (אין הרשאת שליחה מהתיבה) / ‎'no_reply'‎ (לא הוכנה הצעה).
+ */
+async function replyOffer(userId, row) {
+  const d = parseJson(row.data, {});
+  const box = d.reply?.box ?? row.box ?? 0;
+  if (!Gmail.canSend(Gmail.handle(userId, box))) return { error: 'cannot_send' };
+  let reply = MailPush.concreteReply(d.reply) ? d.reply : null;
+  if (!reply) {
+    const r = await MailInsights.suggestReply(userId, row.gmail_id, { box });
+    if (!r?.body) return { error: 'no_reply' };
+    reply = { ...r, gmailId: row.gmail_id, box };
+    D.run('UPDATE ai_suggestions SET data = ? WHERE id = ?', JSON.stringify({ ...d, reply }), row.id);
+  }
+  reply = await MailInsights.completeReply(userId, reply);
+  if (!reply?.body) return { error: 'no_reply' };
+  return {
+    text: MailPush.replyAlert({ ...row, d }, reply),
+    draft: { kind: 'mail_reply', reply, suggestionIds: [row.id], subject: row.subject, buttons: [WaUi.BTN.yes, WaUi.BTN.no], offeredAt: D.nowIso() },
+    buttons: [WaUi.BTN.yes, WaUi.BTN.no]
+  };
+}
+
+/*
+ * 📬 "מיילים לענות" — מעבר מייל-אחרי-מייל, תמיד עם הצעת תשובה (הוחלט 15.11.26,
+ * "תוכנית — חלוקת תפקידים בוט ומשימון.md" סעיף 3.1). הודעת פתיחה, ואז מייל: *כן* שולח, *לא* מוריד, טקסט חופשי מתקן,
+ * 🏁 סיום עוצר. אחרי כל תשובה — המייל הבא. הזרימה עצמה: ‎flowMailWalk‎ ב-‎wa-flows.js‎.
+ */
+const MAIL_WALK_BTN = Object.freeze({ send: 'כן, לשלוח ✅', no: 'לא ❌', stop: '🏁 סיום', next: 'הבא ⏭️' });
+const MAIL_WALK_START = /^(?:\d+\s+)?(?:מיילים|מייל)\s+לענות$|^לענות\s+(?:על|ל)\s*(?:ה)?מיילים$|^(?:תעבור|נעבור|לעבור|בוא\s+נעבור)\s+(?:איתי\s+|יחד\s+)?על\s+(?:ה)?מיילים(?:\s+שמחכים(?:\s+לי)?)?$/;
+const isMailWalkStart = (text) => MAIL_WALK_START.test(WaUi.normalize(text).replace(/^📬\s*/u, '').replace(/[.!?]+$/, '').trim());
+
+function mailWalkIntro(n) {
+  return [
+    `📬 *יש לך ${n === 1 ? 'מייל אחד שמחכה' : `${n} מיילים שמחכים`} לתשובה ממך.*`,
+    n === 1 ? 'אכין לו תשובה:' : 'נעבור עליהם אחד-אחד, ולכל מייל אכין תשובה.',
+    '*כן* 👍 — נשלחת מה-Gmail שלך · *לא* 👎 — עוברים לבא · אפשר גם לכתוב מה לשנות.'
+  ].join('\n');
+}
+
+/**
+ * המייל הבא במעבר, מ-‎from‎ והלאה — רק מה שעדיין מחכה (מה שנענה בינתיים, גם ב-Gmail, יורד מהרשימה).
+ * מחזיר ‎{ w, text, draft, buttons }‎, או ‎{ w, done: true }‎ כשנגמר.
+ */
+async function mailWalkAt(userId, w, from) {
+  const waiting = new Map(MailPush.toAnswer(userId).map((r) => [r.id, r]));
+  for (let i = from; i < w.ids.length; i++) {
+    const row = waiting.get(w.ids[i]);
+    if (!row) continue;
+    const pos = `*${i + 1} מתוך ${w.ids.length}*`;
+    // בזמן שהעובד קורא — מכינים כבר את התשובה לבא (נשמרת בהצעה), כדי שלא יחכה
+    const nextId = w.ids.slice(i + 1).find((id) => waiting.has(id));
+    if (nextId) setImmediate(() => replyOffer(userId, waiting.get(nextId)).catch(() => {}));
+    const o = await replyOffer(userId, row).catch((err) => ({ error: err.message }));
+    const nw = { ...w, i, at: D.nowIso() };
+    if (o.error) {
+      const why = o.error === 'cannot_send' ? 'אין לי הרשאה לשלוח מהתיבה הזו (אפשר לחבר מחדש ב"🔗 חיבור Google" במשימון).' : 'לא הצלחתי להכין תשובה למייל הזה — אפשר לענות ישירות ב-Gmail.';
+      return { w: nw, text: `${pos} · 📧 *${oneLine(row.subject, 120)}* — ${row.from_name || row.from_email}\n\n⚠️ ${why}`,
+        draft: { kind: 'mail_walk_skip', walk: true }, buttons: [MAIL_WALK_BTN.next, MAIL_WALK_BTN.stop] };
+    }
+    const buttons = [MAIL_WALK_BTN.send, MAIL_WALK_BTN.no, MAIL_WALK_BTN.stop];
+    return { w: nw, text: `${pos}\n${o.text}`, draft: { ...o.draft, walk: true, buttons }, buttons };
+  }
+  return { w: { ...w, i: w.ids.length }, done: true };
+}
+
+const mailWalkEnd = (w) => `🏁 עברנו על כולם 👏${w.sent || w.dropped ? ` — ${[w.sent ? `נשלחו ${w.sent}` : null, w.dropped ? `ירדו ${w.dropped}` : null].filter(Boolean).join(', ')}` : ''}.`;
 
 
 async function mailAlerts() {
@@ -798,5 +886,5 @@ async function sendPlainMail(actor, d, { dry = false } = {}) {
 
 module.exports = {
   sendPlainMail,
-  businessCommand, closeAlerted, closureDecision, confirmPending, contactOf, createFromDraft, draftEmail, findRecipients, mailActionAlerts, mailAlertFor, mailAlerts, parseThreadAdd, resolveCc, solveText, startGoodsFromMail, suggestionDecision, suggestionFeedback, threadAddText, VIA_EMAIL, VIA_MESIMON
+  businessCommand, closeAlerted, closureDecision, confirmPending, contactOf, createFromDraft, draftEmail, findRecipients, mailActionAlerts, mailAlertFor, mailAlerts, parseThreadAdd, replyOffer, MAIL_WALK_BTN, isMailWalkStart, mailWalkIntro, mailWalkAt, mailWalkEnd, resolveCc, solveText, startGoodsFromMail, suggestionDecision, suggestionFeedback, threadAddText, VIA_EMAIL, VIA_MESIMON
 };

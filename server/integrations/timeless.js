@@ -737,6 +737,34 @@ const org = {
     const body = await rawCall(token, `/documents/${encodeURIComponent(docId)}`, { format: 'markdown' }, { fresh: true });
     return typeof body.content === 'string' ? body.content : '';
   },
+  /**
+   * העלאת הקלטה (‎PUT /meetings/upload‎) — Timeless מתמלל ומסכם, ומודיע ב-webhook כשמוכן.
+   * מחזיר את מזהה הפגישה החדשה (‎mtg_…‎). הקלטת פגישה ארוכה מוואטסאפ (‎meetings/meeting-audio.js‎).
+   */
+  async upload(token, buf, mime, { title = '', language = 'he' } = {}) {
+    const url = new URL(`${BASE_URL}/meetings/upload`);
+    if (title) url.searchParams.set('title', String(title).slice(0, 500));
+    if (language) url.searchParams.set('language', language);
+    let res;
+    try {
+      res = await fetch(url, {
+        method: 'PUT',
+        headers: { Authorization: `Bearer ${token}`, Accept: 'application/json', 'content-type': String(mime || 'audio/ogg').split(';')[0].trim() },
+        body: buf,
+        signal: AbortSignal.timeout(5 * 60000)
+      });
+    } catch (err) {
+      throw apiError(`העלאת ההקלטה ל-Timeless נכשלה: ${err.message}`, { retryable: true });
+    }
+    const text = await res.text().catch(() => '');
+    let body = {};
+    try { body = JSON.parse(text); } catch { /* ריק */ }
+    syncFromHeaders(tokenKey(token), res.headers);
+    if (!res.ok) throw apiError(`Timeless לא קיבל את ההקלטה (${res.status})${body?.error?.message ? `: ${body.error.message}` : ''}`, { status: res.status, retryable: res.status === 429 || res.status >= 500 });
+    const id = body.id ?? body.data?.id;
+    if (!id) throw apiError('Timeless לא החזיר מזהה פגישה להקלטה שהועלתה');
+    return String(id);
+  },
   /** ‎webhook‎ — Timeless מודיע כשתמליל / סיכום מוכן. מחזיר ‎{ id, secret }‎ (הסוד מגיע רק עכשיו) */
   async createWebhook(token, url, events) {
     const res = await fetch(`${BASE_URL}/webhooks`, {

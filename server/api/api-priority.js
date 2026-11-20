@@ -8,6 +8,7 @@
  *   • ‎POST /api/priority/settings/test‎ — בדיקת חיבור (קריאה בלבד).
  *   • ‎GET|PUT /api/priority/access‎  — מנהלי מערכת: מטריצת ההרשאות.
  *   • ‎GET  /api/priority/log‎       — יומן השינויים בהגדרות ובהרשאות.
+ *   • ‎GET|POST /api/priority/parts/:token‎ — 💬 בלי התחברות (האסימון מהמייל): מנהלת הרכש עונה לעובד על מק"טים לבנייה.
  *   • טור המיילים והגרירה (‎priority-docs.js‎): ‎/api/priority/inbox‎, ‎/api/priority/docs‎ — כל עובד, רק שלו.
  */
 const Settings = require('../priority').PrioritySettings;
@@ -15,6 +16,7 @@ const Access = require('../priority').PriorityAccess;
 const Docs = require('../priority').PriorityDocs;
 const Chain = require('../priority').PriorityChain;
 const Desk = require('../priority').PriorityDesk;
+const PdParts = require('../priority').PdParts;
 const Priority = require('../integrations').Priority;
 const { HttpError, badRequest, forbidden, readJson, sendJson, parseUrl } = require('../core').HttpKit;
 
@@ -37,6 +39,17 @@ const docErr = (err) => (err instanceof HttpError ? err : new HttpError(err?.sta
 const docs = async (fn) => { try { return await fn(); } catch (err) { throw docErr(err); } };
 
 function register(router) {
+  // 💬 מק"טים לבנייה — מנהלת הרכש עונה לעובד ("המק"ט כבר קיים"), מהקישור במייל. בלי התחברות — מוגן באסימון
+  router.get('/api/priority/parts/:token', async (req, res, ctx) => {
+    const v = PdParts.forBuyer(ctx.params.token);
+    if (!v) throw new HttpError(404, 'הקישור אינו תקין');
+    sendJson(res, 200, v);
+  });
+  router.post('/api/priority/parts/:token', async (req, res, ctx) => {
+    const b = await readJson(req);
+    sendJson(res, 200, await docs(() => PdParts.buyerAnswer(ctx.params.token, b)));
+  });
+
   router.get('/api/priority/me', async (req, res, ctx) => {
     const actor = userOnly(ctx);
     const a = Access.of({ id: actor.id, role: actor.role });

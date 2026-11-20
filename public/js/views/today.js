@@ -491,7 +491,8 @@ const TodayView = (() => {
    * Today במייל, משימה מהקלטה והפעלה בקול, ובחירת יומנים — מסך אחד, מ"החשבון
    * שלי" ומכפתור ⚙ ב-Today.
    */
-  async function openSettings() {
+  /** ‎into‎ — בתוך לשונית ב"⚙ ההגדרות שלי" במקום חלון */
+  async function openSettings({ into = null } = {}) {
     let info;
     try {
       info = await API.get('/api/me/today-prefs');
@@ -499,7 +500,7 @@ const TodayView = (() => {
       return UI.error(err);
     }
     const body = el('div.today-settings');
-    const m = UI.modal({ title: '☀ Today והקלטה', body, size: 'wide' });
+    const m = UI.modalOrInline(into, { title: '☀ Today והקלטה', body, size: 'wide' });
 
     const save = async (patch) => {
       try {

@@ -942,6 +942,50 @@ async function setDemandDialog(company, prdno, lines) {
   try { await call(company, 'POST', k, { TEXT }); } catch { await call(company, 'PATCH', k, { TEXT }); }
 }
 
+/**
+ * הוספה לדו-שיח הפנימי של הדרישה (בלי למחוק את מה שכבר כתוב) — להחזרה לבדיקה ולתיקון.
+ * דו-שיח ריק — פריוריטי מחזיר 404, ואז זה הטקסט הראשון.
+ */
+async function appendDemandDialog(company, prdno, lines) {
+  const esc = (s) => String(s).replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+  const k = `${pdKey(prdno)}/INTERNALDIALOGTEXT_SUBFORM`;
+  let prev = '';
+  try { prev = String((await call(company, 'GET', k))?.TEXT ?? '').replace(/<style[\s\S]*?<\/style>/gi, ''); } catch (err) { if (err.status !== 404) throw err; }
+  const TEXT = `${prev}${lines.filter(Boolean).map((l) => `<p>${esc(l)}</p>`).join('')}`;
+  try { await call(company, 'PATCH', k, { TEXT }); } catch { await call(company, 'POST', k, { TEXT }); }
+}
+
+/** שורה בדרישה — עדכון (כמות, תיאור בפריט כללי) ומחיקה. ‎kline‎ — מספר השורה בדרישה */
+const setDemandLine = (company, prdno, kline, fields) => call(company, 'PATCH', `${pdKey(prdno)}/PRDITEMS_SUBFORM(KLINE=${Number(kline)})`, fields);
+const deleteDemandLine = (company, prdno, kline) => call(company, 'DELETE', `${pdKey(prdno)}/PRDITEMS_SUBFORM(KLINE=${Number(kline)})`);
+
+/**
+ * החזרה לבדיקה חוזרת: "פתיחה חוזרת" — כך עושה הרכש בפריוריטי (PD26000053, 15.11.26). מטיוטא פריוריטי חוסם
+ * ("מגבלות שהוגדרו בתהליך העבודה"); השגיאה עולה כמו שהיא.
+ */
+const REOPEN_STATUS = 'פתיחה חוזרת';
+const reopenDemand = (company, prdno) => call(company, 'PATCH', pdKey(prdno), { STATDES: REOPEN_STATUS });
+
+/**
+ * מי מוסמך להוציא הזמנות רכש — לפי פריוריטי. מסכי ההרשאות (‎EXECUSERPRIV‎, ‎MODULEUSERPRIV‎, ‎PRIVUSERS‎ ועוד) סגורים
+ * ל-API, ולכן: מי שפתח הזמנת רכש (‎PORDERS.OWNERLOGIN‎) בשנה האחרונה, בכל החברות. נשמר ל-6 שעות.
+ */
+let buyersCache = null;
+async function purchaseOrderOwners(companies) {
+  if (buyersCache && Date.now() - buyersCache.at < 6 * 3600000) return buyersCache.set;
+  const since = new Date(Date.now() - 365 * 86400000).toISOString().slice(0, 10);
+  const set = new Set();
+  for (const c of companies) {
+    try {
+      for (const r of rows(await call(c, 'GET', `PORDERS?$filter=${enc(`CURDATE ge ${since}T00:00:00Z and STATDES ne 'מבוטלת'`)}&$select=OWNERLOGIN&$top=2000`))) {
+        if (r.OWNERLOGIN) set.add(r.OWNERLOGIN);
+      }
+    } catch { /* חברה בלי גישה להזמנות — מדלגים */ }
+  }
+  buyersCache = { at: Date.now(), set };
+  return set;
+}
+
 /** נספח לדרישה — הצילום של הרשימה */
 async function attachDemand(company, prdno, { buf, mime, description }) {
   const uri = `data:${mime || 'image/jpeg'};base64,${buf.toString('base64')}`;
@@ -1041,6 +1085,6 @@ module.exports = {
   GENERAL, NO_VAT_CODE, TAX_CODES, PAY_TERMS, DEFAULT_PAY, payTerm, payLabel, payFromText, dueDate, projectWarehouses, warehouses, warehouseExists, defaultWarehouse, supplierHistory, recentLines, partByCode, findPartsByText, searchParts, generalCoding, warehouseOf, findSuppliers, supplierByCode, findReceiptByBooknum, getOrder, openOrders, findPartExact, lastSubchapter, projects, matchProjects, readReceipt,
   finalOrders, orderForNotice, demandInitiator, demandForNotice, projectManager, priorityUser,
   readDialog, createReceipt, addOrderLine, addFreeLine, setLineQty, setLineDes, setHeader, attach, deleteAttachment, setDialog, finalizeReceipt, cancelReceipt, receiptStatus, deleteLines,
-  PD_TYPES, demandCodes, recentDemandProjects, createDemand, addDemandLine, setDemand, submitDemand, isNoApproversError, readDemand, waitingDemands, nextSigner, cancelDemand, setDemandDialog, attachDemand, priorityUsers, budgetPairs,
+  PD_TYPES, demandCodes, recentDemandProjects, createDemand, addDemandLine, setDemand, submitDemand, isNoApproversError, readDemand, waitingDemands, nextSigner, cancelDemand, setDemandDialog, appendDemandDialog, setDemandLine, deleteDemandLine, reopenDemand, REOPEN_STATUS, purchaseOrderOwners, attachDemand, priorityUsers, budgetPairs,
   _call: call
 };

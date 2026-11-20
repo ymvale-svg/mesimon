@@ -33,6 +33,8 @@ async function sendSummaries() {
   for (const u of orgUsers().filter((x) => x.phone && workHours(x.id))) {
     const actor = Auth.loadActor('user', u.id);
     if (!actor || !WaActions.allowed(actor, 'summary')) continue;
+    // ☀️ סיכום בוקר אחד (הוחלט 15.11.26): מי שמקבל את סיכום הבוקר החדש (‎day_digest‎) — לא מקבל גם את הישן
+    if (WaActions.byKey('day_digest')?.enabled && WaActions.allowed(actor, 'day_digest') && D.userPrefs(u.id)?.botPrefs?.dayDigest !== false) continue;
     const tasks = hooks.tasks.myTasks(actor).filter(RANGES.today.pick);
     if (!tasks.length) continue;
     const text = formatList(`☀️ בוקר טוב ${firstName(u.full_name)}! להיום ${tasks.length === 1 ? 'משימה אחת' : `${tasks.length} משימות`}:`, tasks, { actor });
@@ -79,11 +81,19 @@ function staleQuestion(userId, st, text, msg = {}) {
 }
 
 
-/** לחיצה על כפתור, 👍 / 👎, או "מאשר" / "ביטול" לבד — תשובה לשאלה שממתינה, גם אחרי 15 דקות */
+/**
+ * לחיצה על כפתור, 👍 / 👎, או "מאשר" / "ביטול" לבד — תשובה לשאלה שממתינה, גם אחרי 15 דקות.
+ * 🔒 תגובה (Reaction) או ציטוט — רק כשהם על ההודעה של השאלה (‎msg.onQuestion‎, נקבע ב-‎handleDirect‎ מול
+ * ‎WaQuestions‎). 👍 על הודעה אחרת אינו תשובה (#171).
+ */
 function answerLike(text, msg = {}) {
+  if (msg.kind === 'reactionMessage' || (!msg.button && msg.replyTo?.id)) {
+    if (!msg.onQuestion) return false;
+    if (msg.kind === 'reactionMessage') return true;
+  }
   const n = WaUi.normalize(String(text ?? ''));
   const short = n.split(/\s+/).filter(Boolean).length <= 3;
-  return Boolean(msg.button || msg.kind === 'reactionMessage' || (n && short && (WaUi.YES.test(n) || WaUi.NO.test(n) || WaUi.CANCEL.test(n) || CANCEL.test(n))));
+  return Boolean(msg.button || (n && short && (WaUi.YES.test(n) || WaUi.NO.test(n) || WaUi.CANCEL.test(n) || CANCEL.test(n))));
 }
 
 
@@ -143,7 +153,8 @@ async function pushToUser(userId, { text, files = [], buttons = [], draft = null
     const parts = splitMessage(text);
     for (let i = 0; i < parts.length; i++) {
       if (i === parts.length - 1 && buttons.length && !busy) await sendButtons(chatId, parts[i], buttons, { owner: 'chat', draft, awaiting: Boolean(draft) });
-      else await sendText(chatId, parts[i]);
+      // שיחה אחרת פתוחה (‎busy‎) — בלי כפתורים, אבל השאלה נרשמת: 👍 עליה מגיע אליה, ולא לטיוטה הפתוחה (באג 17.11.26)
+      else await sendText(chatId, parts[i], i === parts.length - 1 && draft ? { owner: 'chat', draft, awaiting: true } : null);
     }
     rememberBot(userId, text);
     if (draft && !busy) saveChat(userId, { ...chatOf(userId), draft: { ...draft, askedAt: D.nowIso() }, awaiting: true });

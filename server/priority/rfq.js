@@ -17,6 +17,7 @@
  */
 const D = require('../core').Db;
 const W = require('../core').Workdays;
+const Access = require('./priority-access');
 const Gmail = require('../integrations').Gmail;
 const Mime = require('../core').Mime;
 const Mailer = require('../integrations').Mailer;
@@ -55,7 +56,11 @@ const vendorsOf = (id) => D.all('SELECT * FROM rfq_vendors WHERE rfq_id = ? ORDE
 
 const TRIGGER = /הצע(?:ת|ות)\s+מחיר|פני(?:ה|יה)\s+ל(?:ה)?ספקים/;
 const ACT = /(תפנה|תפני|לפנות|פנה|תבקש|תבקשי|לבקש|בקש|צריך|צריכה|תשיג|תשלח|לשלוח|שלח|תוציא|להוציא|תמצא|תחפש)/;
-const isRequest = (text) => TRIGGER.test(text) && ACT.test(text) && !/^(מה|איפה|האם|מתי)(?=[\s?!.,:;"'״׳-]|$)/.test(String(text).trim());
+// בקשה למשימה / תזכורת / קריאה — גם כשהיא מזכירה הצעת מחיר ("…ולפתוח קריאה על הצעת מחיר למחשבים"): לא פנייה לספקים.
+// "מסימה" — כך התמלול שומע לפעמים "משימה" (סקירה 16.11)
+const TASK_ASK = /(?:^|[\s,])(?:ה|ל|ב|ו)?(?:משימ|מסימ)(?:ה|ות)(?=[\s,.!?]|$)|(?:^|[\s,])ו?(?:ל|ת)?פתוח\s+(?:לי\s+)?קריאה|(?:^|[\s,])ש?ת?זכיר(?:י)?\s+לי/;
+const isRequest = (text) => TRIGGER.test(text) && ACT.test(text) && !TASK_ASK.test(String(text))
+  && !/^(מה|איפה|האם|מתי)(?=[\s?!.,:;"'״׳-]|$)/.test(String(text).trim());
 
 const ITEM_SCHEMA = {
   type: 'object',
@@ -320,6 +325,11 @@ async function answer(userId, d, text) {
     D.run("UPDATE rfq SET status = 'cancelled' WHERE id = ?", r.id);
     return { text: 'בסדר, ביטלתי — לא נשלח כלום 👍', draft: null, result: 'בוטל' };
   }
+  // בקשה למשימה באמצע הפנייה — העובד רצה משימה, לא פנייה לספקים: הפנייה (שעוד לא נשלחה) יורדת, וההודעה ממשיכה הלאה
+  if (TASK_ASK.test(t) && r.status !== 'sent') {
+    D.run("UPDATE rfq SET status = 'cancelled' WHERE id = ?", r.id);
+    return null;
+  }
   if (d.step === 'details') {
     if (/^(תמשיך|המשך|לא\s+משנה|אין|לא\s+יודע|דלג)$/.test(n)) return next(userId, r.id, { ...r.item, missing_question: '' });
     const it = await understand(t, r.item);
@@ -486,6 +496,12 @@ async function tick(io) {
   D.run("UPDATE rfq SET status = 'closed' WHERE status IN ('sent', 'summarized') AND sent_at < ?", new Date(now - KEEP_OPEN_DAYS * DAY).toISOString());
 }
 
+/** 🔐 מורשה לדרישת רכש (מטריצת ההרשאות) — רק לו מוצע [לדרישת רכש 🛒] */
+function mayDemand(userId) {
+  const u = D.get('SELECT id, role FROM users WHERE id = ?', userId);
+  return Boolean(u && Access.can({ type: 'user', id: u.id, role: u.role }, 'demand'));
+}
+
 /** הסיכום: הודעה + טבלת Excel */
 function summaryOf(id) {
   const r = rfqById(id);
@@ -511,7 +527,7 @@ function summaryOf(id) {
     '',
     'הטבלה המלאה בקובץ 👆'
   ].filter((l) => l !== null).join('\n');
-  const buttons = [silent.length ? BTN.remind : null, offers.length ? BTN.demand : null, BTN.done].filter(Boolean);
+  const buttons = [silent.length ? BTN.remind : null, offers.length && mayDemand(r.user_id) ? BTN.demand : null, BTN.done].filter(Boolean);
   return {
     text, buttons,
     files: [{ buf, fileName: `הצעות מחיר — ${String(r.item.item).replace(/[\\/:*?"<>|]/g, '').slice(0, 40)}.xlsx`, mime: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }],
@@ -544,6 +560,7 @@ async function answerDone(userId, d, text) {
     return { text: `📨 נשלחה תזכורת ל${n === 1 ? 'ספק אחד' : `-${n} ספקים`}. אעדכן כשיענו.`, draft: d, awaiting: true, buttons: [BTN.demand, BTN.done], result: `תזכורת ל-${n}` };
   }
   if (WaUi.sameLabel(t, BTN.demand) || /דרישת\s+רכש/.test(t)) {
+    if (!mayDemand(userId)) return { text: 'דרישת רכש לא פתוחה לך בבוט. אם צריך — פנו למנהל המערכת.', draft: null, result: 'לדרישת רכש — לא מורשה' };
     const offers = vendorsOf(r.id).filter((v) => v.status === 'replied' && v.offer?.total_number > 0).sort((a, b) => a.offer.total_number - b.offer.total_number);
     if (offers.length > 1 && !d.pick) {
       const labels = WaUi.labels(offers.slice(0, 3).map((v) => v.name.split(' · ')[0]));

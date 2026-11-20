@@ -165,7 +165,7 @@ test('userByPhone — ספק ועובד לא פעיל לא מזוהים', () => 
 
 test('chatOf / saveChat — שמירה וקריאה, היסטוריה מקוצרת ל-8', () => {
   const u = user();
-  assert.deepEqual(X.chatOf(u.id), { draft: null, awaiting: false, history: [], lastList: [], greetedOn: '', insights: [], suggestions: [], queue: [], walk: null });
+  assert.deepEqual(X.chatOf(u.id), { draft: null, awaiting: false, history: [], lastList: [], greetedOn: '', insights: [], suggestions: [], queue: [], walk: null, mailWalk: null });
   const history = Array.from({ length: 12 }, (_, i) => ({ role: 'user', text: String(i) }));
   X.saveChat(u.id, { draft: { kind: 'x' }, awaiting: true, history, lastList: [5, 6], greetedOn: '2026-11-10', insights: ['g1'], queue: ['עוד'], suggestions: [1] });
   const c = X.chatOf(u.id);

@@ -1,12 +1,12 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { boot, D } = require('../../helpers/db');
+const { boot, user, D } = require('../../helpers/db');
 const Prefs = require('../../../server/priority/priority-prefs');
 
 boot();
-let next = 9000;
-const uid = () => { next += 1; return next; };
+// העדפה אישית — לעובד אמיתי (‎user_prefs‎ קשורה לטבלת המשתמשים)
+const uid = () => user().id;
 const P1 = { code: 'P-100', des: 'מבואות חיפה' };
 const P2 = { code: 'P-200', des: 'אלעד סנטר' };
 
@@ -125,21 +125,27 @@ test('set — לא משנה את הסביבה האחרונה', () => {
   assert.equal(Prefs.lastCompany(u), 'mordot');
 });
 
-test('ערך פגום במסד — כאילו אין העדפות', () => {
-  const u = uid();
-  Prefs.remember(u, { company: 'test11', project: P1, warehouse: 'W1' });
-  D.run('UPDATE settings SET value = ? WHERE key = ?', '{not json', `goods_receipt_prefs:${u}`);
-  assert.equal(Prefs.of(u, 'test11'), null);
-  assert.equal(Prefs.lastCompany(u), null);
-  // ושמירה חדשה מתקנת
-  Prefs.remember(u, { company: 'test11', project: P2, warehouse: 'W2' });
-  assert.equal(Prefs.of(u, 'test11').project.code, 'P-200');
-});
-
-test('נשמר במפתח ההיסטורי של קבלת הסחורה', () => {
+test('נשמר בהעדפות האישיות של העובד — לא בטבלת ההגדרות של המערכת (15.11.26)', () => {
   const u = uid();
   Prefs.remember(u, { company: 'test11', project: P1 });
-  const v = D.getSetting(`goods_receipt_prefs:${u}`, null);
+  const v = D.userPrefs(u).priorityPrefs;
   assert.equal(v._company, 'test11');
   assert.equal(v.test11.project.code, 'P-100');
+  assert.equal(D.getSetting(`goods_receipt_prefs:${u}`, null), null);
+});
+
+test('מעבר: העדפות ישנות בטבלת ההגדרות — עוברות להעדפות האישיות בקריאה הראשונה, והשורה הישנה נמחקת', () => {
+  const u = uid();
+  D.setSetting(`goods_receipt_prefs:${u}`, { _company: 'mordot', mordot: { warehouse: 'W9' } });
+  assert.equal(Prefs.lastCompany(u), 'mordot');
+  assert.equal(D.userPrefs(u).priorityPrefs._company, 'mordot');
+  assert.equal(D.getSetting(`goods_receipt_prefs:${u}`, null), null);
+});
+
+test('ערך ישן פגום — כאילו אין העדפות, ושמירה חדשה מתקנת', () => {
+  const u = uid();
+  D.run('INSERT INTO settings (key, value) VALUES (?, ?)', `goods_receipt_prefs:${u}`, '{not json');
+  assert.equal(Prefs.of(u, 'test11'), null);
+  Prefs.remember(u, { company: 'test11', project: P2, warehouse: 'W2' });
+  assert.equal(Prefs.of(u, 'test11').project.code, 'P-200');
 });

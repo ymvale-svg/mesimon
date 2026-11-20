@@ -99,7 +99,7 @@ const PLAIN_INSIGHTS = /^(תובנות|מה חדש)/;
  * ‎suggestions‎ — ההצעות למשימות שהוצגו ב-Today לפי האותיות ("אשר א").
  * ‎queue‎ — בקשות שנאמרו באותה הקלטה ועוד לא טופלו.
  */
-const emptyChat = { draft: null, awaiting: false, history: [], lastList: [], greetedOn: '', insights: [], suggestions: [], queue: [], walk: null };
+const emptyChat = { draft: null, awaiting: false, history: [], lastList: [], greetedOn: '', insights: [], suggestions: [], queue: [], walk: null, mailWalk: null };
 
 
 function chatOf(userId) {
@@ -112,18 +112,20 @@ function chatOf(userId) {
     insights: Array.isArray(extra.insights) ? extra.insights : [], queue: Array.isArray(extra.queue) ? extra.queue : [],
     suggestions: Array.isArray(extra.suggestions) ? extra.suggestions : [],
     // ☀️ "לעבור עליהם" — הפריטים של "דורש ממך היום" והמקום ברשימה
-    walk: extra.walk && Array.isArray(extra.walk.items) ? extra.walk : null
+    walk: extra.walk && Array.isArray(extra.walk.items) ? extra.walk : null,
+    // 📬 "מיילים לענות" — המיילים במעבר והמקום ברשימה (‎flowMailWalk‎)
+    mailWalk: extra.mailWalk && Array.isArray(extra.mailWalk.ids) ? extra.mailWalk : null
   };
 }
 
 
-function saveChat(userId, { draft, awaiting, history, lastList, greetedOn = '', insights = [], queue = [], suggestions = [], walk = null }) {
+function saveChat(userId, { draft, awaiting, history, lastList, greetedOn = '', insights = [], queue = [], suggestions = [], walk = null, mailWalk = null }) {
   D.run(
     `INSERT INTO wa_chats (user_id, draft, awaiting, history, last_list, greeted_on, extra, updated_at) VALUES (?,?,?,?,?,?,?,?)
      ON CONFLICT(user_id) DO UPDATE SET draft = excluded.draft, awaiting = excluded.awaiting, history = excluded.history,
        last_list = excluded.last_list, greeted_on = excluded.greeted_on, extra = excluded.extra, updated_at = excluded.updated_at`,
     userId, draft ? JSON.stringify(draft) : '', awaiting ? 1 : 0, JSON.stringify(history.slice(-HISTORY_TURNS)),
-    JSON.stringify(lastList ?? []), greetedOn ?? '', JSON.stringify({ insights, queue, suggestions, ...(walk ? { walk } : {}) }), D.nowIso()
+    JSON.stringify(lastList ?? []), greetedOn ?? '', JSON.stringify({ insights, queue, suggestions, ...(walk ? { walk } : {}), ...(mailWalk ? { mailWalk } : {}) }), D.nowIso()
   );
 }
 
@@ -334,7 +336,7 @@ function sourceOf(aiSource, text) {
 }
 
 
-async function understand(user, actor, state, text, projects, myOpen) {
+async function understand(user, actor, state, text, projects, myOpen, { file = null } = {}) {
   const users = orgUsers();
   const { allowedProjects } = newTaskScope(actor);
   const allowedList = projects.filter((p) => allowedProjects.has(p.id));
@@ -382,6 +384,7 @@ async function understand(user, actor, state, text, projects, myOpen) {
     'השיחה עד כה:',
     ...(state.history.length ? state.history.map((h) => `${h.role === 'bot' ? 'הבוט' : 'הכותב'}: ${h.text}`) : ['(התחלה)']),
     '',
+    ...(file ? [`קובץ שצורף — הכותב שלח אותו עם ההודעה או ממש לפניה: ${String(file.name || 'קובץ').slice(0, 120)}${file.mime ? ` (${file.mime})` : ''}`, ''] : []),
     'ההודעה החדשה:',
     '<<<',
     text.slice(0, 3000),

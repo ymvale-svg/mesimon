@@ -143,7 +143,8 @@ async function start({ env = {}, timeoutMs = 20000 } = {}) {
     fs.rmSync(tmp, { recursive: true, force: true });
   }
 
-  return { base, port, child, api, raw, login, stop, output: () => output, exited: () => exited };
+  // ‎dataDir‎ — לבדיקה שצריכה לשתול שורה שאין לה נקודת קצה (למשל הצעה מהסריקה)
+  return { base, port, child, api, raw, login, stop, dataDir: childEnv.DATA_DIR, output: () => output, exited: () => exited };
 }
 
 module.exports = { start, ADMIN, freePort };

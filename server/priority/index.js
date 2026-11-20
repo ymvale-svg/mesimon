@@ -10,6 +10,8 @@ module.exports = {
   get GoodsReceipt() { return require('./goods-receipt'); },
   get GrPdf() { return require('./gr-pdf'); },
   get PurchaseDemand() { return require('./purchase-demand'); },
+  get PdReturn() { return require('./pd-return'); },
+  get PdParts() { return require('./pd-parts'); },
   get PriorityPrefs() { return require('./priority-prefs'); },
   get PrioritySettings() { return require('./priority-settings'); },
   get PriorityAccess() { return require('./priority-access'); },
@@ -17,6 +19,7 @@ module.exports = {
   get PriorityChain() { return require('./priority-chain'); },
   get PriorityDesk() { return require('./priority-desk'); },
   get PriorityApprovals() { return require('./priority-approvals'); },
+  get OpensGuard() { return require('./opens-guard'); },
   get PoNotify() { return require('./po-notify'); },
   get PoPdf() { return require('./po-pdf'); },
   get Rfq() { return require('./rfq'); }

@@ -67,6 +67,8 @@ function shapeEvent(e, calendar) {
     end: allDay ? e.end?.date : e.end?.dateTime,
     allDay,
     location: String(e.location ?? ''),
+    // התיאור — בלי HTML ובלי קישורים: לתדריך לפני הפגישה (מה הנושא, מעבר לשם)
+    description: String(e.description ?? '').replace(/<br\s*\/?>/gi, '\n').replace(/<[^>]+>/g, ' ').replace(/https?:\/\/\S+/g, '').replace(/&nbsp;/g, ' ').replace(/[ \t]+/g, ' ').trim().slice(0, 1500),
     meetLink: videoLink(e.hangoutLink ?? e.conferenceData?.entryPoints?.find((p) => p.entryPointType === 'video')?.uri),
     zoomLink: zoomOf(e),
     // מי משתתף — לשאלה "מי בפגישה?" בבוט. מארגן מסומן; חדרים ומשאבים — לא

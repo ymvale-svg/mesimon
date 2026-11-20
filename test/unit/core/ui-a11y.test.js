@@ -22,3 +22,9 @@ test('תיבת השגיאה במסכי הכניסה, ההרשמה וההזמנה
     assert.match(pub(f), /const errorBox = el\('div\.alert\.alert-danger', \{ role: 'alert',/, f);
   }
 });
+
+test('תווית של שדה מקושרת לשדה (for/id) — סקירת הממשק 15.11.26', () => {
+  const src = pub('js/ui.js');
+  assert.match(src, /if \(!control\.id\) control\.id = `fld-\$\{\+\+fieldSeq\}`;/);
+  assert.match(src, /el\('label', \{ text: label, for: forId \}\)/);
+});

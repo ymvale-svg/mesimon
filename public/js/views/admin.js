@@ -1348,69 +1348,8 @@ const AdminView = (() => {
 
   // ------------------------------------------------------------- הגדרות
 
-  /** כל הגדרה והסבר קצר מה היא עושה בפועל */
-  const SETTING_LABELS = {
-    auto_done_on_checklist: ['צ׳קליסט מלא סוגר את המשימה',
-      'סימון הסעיף האחרון מעביר את המשימה ל"הושלם" בלי לסמן אותה שוב בדף הבית, וסעיף שנפתח מחדש מחזיר אותה ל"בטיפול". חל על משימות פנימיות שיש בהן צ׳קליסט; זרימת הספקים נשארת ידנית'],
-    archive_done_after_days: ['ימים עד שמשימה שהושלמה עוברת לארכיון',
-      'עד אז היא נשארת בכרטיס "הושלמו לאחרונה" בדף הבית, כדי שאפשר יהיה לראות מה נסגר ולחזור אם צריך'],
-    vendor_reminder_days_before: ['X — ימים לפני היעד לתזכורת ראשונה לספק', 'הערך שמנוע הכללים משתמש בו לתזכורת האוטומטית לספק'],
-    manager_alert_hours_before: ['Y — שעות לפני היעד להתראה מקדימה למנהל', 'ההתראה נשלחת למנהל לפני שהמשימה חורגת מהיעד'],
-    escalation_hours_urgent: ['שעות ללא שינוי סטטוס עד להקפצת משימה דחופה', 'משימה דחופה שאינה זזה מוקפצת אוטומטית לתשומת לב המנהל'],
-    scheduler_interval_minutes: ['תדירות הרצת מנוע הכללים (דקות)', ''],
-    max_upload_mb: ['גודל מרבי לקובץ (MB)', 'נאכף בכל העלאת קובץ — הן במשימות והן בפורטל הספקים'],
-    allowed_extensions: ['סוגי קבצים מותרים (מופרדים בפסיק)', 'קובץ מסוג שאינו ברשימה יידחה בהעלאה'],
-    recurring_default_policy: ['מדיניות ברירת מחדל למשימות חוזרות חופפות', 'קובע מה קורה כשמגיע מועד למופע חדש והמופע הקודם עדיין פתוח'],
-    org_name: ['שם הארגון', 'מופיע בכותרות המערכת ובהזמנות שנשלחות במייל'],
-    public_url: ['כתובת המערכת באינטרנט', 'הכתובת שממנה משתמשים נכנסים — קישורי ההזמנות במייל נבנים ממנה. לדוגמה https://mesimon.co.il. אם משאירים ריק, הקישור נבנה מהכתובת שדרכה נכנסתם.'],
-    // משימות AI — ברירות המחדל של מדיניות המעקב; כל משימה יכולה לשנות לעצמה
-    ai_email_attempts: ['משימות AI: מיילים שלא נענו לפני מעבר לוואטסאפ', 'כולל הפנייה הראשונה. 2 = פנייה ותזכורת אחת'],
-    ai_days_between_emails: ['משימות AI: ימי עבודה בין מיילים', ''],
-    ai_whatsapp_enabled: ['משימות AI: המשך מעקב בוואטסאפ', 'מהמספר האישי של מי שפתח את המשימה, אם חיבר את הוואטסאפ שלו'],
-    ai_whatsapp_attempts: ['משימות AI: הודעות וואטסאפ שלא נענו לפני עצירה', 'אחרי זה המעקב נעצר ומי שפתח את המשימה מקבל התראה'],
-    ai_days_between_whatsapp: ['משימות AI: ימי עבודה בין הודעות וואטסאפ', ''],
-    ai_send_window: ['משימות AI: שעות שליחה', 'שעון ישראל, בפורמט 08:30-18:00. תזכורת שמועדה נופל מחוץ לשעות תצא בתחילת החלון הבא'],
-    ai_work_days_only: ['משימות AI: שליחה בימי עבודה בלבד', 'בלי שישי ושבת'],
-    ai_auto_thanks: ['משימות AI: הודעת תודה כשהבקשה התקבלה', 'שורה או שתיים, באותו ערוץ שבו הגיעה התשובה'],
-    ai_poll_minutes: ['משימות AI: תדירות בדיקת תשובות (דקות)', ''],
-    ai_model: ['משימות AI: מודל', 'מזהה המודל של Claude. ברירת המחדל: claude-opus-5-5'],
-    ai_bot_model: ['בוט והקלטה: מודל', 'למה שמישהו מחכה לו (בוט הוואטסאפ, ההקלטה באפליקציה). ריק = המודל הראשי. claude-haiku-5-5 — המהיר ביותר, פחות מדויק בבקשות מורכבות'],
-    ai_fast_mode: ['בוט והקלטה: מצב מהיר', 'אותו מודל, תשובה מהירה עד פי 2.5, במחיר כפול לקריאות האלה. רק ב-Opus; כשאינו זמין — רגיל'],
-    ai_approve_reminders: ['משימות AI: כל תזכורת באישור', 'ברירת המחדל לכולם. כבוי = תזכורות יוצאות לבד לפי המדיניות. כל משתמש וכל משימה יכולים לשנות לעצמם'],
-    ai_internal_attempts: ['משימות AI לעובד: תזכורות במערכת לפני עצירה', 'כשהנמען הוא עובד בארגון, המעקב הוא התראות במשימון — בלי מייל ובלי וואטסאפ'],
-    ai_mail_scan_enabled: ['סריקת מיילים: פעילה', 'מיילים שלא נקראו בתיבת ה-Gmail של כל משתמש שחיבר אותה הופכים להצעות משימה'],
-    ai_scan_time: ['סריקת מיילים: שעת ריצת הבוקר', 'שעון ישראל, בפורמט 07:00. באותה שעה נשלחת גם ההודעה "היום יוצאים"'],
-    ai_scan_daily_limit: ['סריקת מיילים: תקרה יומית למשתמש', 'כל מייל הוא קריאה ל-AI. מה שמעבר לתקרה נסרק למחרת'],
-    task_closure_enabled: ['💡 איך לסגור: הצעה לכל משימה מהמייל', 'למי לפנות, באיזה ערוץ ומה לבקש — מזיכרון המייל, משימות AI קודמות, האלפון ואנשי הקשר. שום דבר לא נשלח בלי לחיצה'],
-    task_closure_all: ['💡 איך לסגור: גם למשימות שלא ממייל', 'משימה שנפתחה ידנית, מהבוט, מהקלטה או מוואטסאפ — ההצעה מופיעה בכרטיס המשימה של האחראי'],
-    task_closure_agents: ['💡 איך לסגור: עצה מסוכן המחלקה', 'כשיש סוכן מתאים (מס, שכר, נדל"ן…) — ההמלצה שלו מצטרפת להצעה. עולה יותר: קריאה נוספת ל-AI עם כלים'],
-    mail_reply_suggest: ['📧 הצעת תשובה מוכנה למייל', 'למייל שאדם מחכה בו לתשובה — טיוטה ב"ממתין לאישורך", לפי תשובות קודמות, הזיכרון והידע הארגוני. נשלחת רק בלחיצה'],
-    mail_memory_enabled: ['🧠 זיכרון העבודה: פעיל', 'סריקת כל היסטוריית המייל של המשתמש, אחרי שאישר את הערכת העלות'],
-    mail_memory_auto: ['🧠 זיכרון העבודה: סריקה אוטומטית', 'דלוק: כל עובד שחיבר Gmail נסרק לבד, בלי הפעלה ובלי אישור עלות, והעובדים אינם רואים את זה. השליטה — "ניהול ← 🤖 סוכנים וידע ארגוני ← 🧠 זיכרון"'],
-    mail_memory_users: ['🧠 זיכרון העבודה: מי משתתף', '* = כל העובדים (ברירת המחדל) · ריק = מנהלי מערכת בלבד · או רשימת כתובות מייל מופרדות בפסיק'],
-    mail_memory_model: ['🧠 זיכרון העבודה: מודל', 'ברירת המחדל claude-haiku-5-5 — זול, ומספיק לסיכום שרשורים'],
-    mail_memory_hours: ['🧠 זיכרון העבודה: שעות קריאת ההיסטוריה', 'שעון ישראל, בפורמט 19:00-07:00. ריק = כל שעה. עדכון הבוקר רץ בכל מקרה'],
-    mail_memory_nightly_threads: ['🧠 זיכרון העבודה: שרשורים ביום למשתמש', 'התקציב היומי של הקריאה — גם בלילה. כל שרשור הוא קריאה אחת ל-AI'],
-    mail_memory_doc_mb: ['📎 זיכרון העבודה: גודל מרבי לפענוח קובץ (MB)', 'קובץ מצורף גדול מזה לא מפוענח בסריקה — רק נרשם. הסוכן מבקש לפענח אותו כשהוא נחוץ לשאלה, ומודיע כשהתשובה מוכנה'],
-    mail_memory_night: ['🌙 זיכרון העבודה: מצב לילה', 'בשעות הלילה — עד 2 שרשורים במקביל וסבבים ברצף, עדיין עם התקרה היומית. עוצר כשהמעבד עמוס או כשמישהו שואל סוכן'],
-    mail_memory_night_hours: ['🌙 שעות מצב הלילה', 'שעון ישראל, בפורמט 19:00-07:00'],
-    mail_memory_night_mem_mb: ['🌙 מצב לילה: תקרת זיכרון (MB)', 'בלילה נקראים עד 2 שרשורים במקביל — כל עוד זיכרון השרת מתחת לזה. 1400 מתאים לתוכנית של 2GB; בתוכנית של 512MB — 350'],
-    mail_doc_expiry_days: ['📎 מסמכים: ימים לפני תום תוקף', 'חוזה, היתר או ביטוח שתוקפם מתקרב — הצעה לחדש ב"ממתין לאישורך"'],
-    mail_ask_daily_limit: ['🔎 שאל את המיילים: שאלות ביום למשתמש', 'כל שאלה היא שתי קריאות ל-AI'],
-    agents_daily_limit: ['✨ שאל: שאלות ביום למשתמש', 'כל שאלה: ניתוב זול, ואז הסוכן (ולפעמים גם המיילים)'],
-    org_knowledge_enabled: ['📚 ידע ארגוני: פעיל', 'זיקוק כל בוקר מזיכרון העבודה של כל העובדים'],
-    org_merge_days: ['📚 ידע ארגוני: כל כמה ימים מאחדים', 'לקחים חדשים מצטרפים לערכים קיימים או יוצרים ערכים חדשים'],
-    org_refresh_hours: ['📚 ידע ארגוני: כל כמה שעות מתעדכן', 'זיקוק לקחים ממה שנוסף לזיכרון העבודה של כל העובדים. סבב בלי חדש — בלי עלות'],
-    meeting_hours: ['פגישות: שעות לפגישות', 'שעון ישראל, בפורמט 08:30-18:00. הצעת מועדים ושורת הזמינות — רק בתוך השעות האלה'],
-    meeting_default_minutes: ['פגישות: משך ברירת מחדל (דקות)', ''],
-    meeting_buffer_minutes: ['פגישות: מרווח מפגישה צמודה (דקות)', 'בהצעת מועדים — לא צמוד לפגישה אחרת'],
-    meeting_reminder_minutes: ['פגישות: התראה לפני (דקות)', 'במשימון ובבוט הוואטסאפ, עם קישור ה-Zoom — לבעל היומן, למי שקבע ולמוזמנים שהם משתמשי משימון'],
-    meeting_ai_alternatives: ['פגישות: הצעות AI להזזת פגישות חופפות', 'כבוי = החלופות מסודרות לפי כללים קבועים, בלי AI'],
-    meeting_record_default: ['פגישות: הקלטה אוטומטית לענן — מסומן מראש', 'בפגישת Zoom חדשה. בכל פגישה אפשר לשנות. ההקלטות — במסך "🎥 הקלטות Zoom" ובבוט'],
-    meeting_office_address: ['פגישות: כתובת המשרד', 'בקביעת פגישה "🏢 במשרד" — הכתובת נכנסת למיקום ביומן ובהזמנה למשתתפים'],
-    timeless_unrecorded_alert: ['🎥 Timeless: פגישה שלא מוקלטת — הודעה למזכירות', 'בתחילת כל פגישה מקוונת (Zoom / Meet / Teams) ביומני העובדים שלא מוקלטת ב-Timeless: וואטסאפ והתראה למזכירות, עם הקישור להכנסה ל-Timeless. גם פגישות שלא נקבעו במשימון'],
-    timeless_unrecorded_delay: ['🎥 Timeless: כמה דקות אחרי תחילת הפגישה לבדוק', 'הזמן ש-Timeless מקבל להצטרף לפגישה לפני ההודעה'],
-  };
+  // שם והסבר לכל הגדרה, והלשונית שלה — מהשרת (‎server/core/settings-catalog.js‎), המקור היחיד. לא מגדירים כאן שוב.
+
 
   /**
    * מצב החיבורים החיצוניים. תכונה שתלויה במפתח בשרת נעלמת בשקט כשהמפתח
@@ -1460,6 +1399,37 @@ const AdminView = (() => {
     ]);
   }
 
+  /** 🧪 בדיקה: פגישה קצרה במשתמש ה-Zoom, שנמחקת מיד — ומה בדיוק Zoom ענה, עם מה לתקן */
+  function zoomTestButton(u) {
+    const b = el('button.btn.btn-sm.btn-ghost', { type: 'button', title: 'יוצר פגישת בדיקה ומוחק אותה מיד' }, ['🧪 בדיקה']);
+    b.addEventListener('click', async () => {
+      b.disabled = true;
+      try {
+        const r = await API.post('/api/admin/zoom/test', { zoomUserId: u.id });
+        if (r.ok) UI.success(`✓ ${u.name}: Zoom יצר פגישה ומחק אותה${r.warning ? ` (${r.warning})` : ''}`);
+        else {
+          UI.modal({
+            title: `🧪 Zoom — ${u.name}`,
+            body: el('div', {}, [
+              el('div.alert.alert-warn', {}, [el('span', { text: '⚠️' }), el('div', { text: r.explain })]),
+              // מה בדיוק חסר, ובאיזו אפליקציה — לפני הרשימה הארוכה
+              r.wanted?.length ? el('div', { style: { margin: '8px 0', fontWeight: '700' } }, [
+                `באפליקציה של חשבון Zoom ${r.account}${r.account === '2' ? ' (ZOOM2_… בשרת)' : ''} חסרה אחת מאלה: `,
+                el('span', { style: { direction: 'ltr', unicodeBidi: 'isolate' }, text: (r.missingScopes?.length ? r.missingScopes : r.wanted).join(' או ') })
+              ]) : null,
+              r.scopes?.length ? el('div.mute-sm', { text: `באסימון יש ${r.scopes.length} הרשאות, מתוכן ${r.scopes.filter((x) => x.startsWith('meeting:')).length} של פגישות (meeting:…).` }) : null,
+              el('div.mute-sm', { text: `חשבון Zoom ${r.account} · ההרשאות שבאסימון עכשיו (מה ש-Zoom נותן לאפליקציה בפועל):` }),
+              el('pre', { style: { whiteSpace: 'pre-wrap', direction: 'ltr', textAlign: 'left', fontSize: '12px' }, text: (r.scopes ?? []).join('\n') || '(אין — האפליקציה לא מחזירה הרשאות)' }),
+              el('pre', { style: { whiteSpace: 'pre-wrap', direction: 'ltr', textAlign: 'left', fontSize: '12px' }, text: JSON.stringify({ status: r.status, code: r.code, message: r.message, firstError: r.firstError }, null, 2) })
+            ])
+          });
+        }
+      } catch (err) { UI.error(err); }
+      b.disabled = false;
+    });
+    return b;
+  }
+
   /** משתמשי ה-Zoom של החברה — רענון מ-Zoom, ומי משויך לכל אחד */
   function zoomUsersBox() {
     const box = el('div', { style: { padding: '10px 0' } });
@@ -1485,9 +1455,10 @@ const AdminView = (() => {
           })()
         ]),
         z.users.length
-          ? el('div', {}, z.users.map((u) => el('div.mute-sm', {
-              text: `${u.name} · ${u.email}${multi ? ` · חשבון ${u.account}` : ''}${u.license === 'basic' ? ' · חינמי (40 דק׳)' : ''} — ${u.linked.length ? u.linked.map((x) => x.name).join(', ') : 'לא משויך'}`
-            })))
+          ? el('div', {}, z.users.map((u) => el('div.flex', { style: { gap: '6px', alignItems: 'center', flexWrap: 'wrap' } }, [
+              el('span.mute-sm', { text: `${u.name} · ${u.email}${multi ? ` · חשבון ${u.account}` : ''}${u.license === 'basic' ? ' · חינמי (40 דק׳)' : ''} — ${u.linked.length ? u.linked.map((x) => x.name).join(', ') : 'לא משויך'}` }),
+              zoomTestButton(u)
+            ])))
           : el('div.mute-sm', { text: 'עוד לא נטענו משתמשים — "רענון מ-Zoom".' }));
     };
     API.get('/api/admin/zoom/users').then(draw).catch(() => {});
@@ -1673,7 +1644,7 @@ const AdminView = (() => {
     const s = settingsData.settings;
     const inputs = {};
 
-    const fields = Object.entries(SETTING_LABELS).map(([key, [label, hint]]) => {
+    const field = ({ key, label, hint }) => {
       let control;
       if (key === 'recurring_default_policy') {
         control = UI.select([
@@ -1692,7 +1663,15 @@ const AdminView = (() => {
       }
       inputs[key] = control;
       return UI.field(label, control, hint || null);
-    });
+    };
+    // לשונית לכל תחום — "⏰ שעות וימים" ראשונה: כל השעות של המערכת במקום אחד
+    const sections = (settingsData.form ?? []).map((t) => el('section.settings-section', { id: `settings-${t.key}` }, [
+      el('h3', { text: t.label, style: { margin: '18px 0 10px', fontSize: '15px' } }),
+      el('div.grid.grid-2', {}, t.fields.map(field))
+    ]));
+    const jump = el('div.mb', { style: { display: 'flex', flexWrap: 'wrap', gap: '6px' } }, (settingsData.form ?? []).map((t) => el('button.btn.btn-sm', {
+      type: 'button', text: t.label, onclick: () => document.getElementById(`settings-${t.key}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    })));
 
     const saveBtn = el('button.btn.btn-primary', {}, ['שמירת הגדרות']);
     saveBtn.addEventListener('click', async () => {
@@ -1726,7 +1705,8 @@ const AdminView = (() => {
       ]),
       el('div.card', {}, [
         el('div.card-pad', {}, [
-          el('div.grid.grid-2', {}, fields),
+          jump,
+          ...sections,
           el('div.mt', {}, [saveBtn])
         ])
       ]),
@@ -1847,7 +1827,7 @@ const AdminView = (() => {
             el('div', {}, [el('span', { text: `${a.icon} ` }), el('b', { text: a.label }), ' ', el('span.ai-chip', { text: CHANNEL_CHIP[a.channel] })]),
             el('div.mute-sm', { text: a.description }),
             examples ? UI.field('דוגמאות — שורה לכל דוגמה. מוצגות ב"עזרה" ומכוונות את הבוט', examples) : null,
-            a.key === 'summary' ? el('div.mute-sm', { text: `נשלח בשעה ${info.settings.summaryTime} — משנים בלשונית "הגדרות".` }) : null,
+            a.key === 'summary' ? el('div.mute-sm', { text: 'הוחלף ב"סיכום בוקר וסוף יום" — מי שמקבל אותו לא מקבל גם את זה.' }) : null,
             a.key === 'voice_notes' && !info.speech?.length ? el('div.mute-sm.text-danger', { text: 'התמלול אינו מוגדר בשרת — מגדירים RUNPOD_API_KEY + RUNPOD_ENDPOINT_ID (ivrit.ai), OPENAI_API_KEY או GOOGLE_SPEECH_API_KEY. עד אז הבוט מבקש לכתוב בטקסט.' }) : null,
             a.key === 'voice_notes' && info.speech?.length ? el('div.mute-sm', { text: `סדר התמלול: ${info.speech.map((p) => p.name).join(' ← ')}${info.speech.length > 1 ? ' (כל אחד גיבוי לקודם)' : ''}${info.speechCompare ? ' · מצב השוואה פעיל' : ''}.` }) : null
           ]),
@@ -2211,12 +2191,7 @@ const AdminView = (() => {
       const s = info.settings;
       const enabled = el('input', { type: 'checkbox', checked: s.enabled });
       const quiet = el('input', { type: 'number', min: 0, max: 60, value: s.quietMinutes });
-      const summary = el('input', { type: 'time', value: s.summaryTime });
-      const [from, to] = s.hours ? s.hours.split('-') : ['07:00', '22:00'];
-      const always = el('input', { type: 'checkbox', checked: !s.hours });
-      const hFrom = el('input', { type: 'time', value: from, disabled: !s.hours });
-      const hTo = el('input', { type: 'time', value: to, disabled: !s.hours });
-      always.addEventListener('change', () => { hFrom.disabled = hTo.disabled = always.checked; });
+      // ⏰ השעות (פעילות הבוט, סיכום הבוקר, הודעות יזומות) — במקום אחד: הגדרות מערכת ← "שעות וימים" (15.11.26)
       const shabbat = el('input', { type: 'checkbox', checked: s.shabbat });
       const speechCompare = el('input', { type: 'checkbox', checked: s.speechCompare });
       const topicSwitch = el('input', { type: 'checkbox', checked: s.topicSwitchCancels !== false });
@@ -2227,8 +2202,7 @@ const AdminView = (() => {
         save.disabled = true;
         try {
           draw(await API.put('/api/admin/wa-bot/settings', {
-            enabled: enabled.checked, quietMinutes: Number(quiet.value), summaryTime: summary.value,
-            hours: always.checked ? '' : `${hFrom.value}-${hTo.value}`, shabbat: shabbat.checked,
+            enabled: enabled.checked, quietMinutes: Number(quiet.value), shabbat: shabbat.checked,
             speechCompare: speechCompare.checked, topicSwitchCancels: topicSwitch.checked
           }));
           UI.success('ההגדרות נשמרו');
@@ -2238,15 +2212,16 @@ const AdminView = (() => {
       UI.mount(host, el('div.card', {}, [el('div.card-pad', {}, [
         check(enabled, 'הבוט פעיל', 'כבוי — הבוט לא קורא קבוצות ולא עונה בפרטי. ההודעות נשמרות אצל Green API כ-24 שעות.'),
         el('div.grid.grid-2.mt', {}, [
-          UI.field('דקות שקט לפני ניתוח קבוצה', quiet, 'רצף הודעות נקרא יחד, אחרי הפסקה בשיחה — כך "וגם את זה עד חמישי" מובן בהקשר'),
-          UI.field('שעת סיכום הבוקר', summary, 'בימים א׳–ה׳. הפעלה וכיבוי — בלשונית "פעולות"')
+          UI.field('דקות שקט לפני ניתוח קבוצה', quiet, 'רצף הודעות נקרא יחד, אחרי הפסקה בשיחה — כך "וגם את זה עד חמישי" מובן בהקשר')
         ]),
         el('h4.mt', { text: 'שיחה בפרטי' }),
         check(topicSwitch, 'מעבר לנושא אחר מבטל את הקודם (ברירת מחדל)',
           'הבוט תמיד עושה את מה שמבקשים ממנו עכשיו. עובד שבאמצע טיוטת מייל, משימה, אישור או קבלת סחורה שולח בקשה אחרת ("תפתח משימה לדני…") — הפריט הקודם מבוטל בלי לכתוב "ביטול", ואין חזרה אליו (בקבלת סחורה — גם הטיוטא בפריוריטי). כבוי — רק טיוטות מייל יורדות, וקבלת סחורה מושהית עד "קבלת סחורה".'),
         el('h4.mt', { text: 'מתי הבוט שולח הודעות' }),
-        check(always, 'כל שעות היום'),
-        el('div.row', {}, [UI.field('מהשעה', hFrom), UI.field('עד השעה', hTo)]),
+        el('div.alert.alert-info', {}, [el('span', { text: '⏰' }), el('div', {}, [
+          el('span', { text: `כל השעות — שעות הפעילות (${s.hours || 'כל היום'}), סיכום הבוקר, ההודעות היזומות והטיפ היומי — במקום אחד: ` }),
+          el('a', { href: '#', text: 'הגדרות מערכת ← ⏰ שעות וימים', onclick: (e) => { e.preventDefault(); App.navigate('admin', { tab: 'settings' }); } })
+        ])]),
         check(shabbat, 'לא בשבת', 'משישי ב-15:00 עד מוצאי שבת ב-20:30.'),
         el('div.mute-sm', { text: 'מחוץ לחלון הבוט לא שולח דבר. הודעות שנכתבו לו בפרטי נשמרות ונענות כשהחלון נפתח. הקבוצות ממשיכות להיקרא, וההצעות מחכות באפליקציה.' }),
         el('h4.mt', { text: 'תמלול הודעות קוליות' }),

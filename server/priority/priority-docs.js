@@ -45,6 +45,8 @@ const KIND_LABEL = { invoice: 'חשבונית', delivery_note: 'תעודת מש�
 
 /** טור המיילים — מה שעוד לא טופל (לא נלקח ולא נדחה), מהחדש לישן */
 function inbox(user, { limit = 60 } = {}) {
+  // 🔐 בלי הרשאה לאף מסמך — אין טור מיילים (החשבוניות נשמרות לכל נמען, אבל מוצגות רק למורשה)
+  if (!Access.any({ type: 'user', id: user.id, role: user.role })) return [];
   const since = new Date(Date.now() - INBOX_DAYS * 86400000).toISOString();
   const rows = D.all(
     `SELECT * FROM mail_goods_docs WHERE user_id = ? AND status IN ('pending', 'asked', 'later') AND created_at >= ?
