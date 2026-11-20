@@ -105,6 +105,9 @@ function solveText(r) {
 }
 
 
+/** "לכולם" / "השב לכולם" / "עם כולם בהעתק" — מי שהיה בשרשור נכנס להעתק */
+const TO_ALL = /(?:^|[\s,])(?:ל|את\s+|עם\s+)?כולם(?:[\s,.!]|$)|השב\s+לכולם|לכל\s+(?:המשתתפים|מי\s+שבשרשור|השרשור)/;
+
 /** טיוטה (או תיקון שלה) — עם ההתכתבות האחרונה עם הנמען, להצעות מה להוסיף */
 async function draftEmail(actor, contact, instruction, { feedback = '', previous = null, dry = false, channel = null, solve = null } = {}) {
   const owner = D.get('SELECT id, full_name, email FROM users WHERE id = ?', actor.id);
@@ -130,8 +133,13 @@ async function draftEmail(actor, contact, instruction, { feedback = '', previous
   if (replyThread) d.subject = `Re: ${replyThread.subject}`;
   const resolved = resolveCc(actor, d.cc_names, { previous: previous?.cc ?? [], contact });
   const { ccAsk } = resolved;
-  // תשובה בשרשור — מי שכבר היה בו נשאר בהעתק (כמו "השב לכולם")
-  const cc = picked ? [...resolved.cc, ...MailThread.threadCc(actor.id, picked, contact.email).filter((p) => !resolved.cc.some((c) => c.email === p.email))] : resolved.cc;
+  /*
+   * תשובה בשרשור — מי שהיה בו נכנס להעתק רק כשביקשו ("לכולם", "השב לכולם"). בלי זה — רק הנמען, והטיוטה מציינת
+   * כמה עוד היו בשרשור (סקירה 18.11: הודעה קצרה לאדם אחד יצאה עם כל ההעתק, ועובדים הורידו אותו או ביטלו)
+   */
+  const threadPeople = picked ? MailThread.threadCc(actor.id, picked, contact.email) : replyThread ? previous?.threadPeople ?? [] : [];
+  const toAll = TO_ALL.test(`${previous ? '' : instruction} ${feedback}`);
+  const cc = toAll ? [...resolved.cc, ...threadPeople.filter((p) => !resolved.cc.some((c) => c.email === p.email))] : resolved.cc;
   const suggestions = (Array.isArray(d.suggestions) ? d.suggestions : []).map((x) => String(x).trim()).filter(Boolean).slice(0, 4);
   return {
     kind: 'email',
@@ -155,6 +163,7 @@ async function draftEmail(actor, contact, instruction, { feedback = '', previous
     cc: via === 'email' ? cc : [],
     ccAsk: via === 'email' ? ccAsk : [],
     replyThread: via === 'email' ? replyThread : null,
+    threadPeople: via === 'email' ? threadPeople : [],
     ...(via === 'email' ? await signatureFields(actor.id) : { signature: false, noSignature: null })
   };
 }
@@ -254,6 +263,9 @@ function createFromDraft(actor, original) {
 }
 
 
+/** תוקף הצעת תשובה למייל: אחרי שעתיים "כן" כבר לא שולח (#171) */
+const MAIL_REPLY_TTL_MS = 2 * 60 * 60 * 1000;
+
 /** ביצוע מה שהעובד אישר ב"כן". בבדיקה ממסך הניהול (‎dry‎) — רק מתארים */
 async function confirmPending(actor, pending, dry) {
   const kind = pending.kind ?? 'task';
@@ -279,6 +291,11 @@ async function confirmPending(actor, pending, dry) {
     }
     if (kind === 'mail_reply') {
       const r = pending.reply;
+      // ⏳ הצעת תשובה ישנה (יותר משעתיים) — "כן" כבר לא שולח (#171). ההצעה נשארת ב"ממתין לאישורך"
+      const offered = Date.parse(pending.offeredAt ?? pending.askedAt ?? '') || 0;
+      if (!dry && Date.now() - offered > MAIL_REPLY_TTL_MS) {
+        return { reply: `⏳ הצעת התשובה ל${r?.toName || r?.to || 'מייל'} ישנה מדי (יותר משעתיים), אז לא שלחתי. אם עדיין צריך לענות — בקשו ממני לענות על המייל, ואכין נוסח מעודכן.`, action, status: 'ok', result: `הצעת תשובה פגה — לא נשלחה: ${r?.subject ?? ''}` };
+      }
       if (!dry) await MailInsights.sendReply(actor.id, r);
       // 📉 תשובה למייל מהבוט — שימוש (‎mail-dose.js‎)
       if (!dry) MailDose.noteUse(actor.id, 'reply_sent');
@@ -683,7 +700,7 @@ async function mailAlertFor(userId) {
     return;
   }
   const text = MailPush.replyAlert(head, reply);
-  const draft = { kind: 'mail_reply', reply, alert: true, suggestionIds: ids, subject: head.subject };
+  const draft = { kind: 'mail_reply', reply, alert: true, suggestionIds: ids, subject: head.subject, offeredAt: D.nowIso() };
   try {
     const sentId = await sendButtons(chatId, text, [WaUi.BTN.yes, WaUi.BTN.no], { owner: 'chat', draft, awaiting: true });
     // 👁 נפתחה? (‎wa-reads.js‎) — הצעות שלא נקראות מורידות את המינון
@@ -720,7 +737,7 @@ async function replyOffer(userId, row) {
   if (!reply?.body) return { error: 'no_reply' };
   return {
     text: MailPush.replyAlert({ ...row, d }, reply),
-    draft: { kind: 'mail_reply', reply, suggestionIds: [row.id], subject: row.subject, buttons: [WaUi.BTN.yes, WaUi.BTN.no] },
+    draft: { kind: 'mail_reply', reply, suggestionIds: [row.id], subject: row.subject, buttons: [WaUi.BTN.yes, WaUi.BTN.no], offeredAt: D.nowIso() },
     buttons: [WaUi.BTN.yes, WaUi.BTN.no]
   };
 }

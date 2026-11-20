@@ -85,6 +85,7 @@ const FORM = {
   meeting_ai_alternatives: { tab: 'meetings', label: "פגישות: הצעות AI להזזת פגישות חופפות", hint: "כבוי = החלופות מסודרות לפי כללים קבועים, בלי AI" },
   meeting_record_default: { tab: 'meetings', label: "פגישות: הקלטה אוטומטית לענן — מסומן מראש", hint: "בפגישת Zoom חדשה. בכל פגישה אפשר לשנות. ההקלטות — במסך \"🎥 הקלטות Zoom\" ובבוט" },
   meeting_office_address: { tab: 'meetings', label: "פגישות: כתובת המשרד", hint: "בקביעת פגישה \"🏢 במשרד\" — הכתובת נכנסת למיקום ביומן ובהזמנה למשתתפים" },
+  meeting_summary_auto: { tab: 'meetings', label: "📝 סיכום פגישה אוטומטי", hint: "כשהסיכום של Timeless מוכן: נשלח במייל (מכתובת המערכת) ובבוט לכל המשתתפים מהארגון, ונכנס לידע הארגוני. משתתפים מבחוץ — רק באישור של מי שקבע את הפגישה" },
   timeless_unrecorded_alert: { tab: 'meetings', label: "🎥 Timeless: פגישה שלא מוקלטת — הודעה למזכירות", hint: "בתחילת כל פגישה מקוונת (Zoom / Meet / Teams) ביומני העובדים שלא מוקלטת ב-Timeless: וואטסאפ והתראה למזכירות, עם הקישור להכנסה ל-Timeless. גם פגישות שלא נקבעו במשימון" },
   timeless_unrecorded_delay: { tab: 'meetings', label: "🎥 Timeless: כמה דקות אחרי תחילת הפגישה לבדוק", hint: "הזמן ש-Timeless מקבל להצטרף לפגישה לפני ההודעה" },
   // 📚 ידע וסוכנים
@@ -134,6 +135,7 @@ const HIDDEN = {
   briefing_minutes: 'תדריך לפני פגישה — כמה דקות לפני (ברירת מחדל 20)',
   meeting_followup_minutes: 'אחרי פגישה מוקלטת — כמה דקות לחכות לסיכום',
   meeting_audio_min_kb: 'הקלטת פגישה — גודל מינימלי (קובץ קטן מזה הוא הודעה קולית רגילה)',
+  meeting_audio_timeless_min: 'הקלטת פגישה — מכמה דקות מעלים ל-Timeless (ברירת מחדל 20)',
   rfq_daily_max: 'פנייה לספקים — תקרה יומית',
   rfq_optout: 'ספקים שביקשו לא לקבל פניות (נכתב מהמייל שלהם)',
   mail_ask_memory_first: 'שאל את המיילים — קודם בזיכרון העבודה',

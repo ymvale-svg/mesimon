@@ -55,6 +55,13 @@ async function threadRef(who, threadId) {
 }
 
 /** השרשורים האחרונים עם הנמען (‎THREAD_DAYS‎), מהחדש לישן — לבחירה "בהמשך לשרשור" */
+/**
+ * הודעת יומן (זימון, עדכון, ביטול, אישור הגעה) — לא שיחה. תשובה בשרשור כזה יוצאת לכל המוזמנים, ולכן היא לא נבחרת
+ * כשרשור לתשובה (סקירה 18.11: "תשלח להיתם שהישיבה מבוטלת" נבנה כתשובה לזימון, עם 6 בהעתק — ובוטל)
+ */
+const CALENDAR_SUBJECT = /^(?:(?:re|fw|fwd)\s*:\s*)*(?:הזמנה|ההזמנה עודכנה|הזמנה מעודכנת|(?:ה)?אירוע (?:עודכן|בוטל)|בוטל|התקבל|התקבלה|אושר|אושרה|נדחה|נדחתה|אולי|invitation|updated invitation|invitation updated|canceled event|cancelled event|event canceled|accepted|declined|tentatively accepted|tentative)\s*:/i;
+const isCalendarNotice = (subject) => CALENDAR_SUBJECT.test(String(subject ?? '').trim());
+
 async function recentThreads(userId, email, { max = 3, subject = '', days = THREAD_DAYS } = {}) {
   const address = String(email ?? '').trim().toLowerCase();
   if (!/^[^\s@"]+@[^\s@"]+$/.test(address)) return [];
@@ -69,8 +76,8 @@ async function recentThreads(userId, email, { max = 3, subject = '', days = THRE
         if (seen.has(m.threadId)) continue;
         seen.add(m.threadId);
         const ref = await threadRef(who, m.threadId);
-        if (ref) out.push(ref);
-        if (seen.size >= max) break;
+        if (ref && !isCalendarNotice(ref.subject)) out.push(ref);
+        if (out.length >= max) break;
       }
     }
   } catch (err) {
@@ -166,4 +173,4 @@ async function addPeople(userId, thread, people, { note = '' } = {}) {
   return { to, cc, subject, requestId: req?.id ?? null };
 }
 
-module.exports = { recentThreads, threadsText, threadCc, latestSent, addPeople, threadRef, mineOf, cleanSubject };
+module.exports = { isCalendarNotice, recentThreads, threadsText, threadCc, latestSent, addPeople, threadRef, mineOf, cleanSubject };

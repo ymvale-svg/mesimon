@@ -99,3 +99,15 @@ test('יומן: כל שינוי נרשם, בלי ערך הסיסמה', () => {
   assert.ok(h[0].changes.some((c) => c.includes('סיסמה הוחלפה')));
   assert.equal(JSON.stringify(h).includes('Top-Secret'), false);
 });
+
+test('🆕 מנהלת הרכש (מק"טים לבנייה): נשמרת בברירות המחדל, ומייל לא תקין נדחה', () => {
+  reset();
+  assert.equal(Settings.defaults().buyerEmail, '', 'ברירת המחדל — לא מוגדרת');
+  Settings.save({ defaults: { buyerName: 'רותי', buyerEmail: 'ruti@example.com' } });
+  assert.equal(Settings.defaults().buyerName, 'רותי');
+  assert.equal(Settings.defaults().buyerEmail, 'ruti@example.com');
+  assert.throws(() => Settings.save({ defaults: { buyerEmail: 'לא מייל' } }), /כתובת מייל לא תקינה/);
+  assert.equal(Settings.defaults().buyerEmail, 'ruti@example.com');
+  Settings.save({ defaults: { buyerEmail: '' } });
+  assert.equal(Settings.defaults().buyerEmail, '', 'ריק — מבטל');
+});

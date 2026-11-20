@@ -1414,6 +1414,12 @@ const AdminView = (() => {
             title: `🧪 Zoom — ${u.name}`,
             body: el('div', {}, [
               el('div.alert.alert-warn', {}, [el('span', { text: '⚠️' }), el('div', { text: r.explain })]),
+              // מה בדיוק חסר, ובאיזו אפליקציה — לפני הרשימה הארוכה
+              r.wanted?.length ? el('div', { style: { margin: '8px 0', fontWeight: '700' } }, [
+                `באפליקציה של חשבון Zoom ${r.account}${r.account === '2' ? ' (ZOOM2_… בשרת)' : ''} חסרה אחת מאלה: `,
+                el('span', { style: { direction: 'ltr', unicodeBidi: 'isolate' }, text: (r.missingScopes?.length ? r.missingScopes : r.wanted).join(' או ') })
+              ]) : null,
+              r.scopes?.length ? el('div.mute-sm', { text: `באסימון יש ${r.scopes.length} הרשאות, מתוכן ${r.scopes.filter((x) => x.startsWith('meeting:')).length} של פגישות (meeting:…).` }) : null,
               el('div.mute-sm', { text: `חשבון Zoom ${r.account} · ההרשאות שבאסימון עכשיו (מה ש-Zoom נותן לאפליקציה בפועל):` }),
               el('pre', { style: { whiteSpace: 'pre-wrap', direction: 'ltr', textAlign: 'left', fontSize: '12px' }, text: (r.scopes ?? []).join('\n') || '(אין — האפליקציה לא מחזירה הרשאות)' }),
               el('pre', { style: { whiteSpace: 'pre-wrap', direction: 'ltr', textAlign: 'left', fontSize: '12px' }, text: JSON.stringify({ status: r.status, code: r.code, message: r.message, firstError: r.firstError }, null, 2) })

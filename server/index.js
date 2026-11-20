@@ -37,6 +37,7 @@ const { HttpError, sendJson, serveStatic, parseUrl, unauthorized } = require('./
 const MailDocQueue = require('./mail').MailDocQueue;
 const MailDose = require('./mail').MailDose;
 const PoNotify = require('./priority').PoNotify;
+const PdParts = require('./priority').PdParts;
 const TimelessMedia = require('./meetings').TimelessMedia;
 const TimelessStore = require('./meetings').TimelessStore;
 
@@ -146,6 +147,8 @@ server.listen(PORT, HOST, () => {
     MailDocQueue.start();
     // 🧾 הזמנת רכש שהפכה לסופית בפריוריטי — למנהל הפרויקט וליוזם הדרישה (וואטסאפ ומייל)
     PoNotify.start();
+    // 🆕 מק"טים שנשלחו לרכש לבנייה — כשנבנו בפריוריטי, היוזם נשאל בבוט אם לבנות את הדרישה מחדש
+    PdParts.start();
   }
   // התראה למנהלים כשתקרת המעבד מאטה את הסוכנים
   LoadMonitor.start();

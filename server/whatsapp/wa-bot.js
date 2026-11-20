@@ -78,15 +78,15 @@ const Briefing = require('../meetings').Briefing;
 const Calendar = require('../meetings').Calendar;
 const Meetings = require('../meetings').Meetings;
 const Instinct = require('./instinct');
-const { appRoot, buttonReplyText, candidatesOf, chains, channel, checkState, currentMsg, DAY, DIGEST_GRACE_MIN, doneEmoji, emailText, enqueueAs, firstName, HISTORY_TURNS, hooks, inHours, isConfigured, localDate, log, mailAlertUsers, markDone, onDirect, orgUsers, parseJson, PICK_SHOWN, pickText, publicStatus, qr, react, reactNow, readLog, recentFiles, remove, resolveMentions, save, sendButtons, sendText, setState, signatureFields, signatureLine, splitMessage, taskLink, todayStats, userByPhone, WALK, workHours } = require('./wa-base');
+const { appRoot, lastOutId, buttonReplyText, candidatesOf, chains, channel, checkState, currentMsg, DAY, DIGEST_GRACE_MIN, doneEmoji, emailText, enqueueAs, firstName, HISTORY_TURNS, hooks, inHours, isConfigured, localDate, log, mailAlertUsers, markDone, onDirect, orgUsers, parseJson, PICK_SHOWN, pickText, publicStatus, qr, react, reactNow, readLog, recentFiles, remove, resolveMentions, save, sendButtons, sendText, setState, signatureFields, signatureLine, splitMessage, taskLink, todayStats, userByPhone, WALK, workHours } = require('./wa-base');
 const { analyzeGroup, bindGroup, listGroups, notifyAdmins, processGroup, processGroups, prune, recipientOf, sanitizeGroup } = require('./wa-groups');
 const { CANCEL, FORWARD_MAX, LIST_SHOWN, PLAIN_FEATURES, PLAIN_GREETING, PLAIN_HELP, PLAIN_INSIGHTS, PLAIN_LIST, PLAIN_TODAY, RANGES, READ_ALOUD, READ_ALOUD_DOWN, YES, actionOf, addForward, chatOf, checkDraft, clearForwards, draftText, emptyChat, featuresText, findContactCards, formatList, forwardsOf, helpText, localDay, readAloudAllowed, readAloudFile, readAloudText, saveChat, shortDate, sourceOf, understand, unknownReplied, withForwards } = require('./wa-private');
 const { deliver, flushOutbox, messageUser, notifyAssignment, sendFilesToUser } = require('./wa-tasks');
 const { answerLike, busyFor, meetCoordRun, meetCoordTick, pushToUser, questionTtlMin, releaseQuestion, replyWatchTick, rfqPrepare, rfqSend, rfqTick, sendSummaries, staleQuestion, userLastAt } = require('./wa-proactive');
 const { businessCommand, closeAlerted, closureDecision, confirmPending, contactOf, createFromDraft, draftEmail, findRecipients, mailActionAlerts, mailAlertFor, mailAlerts, parseThreadAdd, resolveCc, solveText, startGoodsFromMail, suggestionDecision, suggestionFeedback, threadAddText, VIA_EMAIL, VIA_MESIMON } = require('./wa-mail');
 const { MENU, MENU_FREE_HINT, MENU_MORE, PLAIN_AGENTS, agentsText, cut, dayItems, isMenuButton, menuButtonOf, menuButtons, menuOptions, menuPick, menuText, moreMenuGroups, pairsOf, parseClosureCommand, parseSuggestionCommand, recordingReply, todayMessage, walkAction, walkButtons, walkText } = require('./wa-menu');
-const { flowReply, logoIntent, meetingAudioAllowed, meetingAudioTurn, meetingFollowups, processMeetingAudio, receiveMeetingAudio, TRANSLATE } = require('./wa-meeting');
-const { DRAFT_ONLY, flowAgentsList, flowAlertNo, flowOnMailDose, flowApproval, flowBusinessCommand, flowCancel, flowClosureCommand, flowEmailEdit, flowEmailPick, flowEmailSolve, flowEmailVia, flowFeaturesRequest, flowFormFillRequest, flowGreeting, flowInstinct, flowInstinctExplicit, flowInstinctPilot, flowNoticeToInstinct, flowIntentCancel, flowIntentDenied, flowIntentMenu, flowIntentOther, flowMailReplyEdit, flowMailWalk, flowMeetCoordRequest, flowMeetingAudioAnswer, flowMeetingAudioRequest, flowMeetingFollowupRequest, flowMeetingReminderRequest, flowMenuList, flowMenuPick, flowNoAi, flowNoticeRequest, flowOnClosureAddress, flowOnDayEvening, flowOnFormFill, flowOnGoodsStop, flowOnMailMuteSender, flowOnMailRemindOrGoods, flowOnMeetCoord, flowOnMeetingTasks, flowOnPaceOffer, flowOnPlainMail, flowOnReminder, flowOnRfq, flowOnSentFollowup, flowOnThreadAdd, flowRemindersRequest, flowReplyAsk, flowRfqRequest, flowRfqSummary, flowSuggestionCommand, flowTranslateRequest, flowWalk, NEXT, switchCancels } = require('./wa-flows');
+const { flowReply, logoIntent, meetingAudioAllowed, meetingAudioTurn, meetingFollowups, processMeetingAudio, receiveMeetingAudio, timelessAudioTick, TRANSLATE } = require('./wa-meeting');
+const { DRAFT_ONLY, flowAgentsList, flowAlertNo, flowOnMailDose, flowApproval, flowBusinessCommand, flowCancel, flowClosureCommand, flowEmailEdit, flowEmailPick, flowEmailSolve, flowEmailVia, flowFeaturesRequest, flowFormFillRequest, flowGreeting, flowInstinct, flowInstinctExplicit, flowInstinctReply, flowInstinctPilot, flowNoticeToInstinct, flowIntentCancel, flowIntentDenied, flowIntentMenu, flowIntentOther, flowMailReplyEdit, flowMailWalk, flowMeetCoordRequest, flowMeetingAudioAnswer, flowMeetingAudioRequest, flowMeetingAudioStatus, flowMeetingFollowupRequest, flowMeetingReminderRequest, flowMenuList, flowMenuPick, flowNoAi, flowNoticeRequest, flowOnClosureAddress, flowOnDayEvening, flowOnFormFill, flowOnGoodsStop, flowOnMailMuteSender, flowOnMailRemindOrGoods, flowOnMeetCoord, flowOnMeetingTasks, flowOnPaceOffer, flowOnPlainMail, flowOnReminder, flowOnRfq, flowOnSentFollowup, flowOnThreadAdd, flowRemindersRequest, flowReplyAsk, flowRfqRequest, flowRfqSummary, flowSuggestionCommand, flowTranslateRequest, flowWalk, NEXT, switchCancels } = require('./wa-flows');
 
 const RECENT_FILE_MS = 15 * 60 * 1000;
 
@@ -361,7 +361,7 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
     const reply = request
       ? { ...await MailInsights.draftReply(actor.id, item.gmailId, request), ...await signatureFields(box) }
       : { ...await MailInsights.suggestReply(actor.id, item.gmailId, { box: boxNo }), ...await signatureFields(box) };
-    return out(replyText(reply), { draft: { kind: 'mail_reply', reply }, awaiting: true }, { action: 'mail_insights', status: 'ok', result: `טיוטת תשובה ל${reply.toName || reply.to}` });
+    return out(replyText(reply), { draft: { kind: 'mail_reply', reply, offeredAt: D.nowIso() }, awaiting: true }, { action: 'mail_insights', status: 'ok', result: `טיוטת תשובה ל${reply.toName || reply.to}` });
   };
 
   /*
@@ -481,6 +481,7 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
   // 🎙 הקלטת פגישה מוואטסאפ: "לאיזו פגישה?", "לפתוח את המשימות?", ו"הקלטת פגישה" (ההקלטה הבאה)
   { const c = { actor, converse, dry, keep, out, state, t, user }; const r = await flowMeetingAudioAnswer(c); if (r !== NEXT) return r; state = c.state; }
   { const r = await flowMeetingAudioRequest({ actor, out, t }); if (r !== NEXT) return r; }
+  { const r = await flowMeetingAudioStatus({ actor, out, t }); if (r !== NEXT) return r; }
   // 🎥 אחרי פגישה מוקלטת: "תפתח אותן" (במילים) על המשימות, ו"כן" / "לא" על שליחת הסיכום
   { const c = { actor, dry, keep, out, state, t }; const r = await flowOnMeetingTasks(c); if (r !== NEXT) return r; state = c.state; }
   { const c = { actor, dry, keep, out, state, t }; const r = await flowOnPlainMail(c); if (r !== NEXT) return r; state = c.state; }
@@ -770,10 +771,14 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
   { const r = await flowInstinctPilot({ actor, dry, out, t }); if (r !== NEXT) return r; }
   // 🤖 "אינסטינקט, …" — ישר לעוזר הכללי, בלי AI
   { const r = await flowInstinctExplicit({ actor, dry, out, t, user }); if (r !== NEXT) return r; }
+  // 🤖 אינסטינקט שאל בסוף התשובה ("להכין כך?") — התשובה של העובד אליו, בציטוט
+  { const r = await flowInstinctReply({ actor, dry, out, state, t, user }); if (r !== NEXT) return r; }
 
   { const r = await flowNoAi({ actor, insightsReply, listReply, menuReply, out, state, t, todayReply, withReadAloud }); if (r !== NEXT) return r; }
 
-  const u = await understand(user, actor, state, t, projects, myOpen);
+  // 📎 קובץ שנשלח עם ההודעה (או ממש לפניה) — ה-AI צריך לדעת שהוא קיים: "תתקן את המסמך לתאריך …" הוא בקשה על הקובץ,
+  // לא שינוי תאריך של משימה (באג 17.11.26)
+  const u = await understand(user, actor, state, t, projects, myOpen, { file: Instinct.allowed(actor) ? Instinct.peekFile(user.id) : null });
   { const r = await flowIntentCancel({ out, u }); if (r !== NEXT) return r; }
   // 🤖 בקשה כללית (לא עבודה) — לאינסטינקט, ברקע
   { const r = await flowInstinct({ actor, dry, out, t, u, user }); if (r !== NEXT) return r; }
@@ -804,7 +809,12 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
       try {
         const user = D.get('SELECT id, full_name, email, role FROM users WHERE id = ?', actor.id);
         const r = await Agents.ask(user, actor, question, { channel: 'whatsapp', history: pairsOf(state.history) });
-        return out(Agents.asText(r), {}, { action: 'mail_ask', status: 'ok', result: `"${question.slice(0, 120)}": ${r.agent?.title ?? (r.mail ? 'מיילים' : 'כללי')}` });
+        // ✍️ נוסח מוכן — הודעה נפרדת אחרי התשובה, נקייה, להעברה כמו שהיא
+        const [first, draft] = Agents.asMessages(r);
+        return out(first, {}, {
+          action: 'mail_ask', status: 'ok', result: `"${question.slice(0, 120)}": ${r.agent?.title ?? (r.mail ? 'מיילים' : 'כללי')}`,
+          ...(draft ? { readyText: draft, followUps: [async () => ({ text: draft })] } : {})
+        });
       } catch (err) {
         return out(err.message, {}, { action: 'mail_ask', status: 'error', result: err.message.slice(0, 200) });
       }
@@ -982,6 +992,12 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
         return out(draftText(draft, user), { draft, awaiting: true },
           { action: 'create_task', status: draft.warnings.length ? 'denied' : 'ok', result: `טיוטה: ${draft.title}${draft.warnings.length ? ` · ${draft.warnings.join(' · ')}` : ''}` });
       }
+      // "לפתוח בלי פרויקט?" — שאלת כן/לא על טיוטה שלמה: "כן" פותח אותה, ולא מציג אותה שוב (באג 18.11.26)
+      if (u.draft.title && OPEN_ASK.test(u.reply ?? '')) {
+        const draft = checkDraft(actor, u.draft);
+        return out(u.reply, { draft, awaiting: true },
+          { action: 'create_task', status: 'unclear', result: `שאלה לפני פתיחה: ${draft.title}` });
+      }
       return out(u.reply || 'מה לכתוב בכותרת המשימה?', { draft: u.draft.title ? u.draft : null },
         { action: 'create_task', status: 'unclear', result: 'חסרים פרטים' });
   }
@@ -989,6 +1005,9 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
 
 
 const CANCEL_ALL = /^ביטול\s+(?:הכו?ל|כל)/;
+
+/** שאלת ה-AI היא "לפתוח (את המשימה) …?" — כן/לא על הטיוטה עצמה */
+const OPEN_ASK = /(?:^|[\s,.])ל?פתוח(?=[\s?])[^?]*\?\s*$/;
 
 /** האם מחכים לתשובה של העובד — אז הבקשה הבאה בתור מחכה */
 const isPending = (next) => Boolean(next.awaiting || ['email_pick', 'reply_ask'].includes(next.draft?.kind));
@@ -1057,6 +1076,8 @@ async function withFollowUps(r) {
 
 let buttonShapeLogged = false;
 
+/** 🔒 המסמך שהכפתורים של קבלת סחורה / דרישת רכש שואלים עליו — כפתור של מסמך אחר לא עונה כאן (#171) */
+const docDraft = (doc) => (doc ? { doc } : null);
 const quietLocationLog = new Map(); // ‎userId‎ → מתי נרשם עדכון מיקום שקט אחרון
 
 /** הודעה פרטית לבוט — קריאות ל-AI בטיפול בה נרשמות לעובד ששלח (💰 ‎ai-usage.js‎) */
@@ -1215,10 +1236,38 @@ async function handleDirectAs(msg) {
     }
   }
   const pdAllowed = WaActions.allowed(actor, 'purchase_demand');
+  // ❓ לחיצה על כפתור של שאלה מסוימת — לשאלה הזו, ולא למה שפתוח עכשיו (‎wa-questions.js‎).
+  // 🔒 תגובה (Reaction), או ציטוט עם "כן" / "לא" קצר — כמו לחיצה על ההודעה שעליה הם (#171)
+  const reaction = msg.kind === 'reactionMessage';
+  const reacted = reaction && msg.replyTo?.id ? msg.replyTo.id : '';
+  const quotedAnswer = !msg.button && !msg.file && Boolean(msg.replyTo?.id) && answerLike(text);
+  const pressed = (msg.button && msg.replyTo?.button) || reaction || quotedAnswer ? WaQuestions.find(user.id, msg.replyTo?.id) : null;
+  // מסמך אחר (קבלת סחורה / דרישת רכש) — הכפתור או התגובה של מסמך שכבר לא פתוח
+  const flowDoc = pressed?.owner === 'goods_receipt' ? GoodsReceipt.docId(user.id) : pressed?.owner === 'purchase_demand' ? PurchaseDemand.docId(user.id) : null;
+  const otherDoc = Boolean(pressed?.draft?.doc) && pressed.draft.doc !== flowDoc;
+  // תגובה היא תשובה רק על ההודעה של השאלה: בשיחה — שאלת כן/לא (לא תפריט); בקבלת סחורה / דרישת רכש — ההודעה האחרונה שלהן
+  const onQuestion = Boolean(pressed) && (pressed.owner === 'chat'
+    ? Boolean(pressed.awaiting && pressed.draft)
+    : otherDoc || WaQuestions.latest(user.id, pressed.owner)?.id === pressed.id);
+  msg = { ...msg, onQuestion };
+  if (reaction && !onQuestion) {
+    // 👍 על הודעה אחרת — לא תשובה. יש שאלה פתוחה — אומרים מה לעשות; אין — כלום
+    const cur = chatOf(user.id);
+    const open = (cur.awaiting && cur.draft && cur.draft.kind !== 'menu') || GoodsReceipt.active(user.id, true) || PurchaseDemand.active(user.id, true);
+    const reply = open ? 'ℹ️ התגובה הייתה על הודעה אחרת, אז לא עשיתי כלום. כדי לענות — לחצו על כפתור בשאלה, או כתבו *כן* / *לא*.' : '';
+    log({ ...base, text, action: 'other', status: 'ok', result: `תגובה ${text || ''} על הודעה שאינה השאלה — לא נחשבה תשובה`.slice(0, 300), reply: reply || undefined });
+    if (reply) await sendText(msg.chatId, reply);
+    return;
+  }
+  if (otherDoc) {
+    const no = WaQuestions.isNo(text);
+    const reply = no ? WaQuestions.CLOSED_NO_TEXT : WaQuestions.CLOSED_TEXT;
+    log({ ...base, text, action: pressed.owner, status: no ? 'ok' : 'unclear', result: `כפתור / תגובה על מסמך אחר (${pressed.draft.doc})${no ? ' (תשובה שלילית)' : ''}`, reply });
+    await sendText(msg.chatId, reply);
+    return;
+  }
   // ⏳ 15 דקות בלי תשובה — דרישת הרכש / קבלת הסחורה כבר לא "פעילה", והודעה חדשה מתחילה מההתחלה. לחיצה על כפתור — עוד עונה
   const late = !msg.file && answerLike(text, msg);
-  // ❓ לחיצה על כפתור של שאלה מסוימת — לשאלה הזו, ולא למה שפתוח עכשיו (‎wa-questions.js‎)
-  const pressed = msg.button && msg.replyTo?.button ? WaQuestions.find(user.id, msg.replyTo.id) : null;
   // 🔍 פעם אחת לכל הפעלה: לחיצה שהגיעה בלי מזהה ההודעה — ביומן (לסקירה הלילית), עם שמות השדות בלבד
   if (msg.button && !msg.replyTo?.button && !buttonShapeLogged) {
     buttonShapeLogged = true;
@@ -1271,7 +1320,7 @@ async function handleDirectAs(msg) {
       await notice;
       const parts = r.replies.map((x, i) => (i === 0 && pre ? `${pre}\n\n${x}` : x)).flatMap((reply) => splitMessage(reply));
       for (let i = 0; i < parts.length; i++) {
-        if (i === parts.length - 1 && r.buttons?.length) await sendButtons(msg.chatId, parts[i], r.buttons, { owner: 'purchase_demand' });
+        if (i === parts.length - 1 && r.buttons?.length) await sendButtons(msg.chatId, parts[i], r.buttons, { owner: 'purchase_demand', draft: docDraft(PurchaseDemand.docId(user.id)) });
         else await sendText(msg.chatId, parts[i]);
       }
       return;
@@ -1332,7 +1381,7 @@ async function handleDirectAs(msg) {
       // כפתורי תשובה — על ההודעה האחרונה בלבד
       const parts = r.replies.flatMap((reply) => splitMessage(reply));
       for (let i = 0; i < parts.length; i++) {
-        if (i === parts.length - 1 && r.buttons?.length) await sendButtons(msg.chatId, parts[i], r.buttons, { owner: 'goods_receipt' });
+        if (i === parts.length - 1 && r.buttons?.length) await sendButtons(msg.chatId, parts[i], r.buttons, { owner: 'goods_receipt', draft: docDraft(GoodsReceipt.docId(user.id)) });
         else await sendText(msg.chatId, parts[i]);
       }
       return;
@@ -1407,6 +1456,12 @@ async function handleDirectAs(msg) {
     releaseQuestion(state.draft);
     state = { ...state, draft: null, awaiting: false, queue: [] };
   }
+  // 👍 / 👎 על הודעה ישנה שאינה שאלה רשומה — לא תשובה לשאלה הפתוחה (היא נשאלה בהודעה אחרת). לא עושים כלום
+  if (reacted && !pressed && state.awaiting && state.draft && lastOutId(msg.chatId) && reacted !== lastOutId(msg.chatId)) {
+    log({ ...base, text, action: 'other', status: 'unclear', result: `סימון ${text} על הודעה ישנה — לא תשובה ל-${state.draft.kind ?? 'task'}` });
+    await sendText(msg.chatId, WaQuestions.OLD_REACTION_TEXT);
+    return;
+  }
   let r;
   // תשובה שמתעכבת (תמלול, Today ראשון של היום, ניסוח מייל) — קודם "רגע", כדי שלא ייראה שהבוט לא שמע
   // הודעה קולית — מ-✍️ (תמלול) ל-🤔 (הבנה) מיד; כתובה — 🤔 רק אם התשובה מתעכבת
@@ -1454,11 +1509,14 @@ async function handleDirectAs(msg) {
   const grNote = grAllowed ? GoodsReceipt.pausedNote(user.id) : '';
   const body = grNotice ? `${grNotice}\n\n${r.reply}` : r.reply;
   const reply = `${retried ? `${AiOutage.retryHeader(retried)}\n\n` : ''}${voice ? `🎙 *שמעתי:* "${said}"\n\n${body}` : body}${grNote ? `\n\n${grNote}` : ''}`;
-  const history = [...state.history, { role: 'user', text: text.slice(0, 500) }, { role: 'bot', text: r.reply.slice(0, 500) }];
+  // הנוסח שנשלח בנפרד נכנס גם להיסטוריה — כך "תקצר אותו" יודע על מה מדובר
+  const history = [...state.history, { role: 'user', text: text.slice(0, 500) }, { role: 'bot', text: [r.reply, r.readyText].filter(Boolean).join('\n\n').slice(0, 900) }];
   // חותמת הזמן של השאלה — ממנה נספרות 15 הדקות (‎staleQuestion‎) והשעתיים (‎busyFor‎)
   // ענו על שאלה ישנה שהוחזרה — מה שהיה פתוח קודם (טיוטת מייל, משימה) חוזר להיות פתוח
   if (displaced && !r.next.draft) r = { ...r, next: { ...r.next, draft: displaced.draft, awaiting: displaced.awaiting } };
   saveChat(user.id, { ...r.next, draft: r.next.draft ? { ...r.next.draft, askedAt: D.nowIso() } : r.next.draft, history });
+  // השאלה שהייתה פתוחה נסגרה — 👍 מאוחר על ההודעה שלה לא יחזיר אותה (ולא ישלח פעמיים)
+  if (state.awaiting && state.draft && WaQuestions.draftKey(r.next.draft) !== WaQuestions.draftKey(state.draft)) WaQuestions.markAnsweredKey(user.id, WaQuestions.draftKey(state.draft));
   const fwdNote = forwards.length ? ` (+${forwards.filter((x) => x.kind === 'forward').length} מועברות)` : '';
   log({ ...base, text: `${voice ? `🎙 ${said}` : said}${fwdNote}`, action: r.action, status: r.status, result: r.result, taskId: r.taskId ?? null, reply });
   // הודעה ארוכה מדי — בכמה הודעות; כפתורי תשובה (התפריט) — על האחרונה
@@ -1804,6 +1862,8 @@ async function tick() {
   try {
     // 🩺 בקשות שנשמרו כשה-AI לא היה זמין — גם מחוץ לשעות: העובד שלח אותן ומחכה
     await retryTick();
+    // 🎥 הקלטת פגישה ארוכה שהועלתה ל-Timeless — העובד מחכה לסיכום, גם מחוץ לשעות
+    await timelessAudioTick().catch((err) => console.error('[משימון] הקלטות ב-Timeless:', err.message));
     // ההודעות עצמן מגיעות דרך המאזין (‎listen‎); כאן — מה שנדחה לשעות הפעילות
     if (inHours()) {
       for (const m of takeDeferred()) dispatch(m);

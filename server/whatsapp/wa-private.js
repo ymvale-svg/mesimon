@@ -336,7 +336,7 @@ function sourceOf(aiSource, text) {
 }
 
 
-async function understand(user, actor, state, text, projects, myOpen) {
+async function understand(user, actor, state, text, projects, myOpen, { file = null } = {}) {
   const users = orgUsers();
   const { allowedProjects } = newTaskScope(actor);
   const allowedList = projects.filter((p) => allowedProjects.has(p.id));
@@ -384,6 +384,7 @@ async function understand(user, actor, state, text, projects, myOpen) {
     'השיחה עד כה:',
     ...(state.history.length ? state.history.map((h) => `${h.role === 'bot' ? 'הבוט' : 'הכותב'}: ${h.text}`) : ['(התחלה)']),
     '',
+    ...(file ? [`קובץ שצורף — הכותב שלח אותו עם ההודעה או ממש לפניה: ${String(file.name || 'קובץ').slice(0, 120)}${file.mime ? ` (${file.mime})` : ''}`, ''] : []),
     'ההודעה החדשה:',
     '<<<',
     text.slice(0, 3000),
