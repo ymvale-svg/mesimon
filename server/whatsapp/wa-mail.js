@@ -264,9 +264,6 @@ function createFromDraft(actor, original) {
 /** תוקף הצעת תשובה למייל: אחרי שעתיים "כן" כבר לא שולח (#171) */
 const MAIL_REPLY_TTL_MS = 2 * 60 * 60 * 1000;
 
-// מייל שביקשו עליו מעקב / משימה במילים — נפתחת משימת AI שעוקבת אחרי התשובה
-const WANTS_TASK = /משימ|תעקוב|לעקוב|מעקב|follow/i;
-
 /** ביצוע מה שהעובד אישר ב"כן". בבדיקה ממסך הניהול (‎dry‎) — רק מתארים */
 async function confirmPending(actor, pending, dry) {
   const kind = pending.kind ?? 'task';
@@ -343,11 +340,12 @@ async function confirmPending(actor, pending, dry) {
       const internal = pending.contact.type === 'user' && pending.via === 'mesimon';
       const wa = pending.channel === 'whatsapp' && pending.contact.type !== 'user';
       /*
-       * ✉️ מייל רגיל — יוצא ישר מ-Gmail, בלי משימה (באג 18.11.26: כל מייל מהבוט פתח משימת AI בלוח).
-       * הבוט הוא המזכירה: כשיענו — "📬 ענה למייל ששלחת" (‎ReplyWatch‎ ב-‎sendReply‎). משימת מעקב — רק כשביקשו
-       * במילים ("ותעקוב", "משימה"), מ"💡 פתרון לבעיה", או מהצעה ("סגור א").
+       * ✉️ משימה ומייל — שני דברים נפרדים (ישראל, 20.11.26; באג 18.11: כל מייל מהבוט פתח משימת AI בלוח).
+       * מייל יוצא ישר מ-Gmail ולעולם לא פותח משימה — גם "ותעקוב", מהצעה ומ"💡 פתרון לבעיה". המעקב:
+       * כשיענו — "📬 ענה למייל ששלחת" (‎ReplyWatch‎ ב-‎sendReply‎). משימה — רק כשמבקשים משימה.
+       * נשארו משימה: "במשימון" לעובד (זו משימה, לא מייל), ווואטסאפ לגורם חיצוני (עוד לא הופרד).
        */
-      if (!internal && !wa && !pending.solve && !pending.suggestionId && !WANTS_TASK.test(pending.instruction ?? '')) {
+      if (!internal && !wa) {
         if (pending.ccAsk?.length) {
           return { reply: `לפני השליחה — עוד לא ברור מי בהעתק: ${pending.ccAsk.map((x) => `"${x.name}"`).join(', ')}. כתבו *בהעתק* עם השם המלא או המייל, או *בלי* והשם.`, action, status: 'unclear', result: 'העתק לא ברור', keep: true };
         }
@@ -359,6 +357,8 @@ async function confirmPending(actor, pending, dry) {
             cc: (pending.cc ?? []).map((c) => c.email).filter(Boolean),
             ...(rt?.threadId ? { threadId: rt.threadId, inReplyTo: rt.inReplyTo, references: rt.references ?? [] } : {})
           });
+          // מ"סגור א": המייל הוא הטיפול בהצעה — היא יורדת מ"ממתין לאישורך" כנענתה, בלי משימה
+          if (pending.suggestionId) closeAlerted(actor.id, [pending.suggestionId], 'replied');
         }
         return {
           reply: `📧 נשלח ל${who}${rt?.threadId ? ' — בהמשך לשרשור' : ''}. כשיענו — אעדכן אותך כאן 📬${test}`,
@@ -410,7 +410,7 @@ async function confirmPending(actor, pending, dry) {
 /**
  * "סגור א" — מה שהוצע ב-💡 של ההצעה:
  *   • פנייה — טיוטת מייל לנמען שהוצע, לאישור ב"כן" (אותה זרימה של "שלח מייל"):
- *     משימת AI נפתחת מההצעה ועוקבת אחרי התשובה. בלי כתובת — שואלים מה המייל.
+ *     המייל יוצא בלי משימה, וההצעה יורדת כנענתה. בלי כתובת — שואלים מה המייל.
  *   • להעביר לעובד — המשימה נפתחת אצלו (ואני נשאר שותף), כמו באפליקציה.
  *   • לבד — המשימה נפתחת אצלי, והצעדים כצ'קליסט.
  * כמו כל פנייה החוצה: שום דבר לא נשלח בלי "כן".

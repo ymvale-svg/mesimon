@@ -1,8 +1,9 @@
 'use strict';
 /**
  * 18.11: "תענה למרק פלדמן…" ← 👍 — כל מייל שיצא מהבוט פתח משימת AI (משימות 587, 588 בלוח של ישראל).
- * הבוט הוא המזכירה: מייל רגיל יוצא ישר מ-Gmail, בלי משימה, עם מעקב "📬 ענה למייל ששלחת" (‎ReplyWatch‎).
- * משימה — רק כשביקשו במילים ("ותעקוב", "תפתח משימה"), מהצעה, על משימה קיימת, או לעובד "במשימון".
+ * "משימה ומייל — שני דברים נפרדים" (ישראל, 20.11.26): מייל יוצא ישר מ-Gmail ולעולם לא פותח משימה — גם
+ * כשכתבו "ותעקוב" (המעקב הוא "📬 ענה למייל ששלחת", ‎ReplyWatch‎), מהצעה ומ"💡 פתרון לבעיה".
+ * משימה — רק כשמבקשים משימה. מייל על משימה קיימת — נשמר בה (לא נפתחת חדשה); "במשימון" לעובד — זו משימה, לא מייל.
  */
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -58,21 +59,32 @@ test('מייל חדש (בלי שרשור) — גם בלי משימה', async (t)
   assert.equal(sent[0].threadId, undefined);
 });
 
-test('ביקש במילים מעקב / משימה — נפתחת משימת AI כמו קודם', async (t) => {
-  for (const instruction of ['שלח לספק בקשה להצעת מחיר ותעקוב אחרי התשובה', 'תפתח משימה ותשלח למרק מייל']) {
+test('גם "ותעקוב" / "תפתח משימה" / "💡 פתרון לבעיה" — המייל יוצא, ולא נפתחת משימה', async (t) => {
+  for (const extra of [
+    { instruction: 'שלח לספק בקשה להצעת מחיר ותעקוב אחרי התשובה' },
+    { instruction: 'תפתח משימה ותשלח למרק מייל' },
+    { solve: { problem: 'מזגן', solution: 'טכנאי' } }
+  ]) {
     const { sent, tasks } = mocks(t);
     const u = user({ role: 'employee' });
-    const r = await WaMail.confirmPending(Auth.loadActor('user', u.id), pendingFor({ instruction }), false);
-    assert.equal(tasks.length, 1, instruction);
-    assert.equal(sent.length, 0, instruction);
-    assert.equal(r.taskId, 999);
+    const r = await WaMail.confirmPending(Auth.loadActor('user', u.id), pendingFor(extra), false);
+    assert.equal(tasks.length, 0, JSON.stringify(extra));
+    assert.equal(sent.length, 1, JSON.stringify(extra));
+    assert.equal(r.taskId ?? null, null);
   }
 });
 
-test('מהצעה ("סגור א") — עדיין משימה מההצעה', async (t) => {
+test('מהצעה ("סגור א") — המייל יוצא, בלי משימה; ההצעה יורדת כ"נענתה"', async (t) => {
+  const { D } = require('../../helpers/db');
   const { sent, tasks } = mocks(t);
   const u = user({ role: 'employee' });
-  await WaMail.confirmPending(Auth.loadActor('user', u.id), pendingFor({ suggestionId: 5 }), false);
-  assert.equal(tasks.length, 1);
-  assert.equal(sent.length, 0);
+  const id = Number(D.run(
+    `INSERT INTO ai_suggestions (user_id, kind, status, gmail_id, header_id, from_name, from_email, subject, data, received_at, created_at)
+     VALUES (?, 'task', 'pending', 'g-s1', 'h-s1', 'דני', 'dani@example.test', 'נושא', '{"title":"x"}', ?, ?)`, u.id, D.nowIso(), D.nowIso()
+  ).lastInsertRowid);
+  await WaMail.confirmPending(Auth.loadActor('user', u.id), pendingFor({ suggestionId: id }), false);
+  assert.equal(tasks.length, 0);
+  assert.equal(sent.length, 1);
+  assert.equal(D.get('SELECT status, task_id FROM ai_suggestions WHERE id = ?', id).status, 'replied');
+  assert.equal(D.get('SELECT task_id FROM ai_suggestions WHERE id = ?', id).task_id, null);
 });
