@@ -20,6 +20,8 @@ const Rfq = require('../priority').Rfq;
 const Notice = require('./notice');
 const SentFollowup = require('../mail').SentFollowup;
 const MailThread = require('../mail').MailThread;
+const MailFiles = require('../mail').MailFiles;
+const { Gmail } = require('../integrations');
 const Claude = require('../integrations').Claude;
 const Reminders = require('./reminders');
 const MailActions = require('../mail').MailActions;
@@ -492,6 +494,49 @@ async function flowMeetingAudioAnswer(ctx) {
     state = { ...state, draft: null, awaiting: false };
   }
   ctx.state = state;
+  return NEXT;
+}
+
+/*
+ * 📎 קובץ מהמייל (הוחלט 20.11.26): "תמצא לי מצגת מלונאות רכסים" — הקובץ עצמו בוואטסאפ, מהתיבה של העובד בלבד.
+ * המתאים ביותר נשלח; עוד קבצים שמתאימים — בכפתורים (שם הקובץ), והלחיצה שולחת אותו.
+ */
+const MAIL_FILE_MAX = 25 * 1024 * 1024;
+async function sendMailFile(actor, out, f, others = []) {
+  if (f.size > MAIL_FILE_MAX) return out(`📎 *${f.filename}* גדול מדי לוואטסאפ (${Math.round(f.size / 1024 / 1024)}MB). הוא במייל: "${f.subject}".`, { draft: null }, { action: 'mail_file', status: 'unclear', result: `גדול מדי: ${f.filename}` });
+  let file;
+  try { file = await MailFiles.download(f); } catch (err) {
+    return out('לא הצלחתי להוריד את הקובץ מהמייל 😕 נסו שוב בעוד רגע.', { draft: null }, { action: 'mail_file', status: 'error', result: `הורדה נכשלה: ${err.message}`.slice(0, 300) });
+  }
+  const rest = others.filter((o) => o.filename !== f.filename).slice(0, 3);
+  const buttons = rest.length ? WaUi.labels(rest.map((o) => o.filename)) : [];
+  const text = [MailFiles.caption(f), rest.length ? `\nעוד במייל: ${rest.map((o) => `${o.filename}${o.date ? ` (${new Intl.DateTimeFormat('he-IL', { timeZone: 'Asia/Jerusalem', day: 'numeric', month: 'numeric', year: '2-digit' }).format(new Date(o.date))})` : ''}`).join(' · ')}\nלשלוח עוד אחד — בכפתור.` : ''].join('');
+  return out(text, rest.length ? { draft: { kind: 'mail_file', options: rest, buttons }, awaiting: true } : { draft: null },
+    { action: 'mail_file', status: 'ok', result: `נשלח קובץ מהמייל: ${f.filename}`.slice(0, 300), files: [file], buttons: buttons.length ? buttons : undefined });
+}
+
+async function flowMailFileRequest({ actor, dry, out, t }) {
+  if (actor?.type !== 'user' || !WaActions.allowed(actor, 'mail_ask') || !MailFiles.isRequest(t)) return NEXT;
+  if (!Gmail.boxesOf(actor.id, 'mail').length) return NEXT;
+  if (dry) return out(`(בדיקה) הייתי מחפש במייל קובץ: "${t}"`, {}, { action: 'mail_file', status: 'ok', result: 'בדיקה' });
+  const found = await MailFiles.find(actor.id, t).catch((err) => { console.error('[משימון] חיפוש קובץ במייל נכשל:', err.message); return []; });
+  if (!found.length) {
+    const { terms } = MailFiles.parse(t);
+    return out(`📎 לא מצאתי במייל שלך קובץ מצורף${terms.length ? ` על "${terms.join(' ')}"` : ''}. נסו מילה מתוך שם הקובץ, או את השם של מי ששלח אותו.`, {},
+      { action: 'mail_file', status: 'unclear', result: `לא נמצא קובץ: ${terms.join(' ')}`.slice(0, 300) });
+  }
+  return sendMailFile(actor, out, found[0], found.slice(1));
+}
+
+/** לחיצה על אחד הקבצים האחרים — שולחים אותו. משהו אחר — השאלה יורדת, וההודעה ממשיכה לניתוב */
+async function flowOnMailFile(ctx) {
+  const { actor, keep, out, state, t } = ctx;
+  if (!(state.awaiting && state.draft?.kind === 'mail_file')) return NEXT;
+  const i = (state.draft.buttons ?? []).findIndex((b) => WaUi.sameLabel(t, b));
+  const pick = i >= 0 ? state.draft.options[i] : (state.draft.options ?? []).find((o) => WaUi.normalize(o.filename) === WaUi.normalize(t));
+  if (pick) return sendMailFile(actor, out, pick, state.draft.options);
+  keep.draft = null;
+  ctx.state = { ...state, draft: null, awaiting: false };
   return NEXT;
 }
 
@@ -1025,5 +1070,5 @@ const switchCancels = () => Boolean(D.getSetting('wa_topic_switch_cancels', true
 const DRAFT_ONLY = /(?:(?:בלי|לא\s+משנה|אין\s+לי\s+(?:את\s+)?|עזוב(?:\s+את)?)\s*ה?(?:כתובת|מייל|נמען)|רק\s+ת?(?:נסח|כתוב)|ת?נסח\s+(?:לי\s+)?(?:רק\s+)?(?:את\s+)?ה?(?:מלל|טקסט|נוסח))/;
 
 module.exports = {
-  SEND_NOW, DRAFT_ONLY, flowAgentsList, flowAlertNo, flowApproval, flowBusinessCommand, flowCancel, flowClosureCommand, flowEmailEdit, flowEmailPick, flowEmailSolve, flowEmailVia, flowFeaturesRequest, flowFormFillRequest, flowGreeting, flowInstinct, flowInstinctExplicit, flowInstinctReply, flowInstinctPilot, flowNoticeToInstinct, flowIntentCancel, flowIntentDenied, flowIntentMenu, flowIntentOther, flowMailReplyEdit, flowMailWalk, flowMeetCoordRequest, flowMeetingAudioAnswer, flowMeetingAudioRequest, flowMeetingAudioStatus, flowMeetingFollowupRequest, flowMeetingReminderRequest, flowMenuList, flowMenuPick, flowNoAi, flowNoticeRequest, flowOnClosureAddress, flowOnDayEvening, flowOnFormFill, flowOnGoodsStop, flowOnMailMuteSender, flowOnMailRemindOrGoods, flowOnMeetCoord, flowOnMeetingTasks, flowOnPaceOffer, flowOnPlainMail, flowOnReminder, flowOnRfq, flowOnSentFollowup, flowOnThreadAdd, flowRemindersRequest, flowReplyAsk, flowRfqRequest, flowRfqSummary, flowSuggestionCommand, flowTranslateRequest, flowWalk, NEXT, switchCancels
+  SEND_NOW, DRAFT_ONLY, flowAgentsList, flowAlertNo, flowApproval, flowBusinessCommand, flowCancel, flowClosureCommand, flowEmailEdit, flowEmailPick, flowEmailSolve, flowEmailVia, flowFeaturesRequest, flowFormFillRequest, flowGreeting, flowInstinct, flowInstinctExplicit, flowInstinctReply, flowInstinctPilot, flowNoticeToInstinct, flowIntentCancel, flowIntentDenied, flowIntentMenu, flowIntentOther, flowMailFileRequest, flowMailReplyEdit, flowMailWalk, flowMeetCoordRequest, flowMeetingAudioAnswer, flowMeetingAudioRequest, flowMeetingAudioStatus, flowMeetingFollowupRequest, flowMeetingReminderRequest, flowMenuList, flowMenuPick, flowNoAi, flowNoticeRequest, flowOnClosureAddress, flowOnDayEvening, flowOnFormFill, flowOnGoodsStop, flowOnMailFile, flowOnMailMuteSender, flowOnMailRemindOrGoods, flowOnMeetCoord, flowOnMeetingTasks, flowOnPaceOffer, flowOnPlainMail, flowOnReminder, flowOnRfq, flowOnSentFollowup, flowOnThreadAdd, flowRemindersRequest, flowReplyAsk, flowRfqRequest, flowRfqSummary, flowSuggestionCommand, flowTranslateRequest, flowWalk, NEXT, switchCancels
 };

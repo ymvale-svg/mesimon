@@ -19,6 +19,7 @@ module.exports = {
   get InsightWindow() { return require('./insight-window'); },
   get FormFill() { return require('./form-fill'); },
   get MailThread() { return require('./mail-thread'); },
+  get MailFiles() { return require('./mail-files'); },
   get MailPush() { return require('./mail-push'); },
   get ReplyWatch() { return require('./reply-watch'); },
   get MailOwner() { return require('./mail-owner'); },
