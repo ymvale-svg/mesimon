@@ -264,6 +264,9 @@ function createFromDraft(actor, original) {
 /** תוקף הצעת תשובה למייל: אחרי שעתיים "כן" כבר לא שולח (#171) */
 const MAIL_REPLY_TTL_MS = 2 * 60 * 60 * 1000;
 
+// מייל שביקשו עליו מעקב / משימה במילים — נפתחת משימת AI שעוקבת אחרי התשובה
+const WANTS_TASK = /משימ|תעקוב|לעקוב|מעקב|follow/i;
+
 /** ביצוע מה שהעובד אישר ב"כן". בבדיקה ממסך הניהול (‎dry‎) — רק מתארים */
 async function confirmPending(actor, pending, dry) {
   const kind = pending.kind ?? 'task';
@@ -338,8 +341,31 @@ async function confirmPending(actor, pending, dry) {
       const who = pending.contact.name || pending.contact.email;
       // עובד בארגון: "במשימון" — משימה משויכת אליו; אחרת — מייל, כמו לכל נמען
       const internal = pending.contact.type === 'user' && pending.via === 'mesimon';
-      if (!P.may(actor, 'create_task')) throw new Error('אין לך הרשאה לפתוח משימות');
       const wa = pending.channel === 'whatsapp' && pending.contact.type !== 'user';
+      /*
+       * ✉️ מייל רגיל — יוצא ישר מ-Gmail, בלי משימה (באג 18.11.26: כל מייל מהבוט פתח משימת AI בלוח).
+       * הבוט הוא המזכירה: כשיענו — "📬 ענה למייל ששלחת" (‎ReplyWatch‎ ב-‎sendReply‎). משימת מעקב — רק כשביקשו
+       * במילים ("ותעקוב", "משימה"), מ"💡 פתרון לבעיה", או מהצעה ("סגור א").
+       */
+      if (!internal && !wa && !pending.solve && !pending.suggestionId && !WANTS_TASK.test(pending.instruction ?? '')) {
+        if (pending.ccAsk?.length) {
+          return { reply: `לפני השליחה — עוד לא ברור מי בהעתק: ${pending.ccAsk.map((x) => `"${x.name}"`).join(', ')}. כתבו *בהעתק* עם השם המלא או המייל, או *בלי* והשם.`, action, status: 'unclear', result: 'העתק לא ברור', keep: true };
+        }
+        const rt = pending.replyThread;
+        if (!dry) {
+          await MailInsights.sendReply(actor.id, {
+            box: rt?.box ?? 0, to: pending.contact.email, toName: pending.contact.name || '',
+            subject: pending.draft.subject, body: pending.draft.body,
+            cc: (pending.cc ?? []).map((c) => c.email).filter(Boolean),
+            ...(rt?.threadId ? { threadId: rt.threadId, inReplyTo: rt.inReplyTo, references: rt.references ?? [] } : {})
+          });
+        }
+        return {
+          reply: `📧 נשלח ל${who}${rt?.threadId ? ' — בהמשך לשרשור' : ''}. כשיענו — אעדכן אותך כאן 📬${test}`,
+          action, status: 'ok', result: `נשלח מייל ל${who}: ${pending.draft.subject}`
+        };
+      }
+      if (!P.may(actor, 'create_task')) throw new Error('אין לך הרשאה לפתוח משימות');
       const contact = pending.contact.type === 'user' && !internal
         ? { name: pending.contact.name, email: pending.contact.email, phone: '', type: 'external', refId: null }
         : wa ? { ...pending.contact, phone: pending.contact.mobile || pending.contact.phone } : pending.contact;

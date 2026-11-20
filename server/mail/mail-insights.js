@@ -458,6 +458,7 @@ async function sendReply(userId, reply) {
   if (body.missing) AiTasks.signatureMissing(userId, body.missing, 'תשובה מהבוט');
   const built = Mailer.buildMessage({
     from: conn.email, fromName: owner.full_name, to: reply.to, toName: reply.toName || undefined,
+    cc: Array.isArray(reply.cc) ? reply.cc : [],
     subject: reply.subject, inReplyTo: reply.inReplyTo, references: reply.references,
     text: body.text, html: body.html
   });
