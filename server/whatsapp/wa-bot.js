@@ -1321,6 +1321,14 @@ async function handleDirect(msg) {
   if (msg.file && !(grAllowed && (GoodsReceipt.active(user.id, late) || GoodsReceipt.opens(text, msg.file)))) rememberFile(user.id, msg.file);
   let grPassed = false;
   let grNotice = '';
+  // 🔐 "דרישת רכש" ממי שאין לו הרשאה (הוחלט 20.11.26): תשובה ברורה, והבקשה עוברת למנהל המערכת בבוט, בשם העובד
+  if (!forceChat && !forceFlow && !pdAllowed && !msg.file && PurchaseDemand.opens(text)) {
+    await notice;
+    log({ ...base, text, action: 'purchase_demand', status: 'denied', result: 'דרישת רכש — אין הרשאה', reply: PD_DENIED });
+    await sendText(msg.chatId, PD_DENIED);
+    pdDeniedToAdmins(user, text);
+    return;
+  }
   // 🔐 פריוריטי לא פתוח לעובד (אין לו אף מסמך במטריצה) — "פריוריטי" / "קבלת סחורה" / "דרישת רכש" (גם כפתור מהודעה ישנה):
   // תשובה אחת ברורה, ולא תפריט ולא בקשה ל-AI (הוחלט 13.11.26)
   const shortAsk = String(text ?? '').trim().split(/\s+/).filter(Boolean).length <= 3;
@@ -1778,6 +1786,23 @@ async function personalHousekeeping() {
   }
 }
 
+
+const PD_DENIED = '🛒 דרישת רכש — אין לך הרשאה ליצור דרישת רכש. העברתי את הבקשה למנהל המערכת.';
+
+/** 🔐 בקשת דרישת רכש בלי הרשאה — למנהלי המערכת בוואטסאפ, בשם העובד. פעם ביום לכל עובד */
+function pdDeniedToAdmins(user, text) {
+  // נתון של עובד אחד — ב-‎user_prefs‎ (CLAUDE.md), לא בטבלת ההגדרות
+  const day = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Jerusalem' });
+  if (D.userPrefs(user.id).pdDeniedNoticeOn === day || !isConfigured()) return;
+  D.setUserPref(user.id, 'pdDeniedNoticeOn', day);
+  const body = `🔐 *${user.full_name}* ביקש/ה בבוט לפתוח דרישת רכש, ואין הרשאה לדרישת רכש (מטריצת ההרשאות של פריוריטי).\n💬 "${String(text ?? '').trim().slice(0, 200)}"\nלפתוח — במסך ההרשאות של פריוריטי.`;
+  for (const a of D.all("SELECT id, full_name, phone FROM users WHERE status = 'active' AND role IN ('superadmin','admin') AND COALESCE(phone, '') <> '' AND id <> ?", user.id)) {
+    const chatId = `${a.phone}@c.us`;
+    sendText(chatId, body)
+      .then(() => log({ channel: 'summary', chatId, userId: a.id, who: a.full_name, action: 'purchase_demand', status: 'ok', result: `בקשת הרשאה לדרישת רכש: ${user.full_name}` }))
+      .catch((err) => console.error('[משימון] הודעה למנהל על בקשת דרישת רכש נכשלה:', err.message));
+  }
+}
 
 /** 🩺 התראה למנהלי המערכת בוואטסאפ — מיד, גם מחוץ לשעות (זו תקלה, לא עדכון) */
 function alertAdminsAi(text) {
