@@ -2006,6 +2006,8 @@ const AdminView = (() => {
             fix.kind && FIX_KIND[fix.kind] ? el('span.ai-chip.ai-chip-ai', { text: FIX_KIND[fix.kind] }) : null,
             // ✉️ מי העיר, והאם כבר הוצעה לו תשובה על מה שטופל
             fix.requester ? el('span.ai-chip', { text: fix.replyProposedAt ? `✉️ ${fix.requester} · הוצעה תשובה` : `✉️ ${fix.requester}` }) : null,
+            // 🔁 מי ניסה ולא הצליח — מקבל "אפשר לנסות שוב" כשזה נכנס
+            ...(fix.retry ?? []).map((r) => el('span.ai-chip', { text: `🔁 ${r.who || 'עובד'}${r.invitedAt ? ' · נשלח לנסות שוב' : ''}` })),
             el(`span.ai-chip${cls ? `.${cls}` : ''}`, { text: label })
           ]),
           fix.problem ? el('div.rv-text', { text: fix.problem }) : null,
