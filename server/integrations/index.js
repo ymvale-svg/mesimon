@@ -8,6 +8,7 @@
  */
 module.exports = {
   get Claude() { return require('./claude'); },
+  get AiUsage() { return require('./ai-usage'); },
   get Priority() { return require('./priority'); },
   get Whatsapp() { return require('./whatsapp'); },
   get Gmail() { return require('./gmail'); },

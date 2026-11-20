@@ -209,6 +209,7 @@ async function build(userId, ev) {
   const c = collect(userId, ev);
   if (!c.text.trim()) return null;
   const out = await Claude.json({
+    feature: 'meetings.briefing', userId,
     system: SYSTEM,
     content: [{ type: 'text', text: `היום: ${dmy(new Date().toISOString())}\nהפגישה: ${ev.title} · ${hhmm(ev.start)}\n${ev.description ? `תיאור האירוע ביומן: ${ev.description}\n` : ''}${c.words.length ? `נושא הפגישה: ${ev.title}` : 'אין נושא בשם הפגישה — פגישה כללית עם המשתתפים'}\nהמשתתפים: ${c.people.map((p) => p.name || p.email).join(', ')}\n\nהמידע שנאסף:\n${c.text.slice(0, 20000)}` }],
     schema: SCHEMA, effort: 'low'

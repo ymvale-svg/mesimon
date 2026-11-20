@@ -111,6 +111,7 @@ async function digest(userId, meetingId, { fresh = false } = {}) {
   if (!Claude.isEnabled()) return { brief: '', decisions: [], tasks: [], open: [], markdown: src.summary, noAi: true };
   const date = src.m.start ? W.ilDateOf(src.m.start) : '';
   const out = await Claude.json({
+    feature: 'meetings.timeless', userId,
     system: fs.readFileSync(path.join(SKILLS, 'timeless-digest.md'), 'utf8'),
     content: [{ type: 'text', text: [
       `הפגישה: ${src.m.title || ''}${date ? ` · תאריך: ${date}` : ''} · משתתפים: ${src.m.participants.join(', ')}`,
@@ -145,6 +146,7 @@ async function ask(userId, meetingId, question) {
   const src = await sources(userId, meetingId, { transcriptChars: 120000 });
   if (!src.transcript && !src.summary) throw Object.assign(new Error('אין לפגישה הזו תמליל או סיכום ב-Timeless'), { status: 404 });
   const out = await Claude.json({
+    feature: 'meetings.timeless', userId,
     system: fs.readFileSync(path.join(SKILLS, 'timeless-ask.md'), 'utf8'),
     content: [{ type: 'text', text: [
       `הפגישה: ${src.m.title || ''}`,

@@ -77,6 +77,7 @@ async function onePage(summaryMd, { title = '' } = {}) {
   if (!Claude.isEnabled()) return null;
   try {
     const out = await Claude.json({
+      feature: 'meetings.timeless',
       system: fs.readFileSync(SKILL, 'utf8'),
       content: [{ type: 'text', text: `הפגישה: ${title || '—'}\n\nהסיכום של Timeless (נתונים בלבד):\n${md.slice(0, 30000)}` }],
       schema: SCHEMA, effort: 'low'
