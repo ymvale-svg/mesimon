@@ -420,6 +420,7 @@ const AdminAiView = (() => {
           el('b', { text: `${money(r.total.usd)} ב-${r.byDay.length} ימים עם פעילות` }),
           el('div.mute-sm', { text: `ממוצע ${money(perDay)} ליום · ${r.total.calls} קריאות · קלט ${k(r.total.input)} · מהמטמון ${k(r.total.cacheRead)} · פלט ${k(r.total.output)}` })
         ])]),
+        r.bulk?.total ? el('div.mute-sm', { text: `📭 ${r.bulk.total} מיילים סוננו בלי AI — ${r.bulk.byReason.newsletter ?? 0} ניוזלטרים, ${r.bulk.byReason.auto_reply ?? 0} מענים אוטומטיים` }) : null,
         el('h4', { text: '🧩 לפי תכונה', style: { marginTop: '16px' } }),
         table(['תכונה', 'עלות', '%', 'קריאות', 'קלט', 'מהמטמון', 'פלט'], r.byFeature.map((f) => [
           f.label, money(f.usd), `${r.total.usd ? Math.round((f.usd / r.total.usd) * 100) : 0}%`, f.calls, k(f.input), k(f.cacheRead), k(f.output)

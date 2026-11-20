@@ -41,6 +41,7 @@ const Classification = require('../core').Classification;
 const MailInsights = require('./mail-insights');
 const MailOwner = require('./mail-owner');
 const MailDose = require('./mail-dose');
+const MailBulk = require('./mail-bulk');
 const MeetingCoord = require('../meetings').MeetingCoord;
 const OrgKnowledge = require('../agents').OrgKnowledge;
 const Rfq = require('../priority').Rfq;
@@ -118,7 +119,8 @@ function record(userId, gmailId, headerId, outcome, box = 0) {
 /** כמה נסרקו היום בתיבה — התקרה היומית לכל תיבה בנפרד, כך שתיבה אחת לא "אוכלת" את השנייה */
 function scannedToday(userId, box = 0) {
   const since = startOfLocalDay(localDate().date).toISOString();
-  return D.get("SELECT COUNT(*) c FROM mail_scanned WHERE user_id = ? AND box = ? AND scanned_at >= ? AND outcome <> 'reply'", userId, box, since).c;
+  // תשובות ו-📭 מה שסונן בלי AI — לא נספרים בתקרה (היא על הקריאות ל-AI)
+  return D.get("SELECT COUNT(*) c FROM mail_scanned WHERE user_id = ? AND box = ? AND scanned_at >= ? AND outcome <> 'reply' AND outcome NOT LIKE 'bulk%'", userId, box, since).c;
 }
 
 const shortDate = (d) => (d ? new Date(d).toLocaleDateString('he-IL', { timeZone: TZ }) : '');
@@ -398,7 +400,11 @@ async function processMessage(user, conn, gmailId) {
   if (Rfq.ownsReply(mail)) return record(user.id, gmailId, headerId, 'reply', meta.box), 'reply';
   // תשובה למייל עם מועדים לפגישה — נקראת שם (‎meeting-coord.js‎)
   if (MeetingCoord.ownsReply(mail)) return record(user.id, gmailId, headerId, 'reply', meta.box), 'reply';
-  if (senderMode(user.id, mail.from.address) === 'ignore') return record(user.id, gmailId, headerId, 'skipped', meta.box), 'skipped';
+  const mode = senderMode(user.id, mail.from.address);
+  if (mode === 'ignore') return record(user.id, gmailId, headerId, 'skipped', meta.box), 'skipped';
+  // 📭 ניוזלטר / מענה אוטומטי — בלי AI (‎mail-bulk.js‎). מייל עם קובץ, מהארגון, משולח מהימן או תשובה בשרשור — תמיד נבדק
+  const bulk = MailBulk.reason(mail, { trusted: mode === 'trust' });
+  if (bulk) return record(user.id, gmailId, headerId, `bulk:${bulk}`, meta.box), 'bulk';
 
   /*
    * מייל שעונה על משימה שפתחתי, או מעדכן אותה — הצעה "לסגור?" / "לעדכן?"
@@ -538,7 +544,7 @@ async function runScan(who, { from, to = null, trigger = 'manual' }) {
 
   if (!Gmail.claimScan(who)) return null;
 
-  const progress = { trigger, total: 0, done: 0, suggested: 0, auto: 0, skipped: 0, replies: 0, errors: 0, startedAt: D.nowIso(), from: from.toISOString(), to: to?.toISOString() ?? null };
+  const progress = { trigger, total: 0, done: 0, suggested: 0, auto: 0, skipped: 0, bulk: 0, replies: 0, errors: 0, startedAt: D.nowIso(), from: from.toISOString(), to: to?.toISOString() ?? null };
   setProgress(who, progress);
   try {
     const limit = Number(D.getSetting('ai_scan_daily_limit', 100));
@@ -559,6 +565,7 @@ async function runScan(who, { from, to = null, trigger = 'manual' }) {
           if (outcome === 'suggested') progress.suggested++;
           else if (outcome === 'auto') progress.auto++;
           else if (outcome === 'reply') progress.replies++;
+          else if (outcome === 'bulk') progress.bulk++;
           else progress.skipped++;
         } catch (err) {
           progress.errors++;

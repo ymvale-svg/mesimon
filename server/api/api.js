@@ -34,6 +34,7 @@ const Calendar = require('../meetings').Calendar;
 const Gmail = require('../integrations').Gmail;
 const MailScan = require('../mail').MailScan;
 const MailDose = require('../mail').MailDose;
+const MailBulk = require('../mail').MailBulk;
 const WaReads = require('../whatsapp').WaReads;
 const Claude = require('../integrations').Claude;
 const WhatsApp = require('../integrations').Whatsapp;
@@ -4720,6 +4721,8 @@ router.get('/api/admin/ai-usage', async (req, res, ctx) => {
   const report = AiUsage.report({ days });
   // 📉 המדרגה של כל עובד במינון המייל (‎mail-dose.js‎) — לראות מי ירד ולמה
   report.byUser = report.byUser.map((u) => (u.userId ? { ...u, dose: MailDose.summary(u.userId), reads: WaReads.stats(u.userId) } : u));
+  // 📭 כמה מיילים סוננו בלי AI בתקופה (‎mail-bulk.js‎)
+  report.bulk = MailBulk.countSince(new Date(`${report.from}T00:00:00Z`).toISOString());
   sendJson(res, 200, report);
 });
 
