@@ -14,6 +14,7 @@ const AiTasks = require('../tasks').AiTasks;
 const GContacts = require('../phonebook').GoogleContacts;
 const WaActions = require('./wa-actions');
 const MailInsights = require('../mail').MailInsights;
+const Whatsapp = require('../integrations').Whatsapp;
 const MailThread = require('../mail').MailThread;
 const MailPush = require('../mail').MailPush;
 const WaScan = require('./whatsapp-scan');
@@ -343,9 +344,21 @@ async function confirmPending(actor, pending, dry) {
        * ✉️ משימה ומייל — שני דברים נפרדים (ישראל, 20.11.26; באג 18.11: כל מייל מהבוט פתח משימת AI בלוח).
        * מייל יוצא ישר מ-Gmail ולעולם לא פותח משימה — גם "ותעקוב", מהצעה ומ"💡 פתרון לבעיה". המעקב:
        * כשיענו — "📬 ענה למייל ששלחת" (‎ReplyWatch‎ ב-‎sendReply‎). משימה — רק כשמבקשים משימה.
-       * נשארו משימה: "במשימון" לעובד (זו משימה, לא מייל), ווואטסאפ לגורם חיצוני (עוד לא הופרד).
+       * גם וואטסאפ לגורם חיצוני — יוצא מהוואטסאפ של העובד, בלי משימה; התשובה מגיעה אליו לוואטסאפ ממילא.
+       * נשארה משימה רק "במשימון" לעובד — זו משימה, לא הודעה.
        */
-      if (!internal && !wa) {
+      if (wa) {
+        if (!Whatsapp.isReady(actor.id)) {
+          return { reply: 'הוואטסאפ שלך אינו מחובר למשימון, אז אין ממה לשלוח. מחברים אותו ב"החשבון שלי" — או כתבו *במייל*.', action, status: 'error', result: 'וואטסאפ לא מחובר', keep: true };
+        }
+        const phone = pending.contact.mobile || pending.contact.phone;
+        if (!dry) {
+          await Whatsapp.send(actor.id, phone, pending.draft.body);
+          if (pending.suggestionId) closeAlerted(actor.id, [pending.suggestionId], 'replied');
+        }
+        return { reply: `💬 נשלח בוואטסאפ ל${who}.${test}`, action, status: 'ok', result: `נשלח וואטסאפ ל${who}` };
+      }
+      if (!internal) {
         if (pending.ccAsk?.length) {
           return { reply: `לפני השליחה — עוד לא ברור מי בהעתק: ${pending.ccAsk.map((x) => `"${x.name}"`).join(', ')}. כתבו *בהעתק* עם השם המלא או המייל, או *בלי* והשם.`, action, status: 'unclear', result: 'העתק לא ברור', keep: true };
         }
@@ -365,30 +378,15 @@ async function confirmPending(actor, pending, dry) {
           action, status: 'ok', result: `נשלח מייל ל${who}: ${pending.draft.subject}`
         };
       }
+      // "במשימון" לעובד — זו משימה, לא הודעה: משויכת אליו, ואת/ה שותף/ה (אותה פתיחה של האשף באפליקציה)
       if (!P.may(actor, 'create_task')) throw new Error('אין לך הרשאה לפתוח משימות');
-      const contact = pending.contact.type === 'user' && !internal
-        ? { name: pending.contact.name, email: pending.contact.email, phone: '', type: 'external', refId: null }
-        : wa ? { ...pending.contact, phone: pending.contact.mobile || pending.contact.phone } : pending.contact;
-      // אותה פתיחה של האשף באפליקציה: משימת AI שעוקבת אחרי התשובה
-      // שם בהעתק שעוד לא הובהר — לא שולחים עד שיהיה ברור למי
-      if (!internal && pending.ccAsk?.length) {
-        return { reply: `לפני השליחה — עוד לא ברור מי בהעתק: ${pending.ccAsk.map((x) => `"${x.name}"`).join(', ')}. כתבו *בהעתק* עם השם המלא או המייל, או *בלי* והשם.`, action, status: 'unclear', result: 'העתק לא ברור', keep: true };
-      }
       const r = dry ? { taskId: null, sendError: null } : await hooks.mail.createAiTask(actor, {
-        instruction: pending.instruction, draft: pending.draft, contact, channel: wa ? 'whatsapp' : 'email',
-        cc: internal || wa ? [] : pending.cc ?? [],
-        // ↩️ בהמשך לשרשור עם הנמען — תשובה בו, לא מייל חדש
-        ...(!internal && !wa && pending.replyThread ? { replyThread: pending.replyThread } : {}),
-        // מ"סגור א": המשימה נפתחת מההצעה (ונעלמת מ"ממתין לאישורך")
-        ...(pending.suggestionId ? { suggestionId: pending.suggestionId } : {})
+        instruction: pending.instruction, draft: pending.draft, contact: pending.contact, channel: 'email', cc: []
       });
       const link = r.taskId ? taskLink(r.taskId) : null;
-      if (r.sendError) {
-        return { reply: `⚠️ המשימה נפתחה, אבל ${wa ? 'ההודעה בוואטסאפ' : 'המייל'} לא יצא${wa ? 'ה' : ''}: ${r.sendError}\nאפשר לשלוח שוב מכרטיס המשימה.${link ? `\n${link}` : ''}`, action, status: 'error', result: `המייל ל${who} לא יצא: ${r.sendError}`, taskId: r.taskId };
-      }
       return {
-        reply: `${internal ? `👤 הועבר ל${who} — המשימה אצלו/ה במשימון.` : `${wa ? '💬 נשלח בוואטסאפ' : '📧 נשלח'} ל${who}. אעקוב אחרי התשובה ואעדכן אותך.`}${test}${link ? `\n${link}` : ''}`,
-        action, status: 'ok', result: `${internal ? 'הועבר' : wa ? 'נשלח וואטסאפ' : 'נשלח מייל'} ל${who}: ${pending.draft.subject || pending.draft.title}`, taskId: r.taskId
+        reply: `👤 הועבר ל${who} — המשימה אצלו/ה במשימון.${test}${link ? `\n${link}` : ''}`,
+        action, status: 'ok', result: `הועבר ל${who}: ${pending.draft.subject || pending.draft.title}`, taskId: r.taskId
       };
     }
   } catch (err) {

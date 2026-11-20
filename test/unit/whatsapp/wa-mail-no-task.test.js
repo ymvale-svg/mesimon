@@ -88,3 +88,40 @@ test('מהצעה ("סגור א") — המייל יוצא, בלי משימה; ה�
   assert.equal(D.get('SELECT status, task_id FROM ai_suggestions WHERE id = ?', id).status, 'replied');
   assert.equal(D.get('SELECT task_id FROM ai_suggestions WHERE id = ?', id).task_id, null);
 });
+
+/*
+ * גם בוואטסאפ (ישראל, 20.11.26: "תפריד גם בוואטסאפ"): הודעה לגורם חיצוני יוצאת מהוואטסאפ של העובד — בלי משימה.
+ * התשובה מגיעה אליו לוואטסאפ ממילא.
+ */
+const Whatsapp = require('../../../server/integrations').Whatsapp;
+const waPending = (extra = {}) => pendingFor({
+  channel: 'whatsapp', via: 'whatsapp', cc: [], replyThread: null,
+  contact: { name: 'יוסי הספק', email: '', phone: '050-1234567', mobile: '0501234567', type: 'vendor' },
+  draft: { title: 'הצעת מחיר', subject: '', body: 'שלום יוסי, אפשר הצעת מחיר?' },
+  ...extra
+});
+
+test('וואטסאפ לגורם חיצוני — יוצא מהוואטסאפ של העובד, בלי משימה', async (t) => {
+  const { sent, tasks } = mocks(t);
+  const wa = [];
+  t.mock.method(Whatsapp, 'isReady', () => true);
+  t.mock.method(Whatsapp, 'send', async (uid, phone, body) => { wa.push({ uid, phone, body }); return { externalId: 'x1' }; });
+  const u = user({ role: 'employee' });
+  const r = await WaMail.confirmPending(Auth.loadActor('user', u.id), waPending(), false);
+  assert.equal(tasks.length, 0, 'לא נפתחה משימה');
+  assert.equal(sent.length, 0, 'לא נשלח מייל');
+  assert.deepEqual(wa, [{ uid: u.id, phone: '0501234567', body: 'שלום יוסי, אפשר הצעת מחיר?' }]);
+  assert.equal(r.taskId ?? null, null);
+  assert.match(r.reply, /נשלח בוואטסאפ ליוסי הספק/);
+});
+
+test('וואטסאפ לא מחובר — הסבר ברור, בלי משימה ובלי שליחה', async (t) => {
+  const { sent, tasks } = mocks(t);
+  t.mock.method(Whatsapp, 'isReady', () => false);
+  const send = t.mock.method(Whatsapp, 'send', async () => ({}));
+  const u = user({ role: 'employee' });
+  const r = await WaMail.confirmPending(Auth.loadActor('user', u.id), waPending(), false);
+  assert.equal(tasks.length + sent.length + send.mock.callCount(), 0);
+  assert.equal(r.status, 'error');
+  assert.match(r.reply, /הוואטסאפ שלך אינו מחובר/);
+});
