@@ -140,6 +140,21 @@ test('ברירות מחדל: דרישה שנייה — פרויקט, מחסן ו
   assert.equal(pr.wrote('createDemand').length, 1, 'הדרישה השנייה עוד לא נכתבה');
 });
 
+test('"דרישת מלט 10 שקים" / "בוקר טוב, אני רוצה לעשות דרישה" — דרישת רכש (הוחלט 20.11: "דרישה" לפני = רכש)', async (t) => {
+  H.companies(t, 'test11');
+  const u = H.worker();
+  Prefs.remember(u.id, { company: 'test11', project: { code: 'PR1', des: 'אלעד 49 צפון' }, warehouse: 'W1' });
+  Prefs.set(u.id, 'test11', 'demandCode', '01');
+  priority(t);
+  ai(t);
+  const { say } = H.chat(t, u);
+  let r = await say('דרישת מלט 10 שקים');
+  assert.match(r.text, /נוספו 2 פריטים|נוספו/, 'הפריטים מההודעה עצמה');
+  await say(BTN.cancel);
+  r = await say('בוקר טוב, אני רוצה לעשות דרישה');
+  assert.match(r.text, /מה צריך\?/);
+});
+
 test('ברירת המחדל ניתנת לשינוי בשפה חופשית: "פרויקט נהריה" ← הפרויקט והמחסן שלו, בלי שאלה נוספת', async (t) => {
   H.companies(t, 'test11');
   const u = H.worker();
