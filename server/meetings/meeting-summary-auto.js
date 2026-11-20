@@ -58,14 +58,33 @@ function nameFor(email, labels) {
   return hit ? String(hit).replace(/<[^>]*>/, '').trim() : '';
 }
 
-/** המוזמנים מהזימון ביומן של מי שקבע — אותו אירוע לפי שעה (±20 דקות) או שם. ‎[]‎ — אין יומן / אין אירוע */
-async function calendarPeople(userId, title, startIso) {
-  if (!userId || !Calendar.isConnected(userId)) return [];
-  const day = await Calendar.eventsForDay(userId, ymdIL(startIso)).catch(() => ({ events: [] }));
+/**
+ * המוזמנים מהזימון ביומן של מי שקבע. ‎[]‎ — אין יומן / אין אירוע.
+ * הסיכום יוצא אוטומטית לכל מי שנמצא כאן, ולכן (אבטחה, 20.11.26) האירוע חייב להיות אותה פגישה:
+ *   • אירוע שמי שקבע משתתף בו (לא יומן משותף של מישהו אחר);
+ *   • כשב-Timeless יש עוד משתתפים — לפחות אחד מהם גם באירוע (פגישה צמודה / באותו שם — לא נלקחת);
+ *   • מבין המתאימים — הקרוב ביותר בשעה (±20 דקות), ורק אם אין כזה — לפי השם;
+ *   • מוזמן שדחה את הזימון — לא משתתף.
+ */
+async function calendarPeople(user, title, startIso, timelessEmails = []) {
+  if (!user?.id || !Calendar.isConnected(user.id)) return [];
+  const day = await Calendar.eventsForDay(user.id, ymdIL(startIso)).catch(() => ({ events: [] }));
   const t = new Date(startIso).getTime();
-  const ev = (day.events ?? []).filter((e) => !e.allDay)
-    .find((e) => Math.abs(new Date(e.start).getTime() - t) <= 20 * MIN || (title && e.title === title));
-  return ev ? [ev.organizer, ...(ev.people ?? [])].filter((p) => p?.email).map((p) => ({ email: normEmail(p.email), name: String(p.name ?? '').trim() })) : [];
+  const mine = new Set([normEmail(user.email), normEmail(user.work_email)].filter(Boolean));
+  const others = new Set(timelessEmails.map(normEmail).filter((e) => e && !mine.has(e)));
+  const emailsOf = (e) => [e.organizer?.email, ...(e.people ?? []).map((p) => p.email)].map(normEmail).filter(Boolean);
+  const fits = (e) => {
+    const emails = emailsOf(e);
+    if (!emails.some((x) => mine.has(x))) return false;
+    return !others.size || emails.some((x) => others.has(x));
+  };
+  const gap = (e) => Math.abs(new Date(e.start).getTime() - t);
+  const events = (day.events ?? []).filter((e) => !e.allDay && fits(e));
+  const ev = events.filter((e) => gap(e) <= 20 * MIN).sort((a, b) => gap(a) - gap(b))[0]
+    ?? (title ? events.find((e) => e.title === title) : undefined);
+  if (!ev) return [];
+  const people = (ev.people ?? []).filter((p) => p.response !== 'declined');
+  return [ev.organizer, ...people].filter((p) => p?.email).map((p) => ({ email: normEmail(p.email), name: String(p.name ?? '').trim() }));
 }
 
 /**
@@ -79,7 +98,7 @@ async function peopleOf(m) {
   const add = (email, name) => { const e = normEmail(email); if (e.includes('@') && !seen.has(e)) { seen.add(e); all.push({ email: e, name: name || nameFor(e, labels) }); } };
   for (const e of m.emails ?? []) add(e);
   const first = all.map((p) => userByEmail(p.email)).find(Boolean) ?? null;
-  for (const p of await calendarPeople(first?.id, m.meeting.title, m.meeting.start)) add(p.email, p.name);
+  for (const p of await calendarPeople(first, m.meeting.title, m.meeting.start, all.map((p) => p.email))) add(p.email, p.name);
   const org = [];
   const external = [];
   for (const p of all) {
