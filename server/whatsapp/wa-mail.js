@@ -312,7 +312,7 @@ async function confirmPending(actor, pending, dry) {
           lines.push(`"${d.title}" — יש בה אנשים נוספים או פנייה החוצה; כדאי לבדוק ולאשר באפליקציה.${root ? `\n${root}/?view=today` : ''}`);
           continue;
         }
-        taskId = dry ? null : await MailScan.approve(id, actor, { dueDate: d.dueDate || localDay(0) });
+        taskId = dry ? null : await MailScan.approve(id, actor, { dueDate: d.dueDate || localDay(0), how: 'bot' });
         lines.push(`✅ נפתחה משימה: ${d.title}${d.dueDate && d.dueDate !== localDay(0) ? ` · 📅 ${shortDate(d.dueDate)}` : ''}${test}${taskId ? `\n${taskLink(taskId) ?? ''}` : ''}`.trim());
       }
       if (!lines.length) return { reply: 'ההצעה כבר טופלה 👍', action, status: 'ok', result: 'כבר טופלה' };
@@ -430,7 +430,7 @@ async function closureDecision(actor, { letter }, state, { dry, out }) {
       const edits = c.kind === 'self'
         ? { dueDate: d.dueDate || localDay(0), checklist: [...(d.checklist ?? []), ...c.steps.filter((x) => !(d.checklist ?? []).includes(x))] }
         : { dueDate: d.dueDate || localDay(0), people: [{ userId: c.primary.refId, role: 'assignee', checklistIndex: 0 }] };
-      const taskId = dry ? null : await MailScan.approve(id, actor, edits);
+      const taskId = dry ? null : await MailScan.approve(id, actor, { ...edits, how: 'bot' });
       const link = taskId ? taskLink(taskId) : null;
       return out(c.kind === 'self'
         ? `✅ נפתחה משימה: ${title}
@@ -495,7 +495,7 @@ async function suggestionDecision(actor, { approve, letters }, state, { dry, out
       const name = sug.kind === 'task_merge' ? `"${d.dropTitle}" ו"${d.keepTitle}"` : `"${d.taskTitle}"`;
       if (approve) {
         try {
-          taskId = dry ? null : await MailScan.approve(id, actor, { applyDue: true, applyStatus: true });
+          taskId = dry ? null : await MailScan.approve(id, actor, { applyDue: true, applyStatus: true, how: 'bot' });
           lines.push(sug.kind === 'task_close' ? `✅ ${letter}. נסגרה: ${name} — ההודעה נשמרה בה כהערה${test}`
             : sug.kind === 'task_update' ? `✅ ${letter}. עודכנה: ${name}${d.proposed?.dueDate ? ` · 📅 ${shortDate(d.proposed.dueDate)}` : ''}${d.proposed?.status ? ` · ${d.proposed.statusLabel}` : ''}${test}`
               : `✅ ${letter}. מוזגו: ${name} — נשארה "${d.keepTitle}"${test}`);
@@ -517,7 +517,7 @@ async function suggestionDecision(actor, { approve, letters }, state, { dry, out
         continue;
       }
       try {
-        taskId = dry ? null : await MailScan.approve(id, actor, { dueDate: d.dueDate || localDay(0) });
+        taskId = dry ? null : await MailScan.approve(id, actor, { dueDate: d.dueDate || localDay(0), how: 'bot' });
         lines.push(`✅ ${letter}. נפתחה משימה: ${title}${d.dueDate && d.dueDate !== localDay(0) ? ` · 📅 ${shortDate(d.dueDate)}` : ''}${test}`);
         done.push(`אושרה: ${title}`);
       } catch (err) {
