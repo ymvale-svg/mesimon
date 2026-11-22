@@ -22,7 +22,8 @@ const AdminView = (() => {
     { key: 'templates', label: 'תבניות', perm: 'create_project', full: true },
     // הודעה שנפתחת לכל המשתמשים — רק אדמין על (ראה ‎manage_release_notes‎)
     { key: 'whatsnew', label: '✨ מה חדש', perm: 'manage_release_notes', full: true },
-    { key: 'ai', label: '🤖 סוכנים וידע ארגוני', perm: 'manage_automations', full: true }
+    { key: 'ai', label: '🤖 סוכנים וידע ארגוני', perm: 'manage_automations', full: true },
+    { key: 'ai_cost', label: '💰 עלות AI', perm: 'manage_automations', full: true }
   ];
 
   async function render(container, params = {}) {
@@ -69,6 +70,7 @@ const AdminView = (() => {
       else if (tab === 'templates') await templatesTab(body);
       else if (tab === 'whatsnew') await WhatsNewView.adminTab(body, reload);
       else if (tab === 'ai') await AdminAiView.tab(body);
+      else if (tab === 'ai_cost') await AdminAiView.costTab(body);
     } catch (err) {
       UI.mount(body, UI.empty(err.message, '⚠️'));
     }

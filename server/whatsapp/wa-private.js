@@ -398,6 +398,7 @@ async function understand(user, actor, state, text, projects, myOpen, { file = n
    */
   const [stable, rest] = prompt.split('\n\u0000\n');
   const out = await Claude.json({
+    feature: 'bot.chat',
     system: fs.readFileSync(CHAT_SKILL, 'utf8'),
     content: [{ type: 'text', text: stable, cache_control: { type: 'ephemeral' } }, { type: 'text', text: rest }],
     schema: CHAT_SCHEMA, effort: 'low', live: true

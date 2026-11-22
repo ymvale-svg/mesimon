@@ -1429,6 +1429,49 @@ CREATE TABLE IF NOT EXISTS mail_memory_runs (
   updated_at    TEXT    NOT NULL
 );
 
+/*
+ * 💰 צריכת ה-AI — שורה לכל יום × עובד × תכונה × מודל × מהירות (‎integrations/ai-usage.js‎). מצטבר, לא שורה לכל קריאה.
+ * ‎user_id = 0‎ — עבודת רקע שאינה של עובד אחד (ידע ארגוני, בדיקת בריאות). ‎cost_micro‎ — הערכה במיליוניות דולר.
+ * ("תוכנית — חיסכון בקרדיטי AI.md", שלב 0)
+ */
+CREATE TABLE IF NOT EXISTS ai_usage (
+  day          TEXT    NOT NULL,              -- יום בשעון ישראל
+  user_id      INTEGER NOT NULL DEFAULT 0,
+  feature      TEXT    NOT NULL,
+  model        TEXT    NOT NULL,
+  fast         INTEGER NOT NULL DEFAULT 0,
+  calls        INTEGER NOT NULL DEFAULT 0,
+  input        INTEGER NOT NULL DEFAULT 0,
+  cache_write  INTEGER NOT NULL DEFAULT 0,
+  cache_read   INTEGER NOT NULL DEFAULT 0,
+  output       INTEGER NOT NULL DEFAULT 0,
+  searches     INTEGER NOT NULL DEFAULT 0,
+  cost_micro   INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (day, user_id, feature, model, fast)
+);
+
+/*
+ * 👁 אישורי קריאה של הצעות יזומות על מיילים (‎whatsapp/wa-reads.js‎): נשלחה / נמסרה / נקראה. נמחק אחרי 30 יום.
+ * ‎counted‎ — כבר נספרה ברצף של "לא נקראו" (לא נספרת שוב).
+ */
+CREATE TABLE IF NOT EXISTS wa_reads (
+  id_message   TEXT    PRIMARY KEY,
+  user_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  kind         TEXT    NOT NULL DEFAULT 'mail_alert',
+  sent_at      TEXT    NOT NULL,
+  status       TEXT    NOT NULL DEFAULT 'sent',   -- sent | delivered | read
+  delivered_at TEXT,
+  read_at      TEXT,
+  counted      INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_wa_reads_user ON wa_reads(user_id, sent_at);
+
+/* 👁 מי שהטלפון שלו מדווח "נקרא" (אישורי קריאה דלוקים) — רק אצלו מסיקים משהו מהודעה שלא נקראה */
+CREATE TABLE IF NOT EXISTS wa_read_reporters (
+  user_id      INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  last_read_at TEXT    NOT NULL
+);
+
 /* תור השרשורים: מה שמופה בשלב 1, ומה שנקרא בשלב 3 */
 CREATE TABLE IF NOT EXISTS mail_memory_threads (
   user_id       INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -1825,7 +1868,9 @@ const DEFAULT_SETTINGS = {
    */
   ai_model: 'claude-opus-5-5',
   ai_bot_model: '',                        // הבוט וההקלטה — ריק = המודל הראשי
-  ai_fast_mode: true,                      // מצב מהיר לשיחה חיה (בוט, הקלטה)
+  ai_fast_mode: false,                     // מצב מהיר לשיחה חיה (בוט, הקלטה) — כבוי מ-17.11.26: פי 2 במחיר
+  ai_scan_skip_bulk: true,                 // 📭 ניוזלטרים ומענים אוטומטיים — בלי AI (‎mail/mail-bulk.js‎)
+  ai_scan_model: 'claude-haiku-5-5',       // מיון המיילים בסריקה (משימה / תשובה / כלום) — זול; התשובה עצמה במודל הראשי
   ai_email_attempts: 2,                    // כמה מיילים שלא נענו לפני מעבר לוואטסאפ
   ai_days_between_emails: 2,
   ai_whatsapp_enabled: true,
@@ -1864,6 +1909,8 @@ const DEFAULT_SETTINGS = {
   ai_mail_scan_enabled: true,
   ai_scan_time: '07:00',                   // ריצת הבוקר, שעון ישראל
   ai_scan_daily_limit: 100,                // תקרת מיילים לסריקה ביום, לכל משתמש
+  ai_dose_enabled: true,                   // 📉 מינון המייל לפי שימוש (‎mail/mail-dose.js‎)
+  ai_dose_week_days: 5,                    // 📉 כמה ימי עבודה בלי שימוש מורידים מדרגה
 
   /*
    * זיכרון העבודה — סריקת כל היסטוריית המייל (‎ai/mail-memory.js‎).
@@ -2266,6 +2313,15 @@ function migrate() {
    * קריאה בכל שעה ולא רק בלילה, יותר שרשורים ביום, ואיחוד לקחים יומי. רק
    * מה שעדיין על ברירת המחדל הישנה מתעדכן — מנהל ששינה ידנית שומר על בחירתו.
    */
+  /*
+   * 💰 חיסכון בקרדיטי AI (17.11.26, "תוכנית — חיסכון בקרדיטי AI.md" סעיף 5.2): מצב מהיר כבוי — פעם אחת, גם אם נשמר
+   * דלוק בטופס ההגדרות. מנהל יכול להדליק שוב ב"🧠 מודלים".
+   */
+  if (getSetting('migr_fast_mode_off', null) === null) {
+    setSetting('ai_fast_mode', false);
+    setSetting('migr_fast_mode_off', true);
+  }
+
   if (getSetting('migr_memory_always_on', null) === null) {
     if (getSetting('mail_memory_hours', null) === '19:00-07:00') setSetting('mail_memory_hours', '');
     if (getSetting('mail_memory_nightly_threads', null) === 400) setSetting('mail_memory_nightly_threads', 1500);

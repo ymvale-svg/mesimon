@@ -396,6 +396,7 @@ const DIGEST_SYSTEM = [
 
 async function digestOf(meeting, transcript, uploader) {
   return Claude.json({
+    feature: 'meetings.summary', userId: uploader?.id,
     system: DIGEST_SYSTEM,
     content: [{
       type: 'text',

@@ -21,6 +21,8 @@ module.exports = {
   get MailThread() { return require('./mail-thread'); },
   get MailFiles() { return require('./mail-files'); },
   get MailPush() { return require('./mail-push'); },
+  get MailDose() { return require('./mail-dose'); },
+  get MailBulk() { return require('./mail-bulk'); },
   get ReplyWatch() { return require('./reply-watch'); },
   get MailOwner() { return require('./mail-owner'); },
   get MailPick() { return require('./mail-pick'); },

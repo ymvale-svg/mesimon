@@ -326,6 +326,7 @@ async function digest(row, userId) {
   const src = row.source === 'zoom' ? await zoomSource(row, userId) : await timelessSource(row, userId);
   if (!src) return null;
   const out = await Claude.json({
+    feature: 'meetings.followup', userId,
     system: DIGEST_SYSTEM,
     content: [{
       type: 'text',

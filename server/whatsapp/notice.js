@@ -153,6 +153,7 @@ const SYSTEM = {
 
 async function compose(kind, { request, author, previous = null, change = '', style = null }) {
   const out = await Claude.json({
+    feature: 'bot.notice',
     system: SYSTEM[kind],
     content: [{
       type: 'text',
