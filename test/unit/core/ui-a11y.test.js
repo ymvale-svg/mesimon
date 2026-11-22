@@ -28,3 +28,10 @@ test('תווית של שדה מקושרת לשדה (for/id) — סקירת המ�
   assert.match(src, /if \(!control\.id\) control\.id = `fld-\$\{\+\+fieldSeq\}`;/);
   assert.match(src, /el\('label', \{ text: label, for: forId \}\)/);
 });
+
+test('גם בחלון UI.prompt ובעורך נקודות הציון התווית מקושרת לשדה — סקירת הממשק 22.11.26', () => {
+  assert.match(pub('js/ui.js'), /body: field\(label, input, hint\),/);
+  const loc = pub('js/views/location.js');
+  assert.match(loc, /const field = \(label, input, hint\) => UI\.field\(label, input, hint\);/);
+  assert.doesNotMatch(loc, /el\('label', \{ text: label \}\)/);
+});
