@@ -372,7 +372,9 @@ const RELATED = {
  */
 async function classify(text) {
   const recent = D.all(
-    "SELECT id, text, reply FROM instinct_requests WHERE kind = 'request' AND status IN ('sent', 'answered', 'timeout') AND created_at >= ? ORDER BY id DESC LIMIT 20",
+    // גם תשובה של עובד לשאלה (‎answer‎) — היא יכולה להיות הבקשה עצמה (באג 22.11.26: "תזכיר לי … בעשר וחצי" יצאה כתשובה,
+    // והתזכורת של אינסטינקט שעתיים אחר כך נדחתה כ"לא קשורה")
+    "SELECT id, text, reply FROM instinct_requests WHERE kind IN ('request', 'answer') AND status IN ('sent', 'answered', 'timeout') AND created_at >= ? ORDER BY id DESC LIMIT 20",
     new Date(Date.now() - cfg.RELATED_MS).toISOString()
   );
   if (!Claude.isEnabled()) return { requestId: 0, asksForInfo: false, reason: 'אין AI' };
