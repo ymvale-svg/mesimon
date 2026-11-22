@@ -575,8 +575,10 @@ const is = (t, btn, re) => WaUi.sameLabel(t, btn) || re.test(WaUi.normalize(t));
 // "לפתוח משימה" — רק במילים מפורשות. "כן" / 👍 על "זכרת?" = הצעת תשובה (הבוט הוא המזכירה)
 const OPEN = /^(לפתוח\s+משימה|תפתח(\s+(לי\s+)?משימה)|פתח\s+משימה|משימה)([\s,.!?]|$)/;
 const REPLY = /^(הצעת\s+תשובה|תציע(\s+לי)?\s+תשובה|לענות|תענה|תשובה|כן|👍)([\s,.!?]|$)/;
+// "לא" לבד על "זכרת?" = "לא זכרתי" — דווקא אז צריך את המייל: הצעת תשובה, לא "התעלם" (תוקן 20.11.26)
+const NO_REMEMBER = /^(לא|לא\s+זכרתי|שכחתי|אופס)([\s,.!?]|$)/;
 const DONE = /^(טיפלתי|עניתי|כבר\s+(עניתי|טיפלתי)|סגור|בוצע|✅)([\s,.!?]|$)/;
-const IGNORE = /^(התעלם|תתעלם|לא\s+צריך|לא|עזוב|👎|🙈)([\s,.!]|$)/;
+const IGNORE = /^(התעלם|תתעלם|לא\s+צריך|עזוב|👎|🙈)([\s,.!]|$)/;
 const TOMORROW = /^(תזכיר(\s+לי)?\s+מחר|מחר|אחר\s+כך|אח"כ|לא\s+עכשיו|תזכיר)([\s,.!]|$)/;
 const RECEIVE = /^(קבלת\s+סחורה|כן|לבצע|יאללה|קדימה|👍)([\s,.!]|$)/;
 
@@ -601,6 +603,8 @@ function answerReminder(userId, draft, text, { closeAlerted } = {}) {
     closeAlerted?.(userId, [draft.suggestionId], 'skipped');
     return { text: 'בסדר גמור, לא אזכיר על זה שוב 🙂', result: `התעלם: ${draft.title}` };
   }
+  // אחרי "התעלם" — כדי ש"לא צריך" יישאר התעלמות
+  if (NO_REMEMBER.test(WaUi.normalize(t))) return { reply: true, result: `לא זכר — הצעת תשובה: ${draft.title}` };
   return null;
 }
 

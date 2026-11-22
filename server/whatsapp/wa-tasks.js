@@ -43,8 +43,10 @@ function sendProactive(userId, chatId, text, { taskId = null, action = 'assignme
     rememberBot(userId, text);
     log({ channel: 'summary', chatId, userId, who, action, status: 'ok', result: text.split('\n')[0].slice(0, 300), taskId });
     if (taskId && action === 'assignment_notice') await offerOutreach(userId, chatId, taskId, who);
+    return true;
   }).catch((err) => {
     log({ channel: 'summary', chatId, userId, who, action, status: 'error', result: err.message, taskId });
+    return false;
   });
 }
 
@@ -229,8 +231,22 @@ async function askUser(userId, text, buttons, action) {
   }
 }
 
+/**
+ * הודעה יזומה שהשולח צריך לדעת אם יצאה (החותם הבא בפריוריטי, #169): ‎true‎ — יצאה; ‎'later'‎ — מחוץ לשעות הפעילות,
+ * לא נכנסת לתור (השולח ינסה שוב בסבב); ‎false‎ — לא יצאה (הבוט כבוי, אין טלפון, השליחה נכשלה — ביומן).
+ */
+async function messageUserNow(userId, text, action) {
+  if (!D.getSetting('wa_bot_enabled', true) || !isConfigured() || !channel()) return false;
+  const u = D.get("SELECT id, full_name, phone FROM users WHERE id = ? AND status = 'active'", userId);
+  if (!u?.phone) return false;
+  if (!workHours(u.id)) return 'later';
+  return sendProactive(u.id, `${u.phone}@c.us`, text, { action, who: u.full_name });
+}
+
 PurchaseDemand.setHooks({
+  // הודעה לעובד (תשובת הרכש, מק"טים שנבנו) — גם מחוץ לשעות: לתור. לחותם הבא — רק כשיצאה בפועל (#169)
   send: (userId, text) => messageUser(userId, text, 'purchase_demand'),
+  sendNow: (userId, text) => messageUserNow(userId, text, 'purchase_demand'),
   ask: (userId, text, buttons) => askUser(userId, text, buttons, 'purchase_demand')
 });
 
@@ -255,5 +271,5 @@ async function flushOutbox() {
 }
 
 module.exports = {
-  deliver, flushOutbox, messageUser, notifyAssignment, rememberBot, sendFilesToUser
+  deliver, flushOutbox, messageUser, messageUserNow, notifyAssignment, rememberBot, sendFilesToUser
 };

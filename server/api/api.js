@@ -15,6 +15,7 @@ const SettingsCatalog = require('../core').SettingsCatalog;
 const Mailer = require('../integrations').Mailer;
 const TaskMail = require('../mail').TaskMail;
 const Push = require('../integrations').Push;
+const AiUsage = require('../integrations').AiUsage;
 const Xlsx = require('../core').XlsxWrite;
 const Spreadsheet = require('../core').Spreadsheet;
 const AiTasks = require('../tasks').AiTasks;
@@ -32,6 +33,9 @@ const GContacts = require('../phonebook').GoogleContacts;
 const Calendar = require('../meetings').Calendar;
 const Gmail = require('../integrations').Gmail;
 const MailScan = require('../mail').MailScan;
+const MailDose = require('../mail').MailDose;
+const MailBulk = require('../mail').MailBulk;
+const WaReads = require('../whatsapp').WaReads;
 const Claude = require('../integrations').Claude;
 const WhatsApp = require('../integrations').Whatsapp;
 const WaBot = require('../whatsapp').WaBot;
@@ -4709,6 +4713,19 @@ router.patch('/api/vendors/:id', async (req, res, ctx) => {
 // הגדרות ומנוע כללים — מנהל מערכת בלבד
 // ---------------------------------------------------------------------------
 
+/** 💰 עלות ה-AI — לפי תכונה, עובד, יום ומודל (‎?days=30‎). "תוכנית — חיסכון בקרדיטי AI.md", שלב 0 */
+router.get('/api/admin/ai-usage', async (req, res, ctx) => {
+  const actor = ctx.requireActor();
+  requireFullPerm(actor, 'manage_automations');
+  const days = Number(parseUrl(req).searchParams.get('days') ?? 30);
+  const report = AiUsage.report({ days });
+  // 📉 המדרגה של כל עובד במינון המייל (‎mail-dose.js‎) — לראות מי ירד ולמה
+  report.byUser = report.byUser.map((u) => (u.userId ? { ...u, dose: MailDose.summary(u.userId), reads: WaReads.stats(u.userId) } : u));
+  // 📭 כמה מיילים סוננו בלי AI בתקופה (‎mail-bulk.js‎)
+  report.bulk = MailBulk.countSince(new Date(`${report.from}T00:00:00Z`).toISOString());
+  sendJson(res, 200, report);
+});
+
 router.get('/api/admin/settings', async (req, res, ctx) => {
   const actor = ctx.requireActor();
   requireFullPerm(actor, 'manage_automations');
@@ -4718,7 +4735,7 @@ router.get('/api/admin/settings', async (req, res, ctx) => {
   } catch { /* עדיין לא נוצר */ }
 
   sendJson(res, 200, {
-    settings: D.allSettings(),
+    settings: D.systemSettings(),
     defaults: D.DEFAULT_SETTINGS,
     // 🗂 הטופס לפי לשוניות — מהקטלוג (‎core/settings-catalog.js‎), המקור היחיד לשם ולהסבר של כל הגדרה
     form: SettingsCatalog.formTabs(),
@@ -4791,7 +4808,7 @@ router.put('/api/admin/settings', async (req, res, ctx) => {
   }
   if (b.settings?.scheduler_interval_minutes) Rules.start();
   if (b.settings?.ai_poll_minutes) AiTasks.start();
-  sendJson(res, 200, { settings: D.allSettings() });
+  sendJson(res, 200, { settings: D.systemSettings() });
 });
 
 router.post('/api/admin/rules', async (req, res, ctx) => {

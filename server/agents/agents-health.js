@@ -57,6 +57,7 @@ async function checkClaude() {
   const started = Date.now();
   try {
     const out = await Claude.json({
+      feature: 'agents.health',
       system: 'ענה לפי הסכמה.', content: [{ type: 'text', text: 'בדיקת חיבור: החזר ok=true.' }],
       schema: { type: 'object', properties: { ok: { type: 'boolean' } }, required: ['ok'], additionalProperties: false },
       effort: 'low', model: 'claude-haiku-5-5'

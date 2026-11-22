@@ -765,7 +765,7 @@ CREATE INDEX IF NOT EXISTS idx_meeting_followups_user ON meeting_followups (user
 /*
  * 🎙 הקלטת פגישה שנשלחה לבוט (‎ai/meeting-audio.js‎). הקובץ שמור ב-‎uploads/meeting-audio‎ עד
  * שהוא מצורף למשימת הפגישה (‎task_id‎), ואז נמחק משם. ‎meeting‎ — הפגישה שנבחרה (נושא, מועד, משתתפים).
- * ‎status‎: choose / transcribing / ready / empty / error / expired.
+ * ‎status‎: choose / transcribing / timeless (הועלתה ל-Timeless ומחכה לתמליל — ‎timeless_id‎) / ready / empty / error / expired.
  */
 CREATE TABLE IF NOT EXISTS meeting_audio (
   id               INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -780,6 +780,9 @@ CREATE TABLE IF NOT EXISTS meeting_audio (
   digest           TEXT,
   transcript_chars INTEGER,
   error            TEXT,
+  timeless_id      TEXT,
+  timeless_at      TEXT,
+  duration_sec     INTEGER,
   created_at       TEXT    NOT NULL
 );
 
@@ -871,6 +874,30 @@ CREATE TABLE IF NOT EXISTS rfq (
   task_id       INTEGER REFERENCES tasks(id) ON DELETE SET NULL,
   created_at    TEXT    NOT NULL
 );
+/*
+ * 🆕 מק"טים לבנייה — פריטים מדרישת רכש שאין להם מק"ט, שנשלחו במייל למנהלת הרכש (‎priority/pd-parts.js‎).
+ * ‎header‎ — כותרת הדרישה (פרויקט, מחסן, רשימת מאשרים, תאריך); ‎items‎ — כל שורות הדרישה (כמויות ומק"טים);
+ * ‎missing‎ — הפריטים בלי מק"ט: מה ביקשו, אילו מק"טים כבר היו בקטלוג (‎known‎), ומה נבנה (‎built‎).
+ * ‎mode‎: wait (הדרישה מחכה לרכש) / partial (נשלחה רק עם המזוהים) / receipt (קבלת סחורה, נקלטה על 000 — רק הודעה כשנבנה).
+ * ‎status‎: open (מחכה לבנייה) / asked (נשאל אם לבנות מחדש) / done / expired.
+ */
+CREATE TABLE IF NOT EXISTS pd_part_requests (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  company     TEXT    NOT NULL,
+  header      TEXT    NOT NULL DEFAULT '{}',
+  items       TEXT    NOT NULL DEFAULT '[]',
+  missing     TEXT    NOT NULL DEFAULT '[]',
+  mode        TEXT    NOT NULL DEFAULT 'wait',
+  prdno       TEXT,
+  status      TEXT    NOT NULL DEFAULT 'open',
+  sent_to     TEXT    NOT NULL DEFAULT '',
+  token       TEXT,
+  checked_at  TEXT,
+  asked_at    TEXT,
+  created_at  TEXT    NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_pd_part_requests ON pd_part_requests(status, user_id);
 /* ספק בפנייה — ‎status‎: pending / no_email / sent / replied / declined / failed / skipped. ‎offer‎ — מה חולץ מהתשובה */
 CREATE TABLE IF NOT EXISTS rfq_vendors (
   id             INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1402,6 +1429,49 @@ CREATE TABLE IF NOT EXISTS mail_memory_runs (
   updated_at    TEXT    NOT NULL
 );
 
+/*
+ * 💰 צריכת ה-AI — שורה לכל יום × עובד × תכונה × מודל × מהירות (‎integrations/ai-usage.js‎). מצטבר, לא שורה לכל קריאה.
+ * ‎user_id = 0‎ — עבודת רקע שאינה של עובד אחד (ידע ארגוני, בדיקת בריאות). ‎cost_micro‎ — הערכה במיליוניות דולר.
+ * ("תוכנית — חיסכון בקרדיטי AI.md", שלב 0)
+ */
+CREATE TABLE IF NOT EXISTS ai_usage (
+  day          TEXT    NOT NULL,              -- יום בשעון ישראל
+  user_id      INTEGER NOT NULL DEFAULT 0,
+  feature      TEXT    NOT NULL,
+  model        TEXT    NOT NULL,
+  fast         INTEGER NOT NULL DEFAULT 0,
+  calls        INTEGER NOT NULL DEFAULT 0,
+  input        INTEGER NOT NULL DEFAULT 0,
+  cache_write  INTEGER NOT NULL DEFAULT 0,
+  cache_read   INTEGER NOT NULL DEFAULT 0,
+  output       INTEGER NOT NULL DEFAULT 0,
+  searches     INTEGER NOT NULL DEFAULT 0,
+  cost_micro   INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (day, user_id, feature, model, fast)
+);
+
+/*
+ * 👁 אישורי קריאה של הצעות יזומות על מיילים (‎whatsapp/wa-reads.js‎): נשלחה / נמסרה / נקראה. נמחק אחרי 30 יום.
+ * ‎counted‎ — כבר נספרה ברצף של "לא נקראו" (לא נספרת שוב).
+ */
+CREATE TABLE IF NOT EXISTS wa_reads (
+  id_message   TEXT    PRIMARY KEY,
+  user_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  kind         TEXT    NOT NULL DEFAULT 'mail_alert',
+  sent_at      TEXT    NOT NULL,
+  status       TEXT    NOT NULL DEFAULT 'sent',   -- sent | delivered | read
+  delivered_at TEXT,
+  read_at      TEXT,
+  counted      INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_wa_reads_user ON wa_reads(user_id, sent_at);
+
+/* 👁 מי שהטלפון שלו מדווח "נקרא" (אישורי קריאה דלוקים) — רק אצלו מסיקים משהו מהודעה שלא נקראה */
+CREATE TABLE IF NOT EXISTS wa_read_reporters (
+  user_id      INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  last_read_at TEXT    NOT NULL
+);
+
 /* תור השרשורים: מה שמופה בשלב 1, ומה שנקרא בשלב 3 */
 CREATE TABLE IF NOT EXISTS mail_memory_threads (
   user_id       INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -1669,6 +1739,14 @@ function allSettings() {
   return out;
 }
 
+/**
+ * הגדרות המערכת בלבד, למסך ההגדרות. מפתחות בצורת ‎<סוג>:<משתמש>‎ (‎wa_questions:7‎, ‎goods_receipt:7‎ …)
+ * הם מצב אישי של עובד — טיוטות מייל, קבלות סחורה, דרישות רכש — ולא נחשפים למנהלי האוטומציות.
+ */
+function systemSettings() {
+  return Object.fromEntries(Object.entries(allSettings()).filter(([k]) => !k.includes(':')));
+}
+
 function audit(taskId, actor, action, details = '') {
   run(
     'INSERT INTO audit_log (task_id, actor_type, actor_id, actor_name, action, details, created_at) VALUES (?,?,?,?,?,?,?)',
@@ -1790,7 +1868,9 @@ const DEFAULT_SETTINGS = {
    */
   ai_model: 'claude-opus-5-5',
   ai_bot_model: '',                        // הבוט וההקלטה — ריק = המודל הראשי
-  ai_fast_mode: true,                      // מצב מהיר לשיחה חיה (בוט, הקלטה)
+  ai_fast_mode: false,                     // מצב מהיר לשיחה חיה (בוט, הקלטה) — כבוי מ-17.11.26: פי 2 במחיר
+  ai_scan_skip_bulk: true,                 // 📭 ניוזלטרים ומענים אוטומטיים — בלי AI (‎mail/mail-bulk.js‎)
+  ai_scan_model: 'claude-haiku-5-5',       // מיון המיילים בסריקה (משימה / תשובה / כלום) — זול; התשובה עצמה במודל הראשי
   ai_email_attempts: 2,                    // כמה מיילים שלא נענו לפני מעבר לוואטסאפ
   ai_days_between_emails: 2,
   ai_whatsapp_enabled: true,
@@ -1812,8 +1892,10 @@ const DEFAULT_SETTINGS = {
   meeting_default_minutes: 30,             // משך ברירת מחדל
   meeting_buffer_minutes: 10,              // מרווח מפגישה צמודה בהצעת מועדים
   meeting_reminder_minutes: 15,            // כמה דקות לפני — התראה ובוט הוואטסאפ, עם קישור הפגישה
+  meeting_summary_auto: true,              // 📝 הסיכום של Timeless — במייל ובבוט למשתתפים מהארגון, ולידע הארגוני (מבחוץ — באישור מי שקבע)
   meeting_followup_minutes: 15,            // כמה דקות אחרי סוף פגישה מוקלטת — הבוט שואל את המשתתפים מה לשלוח
   meeting_audio_min_kb: 1024,              // הודעה קולית גדולה מזה (כ-8 דקות) לבוט = הקלטת פגישה, והבוט שואל לאיזו פגישה לשייך
+  meeting_audio_timeless_min: 20,          // הקלטת פגישה ארוכה מזה (דקות) — מועלית ל-Timeless, והתמליל והסיכום רק משם
   rfq_daily_max: 20,                       // פנייה לספקים: כמה מיילים לכל היותר לעובד ביום (לא להיחשב דואר זבל)
   bot_pilot: false,                        // 🧪 true — היכולות החדשות בבוט (סבב Instinct) רק למנהלי המערכת. נפתח לכולם 10.11.26; "החזר את היכולות החדשות לפיילוט" — סוגר שוב
   remind_hours: '08:30-17:00',             // 🌊 שעות התזכורות מהמייל (מחוץ להן — לא מזכירים, גם לא בשעות הבוט)
@@ -1827,6 +1909,8 @@ const DEFAULT_SETTINGS = {
   ai_mail_scan_enabled: true,
   ai_scan_time: '07:00',                   // ריצת הבוקר, שעון ישראל
   ai_scan_daily_limit: 100,                // תקרת מיילים לסריקה ביום, לכל משתמש
+  ai_dose_enabled: true,                   // 📉 מינון המייל לפי שימוש (‎mail/mail-dose.js‎)
+  ai_dose_week_days: 5,                    // 📉 כמה ימי עבודה בלי שימוש מורידים מדרגה
 
   /*
    * זיכרון העבודה — סריקת כל היסטוריית המייל (‎ai/mail-memory.js‎).
@@ -2127,6 +2211,13 @@ function migrate() {
   relaxUserRoleConstraint();
   relaxAiMessagesChannel();
 
+  // 💬 מק"טים לבנייה — אסימון לדף התשובה של הרכש (‎priority/pd-parts.js‎)
+  addColumn('pd_part_requests', 'token', 'TEXT');
+  // 🎙 הקלטת פגישה ארוכה מוואטסאפ — הועלתה ל-Timeless, והתמליל משם (‎meetings/meeting-audio.js‎, 18.11.26)
+  addColumn('meeting_audio', 'timeless_id', 'TEXT');
+  addColumn('meeting_audio', 'timeless_at', 'TEXT');
+  addColumn('meeting_audio', 'duration_sec', 'INTEGER');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_pd_part_token ON pd_part_requests(token)');
   addColumn('users', 'department_id', 'INTEGER REFERENCES departments(id) ON DELETE SET NULL');
   // 📧 משימה שנולדה ממייל — עותק של המייל (מאת, נושא, תאריך, טקסט), כדי שכל מי שעובד עליה יראה על מה מדובר
   addColumn('tasks', 'source_mail', "TEXT NOT NULL DEFAULT ''");
@@ -2222,6 +2313,15 @@ function migrate() {
    * קריאה בכל שעה ולא רק בלילה, יותר שרשורים ביום, ואיחוד לקחים יומי. רק
    * מה שעדיין על ברירת המחדל הישנה מתעדכן — מנהל ששינה ידנית שומר על בחירתו.
    */
+  /*
+   * 💰 חיסכון בקרדיטי AI (17.11.26, "תוכנית — חיסכון בקרדיטי AI.md" סעיף 5.2): מצב מהיר כבוי — פעם אחת, גם אם נשמר
+   * דלוק בטופס ההגדרות. מנהל יכול להדליק שוב ב"🧠 מודלים".
+   */
+  if (getSetting('migr_fast_mode_off', null) === null) {
+    setSetting('ai_fast_mode', false);
+    setSetting('migr_fast_mode_off', true);
+  }
+
   if (getSetting('migr_memory_always_on', null) === null) {
     if (getSetting('mail_memory_hours', null) === '19:00-07:00') setSetting('mail_memory_hours', '');
     if (getSetting('mail_memory_nightly_threads', null) === 400) setSetting('mail_memory_nightly_threads', 1500);
@@ -2280,6 +2380,10 @@ function migrate() {
   addColumn('users', 'tracker_access', 'INTEGER');
   // משתמש ה-Zoom בחשבון החברה שמארח את הפגישות של העובד (‎zoom_users.id‎)
   addColumn('users', 'zoom_user_id', 'TEXT');
+  // התואר כפי שכתוב בחתימה של האדם עצמו (לא ניחוש) — לתדריך לפני פגישה (17.11.26)
+  addColumn('mail_people', 'title', "TEXT NOT NULL DEFAULT ''");
+  // מתי נקראה החתימה מהמיילים הקיימים (‎mail/signature-backfill.js‎). ריק — עוד לא
+  addColumn('mail_people', 'title_checked_at', 'TEXT');
   // חשבון Zoom שני — לאיזה חשבון שייך כל משתמש Zoom
   addColumn('zoom_users', 'account', "TEXT NOT NULL DEFAULT '1'");
   // הקלטה אוטומטית לענן ב-Zoom — נבחר בקביעת הפגישה
@@ -2708,7 +2812,7 @@ module.exports = {
   db, DB_PATH, UPLOADS_DIR, ROOT, STORAGE,
   all, get, run,
   nowIso, hashPassword, verifyPassword,
-  getSetting, setSetting, allSettings,
+  getSetting, setSetting, allSettings, systemSettings,
   userPrefs, setUserPref,
   audit, notify, onNotify, countsAsOpener,
   internalBoard, createVendorBoard, boardColumns, ensureBoardColumns,

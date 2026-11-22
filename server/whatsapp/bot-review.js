@@ -27,6 +27,7 @@ const Gmail = require('../integrations').Gmail;
 const Mime = require('../core').Mime;
 const MailThread = require('../mail').MailThread;
 const { pushToUser } = require('./wa-proactive');
+const { messageUser } = require('./wa-tasks');
 const WaUi = require('./wa-ui');
 const { escape, shell, button } = require('../core').MailTemplates;
 const { badRequest, unauthorized, readJson, sendJson } = require('../core').HttpKit;
@@ -229,7 +230,9 @@ function feedback() {
         reviewId: r.id, n: out.filter((x) => x.reviewId === r.id).length + 1, date: r.created_at.slice(0, 10), title: f.title, url: f.url, kind: f.kind ?? '',
         status: f.status ?? 'new', note: f.note ?? '',
         // ✉️ מי העיר (משתמש במשימון) — כדי להציע לו תשובה כשזה טופל; ‎replyProposedAt‎ — כבר הוצעה, לא שוב
-        requester: f.requester ?? '', threadHint: f.threadHint ?? '', replyProposedAt: f.replyProposedAt ?? null
+        requester: f.requester ?? '', threadHint: f.threadHint ?? '', replyProposedAt: f.replyProposedAt ?? null,
+        // 🔁 העובדים שניסו ולא הצליחו — ומתי נשלח להם "אפשר לנסות שוב" (‎invitedAt‎; ריק — עוד לא)
+        retry: (f.retry ?? []).map((r) => ({ userId: r.userId, who: nameOf(r.userId), ask: r.ask, invitedAt: r.invitedAt ?? null }))
       });
     }
   }
@@ -265,7 +268,9 @@ async function sendReport(body) {
     kind: clean(f.kind, 30),
     // ✉️ מי העיר — השם המלא של משתמש במשימון (מהמייל שממנו עלה הרעיון), ומילה מהנושא לשרשור התשובה
     requester: clean(f.requester, 120),
-    threadHint: clean(f.threadHint, 120)
+    threadHint: clean(f.threadHint, 120),
+    // 🔁 מי ניסה ולא הצליח — לשלוח לו "אפשר לנסות שוב" כשהתיקון נכנס (הוחלט 20.11.26)
+    retry: retryOf(f.retry)
   })).filter((f) => f.title).map((f, i) => ({ ...f, n: i + 1 }));
   const reportUrl = isHttps(clean(body.reportUrl, 500)) ? clean(body.reportUrl, 500) : '';
   if (!summary && !fixes.length) throw badRequest('הדו"ח ריק');
@@ -287,7 +292,8 @@ async function sendReport(body) {
     D.nowIso(), clean(body.since, 40), clean(body.until, 40), subject, mask(summary), conversations, succeeded,
     JSON.stringify(patterns),
     JSON.stringify(fixes.map((f) => ({ title: mask(f.title), problem: mask(f.problem), example: mask(f.example), kind: f.kind, url: f.url, status: 'new', note: '',
-      ...(f.requester ? { requester: f.requester, threadHint: mask(f.threadHint) } : {}) })))
+      ...(f.requester ? { requester: f.requester, threadHint: mask(f.threadHint) } : {}),
+      ...(f.retry.length ? { retry: f.retry } : {}) })))
   ).lastInsertRowid;
 
   const para = (t) => escape(t).replace(/\n/g, '<br>');
@@ -345,7 +351,7 @@ function listReviews(limit = 30) {
     conversations: r.conversations,
     succeeded: r.succeeded,
     patterns: parse(r.patterns),
-    fixes: parse(r.fixes).map((f, i) => ({ n: i + 1, ...f, status: f.status ?? 'new' })),
+    fixes: parse(r.fixes).map((f, i) => ({ n: i + 1, ...f, status: f.status ?? 'new', retry: (f.retry ?? []).map((x) => ({ who: nameOf(x.userId), invitedAt: x.invitedAt ?? null })) })),
     emailed: r.emailed
   }));
 }
@@ -360,6 +366,48 @@ function setFixStatus(reviewId, n, { status, note = '' }, actor) {
   if (!f) throw badRequest('ההצעה לא נמצאה');
   Object.assign(f, { status, note: clean(note, 500), decidedBy: actor?.name ?? '', decidedAt: D.nowIso() });
   D.run('UPDATE bot_reviews SET fixes = ? WHERE id = ?', JSON.stringify(fixes), Number(reviewId));
+  // ✅ "טופל" — מי שניסה ולא הצליח מקבל "אפשר לנסות שוב"
+  if (status === 'done') retryInvite([{ reviewId: Number(reviewId), n: Number(n) }]);
+}
+
+/*
+ * 🔁 "אפשר לנסות שוב" (הוחלט 20.11.26, ישראל): עובד ניסה ולא הצליח, ותיקנו — הבוט כותב לו לנסות שוב את אותה בקשה.
+ * הסקירה הלילית שומרת בכל תיקון את מי שנכשל ומה ביקש (‎retry: [{ userId, ask, note }]‎). נשלח כשהתיקון מוזג
+ * (הסקירה בודקת ב-GitHub וקוראת ל-‎retry-invite‎) או כשמנהל סימן "טופל". פעם אחת לכל עובד ותיקון (‎invitedAt‎),
+ * ובשעות העבודה בלבד (מחוץ לשעות — לתור, ויוצא כשהחלון נפתח).
+ */
+function retryOf(list) {
+  return (Array.isArray(list) ? list : []).slice(0, 5)
+    .map((r) => ({ userId: Number(r?.userId) || 0, ask: clean(mask(r?.ask), 300), note: clean(mask(r?.note), 300) }))
+    .filter((r) => r.ask && D.get("SELECT id FROM users WHERE id = ? AND status = 'active'", r.userId));
+}
+const nameOf = (id) => D.get('SELECT full_name FROM users WHERE id = ?', id)?.full_name ?? '';
+
+function retryText(userId, r) {
+  const first = nameOf(userId).split(/\s+/)[0];
+  return [`🔧 ${first ? `${first}, ` : ''}ביקשת ממני "${r.ask}" — וזה לא הסתדר.`, r.note ? `תיקנו: ${r.note}` : 'תיקנו את זה.', 'אפשר לנסות שוב עכשיו 🙂'].join('\n');
+}
+
+/** ‎refs‎: ‎[{ reviewId, n }]‎ — התיקונים שנכנסו. מחזיר למי נשלח */
+function retryInvite(refs) {
+  const sent = [];
+  for (const ref of Array.isArray(refs) ? refs.slice(0, 50) : []) {
+    const row = D.get('SELECT fixes FROM bot_reviews WHERE id = ?', Number(ref?.reviewId));
+    if (!row) continue;
+    const fixes = parse(row.fixes);
+    const f = fixes[Number(ref?.n) - 1];
+    if (!f?.retry?.length) continue;
+    let changed = false;
+    for (const r of f.retry) {
+      if (r.invitedAt) continue;
+      if (!messageUser(r.userId, retryText(r.userId, r), 'retry_invite')) continue;
+      r.invitedAt = D.nowIso();
+      changed = true;
+      sent.push({ reviewId: Number(ref.reviewId), n: Number(ref.n), userId: r.userId, who: nameOf(r.userId) });
+    }
+    if (changed) D.run('UPDATE bot_reviews SET fixes = ? WHERE id = ?', JSON.stringify(fixes), Number(ref.reviewId));
+  }
+  return { sent };
 }
 
 const isConfigured = () => Boolean(String(process.env.BOT_REVIEW_KEY ?? '').trim());
@@ -456,10 +504,16 @@ function register(router) {
     sendJson(res, 200, out);
   });
 
+  router.post('/api/integrations/bot-review/retry-invite', async (req, res) => {
+    authenticate(req);
+    const body = await readJson(req);
+    sendJson(res, 200, retryInvite(body.fixes));
+  });
+
   router.post('/api/integrations/bot-review/report', async (req, res) => {
     authenticate(req);
     sendJson(res, 200, await sendReport(await readJson(req)));
   });
 }
 
-module.exports = { register, mask, exportSince, sendReport, listReviews, setFixStatus, isConfigured, readAloudUsage, mailFeedback, mailForApproval };
+module.exports = { register, mask, exportSince, sendReport, listReviews, setFixStatus, retryInvite, feedback, isConfigured, readAloudUsage, mailFeedback, mailForApproval };

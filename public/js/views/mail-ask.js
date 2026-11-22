@@ -179,7 +179,7 @@ const AskView = (() => {
       try {
         const attachments = await Promise.all(sent.map(async (f) => ({ filename: f.name, mime: f.type || 'application/octet-stream', data: await toBase64(f) })));
         const r = await API.post('/api/ai/ask', { question, history, taskId: opts.taskId ?? null, attachments });
-        history.push({ q: question, a: (r.merged ? [r.agent?.text] : [r.mail?.answer, r.agent?.text]).filter(Boolean).join('\n').slice(0, 1500) });
+        history.push({ q: question, a: (r.merged ? [r.agent?.text, r.agent?.draft] : [r.mail?.answer, r.agent?.text, r.agent?.draft]).filter(Boolean).join('\n').slice(0, 1500) });
         UI.mount(answerBox, ...answer(r, question));
         input.value = '';
         input.placeholder = 'שאלת המשך…';
@@ -220,7 +220,15 @@ const AskView = (() => {
       }
 
       // 🤖 הסוכן
-      if (r.agent?.text) {
+      // ✍️ נוסח מוכן — בתיבה משלו, נקי, עם העתקה
+      if (r.agent?.draft) {
+        out.push(el('div.mask-sec.mask-draft', {}, [
+          el('div.mask-sec-title', { text: '✍️ הנוסח — מוכן לשליחה' }),
+          el('div.mask-a', { text: r.agent.draft }),
+          el('div.mask-actions', {}, [copyButton(r.agent.draft)])
+        ]));
+      }
+      if (r.agent?.text && !(r.agent.draft && r.agent.text === '✍️ הנוסח מוכן.')) {
         const a = r.agent;
         out.push(el('div.mask-sec', {}, [
           el('div.mask-sec-title', { text: `${a.icon ?? '🤖'} ${a.title}` }),
@@ -237,7 +245,7 @@ const AskView = (() => {
             copyButton(a.text)
           ])
         ]));
-      } else if (r.agent?.error) {
+      } else if (r.agent?.error && !r.agent?.text) {
         out.push(el('div.mute-sm', { text: `${r.agent.title ?? 'הסוכן'} לא הצליח לענות: ${r.agent.error}` }));
       }
       if (mailBox) out.push(mailBox);

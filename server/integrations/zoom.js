@@ -349,7 +349,11 @@ async function testCreate(zoomUserId) {
     await deleteMeeting(z.id).catch(() => {});
     return { ok: true, warning: z.warning || '', account: key, scopes: tokenScopes(key) };
   } catch (err) {
-    return { ok: false, account: key, status: err.status ?? null, code: err.code ?? null, message: err.zoomMessage ?? err.message, firstError: err.firstError ?? null, explain: explain(err).text, scopes: await scopesNow() };
+    const scopes = await scopesNow();
+    // ‎"does not contain scopes:[a, b]"‎ — מה Zoom דרש, ומה מזה אין באסימון (Zoom מסתפק באחת מהן)
+    const wanted = (String(err.zoomMessage ?? '').match(/scopes:\s*\[([^\]]*)\]/)?.[1] ?? '').split(',').map((x) => x.trim()).filter(Boolean);
+    const missingScopes = wanted.filter((x) => !scopes.includes(x));
+    return { ok: false, account: key, status: err.status ?? null, code: err.code ?? null, message: err.zoomMessage ?? err.message, firstError: err.firstError ?? null, explain: explain(err).text, scopes, wanted, missingScopes };
   }
 }
 

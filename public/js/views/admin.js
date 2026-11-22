@@ -22,7 +22,8 @@ const AdminView = (() => {
     { key: 'templates', label: 'תבניות', perm: 'create_project', full: true },
     // הודעה שנפתחת לכל המשתמשים — רק אדמין על (ראה ‎manage_release_notes‎)
     { key: 'whatsnew', label: '✨ מה חדש', perm: 'manage_release_notes', full: true },
-    { key: 'ai', label: '🤖 סוכנים וידע ארגוני', perm: 'manage_automations', full: true }
+    { key: 'ai', label: '🤖 סוכנים וידע ארגוני', perm: 'manage_automations', full: true },
+    { key: 'ai_cost', label: '💰 עלות AI', perm: 'manage_automations', full: true }
   ];
 
   async function render(container, params = {}) {
@@ -69,6 +70,7 @@ const AdminView = (() => {
       else if (tab === 'templates') await templatesTab(body);
       else if (tab === 'whatsnew') await WhatsNewView.adminTab(body, reload);
       else if (tab === 'ai') await AdminAiView.tab(body);
+      else if (tab === 'ai_cost') await AdminAiView.costTab(body);
     } catch (err) {
       UI.mount(body, UI.empty(err.message, '⚠️'));
     }
@@ -1412,6 +1414,12 @@ const AdminView = (() => {
             title: `🧪 Zoom — ${u.name}`,
             body: el('div', {}, [
               el('div.alert.alert-warn', {}, [el('span', { text: '⚠️' }), el('div', { text: r.explain })]),
+              // מה בדיוק חסר, ובאיזו אפליקציה — לפני הרשימה הארוכה
+              r.wanted?.length ? el('div', { style: { margin: '8px 0', fontWeight: '700' } }, [
+                `באפליקציה של חשבון Zoom ${r.account}${r.account === '2' ? ' (ZOOM2_… בשרת)' : ''} חסרה אחת מאלה: `,
+                el('span', { style: { direction: 'ltr', unicodeBidi: 'isolate' }, text: (r.missingScopes?.length ? r.missingScopes : r.wanted).join(' או ') })
+              ]) : null,
+              r.scopes?.length ? el('div.mute-sm', { text: `באסימון יש ${r.scopes.length} הרשאות, מתוכן ${r.scopes.filter((x) => x.startsWith('meeting:')).length} של פגישות (meeting:…).` }) : null,
               el('div.mute-sm', { text: `חשבון Zoom ${r.account} · ההרשאות שבאסימון עכשיו (מה ש-Zoom נותן לאפליקציה בפועל):` }),
               el('pre', { style: { whiteSpace: 'pre-wrap', direction: 'ltr', textAlign: 'left', fontSize: '12px' }, text: (r.scopes ?? []).join('\n') || '(אין — האפליקציה לא מחזירה הרשאות)' }),
               el('pre', { style: { whiteSpace: 'pre-wrap', direction: 'ltr', textAlign: 'left', fontSize: '12px' }, text: JSON.stringify({ status: r.status, code: r.code, message: r.message, firstError: r.firstError }, null, 2) })
@@ -2000,6 +2008,8 @@ const AdminView = (() => {
             fix.kind && FIX_KIND[fix.kind] ? el('span.ai-chip.ai-chip-ai', { text: FIX_KIND[fix.kind] }) : null,
             // ✉️ מי העיר, והאם כבר הוצעה לו תשובה על מה שטופל
             fix.requester ? el('span.ai-chip', { text: fix.replyProposedAt ? `✉️ ${fix.requester} · הוצעה תשובה` : `✉️ ${fix.requester}` }) : null,
+            // 🔁 מי ניסה ולא הצליח — מקבל "אפשר לנסות שוב" כשזה נכנס
+            ...(fix.retry ?? []).map((r) => el('span.ai-chip', { text: `🔁 ${r.who || 'עובד'}${r.invitedAt ? ' · נשלח לנסות שוב' : ''}` })),
             el(`span.ai-chip${cls ? `.${cls}` : ''}`, { text: label })
           ]),
           fix.problem ? el('div.rv-text', { text: fix.problem }) : null,

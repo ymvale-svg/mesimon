@@ -75,6 +75,7 @@ test('עובד אינו נכנס למסכי הניהול — 403', async () => {
     ['POST', '/api/admin/users', { name: 'פורץ', email: 'intruder@test.local', role: 'admin', invite: false }],
     ['PATCH', `/api/admin/users/${bob.id}`, { role: 'admin' }],
     ['GET', '/api/admin/settings'],
+    ['GET', '/api/admin/ai-usage'],
     ['PUT', '/api/admin/settings', { settings: { org_name: 'נפרץ' } }],
     ['POST', '/api/admin/rules', { triggerKey: 'x', actionKey: 'y' }],
     ['POST', '/api/departments', { name: 'מחלקה פיראטית' }],
@@ -102,7 +103,7 @@ test('הניסיונות של העובד לא שינו דבר', async () => {
 
 test('מנהל המערכת כן מגיע לאותם מסכים — 200', async () => {
   const a = as(admin);
-  for (const path of ['/api/admin/users', '/api/admin/settings', '/api/admin/releases', '/api/reports', '/api/tasks?scope=vendors', '/api/departments?includeInactive=1']) {
+  for (const path of ['/api/admin/users', '/api/admin/settings', '/api/admin/ai-usage?days=7', '/api/admin/releases', '/api/reports', '/api/tasks?scope=vendors', '/api/departments?includeInactive=1']) {
     const r = await a('GET', path);
     assert.equal(r.status, 200, `${path} → ${r.status} ${r.text.slice(0, 120)}`);
   }

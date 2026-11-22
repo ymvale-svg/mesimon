@@ -14,8 +14,11 @@ const AiTasks = require('../tasks').AiTasks;
 const GContacts = require('../phonebook').GoogleContacts;
 const WaActions = require('./wa-actions');
 const MailInsights = require('../mail').MailInsights;
+const Whatsapp = require('../integrations').Whatsapp;
 const MailThread = require('../mail').MailThread;
 const MailPush = require('../mail').MailPush;
+const MailDose = require('../mail').MailDose;
+const WaReads = require('./wa-reads');
 const WaScan = require('./whatsapp-scan');
 const Business = require('./wa-business');
 const GoodsReceipt = require('../priority').GoodsReceipt;
@@ -103,6 +106,9 @@ function solveText(r) {
 }
 
 
+/** "לכולם" / "השב לכולם" / "עם כולם בהעתק" — מי שהיה בשרשור נכנס להעתק */
+const TO_ALL = /(?:^|[\s,])(?:ל|את\s+|עם\s+)?כולם(?:[\s,.!]|$)|השב\s+לכולם|לכל\s+(?:המשתתפים|מי\s+שבשרשור|השרשור)/;
+
 /** טיוטה (או תיקון שלה) — עם ההתכתבות האחרונה עם הנמען, להצעות מה להוסיף */
 async function draftEmail(actor, contact, instruction, { feedback = '', previous = null, dry = false, channel = null, solve = null } = {}) {
   const owner = D.get('SELECT id, full_name, email FROM users WHERE id = ?', actor.id);
@@ -128,8 +134,13 @@ async function draftEmail(actor, contact, instruction, { feedback = '', previous
   if (replyThread) d.subject = `Re: ${replyThread.subject}`;
   const resolved = resolveCc(actor, d.cc_names, { previous: previous?.cc ?? [], contact });
   const { ccAsk } = resolved;
-  // תשובה בשרשור — מי שכבר היה בו נשאר בהעתק (כמו "השב לכולם")
-  const cc = picked ? [...resolved.cc, ...MailThread.threadCc(actor.id, picked, contact.email).filter((p) => !resolved.cc.some((c) => c.email === p.email))] : resolved.cc;
+  /*
+   * תשובה בשרשור — מי שהיה בו נכנס להעתק רק כשביקשו ("לכולם", "השב לכולם"). בלי זה — רק הנמען, והטיוטה מציינת
+   * כמה עוד היו בשרשור (סקירה 18.11: הודעה קצרה לאדם אחד יצאה עם כל ההעתק, ועובדים הורידו אותו או ביטלו)
+   */
+  const threadPeople = picked ? MailThread.threadCc(actor.id, picked, contact.email) : replyThread ? previous?.threadPeople ?? [] : [];
+  const toAll = TO_ALL.test(`${previous ? '' : instruction} ${feedback}`);
+  const cc = toAll ? [...resolved.cc, ...threadPeople.filter((p) => !resolved.cc.some((c) => c.email === p.email))] : resolved.cc;
   const suggestions = (Array.isArray(d.suggestions) ? d.suggestions : []).map((x) => String(x).trim()).filter(Boolean).slice(0, 4);
   return {
     kind: 'email',
@@ -153,6 +164,7 @@ async function draftEmail(actor, contact, instruction, { feedback = '', previous
     cc: via === 'email' ? cc : [],
     ccAsk: via === 'email' ? ccAsk : [],
     replyThread: via === 'email' ? replyThread : null,
+    threadPeople: via === 'email' ? threadPeople : [],
     ...(via === 'email' ? await signatureFields(actor.id) : { signature: false, noSignature: null })
   };
 }
@@ -252,11 +264,14 @@ function createFromDraft(actor, original) {
 }
 
 
+/** תוקף הצעת תשובה למייל: אחרי שעתיים "כן" כבר לא שולח (#171) */
+const MAIL_REPLY_TTL_MS = 2 * 60 * 60 * 1000;
+
 /** ביצוע מה שהעובד אישר ב"כן". בבדיקה ממסך הניהול (‎dry‎) — רק מתארים */
 async function confirmPending(actor, pending, dry) {
   const kind = pending.kind ?? 'task';
   // פנייה יזומה על מייל חדש (‎mailAlerts‎) — לפי הפעולה "מייל חדש — הבוט פונה"
-  const action = pending.solve ? 'solve' : pending.alert ? 'mail_alert' : { task: 'create_task', email: 'send_email', mail_reply: 'mail_insights' }[kind] ?? kind;
+  const action = pending.solve ? 'solve' : pending.alert ? 'mail_alert' : { task: 'create_task', task_batch: 'create_task', email: 'send_email', mail_reply: 'mail_insights' }[kind] ?? kind;
   if (!WaActions.allowed(actor, action)) {
     return { reply: 'הפעולה הזו כבר אינה זמינה לך בוואטסאפ.', action, status: 'denied', result: 'הפעולה כובתה' };
   }
@@ -266,6 +281,17 @@ async function confirmPending(actor, pending, dry) {
       const id = dry ? null : createFromDraft(actor, pending);
       const link = id ? taskLink(id) : null;
       return { reply: `✅ נפתחה משימה: ${pending.title}${test}${link ? `\n${link}` : ''}`, action, status: 'ok', result: `נפתחה משימה: ${pending.title}`, taskId: id };
+    }
+    if (kind === 'task_batch') {
+      const lines = [];
+      let first = null;
+      for (const item of pending.items ?? []) {
+        const id = dry ? null : createFromDraft(actor, item);
+        first ??= id;
+        const link = id ? taskLink(id) : null;
+        lines.push(`• ${item.title}${link ? `\n  ${link}` : ''}`);
+      }
+      return { reply: [`✅ נפתחו ${lines.length} משימות${test}:`, ...lines].join('\n'), action, status: 'ok', result: `נפתחו ${lines.length} משימות: ${(pending.items ?? []).map((x) => x.title).join(' · ')}`.slice(0, 300), taskId: first };
     }
     if (kind === 'complete') {
       if (!dry) hooks.tasks.complete(actor, pending.taskId);
@@ -277,7 +303,14 @@ async function confirmPending(actor, pending, dry) {
     }
     if (kind === 'mail_reply') {
       const r = pending.reply;
+      // ⏳ הצעת תשובה ישנה (יותר משעתיים) — "כן" כבר לא שולח (#171). ההצעה נשארת ב"ממתין לאישורך"
+      const offered = Date.parse(pending.offeredAt ?? pending.askedAt ?? '') || 0;
+      if (!dry && Date.now() - offered > MAIL_REPLY_TTL_MS) {
+        return { reply: `⏳ הצעת התשובה ל${r?.toName || r?.to || 'מייל'} ישנה מדי (יותר משעתיים), אז לא שלחתי. אם עדיין צריך לענות — בקשו ממני לענות על המייל, ואכין נוסח מעודכן.`, action, status: 'ok', result: `הצעת תשובה פגה — לא נשלחה: ${r?.subject ?? ''}` };
+      }
       if (!dry) await MailInsights.sendReply(actor.id, r);
+      // 📉 תשובה למייל מהבוט — שימוש (‎mail-dose.js‎)
+      if (!dry) MailDose.noteUse(actor.id, 'reply_sent');
       // מהפנייה היזומה: ההצעה מהמייל נענתה — יורדת מ"ממתין לאישורך"
       if (!dry && pending.suggestionIds?.length) closeAlerted(actor.id, pending.suggestionIds, 'replied');
       return { reply: `📧 התשובה נשלחה ל${r.toName || r.to}.${test}`, action, status: 'ok', result: `תשובה ל${r.toName || r.to}: ${r.subject}` };
@@ -321,31 +354,54 @@ async function confirmPending(actor, pending, dry) {
       const who = pending.contact.name || pending.contact.email;
       // עובד בארגון: "במשימון" — משימה משויכת אליו; אחרת — מייל, כמו לכל נמען
       const internal = pending.contact.type === 'user' && pending.via === 'mesimon';
-      if (!P.may(actor, 'create_task')) throw new Error('אין לך הרשאה לפתוח משימות');
       const wa = pending.channel === 'whatsapp' && pending.contact.type !== 'user';
-      const contact = pending.contact.type === 'user' && !internal
-        ? { name: pending.contact.name, email: pending.contact.email, phone: '', type: 'external', refId: null }
-        : wa ? { ...pending.contact, phone: pending.contact.mobile || pending.contact.phone } : pending.contact;
-      // אותה פתיחה של האשף באפליקציה: משימת AI שעוקבת אחרי התשובה
-      // שם בהעתק שעוד לא הובהר — לא שולחים עד שיהיה ברור למי
-      if (!internal && pending.ccAsk?.length) {
-        return { reply: `לפני השליחה — עוד לא ברור מי בהעתק: ${pending.ccAsk.map((x) => `"${x.name}"`).join(', ')}. כתבו *בהעתק* עם השם המלא או המייל, או *בלי* והשם.`, action, status: 'unclear', result: 'העתק לא ברור', keep: true };
+      /*
+       * ✉️ משימה ומייל — שני דברים נפרדים (ישראל, 20.11.26; באג 18.11: כל מייל מהבוט פתח משימת AI בלוח).
+       * מייל יוצא ישר מ-Gmail ולעולם לא פותח משימה — גם "ותעקוב", מהצעה ומ"💡 פתרון לבעיה". המעקב:
+       * כשיענו — "📬 ענה למייל ששלחת" (‎ReplyWatch‎ ב-‎sendReply‎). משימה — רק כשמבקשים משימה.
+       * גם וואטסאפ לגורם חיצוני — יוצא מהוואטסאפ של העובד, בלי משימה; התשובה מגיעה אליו לוואטסאפ ממילא.
+       * נשארה משימה רק "במשימון" לעובד — זו משימה, לא הודעה.
+       */
+      if (wa) {
+        if (!Whatsapp.isReady(actor.id)) {
+          return { reply: 'הוואטסאפ שלך אינו מחובר למשימון, אז אין ממה לשלוח. מחברים אותו ב"החשבון שלי" — או כתבו *במייל*.', action, status: 'error', result: 'וואטסאפ לא מחובר', keep: true };
+        }
+        const phone = pending.contact.mobile || pending.contact.phone;
+        if (!dry) {
+          await Whatsapp.send(actor.id, phone, pending.draft.body);
+          if (pending.suggestionId) closeAlerted(actor.id, [pending.suggestionId], 'replied');
+        }
+        return { reply: `💬 נשלח בוואטסאפ ל${who}.${test}`, action, status: 'ok', result: `נשלח וואטסאפ ל${who}` };
       }
+      if (!internal) {
+        if (pending.ccAsk?.length) {
+          return { reply: `לפני השליחה — עוד לא ברור מי בהעתק: ${pending.ccAsk.map((x) => `"${x.name}"`).join(', ')}. כתבו *בהעתק* עם השם המלא או המייל, או *בלי* והשם.`, action, status: 'unclear', result: 'העתק לא ברור', keep: true };
+        }
+        const rt = pending.replyThread;
+        if (!dry) {
+          await MailInsights.sendReply(actor.id, {
+            box: rt?.box ?? 0, to: pending.contact.email, toName: pending.contact.name || '',
+            subject: pending.draft.subject, body: pending.draft.body,
+            cc: (pending.cc ?? []).map((c) => c.email).filter(Boolean),
+            ...(rt?.threadId ? { threadId: rt.threadId, inReplyTo: rt.inReplyTo, references: rt.references ?? [] } : {})
+          });
+          // מ"סגור א": המייל הוא הטיפול בהצעה — היא יורדת מ"ממתין לאישורך" כנענתה, בלי משימה
+          if (pending.suggestionId) closeAlerted(actor.id, [pending.suggestionId], 'replied');
+        }
+        return {
+          reply: `📧 נשלח ל${who}${rt?.threadId ? ' — בהמשך לשרשור' : ''}. כשיענו — אעדכן אותך כאן 📬${test}`,
+          action, status: 'ok', result: `נשלח מייל ל${who}: ${pending.draft.subject}`
+        };
+      }
+      // "במשימון" לעובד — זו משימה, לא הודעה: משויכת אליו, ואת/ה שותף/ה (אותה פתיחה של האשף באפליקציה)
+      if (!P.may(actor, 'create_task')) throw new Error('אין לך הרשאה לפתוח משימות');
       const r = dry ? { taskId: null, sendError: null } : await hooks.mail.createAiTask(actor, {
-        instruction: pending.instruction, draft: pending.draft, contact, channel: wa ? 'whatsapp' : 'email',
-        cc: internal || wa ? [] : pending.cc ?? [],
-        // ↩️ בהמשך לשרשור עם הנמען — תשובה בו, לא מייל חדש
-        ...(!internal && !wa && pending.replyThread ? { replyThread: pending.replyThread } : {}),
-        // מ"סגור א": המשימה נפתחת מההצעה (ונעלמת מ"ממתין לאישורך")
-        ...(pending.suggestionId ? { suggestionId: pending.suggestionId } : {})
+        instruction: pending.instruction, draft: pending.draft, contact: pending.contact, channel: 'email', cc: []
       });
       const link = r.taskId ? taskLink(r.taskId) : null;
-      if (r.sendError) {
-        return { reply: `⚠️ המשימה נפתחה, אבל ${wa ? 'ההודעה בוואטסאפ' : 'המייל'} לא יצא${wa ? 'ה' : ''}: ${r.sendError}\nאפשר לשלוח שוב מכרטיס המשימה.${link ? `\n${link}` : ''}`, action, status: 'error', result: `המייל ל${who} לא יצא: ${r.sendError}`, taskId: r.taskId };
-      }
       return {
-        reply: `${internal ? `👤 הועבר ל${who} — המשימה אצלו/ה במשימון.` : `${wa ? '💬 נשלח בוואטסאפ' : '📧 נשלח'} ל${who}. אעקוב אחרי התשובה ואעדכן אותך.`}${test}${link ? `\n${link}` : ''}`,
-        action, status: 'ok', result: `${internal ? 'הועבר' : wa ? 'נשלח וואטסאפ' : 'נשלח מייל'} ל${who}: ${pending.draft.subject || pending.draft.title}`, taskId: r.taskId
+        reply: `👤 הועבר ל${who} — המשימה אצלו/ה במשימון.${test}${link ? `\n${link}` : ''}`,
+        action, status: 'ok', result: `הועבר ל${who}: ${pending.draft.subject || pending.draft.title}`, taskId: r.taskId
       };
     }
   } catch (err) {
@@ -367,7 +423,7 @@ async function confirmPending(actor, pending, dry) {
 /**
  * "סגור א" — מה שהוצע ב-💡 של ההצעה:
  *   • פנייה — טיוטת מייל לנמען שהוצע, לאישור ב"כן" (אותה זרימה של "שלח מייל"):
- *     משימת AI נפתחת מההצעה ועוקבת אחרי התשובה. בלי כתובת — שואלים מה המייל.
+ *     המייל יוצא בלי משימה, וההצעה יורדת כנענתה. בלי כתובת — שואלים מה המייל.
  *   • להעביר לעובד — המשימה נפתחת אצלו (ואני נשאר שותף), כמו באפליקציה.
  *   • לבד — המשימה נפתחת אצלי, והצעדים כצ'קליסט.
  * כמו כל פנייה החוצה: שום דבר לא נשלח בלי "כן".
@@ -646,7 +702,27 @@ async function mailAlertFor(userId) {
    * 💡 רק כשיש הצעת תשובה קונקרטית (הוחלט 11.11.26, ישראל: "התראה על כל מייל — מטריד"): "קיבלת מייל מדני:
    * <במשפט מה ביקש>. לענות כך? «…»". בלי הצעה — אין הודעה עכשיו; אם המייל לא יטופל, תגיע תזכורת "זכרת? 🐣"
    */
-  const withReply = rows.find((r) => MailPush.concreteReply(r.d.reply));
+  const wantsReply = rows.some((r) => MailPush.concreteReply(r.d.reply) || r.d.replyWanted);
+  // 📉 מינון לפי שימוש (‎mail-dose.js‎): 50% — דחוף תמיד והשאר לסירוגין; 20% — אחת ביום, רק דחוף; מושהה — לא
+  if (wantsReply && !MailDose.mayOffer(userId, head.d.priority)) {
+    log({ channel: 'summary', chatId, userId, who: u.full_name, action: 'mail_alert', status: 'ok', result: `📧 ${head.from_name}: ${oneLine(head.subject, 100)} — לא הוקפץ (מינון ${MailDose.percent(userId)}%); ב"היום"` });
+    return;
+  }
+  let withReply = rows.find((r) => MailPush.concreteReply(r.d.reply));
+  // 📉 מתחת ל-100% התשובה לא הוכנה בסריקה — נכתבת עכשיו, רק למייל שמוצע
+  const wanted = !withReply && rows.find((r) => r.d.replyWanted);
+  const wantedBox = wanted ? Number(wanted.d.replyBox ?? 0) : 0;
+  if (wanted && Gmail.canSend(Gmail.handle(userId, wantedBox))) {
+    const r = await MailInsights.suggestReply(userId, wanted.gmail_id, { box: wantedBox }).catch((err) => {
+      log({ channel: 'summary', chatId, userId, who: u.full_name, action: 'mail_alert', status: 'error', result: `הכנת התשובה: ${err.message}` });
+      return null;
+    });
+    if (r?.body) {
+      wanted.d.reply = { ...r, gmailId: wanted.gmail_id, box: wantedBox };
+      D.run('UPDATE ai_suggestions SET data = ? WHERE id = ?', JSON.stringify(wanted.d), wanted.id);
+      withReply = wanted;
+    }
+  }
   let reply = null;
   if (withReply && Gmail.canSend(Gmail.handle(userId, withReply.d.reply.box ?? 0))) {
     reply = await MailInsights.completeReply(userId, withReply.d.reply).catch((err) => {
@@ -659,9 +735,11 @@ async function mailAlertFor(userId) {
     return;
   }
   const text = MailPush.replyAlert(head, reply);
-  const draft = { kind: 'mail_reply', reply, alert: true, suggestionIds: ids, subject: head.subject };
+  const draft = { kind: 'mail_reply', reply, alert: true, suggestionIds: ids, subject: head.subject, offeredAt: D.nowIso() };
   try {
-    await sendButtons(chatId, text, [WaUi.BTN.yes, WaUi.BTN.no], { owner: 'chat', draft, awaiting: true });
+    const sentId = await sendButtons(chatId, text, [WaUi.BTN.yes, WaUi.BTN.no], { owner: 'chat', draft, awaiting: true });
+    // 👁 נפתחה? (‎wa-reads.js‎) — הצעות שלא נקראות מורידות את המינון
+    WaReads.track(userId, sentId, 'mail_alert');
     rememberBot(userId, text);
     // המצב נקרא שוב רגע לפני השמירה — הודעה שהגיעה בינתיים מהעובד גוברת
     const now = chatOf(userId);
@@ -681,7 +759,7 @@ async function mailAlertFor(userId) {
  */
 async function replyOffer(userId, row) {
   const d = parseJson(row.data, {});
-  const box = d.reply?.box ?? row.box ?? 0;
+  const box = d.reply?.box ?? d.replyBox ?? row.box ?? 0;
   if (!Gmail.canSend(Gmail.handle(userId, box))) return { error: 'cannot_send' };
   let reply = MailPush.concreteReply(d.reply) ? d.reply : null;
   if (!reply) {
@@ -694,7 +772,7 @@ async function replyOffer(userId, row) {
   if (!reply?.body) return { error: 'no_reply' };
   return {
     text: MailPush.replyAlert({ ...row, d }, reply),
-    draft: { kind: 'mail_reply', reply, suggestionIds: [row.id], subject: row.subject, buttons: [WaUi.BTN.yes, WaUi.BTN.no] },
+    draft: { kind: 'mail_reply', reply, suggestionIds: [row.id], subject: row.subject, buttons: [WaUi.BTN.yes, WaUi.BTN.no], offeredAt: D.nowIso() },
     buttons: [WaUi.BTN.yes, WaUi.BTN.no]
   };
 }
@@ -728,7 +806,7 @@ async function mailWalkAt(userId, w, from) {
     const pos = `*${i + 1} מתוך ${w.ids.length}*`;
     // בזמן שהעובד קורא — מכינים כבר את התשובה לבא (נשמרת בהצעה), כדי שלא יחכה
     const nextId = w.ids.slice(i + 1).find((id) => waiting.has(id));
-    if (nextId) setImmediate(() => replyOffer(userId, waiting.get(nextId)).catch(() => {}));
+    if (nextId && MailDose.level(userId) === 0) setImmediate(() => replyOffer(userId, waiting.get(nextId)).catch(() => {}));
     const o = await replyOffer(userId, row).catch((err) => ({ error: err.message }));
     const nw = { ...w, i, at: D.nowIso() };
     if (o.error) {
@@ -747,7 +825,44 @@ const mailWalkEnd = (w) => `🏁 עברנו על כולם 👏${w.sent || w.drop
 
 async function mailAlerts() {
   for (const userId of mailAlertUsers()) {
+    checkUnread(userId);
+    if (MailDose.paused(userId)) {
+      await pauseNoticeFor(userId).catch((err) => console.error('[משימון] הודעת השהיית המייל נכשלה:', err.message));
+      continue;
+    }
     await mailAlertFor(userId).catch((err) => console.error('[משימון] פנייה על מייל חדש נכשלה:', err.message));
+  }
+}
+
+/** 👁 ‎STREAK‎ הצעות ברצף שנמסרו ולא נקראו ב-24 שעות — מדרגה למטה מיד (רק אצל מי שמדווח "נקרא", ‎wa-reads.js‎) */
+function checkUnread(userId) {
+  if (!WaReads.unreadStreak(userId)) return false;
+  MailDose.noteUnread(userId);
+  log({ channel: 'summary', userId, action: 'mail_dose', status: 'ok', result: `👁 ${WaReads.STREAK} הצעות מייל ברצף לא נקראו — המינון ירד ל-${MailDose.percent(userId)}%` });
+  return true;
+}
+
+/**
+ * 📭 עובד שלא השתמש בהצעות המייל שלושה שבועות (‎mail-dose.js‎) — הודעה אחת: "הפסקתי להציע. רוצה שאחזור?"
+ * בשעות, לא באמצע שיחה ולא בפגישה — כמו כל פנייה יזומה. "כן" — חוזרים ל-100% (‎flowOnMailDose‎).
+ */
+async function pauseNoticeFor(userId) {
+  const u = D.get("SELECT id, full_name, phone FROM users WHERE id = ? AND status = 'active'", userId);
+  if (!u?.phone || busyFor(userId) || GoodsReceipt.active(userId) || PurchaseDemand.active(userId)) return;
+  if (!(await MailActions.mayAlertNow(userId))) return;
+  if (!MailDose.takePauseNotice(userId)) return;
+  const chatId = `${u.phone}@c.us`;
+  const buttons = [MailDose.PAUSE_BTN.resume, MailDose.PAUSE_BTN.stay];
+  const draft = { kind: 'mail_dose_resume', buttons };
+  try {
+    await sendButtons(chatId, MailDose.PAUSE_TEXT, buttons);
+    rememberBot(userId, MailDose.PAUSE_TEXT);
+    const now = chatOf(userId);
+    if (freeToAsk(userId, now)) saveChat(userId, { ...now, draft: { ...draft, askedAt: D.nowIso() }, awaiting: true });
+    MailActions.noteProactive(userId);
+    log({ channel: 'summary', chatId, userId, who: u.full_name, action: 'mail_dose', status: 'ok', result: '📭 הצעות המייל הושהו — נשלחה הודעה' });
+  } catch (err) {
+    log({ channel: 'summary', chatId, userId, who: u.full_name, action: 'mail_dose', status: 'error', result: err.message });
   }
 }
 
@@ -768,12 +883,14 @@ async function mailActionAlerts() {
     const prefs = D.userPrefs(u.id)?.botPrefs ?? {};
     const actor = Auth.loadActor('user', u.id);
     if (!actor) continue;
+    // 📉 מושהה (‎mail-dose.js‎) — בלי תזכורות על מיילים ובלי מעקב אחרי מיילים שנשלחו; חשבונית וטופס — כרגיל
+    const mailOn = !MailDose.paused(u.id);
     const allow = {
-      deadline: Boolean(on.deadline && prefs.mailDeadline !== false && WaActions.allowed(actor, 'mail_deadline')),
+      deadline: Boolean(mailOn && on.deadline && prefs.mailDeadline !== false && WaActions.allowed(actor, 'mail_deadline')),
       // 📦 רק מי שפתח אי פעם קבלת סחורה בפריוריטי (11.11.26)
       goods: Boolean(on.goods && prefs.goodsOffer !== false && WaActions.allowed(actor, 'goods_offer') && WaActions.allowed(actor, 'goods_receipt') && GoodsReceipt.everOpened(u.id)),
       form: Boolean(on.form && prefs.formOffer !== false && WaActions.allowed(actor, 'form_fill') && Gmail.canSend(u.id)),
-      followup: Boolean(on.followup && prefs.sentFollowup !== false && WaActions.allowed(actor, 'sent_followup') && Gmail.canSend(u.id))
+      followup: Boolean(mailOn && on.followup && prefs.sentFollowup !== false && WaActions.allowed(actor, 'sent_followup') && Gmail.canSend(u.id))
     };
     if (!allow.deadline && !allow.goods && !allow.form && !allow.followup) continue;
     // 📤 פעם ביום — המיילים ששלחת ולא נענו
@@ -869,5 +986,5 @@ async function sendPlainMail(actor, d, { dry = false } = {}) {
 
 module.exports = {
   sendPlainMail,
-  businessCommand, closeAlerted, closureDecision, confirmPending, contactOf, createFromDraft, draftEmail, findRecipients, mailActionAlerts, mailAlertFor, mailAlerts, parseThreadAdd, replyOffer, MAIL_WALK_BTN, isMailWalkStart, mailWalkIntro, mailWalkAt, mailWalkEnd, resolveCc, solveText, startGoodsFromMail, suggestionDecision, suggestionFeedback, threadAddText, VIA_EMAIL, VIA_MESIMON
+  businessCommand, checkUnread, closeAlerted, pauseNoticeFor, closureDecision, confirmPending, contactOf, createFromDraft, draftEmail, findRecipients, mailActionAlerts, mailAlertFor, mailAlerts, parseThreadAdd, replyOffer, MAIL_WALK_BTN, isMailWalkStart, mailWalkIntro, mailWalkAt, mailWalkEnd, resolveCc, solveText, startGoodsFromMail, suggestionDecision, suggestionFeedback, threadAddText, VIA_EMAIL, VIA_MESIMON
 };

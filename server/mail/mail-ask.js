@@ -127,6 +127,7 @@ async function ask(user, question, history = [], { context = '' } = {}) {
 
   // 1. תכנון
   const plan = await Claude.json({
+    feature: 'mail.ask',
     system: skill(),
     content: [{ type: 'text', text: [
       `תאריך היום: ${today}`,
@@ -257,6 +258,7 @@ async function ask(user, question, history = [], { context = '' } = {}) {
 
   // 4. תשובה
   const out = await Claude.json({
+    feature: 'mail.ask',
     system: skill(),
     content: [...docs.map((d) => d.block), { type: 'text', text: lines.join('\n') }],
     schema: ANSWER_SCHEMA,
