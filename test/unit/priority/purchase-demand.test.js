@@ -222,6 +222,18 @@ test('resolveItems — רשימה ריקה: בלי פניות', async (t) => {
   assert.equal(g.mock.callCount(), 0);
 });
 
+test('לרכש רק בתיאור מדויק — בלי AI: מילה אחת ("פטיש") לא מדויקת, "פטיש 5 ק"ג" כן', async (t) => {
+  mockCatalog(t);
+  const items = [{ n: 1, description: 'פטיש', qty: 2 }, { n: 2, description: 'פטיש 5 ק"ג', qty: 1 }];
+  await PD._resolveItems({ company: 'test11' }, items);
+  assert.deepEqual(items.map((x) => [x.status, x.vague]), [['general', true], ['general', false]]);
+  assert.match(items[0].vagueQ, /איזה פטיש\?/);
+  // בתיקון דרישה שהוחזרה — לא בודקים (שם עדיין מק"ט כללי)
+  const edit = [{ n: 1, description: 'פטיש', qty: 2 }];
+  await PD._resolveItems({ company: 'test11', editOf: 'PD1' }, edit);
+  assert.equal(edit[0].vague, undefined);
+});
+
 test('signerNote — העובד יודע אם החותם הבא קיבל הודעה', () => {
   const n = PD._signerNote;
   assert.equal(n({ signer: null }, ''), '');

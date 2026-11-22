@@ -40,7 +40,7 @@
 
   function draw(v) {
     $('#head').innerHTML = `לבקשת <b>${esc(v.worker)}</b> · ${esc(v.company)}${v.project ? ` · ${esc(v.project)}` : ''}${v.supplier ? ` · ספק: ${esc(v.supplier)}` : ''}<br>`
-      + (v.open ? 'מק"ט כבר קיים, או נבנה? כתבו אותו — העובד יקבל את התשובה בבוט מיד. אפשר גם רק הערה.' : '<span class="ok">✓ הבקשה טופלה — העובד כבר קיבל את המק"טים.</span>');
+      + (v.open ? '<b>פתחת מק"ט חדש בפריוריטי? אין צורך לכתוב כאן</b> — המערכת מזהה אותו לבד, והעובד מקבל הודעה בבוט.<br>כאן — רק כשהמק"ט <b>כבר היה קיים</b>, או כדי לכתוב לעובד הערה.' : '<span class="ok">✓ הבקשה טופלה — העובד כבר קיבל את המק"טים.</span>');
     $('#items').innerHTML = v.items.map((it) => `
       <section class="card" data-n="${it.n}">
         <h2>${esc(it.description)} — ${qty(it.qty)} ${esc(it.unit)}</h2>
@@ -48,7 +48,7 @@
         ${it.built ? `<div class="ok">✓ מק"ט: ${esc(it.built.code)} — ${esc(it.built.des)}</div>` : ''}
         ${it.answers.length ? `<ul class="answers">${it.answers.map((a) => `<li>${a.code ? `מק"ט ${esc(a.code)}` : ''}${a.code && a.note ? ' · ' : ''}${a.note ? `"${esc(a.note)}"` : ''} <span class="muted">(${new Date(a.at).toLocaleString('he-IL')})</span></li>`).join('')}</ul>` : ''}
         ${v.open ? `
-          <label>מק"ט (כבר קיים / נבנה)<input class="ltr code" placeholder="למשל A120-035-010" autocomplete="off"></label>
+          <label>מק"ט שכבר קיים<input class="ltr code" placeholder="למשל A120-035-010" autocomplete="off"></label>
           <label>הערה לעובד (לא חובה)<textarea class="note" rows="2" placeholder="למשל: זה אותו פריט כמו…"></textarea></label>
           <button type="button" class="send">שליחה ל${esc(v.worker)}</button> <span class="msg"></span>` : ''}
       </section>`).join('');
