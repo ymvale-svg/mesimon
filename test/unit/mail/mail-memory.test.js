@@ -158,3 +158,14 @@ test('search — מוצא גם בלי אות שימוש ובלי אות סופי
   assert.deepEqual(M.search(u.id, 'א'), { people: [], events: [], docs: [] });
   assert.equal(M.search(user().id, 'מזגן').people.length, 0, 'רק הזיכרון של המשתמש');
 });
+
+test('savePerson — תואר מהחתימה: נשמר, מתעדכן לתואר חדש, ריק לא מוחק', () => {
+  const u = user();
+  M._internal.savePerson(u.id, 'ami@x.test', { name: 'עמי', title: 'חשב', phone: '' });
+  const t = () => D.get('SELECT title FROM mail_people WHERE user_id = ? AND email = ?', u.id, 'ami@x.test').title;
+  assert.equal(t(), 'חשב');
+  M._internal.savePerson(u.id, 'ami@x.test', { name: 'עמי', phone: '' });
+  assert.equal(t(), 'חשב');
+  M._internal.savePerson(u.id, 'ami@x.test', { name: 'עמי', title: 'סמנכ"ל כספים', phone: '' });
+  assert.equal(t(), 'סמנכ"ל כספים');
+});

@@ -388,7 +388,7 @@ async function closureOf(user, task, { mayVendors = false } = {}) {
     'הצע לפי ההנחיות.'
   ].filter((l) => l !== null).join('\n');
 
-  const out = await Claude.json({ system: skill(), content: [{ type: 'text', text }], schema: CLOSURE_SCHEMA, effort: 'low' });
+  const out = await Claude.json({ feature: 'tasks.closure', system: skill(), content: [{ type: 'text', text }], schema: CLOSURE_SCHEMA, effort: 'low' });
   return sanitize(out, cands, { need, keywords });
 }
 

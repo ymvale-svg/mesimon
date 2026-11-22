@@ -403,6 +403,51 @@ test('👎 כהודעה נפרדת לפני הטיוטא — שלב אחד אח�
   assert.equal(pr.writes.length, 0);
 });
 
+test('תנאי תשלום אחרי אישור הכותרת ("תעשה שוטף" בשאלת ההזמנה) — מתעדכנים, והשאלה נשארת', async (t) => {
+  // מהסקירה של 17.11: העובד אישר את הכותרת, ובשאלת ההזמנה כתב "תעשה שוטף". הבוט חזר על השאלה, 👎 לא החזיר לכותרת,
+  // והעובד ביטל ושלח את המסמך מחדש רק כדי לשנות את תנאי התשלום
+  H.companies(t, 'test11');
+  const u = H.worker();
+  const pr = priority(t);
+  ai(t, doc());
+  const { say } = H.chat(t, u);
+  await say('קבלת סחורה', { file: H.photo() });
+  let r = await say(BTN.yes);                   // ← "יש מספר הזמנה?"
+  assert.match(r.text, /אין הזמנות פתוחות/);
+  r = await say('תעשה שוטף');
+  assert.match(r.text, /תנאי התשלום עודכנו: \*שוטף\*/);
+  assert.match(r.text, /אין הזמנות פתוחות/, 'שאלת ההזמנה חוזרת');
+  H.assertButtons(r.buttons, ['בלי הזמנה ❌', BTN.cancel]);
+  r = await say('בלי הזמנה ❌');
+  assert.match(r.text, /זה מה שהתקבל בפועל/);
+  r = await say('שוטף 60');                     // גם בשלב השורות
+  assert.match(r.text, /תנאי התשלום עודכנו: \*שוטף \+ 60\*/);
+  assert.match(r.text, /זה מה שהתקבל בפועל/);
+  r = await say(BTN.yes);
+  r = await say(BTN.yes);
+  r = await say('נהריה מגרש 12');
+  r = await say(BTN.done);
+  assert.match(r.text, /טיוטא לבדיקה/);
+  assert.equal(pr.state.head.payCode, require('../../../server/integrations/priority').payFromText('שוטף 60').code);
+});
+
+test('הערה לדו-שיח בעוד ניסוחים: "להכניס הערה ש…", "לציין בהערות …", "תכתבי בדו"ח שיח …"', async (t) => {
+  // מסקירה 05.11 (PR #112, הועבר לנתיב החדש ב-19.11): "להכניס הערה ש…" לא נרשם כהערה
+  H.companies(t, 'test11');
+  const u = H.worker();
+  priority(t);
+  ai(t, doc());
+  const { say } = H.chat(t, u);
+  await say('קבלת סחורה', { file: H.photo() });
+  await say(BTN.yes);                           // ← "יש מספר הזמנה?"
+  for (const [said, note] of [['להכניס הערה שהסחורה הגיעה רטובה', 'שהסחורה הגיעה רטובה'], ['לציין בהערות שחסר משטח', 'שחסר משטח'], ['תכתבי בדו"ח שיח: נהג איחר', 'נהג איחר']]) {
+    const r = await say(said);
+    assert.match(r.text, /📝 נרשם בדו-שיח הפנימי/, said);
+    assert.match(r.text, new RegExp(note), said);
+    assert.match(r.text, /אין הזמנות פתוחות/, 'השאלה הפתוחה חוזרת');
+  }
+});
+
 test('👎 כתגובה (Reaction) = לא: בשאלת "יש מספר הזמנה?" — בלי הזמנה', async (t) => {
   H.companies(t, 'test11');
   const u = H.worker();
@@ -543,6 +588,89 @@ test('🏷️ החותמת לא הצליחה (קובץ שאי אפשר לקרו�
 });
 
 // ---------------------------------------------------------------------------
+// 🔒 תשובה מאוחרת או על הודעה אחרת לא הופכת קבלה לסופית (#171)
+// ---------------------------------------------------------------------------
+
+const Q = require('../../../server/whatsapp/wa-questions');
+
+/** מהצילום עד "להפוך לסופית?" */
+async function toConfirmFinal(say) {
+  await toProject(say);
+  await say('אלעד 49 צפון');
+  await say('סיום');
+  const r = await say('👍');
+  assert.match(r.text, /לסופית\?/);
+  return r;
+}
+
+/** המצב השמור "התיישן": ‎min‎ דקות בלי תנועה (וגם שאלת "סופית?" נשאלה אז) */
+function age(u, min) {
+  const k = `goods_receipt:${u.id}`;
+  const s = H.D.getSetting(k);
+  const at = Date.now() - min * 60 * 1000;
+  H.D.setSetting(k, { ...s, at, ...(s.confirmFinal ? { confirmFinalAt: at } : {}) });
+}
+
+test('🔒 👍 כתגובה על הודעה אחרת (לא על "להפוך לסופית?") — לא סוגר; על השאלה עצמה — סוגר', async (t) => {
+  H.companies(t, 'test11');
+  const u = H.worker();
+  const pr = priority(t);
+  ai(t, doc());
+  const { say } = H.chat(t, u);
+  await toConfirmFinal(say);
+
+  let r = await say('👍', { reaction: true, on: 'some-other-message' });
+  assert.match(r.text, /על הודעה אחרת/);
+  assert.equal(pr.wrote('finalizeReceipt').length, 0, '👍 על הודעה אחרת אינו תשובה');
+
+  r = await say('👍', { reaction: true });
+  assert.match(r.text, /נקלטה כסופית/);
+  assert.equal(pr.wrote('finalizeReceipt').length, 1);
+});
+
+test('🔒 הכפתורים נרשמים עם מספר ה-GR — "כן ✅" ישן של קבלה אחרת: "השאלה כבר לא פתוחה", ולא נסגר', async (t) => {
+  H.companies(t, 'test11');
+  const u = H.worker();
+  const pr = priority(t);
+  ai(t, doc());
+  const { say } = H.chat(t, u);
+  const asked = await toConfirmFinal(say);
+  assert.equal(Q.find(u.id, asked.questionId).draft.doc, 'GR26000123');
+
+  Q.record(u.id, 'OLD-GR-BTN', { owner: 'goods_receipt', draft: { doc: 'GR25000999' } });
+  let r = await say(BTN.confirmFinal, { press: 'OLD-GR-BTN' });
+  assert.deepEqual(r.texts, [Q.CLOSED_TEXT]);
+  assert.equal(pr.wrote('finalizeReceipt').length, 0);
+
+  r = await say(BTN.confirmFinal, { press: asked.questionId });
+  assert.match(r.text, /נקלטה כסופית/);
+  assert.equal(pr.wrote('finalizeReceipt').length, 1);
+});
+
+test('⏳ "להפוך לסופית?" לפני 20 דקות — 👍 לא סוגר: הטיוטא מוצגת שוב, ושואלים מחדש', async (t) => {
+  H.companies(t, 'test11');
+  const u = H.worker();
+  const pr = priority(t);
+  ai(t, doc());
+  const { say } = H.chat(t, u);
+  await toConfirmFinal(say);
+  age(u, 20);
+
+  let r = await say('👍', { reaction: true });
+  assert.match(r.text, /עבר זמן/);
+  assert.match(r.text, /GR26000123\* — טיוטא לבדיקה/);
+  H.assertButtons(r.buttons, [BTN.approve, BTN.cancel]);
+  assert.equal(pr.wrote('finalizeReceipt').length, 0, 'תשובה מאוחרת אינה אישור סופי');
+
+  r = await say('👍');
+  assert.match(r.text, /לסופית\?/);
+  assert.equal(pr.wrote('finalizeReceipt').length, 0);
+  r = await say('👍');
+  assert.match(r.text, /נקלטה כסופית/);
+  assert.equal(pr.wrote('finalizeReceipt').length, 1);
+});
+
+// ---------------------------------------------------------------------------
 // 🆕 מק"טים לבנייה (‎pd-parts.js‎): שורה בלי מק"ט ← "לשלוח למנהלת הרכש?" ← מייל; הקליטה ממשיכה על 000
 // ---------------------------------------------------------------------------
 
@@ -572,6 +700,7 @@ async function toParts(say) {
 const noPart = { findPartExact: async () => null, searchParts: async () => [] };
 
 test('מק"טים לבנייה בקבלת סחורה: "לא נמצא מק"ט — לשלוח לרכש?" ← כן: מייל, והקליטה ממשיכה על 000 עד טיוטא', async (t) => {
+  H.at(t);                                      // שעות העבודה — ההודעות לעובד יוצאות מיד
   H.companies(t, 'test11');
   const u = grWorker();
   let built = false;
@@ -592,7 +721,8 @@ test('מק"טים לבנייה בקבלת סחורה: "לא נמצא מק"ט —
   assert.match(r.text, /נשלח ל\*רותי רכש\* במייל/);
   assert.match(r.text, /לאיזה פרויקט לשייך/);
   assert.equal(sent.length, 1);
-  assert.equal(sent[0].subject, `מק"טים נדרשים לבנייה בהקדם — לבקשת ${u.full_name}`);
+  assert.equal(sent[0].subject, `❗ מק"טים נדרשים לבנייה בהקדם — לבקשת ${u.full_name}`);
+  assert.equal(sent[0].urgent, true, 'סימן קריאה אדום גם מקבלת הסחורה');
   assert.match(sent[0].text, /קבלת סחורה מבוט משימון/);
   assert.match(sent[0].text, /ספק: בטון הצפון \(S100\)/);
   assert.match(sent[0].text, /1\. בטון ב-30 — 5 קוב/);

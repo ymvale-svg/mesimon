@@ -19,6 +19,20 @@ test('isTrigger / opens', () => {
   for (const t of ['קבלת סחורה', 'רכש', '', null]) assert.ok(!PD.isTrigger(t), String(t));
 });
 
+test('isTrigger — "דרישת רכס" מהתמלול (סקירה 19.11) פותח דרישה; "רכס" בלי "דרישה" — לא', () => {
+  for (const t of ['בוקר טוב, אני רוצה לעשות דרישת רכס.', 'דרישת רכס לאתר', '🎙 דרישות רכס']) assert.ok(PD.isTrigger(t) && PD.opens(t), t);
+  // "דרישת רכסים" — דרישה לאתר רכסים (הוחלט 20.11: "דרישה" לפני = רכש)
+  assert.ok(PD.isTrigger('דרישת רכסים'));
+  for (const t of ['פגישה ברכס', 'רכסים']) assert.ok(!PD.isTrigger(t), t);
+});
+
+test('isTrigger — "דרישה" בתחילת הבקשה היא דרישת רכש (הוחלט 20.11); באמצע משפט או בשאלה — לא', () => {
+  for (const t of ['דרישה', 'דרישת מלט 10 שקים', 'בוקר טוב, אני רוצה לעשות דרישה', 'תפתח לי דרישה', 'אני צריך דרישה לאתר אלעד', '🎙 דרישה: 5 קוב בטון', 'עוד דרישה'])
+    assert.ok(PD.isTrigger(t) && PD.opens(t), t);
+  for (const t of ['יש דרישה של העירייה לתקן את המדרכה', 'מה הדרישות הפתוחות?', 'דרישות פתוחות?', 'תפתח לי משימה לבדוק את הדרישה', 'הדרישה של אלעד אושרה'])
+    assert.ok(!PD.opens(t), t);
+});
+
 test('parseDate — היום, מחר, מחרתיים', (t) => {
   fixNow(t);
   assert.equal(PD._parseDate('היום'), '2026-11-10');
@@ -80,6 +94,27 @@ test('abandon — עם פריטים: הודעה, והדרישה יורדת', () 
   const u = uid();
   put(u, { step: 'list', at: Date.now(), items: [{ n: 1 }] });
   assert.match(PD.abandon({ id: u }), /דרישת הרכש שהתחלת לא נשלחה/);
+  assert.equal(PD._load(u), null);
+});
+
+test('abandon — דרישה עם פריטים שפגה (15 דקות בלי תשובה): לא נמחקת בשקט — נשמרת, ו"דרישת רכש" ממשיך', () => {
+  // מהסקירה של 18.11: עובד הקליד 5 פריטים, ענה על שאלת הבחירה אחרי 20 דקות — והדרישה ירדה בלי מילה
+  const u = uid();
+  put(u, { step: 'pick', at: Date.now() - 20 * 60 * 1000, items: [{ n: 1 }, { n: 2 }, { n: 3 }] });
+  const note = PD.abandon({ id: u });
+  assert.match(note, /דרישת הרכש שהתחלת \(3 פריטים\) שמורה/);
+  assert.match(note, /דרישת רכש/);
+  assert.equal(PD._load(u)?.paused, true, 'נשמרת, מושהית');
+  assert.equal(PD._load(u)?.items.length, 3);
+  // ההודעה הבאה בנושא אחר — כמו כל דרישה מושהית: יורדת, עם הודעה
+  assert.match(PD.abandon({ id: u }), /דרישת הרכש שהתחלת לא נשלחה/);
+  assert.equal(PD._load(u), null);
+});
+
+test('abandon — דרישה בלי פריטים שפגה: יורדת בשקט, כמו קודם', () => {
+  const u = uid();
+  put(u, { step: 'items', at: Date.now() - 20 * 60 * 1000, items: [] });
+  assert.equal(PD.abandon({ id: u }), '');
   assert.equal(PD._load(u), null);
 });
 
@@ -197,4 +232,14 @@ test('לרכש רק בתיאור מדויק — בלי AI: מילה אחת ("פ�
   const edit = [{ n: 1, description: 'פטיש', qty: 2 }];
   await PD._resolveItems({ company: 'test11', editOf: 'PD1' }, edit);
   assert.equal(edit[0].vague, undefined);
+});
+
+test('signerNote — העובד יודע אם החותם הבא קיבל הודעה', () => {
+  const n = PD._signerNote;
+  assert.equal(n({ signer: null }, ''), '');
+  assert.match(n({ signer: 'Eladh', sent: true }, 'אלעד'), /אלעד\* — קיבל הודעה בוואטסאפ/);
+  assert.match(n({ signer: 'Eladh', later: true }, 'אלעד'), /בשעות הפעילות/);
+  assert.match(n({ signer: 'Eladh', why: 'הבוט לא שלח' }, 'אלעד'), /ינסה שוב/);
+  assert.match(n({ signer: 'Eladh', why: 'אין טלפון בפרופיל' }, 'אלעד'), /לא קיבל הודעה.*מנהל המערכת עודכן/);
+  assert.match(n({ signer: 'Eladh', why: 'לא נמצא במשימון' }, 'Eladh'), /לא קיבל הודעה/);
 });

@@ -116,8 +116,8 @@ async function checkState() {
     const state = (await WhatsApp.call(ch, 'getStateInstance'))?.stateInstance ?? 'unknown';
     setState(state);
     if (state === 'authorized') {
-      // רק הודעות נכנסות. בלי דיווח על יוצאות — הבוט כותב רק בפרטי, ואת זה הוא יודע ממילא
-      await WhatsApp.call(ch, 'setSettings', { http: 'POST', body: { incomingWebhook: 'yes', outgoingMessageWebhook: 'no', outgoingAPIMessageWebhook: 'no' } })
+      // הודעות נכנסות, ו-👁 סטטוס של מה שהבוט שלח (נמסרה / נקראה — ‎wa-reads.js‎). בלי ההודעות היוצאות עצמן — הבוט יודע מה כתב
+      await WhatsApp.call(ch, 'setSettings', { http: 'POST', body: { incomingWebhook: 'yes', outgoingWebhook: 'yes', outgoingMessageWebhook: 'no', outgoingAPIMessageWebhook: 'no' } })
         .catch((err) => console.error('[משימון] הגדרת בוט הוואטסאפ נכשלה:', err.message));
     }
     return { state };
@@ -139,10 +139,23 @@ async function qr() {
 }
 
 
-async function sendText(chatId, message) {
+/** ההודעה האחרונה שהבוט שלח לכל שיחה — 👍 עליה הוא תשובה לשאלה הפתוחה; 👍 על הודעה ישנה יותר — לא (באג 17.11.26) */
+const lastOut = new Map();
+const lastOutId = (chatId) => lastOut.get(chatId) ?? '';
+
+/** מחזיר את מזהה ההודעה (👁 ‎wa-reads.js‎), או ‎null‎. ‎q‎ — שאלה בלי כפתורים (‎{ owner, draft, awaiting }‎): נרשמת כמו הודעה עם כפתורים, כדי ש-👍 עליה יגיע אליה */
+async function sendText(chatId, message, q = null) {
   const ch = channel();
-  if (!ch) return;
-  await WhatsApp.call(ch, 'sendMessage', { http: 'POST', body: { chatId, message } });
+  if (!ch) return null;
+  const sent = await WhatsApp.call(ch, 'sendMessage', { http: 'POST', body: { chatId, message } });
+  if (sent?.idMessage) {
+    lastOut.set(chatId, String(sent.idMessage));
+    if (q) {
+      const u = userByPhone(String(chatId).replace(/@c\.us$/, ''));
+      if (u) WaQuestions.record(u.id, sent.idMessage, q);
+    }
+  }
+  return sent?.idMessage ?? null;
 }
 
 
@@ -159,7 +172,7 @@ let buttonsOffUntil = 0;
  */
 async function sendButtons(chatId, message, buttons, q = null) {
   const ch = channel();
-  if (!ch) return;
+  if (!ch) return null;
   if (!buttons?.length) return sendText(chatId, message);
   // הכפתורים כבויים (נכשלו לאחרונה) — הטקסט, והאפשרויות כשורות, כדי שלא יאבדו
   if (Date.now() < buttonsOffUntil) return sendText(chatId, `${message}\n\n${buttons.slice(0, 3).map((b) => `▫️ ${b}`).join('\n')}`);
@@ -170,14 +183,16 @@ async function sendButtons(chatId, message, buttons, q = null) {
       chatId, body,
       buttons: buttons.slice(0, 3).map((t, i) => ({ buttonId: String(i + 1), buttonText: String(t).slice(0, 20) }))
     } });
+    if (sent?.idMessage) lastOut.set(chatId, String(sent.idMessage));
     if (q && sent?.idMessage) {
       const u = userByPhone(String(chatId).replace(/@c\.us$/, ''));
       if (u) WaQuestions.record(u.id, sent.idMessage, q);
     }
+    return sent?.idMessage ?? null;
   } catch (err) {
     console.error('[משימון] כפתורים בוואטסאפ לא נשלחו, נשלח טקסט:', err.message);
     buttonsOffUntil = Date.now() + 60 * 60 * 1000;
-    await sendText(chatId, `${body !== '👇' ? `${message}\n\n` : ''}${buttons.slice(0, 3).map((b) => `▫️ ${b}`).join('\n')}`);
+    return sendText(chatId, `${body !== '👇' ? `${message}\n\n` : ''}${buttons.slice(0, 3).map((b) => `▫️ ${b}`).join('\n')}`);
   }
 }
 
@@ -566,6 +581,9 @@ function emailText(p) {
   if (!colleague && p.cc?.length) {
     lines.splice(1, 0, `📎 *בהעתק:* ${p.cc.map((c) => (c.name ? `${c.name} <${c.email}>` : c.email)).join(', ')}`);
   }
+  // בשרשור היו עוד אנשים, והם לא בהעתק — אפשר לצרף ב"לכולם"
+  const others = (!colleague && p.replyThread ? p.threadPeople ?? [] : []).filter((x) => !(p.cc ?? []).some((c) => c.email === x.email));
+  if (others.length) lines.push('', `👥 בשרשור יש עוד ${others.length === 1 ? 'אחד' : others.length} (${others.slice(0, 3).map((x) => x.name || x.email).join(', ')}${others.length > 3 ? '…' : ''}) — לא בהעתק. *לכולם* — לצרף אותם.`);
   // שם להעתק שלא ברור למי הכוונה — שואלים, ולא שולחים עותק לאדם הלא נכון
   for (const a of (!colleague && p.ccAsk) || []) {
     lines.push('', a.options.length
@@ -636,5 +654,5 @@ function enqueueAs(userId, m) {
 const chains = new Map();
 
 module.exports = {
-  appRoot, BACKLOG_DAYS, BATCH_MAX, buttonReplyText, candidatesOf, chains, channel, CHAT_SKILL, checkState, CONTEXT_MESSAGES, currentMsg, DAY, DIGEST_GRACE_MIN, doneEmoji, emailText, enqueueAs, firstName, GROUP_SKILL, HISTORY_TURNS, hooks, inHours, isConfigured, KEEP_DAYS, LETTERS, localDate, log, LOG_DAYS, mailAlertUsers, markDone, MSG_BREAK, needsLook, onDirect, orgUsers, parseJson, PICK_SHOWN, pickText, publicStatus, qr, react, reactNow, readLog, recentFiles, remove, resolveMentions, save, sendButtons, sendText, setState, signatureFields, signatureLine, splitMessage, taskLink, todayStats, TZ, usableClosure, userByPhone, WALK, workHours
+  appRoot, BACKLOG_DAYS, BATCH_MAX, buttonReplyText, candidatesOf, chains, channel, CHAT_SKILL, checkState, CONTEXT_MESSAGES, currentMsg, DAY, DIGEST_GRACE_MIN, doneEmoji, emailText, enqueueAs, firstName, GROUP_SKILL, HISTORY_TURNS, hooks, inHours, isConfigured, KEEP_DAYS, lastOutId, LETTERS, localDate, log, LOG_DAYS, mailAlertUsers, markDone, MSG_BREAK, needsLook, onDirect, orgUsers, parseJson, PICK_SHOWN, pickText, publicStatus, qr, react, reactNow, readLog, recentFiles, remove, resolveMentions, save, sendButtons, sendText, setState, signatureFields, signatureLine, splitMessage, taskLink, todayStats, TZ, usableClosure, userByPhone, WALK, workHours
 };

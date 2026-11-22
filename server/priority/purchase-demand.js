@@ -43,7 +43,8 @@ const TTL = 24 * 60 * 60 * 1000;
 const idleMs = () => Math.max(1, Number(D.getSetting('wa_question_ttl_min', 15)) || 15) * 60 * 1000;
 const FILES_DIR = () => path.join(D.UPLOADS_DIR, 'purchase-demand');
 
-const TRIGGER = /דרישת\s*רכש|דרישות\s*רכש/;
+// "רכס" — כך התמלול שומע לפעמים "רכש" (סקירה 19.11: "אני רוצה לעשות דרישת רכס" לא זוהה). לא "רכסים" — המקום
+const TRIGGER = /דרישת\s*רכ[שס](?!ים)|דרישות\s*רכ[שס](?!ים)/;
 const GR_TRIGGER = /קבלת\s*סחורה/;
 // רק כשזו כל ההודעה — "שלח גם 3 שקי מלט" הוא פריט, לא סיום
 const DONE = /^(סיום|סיימתי|זהו|זה הכל|זה הכול|תשלח|שלח|לשלוח|שלח לאישור|תשלח לאישור|לאישור)\s*[!.🏁]*$/u;
@@ -70,7 +71,7 @@ function alertAdmins(user, s, title, details) {
 }
 
 /** שליחת הודעה יזומה לעובד (החותם הבא) — נקבע ב-wa-bot (‎setHooks‎) */
-const hooks = { send: null };
+const hooks = { send: null, sendNow: null };
 const setHooks = (h) => { Object.assign(hooks, h); Return.setHooks(h); Parts.setHooks(h); };
 
 // ---------------------------------------------------------------------------
@@ -91,7 +92,16 @@ const fresh = (s) => s && Date.now() - (s.at ?? 0) < TTL;
 /** באמצע שיחה — ההודעה הבאה הולכת לדרישה (רק כשהשיחה טרייה ולא הושהתה) */
 const active = (userId, late = false) => { const s = load(userId); return Boolean(fresh(s) && !s.paused && (late || Date.now() - (s.at ?? 0) < idleMs())); };
 const pending = (userId) => Boolean(fresh(load(userId)));
-const isTrigger = (text) => TRIGGER.test(String(text ?? ''));
+/** 🔒 הדרישה שהשיחה עליה עכשיו (מספר הדרישה, ולפניו — מתי התחילה), ‎null‎ — אין. נרשם עם הכפתורים (‎WaQuestions‎, #171) */
+const docId = (userId) => { const s = load(userId); return fresh(s) ? String(s.prdno || s.editOf || s.startedAt || '') || null : null; };
+/*
+ * "דרישה" בתחילת הבקשה — תמיד דרישת רכש (הוחלט 20.11.26, ישראל: "כל עוד מופיעה המילה דרישה לפני — הכוונה לרכש"):
+ * "דרישה", "דרישת מלט 10 שקים", "בוקר טוב, אני רוצה לעשות דרישה", "תפתח לי דרישה". באמצע משפט ("יש דרישה של העירייה…") — לא
+ */
+const ASK = /^\P{L}*(?:(?:בוקר טוב|ערב טוב|צהריים טובים|היי|שלום|אהלן)\P{L}*)?(?:(?:אני\s+)?(?:רוצה|צריך|צריכה|מבקש|מבקשת)\s+(?:ל(?:עשות|פתוח|הוציא|בצע|הגיש)\s+)?|(?:ת?פתח|תפתחי|ת?עשה|תעשי|תוציא|תוציאי|לפתוח|לעשות|להוציא|לבצע)\s+(?:לי\s+)?)?(?:בבקשה\s+)?(?:עוד\s+)?דריש(?:ה|ת|ות)(?:\s*רכ[שס](?!ים))?(?=[\s,.!:\-–]|$)/u;
+const isTrigger = (text) => { const t = String(text ?? ''); return TRIGGER.test(t) || ASK.test(t); };
+/** הבקשה בלי מילות הפתיחה: "דרישת מלט 10 שקים" ← "מלט 10 שקים" */
+const afterTrigger = (t) => (ASK.test(t) ? t.replace(ASK, '') : t.replace(TRIGGER, ''));
 /** פותח דרישה ("דרישת רכש"); וגם החזרה לבדיקה ("החזר לבדיקה PD…") ותשובה של פותח הדרישה (לתקן / הכל נכון) */
 // שאלה על דרישות קיימות ("מה הדרישות הפתוחות?") או בקשה אחרת — לא פותחת דרישה חדשה (‎opens-guard.js‎)
 // וגם תשובה ל"המק"טים נבנו — לבנות את הדרישה מחדש?" (‎pd-parts.js‎)
@@ -103,6 +113,13 @@ function abandon(user) {
   if (!fresh(s)) return '';
   // פגה אחרי 15 דקות בלי תשובה — יורדת בשקט (עוד לא נכתב כלום בפריוריטי)
   const expired = !s.paused && Date.now() - (s.at ?? 0) >= idleMs();
+  // פגה עם פריטים — לא נמחקת בשקט (באג 18.11.26: 5 פריטים ירדו כשהעובד ענה אחרי 20 דקות). נשמרת מושהית,
+  // ו"דרישת רכש" ממשיך מאותה שאלה. ההודעה הבאה בנושא אחר — יורדת כמו כל דרישה מושהית
+  const n = (s.items ?? []).length;
+  if (expired && n) {
+    save(user.id, { ...s, paused: true });
+    return `🛒 דרישת הרכש שהתחלת (${n === 1 ? 'פריט אחד' : `${n} פריטים`}) שמורה — כתבו *דרישת רכש* כדי להמשיך בה.`;
+  }
   clear(user.id, s);
   return (s.items ?? []).length && !expired ? 'ℹ️ דרישת הרכש שהתחלת לא נשלחה — עברתי לבקשה החדשה.' : '';
 }
@@ -209,7 +226,7 @@ const ai = {
     const block = file.mime.includes('pdf')
       ? { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data } }
       : { type: 'image', source: { type: 'base64', media_type: file.mime.includes('png') ? 'image/png' : 'image/jpeg', data } };
-    return Claude.json({ system: skill(), content: [block, { type: 'text', text: 'task: items' }], schema: ITEMS_SCHEMA, effort: 'high', live: true });
+    return Claude.json({ feature: 'priority.demand', system: skill(), content: [block, { type: 'text', text: 'task: items' }], schema: ITEMS_SCHEMA, effort: 'high', live: true });
   },
   async match(items, pairs, siblings = []) {
     const text = JSON.stringify({
@@ -220,7 +237,7 @@ const ai = {
         candidates: (it.candidates ?? []).map((c) => ({ code: c.PARTNAME, description: c.PARTDES, chapter: c.BUD_SUBCHAPTERDES ?? '', resource: c.BUD_SUBTOPICDES ?? '' })) })),
       pairs: pairs.slice(0, 150).map((p) => ({ chapter: p.chapter, chapter_name: p.chapterDes, topic: p.topic, topic_name: p.topicDes }))
     });
-    return Claude.json({ system: skill(), content: [{ type: 'text', text }], schema: MATCH_SCHEMA, effort: 'medium', live: true });
+    return Claude.json({ feature: 'priority.demand', system: skill(), content: [{ type: 'text', text }], schema: MATCH_SCHEMA, effort: 'medium', live: true });
   },
   async detail(items) {
     const content = JSON.stringify({ task: 'detail', items: items.map((it) => ({ line: it.n, description: it.description, qty: it.qty, unit: it.unit, note: it.note ?? '' })) });
@@ -228,7 +245,7 @@ const ai = {
   },
   async edit(lines, text) {
     const content = JSON.stringify({ task: 'edit', lines: lines.map((l) => ({ line: l.n, description: l.description, qty: l.qty, unit: l.unit })), text });
-    return Claude.json({ system: skill(), content: [{ type: 'text', text: content }], schema: EDIT_SCHEMA, effort: 'low', live: true });
+    return Claude.json({ feature: 'priority.demand', system: skill(), content: [{ type: 'text', text: content }], schema: EDIT_SCHEMA, effort: 'low', live: true });
   }
 };
 
@@ -769,11 +786,16 @@ async function onFile(user, s, file) {
   return nextQuestion(s, [`📷 קראתי ${added.length} ${added.length === 1 ? 'פריט' : 'פריטים'} מהצילום.`, '']);
 }
 
-async function onText(user, s, t, exact = null) {
+/** ⏳ "סיום" / 👍 אחרי 15 דקות בלי תנועה — לא שולחים; הדרישה מוצגת שוב, ו"סיום" עכשיו שולח (#171) */
+function staleAgain(s) {
+  return { ...showList(s, ['⏳ עבר זמן מאז ההודעה האחרונה בדרישה, ולכן עוד לא שלחתי. הנה הדרישה שוב — לבדוק ולאשר מחדש:', '']), result: 'סיום אחרי 15 דקות — הדרישה הוצגה שוב' };
+}
+
+async function onText(user, s, t, exact = null, { stale = false } = {}) {
   const out = exact ? LineCmd.asDemandEdit(exact) : await ai.edit(s.items ?? [], t);
   if (out.action === 'unrelated') return null;
   if (out.action === 'cancel') return { s: null, replies: ['דרישת הרכש בוטלה. לא נכתב דבר בפריוריטי.'], buttons: [], result: 'ביטול' };
-  if (out.action === 'done' && (s.items ?? []).length) return submit(user, s);
+  if (out.action === 'done' && (s.items ?? []).length) return stale ? staleAgain(s) : submit(user, s);
   const notes = [];
   const removes = [...new Set(out.removes ?? [])].filter((n) => s.items?.some((x) => x.n === n));
   if (removes.length) { s.items = s.items.filter((x) => !removes.includes(x.n)); notes.push(`🗑️ הוסרו: שורה ${removes.join(', ')}.`); renumber(s); }
@@ -827,6 +849,16 @@ async function onPick(user, s, t, { reaction = false } = {}) {
 // ---------------------------------------------------------------------------
 // סיום: פתיחה בפריוריטי ומעבר לאישור
 // ---------------------------------------------------------------------------
+
+/** שורת "החותם הבא" לעובד — גם כשההודעה לא יצאה, כדי שידע (#169) */
+function signerNote(r, name) {
+  if (!r.signer) return '';
+  if (r.sent) return `✍️ החותם הבא: *${name}* — קיבל הודעה בוואטסאפ.`;
+  if (r.later) return `✍️ החותם הבא: *${name}* — יקבל הודעה בוואטסאפ בשעות הפעילות.`;
+  if (r.why === 'הבוט לא שלח') return `✍️ החותם הבא: *${name}* — ההודעה אליו לא יצאה; הבוט ינסה שוב בעוד כמה דקות.`;
+  if (r.why === 'לא נמצא במשימון' || r.why === 'אין טלפון בפרופיל') return `✍️ החותם הבא: *${name}* — לא קיבל הודעה בוואטסאפ (מנהל המערכת עודכן).`;
+  return `✍️ החותם הבא: *${name}*.`;
+}
 
 /** "ישראל כהן" — לשדה ‎DETAILS‎ (עד 24 תווים) */
 const detailsOf = (user) => `בוט: ${String(user?.full_name ?? '').trim()}`.slice(0, 24);
@@ -1035,9 +1067,11 @@ async function submit(user, s) {
   let signerLine = '';
   try {
     const d = await Priority.readDemand(c, prdno);
-    const r = hooks.send ? await Approvals.notifyDemand(c, d, hooks.send) : { signer: Priority.nextSigner(d), user: null, sent: false };
+    // לחותם הבא — sendNow: "קיבל" רק כשההודעה יצאה בפועל (#169)
+    const send = hooks.sendNow ?? hooks.send;
+    const r = send ? await Approvals.notifyDemand(c, d, send) : { signer: Priority.nextSigner(d), user: null, sent: false };
     const name = r.user?.full_name || r.signer;
-    signerLine = !r.signer ? '' : r.sent ? `✍️ החותם הבא: *${name}* — קיבל הודעה בוואטסאפ.` : `✍️ החותם הבא: *${name}*.`;
+    signerLine = signerNote(r, name);
   } catch (err) {
     console.error('[משימון] החותם הבא לדרישת רכש:', err.message);
   }
@@ -1096,11 +1130,11 @@ async function handle({ user, text = '', file = null, reaction = false, voice = 
 
   // "דרישת רכש" — התחלה (או המשך של דרישה פתוחה)
   if (!s || (isTrigger(t) && !file && !s.items?.length && s.step !== 'code')) {
-    if (isTrigger(t) && CANCEL.test(t.replace(TRIGGER, '').trim())) { if (s) clear(user.id, s); return { replies: [s ? 'דרישת הרכש בוטלה.' : 'אין דרישת רכש פתוחה.'], status: 'ok', result: 'ביטול' }; }
+    if (isTrigger(t) && CANCEL.test(afterTrigger(t).trim())) { if (s) clear(user.id, s); return { replies: [s ? 'דרישת הרכש בוטלה.' : 'אין דרישת רכש פתוחה.'], status: 'ok', result: 'ביטול' }; }
     const out = await start(user, heard);
     if (out.s) save(user.id, out.s);
     // תמונה או רשימה כבר בהודעה הראשונה ("דרישת רכש: 10 שקי מלט…")
-    const rest = t.replace(TRIGGER, '').replace(/^[\s:\-–,]+/, '').trim();
+    const rest = afterTrigger(t).replace(/^[\s:\-–,]+/, '').trim();
     if (out.s?.step === 'items' && (file || rest.split(/\s+/).length >= 2)) {
       const r2 = await (file ? onFile(user, out.s, file) : onText(user, out.s, rest)) ?? out;
       if (heard.length && r2 !== out && r2.replies?.length) r2.replies[0] = `${heard.join('\n')}\n${r2.replies[0]}`;
@@ -1109,6 +1143,8 @@ async function handle({ user, text = '', file = null, reaction = false, voice = 
     return finish(user, out.s, out, 'התחלה');
   }
   s.uid = user.id;
+  // ⏳ 15 דקות בלי תנועה — 👍 / "סיום" לא שולחים: מציגים שוב את הדרישה ושואלים מחדש (#171)
+  const stale = Date.now() - (s.at ?? 0) >= idleMs();
   if (s.paused) s.paused = false;
   if (isTrigger(t) && !file && s.step !== 'code') return finish(user, s, s.lastPrompt ? reply(s, `🛒 ממשיכים בדרישת הרכש:\n\n${s.lastPrompt}`, s.lastButtons ?? []) : showList(s), 'המשך');
   if (GR_TRIGGER.test(t)) { save(user.id, { ...s, paused: true }); return { pass: true, replies: [], status: 'ok', result: 'מעבר לקבלת סחורה' }; }
@@ -1123,7 +1159,7 @@ async function handle({ user, text = '', file = null, reaction = false, voice = 
   const snap = JSON.stringify({ ...s, prev: null });
   let out;
   try {
-    out = await step(user, s, t, file, { reaction });
+    out = await step(user, s, t, file, { reaction, stale });
   } catch (err) {
     console.error('[משימון] דרישת רכש:', err.message);
     save(user.id, s);
@@ -1146,7 +1182,7 @@ function finish(user, s, out, result = null) {
   return { replies: out.replies ?? [], files: out.files ?? [], buttons: out.s === null ? [] : out.buttons ?? [], status: out.status ?? 'ok', result: out.result ?? result ?? `שלב ${out.s?.step ?? 'סיום'}`, prdno: out.s?.prdno ?? s?.prdno ?? null };
 }
 
-async function step(user, s, t, file, { reaction }) {
+async function step(user, s, t, file, { reaction, stale = false }) {
   // שינוי כותרת — בכל שלב (חוץ מבחירת סביבה)
   if (!file && s.company && s.step !== 'company' && !s.editOf) {
     const h = await headerCommand(s, t);
@@ -1205,13 +1241,13 @@ async function step(user, s, t, file, { reaction }) {
     case 'review': {
       if (file) return onFile(user, s, file);
       if (!t) return reply(s, s.lastPrompt ?? 'שלחו את רשימת הפריטים.', s.lastButtons ?? []);
-      if (s.step === 'review' && (DONE.test(t) || sameLabel(t, BTN.done) || t === '👍')) return submit(user, s);
+      if (s.step === 'review' && (DONE.test(t) || sameLabel(t, BTN.done) || t === '👍')) return stale ? staleAgain(s) : submit(user, s);
       if (s.step === 'items' && (DONE.test(t) || sameLabel(t, BTN.done))) return reply(s, 'עוד אין פריטים ברשימה. שלחו צילום, הקלטה או הקלדה של מה שצריך.', [BTN.cancel]);
       // "שורה 2 כמות 10" — עריכה ישירה מהמסך (או מוקלדת): בלי AI
       const exact = LineCmd.parse(t);
       if (exact) return onText(user, s, t, exact);
       if (!Claude.isEnabled()) return reply(s, 'הבנת הרשימה דורשת חיבור AI, שעוד לא הוגדר בשרת.', [BTN.cancel]);
-      return onText(user, s, t);
+      return onText(user, s, t, null, { stale });
     }
     default:
       return afterCompany(s);
@@ -1237,4 +1273,4 @@ function view(userId) {
   };
 }
 
-module.exports = { view, isTrigger, opens, startEdit, active, pending, abandon, handle, setHooks, _parseDate: parseDate, _resolveItems: resolveItems, _ai: ai, _load: load, _clear: (userId) => clear(userId, load(userId)), _label: label, _labels: labels, _sameLabel: sameLabel };
+module.exports = { view, isTrigger, opens, startEdit, active, pending, docId, abandon, handle, setHooks, _parseDate: parseDate, _resolveItems: resolveItems, _ai: ai, _load: load, _clear: (userId) => clear(userId, load(userId)), _label: label, _labels: labels, _sameLabel: sameLabel, _signerNote: signerNote };

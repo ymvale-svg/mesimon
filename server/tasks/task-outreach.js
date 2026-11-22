@@ -88,6 +88,7 @@ const ANALYZE_SCHEMA = {
 async function analyze(task) {
   const project = task.project_id ? D.get('SELECT name FROM projects WHERE id = ?', task.project_id)?.name : null;
   return Claude.json({
+    feature: 'tasks.outreach',
     system: fs.readFileSync(SKILL_PATH, 'utf8'),
     content: [{
       type: 'text',

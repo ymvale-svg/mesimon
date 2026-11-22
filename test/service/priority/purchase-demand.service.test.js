@@ -140,6 +140,21 @@ test('ברירות מחדל: דרישה שנייה — פרויקט, מחסן ו
   assert.equal(pr.wrote('createDemand').length, 1, 'הדרישה השנייה עוד לא נכתבה');
 });
 
+test('"דרישת מלט 10 שקים" / "בוקר טוב, אני רוצה לעשות דרישה" — דרישת רכש (הוחלט 20.11: "דרישה" לפני = רכש)', async (t) => {
+  H.companies(t, 'test11');
+  const u = H.worker();
+  Prefs.remember(u.id, { company: 'test11', project: { code: 'PR1', des: 'אלעד 49 צפון' }, warehouse: 'W1' });
+  Prefs.set(u.id, 'test11', 'demandCode', '01');
+  priority(t);
+  ai(t);
+  const { say } = H.chat(t, u);
+  let r = await say('דרישת מלט 10 שקים');
+  assert.match(r.text, /נוספו 2 פריטים|נוספו/, 'הפריטים מההודעה עצמה');
+  await say(BTN.cancel);
+  r = await say('בוקר טוב, אני רוצה לעשות דרישה');
+  assert.match(r.text, /מה צריך\?/);
+});
+
 test('ברירת המחדל ניתנת לשינוי בשפה חופשית: "פרויקט נהריה" ← הפרויקט והמחסן שלו, בלי שאלה נוספת', async (t) => {
   H.companies(t, 'test11');
   const u = H.worker();
@@ -370,6 +385,83 @@ test('עריכה ישירה בטבלה: "שורה 1 כמות 4" ו"שורה 2 ה
 });
 
 // ---------------------------------------------------------------------------
+// 🔒 תשובה מאוחרת או על הודעה אחרת לא שולחת דרישת רכש (#171)
+// ---------------------------------------------------------------------------
+
+const Q = require('../../../server/whatsapp/wa-questions');
+
+/** הדרישה "התיישנה": ‎min‎ דקות בלי תנועה */
+function age(u, min) {
+  const k = `purchase_demand:${u.id}`;
+  H.D.setSetting(k, { ...H.D.getSetting(k), at: Date.now() - min * 60 * 1000 });
+}
+
+test('⏳ דרישה שנשארה 20 דקות בסיכום — 👍 לא שולח: הסיכום מוצג שוב, ו"סיום" אחריו שולח', async (t) => {
+  H.companies(t, 'test11');
+  const u = H.worker();
+  const pr = priority(t);
+  ai(t);
+  const { say } = H.chat(t, u);
+  await toItems(say);
+  await toReview(say);
+  age(u, 20);
+
+  let r = await say('👍', { reaction: true });
+  assert.match(r.text, /עבר זמן/);
+  assert.match(r.text, /דרישת רכש — 2 פריטים/);
+  H.assertButtons(r.buttons, [BTN.done, BTN.cancel]);
+  assert.equal(pr.writes.length, 0, 'תשובה מאוחרת לא שולחת');
+
+  r = await say(BTN.done);
+  assert.match(r.text, /נפתחה ועברה \*לאישור\*/);
+});
+
+test('⏳ כפתור "סיום 🏁" שנלחץ אחרי 20 דקות — לא שולח, הסיכום מוצג שוב', async (t) => {
+  H.companies(t, 'test11');
+  const u = H.worker();
+  const pr = priority(t);
+  ai(t);
+  const { say } = H.chat(t, u);
+  await toItems(say);
+  const shown = await toReview(say);
+  age(u, 20);
+
+  const r = await say(BTN.done, { press: shown.questionId });
+  assert.match(r.text, /עבר זמן/);
+  assert.equal(pr.writes.length, 0);
+});
+
+test('🔒 👍 כתגובה על הודעה אחרת בסיכום — לא שולח', async (t) => {
+  H.companies(t, 'test11');
+  const u = H.worker();
+  const pr = priority(t);
+  ai(t);
+  const { say } = H.chat(t, u);
+  await toItems(say);
+  await toReview(say);
+
+  const r = await say('👍', { reaction: true, on: 'some-other-message' });
+  assert.match(r.text, /על הודעה אחרת/);
+  assert.equal(pr.writes.length, 0);
+});
+
+test('🔒 הכפתורים נרשמים עם מזהה הדרישה — "סיום 🏁" של דרישה אחרת: "השאלה כבר לא פתוחה", ולא נשלח', async (t) => {
+  H.companies(t, 'test11');
+  const u = H.worker();
+  const pr = priority(t);
+  ai(t);
+  const { say } = H.chat(t, u);
+  await toItems(say);
+  const shown = await toReview(say);
+  assert.ok(Q.find(u.id, shown.questionId).draft?.doc, 'הכפתור נרשם עם מזהה הדרישה');
+
+  Q.record(u.id, 'OLD-PD-BTN', { owner: 'purchase_demand', draft: { doc: 'PRD25000001' } });
+  const r = await say(BTN.done, { press: 'OLD-PD-BTN' });
+  assert.deepEqual(r.texts, [Q.CLOSED_TEXT]);
+  assert.equal(pr.writes.length, 0);
+});
+
+// ---------------------------------------------------------------------------
 // 🆕 מק"טים לבנייה (‎pd-parts.js‎): פריט בלי מק"ט ← מייל למנהלת הרכש ← "רק המזוהים" / "לחכות" ← נבנה ← בנייה מחדש
 // ---------------------------------------------------------------------------
 
@@ -437,7 +529,9 @@ test('מק"טים לבנייה: "רק המזוהים" — מייל לרכש (ב�
   const r = await say('רק המזוהים ✅');
   assert.equal(sent.length, 1);
   assert.equal(sent[0].to, 'ruti@example.com');
-  assert.equal(sent[0].subject, `מק"טים נדרשים לבנייה בהקדם — לבקשת ${u.full_name}`);
+  assert.equal(sent[0].subject, `❗ מק"טים נדרשים לבנייה בהקדם — לבקשת ${u.full_name}`);
+  assert.equal(sent[0].urgent, true, 'סימן קריאה אדום: חשיבות גבוהה');
+  assert.match(sent[0].html, /color:#dc2626[^>]*>❗ דחוף/);
   assert.match(sent[0].text, /להלן מק"טים נדרשים לבנייה בהקדם/);
   assert.match(sent[0].text, /1\. בטון — 5 קוב \(לתקרה\)/);
   assert.doesNotMatch(sent[0].text, /שק מלט/, 'רק מה שלא זוהה');
@@ -453,6 +547,7 @@ test('מק"טים לבנייה: "רק המזוהים" — מייל לרכש (ב�
 });
 
 test('מק"טים לבנייה: "לחכות לרכש" ← נבנה ← בבוט ובמייל "המק"טים החסרים נבנו… להמשיך?" ← כן ← כל הדרישה עם הכמויות והמק"ט ← "סיום"', async (t) => {
+  H.at(t);                                      // שעות העבודה — ההודעות לעובד יוצאות מיד
   H.companies(t, 'test11');
   const u = buyerWorker();
   const B77 = part('C-77', 'בטון מובא ב-30 לתקרות');
@@ -572,6 +667,7 @@ test('מק"טים לבנייה — זיהוי: רק מק"ט חדש (שלא הי�
 });
 
 test('מק"טים לבנייה: "רק המזוהים" ← נבנה ← "לבנות דרישה חדשה נוספת מהמק"טים שנבנו?" ← כן ← רק החסרים', async (t) => {
+  H.at(t);                                      // שעות העבודה — ההודעות לעובד יוצאות מיד
   H.companies(t, 'test11');
   const u = buyerWorker();
   const B77 = part('C-77', 'בטון מובא ב-30 לתקרות');
@@ -605,6 +701,7 @@ test('מק"טים לבנייה: "רק המזוהים" ← נבנה ← "לבנו
 });
 
 test('💬 מנהלת הרכש עונה "המק"ט כבר קיים" — העובד מקבל בבוט, ואם זה הפריט האחרון — "להמשיך בדרישה?"', async (t) => {
+  H.at(t);                                      // שעות העבודה — ההודעות לעובד יוצאות מיד
   H.companies(t, 'test11');
   const u = buyerWorker();
   const pr = priority(t, { partByCode: async (c, code) => (code === 'C-30' ? B30 : null) });
@@ -648,6 +745,7 @@ test('💬 מנהלת הרכש עונה "המק"ט כבר קיים" — העוב
 });
 
 test('💬 מנהלת הרכש — הערה בלבד: העובד מקבל אותה, והבקשה נשארת פתוחה', async (t) => {
+  H.at(t);                                      // שעות העבודה — ההודעות לעובד יוצאות מיד
   H.companies(t, 'test11');
   const u = buyerWorker();
   priority(t);
@@ -729,4 +827,25 @@ test('לרכש רק בתיאור מדויק: "להסיר את הפריט" — ה
   r = await say(BTN.done);
   assert.match(r.text, /נפתחה ועברה \*לאישור\*/);
   assert.deepEqual(pr.wrote('addDemandLine').map((w) => w.args[2].part), ['M-1']);
+});
+
+test('💬 מנהלת הרכש עונה בערב — ההודעה לעובד נשמרת לשעות העבודה, לא נשלחת ולא הולכת לאיבוד', async (t) => {
+  H.at(t);
+  H.companies(t, 'test11');
+  const u = buyerWorker();
+  priority(t);
+  ai(t);
+  buyer(t);
+  const { say, wa } = H.chat(t, u);
+  await toMissing(say);
+  await say(BTN.done);
+  await say('לחכות לרכש ⏳');
+  const { token } = D.get('SELECT token FROM pd_part_requests WHERE user_id = ?', u.id);
+  const line = Parts.forBuyer(token).items[0].n;
+  wa.clear();
+  t.mock.timers.setTime(new Date('2026-11-10T19:45:00Z').getTime()); // 21:45 בישראל
+  await Parts.buyerAnswer(token, { n: line, note: 'איזה סוג בטון? ב-30 או ב-40?' });
+  assert.doesNotMatch(wa.texts().join('\n'), /איזה סוג בטון/, 'בערב — לא נשלח');
+  const queued = D.all('SELECT text FROM wa_outbox WHERE user_id = ?', u.id).map((r) => r.text).join('\n');
+  assert.match(queued, /איזה סוג בטון\? ב-30 או ב-40\?/, 'נשמר בתור לבוקר');
 });

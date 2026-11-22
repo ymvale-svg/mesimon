@@ -46,6 +46,8 @@ test('הרשאות חסרות גם באסימון חדש — ניסיון אחד
   assert.equal(r.code, 4711);
   assert.match(r.explain, /Scopes/);
   assert.deepEqual(r.scopes, ['user:read:admin']);
+  assert.deepEqual(r.wanted, ['meeting:write:meeting:admin', 'meeting:write:meeting:master']);
+  assert.deepEqual(r.missingScopes, ['meeting:write:meeting:admin', 'meeting:write:meeting:master']);
   assert.equal(calls.filter((c) => c.method === 'POST' && c.url.includes('/meetings')).length, 2, 'פעם עם האסימון, ופעם עם אסימון חדש — לא יותר');
 });
 

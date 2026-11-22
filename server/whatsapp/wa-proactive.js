@@ -15,6 +15,7 @@ const MeetCoord = require('../meetings').MeetingCoord;
 const { channel, currentMsg, doneEmoji, firstName, hooks, inHours, isConfigured, localDate, log, mailAlertUsers, orgUsers, react, sendButtons, sendText, splitMessage, workHours } = require('./wa-base');
 const { CANCEL, LIST_SHOWN, RANGES, chatOf, formatList, saveChat } = require('./wa-private');
 const { rememberBot } = require('./wa-tasks');
+const Instinct = require('./instinct');
 
 
 // ---------------------------------------------------------------------------
@@ -81,11 +82,19 @@ function staleQuestion(userId, st, text, msg = {}) {
 }
 
 
-/** לחיצה על כפתור, 👍 / 👎, או "מאשר" / "ביטול" לבד — תשובה לשאלה שממתינה, גם אחרי 15 דקות */
+/**
+ * לחיצה על כפתור, 👍 / 👎, או "מאשר" / "ביטול" לבד — תשובה לשאלה שממתינה, גם אחרי 15 דקות.
+ * 🔒 תגובה (Reaction) או ציטוט — רק כשהם על ההודעה של השאלה (‎msg.onQuestion‎, נקבע ב-‎handleDirect‎ מול
+ * ‎WaQuestions‎). 👍 על הודעה אחרת אינו תשובה (#171).
+ */
 function answerLike(text, msg = {}) {
+  if (msg.kind === 'reactionMessage' || (!msg.button && msg.replyTo?.id)) {
+    if (!msg.onQuestion) return false;
+    if (msg.kind === 'reactionMessage') return true;
+  }
   const n = WaUi.normalize(String(text ?? ''));
   const short = n.split(/\s+/).filter(Boolean).length <= 3;
-  return Boolean(msg.button || msg.kind === 'reactionMessage' || (n && short && (WaUi.YES.test(n) || WaUi.NO.test(n) || WaUi.CANCEL.test(n) || CANCEL.test(n))));
+  return Boolean(msg.button || (n && short && (WaUi.YES.test(n) || WaUi.NO.test(n) || WaUi.CANCEL.test(n) || CANCEL.test(n))));
 }
 
 
@@ -145,7 +154,8 @@ async function pushToUser(userId, { text, files = [], buttons = [], draft = null
     const parts = splitMessage(text);
     for (let i = 0; i < parts.length; i++) {
       if (i === parts.length - 1 && buttons.length && !busy) await sendButtons(chatId, parts[i], buttons, { owner: 'chat', draft, awaiting: Boolean(draft) });
-      else await sendText(chatId, parts[i]);
+      // שיחה אחרת פתוחה (‎busy‎) — בלי כפתורים, אבל השאלה נרשמת: 👍 עליה מגיע אליה, ולא לטיוטה הפתוחה (באג 17.11.26)
+      else await sendText(chatId, parts[i], i === parts.length - 1 && draft ? { owner: 'chat', draft, awaiting: true } : null);
     }
     rememberBot(userId, text);
     if (draft && !busy) saveChat(userId, { ...chatOf(userId), draft: { ...draft, askedAt: D.nowIso() }, awaiting: true });
@@ -195,12 +205,18 @@ async function replyWatchTick() {
 }
 
 
+/**
+ * 🛒 חיפוש ספקים ברשת — במקביל גם דרך אינסטינקט (22.11.26, ישראל), כשהוא פעיל במערכת. זה חיפוש בשביל הקוד, לא
+ * בקשה של העובד — לכן לא תלוי בפיילוט שלו: יוצא רק המבוקש, והתשובה חוזרת לפנייה (לא לעובד)
+ */
+const rfqAsk = (actor) => (WaActions.byKey('instinct')?.enabled ? (text) => Instinct.search(actor.id, text) : null);
+
 // 🛒 פנייה לספקים — החיפוש והשליחה ברקע (חיפוש ברשת לוקח זמן)
 function rfqPrepare(actor, rfqId) {
   const ref = currentMsg.get(actor.id);
   setImmediate(async () => {
     try {
-      const r = await Rfq.prepare(actor.id, rfqId);
+      const r = await Rfq.prepare(actor.id, rfqId, { ask: rfqAsk(actor) });
       void react(ref, '');
       await pushToUser(actor.id, { text: r.text, buttons: r.buttons ?? [], draft: r.draft ?? null }, 'rfq');
     } catch (err) {

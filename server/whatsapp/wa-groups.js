@@ -12,6 +12,7 @@ const MailInsights = require('../mail').MailInsights;
 const Insights = require('../agents').Insights;
 const TaskSync = require('../tasks').TaskSync;
 const { BACKLOG_DAYS, BATCH_MAX, CONTEXT_MESSAGES, DAY, GROUP_SKILL, KEEP_DAYS, LOG_DAYS, candidatesOf, localDate, log, orgUsers, parseJson } = require('./wa-base');
+const WaReads = require('./wa-reads');
 
 
 const GROUP_SCHEMA = {
@@ -94,7 +95,7 @@ async function analyzeGroup(group, project, fresh, users) {
     'החלט לפי ההנחיות.'
   ].join('\n');
 
-  const out = await Claude.json({ system: fs.readFileSync(GROUP_SKILL, 'utf8'), content: [{ type: 'text', text }], schema: GROUP_SCHEMA, effort: 'low' });
+  const out = await Claude.json({ feature: 'bot.groups', system: fs.readFileSync(GROUP_SKILL, 'utf8'), content: [{ type: 'text', text }], schema: GROUP_SCHEMA, effort: 'low' });
   return sanitizeGroup(out, users, fresh.length);
 }
 
@@ -288,6 +289,7 @@ function prune() {
   D.run('DELETE FROM wa_forwards WHERE at < ?', new Date(Date.now() - DAY).toISOString());
   // אינסטינקט: הבקשות והתשובות של העוזר החיצוני — לא נשמרות יותר מיומן הבוט (בקשה שעוד בטיפול — נשארת)
   D.run("DELETE FROM instinct_requests WHERE created_at < ? AND status NOT IN ('queued','sent','open')", new Date(Date.now() - LOG_DAYS * DAY).toISOString());
+  WaReads.prune();
 }
 
 

@@ -80,8 +80,8 @@ const switchCancels = () => Boolean(D.getSetting('wa_topic_switch_cancels', true
 const DROPPED = 'ℹ️ קבלת הסחורה הקודמת בוטלה — עברתי לבקשה החדשה.';
 const YES = /^(כן|נכון|מאשר|מאשרת|אשר|אישור|תקין|יאללה|אוקי|אוקיי|סבבה|ok|yes|👍|👌|✅|✔)([\s,.!]|$)/i;
 const CANCEL = /^(ביטול|בטל|לבטל|עזוב|יציאה|stop)([\s,.!]|$)/i;
-/** "תוסיף בדו שיח: ...", "הערה: ...", "תרשום בהערות ..." — הערה חופשית של המקבל לדו-שיח הפנימי, בכל שלב */
-const NOTE_CMD = /^\s*(?:תוסיף|תוסיפי|הוסף|להוסיף|תרשום|תכתוב|רשום|כתוב)?\s*(?:ל|ב)?\s*(?:דו[\s-]*שיח(?:\s*פנימי)?|הערה|הערות)\s*[,:\-–]?\s*([\s\S]+)$/;
+/** "תוסיף בדו שיח: ...", "הערה: ...", "תרשום בהערות ...", "להכניס הערה ש...", "לציין בהערות ..." — הערה חופשית של המקבל לדו-שיח הפנימי, בכל שלב */
+const NOTE_CMD = /^\s*(?:תוסיף|תוסיפי|הוסף|להוסיף|תרשום|תרשמי|לרשום|תכתוב|תכתבי|לכתוב|רשום|כתוב|תכניס|תכניסי|להכניס|הכנס|תציין|תצייני|לציין|ציין)?\s*(?:ל|ב)?\s*(?:דו["״]?\s*-?\s*ח?\s*שיח(?:\s*פנימי)?|הערה|הערות)\s*[,:\-–]?\s*([\s\S]+)$/;
 /*
  * כפתורים לתשובה (וואטסאפ, עד 3). הכיתוב של כל כפתור הוא בדיוק המילה שהבוט מבין ("כן ✅", "מאשר ✅" — ✅ ירוק לאישור),
  * כך שלחיצה עובדת גם כשהיא חוזרת כטקסט רגיל. ‎[]‎ — בלי כפתורים (רשימות ממוספרות, שאלות פתוחות).
@@ -176,6 +176,11 @@ const active = (userId, late = false) => {
 };
 /** יש קליטה פתוחה (גם מושהית) — לתזכורת ולהמשך ב"קבלת סחורה" */
 const pending = (userId) => Boolean(fresh(load(userId)));
+/**
+ * 🔒 המסמך שהקליטה עליו עכשיו (מספר ה-GR, ולפני הטיוטא — מתי התחילה), ‎null‎ — אין / תפריט. נרשם עם הכפתורים
+ * (‎WaQuestions‎), וכפתור או תגובה על הודעה של מסמך אחר — "השאלה כבר לא פתוחה" (#171)
+ */
+const docId = (userId) => { const s = load(userId); return fresh(s) && s.step !== 'menu' ? String(s.docno || s.startedAt || '') || null : null; };
 /**
  * הודעה שנכנסת לפריוריטי — רק במפורש: "קבלת סחורה", "פריוריטי",
  * או קובץ בלי טקסט (הבוט אינו מטפל בקבצים אחרת, ושואל קודם).
@@ -417,12 +422,12 @@ function jpegToPdf(jpg) {
 const ai = {
   async extract(file) {
     const block = fileBlock(file);
-    const first = await Claude.json({ system: skill(), content: [block, { type: 'text', text: 'task: extract' }], schema: EXTRACT_SCHEMA, effort: 'high', live: true });
+    const first = await Claude.json({ feature: 'priority.goods', system: skill(), content: [block, { type: 'text', text: 'task: extract' }], schema: EXTRACT_SCHEMA, effort: 'high', live: true });
     // בדיקה עצמית: סכום השורות לא תואם לסה"כ השורות במסמך — קוראים שוב את הטבלה, שורה אחרי שורה
     const want = Number(first.totals?.subtotal || (Number(first.totals?.before_vat || 0) + Number(first.totals?.doc_discount || 0)) || 0);
     const gap = (d) => Math.abs(lineSum(d.lines) - want);
     if (!(want > 0) || !(first.lines ?? []).length || gap(first) <= 1) return first;
-    const again = await Claude.json({ system: skill(), schema: EXTRACT_SCHEMA, effort: 'high', live: true, content: [block, { type: 'text', text: [
+    const again = await Claude.json({ feature: 'priority.goods', system: skill(), schema: EXTRACT_SCHEMA, effort: 'high', live: true, content: [block, { type: 'text', text: [
       'task: extract',
       `בדיקה: סכום השורות שקראת (${lineSum(first.lines)}) אינו תואם לסה"כ השורות במסמך (${want}). קראת ${first.lines.length} שורות.`,
       'קרא שוב את כל טבלת השורות, שורה אחרי שורה: גם שורות דומות זו לזו, שורות עם אותו מק"ט, שורות שנמשכות על שתי שורות טקסט, ושורות בסוף הטבלה. בדוק כמות × מחיר = סכום בכל שורה.'
@@ -435,26 +440,26 @@ const ai = {
       doc_lines: docLines.map((l, i) => ({ doc_line: i + 1, description: l.description, supplier_code: l.supplier_code, qty: l.qty, unit: l.unit, unit_price: l.unit_price })),
       open_order_lines: orders.flatMap((o) => o.lines.map((l) => ({ order: o.ORDNAME, line: l.LINE, part: l.PARTNAME, description: l.PDES, balance: l.TBALANCE, unit: l.TUNITNAME, price: l.PRICE })))
     });
-    return Claude.json({ system: skill(), content: [{ type: 'text', text }], schema: MATCH_SCHEMA, effort: 'medium', live: true });
+    return Claude.json({ feature: 'priority.goods', system: skill(), content: [{ type: 'text', text }], schema: MATCH_SCHEMA, effort: 'medium', live: true });
   },
   async classify(current, file) {
     const block = fileBlock(file);
-    return Claude.json({ system: skill(), content: [block, { type: 'text', text: JSON.stringify({ task: 'classify', current }) }], schema: CLASSIFY_SCHEMA, effort: 'low', live: true });
+    return Claude.json({ feature: 'priority.goods', system: skill(), content: [block, { type: 'text', text: JSON.stringify({ task: 'classify', current }) }], schema: CLASSIFY_SCHEMA, effort: 'low', live: true });
   },
   async partTerms(text, line) {
     const content = JSON.stringify({ task: 'part_terms', text, line });
-    return Claude.json({ system: skill(), content: [{ type: 'text', text: content }], schema: TERMS_SCHEMA, effort: 'low', live: true });
+    return Claude.json({ feature: 'priority.goods', system: skill(), content: [{ type: 'text', text: content }], schema: TERMS_SCHEMA, effort: 'low', live: true });
   },
   async parts(text, line, candidates) {
     const content = JSON.stringify({ task: 'parts', text, line, candidates: candidates.map((c) => ({ code: c.PARTNAME, description: c.PARTDES, chapter: c.BUD_SUBCHAPTERDES ?? '', resource: c.BUD_SUBTOPICDES ?? '' })) });
-    return Claude.json({ system: skill(), content: [{ type: 'text', text: content }], schema: PARTS_SCHEMA, effort: 'low', live: true });
+    return Claude.json({ feature: 'priority.goods', system: skill(), content: [{ type: 'text', text: content }], schema: PARTS_SCHEMA, effort: 'low', live: true });
   },
   async project(projects, text) {
     const content = JSON.stringify({ task: 'project', text, projects: projects.map((p) => ({ code: p.code, name: p.des, aliases: p.alias ?? '' })) });
-    return Claude.json({ system: skill(), content: [{ type: 'text', text: content }], schema: PROJECT_SCHEMA, effort: 'low', live: true });
+    return Claude.json({ feature: 'priority.goods', system: skill(), content: [{ type: 'text', text: content }], schema: PROJECT_SCHEMA, effort: 'low', live: true });
   },
   async reply(shown, text) {
-    return Claude.json({ system: skill(), content: [{ type: 'text', text: JSON.stringify({ task: 'reply', shown, text }) }], schema: REPLY_SCHEMA, effort: 'low', live: true });
+    return Claude.json({ feature: 'priority.goods', system: skill(), content: [{ type: 'text', text: JSON.stringify({ task: 'reply', shown, text }) }], schema: REPLY_SCHEMA, effort: 'low', live: true });
   }
 };
 
@@ -1928,6 +1933,14 @@ async function handle({ user, text = '', file = null, reaction = false, allow = 
   // תשובה לשאלה "להפוך לסופית?" — כן / 👍 / מאשר: סוגרים; "חזרה לטיוטא" — הטיוטא; כל דבר אחר — ממשיכים בבדיקה
   if (s.confirmFinal) {
     const ok = !file && (YES.test(t) || /^(מאשר|מאשרת|אישור|אשר|👍|👌|✅|✔)([\s,.!]|$)/.test(t));
+    // ⏳ השאלה נשאלה לפני יותר מ-15 דקות — "כן" / 👍 לא סוגר: מציגים שוב את הטיוטא ושואלים מחדש (#171)
+    if (ok && Date.now() - (s.confirmFinalAt ?? 0) >= idleMs()) {
+      s.confirmFinal = false; s.confirmFinalAt = null;
+      const out = await showDraft(s, [], user);
+      save(user.id, out.s ?? s);
+      const again = `⏳ עבר זמן מאז השאלה "להפוך את *${s.docno}* לסופית?", ולכן לא סגרתי. הנה הטיוטא שוב — לבדוק ולאשר מחדש:`;
+      return { ...out, replies: [`${again}\n\n${out.replies?.[0] ?? ''}`, ...(out.replies ?? []).slice(1)], buttons: buttonsFor(out.s ?? s), result: 'אישור סופי אחרי 15 דקות — הטיוטא הוצגה שוב' };
+    }
     if (!ok) s.confirmFinal = false;
     if (!file && /^חזרה לטיוטא/.test(t)) { const out = await showDraft(s, [], user); save(user.id, out.s ?? s); return { ...out, buttons: buttonsFor(out.s ?? s) }; }
     if (ok) t = 'מאשר';
@@ -2011,7 +2024,23 @@ async function handle({ user, text = '', file = null, reaction = false, allow = 
     buttons: out.s === null ? [] : buttonsFor(out.s ?? s) };
 }
 
+/** השלבים שאחרי אישור הכותרת ולפני הטיוטא — תנאי תשלום ("תעשה שוטף", "שוטף 60") עדיין מתעדכנים בהם */
+const LATE_PAY_STEPS = ['order', 'lines', 'parts', 'project', 'warehouse', 'files'];
+
+/** תנאי תשלום בהודעה קצרה אחרי הכותרת: מעדכנים, והשאלה הפתוחה חוזרת כמו שהיא. ‎null‎ — לא תנאי תשלום */
+function latePayChange(s, t) {
+  if (!LATE_PAY_STEPS.includes(s.step) || s.docno) return null;
+  if (String(t).replace(/🎙/g, '').trim().split(/\s+/).length > 5) return null;
+  const pay = Priority.payFromText(t);
+  if (!pay) return null;
+  const again = s.lastPrompt ? `\n\n${s.lastPrompt}` : '';
+  if (pay.unknown !== undefined) return { s, replies: [`אין בפריוריטי תנאי תשלום שוטף + ${pay.unknown}. האפשרויות: ${Priority.PAY_TERMS.map((p) => Priority.payLabel(p.code)).join(', ')}.${again}`], result: `תנאי תשלום לא קיים: ${pay.unknown}` };
+  s.payCode = pay.code;
+  return { s, replies: [`💳 תנאי התשלום עודכנו: *${Priority.payLabel(pay.code)}*${dueText(s, pay.code)}.${again}`], result: `תנאי תשלום: ${Priority.payLabel(pay.code)} (בשלב ${s.step})` };
+}
+
 async function step(user, s, t, file, allow = { gr: true, pd: false }) {
+  if (!file) { const pay = latePayChange(s, t); if (pay) return pay; }
   switch (s.step) {
     case 'menu': {
       // "קבלת סחורה" (הכפתור) — מתחילים. "דרישת רכש" — הבוט מעביר לדרישת הרכש (wa-bot), וכאן רק כשאינה פתוחה לעובד.
@@ -2375,6 +2404,7 @@ async function step(user, s, t, file, allow = { gr: true, pd: false }) {
         // שאלת אישור לפני סגירה — אחרי "סופית" אי אפשר לבטל מהבוט
         if (!s.confirmFinal) {
           s.confirmFinal = true;
+          s.confirmFinalAt = Date.now();
           return { s, replies: [[`🔒 להפוך את *${s.docno}* לסופית?`,
             'אחרי הסגירה אי אפשר לבטל מהבוט — רק בפריוריטי (פעולות ← פתיחת תעודה סופית לעריכה).',
             '*כן* 👍 — לסגור · *חזרה לטיוטא* — להמשיך לבדוק'].join('\n')], result: 'שאלת אישור לפני סגירה' };
@@ -2504,4 +2534,4 @@ function view(userId) {
   };
 }
 
-module.exports = { view, everOpened, markOpened, inMenu, dropMenu, isTrigger, isPriority, opens, active, pending, pausedNote, abandon, switchCancels, wantsUndoFinal, handle, sweep, _jpegToPdf: jpegToPdf, _codeLines: codeLines, _orderDiffs: orderDiffs, _similarLines: similarLines, _askParts: askParts, _projectsOf: projectsOf, _findProjects: findProjects, _ai: ai, _load: load, _clear: (userId) => clear(userId, load(userId)) };
+module.exports = { view, everOpened, markOpened, inMenu, dropMenu, isTrigger, isPriority, opens, active, pending, docId, pausedNote, abandon, switchCancels, wantsUndoFinal, handle, sweep, _jpegToPdf: jpegToPdf, _codeLines: codeLines, _orderDiffs: orderDiffs, _similarLines: similarLines, _askParts: askParts, _projectsOf: projectsOf, _findProjects: findProjects, _ai: ai, _load: load, _clear: (userId) => clear(userId, load(userId)) };
