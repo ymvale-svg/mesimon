@@ -510,7 +510,7 @@ const AdminView = (() => {
                   el('tbody', {}, r.created.filter((c) => !c.emailSent).map((c) =>
                     el('tr', {}, [
                       el('td', { text: c.name }),
-                      el('td', {}, [el('code', { text: c.link ?? '—', style: { direction: 'ltr', fontSize: '11px', wordBreak: 'break-all' } })])
+                      el('td', {}, [el('code', { text: c.link ?? '—', style: { direction: 'ltr', fontSize: 'var(--fs-xs)', wordBreak: 'break-all' } })])
                     ])
                   ))
                 ])
@@ -1323,7 +1323,7 @@ const AdminView = (() => {
         UI.field('שם הכלל', nameInput),
         UI.field('מתי (טריגר)', triggerSelect, isEdit ? 'לא ניתן לשנות טריגר של כלל קיים' : null),
         UI.field('מה קורה (פעולה)', actionSelect, isEdit ? 'לא ניתן לשנות פעולה של כלל קיים' : null),
-        el('h4', { text: 'פרמטרים', style: { fontSize: '13px', margin: '10px 0 8px' } }),
+        el('h4', { text: 'פרמטרים', style: { fontSize: 'var(--fs-md)', margin: '10px 0 8px' } }),
         paramsBox
       ]),
       footer: [saveBtn, el('div.spacer')]
@@ -1363,12 +1363,12 @@ const AdminView = (() => {
     const row = (title, ok, okText, missing, hint) =>
       el('div', { style: { padding: '11px 0', borderBottom: '1px solid var(--border)' } }, [
         el('div.flex', {}, [
-          el('span', { text: ok ? '✅' : '○', style: { fontSize: '15px' } }),
+          el('span', { text: ok ? '✅' : '○', style: { fontSize: 'var(--fs-lg)' } }),
           el('b', { text: title }),
           el('div.spacer'),
           el('span', {
             class: ok ? 'text-ok' : 'text-danger',
-            style: { fontSize: '12.5px', fontWeight: '700' },
+            style: { fontSize: 'var(--fs-sm)', fontWeight: '700' },
             text: ok ? okText : 'לא מוגדר'
           })
         ]),
