@@ -697,3 +697,31 @@ test('search — בלי תשובה בזמן: null', async (t) => {
   const u = person('employee', false);
   assert.equal(await Instinct.search(u.id, 'חפש ספקים', { timeoutMs: 10 }), null);
 });
+
+// באג 22.11.26: אחרי שיחה על השכרת גנרטור העובד כתב "תבדוק ברשת", וה"✨ העוזר" ענה "אין לי גישה לרשת" —
+// ההבנה סיווגה את זה כשאלה (‎mail_ask‎), כי "כל מה שנוגע לספקים — לא instinct". בקשה מפורשת לחפש ברשת — לאינסטינקט,
+// עם מה שלחפש מההודעה הקודמת (השיחה איתו משותפת — הוא לא יודע על מה מדובר)
+test('"תבדוק ברשת" — לאינסטינקט גם כשה-AI סיווג כשאלה, עם ההקשר מההודעה הקודמת', async (t) => {
+  const wa = setup(t);
+  ai(t, { intent: 'mail_ask', request: '' });
+  const u = person();
+  const { chatOf, saveChat } = require('../../../server/whatsapp/wa-private');
+  saveChat(u.id, { ...chatOf(u.id), history: [
+    { role: 'user', text: 'מי הספקים להשכרת גנרטור 110 KVA בדרום?' },
+    { role: 'bot', text: 'אין לי ספקים כאלה בזיכרון' }
+  ] });
+  await say(u.phone, 'תבדוק ברשת');
+  await settle();
+  const out = toInstinct(wa);
+  assert.equal(out.length, 1);
+  assert.match(out[0].body.message, /תבדוק ברשת: מי הספקים להשכרת גנרטור 110 KVA בדרום\?/);
+});
+
+test('"תבדוק ברשת" — מי שאינסטינקט לא פתוח לו: לא יוצא אליו', async (t) => {
+  const wa = setup(t);
+  ai(t, { intent: 'other', request: '' });
+  const u = person('employee', false);
+  await say(u.phone, 'תבדוק ברשת');
+  await settle();
+  assert.equal(toInstinct(wa).length, 0);
+});

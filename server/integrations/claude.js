@@ -194,7 +194,9 @@ function parseOutput(data) {
  * @param {boolean} [opts.live]              מישהו מחכה (✨ שאל, הבוט) — מצב מהיר, כמו ב-‎json‎
  * @returns {Promise<{text: string, calls: Array<{name, input, ok, ms}>}>}
  */
-async function withTools({ system, content, tools, onTool, effort = 'medium', model: modelId = null, maxTurns = 6, onUsage = null, live = false, feature = null, userId = null }) {
+async function withTools({ system, content, tools, onTool, effort = 'medium', model: modelId = null, maxTurns = 6, onUsage = null, live = false, feature = null, userId = null, serverTools = null }) {
+  // כלים שרצים אצל Anthropic (חיפוש ברשת — ‎WEB_SEARCH‎) — לצד הכלים שלנו; ‎onTool‎ לא נקרא עליהם
+  const allTools = [...(tools ?? []), ...(serverTools ?? [])];
   if (!isEnabled()) throw new AiError('חיבור ה-AI אינו מוגדר בשרת (ANTHROPIC_API_KEY)');
   const chosen = String(modelId || model()).trim();
   const fallback = withFallback(chosen);
@@ -212,7 +214,7 @@ async function withTools({ system, content, tools, onTool, effort = 'medium', mo
       messages,
       output_config: { effort },
       // בסבב האחרון — בלי כלים: חייבים לענות עם מה שיש
-      ...(tools?.length && !last ? { tools, tool_choice: { type: 'auto' } } : {}),
+      ...(allTools.length && !last ? { tools: allTools, tool_choice: { type: 'auto' } } : {}),
       ...(fallback ? { fallbacks: 'default' } : {}),
       ...(fast ? { speed: 'fast' } : {})
     };
@@ -254,6 +256,11 @@ async function withTools({ system, content, tools, onTool, effort = 'medium', mo
     if (data?.stop_reason === 'refusal') throw new AiError('ה-AI סירב לטפל בבקשה הזו');
 
     const blocks = data?.content ?? [];
+    // חיפוש ארוך ברשת נעצר באמצע (‎pause_turn‎) — ממשיכים מאותה נקודה
+    if (data?.stop_reason === 'pause_turn' && !last) {
+      messages.push({ role: 'assistant', content: blocks });
+      continue;
+    }
     const uses = blocks.filter((b) => b.type === 'tool_use');
     if (data?.stop_reason !== 'tool_use' || !uses.length || last) {
       const text = blocks.filter((b) => b.type === 'text').map((b) => b.text).join('').trim();

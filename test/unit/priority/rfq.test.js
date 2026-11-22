@@ -231,3 +231,25 @@ test('reviewText — נייד בלבד: "📱 וואטסאפ", וההדמיה ל
   assert.match(t, /1\. \*ב\* — 📱 וואטסאפ 0547654321/);
   assert.match(t, /\*הנוסח:\* s · 📎 הדמיה\.jpg/);
 });
+
+// באג 22.11.26: אחרי שיחה על השכרת גנרטור (עם "הט אנרגיה" והמייל שלהם) — "שלח לכל אחד בקשה להצעת מחיר מהירה",
+// והבוט שאל "איזה פריט?". השיחה עוברת להבנת הבקשה, והספקים שנזכרו בה — אליהם בלבד
+test('understand — השיחה הקודמת עוברת ל-AI', async (t) => {
+  const ai = Fakes.claude(t, () => ({ item: 'השכרת גנרטור', spec: '', quantity: '', location: '', need_by: '', count: 10, source: 'named', vendors: [], terms: [], missing_question: '' }));
+  const it = await RFQ._internal.understand('שלח לכל אחד בקשה להצעת מחיר מהירה', null, null, [
+    { role: 'user', text: 'צריך להשכיר גנרטור 110 KVA' }, { role: 'bot', text: 'הט אנרגיה — hotenergy@test.co' }
+  ]);
+  assert.match(ai.calls[0].opts.content.at(-1).text, /השיחה עד עכשיו[\s\S]*העובד: צריך להשכיר גנרטור[\s\S]*הבוט: הט אנרגיה/);
+  assert.equal(it.source, 'unspecified', 'named בלי ספקים — שואלים מאיפה');
+});
+
+test('findVendors — "רק לספקים מהשיחה" (named): בלי חיפוש, רק הם', async (t) => {
+  const u = user();
+  rfqAi(t);
+  let asked = 0;
+  const list = await findVendors(u.id, { item: 'השכרת גנרטור', count: 10, vendors: [
+    { name: 'הט אנרגיה', email: 'hotenergy@test.co', phone: '050-6962218' }, { name: 'לידור אנרגיה', email: '', phone: '' }
+  ] }, 'named', { ask: async () => { asked++; return ''; } });
+  assert.deepEqual(list.map((x) => [x.name, x.email, x.source]), [['הט אנרגיה', 'hotenergy@test.co', '💬 מהשיחה']]);
+  assert.equal(asked, 0);
+});

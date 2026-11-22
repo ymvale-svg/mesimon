@@ -267,13 +267,14 @@ async function flowRfqSummary({ actor, out, t }) {
 
 const RFQ_FILE_MS = 5 * 60 * 1000;
 
-async function flowRfqRequest({ actor, dry, out, t }) {
+async function flowRfqRequest({ actor, dry, out, state, t }) {
   if (WaActions.allowed(actor, 'rfq') && Rfq.isRequest(t)) {
     if (dry) return out('(בדיקה) הייתי מתחיל פנייה לספקים.', {}, { action: 'rfq', status: 'ok', result: 'בדיקה' });
     // 📎 תמונה / קובץ שנשלחו עם הבקשה או ממש לפניה (הדמיה, שרטוט) — חלק מהבקשה, ומצורפים למייל לספקים
     const recent = recentFiles.get(actor.id);
     const file = recent && Date.now() - recent.at < RFQ_FILE_MS ? recent.file : null;
-    const r = await Rfq.start(actor.id, t, { file }).catch((err) => ({ text: 'משהו השתבש בפנייה לספקים. נסו שוב בעוד רגע 🙏', result: `שגיאה: ${err.message}`, error: true }));
+    // 💬 השיחה עד עכשיו — "שלח לכל אחד בקשה להצעת מחיר" אחרי שיחה על ספקים (באג 22.11.26)
+    const r = await Rfq.start(actor.id, t, { file, history: state?.history ?? [] }).catch((err) => ({ text: 'משהו השתבש בפנייה לספקים. נסו שוב בעוד רגע 🙏', result: `שגיאה: ${err.message}`, error: true }));
     if (r) {
       if (r.search) rfqPrepare(actor, r.rfqId);
       return out(r.text, { draft: r.draft ?? null, awaiting: Boolean(r.awaiting) }, { action: 'rfq', status: r.error ? 'error' : 'ok', result: String(r.result ?? '').slice(0, 300), buttons: r.buttons, react: r.react });
