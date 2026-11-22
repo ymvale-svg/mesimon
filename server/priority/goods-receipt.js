@@ -101,7 +101,7 @@ function buttonsFor(s) {
   if (!s) return [];
   if (s.confirmCancel) return [BTN.confirmCancel, BTN.backToDraft];
   if (s.confirmFinal) return [BTN.confirmFinal, BTN.backToDraft];
-  if (s.pendingNew) return ['צרף כנספח', 'קבלה חדשה', 'להתעלם ❌'];
+  if (s.pendingNew) return ['צרף כנספח', LATER_BTN, 'להתעלם ❌'];
   if (s.pendingList) return [BTN.yes, BTN.no];
   if (s.choices?.step === s.step && s.choices.list?.length) return s.choices.list;
   switch (s.step) {
@@ -1444,6 +1444,12 @@ async function showDraft(s, problems = [], user = null) {
 
 const ATTACH_WORD = /נספח|לצרף|תצרף|צרף/;
 const NEW_WORD = /^\s*2\s*$|חדש|קבלת\s*סחורה|מסמך אחר|הבא/;
+/*
+ * "קבלה נפרדת ⏭️" — המסמך שהגיע באמצע הקליטה נכנס לתור ונקלט אחריה, בלי לבטל אותה (סקירה 22.11: עובד שלח 13 תעודות של
+ * ספקים שונים אחת אחרי השנייה; "קבלה חדשה" ביטלה את הנוכחית, אז בחר "צרף כנספח" — וכולן נצמדו לקבלה אחת)
+ */
+const LATER_BTN = 'קבלה נפרדת ⏭️';
+const LATER_WORD = /נפרד|אחר\s*כך|אחרי\s*זה|בתור|לתור|⏭/;
 
 /**
  * "נספח" בכיתוב — נספח. "קבלת סחורה" — מסמך חדש. בלי כיתוב — ה-AI מסווג: תמונה של
@@ -1471,7 +1477,9 @@ async function routeFile(user, s, file, t) {
   const cur = s.docno ? `ל-${s.docno}` : 'לקבלת הסחורה הנוכחית';
   // לא ‎reply()‎: השאלה הזו אינה "השאלה של השלב", ואחרי התשובה חוזרים לזו שחיכתה
   return { s, replies: [[cls ? `📄 זה נראה כמו מסמך חדש${s.pendingNew.label ? `: ${s.pendingNew.label}` : ''}.` : '📄 קיבלתי מסמך נוסף.',
-    `*צרף כנספח* — ${cur}`, `*קבלה חדשה*${!s.docno && s.step !== 'files' ? ' — הנוכחית תבוטל' : ''}`, `*להתעלם* ❌ — הקובץ לא נקלט, וחוזרים ל: ${waitingQuestion(s)}`].join('\n')] };
+    `*צרף כנספח* — ${cur}`, `*קבלה נפרדת* ⏭️ — אקלוט אותו אחרי הנוכחית`,
+    ...(!s.docno && s.step !== 'files' ? ['*קבלה חדשה* (בכתב) — הנוכחית תבוטל, ועוברים אליו'] : []),
+    `*להתעלם* ❌ — הקובץ לא נקלט, וחוזרים ל: ${waitingQuestion(s)}`].join('\n')] };
 }
 
 /** המסמך שהגיע הוא החשבון שהחשבונית מפנה אליו? (לפני שנוצרה טיוטא) */
@@ -1593,12 +1601,18 @@ function waitingQuestion(s) {
   };
   return by[s.step] ?? String(s.lastPrompt ?? '').split('\n').find((l) => l.trim())?.slice(0, 60) ?? 'השאלה הקודמת';
 }
-const newOrAttach = (s) => `בחרו: *צרף כנספח*${s.docno ? ` (ל-${s.docno})` : ''} · *קבלה חדשה* · *להתעלם* ❌ — וחוזרים ל: ${waitingQuestion(s)}`;
+const newOrAttach = (s) => `בחרו: *צרף כנספח*${s.docno ? ` (ל-${s.docno})` : ''} · *קבלה נפרדת* ⏭️ · *להתעלם* ❌ — וחוזרים ל: ${waitingQuestion(s)}`;
 
 /** תשובה לשאלה "נספח או חדש?" — ‎null‎ אם התשובה אינה אחת מהשתיים */
 async function answerPendingNew(user, s, t) {
   const f = s.pendingNew.file;
   if (/^\s*1\s*$/.test(t) || ATTACH_WORD.test(t)) { s.pendingNew = null; return attachNow(user, s, f); }
+  if (LATER_WORD.test(t)) {
+    s.pendingNew = null;
+    s.queued = [...queueOf(s), f];
+    const n = queueOf(s).length;
+    return { s, replies: [`📥 בתור${n > 1 ? ` (${n})` : ''} — אקלוט אותו כקבלה נפרדת מיד אחרי הנוכחית.${s.lastPrompt ? `\n\n${s.lastPrompt}` : ''}`] };
+  }
   if (NEW_WORD.test(t)) { s.pendingNew = null; return queueNew(user, s, f, null); }
   // "לא" / "אף אחד" / "3" — לא זה ולא זה: הקובץ נמחק, וחוזרים לשאלה שחיכתה
   if (/^\s*3\s*$/.test(t) || /^(לא|אל|אף אחד|שום דבר|לא זה ולא זה|תתעלם|להתעלם|התעלם|עזוב|no)([\s,.!]|$)/i.test(t)) {
