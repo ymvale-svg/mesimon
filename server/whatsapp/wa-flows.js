@@ -33,7 +33,7 @@ const Solve = require('./solve');
 const MailInsights = require('../mail').MailInsights;
 const Range = require('../mail').InsightWindow;
 const Instinct = require('./instinct');
-const { appRoot, currentMsg, doneEmoji, emailText, enqueueAs, firstName, hooks, localDate, log, react, reactNow, signatureFields, taskLink, WALK, MSG_BREAK } = require('./wa-base');
+const { appRoot, currentMsg, doneEmoji, emailText, enqueueAs, firstName, hooks, localDate, log, react, reactNow, recentFiles, signatureFields, taskLink, WALK, MSG_BREAK } = require('./wa-base');
 const { actionOf, CANCEL, checkDraft, draftText, featuresText, helpText, localDay, PLAIN_FEATURES, PLAIN_GREETING, PLAIN_HELP, PLAIN_INSIGHTS, PLAIN_LIST, PLAIN_TODAY, READ_ALOUD, shortDate, YES } = require('./wa-private');
 const { meetCoordRun, pushToUser, rfqPrepare, rfqSend } = require('./wa-proactive');
 const { businessCommand, closeAlerted, closureDecision, confirmPending, contactOf, draftEmail, findRecipients, sendPlainMail, replyOffer, MAIL_WALK_BTN, isMailWalkStart, mailWalkIntro, mailWalkAt, mailWalkEnd, startGoodsFromMail, suggestionDecision, suggestionFeedback, threadAddText, VIA_EMAIL, VIA_MESIMON } = require('./wa-mail');
@@ -265,10 +265,15 @@ async function flowRfqSummary({ actor, out, t }) {
   return NEXT;
 }
 
+const RFQ_FILE_MS = 5 * 60 * 1000;
+
 async function flowRfqRequest({ actor, dry, out, t }) {
   if (WaActions.allowed(actor, 'rfq') && Rfq.isRequest(t)) {
     if (dry) return out('(בדיקה) הייתי מתחיל פנייה לספקים.', {}, { action: 'rfq', status: 'ok', result: 'בדיקה' });
-    const r = await Rfq.start(actor.id, t).catch((err) => ({ text: 'משהו השתבש בפנייה לספקים. נסו שוב בעוד רגע 🙏', result: `שגיאה: ${err.message}`, error: true }));
+    // 📎 תמונה / קובץ שנשלחו עם הבקשה או ממש לפניה (הדמיה, שרטוט) — חלק מהבקשה, ומצורפים למייל לספקים
+    const recent = recentFiles.get(actor.id);
+    const file = recent && Date.now() - recent.at < RFQ_FILE_MS ? recent.file : null;
+    const r = await Rfq.start(actor.id, t, { file }).catch((err) => ({ text: 'משהו השתבש בפנייה לספקים. נסו שוב בעוד רגע 🙏', result: `שגיאה: ${err.message}`, error: true }));
     if (r) {
       if (r.search) rfqPrepare(actor, r.rfqId);
       return out(r.text, { draft: r.draft ?? null, awaiting: Boolean(r.awaiting) }, { action: 'rfq', status: r.error ? 'error' : 'ok', result: String(r.result ?? '').slice(0, 300), buttons: r.buttons, react: r.react });

@@ -668,3 +668,32 @@ test('תשובה לשאלה בבקשה על מסמך — גם היא יוצאת 
   await settle();
   assert.ok(toInstinct(wa)[0].body.message.endsWith(Instinct.NO_GUESS));
 });
+
+// 22.11.26: חיפוש ספקים ברשת לפנייה להצעת מחיר — גם דרך אינסטינקט. זה חיפוש בשביל הקוד: התשובה חוזרת לקוד, לא לעובד
+test('search — התשובה (גם בכמה הודעות) חוזרת לקוד, לא לעובד, ובלי סימון בהיסטוריה', async (t) => {
+  Instinct._internal.reset();
+  const { cfg } = Instinct._internal;
+  const saved = cfg.SEARCH_QUIET_MS;
+  cfg.SEARCH_QUIET_MS = 300;
+  t.after(() => { cfg.SEARCH_QUIET_MS = saved; });
+  const wa = Fakes.whatsapp(t);
+  const u = person('employee', false);
+  const p = Instinct.search(u.id, 'חפש ספקי אלומיניום. לפנות לדני 050-1234567');
+  await settle();
+  const out = wa.calls.find((c) => c.method === 'sendMessage');
+  assert.equal(out.body.chatId, IN_CHAT);
+  assert.match(out.body.message, /\[טלפון\]/, 'גם כאן — בלי פרטים מזהים');
+  wa.clear();
+  await fromInstinct('אלו-נט | info@alunet.test', out.id);
+  await fromInstinct('אלו-צפון | 054-7654321');
+  assert.equal(await p, 'אלו-נט | info@alunet.test\nאלו-צפון | 054-7654321');
+  assert.deepEqual(wa.calls.filter((c) => c.body?.chatId === `${u.phone}@c.us`), [], 'לעובד לא נשלח כלום');
+  assert.equal(Instinct.inConversation(u.id), false, 'חיפוש אינו שיחה של העובד עם אינסטינקט');
+});
+
+test('search — בלי תשובה בזמן: null', async (t) => {
+  Instinct._internal.reset();
+  Fakes.whatsapp(t);
+  const u = person('employee', false);
+  assert.equal(await Instinct.search(u.id, 'חפש ספקים', { timeoutMs: 10 }), null);
+});

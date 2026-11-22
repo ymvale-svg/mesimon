@@ -132,3 +132,102 @@ test('answer — בקשה למשימה באמצע הפנייה: הפנייה מ�
   assert.equal(r, null);
   assert.equal(D.get('SELECT status FROM rfq WHERE id = ?', id).status, 'cancelled');
 });
+
+// ---------------------------------------------------------------------------
+// 22.11.26, אמיר רון: "ספקי אלומיניום ברשת על בסיס הדמיה" — הבוט הציע ספקים מפריוריטי בלי מייל.
+// רק מי שאפשר לפנות אליו (מייל / נייד לוואטסאפ); ברשת — במקביל גם דרך אינסטינקט; ההדמיה מצורפת למייל.
+// ---------------------------------------------------------------------------
+const Fakes = require('../../fakes');
+const Gmail = require('../../../server/integrations/gmail');
+const { mobileOf, mineFor, findVendors, waLink } = RFQ._internal;
+
+test('mobileOf — נייד ישראלי בכל כתיב; קווי / זר — ריק', () => {
+  assert.equal(mobileOf('050-1234567'), '972501234567');
+  assert.equal(mobileOf('+972 52 123 4567'), '972521234567');
+  assert.equal(mobileOf('00972541234567'), '972541234567');
+  assert.equal(mobileOf('04-8123456'), '');
+  assert.equal(mobileOf(''), '');
+  assert.match(waLink('0501234567', 'שלום עולם'), /^https:\/\/wa\.me\/972501234567\?text=%D7%A9/);
+});
+
+/** ה-AI המזויף: בוחר את כל המועמדים; חיפוש ברשת ← ‎web‎; חילוץ מתשובת אינסטינקט ← ‎inst‎ */
+function rfqAi(t, { web = [], inst = [] } = {}) {
+  return Fakes.claude(t, (opts) => {
+    if (opts.schema?.properties?.picks) {
+      const n = (opts.content[0].text.match(/^\d+\./gm) ?? []).length;
+      return { picks: Array.from({ length: n }, (_, i) => ({ n: i + 1, reason: 'מתאים' })) };
+    }
+    if (opts.serverTools) return { vendors: web };
+    if (/חלץ/.test(opts.system)) return { vendors: inst };
+    return {};
+  });
+}
+const v = (name, email, phone) => ({ name, email, phone, website: '', source_url: '', reason: '' });
+
+test('mineFor — ספק מפריוריטי בלי מייל ובלי נייד: לא מוצע; עם נייד בלבד — לוואטסאפ', async (t) => {
+  const u = user();
+  rfqAi(t);
+  Fakes.priority(t, {
+    suppliersByWords: async () => [
+      { name: 'אלומיניום קווי בלבד', email: '', phone: '04-8123456' },
+      { name: 'אלומיניום עם מייל', email: 'sales@alu.test', phone: '' },
+      { name: 'אלומיניום נייד', email: '', phone: '052-1234567' }
+    ]
+  });
+  const list = await mineFor(u.id, { item: 'פרופילי אלומיניום', terms: ['אלומיניום'] }, 10);
+  assert.deepEqual(list.map((x) => x.name), ['אלומיניום עם מייל', 'אלומיניום נייד']);
+  assert.equal(list[1].mobile, '972521234567');
+});
+
+test('findVendors — ברשת: גם דרך אינסטינקט, במקביל; בלי מייל ובלי נייד — בחוץ', async (t) => {
+  const u = user({ full_name: 'אמיר בודק' });
+  rfqAi(t, {
+    web: [v('אלו-נט', 'info@alunet.test', '')],
+    inst: [v('אלו-וואטסאפ', '', '054-7654321'), v('אלו-קווי', '', '03-5555555'), v('אלו-מייל', 'office@alumail.test', '')]
+  });
+  const asked = [];
+  const ask = async (text) => { asked.push(text); return 'אלו-וואטסאפ | — | 054-7654321\nאלו-מייל | office@alumail.test'; };
+  const list = await findVendors(u.id, { item: 'חלונות אלומיניום', spec: 'לפי הדמיה', count: 10 }, 'web', { ask });
+  assert.deepEqual(list.map((x) => x.name), ['אלו-נט', 'אלו-מייל', 'אלו-וואטסאפ'], 'קודם מייל, אחריו וואטסאפ');
+  assert.equal(asked.length, 1);
+  assert.match(asked[0], /חלונות אלומיניום/);
+  assert.doesNotMatch(asked[0], /אמיר/, 'לאינסטינקט יוצא רק המבוקש');
+});
+
+test('findVendors — "מהספקים שלי": בלי חיפוש ברשת ובלי אינסטינקט', async (t) => {
+  const u = user();
+  rfqAi(t);
+  Fakes.priority(t, { suppliersByWords: async () => [] });
+  let asked = 0;
+  await findVendors(u.id, { item: 'מלט', count: 5 }, 'mine', { ask: async () => { asked++; return ''; } });
+  assert.equal(asked, 0);
+});
+
+test('send — המייל יוצא עם ההדמיה מצורפת, וספק עם נייד בלבד מקבל קישור וואטסאפ', async (t) => {
+  const u = user({ full_name: 'אמיר בודק' });
+  const img = Buffer.from('fake-png');
+  const id = Number(D.run("INSERT INTO rfq (user_id, status, item, draft, deadline_at, file, created_at) VALUES (?, 'review', ?, ?, ?, ?, ?)",
+    u.id, JSON.stringify({ item: 'חלונות אלומיניום' }), JSON.stringify({ subject: 'בקשה להצעת מחיר', body: 'שלום, מצורפת הדמיה' }),
+    new Date().toISOString(), JSON.stringify({ name: 'הדמיה.png', mime: 'image/png', b64: img.toString('base64') }), D.nowIso()).lastInsertRowid);
+  D.run("INSERT INTO rfq_vendors (rfq_id, name, email, phone, status) VALUES (?, 'אלו-מייל', 'a@alu.test', '', 'pending')", id);
+  D.run("INSERT INTO rfq_vendors (rfq_id, name, email, phone, status) VALUES (?, 'אלו-וואטסאפ', '', '054-7654321', 'whatsapp')", id);
+  const raws = [];
+  t.mock.method(Gmail, 'connectionOf', () => ({ email: 'amir@co.test' }));
+  t.mock.method(Gmail, 'signed', async (_, b) => b);
+  t.mock.method(Gmail, 'send', async (_, raw) => { raws.push(raw); return { messageId: '<m1@x>', threadId: 't1' }; });
+  const text = await RFQ.send(u.id, id);
+  assert.equal(raws.length, 1);
+  const mail = Buffer.from(String(raws[0]), /^[A-Za-z0-9_-]+=*$/.test(raws[0]) ? 'base64url' : 'utf8').toString('utf8');
+  assert.match(mail, /image\/png/);
+  assert.match(mail, new RegExp(img.toString('base64')));
+  assert.match(text, /✅ נשלח לספק אחד/);
+  assert.match(text, /📱 \*בוואטסאפ\*.*\n• אלו-וואטסאפ: https:\/\/wa\.me\/972547654321\?text=/);
+  assert.equal(D.get("SELECT status FROM rfq_vendors WHERE rfq_id = ? AND name = 'אלו-וואטסאפ'", id).status, 'wa_link');
+});
+
+test('reviewText — נייד בלבד: "📱 וואטסאפ", וההדמיה ליד הנוסח', () => {
+  const t = reviewText({ item: { item: 'x' }, draft: { subject: 's', body: 'b' }, deadline_at: '2026-11-11T14:00:00Z', file: { name: 'הדמיה.jpg' } },
+    [{ name: 'ב', email: '', phone: '0547654321', source: '🌐 ברשת' }]);
+  assert.match(t, /1\. \*ב\* — 📱 וואטסאפ 0547654321/);
+  assert.match(t, /\*הנוסח:\* s · 📎 הדמיה\.jpg/);
+});

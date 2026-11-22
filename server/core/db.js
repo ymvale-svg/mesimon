@@ -857,7 +857,8 @@ CREATE TABLE IF NOT EXISTS priority_docs (
 CREATE INDEX IF NOT EXISTS idx_priority_docs_user ON priority_docs(org_id, user_id, doc, created_at);
 
 /*
- * 🛒 פנייה לספקים להצעת מחיר (‎ai/rfq.js‎). ‎item‎ — מה מבוקש (JSON), ‎draft‎ — נושא וגוף המייל.
+ * 🛒 פנייה לספקים להצעת מחיר (‎ai/rfq.js‎). ‎item‎ — מה מבוקש (JSON), ‎draft‎ — נושא וגוף המייל,
+ * ‎file‎ — תמונה / קובץ שנשלחו עם הבקשה (הדמיה), מצורפים למייל: ‎{ name, mime, b64 }‎.
  * ‎status‎: draft / review / sent / summarized / closed / cancelled.
  */
 CREATE TABLE IF NOT EXISTS rfq (
@@ -872,6 +873,7 @@ CREATE TABLE IF NOT EXISTS rfq (
   polled_at     TEXT,
   summarized_at TEXT,
   task_id       INTEGER REFERENCES tasks(id) ON DELETE SET NULL,
+  file          TEXT,
   created_at    TEXT    NOT NULL
 );
 /*
@@ -898,7 +900,7 @@ CREATE TABLE IF NOT EXISTS pd_part_requests (
   created_at  TEXT    NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_pd_part_requests ON pd_part_requests(status, user_id);
-/* ספק בפנייה — ‎status‎: pending / no_email / sent / replied / declined / failed / skipped. ‎offer‎ — מה חולץ מהתשובה */
+/* ספק בפנייה — ‎status‎: pending / no_email / whatsapp (נייד בלי מייל) / wa_link (קיבל העובד קישור) / sent / replied / declined / failed / skipped. ‎offer‎ — מה חולץ מהתשובה */
 CREATE TABLE IF NOT EXISTS rfq_vendors (
   id             INTEGER PRIMARY KEY AUTOINCREMENT,
   rfq_id         INTEGER NOT NULL REFERENCES rfq(id) ON DELETE CASCADE,
@@ -2225,6 +2227,8 @@ function migrate() {
 
   // 💬 מק"טים לבנייה — אסימון לדף התשובה של הרכש (‎priority/pd-parts.js‎)
   addColumn('pd_part_requests', 'token', 'TEXT');
+  // 🛒 פנייה לספקים — הדמיה / קובץ שנשלחו עם הבקשה, מצורפים למייל לספקים (‎priority/rfq.js‎, 22.11.26)
+  addColumn('rfq', 'file', 'TEXT');
   // 🎙 הקלטת פגישה ארוכה מוואטסאפ — הועלתה ל-Timeless, והתמליל משם (‎meetings/meeting-audio.js‎, 18.11.26)
   addColumn('meeting_audio', 'timeless_id', 'TEXT');
   addColumn('meeting_audio', 'timeless_at', 'TEXT');
