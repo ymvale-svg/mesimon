@@ -107,7 +107,8 @@ const LocationView = (() => {
         useHere.disabled = false;
       }
     }, ['📍 המיקום הנוכחי שלי']);
-    const field = (label, input, hint) => el('div.field', {}, [el('label', { text: label }), input, hint ? el('div.hint', { text: hint }) : null]);
+    // התווית מקושרת לשדה (for/id) — סקירת הממשק 22.11.26
+    const field = (label, input, hint) => UI.field(label, input, hint);
     const m = UI.modal({
       title: place ? `עריכת ${place.name}` : '➕ נקודת ציון חדשה',
       body: el('div', {}, [

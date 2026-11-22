@@ -639,10 +639,8 @@ const UI = (() => {
       const m = modal({
         title,
         // ההסבר מתחת לשדה, כדי לומר מה בדיוק נשמר בלי להאריך את התווית
-        body: el('div.field', {}, [
-          el('label', { text: label }), input,
-          hint ? el('div.hint', { text: hint }) : null
-        ]),
+        // התווית מקושרת לשדה (for/id) — סקירת הממשק 22.11.26
+        body: field(label, input, hint),
         footer: [
           el('button.btn.btn-primary', { onclick: submit }, [okText]),
           el('button.btn', { onclick: () => { finish(null); m.close(); } }, ['ביטול'])
