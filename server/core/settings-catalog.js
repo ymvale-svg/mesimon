@@ -162,7 +162,7 @@ const HIDDEN = {
 const INTERNAL = new Set([
   'agents_health_last', 'ai_morning_last', 'boot_count', 'dup_scan_last', 'installed_at', 'mail_remind_since',
   'migr_bot_pilot_open', 'migr_memory_always_on', 'migr_memory_conservative', 'org_merge_last', 'org_merge_rounds', 'org_refresh_last',
-  'org_topics_migrated', 'po_notify_baseline', 'sent_fu_scanned', 'vapid_private_pem', 'vapid_public', 'wa_mail_alert_since',
+  'org_topics_migrated', 'po_notify_baseline', 'po_pricelist_no_handler', 'sent_fu_scanned', 'vapid_private_pem', 'vapid_public', 'wa_mail_alert_since',
   'wa_summary_sent', 'whats_new_anchors_seeded', 'whats_new_files', 'whats_new_seeded', 'mail_rescan_multibox_v1', 'timeless_webhook',
   'pd_approval_notified', 'pd_approval_unmapped', 'pd_approval_nophone', 'pd_approval_failed', 'ai_outage', 'ai_retry',
   'pd_openers', // מי פתח כל דרישת רכש מהבוט (לפי חברה ומספר) — להודעת "אושרה"

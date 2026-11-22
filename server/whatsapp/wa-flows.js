@@ -18,6 +18,7 @@ const WaActions = require('./wa-actions');
 const MeetCoord = require('../meetings').MeetingCoord;
 const FormFill = require('../mail').FormFill;
 const Rfq = require('../priority').Rfq;
+const PoPricelist = require('../priority').PoPricelist;
 const Notice = require('./notice');
 const SentFollowup = require('../mail').SentFollowup;
 const MailThread = require('../mail').MailThread;
@@ -333,6 +334,31 @@ async function flowOnSentFollowup(ctx) {
   }
   ctx.state = state;
   return NEXT;
+}
+
+// 🏷️ הוספה למחירון ספק מהזמנה (‎po-pricelist.js‎): ההודעה היזומה למי שברשימה "רכש — מחירונים"
+PoPricelist.setHooks({ push: (userId, m) => pushToUser(userId, m, 'po_pricelist') });
+
+/** תשובה להצעה: כולם / לבחור / לא, הסיכום, ו"כן, לבטל" */
+async function flowOnPricelist(ctx) {
+  let { actor, dry, keep, out, state, t } = ctx;
+  if (state.awaiting && state.draft?.kind === PoPricelist.KIND) {
+    const r = dry ? null : await PoPricelist.answer(actor.id, state.draft, t);
+    if (r) return out(r.text, { draft: r.draft ?? null, awaiting: Boolean(r.draft) }, { action: 'po_pricelist', status: 'ok', result: String(r.result ?? '').slice(0, 300), buttons: r.buttons });
+    keep.draft = null;
+    state = { ...state, draft: null, awaiting: false };
+  }
+  ctx.state = state;
+  return NEXT;
+}
+
+/** "מחירון PO26000123", "לבטל את ההוספה למחירון" */
+async function flowPricelistRequest({ actor, dry, out, t }) {
+  if (actor.type !== 'user' || !PoPricelist.isRequest(t)) return NEXT;
+  if (dry) return out('(בדיקה) הייתי בודק את ההזמנה מול מחירון הספק.', {}, { action: 'po_pricelist', status: 'ok', result: 'בדיקה' });
+  const r = await PoPricelist.request(actor.id, t).catch((err) => ({ text: 'לא הצלחתי לבדוק את ההזמנה כרגע. נסו שוב בעוד רגע 🙏', result: `שגיאה: ${err.message}` }));
+  if (!r) return NEXT;
+  return out(r.text, { draft: r.draft ?? null, awaiting: Boolean(r.draft) }, { action: 'po_pricelist', status: 'ok', result: String(r.result ?? '').slice(0, 300), buttons: r.buttons });
 }
 
 // 🔕 "לא להקפיץ יותר מיילים של X?" (‎mail-push.js‎)
@@ -1115,5 +1141,5 @@ const switchCancels = () => Boolean(D.getSetting('wa_topic_switch_cancels', true
 const DRAFT_ONLY = /(?:(?:בלי|לא\s+משנה|אין\s+לי\s+(?:את\s+)?|עזוב(?:\s+את)?)\s*ה?(?:כתובת|מייל|נמען)|רק\s+ת?(?:נסח|כתוב)|ת?נסח\s+(?:לי\s+)?(?:רק\s+)?(?:את\s+)?ה?(?:מלל|טקסט|נוסח))/;
 
 module.exports = {
-  SEND_NOW, DRAFT_ONLY, flowAgentsList, flowAlertNo, flowOnMailDose, flowApproval, flowBusinessCommand, flowCancel, flowClosureCommand, flowEmailEdit, flowEmailPick, flowEmailSolve, flowEmailVia, flowFeaturesRequest, flowFormFillRequest, flowGreeting, flowInstinct, flowInstinctExplicit, flowInstinctReply, flowInstinctPilot, flowNoticeToInstinct, flowIntentCancel, flowIntentDenied, flowIntentMenu, flowIntentOther, flowMailFileRequest, flowMailReplyEdit, flowMailWalk, flowMeetCoordRequest, flowMeetingAudioAnswer, flowMeetingAudioRequest, flowMeetingAudioStatus, flowMeetingFollowupRequest, flowMeetingReminderRequest, flowMenuList, flowMenuPick, flowNoAi, flowNoticeRequest, flowOnClosureAddress, flowOnDayEvening, flowOnFormFill, flowOnGoodsStop, flowOnMailFile, flowOnMailMuteSender, flowOnMailRemindOrGoods, flowOnMeetCoord, flowOnMeetingTasks, flowOnPaceOffer, flowOnPlainMail, flowOnReminder, flowOnRfq, flowOnSentFollowup, flowOnThreadAdd, flowRemindersRequest, flowReplyAsk, flowRfqRequest, flowRfqSummary, flowSuggestionCommand, flowTranslateRequest, flowWalk, NEXT, switchCancels
+  SEND_NOW, DRAFT_ONLY, flowAgentsList, flowAlertNo, flowOnMailDose, flowApproval, flowBusinessCommand, flowCancel, flowClosureCommand, flowEmailEdit, flowEmailPick, flowEmailSolve, flowEmailVia, flowFeaturesRequest, flowFormFillRequest, flowGreeting, flowInstinct, flowInstinctExplicit, flowInstinctReply, flowInstinctPilot, flowNoticeToInstinct, flowIntentCancel, flowIntentDenied, flowIntentMenu, flowIntentOther, flowMailFileRequest, flowMailReplyEdit, flowMailWalk, flowMeetCoordRequest, flowMeetingAudioAnswer, flowMeetingAudioRequest, flowMeetingAudioStatus, flowMeetingFollowupRequest, flowMeetingReminderRequest, flowMenuList, flowMenuPick, flowNoAi, flowNoticeRequest, flowOnClosureAddress, flowOnDayEvening, flowOnFormFill, flowOnGoodsStop, flowOnMailFile, flowOnMailMuteSender, flowOnMailRemindOrGoods, flowOnMeetCoord, flowOnMeetingTasks, flowOnPaceOffer, flowOnPlainMail, flowOnReminder, flowOnRfq, flowOnSentFollowup, flowOnPricelist, flowPricelistRequest, flowOnThreadAdd, flowRemindersRequest, flowReplyAsk, flowRfqRequest, flowRfqSummary, flowSuggestionCommand, flowTranslateRequest, flowWalk, NEXT, switchCancels
 };

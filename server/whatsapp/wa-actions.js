@@ -9,6 +9,10 @@
  */
 const D = require('../core').Db;
 const PriorityAccess = require('../priority').PriorityAccess;
+const PrioritySettings = require('../priority').PrioritySettings;
+
+/** "רכש — מחירונים" (‎po-pricelist.js‎) */
+const pricelistHandlers = () => (PrioritySettings.defaults().pricelistHandlers ?? []).map(Number);
 
 const ACTIONS = [
   {
@@ -156,6 +160,13 @@ const ACTIONS = [
     section: 'priority', feature: '🧾 עדכון כשהזמנת רכש הועברה לספק',
     description: 'כשהזמנת רכש בפריוריטי הופכת לסופית ("אושרה" / "נשלחה לספק"): מנהל הפרויקט (לפי מסך הפרויקטים בפריוריטי) ויוזם דרישת הרכש מקבלים את ההזמנה — הספק, הפריטים, הכמויות והמחירים, ו-PDF של ההזמנה. במייל — לכתובת שבכרטיס המשתמש בפריוריטי; בוואטסאפ — כשיש משתמש משימון עם אותו מייל וטלפון בפרופיל (בשעות הפעילות). סריקה כל 10 דקות, קריאה בלבד. בהפעלה הראשונה ההזמנות הסופיות הקיימות נרשמות בלי שליחה. בסביבת בדיקה (test11) — רק למנהלי המערכת. החברות: PO_NOTIFY_COMPANIES, או כל החברות שהבוט מכיר. דורש PRIORITY_USER ו-PRIORITY_PASSWORD.',
     examples: [],
+    enabled: false
+  },
+  {
+    key: 'po_pricelist', icon: '🏷️', label: 'הוספה למחירון ספק מהזמנה', channel: 'proactive',
+    section: 'priority', feature: '🏷️ *הוספה למחירון ספק* — "מחירון PO…"',
+    description: 'כשהזמנת רכש בפריוריטי הופכת לסופית: הפריטים שבה שאינם במחירון של הספק (מחירון הפרויקט של ההזמנה או הכללי) נשלחים בבוט למי שברשימה "רכש — מחירונים" (משימון פריוריטי ← הגדרות). כולם / לבחור ("רק 1 ו-3", "בלי 2", "שורה 2 במחיר 30") / לא, סיכום ו"מאשר" — והפריטים נכתבים למחירון, במחיר שאחרי הנחת השורה, וגם ל"מוצרים לספק". פריט שכבר במחירון — לא מוצע. לספק בלי מחירון — רק הודעה. "לבטל את ההוספה למחירון" — מוחק מה שנוסף. גם לפי בקשה: "מחירון PO26000123". רק בחברות שפתוחות לכתיבה.',
+    examples: ['מחירון PO26000123', 'לבטל את ההוספה למחירון'],
     enabled: false
   },
   {
@@ -337,6 +348,8 @@ function allowed(actor, key) {
   if (key === 'instinct' && !D.getSetting('instinct_open', false) && !instinctPilot().includes(actor?.id)) return false;
   if (PILOT_KEYS.has(key) && D.getSetting('bot_pilot', false) && !inPilot(actor)) return false;
   if (PRIORITY_DOC[key]) return Boolean(a?.enabled && PriorityAccess.can(actor, PRIORITY_DOC[key]));
+  // 🏷️ הוספה למחירון — רק מי שברשימה "רכש — מחירונים" (משימון פריוריטי ← הגדרות) ומנהלי מערכת; גם הטיפ
+  if (key === 'po_pricelist') return Boolean(a?.enabled && actor?.type === 'user' && (PriorityAccess.isAdmin(actor) || pricelistHandlers().includes(actor.id)));
   return Boolean(a?.enabled && (a.audience === 'all' || isManager(actor)));
 }
 
