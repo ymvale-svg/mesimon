@@ -15,6 +15,7 @@ const MeetCoord = require('../meetings').MeetingCoord;
 const { channel, currentMsg, doneEmoji, firstName, hooks, inHours, isConfigured, localDate, log, mailAlertUsers, orgUsers, react, sendButtons, sendText, splitMessage, workHours } = require('./wa-base');
 const { CANCEL, LIST_SHOWN, RANGES, chatOf, formatList, saveChat } = require('./wa-private');
 const { rememberBot } = require('./wa-tasks');
+const Instinct = require('./instinct');
 
 
 // ---------------------------------------------------------------------------
@@ -204,12 +205,18 @@ async function replyWatchTick() {
 }
 
 
+/**
+ * 🛒 חיפוש ספקים ברשת — במקביל גם דרך אינסטינקט (22.11.26, ישראל), כשהוא פעיל במערכת. זה חיפוש בשביל הקוד, לא
+ * בקשה של העובד — לכן לא תלוי בפיילוט שלו: יוצא רק המבוקש, והתשובה חוזרת לפנייה (לא לעובד)
+ */
+const rfqAsk = (actor) => (WaActions.byKey('instinct')?.enabled ? (text) => Instinct.search(actor.id, text) : null);
+
 // 🛒 פנייה לספקים — החיפוש והשליחה ברקע (חיפוש ברשת לוקח זמן)
 function rfqPrepare(actor, rfqId) {
   const ref = currentMsg.get(actor.id);
   setImmediate(async () => {
     try {
-      const r = await Rfq.prepare(actor.id, rfqId);
+      const r = await Rfq.prepare(actor.id, rfqId, { ask: rfqAsk(actor) });
       void react(ref, '');
       await pushToUser(actor.id, { text: r.text, buttons: r.buttons ?? [], draft: r.draft ?? null }, 'rfq');
     } catch (err) {
