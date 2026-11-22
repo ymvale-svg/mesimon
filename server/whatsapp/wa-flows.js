@@ -1029,8 +1029,13 @@ async function flowInstinctExplicit({ user, actor, dry, out, t }) {
  * ולא "ביטול" / "תפריט".
  */
 const NOT_A_REPLY = /^(?:ביטול|בטל|תפריט|עזרה|🗑️|👎)\s*$/;
+/**
+ * בקשת עבודה — תזכורת, משימות — אינה תשובה לאינסטינקט גם כשהוא שאל: עוברת להבנת הבקשה (באג 22.11.26: "תזכיר לי את
+ * הדברים הבאים בשעה עשר וחצי. אחד: …" אחרי "מה לברר אצל אייל?" יצאה לאינסטינקט, וחזרה רשימה ב-files.instinct.com)
+ */
+const WORK_REQUEST = /(?:^|[\s,.:"])(?:ת?זכיר(?:י|ו)?\s+(?:לי|ל[א-ת]+)|תזכור(?:ת|ות)|משימ(?:ה|ות|ון))/;
 async function flowInstinctReply({ user, actor, dry, out, state, t }) {
-  if (!user || state.awaiting || NOT_A_REPLY.test(t) || !Instinct.allowed(actor)) return NEXT;
+  if (!user || state.awaiting || NOT_A_REPLY.test(t) || WORK_REQUEST.test(t) || !Instinct.allowed(actor)) return NEXT;
   const asked = Instinct.awaitingReply(user.id);
   if (!asked) return NEXT;
   if (dry) return out(`🤖 (בדיקה) תשובה לאינסטינקט: "${Instinct.redact(t)}"`, {}, { action: 'instinct', status: 'ok', result: 'תשובה לשאלה (בדיקה — לא נשלח)' });
