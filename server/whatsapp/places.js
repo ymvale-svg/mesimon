@@ -146,8 +146,10 @@ function fire(userId, place, on) {
  * מיקום חדש של העובד מוואטסאפ. ‎source‎: ‎whatsapp‎ (מיקום 📍) / ‎whatsapp_live‎ (שיתוף בזמן אמת).
  * @returns {{ok: boolean, place: object|null, arrived: object|null, left: object|null, fired: object[], first: boolean, reason?: string}}
  *   ‎first‎ — ההודעה הראשונה של שיתוף בזמן אמת (לפניה לא היה שיתוף פעיל) — רק עליה עונים; על העדכונים — שקט.
+ *   ‎track: false‎ — אין תזכורת שמחכה למקום: לא מחשבים נקודת ציון ולא שומרים אותה. נשמרים רק ‎source‎ ו-‎at‎
+ *   (עם ‎place_id = NULL‎) — כדי ש-‎liveActive‎ ימשיך לזהות את ההודעה הראשונה של שיתוף (#227).
  */
-function report(userId, { lat, lng, accuracy = null, source = 'whatsapp', at = null } = {}) {
+function report(userId, { lat, lng, accuracy = null, source = 'whatsapp', at = null, track = true } = {}) {
   const none = { place: null, arrived: null, left: null, fired: [], first: false };
   lat = Number(lat); lng = Number(lng);
   if (!validCoord(lat, lng)) return { ok: false, reason: 'bad', ...none };
@@ -158,6 +160,12 @@ function report(userId, { lat, lng, accuracy = null, source = 'whatsapp', at = n
   const prev = lastOf(userId);
   // עדכון ישן יותר ממה שכבר יש (הגיע באיחור) — לא מחזיר אחורה
   if (prev && Date.parse(when) < Date.parse(prev.at)) return { ok: true, reason: 'old', ...none, place: currentPlace(userId) };
+  if (!track) {
+    D.run(`INSERT INTO user_locations (user_id, lat, lng, accuracy, source, place_id, at) VALUES (?,NULL,NULL,NULL,?,NULL,?)
+      ON CONFLICT(user_id) DO UPDATE SET lat = NULL, lng = NULL, accuracy = NULL, source = excluded.source, place_id = NULL, at = excluded.at`,
+    userId, source, when);
+    return { ok: true, ...none, first };
+  }
   const prevPlace = prev?.place_id && Date.parse(when) - Date.parse(prev.at) < STALE_MS ? get(prev.place_id) : null;
   const here = placeAt({ lat, lng }, prevPlace?.id ?? null);
   const fired = [];

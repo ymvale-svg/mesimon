@@ -189,8 +189,18 @@ function answer(userId, d, text) {
 /**
  * 📍 מיקום מוואטסאפ: מיקום 📍 רגיל, או שיתוף בזמן אמת (‎live‎ — ההודעה הראשונה והעדכונים שאחריה).
  * ‎text: null‎ — לא עונים (עדכון של שיתוף בזמן אמת: התזכורת עצמה תצא מהסבב כשמגיעים)
+ * ‎nolog: true‎ — לא נכנס ליומן הבוט
  */
 function onLocation(userId, { lat, lng, live = false }) {
+  /*
+   * שיתוף בזמן אמת בלי תזכורת שמחכה למקום — לא בודקים איפה העובד ולא שומרים, ולא רושמים ביומן (‎nolog‎).
+   * עונים רק על ההודעה הראשונה של השיתוף (צמצום מידע, #227)
+   */
+  if (live && !Places.waitingCount(userId)) {
+    const r = Places.report(userId, { lat, lng, source: 'whatsapp_live', track: false });
+    const text = r.ok && r.first ? '📍 תודה! קיבלתי את שיתוף המיקום.\nאין כרגע תזכורות שמחכות למקום — אפשר להפסיק את השיתוף.' : null;
+    return { text, nolog: true, quiet: true, result: 'שיתוף מיקום בזמן אמת — אין תזכורות שמחכות למקום' };
+  }
   const r = Places.report(userId, { lat, lng, source: live ? 'whatsapp_live' : 'whatsapp' });
   const where = r.place ? `ב${r.place.name}` : 'מחוץ לנקודות הציון';
   if (!r.ok) return { text: live ? null : '📍 לא הצלחתי לקרוא את המיקום. נסו לשלוח שוב.', result: `מיקום — ${r.reason}`, log: `מיקום — ${r.reason}` };

@@ -1095,6 +1095,8 @@ async function handleDirect(msg) {
     // מי שתזכורות כבויות אצלו — המיקום לא נבדק ולא נשמר (אבטחה 17.11.26)
     if (!WaActions.allowed(actor, 'reminders')) return;
     const r = Reminders.onLocation(user.id, msg.location);
+    // שיתוף בזמן אמת בלי תזכורת שמחכה למקום — לא ביומן (#227)
+    if (r.nolog) { if (r.text) await sendText(msg.chatId, r.text); return; }
     // עדכון שקט — ליומן פעם בחצי שעה לכל היותר (כדי לראות שהעדכונים מגיעים, ובאיזו צורה)
     const quietLogged = quietLocationLog.get(user.id) ?? 0;
     if (r.quiet && Date.now() - quietLogged < 30 * 60000) return;
