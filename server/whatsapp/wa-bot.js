@@ -80,7 +80,7 @@ const Meetings = require('../meetings').Meetings;
 const Instinct = require('./instinct');
 const { appRoot, lastOutId, buttonReplyText, candidatesOf, chains, channel, checkState, currentMsg, DAY, DIGEST_GRACE_MIN, doneEmoji, emailText, enqueueAs, firstName, HISTORY_TURNS, hooks, inHours, isConfigured, localDate, log, mailAlertUsers, markDone, onDirect, orgUsers, parseJson, PICK_SHOWN, pickText, publicStatus, qr, react, reactNow, readLog, recentFiles, remove, resolveMentions, save, sendButtons, sendText, setState, signatureFields, signatureLine, splitMessage, taskLink, todayStats, userByPhone, WALK, workHours } = require('./wa-base');
 const { analyzeGroup, bindGroup, listGroups, notifyAdmins, processGroup, processGroups, prune, recipientOf, sanitizeGroup } = require('./wa-groups');
-const { CANCEL, FORWARD_MAX, LIST_SHOWN, PLAIN_FEATURES, PLAIN_GREETING, PLAIN_HELP, PLAIN_INSIGHTS, PLAIN_LIST, PLAIN_TODAY, RANGES, READ_ALOUD, READ_ALOUD_DOWN, YES, actionOf, addForward, chatOf, checkDraft, clearForwards, draftText, emptyChat, featuresText, findContactCards, formatList, forwardsOf, helpText, localDay, readAloudAllowed, readAloudFile, readAloudText, saveChat, shortDate, sourceOf, understand, unknownReplied, withForwards } = require('./wa-private');
+const { batchDraft, batchText, CANCEL, FORWARD_MAX, LIST_SHOWN, PLAIN_FEATURES, PLAIN_GREETING, PLAIN_HELP, PLAIN_INSIGHTS, PLAIN_LIST, PLAIN_TODAY, RANGES, READ_ALOUD, READ_ALOUD_DOWN, YES, actionOf, addForward, chatOf, checkDraft, clearForwards, draftText, emptyChat, featuresText, findContactCards, formatList, forwardsOf, helpText, localDay, readAloudAllowed, readAloudFile, readAloudText, saveChat, shortDate, sourceOf, understand, unknownReplied, withForwards } = require('./wa-private');
 const { deliver, flushOutbox, messageUser, messageUserNow, notifyAssignment, sendFilesToUser } = require('./wa-tasks');
 const { answerLike, busyFor, meetCoordRun, meetCoordTick, pushToUser, questionTtlMin, releaseQuestion, replyWatchTick, rfqPrepare, rfqSend, rfqTick, sendSummaries, staleQuestion, userLastAt } = require('./wa-proactive');
 const { businessCommand, closeAlerted, closureDecision, confirmPending, contactOf, createFromDraft, draftEmail, findRecipients, mailActionAlerts, mailAlertFor, mailAlerts, parseThreadAdd, resolveCc, solveText, startGoodsFromMail, suggestionDecision, suggestionFeedback, threadAddText, VIA_EMAIL, VIA_MESIMON } = require('./wa-mail');
@@ -249,7 +249,7 @@ async function receiveOne(ch, timeout = LISTEN_TIMEOUT) {
 const PENDING_KINDS = ['email', 'mail_reply', 'reply_ask', 'email_pick', 'mail_task'];
 
 
-const topicKinds = () => (switchCancels() ? [...PENDING_KINDS, 'task', 'complete', 'comment', 'menu'] : PENDING_KINDS);
+const topicKinds = () => (switchCancels() ? [...PENDING_KINDS, 'task', 'task_batch', 'complete', 'comment', 'menu'] : PENDING_KINDS);
 
 
 // פתיחות של תיקון: "תוסיף…", "בלי…", "באנגלית", "יותר קצר", "במקום…"
@@ -262,6 +262,7 @@ function pendingSummary(d) {
   if (d.kind === 'reply_ask') return 'הבוט שאל מה לענות למייל שנבחר מהתובנות';
   if (d.kind === 'mail_task') return `הבוט שאל אם לפתוח משימה ממייל שהתקבל: ${d.title ?? ''}`;
   if (d.kind === 'email_pick') return `הבוט שאל למי לשלוח מייל ("${d.name || ''}")${d.request ? ` — הבקשה: ${d.request}` : ' — וגם מה לכתוב'}`;
+  if (d.kind === 'task_batch') return `טיוטה של ${d.items?.length ?? 0} משימות: ${(d.items ?? []).map((x) => x.title).join(' · ').slice(0, 600)}`;
   if ((d.kind ?? 'task') === 'task') return `טיוטת משימה: ${d.title ?? ''}${d.assignee ? ` · אחראי: ${d.assignee}` : ''}${d.due ? ` · עד ${d.due}` : ''}`;
   if (d.kind === 'complete') return `הבוט שאל אם לסמן כבוצעה את המשימה: ${d.title ?? ''}`;
   if (d.kind === 'comment') return `הבוט שאל אם להוסיף הערה למשימה "${d.title ?? ''}": ${d.text ?? ''}`;
@@ -990,6 +991,12 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
 
     case 'create_task':
     default:
+      // 📝📝 כמה משימות בהודעה אחת — כולן בטיוטה אחת, "כן" אחד (באג 22.11.26: "אני יכול לפתוח רק משימה אחת בכל פעם")
+      if (u.intent === 'create_task' && (u.tasks ?? []).length >= 2) {
+        const draft = batchDraft(actor, u.draft, u.tasks);
+        return out(batchText(draft, user), { draft, awaiting: true },
+          { action: 'create_task', status: 'ok', result: `טיוטה: ${draft.items.length} משימות — ${draft.items.map((x) => x.title).join(' · ')}`.slice(0, 300) });
+      }
       if (u.ready && u.draft.title) {
         const draft = checkDraft(actor, u.draft);
         return out(draftText(draft, user), { draft, awaiting: true },

@@ -17,6 +17,12 @@ const MIN_WORDS = 10;
 const MAX_REQUESTS = 5;
 
 // מילים שמחברות בקשות — בלעדיהן אין סיבה לחשוד שיש יותר מאחת
+/**
+ * רשימה ממוספרת ("אחד: … שתיים: … שלוש: …") — בקשה אחת של כמה משימות, ולא מפרקים אותה: הפירוק עוצר ב-5 בקשות
+ * ושואל על כל אחת בנפרד (באג 22.11.26: רשימה של 19 משימות)
+ */
+const ORDINALS = /(?:^|[\s.,])(?:אחת?|שתיים|שניים|שתי|שלוש|ארבע|חמש|שש|שבע|שמונה|תשע|עשר|1|2|3|4|5|6|7|8|9|10)\s*[:.)-]/g;
+const isNumberedList = (text) => (text.match(ORDINALS) ?? []).length >= 3;
 const JOINERS = /(?:^|\s)(?:ו(?:גם|תפתח|תשלח|שלח|פתח|תגיד|תכתוב|תזכיר|תענה|תקבע|קבע)|וכן|אחר כך|בנוסף|דבר נוסף|ועוד)(?=\s|$)/;
 
 const SCHEMA = {
@@ -46,6 +52,7 @@ async function split(text, { classify = false } = {}) {
   if (!clean) return [];
   const words = clean.split(' ').length;
   const maybeMany = words >= MIN_WORDS && JOINERS.test(clean);
+  if (isNumberedList(clean)) return [{ kind: classify ? 'task' : null, text: clean }];
   if (!Claude.isEnabled() || (!maybeMany && !classify)) return [{ kind: null, text: clean }];
   try {
     const out = await Claude.json({ feature: 'bot.voice', system: fs.readFileSync(SKILL, 'utf8'), content: [{ type: 'text', text: `<<<\n${clean.slice(0, 4000)}\n>>>` }], schema: SCHEMA, effort: 'low', live: true });
@@ -61,4 +68,4 @@ async function split(text, { classify = false } = {}) {
   }
 }
 
-module.exports = { split };
+module.exports = { split, isNumberedList };
