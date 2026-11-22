@@ -76,6 +76,8 @@ const API = (() => {
     deleteProjectImage: (imageId) => call('DELETE', `/api/project-images/${imageId}`),
 
     reports: () => call('GET', '/api/reports'),
+    // 🔀 איחוד: המשימה ‎id‎ נסגרת, והתוכן שלה עובר ל-‎intoId‎
+    mergeTask: (id, intoId) => call('POST', `/api/tasks/${id}/merge`, { intoId }),
     // ‎scope‎ ריק הוא "שלי" — ברירת המחדל נקבעת בשרת ולא נשכפלת לכאן
     search: (q, scope) => call('GET',
       `/api/search?q=${encodeURIComponent(q)}${scope ? `&scope=${encodeURIComponent(scope)}` : ''}`),
@@ -109,6 +111,8 @@ const API = (() => {
     updateDepartment: (id, body) => call('PATCH', `/api/departments/${id}`, body),
     deleteDepartment: (id) => call('DELETE', `/api/departments/${id}`),
     updateUser: (id, body) => call('PATCH', `/api/admin/users/${id}`, body),
+    userDeleteCheck: (id) => call('GET', `/api/admin/users/${id}/delete-check`),
+    deleteUser: (id, transferTo) => call('DELETE', `/api/admin/users/${id}`, transferTo ? { transferTo } : {}),
     setUserGrants: (id, grants) => call('PUT', `/api/admin/users/${id}/grants`, { grants }),
 
     createVendor: (body) => call('POST', '/api/vendors', body),

@@ -12,7 +12,7 @@
  */
 
 // שינוי המספר מפסל את המטמון הקודם ומאלץ טעינה מחדש של קבצי המערכת
-const VERSION = 'mesimon-v24';
+const VERSION = 'mesimon-v80';
 
 /**
  * מה נשמר מראש. רק מה שנדרש כדי שהמסך ייבנה: אם אחד מהם חסר, האפליקציה לא
@@ -25,6 +25,9 @@ const SHELL = [
   '/css/mobile.css',
   '/js/api.js',
   '/js/ui.js',
+  '/js/time-picker.js',
+  '/js/feature-anchors.js',
+  '/js/spotlight.js',
   '/js/app.js',
   '/js/views/login.js',
   '/js/views/invite.js',
@@ -32,16 +35,36 @@ const SHELL = [
   '/js/views/home.js',
   '/js/views/mobile.js',
   '/js/views/grid.js',
+  '/js/views/class-picker.js',
   '/js/views/board.js',
   '/js/views/tracker.js',
+  '/js/views/flow.js',
   '/js/views/task-card.js',
   '/js/views/ai-task.js',
   '/js/views/ai-inbox.js',
+  '/js/views/mail-memory.js',
+  '/js/views/mail-ask.js',
+  '/js/views/admin-ai.js',
+  '/js/views/task-sync.js',
   '/js/views/checklist-item.js',
   '/js/views/vendor-portal.js',
   '/js/views/reports.js',
   '/js/views/admin.js',
+  '/js/views/whats-new.js',
+  '/js/views/today.js',
+  '/js/views/meeting.js',
+  '/js/views/calendar.js',
+  '/js/views/recordings.js',
+  '/js/views/recording-player.js',
+  '/js/views/voice.js',
+  '/js/views/location.js',
+  '/js/views/assistant.js',
+  '/js/views/contact-picker.js',
+  '/js/views/phonebook.js',
+  '/js/views/assignee-picker.js',
+  '/js/voice-wake.js',
   '/icons/icon-192.png',
+  '/icons/bot.svg',
   '/icons/icon-512.png'
 ];
 
@@ -221,6 +244,8 @@ self.addEventListener('fetch', (event) => {
   // בקשות שאינן GET, מקור אחר, או ה-API — ישר לרשת, בלי מטמון
   if (request.method !== 'GET' || url.origin !== self.location.origin) return;
   if (url.pathname.startsWith('/api/')) return;
+  // סרטונים נטענים בחלקים (Range, תשובת 206) — מטמון אינו יכול לשמור חלק, ולכן ישר לרשת
+  if (request.headers.has('range') || /\.mp4$/i.test(url.pathname)) return;
 
   /**
    * ניווט (פתיחת האפליקציה): קודם רשת, ואם אין — ה-HTML מהמטמון. הסדר הזה

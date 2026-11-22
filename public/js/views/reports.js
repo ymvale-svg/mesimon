@@ -29,9 +29,9 @@ const ReportsView = (() => {
   /** מזהה מחלקה כמפתח אחיד לסינון. מי שאינו משויך למחלקה מקובץ תחת 'none' */
   const deptKey = (id) => String(id ?? 'none');
 
-  /** המחלקה של המשתמש עצמו. הסשן מחזיר שם מחלקה, ומכאן נגזרת השורה בדוח */
+  /** המחלקה של המשתמש עצמו — לפי מזהה, כי בדוח תת-מחלקה מוצגת עם שם ההורה */
   const ownDepartment = () =>
-    data.departments.find((d) => d.name === App.state.actor?.department) ?? null;
+    data.departments.find((d) => d.id != null && d.id === App.state.actor?.departmentId) ?? null;
 
   /** המחלקה שהדוח מצטמצם אליה כרגע, או null כשהתמונה ארגונית */
   function activeKey() {

@@ -108,13 +108,18 @@
   .tabbar button {
     flex: 1; border: 0; background: none; cursor: pointer;
     display: flex; flex-direction: column; align-items: center; justify-content: center;
-    gap: 3px; font-size: var(--fs-xs); color: var(--text-faint); font-family: inherit;
+    gap: 3px; font-size: 12px; color: var(--text-mute); font-family: inherit;
     padding: 0; min-width: 0;
   }
+  /*
+   * 12 ולא 10.5: מתחת לזה התווית אינה קריאה בטלפון באור יום. חמש לשוניות
+   * ב-390 פיקסלים הן 78 פיקסלים כל אחת, והתווית הארוכה ("התראות") נכנסת
+   * גם ב-12 — ואם לא, ‎.lbl‎ מתקצר בשלוש נקודות ולא גולש.
+   */
   .tabbar button .ic { width: 21px; height: 21px; }
   /* עוטף האייקון — נקודת העיגון של מונה ההתראות שמעליו */
   .tabbar button .ic-wrap { display: grid; place-items: center; position: relative; }
-  .tabbar button.active { color: var(--brand); font-weight: 700; }
+  .tabbar button.active { color: var(--brand-ink); font-weight: 700; }
   .tabbar button span.lbl { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
   /* מונה על אייקון ההתראות */
   .tabbar .tab-dot {
@@ -136,6 +141,28 @@
   }
   .fab:active { transform: scale(.94); }
 
+  /*
+   * ✨ שאל את אשל — עיגול צף מול ה-＋ (בצד השני של המסך), באותו גובה. סגול-
+   * טורקיז כמו כפתור "שאל את אשל" במחשב, כדי שיזוהה כאותה פעולה.
+   */
+  .fab-ask {
+    position: fixed; z-index: 51;
+    inset-inline-end: 16px;
+    bottom: calc(var(--nav-h) + env(safe-area-inset-bottom, 0px) + 14px);
+    width: 52px; height: 52px; border-radius: 50%; border: 0; cursor: pointer;
+    background: linear-gradient(135deg, #7c3aed, #0d9488); color: #fff; font-size: 24px;
+    box-shadow: 0 6px 18px rgba(124, 58, 237, .35);
+    display: grid; place-items: center; line-height: 1;
+  }
+  .fab-ask:active { transform: scale(.94); }
+
+  /* מגירת "שאל את אשל": השיחה גולשת עם המגירה, והשדה נשאר בראש */
+  .ask-sheet .mask-thread { max-height: none; overflow: visible; }
+  .ask-sheet .mask-form { position: sticky; top: 0; z-index: 2; background: var(--surface); padding-block: 4px; }
+  .ask-sheet .mask-form input { font-size: 16px; }   /* 16 ומעלה — iOS לא מגדיל את המסך במיקוד */
+  .mask-mic.is-live { background: #dc2626; color: #fff; border-color: #dc2626; animation: mask-mic-pulse 1.2s ease-in-out infinite; }
+  @keyframes mask-mic-pulse { 50% { box-shadow: 0 0 0 6px rgba(220, 38, 38, .2); } }
+
   /* ---------------------------------------------------------------- שדות ומגע */
 
   /*
@@ -147,6 +174,8 @@
   input[type=datetime-local], input[type=number], input[type=search], input[type=tel], input[type=url], select, textarea {
     font-size: 16px; padding: 10px 12px;
   }
+  /* מקום לזכוכית המגדלת שבתחילת שורת החיפוש */
+  input[type=search] { padding-inline-start: calc(var(--sg-x) + var(--sg-size) + 10px); }
   .btn { min-height: 40px; padding: 9px 14px; }
   .btn-sm { min-height: 34px; padding: 6px 11px; font-size: var(--fs-md); }
   .icon-btn { min-width: 40px; min-height: 40px; }
@@ -155,7 +184,7 @@
   /* ---------------------------------------------------------------- כרטיסים ומודלים */
 
   .page-head { margin-bottom: 12px; gap: 10px; }
-  .page-head h2 { font-size: var(--fs-xl); }
+  .page-head h1, .page-head h2 { font-size: 19px; }
   .page-head .sub { display: none; }
   .grid.grid-2, .grid.grid-3, .grid.grid-4 { grid-template-columns: 1fr; }
 
@@ -181,6 +210,17 @@
   .modal-head { padding: 12px 14px; }
   .modal-body { padding: 14px; }
   .modal-foot { border-radius: 0; padding: 12px 14px; flex-wrap: wrap; }
+  /*
+   * החלון לעולם לא רחב מהמסך. ב"החשבון שלי" טבלת הפרטים (עמודת כותרות
+   * רחבה + שלושת כפתורי המראה בשורה אחת) דחפה את החלון ל-432 פיקסלים במסך
+   * של 412 — ה-✕ ו"סגירה" נחתכו בשפה השמאלית.
+   */
+  .modal { min-width: 0; max-width: 100vw; }
+  .modal-body table.data { width: 100%; }
+  .modal-body table.data th { width: 32%; white-space: normal; padding-inline: 8px; }
+  .modal-body table.data td { padding-inline: 8px; }
+  .modal-body .theme-switch { flex-wrap: wrap; }
+  .modal-body .theme-switch button { padding: 5px 9px; }
   .row { flex-direction: column; gap: 0; }
 
   /*
@@ -295,20 +335,16 @@
    * מעל המגירה הצדדית (60) ומתחת למודל (100): התפריט נפתח מעל רשימת
    * הפרויקטים, אבל אישור המחיקה שנפתח ממנו חייב לכסות אותו.
    */
-  .proj-sheet-veil { z-index: 70; }
   /*
    * רקע אחד ולא שניים. המגירה התחתונה נפתחת מעל המגירה הצדדית, ושני
    * הרקעים הכהים מצטברים (‎.42‎ מתחת ל-‎.45‎ ≈ ‎.68‎) — כהה בהרבה מכל מגירה
    * אחרת במערכת. הרקע של המגירה הצדדית מתעמעם כל עוד התפריט פתוח.
+   * (השכבה עצמה — מעל המגירה הצדדית ומתחת לאישור שנפתח ממנה — נקבעת
+   * בערימת השכבות של ‎UI.sheet‎.)
    */
-  body:has(.proj-sheet-veil) .sidebar-veil { opacity: 0; }
-  .proj-sheet { padding-top: 10px; }
+  body:has(.proj-sheet) .sidebar-veil { opacity: 0; }
   /* בטאבלט מגירה ברוחב 768 פיקסלים היא שורות ארוכות וריקות — נשארת קריאה */
   .proj-sheet { max-width: 520px; margin-inline: auto; border-radius: 16px 16px 0 0; }
-  .proj-sheet .proj-pop-head {
-    border-bottom: 1px solid var(--border); margin-bottom: 6px;
-    padding: 0 2px 10px; font-size: var(--fs-lg); color: var(--text);
-  }
   /* ביטול נפרד בראש הטווח של האגודל — במחשב סוגרים בלחיצה בחוץ או ב-Escape */
   .proj-sheet .track-opt.is-cancel {
     justify-content: center; margin-top: 6px;
@@ -354,6 +390,33 @@
   .grid-table .cell-due { font-size: var(--fs-xs); }
   .grid-table .title-tags { display: none; }   /* התגיות חוזרות בכרטיס המשימה */
 
+  /*
+   * סרגל הלוח בטלפון: מתג התצוגה, חיפוש, כפתור "סינון (n)" ושורת שבבים
+   * אחת שנגללת לרוחב. שבעת הבוררים מילאו קודם את כל המסך הראשון, והמשימות
+   * עצמן התחילו רק אחרי גלילה. המסננים השמורים נשארים למחשב.
+   */
+  .board-toolbar { gap: 8px; padding: 9px; }
+  .board-toolbar .view-switch { flex: 1 1 100%; }
+  .board-toolbar .view-switch button { flex: 1; padding: 8px 6px; }
+  .board-toolbar .tl-zoom { flex: 1 1 100%; }
+  .board-toolbar .tl-zoom button { flex: 1; }
+  .board-toolbar input[type="search"] { flex: 1 1 0; min-width: 0; font-size: 16px; }   /* 16px — אחרת iOS מגדיל את הדף במיקוד */
+  .board-toolbar .fchip-add { flex: none; min-height: 40px; }
+  .board-toolbar .fchip-add .fa-desk { display: none; }
+  .board-toolbar .fchip-add .fa-phone { display: inline; }
+  .board-toolbar .fchips {
+    flex: 1 1 100%; flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none;
+    padding-bottom: 2px; margin-inline: -2px; padding-inline: 2px;
+  }
+  .board-toolbar .fchip { flex: none; }
+  .board-toolbar .fchip-body, .board-toolbar .fchip .chip-x { min-height: 34px; }
+  .board-toolbar .spacer, .board-toolbar .tb-saved { display: none; }
+  /* תפריט הסינון בגיליון: שורות גבוהות לאגודל */
+  .fmenu .popover-option { padding: 12px 10px; font-size: 15px; }
+
+  /* ציר הזמן: עמודת שמות צרה יותר, כדי שיישאר מקום לפסים עצמם */
+  .tl-row .tl-label { padding-inline: 10px 8px; font-size: 12px; }
+
   /* המסכים שאינם מיועדים לטלפון */
   .m-desktop-only {
     background: var(--warn-bg); border: 1px solid #f4d9a8; border-radius: 11px;
@@ -373,4 +436,202 @@
   .ai-dialog .row { flex-direction: column; gap: 0; }
   .ai-msg { max-width: 100%; }
   .ai-revise { flex-direction: column; }
+}
+
+/* Today, הקלטה והאזנה — בטלפון */
+@media (max-width: 820px) {
+
+  /*
+   * פס הפעולה מעל הניווט התחתון: ☀ Today ו-🎙 הקלטה בגודל שווה, גבוהים
+   * ונגישים באגודל — שתי הפעולות השימושיות ביותר מהטלפון. 👂 ההאזנה צרה
+   * יותר, כי היא מתג ולא יעד.
+   */
+  :root { --action-h: 60px; }
+  .m-actionbar {
+    position: fixed; inset-inline: 0; z-index: 50;
+    bottom: calc(var(--nav-h) + env(safe-area-inset-bottom, 0px));
+    display: flex; gap: 8px; padding: 6px 10px;
+    background: linear-gradient(to top, var(--surface) 70%, rgba(255, 255, 255, 0));
+  }
+  .m-action {
+    flex: 1; height: calc(var(--action-h) - 12px); border-radius: 14px; border: 0; cursor: pointer;
+    display: flex; align-items: center; justify-content: center; gap: 8px;
+    font-family: inherit; font-size: 17px; font-weight: 800; position: relative;
+    box-shadow: 0 4px 14px rgba(15, 23, 42, .14);
+  }
+  .m-action > span:first-child { font-size: 22px; }
+  .m-action:active { transform: scale(.97); }
+  .m-action-today { background: #fbbf24; color: #78350f; }
+  .m-action-today.active { background: #f59e0b; }
+  .m-action-mic { background: var(--brand); color: #fff; }
+  .m-action-wake { flex: 0 0 74px; flex-direction: column; gap: 0; font-size: 11px; background: var(--surface); color: var(--text-soft); border: 1px solid var(--border-strong); }
+  .m-action-wake.on { background: #7c3aed; color: #fff; border-color: #7c3aed; }
+  .m-action .today-badge { position: absolute; top: 6px; inset-inline-end: 10px; }
+  .tabbar .tab-emoji { font-size: 19px; line-height: 21px; }
+
+  /* התוכן מפנה מקום גם לפס הפעולה, והכפתור הצף עולה מעליו */
+  .main { padding-bottom: calc(var(--nav-h) + var(--action-h) + env(safe-area-inset-bottom, 0px) + 14px); }
+  .fab { bottom: calc(var(--nav-h) + var(--action-h) + env(safe-area-inset-bottom, 0px) + 10px); width: 46px; height: 46px; font-size: 24px; }
+  .fab-ask { bottom: calc(var(--nav-h) + var(--action-h) + env(safe-area-inset-bottom, 0px) + 10px); width: 46px; height: 46px; font-size: 21px; }
+  .toast-root { bottom: calc(var(--nav-h) + var(--action-h) + env(safe-area-inset-bottom, 0px) + 8px); }
+
+  /* בטלפון Today והקלטה בפס הפעולה — לא בסרגל העליון */
+  .topbar .today-btn, .topbar .mic-btn { display: none; }
+
+  .today { gap: 10px; }
+  .today-head h2 { font-size: 19px; }
+  .today-row { padding: 11px 12px; align-items: flex-start; }
+  .today-task .m-check { margin-top: 2px; }
+  .today-actions { flex-direction: column; align-items: stretch; }
+  .today-actions .btn { min-height: 36px; justify-content: center; }
+  .today-event { flex-wrap: wrap; }
+  .today-event .today-actions { flex-direction: row; width: 100%; justify-content: flex-end; }
+  .today-mail-actions .btn { min-height: 38px; justify-content: center; }
+  .today-pick-other { flex-direction: column; align-items: stretch; }
+
+  /* מסך ההקלטה — מסך מלא */
+  .voice-overlay { padding: 0; place-items: stretch; }
+  .voice-panel { width: 100%; max-height: none; height: 100dvh; border-radius: 0; padding: calc(env(safe-area-inset-top, 0px) + 12px) 16px calc(env(safe-area-inset-bottom, 0px) + 16px); }
+  .voice-mic { width: 148px; height: 148px; font-size: 58px; margin: 18px 0 8px; }
+  .voice-live { font-size: 19px; }
+  .voice-foot { margin-top: auto; }
+  .voice-send { flex: 1; justify-content: center; min-height: 50px; font-size: 17px; }
+  .toast-action { flex-direction: column; align-items: stretch; }
+  .toast-action .toast-buttons .btn { flex: 1; justify-content: center; min-height: 38px; }
+
+  /* פס ההאזנה דוחף את הסרגל העליון מטה כדי שלא יסתיר אותו */
+  body:has(.wake-banner) .shell { padding-top: 30px; }
+  .cp-list { min-width: 0; }
+}
+
+/* פגישות ויומן — בטלפון */
+@media (max-width: 820px) {
+  .mt-who { width: 72px; }
+  .mt-alt { flex-wrap: wrap; }
+  .mt-card-head .btn { min-height: 36px; }
+  .cal-people-row { flex-direction: column; }
+  .cal-hours, .cal-col { height: 640px; }
+}
+
+/*
+ * אלפון בטלפון — כל איש קשר ככרטיס, ולא טבלה: טבלה של שש עמודות גלשה
+ * הצידה, וכפתורי החיוג והעריכה נשארו מחוץ למסך.
+ *   שם
+ *   טלפון · מייל
+ *   הערה
+ *   📞 ✉ ✨ ✏ 🗑
+ */
+@media (max-width: 820px) {
+  .pb-tools { flex-wrap: wrap; }
+  .pb-tools .pb-search { max-width: none; }
+  .pb-head-acts { width: 100%; }
+  .pb-head-acts > * { flex: 1; justify-content: center; text-align: center; }
+  .pb-card .table-wrap, .pb-table-wrap { border: 0; }
+  /* ‎table.data.pb-table‎ — חזק מ-‎table.data td‎ (מסגרת וריפוד של טבלה רגילה) */
+  table.data.pb-table thead { display: none; }
+  table.data.pb-table, table.data.pb-table tbody { display: block; white-space: normal; }
+  table.data.pb-table tr {
+    display: grid; grid-template-columns: 1fr;
+    gap: 3px; padding: 12px 4px; border-bottom: 1px solid var(--border);
+  }
+  table.data.pb-table tr:last-child { border-bottom: 0; }
+  table.data.pb-table td { display: block; padding: 0; border: 0; min-width: 0; text-align: right; }
+  /* כרטיס בטלפון — רק מה שהוזן: תא ריק אינו תופס שורה */
+  table.data.pb-table td:empty { display: none; }
+  table.data.pb-table td:nth-child(1) { font-size: 15.5px; }
+  /* העמודות: 1 שם · 2 טל' 1 · 3 טל' 2 · 4 פקס · 5 מייל · 6 הערות · 7 פעולות */
+  table.data.pb-table td:nth-child(3) .pb-cell::before { content: "טל' 2"; color: var(--text-soft); margin-inline-end: 8px; }
+  table.data.pb-table td:nth-child(4) .pb-cell::before { content: 'פקס'; color: var(--text-soft); margin-inline-end: 8px; }
+  table.data.pb-table td:nth-child(5) { overflow-wrap: anywhere; color: var(--text-soft); }
+  table.data.pb-table td:nth-child(6) { color: var(--text-soft); }
+  table.data.pb-table td.pb-row-acts { display: flex; justify-content: flex-start; margin-top: 6px; gap: 4px; }
+  table.data.pb-table .pb-editing td { margin-bottom: 6px; }
+  .pb-act, .pb-row-acts .icon-btn, .pb-cell .pb-act { width: 42px; height: 42px; }
+  /* האלפון בתפריט הנפתח — שורת החיפוש, והתוצאות מתחתיה ולא בחלון צף */
+  .pb-pop { position: static; width: auto; max-height: none; box-shadow: none; border: 0; padding: 4px 0 0; animation: none; }
+/*
+ * ‎UI.sheet‎ — מגירה תחתונה שנגררת. אותו מבנה ‎m-sheet-veil / m-sheet / m-grab‎,
+ * עם כותרת, גוף נגלל ותחתית קבועה.
+ *
+ * ‎touch-action: none‎ על הידית והכותרת: שם כל תנועה היא גרירה של המגירה,
+ * והדפדפן לא צריך לנסות לגלול. על הגוף ‎pan-y‎ — הגלילה שלו נשארת טבעית,
+ * ו-JS מחליט רק כשהגוף בראש הגלילה. ‎overscroll-behavior: contain‎ — גלילה
+ * שהגיעה לסוף הרשימה אינה ממשיכה אל הדף שמאחורי המגירה.
+ */
+@media (max-width: 820px) {
+  .ui-sheet-veil { background: rgba(15, 23, 42, calc(.45 * var(--veil, 1))); }
+  .ui-sheet-veil.leaving { pointer-events: none; }
+  .m-sheet.ui-sheet {
+    display: flex; flex-direction: column; padding: 0; overflow: hidden;
+    /* התנועה בשליטת JS (גרירה והיצמדות), ולכן לא ההנפשה של ‎.m-sheet‎ */
+    animation: none; will-change: transform;
+  }
+  .m-sheet.ui-sheet:focus { outline: none; }
+  .ui-sheet .m-grab {
+    flex: none; margin: 10px auto 6px; position: relative; touch-action: none; cursor: grab;
+  }
+  /* הפס נראה 38×4 ונתפס ב-‎~100×28‎ — אצבע אינה מכוונת לפס של ארבעה פיקסלים */
+  .ui-sheet .m-grab::before { content: ''; position: absolute; inset: -12px -30px; }
+  .ui-sheet .m-sheet-head {
+    flex: none; padding: 0 16px 10px; border-bottom: 1px solid var(--border);
+    touch-action: none; cursor: grab;
+  }
+  .ui-sheet .m-sheet-head h3 { font-size: 16px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ui-sheet .m-sheet-body {
+    flex: 1 1 auto; min-height: 0; overflow-y: auto;
+    overscroll-behavior: contain; touch-action: pan-y; -webkit-overflow-scrolling: touch;
+    padding: 12px 14px calc(env(safe-area-inset-bottom, 0px) + 14px);
+  }
+  .ui-sheet .m-sheet-foot {
+    flex: none; display: flex; gap: 8px; border-top: 1px solid var(--border);
+    padding: 10px 14px calc(env(safe-area-inset-bottom, 0px) + 12px);
+  }
+  /* כשיש תחתית, היא שנושאת את אזור הבטיחות — לא הגוף שמעליה */
+  .ui-sheet .m-sheet-body:has(+ .m-sheet-foot) { padding-bottom: 12px; }
+
+  /* מגירת הפעולות של פרויקט — הפריטים צמודים, כמו בתפריט */
+  .proj-sheet .m-sheet-body { padding-inline: 10px; padding-top: 6px; }
+  .proj-sheet-items { display: flex; flex-direction: column; }
+
+  /* מגירת ההתראות — הרשימה עד הקצוות, כמו במחשב */
+  .notif-sheet .m-sheet-body { padding: 0 0 env(safe-area-inset-bottom, 0px); }
+  .notif-sheet .np-head {
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+    padding: 10px 14px; border-bottom: 1px solid var(--border);
+  }
+  /* שורת ההתראות במכשיר — אותו עיצוב כמו במגירה של המחשב, שם הוא תחת ‎.notif-panel‎ */
+  .notif-sheet .np-desktop {
+    display: flex; align-items: center; gap: 9px;
+    padding: 10px 14px; background: var(--surface-2);
+    border-bottom: 1px solid var(--border);
+    font-size: 12.5px; color: var(--text-mute); line-height: 1.4;
+  }
+  .notif-sheet .np-desktop > div { flex: 1; min-width: 0; }
+  .notif-sheet .np-desktop .btn { flex: none; }
+  .notif .n-read { width: 46px; }
+
+  /* כפתור החיפוש בסרגל העליון — כאן השדה עצמו מוסתר */
+  .topbar .m-search-btn { display: grid; }
+  .toast-undo-btn { min-height: 40px; }
+}
+
+/* ---------------------------------------------------------------- מצב לילה בטלפון */
+
+/*
+ * רוב פריסת הנייד נשענת על המשתנים ומתהפכת מעצמה (ראה "מצב לילה" בגיליון
+ * הראשי). כאן — מה שנכתב כצבע: הדעיכה מעל סרגל הפעולות הייתה דועכת ללבן
+ * שקוף, ועל רקע כהה זה נראה כערפל אפור; והודעת "מסך למחשב" בצבעי חול.
+ */
+@media (max-width: 820px) {
+  [data-theme='dark'] .m-actionbar { background: linear-gradient(to top, var(--surface) 70%, transparent); }
+  [data-theme='dark'] .m-desktop-only { border-color: rgba(251, 191, 36, .3); color: #fde68a; }
+}
+
+/*
+ * 📌 מחכות לקביעה במסך היומן. בטלפון הכפתור הממוזער יושב בראש היומן (לא צף —
+ * למטה יש כבר כפתורים צפים וסרגל ניווט), והלוח הפתוח צף מעל הכול מלמעלה.
+ */
+@media (max-width: 820px) {
+  .cal-dock-pill { position: static; align-self: flex-end; box-shadow: none; }
+  .cal-dock { top: calc(var(--header-h) + env(safe-area-inset-top, 0px) + 8px); bottom: auto; left: 12px; right: 12px; width: auto; max-height: 65vh; z-index: 60; }
 }

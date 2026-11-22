@@ -25,6 +25,17 @@ const BoardView = (() => {
    */
   const isOrgWide = () => ['superadmin', 'admin', 'executive'].includes(App.state.actor?.role);
 
+  /**
+   * מנהל מחלקה נפתח על "משימות שנתתי" — המשימות שהוא פתח — ובבחירה אחת
+   * עובר ל"כל משימות המחלקה". כל המחלקה היא רשימה ארוכה מדי כברירת מחדל,
+   * ומה שמנהל בודק ביום-יום הוא מה שהוא הטיל על אחרים.
+   */
+  const isDeptManager = () => App.state.actor?.role === 'manager';
+  const REACH_OPTIONS = [
+    { value: 'given', label: 'משימות שנתתי' },
+    { value: 'department', label: 'כל משימות המחלקה' }
+  ];
+
   /*
    * ערך המסנן "פתוחות בלבד". אינו מפתח סטטוס אמיתי, ולכן הוא נבחר כמחרוזת
    * שלא תתנגש עם מפתח עמודה — עמודות נוצרות מקוד ומקבלות מפתחות כמו
@@ -75,6 +86,14 @@ const BoardView = (() => {
         : (pick('status', params.status) || (saved.status === undefined ? OPEN_ONLY : '')),
       boardId: pick('boardId', params.boardId),
       departmentId: pick('departmentId', params.departmentId),
+      /*
+       * קיצור דרך (פרויקט, מחלקה, "שלי") מבקש תמונה שלמה, ולכן פותח את כל
+       * המחלקה; פתיחה רגילה חוזרת למה שנבחר בפעם הקודמת, ובראשונה — שנתתי.
+       */
+      reach: !isDeptManager() ? ''
+        : params.reach ?? (params.projectId || params.departmentId || params.mine
+          ? 'department'
+          : (saved.reach || 'given')),
       // חיפוש טקסט לא נשמר בכוונה
       q: '',
       archived: params.archived ? '1' : '',
@@ -100,7 +119,7 @@ const BoardView = (() => {
    * שנפתח עם חיפוש ישן נראה כאילו חסרות בו משימות.
    */
   const FILTER_KEY = 'mesimon.boardFilters';
-  const PERSISTED = ['projectId', 'assignee', 'priority', 'status', 'boardId', 'departmentId', 'onlyOverdue', 'pendingReview'];
+  const PERSISTED = ['projectId', 'assignee', 'priority', 'status', 'boardId', 'departmentId', 'reach', 'onlyOverdue', 'pendingReview'];
 
   const localFilters = () => {
     try { return JSON.parse(localStorage.getItem(FILTER_KEY) ?? '{}'); } catch { return {}; }
@@ -158,14 +177,47 @@ const BoardView = (() => {
     }
   }
 
+  /*
+   * מיקוד אחרי בנייה מחדש. ‎draw‎ מחליף את כל המסך, כולל הפקד שהמשתמש עמד
+   * עליו — ובלי שחזור, כל הסרת שבב או החלפת זום במקלדת זרקה את המיקוד לראש
+   * הדף. המפתח הוא ‎data-fk‎ יציב (‎q‎, ‎add‎, ‎chip:status‎, ‎card:12‎), ולא
+   * הפניה לאלמנט: האלמנט הישן כבר אינו במסמך.
+   */
+  let pendingFocus = null;
+  const focusKey = () => {
+    const node = document.activeElement?.closest?.('[data-fk]');
+    return node && containerRef?.contains(node) ? node.dataset.fk : null;
+  };
+
+  function restoreFocus(key) {
+    if (!key || !containerRef) return;
+    const find = (k) => containerRef.querySelector(`[data-fk="${CSS.escape(k)}"]`);
+    // שבב שנעלם (בחירת "הכול" בתפריט) — כפתור ההוספה הוא המקום הטבעי לחזור אליו
+    const node = find(key) ?? (key.startsWith('chip:') ? find('add') : null);
+    if (!node) return;
+    node.focus({ preventScroll: true });
+    if (key === 'q') node.setSelectionRange?.(node.value.length, node.value.length);
+  }
+
   function draw() {
     const scrollTop = containerRef?.scrollTop ?? 0;
+    const focus = pendingFocus ?? focusKey();
+    pendingFocus = null;
+    // מה שהוקלד בחיפוש בזמן שהטעינה רצה — אחרת הבנייה מחדש מחזירה את הערך הישן
+    const typing = document.activeElement?.dataset?.fk === 'q' ? document.activeElement.value : null;
+
     const body =
       view.mode === 'kanban' ? kanban() :
       view.mode === 'table' ? grid() :
       timeline();
     UI.mount(containerRef, header(), toolbar(), bulkBar(), body);
+    if (typing !== null) {
+      const input = containerRef.querySelector('[data-fk="q"]');
+      if (input) input.value = typing;
+    }
+    if (view.mode === 'timeline') scrollTimelineToToday();
     if (scrollTop) containerRef.scrollTop = scrollTop;
+    restoreFocus(focus);
   }
 
   /** תצוגת הטבלה המקובצת — הקישור בין הלוח למודול הגריד */
@@ -235,11 +287,22 @@ const BoardView = (() => {
     ]);
   }
 
-  function toolbar() {
-    const set = (key, value) => { filters[key] = value; saveFilters(); load(); };
+  /**
+   * הגדרת שדות הסינון — מקור אחד גם לשבבים, גם לתפריט ההוספה וגם לניקוי.
+   *
+   * ‎def‎ הוא ערך ברירת המחדל שהסרת שבב מחזירה אליו, ולא בהכרח "הכול":
+   * בסטטוס, מחוץ לארכיון, ברירת המחדל היא "פתוחות בלבד" (ראו ‎render‎),
+   * והסרת "סטטוס: הושלם" צריכה להחזיר ללוח הרגיל ולא לפתוח את כל ההיסטוריה.
+   *
+   * ‎implicit‎ מסמן ערך שהוא ברירת מחדל ובכל זאת מסתיר נתונים. הוא מוצג
+   * כשבב בלי ✕, כדי שהסרגל לעולם לא ייראה "ללא מסננים" בשעה שמשימות
+   * שהושלמו מוסתרות מהמשתמש.
+   */
+  function filterFields() {
+    const archived = filters.archived === '1';
 
     const projectOptions = [{ value: '', label: 'כל הפרויקטים' },
-      ...App.state.projects.map((p) => ({ value: p.id, label: p.name }))];
+      ...App.myProjects({ keep: filters.projectId }).map((p) => ({ value: p.id, label: p.name }))];
 
     const assigneeOptions = [{ value: '', label: 'כל האחראים' },
       ...App.state.users.map((u) => ({ value: `user:${u.id}`, label: u.name })),
@@ -268,51 +331,182 @@ const BoardView = (() => {
       ...statusSource.map((c) => ({ value: c.key, label: c.label }))
     ];
 
-    const searchInput = el('input', { type: 'search', placeholder: 'סינון לפי טקסט…', value: filters.q });
+    const fields = [
+      /*
+       * היקף הלוח של מנהל מחלקה. "שנתתי" הוא ברירת המחדל ובכל זאת מסתיר את
+       * שאר משימות המחלקה — ולכן שבב קבוע, כמו "פתוחות בלבד"
+       */
+      ...(isDeptManager()
+        ? [{ key: 'reach', label: 'היקף', options: REACH_OPTIONS, def: 'given', implicit: 'given' }]
+        : []),
+      { key: 'status', label: 'סטטוס', options: statusOptions, def: archived ? '' : OPEN_ONLY, implicit: OPEN_ONLY },
+      { key: 'projectId', label: 'פרויקט', options: projectOptions, def: '' },
+      { key: 'assignee', label: 'אחראי', options: assigneeOptions, def: '' },
+      { key: 'priority', label: 'עדיפות', options: priorityOptions, def: '' }
+    ];
+
+    if (isOrgWide() && departments.length) {
+      fields.push({ key: 'departmentId', label: 'מחלקה', def: '', options: [{ value: '', label: 'כל המחלקות' },
+        ...departments.map((d) => ({ value: d.id, label: d.label ?? d.name }))] });
+    }
+
+    if (currentScope === 'vendors') {
+      fields.push({ key: 'boardId', label: 'ספק', def: '', options: [{ value: '', label: 'כל הספקים' },
+        ...App.state.vendors.map((v) => ({ value: v.boardId, label: v.name }))] });
+    }
+
+    // "רק באיחור" היה תיבת סימון בסרגל. עכשיו הוא שדה כמו כל השאר, ולכן גם
+    // הוא מקבל שבב — אחרת היה המסנן היחיד שפעיל בלי שום סימן בסרגל
+    fields.push({ key: 'onlyOverdue', label: 'איחור', def: false, bool: true, options: [
+      { value: false, label: 'כל המשימות' }, { value: true, label: 'באיחור בלבד' }] });
+
+    // אין לו פקד משלו — מגיע רק מקיצור הדרך בדשבורד. שבב בלבד, כדי שאפשר יהיה
+    // לראות שהוא פעיל ולהסיר אותו; אין טעם להציע אותו בתפריט
+    if (filters.pendingReview) {
+      fields.push({ key: 'pendingReview', label: 'בדיקה', def: false, bool: true, hidden: true, options: [
+        { value: false, label: 'כל המשימות' }, { value: true, label: 'ממתינות לבדיקה' }] });
+    }
+    return fields;
+  }
+
+  // השוואה כמחרוזת: מזהי פרויקט מגיעים כמספר מהרשימה וכמחרוזת מההעדפות
+  const same = (a, b) => String(a ?? '') === String(b ?? '');
+  const optionLabel = (field, value) =>
+    field.options.find((o) => same(o.value, value))?.label ?? String(value);
+
+  /** השבבים הפעילים לפי הסדר שבו הם מוצגים — גם הבסיס לבחירת השכן להתמקדות */
+  function activeChips(fields) {
+    return fields
+      .filter((f) => !same(filters[f.key], f.def) || (f.implicit !== undefined && same(filters[f.key], f.implicit)))
+      // ‎false‎ ו'' שקולים ל"ללא מסנן" גם כשהם אינם ברירת המחדל (ארכיון ללא סטטוס)
+      .filter((f) => filters[f.key] !== '' && filters[f.key] !== false && filters[f.key] !== undefined)
+      .map((f) => ({
+        field: f,
+        implicit: f.implicit !== undefined && same(filters[f.key], f.implicit),
+        // שדה כן/לא נקרא טוב יותר בערכו בלבד — "באיחור בלבד", ולא "איחור: באיחור בלבד"
+        text: f.bool || (f.implicit !== undefined && same(filters[f.key], f.implicit))
+          ? optionLabel(f, filters[f.key])
+          : `${f.label}: ${optionLabel(f, filters[f.key])}`
+      }));
+  }
+
+  /*
+   * אזור הכרזה אחד לכל הלוח, מחוץ לסרגל. הסרגל נבנה מחדש בכל שינוי, ואזור
+   * ‎aria-live‎ שנוצר יחד עם התוכן שלו אינו מוכרז ברוב קוראי המסך — הם
+   * מאזינים לשינויים באזור שכבר קיים, לא לאזור שנולד.
+   */
+  let liveNode = null;
+  function announce(text) {
+    if (!liveNode || !liveNode.isConnected) {
+      liveNode = el('div.sr-only', { role: 'status', 'aria-live': 'polite' });
+      document.body.appendChild(liveNode);
+    }
+    // ריקון ואז כתיבה בתור הבא — אותו משפט פעמיים ברצף (שתי הסרות) הוא
+    // לא-שינוי מבחינת קורא המסך, והשני היה נבלע
+    liveNode.textContent = '';
+    setTimeout(() => { liveNode.textContent = text; }, 30);
+  }
+
+  const isPhone = () => window.matchMedia('(max-width: 820px)').matches;
+
+  function toolbar() {
+    /*
+     * ‎focusAfter‎ — מה יקבל את המיקוד אחרי הבנייה מחדש. ‎draw‎ מחליף את כל
+     * הסרגל, ומי שהסיר שבב במקלדת היה נזרק לראש הדף ומתחיל לנווט מההתחלה.
+     */
+    const set = (key, value, focusAfter) => {
+      filters[key] = value;
+      saveFilters();
+      pendingFocus = focusAfter ?? focusKey();
+      // חיפוש טקסט נטען בשקט: ספינר היה מוחק את שדה החיפוש באמצע ההקלדה
+      load(key === 'q' ? { silent: true } : {});
+    };
+
+    const fields = filterFields();
+    const chips = activeChips(fields);
+    const removable = chips.filter((c) => !c.implicit);
+
+    const searchInput = el('input', {
+      type: 'search', placeholder: 'סינון לפי טקסט…', value: filters.q,
+      'aria-label': 'סינון המשימות לפי טקסט', dataset: { fk: 'q' }
+    });
     let timer;
     searchInput.addEventListener('input', () => {
       clearTimeout(timer);
-      timer = setTimeout(() => set('q', searchInput.value.trim()), 300);
+      timer = setTimeout(() => set('q', searchInput.value.trim(), 'q'), 300);
     });
 
+    const removeChip = (chip) => {
+      const i = chips.indexOf(chip);
+      // השכן שאחריו, ואם אין — זה שלפניו. שבב "פתוחות בלבד" שנולד מההסרה
+      // (הסרת סטטוס מפורש) הוא שכן כשר: הוא באותו מקום בדיוק
+      const neighbour = chips[i + 1] ?? chips[i - 1];
+      const after = chip.field.implicit !== undefined && chip.field.def === chip.field.implicit
+        ? `chip:${chip.field.key}`
+        : neighbour ? `chip:${neighbour.field.key}` : 'add';
+      announce(`הוסר ${chip.text}`);
+      set(chip.field.key, chip.field.def, after);
+    };
+
+    const chipNodes = chips.map((chip) => {
+      const key = chip.field.key;
+      const body = el('button.fchip-body', {
+        type: 'button',
+        dataset: { fk: `chip:${key}` },
+        'aria-haspopup': 'menu',
+        title: chip.implicit ? 'ברירת המחדל של הלוח — לחיצה לבחירת סטטוס אחר' : `שינוי ${chip.field.label}`,
+        onclick: (e) => openFilterMenu(e.currentTarget, fields, set, chip.field)
+      }, [chip.text, chip.implicit ? el('span.fchip-caret', { 'aria-hidden': 'true', text: '▾' }) : null]);
+
+      return el(`div.fchip${chip.implicit ? '.is-implicit' : ''}`, { role: 'listitem' }, [
+        body,
+        chip.implicit ? null : el('button.chip-x', {
+          type: 'button',
+          'aria-label': `הסרת הסינון ${chip.text}`,
+          title: 'הסרה',
+          onclick: () => removeChip(chip)
+        }, ['✕'])
+      ]);
+    });
+
+    if (removable.length >= 2) {
+      chipNodes.push(el('button.fchip-clear', {
+        type: 'button',
+        onclick: () => {
+          for (const c of removable) filters[c.field.key] = c.field.def;
+          announce('נוקו כל המסננים');
+          set('q', filters.q, 'add');
+        }
+      }, ['ניקוי הכול']));
+    }
+
+    const addBtn = el('button.btn.btn-sm.fchip-add', {
+      type: 'button',
+      'aria-haspopup': 'menu',
+      dataset: { fk: 'add' },
+      onclick: (e) => openFilterMenu(e.currentTarget, fields, set)
+    }, [
+      el('span.fa-desk', { text: '＋ סינון' }),
+      // בטלפון השבבים בשורה נגללת ולא תמיד כולם בתצוגה — המונה אומר כמה יש
+      el('span.fa-phone', { text: chips.length ? `סינון (${chips.length})` : 'סינון' })
+    ]);
+
     const items = [
-      el('div.view-switch', {}, [
+      el('div.view-switch', { role: 'group', 'aria-label': 'תצוגת הלוח' }, [
         ['table', '☰ טבלה'], ['kanban', '▦ כרטיסיות'], ['timeline', '▤ ציר זמן']
       ].map(([mode, label]) =>
         el(`button${view.mode === mode ? '.active' : ''}`, {
+          type: 'button',
+          'aria-pressed': String(view.mode === mode),
           // גם מצב התצוגה הוא העדפה — מי שעובד בכרטיסיות לא רוצה לחזור לטבלה בכל כניסה
           onclick: () => { view.mode = mode; App.setPref('boardView', mode); draw(); }
         }, [label])
       )),
-      el('div.sep'),
-      UI.select(projectOptions, filters.projectId, { onchange: (e) => set('projectId', e.target.value) }),
-      UI.select(assigneeOptions, filters.assignee, { onchange: (e) => set('assignee', e.target.value) }),
-      UI.select(statusOptions, filters.status, { onchange: (e) => set('status', e.target.value) }),
-      UI.select(priorityOptions, filters.priority, { onchange: (e) => set('priority', e.target.value) })
+      view.mode === 'timeline' ? zoomSwitch() : null,
+      searchInput,
+      addBtn,
+      el('div.fchips', { role: 'list', 'aria-label': 'מסננים פעילים' }, chipNodes)
     ];
-
-    if (isOrgWide() && departments.length) {
-      const departmentOptions = [{ value: '', label: 'כל המחלקות' },
-        ...departments.map((d) => ({ value: d.id, label: d.name }))];
-      items.push(UI.select(departmentOptions, filters.departmentId, { onchange: (e) => set('departmentId', e.target.value) }));
-    }
-
-    if (currentScope === 'vendors') {
-      const vendorOptions = [{ value: '', label: 'כל הספקים' },
-        ...App.state.vendors.map((v) => ({ value: v.boardId, label: v.name }))];
-      items.push(UI.select(vendorOptions, filters.boardId, { onchange: (e) => set('boardId', e.target.value) }));
-    }
-
-    items.push(searchInput);
-    items.push(el('label.checkbox', {}, [
-      el('input', {
-        type: 'checkbox',
-        checked: filters.onlyOverdue,
-        // דרך set, כמו כל שאר החתכים — אחרת "רק באיחור" היה החתך היחיד שאינו נשמר
-        onchange: (e) => set('onlyOverdue', e.target.checked)
-      }),
-      'רק באיחור'
-    ]));
 
     items.push(el('div.spacer'));
 
@@ -323,6 +517,8 @@ const BoardView = (() => {
           [{ value: '', label: 'מסננים שמורים…' }, ...App.state.savedFilters.map((f) => ({ value: f.id, label: f.name }))],
           '',
           {
+            class: 'tb-saved',
+            'aria-label': 'החלת מסנן שמור',
             onchange: (e) => {
               const saved = App.state.savedFilters.find((f) => String(f.id) === e.target.value);
               // מסנן שנשמר לפני שנוספו רמת המשימה והחתך המחלקתי אינו נושא את
@@ -332,10 +528,157 @@ const BoardView = (() => {
           }
         ));
       }
-      items.push(el('button.btn.btn-sm', { onclick: saveCurrentFilter, title: 'שמירת המסננים הנוכחיים' }, ['💾 שמור מסנן']));
+      items.push(el('button.btn.btn-sm.tb-saved', { onclick: saveCurrentFilter, title: 'שמירת המסננים הנוכחיים' }, ['💾 שמור מסנן']));
     }
 
-    return el('div.toolbar', {}, items);
+    return el('div.toolbar.board-toolbar', {}, items);
+  }
+
+  /**
+   * תפריט הוספת מסנן בשני שלבים: שדה ← ערך.
+   *
+   * דפוס תפריט ARIA מלא (‎role=menu‎, ‎menuitemradio‎ עם ‎aria-checked‎, מיקוד
+   * נודד) ולא רשימת כפתורים, כי קורא המסך מודיע אז "תפריט, 7 פריטים, נבחר"
+   * — ומשתמש המקלדת מקבל חצים במקום עשרים לחיצות Tab.
+   *
+   * ב-RTL הכניסה לשלב הערכים היא חץ שמאלה והחזרה חץ ימינה — כיוון הקריאה,
+   * כמו בתפריטי משנה של מערכת ההפעלה בעברית.
+   *
+   * ‎startField‎ — לחיצה על שבב קיים פותחת ישר את ערכי השדה שלו. בחירת שדה
+   * שכבר יש לו שבב מחליפה אותו: לכל שדה ערך אחד, והשבב הוא אותו מפתח.
+   */
+  function openFilterMenu(opener, fields, set, startField = null) {
+    let step = startField ? 'values' : 'fields';
+    let field = startField;
+    let lastField = startField;
+    let typed = '';
+    let typedTimer = null;
+
+    const list = el('div.fmenu', { role: 'menu' });
+    let handle = null;
+    const phone = isPhone();
+
+    const close = (returnFocus = true) => {
+      if (!handle) return;
+      const h = handle;
+      handle = null;
+      h.close();
+      if (returnFocus && opener.isConnected) opener.focus();
+    };
+
+    const items = () => [...list.querySelectorAll('[role^="menuitem"]')];
+    const focusItem = (node) => {
+      for (const it of items()) it.tabIndex = it === node ? 0 : -1;
+      node?.focus();
+    };
+
+    const pick = (f, opt) => {
+      const had = !same(filters[f.key], f.def);
+      close(false);
+      if (same(filters[f.key], opt.value)) { opener.isConnected && opener.focus(); return; }
+      const isNone = same(opt.value, f.def) || opt.value === '' || opt.value === false;
+      announce(isNone
+        ? `הוסר ${f.label}`
+        : `${had ? 'הוחלף' : 'נוסף'} ${f.label}: ${opt.label}`);
+      set(f.key, opt.value, `chip:${f.key}`);
+    };
+
+    function drawStep() {
+      // מחרוזת הקלדה מהשלב הקודם אינה רלוונטית לרשימה החדשה
+      typed = '';
+      if (step === 'fields') {
+        list.setAttribute('aria-label', 'סינון לפי');
+        UI.mount(list, ...fields.filter((f) => !f.hidden).map((f) => el('button.popover-option', {
+          type: 'button', role: 'menuitem', tabIndex: -1, 'aria-haspopup': 'menu',
+          dataset: { key: f.key },
+          onclick: () => { field = f; lastField = f; step = 'values'; drawStep(); }
+        }, [
+          el('span', { text: f.label }),
+          // הערך הנוכחי ליד השדה — "החלפה" נראית אחרת מ"הוספה"
+          !same(filters[f.key], f.def) ? el('span.fm-current', { text: optionLabel(f, filters[f.key]) }) : null,
+          el('span.fm-arrow', { 'aria-hidden': 'true', text: '‹' })
+        ])));
+        const back = lastField && list.querySelector(`[data-key="${lastField.key}"]`);
+        focusItem(back ?? items()[0]);
+        return;
+      }
+      list.setAttribute('aria-label', field.label);
+      const checked = field.options.find((o) => same(o.value, filters[field.key]));
+      UI.mount(list,
+        el('button.popover-option.fm-back', {
+          type: 'button', role: 'menuitem', tabIndex: -1,
+          onclick: () => { step = 'fields'; drawStep(); }
+        }, [el('span.fm-arrow', { 'aria-hidden': 'true', text: '›' }), 'כל השדות']),
+        el('div.fm-sep', { role: 'separator' }),
+        ...field.options.map((o) => el('button.popover-option', {
+          type: 'button', role: 'menuitemradio', tabIndex: -1,
+          'aria-checked': String(o === checked),
+          onclick: () => pick(field, o)
+        }, [el('span', { text: o.label }), o === checked ? el('span.check', { 'aria-hidden': 'true', text: '✓' }) : null]))
+      );
+      focusItem(list.querySelector('[aria-checked="true"]') ?? items()[1]);
+    }
+
+    list.addEventListener('keydown', (e) => {
+      const all = items();
+      const at = all.indexOf(document.activeElement);
+      const move = (i) => { e.preventDefault(); focusItem(all[(i + all.length) % all.length]); };
+
+      if (e.key === 'ArrowDown') return move(at + 1);
+      if (e.key === 'ArrowUp') return move(at - 1);
+      if (e.key === 'Home') return move(0);
+      if (e.key === 'End') return move(all.length - 1);
+      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); return close(); }
+      if (e.key === 'Tab') return close(false);
+      // RTL: שמאלה = פנימה, ימינה = חזרה
+      if (e.key === 'ArrowLeft' && step === 'fields' && at >= 0) { e.preventDefault(); return all[at].click(); }
+      if (e.key === 'ArrowRight' && step === 'values') { e.preventDefault(); step = 'fields'; return drawStep(); }
+      if ((e.key === 'Enter' || e.key === ' ') && at >= 0) { e.preventDefault(); return all[at].click(); }
+
+      /*
+       * הקלדה מקדימה: אותיות שמוקלדות ברצף בתוך 700ms מצטרפות למחרוזת אחת,
+       * כך ש"דנ" מגיע לדנה ולא לדוד. אות בודדת מתחילה מהפריט הבא, כדי שלחיצות
+       * חוזרות על אותה אות יעברו בין כל מי שמתחיל בה.
+       */
+      if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey && e.key !== ' ') {
+        e.preventDefault();
+        clearTimeout(typedTimer);
+        typed += e.key.toLowerCase();
+        typedTimer = setTimeout(() => { typed = ''; }, 700);
+        const from = typed.length === 1 ? at + 1 : Math.max(0, at);
+        const order = [...all.slice(from), ...all.slice(0, from)];
+        const hit = order.find((n) => n.textContent.trim().toLowerCase().startsWith(typed));
+        if (hit) focusItem(hit);
+      }
+    });
+
+    /*
+     * בטלפון — גיליון תחתון (או המודל, עד ש-‎UI.sheet‎ קיים): תפריט צף ליד
+     * כפתור קטן נפתח מתחת לאגודל ונחתך במקלדת. במחשב — תפריט צף רגיל ליד
+     * הכפתור, כי מודל על כל המסך לבחירת ערך אחד הוא כבד מדי.
+     */
+    if (phone) {
+      const open = UI.sheet ?? UI.modal;
+      // סגירה מבחוץ (✕ של הגיליון, החלקה למטה) מחזירה גם היא את המיקוד לכפתור
+      handle = open({
+        title: 'סינון', body: list,
+        onClose: () => { if (handle) { handle = null; if (opener.isConnected) opener.focus(); } }
+      });
+    } else {
+      const pop = el('div.cell-popover.fmenu-pop', {}, [list]);
+      document.body.appendChild(pop);
+      const rect = opener.getBoundingClientRect();
+      pop.style.top = `${Math.min(rect.bottom + 4, window.innerHeight - 200)}px`;
+      // RTL — יישור לקצה הימני של הכפתור, כמו שאר הפופאוברים
+      pop.style.right = `${Math.max(8, window.innerWidth - rect.right)}px`;
+      pop.style.maxHeight = `${Math.max(180, window.innerHeight - rect.bottom - 16)}px`;
+      const onOutside = (e) => { if (!pop.contains(e.target) && !opener.contains(e.target)) close(false); };
+      const t = setTimeout(() => document.addEventListener('mousedown', onOutside), 0);
+      handle = {
+        close: () => { clearTimeout(t); document.removeEventListener('mousedown', onOutside); pop.remove(); }
+      };
+    }
+    drawStep();
   }
 
   async function saveCurrentFilter() {
@@ -380,7 +723,8 @@ const BoardView = (() => {
         onchange: (e) => e.target.value && run('status', e.target.value)
       }),
       UI.select([{ value: '', label: 'שינוי אחראי…' },
-        ...App.state.users.map((u) => ({ value: `user:${u.id}`, label: u.name })),
+        // רק מי שמותר לי לשייך אליו — אותו סינון של כל בוררי האחראי
+        ...(({ near, far }) => [...near, ...far])(UI.usersByDepartment()).map((u) => ({ value: `user:${u.id}`, label: u.name })),
         ...(App.may('assign_task_to_vendor') ? App.state.vendors.map((v) => ({ value: `vendor:${v.id}`, label: `${v.name} (ספק)` })) : [])
       ], '', { onchange: (e) => e.target.value && run('assignee', e.target.value) }),
       UI.select([{ value: '', label: 'שינוי עדיפות…' }, ...App.state.priorities.map((p) => ({ value: p.key, label: p.label }))], '', {
@@ -394,7 +738,7 @@ const BoardView = (() => {
       UI.select([
         { value: '', label: 'העברה לפרויקט…' },
         { value: '__none__', label: 'ללא פרויקט' },
-        ...App.state.projects.map((p) => ({ value: String(p.id), label: p.name }))
+        ...App.state.projects.filter((p) => p.canAddTask).map((p) => ({ value: String(p.id), label: p.name }))
       ], '', {
         onchange: (e) => e.target.value && run('project', e.target.value === '__none__' ? '' : e.target.value)
       }),
@@ -429,17 +773,34 @@ const BoardView = (() => {
   function card(task) {
     const due = UI.dueLabel(task.dueDate);
     const selectable = !App.isVendor();
+    /*
+     * ‎canChangeStatus‎ מגיע מהשרת — אותו רמז שהטבלה משתמשת בו כדי להחליט אם
+     * תא הסטטוס לחיץ. כרטיס שאין לו הרשאה אינו נגרר כלל: גרירה שנגמרת בשגיאת
+     * 403 מלמדת את המשתמש שהגרירה "לא עובדת", במקום שאין לו הרשאה.
+     */
+    const movable = !!task.canChangeStatus;
 
     const node = el('div.task-card', {
-      class: [task.overdue ? 'is-overdue' : '', task.priority === 'urgent' ? 'is-urgent' : '', task.escalated ? 'is-escalated' : ''].filter(Boolean).join(' '),
-      draggable: !App.isVendor() || true,
+      class: [task.overdue ? 'is-overdue' : '', task.priority === 'urgent' ? 'is-urgent' : '', task.escalated ? 'is-escalated' : '',
+        movable ? 'is-movable' : ''].filter(Boolean).join(' '),
+      tabindex: '0',
+      role: 'group',
+      'aria-label': task.title,
+      'aria-roledescription': movable ? 'כרטיס נגרר' : null,
+      'aria-keyshortcuts': movable ? 'Space' : null,
+      dataset: { fk: `card:${task.id}`, taskId: String(task.id) },
       // פס בצבע הפרויקט בקצה הכרטיס — זיהוי ויזואלי בלי לקרוא את שם הפרויקט
       style: task.projectColor ? { borderInlineStartColor: task.projectColor, borderInlineStartWidth: '3px' } : {},
-      onclick: (e) => { if (!e.target.closest('.select-box')) TaskCardView.open(task.id); }
+      onclick: (e) => {
+        // הלחיצה שהדפדפן שולח מיד אחרי שחרור גרירה אינה בקשה לפתוח את המשימה
+        if (performance.now() - drag.endedAt < 400) return;
+        if (!e.target.closest('.select-box')) TaskCardView.open(task.id);
+      }
     }, [
       selectable ? el('label.select-box', {}, [
         el('input', {
           type: 'checkbox',
+          'aria-label': `בחירת ${task.title}`,
           checked: view.selection.has(task.id),
           onclick: (e) => e.stopPropagation(),
           onchange: (e) => {
@@ -472,13 +833,361 @@ const BoardView = (() => {
       ])
     ]);
 
-    node.addEventListener('dragstart', (e) => {
-      e.dataTransfer.setData('text/plain', String(task.id));
-      e.dataTransfer.effectAllowed = 'move';
-      node.classList.add('dragging');
+    node.addEventListener('keydown', (e) => {
+      if (e.target !== node) return;   // מקשים מתוך תיבת הבחירה שבכרטיס
+      // טעינת רקע בנתה את הלוח מחדש בזמן שכרטיס היה מורם — ההרמה הישנה מתה איתו
+      if (kbd && !kbd.node.isConnected) kbd = null;
+      // Enter פותח את המשימה — הכרטיס הוא גם הדרך היחידה להגיע אליה במקלדת.
+      // ההרמה ברווח בלבד, כמו בספריות הגרירה הנגישות המוכרות
+      if (!kbd && e.key === 'Enter') { e.preventDefault(); TaskCardView.open(task.id); return; }
+      if (movable) keyboardDrag(e, task, node);
     });
-    node.addEventListener('dragend', () => node.classList.remove('dragging'));
+    node.addEventListener('blur', () => { if (kbd?.node === node) kbdCancel(); });
+
+    if (movable) {
+      node.addEventListener('pointerdown', (e) => pointerDown(e, task, node));
+      // לחיצה ארוכה באנדרואיד פותחת תפריט הקשר — היא הלחיצה שמרימה את הכרטיס
+      node.addEventListener('contextmenu', (e) => { if (drag.pending || drag.active) e.preventDefault(); });
+      /*
+       * חסימת הגלילה רק אחרי ההרמה. ‎touch-action: none‎ על הכרטיס היה מונע
+       * גלילה של הלוח כולו כשהאצבע מתחילה על כרטיס — כלומר כמעט תמיד בטלפון.
+       * ‎passive: false‎ חובה, אחרת ‎preventDefault‎ מתעלם בשקט.
+       */
+      node.addEventListener('touchmove', (e) => { if (drag.active) e.preventDefault(); }, { passive: false });
+    }
     return node;
+  }
+
+  // ------------------------------------------------------------- גרירה בקנבן
+
+  /*
+   * גרירה בסמן ובמגע (Pointer Events) במקום HTML5 ‎draggable‎. הגרירה של
+   * HTML5 אינה עובדת במגע כלל, אין לה מקלדת, ותמונת הגרירה שלה שקופה
+   * למחצה ובגודל שהדפדפן קובע.
+   *
+   * עקרונות:
+   * - הפעלה בעכבר אחרי תזוזה של כמה פיקסלים, כדי שלחיצה רגילה תפתח משימה.
+   *   במגע — לחיצה ארוכה, כי תזוזה במגע היא גלילה, וגרירה מכל נגיעה הייתה
+   *   הופכת את הלוח לבלתי ניתן לגלילה.
+   * - המדידות נעשות פעם אחת בתחילת הגרירה. מדידה בכל תזוזה, אחרי שמציין
+   *   המקום כבר הוכנס, מזיזה את הכרטיסים שמתחתיו — והמציין קופץ הלוך וחזור.
+   * - רק שינוי עמודה נשמר. למשימות אין שדה סדר, ולכן הסדר בתוך העמודה הוא
+   *   סדר התצוגה של השרת; לשמור "מיקום" שלא נשמר בשום מקום היה שקר.
+   */
+  const DRAG_MOUSE_PX = 6;      // תזוזה לפני שלחיצת עכבר הופכת לגרירה
+  const DRAG_TOUCH_MS = 250;    // לחיצה ארוכה במגע
+  const DRAG_TOUCH_SLOP = 8;    // רעד אצבע מותר בזמן הלחיצה הארוכה
+  const DRAG_EDGE_PX = 70;      // מרחק מקצה הלוח שבו מתחילה גלילה אוטומטית
+  const DRAG_EDGE_SPEED = 16;   // פיקסלים לפריים בקצה ממש
+
+  const reducedMotion = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  const drag = { pending: null, active: null, endedAt: 0 };
+
+  function pointerDown(e, task, node) {
+    if (e.button !== 0 || drag.active || kbd) return;
+    if (e.target.closest('.select-box, a, button, input')) return;
+
+    const p = { task, node, id: e.pointerId, type: e.pointerType, x0: e.clientX, y0: e.clientY, x: e.clientX, y: e.clientY, timer: null };
+    drag.pending = p;
+
+    if (p.type === 'touch') {
+      // לפני ההרמה הדף נגלל כרגיל; אחריה — גרירה
+      p.timer = setTimeout(() => { if (drag.pending === p) startDrag(p); }, DRAG_TOUCH_MS);
+    }
+    window.addEventListener('pointermove', onPointerMove);
+    window.addEventListener('pointerup', onPointerUp);
+    window.addEventListener('pointercancel', onPointerCancel);
+  }
+
+  function detachPointer() {
+    window.removeEventListener('pointermove', onPointerMove);
+    window.removeEventListener('pointerup', onPointerUp);
+    window.removeEventListener('pointercancel', onPointerCancel);
+  }
+
+  function onPointerMove(e) {
+    const p = drag.pending ?? drag.active;
+    if (!p || e.pointerId !== p.id) return;
+    p.x = e.clientX; p.y = e.clientY;
+
+    if (drag.pending) {
+      const dist = Math.hypot(p.x - p.x0, p.y - p.y0);
+      if (p.type === 'touch') {
+        // האצבע זזה לפני שהלחיצה הארוכה הבשילה — זו גלילה, לא גרירה
+        if (dist > DRAG_TOUCH_SLOP) { clearTimeout(p.timer); drag.pending = null; detachPointer(); }
+        return;
+      }
+      if (dist < DRAG_MOUSE_PX) return;
+      startDrag(p);
+    }
+    if (drag.active) { e.preventDefault(); moveOverlay(); updateTarget(); }
+  }
+
+  function onPointerUp(e) {
+    const p = drag.pending ?? drag.active;
+    if (!p || e.pointerId !== p.id) return;
+    if (drag.pending) { clearTimeout(p.timer); drag.pending = null; detachPointer(); return; }
+    finishDrag(true);
+  }
+
+  function onPointerCancel(e) {
+    const p = drag.pending ?? drag.active;
+    if (!p || e.pointerId !== p.id) return;
+    if (drag.pending) { clearTimeout(p.timer); drag.pending = null; detachPointer(); return; }
+    finishDrag(false);
+  }
+
+  const onDragKey = (e) => {
+    if (e.key !== 'Escape' || !drag.active) return;
+    e.preventDefault();
+    e.stopPropagation();
+    finishDrag(false);
+  };
+
+  /**
+   * מדידת העמודות והכרטיסים, פעם אחת. אמצעי הכרטיסים נשמרים יחסית לראש
+   * רשימת העמודה (כולל הגלילה שלה), ולא כקואורדינטות מסך — כך הם נשארים
+   * נכונים גם כשהלוח נגלל אופקית בזמן הגרירה. הכרטיס הנגרר עצמו אינו
+   * נמדד: הוא "יצא" מהרשימה, ומקום לפיו היה נקבע ביחס לחור שהשאיר.
+   */
+  function measure(board, source) {
+    return [...board.querySelectorAll(':scope > .kanban-col')].map((col) => {
+      const body = col.querySelector('.kanban-col-body');
+      const bodyRect = body.getBoundingClientRect();
+      const mids = [...body.querySelectorAll(':scope > .task-card')]
+        .filter((c) => c !== source)
+        .map((c) => {
+          const r = c.getBoundingClientRect();
+          return { node: c, mid: r.top + r.height / 2 - bodyRect.top + body.scrollTop };
+        });
+      return { col, body, rect: col.getBoundingClientRect(), mids, status: col.dataset.status, label: col.dataset.label };
+    });
+  }
+
+  function startDrag(p) {
+    drag.pending = null;
+    const board = p.node.closest('.kanban');
+    if (!board) return;
+    clearTimeout(p.timer);
+
+    const rect = p.node.getBoundingClientRect();
+    p.board = board;
+    p.cols = measure(board, p.node);
+    p.scroll0 = board.scrollLeft;
+    p.dx = p.x0 - rect.left;
+    p.dy = p.y0 - rect.top;
+    p.source = p.cols.find((c) => c.col.contains(p.node));
+    p.target = p.source;
+    p.index = -1;
+
+    /*
+     * השכבה הנגררת היא העתק ב-‎position: fixed‎ שזז ב-‎transform‎ בלבד —
+     * בלי layout בכל תזוזה. הכרטיס המקורי נשאר במקומו, חיוור, כדי שיהיה
+     * ברור מאיפה יצא ולאן ישוב אם הגרירה תבוטל.
+     */
+    const overlay = p.node.cloneNode(true);
+    overlay.classList.add('kanban-drag-overlay');
+    overlay.removeAttribute('tabindex');
+    overlay.setAttribute('aria-hidden', 'true');
+    Object.assign(overlay.style, { width: `${rect.width}px`, left: '0px', top: '0px' });
+    if (reducedMotion()) overlay.classList.add('no-tilt');
+    document.body.appendChild(overlay);
+    p.overlay = overlay;
+
+    p.placeholder = el('div.kanban-placeholder', { 'aria-hidden': 'true', style: { height: `${rect.height}px` } },
+      [el('span', { text: 'שחררו כאן' })]);
+
+    p.node.classList.add('is-ghost');
+    board.classList.add('is-dragging');
+    document.body.classList.add('kanban-dragging');
+    if (p.type === 'mouse') { try { p.node.setPointerCapture?.(p.id); } catch { /* הכרטיס כבר אינו במסמך */ } }
+    window.addEventListener('keydown', onDragKey, true);
+    // רטט קצר בהרמה במגע — האישור היחיד שהלחיצה הארוכה נקלטה, לפני שהאצבע זזה
+    if (p.type === 'touch') navigator.vibrate?.(12);
+
+    drag.active = p;
+    announce(`הורם: ${p.task.title}`);
+    moveOverlay();
+    updateTarget();
+    autoScroll();
+  }
+
+  function moveOverlay() {
+    const p = drag.active;
+    if (!p) return;
+    p.overlay.style.transform = `translate3d(${p.x - p.dx}px, ${p.y - p.dy}px, 0)`;
+  }
+
+  /**
+   * העמודה היא זו שמכילה את הסמן אופקית, ואם אין כזו (רווח בין עמודות,
+   * מחוץ ללוח) — הקרובה ביותר. כך שחרור במרווח שבין שתי עמודות אינו
+   * "מפספס" ומחזיר את הכרטיס.
+   */
+  function updateTarget() {
+    const p = drag.active;
+    if (!p) return;
+    const shift = p.board.scrollLeft - p.scroll0;
+    const x = p.x + shift;
+    const inside = p.cols.find((c) => x >= c.rect.left && x <= c.rect.right);
+    const target = inside ?? p.cols.reduce((best, c) => {
+      const d = Math.abs(x - (c.rect.left + c.rect.width / 2));
+      return !best || d < best.d ? { c, d } : best;
+    }, null).c;
+
+    const y = p.y - target.body.getBoundingClientRect().top + target.body.scrollTop;
+    const at = target.mids.findIndex((m) => m.mid > y);
+    const index = at === -1 ? target.mids.length : at;
+
+    if (target === p.target && index === p.index) return;
+    if (target !== p.target) {
+      p.target.col.classList.remove('drop-target');
+      announce(`עמודה: ${target.label}`);
+    }
+    p.target = target;
+    p.index = index;
+    target.col.classList.add('drop-target');
+
+    // בעמודת המקור הכרטיס החיוור עצמו הוא המציין — שם הוא ינחת אם ישוחרר
+    if (target === p.source) { p.placeholder.remove(); return; }
+    const before = target.mids[index]?.node ?? null;
+    target.body.insertBefore(p.placeholder, before);
+  }
+
+  /** גלילה אופקית של הלוח כשהסמן קרוב לקצה — אחרת אין דרך להגיע לעמודה שמחוץ למסך */
+  function autoScroll() {
+    const p = drag.active;
+    if (!p) return;
+    const r = p.board.getBoundingClientRect();
+    let v = 0;
+    if (p.x < r.left + DRAG_EDGE_PX) v = -DRAG_EDGE_SPEED * Math.min(1, (r.left + DRAG_EDGE_PX - p.x) / DRAG_EDGE_PX);
+    else if (p.x > r.right - DRAG_EDGE_PX) v = DRAG_EDGE_SPEED * Math.min(1, (p.x - (r.right - DRAG_EDGE_PX)) / DRAG_EDGE_PX);
+    if (v) {
+      // ‎scrollLeft‎ שלילי ב-RTL, אבל הכיוון עקבי: הקטנה = שמאלה בשני הכיוונים
+      const before = p.board.scrollLeft;
+      p.board.scrollLeft += v;
+      if (p.board.scrollLeft !== before) updateTarget();
+    }
+    p.raf = requestAnimationFrame(autoScroll);
+  }
+
+  function cleanupDrag(p) {
+    cancelAnimationFrame(p.raf);
+    detachPointer();
+    window.removeEventListener('keydown', onDragKey, true);
+    p.overlay?.remove();
+    p.placeholder?.remove();
+    p.node.classList.remove('is-ghost');
+    p.target?.col.classList.remove('drop-target');
+    p.board.classList.remove('is-dragging');
+    document.body.classList.remove('kanban-dragging');
+    drag.active = null;
+    drag.endedAt = performance.now();
+  }
+
+  function finishDrag(commit) {
+    const p = drag.active;
+    if (!p) return;
+    const target = p.target;
+    const changed = commit && target && target !== p.source;
+    if (changed) {
+      // העברה מיידית למקום שבו המציין עמד, לפני תשובת השרת — בלי הבהוב חזרה
+      p.target.body.insertBefore(p.node, p.placeholder);
+    }
+    cleanupDrag(p);
+    if (!commit) { announce('בוטל'); return; }
+    if (!changed) { announce(`הונח ב-${p.source.label} — ללא שינוי`); return; }
+    announce(`הונח ב-${target.label}`);
+    moveTask(p.task, target.status, target.label);
+  }
+
+  /** אותו מסלול עדכון ששימש את השחרור של HTML5 — ההודעה, הטעינה וההתראות */
+  async function moveTask(task, status, label) {
+    try {
+      await API.updateTask(task.id, { status });
+      UI.success(`המשימה הועברה ל"${label}"`);
+    } catch (err) {
+      UI.error(err);
+    }
+    // גם בכישלון — הכרטיס כבר הוזז במסך, והטעינה מחזירה אותו למקומו האמיתי
+    await load({ silent: true });
+    App.refreshNotifications();
+  }
+
+  // ------------------------------------------------------------- גרירה במקלדת
+
+  /*
+   * רווח מרים, חצים ימינה ושמאלה מעבירים בין עמודות, רווח או Enter מניחים
+   * ו-Escape מבטל. כל צעד מוכרז — משתמש קורא מסך אינו רואה את המציין.
+   *
+   * הכיוון נגזר מהסדר החזותי של העמודות על המסך, ולא מסדרן ב-DOM: ב-RTL
+   * העמודה הראשונה היא הימנית, וחץ שמאלה חייב להוביל לעמודה שמשמאל.
+   */
+  let kbd = null;
+
+  function keyboardDrag(e, task, node) {
+    if (!kbd) {
+      if (e.key !== ' ') return;
+      e.preventDefault();
+      const board = node.closest('.kanban');
+      if (!board || drag.active) return;
+      const cols = measure(board, node).sort((a, b) => a.rect.left - b.rect.left);
+      const source = cols.find((c) => c.col.contains(node));
+      kbd = { task, node, board, cols, source, target: source,
+        placeholder: el('div.kanban-placeholder', { 'aria-hidden': 'true', style: { height: `${node.offsetHeight}px` } },
+          [el('span', { text: 'שחררו כאן' })]) };
+      node.classList.add('is-lifted');
+      board.classList.add('is-dragging');
+      source.col.classList.add('drop-target');
+      announce(`הורם: ${task.title}. חיצים ימינה ושמאלה להעברה בין עמודות, רווח להנחה, Escape לביטול. עמודה: ${source.label}`);
+      return;
+    }
+
+    if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+      e.preventDefault();
+      const at = kbd.cols.indexOf(kbd.target);
+      const next = kbd.cols[at + (e.key === 'ArrowLeft' ? -1 : 1)];
+      if (!next) return;
+      kbd.target.col.classList.remove('drop-target');
+      kbd.target = next;
+      next.col.classList.add('drop-target');
+      if (next === kbd.source) kbd.placeholder.remove();
+      else next.body.insertBefore(kbd.placeholder, next.body.firstChild);
+      next.col.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: reducedMotion() ? 'auto' : 'smooth' });
+      announce(`עמודה: ${next.label}`);
+      return;
+    }
+    if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); kbdDrop(); return; }
+    if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); kbdCancel(); return; }
+    // חיצים למעלה ולמטה אינם מגללים את הדף בזמן שהכרטיס מורם
+    if (e.key === 'ArrowUp' || e.key === 'ArrowDown') e.preventDefault();
+  }
+
+  function kbdEnd() {
+    const k = kbd;
+    kbd = null;
+    k.placeholder.remove();
+    k.node.classList.remove('is-lifted');
+    k.target.col.classList.remove('drop-target');
+    k.board.classList.remove('is-dragging');
+    return k;
+  }
+
+  function kbdCancel() {
+    if (!kbd) return;
+    kbdEnd();
+    announce('בוטל');
+  }
+
+  function kbdDrop() {
+    const k = kbdEnd();
+    if (k.target === k.source) { announce(`הונח ב-${k.source.label} — ללא שינוי`); return; }
+    k.target.body.insertBefore(k.node, k.target.body.firstChild);
+    // הכרטיס עובר עמודה ב-DOM, והטעינה תבנה אותו מחדש — המיקוד חוזר אליו אחריה
+    pendingFocus = `card:${k.task.id}`;
+    k.node.focus({ preventScroll: true });
+    announce(`הונח ב-${k.target.label}`);
+    moveTask(k.task, k.target.status, k.target.label);
   }
 
   // ------------------------------------------------------------- תצוגת קנבן
@@ -495,9 +1204,12 @@ const BoardView = (() => {
       const boardTasks = currentTasks.filter((t) => t.boardId === board.id);
       const cols = board.columns.map((col) => {
         const colTasks = boardTasks.filter((t) => t.status === col.key);
-        const body = el('div.kanban-col-body', {}, colTasks.length ? colTasks.map(card) : []);
+        const body = el('div.kanban-col-body', {}, colTasks.length
+          ? colTasks.map(card)
+          // מוצג רק בזמן גרירה (CSS) — עמודה ריקה נראית אחרת "לא מקום"
+          : [el('div.kanban-empty-hint', { 'aria-hidden': 'true', text: 'שחררו כאן' })]);
 
-        const colNode = el('div.kanban-col', {}, [
+        return el('div.kanban-col', { dataset: { status: col.key, label: col.label } }, [
           el('div.kanban-col-head', {}, [
             el('span.dot', { style: { background: col.color } }),
             el('h4', { text: col.label }),
@@ -505,24 +1217,6 @@ const BoardView = (() => {
           ]),
           body
         ]);
-
-        colNode.addEventListener('dragover', (e) => { e.preventDefault(); colNode.classList.add('drop-target'); });
-        colNode.addEventListener('dragleave', () => colNode.classList.remove('drop-target'));
-        colNode.addEventListener('drop', async (e) => {
-          e.preventDefault();
-          colNode.classList.remove('drop-target');
-          const id = Number(e.dataTransfer.getData('text/plain'));
-          const task = currentTasks.find((t) => t.id === id);
-          if (!task || task.status === col.key) return;
-          try {
-            await API.updateTask(id, { status: col.key });
-            UI.success(`המשימה הועברה ל"${col.label}"`);
-            await load({ silent: true });
-            App.refreshNotifications();
-          } catch (err) { UI.error(err); }
-        });
-
-        return colNode;
       });
 
       return el('div', { style: { marginBottom: '22px' } }, [
@@ -541,76 +1235,194 @@ const BoardView = (() => {
 
   // ------------------------------------------------------------- ציר זמן
 
+  /*
+   * הזום הוא פיקסלים ליום, ולא אחוזים מרוחב המסך. באחוזים כל משימה של
+   * יומיים הייתה פס של כמה פיקסלים בטווח של חודשיים, והשם שבתוכו נמחץ עד
+   * שלא נשאר ממנו דבר. בפיקסלים ליום הציר פשוט ארוך יותר מהמסך — ונגלל.
+   */
+  const TL_ZOOM = { day: 30, week: 9, month: 2.6 };
+  const TL_ZOOM_LABEL = { day: 'יום', week: 'שבוע', month: 'חודש' };
+  const TL_LABEL_W = { desk: 230, phone: 120 };   // רוחב עמודת השמות — זהה ל-CSS
+  const TL_INSIDE_MIN = 60;                         // פס צר מזה מקבל את התווית מחוצה לו
+  const DAY_MS = 86400000;
+
+  const timelineZoom = () => {
+    const z = App.getPref('timelineZoom');
+    return TL_ZOOM[z] ? z : 'week';
+  };
+
+  function zoomSwitch() {
+    const current = timelineZoom();
+    return el('div.seg.tl-zoom', { role: 'group', 'aria-label': 'זום ציר הזמן' },
+      Object.keys(TL_ZOOM).map((z) => el(`button${z === current ? '.active' : ''}`, {
+        type: 'button',
+        'aria-pressed': String(z === current),
+        dataset: { fk: `zoom:${z}` },
+        onclick: () => {
+          App.setPref('timelineZoom', z);
+          pendingFocus = `zoom:${z}`;
+          draw();
+        }
+      }, [TL_ZOOM_LABEL[z]])));
+  }
+
+  /*
+   * תווית בכל יום (זום יום), בכל יום ראשון (שבוע — השבוע הישראלי מתחיל
+   * בראשון), או בראשון לכל חודש (חודש). תוויות במרווח קבוע מ"היום" הציגו
+   * תאריכים שרירותיים; קווים בתחילת שבוע וחודש הם מה שהעין מחפשת.
+   */
+  function timelineTicks(start, days, unit, zoom) {
+    const ticks = [];
+    for (let i = 0; i < days; i++) {
+      const d = new Date(start); d.setDate(d.getDate() + i);
+      const first = d.getDate() === 1;
+      let text = null;
+      if (zoom === 'day') text = first ? `${d.getDate()}.${d.getMonth() + 1}` : String(d.getDate());
+      else if (zoom === 'week' && d.getDay() === 0) text = `${d.getDate()}.${d.getMonth() + 1}`;
+      else if (zoom === 'month' && first) text = d.toLocaleDateString('he-IL', { month: 'short', year: '2-digit' });
+      if (text === null) continue;
+      ticks.push(el(`div.tl-tick${first ? '.is-month' : ''}${zoom === 'day' && [5, 6].includes(d.getDay()) ? '.is-weekend' : ''}`, {
+        style: { insetInlineStart: `${i * unit}px` }
+      }, [el('span.tl-tick-label', { text })]));
+    }
+    return ticks;
+  }
+
   function timeline() {
     const withDates = currentTasks.filter((t) => t.dueDate);
     if (!withDates.length) return UI.empty('אין משימות עם תאריך יעד להצגה בציר הזמן', '📅');
 
+    const zoom = timelineZoom();
     const today = new Date(); today.setHours(0, 0, 0, 0);
-    const start = new Date(today); start.setDate(start.getDate() - 7);
-    const dates = withDates.map((t) => new Date(t.dueDate).getTime());
-    const maxDate = new Date(Math.max(...dates, today.getTime() + 14 * 86400000));
-    const end = new Date(maxDate); end.setDate(end.getDate() + 3);
 
-    const totalDays = Math.max(1, Math.ceil((end - start) / 86400000));
-    const pct = (date) => ((new Date(date) - start) / 86400000 / totalDays) * 100;
+    /*
+     * הציר מתחיל במשימה הוותיקה ביותר (הפס מתחיל ביום פתיחתה), אך לא יותר
+     * מ-120 יום אחורה — משימה פתוחה מלפני שנה הייתה מותחת את כל הציר בשביל
+     * פס אחד. מה שנפתח לפני כן פשוט נחתך בקצה, כמו קודם.
+     */
+    const earliest = Math.min(today.getTime() - 7 * DAY_MS,
+      ...withDates.map((t) => new Date(t.createdAt ?? t.dueDate).getTime()));
+    const start = new Date(Math.max(earliest, today.getTime() - 120 * DAY_MS));
+    start.setHours(0, 0, 0, 0);
+    const maxDate = Math.max(...withDates.map((t) => new Date(t.dueDate).getTime()), today.getTime() + 14 * DAY_MS);
+    const end = new Date(maxDate); end.setHours(0, 0, 0, 0); end.setDate(end.getDate() + 4);
+    const days = Math.max(1, Math.round((end - start) / DAY_MS));
 
-    // התוויות ממוקמות באחוזים בדיוק כמו הפסים. קודם הן היו פריטי flex בחלוקה
-    // שווה, כלומר מערכת קואורדינטות שנייה שלא התלכדה עם התאריכים — והסטייה
-    // הצטברה לרוחב הציר.
-    const todayOffset = Math.round((today - start) / 86400000);
-    const step = Math.max(1, Math.round(totalDays / 14));
-    const ticks = [];
+    /*
+     * כשהטווח קצר והמסך רחב, הזום מתמתח למילוי הרוחב — ציר שתופס חצי מסך
+     * ומשאיר חצי ריק נראה כמו תקלה. ‎containerRef‎ כבר במסמך, ולכן אפשר
+     * למדוד אותו לפני שהציר עצמו נבנה.
+     */
+    const labelW = isPhone() ? TL_LABEL_W.phone : TL_LABEL_W.desk;
+    const avail = Math.max(0, (containerRef?.clientWidth ?? 0) - labelW - 64);
+    const unit = Math.max(TL_ZOOM[zoom], avail / days);
+    const chartW = Math.ceil(days * unit);
+    const px = (date) => ((new Date(date) - start) / DAY_MS) * unit;
+    const todayX = px(today);
 
-    // סדרת התוויות עוגנת ביום הנוכחי, כך שהיום עצמו תמיד מקבל תווית.
-    // בלי העיגון הזה, צעד של יומיים גרם ליום הנוכחי ליפול בין שתי תוויות.
-    for (let i = todayOffset % step; i < totalDays; i += step) {
-      const d = new Date(start); d.setDate(d.getDate() + i);
-      const isToday = i === todayOffset;
-      ticks.push(el(`div.tl-day${isToday ? '.today' : ''}`, {
-        style: { insetInlineStart: `${(i / totalDays) * 100}%` }
-      }, [
-        el('span.tl-day-label', { text: isToday ? `היום ${d.getDate()}.${d.getMonth() + 1}` : `${d.getDate()}.${d.getMonth() + 1}` })
-      ]));
+    // קבוצה לכל פרויקט — הסדר לפי היעד הקרוב בקבוצה, כמו סדר השורות בתוכה
+    const groups = new Map();
+    for (const t of [...withDates].sort((a, b) => new Date(a.dueDate) - new Date(b.dueDate))) {
+      const key = t.projectId ?? 'none';
+      if (!groups.has(key)) groups.set(key, { name: t.projectName || 'ללא פרויקט', color: t.projectColor || 'var(--text-mute)', tasks: [] });
+      groups.get(key).tasks.push(t);
     }
 
-    const rows = withDates
-      .sort((a, b) => new Date(a.dueDate) - new Date(b.dueDate))
-      .map((t) => {
-        const barStart = t.createdAt ? Math.max(0, pct(t.createdAt)) : Math.max(0, pct(t.dueDate) - 4);
-        const barEnd = pct(t.dueDate);
-        const width = Math.max(2.2, barEnd - barStart);
-        return el('div.tl-row', {}, [
-          el('div.tl-label', { text: t.title, title: t.title, onclick: () => TaskCardView.open(t.id) }),
-          el('div.tl-track', {}, [
-            el('div.tl-today-line', { style: { insetInlineStart: `${pct(today)}%` } }),
-            el('div.tl-bar', {
-              style: {
-                insetInlineStart: `${barStart}%`,
-                width: `${width}%`,
-                background: t.overdue ? 'var(--danger)' : t.isFinal ? 'var(--ok)' : t.statusColor
-              },
-              title: `${t.title} — יעד ${UI.formatDate(t.dueDate)}`,
-              onclick: () => TaskCardView.open(t.id)
-            }, [t.assigneeName ?? ''])
-          ])
-        ]);
-      });
+    const row = (t) => {
+      const endX = px(t.dueDate);
+      // משימה שנפתחה אחרי היעד שלה, או בלי תאריך פתיחה — פס של יום אחד לפני היעד
+      const created = t.createdAt && new Date(t.createdAt) < new Date(t.dueDate) ? t.createdAt : null;
+      const startX = Math.max(0, created ? px(created) : endX - unit);
+      const width = Math.max(6, endX - startX);
+      const inside = width >= TL_INSIDE_MIN;
+      const who = t.assigneeName ?? '';
+      const tip = `${t.title}${who ? ` · ${who}` : ''} — יעד ${UI.formatDate(t.dueDate)}`;
 
-    return el('div.timeline', {}, [
-      el('div.tl-grid', {}, [
-        el('div.tl-head', {}, [el('div.tl-label', { text: 'משימה' }), el('div.tl-days', {}, ticks)]),
-        ...rows
+      return el('div.tl-row', {}, [
+        el('button.tl-label', { type: 'button', text: t.title, title: t.title, onclick: () => TaskCardView.open(t.id) }),
+        el('div.tl-track', { style: { width: `${chartW}px` } }, [
+          el('div.tl-bar', {
+            style: {
+              insetInlineStart: `${startX}px`,
+              width: `${width}px`,
+              background: t.overdue ? 'var(--danger)' : t.isFinal ? 'var(--ok)' : t.statusColor
+            },
+            title: tip,
+            'aria-hidden': 'true',
+            onclick: () => TaskCardView.open(t.id)
+          }, [inside ? el('span.tl-bar-text', { text: who }) : null]),
+          // פס צר אינו מקום לטקסט — התווית יושבת אחרי סוף הפס, קריאה ושלמה
+          !inside && who
+            ? el('span.tl-bar-out', { text: who, 'aria-hidden': 'true', style: { insetInlineStart: `${startX + width + 6}px` } })
+            : null
+        ])
+      ]);
+    };
+
+    const lanes = [...groups.values()].map((g) => el('div.tl-lane', {}, [
+      // רצועת הכותרת צבועה בצבע הפרויקט — אותו צבע של הפס בכרטיס ושל הנקודה בתפריט
+      el('div.tl-lane-head', {
+        style: {
+          borderInlineStartColor: g.color,
+          background: `color-mix(in srgb, ${g.color} 11%, var(--surface))`
+        }
+      }, [
+        el('span.tl-lane-name', {}, [el('span.project-dot', { style: { background: g.color } }), g.name,
+          el('span.tl-lane-num', { text: String(g.tasks.length) })])
+      ]),
+      ...g.tasks.map(row)
+    ]));
+
+    const node = el('div.timeline', {}, [
+      el('div.tl-scroll', { tabindex: '0', role: 'region', 'aria-label': 'ציר זמן המשימות' }, [
+        el('div.tl-grid', { style: { width: `${labelW + chartW + 140}px` } }, [
+          el('div.tl-head', {}, [
+            el('div.tl-label', { text: 'משימה' }),
+            el('div.tl-days', { style: { width: `${chartW}px` } }, [
+              ...timelineTicks(start, days, unit, zoom),
+              el('div.tl-today-mark', { style: { insetInlineStart: `${todayX}px` } },
+                [el('span', { text: `היום ${today.getDate()}.${today.getMonth() + 1}` })])
+            ])
+          ]),
+          // קו היום לכל גובה הציר — שכבה אחת מעל כל השורות, ולא קו בכל שורה
+          el('div.tl-today-line', { 'aria-hidden': 'true', style: { insetInlineStart: `${labelW + todayX}px` } }),
+          ...lanes
+        ])
       ])
     ]);
+    // משתנה CSS אינו נכנס דרך ‎Object.assign‎ על ‎style‎ — רק ‎setProperty‎
+    node.style.setProperty('--tl-label-w', `${labelW}px`);
+    return node;
+  }
+
+  /*
+   * בפתיחה הציר נגלל כך ש"היום" באמצע. לא דרך ‎scrollLeft‎: ב-RTL הערך שלו
+   * שלילי בכרום ובפיירפוקס וחיובי בגרסאות ישנות של ספארי — ‎scrollIntoView‎
+   * מחשב את זה בעצמו בכל דפדפן.
+   */
+  function scrollTimelineToToday() {
+    const mark = containerRef?.querySelector('.tl-today-mark');
+    mark?.scrollIntoView({ inline: 'center', block: 'nearest' });
   }
 
   // ------------------------------------------------------------- דיאלוג משימה
 
+  /**
+   * ‎opts.prefill‎ — ערכים התחלתיים למשימה חדשה (מהקלטה, מפגישה ביומן):
+   * ‎title, description, projectId, assignee ('user:12'), priority, dueDate
+   * ('YYYY-MM-DD'), checklist[], statusShort, recurrence, activateDate‎.
+   * ‎opts.voice‎ — נפתח מהקלטה: ‎{ transcript, warnings, uncertain[] }‎ — מה שלא
+   * ודאי מסומן לבדיקה, ו"🎙 הוסף עוד" ממשיך את אותה הקלטה.
+   * ‎opts.participants‎ — משימה מפגישה: מיילים של משתתפי הפגישה. האחראי מוצע
+   * רק מביניהם (ואני תמיד — הפגישה ביומן שלי), בלי ספקים ובלי שאר הארגון.
+   * ‎opts.onSaved‎ — נקרא אחרי שמירה.
+   */
   function openTaskDialog(task = null, opts = {}) {
     const isEdit = !!task;
-    const titleInput = el('input', { type: 'text', value: task?.title ?? '', placeholder: 'מה צריך לעשות?' });
+    const pre = (!isEdit && opts.prefill) || {};
+    const titleInput = el('input', { type: 'text', value: task?.title ?? pre.title ?? '', placeholder: 'מה צריך לעשות?' });
     const descInput = el('textarea', { placeholder: 'תיאור מפורט (אופציונלי)' });
-    descInput.value = task?.description ?? '';
+    descInput.value = task?.description ?? pre.description ?? '';
 
     /**
      * בורר הפרויקטים — חיפוש ודירוג, ולא רשימה מסוננת.
@@ -626,8 +1438,14 @@ const BoardView = (() => {
      * פרויקט (‎myTaskCount‎ מהשרת), ואחריו המחלקה שלי. מי שמחפש מקליד, ומי
      * שלא — מוצא בראש את מה שהוא נוגע בו כל יום.
      */
-    const current = task?.projectId ?? opts.projectId ?? '';
-    const projectPicker = UI.projectPicker({ value: current });
+    const current = task?.projectId ?? (pre.projectId || opts.projectId) ?? '';
+    // רק פרויקטים שבהם מותר לי לפתוח משימה (‎canAddTask‎ מהשרת) — והפרויקט הנוכחי, שלא יתאפס
+    const projectPicker = UI.projectPicker({
+      value: current,
+      projects: App.state.projects.filter((p) => p.canAddTask || String(p.id) === String(current)),
+      // רשימת משימות-האב תלויה בפרויקט — נטענת מחדש כשהוא משתנה
+      onChange: () => loadParents?.()
+    });
 
     /*
      * חברי המחלקה של הפותח בראש הרשימה, תחת כותרת. בארגון של חמישים אנשים
@@ -642,9 +1460,23 @@ const BoardView = (() => {
       // רמת הגישה מצורפת לשם רק כשהצופה רשאי לראות רמות
       label: u.roleLabel ? `${u.name} — ${u.roleLabel}` : u.name
     });
-    const { near, far, deptName } = UI.usersByDepartment();
+    const byDept = UI.usersByDepartment({
+      keep: [task?.assigneeType === 'user' ? task.assigneeId : null, ...(task?.extraAssignees ?? []).filter((e) => e.type === 'user').map((e) => e.id)].filter(Boolean)
+    });
+    /*
+     * משימה מפגישה — מוצעת רק למשתתפים בה. מי שלא ישב בפגישה אינו יודע מה
+     * סוכם בה, ומשימה "מהפגישה" אצלו היא משימה בלי הקשר.
+     */
+    const fromMeeting = !isEdit && Array.isArray(opts.participants);
+    const inMeeting = new Set((opts.participants ?? []).map((x) => String(x ?? '').toLowerCase()));
+    const onlyParticipants = (list) => (fromMeeting
+      ? list.filter((u) => u.id === App.state.actor?.id || inMeeting.has(String(u.email ?? '').toLowerCase()))
+      : list);
+    const near = onlyParticipants(byDept.near);
+    const far = onlyParticipants(byDept.far);
+    const deptName = byDept.deptName;
 
-    const vendorOptions = App.may('assign_task_to_vendor')
+    const vendorOptions = !fromMeeting && App.may('assign_task_to_vendor')
       ? App.state.vendors.filter((v) => v.status === 'active')
         .map((v) => ({ value: `vendor:${v.id}`, label: `${v.name} (ספק חיצוני)` }))
       : [];
@@ -655,7 +1487,7 @@ const BoardView = (() => {
       ...(near.length && far.length
         ? [
             { label: deptName, options: near.map(userOption) },
-            { label: 'שאר הארגון', options: far.map(userOption) }
+            { label: fromMeeting ? 'משתתפים נוספים בפגישה' : 'שאר הארגון', options: far.map(userOption) }
           ]
         : [...near, ...far].map(userOption)),
       ...(vendorOptions.length
@@ -674,7 +1506,7 @@ const BoardView = (() => {
       ? `user:${App.state.actor.id}`
       : '';
     const assigneeSelect = UI.select(assigneeOptions,
-      task?.assigneeId ? `${task.assigneeType}:${task.assigneeId}` : (isEdit ? '' : meAsAssignee));
+      task?.assigneeId ? `${task.assigneeType}:${task.assigneeId}` : (isEdit ? '' : pre.assignee || meAsAssignee));
 
     /*
      * אחראים נוספים.
@@ -688,6 +1520,7 @@ const BoardView = (() => {
      */
     const extraAssignees = (task?.extraAssignees ?? []).map((e) => `${e.type}:${e.id}`);
     const extraList = el('div.extra-assignees');
+    let assigneePicker = null;  // העיגולים — נבנים אחרי ‎drawExtras‎, שמרענן אותם
 
     const drawExtras = () => {
       const taken = new Set([assigneeSelect.value, ...extraAssignees].filter(Boolean));
@@ -728,8 +1561,20 @@ const BoardView = (() => {
             })
           : el('span.mute-sm', { text: 'אין עוד למי להוסיף' })
       );
+      assigneePicker?.redraw();
     };
     drawExtras();
+    /*
+     * עיגולים במקום הרשימה הנפתחת — הראשון הוא מי שאני הכי הרבה מטיל עליו.
+     * במשימה חדשה בלי אחראי שנקבע מראש (הקלטה, תת-משימה) הוא גם נבחר מעצמו.
+     */
+    assigneePicker = AssigneePicker.create({
+      select: assigneeSelect,
+      options: assigneeOptions,
+      extras: extraAssignees,
+      onExtras: drawExtras,
+      autoPick: !isEdit && !pre.assignee
+    });
     // החלפת האחראי הראשי מוציאה אותו מרשימת האחראים הנוספים אם הוא בה
     assigneeSelect.addEventListener('change', () => {
       const at = extraAssignees.indexOf(assigneeSelect.value);
@@ -737,18 +1582,56 @@ const BoardView = (() => {
       drawExtras();
     });
 
-    const prioritySelect = UI.select(App.state.priorities.map((p) => ({ value: p.key, label: p.label })), task?.priority ?? 'normal');
-    const dueInput = el('input', { type: 'date', value: UI.toInputDate(task?.dueDate) });
-    const activateInput = el('input', { type: 'date', value: UI.toInputDate(task?.activateAt) });
+    const prioritySelect = UI.select(App.state.priorities.map((p) => ({ value: p.key, label: p.label })), task?.priority ?? pre.priority ?? 'normal');
+    const dueInput = el('input', { type: 'date', value: isEdit ? UI.toInputDate(task?.dueDate) : pre.dueDate ?? '' });
+    const activateInput = el('input', { type: 'date', value: isEdit ? UI.toInputDate(task?.activateAt) : pre.activateDate ?? '' });
 
     const dependencyOptions = [{ value: '', label: 'ללא תלות' },
       ...currentTasks.filter((t) => !task || t.id !== task.id).map((t) => ({ value: t.id, label: `#${t.id} — ${t.title}` }))];
     const dependsSelect = UI.select(dependencyOptions, task?.dependsOnTaskId ?? '');
 
-    const recurringCheck = el('input', { type: 'checkbox', checked: !!task?.isRecurring });
+    /*
+     * משימת אב — רק למי שנפתחה לו בקרת המשימות, שם העץ מוצג (ואחרים לא
+     * יתבלבלו). המשימות של הפרויקט שנבחר, בעץ: משימת-אב, ותחתיה המשימות שלה.
+     * רמה שלישית אינה מוצעת — מתחתיה אין רמה נוספת.
+     */
+    const parentWanted = String(task?.parentTaskId ?? opts.parentTaskId ?? '');
+    const parentSelect = UI.select([{ value: '', label: 'ללא — משימה ראשית' }], parentWanted);
+    let loadParents = null;
+    if (App.hasTracker()) {
+      let seq = 0;
+      loadParents = async () => {
+        const my = ++seq;
+        const keep = parentSelect.value || parentWanted;
+        const qs = new URLSearchParams();
+        if (projectPicker.value()) qs.set('projectId', projectPicker.value());
+        if (task?.id) qs.set('exclude', task.id);
+        try {
+          const { tasks } = await API.get(`/api/tasks/parent-options?${qs}`);
+          if (my !== seq) return;
+          const kids = new Map();
+          for (const t of tasks) if (t.parentId) (kids.get(t.parentId) ?? kids.set(t.parentId, []).get(t.parentId)).push(t);
+          const ids = new Set(tasks.map((t) => t.id));
+          const opts2 = [{ value: '', label: 'ללא — משימה ראשית' }];
+          for (const t of tasks.filter((x) => !x.parentId || !ids.has(x.parentId))) {
+            opts2.push({ value: String(t.id), label: t.parentId ? `↳ ${t.title}` : t.title });
+            for (const k of kids.get(t.id) ?? []) opts2.push({ value: String(k.id), label: `\u00a0\u00a0\u00a0↳ ${k.title}` });
+          }
+          // אב שנבחר ואינו ברשימה (פרויקט אחר, הושלם) — נשאר, כדי שלא יתאפס בשקט
+          if (keep && !opts2.some((o) => o.value === keep)) {
+            opts2.splice(1, 0, { value: keep, label: task?.parentTitle || opts.parentTitle || `#${keep}` });
+          }
+          UI.mount(parentSelect, ...opts2.map((o) => el('option', { value: o.value }, [o.label])));
+          parentSelect.value = keep;
+        } catch { /* בלי הרשימה — נשאר רק "ללא", והמשימה נשמרת כרגיל */ }
+      };
+      loadParents();
+    }
+
+    const recurringCheck = el('input', { type: 'checkbox', checked: !!task?.isRecurring || Boolean(pre.recurrence) });
     const freqSelect = UI.select(
       [{ value: 'daily', label: 'יומי' }, { value: 'weekly', label: 'שבועי' }, { value: 'monthly', label: 'חודשי' }],
-      task?.recurrenceFreq ?? 'weekly'
+      task?.recurrenceFreq ?? (pre.recurrence || 'weekly')
     );
     const policySelect = UI.select([
       { value: 'inherit', label: 'לפי ברירת המחדל של המערכת' },
@@ -756,7 +1639,7 @@ const BoardView = (() => {
       { value: 'always', label: 'ליצור מופע חדש בכל מקרה' }
     ], task?.recurrencePolicy ?? 'inherit');
 
-    const recurringBox = el('div', { style: { display: task?.isRecurring ? 'block' : 'none' } }, [
+    const recurringBox = el('div', { style: { display: recurringCheck.checked ? 'block' : 'none' } }, [
       el('div.row', {}, [UI.field('תדירות', freqSelect), UI.field('מדיניות חפיפה', policySelect)])
     ]);
     recurringCheck.addEventListener('change', () => {
@@ -764,6 +1647,7 @@ const BoardView = (() => {
     });
 
     const checklistInput = el('textarea', { placeholder: 'סעיף בכל שורה (אופציונלי)', style: { minHeight: '62px' } });
+    checklistInput.value = (pre.checklist ?? []).join('\n');
 
     /**
      * תבנית משימה. עד כה אפשר היה לשמור תבניות מסוג 'task' ומעולם לא היה
@@ -805,27 +1689,70 @@ const BoardView = (() => {
      * פנייה לאדם מחוץ למשימה, ואין לה משמעות כתת-משימה או כעריכה.
      */
     const modeToggle = !isEdit && !opts.parentTaskId && !App.isVendor()
-      ? el('div.seg.task-mode', {}, [
-          el('button.active', { type: 'button' }, ['משימה רגילה']),
-          el('button', {
+      ? el('div.task-mode-row', {}, [
+          el('div.seg.task-mode', {}, [
+            el('button.active', { type: 'button' }, ['משימה רגילה']),
+            el('button', {
+              type: 'button',
+              title: 'ה-AI ינסח פנייה, ישלח אחרי אישורך, ויעקוב עד שתתקבל תשובה',
+              onclick: () => { m.close(); AiTaskView.openDialog({ projectId: opts.projectId ?? '' }); }
+            }, ['✨ משימת AI'])
+          ]),
+          el('div.spacer'),
+          // הכתבה — אומרים את המשימה, והדיאלוג נפתח שוב ממולא
+          el('button.btn.btn-sm', {
             type: 'button',
-            title: 'ה-AI ינסח פנייה, ישלח אחרי אישורך, ויעקוב עד שתתקבל תשובה',
-            onclick: () => { m.close(); AiTaskView.openDialog({ projectId: opts.projectId ?? '' }); }
-          }, ['✨ משימת AI'])
+            title: 'לומר את המשימה במקום להקליד',
+            onclick: () => {
+              m.close();
+              opts.voice
+                ? VoiceView.open({ baseText: opts.voice.transcript, forcePreview: true })
+                : VoiceView.open({ forcePreview: true });
+            }
+          }, [opts.voice ? '🎙 הוסף עוד' : '🎙 הכתבה'])
         ])
       : null;
 
+    /*
+     * מהקלטה: מה שלא ודאי מסומן בצהוב, והאזהרות למעלה — כדי שהבדיקה תהיה של
+     * שדה אחד ולא של כל הטופס.
+     */
+    const voice = !isEdit ? opts.voice : null;
+    const fieldOf = (key, label, control, hint) => {
+      const node = UI.field(label, control, hint);
+      if (voice?.uncertain?.includes(key)) node.classList.add('field-warn');
+      return node;
+    };
+    const voiceBox = voice
+      ? el('div.alert.alert-info.voice-from', {}, [
+          el('span', { text: '🎙' }),
+          el('div', {}, [
+            el('div.mute-sm', { text: `נשמע: "${voice.transcript}"` }),
+            ...(voice.warnings ?? []).map((w) => el('div.voice-warn', { text: `⚠ ${w.text}` }))
+          ])
+        ])
+      : null;
+
+    // 🔒 סיווג — נושא ורמת רגישות. ריק: רגיל, או כמו הפרויקט
+    const classPicker = ClassPicker.create(task?.classification ?? null, { inherited: task?.inheritedClassification ?? null });
     const body = el('div', {}, [
       modeToggle,
-      UI.field('כותרת המשימה', titleInput),
+      voiceBox,
+      fieldOf('title', 'כותרת המשימה', titleInput),
       UI.field('תיאור', descInput),
-      el('div.row', {}, [
-        UI.field('פרויקט', projectPicker, 'משימה ללא פרויקט תופיע בלוח בקבוצת "ללא פרויקט"'),
-        UI.field('אחראי', assigneeSelect, 'משימה ללא אחראי לא תופיע ב"המשימות שלי" של אף אחד')
-      ]),
+      // האחראי בשורה משלו — העיגולים צריכים רוחב
+      fieldOf('assignee', 'אחראי', assigneePicker.node, fromMeeting
+        ? 'משימה מהפגישה — מוצעת רק למשתתפים בה'
+        : 'משימה ללא אחראי לא תופיע ב"המשימות שלי" של אף אחד'),
+      fieldOf('projectId', 'פרויקט', projectPicker, 'משימה ללא פרויקט תופיע בלוח בקבוצת "ללא פרויקט"'),
+      // ליד הפרויקט — הרשימה היא המשימות של הפרויקט שנבחר
+      App.hasTracker()
+        ? UI.field('משימת אב', parentSelect, 'המשימה תופיע תחתיה בבקרת המשימות ובתרשים הזרימה. עד שלוש רמות: משימת אב ← משימה ← תת-משימה')
+        : null,
       UI.field('אחראים נוספים', extraList,
         'המשימה תופיע גם אצלם, והם יקבלו את ההתראות. אפשר לצרף גם ספק חיצוני — המשימה נשארת בלוח הפנימי'),
-      el('div.row', {}, [UI.field('עדיפות', prioritySelect), UI.field('תאריך יעד', dueInput)]),
+      el('div.row', {}, [UI.field('עדיפות', prioritySelect), fieldOf('dueDate', 'תאריך יעד', dueInput)]),
+      UI.field('🔒 סיווג', classPicker.node, ClassPicker.HINT),
       el('div.row', {}, [
         UI.field('תלות במשימה אחרת', dependsSelect, 'המשימה לא תיסגר לפני שהמשימה החוסמת תושלם'),
         UI.field('תאריך הפעלה (משימה עתידית)', activateInput, 'עד למועד זה המשימה לא תופיע ברשימות הפעילות')
@@ -838,16 +1765,18 @@ const BoardView = (() => {
       ])
     ]);
 
-    const saveBtn = el('button.btn.btn-primary', {}, [isEdit ? 'שמירת שינויים' : 'יצירת משימה']);
+    const saveBtn = el('button.btn.btn-primary', {}, [isEdit ? 'שמירת שינויים' : 'שמירה']);
+    // יצירה אינה פותחת את הכרטיס המלא מעצמה — מי שרוצה להמשיך לערוך בוחר בזה
+    const saveOpenBtn = isEdit ? null : el('button.btn', {}, ['שמירה ופתיחה בהרחבה']);
     const m = UI.modal({
       title: isEdit
         ? `עריכת משימה #${task.id}`
         : (opts.parentTitle ? `תת-משימה בתוך "${opts.parentTitle}"` : 'משימה חדשה'),
       body,
-      footer: [saveBtn, el('div.spacer')]
+      footer: [saveBtn, saveOpenBtn, el('div.spacer')]
     });
 
-    saveBtn.addEventListener('click', async () => {
+    const save = async ({ openAfter = false } = {}) => {
       const title = titleInput.value.trim();
       if (!title) return UI.toast('נדרשת כותרת למשימה', 'error');
       const [aType, aId] = assigneeSelect.value ? assigneeSelect.value.split(':') : [null, null];
@@ -868,36 +1797,70 @@ const BoardView = (() => {
         recurrenceFreq: freqSelect.value,
         recurrencePolicy: policySelect.value
       };
+      // הסיווג נשלח רק כשהשתנה — כדי ששמירה רגילה לא תיתקל בכלל ההקלה
+      const cls = classPicker.value();
+      if (cls.topic !== (task?.classification?.topic ?? '') || cls.sens !== (task?.classification?.sens ?? 0)) Object.assign(payload, cls);
       // בלי הרשאה להטיל משימה ארגונית לא שולחים את השדה כלל, כדי שעריכה של
       // משימה ארגונית קיימת לא תוריד אותה בשוגג לרמה המחלקתית
       if (!isEdit) {
         payload.checklist = checklistInput.value.split('\n').map((s) => s.trim()).filter(Boolean);
-        // תת-משימה: נשלח רק ביצירה, כי העברת משימה קיימת תחת אב היא פעולה אחרת
-        if (opts.parentTaskId) payload.parentTaskId = opts.parentTaskId;
+        if (pre.statusShort) payload.statusShort = pre.statusShort;
+        if (opts.parentTaskId && !App.hasTracker()) payload.parentTaskId = opts.parentTaskId;
+      }
+      // משימת אב מהבורר — ביצירה, ובעריכה רק כשהשתנתה
+      if (App.hasTracker()) {
+        const chosen = parentSelect.value ? Number(parentSelect.value) : null;
+        if (!isEdit ? chosen : chosen !== (task.parentTaskId ?? null)) payload.parentTaskId = chosen;
       }
 
       saveBtn.disabled = true;
+      if (saveOpenBtn) saveOpenBtn.disabled = true;
       try {
+        /*
+         * "יש כבר משימה דומה" במחלקה (פרק 11ב) — לפני היצירה: לפתוח בכל זאת /
+         * לא לפתוח / להצטרף. ‎dupChecked‎ — מה שהוצג, כדי שלא יוצע אחר כך כמיזוג.
+         */
+        if (!isEdit) {
+          const dup = await TaskSyncView.checkDuplicate(payload);
+          if (!dup.proceed) {
+            saveBtn.disabled = false;
+            if (saveOpenBtn) saveOpenBtn.disabled = false;
+            if (!dup.back) {
+              m.close();
+              await App.refreshView();
+            }
+            return;
+          }
+          if (dup.dupChecked) payload.dupChecked = dup.dupChecked;
+        }
         let created = null;
         if (isEdit) await API.updateTask(task.id, payload);
         else created = await API.createTask(payload);
         m.close();
-        UI.success(isEdit ? 'המשימה עודכנה' : 'המשימה נוצרה');
+        /**
+         * משימה חדשה אינה נפתחת מעצמה — הכרטיס המלא קפץ גם למי שרק רצה
+         * לרשום משימה ולהמשיך. כדי שלא "תיעלם" (משימה בלי אחראי אינה בדף
+         * הבית, ובלי פרויקט היא בתחתית הלוח), ההודעה אומרת אצל מי ובאיזה
+         * פרויקט היא יושבת, עם "פתיחה". מי שרוצה להמשיך לערוך — "שמירה
+         * ופתיחה בהרחבה".
+         */
+        if (!isEdit) AssigneePicker.refresh();
+        if (isEdit) UI.success('המשימה עודכנה');
+        else if (!openAfter) UI.taskCreated(created?.task);
         await App.reloadReference();
         // הדיאלוג נפתח גם מהסרגל העליון, כשהמסך שמאחוריו אינו הלוח
         await App.refreshView();
         App.refreshNotifications();
-        /**
-         * משימה חדשה נפתחת מיד. בלי זה היא "נעלמת": משימה בלי אחראי אינה
-         * מופיעה בדף הבית, ומשימה בלי פרויקט נופלת לקבוצת "ללא פרויקט"
-         * בתחתית הלוח — והיוצר נשאר בלי שום סימן לאן הלכה.
-         */
-        if (created?.task?.id) TaskCardView.open(created.task.id);
+        opts.onSaved?.(created?.task ?? null);
+        if (openAfter && created?.task?.id) TaskCardView.open(created.task.id);
       } catch (err) {
         saveBtn.disabled = false;
+        if (saveOpenBtn) saveOpenBtn.disabled = false;
         UI.error(err);
       }
-    });
+    };
+    saveBtn.addEventListener('click', () => save());
+    saveOpenBtn?.addEventListener('click', () => save({ openAfter: true }));
   }
 
   // ------------------------------------------------------------- דיאלוג פרויקט
@@ -969,7 +1932,7 @@ const BoardView = (() => {
      */
     const parentOptions = [
       { value: '', label: 'פרויקט ראשי (ללא אב)' },
-      ...App.state.projects
+      ...App.myProjects({ keep: project?.parentProjectId ?? opts.parentProjectId ?? null })
         .filter((p) => !p.parentProjectId && p.status !== 'done' && (!project || p.id !== project.id))
         .map((p) => ({ value: p.id, label: p.name }))
     ];
@@ -985,6 +1948,7 @@ const BoardView = (() => {
      * רחוקות, ורוב פתיחות הדיאלוג אינן נוגעות בשדה הזה.
      */
     const statusOwnerSelect = UI.select([{ value: '', label: 'ללא צביעה' }], String(project?.statusOwnerId ?? ''));
+    const projectClass = ClassPicker.create(project?.classification ?? null);
     API.statusList().then((d) => {
       for (const l of d.lists ?? []) {
         const mine = l.ownerId === App.state.actor?.id;
@@ -1158,6 +2122,7 @@ const BoardView = (() => {
           'איזו רשימת סטטוסים תצבע את שורות הפרויקט במסך הבקרה')
       ]),
       el('div.row', {}, [UI.field('תאריך התחלה', startInput), UI.field('תאריך יעד', dueInput)]),
+      UI.field('🔒 סיווג הפרויקט', projectClass.node, `חל על כל משימה בפרויקט שאין לה סיווג משלה. ${ClassPicker.HINT}`),
       UI.field('צבע הפרויקט', el('div.flex', {}, [colorInput, colorSwatches]),
         'הצבע מסמן את שורות המשימות של הפרויקט, לזיהוי במבט'),
       imagesBox,
@@ -1192,6 +2157,8 @@ const BoardView = (() => {
         statusOwnerId: statusOwnerSelect.value || null,
         templateId: templateSelect.value || null
       };
+      const pcls = projectClass.value();
+      if (pcls.topic !== (project?.classification?.topic ?? '') || pcls.sens !== (project?.classification?.sens ?? 0)) Object.assign(payload, pcls);
       saveBtn.disabled = true;
       try {
         if (isEdit) await API.updateProject(project.id, payload);

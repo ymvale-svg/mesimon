@@ -19,7 +19,9 @@ const App = (() => {
     // העדפות תצוגה של המשתמש, כפי שהגיעו מהשרת ב-bootstrap
     prefs: {},
     route: { name: 'home', params: {} },
-    homeData: null
+    homeData: null,
+    // המונה שעל כפתור Today — משימות של היום, באיחור, ומיילים שמחכים להחלטה
+    todayCount: 0
   };
 
   /**
@@ -41,6 +43,56 @@ const App = (() => {
   }
 
   const getPref = (key, fallback = null) => state.prefs?.[key] ?? fallback;
+
+  // ------------------------------------------------------------- מצב לילה
+
+  /**
+   * מראה המערכת: בהיר, לילה, או לפי הגדרת מערכת ההפעלה. ההעדפה נשמרת בשרת
+   * כמו כל העדפה — כדי שתלך אחרי המשתמש בין מכשירים — ובמקביל במכשיר:
+   * הסקריפט הקטן בראש index.html קורא את העותק המקומי לפני הציור הראשון,
+   * ולכן מי שבחר לילה אינו רואה הבזק לבן בכל טעינה.
+   *
+   * "לפי המערכת" מוחל כאן ל"בהיר" או "לילה" ממש, ולא נשאר ל-CSS: כך יש
+   * בגיליון מצב אחד לכל מראה (‎data-theme‎), והמעבר של מערכת ההפעלה בערב
+   * מתעדכן חי דרך המאזין למטה.
+   */
+  const THEME_KEY = 'mesimon.theme';
+  const THEMES = [
+    { key: 'light', label: 'בהיר', glyph: '☀' },
+    { key: 'dark', label: 'לילה', glyph: '☾' },
+    // בלי סימן: אין תו "חצי ירח" שמופיע זהה בכל הגופנים, ומילים מספיקות
+    { key: 'system', label: 'לפי המערכת', glyph: '' }
+  ];
+  const DARK_QUERY = window.matchMedia('(prefers-color-scheme: dark)');
+
+  function themePref() {
+    let local = null;
+    try { local = localStorage.getItem(THEME_KEY); } catch { /* אחסון חסום — נשארים עם השרת */ }
+    const value = getPref('theme', null) ?? local;
+    return THEMES.some((t) => t.key === value) ? value : 'light';
+  }
+
+  function applyTheme(pref = themePref(), { animate = false } = {}) {
+    const html = document.documentElement;
+    const dark = pref === 'dark' || (pref === 'system' && DARK_QUERY.matches);
+    /*
+     * מעבר רך רק כשהמשתמש מחליף. בטעינה המצב כבר נכון מהסקריפט שבראש הדף,
+     * ומעבר שם היה מנפיש כל כרטיס מלבן לכהה.
+     */
+    if (animate && !window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      html.classList.add('theme-switching');
+      setTimeout(() => html.classList.remove('theme-switching'), 320);
+    }
+    html.dataset.theme = dark ? 'dark' : 'light';
+    try { localStorage.setItem(THEME_KEY, pref); } catch { /* המכשיר לא יזכור — השרת כן */ }
+  }
+
+  function setTheme(pref) {
+    setPref('theme', pref);
+    applyTheme(pref, { animate: true });
+  }
+
+  DARK_QUERY.addEventListener('change', () => { if (themePref() === 'system') applyTheme(); });
 
   const root = () => document.getElementById('app');
 
@@ -111,6 +163,19 @@ const App = (() => {
   const userName = (id) => state.users.find((u) => u.id === id)?.name ?? null;
   const vendorName = (id) => state.vendors.find((v) => v.id === id)?.name ?? null;
   const project = (id) => state.projects.find((p) => p.id === id) ?? null;
+
+  /**
+   * הפרויקטים שלי — אותו עולם בכל בורר ומסנן פרויקט במערכת: פרויקט שאני מנהל
+   * או פתחתי, שנעצתי, שיש לי בו משימות, או של המחלקה שלי (‎canAddTask‎ מהשרת,
+   * אותו כלל ש-‎assertMayUseProject‎ אוכף). לא כל פרויקט בארגון — גם למנהל
+   * מערכת, שרשימה של כל הארגון רק מבלבלת אותו.
+   *
+   * ‎keep‎ — פרויקט שכבר נבחר נשאר ברשימה גם אם אינו "שלי", כדי שבורר לא
+   * יוצג ריק ולא ישנה ערך בשקט.
+   */
+  const myProjects = ({ keep = null, openOnly = false } = {}) => state.projects.filter((p) =>
+    (p.canAddTask || p.mine || (keep !== null && keep !== '' && String(p.id) === String(keep)))
+    && (!openOnly || p.status !== 'done' || String(p.id) === String(keep)));
   const internalBoard = () => state.boards.find((b) => b.type === 'internal') ?? null;
   const vendorBoards = () => state.boards.filter((b) => b.type === 'vendor');
 
@@ -140,11 +205,34 @@ const App = (() => {
     try {
       const data = await API.bootstrap();
       Object.assign(state, data);
+      // ההעדפה מהשרת גוברת על העותק במכשיר — משתמש אחר, או בחירה ממכשיר אחר
+      applyTheme();
+      /*
+       * זרקור "מה חדש": המערכת נטענת בתוך הבאנר לתצוגה בלבד. בלי התראות,
+       * בלי סקרים, בלי Service Worker ובלי באנר בתוך באנר — מכאן ‎Spotlight‎
+       * מנווט ומודד לפי מה שהבאנר מבקש.
+       */
+      if (Spotlight.embedded) return Spotlight.embedBoot();
       await refreshNotifications();
       startNotifPolling();
-      navigate(isVendor() ? 'vendor' : 'home');
+      const params = new URLSearchParams(location.search);
+      /*
+       * בטלפון מסך הפתיחה הוא Today. במחשב — דף הבית, אלא אם הגיעו מקישור
+       * (מייל הבוקר) או מקיצור באפליקציה המותקנת.
+       */
+      navigate(isVendor() ? 'vendor' : (isPhone() || params.get('view') === 'today') ? 'today' : 'home');
       openTaskFromUrl();
-      if (!isVendor()) AiInboxView.handleReturn();
+      if (!isVendor()) openRecordingFromUrl();
+      if (!isVendor()) {
+        // באנר "מה חדש" — רק כשיש גרסה שעוד לא נראתה, או מקישור במייל
+        WhatsNewView.maybeShow();
+        AiInboxView.handleReturn();
+        contactsNotice();
+        openFromUrl(params);
+        refreshTodayCount();
+        clearInterval(todayTimer);
+        todayTimer = setInterval(refreshTodayCount, 5 * 60000);
+      }
       registerServiceWorker();
       /*
        * רישום מחדש בכל כניסה, ולא רק בהפעלה הראשונה: ההרשמה נשמרת בשרת לפי
@@ -153,7 +241,15 @@ const App = (() => {
        */
       subscribeToPush();
     } catch (err) {
-      if (err.status === 401) LoginView.render(root(), boot);
+      // בתוך הבאנר אין מסך כניסה — הבאנר עובר לאייקון
+      if (Spotlight.embedded) return Spotlight.embedFail();
+      if (err.status === 401) {
+        // קישור מהבוט ("לחיבור Google") — ממשיכים אליו אחרי הכניסה, גם דרך כניסה עם Google
+        const q = new URLSearchParams(location.search);
+        const after = q.get('connect') ? `connect:${q.get('connect')}` : q.get('open') ? `open:${q.get('open')}` : null;
+        if (after) { try { sessionStorage.setItem('mesimon.afterLogin', after); } catch { /* ריק */ } }
+        LoginView.render(root(), boot);
+      }
       else {
         UI.mount(root(), el('div.empty', {}, [
           el('div.e-icon', { text: '⚠️' }),
@@ -165,6 +261,79 @@ const App = (() => {
   }
 
   /**
+   * אנשי הקשר מ-Google לא עובדים אצלו (לא מחובר, חיבור שפג, הרשאה חסרה, או
+   * שלא נטענו) — חלון אחד בפתיחה, פעם ביום, עם הכפתור שמתקן: חיבור, חיבור
+   * מחדש או רענון. לא אחרי חזרה מ-Google (שם כבר מתחבר), ולא מעל "מה חדש".
+   */
+  function contactsNotice() {
+    const n = state.contactsNotice;
+    const q = new URLSearchParams(location.search);
+    if (!n || q.has('gmail') || q.has('connect') || q.has('open')) return;
+    const key = 'mesimon.contactsNotice';
+    const day = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Jerusalem' }).format(new Date());
+    try { if (localStorage.getItem(key) === day) return; } catch { /* בלי אחסון — מציגים */ }
+    setTimeout(async () => {
+      if (document.querySelector('.modal-backdrop, .wn-overlay, dialog[open]')) return; // חלון אחר פתוח — מחר
+      try { localStorage.setItem(key, day); } catch { /* ריק */ }
+      const okText = { connect: 'חיבור Google', reconnect: 'חיבור מחדש', refresh: '🔄 רענון' }[n.kind];
+      if (!await UI.confirm(n.text, { title: `👥 ${n.title}`, okText })) return;
+      if (n.kind !== 'refresh') { location.href = '/api/me/gmail/connect'; return; }
+      try {
+        await API.post('/api/me/google/contacts/sync');
+        UI.success('אנשי הקשר נטענים מ-Google ברקע');
+      } catch (err) { UI.error(err); }
+    }, 1500);
+  }
+
+  /**
+   * קישורים וקיצורים שפותחים פעולה ולא מסך:
+   *   ‎?voice=1‎  — "היי Siri, משימון" / "משימה בקול": ההקלטה נפתחת, שואלת ומאזינה
+   *   ‎?new=task‎ — "משימה חדשה" מהקיצור של האפליקציה המותקנת
+   * הפרמטרים נמחקים מהכתובת, כדי שרענון לא יפתח שוב.
+   */
+  function openFromUrl(params) {
+    const voice = params.get('voice') === '1';
+    const newTask = params.get('new') === 'task';
+    /*
+     * ‎?connect=google‎ — קישור מהבוט: ישר למסך האישור של Google (חיבור או
+     * חיבור מחדש, עם כל ההרשאות). ‎?open=google‎ — חלון חיבור Google במשימון
+     * (לרענון אנשי הקשר). נשמר גם דרך מסך הכניסה, אם היה צריך להתחבר קודם.
+     */
+    let connect = params.get('connect') ?? params.get('open');
+    if (connect) connect = `${params.has('connect') ? 'connect' : 'open'}:${connect}`;
+    try {
+      connect = connect || sessionStorage.getItem('mesimon.afterLogin');
+      sessionStorage.removeItem('mesimon.afterLogin');
+    } catch { /* ריק */ }
+    if (params.has('voice') || params.has('new') || params.has('view') || params.has('connect') || params.has('open')) history.replaceState(null, '', location.pathname);
+    if (connect === 'connect:google') { location.href = '/api/me/gmail/connect'; return; }
+    if (connect === 'open:google') { setTimeout(() => AiInboxView.openGmail(() => {}), 300); return; }
+    if (voice && may('create_task')) setTimeout(() => VoiceView.open({ ask: true, handsFree: true }), 300);
+    else if (newTask && may('create_task')) setTimeout(() => BoardView.openTaskDialog(), 300);
+  }
+
+  // ------------------------------------------------------------- מונה Today
+
+  let todayTimer = null;
+
+  function setTodayCount(n) {
+    state.todayCount = Number(n) || 0;
+    for (const node of document.querySelectorAll('.today-badge')) {
+      node.textContent = String(state.todayCount);
+      node.style.display = state.todayCount ? '' : 'none';
+    }
+  }
+
+  async function refreshTodayCount() {
+    if (!state.actor || isVendor()) return;
+    try {
+      setTodayCount((await API.get('/api/today/count')).count);
+    } catch { /* המונה אינו תנאי לשום דבר */ }
+  }
+
+  const todayBadge = () => el('span.today-badge', { text: String(state.todayCount), style: { display: state.todayCount ? '' : 'none' } });
+
+  /**
    * ‎?task=12‎ — קישור ישיר למשימה, כמו זה שנשלח בדואר ההקצאה. הפרמטר נמחק
    * מהכתובת אחרי הפתיחה, כדי שרענון הדף לא יפתח את הכרטיס שוב ושוב.
    */
@@ -173,6 +342,18 @@ const App = (() => {
     if (!id) return;
     history.replaceState(null, '', location.pathname);
     TaskCardView.open(id);
+  }
+
+  /**
+   * ‎?rec=mtg_abc&t=760‎ — קישור לרגע בהקלטה (מהנגן, ממשימה שנפתחה מפגישה): הנגן
+   * נפתח ומתחיל מהשנייה הזו. גם כאן הפרמטרים נמחקים מהכתובת.
+   */
+  function openRecordingFromUrl() {
+    const q = new URLSearchParams(location.search);
+    const id = q.get('rec');
+    if (!id || !/^[\w-]{1,80}$/.test(id) || typeof RecordingPlayer === 'undefined') return;
+    history.replaceState(null, '', location.pathname);
+    RecordingPlayer.open(id, { t: Number(q.get('t')) || 0 });
   }
 
   /**
@@ -502,6 +683,8 @@ const App = (() => {
   async function logout() {
     // לפני הבקשה ולא אחריה: אם השרת אינו זמין הבקשה נכשלת, והסקר היה נשאר חי
     resetNotifSession();
+    clearInterval(todayTimer);
+    VoiceWake.stop();
     await API.logout();
     state.actor = null;
     LoginView.render(root(), boot);
@@ -510,17 +693,34 @@ const App = (() => {
   // ------------------------------------------------------------- ניווט
 
   const ROUTES = {
+    today: { label: 'Today', icon: 'my-tasks', render: (c) => TodayView.render(c) },
+    calendar: { label: 'יומן', icon: 'my-tasks', render: (c) => CalendarView.render(c) },
+    // הקלטות Zoom — לשונית במסך היומן; קישור ישן לכאן מגיע לדף הבית
+    recordings: { label: 'הקלטות', icon: 'my-tasks', hidden: true, render: (c) => RecordingsView.render(c) },
     home: { label: 'דף הבית', icon: 'home', render: (c) => HomeView.render(c) },
     board: { label: 'לוח המשימות', icon: 'board', render: (c, p) => BoardView.render(c, { ...p, scope: 'internal' }) },
     vendorBoards: { label: 'כל משימות הספקים', icon: 'vendors', render: (c, p) => BoardView.render(c, { ...p, scope: 'vendors' }) },
-    tracker: { label: 'בקרת משימות', icon: 'reports', render: (c, p) => TrackerView.render(c, p) },
+    /*
+     * פתוח רק למי שנפתח לו בתיק העובד (ברירת המחדל — מחלקת תכנון), כדי שלא
+     * יבלבל את כולם. לשאר אינו בתפריט, וניווט אליו מגיע לדף הבית.
+     */
+    tracker: { label: 'בקרת משימות', icon: 'reports', allowed: () => hasTracker(), render: (c, p) => TrackerView.render(c, p) },
     archive: { label: 'ארכיון', icon: 'archive', render: (c, p) => BoardView.render(c, { ...p, scope: 'internal', archived: true }) },
     reports: { label: 'דוחות', icon: 'reports', render: (c) => ReportsView.render(c) },
+    // אלפון ארגוני — מ"החשבון שלי" ומהחלון בדשבורד, לכל העובדים
+    phonebook: { label: 'אלפון', icon: 'my-tasks', render: (c) => PhonebookView.render(c) },
     admin: { label: 'ניהול המערכת', icon: 'admin', render: (c, p) => AdminView.render(c, p) },
+    // ⚙ ההגדרות שלי — מסך עם תפריט צד (15.11.26). מעיגול השם, מ-⚙ בטלפון ומחיפוש "הגדרות"
+    settings: { label: 'ההגדרות שלי', icon: 'admin', render: (c, p) => renderMySettings(c, p) },
     vendor: { label: 'המשימות שלי', icon: 'my-tasks', render: (c) => VendorPortalView.render(c) }
   };
 
+  /** מסך "בקרת משימות" ותתי-משימות — רק למי שנפתח לו (‎publicActor.tracker‎ בשרת) */
+  const hasTracker = () => !isVendor() && Boolean(state.actor?.tracker);
+
   function navigate(name, params = {}) {
+    if (ROUTES[name]?.hidden || ROUTES[name]?.allowed?.() === false) name = 'home';
+    if (name === 'phonebook' && isVendor()) name = 'vendor';
     state.route = { name, params };
     closeDrawer();
     // הפתיחה המהירה צפה על ה-body ולכן אינה נמחקת עם המסך — היא שייכת
@@ -600,6 +800,7 @@ const App = (() => {
       state.notifications = data.notifications;
       state.unread = data.unread;
       updateBell();
+      notifPanel?.redraw();
       // בלי await: הבאת כותרות המשימות להקפצה לא תעכב את עדכון הפעמון
       popNewNotifications(data.notifications);
     } catch (err) {
@@ -874,7 +1075,8 @@ const App = (() => {
     return rows;
   }
 
-  function notifSettingsDialog() {
+  /** ‎into‎ — בתוך לשונית ב"⚙ ההגדרות שלי" במקום חלון */
+  function notifSettingsDialog({ into = null } = {}) {
     const body = el('div');
 
     const draw = () => {
@@ -983,6 +1185,7 @@ const App = (() => {
           el('span', { text: 'ℹ️' }),
           el('div', { text: 'הכיבוי חל על הקפיצה בפינת המסך בלבד. כל ההתראות ממשיכות להופיע ברשימה שמתחת לפעמון, כדי שדבר לא ייעלם.' })
         ]),
+        isVendor() ? null : assignChannelsBox(),
         diagBox
       );
 
@@ -1004,72 +1207,294 @@ const App = (() => {
 
     const diagBox = el('div');
 
+    /*
+     * משימה ששויכה לי — בנוסף לפעמון: מייל, והודעה מבוט הוואטסאפ של הארגון
+     * (למי שהטלפון שלו רשום בפרופיל). שניהם דלוקים כברירת מחדל.
+     */
+    function assignChannelsBox() {
+      const chosen = getPref('assignChannels', {}) ?? {};
+      const toggle = (key, label, hint) => {
+        const box = el('input', { type: 'checkbox', checked: chosen[key] !== false });
+        box.addEventListener('change', () => {
+          setPref('assignChannels', { ...(getPref('assignChannels', {}) ?? {}), [key]: box.checked });
+        });
+        return el('tr', {}, [
+          el('td', {}, [el('div', { text: label }), hint ? el('div.mute-sm', { text: hint }) : null]),
+          el('td', { style: { textAlign: 'center', width: '110px' } }, [el('label.checkbox', {}, [box])])
+        ]);
+      };
+      return el('div', {}, [
+        el('h4', { text: 'כשמשייכים לי משימה', style: { margin: '16px 0 8px', fontSize: '13px' } }),
+        el('div.table-wrap', {}, [
+          el('table.data', {}, [
+            el('tbody', {}, [
+              toggle('email', '📧 מייל עם פרטי המשימה'),
+              toggle('whatsapp', '💬 הודעה מבוט הוואטסאפ', state.actor?.phone ? null : 'נשלחת רק כשהטלפון שלך רשום ב"החשבון שלי"')
+            ])
+          ])
+        ]),
+        // 🤖 מה הבוט שולח לי — עבר ל"החשבון שלי ← 🤖 הבוט" (15.11.26), כאן רק קישור
+        el('div.mute-sm.mt', {}, ['מה הבוט שולח לך (תזכורות, הצעות תשובה, טיפ יומי) — ', el('a', { href: '#', text: '🤖 הבוט שלי', onclick: (e) => { e.preventDefault(); openBotPrefs(); } })])
+      ]);
+    }
+
     draw();
-    UI.modal({
+    // סגירה דרך ‎m.close()‎ ולא הסרת ‎.modal-backdrop‎ הראשון במסמך: כשנפתחים
+    // שני חלונות זה מעל זה, "הראשון" הוא דווקא זה שמתחת
+    const m = UI.modalOrInline(into, {
       title: 'ניהול התראות',
       body,
       footer: [
         el('div.spacer'),
-        el('button.btn', { onclick: () => document.querySelector('.modal-backdrop')?.remove() }, ['סגירה'])
+        el('button.btn', { 'data-close': '1', onclick: () => m.close() }, ['סגירה'])
       ]
     });
   }
 
+  /**
+   * מגירת ההתראות.
+   *
+   * מצב יחיד ומסלול סגירה יחיד (‎closeNotifPanel‎). עד כה המאזין ללחיצה
+   * בחוץ הוסר רק כשהלחיצה בחוץ היא שסגרה: סגירה בכפתור הפעמון, ב"סמן הכל
+   * כנקרא" או במעבר להגדרות השאירה אותו רשום, וכל פתיחה הוסיפה עוד אחד.
+   * בנוסף הבדיקה הייתה ‎e.target !== anchor‎ — לחיצה על אייקון הפעמון, שהוא
+   * צומת *בתוך* הכפתור, נחשבה "בחוץ": המגירה נסגרה בלחיצה ונפתחה מחדש מיד.
+   *
+   * בטלפון — מגירה תחתונה (‎UI.sheet‎) במקום הרשימה הנפתחת מהפעמון.
+   */
+  let notifPanel = null;              // { close, redraw }
+  let notifFilter = 'all';            // 'all' | 'unread' — נזכר לאורך הסשן
+
+  function closeNotifPanel() {
+    notifPanel?.close();
+  }
+
+  /** "היום", "אתמול", או יום בשבוע ותאריך — כותרת לכל יום ברשימה */
+  function notifDayLabel(iso) {
+    const d = new Date(iso);
+    d.setHours(0, 0, 0, 0);
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const days = Math.round((today - d) / 86400000);
+    if (days === 0) return 'היום';
+    if (days === 1) return 'אתמול';
+    const weekday = d.toLocaleDateString('he-IL', { weekday: 'long' });
+    return days < 7 ? weekday : `${weekday} · ${UI.formatDate(iso)}`;
+  }
+
+  /**
+   * קיבוץ: התראות רצופות על אותה משימה ומאותו סוג הופכות לשורה אחת עם
+   * "N עדכונים". עשר הודעות בשרשור אחד של משימה אחת דחקו עד כה את כל
+   * השאר מחוץ למגירה. רק רצופות — קיבוץ על פני כל הרשימה היה מזיז התראה
+   * ישנה אל ראש הרשימה רק משום שיש לה אחות חדשה.
+   *
+   * וקיבוץ בתוך היום בלבד: שורה אחת שחוצה את "היום" ו"אתמול" אינה שייכת
+   * לאף אחת משתי הכותרות.
+   */
+  function groupNotifs(list) {
+    const groups = [];
+    for (const n of list) {
+      const prev = groups.at(-1);
+      const day = notifDayLabel(n.createdAt);
+      if (prev && n.taskId && prev.taskId === n.taskId && prev.kind === n.kind && prev.day === day) {
+        prev.items.push(n);
+      } else {
+        groups.push({ taskId: n.taskId, kind: n.kind, day, items: [n] });
+      }
+    }
+    return groups;
+  }
+
+  async function markNotifsRead(items) {
+    const ids = items.filter((n) => !n.isRead).map((n) => n.id);
+    if (!ids.length) return;
+    await Promise.all(ids.map((id) => API.markRead(id)));
+    for (const n of items) n.isRead = true;
+    await refreshNotifications();
+  }
+
+  function notifPanelContent({ withTitle, onClose }) {
+    const listBox = el('div.np-list');
+    const toggleBtns = {};
+
+    const drawList = () => {
+      const source = notifFilter === 'unread'
+        ? state.notifications.filter((n) => !n.isRead)
+        : state.notifications;
+      for (const [key, btn] of Object.entries(toggleBtns)) btn.setAttribute('aria-pressed', String(notifFilter === key));
+
+      if (!source.length) {
+        UI.mount(listBox, UI.empty(notifFilter === 'unread' ? 'אין התראות שלא נקראו' : 'אין התראות חדשות', UI.icon('bell')));
+        return;
+      }
+
+      const nodes = [];
+      let lastDay = null;
+      for (const g of groupNotifs(source)) {
+        if (g.day !== lastDay) {
+          lastDay = g.day;
+          nodes.push(el('div.np-day', { role: 'presentation', text: g.day }));
+        }
+        nodes.push(notifRow(g));
+      }
+      UI.mount(listBox, nodes);
+    };
+
+    const notifRow = (g) => {
+      const n = g.items[0];                       // החדשה בקבוצה — היא שמוצגת
+      const unread = g.items.some((x) => !x.isRead);
+      const style = NOTIF_STYLE[n.kind] ?? NOTIF_STYLE.status_change;
+      const count = g.items.length;
+
+      const main = el('button.n-main', {
+        type: 'button',
+        onclick: async () => {
+          onClose();
+          if (n.taskId) TaskCardView.open(n.taskId);
+          try { await markNotifsRead(g.items); } catch { /* יסומן בפתיחה הבאה */ }
+        }
+      }, [
+        el('div.n-icon', { style: { background: style.bg, color: style.color } },
+          [style.mask ? UI.icon(style.mask, { size: 15 }) : style.icon]),
+        el('div.n-body', {}, [
+          el('b', { text: n.title }),
+          n.body ? el('div.n-text', { text: n.body }) : null,
+          el('small', {}, [
+            UI.relative(n.createdAt),
+            count > 1 ? el('span.n-count', { text: `${count} עדכונים` }) : null
+          ])
+        ])
+      ]);
+
+      // כפתור נפרד ולא לחיצה על השורה: השורה פותחת את המשימה, וכאן רק מסמנים
+      const readBtn = unread
+        ? el('button.n-read', {
+            type: 'button',
+            title: 'סימון כנקרא',
+            'aria-label': count > 1 ? `סימון ${count} עדכונים כנקראו` : 'סימון כנקרא',
+            onclick: async (e) => {
+              e.stopPropagation();
+              readBtn.disabled = true;
+              try {
+                await markNotifsRead(g.items);
+              } catch (err) {
+                readBtn.disabled = false;
+                UI.error(err);
+              }
+            }
+          }, [el('span.n-dot', { 'aria-hidden': 'true' })])
+        : null;
+
+      return el(`div.notif${unread ? '.unread' : ''}`, {}, [main, readBtn]);
+    };
+
+    const segBtn = (key, label) => {
+      toggleBtns[key] = el('button.np-seg-btn', {
+        type: 'button',
+        'aria-pressed': String(notifFilter === key),
+        onclick: () => { notifFilter = key; drawList(); }
+      }, [label]);
+      return toggleBtns[key];
+    };
+
+    const markAll = el('button.btn.btn-sm', {
+      type: 'button',
+      onclick: async () => {
+        markAll.disabled = true;
+        try {
+          await API.markRead(null);
+          await refreshNotifications();
+        } catch (err) { UI.error(err); }
+        markAll.disabled = false;
+      }
+    }, ['סמן הכל כנקרא']);
+
+    const head = el('div.np-head', {}, [
+      withTitle ? el('h3', { text: 'התראות', style: { fontSize: '15px' } }) : null,
+      el('div.spacer'),
+      markAll,
+      el('button.btn.btn-sm', {
+        type: 'button',
+        title: 'ניהול התראות — מה קופץ בפינת המסך',
+        'aria-label': 'ניהול התראות',
+        onclick: () => { onClose(); notifSettingsDialog(); }
+      }, ['⚙']),
+      // בשורה משלו, ברוחב מלא — לצד הכותרת והפעולות הוא דחק את ⚙ לשורה שבורה
+      el('div.np-seg', { role: 'group', 'aria-label': 'אילו התראות להציג' }, [
+        segBtn('unread', 'לא נקראו'),
+        segBtn('all', 'הכול')
+      ])
+    ]);
+
+    const desktopSlot = el('div');
+    const drawDesktopRow = () => UI.mount(desktopSlot, desktopNotifRow(drawDesktopRow));
+
+    // ציור מחדש כשהסקר מביא התראות חדשות, או אחרי סימון — בלי לסגור את המגירה
+    const redraw = () => {
+      markAll.style.display = state.unread ? '' : 'none';
+      drawList();
+    };
+    drawDesktopRow();
+    redraw();
+    return { node: el('div.np-content', {}, [head, desktopSlot, listBox]), redraw };
+  }
+
   function toggleNotifPanel(anchor) {
-    const existing = document.getElementById('notif-panel');
-    if (existing) { existing.remove(); return; }
+    if (notifPanel) { closeNotifPanel(); return; }
 
     // המגירה נפתחת באותה פינה ומציגה את אותן התראות — הכרטיסים המוקפצים מיותרים כאן
     UI.clearNotifyPops();
 
-    const panel = el('div.notif-panel#notif-panel', {}, [
-      el('div.np-head', {}, [
-        el('h3', { text: 'התראות', style: { flex: '1', fontSize: 'var(--fs-lg)' } }),
-        state.unread
-          ? el('button.btn.btn-sm', {
-              onclick: async () => {
-                await API.markRead(null);
-                await refreshNotifications();
-                panel.remove();
-              }
-            }, ['סמן הכל כנקרא'])
-          : null,
-        el('button.btn.btn-sm', {
-          title: 'ניהול התראות — מה קופץ בפינת המסך',
-          onclick: () => { panel.remove(); notifSettingsDialog(); }
-        }, ['⚙'])
-      ]),
-      desktopNotifRow(() => { panel.remove(); toggleNotifPanel(anchor); }),
-      el('div.np-list', {}, state.notifications.length
-        ? state.notifications.map((n) => {
-            const style = NOTIF_STYLE[n.kind] ?? NOTIF_STYLE.status_change;
-            return el(`div.notif${n.isRead ? '' : '.unread'}`, {
-              onclick: async () => {
-                if (!n.isRead) { await API.markRead(n.id); await refreshNotifications(); }
-                panel.remove();
-                if (n.taskId) TaskCardView.open(n.taskId);
-              }
-            }, [
-              el('div.n-icon', { style: { background: style.bg, color: style.color } },
-                [style.mask ? UI.icon(style.mask, { size: 15 }) : style.icon]),
-              el('div.n-body', {}, [
-                el('b', { text: n.title }),
-                n.body ? el('div', { text: n.body, style: { fontSize: 'var(--fs-sm)' } }) : null,
-                el('small', { text: UI.relative(n.createdAt) })
-              ])
-            ]);
-          })
-        : [UI.empty('אין התראות חדשות', UI.icon('bell'))])
-    ]);
+    if (isPhone()) {
+      let ref = null;
+      const content = notifPanelContent({ withTitle: false, onClose: () => ref?.close() });
+      ref = UI.sheet({
+        title: 'התראות',
+        body: content.node,
+        className: 'notif-sheet',
+        snap: [0.62, 0.92],
+        onClose: () => { if (notifPanel?.ref === ref) notifPanel = null; }
+      });
+      notifPanel = { ref, close: () => ref.close(), redraw: content.redraw };
+      return;
+    }
+
+    let panel = null;
+    const close = () => {
+      if (!notifPanel || notifPanel.panel !== panel) return;
+      notifPanel = null;
+      panel.remove();
+      anchor?.setAttribute('aria-expanded', 'false');
+      document.removeEventListener('pointerdown', onOutside, true);
+      document.removeEventListener('keydown', onKey);
+      // המיקוד חוזר לפעמון רק אם הוא היה בתוך המגירה — לא נגזול לחיצה במקום אחר
+      if ((!document.activeElement || document.activeElement === document.body) && anchor?.isConnected) anchor.focus();
+    };
+    const content = notifPanelContent({ withTitle: true, onClose: close });
+    panel = el('div.notif-panel#notif-panel', { role: 'dialog', 'aria-label': 'התראות', tabindex: '-1' }, [content.node]);
+
+    const onOutside = (e) => {
+      if (panel.contains(e.target) || anchor?.contains(e.target)) return;
+      // חלון שנפתח מתוך המגירה, או טוסט "ביטול" — אינם לחיצה בחוץ
+      if (e.target.closest?.('#modal-root, .toast-root')) return;
+      close();
+    };
+    const onKey = (e) => {
+      if (e.key !== 'Escape' || e.defaultPrevented) return;
+      // מחוץ למגירה ובתוך חלון אחר — ה-Escape שייך לחלון
+      if (UI.openLayers().length) return;
+      e.preventDefault();
+      close();
+      if (anchor?.isConnected) anchor.focus();
+    };
 
     document.body.appendChild(panel);
-    const closeOnOutside = (e) => {
-      if (!panel.contains(e.target) && e.target !== anchor) {
-        panel.remove();
-        document.removeEventListener('mousedown', closeOnOutside);
-      }
-    };
-    setTimeout(() => document.addEventListener('mousedown', closeOnOutside), 0);
+    // ‎pointerdown‎ בשלב הלכידה — גם במגע, וגם כשרכיב אחר עוצר את הבעבוע
+    document.addEventListener('pointerdown', onOutside, true);
+    document.addEventListener('keydown', onKey);
+    if (anchor) anchor.setAttribute('aria-expanded', 'true');
+    notifPanel = { panel, close, redraw: content.redraw };
+    panel.focus({ preventScroll: true });
   }
 
   // ------------------------------------------------------------- חיפוש גלובלי
@@ -1086,32 +1511,159 @@ const App = (() => {
    */
   const SEARCH_DEBOUNCE_MS = 120;
 
+  /**
+   * השוואה עברית סלחנית: בלי ניקוד וטעמים, בלי גרש וגרשיים (גם בכתיב
+   * האנגלי שלהם), ואותיות סופיות כרגילות — "דוח", "דו״ח" ו"דו"ח" הם אותה
+   * מילה, וכך גם "סיכום" שהוקלד עד "סיכו" (המ"ם עוד לא נעשתה סופית).
+   */
+  const FINALS = { 'ך': 'כ', 'ם': 'מ', 'ן': 'נ', 'ף': 'פ', 'ץ': 'צ' };
+  const normSearch = (text) => String(text ?? '')
+    .toLowerCase()
+    .replace(/[֑-ׇ]/g, '')
+    .replace(/[׳״'"`]/g, '')
+    .replace(/[ךםןףץ]/g, (c) => FINALS[c])
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  /** האם כל אותיות ‎needle‎ מופיעות ב-‎hay‎ לפי הסדר — "לחמש" מוצא "לוח המשימות" */
+  const isSubsequence = (needle, hay) => {
+    let i = 0;
+    for (const ch of hay) if (ch === needle[i]) i++;
+    return i === needle.length;
+  };
+
+  /**
+   * ניקוד התאמה לפעולה מקומית. התחלת השם גוברת על הכלה, השם גובר על מילת
+   * מפתח, והתאמה מפוזרת (תת-רצף) היא המוצא האחרון — כך "דו" מעלה את
+   * "דוחות" לפני "לוח המשימות", ו"משימה" את "משימה חדשה" לפני כל השאר.
+   */
+  function actionScore(q, action) {
+    const title = normSearch(action.title);
+    const keys = (action.keys ?? []).map(normSearch);
+    if (title.startsWith(q)) return 100;
+    if (title.includes(q)) return 80;
+    if (keys.some((k) => k.startsWith(q))) return 70;
+    if (keys.some((k) => k.includes(q))) return 60;
+    const compact = q.replace(/ /g, '');
+    if (compact.length > 1 && isSubsequence(compact, title.replace(/ /g, ''))) return 30;
+    if (compact.length > 1 && keys.some((k) => isSubsequence(compact, k.replace(/ /g, '')))) return 20;
+    return 0;
+  }
+
+  /**
+   * פעולות ומעברים שהחיפוש מציע לפני תוצאות השרת — לב תפריט Ctrl+K.
+   *
+   * רק מה שהמשתמש רשאי לעשות בפועל: אותם תנאים שקובעים מה מופיע בתפריט
+   * הצד ומה מופיע בסרגל העליון. פעולה שמוצעת כאן ונכשלת ב-403 גרועה
+   * מפעולה שלא הוצעה.
+   *
+   * מסך "בקרת משימות" — רק למי שנפתח לו, כמו בתפריט הצד.
+   */
+  function paletteActions() {
+    const route = (name, keys) => ({ kind: 'route', title: ROUTES[name].label, keys, run: () => navigate(name, {}) });
+    const notifications = {
+      kind: 'action', title: 'התראות', keys: ['פעמון', 'עדכונים', 'notifications'],
+      run: () => toggleNotifPanel(document.querySelector('.topbar .notif-bell'))
+    };
+
+    if (isVendor()) return [route('vendor', ['משימות', 'שלי', 'בית', 'tasks']), notifications];
+    return [
+      may('create_task')
+        ? { kind: 'action', title: 'משימה חדשה', keys: ['הוספה', 'יצירה', 'חדש', 'פתיחת משימה', 'new task', 'add'], run: () => BoardView.openTaskDialog() }
+        : null,
+      route('today', ['היום', 'מה להיום', 'יומי', 'today']),
+      route('home', ['בית', 'המשימות שלי', 'דשבורד', 'ראשי', 'home']),
+      // יומן — לכל העובדים, כמו בתפריט הצד
+      route('calendar', ['יומן', 'פגישות', 'לוח שנה', 'calendar']),
+      route('board', ['לוח', 'משימות', 'רשימה', 'בורד', 'board']),
+      hasTracker() ? route('tracker', ['בקרה', 'בקרת משימות', 'תתי-משימות', 'משימות אב', 'tracker']) : null,
+      may('view_vendor_boards') ? route('vendorBoards', ['ספקים', 'ספק', 'vendors']) : null,
+      route('archive', ['ארכיון', 'שהושלמו', 'archive']),
+      route('phonebook', ['אלפון', 'טלפונים', 'אנשי קשר', 'עובדים', 'phonebook', 'contacts']),
+      may('view_reports') ? route('reports', ['דוח', 'דוחות', 'סטטיסטיקה', 'עומס', 'reports']) : null,
+      // אותו תנאי בדיוק כמו פריט "ניהול המערכת" בתפריט הצד
+      // ⚙ "הגדרות" — קודם ההגדרות של העובד עצמו (החשבון שלי). הגדרות המערכת — "ניהול" / "הגדרות מערכת" (15.11.26)
+      { kind: 'action', title: '⚙ ההגדרות שלי', keys: ['הגדרות', 'ההגדרות שלי', 'החשבון שלי', 'פרופיל', 'העדפות', 'settings'], run: () => openMySettings() },
+      may('manage_users') || may('manage_automations') || may('assign_task_to_vendor') || can('create_project')
+        ? route('admin', ['ניהול', 'הגדרות מערכת', 'משתמשים', 'הרשאות', 'אוטומציות', 'admin', 'system settings'])
+        : null,
+      notifications
+    ].filter(Boolean);
+  }
+
+  /** הפעולות שמתאימות לשאילתה, מהטובה לפחות טובה. בלי שאילתה — כולן, בסדר הקבוע */
+  function matchActions(query) {
+    const all = paletteActions();
+    const q = normSearch(query);
+    if (!q) return all;
+    return all
+      .map((a, i) => ({ a, i, score: actionScore(q, a) }))
+      .filter((x) => x.score > 0)
+      .sort((x, y) => y.score - x.score || x.i - y.i)
+      .slice(0, 5)
+      .map((x) => x.a);
+  }
+
+  // מופע החיפוש שבסרגל העליון — אליו מכוון Ctrl+K במחשב. מתחלף בכל בנייה של הסרגל
+  let headerSearch = null;
+  let searchSeq = 0;
+  const IS_MAC = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
+
   function globalSearch() {
+    headerSearch = buildSearch();
+    return headerSearch.node;
+  }
+
+  /**
+   * חיפוש + תפריט פקודות. ‎inline‎ — הגרסה שבתוך חלון החיפוש בטלפון: התוצאות
+   * זורמות מתחת לשדה ואינן רשימה נפתחת. ‎onPick‎ — נקרא אחרי בחירה, כדי
+   * שהחלון ההוא ייסגר. שתי הגרסאות בונות את התוצאות באותו קוד.
+   */
+  function buildSearch({ inline = false, onPick = null } = {}) {
+    const listId = `gs-list-${++searchSeq}`;
     const input = el('input', {
       type: 'search',
       role: 'combobox',
       'aria-expanded': 'false',
       'aria-autocomplete': 'list',
+      'aria-controls': listId,
+      'aria-keyshortcuts': IS_MAC ? 'Meta+K' : 'Control+K',
+      'aria-label': 'חיפוש משימות ופרויקטים, ומעבר מהיר',
       autocomplete: 'off',
-      placeholder: 'חיפוש משימות ופרויקטים…'
+      placeholder: inline ? 'חיפוש, או שם של מסך או פעולה…' : 'חיפוש משימות ופרויקטים…'
     });
-    const results = el('div.search-results', { role: 'listbox', style: { display: 'none' } });
+    const results = el(`div.search-results${inline ? '.is-inline' : ''}#${listId}`, {
+      role: 'listbox', 'aria-label': 'תוצאות', style: { display: 'none' }
+    });
     let timer = null;
     // מזהה הבקשה האחרונה: תשובה של הקלדה קודמת שהגיעה באיחור לא תדרוס את החדשה
     let seq = 0;
-    /* השורות שעל המסח כרגע, לצורך ניווט במקלדת, והשורה המסומנת */
+    /* השורות שעל המסך כרגע, לצורך ניווט במקלדת, והשורה המסומנת */
     let rows = [];
     let cursor = -1;
+    /*
+     * מצב "תפריט פקודות" — נפתח ב-Ctrl+K. רק בו מוצגות הפעולות גם כשהשדה
+     * ריק; לחיצה רגילה בשדה החיפוש נשארת חיפוש, בלי רשימה שקופצת בפנים.
+     * ‎returnTo‎ — מה היה ממוקד לפני Ctrl+K, כדי ש-Escape יחזיר אליו.
+     */
+    let palette = inline;
+    let returnTo = null;
+    // תוצאות השרת האחרונות: נשארות על המסך עד שהבאות מגיעות, במקום להבהב
+    let lastServer = null;
 
     const show = () => {
       results.style.display = 'block';
       input.setAttribute('aria-expanded', 'true');
     };
     const hide = () => {
+      // בגרסה שבחלון הרשימה היא התוכן עצמו — היא חוזרת לפעולות ולא נעלמת
+      if (inline) { drawActionsOnly(); return; }
       results.style.display = 'none';
       input.setAttribute('aria-expanded', 'false');
+      input.removeAttribute('aria-activedescendant');
       rows = [];
       cursor = -1;
+      palette = false;
     };
 
     /**
@@ -1119,11 +1671,18 @@ const App = (() => {
      *
      * ‎scrollIntoView‎ עם ‎nearest‎ ולא ‎center‎: הרשימה נגללת בתוך תיבה, ומרכוז
      * היה מקפיץ אותה בכל חץ גם כשהשורה הבאה ממילא נראית.
+     *
+     * ‎aria-activedescendant‎ — המיקוד נשאר בשדה, ומחלקה בלבד אינה נשמעת
+     * בקורא מסך: הוא צריך לדעת איזו אפשרות "עומדת" עכשיו.
      */
     const setCursor = (next) => {
       if (!rows.length) return;
       cursor = (next + rows.length) % rows.length;
-      rows.forEach((node, i) => node.classList.toggle('is-active', i === cursor));
+      rows.forEach((node, i) => {
+        node.classList.toggle('is-active', i === cursor);
+        node.setAttribute('aria-selected', String(i === cursor));
+      });
+      input.setAttribute('aria-activedescendant', rows[cursor].id);
       rows[cursor].scrollIntoView({ block: 'nearest' });
     };
 
@@ -1145,17 +1704,42 @@ const App = (() => {
       return frag;
     };
 
+    const reset = () => {
+      clearTimeout(timer);
+      seq++;                 // תשובה שעוד בדרך לא תפתח מחדש רשימה שנסגרה
+      input.value = '';
+      lastServer = null;
+      returnTo = null;
+      hide();
+    };
+
     /** פתיחת פריט — פרויקט פותח את הלוח שלו, משימה פותחת את הכרטיס */
     const openItem = (item) => {
-      hide();
-      input.value = '';
+      reset();
+      onPick?.();
       if (item.type === 'project') navigate('board', { projectId: item.id });
       else TaskCardView.open(item.id);
     };
 
+    const runAction = (action) => {
+      reset();
+      if (!inline) input.blur();
+      onPick?.();
+      action.run();
+    };
+
+    const addRow = (node) => {
+      node.id = `${listId}-opt-${rows.length}`;
+      node.setAttribute('aria-selected', 'false');
+      rows.push(node);
+      results.appendChild(node);
+    };
+
+    // ‎tabindex=-1‎: המיקוד נשאר בשדה והחצים מנווטים; Tab אינו עובר דרך כל שורה
     const row = (item, q) => el(`button.sr-item${item.archived ? '.is-archived' : ''}`, {
       type: 'button',
       role: 'option',
+      tabindex: '-1',
       onclick: () => openItem(item)
     }, [
       el(`span.sr-tag.sr-${item.type}`, { text: item.type === 'project' ? 'פרויקט' : 'משימה' }),
@@ -1168,17 +1752,52 @@ const App = (() => {
       ])
     ]);
 
+    const actionRow = (action) => el('button.sr-item.sr-action-item', {
+      type: 'button',
+      role: 'option',
+      tabindex: '-1',
+      onclick: () => runAction(action)
+    }, [
+      el(`span.sr-tag.sr-${action.kind}`, { text: action.kind === 'route' ? 'מעבר' : 'פעולה' }),
+      el('div.sr-body', {}, [el('div.sr-title', { text: action.title })])
+    ]);
+
+    const drawActions = (acts) => {
+      if (!acts.length) return;
+      results.appendChild(el('div.sr-group', { role: 'presentation', text: 'פעולות ומעבר' }));
+      acts.forEach((a) => addRow(actionRow(a)));
+    };
+
+    /** רק הפעולות — Ctrl+K עם שדה ריק */
+    function drawActionsOnly() {
+      UI.clear(results);
+      rows = [];
+      cursor = -1;
+      input.removeAttribute('aria-activedescendant');
+      drawActions(matchActions(''));
+      if (rows.length) setCursor(0);
+      show();
+    }
+
     /**
      * ציור התוצאות, מקובצות לפי סוג.
      *
      * כותרות "פרויקטים" ו"משימות" ולא רשימה אחת מעורבת: השאלה הראשונה של
      * מי שמחפש היא איזה סוג פריט מצא, והתיוג שעל כל שורה עונה עליה רק
      * אחרי שקוראים אותה. הקיבוץ עונה עליה במבט.
+     *
+     * הפעולות המקומיות קודמות לכולן: הן מחושבות כאן בלי רשת ולכן מופיעות
+     * מיד, ומי שהקליד "דוחות" רוצה כמעט תמיד את המסך ולא משימה ששמה מכיל
+     * את המילה. ‎pending‎ — תוצאות השרת עוד בדרך.
      */
-    const draw = (items, data, q) => {
+    const draw = (items, data, q, { pending = false } = {}) => {
       UI.clear(results);
       rows = [];
       cursor = -1;
+      input.removeAttribute('aria-activedescendant');
+
+      const acts = matchActions(q);
+      drawActions(acts);
 
       // בחתך הרחב נאמר זאת במפורש — אחרת לא ברור למה הופיעו פתאום פריטים זרים
       if (data?.scope === 'all') {
@@ -1189,12 +1808,17 @@ const App = (() => {
        * אין תוצאות בחתך "שלי" — אבל יש מחוצה לו. זה המצב שבו דווקא *חייבים*
        * להציע את ההרחבה: הודעת "לא נמצא" לבדה הייתה אומרת למשתמש שהדבר אינו
        * קיים, בזמן שהוא קיים ורק אינו שלו.
+       *
+       * מצב "מחפש" מוצג לפני תשובת השרת. בלעדיו רשת איטית נראית כחיפוש
+       * שאינו פעיל, והמשתמש מקליד שוב את אותה מילה במקום להמתין.
        */
-      if (!items.length) {
+      if (pending && !items.length) {
+        results.appendChild(el('div.sr-empty', { text: `מחפש "${q}"…` }));
+      } else if (!items.length) {
         results.appendChild(el('div.sr-empty', {
           text: data?.othersCount > 0
             ? `לא נמצא "${q}" במשימות ובפרויקטים שלך`
-            : `לא נמצא איזכור ל"${q}"`
+            : `לא נמצא איזכור ל"${q}" במשימות ובפרויקטים`
         }));
       }
 
@@ -1205,12 +1829,8 @@ const App = (() => {
       for (const [type, label] of groups) {
         const list = items.filter((x) => x.type === type);
         if (!list.length) continue;
-        results.appendChild(el('div.sr-group', { text: `${label} · ${list.length}` }));
-        for (const item of list) {
-          const node = row(item, data?.query ?? q);
-          rows.push(node);
-          results.appendChild(node);
-        }
+        results.appendChild(el('div.sr-group', { role: 'presentation', text: `${label} · ${list.length}` }));
+        for (const item of list) addRow(row(item, data?.query ?? q));
       }
 
       // כשיש יותר ממה שמוצג — נאמר, ולא נשתוק
@@ -1226,12 +1846,12 @@ const App = (() => {
        * שבור — וזה גרוע יותר מרשימה מעורבבת.
        */
       if (data?.othersCount > 0) {
-        const more = el('button.sr-widen', {
+        addRow(el('button.sr-widen', {
           type: 'button',
+          role: 'option',
+          tabindex: '-1',
           onclick: () => runSearch({ scope: 'all', now: true })
-        }, [`עוד ${data.othersCount} בכל הארגון`]);
-        results.appendChild(more);
-        rows.push(more);
+        }, [`עוד ${data.othersCount} בכל הארגון`]));
       }
       // השורה הראשונה מסומנת מיד, כדי ש-Enter יפתח אותה בלי חץ מקדים
       if (rows.length) setCursor(0);
@@ -1247,19 +1867,16 @@ const App = (() => {
     const runSearch = ({ scope = '', now = false } = {}) => {
       clearTimeout(timer);
       const q = input.value.trim();
-      if (!q) return hide();
       const mine = ++seq;
+      if (!q) {
+        lastServer = null;
+        return palette ? drawActionsOnly() : hide();
+      }
+
+      // הפעולות המקומיות מיד, ותוצאות השרת הקודמות עד שהחדשות מגיעות
+      draw(lastServer?.items ?? [], lastServer?.data ?? null, q, { pending: true });
 
       timer = setTimeout(async () => {
-        /*
-         * מצב "מחפש" מוצג לפני הבקשה. בלעדיו רשת איטית נראית כחיפוש
-         * שאינו פעיל, והמשתמש מקליד שוב את אותה מילה במקום להמתין.
-         */
-        if (!rows.length) {
-          UI.clear(results);
-          results.appendChild(el('div.sr-empty', { text: `מחפש "${q}"…` }));
-          show();
-        }
         try {
           const data = await API.search(q, scope);
           if (mine !== seq) return;      // הקלדה חדשה עקפה את הבקשה הזו
@@ -1271,6 +1888,7 @@ const App = (() => {
            * בלי שדבר על המסך רמז שהחיפוש בכלל רץ.
            */
           const items = Array.isArray(data?.results) ? data.results : [];
+          lastServer = { items, data };
           // גם רשימה ריקה עוברת דרך ‎draw‎: שם יושבת ההצעה להרחיב לכל הארגון,
           // והיא נחוצה בדיוק כשאין תוצאות בחתך שלי
           draw(items, data, q);
@@ -1278,11 +1896,12 @@ const App = (() => {
           /*
            * כשל נאמר ואינו נבלע. חיפוש שאינו מציג דבר נראה למשתמש כחיפוש
            * שאינו פעיל, והוא מנסה שוב ושוב באותה מילה — אין שום דבר על
-           * המסך שיאמר לו שהבקשה נשלחה ונכשלה.
+           * המסך שיאמר לו שהבקשה נשלחה ונכשלה. הפעולות המקומיות נשארות.
            */
           if (mine !== seq) return;
-          UI.clear(results);
-          rows = [];
+          lastServer = null;
+          draw([], null, q, { pending: true });
+          results.querySelector('.sr-empty')?.remove();
           results.appendChild(el('div.sr-empty', {
             text: `החיפוש נכשל: ${err?.message ?? 'שגיאה לא ידועה'}`
           }));
@@ -1305,8 +1924,12 @@ const App = (() => {
      */
     input.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') {
-        input.value = '';
-        hide();
+        // בחלון החיפוש בטלפון — Escape שייך לחלון, והוא שסוגר
+        if (inline) return;
+        const back = returnTo;
+        reset();
+        // מי שהגיע ב-Ctrl+K חוזר למקום שבו היה, ולא נשאר תקוע בשדה
+        if (back?.isConnected && back !== document.body) back.focus({ preventScroll: true });
         return;
       }
       if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
@@ -1318,20 +1941,90 @@ const App = (() => {
       if (e.key === 'Enter') {
         e.preventDefault();
         // Enter לפני שהתוצאות הגיעו מריץ את החיפוש מיד, בלי להמתין להשהיה
-        if (!rows.length) return runSearch();
+        if (!rows.length) return runSearch({ now: true });
         rows[Math.max(0, cursor)].click();
       }
     });
 
-    document.addEventListener('mousedown', (e) => {
-      if (!results.contains(e.target) && e.target !== input) hide();
-    });
-
     // הזכוכית ממקדת את השדה — היא נראית כלחיצה, וכדאי שתהיה כזו
-    const icon = el('span.icon', { title: 'חיפוש', text: '🔍', onclick: () => input.focus() });
+    // הזכוכית עצמה מצוירת ברקע השדה (ראה "קרן אור" בגיליון) — כאן רק משטח הלחיצה
+    const icon = el('span.icon', { title: 'חיפוש', 'aria-hidden': 'true', onclick: () => input.focus() });
+    // רמז לקיצור — רק במחשב, ונעלם כשמקלידים או כשהשדה ממוקד (ב-CSS)
+    const kbd = inline ? null : el('kbd.gs-kbd', { 'aria-hidden': 'true', text: IS_MAC ? '⌘K' : 'Ctrl K' });
 
-    return el('div.global-search', {}, [input, icon, results]);
+    /*
+     * ✨ שאל את אשל — כפתור נפרד ליד החיפוש, לא חלק ממנו: החיפוש מוצא משימות
+     * ופרויקטים, ו"שאל את אשל" עונה על שאלה (מיילים, סוכנים, ידע ארגוני)
+     * בחלון משלו. רק בסרגל העליון; בטלפון — כפתור ✨ משלו בסרגל.
+     */
+    const askBtn = inline || isVendor() ? null : el('button.gs-ask', {
+      type: 'button',
+      title: 'שאלה חופשית — תשובה מהמיילים, מסוכני המחלקות ומהידע הארגוני',
+      onclick: () => { hide?.(); AskView.open(); }
+    }, ['✨ שאל את אשל']);
+
+    const field = el('div.gs-field', {}, [input, icon, kbd, results]);
+    const wrap = el(`div.global-search${inline ? '.is-inline' : ''}${askBtn ? '.has-ask' : ''}`, {}, [field, askBtn]);
+
+    /*
+     * סגירה בלחיצה בחוץ. המאזין מסיר את עצמו כשהשדה כבר אינו במסמך: הסרגל
+     * העליון נבנה מחדש בכל ‎render()‎, ועד כה כל בנייה הוסיפה מאזין שלא הוסר
+     * לעולם — אחרי יום עבודה כל לחיצה במסמך הריצה עשרות סוגרים של שדות מתים.
+     */
+    const onOutsideDown = (e) => {
+      if (!wrap.isConnected) { document.removeEventListener('mousedown', onOutsideDown); return; }
+      if (!inline && !wrap.contains(e.target)) hide();
+    };
+    document.addEventListener('mousedown', onOutsideDown);
+
+    /** Ctrl+K: מיקוד השדה ופתיחת הפעולות, גם כשהוא ריק */
+    const openPalette = () => {
+      if (document.activeElement !== input) returnTo = document.activeElement;
+      palette = true;
+      input.focus();
+      input.select();
+      if (input.value.trim()) runSearch({ now: true });
+      else drawActionsOnly();
+    };
+
+    if (inline) drawActionsOnly();
+    return { node: wrap, input, openPalette };
   }
+
+  /**
+   * חיפוש ופעולות בטלפון — חלון מלא ולא רשימה נפתחת: בסרגל העליון של
+   * הטלפון אין מקום לשדה, והמקלדת הווירטואלית ממילא תופסת חצי מסך.
+   */
+  function openSearchOverlay() {
+    let m = null;
+    const search = buildSearch({ inline: true, onPick: () => m?.close() });
+    m = UI.modal({ title: 'חיפוש ומעבר מהיר', body: search.node, size: 'palette' });
+  }
+
+  /**
+   * Ctrl+K (⌘K במק) — מכל מקום שאינו שדה כתיבה.
+   *
+   * ‎e.code‎ ולא ‎e.key‎: במקלדת עברית ‎e.key‎ הוא "ל", והקיצור היה עובד
+   * רק למי שבמקרה כתב באנגלית.
+   *
+   * בתוך שדה אחר — לא נוגעים: שם המקש שייך לעורך. ומעל חלון פתוח — לא
+   * נפתח חיפוש שיישב מאחוריו; פאנל צד של משימה, שאינו חוסם, נסגר לטובתו.
+   */
+  document.addEventListener('keydown', (e) => {
+    if (e.code !== 'KeyK' || !(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey) return;
+    if (!state.actor || e.defaultPrevented) return;
+    const t = e.target;
+    const inSearch = !!t?.closest?.('.global-search');
+    const editing = !inSearch && (t?.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(t?.tagName));
+    if (editing) return;
+    const open = UI.openLayers();
+    if (open.some((l) => !l.side)) return;
+    e.preventDefault();
+    open.forEach((l) => l.close());
+    closeNotifPanel();
+    if (isPhone() || !headerSearch?.node.isConnected) openSearchOverlay();
+    else headerSearch.openPalette();
+  });
 
   // ------------------------------------------------------------- תצוגה
 
@@ -1457,8 +2150,23 @@ const App = (() => {
 
     const phone = isPhone();
 
+    // המגירה התחתונה בטלפון — ‎UI.sheet‎ מחזיר אותה, ובמחשב היא נשארת ‎null‎
+    let sheetRef = null;
+    let closed = false;
+    /*
+     * מסלול סגירה אחד לשתי הפריסות. בטלפון ‎UI.sheet‎ סוגר גם מעצמו — גרירה
+     * למטה, Escape, נגיעה ברקע — ומשם הוא קורא ל-‎close‎ דרך ‎onClose‎;
+     * הדגל מונע סגירה כפולה כשהסגירה התחילה כאן.
+     */
     const close = () => {
+      if (closed) return;
+      closed = true;
       if (closeProjectMenu === close) closeProjectMenu = null;
+      if (sheetRef) {
+        // המגירה מחזירה את המיקוד בעצמה, למה שהיה ממוקד כשנפתחה
+        sheetRef.close();
+        return;
+      }
       shell.remove();
       document.removeEventListener('mousedown', onOutside);
       document.removeEventListener('keydown', onKey);
@@ -1530,63 +2238,50 @@ const App = (() => {
      * נדחק אל הקצה הנגדי של המסך ומתנתק מהשורה שפתחה אותו. מלבד זאת ‎60vh‎
      * ו-‎window.innerHeight‎ מודדים בנייד את החלון בלי שורת הכתובת.
      *
-     * המבנה ‎m-sheet-veil / m-sheet / m-grab‎ כבר קיים ומשמש את מגירת הסינון
-     * בטלפון, והוא גם פותר את הסגירה: הרקע המלא בולע את הנגיעה ואין צורך
-     * במאזין על ה-document — שבמגע ממילא לא עבד, כי ה-‎mousedown‎ המסונתז
-     * מגיע רק כשהאצבע מתרוממת וסגר את המגירה ברגע השחרור.
+     * ‎UI.sheet‎ פותר את כל השאר: הרקע המלא בולע את הנגיעה ואין צורך במאזין
+     * על ה-document — שבמגע ממילא לא עבד, כי ה-‎mousedown‎ המסונתז מגיע רק
+     * כשהאצבע מתרוממת וסגר את המגירה ברגע השחרור — וגם ההשהיה לפני שהרקע
+     * נעשה לחיץ, נגד הלחיצה המסונתזת של הנגיעה שפתחה, נמצאת שם.
      */
-    const shell = phone
-      ? el('div.m-sheet-veil.proj-sheet-veil', {}, [
-          el('div.m-sheet.proj-sheet', {
-            role: 'dialog', 'aria-modal': 'true', 'aria-label': `פעולות בפרויקט ${p.name}`
-          }, [
-            el('div.m-grab'),
-            el('div.proj-pop-head', { text: p.name, title: p.name }),
-            ...items,
-            el('button.track-opt.is-cancel', { onclick: () => close() }, ['ביטול'])
-          ])
-        ])
-      : el('div.track-pop.proj-pop', { role: 'menu' }, [
-          el('div.proj-pop-head', { text: p.name, title: p.name }),
-          ...items
-        ]);
+    if (phone) {
+      sheetRef = UI.sheet({
+        title: p.name,
+        label: `פעולות בפרויקט ${p.name}`,
+        className: 'proj-sheet',
+        snap: [0.9],
+        body: el('div.proj-sheet-items', {}, [
+          ...items,
+          el('button.track-opt.is-cancel', { onclick: () => close() }, ['ביטול'])
+        ]),
+        onClose: close
+      });
+      closeProjectMenu = close;
+      return;
+    }
 
+    const shell = el('div.track-pop.proj-pop', { role: 'menu' }, [
+      el('div.proj-pop-head', { text: p.name, title: p.name }),
+      ...items
+    ]);
     document.body.appendChild(shell);
 
-    if (phone) {
-      /*
-       * הנגיעה שפתחה את המגירה עדיין בעיצומה: הלחיצה המסונתזת שתגיע בשחרור
-       * האצבע תנחת על הרקע שזה עתה נפרש תחתיה ותסגור אותו מיד. לכן הסוגר
-       * מחובר רק אחרי שהמחווה הנוכחית הסתיימה.
-       */
-      setTimeout(() => {
-        shell.addEventListener('click', (e) => { if (e.target === shell) close(); });
-      }, 120);
-    } else {
-      /*
-       * RTL: תפריט הקשר נפתח שמאלה מנקודת הלחיצה, כמו בכל יישום בעברית. בלי
-       * זה הוא היה נפתח מהתפריט לתוך התוכן ומכסה אותו.
-       */
-      const rect = anchor.getBoundingClientRect();
-      const px = ev?.clientX || rect.left;
-      const py = ev?.clientY || rect.bottom;
-      const w = shell.offsetWidth;
-      shell.style.left = `${Math.max(8, Math.min(px - w, window.innerWidth - w - 8))}px`;
-      shell.style.top = `${Math.max(8, Math.min(py + 2, window.innerHeight - shell.offsetHeight - 8))}px`;
-    }
+    /*
+     * RTL: תפריט הקשר נפתח שמאלה מנקודת הלחיצה, כמו בכל יישום בעברית. בלי
+     * זה הוא היה נפתח מהתפריט לתוך התוכן ומכסה אותו.
+     */
+    const rect = anchor.getBoundingClientRect();
+    const px = ev?.clientX || rect.left;
+    const py = ev?.clientY || rect.bottom;
+    const w = shell.offsetWidth;
+    shell.style.left = `${Math.max(8, Math.min(px - w, window.innerWidth - w - 8))}px`;
+    shell.style.top = `${Math.max(8, Math.min(py + 2, window.innerHeight - shell.offsetHeight - 8))}px`;
 
     const onOutside = (e) => { if (!shell.contains(e.target)) close(); };
     const onKey = (e) => { if (e.key === 'Escape') { e.preventDefault(); close(); } };
-    // ברקע מלא אין צורך במאזין על המסמך, והוא גם לא עבד נכון במגע
-    if (!phone) setTimeout(() => document.addEventListener('mousedown', onOutside), 0);
+    setTimeout(() => document.addEventListener('mousedown', onOutside), 0);
     document.addEventListener('keydown', onKey);
     closeProjectMenu = close;
-    /*
-     * מיקוד רק במחשב. במגירה התחתונה הוא מצייר טבעת מיקוד על הפריט הראשון,
-     * וזה נקרא כאילו הוא כבר נבחר; ב-iOS מיקוד יזום לתוך צומת ‎fixed‎ שזה
-     * עתה נוסף, בזמן שהאצבע עוד על המסך, גם מקפיץ את הגלילה.
-     */
-    if (!phone) shell.querySelector('button')?.focus();
+    shell.querySelector('button')?.focus();
   }
 
   /**
@@ -1705,7 +2400,13 @@ const App = (() => {
      * לפי מה שעושים כרגע, ולא פעם אחת בחיים.
      */
     const pinned = sidebarPinned();
+    /*
+     * ‎aria-label‎ על כל פריט ניווט, ולא רק ‎title‎: ברצועה המכווצת התווית
+     * מוסתרת ב-‎display: none‎, וטקסט מוסתר כך אינו נספר בשם הנגיש — קורא
+     * מסך שמע "כפתור" בלי לדעת לאן. ‎title‎ נשאר בשביל הריחוף בעכבר.
+     */
     items.push(el('button.nav-item.nav-pin-toggle', {
+      'aria-label': pinned ? 'כיווץ התפריט' : 'נעיצת התפריט',
       title: pinned ? 'שחרור הנעיצה — התפריט יתכנס לרצועת אייקונים' : 'נעיצת התפריט פתוח',
       onclick: () => {
         localStorage.setItem(SIDEBAR_PIN_KEY, pinned ? '0' : '1');
@@ -1717,11 +2418,15 @@ const App = (() => {
     ]));
     const add = (name, params, extra = {}) => {
       const route = ROUTES[name];
+      const label = extra.label ?? route.label;
       items.push(el(`button.nav-item${state.route.name === name && !extra.matchParam ? '.active' : ''}`, {
+        'aria-label': extra.count ? `${label} (${extra.count})` : label,
+        title: label,
+        'aria-current': state.route.name === name && !extra.matchParam ? 'page' : null,
         onclick: () => navigate(name, params ?? {})
       }, [
         el('span.ico', {}, [extra.icon ? extra.icon : UI.icon(route.icon)]),
-        el('span', { text: extra.label ?? route.label }),
+        el('span', { text: label }),
         extra.count !== undefined ? el('span.count', { text: String(extra.count) }) : null
       ]));
     };
@@ -1731,15 +2436,26 @@ const App = (() => {
       return el(`aside.sidebar#sidebar${sidebarPinned() ? '.pinned' : ''}`, {}, [...items, UI.companyLogo('in-sidebar')]);
     }
 
+    add('today', {}, { icon: el('span.nav-emoji', { text: '☀' }), count: state.todayCount || undefined });
     add('home');
+    // יומן — לכל העובדים: היומן שלי. מזכירות — גם היומנים ששותפו איתן ו"מחכות לקביעה"
+    add('calendar', {}, { icon: el('span.nav-emoji', { text: '📅' }) });
+    // 🗂 משימון פריוריטי — מסך נפרד (‎/priority‎), למי שמורשה בו
+    if (state.actor?.priority) {
+      items.push(el('a.nav-item', { href: '/priority', 'aria-label': 'משימון פריוריטי', title: 'משימון פריוריטי — מסמכי רכש וכספים' }, [
+        el('span.ico', {}, [el('span.nav-emoji', { text: '🗂' })]),
+        el('span', { text: 'משימון פריוריטי' })
+      ]));
+    }
     add('board');
-    add('tracker');
+    if (hasTracker()) add('tracker');
     if (may('view_vendor_boards')) add('vendorBoards');
 
     // הבלוק הזה כולו לא נבנה לספק — מסלול הספק חזר כבר למעלה עם רשימת הניווט שלו
     const projectItem = (p) => {
       const node = el(`button.nav-item${state.route.name === 'board' && state.route.params.projectId === p.id ? '.active' : ''}${p.parentProjectId ? '.is-subproject' : ''}`, {
         title: p.parentProjectName ? `${p.parentProjectName} ← ${p.name}` : p.name,
+        'aria-label': p.name,
         onclick: () => navigate('board', { projectId: p.id }),
         /*
          * הקלקה ימנית פותחת את תפריט הפעולות במקום את תפריט הדפדפן.
@@ -1776,7 +2492,8 @@ const App = (() => {
      * השרת כבר מחזיר את הנעוצים בראש, אך את החלוקה מחשבים כאן מחדש כדי שהחוצץ
      * יישאר במקום הנכון גם אחרי סינון הפרויקטים שהושלמו.
      */
-    const live = state.projects.filter((p) => p.status !== 'done');
+    // "הכול" בתפריט הוא הפרויקטים שלי ושל המחלקה — לא כל הארגון (‎myProjects‎)
+    const live = myProjects({ openOnly: true });
 
     /**
      * למנהל מערכת יש גם עבודה משלו, ורשימה שמערבבת את הפרויקטים שלו עם כל
@@ -1803,6 +2520,9 @@ const App = (() => {
      * לגמרי — ואז גם הכותרת "פרויקטים" מיותרת ולא נבנית, כדי שלא תישאר
      * כותרת תלויה באוויר בלי דבר תחתיה.
      */
+    // האלפון הארגוני — שורת חיפוש מעל "פרויקטים", בכל המסכים
+    items.push(PhonebookView.sidebarSearch());
+
     if (openProjects.length || foreign || may('create_project')) {
       items.push(el('div.nav-group.with-action', {}, [
         el('span', { text: 'פרויקטים' }),
@@ -1885,7 +2605,10 @@ const App = (() => {
       items.push(el('div.nav-note', { text: 'אין פרויקטים שאתה חלק מהם' }));
     }
     if (may('create_project')) {
-      items.push(el('button.nav-item', { onclick: () => BoardView.openProjectDialog() }, [
+      items.push(el('button.nav-item', {
+        'aria-label': 'פרויקט חדש', title: 'פרויקט חדש',
+        onclick: () => BoardView.openProjectDialog()
+      }, [
         el('span.ico', { text: '＋' }), el('span', { text: 'פרויקט חדש' })
       ]));
     }
@@ -1898,6 +2621,14 @@ const App = (() => {
     // ולכן כאן נדרשת הרשאה מלאה לפרויקטים ולא עצם היכולת לפתוח אחד
     if (may('manage_users') || may('manage_automations') || may('assign_task_to_vendor') || can('create_project')) {
       add('admin');
+    }
+    // ⚙ הגדרות — החשבון שלי (העדפות, טלפון, Gmail, מראה). במחשב הוא בעיגול השם
+    // שבפס העליון; בטלפון גם כאן, כדי שמי שמחפש "הגדרות" בתפריט ימצא אותן
+    if (isPhone()) {
+      items.push(el('button.nav-item', {
+        'aria-label': 'הגדרות', title: 'הגדרות',
+        onclick: () => { closeDrawer(); userMenu(); }
+      }, [el('span.ico', {}, [UI.icon('admin')]), el('span', { text: 'הגדרות' })]));
     }
 
     return el(`aside.sidebar#sidebar${sidebarPinned() ? '.pinned' : ''}`, {},
@@ -1986,7 +2717,7 @@ const App = (() => {
   }
 
   function topbar() {
-    const bell = el('button.icon-btn', { title: 'התראות' }, [
+    const bell = el('button.icon-btn.notif-bell', { title: 'התראות', 'aria-haspopup': 'dialog', 'aria-expanded': 'false' }, [
       UI.icon('bell', { size: 19 }),
       el('span.badge-dot#notif-badge', { style: { display: state.unread ? 'grid' : 'none' } }, [String(state.unread)])
     ]);
@@ -1995,7 +2726,7 @@ const App = (() => {
     return el('header.topbar', {}, [
       // הנראות נקבעת ב-CSS ולא כאן: חישוב רוחב חד-פעמי ב-JS השאיר את הכפתור
       // מוסתר אחרי סיבוב המכשיר, ואז לא הייתה דרך להגיע לניווט
-      el('button.icon-btn.drawer-btn', { onclick: toggleDrawer }, ['☰']),
+      el('button.icon-btn.drawer-btn', { onclick: toggleDrawer, 'aria-label': 'תפריט', title: 'תפריט' }, ['☰']),
       el('div.brand', {}, [UI.logo({ size: 'sm', tagline: true, variant: 'brand' })]),
       /*
        * מרווח משני צדי החיפוש. במסך רחב הוא ממורכז בכל מקרה במיקום מוחלט
@@ -2005,18 +2736,38 @@ const App = (() => {
       el('div.topbar-spacer'),
       globalSearch(),
       el('div.topbar-spacer'),
+      !isVendor()
+        ? el(`button.btn.today-btn${state.route.name === 'today' ? '.active' : ''}`, { title: 'מה צריך לעשות היום', onclick: () => navigate('today') }, ['☀ Today', todayBadge()])
+        : null,
+      !isVendor() && may('create_task')
+        ? el('button.btn.mic-btn', { title: 'משימה מהקלטה', onclick: () => VoiceView.open() }, ['🎙'])
+        : null,
       !isVendor() && may('create_task')
         ? el('button.btn.btn-primary', { onclick: () => BoardView.openTaskDialog() }, ['＋ משימה חדשה'])
         : null,
+      // בטלפון שדה החיפוש מוסתר — הזכוכית פותחת אותו כחלון מלא (מוצגת רק שם, ב-CSS)
+      el('button.icon-btn.m-search-btn', { title: 'חיפוש ומעבר מהיר', 'aria-label': 'חיפוש', onclick: () => openSearchOverlay() }, ['🔍']),
       bell,
-      el('button.user-chip', { onclick: userMenu }, [
-        UI.avatar(state.actor.name, { vendor: isVendor() }),
-        el('div', {}, [
-          el('div.name', { text: state.actor.name }),
-          // רמת הגישה מוצגת רק למי שרשאי לראות רמות; לשאר מוצגת המחלקה
-          el('div.role', { text: state.actor.roleLabel ?? state.actor.department ?? (isVendor() ? 'ספק חיצוני' : '') })
-        ])
-      ])
+      (() => {
+        // רמת הגישה מוצגת רק למי שרשאי לראות רמות; לשאר מוצגת המחלקה
+        const role = state.actor.roleLabel ?? state.actor.department ?? (isVendor() ? 'ספק חיצוני' : '');
+        /*
+         * השם והתפקיד גם ב-‎aria-label‎ וב-‎title‎: מתחת ל-1100 פיקסלים הטקסט
+         * מוסתר ונשאר רק העיגול (ראה ‎.user-chip‎ בגיליון), ובלי השם הנגיש
+         * הכפתור היה אילם — גם לקורא מסך וגם למי שמרחף ותוהה של מי החשבון.
+         */
+        const who = [state.actor.name, role].filter(Boolean).join(' · ');
+        return el('button.user-chip', {
+          type: 'button', 'aria-haspopup': 'dialog', 'aria-label': `${who} — תפריט משתמש`, title: who,
+          onclick: userMenu
+        }, [
+          UI.avatar(state.actor.name, { vendor: isVendor() }),
+          el('div.uc-text', {}, [
+            el('div.name', { text: state.actor.name }),
+            el('div.role', { text: role })
+          ])
+        ]);
+      })()
     ]);
   }
 
@@ -2035,54 +2786,293 @@ const App = (() => {
       });
       if (value === null) return;
       try {
-        state.actor.phone = (await API.put('/api/me/phone', { phone: value })).phone;
+        const r = await API.put('/api/me/phone', { phone: value });
+        if (r.pending) {
+          // המספר נשמר רק אחרי שהקוד שהבוט שלח אליו מוקלד כאן
+          for (;;) {
+            const code = await UI.prompt('קוד אימות', {
+              title: '📱 אימות הטלפון',
+              hint: `בוט הוואטסאפ של משימון שלח קוד בן 6 ספרות ל-${UI.phone(r.phone)}. הקלידו אותו כאן.`
+            });
+            if (code === null) return;
+            try {
+              state.actor.phone = (await API.post('/api/me/phone/verify', { code })).phone;
+              break;
+            } catch (err) {
+              UI.error(err);
+              if (!/שגוי/.test(err.message ?? '')) return;
+            }
+          }
+        } else {
+          state.actor.phone = r.phone;
+        }
         UI.success('נשמר');
         draw();
       } catch (err) { UI.error(err); }
     }
     draw();
-    return el('tr', {}, [el('th', { text: 'טלפון נייד' }), cell]);
+    return el('tr', { 'data-anchor': 'account.phone' }, [el('th', { text: 'טלפון נייד' }), cell]);
   }
 
-  function userMenu() {
-    UI.modal({
-      title: 'החשבון שלי',
-      body: el('div', {}, [
-        el('div.flex', { style: { gap: '12px', marginBottom: '16px' } }, [
-          UI.avatar(state.actor.name, { vendor: isVendor() }),
-          el('div', {}, [
-            el('b', { text: state.actor.name }),
-            el('div.mute-sm', { text: state.actor.email })
-          ])
-        ]),
-        el('table.data', { style: { width: '100%' } }, [
+  /** הטלפון במשרד / השלוחה שלי — מופיע באלפון. נשמר בלי קוד אימות */
+  function officePhoneRow() {
+    const cell = el('td');
+    const draw = () => UI.mount(cell, el('div.flex', {}, [
+      el('span', { dir: 'ltr', text: state.actor.officePhone || 'לא הוזן' }),
+      el('button.btn.btn-sm', { onclick: edit }, [state.actor.officePhone ? 'שינוי' : 'הוספה'])
+    ]));
+    async function edit() {
+      const value = await UI.prompt('טלפון במשרד / שלוחה', {
+        title: '☎️ הטלפון שלי במשרד',
+        value: state.actor.officePhone ?? '',
+        hint: 'מספר מלא, שלוחה, או שניהם — למשל "03-1234567 שלוחה 12". מופיע באלפון הארגוני ליד הנייד שלך.'
+      });
+      if (value === null) return;
+      try {
+        state.actor.officePhone = (await API.put('/api/me/office-phone', { officePhone: value })).officePhone;
+        UI.success('נשמר');
+        draw();
+      } catch (err) { UI.error(err); }
+    }
+    draw();
+    return el('tr', { 'data-anchor': 'account.office-phone' }, [el('th', { text: 'טלפון במשרד / שלוחה' }), cell]);
+  }
+
+  /**
+   * בורר המראה בחלון "החשבון שלי" — שלוש אפשרויות במתג אחד. ההחלה מיידית,
+   * בלי "שמירה": זו העדפת תצוגה, ורואים אותה ברגע הלחיצה.
+   */
+  function themeRow() {
+    const current = themePref();
+    const buttons = THEMES.map((t) => el(`button${t.key === current ? '.active' : ''}`, {
+      type: 'button',
+      role: 'radio',
+      'aria-checked': String(t.key === current),
+      onclick: () => {
+        setTheme(t.key);
+        for (const b of buttons) {
+          const on = b === buttons[THEMES.indexOf(t)];
+          b.classList.toggle('active', on);
+          b.setAttribute('aria-checked', String(on));
+        }
+      }
+    }, [t.glyph ? el('span', { 'aria-hidden': 'true', text: `${t.glyph} ` }) : null, t.label]));
+    return el('tr', {}, [
+      el('th', { text: 'מראה' }),
+      el('td', {}, [el('div.view-switch.theme-switch', { role: 'radiogroup', 'aria-label': 'מראה המערכת' }, buttons)])
+    ]);
+  }
+
+  /** האם Today כולל את התובנות (מסך, בוט ומייל הבוקר). דלוק כברירת מחדל */
+  function botPrefsBox() {
+    const box = el('input', { type: 'checkbox', checked: getPref('botPrefs', {})?.insightsInToday !== false });
+    box.addEventListener('change', () => {
+      setPref('botPrefs', { ...(getPref('botPrefs', {}) ?? {}), insightsInToday: box.checked });
+    });
+    // 📬 מייל חדש — הבוט פונה ושואל מה לענות. דלוק כברירת מחדל
+    const alert = el('input', { type: 'checkbox', checked: getPref('botPrefs', {})?.mailAlert !== false });
+    alert.addEventListener('change', () => {
+      setPref('botPrefs', { ...(getPref('botPrefs', {}) ?? {}), mailAlert: alert.checked });
+    });
+    // 🎥 אחרי פגישה מוקלטת — הבוט שואל מה לשלוח. דלוק כברירת מחדל
+    const followup = el('input', { type: 'checkbox', checked: getPref('botPrefs', {})?.meetingFollowup !== false });
+    followup.addEventListener('change', () => {
+      setPref('botPrefs', { ...(getPref('botPrefs', {}) ?? {}), meetingFollowup: followup.checked });
+    });
+    // ⏰ דדליין ממייל — "זכרת?", ו-📄 חשבונית במייל ← קבלת סחורה. דלוקים כברירת מחדל
+    const deadline = el('input', { type: 'checkbox', checked: getPref('botPrefs', {})?.mailDeadline !== false });
+    deadline.addEventListener('change', () => {
+      setPref('botPrefs', { ...(getPref('botPrefs', {}) ?? {}), mailDeadline: deadline.checked });
+    });
+    const goods = el('input', { type: 'checkbox', checked: getPref('botPrefs', {})?.goodsOffer !== false });
+    goods.addEventListener('change', () => {
+      setPref('botPrefs', { ...(getPref('botPrefs', {}) ?? {}), goodsOffer: goods.checked });
+    });
+    // 📝 טופס ריק במייל — להציע למלא. דלוק כברירת מחדל
+    const formOffer = el('input', { type: 'checkbox', checked: getPref('botPrefs', {})?.formOffer !== false });
+    formOffer.addEventListener('change', () => {
+      setPref('botPrefs', { ...(getPref('botPrefs', {}) ?? {}), formOffer: formOffer.checked });
+    });
+    // 💡 הטיפ היומי ב-9 בבוקר — "ידעת שהבוט יודע…?". דלוק כברירת מחדל (‎server/whatsapp/bot-tips.js‎)
+    const tips = el('input', { type: 'checkbox', checked: getPref('botPrefs', {})?.tips !== false });
+    tips.addEventListener('change', () => {
+      setPref('botPrefs', { ...(getPref('botPrefs', {}) ?? {}), tips: tips.checked });
+    });
+    // 🌊 קצב התזכורות מהמייל — כדי לא להציף מי שמקבל עשרות מיילים ביום
+    const pace = el('select', {}, [
+      ['normal', 'רגיל — עד 5 ביום, חצי שעה לפחות ביניהן'],
+      ['light', 'מעט — רק החשובה ביותר, אחת ביום'],
+      ['morning', 'רק בסיכום הבוקר'],
+      ['off', 'בלי תזכורות']
+    ].map(([v, t]) => el('option', { value: v, text: t, selected: (getPref('botPrefs', {})?.remindPace ?? 'normal') === v })));
+    pace.addEventListener('change', () => {
+      setPref('botPrefs', { ...(getPref('botPrefs', {}) ?? {}), remindPace: pace.value });
+    });
+    return el('div', {}, [
+      el('h4', { text: 'בוט הוואטסאפ', style: { margin: '16px 0 8px', fontSize: '13px' } }),
+      el('div.table-wrap', {}, [
+        el('table.data', { style: { whiteSpace: 'normal' } }, [
           el('tbody', {}, [
-            state.actor.roleLabel
-              ? el('tr', {}, [el('th', { text: 'רמת גישה' }), el('td', { text: state.actor.roleLabel })])
-              : null,
-            state.actor.department ? el('tr', {}, [el('th', { text: 'מחלקה' }), el('td', { text: state.actor.department })]) : null,
-            isVendor() ? null : phoneRow(),
-            isVendor() ? el('tr', {}, [el('th', { text: 'הרשאת עדכון' }), el('td', { text: state.actor.readOnly ? 'צפייה בלבד' : 'מלאה' })]) : null
-          ])
-        ]),
-        // הוואטסאפ האישי משמש את משימות ה-AI להמשך מעקב מהמספר של המשתמש
-        isVendor() ? null : el('button.btn.mt', { onclick: () => AiTaskView.openWhatsApp() }, ['💬 חיבור הוואטסאפ שלי']),
-        // Gmail אישי: סריקת מיילים למשימות, וזיהוי תשובות וקשר ישיר בבקשות AI
-        isVendor() ? null : el('button.btn.mt', { style: { marginInlineStart: '8px' }, onclick: () => AiInboxView.openGmail(() => HomeView.reload()) }, ['📧 Gmail ועוזר ה-AI']),
-        el('div.alert.alert-info.mt', {}, [
-          el('div', {}, [
-            el('b', { text: 'מה מותר לי במערכת?' }),
-            el('div', { text: 'ההרשאות נקבעות לפי מטריצת ההרשאות של המחלקה. לשינוי — יש לפנות למנהל המערכת.' })
+            el('tr', {}, [
+              el('td', {}, [
+                el('div', { text: '📬 תובנות ב-Today — מהמייל ומהוואטסאפ' }),
+                el('div.mute-sm', { text: 'החלק האחרון של Today: במסך, בבוט (בהודעת המשך) ובמייל הבוקר. את הרשימה המלאה מקבלים תמיד לפי בקשה: "תובנות", "תובנות מהיומיים האחרונים".' })
+              ]),
+              el('td', { style: { textAlign: 'center', width: '110px' } }, [el('label.checkbox', {}, [box])])
+            ]),
+            el('tr', {}, [
+              el('td', {}, [
+                el('div', { text: '💡 טיפ יומי — "ידעת שהבוט יודע…?"' }),
+                el('div.mute-sm', { text: 'פעם ביום, ב-9 בבוקר: משהו שעוד לא ניסית שהבוט יודע לעשות, עם כפתור "נסו עכשיו". גם בבוט: "מספיק טיפים".' })
+              ]),
+              el('td', { style: { textAlign: 'center', width: '110px' } }, [el('label.checkbox', {}, [tips])])
+            ]),
+            el('tr', {}, [
+              el('td', {}, [
+                el('div', { text: '📧 מייל חדש — הבוט פונה אליי' }),
+                el('div.mute-sm', { text: 'על כל מייל שמחכה ממך למשהו: "קיבלת מייל מ… — לענות לו כך?" עם כן / לא. מייל שכבר קראת — לא נשאל עליו.' })
+              ]),
+              el('td', { style: { textAlign: 'center', width: '110px' } }, [el('label.checkbox', {}, [alert])])
+            ]),
+            el('tr', {}, [
+              el('td', {}, [
+                el('div', { text: '🎥 אחרי פגישה מוקלטת — הבוט שואל אותי' }),
+                el('div.mute-sm', { text: '"הפגישה הסתיימה והוקלטה. איך היה? מה לשלוח לך?" — סיכום, המשימות שלי מהפגישה או ההקלטה. רק בפגישות שהשתתפתי בהן.' })
+              ]),
+              el('td', { style: { textAlign: 'center', width: '110px' } }, [el('label.checkbox', {}, [followup])])
+            ]),
+            el('tr', {}, [
+              el('td', {}, [
+                el('div', { text: '🐣 תזכורת ממייל — "זכרת?"' }),
+                el('div.mute-sm', { text: 'מייל שמחכה ממך ולא טופל — יום אחרי שהגיע (או בבוקר יום הדדליין): "זכרת?" עם 💡 הצעת תשובה / טיפלתי / התעלם. רק על מייל שאתה האחראי עליו.' })
+              ]),
+              el('td', { style: { textAlign: 'center', width: '110px' } }, [el('label.checkbox', {}, [deadline])])
+            ]),
+            el('tr', {}, [
+              el('td', {}, [
+                el('div', { text: '🌊 קצב התזכורות' }),
+                el('div.mute-sm', { text: 'כמה תזכורות על מיילים שלא טופלו במהלך היום — החשובות קודם (דדליין קרוב, עדיפות). לא באמצע פגישה, ורק בשעות העבודה.' }),
+                pace
+              ]),
+              el('td', {}, [])
+            ]),
+            // 🗂 רק למי שמורשה בפריוריטי — מי שלא, לא רואה את האפשרות בכלל (13.11.26)
+            !state.actor?.priority ? null : el('tr', {}, [
+              el('td', {}, [
+                el('div', { text: '📄 חשבונית במייל — להציע קבלת סחורה' }),
+                el('div.mute-sm', { text: 'כשמגיעה חשבונית או תעודת משלוח: "לבצע קבלת סחורה?" — הבוט מוריד את הקובץ מהמייל ומתחיל. רק למי שמורשה לקבלת סחורה.' })
+              ]),
+              el('td', { style: { textAlign: 'center', width: '110px' } }, [el('label.checkbox', {}, [goods])])
+            ]),
+            el('tr', {}, [
+              el('td', {}, [
+                el('div', { text: '📝 טופס ריק במייל — להציע למלא' }),
+                el('div.mute-sm', { text: 'רק כשאני הנמען הראשי (לא בהעתק): הבוט ממלא מכרטיס החברה ומהפרטים שלי, מראה לי, ושולח לשולח רק אחרי אישור.' })
+              ]),
+              el('td', { style: { textAlign: 'center', width: '110px' } }, [el('label.checkbox', {}, [formOffer])])
+            ])
           ])
         ])
-      ]),
-      footer: [
-        el('button.btn.btn-danger', { onclick: () => logout() }, ['התנתקות']),
-        el('div.spacer'),
-        el('button.btn', { onclick: () => document.querySelector('.modal-backdrop')?.remove() }, ['סגירה'])
-      ]
-    });
+      ])
+    ]);
   }
+
+
+
+  /*
+   * ⚙ ההגדרות שלי — מסך אחד עם לשוניות (15.11.26, "תוכנית — חלוקת תפקידים בוט ומשימון.md" סעיף 5.1). כל לשונית מציגה את
+   * אותו תוכן שנפתח גם כחלון לבד (‎UI.modalOrInline‎) — כל הגדרה נבנית במקום אחד. הלשוניות תואמות את
+   * ‎PERSONAL_TABS‎ בקטלוג ההגדרות (‎server/core/settings-catalog.js‎; נבדק ב-‎settings-catalog.test.js‎).
+   */
+  const MY_TABS = [
+    { key: 'profile', label: '👤 פרטים', hint: 'טלפון, מחלקה והרשאות' },
+    { key: 'bot', label: '🤖 הבוט', hint: 'מה הבוט שולח לי', staff: true },
+    { key: 'google', label: '🔗 Google ומייל', hint: 'Gmail, יומן והעדפות AI', staff: true },
+    { key: 'whatsapp', label: '💬 הוואטסאפ שלי', hint: 'חיבור והצעות מהוואטסאפ', staff: true },
+    { key: 'today', label: '☀️ Today והקלטה', hint: 'Today במייל, הקלטה ויומנים', staff: true },
+    { key: 'location', label: '📍 מיקום', hint: 'נקודות ציון ותזכורת לפי מיקום', staff: true },
+    { key: 'notify', label: '🔔 התראות', hint: 'מה קופץ, ומתי במייל ובוואטסאפ' },
+    { key: 'view', label: '🎨 תצוגה', hint: 'בהיר, כהה או לפי המכשיר' }
+  ];
+  const MY_TAB_KEY = 'mesimon.mySettingsTab';
+
+  function profilePane(close) {
+    return el('div', {}, [
+      el('div.flex', { style: { gap: '12px', marginBottom: '16px' } }, [
+        UI.avatar(state.actor.name, { vendor: isVendor() }),
+        el('div', {}, [el('b', { text: state.actor.name }), el('div.mute-sm', { text: state.actor.email })])
+      ]),
+      el('table.data', { style: { width: '100%' } }, [
+        el('tbody', {}, [
+          state.actor.roleLabel ? el('tr', {}, [el('th', { text: 'רמת גישה' }), el('td', { text: state.actor.roleLabel })]) : null,
+          state.actor.department ? el('tr', {}, [el('th', { text: 'מחלקה' }), el('td', { text: state.actor.department })]) : null,
+          isVendor() ? null : phoneRow(),
+          isVendor() ? null : officePhoneRow(),
+          isVendor() ? el('tr', {}, [el('th', { text: 'הרשאת עדכון' }), el('td', { text: state.actor.readOnly ? 'צפייה בלבד' : 'מלאה' })]) : null
+        ])
+      ]),
+      isVendor() ? null : el('div.flex.mt', { style: { gap: '8px', flexWrap: 'wrap' } }, [
+        el('button.btn', { onclick: () => { close(); navigate('phonebook'); } }, ['📒 אלפון ארגוני']),
+        el('button.btn', { 'data-anchor': 'account.whats-new', onclick: () => { close(); WhatsNewView.open({ force: true }); } }, ['✨ מה חדש במערכת'])
+      ]),
+      el('div.mt', {}, [el('button.btn.btn-danger', { type: 'button', onclick: () => logout() }, ['🚪 התנתקות'])]),
+      el('div.alert.alert-info.mt', {}, [el('div', {}, [
+        el('b', { text: 'מה מותר לי במערכת?' }),
+        el('div', { text: 'ההרשאות נקבעות לפי מטריצת ההרשאות של המחלקה. לשינוי — יש לפנות למנהל המערכת.' })
+      ])])
+    ]);
+  }
+
+  /** המסך: תפריט צד (הלשוניות) ותוכן הלשונית. ‎params.tab‎ — לשונית לפתוח */
+  function renderMySettings(container, params = {}) {
+    const tabs = MY_TABS.filter((t) => !t.staff || !isVendor());
+    let saved = null;
+    try { saved = localStorage.getItem(MY_TAB_KEY); } catch { /* בלי אחסון */ }
+    const current = tabs.find((t) => t.key === (params.tab || saved))?.key ?? 'profile';
+    try { localStorage.setItem(MY_TAB_KEY, current); } catch { /* בלי אחסון */ }
+    const tab = tabs.find((t) => t.key === current);
+
+    const nav = el('nav.my-settings-nav', { 'aria-label': 'ההגדרות שלי' }, [
+      el('ul', { role: 'list' }, tabs.map((t) => el('li', {}, [
+        el(`button.my-settings-item${t.key === current ? '.active' : ''}`, {
+          type: 'button', 'aria-current': t.key === current ? 'page' : null,
+          onclick: () => navigate('settings', { tab: t.key })
+        }, [el('span.my-settings-label', { text: t.label }), el('span.my-settings-hint', { text: t.hint })])
+      ])))
+    ]);
+    const box = el('div');
+    UI.mount(container,
+      el('div.page-head', {}, [el('div', {}, [
+        el('h1', { text: '⚙ ההגדרות שלי' }),
+        el('div.sub', { text: 'ההגדרות האישיות שלך. הגדרות המערכת — אצל מנהל המערכת.' })
+      ])]),
+      el('div.my-settings', {}, [
+        nav,
+        el('section.card.my-settings-pane', { 'aria-labelledby': 'my-settings-title' }, [
+          el('div.card-pad', {}, [el('h2#my-settings-title', { text: tab.label }), box])
+        ])
+      ])
+    );
+    if (current === 'profile') UI.mount(box, profilePane(() => {}));
+    else if (current === 'bot') UI.mount(box, el('div', {}, [
+      el('div.mute-sm', { text: 'הבוט הוא המזכירה: מזכיר, מציע תשובות למיילים ומביא נתונים כשמבקשים. משימות — במשימון.' }),
+      botPrefsBox()
+    ]));
+    else if (current === 'google') AiInboxView.openGmail(() => refreshView(), { into: box });
+    else if (current === 'whatsapp') AiTaskView.openWhatsApp({ into: box });
+    else if (current === 'today') TodayView.openSettings({ into: box });
+    else if (current === 'location') LocationView.openSettings({ into: box });
+    else if (current === 'notify') notifSettingsDialog({ into: box });
+    else if (current === 'view') UI.mount(box, el('table.data', { style: { width: '100%' } }, [el('tbody', {}, [themeRow()])]));
+  }
+
+  function openMySettings(tab = null) { navigate('settings', tab ? { tab } : {}); }
+
+  /** "החשבון שלי" (עיגול השם, ⚙ בטלפון) — מסך ההגדרות שלי, בלשונית הפרטים */
+  function userMenu() { openMySettings('profile'); }
+
+  /** ⚙ ההגדרות שלי ← 🤖 הבוט (מקישור בהתראות) */
+  function openBotPrefs() { openMySettings('bot'); }
 
   /** סגירת מגירת הניווט. נקראת גם בניווט, גם בלחיצה על הרקע וגם ב-Escape. */
   /**
@@ -2094,24 +3084,46 @@ const App = (() => {
    * את הרקע הכהה שמעליו, ומשאיר מסך מוחשך בלי מגירה מאחוריו. זה בדיוק מה
    * שקורה כשמשנים צבע פרויקט או נועצים אותו מתוך המגירה עצמה.
    */
+  /*
+   * מגירה סגורה היא ‎inert‎. היא רק מוזזת אל מחוץ למסך ב-‎transform‎, ולכן
+   * בלי זה Tab עבר דרך כל פריטי הניווט והפרויקטים הבלתי נראים לפני שהגיע
+   * לתוכן, וקורא מסך הקריא אותם כאילו הם על המסך. במחשב התפריט תמיד גלוי —
+   * שם התכונה מוסרת.
+   */
   function applyDrawer() {
-    document.getElementById('sidebar')?.classList.toggle('open', !!state.drawerOpen);
+    const sidebarNode = document.getElementById('sidebar');
+    sidebarNode?.classList.toggle('open', !!state.drawerOpen);
     document.querySelector('.sidebar-veil')?.classList.toggle('open', !!state.drawerOpen);
+    if (!sidebarNode) return;
+    const hidden = isPhone() && !state.drawerOpen;
+    sidebarNode.inert = hidden;
+    if (hidden) sidebarNode.setAttribute('aria-hidden', 'true');
+    else sidebarNode.removeAttribute('aria-hidden');
   }
 
   function closeDrawer() {
+    const wasOpen = !!state.drawerOpen;
+    const sidebarNode = document.getElementById('sidebar');
+    // מיקוד שנשאר בתוך מגירה שנעשית ‎inert‎ נופל ל-body; מחזירים אותו לכפתור שפתח
+    const focusInside = sidebarNode?.contains(document.activeElement);
     state.drawerOpen = false;
     applyDrawer();
+    if (wasOpen && focusInside) document.querySelector('.drawer-btn')?.focus({ preventScroll: true });
   }
 
   function toggleDrawer() {
     state.drawerOpen = !state.drawerOpen;
     applyDrawer();
+    // נפתחה — המיקוד נכנס אליה, אחרת משתמש מקלדת נשאר מאחורי הרקע הכהה
+    if (state.drawerOpen && isPhone()) {
+      const sidebarNode = document.getElementById('sidebar');
+      (sidebarNode?.querySelector('.nav-item.active') ?? sidebarNode?.querySelector('.nav-item'))?.focus({ preventScroll: true });
+    }
   }
 
   /**
-   * הניווט התחתון. ארבעה יעדים בלבד — אלה שנעשים מהטלפון. השאר (ניהול,
-   * דוחות, ארכיון, בורדי ספקים) נשארים במגירה, כי הם מסכים של מחשב.
+   * הניווט התחתון — היעדים שנעשים מהטלפון, וההגדרות. השאר (ניהול, דוחות,
+   * ארכיון, בורדי ספקים) נשארים במגירה (☰ למעלה), כי הם מסכים של מחשב.
    */
   function tabbar() {
     const tab = (routeName, iconName, label, extra = {}) => {
@@ -2120,7 +3132,7 @@ const App = (() => {
         onclick: () => { closeDrawer(); navigate(routeName, extra.params ?? {}); }
       }, [
         el('span.ic-wrap', {}, [
-          UI.icon(iconName),
+          extra.emoji ? el('span.tab-emoji', { text: extra.emoji }) : UI.icon(iconName),
           extra.badge ? el('span.tab-dot', { text: String(extra.badge) }) : null
         ]),
         el('span.lbl', { text: label })
@@ -2138,16 +3150,45 @@ const App = (() => {
     }
 
     return el('nav.tabbar', {}, [
+      tab('today', 'my-tasks', 'Today', { emoji: '☀' }),
       tab('home', 'my-tasks', 'המשימות שלי'),
       tab('board', 'board', 'הלוח'),
       el('button', { onclick: () => toggleNotifPanel(null) }, [
         el('span.ic-wrap', {}, [UI.icon('bell'), state.unread ? el('span.tab-dot', { text: String(state.unread) }) : null]),
         el('span.lbl', { text: 'התראות' })
       ]),
-      el(`button${state.route.name === 'admin' ? '.active' : ''}`, { onclick: toggleDrawer }, [
+      /*
+       * ⚙ הגדרות — פותח את "החשבון שלי". קודם הכפתור הזה נקרא "עוד", עם אותו
+       * גלגל שיניים, ופתח את תפריט הצד: מי שלחץ על גלגל השיניים ציפה להגדרות
+       * וקיבל תפריט בלי הגדרות. תפריט הצד (ניהול, דוחות, ארכיון, פרויקטים)
+       * נשאר ב-☰ שבפס העליון.
+       */
+      el('button', { onclick: () => { closeDrawer(); userMenu(); } }, [
         el('span.ic-wrap', {}, [UI.icon('admin')]),
-        el('span.lbl', { text: 'עוד' })
+        el('span.lbl', { text: 'הגדרות' })
       ])
+    ]);
+  }
+
+  /**
+   * פס הפעולה בטלפון, מעל הניווט התחתון: ☀ Today ו-🎙 הקלטה בגודל שווה —
+   * שתי הפעולות שנעשות מהטלפון יותר מכל — ומתג 👂 ההאזנה למי שהפעיל אותו.
+   */
+  function actionBar() {
+    const wake = VoiceWake.enabledInPrefs() && VoiceWake.supported() && may('create_task');
+    return el(`div.m-actionbar${wake ? '.has-wake' : ''}`, {}, [
+      el(`button.m-action.m-action-today${state.route.name === 'today' ? '.active' : ''}`, { onclick: () => navigate('today') }, [
+        el('span', { text: '☀' }), el('span', { text: 'Today' }), todayBadge()
+      ]),
+      may('create_task')
+        ? el('button.m-action.m-action-mic', { onclick: () => VoiceView.open() }, [el('span', { text: '🎙' }), el('span', { text: 'הקלטה' })])
+        : null,
+      wake
+        ? el(`button.m-action.m-action-wake${VoiceWake.isOn() ? '.on' : ''}`, {
+            title: VoiceWake.isOn() ? 'כיבוי ההאזנה' : 'האזנה — אמרו "משימון"',
+            onclick: () => VoiceWake.toggle()
+          }, [el('span', { text: '👂' }), el('span', { text: VoiceWake.isOn() ? 'מאזין' : 'האזנה' })])
+        : null
     ]);
   }
 
@@ -2162,8 +3203,13 @@ const App = (() => {
       // הרקע והניווט התחתון נבנים תמיד; ב-CSS הם מוצגים רק בפריסת נייד
       el('div.sidebar-veil', { onclick: closeDrawer }),
       phone ? tabbar() : null,
+      phone && !isVendor() ? actionBar() : null,
       phone && !isVendor() && may('create_task')
         ? el('button.fab', { title: 'משימה חדשה', onclick: () => BoardView.openTaskDialog() }, ['＋'])
+        : null,
+      // ✨ שאל את אשל — עיגול צף מול ה-＋, בהישג האגודל (במקום כפתור קטן בסרגל העליון)
+      phone && !isVendor()
+        ? el('button.fab-ask', { title: 'שאל את אשל', 'aria-label': 'שאל את אשל', onclick: () => AskView.open() }, ['✨'])
         : null
     ]));
     UI.refitLogos(); // הסמל נבנה מחדש בכל רינדור — מיישרים את הכיתוב לרוחב השם
@@ -2196,6 +3242,7 @@ const App = (() => {
     if (!shell) return;
     shell.querySelector('.topbar')?.replaceWith(topbar());
     shell.querySelector('#sidebar')?.replaceWith(sidebar());
+    if (isPhone() && !isVendor()) shell.querySelector('.m-actionbar')?.replaceWith(actionBar());
     // מצב הנעיצה יושב על השלד — הוא מה שקובע כמה מקום התוכן מפנה לתפריט
     shell.classList.toggle('rail-pinned', !isPhone() && sidebarPinned());
     applyDrawer(); // התפריט נבנה מחדש — מחזירים לו את מצב הפתיחה שהיה
@@ -2207,6 +3254,8 @@ const App = (() => {
    * ובלי לאבד גלילה, ולכן עדכון משימה כבר אינו מחייב בנייה מחדש של האתר.
    */
   const RELOADABLE = {
+    today: () => TodayView.reload(),
+    calendar: () => CalendarView.reload(),
     home: () => (isPhone() && !isVendor() ? MobileView.reload() : HomeView.reload()),
     board: () => BoardView.reload({ silent: true }),
     vendorBoards: () => BoardView.reload({ silent: true }),
@@ -2215,6 +3264,8 @@ const App = (() => {
   };
 
   async function refreshView() {
+    // משימה נוצרה, הושלמה או הוזזה — המונה של Today מתעדכן בכל מסך
+    refreshTodayCount();
     const reload = RELOADABLE[state.route.name];
     // מסך שאין לו טעינה נקודתית (ניהול, דוחות) נבנה מחדש כרגיל
     if (!reload) return render();
@@ -2227,8 +3278,8 @@ const App = (() => {
 
   return {
     state, boot, navigate, refresh, refreshNotifications, logout, render,
-    refreshChrome, refreshView, isPhone, closeDrawer, setPref, getPref,
-    may, can, isVendor, userName, vendorName, project, internalBoard, vendorBoards,
+    refreshChrome, refreshView, isPhone, closeDrawer, setPref, getPref, setTodayCount, refreshTodayCount,
+    may, can, isVendor, hasTracker, userName, vendorName, project, myProjects, internalBoard, vendorBoards,
     reloadReference
   };
 })();

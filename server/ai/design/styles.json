@@ -1,0 +1,83 @@
+[
+ {
+  "id": 1,
+  "name": "Minimalism & Swiss Style",
+  "keywords": "Clean, simple, spacious, functional, white space, high contrast, geometric, sans-serif, grid-based, essential",
+  "bestFor": "Enterprise apps, dashboards, documentation sites, SaaS platforms, professional tools",
+  "avoidFor": "Creative portfolios, entertainment, playful brands, artistic experiments",
+  "rtl": "full",
+  "checklist": "☐ Grid-based layout 12-16 columns, ☐ Typography hierarchy clear, ☐ No unnecessary decorations, ☐ text contrast measured against the chosen project target, ☐ Mobile responsive grid"
+ },
+ {
+  "id": 12,
+  "name": "Flat Design",
+  "keywords": "2D, minimalist, bold colors, no shadows, clean lines, simple shapes, typography-focused, modern, icon-heavy",
+  "bestFor": "Web apps, mobile apps, cross-platform, startup MVPs, user-friendly, SaaS, dashboards, corporate",
+  "avoidFor": "Complex 3D, premium/luxury, artistic portfolios, immersive experiences, high-detail",
+  "rtl": "full",
+  "checklist": "☐ No shadows/gradients, ☐ 4-6 solid colors max, ☐ Clean lines consistent, ☐ Simple shapes used, ☐ Icon-heavy layout, ☐ High saturation colors, ☐ Fast loading verified"
+ },
+ {
+  "id": 23,
+  "name": "Minimal & Direct",
+  "keywords": "Minimal text, white space heavy, single column layout, direct messaging, clean typography, visual-centric, fast-loading",
+  "bestFor": "Simple service landing pages, indie products, consulting services, micro SaaS, freelancer portfolios",
+  "avoidFor": "Feature-heavy products, complex explanations, multi-product showcases",
+  "rtl": "full",
+  "checklist": "☐ Single column centered, ☐ White space generous, ☐ One primary CTA only, ☐ No decorative images, ☐ Page weight < 500KB, ☐ Load time < 2s"
+ },
+ {
+  "id": 39,
+  "name": "Bento Box Grid",
+  "keywords": "Modular cards, asymmetric grid, varied sizes, Apple-style, dashboard tiles, negative space, clean hierarchy, cards",
+  "bestFor": "Dashboards, product pages, portfolios, Apple-style marketing, feature showcases, SaaS",
+  "avoidFor": "Dense data tables, text-heavy content, real-time monitoring",
+  "rtl": "full",
+  "checklist": "☐ Grid responsive (4→2→1 cols), ☐ Card spans varied, ☐ Rounded corners consistent, ☐ Shadows subtle, ☐ Content fits cards, ☐ Hover scale (1.02)"
+ },
+ {
+  "id": 47,
+  "name": "Exaggerated Minimalism",
+  "keywords": "Bold minimalism, oversized typography, high contrast, negative space, loud minimal, statement design",
+  "bestFor": "Fashion, architecture, portfolios, agency landing pages, luxury brands, editorial",
+  "avoidFor": "E-commerce catalogs, dashboards, forms, data-heavy, elderly users, complex apps",
+  "rtl": "full",
+  "checklist": "☐ Typography oversized, ☐ White space extreme, ☐ Black/white dominant, ☐ Single accent only, ☐ Elements minimal, ☐ Statement clear"
+ },
+ {
+  "id": 50,
+  "name": "Swiss Modernism 2.0",
+  "keywords": "Grid system, Helvetica, modular, asymmetric, international style, rational, clean, mathematical spacing",
+  "bestFor": "Corporate sites, architecture, editorial, SaaS, museums, professional services, documentation",
+  "avoidFor": "Playful brands, children's sites, entertainment, gaming, emotional storytelling",
+  "rtl": "full",
+  "checklist": "☐ 12-column grid strict, ☐ Spacing mathematical, ☐ Typography hierarchy clear, ☐ Single accent only, ☐ No decorations, ☐ High contrast verified"
+ },
+ {
+  "id": 66,
+  "name": "Editorial Grid / Magazine",
+  "keywords": "Magazine layout, asymmetric grid, editorial typography, pull quotes, drop caps, column layout, print-inspired",
+  "bestFor": "News sites, blogs, magazines, editorial content, long-form articles, journalism, publishing",
+  "avoidFor": "Dashboards, apps, e-commerce catalogs, real-time data, short-form content",
+  "rtl": "caveats",
+  "checklist": "☐ Grid asymmetric, ☐ Typography editorial, ☐ Pull quotes styled, ☐ Drop caps present, ☐ Images large/impactful, ☐ Mobile reflows well"
+ },
+ {
+  "id": 70,
+  "name": "Minimalist Monochrome",
+  "keywords": "monochrome, black white, editorial, austere, typographic, sharp, zero radius, high contrast, brutalist, pocket editorial, serif, mechanical",
+  "bestFor": "Luxury fashion e-commerce mobile, editorial publications, high-end portfolio apps, experimental/avant-garde brands, digital exhibitions",
+  "avoidFor": "Entertainment, colorful brands, friendly consumer apps, anything requiring visual warmth or gradient",
+  "rtl": "full",
+  "checklist": "☐ 0px border-radius on ALL elements, ☐ No shadows anywhere, ☐ Instant inversion on every tap (transition-none), ☐ 4px black line separates hero from content, ☐ Safe area respected (pt-safe pb-safe), ☐ h-14 touch targets, ☐ Sticky section headers with border-b, ☐ Typography hero: word spans full screen width, ☐ Paper noise texture on backgrounds, ☐ Menu word-label instead of icon"
+ },
+ {
+  "id": 78,
+  "name": "Bold Typography (Mobile Poster)",
+  "keywords": "bold typography, editorial, poster, broadsheet, vermillion, negative space, edge-to-edge type, underline CTA, near-black, warm white",
+  "bestFor": "Creative brand heroes, reading-focused apps, event/exhibition pages, editorial mobile experiences, landing hero sections",
+  "avoidFor": "Utility dashboards, kids apps, playful consumer products, contexts needing many icons or heavy imagery",
+  "rtl": "full",
+  "checklist": "☐ H1 at least 4–5× body size, ☐ All containers 0 radius, ☐ Underline CTA pattern used, ☐ Large vertical gaps between sections, ☐ No shadows or soft corners, ☐ Accent used only for interaction, ☐ Text bleeds to/over screen edges, ☐ Animation timings 200ms, ☐ Accessible contrast ≥ 18:1, ☐ Body text never below 16px"
+ }
+]

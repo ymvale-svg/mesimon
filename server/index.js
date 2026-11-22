@@ -3,6 +3,7 @@
  * משימון — נקודת הכניסה לשרת.
  */
 const http = require('node:http');
+const Paths = require('./core').Paths;
 const path = require('node:path');
 const os = require('node:os');
 
@@ -19,21 +20,45 @@ try {
   process.exit(1);
 }
 
-const D = require('./db');
-const Auth = require('./auth');
-const Rules = require('./rules-engine');
-const Push = require('./push');
-const AiTasks = require('./ai-tasks');
-const WaBot = require('./ai/wa-bot');
-const { router } = require('./api');
-const { HttpError, sendJson, serveStatic, parseUrl, unauthorized } = require('./http-kit');
+const D = require('./core').Db;
+const Auth = require('./core').Auth;
+const Rules = require('./tasks').RulesEngine;
+const Push = require('./integrations').Push;
+const Claude = require('./integrations').Claude;
+const LoadMonitor = require('./core').LoadMonitor;
+const AiTasks = require('./tasks').AiTasks;
+const WaBot = require('./whatsapp').WaBot;
+const { router } = require('./api').Api;
+const Today = require('./today').Today;
+const GContacts = require('./phonebook').GoogleContacts;
+const Meetings = require('./meetings').Meetings;
+const Dupes = require('./tasks').TaskDupes;
+const { HttpError, sendJson, serveStatic, parseUrl, unauthorized } = require('./core').HttpKit;
+const MailDocQueue = require('./mail').MailDocQueue;
+const MailDose = require('./mail').MailDose;
+const PoNotify = require('./priority').PoNotify;
+const PdParts = require('./priority').PdParts;
+const TimelessMedia = require('./meetings').TimelessMedia;
+const TimelessStore = require('./meetings').TimelessStore;
 
 const PORT = Number(process.env.PORT ?? 3000);
 const HOST = process.env.HOST ?? '0.0.0.0';
-const PUBLIC_DIR = path.join(__dirname, '..', 'public');
+const PUBLIC_DIR = Paths.PUBLIC;
+
+// חיבור השקעים בין המודולים — לפני כל עבודה (‎wiring.js‎)
+require('./wiring');
 
 D.bootstrap();
 Auth.purgeExpired();
+// 📉 מינון המייל — נקודת ההתחלה של כל עובד לפי השבועיים האחרונים, פעם אחת (‎mail/mail-dose.js‎)
+try {
+  const seeded = MailDose.seedFromHistory();
+  if (seeded) console.log(`[משימון] מינון המייל לפי השימוש בשבועיים האחרונים: ${seeded.users} עובדים, ${seeded.used} השתמשו · 100%: ${seeded.levels[0]} · 50%: ${seeded.levels[1]} · 20%: ${seeded.levels[2]} · מושהה: ${seeded.levels[3]}`);
+} catch (err) {
+  console.error('[משימון] חישוב המינון מההיסטוריה נכשל:', err.message);
+}
+// ההודעה הראשונה של "מה חדש" — טיוטה אחת, פעם אחת, אחרי שהטבלה קיימת
+require('./api').ApiWhatsNew.seedFirstRelease();
 
 const server = http.createServer(async (req, res) => {
   const url = parseUrl(req);
@@ -52,11 +77,16 @@ const server = http.createServer(async (req, res) => {
           return actor;
         }
       };
-      await match.handler(req, res, ctx);
+      // 💰 קריאות ל-AI בבקשה הזו נרשמות לעובד שביקש (‎ai-usage.js‎)
+      const run = () => match.handler(req, res, ctx);
+      await (actor?.type === 'user' ? Claude.forUser(actor.id, run) : run());
       return;
     }
 
-    if (serveStatic(res, PUBLIC_DIR, url.pathname)) return;
+    if (serveStatic(res, PUBLIC_DIR, url.pathname, req)) return;
+
+    // 🗂 משימון פריוריטי — תוכנה נפרדת באותו אתר (‎public/priority/‎), עם ניווט צד-לקוח משלה
+    if (/^\/priority(\/|$)/.test(url.pathname) && serveStatic(res, PUBLIC_DIR, '/priority/index.html')) return;
 
     // כל נתיב אחר מוגש כאפליקציה (ניווט צד-לקוח)
     if (serveStatic(res, PUBLIC_DIR, '/index.html')) return;
@@ -88,11 +118,40 @@ server.on('error', (err) => {
   process.exitCode = 1;
 });
 
+/*
+ * מצב חירום (‎MESIMON_SAFE_MODE=1‎ במשתני הסביבה ב-Render): האתר עולה בלי שום
+ * עבודת רקע — בלי סריקת מיילים וזיכרון, בוט, תזכורות וסנכרונים. לשימוש כשהשרת
+ * תקוע (502) ואי אפשר להגיע למסך הניהול כדי לכבות משהו.
+ * ‎MAIL_MEMORY_OFF=1‎ — מכבה רק את סריקת זיכרון המייל.
+ */
+const SAFE_MODE = /^(1|true|yes)$/i.test(String(process.env.MESIMON_SAFE_MODE ?? '').trim());
+
 server.listen(PORT, HOST, () => {
-  Rules.start();
-  Push.start();
-  AiTasks.start();
-  WaBot.start();
+  if (SAFE_MODE) {
+    console.warn('[משימון] ⚠ מצב חירום (MESIMON_SAFE_MODE): עבודות הרקע כבויות — רק האתר פועל');
+  } else {
+    Rules.start();
+    Push.start();
+    AiTasks.start();
+    Today.start();
+    GContacts.start();
+    Meetings.start();
+    // 🎥 פגישה מקוונת שהתחילה ולא מוקלטת ב-Timeless — הודעה למזכירות
+    TimelessMedia.start();
+    // 🎥 הצינור היחיד מ-Timeless: סבב כל 5 דקות, והפגישות נשמרות במשימון
+    TimelessStore.start();
+    WaBot.start();
+    // משימות כפולות במחלקה — סריקה פעם ביום (פרק 11ב)
+    Dupes.start();
+    // 📎 פענוח קבצים גדולים מהמייל לפי בקשה — קובץ אחד בכל פעם
+    MailDocQueue.start();
+    // 🧾 הזמנת רכש שהפכה לסופית בפריוריטי — למנהל הפרויקט וליוזם הדרישה (וואטסאפ ומייל)
+    PoNotify.start();
+    // 🆕 מק"טים שנשלחו לרכש לבנייה — כשנבנו בפריוריטי, היוזם נשאל בבוט אם לבנות את הדרישה מחדש
+    PdParts.start();
+  }
+  // התראה למנהלים כשתקרת המעבד מאטה את הסוכנים
+  LoadMonitor.start();
   const nets = os.networkInterfaces();
   const lan = Object.values(nets).flat().find((n) => n && n.family === 'IPv4' && !n.internal);
   console.log('');
@@ -133,6 +192,10 @@ server.listen(PORT, HOST, () => {
 const shutdown = () => {
   Rules.stop();
   AiTasks.stop();
+  Today.stop();
+  GContacts.stop();
+  Meetings.stop();
+  MailDocQueue.stop();
   server.close(() => process.exit(0));
   setTimeout(() => process.exit(0), 2000).unref();
 };

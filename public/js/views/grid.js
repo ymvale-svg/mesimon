@@ -358,7 +358,9 @@ const GridView = (() => {
       inner.title = 'לחיצה להעברה לפרויקט אחר';
       inner.addEventListener('click', (e) => {
         e.stopPropagation();
-        const options = [{ id: '', name: 'ללא פרויקט', color: null }, ...App.state.projects];
+        // העברה רק לפרויקט שמותר לפתוח בו משימה — השרת אוכף (‎assertMayUseProject‎)
+        const options = [{ id: '', name: 'ללא פרויקט', color: null },
+          ...App.state.projects.filter((p) => p.canAddTask || String(p.id) === String(task.projectId ?? ''))];
         popover(inner, el('div.popover-list', {}, options.map((p) =>
           el('button.popover-option', {
             onclick: () => patch(task, { projectId: p.id === '' ? null : p.id })
@@ -390,7 +392,9 @@ const GridView = (() => {
          * המשימה, בכרטיס ובתיוג ‎@‎. ברשימה של חמישים אנשים מי שיושב איתי
          * נופל בדיוק באמצע, והוא זה שאליו מקצים כמעט תמיד.
          */
-        const { near, far, deptName } = UI.usersByDepartment();
+        const { near, far, deptName } = UI.usersByDepartment({
+          keep: task.assigneeType === 'user' && task.assigneeId ? [task.assigneeId] : []
+        });
         const userOpt = (u) => ({ value: `user:${u.id}`, label: u.name, vendor: false });
         const vendors = App.may('assign_task_to_vendor')
           ? App.state.vendors.filter((v) => v.status === 'active')
@@ -463,11 +467,26 @@ const GridView = (() => {
    * מפורש: לחיצה על השורה פותחת את המשימה, ועריכה במקום הייתה מתנגשת בכך —
    * אותה לחיצה עצמה לא יכולה גם לפתוח וגם להיכנס למצב הקלדה.
    */
+  /*
+   * לכל היותר שתי תגיות, והשאר בשבב "‎+N‎" שמפרט אותן בריחוף ולקורא מסך.
+   * משימה שהיא גם באיחור, גם דחופה, גם הוקפצה וגם חסומה מילאה את כל התא
+   * בתגיות, ובמסך של 1024 נשארה מהכותרת אות אחת — והכותרת היא מה שמזהה
+   * את המשימה. התגיות כולן מופיעות בכרטיס המשימה.
+   */
+  const TITLE_TAGS_MAX = 2;
+
   function titleCell(task) {
     const cell = el('td.cell-title', {});
+    const tags = UI.taskTags(task);
+    const rest = tags.slice(TITLE_TAGS_MAX).map((t) => t.textContent.trim());
     cell.appendChild(el('div.title-box', {}, [
-      el('span.title-text', { text: task.title }),
-      el('div.title-tags', {}, UI.taskTags(task))
+      el('span.title-text', { text: task.title, title: task.title }),
+      el('div.title-tags', {}, [
+        ...tags.slice(0, TITLE_TAGS_MAX),
+        rest.length
+          ? el('span.tag.tag-more', { title: rest.join(' · '), 'aria-label': `ועוד: ${rest.join(', ')}` }, [`+${rest.length}`])
+          : null
+      ])
     ]));
     return cell;
   }
@@ -583,7 +602,8 @@ const GridView = (() => {
   function quickAddRow(group, colspan) {
     const input = el('input.quick-add-input', {
       type: 'text',
-      placeholder: '＋ הוספת משימה — כתיבה ו-Enter'
+      placeholder: '＋ הוספת משימה — כתיבה ו-Enter',
+      'aria-label': 'הוספת משימה מהירה'
     });
 
     // Enter מנטרל את השדה, וניטרול שדה ממוקד מפעיל blur — בלי הדגל הזה
@@ -769,16 +789,19 @@ const GridView = (() => {
     const groups = buildGroups(ctx.tasks, state.groupBy, state.sortBy);
 
     const groupSelector = el('div.group-control', {}, [
-      el('span.mute-sm', { text: 'קיבוץ לפי' }),
+      // הכיתוב הגלוי הוא ‎span‎ ולא ‎label‎, ולכן הבורר נושא את שמו בעצמו
+      el('span.mute-sm', { text: 'קיבוץ לפי', 'aria-hidden': 'true' }),
       UI.select(GROUP_OPTIONS, state.groupBy, {
+        'aria-label': 'קיבוץ לפי',
         onchange: (e) => {
           state.groupBy = e.target.value;
           state.collapsed.clear();
           ctx.onRedraw();
         }
       }),
-      el('span.mute-sm', { text: 'מיון לפי' }),
+      el('span.mute-sm', { text: 'מיון לפי', 'aria-hidden': 'true' }),
       UI.select(SORT_OPTIONS, state.sortBy, {
+        'aria-label': 'מיון לפי',
         onchange: (e) => { state.sortBy = e.target.value; ctx.onRedraw(); }
       }),
       el('div.spacer'),

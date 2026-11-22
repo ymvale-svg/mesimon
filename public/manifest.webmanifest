@@ -1,5 +1,5 @@
 {
-  "name": "MESIMON — משימות שעובדות בשבילך",
+  "name": "משימון — משימות שעובדות בשבילך",
   "short_name": "משימון",
   "description": "ניהול המשימות והפרויקטים של הארגון — הדשבורד שלך, סינון מהיר, ופתיחת משימות מהטלפון.",
   "lang": "he",
@@ -19,6 +19,18 @@
     { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
   ],
   "shortcuts": [
+    {
+      "name": "Today — מה עושים היום",
+      "short_name": "Today",
+      "url": "/?view=today",
+      "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "משימה בקול",
+      "short_name": "משימה בקול",
+      "url": "/?voice=1",
+      "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192" }]
+    },
     {
       "name": "משימה חדשה",
       "short_name": "משימה חדשה",

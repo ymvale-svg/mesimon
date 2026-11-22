@@ -9,11 +9,43 @@
     והזום שספארי עושה מעצמו נמנע בדרך אחרת: שדות בגודל 16 פיקסלים.
   -->
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <title>MESIMON</title>
+  <title>משימון — ניהול משימות ופרויקטים לארגון</title>
+  <link rel="canonical" href="https://mesimon.co.il/">
+  <meta property="og:type" content="website">
+  <meta property="og:locale" content="he_IL">
+  <meta property="og:site_name" content="משימון">
+  <meta property="og:title" content="משימון — ניהול משימות ופרויקטים לארגון">
+  <meta property="og:description" content="ניהול המשימות והפרויקטים של הארגון — הדשבורד שלך, סינון מהיר, ופתיחת משימות מהטלפון.">
+  <meta property="og:url" content="https://mesimon.co.il/">
+  <!-- שם האתר בתוצאות החיפוש: Google לוקחת אותו מכאן ומציגה "משימון"; השמות באנגלית רק עוזרים למי שמחפש כך -->
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "WebSite",
+    "name": "משימון",
+    "alternateName": ["MESIMON", "Mesimon"],
+    "url": "https://mesimon.co.il/",
+    "inLanguage": "he"
+  }
+  </script>
 
   <!-- התקנה כאפליקציה -->
   <link rel="manifest" href="/manifest.webmanifest">
   <meta name="theme-color" content="#115e59">
+  <!--
+    מצב לילה — לפני הגיליונות ולפני הציור הראשון. ההעדפה נשמרת בשרת, אבל
+    עד שהשרת עונה המסך כבר צויר; העותק המקומי מונע הבהוב לבן אצל מי שבחר
+    לילה. הלוגיקה המלאה (שינוי, "לפי המערכת" חי) — applyTheme ב-app.js.
+  -->
+  <script>
+    (function () {
+      try {
+        var pref = localStorage.getItem('mesimon.theme') || 'light';
+        var dark = pref === 'dark' || (pref === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+        document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
+      } catch (e) { /* בלי אחסון מקומי — בהיר, עד שההעדפה תגיע מהשרת */ }
+    })();
+  </script>
   <meta name="application-name" content="משימון">
   <meta name="description" content="ניהול המשימות והפרויקטים של הארגון — הדשבורד שלך, סינון מהיר, ופתיחת משימות מהטלפון.">
   <!-- iOS אינו קורא את המניפסט למסך הבית, ולכן שלושת התגים האלה נדרשים בנפרד -->
@@ -21,34 +53,64 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="משימון">
   <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect width='64' height='64' rx='17' fill='%230f766e'/><rect x='15' y='17' width='24' height='5' rx='2.5' fill='white' opacity='.45'/><rect x='15' y='28' width='16' height='5' rx='2.5' fill='white' opacity='.45'/><path d='M16 44.5L25 53 48 26' fill='none' stroke='white' stroke-width='7' stroke-linecap='round' stroke-linejoin='round'/></svg>">
+  <!-- סמל לתוצאות החיפוש: Google אינה קוראת סמל data: ודורשת קובץ בכתובת אמיתית, בכפולה של 48 פיקסלים -->
+  <link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect width='64' height='64' rx='17' fill='%230f766e'/><polygon points='15,16.5 27,14 27,20 15,22.5' fill='%235eead4'/><polygon points='27,14 40,15.5 40,21.5 27,20' fill='white'/><polygon points='15,27.5 27,25 27,31 15,33.5' fill='%235eead4'/><polygon points='27,25 33,26.5 33,32.5 27,31' fill='white'/><path d='M16 44.5L25 53 48 26' fill='none' stroke='white' stroke-width='7' stroke-linecap='round' stroke-linejoin='round'/></svg>">
   <link rel="stylesheet" href="/css/styles.css">
   <!-- אחרי הראשי: כל מה שבו נמצא בשאילתת מדיה ומכריע רק בפריסת נייד -->
   <link rel="stylesheet" href="/css/mobile.css">
 </head>
 <body>
   <div id="app"></div>
+  <!-- טקסט קריא למנועי חיפוש ולמי שבלי JavaScript; האפליקציה מחליפה את #app ולא נוגעת בזה -->
+  <noscript>
+    <h1>משימון — ניהול משימות ופרויקטים לארגון</h1>
+    <p>משימון מרכז את המשימות והפרויקטים של הארגון במקום אחד: דשבורד אישי, סינון מהיר, יומן ופגישות, ופתיחת משימות מהטלפון.</p>
+    <p>כדי להשתמש במשימון יש להפעיל JavaScript בדפדפן.</p>
+  </noscript>
 
   <div id="modal-root"></div>
-  <div id="toast-root" class="toast-root"></div>
+  <div id="toast-root" class="toast-root" role="status" aria-live="polite"></div>
 
   <script src="/js/api.js"></script>
   <script src="/js/ui.js"></script>
+  <script src="/js/time-picker.js"></script>
+  <script src="/js/feature-anchors.js"></script>
+  <script src="/js/spotlight.js"></script>
   <script src="/js/views/login.js"></script>
   <script src="/js/views/invite.js"></script>
   <script src="/js/views/signup.js"></script>
   <script src="/js/views/home.js"></script>
   <script src="/js/views/mobile.js"></script>
   <script src="/js/views/grid.js"></script>
+  <script src="/js/views/class-picker.js"></script>
   <script src="/js/views/board.js"></script>
   <script src="/js/views/tracker.js"></script>
+  <script src="/js/views/flow.js"></script>
   <script src="/js/views/task-card.js"></script>
+  <script src="/js/views/contact-picker.js"></script>
+  <script src="/js/views/phonebook.js"></script>
+  <script src="/js/views/assignee-picker.js"></script>
   <script src="/js/views/ai-task.js"></script>
   <script src="/js/views/ai-inbox.js"></script>
+  <script src="/js/views/mail-memory.js"></script>
+  <script src="/js/views/mail-ask.js"></script>
+  <script src="/js/views/admin-ai.js"></script>
+  <script src="/js/views/task-sync.js"></script>
   <script src="/js/views/checklist-item.js"></script>
   <script src="/js/views/vendor-portal.js"></script>
   <script src="/js/views/reports.js"></script>
   <script src="/js/views/admin.js"></script>
+  <script src="/js/views/whats-new.js"></script>
+  <script src="/js/views/today.js"></script>
+  <script src="/js/views/meeting.js"></script>
+  <script src="/js/views/calendar.js"></script>
+  <script src="/js/views/recordings.js"></script>
+  <script src="/js/views/recording-player.js"></script>
+  <script src="/js/views/voice.js"></script>
+  <script src="/js/views/location.js"></script>
+  <script src="/js/views/assistant.js"></script>
+  <script src="/js/voice-wake.js"></script>
   <script src="/js/app.js"></script>
 </body>
 </html>

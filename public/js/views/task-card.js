@@ -10,24 +10,61 @@ const TaskCardView = (() => {
   let modalRef = null;
   let task = null;
   let activeTab = 'comments';
+  /*
+   * כמה פתיחות נמצאות כרגע בדרך (בהמתנה לשרת). פאנל הצד נסגר בלחיצה מחוצה
+   * לו — אבל לחיצה על שורה אחרת ברשימה היא בקשה להחליף משימה, לא לסגור.
+   * הדגל נדלק כבר בתוך מטפל הלחיצה של השורה, ולכן הוא דולק כשהפאנל שואל.
+   */
+  let opening = 0;
 
+  /**
+   * פתיחת הכרטיס. במחשב — פאנל צד בגובה המסך שגולש מהשמאל (inline-end),
+   * כך שהרשימה נשארת גלויה ואפשר לעבור ממשימה למשימה בלחיצה עליה. בטלפון —
+   * החלון המלא כמו קודם.
+   *
+   * כרטיס שכבר פתוח מקבל את המשימה החדשה *במקומו*, ולא נסגר ונפתח מחדש:
+   * בפאנל צד סגירה ופתיחה הן שתי הנפשות מנוגדות זו אחר זו — הבהוב — והמיקוד
+   * היה חוזר לשורה הקודמת באמצע.
+   *
+   * בלי מיקוד אוטומטי של השדה הראשון: בכרטיס השדה הראשון הוא הסטטוס המקוצר
+   * או הוספת סעיף, ומי שפתח משימה כדי לקרוא אותה לא ביקש להקליד בהם.
+   */
   async function open(taskId) {
-    activeTab = 'comments';
+    opening += 1;
     try {
-      const data = await API.task(taskId);
+      let data;
+      try {
+        data = await API.task(taskId);
+      } catch (err) {
+        return UI.error(err);
+      }
+      activeTab = 'comments';
       task = data.task;
-    } catch (err) {
-      return UI.error(err);
+
+      if (modalRef?.box.isConnected) {
+        const body = modalRef.box.querySelector('.task-detail');
+        modalRef.box.setAttribute('aria-label', task.title);
+        draw(body);
+        body.scrollTop = 0;
+        body.querySelector('.td-main')?.scrollTo?.(0, 0);
+        return;
+      }
+      if (modalRef) modalRef.close();
+      const body = el('div.task-detail');
+      modalRef = UI.modal({
+        title: null,
+        label: task.title,
+        body,
+        size: 'xwide',
+        side: true,
+        autofocus: false,
+        ignoreOutside: () => opening > 0,
+        onClose: () => { modalRef = null; }
+      });
+      draw(body);
+    } finally {
+      opening -= 1;
     }
-    if (modalRef) modalRef.close();
-    const body = el('div.task-detail');
-    modalRef = UI.modal({
-      title: null,
-      body,
-      size: 'xwide',
-      onClose: () => { modalRef = null; }
-    });
-    draw(body);
   }
 
   async function reload() {
@@ -74,6 +111,17 @@ const TaskCardView = (() => {
     const titleRow = el('div.flex', { style: { marginBottom: '4px', gap: '8px' } }, [titleNode, editTitleBtn]);
 
     const alerts = [];
+
+    // מוזגה לתוך משימה ותיקה (פרק 11ב) — ההמשך שם
+    if (task.mergedInto) {
+      alerts.push(el('div.alert.alert-info', {}, [
+        el('span', { text: '🔀' }),
+        el('div', {}, [
+          el('b', { text: 'המשימה מוזגה' }),
+          el('div', {}, ['ההערות, הקבצים והאחראים עברו למשימה ', el('a', { onclick: () => open(task.mergedInto.id) }, [`"${task.mergedInto.title}"`]), '.'])
+        ])
+      ]));
+    }
 
     // אזהרה חזותית אם המשימה תלויה במשימה שטרם הושלמה
     if (task.dependency?.blocking) {
@@ -135,13 +183,30 @@ const TaskCardView = (() => {
         refreshBackground();
         App.refreshNotifications();
       }),
-      // משימה שנולדה ממייל — הקישור למייל עצמו רק אצל מי שהוא בתיבה שלו
+      // משימה שהיא פנייה ("לבקש הצעת מחיר מ…") — נוסח מייל מוכן לשליחה
+      AiTaskView.outreach(task, (updated) => {
+        task = updated;
+        draw(modalRef.box.querySelector('.task-detail'));
+        refreshBackground();
+      }),
+      // הפגישה של המשימה — נקבעה, בוטלה, או "📅 קביעת פגישה"
+      MeetingView.panel(task, async () => {
+        await reload();
+        refreshBackground();
+      }),
+      // משימה שנולדה ממייל — הקישור למייל עצמו רק אצל מי שהוא בתיבה שלו; המייל עצמו (עותק) — לכל מי שעובד עליה
       task.source?.type === 'email'
         ? el('div.mute-sm', { style: { marginBottom: '10px' } }, [
             '📧 נוצרה ממייל',
-            task.source.link ? el('a', { href: task.source.link, target: '_blank', rel: 'noopener' }, [' · פתיחת המייל המקורי ↗']) : null
+            task.source.link ? el('a', { href: task.source.link, target: '_blank', rel: 'noopener' }, [' · פתיחת המייל המקורי ↗']) : null,
+            sourceMailNode(task.source.mail)
           ])
         : null,
+      closurePanel(),
+      // 🔎 שאל את המיילים — על המשימה הזו, כשההקשר כבר ממולא
+      App.isVendor() ? null : el('div.mute-sm', { style: { marginBottom: '10px' } }, [
+        el('a', { href: '#', onclick: (e) => { e.preventDefault(); AskView.open({ taskId: task.id, taskTitle: task.title, question: `מה ידוע על: ${task.title}` }); } }, ['✨ מה ידוע על זה? (מיילים, סוכנים, ידע ארגוני)'])
+      ]),
       vendorWorkflowBar(),
       descNode,
       shortStatusRow(),
@@ -162,6 +227,74 @@ const TaskCardView = (() => {
   }
 
   /** פעולות זרימת העבודה מול הספק */
+  /**
+   * 💡 איך לסגור — ההצעה שהגיעה עם המשימה מהמייל. אותו כפתור כמו ב"ממתין
+   * לאישורך": פותח פנייה עם מעקב AI על המשימה הזו עצמה, והנוסח מוצג לפני שליחה.
+   */
+  /** 📧 המייל שממנו נוצרה המשימה — מקופל: מאת, נושא, תאריך והטקסט (עותק, כדי שכל מי שעובד עליה יבין על מה מדובר) */
+  function sourceMailNode(mail) {
+    if (!mail) return null;
+    const when = mail.date ? new Date(mail.date).toLocaleString('he-IL', { day: 'numeric', month: 'numeric', hour: '2-digit', minute: '2-digit' }) : '';
+    return el('details.source-mail', { style: { marginTop: '6px' } }, [
+      el('summary', { text: `המייל עצמו: ${mail.subject || '(ללא נושא)'}` }),
+      el('div', { style: { marginTop: '6px', padding: '8px 10px', border: '1px solid var(--border, #e2e8f0)', borderRadius: '8px', background: 'var(--surface-2, transparent)' } }, [
+        el('div', { text: [`מאת: ${mail.from || mail.fromEmail || ''}${mail.from && mail.fromEmail ? ` <${mail.fromEmail}>` : ''}`, when].filter(Boolean).join(' · ') }),
+        el('div', { style: { whiteSpace: 'pre-wrap', marginTop: '6px', maxHeight: '320px', overflow: 'auto' }, text: mail.text || '' }),
+        mail.files?.length ? el('div', { style: { marginTop: '6px' }, text: `📎 ${mail.files.join(' · ')}` }) : null
+      ])
+    ]);
+  }
+
+  function closurePanel() {
+    const c = task.closure;
+    if (!c) return null;
+    const dismiss = el('button.btn.btn-sm.btn-ghost', { type: 'button', title: 'לא רלוונטי' }, ['✕']);
+    dismiss.addEventListener('click', async () => {
+      dismiss.disabled = true;
+      try {
+        // משימה ממייל — ההצעה יושבת על הצעת המייל; אחרת — על המשימה עצמה
+        await API.post(c.taskClosure ? `/api/tasks/${task.id}/closure-dismiss` : `/api/ai/suggestions/${c.suggestionId}/closure-dismiss`);
+        task.closure = null;
+        draw(modalRef.box.querySelector('.task-detail'));
+      } catch (err) { dismiss.disabled = false; UI.error(err); }
+    });
+    const main = closureMain(c, dismiss);
+    if (!main) return AiInboxView.agentAdvice(c.agent, dismiss);
+    const advice = AiInboxView.agentAdvice(c.agent);
+    return advice ? el('div', {}, [main, advice]) : main;
+  }
+
+  function closureMain(c, dismiss) {
+    if (c.kind === 'advice') return null;
+    if (c.kind === 'self') {
+      return el('div.ai-closure', {}, [el('div.ai-closure-main', {}, [el('b', { text: '💡 לסגור בעצמך: ' }), el('span', { text: c.steps.join(' · ') })]), dismiss]);
+    }
+    const p = c.primary;
+    if (c.kind === 'assign') {
+      return el('div.ai-closure', {}, [el('div.ai-closure-main', {}, [el('b', { text: `💡 בדרך כלל של ${p.name}` }), p.why ? el('div.mute-sm', { text: p.why }) : null]), dismiss]);
+    }
+    const icon = (ch) => (ch === 'whatsapp' ? '💬' : '📧');
+    const openAi = (who, channel) => AiTaskView.openDialog({
+      taskId: task.id,
+      instruction: p.instruction,
+      contact: { name: who.name, email: who.email, phone: who.phone, type: who.type, refId: who.refId },
+      contactFromSystem: true,
+      channel
+    });
+    return el('div.ai-closure', {}, [
+      el('div.ai-closure-main', {}, [
+        el('div', {}, [el('b', { text: `💡 ${icon(p.channel)} ${p.name}` }), el('span', { text: ` — ${p.instruction}` })]),
+        p.why ? el('div.mute-sm', { text: `למה: ${p.why}` }) : null,
+        !p.email && !p.phone ? el('div.mute-sm', { text: `אין עדיין כתובת של ${p.name} — תבחרו אותה בחלון הפנייה (או הוסיפו אותה לטבלת "אנשי המקצוע שלי")` }) : null
+      ]),
+      el('div.ai-closure-actions', {}, [
+        el('button.btn.btn-sm.btn-primary', { type: 'button', onclick: () => { modalRef.close(); openAi(p, p.channel); } }, [`${icon(p.channel)} שלח ל${p.name}`]),
+        ...(c.alternatives ?? []).map((a) => el('button.btn.btn-sm.btn-ghost', { type: 'button', title: a.why || '', onclick: () => { modalRef.close(); openAi(a, a.channel); } }, [`או ${icon(a.channel)} ${a.name}`])),
+        dismiss
+      ])
+    ]);
+  }
+
   function vendorWorkflowBar() {
     if (task.boardType !== 'vendor') return null;
     const actions = [];
@@ -241,7 +374,8 @@ const TaskCardView = (() => {
    */
   function shortStatusRow() {
     const relevant = task.subtasksTotal > 0 || task.parentTaskId || task.statusShort;
-    if (!relevant || !task.permissions.edit) {
+    // הסטטוס המקוצר שייך לטבלת הבקרה — מי שאין לו את המסך רואה ערך קיים בלבד
+    if (!relevant || !task.permissions.edit || !App.hasTracker()) {
       return task.statusShort
         ? el('div.short-status.is-readonly', {}, [
             el('span.ss-label', { text: 'סטטוס' }),
@@ -268,7 +402,8 @@ const TaskCardView = (() => {
     input.addEventListener('blur', save);
     input.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') { e.preventDefault(); input.blur(); }
-      if (e.key === 'Escape') { input.value = last; input.blur(); }
+      // ‎preventDefault‎ — ה-Escape מבטל את העריכה, ולא סוגר גם את הכרטיס כולו
+      if (e.key === 'Escape') { e.preventDefault(); input.value = last; input.blur(); }
     });
 
     return el('div.short-status', {}, [el('span.ss-label', { text: 'סטטוס' }), input]);
@@ -283,19 +418,35 @@ const TaskCardView = (() => {
    */
   function subtasksSection() {
     const subs = task.subtasks ?? [];
-    if (task.parentTaskId) {
-      // בתוך תת-משימה מוצג קישור למעלה, ולא רשימה — אין רמה שלישית
-      return el('div.subtask-parent', {}, [
-        el('span', { text: '↰' }),
-        el('span.mute-sm', { text: 'תת-משימה בתוך' }),
-        el('button.txt.txt-open', {
-          onclick: () => open(task.parentTaskId)
-        }, [task.parentTitle || `#${task.parentTaskId}`])
-      ]);
-    }
-    if (!subs.length && !App.may('create_task')) return null;
+    // תרשים הזרימה — לכל משימה שהיא חלק מעץ, למי שנפתח לו מסך הבקרה
+    const flowBtn = App.hasTracker() && (subs.length || task.parentTaskId)
+      ? el('button.btn.btn-sm', {
+          title: 'תרשים זרימה — איפה עומד כל דבר, מי אחראי, הנתיב הקריטי והחסמים',
+          onclick: () => FlowView.open(task.id)
+        }, ['🔀 תרשים זרימה'])
+      : null;
+    // קישור למעלה — בתוך משימה שיש מעליה אב
+    const parentLink = task.parentTaskId
+      ? el('div.subtask-parent', {}, [
+          el('span', { text: '↰' }),
+          el('span.mute-sm', { text: 'תת-משימה בתוך' }),
+          el('button.txt.txt-open', {
+            onclick: () => open(task.parentTaskId)
+          }, [task.parentTitle || `#${task.parentTaskId}`]),
+          el('div.spacer'),
+          subs.length ? null : flowBtn
+        ])
+      : null;
+    // שלוש רמות: אב ← משימה ← תת-משימה. ברמה השלישית אין תתי-משימות משלה
+    if ((task.depth ?? 1) >= 3 && !subs.length) return parentLink;
+    /*
+     * הוספת תת-משימה — רק למי שנפתח לו מסך "בקרת משימות": בלי המסך אין לה
+     * טעם, והיא רק מבלבלת. תתי-משימות שכבר קיימות מוצגות לכולם.
+     */
+    const mayAdd = App.may('create_task') && App.hasTracker() && (task.depth ?? 1) < 3;
+    if (!subs.length && !mayAdd) return parentLink;
 
-    const addBtn = App.may('create_task')
+    const addBtn = mayAdd
       ? el('button.btn.btn-sm', {
           onclick: () => BoardView.openTaskDialog(null, {
             projectId: task.projectId, parentTaskId: task.id, parentTitle: task.title
@@ -304,12 +455,14 @@ const TaskCardView = (() => {
       : null;
 
     return el('div', { style: { margin: '16px 0' } }, [
+      parentLink,
       el('div.flex', {}, [
         el('h4', { text: 'תתי-משימות', style: { fontSize: 'var(--fs-base)' } }),
         subs.length
           ? el('span.mute-sm', { text: `${subs.filter((s) => s.isFinal).length}/${subs.length}` })
           : null,
         el('div.spacer'),
+        subs.length ? flowBtn : null,
         addBtn
       ]),
       subs.length
@@ -576,8 +729,15 @@ const TaskCardView = (() => {
     const statusControl = task.permissions.changeStatus && !(App.isVendor() && task.boardType === 'vendor')
       ? UI.select(task.columns.map((c) => ({ value: c.key, label: c.label })), task.status, {
           onchange: async (e) => {
+            const id = task.id;
+            const prev = task.columns.find((c) => c.key === task.status);
+            const next = task.columns.find((c) => c.key === e.target.value);
             try {
-              await API.updateTask(task.id, { status: e.target.value });
+              await API.updateTask(id, { status: e.target.value });
+              // סגירת משימה היא הפעולה שהכי קל לעשות בטעות ברשימה נפתחת — ולכן ביטול
+              if (next?.isFinal && prev && !prev.isFinal) {
+                offerUndo(`המשימה סומנה כ"${next.label}"`, id, { status: prev.key });
+              }
               await reload();
               refreshBackground();
             } catch (err) {
@@ -589,7 +749,9 @@ const TaskCardView = (() => {
       : el('div', {}, [UI.statusTag(task)]);
 
     // חברי המחלקה בראש הרשימה — אותו סדר בכל מקום שבו בוחרים אחראי
-    const { near: nearUsers, far: farUsers, deptName } = UI.usersByDepartment();
+    const { near: nearUsers, far: farUsers, deptName } = UI.usersByDepartment({
+      keep: [task?.assigneeType === 'user' ? task.assigneeId : null, ...(task?.extraAssignees ?? []).filter((e) => e.type === 'user').map((e) => e.id)].filter(Boolean)
+    });
     const asOption = (u) => ({ value: `user:${u.id}`, label: u.name });
     const vendorOpts = App.may('assign_task_to_vendor')
       ? App.state.vendors.map((v) => ({ value: `vendor:${v.id}`, label: `${v.name} (ספק)` }))
@@ -662,6 +824,10 @@ const TaskCardView = (() => {
           )))
         : null,
       sec('עדיפות', priorityControl),
+      // 🔒 סיווג — נערך בדיאלוג המשימה; כאן רק מוצג
+      task.classification || task.inheritedClassification
+        ? sec('סיווג', ClassPicker.badge(task.classification ?? task.inheritedClassification, { inherited: !task.classification }))
+        : null,
       sec('תאריך יעד', el('div', {}, [
         dueControl,
         el('div.mute-sm', {
@@ -679,7 +845,8 @@ const TaskCardView = (() => {
         if (!task.permissions.edit) return el('div', { text: task.projectName ?? 'ללא פרויקט' });
         const select = UI.select(
           [{ value: '', label: 'ללא פרויקט' },
-            ...App.state.projects.map((p) => ({ value: String(p.id), label: p.name }))],
+            // רק פרויקטים שמותר להעביר אליהם (‎canAddTask‎), והנוכחי
+            ...App.state.projects.filter((p) => p.canAddTask || p.id === task.projectId).map((p) => ({ value: String(p.id), label: p.name }))],
           String(task.projectId ?? '')
         );
         select.addEventListener('change', async () => {
@@ -744,11 +911,18 @@ const TaskCardView = (() => {
                   onclick: () => saveAsTemplateDialog(task)
                 }, ['💾 שמירה כתבנית'])
               : null,
+            // 🔀 איחוד ידני — רק למשימה פתוחה (העריכה של שתיהן נבדקת בשרת)
+            !task.isFinal && !task.archived
+              ? el('button.btn.btn-block', { onclick: () => mergeDialog() }, ['🔀 איחוד לתוך משימה אחרת…'])
+              : null,
             el('button.btn.btn-block', {
               onclick: async () => {
+                const id = task.id;
+                const archiving = !task.archived;
                 try {
-                  await API.updateTask(task.id, { archived: !task.archived });
-                  UI.success(task.archived ? 'הוחזרה מהארכיון' : 'הועברה לארכיון');
+                  await API.updateTask(id, { archived: archiving });
+                  if (archiving) offerUndo('המשימה הועברה לארכיון', id, { archived: false });
+                  else UI.success('הוחזרה מהארכיון');
                   await reload();
                   refreshBackground();
                 } catch (err) { UI.error(err); }
@@ -768,6 +942,53 @@ const TaskCardView = (() => {
           ])
         : null
     ]);
+  }
+
+  // ------------------------------------------------------------- 🔀 איחוד
+
+  /**
+   * "איחוד לתוך משימה אחרת": חיפוש משימה פתוחה ← אישור ← המשימה הזו נסגרת, והאחראים, ההערות, הקבצים
+   * והצ'קליסט עוברים לזו שנבחרה (‎POST /api/tasks/:id/merge‎). בסוף נפתחת המשימה שנשארה.
+   */
+  function mergeDialog() {
+    const input = el('input', { type: 'search', placeholder: 'שם המשימה שאליה לאחד…', 'aria-label': 'חיפוש משימה', style: { width: '100%' } });
+    const list = el('div', { style: { marginTop: '10px', maxHeight: '320px', overflow: 'auto' } });
+    let seq = 0;
+    const search = async () => {
+      const q = input.value.trim();
+      const mine = ++seq;
+      if (q.length < 2) { UI.mount(list, el('div.mute-sm', { text: 'הקלידו לפחות 2 אותיות.' })); return; }
+      try {
+        const r = await API.search(q, 'all');
+        if (mine !== seq) return;
+        const hits = (r.results ?? []).filter((x) => x.type === 'task' && x.id !== task.id && !/הושלם|בארכיון/.test(x.subtitle ?? '')).slice(0, 12);
+        UI.mount(list, hits.length ? hits.map((h) => el('button.btn.btn-block', {
+          style: { textAlign: 'start', marginBottom: '6px' },
+          onclick: () => confirmMerge(h)
+        }, [el('div', { text: h.title }), el('div.mute-sm', { text: h.subtitle ?? '' })])) : el('div.mute-sm', { text: 'לא נמצאו משימות פתוחות.' }));
+      } catch (err) { UI.error(err); }
+    };
+    let timer = null;
+    input.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(search, 250); });
+    const m = UI.modal({
+      title: '🔀 איחוד לתוך משימה אחרת',
+      body: el('div', {}, [
+        el('p.mute-sm', { style: { marginTop: 0 }, text: `"${task.title}" תיסגר, וכל מה שבה — אחראים, הערות, קבצים וצ'קליסט — יעבור למשימה שתבחרו.` }),
+        input, list
+      ])
+    });
+    async function confirmMerge(h) {
+      // חלון החיפוש נסגר קודם — אחרת האישור נפתח מאחוריו
+      m.close();
+      const ok = await UI.confirm(`לאחד את "${task.title}" לתוך "${h.title}"? "${task.title}" תיסגר, וההמשך יהיה ב"${h.title}".`, { title: 'איחוד משימות', okText: 'איחוד' });
+      if (!ok) return;
+      try {
+        const r = await API.mergeTask(task.id, h.id);
+        UI.success('המשימות אוחדו');
+        refreshBackground();
+        open(r.task.id);
+      } catch (err) { UI.error(err); }
+    }
   }
 
   // ------------------------------------------------------------- עריכה מהירה
@@ -795,7 +1016,7 @@ const TaskCardView = (() => {
     input.addEventListener('blur', commit);
     input.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' && !multiline) { e.preventDefault(); input.blur(); }
-      if (e.key === 'Escape') { input.value = current; input.blur(); }
+      if (e.key === 'Escape') { e.preventDefault(); input.value = current; input.blur(); }
     });
   }
 
@@ -885,6 +1106,23 @@ const TaskCardView = (() => {
       } catch (err) {
         saveBtn.disabled = false;
         UI.error(err);
+      }
+    });
+  }
+
+  /**
+   * הצעת ביטול לפעולה שכבר נשמרה. ‎inverse‎ הוא העדכון שמחזיר את המצב
+   * הקודם — הוא נשלח לשרת כמו כל עדכון, ולכן עובר את אותן בדיקות הרשאה.
+   *
+   * המזהה נלכד כאן ולא נקרא מ-‎task‎ בזמן הביטול: עד אז הכרטיס יכול כבר
+   * להציג משימה אחרת, וביטול היה מחזיר לארכיון את המשימה הלא נכונה.
+   */
+  function offerUndo(message, id, inverse) {
+    UI.undoToast(message, {
+      onUndo: async () => {
+        await API.updateTask(id, inverse);
+        await refreshIfOpen(id);
+        refreshBackground();
       }
     });
   }
