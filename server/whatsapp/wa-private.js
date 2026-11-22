@@ -391,6 +391,21 @@ function sourceOf(aiSource, text) {
 }
 
 
+/**
+ * "תבדוק ברשת" לבד — לאינסטינקט צריך לצאת *מה* לחפש: ה-‎request‎ של ה-AI (עם ההקשר), ואם הוא ריק או רק חוזר על
+ * ההודעה — ההודעה הקודמת של העובד לפניה (השיחה עם אינסטינקט משותפת, הוא לא יודע על מה מדובר)
+ */
+function webRequest(out, text, state) {
+  const req = String(out.request ?? '').trim();
+  const t = String(text ?? '').trim();
+  if (!WEB_ASK.test(t) || (req && req !== t) || t.split(/\s+/).length > 4) return req.slice(0, 2000);
+  const prev = [...(state?.history ?? [])].reverse().find((h) => h.role === 'user' && String(h.text ?? '').trim() && String(h.text).trim() !== t);
+  return (prev ? `${t}: ${String(prev.text).trim()}` : req || t).slice(0, 2000);
+}
+
+/** בקשה מפורשת לחפש ברשת ("תבדוק ברשת", "תחפש לי באינטרנט", "חפש בגוגל") */
+const WEB_ASK = /(?:^|[\s,])(?:ת|ל|ו)?(?:בדוק|בדקי|חפש|חפשי|בדוק|חפש)(?:\s+(?:לי|את\s+זה|גם|את))*\s+(?:ב|גם\s+ב)(?:רשת|אינטרנט|גוגל)(?=$|[\s,.!?])/;
+
 async function understand(user, actor, state, text, projects, myOpen, { file = null } = {}) {
   const users = orgUsers();
   const { allowedProjects } = newTaskScope(actor);
@@ -463,7 +478,9 @@ async function understand(user, actor, state, text, projects, myOpen, { file = n
   const d = out.draft ?? {};
   return {
     // 🤖 בקשה כללית ממי שאינסטינקט לא פתוח לו — כמו קודם: "אחר"
-    intent: !INTENTS.includes(out.intent) || (out.intent === 'instinct' && !WaActions.allowed(actor, 'instinct')) ? 'other' : out.intent,
+    intent: !INTENTS.includes(out.intent) || (out.intent === 'instinct' && !WaActions.allowed(actor, 'instinct')) ? 'other'
+      // 🌐 "תבדוק ברשת" — לאינסטינקט, גם כשה-AI סיווג כשאלה (באג 22.11.26: "✨ העוזר" ענה "אין לי גישה לרשת")
+      : ['mail_ask', 'other'].includes(out.intent) && WEB_ASK.test(String(text ?? '')) && WaActions.allowed(actor, 'instinct') ? 'instinct' : out.intent,
     ready: Boolean(out.ready),
     reply: String(out.reply ?? '').trim().slice(0, 1000),
     range: RANGES[out.range] ? out.range : 'today',
@@ -481,7 +498,7 @@ async function understand(user, actor, state, text, projects, myOpen, { file = n
       org: String(out.recipient_org ?? '').trim().slice(0, 80),
       email: /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(out.recipient_email ?? '').trim()) ? String(out.recipient_email).trim().toLowerCase() : ''
     },
-    request: String(out.request ?? '').trim().slice(0, 2000),
+    request: webRequest(out, text, state),
     insight: {
       action: INSIGHT_ACTIONS.includes(out.insight_action) ? out.insight_action : 'list',
       n: Number(out.insight_n) || 0,
@@ -640,5 +657,5 @@ function withForwards(rows, text) {
 const unknownReplied = new Map();
 
 module.exports = {
-  BATCH_MAX, batchDraft, batchText, CANCEL, FORWARD_MAX, LIST_SHOWN, PLAIN_FEATURES, PLAIN_GREETING, PLAIN_HELP, PLAIN_INSIGHTS, PLAIN_LIST, PLAIN_TODAY, PRIORITY, RANGES, READ_ALOUD, READ_ALOUD_DOWN, YES, actionOf, addForward, chatOf, checkDraft, clearForwards, draftText, dueLabel, emptyChat, featuresText, findContactCards, formatList, forwardsOf, helpText, localDay, mergedChecklist, readAloudAllowed, readAloudFile, readAloudText, saveChat, shortDate, sourceOf, understand, unknownReplied, withForwards
+  WEB_ASK, BATCH_MAX, batchDraft, batchText, CANCEL, FORWARD_MAX, LIST_SHOWN, PLAIN_FEATURES, PLAIN_GREETING, PLAIN_HELP, PLAIN_INSIGHTS, PLAIN_LIST, PLAIN_TODAY, PRIORITY, RANGES, READ_ALOUD, READ_ALOUD_DOWN, YES, actionOf, addForward, chatOf, checkDraft, clearForwards, draftText, dueLabel, emptyChat, featuresText, findContactCards, formatList, forwardsOf, helpText, localDay, mergedChecklist, readAloudAllowed, readAloudFile, readAloudText, saveChat, shortDate, sourceOf, understand, unknownReplied, withForwards
 };

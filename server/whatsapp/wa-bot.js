@@ -405,7 +405,7 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
   // 🛒 פנייה לספקים להצעת מחיר — הבקשה, השאלות, האישור, ואחרי הסיכום
   { const c = { actor, dry, keep, out, state, t }; const r = await flowOnRfq(c); if (r !== NEXT) return r; state = c.state; }
   { const r = await flowRfqSummary({ actor, out, t }); if (r !== NEXT) return r; }
-  { const r = await flowRfqRequest({ actor, dry, out, t }); if (r !== NEXT) return r; }
+  { const r = await flowRfqRequest({ actor, dry, out, state, t }); if (r !== NEXT) return r; }
   // 🤖 "תעצב באינסטינקט" כשמודעה שלנו מחכה — המודעה עוברת לאינסטינקט
   { const r = await flowNoticeToInstinct({ actor, dry, keep, out, state, t, user }); if (r !== NEXT) return r; }
   // 🎨 מודעה / ✉️ מכתב רשמי — "תעצב לי מודעה…", ובתוך הזרימה: סגנון, תיקונים, "מאשר"
