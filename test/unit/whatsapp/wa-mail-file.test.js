@@ -10,6 +10,7 @@ const Fakes = require('../../fakes');
 const Bot = require('../../../server/whatsapp/wa-bot');
 const MailFiles = require('../../../server/mail/mail-files');
 const { Gmail } = require('../../../server/integrations');
+const Instinct = require('../../../server/whatsapp/instinct');
 
 boot();
 Bot.save({ apiUrl: 'http://localhost:9', instanceId: '1', apiToken: 'tok', phone: '0509999999' });
@@ -90,3 +91,20 @@ test('בלי Gmail מחובר — לא שלנו (ממשיך לניתוב הרג�
   assert.equal(files(wa).length, 0);
   assert.match(wa.texts().join('\n'), /אין לי גישה למייל/);
 });
+
+test('באמצע שיחה עם העוזר הכללי — "תן לי תמונה של …" הולך אליו, לא לחיפוש במייל (סקירה 22.11)', async (t) => {
+  // "תן לי תמונה של הברבי בוקס" — זר שהעוזר הכללי הציע רגע לפני; החיפוש במייל ענה "לא מצאתי במייל שלך"
+  Fakes.whatsapp(t);
+  Fakes.claude(t, () => ({ intent: 'other', reply: '', ready: false }));
+  const q = gmail(t);
+  t.mock.method(Instinct, 'allowed', () => true);
+  t.mock.method(Instinct, 'inConversation', () => true);
+  const u = user({ phone: '972507800004', role: 'employee' });
+  Bot._internal.saveChat(u.id, { ...Bot._internal.chatOf(u.id), greetedOn: today() });
+  await say(u.phone, 'תן לי תמונה של הברבי בוקס');
+  assert.equal(q.length, 0, 'לא חיפש במייל');
+  // אבל "…מהמייל" — כן, גם באמצע שיחה עם העוזר
+  await say(u.phone, 'תשלח לי את המצגת של המלון מהמייל');
+  assert.ok(q.length > 0);
+});
+
