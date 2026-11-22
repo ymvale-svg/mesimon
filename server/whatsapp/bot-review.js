@@ -216,9 +216,31 @@ function exportSince(since) {
     until,
     usage: { readAloud: readAloudUsage(from.toISOString(), until) },
     feedback: feedback(),
+    mailTasks: mailTasks(from.toISOString()),
     conversations: conversations.map(({ lastAt, ...c }) => ({ ...c, endedAt: new Date(lastAt).toISOString() }))
   };
 }
+
+/**
+ * 🔎 משימות שנפתחו מהצעות מייל מאז ‎since‎ — ואיך (‎how‎: ‎trusted‎ / ‎auto_all‎ = לבד; ‎manual‎ / ‎approve_all‎ / ‎bot‎).
+ * כך הסוקר רואה משימה שנפתחה "בלי אישור" (20.11.26). השולח — רק הדומיין; הכותרת — מוסווית.
+ * ‎how‎ ריק — הצעה מלפני הרישום.
+ */
+function mailTasks(since) {
+  return D.all(
+    `SELECT s.id, s.user_id, u.full_name, s.status, s.task_id, s.decided_at, s.from_email, s.data
+       FROM ai_suggestions s LEFT JOIN users u ON u.id = s.user_id
+      WHERE s.status IN ('auto', 'approved') AND s.task_id IS NOT NULL AND s.decided_at >= ?
+      ORDER BY s.decided_at`, since
+  ).map((r) => {
+    const d = parse1(r.data);
+    return {
+      suggestionId: r.id, at: r.decided_at, userId: r.user_id, who: r.full_name ?? '', status: r.status, how: d.how ?? '',
+      taskId: r.task_id, title: mask(d.title ?? ''), fromDomain: String(r.from_email ?? '').split('@')[1] ?? ''
+    };
+  });
+}
+const parse1 = (json) => { try { return JSON.parse(json) ?? {}; } catch { return {}; } };
 
 /** ההחלטות של המנהל על הצעות מ-30 הימים האחרונים — לסוקר של הלילה הבא */
 function feedback() {
