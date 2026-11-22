@@ -142,6 +142,8 @@ function buildMessage(message) {
     // שרשור: תזכורת נכנסת לאותה שיחה אצל הנמען, ולא כמייל חדש ומנותק
     message.inReplyTo ? `In-Reply-To: ${oneLine(message.inReplyTo)}` : null,
     message.references?.length ? `References: ${message.references.map(oneLine).join(' ')}` : null,
+    // דחוף (‎urgent: true‎): סימן קריאה אדום אצל הנמען — Outlook לפי ‎Importance‎ / ‎X-Priority‎, ו-Gmail לפי הנושא
+    ...(message.urgent ? ['X-Priority: 1 (Highest)', 'X-MSMail-Priority: High', 'Importance: High', 'Priority: urgent'] : []),
     'MIME-Version: 1.0',
     `Content-Type: ${files.length ? `multipart/mixed; boundary="${mixed}"` : `multipart/alternative; boundary="${boundary}"`}`,
     ''
@@ -187,7 +189,7 @@ function buildMessage(message) {
 /**
  * @param {{to: string, toName?: string, subject: string, html: string, text: string, fromName?: string,
  *          personalName?: string, replyTo?: string, replyToName?: string, cc?: string[],
- *          inReplyTo?: string, references?: string[], attachments?: Array<{buf: Buffer, fileName: string, mime?: string}>}} message
+ *          inReplyTo?: string, references?: string[], urgent?: boolean, attachments?: Array<{buf: Buffer, fileName: string, mime?: string}>}} message
  *
  * ‎personalName‎ — שם התצוגה של השולח גובר על כל ברירת מחדל. משמש הודעה
  * שנשלחת בשמו של משתמש (משימת AI), שבה הנמען צריך לראות אדם ולא מערכת.
