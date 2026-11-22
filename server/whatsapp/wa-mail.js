@@ -271,7 +271,7 @@ const MAIL_REPLY_TTL_MS = 2 * 60 * 60 * 1000;
 async function confirmPending(actor, pending, dry) {
   const kind = pending.kind ?? 'task';
   // פנייה יזומה על מייל חדש (‎mailAlerts‎) — לפי הפעולה "מייל חדש — הבוט פונה"
-  const action = pending.solve ? 'solve' : pending.alert ? 'mail_alert' : { task: 'create_task', email: 'send_email', mail_reply: 'mail_insights' }[kind] ?? kind;
+  const action = pending.solve ? 'solve' : pending.alert ? 'mail_alert' : { task: 'create_task', task_batch: 'create_task', email: 'send_email', mail_reply: 'mail_insights' }[kind] ?? kind;
   if (!WaActions.allowed(actor, action)) {
     return { reply: 'הפעולה הזו כבר אינה זמינה לך בוואטסאפ.', action, status: 'denied', result: 'הפעולה כובתה' };
   }
@@ -281,6 +281,17 @@ async function confirmPending(actor, pending, dry) {
       const id = dry ? null : createFromDraft(actor, pending);
       const link = id ? taskLink(id) : null;
       return { reply: `✅ נפתחה משימה: ${pending.title}${test}${link ? `\n${link}` : ''}`, action, status: 'ok', result: `נפתחה משימה: ${pending.title}`, taskId: id };
+    }
+    if (kind === 'task_batch') {
+      const lines = [];
+      let first = null;
+      for (const item of pending.items ?? []) {
+        const id = dry ? null : createFromDraft(actor, item);
+        first ??= id;
+        const link = id ? taskLink(id) : null;
+        lines.push(`• ${item.title}${link ? `\n  ${link}` : ''}`);
+      }
+      return { reply: [`✅ נפתחו ${lines.length} משימות${test}:`, ...lines].join('\n'), action, status: 'ok', result: `נפתחו ${lines.length} משימות: ${(pending.items ?? []).map((x) => x.title).join(' · ')}`.slice(0, 300), taskId: first };
     }
     if (kind === 'complete') {
       if (!dry) hooks.tasks.complete(actor, pending.taskId);
