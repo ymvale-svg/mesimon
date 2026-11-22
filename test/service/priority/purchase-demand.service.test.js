@@ -849,3 +849,80 @@ test('💬 מנהלת הרכש עונה בערב — ההודעה לעובד נ�
   const queued = D.all('SELECT text FROM wa_outbox WHERE user_id = ?', u.id).map((r) => r.text).join('\n');
   assert.match(queued, /איזה סוג בטון\? ב-30 או ב-40\?/, 'נשמר בתור לבוקר');
 });
+
+// ---------------------------------------------------------------------------
+// 🆕 מק"ט שנפתח בפריוריטי — הודעה לעובד לבד, בלי שמנהלת הרכש תעדכן (22.11.26)
+// ---------------------------------------------------------------------------
+
+const CABLE = { n: 1, description: 'כבל נחושת ירוק N2XY 5X10 (בתוך) - Synergy', qty: 500, unit: "יח'", known: [], built: null };
+const HOSE = { n: 2, description: 'צינור קוברה 50 (חבילה=50 מטר) - אומיגה', qty: 5, unit: "יח'", known: [], built: null };
+const newPart = (code, des) => ({ PARTNAME: code, PARTDES: des, STATDES: 'פעיל', BUD_SUBCHAPTERNAME: '30', BUD_SUBCHAPTERDES: 'חשמל', BUD_SUBTOPICNAME: '30-10', BUD_SUBTOPICDES: 'כבלים' });
+function openRequest(u, missing) {
+  D.run("UPDATE pd_part_requests SET status = 'expired' WHERE status = 'open'");
+  return Number(D.run("INSERT INTO pd_part_requests (user_id, company, header, items, missing, mode, status, created_at) VALUES (?, 'test11', ?, ?, ?, 'wait', 'open', ?)",
+    u.id, JSON.stringify({ project: { code: 'PR1', des: 'אלעד 49 צפון' } }), JSON.stringify(missing.map((m) => ({ ...m, status: 'general' }))), JSON.stringify(missing), D.nowIso()).lastInsertRowid);
+}
+
+test('נפתח מק"ט אחד מתוך שניים — העובד מקבל מיד "נפתחו המק"טים שלא מצאת" והרשימה; כשנפתח גם השני — "להמשיך בדרישה?"', async (t) => {
+  const u = buyerWorker();
+  let built = [];
+  priority(t, { findPartExact: async () => null, searchParts: async (c, des) => built.filter((x) => des.includes(x.key)).map((x) => ({ p: x.p, score: 3, full: true })) });
+  const { wa } = H.chat(t, u);
+  const id = openRequest(u, [CABLE, HOSE]);
+
+  built = [{ key: 'N2XY', p: newPart('90-10-0051', 'כבל נחושת ירוק N2XY 5X10 Synergy') }];
+  wa.clear();
+  assert.deepEqual(await Parts.tick(), { checked: 1, told: 1 });
+  let note = wa.texts().join('\n');
+  assert.match(note, /נפתחו בפריוריטי המק"טים שלא מצאת/);
+  assert.match(note, /כבל נחושת ירוק N2XY 5X10 \(בתוך\) - Synergy — 500 יח' ← \*כבל נחושת ירוק N2XY 5X10 Synergy\* \(90-10-0051\)/);
+  assert.match(note, /עוד פריט אחד בבנייה ברכש: צינור קוברה 50/);
+  assert.doesNotMatch(note, /להמשיך בדרישת הרכש\?/, 'עוד לא כולם — בלי שאלה');
+  assert.equal(D.get('SELECT status FROM pd_part_requests WHERE id = ?', id).status, 'open');
+
+  wa.clear();
+  assert.deepEqual(await Parts.tick(), { checked: 1, told: 0 }, 'אותו מק"ט — לא מודיעים שוב');
+
+  built.push({ key: 'קוברה', p: newPart('70-20-0007', 'צינור קוברה 50 חבילה 50 מ\' אומיגה') });
+  await Parts.tick();
+  note = wa.texts().join('\n');
+  assert.match(note, /המק"טים החסרים נבנו בפריוריטי — להלן הרשימה/);
+  assert.match(note, /להמשיך בדרישת הרכש\?/);
+  assert.equal(D.get('SELECT status FROM pd_part_requests WHERE id = ?', id).status, 'asked');
+});
+
+test('זיהוי ב-AI: הרכש ניסחה אחרת ("5*10", בלי היצרן) — ה-AI מזהה שזה אותו פריט; לא בטוח — לא מודיעים', async (t) => {
+  const u = buyerWorker();
+  const other = newPart('90-10-0099', 'כבל N2XY 5*16');
+  const same = newPart('90-10-0052', 'כבל N2XY 5*10 ממ"ר');
+  priority(t, { findPartExact: async () => null, searchParts: async () => [{ p: other, score: 2 }, { p: same, score: 2 }] });
+  const asked = [];
+  let answer = '90-10-0052';
+  H.claude(t, { built: (input) => { asked.push(input); return { code: answer, why: 'אותו כבל, 5X10' }; } });
+  const { wa } = H.chat(t, u);
+
+  answer = '';                                    // לא בטוח
+  const id1 = openRequest(u, [CABLE]);
+  wa.clear();
+  assert.deepEqual(await Parts.tick(), { checked: 1, told: 0 });
+  assert.equal(wa.texts().length, 0);
+  assert.equal(Parts._row(id1).missing[0].built, null, 'ה-AI לא בטוח — גם התאמת המילים לא קובעת');
+
+  answer = '90-10-0052';
+  await Parts.tick();
+  assert.equal(Parts._row(id1).missing[0].built.code, '90-10-0052');
+  assert.match(wa.texts().join('\n'), /\(90-10-0052\)/);
+  assert.equal(asked.at(-1).item.description, CABLE.description);
+  assert.deepEqual(asked.at(-1).candidates.map((c) => c.code), ['90-10-0099', '90-10-0052']);
+});
+
+test('המייל לרכש: פותחים מק"ט חדש — אין צורך לעדכן; הדף רק למק"ט שכבר קיים', () => {
+  const u = buyerWorker();
+  D.setSetting('public_url', 'https://mesimon.example');
+  try {
+    const m = Parts._mailOf(u, { company: 'test11', project: { code: 'PR1', des: 'אלעד 49 צפון' } }, [{ n: 1, description: 'בטון', qty: 5, unit: 'קוב' }], { name: 'שקמה', email: 'x@example.com' }, { token: 'a'.repeat(36) });
+    assert.match(m.text, /פותחים מק"ט חדש בפריוריטי — אין צורך לעדכן אף אחד/);
+    assert.match(m.text, /רק כשהמק"ט כבר קיים, או כדי לכתוב לו הערה: https:\/\/mesimon\.example\/parts\.html\?t=a{36}/);
+    assert.match(m.html, /אין צורך לעדכן אף אחד/);
+  } finally { D.setSetting('public_url', ''); }
+});
