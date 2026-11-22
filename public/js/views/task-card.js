@@ -161,7 +161,7 @@ const TaskCardView = (() => {
 
     const descNode = el('p', {
       text: task.description || (canEdit ? 'לחיצה להוספת תיאור…' : 'ללא תיאור'),
-      style: { color: task.description ? 'var(--text)' : 'var(--text-mute)', whiteSpace: 'pre-wrap', cursor: canEdit ? 'text' : 'default' }
+      style: { color: task.description ? 'var(--text)' : 'var(--text-faint)', whiteSpace: 'pre-wrap', cursor: canEdit ? 'text' : 'default' }
     });
     if (canEdit) descNode.addEventListener('click', () => inlineEdit('description', descNode, true));
 
@@ -457,7 +457,7 @@ const TaskCardView = (() => {
     return el('div', { style: { margin: '16px 0' } }, [
       parentLink,
       el('div.flex', {}, [
-        el('h4', { text: 'תתי-משימות', style: { fontSize: '13.5px' } }),
+        el('h4', { text: 'תתי-משימות', style: { fontSize: 'var(--fs-base)' } }),
         subs.length
           ? el('span.mute-sm', { text: `${subs.filter((s) => s.isFinal).length}/${subs.length}` })
           : null,
@@ -494,7 +494,7 @@ const TaskCardView = (() => {
 
     return el('div', { style: { margin: '16px 0' } }, [
       el('div.flex', {}, [
-        el('h4', { text: 'צ׳קליסט', style: { fontSize: '13.5px' } }),
+        el('h4', { text: 'צ׳קליסט', style: { fontSize: 'var(--fs-base)' } }),
         el('div.spacer'),
         task.checklistTotal ? el('span.mute-sm', { text: `${task.checklistDone}/${task.checklistTotal} · ${pct}%` }) : null
       ]),

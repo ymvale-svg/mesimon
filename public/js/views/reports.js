@@ -161,7 +161,7 @@ const ReportsView = (() => {
             }
           }, [
             el('div.flex', {}, [
-              el('b', { text: d.name, style: { fontSize: '14px' } }),
+              el('b', { text: d.name, style: { fontSize: 'var(--fs-base)' } }),
               el('div.spacer'),
               el('span.mute-sm', { text: `${d.people} עובדים` })
             ]),
@@ -197,7 +197,7 @@ const ReportsView = (() => {
         el('div', { style: { marginBottom: '11px' } }, [
           el('div.flex', {}, [
             UI.avatar(r.name, { small: true }),
-            el('b', { text: r.name, style: { fontSize: '13px' } }),
+            el('b', { text: r.name, style: { fontSize: 'var(--fs-md)' } }),
             // התפקיד לצד השם — כדי לראות במבט אחד אם העומס יושב על מנהל או על עובד
             r.roleLabel ? el('span.tag.tag-internal', {}, [r.roleLabel]) : null,
             // כשהדוח מצומצם למחלקה אחת שם המחלקה חוזר בכל שורה ולכן מיותר
@@ -230,7 +230,7 @@ const ReportsView = (() => {
     const group = (title, items) => {
       const total = items.reduce((sum, r) => sum + r.count, 0) || 1;
       return el('div', { style: { marginBottom: '16px' } }, [
-        el('h4', { text: title, style: { fontSize: '13px', marginBottom: '8px' } }),
+        el('h4', { text: title, style: { fontSize: 'var(--fs-md)', marginBottom: '8px' } }),
         el('div', { style: { display: 'flex', height: '20px', borderRadius: '6px', overflow: 'hidden', marginBottom: '8px' } },
           items.map((r) => el('div', {
             style: { width: `${(r.count / total) * 100}%`, background: r.color },

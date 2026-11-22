@@ -75,3 +75,34 @@ test('כינוי של מקום — עד 40 תווים', () => {
   const p = Places.create({}, { name: 'אתר', kind: 'site', lat: 32.1, lng: 34.9, aliases: ['א'.repeat(500)] });
   assert.equal(p.aliases[0].length, 40);
 });
+
+// #227 — שיתוף בזמן אמת בלי תזכורת שמחכה למקום: לא מחשבים ולא שומרים איפה העובד, לא רושמים ביומן, ועונים פעם אחת
+test('שיתוף בזמן אמת בלי תזכורות — המקום לא נשמר, אין שורה ביומן, תשובה אחת בלבד', async (t) => {
+  setup();
+  const sent = [];
+  t.mock.method(WhatsApp, 'call', async (ch, method, opts) => { if (method === 'sendMessage') sent.push(opts.body.message); return {}; });
+  const u = worker();
+  await sendLocation(u, { ...OFFICE, live: true, shape: 'x' });
+  await sendLocation(u, { ...OFFICE, live: true, shape: 'x' });
+  await sendLocation(u, { ...OFFICE, live: true, shape: 'x' });
+  const loc = D.get('SELECT * FROM user_locations WHERE user_id = ?', u.id);
+  assert.ok(loc, 'נשמר שהשיתוף פעיל (כדי לזהות את ההודעה הראשונה)');
+  assert.equal(loc.place_id, null, 'המקום לא נשמר');
+  assert.equal(loc.source, 'whatsapp_live');
+  assert.equal(D.get("SELECT COUNT(*) AS n FROM wa_log WHERE user_id = ? AND action = 'reminders_place'", u.id).n, 0, 'אין שורה ביומן');
+  assert.equal(sent.length, 1, 'תשובה אחת בלבד');
+  assert.match(sent[0], /אין כרגע תזכורות שמחכות למקום/);
+  assert.equal(Places.liveActive(u.id), true);
+});
+
+test('שיתוף בזמן אמת עם תזכורת שמחכה — המקום עדיין נבדק והתזכורת יוצאת', async (t) => {
+  const office = setup();
+  t.mock.method(WhatsApp, 'call', async () => ({}));
+  const u = worker();
+  D.run("INSERT INTO reminders (user_id, text, due_at, status, source, created_at, place_id, place_on) VALUES (?, 'לדבר עם ישראל', ?, 'place', 'bot', ?, ?, 'arrive')", u.id, D.nowIso(), D.nowIso(), office.id);
+  await sendLocation(u, { lat: 31.5, lng: 34.9, live: true, shape: 'x' });
+  assert.equal(D.get('SELECT status FROM reminders WHERE user_id = ?', u.id).status, 'place');
+  await sendLocation(u, { ...OFFICE, live: true, shape: 'x' });
+  assert.equal(D.get('SELECT status FROM reminders WHERE user_id = ?', u.id).status, 'active', 'התזכורת יצאה בהגעה');
+  assert.equal(D.get('SELECT place_id FROM user_locations WHERE user_id = ?', u.id).place_id, office.id);
+});

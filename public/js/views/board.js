@@ -1221,7 +1221,7 @@ const BoardView = (() => {
 
       return el('div', { style: { marginBottom: '22px' } }, [
         boards.length > 1
-          ? el('h3', { text: board.name, style: { marginBottom: '10px', fontSize: '15px', color: 'var(--accent)' } })
+          ? el('h3', { text: board.name, style: { marginBottom: '10px', fontSize: 'var(--fs-lg)', color: 'var(--accent)' } })
           : null,
         el('div.kanban', {}, cols)
       ]);
