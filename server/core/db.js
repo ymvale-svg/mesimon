@@ -2201,6 +2201,18 @@ function relaxAiMessagesChannel() {
  * הרחבות סכמה על מסד נתונים קיים.
  * חייב להיות בטוח להרצה חוזרת, ובלי לאבד נתונים — הוא רץ על המערכת החיה.
  */
+/*
+ * 🔕 יצירת משימות מהמייל בלי אישור — כבויה לכולם, פעם אחת (22.11.26, ישראל: אחרי משימה ממייל של Google שנפתחה
+ * לעובד לבד). המתג "ליצור משימות מהמייל בלי אישור" כבה וכל ⭐ "נוצר ישר" נמחק (🚫 "לא מציעים" נשאר). מכאן כל משימה
+ * מהמייל מחכה לאישור; מי שירצה — מדליק שוב, וזה לא נדרס.
+ */
+function mailAutoOff() {
+  if (getSetting('migr_mail_auto_off', null) !== null) return;
+  run("DELETE FROM user_prefs WHERE key = 'mailAutoCreate'");
+  run("DELETE FROM mail_trusted_senders WHERE mode = 'trust'");
+  setSetting('migr_mail_auto_off', true);
+}
+
 function migrate() {
   const columns = (table) => db.prepare(`PRAGMA table_info(${table})`).all().map((c) => c.name);
 
@@ -2317,6 +2329,8 @@ function migrate() {
    * 💰 חיסכון בקרדיטי AI (17.11.26, "תוכנית — חיסכון בקרדיטי AI.md" סעיף 5.2): מצב מהיר כבוי — פעם אחת, גם אם נשמר
    * דלוק בטופס ההגדרות. מנהל יכול להדליק שוב ב"🧠 מודלים".
    */
+  mailAutoOff();
+
   if (getSetting('migr_fast_mode_off', null) === null) {
     setSetting('ai_fast_mode', false);
     setSetting('migr_fast_mode_off', true);
@@ -2811,7 +2825,7 @@ module.exports = {
   departmentSubtree, departmentPath, trackerAccess, trackerDefault,
   db, DB_PATH, UPLOADS_DIR, ROOT, STORAGE,
   all, get, run,
-  nowIso, hashPassword, verifyPassword,
+  nowIso, hashPassword, verifyPassword, mailAutoOff,
   getSetting, setSetting, allSettings, systemSettings,
   userPrefs, setUserPref,
   audit, notify, onNotify, countsAsOpener,
