@@ -93,9 +93,10 @@ const ITEM_SCHEMA = {
       items: { type: 'object', properties: { name: { type: 'string' }, email: { type: 'string' }, phone: { type: 'string' } }, required: ['name', 'email', 'phone'], additionalProperties: false }
     },
     terms: { type: 'array', items: { type: 'string' }, description: '2–5 מילות חיפוש לספקים, בצורת הבסיס ("פטישון", "כלי עבודה", "כלים חשמליים")' },
+    unrelated: { type: 'boolean', description: 'רק כשיש "מה שכבר ידוע": true כשההודעה החדשה היא נושא אחר לגמרי (בקשה אחרת, שאלה אחרת) ולא תשובה / תוספת לבקשה הזו. אחרת false' },
     missing_question: { type: 'string', description: 'שאלה אחת קצרה על הפרט החשוב ביותר שחסר (כמות, מקום אספקה, מפרט מהותי). כשאפשר להמשיך בלי — ריק. לא לשאול על מה שכבר נענה, ולא כשהעובד אמר "לא משנה" / "תמשיך"' }
   },
-  required: ['item', 'spec', 'quantity', 'location', 'need_by', 'count', 'source', 'vendors', 'terms', 'missing_question'],
+  required: ['item', 'spec', 'quantity', 'location', 'need_by', 'count', 'source', 'vendors', 'terms', 'unrelated', 'missing_question'],
   additionalProperties: false
 };
 
@@ -386,7 +387,9 @@ async function next(userId, id, it) {
 /** החיפוש והטיוטה — ברקע (חיפוש ברשת לוקח זמן). מחזיר את הודעת האישור */
 async function prepare(userId, id, { ask = null } = {}) {
   const r = rfqById(id);
-  const vendors = await findVendors(userId, r.item, r.item.source, { ask });
+  let vendors = await findVendors(userId, r.item, r.item.source, { ask });
+  // "מהספקים שלי" ולא נמצא — לא חוזרים לעובד: ממשיכים לבד לרשת (ולאינסטינקט)
+  if (!vendors.length && ['mine', 'named'].includes(r.item.source)) vendors = await findVendors(userId, { ...r.item, vendors: [] }, 'web', { ask });
   D.run('DELETE FROM rfq_vendors WHERE rfq_id = ?', id);
   for (const v of vendors) {
     D.run('INSERT INTO rfq_vendors (rfq_id, name, email, phone, source, source_url, reason, status) VALUES (?,?,?,?,?,?,?,?)',
@@ -394,7 +397,8 @@ async function prepare(userId, id, { ask = null } = {}) {
   }
   if (!vendors.length) {
     D.run("UPDATE rfq SET status = 'cancelled' WHERE id = ?", id);
-    return { text: `לא מצאתי ספקים ל*${r.item.item}* ${r.item.source === 'mine' ? 'בספקים שלך. אפשר לנסות "חפש ברשת".' : 'ברשת. אפשר לנסח אחרת, או לתת לי שמות.'}`, result: 'לא נמצאו ספקים' };
+    // ‎handoff‎ — הבקשה עוברת לאינסטינקט (כשהוא פעיל), והתשובה שלו מגיעה לעובד; ‎text‎ — רק כשאין לאן להעביר
+    return { handoff: handoffText(id), text: `לא מצאתי ספקים ל*${r.item.item}* עם מייל או וואטסאפ. אפשר לנסח אחרת, או לתת לי שמות.`, result: 'לא נמצאו ספקים' };
   }
   const deadline = defaultDeadline(userId);
   const draft = await composeMail(r.item, authorOf(userId), deadline);
@@ -423,6 +427,11 @@ async function answer(userId, d, text) {
   if (d.step === 'details') {
     if (/^(תמשיך|המשך|לא\s+משנה|אין|לא\s+יודע|דלג)$/.test(n)) return next(userId, r.id, { ...r.item, missing_question: '' });
     const it = await understand(t, r.item, fileOf(r));
+    // נושא אחר (גם אחרי שעה — השאלה הזו לא פגה אחרי 15 דקות) — הפנייה יורדת, וההודעה ממשיכה הלאה
+    if (it.unrelated) {
+      D.run("UPDATE rfq SET status = 'cancelled' WHERE id = ?", r.id);
+      return null;
+    }
     return next(userId, r.id, { ...r.item, ...Object.fromEntries(Object.entries(it).filter(([, v]) => v !== '' && v !== 'unspecified')), missing_question: it.missing_question, source: it.source !== 'unspecified' ? it.source : r.item.source });
   }
   if (d.step === 'source') {
@@ -682,6 +691,19 @@ async function answerDone(userId, d, text) {
   return null;
 }
 
+/**
+ * 🤖 כשאנחנו לא מסתדרים לבד (לא נמצאו ספקים, או שהחיפוש נכשל) — הבקשה עוברת לאינסטינקט, והוא עונה לעובד (22.11.26,
+ * ישראל: "לא מחזיר בקשה, לא מחזיר שגיאה למשתמש"). יוצא רק המבוקש — בלי פרטים שלנו (‎redact‎ באינסטינקט).
+ */
+function handoffText(id) {
+  const r = rfqById(id);
+  const it = r?.item ?? {};
+  return [
+    `צריך הצעת מחיר: ${it.item ? itemLine(it) : String(r?.request ?? '').slice(0, 500)}`,
+    'מצא לי ברשת ספקים בישראל שאפשר לבקש מהם הצעת מחיר — שם, מייל, נייד לוואטסאפ ואתר — ואם יש באתרים מחירים, גם אותם.'
+  ].join('\n');
+}
+
 /** "טבלת הצעות" — הסיכום האחרון שוב (עם מה שהגיע מאז) */
 function lastSummary(userId) {
   const r = D.get("SELECT id FROM rfq WHERE user_id = ? AND status IN ('sent', 'summarized', 'closed') AND sent_at IS NOT NULL ORDER BY id DESC LIMIT 1", userId);
@@ -690,6 +712,6 @@ function lastSummary(userId) {
 const SUMMARY_ASK = /^(?:טבלת|סיכום|מה\s+עם\s+ה?)\s*(?:ה)?הצעות(?:\s+ה?מחיר)?[?.!]*$/;
 
 module.exports = {
-  isRequest, start, answer, prepare, send, tick, answerDone, ownsReply, summaryOf, lastSummary, SUMMARY_ASK, BTN,
+  isRequest, start, answer, prepare, handoffText, send, tick, answerDone, ownsReply, summaryOf, lastSummary, SUMMARY_ASK, BTN,
   _internal: { understand, findVendors, mineFor, webFor, instinctFor, webVendor, mobileOf, waLink, reviewText, composeMail, readOffer, defaultDeadline, itemLine }
 };

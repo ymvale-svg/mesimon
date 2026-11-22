@@ -253,3 +253,35 @@ test('findVendors — "רק לספקים מהשיחה" (named): בלי חיפו�
   assert.deepEqual(list.map((x) => [x.name, x.email, x.source]), [['הט אנרגיה', 'hotenergy@test.co', '💬 מהשיחה']]);
   assert.equal(asked, 0);
 });
+
+// באג 22.11.26: "גנרטור 200 אמפר" — תשובה ל"איזה פריט?" אחרי 33 דקות. השאלה לא פגה (‎staleQuestion‎), ונושא אחר — משחרר
+test('answer — שאלת פרטים: נושא אחר לגמרי — הפנייה יורדת וההודעה ממשיכה (null)', async (t) => {
+  const u = user();
+  Fakes.claude(t, () => ({ item: '', spec: '', quantity: '', location: '', need_by: '', count: 10, source: 'unspecified', vendors: [], terms: [], unrelated: true, missing_question: '' }));
+  const id = D.run("INSERT INTO rfq (user_id, item, status, draft, created_at) VALUES (?, '{\"item\":\"\"}', 'draft', '{}', ?)", u.id, D.nowIso()).lastInsertRowid;
+  assert.equal(await RFQ.answer(u.id, { kind: 'rfq', rfqId: id, step: 'details' }, 'מה מזג האוויר מחר?'), null);
+  assert.equal(D.get('SELECT status FROM rfq WHERE id = ?', id).status, 'cancelled');
+});
+
+test('answer — שאלת פרטים: "גנרטור 200 אמפר" — ממשיך לחיפוש, בלי לבקש לכתוב שוב', async (t) => {
+  const u = user();
+  Fakes.claude(t, () => ({ item: 'גנרטור 200 אמפר', spec: '', quantity: '', location: '', need_by: '', count: 10, source: 'web', vendors: [], terms: ['גנרטור'], unrelated: false, missing_question: '' }));
+  const id = D.run("INSERT INTO rfq (user_id, item, status, draft, created_at) VALUES (?, '{\"item\":\"\",\"source\":\"unspecified\"}', 'draft', '{}', ?)", u.id, D.nowIso()).lastInsertRowid;
+  const r = await RFQ.answer(u.id, { kind: 'rfq', rfqId: id, step: 'details' }, 'גנרטור 200 אמפר');
+  assert.equal(r.search, true);
+  assert.equal(JSON.parse(D.get('SELECT item FROM rfq WHERE id = ?', id).item).item, 'גנרטור 200 אמפר');
+});
+
+// 22.11.26, ישראל: "בקשה להצעת מחיר שהעוזר לא יכול להסתדר לבד — הוא פונה לאינסטינקט; לא מחזיר בקשה ולא שגיאה למשתמש"
+test('prepare — לא נמצאו ספקים: מנסה לבד גם ברשת, ואז ‎handoff‎ לאינסטינקט עם המבוקש בלבד', async (t) => {
+  const u = user({ full_name: 'אמיר בודק' });
+  rfqAi(t);
+  Fakes.priority(t, { suppliersByWords: async () => [] });
+  const asked = [];
+  const id = D.run("INSERT INTO rfq (user_id, item, status, draft, created_at) VALUES (?, ?, 'draft', '{}', ?)", u.id,
+    JSON.stringify({ item: 'גנרטור 200 אמפר', location: 'אלעד', count: 10, source: 'mine', terms: ['גנרטור'] }), D.nowIso()).lastInsertRowid;
+  const r = await RFQ.prepare(u.id, id, { ask: async (q) => { asked.push(q); return null; } });
+  assert.equal(asked.length, 1, '"מהספקים שלי" ולא נמצא — גם ברשת ודרך אינסטינקט, בלי לחזור לעובד');
+  assert.match(r.handoff, /צריך הצעת מחיר: גנרטור 200 אמפר · אספקה לאלעד/);
+  assert.doesNotMatch(r.handoff, /אמיר/);
+});

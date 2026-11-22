@@ -35,7 +35,7 @@ const Range = require('../mail').InsightWindow;
 const Instinct = require('./instinct');
 const { appRoot, currentMsg, doneEmoji, emailText, enqueueAs, firstName, hooks, localDate, log, react, reactNow, recentFiles, signatureFields, taskLink, WALK, MSG_BREAK } = require('./wa-base');
 const { actionOf, CANCEL, checkDraft, draftText, featuresText, helpText, localDay, PLAIN_FEATURES, PLAIN_GREETING, PLAIN_HELP, PLAIN_INSIGHTS, PLAIN_LIST, PLAIN_TODAY, READ_ALOUD, shortDate, YES } = require('./wa-private');
-const { meetCoordRun, pushToUser, rfqPrepare, rfqSend } = require('./wa-proactive');
+const { meetCoordRun, pushToUser, rfqHandoff, rfqPrepare, rfqSend } = require('./wa-proactive');
 const { businessCommand, closeAlerted, closureDecision, confirmPending, contactOf, draftEmail, findRecipients, sendPlainMail, replyOffer, MAIL_WALK_BTN, isMailWalkStart, mailWalkIntro, mailWalkAt, mailWalkEnd, startGoodsFromMail, suggestionDecision, suggestionFeedback, threadAddText, VIA_EMAIL, VIA_MESIMON } = require('./wa-mail');
 const { agentsText, cut, menuButtons, menuOptions, menuText, parseClosureCommand, parseSuggestionCommand, PLAIN_AGENTS, walkAction, walkButtons, walkText } = require('./wa-menu');
 const { meetingAudioAllowed, meetingAudioTurn, timelessAudioCheck, TRANSLATE } = require('./wa-meeting');
@@ -243,7 +243,13 @@ async function flowOnRfq(ctx) {
   if (state.awaiting && ['rfq', 'rfq_done'].includes(state.draft?.kind)) {
     const d = state.draft;
     const r = dry ? null : await (d.kind === 'rfq' ? Rfq.answer(actor.id, d, t) : Rfq.answerDone(actor.id, d, t))
-      .catch((err) => ({ text: 'משהו השתבש בפנייה לספקים. נסו שוב בעוד רגע 🙏', draft: d, awaiting: true, result: `שגיאה: ${err.message}`, error: true }));
+      .catch((err) => {
+        // 🤖 לא הסתדרנו — הבקשה לאינסטינקט, בלי שגיאה לעובד (לפני השליחה בלבד; אחרי הסיכום — כמו קודם)
+        if (d.kind === 'rfq' && d.step !== 'review' && rfqHandoff(actor, Rfq.handoffText(d.rfqId), currentMsg.get(actor.id))) {
+          return { text: '', draft: null, result: `שגיאה — עבר לאינסטינקט: ${err.message}`, handedOff: true, react: '⏳' };
+        }
+        return { text: 'משהו השתבש בפנייה לספקים. נסו שוב בעוד רגע 🙏', draft: d, awaiting: true, result: `שגיאה: ${err.message}`, error: true };
+      });
     if (r) {
       if (r.search) rfqPrepare(actor, r.rfqId);
       if (r.send) rfqSend(actor, r.rfqId);
@@ -274,7 +280,10 @@ async function flowRfqRequest({ actor, dry, out, state, t }) {
     const recent = recentFiles.get(actor.id);
     const file = recent && Date.now() - recent.at < RFQ_FILE_MS ? recent.file : null;
     // 💬 השיחה עד עכשיו — "שלח לכל אחד בקשה להצעת מחיר" אחרי שיחה על ספקים (באג 22.11.26)
-    const r = await Rfq.start(actor.id, t, { file, history: state?.history ?? [] }).catch((err) => ({ text: 'משהו השתבש בפנייה לספקים. נסו שוב בעוד רגע 🙏', result: `שגיאה: ${err.message}`, error: true }));
+    const r = await Rfq.start(actor.id, t, { file, history: state?.history ?? [] }).catch((err) => (
+      // 🤖 לא הסתדרנו — הבקשה (כפי שנכתבה) לאינסטינקט, בלי שגיאה לעובד
+      rfqHandoff(actor, t, currentMsg.get(actor.id)) ? { text: '', result: `שגיאה — עבר לאינסטינקט: ${err.message}`, handedOff: true, react: '⏳' }
+        : { text: 'משהו השתבש בפנייה לספקים. נסו שוב בעוד רגע 🙏', result: `שגיאה: ${err.message}`, error: true }));
     if (r) {
       if (r.search) rfqPrepare(actor, r.rfqId);
       return out(r.text, { draft: r.draft ?? null, awaiting: Boolean(r.awaiting) }, { action: 'rfq', status: r.error ? 'error' : 'ok', result: String(r.result ?? '').slice(0, 300), buttons: r.buttons, react: r.react });
