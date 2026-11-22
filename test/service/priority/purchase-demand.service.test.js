@@ -529,7 +529,9 @@ test('מק"טים לבנייה: "רק המזוהים" — מייל לרכש (ב�
   const r = await say('רק המזוהים ✅');
   assert.equal(sent.length, 1);
   assert.equal(sent[0].to, 'ruti@example.com');
-  assert.equal(sent[0].subject, `מק"טים נדרשים לבנייה בהקדם — לבקשת ${u.full_name}`);
+  assert.equal(sent[0].subject, `❗ מק"טים נדרשים לבנייה בהקדם — לבקשת ${u.full_name}`);
+  assert.equal(sent[0].urgent, true, 'סימן קריאה אדום: חשיבות גבוהה');
+  assert.match(sent[0].html, /color:#dc2626[^>]*>❗ דחוף/);
   assert.match(sent[0].text, /להלן מק"טים נדרשים לבנייה בהקדם/);
   assert.match(sent[0].text, /1\. בטון — 5 קוב \(לתקרה\)/);
   assert.doesNotMatch(sent[0].text, /שק מלט/, 'רק מה שלא זוהה');

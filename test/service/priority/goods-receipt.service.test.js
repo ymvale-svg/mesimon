@@ -721,7 +721,8 @@ test('מק"טים לבנייה בקבלת סחורה: "לא נמצא מק"ט —
   assert.match(r.text, /נשלח ל\*רותי רכש\* במייל/);
   assert.match(r.text, /לאיזה פרויקט לשייך/);
   assert.equal(sent.length, 1);
-  assert.equal(sent[0].subject, `מק"טים נדרשים לבנייה בהקדם — לבקשת ${u.full_name}`);
+  assert.equal(sent[0].subject, `❗ מק"טים נדרשים לבנייה בהקדם — לבקשת ${u.full_name}`);
+  assert.equal(sent[0].urgent, true, 'סימן קריאה אדום גם מקבלת הסחורה');
   assert.match(sent[0].text, /קבלת סחורה מבוט משימון/);
   assert.match(sent[0].text, /ספק: בטון הצפון \(S100\)/);
   assert.match(sent[0].text, /1\. בטון ב-30 — 5 קוב/);
