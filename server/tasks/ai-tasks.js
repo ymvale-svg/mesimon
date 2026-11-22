@@ -453,6 +453,7 @@ async function draftInitial({ owner, instruction, contact = {}, cc = [], project
   }
 
   const out = await Claude.json({
+    feature: 'tasks.ai', userId: owner?.id,
     system: skill(),
     content: [{ type: 'text', text: lines.join('\n') }],
     schema: DRAFT_SCHEMA,
@@ -521,7 +522,7 @@ async function compose(req, kind, channel, extra = '') {
     reply: 'כתוב תשובה לנמען.'
   }[kind];
   const text = [contextText(req), '', channelNote(channel), await signatureNote(req.owner_id, channel), what, extra].filter(Boolean).join('\n');
-  const out = await Claude.json({ system: skill(), content: [{ type: 'text', text }], schema: MESSAGE_SCHEMA, effort: 'low' });
+  const out = await Claude.json({ feature: 'tasks.ai', userId: req.owner_id, system: skill(), content: [{ type: 'text', text }], schema: MESSAGE_SCHEMA, effort: 'low' });
   return tidied(out, ownerOf(req)?.full_name);
 }
 
@@ -532,7 +533,7 @@ async function revise(req, msg, feedback) {
     'הטיוטה הנוכחית:', msg.subject ? `נושא: ${msg.subject}` : null, msg.body,
     '', `המשתמש ביקש לתקן כך: ${feedback}`, 'כתוב את הטיוטה מחדש.'
   ].filter((l) => l !== null).join('\n');
-  return Claude.json({ system: skill(), content: [{ type: 'text', text }], schema: MESSAGE_SCHEMA, effort: 'low' });
+  return Claude.json({ feature: 'tasks.ai', userId: req.owner_id, system: skill(), content: [{ type: 'text', text }], schema: MESSAGE_SCHEMA, effort: 'low' });
 }
 
 // ---------------------------------------------------------------------------
@@ -888,6 +889,7 @@ async function evaluate(req, { channel, text, saved, skipped, autoSubmitted }) {
   ].filter((l) => l !== null).join('\n');
 
   const out = await Claude.json({
+    feature: 'tasks.ai', userId: req.owner_id,
     system: skill(),
     content: [...fileBlocks(saved), { type: 'text', text: intro }],
     schema: EVAL_SCHEMA
@@ -1330,7 +1332,7 @@ async function interpretNote(req, note) {
     '<<<', String(note).slice(0, 3000), '>>>',
     '', 'מה המשמעות למעקב? בחר פעולה אחת לפי ההגדרות בסכמה.'
   ].join('\n');
-  const out = await Claude.json({ system: skill(), content: [{ type: 'text', text }], schema: NOTE_SCHEMA, effort: 'low' });
+  const out = await Claude.json({ feature: 'tasks.ai', userId: req.owner_id, system: skill(), content: [{ type: 'text', text }], schema: NOTE_SCHEMA, effort: 'low' });
   if (out.action === 'reschedule' && !/^\d{4}-\d{2}-\d{2}$/.test(out.date)) out.action = 'pause';
   return out;
 }

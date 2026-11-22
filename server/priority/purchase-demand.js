@@ -68,7 +68,7 @@ function alertAdmins(user, s, title, details) {
 }
 
 /** שליחת הודעה יזומה לעובד (החותם הבא) — נקבע ב-wa-bot (‎setHooks‎) */
-const hooks = { send: null };
+const hooks = { send: null, sendNow: null };
 const setHooks = (h) => { Object.assign(hooks, h); Return.setHooks(h); Parts.setHooks(h); };
 
 // ---------------------------------------------------------------------------
@@ -217,7 +217,7 @@ const ai = {
     const block = file.mime.includes('pdf')
       ? { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data } }
       : { type: 'image', source: { type: 'base64', media_type: file.mime.includes('png') ? 'image/png' : 'image/jpeg', data } };
-    return Claude.json({ system: skill(), content: [block, { type: 'text', text: 'task: items' }], schema: ITEMS_SCHEMA, effort: 'high', live: true });
+    return Claude.json({ feature: 'priority.demand', system: skill(), content: [block, { type: 'text', text: 'task: items' }], schema: ITEMS_SCHEMA, effort: 'high', live: true });
   },
   async match(items, pairs, siblings = []) {
     const text = JSON.stringify({
@@ -228,11 +228,11 @@ const ai = {
         candidates: (it.candidates ?? []).map((c) => ({ code: c.PARTNAME, description: c.PARTDES, chapter: c.BUD_SUBCHAPTERDES ?? '', resource: c.BUD_SUBTOPICDES ?? '' })) })),
       pairs: pairs.slice(0, 150).map((p) => ({ chapter: p.chapter, chapter_name: p.chapterDes, topic: p.topic, topic_name: p.topicDes }))
     });
-    return Claude.json({ system: skill(), content: [{ type: 'text', text }], schema: MATCH_SCHEMA, effort: 'medium', live: true });
+    return Claude.json({ feature: 'priority.demand', system: skill(), content: [{ type: 'text', text }], schema: MATCH_SCHEMA, effort: 'medium', live: true });
   },
   async edit(lines, text) {
     const content = JSON.stringify({ task: 'edit', lines: lines.map((l) => ({ line: l.n, description: l.description, qty: l.qty, unit: l.unit })), text });
-    return Claude.json({ system: skill(), content: [{ type: 'text', text: content }], schema: EDIT_SCHEMA, effort: 'low', live: true });
+    return Claude.json({ feature: 'priority.demand', system: skill(), content: [{ type: 'text', text: content }], schema: EDIT_SCHEMA, effort: 'low', live: true });
   }
 };
 
@@ -776,6 +776,16 @@ async function onPick(user, s, t, { reaction = false } = {}) {
 // סיום: פתיחה בפריוריטי ומעבר לאישור
 // ---------------------------------------------------------------------------
 
+/** שורת "החותם הבא" לעובד — גם כשההודעה לא יצאה, כדי שידע (#169) */
+function signerNote(r, name) {
+  if (!r.signer) return '';
+  if (r.sent) return `✍️ החותם הבא: *${name}* — קיבל הודעה בוואטסאפ.`;
+  if (r.later) return `✍️ החותם הבא: *${name}* — יקבל הודעה בוואטסאפ בשעות הפעילות.`;
+  if (r.why === 'הבוט לא שלח') return `✍️ החותם הבא: *${name}* — ההודעה אליו לא יצאה; הבוט ינסה שוב בעוד כמה דקות.`;
+  if (r.why === 'לא נמצא במשימון' || r.why === 'אין טלפון בפרופיל') return `✍️ החותם הבא: *${name}* — לא קיבל הודעה בוואטסאפ (מנהל המערכת עודכן).`;
+  return `✍️ החותם הבא: *${name}*.`;
+}
+
 /** "ישראל כהן" — לשדה ‎DETAILS‎ (עד 24 תווים) */
 const detailsOf = (user) => `בוט: ${String(user?.full_name ?? '').trim()}`.slice(0, 24);
 
@@ -981,9 +991,11 @@ async function submit(user, s) {
   let signerLine = '';
   try {
     const d = await Priority.readDemand(c, prdno);
-    const r = hooks.send ? await Approvals.notifyDemand(c, d, hooks.send) : { signer: Priority.nextSigner(d), user: null, sent: false };
+    // לחותם הבא — sendNow: "קיבל" רק כשההודעה יצאה בפועל (#169)
+    const send = hooks.sendNow ?? hooks.send;
+    const r = send ? await Approvals.notifyDemand(c, d, send) : { signer: Priority.nextSigner(d), user: null, sent: false };
     const name = r.user?.full_name || r.signer;
-    signerLine = !r.signer ? '' : r.sent ? `✍️ החותם הבא: *${name}* — קיבל הודעה בוואטסאפ.` : `✍️ החותם הבא: *${name}*.`;
+    signerLine = signerNote(r, name);
   } catch (err) {
     console.error('[משימון] החותם הבא לדרישת רכש:', err.message);
   }
@@ -1182,4 +1194,4 @@ function view(userId) {
   };
 }
 
-module.exports = { view, isTrigger, opens, startEdit, active, pending, docId, abandon, handle, setHooks, _parseDate: parseDate, _resolveItems: resolveItems, _ai: ai, _load: load, _clear: (userId) => clear(userId, load(userId)), _label: label, _labels: labels, _sameLabel: sameLabel };
+module.exports = { view, isTrigger, opens, startEdit, active, pending, docId, abandon, handle, setHooks, _parseDate: parseDate, _resolveItems: resolveItems, _ai: ai, _load: load, _clear: (userId) => clear(userId, load(userId)), _label: label, _labels: labels, _sameLabel: sameLabel, _signerNote: signerNote };

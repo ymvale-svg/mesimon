@@ -219,6 +219,20 @@ const messageIds = (value) => (String(value ?? '').match(/<[^<>\s]+>/g) ?? []);
 /**
  * @param {Buffer} raw  ההודעה כפי שהתקבלה מהשרת
  */
+/**
+ * הסימנים שמייל אוטומטי נותן על עצמו. מענה אוטומטי — RFC 3834, ובמערכות של מיקרוסופט כותרת משלהן.
+ * ‎listUnsubscribe‎ / ‎precedence‎ — דיוור (📭 ‎mail/mail-bulk.js‎: לא נשלח ל-AI).
+ */
+function autoFlags(headers) {
+  const autoReply = /auto-replied/i.test(headers['auto-submitted'] ?? '') || Boolean(headers['x-autoreply'] || headers['x-autorespond']);
+  return {
+    autoSubmitted: autoReply || /auto-generated/i.test(headers['auto-submitted'] ?? '') || /^(auto|bulk|junk)/i.test(headers.precedence ?? ''),
+    autoReply,
+    listUnsubscribe: Boolean(headers['list-unsubscribe']),
+    precedence: String(headers.precedence ?? '').trim().toLowerCase()
+  };
+}
+
 function parse(raw) {
   const { head } = splitHeadBody(raw);
   const headers = parseHeaders(decodeBytes(Buffer.from(head, 'latin1'), 'utf-8'));
@@ -235,10 +249,7 @@ function parse(raw) {
     messageId: messageIds(headers['message-id'])[0] ?? null,
     inReplyTo: messageIds(headers['in-reply-to']),
     references: messageIds(headers.references),
-    // מענה אוטומטי מסמן את עצמו — RFC 3834, ובמערכות של מיקרוסופט כותרת משלהן
-    autoSubmitted: /auto-replied|auto-generated/i.test(headers['auto-submitted'] ?? '')
-      || Boolean(headers['x-autoreply'] || headers['x-autorespond'])
-      || /^(auto|bulk|junk)/i.test(headers.precedence ?? ''),
+    ...autoFlags(headers),
     text: fullText.trim(),
     newText: stripQuoted(fullText),
     attachments: out.attachments
@@ -318,9 +329,7 @@ function finishGmail({ headers, plain, html, attachments }) {
     messageId: messageIds(headers['message-id'])[0] ?? null,
     inReplyTo: messageIds(headers['in-reply-to']),
     references: messageIds(headers.references),
-    autoSubmitted: /auto-replied|auto-generated/i.test(headers['auto-submitted'] ?? '')
-      || Boolean(headers['x-autoreply'] || headers['x-autorespond'])
-      || /^(auto|bulk|junk)/i.test(headers.precedence ?? ''),
+    ...autoFlags(headers),
     text: fullText.trim(),
     newText: stripQuoted(fullText),
     attachments

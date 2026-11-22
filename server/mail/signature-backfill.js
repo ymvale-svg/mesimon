@@ -79,7 +79,7 @@ async function stepUser(userId) {
     const text = batch.map((p) => `### ${p.email}\n${p.tails.map((t) => `---\n${t}`).join('\n')}`).join('\n\n');
     let out;
     try {
-      out = await Claude.json({ system: SYSTEM, content: [{ type: 'text', text }], schema: SCHEMA, effort: 'low', model: Memory._internal.model() });
+      out = await Claude.json({ feature: 'mail.memory', system: SYSTEM, content: [{ type: 'text', text }], schema: SCHEMA, effort: 'low', model: Memory._internal.model() });
     } catch (err) {
       // תקלה ב-AI — האנשים בקבוצה הזאת נשארים לסבב הבא
       for (const p of batch) checked.splice(checked.indexOf(p), 1);

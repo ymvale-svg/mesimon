@@ -448,6 +448,7 @@ async function rank(options, meeting) {
   });
   try {
     const out = await Claude.json({
+      feature: 'meetings.summary',
       system: fs.readFileSync(SKILL_PATH, 'utf8'),
       content: [{ type: 'text', text: `הפגישה החדשה: ${meeting.title}, ${fmt(meeting.start)}, ${meeting.minutes} דקות.\n\nהחלופות:\n${lines.join('\n')}` }],
       schema: RANK_SCHEMA,
