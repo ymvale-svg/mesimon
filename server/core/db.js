@@ -900,6 +900,33 @@ CREATE TABLE IF NOT EXISTS pd_part_requests (
   created_at  TEXT    NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_pd_part_requests ON pd_part_requests(status, user_id);
+/*
+ * 🏷️ הוספה למחירון ספק מהזמנת רכש (‎priority/po-pricelist.js‎). שורה לכל הזמנה (וגרסה).
+ * ‎items‎ — הפריטים שאינם במחירון: ‎[{ n, part, des, unit, price, prices, pick }]‎; ‎list‎ — המחירון שאליו כותבים;
+ * ‎written‎ — מה נכתב (המפתחות בפריוריטי, בשביל הביטול).
+ * ‎status‎: pending (מחכה לשליחה) / asked / done / declined / none (אין מה להציע) / no_list (לספק אין מחירון) / undone / expired.
+ */
+CREATE TABLE IF NOT EXISTS po_pricelist_offers (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  company     TEXT    NOT NULL,
+  ordname     TEXT    NOT NULL,
+  version     INTEGER NOT NULL DEFAULT 1,
+  supname     TEXT    NOT NULL,
+  supdes      TEXT    NOT NULL DEFAULT '',
+  projdocno   TEXT,
+  projdes     TEXT    NOT NULL DEFAULT '',
+  items       TEXT    NOT NULL DEFAULT '[]',
+  list        TEXT,
+  lists       TEXT    NOT NULL DEFAULT '[]',
+  written     TEXT    NOT NULL DEFAULT '[]',
+  status      TEXT    NOT NULL DEFAULT 'pending',
+  handler_id  INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  asked_at    TEXT,
+  done_at     TEXT,
+  created_at  TEXT    NOT NULL,
+  UNIQUE(company, ordname, version)
+);
+CREATE INDEX IF NOT EXISTS idx_po_pricelist_status ON po_pricelist_offers(status);
 /* ספק בפנייה — ‎status‎: pending / no_email / whatsapp (נייד בלי מייל) / wa_link (קיבל העובד קישור) / sent / replied / declined / failed / skipped. ‎offer‎ — מה חולץ מהתשובה */
 CREATE TABLE IF NOT EXISTS rfq_vendors (
   id             INTEGER PRIMARY KEY AUTOINCREMENT,

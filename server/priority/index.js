@@ -22,5 +22,6 @@ module.exports = {
   get OpensGuard() { return require('./opens-guard'); },
   get PoNotify() { return require('./po-notify'); },
   get PoPdf() { return require('./po-pdf'); },
+  get PoPricelist() { return require('./po-pricelist'); },
   get Rfq() { return require('./rfq'); }
 };

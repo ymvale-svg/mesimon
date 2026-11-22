@@ -653,7 +653,8 @@
 
   // ---------------------------------------------------------------- הגדרות
   async function settings() {
-    const [s, log] = await Promise.all([api('GET', '/api/priority/settings'), api('GET', '/api/priority/log')]);
+    const [s, log, acc] = await Promise.all([api('GET', '/api/priority/settings'), api('GET', '/api/priority/log'), api('GET', '/api/priority/access').catch(() => ({ users: [] }))]);
+    const handlers = new Set((s.defaults.pricelistHandlers ?? []).map(Number));
     let companies = s.companies.map((c) => ({ ...c }));
     const initialWrite = new Set(s.companies.filter((c) => c.write).map((c) => c.code));
     const pay = (code) => s.payTerms.find((p) => p.code === code)?.name ?? code;
@@ -683,6 +684,13 @@
         <div class="grid-form">
           <label for="b-name">מנהלת הרכש — שם<input id="b-name" value="${esc(s.defaults.buyerName ?? '')}"></label>
           <label for="b-email">מנהלת הרכש — מייל<input id="b-email" class="ltr" type="email" value="${esc(s.defaults.buyerEmail ?? '')}"></label>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-h"><h2>רכש — מחירונים</h2><p>מי מקבל בבוט את הפריטים מהזמנת רכש סופית שאינם במחירון הספק, ומוסיף אותם למחירון. אחד או יותר; הראשון שעונה מטפל. ריק — ההצעות מחכות, ומנהלי המערכת מקבלים התראה.</p></div>
+        <div class="checks" id="pl-handlers" role="group" aria-label="רכש — מחירונים">
+          ${acc.users.map((u) => `<label class="check"><input type="checkbox" value="${u.id}" ${handlers.has(u.id) ? 'checked' : ''}> ${esc(u.name)}</label>`).join('') || '<span class="muted">אין משתמשים</span>'}
         </div>
       </section>
 
@@ -749,7 +757,8 @@
         $('#confirm').innerHTML = `<span class="dirty">פותחים כתיבה לחברה אמיתית: ${esc(opened.join(', '))}. ללחוץ שוב על "שמירה" כדי לאשר.</span>`;
         confirmed = true; return;
       }
-      const body = { connection: { host: $('#c-host').value, ini: $('#c-ini').value, user: $('#c-user').value }, companies, defaults: { buyerName: $('#b-name').value, buyerEmail: $('#b-email').value } };
+      const body = { connection: { host: $('#c-host').value, ini: $('#c-ini').value, user: $('#c-user').value }, companies, defaults: { buyerName: $('#b-name').value, buyerEmail: $('#b-email').value,
+        pricelistHandlers: [...main.querySelectorAll('#pl-handlers input:checked')].map((x) => Number(x.value)) } };
       if ($('#c-pass').value) body.connection.password = $('#c-pass').value;
       try {
         await api('PUT', '/api/priority/settings', body);
