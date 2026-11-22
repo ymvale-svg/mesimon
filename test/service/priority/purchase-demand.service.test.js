@@ -864,6 +864,7 @@ function openRequest(u, missing) {
 }
 
 test('נפתח מק"ט אחד מתוך שניים — העובד מקבל מיד "נפתחו המק"טים שלא מצאת" והרשימה; כשנפתח גם השני — "להמשיך בדרישה?"', async (t) => {
+  H.at(t);                                       // בשעות העבודה — אחרת ההודעה נשמרת לבוקר
   const u = buyerWorker();
   let built = [];
   priority(t, { findPartExact: async () => null, searchParts: async (c, des) => built.filter((x) => des.includes(x.key)).map((x) => ({ p: x.p, score: 3, full: true })) });
@@ -892,6 +893,7 @@ test('נפתח מק"ט אחד מתוך שניים — העובד מקבל מיד
 });
 
 test('זיהוי ב-AI: הרכש ניסחה אחרת ("5*10", בלי היצרן) — ה-AI מזהה שזה אותו פריט; לא בטוח — לא מודיעים', async (t) => {
+  H.at(t);                                       // בשעות העבודה — אחרת ההודעה נשמרת לבוקר
   const u = buyerWorker();
   const other = newPart('90-10-0099', 'כבל N2XY 5*16');
   const same = newPart('90-10-0052', 'כבל N2XY 5*10 ממ"ר');
