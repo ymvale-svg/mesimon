@@ -86,6 +86,8 @@ function load(userId) {
 function save(userId, s) { D.setSetting(key(userId), { ...s, at: Date.now() }); }
 function clear(userId, s) {
   for (const f of s?.files ?? []) { try { fs.unlinkSync(f.path); } catch { /* כבר נמחק */ } }
+  // 📎 מפרט של פריט — נשמר כל עוד הבקשה לרכש פתוחה (‎keep‎; נמחק עם הבקשה ב-‎pd-parts.js‎)
+  for (const it of s?.items ?? []) if (it.spec?.path && !it.spec.keep) { try { fs.unlinkSync(it.spec.path); } catch { /* כבר נמחק */ } }
   D.run('DELETE FROM settings WHERE key = ?', key(userId));
 }
 const fresh = (s) => s && Date.now() - (s.at ?? 0) < TTL;
@@ -377,7 +379,7 @@ const CHANGE_HINT = '_לשנות — כתבו "תאריך 12.11", "פרויקט 
 function itemLine(it, edit = false) {
   const head = `*${it.n}.* ${it.description} — ${qtyText(it.qty)} ${it.unit || "יח'"}${it.note ? ` _(${it.note})_` : ''}`;
   if (it.status === 'ok') return `${head}\n   ✅ ${codeText(it.part)}`;
-  if (it.status === 'general' && !edit) return `${head}\n   🆕 לא בקטלוג — יישלח לרכש לבניית מק"ט`;
+  if (it.status === 'general' && !edit) return `${head}\n   🆕 לא בקטלוג — יישלח לרכש לבניית מק"ט${it.spec ? ' · 📎 מפרט מצורף' : ''}`;
   if (it.status === 'general') return `${head}\n   🆕 לא בקטלוג — מק"ט כללי 000 · ${it.part.chapterDes || it.part.chapter} / ${it.part.topicDes || it.part.topic} _(צריך לפתוח לו מק"ט)_`;
   return `${head}\n   ❓ ממתין לבחירה`;
 }
@@ -445,6 +447,22 @@ async function onDetail(user, s, t) {
   return nextQuestion(s, [`✏️ ${it.description}`, '']);
 }
 
+/**
+ * 📎 מפרט כקובץ (הוחלט 18.11.26): צילום או PDF בשאלה "תיאור מדויק" — מספיק במקום תיאור. לא קוראים ממנו פריטים: הוא
+ * שייך לפריט שנשאל עליו. כיתוב לצד הקובץ — מתווסף לתיאור. הקובץ יוצא למייל לרכש ולדרישה בפריוריטי (נספח "מפרט — …").
+ */
+async function onDetailFile(user, s, file, t) {
+  const it = s.items.find((x) => x.n === s.detailLine && x.status === 'general' && x.vague);
+  if (!it) return onFile(user, s, file);
+  if (it.spec?.path) { try { fs.unlinkSync(it.spec.path); } catch { /* כבר נמחק */ } }
+  it.spec = await saveFile(user.id, file);
+  const caption = String(t ?? '').trim();
+  if (caption && !sameLabel(caption, BTN_DROP)) it.description = `${it.description} ${caption}`.slice(0, 120);
+  it.vague = false;
+  it.vagueChecked = true;
+  return nextQuestion(s, [`📎 המפרט נקלט ל*${it.description}* — יישלח לרכש עם הפריט.`, '']);
+}
+
 /*
  * 🆕 פריטים בלי מק"ט (הוחלט 17.11.26): דרישת רכש *לא* יוצאת עם מק"ט כללי 000. ב"סיום" — רק המזוהים עכשיו, או לחכות
  * לבניית המק"טים ואז כל הדרישה. בשני המקרים רשימת החסרים נשלחת במייל למנהלת הרכש (‎pd-parts.js‎), בלי שאלה.
@@ -491,7 +509,11 @@ function askMode(s, pre = []) {
 /** שולח את החסרים לרכש. ‎null‎ — יצא; אחרת — התשובה לעובד (נשארים בשאלה) */
 async function sendMissing(user, s, mode) {
   const r = await Parts.requestBuild(user, s, missing(s), { mode });
-  if (r.ok) { s.sentTo = r.to.name; return null; }
+  if (r.ok) {
+    s.sentTo = r.to.name;
+    for (const it of missing(s)) if (it.spec) it.spec.keep = true;
+    return null;
+  }
   return askMode(s, ['⚠️ לא הצלחתי לשלוח את הרשימה לרכש — מנהל המערכת קיבל פירוט. נסו שוב בעוד כמה דקות.', '']);
 }
 
@@ -1034,6 +1056,10 @@ async function submit(user, s) {
   for (const f of s.files ?? []) {
     try { await Priority.attachDemand(c, prdno, { buf: fs.readFileSync(f.path), mime: f.mime, description: 'רשימת הפריטים מהבוט' }); } catch (err) { problems.push(`נספח: ${err.message}`); }
   }
+  // 📎 מפרט של פריט — נספח משלו
+  for (const it of s.items.filter((x) => x.spec?.path)) {
+    try { await Priority.attachDemand(c, prdno, { buf: fs.readFileSync(it.spec.path), mime: it.spec.mime, description: `מפרט — ${it.description}`.slice(0, 80) }); } catch (err) { problems.push(`מפרט לשורה ${it.n}: ${err.message}`); }
+  }
   await Priority.setDemandDialog(c, prdno, [
     'דרישת רכש דרך בוט משימון',
     `נפתחה ע"י: ${user.full_name}${owner ? ` (${owner})` : ''} | ${nowHe()}`,
@@ -1232,7 +1258,7 @@ async function step(user, s, t, file, { reaction, stale = false }) {
       return t.split(/\s+/).length >= 6 ? null : askMode(s);
     }
     case 'detail':
-      if (file) return onFile(user, s, file);
+      if (file) return onDetailFile(user, s, file, t);
       return onDetail(user, s, t);
     case 'pick':
       if (file) return onFile(user, s, file);
