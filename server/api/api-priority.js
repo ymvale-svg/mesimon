@@ -12,8 +12,10 @@
  *   • ‎GET /api/priority/pricelist‎, ‎POST /api/priority/pricelist/:id‎ — 🏷️ פריטים למחירון: רק מי שברשימה "רכש — מחירונים" ומנהלי מערכת.
  *   • טור המיילים והגרירה (‎priority-docs.js‎): ‎/api/priority/inbox‎, ‎/api/priority/docs‎ — כל עובד, רק שלו.
  */
+const D = require('../core').Db;
 const Settings = require('../priority').PrioritySettings;
 const Access = require('../priority').PriorityAccess;
+const Approvals = require('../priority').PriorityApprovals;
 const Docs = require('../priority').PriorityDocs;
 const Chain = require('../priority').PriorityChain;
 const Desk = require('../priority').PriorityDesk;
@@ -116,6 +118,24 @@ function register(router) {
     const changes = asBad(() => Access.save(b?.rows));
     Settings.note(Settings.DEFAULT_ORG, who(actor), changes);
     sendJson(res, 200, { ...Access.matrix(), companies: Settings.companies().filter((c) => !c.test), changes });
+  });
+
+  // ---------------------------------------------------------------- מאשרי דרישות הרכש: השיוך למשימון ומה קרה עם ההודעות
+  const activeUsers = () => D.all("SELECT id, full_name, phone FROM users WHERE status = 'active' AND role <> 'vendor' ORDER BY full_name")
+    .map((u) => ({ id: u.id, name: u.full_name, phone: Boolean(u.phone) }));
+  router.get('/api/priority/approvers', async (req, res, ctx) => {
+    adminOnly(ctx);
+    let r;
+    try { r = await Approvals.approversReport(); } catch (err) { r = { approvers: [], problems: [], errors: [err.message] }; }
+    sendJson(res, 200, { ...r, users: activeUsers() });
+  });
+
+  router.put('/api/priority/approvers', async (req, res, ctx) => {
+    const actor = adminOnly(ctx);
+    const b = await readJson(req);
+    asBad(() => Approvals.setManual(b?.login, b?.userId ?? null));
+    Settings.note(Settings.DEFAULT_ORG, who(actor), [`שיוך מאשר: ${b?.login} ← ${b?.userId ?? 'בלי שיוך'}`]);
+    sendJson(res, 200, { ok: true });
   });
 
   // ---------------------------------------------------------------- טור המיילים והגרירה

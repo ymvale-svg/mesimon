@@ -201,3 +201,121 @@ test('sweep — כבוי בלי חיבור לפריוריטי', async (t) => {
   assert.deepEqual(await A.sweep(async () => true, { force: true }), []);
   assert.equal(w.mock.callCount(), 0);
 });
+
+// ---------------------------------------------------------------------------
+// אלעד לא קיבל (23.11.26): PD26000060 / PD26000066 מחכות לאישור של Eladh, ולא יצאה הודעה. בפריוריטי המייל שלו
+// elado@ — במשימון אחר; והשם במשימון עם תוספת. וגם: אין מסך שמראה למה, ואין דרך לשייך ידנית.
+// ---------------------------------------------------------------------------
+
+test('mesimonUserFor — השם במשימון עם תוספת ("אלעד הוד - מנהל פרויקט"): לפי השם הפרטי ושם המשפחה', async (t) => {
+  const u = user({ full_name: 'אלעד הוד - מנהל פרויקט', email: 'eladh@other.test', phone: '0503333333' });
+  usersMock(t, [{ USERLOGIN: 'EladHod', SNAME: 'אלעד הוד', FIRSTNAME: 'אלעד', FAMILYNAME: 'הוד', EMAIL: 'elado@corp.test', STATDES: 'עובד פעיל' }]);
+  const m = await A.mesimonUserFor('EladHod');
+  assert.equal(m.how, 'name');
+  assert.equal(m.user.id, u.id);
+});
+
+test('mesimonUserFor — שם חלקי שמתאים לשני עובדים: לא מנחשים', async (t) => {
+  user({ full_name: 'יוסי לוי מחסן', email: 'y1@x.test' });
+  user({ full_name: 'יוסי לוי הנדסה', email: 'y2@x.test' });
+  usersMock(t, [{ USERLOGIN: 'YossiL', SNAME: 'יוסי לוי', FIRSTNAME: 'יוסי', FAMILYNAME: 'לוי', EMAIL: 'yossi@corp.test', STATDES: 'עובד פעיל' }]);
+  assert.equal((await A.mesimonUserFor('YossiL')).user, null);
+});
+
+test('notifyDemand — מה קרה עם כל דרישה נשמר (למסך): לא נמצא במשימון / נשלח', async (t) => {
+  usersMock(t);
+  t.mock.method(Priority, 'priorityUsers', async () => PR_USERS);
+  await A.notifyDemand('a160226', { PRDNO: 'PD26000060', USERLOGIN: 'Ghost', PDUSER_SUBFORM: [] }, async () => true);
+  assert.equal(A.statusOf('a160226', 'PD26000060', 'Ghost').why, 'לא נמצא במשימון');
+  await A.notifyDemand('a160226', { PRDNO: 'PD26000061', USERLOGIN: 'Eladh', PDUSER_SUBFORM: [] }, async () => true);
+  assert.equal(A.statusOf('a160226', 'PD26000061', 'Eladh').sent, true);
+});
+
+test('setManual — שיוך ידני (ומחיקתו), וההתראה "לא נמצא" תצא שוב אם יחזור', async (t) => {
+  usersMock(t);
+  A.setManual('Ghost', elad.id);
+  assert.equal((await A.mesimonUserFor('Ghost')).how, 'manual');
+  A.setManual('Ghost', null);
+  assert.equal((await A.mesimonUserFor('Ghost')).user, null);
+  assert.throws(() => A.setManual('Ghost', 999999), /אין משתמש/);
+});
+
+test('approversReport — כל המאשרים מהרשימות (ראשי ומחליף), השיוך שלהם, והדרישות שמחכות להם', async (t) => {
+  t.mock.method(Priority, 'priorityUsers', async () => PR_USERS);
+  t.mock.method(Priority, 'approverRows', async (c) => (c === 'a160226' ? [
+    { PRDNO: 'PD26000060', STATDES: 'מחכה לאישור', USERLOGIN: 'Eladh', PDUSER_SUBFORM: [{ USERLOGIN: 'Eladh', POSITIONDES: 'מנהל פרויקט', ALTUSERLOGIN: 'Ghost', ALTPOSITIONDES: 'מנכ"ל ביצוע' }] },
+    { PRDNO: 'PD26000040', STATDES: 'אושרה', USERLOGIN: null, PDUSER_SUBFORM: [{ USERLOGIN: 'MatanR', POSITIONDES: 'מנהל פרויקט' }] }
+  ] : []));
+  const r = await A.approversReport();
+  const by = Object.fromEntries(r.approvers.map((a) => [a.login, a]));
+  assert.deepEqual(Object.keys(by).sort(), ['Eladh', 'Ghost', 'MatanR']);
+  assert.equal(by.Eladh.mesimon.id, elad.id);
+  assert.equal(by.Eladh.mesimon.phone, true);
+  assert.deepEqual(by.Eladh.waiting.map((w) => w.prdno), ['PD26000060']);
+  assert.match(by.Ghost.roles.join(), /מחליף/);
+  assert.equal(by.Ghost.mesimon, null);
+  assert.equal(by.MatanR.mesimon.phone, false, 'מתן במשימון בלי טלפון — יוצג');
+  assert.ok(r.problems.some((p) => /Ghost/.test(p)) && r.problems.some((p) => /מתן|MatanR/.test(p)));
+});
+
+// ---------------------------------------------------------------------------
+// מייל לחותם הבא (23.11.26): "🚩 … ממתינה לאישורך", "קיבלת מ<שולח> … והיא ממתינה לאישורך", וקישור למסמך בפריוריטי.
+// יוצא לכתובת שבפריוריטי — גם כשהמאשר לא משויך במשימון או בלי טלפון.
+// ---------------------------------------------------------------------------
+
+const Mailer = require('../../../server/integrations/mailer');
+function mailbox(t, enabled = true) {
+  const sent = [];
+  t.mock.method(Mailer, 'isEnabled', () => enabled);
+  t.mock.method(Mailer, 'send', async (m) => { sent.push(m); return '<id@test>'; });
+  return sent;
+}
+
+test('approvalMail — דגל אדום בנושא, ממי, מה, ולינק; לשון זכר / נקבה לפי סוג המסמך', () => {
+  const m = A.approvalMail({ type: 'PURDEMANDS', docno: 'PD26000060', sender: 'נחמן קיסר', link: 'https://x.test/open?a=1&b=2', company: 'אשל הירדן', project: 'אלעד סנטר מגרש 50', items: 3 });
+  assert.equal(m.subject, '🚩 דרישת רכש PD26000060 ממתינה לאישורך');
+  assert.match(m.text, /קיבלת מנחמן קיסר דרישת רכש PD26000060 והיא ממתינה לאישורך/);
+  assert.match(m.text, /https:\/\/x\.test\/open\?a=1&b=2/);
+  assert.match(m.html, /href="https:\/\/x\.test\/open\?a=1&amp;b=2"/);
+  assert.match(m.html, /אלעד סנטר מגרש 50/);
+  const c = A.approvalMail({ type: 'contract', docno: 'C-7', sender: '', link: 'https://x.test' });
+  assert.equal(c.subject, '🚩 חוזה C-7 ממתין לאישורך');
+  assert.match(c.text, /קיבלת חוזה C-7 והוא ממתין לאישורך/);
+  assert.equal(A.approvalMail({ type: 'partial_invoice', docno: 'B1', link: 'x' }).subject, '🚩 חשבון חלקי B1 ממתין לאישורך');
+  assert.equal(A.approvalMail({ type: 'PORDERS', docno: 'PO1', link: 'x' }).subject, '🚩 הזמנת רכש PO1 ממתינה לאישורך');
+});
+
+test('Priority.docLink — הקישור של פריוריטי למסמך עצמו (openmail)', () => {
+  assert.equal(Priority.docLink('a160226', 'PURDEMANDS', 'PD26000060'),
+    'https://p.priority-connect.online/webui/openmail.htm?priority:priform@PURDEMANDS:PD26000060:a160226:tabb2121.ini:1');
+});
+
+test('notifyDemand — מייל לחותם, פעם אחת; גם כשאינו משויך במשימון; השולח מהפרטים של הבוט', async (t) => {
+  const sent = mailbox(t);
+  usersMock(t);
+  const d = { PRDNO: 'PD26000060', USERLOGIN: 'Ghost', OWNERLOGIN: 'API VPLANS', DETAILS: 'בוט: נחמן קיסר', PROJDES: 'אלעד סנטר מגרש 50', PDUSER_SUBFORM: [], PRDITEMS_SUBFORM: [{}, {}] };
+  const r = await A.notifyDemand('a160226', d, async () => true);
+  assert.equal(r.sent, false, 'בוואטסאפ — לא משויך');
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].to, 'ghost@nowhere.test');
+  assert.equal(sent[0].subject, '🚩 דרישת רכש PD26000060 ממתינה לאישורך');
+  assert.match(sent[0].text, /קיבלת מנחמן קיסר דרישת רכש PD26000060/);
+  assert.match(sent[0].text, /openmail\.htm\?priority:priform@PURDEMANDS:PD26000060:a160226:/);
+  assert.equal(A.statusOf('a160226', 'PD26000060', 'Ghost').mailed, true);
+  await A.notifyDemand('a160226', d, async () => true);
+  assert.equal(sent.length, 1, 'לא שוב');
+});
+
+test('notifyDemand — בלי מייל בפריוריטי: לכתובת שבמשימון; שליחת דואר לא מוגדרת — בלי מייל, בלי קריסה', async (t) => {
+  usersMock(t);
+  let sent = mailbox(t);
+  await A.notifyDemand('a160226', { PRDNO: 'PD26000070', USERLOGIN: 'MatanR', OWNERLOGIN: 'Eladh', PDUSER_SUBFORM: [] }, async () => true);
+  assert.equal(sent[0].to, 'matan@mesimon.test');
+  assert.match(sent[0].text, /קיבלת מאלעד חדד/);
+  t.mock.restoreAll();
+  usersMock(t);
+  sent = mailbox(t, false);
+  const r = await A.notifyDemand('a160226', { PRDNO: 'PD26000071', USERLOGIN: 'Eladh', PDUSER_SUBFORM: [] }, async () => true);
+  assert.equal(sent.length, 0);
+  assert.equal(r.sent, true);
+});

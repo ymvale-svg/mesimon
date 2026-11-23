@@ -73,6 +73,14 @@ const base = () => {
   return `https://${c.host || DEFAULT_HOST}/odata/Priority/${c.ini || DEFAULT_INI}`;
 };
 const isEnabled = () => { const c = credentials(); return Boolean(c.user && c.password); };
+/**
+ * קישור למסמך עצמו בפריוריטי — כמו בהודעות של פריוריטי ("openmail"): נפתח ב-Priority Web, ובטלפון — באפליקציה.
+ * ‎form‎ — שם המסך (‎PURDEMANDS‎, ‎PORDERS‎…), ‎docno‎ — מספר המסמך. נבדק 23.11.26: ‎/webui/openmail.htm‎ קיים בשרת.
+ */
+function docLink(company, form, docno) {
+  const c = credentials();
+  return `https://${c.host || DEFAULT_HOST}/webui/openmail.htm?priority:priform@${form}:${docno}:${company}:${c.ini || DEFAULT_INI}:1`;
+}
 const allowed = () => (provider?.writable
   ? [...provider.writable()]
   : String(process.env.PRIORITY_COMPANIES || 'test11').split(',').map((s) => s.trim()).filter(Boolean));
@@ -909,6 +917,12 @@ async function demandCodes(company) {
   return out;
 }
 
+/** הדרישות האחרונות של החברה עם רשימת המאשרים (ראשי ומחליף) — למסך "מאשרים" */
+async function approverRows(company, top = 300) {
+  return rows(await call(company, 'GET', `PURDEMANDS?$select=PRDNO,STATDES,USERLOGIN,PROJDES,CURDATE&$orderby=CURDATE%20desc&$top=${top}`
+    + `&$expand=PDUSER_SUBFORM($select=USERLOGIN,ALTUSERLOGIN,POSITIONDES,ALTPOSITIONDES,UFLAG,NEXTUSERLOGIN)`));
+}
+
 /** כל הדרישות שמחכות לאישור בחברה, עם המאשרים ומספר השורות */
 async function waitingDemands(company) {
   return rows(await call(company, 'GET', `PURDEMANDS?$filter=${enc("STATDES eq 'מחכה לאישור'")}&$select=${PD_SEL}`
@@ -1132,7 +1146,7 @@ module.exports = {
   GENERAL, NO_VAT_CODE, TAX_CODES, PAY_TERMS, DEFAULT_PAY, payTerm, payLabel, payFromText, dueDate, projectWarehouses, warehouses, warehouseExists, defaultWarehouse, supplierHistory, recentLines, partByCode, findPartsByText, searchParts, generalCoding, warehouseOf, findSuppliers, supplierByCode, findReceiptByBooknum, getOrder, openOrders, findPartExact, lastSubchapter, projects, matchProjects, readReceipt,
   finalOrders, orderForNotice, demandInitiator, demandForNotice, projectManager, priorityUser,
   readDialog, createReceipt, addOrderLine, addFreeLine, setLineQty, setLineDes, setHeader, attach, deleteAttachment, setDialog, finalizeReceipt, cancelReceipt, receiptStatus, deleteLines,
-  PD_TYPES, demandCodes, recentDemandProjects, createDemand, addDemandLine, setDemand, submitDemand, isNoApproversError, readDemand, waitingDemands, nextSigner, cancelDemand, setDemandDialog, appendDemandDialog, setDemandLine, deleteDemandLine, reopenDemand, REOPEN_STATUS, purchaseOrderOwners, attachDemand, priorityUsers, budgetPairs,
+  PD_TYPES, demandCodes, recentDemandProjects, createDemand, addDemandLine, setDemand, submitDemand, isNoApproversError, readDemand, waitingDemands, approverRows, docLink, nextSigner, cancelDemand, setDemandDialog, appendDemandDialog, setDemandLine, deleteDemandLine, reopenDemand, REOPEN_STATUS, purchaseOrderOwners, attachDemand, priorityUsers, budgetPairs,
   supplierPriceLists, addPriceListItem, deletePriceListItem, supplierParts, addSupplierPart, deleteSupplierPart,
   _call: call
 };
