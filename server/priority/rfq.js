@@ -365,7 +365,6 @@ async function loadFile(file) {
 /** "צריך הצעת מחיר ל…" — ‎null‎ כשזו לא בקשה כזו. ‎file‎ — תמונה / קובץ שנשלחו איתה (הדמיה, שרטוט) */
 async function start(userId, text, { file = null, history = [] } = {}) {
   if (!isRequest(text)) return null;
-  if (!Gmail.canSend(userId)) return { text: 'כדי לפנות לספקים מהמייל שלך צריך לחבר את תיבת ה-Gmail ("החשבון שלי" ← Gmail ועוזר ה-AI).', result: 'אין Gmail' };
   const f = await loadFile(file);
   const it = await understand(text, null, f, history);
   const id = Number(D.run("INSERT INTO rfq (user_id, status, request, item, draft, file, created_at) VALUES (?, 'draft', ?, ?, '{}', ?, ?)", userId, String(text).slice(0, 2000), JSON.stringify(it),
@@ -398,7 +397,6 @@ async function followUp(userId, text) {
   if (!web && !named) return null;
   const r = lastRfq(userId);
   if (!r?.item?.item) return null;
-  if (!Gmail.canSend(userId)) return { text: 'כדי לפנות לספקים מהמייל שלך צריך לחבר את תיבת ה-Gmail ("החשבון שלי" ← Gmail ועוזר ה-AI).', result: 'אין Gmail' };
   const vendors = named ? named[1].split(/\s*(?:,|\s+ו(?=\S))\s*/).map((x) => x.trim()).filter(Boolean).slice(0, MAX_VENDORS).map((name) => ({ name, email: '', phone: '' })) : [];
   const it = { ...r.item, source: web ? 'web' : 'named', vendors, missing_question: '' };
   const id = Number(D.run("INSERT INTO rfq (user_id, status, request, item, draft, file, created_at) VALUES (?, 'draft', ?, ?, '{}', ?, ?)",
@@ -428,6 +426,39 @@ async function next(userId, id, it) {
   return { search: true, rfqId: id, text: '', react: '👀', draft: null, result: `חיפוש ספקים (${it.source})` };
 }
 
+/**
+ * ✉️ העובד לא חיבר Gmail (23.11.26, ישראל): לא עוצרים — רשימת הספקים וקישורי וואטסאפ, בלי מייל, והערה איך לחבר
+ * את המייל כדי שהבוט ישלח בשבילו. הקישור לחיבור — ‎/api/me/gmail/connect‎ (צריך להיות מחובר למשימון בדפדפן).
+ */
+function gmailHelp() {
+  const root = String(D.getSetting('public_url', '') || process.env.PUBLIC_URL || '').trim().replace(/\/+$/, '');
+  return [
+    '✉️ *אני יודע לשלוח עבורך את הבקשות לחברות — במייל, מהתיבה שלך,* ולהחזיר לך טבלת השוואה כשהן עונות. רק תחבר לי את המייל במשימון:',
+    `1. נכנסים למשימון${root ? ` (${root})` : ''} ← *החשבון שלי* ← *Gmail ועוזר ה-AI*.`,
+    `2. לוחצים *לחיבור Gmail*${root ? ` (או ישר: ${root}/api/me/gmail/connect)` : ''}, בוחרים את חשבון העבודה ומאשרים — גם את הרשאת השליחה.`,
+    '3. כותבים לי שוב "תפנה לספקים להצעת מחיר על …" — ואשלח לכל ספק מייל נפרד.'
+  ].join('\n');
+}
+
+/** בלי Gmail: הרשימה — מייל / קישור וואטסאפ עם הנוסח לכל ספק — וההדרכה. הפנייה נסגרת (אין מה לעקוב) */
+function listText(r, vendors) {
+  const author = authorOf(r.user_id);
+  const waText = `${r.draft.subject}\n\n${r.draft.body}${r.file ? `\n\n(מצרף ${r.file.name})` : ''}\n\n${author.full_name}`;
+  const lines = vendors.map((v, i) => {
+    const wa = mobileOf(v.phone) ? `📱 ${waLink(v.phone, waText)}` : null;
+    return [`${i + 1}. *${v.name}*${v.reason ? ` — _${v.reason}_` : ''}`, v.email ? `   ✉️ ${v.email}` : null, wa ? `   ${wa}` : null].filter(Boolean).join('\n');
+  });
+  const withWa = vendors.filter((v) => mobileOf(v.phone)).length;
+  return [
+    `🛒 *ספקים ל${itemLine(r.item)}* (${vendors.length})`,
+    withWa ? '_לחיצה על 📱 פותחת הודעת וואטסאפ מוכנה עם הבקשה, מהטלפון שלך._' : null,
+    '',
+    ...lines,
+    '',
+    gmailHelp()
+  ].filter((l) => l !== null).join('\n');
+}
+
 /** החיפוש והטיוטה — ברקע (חיפוש ברשת לוקח זמן). מחזיר את הודעת האישור */
 async function prepare(userId, id, { ask = null } = {}) {
   const r = rfqById(id);
@@ -446,6 +477,11 @@ async function prepare(userId, id, { ask = null } = {}) {
   }
   const deadline = defaultDeadline(userId);
   const draft = await composeMail(r.item, authorOf(userId), deadline);
+  if (!Gmail.canSend(userId)) {
+    D.run("UPDATE rfq SET draft = ?, status = 'closed' WHERE id = ?", JSON.stringify(draft), id);
+    D.run("UPDATE rfq_vendors SET status = 'wa_link' WHERE rfq_id = ? AND status = 'whatsapp'", id);
+    return { text: listText(rfqById(id), vendorsOf(id)), draft: null, result: `${vendors.length} ספקים ל"${r.item.item}" — רשימה בלי מייל (Gmail לא מחובר)` };
+  }
   D.run("UPDATE rfq SET draft = ?, deadline_at = ?, status = 'review' WHERE id = ?", JSON.stringify(draft), deadline, id);
   return { text: reviewText(rfqById(id), vendorsOf(id)), buttons: [BTN.send, BTN.edit, BTN.cancel], draft: { kind: 'rfq', step: 'review', rfqId: id }, awaiting: true, result: `${vendors.length} ספקים ל"${r.item.item}"` };
 }
@@ -757,5 +793,5 @@ const SUMMARY_ASK = /^(?:טבלת|סיכום|מה\s+עם\s+ה?)\s*(?:ה)?הצע�
 
 module.exports = {
   isRequest, start, followUp, attachFile, answer, prepare, handoffText, send, tick, answerDone, ownsReply, summaryOf, lastSummary, SUMMARY_ASK, BTN,
-  _internal: { understand, findVendors, mineFor, webFor, instinctFor, webVendor, mobileOf, waLink, reviewText, composeMail, readOffer, defaultDeadline, itemLine }
+  _internal: { gmailHelp, listText, understand, findVendors, mineFor, webFor, instinctFor, webVendor, mobileOf, waLink, reviewText, composeMail, readOffer, defaultDeadline, itemLine }
 };
