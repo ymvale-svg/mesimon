@@ -319,3 +319,33 @@ test('followUp — בקשה מלפני יותר משעתיים כבר לא נמ�
   assert.equal(await RFQ.followUp(uid, 'תמצא ברשת'), null);
 });
 
+
+// 23.11.26, ישראל (שזר נחמיאס: "תפנה לספקים להצעת מחיר לאלעד סנטר" ← "צריך לחבר Gmail" — והבוט לא חיפש בכלל):
+// בלי Gmail — רשימת הספקים וקישורי וואטסאפ, בלי מייל, והערה עם הדרכה לחיבור המייל במשימון
+test('start — בלי Gmail: לא עוצר', async (t) => {
+  const u = user();
+  t.mock.method(Gmail, 'canSend', () => false);
+  Fakes.claude(t, () => ({ item: 'יציקת בטון', spec: '', quantity: '', location: 'אלעד', need_by: '', count: 10, source: 'web', vendors: [], terms: ['בטון'], unrelated: false, missing_question: '' }));
+  const r = await RFQ.start(u.id, 'תפנה לספקים להצעת מחיר לאלעד סנטר מגרש 50');
+  assert.equal(r.search, true);
+  assert.doesNotMatch(r.text, /Gmail/);
+});
+
+test('prepare — בלי Gmail: רשימה עם קישורי וואטסאפ והדרכה לחיבור המייל, בלי כפתורי שליחה', async (t) => {
+  const u = user({ full_name: 'שזר בודק' });
+  t.mock.method(Gmail, 'canSend', () => false);
+  D.setSetting('public_url', 'https://mesimon.test');
+  t.after(() => D.setSetting('public_url', ''));
+  rfqAi(t, { web: [v('בטון הצפון', 'info@beton.test', '052-1112233'), v('בטון מייל', 'office@b2.test', '')] });
+  const id = D.run("INSERT INTO rfq (user_id, item, status, draft, created_at) VALUES (?, ?, 'draft', '{}', ?)", u.id,
+    JSON.stringify({ item: 'בטון', location: 'אלעד', count: 10, source: 'web', terms: ['בטון'] }), D.nowIso()).lastInsertRowid;
+  const r = await RFQ.prepare(u.id, id);
+  assert.equal(r.buttons, undefined);
+  assert.equal(r.draft, null);
+  assert.match(r.text, /1\. \*בטון הצפון\*[\s\S]*✉️ info@beton\.test[\s\S]*📱 https:\/\/wa\.me\/972521112233\?text=/);
+  assert.match(r.text, /2\. \*בטון מייל\*\n {3}✉️ office@b2\.test/);
+  assert.match(r.text, /אני יודע לשלוח עבורך את הבקשות לחברות/);
+  assert.match(r.text, /החשבון שלי\* ← \*Gmail ועוזר ה-AI/);
+  assert.match(r.text, /https:\/\/mesimon\.test\/api\/me\/gmail\/connect/);
+  assert.equal(D.get('SELECT status FROM rfq WHERE id = ?', id).status, 'closed');
+});
