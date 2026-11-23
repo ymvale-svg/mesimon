@@ -912,10 +912,10 @@
   }
 
   // ---------------------------------------------------------------- מאשרי דרישות הרכש (בתוך מסך ההרשאות)
-  const APPR_WA = (st) => (!st || (!st.sent && !st.later && !st.why) ? '' : st.sent ? '<span class="pill p-ok">💬 נשלחה הודעה</span>'
-    : st.later ? '<span class="pill p-mute">💬 תישלח בשעות הפעילות</span>' : `<span class="pill p-warn">💬 ${esc(st.why || 'לא נשלחה')}</span>`);
+  const APPR_WA = (st) => (!st || (!st.sent && !st.later && !st.why) ? '' : st.sent ? '<span class="pill p-ok">וואטסאפ: נשלח</span>'
+    : st.later ? '<span class="pill p-mute">וואטסאפ: בשעות הפעילות</span>' : `<span class="pill p-warn">וואטסאפ: ${esc(st.why || 'לא נשלח')}</span>`);
   const APPR_WHY = (st) => (!st ? '<span class="pill p-mute">עוד לא נבדק</span>'
-    : `${APPR_WA(st)} ${st.mailed ? '<span class="pill p-ok">📧 נשלח מייל</span>' : '<span class="pill p-mute">📧 לא נשלח מייל</span>'}`);
+    : `${APPR_WA(st)} ${st.mailed ? '<span class="pill p-ok">מייל: נשלח</span>' : '<span class="pill p-mute">מייל: לא נשלח</span>'}`);
   async function approvers() {
     const box = $('#appr-body');
     if (!box) return;
