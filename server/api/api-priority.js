@@ -9,6 +9,7 @@
  *   • ‎GET|PUT /api/priority/access‎  — מנהלי מערכת: מטריצת ההרשאות.
  *   • ‎GET  /api/priority/log‎       — יומן השינויים בהגדרות ובהרשאות.
  *   • ‎GET|POST /api/priority/parts/:token‎ — 💬 בלי התחברות (האסימון מהמייל): מנהלת הרכש עונה לעובד על מק"טים לבנייה.
+ *   • ‎GET /api/priority/pricelist‎, ‎POST /api/priority/pricelist/:id‎ — 🏷️ פריטים למחירון: רק מי שברשימה "רכש — מחירונים" ומנהלי מערכת.
  *   • טור המיילים והגרירה (‎priority-docs.js‎): ‎/api/priority/inbox‎, ‎/api/priority/docs‎ — כל עובד, רק שלו.
  */
 const Settings = require('../priority').PrioritySettings;
@@ -17,6 +18,7 @@ const Docs = require('../priority').PriorityDocs;
 const Chain = require('../priority').PriorityChain;
 const Desk = require('../priority').PriorityDesk;
 const PdParts = require('../priority').PdParts;
+const PoPricelist = require('../priority').PoPricelist;
 const Priority = require('../integrations').Priority;
 const { HttpError, badRequest, forbidden, readJson, sendJson, parseUrl } = require('../core').HttpKit;
 
@@ -61,8 +63,21 @@ function register(router) {
       docs: Access.DOCS.map((d) => ({ key: d.key, label: d.label, ready: d.ready, allowed: a.docs.includes(d.key) })),
       companies: all.filter((c) => codes.includes(c.code) && !c.test).map((c) => ({ code: c.code, name: c.name })),
       allCompanies: a.companies === null,
-      connected: Priority.isEnabled()
+      connected: Priority.isEnabled(),
+      // 🏷️ כמה הצעות למחירון מחכות; ‎null‎ — העובד אינו ברשימה "רכש — מחירונים"
+      pricelist: PoPricelist.openCount(actor.id)
     });
+  });
+
+  router.get('/api/priority/pricelist', async (req, res, ctx) => {
+    const actor = userOnly(ctx);
+    sendJson(res, 200, await docs(() => PoPricelist.forScreen(actor.id)));
+  });
+
+  router.post('/api/priority/pricelist/:id', async (req, res, ctx) => {
+    const actor = userOnly(ctx);
+    const b = await readJson(req);
+    sendJson(res, 200, await docs(() => PoPricelist.act(actor.id, ctx.params.id, b)));
   });
 
   router.get('/api/priority/settings', async (req, res, ctx) => {

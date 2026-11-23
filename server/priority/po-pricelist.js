@@ -339,6 +339,29 @@ const closed = (r, userId) => {
 };
 const nameOf = (id) => D.get('SELECT full_name FROM users WHERE id = ?', id)?.full_name ?? 'מישהו אחר';
 
+/** הכתיבה אחרי "מאשר" — משותף לבוט ולמסך. ‎{ text, result, ok }‎ */
+async function commit(r, userId) {
+  if (!Settings.writable().includes(r.company)) return { text: 'החברה הזו לא פתוחה לכתיבה מהבוט. פנו למנהל המערכת.', result: 'חברה סגורה לכתיבה', ok: false };
+  if (!picked(r).length) return { text: 'לא נבחר אף פריט.', result: 'לא נבחר', ok: false };
+  let res;
+  try {
+    res = await write(r);
+  } catch (err) {
+    alertAdmins(`הכתיבה למחירון מ-${r.ordname} נכשלה`, `חברה: ${r.company}\n${err.message}`);
+    return { text: 'לא הצלחתי לכתוב למחירון. מנהל המערכת עודכן.', result: `שגיאה: ${err.message}`, ok: false };
+  }
+  save(r, { status: 'done', handler_id: userId, done_at: D.nowIso(), written: res.added });
+  if (res.failed.length) alertAdmins(`חלק מהפריטים מ-${r.ordname} לא נכתבו`, [`חברה: ${r.company}`, ...res.failed.map((f) => `${f.it.part}: ${f.err}`)].join('\n'));
+  for (const h of handlers()) if (h.id !== userId) D.notify({ targetType: 'user', targetId: h.id, kind: 'ai', title: `🏷️ ${nameOf(userId)} הוסיף ${res.added.length} פריטים מ-${r.ordname} למחירון`, body: res.added.map((w) => `• ${w.des}`).join('\n') });
+  const lines = [
+    res.added.length ? `✅ ${res.added.length === 1 ? 'נוסף פריט אחד' : `נוספו ${res.added.length} פריטים`} למחירון של ${r.supdes || r.supname} (${r.list?.name}).` : 'לא נוסף אף פריט.',
+    res.skipped.length ? `ℹ️ כבר היו במחירון: ${res.skipped.map((it) => it.des).join(', ')}` : null,
+    res.failed.filter((f) => !f.partial).length ? `⚠️ לא נוספו: ${res.failed.filter((f) => !f.partial).map((f) => f.it.des).join(', ')}. מנהל המערכת עודכן.` : null,
+    res.added.length ? '_לבטל: "לבטל את ההוספה למחירון"._' : null
+  ].filter(Boolean);
+  return { text: lines.join('\n'), result: `מחירון ${r.ordname}: נוספו ${res.added.length}${res.failed.length ? `, נכשלו ${res.failed.length}` : ''}`, ok: true };
+}
+
 /**
  * תשובה לשאלה של ההצעה (‎draft.kind === 'po_pricelist'‎). ‎null‎ — לא שלי (נושא אחר).
  * מחזיר ‎{ text, buttons?, draft?, result }‎ — ‎draft‎ ריק סוגר את השאלה.
@@ -379,26 +402,7 @@ async function answer(userId, d, text) {
     return t.split(/\s+/).length <= 4 ? { text: 'לא הבנתי. *כולם* ✅, *לא* ❌, או אילו פריטים ("רק 1 ו-3").', buttons: [BTN.all, BTN.pick, BTN.no], draft: draftOf(r, 'pick'), result: 'לא הובן' } : null;
   }
   if (d.step === 'confirm') {
-    if (sameLabel(t, BTN.ok) || yes) {
-      if (!Settings.writable().includes(r.company)) return { text: 'החברה הזו לא פתוחה לכתיבה מהבוט. פנו למנהל המערכת.', result: 'חברה סגורה לכתיבה' };
-      let res;
-      try {
-        res = await write(r);
-      } catch (err) {
-        alertAdmins(`הכתיבה למחירון מ-${r.ordname} נכשלה`, `חברה: ${r.company}\n${err.message}`);
-        return { text: 'לא הצלחתי לכתוב למחירון. מנהל המערכת עודכן.', result: `שגיאה: ${err.message}` };
-      }
-      save(r, { status: 'done', handler_id: userId, done_at: D.nowIso(), written: res.added });
-      if (res.failed.length) alertAdmins(`חלק מהפריטים מ-${r.ordname} לא נכתבו`, [`חברה: ${r.company}`, ...res.failed.map((f) => `${f.it.part}: ${f.err}`)].join('\n'));
-      for (const h of handlers()) if (h.id !== userId) D.notify({ targetType: 'user', targetId: h.id, kind: 'ai', title: `🏷️ ${nameOf(userId)} הוסיף ${res.added.length} פריטים מ-${r.ordname} למחירון`, body: res.added.map((w) => `• ${w.des}`).join('\n') });
-      const lines = [
-        res.added.length ? `✅ ${res.added.length === 1 ? 'נוסף פריט אחד' : `נוספו ${res.added.length} פריטים`} למחירון של ${r.supdes || r.supname} (${r.list?.name}).` : 'לא נוסף אף פריט.',
-        res.skipped.length ? `ℹ️ כבר היו במחירון: ${res.skipped.map((it) => it.des).join(', ')}` : null,
-        res.failed.filter((f) => !f.partial).length ? `⚠️ לא נוספו: ${res.failed.filter((f) => !f.partial).map((f) => f.it.des).join(', ')}. מנהל המערכת עודכן.` : null,
-        res.added.length ? '_לבטל: "לבטל את ההוספה למחירון"._' : null
-      ].filter(Boolean);
-      return { text: lines.join('\n'), result: `מחירון ${r.ordname}: נוספו ${res.added.length}${res.failed.length ? `, נכשלו ${res.failed.length}` : ''}` };
-    }
+    if (sameLabel(t, BTN.ok) || yes) return commit(r, userId);
     if (sameLabel(t, BTN.cancel) || no) { save(r, { status: 'declined', handler_id: userId, done_at: D.nowIso() }); return { text: 'בוטל — לא נוסף למחירון.', result: `מחירון ${r.ordname}: בוטל` }; }
     if (edit(r, t)) { save(r, { items: r.items, list: r.list }); return toSummary(); }
     return t.split(/\s+/).length <= 4 ? { text: '*מאשר* ✅, *ביטול* 🗑️, או תיקון ("בלי 2").', buttons: [BTN.ok, BTN.cancel], draft: draftOf(r, 'confirm'), result: 'לא הובן' } : null;
@@ -445,5 +449,89 @@ async function request(userId, text) {
   return { text: `לא מצאתי את ההזמנה ${ordname} בחברות שפתוחות לכתיבה.`, result: 'הזמנה לא נמצאה' };
 }
 
-module.exports = { BTN, KIND, enabled, handlers, mayHandle, offer, flush, send, build, answer, request, isRequest, setHooks,
+// ---------------------------------------------------------------------------
+// 🗂 המסך: "פריטים למחירון" במשימון פריוריטי (‎/priority/pricelist‎) — אותו מנוע כמו הבוט
+// ---------------------------------------------------------------------------
+
+const err = (status, message) => Object.assign(new Error(message), { status });
+const SCREEN_DAYS = 7;
+
+const view = (r, userId) => ({
+  id: r.id, company: r.company, companyName: Priority.companyOf(r.company).name, ordname: r.ordname, version: r.version,
+  supplier: r.supdes || r.supname, supname: r.supname, project: r.projdes, status: r.status, createdAt: r.created_at, doneAt: r.done_at,
+  handler: r.handler_id ? nameOf(r.handler_id) : '', mine: r.handler_id === userId,
+  busy: Boolean(r.handler_id && r.handler_id !== userId && ['pending', 'asked'].includes(r.status)),
+  list: r.list, lists: r.lists, currency: cur(r.items[0]?.currency),
+  items: r.items.map(({ n, part, des, unit, price, prices, pick }) => ({ n, part, des, unit, price, prices: prices ?? 1, pick: pick !== false })),
+  written: r.written.map(({ part, des, price }) => ({ part, des, price })),
+  canUndo: r.status === 'done' && r.written.length > 0 && Date.parse(r.done_at) >= Date.now() - UNDO_DAYS * 86400000
+});
+
+/** ‎{ open, recent, noList }‎ — מה שמחכה, מה שטופל בשבוע האחרון, וספקים בלי מחירון. רק מי שברשימה ומנהלי מערכת */
+function forScreen(userId) {
+  if (!mayHandle(userId)) throw err(403, 'הוספה למחירון שמורה למי שברשימה "רכש — מחירונים"');
+  const since = new Date(Date.now() - SCREEN_DAYS * 86400000).toISOString();
+  const pick = (sql, ...a) => D.all(sql, ...a).map((x) => view(row(x.id), userId));
+  return {
+    enabled: enabled(),
+    open: pick("SELECT id FROM po_pricelist_offers WHERE status IN ('pending','asked') ORDER BY created_at DESC LIMIT 100"),
+    recent: pick("SELECT id FROM po_pricelist_offers WHERE status IN ('done','declined','undone') AND COALESCE(done_at, created_at) >= ? ORDER BY COALESCE(done_at, created_at) DESC LIMIT 50", since),
+    noList: pick("SELECT id FROM po_pricelist_offers WHERE status IN ('no_list','no_list_sent') AND created_at >= ? ORDER BY created_at DESC LIMIT 50", since)
+  };
+}
+
+/** כמה הצעות מחכות — לכרטיס בבית. ‎null‎ — לא רלוונטי לעובד */
+function openCount(userId) {
+  if (!mayHandle(userId)) return null;
+  return D.get("SELECT COUNT(*) AS n FROM po_pricelist_offers WHERE status IN ('pending','asked')").n;
+}
+
+/**
+ * פעולה מהמסך על הצעה: ‎{ action: 'write' | 'decline' | 'undo', items: [{ n, pick, price }], list: { name, date } }‎.
+ * ‎write‎ — הבחירה, המחירים והמחירון מהמסך, ואז הכתיבה. מחזיר ‎{ text, offer }‎.
+ */
+async function act(userId, id, body = {}) {
+  if (!mayHandle(userId)) throw err(403, 'הוספה למחירון שמורה למי שברשימה "רכש — מחירונים"');
+  const r = row(Number(id));
+  if (!r) throw err(404, 'ההצעה לא נמצאה');
+  const action = String(body.action ?? '');
+  if (action === 'undo') {
+    const v = view(r, userId);
+    if (!v.canUndo) throw err(409, 'אין מה לבטל (או שעברו יותר מיומיים)');
+    const errs = await undo(r);
+    save(r, { status: 'undone' });
+    if (errs.length) alertAdmins(`ביטול ההוספה מ-${r.ordname} נכשל חלקית`, errs.join('\n'));
+    return { text: errs.length ? 'חלק מהפריטים לא נמחקו מהמחירון. מנהל המערכת עודכן.' : `בוטל: ${r.written.length} פריטים הוסרו מהמחירון.`, offer: view(r, userId) };
+  }
+  if (!['pending', 'asked'].includes(r.status)) throw err(409, closed(r, userId) ?? 'ההצעה כבר טופלה');
+  if (r.handler_id && r.handler_id !== userId) throw err(409, `${nameOf(r.handler_id)} כבר מטפל בהצעה הזו`);
+  if (action === 'decline') {
+    save(r, { status: 'declined', handler_id: userId, done_at: D.nowIso() });
+    return { text: 'נסגר — לא נוסף למחירון.', offer: view(r, userId) };
+  }
+  if (action !== 'write') throw err(400, 'פעולה לא מוכרת');
+  const want = new Map((Array.isArray(body.items) ? body.items : []).map((x) => [Number(x?.n), x]));
+  for (const it of r.items) {
+    const w = want.get(it.n);
+    if (!w) continue;
+    it.pick = Boolean(w.pick);
+    const price = Number(w.price);
+    if (w.price !== undefined && !(price > 0)) throw err(400, `מחיר לא תקין בשורה ${it.n}`);
+    if (w.price !== undefined) it.price = Math.round(price * 10000) / 10000;
+  }
+  if (body.list) {
+    const l = r.lists.find((x) => x.name === body.list.name && x.date === body.list.date);
+    if (!l) throw err(400, 'המחירון לא נמצא');
+    r.list = l;
+  }
+  save(r, { items: r.items, list: r.list, handler_id: userId });
+  const out = await commit(r, userId);
+  if (!out.ok) {
+    save(r, { handler_id: null });
+    throw err(400, out.text.replace(/\*/g, ''));
+  }
+  return { text: out.text.replace(/[*_]/g, ''), offer: view(row(r.id), userId) };
+}
+
+module.exports = { BTN, KIND, enabled, handlers, mayHandle, offer, flush, send, build, answer, request, isRequest, setHooks, forScreen, openCount, act,
   _internal: { candidates, applicable, net, edit, offerText, summaryText, write, undo, row } };

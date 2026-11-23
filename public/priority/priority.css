@@ -319,3 +319,21 @@ td.qty .unit { color: var(--mute); font-size: 13px; }
   .typing i { opacity: .8; }
   .preview.scanning::after { top: 40px; }
 }
+
+/* פריטים למחירון */
+.small { font-size: 12.5px; }
+ul.plain { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 4px; font-size: 14px; }
+.pl-offer input[type="checkbox"] { width: 18px; height: 18px; }
+.pl-offer td { white-space: normal; }
+.pl-offer .grid-form { max-width: 420px; }
+.pl-unit-in { display: none; }
+.pl-recent td { white-space: normal; }
+@media (max-width: 560px) {
+  .pl-offer .pl-unit { display: none; }
+  .pl-unit-in { display: inline; }
+  .pl-offer .pl-pr { white-space: nowrap; }
+  .pl-offer .cell-in.num { width: 64px; }
+  .pl-offer table.t th, .pl-offer table.t td { padding: 7px 4px; }
+  .pl-recent tr { display: flex; flex-wrap: wrap; gap: 4px 10px; padding: 8px 0; border-top: 1px solid var(--border); }
+  .pl-recent td { border: 0; padding: 0; }
+}

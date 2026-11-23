@@ -149,3 +149,39 @@ test('פריוריטי מוסיף לבד ל"מוצרים לספק" — לא מו
   await c.say(PL.BTN.undo);
   assert.deepEqual(pr.wrote('deleteSupplierPart').map((w) => w.args[2]), [77]);
 });
+
+test('🗂 מהמסך: בחירה, מחיר ומחירון ← כתיבה; אחר כך ביטול; ומי שאינו ברשימה — 403', async (t) => {
+  const { buyer, pr } = world(t);
+  chat(t, buyer);
+  const po = order();
+  const b = await PL.offer('test11', po);
+  const scr = PL.forScreen(buyer.id);
+  const o = scr.open.find((x) => x.id === b.id);
+  assert.ok(o, 'ההצעה ברשימה של המסך');
+  assert.deepEqual(o.items.map((x) => x.part), ['A-1', 'B-2', 'C-3']);
+  const general = o.lists.find((l) => l.general);
+  const r = await PL.act(buyer.id, b.id, { action: 'write', list: general, items: [{ n: 1, pick: true, price: 30 }, { n: 2, pick: false }, { n: 3, pick: false }] });
+  assert.match(r.text, /נוסף פריט אחד למחירון של ספק הדוגמה \(0003\)/);
+  assert.deepEqual(pr.wrote('addPriceListItem').map((w) => [w.args[1].name, w.args[2].part, w.args[2].price]), [['0003', 'A-1', 30]]);
+  assert.equal(r.offer.status, 'done');
+  assert.equal(r.offer.canUndo, true);
+  await assert.rejects(PL.act(buyer.id, b.id, { action: 'write' }), (e) => e.status === 409);
+  const u = await PL.act(buyer.id, b.id, { action: 'undo' });
+  assert.equal(u.offer.status, 'undone');
+  assert.equal(pr.wrote('deletePriceListItem').length, 1);
+  const other = worker({ email: `scr-${process.hrtime.bigint()}@test.local` });
+  assert.throws(() => PL.forScreen(other.id), (e) => e.status === 403);
+});
+
+test('🗂 מהמסך: הצעה שמישהו אחר כבר מטפל בה בבוט — 409; "לא" — נסגרת', async (t) => {
+  const { buyer, pr } = world(t);
+  const c = chat(t, buyer);
+  const b = await PL.offer('test11', order());
+  await c.say('רק 1');
+  const admin = worker({ role: 'admin', email: `adm-${process.hrtime.bigint()}@test.local` });
+  assert.equal(PL.forScreen(admin.id).open.find((x) => x.id === b.id).busy, true);
+  await assert.rejects(PL.act(admin.id, b.id, { action: 'decline' }), (e) => e.status === 409);
+  const r = await PL.act(buyer.id, b.id, { action: 'decline' });
+  assert.equal(r.offer.status, 'declined');
+  assert.equal(pr.writes.length, 0);
+});
