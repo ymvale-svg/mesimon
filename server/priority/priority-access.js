@@ -109,12 +109,14 @@ function matrix(org = DEFAULT_ORG) {
 
 /**
  * שמירת שורה (או כמה) מהמסך. ‎rows‎ — ‎[{ id, docs, companies }]‎. מנהלי מערכת — תמיד הכל, לא נשמרים.
- * מחזיר רשימת שינויים קריאה (ליומן).
+ * מחזיר ‎{ changes, granted }‎: רשימת שינויים קריאה (ליומן), ומה נפתח למי — ‎[{ userId, docs, companies }]‎
+ * (‎docs‎ — מסמכים שנוספו; ‎companies‎ — חברות שנוספו, ‎null‎ = נפתחו כל החברות). להודעה לעובד (‎access-notice.js‎).
  */
-function save(rows, { org = DEFAULT_ORG } = {}) {
+function saveRows(rows, { org = DEFAULT_ORG } = {}) {
   const s = stored(org);
   s.users = s.users ?? {};
   const changes = [];
+  const granted = [];
   for (const r of Array.isArray(rows) ? rows : []) {
     const id = Number(r?.id);
     const u = Number.isInteger(id) ? userRow(id) : null;
@@ -132,9 +134,17 @@ function save(rows, { org = DEFAULT_ORG } = {}) {
     if (added.length) changes.push(`${u.full_name}: נוסף ${added.map(label).join(', ')}`);
     if (removed.length) changes.push(`${u.full_name}: הוסר ${removed.map(label).join(', ')}`);
     if (JSON.stringify(before.companies) !== JSON.stringify(companies)) changes.push(`${u.full_name}: חברות — ${companies === null ? 'כל החברות' : companies.join(', ') || 'אף חברה'}`);
+    // חברות שנפתחו: ‎null‎ — עבר ל"כל החברות"; לפני כן "כל החברות" — לא נפתח דבר חדש
+    const allOpened = companies === null && before.companies !== null;
+    const moreCompanies = allOpened ? null
+      : (companies === null || before.companies === null ? [] : companies.filter((c) => !before.companies.includes(c)));
+    if (added.length || allOpened || moreCompanies.length) granted.push({ userId: u.id, docs: added, companies: moreCompanies, now: { docs, companies } });
   }
   D.setSetting(key(org), s);
-  return changes;
+  return { changes, granted };
 }
 
-module.exports = { DEFAULT_ORG, DOCS, DOC_KEYS, NO_ACCESS, isAdmin, of, can, any, filterCompanies, filterForUser, matrix, save, _key: key };
+/** כמו ‎saveRows‎ — רק רשימת השינויים (ליומן) */
+const save = (rows, opts) => saveRows(rows, opts).changes;
+
+module.exports = { DEFAULT_ORG, DOCS, DOC_KEYS, NO_ACCESS, isAdmin, of, can, any, filterCompanies, filterForUser, matrix, save, saveRows, _key: key };

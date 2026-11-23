@@ -6,7 +6,7 @@
  *   • ‎GET  /api/priority/me‎        — כל עובד: לאילו מסמכים ולאילו חברות הוא מורשה, והאם הוא מנהל.
  *   • ‎GET|PUT /api/priority/settings‎ — מנהלי מערכת: חיבור, חברות, ברירות מחדל. הסיסמה לעולם לא נשלחת חזרה.
  *   • ‎POST /api/priority/settings/test‎ — בדיקת חיבור (קריאה בלבד).
- *   • ‎GET|PUT /api/priority/access‎  — מנהלי מערכת: מטריצת ההרשאות.
+ *   • ‎GET|PUT /api/priority/access‎  — מנהלי מערכת: מטריצת ההרשאות. מי שנפתחה לו הרשאה — מקבל הודעה בבוט (‎access-notice.js‎).
  *   • ‎GET  /api/priority/log‎       — יומן השינויים בהגדרות ובהרשאות.
  *   • ‎GET|POST /api/priority/parts/:token‎ — 💬 בלי התחברות (האסימון מהמייל): מנהלת הרכש עונה לעובד על מק"טים לבנייה.
  *   • ‎GET /api/priority/pricelist‎, ‎POST /api/priority/pricelist/:id‎ — 🏷️ פריטים למחירון: רק מי שברשימה "רכש — מחירונים" ומנהלי מערכת.
@@ -14,6 +14,7 @@
  */
 const Settings = require('../priority').PrioritySettings;
 const Access = require('../priority').PriorityAccess;
+const AccessNotice = require('../priority').AccessNotice;
 const Docs = require('../priority').PriorityDocs;
 const Chain = require('../priority').PriorityChain;
 const Desk = require('../priority').PriorityDesk;
@@ -113,9 +114,11 @@ function register(router) {
   router.put('/api/priority/access', async (req, res, ctx) => {
     const actor = adminOnly(ctx);
     const b = await readJson(req);
-    const changes = asBad(() => Access.save(b?.rows));
+    const { changes, granted } = asBad(() => Access.saveRows(b?.rows));
     Settings.note(Settings.DEFAULT_ORG, who(actor), changes);
-    sendJson(res, 200, { ...Access.matrix(), companies: Settings.companies().filter((c) => !c.test), changes });
+    // 🔓 נפתחה הרשאה — העובד מקבל הודעה מיד בבוט (אין בוט / טלפון — התראה במשימון)
+    const notified = await AccessNotice.send(granted).catch((err) => { console.error('[משימון] הודעה על הרשאה:', err.message); return []; });
+    sendJson(res, 200, { ...Access.matrix(), companies: Settings.companies().filter((c) => !c.test), changes, notified });
   });
 
   // ---------------------------------------------------------------- טור המיילים והגרירה

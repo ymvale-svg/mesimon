@@ -899,7 +899,8 @@
       const rows = users.filter((u) => dirty.has(u.id)).map((u) => ({ id: u.id, docs: u.docs, companies: u.companies }));
       try {
         const r = await api('PUT', '/api/priority/access', { rows });
-        toast(r.changes.length ? `נשמר: ${r.changes.length} שינויים` : 'נשמר');
+        const told = (r.notified ?? []).map((n) => `${n.name}${n.via === 'app' ? ' (במשימון)' : ''}`);
+        toast(`${r.changes.length ? `נשמר: ${r.changes.length} שינויים` : 'נשמר'}${told.length ? ` · הודעה נשלחה ל: ${told.join(', ')}` : ''}`);
         render();
       } catch (e) { toast(e.message, true); }
     });

@@ -15,6 +15,7 @@ module.exports = {
   get PriorityPrefs() { return require('./priority-prefs'); },
   get PrioritySettings() { return require('./priority-settings'); },
   get PriorityAccess() { return require('./priority-access'); },
+  get AccessNotice() { return require('./access-notice'); },
   get PriorityDocs() { return require('./priority-docs'); },
   get PriorityChain() { return require('./priority-chain'); },
   get PriorityDesk() { return require('./priority-desk'); },
