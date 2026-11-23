@@ -78,7 +78,7 @@ const Briefing = require('../meetings').Briefing;
 const Calendar = require('../meetings').Calendar;
 const Meetings = require('../meetings').Meetings;
 const Instinct = require('./instinct');
-const { appRoot, lastOutId, buttonReplyText, candidatesOf, chains, channel, checkState, currentMsg, DAY, DIGEST_GRACE_MIN, doneEmoji, emailText, enqueueAs, firstName, HISTORY_TURNS, hooks, inHours, isConfigured, localDate, log, mailAlertUsers, markDone, onDirect, orgUsers, parseJson, PICK_SHOWN, pickText, publicStatus, qr, react, reactNow, readLog, recentFiles, remove, resolveMentions, save, sendButtons, sendText, setState, signatureFields, signatureLine, splitMessage, taskLink, todayStats, userByPhone, WALK, workHours } = require('./wa-base');
+const { appRoot, lastOutId, buttonReplyText, candidatesOf, chains, channel, checkState, currentMsg, incoming, DAY, DIGEST_GRACE_MIN, doneEmoji, emailText, enqueueAs, firstName, HISTORY_TURNS, hooks, inHours, isConfigured, localDate, log, mailAlertUsers, markDone, onDirect, orgUsers, parseJson, PICK_SHOWN, pickText, publicStatus, qr, react, reactNow, readLog, recentFiles, remove, resolveMentions, save, sendButtons, sendText, setState, signatureFields, signatureLine, splitMessage, taskLink, todayStats, userByPhone, WALK, workHours } = require('./wa-base');
 const { analyzeGroup, bindGroup, listGroups, notifyAdmins, processGroup, processGroups, prune, recipientOf, sanitizeGroup } = require('./wa-groups');
 const { batchDraft, batchText, CANCEL, FORWARD_MAX, LIST_SHOWN, PLAIN_FEATURES, PLAIN_GREETING, PLAIN_HELP, PLAIN_INSIGHTS, PLAIN_LIST, PLAIN_TODAY, RANGES, READ_ALOUD, READ_ALOUD_DOWN, YES, actionOf, addForward, chatOf, checkDraft, clearForwards, draftText, emptyChat, featuresText, findContactCards, formatList, forwardsOf, helpText, localDay, readAloudAllowed, readAloudFile, readAloudText, saveChat, shortDate, sourceOf, understand, unknownReplied, withForwards } = require('./wa-private');
 const { deliver, flushOutbox, messageUser, messageUserNow, notifyAssignment, sendFilesToUser } = require('./wa-tasks');
@@ -427,7 +427,7 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
   { const c = { actor, dry, keep, out, state, t }; const r = await flowOnSentFollowup(c); if (r !== NEXT) return r; state = c.state; }
   // 🏷️ הוספה למחירון ספק מהזמנה — התשובה, ו"מחירון PO…" / "לבטל את ההוספה למחירון"
   { const c = { actor, dry, keep, out, state, t }; const r = await flowOnPricelist(c); if (r !== NEXT) return r; state = c.state; }
-  { const r = await flowPricelistRequest({ actor, dry, out, t }); if (r !== NEXT) return r; }
+  { const r = await flowPricelistRequest({ actor, dry, out, state, t }); if (r !== NEXT) return r; }
   // 🔕 "לא להקפיץ יותר מיילים של X?" (‎mail-push.js‎)
   { const c = { actor, dry, keep, out, state, t }; const r = await flowOnMailMuteSender(c); if (r !== NEXT) return r; state = c.state; }
   {
@@ -1268,6 +1268,7 @@ async function handleDirectAs(msg) {
     ? Boolean(pressed.awaiting && pressed.draft)
     : otherDoc || WaQuestions.latest(user.id, pressed.owner)?.id === pressed.id);
   msg = { ...msg, onQuestion };
+  incoming.set(user.id, { reaction });
   if (reaction && !onQuestion) {
     // 👍 על הודעה אחרת — לא תשובה. יש שאלה פתוחה — אומרים מה לעשות; אין — כלום
     const cur = chatOf(user.id);

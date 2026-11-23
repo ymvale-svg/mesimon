@@ -366,7 +366,15 @@ async function commit(r, userId) {
  * תשובה לשאלה של ההצעה (‎draft.kind === 'po_pricelist'‎). ‎null‎ — לא שלי (נושא אחר).
  * מחזיר ‎{ text, buttons?, draft?, result }‎ — ‎draft‎ ריק סוגר את השאלה.
  */
-async function answer(userId, d, text) {
+const THUMB_DOWN = /^👎$/;
+/** 👎 כהודעה נפרדת — "שלב אחורה" רק דקות ספורות אחרי ההוספה, וכשההוספה היא הפעולה האחרונה של העובד בבוט */
+const THUMB_UNDO_MIN = 30;
+
+/**
+ * ‎opts.reaction‎ — התשובה היא תגובה (Reaction) על הודעת השאלה (‎CLAUDE.md‎): 👍 = כן, 👎 = לא.
+ * 👎 כהודעה נפרדת = שלב אחורה: בסיכום — חזרה לבחירה; בשאלת הביטול — לא מבטלים.
+ */
+async function answer(userId, d, text, { reaction = false } = {}) {
   const r = row(d?.offerId);
   if (!r) return null;
   const t = String(text ?? '').trim();
@@ -374,6 +382,7 @@ async function answer(userId, d, text) {
   const yes = YES.test(n);
   // "לא 2" — תיקון (בלי שורה 2), לא סירוב
   const no = NO.test(n) && !/\d/.test(n) && n.split(/\s+/).length <= 2;
+  const back = !reaction && THUMB_DOWN.test(n);
   if (d.step === 'undo') {
     if (sameLabel(t, BTN.undo) || yes) {
       if (r.status !== 'done') return { text: closed(r, userId) ?? 'אין מה לבטל.', result: `מחירון ${r.ordname}: אין מה לבטל` };
@@ -403,11 +412,19 @@ async function answer(userId, d, text) {
   }
   if (d.step === 'confirm') {
     if (sameLabel(t, BTN.ok) || yes) return commit(r, userId);
+    // 👎 כהודעה — שלב אחורה: חזרה לבחירת הפריטים (כתגובה על הסיכום — "לא", כמו ביטול)
+    if (back) return { text: offerText(v(), ['↩️ חזרה לבחירה:', '']), buttons: [BTN.all, BTN.pick, BTN.no], draft: draftOf(r, 'pick'), result: `מחירון ${r.ordname}: 👎 שלב אחורה` };
     if (sameLabel(t, BTN.cancel) || no) { save(r, { status: 'declined', handler_id: userId, done_at: D.nowIso() }); return { text: 'בוטל — לא נוסף למחירון.', result: `מחירון ${r.ordname}: בוטל` }; }
     if (edit(r, t)) { save(r, { items: r.items, list: r.list }); return toSummary(); }
     return t.split(/\s+/).length <= 4 ? { text: '*מאשר* ✅, *ביטול* 🗑️, או תיקון ("בלי 2").', buttons: [BTN.ok, BTN.cancel], draft: draftOf(r, 'confirm'), result: 'לא הובן' } : null;
   }
   return null;
+}
+
+/** ההוספה למחירון היא הפעולה האחרונה של העובד בבוט (יומן הבוט) — אחרת 👎 שייך למשהו אחר */
+function lastActionWasWrite(userId) {
+  const last = D.get("SELECT action, result FROM wa_log WHERE user_id = ? AND channel = 'private' ORDER BY id DESC LIMIT 1", userId);
+  return last?.action === KIND && /: נוספו [1-9]/.test(last.result ?? '');
 }
 
 // ---------------------------------------------------------------------------
@@ -423,8 +440,10 @@ async function request(userId, text) {
   const t = String(text ?? '').trim();
   if (!enabled()) return null;
   if (!mayHandle(userId)) return isRequest(t) ? { text: 'ההוספה למחירון שמורה לרכש. אם צריך — פנו למנהל המערכת.', result: 'אין הרשאה' } : null;
-  if (UNDO.test(normalize(t))) {
-    const since = new Date(Date.now() - UNDO_DAYS * 86400000).toISOString();
+  const thumb = THUMB_DOWN.test(normalize(t));
+  if (thumb && !lastActionWasWrite(userId)) return null;
+  if (UNDO.test(normalize(t)) || thumb) {
+    const since = new Date(Date.now() - (thumb ? THUMB_UNDO_MIN * 60000 : UNDO_DAYS * 86400000)).toISOString();
     const last = D.get("SELECT id FROM po_pricelist_offers WHERE handler_id = ? AND status = 'done' AND done_at >= ? ORDER BY done_at DESC LIMIT 1", userId, since);
     const r = last ? row(last.id) : null;
     if (!r || !r.written.length) return { text: 'אין הוספה למחירון מהיומיים האחרונים לבטל.', result: 'אין מה לבטל' };

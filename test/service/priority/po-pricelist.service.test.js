@@ -185,3 +185,66 @@ test('🗂 מהמסך: הצעה שמישהו אחר כבר מטפל בה בבו�
   assert.equal(r.offer.status, 'declined');
   assert.equal(pr.writes.length, 0);
 });
+
+/** מזהה ההודעה האחרונה עם כפתורים — ההודעה של השאלה (בשביל תגובה עליה) */
+const askedId = (c) => c.wa.calls.filter((x) => x.method === 'sendInteractiveButtonsReply').at(-1)?.id;
+
+test('👍 כתגובה על השאלה = כן: על ההצעה ← סיכום, על הסיכום ← נכתב', async (t) => {
+  const { buyer, pr } = world(t);
+  const c = chat(t, buyer);
+  await PL.offer('test11', order());
+  let r = await c.say('👍', { reaction: true, on: askedId(c) });
+  assert.match(r.text, /לכתוב למחירון של ספק הדוגמה/);
+  r = await c.say('👍', { reaction: true });
+  assert.match(r.text, /נוספו 3 פריטים/);
+  assert.equal(pr.wrote('addPriceListItem').length, 3);
+});
+
+test('👎 כהודעה על הסיכום = שלב אחורה (חזרה לבחירה, בלי כתיבה); 👎 כתגובה על הסיכום = לא', async (t) => {
+  const { buyer, pr } = world(t);
+  const c = chat(t, buyer);
+  const po = order();
+  await PL.offer('test11', po);
+  await c.say('רק 1');
+  let r = await c.say('👎');
+  assert.match(r.text, /חזרה לבחירה/);
+  assertButtons(r.buttons, [PL.BTN.all, PL.BTN.pick, PL.BTN.no]);
+  assert.equal(pr.writes.length, 0);
+  r = await c.say('רק 2');
+  assert.match(r.text, /זווית/);
+  await c.say('👎', { reaction: true });
+  assert.equal(D.get('SELECT status FROM po_pricelist_offers WHERE ordname = ?', po.ORDNAME).status, 'declined');
+  assert.equal(pr.writes.length, 0);
+});
+
+test('👎 כהודעה מיד אחרי ההוספה ← "לבטל?" ← 👍 על השאלה ← נמחק', async (t) => {
+  const { buyer, pr } = world(t);
+  const c = chat(t, buyer);
+  await PL.offer('test11', order());
+  await c.say('רק 1');
+  await c.say(PL.BTN.ok);
+  let r = await c.say('👎');
+  assert.match(r.text, /לבטל את ההוספה למחירון של ספק הדוגמה/);
+  assertButtons(r.buttons, [PL.BTN.undo, PL.BTN.keep]);
+  assert.equal(pr.wrote('deletePriceListItem').length, 0, 'לא מבטלים בלי אישור');
+  r = await c.say('👍', { reaction: true });
+  assert.match(r.text, /בוטל/);
+  assert.equal(pr.wrote('deletePriceListItem').length, 1);
+});
+
+test('👎 כהודעה — רק כשההוספה היא הפעולה האחרונה; 👎 על שאלת הביטול — נשאר', async (t) => {
+  const { buyer, pr } = world(t);
+  const c = chat(t, buyer);
+  await PL.offer('test11', order());
+  await c.say(PL.BTN.all);
+  await c.say(PL.BTN.ok);
+  let r = await c.say('👎');
+  assert.match(r.text, /לבטל את ההוספה/);
+  await c.say('👎');
+  assert.equal(D.get('SELECT status FROM po_pricelist_offers WHERE handler_id = ?', buyer.id).status, 'done', 'לא בוטל');
+  // פעולה אחרת בבוט אחרי ההוספה — 👎 כבר לא שייך למחירון
+  D.run("INSERT INTO wa_log (at, channel, user_id, action, result) VALUES (?, 'private', ?, 'tasks', 'משימה')", D.nowIso(), buyer.id);
+  r = await c.say('👎');
+  assert.doesNotMatch(r.text, /לבטל את ההוספה/);
+  assert.equal(pr.wrote('deletePriceListItem').length, 0);
+});

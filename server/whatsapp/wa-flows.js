@@ -34,7 +34,7 @@ const Solve = require('./solve');
 const MailInsights = require('../mail').MailInsights;
 const Range = require('../mail').InsightWindow;
 const Instinct = require('./instinct');
-const { appRoot, currentMsg, doneEmoji, emailText, enqueueAs, firstName, hooks, localDate, log, react, reactNow, recentFiles, signatureFields, taskLink, WALK, MSG_BREAK } = require('./wa-base');
+const { appRoot, currentMsg, incoming, doneEmoji, emailText, enqueueAs, firstName, hooks, localDate, log, react, reactNow, recentFiles, signatureFields, taskLink, WALK, MSG_BREAK } = require('./wa-base');
 const { actionOf, CANCEL, checkDraft, draftText, featuresText, helpText, localDay, PLAIN_FEATURES, PLAIN_GREETING, PLAIN_HELP, PLAIN_INSIGHTS, PLAIN_LIST, PLAIN_TODAY, READ_ALOUD, shortDate, YES } = require('./wa-private');
 const { meetCoordRun, pushToUser, rfqHandoff, rfqPrepare, rfqSend } = require('./wa-proactive');
 const { businessCommand, closeAlerted, closureDecision, confirmPending, contactOf, draftEmail, findRecipients, sendPlainMail, replyOffer, MAIL_WALK_BTN, isMailWalkStart, mailWalkIntro, mailWalkAt, mailWalkEnd, startGoodsFromMail, suggestionDecision, suggestionFeedback, threadAddText, VIA_EMAIL, VIA_MESIMON } = require('./wa-mail');
@@ -377,7 +377,7 @@ PoPricelist.setHooks({ push: (userId, m) => pushToUser(userId, m, 'po_pricelist'
 async function flowOnPricelist(ctx) {
   let { actor, dry, keep, out, state, t } = ctx;
   if (state.awaiting && state.draft?.kind === PoPricelist.KIND) {
-    const r = dry ? null : await PoPricelist.answer(actor.id, state.draft, t);
+    const r = dry ? null : await PoPricelist.answer(actor.id, state.draft, t, { reaction: Boolean(incoming.get(actor.id)?.reaction) });
     if (r) return out(r.text, { draft: r.draft ?? null, awaiting: Boolean(r.draft) }, { action: 'po_pricelist', status: 'ok', result: String(r.result ?? '').slice(0, 300), buttons: r.buttons });
     keep.draft = null;
     state = { ...state, draft: null, awaiting: false };
@@ -387,8 +387,10 @@ async function flowOnPricelist(ctx) {
 }
 
 /** "מחירון PO26000123", "לבטל את ההוספה למחירון" */
-async function flowPricelistRequest({ actor, dry, out, t }) {
-  if (actor.type !== 'user' || !PoPricelist.isRequest(t)) return NEXT;
+async function flowPricelistRequest({ actor, dry, out, state, t }) {
+  // 👎 כהודעה נפרדת, כשאין שאלה פתוחה — ביטול הפעולה האחרונה, אם היא הוספה למחירון (עם שאלת אישור)
+  const thumb = /^👎$/.test(WaUi.normalize(t)) && !state?.awaiting && !incoming.get(actor.id)?.reaction;
+  if (actor.type !== 'user' || !(PoPricelist.isRequest(t) || thumb)) return NEXT;
   if (dry) return out('(בדיקה) הייתי בודק את ההזמנה מול מחירון הספק.', {}, { action: 'po_pricelist', status: 'ok', result: 'בדיקה' });
   const r = await PoPricelist.request(actor.id, t).catch((err) => ({ text: 'לא הצלחתי לבדוק את ההזמנה כרגע. נסו שוב בעוד רגע 🙏', result: `שגיאה: ${err.message}` }));
   if (!r) return NEXT;
