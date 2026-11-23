@@ -243,6 +243,9 @@ async function flowOnRfq(ctx) {
   let { actor, dry, keep, out, state, t } = ctx;
   if (state.awaiting && ['rfq', 'rfq_done'].includes(state.draft?.kind)) {
     const d = state.draft;
+    // 📎 קובץ שנשלח ממש לפני התשובה לשאלה על הפרטים ("זה המידות…") — מצטרף לבקשה (סקירה 22.11: "לא הגיעו אליי המידות")
+    const recent = recentFiles.get(actor.id);
+    if (!dry && d.kind === 'rfq' && d.step === 'details' && recent && Date.now() - recent.at < RFQ_FILE_MS) await Rfq.attachFile(d.rfqId, recent.file).catch(() => false);
     const r = dry ? null : await (d.kind === 'rfq' ? Rfq.answer(actor.id, d, t) : Rfq.answerDone(actor.id, d, t))
       .catch((err) => {
         // 🤖 לא הסתדרנו — הבקשה לאינסטינקט, בלי שגיאה לעובד (לפני השליחה בלבד; אחרי הסיכום — כמו קודם)
@@ -291,6 +294,15 @@ async function flowRfqRequest({ actor, dry, out, state, t }) {
     }
   }
   return NEXT;
+}
+
+/** 🔁 "תמצא ברשת" / "תפנה לאלרם" אחרי בקשה להצעת מחיר — אותה בקשה, בלי לכתוב אותה מחדש (סקירה 22.11) */
+async function flowRfqFollowup({ actor, dry, out, t }) {
+  if (!WaActions.allowed(actor, 'rfq') || dry) return NEXT;
+  const r = await Rfq.followUp(actor.id, t).catch((err) => { console.error('[משימון] המשך לפנייה לספקים:', err.message); return null; });
+  if (!r) return NEXT;
+  if (r.search) rfqPrepare(actor, r.rfqId);
+  return out(r.text, { draft: r.draft ?? null, awaiting: Boolean(r.awaiting) }, { action: 'rfq', status: 'ok', result: String(r.result ?? '').slice(0, 300), buttons: r.buttons, react: r.react });
 }
 
 async function flowNoticeRequest({ actor, dry, out, t, user }) {
@@ -1143,5 +1155,5 @@ const switchCancels = () => Boolean(D.getSetting('wa_topic_switch_cancels', true
 const DRAFT_ONLY = /(?:(?:בלי|לא\s+משנה|אין\s+לי\s+(?:את\s+)?|עזוב(?:\s+את)?)\s*ה?(?:כתובת|מייל|נמען)|רק\s+ת?(?:נסח|כתוב)|ת?נסח\s+(?:לי\s+)?(?:רק\s+)?(?:את\s+)?ה?(?:מלל|טקסט|נוסח))/;
 
 module.exports = {
-  SEND_NOW, DRAFT_ONLY, flowAgentsList, flowAlertNo, flowOnMailDose, flowApproval, flowBusinessCommand, flowCancel, flowClosureCommand, flowEmailEdit, flowEmailPick, flowEmailSolve, flowEmailVia, flowFeaturesRequest, flowFormFillRequest, flowGreeting, flowInstinct, flowInstinctExplicit, flowInstinctReply, flowInstinctPilot, flowNoticeToInstinct, flowIntentCancel, flowIntentDenied, flowIntentMenu, flowIntentOther, flowMailFileRequest, flowMailReplyEdit, flowMailWalk, flowMeetCoordRequest, flowMeetingAudioAnswer, flowMeetingAudioRequest, flowMeetingAudioStatus, flowMeetingFollowupRequest, flowMeetingReminderRequest, flowMenuList, flowMenuPick, flowNoAi, flowNoticeRequest, flowOnClosureAddress, flowOnDayEvening, flowOnFormFill, flowOnGoodsStop, flowOnMailFile, flowOnMailMuteSender, flowOnMailRemindOrGoods, flowOnMeetCoord, flowOnMeetingTasks, flowOnPaceOffer, flowOnPlainMail, flowOnReminder, flowOnRfq, flowOnSentFollowup, flowOnPricelist, flowPricelistRequest, flowOnThreadAdd, flowRemindersRequest, flowReplyAsk, flowRfqRequest, flowRfqSummary, flowSuggestionCommand, flowTranslateRequest, flowWalk, NEXT, switchCancels
+  SEND_NOW, DRAFT_ONLY, flowAgentsList, flowAlertNo, flowOnMailDose, flowApproval, flowBusinessCommand, flowCancel, flowClosureCommand, flowEmailEdit, flowEmailPick, flowEmailSolve, flowEmailVia, flowFeaturesRequest, flowFormFillRequest, flowGreeting, flowInstinct, flowInstinctExplicit, flowInstinctReply, flowInstinctPilot, flowNoticeToInstinct, flowIntentCancel, flowIntentDenied, flowIntentMenu, flowIntentOther, flowMailFileRequest, flowMailReplyEdit, flowMailWalk, flowMeetCoordRequest, flowMeetingAudioAnswer, flowMeetingAudioRequest, flowMeetingAudioStatus, flowMeetingFollowupRequest, flowMeetingReminderRequest, flowMenuList, flowMenuPick, flowNoAi, flowNoticeRequest, flowOnClosureAddress, flowOnDayEvening, flowOnFormFill, flowOnGoodsStop, flowOnMailFile, flowOnMailMuteSender, flowOnMailRemindOrGoods, flowOnMeetCoord, flowOnMeetingTasks, flowOnPaceOffer, flowOnPlainMail, flowOnReminder, flowOnRfq, flowOnSentFollowup, flowOnPricelist, flowPricelistRequest, flowOnThreadAdd, flowRemindersRequest, flowReplyAsk, flowRfqFollowup, flowRfqRequest, flowRfqSummary, flowSuggestionCommand, flowTranslateRequest, flowWalk, NEXT, switchCancels
 };

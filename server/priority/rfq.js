@@ -373,6 +373,50 @@ async function start(userId, text, { file = null, history = [] } = {}) {
   return next(userId, id, it);
 }
 
+/*
+ * 🔁 המשך לבקשה האחרונה (סקירה 22.11: שני עובדים כתבו "ספקי אלומיניום תמצא ברשת", "תיקח מגוגל ספקים חדשים",
+ * "תפנה לאלרם" — והבוט ביקש לכתוב את כל הבקשה מחדש בהודעה אחת). אותה בקשה (פריט, כמות, מקום, הקובץ) — עם ספקים
+ * מהרשת, או לספק שנזכר בשמו. רק בקשה מהשעתיים האחרונות.
+ */
+const FOLLOW_MS = 2 * 60 * 60 * 1000;
+const WEB_ASK = /(?:^|[\s,])(?:ב|מה|ל|מ)?(?:רשת|גוגל|אינטרנט)(?=[\s,.!?]|$)|ספקים\s+(?:חדשים|אחרים)/;
+const NAMED_ASK = /^(?:ת?פנה|תפני|לפנות|ת?שלח|שלחי|תבקש|תבקשי|בקש)\s+(?:גם\s+)?(?:בקשה\s+)?ל(?!כל(?:\s|$)|כולם|ספקים)(\S.{0,60})$/;
+
+/** הבקשה האחרונה של העובד מהשעתיים האחרונות — ‎null‎ אם אין */
+const lastRfq = (userId) => {
+  const r = D.get('SELECT id FROM rfq WHERE user_id = ? AND created_at >= ? ORDER BY id DESC LIMIT 1', userId, new Date(Date.now() - FOLLOW_MS).toISOString());
+  return r ? rfqById(r.id) : null;
+};
+
+/** "תמצא ברשת" / "תפנה לאלרם" אחרי בקשה — ‎null‎ כשזה לא המשך כזה */
+async function followUp(userId, text) {
+  const n = WaUi.normalize(text).replace(/^🎙\s*/, '');
+  if (isRequest(n)) return null;
+  // "תחפש לי ברשת מחיר של טאבלט" — בקשה אחרת (לעוזר הכללי): רק הודעה קצרה, או כזו שמדברת על ספקים
+  const web = WEB_ASK.test(n) && (/ספק/.test(n) || n.split(/\s+/).length <= 4);
+  const named = !web ? NAMED_ASK.exec(n) : null;
+  if (!web && !named) return null;
+  const r = lastRfq(userId);
+  if (!r?.item?.item) return null;
+  if (!Gmail.canSend(userId)) return { text: 'כדי לפנות לספקים מהמייל שלך צריך לחבר את תיבת ה-Gmail ("החשבון שלי" ← Gmail ועוזר ה-AI).', result: 'אין Gmail' };
+  const vendors = named ? named[1].split(/\s*(?:,|\s+ו(?=\S))\s*/).map((x) => x.trim()).filter(Boolean).slice(0, MAX_VENDORS).map((name) => ({ name, email: '', phone: '' })) : [];
+  const it = { ...r.item, source: web ? 'web' : 'named', vendors, missing_question: '' };
+  const id = Number(D.run("INSERT INTO rfq (user_id, status, request, item, draft, file, created_at) VALUES (?, 'draft', ?, ?, '{}', ?, ?)",
+    userId, String(r.request ?? '').slice(0, 2000), JSON.stringify(it), r.file ? JSON.stringify(r.file) : null, D.nowIso()).lastInsertRowid);
+  const out = await next(userId, id, it);
+  return { ...out, result: `המשך לבקשה "${r.item.item}": ${web ? 'ספקים מהרשת' : `לספק ${vendors.map((v) => v.name).join(', ')}`}` };
+}
+
+/** קובץ שהגיע באמצע השאלות על הבקשה ("זה המידות של האלומיניום") — מצטרף אליה, כשעוד אין לה קובץ */
+async function attachFile(id, file) {
+  const r = rfqById(id);
+  if (!r || r.file) return false;
+  const f = await loadFile(file);
+  if (!f) return false;
+  D.run('UPDATE rfq SET file = ? WHERE id = ?', JSON.stringify({ name: f.name, mime: f.mime, b64: f.buf.toString('base64') }), id);
+  return true;
+}
+
 /** השלב הבא לפי מה שידוע: שאלה על פרט חסר → מאיפה הספקים → חיפוש וטיוטה */
 async function next(userId, id, it) {
   D.run('UPDATE rfq SET item = ? WHERE id = ?', JSON.stringify(it), id);
@@ -712,6 +756,6 @@ function lastSummary(userId) {
 const SUMMARY_ASK = /^(?:טבלת|סיכום|מה\s+עם\s+ה?)\s*(?:ה)?הצעות(?:\s+ה?מחיר)?[?.!]*$/;
 
 module.exports = {
-  isRequest, start, answer, prepare, handoffText, send, tick, answerDone, ownsReply, summaryOf, lastSummary, SUMMARY_ASK, BTN,
+  isRequest, start, followUp, attachFile, answer, prepare, handoffText, send, tick, answerDone, ownsReply, summaryOf, lastSummary, SUMMARY_ASK, BTN,
   _internal: { understand, findVendors, mineFor, webFor, instinctFor, webVendor, mobileOf, waLink, reviewText, composeMail, readOffer, defaultDeadline, itemLine }
 };
