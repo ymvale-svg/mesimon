@@ -561,6 +561,8 @@ async function sendMailFile(actor, out, f, others = []) {
 async function flowMailFileRequest({ actor, dry, out, t }) {
   if (actor?.type !== 'user' || !WaActions.allowed(actor, 'mail_ask') || !MailFiles.isRequest(t)) return NEXT;
   if (!Gmail.boxesOf(actor.id, 'mail').length) return NEXT;
+  // באמצע שיחה עם העוזר הכללי — "תן לי תמונה של …" הוא המשך שלה, לא קובץ מהמייל (סקירה 22.11). "…מהמייל" — כן
+  if (Instinct.allowed(actor) && Instinct.inConversation(actor.id) && !/מייל/.test(t)) return NEXT;
   if (dry) return out(`(בדיקה) הייתי מחפש במייל קובץ: "${t}"`, {}, { action: 'mail_file', status: 'ok', result: 'בדיקה' });
   const found = await MailFiles.find(actor.id, t).catch((err) => { console.error('[משימון] חיפוש קובץ במייל נכשל:', err.message); return []; });
   if (!found.length) {
