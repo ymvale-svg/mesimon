@@ -36,6 +36,7 @@ const Prefs = require('./priority-prefs');
 const Access = require('./priority-access');
 const Chain = require('./priority-chain');
 const Parts = require('./pd-parts');
+const BuyerNotices = require('./buyer-notices');
 const LineCmd = require('./line-commands');
 const GrStamp = require('./gr-stamp');
 const Priority = require('../integrations').Priority;
@@ -514,6 +515,8 @@ async function findProjects(all, text, { strict = true } = {}) {
 
 /** שורת הנחה או זיכוי במסמך ("הנחת לקוח קבוע", כמות או מחיר במינוס) — נקלטת כמו שהיא, ומפחיתה את הסכום */
 const isCredit = (l) => Number(l.qty) < 0 || Number(l.price ?? l.unit_price) < 0;
+/** קבלה מול הזמנה: שורות בתעודה שאין להן שורה בהזמנה (בלי שורות הנחה) — נקלטות ומסומנות לרכש (‎buyer-notices.js‎) */
+const extraLines = (s) => (s.order ? (s.lines ?? []).filter((l) => !l.order && !isCredit(l)) : []);
 
 function linesTable(s) {
   return s.lines.map((l) => {
@@ -523,7 +526,7 @@ function linesTable(s) {
       : `   התקבל: *${qtyText(l.qty)}*${l.unit ? ` ${l.unit}` : ''}`;
     const ord = l.order
       ? `   בהזמנה ${l.order.ordname}/${l.order.line}: ${l.order.des} · יתרה ${qtyText(l.order.balance)}${l.qty > l.order.balance ? ' ⚠️ יותר מהיתרה' : ''}${l.order.confidence === 'low' ? ' ❓ התאמה לא ודאית' : ''}`
-      : (s.order || s.ordersChecked) ? '   ללא שורת הזמנה' : '';
+      : s.order && !isCredit(l) ? '   ⚠️ לא בהזמנה — יסומן לרכש' : (s.order || s.ordersChecked) ? '   ללא שורת הזמנה' : '';
     const hand = l.handwritten ? `   ✍️ ${l.handwritten}` : '';
     const unclear = l.unclear && l.options?.length > 1 ? `   ❓ לא ברור — ${l.options.map(qtyText).join(' או ')}?` : '';
     return [head, got, ord, hand, unclear].filter(Boolean).join('\n');
@@ -1379,6 +1382,7 @@ function writeDialog(user, s) {
     `תנאי תשלום: ${Priority.payLabel(s.payCode ?? Priority.DEFAULT_PAY)}${(s.payCode ?? Priority.DEFAULT_PAY) === Priority.DEFAULT_PAY ? ' (ברירת מחדל)' : ' (נבחר ע"י המקבל)'}${dueText(s, s.payCode ?? Priority.DEFAULT_PAY)}`,
     ...(s.corrections ?? []).map((c) => `תיקון המקבל: ${c}`),
     ...short.map((x) => `קבלה חלקית — ${x}. היתרה נשארת פתוחה`),
+    ...extraLines(s).map((l) => `שורה ${l.n} (${l.description}) — לא בהזמנה ${s.order.ordname}; לבדיקת הרכש`),
     !s.order && s.project ? `פרויקט נבחר ע"י המקבל: ${s.project.code} ${s.project.des}` : null,
     s.chapter ? `תת פרק לפריט כללי: ${s.chapter.chapter} ${s.chapter.topic}` : null,
     s.warehouseNote ?? null,
@@ -2436,7 +2440,9 @@ async function step(user, s, t, file, allow = { gr: true, pd: false }) {
         D.setSetting(doneKey(user.id), { docno: s.docno, company: s.company, supplier: s.supplier?.name ?? '', at: Date.now() });
         Chain.progress(user.id, 'receipt', { stage: 'done', docno: s.docno, company: s.company, supplier: s.supplier?.name ?? '' });
         const stamped = await stampDoc(user, s);
-        const done = `✅ *קבלת סחורה ${s.docno}* נקלטה כסופית.\n${companyLine(s)}\nספק: ${s.supplier.name}${s.order ? ` · הזמנה ${s.order.ordname}` : ''}${stamped ? `\n🏷️ מספר ה-GR נכתב על ה${docName(s.doc)} — מצורף, ונשמר כנספח בפריוריטי.` : ''}`;
+        // 📣 לרכש: שורה שלא בהזמנה (מייל עכשיו), ותעודה בלי מספר הזמנה (לדוח השבועי)
+        const toBuyer = await BuyerNotices.afterFinal(user, s, extraLines(s)).catch((err) => { console.error('[משימון] הודעה לרכש מקבלת סחורה:', err.message); return ''; });
+        const done = `✅ *קבלת סחורה ${s.docno}* נקלטה כסופית.\n${companyLine(s)}\nספק: ${s.supplier.name}${s.order ? ` · הזמנה ${s.order.ordname}` : ''}${stamped ? `\n🏷️ מספר ה-GR נכתב על ה${docName(s.doc)} — מצורף, ונשמר כנספח בפריוריטי.` : ''}${toBuyer ? `\n${toBuyer}` : ''}`;
         if (queueOf(s).length) { const q = await startQueued(user, s, [done]); return stamped ? { ...q, files: [stamped, ...(q.files ?? [])] } : q; }
         return { s: null, replies: [done], files: stamped ? [stamped] : [], status: 'ok', result: `GR סופי ${s.docno}` };
       }

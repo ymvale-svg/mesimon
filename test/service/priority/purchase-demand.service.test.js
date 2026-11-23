@@ -850,6 +850,86 @@ test('💬 מנהלת הרכש עונה בערב — ההודעה לעובד נ�
   assert.match(queued, /איזה סוג בטון\? ב-30 או ב-40\?/, 'נשמר בתור לבוקר');
 });
 
+/** פרויקט בבקרת תקציב: תת הפרק שבכרטיס הפריט (20 / 20-10) אינו במהדורת הביצוע של הפרויקט — כמו PD26000062 */
+const CODING_ERR = 'קוד תת פרק 20: יש לבחור תת פרק מרשימת הבחירה. כאשר הפרויקט לבקרה, תת הפרק צריך להופיע במהדורת הביצוע העדכנית';
+
+/** פריוריטי שדוחה את ‎rejected‎ (מק"ט ← הודעת השגיאה) ומקבל כל שורה אחרת */
+function rejecting(t, rejected, reads = {}) {
+  return H.Fakes.priority(t, {
+    projects: async () => PROJECTS, recentDemandProjects: async () => [], demandCodes: async () => CODES, warehouses: async () => WAREHOUSES,
+    projectWarehouses: async () => [WAREHOUSES[0]], warehouseOf: async () => 'Main',
+    findPartExact: async (c, des) => (des === 'שק מלט' ? CEMENT : null),
+    searchParts: async (c, des) => (/בטון/.test(des) ? [B30, B40].map((p) => ({ p, score: 1 })) : []),
+    budgetPairs: async () => [{ chapter: '20', chapterDes: 'שלד', topic: '20-10', topicDes: 'בטון' }],
+    generalCoding: async () => ({ chapter: '101', chapterDes: 'כללי', topic: '98-10', topicDes: 'כללי' }),
+    partByCode: async () => null, priorityUsers: async () => [], readDemand: async (c, prdno) => ({ PRDNO: prdno }), ...reads
+  }, { writes: { createDemand: async () => 'PRD26000007', addDemandLine: async (c, prdno, line) => { if (rejected[line.part]) throw new Error(rejected[line.part]); return 1; } } });
+}
+
+test('אין תקציב בפרויקט לתת הפרק של המק"ט — לא על קידוד אחר ולא על 000: טיוטא; העובד ומנהל הפרויקט בלבד (PD26000062)', async (t) => {
+  H.at(t);
+  H.companies(t, 'test11');
+  const u = H.worker();
+  const pm = H.worker({ full_name: 'מנהל פרויקט', email: 'pm@example.com' });
+  const pr = rejecting(t, { 'M-1': CODING_ERR }, {
+    projectManager: async (c, proj) => (proj === 'PR1' ? 'PmLogin' : null),
+    priorityUser: async (c, login) => (login === 'PmLogin' ? { login, name: 'מנהל פרויקט', email: 'PM@example.com', active: true } : null)
+  });
+  ai(t);
+  const mails = buyer(t);
+  const { say, wa } = H.chat(t, u);
+  await toItems(say);
+  await toReview(say);
+  const before = H.D.get('SELECT COALESCE(MAX(id), 0) AS m FROM notifications').m;
+  const r = await say(BTN.done);
+
+  assert.deepEqual(pr.wrote('addDemandLine').map((w) => w.args[2]), [
+    { part: 'M-1', qty: 10, chapter: '20', topic: '20-10' },
+    { part: 'C-30', qty: 5, chapter: '20', topic: '20-10' }
+  ], 'כל שורה פעם אחת, עם הקידוד מהכרטיס — בלי ניסיון על קידוד אחר ובלי 000');
+  assert.equal(pr.wrote('submitDemand').length, 0, 'לא נשלחה לאישור');
+  assert.match(r.text, /דרישת רכש PRD26000007\* נשארה \*טיוטא\* ולא נשלחה לאישור/);
+  assert.match(r.text, /"שק מלט" \(M-1\): \*אין תקציב בפרויקט\* לתת פרק 20 שלד \/ 20-10 בטון/);
+  assert.match(r.text, /מנהל הפרויקט \*מנהל פרויקט\* קיבל הודעה שאין תקציב/);
+  assert.doesNotMatch(r.text, /רכש\) קיבלה|מנהל המערכת/);
+
+  const toPm = wa.calls.filter((c) => String(c.body?.chatId ?? '').startsWith(pm.phone)).map((c) => c.body?.message ?? '').join('\n');
+  assert.match(toPm, /אין תקציב\* — דרישת רכש של \*עובד שטח \d+\* לא נשלחה לאישור/);
+  assert.match(toPm, /שק מלט — 10 שק \(M-1\): תת פרק 20 שלד \/ 20-10 בטון אינו בתקציב הפרויקט/);
+  const notes = H.D.all('SELECT target_id, title FROM notifications WHERE id > ?', before);
+  assert.deepEqual(notes.map((n) => n.target_id), [pm.id], 'התראה במשימון — רק למנהל הפרויקט');
+  assert.equal(mails.length, 0, 'לא למנהלת הרכש');
+});
+
+test('אין תקציב, ולפרויקט אין מנהל פרויקט בפריוריטי — העובד יודע, ומנהל המערכת מקבל (הגדרה חסרה)', async (t) => {
+  H.companies(t, 'test11');
+  const u = H.worker();
+  rejecting(t, { 'M-1': CODING_ERR }, { projectManager: async () => null });
+  ai(t);
+  const mails = buyer(t);
+  const { say } = H.chat(t, u);
+  await toItems(say);
+  await toReview(say);
+  const r = await say(BTN.done);
+  assert.match(r.text, /לא מצאתי בפריוריטי את מנהל הפרויקט — מנהל המערכת קיבל פירוט/);
+  assert.equal(mails.length, 0);
+});
+
+test('שורה שנדחתה מסיבה אחרת — גם כן טיוטא בלי 000; מנהלת הרכש לא הוגדרה — מנהל המערכת', async (t) => {
+  H.companies(t, 'test11');
+  const u = H.worker();
+  const pr = rejecting(t, { 'C-30': 'הפריט אינו פעיל' });
+  ai(t);
+  const { say } = H.chat(t, u);
+  await toItems(say);
+  await toReview(say);
+  const r = await say(BTN.done);
+  assert.equal(pr.wrote('addDemandLine').filter((w) => w.args[2].part === '000').length, 0);
+  assert.equal(pr.wrote('submitDemand').length, 0);
+  assert.match(r.text, /"בטון" \(C-30\): פריוריטי לא קיבל את השורה/);
+  assert.match(r.text, /מנהל המערכת קיבל פירוט/);
+});
+
 // ---------------------------------------------------------------------------
 // 🆕 מק"ט שנפתח בפריוריטי — הודעה לעובד לבד, בלי שמנהלת הרכש תעדכן (22.11.26)
 // ---------------------------------------------------------------------------
@@ -927,4 +1007,72 @@ test('המייל לרכש: פותחים מק"ט חדש — אין צורך לע�
     assert.match(m.text, /רק כשהמק"ט כבר קיים, או כדי לכתוב לו הערה: https:\/\/mesimon\.example\/parts\.html\?t=a{36}/);
     assert.match(m.html, /אין צורך לעדכן אף אחד/);
   } finally { D.setSetting('public_url', ''); }
+});
+
+// ---------------------------------------------------------------------------
+// 📎 מפרט כקובץ בשאלה "תיאור מדויק" (18.11.26)
+// ---------------------------------------------------------------------------
+
+test('📎 מפרט כקובץ: צילום בשאלה "תיאור מדויק" — מספיק, לא נקרא כרשימה; יוצא במייל לרכש ולדרישה כנספח', async (t) => {
+  H.at(t);
+  H.companies(t, 'test11');
+  const u = buyerWorker();
+  const pr = priority(t, { searchParts: async () => [], readDemand: async (c, prdno) => ({ PRDNO: prdno }) });
+  const extractCalls = [];
+  hammerAi(t);
+  t.mock.method(require('../../../server/priority/purchase-demand')._ai, 'itemsFromFile', async () => { extractCalls.push(1); return { items: [], unrelated: false, question: '' }; });
+  const sent = buyer(t);
+  const { say } = H.chat(t, u);
+
+  await toItems(say);
+  let r = await say('10 שקי מלט, 2 פטישים');
+  assert.match(r.text, /צריך תיאור מדויק/);
+
+  r = await say('', { file: H.photo('spec.jpg') });
+  assert.match(r.text, /המפרט נקלט ל\*פטיש\*/);
+  assert.match(r.text, /פטיש — 2 יח'\n {3}🆕 לא בקטלוג — יישלח לרכש לבניית מק"ט · 📎 מפרט מצורף/);
+  H.assertButtons(r.buttons, [BTN.done, BTN.cancel]);
+  assert.equal(extractCalls.length, 0, 'לא נקרא כרשימת פריטים');
+
+  await say(BTN.done);
+  r = await say('רק המזוהים ✅');
+  assert.match(r.text, /נפתחה ועברה \*לאישור\*/);
+  assert.equal(sent.length, 1);
+  assert.match(sent[0].text, /1\. פטיש — 2 יח' · .* · 📎 מפרט מצורף/);
+  assert.equal(sent[0].attachments.length, 1);
+  assert.match(sent[0].attachments[0].fileName, /^מפרט 1 — פטיש\.jpg$/);
+  assert.equal(sent[0].attachments[0].buf.toString(), 'fake image spec.jpg');
+  // הדרישה יצאה רק עם המזוהים — המפרט שייך לפריט שמחכה לרכש, ולכן לא נספח שלה
+  assert.equal(pr.wrote('attachDemand').filter((w) => /מפרט/.test(w.args[2].description)).length, 0);
+  const rec = D.get('SELECT missing FROM pd_part_requests WHERE user_id = ?', u.id);
+  const spec = JSON.parse(rec.missing)[0].spec;
+  assert.ok(spec?.path && require('node:fs').existsSync(spec.path), 'המפרט נשמר עם הבקשה לרכש (לבנייה מחדש)');
+  const v = Parts.forBuyer(D.get('SELECT token FROM pd_part_requests WHERE user_id = ?', u.id).token);
+  assert.equal(v.items[0].spec, true);
+});
+
+test('📎 מפרט כקובץ: דרישה שיוצאת עם הפריט (אחרי שנבנה) — המפרט נספח בפריוריטי בשם "מפרט — …"', async (t) => {
+  H.at(t);
+  H.companies(t, 'test11');
+  const u = buyerWorker();
+  const pr = priority(t, { searchParts: async () => [] });
+  hammerAi(t);
+  buyer(t);
+  const { say } = H.chat(t, u);
+  await toItems(say);
+  await say('10 שקי מלט, 2 פטישים');
+  await say('', { file: H.photo('spec.pdf') });
+  await say(BTN.done);
+  await say('לחכות לרכש ⏳');
+  const rec = D.get('SELECT id FROM pd_part_requests WHERE user_id = ?', u.id);
+  // הרכש סימנה שהפריט קיים — "להמשיך" — "סיום"
+  D.run("UPDATE pd_part_requests SET missing = json_set(missing, '$[0].built', json(?)), status = 'asked', asked_at = ? WHERE id = ?",
+    JSON.stringify({ code: 'H-5', des: 'פטיש 5 ק"ג', chapter: '20', topic: '20-10' }), D.nowIso(), rec.id);
+  let r = await say('כן, להמשיך ✅');
+  assert.match(r.text, /פטיש — 2 יח'\n {3}✅ H-5/);
+  r = await say(BTN.done);
+  assert.match(r.text, /נפתחה ועברה/);
+  const spec = pr.wrote('attachDemand').find((w) => /מפרט/.test(w.args[2].description));
+  assert.ok(spec, 'המפרט צורף לדרישה');
+  assert.equal(spec.args[2].description, 'מפרט — פטיש');
 });

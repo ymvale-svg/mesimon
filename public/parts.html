@@ -45,6 +45,7 @@
       <section class="card" data-n="${it.n}">
         <h2>${esc(it.description)} — ${qty(it.qty)} ${esc(it.unit)}</h2>
         ${it.note ? `<div class="muted">${esc(it.note)}</div>` : ''}
+        ${it.spec ? '<div class="muted">📎 העובד צירף מפרט — מצורף למייל</div>' : ''}
         ${it.built ? `<div class="ok">✓ מק"ט: ${esc(it.built.code)} — ${esc(it.built.des)}</div>` : ''}
         ${it.answers.length ? `<ul class="answers">${it.answers.map((a) => `<li>${a.code ? `מק"ט ${esc(a.code)}` : ''}${a.code && a.note ? ' · ' : ''}${a.note ? `"${esc(a.note)}"` : ''} <span class="muted">(${new Date(a.at).toLocaleString('he-IL')})</span></li>`).join('')}</ul>` : ''}
         ${v.open ? `

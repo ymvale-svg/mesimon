@@ -806,3 +806,101 @@ test('מק"טים לבנייה בקבלת סחורה: בלי מנהלת רכש �
   assert.doesNotMatch(r.text, /לבניית מק"טים/);
   assert.match(r.text, /לאיזה פרויקט לשייך/);
 });
+
+// ---------------------------------------------------------------------------
+// 📣 לרכש מקבלת סחורה (18.11.26): שורה שלא בהזמנה — נקלטת ומסומנת; תעודה בלי מספר הזמנה — לדוח השבועי
+// ---------------------------------------------------------------------------
+
+const BuyerNotices = require('../../../server/priority/buyer-notices');
+const PO = { ORDNAME: 'PO26000050', CURDATE: '2026-11-01', PROJDOCNO: 'PR1', PROJDES: 'אלעד 49 צפון', PAYCODE: '04', WARHSNAME: 'W1',
+  lines: [{ LINE: 1, KLINE: 1, PARTNAME: 'B-30', PDES: 'בטון ב-30', TQUANT: 50, TBALANCE: 45, TUNITNAME: 'קוב', PRICE: 200, PERCENT: 0 }] };
+const WAIT_LINE = { description: 'המתנה במשאבה — שעתיים', supplier_code: '', qty: 2, unit: 'שעה', unit_price: 300, discount_pct: 0, line_total: 600, handwritten: '', unclear: false, options: [] };
+
+/** מהצילום עד "נקלטה כסופית", מול ההזמנה PO26000050 (שורה 1 — בהזמנה, שורה 2 "המתנה" — לא) */
+async function toFinalWithOrder(t, { poNumber = '' } = {}) {
+  H.at(t);
+  H.companies(t, 'test11');
+  const u = grWorker();
+  const pr = priority(t, { reads: { openOrders: async () => [PO], getOrder: async (c, n) => (n === PO.ORDNAME ? { ...PO, SUPNAME: 'S100', STATDES: 'אושרה' } : null) } });
+  H.claude(t, {
+    extract: () => doc({ po_number: poNumber, lines: [doc().lines[0], WAIT_LINE] }),
+    project: () => ({ codes: [], question: '', unrelated: false }),
+    match: () => ({ best_order: PO.ORDNAME, matches: [{ doc_line: 1, order: PO.ORDNAME, line: 1, confidence: 'high' }] })
+  });
+  const sent = buyer(t);
+  const { say } = H.chat(t, u);
+  let r = await say('קבלת סחורה', { file: H.photo() });
+  r = await say('👍');
+  assert.match(r.text, /לפי הזמנה \*PO26000050\*/);
+  assert.match(r.text, /המתנה במשאבה — שעתיים\n {3}התקבל: \*2\* שעה\n {3}⚠️ לא בהזמנה — יסומן לרכש/);
+  const steps = [];
+  for (let i = 0; i < 8 && !/נקלטה כסופית/.test(r.text); i++) {
+    const btn = r.buttons.includes(BTN.confirmFinal) ? BTN.confirmFinal : r.buttons.includes(BTN.approve) ? BTN.approve
+      : r.buttons.includes(BTN.done) ? BTN.done : r.buttons.includes(BTN.yes) ? BTN.yes : r.buttons[0];
+    steps.push(btn);
+    r = await say(btn);
+  }
+  assert.match(r.text, /נקלטה כסופית/, `השלבים: ${steps.join(' → ')}`);
+  return { u, pr, sent, r };
+}
+
+test('שורה שלא בהזמנה: נקלטת, מסומנת בדו-שיח, וכשהקבלה סופית — מייל לרכש שמחליט; העובד יודע', async (t) => {
+  const { u, pr, sent, r } = await toFinalWithOrder(t, { poNumber: 'PO26000050' });
+  assert.match(r.text, /שורה אחת לא בהזמנה — סומנה לרכש, והרכש מחליט אם לקבל/);
+  // נקלטה (לא נעצרה)
+  assert.equal(pr.wrote('addOrderLine').length, 1);
+  assert.equal(pr.wrote('addFreeLine').length, 1);
+  const dialog = pr.wrote('setDialog').at(-1).args[2].join('\n');
+  assert.match(dialog, /שורה 2 \(המתנה במשאבה — שעתיים\) — לא בהזמנה PO26000050; לבדיקת הרכש/);
+  const mail = sent.find((m) => /לא בהזמנה/.test(m.subject));
+  assert.ok(mail, 'מייל לרכש');
+  assert.equal(mail.to, 'ruti@example.com');
+  assert.match(mail.subject, /שורה שלא בהזמנה — GR26000123 · בטון הצפון/);
+  assert.match(mail.text, /1\. המתנה במשאבה — שעתיים — 2 שעה × 300\.00/);
+  assert.match(mail.text, /נקלטה ע"י: /);
+  assert.doesNotMatch(mail.text, /בטון ב-30 — 5/, 'רק מה שלא בהזמנה');
+  // מספר ההזמנה הופיע בתעודה — לא לדוח
+  assert.equal(D.get('SELECT COUNT(*) n FROM gr_no_po WHERE user_id = ?', u.id).n, 0);
+});
+
+test('תעודה בלי מספר הזמנה, שנקלטה מול הזמנה — נרשמת לדוח השבועי; ביום ראשון בבוקר — דוח אחד לרכש, לפי ספק', async (t) => {
+  const { u, sent } = await toFinalWithOrder(t, { poNumber: '' });
+  const row = D.get('SELECT * FROM gr_no_po WHERE user_id = ?', u.id);
+  assert.ok(row);
+  assert.deepEqual([row.supname, row.booknum, row.docno, row.ordname, row.reported_at], ['S100', '5501', 'GR26000123', 'PO26000050', null]);
+  D.run('UPDATE gr_no_po SET reported_at = ? WHERE user_id != ? AND reported_at IS NULL', D.nowIso(), u.id);
+  D.setSetting('gr_no_po_report_last', '');
+  const before = sent.length;
+
+  t.mock.timers.setTime(new Date('2026-11-10T08:00:00Z').getTime());   // שלישי — לא יום הדוח
+  assert.deepEqual(await BuyerNotices.weekly(), { sent: false, rows: 0 });
+  t.mock.timers.setTime(new Date('2026-11-15T05:00:00Z').getTime());   // ראשון 07:00 — לפני סיכום הבוקר
+  assert.deepEqual(await BuyerNotices.weekly(), { sent: false, rows: 0 });
+  t.mock.timers.setTime(new Date('2026-11-15T07:00:00Z').getTime());   // ראשון 09:00
+  assert.deepEqual(await BuyerNotices.weekly(), { sent: true, rows: 1 });
+  const rep = sent.slice(before).find((m) => /בלי מספר הזמנה/.test(m.subject));
+  assert.ok(rep);
+  assert.match(rep.text, /בטון הצפון \(S100, test11\) — 1/);
+  assert.match(rep.text, /תעודה 5501 · .* · GR26000123 · הזמנה PO26000050/);
+  assert.ok(D.get('SELECT reported_at FROM gr_no_po WHERE id = ?', row.id).reported_at);
+  assert.deepEqual(await BuyerNotices.weekly(), { sent: false, rows: 0 }, 'פעם אחת ביום ראשון');
+});
+
+test('קבלה בלי הזמנה — לא נרשמת לדוח, ובלי סימון "לא בהזמנה"', async (t) => {
+  H.at(t);
+  H.companies(t, 'test11');
+  const u = grWorker();
+  priority(t);
+  ai(t, doc());
+  buyer(t);
+  const { say } = H.chat(t, u);
+  const r = await toProject(say);
+  assert.doesNotMatch(r.text, /לא בהזמנה/);
+  await say('נהריה מגרש 12');
+  await say(BTN.done);
+  await say(BTN.approve);
+  const fin = await say(BTN.confirmFinal);
+  assert.match(fin.text, /נקלטה כסופית/);
+  assert.doesNotMatch(fin.text, /לא בהזמנה/);
+  assert.equal(D.get('SELECT COUNT(*) n FROM gr_no_po WHERE user_id = ?', u.id).n, 0);
+});
