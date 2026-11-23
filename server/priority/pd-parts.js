@@ -112,7 +112,7 @@ function mailOf(user, s, list, to, { source = 'demand', mode = 'wait', token = n
     `שלום ${to.name},`, '',
     `להלן מק"טים נדרשים לבנייה בהקדם, לבקשת ${user.full_name} (${via}):`, '',
     ...facts.map(([k, v]) => `${k}: ${v}`), '',
-    ...list.map((it, i) => `${i + 1}. ${it.description} — ${qty(it.qty)} ${unitOf(it)}${it.note ? ` (${it.note})` : ''}${codingOf(it) ? ` · מוצע: ${codingOf(it)}` : ''}`), '',
+    ...list.map((it, i) => `${i + 1}. ${it.description} — ${qty(it.qty)} ${unitOf(it)}${it.note ? ` (${it.note})` : ''}${codingOf(it) ? ` · מוצע: ${codingOf(it)}` : ''}${it.spec ? ' · 📎 מפרט מצורף' : ''}`), '',
     after,
     `\nפותחים מק"ט חדש בפריוריטי — אין צורך לעדכן אף אחד: ${user.full_name} יקבל הודעה בבוט לבד, ברגע שהמק"ט נפתח.`,
     link ? `רק כשהמק"ט כבר קיים, או כדי לכתוב לו הערה: ${link}` : null,
@@ -125,25 +125,38 @@ function mailOf(user, s, list, to, { source = 'demand', mode = 'wait', token = n
 <p><b>להלן מק"טים נדרשים לבנייה בהקדם</b>, לבקשת ${esc(user.full_name)} (${esc(via)}):</p>
 <p>${facts.map(([k, v]) => `${esc(k)}: <b>${esc(v)}</b>`).join('<br>')}</p>
 <table style="border-collapse:collapse"><tr><th ${td}>#</th><th ${td}>תיאור</th><th ${td}>כמות</th><th ${td}>יחידה</th><th ${td}>הערה</th><th ${td}>תת פרק / משאב מוצע</th></tr>
-${list.map((it, i) => `<tr><td ${td}>${i + 1}</td><td ${td}>${esc(it.description)}</td><td ${td}>${esc(qty(it.qty))}</td><td ${td}>${esc(unitOf(it))}</td><td ${td}>${esc(it.note)}</td><td ${td}>${esc(codingOf(it))}</td></tr>`).join('\n')}
+${list.map((it, i) => `<tr><td ${td}>${i + 1}</td><td ${td}>${esc(it.description)}${it.spec ? '<br>📎 מפרט מצורף' : ''}</td><td ${td}>${esc(qty(it.qty))}</td><td ${td}>${esc(unitOf(it))}</td><td ${td}>${esc(it.note)}</td><td ${td}>${esc(codingOf(it))}</td></tr>`).join('\n')}
 </table>
 <p>${esc(after)}</p>
 <p><b>פותחים מק"ט חדש בפריוריטי — אין צורך לעדכן אף אחד:</b> ${esc(user.full_name)} יקבל הודעה בבוט לבד, ברגע שהמק"ט נפתח.</p>
 ${link ? `<p>רק כשהמק"ט כבר קיים, או כדי לכתוב לו הערה: <a href="${esc(link)}">לענות ל${esc(user.full_name)}</a>.</p>` : ''}
 <p>בברכה,<br>משימון</p></div>`;
-  return { subject, text, html, urgent: true };
+  return { subject, text, html, urgent: true, attachments: specFiles(list) };
+}
+
+/** 📎 המפרטים שהעובד צירף לפריטים (צילום / PDF) — כקבצים מצורפים למייל לרכש */
+function specFiles(list) {
+  const out = [];
+  for (const it of list) {
+    if (!it.spec?.path) continue;
+    try {
+      const ext = it.spec.mime?.includes('pdf') ? 'pdf' : it.spec.mime?.includes('png') ? 'png' : 'jpg';
+      out.push({ buf: fs.readFileSync(it.spec.path), fileName: `מפרט ${out.length + 1} — ${String(it.description).replace(/[\\/:*?"<>|]/g, ' ').slice(0, 60)}.${ext}`, mime: it.spec.mime || 'application/octet-stream' });
+    } catch { /* הקובץ כבר נמחק */ }
+  }
+  return out;
 }
 
 /** שליחה דרך משימון: שרת הדואר של המערכת, ואם אינו מוגדר — מתיבת ה-Gmail של העובד. ‎true‎ — יצא */
 async function sendMail(user, m, to) {
   const me = D.get('SELECT email, full_name FROM users WHERE id = ?', user.id);
   if (Mailer.isEnabled()) {
-    await Mailer.send({ to: to.email, toName: to.name, subject: m.subject, text: m.text, html: m.html, urgent: m.urgent, replyTo: me?.email || undefined, replyToName: me?.full_name });
+    await Mailer.send({ to: to.email, toName: to.name, subject: m.subject, text: m.text, html: m.html, urgent: m.urgent, attachments: m.attachments ?? [], replyTo: me?.email || undefined, replyToName: me?.full_name });
     return true;
   }
   const conn = Gmail.connectionOf(user.id);
   if (!conn?.email) throw new Error('אין שרת דואר במערכת, ולעובד אין תיבת Gmail מחוברת');
-  const built = Mailer.buildMessage({ from: conn.email, fromName: user.full_name, to: to.email, toName: to.name, subject: m.subject, text: m.text, html: m.html, urgent: m.urgent });
+  const built = Mailer.buildMessage({ from: conn.email, fromName: user.full_name, to: to.email, toName: to.name, subject: m.subject, text: m.text, html: m.html, urgent: m.urgent, attachments: m.attachments ?? [] });
   await Gmail.send(user.id, built.raw);
   return true;
 }
@@ -157,7 +170,7 @@ async function knownCodes(company, description) {
 
 const headerOf = (s) => ({ project: s.project ?? null, warehouse: s.warehouse ?? null, warehouseName: s.warehouseName ?? '', demandCode: s.demandCode ?? null, date: s.date ?? null,
   supplier: s.supplier?.name ?? null });
-const itemsOf = (s) => (s.items ?? []).map(({ n, description, qty: q, unit, note, status, part, general, req }) => ({ n, description, qty: q, unit, note, status, part, general, req }));
+const itemsOf = (s) => (s.items ?? []).map(({ n, description, qty: q, unit, note, status, part, general, req, spec }) => ({ n, description, qty: q, unit, note, status, part, general, req, spec }));
 
 /**
  * שולח למנהלת הרכש את הפריטים בלי מק"ט (‎list‎ — שורות מהדרישה), ושומר את הבקשה (‎s.partsReq‎).
@@ -181,7 +194,7 @@ async function requestBuild(user, s, list, { source = 'demand', mode = 'wait' } 
       body: list.map((it) => `• ${it.description} — ${qty(it.qty)} ${unitOf(it)}`).join('\n') });
   }
   const missing = [];
-  for (const it of list) missing.push({ n: it.n, description: it.description, qty: it.qty, unit: unitOf(it), note: it.note ?? '', known: await knownCodes(s.company, it.description), built: null });
+  for (const it of list) missing.push({ n: it.n, description: it.description, qty: it.qty, unit: unitOf(it), note: it.note ?? '', spec: it.spec ?? null, known: await knownCodes(s.company, it.description), built: null });
   if (reuse) {
     D.run('UPDATE pd_part_requests SET missing = ?, items = ?, header = ?, token = ? WHERE id = ?',
       JSON.stringify([...cur.missing, ...missing]), JSON.stringify(itemsOf(s)), JSON.stringify(headerOf(s)), token, cur.id);
@@ -309,6 +322,11 @@ function cleanup() {
   D.run("UPDATE pd_part_requests SET status = 'expired', token = NULL WHERE status = 'open' AND created_at < ?", old);
   D.run("UPDATE pd_part_requests SET token = NULL WHERE status = 'expired' AND token IS NOT NULL");
   const purge = new Date(Date.now() - PURGE_DAYS * 86400000).toISOString();
+  // 📎 המפרטים של הבקשות שנמחקות — גם הם
+  for (const { id } of D.all("SELECT id FROM pd_part_requests WHERE status != 'open' AND created_at < ?", purge)) {
+    const r = row(id);
+    for (const p of new Set([...r.missing, ...r.items].map((x) => x.spec?.path).filter(Boolean))) { try { fs.unlinkSync(p); } catch { /* כבר נמחק */ } }
+  }
   D.run("DELETE FROM pd_part_requests WHERE status != 'open' AND created_at < ?", purge);
 }
 
@@ -415,7 +433,7 @@ function forBuyer(token) {
   return {
     worker: nameOf(r.user_id), company: Priority.companyOf(r.company)?.name ?? r.company, project: r.header?.project?.des ?? '',
     supplier: r.header?.supplier ?? '', receipt: r.mode === 'receipt', open: r.status === 'open', created: r.created_at,
-    items: r.missing.map((m) => ({ n: m.n, description: m.description, qty: m.qty, unit: m.unit, note: m.note ?? '',
+    items: r.missing.map((m) => ({ n: m.n, description: m.description, qty: m.qty, unit: m.unit, note: m.note ?? '', spec: Boolean(m.spec),
       built: m.built ? { code: m.built.code, des: m.built.des } : null, answers: m.answers ?? [] }))
   };
 }
@@ -452,4 +470,4 @@ async function buyerAnswer(token, { n, code = '', note = '' } = {}) {
   return forBuyer(token);
 }
 
-module.exports = { _ai: ai, BTN_REBUILD, BTN_MORE, BTN_SKIP, forBuyer, buyerAnswer, cleanup, contact, requestBuild, setMode, tick, start, owns, answer, setHooks, _findBuilt: findBuilt, _mailOf: mailOf, _row: row };
+module.exports = { _sendMail: sendMail, _ai: ai, BTN_REBUILD, BTN_MORE, BTN_SKIP, forBuyer, buyerAnswer, cleanup, contact, requestBuild, setMode, tick, start, owns, answer, setHooks, _findBuilt: findBuilt, _mailOf: mailOf, _row: row };

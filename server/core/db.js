@@ -901,6 +901,22 @@ CREATE TABLE IF NOT EXISTS pd_part_requests (
 );
 CREATE INDEX IF NOT EXISTS idx_pd_part_requests ON pd_part_requests(status, user_id);
 /*
+ * 📋 קבלת סחורה מול הזמנה, כשמספר ההזמנה לא הופיע בתעודה — לדוח השבועי לרכש (‎priority/buyer-notices.js‎).
+ * ‎reported_at‎ — נכלל בדוח. נמחק אחרי 180 יום.
+ */
+CREATE TABLE IF NOT EXISTS gr_no_po (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  company     TEXT    NOT NULL,
+  supname     TEXT    NOT NULL DEFAULT '',
+  supdes      TEXT    NOT NULL DEFAULT '',
+  booknum     TEXT    NOT NULL DEFAULT '',
+  docno       TEXT    NOT NULL,
+  ordname     TEXT    NOT NULL DEFAULT '',
+  user_id     INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at  TEXT    NOT NULL,
+  reported_at TEXT
+);
+/*
  * 🏷️ הוספה למחירון ספק מהזמנת רכש (‎priority/po-pricelist.js‎). שורה לכל הזמנה (וגרסה).
  * ‎items‎ — הפריטים שאינם במחירון: ‎[{ n, part, des, unit, price, prices, pick }]‎; ‎list‎ — המחירון שאליו כותבים;
  * ‎written‎ — מה נכתב (המפתחות בפריוריטי, בשביל הביטול).

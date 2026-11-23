@@ -12,6 +12,7 @@ module.exports = {
   get PurchaseDemand() { return require('./purchase-demand'); },
   get PdReturn() { return require('./pd-return'); },
   get PdParts() { return require('./pd-parts'); },
+  get BuyerNotices() { return require('./buyer-notices'); },
   get PriorityPrefs() { return require('./priority-prefs'); },
   get PrioritySettings() { return require('./priority-settings'); },
   get PriorityAccess() { return require('./priority-access'); },
