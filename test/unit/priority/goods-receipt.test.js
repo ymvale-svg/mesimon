@@ -402,3 +402,12 @@ test('jpegToPdf — אפור ו-CMYK', () => {
 test('jpegToPdf — בלי מידות: null', () => {
   assert.equal(GR._jpegToPdf(Buffer.concat([Buffer.from([0xff, 0xd8]), Buffer.alloc(40), Buffer.from([0xff, 0xd9])])), null);
 });
+
+test('isTrigger — "קליטת תעודות", "קבלות חורה" (תמלול) פותחים קבלת סחורה; "ריורטי" — פריוריטי (סקירה 22.11)', () => {
+  const GR = require('../../../server/priority/goods-receipt');
+  for (const t of ['קבלת סחורה', 'קליטת תעודות', 'קליטת תעודת משלוח', '🎙 קבלות חורה.', 'קבלת חורה', 'קליטה של תעודות'.replace(' של', '')]) assert.ok(GR.isTrigger(t), t);
+  for (const t of ['קיבלתי את הסחורה אתמול', 'קליטת עובד חדש', 'תעודות']) assert.ok(!GR.isTrigger(t), t);
+  assert.ok(GR.isPriority('ריורטי'));
+  assert.ok(!GR.isPriority('אוריורטי'));
+});
+
