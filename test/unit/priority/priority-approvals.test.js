@@ -257,3 +257,65 @@ test('approversReport — כל המאשרים מהרשימות (ראשי ומח�
   assert.equal(by.MatanR.mesimon.phone, false, 'מתן במשימון בלי טלפון — יוצג');
   assert.ok(r.problems.some((p) => /Ghost/.test(p)) && r.problems.some((p) => /מתן|MatanR/.test(p)));
 });
+
+// ---------------------------------------------------------------------------
+// מייל לחותם הבא (23.11.26): "🚩 … ממתינה לאישורך", "קיבלת מ<שולח> … והיא ממתינה לאישורך", וקישור למסמך בפריוריטי.
+// יוצא לכתובת שבפריוריטי — גם כשהמאשר לא משויך במשימון או בלי טלפון.
+// ---------------------------------------------------------------------------
+
+const Mailer = require('../../../server/integrations/mailer');
+function mailbox(t, enabled = true) {
+  const sent = [];
+  t.mock.method(Mailer, 'isEnabled', () => enabled);
+  t.mock.method(Mailer, 'send', async (m) => { sent.push(m); return '<id@test>'; });
+  return sent;
+}
+
+test('approvalMail — דגל אדום בנושא, ממי, מה, ולינק; לשון זכר / נקבה לפי סוג המסמך', () => {
+  const m = A.approvalMail({ type: 'PURDEMANDS', docno: 'PD26000060', sender: 'נחמן קיסר', link: 'https://x.test/open?a=1&b=2', company: 'אשל הירדן', project: 'אלעד סנטר מגרש 50', items: 3 });
+  assert.equal(m.subject, '🚩 דרישת רכש PD26000060 ממתינה לאישורך');
+  assert.match(m.text, /קיבלת מנחמן קיסר דרישת רכש PD26000060 והיא ממתינה לאישורך/);
+  assert.match(m.text, /https:\/\/x\.test\/open\?a=1&b=2/);
+  assert.match(m.html, /href="https:\/\/x\.test\/open\?a=1&amp;b=2"/);
+  assert.match(m.html, /אלעד סנטר מגרש 50/);
+  const c = A.approvalMail({ type: 'contract', docno: 'C-7', sender: '', link: 'https://x.test' });
+  assert.equal(c.subject, '🚩 חוזה C-7 ממתין לאישורך');
+  assert.match(c.text, /קיבלת חוזה C-7 והוא ממתין לאישורך/);
+  assert.equal(A.approvalMail({ type: 'partial_invoice', docno: 'B1', link: 'x' }).subject, '🚩 חשבון חלקי B1 ממתין לאישורך');
+  assert.equal(A.approvalMail({ type: 'PORDERS', docno: 'PO1', link: 'x' }).subject, '🚩 הזמנת רכש PO1 ממתינה לאישורך');
+});
+
+test('Priority.docLink — הקישור של פריוריטי למסמך עצמו (openmail)', () => {
+  assert.equal(Priority.docLink('a160226', 'PURDEMANDS', 'PD26000060'),
+    'https://p.priority-connect.online/webui/openmail.htm?priority:priform@PURDEMANDS:PD26000060:a160226:tabb2121.ini:1');
+});
+
+test('notifyDemand — מייל לחותם, פעם אחת; גם כשאינו משויך במשימון; השולח מהפרטים של הבוט', async (t) => {
+  const sent = mailbox(t);
+  usersMock(t);
+  const d = { PRDNO: 'PD26000060', USERLOGIN: 'Ghost', OWNERLOGIN: 'API VPLANS', DETAILS: 'בוט: נחמן קיסר', PROJDES: 'אלעד סנטר מגרש 50', PDUSER_SUBFORM: [], PRDITEMS_SUBFORM: [{}, {}] };
+  const r = await A.notifyDemand('a160226', d, async () => true);
+  assert.equal(r.sent, false, 'בוואטסאפ — לא משויך');
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].to, 'ghost@nowhere.test');
+  assert.equal(sent[0].subject, '🚩 דרישת רכש PD26000060 ממתינה לאישורך');
+  assert.match(sent[0].text, /קיבלת מנחמן קיסר דרישת רכש PD26000060/);
+  assert.match(sent[0].text, /openmail\.htm\?priority:priform@PURDEMANDS:PD26000060:a160226:/);
+  assert.equal(A.statusOf('a160226', 'PD26000060', 'Ghost').mailed, true);
+  await A.notifyDemand('a160226', d, async () => true);
+  assert.equal(sent.length, 1, 'לא שוב');
+});
+
+test('notifyDemand — בלי מייל בפריוריטי: לכתובת שבמשימון; שליחת דואר לא מוגדרת — בלי מייל, בלי קריסה', async (t) => {
+  usersMock(t);
+  let sent = mailbox(t);
+  await A.notifyDemand('a160226', { PRDNO: 'PD26000070', USERLOGIN: 'MatanR', OWNERLOGIN: 'Eladh', PDUSER_SUBFORM: [] }, async () => true);
+  assert.equal(sent[0].to, 'matan@mesimon.test');
+  assert.match(sent[0].text, /קיבלת מאלעד חדד/);
+  t.mock.restoreAll();
+  usersMock(t);
+  sent = mailbox(t, false);
+  const r = await A.notifyDemand('a160226', { PRDNO: 'PD26000071', USERLOGIN: 'Eladh', PDUSER_SUBFORM: [] }, async () => true);
+  assert.equal(sent.length, 0);
+  assert.equal(r.sent, true);
+});

@@ -17,6 +17,10 @@
  * לא נמצא, או שאין לו טלפון — מנהלי המערכת מקבלים התראה (פעם אחת לכל משתמש).
  * "קיבל" נרשם רק כשההודעה יצאה בפועל; מחוץ לשעות הפעילות — הסבב שולח כשהחלון נפתח.
  *
+ * **מייל לחותם** (23.11.26), לצד הוואטסאפ: לכתובת שלו בפריוריטי (ואם אין — שבמשימון), פעם אחת לכל מסמך וחותם — גם כשאינו
+ * משויך במשימון או בלי טלפון. נושא "🚩 דרישת רכש PD… ממתינה לאישורך", וגוף "קיבלת מ<שולח> דרישת רכש PD… והיא ממתינה
+ * לאישורך" עם קישור למסמך בפריוריטי (‎Priority.docLink‎). התבנית (‎approvalMail‎) — לכל סוג מסמך (‎DOC_TYPES‎).
+ *
  * באילו חברות (הוחלט 08.11.26): כל החברות המוכרות — האמיתיות (קריאה בלבד; אין צורך בהגדרה) ועותק הבדיקה כשהוא פתוח.
  * ההגדרה ‎pd_notify_companies‎ (מערך קודים) — רק אם רוצים לצמצם.
  */
@@ -25,12 +29,16 @@ const Priority = require('../integrations').Priority;
 const Auth = require('../core').Auth;
 const P = require('../core').Permissions;
 const Settings = require('./priority-settings');
+const Prefs = require('./priority-prefs');
+const Mailer = require('../integrations').Mailer;
+const { escape, shell, button } = require('../core').MailTemplates;
 
 const NOTIFIED = 'pd_approval_notified';
 const UNMAPPED = 'pd_approval_unmapped';
 const NO_PHONE = 'pd_approval_nophone';
 const FAILED = 'pd_approval_failed';
 const STATUS = 'pd_approval_status';
+const MAILED = 'pd_approval_mailed';
 const MAX_FAILS = 3;
 const EVERY = 10 * 60 * 1000;
 const KEEP = 60 * 24 * 60 * 60 * 1000;
@@ -191,10 +199,18 @@ function recordStatus(company, prdno, signer, r) {
   for (const [k, v] of Object.entries(all)) if (Date.now() - (v?.at ?? 0) > KEEP) delete all[k];
   D.setSetting(STATUS, all);
 }
-const statusOf = (company, prdno, signer) => (D.getSetting(STATUS, {}) ?? {})[`${company}:${prdno}:${signer}`] ?? null;
+function statusOf(company, prdno, signer) {
+  const st = (D.getSetting(STATUS, {}) ?? {})[`${company}:${prdno}:${signer}`] ?? null;
+  const mailed = mailedTo(company, prdno, signer);
+  return st || mailed ? { ...(st ?? {}), mailed } : null;
+}
 
 async function notifyDemand(company, d, send) {
   const r = await decide(company, d, send);
+  if (r.signer) {
+    const m = await mesimonUserFor(r.signer).catch(() => null);
+    r.mailed = await mailSigner(company, d, r.signer, m).catch(() => false);
+  }
   // "כבר קיבל" — לא דורסים את "נשלח"
   if (r.why !== 'כבר קיבל') recordStatus(company, d.PRDNO, r.signer, r);
   return r;
@@ -255,6 +271,75 @@ async function approversReport() {
   return { approvers, problems, errors };
 }
 
+// ---------------------------------------------------------------------------
+// מייל לחותם
+// ---------------------------------------------------------------------------
+
+/** סוגי המסמכים שממתינים לאישור — שם, ולשון (‎fem‎: "ממתינה" / "היא") */
+const DOC_TYPES = {
+  PURDEMANDS: { label: 'דרישת רכש', fem: true },
+  PORDERS: { label: 'הזמנת רכש', fem: true },
+  contract: { label: 'חוזה', fem: false },
+  partial_invoice: { label: 'חשבון חלקי', fem: false }
+};
+
+/** המייל "ממתין לאישורך" — לכל סוג מסמך. ‎{ subject, html, text }‎ */
+function approvalMail({ type, docno, sender = '', link, company = '', project = '', items = 0 }) {
+  const t = DOC_TYPES[type] ?? { label: String(type ?? 'מסמך'), fem: false };
+  const wait = t.fem ? 'ממתינה' : 'ממתין';
+  const subject = `🚩 ${t.label} ${docno} ${wait} לאישורך`;
+  const lead = `קיבלת ${sender ? `מ${sender} ` : ''}${t.label} ${docno} ו${t.fem ? 'היא' : 'הוא'} ${wait} לאישורך.`;
+  const details = [company ? `חברה: ${company}` : null, project ? `פרויקט: ${project}` : null, items ? `${items === 1 ? 'פריט אחד' : `${items} פריטים`}` : null].filter(Boolean);
+  const html = shell({
+    title: subject,
+    bodyHtml: `
+          <div style="font-size:20px;font-weight:800;margin-bottom:8px;">🚩 ${escape(t.label)} ${wait} לאישורך</div>
+          <p style="margin:0 0 10px;">${escape(lead)}</p>
+          ${details.length ? `<p style="margin:0;color:#475569;">${details.map(escape).join(' · ')}</p>` : ''}
+${button(link, 'פתיחה בפריוריטי')}
+          <p style="margin:0;color:#64748b;font-size:13px;">האישור — בפריוריטי. הקישור: <a href="${escape(link)}" style="color:#0f766e;">${escape(link)}</a></p>`,
+    footerHtml: 'הודעה אוטומטית ממשימון, לפי רשימת המאשרים בפריוריטי.'
+  });
+  const text = [lead, ...details, '', `לפתיחה בפריוריטי: ${link}`].join('\n');
+  return { subject, html, text };
+}
+
+const SYSTEM_LOGIN = /^(master|medatech|tabula|api\b|api\s)/i;
+/** מי שלח את הדרישה: מי שהבוט רשם, "בוט: <שם>" בפרטים, בעל הדרישה / היוזם (לא משתמש מערכת) */
+async function senderOf(company, d) {
+  const uid = Prefs.openerOf(company, d.PRDNO);
+  if (uid) { const u = D.get('SELECT full_name FROM users WHERE id = ?', uid); if (u?.full_name) return u.full_name; }
+  const bot = String(d.DETAILS ?? '').match(/^בוט:\s*(.+)$/)?.[1]?.trim();
+  if (bot) return bot;
+  const login = [d.OWNERLOGIN, d.INITUSERLOGIN].find((l) => l && !SYSTEM_LOGIN.test(l));
+  return login ? ownerName(login) : '';
+}
+
+/** מייל לחותם הבא — פעם אחת לכל דרישה וחותם. ‎true‎ — נשלח עכשיו */
+async function mailSigner(company, d, signer, m) {
+  if (!Mailer.isEnabled()) return false;
+  const k = `${company}:${d.PRDNO}:${signer}`;
+  const done = D.getSetting(MAILED, {}) ?? {};
+  if (done[k]) return false;
+  const to = String(m?.pr?.EMAIL ?? '').trim() || String(m?.user?.email ?? '').trim();
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(to)) return false;
+  const mail = approvalMail({
+    type: 'PURDEMANDS', docno: d.PRDNO, sender: await senderOf(company, d), link: Priority.docLink(company, 'PURDEMANDS', d.PRDNO),
+    company: Priority.isTest(company) ? `${company} (סביבת בדיקה)` : Priority.companyOf(company).name, project: d.PROJDES ?? '', items: (d.PRDITEMS_SUBFORM ?? []).length
+  });
+  try {
+    await Mailer.send({ to, toName: m?.pr?.SNAME || m?.user?.full_name || '', subject: mail.subject, html: mail.html, text: mail.text });
+  } catch (err) {
+    console.error(`[משימון] מייל לחותם ${signer} על ${d.PRDNO}:`, err.message);
+    return false;
+  }
+  done[k] = Date.now();
+  for (const [x, at] of Object.entries(done)) if (Date.now() - at > KEEP) delete done[x];
+  D.setSetting(MAILED, done);
+  return true;
+}
+const mailedTo = (company, prdno, signer) => Boolean((D.getSetting(MAILED, {}) ?? {})[`${company}:${prdno}:${signer}`]);
+
 let lastRun = 0;
 /** סבב: כל הדרישות שמחכות לאישור בחברות שבהגדרה. פעם ב-10 דקות לכל היותר */
 async function sweep(send, { force = false } = {}) {
@@ -271,4 +356,4 @@ async function sweep(send, { force = false } = {}) {
   return out;
 }
 
-module.exports = { mesimonUserFor, priorityLoginFor, mapping, notifyDemand, sweep, statusOf, setManual, approversReport, messageFor, MAX_FAILS, _words: words };
+module.exports = { mesimonUserFor, priorityLoginFor, mapping, notifyDemand, sweep, statusOf, setManual, approversReport, approvalMail, DOC_TYPES, messageFor, MAX_FAILS, _words: words };
