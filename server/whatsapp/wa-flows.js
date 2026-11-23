@@ -296,6 +296,28 @@ async function flowRfqRequest({ actor, dry, out, state, t }) {
   return NEXT;
 }
 
+/*
+ * 📝 "שבסיום כל פגישה יצא מייל עם הסיכום" — זו כבר השגרה (הוחלט 23.11.26, ישראל: "הסיכום נשלח אוטומטית, אז אין צורך;
+ * ככל שתהיה הנחיה כזו — הבוט יענה שזו השגרה של סיכומי הפגישות"). סקירה 22.11: הבוט ענה "אין לי אפשרות להגדיר שליחה
+ * אוטומטית". רק בקשה כללית ("בסיום כל פגישה", "אוטומטית", "איך מחברים") — לא "שלח לגולן את הסיכום של פגישת X".
+ */
+const SUMMARY_WORD = /סיכום|סיכומי|בסיום/;
+const SUMMARY_SEND = /מייל|מזכיר|משתתפ|לשלוח|ישלח|יישלח|יצא/;
+const SUMMARY_ALWAYS = /כל\s+(?:ה)?(?:פגיש|ישיב)|כל\s+פעם|בסיום|אוטומט|תמיד|מחברים|לחבר\s+את|קבוע/;
+function flowMeetingSummaryRoutine({ actor, out, t }) {
+  if (actor?.type !== 'user') return NEXT;
+  const n = WaUi.normalize(t);
+  if (!(SUMMARY_WORD.test(n) && SUMMARY_SEND.test(n) && SUMMARY_ALWAYS.test(n))) return NEXT;
+  const on = D.getSetting('meeting_summary_auto', true) !== false;
+  const text = on
+    ? ['📝 זו כבר השגרה של סיכומי הפגישות — לא צריך לבקש:',
+      '• כשהסיכום של פגישה שהוקלטה ב-Timeless מוכן, הוא נשלח *אוטומטית* במייל ובבוט לכל המשתתפים מהארגון.',
+      '• משתתפים מבחוץ — מי שקבע את הפגישה מקבל כאן שאלה אם לשלוח גם להם.',
+      '• הקלטה ששלחת לי בעצמך — הסיכום מגיע אליך, ומשם *📤 לשלוח למשתתפים*.'].join('\n')
+    : '📝 שליחת הסיכום האוטומטית אחרי פגישות כבויה כרגע. אפשר לבקש ממנהל המערכת להפעיל אותה (הגדרות ← פגישות והקלטות).';
+  return out(text, {}, { action: 'meeting_followup', status: 'ok', result: on ? 'סיכומי פגישות — הסבר על השגרה' : 'סיכומי פגישות — כבוי' });
+}
+
 /** 🔁 "תמצא ברשת" / "תפנה לאלרם" אחרי בקשה להצעת מחיר — אותה בקשה, בלי לכתוב אותה מחדש (סקירה 22.11) */
 async function flowRfqFollowup({ actor, dry, out, t }) {
   if (!WaActions.allowed(actor, 'rfq') || dry) return NEXT;
@@ -1155,5 +1177,5 @@ const switchCancels = () => Boolean(D.getSetting('wa_topic_switch_cancels', true
 const DRAFT_ONLY = /(?:(?:בלי|לא\s+משנה|אין\s+לי\s+(?:את\s+)?|עזוב(?:\s+את)?)\s*ה?(?:כתובת|מייל|נמען)|רק\s+ת?(?:נסח|כתוב)|ת?נסח\s+(?:לי\s+)?(?:רק\s+)?(?:את\s+)?ה?(?:מלל|טקסט|נוסח))/;
 
 module.exports = {
-  SEND_NOW, DRAFT_ONLY, flowAgentsList, flowAlertNo, flowOnMailDose, flowApproval, flowBusinessCommand, flowCancel, flowClosureCommand, flowEmailEdit, flowEmailPick, flowEmailSolve, flowEmailVia, flowFeaturesRequest, flowFormFillRequest, flowGreeting, flowInstinct, flowInstinctExplicit, flowInstinctReply, flowInstinctPilot, flowNoticeToInstinct, flowIntentCancel, flowIntentDenied, flowIntentMenu, flowIntentOther, flowMailFileRequest, flowMailReplyEdit, flowMailWalk, flowMeetCoordRequest, flowMeetingAudioAnswer, flowMeetingAudioRequest, flowMeetingAudioStatus, flowMeetingFollowupRequest, flowMeetingReminderRequest, flowMenuList, flowMenuPick, flowNoAi, flowNoticeRequest, flowOnClosureAddress, flowOnDayEvening, flowOnFormFill, flowOnGoodsStop, flowOnMailFile, flowOnMailMuteSender, flowOnMailRemindOrGoods, flowOnMeetCoord, flowOnMeetingTasks, flowOnPaceOffer, flowOnPlainMail, flowOnReminder, flowOnRfq, flowOnSentFollowup, flowOnPricelist, flowPricelistRequest, flowOnThreadAdd, flowRemindersRequest, flowReplyAsk, flowRfqFollowup, flowRfqRequest, flowRfqSummary, flowSuggestionCommand, flowTranslateRequest, flowWalk, NEXT, switchCancels
+  SEND_NOW, DRAFT_ONLY, flowAgentsList, flowAlertNo, flowOnMailDose, flowApproval, flowBusinessCommand, flowCancel, flowClosureCommand, flowEmailEdit, flowEmailPick, flowEmailSolve, flowEmailVia, flowFeaturesRequest, flowFormFillRequest, flowGreeting, flowInstinct, flowInstinctExplicit, flowInstinctReply, flowInstinctPilot, flowNoticeToInstinct, flowIntentCancel, flowIntentDenied, flowIntentMenu, flowIntentOther, flowMailFileRequest, flowMailReplyEdit, flowMailWalk, flowMeetCoordRequest, flowMeetingAudioAnswer, flowMeetingAudioRequest, flowMeetingAudioStatus, flowMeetingFollowupRequest, flowMeetingReminderRequest, flowMeetingSummaryRoutine, flowMenuList, flowMenuPick, flowNoAi, flowNoticeRequest, flowOnClosureAddress, flowOnDayEvening, flowOnFormFill, flowOnGoodsStop, flowOnMailFile, flowOnMailMuteSender, flowOnMailRemindOrGoods, flowOnMeetCoord, flowOnMeetingTasks, flowOnPaceOffer, flowOnPlainMail, flowOnReminder, flowOnRfq, flowOnSentFollowup, flowOnPricelist, flowPricelistRequest, flowOnThreadAdd, flowRemindersRequest, flowReplyAsk, flowRfqFollowup, flowRfqRequest, flowRfqSummary, flowSuggestionCommand, flowTranslateRequest, flowWalk, NEXT, switchCancels
 };
