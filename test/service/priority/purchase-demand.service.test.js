@@ -1008,3 +1008,71 @@ test('המייל לרכש: פותחים מק"ט חדש — אין צורך לע�
     assert.match(m.html, /אין צורך לעדכן אף אחד/);
   } finally { D.setSetting('public_url', ''); }
 });
+
+// ---------------------------------------------------------------------------
+// 📎 מפרט כקובץ בשאלה "תיאור מדויק" (18.11.26)
+// ---------------------------------------------------------------------------
+
+test('📎 מפרט כקובץ: צילום בשאלה "תיאור מדויק" — מספיק, לא נקרא כרשימה; יוצא במייל לרכש ולדרישה כנספח', async (t) => {
+  H.at(t);
+  H.companies(t, 'test11');
+  const u = buyerWorker();
+  const pr = priority(t, { searchParts: async () => [], readDemand: async (c, prdno) => ({ PRDNO: prdno }) });
+  const extractCalls = [];
+  hammerAi(t);
+  t.mock.method(require('../../../server/priority/purchase-demand')._ai, 'itemsFromFile', async () => { extractCalls.push(1); return { items: [], unrelated: false, question: '' }; });
+  const sent = buyer(t);
+  const { say } = H.chat(t, u);
+
+  await toItems(say);
+  let r = await say('10 שקי מלט, 2 פטישים');
+  assert.match(r.text, /צריך תיאור מדויק/);
+
+  r = await say('', { file: H.photo('spec.jpg') });
+  assert.match(r.text, /המפרט נקלט ל\*פטיש\*/);
+  assert.match(r.text, /פטיש — 2 יח'\n {3}🆕 לא בקטלוג — יישלח לרכש לבניית מק"ט · 📎 מפרט מצורף/);
+  H.assertButtons(r.buttons, [BTN.done, BTN.cancel]);
+  assert.equal(extractCalls.length, 0, 'לא נקרא כרשימת פריטים');
+
+  await say(BTN.done);
+  r = await say('רק המזוהים ✅');
+  assert.match(r.text, /נפתחה ועברה \*לאישור\*/);
+  assert.equal(sent.length, 1);
+  assert.match(sent[0].text, /1\. פטיש — 2 יח' · .* · 📎 מפרט מצורף/);
+  assert.equal(sent[0].attachments.length, 1);
+  assert.match(sent[0].attachments[0].fileName, /^מפרט 1 — פטיש\.jpg$/);
+  assert.equal(sent[0].attachments[0].buf.toString(), 'fake image spec.jpg');
+  // הדרישה יצאה רק עם המזוהים — המפרט שייך לפריט שמחכה לרכש, ולכן לא נספח שלה
+  assert.equal(pr.wrote('attachDemand').filter((w) => /מפרט/.test(w.args[2].description)).length, 0);
+  const rec = D.get('SELECT missing FROM pd_part_requests WHERE user_id = ?', u.id);
+  const spec = JSON.parse(rec.missing)[0].spec;
+  assert.ok(spec?.path && require('node:fs').existsSync(spec.path), 'המפרט נשמר עם הבקשה לרכש (לבנייה מחדש)');
+  const v = Parts.forBuyer(D.get('SELECT token FROM pd_part_requests WHERE user_id = ?', u.id).token);
+  assert.equal(v.items[0].spec, true);
+});
+
+test('📎 מפרט כקובץ: דרישה שיוצאת עם הפריט (אחרי שנבנה) — המפרט נספח בפריוריטי בשם "מפרט — …"', async (t) => {
+  H.at(t);
+  H.companies(t, 'test11');
+  const u = buyerWorker();
+  const pr = priority(t, { searchParts: async () => [] });
+  hammerAi(t);
+  buyer(t);
+  const { say } = H.chat(t, u);
+  await toItems(say);
+  await say('10 שקי מלט, 2 פטישים');
+  await say('', { file: H.photo('spec.pdf') });
+  await say(BTN.done);
+  await say('לחכות לרכש ⏳');
+  const rec = D.get('SELECT id FROM pd_part_requests WHERE user_id = ?', u.id);
+  // הרכש סימנה שהפריט קיים — "להמשיך" — "סיום"
+  D.run("UPDATE pd_part_requests SET missing = json_set(missing, '$[0].built', json(?)), status = 'asked', asked_at = ? WHERE id = ?",
+    JSON.stringify({ code: 'H-5', des: 'פטיש 5 ק"ג', chapter: '20', topic: '20-10' }), D.nowIso(), rec.id);
+  let r = await say('כן, להמשיך ✅');
+  assert.match(r.text, /פטיש — 2 יח'\n {3}✅ H-5/);
+  r = await say(BTN.done);
+  assert.match(r.text, /נפתחה ועברה/);
+  const spec = pr.wrote('attachDemand').find((w) => /מפרט/.test(w.args[2].description));
+  assert.ok(spec, 'המפרט צורף לדרישה');
+  assert.equal(spec.args[2].description, 'מפרט — פטיש');
+});
