@@ -448,6 +448,42 @@ test('הערה לדו-שיח בעוד ניסוחים: "להכניס הערה ש�
   }
 });
 
+test('תעודה של ספק אחר באמצע קליטה — "קבלה נפרדת ⏭️": נכנסת לתור, הנוכחית ממשיכה, ואחרי הסופית — עוברים אליה (סקירה 22.11)', async (t) => {
+  // עובד שלח 13 תעודות של ספקים שונים אחת אחרי השנייה; "קבלה חדשה" ביטלה את הנוכחית, אז בחר "צרף כנספח" — וכולן
+  // נצמדו לקבלה אחת. עכשיו יש "קבלה נפרדת" — לתור, בלי לבטל
+  H.at(t);
+  H.companies(t, 'test11');
+  const u = H.worker();
+  const pr = priority(t);
+  let extracted = 0;
+  H.claude(t, {
+    extract: () => (++extracted === 1 ? doc() : doc({ supplier_name: 'בטון הצפון', doc_number: '7702' })),
+    project: () => ({ codes: [], question: '', unrelated: false }),
+    classify: () => ({ kind: 'new', doc_type: 'delivery_note', doc_number: '7702', supplier_name: 'ספק אחר' })
+  });
+  const { say } = H.chat(t, u);
+  await say('קבלת סחורה', { file: H.photo() });
+  let r = await say(BTN.yes);                                  // ← "יש מספר הזמנה?"
+  r = await say('', { file: H.photo() });
+  assert.match(r.text, /זה נראה כמו מסמך חדש: תעודת משלוח 7702/);
+  H.assertButtons(r.buttons, ['צרף כנספח', 'קבלה נפרדת ⏭️', 'להתעלם ❌']);
+  r = await say('קבלה נפרדת ⏭️');
+  assert.match(r.text, /📥 .*בתור/);
+  assert.match(r.text, /אין הזמנות פתוחות/, 'הנוכחית ממשיכה מאותה שאלה');
+  assert.equal(pr.writes.filter((w) => w.fn === 'cancelReceipt').length, 0, 'שום דבר לא בוטל');
+  // עד הסופית — ואז עוברים לתעודה שבתור
+  await say('בלי הזמנה ❌');
+  await say(BTN.yes);
+  await say(BTN.yes);
+  await say('נהריה מגרש 12');
+  await say(BTN.done);
+  await say(BTN.approve);
+  r = await say('כן, לסגור ✅');
+  assert.match(r.text, /נקלטה כסופית/);
+  assert.match(r.text, /עובר למסמך הבא/);
+  assert.match(r.text, /7702/);
+});
+
 test('👎 כתגובה (Reaction) = לא: בשאלת "יש מספר הזמנה?" — בלי הזמנה', async (t) => {
   H.companies(t, 'test11');
   const u = H.worker();
