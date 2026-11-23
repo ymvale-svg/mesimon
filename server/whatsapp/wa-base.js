@@ -221,6 +221,8 @@ function buttonReplyText(m) {
  * ניסיון בלבד: תגובה שנכשלה לא עוצרת כלום.
  */
 const currentMsg = new Map(); // ‎userId‎ → ‎{ chatId, id }‎ — ההודעה האחרונה של העובד, שעליה מגיבים
+/** ‎userId‎ → ‎{ reaction }‎ — האם ההודעה שבטיפול היא תגובה (Reaction) על שאלה: 👎 כתגובה = לא, 👎 כהודעה = שלב אחורה */
+const incoming = new Map();
 
 const reacted = new Map();    // ‎messageId‎ → האימוג'י שעליה עכשיו (בלי "להסיר" כשאין מה להסיר)
 
@@ -654,5 +656,5 @@ function enqueueAs(userId, m) {
 const chains = new Map();
 
 module.exports = {
-  appRoot, BACKLOG_DAYS, BATCH_MAX, buttonReplyText, candidatesOf, chains, channel, CHAT_SKILL, checkState, CONTEXT_MESSAGES, currentMsg, DAY, DIGEST_GRACE_MIN, doneEmoji, emailText, enqueueAs, firstName, GROUP_SKILL, HISTORY_TURNS, hooks, inHours, isConfigured, KEEP_DAYS, lastOutId, LETTERS, localDate, log, LOG_DAYS, mailAlertUsers, markDone, MSG_BREAK, needsLook, onDirect, orgUsers, parseJson, PICK_SHOWN, pickText, publicStatus, qr, react, reactNow, readLog, recentFiles, remove, resolveMentions, save, sendButtons, sendText, setState, signatureFields, signatureLine, splitMessage, taskLink, todayStats, TZ, usableClosure, userByPhone, WALK, workHours
+  appRoot, BACKLOG_DAYS, BATCH_MAX, buttonReplyText, candidatesOf, chains, channel, CHAT_SKILL, checkState, CONTEXT_MESSAGES, currentMsg, incoming, DAY, DIGEST_GRACE_MIN, doneEmoji, emailText, enqueueAs, firstName, GROUP_SKILL, HISTORY_TURNS, hooks, inHours, isConfigured, KEEP_DAYS, lastOutId, LETTERS, localDate, log, LOG_DAYS, mailAlertUsers, markDone, MSG_BREAK, needsLook, onDirect, orgUsers, parseJson, PICK_SHOWN, pickText, publicStatus, qr, react, reactNow, readLog, recentFiles, remove, resolveMentions, save, sendButtons, sendText, setState, signatureFields, signatureLine, splitMessage, taskLink, todayStats, TZ, usableClosure, userByPhone, WALK, workHours
 };
