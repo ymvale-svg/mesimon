@@ -285,3 +285,37 @@ test('prepare — לא נמצאו ספקים: מנסה לבד גם ברשת, ו�
   assert.match(r.handoff, /צריך הצעת מחיר: גנרטור 200 אמפר · אספקה לאלעד/);
   assert.doesNotMatch(r.handoff, /אמיר/);
 });
+
+// 🔁 המשך לבקשה האחרונה — סקירה 22.11: "ספקי אלומיניום תמצא ברשת" / "תפנה לאלרם" ← "כתוב את הבקשה מחדש"
+test('followUp — "תמצא ברשת" ו"תפנה לאלרם" ממשיכים את הבקשה האחרונה, עם אותו פריט; בלי בקשה אחרונה — לא', async (t) => {
+  const { D: Db } = require('../../helpers/db');
+  const { Gmail } = require('../../../server/integrations');
+  t.mock.method(Gmail, 'canSend', () => true);
+  const uid = user({ role: 'employee' }).id;
+  const item = { item: 'השכרת גנרטור 200 אמפר', spec: '', quantity: '1', location: 'אתר אלעד', need_by: '1.12', count: 3, source: 'mine', vendors: [], terms: ['גנרטור'], unrelated: false, missing_question: '' };
+  assert.equal(await RFQ.followUp(uid, 'תמצא ברשת'), null, 'אין בקשה — לא שלנו');
+  Db.run("INSERT INTO rfq (user_id, status, request, item, draft, file, created_at) VALUES (?, 'cancelled', 'צריך הצעת מחיר לגנרטור', ?, '{}', NULL, ?)", uid, JSON.stringify(item), Db.nowIso());
+  for (const text of ['ספקי אלומיניום תמצא ברשת', 'תיקח מגוגל ספקים חדשים', 'תבדוק ברשת']) {
+    const r = await RFQ.followUp(uid, text);
+    assert.equal(r?.search, true, text);
+    const row = Db.get('SELECT item FROM rfq WHERE id = ?', r.rfqId);
+    assert.equal(JSON.parse(row.item).source, 'web');
+    assert.equal(JSON.parse(row.item).item, 'השכרת גנרטור 200 אמפר', 'אותו פריט, בלי לשאול שוב');
+  }
+  const named = await RFQ.followUp(uid, 'תפנה לאלרם');
+  const it = JSON.parse(Db.get('SELECT item FROM rfq WHERE id = ?', named.rfqId).item);
+  assert.equal(it.source, 'named');
+  assert.deepEqual(it.vendors.map((v) => v.name), ['אלרם']);
+  for (const text of ['שלח לכל אחד', 'מה שלומך', 'תפנה לספקים להצעת מחיר על מלט', 'תחפש לי ברשת מחיר זול של טאבלט סמסונג']) assert.equal(await RFQ.followUp(uid, text), null, text);
+});
+
+test('followUp — בקשה מלפני יותר משעתיים כבר לא נמשכת', async (t) => {
+  const { D: Db } = require('../../helpers/db');
+  const { Gmail } = require('../../../server/integrations');
+  t.mock.method(Gmail, 'canSend', () => true);
+  const uid = user({ role: 'employee' }).id;
+  Db.run("INSERT INTO rfq (user_id, status, request, item, draft, file, created_at) VALUES (?, 'cancelled', 'x', ?, '{}', NULL, ?)", uid,
+    JSON.stringify({ item: 'מלט', source: 'mine', vendors: [] }), new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString());
+  assert.equal(await RFQ.followUp(uid, 'תמצא ברשת'), null);
+});
+
