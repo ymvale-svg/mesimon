@@ -180,3 +180,15 @@ test('🏷️ פריטים למחירון: עובד שאינו ברשימה — 
   assert.equal((await as(admin)('PUT', '/api/priority/settings', { defaults: { pricelistHandlers: [987654] } })).status, 400);
   await as(admin)('PUT', '/api/priority/settings', { defaults: { pricelistHandlers: [] } });
 });
+
+test('מאשרים בפריוריטי: רק מנהל; בלי חיבור — רשימה ריקה, לא קריסה; שיוך ידני נשמר', async () => {
+  assert.equal((await as(emp)('GET', '/api/priority/approvers')).status, 403);
+  const r = await as(admin)('GET', '/api/priority/approvers');
+  assert.equal(r.status, 200, r.text);
+  assert.ok(Array.isArray(r.json.approvers));
+  assert.ok(Array.isArray(r.json.users) && r.json.users.some((u) => u.id === empId));
+  const s = await as(admin)('PUT', '/api/priority/approvers', { login: 'Eladh', userId: empId });
+  assert.equal(s.status, 200, s.text);
+  assert.equal((await as(emp)('PUT', '/api/priority/approvers', { login: 'Eladh', userId: empId })).status, 403);
+  assert.equal((await as(admin)('PUT', '/api/priority/approvers', { login: 'Eladh', userId: 999999 })).status, 400);
+});

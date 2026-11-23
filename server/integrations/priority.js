@@ -909,6 +909,12 @@ async function demandCodes(company) {
   return out;
 }
 
+/** הדרישות האחרונות של החברה עם רשימת המאשרים (ראשי ומחליף) — למסך "מאשרים" */
+async function approverRows(company, top = 300) {
+  return rows(await call(company, 'GET', `PURDEMANDS?$select=PRDNO,STATDES,USERLOGIN,PROJDES,CURDATE&$orderby=CURDATE%20desc&$top=${top}`
+    + `&$expand=PDUSER_SUBFORM($select=USERLOGIN,ALTUSERLOGIN,POSITIONDES,ALTPOSITIONDES,UFLAG,NEXTUSERLOGIN)`));
+}
+
 /** כל הדרישות שמחכות לאישור בחברה, עם המאשרים ומספר השורות */
 async function waitingDemands(company) {
   return rows(await call(company, 'GET', `PURDEMANDS?$filter=${enc("STATDES eq 'מחכה לאישור'")}&$select=${PD_SEL}`
@@ -1132,7 +1138,7 @@ module.exports = {
   GENERAL, NO_VAT_CODE, TAX_CODES, PAY_TERMS, DEFAULT_PAY, payTerm, payLabel, payFromText, dueDate, projectWarehouses, warehouses, warehouseExists, defaultWarehouse, supplierHistory, recentLines, partByCode, findPartsByText, searchParts, generalCoding, warehouseOf, findSuppliers, supplierByCode, findReceiptByBooknum, getOrder, openOrders, findPartExact, lastSubchapter, projects, matchProjects, readReceipt,
   finalOrders, orderForNotice, demandInitiator, demandForNotice, projectManager, priorityUser,
   readDialog, createReceipt, addOrderLine, addFreeLine, setLineQty, setLineDes, setHeader, attach, deleteAttachment, setDialog, finalizeReceipt, cancelReceipt, receiptStatus, deleteLines,
-  PD_TYPES, demandCodes, recentDemandProjects, createDemand, addDemandLine, setDemand, submitDemand, isNoApproversError, readDemand, waitingDemands, nextSigner, cancelDemand, setDemandDialog, appendDemandDialog, setDemandLine, deleteDemandLine, reopenDemand, REOPEN_STATUS, purchaseOrderOwners, attachDemand, priorityUsers, budgetPairs,
+  PD_TYPES, demandCodes, recentDemandProjects, createDemand, addDemandLine, setDemand, submitDemand, isNoApproversError, readDemand, waitingDemands, approverRows, nextSigner, cancelDemand, setDemandDialog, appendDemandDialog, setDemandLine, deleteDemandLine, reopenDemand, REOPEN_STATUS, purchaseOrderOwners, attachDemand, priorityUsers, budgetPairs,
   supplierPriceLists, addPriceListItem, deletePriceListItem, supplierParts, addSupplierPart, deleteSupplierPart,
   _call: call
 };

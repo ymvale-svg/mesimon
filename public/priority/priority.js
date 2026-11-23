@@ -858,7 +858,13 @@
           <p>לכל משתמש: סוגי המסמכים (כן או לא — מי שמורשה למסמך מורשה לכל מה שבו, בבוט ובמסך), והחברות שהוא שייך אליהן. מנהלי מערכת מורשים תמיד לכל דבר.</p></div>
         <div class="scroll sticky-wrap" tabindex="0" role="region" aria-label="מטריצת ההרשאות"><table class="mtx" id="mtx"></table></div>
         <div class="row-actions"><button class="btn pri" id="save" disabled>שמירה</button><span class="dirty" id="dirty"></span></div>
+      </section>
+      <section class="panel" id="appr">
+        <div class="panel-h"><h2>מאשרי דרישות רכש — הודעות בבוט</h2>
+          <p>כל המאשרים שמופיעים ברשימות המאשרים בפריוריטי (ראשי ומחליף), למי הם משויכים במשימון, ומה קרה עם ההודעה "ממתינה לך דרישת רכש לאישורך". מי שלא משויך או בלי טלפון — לא מקבל הודעות.</p></div>
+        <div id="appr-body"><p class="muted pad">טוען את המאשרים מפריוריטי…</p></div>
       </section>`;
+    approvers();
 
     function draw() {
       // שמירת המיקום של המקלדת אחרי ציור מחדש (ui-ux-pro-max: focus management)
@@ -903,6 +909,34 @@
         render();
       } catch (e) { toast(e.message, true); }
     });
+  }
+
+  // ---------------------------------------------------------------- מאשרי דרישות הרכש (בתוך מסך ההרשאות)
+  const APPR_WHY = (st) => (!st ? '<span class="pill p-mute">עוד לא נבדק</span>' : st.sent ? '<span class="pill p-ok">נשלחה הודעה</span>'
+    : st.later ? '<span class="pill p-mute">תישלח בשעות הפעילות</span>' : `<span class="pill p-warn">${esc(st.why || 'לא נשלחה')}</span>`);
+  async function approvers() {
+    const box = $('#appr-body');
+    if (!box) return;
+    let r;
+    try { r = await api('GET', '/api/priority/approvers'); } catch (e) { box.innerHTML = `<div class="note">${esc(e.message)}</div>`; return; }
+    const opts = (sel) => `<option value="">— לא משויך —</option>${r.users.map((u) => `<option value="${u.id}" ${u.id === sel ? 'selected' : ''}>${esc(u.name)}${u.phone ? '' : ' (בלי טלפון)'}</option>`).join('')}`;
+    box.innerHTML = `
+      ${r.errors?.length ? `<div class="note">לא נקרא מפריוריטי: ${esc(r.errors.join(' · '))}</div>` : ''}
+      ${r.problems.length ? `<div class="note"><b>מה מונע הודעות:</b><ul>${r.problems.map((p) => `<li>${esc(p)}</li>`).join('')}</ul></div>` : (r.approvers.length ? '<p class="pad">✅ כל המאשרים משויכים ויש להם טלפון.</p>' : '')}
+      ${r.approvers.length ? `<div class="scroll" tabindex="0" role="region" aria-label="מאשרי דרישות רכש"><table class="mtx" id="appr-t"><thead><tr><th>מאשר בפריוריטי</th><th>תפקיד</th><th>משתמש במשימון</th><th>טלפון</th><th>מחכות לו עכשיו</th></tr></thead><tbody>
+        ${r.approvers.map((a) => `<tr><td><b>${esc(a.name || a.login)}</b><span>${esc(a.login)}${a.email ? ` · ${esc(a.email)}` : ''}</span></td>
+          <td>${esc(a.roles.join(', '))}</td>
+          <td><select data-login="${esc(a.login)}" aria-label="המשתמש במשימון של ${esc(a.name || a.login)}">${opts(a.mesimon?.id ?? null)}</select>${a.how && a.how !== 'manual' ? `<span class="hint">${a.how === 'email' ? 'לפי המייל' : 'לפי השם'}</span>` : ''}</td>
+          <td>${!a.mesimon ? '—' : a.mesimon.phone ? '<span class="pill p-ok">יש</span>' : '<span class="pill p-warn">אין</span>'}</td>
+          <td>${a.waiting.length ? a.waiting.map((w) => `<div>${esc(w.prdno)}${w.project ? ` · ${esc(w.project)}` : ''} ${APPR_WHY(w.status)}</div>`).join('') : '<span class="muted">—</span>'}</td></tr>`).join('')}
+      </tbody></table></div>` : (r.errors?.length ? '' : '<p class="muted pad">לא נמצאו רשימות מאשרים בדרישות.</p>')}`;
+    box.querySelectorAll('select[data-login]').forEach((el) => el.addEventListener('change', async () => {
+      try {
+        await api('PUT', '/api/priority/approvers', { login: el.dataset.login, userId: el.value ? Number(el.value) : null });
+        toast('השיוך נשמר — ההודעה תצא בסבב הבא (עד 10 דקות)');
+        approvers();
+      } catch (e) { toast(e.message, true); }
+    }));
   }
 
   render();
