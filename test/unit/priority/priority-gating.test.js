@@ -48,9 +48,11 @@ test('בלי הרשאה — "פריוריטי" (גם כפתור מהודעה י�
   for (const text of ['פריוריטי', '🗂 פריוריטי', 'קבלת סחורה', 'דרישת רכש: 10 שקי מלט']) {
     const calls = fakeWhatsApp(t);
     await say(u, text);
-    const out = sent(calls);
+    const out = sent(calls).filter((c) => c.body?.chatId === `${u.phone}@c.us`);
     assert.equal(out.length, 1, text);
-    assert.equal(textOf(out[0]), Access.NO_ACCESS, text);
+    // דרישת רכש — "אין לך הרשאה ליצור דרישת רכש", והבקשה עוברת למנהל המערכת (הוחלט 20.11.26)
+    if (/דרישת רכש/.test(text)) assert.match(textOf(out[0]), /אין לך הרשאה ליצור דרישת רכש/, text);
+    else assert.equal(textOf(out[0]), Access.NO_ACCESS, text);
     assert.equal(out[0].method, 'sendMessage', `${text} — בלי כפתורים`);
     t.mock.restoreAll();
   }

@@ -116,8 +116,8 @@ async function checkState() {
     const state = (await WhatsApp.call(ch, 'getStateInstance'))?.stateInstance ?? 'unknown';
     setState(state);
     if (state === 'authorized') {
-      // רק הודעות נכנסות. בלי דיווח על יוצאות — הבוט כותב רק בפרטי, ואת זה הוא יודע ממילא
-      await WhatsApp.call(ch, 'setSettings', { http: 'POST', body: { incomingWebhook: 'yes', outgoingMessageWebhook: 'no', outgoingAPIMessageWebhook: 'no' } })
+      // הודעות נכנסות, ו-👁 סטטוס של מה שהבוט שלח (נמסרה / נקראה — ‎wa-reads.js‎). בלי ההודעות היוצאות עצמן — הבוט יודע מה כתב
+      await WhatsApp.call(ch, 'setSettings', { http: 'POST', body: { incomingWebhook: 'yes', outgoingWebhook: 'yes', outgoingMessageWebhook: 'no', outgoingAPIMessageWebhook: 'no' } })
         .catch((err) => console.error('[משימון] הגדרת בוט הוואטסאפ נכשלה:', err.message));
     }
     return { state };
@@ -143,10 +143,10 @@ async function qr() {
 const lastOut = new Map();
 const lastOutId = (chatId) => lastOut.get(chatId) ?? '';
 
-/** ‎q‎ — שאלה בלי כפתורים (‎{ owner, draft, awaiting }‎): נרשמת כמו הודעה עם כפתורים, כדי ש-👍 עליה יגיע אליה */
+/** מחזיר את מזהה ההודעה (👁 ‎wa-reads.js‎), או ‎null‎. ‎q‎ — שאלה בלי כפתורים (‎{ owner, draft, awaiting }‎): נרשמת כמו הודעה עם כפתורים, כדי ש-👍 עליה יגיע אליה */
 async function sendText(chatId, message, q = null) {
   const ch = channel();
-  if (!ch) return;
+  if (!ch) return null;
   const sent = await WhatsApp.call(ch, 'sendMessage', { http: 'POST', body: { chatId, message } });
   if (sent?.idMessage) {
     lastOut.set(chatId, String(sent.idMessage));
@@ -155,6 +155,7 @@ async function sendText(chatId, message, q = null) {
       if (u) WaQuestions.record(u.id, sent.idMessage, q);
     }
   }
+  return sent?.idMessage ?? null;
 }
 
 
@@ -171,7 +172,7 @@ let buttonsOffUntil = 0;
  */
 async function sendButtons(chatId, message, buttons, q = null) {
   const ch = channel();
-  if (!ch) return;
+  if (!ch) return null;
   if (!buttons?.length) return sendText(chatId, message);
   // הכפתורים כבויים (נכשלו לאחרונה) — הטקסט, והאפשרויות כשורות, כדי שלא יאבדו
   if (Date.now() < buttonsOffUntil) return sendText(chatId, `${message}\n\n${buttons.slice(0, 3).map((b) => `▫️ ${b}`).join('\n')}`);
@@ -187,10 +188,11 @@ async function sendButtons(chatId, message, buttons, q = null) {
       const u = userByPhone(String(chatId).replace(/@c\.us$/, ''));
       if (u) WaQuestions.record(u.id, sent.idMessage, q);
     }
+    return sent?.idMessage ?? null;
   } catch (err) {
     console.error('[משימון] כפתורים בוואטסאפ לא נשלחו, נשלח טקסט:', err.message);
     buttonsOffUntil = Date.now() + 60 * 60 * 1000;
-    await sendText(chatId, `${body !== '👇' ? `${message}\n\n` : ''}${buttons.slice(0, 3).map((b) => `▫️ ${b}`).join('\n')}`);
+    return sendText(chatId, `${body !== '👇' ? `${message}\n\n` : ''}${buttons.slice(0, 3).map((b) => `▫️ ${b}`).join('\n')}`);
   }
 }
 
@@ -219,6 +221,8 @@ function buttonReplyText(m) {
  * ניסיון בלבד: תגובה שנכשלה לא עוצרת כלום.
  */
 const currentMsg = new Map(); // ‎userId‎ → ‎{ chatId, id }‎ — ההודעה האחרונה של העובד, שעליה מגיבים
+/** ‎userId‎ → ‎{ reaction }‎ — האם ההודעה שבטיפול היא תגובה (Reaction) על שאלה: 👎 כתגובה = לא, 👎 כהודעה = שלב אחורה */
+const incoming = new Map();
 
 const reacted = new Map();    // ‎messageId‎ → האימוג'י שעליה עכשיו (בלי "להסיר" כשאין מה להסיר)
 
@@ -652,5 +656,5 @@ function enqueueAs(userId, m) {
 const chains = new Map();
 
 module.exports = {
-  appRoot, BACKLOG_DAYS, BATCH_MAX, buttonReplyText, candidatesOf, chains, channel, CHAT_SKILL, checkState, CONTEXT_MESSAGES, currentMsg, DAY, DIGEST_GRACE_MIN, doneEmoji, emailText, enqueueAs, firstName, GROUP_SKILL, HISTORY_TURNS, hooks, inHours, isConfigured, KEEP_DAYS, lastOutId, LETTERS, localDate, log, LOG_DAYS, mailAlertUsers, markDone, MSG_BREAK, needsLook, onDirect, orgUsers, parseJson, PICK_SHOWN, pickText, publicStatus, qr, react, reactNow, readLog, recentFiles, remove, resolveMentions, save, sendButtons, sendText, setState, signatureFields, signatureLine, splitMessage, taskLink, todayStats, TZ, usableClosure, userByPhone, WALK, workHours
+  appRoot, BACKLOG_DAYS, BATCH_MAX, buttonReplyText, candidatesOf, chains, channel, CHAT_SKILL, checkState, CONTEXT_MESSAGES, currentMsg, incoming, DAY, DIGEST_GRACE_MIN, doneEmoji, emailText, enqueueAs, firstName, GROUP_SKILL, HISTORY_TURNS, hooks, inHours, isConfigured, KEEP_DAYS, lastOutId, LETTERS, localDate, log, LOG_DAYS, mailAlertUsers, markDone, MSG_BREAK, needsLook, onDirect, orgUsers, parseJson, PICK_SHOWN, pickText, publicStatus, qr, react, reactNow, readLog, recentFiles, remove, resolveMentions, save, sendButtons, sendText, setState, signatureFields, signatureLine, splitMessage, taskLink, todayStats, TZ, usableClosure, userByPhone, WALK, workHours
 };

@@ -197,7 +197,7 @@ async function judge(pairs, { timeoutMs = 0 } = {}) {
     ...pairs.map((p, i) => `זוג ${i + 1}:\n  א. ${describe(p.a)}\n  ב. ${describe(p.b)}`)
   ].join('\n');
   try {
-    const call = Claude.json({ system: fs.readFileSync(SKILL, 'utf8'), content: [{ type: 'text', text }], schema: SCHEMA, effort: 'low' });
+    const call = Claude.json({ feature: 'tasks.dupes', system: fs.readFileSync(SKILL, 'utf8'), content: [{ type: 'text', text }], schema: SCHEMA, effort: 'low' });
     const out = timeoutMs
       ? await Promise.race([call, new Promise((_, reject) => { setTimeout(() => reject(new Error('timeout')), timeoutMs).unref?.(); })])
       : await call;

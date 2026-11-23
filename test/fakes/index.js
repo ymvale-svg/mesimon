@@ -47,7 +47,8 @@ function claude(t, responder = () => ({})) {
 /** פונקציות של פריוריטי שכותבות. בזיוף הן נרשמות ולא מגיעות לשום מקום */
 const WRITES = ['createReceipt', 'addOrderLine', 'addFreeLine', 'setLineQty', 'setLineDes', 'setHeader', 'attach', 'deleteAttachment',
   'setDialog', 'finalizeReceipt', 'cancelReceipt', 'deleteLines', 'createDemand', 'addDemandLine', 'setDemand', 'submitDemand',
-  'cancelDemand', 'setDemandDialog', 'attachDemand', 'appendDemandDialog', 'setDemandLine', 'deleteDemandLine', 'reopenDemand'];
+  'cancelDemand', 'setDemandDialog', 'attachDemand', 'appendDemandDialog', 'setDemandLine', 'deleteDemandLine', 'reopenDemand',
+  'addPriceListItem', 'deletePriceListItem', 'addSupplierPart', 'deleteSupplierPart'];
 
 /**
  * פריוריטי: ‎reads‎ — מימושים לקריאות; ‎writes‎ — מימושים לכתיבות (ברירת מחדל: נרשם ומחזיר ‎{}‎).

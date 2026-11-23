@@ -43,12 +43,16 @@ const TTL = 24 * 60 * 60 * 1000;
 const idleMs = () => Math.max(1, Number(D.getSetting('wa_question_ttl_min', 15)) || 15) * 60 * 1000;
 const FILES_DIR = () => path.join(D.UPLOADS_DIR, 'purchase-demand');
 
-const TRIGGER = /דרישת\s*רכש|דרישות\s*רכש/;
+// "רכס" — כך התמלול שומע לפעמים "רכש" (סקירה 19.11: "אני רוצה לעשות דרישת רכס" לא זוהה). לא "רכסים" — המקום
+const TRIGGER = /דרישת\s*רכ[שס](?!ים)|דרישות\s*רכ[שס](?!ים)/;
 const GR_TRIGGER = /קבלת\s*סחורה/;
 // רק כשזו כל ההודעה — "שלח גם 3 שקי מלט" הוא פריט, לא סיום
 const DONE = /^(סיום|סיימתי|זהו|זה הכל|זה הכול|תשלח|שלח|לשלוח|שלח לאישור|תשלח לאישור|לאישור)\s*[!.🏁]*$/u;
-const NONE = /^(אף אחד|אף אחת|אף אחד מהם|לא אלה|אחר|כללי|מק"?ט כללי)([\s,.!❌]|$)/;
-const BTN_NONE = 'אף אחד ❌';
+const NONE = /^(אף אחד|אף אחת|אף אחד מהם|לא אלה|אחר|כללי|מק"?ט כללי|שלח לבנייה|לבנייה|לרכש|לבנות מק"?ט)([\s,.!❌🆕]|$)/;
+// ב"התכוונת ל…": אף אחת מהאפשרויות ← הפריט נשלח לרכש לבניית מק"ט (בתיקון דרישה שהוחזרה — מק"ט כללי, כמו קודם)
+const BTN_NONE = 'שלח לבנייה לרכש 🆕';
+const BTN_NONE_EDIT = 'אף אחד ❌';
+const BTN_DROP = 'להסיר את הפריט';
 // 🆕 מק"טים לבנייה (‎pd-parts.js‎): ב"סיום", כשיש פריטים בלי מק"ט
 const BTN_ONLY = 'רק המזוהים ✅';
 const BTN_WAIT = 'לחכות לרכש ⏳';
@@ -67,7 +71,7 @@ function alertAdmins(user, s, title, details) {
 }
 
 /** שליחת הודעה יזומה לעובד (החותם הבא) — נקבע ב-wa-bot (‎setHooks‎) */
-const hooks = { send: null };
+const hooks = { send: null, sendNow: null };
 const setHooks = (h) => { Object.assign(hooks, h); Return.setHooks(h); Parts.setHooks(h); };
 
 // ---------------------------------------------------------------------------
@@ -90,7 +94,14 @@ const active = (userId, late = false) => { const s = load(userId); return Boolea
 const pending = (userId) => Boolean(fresh(load(userId)));
 /** 🔒 הדרישה שהשיחה עליה עכשיו (מספר הדרישה, ולפניו — מתי התחילה), ‎null‎ — אין. נרשם עם הכפתורים (‎WaQuestions‎, #171) */
 const docId = (userId) => { const s = load(userId); return fresh(s) ? String(s.prdno || s.editOf || s.startedAt || '') || null : null; };
-const isTrigger = (text) => TRIGGER.test(String(text ?? ''));
+/*
+ * "דרישה" בתחילת הבקשה — תמיד דרישת רכש (הוחלט 20.11.26, ישראל: "כל עוד מופיעה המילה דרישה לפני — הכוונה לרכש"):
+ * "דרישה", "דרישת מלט 10 שקים", "בוקר טוב, אני רוצה לעשות דרישה", "תפתח לי דרישה". באמצע משפט ("יש דרישה של העירייה…") — לא
+ */
+const ASK = /^\P{L}*(?:(?:בוקר טוב|ערב טוב|צהריים טובים|היי|שלום|אהלן)\P{L}*)?(?:(?:אני\s+)?(?:רוצה|צריך|צריכה|מבקש|מבקשת)\s+(?:ל(?:עשות|פתוח|הוציא|בצע|הגיש)\s+)?|(?:ת?פתח|תפתחי|ת?עשה|תעשי|תוציא|תוציאי|לפתוח|לעשות|להוציא|לבצע)\s+(?:לי\s+)?)?(?:בבקשה\s+)?(?:עוד\s+)?דריש(?:ה|ת|ות)(?:\s*רכ[שס](?!ים))?(?=[\s,.!:\-–]|$)/u;
+const isTrigger = (text) => { const t = String(text ?? ''); return TRIGGER.test(t) || ASK.test(t); };
+/** הבקשה בלי מילות הפתיחה: "דרישת מלט 10 שקים" ← "מלט 10 שקים" */
+const afterTrigger = (t) => (ASK.test(t) ? t.replace(ASK, '') : t.replace(TRIGGER, ''));
 /** פותח דרישה ("דרישת רכש"); וגם החזרה לבדיקה ("החזר לבדיקה PD…") ותשובה של פותח הדרישה (לתקן / הכל נכון) */
 // שאלה על דרישות קיימות ("מה הדרישות הפתוחות?") או בקשה אחרת — לא פותחת דרישה חדשה (‎opens-guard.js‎)
 // וגם תשובה ל"המק"טים נבנו — לבנות את הדרישה מחדש?" (‎pd-parts.js‎)
@@ -200,6 +211,12 @@ const EDIT_SCHEMA = {
   required: ['action', 'adds', 'updates', 'removes', 'question'], additionalProperties: false
 };
 
+const DETAIL_SCHEMA = {
+  type: 'object',
+  properties: { results: { type: 'array', items: { type: 'object', properties: { line: { type: 'integer' }, specific: { type: 'boolean' }, question: str }, required: ['line', 'specific', 'question'], additionalProperties: false } } },
+  required: ['results'], additionalProperties: false
+};
+
 const skill = () => fs.readFileSync(SKILL, 'utf8');
 
 /** ניתן להחלפה בבדיקות — ‎_ai‎ */
@@ -209,7 +226,7 @@ const ai = {
     const block = file.mime.includes('pdf')
       ? { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data } }
       : { type: 'image', source: { type: 'base64', media_type: file.mime.includes('png') ? 'image/png' : 'image/jpeg', data } };
-    return Claude.json({ system: skill(), content: [block, { type: 'text', text: 'task: items' }], schema: ITEMS_SCHEMA, effort: 'high', live: true });
+    return Claude.json({ feature: 'priority.demand', system: skill(), content: [block, { type: 'text', text: 'task: items' }], schema: ITEMS_SCHEMA, effort: 'high', live: true });
   },
   async match(items, pairs, siblings = []) {
     const text = JSON.stringify({
@@ -220,11 +237,15 @@ const ai = {
         candidates: (it.candidates ?? []).map((c) => ({ code: c.PARTNAME, description: c.PARTDES, chapter: c.BUD_SUBCHAPTERDES ?? '', resource: c.BUD_SUBTOPICDES ?? '' })) })),
       pairs: pairs.slice(0, 150).map((p) => ({ chapter: p.chapter, chapter_name: p.chapterDes, topic: p.topic, topic_name: p.topicDes }))
     });
-    return Claude.json({ system: skill(), content: [{ type: 'text', text }], schema: MATCH_SCHEMA, effort: 'medium', live: true });
+    return Claude.json({ feature: 'priority.demand', system: skill(), content: [{ type: 'text', text }], schema: MATCH_SCHEMA, effort: 'medium', live: true });
+  },
+  async detail(items) {
+    const content = JSON.stringify({ task: 'detail', items: items.map((it) => ({ line: it.n, description: it.description, qty: it.qty, unit: it.unit, note: it.note ?? '' })) });
+    return Claude.json({ system: skill(), content: [{ type: 'text', text: content }], schema: DETAIL_SCHEMA, effort: 'low', live: true });
   },
   async edit(lines, text) {
     const content = JSON.stringify({ task: 'edit', lines: lines.map((l) => ({ line: l.n, description: l.description, qty: l.qty, unit: l.unit })), text });
-    return Claude.json({ system: skill(), content: [{ type: 'text', text: content }], schema: EDIT_SCHEMA, effort: 'low', live: true });
+    return Claude.json({ feature: 'priority.demand', system: skill(), content: [{ type: 'text', text: content }], schema: EDIT_SCHEMA, effort: 'low', live: true });
   }
 };
 
@@ -291,6 +312,7 @@ async function resolveItems(s, items) {
     if (it.status === 'general') it.part = { ...it.part, ...it.general, why: 'כמו שאר הפריטים בדרישה' };
   }
   for (const it of items) { delete it.candidates; delete it.exactHit; }
+  await checkDetail(s, items);
 }
 
 /** צירופי תת פרק ומשאב של רשימת פריטים, הנפוץ קודם: ‎[{ chapter, chapterDes, topic, topicDes, n }]‎ */
@@ -304,6 +326,28 @@ function codingsOf(parts) {
     m.set(k, e);
   }
   return [...m.values()].sort((a, b) => b.n - a.n);
+}
+
+/*
+ * 🆕 פריט שיישלח לרכש לבניית מק"ט — צריך תיאור מדויק ("פטיש" ← "פטיש 5 ק"ג"), אחרת הרכש לא יכול לבנות כרטיס פריט
+ * (הוחלט 17.11.26). ה-AI בודק; בלי AI — לפחות שתי מילים. ה-AI נכשל — לא עוצרים את העובד.
+ * פריט לא מדויק מסומן ‎vague‎ (עם השאלה), והבוט מבקש תיאור מדויק לפני "סיום".
+ */
+const wordsIn = (t) => String(t ?? '').replace(/["'״׳(),.:;\-/]/g, ' ').split(/\s+/).filter(Boolean);
+async function checkDetail(s, items) {
+  const list = (items ?? []).filter((it) => it.status === 'general' && !it.vagueChecked);
+  if (s.editOf || !list.length) return;
+  let res = null;
+  if (Claude.isEnabled()) {
+    try { res = (await ai.detail(list)).results ?? []; } catch (err) { console.error('[משימון] בדיקת תיאור לבניית מק"ט:', err.message); res = []; }
+  }
+  for (const it of list) {
+    it.vagueChecked = true;
+    const r = res?.find((x) => x.line === it.n);
+    const specific = res ? (r ? r.specific : true) : wordsIn(it.description).length >= 2;
+    it.vague = !specific;
+    it.vagueQ = specific ? '' : (r?.question || `איזה ${it.description}? כתבו תיאור מדויק — סוג ומידה (למשל "${it.description} 5 ק"ג").`);
+  }
 }
 
 function setGeneral(it, why) {
@@ -347,10 +391,11 @@ function askItems(s, pre = []) {
 /** הפריט הבא שמחכה לבחירה — "התכוונת ל…" בכפתורים; אין — הסיכום */
 function nextQuestion(s, pre = []) {
   const it = (s.items ?? []).find((x) => x.status === 'ask');
-  if (!it) return showList(s, pre);
+  if (!it) return askDetail(s, pre);
   s.step = 'pick';
   s.pickLine = it.n;
   const opts = it.options.slice(0, 2);
+  const none = s.editOf ? BTN_NONE_EDIT : BTN_NONE;
   const btns = labels(opts.map((p) => p.des));
   opts.forEach((p, i) => { p.btn = btns[i]; });
   const left = s.items.filter((x) => x.status === 'ask').length;
@@ -360,8 +405,44 @@ function nextQuestion(s, pre = []) {
     ...it.options.map((p) => `• *${p.des}* (${p.code})${p.chapterDes ? ` · ${p.chapterDes}` : ''}`),
     '',
     s.editOf ? `אף אחד — נקלט כמק"ט כללי עם התיאור שלכם, על ${it.general.chapterDes || it.general.chapter} / ${it.general.topicDes || it.general.topic}. או כתבו תיאור אחר.`
-      : 'אף אחד — הפריט יישלח לרכש לבניית מק"ט. או כתבו תיאור אחר.'].join('\n'),
-  [...opts.map((p) => p.btn), BTN_NONE]);
+      : `*${BTN_NONE}* — אף אחד מאלה: הפריט יישלח לרכש לבניית מק"ט (בתיאור מדויק). או כתבו תיאור אחר.`].join('\n'),
+  [...opts.map((p) => p.btn), none]);
+}
+
+/** פריט שיישלח לרכש, ותיאורו כללי מדי ("פטיש") — מבקשים תיאור מדויק. אין — הסיכום */
+function askDetail(s, pre = []) {
+  const it = (s.items ?? []).find((x) => x.status === 'general' && x.vague);
+  if (!it) return showList(s, pre);
+  s.step = 'detail';
+  s.detailLine = it.n;
+  return reply(s, [...pre,
+    `🆕 *${it.description}* — ${qtyText(it.qty)} ${it.unit || "יח'"}`,
+    'לא בקטלוג, ויישלח לרכש לבניית מק"ט — אבל כדי שיוכלו לבנות אותו צריך תיאור מדויק.',
+    `❓ ${it.vagueQ}`, '',
+    'כתבו את התיאור המלא, או *להסיר את הפריט*.'].join('\n'),
+  [BTN_DROP, BTN.cancel]);
+}
+
+/** תשובה ל"תיאור מדויק" — הסרה, או התיאור החדש (חיפוש מחדש בקטלוג, ובדיקה שוב) */
+async function onDetail(user, s, t) {
+  const it = s.items.find((x) => x.n === s.detailLine && x.status === 'general' && x.vague);
+  if (!it) return nextQuestion(s);
+  if (sameLabel(t, BTN_DROP) || /^(להסיר|הסר|תסיר|בלי|תוריד)/.test(t)) {
+    s.items = s.items.filter((x) => x !== it);
+    renumber(s);
+    return nextQuestion(s, [`🗑️ הוסר: ${it.description}.`, '']);
+  }
+  if (DONE.test(t) || YES.test(t)) return reply(s, `קודם — תיאור מדויק ל*${it.description}*, או *להסיר את הפריט*.`, s.lastButtons ?? []);
+  if (t.split(/\s+/).length >= 12) return onText(user, s, t);
+  // "5 ק"ג" — תוספת לתיאור; תיאור מלא — במקומו
+  const words = wordsIn(t);
+  const base = wordsIn(it.description);
+  it.description = (words.some((w) => base.includes(w)) ? t.trim() : `${it.description} ${t.trim()}`).slice(0, 120);
+  it.status = 'new';
+  it.vague = false;
+  it.vagueChecked = false;
+  await resolveItems(s, [it]);
+  return nextQuestion(s, [`✏️ ${it.description}`, '']);
 }
 
 /*
@@ -742,12 +823,13 @@ async function onPick(user, s, t, { reaction = false } = {}) {
   if (!it) return nextQuestion(s);
   const opt = it.options.find((p) => sameLabel(t, p.btn ?? label(p.des)) || normalize(t) === normalize(p.des) || t.trim() === p.code);
   if (opt) { const { btn, ...part } = opt; it.part = part; it.status = 'ok'; it.options = null; return nextQuestion(s, [`✅ ${it.description} ← ${opt.des} (${opt.code})`, '']); }
-  if (NONE.test(t) || sameLabel(t, BTN_NONE) || (reaction && NO.test(t))) {
+  if (NONE.test(t) || sameLabel(t, BTN_NONE) || sameLabel(t, BTN_NONE_EDIT) || (reaction && NO.test(t))) {
     setGeneral(it, 'לא בקטלוג — נבחר ע"י העובד');
+    await checkDetail(s, [it]);
     return nextQuestion(s, [s.editOf ? `🆕 ${it.description} ← מק"ט כללי 000 (${it.general.chapterDes || it.general.chapter} / ${it.general.topicDes || it.general.topic})` : `🆕 ${it.description} ← לא בקטלוג, יישלח לרכש לבניית מק"ט`, '']);
   }
   if (YES.test(t)) return reply(s, 'בחרו אחד מהכפתורים, *אף אחד* ❌, או כתבו תיאור אחר.', s.lastButtons ?? []);
-  if (DONE.test(t)) return reply(s, `קודם — *${it.description}*: בחרו אחד מהכפתורים, או *אף אחד* ❌.`, s.lastButtons ?? []);
+  if (DONE.test(t)) return reply(s, `קודם — *${it.description}*: בחרו אחד מהכפתורים, או *${s.editOf ? BTN_NONE_EDIT : BTN_NONE}*.`, s.lastButtons ?? []);
   // מק"ט מפורש
   const code = t.match(/[A-Za-z]*\d[\w]*(?:-[\w]+)+/)?.[0];
   if (code) {
@@ -767,6 +849,16 @@ async function onPick(user, s, t, { reaction = false } = {}) {
 // ---------------------------------------------------------------------------
 // סיום: פתיחה בפריוריטי ומעבר לאישור
 // ---------------------------------------------------------------------------
+
+/** שורת "החותם הבא" לעובד — גם כשההודעה לא יצאה, כדי שידע (#169) */
+function signerNote(r, name) {
+  if (!r.signer) return '';
+  if (r.sent) return `✍️ החותם הבא: *${name}* — קיבל הודעה בוואטסאפ.`;
+  if (r.later) return `✍️ החותם הבא: *${name}* — יקבל הודעה בוואטסאפ בשעות הפעילות.`;
+  if (r.why === 'הבוט לא שלח') return `✍️ החותם הבא: *${name}* — ההודעה אליו לא יצאה; הבוט ינסה שוב בעוד כמה דקות.`;
+  if (r.why === 'לא נמצא במשימון' || r.why === 'אין טלפון בפרופיל') return `✍️ החותם הבא: *${name}* — לא קיבל הודעה בוואטסאפ (מנהל המערכת עודכן).`;
+  return `✍️ החותם הבא: *${name}*.`;
+}
 
 /** "ישראל כהן" — לשדה ‎DETAILS‎ (עד 24 תווים) */
 const detailsOf = (user) => `בוט: ${String(user?.full_name ?? '').trim()}`.slice(0, 24);
@@ -935,6 +1027,8 @@ async function submit(user, s) {
   if (open.length) return nextQuestion(s, ['קודם צריך לבחור לפריטים שנשארו פתוחים:', '']);
   const c = s.company;
   if (!writable(user.id).includes(c)) return reply(s, 'הסביבה הזו אינה פתוחה לכתיבה מהבוט. כתבו *סביבה* לבחירת סביבה אחרת, או *ביטול*.', [BTN.cancel]);
+  if (s.items.some((x) => x.status === 'general' && x.vague)) return askDetail(s, ['קודם — תיאור מדויק לפריט שיישלח לרכש:', '']);
+  if (s.items.some((x) => x.status === 'general' && x.vague)) return askDetail(s, ['קודם — תיאור מדויק לפריט שיישלח לרכש:', '']);
   // 🆕 פריטים בלי מק"ט — לא יוצאים על 000: קודם "רק המזוהים" / "לחכות"
   if (missing(s).length && s.partsMode !== 'partial') return askMode(s);
   if (s.partsMode === 'partial' && !s.held) {
@@ -1026,9 +1120,11 @@ async function submit(user, s) {
   let signerLine = '';
   try {
     const d = await Priority.readDemand(c, prdno);
-    const r = hooks.send ? await Approvals.notifyDemand(c, d, hooks.send) : { signer: Priority.nextSigner(d), user: null, sent: false };
+    // לחותם הבא — sendNow: "קיבל" רק כשההודעה יצאה בפועל (#169)
+    const send = hooks.sendNow ?? hooks.send;
+    const r = send ? await Approvals.notifyDemand(c, d, send) : { signer: Priority.nextSigner(d), user: null, sent: false };
     const name = r.user?.full_name || r.signer;
-    signerLine = !r.signer ? '' : r.sent ? `✍️ החותם הבא: *${name}* — קיבל הודעה בוואטסאפ.` : `✍️ החותם הבא: *${name}*.`;
+    signerLine = signerNote(r, name);
   } catch (err) {
     console.error('[משימון] החותם הבא לדרישת רכש:', err.message);
   }
@@ -1087,11 +1183,11 @@ async function handle({ user, text = '', file = null, reaction = false, voice = 
 
   // "דרישת רכש" — התחלה (או המשך של דרישה פתוחה)
   if (!s || (isTrigger(t) && !file && !s.items?.length && s.step !== 'code')) {
-    if (isTrigger(t) && CANCEL.test(t.replace(TRIGGER, '').trim())) { if (s) clear(user.id, s); return { replies: [s ? 'דרישת הרכש בוטלה.' : 'אין דרישת רכש פתוחה.'], status: 'ok', result: 'ביטול' }; }
+    if (isTrigger(t) && CANCEL.test(afterTrigger(t).trim())) { if (s) clear(user.id, s); return { replies: [s ? 'דרישת הרכש בוטלה.' : 'אין דרישת רכש פתוחה.'], status: 'ok', result: 'ביטול' }; }
     const out = await start(user, heard);
     if (out.s) save(user.id, out.s);
     // תמונה או רשימה כבר בהודעה הראשונה ("דרישת רכש: 10 שקי מלט…")
-    const rest = t.replace(TRIGGER, '').replace(/^[\s:\-–,]+/, '').trim();
+    const rest = afterTrigger(t).replace(/^[\s:\-–,]+/, '').trim();
     if (out.s?.step === 'items' && (file || rest.split(/\s+/).length >= 2)) {
       const r2 = await (file ? onFile(user, out.s, file) : onText(user, out.s, rest)) ?? out;
       if (heard.length && r2 !== out && r2.replies?.length) r2.replies[0] = `${heard.join('\n')}\n${r2.replies[0]}`;
@@ -1188,6 +1284,9 @@ async function step(user, s, t, file, { reaction, stale = false }) {
       if (NO.test(t) || /^(חזרה|לרשימה|תיקון)/.test(t)) return showList(s);
       return t.split(/\s+/).length >= 6 ? null : askMode(s);
     }
+    case 'detail':
+      if (file) return onFile(user, s, file);
+      return onDetail(user, s, t);
     case 'pick':
       if (file) return onFile(user, s, file);
       return onPick(user, s, t, { reaction });
@@ -1211,7 +1310,7 @@ async function step(user, s, t, file, { reaction, stale = false }) {
 /**
  * 🗂 תצוגה למסך של משימון פריוריטי (‎priority-desk.js‎) — הדרישה כפי שהיא עכשיו, כנתונים. קריאה בלבד.
  */
-const VIEW_STEP = { start: 'פתיחה', company: 'חברה', project: 'פרויקט', warehouse: 'מחסן', code: 'סוג דרישה', items: 'רשימת הפריטים', pick: 'בחירת פריט', review: 'לפני שליחה לאישור', parts_mode: 'מק"טים מהרכש' };
+const VIEW_STEP = { start: 'פתיחה', company: 'חברה', project: 'פרויקט', warehouse: 'מחסן', code: 'סוג דרישה', items: 'רשימת הפריטים', pick: 'בחירת פריט', review: 'לפני שליחה לאישור', parts_mode: 'מק"טים מהרכש', detail: 'תיאור מדויק לרכש' };
 function view(userId) {
   const s = load(userId);
   if (!s || !fresh(s)) return null;
@@ -1227,4 +1326,4 @@ function view(userId) {
   };
 }
 
-module.exports = { view, isTrigger, opens, startEdit, active, pending, docId, abandon, handle, setHooks, _parseDate: parseDate, _resolveItems: resolveItems, _ai: ai, _load: load, _clear: (userId) => clear(userId, load(userId)), _label: label, _labels: labels, _sameLabel: sameLabel };
+module.exports = { view, isTrigger, opens, startEdit, active, pending, docId, abandon, handle, setHooks, _parseDate: parseDate, _resolveItems: resolveItems, _ai: ai, _load: load, _clear: (userId) => clear(userId, load(userId)), _label: label, _labels: labels, _sameLabel: sameLabel, _signerNote: signerNote };

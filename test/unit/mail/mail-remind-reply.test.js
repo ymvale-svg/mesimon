@@ -91,3 +91,26 @@ test('מעבר על "היום" בבוט — מייל: לענות / להתעלם 
     assert.ok(!b.includes(WALK.task), JSON.stringify(x));
   }
 });
+
+/*
+ * "לא" על "זכרת?" = "לא זכרתי" — דווקא אז צריך את המייל. עד 20.11.26 "לא" לבד נחשב "התעלם",
+ * והמייל ירד מכל הרשימות. מעכשיו — כמו "כן": הבוט מציע תשובה, והמייל לא יורד.
+ */
+test('"לא" / "לא זכרתי" / "שכחתי" — הצעת תשובה, לא "התעלם"', () => {
+  const u = user();
+  for (const t of ['לא', 'לא זכרתי', 'שכחתי']) {
+    const row = suggestion(u);
+    const r = MailActions.answerReminder(u.id, { suggestionId: row.id, title: 'x' }, t);
+    assert.equal(r?.reply, true, t);
+    assert.equal(remindOf(row.id).closed, undefined, `${t} — לא סומן "התעלם"`);
+  }
+});
+
+test('"התעלם", 👎, "לא צריך", "עזוב" — עדיין מתעלמים', () => {
+  const u = user();
+  for (const t of [BTN.ignore, '👎', 'לא צריך', 'עזוב']) {
+    const row = suggestion(u);
+    MailActions.answerReminder(u.id, { suggestionId: row.id, title: 'x' }, t);
+    assert.equal(remindOf(row.id).closed, 'ignored', t);
+  }
+});

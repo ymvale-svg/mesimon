@@ -57,6 +57,14 @@ test('buildMessage — העתק בלי הנמען הראשי, ו-Reply-To עם �
   assert.equal(header(raw, 'Reply-To'), 'Me <me@org.test>');
 });
 
+test('buildMessage — דחוף: כותרות חשיבות גבוהה (סימן קריאה אדום ב-Outlook); רגיל — בלי', () => {
+  const { raw } = Mailer.buildMessage({ ...base, urgent: true });
+  for (const h of ['X-Priority: 1 (Highest)', 'Importance: High', 'X-MSMail-Priority: High']) assert.ok(raw.includes(`\r\n${h}\r\n`), h);
+  const plain = Mailer.buildMessage(base).raw;
+  assert.ok(!plain.includes('X-Priority'));
+  assert.ok(!plain.includes('Importance'));
+});
+
 test('buildMessage — שרשור: In-Reply-To ו-References', () => {
   const { raw } = Mailer.buildMessage({ ...base, inReplyTo: '<a@x>', references: ['<z@x>', '<a@x>'] });
   assert.equal(header(raw, 'In-Reply-To'), '<a@x>');

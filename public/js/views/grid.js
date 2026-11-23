@@ -498,7 +498,7 @@ const GridView = (() => {
   function progressCell(task) {
     if (!task.checklistTotal) {
       return el('td.cell-progress', {}, [
-        el('div.flex', { style: { gap: '6px', color: 'var(--text-mute)', fontSize: '12px' } }, [
+        el('div.flex', { style: { gap: '6px', color: 'var(--text-faint)', fontSize: 'var(--fs-sm)' } }, [
           task.commentsCount ? el('span', { text: `💬 ${task.commentsCount}` }) : null,
           !task.commentsCount ? el('span', { text: '—' }) : null
         ])

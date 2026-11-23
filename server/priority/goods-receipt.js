@@ -66,9 +66,10 @@ const TTL = 24 * 60 * 60 * 1000;
 const TZ = 'Asia/Jerusalem';
 const FILES_DIR = () => path.join(D.UPLOADS_DIR, 'goods-receipt');
 
-const TRIGGER = /קבלת\s*סחורה/;
+// גם "קבלות חורה" (התמלול) ו"קליטת תעודות" (סקירה 22.11: עובד כתב אותם, והבוט ענה "כתוב בדיוק 'קבלת סחורה'")
+const TRIGGER = /קבל(?:ת|ות)\s*ס?חורה|קליט(?:ת|ה)\s+(?:ה)?(?:תעוד(?:ה|ות|ת)|סחורה|חשבוני(?:ת|ות))(?=[\s,.!?]|$)/;
 // "פריוריטי" לבד — תפריט: מה לעשות בפריוריטי (היום קבלת סחורה; בהמשך חשבוניות חלקיות ועוד)
-const PRIORITY = /פריוריטי|פריורטי|פרויוריטי|priority/i;
+const PRIORITY = /פריוריטי|פריורטי|פרויוריטי|(?:^|[\s,.])ריורטי(?=[\s,.!?]|$)|priority/i;
 // שיחה פעילה — רק כל עוד העובד באמת עונה: 15 דקות מההודעה האחרונה (הוחלט 10.11.26; אותה הגדרה של שאר
 // הבוט — ‎wa_question_ttl_min‎). אחרי זה הודעה חדשה מתחילה מההתחלה; רק לחיצה על כפתור (‎late‎) עוד עונה לשאלה
 const idleMs = () => Math.max(1, Number(D.getSetting('wa_question_ttl_min', 15)) || 15) * 60 * 1000;
@@ -101,7 +102,7 @@ function buttonsFor(s) {
   if (!s) return [];
   if (s.confirmCancel) return [BTN.confirmCancel, BTN.backToDraft];
   if (s.confirmFinal) return [BTN.confirmFinal, BTN.backToDraft];
-  if (s.pendingNew) return ['צרף כנספח', 'קבלה חדשה', 'להתעלם ❌'];
+  if (s.pendingNew) return ['צרף כנספח', LATER_BTN, 'להתעלם ❌'];
   if (s.pendingList) return [BTN.yes, BTN.no];
   if (s.choices?.step === s.step && s.choices.list?.length) return s.choices.list;
   switch (s.step) {
@@ -422,12 +423,12 @@ function jpegToPdf(jpg) {
 const ai = {
   async extract(file) {
     const block = fileBlock(file);
-    const first = await Claude.json({ system: skill(), content: [block, { type: 'text', text: 'task: extract' }], schema: EXTRACT_SCHEMA, effort: 'high', live: true });
+    const first = await Claude.json({ feature: 'priority.goods', system: skill(), content: [block, { type: 'text', text: 'task: extract' }], schema: EXTRACT_SCHEMA, effort: 'high', live: true });
     // בדיקה עצמית: סכום השורות לא תואם לסה"כ השורות במסמך — קוראים שוב את הטבלה, שורה אחרי שורה
     const want = Number(first.totals?.subtotal || (Number(first.totals?.before_vat || 0) + Number(first.totals?.doc_discount || 0)) || 0);
     const gap = (d) => Math.abs(lineSum(d.lines) - want);
     if (!(want > 0) || !(first.lines ?? []).length || gap(first) <= 1) return first;
-    const again = await Claude.json({ system: skill(), schema: EXTRACT_SCHEMA, effort: 'high', live: true, content: [block, { type: 'text', text: [
+    const again = await Claude.json({ feature: 'priority.goods', system: skill(), schema: EXTRACT_SCHEMA, effort: 'high', live: true, content: [block, { type: 'text', text: [
       'task: extract',
       `בדיקה: סכום השורות שקראת (${lineSum(first.lines)}) אינו תואם לסה"כ השורות במסמך (${want}). קראת ${first.lines.length} שורות.`,
       'קרא שוב את כל טבלת השורות, שורה אחרי שורה: גם שורות דומות זו לזו, שורות עם אותו מק"ט, שורות שנמשכות על שתי שורות טקסט, ושורות בסוף הטבלה. בדוק כמות × מחיר = סכום בכל שורה.'
@@ -440,26 +441,26 @@ const ai = {
       doc_lines: docLines.map((l, i) => ({ doc_line: i + 1, description: l.description, supplier_code: l.supplier_code, qty: l.qty, unit: l.unit, unit_price: l.unit_price })),
       open_order_lines: orders.flatMap((o) => o.lines.map((l) => ({ order: o.ORDNAME, line: l.LINE, part: l.PARTNAME, description: l.PDES, balance: l.TBALANCE, unit: l.TUNITNAME, price: l.PRICE })))
     });
-    return Claude.json({ system: skill(), content: [{ type: 'text', text }], schema: MATCH_SCHEMA, effort: 'medium', live: true });
+    return Claude.json({ feature: 'priority.goods', system: skill(), content: [{ type: 'text', text }], schema: MATCH_SCHEMA, effort: 'medium', live: true });
   },
   async classify(current, file) {
     const block = fileBlock(file);
-    return Claude.json({ system: skill(), content: [block, { type: 'text', text: JSON.stringify({ task: 'classify', current }) }], schema: CLASSIFY_SCHEMA, effort: 'low', live: true });
+    return Claude.json({ feature: 'priority.goods', system: skill(), content: [block, { type: 'text', text: JSON.stringify({ task: 'classify', current }) }], schema: CLASSIFY_SCHEMA, effort: 'low', live: true });
   },
   async partTerms(text, line) {
     const content = JSON.stringify({ task: 'part_terms', text, line });
-    return Claude.json({ system: skill(), content: [{ type: 'text', text: content }], schema: TERMS_SCHEMA, effort: 'low', live: true });
+    return Claude.json({ feature: 'priority.goods', system: skill(), content: [{ type: 'text', text: content }], schema: TERMS_SCHEMA, effort: 'low', live: true });
   },
   async parts(text, line, candidates) {
     const content = JSON.stringify({ task: 'parts', text, line, candidates: candidates.map((c) => ({ code: c.PARTNAME, description: c.PARTDES, chapter: c.BUD_SUBCHAPTERDES ?? '', resource: c.BUD_SUBTOPICDES ?? '' })) });
-    return Claude.json({ system: skill(), content: [{ type: 'text', text: content }], schema: PARTS_SCHEMA, effort: 'low', live: true });
+    return Claude.json({ feature: 'priority.goods', system: skill(), content: [{ type: 'text', text: content }], schema: PARTS_SCHEMA, effort: 'low', live: true });
   },
   async project(projects, text) {
     const content = JSON.stringify({ task: 'project', text, projects: projects.map((p) => ({ code: p.code, name: p.des, aliases: p.alias ?? '' })) });
-    return Claude.json({ system: skill(), content: [{ type: 'text', text: content }], schema: PROJECT_SCHEMA, effort: 'low', live: true });
+    return Claude.json({ feature: 'priority.goods', system: skill(), content: [{ type: 'text', text: content }], schema: PROJECT_SCHEMA, effort: 'low', live: true });
   },
   async reply(shown, text) {
-    return Claude.json({ system: skill(), content: [{ type: 'text', text: JSON.stringify({ task: 'reply', shown, text }) }], schema: REPLY_SCHEMA, effort: 'low', live: true });
+    return Claude.json({ feature: 'priority.goods', system: skill(), content: [{ type: 'text', text: JSON.stringify({ task: 'reply', shown, text }) }], schema: REPLY_SCHEMA, effort: 'low', live: true });
   }
 };
 
@@ -1444,6 +1445,12 @@ async function showDraft(s, problems = [], user = null) {
 
 const ATTACH_WORD = /נספח|לצרף|תצרף|צרף/;
 const NEW_WORD = /^\s*2\s*$|חדש|קבלת\s*סחורה|מסמך אחר|הבא/;
+/*
+ * "קבלה נפרדת ⏭️" — המסמך שהגיע באמצע הקליטה נכנס לתור ונקלט אחריה, בלי לבטל אותה (סקירה 22.11: עובד שלח 13 תעודות של
+ * ספקים שונים אחת אחרי השנייה; "קבלה חדשה" ביטלה את הנוכחית, אז בחר "צרף כנספח" — וכולן נצמדו לקבלה אחת)
+ */
+const LATER_BTN = 'קבלה נפרדת ⏭️';
+const LATER_WORD = /נפרד|אחר\s*כך|אחרי\s*זה|בתור|לתור|⏭/;
 
 /**
  * "נספח" בכיתוב — נספח. "קבלת סחורה" — מסמך חדש. בלי כיתוב — ה-AI מסווג: תמונה של
@@ -1471,7 +1478,9 @@ async function routeFile(user, s, file, t) {
   const cur = s.docno ? `ל-${s.docno}` : 'לקבלת הסחורה הנוכחית';
   // לא ‎reply()‎: השאלה הזו אינה "השאלה של השלב", ואחרי התשובה חוזרים לזו שחיכתה
   return { s, replies: [[cls ? `📄 זה נראה כמו מסמך חדש${s.pendingNew.label ? `: ${s.pendingNew.label}` : ''}.` : '📄 קיבלתי מסמך נוסף.',
-    `*צרף כנספח* — ${cur}`, `*קבלה חדשה*${!s.docno && s.step !== 'files' ? ' — הנוכחית תבוטל' : ''}`, `*להתעלם* ❌ — הקובץ לא נקלט, וחוזרים ל: ${waitingQuestion(s)}`].join('\n')] };
+    `*צרף כנספח* — ${cur}`, `*קבלה נפרדת* ⏭️ — אקלוט אותו אחרי הנוכחית`,
+    ...(!s.docno && s.step !== 'files' ? ['*קבלה חדשה* (בכתב) — הנוכחית תבוטל, ועוברים אליו'] : []),
+    `*להתעלם* ❌ — הקובץ לא נקלט, וחוזרים ל: ${waitingQuestion(s)}`].join('\n')] };
 }
 
 /** המסמך שהגיע הוא החשבון שהחשבונית מפנה אליו? (לפני שנוצרה טיוטא) */
@@ -1593,12 +1602,18 @@ function waitingQuestion(s) {
   };
   return by[s.step] ?? String(s.lastPrompt ?? '').split('\n').find((l) => l.trim())?.slice(0, 60) ?? 'השאלה הקודמת';
 }
-const newOrAttach = (s) => `בחרו: *צרף כנספח*${s.docno ? ` (ל-${s.docno})` : ''} · *קבלה חדשה* · *להתעלם* ❌ — וחוזרים ל: ${waitingQuestion(s)}`;
+const newOrAttach = (s) => `בחרו: *צרף כנספח*${s.docno ? ` (ל-${s.docno})` : ''} · *קבלה נפרדת* ⏭️ · *להתעלם* ❌ — וחוזרים ל: ${waitingQuestion(s)}`;
 
 /** תשובה לשאלה "נספח או חדש?" — ‎null‎ אם התשובה אינה אחת מהשתיים */
 async function answerPendingNew(user, s, t) {
   const f = s.pendingNew.file;
   if (/^\s*1\s*$/.test(t) || ATTACH_WORD.test(t)) { s.pendingNew = null; return attachNow(user, s, f); }
+  if (LATER_WORD.test(t)) {
+    s.pendingNew = null;
+    s.queued = [...queueOf(s), f];
+    const n = queueOf(s).length;
+    return { s, replies: [`📥 בתור${n > 1 ? ` (${n})` : ''} — אקלוט אותו כקבלה נפרדת מיד אחרי הנוכחית.${s.lastPrompt ? `\n\n${s.lastPrompt}` : ''}`] };
+  }
   if (NEW_WORD.test(t)) { s.pendingNew = null; return queueNew(user, s, f, null); }
   // "לא" / "אף אחד" / "3" — לא זה ולא זה: הקובץ נמחק, וחוזרים לשאלה שחיכתה
   if (/^\s*3\s*$/.test(t) || /^(לא|אל|אף אחד|שום דבר|לא זה ולא זה|תתעלם|להתעלם|התעלם|עזוב|no)([\s,.!]|$)/i.test(t)) {

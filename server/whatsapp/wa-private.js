@@ -55,6 +55,20 @@ const CHAT_SCHEMA = {
     recording_query: { type: 'string', description: 'בהקלטה: לפי מה לחפש — נושא הפגישה, שם משתתף או חברה ("רזבר", "ישיבת צוות"), בלי מילים כמו "ההקלטה של הפגישה עם". לא נאמר — ריק' },
     recording_date: { type: 'string', description: 'בהקלטה: YYYY-MM-DD כשנאמר יום ("מאתמול", "של יום שלישי"), לפי תאריך היום. לא נאמר — ריק' },
     contact_source: { type: 'string', enum: ['any', 'google', 'phonebook'], description: 'באיש קשר ובמייל: מאיפה לחפש — phonebook רק כשנאמר במפורש "מהאלפון"/"באלפון", google רק כשנאמר "מגוגל"/"מאנשי הקשר בגוגל". אחרת any' },
+    tasks: {
+      type: 'array',
+      description: 'ב-create_task כשנמנו כמה משימות נפרדות (2 ומעלה, "אחד: … שתיים: …"): כל משימה כאן. draft — מה שמשותף לכולן (יעד, פרויקט, עדיפות, אחראי). משימה אחת — ריק',
+      items: {
+        type: 'object',
+        properties: {
+          title: { type: 'string' },
+          due_date: { type: 'string', description: 'YYYY-MM-DD כשנאמר לה יעד משלה, אחרת ריק' },
+          assignee_user_id: { type: 'integer', description: 'כשנאמר לה אחראי משלה, אחרת 0' }
+        },
+        required: ['title', 'due_date', 'assignee_user_id'],
+        additionalProperties: false
+      }
+    },
     draft: {
       type: 'object',
       properties: {
@@ -72,7 +86,7 @@ const CHAT_SCHEMA = {
       additionalProperties: false
     }
   },
-  required: ['intent', 'ready', 'reply', 'range', 'task_id', 'comment', 'project_id', 'recipient_name', 'recipient_org', 'recipient_email', 'request', 'insight_action', 'insight_n', 'insight_from', 'insight_range_unit', 'insight_range_n', 'contact_query', 'contact_source', 'recording_query', 'recording_date', 'draft'],
+  required: ['intent', 'ready', 'reply', 'range', 'task_id', 'comment', 'project_id', 'recipient_name', 'recipient_org', 'recipient_email', 'request', 'insight_action', 'insight_n', 'insight_from', 'insight_range_unit', 'insight_range_n', 'contact_query', 'contact_source', 'recording_query', 'recording_date', 'tasks', 'draft'],
   additionalProperties: false
 };
 
@@ -164,6 +178,47 @@ function draftText(draft, user) {
 
 
 const LIST_SHOWN = 15;
+
+/** כמה משימות לכל היותר בבקשה אחת */
+const BATCH_MAX = 30;
+
+/**
+ * 📝📝 כמה משימות בהודעה אחת — טיוטה אחת (‎task_batch‎): כל משימה עם מה שמשותף (‎base‎: יעד, פרויקט, עדיפות,
+ * אחראי) ועם מה שנאמר לה עצמה. "כן" אחד פותח את כולן.
+ */
+function batchDraft(actor, base, tasks) {
+  const items = tasks.map((x) => checkDraft(actor, {
+    ...base, kind: 'task', title: x.title, summary: '', checklist: [], templateId: 0,
+    dueDate: x.dueDate || base.dueDate || '', assigneeId: x.assigneeId || base.assigneeId || 0
+  }));
+  return { kind: 'task_batch', title: `${items.length} משימות`, items };
+}
+
+function batchText(draft, user) {
+  const nameOf = (id) => D.get('SELECT full_name FROM users WHERE id = ?', id)?.full_name;
+  const projects = [...new Set(draft.items.map((x) => x.projectId))];
+  const project = projects.length === 1 && projects[0] ? D.get('SELECT name FROM projects WHERE id = ?', projects[0])?.name : null;
+  const dues = [...new Set(draft.items.map((x) => x.dueDate))];
+  const line = (x, i) => {
+    const bits = [
+      x.assigneeId && x.assigneeId !== user.id ? `👤 ${nameOf(x.assigneeId)}` : null,
+      dues.length > 1 && x.dueDate ? `📅 ${shortDate(x.dueDate)}` : null,
+      projects.length > 1 && x.projectId ? `📁 ${D.get('SELECT name FROM projects WHERE id = ?', x.projectId)?.name ?? ''}` : null
+    ].filter(Boolean);
+    return `${i + 1}. ${x.title}${bits.length ? ` · ${bits.join(' · ')}` : ''}`;
+  };
+  const warnings = [...new Set(draft.items.flatMap((x) => x.warnings ?? []))];
+  return [
+    `📝 *${draft.items.length} משימות:*`,
+    ...draft.items.map(line),
+    '',
+    dues.length === 1 ? `📅 יעד: ${dues[0] ? shortDate(dues[0]) : 'ללא'}` : null,
+    projects.length === 1 ? `📁 פרויקט: ${project ?? 'ללא'}` : null,
+    ...warnings.map((w) => `⚠️ ${w}`),
+    '',
+    `לפתוח את כל ${draft.items.length}? השיבו *כן*, או כתבו מה לתקן.`
+  ].filter((l) => l !== null).join('\n');
+}
 
 
 function dueLabel(t) {
@@ -336,6 +391,21 @@ function sourceOf(aiSource, text) {
 }
 
 
+/**
+ * "תבדוק ברשת" לבד — לאינסטינקט צריך לצאת *מה* לחפש: ה-‎request‎ של ה-AI (עם ההקשר), ואם הוא ריק או רק חוזר על
+ * ההודעה — ההודעה הקודמת של העובד לפניה (השיחה עם אינסטינקט משותפת, הוא לא יודע על מה מדובר)
+ */
+function webRequest(out, text, state) {
+  const req = String(out.request ?? '').trim();
+  const t = String(text ?? '').trim();
+  if (!WEB_ASK.test(t) || (req && req !== t) || t.split(/\s+/).length > 4) return req.slice(0, 2000);
+  const prev = [...(state?.history ?? [])].reverse().find((h) => h.role === 'user' && String(h.text ?? '').trim() && String(h.text).trim() !== t);
+  return (prev ? `${t}: ${String(prev.text).trim()}` : req || t).slice(0, 2000);
+}
+
+/** בקשה מפורשת לחפש ברשת ("תבדוק ברשת", "תחפש לי באינטרנט", "חפש בגוגל") */
+const WEB_ASK = /(?:^|[\s,])(?:ת|ל|ו)?(?:בדוק|בדקי|חפש|חפשי|בדוק|חפש)(?:\s+(?:לי|את\s+זה|גם|את))*\s+(?:ב|גם\s+ב)(?:רשת|אינטרנט|גוגל)(?=$|[\s,.!?])/;
+
 async function understand(user, actor, state, text, projects, myOpen, { file = null } = {}) {
   const users = orgUsers();
   const { allowedProjects } = newTaskScope(actor);
@@ -379,7 +449,7 @@ async function understand(user, actor, state, text, projects, myOpen, { file = n
     'רשימת התובנות האחרונה שנשלחה לו — מהמייל 📧 ומהוואטסאפ 👥💬 (מספר · שולח · תובנה):',
     ...(insightList.length ? insightList.map((x) => `${x.n} · ${x.who} · ${x.insight}`) : ['(אין)']),
     '',
-    `הטיוטה הנוכחית: ${state.draft && (state.draft.kind ?? 'task') === 'task' ? JSON.stringify(state.draft) : '(אין)'}`,
+    `הטיוטה הנוכחית: ${state.draft && ['task', 'task_batch'].includes(state.draft.kind ?? 'task') ? JSON.stringify(state.draft) : '(אין)'}`,
     '',
     'השיחה עד כה:',
     ...(state.history.length ? state.history.map((h) => `${h.role === 'bot' ? 'הבוט' : 'הכותב'}: ${h.text}`) : ['(התחלה)']),
@@ -398,6 +468,7 @@ async function understand(user, actor, state, text, projects, myOpen, { file = n
    */
   const [stable, rest] = prompt.split('\n\u0000\n');
   const out = await Claude.json({
+    feature: 'bot.chat',
     system: fs.readFileSync(CHAT_SKILL, 'utf8'),
     content: [{ type: 'text', text: stable, cache_control: { type: 'ephemeral' } }, { type: 'text', text: rest }],
     schema: CHAT_SCHEMA, effort: 'low', live: true
@@ -407,7 +478,9 @@ async function understand(user, actor, state, text, projects, myOpen, { file = n
   const d = out.draft ?? {};
   return {
     // 🤖 בקשה כללית ממי שאינסטינקט לא פתוח לו — כמו קודם: "אחר"
-    intent: !INTENTS.includes(out.intent) || (out.intent === 'instinct' && !WaActions.allowed(actor, 'instinct')) ? 'other' : out.intent,
+    intent: !INTENTS.includes(out.intent) || (out.intent === 'instinct' && !WaActions.allowed(actor, 'instinct')) ? 'other'
+      // 🌐 "תבדוק ברשת" — לאינסטינקט, גם כשה-AI סיווג כשאלה (באג 22.11.26: "✨ העוזר" ענה "אין לי גישה לרשת")
+      : ['mail_ask', 'other'].includes(out.intent) && WEB_ASK.test(String(text ?? '')) && WaActions.allowed(actor, 'instinct') ? 'instinct' : out.intent,
     ready: Boolean(out.ready),
     reply: String(out.reply ?? '').trim().slice(0, 1000),
     range: RANGES[out.range] ? out.range : 'today',
@@ -425,7 +498,7 @@ async function understand(user, actor, state, text, projects, myOpen, { file = n
       org: String(out.recipient_org ?? '').trim().slice(0, 80),
       email: /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(out.recipient_email ?? '').trim()) ? String(out.recipient_email).trim().toLowerCase() : ''
     },
-    request: String(out.request ?? '').trim().slice(0, 2000),
+    request: webRequest(out, text, state),
     insight: {
       action: INSIGHT_ACTIONS.includes(out.insight_action) ? out.insight_action : 'list',
       n: Number(out.insight_n) || 0,
@@ -433,6 +506,12 @@ async function understand(user, actor, state, text, projects, myOpen, { file = n
       // הטווח — יחידה ומספר מה-AI, ואם לא חזרו — מהטקסט. התאריכים — בקוד
       range: Range.specFrom({ unit: out.insight_range_unit, n: out.insight_range_n }, text)
     },
+    // 📝📝 כמה משימות בבת אחת ("אחד: … שתיים: …") — כל אחת נפתחת בנפרד (באג 22.11.26: נפתחה משימה אחת עם צ'קליסט)
+    tasks: (Array.isArray(out.tasks) ? out.tasks : []).map((x) => ({
+      title: String(x?.title ?? '').trim().slice(0, 120),
+      dueDate: /^\d{4}-\d{2}-\d{2}$/.test(String(x?.due_date ?? '')) ? x.due_date : '',
+      assigneeId: ids.has(Number(x?.assignee_user_id)) ? Number(x.assignee_user_id) : 0
+    })).filter((x) => x.title).slice(0, BATCH_MAX),
     draft: {
       kind: 'task',
       title: String(d.title ?? '').trim().slice(0, 120),
@@ -578,5 +657,5 @@ function withForwards(rows, text) {
 const unknownReplied = new Map();
 
 module.exports = {
-  CANCEL, FORWARD_MAX, LIST_SHOWN, PLAIN_FEATURES, PLAIN_GREETING, PLAIN_HELP, PLAIN_INSIGHTS, PLAIN_LIST, PLAIN_TODAY, PRIORITY, RANGES, READ_ALOUD, READ_ALOUD_DOWN, YES, actionOf, addForward, chatOf, checkDraft, clearForwards, draftText, dueLabel, emptyChat, featuresText, findContactCards, formatList, forwardsOf, helpText, localDay, mergedChecklist, readAloudAllowed, readAloudFile, readAloudText, saveChat, shortDate, sourceOf, understand, unknownReplied, withForwards
+  WEB_ASK, BATCH_MAX, batchDraft, batchText, CANCEL, FORWARD_MAX, LIST_SHOWN, PLAIN_FEATURES, PLAIN_GREETING, PLAIN_HELP, PLAIN_INSIGHTS, PLAIN_LIST, PLAIN_TODAY, PRIORITY, RANGES, READ_ALOUD, READ_ALOUD_DOWN, YES, actionOf, addForward, chatOf, checkDraft, clearForwards, draftText, dueLabel, emptyChat, featuresText, findContactCards, formatList, forwardsOf, helpText, localDay, mergedChecklist, readAloudAllowed, readAloudFile, readAloudText, saveChat, shortDate, sourceOf, understand, unknownReplied, withForwards
 };

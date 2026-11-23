@@ -33,6 +33,7 @@ const Dupes = require('../tasks').TaskDupes;
 const P = require('../core').Permissions;
 const Docs = require('../core').DocText;
 const Memory = require('./mail-memory');
+const SignatureBackfill = require('./signature-backfill');
 const Closure = require('../tasks').TaskClosure;
 const MailActions = require('./mail-actions');
 const FormFill = require('./form-fill');
@@ -40,6 +41,8 @@ const Ports = require('../core').Ports;
 const Classification = require('../core').Classification;
 const MailInsights = require('./mail-insights');
 const MailOwner = require('./mail-owner');
+const MailDose = require('./mail-dose');
+const MailBulk = require('./mail-bulk');
 const MeetingCoord = require('../meetings').MeetingCoord;
 const OrgKnowledge = require('../agents').OrgKnowledge;
 const Rfq = require('../priority').Rfq;
@@ -117,7 +120,8 @@ function record(userId, gmailId, headerId, outcome, box = 0) {
 /** כמה נסרקו היום בתיבה — התקרה היומית לכל תיבה בנפרד, כך שתיבה אחת לא "אוכלת" את השנייה */
 function scannedToday(userId, box = 0) {
   const since = startOfLocalDay(localDate().date).toISOString();
-  return D.get("SELECT COUNT(*) c FROM mail_scanned WHERE user_id = ? AND box = ? AND scanned_at >= ? AND outcome <> 'reply'", userId, box, since).c;
+  // תשובות ו-📭 מה שסונן בלי AI — לא נספרים בתקרה (היא על הקריאות ל-AI)
+  return D.get("SELECT COUNT(*) c FROM mail_scanned WHERE user_id = ? AND box = ? AND scanned_at >= ? AND outcome <> 'reply' AND outcome NOT LIKE 'bulk%'", userId, box, since).c;
 }
 
 const shortDate = (d) => (d ? new Date(d).toLocaleDateString('he-IL', { timeZone: TZ }) : '');
@@ -229,7 +233,21 @@ async function analyze(user, mail, conn = null) {
     'החלט לפי ההנחיות.'
   ].filter((l) => l !== null).join('\n');
 
-  const out = await Claude.json({ system: skill(), content: [...docs.map((d) => d.block), { type: 'text', text }], schema: ANALYSIS_SCHEMA, effort: 'low' });
+  const content = [...docs.map((d) => d.block), { type: 'text', text }];
+  const ask = (model) => Claude.json({ feature: 'mail.scan', userId: user?.id, system: skill(), content, schema: ANALYSIS_SCHEMA, effort: 'low', model });
+  /*
+   * 💰 מיון המיילים — במודל זול (‎ai_scan_model‎, ברירת מחדל Haiku; הוחלט 17.11.26). השירות דחה אותו (מודל לא זמין,
+   * בקשה שלא נתמכת בו) — אותה בקשה במודל הראשי, כדי שמייל לא ייפול בגלל המודל. תקלה זמנית (429 / 5xx) — כמו תמיד.
+   */
+  const scanModel = String(D.getSetting('ai_scan_model', 'claude-haiku-5-5') || '').trim() || null;
+  let out;
+  try {
+    out = await ask(scanModel);
+  } catch (err) {
+    if (!scanModel || !(err.status >= 400 && err.status < 500 && err.status !== 429)) throw err;
+    console.error(`[משימון] מיון המייל ב-${scanModel} נדחה (${err.status}) — במודל הראשי:`, err.message);
+    out = await ask(null);
+  }
   return sanitize(out, user, users);
 }
 
@@ -383,7 +401,11 @@ async function processMessage(user, conn, gmailId) {
   if (Rfq.ownsReply(mail)) return record(user.id, gmailId, headerId, 'reply', meta.box), 'reply';
   // תשובה למייל עם מועדים לפגישה — נקראת שם (‎meeting-coord.js‎)
   if (MeetingCoord.ownsReply(mail)) return record(user.id, gmailId, headerId, 'reply', meta.box), 'reply';
-  if (senderMode(user.id, mail.from.address) === 'ignore') return record(user.id, gmailId, headerId, 'skipped', meta.box), 'skipped';
+  const mode = senderMode(user.id, mail.from.address);
+  if (mode === 'ignore') return record(user.id, gmailId, headerId, 'skipped', meta.box), 'skipped';
+  // 📭 ניוזלטר / מענה אוטומטי — בלי AI (‎mail-bulk.js‎). מייל עם קובץ, מהארגון, משולח מהימן או תשובה בשרשור — תמיד נבדק
+  const bulk = MailBulk.reason(mail, { trusted: mode === 'trust' });
+  if (bulk) return record(user.id, gmailId, headerId, `bulk:${bulk}`, meta.box), 'bulk';
 
   /*
    * מייל שעונה על משימה שפתחתי, או מעדכן אותה — הצעה "לסגור?" / "לעדכן?"
@@ -456,8 +478,12 @@ async function processMessage(user, conn, gmailId) {
    * 📧 הצעת תשובה מוכנה — כשהשולח מחכה לתשובה במייל: לפי המייל, איך ענית לו
    * בעבר, זיכרון העבודה והידע הארגוני. נשמרת עם ההצעה הראשונה של המייל;
    * נשלחת רק בלחיצה ("✏️ עריכה ושליחה"). כשל — ההצעה נשארת בלי תשובה.
+   * 📉 מתחת ל-100% (‎mail-dose.js‎) — לא מכינים מראש: ‎replyWanted‎, והתשובה נכתבת רק כשהמייל מוצע או כשמבקשים.
    */
-  if (result.replyExpected && D.getSetting('mail_reply_suggest', true) && Gmail.canSend(Gmail.handle(user.id, meta.box))) {
+  if (result.replyExpected && result.tasks[0] && !MailDose.prepareReplies(user.id)) {
+    result.tasks[0].replyWanted = true;
+    result.tasks[0].replyBox = meta.box ?? 0;
+  } else if (result.replyExpected && D.getSetting('mail_reply_suggest', true) && Gmail.canSend(Gmail.handle(user.id, meta.box))) {
     try {
       const r = await MailInsights.suggestReply(user.id, gmailId, { box: meta.box });
       // כל השדות — גם השרשור והכותרות, כדי שהבוט יוכל לשלוח את התשובה ב"כן" (‎mailAlerts‎ ב-‎wa-bot.js‎)
@@ -467,8 +493,7 @@ async function processMessage(user, conn, gmailId) {
     }
   }
 
-  const trusted = senderMode(user.id, mail.from.address) === 'trust';
-  const autoAll = D.userPrefs(user.id).mailAutoCreate === true;
+  const how = autoHow({ trusted: senderMode(user.id, mail.from.address) === 'trust', autoAll: D.userPrefs(user.id).mailAutoCreate === true });
   let created = 0;
   for (const t of result.tasks) {
     // ‎toMe‎ — אני הנמען הראשי (לא רק בהעתק); ‎auto‎ — דיוור / הודעה אוטומטית. רק כאלה קופצים בוואטסאפ (‎mail-push.js‎)
@@ -477,12 +502,12 @@ async function processMessage(user, conn, gmailId) {
     const data = { ...t, warning: result.warning, alsoSuggestedTo: others, receivedAt: meta.receivedAt, toMe, auto: Boolean(mail.autoSubmitted), ...(ownerName ? { ownerName } : {}) };
     // לבד רק משימה שכולה שלי: בלי עובדים אחרים, בלי פנייה החוצה ובלי סימן אזהרה
     const solo = !t.people.length && !t.aiRequest && !t.ambiguous.length && !result.warning;
-    if ((trusted || autoAll) && solo && !others.length) {
+    if (how && solo && !others.length) {
       const id = insertSuggestion(user, meta, 'task', data);
       try {
         const actor = Auth.loadActor('user', user.id);
         // משימה מהמייל בלי יעד — להיום, כדי שתופיע ב-Today ולא תישכח בלוח
-        const taskId = createFromSuggestion(suggestionById(id), actor, t.dueDate ? {} : { dueDate: W.todayIL() });
+        const taskId = createFromSuggestion(suggestionById(id), actor, { how, ...(t.dueDate ? {} : { dueDate: W.todayIL() }) });
         D.run("UPDATE ai_suggestions SET status = 'auto', task_id = ?, decided_at = ? WHERE id = ?", taskId, D.nowIso(), id);
         created++;
       } catch (err) {
@@ -519,7 +544,7 @@ async function runScan(who, { from, to = null, trigger = 'manual' }) {
 
   if (!Gmail.claimScan(who)) return null;
 
-  const progress = { trigger, total: 0, done: 0, suggested: 0, auto: 0, skipped: 0, replies: 0, errors: 0, startedAt: D.nowIso(), from: from.toISOString(), to: to?.toISOString() ?? null };
+  const progress = { trigger, total: 0, done: 0, suggested: 0, auto: 0, skipped: 0, bulk: 0, replies: 0, errors: 0, startedAt: D.nowIso(), from: from.toISOString(), to: to?.toISOString() ?? null };
   setProgress(who, progress);
   try {
     const limit = Number(D.getSetting('ai_scan_daily_limit', 100));
@@ -536,10 +561,11 @@ async function runScan(who, { from, to = null, trigger = 'manual' }) {
     for (let i = 0; i < batch.length; i += CONCURRENCY) {
       await Promise.all(batch.slice(i, i + CONCURRENCY).map(async (id) => {
         try {
-          const outcome = await processMessage(user, conn, id);
+          const outcome = await Claude.forUser(userId, () => processMessage(user, conn, id));
           if (outcome === 'suggested') progress.suggested++;
           else if (outcome === 'auto') progress.auto++;
           else if (outcome === 'reply') progress.replies++;
+          else if (outcome === 'bulk') progress.bulk++;
           else progress.skipped++;
         } catch (err) {
           progress.errors++;
@@ -579,6 +605,8 @@ function startScan(userId, range) {
   const boxes = Gmail.boxesOf(userId, 'mail');
   if (!boxes.length) throw new Error('תיבת ה-Gmail אינה מחוברת');
   if (boxes.some((who) => Gmail.connectionOf(who)?.scan_running)) throw new Error('סריקה כבר רצה');
+  // 📉 "סרוק עכשיו" — בקשה של העובד: שימוש (‎mail-dose.js‎)
+  MailDose.noteUse(userId, 'app');
   (async () => {
     for (const who of boxes) {
       await runScan(who, { from, to, trigger: 'manual' }).catch((err) => {
@@ -633,6 +661,8 @@ async function morningRun() {
     if (!D.getSetting('ai_mail_scan_enabled', true) || !Claude.isEnabled()) return;
     // כל תיבה של כל עובד — הראשית והנוספות
     for (const userId of Gmail.allBoxes('mail')) {
+      // 📉 עובד מושהה (לא השתמש בהצעות המייל שלושה שבועות) — לא נסרק (‎mail-dose.js‎)
+      if (!MailDose.morningScan(Gmail.userOf(userId))) continue;
       const conn = Gmail.connectionOf(userId);
       // מהסריקה הקודמת, ולא יותר משבוע אחורה — מי שחזר מחופשה לא יקבל חודש של הצעות בבת אחת
       const last = conn.last_scan_at ? new Date(conn.last_scan_at) : rangeOf({ range: 'yesterday' }).from;
@@ -674,6 +704,8 @@ async function liveRun() {
     for (const who of liveBoxes()) {
       const conn = Gmail.connectionOf(who);
       if (!conn || conn.state !== 'ok' || conn.scan_running) continue;
+      // 📉 לפי המדרגה: 100% — כל סבב, 50% — כל 30 דק', 20% ומושהה — לא בסריקה השוטפת (‎mail-dose.js‎)
+      if (!MailDose.liveDue(Gmail.userOf(who), conn.last_scan_at, { baseMinutes: every })) continue;
       const last = conn.last_scan_at ? new Date(conn.last_scan_at).getTime() : 0;
       const from = new Date(Math.max(last - 30 * 60000, Date.now() - DAY));
       await runScan(who, { from, trigger: 'live' }).catch((err) => console.error(`[משימון] סריקה שוטפת של ${who} נכשלה:`, err.message));
@@ -882,6 +914,21 @@ async function suggestionMail(id, userId) {
   }
 }
 
+/*
+ * 🔎 איך נפתחה משימה מהצעה — נרשם ביומן הפעולות של המשימה ובהצעה (‎data.how‎), ומשם לייצוא של הסקירה
+ * הלילית (20.11.26: משימה ממייל של Google נפתחה לעובד, ולא היה אפשר לדעת אם לבד או בלחיצה).
+ */
+const HOW = Object.freeze({
+  trusted: 'נוצרה לבד — השולח מסומן ⭐ "נוצר ישר"',
+  auto_all: 'נוצרה לבד — המתג "ליצור משימות מהמייל בלי אישור" דולק',
+  manual: 'אושרה ידנית באתר',
+  approve_all: 'אושרה ב"אשר הכול"',
+  bot: 'אושרה בבוט'
+});
+
+/** יצירה לבד מהסריקה: למה — שולח מהימן קודם למתג; ‎null‎ — לא לבד, ממתין לאישור */
+const autoHow = ({ trusted, autoAll }) => (trusted ? 'trusted' : autoAll ? 'auto_all' : null);
+
 /** העותק של המייל המקורי, לכרטיס המשימה. ‎null‎ — אין */
 function sourceMailOf(task) {
   const v = parseJson(task?.source_mail || '', null);
@@ -939,10 +986,12 @@ function createFromSuggestion(sug, actor, edits = {}) {
     source: fromWhatsApp ? 'whatsapp' : fromAgent ? 'agent' : fromMeeting ? 'meeting' : 'email',
     sourceRef: sug.header_id,
     sourceUserId: sug.user_id,
-    auditNote: fromMeeting ? `המשימה נוצרה מהמשימות של הפגישה "${data.meetingTitle}"` : fromWhatsApp
+    auditNote: (fromMeeting ? `המשימה נוצרה מהמשימות של הפגישה "${data.meetingTitle}"` : fromWhatsApp
       ? (data.personal ? `המשימה נוצרה מהודעת וואטסאפ של ${sug.from_name}` : `המשימה נוצרה מבקשה של ${sug.from_name} בקבוצת "${data.groupName}"`)
-      : fromAgent ? `המשימה נוצרה מהצעה של הסוכן "${sug.from_name}"` : `המשימה נוצרה ממייל של ${sug.from_name}`
+      : fromAgent ? `המשימה נוצרה מהצעה של הסוכן "${sug.from_name}"` : `המשימה נוצרה ממייל של ${sug.from_name}`)
+      + (HOW[edits.how] ? ` · ${HOW[edits.how]}` : '')
   });
+  if (HOW[edits.how]) D.run("UPDATE ai_suggestions SET data = json_set(data, '$.how', ?) WHERE id = ?", edits.how, sug.id);
   // בקשה לפגישה — מהמייל, מקבוצה או מהוואטסאפ האישי: "📅 פגישה לקביעה"
   if (data.meeting) D.run('UPDATE tasks SET meeting_pending = 1 WHERE id = ?', taskId);
   // 📧 עותק של המייל במשימה — לכל מי שעובד עליה (ברקע)
@@ -985,6 +1034,12 @@ function createFromSuggestion(sug, actor, edits = {}) {
  * @returns {number|Promise<number>} מזהה המשימה
  */
 function approve(id, actor, edits = {}) {
+  // מבחוץ — רק "בבוט" או "ידנית": יצירה לבד ו"אשר הכול" נקבעים כאן בפנים, לא בבקשה
+  return approveAs(id, actor, edits, edits.how === 'bot' ? 'bot' : 'manual');
+}
+
+function approveAs(id, actor, edits, how) {
+  edits = { ...edits, how };
   const sug = ownSuggestion(id, actor.id);
   if (TaskSync.KINDS.includes(sug.kind)) return TaskSync.approve(sug, actor, edits).then((r) => r.taskId);
   if (sug.kind === 'task_merge') return Dupes.approve(sug, actor);
@@ -1022,7 +1077,7 @@ function approveAll(actor) {
     const d = parseJson(sug.data, {});
     if ((d.people ?? []).length || d.aiRequest || (d.ambiguous ?? []).length || d.warning) { out.left++; continue; }
     try {
-      approve(sug.id, actor, {});
+      approveAs(sug.id, actor, {}, 'approve_all');
       out.approved++;
     } catch {
       out.left++;
@@ -1113,6 +1168,23 @@ function dismissClosure(id, actor) {
 }
 
 /** 📧 הצעת התשובה שעל ההצעה: נשלחה (מהחלון) או נדחתה — יורדת מהשורה */
+/**
+ * 💡 "להכין הצעת תשובה" — למייל שהשולח מחכה בו לתשובה, כשהתשובה לא הוכנה מראש (📉 מינון מתחת ל-100%, ‎mail-dose.js‎).
+ * נכתבת עכשיו ונשמרת בהצעה, כמו בסריקה.
+ */
+async function prepareReply(id, actor) {
+  const sug = ownSuggestion(id, actor.id);
+  const data = parseJson(sug.data, {});
+  if (data.reply?.body) return;
+  if (!data.replyWanted) throw new Error('אין במייל הזה בקשה לתשובה');
+  const box = Number(data.replyBox ?? 0);
+  if (!Gmail.canSend(Gmail.handle(actor.id, box))) throw new Error('כדי לענות צריך לחבר את תיבת ה-Gmail עם הרשאת שליחה');
+  const r = await MailInsights.suggestReply(actor.id, sug.gmail_id, { box });
+  if (!r?.body) throw new Error('לא הצלחתי להכין תשובה — אפשר לענות ישירות ב-Gmail');
+  data.reply = { ...r, gmailId: sug.gmail_id, box };
+  D.run('UPDATE ai_suggestions SET data = ? WHERE id = ?', JSON.stringify(data), sug.id);
+}
+
 function markReply(id, actor, state) {
   const sug = ownSuggestion(id, actor.id);
   const data = parseJson(sug.data, {});
@@ -1245,6 +1317,8 @@ function init({ createTask }) {
     afterTick: () => {
       // זיכרון המייל רץ ברקע ובקצב משלו — לא מעכב את ריצת הבוקר
       Memory.tick().catch((err) => console.error('[משימון] זיכרון המייל:', err.message));
+      // ✍️ התארים מחתימות המיילים הקיימים — פעם אחת לכל איש קשר, ברקע
+      SignatureBackfill.tick().catch((err) => console.error('[משימון] קריאת החתימות:', err.message));
       // 📚 הידע הארגוני מתעדכן ממה שהזיכרון קרא — כל כמה שעות, לא רק בבוקר
       OrgKnowledge.refresh();
       // 📬 הסריקה השוטפת רצה ברקע — לא מעכבת את ריצת הבוקר
@@ -1257,9 +1331,9 @@ function init({ createTask }) {
 module.exports = {
   init, startScan, runScan, rangeOf, morningRun, liveRun, pollMailbox,
   approve, approveAll, attachToOther, newTaskFromMessage, reject, restore, ignoreSenderOf, join, skip, undo, markConverted, setSender, senders,
-  dismissClosure, closureForTask, markReply,
+  dismissClosure, closureForTask, markReply, prepareReply,
   listFor, sourceLink, suggestionById, captureSourceMail, sourceMailOf, mailSnapshot, suggestionMail,
   // 📧 משימה ממייל שהעובד בוחר (‎mail-pick.js‎) — אותו ניתוח ואותה הצעה כמו בסריקה
   analyze, insertSuggestion, existingTaskFor, involvedIn, shape, recordScanned: record,
-  _internal: { sanitize, processMessage, createFromSuggestion, liveBoxes }
+  _internal: { autoHow, HOW, sanitize, processMessage, createFromSuggestion, liveBoxes }
 };

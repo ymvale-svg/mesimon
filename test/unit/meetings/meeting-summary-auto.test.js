@@ -195,3 +195,30 @@ test('בלי AI — רק תחילת הסיכום של Timeless (עד 3,000 תו�
   assert.ok(mail.text.length < 3500, `${mail.text.length}`);
   assert.match(mail.text, /\(הסיכום המלא — ב-Timeless\)/);
 });
+
+test('אבטחה: מהיומן — רק האירוע של הפגישה עצמה; פגישה צמודה, יומן משותף של אחר ומי שדחה — לא מקבלים את הסיכום', async (t) => {
+  clean();
+  const Calendar = require('../../../server/meetings/calendar');
+  const host = user({ full_name: 'רונית', email: `hc${NOW}@eshel.test` });
+  const dana = user({ full_name: 'דנה', email: `dc${NOW}@eshel.test` });
+  const zara = user({ full_name: 'זרה', email: `zc${NOW}@eshel.test` });
+  const yossi = user({ full_name: 'יוסי', email: `yc${NOW}@eshel.test` });
+  const other = user({ full_name: 'אחר', email: `oc${NOW}@eshel.test` });
+  const id = meeting({ host: { name: 'רונית', email: host.email }, people: [{ name: 'דנה', email: dana.email }] });
+  const start = new Date(NOW - 2 * HOUR).getTime();
+  const p = (u, response = 'accepted') => ({ email: u.email, name: u.full_name, response });
+  t.mock.method(Calendar, 'isConnected', () => true);
+  t.mock.method(Calendar, 'eventsForDay', async () => ({ connected: true, events: [
+    // פגישה צמודה, רבע שעה לפני — עם מישהו אחר
+    { title: 'פגישה אחרת', start: iso(start - 15 * 60000), allDay: false, organizer: { email: host.email }, people: [p(host), p(zara)] },
+    // יומן משותף של עובד אחר, באותו שם — רונית לא בו
+    { title: 'פגישת איטום בפרויקט הרצל', start: iso(start + 60 * 60000), allDay: false, organizer: { email: other.email }, people: [p(other), p(zara)] },
+    // הפגישה עצמה — יוסי דחה
+    { title: 'פגישת איטום בפרויקט הרצל', start: iso(start), allDay: false, organizer: { email: host.email }, people: [p(host), p(dana), p(yossi, 'declined')] }
+  ] }));
+  const m = mailer(t);
+  await Auto.sweep(NOW, { send: m.send });
+  assert.deepEqual(m.sent.map((x) => x.to).sort(), [dana.email, host.email].sort());
+  const st = Auto.stateOf(id);
+  assert.deepEqual(st.orgIds.sort(), [host.id, dana.id].sort(), 'גם בבוט — רק מי שהיה בפגישה');
+});

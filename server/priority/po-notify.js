@@ -29,6 +29,7 @@ const Auth = require('../core').Auth;
 const P = require('../core').Permissions;
 const { orderPdf } = require('./po-pdf');
 const Settings = require('./priority-settings');
+const Pricelist = require('./po-pricelist');
 const { escape, shell } = require('../core').MailTemplates;
 
 const TICK = 10 * 60 * 1000;
@@ -49,7 +50,9 @@ const SYSTEM_LOGIN = /^(master|medatech|tabula|api\b|api\s)/i;
 const SYSTEM_MAIL = /@medatech\.com$/i;
 
 const actionOn = (key) => Boolean(WaActions.byKey(key)?.enabled);
-const enabled = () => Priority.isEnabled() && (actionOn('po_notify') || actionOn('purchase_demand'));
+const notifying = () => actionOn('po_notify') || actionOn('purchase_demand');
+// 🏷️ גם "הוספה למחירון ספק" (‎po-pricelist.js‎) נשענת על הסריקה הזו
+const enabled = () => Priority.isEnabled() && (notifying() || actionOn('po_pricelist'));
 /** איזה תפקיד מקבל הודעה: מנהל הפרויקט — רק עם "הזמנת רכש הועברה לספק"; פותח הדרישה והמאשר — גם עם "דרישת רכש" */
 const roleOn = (role) => (role === 'manager' ? actionOn('po_notify') : actionOn('po_notify') || actionOn('purchase_demand'));
 
@@ -181,7 +184,7 @@ async function demandDiffs(d, po) {
   if (want.length === got.length && want.map(sig).sort().join('\n') === got.map(sig).sort().join('\n')) return [];
   if (Claude.isEnabled()) {
     try {
-      const r = await Claude.json({ system: COMPARE_SYSTEM, schema: COMPARE_SCHEMA, effort: 'low', content: [{ type: 'text', text: JSON.stringify({
+      const r = await Claude.json({ feature: 'priority.po', system: COMPARE_SYSTEM, schema: COMPARE_SCHEMA, effort: 'low', content: [{ type: 'text', text: JSON.stringify({
         requested: want.map((l) => ({ item: l.PDES, code: l.PARTNAME, qty: l.TQUANT, unit: l.TUNITNAME })),
         ordered: got.map((l) => ({ item: l.PDES, code: l.PARTNAME, qty: l.TQUANT, unit: l.TUNITNAME }))
       }) }] });
@@ -380,7 +383,14 @@ async function handle(company, o, row) {
   const updated = Boolean(row && row.status !== 'error' && version > row.version);
   const attempts = row?.status === 'error' ? row.attempts + 1 : 1;
   try {
+    if (!notifying()) {
+      // רק "הוספה למחירון" מופעלת — בלי התראות
+      await Pricelist.offer(company, await Priority.orderForNotice(company, o.ORDNAME), { version });
+      record(company, o.ORDNAME, version, { status: 'none', recipients: [] });
+      return;
+    }
     const { prep, done, failed, waPending } = await notifyOrder(company, o.ORDNAME, { updated });
+    await Pricelist.offer(company, prep.po, { version });
     const names = prep.recipients.map((r) => `${r.name} <${r.email}>`);
     if (!prep.recipients.length) {
       record(company, o.ORDNAME, version, { status: 'none', recipients: [] });
@@ -474,6 +484,7 @@ async function tick() {
   try {
     for (const c of companies()) await scanCompany(c);
     await flushPending();
+    await Pricelist.flush().catch((err) => console.error('[משימון] מחירון ספק — סבב:', err.message));
   } catch (err) {
     console.error('[משימון] סבב התראות הזמנות רכש נכשל:', err.message);
   } finally {

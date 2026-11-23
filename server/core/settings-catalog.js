@@ -42,6 +42,9 @@ const FORM = {
   mail_digest_time: { tab: 'hours', label: "📬 \"N מיילים מחכים לך\" — משעה", hint: "ההודעה המרוכזת של הצהריים, פעם ביום" },
   // 📧 מייל
   ai_mail_scan_enabled: { tab: 'mail', label: "סריקת מיילים: פעילה", hint: "מיילים שלא נקראו בתיבת ה-Gmail של כל משתמש שחיבר אותה הופכים להצעות משימה" },
+  ai_scan_skip_bulk: { tab: 'mail', label: "📭 סריקת מיילים: לדלג על ניוזלטרים ומענים אוטומטיים", hint: "מייל עם קישור הסרה מרשימת תפוצה, או מענה \"מחוץ למשרד\" — לא נשלח ל-AI. תמיד נבדקים: מייל עם קובץ מצורף, מהארגון, משולח מהימן, או תשובה בשרשור" },
+  ai_dose_enabled: { tab: 'mail', label: "📉 מינון לפי שימוש", hint: "מי שלא משתמש בהצעות המייל בבוט ובמשימון — כל שבוע עבודה יורד מדרגה: 100% ← 50% ← 20% ← הפסקה (בלי סריקה ובלי הצעות). כל שימוש מחזיר ל-100%. הכנה לפגישה ויומן — תמיד" },
+  ai_dose_week_days: { tab: 'mail', label: "📉 מינון: ימי עבודה למדרגה", hint: "כמה ימי עבודה בלי שימוש מורידים מדרגה. 5 = שבוע עבודה" },
   ai_scan_daily_limit: { tab: 'mail', label: "סריקת מיילים: תקרה יומית למשתמש", hint: "כל מייל הוא קריאה ל-AI. מה שמעבר לתקרה נסרק למחרת" },
   mail_reply_suggest: { tab: 'mail', label: "📧 הצעת תשובה מוכנה למייל", hint: "למייל שאדם מחכה בו לתשובה — טיוטה ב\"ממתין לאישורך\", לפי תשובות קודמות, הזיכרון והידע הארגוני. נשלחת רק בלחיצה" },
   mail_memory_enabled: { tab: 'mail', label: "🧠 זיכרון העבודה: פעיל", hint: "סריקת כל היסטוריית המייל של המשתמש, אחרי שאישר את הערכת העלות" },
@@ -93,7 +96,8 @@ const FORM = {
   // 🧠 מודלים
   ai_model: { tab: 'models', label: "משימות AI: מודל", hint: "מזהה המודל של Claude. ברירת המחדל: claude-opus-5-5" },
   ai_bot_model: { tab: 'models', label: "בוט והקלטה: מודל", hint: "למה שמישהו מחכה לו (בוט הוואטסאפ, ההקלטה באפליקציה). ריק = המודל הראשי. claude-haiku-5-5 — המהיר ביותר, פחות מדויק בבקשות מורכבות" },
-  ai_fast_mode: { tab: 'models', label: "בוט והקלטה: מצב מהיר", hint: "אותו מודל, תשובה מהירה עד פי 2.5, במחיר כפול לקריאות האלה. רק ב-Opus; כשאינו זמין — רגיל" },
+  ai_fast_mode: { tab: 'models', label: "בוט והקלטה: מצב מהיר", hint: "אותו מודל, תשובה מהירה עד פי 2.5, במחיר כפול לקריאות האלה. רק ב-Opus; כשאינו זמין — רגיל. כבוי מ-17.11.26 לחיסכון" },
+  ai_scan_model: { tab: 'models', label: "📧 סריקת מיילים: מודל המיון", hint: "מחליט לכל מייל אם יש בו משימה או בקשה לתשובה — קריאה לכל מייל. ברירת המחדל claude-haiku-5-5 (זול). ריק = המודל הראשי. התשובה למייל — תמיד במודל הראשי" },
   mail_memory_model: { tab: 'models', label: "🧠 זיכרון העבודה: מודל", hint: "ברירת המחדל claude-haiku-5-5 — זול, ומספיק לסיכום שרשורים" },
   // 🏢 הארגון
   max_upload_mb: { tab: 'org', label: "גודל מרבי לקובץ (MB)", hint: "נאכף בכל העלאת קובץ — הן במשימות והן בפורטל הספקים" },
@@ -158,11 +162,14 @@ const HIDDEN = {
 const INTERNAL = new Set([
   'agents_health_last', 'ai_morning_last', 'boot_count', 'dup_scan_last', 'installed_at', 'mail_remind_since',
   'migr_bot_pilot_open', 'migr_memory_always_on', 'migr_memory_conservative', 'org_merge_last', 'org_merge_rounds', 'org_refresh_last',
-  'org_topics_migrated', 'po_notify_baseline', 'sent_fu_scanned', 'vapid_private_pem', 'vapid_public', 'wa_mail_alert_since',
+  'org_topics_migrated', 'po_notify_baseline', 'po_pricelist_no_handler', 'sent_fu_scanned', 'vapid_private_pem', 'vapid_public', 'wa_mail_alert_since',
   'wa_summary_sent', 'whats_new_anchors_seeded', 'whats_new_files', 'whats_new_seeded', 'mail_rescan_multibox_v1', 'timeless_webhook',
-  'pd_approval_notified', 'pd_approval_unmapped', 'ai_outage', 'ai_retry',
+  'pd_approval_notified', 'pd_approval_unmapped', 'pd_approval_nophone', 'pd_approval_failed', 'ai_outage', 'ai_retry',
   'pd_openers', // מי פתח כל דרישת רכש מהבוט (לפי חברה ומספר) — להודעת "אושרה"
   'pd_returned', // דרישות שהוחזרו לבדיקה ומחכות לפותח (לפי חברה ומספר) — pd-return.js
+  'ai_dose_seeded_at', // 📉 מינון המייל — מתי חושבה נקודת ההתחלה מהשבועיים האחרונים (פעם אחת)
+  'migr_fast_mode_off', // מצב מהיר כובה פעם אחת (17.11.26)
+  'migr_mail_auto_off', // יצירת משימות מהמייל בלי אישור כובתה לכולם פעם אחת (22.11.26)
   'pd_return_chats' // שיחות פתוחות של החזרה לבדיקה (המחזיר / המסביר), לפי עובד, 30 דקות — pd-return.js
 ]);
 
@@ -202,6 +209,7 @@ const PERSONAL = {
   mailAutoCreate: { tab: 'google', label: 'מייל ← משימה בלי אישור' },
   waScan: { tab: 'whatsapp', label: 'סריקת הוואטסאפ האישי' },
   mailClient: { tab: 'view', label: 'פתיחת מייל מהאלפון — Gmail / Outlook' },
+  mailDose: { label: '📉 מינון המייל — מתי השתמש לאחרונה, מדרגה (‎mail-dose.js‎)', ui: false },
   priorityPrefs: { label: 'פריוריטי — הבחירה האחרונה (סביבה, פרויקט, מחסן)', ui: false },
   boardFilters: { ui: false }, boardView: { ui: false }, projectScope: { ui: false }, sidebar: { ui: false }, mobileFilter: { ui: false },
   projectOrder: { ui: false }, trackerProject: { ui: false }, trackerScope: { ui: false }, trackerColumns: { ui: false },

@@ -23,12 +23,27 @@ const TZ = 'Asia/Jerusalem';
 const parseJson = (t, f) => { try { return JSON.parse(t); } catch { return f; } };
 const hhmm = (iso) => new Intl.DateTimeFormat('he-IL', { timeZone: TZ, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(iso));
 const dmy = (iso) => (iso ? new Intl.DateTimeFormat('he-IL', { timeZone: TZ, day: 'numeric', month: 'numeric', year: '2-digit' }).format(new Date(iso)) : '');
-const userByEmail = (e) => D.get("SELECT id, full_name, email FROM users WHERE status = 'active' AND (lower(email) = ? OR lower(work_email) = ?)", String(e).toLowerCase(), String(e).toLowerCase());
+const userByEmail = (e) => D.get("SELECT id, full_name, email, department, department_id FROM users WHERE status = 'active' AND (lower(email) = ? OR lower(work_email) = ?)", String(e).toLowerCase(), String(e).toLowerCase());
 // מילים שלא מזהות נושא, ומייל של מזכירה שהוא רק תיאום / זימון — לא נכנסים לתדריך
 const STOP = new Set(['פגישה', 'פגישת', 'עם', 'של', 'על', 'שיחה', 'שיחת', 'זום', 'zoom', 'meeting', 'call', 'ישיבה', 'ישיבת', 'בנושא', 'לגבי']);
 const COORD = /(?:זימון|הזמנה|תיאום|לתאם|נקבע|נקבעה|קישור|לינק|zoom|זום|מועד|הוזז|נדחה|בוטל|invite|invitation)/i;
-/** מילות הנושא משם הפגישה ("הכנסת ערבויות לפריוריטי" ← הכנסת, ערבויות, לפריוריטי). ריק — פגישה כללית עם האנשים */
-const topicWords = (title) => String(title ?? '').split(/[\s,.:;\-–—|/()"']+/).filter((w) => w.length >= 3 && !STOP.has(w.toLowerCase()));
+// מילים כלליות בשם פגישה — לא מזהות נושא (16.11.26: "הצגת מערכת בקרה תקציבית 'אשל-project'")
+const GENERIC = new Set(['הצגת', 'הצגה', 'מערכת', 'פרויקט', 'project', 'עדכון', 'סטטוס', 'status', 'update', 'דיון', 'סיכום', 'המשך', 'היכרות', 'חדש', 'חדשה']);
+/**
+ * מילות הנושא משם הפגישה ("הכנסת ערבויות לפריוריטי" ← הכנסת, ערבויות, לפריוריטי). ריק — פגישה כללית עם האנשים.
+ * בלי מילים כלליות ובלי שם הארגון — הוא מופיע כמעט בכל מייל
+ */
+const topicWords = (title) => {
+  const org = String(D.getSetting('org_name', '') ?? '').toLowerCase().split(/[\s\-–—]+/).filter(Boolean);
+  return [...new Set(String(title ?? '').split(/[\s,.:;\-–—|/()"'`׳״]+/).filter((w) => w.length >= 3)
+    .filter((w) => !STOP.has(w.toLowerCase()) && !GENERIC.has(w.toLowerCase()) && !org.includes(w.toLowerCase())))];
+};
+// כמה אחורה (16.11.26 — תדריך שהלך שנה אחורה): מייל עם משתתף — מהשבועות האחרונים, או על הנושא עד כמה חודשים;
+// פגישה קודמת ומיילי המזכירות — עד כמה חודשים
+const RECENT_DAYS = 21;
+const TOPIC_DAYS = 120;
+const LAST_MEETING_DAYS = 120;
+const daysAgo = (n) => new Date(Date.now() - n * 24 * 60 * MIN).toISOString();
 // "לפריוריטי" ← "פריוריטי"; "ערבויות" ← "ערבוי" — אות שימוש בהתחלה וסיומת רבים / נקבה
 const variants = (w) => {
   const base = w.length > 3 && /^[והבלמש]/.test(w) ? [w, w.slice(1)] : [w];
@@ -41,12 +56,31 @@ const onTopic = (text, words) => { const t = plain(text); return words.some((w) 
 const topicFirst = (rows, words, key) => (words.length ? [...rows].sort((a, b) => Number(onTopic(key(b), words)) - Number(onTopic(key(a), words))) : rows);
 const OPEN = `NOT EXISTS (SELECT 1 FROM board_columns c WHERE c.board_id = t.board_id AND c.key = t.status AND c.is_final = 1)`;
 
+/**
+ * השם והתואר של משתתף — לא מניחוש של Claude (16.11.26: "התארים ממש לא מדויקים — קח אותם משמות המשתמשים במשימון";
+ * 17.11.26: "תיקח מחתימות המיילים"). התואר — כפי שכתוב בחתימה שלו עצמו (‎mail_people.title‎).
+ * עובד בארגון — השם כפי שהוא במשימון; בלי חתימה — המחלקה (ומנהל/ת המחלקה). מבחוץ — השם מהיומן / מהמיילים, והחברה.
+ */
+function identity(userId, p, colleague) {
+  const email = p.email.toLowerCase();
+  const mp = D.get('SELECT name, company, title FROM mail_people WHERE user_id = ? AND email = ?', userId, email);
+  const sig = String(mp?.title ?? '').trim();
+  if (colleague) {
+    const dep = colleague.department_id ? D.get('SELECT name, manager_user_id FROM departments WHERE id = ?', colleague.department_id) : null;
+    const depName = dep?.name || colleague.department || '';
+    const title = depName ? (dep?.manager_user_id === colleague.id ? `מנהל/ת ${depName}` : depName) : '';
+    return { email, name: colleague.full_name, title: sig || title, internal: true };
+  }
+  return { email, name: p.name || mp?.name || email, title: [sig, mp?.company].filter(Boolean).join(', '), internal: false };
+}
+
 /** כל מה שנאסף על המשתתפים — טקסט לסיכום. ריק — אין מה לתדרך */
 function collect(userId, ev) {
   const me = D.get('SELECT email FROM users WHERE id = ?', userId)?.email?.toLowerCase();
   // המזכירות — לא משתתפות (הן קבעו / הזמינו); המיילים שלהן — רק מה שנוגע לנושא הפגישה (למטה)
   const people = Secretariat.withoutSecretaries((ev.people ?? []).filter((p) => p.email && p.email.toLowerCase() !== me));
   const parts = [];
+  const who = [];
   // שם של משתתף או של החברה שלו ("פגישה עם רזבר") — לא נושא
   const names = plain(people.map((p) => `${p.name ?? ''} ${D.get('SELECT name, company FROM mail_people WHERE user_id = ? AND email = ?', userId, p.email.toLowerCase())?.company ?? ''}`).join(' '));
   const words = topicWords(ev.title).filter((w) => !variants(w).map(plain).some((v) => v.length >= 3 && names.includes(v)));
@@ -54,11 +88,12 @@ function collect(userId, ev) {
     const email = p.email.toLowerCase();
     const colleague = userByEmail(email);
     const lines = [];
-    const mp = D.get('SELECT * FROM mail_people WHERE user_id = ? AND email = ?', userId, email);
-    if (mp) lines.push(`מהמיילים: ${[mp.company, mp.role].filter(Boolean).join(' · ') || '—'} · ${mp.threads} שרשורים, אחרון ${dmy(mp.last_at)}`);
     // ההיסטוריה עם האדם — מה שנוגע לנושא הפגישה קודם (17.11.26: תדריך "הכנסת ערבויות לפריוריטי" הביא את עזיבת עובדת אחרת
     // ובדיקת תקבולים — חמשת המיילים האחרונים עם המשתתפת, בלי קשר לנושא)
-    const mails = D.all('SELECT domain, keywords, summary, outcome, amount, happened_at FROM mail_memory WHERE user_id = ? AND contact_email = ? ORDER BY happened_at DESC LIMIT 25', userId, email);
+    // ורק מהחודשים האחרונים: על הנושא — עד ‎TOPIC_DAYS‎; עניין אחר — רק מהשבועות האחרונים (16.11.26)
+    const recent = daysAgo(RECENT_DAYS);
+    const mails = D.all('SELECT domain, keywords, summary, outcome, amount, happened_at FROM mail_memory WHERE user_id = ? AND contact_email = ? AND happened_at >= ? ORDER BY happened_at DESC LIMIT 25', userId, email, daysAgo(TOPIC_DAYS))
+      .filter((m) => m.happened_at >= recent || onTopic(`${m.domain} ${m.keywords} ${m.summary}`, words));
     for (const e of topicFirst(mails, words, (m) => `${m.domain} ${m.keywords} ${m.summary}`).slice(0, 6)) {
       lines.push(`• ${dmy(e.happened_at)} ${e.summary}${e.amount ? ` (${e.amount})` : ''} [${e.outcome}]`);
     }
@@ -71,12 +106,15 @@ function collect(userId, ev) {
         lines.push(`• משימה פתוחה (${t.side}): ${t.title}${t.due_date ? ` · עד ${dmy(t.due_date)}` : ''}`);
       }
     }
-    if (lines.length) parts.push(`## ${colleague?.full_name || p.name || email} <${email}>${colleague ? ' (עובד/ת בארגון)' : ''} — ההיסטוריה איתו/ה, לא בהכרח על נושא הפגישה\n${lines.join('\n')}`);
+    if (!lines.length) continue;   // משתתף בלי מידע — לא בתדריך
+    const id = identity(userId, p, colleague);
+    who.push(id);
+    parts.push(`## ${id.name}${id.title ? ` — ${id.title}` : ''} <${email}>${id.internal ? ' (עובד/ת בארגון)' : ''} — ההיסטוריה איתו/ה, לא בהכרח על נושא הפגישה\n${lines.join('\n')}`);
   }
   // הפגישה הקודמת עם אותם אנשים — הסיכום שנשמר
   const emails = people.map((p) => p.email.toLowerCase());
   const used = new Set();
-  for (const f of D.all("SELECT source, ref, title, start_at, data FROM meeting_followups WHERE user_id = ? ORDER BY start_at DESC LIMIT 40", userId)) {
+  for (const f of D.all("SELECT source, ref, title, start_at, data FROM meeting_followups WHERE user_id = ? AND start_at >= ? ORDER BY start_at DESC LIMIT 40", userId, daysAgo(LAST_MEETING_DAYS))) {
     const d = parseJson(f.data, {});
     const who = JSON.stringify(d.participants ?? []).toLowerCase();
     if (!emails.some((e) => who.includes(e)) && !(ev.title && f.title && f.title === ev.title)) continue;
@@ -101,7 +139,7 @@ function collect(userId, ev) {
     const sec = [...Secretariat.secretaryEmails()].filter((e) => e !== me);
     const hits = sec.length ? D.all(
       `SELECT summary, happened_at FROM mail_memory WHERE user_id = ? AND contact_email IN (${sec.map(() => '?').join(',')})
-        ORDER BY happened_at DESC LIMIT 40`, userId, ...sec
+        AND happened_at >= ? ORDER BY happened_at DESC LIMIT 40`, userId, ...sec, daysAgo(TOPIC_DAYS)
     ).filter((e) => words.some((w) => String(e.summary ?? '').includes(w)) && !COORD.test(String(e.summary ?? ''))).slice(0, 3) : [];
     if (hits.length) parts.push(`## מהמזכירות — רק מה שנוגע לנושא\n${hits.map((e) => `• ${dmy(e.happened_at)} ${e.summary}`).join('\n')}`);
   }
@@ -114,7 +152,7 @@ function collect(userId, ev) {
       if (hits.length) parts.push(`## מהידע הארגוני — לפי מילים, לא בהכרח על הנושא\n${hits.map((e) => `• ${String(e.text ?? '').slice(0, 400)}`).join('\n')}`);
     } catch { /* בלי ידע ארגוני */ }
   }
-  return { people, words, text: parts.join('\n\n') };
+  return { people, who, words, text: parts.join('\n\n') };
 }
 
 // כל נקודה מסומנת אם היא על נושא הפגישה — מה שלא, לא נכנס לתדריך (גם כשהמשתתף/ת הופיע/ה בו)
@@ -134,7 +172,15 @@ const SCHEMA = {
   type: 'object',
   properties: {
     about: { type: 'string', description: 'במשפט: על מה הפגישה, לפי השם, התיאור ומי המשתתפים (למשל יו"ר ועד + משאבי אנוש + "שכר" ← הסכם / תנאי שכר לעובדים). לא ברור — "לא ברור"' },
-    who: { type: 'array', items: { type: 'string' }, description: 'שורה לכל משתתף: שם, תפקיד / חברה, והקשר שלו לנושא הפגישה — בלי אירועים שלא קשורים לנושא' },
+    who: {
+      type: 'array',
+      description: 'למשתתף שיש עליו מידע רלוונטי: הקשר שלו לנושא הפגישה. השם והתואר מתווספים מהמערכת — אל תכתוב אותם',
+      items: {
+        type: 'object',
+        properties: { email: { type: 'string' }, about: { type: 'string', description: 'משפט קצר: מה הקשר שלו לנושא. בלי שם, בלי תואר ובלי תפקיד' } },
+        required: ['email', 'about'], additionalProperties: false
+      }
+    },
     background: POINTS('0–4 נקודות רקע על נושא הפגישה'),
     open_items: POINTS('מה פתוח / ממתין בנושא הפגישה'),
     last_agreed: POINTS('מה סוכם בפעם הקודמת בנושא הזה, אם ידוע'),
@@ -154,6 +200,8 @@ const SYSTEM = [
   'רק מה שמפורש שהוא על הפגישה הזו או על אותו עניין מול אותם אנשים. about="לא ברור" — כל הנקודות on_topic=false.',
   'כשאין נושא (שם הפגישה הוא רק שמות) — מה שפתוח ועדכני מול המשתתפים רלוונטי.',
   'אין מה לכתוב בסעיף — מערך ריק. אל תכתוב "לא ידוע" ואל תשלים נקודות כדי למלא.',
+  'אל תייחס לאנשים תפקיד או תואר — השם והתואר באים מהמערכת. משתתף שאין עליו מידע רלוונטי — אל תזכיר אותו.',
+  'מידע ישן שאינו על הנושא — השמט, גם אם נאסף.',
   'המזכירות אינן משתתפות בפגישות — אל תציג אותן כמשתתפות, ותיאום / זימון / קישור מהן אינו רלוונטי.'
 ].join('\n');
 
@@ -161,8 +209,9 @@ async function build(userId, ev) {
   const c = collect(userId, ev);
   if (!c.text.trim()) return null;
   const out = await Claude.json({
+    feature: 'meetings.briefing', userId,
     system: SYSTEM,
-    content: [{ type: 'text', text: `הפגישה: ${ev.title} · ${hhmm(ev.start)}\n${ev.description ? `תיאור האירוע ביומן: ${ev.description}\n` : ''}${c.words.length ? `נושא הפגישה: ${ev.title}` : 'אין נושא בשם הפגישה — פגישה כללית עם המשתתפים'}\nהמשתתפים: ${c.people.map((p) => p.name || p.email).join(', ')}\n\nהמידע שנאסף:\n${c.text.slice(0, 20000)}` }],
+    content: [{ type: 'text', text: `היום: ${dmy(new Date().toISOString())}\nהפגישה: ${ev.title} · ${hhmm(ev.start)}\n${ev.description ? `תיאור האירוע ביומן: ${ev.description}\n` : ''}${c.words.length ? `נושא הפגישה: ${ev.title}` : 'אין נושא בשם הפגישה — פגישה כללית עם המשתתפים'}\nהמשתתפים: ${c.people.map((p) => p.name || p.email).join(', ')}\n\nהמידע שנאסף:\n${c.text.slice(0, 20000)}` }],
     schema: SCHEMA, effort: 'low'
   });
   // נקודה שסומנה כלא על הנושא — בחוץ; "לא ידוע" וכדומה — בחוץ
@@ -175,12 +224,17 @@ async function build(userId, ev) {
     ['🤝', 'מה סוכם בפעם הקודמת', keep(out.last_agreed)], ['💬', 'נקודות לפגישה', keep(out.talking_points)]];
   // אין שום דבר על הנושא — אין תדריך (רק "מי" זה לא תדריך)
   if (!sections.some(([, , arr]) => arr.length)) return null;
+  // "מי" — השם והתואר מהמערכת (משימון / החתימה), ומ-Claude רק הקשר לנושא
+  const whoLines = (c.who ?? []).map((id) => {
+    const w = (out.who ?? []).find((x) => String(x?.email ?? '').toLowerCase() === id.email);
+    return [id.name, id.title, unclear ? '' : w?.about].filter(Boolean).join(' — ');
+  });
   const sec = (icon, title, arr) => (arr?.length ? [`${icon} *${title}*`, ...arr.map((x) => `• ${x}`), ''] : []);
   return [
     `📋 *תדריך לפגישה: ${ev.title}* · ${hhmm(ev.start)}`,
     '_להלן התדריך, כפי שנאסף מהמיילים, מהמשימות ומהפגישות הקודמות:_',
     '',
-    ...sec('👥', 'מי', out.who),
+    ...sec('👥', 'מי', whoLines),
     ...sections.flatMap(([i, t, arr]) => sec(i, t, arr))
   ].join('\n').trim();
 }
@@ -211,4 +265,4 @@ async function tick(io) {
   }
 }
 
-module.exports = { tick, build, _internal: { collect, topicWords, onTopic } };
+module.exports = { tick, build, _internal: { collect, topicWords, onTopic, identity } };

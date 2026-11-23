@@ -75,7 +75,7 @@ async function toReview(say) {
   let r = await say('10 שקי מלט, 5 קוב בטון לתקרה');
   assert.match(r.text, /בטון\* — 5 קוב/);
   assert.match(r.text, /התכוונת ל/);
-  H.assertButtons(r.buttons, ['בטון ב-30', 'בטון ב-40', 'אף אחד ❌']);
+  H.assertButtons(r.buttons, ['בטון ב-30', 'בטון ב-40', 'שלח לבנייה לרכש 🆕']);
 
   r = await say('בטון ב-30');
   assert.match(r.text, /דרישת רכש — 2 פריטים/);
@@ -138,6 +138,21 @@ test('ברירות מחדל: דרישה שנייה — פרויקט, מחסן ו
   assert.match(r.text, /לשנות — כתבו/);
   H.assertButtons(r.buttons, [BTN.cancel]);
   assert.equal(pr.wrote('createDemand').length, 1, 'הדרישה השנייה עוד לא נכתבה');
+});
+
+test('"דרישת מלט 10 שקים" / "בוקר טוב, אני רוצה לעשות דרישה" — דרישת רכש (הוחלט 20.11: "דרישה" לפני = רכש)', async (t) => {
+  H.companies(t, 'test11');
+  const u = H.worker();
+  Prefs.remember(u.id, { company: 'test11', project: { code: 'PR1', des: 'אלעד 49 צפון' }, warehouse: 'W1' });
+  Prefs.set(u.id, 'test11', 'demandCode', '01');
+  priority(t);
+  ai(t);
+  const { say } = H.chat(t, u);
+  let r = await say('דרישת מלט 10 שקים');
+  assert.match(r.text, /נוספו 2 פריטים|נוספו/, 'הפריטים מההודעה עצמה');
+  await say(BTN.cancel);
+  r = await say('בוקר טוב, אני רוצה לעשות דרישה');
+  assert.match(r.text, /מה צריך\?/);
 });
 
 test('ברירת המחדל ניתנת לשינוי בשפה חופשית: "פרויקט נהריה" ← הפרויקט והמחסן שלו, בלי שאלה נוספת', async (t) => {
@@ -473,7 +488,7 @@ function buyer(t) {
 async function toMissing(say) {
   await toItems(say);
   await say('10 שקי מלט, 5 קוב בטון לתקרה');
-  return say('אף אחד ❌');
+  return say('שלח לבנייה לרכש 🆕');
 }
 
 test('מק"טים לבנייה: "אף אחד" — בלי שאלה בטיוטא; ב"סיום" — רק המזוהים / לחכות (בלי מק"ט כללי)', async (t) => {
@@ -514,7 +529,9 @@ test('מק"טים לבנייה: "רק המזוהים" — מייל לרכש (ב�
   const r = await say('רק המזוהים ✅');
   assert.equal(sent.length, 1);
   assert.equal(sent[0].to, 'ruti@example.com');
-  assert.equal(sent[0].subject, `מק"טים נדרשים לבנייה בהקדם — לבקשת ${u.full_name}`);
+  assert.equal(sent[0].subject, `❗ מק"טים נדרשים לבנייה בהקדם — לבקשת ${u.full_name}`);
+  assert.equal(sent[0].urgent, true, 'סימן קריאה אדום: חשיבות גבוהה');
+  assert.match(sent[0].html, /color:#dc2626[^>]*>❗ דחוף/);
   assert.match(sent[0].text, /להלן מק"טים נדרשים לבנייה בהקדם/);
   assert.match(sent[0].text, /1\. בטון — 5 קוב \(לתקרה\)/);
   assert.doesNotMatch(sent[0].text, /שק מלט/, 'רק מה שלא זוהה');
@@ -748,6 +765,70 @@ test('💬 מנהלת הרכש — הערה בלבד: העובד מקבל אות
   assert.doesNotMatch(wa.texts().join('\n'), /להמשיך/);
 });
 
+// ---------------------------------------------------------------------------
+// 🆕 לרכש — רק בתיאור מדויק: "פטיש" לא יוצא לבנייה, "פטיש 5 ק"ג" כן
+// ---------------------------------------------------------------------------
+
+/** ה-AI: "פטיש" — לא בקטלוג; בדיקת התיאור: בלי משקל — לא מדויק */
+function hammerAi(t, seen = []) {
+  return H.claude(t, {
+    edit: () => ({ action: 'add', adds: [{ description: 'שק מלט', qty: 10, unit: 'שק', note: '' }, { description: 'פטיש', qty: 2, unit: "יח'", note: '' }], updates: [], removes: [], question: '' }),
+    match: (input) => ({ results: input.items.map((it) => (it.description === 'שק מלט'
+      ? { line: it.line, kind: 'exact', codes: ['M-1'], chapter: '20', topic: '20-10', why: '' }
+      : { line: it.line, kind: 'none', codes: [], chapter: '20', topic: '20-10', why: 'אין פטישים בקטלוג' })) }),
+    detail: (input) => { seen.push(...input.items.map((x) => x.description)); return { results: input.items.map((x) => ({ line: x.line, specific: /\d/.test(x.description), question: 'איזה פטיש? משקל וסוג — למשל "פטיש 5 ק"ג ידית עץ"' })) }; }
+  });
+}
+
+test('לרכש רק בתיאור מדויק: "פטיש" ← הבוט מבקש תיאור ← "5 ק"ג" ← "פטיש 5 ק"ג" יוצא לרכש', async (t) => {
+  H.companies(t, 'test11');
+  const u = buyerWorker();
+  const pr = priority(t);
+  const seen = [];
+  hammerAi(t, seen);
+  const sent = buyer(t);
+  const { say } = H.chat(t, u);
+
+  await toItems(say);
+  let r = await say('10 שקי מלט, 2 פטישים');
+  assert.match(r.text, /🆕 \*פטיש\* — 2 יח'/);
+  assert.match(r.text, /כדי שיוכלו לבנות אותו צריך תיאור מדויק/);
+  assert.match(r.text, /איזה פטיש\? משקל וסוג/);
+  H.assertButtons(r.buttons, ['להסיר את הפריט', BTN.cancel]);
+
+  r = await say(BTN.done);                       // "סיום" לא עוקף
+  assert.match(r.text, /קודם — תיאור מדויק ל\*פטיש\*/);
+
+  r = await say('5 ק"ג');                        // תוספת לתיאור
+  assert.match(r.text, /✏️ פטיש 5 ק"ג/);
+  assert.match(r.text, /פטיש 5 ק"ג — 2 יח'\n {3}🆕 לא בקטלוג — יישלח לרכש לבניית מק"ט/);
+  H.assertButtons(r.buttons, [BTN.done, BTN.cancel]);
+  assert.deepEqual(seen, ['פטיש', 'פטיש 5 ק"ג']);
+
+  await say(BTN.done);
+  await say('לחכות לרכש ⏳');
+  assert.match(sent[0].text, /1\. פטיש 5 ק"ג — 2 יח'/);
+  assert.doesNotMatch(sent[0].text, /1\. פטיש — /);
+  assert.deepEqual(pr.writes, []);
+});
+
+test('לרכש רק בתיאור מדויק: "להסיר את הפריט" — הפריט יורד, והדרישה יוצאת עם השאר', async (t) => {
+  H.companies(t, 'test11');
+  const u = buyerWorker();
+  const pr = priority(t);
+  hammerAi(t);
+  buyer(t);
+  const { say } = H.chat(t, u);
+  await toItems(say);
+  await say('10 שקי מלט, 2 פטישים');
+  let r = await say('להסיר את הפריט');
+  assert.match(r.text, /הוסר: פטיש/);
+  assert.match(r.text, /דרישת רכש — 1 פריט/);
+  r = await say(BTN.done);
+  assert.match(r.text, /נפתחה ועברה \*לאישור\*/);
+  assert.deepEqual(pr.wrote('addDemandLine').map((w) => w.args[2].part), ['M-1']);
+});
+
 test('💬 מנהלת הרכש עונה בערב — ההודעה לעובד נשמרת לשעות העבודה, לא נשלחת ולא הולכת לאיבוד', async (t) => {
   H.at(t);
   H.companies(t, 'test11');
@@ -847,4 +928,83 @@ test('שורה שנדחתה מסיבה אחרת — גם כן טיוטא בלי 
   assert.equal(pr.wrote('submitDemand').length, 0);
   assert.match(r.text, /"בטון" \(C-30\): פריוריטי לא קיבל את השורה/);
   assert.match(r.text, /מנהל המערכת קיבל פירוט/);
+});
+
+// ---------------------------------------------------------------------------
+// 🆕 מק"ט שנפתח בפריוריטי — הודעה לעובד לבד, בלי שמנהלת הרכש תעדכן (22.11.26)
+// ---------------------------------------------------------------------------
+
+const CABLE = { n: 1, description: 'כבל נחושת ירוק N2XY 5X10 (בתוך) - Synergy', qty: 500, unit: "יח'", known: [], built: null };
+const HOSE = { n: 2, description: 'צינור קוברה 50 (חבילה=50 מטר) - אומיגה', qty: 5, unit: "יח'", known: [], built: null };
+const newPart = (code, des) => ({ PARTNAME: code, PARTDES: des, STATDES: 'פעיל', BUD_SUBCHAPTERNAME: '30', BUD_SUBCHAPTERDES: 'חשמל', BUD_SUBTOPICNAME: '30-10', BUD_SUBTOPICDES: 'כבלים' });
+function openRequest(u, missing) {
+  D.run("UPDATE pd_part_requests SET status = 'expired' WHERE status = 'open'");
+  return Number(D.run("INSERT INTO pd_part_requests (user_id, company, header, items, missing, mode, status, created_at) VALUES (?, 'test11', ?, ?, ?, 'wait', 'open', ?)",
+    u.id, JSON.stringify({ project: { code: 'PR1', des: 'אלעד 49 צפון' } }), JSON.stringify(missing.map((m) => ({ ...m, status: 'general' }))), JSON.stringify(missing), D.nowIso()).lastInsertRowid);
+}
+
+test('נפתח מק"ט אחד מתוך שניים — העובד מקבל מיד "נפתחו המק"טים שלא מצאת" והרשימה; כשנפתח גם השני — "להמשיך בדרישה?"', async (t) => {
+  H.at(t);                                       // בשעות העבודה — אחרת ההודעה נשמרת לבוקר
+  const u = buyerWorker();
+  let built = [];
+  priority(t, { findPartExact: async () => null, searchParts: async (c, des) => built.filter((x) => des.includes(x.key)).map((x) => ({ p: x.p, score: 3, full: true })) });
+  const { wa } = H.chat(t, u);
+  const id = openRequest(u, [CABLE, HOSE]);
+
+  built = [{ key: 'N2XY', p: newPart('90-10-0051', 'כבל נחושת ירוק N2XY 5X10 Synergy') }];
+  wa.clear();
+  assert.deepEqual(await Parts.tick(), { checked: 1, told: 1 });
+  let note = wa.texts().join('\n');
+  assert.match(note, /נפתחו בפריוריטי המק"טים שלא מצאת/);
+  assert.match(note, /כבל נחושת ירוק N2XY 5X10 \(בתוך\) - Synergy — 500 יח' ← \*כבל נחושת ירוק N2XY 5X10 Synergy\* \(90-10-0051\)/);
+  assert.match(note, /עוד פריט אחד בבנייה ברכש: צינור קוברה 50/);
+  assert.doesNotMatch(note, /להמשיך בדרישת הרכש\?/, 'עוד לא כולם — בלי שאלה');
+  assert.equal(D.get('SELECT status FROM pd_part_requests WHERE id = ?', id).status, 'open');
+
+  wa.clear();
+  assert.deepEqual(await Parts.tick(), { checked: 1, told: 0 }, 'אותו מק"ט — לא מודיעים שוב');
+
+  built.push({ key: 'קוברה', p: newPart('70-20-0007', 'צינור קוברה 50 חבילה 50 מ\' אומיגה') });
+  await Parts.tick();
+  note = wa.texts().join('\n');
+  assert.match(note, /המק"טים החסרים נבנו בפריוריטי — להלן הרשימה/);
+  assert.match(note, /להמשיך בדרישת הרכש\?/);
+  assert.equal(D.get('SELECT status FROM pd_part_requests WHERE id = ?', id).status, 'asked');
+});
+
+test('זיהוי ב-AI: הרכש ניסחה אחרת ("5*10", בלי היצרן) — ה-AI מזהה שזה אותו פריט; לא בטוח — לא מודיעים', async (t) => {
+  H.at(t);                                       // בשעות העבודה — אחרת ההודעה נשמרת לבוקר
+  const u = buyerWorker();
+  const other = newPart('90-10-0099', 'כבל N2XY 5*16');
+  const same = newPart('90-10-0052', 'כבל N2XY 5*10 ממ"ר');
+  priority(t, { findPartExact: async () => null, searchParts: async () => [{ p: other, score: 2 }, { p: same, score: 2 }] });
+  const asked = [];
+  let answer = '90-10-0052';
+  H.claude(t, { built: (input) => { asked.push(input); return { code: answer, why: 'אותו כבל, 5X10' }; } });
+  const { wa } = H.chat(t, u);
+
+  answer = '';                                    // לא בטוח
+  const id1 = openRequest(u, [CABLE]);
+  wa.clear();
+  assert.deepEqual(await Parts.tick(), { checked: 1, told: 0 });
+  assert.equal(wa.texts().length, 0);
+  assert.equal(Parts._row(id1).missing[0].built, null, 'ה-AI לא בטוח — גם התאמת המילים לא קובעת');
+
+  answer = '90-10-0052';
+  await Parts.tick();
+  assert.equal(Parts._row(id1).missing[0].built.code, '90-10-0052');
+  assert.match(wa.texts().join('\n'), /\(90-10-0052\)/);
+  assert.equal(asked.at(-1).item.description, CABLE.description);
+  assert.deepEqual(asked.at(-1).candidates.map((c) => c.code), ['90-10-0099', '90-10-0052']);
+});
+
+test('המייל לרכש: פותחים מק"ט חדש — אין צורך לעדכן; הדף רק למק"ט שכבר קיים', () => {
+  const u = buyerWorker();
+  D.setSetting('public_url', 'https://mesimon.example');
+  try {
+    const m = Parts._mailOf(u, { company: 'test11', project: { code: 'PR1', des: 'אלעד 49 צפון' } }, [{ n: 1, description: 'בטון', qty: 5, unit: 'קוב' }], { name: 'שקמה', email: 'x@example.com' }, { token: 'a'.repeat(36) });
+    assert.match(m.text, /פותחים מק"ט חדש בפריוריטי — אין צורך לעדכן אף אחד/);
+    assert.match(m.text, /רק כשהמק"ט כבר קיים, או כדי לכתוב לו הערה: https:\/\/mesimon\.example\/parts\.html\?t=a{36}/);
+    assert.match(m.html, /אין צורך לעדכן אף אחד/);
+  } finally { D.setSetting('public_url', ''); }
 });

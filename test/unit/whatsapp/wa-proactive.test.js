@@ -131,3 +131,13 @@ test('🔕 תשובה של ממש להצעה מאפסת את הספירה', () =
   add('b', 'ignored', 5);
   assert.equal(MailActions._internal.goodsIgnoredStreak(u.id), 1);
 });
+
+// באג 22.11.26: "גנרטור 200 אמפר" אחרי 33 דקות ל"איזה פריט?" — שאלת פרטים בפנייה לספקים לא פגה אחרי 15 דקות
+test('staleQuestion — שאלת פרטים בפנייה לספקים: לא פגה אחרי חצי שעה; שאלת אישור — כן', () => {
+  const { staleQuestion } = require('../../../server/whatsapp/wa-proactive');
+  const askedAt = new Date(Date.now() - 33 * 60 * 1000).toISOString();
+  assert.equal(staleQuestion(1, { draft: { kind: 'rfq', step: 'details', rfqId: 1, askedAt } }, 'גנרטור 200 אמפר'), false);
+  assert.equal(staleQuestion(1, { draft: { kind: 'rfq', step: 'review', rfqId: 1, askedAt } }, 'גנרטור 200 אמפר'), true);
+  const old = new Date(Date.now() - 4 * 60 * 60 * 1000).toISOString();
+  assert.equal(staleQuestion(1, { draft: { kind: 'rfq', step: 'details', rfqId: 1, askedAt: old } }, 'גנרטור'), true, 'אחרי 3 שעות — פגה');
+});

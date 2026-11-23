@@ -174,6 +174,7 @@ const CARD_SYSTEM = [
 async function saveCard(a, doc) {
   const model = String(D.getSetting('mail_memory_model', 'claude-haiku-5-5') || 'claude-haiku-5-5');
   const c = await Claude.json({
+    feature: 'mail.docs',
     system: CARD_SYSTEM, schema: CARD_SCHEMA, effort: 'low', model,
     content: [doc.block, { type: 'text', text: `שם הקובץ: ${a.filename}\nמאת: ${a.from_email}\nנושא המייל: ${a.subject}` }]
   });

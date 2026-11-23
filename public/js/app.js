@@ -1191,14 +1191,14 @@ const App = (() => {
 
       // האבחון נטען אחרי הציור, כדי שהמסך ייפתח מיד
       notifDiagnostics().then((rows) => UI.mount(diagBox,
-        el('h4', { text: 'אבחון', style: { margin: '16px 0 8px', fontSize: '13px' } }),
+        el('h4', { text: 'אבחון', style: { margin: '16px 0 8px', fontSize: 'var(--fs-md)' } }),
         el('div.table-wrap', {}, [
           el('table.data', {}, [
             el('tbody', {}, rows.map((r) => el('tr', {}, [
               el('td', { style: { width: '28px' }, text: r.ok ? '✅' : '⚠️' }),
               el('td', { text: r.label }),
               el('td', { class: r.ok ? 'text-ok' : 'text-danger',
-                style: { fontSize: '12px', direction: 'ltr', textAlign: 'right' }, text: r.detail || '' })
+                style: { fontSize: 'var(--fs-sm)', direction: 'ltr', textAlign: 'right' }, text: r.detail || '' })
             ])))
           ])
         ])

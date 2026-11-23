@@ -623,6 +623,24 @@ test('התשובה של אינסטינקט נגמרת בשאלה ("להכין כ
   assert.equal(back[0].body.quotedMessageId, 'ask-1');
 });
 
+test('אינסטינקט שאל ("מה לברר אצל אייל?"), והעובד שולח רשימת משימות / תזכורת — לבוט, לא לאינסטינקט', async (t) => {
+  // באג 22.11.26: "תזכיר לי את הדברים הבאים בשעה עשר וחצי. אחד: … שתיים: …" אחרי שאלה של אינסטינקט — יצא אליו בלי
+  // לעבור בהבנת הבקשה, וחזר "רשימת משימות" כקישור ל-files.instinct.com במקום משימות במשימון
+  const wa = setup(t);
+  const u = person();
+  ai(t, { intent: 'other' });
+  await say(u.phone, 'אינסטינקט, תסדר לי את הרשימה');
+  await settle();
+  await fromInstinct('הפריט הרביעי נחתך לי - מה לברר אצל אייל מביגה?', outIdOf(u), { id: 'ask-3' });
+  wa.clear();
+  for (const text of ['תזכיר לי את הדברים הבאים בשעה עשר וחצי. אחד: לטפל במטענים. שתיים: להזמין פרחים לשושנה',
+    'תפתח לי משימות: לברר אצל אייל מביגה מה המחיר']) {
+    await say(u.phone, text);
+    await settle();
+  }
+  assert.equal(toInstinct(wa).length, 0, 'משימות ותזכורות — של משימון');
+});
+
 test('התשובה של אינסטינקט בלי שאלה — ההודעה הבאה לא נשלחת אליו מעצמה', async (t) => {
   const wa = setup(t);
   const u = person();
@@ -649,4 +667,61 @@ test('תשובה לשאלה בבקשה על מסמך — גם היא יוצאת 
   await say(u.phone, 'כן');
   await settle();
   assert.ok(toInstinct(wa)[0].body.message.endsWith(Instinct.NO_GUESS));
+});
+
+// 22.11.26: חיפוש ספקים ברשת לפנייה להצעת מחיר — גם דרך אינסטינקט. זה חיפוש בשביל הקוד: התשובה חוזרת לקוד, לא לעובד
+test('search — התשובה (גם בכמה הודעות) חוזרת לקוד, לא לעובד, ובלי סימון בהיסטוריה', async (t) => {
+  Instinct._internal.reset();
+  const { cfg } = Instinct._internal;
+  const saved = cfg.SEARCH_QUIET_MS;
+  cfg.SEARCH_QUIET_MS = 300;
+  t.after(() => { cfg.SEARCH_QUIET_MS = saved; });
+  const wa = Fakes.whatsapp(t);
+  const u = person('employee', false);
+  const p = Instinct.search(u.id, 'חפש ספקי אלומיניום. לפנות לדני 050-1234567');
+  await settle();
+  const out = wa.calls.find((c) => c.method === 'sendMessage');
+  assert.equal(out.body.chatId, IN_CHAT);
+  assert.match(out.body.message, /\[טלפון\]/, 'גם כאן — בלי פרטים מזהים');
+  wa.clear();
+  await fromInstinct('אלו-נט | info@alunet.test', out.id);
+  await fromInstinct('אלו-צפון | 054-7654321');
+  assert.equal(await p, 'אלו-נט | info@alunet.test\nאלו-צפון | 054-7654321');
+  assert.deepEqual(wa.calls.filter((c) => c.body?.chatId === `${u.phone}@c.us`), [], 'לעובד לא נשלח כלום');
+  assert.equal(Instinct.inConversation(u.id), false, 'חיפוש אינו שיחה של העובד עם אינסטינקט');
+});
+
+test('search — בלי תשובה בזמן: null', async (t) => {
+  Instinct._internal.reset();
+  Fakes.whatsapp(t);
+  const u = person('employee', false);
+  assert.equal(await Instinct.search(u.id, 'חפש ספקים', { timeoutMs: 10 }), null);
+});
+
+// באג 22.11.26: אחרי שיחה על השכרת גנרטור העובד כתב "תבדוק ברשת", וה"✨ העוזר" ענה "אין לי גישה לרשת" —
+// ההבנה סיווגה את זה כשאלה (‎mail_ask‎), כי "כל מה שנוגע לספקים — לא instinct". בקשה מפורשת לחפש ברשת — לאינסטינקט,
+// עם מה שלחפש מההודעה הקודמת (השיחה איתו משותפת — הוא לא יודע על מה מדובר)
+test('"תבדוק ברשת" — לאינסטינקט גם כשה-AI סיווג כשאלה, עם ההקשר מההודעה הקודמת', async (t) => {
+  const wa = setup(t);
+  ai(t, { intent: 'mail_ask', request: '' });
+  const u = person();
+  const { chatOf, saveChat } = require('../../../server/whatsapp/wa-private');
+  saveChat(u.id, { ...chatOf(u.id), history: [
+    { role: 'user', text: 'מי הספקים להשכרת גנרטור 110 KVA בדרום?' },
+    { role: 'bot', text: 'אין לי ספקים כאלה בזיכרון' }
+  ] });
+  await say(u.phone, 'תבדוק ברשת');
+  await settle();
+  const out = toInstinct(wa);
+  assert.equal(out.length, 1);
+  assert.match(out[0].body.message, /תבדוק ברשת: מי הספקים להשכרת גנרטור 110 KVA בדרום\?/);
+});
+
+test('"תבדוק ברשת" — מי שאינסטינקט לא פתוח לו: לא יוצא אליו', async (t) => {
+  const wa = setup(t);
+  ai(t, { intent: 'other', request: '' });
+  const u = person('employee', false);
+  await say(u.phone, 'תבדוק ברשת');
+  await settle();
+  assert.equal(toInstinct(wa).length, 0);
 });

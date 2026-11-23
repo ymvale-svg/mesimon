@@ -22,7 +22,8 @@ const AdminView = (() => {
     { key: 'templates', label: 'תבניות', perm: 'create_project', full: true },
     // הודעה שנפתחת לכל המשתמשים — רק אדמין על (ראה ‎manage_release_notes‎)
     { key: 'whatsnew', label: '✨ מה חדש', perm: 'manage_release_notes', full: true },
-    { key: 'ai', label: '🤖 סוכנים וידע ארגוני', perm: 'manage_automations', full: true }
+    { key: 'ai', label: '🤖 סוכנים וידע ארגוני', perm: 'manage_automations', full: true },
+    { key: 'ai_cost', label: '💰 עלות AI', perm: 'manage_automations', full: true }
   ];
 
   async function render(container, params = {}) {
@@ -69,6 +70,7 @@ const AdminView = (() => {
       else if (tab === 'templates') await templatesTab(body);
       else if (tab === 'whatsnew') await WhatsNewView.adminTab(body, reload);
       else if (tab === 'ai') await AdminAiView.tab(body);
+      else if (tab === 'ai_cost') await AdminAiView.costTab(body);
     } catch (err) {
       UI.mount(body, UI.empty(err.message, '⚠️'));
     }
@@ -508,7 +510,7 @@ const AdminView = (() => {
                   el('tbody', {}, r.created.filter((c) => !c.emailSent).map((c) =>
                     el('tr', {}, [
                       el('td', { text: c.name }),
-                      el('td', {}, [el('code', { text: c.link ?? '—', style: { direction: 'ltr', fontSize: '11px', wordBreak: 'break-all' } })])
+                      el('td', {}, [el('code', { text: c.link ?? '—', style: { direction: 'ltr', fontSize: 'var(--fs-xs)', wordBreak: 'break-all' } })])
                     ])
                   ))
                 ])
@@ -1321,7 +1323,7 @@ const AdminView = (() => {
         UI.field('שם הכלל', nameInput),
         UI.field('מתי (טריגר)', triggerSelect, isEdit ? 'לא ניתן לשנות טריגר של כלל קיים' : null),
         UI.field('מה קורה (פעולה)', actionSelect, isEdit ? 'לא ניתן לשנות פעולה של כלל קיים' : null),
-        el('h4', { text: 'פרמטרים', style: { fontSize: '13px', margin: '10px 0 8px' } }),
+        el('h4', { text: 'פרמטרים', style: { fontSize: 'var(--fs-md)', margin: '10px 0 8px' } }),
         paramsBox
       ]),
       footer: [saveBtn, el('div.spacer')]
@@ -1361,12 +1363,12 @@ const AdminView = (() => {
     const row = (title, ok, okText, missing, hint) =>
       el('div', { style: { padding: '11px 0', borderBottom: '1px solid var(--border)' } }, [
         el('div.flex', {}, [
-          el('span', { text: ok ? '✅' : '○', style: { fontSize: '15px' } }),
+          el('span', { text: ok ? '✅' : '○', style: { fontSize: 'var(--fs-lg)' } }),
           el('b', { text: title }),
           el('div.spacer'),
           el('span', {
             class: ok ? 'text-ok' : 'text-danger',
-            style: { fontSize: '12.5px', fontWeight: '700' },
+            style: { fontSize: 'var(--fs-sm)', fontWeight: '700' },
             text: ok ? okText : 'לא מוגדר'
           })
         ]),
@@ -2006,6 +2008,8 @@ const AdminView = (() => {
             fix.kind && FIX_KIND[fix.kind] ? el('span.ai-chip.ai-chip-ai', { text: FIX_KIND[fix.kind] }) : null,
             // ✉️ מי העיר, והאם כבר הוצעה לו תשובה על מה שטופל
             fix.requester ? el('span.ai-chip', { text: fix.replyProposedAt ? `✉️ ${fix.requester} · הוצעה תשובה` : `✉️ ${fix.requester}` }) : null,
+            // 🔁 מי ניסה ולא הצליח — מקבל "אפשר לנסות שוב" כשזה נכנס
+            ...(fix.retry ?? []).map((r) => el('span.ai-chip', { text: `🔁 ${r.who || 'עובד'}${r.invitedAt ? ' · נשלח לנסות שוב' : ''}` })),
             el(`span.ai-chip${cls ? `.${cls}` : ''}`, { text: label })
           ]),
           fix.problem ? el('div.rv-text', { text: fix.problem }) : null,
