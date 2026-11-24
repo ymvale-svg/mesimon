@@ -192,6 +192,24 @@ const pending = (userId) => Boolean(fresh(load(userId)));
  * 🔒 המסמך שהקליטה עליו עכשיו (מספר ה-GR, ולפני הטיוטא — מתי התחילה), ‎null‎ — אין / תפריט. נרשם עם הכפתורים
  * (‎WaQuestions‎), וכפתור או תגובה על הודעה של מסמך אחר — "השאלה כבר לא פתוחה" (#171)
  */
+/*
+ * 🚫 מק"ט שפריוריטי דחה בפרויקט מסוים (למשל תת פרק שלא במהדורת התכנון של הפרויקט) — נזכר לפי חברה ופרויקט, ובקליטה
+ * הבאה השורה נקלטת ישר על הקידוד שעבד (רעיון מסקירה 24.11: אותו מק"ט "כמו בקליטות קודמות" נדחה 4 פעמים ברצף).
+ * נשכח אחרי 30 יום — אולי סידרו את הפרויקט בינתיים.
+ */
+const REJECT_MS = 30 * 86400000;
+const rejectKey = (c, project) => `gr_rejected_part:${c}:${project}`;
+function rejectedPart(c, project, code) {
+  if (!project || !code) return null;
+  const hit = D.getSetting(rejectKey(c, project), null)?.[code];
+  return hit && Date.now() - Date.parse(hit.at) < REJECT_MS ? hit : null;
+}
+function rememberRejected(c, project, code, used, why) {
+  if (!project || !code) return;
+  const all = D.getSetting(rejectKey(c, project), null) ?? {};
+  all[code] = { at: new Date().toISOString(), chapter: used.chapter, chapterDes: used.chapterDes ?? '', topic: used.topic, topicDes: used.topicDes ?? '', why: String(why ?? '').slice(0, 300) };
+  D.setSetting(rejectKey(c, project), all);
+}
 const docId = (userId) => { const s = load(userId); return fresh(s) && s.step !== 'menu' ? String(s.docno || s.startedAt || '') || null : null; };
 /**
  * הודעה שנכנסת לפריוריטי — רק במפורש: "קבלת סחורה", "פריוריטי",
@@ -1312,6 +1330,9 @@ async function createDraft(user, s) {
     try {
       if (l.order) await Priority.addOrderLine(c, docno, { ordname: l.order.ordname, line: l.order.line, qty: l.qty });
       else if (l.part && l.part.code !== '000') {
+        // המק"ט כבר נדחה בפרויקט הזה — ישר לקידוד שנקלט בפעם הקודמת, בלי לנסות שוב (סקירה 24.11: 4 פעמים ברצף)
+        const known = rejectedPart(c, s.project?.code, l.part.code);
+        if (known) throw Object.assign(new Error(known.why), { known });
         try {
           await Priority.addFreeLine(c, docno, { part: l.part.code, qty: l.qty, price: l.price, discount: l.discount, chapter: l.part.chapter, topic: l.part.topic });
         } catch (err) {
@@ -1340,10 +1361,14 @@ async function createDraft(user, s) {
       const line = { part: '000', description: whole ? l.description : `${qtyText(l.qty)} ${l.unit ?? ''} · ${l.description}`,
         qty: whole ? l.qty : 1, price: whole ? l.price : net, discount: whole ? l.discount : 0 };
       let used = null, last = null;
-      for (const g of [Priority.GENERAL, await Priority.generalCoding(c).catch(() => null)].filter(Boolean)) {
+      for (const g of [err.known, Priority.GENERAL, await Priority.generalCoding(c).catch(() => null)].filter(Boolean)) {
         try { await Priority.addFreeLine(c, docno, { ...line, chapter: g.chapter, topic: g.topic }); used = g; break; } catch (e) { last = e; }
       }
-      if (used) {
+      if (used && err.known) {
+        (s.notes ??= []).push(`שורה ${l.n} (${l.description}) נקלטה על מק"ט כללי 000, ${used.chapter} ${used.chapterDes ?? ''} / ${used.topic} ${used.topicDes ?? ''} — ${l.part.code} לא פתוח בפרויקט הזה (נדחה כבר בקליטה קודמת)`.replace(/\s+\//, ' /'));
+      } else if (used) {
+        // רק דחייה של הקידוד (תת פרק / משאב) — לא תקלת רשת רגעית
+        if (l.part?.code && l.part.code !== '000' && Priority.isCodingError(err)) rememberRejected(c, s.project?.code, l.part.code, used, err.message);
         (s.notes ??= []).push(`שורה ${l.n} (${l.description}) נקלטה על מק"ט כללי 000, ${used.chapter} ${used.chapterDes} / ${used.topic} ${used.topicDes}${l.part?.code && l.part.code !== '000' ? ` — ${l.part.code} נדחה בפריוריטי` : ''}`);
         problems.push({ what: null, err: `שורה ${l.n}: ${l.part?.code ?? ''} נדחה (${err.message}), נקלטה על 000 ${used.chapter}/${used.topic}` });
       } else {
