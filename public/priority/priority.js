@@ -44,7 +44,16 @@
     mail: '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/>',
     upload: '<path d="M12 16V4M7 9l5-5 5 5"/><path d="M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"/>',
     clip: '<path d="m21 11-8.5 8.5a5 5 0 0 1-7-7L14 4a3.5 3.5 0 0 1 5 5l-8.5 8.5a2 2 0 0 1-3-3L15 7"/>',
-    x: '<path d="M18 6 6 18M6 6l12 12"/>'
+    x: '<path d="M18 6 6 18M6 6l12 12"/>',
+    refresh: '<path d="M21 12a9 9 0 1 1-2.6-6.4L21 8"/><path d="M21 3v5h-5"/>',
+    download: '<path d="M12 4v12M7 11l5 5 5-5"/><path d="M4 20h16"/>',
+    alert: '<path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4M12 17h.01"/>',
+    calendar: '<rect x="3" y="4" width="18" height="17" rx="2"/><path d="M3 9h18M8 2v4M16 2v4"/>',
+    list: '<path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/>',
+    home: '<path d="m3 10 9-7 9 7v10a1 1 0 0 1-1 1h-5v-6h-6v6H4a1 1 0 0 1-1-1z"/>',
+    chain: '<path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7"/><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"/>',
+    settings: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>',
+    shield: '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/>'
   };
   const ui = (k) => `<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${UI[k]}</svg>`;
   const icon = (k) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[k] ?? ''}</svg>`;
@@ -76,10 +85,11 @@
 
   function header() {
     const r = routeOf();
-    const tabs = [['/priority', 'בית', ''], ['/priority/chain', 'השרשרת', 'chain'], ['/priority/payments', 'תשלומים', 'payments']];
-    if (me.pricelist !== null && me.pricelist !== undefined) tabs.push(['/priority/pricelist', 'מחירונים', 'pricelist']);
-    if (me.admin) tabs.push(['/priority/settings', 'הגדרות', 'settings'], ['/priority/access', 'הרשאות', 'access']);
-    $('#tabs').innerHTML = tabs.map(([href, label, key]) => `<a href="${href}" data-nav ${r === key ? 'aria-current="page"' : ''}>${label}</a>`).join('');
+    const tabs = [['/priority', 'בית', '', ui('home')], ['/priority/chain', 'השרשרת', 'chain', ui('chain')], ['/priority/payments', 'תשלומים', 'payments', icon('payments')]];
+    if (me.pricelist !== null && me.pricelist !== undefined) tabs.push(['/priority/pricelist', 'מחירונים', 'pricelist', icon('pricelist')]);
+    if (me.admin) tabs.push(['/priority/settings', 'הגדרות', 'settings', ui('settings')], ['/priority/access', 'הרשאות', 'access', ui('shield')]);
+    $('#tabs').innerHTML = tabs.map(([href, label, key, ic]) => `<a href="${href}" data-nav ${r === key ? 'aria-current="page"' : ''}>${ic}<span>${label}</span></a>`).join('');
+    $('#tabs').querySelector('[aria-current]')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
     $('#who').innerHTML = `${me.connected ? '' : '<span class="pill p-warn">החיבור לפריוריטי לא הוגדר</span>'} ${esc(me.name)} · <a href="/" class="back-link">משימון</a>`;
   }
 
@@ -753,30 +763,30 @@
     const other = (o) => Object.entries(o ?? {}).map(([cur, v]) => `${shekel(v)} ${esc(cur)}`).join(' · ');
     const money = (t) => `₪${shekel(t.ils)}${Object.keys(t.other ?? {}).length ? ` <span class="muted small">+ ${other(t.other)}</span>` : ''}`;
     // כל חודש שיש בו תשלום (ולפחות שלושת הקרובים); באיחור וחסר תנאי — רק כשיש
-    const BUCKETS = [['late', '⚠️ באיחור'], ...r.runs.map((d) => [d, dmy15(d)]), ['none', 'חסר תנאי תשלום'], ['', 'הכל']];
+    const BUCKETS = [['late', 'באיחור'], ...r.runs.map((d) => [d, dmy15(d)]), ['none', 'חסר תנאי תשלום'], ['', 'הכל']];
     const chips = BUCKETS.filter(([k]) => !k || r.runs.includes(k) || r.byBucket[k]?.count).map(([k, label]) => {
       const t = k ? r.byBucket[k] : Object.values(r.byBucket).reduce((a, x) => ({ count: a.count + x.count, ils: a.ils + x.ils }), { count: 0, ils: 0 });
       return `<button type="button" class="chip pay-b${k === 'late' && t?.count ? ' late' : ''}" data-b="${k}" aria-pressed="${payFilter.bucket === k}">
-        <b>${esc(label)}</b>${t ? `<span class="pay-b-sum num">${t.count ? `₪${shekel(t.ils)}` : '—'}</span><span class="pay-b-n num">${t.count} מסמכים</span>` : ''}</button>`;
+        <b>${k === 'late' ? ui('alert') : k === '' ? ui('list') : k === 'none' ? '' : ui('calendar')}${esc(label)}</b>${t ? `<span class="pay-b-sum num">${t.count ? `₪${shekel(t.ils)}` : '—'}</span><span class="pay-b-n num">${t.count} מסמכים</span>` : ''}</button>`;
     }).join('');
     const opt = (v, label, cur) => `<option value="${esc(v)}" ${v === cur ? 'selected' : ''}>${esc(label)}</option>`;
     const rows = r.items.map((i) => `<tr>
-        <td class="num">${i.payDay ? dm(i.payDay) : '<span class="pill p-warn">חסר</span>'}${i.bucket === 'late' ? ' <span class="pill p-bad">באיחור</span>' : ''}</td>
-        <td><span class="pill p-brand">${esc(typeLabel(i.type))}</span></td>
-        <td>${esc(i.supplier.name || i.supplier.code)}${me.companies.length > 1 || r.scope === 'mine' ? `<div class="muted small">${esc(company(i.company))}</div>` : ''}</td>
-        <td><span class="ltr-inline">${esc(i.docno)}</span>${i.booknum ? `<div class="muted small">אסמכתא ${esc(i.booknum)}</div>` : ''}</td>
-        <td class="num">${dm(i.date)}${i.terms ? `<div class="muted small">${esc(i.terms)}</div>` : ''}</td>
-        <td class="num pay-amt">${i.currency === 'ש"ח' ? `₪${shekel(i.amount)}` : `${shekel(i.amount)} ${esc(i.currency)}`}${i.partialInvoiced ? `<div class="muted small" title="${esc(i.invoices.join(', '))}">היתרה שלא בחשבונית, מתוך ₪${shekel(i.total)}</div>` : ''}</td>
-        <td>${esc(i.project.name)}</td>
-        <td>${esc(i.initiatorName || '')}${i.mine && r.scope === 'all' ? ' <span class="pill p-ok">שלך</span>' : ''}</td>
+        <td class="num pay-day" data-label="מועד">${i.payDay ? dm(i.payDay) : '<span class="pill p-warn">חסר</span>'}${i.bucket === 'late' ? ' <span class="pill p-bad">באיחור</span>' : ''}</td>
+        <td class="pay-type" data-label="סוג"><span class="pill p-brand">${esc(typeLabel(i.type))}</span></td>
+        <td class="pay-sup" data-label="ספק">${esc(i.supplier.name || i.supplier.code)}${me.companies.length > 1 || r.scope === 'mine' ? `<div class="muted small">${esc(company(i.company))}</div>` : ''}</td>
+        <td data-label="מסמך"><span class="ltr-inline">${esc(i.docno)}</span>${i.booknum ? `<div class="muted small">אסמכתא ${esc(i.booknum)}</div>` : ''}</td>
+        <td class="num" data-label="תאריך · תנאי">${dm(i.date)}${i.terms ? `<div class="muted small">${esc(i.terms)}</div>` : ''}</td>
+        <td class="num pay-amt" data-label="סכום">${i.currency === 'ש"ח' ? `₪${shekel(i.amount)}` : `${shekel(i.amount)} ${esc(i.currency)}`}${i.partialInvoiced ? `<div class="muted small" title="${esc(i.invoices.join(', '))}">היתרה שלא בחשבונית, מתוך ₪${shekel(i.total)}</div>` : ''}</td>
+        <td data-label="פרויקט">${esc(i.project.name)}</td>
+        <td data-label="יוזם">${esc(i.initiatorName || '')}${i.mine && r.scope === 'all' ? ' <span class="pill p-ok">שלך</span>' : ''}</td>
       </tr>`).join('');
-    const errs = r.errors.length ? `<p class="note">⚠️ לא נקרא מפריוריטי: ${esc([...new Set(r.errors.map((e) => company(e.company) || e.message))].join(', '))}. הרשימה חסרה את מה שבהן. ${esc(r.errors[0].message)}</p>` : '';
+    const errs = r.errors.length ? `<p class="note warn">${ui('alert')} לא נקרא מפריוריטי: ${esc([...new Set(r.errors.map((e) => company(e.company) || e.message))].join(', '))}. הרשימה חסרה את מה שבהן. ${esc(r.errors[0].message)}</p>` : '';
     const intro = r.scope === 'all'
       ? 'כל מה שמחכה לתשלום: קבלות סחורה סופיות (רק מה שעוד לא בחשבונית ספק), חשבונות חלקיים מאושרים וחשבונות עסקה מאושרים. מועד התשלום — ה-15 שאחרי סוף החודש ועוד ימי התנאי.'
       : r.login || r.items.length ? 'המסמכים שיזמת — מתי צפוי התשלום עליהם.' : 'לא מצאנו את שם המשתמש שלך בפריוריטי, ולכן אין כאן מסמכים. פנו למנהל המערכת.';
     main.innerHTML = `<div class="pay">
-      <div class="chain-h"><div><h1>תשלומים</h1><p class="muted">${esc(intro)}</p></div>
-        <div class="row-actions"><button class="btn pay-refresh" type="button">רענון מפריוריטי</button><a class="btn" href="/api/priority/payments?${new URLSearchParams([...q].filter(([k]) => k !== 'refresh'))}&format=xlsx" title="מה שמוצג עכשיו — גיליון לכל חברה">ייצוא לאקסל</a></div></div>
+      <div class="chain-h pay-head"><div><h1>תשלומים</h1><p class="muted">${esc(intro)}</p></div>
+        <div class="row-actions"><button class="btn pay-refresh" type="button">${ui('refresh')}<span>רענון מפריוריטי</span></button><a class="btn" download href="/api/priority/payments?${new URLSearchParams([...q].filter(([k]) => k !== 'refresh'))}&format=xlsx" title="מה שמוצג עכשיו — גיליון לכל חברה">${ui('download')}<span>ייצוא לאקסל</span></a></div></div>
       ${errs}
       <div class="pay-buckets" role="group" aria-label="מועד התשלום">${chips}</div>
       <div class="grid-form pay-f">
@@ -788,7 +798,7 @@
       </div>
       <div class="pay-body">
         <section class="panel"><div class="panel-h"><h2>${r.items.length} מסמכים · ${money(r.totals.all)}</h2><p>כולל מע״מ. עודכן ${fmtAt(r.at)}.</p></div>
-          ${rows ? `<div class="scroll"><table class="t pay-t"><tr><th scope="col">מועד</th><th scope="col">סוג</th><th scope="col">ספק</th><th scope="col">מסמך</th><th scope="col">תאריך · תנאי</th><th scope="col">סכום</th><th scope="col">פרויקט</th><th scope="col">יוזם</th></tr>${rows}</table></div>` : '<p class="muted">אין מסמכים במועד הזה.</p>'}
+          ${rows ? `<div class="scroll"><table class="t pay-t"><thead><tr><th scope="col">מועד</th><th scope="col">סוג</th><th scope="col">ספק</th><th scope="col">מסמך</th><th scope="col">תאריך · תנאי</th><th scope="col">סכום</th><th scope="col">פרויקט</th><th scope="col">יוזם</th></tr></thead><tbody>${rows}</tbody></table></div>` : '<p class="muted">אין מסמכים במועד הזה.</p>'}
         </section>
       </div></div>`;
 
@@ -807,8 +817,9 @@
       typing = setTimeout(() => payments().then(() => { const n = main.querySelector(`[data-f="${el.dataset.f}"]`); if (n && el.type === 'search') { n.focus(); n.setSelectionRange(n.value.length, n.value.length); } }), el.type === 'search' ? 350 : 0);
     });
     main.querySelector('.pay-refresh').addEventListener('click', async (e) => {
-      e.target.disabled = true; e.target.textContent = 'קורא…';
-      try { await payments(true); toast('עודכן מפריוריטי'); } catch (err) { toast(err.message, true); e.target.disabled = false; }
+      const b = e.currentTarget;
+      b.disabled = true; b.querySelector('span').textContent = 'קורא…'; b.classList.add('spin');
+      try { await payments(true); toast('עודכן מפריוריטי'); } catch (err) { toast(err.message, true); b.disabled = false; b.classList.remove('spin'); b.querySelector('span').textContent = 'רענון מפריוריטי'; }
     });
   }
 
@@ -822,7 +833,7 @@
     const conn = s.connection;
 
     main.innerHTML = `
-      ${s.testLock ? '<p class="note">⚠ סביבת בדיקות: אף חברה אינה פתוחה לכתיבה, מה שלא יישמר כאן.</p>' : ''}
+      ${s.testLock ? `<p class="note warn">${ui('alert')} סביבת בדיקות: אף חברה אינה פתוחה לכתיבה, מה שלא יישמר כאן.</p>` : ''}
       <section class="panel">
         <div class="panel-h"><h2>חיבור לפריוריטי</h2><p>משתמש ה-API של הארגון. הסיסמה נשמרת מוצפנת ולא מוצגת שוב — כדי להחליף, מקלידים חדשה.</p></div>
         <div class="grid-form">
