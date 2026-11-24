@@ -13,11 +13,15 @@
  *   • ‎GET /api/priority/payments‎ — 💰 תשלומים ל-15: מורשה "תשלומים" — הכל בחברות שלו; כל עובד אחר — רק מה שיזם.
  *     ‎?format=xlsx‎ — אותו סינון, כקובץ אקסל.
  *   • טור המיילים והגרירה (‎priority-docs.js‎): ‎/api/priority/inbox‎, ‎/api/priority/docs‎ — כל עובד, רק שלו.
+ *   • ✍️ "ממתין לאישורך" (‎priority-waiting.js‎): ‎GET /api/priority/waiting‎, ‎POST …/waiting/refresh‎, ‎GET …/waiting/:id/check‎ —
+ *     כל עובד, רק מה שהוא החותם הבא בו (פריוריטי קובע — בלי מטריצת ההרשאות, הוחלט 24.11.26).
+ *     מנהלי מערכת: ‎GET …/waiting/admin‎, ‎PUT …/waiting/types/:screen‎, ‎POST …/waiting/map‎.
  */
 const Settings = require('../priority').PrioritySettings;
 const Access = require('../priority').PriorityAccess;
 const Docs = require('../priority').PriorityDocs;
 const Chain = require('../priority').PriorityChain;
+const Waiting = require('../priority').PriorityWaiting;
 const Desk = require('../priority').PriorityDesk;
 const PdParts = require('../priority').PdParts;
 const PoPricelist = require('../priority').PoPricelist;
@@ -249,6 +253,34 @@ function register(router) {
     // מנהל מערכת — אפשר לראות את כל הארגון (‎all=1‎); עובד — רק שלו
     const all = Access.isAdmin(actor) && url.searchParams.get('all') === '1';
     sendJson(res, 200, { ...Chain.board(actor, { doc, all }), all });
+  });
+
+  // ---------------------------------------------------------------- ✍️ ממתין לאישורך
+  router.get('/api/priority/waiting', async (req, res, ctx) => {
+    const actor = userOnly(ctx);
+    sendJson(res, 200, await Waiting.forUser(actor.id));
+  });
+  router.post('/api/priority/waiting/refresh', async (req, res, ctx) => {
+    const actor = userOnly(ctx);
+    sendJson(res, 200, await docs(() => Waiting.refresh(actor.id)));
+  });
+  router.get('/api/priority/waiting/admin', async (req, res, ctx) => {
+    adminOnly(ctx);
+    sendJson(res, 200, await Waiting.adminView());
+  });
+  router.get('/api/priority/waiting/:id/check', async (req, res, ctx) => {
+    const actor = userOnly(ctx);
+    sendJson(res, 200, await docs(() => Waiting.check(actor.id, ctx.params.id)));
+  });
+  router.put('/api/priority/waiting/types/:screen', async (req, res, ctx) => {
+    adminOnly(ctx);
+    const b = await readJson(req);
+    sendJson(res, 200, await docs(() => Waiting.setType(ctx.params.screen, { name: b?.name, on: b?.on })));
+  });
+  router.post('/api/priority/waiting/map', async (req, res, ctx) => {
+    adminOnly(ctx);
+    const b = await readJson(req);
+    sendJson(res, 200, await docs(() => Waiting.mapUser(b?.login, b?.userId)));
   });
 
   router.get('/api/priority/log', async (req, res, ctx) => {
