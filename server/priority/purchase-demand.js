@@ -332,23 +332,29 @@ const buildingPairs = (b) => (b.topics ?? []).map((t) => ({ chapter: b.chapter, 
  * (השורה נשארת על הקידוד של הפריט). בניין בלי משאבים בכרטיס — רק תת הפרק.
  */
 function codeForBuilding(s, it) {
-  const b = s.building;
+  // שורה ששויכה לחלק אחר ("שורה 3 — חניון") — החלק שלה; אחרת — החלק של הדרישה
+  const b = (it.zone && (s.buildings ?? []).find((x) => x.chapter === it.zone)) || s.building;
   if (!b) { it.bcoding = null; return; }
   const tops = b.topics ?? [];
   const base = it.part ?? it.general ?? {};
   if (!tops.length) { it.bcoding = { chapter: b.chapter, chapterDes: b.chapterDes, topic: base.topic ?? null, topicDes: base.topicDes ?? '' }; return; }
   const byTopic = (x) => (x ? tops.find((t) => t.topic === x) : null);
+  const byDes = (d) => (d ? tops.find((x) => normalize(x.topicDes) === normalize(d)) : null);
+  // מעבר לחלק אחר ("שורה 3 — חניון") — אותו סוג משאב שהיה לשורה ("שלד" ← "שלד" של החניון)
+  const prev = it.bcoding?.chapter !== b.chapter ? it.bcoding : null;
   const t = (it.generalFrom === 'ai' && it.general?.chapter === b.chapter ? byTopic(it.general.topic) : null)
+    ?? byDes(prev?.topicDes)
+    ?? (it.generalFrom === 'ai' ? byDes(it.general?.topicDes) : null)
     ?? byTopic(base.topic)
-    ?? (base.topicDes ? tops.find((x) => normalize(x.topicDes) === normalize(base.topicDes)) : null);
+    ?? byDes(base.topicDes);
   if (t) { it.bcoding = { chapter: b.chapter, chapterDes: b.chapterDes, topic: t.topic, topicDes: t.topicDes }; return; }
   it.bcoding = null;
   const k = `${b.chapter}|${it.description}`;
   if ((s.noTopicAlerts ??= []).includes(k)) return;
   s.noTopicAlerts.push(k);
-  alertAdmins({ full_name: '' }, s, `אין משאב מתאים מתחת לבניין ${buildingName(b)}`, [`פרויקט: ${s.project?.code ?? ''} ${s.project?.des ?? ''}`, `בניין (תת פרק): ${b.chapter} ${b.chapterDes}`,
+  alertAdmins({ full_name: '' }, s, `אין משאב מתאים מתחת לתת הפרק ${buildingName(b)}`, [`פרויקט: ${s.project?.code ?? ''} ${s.project?.des ?? ''}`, `חלק בפרויקט (תת פרק): ${b.chapter} ${b.chapterDes}`,
     `פריט: ${it.description}${it.part?.code ? ` (${it.part.code}, משאב בקטלוג: ${it.part.topic ?? '—'} ${it.part.topicDes ?? ''})` : ''}`,
-    `המשאבים מתחת לבניין: ${tops.map((x) => `${x.topic} ${x.topicDes}`).join(', ')}`, 'השורה נשארה על המשאב של הפריט — לבדוק את המשאבים של הבניין בפריוריטי.']);
+    `המשאבים מתחת לתת הפרק: ${tops.map((x) => `${x.topic} ${x.topicDes}`).join(', ')}`, 'השורה נשארה על המשאב של הפריט — לבדוק את המשאבים של תת הפרק בפריוריטי.']);
 }
 
 /** צירופי תת פרק ומשאב של רשימת פריטים, הנפוץ קודם: ‎[{ chapter, chapterDes, topic, topicDes, n }]‎ */
@@ -404,7 +410,7 @@ function headerLines(s, { notes = [] } = {}) {
     `📅 תאריך: *${ymdHe(s.date)}*${s.date === today() ? ' (היום)' : ''}`,
     s.project ? `📁 פרויקט: *${s.project.des}* (${s.project.code})${s.projectFrom === 'pref' ? ' — הבחירה האחרונה שלך' : s.projectFrom === 'only' ? ' — הפרויקט היחיד בחברה' : ''}` : null,
     s.warehouse ? `🏬 מחסן: *${s.warehouseName || s.warehouse}* (${s.warehouse})${s.warehouseFrom === 'pref' ? ' — הבחירה האחרונה שלך' : ''}` : null,
-    s.building ? `🏗️ בניין: *${buildingName(s.building)}* (${s.building.chapter})${s.buildingFrom === 'pref' ? ' — הבחירה האחרונה שלך' : s.buildingFrom === 'only' ? ' — הבניין היחיד בפרויקט' : ''}` : null,
+    s.building ? `📍 חלק בפרויקט: *${buildingName(s.building)}* (${s.building.chapter})${s.buildingFrom === 'pref' ? ' — הבחירה האחרונה שלך' : s.buildingFrom === 'only' ? ' — היחיד בפרויקט' : s.buildingFrom === 'hint' ? ' — לפי הבקשה' : ''}` : null,
     s.demandCode ? `📋 ${s.demandCode.des}${s.codeFrom === 'pref' ? ' — הבחירה האחרונה שלך' : ''}` : null,
     ...notes
   ].filter(Boolean);
@@ -682,20 +688,41 @@ async function chooseBuilding(s, pre = []) {
   s.buildings = list ?? [];
   if (s.buildings.length === 0) { s.building = null; return null; }
   if (s.buildings.length === 1) { s.building = s.buildings[0]; s.buildingFrom = 'only'; return null; }
+  // הבקשה גוברת ("בלוקים לחניון") — על הבחירה האחרונה
+  const hinted = s.partHint ? detectPart(s, s.partHint) : null;
+  if (hinted) { s.building = hinted; s.buildingFrom = 'hint'; return null; }
   const last = Prefs.of(s.uid, s.company)?.buildings?.[s.project.code];
   const hit = last && s.buildings.find((b) => b.chapter === last);
   if (hit) { s.building = hit; s.buildingFrom = 'pref'; return null; }
   return askBuilding(s, pre);
 }
+
+/*
+ * 📍 החלק בפרויקט מתוך הטקסט ("בלוקים לחניון", "למבנה B"): השם המלא של תת הפרק, או מילה מיוחדת בו (לא "מבנה", "בניין",
+ * "כללי", ולא מספר) — רק כשהיא מתאימה לחלק אחד. אין — ‎null‎.
+ */
+const GENERIC_PART = new Set(['מבנה', 'בניין', 'כללי', 'פרויקט', 'חלק', 'שלב', 'עבודות']);
+function detectPart(s, text) {
+  const tx = normalize(text).toLowerCase();
+  if (!tx) return null;
+  const list = s.buildings ?? [];
+  const full = list.filter((b) => b.chapterDes && tx.includes(normalize(b.chapterDes).toLowerCase()));
+  if (full.length === 1) return full[0];
+  const words = (b) => normalize(buildingName(b)).toLowerCase().split(/\s+/).filter((w) => w.length >= 3 && !GENERIC_PART.has(w) && !/^\d+$/.test(w));
+  const hits = list.filter((b) => words(b).some((w) => tx.includes(w)));
+  return hits.length === 1 ? hits[0] : null;
+}
 const buildingName = (b) => b.chapterDes || b.chapter;
-function askBuilding(s, pre = [], head = '🏗️ *לאיזה בניין? (תת פרק)*') {
+function askBuilding(s, pre = [], head = '📍 *לאיזה חלק בפרויקט?*') {
   s.step = 'building';
   const list = s.buildings ?? [];
-  const opts = list.slice(0, 3);
+  // הבחירה האחרונה בפרויקט — ראשונה בכפתורים
+  const last = Prefs.of(s.uid, s.company)?.buildings?.[s.project?.code];
+  const opts = [...list.filter((b) => b.chapter === last), ...list.filter((b) => b.chapter !== last)].slice(0, 3);
   const btns = labels(opts.map(buildingName));
   s.buildingOptions = opts.map((b, i) => ({ chapter: b.chapter, btn: btns[i] }));
   return reply(s, [...pre, head, ...list.map((b) => `• ${buildingName(b)} (${b.chapter})`),
-    list.length > 3 ? 'או כתבו את שם הבניין.' : null, '_דרישה אחת — לבניין אחד. בפעם הבאה אזכור את הבחירה._'].filter(Boolean).join('\n'), btns);
+    list.length > 3 ? 'או כתבו את השם ("חניון", "מבנה 3").' : null, '_שורה לחלק אחר — "שורה 3 — חניון". בפעם הבאה אזכור את הבחירה._'].filter(Boolean).join('\n'), btns);
 }
 /** כפתור, קוד, או שם הבניין ("A", "מבנה B") */
 function pickBuilding(s, t) {
@@ -787,7 +814,7 @@ async function chooseWarehouse(s) {
 /** "תאריך …", "פרויקט …", "מחסן …", "סביבה" — בכל שלב */
 const DATE_CMD = /^\s*(?:תאריך|לתאריך|ל-?)\s*[:\-–]?\s*(.+)$/;
 const PROJECT_CMD = /^\s*(?:פרויקט|לשנות פרויקט|שנה פרויקט|פרויקט אחר)(?=[\s:\-–]|$)\s*[:\-–]?\s*([\s\S]*)$/;
-const BUILDING_CMD = /^\s*(?:בניין|מבנה|לשנות בניין|בניין אחר|מבנה אחר)(?=[\s:\-–]|$)\s*[:\-–]?\s*([\s\S]*)$/;
+const BUILDING_CMD = /^\s*(?:חלק בפרויקט|חלק|חלק אחר|לשנות חלק|בניין|מבנה|לשנות בניין|בניין אחר|מבנה אחר)(?=[\s:\-–]|$)\s*[:\-–]?\s*([\s\S]*)$/;
 const WAREHOUSE_CMD = /^\s*(?:מחסן|לשנות מחסן|שנה מחסן|מחסן אחר)(?=[\s:\-–]|$)\s*[:\-–]?\s*([\s\S]*)$/;
 const COMPANY_CMD = /^\s*(?:סביבה|סביבה אחרת|חברה|חברה אחרת|לשנות סביבה|לשנות חברה)\s*$/;
 
@@ -823,13 +850,22 @@ async function headerCommand(s, t) {
   const bm = t.match(BUILDING_CMD);
   if (bm && s.project?.code && !s.editOf && s.step !== 'building') {
     if (!s.buildings) { s.building = undefined; await chooseBuilding(s); }
-    if (!(s.buildings ?? []).length) return back(s, '🏗️ לפרויקט הזה אין תתי פרקים בפריוריטי.');
+    if (!(s.buildings ?? []).length) return back(s, '📍 לפרויקט הזה אין תתי פרקים בפריוריטי.');
     const what = bm[1].replace(/\s+/g, ' ').trim();
     const b = what && !/^אחר$/.test(what) ? pickBuilding(s, what) : null;
     if (!b) return askBuilding(s);
     setBuilding(s, b);
     for (const it of s.items ?? []) codeForBuilding(s, it);
-    return back(s, `🏗️ בניין: *${buildingName(b)}* (${b.chapter}).`);
+    return back(s, `📍 חלק בפרויקט: *${buildingName(b)}* (${b.chapter}).`);
+  }
+  // שם החלק לבד ("חניון") — שינוי החלק של הדרישה
+  if ((s.buildings ?? []).length && s.step !== 'building' && !s.editOf && t.split(/\s+/).length <= 3 && !/\d/.test(t)) {
+    const b = detectPart(s, t);
+    if (b && (normalize(t) === normalize(buildingName(b)) || !/\s/.test(t.trim()))) {
+      setBuilding(s, b);
+      for (const it of s.items ?? []) codeForBuilding(s, it);
+      return back(s, `📍 חלק בפרויקט: *${buildingName(b)}* (${b.chapter}).`);
+    }
   }
   const wm = t.match(WAREHOUSE_CMD);
   if (wm) {
@@ -1277,8 +1313,8 @@ async function submit(user, s) {
 // כניסה
 // ---------------------------------------------------------------------------
 
-async function start(user, pre = []) {
-  const s = { step: 'start', uid: user.id, startedAt: Date.now(), date: today(), items: [], files: [] };
+async function start(user, pre = [], hint = '') {
+  const s = { step: 'start', uid: user.id, startedAt: Date.now(), date: today(), items: [], files: [], partHint: hint || null };
   const list = writable(user.id);
   const last = Prefs.lastCompany(user.id);
   if (last && list.includes(last)) s.company = last;
@@ -1321,7 +1357,7 @@ async function handle({ user, text = '', file = null, reaction = false, voice = 
   // "דרישת רכש" — התחלה (או המשך של דרישה פתוחה)
   if (!s || (isTrigger(t) && !file && !s.items?.length && s.step !== 'code')) {
     if (isTrigger(t) && CANCEL.test(afterTrigger(t).trim())) { if (s) clear(user.id, s); return { replies: [s ? 'דרישת הרכש בוטלה.' : 'אין דרישת רכש פתוחה.'], status: 'ok', result: 'ביטול' }; }
-    const out = await start(user, heard);
+    const out = await start(user, heard, afterTrigger(t));
     if (out.s) save(user.id, out.s);
     // תמונה או רשימה כבר בהודעה הראשונה ("דרישת רכש: 10 שקי מלט…")
     const rest = afterTrigger(t).replace(/^[\s:\-–,]+/, '').trim();
@@ -1407,13 +1443,13 @@ async function step(user, s, t, file, { reaction, stale = false }) {
     case 'building': {
       if (file) return reply(s, 'קודם הבניין — ואז הרשימה.', s.lastButtons ?? []);
       const b = pickBuilding(s, t);
-      if (!b) return t.split(/\s+/).length >= 6 ? null : askBuilding(s, [], '🏗️ לא מצאתי תת פרק כזה בפרויקט. לאיזה בניין?');
+      if (!b) return t.split(/\s+/).length >= 6 ? null : askBuilding(s, [], '📍 לא מצאתי חלק כזה בפרויקט. לאיזה חלק?');
       const had = (s.items ?? []).length;
       setBuilding(s, b);
       if (had) for (const it of s.items) codeForBuilding(s, it);
-      const askC = await chooseCode(s, [`🏗️ בניין: *${buildingName(b)}* (${b.chapter})`, '']);
+      const askC = await chooseCode(s, [`📍 חלק בפרויקט: *${buildingName(b)}* (${b.chapter})`, '']);
       if (askC) return askC;
-      return back(s, `🏗️ בניין: *${buildingName(b)}* (${b.chapter}) — אזכור לפעם הבאה בפרויקט.`);
+      return back(s, `📍 חלק בפרויקט: *${buildingName(b)}* (${b.chapter}) — אזכור לפעם הבאה בפרויקט.`);
     }
     case 'warehouse': {
       const opts = s.warehouseOptions ?? [];
@@ -1451,6 +1487,17 @@ async function step(user, s, t, file, { reaction, stale = false }) {
       if (s.step === 'review' && (DONE.test(t) || sameLabel(t, BTN.done) || t === '👍')) return stale ? staleAgain(s) : submit(user, s);
       if (s.step === 'items' && (DONE.test(t) || sameLabel(t, BTN.done))) return reply(s, 'עוד אין פריטים ברשימה. שלחו צילום, הקלטה או הקלדה של מה שצריך.', [BTN.cancel]);
       // "שורה 2 כמות 10" — עריכה ישירה מהמסך (או מוקלדת): בלי AI
+      // 📍 "שורה 3 — חניון" — השורה הזו לחלק אחר בפרויקט (שאר הדרישה — כמו שהיא)
+      const zm = (s.buildings ?? []).length ? t.match(/^שורה\s*(\d+)\s*[-–—:]?\s*(.+)$/) : null;
+      if (zm && !/\d/.test(zm[2]) && zm[2].split(/\s+/).length <= 4) {
+        const z = detectPart(s, zm[2]);
+        const it = z && s.items.find((x) => x.n === Number(zm[1]));
+        if (it) {
+          it.zone = z.chapter === s.building?.chapter ? null : z.chapter;
+          codeForBuilding(s, it);
+          return showList(s, [`📍 שורה ${it.n} (${it.description}) ← *${buildingName(z)}*`, '']);
+        }
+      }
       const exact = LineCmd.parse(t);
       if (exact) return onText(user, s, t, exact);
       if (!Claude.isEnabled()) return reply(s, 'הבנת הרשימה דורשת חיבור AI, שעוד לא הוגדר בשרת.', [BTN.cancel]);
@@ -1464,7 +1511,7 @@ async function step(user, s, t, file, { reaction, stale = false }) {
 /**
  * 🗂 תצוגה למסך של משימון פריוריטי (‎priority-desk.js‎) — הדרישה כפי שהיא עכשיו, כנתונים. קריאה בלבד.
  */
-const VIEW_STEP = { start: 'פתיחה', company: 'חברה', project: 'פרויקט', warehouse: 'מחסן', code: 'סוג דרישה', items: 'רשימת הפריטים', pick: 'בחירת פריט', review: 'לפני שליחה לאישור', parts_mode: 'מק"טים מהרכש', detail: 'תיאור מדויק לרכש', building: 'בניין' };
+const VIEW_STEP = { start: 'פתיחה', company: 'חברה', project: 'פרויקט', warehouse: 'מחסן', code: 'סוג דרישה', items: 'רשימת הפריטים', pick: 'בחירת פריט', review: 'לפני שליחה לאישור', parts_mode: 'מק"טים מהרכש', detail: 'תיאור מדויק לרכש', building: 'חלק בפרויקט' };
 function view(userId) {
   const s = load(userId);
   if (!s || !fresh(s)) return null;

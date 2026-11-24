@@ -1121,69 +1121,112 @@ test('מק"טים לבנייה: תיקון או פריט נוסף בשאלה "א
 });
 
 // ---------------------------------------------------------------------------
-// 🏗️ לאיזה בניין? — תת הפרק = הבניין, המשאב מתחתיו (23.11.26)
+// 📍 לאיזה חלק בפרויקט? — תתי הפרקים של הפרויקט (בניינים, חניון משותף…), המשאב מתחתיו (24.11.26)
 // ---------------------------------------------------------------------------
 
-const BUILDINGS = [
+const PARTS = [
   { chapter: '210', chapterDes: 'מבנה A', topics: [{ topic: '210-10', topicDes: 'בטון' }, { topic: '210-20', topicDes: 'שלד' }] },
-  { chapter: '220', chapterDes: 'מבנה B', topics: [{ topic: '220-10', topicDes: 'בטון' }, { topic: '220-20', topicDes: 'שלד' }] }
+  { chapter: '220', chapterDes: 'מבנה B', topics: [{ topic: '220-10', topicDes: 'בטון' }, { topic: '220-20', topicDes: 'שלד' }] },
+  { chapter: '230', chapterDes: 'חניון משותף', topics: [{ topic: '230-10', topicDes: 'בטון' }, { topic: '230-20', topicDes: 'שלד' }] }
 ];
+/** ה-AI: "שק מלט" — זהה בקטלוג (M-1, משאב "שלד" של החלק שנבחר) */
+function partsAi(t, { adds = [{ description: 'שק מלט', qty: 10, unit: 'שק', note: '' }], chapter = null } = {}) {
+  return H.claude(t, {
+    edit: () => ({ action: 'add', adds, updates: [], removes: [], question: '' }),
+    match: (input) => ({ results: input.items.map((it) => {
+      const ch = chapter ?? input.pairs[0]?.chapter ?? '';
+      return { line: it.line, kind: 'exact', codes: ['M-1'], chapter: ch, topic: ch ? `${ch}-20` : '', why: '' };
+    }) })
+  });
+}
 
-test('🏗️ לאיזה בניין? — אחרי הפרויקט; כל השורות על תת הפרק של הבניין והמשאב שמתחתיו; הבחירה נשמרת לפרויקט', async (t) => {
+test('📍 לאיזה חלק בפרויקט? — תתי הפרקים כפי שהם (גם חניון); השורות על תת הפרק והמשאב שמתחתיו; הבחירה נשמרת', async (t) => {
   H.at(t);
   H.companies(t, 'test11');
   const u = buyerWorker();
-  const pr = priority(t, { projectChapters: async (c, proj) => (proj === 'PR1' ? BUILDINGS : []) });
-  H.claude(t, {
-    edit: () => ({ action: 'add', adds: [{ description: 'שק מלט', qty: 10, unit: 'שק', note: '' }], updates: [], removes: [], question: '' }),
-    match: (input) => {
-      // ה-AI מקבל רק את הצירופים של הבניין
-      assert.ok(input.pairs.every((p) => p.chapter === '220'), JSON.stringify(input.pairs));
-      return { results: input.items.map((it) => ({ line: it.line, kind: 'exact', codes: ['M-1'], chapter: '220', topic: '220-20', why: '' })) };
-    }
-  });
+  const pr = priority(t, { projectChapters: async (c, proj) => (proj === 'PR1' ? PARTS : []) });
+  partsAi(t);
   const { say } = H.chat(t, u);
 
   let r = await say('דרישת רכש');
   r = await say('אלעד 49 צפון');
-  assert.match(r.text, /לאיזה בניין\? \(תת פרק\)/);
-  assert.match(r.text, /• מבנה A \(210\)\n• מבנה B \(220\)/);
-  H.assertButtons(r.buttons, ['מבנה A', 'מבנה B']);
-  r = await say('מבנה B');
+  assert.match(r.text, /לאיזה חלק בפרויקט\?/);
+  assert.doesNotMatch(r.text, /לאיזה בניין/);
+  assert.match(r.text, /• מבנה A \(210\)\n• מבנה B \(220\)\n• חניון משותף \(230\)/);
+  assert.match(r.text, /שורה לחלק אחר — "שורה 3 — חניון"/);
+  H.assertButtons(r.buttons, ['מבנה A', 'מבנה B', 'חניון משותף']);
+  r = await say('חניון משותף');
   assert.match(r.text, /איזו דרישה\?/);
   r = await say('אתרי');
-  assert.match(r.text, /🏗️ בניין: \*מבנה B\* \(220\)/);
+  assert.match(r.text, /📍 חלק בפרויקט: \*חניון משותף\* \(230\)/);
   r = await say('10 שקי מלט');
-  assert.match(r.text, /שק מלט — 10 שק\n {3}✅ M-1 שק מלט · מבנה B \/ שלד/);
+  assert.match(r.text, /✅ M-1 שק מלט · חניון משותף \/ שלד/);
   await say(BTN.done);
-  assert.deepEqual(pr.wrote('addDemandLine')[0].args[2], { part: 'M-1', qty: 10, chapter: '220', topic: '220-20' });
+  assert.deepEqual(pr.wrote('addDemandLine')[0].args[2], { part: 'M-1', qty: 10, chapter: '230', topic: '230-20' });
 
-  // הפעם הבאה — בלי שאלה
+  // הפעם הבאה — בלי שאלה; ושינוי בשם לבד
   r = await say('דרישת רכש');
-  assert.match(r.text, /🏗️ בניין: \*מבנה B\* \(220\) — הבחירה האחרונה שלך/);
-  assert.match(r.text, /מה צריך\?/);
-  // ושינוי בשפה חופשית
-  r = await say('בניין A');
-  assert.match(r.text, /🏗️ בניין: \*מבנה A\* \(210\)/);
+  assert.match(r.text, /📍 חלק בפרויקט: \*חניון משותף\* \(230\) — הבחירה האחרונה שלך/);
+  r = await say('מבנה A');
+  assert.match(r.text, /📍 חלק בפרויקט: \*מבנה A\* \(210\)/);
 });
 
-test('🏗️ פרויקט עם בניין אחד — בלי שאלה; בלי בניינים — כמו קודם', async (t) => {
+test('📍 הבקשה גוברת: "דרישת רכש — 10 שקי מלט לחניון" — החלק נבחר לבד, בלי שאלה', async (t) => {
   H.at(t);
   H.companies(t, 'test11');
   const u = buyerWorker();
-  priority(t, { projectChapters: async (c, proj) => (proj === 'PR1' ? [BUILDINGS[0]] : []) });
+  Prefs.remember(u.id, { company: 'test11', project: { code: 'PR1', des: 'אלעד 49 צפון' }, warehouse: 'W1' });
+  Prefs.set(u.id, 'test11', 'demandCode', '01');
+  Prefs.set(u.id, 'test11', 'buildings', { PR1: '210' });
+  const pr = priority(t, { projectChapters: async () => PARTS });
+  partsAi(t, { chapter: '230' });
+  const { say } = H.chat(t, u);
+  const r = await say('דרישת רכש — 10 שקי מלט לחניון');
+  assert.doesNotMatch(r.text, /לאיזה חלק/);
+  assert.match(r.text, /📍 חלק בפרויקט: \*חניון משותף\* \(230\) — לפי הבקשה/);
+  await say(BTN.done);
+  assert.equal(pr.wrote('addDemandLine')[0].args[2].chapter, '230');
+});
+
+test('📍 "שורה 2 — חניון": שורה אחת לחלק אחר, ושאר הדרישה נשארת על החלק שנבחר', async (t) => {
+  H.at(t);
+  H.companies(t, 'test11');
+  const u = buyerWorker();
+  Prefs.remember(u.id, { company: 'test11', project: { code: 'PR1', des: 'אלעד 49 צפון' }, warehouse: 'W1' });
+  Prefs.set(u.id, 'test11', 'demandCode', '01');
+  Prefs.set(u.id, 'test11', 'buildings', { PR1: '210' });
+  const pr = priority(t, { projectChapters: async () => PARTS });
+  partsAi(t, { adds: [{ description: 'שק מלט', qty: 10, unit: 'שק', note: '' }, { description: 'שק מלט', qty: 4, unit: 'שק', note: '' }] });
+  const { say } = H.chat(t, u);
+  let r = await say('דרישת רכש');
+  assert.match(r.text, /📍 חלק בפרויקט: \*מבנה A\* \(210\) — הבחירה האחרונה שלך/);
+  await say('10 שקי מלט, ועוד 4');
+  r = await say('שורה 2 — חניון');
+  assert.match(r.text, /📍 שורה 2 \(שק מלט\) ← \*חניון משותף\*/);
+  assert.match(r.text, /\*1\.\* שק מלט — 10 שק\n {3}✅ M-1 שק מלט · מבנה A \/ שלד/);
+  assert.match(r.text, /\*2\.\* שק מלט — 4 שק\n {3}✅ M-1 שק מלט · חניון משותף \/ שלד/);
+  await say(BTN.done);
+  assert.deepEqual(pr.wrote('addDemandLine').map((w) => [w.args[2].chapter, w.args[2].topic]), [['210', '210-20'], ['230', '230-20']]);
+  // "שורה 1 — 20" — עדיין כמות, לא חלק
+});
+
+test('📍 חלק אחד בפרויקט — בלי שאלה; בלי תתי פרקים — כמו קודם', async (t) => {
+  H.at(t);
+  H.companies(t, 'test11');
+  const u = buyerWorker();
+  priority(t, { projectChapters: async (c, proj) => (proj === 'PR1' ? [PARTS[0]] : []) });
   ai(t);
   const { say } = H.chat(t, u);
   await say('דרישת רכש');
   let r = await say('אלעד 49 צפון');
-  assert.doesNotMatch(r.text, /לאיזה בניין/);
+  assert.doesNotMatch(r.text, /לאיזה חלק/);
   r = await say('אתרי');
-  assert.match(r.text, /🏗️ בניין: \*מבנה A\* \(210\) — הבניין היחיד בפרויקט/);
+  assert.match(r.text, /📍 חלק בפרויקט: \*מבנה A\* \(210\) — היחיד בפרויקט/);
   r = await say('פרויקט נהריה');
-  assert.doesNotMatch(r.text, /בניין/);
+  assert.doesNotMatch(r.text, /חלק בפרויקט/);
 });
 
-test('🏗️ אין משאב מתאים מתחת לבניין — העובד לא נתקע (הקידוד של הפריט), ומנהל המערכת מקבל התראה', async (t) => {
+test('📍 אין משאב מתאים מתחת לתת הפרק — העובד לא נתקע (הקידוד של הפריט), ומנהל המערכת מקבל התראה', async (t) => {
   H.at(t);
   H.companies(t, 'test11');
   const u = buyerWorker();
@@ -1203,6 +1246,7 @@ test('🏗️ אין משאב מתאים מתחת לבניין — העובד ל
   assert.deepEqual(pr.wrote('addDemandLine')[0].args[2], { part: 'M-1', qty: 10, chapter: '20', topic: '20-10' });
   const n = D.get("SELECT title, body FROM notifications WHERE target_id = ? AND title LIKE '%אין משאב מתאים%' ORDER BY id DESC", admin.id);
   assert.ok(n, 'התראה למנהל');
+  assert.match(n.title, /מתחת לתת הפרק מבנה A/);
   assert.match(n.body, /פריט: שק מלט \(M-1/);
-  assert.match(n.body, /המשאבים מתחת לבניין: 210-90 חשמל/);
+  assert.match(n.body, /המשאבים מתחת לתת הפרק: 210-90 חשמל/);
 });
