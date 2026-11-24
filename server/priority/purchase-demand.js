@@ -1301,14 +1301,20 @@ async function step(user, s, t, file, { reaction, stale = false }) {
       return back(s, `🏬 המחסן עודכן ל-*${w.name || w.code}* (${w.code}).`);
     }
     case 'parts_mode': {
-      if (file) return reply(s, 'קודם — איך לשלוח את הדרישה.', s.lastButtons ?? []);
       const known = s.items.length > missing(s).length;
       if (known && (sameLabel(t, BTN_ONLY) || /^רק\s*(ה)?מזוהים|^רק מה שזוהה|^בלעדיהם|^בלי החסרים/.test(t))) return onlyKnown(user, s);
       if (Parts.contact() && (sameLabel(t, BTN_WAIT) || /^(לחכות|נחכה|חכה|תחכה|אחכה)/.test(t))) return waitForParts(user, s);
       if (/כללי|000/.test(t)) return askMode(s, ['דרישת רכש לא יוצאת עם מק"ט כללי.', '']);
       // חזרה לרשימה — להוסיף או לתקן
-      if (NO.test(t) || /^(חזרה|לרשימה|תיקון)/.test(t)) return showList(s);
-      return t.split(/\s+/).length >= 6 ? null : askMode(s);
+      if (!file && (NO.test(t) || /^(חזרה|לרשימה|תיקון)/.test(t))) return showList(s);
+      if (!file && (!t || YES.test(t) || DONE.test(t) || t === '👍')) return askMode(s);
+      // תיקון, פריט נוסף או צילום — חוזרים לרשימה ומעדכנים אותה (סקירה 23.11: "תשנה את הכמות ל 20", פריט נוסף —
+      // הדרישה הושהתה). בקשה אחרת לגמרי — ה-AI מחזיר ‎unrelated‎, והדרישה נשארת בשאלה הזו
+      s.step = 'review';
+      const edited = file ? await onFile(user, s, file) : LineCmd.parse(t) ? await onText(user, s, t, LineCmd.parse(t))
+        : Claude.isEnabled() ? await onText(user, s, t) : null;
+      if (!edited) s.step = 'parts_mode';
+      return edited;
     }
     case 'detail':
       if (file) return onDetailFile(user, s, file, t);

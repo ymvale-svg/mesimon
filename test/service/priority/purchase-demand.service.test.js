@@ -1076,3 +1076,46 @@ test('📎 מפרט כקובץ: דרישה שיוצאת עם הפריט (אחר�
   assert.ok(spec, 'המפרט צורף לדרישה');
   assert.equal(spec.args[2].description, 'מפרט — פטיש');
 });
+
+// סקירה לילית 23.11: בשאלה "איך להמשיך?" (שלב ‎parts_mode‎) העובד הוסיף פריט ("עצר מים מתכתי … K160"),
+// שינה כמות ("תשנה את הכמות ל 20 יחידה") או שלח צילום — והדרישה הושהתה ("לא נשלחה — עברתי לבקשה החדשה").
+// עכשיו: תיקון / תוספת / קובץ חוזרים לרשימה ומעדכנים אותה; התשובות לשאלה עצמה — כמו קודם.
+test('מק"טים לבנייה: תיקון או פריט נוסף בשאלה "איך להמשיך?" — הרשימה מתעדכנת, והדרישה לא נזנחת', async (t) => {
+  H.companies(t, 'test11');
+  const u = buyerWorker();
+  const pr = priority(t);
+  let calls = 0;
+  H.claude(t, {
+    edit: () => {
+      calls += 1;
+      if (calls === 1) return { action: 'add', adds: [{ description: 'שק מלט', qty: 10, unit: 'שק', note: '' }, { description: 'בטון', qty: 5, unit: 'קוב', note: 'לתקרה' }], updates: [], removes: [], question: '' };
+      if (calls === 2) return { action: 'edit', adds: [], updates: [{ line: 1, qty: 20 }], removes: [], question: '' };
+      return { action: 'add', adds: [{ description: 'שק מלט', qty: 3, unit: 'שק', note: '' }], updates: [], removes: [], question: '' };
+    },
+    match: (input) => ({
+      results: input.items.map((it) => (it.description === 'בטון'
+        ? { line: it.line, kind: 'close', codes: ['C-30', 'C-40'], chapter: '20', topic: '20-10', why: '' }
+        : { line: it.line, kind: 'exact', codes: [it.candidates[0]?.code ?? ''], chapter: '20', topic: '20-10', why: '' }))
+    })
+  });
+  buyer(t);
+  const { say } = H.chat(t, u);
+  await toMissing(say);
+  let r = await say(BTN.done);
+  H.assertButtons(r.buttons, ['רק המזוהים ✅', 'לחכות לרכש ⏳', BTN.cancel]);
+
+  r = await say('תשנה את הכמות של המלט ל 20 יחידה');
+  assert.doesNotMatch(r.text, /לא נשלחה/);
+  assert.match(r.text, /✏️ שורה 1: שק מלט — 20 שק/);
+  H.assertButtons(r.buttons, [BTN.done, BTN.cancel]);
+
+  r = await say('עוד 3 שקי מלט');
+  assert.match(r.text, /➕ נוסף פריט אחד/);
+  r = await say(BTN.done);
+  H.assertButtons(r.buttons, ['רק המזוהים ✅', 'לחכות לרכש ⏳', BTN.cancel]);
+
+  // "שורה 2 — 7" — עריכה ישירה, גם מהשאלה
+  r = await say('שורה 2 כמות 7');
+  assert.match(r.text, /בטון — 7 קוב/);
+  assert.deepEqual(pr.writes, []);
+});
