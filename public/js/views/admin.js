@@ -391,7 +391,7 @@ const AdminView = (() => {
       el('div.flex.mb', { 'data-anchor': 'admin.users-tools' }, [
         statusFilter,
         el('div.spacer'),
-        el('button.btn', { onclick: () => importDialog(data) }, ['⇪ ייבוא מאקסל']),
+        el('button.btn', { onclick: () => importDialog(data) }, [UI.lineIcon('upload'), 'ייבוא מאקסל']),
         el('button.btn.btn-primary', { onclick: () => userDialog(null, data) }, ['＋ משתמש חדש'])
       ]),
       el('div.table-wrap', {}, [
@@ -414,7 +414,7 @@ const AdminView = (() => {
           // עמודת טלפון — כך רואים במבט מי עוד חסר לבוט הוואטסאפ
           u.phone
             ? el('td', { dir: 'ltr', style: { textAlign: 'right' }, text: UI.phone(u.phone) })
-            : el('td.mute-sm', { text: '📱 אין טלפון' }),
+            : el('td.mute-sm', {}, [UI.lineIcon('phone'), ' אין טלפון']),
           data.seesRoles ? el('td', {}, [el('span.tag.tag-internal', {}, [u.roleLabel])]) : null,
           // משתמש יכול להיות ללא שיוך למחלקה (הנהלה, מנהל מערכת) — מסומן במקף ולא בתא ריק
           el('td', { text: u.department || '—' }),
@@ -433,7 +433,7 @@ const AdminView = (() => {
                     showInviteResult(r.invite, u.name);
                   } catch (err) { UI.error(err); }
                 }
-              }, ['✉ הזמנה'])
+              }, [UI.lineIcon('mail'), 'הזמנה'])
             ])
           ])
       ]);
@@ -561,7 +561,7 @@ const AdminView = (() => {
             // עמודה אופציונלית שלא זוהתה פשוט אינה נקלטת — עדיף לומר זאת לפני האישור
             analysis.columns?.phone && !analysis.columns.phone.found
               ? el('div.alert.alert-warn.mb', {}, [
-                  el('span', { text: '📱' }),
+                  UI.lineIcon('phone'),
                   el('div', { text: 'לא זוהתה בקובץ עמודת טלפון, ולכן המשתמשים ייובאו בלי מספר. כדי לייבא טלפונים יש לקרוא לכותרת העמודה "טלפון".' })
                 ])
               : null,
@@ -1141,7 +1141,7 @@ const AdminView = (() => {
                         showInviteResult(r.invite, v.contactName || v.name);
                       } catch (err) { UI.error(err); }
                     }
-                  }, ['✉ הזמנה']),
+                  }, [UI.lineIcon('mail'), 'הזמנה']),
                   v.boardId ? el('button.btn.btn-sm', { onclick: () => App.navigate('vendorBoards', { boardId: v.boardId }) }, ['לבורד']) : null
                 ])
               ])
@@ -1905,7 +1905,7 @@ const AdminView = (() => {
       };
 
       const phones = info.usersWithoutPhone.length ? el('div.alert.alert-info.mt', {}, [
-        el('span', { text: '📱' }),
+        UI.lineIcon('phone'),
         el('div', {}, [
           el('b', { text: 'לעובדים האלה אין טלפון בפרופיל: ' }),
           info.usersWithoutPhone.join(', '),
@@ -2291,7 +2291,7 @@ const AdminView = (() => {
             el('li', {}, ['נרשמים ב-', el('a', { href: 'https://green-api.com', target: '_blank', rel: 'noopener' }, ['green-api.com']), ', יוצרים Instance ומעתיקים לכאן את הפרטים.']),
             el('li', { text: 'שומרים, ואז "הצגת QR לקישור" וסורקים מהטלפון של הבוט.' })
           ]),
-          c?.state === 'notAuthorized' ? el('div.alert.alert-warn', {}, [el('span', { text: '📱' }), el('div', { text: 'יש לסרוק את קוד ה-QR מהטלפון של הבוט: וואטסאפ ← מכשירים מקושרים ← קישור מכשיר.' })]) : null,
+          c?.state === 'notAuthorized' ? el('div.alert.alert-warn', {}, [UI.lineIcon('phone'), el('div', { text: 'יש לסרוק את קוד ה-QR מהטלפון של הבוט: וואטסאפ ← מכשירים מקושרים ← קישור מכשיר.' })]) : null,
           el('div.row', {}, [UI.field('apiUrl', apiUrl), UI.field('idInstance', instanceId)]),
           el('div.row', {}, [UI.field('apiTokenInstance', token), UI.field('מספר הבוט', phone, 'לתצוגה בלבד — כדי שיהיה ברור לאיזה מספר מצרפים')]),
           qrBox,
@@ -2301,7 +2301,7 @@ const AdminView = (() => {
           el('div.alert.alert-info.mt', {}, [
             el('img', { src: '/icons/bot-profile.png', alt: '', width: 40, height: 40, style: { borderRadius: '50%', flex: 'none' } }),
             el('div', { text: 'תמונת הפרופיל של הבוט: מורידים, ובטלפון של הבוט — וואטסאפ ← הגדרות ← לחיצה על התמונה ← החלפה.' }),
-            el('a.btn.btn-sm', { href: '/icons/bot-profile.png', download: 'mesimon-bot.png', style: { flex: 'none' } }, ['⬇ הורדה'])
+            el('a.btn.btn-sm', { href: '/icons/bot-profile.png', download: 'mesimon-bot.png', style: { flex: 'none' } }, [UI.lineIcon('download'), 'הורדה'])
           ])
         ])
       ]));

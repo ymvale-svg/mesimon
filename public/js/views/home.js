@@ -1333,7 +1333,7 @@ const HomeView = (() => {
       'aria-haspopup': 'menu',
       'aria-expanded': 'false',
       onclick: () => addMenu(addBtnRef)
-    }, [el('span.hab-plus', { 'aria-hidden': 'true', text: '＋' }), 'הוספת חלון']);
+    }, [el('span.hab-plus', {}, [UI.lineIcon('plus')]), 'הוספת חלון']);
 
     UI.mount(container,
       el('div.page-head', {}, [
@@ -1478,7 +1478,7 @@ const HomeView = (() => {
           }
         });
       }
-    }, ['📅']);
+    }, [UI.lineIcon('calendar')]);
   }
 
   function taskRow(task, { lead = 'project', trail = 'status' } = {}) {
