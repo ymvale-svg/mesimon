@@ -273,6 +273,10 @@ async function generalPair(s) {
  */
 async function resolveItems(s, items) {
   if (!items.length) return;
+  return resolveItems0(s, items);
+}
+async function resolveItems0(s, items) {
+  if (!items.length) return;
   await inBatches(items, 4, async (it) => {
     const exact = await Priority.findPartExact(s.company, it.description).catch(() => null);
     const found = await Priority.searchParts(s.company, it.description).catch(() => []);
@@ -281,7 +285,8 @@ async function resolveItems(s, items) {
     // התאמה מלאה — רק לפריט פעיל (שנשאר במועמדים)
     it.exactHit = exact && it.candidates.some((p) => p.PARTNAME === exact.PARTNAME) ? exact.PARTNAME : null;
   });
-  const pairs = await Priority.budgetPairs(s.company).catch(() => []);
+  // 🏗️ נבחר בניין — הצירופים: תת הפרק של הבניין והמשאבים שמתחתיו בלבד
+  const pairs = s.building?.topics?.length ? buildingPairs(s.building) : await Priority.budgetPairs(s.company).catch(() => []);
   const gen = await generalPair(s);
   // הקידוד של הפריטים שכבר בדרישה, ושל המועמדים מהקטלוג לפריטים החדשים — הקשר ל-AI
   const siblings = codingsOf([...(s.items ?? []).filter((x) => !items.includes(x) && x.part && x.part.code !== '000').map((x) => x.part),
@@ -306,7 +311,7 @@ async function resolveItems(s, items) {
   }
   // פריט בלי קידוד מתאים (ה-AI לא בחר, או בחר צירוף שלא קיים) — הקידוד הנפוץ בשאר הפריטים בדרישה, לפני הכללי של החברה.
   // כך "מיקרוגל" בדרישה של ציוד משרד נקלט על ציוד משרדי ולא על 101 / 98-10 (PD26000052)
-  const common = codingsOf((s.items ?? []).filter((x) => x.status === 'ok' && x.part && x.part.code !== '000').map((x) => x.part))[0];
+  const common = s.building ? null : codingsOf((s.items ?? []).filter((x) => x.status === 'ok' && x.part && x.part.code !== '000').map((x) => x.part))[0];
   for (const it of (s.items ?? []).filter((x) => x.generalFrom === 'default')) {
     if (!common) break;
     it.general = { chapter: common.chapter, chapterDes: common.chapterDes, topic: common.topic, topicDes: common.topicDes };
@@ -314,7 +319,36 @@ async function resolveItems(s, items) {
     if (it.status === 'general') it.part = { ...it.part, ...it.general, why: 'כמו שאר הפריטים בדרישה' };
   }
   for (const it of items) { delete it.candidates; delete it.exactHit; }
+  if (s.building) for (const it of items) codeForBuilding(s, it);
   await checkDetail(s, items);
+}
+
+/** 🏗️ הצירופים של בניין: תת הפרק שלו, וכל משאב מתחתיו */
+const buildingPairs = (b) => (b.topics ?? []).map((t) => ({ chapter: b.chapter, chapterDes: b.chapterDes, topic: t.topic, topicDes: t.topicDes }));
+
+/**
+ * 🏗️ הקידוד של השורה בבניין שנבחר: תת הפרק — של הבניין; המשאב — מתוך המשאבים שמתחתיו: מה שה-AI בחר מהם, ואם לא —
+ * המשאב של הפריט בקטלוג (לפי קוד, ואז לפי שם). לא נמצא — לא אמור לקרות: התראה למנהלי המערכת, והעובד לא נתקע
+ * (השורה נשארת על הקידוד של הפריט). בניין בלי משאבים בכרטיס — רק תת הפרק.
+ */
+function codeForBuilding(s, it) {
+  const b = s.building;
+  if (!b) { it.bcoding = null; return; }
+  const tops = b.topics ?? [];
+  const base = it.part ?? it.general ?? {};
+  if (!tops.length) { it.bcoding = { chapter: b.chapter, chapterDes: b.chapterDes, topic: base.topic ?? null, topicDes: base.topicDes ?? '' }; return; }
+  const byTopic = (x) => (x ? tops.find((t) => t.topic === x) : null);
+  const t = (it.generalFrom === 'ai' && it.general?.chapter === b.chapter ? byTopic(it.general.topic) : null)
+    ?? byTopic(base.topic)
+    ?? (base.topicDes ? tops.find((x) => normalize(x.topicDes) === normalize(base.topicDes)) : null);
+  if (t) { it.bcoding = { chapter: b.chapter, chapterDes: b.chapterDes, topic: t.topic, topicDes: t.topicDes }; return; }
+  it.bcoding = null;
+  const k = `${b.chapter}|${it.description}`;
+  if ((s.noTopicAlerts ??= []).includes(k)) return;
+  s.noTopicAlerts.push(k);
+  alertAdmins({ full_name: '' }, s, `אין משאב מתאים מתחת לבניין ${buildingName(b)}`, [`פרויקט: ${s.project?.code ?? ''} ${s.project?.des ?? ''}`, `בניין (תת פרק): ${b.chapter} ${b.chapterDes}`,
+    `פריט: ${it.description}${it.part?.code ? ` (${it.part.code}, משאב בקטלוג: ${it.part.topic ?? '—'} ${it.part.topicDes ?? ''})` : ''}`,
+    `המשאבים מתחת לבניין: ${tops.map((x) => `${x.topic} ${x.topicDes}`).join(', ')}`, 'השורה נשארה על המשאב של הפריט — לבדוק את המשאבים של הבניין בפריוריטי.']);
 }
 
 /** צירופי תת פרק ומשאב של רשימת פריטים, הנפוץ קודם: ‎[{ chapter, chapterDes, topic, topicDes, n }]‎ */
@@ -370,6 +404,7 @@ function headerLines(s, { notes = [] } = {}) {
     `📅 תאריך: *${ymdHe(s.date)}*${s.date === today() ? ' (היום)' : ''}`,
     s.project ? `📁 פרויקט: *${s.project.des}* (${s.project.code})${s.projectFrom === 'pref' ? ' — הבחירה האחרונה שלך' : s.projectFrom === 'only' ? ' — הפרויקט היחיד בחברה' : ''}` : null,
     s.warehouse ? `🏬 מחסן: *${s.warehouseName || s.warehouse}* (${s.warehouse})${s.warehouseFrom === 'pref' ? ' — הבחירה האחרונה שלך' : ''}` : null,
+    s.building ? `🏗️ בניין: *${buildingName(s.building)}* (${s.building.chapter})${s.buildingFrom === 'pref' ? ' — הבחירה האחרונה שלך' : s.buildingFrom === 'only' ? ' — הבניין היחיד בפרויקט' : ''}` : null,
     s.demandCode ? `📋 ${s.demandCode.des}${s.codeFrom === 'pref' ? ' — הבחירה האחרונה שלך' : ''}` : null,
     ...notes
   ].filter(Boolean);
@@ -378,7 +413,7 @@ const CHANGE_HINT = '_לשנות — כתבו "תאריך 12.11", "פרויקט 
 
 function itemLine(it, edit = false) {
   const head = `*${it.n}.* ${it.description} — ${qtyText(it.qty)} ${it.unit || "יח'"}${it.note ? ` _(${it.note})_` : ''}`;
-  if (it.status === 'ok') return `${head}\n   ✅ ${codeText(it.part)}`;
+  if (it.status === 'ok') return `${head}\n   ✅ ${codeText({ ...it.part, ...(it.bcoding ?? {}) })}`;
   if (it.status === 'general' && !edit) return `${head}\n   🆕 לא בקטלוג — יישלח לרכש לבניית מק"ט${it.spec ? ' · 📎 מפרט מצורף' : ''}`;
   if (it.status === 'general') return `${head}\n   🆕 לא בקטלוג — מק"ט כללי 000 · ${it.part.chapterDes || it.part.chapter} / ${it.part.topicDes || it.part.topic} _(צריך לפתוח לו מק"ט)_`;
   return `${head}\n   ❓ ממתין לבחירה`;
@@ -549,7 +584,7 @@ async function startRebuild(user, rb) {
   const h = rb.header ?? {};
   const s = { step: 'review', uid: user.id, startedAt: Date.now(), company: rb.company, date: today(),
     project: h.project ?? null, projectFrom: 'user', warehouse: h.warehouse ?? null, warehouseName: h.warehouseName ?? '', warehouseFrom: 'user',
-    demandCode: h.demandCode ?? null, codeFrom: 'user', items: rb.items, files: [], rebuildOf: rb.from };
+    demandCode: h.demandCode ?? null, codeFrom: 'user', building: h.building ?? null, buildingFrom: 'user', items: rb.items, files: [], rebuildOf: rb.from };
   renumber(s);
   return showList(s, [rb.partial ? `🆕 *דרישה חדשה נוספת* מהמק"טים שנבנו (${rb.prdno} כבר נשלחה עם השאר):` : '▶️ *ממשיכים בדרישת הרכש* — כל הדרישה, עם הכמויות שביקשת והמק"טים שנבנו:', '']);
 }
@@ -616,9 +651,68 @@ async function afterCompany(s, pre = []) {
     else return askProject(s, all, pre);
   }
   await chooseWarehouse(s);
+  const askB = await chooseBuilding(s, pre);
+  if (askB) return askB;
   const ask = await chooseCode(s, pre);
   if (ask) return ask;
   return (s.items ?? []).length ? showList(s, pre) : askItems(s, pre);
+}
+
+/*
+ * 🏗️ לאיזה בניין? (הוחלט 23.11.26) — בכרטיס הפרויקט בפריוריטי, תתי הפרקים הם הבניינים, והמשאבים מתחתיהם ("מבנה A ←
+ * בלוקים, בטון, חשמל"). פרויקט עם כמה בניינים ← שאלה בכפתורים (הבחירה האחרונה בפרויקט — ברירת המחדל); בניין אחד —
+ * בלי שאלה; אין — כמו קודם. הבניין קובע את תת הפרק של כל השורות, והמשאב נבחר מתוך המשאבים שמתחתיו. דרישה אחת = בניין אחד.
+ * הטבלה לא נמצאה בפריוריטי — בלי שאלה, והתראה למנהלי המערכת (פעם אחת לחברה).
+ */
+const noChapterForm = new Set();
+async function chooseBuilding(s, pre = []) {
+  if (s.editOf || s.building !== undefined || !s.project?.code) return null;
+  let list = null;
+  try {
+    list = await Priority.projectChapters(s.company, s.project.code);
+  } catch (err) {
+    console.error('[משימון] בניינים בכרטיס הפרויקט:', err.message);
+    s.building = null;
+    return null;
+  }
+  if (list === null && !noChapterForm.has(s.company)) {
+    noChapterForm.add(s.company);
+    alertAdmins({ full_name: '' }, s, 'לא נמצאו הבניינים בכרטיס הפרויקט', [`בכרטיס הפרויקט ${s.project.code} לא נמצאה טבלה עם תתי פרקים — הבוט לא שואל "לאיזה בניין?" בחברה הזו.`]);
+  }
+  s.buildings = list ?? [];
+  if (s.buildings.length === 0) { s.building = null; return null; }
+  if (s.buildings.length === 1) { s.building = s.buildings[0]; s.buildingFrom = 'only'; return null; }
+  const last = Prefs.of(s.uid, s.company)?.buildings?.[s.project.code];
+  const hit = last && s.buildings.find((b) => b.chapter === last);
+  if (hit) { s.building = hit; s.buildingFrom = 'pref'; return null; }
+  return askBuilding(s, pre);
+}
+const buildingName = (b) => b.chapterDes || b.chapter;
+function askBuilding(s, pre = [], head = '🏗️ *לאיזה בניין?*') {
+  s.step = 'building';
+  const list = s.buildings ?? [];
+  const opts = list.slice(0, 3);
+  const btns = labels(opts.map(buildingName));
+  s.buildingOptions = opts.map((b, i) => ({ chapter: b.chapter, btn: btns[i] }));
+  return reply(s, [...pre, head, ...list.map((b) => `• ${buildingName(b)} (${b.chapter})`),
+    list.length > 3 ? 'או כתבו את שם הבניין.' : null, '_דרישה אחת — לבניין אחד. בפעם הבאה אזכור את הבחירה._'].filter(Boolean).join('\n'), btns);
+}
+/** כפתור, קוד, או שם הבניין ("A", "מבנה B") */
+function pickBuilding(s, t) {
+  const n = normalize(t).replace(/^(בניין|מבנה)\s*/, '');
+  const list = s.buildings ?? [];
+  const byBtn = (s.buildingOptions ?? []).find((x) => sameLabel(t, x.btn));
+  if (byBtn) return list.find((b) => b.chapter === byBtn.chapter) ?? null;
+  const exact = list.find((b) => b.chapter === n.trim() || normalize(buildingName(b)) === normalize(t));
+  if (exact) return exact;
+  const hits = n.length >= 1 ? list.filter((b) => normalize(buildingName(b)).split(/\s+/).includes(n) || (n.length >= 2 && normalize(buildingName(b)).includes(n))) : [];
+  return hits.length === 1 ? hits[0] : null;
+}
+function setBuilding(s, b, from = 'user') {
+  s.building = b;
+  s.buildingFrom = from;
+  const all = Prefs.of(s.uid, s.company)?.buildings ?? {};
+  Prefs.set(s.uid, s.company, 'buildings', { ...all, [s.project.code]: b.chapter });
 }
 
 /*
@@ -693,6 +787,7 @@ async function chooseWarehouse(s) {
 /** "תאריך …", "פרויקט …", "מחסן …", "סביבה" — בכל שלב */
 const DATE_CMD = /^\s*(?:תאריך|לתאריך|ל-?)\s*[:\-–]?\s*(.+)$/;
 const PROJECT_CMD = /^\s*(?:פרויקט|לשנות פרויקט|שנה פרויקט|פרויקט אחר)(?=[\s:\-–]|$)\s*[:\-–]?\s*([\s\S]*)$/;
+const BUILDING_CMD = /^\s*(?:בניין|מבנה|לשנות בניין|בניין אחר|מבנה אחר)(?=[\s:\-–]|$)\s*[:\-–]?\s*([\s\S]*)$/;
 const WAREHOUSE_CMD = /^\s*(?:מחסן|לשנות מחסן|שנה מחסן|מחסן אחר)(?=[\s:\-–]|$)\s*[:\-–]?\s*([\s\S]*)$/;
 const COMPANY_CMD = /^\s*(?:סביבה|סביבה אחרת|חברה|חברה אחרת|לשנות סביבה|לשנות חברה)\s*$/;
 
@@ -719,11 +814,22 @@ async function headerCommand(s, t) {
   }
   const pm = t.match(PROJECT_CMD);
   if (pm) {
-    s.project = null; s.warehouse = null; s.noPref = true;
+    s.project = null; s.warehouse = null; s.noPref = true; s.building = undefined;
     const what = pm[1].replace(/\s+/g, ' ').trim();
     const all = await projectsOf(s.company);
     if (!what || /^אחר$/.test(what)) return askProject(s, all);
     return projectAnswer(s, what, all);
+  }
+  const bm = t.match(BUILDING_CMD);
+  if (bm && s.project?.code && !s.editOf && s.step !== 'building') {
+    if (!s.buildings) { s.building = undefined; await chooseBuilding(s); }
+    if (!(s.buildings ?? []).length) return back(s, '🏗️ לפרויקט הזה אין רשימת בניינים בפריוריטי.');
+    const what = bm[1].replace(/\s+/g, ' ').trim();
+    const b = what && !/^אחר$/.test(what) ? pickBuilding(s, what) : null;
+    if (!b) return askBuilding(s);
+    setBuilding(s, b);
+    for (const it of s.items ?? []) codeForBuilding(s, it);
+    return back(s, `🏗️ בניין: *${buildingName(b)}* (${b.chapter}).`);
   }
   const wm = t.match(WAREHOUSE_CMD);
   if (wm) {
@@ -773,7 +879,10 @@ async function projectAnswer(s, t, all) {
   s.projectFrom = 'user';
   s.projectOptions = null;
   s.warehouse = null;
+  s.building = undefined;
   await chooseWarehouse(s);
+  const askB = await chooseBuilding(s, [`📁 פרויקט: *${p.des}* (${p.code})`, '']);
+  if (askB) return askB;
   const askC = await chooseCode(s, [`📁 פרויקט: *${p.des}* (${p.code})`, '']);
   if (askC) return askC;
   return back(s, `📁 פרויקט: *${p.des}* (${p.code}) · 🏬 מחסן: *${s.warehouseName || s.warehouse}* (${s.warehouse})`);
@@ -891,11 +1000,13 @@ function lineOf(it) {
   const whole = Number.isInteger(Number(it.qty));
   const unitless = /^יח/.test(it.unit || "יח'");
   const desc = !whole ? `${qtyText(it.qty)} ${it.unit} · ${it.description}` : unitless ? it.description : `${it.description} · ${it.unit}`;
+  // 🏗️ נבחר בניין — תת הפרק (והמשאב שמתחתיו) של הבניין
+  const cod = it.bcoding ?? it.part;
   return {
     desc, whole,
     line: it.part.code === '000'
-      ? { part: '000', description: `${desc}${it.note ? ` (${it.note})` : ''}`, qty: whole ? it.qty : 1, chapter: it.part.chapter, topic: it.part.topic }
-      : { part: it.part.code, qty: it.qty, chapter: it.part.chapter, topic: it.part.topic }
+      ? { part: '000', description: `${desc}${it.note ? ` (${it.note})` : ''}`, qty: whole ? it.qty : 1, chapter: cod.chapter, topic: cod.topic }
+      : { part: it.part.code, qty: it.qty, chapter: cod.chapter, topic: cod.topic }
   };
 }
 
@@ -1293,6 +1404,17 @@ async function step(user, s, t, file, { reaction, stale = false }) {
       Prefs.set(s.uid, s.company, 'demandCode', c.code);
       return back(s, `📋 *${c.des}* — אזכור לפעם הבאה.`);
     }
+    case 'building': {
+      if (file) return reply(s, 'קודם הבניין — ואז הרשימה.', s.lastButtons ?? []);
+      const b = pickBuilding(s, t);
+      if (!b) return t.split(/\s+/).length >= 6 ? null : askBuilding(s, [], '🏗️ לא מצאתי בניין כזה. לאיזה בניין?');
+      const had = (s.items ?? []).length;
+      setBuilding(s, b);
+      if (had) for (const it of s.items) codeForBuilding(s, it);
+      const askC = await chooseCode(s, [`🏗️ בניין: *${buildingName(b)}* (${b.chapter})`, '']);
+      if (askC) return askC;
+      return back(s, `🏗️ בניין: *${buildingName(b)}* (${b.chapter}) — אזכור לפעם הבאה בפרויקט.`);
+    }
     case 'warehouse': {
       const opts = s.warehouseOptions ?? [];
       const w = opts.find((x) => x.code === t.trim() || (t.trim().length >= 2 && (x.name ?? '').includes(t.trim())));
@@ -1342,7 +1464,7 @@ async function step(user, s, t, file, { reaction, stale = false }) {
 /**
  * 🗂 תצוגה למסך של משימון פריוריטי (‎priority-desk.js‎) — הדרישה כפי שהיא עכשיו, כנתונים. קריאה בלבד.
  */
-const VIEW_STEP = { start: 'פתיחה', company: 'חברה', project: 'פרויקט', warehouse: 'מחסן', code: 'סוג דרישה', items: 'רשימת הפריטים', pick: 'בחירת פריט', review: 'לפני שליחה לאישור', parts_mode: 'מק"טים מהרכש', detail: 'תיאור מדויק לרכש' };
+const VIEW_STEP = { start: 'פתיחה', company: 'חברה', project: 'פרויקט', warehouse: 'מחסן', code: 'סוג דרישה', items: 'רשימת הפריטים', pick: 'בחירת פריט', review: 'לפני שליחה לאישור', parts_mode: 'מק"טים מהרכש', detail: 'תיאור מדויק לרכש', building: 'בניין' };
 function view(userId) {
   const s = load(userId);
   if (!s || !fresh(s)) return null;

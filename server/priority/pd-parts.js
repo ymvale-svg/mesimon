@@ -201,8 +201,8 @@ async function knownCodes(company, description) {
 }
 
 const headerOf = (s) => ({ project: s.project ?? null, warehouse: s.warehouse ?? null, warehouseName: s.warehouseName ?? '', demandCode: s.demandCode ?? null, date: s.date ?? null,
-  supplier: s.supplier?.name ?? null });
-const itemsOf = (s) => (s.items ?? []).map(({ n, description, qty: q, unit, note, status, part, general, req, spec }) => ({ n, description, qty: q, unit, note, status, part, general, req, spec }));
+  supplier: s.supplier?.name ?? null, building: s.building ?? null });
+const itemsOf = (s) => (s.items ?? []).map(({ n, description, qty: q, unit, note, status, part, general, req, spec, bcoding }) => ({ n, description, qty: q, unit, note, status, part, general, req, spec, bcoding }));
 
 /**
  * שולח למנהלת הרכש את הפריטים בלי מק"ט (‎list‎ — שורות מהדרישה), ושומר את הבקשה (‎s.partsReq‎).

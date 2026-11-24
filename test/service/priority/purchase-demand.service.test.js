@@ -1119,3 +1119,90 @@ test('מק"טים לבנייה: תיקון או פריט נוסף בשאלה "א
   assert.match(r.text, /בטון — 7 קוב/);
   assert.deepEqual(pr.writes, []);
 });
+
+// ---------------------------------------------------------------------------
+// 🏗️ לאיזה בניין? — תת הפרק = הבניין, המשאב מתחתיו (23.11.26)
+// ---------------------------------------------------------------------------
+
+const BUILDINGS = [
+  { chapter: '210', chapterDes: 'מבנה A', topics: [{ topic: '210-10', topicDes: 'בטון' }, { topic: '210-20', topicDes: 'שלד' }] },
+  { chapter: '220', chapterDes: 'מבנה B', topics: [{ topic: '220-10', topicDes: 'בטון' }, { topic: '220-20', topicDes: 'שלד' }] }
+];
+
+test('🏗️ לאיזה בניין? — אחרי הפרויקט; כל השורות על תת הפרק של הבניין והמשאב שמתחתיו; הבחירה נשמרת לפרויקט', async (t) => {
+  H.at(t);
+  H.companies(t, 'test11');
+  const u = buyerWorker();
+  const pr = priority(t, { projectChapters: async (c, proj) => (proj === 'PR1' ? BUILDINGS : []) });
+  H.claude(t, {
+    edit: () => ({ action: 'add', adds: [{ description: 'שק מלט', qty: 10, unit: 'שק', note: '' }], updates: [], removes: [], question: '' }),
+    match: (input) => {
+      // ה-AI מקבל רק את הצירופים של הבניין
+      assert.ok(input.pairs.every((p) => p.chapter === '220'), JSON.stringify(input.pairs));
+      return { results: input.items.map((it) => ({ line: it.line, kind: 'exact', codes: ['M-1'], chapter: '220', topic: '220-20', why: '' })) };
+    }
+  });
+  const { say } = H.chat(t, u);
+
+  let r = await say('דרישת רכש');
+  r = await say('אלעד 49 צפון');
+  assert.match(r.text, /לאיזה בניין\?/);
+  assert.match(r.text, /• מבנה A \(210\)\n• מבנה B \(220\)/);
+  H.assertButtons(r.buttons, ['מבנה A', 'מבנה B']);
+  r = await say('מבנה B');
+  assert.match(r.text, /איזו דרישה\?/);
+  r = await say('אתרי');
+  assert.match(r.text, /🏗️ בניין: \*מבנה B\* \(220\)/);
+  r = await say('10 שקי מלט');
+  assert.match(r.text, /שק מלט — 10 שק\n {3}✅ M-1 שק מלט · מבנה B \/ שלד/);
+  await say(BTN.done);
+  assert.deepEqual(pr.wrote('addDemandLine')[0].args[2], { part: 'M-1', qty: 10, chapter: '220', topic: '220-20' });
+
+  // הפעם הבאה — בלי שאלה
+  r = await say('דרישת רכש');
+  assert.match(r.text, /🏗️ בניין: \*מבנה B\* \(220\) — הבחירה האחרונה שלך/);
+  assert.match(r.text, /מה צריך\?/);
+  // ושינוי בשפה חופשית
+  r = await say('בניין A');
+  assert.match(r.text, /🏗️ בניין: \*מבנה A\* \(210\)/);
+});
+
+test('🏗️ פרויקט עם בניין אחד — בלי שאלה; בלי בניינים — כמו קודם', async (t) => {
+  H.at(t);
+  H.companies(t, 'test11');
+  const u = buyerWorker();
+  priority(t, { projectChapters: async (c, proj) => (proj === 'PR1' ? [BUILDINGS[0]] : []) });
+  ai(t);
+  const { say } = H.chat(t, u);
+  await say('דרישת רכש');
+  let r = await say('אלעד 49 צפון');
+  assert.doesNotMatch(r.text, /לאיזה בניין/);
+  r = await say('אתרי');
+  assert.match(r.text, /🏗️ בניין: \*מבנה A\* \(210\) — הבניין היחיד בפרויקט/);
+  r = await say('פרויקט נהריה');
+  assert.doesNotMatch(r.text, /בניין/);
+});
+
+test('🏗️ אין משאב מתאים מתחת לבניין — העובד לא נתקע (הקידוד של הפריט), ומנהל המערכת מקבל התראה', async (t) => {
+  H.at(t);
+  H.companies(t, 'test11');
+  const u = buyerWorker();
+  const admin = require('../../helpers/db').user({ role: 'admin', full_name: 'מנהל' });
+  const pr = priority(t, { projectChapters: async () => [{ chapter: '210', chapterDes: 'מבנה A', topics: [{ topic: '210-90', topicDes: 'חשמל' }] }] });
+  H.claude(t, {
+    edit: () => ({ action: 'add', adds: [{ description: 'שק מלט', qty: 10, unit: 'שק', note: '' }], updates: [], removes: [], question: '' }),
+    match: (input) => ({ results: input.items.map((it) => ({ line: it.line, kind: 'exact', codes: ['M-1'], chapter: '', topic: '', why: '' })) })
+  });
+  const { say } = H.chat(t, u);
+  await say('דרישת רכש');
+  await say('אלעד 49 צפון');
+  await say('אתרי');
+  const r = await say('10 שקי מלט');
+  assert.match(r.text, /✅ M-1 שק מלט · שלד \/ בטון/);
+  await say(BTN.done);
+  assert.deepEqual(pr.wrote('addDemandLine')[0].args[2], { part: 'M-1', qty: 10, chapter: '20', topic: '20-10' });
+  const n = D.get("SELECT title, body FROM notifications WHERE target_id = ? AND title LIKE '%אין משאב מתאים%' ORDER BY id DESC", admin.id);
+  assert.ok(n, 'התראה למנהל');
+  assert.match(n.body, /פריט: שק מלט \(M-1/);
+  assert.match(n.body, /המשאבים מתחת לבניין: 210-90 חשמל/);
+});
