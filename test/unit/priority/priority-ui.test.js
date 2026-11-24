@@ -131,3 +131,11 @@ test('הגדרות: פס שמירה עם רקע, בלי ריק מתחת לטבל
   assert.doesNotMatch(css, /\.sticky-wrap \{[^}]*min-height/);
   assert.match(js, /id="co-add">\$\{ui\('plus'\)\}/);
 });
+
+test('✍️ ממתין לאישורך: "הכל" והמונה — רק מה שהעובד חותם בו; כמחליף — רק בכפתור "כמחליף"', () => {
+  const w = js.slice(js.indexOf('const Waiting = (() => {'), js.indexOf('return { mount };'));
+  assert.match(w, /const items = data\.items\.filter\(\(w\) => !w\.altFor\);/);
+  assert.match(w, /const shown = filter === ALT \? alt : items\.filter/);
+  assert.match(w, /badge num">\$\{items\.length\}/);
+  assert.match(w, /data-f="\$\{ALT\}"[^>]*>כמחליף <b/);
+});
