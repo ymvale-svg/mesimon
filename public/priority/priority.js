@@ -3,7 +3,7 @@
  * משימון פריוריטי — תוכנה נפרדת בתוך משימון (‎/priority‎). לא טוען שום קוד של האתר הראשי.
  * האפיון: "אפיון — משימון פריוריטי (דשבורד).md".
  *
- * מסכים: הבית (‎/priority‎) · השרשרת (‎/priority/chain‎) · עבודה על פעולה (‎/priority/receipt‎ וכו' — התור, טור המיילים והגרירה)
+ * מסכים: הבית (‎/priority‎) · עבודה על פעולה (‎/priority/receipt‎ וכו' — התור, טור המיילים והגרירה)
  *        · הגדרות (‎/priority/settings‎) · הרשאות (‎/priority/access‎). הגדרות והרשאות — מנהלי מערכת.
  */
 (() => {
@@ -64,7 +64,7 @@
   let me = null;
 
   // ---------------------------------------------------------------- ניווט
-  const ROUTES = { '': home, chain, settings, access, pricelist, payments };
+  const ROUTES = { '': home, settings, access, pricelist, payments };
   const routeOf = () => location.pathname.replace(/^\/priority\/?/, '').split('/')[0];
   function go(path) { history.pushState(null, '', path); render(); }
   document.addEventListener('click', (e) => {
@@ -76,7 +76,7 @@
 
   function header() {
     const r = routeOf();
-    const tabs = [['/priority', 'בית', ''], ['/priority/chain', 'השרשרת', 'chain'], ['/priority/payments', 'תשלומים', 'payments']];
+    const tabs = [['/priority', 'בית', ''], ['/priority/payments', 'תשלומים', 'payments']];
     if (me.pricelist !== null && me.pricelist !== undefined) tabs.push(['/priority/pricelist', 'מחירונים', 'pricelist']);
     if (me.admin) tabs.push(['/priority/settings', 'הגדרות', 'settings'], ['/priority/access', 'הרשאות', 'access']);
     $('#tabs').innerHTML = tabs.map(([href, label, key]) => `<a href="${href}" data-nav ${r === key ? 'aria-current="page"' : ''}>${label}</a>`).join('');
@@ -596,70 +596,11 @@
 
     await load();
     await deskLoad();
-    // מהשרשרת: ‎?id=‎ — המסמך הזה פתוח; אחרת — המסמך שבעבודה
+    // ‎?id=‎ — המסמך הזה פתוח; אחרת — המסמך שבעבודה
     const want = Number(new URLSearchParams(location.search).get('id'));
     if (want && items.some((i) => i.id === want)) preview(want);
     else if (desk?.active && desk.docId && items.some((i) => i.id === desk.docId)) preview(desk.docId);
     else if (items[0]) preview(items[0].id);
-  }
-
-  // ---------------------------------------------------------------- השרשרת
-  const ago = (iso) => {
-    const m = Math.max(0, Math.round((Date.now() - new Date(iso)) / 60000));
-    if (m < 60) return m <= 1 ? 'עכשיו' : `לפני ${m} דק׳`;
-    const h = Math.round(m / 60);
-    if (h < 24) return h === 1 ? 'לפני שעה' : `לפני ${h} שעות`;
-    const d = Math.round(h / 24);
-    return d === 1 ? 'אתמול' : `לפני ${d} ימים`;
-  };
-  // השלבים שבהם העובד צריך לעשות משהו — "התקבל" (לקחת לעבודה) ו"טיוטא" ("מאשר" בבוט)
-  const MINE = new Set(['new', 'draft']);
-  const SOURCE = { mail: ['mail', 'מהמייל'], upload: ['upload', 'הועלה במסך'], whatsapp: ['bot', 'נפתח בוואטסאפ'] };
-  let chainFilter = { doc: '', all: false };
-
-  async function chain() {
-    const docs = me.docs.filter((d) => d.allowed && !d.report);
-    const q = new URLSearchParams();
-    if (chainFilter.doc) q.set('doc', chainFilter.doc);
-    if (chainFilter.all) q.set('all', '1');
-    const b = await api('GET', `/api/priority/chain?${q}`);
-    const label = (k) => me.docs.find((x) => x.key === k)?.label ?? k;
-    const company = (c) => me.companies.find((x) => x.code === c)?.name ?? c;
-    const total = Object.values(b.columns).reduce((n, c) => n + c.length, 0);
-
-    main.innerHTML = `
-      <div class="chain-h">
-        <div><h1>השרשרת</h1><p class="muted">${total ? `${total} מסמכים` : 'אין מסמכים פעילים'} · מסמך סופי נשאר כאן 14 יום</p></div>
-        <div class="filters" role="group" aria-label="סינון לפי סוג מסמך">
-          <button type="button" class="chip" aria-pressed="${!chainFilter.doc}" data-doc="">הכל</button>
-          ${docs.map((d) => `<button type="button" class="chip" aria-pressed="${chainFilter.doc === d.key}" data-doc="${d.key}">${esc(d.label)}</button>`).join('')}
-          ${me.admin ? `<span class="sep" aria-hidden="true"></span><button type="button" class="chip" aria-pressed="${chainFilter.all}" data-all>כל הארגון</button>` : ''}
-        </div>
-      </div>
-      <div class="board" role="region" aria-label="השרשרת לפי שלבים" tabindex="0">
-        ${b.stages.map((st) => {
-          const cards = b.columns[st.key];
-          return `<section class="col${MINE.has(st.key) ? ' mine' : ''}" aria-labelledby="col-${st.key}">
-            <div class="col-h"><h2 id="col-${st.key}">${esc(st.label)}</h2><span class="pill ${MINE.has(st.key) && cards.length ? 'p-warn' : 'p-mute'} num" aria-label="${cards.length} מסמכים">${cards.length}</span></div>
-            <p class="col-hint">${esc(st.hint)}${MINE.has(st.key) ? ' · <b>אצלך</b>' : ''}</p>
-            <ul class="cards">${cards.map((c) => {
-              const [ic, src] = SOURCE[c.source] ?? ['upload', ''];
-              return `<li><a class="ccard" href="/priority/${c.doc}?id=${c.id}" data-nav>
-                <span class="cc-top"><span class="pill p-brand">${esc(label(c.doc))}</span><span class="muted cc-at">${ago(c.updatedAt)}</span></span>
-                <b class="cc-title">${esc(c.title)}</b>
-                ${c.docno ? `<span class="cc-docno ltr-inline">${esc(c.docno)}</span>` : ''}
-                <span class="cc-meta">${ui(ic)} ${esc(src)}${c.company ? ` · ${esc(company(c.company))}` : ''}${b.all && c.owner ? ` · ${esc(c.owner)}` : ''}</span>
-              </a></li>`;
-            }).join('') || '<li class="empty muted">—</li>'}</ul>
-          </section>`;
-        }).join('')}
-      </div>`;
-    main.querySelector('.filters').addEventListener('click', (e) => {
-      const c = e.target.closest('.chip');
-      if (!c) return;
-      if (c.hasAttribute('data-all')) chainFilter.all = !chainFilter.all; else chainFilter.doc = c.dataset.doc;
-      chain().then(() => main.querySelector(c.hasAttribute('data-all') ? '[data-all]' : `.chip[data-doc="${c.dataset.doc}"]`)?.focus());
-    });
   }
 
   // ---------------------------------------------------------------- 🏷️ פריטים למחירון (‎po-pricelist.js‎ — אותו מנוע כמו הבוט)

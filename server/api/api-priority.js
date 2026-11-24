@@ -17,7 +17,6 @@
 const Settings = require('../priority').PrioritySettings;
 const Access = require('../priority').PriorityAccess;
 const Docs = require('../priority').PriorityDocs;
-const Chain = require('../priority').PriorityChain;
 const Desk = require('../priority').PriorityDesk;
 const PdParts = require('../priority').PdParts;
 const PoPricelist = require('../priority').PoPricelist;
@@ -239,16 +238,6 @@ function register(router) {
     const actor = userOnly(ctx);
     const b = await readJson(req);
     sendJson(res, 200, await docs(() => Desk.say(actor, ctx.params.flow, b.text)));
-  });
-
-  // ---------------------------------------------------------------- השרשרת
-  router.get('/api/priority/chain', async (req, res, ctx) => {
-    const actor = userOnly(ctx);
-    const url = parseUrl(req);
-    const doc = url.searchParams.get('doc') || null;
-    // מנהל מערכת — אפשר לראות את כל הארגון (‎all=1‎); עובד — רק שלו
-    const all = Access.isAdmin(actor) && url.searchParams.get('all') === '1';
-    sendJson(res, 200, { ...Chain.board(actor, { doc, all }), all });
   });
 
   router.get('/api/priority/log', async (req, res, ctx) => {
