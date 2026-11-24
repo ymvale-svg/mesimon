@@ -165,6 +165,7 @@ test('קישור "משימון פריוריטי" בתפריט: מנהל — כן
   assert.equal(b.json.actor.priority, true);
   await as(admin)('PUT', '/api/priority/access', { rows: [{ id: empId, docs: [], companies: null }] });
   assert.equal((await as(emp)('GET', '/api/bootstrap')).json.actor.priority, false);
+  assert.equal((await as(emp)('GET', '/api/bootstrap')).json.actor.payments, false, 'לא העביר לתשלום כלום — בלי "התשלומים שלי"');
   await as(admin)('PUT', '/api/priority/access', { rows: [{ id: empId, docs: ['receipt'], companies: ['elad1'] }] });
   assert.equal((await as(emp)('GET', '/api/bootstrap')).json.actor.priority, true);
 });

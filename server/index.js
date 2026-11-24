@@ -37,6 +37,7 @@ const { HttpError, sendJson, serveStatic, parseUrl, unauthorized } = require('./
 const MailDocQueue = require('./mail').MailDocQueue;
 const MailDose = require('./mail').MailDose;
 const PoNotify = require('./priority').PoNotify;
+const Payments = require('./priority').Payments;
 const PdParts = require('./priority').PdParts;
 const BuyerNotices = require('./priority').BuyerNotices;
 const TimelessMedia = require('./meetings').TimelessMedia;
@@ -152,6 +153,8 @@ server.listen(PORT, HOST, () => {
     PdParts.start();
     // 📋 דוח שבועי לרכש: תעודות משלוח שנקלטו מול הזמנה בלי מספר הזמנה
     BuyerNotices.start();
+    // 💰 תשלומים: רענון מפריוריטי כל שעה — מי שהעביר לתשלום רואה בתפריט "התשלומים שלי"
+    Payments.start();
   }
   // התראה למנהלים כשתקרת המעבד מאטה את הסוכנים
   LoadMonitor.start();

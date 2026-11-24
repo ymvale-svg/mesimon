@@ -245,9 +245,32 @@ let loading = null;
 
 const realCompanies = () => Settings.companies().filter((c) => !c.test).map((c) => c.code);
 
+/**
+ * לכל חוב — עובדי משימון שהעבירו אותו לתשלום (‎owners‎): לפי שם המשתמש בפריוריטי (יוזם / בעלים), ומה שנקלט בבוט בשמם.
+ * כך כל עובד רואה את שלו בלי הרשאה (הוחלט 24.11.26), וגם הקישור בתפריט של משימון.
+ */
+async function attachOwners(items) {
+  const bot = new Map();
+  for (const r of D.all("SELECT company, docno, user_id FROM priority_docs WHERE org_id = ? AND docno <> ''", ORG)) {
+    const k = `${r.company}:${r.docno}`;
+    bot.set(k, [...(bot.get(k) ?? []), r.user_id]);
+  }
+  const byLogin = new Map();
+  for (const l of new Set(items.flatMap((i) => i.people))) {
+    const k = l.toLowerCase();
+    if (byLogin.has(k) || /^api\b/.test(k)) continue;   // משתמש ה-API — הבוט; מי קלט — מ-priority_docs
+    const m = await Approvals.mesimonUserFor(l).catch(() => null);
+    byLogin.set(k, m?.user?.id ?? null);
+  }
+  for (const i of items) {
+    i.owners = [...new Set([...(bot.get(`${i.company}:${i.docno}`) ?? []), ...i.people.map((p) => byLogin.get(p.toLowerCase())).filter(Boolean)])];
+  }
+}
+
 async function refreshNow() {
   if (!Priority.isEnabled()) return { at: Date.now(), items: [], errors: [{ company: '', type: '', message: 'החיבור לפריוריטי אינו מוגדר' }] };
   const { items, errors, read } = await collect(realCompanies());
+  try { await attachOwners(items); } catch (err) { console.error('[משימון] תשלומים — זיהוי העובדים נכשל:', err.message); }
   const now = D.nowIso();
   try { persist(items, read, now); await resolve(now); } catch (err) { console.error('[משימון] תשלומים — שמירה נכשלה:', err.message); }
   if (errors.length) console.error('[משימון] תשלומים — קריאה נכשלה:', errors.map((e) => `${e.company}/${e.type}: ${e.message}`).join('; '));
@@ -265,6 +288,28 @@ async function load({ force = false } = {}) {
 
 const _reset = () => { cache = null; loading = null; };
 
+/**
+ * האם לעובד יש משהו שמחכה לתשלום — לקישור "התשלומים שלי" בתפריט. מהיר (בלי פריוריטי): מהזיכרון, ואם אין — מהמסד.
+ */
+function hasMine(userId) {
+  const id = Number(userId);
+  if (!id) return false;
+  if (cache) return cache.items.some((i) => i.owners?.includes(id));
+  return Boolean(D.get(`SELECT 1 FROM payment_items p, json_each(p.data, '$.owners') o
+    WHERE p.org_id = ? AND p.stage = 'open' AND o.value = ? LIMIT 1`, ORG, id));
+}
+
+/** רענון ברקע כל שעה — כדי שהקישור בתפריט יופיע גם למי שעוד לא נכנס למסך */
+const EVERY_MS = 60 * 60 * 1000;
+let timer = null;
+function start() {
+  if (timer) return;
+  const tick = () => { if (Priority.isEnabled()) load({ force: true }).catch((err) => console.error('[משימון] תשלומים — רענון:', err.message)); };
+  timer = setInterval(tick, EVERY_MS);
+  timer.unref?.();
+  setTimeout(tick, 3 * 60 * 1000).unref?.();
+}
+
 // ---------------------------------------------------------------------------
 // תצוגות
 // ---------------------------------------------------------------------------
@@ -275,7 +320,7 @@ async function mineOf(actor) {
   const bot = new Set(D.all("SELECT company, docno FROM priority_docs WHERE org_id = ? AND user_id = ? AND docno <> ''", ORG, actor.id)
     .map((r) => `${r.company}:${r.docno}`));
   const l = login ? login.toLowerCase() : null;
-  return { login, is: (it) => bot.has(`${it.company}:${it.docno}`) || Boolean(l && it.people.some((p) => p.toLowerCase() === l)) };
+  return { login, is: (it) => Boolean(it.owners?.includes(actor.id)) || bot.has(`${it.company}:${it.docno}`) || Boolean(l && it.people.some((p) => p.toLowerCase() === l)) };
 }
 
 /** מי יזם — לתצוגה: עובד משימון (בבוט), או השם בפריוריטי */
@@ -391,5 +436,6 @@ module.exports = {
   TYPES, STAGES, SOURCES, RESOLVERS,
   payDay, addRuns, nextRun, bucketOf, todayIL,
   fromReceipt, fromPartial, fromDeal, collect, persist, resolve, stageFromStatus, load, report, filterItems, totals, toXlsx,
+  attachOwners, hasMine, start,
   _reset
 };

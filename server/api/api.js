@@ -25,6 +25,7 @@ const PhonebookApi = require('./api-phonebook');
 const PlacesApi = require('./api-places');
 const PriorityApi = require('./api-priority');
 const PriorityAccess = require('../priority').PriorityAccess;
+const Payments = require('../priority').Payments;
 const MeetingsApi = require('./api-meetings');
 const WhatsNew = require('./api-whats-new');
 const Zoom = require('../integrations').Zoom;
@@ -883,7 +884,9 @@ function publicActor(actor) {
     // מסך הקלטות ה-Zoom — כשיש חיבור Zoom
     zoomRecordings: actor.type === 'user' && Zoom.isEnabled(),
     // 🗂 משימון פריוריטי (‎/priority‎) — קישור בתפריט למי שמורשה לפחות לסוג מסמך אחד (או מנהל מערכת)
-    priority: actor.type === 'user' && (PriorityAccess.isAdmin(actor) || PriorityAccess.of({ id: actor.id, role: actor.role }).docs.length > 0)
+    priority: actor.type === 'user' && (PriorityAccess.isAdmin(actor) || PriorityAccess.of({ id: actor.id, role: actor.role }).docs.length > 0),
+    // 💰 מי שהעביר לתשלום (קבלת סחורה, חשבון חלקי, חשבון עסקה) ומשהו מזה עוד מחכה — "התשלומים שלי", בלי הרשאה
+    payments: actor.type === 'user' && actor.role !== 'vendor' && Payments.hasMine(actor.id)
   };
 }
 

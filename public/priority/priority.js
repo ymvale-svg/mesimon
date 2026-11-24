@@ -62,6 +62,7 @@
 
   const ROLE = { superadmin: 'אדמין על', admin: 'מנהל מערכת', executive: 'הנהלה', manager: 'מנהל מחלקה', employee: 'עובד' };
   let me = null;
+  const workDocs = () => me.docs.filter((d) => d.allowed && !d.report);
 
   // ---------------------------------------------------------------- ניווט
   const ROUTES = { '': home, chain, settings, access, pricelist, payments };
@@ -76,7 +77,8 @@
 
   function header() {
     const r = routeOf();
-    const tabs = [['/priority', 'בית', ''], ['/priority/chain', 'השרשרת', 'chain'], ['/priority/payments', 'תשלומים', 'payments']];
+    // מי שאין לו אף מסמך לקליטה (רק מה שהעביר לתשלום) — רק "תשלומים"
+    const tabs = workDocs().length ? [['/priority', 'בית', ''], ['/priority/chain', 'השרשרת', 'chain'], ['/priority/payments', 'תשלומים', 'payments']] : [['/priority/payments', 'התשלומים שלי', 'payments']];
     if (me.pricelist !== null && me.pricelist !== undefined) tabs.push(['/priority/pricelist', 'מחירונים', 'pricelist']);
     if (me.admin) tabs.push(['/priority/settings', 'הגדרות', 'settings'], ['/priority/access', 'הרשאות', 'access']);
     $('#tabs').innerHTML = tabs.map(([href, label, key]) => `<a href="${href}" data-nav ${r === key ? 'aria-current="page"' : ''}>${label}</a>`).join('');
@@ -93,7 +95,8 @@
     header();
     const r = routeOf();
     const docRoute = me.docs.find((d) => d.key === r && !d.report);
-    const view = docRoute ? () => workspace(docRoute) : ROUTES[r] ?? home;
+    let view = docRoute ? () => workspace(docRoute) : ROUTES[r] ?? home;
+    if (!workDocs().length && !me.admin && view !== payments) view = payments;   // בלי מסמכים לקליטה — ישר לתשלומים
     if ((view === settings || view === access) && !me.admin) { main.innerHTML = '<div class="note">רק מנהלי מערכת נכנסים למסך הזה.</div>'; return; }
     main.classList.remove('wide');
     main.innerHTML = '<p class="muted pad">טוען…</p>';
@@ -773,9 +776,10 @@
     const errs = r.errors.length ? `<p class="note">⚠️ לא נקרא מפריוריטי: ${esc([...new Set(r.errors.map((e) => company(e.company) || e.message))].join(', '))}. הרשימה חסרה את מה שבהן. ${esc(r.errors[0].message)}</p>` : '';
     const intro = r.scope === 'all'
       ? 'כל מה שמחכה לתשלום: קבלות סחורה סופיות (רק מה שעוד לא בחשבונית ספק), חשבונות חלקיים מאושרים וחשבונות עסקה מאושרים. מועד התשלום — ה-15 שאחרי סוף החודש ועוד ימי התנאי.'
-      : r.login || r.items.length ? 'המסמכים שיזמת — מתי צפוי התשלום עליהם.' : 'לא מצאנו את שם המשתמש שלך בפריוריטי, ולכן אין כאן מסמכים. פנו למנהל המערכת.';
+      : r.items.length ? 'מה שהעברת לתשלום (קבלות סחורה, חשבונות חלקיים, חשבונות עסקה) — ומתי צפוי התשלום.'
+        : r.login ? 'אין כרגע מסמכים שהעברת לתשלום ומחכים לתשלום.' : 'לא מצאנו את שם המשתמש שלך בפריוריטי, ולכן אין כאן מסמכים. פנו למנהל המערכת.';
     main.innerHTML = `<div class="pay">
-      <div class="chain-h"><div><h1>תשלומים</h1><p class="muted">${esc(intro)}</p></div>
+      <div class="chain-h"><div><h1>${r.scope === 'all' ? 'תשלומים' : 'התשלומים שלי'}</h1><p class="muted">${esc(intro)}</p></div>
         <div class="row-actions"><button class="btn pay-refresh" type="button">רענון מפריוריטי</button><a class="btn" href="/api/priority/payments?${new URLSearchParams([...q].filter(([k]) => k !== 'refresh'))}&format=xlsx" title="מה שמוצג עכשיו — גיליון לכל חברה">ייצוא לאקסל</a></div></div>
       ${errs}
       <div class="pay-buckets" role="group" aria-label="מועד התשלום">${chips}</div>

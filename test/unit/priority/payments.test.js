@@ -273,3 +273,33 @@ test('מחלקת כספים / הנהלת חשבונות (וגם תת-מחלקה)
   assert.equal(r.scope, 'mine');
   assert.deepEqual(r.items, [], 'עובד הנדסה — רק מה שיזם');
 });
+
+test('מי שהעביר לתשלום — רואה את שלו בלי הרשאה, וגם קישור בתפריט (hasMine), עד שזה יוצא מהרשימה', async (t) => {
+  reset();
+  const yossi = user({ role: 'employee' });
+  const botUser = user({ role: 'employee' });
+  const other = user({ role: 'employee' });
+  D.setSetting('priority_user_map', { YossiP: yossi.id });
+  Docs.upload(botUser, { doc: 'receipt', filename: 'x.pdf', mime: 'application/pdf', data: Buffer.from('%PDF-1.4\n').toString('base64') });
+  D.run("UPDATE priority_docs SET docno = 'GR81', company = 'a160226' WHERE user_id = ?", botUser.id);
+  fake(t, { a160226: {
+    receipt: [gr('GR80', { USERLOGIN: 'YossiP', OWNERLOGIN: 'YossiP' }), gr('GR81', { USERLOGIN: 'API VPLANS', OWNERLOGIN: 'API VPLANS' })],
+    partial: [pc('PC80', { USERLOGIN: 'Someone', OWNERLOGIN: 'yossip' })]
+  } });
+  const admin = user({ role: 'admin' });
+  const all = await Payments.report(actor(admin), { today: TODAY });
+  assert.deepEqual(all.items.find((i) => i.docno === 'GR80').owners, [yossi.id]);
+  assert.deepEqual(all.items.find((i) => i.docno === 'GR81').owners, [botUser.id], 'נקלט בבוט');
+
+  const y = await Payments.report(actor(yossi), { today: TODAY });
+  assert.equal(y.scope, 'mine');
+  assert.deepEqual(y.items.map((i) => i.docno).sort(), ['GR80', 'PC80'], 'יוזם או בעלים — בלי הרשאה');
+  assert.equal(Payments.hasMine(yossi.id), true);
+  assert.equal(Payments.hasMine(botUser.id), true);
+  assert.equal(Payments.hasMine(other.id), false);
+  Payments._reset();
+  assert.equal(Payments.hasMine(yossi.id), true, 'גם בלי זיכרון — מהמסד');
+  D.run("UPDATE payment_items SET stage = 'invoiced' WHERE docno IN ('GR80', 'PC80')");
+  assert.equal(Payments.hasMine(yossi.id), false, 'מה שכבר לא מחכה — לא מקפיץ קישור');
+  D.setSetting('priority_user_map', {});
+});
