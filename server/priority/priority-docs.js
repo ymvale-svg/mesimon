@@ -35,7 +35,7 @@ const parseJson = (s, d) => { try { return JSON.parse(s) ?? d; } catch { return 
 const actorOf = (user) => ({ type: 'user', id: user.id, role: user.role });
 
 function assertDoc(user, doc) {
-  if (!Access.DOC_KEYS.includes(doc)) throw fail(400, 'סוג מסמך לא מוכר');
+  if (!Access.DOC_KEYS.includes(doc) || Access.DOCS.find((d) => d.key === doc)?.report) throw fail(400, 'סוג מסמך לא מוכר');
   if (!Access.can(actorOf(user), doc)) throw fail(403, 'אין לך הרשאה למסמך הזה');
 }
 

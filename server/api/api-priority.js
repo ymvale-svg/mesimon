@@ -10,6 +10,8 @@
  *   • ‎GET  /api/priority/log‎       — יומן השינויים בהגדרות ובהרשאות.
  *   • ‎GET|POST /api/priority/parts/:token‎ — 💬 בלי התחברות (האסימון מהמייל): מנהלת הרכש עונה לעובד על מק"טים לבנייה.
  *   • ‎GET /api/priority/pricelist‎, ‎POST /api/priority/pricelist/:id‎ — 🏷️ פריטים למחירון: רק מי שברשימה "רכש — מחירונים" ומנהלי מערכת.
+ *   • ‎GET /api/priority/payments‎ — 💰 תשלומים ל-15: מורשה "תשלומים" — הכל בחברות שלו; כל עובד אחר — רק מה שיזם.
+ *     ‎?format=xlsx‎ — אותו סינון, כקובץ אקסל.
  *   • טור המיילים והגרירה (‎priority-docs.js‎): ‎/api/priority/inbox‎, ‎/api/priority/docs‎ — כל עובד, רק שלו.
  */
 const Settings = require('../priority').PrioritySettings;
@@ -19,6 +21,7 @@ const Chain = require('../priority').PriorityChain;
 const Desk = require('../priority').PriorityDesk;
 const PdParts = require('../priority').PdParts;
 const PoPricelist = require('../priority').PoPricelist;
+const Payments = require('../priority').Payments;
 const Priority = require('../integrations').Priority;
 const { HttpError, badRequest, forbidden, readJson, sendJson, parseUrl } = require('../core').HttpKit;
 
@@ -60,7 +63,9 @@ function register(router) {
     sendJson(res, 200, {
       name: actor.name,
       admin: Access.isAdmin(actor),
-      docs: Access.DOCS.map((d) => ({ key: d.key, label: d.label, ready: d.ready, allowed: a.docs.includes(d.key) })),
+      docs: Access.DOCS.map((d) => ({ key: d.key, label: d.label, ready: d.ready, report: Boolean(d.report), allowed: a.docs.includes(d.key) })),
+      // 💰 תשלומים ל-15: ‎all‎ — הכל בחברות שלו; ‎mine‎ — רק מה שהוא יזם
+      payments: Access.can(actor, 'payments') ? 'all' : 'mine',
       companies: all.filter((c) => codes.includes(c.code) && !c.test).map((c) => ({ code: c.code, name: c.name })),
       allCompanies: a.companies === null,
       connected: Priority.isEnabled(),
@@ -116,6 +121,26 @@ function register(router) {
     const changes = asBad(() => Access.save(b?.rows));
     Settings.note(Settings.DEFAULT_ORG, who(actor), changes);
     sendJson(res, 200, { ...Access.matrix(), companies: Settings.companies().filter((c) => !c.test), changes });
+  });
+
+  // ---------------------------------------------------------------- 💰 תשלומים ל-15
+  router.get('/api/priority/payments', async (req, res, ctx) => {
+    const actor = userOnly(ctx);
+    const sp = parseUrl(req).searchParams;
+    const f = {
+      bucket: sp.get('bucket') || '', type: sp.get('type') || '', company: sp.get('company') || '', project: sp.get('project') || '',
+      supplier: sp.get('supplier') || '', mine: sp.get('mine') === '1', refresh: sp.get('refresh') === '1'
+    };
+    const r = await Payments.report(actor, f);
+    if (sp.get('format') !== 'xlsx') return sendJson(res, 200, r);
+    const buf = Payments.toXlsx(r);
+    res.writeHead(200, {
+      'content-type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'content-length': buf.length,
+      'content-disposition': `attachment; filename*=UTF-8''${encodeURIComponent(`תשלומים ל-15 ${r.today}.xlsx`)}`,
+      'cache-control': 'private, no-cache'
+    });
+    res.end(buf);
   });
 
   // ---------------------------------------------------------------- טור המיילים והגרירה

@@ -1124,6 +1124,47 @@ async function supplierParts(company, supname) {
   return rows(await call(company, 'GET', `SUPPLIERS('${q(supname)}')/SUPPART_SUBFORM?$select=PARTNAME,KLINE&$top=2000`));
 }
 
+// ---------------------------------------------------------------------------
+// קריאה — מה שמחכה לתשלום (‎priority/payments.js‎; האפיון: "אפיון — רשימת תשלומים ל-15.md")
+// ---------------------------------------------------------------------------
+
+/*
+ * שלושת המסמכים שמובילים לתשלום, בסטטוס שנקבע (24.11.26). קריאה בלבד.
+ *   קבלת סחורה — ‎DOCUMENTS_P‎, ‎סופית‎, ועוד לא כולה בחשבונית (‎IVALL ≠ Y‎), עם השורות (‎IVNUM‎ — השורה כבר בחשבונית).
+ *   חשבון חלקי — ‎MED_DOCUMENTS_P‎ (PC, מתוך חוזה), ‎אושרה‎.
+ *   חשבון עסקה — ‎DINVOICES‎, ‎מאושרת‎. אין בו קוד תנאי תשלום ב-API — פריוריטי מחשב ‎PAYDATE‎.
+ */
+const PAY_STATUS = Object.freeze({ receipt: 'סופית', partial: 'אושרה', deal: 'מאושרת' });
+const PAY_TOP = 5000;
+
+const payReceipts = async (company) => rows(await call(company, 'GET',
+  `DOCUMENTS_P?$filter=${enc(`STATDES eq '${PAY_STATUS.receipt}' and IVALL ne 'Y'`)}`
+  + '&$select=DOCNO,CURDATE,SUPNAME,CDES,BOOKNUM,PROJDOCNO,PROJDES,QPRICE,PERCENT,DISPRICE,VAT,TOTPRICE,CODE,MED_MXPAYCODE,USERLOGIN,OWNERLOGIN'
+  + `&$expand=TRANSORDER_P_SUBFORM($select=KLINE,QPRICE,IVNUM)&$top=${PAY_TOP}`)).map(strip);
+
+const payPartials = async (company) => rows(await call(company, 'GET',
+  `MED_DOCUMENTS_P?$filter=${enc(`STATDES eq '${PAY_STATUS.partial}'`)}`
+  + `&$select=DOCNO,CURDATE,SUPNAME,CDES,ORDNAME,BOOKNUM,PROJDOCNO,PROJDES,TOTPRICE,CODE,MED_PAYCODE,USERLOGIN,OWNERLOGIN&$top=${PAY_TOP}`)).map(strip);
+
+const payDeals = async (company) => rows(await call(company, 'GET',
+  `DINVOICES?$filter=${enc(`STATDES eq '${PAY_STATUS.deal}'`)}`
+  + `&$select=IVNUM,IVDATE,SUPNAME,SUPDES,BOOKNUM,PROJDOCNO,PROJDES,TOTPRICE,CODE,PAYDATE,OWNERLOGIN&$top=${PAY_TOP}`)).map(strip);
+
+/**
+ * איפה עומד מסמך שיצא מהרשימה — לשלב של החוב (עבר לחשבונית, בוטל, שולם). ‎null‎ — לא נמצא.
+ * ‎{ status, invoiced }‎: ‎invoiced‎ — כולו בחשבונית (‎IVALL = Y‎).
+ */
+async function payDocStatus(company, type, docno) {
+  const path = {
+    receipt: `DOCUMENTS_P?$filter=${enc(`DOCNO eq '${q(docno)}'`)}&$select=STATDES,IVALL&$top=1`,
+    partial: `MED_DOCUMENTS_P?$filter=${enc(`DOCNO eq '${q(docno)}'`)}&$select=STATDES,IVALL&$top=1`,
+    deal: `DINVOICES?$filter=${enc(`IVNUM eq '${q(docno)}'`)}&$select=STATDES&$top=1`
+  }[type];
+  if (!path) return null;
+  const r = rows(await call(company, 'GET', path))[0];
+  return r ? { status: r.STATDES ?? '', invoiced: r.IVALL === 'Y' } : null;
+}
+
 /** פריט ל"מוצרים לספק". מחזיר ‎{ KLINE }‎ — המפתח למחיקה */
 async function addSupplierPart(company, supname, part) {
   const r = await call(company, 'POST', `SUPPLIERS('${q(supname)}')/SUPPART_SUBFORM`, { PARTNAME: part });
@@ -1139,6 +1180,7 @@ module.exports = {
   finalOrders, orderForNotice, demandInitiator, demandForNotice, projectManager, priorityUser,
   readDialog, createReceipt, addOrderLine, addFreeLine, setLineQty, setLineDes, setHeader, attach, deleteAttachment, setDialog, finalizeReceipt, cancelReceipt, receiptStatus, deleteLines,
   PD_TYPES, demandCodes, recentDemandProjects, createDemand, addDemandLine, setDemand, submitDemand, isNoApproversError, readDemand, waitingDemands, nextSigner, cancelDemand, setDemandDialog, appendDemandDialog, setDemandLine, deleteDemandLine, reopenDemand, REOPEN_STATUS, purchaseOrderOwners, attachDemand, priorityUsers, budgetPairs, isCodingError,
+  PAY_STATUS, payReceipts, payPartials, payDeals, payDocStatus,
   supplierPriceLists, addPriceListItem, deletePriceListItem, supplierParts, addSupplierPart, deleteSupplierPart,
   _call: call
 };

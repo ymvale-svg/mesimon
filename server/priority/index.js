@@ -19,6 +19,7 @@ module.exports = {
   get PriorityDocs() { return require('./priority-docs'); },
   get PriorityChain() { return require('./priority-chain'); },
   get PriorityDesk() { return require('./priority-desk'); },
+  get Payments() { return require('./payments'); },
   get PriorityApprovals() { return require('./priority-approvals'); },
   get OpensGuard() { return require('./opens-guard'); },
   get PoNotify() { return require('./po-notify'); },

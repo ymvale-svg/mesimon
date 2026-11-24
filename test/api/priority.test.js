@@ -43,7 +43,9 @@ test('עובד: רואה את עצמו, לא נכנס להגדרות ולהרש�
   const me = await as(emp)('GET', '/api/priority/me');
   assert.equal(me.status, 200);
   assert.equal(me.json.admin, false);
-  assert.equal(me.json.docs.length, 6);
+  assert.equal(me.json.docs.length, 7);
+  assert.equal(me.json.docs.find((d) => d.key === 'payments').report, true, '💰 תשלומים — דוח, לא מסמך לקליטה');
+  assert.equal(me.json.payments, 'mine', 'בלי הרשאה — רק מה שהוא יזם');
   for (const [m, p] of [['GET', '/api/priority/settings'], ['PUT', '/api/priority/settings'], ['GET', '/api/priority/access'], ['PUT', '/api/priority/access'], ['GET', '/api/priority/log'], ['POST', '/api/priority/settings/test']]) {
     assert.equal((await as(emp)(m, p, m === 'GET' ? undefined : {})).status, 403, `${m} ${p}`);
   }
@@ -112,6 +114,21 @@ test('טור המיילים: ריק כשאין מה שזוהה, ומייל לא 
   assert.deepEqual(r.json.items, []);
   assert.equal((await as(emp)('POST', '/api/priority/inbox/999999/take', { doc: 'receipt' })).status, 404);
   assert.equal((await as(emp)('POST', '/api/priority/inbox/999999/dismiss', {})).status, 404);
+});
+
+test('💰 תשלומים ל-15: עובד — רק שלו ובלי פרטים טכניים; מנהל — הכל, והתקלה; אקסל; בלי התחברות — 401', async () => {
+  const w = await as(emp)('GET', '/api/priority/payments');
+  assert.equal(w.status, 200, w.text);
+  assert.equal(w.json.scope, 'mine');
+  assert.deepEqual(w.json.errors, []);
+  assert.equal(w.json.runs.length, 3);
+  const a = await as(admin)('GET', '/api/priority/payments?bucket=r0&type=receipt');
+  assert.equal(a.json.scope, 'all');
+  assert.ok(a.json.errors.length > 0, 'בבדיקות אין חיבור לפריוריטי — המנהל רואה את התקלה');
+  const x = await srv.api('GET', '/api/priority/payments?format=xlsx', { cookie: admin });
+  assert.equal(x.status, 200);
+  assert.match(x.headers.get('content-type'), /spreadsheetml/);
+  assert.equal((await srv.api('GET', '/api/priority/payments')).status, 401);
 });
 
 test('השרשרת: עובד רואה את שלו; "כל הארגון" — רק למנהל', async () => {
