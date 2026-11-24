@@ -48,9 +48,18 @@ test('מחיקה מהתור — לחיצה שנייה לאישור', () => {
   assert.match(js, /'למחוק\?'/);
 });
 
-test('ניגודיות: אדום במצב בהיר #b91c1c (4.5:1 מול הרקע שלו), וכרטיס כבוי בלי שקיפות', () => {
+test('ניגודיות: אדום במצב בהיר #b91c1c (4.5:1 מול הרקע שלו)', () => {
   assert.match(css, /--bad: #b91c1c/);
-  assert.doesNotMatch(css, /\.tile\.off\s*\{[^}]*opacity/);
+});
+
+test('מסך הבית: רק הכפתורים שמותרים לעובד (בלי אפורים), בלי כיתובים עליהם, ו"פריטים למחירון" כפתור כמו כולם', () => {
+  const home = js.slice(js.indexOf('async function home('), js.indexOf('// ---', js.indexOf('async function home(')));
+  assert.match(home, /me\.docs\.filter\(\(d\) => d\.report \|\| d\.allowed\)/);
+  assert.doesNotMatch(home, /tile off/, 'אין כפתור אפור למי שאין לו הרשאה');
+  assert.doesNotMatch(home, /class="foot"|class="pill|אין לך הרשאה|עובד דרך הבוט|גם בבוט/, 'על הכפתור — רק אייקון, שם ותיאור');
+  assert.match(home, /tiles\.push\(\{ key: 'pricelist'/);
+  assert.match(js, /pricelist: 'הזמנה סופית/);
+  assert.doesNotMatch(css, /\.tile\.off/);
 });
 
 test('כותרות קפואות: מטריצת ההרשאות וטבלת החברות גוללות במסגרת, ושורת הכותרות נשארת', () => {

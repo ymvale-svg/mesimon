@@ -55,7 +55,8 @@
     partial: 'חוזה ← כתב הכמויות שנוצל ← לתשלום',
     invoice: 'חשבונית ← משיכת GR ← פערים',
     income: 'שובר ← דירה ובניין ← קבלה',
-    payments: 'קבלות סחורה · חשבונות חלקיים · חשבונות עסקה ← ה-15'
+    payments: 'קבלות סחורה · חשבונות חלקיים · חשבונות עסקה ← ה-15',
+    pricelist: 'הזמנה סופית ← פריטים שאינם במחירון הספק ← למחירון'
   };
   // סדר הבנייה (הוחלט 11.11.26): קודם מה שעובד, אחר כך חשבון חלקי, חשבונית ספק, קבלה, והזמנות רכש בסוף
   const NEXT = { partial: 1, invoice: 2, income: 3, order: 4 };
@@ -103,27 +104,14 @@
   // ---------------------------------------------------------------- בית
   async function home() {
     const cos = me.allCompanies ? 'כל החברות' : me.companies.map((c) => c.name).join(' · ') || 'אף חברה';
-    const [q, inbox] = await Promise.all([api('GET', '/api/priority/docs'), api('GET', '/api/priority/inbox')]);
-    const fromMail = (k) => inbox.items.filter((m) => m.guess === k || (k === 'receipt' && m.guess === 'invoice')).length;
+    const inbox = await api('GET', '/api/priority/inbox');
+    // הכפתורים (מ-24.11.26): רק מה שמותר לעובד — בלי כפתורים אפורים — ועל הכפתור רק אייקון, שם ותיאור.
+    // 🏷️ פריטים למחירון — כפתור כמו כולם, למי שברשימה "רכש — מחירונים" (‎me.pricelist‎ אינו ‎null‎).
+    const tiles = me.docs.filter((d) => d.report || d.allowed).map((d) => ({ key: d.key, label: d.label }));
+    if (me.pricelist !== null && me.pricelist !== undefined) tiles.push({ key: 'pricelist', label: 'פריטים למחירון' });
     main.innerHTML = `
       <div class="greet"><h1>שלום, ${esc(me.name)}</h1><p>החברות שלך: ${esc(cos)}${inbox.items.length ? ` · <b>${inbox.items.length}</b> מסמכים חדשים במייל` : ''}</p></div>
-      <div class="tiles">${me.docs.map((d) => {
-        if (d.report) {
-          // 💰 דוח: מורשה — הכל בחברות שלו; כל עובד אחר — מה שהוא יזם
-          return `<a class="tile" href="/priority/${d.key}" data-nav><span class="ic">${icon(d.key)}</span><h2>${esc(d.label)}</h2><span class="sub">${SUB[d.key] ?? ''}</span>
-            <span class="foot">${me.payments === 'all' ? '<span class="pill p-ok">כל מה שמחכה לתשלום</span>' : '<span class="pill p-brand">מה שיזמת</span>'}</span></a>`;
-        }
-        const status = !d.allowed ? '<span class="pill p-mute">אין לך הרשאה</span>'
-          : d.ready ? '<span class="pill p-ok">עובד דרך הבוט</span>'
-            : `<span class="pill p-mute">איסוף בלבד · ${NEXT[d.key]} בתור לבנייה</span>`;
-        const n = q.counts[d.key] ?? 0;
-        const m = d.allowed ? fromMail(d.key) : 0;
-        const counts = d.allowed ? `<span class="count num">${n}<small>בתור</small></span>${m ? `<span class="pill p-warn">${m} במייל</span>` : ''}` : '';
-        const body = `<span class="ic">${icon(d.key)}</span><h2>${esc(d.label)}</h2><span class="sub">${SUB[d.key] ?? ''}</span><span class="foot">${counts}${status}</span>`;
-        return d.allowed ? `<a class="tile" href="/priority/${d.key}" data-nav>${body}</a>` : `<div class="tile off">${body}</div>`;
-      }).join('')}${me.pricelist !== null && me.pricelist !== undefined ? `<a class="tile" href="/priority/pricelist" data-nav>
-          <span class="ic">${icon('pricelist')}</span><h2>פריטים למחירון</h2><span class="sub">הזמנה סופית ← פריטים שאינם במחירון הספק ← למחירון</span>
-          <span class="foot"><span class="count num">${me.pricelist}<small>מחכים</small></span><span class="pill p-ok">גם בבוט</span></span></a>` : ''}</div>
+      <div class="tiles">${tiles.map((d) => `<a class="tile" href="/priority/${d.key}" data-nav><span class="ic">${icon(d.key)}</span><h2>${esc(d.label)}</h2><span class="sub">${SUB[d.key] ?? ''}</span></a>`).join('')}</div>
       <p class="note">לחצו על פעולה: בצד שמאל המיילים שהגיעו אליכם עם חשבונית או תעודת משלוח, ואפשר לגרור לשם קבצים. דרישת רכש וקבלת סחורה — המסמך נשלח לבוט, והשיחה ממשיכה בוואטסאפ.</p>`;
   }
 
