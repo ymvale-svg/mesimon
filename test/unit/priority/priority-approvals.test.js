@@ -201,3 +201,97 @@ test('sweep — כבוי בלי חיבור לפריוריטי', async (t) => {
   assert.deepEqual(await A.sweep(async () => true, { force: true }), []);
   assert.equal(w.mock.callCount(), 0);
 });
+
+// --- כל סבבי האישורים (הוחלט 24.11.26) ---
+const Settings = require('../../../server/priority/priority-settings');
+
+const CONTRACT = { ORDNAME: 'CO260000125', MED_TYPE: 'CO', CDES: 'סער מהנדסים בע"מ', PROJDES: 'מבואות דרומיים', CURDATE: '2026-11-24T00:00:00Z', TOTPRICE: 126024, CODE: 'ש"ח', USERLOGIN: 'Eladh', OWNERLOGIN: 'MatanR' };
+const PARTIAL = { DOCNO: 'PC260000236', CDES: 'עגלוני לחפירות', PROJDES: 'אלעד סנטר', CURDATE: '2026-10-14T00:00:00Z', TOTPRICE: 49492.41, MED_USERLOGIN: 'Eladh', USERLOGIN: 'AlexP', OWNERLOGIN: 'MatanR' };
+
+test('KINDS — כל הסבבים: דרישה, הזמנה, חוזה, חשבון חלקי, חשבון עסקה', () => {
+  assert.deepEqual(A.KINDS(), ['demand', 'order', 'contract', 'partial', 'deal']);
+});
+
+test('messageFor — חוזה: מספר, ספק, סכום, מי שלח', () => {
+  const t = A.messageFor('mordot', CONTRACT, 'מתן רוזן', 'contract');
+  assert.match(t, /^📝 ממתין לך בפריוריטי \*חוזה CO260000125\* לאישורך\./);
+  assert.match(t, /🏢 מורדות הכרמל נכסים · 📁 מבואות דרומיים/);
+  assert.match(t, /🤝 סער מהנדסים בע"מ · 126,024 ש"ח/);
+  assert.match(t, /נשלח ע"י מתן רוזן · מ-24\.11\.2026/);
+  assert.match(t, /\n\nהאישור — בפריוריטי/);
+});
+
+test('messageFor — חוזה CH הוא שינוי בחוזה; חשבון עסקה — הספק מ-SUPDES', () => {
+  assert.match(A.messageFor('mordot', { ...CONTRACT, MED_TYPE: 'CH', ORDNAME: 'CH260000018' }, '', 'contract'), /\*שינוי בחוזה CH260000018\*/);
+  const t = A.messageFor('mordot', { IVNUM: 'T18', SUPDES: 'ספק עסקה', IVDATE: '2026-09-24T00:00:00Z' }, '', 'deal');
+  assert.match(t, /\*חשבון עסקה T18\*/);
+  assert.match(t, /🤝 ספק עסקה/);
+  assert.match(t, /^מ-24\.09\.2026$/m);
+  assert.doesNotMatch(t, /נשלח ע"י/);
+});
+
+test('digestFor — כמה מסמכים בהודעה אחת, עד 10 שורות', () => {
+  const items = Array.from({ length: 12 }, (_, i) => ({ company: 'mordot', kind: 'partial', d: { ...PARTIAL, DOCNO: `PC${i}` } }));
+  const t = A.digestFor(items);
+  assert.match(t, /\*12 מסמכים\*/);
+  assert.match(t, /• 🧾 \*חשבון חלקי PC0\* · עגלוני לחפירות · 49,492 ש"ח · מורדות הכרמל נכסים/);
+  assert.doesNotMatch(t, /PC10/);
+  assert.match(t, /ועוד 2\./);
+});
+
+test('notifyDoc — חשבון חלקי: נשלח לחותם הבא פעם אחת, מפתח עם הסוג', async (t) => {
+  usersMock(t);
+  const sent = [];
+  const send = async (id, text) => { sent.push({ id, text }); return true; };
+  const r = await A.notifyDoc('test11', 'partial', PARTIAL, send);
+  assert.equal(r.sent, true);
+  assert.equal(r.signer, 'Eladh');
+  assert.equal(sent[0].id, elad.id);
+  assert.match(sent[0].text, /חשבון חלקי PC260000236/);
+  assert.ok(D.getSetting('pd_approval_notified', {})['test11:partial:PC260000236:Eladh']);
+  assert.equal((await A.notifyDoc('test11', 'partial', PARTIAL, send)).why, 'כבר קיבל');
+  assert.equal(sent.length, 1);
+});
+
+test('sweep — עובר על כל הסוגים; כמה מסמכים לאותו חותם — הודעה אחת מרוכזת', async (t) => {
+  usersMock(t);
+  t.mock.method(Priority, 'isEnabled', () => true);
+  t.mock.method(Settings, 'pdNotifyCompanies', () => ['test11']);
+  t.mock.method(Priority, 'waitingDemands', async () => [{ PRDNO: 'PD-SW', USERLOGIN: 'Eladh' }]);
+  const asked = [];
+  t.mock.method(Priority, 'waitingForApproval', async (c, kind) => {
+    asked.push(kind);
+    if (kind === 'contract') return [{ ...CONTRACT, ORDNAME: 'CO-SW' }];
+    if (kind === 'partial') return [{ ...PARTIAL, DOCNO: 'PC-SW' }];
+    if (kind === 'deal') throw new Error('down');
+    return [];
+  });
+  const sent = [];
+  const out = await A.sweep(async (id, text) => { sent.push({ id, text }); return true; }, { force: true });
+  assert.deepEqual(asked, ['order', 'contract', 'partial', 'deal']);
+  assert.equal(sent.length, 1, 'הודעה אחת לחותם');
+  assert.match(sent[0].text, /\*3 מסמכים\*/);
+  assert.match(sent[0].text, /דרישת רכש PD-SW/);
+  assert.match(sent[0].text, /חוזה CO-SW/);
+  assert.match(sent[0].text, /חשבון חלקי PC-SW/);
+  assert.deepEqual(out.map((x) => [x.kind, x.no, x.sent]), [['demand', 'PD-SW', true], ['contract', 'CO-SW', true], ['partial', 'PC-SW', true]]);
+  const done = D.getSetting('pd_approval_notified', {});
+  assert.ok(done['test11:PD-SW:Eladh'] && done['test11:contract:CO-SW:Eladh'] && done['test11:partial:PC-SW:Eladh']);
+  // בסבב הבא — כבר קיבל, לא נשלח שוב
+  await A.sweep(async (id, text) => { sent.push({ id, text }); return true; }, { force: true });
+  assert.equal(sent.length, 1);
+});
+
+test('sweep — מסמך אחד: ההודעה הרגילה; מחוץ לשעות — לא נרשם', async (t) => {
+  usersMock(t);
+  t.mock.method(Priority, 'isEnabled', () => true);
+  t.mock.method(Settings, 'pdNotifyCompanies', () => ['test11']);
+  t.mock.method(Priority, 'waitingDemands', async () => []);
+  t.mock.method(Priority, 'waitingForApproval', async (c, kind) => (kind === 'order' ? [{ ORDNAME: 'PO-ONE', CDES: 'ספק', PORDERUSER_SUBFORM: [{ USERLOGIN: 'Eladh' }] }] : []));
+  const texts = [];
+  const later = await A.sweep(async (id, text) => { texts.push(text); return 'later'; }, { force: true });
+  assert.equal(later[0].later, true);
+  assert.match(texts[0], /^📦 ממתין לך בפריוריטי \*הזמנת רכש PO-ONE\*/);
+  const ok = await A.sweep(async () => true, { force: true });
+  assert.equal(ok[0].sent, true);
+});

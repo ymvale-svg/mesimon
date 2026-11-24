@@ -230,6 +230,42 @@ test('nextSigner — אין חותם', () => {
   assert.equal(Priority.nextSigner(null), null);
 });
 
+// סבבי האישורים — לפי מה שנמצא בפריוריטי (24.11.26): חוזה CO260000123, חשבון חלקי PC260000236, חשבון עסקה T10
+test('approvalSigner — חוזה: השדה בכותרת (USERLOGIN)', () => {
+  const d = { USERLOGIN: 'GolanB', PORDERUSER_SUBFORM: [{ USERLOGIN: 'TengizG', UFLAG: 'Y', NEXTUSERLOGIN: 'GolanB' }, { USERLOGIN: 'GolanB' }] };
+  assert.equal(Priority.approvalSigner('contract', d), 'GolanB');
+});
+
+test('approvalSigner — חשבון חלקי: MED_USERLOGIN, לא USERLOGIN (היוזם)', () => {
+  const d = { USERLOGIN: 'AlexP', MED_USERLOGIN: 'GolanB', MED_PDOCUSER_SUBFORM: [{ USERLOGIN: 'GolanB' }, { USERLOGIN: 'GiladK' }] };
+  assert.equal(Priority.approvalSigner('partial', d), 'GolanB');
+});
+
+test('approvalSigner — חשבון עסקה: הכותרת ריקה ← הראשון שלא חתם', () => {
+  const d = { NEXTSIGNUSERLOGIN: null, PYINVUSER_SUBFORM: [{ USERLOGIN: 'EddiY' }, { USERLOGIN: 'GiladK' }] };
+  assert.equal(Priority.approvalSigner('deal', d), 'EddiY');
+});
+
+test('approvalSigner — הזמנת רכש: לא לפי USERLOGIN (הקניין), רק לפי רשימת המאשרים', () => {
+  const d = { USERLOGIN: 'ShikmaB', PORDERUSER_SUBFORM: [{ USERLOGIN: 'ShikmaB', UFLAG: 'Y', NEXTUSERLOGIN: 'GolanB' }, { USERLOGIN: 'GolanB' }, { USERLOGIN: 'GiladK' }] };
+  assert.equal(Priority.approvalSigner('order', d), 'GolanB');
+});
+
+test('approvalSigner — מי שהאחרון שחתם הפנה אליו, גם כשאינו הראשון ברשימה', () => {
+  const d = { PORDERUSER_SUBFORM: [{ USERLOGIN: 'a', UFLAG: 'Y', NEXTUSERLOGIN: 'c' }, { USERLOGIN: 'b' }, { USERLOGIN: 'c' }] };
+  assert.equal(Priority.approvalSigner('order', d), 'c');
+});
+
+test('approvalSigner — כולם חתמו / סוג לא מוכר / דרישת רכש כמו nextSigner', () => {
+  assert.equal(Priority.approvalSigner('order', { PORDERUSER_SUBFORM: [{ USERLOGIN: 'a', UFLAG: 'Y' }] }), null);
+  assert.equal(Priority.approvalSigner('nope', { USERLOGIN: 'a' }), null);
+  assert.equal(Priority.approvalSigner('demand', { USERLOGIN: 'Eladh' }), 'Eladh');
+});
+
+test('waitingForApproval — סוג לא מוכר נזרק', async () => {
+  await assert.rejects(() => Priority.waitingForApproval('test11', 'nope'), /לא מוכר/);
+});
+
 test('isNoApproversError', () => {
   assert.equal(Priority.isNoApproversError(new Error('לא הוגדרה רשימת מאשרים')), true);
   assert.equal(Priority.isNoApproversError(new Error('חסרה רשימת המאשרים')), true);

@@ -1014,6 +1014,49 @@ function nextSigner(d) {
   return open?.NEXTUSERLOGIN || open?.USERLOGIN || null;
 }
 
+/**
+ * כל סבבי האישורים בפריוריטי (נבדק 24.11.26, קריאה בלבד, a160226). לכל סוג: המסך, המפתח, רשימת המאשרים,
+ * השדה בכותרת שבו פריוריטי מציב את החותם הבא (‎head‎; ‎null‎ — לא מאומת, רק לפי הרשימה), היוזם, התאריך, הספק.
+ *   חוזה (‎MED_PORDERS‎, ‎CO‎ / ‎CH‎) — ‎USERLOGIN‎ · חשבון חלקי (‎MED_DOCUMENTS_P‎) — ‎MED_USERLOGIN‎ (‎USERLOGIN‎ שם הוא היוזם) ·
+ *   חשבון עסקה (‎DINVOICES‎) — ‎NEXTSIGNUSERLOGIN‎ · הזמנת רכש (‎PORDERS‎) — ‎USERLOGIN‎ שם הוא הקניין, לכן רק הרשימה.
+ * דרישת רכש — ‎waitingDemands‎ / ‎nextSigner‎ (למעלה). הזמנת מסגרת — המסך שלה סגור ל-API (‎MEDR_PORDERS‎?), לבירור.
+ */
+const APPROVAL_KINDS = Object.freeze({
+  order: { label: 'הזמנת רכש', icon: '📦', entity: 'PORDERS', key: 'ORDNAME', users: 'PORDERUSER_SUBFORM', head: null,
+    sel: 'ORDNAME,CDES,PROJDES,CURDATE,OWNERLOGIN,TOTPRICE,CODE', date: 'CURDATE', supplier: 'CDES' },
+  contract: { label: 'חוזה', icon: '📝', entity: 'MED_PORDERS', key: 'ORDNAME', users: 'PORDERUSER_SUBFORM', head: 'USERLOGIN',
+    sel: 'ORDNAME,MED_TYPE,CDES,PROJDES,CURDATE,OWNERLOGIN,USERLOGIN,TOTPRICE,CODE', date: 'CURDATE', supplier: 'CDES' },
+  partial: { label: 'חשבון חלקי', icon: '🧾', entity: 'MED_DOCUMENTS_P', key: 'DOCNO', users: 'MED_PDOCUSER_SUBFORM', head: 'MED_USERLOGIN', usersSel: 'USERLOGIN,UFLAG,CUSERLOGIN,UDATE',
+    sel: 'DOCNO,ORDNAME,CDES,PROJDES,CURDATE,OWNERLOGIN,MED_USERLOGIN,TOTPRICE,CODE', date: 'CURDATE', supplier: 'CDES' },
+  deal: { label: 'חשבון עסקה', icon: '💳', entity: 'DINVOICES', key: 'IVNUM', users: 'PYINVUSER_SUBFORM', head: 'NEXTSIGNUSERLOGIN',
+    sel: 'IVNUM,SUPDES,PROJDES,IVDATE,OWNERLOGIN,NEXTSIGNUSERLOGIN,TOTPRICE,CODE', date: 'IVDATE', supplier: 'SUPDES' }
+});
+const APPROVER_SEL = 'USERLOGIN,UFLAG,NEXTUSERLOGIN,CUSERLOGIN,UDATE';
+
+/** כל המסמכים מסוג ‎kind‎ שמחכים לאישור בחברה, עם רשימת המאשרים */
+async function waitingForApproval(company, kind) {
+  const k = APPROVAL_KINDS[kind];
+  if (!k) throw new Error(`סוג מסמך לא מוכר: ${kind}`);
+  return rows(await call(company, 'GET', `${k.entity}?$filter=${enc("STATDES eq 'מחכה לאישור'")}&$select=${k.sel}`
+    + `&$expand=${k.users}($select=${k.usersSel ?? APPROVER_SEL})&$top=300`));
+}
+
+/**
+ * החותם הבא של מסמך מסוג ‎kind‎: השדה בכותרת (כשאומת), ואם ריק — לפי רשימת המאשרים: מי שהאחרון שחתם
+ * הפנה אליו (‎NEXTUSERLOGIN‎), או הראשון שעוד לא חתם. ‎null‎ — לא ידוע.
+ */
+function approvalSigner(kind, d) {
+  if (kind === 'demand') return nextSigner(d);
+  const k = APPROVAL_KINDS[kind];
+  if (!k || !d) return null;
+  if (k.head && d[k.head]) return d[k.head];
+  const list = d[k.users] ?? [];
+  const signed = list.filter((u) => u.UFLAG === 'Y');
+  const pointed = signed.length ? signed[signed.length - 1].NEXTUSERLOGIN : null;
+  if (pointed && list.some((u) => u.USERLOGIN === pointed && u.UFLAG !== 'Y')) return pointed;
+  return list.find((u) => u.UFLAG !== 'Y' && u.USERLOGIN)?.USERLOGIN ?? null;
+}
+
 /** ביטול טיוטא (גם עם שורות). דרישה שכבר אינה טיוטא — לא נוגעים: ‎{ skipped }‎ */
 async function cancelDemand(company, prdno) {
   const d = await call(company, 'GET', `${pdKey(prdno)}?$select=STATDES`).catch(() => null);
@@ -1262,7 +1305,7 @@ module.exports = {
   GENERAL, NO_VAT_CODE, TAX_CODES, PAY_TERMS, DEFAULT_PAY, payTerm, payLabel, payFromText, dueDate, projectWarehouses, warehouses, warehouseExists, defaultWarehouse, supplierHistory, recentLines, partByCode, findPartsByText, searchParts, generalCoding, warehouseOf, findSuppliers, supplierByCode, findReceiptByBooknum, getOrder, openOrders, findPartExact, lastSubchapter, projects, matchProjects, readReceipt,
   finalOrders, orderForNotice, demandInitiator, demandForNotice, projectManager, priorityUser,
   readDialog, createReceipt, addOrderLine, addFreeLine, setLineQty, setLineDes, setHeader, attach, deleteAttachment, setDialog, finalizeReceipt, cancelReceipt, receiptStatus, deleteLines,
-  PD_TYPES, demandCodes, recentDemandProjects, createDemand, addDemandLine, setDemand, submitDemand, isNoApproversError, readDemand, waitingDemands, nextSigner, cancelDemand, setDemandDialog, appendDemandDialog, setDemandLine, deleteDemandLine, reopenDemand, REOPEN_STATUS, purchaseOrderOwners, attachDemand, priorityUsers, budgetPairs, isCodingError,
+  PD_TYPES, demandCodes, recentDemandProjects, createDemand, addDemandLine, setDemand, submitDemand, isNoApproversError, readDemand, waitingDemands, nextSigner, APPROVAL_KINDS, waitingForApproval, approvalSigner, cancelDemand, setDemandDialog, appendDemandDialog, setDemandLine, deleteDemandLine, reopenDemand, REOPEN_STATUS, purchaseOrderOwners, attachDemand, priorityUsers, budgetPairs, isCodingError,
   PAY_STATUS, payReceipts, payPartials, payDeals, payDocStatus,
   supplierPriceLists, addPriceListItem, deletePriceListItem, supplierParts, addSupplierPart, deleteSupplierPart,
   _call: call

@@ -2,10 +2,11 @@
 /**
  * אישורים בפריוריטי — "החותם הבא" מקבל הודעה בוואטסאפ.
  *
- * אי אפשר לאשר דרך הבוט (האישור — בפריוריטי). מה שהבוט עושה: לכל דרישת רכש בסטטוס "מחכה לאישור", הוא
- * מוצא את החותם הבא (‎Priority.nextSigner‎ — ‎USERLOGIN‎ בכותרת, או המאשר הראשון שעוד לא אישר), מתרגם את
- * שם המשתמש בפריוריטי ("Eladh", "MatanR") למשתמש משימון, ושולח לו פעם אחת: "ממתינה לך בפריוריטי דרישת
- * רכש … לאישורך". עבר לחותם הבא — גם הוא מקבל.
+ * אי אפשר לאשר דרך הבוט (האישור — בפריוריטי). מה שהבוט עושה: לכל מסמך בסטטוס "מחכה לאישור" — **בכל סבבי
+ * האישורים** (הוחלט 24.11.26): דרישת רכש, הזמנת רכש, חוזה, חשבון חלקי, חשבון עסקה (‎Priority.APPROVAL_KINDS‎) —
+ * הוא מוצא את החותם הבא (‎Priority.approvalSigner‎), מתרגם את שם המשתמש בפריוריטי ("Eladh", "MatanR") למשתמש
+ * משימון, ושולח לו פעם אחת: "ממתין לך בפריוריטי … לאישורך". עבר לחותם הבא — גם הוא מקבל.
+ * כמה מסמכים חדשים לאותו חותם באותו סבב — הודעה אחת מרוכזת (‎digestFor‎). האפיון: "אפיון — מעקב אישורים ותשלומים.md".
  *
  * התרגום (‎mesimonUserFor‎): מסך משתמשי פריוריטי (‎USERSB‎) נותן לכל שם משתמש מייל ושם בעברית.
  *   1. מיפוי ידני — ההגדרה ‎priority_user_map‎: ‎{ "Eladh": 12 }‎ (קודם לכל השאר);
@@ -94,13 +95,49 @@ async function mapping() {
 // מסך ההגדרות (‎priority-settings.js‎); עד השמירה הראשונה — ‎pd_notify_companies‎, או כל האמיתיות + הפתוחות לכתיבה
 const companies = () => Settings.pdNotifyCompanies();
 
-function messageFor(company, d, owner) {
-  const c = Priority.companyOf(company);
-  const items = (d.PRDITEMS_SUBFORM ?? []).length;
+/** הסוגים שהסבב עובר עליהם, לפי הסדר: דרישת רכש, ואחריה כל השאר (‎Priority.APPROVAL_KINDS‎) */
+const KINDS = () => ['demand', ...Object.keys(Priority.APPROVAL_KINDS)];
+const kindOf = (kind) => (kind === 'demand' ? { label: 'דרישת רכש', icon: '🛒', key: 'PRDNO', date: 'CURDATE' } : Priority.APPROVAL_KINDS[kind]);
+/** שם המסמך בהודעה. חוזה ‎CH‎ — שינוי בחוזה */
+const labelOf = (kind, d) => (kind === 'contract' && d?.MED_TYPE === 'CH' ? 'שינוי בחוזה' : kindOf(kind).label);
+const numOf = (kind, d) => d?.[kindOf(kind).key] ?? '';
+const dmy = (iso) => String(iso).slice(0, 10).split('-').reverse().join('.');
+const money = (d) => (Number(d?.TOTPRICE) > 0 ? `${Math.round(Number(d.TOTPRICE)).toLocaleString('he-IL')} ${d.CODE || 'ש"ח'}` : null);
+const where = (company) => (Priority.isTest(company) ? `🧪 ${company} (סביבת בדיקה)` : `🏢 ${Priority.companyOf(company).name}`);
+/** מפתח "כבר קיבל". בדרישת רכש — בלי הסוג (כמו לפני ההרחבה, כדי לא לשלוח שוב) */
+const keyOf = (company, kind, d, signer) => (kind === 'demand' ? `${company}:${d.PRDNO}:${signer}` : `${company}:${kind}:${numOf(kind, d)}:${signer}`);
+
+function messageFor(company, d, owner, kind = 'demand') {
+  const k = kindOf(kind);
+  const label = labelOf(kind, d);
+  if (kind === 'demand') {
+    const items = (d.PRDITEMS_SUBFORM ?? []).length;
+    return [
+      `🛒 ממתינה לך בפריוריטי *דרישת רכש ${d.PRDNO}* לאישורך.`,
+      `${where(company)}${d.PROJDES ? ` · 📁 ${d.PROJDES}` : ''}`,
+      [owner ? `נפתחה ע"י ${owner}` : null, items ? (items === 1 ? 'פריט אחד' : `${items} פריטים`) : null, d.CURDATE ? `מ-${dmy(d.CURDATE)}` : null].filter(Boolean).join(' · '),
+      '',
+      'האישור — בפריוריטי (מהבוט אי אפשר לאשר).'
+    ].join('\n');
+  }
   return [
-    `🛒 ממתינה לך בפריוריטי *דרישת רכש ${d.PRDNO}* לאישורך.`,
-    `${Priority.isTest(company) ? `🧪 ${company} (סביבת בדיקה)` : `🏢 ${c.name}`}${d.PROJDES ? ` · 📁 ${d.PROJDES}` : ''}`,
-    [owner ? `נפתחה ע"י ${owner}` : null, items ? (items === 1 ? "פריט אחד" : `${items} פריטים`) : null, d.CURDATE ? `מ-${String(d.CURDATE).slice(0, 10).split('-').reverse().join('.')}` : null].filter(Boolean).join(' · '),
+    `${k.icon} ממתין לך בפריוריטי *${label} ${numOf(kind, d)}* לאישורך.`,
+    `${where(company)}${d.PROJDES ? ` · 📁 ${d.PROJDES}` : ''}`,
+    [d[k.supplier] ? `🤝 ${d[k.supplier]}` : null, money(d)].filter(Boolean).join(' · '),
+    [owner ? `נשלח ע"י ${owner}` : null, d[k.date] ? `מ-${dmy(d[k.date])}` : null].filter(Boolean).join(' · ')
+  ].filter(Boolean).concat('', 'האישור — בפריוריטי (מהבוט אי אפשר לאשר).').join('\n');
+}
+
+const MAX_LINES = 10;
+/** כמה מסמכים לאותו חותם באותו סבב — הודעה אחת מרוכזת */
+function digestFor(items) {
+  const lines = items.slice(0, MAX_LINES).map(({ company, kind, d }) =>
+    `• ${kindOf(kind).icon} *${labelOf(kind, d)} ${numOf(kind, d)}*${[d[kindOf(kind).supplier], money(d), Priority.isTest(company) ? `🧪 ${company}` : Priority.companyOf(company).name].filter(Boolean).map((x) => ` · ${x}`).join('')}`);
+  const more = items.length - MAX_LINES;
+  return [
+    `✍️ ממתינים לאישורך בפריוריטי *${items.length} מסמכים*:`,
+    ...lines,
+    more > 0 ? `ועוד ${more}.` : null,
     '',
     'האישור — בפריוריטי (מהבוט אי אפשר לאשר).'
   ].filter((x) => x !== null).join('\n');
@@ -110,6 +147,7 @@ async function ownerName(login) {
   if (!login) return '';
   const list = await Priority.priorityUsers().catch(() => []);
   const pr = list.find((x) => x.USERLOGIN === login);
+  // יש מסמכים שבהם היוזם רשום בשם מלא ולא בשם משתמש — מציגים כמו שהוא
   return pr?.SNAME || login;
 }
 
@@ -124,69 +162,113 @@ const firstTimeUnmapped = (key) => onceIn(D.getSetting(UNMAPPED, {}) ?? {}, key,
 const firstTimeNoPhone = (key) => onceIn(D.getSetting(NO_PHONE, {}) ?? {}, key, (v) => D.setSetting(NO_PHONE, v));
 
 /**
- * הודעה לחותם הבא של דרישה אחת — אם עוד לא קיבל עליה. ‎send(userId, text)‎ ←
- *   ‎true‎ — ההודעה יצאה; ‎'later'‎ — מחוץ לשעות הפעילות (הסבב ינסה שוב כשהחלון נפתח); ‎false‎ — לא יצאה.
- * רק הודעה שיצאה נרשמת כ"קיבל". נכשלה — ניסיון בכל סבב, ואחרי ‎MAX_FAILS‎ — התראה למנהלי המערכת (פעם אחת).
- * ‎{ signer, user, sent, later, why }‎
+ * למי ההודעה על מסמך אחד, ואם אפשר לשלוח לו. ‎{ signer, user, key, why }‎ — ‎why‎ ריק = לשלוח.
+ * חותם שלא נמצא במשימון, או שאין לו טלפון — מנהלי המערכת מקבלים התראה (פעם אחת לכל משתמש).
  */
-async function notifyDemand(company, d, send) {
-  const signer = Priority.nextSigner(d);
-  if (!signer) return { signer: null, user: null, sent: false, why: 'אין חותם בא (אין רשימת מאשרים)' };
-  const k = `${company}:${d.PRDNO}:${signer}`;
-  const done = D.getSetting(NOTIFIED, {}) ?? {};
+async function planFor(company, kind, d) {
+  const signer = Priority.approvalSigner(kind, d);
+  const doc = `${labelOf(kind, d)} ${numOf(kind, d)} (${company})`;
+  if (!signer) return { signer: null, user: null, key: null, why: 'אין חותם בא (אין רשימת מאשרים)' };
+  const key = keyOf(company, kind, d, signer);
   const m = await mesimonUserFor(signer);
-  if (done[k]) return { signer, user: m.user, sent: false, why: 'כבר קיבל' };
+  if ((D.getSetting(NOTIFIED, {}) ?? {})[key]) return { signer, user: m.user, key, why: 'כבר קיבל' };
   if (!m.user) {
     if (firstTimeUnmapped(signer)) {
-      alertAdmins(`החותם הבא ${signer} לא נמצא במשימון`, [`דרישת רכש ${d.PRDNO} (${company}) מחכה לאישור של ${signer}${m.pr?.SNAME ? ` (${m.pr.SNAME})` : ''}.`,
+      alertAdmins(`החותם הבא ${signer} לא נמצא במשימון`, [`${doc} מחכה לאישור של ${signer}${m.pr?.SNAME ? ` (${m.pr.SNAME})` : ''}.`,
         'לא נמצא משתמש משימון עם אותו מייל או אותו שם, ולכן לא נשלחה לו הודעה בוואטסאפ.',
         'לתיקון: מייל זהה בשני המקומות, או מיפוי ידני בהגדרה priority_user_map.'].join('\n'));
     }
-    return { signer, user: null, sent: false, why: 'לא נמצא במשימון' };
+    return { signer, user: null, key, why: 'לא נמצא במשימון' };
   }
   if (!m.user.phone) {
     // בלי טלפון אין לאן לשלוח — מנהלי המערכת יודעים (פעם אחת לכל משתמש), כדי להשלים את הפרופיל
     if (firstTimeNoPhone(String(m.user.id))) {
-      alertAdmins(`לחותם ${m.user.full_name} אין טלפון במשימון`, [`דרישת רכש ${d.PRDNO} (${company}) מחכה לאישור של ${m.user.full_name} (${signer}),`,
+      alertAdmins(`לחותם ${m.user.full_name} אין טלפון במשימון`, [`${doc} מחכה לאישור של ${m.user.full_name} (${signer}),`,
         'אבל בפרופיל שלו במשימון אין מספר טלפון, ולכן לא נשלחה לו הודעה בוואטסאפ.',
         'לתיקון: להוסיף טלפון בפרופיל — ההודעה תצא בסבב הבא (עד 10 דקות).'].join('\n'));
     }
-    return { signer, user: m.user, sent: false, why: 'אין טלפון בפרופיל' };
+    return { signer, user: m.user, key, why: 'אין טלפון בפרופיל' };
   }
-  const res = await send(m.user.id, messageFor(company, d, await ownerName(d.OWNERLOGIN || d.INITUSERLOGIN)));
-  if (res === 'later') return { signer, user: m.user, sent: false, later: true, why: 'מחוץ לשעות הפעילות' };
+  return { signer, user: m.user, key, why: '' };
+}
+
+/**
+ * תוצאת שליחה אחת (על מסמך אחד או כמה) — ‎res‎ מ-‎send‎: ‎true‎ יצאה · ‎'later'‎ מחוץ לשעות · ‎false‎ לא יצאה.
+ * רק הודעה שיצאה נרשמת כ"קיבל". נכשלה — ניסיון בכל סבב, ואחרי ‎MAX_FAILS‎ — התראה למנהלי המערכת (פעם אחת).
+ */
+function record(res, user, keys, docs) {
+  if (res === 'later') return { sent: false, later: true, why: 'מחוץ לשעות הפעילות' };
   const fails = D.getSetting(FAILED, {}) ?? {};
   if (res === true) {
-    done[k] = Date.now();
+    const done = D.getSetting(NOTIFIED, {}) ?? {};
+    for (const k of keys) done[k] = Date.now();
     for (const [x, at] of Object.entries(done)) if (Date.now() - at > KEEP) delete done[x];
     D.setSetting(NOTIFIED, done);
-    if (fails[k]) { delete fails[k]; D.setSetting(FAILED, fails); }
-    return { signer, user: m.user, sent: true, why: '' };
+    if (keys.some((k) => fails[k])) { for (const k of keys) delete fails[k]; D.setSetting(FAILED, fails); }
+    return { sent: true, why: '' };
   }
-  fails[k] = (fails[k] ?? 0) + 1;
+  let alert = false;
+  for (const k of keys) { fails[k] = (fails[k] ?? 0) + 1; if (fails[k] === MAX_FAILS) alert = true; }
   D.setSetting(FAILED, fails);
-  if (fails[k] === MAX_FAILS) {
-    alertAdmins(`ההודעה לחותם ${m.user.full_name} לא נשלחה`, [`דרישת רכש ${d.PRDNO} (${company}) מחכה לאישור של ${m.user.full_name} (${signer}).`,
+  if (alert) {
+    alertAdmins(`ההודעה לחותם ${user.full_name} לא נשלחה`, [`${docs} מחכה לאישור של ${user.full_name}.`,
       `הבוט ניסה ${MAX_FAILS} פעמים לשלוח לו הודעה בוואטסאפ, ולא הצליח (הפירוט ביומן הבוט, פעולה purchase_demand).`,
       'הבוט ממשיך לנסות כל 10 דקות.'].join('\n'));
   }
-  return { signer, user: m.user, sent: false, why: 'הבוט לא שלח' };
+  return { sent: false, why: 'הבוט לא שלח' };
 }
 
+/**
+ * הודעה לחותם הבא של מסמך אחד — אם עוד לא קיבל עליו. ‎send(userId, text)‎. ‎{ signer, user, sent, later, why }‎
+ */
+async function notifyDoc(company, kind, d, send) {
+  const p = await planFor(company, kind, d);
+  if (p.why) return { signer: p.signer, user: p.user, sent: false, why: p.why };
+  const res = await send(p.user.id, messageFor(company, d, await ownerName(d.OWNERLOGIN || d.INITUSERLOGIN), kind));
+  return { signer: p.signer, user: p.user, ...record(res, p.user, [p.key], `${labelOf(kind, d)} ${numOf(kind, d)} (${company})`) };
+}
+const notifyDemand = (company, d, send) => notifyDoc(company, 'demand', d, send);
+
+/** המסמכים שמחכים לאישור מסוג אחד בחברה */
+const waiting = (c, kind) => (kind === 'demand' ? Priority.waitingDemands(c) : Priority.waitingForApproval(c, kind));
+
 let lastRun = 0;
-/** סבב: כל הדרישות שמחכות לאישור בחברות שבהגדרה. פעם ב-10 דקות לכל היותר */
+/**
+ * סבב: כל המסמכים שמחכים לאישור, מכל הסוגים, בחברות שבהגדרה. פעם ב-10 דקות לכל היותר.
+ * חותם שיש לו באותו סבב כמה מסמכים חדשים — מקבל הודעה אחת מרוכזת (למשל בפעם הראשונה, כשמצטברים מסמכים ישנים).
+ */
 async function sweep(send, { force = false } = {}) {
   if (!Priority.isEnabled() || (!force && Date.now() - lastRun < EVERY)) return [];
   lastRun = Date.now();
   const out = [];
+  const byUser = new Map();
   for (const c of companies()) {
-    let list = [];
-    try { list = await Priority.waitingDemands(c); } catch (err) { console.error(`[משימון] דרישות שמחכות לאישור (${c}):`, err.message); continue; }
-    for (const d of list) {
-      try { out.push({ company: c, prdno: d.PRDNO, ...(await notifyDemand(c, d, send)) }); } catch (err) { console.error(`[משימון] הודעה על ${d.PRDNO}:`, err.message); }
+    for (const kind of KINDS()) {
+      let list = [];
+      try { list = await waiting(c, kind); } catch (err) { console.error(`[משימון] ${kindOf(kind).label} שמחכים לאישור (${c}):`, err.message); continue; }
+      for (const d of list) {
+        try {
+          const p = await planFor(c, kind, d);
+          const row = { company: c, kind, no: numOf(kind, d), ...(kind === 'demand' ? { prdno: d.PRDNO } : {}), signer: p.signer, user: p.user, sent: false, why: p.why };
+          out.push(row);
+          if (!p.why) {
+            if (!byUser.has(p.user.id)) byUser.set(p.user.id, { user: p.user, items: [] });
+            byUser.get(p.user.id).items.push({ company: c, kind, d, key: p.key, row });
+          }
+        } catch (err) { console.error(`[משימון] הודעה על ${numOf(kind, d)}:`, err.message); }
+      }
     }
+  }
+  for (const { user, items } of byUser.values()) {
+    try {
+      const one = items.length === 1 ? items[0] : null;
+      const text = one ? messageFor(one.company, one.d, await ownerName(one.d.OWNERLOGIN || one.d.INITUSERLOGIN), one.kind) : digestFor(items);
+      const docs = items.map((x) => `${labelOf(x.kind, x.d)} ${numOf(x.kind, x.d)} (${x.company})`).join(', ');
+      const r = record(await send(user.id, text), user, items.map((x) => x.key), docs);
+      for (const x of items) Object.assign(x.row, r);
+    } catch (err) { console.error(`[משימון] הודעה לחותם ${user.full_name}:`, err.message); }
   }
   return out;
 }
 
-module.exports = { mesimonUserFor, priorityLoginFor, mapping, notifyDemand, sweep, messageFor, MAX_FAILS, _words: words };
+module.exports = { mesimonUserFor, priorityLoginFor, mapping, notifyDemand, notifyDoc, sweep, messageFor, digestFor, KINDS, MAX_FAILS, _words: words };
