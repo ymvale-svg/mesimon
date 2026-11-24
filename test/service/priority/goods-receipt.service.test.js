@@ -448,6 +448,42 @@ test('הערה לדו-שיח בעוד ניסוחים: "להכניס הערה ש�
   }
 });
 
+test('תעודה של ספק אחר באמצע קליטה — "קבלה נפרדת ⏭️": נכנסת לתור, הנוכחית ממשיכה, ואחרי הסופית — עוברים אליה (סקירה 22.11)', async (t) => {
+  // עובד שלח 13 תעודות של ספקים שונים אחת אחרי השנייה; "קבלה חדשה" ביטלה את הנוכחית, אז בחר "צרף כנספח" — וכולן
+  // נצמדו לקבלה אחת. עכשיו יש "קבלה נפרדת" — לתור, בלי לבטל
+  H.at(t);
+  H.companies(t, 'test11');
+  const u = H.worker();
+  const pr = priority(t);
+  let extracted = 0;
+  H.claude(t, {
+    extract: () => (++extracted === 1 ? doc() : doc({ supplier_name: 'בטון הצפון', doc_number: '7702' })),
+    project: () => ({ codes: [], question: '', unrelated: false }),
+    classify: () => ({ kind: 'new', doc_type: 'delivery_note', doc_number: '7702', supplier_name: 'ספק אחר' })
+  });
+  const { say } = H.chat(t, u);
+  await say('קבלת סחורה', { file: H.photo() });
+  let r = await say(BTN.yes);                                  // ← "יש מספר הזמנה?"
+  r = await say('', { file: H.photo() });
+  assert.match(r.text, /זה נראה כמו מסמך חדש: תעודת משלוח 7702/);
+  H.assertButtons(r.buttons, ['צרף כנספח', 'קבלה נפרדת ⏭️', 'להתעלם ❌']);
+  r = await say('קבלה נפרדת ⏭️');
+  assert.match(r.text, /📥 .*בתור/);
+  assert.match(r.text, /אין הזמנות פתוחות/, 'הנוכחית ממשיכה מאותה שאלה');
+  assert.equal(pr.writes.filter((w) => w.fn === 'cancelReceipt').length, 0, 'שום דבר לא בוטל');
+  // עד הסופית — ואז עוברים לתעודה שבתור
+  await say('בלי הזמנה ❌');
+  await say(BTN.yes);
+  await say(BTN.yes);
+  await say('נהריה מגרש 12');
+  await say(BTN.done);
+  await say(BTN.approve);
+  r = await say('כן, לסגור ✅');
+  assert.match(r.text, /נקלטה כסופית/);
+  assert.match(r.text, /עובר למסמך הבא/);
+  assert.match(r.text, /7702/);
+});
+
 test('👎 כתגובה (Reaction) = לא: בשאלת "יש מספר הזמנה?" — בלי הזמנה', async (t) => {
   H.companies(t, 'test11');
   const u = H.worker();
@@ -721,7 +757,8 @@ test('מק"טים לבנייה בקבלת סחורה: "לא נמצא מק"ט —
   assert.match(r.text, /נשלח ל\*רותי רכש\* במייל/);
   assert.match(r.text, /לאיזה פרויקט לשייך/);
   assert.equal(sent.length, 1);
-  assert.equal(sent[0].subject, `מק"טים נדרשים לבנייה בהקדם — לבקשת ${u.full_name}`);
+  assert.equal(sent[0].subject, `❗ מק"טים נדרשים לבנייה בהקדם — לבקשת ${u.full_name}`);
+  assert.equal(sent[0].urgent, true, 'סימן קריאה אדום גם מקבלת הסחורה');
   assert.match(sent[0].text, /קבלת סחורה מבוט משימון/);
   assert.match(sent[0].text, /ספק: בטון הצפון \(S100\)/);
   assert.match(sent[0].text, /1\. בטון ב-30 — 5 קוב/);
@@ -768,4 +805,102 @@ test('מק"טים לבנייה בקבלת סחורה: בלי מנהלת רכש �
   const r = await toParts(say);
   assert.doesNotMatch(r.text, /לבניית מק"טים/);
   assert.match(r.text, /לאיזה פרויקט לשייך/);
+});
+
+// ---------------------------------------------------------------------------
+// 📣 לרכש מקבלת סחורה (18.11.26): שורה שלא בהזמנה — נקלטת ומסומנת; תעודה בלי מספר הזמנה — לדוח השבועי
+// ---------------------------------------------------------------------------
+
+const BuyerNotices = require('../../../server/priority/buyer-notices');
+const PO = { ORDNAME: 'PO26000050', CURDATE: '2026-11-01', PROJDOCNO: 'PR1', PROJDES: 'אלעד 49 צפון', PAYCODE: '04', WARHSNAME: 'W1',
+  lines: [{ LINE: 1, KLINE: 1, PARTNAME: 'B-30', PDES: 'בטון ב-30', TQUANT: 50, TBALANCE: 45, TUNITNAME: 'קוב', PRICE: 200, PERCENT: 0 }] };
+const WAIT_LINE = { description: 'המתנה במשאבה — שעתיים', supplier_code: '', qty: 2, unit: 'שעה', unit_price: 300, discount_pct: 0, line_total: 600, handwritten: '', unclear: false, options: [] };
+
+/** מהצילום עד "נקלטה כסופית", מול ההזמנה PO26000050 (שורה 1 — בהזמנה, שורה 2 "המתנה" — לא) */
+async function toFinalWithOrder(t, { poNumber = '' } = {}) {
+  H.at(t);
+  H.companies(t, 'test11');
+  const u = grWorker();
+  const pr = priority(t, { reads: { openOrders: async () => [PO], getOrder: async (c, n) => (n === PO.ORDNAME ? { ...PO, SUPNAME: 'S100', STATDES: 'אושרה' } : null) } });
+  H.claude(t, {
+    extract: () => doc({ po_number: poNumber, lines: [doc().lines[0], WAIT_LINE] }),
+    project: () => ({ codes: [], question: '', unrelated: false }),
+    match: () => ({ best_order: PO.ORDNAME, matches: [{ doc_line: 1, order: PO.ORDNAME, line: 1, confidence: 'high' }] })
+  });
+  const sent = buyer(t);
+  const { say } = H.chat(t, u);
+  let r = await say('קבלת סחורה', { file: H.photo() });
+  r = await say('👍');
+  assert.match(r.text, /לפי הזמנה \*PO26000050\*/);
+  assert.match(r.text, /המתנה במשאבה — שעתיים\n {3}התקבל: \*2\* שעה\n {3}⚠️ לא בהזמנה — יסומן לרכש/);
+  const steps = [];
+  for (let i = 0; i < 8 && !/נקלטה כסופית/.test(r.text); i++) {
+    const btn = r.buttons.includes(BTN.confirmFinal) ? BTN.confirmFinal : r.buttons.includes(BTN.approve) ? BTN.approve
+      : r.buttons.includes(BTN.done) ? BTN.done : r.buttons.includes(BTN.yes) ? BTN.yes : r.buttons[0];
+    steps.push(btn);
+    r = await say(btn);
+  }
+  assert.match(r.text, /נקלטה כסופית/, `השלבים: ${steps.join(' → ')}`);
+  return { u, pr, sent, r };
+}
+
+test('שורה שלא בהזמנה: נקלטת, מסומנת בדו-שיח, וכשהקבלה סופית — מייל לרכש שמחליט; העובד יודע', async (t) => {
+  const { u, pr, sent, r } = await toFinalWithOrder(t, { poNumber: 'PO26000050' });
+  assert.match(r.text, /שורה אחת לא בהזמנה — סומנה לרכש, והרכש מחליט אם לקבל/);
+  // נקלטה (לא נעצרה)
+  assert.equal(pr.wrote('addOrderLine').length, 1);
+  assert.equal(pr.wrote('addFreeLine').length, 1);
+  const dialog = pr.wrote('setDialog').at(-1).args[2].join('\n');
+  assert.match(dialog, /שורה 2 \(המתנה במשאבה — שעתיים\) — לא בהזמנה PO26000050; לבדיקת הרכש/);
+  const mail = sent.find((m) => /לא בהזמנה/.test(m.subject));
+  assert.ok(mail, 'מייל לרכש');
+  assert.equal(mail.to, 'ruti@example.com');
+  assert.match(mail.subject, /שורה שלא בהזמנה — GR26000123 · בטון הצפון/);
+  assert.match(mail.text, /1\. המתנה במשאבה — שעתיים — 2 שעה × 300\.00/);
+  assert.match(mail.text, /נקלטה ע"י: /);
+  assert.doesNotMatch(mail.text, /בטון ב-30 — 5/, 'רק מה שלא בהזמנה');
+  // מספר ההזמנה הופיע בתעודה — לא לדוח
+  assert.equal(D.get('SELECT COUNT(*) n FROM gr_no_po WHERE user_id = ?', u.id).n, 0);
+});
+
+test('תעודה בלי מספר הזמנה, שנקלטה מול הזמנה — נרשמת לדוח השבועי; ביום ראשון בבוקר — דוח אחד לרכש, לפי ספק', async (t) => {
+  const { u, sent } = await toFinalWithOrder(t, { poNumber: '' });
+  const row = D.get('SELECT * FROM gr_no_po WHERE user_id = ?', u.id);
+  assert.ok(row);
+  assert.deepEqual([row.supname, row.booknum, row.docno, row.ordname, row.reported_at], ['S100', '5501', 'GR26000123', 'PO26000050', null]);
+  D.run('UPDATE gr_no_po SET reported_at = ? WHERE user_id != ? AND reported_at IS NULL', D.nowIso(), u.id);
+  D.setSetting('gr_no_po_report_last', '');
+  const before = sent.length;
+
+  t.mock.timers.setTime(new Date('2026-11-10T08:00:00Z').getTime());   // שלישי — לא יום הדוח
+  assert.deepEqual(await BuyerNotices.weekly(), { sent: false, rows: 0 });
+  t.mock.timers.setTime(new Date('2026-11-15T05:00:00Z').getTime());   // ראשון 07:00 — לפני סיכום הבוקר
+  assert.deepEqual(await BuyerNotices.weekly(), { sent: false, rows: 0 });
+  t.mock.timers.setTime(new Date('2026-11-15T07:00:00Z').getTime());   // ראשון 09:00
+  assert.deepEqual(await BuyerNotices.weekly(), { sent: true, rows: 1 });
+  const rep = sent.slice(before).find((m) => /בלי מספר הזמנה/.test(m.subject));
+  assert.ok(rep);
+  assert.match(rep.text, /בטון הצפון \(S100, test11\) — 1/);
+  assert.match(rep.text, /תעודה 5501 · .* · GR26000123 · הזמנה PO26000050/);
+  assert.ok(D.get('SELECT reported_at FROM gr_no_po WHERE id = ?', row.id).reported_at);
+  assert.deepEqual(await BuyerNotices.weekly(), { sent: false, rows: 0 }, 'פעם אחת ביום ראשון');
+});
+
+test('קבלה בלי הזמנה — לא נרשמת לדוח, ובלי סימון "לא בהזמנה"', async (t) => {
+  H.at(t);
+  H.companies(t, 'test11');
+  const u = grWorker();
+  priority(t);
+  ai(t, doc());
+  buyer(t);
+  const { say } = H.chat(t, u);
+  const r = await toProject(say);
+  assert.doesNotMatch(r.text, /לא בהזמנה/);
+  await say('נהריה מגרש 12');
+  await say(BTN.done);
+  await say(BTN.approve);
+  const fin = await say(BTN.confirmFinal);
+  assert.match(fin.text, /נקלטה כסופית/);
+  assert.doesNotMatch(fin.text, /לא בהזמנה/);
+  assert.equal(D.get('SELECT COUNT(*) n FROM gr_no_po WHERE user_id = ?', u.id).n, 0);
 });

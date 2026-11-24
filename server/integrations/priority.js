@@ -486,6 +486,12 @@ async function lastSubchapter(company, supname) {
 }
 
 /**
+ * פריוריטי דחה את תת הפרק / המשאב של השורה — בפרויקט בבקרת תקציב (‎CHECKCONV‎) תת הפרק אינו במהדורת הביצוע שלו ("יש לבחור
+ * תת פרק מרשימת הבחירה"), או "יש לקשר תת פרק"
+ */
+const isCodingError = (err) => /תת פרק|משאב/.test(String(err?.message ?? ''));
+
+/**
  * הפרויקטים של החברה — ממסך הפרויקטים, ‎DOCUMENTS_p‎ (p קטנה; ‎DOCPROJ‎ סגור ל-API).
  * בלי המבוטלים. נשמר לשעה. אם המסך אינו זמין — מהפרויקטים שבהזמנות ובקבלות.
  */
@@ -1079,12 +1085,60 @@ async function ordersByProject(company, projdocno, { item = '', top = 25 } = {})
   return out;
 }
 
+// ---------------------------------------------------------------------------
+// 🏷️ מחירוני ספקים ו"מוצרים לספק" (‎po-pricelist.js‎; נבדק ב-test11 וב-a160226, 22.11.26)
+//   ‎SUPPRICELIST‎ — מחירון (מפתח: ‎SUPPLNAME‎ + ‎SUPPLDATE‎), ‎SPARTPRICE_SUBFORM‎ — הפריטים (מפתח: ‎PART‎ + ‎QUANT‎),
+//   ‎MEDR_PROJPRICELIST_SUBFORM‎ — "פרויקטים למחירון" (ריק = מחירון כללי). ‎SUPPLIERS/SUPPART_SUBFORM‎ — מוצרים לספק
+//   (פריוריטי מקבל אותו פריט פעמיים — בודקים לפני שמוסיפים).
+// ---------------------------------------------------------------------------
+
+const priceListKey = (name, date) => `SUPPRICELIST(SUPPLNAME='${q(name)}',SUPPLDATE=${String(date).replace(/\.\d+Z$/, 'Z')})`;
+
+/** מחירוני הספק שלא בוטלו: ‎[{ name, des, date, code, projects: [DOCNO], parts: Set }]‎ */
+async function supplierPriceLists(company, supname) {
+  const f = enc(`SUPNAME eq '${q(supname)}'`);
+  const list = rows(await call(company, 'GET', `SUPPRICELIST?$filter=${f}&$select=SUPPLNAME,SUPPLDES,SUPPLDATE,EXPIRYDATE,CODE,MEDR_CANCEL`
+    + '&$expand=MEDR_PROJPRICELIST_SUBFORM($select=DOCNO,PROJDES),SPARTPRICE_SUBFORM($select=PARTNAME,QUANT,PRICE)&$top=50'));
+  const now = Date.now();
+  return list
+    .filter((l) => !l.MEDR_CANCEL && !(l.EXPIRYDATE && Date.parse(l.EXPIRYDATE) < now))
+    .map((l) => ({
+      name: l.SUPPLNAME, des: l.SUPPLDES ?? '', date: l.SUPPLDATE, code: l.CODE ?? '',
+      projects: (l.MEDR_PROJPRICELIST_SUBFORM ?? []).map((p) => p.DOCNO).filter(Boolean),
+      projectNames: (l.MEDR_PROJPRICELIST_SUBFORM ?? []).map((p) => p.PROJDES).filter(Boolean),
+      parts: new Set((l.SPARTPRICE_SUBFORM ?? []).map((x) => x.PARTNAME))
+    }));
+}
+
+/** פריט למחירון. מחזיר ‎{ PART, QUANT }‎ — המפתח למחיקה */
+async function addPriceListItem(company, list, { part, price, quant = 1 }) {
+  const r = await call(company, 'POST', `${priceListKey(list.name, list.date)}/SPARTPRICE_SUBFORM`, { PARTNAME: part, QUANT: quant, PRICE: price });
+  return { PART: r?.PART ?? null, QUANT: r?.QUANT ?? quant };
+}
+
+const deletePriceListItem = (company, list, { PART, QUANT = 1 }) =>
+  call(company, 'DELETE', `${priceListKey(list.name, list.date)}/SPARTPRICE_SUBFORM(QUANT=${Number(QUANT)},PART=${Number(PART)})`);
+
+/** המק"טים ב"מוצרים לספק" */
+async function supplierParts(company, supname) {
+  return rows(await call(company, 'GET', `SUPPLIERS('${q(supname)}')/SUPPART_SUBFORM?$select=PARTNAME,KLINE&$top=2000`));
+}
+
+/** פריט ל"מוצרים לספק". מחזיר ‎{ KLINE }‎ — המפתח למחיקה */
+async function addSupplierPart(company, supname, part) {
+  const r = await call(company, 'POST', `SUPPLIERS('${q(supname)}')/SUPPART_SUBFORM`, { PARTNAME: part });
+  return { KLINE: r?.KLINE ?? null };
+}
+
+const deleteSupplierPart = (company, supname, kline) => call(company, 'DELETE', `SUPPLIERS('${q(supname)}')/SUPPART_SUBFORM(KLINE=${Number(kline)})`);
+
 module.exports = {
   suppliersByWords, ordersByProject,
   COMPANIES, DEFAULT_HOST, DEFAULT_INI, configure, syncCompanies, ping, isEnabled, allowed, companyOf, isTest, resolveCompany, companiesByName, PriorityError,
   GENERAL, NO_VAT_CODE, TAX_CODES, PAY_TERMS, DEFAULT_PAY, payTerm, payLabel, payFromText, dueDate, projectWarehouses, warehouses, warehouseExists, defaultWarehouse, supplierHistory, recentLines, partByCode, findPartsByText, searchParts, generalCoding, warehouseOf, findSuppliers, supplierByCode, findReceiptByBooknum, getOrder, openOrders, findPartExact, lastSubchapter, projects, matchProjects, readReceipt,
   finalOrders, orderForNotice, demandInitiator, demandForNotice, projectManager, priorityUser,
   readDialog, createReceipt, addOrderLine, addFreeLine, setLineQty, setLineDes, setHeader, attach, deleteAttachment, setDialog, finalizeReceipt, cancelReceipt, receiptStatus, deleteLines,
-  PD_TYPES, demandCodes, recentDemandProjects, createDemand, addDemandLine, setDemand, submitDemand, isNoApproversError, readDemand, waitingDemands, nextSigner, cancelDemand, setDemandDialog, appendDemandDialog, setDemandLine, deleteDemandLine, reopenDemand, REOPEN_STATUS, purchaseOrderOwners, attachDemand, priorityUsers, budgetPairs,
+  PD_TYPES, demandCodes, recentDemandProjects, createDemand, addDemandLine, setDemand, submitDemand, isNoApproversError, readDemand, waitingDemands, nextSigner, cancelDemand, setDemandDialog, appendDemandDialog, setDemandLine, deleteDemandLine, reopenDemand, REOPEN_STATUS, purchaseOrderOwners, attachDemand, priorityUsers, budgetPairs, isCodingError,
+  supplierPriceLists, addPriceListItem, deletePriceListItem, supplierParts, addSupplierPart, deleteSupplierPart,
   _call: call
 };

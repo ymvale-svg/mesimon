@@ -18,6 +18,7 @@ const WaActions = require('./wa-actions');
 const MeetCoord = require('../meetings').MeetingCoord;
 const FormFill = require('../mail').FormFill;
 const Rfq = require('../priority').Rfq;
+const PoPricelist = require('../priority').PoPricelist;
 const Notice = require('./notice');
 const SentFollowup = require('../mail').SentFollowup;
 const MailThread = require('../mail').MailThread;
@@ -33,9 +34,9 @@ const Solve = require('./solve');
 const MailInsights = require('../mail').MailInsights;
 const Range = require('../mail').InsightWindow;
 const Instinct = require('./instinct');
-const { appRoot, currentMsg, doneEmoji, emailText, enqueueAs, firstName, hooks, localDate, log, react, reactNow, signatureFields, taskLink, WALK, MSG_BREAK } = require('./wa-base');
+const { appRoot, currentMsg, incoming, doneEmoji, emailText, enqueueAs, firstName, hooks, localDate, log, react, reactNow, recentFiles, signatureFields, taskLink, WALK, MSG_BREAK } = require('./wa-base');
 const { actionOf, CANCEL, checkDraft, draftText, featuresText, helpText, localDay, PLAIN_FEATURES, PLAIN_GREETING, PLAIN_HELP, PLAIN_INSIGHTS, PLAIN_LIST, PLAIN_TODAY, READ_ALOUD, shortDate, YES } = require('./wa-private');
-const { meetCoordRun, pushToUser, rfqPrepare, rfqSend } = require('./wa-proactive');
+const { meetCoordRun, pushToUser, rfqHandoff, rfqPrepare, rfqSend } = require('./wa-proactive');
 const { businessCommand, closeAlerted, closureDecision, confirmPending, contactOf, draftEmail, findRecipients, sendPlainMail, replyOffer, MAIL_WALK_BTN, isMailWalkStart, mailWalkIntro, mailWalkAt, mailWalkEnd, startGoodsFromMail, suggestionDecision, suggestionFeedback, threadAddText, VIA_EMAIL, VIA_MESIMON } = require('./wa-mail');
 const { agentsText, cut, menuButtons, menuOptions, menuText, parseClosureCommand, parseSuggestionCommand, PLAIN_AGENTS, walkAction, walkButtons, walkText } = require('./wa-menu');
 const { meetingAudioAllowed, meetingAudioTurn, timelessAudioCheck, TRANSLATE } = require('./wa-meeting');
@@ -242,8 +243,17 @@ async function flowOnRfq(ctx) {
   let { actor, dry, keep, out, state, t } = ctx;
   if (state.awaiting && ['rfq', 'rfq_done'].includes(state.draft?.kind)) {
     const d = state.draft;
+    // 📎 קובץ שנשלח ממש לפני התשובה לשאלה על הפרטים ("זה המידות…") — מצטרף לבקשה (סקירה 22.11: "לא הגיעו אליי המידות")
+    const recent = recentFiles.get(actor.id);
+    if (!dry && d.kind === 'rfq' && d.step === 'details' && recent && Date.now() - recent.at < RFQ_FILE_MS) await Rfq.attachFile(d.rfqId, recent.file).catch(() => false);
     const r = dry ? null : await (d.kind === 'rfq' ? Rfq.answer(actor.id, d, t) : Rfq.answerDone(actor.id, d, t))
-      .catch((err) => ({ text: 'משהו השתבש בפנייה לספקים. נסו שוב בעוד רגע 🙏', draft: d, awaiting: true, result: `שגיאה: ${err.message}`, error: true }));
+      .catch((err) => {
+        // 🤖 לא הסתדרנו — הבקשה לאינסטינקט, בלי שגיאה לעובד (לפני השליחה בלבד; אחרי הסיכום — כמו קודם)
+        if (d.kind === 'rfq' && d.step !== 'review' && rfqHandoff(actor, Rfq.handoffText(d.rfqId), currentMsg.get(actor.id))) {
+          return { text: '', draft: null, result: `שגיאה — עבר לאינסטינקט: ${err.message}`, handedOff: true, react: '⏳' };
+        }
+        return { text: 'משהו השתבש בפנייה לספקים. נסו שוב בעוד רגע 🙏', draft: d, awaiting: true, result: `שגיאה: ${err.message}`, error: true };
+      });
     if (r) {
       if (r.search) rfqPrepare(actor, r.rfqId);
       if (r.send) rfqSend(actor, r.rfqId);
@@ -265,16 +275,56 @@ async function flowRfqSummary({ actor, out, t }) {
   return NEXT;
 }
 
-async function flowRfqRequest({ actor, dry, out, t }) {
+const RFQ_FILE_MS = 5 * 60 * 1000;
+
+async function flowRfqRequest({ actor, dry, out, state, t }) {
   if (WaActions.allowed(actor, 'rfq') && Rfq.isRequest(t)) {
     if (dry) return out('(בדיקה) הייתי מתחיל פנייה לספקים.', {}, { action: 'rfq', status: 'ok', result: 'בדיקה' });
-    const r = await Rfq.start(actor.id, t).catch((err) => ({ text: 'משהו השתבש בפנייה לספקים. נסו שוב בעוד רגע 🙏', result: `שגיאה: ${err.message}`, error: true }));
+    // 📎 תמונה / קובץ שנשלחו עם הבקשה או ממש לפניה (הדמיה, שרטוט) — חלק מהבקשה, ומצורפים למייל לספקים
+    const recent = recentFiles.get(actor.id);
+    const file = recent && Date.now() - recent.at < RFQ_FILE_MS ? recent.file : null;
+    // 💬 השיחה עד עכשיו — "שלח לכל אחד בקשה להצעת מחיר" אחרי שיחה על ספקים (באג 22.11.26)
+    const r = await Rfq.start(actor.id, t, { file, history: state?.history ?? [] }).catch((err) => (
+      // 🤖 לא הסתדרנו — הבקשה (כפי שנכתבה) לאינסטינקט, בלי שגיאה לעובד
+      rfqHandoff(actor, t, currentMsg.get(actor.id)) ? { text: '', result: `שגיאה — עבר לאינסטינקט: ${err.message}`, handedOff: true, react: '⏳' }
+        : { text: 'משהו השתבש בפנייה לספקים. נסו שוב בעוד רגע 🙏', result: `שגיאה: ${err.message}`, error: true }));
     if (r) {
       if (r.search) rfqPrepare(actor, r.rfqId);
       return out(r.text, { draft: r.draft ?? null, awaiting: Boolean(r.awaiting) }, { action: 'rfq', status: r.error ? 'error' : 'ok', result: String(r.result ?? '').slice(0, 300), buttons: r.buttons, react: r.react });
     }
   }
   return NEXT;
+}
+
+/*
+ * 📝 "שבסיום כל פגישה יצא מייל עם הסיכום" — זו כבר השגרה (הוחלט 23.11.26, ישראל: "הסיכום נשלח אוטומטית, אז אין צורך;
+ * ככל שתהיה הנחיה כזו — הבוט יענה שזו השגרה של סיכומי הפגישות"). סקירה 22.11: הבוט ענה "אין לי אפשרות להגדיר שליחה
+ * אוטומטית". רק בקשה כללית ("בסיום כל פגישה", "אוטומטית", "איך מחברים") — לא "שלח לגולן את הסיכום של פגישת X".
+ */
+const SUMMARY_WORD = /סיכום|סיכומי|בסיום/;
+const SUMMARY_SEND = /מייל|מזכיר|משתתפ|לשלוח|ישלח|יישלח|יצא/;
+const SUMMARY_ALWAYS = /כל\s+(?:ה)?(?:פגיש|ישיב)|כל\s+פעם|בסיום|אוטומט|תמיד|מחברים|לחבר\s+את|קבוע/;
+function flowMeetingSummaryRoutine({ actor, out, t }) {
+  if (actor?.type !== 'user') return NEXT;
+  const n = WaUi.normalize(t);
+  if (!(SUMMARY_WORD.test(n) && SUMMARY_SEND.test(n) && SUMMARY_ALWAYS.test(n))) return NEXT;
+  const on = D.getSetting('meeting_summary_auto', true) !== false;
+  const text = on
+    ? ['📝 זו כבר השגרה של סיכומי הפגישות — לא צריך לבקש:',
+      '• כשהסיכום של פגישה שהוקלטה ב-Timeless מוכן, הוא נשלח *אוטומטית* במייל ובבוט לכל המשתתפים מהארגון.',
+      '• משתתפים מבחוץ — מי שקבע את הפגישה מקבל כאן שאלה אם לשלוח גם להם.',
+      '• הקלטה ששלחת לי בעצמך — הסיכום מגיע אליך, ומשם *📤 לשלוח למשתתפים*.'].join('\n')
+    : '📝 שליחת הסיכום האוטומטית אחרי פגישות כבויה כרגע. אפשר לבקש ממנהל המערכת להפעיל אותה (הגדרות ← פגישות והקלטות).';
+  return out(text, {}, { action: 'meeting_followup', status: 'ok', result: on ? 'סיכומי פגישות — הסבר על השגרה' : 'סיכומי פגישות — כבוי' });
+}
+
+/** 🔁 "תמצא ברשת" / "תפנה לאלרם" אחרי בקשה להצעת מחיר — אותה בקשה, בלי לכתוב אותה מחדש (סקירה 22.11) */
+async function flowRfqFollowup({ actor, dry, out, t }) {
+  if (!WaActions.allowed(actor, 'rfq') || dry) return NEXT;
+  const r = await Rfq.followUp(actor.id, t).catch((err) => { console.error('[משימון] המשך לפנייה לספקים:', err.message); return null; });
+  if (!r) return NEXT;
+  if (r.search) rfqPrepare(actor, r.rfqId);
+  return out(r.text, { draft: r.draft ?? null, awaiting: Boolean(r.awaiting) }, { action: 'rfq', status: 'ok', result: String(r.result ?? '').slice(0, 300), buttons: r.buttons, react: r.react });
 }
 
 async function flowNoticeRequest({ actor, dry, out, t, user }) {
@@ -318,6 +368,33 @@ async function flowOnSentFollowup(ctx) {
   }
   ctx.state = state;
   return NEXT;
+}
+
+// 🏷️ הוספה למחירון ספק מהזמנה (‎po-pricelist.js‎): ההודעה היזומה למי שברשימה "רכש — מחירונים"
+PoPricelist.setHooks({ push: (userId, m) => pushToUser(userId, m, 'po_pricelist') });
+
+/** תשובה להצעה: כולם / לבחור / לא, הסיכום, ו"כן, לבטל" */
+async function flowOnPricelist(ctx) {
+  let { actor, dry, keep, out, state, t } = ctx;
+  if (state.awaiting && state.draft?.kind === PoPricelist.KIND) {
+    const r = dry ? null : await PoPricelist.answer(actor.id, state.draft, t, { reaction: Boolean(incoming.get(actor.id)?.reaction) });
+    if (r) return out(r.text, { draft: r.draft ?? null, awaiting: Boolean(r.draft) }, { action: 'po_pricelist', status: 'ok', result: String(r.result ?? '').slice(0, 300), buttons: r.buttons });
+    keep.draft = null;
+    state = { ...state, draft: null, awaiting: false };
+  }
+  ctx.state = state;
+  return NEXT;
+}
+
+/** "מחירון PO26000123", "לבטל את ההוספה למחירון" */
+async function flowPricelistRequest({ actor, dry, out, state, t }) {
+  // 👎 כהודעה נפרדת, כשאין שאלה פתוחה — ביטול הפעולה האחרונה, אם היא הוספה למחירון (עם שאלת אישור)
+  const thumb = /^👎$/.test(WaUi.normalize(t)) && !state?.awaiting && !incoming.get(actor.id)?.reaction;
+  if (actor.type !== 'user' || !(PoPricelist.isRequest(t) || thumb)) return NEXT;
+  if (dry) return out('(בדיקה) הייתי בודק את ההזמנה מול מחירון הספק.', {}, { action: 'po_pricelist', status: 'ok', result: 'בדיקה' });
+  const r = await PoPricelist.request(actor.id, t).catch((err) => ({ text: 'לא הצלחתי לבדוק את ההזמנה כרגע. נסו שוב בעוד רגע 🙏', result: `שגיאה: ${err.message}` }));
+  if (!r) return NEXT;
+  return out(r.text, { draft: r.draft ?? null, awaiting: Boolean(r.draft) }, { action: 'po_pricelist', status: 'ok', result: String(r.result ?? '').slice(0, 300), buttons: r.buttons });
 }
 
 // 🔕 "לא להקפיץ יותר מיילים של X?" (‎mail-push.js‎)
@@ -520,6 +597,8 @@ async function sendMailFile(actor, out, f, others = []) {
 async function flowMailFileRequest({ actor, dry, out, t }) {
   if (actor?.type !== 'user' || !WaActions.allowed(actor, 'mail_ask') || !MailFiles.isRequest(t)) return NEXT;
   if (!Gmail.boxesOf(actor.id, 'mail').length) return NEXT;
+  // באמצע שיחה עם העוזר הכללי — "תן לי תמונה של …" הוא המשך שלה, לא קובץ מהמייל (סקירה 22.11). "…מהמייל" — כן
+  if (Instinct.allowed(actor) && Instinct.inConversation(actor.id) && !/מייל/.test(t)) return NEXT;
   if (dry) return out(`(בדיקה) הייתי מחפש במייל קובץ: "${t}"`, {}, { action: 'mail_file', status: 'ok', result: 'בדיקה' });
   const found = await MailFiles.find(actor.id, t).catch((err) => { console.error('[משימון] חיפוש קובץ במייל נכשל:', err.message); return []; });
   if (!found.length) {
@@ -1100,5 +1179,5 @@ const switchCancels = () => Boolean(D.getSetting('wa_topic_switch_cancels', true
 const DRAFT_ONLY = /(?:(?:בלי|לא\s+משנה|אין\s+לי\s+(?:את\s+)?|עזוב(?:\s+את)?)\s*ה?(?:כתובת|מייל|נמען)|רק\s+ת?(?:נסח|כתוב)|ת?נסח\s+(?:לי\s+)?(?:רק\s+)?(?:את\s+)?ה?(?:מלל|טקסט|נוסח))/;
 
 module.exports = {
-  SEND_NOW, DRAFT_ONLY, flowAgentsList, flowAlertNo, flowOnMailDose, flowApproval, flowBusinessCommand, flowCancel, flowClosureCommand, flowEmailEdit, flowEmailPick, flowEmailSolve, flowEmailVia, flowFeaturesRequest, flowFormFillRequest, flowGreeting, flowInstinct, flowInstinctExplicit, flowInstinctReply, flowInstinctPilot, flowNoticeToInstinct, flowIntentCancel, flowIntentDenied, flowIntentMenu, flowIntentOther, flowMailFileRequest, flowMailReplyEdit, flowMailWalk, flowMeetCoordRequest, flowMeetingAudioAnswer, flowMeetingAudioRequest, flowMeetingAudioStatus, flowMeetingFollowupRequest, flowMeetingReminderRequest, flowMenuList, flowMenuPick, flowNoAi, flowNoticeRequest, flowOnClosureAddress, flowOnDayEvening, flowOnFormFill, flowOnGoodsStop, flowOnMailFile, flowOnMailMuteSender, flowOnMailRemindOrGoods, flowOnMeetCoord, flowOnMeetingTasks, flowOnPaceOffer, flowOnPlainMail, flowOnReminder, flowOnRfq, flowOnSentFollowup, flowOnThreadAdd, flowRemindersRequest, flowReplyAsk, flowRfqRequest, flowRfqSummary, flowSuggestionCommand, flowTranslateRequest, flowWalk, NEXT, switchCancels
+  SEND_NOW, DRAFT_ONLY, flowAgentsList, flowAlertNo, flowOnMailDose, flowApproval, flowBusinessCommand, flowCancel, flowClosureCommand, flowEmailEdit, flowEmailPick, flowEmailSolve, flowEmailVia, flowFeaturesRequest, flowFormFillRequest, flowGreeting, flowInstinct, flowInstinctExplicit, flowInstinctReply, flowInstinctPilot, flowNoticeToInstinct, flowIntentCancel, flowIntentDenied, flowIntentMenu, flowIntentOther, flowMailFileRequest, flowMailReplyEdit, flowMailWalk, flowMeetCoordRequest, flowMeetingAudioAnswer, flowMeetingAudioRequest, flowMeetingAudioStatus, flowMeetingFollowupRequest, flowMeetingReminderRequest, flowMeetingSummaryRoutine, flowMenuList, flowMenuPick, flowNoAi, flowNoticeRequest, flowOnClosureAddress, flowOnDayEvening, flowOnFormFill, flowOnGoodsStop, flowOnMailFile, flowOnMailMuteSender, flowOnMailRemindOrGoods, flowOnMeetCoord, flowOnMeetingTasks, flowOnPaceOffer, flowOnPlainMail, flowOnReminder, flowOnRfq, flowOnSentFollowup, flowOnPricelist, flowPricelistRequest, flowOnThreadAdd, flowRemindersRequest, flowReplyAsk, flowRfqFollowup, flowRfqRequest, flowRfqSummary, flowSuggestionCommand, flowTranslateRequest, flowWalk, NEXT, switchCancels
 };

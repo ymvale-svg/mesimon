@@ -857,7 +857,8 @@ CREATE TABLE IF NOT EXISTS priority_docs (
 CREATE INDEX IF NOT EXISTS idx_priority_docs_user ON priority_docs(org_id, user_id, doc, created_at);
 
 /*
- * 🛒 פנייה לספקים להצעת מחיר (‎ai/rfq.js‎). ‎item‎ — מה מבוקש (JSON), ‎draft‎ — נושא וגוף המייל.
+ * 🛒 פנייה לספקים להצעת מחיר (‎ai/rfq.js‎). ‎item‎ — מה מבוקש (JSON), ‎draft‎ — נושא וגוף המייל,
+ * ‎file‎ — תמונה / קובץ שנשלחו עם הבקשה (הדמיה), מצורפים למייל: ‎{ name, mime, b64 }‎.
  * ‎status‎: draft / review / sent / summarized / closed / cancelled.
  */
 CREATE TABLE IF NOT EXISTS rfq (
@@ -872,6 +873,7 @@ CREATE TABLE IF NOT EXISTS rfq (
   polled_at     TEXT,
   summarized_at TEXT,
   task_id       INTEGER REFERENCES tasks(id) ON DELETE SET NULL,
+  file          TEXT,
   created_at    TEXT    NOT NULL
 );
 /*
@@ -898,7 +900,50 @@ CREATE TABLE IF NOT EXISTS pd_part_requests (
   created_at  TEXT    NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_pd_part_requests ON pd_part_requests(status, user_id);
-/* ספק בפנייה — ‎status‎: pending / no_email / sent / replied / declined / failed / skipped. ‎offer‎ — מה חולץ מהתשובה */
+/*
+ * 📋 קבלת סחורה מול הזמנה, כשמספר ההזמנה לא הופיע בתעודה — לדוח השבועי לרכש (‎priority/buyer-notices.js‎).
+ * ‎reported_at‎ — נכלל בדוח. נמחק אחרי 180 יום.
+ */
+CREATE TABLE IF NOT EXISTS gr_no_po (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  company     TEXT    NOT NULL,
+  supname     TEXT    NOT NULL DEFAULT '',
+  supdes      TEXT    NOT NULL DEFAULT '',
+  booknum     TEXT    NOT NULL DEFAULT '',
+  docno       TEXT    NOT NULL,
+  ordname     TEXT    NOT NULL DEFAULT '',
+  user_id     INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at  TEXT    NOT NULL,
+  reported_at TEXT
+);
+/*
+ * 🏷️ הוספה למחירון ספק מהזמנת רכש (‎priority/po-pricelist.js‎). שורה לכל הזמנה (וגרסה).
+ * ‎items‎ — הפריטים שאינם במחירון: ‎[{ n, part, des, unit, price, prices, pick }]‎; ‎list‎ — המחירון שאליו כותבים;
+ * ‎written‎ — מה נכתב (המפתחות בפריוריטי, בשביל הביטול).
+ * ‎status‎: pending (מחכה לשליחה) / asked / done / declined / none (אין מה להציע) / no_list (לספק אין מחירון) / undone / expired.
+ */
+CREATE TABLE IF NOT EXISTS po_pricelist_offers (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  company     TEXT    NOT NULL,
+  ordname     TEXT    NOT NULL,
+  version     INTEGER NOT NULL DEFAULT 1,
+  supname     TEXT    NOT NULL,
+  supdes      TEXT    NOT NULL DEFAULT '',
+  projdocno   TEXT,
+  projdes     TEXT    NOT NULL DEFAULT '',
+  items       TEXT    NOT NULL DEFAULT '[]',
+  list        TEXT,
+  lists       TEXT    NOT NULL DEFAULT '[]',
+  written     TEXT    NOT NULL DEFAULT '[]',
+  status      TEXT    NOT NULL DEFAULT 'pending',
+  handler_id  INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  asked_at    TEXT,
+  done_at     TEXT,
+  created_at  TEXT    NOT NULL,
+  UNIQUE(company, ordname, version)
+);
+CREATE INDEX IF NOT EXISTS idx_po_pricelist_status ON po_pricelist_offers(status);
+/* ספק בפנייה — ‎status‎: pending / no_email / whatsapp (נייד בלי מייל) / wa_link (קיבל העובד קישור) / sent / replied / declined / failed / skipped. ‎offer‎ — מה חולץ מהתשובה */
 CREATE TABLE IF NOT EXISTS rfq_vendors (
   id             INTEGER PRIMARY KEY AUTOINCREMENT,
   rfq_id         INTEGER NOT NULL REFERENCES rfq(id) ON DELETE CASCADE,
@@ -2201,6 +2246,18 @@ function relaxAiMessagesChannel() {
  * הרחבות סכמה על מסד נתונים קיים.
  * חייב להיות בטוח להרצה חוזרת, ובלי לאבד נתונים — הוא רץ על המערכת החיה.
  */
+/*
+ * 🔕 יצירת משימות מהמייל בלי אישור — כבויה לכולם, פעם אחת (22.11.26, ישראל: אחרי משימה ממייל של Google שנפתחה
+ * לעובד לבד). המתג "ליצור משימות מהמייל בלי אישור" כבה וכל ⭐ "נוצר ישר" נמחק (🚫 "לא מציעים" נשאר). מכאן כל משימה
+ * מהמייל מחכה לאישור; מי שירצה — מדליק שוב, וזה לא נדרס.
+ */
+function mailAutoOff() {
+  if (getSetting('migr_mail_auto_off', null) !== null) return;
+  run("DELETE FROM user_prefs WHERE key = 'mailAutoCreate'");
+  run("DELETE FROM mail_trusted_senders WHERE mode = 'trust'");
+  setSetting('migr_mail_auto_off', true);
+}
+
 function migrate() {
   const columns = (table) => db.prepare(`PRAGMA table_info(${table})`).all().map((c) => c.name);
 
@@ -2213,6 +2270,8 @@ function migrate() {
 
   // 💬 מק"טים לבנייה — אסימון לדף התשובה של הרכש (‎priority/pd-parts.js‎)
   addColumn('pd_part_requests', 'token', 'TEXT');
+  // 🛒 פנייה לספקים — הדמיה / קובץ שנשלחו עם הבקשה, מצורפים למייל לספקים (‎priority/rfq.js‎, 22.11.26)
+  addColumn('rfq', 'file', 'TEXT');
   // 🎙 הקלטת פגישה ארוכה מוואטסאפ — הועלתה ל-Timeless, והתמליל משם (‎meetings/meeting-audio.js‎, 18.11.26)
   addColumn('meeting_audio', 'timeless_id', 'TEXT');
   addColumn('meeting_audio', 'timeless_at', 'TEXT');
@@ -2317,6 +2376,8 @@ function migrate() {
    * 💰 חיסכון בקרדיטי AI (17.11.26, "תוכנית — חיסכון בקרדיטי AI.md" סעיף 5.2): מצב מהיר כבוי — פעם אחת, גם אם נשמר
    * דלוק בטופס ההגדרות. מנהל יכול להדליק שוב ב"🧠 מודלים".
    */
+  mailAutoOff();
+
   if (getSetting('migr_fast_mode_off', null) === null) {
     setSetting('ai_fast_mode', false);
     setSetting('migr_fast_mode_off', true);
@@ -2811,7 +2872,7 @@ module.exports = {
   departmentSubtree, departmentPath, trackerAccess, trackerDefault,
   db, DB_PATH, UPLOADS_DIR, ROOT, STORAGE,
   all, get, run,
-  nowIso, hashPassword, verifyPassword,
+  nowIso, hashPassword, verifyPassword, mailAutoOff,
   getSetting, setSetting, allSettings, systemSettings,
   userPrefs, setUserPref,
   audit, notify, onNotify, countsAsOpener,

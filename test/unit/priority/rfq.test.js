@@ -132,3 +132,220 @@ test('answer — בקשה למשימה באמצע הפנייה: הפנייה מ�
   assert.equal(r, null);
   assert.equal(D.get('SELECT status FROM rfq WHERE id = ?', id).status, 'cancelled');
 });
+
+// ---------------------------------------------------------------------------
+// 22.11.26, אמיר רון: "ספקי אלומיניום ברשת על בסיס הדמיה" — הבוט הציע ספקים מפריוריטי בלי מייל.
+// רק מי שאפשר לפנות אליו (מייל / נייד לוואטסאפ); ברשת — במקביל גם דרך אינסטינקט; ההדמיה מצורפת למייל.
+// ---------------------------------------------------------------------------
+const Fakes = require('../../fakes');
+const Gmail = require('../../../server/integrations/gmail');
+const { mobileOf, mineFor, findVendors, waLink } = RFQ._internal;
+
+test('mobileOf — נייד ישראלי בכל כתיב; קווי / זר — ריק', () => {
+  assert.equal(mobileOf('050-1234567'), '972501234567');
+  assert.equal(mobileOf('+972 52 123 4567'), '972521234567');
+  assert.equal(mobileOf('00972541234567'), '972541234567');
+  assert.equal(mobileOf('04-8123456'), '');
+  assert.equal(mobileOf(''), '');
+  assert.match(waLink('0501234567', 'שלום עולם'), /^https:\/\/wa\.me\/972501234567\?text=%D7%A9/);
+});
+
+/** ה-AI המזויף: בוחר את כל המועמדים; חיפוש ברשת ← ‎web‎; חילוץ מתשובת אינסטינקט ← ‎inst‎ */
+function rfqAi(t, { web = [], inst = [] } = {}) {
+  return Fakes.claude(t, (opts) => {
+    if (opts.schema?.properties?.picks) {
+      const n = (opts.content[0].text.match(/^\d+\./gm) ?? []).length;
+      return { picks: Array.from({ length: n }, (_, i) => ({ n: i + 1, reason: 'מתאים' })) };
+    }
+    if (opts.serverTools) return { vendors: web };
+    if (/חלץ/.test(opts.system)) return { vendors: inst };
+    return {};
+  });
+}
+const v = (name, email, phone) => ({ name, email, phone, website: '', source_url: '', reason: '' });
+
+test('mineFor — ספק מפריוריטי בלי מייל ובלי נייד: לא מוצע; עם נייד בלבד — לוואטסאפ', async (t) => {
+  const u = user();
+  rfqAi(t);
+  Fakes.priority(t, {
+    suppliersByWords: async () => [
+      { name: 'אלומיניום קווי בלבד', email: '', phone: '04-8123456' },
+      { name: 'אלומיניום עם מייל', email: 'sales@alu.test', phone: '' },
+      { name: 'אלומיניום נייד', email: '', phone: '052-1234567' }
+    ]
+  });
+  const list = await mineFor(u.id, { item: 'פרופילי אלומיניום', terms: ['אלומיניום'] }, 10);
+  assert.deepEqual(list.map((x) => x.name), ['אלומיניום עם מייל', 'אלומיניום נייד']);
+  assert.equal(list[1].mobile, '972521234567');
+});
+
+test('findVendors — ברשת: גם דרך אינסטינקט, במקביל; בלי מייל ובלי נייד — בחוץ', async (t) => {
+  const u = user({ full_name: 'אמיר בודק' });
+  rfqAi(t, {
+    web: [v('אלו-נט', 'info@alunet.test', '')],
+    inst: [v('אלו-וואטסאפ', '', '054-7654321'), v('אלו-קווי', '', '03-5555555'), v('אלו-מייל', 'office@alumail.test', '')]
+  });
+  const asked = [];
+  const ask = async (text) => { asked.push(text); return 'אלו-וואטסאפ | — | 054-7654321\nאלו-מייל | office@alumail.test'; };
+  const list = await findVendors(u.id, { item: 'חלונות אלומיניום', spec: 'לפי הדמיה', count: 10 }, 'web', { ask });
+  assert.deepEqual(list.map((x) => x.name), ['אלו-נט', 'אלו-מייל', 'אלו-וואטסאפ'], 'קודם מייל, אחריו וואטסאפ');
+  assert.equal(asked.length, 1);
+  assert.match(asked[0], /חלונות אלומיניום/);
+  assert.doesNotMatch(asked[0], /אמיר/, 'לאינסטינקט יוצא רק המבוקש');
+});
+
+test('findVendors — "מהספקים שלי": בלי חיפוש ברשת ובלי אינסטינקט', async (t) => {
+  const u = user();
+  rfqAi(t);
+  Fakes.priority(t, { suppliersByWords: async () => [] });
+  let asked = 0;
+  await findVendors(u.id, { item: 'מלט', count: 5 }, 'mine', { ask: async () => { asked++; return ''; } });
+  assert.equal(asked, 0);
+});
+
+test('send — המייל יוצא עם ההדמיה מצורפת, וספק עם נייד בלבד מקבל קישור וואטסאפ', async (t) => {
+  const u = user({ full_name: 'אמיר בודק' });
+  const img = Buffer.from('fake-png');
+  const id = Number(D.run("INSERT INTO rfq (user_id, status, item, draft, deadline_at, file, created_at) VALUES (?, 'review', ?, ?, ?, ?, ?)",
+    u.id, JSON.stringify({ item: 'חלונות אלומיניום' }), JSON.stringify({ subject: 'בקשה להצעת מחיר', body: 'שלום, מצורפת הדמיה' }),
+    new Date().toISOString(), JSON.stringify({ name: 'הדמיה.png', mime: 'image/png', b64: img.toString('base64') }), D.nowIso()).lastInsertRowid);
+  D.run("INSERT INTO rfq_vendors (rfq_id, name, email, phone, status) VALUES (?, 'אלו-מייל', 'a@alu.test', '', 'pending')", id);
+  D.run("INSERT INTO rfq_vendors (rfq_id, name, email, phone, status) VALUES (?, 'אלו-וואטסאפ', '', '054-7654321', 'whatsapp')", id);
+  const raws = [];
+  t.mock.method(Gmail, 'connectionOf', () => ({ email: 'amir@co.test' }));
+  t.mock.method(Gmail, 'signed', async (_, b) => b);
+  t.mock.method(Gmail, 'send', async (_, raw) => { raws.push(raw); return { messageId: '<m1@x>', threadId: 't1' }; });
+  const text = await RFQ.send(u.id, id);
+  assert.equal(raws.length, 1);
+  const mail = Buffer.from(String(raws[0]), /^[A-Za-z0-9_-]+=*$/.test(raws[0]) ? 'base64url' : 'utf8').toString('utf8');
+  assert.match(mail, /image\/png/);
+  assert.match(mail, new RegExp(img.toString('base64')));
+  assert.match(text, /✅ נשלח לספק אחד/);
+  assert.match(text, /📱 \*בוואטסאפ\*.*\n• אלו-וואטסאפ: https:\/\/wa\.me\/972547654321\?text=/);
+  assert.equal(D.get("SELECT status FROM rfq_vendors WHERE rfq_id = ? AND name = 'אלו-וואטסאפ'", id).status, 'wa_link');
+});
+
+test('reviewText — נייד בלבד: "📱 וואטסאפ", וההדמיה ליד הנוסח', () => {
+  const t = reviewText({ item: { item: 'x' }, draft: { subject: 's', body: 'b' }, deadline_at: '2026-11-11T14:00:00Z', file: { name: 'הדמיה.jpg' } },
+    [{ name: 'ב', email: '', phone: '0547654321', source: '🌐 ברשת' }]);
+  assert.match(t, /1\. \*ב\* — 📱 וואטסאפ 0547654321/);
+  assert.match(t, /\*הנוסח:\* s · 📎 הדמיה\.jpg/);
+});
+
+// באג 22.11.26: אחרי שיחה על השכרת גנרטור (עם "הט אנרגיה" והמייל שלהם) — "שלח לכל אחד בקשה להצעת מחיר מהירה",
+// והבוט שאל "איזה פריט?". השיחה עוברת להבנת הבקשה, והספקים שנזכרו בה — אליהם בלבד
+test('understand — השיחה הקודמת עוברת ל-AI', async (t) => {
+  const ai = Fakes.claude(t, () => ({ item: 'השכרת גנרטור', spec: '', quantity: '', location: '', need_by: '', count: 10, source: 'named', vendors: [], terms: [], missing_question: '' }));
+  const it = await RFQ._internal.understand('שלח לכל אחד בקשה להצעת מחיר מהירה', null, null, [
+    { role: 'user', text: 'צריך להשכיר גנרטור 110 KVA' }, { role: 'bot', text: 'הט אנרגיה — hotenergy@test.co' }
+  ]);
+  assert.match(ai.calls[0].opts.content.at(-1).text, /השיחה עד עכשיו[\s\S]*העובד: צריך להשכיר גנרטור[\s\S]*הבוט: הט אנרגיה/);
+  assert.equal(it.source, 'unspecified', 'named בלי ספקים — שואלים מאיפה');
+});
+
+test('findVendors — "רק לספקים מהשיחה" (named): בלי חיפוש, רק הם', async (t) => {
+  const u = user();
+  rfqAi(t);
+  let asked = 0;
+  const list = await findVendors(u.id, { item: 'השכרת גנרטור', count: 10, vendors: [
+    { name: 'הט אנרגיה', email: 'hotenergy@test.co', phone: '050-6962218' }, { name: 'לידור אנרגיה', email: '', phone: '' }
+  ] }, 'named', { ask: async () => { asked++; return ''; } });
+  assert.deepEqual(list.map((x) => [x.name, x.email, x.source]), [['הט אנרגיה', 'hotenergy@test.co', '💬 מהשיחה']]);
+  assert.equal(asked, 0);
+});
+
+// באג 22.11.26: "גנרטור 200 אמפר" — תשובה ל"איזה פריט?" אחרי 33 דקות. השאלה לא פגה (‎staleQuestion‎), ונושא אחר — משחרר
+test('answer — שאלת פרטים: נושא אחר לגמרי — הפנייה יורדת וההודעה ממשיכה (null)', async (t) => {
+  const u = user();
+  Fakes.claude(t, () => ({ item: '', spec: '', quantity: '', location: '', need_by: '', count: 10, source: 'unspecified', vendors: [], terms: [], unrelated: true, missing_question: '' }));
+  const id = D.run("INSERT INTO rfq (user_id, item, status, draft, created_at) VALUES (?, '{\"item\":\"\"}', 'draft', '{}', ?)", u.id, D.nowIso()).lastInsertRowid;
+  assert.equal(await RFQ.answer(u.id, { kind: 'rfq', rfqId: id, step: 'details' }, 'מה מזג האוויר מחר?'), null);
+  assert.equal(D.get('SELECT status FROM rfq WHERE id = ?', id).status, 'cancelled');
+});
+
+test('answer — שאלת פרטים: "גנרטור 200 אמפר" — ממשיך לחיפוש, בלי לבקש לכתוב שוב', async (t) => {
+  const u = user();
+  Fakes.claude(t, () => ({ item: 'גנרטור 200 אמפר', spec: '', quantity: '', location: '', need_by: '', count: 10, source: 'web', vendors: [], terms: ['גנרטור'], unrelated: false, missing_question: '' }));
+  const id = D.run("INSERT INTO rfq (user_id, item, status, draft, created_at) VALUES (?, '{\"item\":\"\",\"source\":\"unspecified\"}', 'draft', '{}', ?)", u.id, D.nowIso()).lastInsertRowid;
+  const r = await RFQ.answer(u.id, { kind: 'rfq', rfqId: id, step: 'details' }, 'גנרטור 200 אמפר');
+  assert.equal(r.search, true);
+  assert.equal(JSON.parse(D.get('SELECT item FROM rfq WHERE id = ?', id).item).item, 'גנרטור 200 אמפר');
+});
+
+// 22.11.26, ישראל: "בקשה להצעת מחיר שהעוזר לא יכול להסתדר לבד — הוא פונה לאינסטינקט; לא מחזיר בקשה ולא שגיאה למשתמש"
+test('prepare — לא נמצאו ספקים: מנסה לבד גם ברשת, ואז ‎handoff‎ לאינסטינקט עם המבוקש בלבד', async (t) => {
+  const u = user({ full_name: 'אמיר בודק' });
+  rfqAi(t);
+  Fakes.priority(t, { suppliersByWords: async () => [] });
+  const asked = [];
+  const id = D.run("INSERT INTO rfq (user_id, item, status, draft, created_at) VALUES (?, ?, 'draft', '{}', ?)", u.id,
+    JSON.stringify({ item: 'גנרטור 200 אמפר', location: 'אלעד', count: 10, source: 'mine', terms: ['גנרטור'] }), D.nowIso()).lastInsertRowid;
+  const r = await RFQ.prepare(u.id, id, { ask: async (q) => { asked.push(q); return null; } });
+  assert.equal(asked.length, 1, '"מהספקים שלי" ולא נמצא — גם ברשת ודרך אינסטינקט, בלי לחזור לעובד');
+  assert.match(r.handoff, /צריך הצעת מחיר: גנרטור 200 אמפר · אספקה לאלעד/);
+  assert.doesNotMatch(r.handoff, /אמיר/);
+});
+
+// 🔁 המשך לבקשה האחרונה — סקירה 22.11: "ספקי אלומיניום תמצא ברשת" / "תפנה לאלרם" ← "כתוב את הבקשה מחדש"
+test('followUp — "תמצא ברשת" ו"תפנה לאלרם" ממשיכים את הבקשה האחרונה, עם אותו פריט; בלי בקשה אחרונה — לא', async (t) => {
+  const { D: Db } = require('../../helpers/db');
+  const { Gmail } = require('../../../server/integrations');
+  t.mock.method(Gmail, 'canSend', () => true);
+  const uid = user({ role: 'employee' }).id;
+  const item = { item: 'השכרת גנרטור 200 אמפר', spec: '', quantity: '1', location: 'אתר אלעד', need_by: '1.12', count: 3, source: 'mine', vendors: [], terms: ['גנרטור'], unrelated: false, missing_question: '' };
+  assert.equal(await RFQ.followUp(uid, 'תמצא ברשת'), null, 'אין בקשה — לא שלנו');
+  Db.run("INSERT INTO rfq (user_id, status, request, item, draft, file, created_at) VALUES (?, 'cancelled', 'צריך הצעת מחיר לגנרטור', ?, '{}', NULL, ?)", uid, JSON.stringify(item), Db.nowIso());
+  for (const text of ['ספקי אלומיניום תמצא ברשת', 'תיקח מגוגל ספקים חדשים', 'תבדוק ברשת']) {
+    const r = await RFQ.followUp(uid, text);
+    assert.equal(r?.search, true, text);
+    const row = Db.get('SELECT item FROM rfq WHERE id = ?', r.rfqId);
+    assert.equal(JSON.parse(row.item).source, 'web');
+    assert.equal(JSON.parse(row.item).item, 'השכרת גנרטור 200 אמפר', 'אותו פריט, בלי לשאול שוב');
+  }
+  const named = await RFQ.followUp(uid, 'תפנה לאלרם');
+  const it = JSON.parse(Db.get('SELECT item FROM rfq WHERE id = ?', named.rfqId).item);
+  assert.equal(it.source, 'named');
+  assert.deepEqual(it.vendors.map((v) => v.name), ['אלרם']);
+  for (const text of ['שלח לכל אחד', 'מה שלומך', 'תפנה לספקים להצעת מחיר על מלט', 'תחפש לי ברשת מחיר זול של טאבלט סמסונג']) assert.equal(await RFQ.followUp(uid, text), null, text);
+});
+
+test('followUp — בקשה מלפני יותר משעתיים כבר לא נמשכת', async (t) => {
+  const { D: Db } = require('../../helpers/db');
+  const { Gmail } = require('../../../server/integrations');
+  t.mock.method(Gmail, 'canSend', () => true);
+  const uid = user({ role: 'employee' }).id;
+  Db.run("INSERT INTO rfq (user_id, status, request, item, draft, file, created_at) VALUES (?, 'cancelled', 'x', ?, '{}', NULL, ?)", uid,
+    JSON.stringify({ item: 'מלט', source: 'mine', vendors: [] }), new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString());
+  assert.equal(await RFQ.followUp(uid, 'תמצא ברשת'), null);
+});
+
+
+// 23.11.26, ישראל (שזר נחמיאס: "תפנה לספקים להצעת מחיר לאלעד סנטר" ← "צריך לחבר Gmail" — והבוט לא חיפש בכלל):
+// בלי Gmail — רשימת הספקים וקישורי וואטסאפ, בלי מייל, והערה עם הדרכה לחיבור המייל במשימון
+test('start — בלי Gmail: לא עוצר', async (t) => {
+  const u = user();
+  t.mock.method(Gmail, 'canSend', () => false);
+  Fakes.claude(t, () => ({ item: 'יציקת בטון', spec: '', quantity: '', location: 'אלעד', need_by: '', count: 10, source: 'web', vendors: [], terms: ['בטון'], unrelated: false, missing_question: '' }));
+  const r = await RFQ.start(u.id, 'תפנה לספקים להצעת מחיר לאלעד סנטר מגרש 50');
+  assert.equal(r.search, true);
+  assert.doesNotMatch(r.text, /Gmail/);
+});
+
+test('prepare — בלי Gmail: רשימה עם קישורי וואטסאפ והדרכה לחיבור המייל, בלי כפתורי שליחה', async (t) => {
+  const u = user({ full_name: 'שזר בודק' });
+  t.mock.method(Gmail, 'canSend', () => false);
+  D.setSetting('public_url', 'https://mesimon.test');
+  t.after(() => D.setSetting('public_url', ''));
+  rfqAi(t, { web: [v('בטון הצפון', 'info@beton.test', '052-1112233'), v('בטון מייל', 'office@b2.test', '')] });
+  const id = D.run("INSERT INTO rfq (user_id, item, status, draft, created_at) VALUES (?, ?, 'draft', '{}', ?)", u.id,
+    JSON.stringify({ item: 'בטון', location: 'אלעד', count: 10, source: 'web', terms: ['בטון'] }), D.nowIso()).lastInsertRowid;
+  const r = await RFQ.prepare(u.id, id);
+  assert.equal(r.buttons, undefined);
+  assert.equal(r.draft, null);
+  assert.match(r.text, /1\. \*בטון הצפון\*[\s\S]*✉️ info@beton\.test[\s\S]*📱 https:\/\/wa\.me\/972521112233\?text=/);
+  assert.match(r.text, /2\. \*בטון מייל\*\n {3}✉️ office@b2\.test/);
+  assert.match(r.text, /אני יודע לשלוח עבורך את הבקשות לחברות/);
+  assert.match(r.text, /החשבון שלי\* ← \*Gmail ועוזר ה-AI/);
+  assert.match(r.text, /https:\/\/mesimon\.test\/api\/me\/gmail\/connect/);
+  assert.equal(D.get('SELECT status FROM rfq WHERE id = ?', id).status, 'closed');
+});

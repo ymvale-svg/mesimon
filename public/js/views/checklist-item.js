@@ -128,7 +128,7 @@ const ChecklistItemView = (() => {
           el('label', { text: 'הערה' }),
           el('p', {
             text: item.note || 'ללא הערה',
-            style: { whiteSpace: 'pre-wrap', color: item.note ? 'var(--text)' : 'var(--text-mute)', margin: '0' }
+            style: { whiteSpace: 'pre-wrap', color: item.note ? 'var(--text)' : 'var(--text-faint)', margin: '0' }
           })
         ]);
 
@@ -140,7 +140,7 @@ const ChecklistItemView = (() => {
         renameBtn
       ]),
       noteBlock,
-      el('h4', { text: `תגובות בסעיף (${item.comments.length})`, style: { fontSize: '13.5px', margin: '16px 0 8px' } }),
+      el('h4', { text: `תגובות בסעיף (${item.comments.length})`, style: { fontSize: 'var(--fs-base)', margin: '16px 0 8px' } }),
       UI.commentThread({
         comments: item.comments,
         canComment: permissions.comment,

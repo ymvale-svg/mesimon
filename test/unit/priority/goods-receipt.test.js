@@ -402,3 +402,21 @@ test('jpegToPdf — אפור ו-CMYK', () => {
 test('jpegToPdf — בלי מידות: null', () => {
   assert.equal(GR._jpegToPdf(Buffer.concat([Buffer.from([0xff, 0xd8]), Buffer.alloc(40), Buffer.from([0xff, 0xd9])])), null);
 });
+
+test('isTrigger — "קליטת תעודות", "קבלות חורה" (תמלול) פותחים קבלת סחורה; "ריורטי" — פריוריטי (סקירה 22.11)', () => {
+  const GR = require('../../../server/priority/goods-receipt');
+  for (const t of ['קבלת סחורה', 'קליטת תעודות', 'קליטת תעודת משלוח', '🎙 קבלות חורה.', 'קבלת חורה', 'קליטה של תעודות'.replace(' של', '')]) assert.ok(GR.isTrigger(t), t);
+  for (const t of ['קיבלתי את הסחורה אתמול', 'קליטת עובד חדש', 'תעודות']) assert.ok(!GR.isTrigger(t), t);
+  assert.ok(GR.isPriority('ריורטי'));
+  assert.ok(!GR.isPriority('אוריורטי'));
+});
+
+
+// סקירה לילית 23.11: בשאלת הספק העובדת כתבה "מס' ספק 603143" — חופש כשם ("לא מצאתי ספק בשם …"), לא כמספר.
+test('שאלת הספק: "מס\' ספק 603143" / "מספר ספק: 603143" / "ספק מס׳ 603143" — מספר הספק', () => {
+  const GRx = require('../../../server/priority/goods-receipt');
+  for (const t of ["מס' ספק 603143", 'מספר ספק: 603143', 'ספק מס׳ 603143', 'מס ספק 603143', '603143'])
+    assert.equal(GRx._supplierAnswer(t), '603143', t);
+  assert.equal(GRx._supplierAnswer('בטון הצפון'), 'בטון הצפון');
+  assert.equal(GRx._supplierAnswer('ספק בטון הצפון'), 'בטון הצפון');
+});

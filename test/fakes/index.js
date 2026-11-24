@@ -47,7 +47,8 @@ function claude(t, responder = () => ({})) {
 /** פונקציות של פריוריטי שכותבות. בזיוף הן נרשמות ולא מגיעות לשום מקום */
 const WRITES = ['createReceipt', 'addOrderLine', 'addFreeLine', 'setLineQty', 'setLineDes', 'setHeader', 'attach', 'deleteAttachment',
   'setDialog', 'finalizeReceipt', 'cancelReceipt', 'deleteLines', 'createDemand', 'addDemandLine', 'setDemand', 'submitDemand',
-  'cancelDemand', 'setDemandDialog', 'attachDemand', 'appendDemandDialog', 'setDemandLine', 'deleteDemandLine', 'reopenDemand'];
+  'cancelDemand', 'setDemandDialog', 'attachDemand', 'appendDemandDialog', 'setDemandLine', 'deleteDemandLine', 'reopenDemand',
+  'addPriceListItem', 'deletePriceListItem', 'addSupplierPart', 'deleteSupplierPart'];
 
 /**
  * פריוריטי: ‎reads‎ — מימושים לקריאות; ‎writes‎ — מימושים לכתיבות (ברירת מחדל: נרשם ומחזיר ‎{}‎).
@@ -62,7 +63,7 @@ function priority(t, reads = {}, { writes = {}, enabled = true } = {}) {
     else if (WRITES.includes(name)) {
       t.mock.method(Priority, name, async (...a) => { log.push({ name, args: a }); return writes[name] ? writes[name](...a) : {}; });
     } else if (['allowed', 'companyOf', 'isTest', 'resolveCompany', 'companiesByName', 'payTerm', 'payLabel', 'payFromText', 'dueDate',
-      'nextSigner', 'isNoApproversError', 'matchProjects'].includes(name)) {
+      'nextSigner', 'isNoApproversError', 'isCodingError', 'matchProjects'].includes(name)) {
       continue; // עזרים טהורים — האמיתיים
     } else {
       t.mock.method(Priority, name, async () => { throw new Error(`פריוריטי.${name} לא זויף בבדיקה`); });

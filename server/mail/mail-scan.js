@@ -493,8 +493,7 @@ async function processMessage(user, conn, gmailId) {
     }
   }
 
-  const trusted = senderMode(user.id, mail.from.address) === 'trust';
-  const autoAll = D.userPrefs(user.id).mailAutoCreate === true;
+  const how = autoHow({ trusted: senderMode(user.id, mail.from.address) === 'trust', autoAll: D.userPrefs(user.id).mailAutoCreate === true });
   let created = 0;
   for (const t of result.tasks) {
     // ‎toMe‎ — אני הנמען הראשי (לא רק בהעתק); ‎auto‎ — דיוור / הודעה אוטומטית. רק כאלה קופצים בוואטסאפ (‎mail-push.js‎)
@@ -503,12 +502,12 @@ async function processMessage(user, conn, gmailId) {
     const data = { ...t, warning: result.warning, alsoSuggestedTo: others, receivedAt: meta.receivedAt, toMe, auto: Boolean(mail.autoSubmitted), ...(ownerName ? { ownerName } : {}) };
     // לבד רק משימה שכולה שלי: בלי עובדים אחרים, בלי פנייה החוצה ובלי סימן אזהרה
     const solo = !t.people.length && !t.aiRequest && !t.ambiguous.length && !result.warning;
-    if ((trusted || autoAll) && solo && !others.length) {
+    if (how && solo && !others.length) {
       const id = insertSuggestion(user, meta, 'task', data);
       try {
         const actor = Auth.loadActor('user', user.id);
         // משימה מהמייל בלי יעד — להיום, כדי שתופיע ב-Today ולא תישכח בלוח
-        const taskId = createFromSuggestion(suggestionById(id), actor, t.dueDate ? {} : { dueDate: W.todayIL() });
+        const taskId = createFromSuggestion(suggestionById(id), actor, { how, ...(t.dueDate ? {} : { dueDate: W.todayIL() }) });
         D.run("UPDATE ai_suggestions SET status = 'auto', task_id = ?, decided_at = ? WHERE id = ?", taskId, D.nowIso(), id);
         created++;
       } catch (err) {
@@ -915,6 +914,21 @@ async function suggestionMail(id, userId) {
   }
 }
 
+/*
+ * 🔎 איך נפתחה משימה מהצעה — נרשם ביומן הפעולות של המשימה ובהצעה (‎data.how‎), ומשם לייצוא של הסקירה
+ * הלילית (20.11.26: משימה ממייל של Google נפתחה לעובד, ולא היה אפשר לדעת אם לבד או בלחיצה).
+ */
+const HOW = Object.freeze({
+  trusted: 'נוצרה לבד — השולח מסומן ⭐ "נוצר ישר"',
+  auto_all: 'נוצרה לבד — המתג "ליצור משימות מהמייל בלי אישור" דולק',
+  manual: 'אושרה ידנית באתר',
+  approve_all: 'אושרה ב"אשר הכול"',
+  bot: 'אושרה בבוט'
+});
+
+/** יצירה לבד מהסריקה: למה — שולח מהימן קודם למתג; ‎null‎ — לא לבד, ממתין לאישור */
+const autoHow = ({ trusted, autoAll }) => (trusted ? 'trusted' : autoAll ? 'auto_all' : null);
+
 /** העותק של המייל המקורי, לכרטיס המשימה. ‎null‎ — אין */
 function sourceMailOf(task) {
   const v = parseJson(task?.source_mail || '', null);
@@ -972,10 +986,12 @@ function createFromSuggestion(sug, actor, edits = {}) {
     source: fromWhatsApp ? 'whatsapp' : fromAgent ? 'agent' : fromMeeting ? 'meeting' : 'email',
     sourceRef: sug.header_id,
     sourceUserId: sug.user_id,
-    auditNote: fromMeeting ? `המשימה נוצרה מהמשימות של הפגישה "${data.meetingTitle}"` : fromWhatsApp
+    auditNote: (fromMeeting ? `המשימה נוצרה מהמשימות של הפגישה "${data.meetingTitle}"` : fromWhatsApp
       ? (data.personal ? `המשימה נוצרה מהודעת וואטסאפ של ${sug.from_name}` : `המשימה נוצרה מבקשה של ${sug.from_name} בקבוצת "${data.groupName}"`)
-      : fromAgent ? `המשימה נוצרה מהצעה של הסוכן "${sug.from_name}"` : `המשימה נוצרה ממייל של ${sug.from_name}`
+      : fromAgent ? `המשימה נוצרה מהצעה של הסוכן "${sug.from_name}"` : `המשימה נוצרה ממייל של ${sug.from_name}`)
+      + (HOW[edits.how] ? ` · ${HOW[edits.how]}` : '')
   });
+  if (HOW[edits.how]) D.run("UPDATE ai_suggestions SET data = json_set(data, '$.how', ?) WHERE id = ?", edits.how, sug.id);
   // בקשה לפגישה — מהמייל, מקבוצה או מהוואטסאפ האישי: "📅 פגישה לקביעה"
   if (data.meeting) D.run('UPDATE tasks SET meeting_pending = 1 WHERE id = ?', taskId);
   // 📧 עותק של המייל במשימה — לכל מי שעובד עליה (ברקע)
@@ -1018,6 +1034,12 @@ function createFromSuggestion(sug, actor, edits = {}) {
  * @returns {number|Promise<number>} מזהה המשימה
  */
 function approve(id, actor, edits = {}) {
+  // מבחוץ — רק "בבוט" או "ידנית": יצירה לבד ו"אשר הכול" נקבעים כאן בפנים, לא בבקשה
+  return approveAs(id, actor, edits, edits.how === 'bot' ? 'bot' : 'manual');
+}
+
+function approveAs(id, actor, edits, how) {
+  edits = { ...edits, how };
   const sug = ownSuggestion(id, actor.id);
   if (TaskSync.KINDS.includes(sug.kind)) return TaskSync.approve(sug, actor, edits).then((r) => r.taskId);
   if (sug.kind === 'task_merge') return Dupes.approve(sug, actor);
@@ -1055,7 +1077,7 @@ function approveAll(actor) {
     const d = parseJson(sug.data, {});
     if ((d.people ?? []).length || d.aiRequest || (d.ambiguous ?? []).length || d.warning) { out.left++; continue; }
     try {
-      approve(sug.id, actor, {});
+      approveAs(sug.id, actor, {}, 'approve_all');
       out.approved++;
     } catch {
       out.left++;
@@ -1313,5 +1335,5 @@ module.exports = {
   listFor, sourceLink, suggestionById, captureSourceMail, sourceMailOf, mailSnapshot, suggestionMail,
   // 📧 משימה ממייל שהעובד בוחר (‎mail-pick.js‎) — אותו ניתוח ואותה הצעה כמו בסריקה
   analyze, insertSuggestion, existingTaskFor, involvedIn, shape, recordScanned: record,
-  _internal: { sanitize, processMessage, createFromSuggestion, liveBoxes }
+  _internal: { autoHow, HOW, sanitize, processMessage, createFromSuggestion, liveBoxes }
 };

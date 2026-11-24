@@ -35,7 +35,8 @@
     receipt: '<path d="M21 8l-9-5-9 5 9 5 9-5z"/><path d="M3 8v8l9 5 9-5V8"/><path d="M12 13v8"/>',
     partial: '<path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/>',
     invoice: '<path d="M6 2h9l5 5v14a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1z"/><path d="M14 2v6h6M9 13h6M9 17h6"/>',
-    income: '<rect x="2" y="6" width="20" height="12" rx="2"/><circle cx="12" cy="12" r="2.5"/><path d="M6 10v4M18 10v4"/>'
+    income: '<rect x="2" y="6" width="20" height="12" rx="2"/><circle cx="12" cy="12" r="2.5"/><path d="M6 10v4M18 10v4"/>',
+    pricelist: '<path d="M20.6 13.4 13.4 20.6a2 2 0 0 1-2.8 0L3 13V3h10l7.6 7.6a2 2 0 0 1 0 2.8z"/><circle cx="7.5" cy="7.5" r="1.5"/>'
   };
   const UI = {
     bot: '<rect x="4" y="8" width="16" height="12" rx="3"/><path d="M12 4v4M9 13h.01M15 13h.01M9 17h6"/>',
@@ -61,7 +62,7 @@
   let me = null;
 
   // ---------------------------------------------------------------- ניווט
-  const ROUTES = { '': home, chain, settings, access };
+  const ROUTES = { '': home, chain, settings, access, pricelist };
   const routeOf = () => location.pathname.replace(/^\/priority\/?/, '').split('/')[0];
   function go(path) { history.pushState(null, '', path); render(); }
   document.addEventListener('click', (e) => {
@@ -74,6 +75,7 @@
   function header() {
     const r = routeOf();
     const tabs = [['/priority', 'בית', ''], ['/priority/chain', 'השרשרת', 'chain']];
+    if (me.pricelist !== null && me.pricelist !== undefined) tabs.push(['/priority/pricelist', 'מחירונים', 'pricelist']);
     if (me.admin) tabs.push(['/priority/settings', 'הגדרות', 'settings'], ['/priority/access', 'הרשאות', 'access']);
     $('#tabs').innerHTML = tabs.map(([href, label, key]) => `<a href="${href}" data-nav ${r === key ? 'aria-current="page"' : ''}>${label}</a>`).join('');
     $('#who').innerHTML = `${me.connected ? '' : '<span class="pill p-warn">החיבור לפריוריטי לא הוגדר</span>'} ${esc(me.name)} · <a href="/" class="back-link">משימון</a>`;
@@ -112,7 +114,9 @@
         const counts = d.allowed ? `<span class="count num">${n}<small>בתור</small></span>${m ? `<span class="pill p-warn">${m} במייל</span>` : ''}` : '';
         const body = `<span class="ic">${icon(d.key)}</span><h2>${esc(d.label)}</h2><span class="sub">${SUB[d.key] ?? ''}</span><span class="foot">${counts}${status}</span>`;
         return d.allowed ? `<a class="tile" href="/priority/${d.key}" data-nav>${body}</a>` : `<div class="tile off">${body}</div>`;
-      }).join('')}</div>
+      }).join('')}${me.pricelist !== null && me.pricelist !== undefined ? `<a class="tile" href="/priority/pricelist" data-nav>
+          <span class="ic">${icon('pricelist')}</span><h2>פריטים למחירון</h2><span class="sub">הזמנה סופית ← פריטים שאינם במחירון הספק ← למחירון</span>
+          <span class="foot"><span class="count num">${me.pricelist}<small>מחכים</small></span><span class="pill p-ok">גם בבוט</span></span></a>` : ''}</div>
       <p class="note">לחצו על פעולה: בצד שמאל המיילים שהגיעו אליכם עם חשבונית או תעודת משלוח, ואפשר לגרור לשם קבצים. דרישת רכש וקבלת סחורה — המסמך נשלח לבוט, והשיחה ממשיכה בוואטסאפ.</p>`;
   }
 
@@ -651,9 +655,83 @@
     });
   }
 
+  // ---------------------------------------------------------------- 🏷️ פריטים למחירון (‎po-pricelist.js‎ — אותו מנוע כמו הבוט)
+  const money = (n) => Number(n ?? 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 4 });
+  const listName = (l) => (l ? `${l.name}${l.des ? ` · ${l.des}` : ''}${l.general ? ' (כללי)' : l.projects?.length ? ` (${l.projects.join(', ')})` : ''}` : '—');
+  const PL_STATUS = { done: ['p-ok', 'נוסף למחירון'], declined: ['p-mute', 'לא נוסף'], undone: ['p-mute', 'בוטל'] };
+  const plKey = (l) => (l ? `${l.name}|${l.date}` : '');
+
+  async function pricelist() {
+    const b = await api('GET', '/api/priority/pricelist');
+    const card = (o) => {
+      const head = `<div class="panel-h"><h2>${esc(o.supplier)} <span class="muted ltr-inline">${esc(o.ordname)}</span></h2>
+        <p>${esc([o.project, o.companyName, fmtAt(o.createdAt)].filter(Boolean).join(' · '))}${o.busy ? ` · <span class="pill p-warn">בטיפול אצל ${esc(o.handler)}</span>` : ''}</p></div>`;
+      const rows = o.items.map((it) => `<tr>
+          <td><input type="checkbox" class="pl-pick" data-n="${it.n}" ${it.pick ? 'checked' : ''} aria-label="להוסיף: ${esc(it.des)}"></td>
+          <td>${esc(it.des)}<div class="muted ltr-inline small">${esc(it.part)}</div></td>
+          <td class="muted pl-unit">${esc(it.unit || '')}</td>
+          <td class="pl-pr"><input class="cell-in num pl-price" data-n="${it.n}" inputmode="decimal" value="${esc(it.price)}" aria-label="מחיר: ${esc(it.des)}"> <span class="muted">${esc(o.currency)}</span><span class="pl-unit-in muted small">${it.unit ? ` / ${esc(it.unit)}` : ''}</span>${it.prices > 1 ? `<div class="muted small">בהזמנה ב-${it.prices} מחירים</div>` : ''}</td>
+        </tr>`).join('');
+      return `<section class="panel pl-offer" data-id="${o.id}">${head}
+        <div class="scroll"><table class="t"><tr><th scope="col"><span class="sr-only">לבחור</span></th><th scope="col">פריט</th><th scope="col" class="pl-unit">יחידה</th><th scope="col">מחיר נטו</th></tr>${rows}</table></div>
+        <div class="grid-form"><label>מחירון<select class="pl-list">${o.lists.map((l) => `<option value="${esc(plKey(l))}" ${plKey(l) === plKey(o.list) ? 'selected' : ''}>${esc(listName(l))}</option>`).join('')}</select></label></div>
+        <p class="muted small">המחיר — אחרי הנחת השורה. הפריטים שנבחרו ייכנסו למחירון וגם ל"מוצרים לספק".</p>
+        <div class="row-actions"><button class="btn pri pl-write" ${o.busy ? 'disabled' : ''}>להוסיף למחירון</button><button class="btn pl-decline" ${o.busy ? 'disabled' : ''}>לא להוסיף</button><span class="pl-confirm" role="status"></span></div>
+      </section>`;
+    };
+    const recent = b.recent.map((o) => {
+      const [cls, label] = PL_STATUS[o.status] ?? ['p-mute', o.status];
+      return `<tr data-id="${o.id}"><td>${esc(o.supplier)} <span class="muted ltr-inline">${esc(o.ordname)}</span></td><td><span class="pill ${cls}">${label}</span></td>
+        <td>${o.status === 'done' ? esc(o.written.map((w) => w.des).join(', ')) : ''}</td><td class="muted">${esc(o.handler)}${o.doneAt ? ` · ${fmtAt(o.doneAt)}` : ''}</td>
+        <td>${o.canUndo ? '<button class="btn small pl-undo">לבטל</button>' : ''}</td></tr>`;
+    }).join('');
+    main.innerHTML = `
+      <div class="greet"><h1>פריטים למחירון</h1><p>פריטים מהזמנות רכש סופיות שאינם במחירון של הספק (מחירון הפרויקט של ההזמנה או הכללי). פריט שכבר במחירון — לא מוצע.</p></div>
+      ${b.enabled ? '' : '<p class="note">הפעולה "הוספה למחירון ספק מהזמנה" כבויה בהגדרות הבוט — הצעות חדשות לא נוצרות עד שמפעילים אותה.</p>'}
+      ${b.open.map(card).join('') || '<p class="note">אין כרגע פריטים שמחכים למחירון.</p>'}
+      ${b.noList.length ? `<section class="panel"><div class="panel-h"><h2>ספקים בלי מחירון</h2><p>כדי להוסיף להם פריטים, צריך לפתוח להם מחירון בפריוריטי.</p></div>
+        <ul class="plain">${b.noList.map((o) => `<li>${esc(o.supplier)} — <span class="ltr-inline">${esc(o.ordname)}</span>, ${o.items.length} פריטים${o.project ? ` · ${esc(o.project)}` : ''}</li>`).join('')}</ul></section>` : ''}
+      ${recent ? `<section class="panel"><div class="panel-h"><h2>טופל בשבוע האחרון</h2><p>ביטול — עד יומיים אחרי ההוספה; נמחק רק מה שנוסף.</p></div>
+        <div class="scroll"><table class="t pl-recent" id="pl-recent">${recent}</table></div><span class="pl-confirm" role="status"></span></section>` : ''}`;
+
+    const send = async (id, body, okText) => {
+      try { const r = await api('POST', `/api/priority/pricelist/${id}`, body); toast(r.text || okText); pricelist(); } catch (e) { toast(e.message, true); }
+    };
+    for (const sec of main.querySelectorAll('.pl-offer')) {
+      const id = sec.dataset.id;
+      const o = b.open.find((x) => String(x.id) === id);
+      let armed = false;
+      const conf = sec.querySelector('.pl-confirm');
+      sec.addEventListener('input', () => { armed = false; conf.textContent = ''; });
+      sec.querySelector('.pl-write').addEventListener('click', () => {
+        const items = o.items.map((it) => ({ n: it.n, pick: sec.querySelector(`.pl-pick[data-n="${it.n}"]`).checked, price: Number(String(sec.querySelector(`.pl-price[data-n="${it.n}"]`).value).replace(/,/g, '')) }));
+        const n = items.filter((x) => x.pick).length;
+        if (!n) { toast('לא נבחר אף פריט', true); return; }
+        const bad = items.find((x) => x.pick && !(x.price > 0));
+        if (bad) { toast(`מחיר לא תקין בשורה ${bad.n}`, true); return; }
+        const list = o.lists.find((l) => plKey(l) === sec.querySelector('.pl-list').value);
+        if (!armed) { armed = true; conf.innerHTML = `<span class="dirty">לכתוב ${n === 1 ? 'פריט אחד' : `${n} פריטים`} למחירון ${esc(listName(list))}? ללחוץ שוב כדי לאשר.</span>`; return; }
+        send(id, { action: 'write', items, list }, 'נוסף למחירון');
+      });
+      sec.querySelector('.pl-decline').addEventListener('click', () => send(id, { action: 'decline' }, 'נסגר'));
+    }
+    const rt = $('#pl-recent');
+    if (rt) {
+      let armedId = null;
+      rt.addEventListener('click', (e) => {
+        const btn = e.target.closest('.pl-undo');
+        if (!btn) return;
+        const id = btn.closest('tr').dataset.id;
+        if (armedId !== id) { armedId = id; btn.textContent = 'ללחוץ שוב לביטול'; return; }
+        send(id, { action: 'undo' }, 'בוטל');
+      });
+    }
+  }
+
   // ---------------------------------------------------------------- הגדרות
   async function settings() {
-    const [s, log] = await Promise.all([api('GET', '/api/priority/settings'), api('GET', '/api/priority/log')]);
+    const [s, log, acc] = await Promise.all([api('GET', '/api/priority/settings'), api('GET', '/api/priority/log'), api('GET', '/api/priority/access').catch(() => ({ users: [] }))]);
+    const handlers = new Set((s.defaults.pricelistHandlers ?? []).map(Number));
     let companies = s.companies.map((c) => ({ ...c }));
     const initialWrite = new Set(s.companies.filter((c) => c.write).map((c) => c.code));
     const pay = (code) => s.payTerms.find((p) => p.code === code)?.name ?? code;
@@ -679,10 +757,20 @@
       </section>
 
       <section class="panel">
-        <div class="panel-h"><h2>🆕 רכש — מק"טים לבנייה</h2><p>פריט בדרישת רכש שאין לו מק"ט נשלח במייל לבניית מק"ט (דרישה לא יוצאת עם מק"ט כללי), והיוזם מקבל הודעה כשהמק"ט נבנה. בקבלת סחורה — הבוט שואל אם לשלוח. ריק — בדרישה: רק המזוהים, והרשימה למנהלי המערכת.</p></div>
+        <div class="panel-h"><h2>🆕 רכש — מק"טים לבנייה</h2><p>פריט בדרישת רכש שאין לו מק"ט נשלח במייל לבניית מק"ט (דרישה לא יוצאת עם מק"ט כללי), והיוזם מקבל הודעה כשהמק"ט נבנה. בקבלת סחורה — הבוט שואל אם לשלוח. היא מקבלת גם דרישה שנשארה טיוטא כי פריוריטי דחה שורה (למשל אין תקציב בפרויקט לתת הפרק). ריק — הכל למנהלי המערכת, ובדרישה: רק המזוהים.</p></div>
         <div class="grid-form">
-          <label for="b-name">מנהלת הרכש — שם<input id="b-name" value="${esc(s.defaults.buyerName ?? '')}"></label>
-          <label for="b-email">מנהלת הרכש — מייל<input id="b-email" class="ltr" type="email" value="${esc(s.defaults.buyerEmail ?? '')}"></label>
+          <label for="b-user">מנהלת הרכש — מתוך המשתמשים של משימון<select id="b-user">
+            <option value="">— לא הוגדרה —</option>
+            ${(s.users ?? []).map((u) => `<option value="${u.id}"${u.id === s.defaults.buyerUserId ? ' selected' : ''}>${esc(u.name)}${u.department ? ` · ${esc(u.department)}` : ''} — ${esc(u.email)}</option>`).join('')}
+          </select></label>
+          ${!s.defaults.buyerUserId && s.defaults.buyerEmail ? `<p class="hint">מוגדר היום: ${esc(s.defaults.buyerName || '')} ${esc(s.defaults.buyerEmail)} — אינו משתמש פעיל במשימון. בחרו משתמש מהרשימה.</p>` : ''}
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-h"><h2>רכש — מחירונים</h2><p>מי מקבל בבוט את הפריטים מהזמנת רכש סופית שאינם במחירון הספק, ומוסיף אותם למחירון. אחד או יותר; הראשון שעונה מטפל. ריק — ההצעות מחכות, ומנהלי המערכת מקבלים התראה.</p></div>
+        <div class="checks" id="pl-handlers" role="group" aria-label="רכש — מחירונים">
+          ${acc.users.map((u) => `<label class="check"><input type="checkbox" value="${u.id}" ${handlers.has(u.id) ? 'checked' : ''}> ${esc(u.name)}</label>`).join('') || '<span class="muted">אין משתמשים</span>'}
         </div>
       </section>
 
@@ -749,7 +837,8 @@
         $('#confirm').innerHTML = `<span class="dirty">פותחים כתיבה לחברה אמיתית: ${esc(opened.join(', '))}. ללחוץ שוב על "שמירה" כדי לאשר.</span>`;
         confirmed = true; return;
       }
-      const body = { connection: { host: $('#c-host').value, ini: $('#c-ini').value, user: $('#c-user').value }, companies, defaults: { buyerName: $('#b-name').value, buyerEmail: $('#b-email').value } };
+      const body = { connection: { host: $('#c-host').value, ini: $('#c-ini').value, user: $('#c-user').value }, companies, defaults: { buyerUserId: Number($('#b-user').value) || null,
+        pricelistHandlers: [...main.querySelectorAll('#pl-handlers input:checked')].map((x) => Number(x.value)) } };
       if ($('#c-pass').value) body.connection.password = $('#c-pass').value;
       try {
         await api('PUT', '/api/priority/settings', body);

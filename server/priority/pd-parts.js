@@ -8,13 +8,14 @@
  *   1. "אף אחד" ל"התכוונת ל…" — הפריט בלי מק"ט. ב"סיום": *רק המזוהים* (הדרישה יוצאת בלעדיהם, ‎partial‎) או
  *      *לחכות לרכש* (שום דבר לא נכתב, ‎wait‎). בשני המקרים — מייל דרך משימון למנהלת הרכש, בלי שאלה:
  *      "מק"טים נדרשים לבנייה בהקדם — לבקשת <העובד>".
- *   2. סבב (כל 20 דקות): לכל פריט — מק"ט פעיל *חדש* בקטלוג (שלא היה כשנשלחה הבקשה) עם שם דומה.
+ *   2. סבב (כל 20 דקות): לכל פריט — מק"ט פעיל *חדש* בקטלוג (שלא היה כשנשלחה הבקשה) שהוא הפריט שביקשו (ה-AI מכריע;
+ *      בלי AI — שם דומה). כל מה שנפתח — הודעה ליוזם מיד (גם כשעוד לא נפתחו כולם). מנהלת הרכש לא צריכה לעדכן אף אחד.
  *   3. כשכל המק"טים נבנו — ליוזם בבוט *ובמייל*: "המק"טים החסרים נבנו", הרשימה, ו"להמשיך בדרישת הרכש עם הכמויות
  *      והמק"טים?" *כן* ← הדרישה נטענת מוכנה (‎purchase-demand.js‎, ‎startRebuild‎): ב-‎wait‎ — כל הדרישה; ב-‎partial‎ —
  *      החסרים בלבד (השאר כבר יצא). "סיום" שולח אותה.
  *   קבלת סחורה (‎goods-receipt.js‎): שאלה "לשלוח לרכש?" בשלב המק"טים; הקליטה ממשיכה על 000, וכשנבנו — רק הודעה (‎receipt‎).
  *
- * מנהלת הרכש — בהגדרות פריוריטי (‎/priority‎ ← הגדרות: ‎buyerName‎, ‎buyerEmail‎). לא הוגדרה — בדרישה: רק המזוהים, והרשימה
+ * מנהלת הרכש — בהגדרות פריוריטי (‎/priority‎ ← הגדרות): משתמש משימון (‎buyerUserId‎); בהגדרה ישנה — ‎buyerName‎, ‎buyerEmail‎. לא הוגדרה — בדרישה: רק המזוהים, והרשימה
  * למנהלי המערכת; בקבלת סחורה — בלי שאלה.
  */
 const crypto = require('node:crypto');
@@ -22,6 +23,9 @@ const D = require('../core').Db;
 const Auth = require('../core').Auth;
 const P = require('../core').Permissions;
 const Priority = require('../integrations').Priority;
+const Claude = require('../integrations').Claude;
+const Paths = require('../core').Paths;
+const fs = require('node:fs');
 const Mailer = require('../integrations').Mailer;
 const Gmail = require('../integrations').Gmail;
 const Settings = require('./priority-settings');
@@ -68,6 +72,11 @@ function alertAdmins(title, body) {
 /** ‎{ name, email, userId }‎ — מי שמוגדרת בהגדרות פריוריטי; ‎null‎ — לא הוגדרה (אין שאלות, הזרימה הישנה) */
 function contact() {
   const d = Settings.defaults();
+  // משתמש משימון שנבחר במסך (מ-19.11.26) — השם והמייל ממנו; לא פעיל עוד — אין מנהלת רכש
+  if (d.buyerUserId) {
+    const u = Settings.buyerOf(d);
+    return u && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(u.email ?? '')) ? { email: u.email, name: u.full_name, userId: u.id } : null;
+  }
   const email = String(d.buyerEmail ?? '').trim();
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return null;
   const u = D.get("SELECT id, full_name FROM users WHERE lower(email) = lower(?) AND status = 'active'", email);
@@ -94,7 +103,8 @@ function mailOf(user, s, list, to, { source = 'demand', mode = 'wait', token = n
   const after = receipt
     ? `הסחורה נקלטה בינתיים על מק"ט כללי 000. כשכרטיסי הפריט ייבנו, ${user.full_name} יקבל הודעה בבוט, ובפעם הבאה הבוט ימצא אותם לבד.`
     : `${mode === 'partial' ? 'הדרישה יוצאת בינתיים עם הפריטים שזוהו.' : 'הדרישה ממתינה לבניית המק"טים.'} כשכרטיסי הפריט ייבנו בפריוריטי (בשם דומה), ${user.full_name} יקבל הודעה בבוט ובמייל וימשיך בדרישה עם המק"טים המדויקים.`;
-  const subject = `מק"טים נדרשים לבנייה בהקדם — לבקשת ${user.full_name}`;
+  // ❗ סימן קריאה אדום — בנושא, בראש ההודעה, ובכותרות "חשיבות גבוהה" (‎urgent‎) שמסמנות אותו בתיבה
+  const subject = `❗ מק"טים נדרשים לבנייה בהקדם — לבקשת ${user.full_name}`;
   const facts = [
     ['חברה', `${company?.name ?? s.company} (${s.company})`],
     s.project ? ['פרויקט', `${s.project.des} (${s.project.code})`] : null,
@@ -107,37 +117,80 @@ function mailOf(user, s, list, to, { source = 'demand', mode = 'wait', token = n
     `שלום ${to.name},`, '',
     `להלן מק"טים נדרשים לבנייה בהקדם, לבקשת ${user.full_name} (${via}):`, '',
     ...facts.map(([k, v]) => `${k}: ${v}`), '',
-    ...list.map((it, i) => `${i + 1}. ${it.description} — ${qty(it.qty)} ${unitOf(it)}${it.note ? ` (${it.note})` : ''}${codingOf(it) ? ` · מוצע: ${codingOf(it)}` : ''}`), '',
+    ...list.map((it, i) => `${i + 1}. ${it.description} — ${qty(it.qty)} ${unitOf(it)}${it.note ? ` (${it.note})` : ''}${codingOf(it) ? ` · מוצע: ${codingOf(it)}` : ''}${it.spec ? ' · 📎 מפרט מצורף' : ''}`), '',
     after,
-    link ? `\nמק"ט כבר קיים, או נבנה? אפשר לענות ל${user.full_name} כאן — והוא יקבל את התשובה בבוט: ${link}` : null,
+    `\nפותחים מק"ט חדש בפריוריטי — אין צורך לעדכן אף אחד: ${user.full_name} יקבל הודעה בבוט לבד, ברגע שהמק"ט נפתח.`,
+    link ? `רק כשהמק"ט כבר קיים, או כדי לכתוב לו הערה: ${link}` : null,
     '', 'בברכה,', 'משימון'
   ].filter((x) => x !== null).join('\n');
   const td = 'style="border:1px solid #ccc;padding:6px 8px"';
   const html = `<div dir="rtl" style="font-family:Arial,sans-serif;font-size:14px">
+<p style="color:#dc2626;font-weight:bold;font-size:16px">❗ דחוף</p>
 <p>שלום ${esc(to.name)},</p>
 <p><b>להלן מק"טים נדרשים לבנייה בהקדם</b>, לבקשת ${esc(user.full_name)} (${esc(via)}):</p>
 <p>${facts.map(([k, v]) => `${esc(k)}: <b>${esc(v)}</b>`).join('<br>')}</p>
 <table style="border-collapse:collapse"><tr><th ${td}>#</th><th ${td}>תיאור</th><th ${td}>כמות</th><th ${td}>יחידה</th><th ${td}>הערה</th><th ${td}>תת פרק / משאב מוצע</th></tr>
-${list.map((it, i) => `<tr><td ${td}>${i + 1}</td><td ${td}>${esc(it.description)}</td><td ${td}>${esc(qty(it.qty))}</td><td ${td}>${esc(unitOf(it))}</td><td ${td}>${esc(it.note)}</td><td ${td}>${esc(codingOf(it))}</td></tr>`).join('\n')}
+${list.map((it, i) => `<tr><td ${td}>${i + 1}</td><td ${td}>${esc(it.description)}${it.spec ? '<br>📎 מפרט מצורף' : ''}</td><td ${td}>${esc(qty(it.qty))}</td><td ${td}>${esc(unitOf(it))}</td><td ${td}>${esc(it.note)}</td><td ${td}>${esc(codingOf(it))}</td></tr>`).join('\n')}
 </table>
 <p>${esc(after)}</p>
-${link ? `<p><b>מק"ט כבר קיים, או נבנה?</b> <a href="${esc(link)}">לענות ל${esc(user.full_name)}</a> — הוא יקבל את התשובה בבוט.</p>` : ''}
+<p><b>פותחים מק"ט חדש בפריוריטי — אין צורך לעדכן אף אחד:</b> ${esc(user.full_name)} יקבל הודעה בבוט לבד, ברגע שהמק"ט נפתח.</p>
+${link ? `<p>רק כשהמק"ט כבר קיים, או כדי לכתוב לו הערה: <a href="${esc(link)}">לענות ל${esc(user.full_name)}</a>.</p>` : ''}
 <p>בברכה,<br>משימון</p></div>`;
-  return { subject, text, html };
+  return { subject, text, html, urgent: true, attachments: specFiles(list) };
+}
+
+/** 📎 המפרטים שהעובד צירף לפריטים (צילום / PDF) — כקבצים מצורפים למייל לרכש */
+function specFiles(list) {
+  const out = [];
+  for (const it of list) {
+    if (!it.spec?.path) continue;
+    try {
+      const ext = it.spec.mime?.includes('pdf') ? 'pdf' : it.spec.mime?.includes('png') ? 'png' : 'jpg';
+      out.push({ buf: fs.readFileSync(it.spec.path), fileName: `מפרט ${out.length + 1} — ${String(it.description).replace(/[\\/:*?"<>|]/g, ' ').slice(0, 60)}.${ext}`, mime: it.spec.mime || 'application/octet-stream' });
+    } catch { /* הקובץ כבר נמחק */ }
+  }
+  return out;
 }
 
 /** שליחה דרך משימון: שרת הדואר של המערכת, ואם אינו מוגדר — מתיבת ה-Gmail של העובד. ‎true‎ — יצא */
 async function sendMail(user, m, to) {
   const me = D.get('SELECT email, full_name FROM users WHERE id = ?', user.id);
   if (Mailer.isEnabled()) {
-    await Mailer.send({ to: to.email, toName: to.name, subject: m.subject, text: m.text, html: m.html, replyTo: me?.email || undefined, replyToName: me?.full_name });
+    await Mailer.send({ to: to.email, toName: to.name, subject: m.subject, text: m.text, html: m.html, urgent: m.urgent, attachments: m.attachments ?? [], replyTo: me?.email || undefined, replyToName: me?.full_name });
     return true;
   }
   const conn = Gmail.connectionOf(user.id);
   if (!conn?.email) throw new Error('אין שרת דואר במערכת, ולעובד אין תיבת Gmail מחוברת');
-  const built = Mailer.buildMessage({ from: conn.email, fromName: user.full_name, to: to.email, toName: to.name, subject: m.subject, text: m.text, html: m.html });
+  const built = Mailer.buildMessage({ from: conn.email, fromName: user.full_name, to: to.email, toName: to.name, subject: m.subject, text: m.text, html: m.html, urgent: m.urgent, attachments: m.attachments ?? [] });
   await Gmail.send(user.id, built.raw);
   return true;
+}
+
+/** מייל טקסט פשוט דרך משימון ל-‎to = { name, email }‎ — עם "שלום" ו"בברכה". זורק כשלא יצא */
+async function mailPerson(user, to, subject, body) {
+  const text = [`שלום ${to.name},`, '', body, '', 'בברכה,', 'משימון'].join('\n');
+  const html = `<div dir="rtl" style="font-family:Arial,sans-serif;font-size:14px">${text.split('\n').map((l) => esc(l) || '&nbsp;').join('<br>')}</div>`;
+  return sendMail(user, { subject, text, html }, to);
+}
+
+/**
+ * 🛒 שורות בדרישת רכש שפריוריטי לא קיבל (למשל אין תקציב בפרויקט לתת הפרק) — הדרישה נשארה טיוטא. הודעה למנהלת הרכש:
+ * התראה במשימון ומייל (הוחלט 19.11.26 — רק לה ולעובד). לא הוגדרה, או שהמייל לא יצא — למנהלי המערכת.
+ * מחזיר את שם מי שקיבלה, או ‎null‎.
+ */
+async function notifyBuyer(user, s, title, lines) {
+  const to = contact();
+  const company = Priority.companyOf(s.company);
+  const body = [`לבקשת: ${user.full_name}`, `חברה: ${company?.name ?? s.company} (${s.company})`, s.project ? `פרויקט: ${s.project.des} (${s.project.code})` : null,
+    s.prdno || s.editOf ? `דרישה: ${s.prdno || s.editOf} — נשארה טיוטא, לא נשלחה לאישור` : null, '', ...lines].filter((x) => x !== null).join('\n');
+  if (!to) { alertAdmins(title, `${body}\n\n(מנהלת הרכש לא הוגדרה בהגדרות פריוריטי)`); return null; }
+  if (to.userId) D.notify({ targetType: 'user', targetId: to.userId, kind: 'ai', title: `🛒 ${title}`, body });
+  try {
+    await mailPerson(user, to, `${title} — לבקשת ${user.full_name}`, body);
+  } catch (err) {
+    if (!to.userId) { alertAdmins(title, `${body}\n\nהמייל למנהלת הרכש לא יצא: ${err.message}`); return null; }
+  }
+  return to.name;
 }
 
 /** המק"טים שכבר בקטלוג לתיאור הזה — כדי לזהות בהמשך מק"ט *חדש* */
@@ -149,7 +202,7 @@ async function knownCodes(company, description) {
 
 const headerOf = (s) => ({ project: s.project ?? null, warehouse: s.warehouse ?? null, warehouseName: s.warehouseName ?? '', demandCode: s.demandCode ?? null, date: s.date ?? null,
   supplier: s.supplier?.name ?? null });
-const itemsOf = (s) => (s.items ?? []).map(({ n, description, qty: q, unit, note, status, part, general, req }) => ({ n, description, qty: q, unit, note, status, part, general, req }));
+const itemsOf = (s) => (s.items ?? []).map(({ n, description, qty: q, unit, note, status, part, general, req, spec }) => ({ n, description, qty: q, unit, note, status, part, general, req, spec }));
 
 /**
  * שולח למנהלת הרכש את הפריטים בלי מק"ט (‎list‎ — שורות מהדרישה), ושומר את הבקשה (‎s.partsReq‎).
@@ -173,7 +226,7 @@ async function requestBuild(user, s, list, { source = 'demand', mode = 'wait' } 
       body: list.map((it) => `• ${it.description} — ${qty(it.qty)} ${unitOf(it)}`).join('\n') });
   }
   const missing = [];
-  for (const it of list) missing.push({ n: it.n, description: it.description, qty: it.qty, unit: unitOf(it), note: it.note ?? '', known: await knownCodes(s.company, it.description), built: null });
+  for (const it of list) missing.push({ n: it.n, description: it.description, qty: it.qty, unit: unitOf(it), note: it.note ?? '', spec: it.spec ?? null, known: await knownCodes(s.company, it.description), built: null });
   if (reuse) {
     D.run('UPDATE pd_part_requests SET missing = ?, items = ?, header = ?, token = ? WHERE id = ?',
       JSON.stringify([...cur.missing, ...missing]), JSON.stringify(itemsOf(s)), JSON.stringify(headerOf(s)), token, cur.id);
@@ -196,13 +249,35 @@ function setMode(s, mode, prdno = null) {
 
 const wordsOf = (t) => String(t ?? '').replace(/["'״׳(),.:;\-/]/g, ' ').split(/\s+/).filter((w) => w.length >= 2 && !/^\d+$/.test(w));
 
-/** מק"ט פעיל חדש (שלא היה כשנשלחה הבקשה) עם שם דומה לתיאור — או ‎null‎ */
+/*
+ * ה-AI מכריע בין המק"טים החדשים: איזה מהם הוא הפריט שהעובד ביקש — גם כשהרכש ניסח אחרת ("5*10" / "5X10", בלי שם היצרן).
+ * לא בטוח — אף אחד (עדיף לחכות לסבב הבא מאשר להודיע על פריט אחר). ניתן להחלפה בבדיקות — ‎_ai‎.
+ */
+const BUILT_SCHEMA = { type: 'object', properties: { code: { type: 'string' }, why: { type: 'string' } }, required: ['code', 'why'], additionalProperties: false };
+const ai = {
+  async built(m, candidates) {
+    const text = JSON.stringify({ task: 'built', item: { description: m.description, qty: m.qty, unit: m.unit, note: m.note ?? '' },
+      candidates: candidates.map((p) => ({ code: p.PARTNAME, description: p.PARTDES ?? '' })) });
+    return Claude.json({ feature: 'priority.demand', system: fs.readFileSync(Paths.skill('purchase-demand.md'), 'utf8'), content: [{ type: 'text', text }], schema: BUILT_SCHEMA, effort: 'low' });
+  }
+};
+
+/** מק"ט פעיל חדש (שלא היה כשנשלחה הבקשה) שהוא הפריט שביקשו — או ‎null‎ */
 async function findBuilt(company, m) {
   const known = new Set(m.known ?? []);
   const exact = await Priority.findPartExact(company, m.description).catch(() => null);
   if (exact && !known.has(exact.PARTNAME) && (exact.STATDES ?? 'פעיל') === 'פעיל') return exact;
   const found = (await Priority.searchParts(company, m.description).catch(() => [])).filter((x) => x.p && !known.has(x.p.PARTNAME));
   if (!found.length) return null;
+  if (Claude.isEnabled()) {
+    try {
+      const pool = found.slice(0, 10).map((x) => x.p);
+      const r = await ai.built(m, pool);
+      return pool.find((p) => p.PARTNAME === String(r?.code ?? '').trim()) ?? null;
+    } catch (err) {
+      console.error('[משימון] מק"טים לבנייה — זיהוי ב-AI (ממשיכים בהתאמת מילים):', err.message);
+    }
+  }
   const full = found.find((x) => x.full);
   if (full) return full.p;
   // לפחות שתי מילים מהתיאור (או המילה היחידה) — "שם דומה"
@@ -241,6 +316,17 @@ async function mailWorker(r, text) {
   }
 }
 
+/** חלק מהמק"טים נפתחו (לא כולם) — הודעה מיד ליוזם, עם הרשימה של מה שנפתח ומה עוד בבנייה; בלי שאלה */
+async function tellSome(r, fresh) {
+  const left = r.missing.filter((m) => !m.built);
+  const text = [`🆕 *נפתחו בפריוריטי המק"טים שלא מצאת:*`, ...fresh.map((m) => `• ${m.description} — ${qty(m.qty)} ${m.unit} ← *${m.built.des}* (${m.built.code})`),
+    r.header?.project ? `📁 ${r.header.project.des}` : null, '',
+    `⏳ עוד ${left.length === 1 ? 'פריט אחד' : `${left.length} פריטים`} בבנייה ברכש: ${left.map((m) => m.description).join(', ')}.`,
+    r.mode === 'receipt' ? null : 'כשכולם ייפתחו — אשאל אם להמשיך בדרישה.'].filter((x) => x !== null).join('\n');
+  D.notify({ targetType: 'user', targetId: r.user_id, kind: 'ai', title: '🆕 נפתחו המק"טים שלא מצאת', body: fresh.map((m) => `• ${m.description} ← ${m.built.des} (${m.built.code})`).join('\n') });
+  if (hooks.send) await hooks.send(r.user_id, text);
+}
+
 /** הודעה ליוזם, בבוט ובמייל: המק"טים החסרים נבנו, הרשימה, ו"להמשיך בדרישה?" (בקבלת סחורה — רק הודעה) */
 async function tell(r) {
   const list = r.missing.map((m) => `• ${m.description} — ${qty(m.qty)} ${m.unit} ← *${m.built.des}* (${m.built.code})`);
@@ -268,6 +354,11 @@ function cleanup() {
   D.run("UPDATE pd_part_requests SET status = 'expired', token = NULL WHERE status = 'open' AND created_at < ?", old);
   D.run("UPDATE pd_part_requests SET token = NULL WHERE status = 'expired' AND token IS NOT NULL");
   const purge = new Date(Date.now() - PURGE_DAYS * 86400000).toISOString();
+  // 📎 המפרטים של הבקשות שנמחקות — גם הם
+  for (const { id } of D.all("SELECT id FROM pd_part_requests WHERE status != 'open' AND created_at < ?", purge)) {
+    const r = row(id);
+    for (const p of new Set([...r.missing, ...r.items].map((x) => x.spec?.path).filter(Boolean))) { try { fs.unlinkSync(p); } catch { /* כבר נמחק */ } }
+  }
   D.run("DELETE FROM pd_part_requests WHERE status != 'open' AND created_at < ?", purge);
 }
 
@@ -282,15 +373,18 @@ async function tick() {
     for (const { id } of D.all("SELECT id FROM pd_part_requests WHERE status = 'open' ORDER BY id")) {
       const r = row(id);
       checked += 1;
-      let changed = false;
+      const fresh = [];
       for (const m of r.missing.filter((x) => !x.built)) {
         const p = await findBuilt(r.company, m);
-        if (p) { m.built = partOf(p); changed = true; }
+        if (p) { m.built = partOf(p); fresh.push(m); }
       }
       D.run('UPDATE pd_part_requests SET missing = ?, checked_at = ? WHERE id = ?', JSON.stringify(r.missing), D.nowIso(), id);
-      if (changed && r.missing.every((m) => m.built)) {
-        try { await tell(r); told += 1; } catch (err) { console.error('[משימון] מק"טים לבנייה — הודעה ליוזם:', err.message); }
-      }
+      if (!fresh.length) continue;
+      // כל מה שנפתח — הודעה מיד; כשנפתחו כולם — הרשימה המלאה והשאלה
+      try {
+        if (r.missing.every((m) => m.built)) await tell(r); else await tellSome(r, fresh);
+        told += 1;
+      } catch (err) { console.error('[משימון] מק"טים לבנייה — הודעה ליוזם:', err.message); }
     }
   } catch (err) {
     console.error('[משימון] מק"טים לבנייה — סבב:', err.message);
@@ -371,7 +465,7 @@ function forBuyer(token) {
   return {
     worker: nameOf(r.user_id), company: Priority.companyOf(r.company)?.name ?? r.company, project: r.header?.project?.des ?? '',
     supplier: r.header?.supplier ?? '', receipt: r.mode === 'receipt', open: r.status === 'open', created: r.created_at,
-    items: r.missing.map((m) => ({ n: m.n, description: m.description, qty: m.qty, unit: m.unit, note: m.note ?? '',
+    items: r.missing.map((m) => ({ n: m.n, description: m.description, qty: m.qty, unit: m.unit, note: m.note ?? '', spec: Boolean(m.spec),
       built: m.built ? { code: m.built.code, des: m.built.des } : null, answers: m.answers ?? [] }))
   };
 }
@@ -408,4 +502,4 @@ async function buyerAnswer(token, { n, code = '', note = '' } = {}) {
   return forBuyer(token);
 }
 
-module.exports = { BTN_REBUILD, BTN_MORE, BTN_SKIP, forBuyer, buyerAnswer, cleanup, contact, requestBuild, setMode, tick, start, owns, answer, setHooks, _findBuilt: findBuilt, _mailOf: mailOf, _row: row };
+module.exports = { _sendMail: sendMail, _ai: ai, BTN_REBUILD, BTN_MORE, BTN_SKIP, notifyBuyer, mailPerson, alertAdmins, forBuyer, buyerAnswer, cleanup, contact, requestBuild, setMode, tick, start, owns, answer, setHooks, _findBuilt: findBuilt, _mailOf: mailOf, _row: row };

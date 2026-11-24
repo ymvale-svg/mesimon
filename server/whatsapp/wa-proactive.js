@@ -15,6 +15,7 @@ const MeetCoord = require('../meetings').MeetingCoord;
 const { channel, currentMsg, doneEmoji, firstName, hooks, inHours, isConfigured, localDate, log, mailAlertUsers, orgUsers, react, sendButtons, sendText, splitMessage, workHours } = require('./wa-base');
 const { CANCEL, LIST_SHOWN, RANGES, chatOf, formatList, saveChat } = require('./wa-private');
 const { rememberBot } = require('./wa-tasks');
+const Instinct = require('./instinct');
 
 
 // ---------------------------------------------------------------------------
@@ -77,8 +78,12 @@ function staleQuestion(userId, st, text, msg = {}) {
   if (!st.draft || st.draft.kind === 'menu') return false;
   const asked = Date.parse(st.draft.askedAt ?? '') || Date.parse(D.get('SELECT updated_at FROM wa_chats WHERE user_id = ?', userId)?.updated_at ?? '') || 0;
   if (!asked || Date.now() - asked < questionTtlMin() * 60 * 1000) return false;
+  // 🛒 שאלת פרטים בפנייה לספקים ("איזה פריט?", "מאיפה הספקים?") — לא שאלת אישור: התשובה בה גם אחרי חצי שעה
+  // (באג 22.11.26: "גנרטור 200 אמפר" אחרי 33 דקות ← "תכתוב הכול שוב בהודעה אחת"). נושא אחר — ‎Rfq.answer‎ מזהה ומשחרר
+  if (st.draft.kind === 'rfq' && ['details', 'source'].includes(st.draft.step) && Date.now() - asked < RFQ_LATE_MS) return false;
   return !answerLike(text, msg);
 }
+const RFQ_LATE_MS = 3 * 60 * 60 * 1000;
 
 
 /**
@@ -204,17 +209,43 @@ async function replyWatchTick() {
 }
 
 
+/**
+ * 🛒 חיפוש ספקים ברשת — במקביל גם דרך אינסטינקט (22.11.26, ישראל), כשהוא פעיל במערכת. זה חיפוש בשביל הקוד, לא
+ * בקשה של העובד — לכן לא תלוי בפיילוט שלו: יוצא רק המבוקש, והתשובה חוזרת לפנייה (לא לעובד)
+ */
+const instinctOn = () => Boolean(WaActions.byKey('instinct')?.enabled);
+const rfqAsk = (actor) => (instinctOn() ? (text) => Instinct.search(actor.id, text) : null);
+
+/**
+ * 🛒 לא הסתדרנו לבד (לא נמצאו ספקים / החיפוש נכשל) — הבקשה לאינסטינקט, והתשובה שלו לעובד. בלי "לא מצאתי" ובלי
+ * שגיאה (22.11.26, ישראל). ‎false‎ — אינסטינקט לא פעיל: העובד מקבל את ההודעה הרגילה.
+ */
+function rfqHandoff(actor, text, ref) {
+  if (!instinctOn() || !text) return false;
+  const user = D.get('SELECT id, full_name FROM users WHERE id = ?', actor.id);
+  if (!user) return false;
+  Instinct.request(user, text, { ref });
+  void react(ref, '⏳');
+  log({ channel: 'private', userId: actor.id, action: 'rfq', status: 'ok', result: 'לא הסתדרנו לבד — הבקשה עברה לאינסטינקט' });
+  return true;
+}
+
 // 🛒 פנייה לספקים — החיפוש והשליחה ברקע (חיפוש ברשת לוקח זמן)
 function rfqPrepare(actor, rfqId) {
   const ref = currentMsg.get(actor.id);
   setImmediate(async () => {
     try {
-      const r = await Rfq.prepare(actor.id, rfqId);
+      const r = await Rfq.prepare(actor.id, rfqId, { ask: rfqAsk(actor) });
+      if (r.handoff && rfqHandoff(actor, r.handoff, ref)) return;
       void react(ref, '');
       await pushToUser(actor.id, { text: r.text, buttons: r.buttons ?? [], draft: r.draft ?? null }, 'rfq');
     } catch (err) {
-      void react(ref, '⚠️');
       console.error('[משימון] חיפוש ספקים נכשל:', err.message);
+      log({ channel: 'private', userId: actor.id, action: 'rfq', status: 'error', result: `חיפוש ספקים נכשל: ${err.message}`.slice(0, 300) });
+      let text = '';
+      try { text = Rfq.handoffText(rfqId); } catch { /* בלי */ }
+      if (rfqHandoff(actor, text, ref)) return;
+      void react(ref, '⚠️');
       await pushToUser(actor.id, { text: 'לא הצלחתי למצוא ספקים כרגע 😕 נסו שוב בעוד כמה דקות.' }, 'rfq');
     }
   });
@@ -230,7 +261,9 @@ function rfqSend(actor, rfqId) {
     } catch (err) {
       void react(ref, '⚠️');
       console.error('[משימון] שליחה לספקים נכשלה:', err.message);
-      await pushToUser(actor.id, { text: `השליחה לספקים נכשלה: ${err.message}` }, 'rfq');
+      // לעובד — בלי פרטים טכניים (הם ביומן); השליחה עצמה לא עוברת לאינסטינקט: היא מהמייל של העובד
+      log({ channel: 'private', userId: actor.id, action: 'rfq', status: 'error', result: `השליחה לספקים נכשלה: ${err.message}`.slice(0, 300) });
+      await pushToUser(actor.id, { text: 'השליחה לספקים לא הצליחה הפעם 😕 נסו שוב בעוד כמה דקות.' }, 'rfq');
     }
   });
 }
@@ -247,5 +280,5 @@ async function rfqTick() {
 }
 
 module.exports = {
-  answerLike, busyFor, freeToAsk, meetCoordRun, meetCoordTick, pushToUser, questionTtlMin, releaseQuestion, replyWatchTick, rfqPrepare, rfqSend, rfqTick, sendSummaries, staleQuestion, userLastAt
+  rfqHandoff, answerLike, busyFor, freeToAsk, meetCoordRun, meetCoordTick, pushToUser, questionTtlMin, releaseQuestion, replyWatchTick, rfqPrepare, rfqSend, rfqTick, sendSummaries, staleQuestion, userLastAt
 };

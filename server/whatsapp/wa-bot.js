@@ -78,7 +78,7 @@ const Briefing = require('../meetings').Briefing;
 const Calendar = require('../meetings').Calendar;
 const Meetings = require('../meetings').Meetings;
 const Instinct = require('./instinct');
-const { appRoot, lastOutId, buttonReplyText, candidatesOf, chains, channel, checkState, currentMsg, DAY, DIGEST_GRACE_MIN, doneEmoji, emailText, enqueueAs, firstName, HISTORY_TURNS, hooks, inHours, isConfigured, localDate, log, mailAlertUsers, markDone, onDirect, orgUsers, parseJson, PICK_SHOWN, pickText, publicStatus, qr, react, reactNow, readLog, recentFiles, remove, resolveMentions, save, sendButtons, sendText, setState, signatureFields, signatureLine, splitMessage, taskLink, todayStats, userByPhone, WALK, workHours } = require('./wa-base');
+const { appRoot, lastOutId, buttonReplyText, candidatesOf, chains, channel, checkState, currentMsg, incoming, DAY, DIGEST_GRACE_MIN, doneEmoji, emailText, enqueueAs, firstName, HISTORY_TURNS, hooks, inHours, isConfigured, localDate, log, mailAlertUsers, markDone, onDirect, orgUsers, parseJson, PICK_SHOWN, pickText, publicStatus, qr, react, reactNow, readLog, recentFiles, remove, resolveMentions, save, sendButtons, sendText, setState, signatureFields, signatureLine, splitMessage, taskLink, todayStats, userByPhone, WALK, workHours } = require('./wa-base');
 const { analyzeGroup, bindGroup, listGroups, notifyAdmins, processGroup, processGroups, prune, recipientOf, sanitizeGroup } = require('./wa-groups');
 const { batchDraft, batchText, CANCEL, FORWARD_MAX, LIST_SHOWN, PLAIN_FEATURES, PLAIN_GREETING, PLAIN_HELP, PLAIN_INSIGHTS, PLAIN_LIST, PLAIN_TODAY, RANGES, READ_ALOUD, READ_ALOUD_DOWN, YES, actionOf, addForward, chatOf, checkDraft, clearForwards, draftText, emptyChat, featuresText, findContactCards, formatList, forwardsOf, helpText, localDay, readAloudAllowed, readAloudFile, readAloudText, saveChat, shortDate, sourceOf, understand, unknownReplied, withForwards } = require('./wa-private');
 const { deliver, flushOutbox, messageUser, messageUserNow, notifyAssignment, sendFilesToUser } = require('./wa-tasks');
@@ -86,7 +86,7 @@ const { answerLike, busyFor, meetCoordRun, meetCoordTick, pushToUser, questionTt
 const { businessCommand, closeAlerted, closureDecision, confirmPending, contactOf, createFromDraft, draftEmail, findRecipients, mailActionAlerts, mailAlertFor, mailAlerts, parseThreadAdd, resolveCc, solveText, startGoodsFromMail, suggestionDecision, suggestionFeedback, threadAddText, VIA_EMAIL, VIA_MESIMON } = require('./wa-mail');
 const { MENU, MENU_FREE_HINT, MENU_MORE, PLAIN_AGENTS, agentsText, cut, dayItems, isMenuButton, menuButtonOf, menuButtons, menuOptions, menuPick, menuText, moreMenuGroups, pairsOf, parseClosureCommand, parseSuggestionCommand, recordingReply, todayMessage, walkAction, walkButtons, walkText } = require('./wa-menu');
 const { flowReply, logoIntent, meetingAudioAllowed, meetingAudioTurn, meetingFollowups, processMeetingAudio, receiveMeetingAudio, timelessAudioTick, TRANSLATE } = require('./wa-meeting');
-const { DRAFT_ONLY, flowAgentsList, flowAlertNo, flowOnMailDose, flowApproval, flowBusinessCommand, flowCancel, flowClosureCommand, flowEmailEdit, flowEmailPick, flowEmailSolve, flowEmailVia, flowFeaturesRequest, flowFormFillRequest, flowGreeting, flowInstinct, flowInstinctExplicit, flowInstinctReply, flowInstinctPilot, flowNoticeToInstinct, flowIntentCancel, flowIntentDenied, flowIntentMenu, flowIntentOther, flowMailFileRequest, flowMailReplyEdit, flowMailWalk, flowMeetCoordRequest, flowMeetingAudioAnswer, flowMeetingAudioRequest, flowMeetingAudioStatus, flowMeetingFollowupRequest, flowMeetingReminderRequest, flowMenuList, flowMenuPick, flowNoAi, flowNoticeRequest, flowOnClosureAddress, flowOnDayEvening, flowOnFormFill, flowOnGoodsStop, flowOnMailFile, flowOnMailMuteSender, flowOnMailRemindOrGoods, flowOnMeetCoord, flowOnMeetingTasks, flowOnPaceOffer, flowOnPlainMail, flowOnReminder, flowOnRfq, flowOnSentFollowup, flowOnThreadAdd, flowRemindersRequest, flowReplyAsk, flowRfqRequest, flowRfqSummary, flowSuggestionCommand, flowTranslateRequest, flowWalk, NEXT, switchCancels } = require('./wa-flows');
+const { DRAFT_ONLY, flowAgentsList, flowAlertNo, flowOnMailDose, flowApproval, flowBusinessCommand, flowCancel, flowClosureCommand, flowEmailEdit, flowEmailPick, flowEmailSolve, flowEmailVia, flowFeaturesRequest, flowFormFillRequest, flowGreeting, flowInstinct, flowInstinctExplicit, flowInstinctReply, flowInstinctPilot, flowNoticeToInstinct, flowIntentCancel, flowIntentDenied, flowIntentMenu, flowIntentOther, flowMailFileRequest, flowMailReplyEdit, flowMailWalk, flowMeetCoordRequest, flowMeetingAudioAnswer, flowMeetingAudioRequest, flowMeetingAudioStatus, flowMeetingFollowupRequest, flowMeetingReminderRequest, flowMeetingSummaryRoutine, flowMenuList, flowMenuPick, flowNoAi, flowNoticeRequest, flowOnClosureAddress, flowOnDayEvening, flowOnFormFill, flowOnGoodsStop, flowOnMailFile, flowOnMailMuteSender, flowOnMailRemindOrGoods, flowOnMeetCoord, flowOnMeetingTasks, flowOnPaceOffer, flowOnPlainMail, flowOnReminder, flowOnRfq, flowOnSentFollowup, flowOnPricelist, flowPricelistRequest, flowOnThreadAdd, flowRemindersRequest, flowReplyAsk, flowRfqFollowup, flowRfqRequest, flowRfqSummary, flowSuggestionCommand, flowTranslateRequest, flowWalk, NEXT, switchCancels } = require('./wa-flows');
 
 const RECENT_FILE_MS = 15 * 60 * 1000;
 
@@ -405,7 +405,8 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
   // 🛒 פנייה לספקים להצעת מחיר — הבקשה, השאלות, האישור, ואחרי הסיכום
   { const c = { actor, dry, keep, out, state, t }; const r = await flowOnRfq(c); if (r !== NEXT) return r; state = c.state; }
   { const r = await flowRfqSummary({ actor, out, t }); if (r !== NEXT) return r; }
-  { const r = await flowRfqRequest({ actor, dry, out, t }); if (r !== NEXT) return r; }
+  { const r = await flowRfqRequest({ actor, dry, out, state, t }); if (r !== NEXT) return r; }
+  { const r = await flowRfqFollowup({ actor, dry, out, t }); if (r !== NEXT) return r; }
   // 🤖 "תעצב באינסטינקט" כשמודעה שלנו מחכה — המודעה עוברת לאינסטינקט
   { const r = await flowNoticeToInstinct({ actor, dry, keep, out, state, t, user }); if (r !== NEXT) return r; }
   // 🎨 מודעה / ✉️ מכתב רשמי — "תעצב לי מודעה…", ובתוך הזרימה: סגנון, תיקונים, "מאשר"
@@ -424,6 +425,9 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
   { const c = { actor, dry, keep, out, state, t }; const r = await flowOnDayEvening(c); if (r !== NEXT) return r; state = c.state; }
   // 📤 "לשלוח תזכורת עדינה?" על מייל ששלחת ולא נענה
   { const c = { actor, dry, keep, out, state, t }; const r = await flowOnSentFollowup(c); if (r !== NEXT) return r; state = c.state; }
+  // 🏷️ הוספה למחירון ספק מהזמנה — התשובה, ו"מחירון PO…" / "לבטל את ההוספה למחירון"
+  { const c = { actor, dry, keep, out, state, t }; const r = await flowOnPricelist(c); if (r !== NEXT) return r; state = c.state; }
+  { const r = await flowPricelistRequest({ actor, dry, out, state, t }); if (r !== NEXT) return r; }
   // 🔕 "לא להקפיץ יותר מיילים של X?" (‎mail-push.js‎)
   { const c = { actor, dry, keep, out, state, t }; const r = await flowOnMailMuteSender(c); if (r !== NEXT) return r; state = c.state; }
   {
@@ -490,6 +494,8 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
   { const c = { actor, dry, keep, out, state, t }; const r = await flowOnMeetingTasks(c); if (r !== NEXT) return r; state = c.state; }
   { const c = { actor, dry, keep, out, state, t }; const r = await flowOnPlainMail(c); if (r !== NEXT) return r; state = c.state; }
   // 🎥 אחרי פגישה מוקלטת: "סיכום הפגישה", "משימות מהפגישה", "הקלטת הפגישה"
+  // 📝 "שבסיום כל פגישה יישלח סיכום" — זו כבר השגרה (הוחלט 23.11.26)
+  { const r = flowMeetingSummaryRoutine({ actor, out, t }); if (r !== NEXT) return r; }
   { const r = await flowMeetingFollowupRequest({ actor, dry, out, state, t }); if (r !== NEXT) return r; }
 
   // 📅 "מי משתתף בפגישה?" — מהיומן (גם פגישות שלא נקבעו ממשימון)
@@ -1121,6 +1127,8 @@ async function handleDirectAs(msg) {
     // מי שתזכורות כבויות אצלו — המיקום לא נבדק ולא נשמר (אבטחה 17.11.26)
     if (!WaActions.allowed(actor, 'reminders')) return;
     const r = Reminders.onLocation(user.id, msg.location);
+    // שיתוף בזמן אמת בלי תזכורת שמחכה למקום — לא ביומן (#227)
+    if (r.nolog) { if (r.text) await sendText(msg.chatId, r.text); return; }
     // עדכון שקט — ליומן פעם בחצי שעה לכל היותר (כדי לראות שהעדכונים מגיעים, ובאיזו צורה)
     const quietLogged = quietLocationLog.get(user.id) ?? 0;
     if (r.quiet && Date.now() - quietLogged < 30 * 60000) return;
@@ -1260,6 +1268,7 @@ async function handleDirectAs(msg) {
     ? Boolean(pressed.awaiting && pressed.draft)
     : otherDoc || WaQuestions.latest(user.id, pressed.owner)?.id === pressed.id);
   msg = { ...msg, onQuestion };
+  incoming.set(user.id, { reaction });
   if (reaction && !onQuestion) {
     // 👍 על הודעה אחרת — לא תשובה. יש שאלה פתוחה — אומרים מה לעשות; אין — כלום
     const cur = chatOf(user.id);

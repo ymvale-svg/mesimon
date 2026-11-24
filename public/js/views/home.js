@@ -1971,7 +1971,7 @@ const HomeView = (() => {
     }, [
       el('div.flex', { style: { gap: '7px' } }, [
         UI.avatar(m.authorName, { small: true }),
-        el('b', { text: m.authorName, style: { fontSize: '12.5px' } }),
+        el('b', { text: m.authorName, style: { fontSize: 'var(--fs-sm)' } }),
         m.internal ? el('span.mute-sm', { title: 'הערה פנימית', text: '🔒' }) : null,
         el('div.spacer'),
         el('small.mute-sm', { text: UI.relative(m.createdAt) })

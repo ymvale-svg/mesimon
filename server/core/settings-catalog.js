@@ -162,13 +162,15 @@ const HIDDEN = {
 const INTERNAL = new Set([
   'agents_health_last', 'ai_morning_last', 'boot_count', 'dup_scan_last', 'installed_at', 'mail_remind_since',
   'migr_bot_pilot_open', 'migr_memory_always_on', 'migr_memory_conservative', 'org_merge_last', 'org_merge_rounds', 'org_refresh_last',
-  'org_topics_migrated', 'po_notify_baseline', 'sent_fu_scanned', 'vapid_private_pem', 'vapid_public', 'wa_mail_alert_since',
+  'org_topics_migrated', 'po_notify_baseline', 'po_pricelist_no_handler', 'sent_fu_scanned', 'vapid_private_pem', 'vapid_public', 'wa_mail_alert_since',
   'wa_summary_sent', 'whats_new_anchors_seeded', 'whats_new_files', 'whats_new_seeded', 'mail_rescan_multibox_v1', 'timeless_webhook',
   'pd_approval_notified', 'pd_approval_unmapped', 'pd_approval_nophone', 'pd_approval_failed', 'ai_outage', 'ai_retry',
   'pd_openers', // מי פתח כל דרישת רכש מהבוט (לפי חברה ומספר) — להודעת "אושרה"
   'pd_returned', // דרישות שהוחזרו לבדיקה ומחכות לפותח (לפי חברה ומספר) — pd-return.js
   'ai_dose_seeded_at', // 📉 מינון המייל — מתי חושבה נקודת ההתחלה מהשבועיים האחרונים (פעם אחת)
   'migr_fast_mode_off', // מצב מהיר כובה פעם אחת (17.11.26)
+  'migr_mail_auto_off', // יצירת משימות מהמייל בלי אישור כובתה לכולם פעם אחת (22.11.26)
+  'gr_no_po_report_last', // מתי נשלח הדוח השבועי "תעודות בלי מספר הזמנה" — buyer-notices.js
   'pd_return_chats' // שיחות פתוחות של החזרה לבדיקה (המחזיר / המסביר), לפי עובד, 30 דקות — pd-return.js
 ]);
 

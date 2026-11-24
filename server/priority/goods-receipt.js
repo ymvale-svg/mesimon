@@ -36,6 +36,7 @@ const Prefs = require('./priority-prefs');
 const Access = require('./priority-access');
 const Chain = require('./priority-chain');
 const Parts = require('./pd-parts');
+const BuyerNotices = require('./buyer-notices');
 const LineCmd = require('./line-commands');
 const GrStamp = require('./gr-stamp');
 const Priority = require('../integrations').Priority;
@@ -66,9 +67,10 @@ const TTL = 24 * 60 * 60 * 1000;
 const TZ = 'Asia/Jerusalem';
 const FILES_DIR = () => path.join(D.UPLOADS_DIR, 'goods-receipt');
 
-const TRIGGER = /קבלת\s*סחורה/;
+// גם "קבלות חורה" (התמלול) ו"קליטת תעודות" (סקירה 22.11: עובד כתב אותם, והבוט ענה "כתוב בדיוק 'קבלת סחורה'")
+const TRIGGER = /קבל(?:ת|ות)\s*ס?חורה|קליט(?:ת|ה)\s+(?:ה)?(?:תעוד(?:ה|ות|ת)|סחורה|חשבוני(?:ת|ות))(?=[\s,.!?]|$)/;
 // "פריוריטי" לבד — תפריט: מה לעשות בפריוריטי (היום קבלת סחורה; בהמשך חשבוניות חלקיות ועוד)
-const PRIORITY = /פריוריטי|פריורטי|פרויוריטי|priority/i;
+const PRIORITY = /פריוריטי|פריורטי|פרויוריטי|(?:^|[\s,.])ריורטי(?=[\s,.!?]|$)|priority/i;
 // שיחה פעילה — רק כל עוד העובד באמת עונה: 15 דקות מההודעה האחרונה (הוחלט 10.11.26; אותה הגדרה של שאר
 // הבוט — ‎wa_question_ttl_min‎). אחרי זה הודעה חדשה מתחילה מההתחלה; רק לחיצה על כפתור (‎late‎) עוד עונה לשאלה
 const idleMs = () => Math.max(1, Number(D.getSetting('wa_question_ttl_min', 15)) || 15) * 60 * 1000;
@@ -101,7 +103,7 @@ function buttonsFor(s) {
   if (!s) return [];
   if (s.confirmCancel) return [BTN.confirmCancel, BTN.backToDraft];
   if (s.confirmFinal) return [BTN.confirmFinal, BTN.backToDraft];
-  if (s.pendingNew) return ['צרף כנספח', 'קבלה חדשה', 'להתעלם ❌'];
+  if (s.pendingNew) return ['צרף כנספח', LATER_BTN, 'להתעלם ❌'];
   if (s.pendingList) return [BTN.yes, BTN.no];
   if (s.choices?.step === s.step && s.choices.list?.length) return s.choices.list;
   switch (s.step) {
@@ -123,6 +125,15 @@ function buttonsFor(s) {
 
 /** "ספק …", "שם ספק: …", "הספק הוא …", "ספק אחר" — ‎[1]‎ השם או המספר */
 const SUPPLIER_CMD = /^\s*(?:שם\s*(?:ה)?ספק|(?:ה)?ספק(?:\s+(?:הוא|זה|נכון|אחר))?|לשנות\s*ספק|תשנה\s*ספק|ספק\s*שגוי)(?=[\s:\-–]|$)\s*[:\-–]?\s*([\s\S]*)$/;
+// "מס' ספק 603143" / "ספק מס׳ 603143" — מספר הספק (סקירה 23.11: חופש כשם)
+const SUPPLIER_NO = /^(?:מס(?:פר|'|׳)?\.?\s*(?:ה)?ספק|מס(?:פר|'|׳)?\.?)?\s*[:\-–]?\s*(\d{3,})\s*$/;
+/** התשובה לשאלת הספק — רק השם או המספר ("ספק …", "שם ספק: …", "מס' ספק …") */
+function supplierAnswer(text) {
+  let t = String(text ?? '').trim();
+  const smc = t.match(SUPPLIER_CMD);
+  if (smc && smc[1].trim()) t = smc[1].replace(/\s+/g, ' ').trim();
+  return t.match(SUPPLIER_NO)?.[1] ?? t;
+}
 const DONE_FILES = /^(סיום|סיימתי|זהו|אין|אין נספחים|בלי נספחים|המשך)([\s,.!]|$)/;
 const NO_ORDER = /^(בלי הזמנה|אין הזמנה|ללא הזמנה|לפי המסמך|אין|בלי|לא)([\s,.!]|$)/;
 
@@ -513,6 +524,8 @@ async function findProjects(all, text, { strict = true } = {}) {
 
 /** שורת הנחה או זיכוי במסמך ("הנחת לקוח קבוע", כמות או מחיר במינוס) — נקלטת כמו שהיא, ומפחיתה את הסכום */
 const isCredit = (l) => Number(l.qty) < 0 || Number(l.price ?? l.unit_price) < 0;
+/** קבלה מול הזמנה: שורות בתעודה שאין להן שורה בהזמנה (בלי שורות הנחה) — נקלטות ומסומנות לרכש (‎buyer-notices.js‎) */
+const extraLines = (s) => (s.order ? (s.lines ?? []).filter((l) => !l.order && !isCredit(l)) : []);
 
 function linesTable(s) {
   return s.lines.map((l) => {
@@ -522,7 +535,7 @@ function linesTable(s) {
       : `   התקבל: *${qtyText(l.qty)}*${l.unit ? ` ${l.unit}` : ''}`;
     const ord = l.order
       ? `   בהזמנה ${l.order.ordname}/${l.order.line}: ${l.order.des} · יתרה ${qtyText(l.order.balance)}${l.qty > l.order.balance ? ' ⚠️ יותר מהיתרה' : ''}${l.order.confidence === 'low' ? ' ❓ התאמה לא ודאית' : ''}`
-      : (s.order || s.ordersChecked) ? '   ללא שורת הזמנה' : '';
+      : s.order && !isCredit(l) ? '   ⚠️ לא בהזמנה — יסומן לרכש' : (s.order || s.ordersChecked) ? '   ללא שורת הזמנה' : '';
     const hand = l.handwritten ? `   ✍️ ${l.handwritten}` : '';
     const unclear = l.unclear && l.options?.length > 1 ? `   ❓ לא ברור — ${l.options.map(qtyText).join(' או ')}?` : '';
     return [head, got, ord, hand, unclear].filter(Boolean).join('\n');
@@ -1378,6 +1391,7 @@ function writeDialog(user, s) {
     `תנאי תשלום: ${Priority.payLabel(s.payCode ?? Priority.DEFAULT_PAY)}${(s.payCode ?? Priority.DEFAULT_PAY) === Priority.DEFAULT_PAY ? ' (ברירת מחדל)' : ' (נבחר ע"י המקבל)'}${dueText(s, s.payCode ?? Priority.DEFAULT_PAY)}`,
     ...(s.corrections ?? []).map((c) => `תיקון המקבל: ${c}`),
     ...short.map((x) => `קבלה חלקית — ${x}. היתרה נשארת פתוחה`),
+    ...extraLines(s).map((l) => `שורה ${l.n} (${l.description}) — לא בהזמנה ${s.order.ordname}; לבדיקת הרכש`),
     !s.order && s.project ? `פרויקט נבחר ע"י המקבל: ${s.project.code} ${s.project.des}` : null,
     s.chapter ? `תת פרק לפריט כללי: ${s.chapter.chapter} ${s.chapter.topic}` : null,
     s.warehouseNote ?? null,
@@ -1444,6 +1458,12 @@ async function showDraft(s, problems = [], user = null) {
 
 const ATTACH_WORD = /נספח|לצרף|תצרף|צרף/;
 const NEW_WORD = /^\s*2\s*$|חדש|קבלת\s*סחורה|מסמך אחר|הבא/;
+/*
+ * "קבלה נפרדת ⏭️" — המסמך שהגיע באמצע הקליטה נכנס לתור ונקלט אחריה, בלי לבטל אותה (סקירה 22.11: עובד שלח 13 תעודות של
+ * ספקים שונים אחת אחרי השנייה; "קבלה חדשה" ביטלה את הנוכחית, אז בחר "צרף כנספח" — וכולן נצמדו לקבלה אחת)
+ */
+const LATER_BTN = 'קבלה נפרדת ⏭️';
+const LATER_WORD = /נפרד|אחר\s*כך|אחרי\s*זה|בתור|לתור|⏭/;
 
 /**
  * "נספח" בכיתוב — נספח. "קבלת סחורה" — מסמך חדש. בלי כיתוב — ה-AI מסווג: תמונה של
@@ -1471,7 +1491,9 @@ async function routeFile(user, s, file, t) {
   const cur = s.docno ? `ל-${s.docno}` : 'לקבלת הסחורה הנוכחית';
   // לא ‎reply()‎: השאלה הזו אינה "השאלה של השלב", ואחרי התשובה חוזרים לזו שחיכתה
   return { s, replies: [[cls ? `📄 זה נראה כמו מסמך חדש${s.pendingNew.label ? `: ${s.pendingNew.label}` : ''}.` : '📄 קיבלתי מסמך נוסף.',
-    `*צרף כנספח* — ${cur}`, `*קבלה חדשה*${!s.docno && s.step !== 'files' ? ' — הנוכחית תבוטל' : ''}`, `*להתעלם* ❌ — הקובץ לא נקלט, וחוזרים ל: ${waitingQuestion(s)}`].join('\n')] };
+    `*צרף כנספח* — ${cur}`, `*קבלה נפרדת* ⏭️ — אקלוט אותו אחרי הנוכחית`,
+    ...(!s.docno && s.step !== 'files' ? ['*קבלה חדשה* (בכתב) — הנוכחית תבוטל, ועוברים אליו'] : []),
+    `*להתעלם* ❌ — הקובץ לא נקלט, וחוזרים ל: ${waitingQuestion(s)}`].join('\n')] };
 }
 
 /** המסמך שהגיע הוא החשבון שהחשבונית מפנה אליו? (לפני שנוצרה טיוטא) */
@@ -1593,12 +1615,18 @@ function waitingQuestion(s) {
   };
   return by[s.step] ?? String(s.lastPrompt ?? '').split('\n').find((l) => l.trim())?.slice(0, 60) ?? 'השאלה הקודמת';
 }
-const newOrAttach = (s) => `בחרו: *צרף כנספח*${s.docno ? ` (ל-${s.docno})` : ''} · *קבלה חדשה* · *להתעלם* ❌ — וחוזרים ל: ${waitingQuestion(s)}`;
+const newOrAttach = (s) => `בחרו: *צרף כנספח*${s.docno ? ` (ל-${s.docno})` : ''} · *קבלה נפרדת* ⏭️ · *להתעלם* ❌ — וחוזרים ל: ${waitingQuestion(s)}`;
 
 /** תשובה לשאלה "נספח או חדש?" — ‎null‎ אם התשובה אינה אחת מהשתיים */
 async function answerPendingNew(user, s, t) {
   const f = s.pendingNew.file;
   if (/^\s*1\s*$/.test(t) || ATTACH_WORD.test(t)) { s.pendingNew = null; return attachNow(user, s, f); }
+  if (LATER_WORD.test(t)) {
+    s.pendingNew = null;
+    s.queued = [...queueOf(s), f];
+    const n = queueOf(s).length;
+    return { s, replies: [`📥 בתור${n > 1 ? ` (${n})` : ''} — אקלוט אותו כקבלה נפרדת מיד אחרי הנוכחית.${s.lastPrompt ? `\n\n${s.lastPrompt}` : ''}`] };
+  }
   if (NEW_WORD.test(t)) { s.pendingNew = null; return queueNew(user, s, f, null); }
   // "לא" / "אף אחד" / "3" — לא זה ולא זה: הקובץ נמחק, וחוזרים לשאלה שחיכתה
   if (/^\s*3\s*$/.test(t) || /^(לא|אל|אף אחד|שום דבר|לא זה ולא זה|תתעלם|להתעלם|התעלם|עזוב|no)([\s,.!]|$)/i.test(t)) {
@@ -2106,8 +2134,7 @@ async function step(user, s, t, file, allow = { gr: true, pd: false }) {
 
     case 'supplier': {
       // "ספק …" / "שם ספק: …" גם כאן — רק השם
-      const smc = t.match(SUPPLIER_CMD);
-      if (smc && smc[1].trim()) t = smc[1].replace(/\s+/g, ' ').trim();
+      t = supplierAnswer(t);
       const n = numberIn(t);
       let sup = s.supplierOptions?.length && n && n <= s.supplierOptions.length && /^\d{1,2}$/.test(t) ? s.supplierOptions[n - 1] : null;
       if (!sup && /^\d{3,}$/.test(t)) {
@@ -2421,7 +2448,9 @@ async function step(user, s, t, file, allow = { gr: true, pd: false }) {
         D.setSetting(doneKey(user.id), { docno: s.docno, company: s.company, supplier: s.supplier?.name ?? '', at: Date.now() });
         Chain.progress(user.id, 'receipt', { stage: 'done', docno: s.docno, company: s.company, supplier: s.supplier?.name ?? '' });
         const stamped = await stampDoc(user, s);
-        const done = `✅ *קבלת סחורה ${s.docno}* נקלטה כסופית.\n${companyLine(s)}\nספק: ${s.supplier.name}${s.order ? ` · הזמנה ${s.order.ordname}` : ''}${stamped ? `\n🏷️ מספר ה-GR נכתב על ה${docName(s.doc)} — מצורף, ונשמר כנספח בפריוריטי.` : ''}`;
+        // 📣 לרכש: שורה שלא בהזמנה (מייל עכשיו), ותעודה בלי מספר הזמנה (לדוח השבועי)
+        const toBuyer = await BuyerNotices.afterFinal(user, s, extraLines(s)).catch((err) => { console.error('[משימון] הודעה לרכש מקבלת סחורה:', err.message); return ''; });
+        const done = `✅ *קבלת סחורה ${s.docno}* נקלטה כסופית.\n${companyLine(s)}\nספק: ${s.supplier.name}${s.order ? ` · הזמנה ${s.order.ordname}` : ''}${stamped ? `\n🏷️ מספר ה-GR נכתב על ה${docName(s.doc)} — מצורף, ונשמר כנספח בפריוריטי.` : ''}${toBuyer ? `\n${toBuyer}` : ''}`;
         if (queueOf(s).length) { const q = await startQueued(user, s, [done]); return stamped ? { ...q, files: [stamped, ...(q.files ?? [])] } : q; }
         return { s: null, replies: [done], files: stamped ? [stamped] : [], status: 'ok', result: `GR סופי ${s.docno}` };
       }
@@ -2534,4 +2563,4 @@ function view(userId) {
   };
 }
 
-module.exports = { view, everOpened, markOpened, inMenu, dropMenu, isTrigger, isPriority, opens, active, pending, docId, pausedNote, abandon, switchCancels, wantsUndoFinal, handle, sweep, _jpegToPdf: jpegToPdf, _codeLines: codeLines, _orderDiffs: orderDiffs, _similarLines: similarLines, _askParts: askParts, _projectsOf: projectsOf, _findProjects: findProjects, _ai: ai, _load: load, _clear: (userId) => clear(userId, load(userId)) };
+module.exports = { _supplierAnswer: supplierAnswer, view, everOpened, markOpened, inMenu, dropMenu, isTrigger, isPriority, opens, active, pending, docId, pausedNote, abandon, switchCancels, wantsUndoFinal, handle, sweep, _jpegToPdf: jpegToPdf, _codeLines: codeLines, _orderDiffs: orderDiffs, _similarLines: similarLines, _askParts: askParts, _projectsOf: projectsOf, _findProjects: findProjects, _ai: ai, _load: load, _clear: (userId) => clear(userId, load(userId)) };
