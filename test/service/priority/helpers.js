@@ -100,4 +100,23 @@ function assertButtons(buttons, expected = null) {
   if (expected) assert.deepEqual(buttons, expected);
 }
 
-module.exports = { setup, worker, companies, at, claude, chat, photo, assertButtons, taskOf, Fakes, D };
+/**
+ * 🖥️ עבודה מהמסך של משימון פריוריטי (‎priority-desk.js‎) — כמו ‎chat‎, אבל בערוץ של האתר: ‎open(file)‎ מעלה מסמך לתור של הפעולה
+ * ומתחיל אותו ("להתחיל כאן"), ‎say(text)‎ — תשובה או כפתור. כל אחד מחזיר את מה שהמנוע ענה: ‎{ text, buttons, state }‎.
+ */
+function desk(u, flow) {
+  const Docs = require('../../../server/priority/priority-docs');
+  const Desk = require('../../../server/priority/priority-desk');
+  const actor = { type: 'user', id: u.id, role: u.role, name: u.full_name };
+  const last = (st) => { const m = st.messages.at(-1) ?? { texts: [], buttons: [] }; return { text: (m.texts ?? []).join('\n'), buttons: m.buttons ?? [], state: st }; };
+  return {
+    actor,
+    async open(file = photo()) {
+      const d = Docs.upload(actor, { doc: flow, filename: file.name ?? 'doc.jpg', mime: file.mime, data: file.buf.toString('base64') });
+      return last(await Desk.start(actor, d.id));
+    },
+    async say(text) { return last(await Desk.say(actor, flow, text)); }
+  };
+}
+
+module.exports = { setup, worker, companies, at, claude, chat, desk, photo, assertButtons, taskOf, Fakes, D };

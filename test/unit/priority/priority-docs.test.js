@@ -132,9 +132,9 @@ test('לבוט: קבלת סחורה עם הקובץ, כאילו העובד של�
   assert.equal(sent[0].userId, u.id);
   assert.equal(sent[0].text, 'קבלת סחורה');
   assert.deepEqual(sent[0].file.buf, PDF);
+  // חשבונית ספק — רק במסך (הוחלט 24.11.26: בבוט עובדים על קבלת סחורה)
   const inv = Docs.upload(u, { doc: 'invoice', filename: 'i.pdf', mime: 'application/pdf', data: b64(PDF) });
-  await Docs.toBot(u, inv.id);
-  assert.equal(sent.at(-1).text, 'חשבונית ספק', 'חשבונית ספק — לבוט עם הטריגר שלה');
+  await assert.rejects(Docs.toBot(u, inv.id), /עוד לא עובדת בבוט/);
   const inc = Docs.upload(u, { doc: 'income', filename: 'r.pdf', mime: 'application/pdf', data: b64(PDF) });
   await assert.rejects(Docs.toBot(u, inc.id), /עוד לא עובדת בבוט/);
 });

@@ -1,24 +1,26 @@
 'use strict';
 /**
- * 🧾 חשבונית ספק מהבוט ומהמסך — חשבונית על סחורה / שירות שכבר נקלטו בקבלת סחורה ← חשבונית ספק בפריוריטי
- * (חשבונית מרכזת, ‎PINVOICES‎), שמושכת את ה-GR.
+ * 🧾 חשבונית ספק — **במשימון פריוריטי בלבד** (‎/priority/invoice‎; הוחלט 24.11.26: בבוט עובדים על קבלת סחורה, לא על חשבוניות).
+ * חשבונית מס של ספק ← חשבונית ספק בפריוריטי (חשבונית מרכזת, ‎PINVOICES‎) שמושכת את הבסיס שלה: **GR** (קבלת סחורה, מהזמנה
+ * או בלי) או **חשבון חלקי** (PC, מחוזה).
  *
- * האפיון: "אפיון — סריקת מסמכי רכש לפריוריטי.md" ("חשבונית: קליטה והשוואה ל-GR"), והתבנית — כפי שהנהלת החשבונות
+ * האפיון: "אפיון — סריקת מסמכי רכש לפריוריטי.md" ("חשבונית ספק — פעולה אחת, שלושה בסיסים"). התבנית — כפי שהנהלת החשבונות
  * קולטת היום (‎GI26000060‎ ב-raba: חשבונית מס 10288 של הרמן, שמושכת את ‎GR26000033‎ — שנקלט על חשבונית העסקה 90016).
  *
- * העובד כותב "חשבונית ספק" ושולח צילום (או מתחיל ממסמך בתור במסך). המנוע:
+ * העובד מעלה את החשבונית במסך חשבונית ספק ("להתחיל כאן"). המנוע:
  *   1. קורא את המסמך (אותה קריאה כמו בקבלת הסחורה — ‎GoodsReceipt.extractDoc‎).
  *   2. חברה — לפי הנמען, רק חברה שפתוחה ושהעובד משויך אליה.            ← בחירה כשלא ברור
  *   3. ספק — לפי ח.פ., אחרת לפי שם.                                        ← בחירה כשלא ברור
  *   4. כפילות: אותו ספק ואותו מספר חשבונית כבר בפריוריטי — עוצרים ("כבר נקלטה: GI…").
- *   5. **הבסיס** — GR או חשבון חלקי (PC) מחוזה (אוחד 24.11.26 עם ‎pc-invoice.js‎, שמטפל בשרשרת חוזה ← חשבון חלקי):
- *      GR שמספרו על המסמך ← GR; אחרת חשבון חלקי שלא חויב (‎PcInvoice.start‎ — לפי PC / CO שעל המסמך או הסכום); אחרת GR לפי הסכום.
- *      ה-GR: הסופיים של הספק שעוד לא נמשכו לחשבונית. קודם לפי מספר (מספר החשבונית / תעודה / הזמנה שעל המסמך = ‎BOOKNUM‎ /
- *      ‎ORDNAME‎), אחר כך לפי הסכום לפני מע"מ (GR אחד, או צירוף של כמה). לא ברור — העובד בוחר.
- *   6. סיכום לפני "כן": ספק, חשבונית, ה-GR, סכומים והשוואה (תואם / פער, וממה הוא נובע).
- *   7. אחרי "כן": חשבונית זמנית (‎T…‎) ← משיכת ה-GR ← צילום החשבונית כנספח ← דו-שיח פנימי ← קריאה חזרה והשוואה.
+ *   5. **הבסיס — לפי השורות** (‎pickBasis‎): המועמדים — ה-GR הסופיים של הספק שעוד לא נמשכו, והחשבונות החלקיים שלא חויבו.
+ *      מספר של מועמד שעל המסמך (GR / PC / תעודה / הזמנה / חוזה) — הוא. אחרת שורות החשבונית מול השורות של כל מועמד (סכום, כמות,
+ *      מחיר, תיאור) והסכום לפני מע"מ; הטוב ביותר כשהוא ברור. כמה GR שסכומם הסכום בחשבונית — כולם. לא ברור — העובד בוחר.
+ *   6. GR — סיכום לפני "כן" (ספק, חשבונית, ה-GR, סכומים, תואם / פער וממה הוא נובע).
+ *      חשבון חלקי — ‎pc-invoice.js‎: השרשרת (ספק, מבוטל, חויב, **מאושר**), עכבון, מספר הקצאה, ואז "כן".
+ *   7. אחרי "כן": חשבונית זמנית (‎T…‎) ← משיכת הבסיס (השורות נמשכות ממנו) ← מספר ההקצאה ← צילום החשבונית כנספח ←
+ *      דו-שיח פנימי ← קריאה חזרה והשוואה.
  *
- * **החשבונית נשארת זמנית** — הנהלת החשבונות בודקת וסוגרת בפריוריטי. חשבונית זמנית אי אפשר למחוק ב-API, ולכן שום דבר
+ * **החשבונית נשארת טיוטא** — הנהלת החשבונות בודקת וסוגרת בפריוריטי. חשבונית זמנית אי אפשר למחוק ב-API, ולכן שום דבר
  * לא נכתב לפני "כן", ו"ביטול" אחרי הקליטה — הנחיה למחוק בפריוריטי (והתראה למנהלי המערכת).
  *
  * מצב השיחה — בהעדפות העובד (‎user_prefs.supplierInvoice‎, לא בטבלת ההגדרות); הקובץ — בתיקיית ההעלאות עד סוף הקליטה.
@@ -150,8 +152,7 @@ function pcHelpers(user) {
     // בחשבונית ספק אין "בוט רגיל" מאחור — תשובה לא ברורה חוזרת לשאלה
     pass: (s) => reply(s, `לא הבנתי. ${s.lastPrompt ?? ''}`.trim(), { status: 'unclear', result: 'תשובה לא ברורה (חשבון חלקי)' }),
     looksUnrelated: () => false,
-    alertAdmins: (s, title, details) => alertAdmins(user, s, title, details),
-    notifyAccounting: GoodsReceipt.notifyAccounting
+    alertAdmins: (s, title, details) => alertAdmins(user, s, title, details)
   };
 }
 
@@ -170,7 +171,7 @@ function buttonsFor(s) {
 
 /** כל המספרים שעל המסמך שיכולים להיות ה-‎BOOKNUM‎ של ה-GR או ההזמנה: מספר החשבונית, הזמנה, תעודות בשורות */
 function refsOf(doc) {
-  const texts = [doc?.doc_number, doc?.po_number, doc?.supplier_order_ref, ...(doc?.other_ids ?? []),
+  const texts = [doc?.doc_number, doc?.po_number, doc?.supplier_order_ref, ...(doc?.other_ids ?? []), ...(doc?.contract_refs ?? []),
     ...(doc?.lines ?? []).flatMap((l) => [l.description, l.supplier_code])].filter(Boolean).map(String);
   const out = new Set();
   for (const t of texts) {
@@ -210,6 +211,69 @@ function matchReceipts(doc, grs) {
   // הקרובים ביותר בסכום — להצעה
   const near = [...list].sort((a, b) => Math.abs(Number(a.DISPRICE) - want) - Math.abs(Number(b.DISPRICE) - want)).slice(0, 3);
   return { picked: [], how: null, options: near };
+}
+
+/**
+ * 🧮 הבסיס של החשבונית — לפי השורות (הוחלט 24.11.26): לכל מועמד (GR סופי שלא נמשך, או חשבון חלקי שלא חויב) משווים את שורות
+ * החשבונית לשורות שלו — סכום, כמות, מחיר, תיאור — ואת הסכום לפני מע"מ. מספר של המועמד שמופיע במסמך גובר על הכל.
+ * ‎cand‎: ‎{ kind: 'gr' | 'pc', id, booknum, ordname, amount, gross, lines: [{ des, qty, price, total }] | null }‎.
+ * מחזיר את המועמדים עם ‎score‎ (0–1) ו-‎ref‎, מהטוב לפחות טוב.
+ */
+const lineTotal = (l) => round2(l.line_total || Number(l.qty ?? 0) * Number(l.unit_price ?? 0) * (1 - Number(l.discount_pct ?? 0) / 100));
+const WORD = (t) => new Set(String(t ?? '').replace(/["'״׳]/g, '').split(/[\s,.\-–/()]+/).filter((w) => w.length >= 3 && !/^\d+([.,]\d+)?$/.test(w)));
+const near = (a, b) => Math.abs(Number(a) - Number(b)) <= Math.max(1, Math.abs(Number(b)) * 0.005);
+function lineScore(inv, base) {
+  const mine = (inv ?? []).filter((l) => lineTotal(l) !== 0);
+  // שורות שליליות (עכבון, הנחה) — לא חלק מההשוואה
+  const theirs = (base ?? []).filter((l) => Number(l.total) > 0).map((l) => ({ ...l, used: false }));
+  if (!mine.length || !theirs.length) return 0;
+  let sum = 0;
+  for (const l of mine) {
+    const t = lineTotal(l);
+    const words = WORD(l.description);
+    let best = null;
+    let bestPts = 0;
+    for (const b of theirs.filter((x) => !x.used)) {
+      let pts = 0;
+      // סכום שווה לבד אינו מספיק (שני GR באותו סכום) — התיאור, הכמות והמחיר מכריעים
+      if (near(t, b.total)) pts += 2;
+      if (Number(l.qty) && near(l.qty, b.qty)) pts += 1;
+      if (Number(l.unit_price) && near(l.unit_price, b.price)) pts += 1;
+      if ([...WORD(b.des)].some((w) => words.has(w))) pts += 2;
+      if (pts > bestPts) { bestPts = pts; best = b; }
+    }
+    if (best && bestPts >= 2) { best.used = true; sum += bestPts / 6; }
+  }
+  const covered = theirs.filter((x) => x.used).length / theirs.length;
+  return round2(0.7 * (sum / mine.length) + 0.3 * covered);
+}
+function rankBases(doc, cands) {
+  const refs = refsOf(doc);
+  const want = beforeVat(doc);
+  return (cands ?? []).map((c) => {
+    const ref = [c.id, c.booknum, c.ordname].some((x) => x && refs.has(norm(x)));
+    const amount = want > 0 && [c.amount, c.gross].some((x) => Number(x) && Math.abs(Number(x) - want) <= ROUND) ? 1 : 0;
+    const lines = c.lines ? lineScore(doc?.lines, c.lines) : null;
+    const score = round2(lines === null ? amount : 0.6 * lines + 0.4 * amount);
+    return { ...c, ref, score };
+  }).sort((a, b) => Number(b.ref) - Number(a.ref) || b.score - a.score);
+}
+/**
+ * הבחירה: מספר במסמך (מועמד אחד) ← הוא; אחרת הטוב ביותר כשהוא ברור (‎≥ 0.6‎, ופער ‎0.15‎ מהבא); אחרת כמה GR שסכומם הסכום
+ * בחשבונית (צירוף אחד בלבד); אחרת — שאלה. ‎{ picked: [cand], how, options: [cand] }‎
+ */
+function pickBasis(doc, cands) {
+  const ranked = rankBases(doc, cands);
+  if (!ranked.length) return { picked: [], how: null, options: [] };
+  const byRef = ranked.filter((c) => c.ref);
+  if (byRef.length === 1 || (byRef.length > 1 && byRef.every((c) => c.kind === 'gr'))) return { picked: byRef, how: 'ref', options: byRef };
+  const pool = byRef.length ? byRef : ranked;
+  const [a, b] = pool;
+  if (a.score >= 0.6 && (!b || a.score - b.score >= 0.15)) return { picked: [a], how: a.lines ? 'lines' : 'amount', options: [a] };
+  const grs = pool.filter((c) => c.kind === 'gr').map((c) => ({ ...c, DOCNO: c.id, DISPRICE: c.amount }));
+  const m = matchReceipts({ ...doc, doc_number: '', po_number: '', supplier_order_ref: '', other_ids: [], lines: [] }, grs);
+  if (m.how === 'sum') return { picked: m.picked, how: 'sum', options: m.picked };
+  return { picked: [], how: null, options: pool.slice(0, 3) };
 }
 
 /**
@@ -313,36 +377,60 @@ async function findReceipts(user, s) {
     DOCNO: g.DOCNO, BOOKNUM: g.BOOKNUM ?? '', CURDATE: g.CURDATE ?? '', ORDNAME: g.ORDNAME ?? '', PROJDES: g.PROJDES ?? '',
     DISPRICE: Number(g.DISPRICE ?? 0), VAT: Number(g.VAT ?? 0), TOTPRICE: Number(g.TOTPRICE ?? 0)
   }));
-  const m = matchReceipts(s.doc, s.available);
-  if (m.how === 'ref') { s.picked = m.picked.map((g) => g.DOCNO); s.how = m.how; return summary(s); }
-  // חשבון חלקי מחוזה — כשהמסמך מפנה אליו (PC / CO), או כשאין GR שמתאים
-  const pcRefs = PcInvoice._refsOf(s.doc);
-  if (pcRefs.pc.length || pcRefs.co.length || !m.picked.length) {
-    const r = await PcInvoice.start({ ...s, uid: user.id }, pcHelpers(user)).catch((err) => { alertAdmins(user, s, 'חשבונות חלקיים לא נקראו', [err.message]); return null; });
-    if (r) return r;
+  let pcs = [];
+  try { pcs = await Priority.partialBills(s.company, s.supplier.code); } catch (err) { alertAdmins(user, s, 'חשבונות חלקיים לא נקראו', [err.message]); }
+  s.pcs = pcs.map((x) => ({ DOCNO: x.DOCNO, ORDNAME: x.ORDNAME ?? '', BOOKNUM: x.BOOKNUM ?? '', STATDES: x.STATDES ?? '', PROJDES: x.PROJDES ?? '',
+    MONTH: x.MED_EXEMONTH || ymdHe(x.CURDATE), NET: Number(x.MED_QPRICE ?? x.DISPRICE ?? 0) }));
+  if (!s.available.length && !s.pcs.length) return noBasis(user, s);
+  const cands = [
+    ...s.available.map((g) => ({ kind: 'gr', id: g.DOCNO, booknum: g.BOOKNUM, ordname: g.ORDNAME, amount: g.DISPRICE, gross: null, lines: null })),
+    ...s.pcs.map((p) => ({ kind: 'pc', id: p.DOCNO, booknum: p.BOOKNUM, ordname: p.ORDNAME, amount: p.NET, gross: null, lines: null }))
+  ];
+  // השורות — של המועמדים הקרובים (מספר במסמך, ואז הקרובים בסכום): עד 8 קריאות
+  const want = beforeVat(s.doc);
+  const order = rankBases(s.doc, cands).sort((a, b) => Number(b.ref) - Number(a.ref) || Math.abs(a.amount - want) - Math.abs(b.amount - want));
+  for (const c of order.slice(0, 8)) {
+    const at = cands.find((x) => x.kind === c.kind && x.id === c.id);
+    try {
+      if (c.kind === 'gr') at.lines = (await Priority.receiptLines(s.company, c.id)).map((l) => ({ des: l.PDES || l.PARTNAME, qty: l.TQUANT, price: l.PRICE, total: l.QPRICE }));
+      else {
+        at.lines = (await Priority.partialBillLines(s.company, c.id)).map((l) => ({ des: l.MED_SECDES || l.PDES, qty: l.TQUANT, price: l.MED_PRICE, total: l.MED_CQPRICE_BD }));
+        at.gross = round2(at.lines.filter((l) => Number(l.total) > 0).reduce((a, l) => a + Number(l.total), 0));   // לפני עכבון
+      }
+    } catch { /* בלי שורות — לפי הסכום */ }
   }
-  if (m.picked.length) { s.picked = m.picked.map((g) => g.DOCNO); s.how = m.how; return summary(s); }
-  if (!s.available.length) return noBasis(user, s);
+  const m = pickBasis(s.doc, cands);
+  s.how = m.how;
+  if (m.picked[0]?.kind === 'pc') return choosePc(user, s, m.picked[0].id);
+  if (m.picked.length) { s.picked = m.picked.map((c) => c.id); return summary(s); }
   return askReceipts(s, m.options);
+}
+
+/** החשבון החלקי נבחר — השרשרת, ההשוואה והעכבון ב-‎pc-invoice.js‎ */
+function choosePc(user, s, docno) {
+  return PcInvoice.choose({ ...s, uid: user.id }, pcHelpers(user), docno);
 }
 
 function noBasis(user, s) {
   clear(user.id, s);
   return { s: null, replies: [[companyLine(s), `🏭 ${s.supplier.name}`, '',
     `לא מצאתי אצל הספק קבלת סחורה *סופית* שעוד לא נמשכה לחשבונית, וגם לא חשבון חלקי שלא חויב — ולכן אין מה למשוך ל${docTitle(s.doc)}.`,
-    'אם הסחורה עוד לא נקלטה — קודם *קבלת סחורה* על החשבונית, ואחר כך *חשבונית ספק*. אם יש GR או חשבון חלקי שעוד לא סופי — לאשר אותו קודם.'].join('\n')],
+    'אם הסחורה עוד לא נקלטה — קודם *קבלת סחורה*, ואחר כך חשבונית ספק. אם יש GR או חשבון חלקי שעוד לא סופי — לאשר אותו קודם.'].join('\n')],
   status: 'unclear', result: 'אין GR סופי או PC פתוח לספק' };
 }
 
+const pcLine = (p) => `*${p.DOCNO}* — חשבון חלקי, חוזה ${p.ORDNAME}${p.MONTH ? `, ${p.MONTH}` : ''}${p.PROJDES ? ` · ${p.PROJDES}` : ''} · לתשלום ${money(p.NET)} ₪${p.STATDES && p.STATDES !== 'סופית' ? ` (${p.STATDES})` : ''}`;
+const baseLine = (s, id) => { const g = s.available?.find((x) => x.DOCNO === id); if (g) return grLine(g); const p = s.pcs?.find((x) => x.DOCNO === id); return p ? pcLine(p) : id; };
+
 function askReceipts(s, options) {
   s.step = 'receipts';
-  s.receiptOptions = options.map((g) => g.DOCNO);
-  const extra = s.available.filter((g) => !s.receiptOptions.includes(g.DOCNO)).slice(0, 5);
-  offer(s, options.map((g) => g.DOCNO));
+  s.receiptOptions = options.map((c) => c.id ?? c.DOCNO);
+  const extra = [...(s.available ?? []).map((g) => g.DOCNO), ...(s.pcs ?? []).map((p) => p.DOCNO)].filter((id) => !s.receiptOptions.includes(id)).slice(0, 5);
+  offer(s, s.receiptOptions);
   return reply(s, [companyLine(s), `🏭 ${s.supplier.name} · ${docTitle(s.doc)} · ${money(beforeVat(s.doc))} ₪ לפני מע"מ`, '',
-    'לא מצאתי GR שמתאים לחשבונית בוודאות. איזו קבלת סחורה החשבונית מושכת?', ...options.map((g) => bullet(grLine(g))),
-    ...(extra.length ? ['', 'עוד GR פתוחים של הספק:', ...extra.map((g) => bullet(grLine(g)))] : []),
-    '', 'בחרו בכפתור, או כתבו מספרי GR (כמה — עם רווח). *ביטול* — לבטל.'].join('\n'), { status: 'unclear', result: 'GR לא ברור' });
+    'לא מצאתי בוודאות לאיזו קבלת סחורה או לאיזה חשבון חלקי החשבונית שייכת. מה למשוך?', ...s.receiptOptions.map((id) => bullet(baseLine(s, id))),
+    ...(extra.length ? ['', 'עוד פתוחים של הספק:', ...extra.map((id) => bullet(baseLine(s, id)))] : []),
+    '', 'בחרו בכפתור, או כתבו את המספר (GR… / PC…; כמה GR — עם רווח). *ביטול* — לבטל.'].join('\n'), { status: 'unclear', result: 'בסיס לא ברור' });
 }
 
 function pickedOf(s) { return (s.picked ?? []).map((n) => s.available.find((g) => g.DOCNO === n)).filter(Boolean); }
@@ -352,7 +440,7 @@ async function summary(s) {
   const grs = pickedOf(s);
   const c = compare(s.doc, grs);
   s.compare = { ok: c.ok, diff: c.diff };
-  const HOW = { ref: 'לפי המספר שעל המסמך', amount: 'לפי הסכום', sum: 'לפי הסכום — כמה תעודות', manual: 'בחרת' };
+  const HOW = { ref: 'לפי המספר שעל המסמך', lines: 'לפי השורות', amount: 'לפי הסכום', sum: 'לפי הסכום — כמה תעודות', manual: 'בחרת' };
   const vat = s.doc.totals?.vat;
   return reply(s, [
     `🧾 *חשבונית ספק* — לבדיקה לפני קליטה`,
@@ -488,7 +576,14 @@ async function step(user, s, t, file) {
     case 'receipts': {
       const n = Number(t);
       const opts = s.receiptOptions ?? [];
-      if (Number.isInteger(n) && n >= 1 && n <= opts.length) { s.picked = [opts[n - 1]]; s.how = 'manual'; return summary(s); }
+      const one = Number.isInteger(n) && n >= 1 && n <= opts.length ? opts[n - 1] : null;
+      const pc = (one && /^PC/.test(one) ? one : null) ?? String(t).toUpperCase().match(/PC\s?\d{6,}/)?.[0]?.replace(/\s/g, '');
+      if (pc) {
+        if (!(s.pcs ?? []).some((x) => x.DOCNO === pc)) return reply(s, `${pc} — לא חשבון חלקי פתוח של ${s.supplier.name}.\n\n${s.lastPrompt ?? ''}`, { status: 'unclear', result: 'PC לא מזוהה' });
+        s.how = 'manual';
+        return choosePc(user, s, pc);
+      }
+      if (one) { s.picked = [one]; s.how = 'manual'; return summary(s); }
       const g = grsIn(s, t);
       if (g.known.length) { s.picked = g.known; s.how = 'manual'; return summary(s); }
       const why = g.unknown.length ? `${g.unknown.join(', ')} — לא GR סופי פתוח של ${s.supplier.name}.` : 'לא הבנתי איזה GR.';
@@ -618,4 +713,4 @@ function view(userId) {
   };
 }
 
-module.exports = { TRIGGER, MENU_BTN, START, isTrigger, opens, active, pending, docId, wantsUndo, handle, abandon, view, matchReceipts, compare, refsOf, _load: load, _clear: (userId) => clear(userId, load(userId)) };
+module.exports = { pickBasis, rankBases, lineScore, TRIGGER, MENU_BTN, START, isTrigger, opens, active, pending, docId, wantsUndo, handle, abandon, view, matchReceipts, compare, refsOf, _load: load, _clear: (userId) => clear(userId, load(userId)) };

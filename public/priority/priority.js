@@ -57,6 +57,8 @@
   };
   // סדר הבנייה (הוחלט 11.11.26): קודם מה שעובד, אחר כך חשבון חלקי, חשבונית ספק, קבלה, והזמנות רכש בסוף
   const NEXT = { partial: 1, invoice: 2, income: 3, order: 4 };
+  // מה עובד גם בבוט. חשבונית ספק — רק כאן (הוחלט 24.11.26: בבוט עובדים על קבלת סחורה)
+  const BOT_DOCS = ['receipt', 'demand'];
 
   const ROLE = { superadmin: 'אדמין על', admin: 'מנהל מערכת', executive: 'הנהלה', manager: 'מנהל מחלקה', employee: 'עובד' };
   let me = null;
@@ -107,7 +109,7 @@
       <div class="greet"><h1>שלום, ${esc(me.name)}</h1><p>החברות שלך: ${esc(cos)}${inbox.items.length ? ` · <b>${inbox.items.length}</b> מסמכים חדשים במייל` : ''}</p></div>
       <div class="tiles">${me.docs.map((d) => {
         const status = !d.allowed ? '<span class="pill p-mute">אין לך הרשאה</span>'
-          : d.ready ? '<span class="pill p-ok">עובד דרך הבוט</span>'
+          : d.ready ? `<span class="pill p-ok">${BOT_DOCS.includes(d.key) ? 'עובד — כאן ובבוט' : 'עובד כאן'}</span>`
             : `<span class="pill p-mute">איסוף בלבד · ${NEXT[d.key]} בתור לבנייה</span>`;
         const n = q.counts[d.key] ?? 0;
         const m = d.allowed ? fromMail(d.key) : 0;
@@ -191,7 +193,7 @@
         </nav>
         <section class="center">
           <div class="ctx"><div><h1>${esc(d.label)}</h1><span class="muted" id="ws-meta"></span></div>
-            ${d.ready ? `<span class="pill p-ok ctx-note">"להתחיל כאן" — עובדים על המסמך במסך · "לבוט" — ממשיכים בוואטסאפ</span>` : `<span class="pill p-mute ctx-note">איסוף בלבד — הקליטה תיבנה בהמשך (${NEXT[d.key]} בתור)</span>`}</div>
+            ${d.ready ? `<span class="pill p-ok ctx-note">"להתחיל כאן" — עובדים על המסמך במסך${BOT_DOCS.includes(d.key) ? ' · "לבוט" — ממשיכים בוואטסאפ' : ''}</span>` : `<span class="pill p-mute ctx-note">איסוף בלבד — הקליטה תיבנה בהמשך (${NEXT[d.key]} בתור)</span>`}</div>
           <div class="split" id="split">
             <div class="queue" id="queue"></div>
             ${d.ready ? '<section class="desk" id="desk" aria-label="עבודה על המסמך" hidden></section>' : ''}
@@ -221,7 +223,7 @@
           </button>
           <span class="qa">
             ${d.ready && !deskBusy && ['new', 'bot'].includes(x.stage) && desk?.openDocId !== x.id ? `<button type="button" class="btn small pri" data-start="${x.id}" aria-label="להתחיל כאן: ${esc(x.filename)}">להתחיל כאן</button>` : ''}
-            ${d.ready && x.stage === 'new' ? `<button type="button" class="btn small" data-bot="${x.id}" aria-label="לשלוח לבוט: ${esc(x.filename)}">${ui('bot')} לבוט</button>` : ''}
+            ${d.ready && BOT_DOCS.includes(d.key) && x.stage === 'new' ? `<button type="button" class="btn small" data-bot="${x.id}" aria-label="לשלוח לבוט: ${esc(x.filename)}">${ui('bot')} לבוט</button>` : ''}
             ${['new', 'bot'].includes(x.stage) ? (confirmDel === x.id
               ? `<button type="button" class="btn small confirm" data-del="${x.id}">${x.source === 'upload' ? 'למחוק?' : 'להוציא?'}</button>`
               : `<button type="button" class="btn small" data-del="${x.id}" aria-label="הוצאה מהתור: ${esc(x.filename)}">${ui('x')}</button>`) : ''}

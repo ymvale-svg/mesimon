@@ -39,7 +39,6 @@ const Parts = require('./pd-parts');
 const BuyerNotices = require('./buyer-notices');
 const LineCmd = require('./line-commands');
 const GrStamp = require('./gr-stamp');
-const PcInvoice = require('./pc-invoice');
 const Priority = require('../integrations').Priority;
 const WhatsApp = require('../integrations').Whatsapp;
 const { receiptPdf } = require('./gr-pdf');
@@ -61,26 +60,6 @@ function alertAdmins(user, s, title, details) {
   } catch (err) {
     console.error('[משימון] התראה למנהלים על קבלת סחורה:', err.message);
   }
-}
-
-/** 🧾 הודעה למי שמטפל בחשבוניות ספק בחברה (מטריצת ההרשאות; מנהלי מערכת תמיד) — עכבון שנדחה וכדומה */
-function notifyAccounting(s, title, lines) {
-  try {
-    for (const u of D.all("SELECT id, role FROM users WHERE status = 'active' AND role != 'vendor'")) {
-      if (!Access.of(u.id).docs.includes('invoice') || !Access.filterForUser(u.id, [s.company]).length) continue;
-      D.notify({ targetType: 'user', targetId: u.id, kind: 'ai', title: `🧾 ${title}`, body: [`חברה: ${s.company}`, ...lines].join('\n') });
-    }
-  } catch (err) {
-    console.error('[משימון] התראה על חשבונית ספק:', err.message);
-  }
-}
-
-/** העזרים של השיחה לחשבונית ספק מחשבון חלקי (‎pc-invoice.js‎ אינו מייבא את הקובץ הזה) */
-function pcHelpers(user) {
-  return {
-    reply: (...a) => reply(...a), offer: (...a) => offer(...a), companyLine: (s) => companyLine(s), pass: (...a) => pass(...a),
-    looksUnrelated: (t) => looksUnrelated(t), alertAdmins: (s, title, details) => alertAdmins(user, s, title, details), notifyAccounting
-  };
 }
 
 const SKILL = Paths.skill('goods-receipt.md');
@@ -126,7 +105,6 @@ function buttonsFor(s) {
   if (s.confirmFinal) return [BTN.confirmFinal, BTN.backToDraft];
   if (s.pendingNew) return ['צרף כנספח', LATER_BTN, 'להתעלם ❌'];
   if (s.pendingList) return [BTN.yes, BTN.no];
-  if (PcInvoice.isPcStep(s)) return PcInvoice.buttons(s);
   if (s.choices?.step === s.step && s.choices.list?.length) return s.choices.list;
   switch (s.step) {
     case 'menu': return menuOf(s.allow).buttons;
@@ -623,13 +601,10 @@ function dueText(s, code) {
 /** תפריט פריוריטי — בכפתורים. הכיתוב של כל כפתור הוא הטריגר של הזרימה ("קבלת סחורה", "דרישת רכש") */
 const MENU_GR = '📦 קבלת סחורה';
 const MENU_PD = '🛒 דרישת רכש';
-// הכיתוב הוא הטריגר של חשבונית הספק (‎supplier-invoice.js‎ — ‎MENU_BTN‎); הבוט מנתב אליה לפני קבלת הסחורה
-const MENU_IV = '🧾 חשבונית ספק';
-const MENU_BTNS = { gr: MENU_GR, pd: MENU_PD, iv: MENU_IV };
+const MENU_BTNS = { gr: MENU_GR, pd: MENU_PD };
 const MENU_LINES = {
   gr: '📦 *קבלת סחורה* — תעודת משלוח או חשבונית ← GR',
-  pd: '🛒 *דרישת רכש* — רשימת פריטים (צילום, הקלטה או הקלדה) ← דרישה לאישור',
-  iv: '🧾 *חשבונית ספק* — חשבונית על סחורה שכבר נקלטה ← משיכת ה-GR'
+  pd: '🛒 *דרישת רכש* — רשימת פריטים (צילום, הקלטה או הקלדה) ← דרישה לאישור'
 };
 /**
  * תפריט פריוריטי — רק מה שמותר לעובד (מטריצת ההרשאות, ‎priority-access.js‎; הוחלט 13.11.26).
@@ -637,7 +612,7 @@ const MENU_LINES = {
  */
 function menuOf(allow) {
   const a = allow ?? { gr: true, pd: true };
-  const keys = ['gr', 'pd', 'iv'].filter((k) => a[k]);
+  const keys = ['gr', 'pd'].filter((k) => a[k]);
   return {
     text: ['🗂 *פריוריטי* — מה לעשות?', ...keys.map((k) => MENU_LINES[k]), '_או פשוט המשיכו במה שרציתם — זה יגיע למשימות כרגיל._'].join('\n'),
     buttons: keys.map((k) => MENU_BTNS[k])
@@ -735,15 +710,6 @@ async function onMainDoc(user, s, file, pre = null) {
     .filter((w) => !((doc.lines ?? []).some((l) => l.qty < 0 || l.unit_price < 0 || l.line_total < 0) && /שליל|במינוס|מינוס|הנחת לקוח|זיכוי/.test(w)))
     .slice(0, 3);
   s.doc = doc;
-  // 🧾 תדפיס של חשבון חלקי (מסמך פנימי של החברה) בלי חשבונית הספק — מבקשים את החשבונית; מספר החשבון נשמר
-  const pcRefs = (doc.contract_refs ?? []).filter((x) => /^PC\s?\d/i.test(x));
-  if (doc.doc_type === 'other' && pcRefs.length) {
-    s.pcRefs = [...new Set([...(s.pcRefs ?? []), ...pcRefs])];
-    s.step = 'doc';
-    return reply(s, `🧾 זה תדפיס של החשבון החלקי *${pcRefs[0]}*. כדי להמיר אותו לחשבונית ספק — שלחו את *חשבונית המס של הספק* (אפשר יחד עם התדפיס). או *ביטול*.`,
-      { status: 'unclear', result: `תדפיס חשבון חלקי בלי חשבונית: ${pcRefs[0]}` });
-  }
-  if (s.pcRefs?.length) doc.contract_refs = [...new Set([...(doc.contract_refs ?? []), ...s.pcRefs])];
   // כמעט מכל מסמך ספק אפשר לקלוט קבלת סחורה (גם אגרה או שובר תשלום). רק כשלא ברור שזה מסמך ספק — שואלים
   if (doc.doc_type === 'other') {
     s.step = 'doctype';
@@ -862,13 +828,6 @@ async function resumeDraft(s, dup) {
 
 async function askHeader(s) {
   const d = s.doc;
-  // 🧾 חשבונית של קבלן משנה עם חוזה — אין הזמנה ואין קבלת סחורה: המרת החשבון החלקי לחשבונית ספק (‎pc-invoice.js‎)
-  if (s.pcChecked !== s.supplier.code) {
-    s.pcChecked = s.supplier.code;
-    const user = (s.uid && D.get('SELECT id, full_name FROM users WHERE id = ?', s.uid)) || { id: s.uid ?? null, full_name: '' };
-    const r = await PcInvoice.start(s, pcHelpers(user));
-    if (r) return r;
-  }
   if (s.noVat === undefined) s.noVat = docWithoutVat(d);
   // אותו מסמך כבר נקלט — פריוריטי ממילא דוחה מספר תעודה כפול לאותו ספק
   const dup = await Priority.findReceiptByBooknum(s.company, s.supplier.code, d.doc_number);
@@ -1797,9 +1756,6 @@ async function sweep(send, { force = false } = {}) {
   lastSweep = Date.now();
   // אינדקס השורות לקידוד — חברה אחת בכל סבב, ברקע
   await warmIndex().catch((err) => console.error('[משימון] אינדקס שורות:', err.message));
-  // 🧾 חשבוניות שממתינות שהחשבון החלקי יהיה סופי
-  await PcInvoice.sweep(send, { ...pcHelpers({ id: null, full_name: 'הסבב' }), busy: (uid) => active(uid), open: (uid, s) => save(uid, s) })
-    .catch((err) => console.error('[משימון] חשבוניות מחשבון חלקי:', err.message));
   for (const row of D.all("SELECT key, value FROM settings WHERE key LIKE 'goods_receipt:%'")) {
     const userId = Number(row.key.split(':')[1]);
     let s;
@@ -1942,13 +1898,13 @@ async function handle({ user, text = '', file = null, reaction = false, allow = 
   // "פריוריטי" בלי "קבלת סחורה" — תפריט. היום יש בו רק קבלת סחורה; בהמשך גם חשבוניות חלקיות ועוד
   // 🔐 רק מה שמותר: קבלת סחורה בלבד — ישר אליה, בלי תפריט; דרישת רכש בלבד — כפתור אחד; כלום — לא פתוח
   if (!s && !file && isPriority(t) && !isTrigger(t)) {
-    if (!allow.gr && !allow.pd && !allow.iv) return { s: null, replies: [Access.NO_ACCESS], status: 'ok', result: 'פריוריטי — לא מורשה' };
-    if (allow.gr && !allow.pd && !allow.iv) {
+    if (!allow.gr && !allow.pd) return { s: null, replies: [Access.NO_ACCESS], status: 'ok', result: 'פריוריטי — לא מורשה' };
+    if (allow.gr && !allow.pd) {
       save(user.id, { step: 'doc', startedAt: Date.now(), lastPrompt: GR_START });
       return { replies: [GR_START], status: 'ok', result: 'פריוריטי ← קבלת סחורה (המסמך היחיד שמותר)', buttons: [BTN.cancel] };
     }
     const m = menuOf(allow);
-    save(user.id, { step: 'menu', startedAt: Date.now(), allow: { gr: Boolean(allow.gr), pd: Boolean(allow.pd), iv: Boolean(allow.iv) } });
+    save(user.id, { step: 'menu', startedAt: Date.now(), allow: { gr: Boolean(allow.gr), pd: Boolean(allow.pd) } });
     return { replies: [m.text], status: 'ok', result: 'תפריט פריוריטי', buttons: m.buttons };
   }
 
@@ -2043,7 +1999,7 @@ async function handle({ user, text = '', file = null, reaction = false, allow = 
   if (t === '👍' && !file && s.step === 'order') return { replies: ['כתבו את מספר ההזמנה (PO…), או *בלי הזמנה* 👎.'], status: 'ok', result: '👍 בשאלת ההזמנה' };
   // 👎 — "לא": בשאלת כן/לא — לא; על סיכום — לא ממשיכים ושואלים מה לתקן; על הטיוטא — מבקשים אישור לביטול
   if (t === '👎' && !file) {
-    if (s.pendingList || s.pendingNew || ['offer', 'doctype', 'shortage', 'pc_confirm'].includes(s.step)) t = 'לא';
+    if (s.pendingList || s.pendingNew || ['offer', 'doctype', 'shortage'].includes(s.step)) t = 'לא';
     else if (s.step === 'order') t = 'בלי הזמנה';      // "יש מספר הזמנה?" — 👎 = אין, בלי הזמנה
     else if (s.step === 'files') t = 'סיום';           // "יש עוד נספחים?" — 👎 = אין
     else if (s.step === 'review') return askCancel(user, s, { mark: '👎', result: '👎 בבדיקת הטיוטא' });
@@ -2123,7 +2079,6 @@ function latePayChange(s, t) {
 }
 
 async function step(user, s, t, file, allow = { gr: true, pd: false }) {
-  if (PcInvoice.isPcStep(s)) return PcInvoice.step(user, s, t, file, pcHelpers(user));
   if (!file) { const pay = latePayChange(s, t); if (pay) return pay; }
   switch (s.step) {
     case 'menu': {
@@ -2653,4 +2608,4 @@ function view(userId) {
 /** קריאת מסמך ספק (‎EXTRACT_SCHEMA‎) — משותפת גם לחשבונית ספק (‎supplier-invoice.js‎). ‎file‎ — ‎{ path, mime }‎ */
 const extractDoc = (file) => ai.extract(file);
 
-module.exports = { extractDoc, notifyAccounting, _supplierAnswer: supplierAnswer, view, everOpened, markOpened, inMenu, dropMenu, isTrigger, isPriority, opens, active, pending, docId, pausedNote, abandon, switchCancels, wantsUndoFinal, handle, sweep, _jpegToPdf: jpegToPdf, _codeLines: codeLines, _orderDiffs: orderDiffs, _similarLines: similarLines, _askParts: askParts, _projectsOf: projectsOf, _findProjects: findProjects, _ai: ai, _load: load, _clear: (userId) => clear(userId, load(userId)) };
+module.exports = { extractDoc, _supplierAnswer: supplierAnswer, view, everOpened, markOpened, inMenu, dropMenu, isTrigger, isPriority, opens, active, pending, docId, pausedNote, abandon, switchCancels, wantsUndoFinal, handle, sweep, _jpegToPdf: jpegToPdf, _codeLines: codeLines, _orderDiffs: orderDiffs, _similarLines: similarLines, _askParts: askParts, _projectsOf: projectsOf, _findProjects: findProjects, _ai: ai, _load: load, _clear: (userId) => clear(userId, load(userId)) };

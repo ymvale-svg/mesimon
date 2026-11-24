@@ -1200,6 +1200,11 @@ async function receiptsToInvoice(company, supname, { top = 60 } = {}) {
   return grs.filter((g) => !used.has(g.DOCNO));
 }
 
+/** השורות של GR — להשוואה לשורות החשבונית (בלי הכותרת והנספחים של ‎readReceipt‎) */
+async function receiptLines(company, docno) {
+  return rows(await call(company, 'GET', `${grKey(docno)}/TRANSORDER_P_SUBFORM?$select=KLINE,PARTNAME,PDES,TQUANT,TUNITNAME,PRICE,QPRICE`));
+}
+
 /** חשבונית ספק זמנית. מחזיר את המספר (‎T…‎) */
 async function createSupplierInvoice(company, { supname, booknum, date, details = '', allocation = '' }) {
   // ‎DETAILS‎ ב-‎PINVOICES‎ — עד 50 (נבדק: "ח-ן הרמן עיצוב וניהול פרויקטים", 30 תווים, ב-GI26000060). ב-GR — כ-24
@@ -1322,6 +1327,15 @@ async function readPartialBill(company, docno) {
   return { ...strip(list[0]), retention, approvers };
 }
 
+/**
+ * השורות של החשבון החלקי (‎MED_TRANSORDER_P_SUBFORM‎) — רק מה שחויב בחשבון הזה: סעיף (‎MED_SECDES‎), כמות (‎TQUANT‎),
+ * מחיר (‎MED_PRICE‎) וסכום (‎MED_CQPRICE_BD‎, לפני עכבון). להשוואה לשורות החשבונית (‎supplier-invoice.js‎). נבדק ב-PC260000262.
+ */
+async function partialBillLines(company, docno) {
+  return rows(await call(company, 'GET', `${pcKey(docno)}/MED_TRANSORDER_P_SUBFORM?$select=KLINE,MED_SECTION,MED_SECDES,PARTNAME,PDES,TQUANT,TUNITNAME,MED_PRICE,MED_CQPRICE_BD`))
+    .filter((l) => Number(l.TQUANT || 0) !== 0 || Number(l.MED_CQPRICE_BD || 0) !== 0);
+}
+
 /** הסטטוס של חשבון חלקי (‎null‎ — לא קיים) */
 async function partialBillStatus(company, docno) {
   const list = rows(await call(company, 'GET', `MED_DOCUMENTS_P?$filter=${enc(`DOCNO eq '${q(docno)}'`)}&$select=DOCNO,STATDES,IVALL`));
@@ -1337,8 +1351,8 @@ module.exports = {
   finalOrders, orderForNotice, demandInitiator, demandForNotice, projectManager, priorityUser,
   readDialog, createReceipt, addOrderLine, addFreeLine, setLineQty, setLineDes, setHeader, attach, deleteAttachment, setDialog, finalizeReceipt, cancelReceipt, receiptStatus, deleteLines,
   PD_TYPES, demandCodes, recentDemandProjects, createDemand, addDemandLine, setDemand, submitDemand, isNoApproversError, readDemand, waitingDemands, nextSigner, cancelDemand, setDemandDialog, appendDemandDialog, setDemandLine, deleteDemandLine, reopenDemand, REOPEN_STATUS, purchaseOrderOwners, attachDemand, priorityUsers, budgetPairs, isCodingError,
-  findInvoiceByBooknum, receiptsToInvoice, createSupplierInvoice, addInvoiceReceipt, attachInvoice, setInvoiceDialog, readSupplierInvoice, setInvoiceLine,
-  PC_READY, partialBills, readPartialBill, partialBillStatus,
+  findInvoiceByBooknum, receiptsToInvoice, receiptLines, createSupplierInvoice, addInvoiceReceipt, attachInvoice, setInvoiceDialog, readSupplierInvoice, setInvoiceLine,
+  PC_READY, partialBills, readPartialBill, partialBillStatus, partialBillLines,
   supplierPriceLists, addPriceListItem, deletePriceListItem, supplierParts, addSupplierPart, deleteSupplierPart,
   _call: call
 };

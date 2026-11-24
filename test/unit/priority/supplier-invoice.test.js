@@ -108,3 +108,17 @@ test('התצוגה למסך — מהמצב השמור: ספק, מסמך, ה-GR �
   assert.match(v.lines[0].description, /GR26000033 · מסמך 90016/);
   assert.deepEqual(v.match, { ok: true, diff: 0 });
 });
+
+test('הבסיס לפי השורות: שורת סיכום של קבלן מול סעיף בחשבון החלקי (סלע, PC260000262) — והשורה השלילית (עכבון) לא נספרת', () => {
+  const sela = doc({ doc_number: '01/000807', lines: [{ description: 'חשבון חלקי 1 - אתר הפסגה הירוקה - רכסים', qty: 1, unit_price: 609317, line_total: 609317 }],
+    totals: { before_vat: 609317.03, vat: 109677.07, total: 718994.1 } });
+  const pc = { kind: 'pc', id: 'PC260000262', ordname: 'CO260000102', amount: 578851.24, gross: 609317.1,
+    lines: [{ des: 'חפירה ופינוי', qty: 20310.57, price: 30, total: 609317.1 }, { des: 'עכבון לפי חוזה', qty: 1, price: -30465.86, total: -30465.86 }] };
+  const gr = { kind: 'gr', id: 'GR26000099', amount: 1000, lines: [{ des: 'צנרת', qty: 10, price: 100, total: 1000 }] };
+  const m = SI.pickBasis(sela, [gr, pc]);
+  assert.deepEqual(m.picked.map((c) => c.id), ['PC260000262']);
+  // מספר החוזה על החשבונית — גובר
+  assert.equal(SI.pickBasis(doc({ contract_refs: ['CO260000102'] }), [gr, pc]).how, 'ref');
+  // אין שורות ואין סכום מתאים — לא מנחשים
+  assert.deepEqual(SI.pickBasis(doc(), [gr, { ...pc, gross: 1, amount: 1 }]).picked, []);
+});

@@ -1,6 +1,7 @@
 'use strict';
 /**
- * 🧾 חוזה ← חשבון חלקי ← חשבונית ספק, מקצה לקצה (‎server/priority/pc-invoice.js‎ דרך שיחת הבוט).
+ * 🧾 חוזה ← חשבון חלקי ← חשבונית ספק, מקצה לקצה — מהמסך של משימון פריוריטי (‎supplier-invoice.js‎ ← ‎pc-invoice.js‎).
+ * הוחלט 24.11.26: חשבונית ספק — רק באתר; בבוט כל מסמך הוא קבלת סחורה.
  * המקרה האמיתי (24.11.26): חשבונית 01/000807 של סלע ס.ט תשתיות על 609,317 ₪ לפני מע"מ, והחשבון החלקי PC260000262
  * מתוך החוזה CO260000102: 609,317.10 פחות עכבון 5% (30,465.86) = 578,851.24 — הספק לא קיזז עכבון.
  */
@@ -9,7 +10,6 @@ const assert = require('node:assert/strict');
 const H = require('./helpers');
 const Access = require('../../../server/priority/priority-access');
 const PcInvoice = require('../../../server/priority/pc-invoice');
-const GR = require('../../../server/priority/goods-receipt');
 const { BTN } = require('../../../server/whatsapp/wa-ui');
 
 H.setup();
@@ -42,6 +42,9 @@ function priority(t, { pc = PC(), open = null } = {}) {
   const pr = H.Fakes.priority(t, {
     findSuppliers: async () => ({ list: [{ SUPNAME: '615142', SUPDES: 'סלע ס.ט תשתיות בע"מ' }], by: 'vat' }),
     findReceiptByBooknum: async () => null,
+    receiptsToInvoice: async () => [],
+    receiptLines: async () => [],
+    partialBillLines: async () => [{ MED_SECDES: 'חפירה ופינוי', TQUANT: 20310.57, MED_PRICE: 30, MED_CQPRICE_BD: 609317.1 }, { MED_SECDES: 'עכבון לפי חוזה', TQUANT: 1, MED_PRICE: -30465.86, MED_CQPRICE_BD: -30465.86 }],
     partialBills: async () => open ?? (state.pc.IVALL === 'Y' || state.pc.STATDES === 'מבוטלת' ? [] : [state.pc]),
     readPartialBill: async (c, no) => (no === state.pc.DOCNO ? state.pc : null),
     partialBillStatus: async (c, no) => (no === state.pc.DOCNO ? { DOCNO: no, STATDES: state.pc.STATDES, IVALL: state.pc.IVALL } : null),
@@ -72,29 +75,25 @@ function accountant() {
 
 test('חשבון סופי והספק לא קיזז עכבון: מתריע, "עכבון בחשבון הבא" ← חשבונית זמנית כמו של הספק, העכבון נרשם לחשבון הבא', async (t) => {
   H.companies(t, 'test11');
-  H.at(t);
   const u = accountant();
   const pr = priority(t);
   ai(t, invoice());
-  const { say } = H.chat(t, u);
+  const { open, say } = H.desk(u, 'invoice');
 
-  let r = await say('', { file: H.photo() });
-  assert.match(r.text, /לקלוט את המסמך/);
-  r = await say(BTN.yes);
+  let r = await open();
   assert.match(r.text, /חשבונית ספק מחשבון חלקי/);
   assert.match(r.text, /PC260000262/);
   assert.match(r.text, /CO260000102/);
   assert.match(r.text, /הספק לא קיזז עכבון/);
   assert.match(r.text, /30,465\.86/);
   assert.doesNotMatch(r.text, /אין מספר הקצאה/);
-  assert.doesNotMatch(r.text, /הזמנ/, 'בחוזה אין הזמנה — לא שואלים עליה');
   H.assertButtons(r.buttons, [PcInvoice.BTN_DEFER, PcInvoice.BTN_NOW, BTN.cancel]);
   assert.equal(pr.writes.length, 0, 'לפני התשובה — שום דבר לא נכתב');
 
   r = await say(PcInvoice.BTN_DEFER);
   assert.match(r.text, /T501/);
   assert.match(r.text, /כמו חשבונית הספק/);
-  assert.match(r.text, /יירשם|נרשם לקיזוז בחשבון הבא/);
+  assert.match(r.text, /נרשם לקיזוז בחשבון הבא/);
   const [create] = pr.wrote('createSupplierInvoice');
   assert.equal(create.args[0], 'test11');
   assert.deepEqual({ ...create.args[1], details: undefined }, { supname: '615142', booknum: '01/000807', date: '2026-10-31', allocation: '320727438', details: undefined });
@@ -103,19 +102,17 @@ test('חשבון סופי והספק לא קיזז עכבון: מתריע, "עכ
   assert.equal(pr.wrote('attachInvoice').length, 1);
   assert.match(pr.wrote('setInvoiceDialog')[0].args[2].join('\n'), /יקוזז בחשבון הבא של החוזה CO260000102/);
   assert.equal(PcInvoice.deferred().filter((x) => x.pc === 'PC260000262').length, 1);
-  assert.equal(GR.active(u.id), false, 'השיחה נסגרה');
+  assert.equal(r.state.active, false, 'הקליטה הסתיימה');
 });
 
-test('החשבון הבא של אותו חוזה: הבוט מזכיר את העכבון שנדחה, ואחרי ההמרה — נרשם שקוזז', async (t) => {
+test('החשבון הבא של אותו חוזה: מזכירים את העכבון שנדחה, ואחרי ההמרה — נרשם שקוזז', async (t) => {
   H.companies(t, 'test11');
-  H.at(t);
   const u = accountant();
   const pc2 = PC({ DOCNO: 'PC260000300', MED_QPRICE: 95000, DISPRICE: 95000, VAT: 17100, TOTPRICE: 112100, MED_EXEMONTH: '10/26', retention: [{ PERCENT: 5, QPRICE: 5000 }] });
   priority(t, { pc: pc2 });
   ai(t, invoice({ doc_number: '01/000900', totals: { subtotal: 95000, doc_discount_pct: 0, doc_discount: 0, before_vat: 95000, vat: 17100, total: 112100 } }));
-  const { say } = H.chat(t, u);
-  await say('', { file: H.photo() });
-  let r = await say(BTN.yes);
+  const { open, say } = H.desk(u, 'invoice');
+  let r = await open();
   assert.match(r.text, /עכבון שנדחה מ-PC260000262/);
   assert.match(r.text, /✅ הסכומים מתאימים/);
   H.assertButtons(r.buttons, [BTN.yes, BTN.cancel]);
@@ -124,46 +121,22 @@ test('החשבון הבא של אותו חוזה: הבוט מזכיר את הע�
   assert.equal(PcInvoice.deferred().filter((x) => x.pc === 'PC260000262').length, 0, 'העכבון שנדחה סומן כמקוזז');
 });
 
-test('חשבון שעוד מחכה לאישור: לא נכתב דבר, הבוט אומר אצל מי — וכשהחשבון סופי, הסבב מציע להמיר', async (t) => {
+test('ביטול לפני ההמרה — בלי כתיבה', async (t) => {
+  H.companies(t, 'test11');
+  const u = accountant();
+  const pr = priority(t);
+  ai(t, invoice());
+  const { open, say } = H.desk(u, 'invoice');
+  await open();
+  const r = await say(BTN.cancel);
+  assert.match(r.text, /בוטלה/);
+  assert.equal(pr.writes.length, 0);
+});
+
+test('בבוט: חשבונית של קבלן משנה — קבלת סחורה (גם למי שמורשה לחשבוניות ספק), בלי חשבון חלקי', async (t) => {
   H.companies(t, 'test11');
   H.at(t);
   const u = accountant();
-  const pr = priority(t, { pc: PC({ STATDES: 'מחכה לאישור' }) });
-  ai(t, invoice());
-  const { say, wa } = H.chat(t, u);
-  await say('', { file: H.photo() });
-  let r = await say(BTN.yes);
-  assert.match(r.text, /מחכה לאישור/);
-  assert.match(r.text, /גילעד קוגלמן \(או AlexO\)/);
-  assert.match(r.text, /אשלח לך הודעה/);
-  assert.equal(pr.writes.length, 0);
-  assert.equal(PcInvoice.waiting(u.id).length, 1);
-
-  // הסבב: עוד לא סופי — כלום
-  const sent = [];
-  await GR.sweep((id, text) => sent.push({ id, text }), { force: true });
-  assert.equal(sent.length, 0);
-
-  // סופי — הודעה, והקליטה נפתחת בשאלת ההמרה
-  pr.state.pc.STATDES = 'סופית';
-  t.mock.timers.tick(25 * 60 * 1000);
-  await GR.sweep((id, text) => sent.push({ id, text }), { force: true });
-  assert.equal(sent.length, 1);
-  assert.equal(sent[0].id, u.id);
-  assert.match(sent[0].text, /אושר סופית/);
-  assert.match(sent[0].text, /עכבון בחשבון הבא/);
-  wa.clear();
-  r = await say(PcInvoice.BTN_NOW);
-  assert.match(r.text, /T501/);
-  assert.equal(pr.wrote('setInvoiceLine').length, 0, '"לקזז עכשיו" — לפי החשבון, העכבון לא מתאפס');
-  assert.match(r.text, /בחשבונית הספק 609,317\.03 לפני מע"מ/);
-  assert.equal(PcInvoice.waiting(u.id).length, 0);
-});
-
-test('מי שלא מורשה לחשבוניות ספק — ממשיך בקבלת סחורה רגילה (שאלת ההזמנה)', async (t) => {
-  H.companies(t, 'test11');
-  H.at(t);
-  const u = H.worker();
   priority(t);
   t.mock.method(require('../../../server/integrations/priority'), 'openOrders', async () => []);
   ai(t, invoice());
@@ -174,20 +147,6 @@ test('מי שלא מורשה לחשבוניות ספק — ממשיך בקבלת
   assert.doesNotMatch(r.text, /חשבון חלקי/);
 });
 
-test('ביטול לפני ההמרה — "ההמרה בוטלה", בלי כתיבה', async (t) => {
-  H.companies(t, 'test11');
-  H.at(t);
-  const u = accountant();
-  const pr = priority(t);
-  ai(t, invoice());
-  const { say } = H.chat(t, u);
-  await say('', { file: H.photo() });
-  await say(BTN.yes);
-  const r = await say(BTN.cancel);
-  assert.match(r.text, /ההמרה לחשבונית ספק בוטלה/);
-  assert.equal(pr.writes.length, 0);
-});
-
 test('השוואה: עיגול, עכבון שלא קוזז, פער אחר', () => {
   const a = PcInvoice._amountsOf(PC());
   assert.deepEqual(a, { net: 578851.24, retention: 30465.86, pct: 5, gross: 609317.1, vat: 104193.22, total: 683044.46 });
@@ -195,21 +154,4 @@ test('השוואה: עיגול, עכבון שלא קוזז, פער אחר', () =
   assert.equal(PcInvoice._compare(609317.03, a).kind, 'retention');
   assert.equal(PcInvoice._compare(500000, a).kind, 'gap');
   assert.equal(PcInvoice._compare(0, a).kind, 'unknown');
-  assert.deepEqual(PcInvoice._refsOf({ contract_refs: ['PC260000262'], lines: [{ description: 'חוזה CO260000102' }] }), { pc: ['PC260000262'], co: ['CO260000102'] });
-});
-
-test('תדפיס של החשבון החלקי בלי חשבונית הספק — הבוט מבקש את החשבונית, ואחריה ממשיך עם אותו חשבון', async (t) => {
-  H.companies(t, 'test11');
-  H.at(t);
-  const u = accountant();
-  priority(t);
-  let next = { doc_type: 'other', doc_label: 'חשבון חלקי לקבלן משנה', contract_refs: ['PC260000262', 'CO260000102'], warnings: [], lines: [], totals: {} };
-  H.claude(t, { extract: () => next });
-  const { say } = H.chat(t, u);
-  let r = await say('קבלת סחורה', { file: H.photo('pc.jpg') });
-  assert.match(r.text, /תדפיס של החשבון החלקי \*PC260000262\*/);
-  assert.match(r.text, /חשבונית המס של הספק/);
-  next = invoice();
-  r = await say('', { file: H.photo('inv.jpg') });
-  assert.match(r.text, /חשבון חלקי \*PC260000262\*/);
 });

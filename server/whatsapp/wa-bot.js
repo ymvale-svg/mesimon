@@ -57,7 +57,6 @@ const WaScan = require('./whatsapp-scan');
 const Zoom = require('../integrations').Zoom;
 const GoodsReceipt = require('../priority').GoodsReceipt;
 const PurchaseDemand = require('../priority').PurchaseDemand;
-const SupplierInvoice = require('../priority').SupplierInvoice;
 const Approvals = require('../priority').PriorityApprovals;
 const WaUi = require('./wa-ui');
 const MeetingFollowup = require('../meetings').MeetingFollowup;
@@ -1255,15 +1254,13 @@ async function handleDirectAs(msg) {
     }
   }
   const pdAllowed = WaActions.allowed(actor, 'purchase_demand');
-  const ivAllowed = WaActions.allowed(actor, 'supplier_invoice');
   // ❓ לחיצה על כפתור של שאלה מסוימת — לשאלה הזו, ולא למה שפתוח עכשיו (‎wa-questions.js‎).
   // 🔒 תגובה (Reaction), או ציטוט עם "כן" / "לא" קצר — כמו לחיצה על ההודעה שעליה הם (#171)
   const reaction = msg.kind === 'reactionMessage';
   const quotedAnswer = !msg.button && !msg.file && Boolean(msg.replyTo?.id) && answerLike(text);
   const pressed = (msg.button && msg.replyTo?.button) || reaction || quotedAnswer ? WaQuestions.find(user.id, msg.replyTo?.id) : null;
   // מסמך אחר (קבלת סחורה / דרישת רכש) — הכפתור או התגובה של מסמך שכבר לא פתוח
-  const flowDoc = pressed?.owner === 'goods_receipt' ? GoodsReceipt.docId(user.id) : pressed?.owner === 'purchase_demand' ? PurchaseDemand.docId(user.id)
-    : pressed?.owner === 'supplier_invoice' ? SupplierInvoice.docId(user.id) : null;
+  const flowDoc = pressed?.owner === 'goods_receipt' ? GoodsReceipt.docId(user.id) : pressed?.owner === 'purchase_demand' ? PurchaseDemand.docId(user.id) : null;
   const otherDoc = Boolean(pressed?.draft?.doc) && pressed.draft.doc !== flowDoc;
   // תגובה היא תשובה רק על ההודעה של השאלה: בשיחה — שאלת כן/לא (לא תפריט); בקבלת סחורה / דרישת רכש — ההודעה האחרונה שלהן
   const onQuestion = Boolean(pressed) && (pressed.owner === 'chat'
@@ -1274,7 +1271,7 @@ async function handleDirectAs(msg) {
   if (reaction && !onQuestion) {
     // 👍 על הודעה אחרת — לא תשובה. יש שאלה פתוחה — אומרים מה לעשות; אין — כלום
     const cur = chatOf(user.id);
-    const open = (cur.awaiting && cur.draft && cur.draft.kind !== 'menu') || GoodsReceipt.active(user.id, true) || PurchaseDemand.active(user.id, true) || SupplierInvoice.active(user.id, true);
+    const open = (cur.awaiting && cur.draft && cur.draft.kind !== 'menu') || GoodsReceipt.active(user.id, true) || PurchaseDemand.active(user.id, true);
     const reply = open ? 'ℹ️ התגובה הייתה על הודעה אחרת, אז לא עשיתי כלום. כדי לענות — לחצו על כפתור בשאלה, או כתבו *כן* / *לא*.' : '';
     log({ ...base, text, action: 'other', status: 'ok', result: `תגובה ${text || ''} על הודעה שאינה השאלה — לא נחשבה תשובה`.slice(0, 300), reply: reply || undefined });
     if (reply) await sendText(msg.chatId, reply);
@@ -1319,39 +1316,7 @@ async function handleDirectAs(msg) {
     // תפריט פריוריטי אינו קליטה — הוא מנתב: "🛒 דרישת רכש" עליו הולך לדרישת הרכש (באג 11.11: נענה "לא פתוחה לך")
     const open = pressed.owner === 'goods_receipt' ? GoodsReceipt.active(user.id, true) && !GoodsReceipt.inMenu(user.id) : PurchaseDemand.active(user.id, true);
     if (open) forceFlow = pressed.owner;
-  } else if (pressed?.owner === 'supplier_invoice' && SupplierInvoice.active(user.id, true)) {
-    forceFlow = 'supplier_invoice';
   }
-  // 🧾 חשבונית ספק — "חשבונית ספק" (כתוב, בכיתוב לתמונה, או הכפתור בתפריט פריוריטי), או תשובה לחשבונית פתוחה.
-  // בקשה מפורשת לקבלת סחורה / דרישת רכש באמצע — עוברת אליהן, והחשבונית (שעוד לא נכתבה) יורדת
-  const ivOther = !SupplierInvoice.isTrigger(text) && (GoodsReceipt.isTrigger(text) || PurchaseDemand.opens(text, user.id));
-  if (!forceChat && (forceFlow === 'supplier_invoice' || (!forceFlow && ivAllowed && !ivOther
-    && (SupplierInvoice.active(user.id, late) || SupplierInvoice.opens(text) || (!msg.file && SupplierInvoice.wantsUndo(user.id, text) && !GoodsReceipt.active(user.id, late) && !PurchaseDemand.active(user.id, late)))))) {
-    let pre = '';
-    if (!SupplierInvoice.active(user.id, late)) {
-      GoodsReceipt.dropMenu(user.id);
-      if (GoodsReceipt.pending(user.id)) pre = await GoodsReceipt.abandon(user).catch(() => '');
-      if (PurchaseDemand.pending(user.id)) pre = [pre, PurchaseDemand.abandon(user)].filter(Boolean).join('\n');
-    }
-    const slowIv = setTimeout(() => react(ref, '🧐'), SLOW_NOTICE_MS);
-    let r;
-    try {
-      r = await SupplierInvoice.handle({ user, text, file: msg.file, reaction });
-    } catch (err) {
-      console.error('[משימון] חשבונית ספק נכשלה:', err.message);
-      r = { replies: ['משהו השתבש בחשבונית הספק. נסו שוב, או *ביטול*.'], status: 'error', result: err.message };
-    }
-    clearTimeout(slowIv);
-    log({ ...base, text: [voice ? `🎙 ${text}` : text, msg.file ? '[📎 קובץ]' : ''].filter(Boolean).join(' ') || '[קובץ]', action: 'supplier_invoice', status: r.status, result: r.result, reply: flowReply(r, pre) });
-    await notice;
-    const parts = (r.replies ?? []).map((x, i) => (i === 0 && pre ? `${pre}\n\n${x}` : x)).flatMap((reply) => splitMessage(reply));
-    for (let i = 0; i < parts.length; i++) {
-      if (i === parts.length - 1 && r.buttons?.length) await sendButtons(msg.chatId, parts[i], r.buttons, { owner: 'supplier_invoice', draft: docDraft(SupplierInvoice.docId(user.id)) });
-      else await sendText(msg.chatId, parts[i]);
-    }
-    return;
-  }
-  if (ivOther && SupplierInvoice.pending(user.id)) SupplierInvoice.abandon(user);
   if (!forceChat && forceFlow !== 'goods_receipt' && pdAllowed && (PurchaseDemand.active(user.id, late) || forceFlow === 'purchase_demand' || (PurchaseDemand.opens(text, user.id) && !(msg.file && !text)))) {
     let pre = '';
     if (!PurchaseDemand.active(user.id, late)) {
@@ -1404,7 +1369,7 @@ async function handleDirectAs(msg) {
   // 🔐 פריוריטי לא פתוח לעובד (אין לו אף מסמך במטריצה) — "פריוריטי" / "קבלת סחורה" / "דרישת רכש" (גם כפתור מהודעה ישנה):
   // תשובה אחת ברורה, ולא תפריט ולא בקשה ל-AI (הוחלט 13.11.26)
   const shortAsk = String(text ?? '').trim().split(/\s+/).filter(Boolean).length <= 3;
-  if (!forceChat && !forceFlow && !grAllowed && !pdAllowed && !ivAllowed && !msg.file
+  if (!forceChat && !forceFlow && !grAllowed && !pdAllowed && !msg.file
     && ((shortAsk && (GoodsReceipt.isPriority(text) || GoodsReceipt.isTrigger(text) || PurchaseDemand.opens(text)))
       || /^\P{L}*(?:קבלת\s*סחורה|דרישת\s*רכש)/u.test(String(text ?? '')))) {
     await notice;
@@ -1412,12 +1377,12 @@ async function handleDirectAs(msg) {
     await sendText(msg.chatId, PriorityAccess.NO_ACCESS);
     return;
   }
-  const prioMenuOnly = !grAllowed && (pdAllowed || ivAllowed) && !msg.file && (GoodsReceipt.isPriority(text) || GoodsReceipt.inMenu(user.id));
+  const prioMenuOnly = !grAllowed && pdAllowed && !msg.file && (GoodsReceipt.isPriority(text) || GoodsReceipt.inMenu(user.id));
   if (!offerAnswer && !forceChat && (prioMenuOnly || forceFlow === 'goods_receipt' || (grAllowed && (GoodsReceipt.active(user.id, late) || GoodsReceipt.opens(text, msg.file) || GoodsReceipt.wantsUndoFinal(user.id, text))))) {
     const slowGr = setTimeout(() => react(ref, '🧐'), SLOW_NOTICE_MS);
     let r;
     try {
-      r = await GoodsReceipt.handle({ user, text, file: msg.file, reaction: msg.kind === 'reactionMessage', allow: { gr: grAllowed, pd: pdAllowed, iv: ivAllowed } });
+      r = await GoodsReceipt.handle({ user, text, file: msg.file, reaction: msg.kind === 'reactionMessage', allow: { gr: grAllowed, pd: pdAllowed } });
     } catch (err) {
       console.error('[משימון] קבלת סחורה נכשלה:', err.message);
       r = { replies: ['משהו השתבש בקבלת הסחורה. נסו שוב, או *ביטול*.'], status: 'error', result: err.message };

@@ -1,42 +1,28 @@
 'use strict';
 /**
- * 🧾 חוזה ← חשבון חלקי ← חשבונית ספק (24.11.26).
+ * 🧾 חוזה ← חשבון חלקי ← חשבונית ספק (24.11.26) — הבסיס "חשבון חלקי" של חשבונית ספק (‎supplier-invoice.js‎).
  *
- * האפיון: "אפיון — סריקת מסמכי רכש לפריוריטי.md", "חשבונית ספק מחשבון חלקי (חוזה)".
+ * האפיון: "אפיון — סריקת מסמכי רכש לפריוריטי.md" ("חשבונית ספק — פעולה אחת, שלושה בסיסים").
  *
- * אצל קבלן משנה עם חוזה (‎CO…‎) אין הזמנה ואין קבלת סחורה: הקבלן מגיש חשבון, הוא נקלט בפריוריטי כ*חשבון חלקי* (‎PC…‎)
- * מתוך כתב הכמויות של החוזה ועובר אישורים, והספק שולח *חשבונית מס*. כאן הבוט ממיר את החשבון לחשבונית ספק:
- *   1. העובד שולח את חשבונית המס (וברוב המקרים גם את תדפיס החשבון החלקי ואת דף החישוב של הקבלן) — הקריאה והחברה
- *      והספק — כמו בקבלת הסחורה (‎goods-receipt.js‎, אותו מנוע ואותה שיחה). כשלספק יש חשבון חלקי שלא חויב,
- *      הקליטה עוברת לכאן במקום לשאלת ההזמנה.
- *   2. החשבון: לפי המספר שבמסמכים (‎PC…‎ / ‎CO…‎), אחרת לפי הסכום, אחרת שואלים (כפתורים).
- *   3. השוואה: הסכום לפני מע"מ בחשבונית מול "לתשלום" בחשבון (אחרי עכבון). עיגול (עד 1 ₪) — ✅.
- *      **הספק לא קיזז עכבון** (החשבונית = החשבון לפני עכבון): מתריעים, ומציעים לגבות את העכבון בחשבון הבא — שורת
- *      העכבון בחשבונית מתאפסת, והעכבון נרשם לקיזוז בחשבון הבא של אותו חוזה (‎pc_retention_deferred‎). כשהחשבון הבא
- *      מגיע — הבוט מזכיר אותו (הוחלט 24.11.26).
- *   4. **רק חשבון סופי** (הוחלט 24.11.26): חשבון שעוד מחכה לאישור — הבוט אומר אצל מי, שומר את החשבונית
- *      (‎pc_invoice_waiting‎), ובסבב בודק. כשהחשבון סופי — מציע לעובד להמיר. כך לא נפתחת חשבונית זמנית שאי אפשר
- *      למחוק ב-API.
- *   5. אחרי "כן": חשבונית ספק זמנית (‎T…‎) במסך החשבוניות המרכזות, משיכת החשבון (‎PIVDOC_SUBFORM‎), נספחים
- *      ודו-שיח פנימי. החשבונית **נשארת זמנית** — הנהלת החשבונות בודקת וסוגרת.
+ * אצל קבלן משנה עם חוזה (‎CO…‎) אין הזמנה ואין קבלת סחורה: החשבון נקלט בפריוריטי כ*חשבון חלקי* (‎PC…‎) מכתב הכמויות של
+ * החוזה ועובר אישורים, והספק שולח *חשבונית מס*. חשבונית ספק — **רק במשימון פריוריטי** (הוחלט 24.11.26; בבוט — קבלת סחורה בלבד).
+ * ‎supplier-invoice.js‎ מוצא את החשבון (לפי השורות, המספרים והסכום) וקורא ל-‎choose‎. כאן:
+ *   1. השרשרת: החשבון של אותו ספק, לא מבוטל, לא חויב, ו**מאושר (סופי)** — אחרת אומרים אצל מי הוא, ולא נכתב דבר.
+ *   2. השוואה: הסכום לפני מע"מ בחשבונית מול "לתשלום" בחשבון (אחרי עכבון). עיגול (עד 1 ₪) — ✅.
+ *      **הספק לא קיזז עכבון**: מתריעים, ומציעים לגבות את העכבון בחשבון הבא — שורת העכבון בחשבונית מתאפסת, והעכבון נרשם
+ *      לקיזוז בחשבון הבא של אותו חוזה (‎pc_retention_deferred‎), שמזכיר אותו.
+ *   3. אחרי "כן": חשבונית ספק זמנית (‎T…‎), משיכת החשבון (‎PIVDOC_SUBFORM‎ — השורות נמשכות ממנו), מספר ההקצאה, נספחים
+ *      ודו-שיח פנימי. החשבונית **נשארת טיוטא** — הנהלת החשבונות בודקת וסוגרת.
  *
- * הרשאה: סוג המסמך "חשבונית ספק" (‎invoice‎) במטריצה. מי שלא מורשה — ממשיך בקבלת הסחורה כרגיל.
- * המודול אינו מייבא את ‎goods-receipt.js‎ (בלי מעגל): העזרים של השיחה מגיעים ב-‎h‎.
+ * המודול אינו מייבא את ‎supplier-invoice.js‎ (בלי מעגל): העזרים של השיחה מגיעים ב-‎h‎.
  */
 const fs = require('node:fs');
-const path = require('node:path');
 const D = require('../core').Db;
 const Priority = require('../integrations').Priority;
 const { BTN } = require('../whatsapp').WaUi;
 const Access = require('./priority-access');
 
-const WAIT_KEY = 'pc_invoice_waiting';
 const DEFER_KEY = 'pc_retention_deferred';
-const FILES_DIR = () => path.join(D.UPLOADS_DIR, 'pc-invoice');
-const WAIT_DAYS = 30;
-const CHECK_EVERY = 20 * 60 * 1000;
-const RENOTIFY = 24 * 60 * 60 * 1000;
-const MAX_NOTIFY = 3;
 /*
  * מספר הקצאה חובה מעל סף (חוק ההסדרים — חשבוניות ישראל): 10,000 ₪ לפני מע"מ מ-01.01.26, 5,000 ₪ מ-01.06.26.
  * בלי מספר הקצאה אי אפשר לקזז את המע"מ שבחשבונית — מתריעים, לא עוצרים (הנה"ח מחליטה).
@@ -50,6 +36,18 @@ const NO = /^(לא|אל|ממש לא|no|👎)([\s,.!]|$)/i;
 const DEFER = /בחשבון\s*הבא|לגבות\s*(?:אחר\s*כך|בהמשך)|לדחות|נדחה|בלי\s*עכבון|ללא\s*עכבון/;
 const NOW = /לקזז\s*(?:עכשיו|כבר)|עכשיו|כמו\s*שהוא|לפי\s*החשבון/;
 
+/** 🧾 הודעה למי שמטפל בחשבוניות ספק בחברה (מטריצת ההרשאות; מנהלי מערכת תמיד) — עכבון שנדחה וכדומה */
+function notifyAccounting(s, title, lines) {
+  try {
+    for (const u of D.all("SELECT id, role FROM users WHERE status = 'active' AND role != 'vendor'")) {
+      if (!Access.of(u.id).docs.includes('invoice') || !Access.filterForUser(u.id, [s.company]).length) continue;
+      D.notify({ targetType: 'user', targetId: u.id, kind: 'ai', title: `🧾 ${title}`, body: [`חברה: ${s.company}`, ...lines].join('\n') });
+    }
+  } catch (err) {
+    console.error('[משימון] התראה על חשבונית ספק:', err.message);
+  }
+}
+
 const r2 = (n) => Math.round(Number(n || 0) * 100) / 100;
 const money = (n) => Number(n ?? 0).toLocaleString('he-IL', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const ymdHe = (d) => (d ? String(d).slice(0, 10).split('-').reverse().join('.') : '');
@@ -59,14 +57,6 @@ const isPcStep = (s) => String(s?.step ?? '').startsWith('pc_');
 // ---------------------------------------------------------------------------
 // מספרים מהמסמכים, סכומים והשוואה
 // ---------------------------------------------------------------------------
-
-/** ‎PC…‎ / ‎CO…‎ שמופיעים במסמך (שדה ‎contract_refs‎, וכל טקסט אחר שנקרא) */
-function refsOf(doc) {
-  const text = [...(doc?.contract_refs ?? []), doc?.doc_number, doc?.po_number, doc?.supplier_order_ref, ...(doc?.other_ids ?? []),
-    ...(doc?.lines ?? []).map((l) => `${l.description} ${l.supplier_code}`)].join(' ').toUpperCase();
-  const all = (re) => [...new Set([...text.matchAll(re)].map((m) => m[0].replace(/\s/g, '')))];
-  return { pc: all(/PC\s?\d{6,}/g), co: all(/CO\s?\d{6,}/g) };
-}
 
 const docBeforeVat = (d) => r2(d?.totals?.before_vat || d?.totals?.subtotal || 0);
 
@@ -100,64 +90,6 @@ function pendingApprovers(pc) {
 function deferredFor(company, ordname, exceptPc = '') {
   const all = D.getSetting(DEFER_KEY, []) ?? [];
   return all.filter((x) => x.company === company && x.ordname === ordname && !x.settledBy && x.pc !== exceptPc);
-}
-
-// ---------------------------------------------------------------------------
-// כניסה: האם החשבונית שייכת לחשבון חלקי
-// ---------------------------------------------------------------------------
-
-/** העובד מורשה לחשבוניות ספק (מטריצת ההרשאות) */
-const allowed = (uid) => Boolean(uid) && Access.of(uid).docs.includes('invoice');
-
-/**
- * נקרא מקבלת הסחורה אחרי שהחברה והספק נקבעו. ‎null‎ — לא חשבון חלקי, וקבלת הסחורה ממשיכה כרגיל.
- * אחרת — התשובה של השלב הבא (הקליטה עוברת למצב ‎pc‎).
- */
-async function start(s, h) {
-  const d = s.doc ?? {};
-  if (!allowed(s.uid)) return null;
-  const refs = refsOf({ ...d, contract_refs: [...(d.contract_refs ?? []), ...(s.pcRefs ?? [])] });
-  if (d.doc_type !== 'invoice' && !refs.pc.length && !refs.co.length) return null;
-  let open;
-  try {
-    open = await Priority.partialBills(s.company, s.supplier.code);
-  } catch (err) {
-    // המסך סגור או תקלה — לא חוסמים את קבלת הסחורה; למנהלים
-    h.alertAdmins(s, 'חשבונות חלקיים לא נקראו', [err.message]);
-    return null;
-  }
-  // מספר חשבון שבמסמך — גם כשאינו ברשימה (חויב כבר / בוטל / של ספק אחר): אומרים מה מצאנו
-  for (const no of refs.pc) {
-    if (open.some((x) => x.DOCNO === no)) continue;
-    const pc = await Priority.readPartialBill(s.company, no).catch(() => null);
-    if (!pc) continue;
-    if (pc.SUPNAME !== s.supplier.code) return stop(s, `החשבון החלקי *${no}* שבמסמך שייך לספק אחר (${pc.CDES}). בדקו את המסמכים.`, `PC של ספק אחר: ${no}`);
-    if (pc.STATDES === 'מבוטלת') return stop(s, `החשבון החלקי *${no}* מבוטל בפריוריטי. אי אפשר להמיר אותו לחשבונית.`, `PC מבוטל: ${no}`);
-    if (pc.IVALL === 'Y') return stop(s, `החשבון החלקי *${no}* כבר חויב בחשבונית ספק. לא נקלט שוב.`, `PC כבר חויב: ${no}`);
-  }
-  if (!open.length) return null;
-  let list = open;
-  const byPc = open.filter((x) => refs.pc.includes(x.DOCNO));
-  const byCo = open.filter((x) => refs.co.includes(x.ORDNAME));
-  if (byPc.length) list = byPc;
-  else if (byCo.length) list = byCo;
-  const before = docBeforeVat(d);
-  // לפי הסכום: לתשלום, או לפני עכבון (העכבון נקרא רק לחשבון שנבחר — כאן מספיק "לתשלום" והמצטבר)
-  if (list.length > 1 && before > 0) {
-    const near = list.filter((x) => Math.abs(r2(x.MED_QPRICE) - before) <= 1 || Math.abs(r2(x.MED_DOCTOTPRICE) - before) <= 1);
-    if (near.length) list = near;
-  }
-  s.mode = 'pc';
-  if (list.length === 1) return choose(s, h, list[0].DOCNO);
-  const opts = list.slice(0, 3);
-  s.step = 'pc_pick';
-  s.pcOptions = opts.map((x) => x.DOCNO);
-  h.offer(s, opts.map((x) => x.DOCNO));
-  return h.reply(s, [`🧾 *חשבונית ספק מחשבון חלקי* — חשבונית ${d.doc_number || ''}`.trim(), h.companyLine(s),
-    `🚚 ספק: *${s.supplier.name}* (${s.supplier.code})`, '',
-    `לספק יש ${list.length} חשבונות חלקיים שעוד לא חויבו. לאיזה מהם החשבונית?`,
-    ...opts.map((x) => `• *${x.DOCNO}* — חוזה ${x.ORDNAME}, ${x.MED_EXEMONTH || ymdHe(x.CURDATE)}, לתשלום ${money(x.MED_QPRICE)} (${x.STATDES})`),
-    '', 'בחרו בכפתור, או כתבו את מספר החשבון (PC…). *ביטול* — לבטל.'].join('\n'));
 }
 
 function stop(s, text, result) {
@@ -216,33 +148,23 @@ function summary(s, h, { head = true } = {}) {
   return lines.filter((x) => x !== null).join('\n');
 }
 
-/** החשבון עוד לא סופי: שומרים את החשבונית לסבב, ואומרים אצל מי */
+/**
+ * החשבון עוד לא סופי (לא מאושר): אי אפשר להמיר. אומרים אצל מי הוא, ולא נכתב דבר. המסמך נשאר בתור במשימון פריוריטי —
+ * כשהחשבון יאושר, מתחילים אותו שוב (הוחלט 24.11.26: חשבונית ספק — רק מהמסך; בלי הודעה בבוט).
+ */
 function wait(s, h) {
   const p = s.pc;
-  const files = (s.files ?? []).map((f) => copyFile(f)).filter(Boolean);
-  const list = (D.getSetting(WAIT_KEY, []) ?? []).filter((x) => !(x.uid === s.uid && x.company === s.company && x.pc === p.docno));
-  list.push({ uid: s.uid, company: s.company, pc: p.docno, supplier: s.supplier, doc: s.doc, via: s.via ?? null, companyHow: s.companyHow ?? null,
-    supplierBy: s.supplierBy ?? null, files, since: Date.now(), checkedAt: Date.now(), notified: 0 });
-  D.setSetting(WAIT_KEY, list);
-  const who = p.pending.length ? `ממתין לאישור של: *${p.pending.join(', ')}*.` : '';
+  const who = p.pending.length ? ` ממתין לאישור של: *${p.pending.join(', ')}*.` : '';
   return {
     s: null,
     replies: [[summary(s, h).split('\n\n').slice(0, -1).join('\n\n').replace(/\n$/, ''), '',
-      `⏳ החשבון החלקי *${p.docno}* עוד *${p.status}* בפריוריטי, ואפשר להמיר רק חשבון סופי. ${who}`.trim(),
-      'שמרתי את החשבונית. כשהחשבון יהיה סופי — אשלח לך הודעה, ונמיר בלחיצה.'].join('\n')],
+      `⏳ החשבון החלקי *${p.docno}* עוד *${p.status}* בפריוריטי, ואפשר להמיר רק חשבון מאושר (סופי).${who}`,
+      'לא נכתב דבר. המסמך נשאר בתור — כשהחשבון יאושר, "להתחיל כאן" שוב.'].join('\n')],
     status: 'ok',
-    result: `ממתין לחשבון סופי: ${p.docno} (${p.status})`
+    result: `חשבון חלקי לא סופי: ${p.docno} (${p.status})`
   };
 }
 
-function copyFile(f) {
-  try {
-    fs.mkdirSync(FILES_DIR(), { recursive: true });
-    const to = path.join(FILES_DIR(), `${Date.now()}-${Math.random().toString(36).slice(2, 7)}-${path.basename(f.path)}`);
-    fs.copyFileSync(f.path, to);
-    return { ...f, path: to };
-  } catch { return null; }
-}
 
 // ---------------------------------------------------------------------------
 // השיחה
@@ -350,8 +272,7 @@ async function convert(user, s, h) {
   const got = r2(inv?.DISPRICE ?? inv?.QPRICE ?? 0);
   const want = docBeforeVat(d);
   const ok = inv && want > 0 && Math.abs(got - want) <= 1;
-  if (s.pcDefer) h.notifyAccounting(s, `עכבון נדחה: ${p.docno}`, [`חשבונית ${ivnum} של ${s.supplier.name} נקלטה בלי עכבון (${money(p.retention)}).`, `לקזז בחשבון הבא של החוזה ${p.ordname}.`]);
-  dropWaiting(s.uid, s.company, p.docno);
+  if (s.pcDefer) notifyAccounting(s, `עכבון נדחה: ${p.docno}`, [`חשבונית ${ivnum} של ${s.supplier.name} נקלטה בלי עכבון (${money(p.retention)}).`, `לקזז בחשבון הבא של החוזה ${p.ordname}.`]);
   return {
     s: null,
     replies: [[
@@ -367,74 +288,7 @@ async function convert(user, s, h) {
   };
 }
 
-// ---------------------------------------------------------------------------
-// ממתינים לחשבון סופי — הסבב
-// ---------------------------------------------------------------------------
-
-function dropWaiting(uid, company, pc) {
-  const list = D.getSetting(WAIT_KEY, []) ?? [];
-  const keep = [];
-  for (const x of list) {
-    if (x.uid === uid && x.company === company && x.pc === pc) { for (const f of x.files ?? []) { try { fs.unlinkSync(f.path); } catch { /* כבר נמחק */ } } } else keep.push(x);
-  }
-  if (keep.length !== list.length) D.setSetting(WAIT_KEY, keep);
-}
-
-/**
- * נקרא מהסבב של קבלת הסחורה. לכל חשבונית שממתינה: בודקים את החשבון (כל 20 דקות). סופי ← הקליטה נפתחת אצל העובד
- * בשאלת ההמרה (‎h.open(uid, s)‎) והודעה; בוטל או חויב במחשב ← הודעה ויורדת; 30 יום ← יורדת.
- * ‎h.busy(uid)‎ — לעובד יש קליטה פעילה: מחכים לסבב הבא.
- */
-async function sweep(send, h) {
-  const list = D.getSetting(WAIT_KEY, []) ?? [];
-  if (!list.length) return;
-  const now = Date.now();
-  const drop = [];
-  for (const x of list) {
-    try {
-      if (now - x.since > WAIT_DAYS * 24 * 60 * 60 * 1000) {
-        drop.push(x);
-        send(x.uid, `⏱ חשבונית ${x.doc?.doc_number ?? ''} של ${x.supplier?.name ?? ''} חיכתה ${WAIT_DAYS} יום שהחשבון החלקי *${x.pc}* יהיה סופי, וירדה מהרשימה. כשהוא סופי — שלחו אותה שוב.`);
-        continue;
-      }
-      if (now - (x.checkedAt ?? 0) < CHECK_EVERY) continue;
-      if (x.notified && now - (x.notifiedAt ?? 0) < RENOTIFY) continue;
-      x.checkedAt = now;
-      const st = await Priority.partialBillStatus(x.company, x.pc);
-      if (!st || st.STATDES === 'מבוטלת' || st.IVALL === 'Y') {
-        drop.push(x);
-        send(x.uid, `ℹ️ החשבון החלקי *${x.pc}* ${!st ? 'כבר לא קיים' : st.STATDES === 'מבוטלת' ? 'בוטל' : 'כבר חויב בחשבונית (במחשב)'} בפריוריטי, ולכן חשבונית ${x.doc?.doc_number ?? ''} של ${x.supplier?.name ?? ''} לא תומר מהבוט.`);
-        continue;
-      }
-      if (!Priority.PC_READY.includes(st.STATDES)) continue;
-      if (h.busy(x.uid)) continue;
-      if (x.notified >= MAX_NOTIFY) { drop.push(x); continue; }
-      // הקליטה נפתחת בשאלת ההמרה, עם עותק של הקבצים (הקליטה מוחקת את שלה בסוף)
-      const s = { mode: 'pc', step: 'pc_pick', uid: x.uid, startedAt: now, company: x.company, supplier: x.supplier, doc: x.doc,
-        via: x.via, companyHow: x.companyHow, supplierBy: x.supplierBy, files: (x.files ?? []).map(copyFile).filter(Boolean), pcOptions: [x.pc] };
-      const out = await choose(s, h, x.pc);
-      if (!out.s) { drop.push(x); if (out.replies?.length) send(x.uid, out.replies.join('\n')); continue; }
-      out.s.lastPrompt = out.replies[0];
-      h.open(x.uid, out.s);
-      x.notified = (x.notified ?? 0) + 1;
-      x.notifiedAt = now;
-      send(x.uid, [`✅ החשבון החלקי *${x.pc}* אושר סופית. אפשר להמיר את החשבונית לחשבונית ספק:`, '', out.replies[0], '',
-        '_עניתם אחרי שעה? כתבו *פריוריטי* כדי לחזור לשאלה._'].join('\n'));
-    } catch (err) {
-      console.error('[משימון] חשבוניות שממתינות לחשבון חלקי:', err.message);
-    }
-  }
-  const fresh = D.getSetting(WAIT_KEY, []) ?? [];
-  const gone = (y) => drop.some((x) => x.uid === y.uid && x.company === y.company && x.pc === y.pc);
-  for (const x of drop) for (const f of x.files ?? []) { try { fs.unlinkSync(f.path); } catch { /* כבר נמחק */ } }
-  // שומרים את מה שהשתנה בסבב (בדיקה אחרונה, הודעות), בלי לדרוס רשומה שנוספה בינתיים
-  const byKey = new Map(list.map((x) => [`${x.uid}|${x.company}|${x.pc}`, x]));
-  D.setSetting(WAIT_KEY, fresh.filter((y) => !gone(y)).map((y) => byKey.get(`${y.uid}|${y.company}|${y.pc}`) ?? y));
-}
-
-/** החשבוניות שממתינות לחשבון סופי (לתצוגה ולבדיקות) */
-const waiting = (uid = null) => (D.getSetting(WAIT_KEY, []) ?? []).filter((x) => uid == null || x.uid === uid);
 /** עכבונות שנדחו ועוד לא קוזזו */
 const deferred = () => (D.getSetting(DEFER_KEY, []) ?? []).filter((x) => !x.settledBy);
 
-module.exports = { start, step, buttons, sweep, isPcStep, waiting, deferred, _compare: compare, _amountsOf: amountsOf, _refsOf: refsOf, BTN_DEFER, BTN_NOW };
+module.exports = { choose, step, buttons, isPcStep, deferred, _compare: compare, _amountsOf: amountsOf, BTN_DEFER, BTN_NOW };
