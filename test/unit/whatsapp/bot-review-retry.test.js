@@ -31,7 +31,7 @@ test('הדו"ח שומר מי ניסה ולא הצליח (רק משתמש פעי
   assert.deepEqual(Review.feedback().find((f) => f.reviewId === id && f.n === 2).retry, []);
 });
 
-test('retry-invite — העובד מקבל "ביקשת … תיקנו … אפשר לנסות שוב", פעם אחת בלבד', async (t) => {
+test('retry-invite — העובד מקבל "ניסית … תיקנו … לידיעתך, כרגע אפשר לנסות שוב", פעם אחת בלבד', async (t) => {
   workday(t);
   const wa = Fakes.whatsapp(t);
   const gilad = user({ full_name: 'גלעד שני', phone: '972507900002', role: 'employee' });
@@ -40,9 +40,9 @@ test('retry-invite — העובד מקבל "ביקשת … תיקנו … אפש
   await new Promise((res) => setImmediate(res));
   assert.deepEqual(r.sent.map((x) => x.who), ['גלעד שני']);
   const text = wa.texts().join('\n');
-  assert.match(text, /🔧 גלעד, ביקשת ממני "תמצא לי מצגת מלונאות רכסים" — וזה לא הסתדר\./);
+  assert.match(text, /🔧 גלעד, ניסית "תמצא לי מצגת מלונאות רכסים" — וזה לא הסתדר\./);
   assert.match(text, /תיקנו: עכשיו הקובץ עצמו נשלח אליך כאן/);
-  assert.match(text, /אפשר לנסות שוב עכשיו/);
+  assert.match(text, /לידיעתך, כרגע אפשר לנסות שוב/);
   assert.ok(Review.feedback().find((f) => f.reviewId === id && f.n === 1).retry[0].invitedAt);
   // פעם שנייה — לא שוב
   wa.clear();
@@ -57,7 +57,7 @@ test('מנהל מסמן "טופל" — ההזמנה לנסות שוב יוצאת
   const id = await review(gilad);
   Review.setFixStatus(id, 1, { status: 'done' }, { name: 'מנהל' });
   await new Promise((res) => setImmediate(res));
-  assert.match(wa.texts().join('\n'), /🔧 גלעד, ביקשת ממני/);
+  assert.match(wa.texts().join('\n'), /🔧 גלעד, ניסית /);
 });
 
 test('מחוץ לשעות העבודה — ההודעה נשמרת בתור לבוקר, ומסומנת כנשלחה', async (t) => {
@@ -68,4 +68,33 @@ test('מחוץ לשעות העבודה — ההודעה נשמרת בתור לב
   Review.retryInvite([{ reviewId: id, n: 1 }]);
   assert.equal(wa.texts().length, 0);
   assert.match(D.get('SELECT text FROM wa_outbox WHERE user_id = ?', gilad.id).text, /אפשר לנסות שוב/);
+});
+
+// הוחלט 24.11.26: "ניסית 1, 2, 3 — לידיעתך, כרגע אפשר" — כמה תיקונים לאותו עובד: הודעה אחת ממוספרת, לא כמה הודעות
+test('כמה תיקונים לאותו עובד — הודעה אחת: "ניסית כמה דברים … 1. … 2. … לידיעתך, כרגע אפשר"', async (t) => {
+  workday(t);
+  const wa = Fakes.whatsapp(t);
+  const hasan = user({ full_name: 'חסן חמישי', phone: '972507900005', role: 'employee' });
+  const other = user({ full_name: 'מלכה חמישית', phone: '972507900006', role: 'employee' });
+  await Review.sendReport({ subject: 'סקירה', summary: 'x', fixes: [
+    { title: 'א', problem: 'x', kind: 'bug', retry: [{ userId: hasan.id, ask: 'לשנות כמות בדרישה ל-20', note: 'עכשיו אפשר לתקן גם בשאלה "איך להמשיך?"' }] },
+    { title: 'ב', problem: 'x', kind: 'bug', retry: [{ userId: hasan.id, ask: 'הזמנת רכש חדשה', note: 'מזוהה כדרישת רכש' }, { userId: other.id, ask: 'סטטוס התחדשות עירונית' }] },
+    { title: 'ג', problem: 'x', kind: 'bug', retry: [{ userId: hasan.id, ask: 'הזמנת רכש חדשה', note: 'אותה תקלה' }] }
+  ] });
+  const id = D.get('SELECT id FROM bot_reviews ORDER BY id DESC LIMIT 1').id;
+  const r = Review.retryInvite([{ reviewId: id, n: 1 }, { reviewId: id, n: 2 }, { reviewId: id, n: 3 }]);
+  await new Promise((res) => setImmediate(res));
+  const texts = wa.texts();
+  assert.equal(texts.length, 2, 'הודעה אחת לכל עובד');
+  const toHasan = texts.find((x) => /חסן/.test(x));
+  assert.match(toHasan, /🔧 חסן, ניסית כמה דברים בבוט שלא הסתדרו — תיקנו אותם:\n1\. "לשנות כמות בדרישה ל-20" — עכשיו אפשר לתקן/);
+  assert.match(toHasan, /\n2\. "הזמנת רכש חדשה" — מזוהה כדרישת רכש\n/);
+  assert.doesNotMatch(toHasan, /\n3\./, 'אותה בקשה — פעם אחת');
+  assert.match(toHasan, /לידיעתך, כרגע אפשר לנסות שוב/);
+  assert.match(texts.find((x) => /מלכה/.test(x)), /🔧 מלכה, ניסית "סטטוס התחדשות עירונית" — וזה לא הסתדר\.\nתיקנו את זה\./);
+  assert.equal(r.sent.length, 4);
+  const fb = Review.feedback().filter((f) => f.reviewId === id);
+  assert.ok(fb.every((f) => f.retry.every((x) => x.invitedAt)), 'כולם מסומנים כנשלחו');
+  wa.clear();
+  assert.deepEqual(Review.retryInvite([{ reviewId: id, n: 1 }, { reviewId: id, n: 2 }]).sent, []);
 });

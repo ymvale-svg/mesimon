@@ -405,30 +405,55 @@ function retryOf(list) {
 }
 const nameOf = (id) => D.get('SELECT full_name FROM users WHERE id = ?', id)?.full_name ?? '';
 
-function retryText(userId, r) {
+/*
+ * ההודעה לעובד — אחת לכל עובד, עם כל מה שניסה ותוקן (הוחלט 24.11.26: "ניסית 1, 2, 3 — לידיעתך, כרגע אפשר", כמו
+ * בתשובות במייל). כמה תיקונים לאותו עובד באותה הזמנה — רשימה ממוספרת בהודעה אחת, לא כמה הודעות.
+ */
+function retryText(userId, items) {
+  const list = Array.isArray(items) ? items : [items];
   const first = nameOf(userId).split(/\s+/)[0];
-  return [`🔧 ${first ? `${first}, ` : ''}ביקשת ממני "${r.ask}" — וזה לא הסתדר.`, r.note ? `תיקנו: ${r.note}` : 'תיקנו את זה.', 'אפשר לנסות שוב עכשיו 🙂'].join('\n');
+  const hi = `🔧 ${first ? `${first}, ` : ''}`;
+  if (list.length === 1) {
+    const r = list[0];
+    return [`${hi}ניסית "${r.ask}" — וזה לא הסתדר.`, r.note ? `תיקנו: ${r.note}` : 'תיקנו את זה.', 'לידיעתך, כרגע אפשר לנסות שוב 🙂'].join('\n');
+  }
+  return [`${hi}ניסית כמה דברים בבוט שלא הסתדרו — תיקנו אותם:`,
+    ...list.map((r, i) => `${i + 1}. "${r.ask}"${r.note ? ` — ${r.note}` : ''}`),
+    'לידיעתך, כרגע אפשר לנסות שוב 🙂'].join('\n');
 }
 
-/** ‎refs‎: ‎[{ reviewId, n }]‎ — התיקונים שנכנסו. מחזיר למי נשלח */
+/** ‎refs‎: ‎[{ reviewId, n }]‎ — התיקונים שנכנסו. הודעה אחת לכל עובד. מחזיר למי נשלח */
 function retryInvite(refs) {
-  const sent = [];
+  const reviews = new Map(); // reviewId ← fixes
+  const byUser = new Map(); // userId ← [{ reviewId, n, r }]
   for (const ref of Array.isArray(refs) ? refs.slice(0, 50) : []) {
-    const row = D.get('SELECT fixes FROM bot_reviews WHERE id = ?', Number(ref?.reviewId));
-    if (!row) continue;
-    const fixes = parse(row.fixes);
-    const f = fixes[Number(ref?.n) - 1];
-    if (!f?.retry?.length) continue;
-    let changed = false;
-    for (const r of f.retry) {
-      if (r.invitedAt) continue;
-      if (!messageUser(r.userId, retryText(r.userId, r), 'retry_invite')) continue;
-      r.invitedAt = D.nowIso();
-      changed = true;
-      sent.push({ reviewId: Number(ref.reviewId), n: Number(ref.n), userId: r.userId, who: nameOf(r.userId) });
+    const reviewId = Number(ref?.reviewId);
+    if (!reviews.has(reviewId)) {
+      const row = D.get('SELECT fixes FROM bot_reviews WHERE id = ?', reviewId);
+      reviews.set(reviewId, row ? parse(row.fixes) : null);
     }
-    if (changed) D.run('UPDATE bot_reviews SET fixes = ? WHERE id = ?', JSON.stringify(fixes), Number(ref.reviewId));
+    const f = reviews.get(reviewId)?.[Number(ref?.n) - 1];
+    for (const r of f?.retry ?? []) {
+      if (r.invitedAt) continue;
+      const mine = byUser.get(r.userId) ?? [];
+      // אותה בקשה פעמיים (שני תיקונים לאותה תקלה) — פעם אחת ברשימה
+      if (!mine.some((x) => x.r.ask === r.ask)) mine.push({ reviewId, n: Number(ref.n), r });
+      else mine.push({ reviewId, n: Number(ref.n), r, dup: true });
+      byUser.set(r.userId, mine);
+    }
   }
+  const sent = [];
+  const changed = new Set();
+  for (const [userId, items] of byUser) {
+    if (!messageUser(userId, retryText(userId, items.filter((x) => !x.dup).map((x) => x.r)), 'retry_invite')) continue;
+    const at = D.nowIso();
+    for (const x of items) {
+      x.r.invitedAt = at;
+      changed.add(x.reviewId);
+      sent.push({ reviewId: x.reviewId, n: x.n, userId, who: nameOf(userId) });
+    }
+  }
+  for (const id of changed) D.run('UPDATE bot_reviews SET fixes = ? WHERE id = ?', JSON.stringify(reviews.get(id)), id);
   return { sent };
 }
 

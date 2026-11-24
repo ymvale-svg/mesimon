@@ -125,6 +125,15 @@ function buttonsFor(s) {
 
 /** "ספק …", "שם ספק: …", "הספק הוא …", "ספק אחר" — ‎[1]‎ השם או המספר */
 const SUPPLIER_CMD = /^\s*(?:שם\s*(?:ה)?ספק|(?:ה)?ספק(?:\s+(?:הוא|זה|נכון|אחר))?|לשנות\s*ספק|תשנה\s*ספק|ספק\s*שגוי)(?=[\s:\-–]|$)\s*[:\-–]?\s*([\s\S]*)$/;
+// "מס' ספק 603143" / "ספק מס׳ 603143" — מספר הספק (סקירה 23.11: חופש כשם)
+const SUPPLIER_NO = /^(?:מס(?:פר|'|׳)?\.?\s*(?:ה)?ספק|מס(?:פר|'|׳)?\.?)?\s*[:\-–]?\s*(\d{3,})\s*$/;
+/** התשובה לשאלת הספק — רק השם או המספר ("ספק …", "שם ספק: …", "מס' ספק …") */
+function supplierAnswer(text) {
+  let t = String(text ?? '').trim();
+  const smc = t.match(SUPPLIER_CMD);
+  if (smc && smc[1].trim()) t = smc[1].replace(/\s+/g, ' ').trim();
+  return t.match(SUPPLIER_NO)?.[1] ?? t;
+}
 const DONE_FILES = /^(סיום|סיימתי|זהו|אין|אין נספחים|בלי נספחים|המשך)([\s,.!]|$)/;
 const NO_ORDER = /^(בלי הזמנה|אין הזמנה|ללא הזמנה|לפי המסמך|אין|בלי|לא)([\s,.!]|$)/;
 
@@ -2125,8 +2134,7 @@ async function step(user, s, t, file, allow = { gr: true, pd: false }) {
 
     case 'supplier': {
       // "ספק …" / "שם ספק: …" גם כאן — רק השם
-      const smc = t.match(SUPPLIER_CMD);
-      if (smc && smc[1].trim()) t = smc[1].replace(/\s+/g, ' ').trim();
+      t = supplierAnswer(t);
       const n = numberIn(t);
       let sup = s.supplierOptions?.length && n && n <= s.supplierOptions.length && /^\d{1,2}$/.test(t) ? s.supplierOptions[n - 1] : null;
       if (!sup && /^\d{3,}$/.test(t)) {
@@ -2555,4 +2563,4 @@ function view(userId) {
   };
 }
 
-module.exports = { view, everOpened, markOpened, inMenu, dropMenu, isTrigger, isPriority, opens, active, pending, docId, pausedNote, abandon, switchCancels, wantsUndoFinal, handle, sweep, _jpegToPdf: jpegToPdf, _codeLines: codeLines, _orderDiffs: orderDiffs, _similarLines: similarLines, _askParts: askParts, _projectsOf: projectsOf, _findProjects: findProjects, _ai: ai, _load: load, _clear: (userId) => clear(userId, load(userId)) };
+module.exports = { _supplierAnswer: supplierAnswer, view, everOpened, markOpened, inMenu, dropMenu, isTrigger, isPriority, opens, active, pending, docId, pausedNote, abandon, switchCancels, wantsUndoFinal, handle, sweep, _jpegToPdf: jpegToPdf, _codeLines: codeLines, _orderDiffs: orderDiffs, _similarLines: similarLines, _askParts: askParts, _projectsOf: projectsOf, _findProjects: findProjects, _ai: ai, _load: load, _clear: (userId) => clear(userId, load(userId)) };
