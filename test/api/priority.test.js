@@ -131,13 +131,8 @@ test('💰 תשלומים ל-15: עובד — רק שלו ובלי פרטים ט
   assert.equal((await srv.api('GET', '/api/priority/payments')).status, 401);
 });
 
-test('השרשרת: עובד רואה את שלו; "כל הארגון" — רק למנהל', async () => {
-  const w = await as(emp)('GET', '/api/priority/chain');
-  assert.equal(w.status, 200);
-  assert.deepEqual(w.json.stages.map((s) => s.key), ['new', 'bot', 'draft', 'waiting', 'done']);
-  assert.equal((await as(emp)('GET', '/api/priority/chain?all=1')).json.all, false, 'עובד לא מקבל את כל הארגון');
-  assert.equal((await as(admin)('GET', '/api/priority/chain?all=1')).json.all, true);
-  assert.equal((await srv.api('GET', '/api/priority/chain')).status, 401);
+test('מסך השרשרת הוסר (24.11.26) — אין נקודת קצה', async () => {
+  assert.notEqual((await as(admin)('GET', '/api/priority/chain')).status, 200);
 });
 
 test('עבודה מתוך המסך: מצב ריק, בלי הרשאה — 403, פעולה שלא עובדת מהמסך — 400, מסמך לא קיים — 404', async () => {

@@ -3,7 +3,7 @@
  * משימון פריוריטי — תוכנה נפרדת בתוך משימון (‎/priority‎). לא טוען שום קוד של האתר הראשי.
  * האפיון: "אפיון — משימון פריוריטי (דשבורד).md".
  *
- * מסכים: הבית (‎/priority‎) · השרשרת (‎/priority/chain‎) · עבודה על פעולה (‎/priority/receipt‎ וכו' — התור, טור המיילים והגרירה)
+ * מסכים: הבית (‎/priority‎) · עבודה על פעולה (‎/priority/receipt‎ וכו' — התור, טור המיילים והגרירה)
  *        · הגדרות (‎/priority/settings‎) · הרשאות (‎/priority/access‎). הגדרות והרשאות — מנהלי מערכת.
  */
 (() => {
@@ -57,7 +57,6 @@
     calendar: '<rect x="3" y="4" width="18" height="17" rx="2"/><path d="M3 9h18M8 2v4M16 2v4"/>',
     list: '<path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/>',
     home: '<path d="m3 10 9-7 9 7v10a1 1 0 0 1-1 1h-5v-6h-6v6H4a1 1 0 0 1-1-1z"/>',
-    chain: '<path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7"/><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"/>',
     settings: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>',
     shield: '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/>'
   };
@@ -86,7 +85,7 @@
   const workDocs = () => me.docs.filter((d) => d.allowed && !d.report);
 
   // ---------------------------------------------------------------- ניווט
-  const ROUTES = { '': home, chain, settings, access, pricelist, payments, approvals };
+  const ROUTES = { '': home, settings, access, pricelist, payments, approvals };
   const routeOf = () => location.pathname.replace(/^\/priority\/?/, '').split('/')[0];
   function go(path) { history.pushState(null, '', path); render(); }
   document.addEventListener('click', (e) => {
@@ -100,7 +99,7 @@
     const r = routeOf();
     // מי שאין לו אף מסמך לקליטה (רק מה שהעביר לתשלום) — בית ("ממתין לאישורך") ו"התשלומים שלי"
     const tabs = workDocs().length || me.admin
-      ? [['/priority', 'בית', '', ui('home')], ['/priority/chain', 'השרשרת', 'chain', ui('chain')], ['/priority/payments', 'תשלומים', 'payments', icon('payments')]]
+      ? [['/priority', 'בית', '', ui('home')], ['/priority/payments', 'תשלומים', 'payments', icon('payments')]]
       : [['/priority', 'בית', '', ui('home')], ['/priority/payments', 'התשלומים שלי', 'payments', icon('payments')]];
     if (me.pricelist !== null && me.pricelist !== undefined) tabs.push(['/priority/pricelist', 'מחירונים', 'pricelist', icon('pricelist')]);
     if (me.admin) tabs.push(['/priority/settings', 'הגדרות', 'settings', ui('settings')], ['/priority/access', 'הרשאות', 'access', ui('shield')], ['/priority/approvals', 'סוגי אישורים', 'approvals', icon('doc')]);
@@ -703,70 +702,11 @@
 
     await load();
     await deskLoad();
-    // מהשרשרת: ‎?id=‎ — המסמך הזה פתוח; אחרת — המסמך שבעבודה
+    // ‎?id=‎ — המסמך הזה פתוח; אחרת — המסמך שבעבודה
     const want = Number(new URLSearchParams(location.search).get('id'));
     if (want && items.some((i) => i.id === want)) preview(want);
     else if (desk?.active && desk.docId && items.some((i) => i.id === desk.docId)) preview(desk.docId);
     else if (items[0]) preview(items[0].id);
-  }
-
-  // ---------------------------------------------------------------- השרשרת
-  const ago = (iso) => {
-    const m = Math.max(0, Math.round((Date.now() - new Date(iso)) / 60000));
-    if (m < 60) return m <= 1 ? 'עכשיו' : `לפני ${m} דק׳`;
-    const h = Math.round(m / 60);
-    if (h < 24) return h === 1 ? 'לפני שעה' : `לפני ${h} שעות`;
-    const d = Math.round(h / 24);
-    return d === 1 ? 'אתמול' : `לפני ${d} ימים`;
-  };
-  // השלבים שבהם העובד צריך לעשות משהו — "התקבל" (לקחת לעבודה) ו"טיוטא" ("מאשר" בבוט)
-  const MINE = new Set(['new', 'draft']);
-  const SOURCE = { mail: ['mail', 'מהמייל'], upload: ['upload', 'הועלה במסך'], whatsapp: ['bot', 'נפתח בוואטסאפ'] };
-  let chainFilter = { doc: '', all: false };
-
-  async function chain() {
-    const docs = me.docs.filter((d) => d.allowed && !d.report);
-    const q = new URLSearchParams();
-    if (chainFilter.doc) q.set('doc', chainFilter.doc);
-    if (chainFilter.all) q.set('all', '1');
-    const b = await api('GET', `/api/priority/chain?${q}`);
-    const label = (k) => me.docs.find((x) => x.key === k)?.label ?? k;
-    const company = (c) => me.companies.find((x) => x.code === c)?.name ?? c;
-    const total = Object.values(b.columns).reduce((n, c) => n + c.length, 0);
-
-    main.innerHTML = `
-      <div class="chain-h">
-        <div><h1>השרשרת</h1><p class="muted">${total ? `${total} מסמכים` : 'אין מסמכים פעילים'} · מסמך סופי נשאר כאן 14 יום</p></div>
-        <div class="filters" role="group" aria-label="סינון לפי סוג מסמך">
-          <button type="button" class="chip" aria-pressed="${!chainFilter.doc}" data-doc="">הכל</button>
-          ${docs.map((d) => `<button type="button" class="chip" aria-pressed="${chainFilter.doc === d.key}" data-doc="${d.key}">${esc(d.label)}</button>`).join('')}
-          ${me.admin ? `<span class="sep" aria-hidden="true"></span><button type="button" class="chip" aria-pressed="${chainFilter.all}" data-all>כל הארגון</button>` : ''}
-        </div>
-      </div>
-      <div class="board" role="region" aria-label="השרשרת לפי שלבים" tabindex="0">
-        ${b.stages.map((st) => {
-          const cards = b.columns[st.key];
-          return `<section class="col${MINE.has(st.key) ? ' mine' : ''}" aria-labelledby="col-${st.key}">
-            <div class="col-h"><h2 id="col-${st.key}">${esc(st.label)}</h2><span class="pill ${MINE.has(st.key) && cards.length ? 'p-warn' : 'p-mute'} num" aria-label="${cards.length} מסמכים">${cards.length}</span></div>
-            <p class="col-hint">${esc(st.hint)}${MINE.has(st.key) ? ' · <b>אצלך</b>' : ''}</p>
-            <ul class="cards">${cards.map((c) => {
-              const [ic, src] = SOURCE[c.source] ?? ['upload', ''];
-              return `<li><a class="ccard" href="/priority/${c.doc}?id=${c.id}" data-nav>
-                <span class="cc-top"><span class="pill p-brand">${esc(label(c.doc))}</span><span class="muted cc-at">${ago(c.updatedAt)}</span></span>
-                <b class="cc-title">${esc(c.title)}</b>
-                ${c.docno ? `<span class="cc-docno ltr-inline">${esc(c.docno)}</span>` : ''}
-                <span class="cc-meta">${ui(ic)} ${esc(src)}${c.company ? ` · ${esc(company(c.company))}` : ''}${b.all && c.owner ? ` · ${esc(c.owner)}` : ''}</span>
-              </a></li>`;
-            }).join('') || '<li class="empty muted">—</li>'}</ul>
-          </section>`;
-        }).join('')}
-      </div>`;
-    main.querySelector('.filters').addEventListener('click', (e) => {
-      const c = e.target.closest('.chip');
-      if (!c) return;
-      if (c.hasAttribute('data-all')) chainFilter.all = !chainFilter.all; else chainFilter.doc = c.dataset.doc;
-      chain().then(() => main.querySelector(c.hasAttribute('data-all') ? '[data-all]' : `.chip[data-doc="${c.dataset.doc}"]`)?.focus());
-    });
   }
 
   // ---------------------------------------------------------------- 🏷️ פריטים למחירון (‎po-pricelist.js‎ — אותו מנוע כמו הבוט)

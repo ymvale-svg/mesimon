@@ -52,23 +52,3 @@ test('דיווח לא תקין — לא זורק', () => {
   assert.equal(Chain.progress(null, 'receipt', { stage: 'draft' }), null);
   assert.equal(Chain.progress(1, 'receipt', { stage: 'nope' }), null);
 });
-
-test('הלוח: עובד — שלו; מנהל עם all — כולם; סופי ישן יורד; בוטל לא מוצג', () => {
-  const a = worker();
-  const b = worker();
-  const admin = user({ role: 'admin' });
-  const ida = Chain.progress(a.id, 'receipt', { stage: 'draft', docno: 'GR-A' });
-  Chain.progress(b.id, 'demand', { stage: 'waiting', docno: 'PD-B' });
-  const old = Chain.progress(a.id, 'receipt', { stage: 'done', docno: 'GR-OLD' });
-  D.run('UPDATE priority_docs SET updated_at = ? WHERE id = ?', new Date(Date.now() - 20 * 86400000).toISOString(), old);
-  Chain.progress(a.id, 'receipt', { stage: 'cancelled', docno: 'GR-A2' });
-
-  const mine = Chain.board(actor(a));
-  assert.deepEqual(mine.stages.map((s) => s.key), ['new', 'bot', 'draft', 'waiting', 'done']);
-  assert.deepEqual(mine.columns.draft.map((c) => c.id), [ida]);
-  assert.equal(mine.columns.waiting.length, 0, 'לא של אחר');
-  assert.equal(mine.columns.done.some((c) => c.docno === 'GR-OLD'), false, 'סופי ישן');
-  const everyone = Chain.board(actor(admin), { all: true });
-  assert.ok(everyone.columns.waiting.some((c) => c.docno === 'PD-B' && c.owner));
-  assert.deepEqual(Chain.board(actor(a), { doc: 'demand' }).columns.draft, [], 'סינון לפי סוג');
-});
