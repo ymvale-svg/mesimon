@@ -338,6 +338,36 @@ test('הודעה יזומה — ה-AI רואה גם בקשה שעוד בטיפו
   assert.match(prompt, /הזמנה לכנס דיירים/);
 });
 
+test('הודעה יזומה — שאלת המשך על הבקשה ("לשריין אחת האפשרויות?") אינה "בקשת מידע"; ה-AI מקבל את הכלל', async (t) => {
+  // באג 22.11.26: "ולגבי הטיסה, היא יוצאת מחר בבוקר. לשריין אחת האפשרויות, או שכבר לא רלוונטי?" — נחסם כ"ביקש מידע"
+  setup(t);
+  const claude = ai(t);
+  await Instinct._internal.classify('ולגבי הטיסה, היא יוצאת מחר בבוקר. לשריין אחת האפשרויות, או שכבר לא רלוונטי?');
+  const system = claude.calls.at(-1).opts.system;
+  assert.match(system, /שאלת המשך על הבקשה עצמה/);
+  assert.match(system, /asks_for_info=false/);
+  assert.doesNotMatch(system, /פרטים אישיים, או לבצע פעולה\./, 'לא "כל פעולה" — רק פעולה במערכות שלנו');
+});
+
+/*
+ * באג 22.11.26: הרשימה יצאה לאינסטינקט כתשובה לשאלה שלו (kind ‎answer‎), והוא שלח מעצמו, שעתיים אחר כך, "תזכורת
+ * ל-10:30: …" וקישור. ה-AI ראה רק בקשות (‎request‎), לא תשובות — ולא מצא למה זה שייך: שתי התראות "לא קשורה לבקשה".
+ */
+test('הודעה יזומה שממשיכה תשובה של העובד לשאלה (ולא בקשה) — מגיעה אליו, וגם הקישור שאחריה', async (t) => {
+  const wa = setup(t);
+  const u = person();
+  const ago = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+  const ins = D.run("INSERT INTO instinct_requests (user_id, kind, status, text, out_id, created_at, sent_at, answered_at, reply) VALUES (?, 'answer', 'answered', 'תזכיר לי את הדברים הבאים בשעה עשר וחצי. אחד: לטפל במטענים', 'a-1', ?, ?, ?, 'עובד על זה')", u.id, ago, ago, ago);
+  const id = Number(ins.lastInsertRowid);
+  ai(t, { related: (opts) => (/בשעה עשר וחצי/.test(opts.content[0].text.split('ההודעה מהעוזר')[0]) ? { request_id: id, asks_for_info: false, reason: 'התזכורת שביקש' } : { request_id: 0, asks_for_info: false, reason: 'לא ברור' }) });
+  await fromInstinct('תזכורת ל-10:30: רשימת משימות המשרד השותף, יעד מחר. הנה הקישור שוב:');
+  await fromInstinct('https://files.instinct.com/65676aidld46-23-11?via=wa');
+  const got = toUser(wa, u).map((c) => c.body.message);
+  assert.ok(got.some((m) => /תזכורת ל-10:30/.test(m)), 'התזכורת — לעובד');
+  assert.ok(got.includes('https://files.instinct.com/65676aidld46-23-11?via=wa'), 'והקישור אחריה');
+  assert.equal(wa.calls.filter((c) => /לא קשורה לבקשה/.test(c.body?.message ?? '')).length, 0, 'בלי התראה למנהלים');
+});
+
 /*
  * באג 15.11.26 (פטישון מילווקי): אינסטינקט שאל, ענה, ושלח קישור לטבלה ("https://files.instinct.com/…") — שלוש
  * הודעות בלי ציטוט. הקישור לבדו לא אמר ל-AI כלום, ונחשב "לא קשור". עכשיו: הודעה מיד אחרי מה שהועבר לעובד — המשך;

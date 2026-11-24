@@ -87,7 +87,8 @@ async function json({ system, content, schema, effort = 'medium', live = false, 
 }
 
 /** חיפוש ברשת — כלי שרץ אצל Anthropic. ‎max‎ — כמה חיפושים לכל היותר בבקשה אחת */
-const WEB_SEARCH = (max = 6) => ({ type: 'web_search_20250305', name: 'web_search', max_uses: max, user_location: { type: 'approximate', country: 'IL', timezone: 'Asia/Jerusalem' } });
+// בלי ‎country‎: ה-API דוחה את IL ("Country code IL is not supported", 23.11.26) — אזור הזמן מספיק
+const WEB_SEARCH = (max = 6) => ({ type: 'web_search_20250305', name: 'web_search', max_uses: max, user_location: { type: 'approximate', timezone: 'Asia/Jerusalem' } });
 
 async function request({ system, content, schema, effort, model: modelId, fast, onUsage = null, serverTools = null, feature = null, userId = null }) {
   // חיפוש ארוך עוצר באמצע (‎pause_turn‎) — שולחים שוב עם מה שנעשה עד עכשיו, עד 4 פעמים

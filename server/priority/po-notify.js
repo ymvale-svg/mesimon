@@ -319,8 +319,16 @@ async function prepare(company, ordname, { updated = false } = {}) {
   ctx.diffs = [];
   for (const d of who.demands) ctx.diffs.push(...await demandDiffs(d, po));
   const recipients = test ? testRecipients() : who.recipients.map((r) => ({ ...r, roles: r.roles.filter(roleOn) })).filter((r) => r.roles.length);
+  // ג2: טלפון ואיש קשר של הספק (כרטיס הספק), כתובת האספקה (כרטיס המחסן), ואיש הקשר באתר — יוזם הדרישה ממשימון
+  const [supplier, address] = await Promise.all([
+    Priority.supplierContact(company, po.SUPNAME).catch(() => null),
+    Priority.warehouseAddress(company, po.WARHSNAME).catch(() => '')
+  ]);
+  const site = who.recipients.filter((r) => r.roles.includes('initiator')).map((r) => [r.name, r.phone, r.email].filter(Boolean).join(' · '));
+  ctx.supplierPhone = supplier?.phone ?? '';
+  ctx.address = address;
   const file = {
-    buf: orderPdf(po, { companyLabel: ctx.companyLabel, test, manager: ctx.managerName, initiators: who.initiators.map(label), updated }),
+    buf: orderPdf(po, { companyLabel: ctx.companyLabel, test, manager: ctx.managerName, initiators: who.initiators.map(label), updated, supplier, address, site }),
     fileName: `${po.ORDNAME}.pdf`, mime: 'application/pdf'
   };
   return { po, ctx, recipients, file };

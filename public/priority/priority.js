@@ -36,6 +36,7 @@
     partial: '<path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/>',
     invoice: '<path d="M6 2h9l5 5v14a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1z"/><path d="M14 2v6h6M9 13h6M9 17h6"/>',
     income: '<rect x="2" y="6" width="20" height="12" rx="2"/><circle cx="12" cy="12" r="2.5"/><path d="M6 10v4M18 10v4"/>',
+    payments: '<rect x="3" y="4" width="18" height="17" rx="2"/><path d="M3 9h18M8 2v4M16 2v4"/><path d="M12 12.5v5M10.2 13.6c0-.7.8-1.1 1.8-1.1s1.8.4 1.8 1.1-.8 1-1.8 1.2-1.8.5-1.8 1.2.8 1.1 1.8 1.1 1.8-.4 1.8-1.1"/>',
     pricelist: '<path d="M20.6 13.4 13.4 20.6a2 2 0 0 1-2.8 0L3 13V3h10l7.6 7.6a2 2 0 0 1 0 2.8z"/><circle cx="7.5" cy="7.5" r="1.5"/>',
     contract: '<path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6M8 17c1.5-2 2.5-2 3.5 0s2 2 3.5 0"/>',
     deal: '<path d="M12 2v20M17 6H9.5a3 3 0 0 0 0 6h5a3 3 0 0 1 0 6H6"/>',
@@ -59,7 +60,8 @@
     receipt: 'תעודת משלוח ← השוואה להזמנה ← GR',
     partial: 'חוזה ← כתב הכמויות שנוצל ← לתשלום',
     invoice: 'חשבונית ← משיכת GR ← פערים',
-    income: 'שובר ← דירה ובניין ← קבלה'
+    income: 'שובר ← דירה ובניין ← קבלה',
+    payments: 'קבלות סחורה · חשבונות חלקיים · חשבונות עסקה ← ה-15'
   };
   // סדר הבנייה (הוחלט 11.11.26): קודם מה שעובד, אחר כך חשבון חלקי, חשבונית ספק, קבלה, והזמנות רכש בסוף
   const NEXT = { partial: 1, invoice: 2, income: 3, order: 4 };
@@ -68,7 +70,7 @@
   let me = null;
 
   // ---------------------------------------------------------------- ניווט
-  const ROUTES = { '': home, chain, settings, access, pricelist, approvals };
+  const ROUTES = { '': home, chain, settings, access, pricelist, payments, approvals };
   const routeOf = () => location.pathname.replace(/^\/priority\/?/, '').split('/')[0];
   function go(path) { history.pushState(null, '', path); render(); }
   document.addEventListener('click', (e) => {
@@ -80,7 +82,7 @@
 
   function header() {
     const r = routeOf();
-    const tabs = [['/priority', 'בית', ''], ['/priority/chain', 'השרשרת', 'chain']];
+    const tabs = [['/priority', 'בית', ''], ['/priority/chain', 'השרשרת', 'chain'], ['/priority/payments', 'תשלומים', 'payments']];
     if (me.pricelist !== null && me.pricelist !== undefined) tabs.push(['/priority/pricelist', 'מחירונים', 'pricelist']);
     if (me.admin) tabs.push(['/priority/settings', 'הגדרות', 'settings'], ['/priority/access', 'הרשאות', 'access'], ['/priority/approvals', 'סוגי אישורים', 'approvals']);
     $('#tabs').innerHTML = tabs.map(([href, label, key]) => `<a href="${href}" data-nav ${r === key ? 'aria-current="page"' : ''}>${label}</a>`).join('');
@@ -96,7 +98,7 @@
     }
     header();
     const r = routeOf();
-    const docRoute = me.docs.find((d) => d.key === r);
+    const docRoute = me.docs.find((d) => d.key === r && !d.report);
     const view = docRoute ? () => workspace(docRoute) : ROUTES[r] ?? home;
     if ((view === settings || view === access || view === approvals) && !me.admin) { main.innerHTML = '<div class="note">רק מנהלי מערכת נכנסים למסך הזה.</div>'; return; }
     main.classList.remove('wide');
@@ -114,6 +116,11 @@
       <div class="greet"><h1>שלום, ${esc(me.name)}</h1><p>החברות שלך: ${esc(cos)}${inbox.items.length ? ` · <b>${inbox.items.length}</b> מסמכים חדשים במייל` : ''}</p></div>
       <div id="waiting"></div>
       <div class="tiles">${me.docs.map((d) => {
+        if (d.report) {
+          // 💰 דוח: מורשה — הכל בחברות שלו; כל עובד אחר — מה שהוא יזם
+          return `<a class="tile" href="/priority/${d.key}" data-nav><span class="ic">${icon(d.key)}</span><h2>${esc(d.label)}</h2><span class="sub">${SUB[d.key] ?? ''}</span>
+            <span class="foot">${me.payments === 'all' ? '<span class="pill p-ok">כל מה שמחכה לתשלום</span>' : '<span class="pill p-brand">מה שיזמת</span>'}</span></a>`;
+        }
         const status = !d.allowed ? '<span class="pill p-mute">אין לך הרשאה</span>'
           : d.ready ? '<span class="pill p-ok">עובד דרך הבוט</span>'
             : `<span class="pill p-mute">איסוף בלבד · ${NEXT[d.key]} בתור לבנייה</span>`;
@@ -698,7 +705,7 @@
   let chainFilter = { doc: '', all: false };
 
   async function chain() {
-    const docs = me.docs.filter((d) => d.allowed);
+    const docs = me.docs.filter((d) => d.allowed && !d.report);
     const q = new URLSearchParams();
     if (chainFilter.doc) q.set('doc', chainFilter.doc);
     if (chainFilter.all) q.set('all', '1');
@@ -813,6 +820,83 @@
         send(id, { action: 'undo' }, 'בוטל');
       });
     }
+  }
+
+  // ---------------------------------------------------------------- 💰 תשלומים ל-15 (‎payments.js‎ — הסינון והסכומים בשרת, גם לאקסל)
+  const shekel = (n) => Number(n ?? 0).toLocaleString('he-IL', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const dm = (d) => (d ? `${d.slice(8, 10)}.${d.slice(5, 7)}.${d.slice(2, 4)}` : '');
+  const dmy15 = (d) => (d ? `15.${d.slice(5, 7)}${d.slice(0, 4) !== String(new Date().getFullYear()) ? `.${d.slice(2, 4)}` : ''}` : '');
+  const payFilter = { bucket: 'next', type: '', company: '', project: '', supplier: '', mine: false };
+
+  async function payments(refresh = false) {
+    const q = new URLSearchParams();
+    for (const [k, v] of Object.entries(payFilter)) if (v) q.set(k, v === true ? '1' : v);
+    if (refresh) q.set('refresh', '1');
+    if (!main.querySelector('.pay')) main.innerHTML = '<p class="muted pad">קורא מפריוריטי… (בפעם הראשונה זה לוקח כחצי דקה)</p>';
+    const r = await api('GET', `/api/priority/payments?${q}`);
+    if (payFilter.bucket === 'next') payFilter.bucket = r.bucket;
+    const company = (c) => me.companies.find((x) => x.code === c)?.name ?? c;
+    const typeLabel = (k) => r.types.find((t) => t.key === k)?.label ?? k;
+    const other = (o) => Object.entries(o ?? {}).map(([cur, v]) => `${shekel(v)} ${esc(cur)}`).join(' · ');
+    const money = (t) => `₪${shekel(t.ils)}${Object.keys(t.other ?? {}).length ? ` <span class="muted small">+ ${other(t.other)}</span>` : ''}`;
+    // כל חודש שיש בו תשלום (ולפחות שלושת הקרובים); באיחור וחסר תנאי — רק כשיש
+    const BUCKETS = [['late', '⚠️ באיחור'], ...r.runs.map((d) => [d, dmy15(d)]), ['none', 'חסר תנאי תשלום'], ['', 'הכל']];
+    const chips = BUCKETS.filter(([k]) => !k || r.runs.includes(k) || r.byBucket[k]?.count).map(([k, label]) => {
+      const t = k ? r.byBucket[k] : Object.values(r.byBucket).reduce((a, x) => ({ count: a.count + x.count, ils: a.ils + x.ils }), { count: 0, ils: 0 });
+      return `<button type="button" class="chip pay-b${k === 'late' && t?.count ? ' late' : ''}" data-b="${k}" aria-pressed="${payFilter.bucket === k}">
+        <b>${esc(label)}</b>${t ? `<span class="pay-b-sum num">${t.count ? `₪${shekel(t.ils)}` : '—'}</span><span class="pay-b-n num">${t.count} מסמכים</span>` : ''}</button>`;
+    }).join('');
+    const opt = (v, label, cur) => `<option value="${esc(v)}" ${v === cur ? 'selected' : ''}>${esc(label)}</option>`;
+    const rows = r.items.map((i) => `<tr>
+        <td class="num">${i.payDay ? dm(i.payDay) : '<span class="pill p-warn">חסר</span>'}${i.bucket === 'late' ? ' <span class="pill p-bad">באיחור</span>' : ''}</td>
+        <td><span class="pill p-brand">${esc(typeLabel(i.type))}</span></td>
+        <td>${esc(i.supplier.name || i.supplier.code)}${me.companies.length > 1 || r.scope === 'mine' ? `<div class="muted small">${esc(company(i.company))}</div>` : ''}</td>
+        <td><span class="ltr-inline">${esc(i.docno)}</span>${i.booknum ? `<div class="muted small">אסמכתא ${esc(i.booknum)}</div>` : ''}</td>
+        <td class="num">${dm(i.date)}${i.terms ? `<div class="muted small">${esc(i.terms)}</div>` : ''}</td>
+        <td class="num pay-amt">${i.currency === 'ש"ח' ? `₪${shekel(i.amount)}` : `${shekel(i.amount)} ${esc(i.currency)}`}${i.partialInvoiced ? `<div class="muted small" title="${esc(i.invoices.join(', '))}">היתרה שלא בחשבונית, מתוך ₪${shekel(i.total)}</div>` : ''}</td>
+        <td>${esc(i.project.name)}</td>
+        <td>${esc(i.initiatorName || '')}${i.mine && r.scope === 'all' ? ' <span class="pill p-ok">שלך</span>' : ''}</td>
+      </tr>`).join('');
+    const errs = r.errors.length ? `<p class="note">⚠️ לא נקרא מפריוריטי: ${esc([...new Set(r.errors.map((e) => company(e.company) || e.message))].join(', '))}. הרשימה חסרה את מה שבהן. ${esc(r.errors[0].message)}</p>` : '';
+    const intro = r.scope === 'all'
+      ? 'כל מה שמחכה לתשלום: קבלות סחורה סופיות (רק מה שעוד לא בחשבונית ספק), חשבונות חלקיים מאושרים וחשבונות עסקה מאושרים. מועד התשלום — ה-15 שאחרי סוף החודש ועוד ימי התנאי.'
+      : r.login || r.items.length ? 'המסמכים שיזמת — מתי צפוי התשלום עליהם.' : 'לא מצאנו את שם המשתמש שלך בפריוריטי, ולכן אין כאן מסמכים. פנו למנהל המערכת.';
+    main.innerHTML = `<div class="pay">
+      <div class="chain-h"><div><h1>תשלומים</h1><p class="muted">${esc(intro)}</p></div>
+        <div class="row-actions"><button class="btn pay-refresh" type="button">רענון מפריוריטי</button><a class="btn" href="/api/priority/payments?${new URLSearchParams([...q].filter(([k]) => k !== 'refresh'))}&format=xlsx" title="מה שמוצג עכשיו — גיליון לכל חברה">ייצוא לאקסל</a></div></div>
+      ${errs}
+      <div class="pay-buckets" role="group" aria-label="מועד התשלום">${chips}</div>
+      <div class="grid-form pay-f">
+        <label>סוג<select data-f="type">${opt('', 'הכל', payFilter.type)}${r.types.map((t) => opt(t.key, t.label, payFilter.type)).join('')}</select></label>
+        ${r.facets.companies.length > 1 || payFilter.company ? `<label>חברה<select data-f="company">${opt('', 'כל החברות', payFilter.company)}${r.facets.companies.map((c) => opt(c, company(c), payFilter.company)).join('')}</select></label>` : ''}
+        <label>פרויקט<select data-f="project">${opt('', 'כל הפרויקטים', payFilter.project)}${r.facets.projects.map((p) => opt(p.code, p.name, payFilter.project)).join('')}</select></label>
+        <label>ספק<input data-f="supplier" type="search" value="${esc(payFilter.supplier)}" placeholder="שם או מספר ספק"></label>
+        ${r.scope === 'all' ? `<label class="pay-mine"><span><input type="checkbox" data-f="mine" ${payFilter.mine ? 'checked' : ''}> רק מה שיזמתי</span></label>` : ''}
+      </div>
+      <div class="pay-body">
+        <section class="panel"><div class="panel-h"><h2>${r.items.length} מסמכים · ${money(r.totals.all)}</h2><p>כולל מע״מ. עודכן ${fmtAt(r.at)}.</p></div>
+          ${rows ? `<div class="scroll"><table class="t pay-t"><tr><th scope="col">מועד</th><th scope="col">סוג</th><th scope="col">ספק</th><th scope="col">מסמך</th><th scope="col">תאריך · תנאי</th><th scope="col">סכום</th><th scope="col">פרויקט</th><th scope="col">יוזם</th></tr>${rows}</table></div>` : '<p class="muted">אין מסמכים במועד הזה.</p>'}
+        </section>
+      </div></div>`;
+
+    main.querySelector('.pay-buckets').addEventListener('click', (e) => {
+      const c = e.target.closest('.chip');
+      if (!c) return;
+      payFilter.bucket = c.dataset.b;
+      payments().then(() => main.querySelector(`.pay-b[data-b="${c.dataset.b}"]`)?.focus());
+    });
+    let typing = null;
+    main.querySelector('.pay-f').addEventListener('input', (e) => {
+      const el = e.target.closest('[data-f]');
+      if (!el) return;
+      payFilter[el.dataset.f] = el.type === 'checkbox' ? el.checked : el.value;
+      clearTimeout(typing);
+      typing = setTimeout(() => payments().then(() => { const n = main.querySelector(`[data-f="${el.dataset.f}"]`); if (n && el.type === 'search') { n.focus(); n.setSelectionRange(n.value.length, n.value.length); } }), el.type === 'search' ? 350 : 0);
+    });
+    main.querySelector('.pay-refresh').addEventListener('click', async (e) => {
+      e.target.disabled = true; e.target.textContent = 'קורא…';
+      try { await payments(true); toast('עודכן מפריוריטי'); } catch (err) { toast(err.message, true); e.target.disabled = false; }
+    });
   }
 
   // ---------------------------------------------------------------- הגדרות

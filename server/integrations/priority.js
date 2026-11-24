@@ -267,6 +267,89 @@ async function supplierByCode(company, code) {
   return list[0] ?? null;
 }
 
+/*
+ * 📇 כרטיס הספק — מייל, טלפון ואיש קשר (הוחלט 23.11.26: פתוחים לקריאה). שמות השדות לא ידועים מראש (שדות מותאמים
+ * בחלק מהחברות), ולכן קוראים את כל הכרטיס ובוחרים לפי שם השדה. אנשי הקשר — מהטבלה של הכרטיס, כשהיא פתוחה. שעה במטמון.
+ */
+const contactCache = new Map();
+const pick = (o, re) => { for (const [k, v] of Object.entries(o ?? {})) if (re.test(k) && typeof v === 'string' && v.trim()) return v.trim(); return ''; };
+async function supplierContact(company, supname) {
+  const k = `${company}|${supname}`;
+  const hit = contactCache.get(k);
+  if (hit && Date.now() - hit.at < 3600000) return hit.v;
+  const card = rows(await call(company, 'GET', `SUPPLIERS?$filter=${enc(`SUPNAME eq '${q(supname)}'`)}&$top=1`))[0] ?? {};
+  let people = [];
+  try { people = rows(await call(company, 'GET', `SUPPLIERS('${q(supname)}')/SUPPERSONNEL_SUBFORM?$top=10`)); } catch { /* הטבלה סגורה — בלי איש קשר */ }
+  const person = people.find((x) => pick(x, /^NAME$|FULLNAME|^SNAME$/i)) ?? null;
+  const v = {
+    email: pick(card, /^EMAIL$|MAIL/i).toLowerCase(),
+    phone: pick(card, /^PHONE$|PHONENUM|^TEL/i),
+    contact: person ? { name: pick(person, /^NAME$|FULLNAME|^SNAME$/i), phone: pick(person, /CELL|PHONE/i), email: pick(person, /MAIL/i).toLowerCase() } : null
+  };
+  contactCache.set(k, { at: Date.now(), v });
+  return v;
+}
+
+/** 🏬 כתובת המחסן (כתובת האתר / האספקה) — מכרטיס המחסן, כל שדות הכתובת לפי השם. ריק — אין */
+async function warehouseAddress(company, code) {
+  if (!code) return '';
+  const w = rows(await call(company, 'GET', `WAREHOUSES?$filter=${enc(`WARHSNAME eq '${q(code)}'`)}&$top=1`))[0] ?? {};
+  return Object.entries(w).filter(([key, v]) => /ADDRESS|STATE|CITY|ZIP/i.test(key) && !/CODE$|ID$/i.test(key) && typeof v === 'string' && v.trim())
+    .map(([, v]) => v.trim()).join(', ');
+}
+
+/*
+ * 🏗️ הבניינים של פרויקט — תתי הפרקים של הפרויקט (אין רשימת בניינים נפרדת: הבניינים מופיעים כתתי פרקים), והמשאבים שמתחת לכל אחד (הוחלט 23.11.26: "מבנה A ← בלוקים, בטון…").
+ * שם הטבלה בכרטיס הפרויקט אינו ידוע מראש (שדות מותאמים לחברה), ולכן היא נמצאת לבד: מתוך ‎$metadata‎ — הטבלאות של
+ * ‎DOCUMENTS_p‎, והראשונה שבשורות שלה יש תת פרק. נשמר לכל חברה (בזיכרון).
+ * ‎[{ chapter, chapterDes, topics: [{ topic, topicDes }] }]‎ · ‎[]‎ — לפרויקט אין · ‎null‎ — הטבלה לא נמצאה בפריוריטי.
+ */
+const chapterForm = new Map();
+async function projectSubforms(company) {
+  const c = credentials();
+  const res = await fetch(`${companyUrl(company, 'GET')}$metadata`, {
+    headers: { authorization: `Basic ${Buffer.from(`${c.user}:${c.password}`).toString('base64')}`, accept: 'application/xml' },
+    signal: AbortSignal.timeout(TIMEOUT)
+  });
+  if (!res.ok) throw new PriorityError(`$metadata: ${res.status}`);
+  const xml = await res.text();
+  const m = xml.match(/<EntityType Name="DOCUMENTS_p"[\s\S]*?<\/EntityType>/);
+  return m ? [...m[0].matchAll(/<NavigationProperty Name="([A-Z0-9_]+_SUBFORM)"/g)].map((x) => x[1]) : [];
+}
+const chapterKeys = (row) => {
+  const keys = Object.keys(row ?? {});
+  const k = (re) => keys.find((x) => re.test(x)) ?? null;
+  return { chapter: k(/SUBCHAPTERNAME$/), chapterDes: k(/SUBCHAPTERDES$/), topic: k(/SUBTOPICNAME$/), topicDes: k(/SUBTOPICDES$/) };
+};
+async function projectChapters(company, projdocno) {
+  const key = `DOCUMENTS_p('${q(projdocno)}')`;
+  let form = chapterForm.get(company);
+  let list = null;
+  if (form === undefined) {
+    form = null;
+    for (const f of (await projectSubforms(company)).slice(0, 40)) {
+      try {
+        const r = rows(await call(company, 'GET', `${key}/${f}?$top=500`));
+        if (chapterKeys(r[0]).chapter || (!r.length && /CHAPTER|BUDGET|BUD/i.test(f))) { form = f; list = r; if (r.length) break; }
+      } catch { /* טבלה שלא נפתחת — הבאה */ }
+    }
+    chapterForm.set(company, form);
+  }
+  if (!form) return null;
+  list ??= rows(await call(company, 'GET', `${key}/${form}?$top=500`));
+  const by = new Map();
+  for (const r of list) {
+    const k = chapterKeys(r);
+    const ch = String(r[k.chapter] ?? '').trim();
+    if (!ch) continue;
+    const e = by.get(ch) ?? { chapter: ch, chapterDes: String(r[k.chapterDes] ?? '').trim(), topics: [] };
+    const tp = String(r[k.topic] ?? '').trim();
+    if (tp && !e.topics.some((x) => x.topic === tp)) e.topics.push({ topic: tp, topicDes: String(r[k.topicDes] ?? '').trim() });
+    by.set(ch, e);
+  }
+  return [...by.values()];
+}
+
 /**
  * GR קיים של אותו ספק עם אותו מספר תעודה. פריוריטי לא יקלוט פעמיים — גם כשה-GR
  * הקודם בוטל (ואז מחזיר שגיאה מבלבלת על "סטטוס מבוטלת"). ‎cancelReceipt‎ משנה את
@@ -1125,6 +1208,47 @@ async function supplierParts(company, supname) {
   return rows(await call(company, 'GET', `SUPPLIERS('${q(supname)}')/SUPPART_SUBFORM?$select=PARTNAME,KLINE&$top=2000`));
 }
 
+// ---------------------------------------------------------------------------
+// קריאה — מה שמחכה לתשלום (‎priority/payments.js‎; האפיון: "אפיון — רשימת תשלומים ל-15.md")
+// ---------------------------------------------------------------------------
+
+/*
+ * שלושת המסמכים שמובילים לתשלום, בסטטוס שנקבע (24.11.26). קריאה בלבד.
+ *   קבלת סחורה — ‎DOCUMENTS_P‎, ‎סופית‎, ועוד לא כולה בחשבונית (‎IVALL ≠ Y‎), עם השורות (‎IVNUM‎ — השורה כבר בחשבונית).
+ *   חשבון חלקי — ‎MED_DOCUMENTS_P‎ (PC, מתוך חוזה), ‎אושרה‎.
+ *   חשבון עסקה — ‎DINVOICES‎, ‎מאושרת‎. אין בו קוד תנאי תשלום ב-API — פריוריטי מחשב ‎PAYDATE‎.
+ */
+const PAY_STATUS = Object.freeze({ receipt: 'סופית', partial: 'אושרה', deal: 'מאושרת' });
+const PAY_TOP = 5000;
+
+const payReceipts = async (company) => rows(await call(company, 'GET',
+  `DOCUMENTS_P?$filter=${enc(`STATDES eq '${PAY_STATUS.receipt}' and IVALL ne 'Y'`)}`
+  + '&$select=DOCNO,CURDATE,SUPNAME,CDES,BOOKNUM,PROJDOCNO,PROJDES,QPRICE,PERCENT,DISPRICE,VAT,TOTPRICE,CODE,MED_MXPAYCODE,USERLOGIN,OWNERLOGIN'
+  + `&$expand=TRANSORDER_P_SUBFORM($select=KLINE,QPRICE,IVNUM)&$top=${PAY_TOP}`)).map(strip);
+
+const payPartials = async (company) => rows(await call(company, 'GET',
+  `MED_DOCUMENTS_P?$filter=${enc(`STATDES eq '${PAY_STATUS.partial}'`)}`
+  + `&$select=DOCNO,CURDATE,SUPNAME,CDES,ORDNAME,BOOKNUM,PROJDOCNO,PROJDES,TOTPRICE,CODE,MED_PAYCODE,USERLOGIN,OWNERLOGIN&$top=${PAY_TOP}`)).map(strip);
+
+const payDeals = async (company) => rows(await call(company, 'GET',
+  `DINVOICES?$filter=${enc(`STATDES eq '${PAY_STATUS.deal}'`)}`
+  + `&$select=IVNUM,IVDATE,SUPNAME,SUPDES,BOOKNUM,PROJDOCNO,PROJDES,TOTPRICE,CODE,PAYDATE,OWNERLOGIN&$top=${PAY_TOP}`)).map(strip);
+
+/**
+ * איפה עומד מסמך שיצא מהרשימה — לשלב של החוב (עבר לחשבונית, בוטל, שולם). ‎null‎ — לא נמצא.
+ * ‎{ status, invoiced }‎: ‎invoiced‎ — כולו בחשבונית (‎IVALL = Y‎).
+ */
+async function payDocStatus(company, type, docno) {
+  const path = {
+    receipt: `DOCUMENTS_P?$filter=${enc(`DOCNO eq '${q(docno)}'`)}&$select=STATDES,IVALL&$top=1`,
+    partial: `MED_DOCUMENTS_P?$filter=${enc(`DOCNO eq '${q(docno)}'`)}&$select=STATDES,IVALL&$top=1`,
+    deal: `DINVOICES?$filter=${enc(`IVNUM eq '${q(docno)}'`)}&$select=STATDES&$top=1`
+  }[type];
+  if (!path) return null;
+  const r = rows(await call(company, 'GET', path))[0];
+  return r ? { status: r.STATDES ?? '', invoiced: r.IVALL === 'Y' } : null;
+}
+
 /** פריט ל"מוצרים לספק". מחזיר ‎{ KLINE }‎ — המפתח למחיקה */
 async function addSupplierPart(company, supname, part) {
   const r = await call(company, 'POST', `SUPPLIERS('${q(supname)}')/SUPPART_SUBFORM`, { PARTNAME: part });
@@ -1206,12 +1330,13 @@ function docLink(company, screen, docno) {
 }
 
 module.exports = {
-  suppliersByWords, ordersByProject,
+  suppliersByWords, ordersByProject, supplierContact, warehouseAddress, projectChapters,
   COMPANIES, DEFAULT_HOST, DEFAULT_INI, configure, syncCompanies, ping, isEnabled, allowed, companyOf, isTest, resolveCompany, companiesByName, PriorityError,
   GENERAL, NO_VAT_CODE, TAX_CODES, PAY_TERMS, DEFAULT_PAY, payTerm, payLabel, payFromText, dueDate, projectWarehouses, warehouses, warehouseExists, defaultWarehouse, supplierHistory, recentLines, partByCode, findPartsByText, searchParts, generalCoding, warehouseOf, findSuppliers, supplierByCode, findReceiptByBooknum, getOrder, openOrders, findPartExact, lastSubchapter, projects, matchProjects, readReceipt,
   finalOrders, orderForNotice, demandInitiator, demandForNotice, projectManager, priorityUser,
   readDialog, createReceipt, addOrderLine, addFreeLine, setLineQty, setLineDes, setHeader, attach, deleteAttachment, setDialog, finalizeReceipt, cancelReceipt, receiptStatus, deleteLines,
   PD_TYPES, demandCodes, recentDemandProjects, createDemand, addDemandLine, setDemand, submitDemand, isNoApproversError, readDemand, waitingDemands, nextSigner, cancelDemand, setDemandDialog, appendDemandDialog, setDemandLine, deleteDemandLine, reopenDemand, REOPEN_STATUS, purchaseOrderOwners, attachDemand, priorityUsers, budgetPairs, isCodingError,
+  PAY_STATUS, payReceipts, payPartials, payDeals, payDocStatus,
   supplierPriceLists, addPriceListItem, deletePriceListItem, supplierParts, addSupplierPart, deleteSupplierPart,
   parseApprovalScreens, approvalScreens, isBlockedScreen, waitingDocs, waitingDoc, docLink,
   _call: call

@@ -266,3 +266,31 @@ test('scanCompany — סריקה ראשונה: הזמנה מדרישה מהימ�
   const rows = D.all("SELECT ordname FROM po_notices WHERE company = 'kedma1' ORDER BY ordname").map((r) => r.ordname);
   assert.deepEqual(rows, ['PO-NOPD', 'PO-OLD']);
 });
+
+test('prepare — ההזמנה לשטח: טלפון הספק, כתובת האספקה מכרטיס המחסן, ויוזם הדרישה כאיש קשר באתר (23.11.26)', async (t) => {
+  user({ full_name: 'מדיין אבו סלאח', email: 'madian@corp.test', phone: '0521234567' });
+  t.mock.method(Priority, 'orderForNotice', async () => order({ WARHSNAME: 'W1', OWNERLOGIN: '' }));
+  t.mock.method(Priority, 'projectManager', async () => null);
+  t.mock.method(Priority, 'demandForNotice', async (c, prdno) => ({ PRDNO: prdno, INITUSERLOGIN: 'Madian', approvers: [], lines: [] }));
+  t.mock.method(Priority, 'priorityUser', async () => ({ login: 'Madian', name: 'מדיין', email: 'madian@corp.test', active: true }));
+  const sup = t.mock.method(Priority, 'supplierContact', async () => ({ email: 'o@s.co.il', phone: '04-8888888', contact: null }));
+  const wh = t.mock.method(Priority, 'warehouseAddress', async (c, code) => (code === 'W1' ? 'הרב קוק 12, אלעד' : ''));
+  const p = await PO.prepare('mordot', 'PO26000045');
+  assert.equal(sup.mock.calls[0].arguments[1], '1001');
+  assert.equal(wh.mock.calls[0].arguments[1], 'W1');
+  assert.equal(p.ctx.supplierPhone, '04-8888888');
+  assert.equal(p.ctx.address, 'הרב קוק 12, אלעד');
+  assert.equal(p.file.buf.subarray(0, 5).toString(), '%PDF-');
+});
+
+test('prepare — כרטיס הספק או המחסן לא נקראים: ההזמנה נשלחת בלעדיהם', async (t) => {
+  t.mock.method(Priority, 'orderForNotice', async () => order({ OWNERLOGIN: '' }));
+  t.mock.method(Priority, 'projectManager', async () => null);
+  t.mock.method(Priority, 'demandForNotice', async () => null);
+  t.mock.method(Priority, 'supplierContact', async () => { throw new Error('סגור'); });
+  t.mock.method(Priority, 'warehouseAddress', async () => { throw new Error('סגור'); });
+  const p = await PO.prepare('mordot', 'PO26000045');
+  assert.equal(p.ctx.supplierPhone, '');
+  assert.equal(p.ctx.address, '');
+  assert.ok(p.file.buf.length > 0);
+});

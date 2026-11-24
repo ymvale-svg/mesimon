@@ -857,6 +857,34 @@ CREATE TABLE IF NOT EXISTS priority_docs (
 CREATE INDEX IF NOT EXISTS idx_priority_docs_user ON priority_docs(org_id, user_id, doc, created_at);
 
 /*
+ * 💰 רשימת התשלומים ל-15 (‎server/priority/payments.js‎; "אפיון — רשימת תשלומים ל-15.md"): כל "חוב" שנכנס לרשימה —
+ * קבלת סחורה, חשבון חלקי או חשבון עסקה — נשמר כאן, כדי לעקוב אחריו גם אחרי שיצא מהרשימה של פריוריטי.
+ * ‎ref‎ — המפתח הקבוע: ‎חברה:סוג:מספר‎. ‎type‎: receipt · partial · deal.
+ * ‎stage‎: open (ממתין לתשלום) · gone (יצא מהרשימה, עוד לא ידוע לאן) · invoiced (עבר לחשבונית ספק) · cancelled · paid (שלב 2).
+ * ‎pay_day‎ — ה-15 שבו התשלום יוצא; ‎first_pay_day‎ — המועד בפעם הראשונה שנראה (לראות מה זז).
+ * ‎data‎ — השורה האחרונה שנקראה (JSON); ‎invoices‎ — חשבוניות שכבר כוללות חלק מהמסמך (JSON).
+ */
+CREATE TABLE IF NOT EXISTS payment_items (
+  ref           TEXT    PRIMARY KEY,
+  org_id        INTEGER NOT NULL DEFAULT 1,
+  company       TEXT    NOT NULL,
+  type          TEXT    NOT NULL,
+  docno         TEXT    NOT NULL,
+  stage         TEXT    NOT NULL DEFAULT 'open',
+  amount        REAL    NOT NULL DEFAULT 0,
+  pay_day       TEXT    NOT NULL DEFAULT '',
+  first_pay_day TEXT    NOT NULL DEFAULT '',
+  invoices      TEXT    NOT NULL DEFAULT '[]',
+  data          TEXT    NOT NULL DEFAULT '{}',
+  first_seen    TEXT    NOT NULL,
+  last_seen     TEXT    NOT NULL,
+  stage_at      TEXT    NOT NULL,
+  paid_at       TEXT    NOT NULL DEFAULT '',
+  payment_ref   TEXT    NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_payment_items_stage ON payment_items(org_id, stage, pay_day);
+
+/*
  * 🛒 פנייה לספקים להצעת מחיר (‎ai/rfq.js‎). ‎item‎ — מה מבוקש (JSON), ‎draft‎ — נושא וגוף המייל,
  * ‎file‎ — תמונה / קובץ שנשלחו עם הבקשה (הדמיה), מצורפים למייל: ‎{ name, mime, b64 }‎.
  * ‎status‎: draft / review / sent / summarized / closed / cancelled.

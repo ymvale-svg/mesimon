@@ -66,6 +66,6 @@ test('הבוט: קבלת סחורה ודרישת רכש לפי המטריצה (�
 
 test('המטריצה למסך — בלי ספקים, עם סוגי המסמכים', () => {
   const m = Access.matrix();
-  assert.deepEqual(m.docs.map((d) => d.key), ['demand', 'order', 'receipt', 'partial', 'invoice', 'income']);
+  assert.deepEqual(m.docs.map((d) => d.key), ['demand', 'order', 'receipt', 'partial', 'invoice', 'income', 'payments']);
   assert.equal(m.users.some((u) => u.role === 'vendor'), false);
 });

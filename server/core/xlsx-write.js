@@ -157,21 +157,14 @@ const STYLES = `${XML_HEAD}
 <cellXfs count="2"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1"/></cellXfs>
 </styleSheet>`;
 
-/**
- * יוצר חוברת עבודה עם גיליון אחד.
- *
- * ‎rows‎ הוא מערך של מערכי תאים. השורה הראשונה מודגשת ומוקפאת — דוח שנגלל
- * ומאבד את הכותרות אינו קריא. כל הערכים נכתבים כמחרוזות בכוונה: תאריך
- * שנכתב כמספר סידורי תלוי בהגדרות האזור, ובדוח בקרה חשוב יותר שמה שמופיע
- * במסך יופיע גם בקובץ.
- */
-function build(rows, { sheetName = 'גיליון1', widths = [] } = {}) {
+/** XML של גיליון אחד. השורה הראשונה מודגשת ומוקפאת; ‎bold‎ — עוד שורות מודגשות (סיכום) */
+function sheetXml(rows, { widths = [], bold = [] } = {}) {
   const cols = widths.length
     ? `<cols>${widths.map((w, i) => `<col min="${i + 1}" max="${i + 1}" width="${w}" customWidth="1"/>`).join('')}</cols>`
     : '';
-
+  const strong = new Set([0, ...bold]);
   const body = rows.map((cells, r) => {
-    const style = r === 0 ? ' s="1"' : '';
+    const style = strong.has(r) ? ' s="1"' : '';
     const tags = cells.map((value, c) => {
       const text = String(value ?? '');
       if (!text) return '';   // תא ריק אינו נכתב כלל — קובץ קטן וקריא יותר
@@ -185,15 +178,40 @@ function build(rows, { sheetName = 'גיליון1', widths = [] } = {}) {
     ? '<pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/>'
     : '';
 
-  const sheet = `${XML_HEAD}
+  return `${XML_HEAD}
 <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
-<sheetViews><sheetView rightToLeft="1" tabSelected="1" workbookViewId="0">${pane}</sheetView></sheetViews>
+<sheetViews><sheetView rightToLeft="1" workbookViewId="0">${pane}</sheetView></sheetViews>
 ${cols}<sheetData>${body}</sheetData></worksheet>`;
+}
 
+/** שם גיליון: עד 31 תווים, בלי ‎: \ / ? * [ ]‎, ולא כפול */
+function sheetNames(names) {
+  const used = new Set();
+  return names.map((n, i) => {
+    let base = String(n || `גיליון${i + 1}`).replace(/[:\\/?*[\]]/g, ' ').trim().slice(0, 31) || `גיליון${i + 1}`;
+    let name = base;
+    for (let k = 2; used.has(name); k++) name = `${base.slice(0, 31 - String(k).length - 1)} ${k}`;
+    used.add(name);
+    return name;
+  });
+}
+
+/**
+ * חוברת עבודה עם כמה גיליונות: ‎[{ name, rows, widths, bold }]‎.
+ *
+ * ‎rows‎ הוא מערך של מערכי תאים. השורה הראשונה מודגשת ומוקפאת — דוח שנגלל
+ * ומאבד את הכותרות אינו קריא. כל הערכים נכתבים כמחרוזות בכוונה: תאריך
+ * שנכתב כמספר סידורי תלוי בהגדרות האזור, ובדוח בקרה חשוב יותר שמה שמופיע
+ * במסך יופיע גם בקובץ.
+ */
+function buildBook(sheets) {
+  const list = sheets.length ? sheets : [{ name: 'גיליון1', rows: [] }];
+  const names = sheetNames(list.map((x) => x.name));
   const workbook = `${XML_HEAD}
 <workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
           xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
-<sheets><sheet name="${esc(String(sheetName).slice(0, 31))}" sheetId="1" r:id="rId1"/></sheets></workbook>`;
+<sheets>${names.map((n, i) => `<sheet name="${esc(n)}" sheetId="${i + 1}" r:id="rId${i + 1}"/>`).join('')}</sheets></workbook>`;
+  const styleId = list.length + 1;
 
   return zip([
     {
@@ -203,7 +221,7 @@ ${cols}<sheetData>${body}</sheetData></worksheet>`;
 <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
 <Default Extension="xml" ContentType="application/xml"/>
 <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
-<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+${list.map((_, i) => `<Override PartName="/xl/worksheets/sheet${i + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`).join('\n')}
 <Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>
 </Types>`)
     },
@@ -219,13 +237,18 @@ ${cols}<sheetData>${body}</sheetData></worksheet>`;
       name: 'xl/_rels/workbook.xml.rels',
       data: buf(`${XML_HEAD}
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
-<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
+${list.map((_, i) => `<Relationship Id="rId${i + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${i + 1}.xml"/>`).join('\n')}
+<Relationship Id="rId${styleId}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
 </Relationships>`)
     },
     { name: 'xl/styles.xml', data: buf(STYLES) },
-    { name: 'xl/worksheets/sheet1.xml', data: buf(sheet) }
+    ...list.map((x, i) => ({ name: `xl/worksheets/sheet${i + 1}.xml`, data: buf(sheetXml(x.rows, x).replace('<sheetView ', i === 0 ? '<sheetView tabSelected="1" ' : '<sheetView ')) }))
   ]);
 }
 
-module.exports = { build, colLetter, crc32, zip, stripControl };
+/** חוברת עם גיליון אחד */
+function build(rows, { sheetName = 'גיליון1', widths = [] } = {}) {
+  return buildBook([{ name: sheetName, rows, widths }]);
+}
+
+module.exports = { build, buildBook, colLetter, crc32, zip, stripControl };

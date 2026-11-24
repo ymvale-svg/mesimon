@@ -117,6 +117,7 @@ function buttonsFor(s) {
     case 'lines': return [BTN.yes, BTN.cancel];
     case 'parts': return [BTN.yes, 'כללי'];
     case 'parts_build': return [BTN.yes, BTN.no];
+    case 'shortage': return [BTN.yes, BTN.no];
     case 'files': return [BTN.done];
     case 'review': return [BTN.approve, BTN.cancel];
     default: return [];
@@ -125,6 +126,15 @@ function buttonsFor(s) {
 
 /** "ספק …", "שם ספק: …", "הספק הוא …", "ספק אחר" — ‎[1]‎ השם או המספר */
 const SUPPLIER_CMD = /^\s*(?:שם\s*(?:ה)?ספק|(?:ה)?ספק(?:\s+(?:הוא|זה|נכון|אחר))?|לשנות\s*ספק|תשנה\s*ספק|ספק\s*שגוי)(?=[\s:\-–]|$)\s*[:\-–]?\s*([\s\S]*)$/;
+// "מס' ספק 603143" / "ספק מס׳ 603143" — מספר הספק (סקירה 23.11: חופש כשם)
+const SUPPLIER_NO = /^(?:מס(?:פר|'|׳)?\.?\s*(?:ה)?ספק|מס(?:פר|'|׳)?\.?)?\s*[:\-–]?\s*(\d{3,})\s*$/;
+/** התשובה לשאלת הספק — רק השם או המספר ("ספק …", "שם ספק: …", "מס' ספק …") */
+function supplierAnswer(text) {
+  let t = String(text ?? '').trim();
+  const smc = t.match(SUPPLIER_CMD);
+  if (smc && smc[1].trim()) t = smc[1].replace(/\s+/g, ' ').trim();
+  return t.match(SUPPLIER_NO)?.[1] ?? t;
+}
 const DONE_FILES = /^(סיום|סיימתי|זהו|אין|אין נספחים|בלי נספחים|המשך)([\s,.!]|$)/;
 const NO_ORDER = /^(בלי הזמנה|אין הזמנה|ללא הזמנה|לפי המסמך|אין|בלי|לא)([\s,.!]|$)/;
 
@@ -516,6 +526,8 @@ async function findProjects(all, text, { strict = true } = {}) {
 /** שורת הנחה או זיכוי במסמך ("הנחת לקוח קבוע", כמות או מחיר במינוס) — נקלטת כמו שהיא, ומפחיתה את הסכום */
 const isCredit = (l) => Number(l.qty) < 0 || Number(l.price ?? l.unit_price) < 0;
 /** קבלה מול הזמנה: שורות בתעודה שאין להן שורה בהזמנה (בלי שורות הנחה) — נקלטות ומסומנות לרכש (‎buyer-notices.js‎) */
+/** 📧 חוסר / פגם: שורות שבהן המקבל תיקן את הכמות כלפי מטה מול התעודה (‎buyer-notices.js‎, ב2) */
+const shortLines = (s) => (s.lines ?? []).filter((l) => !isCredit(l) && l.docQty != null && Number(l.qty) < Number(l.docQty));
 const extraLines = (s) => (s.order ? (s.lines ?? []).filter((l) => !l.order && !isCredit(l)) : []);
 
 function linesTable(s) {
@@ -607,7 +619,7 @@ const GR_START = '📦 *קבלת סחורה* — שלחו צילום של תעו
 
 const reply = (s, text, extra = {}) => { if (s && s.step) s.lastPrompt = text; return { s, replies: [text], ...extra }; };
 
-const linesOf = (doc) => (doc.lines ?? []).map((l, i) => ({ n: i + 1, description: l.description, supplierCode: l.supplier_code, qty: l.qty, unit: l.unit,
+const linesOf = (doc) => (doc.lines ?? []).map((l, i) => ({ n: i + 1, description: l.description, supplierCode: l.supplier_code, qty: l.qty, docQty: l.qty, unit: l.unit,
   price: l.unit_price, discount: l.discount_pct, handwritten: l.handwritten, unclear: l.unclear, options: l.options ?? [] }));
 
 /** שם סוג המסמך לתצוגה: "חשבונית", "תעודת משלוח", או כפי שכתוב עליו ("אגרת שלטים", "שובר תשלום") */
@@ -1824,13 +1836,14 @@ async function handle({ user, text = '', file = null, reaction = false, allow = 
   if (s) s.uid = user.id;
   if (s && !fresh(s)) {
     // נשכחה — טיוטא שלא אושרה מבוטלת, כדי לא להשאיר יתרה תפוסה בהזמנה
-    if (s.docno) await Priority.cancelReceipt(s.company, s.docno).catch(() => {});
+    if (s.docno && s.step !== 'shortage') await Priority.cancelReceipt(s.company, s.docno).catch(() => {});
     clear(user.id, s);
     s = null;
   }
   // ה-GR אושר או בוטל ישר בפריוריטי (במחשב) — הקליטה בבוט נסגרת, וההודעה מטופלת כהתחלה חדשה
   let released = '';
-  if (s?.docno) {
+  // שאלת החוסר — אחרי שה-GR כבר סופי (בכוונה); לא "עודכנה במחשב"
+  if (s?.docno && s.step !== 'shortage') {
     const status = await Priority.receiptStatus(s.company, s.docno).catch(() => 'טיוטא');
     if (status !== 'טיוטא') {
       released = `ℹ️ *${s.docno}* כבר ${status ? `*${status}*` : 'לא קיימת'} בפריוריטי (עודכנה במחשב), ולכן סגרתי אותה בבוט.`;
@@ -1979,7 +1992,7 @@ async function handle({ user, text = '', file = null, reaction = false, allow = 
   if (t === '👍' && !file && s.step === 'order') return { replies: ['כתבו את מספר ההזמנה (PO…), או *בלי הזמנה* 👎.'], status: 'ok', result: '👍 בשאלת ההזמנה' };
   // 👎 — "לא": בשאלת כן/לא — לא; על סיכום — לא ממשיכים ושואלים מה לתקן; על הטיוטא — מבקשים אישור לביטול
   if (t === '👎' && !file) {
-    if (s.pendingList || s.pendingNew || ['offer', 'doctype'].includes(s.step)) t = 'לא';
+    if (s.pendingList || s.pendingNew || ['offer', 'doctype', 'shortage'].includes(s.step)) t = 'לא';
     else if (s.step === 'order') t = 'בלי הזמנה';      // "יש מספר הזמנה?" — 👎 = אין, בלי הזמנה
     else if (s.step === 'files') t = 'סיום';           // "יש עוד נספחים?" — 👎 = אין
     else if (s.step === 'review') return askCancel(user, s, { mark: '👎', result: '👎 בבדיקת הטיוטא' });
@@ -2125,8 +2138,7 @@ async function step(user, s, t, file, allow = { gr: true, pd: false }) {
 
     case 'supplier': {
       // "ספק …" / "שם ספק: …" גם כאן — רק השם
-      const smc = t.match(SUPPLIER_CMD);
-      if (smc && smc[1].trim()) t = smc[1].replace(/\s+/g, ' ').trim();
+      t = supplierAnswer(t);
       const n = numberIn(t);
       let sup = s.supplierOptions?.length && n && n <= s.supplierOptions.length && /^\d{1,2}$/.test(t) ? s.supplierOptions[n - 1] : null;
       if (!sup && /^\d{3,}$/.test(t)) {
@@ -2319,6 +2331,29 @@ async function step(user, s, t, file, allow = { gr: true, pd: false }) {
       return reply(s, '*כן* 👍 — להמשיך, או כתבו מק"ט / מילה מהתיאור / *כללי*.');
     }
 
+    case 'shortage': {
+      const yes = YES.test(t) || sameLabel(t, BTN.yes);
+      if (!yes && !NO_WORD.test(t) && !sameLabel(t, BTN.no)) {
+        if (looksUnrelated(t)) return pass(s, 'לא תשובה לחוסר');
+        return reply(s, `${s.lastPrompt ?? ''}`.trim());
+      }
+      let note = 'בסדר — לא נשלח.';
+      if (yes) {
+        const files = [];
+        try {
+          const gr = await Priority.readReceipt(s.company, s.docno);
+          const c = Priority.companyOf(s.company);
+          files.push({ buf: receiptPdf(gr, { companyLabel: `${c.name.replace(/ — .*/, '')} (${s.company})`, test: Priority.isTest(s.company), order: s.order?.ordname ?? '' }), fileName: `${s.docno}.pdf`, mime: 'application/pdf' });
+        } catch (err) { console.error('[משימון] PDF למייל החוסר:', err.message); }
+        const r = await BuyerNotices.sendShortage(user, s, shortLines(s), { files, photos: s.files ?? [] });
+        note = !r.ok ? '⚠️ לא הצלחתי לשלוח את המייל. מנהל המערכת קיבל פירוט.'
+          : r.noSupplierEmail ? `📧 אין מייל לספק בכרטיס בפריוריטי — נשלח לרכש (${r.to}).`
+            : `📧 נשלח לספק (${r.to})${r.cc.length ? ', עם עותק לרכש' : ''}.`;
+        if (!r.ok) alertAdmins(user, s, 'מייל חוסר / פגם לא נשלח', [r.error]);
+      }
+      if (queueOf(s).length) return startQueued(user, s, [note]);
+      return { s: null, replies: [note], status: 'ok', result: `חוסר ${s.docno}: ${yes ? 'נשלח' : 'לא'}` };
+    }
     case 'parts_build': {
       if (YES.test(t)) return answerBuild(user, s, true);
       if (NO_WORD.test(t)) return answerBuild(user, s, false);
@@ -2443,6 +2478,14 @@ async function step(user, s, t, file, allow = { gr: true, pd: false }) {
         // 📣 לרכש: שורה שלא בהזמנה (מייל עכשיו), ותעודה בלי מספר הזמנה (לדוח השבועי)
         const toBuyer = await BuyerNotices.afterFinal(user, s, extraLines(s)).catch((err) => { console.error('[משימון] הודעה לרכש מקבלת סחורה:', err.message); return ''; });
         const done = `✅ *קבלת סחורה ${s.docno}* נקלטה כסופית.\n${companyLine(s)}\nספק: ${s.supplier.name}${s.order ? ` · הזמנה ${s.order.ordname}` : ''}${stamped ? `\n🏷️ מספר ה-GR נכתב על ה${docName(s.doc)} — מצורף, ונשמר כנספח בפריוריטי.` : ''}${toBuyer ? `\n${toBuyer}` : ''}`;
+        // 📧 חוסר / פגם מול התעודה — "לשלוח לספק ולרכש?" (הקליטה כבר סופית; התשובה לא משנה אותה)
+        const short = shortLines(s);
+        if (short.length) {
+          s.step = 'shortage';
+          return reply(s, [done, '', `📉 *חוסר / פגם מול התעודה:*`,
+            ...short.map((l) => `• ${l.description} — בתעודה ${qtyText(l.docQty)}, התקבל ${qtyText(l.qty)}`), '',
+            '*לשלוח לספק ולרכש?* (מהמייל שלך, עם הקבלה והתמונות) *כן* 👍 / *לא* 👎'].join('\n'), { files: stamped ? [stamped] : [], result: `GR סופי ${s.docno}; חוסר — שאלה` });
+        }
         if (queueOf(s).length) { const q = await startQueued(user, s, [done]); return stamped ? { ...q, files: [stamped, ...(q.files ?? [])] } : q; }
         return { s: null, replies: [done], files: stamped ? [stamped] : [], status: 'ok', result: `GR סופי ${s.docno}` };
       }
@@ -2527,7 +2570,7 @@ function dropMenu(userId) { const s = load(userId); if (s?.step === 'menu') clea
  */
 const VIEW_STEP = {
   offer: 'מסמך מהמייל', doc: 'קריאת המסמך', doctype: 'סוג המסמך', company: 'חברה', supplier: 'ספק', order: 'הזמנה',
-  lines: 'השוואת שורות', parts: 'פריטים בלי הזמנה', parts_build: 'מק"טים לבנייה', project: 'פרויקט', warehouse: 'מחסן', header: 'פרטי הכותרת',
+  lines: 'השוואת שורות', parts: 'פריטים בלי הזמנה', parts_build: 'מק"טים לבנייה', shortage: 'חוסר / פגם — לשלוח לספק?', project: 'פרויקט', warehouse: 'מחסן', header: 'פרטי הכותרת',
   files: 'נספחים', review: 'טיוטא בפריוריטי — מחכה ל"מאשר"'
 };
 function view(userId) {
@@ -2555,4 +2598,4 @@ function view(userId) {
   };
 }
 
-module.exports = { view, everOpened, markOpened, inMenu, dropMenu, isTrigger, isPriority, opens, active, pending, docId, pausedNote, abandon, switchCancels, wantsUndoFinal, handle, sweep, _jpegToPdf: jpegToPdf, _codeLines: codeLines, _orderDiffs: orderDiffs, _similarLines: similarLines, _askParts: askParts, _projectsOf: projectsOf, _findProjects: findProjects, _ai: ai, _load: load, _clear: (userId) => clear(userId, load(userId)) };
+module.exports = { _supplierAnswer: supplierAnswer, view, everOpened, markOpened, inMenu, dropMenu, isTrigger, isPriority, opens, active, pending, docId, pausedNote, abandon, switchCancels, wantsUndoFinal, handle, sweep, _jpegToPdf: jpegToPdf, _codeLines: codeLines, _orderDiffs: orderDiffs, _similarLines: similarLines, _askParts: askParts, _projectsOf: projectsOf, _findProjects: findProjects, _ai: ai, _load: load, _clear: (userId) => clear(userId, load(userId)) };

@@ -14,7 +14,31 @@ const ymd = (d) => (d ? String(d).slice(0, 10).split('-').reverse().join('.') : 
  * @param {object} info   ‎{ companyLabel, test, manager, initiators }‎ — שמות לתצוגה
  * @returns {Buffer}
  */
-function orderPdf(po, { companyLabel = '', test = false, manager = '', initiators = [], updated = false } = {}) {
+/** השדות בראש ההזמנה — ‎[[כותרת, ערך]]‎, רק אלה שיש להם ערך */
+function orderFields(po, { manager = '', initiators = [], supplier = null, address = '', site = [] } = {}) {
+  const ship = po.ship ?? {};
+  // סימני כיוון בלתי נראים (מהעתקה מוואטסאפ) — הגופן מצייר אותם כריבועים
+  const clean = (t) => String(t ?? '').replace(/[\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, '').trim();
+  const contact = [ship.NAME, ship.PHONENUM, ship.CELLPHONE, ship.ADDRESS, ship.ADDRESS2, ship.ADDRESS3, ship.STATE].map(clean).filter(Boolean).join(' · ');
+  return [
+    ['ספק', `${po.CDES ?? ''} (${po.SUPNAME ?? ''})`], ['תאריך', ymd(po.CURDATE)],
+    ['פרויקט', `${po.PROJDOCNO ?? ''} ${po.PROJDES ?? ''}`.trim()], ['מחסן', po.WARHSNAME ?? ''],
+    ['מנהל הפרויקט', manager], ['יוזם הדרישה', initiators.join(', ')],
+    ['דרישת רכש', [...new Set([po.PRDNO, ...po.lines.map((l) => l.PRDNO)].filter(Boolean))].join(', ')], ['תנאי תשלום', po.PAYDES ?? ''],
+    ['טלפון הספק', clean(supplier?.phone)],
+    ['איש קשר אצל הספק', [supplier?.contact?.name, supplier?.contact?.phone, supplier?.contact?.email].map(clean).filter(Boolean).join(' · ')],
+    ['כתובת אספקה', clean(address)],
+    ['איש קשר באתר', site.map(clean).filter(Boolean).join(' | ')],
+    ...(contact ? [['פרטי משלוח בהזמנה', contact]] : []),
+    ...(po.DETAILS ? [['פרטים', po.DETAILS]] : [])
+  ].filter(([, v]) => v);
+}
+
+/*
+ * ‎supplier‎ — כרטיס הספק (‎{ phone, contact: { name, phone, email } }‎), ‎address‎ — כתובת האספקה מכרטיס המחסן, ‎site‎ — איש הקשר
+ * באתר (יוזם הדרישה ממשימון: שם · טלפון · מייל). הוחלט 23.11.26 ("אפיון — יישום ישיבת הרכש", ג2).
+ */
+function orderPdf(po, { companyLabel = '', test = false, manager = '', initiators = [], updated = false, supplier = null, address = '', site = [] } = {}) {
   const pdf = new Pdf();
   const M = 40;
   const R = pdf.width - M;
@@ -33,18 +57,7 @@ function orderPdf(po, { companyLabel = '', test = false, manager = '', initiator
   pdf.text(`${companyLabel} · סטטוס: ${po.STATDES ?? ''}`, R, y, { size: 10, color: '#555' });
   y += 22;
 
-  const ship = po.ship ?? {};
-  // סימני כיוון בלתי נראים (מהעתקה מוואטסאפ) — הגופן מצייר אותם כריבועים
-  const clean = (t) => String(t ?? '').replace(/[\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, '').trim();
-  const contact = [ship.NAME, ship.PHONENUM, ship.CELLPHONE, ship.ADDRESS, ship.ADDRESS2, ship.ADDRESS3, ship.STATE].map(clean).filter(Boolean).join(' · ');
-  const fields = [
-    ['ספק', `${po.CDES ?? ''} (${po.SUPNAME ?? ''})`], ['תאריך', ymd(po.CURDATE)],
-    ['פרויקט', `${po.PROJDOCNO ?? ''} ${po.PROJDES ?? ''}`.trim()], ['מחסן', po.WARHSNAME ?? ''],
-    ['מנהל הפרויקט', manager], ['יוזם הדרישה', initiators.join(', ')],
-    ['דרישת רכש', [...new Set([po.PRDNO, ...po.lines.map((l) => l.PRDNO)].filter(Boolean))].join(', ')], ['תנאי תשלום', po.PAYDES ?? ''],
-    ...(contact ? [['איש קשר', contact]] : []),
-    ...(po.DETAILS ? [['פרטים', po.DETAILS]] : [])
-  ].filter(([, v]) => v);
+  const fields = orderFields(po, { manager, initiators, supplier, address, site });
   const colW = W / 2;
   for (let i = 0; i < fields.length; i += 2) {
     let rows = 1;
@@ -120,4 +133,4 @@ function orderPdf(po, { companyLabel = '', test = false, manager = '', initiator
   return pdf.toBuffer({ title: `הזמנת רכש ${po.ORDNAME}` });
 }
 
-module.exports = { orderPdf };
+module.exports = { orderFields, orderPdf };
