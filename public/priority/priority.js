@@ -942,7 +942,7 @@
     main.innerHTML = `
       <section class="panel">
         <div class="panel-h"><h2>מי יכול מה בפריוריטי</h2>
-          <p>לכל משתמש: סוגי המסמכים (כן או לא — מי שמורשה למסמך מורשה לכל מה שבו, בבוט ובמסך), והחברות שהוא שייך אליהן. מנהלי מערכת מורשים תמיד לכל דבר.</p></div>
+          <p>לכל משתמש: סוגי המסמכים (כן או לא — מי שמורשה למסמך מורשה לכל מה שבו, בבוט ובמסך), והחברות שהוא שייך אליהן. מנהלי מערכת מורשים תמיד לכל דבר. מחלקת כספים והנהלת חשבונות — תמיד רואים את כל התשלומים, בכל החברות.</p></div>
         <div class="scroll sticky-wrap" tabindex="0" role="region" aria-label="מטריצת ההרשאות"><table class="mtx" id="mtx"></table></div>
         <div class="row-actions"><button class="btn pri" id="save" disabled>שמירה</button><span class="dirty" id="dirty"></span></div>
       </section>`;
@@ -953,7 +953,11 @@
       const keep = f && $('#mtx')?.contains(f) ? ['data-u', 'data-d', 'data-co', 'data-pick'].filter((k) => f.hasAttribute(k)).map((k) => `[${k}="${CSS.escape(f.getAttribute(k))}"]`).join('') : '';
       $('#mtx').innerHTML = `<thead><tr><th>משתמש</th>${m.docs.map((d) => `<th>${esc(d.label)}${d.ready ? '' : '<br><span class="pill p-mute">בקרוב</span>'}</th>`).join('')}<th>חברות</th></tr></thead><tbody>` +
         users.map((u, i) => `<tr><td><b>${esc(u.name)}</b><span>${esc([u.department, ROLE[u.role] ?? u.role].filter(Boolean).join(' · '))}</span></td>
-          ${m.docs.map((d) => `<td><button type="button" class="ck" role="checkbox" aria-checked="${u.docs.includes(d.key)}" aria-label="${esc(u.name)} — ${esc(d.label)}" data-u="${i}" data-d="${d.key}" ${u.admin ? 'disabled' : ''}>✓</button></td>`).join('')}
+          ${m.docs.map((d) => {
+            // 💰 מחלקת כספים — "תשלומים" תמיד, בכל החברות
+            const fixed = u.admin || (u.finance && d.key === 'payments');
+            return `<td><button type="button" class="ck" role="checkbox" aria-checked="${u.docs.includes(d.key)}" aria-label="${esc(u.name)} — ${esc(d.label)}" data-u="${i}" data-d="${d.key}" ${fixed ? 'disabled' : ''} ${u.finance && d.key === 'payments' ? 'title="מחלקת כספים — תמיד, בכל החברות"' : ''}>✓</button></td>`;
+          }).join('')}
           <td><button type="button" class="cobtn" data-pick="${i}" ${u.admin ? 'disabled' : ''} aria-expanded="${picking === i}" aria-label="החברות של ${esc(u.name)}: ${u.companies === null ? 'כל החברות' : u.companies.length ? esc(u.companies.map(coName).join(', ')) : 'אף חברה'}">${u.companies === null ? '<span class="pill p-ok">כל החברות</span>' : u.companies.length ? u.companies.map((c) => `<span class="pill p-brand">${esc(coName(c))}</span>`).join('') : '<span class="pill p-warn">אף חברה</span>'}</button></td></tr>
           ${picking === i ? `<tr class="copick"><td colspan="${m.docs.length + 2}"><div class="pk"><button data-co="*" data-u="${i}" aria-pressed="${u.companies === null}">כל החברות</button>${m.companies.map((c) => `<button data-co="${esc(c.code)}" data-u="${i}" aria-pressed="${Boolean(u.companies?.includes(c.code))}">${esc(c.name)}</button>`).join('')}</div><span class="hint">חברה חדשה בפריוריטי נוספת אוטומטית רק למי שמסומן "כל החברות".</span></td></tr>` : ''}`).join('') + '</tbody>';
       if (keep) $('#mtx').querySelector(keep)?.focus();
