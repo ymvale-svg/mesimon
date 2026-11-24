@@ -78,9 +78,26 @@ test('parseApprovalScreens — רק מסך עם סטטוס ומאשרים (או 
   assert.equal(iv.key, 'IVNUM');
 });
 
-test('docLink — המסך, המספר והחברה בקישור של פריוריטי', () => {
-  assert.match(Priority.docLink('a160226', 'MED_DOCUMENTS_P', 'PC260000236'),
-    /^https:\/\/[^/]+\/webui\/openmail\.htm\?priority:priform@MED_DOCUMENTS_P:PC260000236:a160226:[^:]+\.ini:1$/);
+test('docLink — המסך, המספר, החברה והסביבה בענן (tenant) בקישור של פריוריטי', () => {
+  assert.equal(Priority.tenantOf('tabb2121.ini'), 'B2121');
+  assert.equal(Priority.tenantOf('weird'), '');
+  const link = Priority.docLink('a160226', 'MED_DOCUMENTS_P', 'PC260000236');
+  assert.match(link, /^https:\/\/[^/]+\/webui\/openmail\.htm\?tenant=B2121&priority:priform@MED_DOCUMENTS_P:PC260000236:a160226:tabb2121\.ini:1$/);
+});
+
+test('docLink — בלי התוסף של פריוריטי, הדף של פריוריטי מעביר ל-/webui/B2121/ ולא לשורש (באג 404, 24.11.26)', () => {
+  // הלוגיקה של openmail.htm בפריוריטי (OpenMail, בלי התוסף) — כפי שהיא בשרת
+  const loc = Priority.docLink('a160226', 'MED_PORDERS', 'CO260000121');
+  const i = loc.indexOf('?');
+  const url = loc.slice(0, i);
+  let par = loc.slice(i + 1);
+  const m = /tenant=(.*?)&/.exec(par);
+  const tenant = m ? m[1] : '';
+  par = par.replace(/\+priority:/, 'priority:').replace(m ? m[0] : '', '');
+  let noExt = par.replace('#', '&_disableplugin=1&_execute=');
+  if (noExt === par) noExt = par.replace('@', '&_disableplugin=1&_execute=');
+  const out = url.split('webui/openmail.htm')[0] + (tenant ? `webui/${tenant}/` : '') + '?' + noExt;
+  assert.match(out, /^https:\/\/[^/]+\/webui\/B2121\/\?priority:priform&_disableplugin=1&_execute=MED_PORDERS:CO260000121:a160226:tabb2121\.ini:1$/);
 });
 
 test('signerOf — "החותם הבא", אחר כך הראשון שלא אישר; USERLOGIN בכותרת רק במסך בלי רשימה', () => {
