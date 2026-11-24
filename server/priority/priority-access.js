@@ -23,7 +23,7 @@ const DOCS = Object.freeze([
   { key: 'order', label: 'הזמנת רכש', ready: false },
   { key: 'receipt', label: 'קבלת סחורה', ready: true, waAction: 'goods_receipt' },
   { key: 'partial', label: 'חשבון חלקי', ready: false },
-  { key: 'invoice', label: 'חשבונית ספק', ready: false },
+  { key: 'invoice', label: 'חשבונית ספק', ready: true },   // מחשבון חלקי (חוזה) — pc-invoice.js, 24.11.26
   { key: 'income', label: 'קבלה מהכנסות', ready: false }
 ]);
 const DOC_KEYS = DOCS.map((d) => d.key);

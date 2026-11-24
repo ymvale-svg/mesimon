@@ -1132,6 +1132,92 @@ async function addSupplierPart(company, supname, part) {
 
 const deleteSupplierPart = (company, supname, kline) => call(company, 'DELETE', `SUPPLIERS('${q(supname)}')/SUPPART_SUBFORM(KLINE=${Number(kline)})`);
 
+// ---------------------------------------------------------------------------
+// חוזה ← חשבון חלקי ← חשבונית ספק (‎server/priority/pc-invoice.js‎, 24.11.26)
+// ---------------------------------------------------------------------------
+
+/*
+ * חשבון חלקי לקבלן משנה — ‎MED_DOCUMENTS_P‎ (‎PC…‎, מתוך חוזה ‎CO…‎). נבדק ב-a160226 (24.11.26, קריאה):
+ *   • ‎MED_QPRICE‎ — לתשלום בחשבון הזה, לפני מע"מ ואחרי עכבון. ‎MED_DOCTOTPRICE‎ — המצטבר בחוזה (לא של החשבון לבד).
+ *   • ‎MED_DOCRETENTION_SUBFORM‎ — העכבון: ‎QPRICE‎ בחשבון הזה, ‎QPRICE_PREV‎ / ‎QPRICE_TO‎ — מצטבר.
+ *   • ‎MED_PDOCUSER_SUBFORM‎ — רשימת המאשרים: ‎UFLAG = Y‎ — אישר.
+ *   • ‎IVALL = Y‎ — כבר חויב במלואו בחשבונית.
+ * ההמרה לחשבונית ספק: חשבונית מרכזת (‎PINVOICES‎) ושורה ב-‎PIVDOC_SUBFORM‎ עם מספר ה-PC — כך נקלטו GI26000655 ו-GI26000634
+ * (הסעיפים נמשכים לשורות החשבונית עם ‎DOCNO‎ של ה-PC, ושורת עכבון — פריט ‎708‎).
+ */
+const pcKey = (docno) => `MED_DOCUMENTS_P(DOCNO='${q(docno)}',TYPE='P')`;
+const ivKey = (ivnum) => `PINVOICES(IVNUM='${q(ivnum)}',IVTYPE='P',DEBIT='D')`;
+const PC_FIELDS = 'DOCNO,ORDNAME,SUPNAME,CDES,BOOKNUM,CURDATE,STATDES,IVALL,PROJDOCNO,PROJDES,MED_QPRICE,DISPRICE,VAT,TOTPRICE,MED_DOCTOTPRICE,MED_PAYCODE,MED_PAYDES,MED_EXEMONTH';
+/** סטטוס שמותר להמיר ממנו (הוחלט 24.11.26: רק סופית) */
+const PC_READY = ['סופית'];
+
+/** חשבונות חלקיים של ספק שעוד לא חויבו ולא בוטלו (החדשים קודם) */
+async function partialBills(company, supname, top = 30) {
+  const list = rows(await call(company, 'GET',
+    `MED_DOCUMENTS_P?$filter=${enc(`SUPNAME eq '${q(supname)}'`)}&$select=${PC_FIELDS}&$orderby=DOCNO desc&$top=${top}`));
+  return list.filter((x) => x.STATDES !== 'מבוטלת' && x.IVALL !== 'Y');
+}
+
+/** חשבון חלקי אחד, עם העכבון והמאשרים. ‎null‎ — לא קיים */
+async function readPartialBill(company, docno) {
+  const list = rows(await call(company, 'GET', `MED_DOCUMENTS_P?$filter=${enc(`DOCNO eq '${q(docno)}'`)}&$select=${PC_FIELDS}`));
+  if (!list.length) return null;
+  const k = pcKey(docno);
+  const retention = rows(await call(company, 'GET', `${k}/MED_DOCRETENTION_SUBFORM?$select=PERCENT,RETDES,QPRICE,QPRICE_PREV,QPRICE_TO`).catch(() => ({ value: [] })));
+  const approvers = rows(await call(company, 'GET', `${k}/MED_PDOCUSER_SUBFORM?$select=AMOUNT,USERNAME,USERLOGIN,ALTUSERLOGIN,UFLAG,CUSERLOGIN,UDATE`).catch(() => ({ value: [] })));
+  return { ...strip(list[0]), retention, approvers };
+}
+
+/** הסטטוס של חשבון חלקי (‎null‎ — לא קיים) */
+async function partialBillStatus(company, docno) {
+  const list = rows(await call(company, 'GET', `MED_DOCUMENTS_P?$filter=${enc(`DOCNO eq '${q(docno)}'`)}&$select=DOCNO,STATDES,IVALL`));
+  return list[0] ?? null;
+}
+
+/** חשבונית ספק (מרכזת) לפי מספר החשבונית של הספק — כדי לא לקלוט פעמיים */
+async function findInvoiceByBooknum(company, supname, booknum) {
+  if (!booknum) return null;
+  const list = rows(await call(company, 'GET',
+    `PINVOICES?$filter=${enc(`SUPNAME eq '${q(supname)}' and BOOKNUM eq '${q(String(booknum).slice(0, 20))}'`)}&$select=IVNUM,STATDES,IVDATE&$top=5`));
+  return list.find((x) => x.STATDES !== 'מבוטלת') ?? null;
+}
+
+/** חשבונית ספק זמנית (‎T…‎). ‎allocation‎ — מספר ההקצאה של רשות המסים (‎SDINUMIT‎) */
+async function createPcInvoice(company, { supname, booknum, date, allocation = '', details = '' }) {
+  const body = { SUPNAME: supname, BOOKNUM: String(booknum ?? '').slice(0, 20) };
+  if (date) body.IVDATE = `${String(date).slice(0, 10)}T00:00:00Z`;
+  if (allocation) body.SDINUMIT = String(allocation).replace(/\D/g, '');
+  if (details) body.DETAILS = String(details).slice(-24);   // ‎DETAILS‎ — עד 24 תווים, פריוריטי שומר את הסוף
+  const r = await call(company, 'POST', 'PINVOICES', body);
+  return r?.IVNUM;
+}
+
+/** משיכת החשבון החלקי לחשבונית (כמו "שליפת תעודות"). פריוריטי דוחה חשבון שאינו סופי */
+const pullPartialBill = (company, ivnum, docno) => call(company, 'POST', `${ivKey(ivnum)}/PIVDOC_SUBFORM`, { DOCNO: docno });
+
+/** החשבונית כפי שנקלטה: סכומים ושורות שיש בהן סכום (וגם שורת העכבון) */
+async function readInvoice(company, ivnum) {
+  const h = strip(await call(company, 'GET', `${ivKey(ivnum)}?$select=IVNUM,STATDES,BOOKNUM,IVDATE,QPRICE,CALPRICE,DIFF,DISPRICE,VAT,TOTPRICE,PAYDATE,SDINUMIT`));
+  const lines = rows(await call(company, 'GET', `${ivKey(ivnum)}/PINVOICEITEMS_SUBFORM?$select=KLINE,PARTNAME,PDES,MED_SECDES,TQUANT,PRICE,QPRICE,DOCNO`))
+    .sort((a, b) => a.KLINE - b.KLINE);
+  return { ...h, lines };
+}
+
+const setInvoiceLine = (company, ivnum, kline, fields) => call(company, 'PATCH', `${ivKey(ivnum)}/PINVOICEITEMS_SUBFORM(KLINE=${Number(kline)})`, fields);
+
+async function attachInvoice(company, ivnum, { buf, mime, description }) {
+  const uri = `data:${mime || 'image/jpeg'};base64,${buf.toString('base64')}`;
+  const r = await call(company, 'POST', `${ivKey(ivnum)}/EXTFILES_SUBFORM`, { EXTFILEDES: String(description ?? '').slice(0, 80), EXTFILENAME: uri });
+  return r?.EXTFILENUM ?? null;
+}
+
+async function setInvoiceDialog(company, ivnum, lines) {
+  const esc = (s) => String(s).replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+  const TEXT = lines.filter(Boolean).map((l) => `<p>${esc(l)}</p>`).join('');
+  const k = `${ivKey(ivnum)}/INTERNALDIALOGTEXT_SUBFORM`;
+  try { await call(company, 'POST', k, { TEXT }); } catch { await call(company, 'PATCH', k, { TEXT }); }
+}
+
 module.exports = {
   suppliersByWords, ordersByProject,
   COMPANIES, DEFAULT_HOST, DEFAULT_INI, configure, syncCompanies, ping, isEnabled, allowed, companyOf, isTest, resolveCompany, companiesByName, PriorityError,
@@ -1139,6 +1225,7 @@ module.exports = {
   finalOrders, orderForNotice, demandInitiator, demandForNotice, projectManager, priorityUser,
   readDialog, createReceipt, addOrderLine, addFreeLine, setLineQty, setLineDes, setHeader, attach, deleteAttachment, setDialog, finalizeReceipt, cancelReceipt, receiptStatus, deleteLines,
   PD_TYPES, demandCodes, recentDemandProjects, createDemand, addDemandLine, setDemand, submitDemand, isNoApproversError, readDemand, waitingDemands, nextSigner, cancelDemand, setDemandDialog, appendDemandDialog, setDemandLine, deleteDemandLine, reopenDemand, REOPEN_STATUS, purchaseOrderOwners, attachDemand, priorityUsers, budgetPairs, isCodingError,
+  PC_READY, partialBills, readPartialBill, partialBillStatus, findInvoiceByBooknum, createPcInvoice, pullPartialBill, readInvoice, setInvoiceLine, attachInvoice, setInvoiceDialog,
   supplierPriceLists, addPriceListItem, deletePriceListItem, supplierParts, addSupplierPart, deleteSupplierPart,
   _call: call
 };

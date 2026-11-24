@@ -21,6 +21,7 @@ module.exports = {
   get PriorityDesk() { return require('./priority-desk'); },
   get PriorityApprovals() { return require('./priority-approvals'); },
   get OpensGuard() { return require('./opens-guard'); },
+  get PcInvoice() { return require('./pc-invoice'); },
   get PoNotify() { return require('./po-notify'); },
   get PoPdf() { return require('./po-pdf'); },
   get PoPricelist() { return require('./po-pricelist'); },

@@ -171,6 +171,8 @@ const INTERNAL = new Set([
   'migr_fast_mode_off', // מצב מהיר כובה פעם אחת (17.11.26)
   'migr_mail_auto_off', // יצירת משימות מהמייל בלי אישור כובתה לכולם פעם אחת (22.11.26)
   'gr_no_po_report_last', // מתי נשלח הדוח השבועי "תעודות בלי מספר הזמנה" — buyer-notices.js
+  'pc_invoice_waiting', // חשבוניות ספק שממתינות שהחשבון החלקי יהיה סופי (לפי עובד) — pc-invoice.js
+  'pc_retention_deferred', // עכבון שהספק לא קיזז ונדחה לחשבון הבא של החוזה — pc-invoice.js
   'pd_return_chats' // שיחות פתוחות של החזרה לבדיקה (המחזיר / המסביר), לפי עובד, 30 דקות — pd-return.js
 ]);
 
