@@ -26,7 +26,7 @@ const INBOX_DAYS = 30;
 const DOC_MIME = /^(application\/pdf|image\/(jpeg|png|heic|heif|tiff|webp))$/i;
 const EXT = { 'application/pdf': '.pdf', 'image/jpeg': '.jpg', 'image/png': '.png', 'image/heic': '.heic', 'image/heif': '.heif', 'image/tiff': '.tif', 'image/webp': '.webp' };
 const MIME_BY_EXT = { '.pdf': 'application/pdf', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.heic': 'image/heic', '.tif': 'image/tiff', '.tiff': 'image/tiff', '.webp': 'image/webp' };
-const BOT_TEXT = { receipt: 'קבלת סחורה', demand: 'דרישת רכש' };
+const BOT_TEXT = { receipt: 'קבלת סחורה', demand: 'דרישת רכש', invoice: 'חשבונית ספק' };
 const STAGES = require('./priority-chain').LABELS;
 
 const dir = () => path.join(D.UPLOADS_DIR, 'priority-docs', String(ORG));

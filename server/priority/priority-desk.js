@@ -24,10 +24,12 @@ const Access = require('./priority-access');
 const Docs = require('./priority-docs');
 const GoodsReceipt = require('./goods-receipt');
 const PurchaseDemand = require('./purchase-demand');
+const SupplierInvoice = require('./supplier-invoice');
 
 const FLOWS = {
   receipt: { engine: () => GoodsReceipt, trigger: 'קבלת סחורה', args: { allow: { gr: true, pd: false } } },
-  demand: { engine: () => PurchaseDemand, trigger: 'דרישת רכש', args: {} }
+  demand: { engine: () => PurchaseDemand, trigger: 'דרישת רכש', args: {} },
+  invoice: { engine: () => SupplierInvoice, trigger: 'חשבונית ספק', args: {} }
 };
 const MAX_MESSAGES = 80;
 const fail = (status, message, extra = {}) => Object.assign(new Error(message), { status, ...extra });

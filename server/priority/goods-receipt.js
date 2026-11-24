@@ -599,9 +599,13 @@ function dueText(s, code) {
 /** תפריט פריוריטי — בכפתורים. הכיתוב של כל כפתור הוא הטריגר של הזרימה ("קבלת סחורה", "דרישת רכש") */
 const MENU_GR = '📦 קבלת סחורה';
 const MENU_PD = '🛒 דרישת רכש';
+// הכיתוב הוא הטריגר של חשבונית הספק (‎supplier-invoice.js‎ — ‎MENU_BTN‎); הבוט מנתב אליה לפני קבלת הסחורה
+const MENU_IV = '🧾 חשבונית ספק';
+const MENU_BTNS = { gr: MENU_GR, pd: MENU_PD, iv: MENU_IV };
 const MENU_LINES = {
   gr: '📦 *קבלת סחורה* — תעודת משלוח או חשבונית ← GR',
-  pd: '🛒 *דרישת רכש* — רשימת פריטים (צילום, הקלטה או הקלדה) ← דרישה לאישור'
+  pd: '🛒 *דרישת רכש* — רשימת פריטים (צילום, הקלטה או הקלדה) ← דרישה לאישור',
+  iv: '🧾 *חשבונית ספק* — חשבונית על סחורה שכבר נקלטה ← משיכת ה-GR'
 };
 /**
  * תפריט פריוריטי — רק מה שמותר לעובד (מטריצת ההרשאות, ‎priority-access.js‎; הוחלט 13.11.26).
@@ -609,10 +613,10 @@ const MENU_LINES = {
  */
 function menuOf(allow) {
   const a = allow ?? { gr: true, pd: true };
-  const keys = ['gr', 'pd'].filter((k) => a[k]);
+  const keys = ['gr', 'pd', 'iv'].filter((k) => a[k]);
   return {
     text: ['🗂 *פריוריטי* — מה לעשות?', ...keys.map((k) => MENU_LINES[k]), '_או פשוט המשיכו במה שרציתם — זה יגיע למשימות כרגיל._'].join('\n'),
-    buttons: keys.map((k) => (k === 'gr' ? MENU_GR : MENU_PD))
+    buttons: keys.map((k) => MENU_BTNS[k])
   };
 }
 const GR_START = '📦 *קבלת סחורה* — שלחו צילום של תעודת המשלוח או החשבונית (המסמך הראשי, שממנו נקראים הנתונים).';
@@ -1891,13 +1895,13 @@ async function handle({ user, text = '', file = null, reaction = false, allow = 
   // "פריוריטי" בלי "קבלת סחורה" — תפריט. היום יש בו רק קבלת סחורה; בהמשך גם חשבוניות חלקיות ועוד
   // 🔐 רק מה שמותר: קבלת סחורה בלבד — ישר אליה, בלי תפריט; דרישת רכש בלבד — כפתור אחד; כלום — לא פתוח
   if (!s && !file && isPriority(t) && !isTrigger(t)) {
-    if (!allow.gr && !allow.pd) return { s: null, replies: [Access.NO_ACCESS], status: 'ok', result: 'פריוריטי — לא מורשה' };
-    if (allow.gr && !allow.pd) {
+    if (!allow.gr && !allow.pd && !allow.iv) return { s: null, replies: [Access.NO_ACCESS], status: 'ok', result: 'פריוריטי — לא מורשה' };
+    if (allow.gr && !allow.pd && !allow.iv) {
       save(user.id, { step: 'doc', startedAt: Date.now(), lastPrompt: GR_START });
       return { replies: [GR_START], status: 'ok', result: 'פריוריטי ← קבלת סחורה (המסמך היחיד שמותר)', buttons: [BTN.cancel] };
     }
     const m = menuOf(allow);
-    save(user.id, { step: 'menu', startedAt: Date.now(), allow: { gr: Boolean(allow.gr), pd: Boolean(allow.pd) } });
+    save(user.id, { step: 'menu', startedAt: Date.now(), allow: { gr: Boolean(allow.gr), pd: Boolean(allow.pd), iv: Boolean(allow.iv) } });
     return { replies: [m.text], status: 'ok', result: 'תפריט פריוריטי', buttons: m.buttons };
   }
 
@@ -2598,4 +2602,7 @@ function view(userId) {
   };
 }
 
-module.exports = { _supplierAnswer: supplierAnswer, view, everOpened, markOpened, inMenu, dropMenu, isTrigger, isPriority, opens, active, pending, docId, pausedNote, abandon, switchCancels, wantsUndoFinal, handle, sweep, _jpegToPdf: jpegToPdf, _codeLines: codeLines, _orderDiffs: orderDiffs, _similarLines: similarLines, _askParts: askParts, _projectsOf: projectsOf, _findProjects: findProjects, _ai: ai, _load: load, _clear: (userId) => clear(userId, load(userId)) };
+/** קריאת מסמך ספק (‎EXTRACT_SCHEMA‎) — משותפת גם לחשבונית ספק (‎supplier-invoice.js‎). ‎file‎ — ‎{ path, mime }‎ */
+const extractDoc = (file) => ai.extract(file);
+
+module.exports = { extractDoc, _supplierAnswer: supplierAnswer, view, everOpened, markOpened, inMenu, dropMenu, isTrigger, isPriority, opens, active, pending, docId, pausedNote, abandon, switchCancels, wantsUndoFinal, handle, sweep, _jpegToPdf: jpegToPdf, _codeLines: codeLines, _orderDiffs: orderDiffs, _similarLines: similarLines, _askParts: askParts, _projectsOf: projectsOf, _findProjects: findProjects, _ai: ai, _load: load, _clear: (userId) => clear(userId, load(userId)) };

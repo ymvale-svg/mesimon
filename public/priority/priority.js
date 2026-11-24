@@ -315,7 +315,10 @@
       const fields = d.key === 'receipt'
         ? [field('מסמך', esc([v.docType, v.docNumber].filter(Boolean).join(' '))), field('תאריך', esc(v.date)), field('חברה', company), field('ספק', v.supplier ? `${esc(v.supplier.name)}${v.supplier.guess ? ' <span class="pill p-warn">מהמסמך — לא אושר</span>' : ''}` : ''),
            field('הזמנה', esc(v.order), 'ltr-f'), field('פרויקט', esc(v.project)), field('מחסן', esc(v.warehouse), 'ltr-f'), field('תנאי תשלום', esc(v.pay)), field('GR בפריוריטי', esc(v.docno), 'ltr-f strong')]
-        : [field('חברה', company), field('תאריך', esc(v.date)), field('פרויקט', esc(v.project)), field('מחסן', esc(v.warehouse), 'ltr-f'), field('דרישה בפריוריטי', esc(v.docno), 'ltr-f strong')];
+        : d.key === 'invoice'
+          ? [field('מסמך', esc([v.docType, v.docNumber].filter(Boolean).join(' '))), field('תאריך', esc(v.date)), field('חברה', company), field('ספק', v.supplier ? `${esc(v.supplier.name)}${v.supplier.guess ? ' <span class="pill p-warn">מהמסמך — לא אושר</span>' : ''}` : ''),
+             field('השוואה ל-GR', v.match ? (v.match.ok ? '<span class="pill p-ok">תואם</span>' : `<span class="pill p-warn">פער ${num(Math.abs(v.match.diff))} ₪</span>`) : ''), field('חשבונית בפריוריטי', esc(v.docno), 'ltr-f strong')]
+          : [field('חברה', company), field('תאריך', esc(v.date)), field('פרויקט', esc(v.project)), field('מחסן', esc(v.warehouse), 'ltr-f'), field('דרישה בפריוריטי', esc(v.docno), 'ltr-f strong')];
       // עריכה ישירה: כל שינוי נשלח למנוע כפקודה מדויקת ("שורה 2 כמות 100") — אותו מסלול כמו תיקון מוקלד
       const ed = v.editable && !deskBusy ? v.editable : null;
       const qtyCell = (l) => (ed?.qty
@@ -326,8 +329,8 @@
         : esc(l.description));
       const delCell = (l) => (ed?.remove
         ? `<td><button type="button" class="btn small${confirmLine === l.n ? ' confirm' : ''}" data-del-line="${l.n}" aria-label="הסרת שורה ${l.n}: ${esc(l.description)}">${confirmLine === l.n ? 'להסיר?' : ui('x')}</button></td>` : '');
-      const lines = v.lines?.length ? `${ed ? '<p class="hint">אפשר לתקן כמות או תיאור ישירות בטבלה — Enter שומר, Esc מחזיר.</p>' : ''}<div class="scroll"><table class="t lines"><thead><tr><th>#</th><th>פריט</th><th>כמות</th>${d.key === 'receipt' ? '<th>מחיר</th>' : '<th>מק"ט</th>'}${ed?.remove ? '<th><span class="sr-only">הסרה</span></th>' : ''}</tr></thead><tbody>
-        ${v.lines.map((l) => `<tr${l.unclear || l.open ? ' class="unclear"' : ''}><td class="num">${l.n}</td><td class="wrap">${desCell(l)}${l.unclear ? ' <span class="pill p-warn">לא ברור</span>' : ''}${l.open ? ' <span class="pill p-warn">לבחור</span>' : ''}</td><td class="num qty">${qtyCell(l)}</td><td class="num">${d.key === 'receipt' ? num(l.price) : esc(l.part ?? '')}</td>${delCell(l)}</tr>`).join('')}
+      const lines = v.lines?.length ? `${ed ? '<p class="hint">אפשר לתקן כמות או תיאור ישירות בטבלה — Enter שומר, Esc מחזיר.</p>' : ''}<div class="scroll"><table class="t lines"><thead><tr><th>#</th><th>פריט</th><th>כמות</th>${d.key !== 'demand' ? '<th>מחיר</th>' : '<th>מק"ט</th>'}${ed?.remove ? '<th><span class="sr-only">הסרה</span></th>' : ''}</tr></thead><tbody>
+        ${v.lines.map((l) => `<tr${l.unclear || l.open ? ' class="unclear"' : ''}><td class="num">${l.n}</td><td class="wrap">${desCell(l)}${l.unclear ? ' <span class="pill p-warn">לא ברור</span>' : ''}${l.open ? ' <span class="pill p-warn">לבחור</span>' : ''}</td><td class="num qty">${qtyCell(l)}</td><td class="num">${d.key !== 'demand' ? num(l.price) : esc(l.part ?? '')}</td>${delCell(l)}</tr>`).join('')}
         </tbody></table></div>` : '';
       const totals = v.totals && v.totals.total !== null ? `<p class="totals num">לפני מע"מ ${num(v.totals.beforeVat)} · מע"מ ${num(v.totals.vat)} · <b>סה"כ ${num(v.totals.total)} ₪</b></p>` : '';
       const last = [...desk.messages].reverse().find((m) => m.from === 'bot');
@@ -400,7 +403,7 @@
       if (deskBusy) return;
       deskBusy = true; deskConflict = null; busyOn('read');
       const name = items.find((i) => i.id === id)?.filename ?? 'מסמך';
-      desk = { active: true, docId: id, openDocId: id, messages: [{ from: 'user', texts: [`${d.key === 'receipt' ? 'קבלת סחורה' : 'דרישת רכש'}: ${name}`] }], view: { stepLabel: 'קריאת המסמך', lines: [] } };
+      desk = { active: true, docId: id, openDocId: id, messages: [{ from: 'user', texts: [`${{ receipt: 'קבלת סחורה', invoice: 'חשבונית ספק' }[d.key] ?? 'דרישת רכש'}: ${name}`] }], view: { stepLabel: 'קריאת המסמך', lines: [] } };
       drawDesk(); drawQueue();
       try {
         desk = await api('POST', '/api/priority/desk/start', { id, force });

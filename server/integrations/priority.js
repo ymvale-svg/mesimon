@@ -1169,6 +1169,73 @@ async function ordersByProject(company, projdocno, { item = '', top = 25 } = {})
 }
 
 // ---------------------------------------------------------------------------
+// 🧾 חשבונית ספק (חשבונית מרכזת, ‎PINVOICES‎) — משיכת GR סופי (‎supplier-invoice.js‎; נבדק ב-raba וב-test11, 24.11.26)
+//   כך קולטת הנהלת החשבונות: ‎SUPNAME‎, ‎BOOKNUM‎ = מספר החשבונית של הספק, ‎IVDATE‎, ‎DETAILS‎ ("ח-ן <ספק>"),
+//   ‎PIVDOC_SUBFORM‎ ← ‎DOCNO‎ של ה-GR (רק GR סופי), ונספח — צילום החשבונית. המפתח: ‎IVNUM‎ + ‎DEBIT='D'‎ + ‎IVTYPE='P'‎.
+//   חשבונית זמנית (‎T…‎) **אי אפשר למחוק או לבטל ב-REST** ("מחיקת חשבונית זמנית" — בפריוריטי). לכן כותבים רק אחרי "כן".
+//   ‎IVNUM‎ של ה-GR לא מתעדכן כשהוא נמשך לחשבונית — מה שכבר נמשך נבדק בחשבוניות של הספק עצמן.
+// ---------------------------------------------------------------------------
+
+const ivKey = (ivnum) => `PINVOICES(IVNUM='${q(ivnum)}',DEBIT='D',IVTYPE='P')`;
+const IV_SEL = 'IVNUM,IVDATE,BOOKNUM,SUPNAME,SUPDES,STATDES,FINAL,DETAILS,QPRICE,DISCOUNT,DISPRICE,VAT,TOTPRICE,PAYDATE';
+
+/** חשבונית ספק קיימת לאותו ספק ולאותו מספר חשבונית (כפילות). ‎null‎ — אין */
+async function findInvoiceByBooknum(company, supname, booknum) {
+  if (!booknum) return null;
+  const list = rows(await call(company, 'GET',
+    `PINVOICES?$filter=${enc(`SUPNAME eq '${q(supname)}' and BOOKNUM eq '${q(String(booknum).slice(0, 48))}'`)}&$select=IVNUM,STATDES,IVDATE,TOTPRICE&$top=5`));
+  return list.find((x) => x.STATDES !== 'מבוטלת') ?? null;
+}
+
+/**
+ * ה-GR הסופיים של הספק שעוד לא נמשכו לחשבונית (מהחדש לישן). ‎{ DOCNO, BOOKNUM, CURDATE, ORDNAME, PROJDOCNO, PROJDES, DISPRICE, VAT, TOTPRICE }‎
+ * מה שכבר נמשך — מ-‎PIVDOC_SUBFORM‎ של החשבוניות של הספק (גם זמניות).
+ */
+async function receiptsToInvoice(company, supname, { top = 60 } = {}) {
+  const grs = rows(await call(company, 'GET', `DOCUMENTS_P?$filter=${enc(`SUPNAME eq '${q(supname)}' and STATDES eq 'סופית'`)}`
+    + `&$select=DOCNO,BOOKNUM,CURDATE,ORDNAME,PROJDOCNO,PROJDES,DISPRICE,VAT,TOTPRICE&$orderby=CURDATE desc&$top=${top}`));
+  if (!grs.length) return [];
+  const ivs = rows(await call(company, 'GET', `PINVOICES?$filter=${enc(`SUPNAME eq '${q(supname)}'`)}&$select=IVNUM,STATDES&$expand=PIVDOC_SUBFORM($select=DOCNO)&$orderby=IVDATE desc&$top=200`));
+  const used = new Set(ivs.filter((x) => x.STATDES !== 'מבוטלת').flatMap((x) => (x.PIVDOC_SUBFORM ?? []).map((d) => d.DOCNO)));
+  return grs.filter((g) => !used.has(g.DOCNO));
+}
+
+/** חשבונית ספק זמנית. מחזיר את המספר (‎T…‎) */
+async function createSupplierInvoice(company, { supname, booknum, date, details = '' }) {
+  const body = { SUPNAME: supname, BOOKNUM: String(booknum ?? '').slice(0, 48), DETAILS: String(details ?? '').slice(0, 50) };
+  if (date) body.IVDATE = `${String(date).slice(0, 10)}T00:00:00Z`;
+  const r = await call(company, 'POST', 'PINVOICES', body);
+  if (!r?.IVNUM) throw new PriorityError('החשבונית נוצרה בלי מספר');
+  return r.IVNUM;
+}
+
+/** משיכת GR (סופי) לחשבונית — "תעודות קבלה לחשבונית" */
+const addInvoiceReceipt = (company, ivnum, docno) => call(company, 'POST', `${ivKey(ivnum)}/PIVDOC_SUBFORM`, { DOCNO: docno });
+
+/** נספח לחשבונית — צילום החשבונית */
+async function attachInvoice(company, ivnum, { buf, mime, description }) {
+  const uri = `data:${mime || 'image/jpeg'};base64,${buf.toString('base64')}`;
+  const r = await call(company, 'POST', `${ivKey(ivnum)}/EXTFILES_SUBFORM`, { EXTFILEDES: String(description ?? '').slice(0, 80), EXTFILENAME: uri });
+  return r?.EXTFILENUM ?? null;
+}
+
+/** דו-שיח פנימי של החשבונית — מי קלט ומה הושווה */
+async function setInvoiceDialog(company, ivnum, lines) {
+  const esc = (s) => String(s).replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+  const TEXT = lines.filter(Boolean).map((l) => `<p>${esc(l)}</p>`).join('');
+  const k = `${ivKey(ivnum)}/INTERNALDIALOGTEXT_SUBFORM`;
+  try { await call(company, 'POST', k, { TEXT }); } catch { await call(company, 'PATCH', k, { TEXT }); }
+}
+
+/** החשבונית כפי שנשמרה — כותרת וסכומים, ה-GR שנמשכו */
+async function readSupplierInvoice(company, ivnum) {
+  const k = ivKey(ivnum);
+  const h = strip(await call(company, 'GET', `${k}?$select=${IV_SEL}`));
+  const receipts = rows(await call(company, 'GET', `${k}/PIVDOC_SUBFORM?$select=DOCNO,BOOKNUM,CURDATE`));
+  return { ...h, receipts };
+}
+
+// ---------------------------------------------------------------------------
 // 🏷️ מחירוני ספקים ו"מוצרים לספק" (‎po-pricelist.js‎; נבדק ב-test11 וב-a160226, 22.11.26)
 //   ‎SUPPRICELIST‎ — מחירון (מפתח: ‎SUPPLNAME‎ + ‎SUPPLDATE‎), ‎SPARTPRICE_SUBFORM‎ — הפריטים (מפתח: ‎PART‎ + ‎QUANT‎),
 //   ‎MEDR_PROJPRICELIST_SUBFORM‎ — "פרויקטים למחירון" (ריק = מחירון כללי). ‎SUPPLIERS/SUPPART_SUBFORM‎ — מוצרים לספק
@@ -1222,6 +1289,7 @@ module.exports = {
   finalOrders, orderForNotice, demandInitiator, demandForNotice, projectManager, priorityUser,
   readDialog, createReceipt, addOrderLine, addFreeLine, setLineQty, setLineDes, setHeader, attach, deleteAttachment, setDialog, finalizeReceipt, cancelReceipt, receiptStatus, deleteLines,
   PD_TYPES, demandCodes, recentDemandProjects, createDemand, addDemandLine, setDemand, submitDemand, isNoApproversError, readDemand, waitingDemands, nextSigner, cancelDemand, setDemandDialog, appendDemandDialog, setDemandLine, deleteDemandLine, reopenDemand, REOPEN_STATUS, purchaseOrderOwners, attachDemand, priorityUsers, budgetPairs, isCodingError,
+  findInvoiceByBooknum, receiptsToInvoice, createSupplierInvoice, addInvoiceReceipt, attachInvoice, setInvoiceDialog, readSupplierInvoice,
   supplierPriceLists, addPriceListItem, deletePriceListItem, supplierParts, addSupplierPart, deleteSupplierPart,
   _call: call
 };

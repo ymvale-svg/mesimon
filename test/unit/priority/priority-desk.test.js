@@ -102,7 +102,8 @@ test('דרישת רכש — אותו ערוץ, המנוע של דרישת הרכ
 test('בלי הרשאה, או פעולה שעוד לא עובדת מהמסך — נדחה', async () => {
   const a = worker(['demand']);
   assert.throws(() => Desk.state(a, 'receipt'), (e) => e.status === 403);
-  assert.throws(() => Desk.state(a, 'invoice'), (e) => e.status === 400);
+  assert.throws(() => Desk.state(a, 'invoice'), (e) => e.status === 403, 'חשבונית ספק — רק למי שמסומן במטריצה');
+  assert.throws(() => Desk.state(a, 'income'), (e) => e.status === 400);
 });
 
 test('התצוגה של קבלת הסחורה — מהמצב השמור, בלי לשנות אותו', () => {

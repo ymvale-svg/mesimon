@@ -128,7 +128,7 @@ test('עבודה מתוך המסך: מצב ריק, בלי הרשאה — 403, פ
   assert.equal(s.status, 200, s.text);
   assert.equal(s.json.active, false);
   assert.equal((await as(emp)('GET', '/api/priority/desk/demand')).status, 403);
-  assert.equal((await as(emp)('GET', '/api/priority/desk/invoice')).status, 400);
+  assert.equal((await as(emp)('GET', '/api/priority/desk/income')).status, 400);
   assert.equal((await as(emp)('POST', '/api/priority/desk/start', { id: 999999 })).status, 404);
   assert.equal((await as(emp)('GET', '/api/priority/desk/file/1-x.pdf')).status, 404);
 });

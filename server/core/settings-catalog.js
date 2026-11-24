@@ -212,6 +212,8 @@ const PERSONAL = {
   mailClient: { tab: 'view', label: 'פתיחת מייל מהאלפון — Gmail / Outlook' },
   mailDose: { label: '📉 מינון המייל — מתי השתמש לאחרונה, מדרגה (‎mail-dose.js‎)', ui: false },
   priorityPrefs: { label: 'פריוריטי — הבחירה האחרונה (סביבה, פרויקט, מחסן)', ui: false },
+  supplierInvoice: { label: '🧾 חשבונית ספק — הקליטה הפתוחה (‎supplier-invoice.js‎)', ui: false },
+  supplierInvoiceDone: { label: '🧾 חשבונית ספק — האחרונה שנקלטה (ל-👎 מיד אחריה)', ui: false },
   boardFilters: { ui: false }, boardView: { ui: false }, projectScope: { ui: false }, sidebar: { ui: false }, mobileFilter: { ui: false },
   projectOrder: { ui: false }, trackerProject: { ui: false }, trackerScope: { ui: false }, trackerColumns: { ui: false },
   trackerCollapsed: { ui: false }, homeLayout: { ui: false }, homeProject: { ui: false }, calendarUsers: { ui: false }, calendarDock: { ui: false },

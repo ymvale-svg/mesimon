@@ -1,6 +1,6 @@
 'use strict';
 /**
- * פריוריטי — קבלת סחורה, דרישת רכש, אישורים, הזמנות רכש, בקשות להצעת מחיר.
+ * פריוריטי — קבלת סחורה, חשבונית ספק, דרישת רכש, אישורים, הזמנות רכש, בקשות להצעת מחיר.
  *
  * קובץ הכניסה של התחום — הדרך היחידה לגשת אליו מתחום אחר: ‎const { X } = require('../priority')‎.
  * כל מודול נטען רק כשמבקשים אותו (getter), כך שסדר הטעינה זהה לייבוא ישיר.
@@ -9,6 +9,7 @@
 module.exports = {
   get GoodsReceipt() { return require('./goods-receipt'); },
   get GrPdf() { return require('./gr-pdf'); },
+  get SupplierInvoice() { return require('./supplier-invoice'); },
   get PurchaseDemand() { return require('./purchase-demand'); },
   get PdReturn() { return require('./pd-return'); },
   get PdParts() { return require('./pd-parts'); },

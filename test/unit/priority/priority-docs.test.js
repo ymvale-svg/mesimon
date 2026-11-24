@@ -123,7 +123,7 @@ test('הוצאה מהתור — מייל חוזר לטור', () => {
 });
 
 test('לבוט: קבלת סחורה עם הקובץ, כאילו העובד שלח; פעולה שלא בבוט — נדחית', async (t) => {
-  const u = worker(['receipt', 'invoice']);
+  const u = worker(['receipt', 'invoice', 'income']);
   const sent = [];
   t.mock.method(WaBot, 'handOver', (userId, m) => { sent.push({ userId, ...m }); return true; });
   const d = Docs.upload(u, { doc: 'receipt', filename: 't.pdf', mime: 'application/pdf', data: b64(PDF) });
@@ -133,7 +133,10 @@ test('לבוט: קבלת סחורה עם הקובץ, כאילו העובד של�
   assert.equal(sent[0].text, 'קבלת סחורה');
   assert.deepEqual(sent[0].file.buf, PDF);
   const inv = Docs.upload(u, { doc: 'invoice', filename: 'i.pdf', mime: 'application/pdf', data: b64(PDF) });
-  await assert.rejects(Docs.toBot(u, inv.id), /עוד לא עובדת בבוט/);
+  await Docs.toBot(u, inv.id);
+  assert.equal(sent.at(-1).text, 'חשבונית ספק', 'חשבונית ספק — לבוט עם הטריגר שלה');
+  const inc = Docs.upload(u, { doc: 'income', filename: 'r.pdf', mime: 'application/pdf', data: b64(PDF) });
+  await assert.rejects(Docs.toBot(u, inc.id), /עוד לא עובדת בבוט/);
 });
 
 test('לבוט בלי טלפון בפרופיל — הודעה ברורה, המסמך נשאר בתור', async (t) => {

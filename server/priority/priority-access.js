@@ -23,7 +23,7 @@ const DOCS = Object.freeze([
   { key: 'order', label: 'הזמנת רכש', ready: false },
   { key: 'receipt', label: 'קבלת סחורה', ready: true, waAction: 'goods_receipt' },
   { key: 'partial', label: 'חשבון חלקי', ready: false },
-  { key: 'invoice', label: 'חשבונית ספק', ready: false },
+  { key: 'invoice', label: 'חשבונית ספק', ready: true },   // בלי ‎waAction‎: רק מי שסומן במטריצה (הנה"ח) — לא "כולם" כברירת מחדל
   { key: 'income', label: 'קבלה מהכנסות', ready: false }
 ]);
 const DOC_KEYS = DOCS.map((d) => d.key);
