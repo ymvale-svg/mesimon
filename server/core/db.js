@@ -943,6 +943,35 @@ CREATE TABLE IF NOT EXISTS po_pricelist_offers (
   UNIQUE(company, ordname, version)
 );
 CREATE INDEX IF NOT EXISTS idx_po_pricelist_status ON po_pricelist_offers(status);
+/*
+ * ✍️ "ממתין לאישורך" (‎priority/priority-waiting.js‎): כל מסמך בפריוריטי שממתין לאישור, ומי החותם הבא.
+ * נבנה בסבב כל 10 דקות מכל המסכים שיש בהם סבב מאשרים; מסמך שלא חזר בסבב — נמחק. המסך קורא מכאן.
+ * ‎signer‎ / ‎alt‎ — שם המשתמש בפריוריטי של החותם הבא ושל המחליף שלו; ‎*_user_id‎ — המשתמש במשימון (‎null‎ — לא מקושר).
+ * ‎since‎ — מאז שהגיע תורו (האישור הקודם), או תאריך המסמך.
+ */
+CREATE TABLE IF NOT EXISTS priority_waiting (
+  id             INTEGER PRIMARY KEY AUTOINCREMENT,
+  org_id         INTEGER NOT NULL DEFAULT 1,
+  company        TEXT    NOT NULL,
+  screen         TEXT    NOT NULL,
+  docno          TEXT    NOT NULL,
+  status         TEXT    NOT NULL DEFAULT '',
+  signer         TEXT,
+  signer_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  alt            TEXT,
+  alt_user_id    INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  subtype        TEXT    NOT NULL DEFAULT '',
+  party          TEXT    NOT NULL DEFAULT '',
+  project        TEXT    NOT NULL DEFAULT '',
+  amount         REAL,
+  owner          TEXT    NOT NULL DEFAULT '',
+  since          TEXT,
+  first_seen     TEXT    NOT NULL,
+  seen_at        TEXT    NOT NULL,
+  UNIQUE(org_id, company, screen, docno)
+);
+CREATE INDEX IF NOT EXISTS idx_priority_waiting_signer ON priority_waiting(signer_user_id);
+CREATE INDEX IF NOT EXISTS idx_priority_waiting_alt ON priority_waiting(alt_user_id);
 /* ספק בפנייה — ‎status‎: pending / no_email / whatsapp (נייד בלי מייל) / wa_link (קיבל העובד קישור) / sent / replied / declined / failed / skipped. ‎offer‎ — מה חולץ מהתשובה */
 CREATE TABLE IF NOT EXISTS rfq_vendors (
   id             INTEGER PRIMARY KEY AUTOINCREMENT,

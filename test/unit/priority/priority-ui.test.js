@@ -67,3 +67,14 @@ test('"המערכת קוראת": בועה עם נקודות, השלב, רשימ�
   assert.match(css, /\.preview\.scanning::after \{[^}]*animation: scan/);
   assert.match(css, /prefers-reduced-motion: reduce\) \{\s*\.typing i, \.busy-bar span::after, \.preview\.scanning::after \{ animation: none; \}/);
 });
+
+test('✍️ ממתין לאישורך: אין ממתינים — האזור לא מצויר בכלל; יש — מעל האריחים, עם קישור בלשונית חדשה', () => {
+  const w = js.slice(js.indexOf('const Waiting = (() => {'), js.indexOf('return { mount };'));
+  assert.match(w, /if \(!items\.length\) \{ box\.innerHTML = ''; return; \}/);
+  assert.match(css, /#waiting:empty \{ display: none; \}/);
+  const home = js.slice(js.indexOf('async function home()'), js.indexOf('const Waiting = (() => {'));
+  assert.ok(home.indexOf('<div id="waiting"></div>') < home.indexOf('<div class="tiles">'), 'האזור מעל האריחים');
+  assert.match(w, /target="_blank" rel="noopener" data-open=/);
+  assert.match(w, /visibilitychange/);
+  assert.match(css, /@media \(max-width: 760px\) \{\n  \.appr-wide \{ display: none; \}/, 'בטלפון — כרטיסים');
+});

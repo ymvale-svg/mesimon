@@ -180,3 +180,18 @@ test('🏷️ פריטים למחירון: עובד שאינו ברשימה — 
   assert.equal((await as(admin)('PUT', '/api/priority/settings', { defaults: { pricelistHandlers: [987654] } })).status, 400);
   await as(admin)('PUT', '/api/priority/settings', { defaults: { pricelistHandlers: [] } });
 });
+
+test('✍️ ממתין לאישורך: עובד מקבל רק את שלו (ריק כשאין), ומסך סוגי האישורים — רק למנהלים', async () => {
+  const w = await as(emp)('GET', '/api/priority/waiting');
+  assert.equal(w.status, 200, w.text);
+  assert.deepEqual(w.json.items, []);
+  for (const [m, p] of [['GET', '/api/priority/waiting/admin'], ['PUT', '/api/priority/waiting/types/PORDERS'], ['POST', '/api/priority/waiting/map']]) {
+    assert.equal((await as(emp)(m, p, m === 'GET' ? undefined : {})).status, 403, `${m} ${p}`);
+  }
+  const a = await as(admin)('GET', '/api/priority/waiting/admin');
+  assert.equal(a.status, 200, a.text);
+  assert.ok(Array.isArray(a.json.types) && Array.isArray(a.json.unmapped));
+  assert.equal((await as(admin)('PUT', '/api/priority/waiting/types/NOPE', { on: false })).status, 404);
+  assert.equal((await as(admin)('POST', '/api/priority/waiting/map', { login: '', userId: 0 })).status, 400);
+  assert.equal((await srv.api('GET', '/api/priority/waiting')).status, 401);
+});

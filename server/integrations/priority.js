@@ -152,7 +152,7 @@ function errorText(data, raw) {
   return data?.FORM?.InterfaceErrors?.text ?? data?.error?.message ?? String(raw ?? '').slice(0, 300);
 }
 
-async function call(company, method, path, body = null) {
+async function call(company, method, path, body = null, { text = false } = {}) {
   if (!isEnabled()) throw new PriorityError('החיבור לפריוריטי אינו מוגדר (מסך ההגדרות של משימון פריוריטי)');
   const c = credentials();
   const auth = Buffer.from(`${c.user}:${c.password}`).toString('base64');
@@ -169,6 +169,7 @@ async function call(company, method, path, body = null) {
     throw new PriorityError(`אין חיבור לפריוריטי: ${err.message}`);
   }
   const raw = await res.text();
+  if (text && res.ok) return raw;
   let data = null;
   try { data = raw ? JSON.parse(raw) : null; } catch { /* טקסט */ }
   if (!res.ok) {
@@ -1132,6 +1133,78 @@ async function addSupplierPart(company, supname, part) {
 
 const deleteSupplierPart = (company, supname, kline) => call(company, 'DELETE', `SUPPLIERS('${q(supname)}')/SUPPART_SUBFORM(KLINE=${Number(kline)})`);
 
+// ---------------------------------------------------------------------------
+// ✍️ "ממתין לאישורך" — כל מסך שיש בו סבב מאשרים (server/priority/priority-waiting.js)
+// ---------------------------------------------------------------------------
+
+/** שדות לתצוגה — נבחרים רק מה שקיים במסך */
+const WAIT_FIELDS = ['STATDES', 'NEXTSIGNUSERLOGIN', 'USERLOGIN', 'CDES', 'SUPDES', 'CUSTDES', 'PROJDES', 'DISPRICE', 'QPRICE', 'TOTPRICE',
+  'CURDATE', 'IVDATE', 'OWNERLOGIN', 'CODEDES', 'TYPEDES'];
+const APPROVER_FIELDS = ['USERLOGIN', 'ALTUSERLOGIN', 'UFLAG', 'UDATE'];
+
+/**
+ * מסכים עם סבב מאשרים, מתוך רשימת המסכים של פריוריטי (‎$metadata‎ — XML). טהור, לבדיקות.
+ * מסך נכנס כשיש בו סטטוס (‎STATDES‎), מפתח, ובנוסף רשימת מאשרים (תת-מסך עם ‎USERLOGIN‎ ו-‎UFLAG‎)
+ * או שדה "החותם הבא" (‎NEXTSIGNUSERLOGIN‎). ‎[{ screen, key, approvers, approverFields, fields }]‎
+ */
+function parseApprovalScreens(xml) {
+  const src = String(xml ?? '');
+  const sets = new Set([...src.matchAll(/<EntitySet Name="([^"]+)"/g)].map((m) => m[1]));
+  const types = new Map([...src.matchAll(/<EntityType Name="([^"]+)"[^>]*>([\s\S]*?)<\/EntityType>/g)].map((m) => [m[1], m[2]]));
+  const props = (body) => [...String(body ?? '').matchAll(/<Property Name="([^"]+)"/g)].map((m) => m[1]);
+  const out = [];
+  for (const name of sets) {
+    const body = types.get(name);
+    if (!body) continue;
+    const own = props(body);
+    const key = [...body.matchAll(/<PropertyRef Name="([^"]+)"/g)].map((m) => m[1])[0];
+    if (!own.includes('STATDES') || !key) continue;
+    let approvers = null, approverFields = [];
+    for (const nav of body.matchAll(/<NavigationProperty Name="([^"]+)" Type="([^"]+)"/g)) {
+      const t = nav[2].replace(/^Collection\(|\)$/g, '').split('.').pop();
+      const sub = props(types.get(t));
+      if (sub.includes('USERLOGIN') && sub.includes('UFLAG')) { approvers = nav[1]; approverFields = APPROVER_FIELDS.filter((f) => sub.includes(f)); break; }
+    }
+    if (!approvers && !own.includes('NEXTSIGNUSERLOGIN')) continue;
+    out.push({ screen: name, key, approvers, approverFields, fields: WAIT_FIELDS.filter((f) => own.includes(f) && f !== key) });
+  }
+  return out.sort((a, b) => a.screen.localeCompare(b.screen));
+}
+
+/** כל המסכים עם סבב מאשרים בסביבה (המסכים משותפים לכל החברות — נקרא מחברה אחת) */
+async function approvalScreens(company) {
+  return parseApprovalScreens(await call(company, 'GET', '$metadata', null, { text: true }));
+}
+
+/** "המסך סגור ל-API" — מנהל פריוריטי צריך לפתוח אותו */
+const isBlockedScreen = (err) => /לא ניתן להפעיל API/.test(String(err?.message ?? ''));
+
+function waitQuery(s, filter, top) {
+  const sel = [s.key, ...s.fields].join(',');
+  const exp = s.approvers ? `&$expand=${s.approvers}($select=${s.approverFields.join(',')})` : '';
+  return `${s.screen}?$filter=${enc(filter)}&$select=${sel}${exp}&$top=${top}`;
+}
+
+/** המסמכים שממתינים לאישור במסך אחד (כל סטטוס שיש בו "לאישור"). ‎s‎ — מ-‎approvalScreens‎ */
+async function waitingDocs(company, s) {
+  return rows(await call(company, 'GET', waitQuery(s, "contains(STATDES,'לאישור')", 500))).map(strip);
+}
+
+/** מסמך אחד, בכל סטטוס — לבדיקה אחרי שהעובד חזר מפריוריטי. ‎null‎ — לא נמצא */
+async function waitingDoc(company, s, docno) {
+  return rows(await call(company, 'GET', waitQuery(s, `${s.key} eq '${q(docno)}'`, 1))).map(strip)[0] ?? null;
+}
+
+/**
+ * קישור שפותח את המסמך המסוים, בחברה ובמסך שלו (נבדק בלחיצה 24.11.26). הדף ‎openmail.htm‎ של פריוריטי
+ * מחליט לבד: התוכנה המותקנת, פריוריטי בדפדפן, או האפליקציה בטלפון.
+ */
+function docLink(company, screen, docno) {
+  const c = credentials();
+  const v = /^[\w.\-/]+$/.test(String(docno)) ? String(docno) : enc(String(docno));
+  return `https://${c.host || DEFAULT_HOST}/webui/openmail.htm?priority:priform@${screen}:${v}:${company}:${c.ini || DEFAULT_INI}:1`;
+}
+
 module.exports = {
   suppliersByWords, ordersByProject,
   COMPANIES, DEFAULT_HOST, DEFAULT_INI, configure, syncCompanies, ping, isEnabled, allowed, companyOf, isTest, resolveCompany, companiesByName, PriorityError,
@@ -1140,5 +1213,6 @@ module.exports = {
   readDialog, createReceipt, addOrderLine, addFreeLine, setLineQty, setLineDes, setHeader, attach, deleteAttachment, setDialog, finalizeReceipt, cancelReceipt, receiptStatus, deleteLines,
   PD_TYPES, demandCodes, recentDemandProjects, createDemand, addDemandLine, setDemand, submitDemand, isNoApproversError, readDemand, waitingDemands, nextSigner, cancelDemand, setDemandDialog, appendDemandDialog, setDemandLine, deleteDemandLine, reopenDemand, REOPEN_STATUS, purchaseOrderOwners, attachDemand, priorityUsers, budgetPairs, isCodingError,
   supplierPriceLists, addPriceListItem, deletePriceListItem, supplierParts, addSupplierPart, deleteSupplierPart,
+  parseApprovalScreens, approvalScreens, isBlockedScreen, waitingDocs, waitingDoc, docLink,
   _call: call
 };

@@ -337,3 +337,40 @@ ul.plain { list-style: none; padding: 0; margin: 0; display: flex; flex-directio
   .pl-recent tr { display: flex; flex-wrap: wrap; gap: 4px 10px; padding: 8px 0; border-top: 1px solid var(--border); }
   .pl-recent td { border: 0; padding: 0; }
 }
+
+/* ✍️ ממתין לאישורך — בראש הבית (האפיון: "אפיון — מסך אישורים במשימון פריוריטי.md"). אין ממתינים — האזור לא קיים */
+.stack { display: flex; flex-direction: column; gap: 16px; }
+#waiting:empty { display: none; }
+.appr { background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-lg); overflow: hidden; min-width: 0; }
+.appr-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 14px 18px; border-bottom: 1px solid var(--border); }
+.appr-head h2 { font-size: 18px; display: flex; align-items: center; gap: 8px; }
+.appr .badge { background: var(--brand); color: var(--on-brand); border-radius: 999px; min-width: 26px; height: 24px; padding: 0 8px; display: inline-grid; place-items: center; font-size: 13px; font-weight: 700; }
+.appr .fresh { margin-inline-start: auto; color: var(--mute); font-size: 13px; display: flex; align-items: center; gap: 8px; }
+.appr .fresh .btn { display: inline-flex; align-items: center; gap: 5px; }
+.appr .chips { display: flex; gap: 6px; flex-wrap: wrap; padding: 10px 18px; border-bottom: 1px solid var(--border); background: var(--surface-2); }
+.appr .chip { border: 1px solid var(--border); background: var(--surface); border-radius: 999px; padding: 3px 12px; font-size: 13.5px; font-weight: 600; color: var(--soft); }
+.appr .chip b { color: var(--text); }
+.appr .chip[aria-pressed="true"] { border-color: var(--brand); background: var(--brand-light); color: var(--brand-ink); }
+.appr-t th:first-child, .appr-t td:first-child { padding-inline-start: 18px; }
+.appr-t th:last-child, .appr-t td:last-child { padding-inline-end: 18px; text-align: end; }
+.appr-t td .sub { display: block; color: var(--mute); font-size: 12.5px; }
+.appr-t td.wrap { white-space: normal; min-width: 140px; }
+.appr .wt { display: inline-flex; align-items: center; gap: 8px; font-weight: 600; }
+.appr .wt > span:last-child { display: flex; flex-direction: column; }
+.appr .wt-ic { width: 28px; height: 28px; border-radius: 8px; background: var(--brand-light); color: var(--brand-ink); display: grid; place-items: center; flex: none; }
+.appr .wt-ic svg { width: 16px; height: 16px; }
+.appr .alt { color: var(--warn); font-size: 12px; font-weight: 600; }
+.appr .wo { display: inline-flex; align-items: center; gap: 6px; text-decoration: none; white-space: nowrap; }
+.appr-done, .appr-done td { background: var(--ok-bg); color: var(--ok); font-weight: 700; }
+.appr-cards { display: none; }
+.appr-card { padding: 12px 14px; border-top: 1px solid var(--border); display: grid; gap: 6px; }
+.appr-card:first-child { border-top: 0; }
+.appr-card .r1, .appr-card .r2 { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.appr-card .r2 { color: var(--soft); font-size: 14px; }
+.appr-card .wo { justify-content: center; padding: 9px; margin-top: 4px; }
+@media (max-width: 760px) {
+  .appr-wide { display: none; }
+  .appr-cards { display: block; }
+  .appr .chips { flex-wrap: nowrap; overflow-x: auto; padding-inline: 14px; }
+  .appr .chip { white-space: nowrap; }
+}

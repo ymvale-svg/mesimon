@@ -36,14 +36,20 @@
     partial: '<path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/>',
     invoice: '<path d="M6 2h9l5 5v14a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1z"/><path d="M14 2v6h6M9 13h6M9 17h6"/>',
     income: '<rect x="2" y="6" width="20" height="12" rx="2"/><circle cx="12" cy="12" r="2.5"/><path d="M6 10v4M18 10v4"/>',
-    pricelist: '<path d="M20.6 13.4 13.4 20.6a2 2 0 0 1-2.8 0L3 13V3h10l7.6 7.6a2 2 0 0 1 0 2.8z"/><circle cx="7.5" cy="7.5" r="1.5"/>'
+    pricelist: '<path d="M20.6 13.4 13.4 20.6a2 2 0 0 1-2.8 0L3 13V3h10l7.6 7.6a2 2 0 0 1 0 2.8z"/><circle cx="7.5" cy="7.5" r="1.5"/>',
+    contract: '<path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6M8 17c1.5-2 2.5-2 3.5 0s2 2 3.5 0"/>',
+    deal: '<path d="M12 2v20M17 6H9.5a3 3 0 0 0 0 6h5a3 3 0 0 1 0 6H6"/>',
+    doc: '<path d="M6 2h9l5 5v14a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1z"/><path d="M14 2v6h6M9 15l2 2 4-4"/>'
   };
   const UI = {
     bot: '<rect x="4" y="8" width="16" height="12" rx="3"/><path d="M12 4v4M9 13h.01M15 13h.01M9 17h6"/>',
     mail: '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/>',
     upload: '<path d="M12 16V4M7 9l5-5 5 5"/><path d="M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"/>',
     clip: '<path d="m21 11-8.5 8.5a5 5 0 0 1-7-7L14 4a3.5 3.5 0 0 1 5 5l-8.5 8.5a2 2 0 0 1-3-3L15 7"/>',
-    x: '<path d="M18 6 6 18M6 6l12 12"/>'
+    x: '<path d="M18 6 6 18M6 6l12 12"/>',
+    ext: '<path d="M14 4h6v6M20 4l-9 9"/><path d="M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/>',
+    refresh: '<path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/>',
+    check: '<path d="m5 12 5 5L20 7"/>'
   };
   const ui = (k) => `<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${UI[k]}</svg>`;
   const icon = (k) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[k] ?? ''}</svg>`;
@@ -62,7 +68,7 @@
   let me = null;
 
   // ---------------------------------------------------------------- ניווט
-  const ROUTES = { '': home, chain, settings, access, pricelist };
+  const ROUTES = { '': home, chain, settings, access, pricelist, approvals };
   const routeOf = () => location.pathname.replace(/^\/priority\/?/, '').split('/')[0];
   function go(path) { history.pushState(null, '', path); render(); }
   document.addEventListener('click', (e) => {
@@ -76,7 +82,7 @@
     const r = routeOf();
     const tabs = [['/priority', 'בית', ''], ['/priority/chain', 'השרשרת', 'chain']];
     if (me.pricelist !== null && me.pricelist !== undefined) tabs.push(['/priority/pricelist', 'מחירונים', 'pricelist']);
-    if (me.admin) tabs.push(['/priority/settings', 'הגדרות', 'settings'], ['/priority/access', 'הרשאות', 'access']);
+    if (me.admin) tabs.push(['/priority/settings', 'הגדרות', 'settings'], ['/priority/access', 'הרשאות', 'access'], ['/priority/approvals', 'סוגי אישורים', 'approvals']);
     $('#tabs').innerHTML = tabs.map(([href, label, key]) => `<a href="${href}" data-nav ${r === key ? 'aria-current="page"' : ''}>${label}</a>`).join('');
     $('#who').innerHTML = `${me.connected ? '' : '<span class="pill p-warn">החיבור לפריוריטי לא הוגדר</span>'} ${esc(me.name)} · <a href="/" class="back-link">משימון</a>`;
   }
@@ -92,7 +98,7 @@
     const r = routeOf();
     const docRoute = me.docs.find((d) => d.key === r);
     const view = docRoute ? () => workspace(docRoute) : ROUTES[r] ?? home;
-    if ((view === settings || view === access) && !me.admin) { main.innerHTML = '<div class="note">רק מנהלי מערכת נכנסים למסך הזה.</div>'; return; }
+    if ((view === settings || view === access || view === approvals) && !me.admin) { main.innerHTML = '<div class="note">רק מנהלי מערכת נכנסים למסך הזה.</div>'; return; }
     main.classList.remove('wide');
     main.innerHTML = '<p class="muted pad">טוען…</p>';
     try { await view(); } catch (e) { main.innerHTML = `<div class="note">${esc(e.message)}</div>`; }
@@ -101,10 +107,12 @@
   // ---------------------------------------------------------------- בית
   async function home() {
     const cos = me.allCompanies ? 'כל החברות' : me.companies.map((c) => c.name).join(' · ') || 'אף חברה';
-    const [q, inbox] = await Promise.all([api('GET', '/api/priority/docs'), api('GET', '/api/priority/inbox')]);
+    const [q, inbox, waiting] = await Promise.all([api('GET', '/api/priority/docs'), api('GET', '/api/priority/inbox'),
+      api('GET', '/api/priority/waiting').catch(() => ({ items: [], at: null }))]);
     const fromMail = (k) => inbox.items.filter((m) => m.guess === k || (k === 'receipt' && m.guess === 'invoice')).length;
     main.innerHTML = `
       <div class="greet"><h1>שלום, ${esc(me.name)}</h1><p>החברות שלך: ${esc(cos)}${inbox.items.length ? ` · <b>${inbox.items.length}</b> מסמכים חדשים במייל` : ''}</p></div>
+      <div id="waiting"></div>
       <div class="tiles">${me.docs.map((d) => {
         const status = !d.allowed ? '<span class="pill p-mute">אין לך הרשאה</span>'
           : d.ready ? '<span class="pill p-ok">עובד דרך הבוט</span>'
@@ -118,7 +126,86 @@
           <span class="ic">${icon('pricelist')}</span><h2>פריטים למחירון</h2><span class="sub">הזמנה סופית ← פריטים שאינם במחירון הספק ← למחירון</span>
           <span class="foot"><span class="count num">${me.pricelist}<small>מחכים</small></span><span class="pill p-ok">גם בבוט</span></span></a>` : ''}</div>
       <p class="note">לחצו על פעולה: בצד שמאל המיילים שהגיעו אליכם עם חשבונית או תעודת משלוח, ואפשר לגרור לשם קבצים. דרישת רכש וקבלת סחורה — המסמך נשלח לבוט, והשיחה ממשיכה בוואטסאפ.</p>`;
+    Waiting.mount($('#waiting'), waiting);
   }
+
+  // ---------------------------------------------------------------- ✍️ ממתין לאישורך (בראש הבית)
+  // האפיון: "אפיון — מסך אישורים במשימון פריוריטי.md". אין שום דבר שממתין — האזור לא קיים בכלל.
+  const Waiting = (() => {
+    let box = null, data = { items: [], at: null }, filter = 'all', opened = null;
+    const money = (n) => (n === null || n === undefined ? '' : `₪ ${Math.round(n).toLocaleString('he-IL')}`);
+    const ago = (iso) => {
+      if (!iso) return '';
+      const m = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 60000));
+      return m < 1 ? 'עודכן עכשיו' : m < 60 ? `עודכן לפני ${m} דק׳` : `עודכן ב-${new Date(iso).toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit' })}`;
+    };
+    const age = (w) => `<span class="pill ${w.level === 'late' ? 'p-bad' : w.level === 'warn' ? 'p-warn' : 'p-mute'}">${w.days === 0 ? 'היום' : w.days === 1 ? 'יום אחד' : `${w.days} ימים`}</span>`;
+    const typeCell = (w) => `<span class="wt"><span class="wt-ic">${icon(w.icon)}</span><span>${esc(w.type)}${w.isNew ? ' <span class="pill p-brand">חדש</span>' : ''}${w.altFor ? `<span class="alt">כמחליף של ${esc(w.altFor)}</span>` : ''}</span></span>`;
+    const openBtn = (w) => `<a class="btn pri small wo" href="${esc(w.link)}" target="_blank" rel="noopener" data-open="${w.id}">פתיחה בפריוריטי ${ui('ext')}<span class="sr-only"> — ${esc(w.type)} ${esc(w.docno)}</span></a>`;
+    const sumOf = (w) => money(w.amount) || '—';
+
+    function draw() {
+      if (!box) return;
+      const items = data.items;
+      if (!items.length) { box.innerHTML = ''; return; }
+      const types = [...new Set(items.map((w) => w.type))];
+      if (filter !== 'all' && !types.includes(filter)) filter = 'all';
+      const shown = items.filter((w) => filter === 'all' || w.type === filter);
+      box.innerHTML = `<section class="appr" aria-labelledby="appr-h">
+        <div class="appr-head"><h2 id="appr-h">ממתין לאישורך <span class="badge num">${items.length}</span></h2>
+          <span class="fresh"><span id="appr-at">${esc(ago(data.at))}</span> <button class="btn small" id="appr-refresh">${ui('refresh')} רענון</button></span></div>
+        ${types.length > 1 ? `<div class="chips" role="group" aria-label="סינון לפי סוג"><button class="chip" data-f="all" aria-pressed="${filter === 'all'}">הכל <b class="num">${items.length}</b></button>${types.map((t) => `<button class="chip" data-f="${esc(t)}" aria-pressed="${filter === t}">${esc(t)} <b class="num">${items.filter((w) => w.type === t).length}</b></button>`).join('')}</div>` : ''}
+        <div class="scroll appr-wide"><table class="t appr-t">
+          <thead><tr><th>סוג</th><th>מספר</th><th>חברה ופרויקט</th><th>ספק / קבלן</th><th>סכום</th><th>הוגש ע״י</th><th>ממתין</th><th><span class="sr-only">פתיחה</span></th></tr></thead>
+          <tbody>${shown.map((w) => w.done ? `<tr class="appr-done"><td colspan="8">${ui('check')} ${esc(w.done)}</td></tr>` : `<tr>
+            <td>${typeCell(w)}</td><td class="ltr num">${esc(w.docno)}</td>
+            <td>${esc(w.companyName)}${w.project ? `<span class="sub">${esc(w.project)}</span>` : ''}</td>
+            <td class="wrap">${esc(w.party || '—')}</td><td class="num">${sumOf(w)}</td><td>${esc(w.owner || '—')}</td><td>${age(w)}</td><td>${openBtn(w)}</td></tr>`).join('')}</tbody></table></div>
+        <div class="appr-cards">${shown.map((w) => w.done ? `<div class="appr-card appr-done">${ui('check')} ${esc(w.done)}</div>` : `<div class="appr-card">
+            <div class="r1">${typeCell(w)}${age(w)}</div>
+            <div class="r2"><span class="ltr num">${esc(w.docno)}</span><span>${esc(w.companyName)}</span></div>
+            <div class="r2"><span>${esc(w.party || w.project || '—')}</span><span class="num">${sumOf(w)}</span></div>
+            ${openBtn(w)}</div>`).join('')}</div>
+      </section>`;
+    }
+
+    async function refresh(btn) {
+      if (btn) { btn.disabled = true; btn.textContent = 'מעדכן…'; }
+      try { data = await api('POST', '/api/priority/waiting/refresh'); draw(); toast('עודכן מפריוריטי'); }
+      catch (e) { toast(e.message, true); if (btn) { btn.disabled = false; btn.textContent = 'רענון'; } }
+    }
+
+    /** העובד חזר מפריוריטי — בדיקה של המסמך שפתח */
+    async function back() {
+      if (document.visibilityState !== 'visible' || !opened || !box?.isConnected) return;
+      const id = opened; opened = null;
+      try {
+        const r = await api('GET', `/api/priority/waiting/${id}/check`);
+        if (!r.gone) return;
+        const w = data.items.find((x) => x.id === id);
+        if (!w) return;
+        w.done = r.next ? `${w.docno} — עבר ל${r.next}` : `${w.docno} — ${r.status || 'כבר לא ממתין לך'}`;
+        draw();
+        setTimeout(() => { data.items = data.items.filter((x) => x.id !== id); draw(); }, 2500);
+      } catch { /* בסבב הבא */ }
+    }
+    document.addEventListener('visibilitychange', back);
+    window.addEventListener('focus', back);
+
+    function mount(el, d) {
+      box = el; data = d ?? { items: [], at: null };
+      draw();
+      el.addEventListener('click', (e) => {
+        const f = e.target.closest('[data-f]');
+        if (f) { filter = f.dataset.f; draw(); return; }
+        const o = e.target.closest('[data-open]');
+        if (o) { opened = Number(o.dataset.open); return; }
+        const b = e.target.closest('#appr-refresh');
+        if (b) refresh(b);
+      });
+    }
+    return { mount };
+  })();
 
   // ---------------------------------------------------------------- עבודה על פעולה: התור, המיילים והגרירה
   const fmtAt = (iso) => {
@@ -848,6 +935,68 @@
   }
 
   // ---------------------------------------------------------------- הרשאות
+  // ---------------------------------------------------------------- ✍️ סוגי אישורים (מנהלי מערכת)
+  async function approvals() {
+    let v = await api('GET', '/api/priority/waiting/admin');
+    const when = (iso) => (iso ? new Date(iso).toLocaleString('he-IL', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : 'עוד לא');
+    main.innerHTML = '<div class="stack" id="aa"></div>';
+    const root = $('#aa');
+    function draw() {
+      const ok = v.types.filter((t) => t.status === 'ok');
+      const closed = v.types.filter((t) => t.status !== 'ok');
+      root.innerHTML = `
+        <section class="panel">
+          <div class="panel-h"><h2>סוגי אישורים</h2>
+            <p>כל מסך בפריוריטי שיש בו רשימת מאשרים — נמצא לבד, פעם ביום. סוג חדש מופיע לחותמים מיד ב"ממתין לאישורך"; כאן נותנים לו שם בעברית או מכבים. החותם הבא נמצא לפי אותו כלל בכל המסכים, והקישור נבנה לבד.
+            נבדק לאחרונה: ${esc(when(v.discoveredAt))} · סבב אחרון: ${esc(when(v.sweptAt))}${v.errors.length ? ` · <span class="pill p-warn">${v.errors.length} קריאות נכשלו</span>` : ''}</p></div>
+          ${v.types.length ? `<div class="scroll" tabindex="0" role="region" aria-label="סוגי אישורים"><table class="t">
+            <thead><tr><th>שם במשימון</th><th>המסך בפריוריטי</th><th>ממתינים עכשיו</th><th>מוצג</th></tr></thead>
+            <tbody>${ok.map((t) => `<tr>
+              <td><input type="text" data-name="${esc(t.screen)}" value="${esc(t.name)}" placeholder="${esc(t.suggested || 'מסמך לאישור')}" aria-label="שם בעברית ל-${esc(t.screen)}">${t.isNew ? ' <span class="pill p-brand">חדש</span>' : ''}</td>
+              <td class="ltr">${esc(t.screen)}</td><td class="num">${t.count}</td>
+              <td><button type="button" class="tg" role="switch" aria-checked="${t.on}" data-on="${esc(t.screen)}" aria-label="להציג את ${esc(t.name || t.screen)}"></button></td></tr>`).join('')}
+            ${closed.map((t) => `<tr><td class="muted">—</td><td class="ltr">${esc(t.screen)}</td><td colspan="2"><span class="pill p-warn">${t.status === 'blocked' ? 'סגור למשימון' : 'תקלה'}</span>
+              <span class="hint">${t.status === 'blocked' ? 'לבקש ממנהל פריוריטי לפתוח את המסך ל-API' : esc(t.error)}</span></td></tr>`).join('')}</tbody></table></div>` : '<p class="muted">עוד לא נבדק. הבדיקה הראשונה רצה כמה דקות אחרי שהשרת עולה.</p>'}
+        </section>
+        <section class="panel">
+          <div class="panel-h"><h2>חותמים שלא מקושרים למשימון</h2>
+            <p>יש להם מסמכים שממתינים לחתימה, אבל לא נמצא משתמש משימון עם אותו מייל או אותו שם — ולכן הם לא רואים את "ממתין לאישורך". בוחרים משתמש ושומרים.</p></div>
+          ${v.unmapped.length ? `<div class="scroll"><table class="t"><thead><tr><th>משתמש בפריוריטי</th><th>השם בפריוריטי</th><th>ממתינים לו</th><th>משתמש במשימון</th><th></th></tr></thead>
+            <tbody>${v.unmapped.map((u, i) => `<tr><td class="ltr">${esc(u.login)}</td><td>${esc(u.name || '—')}</td><td class="num">${u.count}</td>
+              <td><select id="map-${i}" aria-label="משתמש משימון עבור ${esc(u.login)}"><option value="">— בחירה —</option>${v.users.map((x) => `<option value="${x.id}">${esc(x.name)}</option>`).join('')}</select></td>
+              <td><button class="btn small pri" data-map="${i}">שמירה</button></td></tr>`).join('')}</tbody></table></div>` : '<p class="muted">כל החותמים מקושרים.</p>'}
+          ${v.noSigner.length ? `<p class="hint">${v.noSigner.length} מסמכים ממתינים בלי חותם ידוע (אין רשימת מאשרים): ${v.noSigner.slice(0, 8).map((d) => esc(`${d.docno} (${d.company})`)).join(' · ')}</p>` : ''}
+        </section>`;
+    }
+    draw();
+    root.addEventListener('change', async (e) => {
+      const n = e.target.closest('[data-name]');
+      if (!n) return;
+      try { await api('PUT', `/api/priority/waiting/types/${encodeURIComponent(n.dataset.name)}`, { name: n.value }); toast('השם נשמר'); }
+      catch (err) { toast(err.message, true); }
+    });
+    root.addEventListener('click', async (e) => {
+      const sw = e.target.closest('[data-on]');
+      if (sw) {
+        const on = sw.getAttribute('aria-checked') !== 'true';
+        try {
+          await api('PUT', `/api/priority/waiting/types/${encodeURIComponent(sw.dataset.on)}`, { on });
+          sw.setAttribute('aria-checked', String(on));
+          toast(on ? 'מוצג לחותמים — מהסבב הבא' : 'כבוי — לא מוצג');
+        } catch (err) { toast(err.message, true); }
+        return;
+      }
+      const m = e.target.closest('[data-map]');
+      if (m) {
+        const u = v.unmapped[Number(m.dataset.map)];
+        const userId = Number($(`#map-${m.dataset.map}`).value);
+        if (!userId) { toast('בחרו משתמש משימון', true); return; }
+        try { await api('POST', '/api/priority/waiting/map', { login: u.login, userId }); toast('נשמר — הוא רואה את הממתינים לו מעכשיו'); v = await api('GET', '/api/priority/waiting/admin'); draw(); }
+        catch (err) { toast(err.message, true); }
+      }
+    });
+  }
+
   async function access() {
     const m = await api('GET', '/api/priority/access');
     const users = m.users.map((u) => ({ ...u, docs: [...u.docs], companies: u.companies ? [...u.companies] : null }));
