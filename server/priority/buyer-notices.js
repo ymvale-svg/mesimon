@@ -7,11 +7,17 @@
  *   • ב3 — קבלה מול הזמנה, כשמספר ההזמנה לא הופיע בתעודה: נרשמת (‎gr_no_po‎). **דוח שבועי** למנהלת הרכש, ביום ראשון
  *     משעת "סיכום הבוקר" (‎digest_morning‎). אין רשומות — אין מייל. קבלה בלי הזמנה — לא נרשמת.
  *
+ *   • ב2 — חוסר או פגם מול התעודה (המקבל תיקן כמות): אחרי "סופית" הבוט שואל "לשלוח לספק ולרכש?". כן ← מייל מהתיבה של
+ *     העובד אל המייל בכרטיס הספק, ותמיד עותק לרכש; אין מייל לספק — לרכש כנמענת ראשית. בתוכו: הקבלה (PDF), הצילומים,
+ *     ופירוט "בתעודה / התקבל" לכל שורה. אין לעובד Gmail מחובר — משרת הדואר של המערכת, ו"השב" לעובד.
+ *
  * מנהלת הרכש — ‎PdParts.contact()‎ (הגדרות פריוריטי). לא הוגדרה — ב1: רק בדו-שיח הפנימי; ב3: הרשומות מחכות.
  */
 const D = require('../core').Db;
 const Priority = require('../integrations').Priority;
 const Mailer = require('../integrations').Mailer;
+const Gmail = require('../integrations').Gmail;
+const fs = require('node:fs');
 const Parts = require('./pd-parts');
 
 const TZ = 'Asia/Jerusalem';
@@ -79,6 +85,60 @@ async function afterFinal(user, s, extra = []) {
 }
 
 // ---------------------------------------------------------------------------
+// ב2 — חוסר או פגם: מייל לספק, ועותק לרכש
+// ---------------------------------------------------------------------------
+
+function shortageMail(user, s, lines) {
+  const subject = `חוסר / פגם בקבלת סחורה — ${s.supplier?.name ?? ''} · תעודה ${s.doc?.doc_number ?? ''} · ${s.docno}`;
+  const facts = [['תעודת משלוח', s.doc?.doc_number ?? ''], ['קבלת סחורה', s.docno], ['הזמנה', s.order?.ordname ?? ''],
+    ['חברה', companyName(s.company)], ['נקלטה ע"י', user.full_name]].filter(([, v]) => v);
+  const notes = (s.corrections ?? []).filter((c) => !/נבנו מחדש|נוספו ע"י/.test(c));
+  const text = [`שלום רב,`, '', `בקבלת הסחורה לפי תעודה ${s.doc?.doc_number ?? ''} נמצאו חוסרים / פגמים מול התעודה:`, '',
+    ...facts.map(([k, v]) => `${k}: ${v}`), '',
+    ...lines.map((l, i) => `${i + 1}. ${l.description} — בתעודה ${qty(l.docQty)}, התקבל בפועל ${qty(l.qty)} ${l.unit || "יח'"} (חסר ${qty(Number(l.docQty) - Number(l.qty))})`),
+    notes.length ? `\nהערות המקבל: ${notes.join('; ')}` : null, '', 'מצורפים: הקבלה כפי שנקלטה, ותמונות התעודה החתומה והסחורה.', '', 'בברכה,', user.full_name].filter((x) => x !== null).join('\n');
+  const html = `<div dir="rtl" style="font-family:Arial,sans-serif;font-size:14px">
+<p>שלום רב,</p><p>בקבלת הסחורה לפי תעודה <b>${esc(s.doc?.doc_number ?? '')}</b> נמצאו <b>חוסרים / פגמים</b> מול התעודה:</p>
+<p>${facts.map(([k, v]) => `${esc(k)}: <b>${esc(v)}</b>`).join('<br>')}</p>
+<table style="border-collapse:collapse"><tr><th ${td}>#</th><th ${td}>פריט</th><th ${td}>בתעודה</th><th ${td}>התקבל בפועל</th><th ${td}>חסר</th></tr>
+${lines.map((l, i) => `<tr><td ${td}>${i + 1}</td><td ${td}>${esc(l.description)}</td><td ${td}>${esc(qty(l.docQty))}</td><td ${td}>${esc(qty(l.qty))} ${esc(l.unit || "יח'")}</td><td ${td}>${esc(qty(Number(l.docQty) - Number(l.qty)))}</td></tr>`).join('\n')}
+</table>${notes.length ? `<p>הערות המקבל: ${esc(notes.join('; '))}</p>` : ''}
+<p>מצורפים: הקבלה כפי שנקלטה, ותמונות התעודה החתומה והסחורה.</p><p>בברכה,<br>${esc(user.full_name)}</p></div>`;
+  return { subject, text, html };
+}
+
+/**
+ * שולח את מייל החוסר. ‎files‎ — ‎[{ buf, fileName, mime }]‎ (הקבלה כ-PDF) + ‎paths‎ — הצילומים שבקבלה.
+ * ‎{ ok, to, cc, noSupplierEmail }‎ — לעובד: לאן יצא.
+ */
+async function sendShortage(user, s, lines, { files = [], photos = [] } = {}) {
+  const buyer = Parts.contact();
+  let supplier = '';
+  try { supplier = (await Priority.supplierContact(s.company, s.supplier?.code))?.email ?? ''; } catch (err) { console.error('[משימון] כרטיס הספק:', err.message); }
+  const to = supplier || buyer?.email;
+  if (!to) return { ok: false, error: 'אין מייל לספק בכרטיס, ולא הוגדרה מנהלת רכש' };
+  const cc = supplier && buyer?.email ? [buyer.email] : [];
+  const attachments = [...files];
+  photos.forEach((f, i) => {
+    try { attachments.push({ buf: fs.readFileSync(f.path), fileName: `תמונה ${i + 1}.${String(f.mime).includes('pdf') ? 'pdf' : String(f.mime).includes('png') ? 'png' : 'jpg'}`, mime: f.mime || 'image/jpeg' }); } catch { /* נמחק */ }
+  });
+  const m = shortageMail(user, s, lines);
+  const me = D.get('SELECT email, full_name FROM users WHERE id = ?', user.id);
+  const msg = { to, toName: supplier ? s.supplier?.name : buyer?.name, cc, subject: m.subject, text: m.text, html: m.html, attachments };
+  try {
+    const conn = Gmail.connectionOf(user.id);
+    if (conn?.email) await Gmail.send(user.id, Mailer.buildMessage({ ...msg, from: conn.email, fromName: user.full_name }).raw);
+    else if (Mailer.isEnabled()) await Mailer.send({ ...msg, replyTo: me?.email || undefined, replyToName: me?.full_name });
+    else throw new Error('אין לעובד תיבת Gmail מחוברת, ואין שרת דואר במערכת');
+  } catch (err) {
+    console.error('[משימון] מייל חוסר / פגם:', err.message);
+    return { ok: false, error: err.message };
+  }
+  if (buyer?.userId) D.notify({ targetType: 'user', targetId: buyer.userId, kind: 'ai', title: m.subject, body: m.text.slice(0, 1500) });
+  return { ok: true, to, cc, noSupplierEmail: !supplier };
+}
+
+// ---------------------------------------------------------------------------
 // ב3 — דוח שבועי: תעודות בלי מספר הזמנה
 // ---------------------------------------------------------------------------
 
@@ -133,4 +193,4 @@ function start() {
   timer.unref?.();
 }
 
-module.exports = { afterFinal, weekly, start, _extraMail: extraMail, _reportMail: reportMail };
+module.exports = { afterFinal, sendShortage, weekly, start, _shortageMail: shortageMail, _extraMail: extraMail, _reportMail: reportMail };
