@@ -87,7 +87,7 @@ const ReportsView = (() => {
         el('div.sub', { text: sub })
       ]),
       el('div.spacer'),
-      App.may('export_data') ? el('a.btn', { href: '/api/export/tasks.csv' }, ['⬇ ייצוא כל המשימות ל-CSV']) : null
+      App.may('export_data') ? el('a.btn', { href: '/api/export/tasks.csv' }, [UI.lineIcon('download'), 'ייצוא כל המשימות ל-CSV']) : null
     ]);
   }
 
@@ -195,7 +195,7 @@ const ReportsView = (() => {
       ]),
       el('div.card-pad', {}, rows.length ? rows.map((r) =>
         el('div', { style: { marginBottom: '11px' } }, [
-          el('div.flex', {}, [
+          el('div.flex.wl-row', {}, [
             UI.avatar(r.name, { small: true }),
             el('b', { text: r.name, style: { fontSize: 'var(--fs-md)' } }),
             // התפקיד לצד השם — כדי לראות במבט אחד אם העומס יושב על מנהל או על עובד

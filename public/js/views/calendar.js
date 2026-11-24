@@ -88,8 +88,8 @@ const CalendarView = (() => {
       if (tab === 'recordings') drawRecordings();
       else loadRange();
     };
-    return el('div.seg.cal-tabs', {}, [['calendar', '📅 יומן'], ['recordings', '🎥 הקלטות']].map(([k, label]) =>
-      el(`button${view.tab === k ? '.active' : ''}`, { onclick: () => go(k) }, [label])));
+    return el('div.seg.cal-tabs', {}, [['calendar', 'יומן', 'calendar'], ['recordings', 'הקלטות', 'video']].map(([k, label, ic]) =>
+      el(`button${view.tab === k ? '.active' : ''}`, { onclick: () => go(k) }, [UI.lineIcon(ic), label])));
   }
 
   function drawRecordings() {
@@ -199,7 +199,7 @@ const CalendarView = (() => {
       secretary ? pendingDock(dockOpen) : null,
       tabs(),
       el('div.cal-head', {}, [
-        el('h2', { text: '📅 יומן' }),
+        el('h2', {}, [UI.lineIcon('calendar'), ' יומן']),
         el('div.seg', {}, [['day', 'יום'], ['week', 'שבוע']].map(([k, label]) =>
           el(`button${view.mode === k ? '.active' : ''}`, { onclick: () => { view.mode = k; loadRange(); } }, [label]))),
         // ביום, כשמוצג יותר מיומן אחד: הכול בעמודה אחת, או עמודה לכל עובד
@@ -213,11 +213,11 @@ const CalendarView = (() => {
         el('button.btn.btn-sm', { onclick: () => { view.date = new Date(); loadRange(); } }, ['היום']),
         el('div.spacer'),
         // קביעת פגישה בלי לבחור משבצת ובלי משימה — מזכירה: בכל יומן ששותף איתה; עובד: ביומן שלו
-        info.google?.calendar || secretary ? el('button.btn.btn-sm.btn-primary', { onclick: scheduleNew }, ['📅 קביעת פגישה']) : null,
-        el('button.btn.btn-sm.cal-refresh', { title: secretary ? 'רענון: היומנים ששותפו, הפגישות והמשימות שמחכות' : 'רענון הפגישות', onclick: (e) => refreshAll(e.currentTarget) }, ['⟳ רענון'])
+        info.google?.calendar || secretary ? el('button.btn.btn-sm.btn-primary', { onclick: scheduleNew }, [UI.lineIcon('calendar-plus'), 'קביעת פגישה']) : null,
+        el('button.btn.btn-sm.cal-refresh', { title: secretary ? 'רענון: היומנים ששותפו, הפגישות והמשימות שמחכות' : 'רענון הפגישות', onclick: (e) => refreshAll(e.currentTarget) }, [UI.lineIcon('refresh'), el('span.btn-lbl', { text: 'רענון' })])
       ]),
       // היומן של Google לא מחובר — בלי זה אין מה להציג
-      !info.google?.calendar ? el('div.alert.alert-warn', {}, [el('span', { text: '📅' }), el('div', {}, [
+      !info.google?.calendar ? el('div.alert.alert-warn', {}, [UI.lineIcon('calendar'), el('div', {}, [
         el('b', { text: 'צריך לחבר את היומן של Google' }),
         el('div', { text: 'היומן כאן הוא היומן שלך ב-Google. חיבור פעם אחת — ואפשר לראות פגישות ולקבוע אותן מכאן.' }),
         el('a.btn.btn-primary.btn-sm.mt', { href: '/api/me/gmail/connect' }, ['חיבור Google'])
@@ -427,7 +427,7 @@ const CalendarView = (() => {
             el('b', { text: e.title ?? 'תפוס' }),
             el('span', { text: ` ${hhmm(e.start)}` }),
             e.meetingId ? el('span', { text: ' ✦' }) : null,
-            e.rec ? el('span.cal-ev-rec', { title: 'יש הקלטה ב-Timeless' }, ['🎥 הקלטה']) : null
+            e.rec ? el('span.cal-ev-rec', { title: 'יש הקלטה ב-Timeless' }, [UI.lineIcon('video'), 'הקלטה']) : null
           ]))
         ]);
         return col;
@@ -471,7 +471,7 @@ const CalendarView = (() => {
     if (btn.disabled) return;
     btn.disabled = true;
     btn.classList.add('is-busy');
-    btn.textContent = '⟳ מרענן…';
+    btn.querySelector('.btn-lbl').textContent = 'מרענן…';
     const writable = (list) => new Set(list.filter((c) => !c.self && ['owner', 'write'].includes(c.access)).map((c) => c.userId));
     const before = writable(info.calendars);
     try {
@@ -495,7 +495,7 @@ const CalendarView = (() => {
     } finally {
       btn.disabled = false;
       btn.classList.remove('is-busy');
-      btn.textContent = '⟳ רענון';
+      btn.querySelector('.btn-lbl').textContent = 'רענון';
     }
   }
 
@@ -561,7 +561,7 @@ const CalendarView = (() => {
     if (e.link) buttons.push(el('a.btn.btn-sm', { href: e.link, target: '_blank', rel: 'noopener' }, ['פתיחה ב-Google ↗']));
     if (e.editable && e.organizerIsOwner && !e.busyOnly && !e.allDay) {
       // פגישה של משימון — הדיאלוג המלא (מוזמנים, מועד, מיקום, Zoom); אחרת — רק המוזמנים
-      if (e.meetingId) buttons.push(el('button.btn.btn-sm.btn-primary', { onclick: () => { m.close(); editMeeting(e); } }, ['✎ עריכה']));
+      if (e.meetingId) buttons.push(el('button.btn.btn-sm.btn-primary', { onclick: () => { m.close(); editMeeting(e); } }, [UI.lineIcon('pencil'), 'עריכה']));
       else buttons.push(el('button.btn.btn-sm', { onclick: () => { m.close(); attendeesDialog(e); } }, ['👥 מוזמנים']));
       buttons.push(el('button.btn.btn-sm', { onclick: () => { m.close(); moveDialog(e); } }, ['🔀 הזזה']));
     }
@@ -722,7 +722,7 @@ const CalendarView = (() => {
                 const ownerId = t.requestedBy && !blockedCalendar(t.requestedBy) ? t.requestedBy : undefined;
                 MeetingView.openDialog({ task: t, prefill: ownerId ? { ownerId } : null, onDone: () => { reload(); refreshPending(); } });
               }
-            }, ['📅 קביעה'])
+            }, [UI.lineIcon('calendar-plus'), 'קביעה'])
           ]))
         : [el('div.mute-sm.cal-dock-empty', { text: 'אין משימות שמחכות לקביעת פגישה ✓' })])
     ]);

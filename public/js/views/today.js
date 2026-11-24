@@ -103,18 +103,18 @@ const TodayView = (() => {
     UI.mount(containerRef, el('div.today', {}, [
       el('div.today-head', {}, [
         el('div', {}, [
-          el('h2', {}, ['☀ ', data.dateLabel]),
+          el('h2', {}, [UI.lineIcon('sun'), ' ', data.dateLabel]),
           el('div.today-summary', { text: summary || 'אין משימות להיום' }),
           c.doneToday ? el('div.today-done', { text: `✓ ${c.doneToday} הושלמו היום` }) : null
         ]),
         el('div.spacer'),
-        el('button.btn.btn-sm', { title: 'רענון, כולל היומן', onclick: (e) => { e.currentTarget.disabled = true; reload({ fresh: true }); } }, ['⟳']),
-        el('button.btn.btn-sm', { title: 'Today במייל והקלטה', onclick: () => openSettings() }, ['⚙'])
+        el('button.btn.btn-sm', { title: 'רענון, כולל היומן', 'aria-label': 'רענון, כולל היומן', onclick: (e) => { e.currentTarget.disabled = true; reload({ fresh: true }); } }, [UI.lineIcon('refresh')]),
+        el('button.btn.btn-sm', { title: 'Today במייל והקלטה', 'aria-label': 'הגדרות Today', onclick: () => openSettings() }, [UI.lineIcon('settings')])
       ]),
       !data.isWorkDay ? el('div.alert.alert-info.today-note', {}, [el('span', { text: '🌿' }), el('div', { text: 'היום אינו יום עבודה שלך. מה שמופיע כאן מחכה ליום העבודה הבא.' })]) : null,
       googleBanner(),
       nextUp(),
-      empty ? el('div.today-clear', {}, [el('div.e-icon', { text: '🌤' }), el('b', { text: 'יום נקי' }), el('div.mute-sm', { text: 'אין פגישות, אין משימות להיום ואין הצעות שמחכות להחלטה.' })]) : null,
+      empty ? el('div.today-clear', {}, [el('div.e-icon', {}, [UI.lineIcon('cloud-sun', { size: 40 })]), el('b', { text: 'יום נקי' }), el('div.mute-sm', { text: 'אין פגישות, אין משימות להיום ואין הצעות שמחכות להחלטה.' })]) : null,
       calendarSection(),
       meetingsSection(),
       tasksSection('⚠ באיחור', data.tasks.overdue, { late: true }),
@@ -130,13 +130,13 @@ const TodayView = (() => {
     const g = data.google;
     if (!g.enabled) return null;
     if (!g.connected) {
-      return el('div.alert.alert-info.today-note', {}, [el('span', { text: '📅' }), el('div', {}, [
+      return el('div.alert.alert-info.today-note', {}, [UI.lineIcon('calendar'), el('div', {}, [
         'חברו את Google כדי לראות כאן את היומן ואת המיילים שמחכים להחלטה. ',
         el('a', { href: '/api/me/gmail/connect' }, ['חיבור Google'])
       ])]);
     }
     if (g.missing.includes('calendar')) {
-      return el('div.alert.alert-warn.today-note', {}, [el('span', { text: '📅' }), el('div', {}, [
+      return el('div.alert.alert-warn.today-note', {}, [UI.lineIcon('calendar'), el('div', {}, [
         'חברו מחדש את Google כדי לראות כאן את היומן ואת אנשי הקשר. ',
         el('a', { href: '/api/me/gmail/connect' }, ['חיבור מחדש'])
       ])]);
@@ -161,9 +161,10 @@ const TodayView = (() => {
     ]);
   }
 
+  const CAL_TITLE = () => [UI.lineIcon('calendar'), ' היומן'];
   function section(title, count, rows, extra = null) {
     return el('div.card.today-sec', {}, [
-      el('div.today-sec-head', {}, [el('b', { text: title }), count !== null ? el('span.today-count', { text: String(count) }) : null, el('div.spacer'), extra]),
+      el('div.today-sec-head', {}, [el('b', {}, Array.isArray(title) ? title : [title]), count !== null ? el('span.today-count', { text: String(count) }) : null, el('div.spacer'), extra]),
       el('div.today-rows', {}, rows)
     ]);
   }
@@ -173,10 +174,10 @@ const TodayView = (() => {
   function calendarSection() {
     const cal = data.calendar;
     if (!cal.connected) return null;
-    if (cal.error && !cal.events.length) return section('📅 היומן', null, [el('div.mute-sm.today-pad', { text: cal.error })]);
-    if (!cal.events.length) return section('📅 היומן', 0, [el('div.mute-sm.today-pad', { text: 'אין פגישות היום' })]);
+    if (cal.error && !cal.events.length) return section(CAL_TITLE(), null, [el('div.mute-sm.today-pad', { text: cal.error })]);
+    if (!cal.events.length) return section(CAL_TITLE(), 0, [el('div.mute-sm.today-pad', { text: 'אין פגישות היום' })]);
     const now = Date.now();
-    return section('📅 היומן', cal.events.length, cal.events.map((e) => {
+    return section(CAL_TITLE(), cal.events.length, cal.events.map((e) => {
       const past = !e.allDay && new Date(e.end).getTime() < now;
       return el(`div.today-row.today-event${past ? '.is-past' : ''}`, {}, [
         el('span.today-time', { text: e.allDay ? 'כל היום' : hhmm(e.start) }),
@@ -185,7 +186,7 @@ const TodayView = (() => {
           el('div.mute-sm', { text: [e.allDay ? null : `עד ${hhmm(e.end)}`, e.location, e.calendarName].filter(Boolean).join(' · ') })
         ]),
         el('div.today-actions', {}, [
-          e.meetLink && !past ? el('a.btn.btn-sm', { href: e.meetLink, target: '_blank', rel: 'noopener', title: 'הצטרפות לשיחה' }, ['🎥']) : null,
+          e.meetLink && !past ? el('a.btn.btn-sm', { href: e.meetLink, target: '_blank', rel: 'noopener', title: 'הצטרפות לשיחה', 'aria-label': 'הצטרפות לשיחה' }, [UI.lineIcon('video')]) : null,
           e.link ? el('a.btn.btn-sm.btn-ghost', { href: e.link, target: '_blank', rel: 'noopener', title: 'פתיחה ב-Google Calendar' }, ['↗']) : null,
           el('button.btn.btn-sm', {
             title: 'משימה חדשה מהפגישה — מעקב, סיכום, מה שסוכם',
@@ -201,7 +202,7 @@ const TodayView = (() => {
   function meetingsSection() {
     const items = data.meetings ?? [];
     if (!items.length) return null;
-    return section('📅 פגישות — מחכה להחלטה', items.length, items.map((s) => AiInboxView.meetingRow(s, () => reload())));
+    return section([UI.lineIcon('calendar'), ' פגישות — מחכה להחלטה'], items.length, items.map((s) => AiInboxView.meetingRow(s, () => reload())));
   }
 
   // ------------------------------------------------------------- משימות
@@ -249,7 +250,7 @@ const TodayView = (() => {
     const due = UI.dueLabel(task.dueDate);
     const toToday = late && task.canEdit ? el('button.btn.btn-sm', { title: 'להעביר את היעד להיום' }, ['להיום']) : null;
     toToday?.addEventListener('click', run(toToday, () => API.updateTask(task.id, { dueDate: UI.fromInputDate(data.date) })));
-    const move = task.canEdit ? el('button.btn.btn-sm', { title: 'להזיז את היעד', onclick: (e) => { e.stopPropagation(); moveDialog(task); } }, ['📅']) : null;
+    const move = task.canEdit ? el('button.btn.btn-sm', { title: 'להזיז את היעד', 'aria-label': 'להזיז את היעד', onclick: (e) => { e.stopPropagation(); moveDialog(task); } }, [UI.lineIcon('calendar')]) : null;
 
     return el(`div.today-row.today-task${late ? '.is-late' : ''}`, { onclick: () => TaskCardView.open(task.id) }, [
       el('span.m-bar', { style: { background: task.projectColor ?? 'transparent' } }),
@@ -350,7 +351,7 @@ const TodayView = (() => {
         }));
     if (needsLook) approve.textContent = 'בדיקה ואישור';
 
-    const later = el('button.btn.btn-sm', { title: 'משימה עם תאריך יעד אחר' }, ['📅 תאריך אחר']);
+    const later = el('button.btn.btn-sm', { title: 'משימה עם תאריך יעד אחר' }, [UI.lineIcon('calendar'), 'תאריך אחר']);
     later.addEventListener('click', (e) => {
       e.stopPropagation();
       pickDate(`תאריך יעד: ${d.title ?? s.subject}`, {
@@ -401,7 +402,7 @@ const TodayView = (() => {
     ]);
     const more = el('button.btn-link.ai-more', { type: 'button', title: 'תקציר, איך לסגור ומשימת AI' }, [closure ? '💡 ▾' : '▾']);
     more.addEventListener('click', (e) => { e.stopPropagation(); details.hidden = !details.hidden; more.classList.toggle('is-open', !details.hidden); });
-    later.textContent = '📅';
+    later.replaceChildren(UI.lineIcon('calendar')); later.setAttribute('aria-label', 'משימה עם תאריך יעד אחר');
     reject.textContent = '✕';
 
     return el('div.today-row.today-mail', { onclick: () => AiInboxView.editSuggestion(s, () => reload()) }, [
