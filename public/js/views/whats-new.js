@@ -231,7 +231,7 @@ const WhatsNewView = (() => {
             type: 'button',
             title: 'הבאנר נסגר, והחידוש יודגש לך במסך עצמו',
             onclick: () => { finish(); Spotlight.showMe(anchor.key, item.title); }
-          }, ['🎯 הראו לי']) : null
+          }, [UI.lineIcon('target'), 'הראו לי']) : null
         ])
       ]);
       UI.mount(copyHost, card);
@@ -352,7 +352,7 @@ const WhatsNewView = (() => {
     }));
 
     const saveBtn = el('button.btn.btn-primary', { type: 'button' }, ['שמירת הניסוח']);
-    const previewBtn = el('button.btn', { type: 'button' }, ['👁 תצוגה מקדימה']);
+    const previewBtn = el('button.btn', { type: 'button' }, [UI.lineIcon('eye'), 'תצוגה מקדימה']);
     const collect = () => ({
       title: titleInput.value.trim(),
       summary: summaryInput.value.trim(),
@@ -422,8 +422,8 @@ const WhatsNewView = (() => {
           r.emailedAt ? el('span.tag', { title: UI.formatDateTime(r.emailedAt) },
             [r.sending ? `✉ נשלח ל-${r.emailedCount} מתוך ${r.emailedTotal}…` : `✉ נשלח ל-${r.emailedCount}${r.emailedTotal && r.emailedTotal !== r.emailedCount ? ` מתוך ${r.emailedTotal}` : ''} · ${UI.formatDate(r.emailedAt)}`]) : null,
           el('div.spacer'),
-          el('button.btn.btn-sm', { onclick: () => editor(r, reload) }, ['✎ ניסוח']),
-          el('button.btn.btn-sm', { onclick: () => open({ preview: r }) }, ['👁 תצוגה']),
+          el('button.btn.btn-sm', { onclick: () => editor(r, reload) }, [UI.lineIcon('pencil'), 'ניסוח']),
+          el('button.btn.btn-sm', { onclick: () => open({ preview: r }) }, [UI.lineIcon('eye'), 'תצוגה']),
           el('button.btn.btn-sm.btn-danger', {
             onclick: async () => {
               if (!await UI.confirm(`למחוק את "${r.title}"?`, { danger: true, okText: 'מחיקה' })) return;
@@ -457,14 +457,14 @@ const WhatsNewView = (() => {
                 if (!await UI.confirm('מהרגע הזה הבאנר ייפתח לכל משתמש בכניסה הבאה שלו (עם אפשרות לדלג). כל משתמש יראה רק את הפריטים שמיועדים לו.', { title: 'פרסום הגרסה', okText: 'פרסום' })) return;
                 act(() => API.post(`/api/admin/releases/${r.id}/publish`, {}), 'פורסם — הבאנר יוצג לכולם');
               }
-            }, ['🚀 פרסום']),
+            }, [UI.lineIcon('rocket'), 'פרסום']),
           el('button.btn.btn-sm', {
             disabled: !data.mailEnabled,
             onclick: () => act(async () => {
               const res = await API.post(`/api/admin/releases/${r.id}/email`, { test: true });
               UI.success(`מייל בדיקה נשלח אל ${res.to}`);
             })
-          }, ['✉ מייל בדיקה אליי']),
+          }, [UI.lineIcon('mail'), 'מייל בדיקה אליי']),
           el('button.btn.btn-sm', {
             disabled: !data.mailEnabled || !published || r.sending,
             title: !published ? 'יש לפרסם קודם' : '',
@@ -476,7 +476,7 @@ const WhatsNewView = (() => {
                 UI.success(`המשלוח התחיל — ${res.total} נמענים. המונה יתעדכן תוך כדי.`);
               });
             }
-          }, ['📣 שליחה במייל לכל המשתמשים'])
+          }, [UI.lineIcon('megaphone'), 'שליחה במייל לכל המשתמשים'])
         ])
       ]);
     };

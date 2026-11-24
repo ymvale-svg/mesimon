@@ -120,11 +120,11 @@ const TaskSyncView = (() => {
           el('button.btn.btn-sm', {
             title: 'ההודעה תתווסף כהערה למשימה שתבחר/י. המשימה שהוצעה לא תשתנה',
             onclick: () => { m.close(); attachOtherDialog(s, comment.value.trim(), reload); }
-          }, ['🔀 לצרף למשימה אחרת…']),
+          }, [UI.lineIcon('merge'), 'לצרף למשימה אחרת…']),
           el('button.btn.btn-sm', {
             title: 'משימה חדשה באחריותך, וההודעה נשמרת בה כהערה. המשימה שהוצעה לא תשתנה',
             onclick: () => { m.close(); newTaskDialog(s, comment.value.trim(), reload); }
-          }, ['➕ משימה חדשה מההודעה'])
+          }, [UI.lineIcon('plus'), 'משימה חדשה מההודעה'])
         ])
       ]),
       footer: [ok, el('div.spacer'), el('button.btn', { onclick: () => m.close() }, ['ביטול'])]
@@ -198,7 +198,7 @@ const TaskSyncView = (() => {
     title.value = String(d.summary || s.subject || d.comment || '').trim().split('\n')[0].slice(0, 120);
     const description = el('textarea', { rows: 3 });
     description.value = d.summary ?? '';
-    const ok = el('button.btn.btn-primary', {}, ['➕ פתיחת המשימה']);
+    const ok = el('button.btn.btn-primary', {}, [UI.lineIcon('plus'), 'פתיחת המשימה']);
     const m = UI.modal({
       title: '➕ משימה חדשה מההודעה',
       body: el('div', {}, [
@@ -232,7 +232,7 @@ const TaskSyncView = (() => {
         await API.post(`/api/ai/suggestions/${s.id}/approve`, {});
         UI.success(`"${d.taskTitle}" נסגרה — ההודעה נשמרה בה`);
       }, reload));
-      const note = el('button.btn.btn-sm', { title: 'רק להוסיף כהערה, בלי לסגור' }, ['📝 רק הערה']);
+      const note = el('button.btn.btn-sm', { title: 'רק להוסיף כהערה, בלי לסגור' }, [UI.lineIcon('pencil'), 'רק הערה']);
       note.addEventListener('click', (e) => { e.stopPropagation(); approveDialog({ ...s, kind: 'task_close', data: d }, reload); });
       actions.push(ok, note);
     } else if (p.dueDate || p.status) {
@@ -244,7 +244,7 @@ const TaskSyncView = (() => {
         await API.post(`/api/ai/suggestions/${s.id}/approve`, {});
         UI.success('העדכון נוסף למשימה');
       }, reload));
-      actions.push(ok, el('button.btn.btn-sm', { title: 'עריכה ושינויים נוספים', onclick: (e) => { e.stopPropagation(); approveDialog(s, reload); } }, ['✎']));
+      actions.push(ok, el('button.btn.btn-sm', { title: 'עריכה ושינויים נוספים', onclick: (e) => { e.stopPropagation(); approveDialog(s, reload); } }, [UI.lineIcon('pencil')]));
     }
     const no = el('button.btn.btn-sm.btn-ghost', { title: 'לא קשור — ההודעה לא תוצע שוב למשימה הזו' }, ['✕ לא קשור']);
     no.addEventListener('click', run(no, () => rejectNow(s, reload), reload));
@@ -253,14 +253,14 @@ const TaskSyncView = (() => {
     const what = d.channel === 'mail' ? 'המייל' : 'ההודעה';
     return {
       title: close
-        ? el('div', {}, [el('b', { text: '✅ לסגור? ' }), `נראה ש${what} מ${s.from.name} עונה על `, taskLink(s.taskId, d.taskTitle)])
-        : el('div', {}, [el('b', { text: '📝 עדכון ל' }), taskLink(s.taskId, d.taskTitle), d.summary ? `: ${d.summary}` : '']),
+        ? el('div', {}, [el('b', {}, [UI.lineIcon('check-circle'), 'לסגור? ']), `נראה ש${what} מ${s.from.name} עונה על `, taskLink(s.taskId, d.taskTitle)])
+        : el('div', {}, [el('b', {}, [UI.lineIcon('pencil'), 'עדכון ל']), taskLink(s.taskId, d.taskTitle), d.summary ? `: ${d.summary}` : '']),
       lines: [
         d.comment ? el('div.ai-quote.ts-quote', { text: d.comment.length > 240 ? `${d.comment.slice(0, 240)}…` : d.comment }) : null,
         (p.dueDate || p.status || d.files?.length) ? el('div.ai-chips', {}, [
           p.dueDate ? el('span.ai-chip', { text: `📅 יעד ← ${dm(p.dueDate)}${d.currentDue ? ` (במקום ${dm(d.currentDue)})` : ''}` }) : null,
           p.status ? el('span.ai-chip', { text: `סטטוס ← ${p.statusLabel}` }) : null,
-          d.files?.length ? el('span.ai-chip', {}, ['📎 ', d.files.length === 1 ? el('bdi', { text: d.files[0] }) : `${d.files.length} קבצים`]) : null
+          d.files?.length ? el('span.ai-chip', {}, [UI.lineIcon('paperclip'), '', d.files.length === 1 ? el('bdi', { text: d.files[0] }) : `${d.files.length} קבצים`]) : null
         ]) : null,
         originLine(s)
       ],
@@ -271,7 +271,7 @@ const TaskSyncView = (() => {
 
   function mergeParts(s, reload) {
     const d = s.data ?? {};
-    const ok = el('button.btn.btn-sm.btn-primary', {}, ['🔀 למזג']);
+    const ok = el('button.btn.btn-sm.btn-primary', {}, [UI.lineIcon('merge'), 'למזג']);
     ok.addEventListener('click', async (e) => {
       e.stopPropagation();
       if (!await UI.confirm(`"${d.keepTitle}" תישאר, ו"${d.dropTitle}" תיסגר עם קישור אליה. האחראים, ההערות, הקבצים והצ'קליסט יעברו, והיעד יהיה המוקדם מבין השניים.`, { okText: 'מיזוג' })) return;
@@ -284,7 +284,7 @@ const TaskSyncView = (() => {
     const no = el('button.btn.btn-sm.btn-ghost', { title: 'לא כפולות — הזוג לא יוצע שוב' }, ['✕ לא כפולות']);
     no.addEventListener('click', run(no, () => rejectNow(s, reload), reload));
     return {
-      title: el('div', {}, [el('b', { text: '🔀 למזג? ' }), 'נראה ש', taskLink(d.dropId, d.dropTitle), ` (אצל ${d.dropOwner}) ו`, taskLink(d.keepId, d.keepTitle), ` (אצל ${d.keepOwner}) הן אותה עבודה`]),
+      title: el('div', {}, [el('b', {}, [UI.lineIcon('merge'), 'למזג? ']), 'נראה ש', taskLink(d.dropId, d.dropTitle), ` (אצל ${d.dropOwner}) ו`, taskLink(d.keepId, d.keepTitle), ` (אצל ${d.keepOwner}) הן אותה עבודה`]),
       lines: [
         el('div.mute-sm', { text: `"${d.keepTitle}" הוותיקה תישאר${d.projectName ? ` · 📁 ${d.projectName}` : ''}${s.receivedAt ? ` · ${UI.relative(s.receivedAt)}` : ''}` })
       ],

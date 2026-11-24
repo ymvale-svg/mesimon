@@ -57,7 +57,7 @@ const SignupView = (() => {
     const button = el('button.btn.btn-primary.btn-block', { type: 'submit' }, ['שליחת בקשת הרשמה']);
 
     const fail = (message) => {
-      UI.mount(errorBox, el('span', { text: '⚠️' }), el('div', { text: message }));
+      UI.mount(errorBox, el('span', {}, [UI.lineIcon('alert')]), el('div', { text: message }));
       errorBox.style.display = 'flex';
       button.disabled = false;
       button.textContent = 'שליחת בקשת הרשמה';

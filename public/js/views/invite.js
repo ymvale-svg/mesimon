@@ -62,7 +62,7 @@ const InviteView = (() => {
         el('h2', { text: `שלום ${info.name}` }),
         el('p.muted', { text: invitedBy }),
         el('div.alert.alert-info', {}, [
-          el('span', { text: '✉️' }),
+          el('span', {}, [UI.lineIcon('mail')]),
           el('div', {}, [
             el('div', { text: 'החשבון שלך:' }),
             el('b', { text: info.email })
@@ -89,7 +89,7 @@ const InviteView = (() => {
       el('div.login-panel', {}, [
         UI.companyLogo('on-panel'),
         el('h2', { text: 'ההזמנה אינה זמינה' }),
-        el('div.alert.alert-danger.mt', {}, [el('span', { text: '⚠️' }), el('div', { text: message })]),
+        el('div.alert.alert-danger.mt', {}, [el('span', {}, [UI.lineIcon('alert')]), el('div', { text: message })]),
         el('a.btn.btn-block.mt', { href: '/' }, ['למסך הכניסה'])
       ]),
       hero()

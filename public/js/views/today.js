@@ -111,7 +111,7 @@ const TodayView = (() => {
         el('button.btn.btn-sm', { title: 'רענון, כולל היומן', 'aria-label': 'רענון, כולל היומן', onclick: (e) => { e.currentTarget.disabled = true; reload({ fresh: true }); } }, [UI.lineIcon('refresh')]),
         el('button.btn.btn-sm', { title: 'Today במייל והקלטה', 'aria-label': 'הגדרות Today', onclick: () => openSettings() }, [UI.lineIcon('settings')])
       ]),
-      !data.isWorkDay ? el('div.alert.alert-info.today-note', {}, [el('span', { text: '🌿' }), el('div', { text: 'היום אינו יום עבודה שלך. מה שמופיע כאן מחכה ליום העבודה הבא.' })]) : null,
+      !data.isWorkDay ? el('div.alert.alert-info.today-note', {}, [el('span', {}, [UI.lineIcon('leaf')]), el('div', { text: 'היום אינו יום עבודה שלך. מה שמופיע כאן מחכה ליום העבודה הבא.' })]) : null,
       googleBanner(),
       nextUp(),
       empty ? el('div.today-clear', {}, [el('div.e-icon', {}, [UI.lineIcon('cloud-sun', { size: 40 })]), el('b', { text: 'יום נקי' }), el('div.mute-sm', { text: 'אין פגישות, אין משימות להיום ואין הצעות שמחכות להחלטה.' })]) : null,
@@ -369,7 +369,7 @@ const TodayView = (() => {
       });
     });
 
-    const toAi = el('button.btn.btn-sm', { title: 'לבקש את זה ממישהו — העוזר ינסח פנייה לאישורך ויעקוב' }, ['✨ משימת AI']);
+    const toAi = el('button.btn.btn-sm', { title: 'לבקש את זה ממישהו — העוזר ינסח פנייה לאישורך ויעקוב' }, [UI.lineIcon('sparkles'), 'משימת AI']);
     toAi.addEventListener('click', (e) => {
       e.stopPropagation();
       AiTaskView.openDialog({
@@ -537,7 +537,7 @@ const TodayView = (() => {
         }
       }, [DAY_LETTERS[d]]));
 
-      const test = el('button.btn.btn-sm', {}, ['📨 שלח לי עכשיו לבדיקה']);
+      const test = el('button.btn.btn-sm', {}, [UI.lineIcon('mail'), 'שלח לי עכשיו לבדיקה']);
       test.addEventListener('click', async () => {
         test.disabled = true;
         try {
@@ -560,7 +560,7 @@ const TodayView = (() => {
       wakeMinutes.addEventListener('change', () => save({ voice: { wakeMinutes: Number(wakeMinutes.value) } }));
 
       UI.mount(body,
-        el('div.ai-section-title', { text: '📨 Today במייל' }),
+        el('div.ai-section-title', {}, [UI.lineIcon('mail'), 'Today במייל']),
         el('label.checkbox', {}, [enabled, ' שלח לי את Today במייל כל בוקר']),
         el('div.mute-sm', { text: 'הפגישות, המשימות של היום ומה שבאיחור, ההצעות למשימות והתובנות מהמייל ומהוואטסאפ — בלי ללחוץ על כלום.' }),
         el('div.today-digest-grid', { style: { opacity: dg.enabled ? '1' : '.55' } }, [
@@ -573,23 +573,23 @@ const TodayView = (() => {
         ]),
         info.digestVia
           ? el('div.mute-sm', { text: info.digestVia === 'gmail' ? 'יישלח מתיבת ה-Gmail שלך, אליך בלבד.' : 'יישלח מתיבת המערכת של משימון.' })
-          : el('div.alert.alert-warn', {}, [el('span', { text: '📭' }), el('div', { text: 'אין כרגע דרך לשלוח: שליחת מיילים אינה מוגדרת בשרת, ותיבת ה-Gmail שלך אינה מחוברת לשליחה. חברו את Google ב"החשבון שלי".' })]),
-        info.digestError ? el('div.alert.alert-warn', {}, [el('span', { text: '⚠️' }), el('div', { text: `השליחה האחרונה נכשלה: ${info.digestError}` })]) : null,
+          : el('div.alert.alert-warn', {}, [el('span', {}, [UI.lineIcon('inbox')]), el('div', { text: 'אין כרגע דרך לשלוח: שליחת מיילים אינה מוגדרת בשרת, ותיבת ה-Gmail שלך אינה מחוברת לשליחה. חברו את Google ב"החשבון שלי".' })]),
+        info.digestError ? el('div.alert.alert-warn', {}, [el('span', {}, [UI.lineIcon('alert')]), el('div', { text: `השליחה האחרונה נכשלה: ${info.digestError}` })]) : null,
         el('div', { style: { marginTop: '8px' } }, [test]),
 
-        el('div.ai-section-title', { text: '🎙 משימה מהקלטה', style: { marginTop: '20px' } }),
-        !info.ai ? el('div.alert.alert-warn', {}, [el('span', { text: '⚠️' }), el('div', { text: 'חיבור ה-AI עדיין לא הוגדר בשרת — ההקלטה תיפתח כשמנהל המערכת יגדיר אותו.' })]) : null,
+        el('div.ai-section-title', { style: { marginTop: '20px' } }, [UI.lineIcon('mic'), 'משימה מהקלטה']),
+        !info.ai ? el('div.alert.alert-warn', {}, [el('span', {}, [UI.lineIcon('alert')]), el('div', { text: 'חיבור ה-AI עדיין לא הוגדר בשרת — ההקלטה תיפתח כשמנהל המערכת יגדיר אותו.' })]) : null,
         mode('preview', 'תמיד תצוגה מקדימה', 'המשימה נפתחת ממולאת, ואתם לוחצים "יצירת משימה".'),
         mode('direct', 'יצירה ישירה כשאומרים "פתח משימה"', 'הקלטה שנפתחת ב"פתח משימה" או "פתח במשימון" — המשימה נוצרת לבד, עם "ביטול" ל-10 שניות. בלי המילים האלה — תצוגה מקדימה.'),
         el('div.mute-sm', { style: { marginTop: '6px' }, text: 'ברירות המחדל: אחראי — אתם · יעד — יום העבודה הבא · עדיפות — רגילה. משימת AI תמיד עוברת דרך האשף, כי היא שולחת הודעה לאדם אחר.' }),
 
-        el('div.ai-section-title', { text: '👂 הפעלה בקול — "משימון!"', style: { marginTop: '20px' } }),
+        el('div.ai-section-title', { style: { marginTop: '20px' } }, [UI.lineIcon('ear'), 'הפעלה בקול — "משימון!"']),
         el('label.checkbox', {}, [wake, ' להציג בטלפון את מתג ההאזנה']),
         el('div.mute-sm', { text: 'כשהמתג דולק ומשימון פתוח על המסך: אומרים "משימון" — והמערכת שואלת "במה אפשר לעזור?" ומאזינה, בלי ללחוץ.' }),
         el('div.today-digest-grid', { style: { opacity: v.wake ? '1' : '.55' } }, [
           UI.field('כיבוי אוטומטי אחרי (דקות בלי שימוש)', wakeMinutes)
         ]),
-        el('div.alert.alert-info', {}, [el('span', { text: '🔒' }), el('div', {}, [
+        el('div.alert.alert-info', {}, [el('span', {}, [UI.lineIcon('lock')]), el('div', {}, [
           el('div', { text: 'האזנה אפשרית רק כשמשימון פתוח על המסך והמסך דולק. כשהטלפון נעול — "היי Siri, משימון" באייפון, או "Hey Google, פתח משימון" באנדרואיד.' }),
           el('div', { text: 'באנדרואיד (כרום), זיהוי הדיבור של הדפדפן מעביר את הקול ל-Google כל עוד ההאזנה דולקת. משימון עצמו מקבל רק את מה שנאמר אחרי "משימון".' }),
           el('a', { href: '#', onclick: (e) => { e.preventDefault(); VoiceView.shortcutHelp(); } }, ['איך מוסיפים קיצור ל-Siri / Google'])
@@ -600,16 +600,16 @@ const TodayView = (() => {
     }
 
     function calendarsBox() {
-      const box = el('div', {}, [el('div.ai-section-title', { text: '📅 יומנים ב-Today', style: { marginTop: '20px' } }), UI.spinner()]);
+      const box = el('div', {}, [el('div.ai-section-title', { style: { marginTop: '20px' } }, [UI.lineIcon('calendar'), 'יומנים ב-Today']), UI.spinner()]);
       API.get('/api/me/calendars').then(({ calendars }) => {
         if (!calendars.length) {
-          UI.mount(box, el('div.ai-section-title', { text: '📅 יומנים ב-Today', style: { marginTop: '20px' } }),
+          UI.mount(box, el('div.ai-section-title', { style: { marginTop: '20px' } }, [UI.lineIcon('calendar'), 'יומנים ב-Today']),
             el('div.mute-sm', { text: 'מוצג היומן הראשי. לבחירת יומנים נוספים — חברו מחדש את Google.' }));
           return;
         }
         const chosen = new Set(calendars.filter((c) => c.selected).map((c) => c.id));
         UI.mount(box,
-          el('div.ai-section-title', { text: '📅 יומנים ב-Today', style: { marginTop: '20px' } }),
+          el('div.ai-section-title', { style: { marginTop: '20px' } }, [UI.lineIcon('calendar'), 'יומנים ב-Today']),
           ...calendars.map((c) => {
             const cb = el('input', { type: 'checkbox', checked: chosen.has(c.id) });
             cb.addEventListener('change', () => {

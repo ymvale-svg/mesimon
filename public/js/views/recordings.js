@@ -111,7 +111,7 @@ const RecordingsView = (() => {
     const search = el('input', { type: 'search', placeholder: view.source === 'timeless' ? 'חיפוש לפי נושא או משתתף…' : 'חיפוש לפי נושא או מארח…', value: view.q, style: { width: '220px' } });
     search.addEventListener('input', () => { view.q = search.value; drawList(); });
     return el('div.cal-head', {}, [
-      embedded ? null : el('h2', { text: '🎥 הקלטות' }),
+      embedded ? null : el('h2', {}, [UI.lineIcon('video'), 'הקלטות']),
       // המקור — רק כשיש גם Zoom
       sources.zoom ? el('div.seg', {}, [['timeless', 'Timeless'], ['zoom', 'Zoom']].map(([k, label]) =>
         el(`button${view.source === k ? '.active' : ''}`, { onclick: () => { if (view.source !== k) { view.source = k; load(); } } }, [label]))) : null,
@@ -121,7 +121,7 @@ const RecordingsView = (() => {
       el('button.btn.btn-sm', { onclick: () => { view.month = new Date(); load(); } }, ['החודש']),
       el('div.spacer'),
       search,
-      view.source === 'timeless' && App.can?.('manage_users') ? el('button.btn.btn-sm.btn-ghost', { title: 'מצב החיבור ל-Timeless — למנהלי מערכת', onclick: timelessDiag }, ['⚙ Timeless']) : null,
+      view.source === 'timeless' && App.can?.('manage_users') ? el('button.btn.btn-sm.btn-ghost', { title: 'מצב החיבור ל-Timeless — למנהלי מערכת', onclick: timelessDiag }, [UI.lineIcon('settings'), 'Timeless']) : null,
       el('button.btn.btn-sm', { title: view.source === 'timeless' ? 'רענון מ-Timeless' : 'רענון מ-Zoom', onclick: async (e) => { e.currentTarget.disabled = true; await load(); UI.success('ההקלטות עודכנו'); } }, ['⟳ רענון'])
     ]);
   }
@@ -132,7 +132,7 @@ const RecordingsView = (() => {
     listBox = el('div.rec-list');
     UI.mount(containerRef, el('div.rec', {}, [
       head(),
-      ...(data.errors ?? []).map((e) => el('div.alert.alert-warn', {}, [el('span', { text: '⚠️' }), el('div', {}, [
+      ...(data.errors ?? []).map((e) => el('div.alert.alert-warn', {}, [el('span', {}, [UI.lineIcon('alert')]), el('div', {}, [
         e,
         data.busy && retries && retries <= 3 ? el('div.mute-sm', { text: `מנסה שוב לבד בעוד ${retries * 20} שניות…` }) : null,
         // מנהל מערכת — מה בדיוק Timeless החזיר
@@ -242,11 +242,11 @@ const RecordingsView = (() => {
       ]),
       people.length ? el('div.mute-sm', { text: `משתתפים: ${people.slice(0, 6).join(', ')}${people.length > 6 ? ` +${people.length - 6}` : ''}` }) : null,
       // 📄 תחילת הסיכום של Timeless — המלא ב"📋 סיכום ומשימות"
-      r.summary ? el('div.rec-summary', {}, [el('b', { text: '📄 ' }), el('span', { text: r.summary })]) : null,
+      r.summary ? el('div.rec-summary', {}, [el('b', {}, [UI.lineIcon('file')]), el('span', { text: r.summary })]) : null,
       el('div.rec-actions', {}, [
         el('button.btn.btn-sm.btn-primary', { onclick: () => RecordingPlayer.open(r.id) }, ['▶ צפייה ותמליל']),
-        el('button.btn.btn-sm', { onclick: () => RecordingPlayer.open(r.id, { tab: 'summary' }) }, ['📋 סיכום ומשימות']),
-        el('button.btn.btn-sm.btn-ghost', { onclick: () => RecordingPlayer.open(r.id, { tab: 'ask' }) }, ['✨ שאל על הפגישה'])
+        el('button.btn.btn-sm', { onclick: () => RecordingPlayer.open(r.id, { tab: 'summary' }) }, [UI.lineIcon('clipboard'), 'סיכום ומשימות']),
+        el('button.btn.btn-sm.btn-ghost', { onclick: () => RecordingPlayer.open(r.id, { tab: 'ask' }) }, [UI.lineIcon('sparkles'), 'שאל על הפגישה'])
       ])
     ]);
   }
@@ -259,7 +259,7 @@ const RecordingsView = (() => {
     const copy = el('button.btn.btn-sm', {}, ['העתקה']);
     copy.addEventListener('click', async () => { try { await navigator.clipboard.writeText(text); UI.success('הועתק'); } catch { /* ריק */ } });
     // webhook — Timeless מודיע כשתמליל / סיכום מוכן, והפגישה נכנסת מיד (בלי לחכות לסבב של 5 דקות)
-    const hook = st.webhook?.registered ? null : el('button.btn.btn-sm.btn-primary', {}, ['🔔 עדכונים מיידיים מ-Timeless']);
+    const hook = st.webhook?.registered ? null : el('button.btn.btn-sm.btn-primary', {}, [UI.lineIcon('bell'), 'עדכונים מיידיים מ-Timeless']);
     hook?.addEventListener('click', async () => {
       hook.disabled = true;
       try { await API.post('/api/admin/timeless/webhook', {}); UI.success('Timeless יודיע למשימון כשפגישה מוכנה'); dlg.close(); } catch (err) { hook.disabled = false; UI.error(err); }
@@ -294,7 +294,7 @@ const RecordingsView = (() => {
       } catch (err) { save.disabled = false; UI.error(err); }
     });
     return el('div.card.card-pad.rec-connect', {}, [
-      el('b', { text: '🎥 ההקלטות מגיעות מ-Timeless' }),
+      el('b', {}, [UI.lineIcon('video'), 'ההקלטות מגיעות מ-Timeless']),
       el('ol.ai-steps', {}, [
         el('li', {}, ['נכנסים ל-', el('a', { href: 'https://my.timeless.day/api-token', target: '_blank', rel: 'noopener' }, ['my.timeless.day/api-token']), ' ומעתיקים את האסימון.']),
         el('li', { text: 'מדביקים כאן ← "חיבור Timeless".' })

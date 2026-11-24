@@ -178,7 +178,7 @@ const VoiceView = (() => {
     let answerMic = null;                    // המיקרופון בזמן שאלה: מאזין לתשובה
     let answerRec = null;                    // ההאזנה לתשובה הנוכחית — נעצרת בסגירה
     const input = el('textarea.voice-input', { placeholder: 'לדוגמה: פתח משימה לסדר את המעליות, אחראי דני, עד יום חמישי. צ׳קליסט: אחת להזמין טכנאי, שתיים לבדוק את הלוח.' });
-    const mic = el('button.voice-mic', { type: 'button', title: 'הקלטה' }, [el('span.voice-mic-ic', { text: '🎙' })]);
+    const mic = el('button.voice-mic', { type: 'button', title: 'הקלטה' }, [el('span.voice-mic-ic', {}, [UI.lineIcon('mic')])]);
     const sendBtn = el('button.btn.btn-primary.voice-send', { type: 'button' }, [o.forcePreview ? '✓ יצירת משימה' : '✓ המשך']);
     const typeBtn = el('button.btn.btn-ghost', { type: 'button' }, ['⌨ הקלדה']);
     const closeBtn = el('button.icon-btn.voice-close', { type: 'button', title: 'סגירה' }, ['✕']);
@@ -835,14 +835,14 @@ const VoiceView = (() => {
       body: el('div.voice-help', {}, [
         el('p', { style: { marginTop: 0 }, text: 'משימון יכול להאזין רק כשהוא פתוח על המסך. כשהטלפון נעול — העוזר הקולי של הטלפון פותח את משימון ישר להקלטה.' }),
         el('div.voice-url', {}, [el('code', { dir: 'ltr', text: url }), copy]),
-        el('div.ai-section-title', { text: '🍎 אייפון — "היי Siri, משימון"' }),
+        el('div.ai-section-title', {}, [UI.lineIcon('leaf'), 'אייפון — "היי Siri, משימון"']),
         el('ol.ai-steps', {}, [
           el('li', { text: 'פותחים את האפליקציה "קיצורים" (Shortcuts) ← ＋ קיצור חדש.' }),
           el('li', { text: 'הוספת פעולה ← "פתח כתובת URL" (Open URLs) ← מדביקים את הכתובת שלמעלה.' }),
           el('li', { text: 'שם הקיצור: משימון. שומרים.' }),
           el('li', { text: 'מעכשיו: "היי Siri, משימון" — משימון נפתח, שואל "במה אפשר לעזור?" ומאזין.' })
         ]),
-        el('div.ai-section-title', { text: '🤖 אנדרואיד — "Hey Google, פתח משימון"' }),
+        el('div.ai-section-title', {}, [UI.lineIcon('bot'), 'אנדרואיד — "Hey Google, פתח משימון"']),
         el('ol.ai-steps', {}, [
           el('li', { text: 'אחרי התקנת משימון למסך הבית: "Hey Google, פתח משימון" פותח את האפליקציה.' }),
           el('li', { text: 'לחיצה ארוכה על סמל משימון ← "משימה בקול" — פותח ישר להקלטה. אפשר לגרור אותו למסך הבית.' })

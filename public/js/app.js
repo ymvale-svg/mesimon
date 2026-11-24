@@ -252,7 +252,7 @@ const App = (() => {
       }
       else {
         UI.mount(root(), el('div.empty', {}, [
-          el('div.e-icon', { text: '⚠️' }),
+          el('div.e-icon', {}, [UI.lineIcon('alert')]),
           el('div', { text: `לא ניתן לטעון את המערכת: ${err.message}` }),
           el('button.btn.mt', { onclick: boot }, ['ניסיון חוזר'])
         ]));
@@ -554,7 +554,7 @@ const App = (() => {
     if (isVendor()) return null;   // לספק אין שרשורים פנימיים שממתינים לו
 
     const bar = el('div.notif-invite', {}, [
-      el('span', { text: '🔔' }),
+      el('span', {}, [UI.lineIcon('bell')]),
       el('div', { text: 'להפעיל התראות במחשב? הודעה שנכתבת לך בתוך משימה תופיע בפינת המסך גם כשמשימון מוסתר.' }),
       el('button.btn.btn-sm.btn-primary', {
         onclick: async () => {
@@ -966,19 +966,19 @@ const App = (() => {
 
     if (mode === 'insecure') {
       return row([
-        el('span', { text: '🔒' }),
+        el('span', {}, [UI.lineIcon('lock')]),
         el('div', { text: `התראות במחשב זמינות רק בכתובת מאובטחת (https). הכתובת הנוכחית היא ${location.protocol}//${location.host}` })
       ]);
     }
     if (mode === 'denied') {
       return row([
-        el('span', { text: '🔕' }),
+        el('span', {}, [UI.lineIcon('bell-off')]),
         el('div', { text: 'התראות במחשב חסומות בדפדפן. לפתיחה: סמל המנעול שליד הכתובת ← התראות ← אפשר' })
       ]);
     }
     if (mode === 'granted') {
       return row([
-        el('span', { text: '🔔' }),
+        el('span', {}, [UI.lineIcon('bell')]),
         el('div', { text: 'התראות במחשב פעילות — הודעה במשימה תופיע גם כשהחלון מוסתר' }),
         el('button.btn.btn-sm', {
           onclick: () => { muteDesktopNotifications(); onChanged?.(); }
@@ -988,7 +988,7 @@ const App = (() => {
 
     // 'default' (טרם נשאל) או 'muted' (הושתק במכשיר הזה)
     return row([
-      el('span', { text: '🔔' }),
+      el('span', {}, [UI.lineIcon('bell')]),
       el('div', { text: mode === 'muted'
         ? 'התראות במחשב מושתקות במכשיר הזה'
         : 'להפעיל התראות במחשב? הודעה שנכתבת לך במשימה תופיע בפינת המסך גם כשמשימון מוסתר' }),
@@ -1084,22 +1084,22 @@ const App = (() => {
 
       const header = mode === 'insecure'
         ? el('div.alert.alert-danger', {}, [
-            el('span', { text: '🔒' }),
+            el('span', {}, [UI.lineIcon('lock')]),
             el('div', { text: `התראות במחשב זמינות רק בכתובת מאובטחת (https). הכתובת הנוכחית היא ${location.protocol}//${location.host}` })
           ])
         : mode === 'unsupported'
           ? el('div.alert.alert-danger', {}, [
-              el('span', { text: '🚫' }),
+              el('span', {}, [UI.lineIcon('ban')]),
               el('div', { text: 'הדפדפן הזה אינו תומך בהתראות מערכת.' })
             ])
           : mode === 'denied'
             ? el('div.alert.alert-danger', {}, [
-                el('span', { text: '🔕' }),
+                el('span', {}, [UI.lineIcon('bell-off')]),
                 el('div', { text: 'ההתראות חסומות בדפדפן. לפתיחה: סמל המנעול שליד הכתובת ← התראות ← אפשר. אחרי השינוי יש לרענן את הדף.' })
               ])
             : mode === 'granted'
               ? el('div.alert.alert-ok', {}, [
-                  el('span', { text: '🔔' }),
+                  el('span', {}, [UI.lineIcon('bell')]),
                   el('div', { text: 'התראות במחשב פעילות. הן מוצגות כשחלון משימון אינו מול העיניים.' }),
                   el('div.flex', { style: { gap: '6px', flex: 'none' } }, [
                     el('button.btn.btn-sm', { onclick: () => sendTestNotification() }, ['בדיקה']),
@@ -1109,7 +1109,7 @@ const App = (() => {
                   ])
                 ])
               : el('div.alert.alert-info', {}, [
-                  el('span', { text: '🔔' }),
+                  el('span', {}, [UI.lineIcon('bell')]),
                   el('div', { text: mode === 'muted'
                     ? 'ההתראות מושתקות במכשיר הזה. ההגדרות שלמטה יחזרו לפעול עם ביטול ההשתקה.'
                     : 'ההתראות במחשב עדיין לא הופעלו. ההגדרות שלמטה ייכנסו לתוקף לאחר ההפעלה.' }),
@@ -1149,11 +1149,11 @@ const App = (() => {
        */
       const installRow = installedAsApp()
         ? el('div.alert.alert-ok.mt', {}, [
-            el('span', { text: '📌' }),
+            el('span', {}, [UI.lineIcon('pin')]),
             el('div', { text: 'משימון מותקן כאפליקציה. ההתראות מופיעות במרכז ההתראות של Windows בשם משימון, כמו וואטסאפ ואאוטלוק.' })
           ])
         : el('div.alert.alert-info.mt', {}, [
-            el('span', { text: '📌' }),
+            el('span', {}, [UI.lineIcon('pin')]),
             el('div', { text: 'משימון אינו מותקן כאפליקציה, ולכן ההתראות נרשמות ב-Windows על שם הדפדפן. התקנה נותנת לו שורה משלו במרכז ההתראות, עם השם והאייקון שלו — בדיוק כמו וואטסאפ ואאוטלוק.' }),
             installPrompt
               ? el('button.btn.btn-sm.btn-primary', {
@@ -1219,7 +1219,7 @@ const App = (() => {
           setPref('assignChannels', { ...(getPref('assignChannels', {}) ?? {}), [key]: box.checked });
         });
         return el('tr', {}, [
-          el('td', {}, [el('div', { text: label }), hint ? el('div.mute-sm', { text: hint }) : null]),
+          el('td', {}, [el('div', {}, UI.iconLabel(label)), hint ? el('div.mute-sm', { text: hint }) : null]),
           el('td', { style: { textAlign: 'center', width: '110px' } }, [el('label.checkbox', {}, [box])])
         ]);
       };
@@ -2214,10 +2214,10 @@ const App = (() => {
       p.canEdit
         ? el('button.track-opt', {
             onclick: act(() => BoardView.openProjectDialog(p), { modal: true })
-          }, ['✎ עריכת פרויקט'])
+          }, [UI.lineIcon('pencil'), 'עריכת פרויקט'])
         : null,
       el('button.track-opt', { onclick: act(() => togglePin(p)) },
-        [p.pinned ? '📌 שחרור הנעיצה' : '📌 נעיצה לראש הרשימה']),
+        UI.iconLabel(p.pinned ? '📌 שחרור הנעיצה' : '📌 נעיצה לראש הרשימה')),
       p.canEdit
         ? el('div.proj-pop-colors', { role: 'group', 'aria-label': 'צבע הפרויקט' }, [
             el('span.proj-pop-label', { text: 'צבע' }),
@@ -2227,7 +2227,7 @@ const App = (() => {
       p.canDelete
         ? el('button.track-opt.is-danger', {
             onclick: act(() => BoardView.deleteProjectFlow(p), { modal: true })
-          }, ['🗑 מחיקת פרויקט'])
+          }, [UI.lineIcon('trash'), 'מחיקת פרויקט'])
         : null
     ];
 
@@ -2449,7 +2449,7 @@ const App = (() => {
     } else if (state.actor?.payments) {
       // 💰 מי שהעביר לתשלום ואין לו הרשאות בפריוריטי — ישר לתשלומים שלו
       items.push(el('a.nav-item', { href: '/priority/payments', 'aria-label': 'התשלומים שלי', title: 'מה שהעברת לתשלום — ומתי ישולם' }, [
-        el('span.ico', {}, [el('span.nav-emoji', { text: '💰' })]),
+        el('span.ico', {}, [el('span.nav-emoji', {}, [UI.lineIcon('coins')])]),
         el('span', { text: 'התשלומים שלי' })
       ]));
     }
@@ -2752,7 +2752,7 @@ const App = (() => {
         ? el('button.btn.btn-primary', { onclick: () => BoardView.openTaskDialog() }, ['＋ משימה חדשה'])
         : null,
       // בטלפון שדה החיפוש מוסתר — הזכוכית פותחת אותו כחלון מלא (מוצגת רק שם, ב-CSS)
-      el('button.icon-btn.m-search-btn', { title: 'חיפוש ומעבר מהיר', 'aria-label': 'חיפוש', onclick: () => openSearchOverlay() }, ['🔍']),
+      el('button.icon-btn.m-search-btn', { title: 'חיפוש ומעבר מהיר', 'aria-label': 'חיפוש', onclick: () => openSearchOverlay() }, [UI.lineIcon('search')]),
       bell,
       (() => {
         // רמת הגישה מוצגת רק למי שרשאי לראות רמות; לשאר מוצגת המחלקה
@@ -2921,42 +2921,42 @@ const App = (() => {
           el('tbody', {}, [
             el('tr', {}, [
               el('td', {}, [
-                el('div', { text: '📬 תובנות ב-Today — מהמייל ומהוואטסאפ' }),
+                el('div', {}, [UI.lineIcon('mail'), 'תובנות ב-Today — מהמייל ומהוואטסאפ']),
                 el('div.mute-sm', { text: 'החלק האחרון של Today: במסך, בבוט (בהודעת המשך) ובמייל הבוקר. את הרשימה המלאה מקבלים תמיד לפי בקשה: "תובנות", "תובנות מהיומיים האחרונים".' })
               ]),
               el('td', { style: { textAlign: 'center', width: '110px' } }, [el('label.checkbox', {}, [box])])
             ]),
             el('tr', {}, [
               el('td', {}, [
-                el('div', { text: '💡 טיפ יומי — "ידעת שהבוט יודע…?"' }),
+                el('div', {}, [UI.lineIcon('lightbulb'), 'טיפ יומי — "ידעת שהבוט יודע…?"']),
                 el('div.mute-sm', { text: 'פעם ביום, ב-9 בבוקר: משהו שעוד לא ניסית שהבוט יודע לעשות, עם כפתור "נסו עכשיו". גם בבוט: "מספיק טיפים".' })
               ]),
               el('td', { style: { textAlign: 'center', width: '110px' } }, [el('label.checkbox', {}, [tips])])
             ]),
             el('tr', {}, [
               el('td', {}, [
-                el('div', { text: '📧 מייל חדש — הבוט פונה אליי' }),
+                el('div', {}, [UI.lineIcon('mail'), 'מייל חדש — הבוט פונה אליי']),
                 el('div.mute-sm', { text: 'על כל מייל שמחכה ממך למשהו: "קיבלת מייל מ… — לענות לו כך?" עם כן / לא. מייל שכבר קראת — לא נשאל עליו.' })
               ]),
               el('td', { style: { textAlign: 'center', width: '110px' } }, [el('label.checkbox', {}, [alert])])
             ]),
             el('tr', {}, [
               el('td', {}, [
-                el('div', { text: '🎥 אחרי פגישה מוקלטת — הבוט שואל אותי' }),
+                el('div', {}, [UI.lineIcon('video'), 'אחרי פגישה מוקלטת — הבוט שואל אותי']),
                 el('div.mute-sm', { text: '"הפגישה הסתיימה והוקלטה. איך היה? מה לשלוח לך?" — סיכום, המשימות שלי מהפגישה או ההקלטה. רק בפגישות שהשתתפתי בהן.' })
               ]),
               el('td', { style: { textAlign: 'center', width: '110px' } }, [el('label.checkbox', {}, [followup])])
             ]),
             el('tr', {}, [
               el('td', {}, [
-                el('div', { text: '🐣 תזכורת ממייל — "זכרת?"' }),
+                el('div', {}, [UI.lineIcon('sprout'), 'תזכורת ממייל — "זכרת?"']),
                 el('div.mute-sm', { text: 'מייל שמחכה ממך ולא טופל — יום אחרי שהגיע (או בבוקר יום הדדליין): "זכרת?" עם 💡 הצעת תשובה / טיפלתי / התעלם. רק על מייל שאתה האחראי עליו.' })
               ]),
               el('td', { style: { textAlign: 'center', width: '110px' } }, [el('label.checkbox', {}, [deadline])])
             ]),
             el('tr', {}, [
               el('td', {}, [
-                el('div', { text: '🌊 קצב התזכורות' }),
+                el('div', {}, [UI.lineIcon('waves'), 'קצב התזכורות']),
                 el('div.mute-sm', { text: 'כמה תזכורות על מיילים שלא טופלו במהלך היום — החשובות קודם (דדליין קרוב, עדיפות). לא באמצע פגישה, ורק בשעות העבודה.' }),
                 pace
               ]),
@@ -2965,14 +2965,14 @@ const App = (() => {
             // 🗂 רק למי שמורשה בפריוריטי — מי שלא, לא רואה את האפשרות בכלל (13.11.26)
             !state.actor?.priority ? null : el('tr', {}, [
               el('td', {}, [
-                el('div', { text: '📄 חשבונית במייל — להציע קבלת סחורה' }),
+                el('div', {}, [UI.lineIcon('file'), 'חשבונית במייל — להציע קבלת סחורה']),
                 el('div.mute-sm', { text: 'כשמגיעה חשבונית או תעודת משלוח: "לבצע קבלת סחורה?" — הבוט מוריד את הקובץ מהמייל ומתחיל. רק למי שמורשה לקבלת סחורה.' })
               ]),
               el('td', { style: { textAlign: 'center', width: '110px' } }, [el('label.checkbox', {}, [goods])])
             ]),
             el('tr', {}, [
               el('td', {}, [
-                el('div', { text: '📝 טופס ריק במייל — להציע למלא' }),
+                el('div', {}, [UI.lineIcon('pencil'), 'טופס ריק במייל — להציע למלא']),
                 el('div.mute-sm', { text: 'רק כשאני הנמען הראשי (לא בהעתק): הבוט ממלא מכרטיס החברה ומהפרטים שלי, מראה לי, ושולח לשולח רק אחרי אישור.' })
               ]),
               el('td', { style: { textAlign: 'center', width: '110px' } }, [el('label.checkbox', {}, [formOffer])])
@@ -3018,10 +3018,10 @@ const App = (() => {
         ])
       ]),
       isVendor() ? null : el('div.flex.mt', { style: { gap: '8px', flexWrap: 'wrap' } }, [
-        el('button.btn', { onclick: () => { close(); navigate('phonebook'); } }, ['📒 אלפון ארגוני']),
-        el('button.btn', { 'data-anchor': 'account.whats-new', onclick: () => { close(); WhatsNewView.open({ force: true }); } }, ['✨ מה חדש במערכת'])
+        el('button.btn', { onclick: () => { close(); navigate('phonebook'); } }, [UI.lineIcon('contacts'), 'אלפון ארגוני']),
+        el('button.btn', { 'data-anchor': 'account.whats-new', onclick: () => { close(); WhatsNewView.open({ force: true }); } }, [UI.lineIcon('sparkles'), 'מה חדש במערכת'])
       ]),
-      el('div.mt', {}, [el('button.btn.btn-danger', { type: 'button', onclick: () => logout() }, ['🚪 התנתקות'])]),
+      el('div.mt', {}, [el('button.btn.btn-danger', { type: 'button', onclick: () => logout() }, [UI.lineIcon('log-out'), 'התנתקות'])]),
       el('div.alert.alert-info.mt', {}, [el('div', {}, [
         el('b', { text: 'מה מותר לי במערכת?' }),
         el('div', { text: 'ההרשאות נקבעות לפי מטריצת ההרשאות של המחלקה. לשינוי — יש לפנות למנהל המערכת.' })
@@ -3043,7 +3043,7 @@ const App = (() => {
         el(`button.my-settings-item${t.key === current ? '.active' : ''}`, {
           type: 'button', 'aria-current': t.key === current ? 'page' : null,
           onclick: () => navigate('settings', { tab: t.key })
-        }, [el('span.my-settings-label', { text: t.label }), el('span.my-settings-hint', { text: t.hint })])
+        }, [el('span.my-settings-label', {}, UI.iconLabel(t.label)), el('span.my-settings-hint', { text: t.hint })])
       ])))
     ]);
     const box = el('div');
@@ -3055,7 +3055,7 @@ const App = (() => {
       el('div.my-settings', {}, [
         nav,
         el('section.card.my-settings-pane', { 'aria-labelledby': 'my-settings-title' }, [
-          el('div.card-pad', {}, [el('h2#my-settings-title', { text: tab.label }), box])
+          el('div.card-pad', {}, [el('h2#my-settings-title', {}, UI.iconLabel(tab.label)), box])
         ])
       ])
     );
@@ -3193,7 +3193,7 @@ const App = (() => {
         ? el(`button.m-action.m-action-wake${VoiceWake.isOn() ? '.on' : ''}`, {
             title: VoiceWake.isOn() ? 'כיבוי ההאזנה' : 'האזנה — אמרו "משימון"',
             onclick: () => VoiceWake.toggle()
-          }, [el('span', { text: '👂' }), el('span', { text: VoiceWake.isOn() ? 'מאזין' : 'האזנה' })])
+          }, [el('span', {}, [UI.lineIcon('ear')]), el('span', { text: VoiceWake.isOn() ? 'מאזין' : 'האזנה' })])
         : null
     ]);
   }

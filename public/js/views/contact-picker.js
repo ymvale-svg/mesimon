@@ -280,7 +280,7 @@ const ContactPicker = (() => {
     const name = el('input', { type: 'text', value: contact.name ?? '' });
     const email = el('input', { type: 'email', dir: 'ltr', value: contact.email ?? '' });
     const phone = el('input', { type: 'tel', dir: 'ltr', value: contact.phone ?? '' });
-    const ok = el('button.btn.btn-primary', {}, ['⭐ שמירה']);
+    const ok = el('button.btn.btn-primary', {}, [UI.lineIcon('star'), 'שמירה']);
     const m = UI.modal({
       title: '⭐ שמירה באנשי הקשר של Google',
       body: el('div', {}, [
@@ -323,10 +323,10 @@ const ContactPicker = (() => {
         API.post('/api/ai/contacts/dismiss', { email: contact.email, phone: contact.phone }).catch(() => {});
       });
       UI.mount(box, el('div.alert.alert-info.cp-suggest', {}, [
-        el('span', { text: '⭐' }),
+        el('span', {}, [UI.lineIcon('star')]),
         el('div', {}, [el('b', { text: contact.name || contact.email || contact.phone }), ' אינו באנשי הקשר שלך ב-Google.']),
         el('div.spacer'),
-        el('button.btn.btn-sm.btn-primary', { onclick: () => saveDialog(contact, { onSaved: () => box.remove() }) }, ['⭐ שמור']),
+        el('button.btn.btn-sm.btn-primary', { onclick: () => saveDialog(contact, { onSaved: () => box.remove() }) }, [UI.lineIcon('star'), 'שמור']),
         no
       ]));
     }).catch(() => {});

@@ -16,7 +16,7 @@ const AdminAiView = (() => {
     let sub = 'knowledge';
     const holder = el('div');
     const seg = el('div.seg', {}, [['knowledge', '📚 ידע ארגוני'], ['topics', '🔒 טבלת רגישות'], ['memory', '🧠 זיכרון'], ['agents', '🤖 סוכנים'], ['log', '📜 יומן']].map(([key, label]) => {
-      const b = el(`button${key === sub ? '.active' : ''}`, { type: 'button' }, [label]);
+      const b = el(`button${key === sub ? '.active' : ''}`, { type: 'button' }, UI.iconLabel(label));
       b.addEventListener('click', () => { sub = key; for (const x of seg.children) x.classList.toggle('active', x === b); draw(); });
       return b;
     }));
@@ -39,7 +39,7 @@ const AdminAiView = (() => {
     const deptSel = el('select');
     const topicSel = el('select');
     const weekBox = el('input', { type: 'checkbox' });
-    const run = el('button.btn.btn-sm', { type: 'button', title: 'זיקוק של מה שנוסף לזיכרון אצל כל העובדים, ואיחוד — עכשיו, בלי לחכות לבוקר' }, ['🔄 עדכן עכשיו']);
+    const run = el('button.btn.btn-sm', { type: 'button', title: 'זיקוק של מה שנוסף לזיכרון אצל כל העובדים, ואיחוד — עכשיו, בלי לחכות לבוקר' }, [UI.lineIcon('refresh'), 'עדכן עכשיו']);
     const blockInput = el('textarea', { rows: '2', placeholder: 'שמות לקוחות, מופרדים בפסיק — יוסרו תמיד מהידע' });
     const blockSave = el('button.btn.btn-sm', { type: 'button' }, ['שמירה']);
     let timer = null;
@@ -70,7 +70,7 @@ const AdminAiView = (() => {
         const r = await API.get(`/api/admin/knowledge?q=${encodeURIComponent(q)}&dept=${dept}&topic=${encodeURIComponent(topic)}&week=${week ? 1 : 0}`);
         topicsTable = r.topics ?? {};
         if (!topicSel.children.length) {
-          UI.mount(topicSel, el('option', { value: '' }, ['כל הנושאים']), el('option', { value: '_none' }, ['🔒 לא מסווג']), ...Object.entries(topicsTable).map(([k, t]) => el('option', { value: k }, [t.label])));
+          UI.mount(topicSel, el('option', { value: '' }, ['כל הנושאים']), el('option', { value: '_none' }, [UI.lineIcon('lock'), 'לא מסווג']), ...Object.entries(topicsTable).map(([k, t]) => el('option', { value: k }, [t.label])));
         }
         if (!deptSel.children.length) {
           UI.mount(deptSel, el('option', { value: '' }, ['כל המחלקות']), ...Object.entries(r.depts).filter(([, v]) => v).map(([k, v]) => el('option', { value: k }, [v])));
@@ -87,7 +87,7 @@ const AdminAiView = (() => {
     function entryRow(e) {
       const row = el(`div.mm-row${e.hidden ? '.mm-hidden' : ''}`);
       const act = (label, title, fn) => {
-        const b = el('button.btn.btn-sm.btn-ghost', { type: 'button', title }, [label]);
+        const b = el('button.btn.btn-sm.btn-ghost', { type: 'button', title, 'aria-label': title }, UI.iconLabel(label));
         b.addEventListener('click', async () => { b.disabled = true; try { await fn(); } catch (err) { UI.error(err); } b.disabled = false; });
         return b;
       };
@@ -118,7 +118,7 @@ const AdminAiView = (() => {
   const LEVEL_TEXT = { 1: '🟢 כללי — כל העובדים', 2: '🔵 מקצועי — עובדי המחלקות של הנושא', 3: '🟠 רגיש — מנהלי המחלקות של הנושא והנהלה', 4: '🔴 סודי — הנהלה בלבד' };
 
   function classChip(e, table) {
-    if (!e.classified || !e.topic) return el('span.ai-chip.ai-chip-warn', { text: '🔒 לא מסווג — הנהלה בלבד', title: 'ייסווג בעדכון הבא. עד אז עובדים לא מקבלים אותו' });
+    if (!e.classified || !e.topic) return el('span.ai-chip.ai-chip-warn', { title: 'ייסווג בעדכון הבא. עד אז עובדים לא מקבלים אותו' }, [UI.lineIcon('lock'), 'לא מסווג — הנהלה בלבד']);
     const t = table[e.topic];
     const lvl = Math.max(e.sens || 4, t?.floor ?? 4);
     return el(`span.ai-chip${lvl >= 3 ? '.ai-chip-warn' : ''}`, { text: `${t?.label ?? e.topic} · ${LEVEL_TEXT[lvl].split(' — ')[0]}`, title: LEVEL_TEXT[lvl] });
@@ -207,10 +207,10 @@ const AdminAiView = (() => {
         el('tbody', {}, rows.map((x) => x.row))
       ])]),
       save,
-      el('h4', { text: '👑 ההנהלה — רואה את כל הרמות', style: { marginTop: '16px' } }),
+      el('h4', { style: { marginTop: '16px' } }, [UI.lineIcon('crown'), 'ההנהלה — רואה את כל הרמות']),
       el('p.mute-sm', { text: 'אדמין על, ו"הנהלה" שאינו משויך למחלקה מקצועית (בלי מחלקה, או מחלקה בשם הנהלה / מנכ"ל). "הנהלה" שמשויך למחלקה אחרת — למשל סמנכ"ל כספים במחלקת כספים — מקבל את מה שמנהל המחלקה שלו מקבל. מנהל מערכת אינו הנהלה.' }),
       el('div.mm-list', {}, r.leadership.map((u) => el('div.mm-row', {}, [el('div.mm-row-main', {}, [el('b', { text: u.name }), el('span.mute-sm', { text: ` · ${u.leader ? '👑 הנהלה — רואה הכול' : `כמנהל ${u.departments.join(' › ') || ''}`}` })])]))),
-      el('h4', { text: '👁 איך זה נראה לעובד', style: { marginTop: '16px' } }),
+      el('h4', { style: { marginTop: '16px' } }, [UI.lineIcon('eye'), 'איך זה נראה לעובד']),
       el('div.mm-tools', {}, [pvDept, pvRole]),
       pvOut
     );
@@ -244,7 +244,7 @@ const AdminAiView = (() => {
     try { r = await API.get('/api/admin/mail-memory'); } catch (err) { return UI.mount(holder, UI.empty(err.message, '⚠️')); }
     const total = r.users.reduce((n, u) => n + (u.cost ?? 0), 0);
     const act = (u, action, label, confirmText) => {
-      const b = el('button.btn.btn-sm', { type: 'button' }, [label]);
+      const b = el('button.btn.btn-sm', { type: 'button' }, UI.iconLabel(label));
       b.addEventListener('click', async () => {
         if (confirmText && !await UI.confirm(confirmText, { danger: true, okText: label })) return;
         b.disabled = true;
@@ -297,7 +297,7 @@ const AdminAiView = (() => {
     const healthBox = el('div');
     let last = null;
     try { last = (await API.get('/api/admin/agents/health')).last; } catch { /* בלי תוצאה קודמת */ }
-    const runBtn = el('button.btn.btn-primary', { type: 'button' }, ['🩺 בדיקת סוכנים']);
+    const runBtn = el('button.btn.btn-primary', { type: 'button' }, [UI.lineIcon('activity'), 'בדיקת סוכנים']);
     runBtn.addEventListener('click', async () => {
       runBtn.disabled = true;
       runBtn.textContent = '🩺 בודק… (עד דקה)';
@@ -308,7 +308,7 @@ const AdminAiView = (() => {
     if (last) drawHealth(healthBox, last);
     UI.mount(holder,
       el('div.ai-sec', {}, [
-        el('div.ai-sec-head', {}, [el('b', { text: '🩺 בדיקת סוכנים' }), el('span.mute-sm', { text: ' · מהשרת החי: קריאה אמיתית לכל מקור נתונים, ל-AI, למחשבונים ול-Timeless שלך' })]),
+        el('div.ai-sec-head', {}, [el('b', {}, [UI.lineIcon('activity'), 'בדיקת סוכנים']), el('span.mute-sm', { text: ' · מהשרת החי: קריאה אמיתית לכל מקור נתונים, ל-AI, למחשבונים ול-Timeless שלך' })]),
         el('div', { style: { margin: '6px 0' } }, [runBtn]),
         healthBox
       ]),
@@ -317,7 +317,7 @@ const AdminAiView = (() => {
         el('div.ai-sec-head', {}, [el('b', { text: `${g.icon} ${label}` })]),
         ...g.list.map(agentRow)
       ])),
-      el('div.ai-sec', {}, [el('div.ai-sec-head', {}, [el('b', { text: '🌐 מקורות נתונים' }), el('span.mute-sm', { text: ' · עולים כשסוכן צריך אותם לראשונה' })]), ...(mcpRows.length ? mcpRows : [el('div.mute-sm', { text: 'עוד לא הופעלו מאז שהשרת עלה.' })])])
+      el('div.ai-sec', {}, [el('div.ai-sec-head', {}, [el('b', {}, [UI.lineIcon('globe'), 'מקורות נתונים']), el('span.mute-sm', { text: ' · עולים כשסוכן צריך אותם לראשונה' })]), ...(mcpRows.length ? mcpRows : [el('div.mute-sm', { text: 'עוד לא הופעלו מאז שהשרת עלה.' })])])
     );
   }
 
@@ -421,20 +421,20 @@ const AdminAiView = (() => {
           el('div.mute-sm', { text: `ממוצע ${money(perDay)} ליום · ${r.total.calls} קריאות · קלט ${k(r.total.input)} · מהמטמון ${k(r.total.cacheRead)} · פלט ${k(r.total.output)}` })
         ])]),
         r.bulk?.total ? el('div.mute-sm', { text: `📭 ${r.bulk.total} מיילים סוננו בלי AI — ${r.bulk.byReason.newsletter ?? 0} ניוזלטרים, ${r.bulk.byReason.auto_reply ?? 0} מענים אוטומטיים` }) : null,
-        el('h4', { text: '🧩 לפי תכונה', style: { marginTop: '16px' } }),
+        el('h4', { style: { marginTop: '16px' } }, [UI.lineIcon('puzzle'), 'לפי תכונה']),
         table(['תכונה', 'עלות', '%', 'קריאות', 'קלט', 'מהמטמון', 'פלט'], r.byFeature.map((f) => [
           f.label, money(f.usd), `${r.total.usd ? Math.round((f.usd / r.total.usd) * 100) : 0}%`, f.calls, k(f.input), k(f.cacheRead), k(f.output)
         ])),
-        el('h4', { text: '👤 לפי עובד', style: { marginTop: '16px' } }),
-        el('p.mute-sm', { text: '📉 מינון המייל: מי שלא משתמש בהצעות המייל (בבוט או ב"ממתין לאישורך") יורד בכל שבוע עבודה מדרגה — 100% ← 50% ← 20% ← מושהה, ו-5 הצעות ברצף שלא נפתחו — מדרגה מיד. כל שימוש מחזיר ל-100%.' }),
+        el('h4', { style: { marginTop: '16px' } }, [UI.lineIcon('user'), 'לפי עובד']),
+        el('p.mute-sm', {}, [UI.lineIcon('trending-down'), 'מינון המייל: מי שלא משתמש בהצעות המייל (בבוט או ב"ממתין לאישורך") יורד בכל שבוע עבודה מדרגה — 100% ← 50% ← 20% ← מושהה, ו-5 הצעות ברצף שלא נפתחו — מדרגה מיד. כל שימוש מחזיר ל-100%.']),
         table(['עובד', 'עלות', 'קריאות', '📉 מינון מייל', '👁 הצעות שנקראו (30 יום)', 'על מה בעיקר'], r.byUser.map((u) => [
           u.name, money(u.usd), u.calls, u.dose ? (u.dose.percent ? `${u.dose.percent}%` : '⏸ מושהה') : '—',
           !u.reads ? '—' : !u.reads.reports ? `${u.reads.sent} נשלחו · אישורי קריאה כבויים` : `${u.reads.read} מתוך ${u.reads.sent}`,
           u.features.slice(0, 3).map((f) => `${f.label} ${money(f.usd)}`).join(' · ')
         ])),
-        el('h4', { text: '🧠 לפי מודל', style: { marginTop: '16px' } }),
+        el('h4', { style: { marginTop: '16px' } }, [UI.lineIcon('brain'), 'לפי מודל']),
         table(['מודל', 'עלות', 'קריאות', 'קלט', 'פלט'], r.byModel.map((m) => [`${m.model}${m.fast ? ' ⚡ מהיר' : ''}`, money(m.usd), m.calls, k(m.input), k(m.output)])),
-        el('h4', { text: '📅 לפי יום', style: { marginTop: '16px' } }),
+        el('h4', { style: { marginTop: '16px' } }, [UI.lineIcon('calendar'), 'לפי יום']),
         table(['יום', 'עלות', 'קריאות'], [...r.byDay].reverse().map((d) => [d.day, money(d.usd), d.calls]))
       );
     }

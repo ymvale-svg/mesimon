@@ -50,7 +50,7 @@ const AiTaskView = (() => {
       UI.modal({
         title: '✨ משימת AI',
         body: el('div.alert.alert-warn', {}, [
-          el('span', { text: '⚠️' }),
+          el('span', {}, [UI.lineIcon('alert')]),
           el('div', {}, [
             el('b', { text: 'חיבור ה-AI עדיין לא הוגדר בשרת' }),
             el('div', { text: 'מנהל המערכת צריך להגדיר את המשתנה ANTHROPIC_API_KEY. אחרי זה האפשרות תיפתח כאן.' })
@@ -220,7 +220,7 @@ const AiTaskView = (() => {
       const extrasBox = el('div');
       const showColleague = () => UI.mount(colleagueNote, state.contact.type === 'user'
         ? el('div.alert.alert-info', {}, [
-            el('span', { text: '👤' }),
+            el('span', {}, [UI.lineIcon('user')]),
             el('div', { text: 'זה עובד בארגון — לא יישלח אליו מייל מבחוץ. המשימה תיכנס אליו במשימון, והעוזר יזכיר לו בתוך המערכת עד שיסמן "בוצע".' })
           ])
         : null);
@@ -264,7 +264,7 @@ const AiTaskView = (() => {
                   el('button.btn.btn-sm', {
                     type: 'button',
                     onclick: () => ContactPicker.saveDialog({ ...c, email: emailInput.value, phone: phoneInput.value || c.phone }, { onSaved: () => UI.mount(extrasBox) })
-                  }, ['⭐ שמור באנשי הקשר של Google'])
+                  }, [UI.lineIcon('star'), 'שמור באנשי הקשר של Google'])
                 ])
               : null);
           showColleague();
@@ -313,7 +313,7 @@ const AiTaskView = (() => {
                 onclick: () => PhonebookView.editDialog({ name, email, phone }, {
                   onSaved: (entry) => { if (entry) { fromPhonebook = true; showPbSave(); } }
                 })
-              }, ['📒 שמירה באלפון'])
+              }, [UI.lineIcon('contacts'), 'שמירה באלפון'])
             ])
           : null);
       };
@@ -354,7 +354,7 @@ const AiTaskView = (() => {
         Object.assign(state.policy, policyBox.read());
       }
 
-      const go = el('button.btn.btn-primary', {}, ['✨ נסח לי את הפנייה']);
+      const go = el('button.btn.btn-primary', {}, [UI.lineIcon('sparkles'), 'נסח לי את הפנייה']);
       go.addEventListener('click', async () => {
         read();
         if (!state.instruction) return UI.toast('כתבו מה המשימה', 'error');
@@ -376,7 +376,7 @@ const AiTaskView = (() => {
           'כתבו בחופשיות: למי לפנות, מה לבקש, ואם יש — עד מתי ולמה. ה-AI ינסח, ואתם תאשרו לפני שליחה.'),
         el('div.ai-section-title', { text: 'הנמען' }),
         state.fromEmail
-          ? el('div.alert.alert-warn', {}, [el('span', { text: '📧' }), el('div', { text: 'פרטי הנמען חולצו מתוך המייל שהתקבל. בדקו שהם נכונים — הפנייה תצא אליהם בשמך.' })])
+          ? el('div.alert.alert-warn', {}, [el('span', {}, [UI.lineIcon('mail')]), el('div', { text: 'פרטי הנמען חולצו מתוך המייל שהתקבל. בדקו שהם נכונים — הפנייה תצא אליהם בשמך.' })])
           : null,
         el('div.row', {}, [
           UI.field('שם', picker.node),
@@ -397,7 +397,7 @@ const AiTaskView = (() => {
         // מייל יוצא רק מהתיבה האישית — מי שלא חיבר אותה רואה כאן איך לחבר
         !status.mail && state.contact.type !== 'user'
           ? el('div.alert.alert-warn', {}, [
-              el('span', { text: '📭' }),
+              el('span', {}, [UI.lineIcon('inbox')]),
               el('div', {}, [
                 status.gmail?.state === 'ok' && !status.gmail.canSend
                   ? 'תיבת ה-Gmail שלך מחוברת לקריאה בלבד. כדי לשלוח ממנה צריך לחבר אותה מחדש ולאשר גם שליחה. '
@@ -436,7 +436,7 @@ const AiTaskView = (() => {
     /** אין חתימה ב-Gmail — למה, ומה ייכתב בסוף המייל במקומה */
     function signatureWarning(miss) {
       return el('div.alert.alert-warn.ai-signature-warn', {}, [
-        el('span', { text: '✍️' }),
+        el('span', {}, [UI.lineIcon('pencil')]),
         el('div', {}, [
           el('b', { text: 'המייל ייצא בלי החתימה שלך. ' }),
           el('span', { text: miss.help ?? '' }),
@@ -456,7 +456,7 @@ const AiTaskView = (() => {
         try { frame.style.height = `${Math.min(220, frame.contentDocument.body.scrollHeight + 8)}px`; } catch { /* נשאר בגובה ברירת המחדל */ }
       });
       return el('div.ai-signature-box', {}, [
-        el('div.mute-sm', { text: '✍️ החתימה שלך מ-Gmail תצורף בסוף המייל (משנים אותה ב-Gmail ← הגדרות ← חתימה)' }),
+        el('div.mute-sm', {}, [UI.lineIcon('pencil'), 'החתימה שלך מ-Gmail תצורף בסוף המייל (משנים אותה ב-Gmail ← הגדרות ← חתימה)']),
         frame
       ]);
     }
@@ -517,7 +517,7 @@ const AiTaskView = (() => {
       };
 
       const feedback = el('input', { type: 'text', placeholder: 'מה לשנות? למשל: "יותר רשמי", "להוסיף שזה דחוף", "באנגלית"' });
-      const redo = el('button.btn', {}, ['✨ תקן']);
+      const redo = el('button.btn', {}, [UI.lineIcon('sparkles'), 'תקן']);
       const doRedo = async () => {
         if (!feedback.value.trim()) return feedback.focus();
         read();
@@ -577,11 +577,11 @@ const AiTaskView = (() => {
       });
 
       return el('div', {}, [
-        d.notes ? el('div.alert.alert-info', {}, [el('span', { text: '💡' }), el('div', { text: d.notes })]) : null,
+        d.notes ? el('div.alert.alert-info', {}, [el('span', {}, [UI.lineIcon('lightbulb')]), el('div', { text: d.notes })]) : null,
         // מההתכתבות האחרונה עם הנמען: מה כדאי להוסיף. לחיצה — ה-AI מוסיף למייל
         d.suggestions?.length && !internal
           ? el('div.alert.alert-info', {}, [
-              el('span', { text: '📨' }),
+              el('span', {}, [UI.lineIcon('mail')]),
               el('div', {}, [
                 el('div', { text: 'מההתכתבות האחרונה איתו — אולי להוסיף:' }),
                 el('div.flex', { style: { gap: '6px', flexWrap: 'wrap', marginTop: '6px' } }, d.suggestions.map((x) =>
@@ -636,7 +636,7 @@ const AiTaskView = (() => {
     for (const i of [emailAttempts, daysEmail, wa, waAttempts, daysWa, approveAll]) i.addEventListener('input', () => { sumNode.textContent = summary(); });
 
     const node = el('details.ai-policy', {}, [
-      el('summary', {}, ['🔁 מדיניות מעקב: ', sumNode]),
+      el('summary', {}, [UI.lineIcon('refresh'), 'מדיניות מעקב: ', sumNode]),
       el('div.ai-policy-grid', {}, [
         el('label', {}, [waReady ? 'מיילים שלא נענו לפני מעבר לוואטסאפ ' : 'מיילים שלא נענו לפני עצירה ', emailAttempts]),
         el('label', {}, ['ימי עבודה בין מיילים ', daysEmail]),
@@ -687,7 +687,7 @@ const AiTaskView = (() => {
       if (!o) return;
       const who = o.contact ? (o.contact.name || o.contact.email) : (o.recipient?.name || o.recipient?.org || '');
       const head = el('div.flex', { style: { alignItems: 'center', gap: '8px', flexWrap: 'wrap' } }, [
-        el('span', { text: '✉️' }),
+        el('span', {}, [UI.lineIcon('mail')]),
         el('b', { text: o.state === 'ready' ? `הכנתי נוסח מייל ל${who}` : 'אפשר לשלוח מכאן מייל לנמען' }),
         el('div.spacer'),
         o.state === 'ready' && !open ? el('button.btn.btn-sm.btn-primary', { onclick: () => { open = true; draw(o); } }, ['הצגת הנוסח']) : null,
@@ -709,7 +709,7 @@ const AiTaskView = (() => {
       if (o.state === 'no_contact') {
         const email = el('input', { type: 'email', placeholder: 'כתובת המייל של הנמען', dir: 'ltr' });
         const name = el('input', { type: 'text', placeholder: 'שם (לא חובה)', value: o.recipient?.name ?? '' });
-        const go = el('button.btn.btn-sm.btn-primary', {}, ['✨ הכנת נוסח']);
+        const go = el('button.btn.btn-sm.btn-primary', {}, [UI.lineIcon('sparkles'), 'הכנת נוסח']);
         go.addEventListener('click', () => {
           if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.value.trim())) return UI.toast('כתבו כתובת מייל תקינה', 'error');
           busy(go, () => redraft({ contact: { name: name.value.trim(), email: email.value.trim() } }));
@@ -737,7 +737,7 @@ const AiTaskView = (() => {
       const text = el('textarea', { rows: 6 }, []);
       text.value = o.draft.body ?? '';
       const feedback = el('input', { type: 'text', placeholder: 'מה לתקן? למשל: "תוסיף שזה דחוף" או "באנגלית"' });
-      const redo = el('button.btn', {}, ['✨ תיקון']);
+      const redo = el('button.btn', {}, [UI.lineIcon('sparkles'), 'תיקון']);
       const doRedo = () => {
         if (!feedback.value.trim()) return;
         busy(redo, () => redraft({ feedback: feedback.value.trim() }));
@@ -745,7 +745,7 @@ const AiTaskView = (() => {
       redo.addEventListener('click', doRedo);
       feedback.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); doRedo(); } });
 
-      const send = el('button.btn.btn-primary', {}, ['📧 שליחה']);
+      const send = el('button.btn.btn-primary', {}, [UI.lineIcon('mail'), 'שליחה']);
       send.addEventListener('click', () => busy(send, async () => {
         const res = await API.post(`${base}/send`, {
           subject: subject.value, body: text.value,
@@ -757,10 +757,10 @@ const AiTaskView = (() => {
 
       box.append(el('div.ai-panel', {}, [
         head,
-        o.notes ? el('div.alert.alert-info', { style: { marginTop: '8px' } }, [el('span', { text: '💡' }), el('div', { text: o.notes })]) : null,
+        o.notes ? el('div.alert.alert-info', { style: { marginTop: '8px' } }, [el('span', {}, [UI.lineIcon('lightbulb')]), el('div', { text: o.notes })]) : null,
         o.suggestions?.length
           ? el('div.alert.alert-info', { style: { marginTop: '8px' } }, [
-              el('span', { text: '📨' }),
+              el('span', {}, [UI.lineIcon('mail')]),
               el('div', {}, [
                 el('div', { text: 'מההתכתבות האחרונה איתו — אולי להוסיף:' }),
                 el('div.flex', { style: { gap: '6px', flexWrap: 'wrap', marginTop: '6px' } }, o.suggestions.map((x) =>
@@ -815,7 +815,7 @@ const AiTaskView = (() => {
         ].filter(Boolean).join(' · ');
 
     const head = el('div.ai-head', {}, [
-      el('span.ai-badge', { text: '✨ AI' }),
+      el('span.ai-badge', {}, [UI.lineIcon('sparkles'), 'AI']),
       el(`span.ai-state.ai-state-${a.state}`, { text: a.stateLabel }),
       el('span.ai-contact', { text: contactLine }),
       el('div.spacer'),
@@ -830,7 +830,7 @@ const AiTaskView = (() => {
       lines.push(el('div.ai-summary', {}, [el('b', { text: 'מה ענו: ' }), a.lastSummary]));
     }
     if (a.error) {
-      lines.push(el('div.alert.alert-warn', {}, [el('span', { text: '⚠️' }), el('div', { text: a.error })]));
+      lines.push(el('div.alert.alert-warn', {}, [el('span', {}, [UI.lineIcon('alert')]), el('div', { text: a.error })]));
     }
     // נמען מבחוץ שאינו באנשי הקשר של Google — הצעה לשמור אותו, פעם אחת
     if (!a.internal && (a.contact.email || a.contact.phone)) lines.push(ContactPicker.suggestion(a.contact));
@@ -840,7 +840,7 @@ const AiTaskView = (() => {
 
     // המעקב נעצר כי ייתכן שסוכם משהו מחוץ להתכתבות — "דיברתי איתו" הוא התשובה
     if (a.attention === 'contact_detected' || a.attention === 'handled_elsewhere') {
-      const b = el('button.btn.btn-primary.btn-sm', { onclick: () => talked(task, onChange) }, ['📞 עדכון: מה המצב?']);
+      const b = el('button.btn.btn-primary.btn-sm', { onclick: () => talked(task, onChange) }, [UI.lineIcon('phone'), 'עדכון: מה המצב?']);
       lines.push(el('div.ai-question', {}, [
         el('div', {}, [
           el('b', { text: a.attention === 'contact_detected' ? '👀 ' : '📞 ' }),
@@ -855,13 +855,13 @@ const AiTaskView = (() => {
     // שאלה פתוחה של ה-AI
     if (a.ownerQuestion && a.attention !== 'contact_detected') {
       const answer = el('textarea', { placeholder: 'התשובה שלך — ה-AI ינסח ממנה תשובה לנמען, לאישורך' });
-      const send = el('button.btn.btn-primary.btn-sm', {}, ['✨ נסח תשובה']);
+      const send = el('button.btn.btn-primary.btn-sm', {}, [UI.lineIcon('sparkles'), 'נסח תשובה']);
       send.addEventListener('click', () => {
         if (!answer.value.trim()) return answer.focus();
         act(send, () => API.post(`${base}/answer`, { answer: answer.value.trim() }));
       });
       lines.push(el('div.ai-question', {}, [
-        el('div', {}, [el('b', { text: '❓ ה-AI צריך אותך: ' }), a.ownerQuestion]),
+        el('div', {}, [el('b', {}, [UI.lineIcon('help'), 'ה-AI צריך אותך: ']), a.ownerQuestion]),
         answer,
         el('div', {}, [send])
       ]));
@@ -877,7 +877,7 @@ const AiTaskView = (() => {
       const approve = el('button.btn.btn-primary.btn-sm', {}, [`${CHANNEL_ICON[msg.channel]} אישור ושליחה`]);
       approve.addEventListener('click', () => act(approve, () =>
         API.post(`${base}/messages/${msg.id}/approve`, { subject: subject?.value, body: text.value })));
-      const fix = el('button.btn.btn-sm', {}, ['✨ תקן']);
+      const fix = el('button.btn.btn-sm', {}, [UI.lineIcon('sparkles'), 'תקן']);
       fix.addEventListener('click', async () => {
         const feedback = await UI.prompt('מה לשנות בטיוטה?', { title: 'תיקון עם AI' });
         if (feedback) act(fix, () => API.post(`${base}/messages/${msg.id}/revise`, { feedback }));
@@ -929,22 +929,22 @@ const AiTaskView = (() => {
         msg.attachments.length
           ? el('div.ai-msg-files', {}, msg.attachments.map((f) =>
               // ‎bdi‎ — שם קובץ עברי עם סיומת לטינית מתהפך בלעדיו ("pdf.2 טופס")
-              el('a', { href: `/api/attachments/${f.id}/download`, target: '_blank', rel: 'noopener' }, ['📎 ', el('bdi', { text: f.filename })])))
+              el('a', { href: `/api/attachments/${f.id}/download`, target: '_blank', rel: 'noopener' }, [UI.lineIcon('paperclip'), '', el('bdi', { text: f.filename })])))
           : null,
         msg.analysis?.summary && msg.direction === 'in'
-          ? el('div.ai-msg-analysis', {}, ['✨ ', msg.analysis.summary, msg.analysis.missing ? ` · חסר: ${msg.analysis.missing}` : ''])
+          ? el('div.ai-msg-analysis', {}, [UI.lineIcon('sparkles'), '', msg.analysis.summary, msg.analysis.missing ? ` · חסר: ${msg.analysis.missing}` : ''])
           : null
       ]);
     });
 
     const actions = el('div.ai-actions', {}, [
-      open ? el('button.btn.btn-sm', { title: 'סוכם משהו בטלפון, בפגישה או בהודעה אחרת', onclick: () => talked(task, onChange) }, ['📞 דיברתי איתו']) : null,
+      open ? el('button.btn.btn-sm', { title: 'סוכם משהו בטלפון, בפגישה או בהודעה אחרת', onclick: () => talked(task, onChange) }, [UI.lineIcon('phone'), 'דיברתי איתו']) : null,
       a.state === 'waiting' ? action('nudge', '🔔 תזכורת עכשיו') : null,
       a.state === 'waiting' && a.nextActionAt ? postponeButton(task, onChange) : null,
       a.state === 'waiting' || a.state === 'needs_user' ? action('pause', '⏸ השהיה') : null,
       a.state === 'paused' || a.state === 'stalled' ? action('resume', a.state === 'stalled' ? '🔁 סבב מעקב נוסף' : '▶ חידוש') : null,
       open ? action('complete', '✅ התקבל') : null,
-      open ? el('button.btn.btn-sm', { onclick: () => editDetails(task, a, onChange) }, ['✎ פרטים ומדיניות']) : null,
+      open ? el('button.btn.btn-sm', { onclick: () => editDetails(task, a, onChange) }, [UI.lineIcon('pencil'), 'פרטים ומדיניות']) : null,
       el('div.spacer'),
       open ? action('stop', 'עצירת המעקב', '.btn-ghost') : null
     ]);
@@ -1012,7 +1012,7 @@ const AiTaskView = (() => {
           : null);
     actionSel.addEventListener('change', drawExtra);
 
-    const understand = el('button.btn', {}, ['✨ מה זה אומר?']);
+    const understand = el('button.btn', {}, [UI.lineIcon('sparkles'), 'מה זה אומר?']);
     const save = el('button.btn.btn-primary', {}, ['שמירה']);
     understand.addEventListener('click', async () => {
       if (!note.value.trim()) return note.focus();
@@ -1025,7 +1025,7 @@ const AiTaskView = (() => {
         if (proposal.goal) goal.value = proposal.goal;
         if (proposal.success_criteria) criteria.value = proposal.success_criteria;
         drawExtra();
-        UI.mount(proposalBox, el('div.alert.alert-info', {}, [el('span', { text: '✨' }), el('div', { text: proposal.explanation })]));
+        UI.mount(proposalBox, el('div.alert.alert-info', {}, [el('span', {}, [UI.lineIcon('sparkles')]), el('div', { text: proposal.explanation })]));
       } catch (err) {
         UI.error(err);
       }
@@ -1131,7 +1131,7 @@ const AiTaskView = (() => {
     const showState = (state, error) => {
       const [label, kind] = STATES[state] ?? [state, 'warn'];
       UI.mount(stateBox, el(`div.alert.alert-${kind === 'ok' ? 'ok' : kind === 'danger' ? 'danger' : 'warn'}`, {}, [
-        el('span', { text: '💬' }),
+        el('span', {}, [UI.lineIcon('message')]),
         el('div', {}, [el('b', { text: `מצב: ${label}` }), error ? el('div', { text: error }) : null,
           state === 'notAuthorized' ? el('div', { text: 'יש לסרוק את קוד ה-QR בלוח הבקרה של Green API: וואטסאפ בטלפון ← מכשירים מקושרים ← קישור מכשיר.' }) : null])
       ]));
@@ -1208,11 +1208,11 @@ const AiTaskView = (() => {
         business.addEventListener('change', savePrefs);
         ignore.addEventListener('change', savePrefs);
         UI.mount(box,
-          el('div.ai-section-title', { text: '💬 הצעות ותובנות מהוואטסאפ שלי' }),
+          el('div.ai-section-title', {}, [UI.lineIcon('message'), 'הצעות ותובנות מהוואטסאפ שלי']),
           el('label.checkbox', {}, [on, ' להציע משימות ופגישות מהודעות שמגיעות אליי בוואטסאפ']),
           el('div.mute-sm', { text: 'רק שיחות פרטיות, ורק עם אנשי קשר עסקיים — ההצעות מגיעות ל"ממתין לאישורך", ושום דבר לא נוצר בלי אישור. תוכן ההודעות לא נשמר במשימון.' }),
           !p.ai ? el('div.mute-sm.text-warn', { text: 'חיבור ה-AI עוד לא מוגדר בשרת — ההצעות יתחילו כשיוגדר.' }) : null,
-          el('div.alert.alert-info.wa-business-note', {}, [el('span', { text: '💼' }), el('div', {}, [
+          el('div.alert.alert-info.wa-business-note', {}, [el('span', {}, [UI.lineIcon('briefcase')]), el('div', {}, [
             el('b', { text: 'מי נחשב עסקי אוטומטית: ' }),
             'עובדים בארגון, אנשי האלפון, ספקים, אנשי קשר בגוגל עם חברה או תפקיד, ומי שעבדת איתו במשימות, במשימות AI ובפגישות. ',
             'כל שיחה אחרת לא נקראת ולא נשלחת ל-AI. ממספר לא מוכר ששלח כמה הודעות — הבוט ישאל אותך פעם אחת "עסקי או אישי?".'

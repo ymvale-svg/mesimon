@@ -31,7 +31,7 @@ const AskView = (() => {
   function openDock(content, onClose) {
     const closeBtn = el('button.icon-btn', { type: 'button', title: 'סגירה', 'aria-label': 'סגירת שאל את אשל' }, ['✕']);
     const panel = el('aside.ask-dock', { role: 'complementary', 'aria-label': 'שאל את אשל' }, [
-      el('div.ask-dock-head', {}, [el('b', { text: '✨ שאל את אשל' }), el('div.spacer'), closeBtn]),
+      el('div.ask-dock-head', {}, [el('b', {}, [UI.lineIcon('sparkles'), 'שאל את אשל']), el('div.spacer'), closeBtn]),
       el('div.ask-dock-body', {}, [content])
     ]);
     const close = () => {
@@ -75,9 +75,9 @@ const AskView = (() => {
     let files = [];
     const thread = el('div.mask-thread');
     const input = el('input', { type: 'text', placeholder: 'שאלה חופשית — "כמה מס רכישה על 2.4 מיליון?", "מה סיכמנו עם העירייה?"', maxlength: '1000', 'aria-label': 'השאלה' });
-    const go = el('button.btn.btn-primary', { type: 'submit' }, ['✨ שאל']);
+    const go = el('button.btn.btn-primary', { type: 'submit' }, [UI.lineIcon('sparkles'), 'שאל']);
     const fileInput = el('input', { type: 'file', multiple: true, accept: '.pdf,.png,.jpg,.jpeg,.webp,.docx,.xlsx,.csv', style: { display: 'none' } });
-    const attach = el('button.btn', { type: 'button', title: 'לצרף מסמך — קבלה, נסח טאבו, מכתב, קורות חיים' }, ['📎']);
+    const attach = el('button.btn', { type: 'button', title: 'לצרף מסמך — קבלה, נסח טאבו, מכתב, קורות חיים' }, [UI.lineIcon('paperclip')]);
     const fileChips = el('div.mask-chips');
     const recentBox = el('div.mask-recent');
     /*
@@ -85,7 +85,7 @@ const AskView = (() => {
      * כדי דיבור, ובסוף נשלח. בלי זיהוי דיבור (פיירפוקס) — הכפתור לא מוצג.
      */
     const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition || null;
-    const mic = Recognition ? el('button.btn.mask-mic', { type: 'button', title: 'לשאול בקול', 'aria-label': 'לשאול בקול' }, ['🎙']) : null;
+    const mic = Recognition ? el('button.btn.mask-mic', { type: 'button', title: 'לשאול בקול', 'aria-label': 'לשאול בקול' }, [UI.lineIcon('mic')]) : null;
     let rec = null;
     mic?.addEventListener('click', () => {
       if (rec) { try { rec.stop(); } catch { /* כבר עצר */ } return; }
@@ -125,7 +125,7 @@ const AskView = (() => {
 
     const content = el('div.mask', {}, [
       // במחשב, לפני השאלה הראשונה — כותרת מעל השדה, שניהם במרכז החלונית
-      docked ? el('div.mask-hello', { text: '✨ מה תרצה לשאול את אשל?' }) : null,
+      docked ? el('div.mask-hello', {}, [UI.lineIcon('sparkles'), 'מה תרצה לשאול את אשל?']) : null,
         opts.taskTitle ? el('div.mute-sm', { text: `על המשימה: ${opts.taskTitle}` }) : null,
         form,
         fileChips,
@@ -202,7 +202,7 @@ const AskView = (() => {
 
       // ✨ תשובה מאוחדת — קודם; מהמיילים נשארים רק המקורות והפעולות
       const mailBox = r.merged && r.mail?.answer && r.mail.found !== false ? el('div.mask-sec', {}, [
-        el('div.mask-sec-title', { text: '📧 המיילים שעליהם נשענה התשובה' }),
+        el('div.mask-sec-title', {}, [UI.lineIcon('mail'), 'המיילים שעליהם נשענה התשובה']),
         r.mail.sources?.length ? el('div.mask-sources', {}, r.mail.sources.map(sourceRow)) : null,
         el('div.mask-actions', {}, mailActions(r.mail))
       ]) : null;
@@ -210,7 +210,7 @@ const AskView = (() => {
       // 📧 מהמיילים
       if (r.mail?.answer && !r.merged) {
         out.push(el('div.mask-sec', {}, [
-          el('div.mask-sec-title', { text: '📧 מהמיילים שלך' }),
+          el('div.mask-sec-title', {}, [UI.lineIcon('mail'), 'מהמיילים שלך']),
           rich(r.mail.answer, r.mail.found ? '' : '.mask-none'),
           r.mail.sources?.length ? el('div.mask-sources', {}, r.mail.sources.map(sourceRow)) : null,
           el('div.mask-actions', {}, mailActions(r.mail))
@@ -223,7 +223,7 @@ const AskView = (() => {
       // ✍️ נוסח מוכן — בתיבה משלו, נקי, עם העתקה
       if (r.agent?.draft) {
         out.push(el('div.mask-sec.mask-draft', {}, [
-          el('div.mask-sec-title', { text: '✍️ הנוסח — מוכן לשליחה' }),
+          el('div.mask-sec-title', {}, [UI.lineIcon('pencil'), 'הנוסח — מוכן לשליחה']),
           el('div.mask-a', { text: r.agent.draft }),
           el('div.mask-actions', {}, [copyButton(r.agent.draft)])
         ]));
@@ -236,12 +236,12 @@ const AskView = (() => {
           r.contributors?.length ? el('div.mute-sm', { text: `ענו יחד: ${r.contributors.map((c) => `${c.icon ?? '🤖'} ${c.title}`).join(' · ')}` }) : null,
           a.sources?.length ? el('div.mute-sm', { text: `מקורות: ${a.sources.join(' · ')}` }) : null,
           r.failed?.length ? el('div.mute-sm', { text: `⚠️ לא ענו: ${r.failed.map((f) => f.title).join(', ')}` }) : null,
-          a.proposed?.length ? el('div.alert.alert-info.ai-mini', {}, [el('span', { text: '📌' }), el('div', {}, [
+          a.proposed?.length ? el('div.alert.alert-info.ai-mini', {}, [el('span', {}, [UI.lineIcon('pin')]), el('div', {}, [
             `${a.proposed.length === 1 ? 'הוצעה משימה' : `הוצעו ${a.proposed.length} משימות`}: ${a.proposed.map((p) => p.title).join(' · ')} — `,
             el('a', { href: '#', onclick: (e) => { e.preventDefault(); leave(); App.navigate('home', {}); } }, ['לאישור ב"ממתין לאישורך"'])
           ])]) : null,
           el('div.mask-actions', {}, [
-            el('button.btn.btn-sm', { type: 'button', onclick: () => { leave(); BoardView.openTaskDialog(null, { prefill: { title: question.slice(0, 120), description: `${a.text}\n\n${a.icon ?? '🤖'} ${a.title}` } }); } }, ['📌 משימה מזה']),
+            el('button.btn.btn-sm', { type: 'button', onclick: () => { leave(); BoardView.openTaskDialog(null, { prefill: { title: question.slice(0, 120), description: `${a.text}\n\n${a.icon ?? '🤖'} ${a.title}` } }); } }, [UI.lineIcon('pin'), 'משימה מזה']),
             copyButton(a.text)
           ])
         ]));
@@ -253,7 +253,7 @@ const AskView = (() => {
       // 📚 הידע הארגוני — כשהסוכן לא כבר נשען עליו
       if (r.org?.length && !r.agent?.sources?.includes('📚 הידע הארגוני')) {
         out.push(el('div.mask-sec', {}, [
-          el('div.mask-sec-title', { text: '📚 מהידע הארגוני' }),
+          el('div.mask-sec-title', {}, [UI.lineIcon('book'), 'מהידע הארגוני']),
           ...r.org.map((e) => el('div.mask-org', {}, [
             el('b', { text: e.domain }), e.project ? el('span.mute-sm', { text: ` · ${e.project}` }) : null,
             rich(e.text),
@@ -317,7 +317,7 @@ const AskView = (() => {
 
     function mailActions(mail) {
       return [
-        mail.actions?.task ? el('button.btn.btn-sm', { type: 'button', onclick: () => { leave(); BoardView.openTaskDialog(null, { prefill: { title: mail.actions.task, description: `${mail.answer}\n\n📧 מתוך המיילים: "${mail.question}"` } }); } }, ['📌 משימה מזה']) : null,
+        mail.actions?.task ? el('button.btn.btn-sm', { type: 'button', onclick: () => { leave(); BoardView.openTaskDialog(null, { prefill: { title: mail.actions.task, description: `${mail.answer}\n\n📧 מתוך המיילים: "${mail.question}"` } }); } }, [UI.lineIcon('pin'), 'משימה מזה']) : null,
         mail.actions?.contact ? el('button.btn.btn-sm', {
           type: 'button',
           onclick: () => { leave(); AiTaskView.openDialog({ instruction: '', contact: { name: mail.actions.contact.name, email: mail.actions.contact.email, phone: mail.actions.contact.phone }, contactFromSystem: true }); }
@@ -328,7 +328,7 @@ const AskView = (() => {
     }
 
     function copyButton(text) {
-      const b = el('button.btn.btn-sm.btn-ghost', { type: 'button' }, ['📋 העתק']);
+      const b = el('button.btn.btn-sm.btn-ghost', { type: 'button' }, [UI.lineIcon('clipboard'), 'העתק']);
       b.addEventListener('click', async () => {
         try { await navigator.clipboard.writeText(text); UI.success('הועתק'); } catch { UI.toast('ההעתקה לא הצליחה', 'error'); }
       });
@@ -359,9 +359,9 @@ const AskView = (() => {
         const what = el('textarea', { rows: '2', placeholder: 'מה לענות? למשל: שנאשר ונשלח עד יום חמישי — או "💡 הצע תשובה" והעוזר יציע לבד' });
         const bodyBox = el('textarea', { rows: '7', style: { display: 'none' } });
         const note = el('div.mask-suggest-note', { style: { display: 'none' } });
-        const suggestBtn = el('button.btn.btn-primary', { type: 'button', title: 'לפי המייל, התשובות הקודמות שלך לשולח, זיכרון העבודה והידע הארגוני' }, ['💡 הצע תשובה']);
-        const draftBtn = el('button.btn', { type: 'button' }, ['✍️ נסח לפי מה שכתבתי']);
-        const send = el('button.btn.btn-primary', { type: 'button', style: { display: 'none' } }, ['📧 שליחה']);
+        const suggestBtn = el('button.btn.btn-primary', { type: 'button', title: 'לפי המייל, התשובות הקודמות שלך לשולח, זיכרון העבודה והידע הארגוני' }, [UI.lineIcon('lightbulb'), 'הצע תשובה']);
+        const draftBtn = el('button.btn', { type: 'button' }, [UI.lineIcon('pencil'), 'נסח לפי מה שכתבתי']);
+        const send = el('button.btn.btn-primary', { type: 'button', style: { display: 'none' } }, [UI.lineIcon('mail'), 'שליחה']);
         const dm = UI.modal({
           title: `↩︎ תשובה ל${src.to}`,
           body: el('div', {}, [el('div.mute-sm', { text: src.subject }), UI.field('מה לענות', what), note, bodyBox]),
@@ -378,8 +378,8 @@ const AskView = (() => {
             bodyBox.style.display = '';
             send.style.display = '';
             UI.mount(note,
-              d.basis?.length ? el('div.mute-sm', { text: `💡 לפי: ${d.basis.join(' · ')}` }) : el('div.mute-sm', { text: '💡 הצעה לפי המייל עצמו — לא נמצאו תשובות קודמות או ידע רלוונטי.' }),
-              d.missing ? el('div.alert.alert-warn.ai-mini', {}, [el('span', { text: '⚠️' }), el('div', { text: d.missing })]) : null);
+              d.basis?.length ? el('div.mute-sm', { text: `💡 לפי: ${d.basis.join(' · ')}` }) : el('div.mute-sm', {}, [UI.lineIcon('lightbulb'), 'הצעה לפי המייל עצמו — לא נמצאו תשובות קודמות או ידע רלוונטי.']),
+              d.missing ? el('div.alert.alert-warn.ai-mini', {}, [el('span', {}, [UI.lineIcon('alert')]), el('div', { text: d.missing })]) : null);
             note.style.display = '';
             suggestBtn.textContent = '💡 הצע שוב';
           } catch (err) { suggestBtn.textContent = label; UI.error(err); } finally { suggestBtn.disabled = false; draftBtn.disabled = false; }

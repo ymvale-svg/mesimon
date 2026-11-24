@@ -69,3 +69,30 @@ test('לוח בטלפון: היעד — יום וחודש בלבד; דוחות: 
   assert.match(code('js/views/reports.js'), /el\('div\.flex\.wl-row'/);
   assert.match(read('css/styles.css'), /\.wl-row \{ flex-wrap: wrap/);
 });
+
+/*
+ * סבב 2 (24.11.26) — כל המסכים: אימוג'י ציורי בתחילת הילדים של el() או בתחילת ה-text שלו הוא אייקון — סמל קו.
+ * סימנים טיפוגרפיים (✕ ✓ ✗ חצים) מותרים, כמו שנקבע ב-MASTER.md. אימוג'י בתוך משפט — מותר.
+ */
+const PICTO = /[\u{1F300}-\u{1FAFF}\u{2600}-\u{26FF}\u{2705}\u{2709}\u{270D}\u{270E}\u{270F}\u{2728}\u{2753}\u{2795}\u{2B07}]/u;
+const LEAD = new RegExp(String.raw`(\}, \[\s*'|el\('[^']+', \{ text: ')(` + PICTO.source + ')', 'u');
+
+test('בכל המסכים: אימוג\'י בתחילת כפתור, כותרת או תגית — סמל קו', () => {
+  const files = ['js/app.js', 'js/ui.js', ...fs.readdirSync(path.join(PUB, 'js', 'views')).map((f) => `js/views/${f}`)];
+  const bad = [];
+  for (const f of files) {
+    code(f).split('\n').forEach((line, i) => { if (LEAD.test(line) && !/el\('option/.test(line)) bad.push(`${f}:${i + 1} ${line.trim().slice(0, 80)}`); });
+  }
+  assert.deepEqual(bad, []);
+});
+
+test('תווית מרשימה ("✨ מה חדש") — סמל וטקסט דרך UI.iconLabel; ריק עם אימוג\'י — סמל', () => {
+  assert.match(ui, /function iconLabel\(text\)/);
+  assert.match(ui, /el\('div\.e-icon', \{\}, \[emojiIcon\(icon\)\]\)/);
+  assert.match(code('js/views/admin.js'), /\}, UI\.iconLabel\(t\.label\)\)\);/);
+  assert.match(code('js/views/admin-ai.js'), /UI\.iconLabel\(label\)/);
+  // כל אימוג'י במפה של iconLabel — יש לו סמל
+  const names = new Set([...ui.slice(ui.indexOf('const LINE_ICONS'), ui.indexOf('function lineIcon')).matchAll(/^\s*'?([a-z-]+)'?: '</gm)].map((m) => m[1]));
+  const map = ui.slice(ui.indexOf('const EMOJI_ICON'), ui.indexOf('const EMOJI_LEAD'));
+  for (const m of map.matchAll(/: '([a-z-]+)'/g)) assert.ok(names.has(m[1]), m[1]);
+});

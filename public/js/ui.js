@@ -131,10 +131,10 @@ const UI = (() => {
     if (task.priority === 'urgent') tags.push(el('span.tag.tag-urgent', {}, [icon('urgent'), 'דחוף']));
     else if (task.priority === 'high') tags.push(el('span.tag.tag-high', {}, ['גבוהה']));
     if (task.escalated) tags.push(el('span.tag.tag-escalated', {}, [icon('urgent'), 'הוקפצה']));
-    if (task.scheduled) tags.push(el('span.tag.tag-scheduled', {}, ['🗓 מתוזמנת']));
-    if (task.meetingPending) tags.push(el('span.tag.tag-meeting', { title: 'מחכה שתיקבע לה פגישה' }, ['📅 פגישה לקביעה']));
+    if (task.scheduled) tags.push(el('span.tag.tag-scheduled', {}, [lineIcon('calendar'), 'מתוזמנת']));
+    if (task.meetingPending) tags.push(el('span.tag.tag-meeting', { title: 'מחכה שתיקבע לה פגישה' }, [lineIcon('calendar'), 'פגישה לקביעה']));
     if (task.isRecurring) tags.push(el('span.tag.tag-recurring', {}, ['⟳ חוזרת']));
-    if (task.dependency?.blocking) tags.push(el('span.tag.tag-high', {}, ['🔗 חסומה']));
+    if (task.dependency?.blocking) tags.push(el('span.tag.tag-high', {}, [lineIcon('link'), 'חסומה']));
     // משימת AI — מצב המעקב, ובראש ובראשונה "ממתין לאישורך"
     if (task.ai) {
       const waiting = task.ai.pending || task.ai.state === 'needs_user';
@@ -942,8 +942,20 @@ const UI = (() => {
   }
 
   // ‎icon‎ הוא או צומת (מסכת אייקון) או טקסט — שני המצבים מטופלים כאן
+  /*
+   * תווית שמתחילה באימוג'י ("✨ מה חדש") — סמל קו ואחריו הטקסט. לתוויות שמגיעות מרשימות (לשוניות, מצבים),
+   * שאי אפשר לכתוב בהן את הסמל ישירות. אימוג'י שאין לו סמל — נשאר כמו שהוא.
+   */
+  const EMOJI_ICON = { '⚠': 'alert', '✨': 'sparkles', '📧': 'mail', '✉': 'mail', '📨': 'mail', '📬': 'mail', '✎': 'pencil', '✍': 'pencil', '✏': 'pencil', '📝': 'pencil', '📅': 'calendar', '🗓': 'calendar', '💡': 'lightbulb', '✅': 'check-circle', '🗑': 'trash', '📌': 'pin', '📎': 'paperclip', '🔒': 'lock', '🔐': 'lock', '🎥': 'video', '📞': 'phone', '🔍': 'search', '🔔': 'bell', '🔕': 'bell-off', '🔄': 'refresh', '🔁': 'refresh', '👤': 'user', '👥': 'users', '📋': 'clipboard', '📭': 'inbox', '🎙': 'mic', '📄': 'file', '📑': 'file', '📜': 'file', '👁': 'eye', '⭐': 'star', '🔗': 'link', '🧠': 'brain', '🏢': 'building', '⚙': 'settings', '💬': 'message', '🔥': 'flame', '📒': 'contacts', '🌐': 'globe', '🧪': 'flask', '🌙': 'moon', '🛡': 'shield', '⛔': 'ban', '🚫': 'ban', '📍': 'map-pin', '💰': 'coins', '🎧': 'headphones', '🔧': 'wrench', '🛠': 'wrench', '💼': 'briefcase', '☀': 'sun', '📚': 'book', '📤': 'upload', '⬇': 'download', '💾': 'save', '🤝': 'handshake', '🤖': 'bot', '🎯': 'target', '🚀': 'rocket', '📣': 'megaphone', '❓': 'help', '🗂': 'layers', '📊': 'activity', '📈': 'activity', '🔗': 'link', '🎨': 'palette', '🧩': 'puzzle', '👑': 'crown', '👂': 'ear', '🙈': 'eye-off', '🗄': 'archive' };
+  const EMOJI_LEAD = new RegExp(`^(${Object.keys(EMOJI_ICON).join('|')})\uFE0F?\\s*`, 'u');
+  function iconLabel(text) {
+    const m = typeof text === 'string' ? EMOJI_LEAD.exec(text) : null;
+    return m ? [lineIcon(EMOJI_ICON[m[1]]), text.slice(m[0].length)] : [text];
+  }
+  const emojiIcon = (icon) => (typeof icon === 'string' && EMOJI_ICON[icon.replace('\uFE0F', '')] ? lineIcon(EMOJI_ICON[icon.replace('\uFE0F', '')]) : icon);
+
   const empty = (message, icon = '📭') =>
-    el('div.empty', {}, [el('div.e-icon', {}, [icon]), el('div', { text: message })]);
+    el('div.empty', {}, [el('div.e-icon', {}, [emojiIcon(icon)]), el('div', { text: message })]);
 
   const spinner = () => el('div.spinner');
 
@@ -1278,6 +1290,59 @@ const UI = (() => {
     'panel-pin': '<rect width="18" height="18" x="3" y="3" rx="2"/><path d="M15 3v18"/><path d="m8 9 3 3-3 3"/>',
     'panel-unpin': '<rect width="18" height="18" x="3" y="3" rx="2"/><path d="M15 3v18"/><path d="m10 15-3-3 3-3"/>',
     'chevron-down': '<path d="m6 9 6 6 6-6"/>',
+    // סבב 2 (24.11.26) — המסכים המשניים
+    alert: '<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/>',
+    lightbulb: '<path d="M15 14c.2-1 .7-1.7 1.5-2.5 1-.9 1.5-2.2 1.5-3.5A6 6 0 0 0 6 8c0 1 .2 2.2 1.5 3.5.7.7 1.3 1.5 1.5 2.5"/><path d="M9 18h6"/><path d="M10 22h4"/>',
+    'check-circle': '<circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/>',
+    merge: '<circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M6 21V9a9 9 0 0 0 9 9"/>',
+    move: '<path d="M8 3 4 7l4 4"/><path d="M4 7h16"/><path d="m16 21 4-4-4-4"/><path d="M20 17H4"/>',
+    workflow: '<rect width="8" height="8" x="3" y="3" rx="2"/><path d="M7 11v4a2 2 0 0 0 2 2h4"/><rect width="8" height="8" x="13" y="13" rx="2"/>',
+    paperclip: '<path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"/>',
+    lock: '<rect width="18" height="11" x="3" y="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>',
+    pin: '<path d="M12 17v5"/><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z"/>',
+    search: '<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>',
+    bell: '<path d="M10.27 21a2 2 0 0 0 3.46 0"/><path d="M3.26 15.33A1 1 0 0 0 4 17h16a1 1 0 0 0 .74-1.67C19.41 13.96 18 12.5 18 8A6 6 0 0 0 6 8c0 4.5-1.41 5.96-2.74 7.33"/>',
+    'bell-off': '<path d="M10.27 21a2 2 0 0 0 3.46 0"/><path d="M17 17H4a1 1 0 0 1-.74-1.67C4.59 13.96 6 12.5 6 8a6 6 0 0 1 .26-1.74"/><path d="M8.67 3.17A6 6 0 0 1 18 8c0 2.37.39 3.83.94 4.85"/><path d="m2 2 20 20"/>',
+    inbox: '<path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/>',
+    file: '<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M10 13H8"/><path d="M16 17H8"/><path d="M16 13h-2"/>',
+    clipboard: '<rect width="8" height="4" x="8" y="2" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="M12 11h4"/><path d="M12 16h4"/><path d="M8 11h.01"/><path d="M8 16h.01"/>',
+    user: '<circle cx="12" cy="8" r="5"/><path d="M20 21a8 8 0 0 0-16 0"/>',
+    users: '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>',
+    star: '<path d="M11.53 2.3a.53.53 0 0 1 .94 0l2.31 4.68a2.12 2.12 0 0 0 1.6 1.16l5.16.76a.53.53 0 0 1 .3.9l-3.74 3.64a2.12 2.12 0 0 0-.61 1.88l.88 5.14a.53.53 0 0 1-.77.56l-4.62-2.43a2.12 2.12 0 0 0-1.97 0L6.4 21.01a.53.53 0 0 1-.77-.56l.88-5.13a2.12 2.12 0 0 0-.61-1.88L2.16 9.8a.53.53 0 0 1 .3-.9l5.16-.76a2.12 2.12 0 0 0 1.6-1.16z"/>',
+    message: '<path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z"/>',
+    link: '<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>',
+    flame: '<path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.07-2.14-.22-4.05 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.15.43-2.29 1-3a2.5 2.5 0 0 0 2.5 2.5z"/>',
+    ban: '<circle cx="12" cy="12" r="10"/><path d="m4.9 4.9 14.2 14.2"/>',
+    wrench: '<path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>',
+    shield: '<path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/>',
+    moon: '<path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/>',
+    'map-pin': '<path d="M20 10c0 4.99-5.54 10.19-7.4 11.8a1 1 0 0 1-1.2 0C9.54 20.19 4 14.99 4 10a8 8 0 0 1 16 0"/><circle cx="12" cy="10" r="3"/>',
+    leaf: '<path d="M11 20A7 7 0 0 1 9.8 6.1C15.5 5 17 4.48 19 2c1 2 2 4.18 2 8 0 5.5-4.78 10-10 10Z"/><path d="M2 21c0-3 1.85-5.36 5.08-6C9.5 14.52 12 13 13 12"/>',
+    layers: '<path d="m12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z"/><path d="m22 17.65-9.17 4.16a2 2 0 0 1-1.66 0L2 17.65"/><path d="m22 12.65-9.17 4.16a2 2 0 0 1-1.66 0L2 12.65"/>',
+    globe: '<circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/>',
+    flask: '<path d="M10 2v7.53a2 2 0 0 1-.21.9L4.72 20.55a1 1 0 0 0 .9 1.45h12.76a1 1 0 0 0 .9-1.45l-5.07-10.12a2 2 0 0 1-.21-.9V2"/><path d="M8.5 2h7"/><path d="M7 16h10"/>',
+    building: '<rect width="16" height="20" x="4" y="2" rx="2"/><path d="M9 22v-4h6v4"/><path d="M8 6h.01"/><path d="M16 6h.01"/><path d="M12 6h.01"/><path d="M12 10h.01"/><path d="M12 14h.01"/><path d="M16 10h.01"/><path d="M16 14h.01"/><path d="M8 10h.01"/><path d="M8 14h.01"/>',
+    activity: '<path d="M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2"/>',
+    waves: '<path d="M2 6c.6.5 1.2 1 2.5 1C7 7 7 5 9.5 5c2.6 0 2.4 2 5 2 2.5 0 2.5-2 5-2 1.3 0 1.9.5 2.5 1"/><path d="M2 12c.6.5 1.2 1 2.5 1 2.5 0 2.5-2 5-2 2.6 0 2.4 2 5 2 2.5 0 2.5-2 5-2 1.3 0 1.9.5 2.5 1"/><path d="M2 18c.6.5 1.2 1 2.5 1 2.5 0 2.5-2 5-2 2.6 0 2.4 2 5 2 2.5 0 2.5-2 5-2 1.3 0 1.9.5 2.5 1"/>',
+    'trending-down': '<path d="M16 17h6v-6"/><path d="m22 17-8.5-8.5-5 5L2 7"/>',
+    target: '<circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/>',
+    sprout: '<path d="M7 20h10"/><path d="M10 20c5.5-2.5.8-6.4 3-10"/><path d="M9.5 9.4c1.1.8 1.8 2.2 2.3 3.7-2 .4-3.5.4-4.8-.3-1.2-.6-2.3-1.9-3-4.2 2.8-.5 4.4 0 5.5.8z"/><path d="M14.1 6a7 7 0 0 0-1.1 4c1.9-.1 3.3-.6 4.3-1.4 1-1 1.6-2.3 1.7-4.6-2.7.1-4 1-4.9 2z"/>',
+    rocket: '<path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z"/><path d="m12 15-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z"/><path d="M9 12H4s.55-3.03 2-4c1.62-1.08 5 0 5 0"/><path d="M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5"/>',
+    megaphone: '<path d="m3 11 18-5v12L3 14v-3z"/><path d="M11.6 16.8a3 3 0 1 1-5.8-1.6"/>',
+    'log-out': '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5"/><path d="M21 12H9"/>',
+    help: '<circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/>',
+    headphones: '<path d="M3 14h3a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-7a9 9 0 0 1 18 0v7a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3"/>',
+    handshake: '<path d="m11 17 2 2a1 1 0 1 0 3-3"/><path d="m14 14 2.5 2.5a1 1 0 1 0 3-3l-3.88-3.88a3 3 0 0 0-4.24 0l-.88.88a1 1 0 1 1-3-3l2.81-2.81a5.79 5.79 0 0 1 7.06-.87l.47.28a2 2 0 0 0 1.42.25L21 4"/><path d="m21 3 1 11h-2"/><path d="M3 3 2 14l6.5 6.5a1 1 0 1 0 3-3"/><path d="M3 4h8"/>',
+    ear: '<path d="M6 8.5a6.5 6.5 0 1 1 13 0c0 6-6 6-6 10a3.5 3.5 0 1 1-7 0"/><path d="M15 8.5a2.5 2.5 0 0 0-5 0v1a2 2 0 1 1 0 4"/>',
+    coins: '<circle cx="8" cy="8" r="6"/><path d="M18.09 10.37A6 6 0 1 1 10.34 18"/><path d="M7 6h1v4"/><path d="m16.71 13.88.7.71-2.82 2.82"/>',
+    briefcase: '<path d="M16 20V4a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/><rect width="20" height="14" x="2" y="6" rx="2"/>',
+    brain: '<path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z"/><path d="M12 5a3 3 0 1 1 5.997.125 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18Z"/><path d="M12 5v13"/>',
+    bot: '<path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/>',
+    crown: '<path d="M11.56 3.27a.5.5 0 0 1 .88 0l2.95 5.6a1 1 0 0 0 1.52.29L21.18 5.5a.5.5 0 0 1 .8.52l-2.83 10.25a1 1 0 0 1-.96.73H5.82a1 1 0 0 1-.96-.73L2.03 6.02a.5.5 0 0 1 .8-.52l4.27 3.66a1 1 0 0 0 1.52-.29z"/><path d="M5 21h14"/>',
+    puzzle: '<path d="M15.39 4.39a1 1 0 0 0 1.68-.47 2.5 2.5 0 1 1 3.01 3.01 1 1 0 0 0-.47 1.68l1.68 1.68a2.41 2.41 0 0 1 0 3.42l-1.61 1.61a.98.98 0 0 1-.84.28 1.17 1.17 0 0 1-.83-.72 2.5 2.5 0 1 0-3.21 3.21 1.17 1.17 0 0 1 .72.83.98.98 0 0 1-.28.84l-1.61 1.61a2.41 2.41 0 0 1-3.42 0l-1.68-1.68a1 1 0 0 0-1.68.47 2.5 2.5 0 1 1-3.01-3.01 1 1 0 0 0 .47-1.68l-1.68-1.68a2.41 2.41 0 0 1 0-3.42l1.61-1.61a.98.98 0 0 1 .84-.28 1.17 1.17 0 0 1 .83.72 2.5 2.5 0 1 0 3.21-3.21 1.17 1.17 0 0 1-.72-.83.98.98 0 0 1 .28-.84l1.61-1.61a2.41 2.41 0 0 1 3.42 0z"/>',
+    palette: '<circle cx="13.5" cy="6.5" r=".5" fill="currentColor"/><circle cx="17.5" cy="10.5" r=".5" fill="currentColor"/><circle cx="8.5" cy="7.5" r=".5" fill="currentColor"/><circle cx="6.5" cy="12.5" r=".5" fill="currentColor"/><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.93 0 1.65-.75 1.65-1.69 0-.44-.18-.84-.44-1.13-.29-.29-.44-.65-.44-1.13a1.64 1.64 0 0 1 1.67-1.67h2c3.05 0 5.55-2.5 5.55-5.55C21.97 6.01 17.46 2 12 2z"/>',
+    archive: '<rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/>',
+    book: '<path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H19a1 1 0 0 1 1 1v18a1 1 0 0 1-1 1H6.5a1 1 0 0 1 0-5H20"/>',
     copy: '<rect width="14" height="14" x="8" y="8" rx="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/>',
     // הצגת/הסתרת סיסמה במסך הכניסה
     eye: '<path d="M2.06 12.35a1 1 0 0 1 0-.7 10.75 10.75 0 0 1 19.88 0 1 1 0 0 1 0 .7 10.75 10.75 0 0 1-19.88 0"/><circle cx="12" cy="12" r="3"/>',
@@ -1517,7 +1582,7 @@ const UI = (() => {
             // ‎controls‎ של הדפדפן ולא נגן משלנו: הוא מביא הפעלה, סרגל
             // התקדמות, עוצמה ומהירות — והוא נגיש במקלדת בלי שנכתוב דבר
             ? el('div.preview-audio', {}, [
-                el('div.pa-icon', { text: '🎧' }),
+                el('div.pa-icon', {}, [lineIcon('headphones')]),
                 el('audio', { src: f.url, controls: true, preload: 'metadata' })
               ])
             : el('img.preview-img', { src: f.url, alt: f.filename }));
@@ -1845,7 +1910,7 @@ const UI = (() => {
             el('b', { text: c.authorName }),
             c.authorType === 'vendor' ? el('span.tag.tag-vendor', {}, ['ספק']) : null
           ]),
-          c.internal ? el('div.b-flag', { text: '🔒 הערה פנימית — מוסתרת מהספק' }) : null,
+          c.internal ? el('div.b-flag', {}, [lineIcon('lock'), 'הערה פנימית — מוסתרת מהספק']) : null,
           images.length ? mediaGrid(images, previewable) : null,
           c.body ? el('div.c-text', {}, [renderMentions(c.body, names)]) : null,
           rest.length ? fileChips(rest) : null,
@@ -1862,7 +1927,7 @@ const UI = (() => {
                     if (!await confirm(what, { title: 'מחיקת הודעה', danger: true, okText: 'מחיקה' })) return;
                     try { await onDelete(c); } catch (err) { error(err); }
                   }
-                }, ['🗑'])
+                }, [lineIcon('trash')])
               : null
           ])
         ])
@@ -1885,7 +1950,7 @@ const UI = (() => {
               el('button.btn', {
                 title: 'צירוף קובץ — אפשר גם להדביק תמונה או לגרור קובץ לתיבה',
                 onclick: () => fileInput.click()
-              }, ['📎']),
+              }, [lineIcon('paperclip')]),
               seeInternal
                 ? el('label.checkbox', { title: 'הערות פנימיות מוסתרות לחלוטין מהספק' }, [internalCheck, '🔒 פנימית'])
                 : null,
@@ -1919,7 +1984,7 @@ const UI = (() => {
     empty, spinner, field, select, phone, projectPicker, rankProjects,
     renderMentions, fileSize, fileIcon, announceAutoStatus,
     usersByDepartment,
-    preview, previewUrls, canPreview, PROJECT_COLORS, commentThread, icon, lineIcon,
+    preview, previewUrls, canPreview, PROJECT_COLORS, commentThread, icon, lineIcon, iconLabel,
     logo, logoMark, companyLogo, refitLogos
   };
 })();

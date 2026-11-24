@@ -2080,7 +2080,7 @@ const HomeView = (() => {
     fileInput.addEventListener('change', () => { addFiles([...fileInput.files]); fileInput.value = ''; });
 
     const drop = el('div.qt-drop', { onclick: () => fileInput.click() },
-      [el('span.mute-sm', { text: '📎 צירוף קבצים — לחיצה או גרירה' })]);
+      [el('span.mute-sm', {}, [UI.lineIcon('paperclip'), 'צירוף קבצים — לחיצה או גרירה'])]);
     drop.addEventListener('dragover', (e) => { e.preventDefault(); drop.classList.add('over'); });
     drop.addEventListener('dragleave', () => drop.classList.remove('over'));
     drop.addEventListener('drop', (e) => {

@@ -79,7 +79,7 @@ const MailMemoryView = (() => {
         el('span', { text: `👤 ${num(c.people)} אנשי קשר` }),
         el('span', { text: `🗂 ${num(c.events)} רשומות` }),
         el('span', { text: `📎 ${num(c.docs)} מסמכים` }),
-        el('button.btn.btn-sm', { type: 'button', onclick: () => browse() }, ['🧠 מה העוזר יודע עליי'])
+        el('button.btn.btn-sm', { type: 'button', onclick: () => browse() }, [UI.lineIcon('brain'), 'מה העוזר יודע עליי'])
       ]);
     }
 
@@ -152,7 +152,7 @@ const MailMemoryView = (() => {
           parts.push(el('div', { text: `✅ הזיכרון מוכן${s.lastIncrementalAt ? ` · עודכן ${UI.relative(s.lastIncrementalAt)}` : ''} — מתעדכן כל בוקר מהמיילים החדשים.` }));
           break;
         case 'error':
-          parts.push(el('div.alert.alert-warn', {}, [el('span', { text: '⚠️' }), el('div', { text: `המיפוי נעצר: ${s.error}` })]),
+          parts.push(el('div.alert.alert-warn', {}, [el('span', {}, [UI.lineIcon('alert')]), el('div', { text: `המיפוי נעצר: ${s.error}` })]),
             act('נסה שוב', () => call('post', '/api/me/mail-memory/start', { fromDate: s.fromDate, withDocs: s.withDocs, internal: s.internal, excludedLabels: s.excludedLabels }), '.btn-primary'));
           break;
         default:
@@ -210,7 +210,7 @@ const MailMemoryView = (() => {
     }
 
     const del = (kind, id, row) => {
-      const b = el('button.btn.btn-sm.btn-ghost', { type: 'button', title: 'מחיקה מהזיכרון' }, ['🗑']);
+      const b = el('button.btn.btn-sm.btn-ghost', { type: 'button', title: 'מחיקה מהזיכרון' }, [UI.lineIcon('trash')]);
       b.addEventListener('click', async () => {
         try { await API.del(`/api/me/mail-memory/${kind}/${id}`); row.remove(); } catch (err) { UI.error(err); }
       });
@@ -219,7 +219,7 @@ const MailMemoryView = (() => {
 
     function personRow(p) {
       const row = el('div.mm-row');
-      const edit = el('button.btn.btn-sm.btn-ghost', { type: 'button', title: 'תיקון' }, ['✎']);
+      const edit = el('button.btn.btn-sm.btn-ghost', { type: 'button', title: 'תיקון' }, [UI.lineIcon('pencil')]);
       edit.addEventListener('click', () => editPerson(p, (next) => { Object.assign(p, next); row.replaceWith(personRow(p)); }));
       UI.mount(row,
         el('div.mm-row-main', {}, [
@@ -239,7 +239,7 @@ const MailMemoryView = (() => {
           el('div', { text: e.summary }),
           e.contact_email ? el('div.mute-sm', {}, [el('bdi', { text: e.contact_email })]) : null
         ]),
-        e.link ? el('a.btn.btn-sm.btn-ghost', { href: e.link, target: '_blank', rel: 'noopener', title: 'פתח ב-Gmail' }, ['📧']) : null,
+        e.link ? el('a.btn.btn-sm.btn-ghost', { href: e.link, target: '_blank', rel: 'noopener', title: 'פתח ב-Gmail' }, [UI.lineIcon('mail')]) : null,
         del('event', e.id, row));
       return row;
     }
@@ -252,7 +252,7 @@ const MailMemoryView = (() => {
           el('div', {}, [el('b', { text: `📎 ${KIND[d.kind] ?? 'מסמך'}` }), el('span', { text: ` · ${d.title || d.filename}` })]),
           el('div.mute-sm', { text: [d.filename, d.doc_date ? day(d.doc_date) : null, f.amount, f.number ? `מס' ${f.number}` : null, f.gush_helka, d.valid_until ? `בתוקף עד ${day(d.valid_until)}` : null].filter(Boolean).join(' · ') })
         ]),
-        d.link ? el('a.btn.btn-sm.btn-ghost', { href: d.link, target: '_blank', rel: 'noopener', title: 'פתח ב-Gmail' }, ['📧']) : null,
+        d.link ? el('a.btn.btn-sm.btn-ghost', { href: d.link, target: '_blank', rel: 'noopener', title: 'פתח ב-Gmail' }, [UI.lineIcon('mail')]) : null,
         del('doc', d.id, row));
       return row;
     }

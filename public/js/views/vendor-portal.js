@@ -38,7 +38,7 @@ const VendorPortalView = (() => {
   function banner() {
     const actor = App.state.actor;
     return el('div.vendor-banner', {}, [
-      el('div', { text: '🏢', style: { fontSize: '30px' } }),
+      el('div', { style: { fontSize: '30px' } }, [UI.lineIcon('building')]),
       el('div', { style: { flex: '1' } }, [
         el('h2', { text: actor.name }),
         el('p', { text: 'פורטל הספקים — כאן מרוכזות המשימות שהוקצו לך.' })

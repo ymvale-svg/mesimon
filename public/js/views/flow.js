@@ -171,9 +171,9 @@ const FlowView = (() => {
     const color = colorOf(n);
     const due = n.dueDate ? UI.dueLabel(n.dueDate) : null;
     const flags = [
-      n.critical ? el('span.fl-flag.is-critical', { title: 'על הנתיב הקריטי — איחור כאן מאחר את משימת-האב' }, ['🔥']) : null,
-      n.blocked ? el('span.fl-flag.is-blocked', { title: `חסומה — מחכה ל"${n.dependsOn.title}"` }, ['⛔']) : null,
-      n.blocking ? el('span.fl-flag.is-blocking', { title: `חוסמת ${n.waiters.length} משימות` }, ['🧱']) : null,
+      n.critical ? el('span.fl-flag.is-critical', { title: 'על הנתיב הקריטי — איחור כאן מאחר את משימת-האב' }, [UI.lineIcon('flame')]) : null,
+      n.blocked ? el('span.fl-flag.is-blocked', { title: `חסומה — מחכה ל"${n.dependsOn.title}"` }, [UI.lineIcon('ban')]) : null,
+      n.blocking ? el('span.fl-flag.is-blocking', { title: `חוסמת ${n.waiters.length} משימות` }, [UI.lineIcon('layers')]) : null,
       n.lateVsParent ? el('span.fl-flag.is-late', { title: 'היעד שלה אחרי היעד של המשימה שמעליה' }, ['↧']) : null
     ].filter(Boolean);
     const people = [n.assigneeName, ...(n.extraAssignees ?? [])].filter(Boolean);
@@ -195,7 +195,7 @@ const FlowView = (() => {
       el('div.fl-meta', {}, [
         people.length
           ? el('span.fl-who', { title: people.join(', ') }, [UI.avatar(people[0], { small: true }), el('span', { text: people.length > 1 ? `${people[0]} +${people.length - 1}` : people[0] })])
-          : el('span.fl-who.is-none', { text: '👤 ללא אחראי' }),
+          : el('span.fl-who.is-none', {}, [UI.lineIcon('user'), 'ללא אחראי']),
         el('div.spacer'),
         due ? el(`span.fl-due.tone-${n.isFinal ? 'mute' : due.tone}`, { text: due.text }) : el('span.fl-due.tone-mute', { text: 'ללא יעד' })
       ])
@@ -270,9 +270,9 @@ const FlowView = (() => {
         el('span.fl-swatch', { style: `background: ${s.color}` }), `${s.label} (${s.count})`
       ])),
       el('span.fl-leg-sep'),
-      el('span.fl-leg', {}, ['🔥 נתיב קריטי']),
-      el('span.fl-leg', {}, ['⛔ חסומה']),
-      el('span.fl-leg', {}, ['🧱 חוסמת']),
+      el('span.fl-leg', {}, [UI.lineIcon('flame'), 'נתיב קריטי']),
+      el('span.fl-leg', {}, [UI.lineIcon('ban'), 'חסומה']),
+      el('span.fl-leg', {}, [UI.lineIcon('layers'), 'חוסמת']),
       el('span.fl-leg', {}, ['↧ חורגת מיעד האב']),
       el('span.fl-leg', {}, [el('span.fl-dash'), ' תלויה ב…'])
     ]);
@@ -296,7 +296,7 @@ const FlowView = (() => {
 
     const crit = [...model.critical].map((id) => model.byId.get(id));
     return el('div.fl-side', {}, [
-      el('h4', { text: '🔥 הנתיב הקריטי' }),
+      el('h4', {}, [UI.lineIcon('flame'), 'הנתיב הקריטי']),
       crit.length
         ? el('ol.fl-path', {}, crit.map((n) => el('li', {}, [
             el('button.txt.txt-open', { onclick: () => focus(n.id) }, [n.title]),

@@ -100,7 +100,7 @@ const TaskCardView = (() => {
     const titleNode = el('h2', { text: task.title, style: { fontSize: '20px' } });
     const editTitleBtn = canEdit
       // "שינוי שם" ולא "עריכה" — בכרטיס יש כבר כפתור "עריכה מלאה" לכל השדות
-      ? el('button.btn.btn-sm', { title: 'עריכת שם המשימה' }, ['✎ שינוי שם'])
+      ? el('button.btn.btn-sm', { title: 'עריכת שם המשימה' }, [UI.lineIcon('pencil'), 'שינוי שם'])
       : null;
     // הכפתור נעלם בזמן ההקלדה — לחיצה שנייה עליו הייתה מנסה להחליף צומת
     // שכבר הוחלף בתיבת הקלט, ולא הייתה עושה דבר
@@ -115,7 +115,7 @@ const TaskCardView = (() => {
     // מוזגה לתוך משימה ותיקה (פרק 11ב) — ההמשך שם
     if (task.mergedInto) {
       alerts.push(el('div.alert.alert-info', {}, [
-        el('span', { text: '🔀' }),
+        el('span', {}, [UI.lineIcon('merge')]),
         el('div', {}, [
           el('b', { text: 'המשימה מוזגה' }),
           el('div', {}, ['ההערות, הקבצים והאחראים עברו למשימה ', el('a', { onclick: () => open(task.mergedInto.id) }, [`"${task.mergedInto.title}"`]), '.'])
@@ -126,7 +126,7 @@ const TaskCardView = (() => {
     // אזהרה חזותית אם המשימה תלויה במשימה שטרם הושלמה
     if (task.dependency?.blocking) {
       alerts.push(el('div.alert.alert-warn', {}, [
-        el('span', { text: '🔗' }),
+        el('span', {}, [UI.lineIcon('link')]),
         el('div', {}, [
           el('b', { text: 'המשימה חסומה' }),
           el('div', {}, [
@@ -139,7 +139,7 @@ const TaskCardView = (() => {
     }
     if (task.scheduled) {
       alerts.push(el('div.alert.alert-info', {}, [
-        el('span', { text: '🗓' }),
+        el('span', {}, [UI.lineIcon('calendar')]),
         el('div', {}, [
           el('b', { text: 'משימה עתידית מתוזמנת' }),
           el('div', { text: `המשימה תופעל אוטומטית בתאריך ${UI.formatDate(task.activateAt)} ועד אז אינה מופיעה ברשימות הפעילות, בדוחות העומס ובהתראות.` })
@@ -197,7 +197,7 @@ const TaskCardView = (() => {
       // משימה שנולדה ממייל — הקישור למייל עצמו רק אצל מי שהוא בתיבה שלו; המייל עצמו (עותק) — לכל מי שעובד עליה
       task.source?.type === 'email'
         ? el('div.mute-sm', { style: { marginBottom: '10px' } }, [
-            '📧 נוצרה ממייל',
+            UI.lineIcon('mail'), 'נוצרה ממייל',
             task.source.link ? el('a', { href: task.source.link, target: '_blank', rel: 'noopener' }, [' · פתיחת המייל המקורי ↗']) : null,
             sourceMailNode(task.source.mail)
           ])
@@ -205,7 +205,7 @@ const TaskCardView = (() => {
       closurePanel(),
       // 🔎 שאל את המיילים — על המשימה הזו, כשההקשר כבר ממולא
       App.isVendor() ? null : el('div.mute-sm', { style: { marginBottom: '10px' } }, [
-        el('a', { href: '#', onclick: (e) => { e.preventDefault(); AskView.open({ taskId: task.id, taskTitle: task.title, question: `מה ידוע על: ${task.title}` }); } }, ['✨ מה ידוע על זה? (מיילים, סוכנים, ידע ארגוני)'])
+        el('a', { href: '#', onclick: (e) => { e.preventDefault(); AskView.open({ taskId: task.id, taskTitle: task.title, question: `מה ידוע על: ${task.title}` }); } }, [UI.lineIcon('sparkles'), 'מה ידוע על זה? (מיילים, סוכנים, ידע ארגוני)'])
       ]),
       vendorWorkflowBar(),
       descNode,
@@ -267,7 +267,7 @@ const TaskCardView = (() => {
   function closureMain(c, dismiss) {
     if (c.kind === 'advice') return null;
     if (c.kind === 'self') {
-      return el('div.ai-closure', {}, [el('div.ai-closure-main', {}, [el('b', { text: '💡 לסגור בעצמך: ' }), el('span', { text: c.steps.join(' · ') })]), dismiss]);
+      return el('div.ai-closure', {}, [el('div.ai-closure-main', {}, [el('b', {}, [UI.lineIcon('lightbulb'), 'לסגור בעצמך: ']), el('span', { text: c.steps.join(' · ') })]), dismiss]);
     }
     const p = c.primary;
     if (c.kind === 'assign') {
@@ -304,7 +304,7 @@ const TaskCardView = (() => {
         return el('div.alert.alert-info', {}, [el('span', { text: 'ℹ️' }), el('div', { text: 'לחשבון שלך הוגדרה הרשאת צפייה בלבד.' })]);
       }
       if (['awaiting_upload', 'uploaded', 'needs_fix'].includes(task.status)) {
-        actions.push(el('button.btn.btn-primary', { onclick: () => { activeTab = 'files'; draw(modalRef.box.querySelector('.task-detail')); } }, ['📎 העלאת תוצרים']));
+        actions.push(el('button.btn.btn-primary', { onclick: () => { activeTab = 'files'; draw(modalRef.box.querySelector('.task-detail')); } }, [UI.lineIcon('paperclip'), 'העלאת תוצרים']));
         actions.push(el('button.btn', {
           onclick: async () => {
             if (!await UI.confirm('לסמן את המשימה כהושלמה מצדך ולהעביר לבדיקת הצוות?', { okText: 'סימון כהושלם' })) return;
@@ -319,21 +319,21 @@ const TaskCardView = (() => {
       } else if (task.status === 'pending_team_review' || task.status === 'in_team_review') {
         return el('div.alert.alert-info', {}, [el('span', { text: '⏳' }), el('div', { text: 'התוצר הועבר לבדיקת הצוות. תישלח אליך התראה עם התוצאה.' })]);
       } else if (task.status === 'approved') {
-        return el('div.alert.alert-ok', {}, [el('span', { text: '✅' }), el('div', { text: 'התוצר אושר סופית על ידי הצוות. המשימה הושלמה.' })]);
+        return el('div.alert.alert-ok', {}, [el('span', {}, [UI.lineIcon('check-circle')]), el('div', { text: 'התוצר אושר סופית על ידי הצוות. המשימה הושלמה.' })]);
       }
     } else if (task.permissions.approve && task.status !== 'approved') {
       if (['uploaded', 'pending_team_review'].includes(task.status)) {
         actions.push(el('button.btn', {
           onclick: () => decide('start_review', 'העברה לבדיקת הצוות', false)
-        }, ['🔍 התחלת בדיקה']));
+        }, [UI.lineIcon('search'), 'התחלת בדיקה']));
       }
-      actions.push(el('button.btn.btn-primary', { onclick: () => decide('approve', 'אישור סופי של התוצר', false) }, ['✅ אישור סופי']));
+      actions.push(el('button.btn.btn-primary', { onclick: () => decide('approve', 'אישור סופי של התוצר', false) }, [UI.lineIcon('check-circle'), 'אישור סופי']));
       actions.push(el('button.btn.btn-danger', { onclick: () => decide('reject', 'החזרה לספק עם הערות תיקון', true) }, ['↩ נדרש תיקון']));
     }
 
     if (!actions.length) return null;
     return el('div.alert.alert-info', { style: { flexWrap: 'wrap' } }, [
-      el('span', { text: '🤝' }),
+      el('span', {}, [UI.lineIcon('handshake')]),
       el('div', { style: { flex: '1' } }, [
         el('b', { text: 'זרימת עבודה מול הספק' }),
         el('div.flex', { style: { marginTop: '8px', flexWrap: 'wrap' } }, actions)
@@ -423,7 +423,7 @@ const TaskCardView = (() => {
       ? el('button.btn.btn-sm', {
           title: 'תרשים זרימה — איפה עומד כל דבר, מי אחראי, הנתיב הקריטי והחסמים',
           onclick: () => FlowView.open(task.id)
-        }, ['🔀 תרשים זרימה'])
+        }, [UI.lineIcon('workflow'), 'תרשים זרימה'])
       : null;
     // קישור למעלה — בתוך משימה שיש מעליה אב
     const parentLink = task.parentTaskId
@@ -631,7 +631,7 @@ const TaskCardView = (() => {
     fileInput.addEventListener('change', () => uploadFiles([...fileInput.files]));
 
     const dropzone = el('div.dropzone', { onclick: () => fileInput.click() }, [
-      el('div', { text: '📎 גרירת קבצים לכאן, או לחיצה לבחירה' }),
+      el('div', {}, [UI.lineIcon('paperclip'), 'גרירת קבצים לכאן, או לחיצה לבחירה']),
       el('div.mute-sm', { text: `עד ${App.state.settings.maxUploadMb}MB · גרסאות קודמות נשמרות ואינן נדרסות` })
     ]);
     dropzone.addEventListener('dragover', (e) => { e.preventDefault(); dropzone.classList.add('over'); });
@@ -665,14 +665,14 @@ const TaskCardView = (() => {
                 ]),
                 // תמונות ו-PDF נפתחים בתוך המערכת; שאר הסוגים בהורדה בלבד
                 UI.canPreview(a)
-                  ? el('button.btn.btn-sm', { onclick: () => UI.preview(previewable, previewable.indexOf(a)) }, ['👁 תצוגה'])
+                  ? el('button.btn.btn-sm', { onclick: () => UI.preview(previewable, previewable.indexOf(a)) }, [UI.lineIcon('eye'), 'תצוגה'])
                   : null,
-                el('a.btn.btn-sm', { href: `/api/attachments/${a.id}/download` }, ['⬇ הורדה']),
+                el('a.btn.btn-sm', { href: `/api/attachments/${a.id}/download` }, [UI.lineIcon('download'), 'הורדה']),
                 a.canDelete
                   ? el('button.btn.btn-sm.btn-ghost.f-del', {
                       title: 'מחיקת הקובץ',
                       onclick: () => deleteFile(a, versions.length)
-                    }, ['🗑'])
+                    }, [UI.lineIcon('trash')])
                   : null
               ])
             ))))
@@ -706,7 +706,7 @@ const TaskCardView = (() => {
   function historySection() {
     return el('div', {}, [
       el('div.alert.alert-info', {}, [
-        el('span', { text: '🔒' }),
+        el('span', {}, [UI.lineIcon('lock')]),
         el('div', { text: 'לוג ההיסטוריה הוא רשומת שינויים לקריאה בלבד — לא ניתן למחוק או לערוך אותו.' })
       ]),
       ...task.history.map((h) =>
@@ -879,7 +879,7 @@ const TaskCardView = (() => {
         ? el('div', { style: { marginTop: '20px', display: 'flex', flexDirection: 'column', gap: '7px' } }, [
             el('button.btn.btn-block', {
               onclick: () => { modalRef.close(); BoardView.openTaskDialog(task); }
-            }, ['✎ עריכה מלאה']),
+            }, [UI.lineIcon('pencil'), 'עריכה מלאה']),
 
             /**
              * שכפול ושמירה כתבנית — שתי דרכים לחסוך בנייה מחדש של אותה עבודה.
@@ -909,11 +909,11 @@ const TaskCardView = (() => {
             App.may('create_task')
               ? el('button.btn.btn-block', {
                   onclick: () => saveAsTemplateDialog(task)
-                }, ['💾 שמירה כתבנית'])
+                }, [UI.lineIcon('save'), 'שמירה כתבנית'])
               : null,
             // 🔀 איחוד ידני — רק למשימה פתוחה (העריכה של שתיהן נבדקת בשרת)
             !task.isFinal && !task.archived
-              ? el('button.btn.btn-block', { onclick: () => mergeDialog() }, ['🔀 איחוד לתוך משימה אחרת…'])
+              ? el('button.btn.btn-block', { onclick: () => mergeDialog() }, [UI.lineIcon('merge'), 'איחוד לתוך משימה אחרת…'])
               : null,
             el('button.btn.btn-block', {
               onclick: async () => {
@@ -927,7 +927,7 @@ const TaskCardView = (() => {
                   refreshBackground();
                 } catch (err) { UI.error(err); }
               }
-            }, [task.archived ? '↩ החזרה מארכיון' : '🗄 העברה לארכיון']),
+            }, UI.iconLabel(task.archived ? '↩ החזרה מארכיון' : '🗄 העברה לארכיון')),
             el('button.btn.btn-danger.btn-block', {
               onclick: async () => {
                 if (!await UI.confirm('למחוק את המשימה לצמיתות? לוג ההיסטוריה שלה יימחק יחד איתה.', { danger: true, okText: 'מחיקה' })) return;
@@ -938,7 +938,7 @@ const TaskCardView = (() => {
                   refreshBackground();
                 } catch (err) { UI.error(err); }
               }
-            }, ['🗑 מחיקה'])
+            }, [UI.lineIcon('trash'), 'מחיקה'])
           ])
         : null
     ]);

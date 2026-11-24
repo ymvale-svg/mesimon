@@ -228,7 +228,7 @@ const CalendarView = (() => {
       ]) : null,
       // עובד רואה רק את היומן של עצמו — אין את מי לבחור
       secretary ? peoplePicker() : null,
-      data?.error ? el('div.alert.alert-warn', {}, [el('span', { text: '⚠️' }), el('div', { text: data.error })]) : null,
+      data?.error ? el('div.alert.alert-warn', {}, [el('span', {}, [UI.lineIcon('alert')]), el('div', { text: data.error })]) : null,
       view.mode === 'week' ? weekGrid(r.days) : view.layout === 'columns' && view.users.length > 1 ? dayGrid(r.days[0]) : combinedDay(r.days[0])
     ]));
   }
@@ -546,12 +546,12 @@ const CalendarView = (() => {
     const buttons = [];
     if (e.rec) {
       buttons.push(el('button.btn.btn-sm.btn-primary', { onclick: () => { m.close(); RecordingPlayer.open(e.rec.id); } }, ['▶ צפייה ותמליל']));
-      buttons.push(el('button.btn.btn-sm', { onclick: () => { m.close(); RecordingPlayer.open(e.rec.id, { tab: 'summary' }); } }, ['📋 סיכום ומשימות']));
+      buttons.push(el('button.btn.btn-sm', { onclick: () => { m.close(); RecordingPlayer.open(e.rec.id, { tab: 'summary' }); } }, [UI.lineIcon('clipboard'), 'סיכום ומשימות']));
     }
     if (e.taskId) buttons.push(el('button.btn.btn-sm', { onclick: () => { m.close(); TaskCardView.open(e.taskId); } }, ['פתיחת המשימה']));
     // פגישה שהוקלטה — משפט אחד מהסיכום (נטען כשהחלון נפתח)
     // יש סיכום של Timeless — ממנו (כבר ברשימה, בלי בקשה); אחרת — המשפט מהסיכום שלנו
-    const brief = e.rec?.summary ? el('div.cal-rec-brief.mute-sm', {}, [el('b', { text: '📄 סיכום Timeless: ' }), el('span', { text: e.rec.summary })])
+    const brief = e.rec?.summary ? el('div.cal-rec-brief.mute-sm', {}, [el('b', {}, [UI.lineIcon('file'), 'סיכום Timeless: ']), el('span', { text: e.rec.summary })])
       : e.rec ? el('div.cal-rec-brief.mute-sm', {}, [el('span.spinner-sm'), ' טוען סיכום…']) : null;
     if (e.rec && !e.rec.summary) {
       API.get(`/api/timeless/recordings/${encodeURIComponent(e.rec.id)}/digest`)
@@ -562,8 +562,8 @@ const CalendarView = (() => {
     if (e.editable && e.organizerIsOwner && !e.busyOnly && !e.allDay) {
       // פגישה של משימון — הדיאלוג המלא (מוזמנים, מועד, מיקום, Zoom); אחרת — רק המוזמנים
       if (e.meetingId) buttons.push(el('button.btn.btn-sm.btn-primary', { onclick: () => { m.close(); editMeeting(e); } }, [UI.lineIcon('pencil'), 'עריכה']));
-      else buttons.push(el('button.btn.btn-sm', { onclick: () => { m.close(); attendeesDialog(e); } }, ['👥 מוזמנים']));
-      buttons.push(el('button.btn.btn-sm', { onclick: () => { m.close(); moveDialog(e); } }, ['🔀 הזזה']));
+      else buttons.push(el('button.btn.btn-sm', { onclick: () => { m.close(); attendeesDialog(e); } }, [UI.lineIcon('users'), 'מוזמנים']));
+      buttons.push(el('button.btn.btn-sm', { onclick: () => { m.close(); moveDialog(e); } }, [UI.lineIcon('move'), 'הזזה']));
     }
     const m = UI.modal({
       title: e.title ?? 'תפוס',
@@ -690,13 +690,13 @@ const CalendarView = (() => {
   function pendingDock(open) {
     if (!open) {
       return el('button.cal-dock-pill', { title: 'פתיחת המשימות שמחכות לקביעה', onclick: () => setDock('open') }, [
-        el('span', { text: '📌 מחכות לקביעה' }),
+        el('span', {}, [UI.lineIcon('pin'), 'מחכות לקביעה']),
         el('span.today-count', { text: String(pending.length) })
       ]);
     }
     return el('aside.cal-dock', { 'aria-label': 'משימות שמחכות לקביעת פגישה' }, [
       el('div.cal-dock-head', {}, [
-        el('b', { text: '📌 מחכות לקביעה' }),
+        el('b', {}, [UI.lineIcon('pin'), 'מחכות לקביעה']),
         el('span.today-count', { text: String(pending.length) }),
         el('div.spacer'),
         el('button.btn.btn-sm.btn-ghost.cal-dock-min', { title: 'מזעור', 'aria-label': 'מזעור', onclick: () => setDock('min') }, ['—'])

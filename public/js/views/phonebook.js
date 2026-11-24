@@ -103,8 +103,8 @@ const PhonebookView = (() => {
       title: `מייל ל-${email}`,
       snap: [0.45],
       body: el('div.pb-choose', {}, [
-        el('button.btn.pb-choice', { type: 'button', onclick: () => pick('gmail') }, ['🌐 ', MAIL_CLIENTS.gmail]),
-        el('button.btn.pb-choice', { type: 'button', onclick: () => pick('outlook') }, ['📧 ', MAIL_CLIENTS.outlook]),
+        el('button.btn.pb-choice', { type: 'button', onclick: () => pick('gmail') }, [UI.lineIcon('globe'), '', MAIL_CLIENTS.gmail]),
+        el('button.btn.pb-choice', { type: 'button', onclick: () => pick('outlook') }, [UI.lineIcon('mail'), '', MAIL_CLIENTS.outlook]),
         el('label.checkbox.pb-remember', {}, [remember, ' לזכור את הבחירה'])
       ])
     });
@@ -122,8 +122,8 @@ const PhonebookView = (() => {
       title: phone,
       snap: [0.45],
       body: el('div.pb-choose', {}, [
-        el('a.btn.pb-choice', { href: telHref(phone), onclick: () => s.close() }, ['📞 התקשר']),
-        el('a.btn.pb-choice', { href: waHref(phone), target: '_blank', rel: 'noopener', onclick: () => s.close() }, ['💬 וואטסאפ ווב']),
+        el('a.btn.pb-choice', { href: telHref(phone), onclick: () => s.close() }, [UI.lineIcon('phone'), 'התקשר']),
+        el('a.btn.pb-choice', { href: waHref(phone), target: '_blank', rel: 'noopener', onclick: () => s.close() }, [UI.lineIcon('message'), 'וואטסאפ ווב']),
         el('button.btn.btn-ghost.btn-sm.pb-choice-copy', { type: 'button', onclick: () => { s.close(); copy(phone); } }, [UI.lineIcon('copy'), ' העתקת המספר'])
       ])
     });
@@ -462,7 +462,7 @@ const PhonebookView = (() => {
           id: entry.id ?? null, phone: f.phone.value, phone2: f.phone2.value, fax: f.fax.value, email: f.email.value
         });
         UI.mount(dupBox, duplicates.length
-          ? el('div.alert.alert-warn', {}, [el('span', { text: '⚠️' }), el('div', { text: `כבר באלפון: ${duplicates.map((d) => d.name).join(', ')}` })])
+          ? el('div.alert.alert-warn', {}, [el('span', {}, [UI.lineIcon('alert')]), el('div', { text: `כבר באלפון: ${duplicates.map((d) => d.name).join(', ')}` })])
           : null);
       } catch { /* הבדיקה אינה תנאי לשמירה */ }
     };

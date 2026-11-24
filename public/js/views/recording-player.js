@@ -49,7 +49,7 @@ const RecordingPlayer = (() => {
     try {
       info = await API.get(base(id));
     } catch (err) {
-      UI.mount(body, el('div.alert.alert-warn', {}, [el('span', { text: '⚠️' }), el('div', { text: err.message })]));
+      UI.mount(body, el('div.alert.alert-warn', {}, [el('span', {}, [UI.lineIcon('alert')]), el('div', { text: err.message })]));
       return;
     }
     const meeting = info.meeting;
@@ -83,7 +83,7 @@ const RecordingPlayer = (() => {
       audioBtn.setAttribute('aria-pressed', String(on));
       audioBtn.classList.toggle('btn-primary', on);
     });
-    const linkBtn = el('button.btn.btn-sm', { type: 'button', title: 'קישור שפותח את ההקלטה בדיוק ברגע הזה' }, ['🔗 קישור לרגע הזה']);
+    const linkBtn = el('button.btn.btn-sm', { type: 'button', title: 'קישור שפותח את ההקלטה בדיוק ברגע הזה' }, [UI.lineIcon('link'), 'קישור לרגע הזה']);
     linkBtn.addEventListener('click', async () => {
       const t = Math.floor(video.hidden ? 0 : video.currentTime || 0);
       const url = `${location.origin}/?rec=${enc(id)}${t ? `&t=${t}` : ''}`;
@@ -216,8 +216,8 @@ const RecordingPlayer = (() => {
     function drawSide() {
       if (tab === 'ask') return UI.mount(sideBody, askBox());
       const tl = tlSummary;
-      const tlSec = tl ? el('div.rp-sec.rp-tl-summary', {}, [el('div.rp-sec-title', { text: '📄 הסיכום של Timeless' }), mdView(tl)]) : null;
-      if (digestErr) return UI.mount(sideBody, tlSec, el('div.alert.alert-warn', {}, [el('span', { text: '⚠️' }), el('div', { text: digestErr })]));
+      const tlSec = tl ? el('div.rp-sec.rp-tl-summary', {}, [el('div.rp-sec-title', {}, [UI.lineIcon('file'), 'הסיכום של Timeless']), mdView(tl)]) : null;
+      if (digestErr) return UI.mount(sideBody, tlSec, el('div.alert.alert-warn', {}, [el('span', {}, [UI.lineIcon('alert')]), el('div', { text: digestErr })]));
       if (!digest) return UI.mount(sideBody, tlSec, el('div.mute-sm.rp-loading', {}, [el('span.spinner-sm'), tl ? ' מכין את המשימות מהפגישה…' : ' מכין סיכום מסודר — החלטות, משימות ונקודות פתוחות…']));
       if (digest.noAi) return UI.mount(sideBody, tlSec ?? (digest.markdown ? mdView(digest.markdown) : UI.empty('אין סיכום', '📋')));
       if (digest.empty) return UI.mount(sideBody, tlSec ?? UI.empty('אין עדיין תמליל או סיכום לפגישה הזו', '📋'));
@@ -247,7 +247,7 @@ const RecordingPlayer = (() => {
         ]) : null,
         el('div.rp-sec-foot', {}, [
           el('button.btn.btn-sm.btn-ghost', { type: 'button', title: 'לבנות את הסיכום מחדש', onclick: () => loadDigest(true) }, ['↻ סיכום מחדש']),
-          el('button.btn.btn-sm.btn-ghost', { type: 'button', onclick: shareSummary }, ['📤 שיתוף הסיכום'])
+          el('button.btn.btn-sm.btn-ghost', { type: 'button', onclick: shareSummary }, [UI.lineIcon('upload'), 'שיתוף הסיכום'])
         ])
       );
     }

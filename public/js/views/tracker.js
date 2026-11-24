@@ -653,8 +653,9 @@ const TrackerView = (() => {
   const flowButton = (taskId) => el('button.btn.btn-sm.btn-ghost.tr-flow', {
     type: 'button',
     title: 'תרשים זרימה — איפה עומד כל דבר, מי אחראי, הנתיב הקריטי והחסמים',
+    'aria-label': 'תרשים זרימה',
     onclick: (e) => { e.stopPropagation(); FlowView.open(taskId); }
-  }, ['🔀'])
+  }, [UI.lineIcon('workflow')])
 
   function parentRow(task) {
     const isOpen = expanded.has(task.id);
@@ -756,7 +757,7 @@ const TrackerView = (() => {
                 reload();
               } catch (err) { UI.error(err); }
             }
-          }, ['🗑'])
+          }, [UI.lineIcon('trash')])
         ]);
       });
 

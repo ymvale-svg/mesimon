@@ -4741,3 +4741,9 @@ h1 > .li, h2 > .li, .today-sec-head b > .li { vertical-align: -3px; color: var(-
 /* דוחות — "עומס לפי עובד": השורה נשברת בטלפון במקום לגלוש החוצה מהכרטיס */
 .wl-row { flex-wrap: wrap; row-gap: 4px; }
 td > .li { vertical-align: -2px; }
+/* לשונית עם סמל (‎UI.iconLabel‎) */
+[role="tab"]:has(> .li) { display: inline-flex; align-items: center; gap: 6px; }
+[role="tab"] > .li { width: 15px; height: 15px; }
+.empty .e-icon > .li { width: 40px; height: 40px; color: var(--brand-ink); }
+.my-settings-label { display: inline-flex; align-items: center; gap: 6px; }
+.my-settings-label > .li { width: 16px; height: 16px; color: var(--brand-ink); }

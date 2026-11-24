@@ -52,7 +52,7 @@ const LocationView = (() => {
       ? `🟢 יש כרגע שיתוף מיקום בזמן אמת עם הבוט${me.place ? ` · נקודת ציון: ${me.place.name}` : ''}.`
       : `אין כרגע שיתוף מיקום בזמן אמת${me.lastAt ? ` · מיקום אחרון ${ago(me.lastAt)}` : ''}.`;
     return el('div.alert.alert-info', {}, [el('div', {}, [
-      el('b', { text: '📍 תזכורת לפי מיקום' }),
+      el('b', {}, [UI.lineIcon('map-pin'), 'תזכורת לפי מיקום']),
       el('div', { text: 'כותבים לבוט: "תזכיר לי כשאני מגיע למשרד לדבר עם ישראל". הבוט מבקש לשתף איתו מיקום בזמן אמת בוואטסאפ (📎 ← מיקום ← שיתוף מיקום בזמן אמת), וברגע שמגיעים — שולח את התזכורת.' }),
       el('div.mute-sm', { style: { marginTop: '4px' }, text: 'הבוט שומר רק באיזו נקודת ציון העובד נמצא — לא את המסלול, ואף אחד לא רואה את זה.' }),
       el('div.mute-sm', { style: { marginTop: '4px' }, text: now }),
@@ -78,12 +78,12 @@ const LocationView = (() => {
       ])
     ]));
     return el('div', {}, [
-      el('h4', { text: '📌 נקודות ציון — המשרד והאתרים', style: { margin: '18px 0 8px', fontSize: '13px' } }),
+      el('h4', { style: { margin: '18px 0 8px', fontSize: '13px' } }, [UI.lineIcon('pin'), 'נקודות ציון — המשרד והאתרים']),
       rows.length
         ? el('div.table-wrap', {}, [el('table.data', { style: { whiteSpace: 'normal', width: '100%' } }, [el('tbody', {}, rows)])])
         : el('div.mute-sm', { text: data.canEdit ? 'עוד אין נקודות ציון. הוסיפו את המשרד ואת האתרים.' : 'עוד אין נקודות ציון. מנהל המחלקה מוסיף אותן.' }),
       data.canEdit ? el('div.flex.mt', { style: { gap: '8px' } }, [
-        el('button.btn.btn-sm.btn-primary', { onclick: () => editPlace(data, null, redraw) }, ['➕ נקודת ציון'])
+        el('button.btn.btn-sm.btn-primary', { onclick: () => editPlace(data, null, redraw) }, [UI.lineIcon('plus'), 'נקודת ציון'])
       ]) : null
     ]);
   }
@@ -106,7 +106,7 @@ const LocationView = (() => {
         } catch (err) { UI.error(err); }
         useHere.disabled = false;
       }
-    }, ['📍 המיקום הנוכחי שלי']);
+    }, [UI.lineIcon('map-pin'), 'המיקום הנוכחי שלי']);
     // התווית מקושרת לשדה (for/id) — סקירת הממשק 22.11.26
     const field = (label, input, hint) => UI.field(label, input, hint);
     const m = UI.modal({

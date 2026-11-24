@@ -761,7 +761,7 @@ const BoardView = (() => {
               );
               if (ok) run('delete');
             }
-          }, ['🗑 מחיקה'])
+          }, [UI.lineIcon('trash'), 'מחיקה'])
         : null,
       el('div.spacer'),
       el('button.btn.btn-sm', { onclick: () => { view.selection.clear(); draw(); } }, ['ביטול בחירה'])
@@ -1696,7 +1696,7 @@ const BoardView = (() => {
               type: 'button',
               title: 'ה-AI ינסח פנייה, ישלח אחרי אישורך, ויעקוב עד שתתקבל תשובה',
               onclick: () => { m.close(); AiTaskView.openDialog({ projectId: opts.projectId ?? '' }); }
-            }, ['✨ משימת AI'])
+            }, [UI.lineIcon('sparkles'), 'משימת AI'])
           ]),
           el('div.spacer'),
           // הכתבה — אומרים את המשימה, והדיאלוג נפתח שוב ממולא
@@ -1709,7 +1709,7 @@ const BoardView = (() => {
                 ? VoiceView.open({ baseText: opts.voice.transcript, forcePreview: true })
                 : VoiceView.open({ forcePreview: true });
             }
-          }, [opts.voice ? '🎙 הוסף עוד' : '🎙 הכתבה'])
+          }, UI.iconLabel(opts.voice ? '🎙 הוסף עוד' : '🎙 הכתבה'))
         ])
       : null;
 
@@ -1725,7 +1725,7 @@ const BoardView = (() => {
     };
     const voiceBox = voice
       ? el('div.alert.alert-info.voice-from', {}, [
-          el('span', { text: '🎙' }),
+          el('span', {}, [UI.lineIcon('mic')]),
           el('div', {}, [
             el('div.mute-sm', { text: `נשמע: "${voice.transcript}"` }),
             ...(voice.warnings ?? []).map((w) => el('div.voice-warn', { text: `⚠ ${w.text}` }))

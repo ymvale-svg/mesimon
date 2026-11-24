@@ -100,7 +100,7 @@ const AdminView = (() => {
       'aria-controls': 'admin-body',
       tabindex: tab === t.key ? '0' : '-1',
       onclick: () => onPick(t.key)
-    }, [t.label]));
+    }, UI.iconLabel(t.label)));
 
     const list = el('div.tabs.admin-tabs', { role: 'tablist', 'aria-label': 'אזורי הניהול' }, buttons);
 
@@ -177,7 +177,7 @@ const AdminView = (() => {
       title: 'ההזמנה נוצרה — הדואר לא נשלח',
       body: el('div', {}, [
         el('div.alert.alert-warn', {}, [
-          el('span', { text: '✉️' }),
+          el('span', {}, [UI.lineIcon('mail')]),
           el('div', { text: invite.emailError === 'שליחת דואר אינה מוגדרת במערכת'
             ? 'שליחת דואר אינה מוגדרת עדיין. אפשר להעביר את הקישור הזה ידנית.'
             : `שליחת הדואר נכשלה: ${invite.emailError}` })
@@ -216,7 +216,7 @@ const AdminView = (() => {
         data = await API.signupLink();
       } catch (err) {
         return UI.mount(box, el('div.card-pad', {}, [
-          el('div.alert.alert-danger', {}, [el('span', { text: '⚠️' }), el('div', { text: err.message })])
+          el('div.alert.alert-danger', {}, [el('span', {}, [UI.lineIcon('alert')]), el('div', { text: err.message })])
         ]));
       }
       draw(data);
@@ -458,7 +458,7 @@ const AdminView = (() => {
     let payload = null;
 
     const columnsNote = el('div.alert.alert-info', {}, [
-      el('span', { text: '📋' }),
+      el('span', {}, [UI.lineIcon('clipboard')]),
       el('div', {}, [
         el('b', { text: 'מה צריך להיות בקובץ' }),
         el('div', { text: 'השורה הראשונה היא שורת כותרות. עמודות חובה: שם מלא, אימייל. עמודות אופציונליות: טלפון, מחלקה, רמת גישה (ברירת המחדל — עובד פנימי).' }),
@@ -494,14 +494,14 @@ const AdminView = (() => {
     const resultsTable = (r) =>
       el('div', {}, [
         el('div.alert.alert-ok', {}, [
-          el('span', { text: '✅' }),
+          el('span', {}, [UI.lineIcon('check-circle')]),
           el('div', { text: `נוצרו ${r.createdCount} משתמשים${r.failedCount ? `, ${r.failedCount} נכשלו` : ''}.` })
         ]),
         // מי שהדואר לא יצא אליו צריך את הקישור, אחרת הוא נשאר בלי דרך להיכנס
         r.created.some((c) => !c.emailSent)
           ? el('div', {}, [
               el('div.alert.alert-warn', {}, [
-                el('span', { text: '✉️' }),
+                el('span', {}, [UI.lineIcon('mail')]),
                 el('div', { text: 'לחלק מהמשתמשים לא נשלח דואר. יש להעביר להם את הקישור האישי ידנית.' })
               ]),
               el('div.table-wrap', { style: { maxHeight: '240px', overflowY: 'auto' } }, [
@@ -619,7 +619,7 @@ const AdminView = (() => {
       title: `מחיקת ${user.name}`,
       body: el('div', {}, [
         el('div.alert.alert-warn.mb', {}, [
-          el('span', { text: '⚠️' }),
+          el('span', {}, [UI.lineIcon('alert')]),
           el('div', { text: 'המחיקה אינה הפיכה: החשבון, החיבורים וההגדרות האישיות יימחקו. מי שרק עזב — אפשר במקום זאת לשנות את הסטטוס ל"לא פעיל", וההיסטוריה תישמר.' })
         ]),
         el('p.muted', { text: 'נשמרים יומן הפעולות במערכת, התגובות וההיסטוריה במשימות והקבצים שצורפו להן — הם חלק מתיעוד העבודה של הארגון; הודעות הוואטסאפ, יומני הבוט וההגדרות האישיות נמחקים.' }),
@@ -716,7 +716,7 @@ const AdminView = (() => {
 
     // מנהל מחלקה חייב שיוך — עדיף להסביר מראש מאשר להפתיע בשגיאה בשמירה
     const managerNote = el('div.alert.alert-warn', {}, [
-      el('span', { text: '👤' }),
+      el('span', {}, [UI.lineIcon('user')]),
       el('div', { text: 'מנהל מחלקה חייב להיות משויך למחלקה. יש לבחור מחלקה קיימת, או להגדיר מחלקה חדשה שהוא ינהל.' })
     ]);
 
@@ -804,7 +804,7 @@ const AdminView = (() => {
         managerNote,
         !isEdit
           ? el('div.alert.alert-info', {}, [
-              el('span', { text: '✉️' }),
+              el('span', {}, [UI.lineIcon('mail')]),
               el('div', { text: 'עם השמירה תישלח הזמנה במייל ובה הלוגו של המערכת, שמך ושם הארגון. המוזמן קובע לעצמו סיסמה.' })
             ])
           : null
@@ -813,7 +813,7 @@ const AdminView = (() => {
         saveBtn,
         el('div.spacer'),
         isEdit && user.id !== App.state.actor?.id && App.can('manage_users')
-          ? el('button.btn.btn-danger', { onclick: () => deleteUserFlow(user, listData, m) }, ['🗑 מחיקת משתמש'])
+          ? el('button.btn.btn-danger', { onclick: () => deleteUserFlow(user, listData, m) }, [UI.lineIcon('trash'), 'מחיקת משתמש'])
           : null
       ]
     });
@@ -884,7 +884,7 @@ const AdminView = (() => {
 
     UI.mount(body,
       el('div.alert.alert-info.mb', {}, [
-        el('span', { text: '🏢' }),
+        el('span', {}, [UI.lineIcon('building')]),
         el('div', { text: 'המחלקה היא היחידה שלפיה נחתכות ההרשאות: מנהל מחלקה רואה ומנהל את המשימות והעובדים של המחלקה שלו ושל תתי-המחלקות שלה (למשל הנדסה וביצוע › אתר אלעד). משימה יכולה להיות מחלקתית או ארגונית.' })
       ]),
       el('div.flex.mb', {}, [
@@ -1182,7 +1182,7 @@ const AdminView = (() => {
         UI.field('אימייל', emailInput, 'משמש לכניסה לפורטל הספקים'),
         el('div.row', {}, [UI.field('סטטוס', statusSelect), UI.field('סיסמה', passInput)]),
         el('div.field', {}, [el('label.checkbox', {}, [readOnlyCheck, 'הרשאת צפייה בלבד (ללא יכולת עדכון)'])]),
-        !isEdit ? el('div.alert.alert-info', {}, [el('span', { text: '📋' }), el('div', { text: 'עם יצירת הספק ייווצר עבורו אוטומטית בורד ייעודי נפרד.' })]) : null
+        !isEdit ? el('div.alert.alert-info', {}, [el('span', {}, [UI.lineIcon('clipboard')]), el('div', { text: 'עם יצירת הספק ייווצר עבורו אוטומטית בורד ייעודי נפרד.' })]) : null
       ]),
       footer: [saveBtn, el('div.spacer')]
     });
@@ -1222,7 +1222,7 @@ const AdminView = (() => {
 
     UI.mount(body,
       el('div.alert.alert-info.mb', {}, [
-        el('span', { text: '⚙️' }),
+        el('span', {}, [UI.lineIcon('settings')]),
         el('div', {}, [
           el('b', { text: 'מנוע כללים ניתן להרחבה' }),
           el('div', { text: 'ניתן לשנות כללים קיימים או להוסיף כללים חדשים בכל שלב, ללא שינוי מבני במערכת. כל הפרמטרים המספריים נקראים מהגדרות המערכת ואינם מקודדים בקוד.' })
@@ -1403,7 +1403,7 @@ const AdminView = (() => {
 
   /** 🧪 בדיקה: פגישה קצרה במשתמש ה-Zoom, שנמחקת מיד — ומה בדיוק Zoom ענה, עם מה לתקן */
   function zoomTestButton(u) {
-    const b = el('button.btn.btn-sm.btn-ghost', { type: 'button', title: 'יוצר פגישת בדיקה ומוחק אותה מיד' }, ['🧪 בדיקה']);
+    const b = el('button.btn.btn-sm.btn-ghost', { type: 'button', title: 'יוצר פגישת בדיקה ומוחק אותה מיד' }, [UI.lineIcon('flask'), 'בדיקה']);
     b.addEventListener('click', async () => {
       b.disabled = true;
       try {
@@ -1413,7 +1413,7 @@ const AdminView = (() => {
           UI.modal({
             title: `🧪 Zoom — ${u.name}`,
             body: el('div', {}, [
-              el('div.alert.alert-warn', {}, [el('span', { text: '⚠️' }), el('div', { text: r.explain })]),
+              el('div.alert.alert-warn', {}, [el('span', {}, [UI.lineIcon('alert')]), el('div', { text: r.explain })]),
               // מה בדיוק חסר, ובאיזו אפליקציה — לפני הרשימה הארוכה
               r.wanted?.length ? el('div', { style: { margin: '8px 0', fontWeight: '700' } }, [
                 `באפליקציה של חשבון Zoom ${r.account}${r.account === '2' ? ' (ZOOM2_… בשרת)' : ''} חסרה אחת מאלה: `,
@@ -1488,14 +1488,14 @@ const AdminView = (() => {
 
     const alert = s.ephemeralInCloud
       ? el('div.alert.alert-danger', {}, [
-          el('span', { text: '⚠️' }),
+          el('span', {}, [UI.lineIcon('alert')]),
           el('div', {}, [
             el('b', { text: 'הנתונים אינם נשמרים' }),
             el('div', { text: 'המערכת כותבת לתוך תיקיית הקוד בשרת, שנמחקת בכל פרסום גרסה. כל המשימות, המשתמשים והקבצים יימחקו בעדכון הבא. יש לחבר דיסק קבוע בנתיב /var/mesimon.' })
           ])
         ])
       : el('div.alert.alert-ok', {}, [
-          el('span', { text: '✅' }),
+          el('span', {}, [UI.lineIcon('check-circle')]),
           el('div', {}, [
             el('b', { text: 'הנתונים נשמרים' }),
             el('div', { text: 'אם התאריך שלמטה נשאר זהה גם אחרי פרסום גרסה חדשה — האחסון תקין.' })
@@ -1622,7 +1622,7 @@ const AdminView = (() => {
         title: `מחיקת הסטטוס "${col.label}"`,
         body: el('div', {}, [
           el('div.alert.alert-warn', {}, [
-            el('span', { text: '⚠️' }),
+            el('span', {}, [UI.lineIcon('alert')]),
             el('div', { text: 'משימות שנמצאות כרגע בסטטוס הזה יועברו לסטטוס שייבחר כאן. משימה שתישאר בסטטוס שנמחק לא תופיע בשום תצוגה.' })
           ]),
           UI.field('להעביר את המשימות אל', targetSelect)
@@ -1702,7 +1702,7 @@ const AdminView = (() => {
       integrationsCard(settingsData.integrations),
       storageCard(settingsData.storage),
       el('div.alert.alert-info.mb', {}, [
-        el('span', { text: '🔧' }),
+        el('span', {}, [UI.lineIcon('wrench')]),
         el('div', { text: 'כל הפרמטרים המספריים של האוטומציות מוגדרים כאן ולא בקוד — כך שניתן לכוונן אותם תוך כדי עבודה, בהתאם לצורך בפועל.' })
       ]),
       el('div.card', {}, [
@@ -1769,7 +1769,7 @@ const AdminView = (() => {
     const draw = (next) => {
       if (next) info = next;
       UI.mount(body, headerCard(), el('div.seg.mb', {}, WA_SECTIONS.map((s) =>
-        el(`button${waSection === s.key ? '.active' : ''}`, { onclick: () => { waSection = s.key; draw(); } }, [s.label])
+        el(`button${waSection === s.key ? '.active' : ''}`, { onclick: () => { waSection = s.key; draw(); } }, UI.iconLabel(s.label))
       )), host);
       const sections = { actions: actionsSection, groups: groupsSection, log: logSection, review: reviewSection, test: testSection, settings: settingsSection, connection: connectionSection };
       Promise.resolve(sections[waSection]()).catch((err) => UI.mount(host, UI.empty(err.message, '⚠️')));
@@ -1784,7 +1784,7 @@ const AdminView = (() => {
         el(`span.ai-chip${kind === 'ok' ? '.wa-chip-ok' : kind === 'danger' ? '.wa-chip-danger' : '.ai-chip-warn'}`, { text: `🤖 ${stateLabel}` }),
         !info.settings.enabled ? el('span.ai-chip.ai-chip-warn', { text: '⏸ כבוי' })
           : c?.state !== 'authorized' ? null
-          : !info.sendingNow ? el('span.ai-chip.ai-chip-warn', { text: '🌙 בהפסקה — עונה כשהחלון ייפתח' })
+          : !info.sendingNow ? el('span.ai-chip.ai-chip-warn', {}, [UI.lineIcon('moon'), 'בהפסקה — עונה כשהחלון ייפתח'])
           : el('span.ai-chip.wa-chip-ok', { text: 'פעיל ועונה' }),
         !info.ai ? el('span.ai-chip.wa-chip-danger', { text: 'אין חיבור AI' }) : null,
         c?.phone ? el('span.mute-sm', { dir: 'ltr', text: UI.phone(c.phone) }) : null
@@ -1849,7 +1849,7 @@ const AdminView = (() => {
 
       UI.mount(host,
         el('div.alert.alert-info.mb', {}, [
-          el('span', { text: '🛡️' }),
+          el('span', {}, [UI.lineIcon('shield')]),
           el('div', {}, [
             el('div', { text: 'ה-AI רק מזהה מה העובד ביקש. את הפעולה עצמה מבצע משימון עם ההרשאות של העובד, בדיוק כמו באפליקציה: אף אחד לא יראה בוואטסאפ משימה שאינו רואה במערכת. פעולה שמשנה משהו (פתיחה, סגירה, הערה) מתבצעת רק אחרי "כן".' }),
             el('div.mute-sm', { text: 'פעולה כבויה — הבוט עונה שאינה זמינה. פעולה חדשה מחייבת פיתוח; כאן מפעילים, מכבים ומכוונים.' })
@@ -2033,10 +2033,10 @@ const AdminView = (() => {
         ]),
         r.summary ? el('div.rv-text.mb', { text: r.summary }) : null,
         r.patterns.length ? el('div.mb', {}, [
-          el('h4.rv-h', { text: '👥 מה למדנו על איך האנשים מבקשים' }),
+          el('h4.rv-h', {}, [UI.lineIcon('users'), 'מה למדנו על איך האנשים מבקשים']),
           el('ul.rv-list', {}, r.patterns.map((p) => el('li', {}, [p.who ? el('b', { text: `${p.who}: ` }) : null, p.pattern])))
         ]) : null,
-        r.fixes.length ? el('div', {}, [el('h4.rv-h', { text: '🛠 הצעות לתיקון' }), ...r.fixes.map((f) => fixCard(r, f))])
+        r.fixes.length ? el('div', {}, [el('h4.rv-h', {}, [UI.lineIcon('wrench'), 'הצעות לתיקון']), ...r.fixes.map((f) => fixCard(r, f))])
           : el('div.mute-sm', { text: 'אין הצעות לתיקון בסקירה הזו.' })
       ]);
 
@@ -2050,12 +2050,12 @@ const AdminView = (() => {
         const trend = reviews.slice(0, 14).reverse().filter((r) => pct(r) !== null);
 
         UI.mount(host,
-          el('div.alert.alert-info.mb', {}, [el('span', { text: '🌙' }), el('div', {}, [
+          el('div.alert.alert-info.mb', {}, [el('span', {}, [UI.lineIcon('moon')]), el('div', {}, [
             'כל ערב (א׳–ה׳, 21:40) עוברים על כל השיחות של היום עם הבוט: מי ביקש מה, ואם קיבל את זה — משימה שנפתחה, מייל שיצא, תשובה. איפה שאנשים ניסו ולא הצליחו, מוכן תיקון. ',
             el('b', { text: 'תיקון נכנס רק אחרי "לבדיקה ולמיזוג".' }),
             ' "טופל" או "לא רלוונטי" כאן — והסקירה הבאה לומדת מההחלטה ולא מציעה שוב. טלפונים, מיילים וסכומים מוסתרים לפני שהשיחות יוצאות מהמערכת.'
           ])]),
-          !data.configured ? el('div.alert.alert-warn.mb', {}, [el('span', { text: '⚠️' }), el('div', { text: 'הסקירה עוד לא מחוברת: חסר המפתח BOT_REVIEW_KEY בהגדרות השרת (Render ← Environment).' })]) : null,
+          !data.configured ? el('div.alert.alert-warn.mb', {}, [el('span', {}, [UI.lineIcon('alert')]), el('div', { text: 'הסקירה עוד לא מחוברת: חסר המפתח BOT_REVIEW_KEY בהגדרות השרת (Render ← Environment).' })]) : null,
           !reviews.length ? UI.empty('עוד אין סקירות. הראשונה תופיע כאן אחרי הערב הראשון שבו הסקירה רצה.', '🌙') : null,
           trend.length > 1 ? el('div.card.mb', {}, [el('div.card-pad', {}, [
             el('h4.rv-h', { text: 'אחוז השיחות שהצליחו — לאורך זמן' }),
@@ -2095,7 +2095,7 @@ const AdminView = (() => {
         el(`button${testMode === 'group' ? '.active' : ''}`, { onclick: () => { testMode = 'group'; testSection(); } }, ['הודעה בקבוצה'])
       ]);
       UI.mount(host,
-        el('div.alert.alert-info.mb', {}, [el('span', { text: '🧪' }), el('div', { text: 'כאן רואים מה הבוט היה עונה ועושה, בלי וואטסאפ. שום הודעה לא נשלחת ושום משימה לא נפתחת, נסגרת או משתנה. רשימות המשימות הן אמיתיות — כפי שהעובד שנבחר רואה אותן.' })]),
+        el('div.alert.alert-info.mb', {}, [el('span', {}, [UI.lineIcon('flask')]), el('div', { text: 'כאן רואים מה הבוט היה עונה ועושה, בלי וואטסאפ. שום הודעה לא נשלחת ושום משימה לא נפתחת, נסגרת או משתנה. רשימות המשימות הן אמיתיות — כפי שהעובד שנבחר רואה אותן.' })]),
         mode,
         testMode === 'private' ? privateTest() : groupTest()
       );
@@ -2162,8 +2162,8 @@ const AdminView = (() => {
         try {
           const r = await API.post('/api/admin/wa-bot/simulate', { chatId: group.value, userId: Number(sender.value) || 0, text: text.value });
           UI.mount(out,
-            r.note ? el('div.alert.alert-warn', {}, [el('span', { text: '⚠️' }), el('div', { text: r.note })]) : null,
-            r.warning ? el('div.alert.alert-danger', {}, [el('span', { text: '🛡️' }), el('div', { text: r.warning })]) : null,
+            r.note ? el('div.alert.alert-warn', {}, [el('span', {}, [UI.lineIcon('alert')]), el('div', { text: r.note })]) : null,
+            r.warning ? el('div.alert.alert-danger', {}, [el('span', {}, [UI.lineIcon('shield')]), el('div', { text: r.warning })]) : null,
             r.candidates?.length ? el('div.mute-sm.mb', { text: `מי יכול לקבל הצעות: ${r.candidates.join(', ')}` }) : null,
             r.tasks?.length ? el('div', {}, r.tasks.map((t) => el('div.ai-row', {}, [
               el('div.ai-row-main', { style: { cursor: 'default' } }, [
@@ -2178,7 +2178,7 @@ const AdminView = (() => {
               ])
             ]))) : (!r.note ? UI.empty('הבוט לא היה מציע כאן משימה', '💬') : null)
           );
-        } catch (err) { UI.mount(out, el('div.alert.alert-danger', {}, [el('span', { text: '⚠️' }), el('div', { text: err.message })])); }
+        } catch (err) { UI.mount(out, el('div.alert.alert-danger', {}, [el('span', {}, [UI.lineIcon('alert')]), el('div', { text: err.message })])); }
         go.disabled = false;
       });
       return el('div.card', {}, [el('div.card-pad', {}, [
@@ -2267,7 +2267,7 @@ const AdminView = (() => {
         try {
           const r = await API.get('/api/admin/wa-bot/qr');
           UI.mount(qrBox, r.linked
-            ? el('div.alert.alert-ok', {}, [el('span', { text: '✅' }), el('div', { text: 'הטלפון כבר מקושר. לחצו "בדיקת חיבור".' })])
+            ? el('div.alert.alert-ok', {}, [el('span', {}, [UI.lineIcon('check-circle')]), el('div', { text: 'הטלפון כבר מקושר. לחצו "בדיקת חיבור".' })])
             : el('div', { style: { textAlign: 'center', margin: '12px 0' } }, [
                 el('img', { src: r.image, alt: 'קוד QR', style: { width: '240px', height: '240px' } }),
                 el('div.mute-sm', { text: 'הקוד מתחלף כל כמה שניות. אם פג — לחצו שוב.' })
@@ -2285,7 +2285,7 @@ const AdminView = (() => {
         el('div.card-head', {}, [el('img', { src: '/icons/bot.svg', alt: '', width: 22, height: 22 }), el('h3', { text: 'מספר הבוט' })]),
         el('div.card-pad', {}, [
           el('p', { style: { marginTop: 0 }, text: 'מספר וואטסאפ ייעודי של הארגון. מצרפים אותו לקבוצות הפרויקטים כמשתתף, והוא קורא בהן בקשות ומציע אותן כמשימות. הוא לא כותב בקבוצות. בפרטי עובדים כותבים לו — הפעולות שמותרות מוגדרות בלשונית "פעולות".' }),
-          !info.ai ? el('div.alert.alert-warn', {}, [el('span', { text: '⚠️' }), el('div', { text: 'חיבור ה-AI אינו מוגדר בשרת (ANTHROPIC_API_KEY). בלעדיו הבוט אינו מנתח הודעות.' })]) : null,
+          !info.ai ? el('div.alert.alert-warn', {}, [el('span', {}, [UI.lineIcon('alert')]), el('div', { text: 'חיבור ה-AI אינו מוגדר בשרת (ANTHROPIC_API_KEY). בלעדיו הבוט אינו מנתח הודעות.' })]) : null,
           el('ol.ai-steps', {}, [
             el('li', { text: 'מכשיר עם כרטיס SIM ייעודי ווואטסאפ מותקן (מומלץ WhatsApp Business). לא מספר אישי של עובד.' }),
             el('li', {}, ['נרשמים ב-', el('a', { href: 'https://green-api.com', target: '_blank', rel: 'noopener' }, ['green-api.com']), ', יוצרים Instance ומעתיקים לכאן את הפרטים.']),
@@ -2323,7 +2323,7 @@ const AdminView = (() => {
           'ההגדרות וכללי האוטומציה נשמרים.'
         ]),
         el('div.alert.alert-warn', {}, [
-          el('span', { text: '⚠️' }),
+          el('span', {}, [UI.lineIcon('alert')]),
           el('div', { text: 'הפעולה אינה הפיכה. השתמש בה כדי לנקות את נתוני ההדגמה לפני שמתחילים לעבוד באמת.' })
         ]),
         el('button.btn.btn-danger', { onclick: confirmWipe }, ['אתחול תוכן המערכת'])
@@ -2393,7 +2393,7 @@ const AdminView = (() => {
 
     UI.mount(body,
       el('div.alert.alert-info.mb', {}, [
-        el('span', { text: '🔐' }),
+        el('span', {}, [UI.lineIcon('lock')]),
         el('div', { text: 'זוהי מטריצת ההרשאות המלאה של המערכת. היא נאכפת בצד השרת ומהווה מקור אמת יחיד — הממשק בונה את התצוגה ממנה ואינו קובע הרשאות בעצמו.' })
       ]),
       el('div.flex.mb', {}, [
@@ -2528,7 +2528,7 @@ const AdminView = (() => {
           el('span.tag', { class: t.departmentId ? '' : 'tag-org' },
             [t.departmentName ?? 'כל הארגון']),
           el('div.spacer'),
-          el('button.btn.btn-sm', { onclick: () => dialog(t) }, ['✎ עריכה']),
+          el('button.btn.btn-sm', { onclick: () => dialog(t) }, [UI.lineIcon('pencil'), 'עריכה']),
           el('button.btn.btn-sm.btn-danger', {
             onclick: async () => {
               if (!await UI.confirm(
@@ -2564,7 +2564,7 @@ const AdminView = (() => {
 
     UI.mount(body,
       el('div.alert.alert-info.mb', {}, [
-        el('span', { text: '📑' }),
+        el('span', {}, [UI.lineIcon('file')]),
         el('div', { text: 'תבניות למשימות ולפרויקטים שחוזרים על עצמם. תבנית שייכת למחלקה, ועובדי מחלקה אחרת אינם רואים אותה — תבנית של "כל הארגון" נראית לכולם. תבנית פרויקט יוצרת אוטומטית את משימות הבסיס שלו.' })
       ]),
       el('div.flex.mb', {}, [
