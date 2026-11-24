@@ -44,7 +44,10 @@ const DEFAULTS = Object.freeze({
   buyerName: '',
   buyerEmail: '',
   // 🏷️ "רכש — מחירונים" — מי מקבל את ההצעות להוסיף למחירון ספק מהזמנה (‎po-pricelist.js‎). מזהי משתמשי משימון; ריק — ההצעות מחכות
-  pricelistHandlers: []
+  pricelistHandlers: [],
+  // 💸 "שולם" — מי עוד מקבל מייל, לפי המחלקה של היוזם (‎pay-status.js‎): ‎{ "<מזהה מחלקה>": [מזהי משתמשים] }‎.
+  // למשל המזכירה — על כל מה שמגיע למנהלת התכנון (הוחלט 24.11.26). היוזם ומנהל המחלקה מקבלים תמיד
+  paidNotify: {}
 });
 
 /** מה שהיה נכון עד היום — ממשתני הסביבה ומההגדרות הישנות */
@@ -128,6 +131,8 @@ function forDisplay(org = DEFAULT_ORG) {
     defaults: { ...r.defaults, buyerUserId: buyerOf(r.defaults)?.id ?? null },
     // לבחירת מנהלת הרכש — משתמשי משימון פעילים עם מייל
     users: D.all("SELECT id, full_name AS name, email, department FROM users WHERE status = 'active' AND email LIKE '%@%' ORDER BY full_name"),
+    // 💸 "שולם" — מי עוד מקבל, לפי מחלקה
+    departments: D.all("SELECT d.id, d.name, u.full_name AS manager FROM departments d LEFT JOIN users u ON u.id = d.manager_user_id WHERE d.status = 'active' ORDER BY d.name"),
     testLock: testLock(),
     updatedAt: r.updatedAt ?? null,
     updatedBy: r.updatedBy ?? null
@@ -199,6 +204,19 @@ function save(input, { org = DEFAULT_ORG, by = null } = {}) {
         if (!u || u.status !== 'active' || u.role === 'vendor') throw new Error(`משתמש ${id} לא יכול לקבל הצעות למחירון`);
       }
       defs.pricelistHandlers = ids;
+    }
+    if ('paidNotify' in b.defaults) {
+      const out = {};
+      for (const [dept, list] of Object.entries(b.defaults.paidNotify ?? {})) {
+        if (!D.get('SELECT id FROM departments WHERE id = ?', Number(dept))) throw new Error(`מחלקה ${dept} לא קיימת`);
+        const ids = [...new Set((Array.isArray(list) ? list : []).map(Number).filter(Number.isInteger))];
+        for (const id of ids) {
+          const u = D.get('SELECT role, status FROM users WHERE id = ?', id);
+          if (!u || u.status !== 'active' || u.role === 'vendor') throw new Error(`משתמש ${id} לא יכול לקבל הודעות "שולם"`);
+        }
+        if (ids.length) out[String(Number(dept))] = ids;
+      }
+      defs.paidNotify = out;
     }
     if ('draftTtlHours' in b.defaults) defs.draftTtlHours = Math.min(168, Math.max(1, Number(b.defaults.draftTtlHours) || DEFAULTS.draftTtlHours));
   }

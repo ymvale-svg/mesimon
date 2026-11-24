@@ -39,6 +39,7 @@ const MailDose = require('./mail').MailDose;
 const PoNotify = require('./priority').PoNotify;
 const PdParts = require('./priority').PdParts;
 const BuyerNotices = require('./priority').BuyerNotices;
+const Payments = require('./priority').Payments;
 const TimelessMedia = require('./meetings').TimelessMedia;
 const TimelessStore = require('./meetings').TimelessStore;
 
@@ -152,6 +153,8 @@ server.listen(PORT, HOST, () => {
     PdParts.start();
     // 📋 דוח שבועי לרכש: תעודות משלוח שנקלטו מול הזמנה בלי מספר הזמנה
     BuyerNotices.start();
+    // 💸 תשלומים ל-15: רענון כל שעה, "שולם" (מייל ליוזם, למנהל המחלקה ולמי שבהגדרה) ו"לא שולם ב-15" (ליוזם)
+    Payments.start();
   }
   // התראה למנהלים כשתקרת המעבד מאטה את הסוכנים
   LoadMonitor.start();

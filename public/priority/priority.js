@@ -739,7 +739,7 @@
   const shekel = (n) => Number(n ?? 0).toLocaleString('he-IL', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const dm = (d) => (d ? `${d.slice(8, 10)}.${d.slice(5, 7)}.${d.slice(2, 4)}` : '');
   const dmy15 = (d) => (d ? `15.${d.slice(5, 7)}${d.slice(0, 4) !== String(new Date().getFullYear()) ? `.${d.slice(2, 4)}` : ''}` : '');
-  const payFilter = { bucket: 'next', type: '', company: '', project: '', supplier: '', mine: false };
+  const payFilter = { status: '', bucket: 'next', type: '', company: '', project: '', supplier: '', mine: false };
 
   async function payments(refresh = false) {
     const q = new URLSearchParams();
@@ -760,8 +760,12 @@
         <b>${esc(label)}</b>${t ? `<span class="pay-b-sum num">${t.count ? `₪${shekel(t.ils)}` : '—'}</span><span class="pay-b-n num">${t.count} מסמכים</span>` : ''}</button>`;
     }).join('');
     const opt = (v, label, cur) => `<option value="${esc(v)}" ${v === cur ? 'selected' : ''}>${esc(label)}</option>`;
+    const paidView = r.status === 'paid';
+    // שולם: מתי, במה (BT…), איך זוהה; לפני ה-15 — "לפני המועד" (דחוף, מוצג בדיעבד)
+    const paidCell = (i) => `<td class="num">${dm(i.paidAt)}${i.paymentRef ? `<div class="muted small ltr-inline">${esc(i.paymentRef)}</div>` : ''}${i.early ? ' <span class="pill p-warn" title="שולם לפני ה-15 שנקבע לו">לפני המועד</span>' : ''}${i.paidHow === 'amount' ? ' <span class="pill" title="אין עוד התאמה בכרטיס הספק — זוהה לפי הסכום">לפי סכום</span>' : ''}</td>`;
     const rows = r.items.map((i) => `<tr>
-        <td class="num">${i.payDay ? dm(i.payDay) : '<span class="pill p-warn">חסר</span>'}${i.bucket === 'late' ? ' <span class="pill p-bad">באיחור</span>' : ''}</td>
+        ${paidView ? paidCell(i) : ''}
+        <td class="num">${i.payDay ? dm(i.payDay) : '<span class="pill p-warn">חסר</span>'}${i.bucket === 'late' && !paidView ? ' <span class="pill p-bad">באיחור</span>' : ''}</td>
         <td><span class="pill p-brand">${esc(typeLabel(i.type))}</span></td>
         <td>${esc(i.supplier.name || i.supplier.code)}${me.companies.length > 1 || r.scope === 'mine' ? `<div class="muted small">${esc(company(i.company))}</div>` : ''}</td>
         <td><span class="ltr-inline">${esc(i.docno)}</span>${i.booknum ? `<div class="muted small">אסמכתא ${esc(i.booknum)}</div>` : ''}</td>
@@ -771,14 +775,20 @@
         <td>${esc(i.initiatorName || '')}${i.mine && r.scope === 'all' ? ' <span class="pill p-ok">שלך</span>' : ''}</td>
       </tr>`).join('');
     const errs = r.errors.length ? `<p class="note">⚠️ לא נקרא מפריוריטי: ${esc([...new Set(r.errors.map((e) => company(e.company) || e.message))].join(', '))}. הרשימה חסרה את מה שבהן. ${esc(r.errors[0].message)}</p>` : '';
-    const intro = r.scope === 'all'
+    const intro = paidView
+      ? `מה ששולם ב-120 הימים האחרונים${r.scope === 'all' ? '' : ' מהמסמכים שיזמת'} — לפי התשלום לספק בפריוריטי (העברה בנקאית או המחאה). תשלום דחוף מופיע כאן בדיעבד, כשנרשם בפריוריטי.`
+      : r.scope === 'all'
       ? 'כל מה שמחכה לתשלום: קבלות סחורה סופיות (רק מה שעוד לא בחשבונית ספק), חשבונות חלקיים מאושרים וחשבונות עסקה מאושרים. מועד התשלום — ה-15 שאחרי סוף החודש ועוד ימי התנאי.'
       : r.login || r.items.length ? 'המסמכים שיזמת — מתי צפוי התשלום עליהם.' : 'לא מצאנו את שם המשתמש שלך בפריוריטי, ולכן אין כאן מסמכים. פנו למנהל המערכת.';
     main.innerHTML = `<div class="pay">
       <div class="chain-h"><div><h1>תשלומים</h1><p class="muted">${esc(intro)}</p></div>
         <div class="row-actions"><button class="btn pay-refresh" type="button">רענון מפריוריטי</button><a class="btn" href="/api/priority/payments?${new URLSearchParams([...q].filter(([k]) => k !== 'refresh'))}&format=xlsx" title="מה שמוצג עכשיו — גיליון לכל חברה">ייצוא לאקסל</a></div></div>
       ${errs}
-      <div class="pay-buckets" role="group" aria-label="מועד התשלום">${chips}</div>
+      <div class="pay-status" role="group" aria-label="סטטוס">
+        <button type="button" class="chip pay-s" data-s="" aria-pressed="${!paidView}"><b>ממתין לתשלום</b></button>
+        <button type="button" class="chip pay-s" data-s="paid" aria-pressed="${paidView}"><b>שולם</b></button>
+      </div>
+      ${paidView ? '' : `<div class="pay-buckets" role="group" aria-label="מועד התשלום">${chips}</div>`}
       <div class="grid-form pay-f">
         <label>סוג<select data-f="type">${opt('', 'הכל', payFilter.type)}${r.types.map((t) => opt(t.key, t.label, payFilter.type)).join('')}</select></label>
         ${r.facets.companies.length > 1 || payFilter.company ? `<label>חברה<select data-f="company">${opt('', 'כל החברות', payFilter.company)}${r.facets.companies.map((c) => opt(c, company(c), payFilter.company)).join('')}</select></label>` : ''}
@@ -788,11 +798,17 @@
       </div>
       <div class="pay-body">
         <section class="panel"><div class="panel-h"><h2>${r.items.length} מסמכים · ${money(r.totals.all)}</h2><p>כולל מע״מ. עודכן ${fmtAt(r.at)}.</p></div>
-          ${rows ? `<div class="scroll"><table class="t pay-t"><tr><th scope="col">מועד</th><th scope="col">סוג</th><th scope="col">ספק</th><th scope="col">מסמך</th><th scope="col">תאריך · תנאי</th><th scope="col">סכום</th><th scope="col">פרויקט</th><th scope="col">יוזם</th></tr>${rows}</table></div>` : '<p class="muted">אין מסמכים במועד הזה.</p>'}
+          ${rows ? `<div class="scroll"><table class="t pay-t"><tr>${paidView ? '<th scope="col">שולם</th>' : ''}<th scope="col">מועד</th><th scope="col">סוג</th><th scope="col">ספק</th><th scope="col">מסמך</th><th scope="col">תאריך · תנאי</th><th scope="col">סכום</th><th scope="col">פרויקט</th><th scope="col">יוזם</th></tr>${rows}</table></div>` : `<p class="muted">${paidView ? 'עוד לא זוהו תשלומים.' : 'אין מסמכים במועד הזה.'}</p>`}
         </section>
       </div></div>`;
 
-    main.querySelector('.pay-buckets').addEventListener('click', (e) => {
+    main.querySelector('.pay-status').addEventListener('click', (e) => {
+      const c = e.target.closest('.chip');
+      if (!c) return;
+      payFilter.status = c.dataset.s;
+      payments().then(() => main.querySelector(`.pay-s[data-s="${c.dataset.s}"]`)?.focus());
+    });
+    main.querySelector('.pay-buckets')?.addEventListener('click', (e) => {
       const c = e.target.closest('.chip');
       if (!c) return;
       payFilter.bucket = c.dataset.b;
@@ -859,6 +875,17 @@
       </section>
 
       <section class="panel">
+        <div class="panel-h"><h2>"שולם" — מי עוד מקבל מייל</h2><p>כשמזהים בפריוריטי שמסמך שולם, מקבלים מייל מי שיזם אותו ומנהל המחלקה שלו. כאן — מי עוד מקבל, לפי המחלקה של היוזם (למשל המזכירה — על כל מה שמגיע למנהלת התכנון).</p></div>
+        ${(s.departments ?? []).map((d) => {
+          const on = new Set(((s.defaults.paidNotify ?? {})[String(d.id)] ?? []).map(Number));
+          return `<details class="paid-dept"${on.size ? ' open' : ''}><summary><b>${esc(d.name)}</b>${d.manager ? ` <span class="muted small">· מנהל/ת: ${esc(d.manager)}</span>` : ''}${on.size ? ` <span class="pill p-ok">${on.size} נוספים</span>` : ''}</summary>
+            <div class="checks" data-dept="${d.id}" role="group" aria-label="${esc(d.name)} — מי עוד מקבל">
+              ${acc.users.map((u) => `<label class="check"><input type="checkbox" value="${u.id}" ${on.has(u.id) ? 'checked' : ''}> ${esc(u.name)}</label>`).join('')}
+            </div></details>`;
+        }).join('') || '<p class="muted">אין מחלקות במשימון.</p>'}
+      </section>
+
+      <section class="panel">
         <div class="panel-h"><h2>ברירות מחדל לקליטה</h2><p>מה שהמערכת ממלאת כשהמסמך לא אומר. כרגע לקריאה בלבד; יהיו ניתנות לעריכה כשקבלת הסחורה ודרישת הרכש יעברו למסך.</p></div>
         <div class="scroll"><table class="t">
           <tr><td>תנאי תשלום</td><td>${esc(pay(s.defaults.payCode))}</td></tr>
@@ -922,7 +949,8 @@
         confirmed = true; return;
       }
       const body = { connection: { host: $('#c-host').value, ini: $('#c-ini').value, user: $('#c-user').value }, companies, defaults: { buyerUserId: Number($('#b-user').value) || null,
-        pricelistHandlers: [...main.querySelectorAll('#pl-handlers input:checked')].map((x) => Number(x.value)) } };
+        pricelistHandlers: [...main.querySelectorAll('#pl-handlers input:checked')].map((x) => Number(x.value)),
+        paidNotify: Object.fromEntries([...main.querySelectorAll('.paid-dept .checks')].map((g) => [g.dataset.dept, [...g.querySelectorAll('input:checked')].map((x) => Number(x.value))])) } };
       if ($('#c-pass').value) body.connection.password = $('#c-pass').value;
       try {
         await api('PUT', '/api/priority/settings', body);

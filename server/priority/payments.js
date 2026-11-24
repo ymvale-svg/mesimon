@@ -19,6 +19,7 @@ const Priority = require('../integrations').Priority;
 const Settings = require('./priority-settings');
 const Access = require('./priority-access');
 const Approvals = require('./priority-approvals');
+const PayStatus = require('./pay-status');
 
 const ORG = 1;
 const TTL_MS = 10 * 60 * 1000;
@@ -121,7 +122,9 @@ function fromPartial(r, company) {
   return {
     ...base(company, 'partial', r.DOCNO, r), contract: r.ORDNAME ?? '', date, payCode: r.MED_PAYCODE ?? '',
     terms: r.MED_PAYCODE ? Priority.payLabel(r.MED_PAYCODE) : '', due, payDay: payDay(due),
-    amount: num(r.TOTPRICE), total: num(r.TOTPRICE), initiator: r.USERLOGIN ?? r.OWNERLOGIN ?? '', people: logins(r.USERLOGIN, r.OWNERLOGIN)
+    amount: num(r.TOTPRICE), total: num(r.TOTPRICE), initiator: r.USERLOGIN ?? r.OWNERLOGIN ?? '', people: logins(r.USERLOGIN, r.OWNERLOGIN),
+    // הוסב (‎MEDR_ENDORSED‎) — בלי התראת "לא שולם ב-15" (הוחלט 24.11.26)
+    endorsed: r.MEDR_ENDORSED === 'Y'
   };
 }
 
@@ -201,7 +204,7 @@ function persist(items, read, now = D.nowIso()) {
 }
 
 // ---------------------------------------------------------------------------
-// משלימי שלב — שלב 1: לאן הלך מסמך שיצא מהרשימה. שלב 2 יוסיף כאן "שולם".
+// משלימי שלב — לאן הלך מסמך שיצא מהרשימה, ואם שולם (שלב 2 — ‎pay-status.js‎)
 // ---------------------------------------------------------------------------
 
 /** השלב לפי הסטטוס בפריוריטי. ‎null‎ — עוד לא ידוע (נשאר ‎gone‎) */
@@ -222,7 +225,11 @@ const RESOLVERS = [
       for (const r of rows) {
         try {
           const stage = stageFromStatus(r.type, await Priority.payDocStatus(r.company, r.type, r.docno));
-          if (stage) D.run('UPDATE payment_items SET stage = ?, stage_at = ? WHERE ref = ?', stage, now, r.ref);
+          if (stage === 'paid') {
+            // חשבון חלקי שהסטטוס שלו "שולם" — בלי תאריך תשלום מפריוריטי: היום
+            PayStatus.markPaid(r.ref, { paidAt: now.slice(0, 10), how: 'status' }, now);
+            await PayStatus.onPaid(r.ref, now);
+          } else if (stage) D.run('UPDATE payment_items SET stage = ?, stage_at = ? WHERE ref = ?', stage, now, r.ref);
         } catch { /* ננסה ברענון הבא */ }
       }
     }
@@ -234,6 +241,8 @@ async function resolve(now = D.nowIso()) {
     const rows = D.all('SELECT ref, company, type, docno FROM payment_items WHERE org_id = ? AND stage = ? ORDER BY stage_at LIMIT ?', ORG, r.from, RESOLVE_MAX);
     if (rows.length) await r.run(rows, now);
   }
+  // 💸 שלב 2: מה שעבר לחשבונית — שולם?
+  await PayStatus.checkPaid(now);
 }
 
 // ---------------------------------------------------------------------------
@@ -264,6 +273,28 @@ async function load({ force = false } = {}) {
 }
 
 const _reset = () => { cache = null; loading = null; };
+
+/**
+ * ⏱ סבב רקע, פעם בשעה: רענון מפריוריטי (כולל בדיקת "שולם" והמיילים), ו"לא שולם ב-15" — ליוזם.
+ * בלי זה הרשימה מתעדכנת רק כשמישהו פותח את המסך.
+ */
+const EVERY_MS = 60 * 60 * 1000;
+let timer = null;
+async function tick(today = todayIL()) {
+  if (!Priority.isEnabled()) return;
+  try {
+    await load({ force: true });
+    await PayStatus.sweepLate(today);
+  } catch (err) {
+    console.error('[משימון] תשלומים — סבב רקע:', err.message);
+  }
+}
+function start() {
+  if (timer) clearInterval(timer);
+  timer = setInterval(() => void tick(), EVERY_MS);
+  timer.unref?.();
+  setTimeout(() => void tick(), 3 * 60 * 1000).unref?.();
+}
 
 // ---------------------------------------------------------------------------
 // תצוגות
@@ -323,9 +354,24 @@ function totals(items) {
  * הדוח. מי שמורשה ל"תשלומים" — כל מה שבחברות שלו (מחלקת כספים — כל החברות; ואפשר "רק שלי"); כל עובד אחר — רק מה שהוא יזם.
  * ‎f‎: ‎{ bucket, type, company, project, supplier, mine, refresh }‎.
  */
+const PAID_DAYS = 120;
+/** מה ששולם (שלב 2) — מהשמירה, ב-‎PAID_DAYS‎ האחרונים: השורה האחרונה שנקראה ועוד מתי, במה ואיך זוהה */
+function paidItems(today = todayIL()) {
+  const since = new Date(Date.parse(`${today}T00:00:00Z`) - PAID_DAYS * 86400000).toISOString().slice(0, 10);
+  return D.all("SELECT data, paid_at, payment_ref, paid_how FROM payment_items WHERE org_id = ? AND stage = 'paid' AND paid_at >= ?", ORG, since)
+    .map((r) => {
+      let it;
+      try { it = JSON.parse(r.data); } catch { return null; }
+      const [how, kind] = String(r.paid_how ?? '').split(':');
+      return { ...it, paidAt: r.paid_at, paymentRef: r.payment_ref, paidHow: how, paidKind: kind ?? '', early: Boolean(it.payDay && r.paid_at < it.payDay) };
+    }).filter(Boolean);
+}
+
 async function report(actor, f = {}) {
   const all = Access.can(actor, 'payments');
-  const data = await load({ force: Boolean(f.refresh) });
+  // ‎status‎: ממתין לתשלום (ברירת המחדל) · ‎paid‎ — מה ששולם, כולל דחוף ששולם לפני ה-15 (מוצג בדיעבד)
+  const paidView = f.status === 'paid';
+  const data = paidView ? { at: cache?.at ?? Date.now(), items: paidItems(f.today), errors: [] } : await load({ force: Boolean(f.refresh) });
   const mine = await mineOf(actor);
   const run = nextRun(f.today);
   const name = await initiatorNames(data.items);
@@ -343,11 +389,13 @@ async function report(actor, f = {}) {
   const keys = ['late', ...runs, 'none'];
   const byBucket = Object.fromEntries(keys.map((b) => [b, totals(filtered.filter((i) => i.bucket === b)).all]));
   // ‎next‎ — ה-15 הקרוב (ברירת המחדל של המסך)
-  const bucket = f.bucket === 'next' ? run : f.bucket || '';
+  const bucket = paidView ? '' : f.bucket === 'next' ? run : f.bucket || '';
   const shown = bucket ? filtered.filter((i) => i.bucket === bucket) : filtered;
-  shown.sort((a, b) => (a.payDay || '9999').localeCompare(b.payDay || '9999') || a.supplier.name.localeCompare(b.supplier.name, 'he') || a.docno.localeCompare(b.docno));
+  shown.sort(paidView
+    ? (a, b) => b.paidAt.localeCompare(a.paidAt) || a.supplier.name.localeCompare(b.supplier.name, 'he')
+    : (a, b) => (a.payDay || '9999').localeCompare(b.payDay || '9999') || a.supplier.name.localeCompare(b.supplier.name, 'he') || a.docno.localeCompare(b.docno));
   return {
-    scope: all ? 'all' : 'mine', login: mine.login, today: f.today ?? todayIL(), run, runs, bucket,
+    status: paidView ? 'paid' : 'open', scope: all ? 'all' : 'mine', login: mine.login, today: f.today ?? todayIL(), run, runs, bucket,
     at: new Date(data.at).toISOString(), types: TYPES, facets, byBucket, totals: totals(shown), items: shown,
     errors: all ? data.errors : []
   };
@@ -360,8 +408,8 @@ async function report(actor, f = {}) {
 const dmy = (d) => (d ? `${d.slice(8, 10)}.${d.slice(5, 7)}.${d.slice(0, 4)}` : '');
 const typeLabel = (k) => TYPES.find((t) => t.key === k)?.label ?? k;
 
-const HEAD = ['מועד התשלום', 'סוג', 'חברה', 'ספק', 'מספר', 'אסמכתא', 'תאריך', 'תנאי תשלום', 'סכום', 'מטבע', 'פרויקט', 'יוזם', 'הערה'];
-const WIDTHS = [13, 13, 22, 28, 14, 12, 11, 12, 13, 7, 26, 16, 34];
+const HEAD = ['מועד התשלום', 'סוג', 'חברה', 'ספק', 'מספר', 'אסמכתא', 'תאריך', 'תנאי תשלום', 'סכום', 'מטבע', 'פרויקט', 'יוזם', 'הערה', 'שולם'];
+const WIDTHS = [13, 13, 22, 28, 14, 12, 11, 12, 13, 7, 26, 16, 34, 26];
 
 /**
  * אקסל: גיליון "הכל", ועוד גיליון לכל חברה (הוחלט 24.11.26 — "לפי חברה"). בסוף כל גיליון — סה"כ, ובגיליון "הכל" גם סה"כ לכל חברה.
@@ -370,7 +418,8 @@ function toXlsx(r) {
   const company = (c) => Settings.companies().find((x) => x.code === c)?.name ?? c;
   const row = (i) => [dmy(i.payDay) || 'חסר תנאי תשלום', typeLabel(i.type), company(i.company), i.supplier.name || i.supplier.code, i.docno, i.booknum,
     dmy(i.date), i.terms, i.amount.toFixed(2), i.currency, i.project.name, i.initiatorName,
-    i.partialInvoiced ? `רק מה שעוד לא בחשבונית (${i.invoices.join(', ')})` : i.contract ? `חוזה ${i.contract}` : ''];
+    i.partialInvoiced ? `רק מה שעוד לא בחשבונית (${i.invoices.join(', ')})` : i.contract ? `חוזה ${i.contract}` : '',
+    i.paidAt ? `${dmy(i.paidAt)}${i.paymentRef ? ` · ${i.paymentRef}` : ''}${i.paidHow === 'amount' ? ' (לפי סכום)' : ''}` : ''];
   const money = (t) => [t.ils.toFixed(2), ILS, Object.entries(t.other).map(([c, v]) => `+ ${v.toFixed(2)} ${c}`).join(' ')];
   const sheet = (name, items, extra = []) => {
     const t = totals(items);
@@ -391,5 +440,5 @@ module.exports = {
   TYPES, STAGES, SOURCES, RESOLVERS,
   payDay, addRuns, nextRun, bucketOf, todayIL,
   fromReceipt, fromPartial, fromDeal, collect, persist, resolve, stageFromStatus, load, report, filterItems, totals, toXlsx,
-  _reset
+  paidItems, start, tick, _reset
 };

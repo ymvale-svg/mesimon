@@ -880,7 +880,11 @@ CREATE TABLE IF NOT EXISTS payment_items (
   last_seen     TEXT    NOT NULL,
   stage_at      TEXT    NOT NULL,
   paid_at       TEXT    NOT NULL DEFAULT '',
-  payment_ref   TEXT    NOT NULL DEFAULT ''
+  payment_ref   TEXT    NOT NULL DEFAULT '',
+  paid_how      TEXT    NOT NULL DEFAULT '',
+  paid_checked_at TEXT  NOT NULL DEFAULT '',
+  paid_notified_at TEXT NOT NULL DEFAULT '',
+  late_notified_at TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_payment_items_stage ON payment_items(org_id, stage, pay_day);
 
@@ -2498,6 +2502,11 @@ function migrate() {
   addColumn('reminders', 'place_id', 'INTEGER REFERENCES places(id) ON DELETE SET NULL');
   addColumn('reminders', 'place_kind', 'TEXT');
   addColumn('reminders', 'place_on', 'TEXT');
+  // 💸 תשלומים — שלב 2: שולם (‎priority/pay-status.js‎)
+  addColumn('payment_items', 'paid_how', "TEXT NOT NULL DEFAULT ''");
+  addColumn('payment_items', 'paid_checked_at', "TEXT NOT NULL DEFAULT ''");
+  addColumn('payment_items', 'paid_notified_at', "TEXT NOT NULL DEFAULT ''");
+  addColumn('payment_items', 'late_notified_at', "TEXT NOT NULL DEFAULT ''");
 
   /**
    * סדר העמודות הוא סדר הזרימה, ולכן העמודה הסופית חייבת להיות אחרונה.

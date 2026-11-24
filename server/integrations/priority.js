@@ -1270,7 +1270,7 @@ const payReceipts = async (company) => rows(await call(company, 'GET',
 
 const payPartials = async (company) => rows(await call(company, 'GET',
   `MED_DOCUMENTS_P?$filter=${enc(`STATDES eq '${PAY_STATUS.partial}'`)}`
-  + `&$select=DOCNO,CURDATE,SUPNAME,CDES,ORDNAME,BOOKNUM,PROJDOCNO,PROJDES,TOTPRICE,CODE,MED_PAYCODE,USERLOGIN,OWNERLOGIN&$top=${PAY_TOP}`)).map(strip);
+  + `&$select=DOCNO,CURDATE,SUPNAME,CDES,ORDNAME,BOOKNUM,PROJDOCNO,PROJDES,TOTPRICE,CODE,MED_PAYCODE,USERLOGIN,OWNERLOGIN,MEDR_ENDORSED&$top=${PAY_TOP}`)).map(strip);
 
 const payDeals = async (company) => rows(await call(company, 'GET',
   `DINVOICES?$filter=${enc(`STATDES eq '${PAY_STATUS.deal}'`)}`
@@ -1291,6 +1291,48 @@ async function payDocStatus(company, type, docno) {
   return r ? { status: r.STATDES ?? '', invoiced: r.IVALL === 'Y' } : null;
 }
 
+/*
+ * 💸 שולם? (שלב 2, נבדק 24.11.26 בפריוריטי, קריאה בלבד). השרשרת: מסמך (קבלת סחורה / חשבון חלקי) ← חשבונית ספק (GI,
+ * ‎PINVOICES‎ — המסמך שלה ב-‎PIVDOC_SUBFORM‎) ← פקודת יומן (‎FNCNUM‎) ← תשלום לספק: פקודה עם ‎FNCPATNAME‎ ‎העב‎ (העברה
+ * בנקאית, BT) או ‎תשצ‎ (תשלום בהמחאה), שבה הספק בחובה (‎ACCNAME1‎). חשבון עסקה — הוא עצמו החשבונית (‎DINVOICES‎).
+ * התאמה בכרטיס הספק — ‎FRECONNUM‎ זהה (חיובי) בשורת הספק של החשבונית ושל התשלום.
+ */
+const PAYMENT_PATTERNS = Object.freeze(['העב', 'תשצ']);
+const isoOf = (d) => `${String(d).slice(0, 10)}T00:00:00Z`;
+
+/** חשבוניות הספק (סופיות) שנוצרו מהמסמך ‎docno‎, מאז ‎since‎ (‎YYYY-MM-DD‎). ‎[{ IVNUM, IVDATE, TOTPRICE, FNCNUM }]‎ */
+async function invoicesForDoc(company, supname, docno, since) {
+  const list = rows(await call(company, 'GET', `PINVOICES?$filter=${enc(`SUPNAME eq '${q(supname)}' and IVDATE ge ${isoOf(since)} and STATDES eq 'סופית'`)}`
+    + '&$select=IVNUM,IVDATE,TOTPRICE,FNCNUM&$expand=PIVDOC_SUBFORM($select=DOCNO)&$top=500'));
+  return list.filter((iv) => (iv.PIVDOC_SUBFORM ?? []).some((x) => x.DOCNO === docno)).map(({ PIVDOC_SUBFORM, ...iv }) => strip(iv));
+}
+
+/** חשבון עסקה כחשבונית: ‎{ IVNUM, IVDATE, TOTPRICE, FNCNUM, STATDES }‎ או ‎null‎ */
+async function dealInvoice(company, ivnum) {
+  const r = rows(await call(company, 'GET', `DINVOICES?$filter=${enc(`IVNUM eq '${q(ivnum)}'`)}&$select=IVNUM,IVDATE,TOTPRICE,FNCNUM,STATDES&$top=1`))[0];
+  return r ? strip(r) : null;
+}
+
+/** מספר ההתאמה בשורת הספק בפקודת היומן של החשבונית. ‎0‎ — לא הותאמה */
+async function invoiceRecon(company, fncnum, supname) {
+  if (!fncnum) return 0;
+  const r = rows(await call(company, 'GET', `FNCTRANS?$filter=${enc(`FNCNUM eq '${q(fncnum)}'`)}&$select=FNCNUM&$expand=FNCITEMS_SUBFORM($select=ACCNAME,FRECONNUM)&$top=1`))[0];
+  const line = (r?.FNCITEMS_SUBFORM ?? []).find((l) => l.ACCNAME === supname);
+  return Number(line?.FRECONNUM) > 0 ? Number(line.FRECONNUM) : 0;
+}
+
+/** התשלומים לספק מאז ‎since‎: ‎[{ fncnum, ref, kind, date, sum, recon }]‎ (בלי פקודות שבוטלו) */
+async function supplierPayments(company, supname, since) {
+  const pats = PAYMENT_PATTERNS.map((p) => `FNCPATNAME eq '${p}'`).join(' or ');
+  const list = rows(await call(company, 'GET', `FNCTRANS?$filter=${enc(`ACCNAME1 eq '${q(supname)}' and FINAL eq 'Y' and (${pats}) and CURDATE ge ${isoOf(since)}`)}`
+    + '&$select=FNCNUM,FNCREF,FNCPATNAME,CURDATE,FNCDATE,SUM1,STORNOFLAG&$expand=FNCITEMS_SUBFORM($select=ACCNAME,FRECONNUM)&$top=1000'));
+  return list.filter((t) => t.STORNOFLAG !== 'Y').map((t) => {
+    const line = (t.FNCITEMS_SUBFORM ?? []).find((l) => l.ACCNAME === supname);
+    return { fncnum: t.FNCNUM, ref: t.FNCREF || t.FNCNUM, kind: t.FNCPATNAME, date: String(t.FNCDATE || t.CURDATE || '').slice(0, 10),
+      sum: Number(t.SUM1) || 0, recon: Number(line?.FRECONNUM) > 0 ? Number(line.FRECONNUM) : 0 };
+  });
+}
+
 /** פריט ל"מוצרים לספק". מחזיר ‎{ KLINE }‎ — המפתח למחיקה */
 async function addSupplierPart(company, supname, part) {
   const r = await call(company, 'POST', `SUPPLIERS('${q(supname)}')/SUPPART_SUBFORM`, { PARTNAME: part });
@@ -1306,7 +1348,7 @@ module.exports = {
   finalOrders, orderForNotice, demandInitiator, demandForNotice, projectManager, priorityUser,
   readDialog, createReceipt, addOrderLine, addFreeLine, setLineQty, setLineDes, setHeader, attach, deleteAttachment, setDialog, finalizeReceipt, cancelReceipt, receiptStatus, deleteLines,
   PD_TYPES, demandCodes, recentDemandProjects, createDemand, addDemandLine, setDemand, submitDemand, isNoApproversError, readDemand, waitingDemands, nextSigner, APPROVAL_KINDS, waitingForApproval, approvalSigner, cancelDemand, setDemandDialog, appendDemandDialog, setDemandLine, deleteDemandLine, reopenDemand, REOPEN_STATUS, purchaseOrderOwners, attachDemand, priorityUsers, budgetPairs, isCodingError,
-  PAY_STATUS, payReceipts, payPartials, payDeals, payDocStatus,
+  PAY_STATUS, payReceipts, payPartials, payDeals, payDocStatus, PAYMENT_PATTERNS, invoicesForDoc, dealInvoice, invoiceRecon, supplierPayments,
   supplierPriceLists, addPriceListItem, deletePriceListItem, supplierParts, addSupplierPart, deleteSupplierPart,
   _call: call
 };

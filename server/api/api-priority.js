@@ -129,7 +129,8 @@ function register(router) {
     const sp = parseUrl(req).searchParams;
     const f = {
       bucket: sp.get('bucket') || '', type: sp.get('type') || '', company: sp.get('company') || '', project: sp.get('project') || '',
-      supplier: sp.get('supplier') || '', mine: sp.get('mine') === '1', refresh: sp.get('refresh') === '1'
+      supplier: sp.get('supplier') || '', mine: sp.get('mine') === '1', refresh: sp.get('refresh') === '1',
+      status: sp.get('status') === 'paid' ? 'paid' : ''
     };
     const r = await Payments.report(actor, f);
     if (sp.get('format') !== 'xlsx') return sendJson(res, 200, r);
