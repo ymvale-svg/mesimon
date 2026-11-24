@@ -45,6 +45,8 @@
     upload: '<path d="M12 16V4M7 9l5-5 5 5"/><path d="M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"/>',
     clip: '<path d="m21 11-8.5 8.5a5 5 0 0 1-7-7L14 4a3.5 3.5 0 0 1 5 5l-8.5 8.5a2 2 0 0 1-3-3L15 7"/>',
     x: '<path d="M18 6 6 18M6 6l12 12"/>',
+    plus: '<path d="M12 5v14M5 12h14"/>',
+    check: '<path d="M20 6 9 17l-5-5"/>',
     refresh: '<path d="M21 12a9 9 0 1 1-2.6-6.4L21 8"/><path d="M21 3v5h-5"/>',
     download: '<path d="M12 4v12M7 11l5 5 5-5"/><path d="M4 20h16"/>',
     alert: '<path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4M12 17h.01"/>',
@@ -55,6 +57,12 @@
     settings: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>',
     shield: '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/>'
   };
+  /*
+   * שם קובץ בעמוד מימין לשמאל: "תעודת משלוח 881.jpg" הוצג "jpg.881 תעודת משלוח". החלק האחרון, כשהוא מתחיל באנגלית או
+   * בספרה, נבודד ככיוון שמאל-ימין (‎<bdi dir="ltr">‎) — והשם נקרא כמו שנכתב.
+   */
+  const LTR_TAIL = /(^|\s)([A-Za-z0-9][^\s<]*\.[A-Za-z0-9]{2,5})(?=$|\s|[,.;:!?)])/g;
+  const fname = (name) => esc(name).replace(LTR_TAIL, '$1<bdi dir="ltr">$2</bdi>');
   const ui = (k) => `<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${UI[k]}</svg>`;
   const icon = (k) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[k] ?? ''}</svg>`;
   const SUB = {
@@ -233,7 +241,7 @@
         <article class="qcard${selected === x.id ? ' sel' : ''}" data-id="${x.id}">
           <button class="qmain" data-view="${x.id}">
             <span class="qt"><b>${esc(x.supplier || x.fromName || x.filename)}</b><span class="pill ${STAGE_CLS[x.stage] ?? 'p-mute'}">${esc(x.stageLabel)}</span></span>
-            <span class="qs">${ui(x.source === 'mail' ? 'mail' : 'upload')} ${esc(x.filename)}</span>
+            <span class="qs">${ui(x.source === 'mail' ? 'mail' : 'upload')} ${fname(x.filename)}</span>
             <span class="qs muted">${x.docno ? `<b class="ltr-inline">${esc(x.docno)}</b> · ` : ''}${x.source === 'mail' ? esc(x.subject || x.fromEmail) : x.source === 'whatsapp' ? 'נפתח בוואטסאפ' : 'הועלה במסך'} · ${fmtAt(x.at)}</span>
           </button>
           <span class="qa">
@@ -257,7 +265,7 @@
         return `<div class="mail">
           <span class="mfrom"><b>${esc(m.supplier || m.fromName || m.fromEmail)}</b><time>${fmtAt(m.at)}</time></span>
           <span class="msubj">${esc(m.subject)}</span>
-          <span class="matt">${ui('clip')} ${esc(m.filename)} <span class="pill ${m.guess === d.key ? 'p-brand' : 'p-mute'}">${esc(m.kindLabel)} · נראה כמו ${esc(label(m.guess))}</span></span>
+          <span class="matt">${ui('clip')} ${fname(m.filename)} <span class="pill ${m.guess === d.key ? 'p-brand' : 'p-mute'}">${esc(m.kindLabel)} · נראה כמו ${esc(label(m.guess))}</span></span>
           <span class="mbtns">${btns.join('')}</span>
         </div>`;
       }).join('') : '<p class="muted empty">אין מיילים חדשים עם חשבונית או תעודת משלוח. מה שסריקת המייל מזהה יופיע כאן.</p>';
@@ -270,7 +278,7 @@
       if (!x) { $('#preview').innerHTML = '<p class="muted">בחרו מסמך מהתור כדי לראות אותו כאן.</p>'; return; }
       const src = `/api/priority/docs/${x.id}/file`;
       if (!x.filename) { $('#preview').innerHTML = '<p class="muted">למסמך הזה אין קובץ במשימון — הוא נפתח ישר בוואטסאפ.</p>'; return; }
-      $('#preview').innerHTML = `<div class="pv-h"><span>${esc(x.filename)}</span><a class="pv-open" href="${src}" target="_blank" rel="noopener">פתיחה בחלון<span class="sr-only"> (חלון חדש)</span></a></div><p class="muted" aria-busy="true">טוען את המסמך…</p>`;
+      $('#preview').innerHTML = `<div class="pv-h"><span>${fname(x.filename)}</span><a class="pv-open" href="${src}" target="_blank" rel="noopener">פתיחה בחלון<span class="sr-only"> (חלון חדש)</span></a></div><p class="muted" aria-busy="true">טוען את המסמך…</p>`;
       // טעינה קודם: קובץ שלא ירד (Gmail) — הודעה ברורה, לא שגיאה גולמית בתוך המסגרת
       const ticket = (previewTicket = (previewTicket || 0) + 1);
       fetch(src, { credentials: 'same-origin' }).then(async (r) => {
@@ -285,9 +293,9 @@
     }
 
     // ---------------- עבודה על המסמך מתוך המסך
-    const fmtWa = (t) => esc(t).replace(/\*([^*\n]+)\*/g, '<b>$1</b>').replace(/(^|\s)_([^_\n]+)_(?=\s|$)/g, '$1<i>$2</i>').replace(/~([^~\n]+)~/g, '<s>$1</s>').replace(/\n/g, '<br>');
+    const fmtWa = (t) => esc(t).replace(LTR_TAIL, '$1<bdi dir="ltr">$2</bdi>').replace(/\*([^*\n]+)\*/g, '<b>$1</b>').replace(/(^|\s)_([^_\n]+)_(?=\s|$)/g, '$1<i>$2</i>').replace(/~([^~\n]+)~/g, '<s>$1</s>').replace(/\n/g, '<br>');
     const num = (v) => (v === null || v === undefined || v === '' ? '' : Number(v).toLocaleString('he-IL', { maximumFractionDigits: 2 }));
-    const talkHtml = (messages) => messages.map((m) => `<li class="msg ${m.from}">${m.texts.map((t) => `<p>${fmtWa(t)}</p>`).join('')}${(m.files ?? []).map((f) => `<a class="msg-file" href="/api/priority/desk/file/${encodeURIComponent(f.id)}" target="_blank" rel="noopener">${ui('clip')} ${esc(f.caption || f.name)}</a>`).join('')}</li>`).join('');
+    const talkHtml = (messages) => messages.map((m) => `<li class="msg ${m.from}">${m.texts.map((t) => `<p>${fmtWa(t)}</p>`).join('')}${(m.files ?? []).map((f) => `<a class="msg-file" href="/api/priority/desk/file/${encodeURIComponent(f.id)}" target="_blank" rel="noopener">${ui('clip')} ${fname(f.caption || f.name)}</a>`).join('')}</li>`).join('');
     function drawDesk() {
       const box = $('#desk');
       if (!box) return;
@@ -313,7 +321,7 @@
           ${desk.messages?.length ? `<ol class="talk ro" id="talk" aria-label="השיחה על המסמך">${talkHtml(desk.messages)}</ol>` : ''}
           ${desk.openDocId && desk.openDocId !== desk.docId ? `<button type="button" class="btn" data-view-doc="${desk.openDocId}">חזרה למסמך שבעבודה</button>` : ''}
           ${n ? `<div class="desk-done"><p class="muted">${esc(d.label)} הבאה בתור:</p>
-            <div class="next-doc"><b>${esc(n.supplier || n.fromName || n.filename)}</b><span class="muted">${esc(n.filename)}${n.pages ? ` · ${n.pages + 1} עמודים` : ''}</span></div>
+            <div class="next-doc"><b>${esc(n.supplier || n.fromName || n.filename)}</b><span class="muted">${fname(n.filename)}${n.pages ? ` · ${n.pages + 1} עמודים` : ''}</span></div>
             <button type="button" class="btn pri" data-start="${n.id}">להתחיל את המסמך הבא</button></div>` : ''}`;
         const talk = $('#talk'); if (talk) talk.scrollTop = talk.scrollHeight;
         return;
@@ -693,7 +701,7 @@
         <div class="scroll"><table class="t"><tr><th scope="col"><span class="sr-only">לבחור</span></th><th scope="col">פריט</th><th scope="col" class="pl-unit">יחידה</th><th scope="col">מחיר נטו</th></tr>${rows}</table></div>
         <div class="grid-form"><label>מחירון<select class="pl-list">${o.lists.map((l) => `<option value="${esc(plKey(l))}" ${plKey(l) === plKey(o.list) ? 'selected' : ''}>${esc(listName(l))}</option>`).join('')}</select></label></div>
         <p class="muted small">המחיר — אחרי הנחת השורה. הפריטים שנבחרו ייכנסו למחירון וגם ל"מוצרים לספק".</p>
-        <div class="row-actions"><button class="btn pri pl-write" ${o.busy ? 'disabled' : ''}>להוסיף למחירון</button><button class="btn pl-decline" ${o.busy ? 'disabled' : ''}>לא להוסיף</button><span class="pl-confirm" role="status"></span></div>
+        <div class="row-actions"><button class="btn pri pl-write" ${o.busy ? 'disabled' : ''}>${ui('plus')}<span>להוסיף למחירון</span></button><button class="btn pl-decline" ${o.busy ? 'disabled' : ''}>לא להוסיף</button><span class="pl-confirm" role="status"></span></div>
       </section>`;
     };
     const recent = b.recent.map((o) => {
@@ -848,11 +856,11 @@
       <section class="panel">
         <div class="panel-h"><h2>חברות</h2><p>כל החברות בפריוריטי. כתיבה — לאן מותר לקלוט מהבוט ומהמסך. התראות — באילו חברות שולחים "הזמנה הועברה לספק" והודעה לחותם הבא על דרישה.</p></div>
         <div class="scroll sticky-wrap" tabindex="0" role="region" aria-label="טבלת החברות"><table class="t" id="co"></table></div>
-        <div class="row-actions"><button class="btn small" id="co-add">+ חברה</button></div>
+        <div class="row-actions"><button class="btn small" id="co-add">${ui('plus')}<span>חברה</span></button></div>
       </section>
 
       <section class="panel">
-        <div class="panel-h"><h2>🆕 רכש — מק"טים לבנייה</h2><p>פריט בדרישת רכש שאין לו מק"ט נשלח במייל לבניית מק"ט (דרישה לא יוצאת עם מק"ט כללי), והיוזם מקבל הודעה כשהמק"ט נבנה. בקבלת סחורה — הבוט שואל אם לשלוח. היא מקבלת גם דרישה שנשארה טיוטא כי פריוריטי דחה שורה (למשל אין תקציב בפרויקט לתת הפרק). ריק — הכל למנהלי המערכת, ובדרישה: רק המזוהים.</p></div>
+        <div class="panel-h"><h2>רכש — מק"טים לבנייה</h2><p>פריט בדרישת רכש שאין לו מק"ט נשלח במייל לבניית מק"ט (דרישה לא יוצאת עם מק"ט כללי), והיוזם מקבל הודעה כשהמק"ט נבנה. בקבלת סחורה — הבוט שואל אם לשלוח. היא מקבלת גם דרישה שנשארה טיוטא כי פריוריטי דחה שורה (למשל אין תקציב בפרויקט לתת הפרק). ריק — הכל למנהלי המערכת, ובדרישה: רק המזוהים.</p></div>
         <div class="grid-form">
           <label for="b-user">מנהלת הרכש — מתוך המשתמשים של משימון<select id="b-user">
             <option value="">— לא הוגדרה —</option>
@@ -871,7 +879,7 @@
 
       <section class="panel">
         <div class="panel-h"><h2>ברירות מחדל לקליטה</h2><p>מה שהמערכת ממלאת כשהמסמך לא אומר. כרגע לקריאה בלבד; יהיו ניתנות לעריכה כשקבלת הסחורה ודרישת הרכש יעברו למסך.</p></div>
-        <div class="scroll"><table class="t">
+        <div class="scroll"><table class="t defs">
           <tr><td>תנאי תשלום</td><td>${esc(pay(s.defaults.payCode))}</td></tr>
           <tr><td>מחסן, כשלפרויקט אין</td><td class="ltr">${esc(s.defaults.warehouse)}</td></tr>
           <tr><td>פריט כללי לשורה בלי מק"ט</td><td class="ltr">${esc(s.defaults.generalPart)}</td></tr>
@@ -883,7 +891,7 @@
         </table></div>
       </section>
 
-      <div class="row-actions" style="position:sticky;bottom:0;background:var(--bg);padding:10px 0">
+      <div class="row-actions savebar">
         <button class="btn pri" id="save">שמירה</button><span id="confirm"></span>
         <span class="hint">${s.updatedAt ? `נשמר לאחרונה ${new Date(s.updatedAt).toLocaleString('he-IL')}${s.updatedBy ? ` · ${esc(s.updatedBy.name)}` : ''}` : 'עוד לא נשמר במסך — הערכים נגזרים מההגדרות הקודמות'}</span>
       </div>
@@ -921,7 +929,7 @@
       const st = $('#c-status'); st.innerHTML = '<span class="muted">בודק…</span>';
       try {
         const r = await api('POST', '/api/priority/settings/test', {});
-        st.innerHTML = r.ok ? `<span class="pill p-ok">מחובר ✓</span> <span class="muted">נבדק מול ${esc(r.company)}</span>` : `<span class="pill p-bad">לא מחובר</span> ${esc(r.error)}`;
+        st.innerHTML = r.ok ? `<span class="pill p-ok">${ui('check')} מחובר</span> <span class="muted">נבדק מול ${esc(r.company)}</span>` : `<span class="pill p-bad">לא מחובר</span> ${esc(r.error)}`;
       } catch (e) { st.innerHTML = `<span class="pill p-bad">שגיאה</span> ${esc(e.message)}`; }
     });
 

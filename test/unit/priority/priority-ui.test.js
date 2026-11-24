@@ -40,7 +40,7 @@ test('הודעת סטטוס נשארת ב-DOM עם role="status"; התוכן ה�
 
 test('בלי אימוג׳י כאייקונים בממשק — SVG בלבד', () => {
   const ui = js.replace(/\/\*[\s\S]*?\*\/|\/\/.*$/gm, '');
-  assert.doesNotMatch(ui, /[\u{1F300}-\u{1FAFF}\u{2600}-\u{26FF}✉⤓✕]/u);
+  assert.doesNotMatch(ui, /[\u{1F100}-\u{1FAFF}\u{2600}-\u{26FF}✉⤓✕]/u);
 });
 
 test('מחיקה מהתור — לחיצה שנייה לאישור', () => {
@@ -93,4 +93,30 @@ test('תשלומים בטלפון: הטבלה הופכת לכרטיסים, וכ�
   assert.match(mob, /\.pay-buckets \{[^}]*overflow-x: auto/);
   assert.match(mob, /\.pay-t thead \{[^}]*position: absolute/);
   assert.match(mob, /table\.t\.pay-t td \{[^}]*border: 0/);
+});
+
+test('שם קובץ בעברית ואנגלית נקרא כמו שנכתב: "תעודת משלוח 881.jpg" (לא "jpg.881")', () => {
+  const src = js.slice(js.indexOf('const LTR_TAIL'), js.indexOf('const fname'));
+  const LTR_TAIL = eval(src.replace(/^const LTR_TAIL = /, '').replace(/;\s*$/, ''));
+  const f = (n) => n.replace(LTR_TAIL, '$1<bdi dir="ltr">$2</bdi>');
+  assert.equal(f('תעודת משלוח 881.jpg'), 'תעודת משלוח <bdi dir="ltr">881.jpg</bdi>');
+  assert.equal(f('inv5521.pdf'), '<bdi dir="ltr">inv5521.pdf</bdi>');
+  assert.equal(f('קבלת סחורה: תעודת משלוח 881.jpg'), 'קבלת סחורה: תעודת משלוח <bdi dir="ltr">881.jpg</bdi>');
+  assert.equal(f('תעודה.pdf'), 'תעודה.pdf', 'שם עברי עם סיומת — בלי בידוד');
+  for (const use of ['${fname(x.filename)}', '${fname(m.filename)}', '${fname(n.filename)}', 'fname(f.caption || f.name)']) assert.ok(js.includes(use), use);
+  assert.match(js, /const fmtWa = \(t\) => esc\(t\)\.replace\(LTR_TAIL/);
+});
+
+test('עבודה על מסמך: כפתורי התור בשורה מתחת לשם (השם לא נחתך), ושורות המסמך — כרטיסים בטלפון', () => {
+  assert.match(css, /\.qcard \{[^}]*flex-wrap: wrap/);
+  assert.match(css, /\.qmain \{ flex-basis: 100%; \}/);
+  assert.match(css, /table\.t\.lines tr \{ display: grid/);
+});
+
+test('הגדרות: פס שמירה עם רקע, בלי ריק מתחת לטבלה קצרה, וכפתור "חברה" עם אייקון', () => {
+  assert.match(js, /class="row-actions savebar"/);
+  assert.doesNotMatch(js, /style="position:sticky/);
+  assert.match(css, /\.savebar \{[^}]*position: sticky; bottom: 0/);
+  assert.doesNotMatch(css, /\.sticky-wrap \{[^}]*min-height/);
+  assert.match(js, /id="co-add">\$\{ui\('plus'\)\}/);
 });
