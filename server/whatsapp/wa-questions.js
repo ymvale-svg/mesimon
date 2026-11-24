@@ -21,6 +21,8 @@ const TTL_MS = 2 * 24 * 60 * 60 * 1000;   // יומיים
 /** שאלות יזומות שבטוח להחזיר: התשובה להן בודקת במסד אם כבר טופלו */
 // ‎plain_mail‎ — "מייל מוכן לאישור" שנשלח כשהיה פתוח משהו אחר; אחרי שנענה (גם בטקסט) — ‎markAnsweredKey‎, ולא נשלח פעמיים
 const RESTORABLE = new Set(['goods_offer', 'mail_remind', 'sent_followup', 'plain_mail']);
+/** פעולה שאין ממנה חזרה (מייל שנשלח) — חוזרת רק כשעוד לא נענתה; "שינוי דעה" עליה היה שולח פעמיים */
+const ONCE = new Set(['plain_mail']);
 
 const keyOf = (userId) => `wa_questions:${userId}`;
 const list = (userId) => { const v = D.getSetting(keyOf(userId), []); return Array.isArray(v) ? v : []; };
@@ -72,7 +74,7 @@ function markAnsweredKey(userId, key, answer = '') {
 function decide(q, currentDraft, { text = '', alertOpen = () => false } = {}) {
   if (!q || q.owner !== 'chat' || !q.awaiting || !q.draft) return 'free';
   if (draftKey(currentDraft) === q.key) return 'current';
-  if (RESTORABLE.has(q.draft.kind) && (!q.answered || (q.answer && q.answer !== String(text ?? '').trim()))) return 'restore';
+  if (RESTORABLE.has(q.draft.kind) && (!q.answered || (!ONCE.has(q.draft.kind) && q.answer && q.answer !== String(text ?? '').trim()))) return 'restore';
   if (q.draft.alert && q.draft.suggestionIds?.length && alertOpen(q.draft)) return 'restore';
   return 'closed';
 }
@@ -93,8 +95,7 @@ function replyToOf(m) {
 
 const CLOSED_TEXT = 'ℹ️ השאלה הזו כבר לא פתוחה, אז לא עשיתי כלום. אם עדיין צריך — כתבו לי מה לעשות.';
 /** "לא" / "התעלם" / "ביטול" על שאלה שכבר לא פתוחה — זה בדיוק מה שקרה (כלום), אז עונים כך ולא "לא פתוחה" (סקירה 12.11) */
-const OLD_REACTION_TEXT = 'ℹ️ סימנת הודעה קודמת, ולא ברור לי על מה — אז לא עשיתי כלום. כדי לאשר את השאלה האחרונה: *כן* 👍 עליה, או כתבו *כן*.';
 const CLOSED_NO_TEXT = 'בסדר 👍 לא שלחתי ולא שיניתי כלום.';
 const isNo = (text) => /^(לא|התעלם|ביטול|בטל|עזוב|👎)(?=[\s,.!❌🙈🗑️]|$)/u.test(String(text ?? '').trim());
 
-module.exports = { record, find, latest, markAnswered, markAnsweredKey, decide, draftKey, replyToOf, isNo, RESTORABLE, CLOSED_TEXT, CLOSED_NO_TEXT, OLD_REACTION_TEXT };
+module.exports = { record, find, latest, markAnswered, markAnsweredKey, decide, draftKey, replyToOf, isNo, RESTORABLE, CLOSED_TEXT, CLOSED_NO_TEXT };
