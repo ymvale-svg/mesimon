@@ -189,4 +189,4 @@ async function sweep(send, { force = false } = {}) {
   return out;
 }
 
-module.exports = { mesimonUserFor, priorityLoginFor, mapping, notifyDemand, sweep, messageFor, MAX_FAILS, _words: words };
+module.exports = { alertAdmins, mesimonUserFor, priorityLoginFor, mapping, notifyDemand, sweep, messageFor, MAX_FAILS, _words: words };

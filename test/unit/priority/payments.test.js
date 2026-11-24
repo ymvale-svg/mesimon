@@ -182,7 +182,7 @@ test('חוב שיצא מהרשימה: נשמר, והשלב מתעדכן לפי �
     'a160226:partial:PC40': { status: 'שולם', invoiced: false },
     'a160226:partial:PC41': { status: 'מבוטלת', invoiced: false }
   } });
-  Payments._reset();
+  await Payments.reload();
   await Payments.report(actor(admin), { today: TODAY });
   assert.equal(stage('a160226:receipt:GR40'), 'invoiced');
   assert.equal(stage('a160226:partial:PC40'), 'paid', 'חשבון חלקי בסטטוס "שולם"');
@@ -191,7 +191,7 @@ test('חוב שיצא מהרשימה: נשמר, והשלב מתעדכן לפי �
 
   t.mock.restoreAll();
   fake(t, { a160226: { receipt: [gr('GR40'), gr('GR41')] } });
-  Payments._reset();
+  await Payments.reload();
   await Payments.report(actor(admin), { today: TODAY });
   assert.equal(stage('a160226:receipt:GR40'), 'open', 'חזר לרשימה');
 });
@@ -203,7 +203,7 @@ test('חברה שהקריאה ממנה נכשלה: המסמכים שלה לא "�
   await Payments.report(actor(admin), { today: TODAY });
   t.mock.restoreAll();
   fake(t, {}, { fail: ['elad1'] });
-  Payments._reset();
+  await Payments.reload();
   const r = await Payments.report(actor(admin), { today: TODAY });
   assert.ok(r.errors.some((e) => e.company === 'elad1'));
   assert.equal(D.get("SELECT stage FROM payment_items WHERE ref = 'elad1:receipt:GR50'").stage, 'open');
@@ -341,4 +341,32 @@ test('מי רואה מה: עובד — שלו; מנהל מחלקה — שלו ו
   D.run("UPDATE payment_items SET stage = 'invoiced' WHERE docno IN ('GR91', 'GR92')");
   assert.equal(Payments.hasMine(boss.id), false);
   D.setSetting('priority_user_map', {});
+});
+
+test('לא קוראים מפריוריטי בכל כניסה: אחרי הפעלה מחדש — מהמסד מיד; ישן מ-10 דקות — מוצג ומתרענן ברקע; "רענון" — מחכה', async (t) => {
+  reset();
+  let calls = 0;
+  let rows = [gr('GR95')];
+  Fakes.priority(t, { payReceipts: async (c) => { calls += 1; return c === 'a160226' ? rows : []; }, payPartials: async () => [], payDeals: async () => [], priorityUsers: async () => [] });
+  const admin = user({ role: 'admin' });
+  await Payments.report(actor(admin), { today: TODAY });            // פעם ראשונה אי פעם — מחכים
+  const first = calls;
+  assert.ok(first > 0);
+
+  Payments._reset();                                                 // "הפעלה מחדש של השרת"
+  rows = [gr('GR95'), gr('GR96')];
+  const cold = await Payments.report(actor(admin), { today: TODAY });
+  assert.equal(calls, first, 'מהמסד — בלי פריוריטי');
+  assert.deepEqual(cold.items.map((i) => i.docno), ['GR95']);
+  assert.equal(cold.refreshing, false);
+
+  D.run("UPDATE payment_items SET last_seen = '2026-01-01T00:00:00.000Z'");   // ישן
+  Payments._reset();
+  const stale = await Payments.report(actor(admin), { today: TODAY });
+  assert.deepEqual(stale.items.map((i) => i.docno), ['GR95'], 'מוצג מה שהיה — מיד');
+  assert.equal(stale.refreshing, true, 'והרענון רץ ברקע');
+  await Payments.reload();
+  const fresh = await Payments.report(actor(admin), { today: TODAY });
+  assert.deepEqual(fresh.items.map((i) => i.docno).sort(), ['GR95', 'GR96']);
+  assert.equal(fresh.refreshing, false);
 });

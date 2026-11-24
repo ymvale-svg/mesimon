@@ -11,7 +11,8 @@
  *   ← משלימי שלב (‎RESOLVERS‎: שלב 1 — לאן הלך מסמך שיצא מהרשימה) ← תצוגות (‎report‎ — ממתין לתשלום, "שלי").
  *   שלב 2 מוסיף משלים ("שולם") ותצוגה; הקוראים, החישוב והמסך לא משתנים. לא זורקים — מסננים בתצוגה.
  *
- * קריאה בלבד מפריוריטי. הנתונים נשמרים בזיכרון ל-10 דקות; "רענון" קורא מחדש (לא יותר מפעם ב-30 שניות).
+ * קריאה בלבד מפריוריטי. המסך נפתח מיד עם הנתונים האחרונים (מהזיכרון או מהמסד); רענון ברקע כל 10 דקות,
+ * ו"רענון מפריוריטי" קורא מחדש (לא יותר מפעם ב-30 שניות).
  */
 const D = require('../core').Db;
 const Xlsx = require('../core').XlsxWrite;
@@ -270,7 +271,12 @@ async function attachOwners(items) {
 async function refreshNow() {
   if (!Priority.isEnabled()) return { at: Date.now(), items: [], errors: [{ company: '', type: '', message: 'החיבור לפריוריטי אינו מוגדר' }] };
   const { items, errors, read } = await collect(realCompanies());
-  try { await attachOwners(items); } catch (err) { console.error('[משימון] תשלומים — זיהוי העובדים נכשל:', err.message); }
+  try {
+    await attachOwners(items);
+    // שם היוזם — כבר ברענון, כדי שפתיחת המסך לא תפנה לפריוריטי
+    const name = await initiatorNames(items);
+    for (const i of items) i.initiatorName = name(i);
+  } catch (err) { console.error('[משימון] תשלומים — זיהוי העובדים נכשל:', err.message); }
   const now = D.nowIso();
   try { persist(items, read, now); await resolve(now); } catch (err) { console.error('[משימון] תשלומים — שמירה נכשלה:', err.message); }
   if (errors.length) console.error('[משימון] תשלומים — קריאה נכשלה:', errors.map((e) => `${e.company}/${e.type}: ${e.message}`).join('; '));
@@ -278,13 +284,45 @@ async function refreshNow() {
 }
 
 /** הנתונים — מהזיכרון, או קריאה מחדש. ‎force‎ — רענון (לא יותר מפעם ב-30 שניות) */
-async function load({ force = false } = {}) {
-  if (loading) return loading;
-  const age = cache ? Date.now() - cache.at : Infinity;
-  if (cache && age < (force ? MIN_REFRESH_MS : TTL_MS)) return cache;
-  loading = refreshNow().then((r) => { cache = r; return r; }).finally(() => { loading = null; });
+/**
+ * הנתונים מהפעם הקודמת — מהמסד (החובות הפתוחים ב-‎payment_items‎), בלי פנייה לפריוריטי. כך גם אחרי הפעלה מחדש של השרת
+ * המסך נפתח מיד. ‎null‎ — עוד לא נקרא אף פעם.
+ */
+function fromDb() {
+  const at = D.get('SELECT MAX(last_seen) AS at FROM payment_items WHERE org_id = ?', ORG)?.at;
+  if (!at) return null;
+  const items = D.all("SELECT data FROM payment_items WHERE org_id = ? AND stage = 'open'", ORG).map((r) => {
+    try { return JSON.parse(r.data); } catch { return null; }
+  }).filter((x) => x && x.ref);
+  return { at: Date.parse(at), items, errors: [] };
+}
+
+/** קריאה מפריוריטי — אחת בכל פעם; מי שמבקש באמצע מקבל את אותה קריאה */
+function reload() {
+  if (!loading) {
+    loading = refreshNow().then((r) => { cache = r; return r; }).finally(() => { loading = null; });
+    loading.catch((err) => console.error('[משימון] תשלומים — רענון:', err.message));
+  }
   return loading;
 }
+
+/**
+ * הנתונים למסך (הוחלט 24.11.26 — לא קוראים מפריוריטי בכל כניסה):
+ *   • תמיד מה שיש — מהזיכרון, ואם אין (אחרי הפעלה מחדש) — מהמסד. מיד, בלי לחכות.
+ *   • ישן מ-10 דקות — מוצג כמו שהוא, והרענון רץ ברקע. גם הסבב (‎start‎) מרענן כל 10 דקות.
+ *   • ‎force‎ ("רענון מפריוריטי") — מחכים לקריאה חדשה (לא יותר מפעם ב-30 שניות).
+ *   • רק בפעם הראשונה אי פעם (אין כלום במסד) — מחכים לקריאה.
+ */
+async function load({ force = false } = {}) {
+  if (!cache) cache = fromDb();
+  if (!cache) return reload();
+  const age = Date.now() - cache.at;
+  if (force) return age < MIN_REFRESH_MS && !loading ? cache : reload();
+  if (age >= TTL_MS) reload();
+  return cache;
+}
+
+const refreshing = () => Boolean(loading);
 
 const _reset = () => { cache = null; loading = null; };
 
@@ -301,15 +339,15 @@ function hasMine(userId) {
     WHERE p.org_id = ? AND p.stage = 'open' AND o.value IN (${ids.map(() => '?').join(',')}) LIMIT 1`, ORG, ...ids));
 }
 
-/** רענון ברקע כל שעה — כדי שהקישור בתפריט יופיע גם למי שעוד לא נכנס למסך */
-const EVERY_MS = 60 * 60 * 1000;
+/** רענון ברקע כל 10 דקות — המסך נפתח מיד עם הנתונים האחרונים, והקישור בתפריט מופיע גם למי שעוד לא נכנס */
+const EVERY_MS = TTL_MS;
 let timer = null;
 function start() {
   if (timer) return;
-  const tick = () => { if (Priority.isEnabled()) load({ force: true }).catch((err) => console.error('[משימון] תשלומים — רענון:', err.message)); };
+  const tick = () => { if (Priority.isEnabled()) reload(); };
   timer = setInterval(tick, EVERY_MS);
   timer.unref?.();
-  setTimeout(tick, 3 * 60 * 1000).unref?.();
+  setTimeout(tick, 60 * 1000).unref?.();
 }
 
 // ---------------------------------------------------------------------------
@@ -317,12 +355,11 @@ function start() {
 // ---------------------------------------------------------------------------
 
 /** מה שהעובד יזם: שם המשתמש שלו בפריוריטי, ומסמכים שנפתחו בבוט בשמו (שם בפריוריטי רשום משתמש ה-API) */
-async function mineOf(actor) {
-  const login = await Approvals.priorityLoginFor({ id: actor.id }).catch(() => null);
+/** מה שהעובד העביר לתשלום: ‎owners‎ (נקבע ברענון), ומה שקלט בבוט. בלי פנייה לפריוריטי — פתיחת המסך מיידית */
+function mineOf(actor) {
   const bot = new Set(D.all("SELECT company, docno FROM priority_docs WHERE org_id = ? AND user_id = ? AND docno <> ''", ORG, actor.id)
     .map((r) => `${r.company}:${r.docno}`));
-  const l = login ? login.toLowerCase() : null;
-  return { login, is: (it) => Boolean(it.owners?.includes(actor.id)) || bot.has(`${it.company}:${it.docno}`) || Boolean(l && it.people.some((p) => p.toLowerCase() === l)) };
+  return { is: (it) => Boolean(it.owners?.includes(actor.id)) || bot.has(`${it.company}:${it.docno}`) };
 }
 
 /** מי יזם — לתצוגה: עובד משימון (בבוט), או השם בפריוריטי */
@@ -375,11 +412,10 @@ async function report(actor, f = {}) {
   const all = Access.can(actor, 'payments');
   const team = all ? new Set() : Access.teamOf(actor.id);   // מנהל מחלקה — מה שהעובדים שלו יזמו
   const data = await load({ force: Boolean(f.refresh) });
-  const mine = await mineOf(actor);
+  const mine = mineOf(actor);
   const run = nextRun(f.today);
-  const name = await initiatorNames(data.items);
   const allowedCos = Access.paymentCompanies(actor, realCompanies());   // מחלקת כספים — כל החברות
-  let items = data.items.map((it) => ({ ...it, bucket: bucketOf(it.payDay, run), mine: mine.is(it), initiatorName: name(it) }));
+  let items = data.items.map((it) => ({ ...it, bucket: bucketOf(it.payDay, run), mine: mine.is(it), initiatorName: it.initiatorName || it.initiator }));
   items = all ? items.filter((it) => allowedCos.includes(it.company))
     : items.filter((it) => it.mine || it.owners?.some((o) => team.has(o)));
 
@@ -397,8 +433,8 @@ async function report(actor, f = {}) {
   const shown = bucket ? filtered.filter((i) => i.bucket === bucket) : filtered;
   shown.sort((a, b) => (a.payDay || '9999').localeCompare(b.payDay || '9999') || a.supplier.name.localeCompare(b.supplier.name, 'he') || a.docno.localeCompare(b.docno));
   return {
-    scope: all ? 'all' : team.size ? 'team' : 'mine', login: mine.login, today: f.today ?? todayIL(), run, runs, bucket,
-    at: new Date(data.at).toISOString(), types: TYPES, facets, byBucket, totals: totals(shown), items: shown,
+    scope: all ? 'all' : team.size ? 'team' : 'mine', today: f.today ?? todayIL(), run, runs, bucket,
+    at: new Date(data.at).toISOString(), refreshing: refreshing(), types: TYPES, facets, byBucket, totals: totals(shown), items: shown,
     errors: all ? data.errors : []
   };
 }
@@ -441,6 +477,6 @@ module.exports = {
   TYPES, STAGES, SOURCES, RESOLVERS,
   payDay, addRuns, nextRun, bucketOf, todayIL,
   fromReceipt, fromPartial, fromDeal, collect, persist, resolve, stageFromStatus, load, report, filterItems, totals, toXlsx,
-  attachOwners, hasMine, start,
+  attachOwners, hasMine, start, reload,
   _reset
 };
