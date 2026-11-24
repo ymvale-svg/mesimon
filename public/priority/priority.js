@@ -158,6 +158,7 @@
   // ---------------------------------------------------------------- ✍️ ממתין לאישורך (בראש הבית)
   // האפיון: "אפיון — מסך אישורים במשימון פריוריטי.md". אין שום דבר שממתין — האזור לא קיים בכלל.
   const Waiting = (() => {
+    const ALT = '__alt';
     let box = null, data = { items: [], at: null }, filter = 'all', opened = null;
     const money = (n) => (n === null || n === undefined ? '' : `₪ ${Math.round(n).toLocaleString('he-IL')}`);
     const ago = (iso) => {
@@ -172,22 +173,25 @@
 
     function draw() {
       if (!box) return;
-      const items = data.items;
-      if (!items.length) { box.innerHTML = ''; return; }
+      // "הכל" והמונה — רק מה שהעובד הוא החותם בו. כמחליף — רק בלחיצה על "כמחליף" (הוחלט 24.11.26)
+      const items = data.items.filter((w) => !w.altFor);
+      const alt = data.items.filter((w) => w.altFor);
+      if (!items.length && !alt.length) { box.innerHTML = ''; return; }
       const types = [...new Set(items.map((w) => w.type))];
-      if (filter !== 'all' && !types.includes(filter)) filter = 'all';
-      const shown = items.filter((w) => filter === 'all' || w.type === filter);
+      if (filter === ALT ? !alt.length : (filter !== 'all' && !types.includes(filter))) filter = 'all';
+      const shown = filter === ALT ? alt : items.filter((w) => filter === 'all' || w.type === filter);
       box.innerHTML = `<section class="appr" aria-labelledby="appr-h">
         <div class="appr-head"><h2 id="appr-h">ממתין לאישורך <span class="badge num">${items.length}</span></h2>
           <span class="fresh"><span id="appr-at">${esc(ago(data.at))}</span> <button class="btn small" id="appr-refresh">${ui('refresh')} רענון</button></span></div>
-        ${types.length > 1 ? `<div class="chips" role="group" aria-label="סינון לפי סוג"><button class="chip" data-f="all" aria-pressed="${filter === 'all'}">הכל <b class="num">${items.length}</b></button>${types.map((t) => `<button class="chip" data-f="${esc(t)}" aria-pressed="${filter === t}">${esc(t)} <b class="num">${items.filter((w) => w.type === t).length}</b></button>`).join('')}</div>` : ''}
-        <div class="scroll appr-wide"><table class="t appr-t">
+        ${types.length > 1 || alt.length ? `<div class="chips" role="group" aria-label="סינון לפי סוג"><button class="chip" data-f="all" aria-pressed="${filter === 'all'}">הכל <b class="num">${items.length}</b></button>${types.length > 1 ? types.map((t) => `<button class="chip" data-f="${esc(t)}" aria-pressed="${filter === t}">${esc(t)} <b class="num">${items.filter((w) => w.type === t).length}</b></button>`).join('') : ''}${alt.length ? `<button class="chip chip-alt" data-f="${ALT}" aria-pressed="${filter === ALT}">כמחליף <b class="num">${alt.length}</b></button>` : ''}</div>` : ''}
+        ${shown.length ? '' : '<p class="muted appr-none">אין מסמכים שממתינים לחתימה שלך.</p>'}
+        <div class="scroll appr-wide"${shown.length ? '' : ' hidden'}><table class="t appr-t">
           <thead><tr><th>סוג</th><th>מספר</th><th>חברה ופרויקט</th><th>ספק / קבלן</th><th>סכום</th><th>הוגש ע״י</th><th>ממתין</th><th><span class="sr-only">פתיחה</span></th></tr></thead>
           <tbody>${shown.map((w) => w.done ? `<tr class="appr-done"><td colspan="8">${ui('check')} ${esc(w.done)}</td></tr>` : `<tr>
             <td>${typeCell(w)}</td><td class="ltr num">${esc(w.docno)}</td>
             <td>${esc(w.companyName)}${w.project ? `<span class="sub">${esc(w.project)}</span>` : ''}</td>
             <td class="wrap">${esc(w.party || '—')}</td><td class="num">${sumOf(w)}</td><td>${esc(w.owner || '—')}</td><td>${age(w)}</td><td>${openBtn(w)}</td></tr>`).join('')}</tbody></table></div>
-        <div class="appr-cards">${shown.map((w) => w.done ? `<div class="appr-card appr-done">${ui('check')} ${esc(w.done)}</div>` : `<div class="appr-card">
+        <div class="appr-cards"${shown.length ? '' : ' hidden'}>${shown.map((w) => w.done ? `<div class="appr-card appr-done">${ui('check')} ${esc(w.done)}</div>` : `<div class="appr-card">
             <div class="r1">${typeCell(w)}${age(w)}</div>
             <div class="r2"><span class="ltr num">${esc(w.docno)}</span><span>${esc(w.companyName)}</span></div>
             <div class="r2"><span>${esc(w.party || w.project || '—')}</span><span class="num">${sumOf(w)}</span></div>

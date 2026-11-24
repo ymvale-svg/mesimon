@@ -469,3 +469,5 @@ table.defs td.ltr { text-align: right; direction: ltr; unicode-bidi: isolate; }
   .mtx thead th { white-space: normal; min-width: 64px; }
   .savebar { border-radius: 0; margin-inline: -16px; border-inline: 0; }
 }
+.appr .chip-alt { margin-inline-start: auto; border-style: dashed; }
+.appr-none { padding: 14px 18px; }
