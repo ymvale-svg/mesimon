@@ -11,7 +11,9 @@
  *   2. חברה — לפי הנמען, רק חברה שפתוחה ושהעובד משויך אליה.            ← בחירה כשלא ברור
  *   3. ספק — לפי ח.פ., אחרת לפי שם.                                        ← בחירה כשלא ברור
  *   4. כפילות: אותו ספק ואותו מספר חשבונית כבר בפריוריטי — עוצרים ("כבר נקלטה: GI…").
- *   5. ה-GR: הסופיים של הספק שעוד לא נמשכו לחשבונית. קודם לפי מספר (מספר החשבונית / תעודה / הזמנה שעל המסמך = ‎BOOKNUM‎ /
+ *   5. **הבסיס** — GR או חשבון חלקי (PC) מחוזה (אוחד 24.11.26 עם ‎pc-invoice.js‎, שמטפל בשרשרת חוזה ← חשבון חלקי):
+ *      GR שמספרו על המסמך ← GR; אחרת חשבון חלקי שלא חויב (‎PcInvoice.start‎ — לפי PC / CO שעל המסמך או הסכום); אחרת GR לפי הסכום.
+ *      ה-GR: הסופיים של הספק שעוד לא נמשכו לחשבונית. קודם לפי מספר (מספר החשבונית / תעודה / הזמנה שעל המסמך = ‎BOOKNUM‎ /
  *      ‎ORDNAME‎), אחר כך לפי הסכום לפני מע"מ (GR אחד, או צירוף של כמה). לא ברור — העובד בוחר.
  *   6. סיכום לפני "כן": ספק, חשבונית, ה-GR, סכומים והשוואה (תואם / פער, וממה הוא נובע).
  *   7. אחרי "כן": חשבונית זמנית (‎T…‎) ← משיכת ה-GR ← צילום החשבונית כנספח ← דו-שיח פנימי ← קריאה חזרה והשוואה.
@@ -34,6 +36,7 @@ const { BTN, labels, sameLabel } = require('../whatsapp').WaUi;
 const Access = require('./priority-access');
 const Chain = require('./priority-chain');
 const GoodsReceipt = require('./goods-receipt');
+const PcInvoice = require('./pc-invoice');
 const { notOpening } = require('./opens-guard');
 
 const TTL = 24 * 60 * 60 * 1000;
@@ -44,6 +47,9 @@ const idleMs = () => Math.max(1, Number(D.getSetting('wa_question_ttl_min', 15))
 /** סטייה מותרת בהשוואת סכומים (עיגול) */
 const ROUND = 1;
 const MAX_SUBSET = 12;
+/** מספר הקצאה — חובה מעל 5,000 ₪ לפני מע"מ (חשבוניות ישראל, מ-01.06.26); כמו ב-‎pc-invoice.js‎ */
+const ALLOCATION_FROM = 5000;
+const allocationOf = (d) => String(d?.allocation_number ?? '').replace(/\D/g, '');
 
 /** "חשבונית ספק", "קליטת חשבונית ספק", "חשבוניות ספקים", הכפתור "🧾 חשבונית ספק" */
 const TRIGGER = /חשבוני(?:ת|ות)\s+(?:ה)?ספק(?:ים)?(?=[\s,.!?:]|$)/;
@@ -137,8 +143,21 @@ function offer(s, names) {
   s.choices = { step: s.step, list };
   return list;
 }
+/** העזרים של השיחה ל-‎pc-invoice.js‎ (אותו חוזה כמו בקבלת הסחורה) */
+function pcHelpers(user) {
+  return {
+    reply, offer, companyLine,
+    // בחשבונית ספק אין "בוט רגיל" מאחור — תשובה לא ברורה חוזרת לשאלה
+    pass: (s) => reply(s, `לא הבנתי. ${s.lastPrompt ?? ''}`.trim(), { status: 'unclear', result: 'תשובה לא ברורה (חשבון חלקי)' }),
+    looksUnrelated: () => false,
+    alertAdmins: (s, title, details) => alertAdmins(user, s, title, details),
+    notifyAccounting: GoodsReceipt.notifyAccounting
+  };
+}
+
 function buttonsFor(s) {
   if (!s) return [];
+  if (PcInvoice.isPcStep(s)) return PcInvoice.buttons(s);
   if (s.choices?.step === s.step && s.choices.list?.length) return s.choices.list;
   if (s.step === 'confirm') return [BTN.yes, BTN.cancel];
   if (s.step === 'doc') return [BTN.cancel];
@@ -294,16 +313,25 @@ async function findReceipts(user, s) {
     DOCNO: g.DOCNO, BOOKNUM: g.BOOKNUM ?? '', CURDATE: g.CURDATE ?? '', ORDNAME: g.ORDNAME ?? '', PROJDES: g.PROJDES ?? '',
     DISPRICE: Number(g.DISPRICE ?? 0), VAT: Number(g.VAT ?? 0), TOTPRICE: Number(g.TOTPRICE ?? 0)
   }));
-  if (!s.available.length) {
-    clear(user.id, s);
-    return { s: null, replies: [[companyLine(s), `🏭 ${s.supplier.name}`, '',
-      `לא מצאתי אצל הספק קבלת סחורה *סופית* שעוד לא נמשכה לחשבונית — ולכן אין מה למשוך ל${docTitle(s.doc)}.`,
-      'אם הסחורה עוד לא נקלטה — קודם *קבלת סחורה* על החשבונית, ואחר כך *חשבונית ספק*. אם יש GR בטיוטא — לאשר אותו קודם.'].join('\n')],
-    status: 'unclear', result: 'אין GR סופי פתוח לספק' };
-  }
   const m = matchReceipts(s.doc, s.available);
+  if (m.how === 'ref') { s.picked = m.picked.map((g) => g.DOCNO); s.how = m.how; return summary(s); }
+  // חשבון חלקי מחוזה — כשהמסמך מפנה אליו (PC / CO), או כשאין GR שמתאים
+  const pcRefs = PcInvoice._refsOf(s.doc);
+  if (pcRefs.pc.length || pcRefs.co.length || !m.picked.length) {
+    const r = await PcInvoice.start({ ...s, uid: user.id }, pcHelpers(user)).catch((err) => { alertAdmins(user, s, 'חשבונות חלקיים לא נקראו', [err.message]); return null; });
+    if (r) return r;
+  }
   if (m.picked.length) { s.picked = m.picked.map((g) => g.DOCNO); s.how = m.how; return summary(s); }
+  if (!s.available.length) return noBasis(user, s);
   return askReceipts(s, m.options);
+}
+
+function noBasis(user, s) {
+  clear(user.id, s);
+  return { s: null, replies: [[companyLine(s), `🏭 ${s.supplier.name}`, '',
+    `לא מצאתי אצל הספק קבלת סחורה *סופית* שעוד לא נמשכה לחשבונית, וגם לא חשבון חלקי שלא חויב — ולכן אין מה למשוך ל${docTitle(s.doc)}.`,
+    'אם הסחורה עוד לא נקלטה — קודם *קבלת סחורה* על החשבונית, ואחר כך *חשבונית ספק*. אם יש GR או חשבון חלקי שעוד לא סופי — לאשר אותו קודם.'].join('\n')],
+  status: 'unclear', result: 'אין GR סופי או PC פתוח לספק' };
 }
 
 function askReceipts(s, options) {
@@ -332,6 +360,8 @@ async function summary(s) {
     `🏭 ${s.supplier.name} (${s.supplier.code})`,
     `📄 ${docTitle(s.doc)}${s.doc.doc_date || s.doc.date ? ` מ-${ymdHe(s.doc.doc_date || s.doc.date)}` : ''}`,
     `💰 לפני מע"מ ${money(beforeVat(s.doc))}${vat ? ` · מע"מ ${money(vat)}` : ''}${totalOf(s.doc) ? ` · *סה"כ ${money(totalOf(s.doc))} ₪*` : ''}`,
+    allocationOf(s.doc) ? `🔢 מספר הקצאה ${allocationOf(s.doc)} — לאמת`
+      : beforeVat(s.doc) >= ALLOCATION_FROM ? `⚠️ אין מספר הקצאה בחשבונית (חובה מעל ${money(ALLOCATION_FROM)} ₪ לפני מע"מ) — בלעדיו אי אפשר לקזז את המע"מ.` : null,
     '',
     `📦 ימשכו לחשבונית (${HOW[s.how] ?? ''}):`,
     ...grs.map((g) => bullet(grLine(g))),
@@ -341,7 +371,7 @@ async function summary(s) {
     '',
     'החשבונית תיקלט *זמנית* — הסגירה בפריוריטי, אצל הנהלת החשבונות.',
     'לקלוט? *כן* 👍 · לשנות GR — כתבו את המספרים · *ביטול* 🗑️'
-  ].join('\n'), { status: 'ok', result: `סיכום: ${grs.map((g) => g.DOCNO).join(', ')}${c.ok ? '' : ` (פער ${c.diff})`}` });
+  ].filter((x) => x !== null).join('\n'), { status: 'ok', result: `סיכום: ${grs.map((g) => g.DOCNO).join(', ')}${c.ok ? '' : ` (פער ${c.diff})`}` });
 }
 
 /** מספרי GR שהעובד כתב — רק מה שפתוח אצל הספק */
@@ -358,7 +388,7 @@ async function create(user, s) {
   const c = s.company;
   let ivnum = null;
   try {
-    ivnum = await Priority.createSupplierInvoice(c, { supname: s.supplier.code, booknum: s.doc.doc_number, date: s.doc.doc_date || s.doc.date, details: `ח-ן ${s.supplier.name}` });
+    ivnum = await Priority.createSupplierInvoice(c, { supname: s.supplier.code, booknum: s.doc.doc_number, date: s.doc.doc_date || s.doc.date, details: `ח-ן ${s.supplier.name}`, allocation: allocationOf(s.doc) });
     s.ivnum = ivnum;
     for (const g of grs) await Priority.addInvoiceReceipt(c, ivnum, g.DOCNO);
   } catch (err) {
@@ -389,6 +419,7 @@ async function create(user, s) {
     await Priority.setInvoiceDialog(c, ivnum, [
       `נקלט ע"י: ${user.full_name ?? ''} (משימון), ${nowHe()}`,
       `מסמך: ${docTitle(s.doc)}${s.doc.doc_date || s.doc.date ? ` מ-${ymdHe(s.doc.doc_date || s.doc.date)}` : ''} — מצורף בנספחים`,
+      allocationOf(s.doc) ? `מספר הקצאה (מהחשבונית): ${allocationOf(s.doc)} — לאמת` : null,
       `קבלות סחורה: ${grs.map((g) => `${g.DOCNO}${g.BOOKNUM ? ` (${g.BOOKNUM})` : ''}`).join(', ')}`,
       full.ok ? `השוואה: תואם (${money(full.invoice)} לפני מע"מ)${full.rounding ? `, עיגול ${money(Math.abs(full.diff))}` : ''}`
         : `השוואה: פער ${money(full.diff)} — בחשבונית ${money(full.invoice)}, ב-GR ${money(full.receipts)}`,
@@ -415,6 +446,16 @@ async function create(user, s) {
 // ---------------------------------------------------------------------------
 
 async function step(user, s, t, file) {
+  if (PcInvoice.isPcStep(s)) {
+    const r = await PcInvoice.step(user, { ...s, uid: user.id }, t, file, pcHelpers(user));
+    const ivnum = r?.ivnum;
+    if (ivnum) {
+      Chain.progress(user.id, 'invoice', { stage: 'waiting', docno: ivnum, company: s.company, supplier: s.supplier?.name ?? '' });
+      D.setUserPref(user.id, DONE, { at: Date.now(), company: s.company, ivnum, supplier: s.supplier?.name ?? '' });
+    }
+    if (!r.s) clear(user.id, s);
+    return { ...r, docno: ivnum ?? null };
+  }
   switch (s.step) {
     case 'doc':
       if (!file) return reply(s, START, { status: 'ok', result: 'מחכה לצילום' });
@@ -554,7 +595,8 @@ function abandon(user) {
 /**
  * 🗂 תצוגה למסך (‎priority-desk.js‎). קריאה בלבד. ‎null‎ — אין חשבונית פתוחה.
  */
-const VIEW_STEP = { doc: 'קריאת החשבונית', company: 'חברה', supplier: 'ספק', receipts: 'איזה GR', confirm: 'לבדיקה — מחכה ל"כן"' };
+const VIEW_STEP = { doc: 'קריאת החשבונית', company: 'חברה', supplier: 'ספק', receipts: 'איזה GR', confirm: 'לבדיקה — מחכה ל"כן"',
+  pc_pick: 'איזה חשבון חלקי', pc_confirm: 'חשבון חלקי — מחכה ל"כן"' };
 function view(userId) {
   const s = load(userId);
   if (!fresh(s)) return null;
@@ -569,6 +611,7 @@ function view(userId) {
     receipts: grs.map((g) => ({ docno: g.DOCNO, booknum: g.BOOKNUM, date: g.CURDATE, project: g.PROJDES, beforeVat: g.DISPRICE, total: g.TOTPRICE })),
     match: s.compare ?? null,
     docno: s.ivnum ?? '',
+    partialBill: s.pc ? { docno: s.pc.docno, contract: s.pc.ordname, project: s.pc.projdes, net: s.pc.net, retention: s.pc.retention } : null,
     totals: { beforeVat: t.before_vat ?? null, vat: t.vat ?? null, total: t.total ?? null },
     editable: null, attachments: 0, canAttach: false,
     lines: grs.map((g, i) => ({ n: i + 1, description: `${g.DOCNO}${g.BOOKNUM ? ` · מסמך ${g.BOOKNUM}` : ''}${g.PROJDES ? ` · ${g.PROJDES}` : ''}`, qty: 1, price: g.DISPRICE }))

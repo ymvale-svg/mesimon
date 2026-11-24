@@ -20,6 +20,7 @@ const D = require('../core').Db;
 const Paths = require('../core').Paths;
 const W = require('../core').Workdays;
 const WaActions = require('./wa-actions');
+const PriorityAccess = require('../priority').PriorityAccess;
 const WaUi = require('./wa-ui');
 
 const FILE = path.join(Paths.WHATS_NEW, 'bot-tips.json');
@@ -49,7 +50,9 @@ function usedActions(userId) {
 function nextFor(actor) {
   const sent = new Set(prefsOf(actor.id).tipsSent ?? []);
   const used = usedActions(actor.id);
-  return catalog().find((tip) => !sent.has(tip.id) && WaActions.allowed(actor, tip.action) && !used.has(tip.used ?? tip.action)) ?? null;
+  // ‎doc‎ — טיפ על מסמך בפריוריטי: רק למי שמורשה לו במטריצה (‎PriorityAccess‎). מי שלא — לא רואה בכלל
+  const docOk = (tip) => !tip.doc || PriorityAccess.of(actor.id).docs.includes(tip.doc);
+  return catalog().find((tip) => !sent.has(tip.id) && WaActions.allowed(actor, tip.action) && docOk(tip) && !used.has(tip.used ?? tip.action)) ?? null;
 }
 
 /** ההודעה: כותרת, 2–3 שורות, ו"נסו עכשיו" */

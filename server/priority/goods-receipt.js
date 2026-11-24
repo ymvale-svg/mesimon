@@ -39,6 +39,7 @@ const Parts = require('./pd-parts');
 const BuyerNotices = require('./buyer-notices');
 const LineCmd = require('./line-commands');
 const GrStamp = require('./gr-stamp');
+const PcInvoice = require('./pc-invoice');
 const Priority = require('../integrations').Priority;
 const WhatsApp = require('../integrations').Whatsapp;
 const { receiptPdf } = require('./gr-pdf');
@@ -60,6 +61,26 @@ function alertAdmins(user, s, title, details) {
   } catch (err) {
     console.error('[משימון] התראה למנהלים על קבלת סחורה:', err.message);
   }
+}
+
+/** 🧾 הודעה למי שמטפל בחשבוניות ספק בחברה (מטריצת ההרשאות; מנהלי מערכת תמיד) — עכבון שנדחה וכדומה */
+function notifyAccounting(s, title, lines) {
+  try {
+    for (const u of D.all("SELECT id, role FROM users WHERE status = 'active' AND role != 'vendor'")) {
+      if (!Access.of(u.id).docs.includes('invoice') || !Access.filterForUser(u.id, [s.company]).length) continue;
+      D.notify({ targetType: 'user', targetId: u.id, kind: 'ai', title: `🧾 ${title}`, body: [`חברה: ${s.company}`, ...lines].join('\n') });
+    }
+  } catch (err) {
+    console.error('[משימון] התראה על חשבונית ספק:', err.message);
+  }
+}
+
+/** העזרים של השיחה לחשבונית ספק מחשבון חלקי (‎pc-invoice.js‎ אינו מייבא את הקובץ הזה) */
+function pcHelpers(user) {
+  return {
+    reply: (...a) => reply(...a), offer: (...a) => offer(...a), companyLine: (s) => companyLine(s), pass: (...a) => pass(...a),
+    looksUnrelated: (t) => looksUnrelated(t), alertAdmins: (s, title, details) => alertAdmins(user, s, title, details), notifyAccounting
+  };
 }
 
 const SKILL = Paths.skill('goods-receipt.md');
@@ -105,6 +126,7 @@ function buttonsFor(s) {
   if (s.confirmFinal) return [BTN.confirmFinal, BTN.backToDraft];
   if (s.pendingNew) return ['צרף כנספח', LATER_BTN, 'להתעלם ❌'];
   if (s.pendingList) return [BTN.yes, BTN.no];
+  if (PcInvoice.isPcStep(s)) return PcInvoice.buttons(s);
   if (s.choices?.step === s.step && s.choices.list?.length) return s.choices.list;
   switch (s.step) {
     case 'menu': return menuOf(s.allow).buttons;
@@ -297,6 +319,8 @@ const EXTRACT_SCHEMA = {
       additionalProperties: false
     },
     // 🏷️ איפה לכתוב את מספר ה-GR על המסמך (‎gr-stamp.js‎): אזור לבן וריק בעמוד הראשון, עדיף בצד שמאל
+    allocation_number: { type: 'string', description: 'מספר הקצאה של רשות המסים ("מספר הקצאה", "הקצאה מספר"), ספרות בלבד. אין — ריק' },
+    contract_refs: { type: 'array', items: str, description: 'מספרי חוזה וחשבון חלקי בפורמט CO… / PC… שמופיעים במסמך. אין — []' },
     blank_area: {
       type: 'object',
       description: 'אזור לבן וריק לגמרי (בלי טקסט, קווים או חותמות) בעמוד הראשון, לפחות 20% מהרוחב ו-6% מהגובה, עדיף בצד שמאל של הדף. קואורדינטות יחסיות 0–1 מהפינה השמאלית העליונה. אין — הכל 0',
@@ -307,7 +331,7 @@ const EXTRACT_SCHEMA = {
     warnings: { type: 'array', items: str }
   },
   required: ['doc_type', 'doc_label', 'recipient_name', 'recipient_vat', 'other_ids', 'supplier_name', 'supplier_vat', 'doc_number', 'po_number', 'supplier_order_ref',
-    'date', 'doc_date', 'delivery_place', 'project_hint', 'purchase_type', 'lines', 'totals', 'blank_area', 'warnings'],
+    'date', 'doc_date', 'delivery_place', 'project_hint', 'purchase_type', 'lines', 'totals', 'allocation_number', 'contract_refs', 'blank_area', 'warnings'],
   additionalProperties: false
 };
 const MATCH_SCHEMA = {
@@ -711,6 +735,15 @@ async function onMainDoc(user, s, file, pre = null) {
     .filter((w) => !((doc.lines ?? []).some((l) => l.qty < 0 || l.unit_price < 0 || l.line_total < 0) && /שליל|במינוס|מינוס|הנחת לקוח|זיכוי/.test(w)))
     .slice(0, 3);
   s.doc = doc;
+  // 🧾 תדפיס של חשבון חלקי (מסמך פנימי של החברה) בלי חשבונית הספק — מבקשים את החשבונית; מספר החשבון נשמר
+  const pcRefs = (doc.contract_refs ?? []).filter((x) => /^PC\s?\d/i.test(x));
+  if (doc.doc_type === 'other' && pcRefs.length) {
+    s.pcRefs = [...new Set([...(s.pcRefs ?? []), ...pcRefs])];
+    s.step = 'doc';
+    return reply(s, `🧾 זה תדפיס של החשבון החלקי *${pcRefs[0]}*. כדי להמיר אותו לחשבונית ספק — שלחו את *חשבונית המס של הספק* (אפשר יחד עם התדפיס). או *ביטול*.`,
+      { status: 'unclear', result: `תדפיס חשבון חלקי בלי חשבונית: ${pcRefs[0]}` });
+  }
+  if (s.pcRefs?.length) doc.contract_refs = [...new Set([...(doc.contract_refs ?? []), ...s.pcRefs])];
   // כמעט מכל מסמך ספק אפשר לקלוט קבלת סחורה (גם אגרה או שובר תשלום). רק כשלא ברור שזה מסמך ספק — שואלים
   if (doc.doc_type === 'other') {
     s.step = 'doctype';
@@ -829,6 +862,13 @@ async function resumeDraft(s, dup) {
 
 async function askHeader(s) {
   const d = s.doc;
+  // 🧾 חשבונית של קבלן משנה עם חוזה — אין הזמנה ואין קבלת סחורה: המרת החשבון החלקי לחשבונית ספק (‎pc-invoice.js‎)
+  if (s.pcChecked !== s.supplier.code) {
+    s.pcChecked = s.supplier.code;
+    const user = (s.uid && D.get('SELECT id, full_name FROM users WHERE id = ?', s.uid)) || { id: s.uid ?? null, full_name: '' };
+    const r = await PcInvoice.start(s, pcHelpers(user));
+    if (r) return r;
+  }
   if (s.noVat === undefined) s.noVat = docWithoutVat(d);
   // אותו מסמך כבר נקלט — פריוריטי ממילא דוחה מספר תעודה כפול לאותו ספק
   const dup = await Priority.findReceiptByBooknum(s.company, s.supplier.code, d.doc_number);
@@ -1724,7 +1764,10 @@ async function sortBatch(user, s) {
   const detail = attach.find((x) => isDetailOf(main.doc, x.doc));
   // דף עם רשימת פריטים (בלי מספר) — הפירוט: הסכום תואם — לוקחים ממנו; לא תואם — שואלים אחר כך
   const list = !detail ? attach.find((x) => isListFor(main.doc, x.doc)) : null;
-  const pre = detail ? withDetail(main.doc, detail.doc) : list && listMatches(main.doc, list.doc) ? withList(main.doc, list.doc) : main.doc;
+  let pre = detail ? withDetail(main.doc, detail.doc) : list && listMatches(main.doc, list.doc) ? withList(main.doc, list.doc) : main.doc;
+  // 🧾 מספרי חוזה וחשבון חלקי מכל הצילומים (תדפיס החשבון החלקי, דף החישוב של הקבלן) — למסמך הראשי
+  const refs = [...new Set(read.flatMap((x) => x.doc?.contract_refs ?? []))];
+  if (refs.length) pre = { ...pre, contract_refs: refs };
   const out = await onMainDoc(user, s, main.f, pre);
   const target = out.s ?? s;
   if (out.s !== null && list && pre === main.doc) { target.pendingList = { doc: list.doc }; out.replies = [...out.replies, listQuestion(main.doc, list.doc)]; }
@@ -1754,6 +1797,9 @@ async function sweep(send, { force = false } = {}) {
   lastSweep = Date.now();
   // אינדקס השורות לקידוד — חברה אחת בכל סבב, ברקע
   await warmIndex().catch((err) => console.error('[משימון] אינדקס שורות:', err.message));
+  // 🧾 חשבוניות שממתינות שהחשבון החלקי יהיה סופי
+  await PcInvoice.sweep(send, { ...pcHelpers({ id: null, full_name: 'הסבב' }), busy: (uid) => active(uid), open: (uid, s) => save(uid, s) })
+    .catch((err) => console.error('[משימון] חשבוניות מחשבון חלקי:', err.message));
   for (const row of D.all("SELECT key, value FROM settings WHERE key LIKE 'goods_receipt:%'")) {
     const userId = Number(row.key.split(':')[1]);
     let s;
@@ -1826,6 +1872,7 @@ async function cancel(user, s, why = 'בוטלה') {
   // גם בלי טיוטא — מסמך שנשלח לבוט מהמסך יוצא מ"בטיפול בבוט"
   Chain.progress(user.id, 'receipt', { stage: 'cancelled', docno: s?.docno ?? '', company: s?.company ?? '' });
   clear(user.id, s);
+  if (s?.mode === 'pc') return { replies: [`ההמרה לחשבונית ספק ${why}. לא נכתב דבר בפריוריטי.`], status: 'ok', result: 'ביטול: חשבונית מחשבון חלקי' };
   return { replies: [`קבלת הסחורה ${why}.${note}`], status: 'ok', result: `ביטול${s?.docno ? ` ${s.docno}` : ''}` };
 }
 
@@ -1996,7 +2043,7 @@ async function handle({ user, text = '', file = null, reaction = false, allow = 
   if (t === '👍' && !file && s.step === 'order') return { replies: ['כתבו את מספר ההזמנה (PO…), או *בלי הזמנה* 👎.'], status: 'ok', result: '👍 בשאלת ההזמנה' };
   // 👎 — "לא": בשאלת כן/לא — לא; על סיכום — לא ממשיכים ושואלים מה לתקן; על הטיוטא — מבקשים אישור לביטול
   if (t === '👎' && !file) {
-    if (s.pendingList || s.pendingNew || ['offer', 'doctype', 'shortage'].includes(s.step)) t = 'לא';
+    if (s.pendingList || s.pendingNew || ['offer', 'doctype', 'shortage', 'pc_confirm'].includes(s.step)) t = 'לא';
     else if (s.step === 'order') t = 'בלי הזמנה';      // "יש מספר הזמנה?" — 👎 = אין, בלי הזמנה
     else if (s.step === 'files') t = 'סיום';           // "יש עוד נספחים?" — 👎 = אין
     else if (s.step === 'review') return askCancel(user, s, { mark: '👎', result: '👎 בבדיקת הטיוטא' });
@@ -2076,6 +2123,7 @@ function latePayChange(s, t) {
 }
 
 async function step(user, s, t, file, allow = { gr: true, pd: false }) {
+  if (PcInvoice.isPcStep(s)) return PcInvoice.step(user, s, t, file, pcHelpers(user));
   if (!file) { const pay = latePayChange(s, t); if (pay) return pay; }
   switch (s.step) {
     case 'menu': {
@@ -2605,4 +2653,4 @@ function view(userId) {
 /** קריאת מסמך ספק (‎EXTRACT_SCHEMA‎) — משותפת גם לחשבונית ספק (‎supplier-invoice.js‎). ‎file‎ — ‎{ path, mime }‎ */
 const extractDoc = (file) => ai.extract(file);
 
-module.exports = { extractDoc, _supplierAnswer: supplierAnswer, view, everOpened, markOpened, inMenu, dropMenu, isTrigger, isPriority, opens, active, pending, docId, pausedNote, abandon, switchCancels, wantsUndoFinal, handle, sweep, _jpegToPdf: jpegToPdf, _codeLines: codeLines, _orderDiffs: orderDiffs, _similarLines: similarLines, _askParts: askParts, _projectsOf: projectsOf, _findProjects: findProjects, _ai: ai, _load: load, _clear: (userId) => clear(userId, load(userId)) };
+module.exports = { extractDoc, notifyAccounting, _supplierAnswer: supplierAnswer, view, everOpened, markOpened, inMenu, dropMenu, isTrigger, isPriority, opens, active, pending, docId, pausedNote, abandon, switchCancels, wantsUndoFinal, handle, sweep, _jpegToPdf: jpegToPdf, _codeLines: codeLines, _orderDiffs: orderDiffs, _similarLines: similarLines, _askParts: askParts, _projectsOf: projectsOf, _findProjects: findProjects, _ai: ai, _load: load, _clear: (userId) => clear(userId, load(userId)) };

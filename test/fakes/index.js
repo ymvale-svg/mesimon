@@ -49,7 +49,7 @@ const WRITES = ['createReceipt', 'addOrderLine', 'addFreeLine', 'setLineQty', 's
   'setDialog', 'finalizeReceipt', 'cancelReceipt', 'deleteLines', 'createDemand', 'addDemandLine', 'setDemand', 'submitDemand',
   'cancelDemand', 'setDemandDialog', 'attachDemand', 'appendDemandDialog', 'setDemandLine', 'deleteDemandLine', 'reopenDemand',
   'addPriceListItem', 'deletePriceListItem', 'addSupplierPart', 'deleteSupplierPart',
-  'createSupplierInvoice', 'addInvoiceReceipt', 'attachInvoice', 'setInvoiceDialog'];
+  'createSupplierInvoice', 'addInvoiceReceipt', 'setInvoiceLine', 'attachInvoice', 'setInvoiceDialog'];
 
 /**
  * פריוריטי: ‎reads‎ — מימושים לקריאות; ‎writes‎ — מימושים לכתיבות (ברירת מחדל: נרשם ומחזיר ‎{}‎).

@@ -86,6 +86,10 @@ test('פריוריטי — רק למורשה', () => {
   };
   assert.ok(!ids(none).some((id) => ['goods_receipt', 'purchase_demand'].includes(id)));
   assert.ok(ids(ok).includes('goods_receipt'));
+  // טיפ על מסמך (‎doc‎) — רק למי שמורשה לסוג המסמך: חשבונית ספק מחשבון חלקי
+  assert.ok(!ids(ok).includes('pc_invoice'), 'קבלת סחורה בלי "חשבונית ספק" — לא רואה את הטיפ');
+  Access.save([{ id: ok.id, docs: ['receipt', 'demand', 'invoice'] }]);
+  assert.ok(ids(ok).includes('pc_invoice'));
   D.setSetting('wa_actions', {});
 });
 

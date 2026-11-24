@@ -70,7 +70,7 @@ test('חשבונית מס על GR שנקלט על חשבונית העסקה: נ�
   assert.match(r.text, /נמשכו: GR26000033/);
   assert.match(r.text, /הסכום תואם/);
   assert.ok(pr.writes.every((w) => w.args[0] === 'raba'));
-  assert.deepEqual(pr.wrote('createSupplierInvoice')[0].args[1], { supname: '621259', booknum: '10288', date: '2026-11-18', details: 'ח-ן הרמן עיצוב וניהול פרויקטים' });
+  assert.deepEqual(pr.wrote('createSupplierInvoice')[0].args[1], { supname: '621259', booknum: '10288', date: '2026-11-18', details: 'ח-ן הרמן עיצוב וניהול פרויקטים', allocation: '' });
   assert.deepEqual(pr.wrote('addInvoiceReceipt').map((w) => w.args.slice(1)), [['T10', 'GR26000033']]);
   assert.equal(pr.wrote('attachInvoice').length, 1, 'צילום החשבונית — נספח');
   const dialog = pr.wrote('setInvoiceDialog')[0].args[2].join('\n');
@@ -167,5 +167,65 @@ test('בלי הרשאה לחשבונית ספק — "חשבונית ספק" לא
   const { say } = H.chat(t, u);
   const r = await say('פריוריטי');
   assert.ok(!r.buttons.includes('🧾 חשבונית ספק'));
+  assert.equal(pr.writes.length, 0);
+});
+
+test('"חשבונית ספק" על חשבונית של קבלן משנה עם חוזה: אין GR — נמצא החשבון החלקי (PC), "כן ✅" ← חשבונית זמנית שמושכת אותו', async (t) => {
+  H.companies(t, 'raba');
+  enable();
+  const u = accountant();
+  const PC = { DOCNO: 'PC260000262', ORDNAME: 'CO260000102', SUPNAME: '621259', CDES: 'הרמן עיצוב וניהול פרויקטים', CURDATE: '2026-09-30', STATDES: 'סופית', IVALL: 'N',
+    PROJDOCNO: 'PR26000008', PROJDES: 'הפסגה הירוקה', MED_QPRICE: 3000, DISPRICE: 3000, VAT: 540, TOTPRICE: 3540, MED_DOCTOTPRICE: 3000, MED_EXEMONTH: '10/26',
+    retention: [], approvers: [] };
+  const pr = H.Fakes.priority(t, {
+    findSuppliers: async () => ({ list: [{ SUPNAME: '621259', SUPDES: 'הרמן עיצוב וניהול פרויקטים' }], by: 'vat' }),
+    findInvoiceByBooknum: async () => null,
+    receiptsToInvoice: async () => [],
+    partialBills: async () => [PC],
+    readPartialBill: async () => PC,
+    partialBillStatus: async () => ({ DOCNO: PC.DOCNO, STATDES: 'סופית', IVALL: 'N' }),
+    readSupplierInvoice: async (c, iv) => ({ IVNUM: iv, DISPRICE: 3000, VAT: 540, TOTPRICE: 3540, lines: [], receipts: [{ DOCNO: PC.DOCNO }] })
+  }, { writes: { createSupplierInvoice: async () => 'T11' } });
+  ai(t, invoice({ allocation_number: '320727438', contract_refs: [] }));
+  const { say } = H.chat(t, u);
+
+  let r = await say('חשבונית ספק', { file: H.photo() });
+  assert.match(r.text, /חשבונית ספק מחשבון חלקי/);
+  assert.match(r.text, /PC260000262/);
+  assert.match(r.text, /הסכומים מתאימים/);
+  H.assertButtons(r.buttons, [BTN.yes, BTN.cancel]);
+  assert.equal(pr.writes.length, 0);
+
+  r = await say(BTN.yes);
+  assert.match(r.text, /\*T11\* — חשבונית ספק זמנית מהחשבון החלקי \*PC260000262\*/);
+  assert.deepEqual(pr.wrote('addInvoiceReceipt')[0].args, ['raba', 'T11', 'PC260000262']);
+  assert.equal(pr.wrote('createSupplierInvoice')[0].args[1].allocation, '320727438', 'מספר ההקצאה מהחשבונית');
+  assert.equal(H.D.get("SELECT docno FROM priority_docs WHERE user_id = ? AND doc = 'invoice'", u.id)?.docno, 'T11');
+  r = await say('👎');
+  assert.match(r.text, /T11/);
+  assert.match(r.text, /מחיקת חשבונית זמנית/);
+});
+
+test('מספר הקצאה: מהחשבונית ← SDINUMIT ("לאמת"); מעל 5,000 ₪ בלעדיו — אזהרה בסיכום', async (t) => {
+  H.companies(t, 'raba');
+  enable();
+  const u = accountant();
+  const big = { ...GR33, DISPRICE: 12000, VAT: 2160, TOTPRICE: 14160 };
+  const pr = priority(t, { receipts: [big] });
+  H.claude(t, { extract: () => invoice({ totals: { subtotal: 12000, doc_discount_pct: 0, doc_discount: 0, before_vat: 12000, vat: 2160, total: 14160 }, allocation_number: '' }) });
+  const { say } = H.chat(t, u);
+  let r = await say('חשבונית ספק', { file: H.photo() });
+  assert.match(r.text, /אין מספר הקצאה/);
+  r = await say(BTN.cancel);
+
+  t.mock.restoreAll();
+  enable();
+  const pr2 = priority(t, { receipts: [big] });
+  H.claude(t, { extract: () => invoice({ totals: { subtotal: 12000, doc_discount_pct: 0, doc_discount: 0, before_vat: 12000, vat: 2160, total: 14160 }, allocation_number: '3207-27438' }) });
+  const c2 = H.chat(t, u);
+  r = await c2.say('חשבונית ספק', { file: H.photo() });
+  assert.match(r.text, /מספר הקצאה 320727438 — לאמת/);
+  await c2.say(BTN.yes);
+  assert.equal(pr2.wrote('createSupplierInvoice')[0].args[1].allocation, '320727438');
   assert.equal(pr.writes.length, 0);
 });
