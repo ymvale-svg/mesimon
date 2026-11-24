@@ -51,15 +51,13 @@ test('מועד התשלום: ה-15 הראשון אחרי סוף החודש + י�
   assert.equal(Payments.payDay(''), '');
 });
 
-test('המועד הקרוב והחלוקה: באיחור · 15 הקרוב · הבא · השלישי · אחר כך · חסר תנאי', () => {
+test('המועד הקרוב והחלוקה: באיחור · כל חודש לחוד · חסר תנאי', () => {
   assert.equal(Payments.nextRun('2026-11-24'), '2026-12-15');
   assert.equal(Payments.nextRun('2026-12-15'), '2026-12-15', 'ב-15 עצמו — היום');
   const run = '2026-12-15';
   assert.equal(Payments.bucketOf('2026-11-15', run), 'late');
-  assert.equal(Payments.bucketOf('2026-12-15', run), 'r0');
-  assert.equal(Payments.bucketOf('2027-01-15', run), 'r1');
-  assert.equal(Payments.bucketOf('2027-02-15', run), 'r2');
-  assert.equal(Payments.bucketOf('2027-03-15', run), 'later');
+  assert.equal(Payments.bucketOf('2026-12-15', run), '2026-12-15');
+  assert.equal(Payments.bucketOf('2027-06-15', run), '2027-06-15', 'כל חודש — בלי גבול');
   assert.equal(Payments.bucketOf('', run), 'none');
 });
 
@@ -138,27 +136,32 @@ test('מורשה "תשלומים" — הכל בחברות שלו; עובד אח�
 test('סינון, מועדים וסכומים: לכל מועד מספר ושקלים; מטבע זר — בנפרד; לפי ספק', async (t) => {
   reset();
   fake(t, { a160226: {
-    receipt: [gr('GR30'), gr('GR31', { CURDATE: '2026-09-01T00:00:00Z' }), gr('GR32', { CODE: '$', TOTPRICE: 100 })],
+    receipt: [gr('GR30'), gr('GR31', { CURDATE: '2026-09-01T00:00:00Z' }), gr('GR32', { CODE: '$', TOTPRICE: 100 }), gr('GR33', { MED_MXPAYCODE: '06', CURDATE: '2026-11-20T00:00:00Z' })],
     partial: [pc('PC30'), pc('PC31', { MED_PAYCODE: null })]
   } });
   const admin = user({ role: 'admin' });
   const r = await Payments.report(actor(admin), { today: TODAY });
-  assert.deepEqual(r.runs, ['2026-12-15', '2027-01-15', '2027-02-15']);
-  assert.equal(r.byBucket.r0.count, 2, 'GR30 ו-GR32');
-  assert.equal(r.byBucket.r0.ils, 1180);
-  assert.deepEqual(r.byBucket.r0.other, { $: 100 });
+  assert.deepEqual(r.runs, ['2026-12-15', '2027-01-15', '2027-02-15', '2027-03-15'], 'שלושת הקרובים, ועוד כל חודש שיש בו תשלום');
+  const far = await Payments.report(actor(admin), { today: '2026-09-20' });
+  assert.ok(far.runs.includes('2027-01-15'), 'חודש רחוק שיש בו תשלום — מופיע');
+  assert.equal(r.byBucket['2026-12-15'].count, 2, 'GR30 ו-GR32');
+  assert.equal(r.byBucket['2026-12-15'].ils, 1180);
+  assert.deepEqual(r.byBucket['2026-12-15'].other, { $: 100 });
   assert.equal(r.byBucket.late.count, 1, 'GR31 — 15.11 עבר');
-  assert.equal(r.byBucket.r1.count, 1);
+  assert.equal(r.byBucket['2027-01-15'].count, 1);
   assert.equal(r.byBucket.none.count, 1, 'חסר תנאי תשלום');
+  assert.equal(r.items.length, 6, 'בלי מועד — הכל');
+  assert.equal(r.byBucket['2027-03-15'].count, 1, 'שוטף + 90 מ-20.11 — 15.03');
 
-  const r0 = await Payments.report(actor(admin), { today: TODAY, bucket: 'r0' });
+  const r0 = await Payments.report(actor(admin), { today: TODAY, bucket: 'next' });
+  assert.equal(r0.bucket, '2026-12-15', 'next — ה-15 הקרוב');
   assert.deepEqual(r0.items.map((i) => i.docno).sort(), ['GR30', 'GR32']);
   assert.equal(r0.totals.suppliers[0].supplier, 'אפקון');
   const onlyPc = await Payments.report(actor(admin), { today: TODAY, type: 'partial' });
-  assert.equal(onlyPc.byBucket.r0.count, 0, 'הספירה לכל מועד — לפי שאר הסינונים');
+  assert.equal(onlyPc.byBucket['2026-12-15'].count, 0, 'הספירה לכל מועד — לפי שאר הסינונים');
   assert.equal(onlyPc.items.length, 2);
   assert.equal((await Payments.report(actor(admin), { today: TODAY, supplier: 'קום' })).items.length, 2);
-  assert.equal((await Payments.report(actor(admin), { today: TODAY, project: 'PR1' })).items.length, 3);
+  assert.equal((await Payments.report(actor(admin), { today: TODAY, project: 'PR1' })).items.length, 4);
   assert.equal(r.items[0].docno, 'GR31', 'מסודר לפי מועד');
 });
 
@@ -219,13 +222,19 @@ test('נתונים נשמרים בזיכרון; רענון קורא מחדש', a
   assert.equal(calls, first, 'רענון — לא יותר מפעם ב-30 שניות');
 });
 
-test('ייצוא לאקסל — קובץ xlsx עם השורות', async (t) => {
+test('ייצוא לאקסל — גיליון "הכל" וגיליון לכל חברה, עם סה"כ', async (t) => {
   reset();
-  fake(t, { a160226: { receipt: [gr('GR60')] } });
+  fake(t, { a160226: { receipt: [gr('GR60')] }, elad1: { receipt: [gr('GR61', { TOTPRICE: 500 })] } });
   const r = await Payments.report(actor(user({ role: 'admin' })), { today: TODAY });
+  assert.deepEqual(r.totals.companies.map((c) => [c.company, c.ils]), [['a160226', 1180], ['elad1', 500]]);
   const buf = Payments.toXlsx(r);
   assert.equal(buf.subarray(0, 2).toString(), 'PK');
-  assert.match(buf.toString('utf8'), /GR60/);
+  const text = buf.toString('utf8');
+  assert.match(text, /GR60/);
+  assert.equal((text.match(/worksheets\/sheet\d\.xml/g) ?? []).length > 0, true);
+  assert.match(text, /sheet3\.xml/, 'הכל + שתי חברות');
+  assert.match(text, /1680\.00/, 'סה"כ בגיליון הכל');
+  assert.match(text, /לפי חברה/);
 });
 
 test('"תשלומים" הוא דוח — אי אפשר להעלות אליו מסמך', () => {

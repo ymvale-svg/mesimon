@@ -739,7 +739,7 @@
   const shekel = (n) => Number(n ?? 0).toLocaleString('he-IL', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const dm = (d) => (d ? `${d.slice(8, 10)}.${d.slice(5, 7)}.${d.slice(2, 4)}` : '');
   const dmy15 = (d) => (d ? `15.${d.slice(5, 7)}${d.slice(0, 4) !== String(new Date().getFullYear()) ? `.${d.slice(2, 4)}` : ''}` : '');
-  const payFilter = { bucket: 'r0', type: '', company: '', project: '', supplier: '', mine: false };
+  const payFilter = { bucket: 'next', type: '', company: '', project: '', supplier: '', mine: false };
 
   async function payments(refresh = false) {
     const q = new URLSearchParams();
@@ -747,12 +747,14 @@
     if (refresh) q.set('refresh', '1');
     if (!main.querySelector('.pay')) main.innerHTML = '<p class="muted pad">קורא מפריוריטי… (בפעם הראשונה זה לוקח כחצי דקה)</p>';
     const r = await api('GET', `/api/priority/payments?${q}`);
+    if (payFilter.bucket === 'next') payFilter.bucket = r.bucket;
     const company = (c) => me.companies.find((x) => x.code === c)?.name ?? c;
     const typeLabel = (k) => r.types.find((t) => t.key === k)?.label ?? k;
     const other = (o) => Object.entries(o ?? {}).map(([cur, v]) => `${shekel(v)} ${esc(cur)}`).join(' · ');
     const money = (t) => `₪${shekel(t.ils)}${Object.keys(t.other ?? {}).length ? ` <span class="muted small">+ ${other(t.other)}</span>` : ''}`;
-    const BUCKETS = [['late', '⚠️ באיחור'], ['r0', dmy15(r.runs[0])], ['r1', dmy15(r.runs[1])], ['r2', dmy15(r.runs[2])], ['later', 'אחר כך'], ['none', 'חסר תנאי תשלום'], ['', 'הכל']];
-    const chips = BUCKETS.filter(([k]) => !k || ['r0', 'r1', 'r2'].includes(k) || r.byBucket[k]?.count).map(([k, label]) => {
+    // כל חודש שיש בו תשלום (ולפחות שלושת הקרובים); באיחור וחסר תנאי — רק כשיש
+    const BUCKETS = [['late', '⚠️ באיחור'], ...r.runs.map((d) => [d, dmy15(d)]), ['none', 'חסר תנאי תשלום'], ['', 'הכל']];
+    const chips = BUCKETS.filter(([k]) => !k || r.runs.includes(k) || r.byBucket[k]?.count).map(([k, label]) => {
       const t = k ? r.byBucket[k] : Object.values(r.byBucket).reduce((a, x) => ({ count: a.count + x.count, ils: a.ils + x.ils }), { count: 0, ils: 0 });
       return `<button type="button" class="chip pay-b${k === 'late' && t?.count ? ' late' : ''}" data-b="${k}" aria-pressed="${payFilter.bucket === k}">
         <b>${esc(label)}</b>${t ? `<span class="pay-b-sum num">${t.count ? `₪${shekel(t.ils)}` : '—'}</span><span class="pay-b-n num">${t.count} מסמכים</span>` : ''}</button>`;
@@ -769,13 +771,14 @@
         <td>${esc(i.initiatorName || '')}${i.mine && r.scope === 'all' ? ' <span class="pill p-ok">שלך</span>' : ''}</td>
       </tr>`).join('');
     const sup = r.totals.suppliers.slice(0, 12).map((s) => `<li><span>${esc(s.supplier)}${me.companies.length > 1 ? ` <span class="muted small">· ${esc(company(s.company))}</span>` : ''}</span><b class="num">${money(s)}</b> <span class="muted small">${s.count}</span></li>`).join('');
+    const cos = r.totals.companies.length > 1 ? r.totals.companies.map((c) => `<li><span>${esc(company(c.company))}</span><b class="num">${money(c)}</b> <span class="muted small">${c.count}</span></li>`).join('') : '';
     const errs = r.errors.length ? `<p class="note">⚠️ לא נקרא מפריוריטי: ${esc([...new Set(r.errors.map((e) => company(e.company) || e.message))].join(', '))}. הרשימה חסרה את מה שבהן. ${esc(r.errors[0].message)}</p>` : '';
     const intro = r.scope === 'all'
       ? 'כל מה שמחכה לתשלום: קבלות סחורה סופיות (רק מה שעוד לא בחשבונית ספק), חשבונות חלקיים מאושרים וחשבונות עסקה מאושרים. מועד התשלום — ה-15 שאחרי סוף החודש ועוד ימי התנאי.'
       : r.login || r.items.length ? 'המסמכים שיזמת — מתי צפוי התשלום עליהם.' : 'לא מצאנו את שם המשתמש שלך בפריוריטי, ולכן אין כאן מסמכים. פנו למנהל המערכת.';
     main.innerHTML = `<div class="pay">
-      <div class="chain-h"><div><h1>תשלומים ל-15</h1><p class="muted">${esc(intro)}</p></div>
-        <div class="row-actions"><button class="btn pay-refresh" type="button">רענון מפריוריטי</button><a class="btn" href="/api/priority/payments?${new URLSearchParams([...q].filter(([k]) => k !== 'refresh'))}&format=xlsx">ייצוא לאקסל</a></div></div>
+      <div class="chain-h"><div><h1>תשלומים</h1><p class="muted">${esc(intro)}</p></div>
+        <div class="row-actions"><button class="btn pay-refresh" type="button">רענון מפריוריטי</button><a class="btn" href="/api/priority/payments?${new URLSearchParams([...q].filter(([k]) => k !== 'refresh'))}&format=xlsx" title="מה שמוצג עכשיו — גיליון לכל חברה">ייצוא לאקסל</a></div></div>
       ${errs}
       <div class="pay-buckets" role="group" aria-label="מועד התשלום">${chips}</div>
       <div class="grid-form pay-f">
@@ -789,6 +792,7 @@
         <section class="panel"><div class="panel-h"><h2>${r.items.length} מסמכים · ${money(r.totals.all)}</h2><p>כולל מע״מ. עודכן ${fmtAt(r.at)}.</p></div>
           ${rows ? `<div class="scroll"><table class="t pay-t"><tr><th scope="col">מועד</th><th scope="col">סוג</th><th scope="col">ספק</th><th scope="col">מסמך</th><th scope="col">תאריך · תנאי</th><th scope="col">סכום</th><th scope="col">פרויקט</th><th scope="col">יוזם</th></tr>${rows}</table></div>` : '<p class="muted">אין מסמכים במועד הזה.</p>'}
         </section>
+        ${cos ? `<aside class="panel pay-sup"><div class="panel-h"><h2>לפי חברה</h2></div><ul class="plain">${cos}</ul></aside>` : ''}
         ${sup ? `<aside class="panel pay-sup"><div class="panel-h"><h2>לפי ספק</h2></div><ul class="plain">${sup}</ul>${r.totals.suppliers.length > 12 ? `<p class="muted small">ועוד ${r.totals.suppliers.length - 12} ספקים</p>` : ''}</aside>` : ''}
       </div></div>`;
 

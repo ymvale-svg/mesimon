@@ -137,7 +137,7 @@ function register(router) {
     res.writeHead(200, {
       'content-type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
       'content-length': buf.length,
-      'content-disposition': `attachment; filename*=UTF-8''${encodeURIComponent(`תשלומים ל-15 ${r.today}.xlsx`)}`,
+      'content-disposition': `attachment; filename="payments-${r.today}.xlsx"; filename*=UTF-8''${encodeURIComponent(`תשלומים ${r.today}.xlsx`)}`,
       'cache-control': 'private, no-cache'
     });
     res.end(buf);

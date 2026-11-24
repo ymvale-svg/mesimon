@@ -26,7 +26,7 @@ const DOCS = Object.freeze([
   { key: 'invoice', label: 'חשבונית ספק', ready: false },
   { key: 'income', label: 'קבלה מהכנסות', ready: false },
   // 💰 דוח, לא מסמך לקליטה (‎report‎): כל מה שמחכה לתשלום ב-15 (‎payments.js‎). בלי הרשאה — רק מה שהעובד יזם
-  { key: 'payments', label: 'תשלומים ל-15', ready: true, report: true }
+  { key: 'payments', label: 'תשלומים', ready: true, report: true }
 ]);
 const DOC_KEYS = DOCS.map((d) => d.key);
 

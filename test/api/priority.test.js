@@ -121,8 +121,8 @@ test('💰 תשלומים ל-15: עובד — רק שלו ובלי פרטים ט
   assert.equal(w.status, 200, w.text);
   assert.equal(w.json.scope, 'mine');
   assert.deepEqual(w.json.errors, []);
-  assert.equal(w.json.runs.length, 3);
-  const a = await as(admin)('GET', '/api/priority/payments?bucket=r0&type=receipt');
+  assert.ok(w.json.runs.length >= 3, 'לפחות שלושת ה-15 הקרובים');
+  const a = await as(admin)('GET', '/api/priority/payments?bucket=next&type=receipt');
   assert.equal(a.json.scope, 'all');
   assert.ok(a.json.errors.length > 0, 'בבדיקות אין חיבור לפריוריטי — המנהל רואה את התקלה');
   const x = await srv.api('GET', '/api/priority/payments?format=xlsx', { cookie: admin });

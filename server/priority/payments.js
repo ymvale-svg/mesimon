@@ -64,13 +64,13 @@ const todayIL = (now = new Date()) => new Intl.DateTimeFormat('en-CA', { timeZon
 const nextRun = (today = todayIL()) => payDay(today);
 
 /**
- * לאיזה מועד שייך החוב, ביחס ל-15 הקרוב: ‎late‎ (היה צריך לצאת כבר) · ‎r0‎ / ‎r1‎ / ‎r2‎ · ‎later‎ · ‎none‎ (אין תנאי תשלום).
+ * לאיזה מועד שייך החוב, ביחס ל-15 הקרוב: ‎late‎ (היה צריך לצאת כבר) · ‎none‎ (אין תנאי תשלום) · או ה-15 עצמו (‎YYYY-MM-15‎) —
+ * כל חודש שיש בו תשלום, בלי גבול (הוחלט 24.11.26: "כל מה שנמצא במערכת").
  */
 function bucketOf(day, run) {
   if (!day) return 'none';
   if (day < run) return 'late';
-  for (let i = 0; i < 3; i++) if (day === addRuns(run, i)) return `r${i}`;
-  return 'later';
+  return day;
 }
 
 // ---------------------------------------------------------------------------
@@ -307,15 +307,15 @@ function totals(items) {
     for (const i of list.filter((x) => x.currency !== ILS)) other[i.currency] = round2((other[i.currency] ?? 0) + i.amount);
     return { count: list.length, ils, other };
   };
-  const bySup = new Map();
-  for (const i of items) {
-    const k = `${i.company}:${i.supplier.code}`;
-    if (!bySup.has(k)) bySup.set(k, { supplier: i.supplier.name || i.supplier.code, company: i.company, list: [] });
-    bySup.get(k).list.push(i);
-  }
+  const group = (keyOf, label) => {
+    const m = new Map();
+    for (const i of items) { const k = keyOf(i); if (!m.has(k)) m.set(k, { ...label(i), list: [] }); m.get(k).list.push(i); }
+    return [...m.values()].map(({ list, ...x }) => ({ ...x, ...sum(list) })).sort((a, b) => b.ils - a.ils);
+  };
   return {
     all: sum(items),
-    suppliers: [...bySup.values()].map((s) => ({ supplier: s.supplier, company: s.company, ...sum(s.list) })).sort((a, b) => b.ils - a.ils)
+    suppliers: group((i) => `${i.company}:${i.supplier.code}`, (i) => ({ supplier: i.supplier.name || i.supplier.code, company: i.company })),
+    companies: group((i) => i.company, (i) => ({ company: i.company }))
   };
 }
 
@@ -338,12 +338,16 @@ async function report(actor, f = {}) {
     projects: [...new Map(items.filter((i) => i.project.code).map((i) => [i.project.code, i.project])).values()].sort((a, b) => a.name.localeCompare(b.name, 'he'))
   };
   const filtered = filterItems(items, f);
-  const BUCKETS = ['late', 'r0', 'r1', 'r2', 'later', 'none'];
-  const byBucket = Object.fromEntries(BUCKETS.map((b) => [b, totals(filtered.filter((i) => i.bucket === b)).all]));
-  const shown = f.bucket ? filtered.filter((i) => i.bucket === f.bucket) : filtered;
+  // המועדים: באיחור, כל חודש שיש בו תשלום (ולפחות שלושת הקרובים), חסר תנאי תשלום
+  const runs = [...new Set([0, 1, 2].map((n) => addRuns(run, n)).concat(filtered.map((i) => i.bucket).filter((b) => /^\d{4}-/.test(b))))].sort();
+  const keys = ['late', ...runs, 'none'];
+  const byBucket = Object.fromEntries(keys.map((b) => [b, totals(filtered.filter((i) => i.bucket === b)).all]));
+  // ‎next‎ — ה-15 הקרוב (ברירת המחדל של המסך)
+  const bucket = f.bucket === 'next' ? run : f.bucket || '';
+  const shown = bucket ? filtered.filter((i) => i.bucket === bucket) : filtered;
   shown.sort((a, b) => (a.payDay || '9999').localeCompare(b.payDay || '9999') || a.supplier.name.localeCompare(b.supplier.name, 'he') || a.docno.localeCompare(b.docno));
   return {
-    scope: all ? 'all' : 'mine', login: mine.login, today: f.today ?? todayIL(), run, runs: [0, 1, 2].map((n) => addRuns(run, n)),
+    scope: all ? 'all' : 'mine', login: mine.login, today: f.today ?? todayIL(), run, runs, bucket,
     at: new Date(data.at).toISOString(), types: TYPES, facets, byBucket, totals: totals(shown), items: shown,
     errors: all ? data.errors : []
   };
@@ -356,15 +360,31 @@ async function report(actor, f = {}) {
 const dmy = (d) => (d ? `${d.slice(8, 10)}.${d.slice(5, 7)}.${d.slice(0, 4)}` : '');
 const typeLabel = (k) => TYPES.find((t) => t.key === k)?.label ?? k;
 
+const HEAD = ['מועד התשלום', 'סוג', 'חברה', 'ספק', 'מספר', 'אסמכתא', 'תאריך', 'תנאי תשלום', 'סכום', 'מטבע', 'פרויקט', 'יוזם', 'הערה'];
+const WIDTHS = [13, 13, 22, 28, 14, 12, 11, 12, 13, 7, 26, 16, 34];
+
+/**
+ * אקסל: גיליון "הכל", ועוד גיליון לכל חברה (הוחלט 24.11.26 — "לפי חברה"). בסוף כל גיליון — סה"כ, ובגיליון "הכל" גם סה"כ לכל חברה.
+ */
 function toXlsx(r) {
   const company = (c) => Settings.companies().find((x) => x.code === c)?.name ?? c;
-  const rows = [['מועד התשלום', 'סוג', 'חברה', 'ספק', 'מספר', 'אסמכתא', 'תאריך', 'תנאי תשלום', 'סכום', 'מטבע', 'פרויקט', 'יוזם', 'הערה']];
-  for (const i of r.items) {
-    rows.push([dmy(i.payDay) || 'חסר תנאי תשלום', typeLabel(i.type), company(i.company), i.supplier.name || i.supplier.code, i.docno, i.booknum,
-      dmy(i.date), i.terms, i.amount.toFixed(2), i.currency, i.project.name, i.initiatorName,
-      i.partialInvoiced ? `רק מה שעוד לא בחשבונית (${i.invoices.join(', ')})` : i.contract ? `חוזה ${i.contract}` : '']);
-  }
-  return Xlsx.build(rows, { sheetName: 'תשלומים', widths: [13, 13, 22, 28, 14, 12, 11, 12, 13, 7, 26, 16, 34] });
+  const row = (i) => [dmy(i.payDay) || 'חסר תנאי תשלום', typeLabel(i.type), company(i.company), i.supplier.name || i.supplier.code, i.docno, i.booknum,
+    dmy(i.date), i.terms, i.amount.toFixed(2), i.currency, i.project.name, i.initiatorName,
+    i.partialInvoiced ? `רק מה שעוד לא בחשבונית (${i.invoices.join(', ')})` : i.contract ? `חוזה ${i.contract}` : ''];
+  const money = (t) => [t.ils.toFixed(2), ILS, Object.entries(t.other).map(([c, v]) => `+ ${v.toFixed(2)} ${c}`).join(' ')];
+  const sheet = (name, items, extra = []) => {
+    const t = totals(items);
+    const rows = [HEAD, ...items.map(row), [], ['סה"כ', '', '', `${t.all.count} מסמכים`, '', '', '', '', ...money(t.all)]];
+    const bold = [rows.length - 1];
+    for (const e of extra) { rows.push(e); bold.push(rows.length - 1); }
+    return { name, rows, widths: WIDTHS, bold };
+  };
+  const cos = totals(r.items).companies;
+  const perCompany = cos.length > 1 ? cos.map((c) => ['', '', company(c.company), `${c.count} מסמכים`, '', '', '', '', ...money(c)]) : [];
+  return Xlsx.buildBook([
+    sheet('הכל', r.items, perCompany.length ? [[], ['לפי חברה'], ...perCompany] : []),
+    ...(cos.length > 1 ? cos.map((c) => sheet(company(c.company), r.items.filter((i) => i.company === c.company))) : [])
+  ]);
 }
 
 module.exports = {
