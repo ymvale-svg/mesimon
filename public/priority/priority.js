@@ -770,8 +770,6 @@
         <td>${esc(i.project.name)}</td>
         <td>${esc(i.initiatorName || '')}${i.mine && r.scope === 'all' ? ' <span class="pill p-ok">שלך</span>' : ''}</td>
       </tr>`).join('');
-    const sup = r.totals.suppliers.slice(0, 12).map((s) => `<li><span>${esc(s.supplier)}${me.companies.length > 1 ? ` <span class="muted small">· ${esc(company(s.company))}</span>` : ''}</span><b class="num">${money(s)}</b> <span class="muted small">${s.count}</span></li>`).join('');
-    const cos = r.totals.companies.length > 1 ? r.totals.companies.map((c) => `<li><span>${esc(company(c.company))}</span><b class="num">${money(c)}</b> <span class="muted small">${c.count}</span></li>`).join('') : '';
     const errs = r.errors.length ? `<p class="note">⚠️ לא נקרא מפריוריטי: ${esc([...new Set(r.errors.map((e) => company(e.company) || e.message))].join(', '))}. הרשימה חסרה את מה שבהן. ${esc(r.errors[0].message)}</p>` : '';
     const intro = r.scope === 'all'
       ? 'כל מה שמחכה לתשלום: קבלות סחורה סופיות (רק מה שעוד לא בחשבונית ספק), חשבונות חלקיים מאושרים וחשבונות עסקה מאושרים. מועד התשלום — ה-15 שאחרי סוף החודש ועוד ימי התנאי.'
@@ -792,8 +790,6 @@
         <section class="panel"><div class="panel-h"><h2>${r.items.length} מסמכים · ${money(r.totals.all)}</h2><p>כולל מע״מ. עודכן ${fmtAt(r.at)}.</p></div>
           ${rows ? `<div class="scroll"><table class="t pay-t"><tr><th scope="col">מועד</th><th scope="col">סוג</th><th scope="col">ספק</th><th scope="col">מסמך</th><th scope="col">תאריך · תנאי</th><th scope="col">סכום</th><th scope="col">פרויקט</th><th scope="col">יוזם</th></tr>${rows}</table></div>` : '<p class="muted">אין מסמכים במועד הזה.</p>'}
         </section>
-        ${cos ? `<aside class="panel pay-sup"><div class="panel-h"><h2>לפי חברה</h2></div><ul class="plain">${cos}</ul></aside>` : ''}
-        ${sup ? `<aside class="panel pay-sup"><div class="panel-h"><h2>לפי ספק</h2></div><ul class="plain">${sup}</ul>${r.totals.suppliers.length > 12 ? `<p class="muted small">ועוד ${r.totals.suppliers.length - 12} ספקים</p>` : ''}</aside>` : ''}
       </div></div>`;
 
     main.querySelector('.pay-buckets').addEventListener('click', (e) => {
