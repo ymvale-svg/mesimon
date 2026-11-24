@@ -823,7 +823,7 @@
       ? `${i.payDay ? dm(i.payDay) : '<span class="pill p-warn">חסר</span>'}${i.bucket === 'late' ? ' <span class="pill p-bad">באיחור</span>' : ''}${i.paidHow === 'guess' ? `<div>${payCell(i)}</div>` : ''}`
       : payCell(i));
     const rows = r.items.map((i) => `<tr>
-        <td class="num pay-day" data-label="${firstCol}">${first(i)}</td>
+        ${r.view === 'pending' ? `<td class="num pay-day" data-label="מועד">${first(i)}</td>` : `<td class="num pay-day" data-label="${firstCol}">${first(i)}</td>`}
         <td class="pay-type" data-label="סוג"><span class="pill p-brand">${esc(typeLabel(i.type))}</span></td>
         <td class="pay-sup" data-label="ספק">${esc(i.supplier.name || i.supplier.code)}${me.companies.length > 1 || r.scope === 'mine' ? `<div class="muted small">${esc(company(i.company))}</div>` : ''}</td>
         <td data-label="מסמך"><span class="ltr-inline">${esc(i.docno)}</span>${i.booknum ? `<div class="muted small">אסמכתא ${esc(i.booknum)}</div>` : ''}</td>

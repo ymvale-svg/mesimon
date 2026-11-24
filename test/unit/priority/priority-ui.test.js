@@ -100,6 +100,9 @@ test('כפתור שהוא קישור (ייצוא לאקסל) נראה ככפתו
 test('תשלומים בטלפון: הטבלה הופכת לכרטיסים, וכרטיסי המועד בפס שגולל', () => {
   assert.match(js, /<table class="t pay-t"><thead>/);
   for (const l of ['מועד', 'סוג', 'ספק', 'סכום', 'פרויקט', 'יוזם']) assert.match(js, new RegExp(`data-label="${l}"`));
+  // 💰 שלב 2: ממתין לתשלום · בחשבונית · שולם — והעמודה הראשונה מתחלפת לפי התצוגה
+  assert.match(js, /pending: 'ממתין לתשלום', invoiced: 'בחשבונית', paid: 'שולם'/);
+  assert.match(js, /נראה ששולם/);
   const mob = css.slice(css.indexOf('/* כרטיסי המועד'));
   assert.match(mob, /\.pay-buckets \{[^}]*overflow-x: auto/);
   assert.match(mob, /\.pay-t thead \{[^}]*position: absolute/);
