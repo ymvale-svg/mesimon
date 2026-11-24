@@ -47,7 +47,11 @@ const FILES_DIR = () => path.join(D.UPLOADS_DIR, 'purchase-demand');
 const TRIGGER = /דרישת\s*רכ[שס](?!ים)|דרישות\s*רכ[שס](?!ים)/;
 const GR_TRIGGER = /קבלת\s*סחורה/;
 // רק כשזו כל ההודעה — "שלח גם 3 שקי מלט" הוא פריט, לא סיום
-const DONE = /^(סיום|סיימתי|זהו|זה הכל|זה הכול|תשלח|שלח|לשלוח|שלח לאישור|תשלח לאישור|לאישור)\s*[!.🏁]*$/u;
+const DONE = /^(סיום|סיימתי|ת?סיים(?:\s+(?:את\s+)?(?:הכל|הכול))?|זהו|זה הכל|זה הכול|תשלח|שלח|לשלוח|שלח לאישור|תשלח לאישור|לאישור)\s*[!.🏁]*$/u;
+// לא תיאור של פריט (סקירה 24.11): פקודה ("סיים", "תסיים הכל"), "רכישת רכש" (במקום "דרישת רכש"), או שאלה
+const notDescription = (t) => DONE.test(t) || /\?\s*$/.test(t) || /^(?:ד?רכישת\s+רכש|דרישת\s+רכש|רכש|דרישה)$/.test(String(t).trim());
+// "תבטל ותבדוק לי גלגל …" / "תחפש לי …" — רק הפריט עצמו
+const ASK_PREFIX = /^(?:ת?בטל\s+(?:את\s+(?:זה|ה\S+)\s+)?ו)?(?:ת?בדוק|ת?חפש|תמצא)\s+(?:לי\s+)?/;
 const NONE = /^(אף אחד|אף אחת|אף אחד מהם|לא אלה|אחר|כללי|מק"?ט כללי|שלח לבנייה|לבנייה|לרכש|לבנות מק"?ט)([\s,.!❌🆕]|$)/;
 // ב"התכוונת ל…": אף אחת מהאפשרויות ← הפריט נשלח לרכש לבניית מק"ט (בתיקון דרישה שהוחזרה — מק"ט כללי, כמו קודם)
 const BTN_NONE = 'שלח לבנייה לרכש 🆕';
@@ -479,7 +483,7 @@ async function onDetail(user, s, t) {
     renumber(s);
     return nextQuestion(s, [`🗑️ הוסר: ${it.description}.`, '']);
   }
-  if (DONE.test(t) || YES.test(t)) return reply(s, `קודם — תיאור מדויק ל*${it.description}*, או *להסיר את הפריט*.`, s.lastButtons ?? []);
+  if (notDescription(t) || YES.test(t)) return reply(s, `קודם — תיאור מדויק ל*${it.description}*, או *להסיר את הפריט*.`, s.lastButtons ?? []);
   if (t.split(/\s+/).length >= 12) return onText(user, s, t);
   // "5 ק"ג" — תוספת לתיאור; תיאור מלא — במקומו
   const words = wordsIn(t);
@@ -1000,7 +1004,7 @@ async function onPick(user, s, t, { reaction = false } = {}) {
     return nextQuestion(s, [s.editOf ? `🆕 ${it.description} ← מק"ט כללי 000 (${it.general.chapterDes || it.general.chapter} / ${it.general.topicDes || it.general.topic})` : `🆕 ${it.description} ← לא בקטלוג, יישלח לרכש לבניית מק"ט`, '']);
   }
   if (YES.test(t)) return reply(s, 'בחרו אחד מהכפתורים, *אף אחד* ❌, או כתבו תיאור אחר.', s.lastButtons ?? []);
-  if (DONE.test(t)) return reply(s, `קודם — *${it.description}*: בחרו אחד מהכפתורים, או *${s.editOf ? BTN_NONE_EDIT : BTN_NONE}*.`, s.lastButtons ?? []);
+  if (notDescription(t)) return reply(s, `קודם — *${it.description}*: בחרו אחד מהכפתורים, או *${s.editOf ? BTN_NONE_EDIT : BTN_NONE}*.`, s.lastButtons ?? []);
   // מק"ט מפורש
   const code = t.match(/[A-Za-z]*\d[\w]*(?:-[\w]+)+/)?.[0];
   if (code) {
@@ -1011,7 +1015,7 @@ async function onPick(user, s, t, { reaction = false } = {}) {
   }
   // תשובה ארוכה שאינה תיאור — אולי תיקון לרשימה או בקשה אחרת
   if (t.split(/\s+/).length >= 7) return onText(user, s, t);
-  it.description = t.trim().slice(0, 120);
+  it.description = (t.trim().replace(ASK_PREFIX, '').trim() || t.trim()).slice(0, 120);
   it.status = 'new';
   await resolveItems(s, [it]);
   return nextQuestion(s);
