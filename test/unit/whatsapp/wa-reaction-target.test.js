@@ -83,3 +83,16 @@ test('"מייל מוכן לאישור" שנענה בטקסט ("כן") — 👍 �
   await react('972509300003', '👍', msg);
   assert.equal(mails.length, 1, 'לא נשלח פעמיים');
 });
+
+test('"מייל מוכן לאישור" שאושר בכפתור "כן ✅" — 👍 אחר כך על אותה הודעה לא שולח שוב, ו-👎 לא אומר "לא נשלח"', async (t) => {
+  const { u, naama, mails, texts } = setup(t, '972509300004');
+  Bot._internal.saveChat(u.id, { ...Bot._internal.chatOf(u.id), draft: null, awaiting: false });
+  await Proactive.pushToUser(u.id, { text: '✉️ מייל מוכן לאישור\n\nלשלוח?', buttons: ['כן ✅', 'לא ❌'], draft: plain(naama) }, 'send_email', { requested: true });
+  const msg = lastId();
+  await Bot._internal.handleDirect({ phone: '972509300004', chatId: '972509300004@c.us', text: 'כן ✅', id: `t${++seq}`, button: true, replyTo: { id: msg, button: true } });
+  assert.equal(mails.length, 1);
+  await react('972509300004', '👍', msg);
+  assert.equal(mails.length, 1, 'לא נשלח פעמיים');
+  await react('972509300004', '👎', msg);
+  assert.doesNotMatch(texts('972509300004').at(-1), /לא נשלח/);
+});
