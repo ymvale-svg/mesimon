@@ -904,3 +904,70 @@ test('קבלה בלי הזמנה — לא נרשמת לדוח, ובלי סימו
   assert.doesNotMatch(fin.text, /לא בהזמנה/);
   assert.equal(D.get('SELECT COUNT(*) n FROM gr_no_po WHERE user_id = ?', u.id).n, 0);
 });
+
+// ---------------------------------------------------------------------------
+// 📧 חוסר / פגם מול התעודה — מייל לספק, עותק לרכש (23.11.26)
+// ---------------------------------------------------------------------------
+
+/** קבלה בלי הזמנה, בטון 5 קוב בתעודה — "קיבלתי רק 3" — עד "נקלטה כסופית" ושאלת החוסר */
+async function toShortage(t, { supplierEmail = 'orders@beton.example' } = {}) {
+  H.at(t);
+  H.companies(t, 'test11');
+  const u = grWorker();
+  const pr = priority(t, { reads: { supplierContact: async () => ({ email: supplierEmail, phone: '04-1234567', contact: null }) } });
+  H.claude(t, {
+    extract: () => doc(),
+    project: () => ({ codes: [], question: '', unrelated: false }),
+    reply: () => ({ action: 'update', renames: [], updates: [{ line: 1, qty: 3 }], adds: [], note: '2 קוב חזרו — סדוק', question: '', answer: '' })
+  });
+  const sent = buyer(t);
+  const { say } = H.chat(t, u);
+  await say('קבלת סחורה', { file: H.photo() });
+  await say('👍');
+  await say('בלי הזמנה ❌');
+  let r = await say('קיבלתי רק 3 קוב, 2 חזרו סדוקים');
+  assert.match(r.text, /בטון ב-30/);
+  for (let i = 0; i < 8 && !/נקלטה כסופית/.test(r.text); i++) {
+    const btn = r.buttons.includes(BTN.confirmFinal) ? BTN.confirmFinal : r.buttons.includes(BTN.approve) ? BTN.approve
+      : r.buttons.includes(BTN.done) ? BTN.done : r.buttons.includes(BTN.yes) ? BTN.yes : r.buttons[0] ?? 'נהריה מגרש 12';
+    r = await say(btn);
+  }
+  assert.match(r.text, /נקלטה כסופית/);
+  return { u, pr, sent, r, say };
+}
+
+test('📧 חוסר מול התעודה: אחרי "סופית" — "לשלוח לספק ולרכש?" ← כן: מייל לספק, עותק לרכש, עם הקבלה והתמונות', async (t) => {
+  const { sent, r, say } = await toShortage(t);
+  assert.match(r.text, /חוסר \/ פגם מול התעודה:\*\n• בטון ב-30 — בתעודה 5, התקבל 3/);
+  assert.match(r.text, /לשלוח לספק ולרכש\?/);
+  H.assertButtons(r.buttons, [BTN.yes, BTN.no]);
+  const before = sent.length;
+
+  const a = await say(BTN.yes);
+  assert.match(a.text, /נשלח לספק \(orders@beton\.example\), עם עותק לרכש/);
+  const m = sent.slice(before).find((x) => /חוסר \/ פגם/.test(x.subject));
+  assert.ok(m, 'המייל יצא');
+  assert.equal(m.to, 'orders@beton.example');
+  assert.deepEqual(m.cc, ['ruti@example.com']);
+  assert.match(m.subject, /בטון הצפון · תעודה 5501 · GR26000123/);
+  assert.match(m.text, /1\. בטון ב-30 — בתעודה 5, התקבל בפועל 3 קוב \(חסר 2\)/);
+  assert.deepEqual(m.attachments.map((f) => f.fileName), ['GR26000123.pdf', 'תמונה 1.jpg']);
+});
+
+test('📧 חוסר — אין מייל לספק בכרטיס: נשלח לרכש כנמענת ראשית, והעובד יודע', async (t) => {
+  const { sent, say } = await toShortage(t, { supplierEmail: '' });
+  const before = sent.length;
+  const a = await say(BTN.yes);
+  assert.match(a.text, /אין מייל לספק בכרטיס בפריוריטי — נשלח לרכש \(ruti@example\.com\)/);
+  const m = sent.slice(before).find((x) => /חוסר \/ פגם/.test(x.subject));
+  assert.equal(m.to, 'ruti@example.com');
+  assert.deepEqual(m.cc, []);
+});
+
+test('📧 חוסר — "לא": שום מייל לא יוצא; בלי חוסר — בלי שאלה', async (t) => {
+  const { sent, say } = await toShortage(t);
+  const before = sent.length;
+  const a = await say(BTN.no);
+  assert.match(a.text, /לא נשלח/);
+  assert.equal(sent.slice(before).filter((x) => /חוסר/.test(x.subject)).length, 0);
+});

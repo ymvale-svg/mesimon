@@ -96,3 +96,19 @@ test('receiptPdf — בלי הזמנה, בלי נספחים, תיאור חסר: 
   const buf = receiptPdf(gr({ files: [], lines: [{ TQUANT: 1 }] }), { due: '2026-12-31' });
   assert.equal(pageCount(buf), 1);
 });
+
+test('orderFields — השדות לשטח: טלפון ואיש קשר של הספק, כתובת אספקה, איש קשר באתר (23.11.26)', () => {
+  const { orderFields } = require('../../../server/priority/po-pdf');
+  const f = Object.fromEntries(orderFields(po({ WARHSNAME: 'W1' }), {
+    supplier: { phone: '04-8888888', contact: { name: 'יוסי לוי', phone: '050-1111111', email: 'y@sup.co.il' } },
+    address: 'הרב קוק 12, אלעד', site: ['מדיין אבו סלאח · 0521234567 · m@x.co.il']
+  }));
+  assert.equal(f['טלפון הספק'], '04-8888888');
+  assert.equal(f['איש קשר אצל הספק'], 'יוסי לוי · 050-1111111 · y@sup.co.il');
+  assert.equal(f['כתובת אספקה'], 'הרב קוק 12, אלעד');
+  assert.equal(f['איש קשר באתר'], 'מדיין אבו סלאח · 0521234567 · m@x.co.il');
+  // בלי הנתונים — השדות לא מופיעים (לא "ריק")
+  const g = Object.fromEntries(orderFields(po()));
+  assert.equal(g['טלפון הספק'], undefined);
+  assert.equal(g['איש קשר באתר'], undefined);
+});

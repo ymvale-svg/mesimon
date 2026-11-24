@@ -182,3 +182,63 @@ test('nextSigner לא פונה לרשת', (t) => {
   Priority.nextSigner({ USERLOGIN: 'a' });
   assert.equal(calls.length, 0);
 });
+
+// ---------------------------------------------------------------------------
+// כרטיס ספק, כתובת מחסן, בניינים בכרטיס הפרויקט (23.11.26) — קריאה בלבד
+// ---------------------------------------------------------------------------
+
+test('supplierContact — מייל, טלפון ואיש קשר מכרטיס הספק, לפי שם השדה', async (t) => {
+  withCreds(t);
+  fakeFetch(t, (url) => (/SUPPERSONNEL_SUBFORM/.test(url)
+    ? { value: [{ NAME: 'יוסי לוי', CELLPHONE: '050-1111111', EMAIL: 'Yossi@Sup.co.il' }] }
+    : { value: [{ SUPNAME: 'S1', SUPDES: 'ספק', EMAIL: 'Orders@Sup.co.il ', PHONE: '04-8888888', VATNUM: '5' }] }));
+  const c = await Priority.supplierContact('test11', 'S1');
+  assert.deepEqual(c, { email: 'orders@sup.co.il', phone: '04-8888888', contact: { name: 'יוסי לוי', phone: '050-1111111', email: 'yossi@sup.co.il' } });
+});
+
+test('supplierContact — טבלת אנשי הקשר סגורה: בלי איש קשר, בלי שגיאה', async (t) => {
+  withCreds(t);
+  fakeFetch(t, (url) => (/SUPPERSONNEL_SUBFORM/.test(url) ? new Response('{"error":{"message":"no"}}', { status: 403 }) : { value: [{ SUPNAME: 'S2', EMAIL: '' }] }));
+  assert.deepEqual(await Priority.supplierContact('test11', 'S2'), { email: '', phone: '', contact: null });
+});
+
+test('warehouseAddress — כל שדות הכתובת בכרטיס המחסן', async (t) => {
+  withCreds(t);
+  fakeFetch(t, () => ({ value: [{ WARHSNAME: 'W1', WARHSDES: 'מחסן אלעד', ADDRESS: 'הרב קוק 12', STATEA: 'אלעד', ZIPCODE: '' }] }));
+  assert.equal(await Priority.warehouseAddress('test11', 'W1'), 'הרב קוק 12, אלעד');
+  assert.equal(await Priority.warehouseAddress('test11', ''), '');
+});
+
+test('projectChapters — מוצא לבד את טבלת תתי הפרקים בכרטיס הפרויקט; בניין ← המשאבים שמתחתיו', async (t) => {
+  withCreds(t, 'tabb21');
+  const META = '<Edmx><EntityType Name="DOCUMENTS_p"><Property Name="DOCNO"/><NavigationProperty Name="PROJMANAGERS_SUBFORM" Type="x"/><NavigationProperty Name="BUD_BUDGET_SUBFORM" Type="y"/></EntityType><EntityType Name="OTHER"><NavigationProperty Name="NOPE_SUBFORM"/></EntityType></Edmx>';
+  const calls = fakeFetch(t, (url) => {
+    if (/\$metadata/.test(url)) return new Response(META, { status: 200 });
+    if (/PROJMANAGERS_SUBFORM/.test(url)) return { value: [{ USERLOGIN: 'x' }] };
+    if (/BUD_BUDGET_SUBFORM/.test(url)) {
+      return { value: [
+        { BUD_SUBCHAPTERNAME: '210', BUD_SUBCHAPTERDES: 'מבנה A', BUD_SUBTOPICNAME: '210-10', BUD_SUBTOPICDES: 'בטון' },
+        { BUD_SUBCHAPTERNAME: '210', BUD_SUBCHAPTERDES: 'מבנה A', BUD_SUBTOPICNAME: '210-20', BUD_SUBTOPICDES: 'בלוקים' },
+        { BUD_SUBCHAPTERNAME: '220', BUD_SUBCHAPTERDES: 'מבנה B', BUD_SUBTOPICNAME: '220-10', BUD_SUBTOPICDES: 'בטון' }
+      ] };
+    }
+    return { value: [] };
+  });
+  const list = await Priority.projectChapters('tabb21', 'PR1');
+  assert.deepEqual(list, [
+    { chapter: '210', chapterDes: 'מבנה A', topics: [{ topic: '210-10', topicDes: 'בטון' }, { topic: '210-20', topicDes: 'בלוקים' }] },
+    { chapter: '220', chapterDes: 'מבנה B', topics: [{ topic: '220-10', topicDes: 'בטון' }] }
+  ]);
+  assert.ok(calls.every((c) => (c.init?.method ?? 'GET') === 'GET'), 'קריאה בלבד');
+  // הטבלה נזכרת — פרויקט נוסף בלי חיפוש מחדש
+  const before = calls.length;
+  await Priority.projectChapters('tabb21', 'PR2');
+  assert.equal(calls.length - before, 1);
+  assert.match(calls.at(-1).url, /DOCUMENTS_p\('PR2'\)\/BUD_BUDGET_SUBFORM/);
+});
+
+test('projectChapters — אין טבלה עם תתי פרקים: null (הבוט לא שואל על בניין)', async (t) => {
+  withCreds(t, 'tabb22');
+  fakeFetch(t, (url) => (/\$metadata/.test(url) ? new Response('<EntityType Name="DOCUMENTS_p"><NavigationProperty Name="X_SUBFORM"/></EntityType>', { status: 200 }) : { value: [{ A: 1 }] }));
+  assert.equal(await Priority.projectChapters('tabb22', 'PR1'), null);
+});
