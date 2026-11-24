@@ -107,7 +107,11 @@ const afterTrigger = (t) => (ASK.test(t) ? t.replace(ASK, '') : t.replace(TRIGGE
 /** פותח דרישה ("דרישת רכש"); וגם החזרה לבדיקה ("החזר לבדיקה PD…") ותשובה של פותח הדרישה (לתקן / הכל נכון) */
 // שאלה על דרישות קיימות ("מה הדרישות הפתוחות?") או בקשה אחרת — לא פותחת דרישה חדשה (‎opens-guard.js‎)
 // וגם תשובה ל"המק"טים נבנו — לבנות את הדרישה מחדש?" (‎pd-parts.js‎)
-const opens = (text, userId = null) => (isTrigger(text) && !notOpening(text)) || Boolean(userId && (Return.owns(userId, text) || Parts.owns(userId, text)));
+// דרישה שמורה (מושהית) — "תשלח את זה כדרישת רכש", "אתה יכול להוציא את הדרישה", "איך להמשיך?" ממשיכים בה (סקירה 24.11:
+// הבקשה נחסמה כ"בקשה אחרת" והדרישה נזרקה)
+const RESUME = /(?:^|\s)(?:ת?שלח|תשלחי|תוציא|להוציא|לשלוח|ת?משיך|להמשיך|נמשיך|תסיים|לסיים)\s+(?:\S+\s+){0,3}?(?:כ?דריש(?:ה|ת|ות)|ה?דרישה)|^\P{L}*(?:איך\s+)?(?:להמשיך|תמשיך|נמשיך|ממשיכים)\P{L}*$/u;
+const resumes = (userId, text) => Boolean(userId && RESUME.test(String(text ?? '').trim()) && (() => { const s = load(userId); return fresh(s) && s.paused; })());
+const opens = (text, userId = null) => (isTrigger(text) && !notOpening(text)) || resumes(userId, text) || Boolean(userId && (Return.owns(userId, text) || Parts.owns(userId, text)));
 
 /** הודעה בנושא אחר כשיש דרישה פתוחה — הדרישה יורדת (עוד לא נכתב כלום בפריוריטי). מחזיר שורת הודעה */
 function abandon(user) {
@@ -1371,8 +1375,9 @@ async function handle({ user, text = '', file = null, reaction = false, voice = 
   s.uid = user.id;
   // ⏳ 15 דקות בלי תנועה — 👍 / "סיום" לא שולחים: מציגים שוב את הדרישה ושואלים מחדש (#171)
   const stale = Date.now() - (s.at ?? 0) >= idleMs();
+  const resumed = s.paused && !file && RESUME.test(t);
   if (s.paused) s.paused = false;
-  if (isTrigger(t) && !file && s.step !== 'code') return finish(user, s, s.lastPrompt ? reply(s, `🛒 ממשיכים בדרישת הרכש:\n\n${s.lastPrompt}`, s.lastButtons ?? []) : showList(s), 'המשך');
+  if ((isTrigger(t) || resumed) && !file && s.step !== 'code') return finish(user, s, s.lastPrompt ? reply(s, `🛒 ממשיכים בדרישת הרכש:\n\n${s.lastPrompt}`, s.lastButtons ?? []) : showList(s), 'המשך');
   if (GR_TRIGGER.test(t)) { save(user.id, { ...s, paused: true }); return { pass: true, replies: [], status: 'ok', result: 'מעבר לקבלת סחורה' }; }
   if (!file && (CANCEL.test(t) || sameLabel(t, BTN.cancel))) { clear(user.id, s); return { replies: ['דרישת הרכש בוטלה. לא נכתב דבר בפריוריטי.'], status: 'ok', result: 'ביטול' }; }
 
@@ -1527,4 +1532,4 @@ function view(userId) {
   };
 }
 
-module.exports = { view, isTrigger, opens, startEdit, active, pending, docId, abandon, handle, setHooks, _parseDate: parseDate, _resolveItems: resolveItems, _ai: ai, _load: load, _clear: (userId) => clear(userId, load(userId)), _label: label, _labels: labels, _sameLabel: sameLabel, _signerNote: signerNote };
+module.exports = { _pause: (userId) => { const s = load(userId); if (s) save(userId, { ...s, paused: true }); }, view, isTrigger, opens, startEdit, active, pending, docId, abandon, handle, setHooks, _parseDate: parseDate, _resolveItems: resolveItems, _ai: ai, _load: load, _clear: (userId) => clear(userId, load(userId)), _label: label, _labels: labels, _sameLabel: sameLabel, _signerNote: signerNote };

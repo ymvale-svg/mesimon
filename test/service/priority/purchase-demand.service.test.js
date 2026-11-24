@@ -1250,3 +1250,28 @@ test('📍 אין משאב מתאים מתחת לתת הפרק — העובד ל
   assert.match(n.body, /פריט: שק מלט \(M-1/);
   assert.match(n.body, /המשאבים מתחת לתת הפרק: 210-90 חשמל/);
 });
+
+// סקירה לילית 24.11: דרישה שמורה (מושהית) ירדה כשהעובד ביקש להמשיך בה במילים שלו — "תשלח את זה כדרישת רכש",
+// "אתה יכול להוציא את דרישת הרכש", "איך להמשיך?" ("לא נשלחה — עברתי לבקשה החדשה"). עכשיו — ממשיכים בה.
+test('דרישה שמורה: "תשלח את זה כדרישת רכש" / "להוציא את הדרישה" / "איך להמשיך?" — ממשיכים בה, לא נזרקת', async (t) => {
+  H.companies(t, 'test11');
+  const PD = require('../../../server/priority/purchase-demand');
+  for (const ask of ['תשלח את זה כדרישת רכש', 'מבחינתי אתה יכול להוציא את דרישת הרכש', 'איך להמשיך?']) {
+    const u = buyerWorker();
+    priority(t);
+    ai(t);
+    const { say } = H.chat(t, u);
+    await toItems(say);
+    await toReview(say);
+    // הדרישה מושהית (כמו אחרי בקשה אחרת / 15 דקות)
+    const s = PD._load(u.id);
+    PD._pause(u.id);
+    assert.equal(PD.active(u.id), false);
+    assert.ok(PD.opens(ask, u.id), 'opens: ' + ask);
+    assert.equal(s.items.length, 2);
+    const r = await say(ask);
+    assert.match(r.text, /ממשיכים בדרישת הרכש/, ask);
+    assert.match(r.text, /דרישת רכש — 2 פריטים/, ask);
+    assert.doesNotMatch(r.text, /לא נשלחה/, ask);
+  }
+});
