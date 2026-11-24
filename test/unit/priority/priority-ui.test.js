@@ -70,7 +70,7 @@ test('"המערכת קוראת": בועה עם נקודות, השלב, רשימ�
 
 test('✍️ ממתין לאישורך: אין ממתינים — האזור לא מצויר בכלל; יש — מעל האריחים, עם קישור בלשונית חדשה', () => {
   const w = js.slice(js.indexOf('const Waiting = (() => {'), js.indexOf('return { mount };'));
-  assert.match(w, /if \(!items\.length\) \{ box\.innerHTML = ''; return; \}/);
+  assert.match(w, /if \(!items\.length && !alt\.length\) \{ box\.innerHTML = ''; return; \}/);
   assert.match(css, /#waiting:empty \{ display: none; \}/);
   const home = js.slice(js.indexOf('async function home()'), js.indexOf('const Waiting = (() => {'));
   assert.ok(home.indexOf('<div id="waiting"></div>') < home.indexOf('<div class="tiles">'), 'האזור מעל האריחים');
