@@ -182,7 +182,7 @@ test('חוב שיצא מהרשימה: נשמר, והשלב מתעדכן לפי �
     'a160226:partial:PC40': { status: 'שולם', invoiced: false },
     'a160226:partial:PC41': { status: 'מבוטלת', invoiced: false }
   } });
-  Payments._reset();
+  await Payments.reload();
   await Payments.report(actor(admin), { today: TODAY });
   assert.equal(stage('a160226:receipt:GR40'), 'invoiced');
   assert.equal(stage('a160226:partial:PC40'), 'paid', 'חשבון חלקי בסטטוס "שולם"');
@@ -191,7 +191,7 @@ test('חוב שיצא מהרשימה: נשמר, והשלב מתעדכן לפי �
 
   t.mock.restoreAll();
   fake(t, { a160226: { receipt: [gr('GR40'), gr('GR41')] } });
-  Payments._reset();
+  await Payments.reload();
   await Payments.report(actor(admin), { today: TODAY });
   assert.equal(stage('a160226:receipt:GR40'), 'open', 'חזר לרשימה');
 });
@@ -203,7 +203,7 @@ test('חברה שהקריאה ממנה נכשלה: המסמכים שלה לא "�
   await Payments.report(actor(admin), { today: TODAY });
   t.mock.restoreAll();
   fake(t, {}, { fail: ['elad1'] });
-  Payments._reset();
+  await Payments.reload();
   const r = await Payments.report(actor(admin), { today: TODAY });
   assert.ok(r.errors.some((e) => e.company === 'elad1'));
   assert.equal(D.get("SELECT stage FROM payment_items WHERE ref = 'elad1:receipt:GR50'").stage, 'open');
@@ -240,4 +240,133 @@ test('ייצוא לאקסל — גיליון "הכל" וגיליון לכל חב
 test('"תשלומים" הוא דוח — אי אפשר להעלות אליו מסמך', () => {
   const u = user({ role: 'admin' });
   assert.throws(() => Docs.upload(u, { doc: 'payments', filename: 'x.pdf', mime: 'application/pdf', data: 'JVBERg==' }), /סוג מסמך לא מוכר/);
+});
+
+test('מחלקת כספים / הנהלת חשבונות (וגם תת-מחלקה): כל התשלומים בכל החברות — גם כשבמטריצה סומנו חברות אחרות', async (t) => {
+  reset();
+  fake(t, { a160226: { receipt: [gr('GR70', { USERLOGIN: 'X', OWNERLOGIN: 'X' })] }, elad1: { receipt: [gr('GR71', { USERLOGIN: 'X', OWNERLOGIN: 'X' })] } });
+  const now = new Date().toISOString();
+  const dept = (name, parent = null) => {
+    D.run('INSERT OR IGNORE INTO departments (name, created_at) VALUES (?, ?)', name, now);
+    const id = D.get('SELECT id FROM departments WHERE name = ?', name).id;
+    if (parent) D.run('UPDATE departments SET parent_id = ? WHERE id = ?', parent, id);
+    return id;
+  };
+  const fin = dept('כספים');
+  const acct = dept('הנהלת חשבונות', fin);
+  const eng = dept('הנדסה וביצוע');
+  const a = user({ role: 'employee', department_id: fin });
+  const b = user({ role: 'employee', department_id: acct });
+  const c = user({ role: 'employee', department: 'הנה"ח' });
+  const e = user({ role: 'employee', department_id: eng });
+  Access.save([{ id: b.id, docs: ['receipt'], companies: ['elad1'] }]);
+
+  for (const u of [a, b, c]) {
+    assert.equal(Access.isFinance(u), true, u.full_name);
+    const r = await Payments.report(actor(u), { today: TODAY });
+    assert.equal(r.scope, 'all');
+    assert.deepEqual(r.items.map((i) => i.docno).sort(), ['GR70', 'GR71'], 'כל החברות');
+  }
+  assert.equal(Access.matrix().users.find((x) => x.id === b.id).finance, true, 'במטריצה — מסומן ונעול');
+  assert.equal(Access.isFinance(e), false);
+  const r = await Payments.report(actor(e), { today: TODAY });
+  assert.equal(r.scope, 'mine');
+  assert.deepEqual(r.items, [], 'עובד הנדסה — רק מה שיזם');
+});
+
+test('מי שהעביר לתשלום — רואה את שלו בלי הרשאה, וגם קישור בתפריט (hasMine), עד שזה יוצא מהרשימה', async (t) => {
+  reset();
+  const yossi = user({ role: 'employee' });
+  const botUser = user({ role: 'employee' });
+  const other = user({ role: 'employee' });
+  D.setSetting('priority_user_map', { YossiP: yossi.id });
+  Docs.upload(botUser, { doc: 'receipt', filename: 'x.pdf', mime: 'application/pdf', data: Buffer.from('%PDF-1.4\n').toString('base64') });
+  D.run("UPDATE priority_docs SET docno = 'GR81', company = 'a160226' WHERE user_id = ?", botUser.id);
+  fake(t, { a160226: {
+    receipt: [gr('GR80', { USERLOGIN: 'YossiP', OWNERLOGIN: 'YossiP' }), gr('GR81', { USERLOGIN: 'API VPLANS', OWNERLOGIN: 'API VPLANS' })],
+    partial: [pc('PC80', { USERLOGIN: 'Someone', OWNERLOGIN: 'yossip' })]
+  } });
+  const admin = user({ role: 'admin' });
+  const all = await Payments.report(actor(admin), { today: TODAY });
+  assert.deepEqual(all.items.find((i) => i.docno === 'GR80').owners, [yossi.id]);
+  assert.deepEqual(all.items.find((i) => i.docno === 'GR81').owners, [botUser.id], 'נקלט בבוט');
+
+  const y = await Payments.report(actor(yossi), { today: TODAY });
+  assert.equal(y.scope, 'mine');
+  assert.deepEqual(y.items.map((i) => i.docno).sort(), ['GR80', 'PC80'], 'יוזם או בעלים — בלי הרשאה');
+  assert.equal(Payments.hasMine(yossi.id), true);
+  assert.equal(Payments.hasMine(botUser.id), true);
+  assert.equal(Payments.hasMine(other.id), false);
+  Payments._reset();
+  assert.equal(Payments.hasMine(yossi.id), true, 'גם בלי זיכרון — מהמסד');
+  D.run("UPDATE payment_items SET stage = 'invoiced' WHERE docno IN ('GR80', 'PC80')");
+  assert.equal(Payments.hasMine(yossi.id), false, 'מה שכבר לא מחכה — לא מקפיץ קישור');
+  D.setSetting('priority_user_map', {});
+});
+
+test('מי רואה מה: עובד — שלו; מנהל מחלקה — שלו ושל העובדים במחלקות שלו (גם תת-מחלקה); הנהלה — הכל', async (t) => {
+  reset();
+  const now = new Date().toISOString();
+  const dept = (name, parent = null) => {
+    D.run('INSERT OR IGNORE INTO departments (name, created_at) VALUES (?, ?)', name, now);
+    const id = D.get('SELECT id FROM departments WHERE name = ?', name).id;
+    if (parent) D.run('UPDATE departments SET parent_id = ? WHERE id = ?', parent, id);
+    return id;
+  };
+  const eng = dept('ביצוע-בדיקה');
+  const site = dept('אתר-בדיקה', eng);
+  const other = dept('שיווק-בדיקה');
+  const boss = user({ role: 'manager', department_id: eng });
+  D.run('UPDATE departments SET manager_user_id = ? WHERE id = ?', boss.id, eng);
+  const w1 = user({ role: 'employee', department_id: eng });
+  const w2 = user({ role: 'employee', department_id: site });
+  const out = user({ role: 'employee', department_id: other });
+  const exec = user({ role: 'executive', department_id: other });
+  D.setSetting('priority_user_map', { Boss: boss.id, W1: w1.id, W2: w2.id, Out: out.id });
+  const g = (no, who) => gr(no, { USERLOGIN: who, OWNERLOGIN: who });
+  fake(t, { a160226: { receipt: [g('GR90', 'Boss'), g('GR91', 'W1'), g('GR92', 'W2'), g('GR93', 'Out'), g('GR94', 'Nobody')] } });
+
+  const docs = async (u, f = {}) => { const r = await Payments.report(actor(u), { today: TODAY, ...f }); return [r.scope, r.items.map((i) => i.docno).sort()]; };
+  assert.deepEqual(await docs(w1), ['mine', ['GR91']]);
+  assert.deepEqual(await docs(out), ['mine', ['GR93']]);
+  assert.deepEqual(await docs(boss), ['team', ['GR90', 'GR91', 'GR92']], 'מנהל — גם תת-המחלקה');
+  assert.deepEqual(await docs(boss, { mine: true }), ['team', ['GR90']], 'רק מה שיזמתי');
+  assert.deepEqual(await docs(exec), ['all', ['GR90', 'GR91', 'GR92', 'GR93', 'GR94']], 'הנהלה — הכל');
+  assert.equal(Access.of(exec).docs.includes('payments'), true);
+
+  assert.equal(Payments.hasMine(boss.id), true);
+  D.run("UPDATE payment_items SET stage = 'invoiced' WHERE docno = 'GR90'");
+  Payments._reset();
+  assert.equal(Payments.hasMine(boss.id), true, 'מהמסד — עדיין יש של העובדים');
+  D.run("UPDATE payment_items SET stage = 'invoiced' WHERE docno IN ('GR91', 'GR92')");
+  assert.equal(Payments.hasMine(boss.id), false);
+  D.setSetting('priority_user_map', {});
+});
+
+test('לא קוראים מפריוריטי בכל כניסה: אחרי הפעלה מחדש — מהמסד מיד; ישן מ-10 דקות — מוצג ומתרענן ברקע; "רענון" — מחכה', async (t) => {
+  reset();
+  let calls = 0;
+  let rows = [gr('GR95')];
+  Fakes.priority(t, { payReceipts: async (c) => { calls += 1; return c === 'a160226' ? rows : []; }, payPartials: async () => [], payDeals: async () => [], priorityUsers: async () => [] });
+  const admin = user({ role: 'admin' });
+  await Payments.report(actor(admin), { today: TODAY });            // פעם ראשונה אי פעם — מחכים
+  const first = calls;
+  assert.ok(first > 0);
+
+  Payments._reset();                                                 // "הפעלה מחדש של השרת"
+  rows = [gr('GR95'), gr('GR96')];
+  const cold = await Payments.report(actor(admin), { today: TODAY });
+  assert.equal(calls, first, 'מהמסד — בלי פריוריטי');
+  assert.deepEqual(cold.items.map((i) => i.docno), ['GR95']);
+  assert.equal(cold.refreshing, false);
+
+  D.run("UPDATE payment_items SET last_seen = '2026-01-01T00:00:00.000Z'");   // ישן
+  Payments._reset();
+  const stale = await Payments.report(actor(admin), { today: TODAY });
+  assert.deepEqual(stale.items.map((i) => i.docno), ['GR95'], 'מוצג מה שהיה — מיד');
+  assert.equal(stale.refreshing, true, 'והרענון רץ ברקע');
+  await Payments.reload();
+  const fresh = await Payments.report(actor(admin), { today: TODAY });
+  assert.deepEqual(fresh.items.map((i) => i.docno).sort(), ['GR95', 'GR96']);
+  assert.equal(fresh.refreshing, false);
 });

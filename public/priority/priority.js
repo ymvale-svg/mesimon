@@ -37,15 +37,35 @@
     invoice: '<path d="M6 2h9l5 5v14a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1z"/><path d="M14 2v6h6M9 13h6M9 17h6"/>',
     income: '<rect x="2" y="6" width="20" height="12" rx="2"/><circle cx="12" cy="12" r="2.5"/><path d="M6 10v4M18 10v4"/>',
     payments: '<rect x="3" y="4" width="18" height="17" rx="2"/><path d="M3 9h18M8 2v4M16 2v4"/><path d="M12 12.5v5M10.2 13.6c0-.7.8-1.1 1.8-1.1s1.8.4 1.8 1.1-.8 1-1.8 1.2-1.8.5-1.8 1.2.8 1.1 1.8 1.1 1.8-.4 1.8-1.1"/>',
-    pricelist: '<path d="M20.6 13.4 13.4 20.6a2 2 0 0 1-2.8 0L3 13V3h10l7.6 7.6a2 2 0 0 1 0 2.8z"/><circle cx="7.5" cy="7.5" r="1.5"/>'
+    pricelist: '<path d="M20.6 13.4 13.4 20.6a2 2 0 0 1-2.8 0L3 13V3h10l7.6 7.6a2 2 0 0 1 0 2.8z"/><circle cx="7.5" cy="7.5" r="1.5"/>',
+    contract: '<path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6M8 17c1.5-2 2.5-2 3.5 0s2 2 3.5 0"/>',
+    deal: '<path d="M12 2v20M17 6H9.5a3 3 0 0 0 0 6h5a3 3 0 0 1 0 6H6"/>',
+    doc: '<path d="M6 2h9l5 5v14a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1z"/><path d="M14 2v6h6M9 15l2 2 4-4"/>'
   };
   const UI = {
     bot: '<rect x="4" y="8" width="16" height="12" rx="3"/><path d="M12 4v4M9 13h.01M15 13h.01M9 17h6"/>',
     mail: '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/>',
     upload: '<path d="M12 16V4M7 9l5-5 5 5"/><path d="M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"/>',
     clip: '<path d="m21 11-8.5 8.5a5 5 0 0 1-7-7L14 4a3.5 3.5 0 0 1 5 5l-8.5 8.5a2 2 0 0 1-3-3L15 7"/>',
-    x: '<path d="M18 6 6 18M6 6l12 12"/>'
+    x: '<path d="M18 6 6 18M6 6l12 12"/>',
+    ext: '<path d="M14 4h6v6M20 4l-9 9"/><path d="M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/>',
+    plus: '<path d="M12 5v14M5 12h14"/>',
+    check: '<path d="M20 6 9 17l-5-5"/>',
+    refresh: '<path d="M21 12a9 9 0 1 1-2.6-6.4L21 8"/><path d="M21 3v5h-5"/>',
+    download: '<path d="M12 4v12M7 11l5 5 5-5"/><path d="M4 20h16"/>',
+    alert: '<path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4M12 17h.01"/>',
+    calendar: '<rect x="3" y="4" width="18" height="17" rx="2"/><path d="M3 9h18M8 2v4M16 2v4"/>',
+    list: '<path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/>',
+    home: '<path d="m3 10 9-7 9 7v10a1 1 0 0 1-1 1h-5v-6h-6v6H4a1 1 0 0 1-1-1z"/>',
+    settings: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>',
+    shield: '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/>'
   };
+  /*
+   * שם קובץ בעמוד מימין לשמאל: "תעודת משלוח 881.jpg" הוצג "jpg.881 תעודת משלוח". החלק האחרון, כשהוא מתחיל באנגלית או
+   * בספרה, נבודד ככיוון שמאל-ימין (‎<bdi dir="ltr">‎) — והשם נקרא כמו שנכתב.
+   */
+  const LTR_TAIL = /(^|\s)([A-Za-z0-9][^\s<]*\.[A-Za-z0-9]{2,5})(?=$|\s|[,.;:!?)])/g;
+  const fname = (name) => esc(name).replace(LTR_TAIL, '$1<bdi dir="ltr">$2</bdi>');
   const ui = (k) => `<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${UI[k]}</svg>`;
   const icon = (k) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[k] ?? ''}</svg>`;
   const SUB = {
@@ -62,9 +82,10 @@
 
   const ROLE = { superadmin: 'אדמין על', admin: 'מנהל מערכת', executive: 'הנהלה', manager: 'מנהל מחלקה', employee: 'עובד' };
   let me = null;
+  const workDocs = () => me.docs.filter((d) => d.allowed && !d.report);
 
   // ---------------------------------------------------------------- ניווט
-  const ROUTES = { '': home, settings, access, pricelist, payments };
+  const ROUTES = { '': home, settings, access, pricelist, payments, approvals };
   const routeOf = () => location.pathname.replace(/^\/priority\/?/, '').split('/')[0];
   function go(path) { history.pushState(null, '', path); render(); }
   document.addEventListener('click', (e) => {
@@ -76,10 +97,14 @@
 
   function header() {
     const r = routeOf();
-    const tabs = [['/priority', 'בית', ''], ['/priority/payments', 'תשלומים', 'payments']];
-    if (me.pricelist !== null && me.pricelist !== undefined) tabs.push(['/priority/pricelist', 'מחירונים', 'pricelist']);
-    if (me.admin) tabs.push(['/priority/settings', 'הגדרות', 'settings'], ['/priority/access', 'הרשאות', 'access']);
-    $('#tabs').innerHTML = tabs.map(([href, label, key]) => `<a href="${href}" data-nav ${r === key ? 'aria-current="page"' : ''}>${label}</a>`).join('');
+    // מי שאין לו אף מסמך לקליטה (רק מה שהעביר לתשלום) — בית ("ממתין לאישורך") ו"התשלומים שלי"
+    const tabs = workDocs().length || me.admin
+      ? [['/priority', 'בית', '', ui('home')], ['/priority/payments', 'תשלומים', 'payments', icon('payments')]]
+      : [['/priority', 'בית', '', ui('home')], ['/priority/payments', 'התשלומים שלי', 'payments', icon('payments')]];
+    if (me.pricelist !== null && me.pricelist !== undefined) tabs.push(['/priority/pricelist', 'מחירונים', 'pricelist', icon('pricelist')]);
+    if (me.admin) tabs.push(['/priority/settings', 'הגדרות', 'settings', ui('settings')], ['/priority/access', 'הרשאות', 'access', ui('shield')], ['/priority/approvals', 'סוגי אישורים', 'approvals', icon('doc')]);
+    $('#tabs').innerHTML = tabs.map(([href, label, key, ic]) => `<a href="${href}" data-nav ${r === key ? 'aria-current="page"' : ''}>${ic}<span>${label}</span></a>`).join('');
+    $('#tabs').querySelector('[aria-current]')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
     $('#who').innerHTML = `${me.connected ? '' : '<span class="pill p-warn">החיבור לפריוריטי לא הוגדר</span>'} ${esc(me.name)} · <a href="/" class="back-link">משימון</a>`;
   }
 
@@ -94,7 +119,7 @@
     const r = routeOf();
     const docRoute = me.docs.find((d) => d.key === r && !d.report);
     const view = docRoute ? () => workspace(docRoute) : ROUTES[r] ?? home;
-    if ((view === settings || view === access) && !me.admin) { main.innerHTML = '<div class="note">רק מנהלי מערכת נכנסים למסך הזה.</div>'; return; }
+    if ((view === settings || view === access || view === approvals) && !me.admin) { main.innerHTML = '<div class="note">רק מנהלי מערכת נכנסים למסך הזה.</div>'; return; }
     main.classList.remove('wide');
     main.innerHTML = '<p class="muted pad">טוען…</p>';
     try { await view(); } catch (e) { main.innerHTML = `<div class="note">${esc(e.message)}</div>`; }
@@ -103,10 +128,12 @@
   // ---------------------------------------------------------------- בית
   async function home() {
     const cos = me.allCompanies ? 'כל החברות' : me.companies.map((c) => c.name).join(' · ') || 'אף חברה';
-    const [q, inbox] = await Promise.all([api('GET', '/api/priority/docs'), api('GET', '/api/priority/inbox')]);
+    const [q, inbox, waiting] = await Promise.all([api('GET', '/api/priority/docs'), api('GET', '/api/priority/inbox'),
+      api('GET', '/api/priority/waiting').catch(() => ({ items: [], at: null }))]);
     const fromMail = (k) => inbox.items.filter((m) => m.guess === k || (k === 'receipt' && m.guess === 'invoice')).length;
     main.innerHTML = `
       <div class="greet"><h1>שלום, ${esc(me.name)}</h1><p>החברות שלך: ${esc(cos)}${inbox.items.length ? ` · <b>${inbox.items.length}</b> מסמכים חדשים במייל` : ''}</p></div>
+      <div id="waiting"></div>
       <div class="tiles">${me.docs.map((d) => {
         if (d.report) {
           // 💰 דוח: מורשה — הכל בחברות שלו; כל עובד אחר — מה שהוא יזם
@@ -125,7 +152,86 @@
           <span class="ic">${icon('pricelist')}</span><h2>פריטים למחירון</h2><span class="sub">הזמנה סופית ← פריטים שאינם במחירון הספק ← למחירון</span>
           <span class="foot"><span class="count num">${me.pricelist}<small>מחכים</small></span><span class="pill p-ok">גם בבוט</span></span></a>` : ''}</div>
       <p class="note">לחצו על פעולה: בצד שמאל המיילים שהגיעו אליכם עם חשבונית או תעודת משלוח, ואפשר לגרור לשם קבצים. דרישת רכש וקבלת סחורה — המסמך נשלח לבוט, והשיחה ממשיכה בוואטסאפ.</p>`;
+    Waiting.mount($('#waiting'), waiting);
   }
+
+  // ---------------------------------------------------------------- ✍️ ממתין לאישורך (בראש הבית)
+  // האפיון: "אפיון — מסך אישורים במשימון פריוריטי.md". אין שום דבר שממתין — האזור לא קיים בכלל.
+  const Waiting = (() => {
+    let box = null, data = { items: [], at: null }, filter = 'all', opened = null;
+    const money = (n) => (n === null || n === undefined ? '' : `₪ ${Math.round(n).toLocaleString('he-IL')}`);
+    const ago = (iso) => {
+      if (!iso) return '';
+      const m = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 60000));
+      return m < 1 ? 'עודכן עכשיו' : m < 60 ? `עודכן לפני ${m} דק׳` : `עודכן ב-${new Date(iso).toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit' })}`;
+    };
+    const age = (w) => `<span class="pill ${w.level === 'late' ? 'p-bad' : w.level === 'warn' ? 'p-warn' : 'p-mute'}">${w.days === 0 ? 'היום' : w.days === 1 ? 'יום אחד' : `${w.days} ימים`}</span>`;
+    const typeCell = (w) => `<span class="wt"><span class="wt-ic">${icon(w.icon)}</span><span>${esc(w.type)}${w.isNew ? ' <span class="pill p-brand">חדש</span>' : ''}${w.altFor ? `<span class="alt">כמחליף של ${esc(w.altFor)}</span>` : ''}</span></span>`;
+    const openBtn = (w) => `<a class="btn pri small wo" href="${esc(w.link)}" target="_blank" rel="noopener" data-open="${w.id}">פתיחה בפריוריטי ${ui('ext')}<span class="sr-only"> — ${esc(w.type)} ${esc(w.docno)}</span></a>`;
+    const sumOf = (w) => money(w.amount) || '—';
+
+    function draw() {
+      if (!box) return;
+      const items = data.items;
+      if (!items.length) { box.innerHTML = ''; return; }
+      const types = [...new Set(items.map((w) => w.type))];
+      if (filter !== 'all' && !types.includes(filter)) filter = 'all';
+      const shown = items.filter((w) => filter === 'all' || w.type === filter);
+      box.innerHTML = `<section class="appr" aria-labelledby="appr-h">
+        <div class="appr-head"><h2 id="appr-h">ממתין לאישורך <span class="badge num">${items.length}</span></h2>
+          <span class="fresh"><span id="appr-at">${esc(ago(data.at))}</span> <button class="btn small" id="appr-refresh">${ui('refresh')} רענון</button></span></div>
+        ${types.length > 1 ? `<div class="chips" role="group" aria-label="סינון לפי סוג"><button class="chip" data-f="all" aria-pressed="${filter === 'all'}">הכל <b class="num">${items.length}</b></button>${types.map((t) => `<button class="chip" data-f="${esc(t)}" aria-pressed="${filter === t}">${esc(t)} <b class="num">${items.filter((w) => w.type === t).length}</b></button>`).join('')}</div>` : ''}
+        <div class="scroll appr-wide"><table class="t appr-t">
+          <thead><tr><th>סוג</th><th>מספר</th><th>חברה ופרויקט</th><th>ספק / קבלן</th><th>סכום</th><th>הוגש ע״י</th><th>ממתין</th><th><span class="sr-only">פתיחה</span></th></tr></thead>
+          <tbody>${shown.map((w) => w.done ? `<tr class="appr-done"><td colspan="8">${ui('check')} ${esc(w.done)}</td></tr>` : `<tr>
+            <td>${typeCell(w)}</td><td class="ltr num">${esc(w.docno)}</td>
+            <td>${esc(w.companyName)}${w.project ? `<span class="sub">${esc(w.project)}</span>` : ''}</td>
+            <td class="wrap">${esc(w.party || '—')}</td><td class="num">${sumOf(w)}</td><td>${esc(w.owner || '—')}</td><td>${age(w)}</td><td>${openBtn(w)}</td></tr>`).join('')}</tbody></table></div>
+        <div class="appr-cards">${shown.map((w) => w.done ? `<div class="appr-card appr-done">${ui('check')} ${esc(w.done)}</div>` : `<div class="appr-card">
+            <div class="r1">${typeCell(w)}${age(w)}</div>
+            <div class="r2"><span class="ltr num">${esc(w.docno)}</span><span>${esc(w.companyName)}</span></div>
+            <div class="r2"><span>${esc(w.party || w.project || '—')}</span><span class="num">${sumOf(w)}</span></div>
+            ${openBtn(w)}</div>`).join('')}</div>
+      </section>`;
+    }
+
+    async function refresh(btn) {
+      if (btn) { btn.disabled = true; btn.textContent = 'מעדכן…'; }
+      try { data = await api('POST', '/api/priority/waiting/refresh'); draw(); toast('עודכן מפריוריטי'); }
+      catch (e) { toast(e.message, true); if (btn) { btn.disabled = false; btn.textContent = 'רענון'; } }
+    }
+
+    /** העובד חזר מפריוריטי — בדיקה של המסמך שפתח */
+    async function back() {
+      if (document.visibilityState !== 'visible' || !opened || !box?.isConnected) return;
+      const id = opened; opened = null;
+      try {
+        const r = await api('GET', `/api/priority/waiting/${id}/check`);
+        if (!r.gone) return;
+        const w = data.items.find((x) => x.id === id);
+        if (!w) return;
+        w.done = r.next ? `${w.docno} — עבר ל${r.next}` : `${w.docno} — ${r.status || 'כבר לא ממתין לך'}`;
+        draw();
+        setTimeout(() => { data.items = data.items.filter((x) => x.id !== id); draw(); }, 2500);
+      } catch { /* בסבב הבא */ }
+    }
+    document.addEventListener('visibilitychange', back);
+    window.addEventListener('focus', back);
+
+    function mount(el, d) {
+      box = el; data = d ?? { items: [], at: null };
+      draw();
+      el.addEventListener('click', (e) => {
+        const f = e.target.closest('[data-f]');
+        if (f) { filter = f.dataset.f; draw(); return; }
+        const o = e.target.closest('[data-open]');
+        if (o) { opened = Number(o.dataset.open); return; }
+        const b = e.target.closest('#appr-refresh');
+        if (b) refresh(b);
+      });
+    }
+    return { mount };
+  })();
 
   // ---------------------------------------------------------------- עבודה על פעולה: התור, המיילים והגרירה
   const fmtAt = (iso) => {
@@ -223,7 +329,7 @@
         <article class="qcard${selected === x.id ? ' sel' : ''}" data-id="${x.id}">
           <button class="qmain" data-view="${x.id}">
             <span class="qt"><b>${esc(x.supplier || x.fromName || x.filename)}</b><span class="pill ${STAGE_CLS[x.stage] ?? 'p-mute'}">${esc(x.stageLabel)}</span></span>
-            <span class="qs">${ui(x.source === 'mail' ? 'mail' : 'upload')} ${esc(x.filename)}</span>
+            <span class="qs">${ui(x.source === 'mail' ? 'mail' : 'upload')} ${fname(x.filename)}</span>
             <span class="qs muted">${x.docno ? `<b class="ltr-inline">${esc(x.docno)}</b> · ` : ''}${x.source === 'mail' ? esc(x.subject || x.fromEmail) : x.source === 'whatsapp' ? 'נפתח בוואטסאפ' : 'הועלה במסך'} · ${fmtAt(x.at)}</span>
           </button>
           <span class="qa">
@@ -247,7 +353,7 @@
         return `<div class="mail">
           <span class="mfrom"><b>${esc(m.supplier || m.fromName || m.fromEmail)}</b><time>${fmtAt(m.at)}</time></span>
           <span class="msubj">${esc(m.subject)}</span>
-          <span class="matt">${ui('clip')} ${esc(m.filename)} <span class="pill ${m.guess === d.key ? 'p-brand' : 'p-mute'}">${esc(m.kindLabel)} · נראה כמו ${esc(label(m.guess))}</span></span>
+          <span class="matt">${ui('clip')} ${fname(m.filename)} <span class="pill ${m.guess === d.key ? 'p-brand' : 'p-mute'}">${esc(m.kindLabel)} · נראה כמו ${esc(label(m.guess))}</span></span>
           <span class="mbtns">${btns.join('')}</span>
         </div>`;
       }).join('') : '<p class="muted empty">אין מיילים חדשים עם חשבונית או תעודת משלוח. מה שסריקת המייל מזהה יופיע כאן.</p>';
@@ -260,7 +366,7 @@
       if (!x) { $('#preview').innerHTML = '<p class="muted">בחרו מסמך מהתור כדי לראות אותו כאן.</p>'; return; }
       const src = `/api/priority/docs/${x.id}/file`;
       if (!x.filename) { $('#preview').innerHTML = '<p class="muted">למסמך הזה אין קובץ במשימון — הוא נפתח ישר בוואטסאפ.</p>'; return; }
-      $('#preview').innerHTML = `<div class="pv-h"><span>${esc(x.filename)}</span><a class="pv-open" href="${src}" target="_blank" rel="noopener">פתיחה בחלון<span class="sr-only"> (חלון חדש)</span></a></div><p class="muted" aria-busy="true">טוען את המסמך…</p>`;
+      $('#preview').innerHTML = `<div class="pv-h"><span>${fname(x.filename)}</span><a class="pv-open" href="${src}" target="_blank" rel="noopener">פתיחה בחלון<span class="sr-only"> (חלון חדש)</span></a></div><p class="muted" aria-busy="true">טוען את המסמך…</p>`;
       // טעינה קודם: קובץ שלא ירד (Gmail) — הודעה ברורה, לא שגיאה גולמית בתוך המסגרת
       const ticket = (previewTicket = (previewTicket || 0) + 1);
       fetch(src, { credentials: 'same-origin' }).then(async (r) => {
@@ -275,9 +381,9 @@
     }
 
     // ---------------- עבודה על המסמך מתוך המסך
-    const fmtWa = (t) => esc(t).replace(/\*([^*\n]+)\*/g, '<b>$1</b>').replace(/(^|\s)_([^_\n]+)_(?=\s|$)/g, '$1<i>$2</i>').replace(/~([^~\n]+)~/g, '<s>$1</s>').replace(/\n/g, '<br>');
+    const fmtWa = (t) => esc(t).replace(LTR_TAIL, '$1<bdi dir="ltr">$2</bdi>').replace(/\*([^*\n]+)\*/g, '<b>$1</b>').replace(/(^|\s)_([^_\n]+)_(?=\s|$)/g, '$1<i>$2</i>').replace(/~([^~\n]+)~/g, '<s>$1</s>').replace(/\n/g, '<br>');
     const num = (v) => (v === null || v === undefined || v === '' ? '' : Number(v).toLocaleString('he-IL', { maximumFractionDigits: 2 }));
-    const talkHtml = (messages) => messages.map((m) => `<li class="msg ${m.from}">${m.texts.map((t) => `<p>${fmtWa(t)}</p>`).join('')}${(m.files ?? []).map((f) => `<a class="msg-file" href="/api/priority/desk/file/${encodeURIComponent(f.id)}" target="_blank" rel="noopener">${ui('clip')} ${esc(f.caption || f.name)}</a>`).join('')}</li>`).join('');
+    const talkHtml = (messages) => messages.map((m) => `<li class="msg ${m.from}">${m.texts.map((t) => `<p>${fmtWa(t)}</p>`).join('')}${(m.files ?? []).map((f) => `<a class="msg-file" href="/api/priority/desk/file/${encodeURIComponent(f.id)}" target="_blank" rel="noopener">${ui('clip')} ${fname(f.caption || f.name)}</a>`).join('')}</li>`).join('');
     function drawDesk() {
       const box = $('#desk');
       if (!box) return;
@@ -303,7 +409,7 @@
           ${desk.messages?.length ? `<ol class="talk ro" id="talk" aria-label="השיחה על המסמך">${talkHtml(desk.messages)}</ol>` : ''}
           ${desk.openDocId && desk.openDocId !== desk.docId ? `<button type="button" class="btn" data-view-doc="${desk.openDocId}">חזרה למסמך שבעבודה</button>` : ''}
           ${n ? `<div class="desk-done"><p class="muted">${esc(d.label)} הבאה בתור:</p>
-            <div class="next-doc"><b>${esc(n.supplier || n.fromName || n.filename)}</b><span class="muted">${esc(n.filename)}${n.pages ? ` · ${n.pages + 1} עמודים` : ''}</span></div>
+            <div class="next-doc"><b>${esc(n.supplier || n.fromName || n.filename)}</b><span class="muted">${fname(n.filename)}${n.pages ? ` · ${n.pages + 1} עמודים` : ''}</span></div>
             <button type="button" class="btn pri" data-start="${n.id}">להתחיל את המסמך הבא</button></div>` : ''}`;
         const talk = $('#talk'); if (talk) talk.scrollTop = talk.scrollHeight;
         return;
@@ -624,7 +730,7 @@
         <div class="scroll"><table class="t"><tr><th scope="col"><span class="sr-only">לבחור</span></th><th scope="col">פריט</th><th scope="col" class="pl-unit">יחידה</th><th scope="col">מחיר נטו</th></tr>${rows}</table></div>
         <div class="grid-form"><label>מחירון<select class="pl-list">${o.lists.map((l) => `<option value="${esc(plKey(l))}" ${plKey(l) === plKey(o.list) ? 'selected' : ''}>${esc(listName(l))}</option>`).join('')}</select></label></div>
         <p class="muted small">המחיר — אחרי הנחת השורה. הפריטים שנבחרו ייכנסו למחירון וגם ל"מוצרים לספק".</p>
-        <div class="row-actions"><button class="btn pri pl-write" ${o.busy ? 'disabled' : ''}>להוסיף למחירון</button><button class="btn pl-decline" ${o.busy ? 'disabled' : ''}>לא להוסיף</button><span class="pl-confirm" role="status"></span></div>
+        <div class="row-actions"><button class="btn pri pl-write" ${o.busy ? 'disabled' : ''}>${ui('plus')}<span>להוסיף למחירון</span></button><button class="btn pl-decline" ${o.busy ? 'disabled' : ''}>לא להוסיף</button><span class="pl-confirm" role="status"></span></div>
       </section>`;
     };
     const recent = b.recent.map((o) => {
@@ -682,11 +788,12 @@
   const dmy15 = (d) => (d ? `15.${d.slice(5, 7)}${d.slice(0, 4) !== String(new Date().getFullYear()) ? `.${d.slice(2, 4)}` : ''}` : '');
   const payFilter = { bucket: 'next', type: '', company: '', project: '', supplier: '', mine: false };
 
+  let payPoll = null;
   async function payments(refresh = false) {
     const q = new URLSearchParams();
     for (const [k, v] of Object.entries(payFilter)) if (v) q.set(k, v === true ? '1' : v);
     if (refresh) q.set('refresh', '1');
-    if (!main.querySelector('.pay')) main.innerHTML = '<p class="muted pad">קורא מפריוריטי… (בפעם הראשונה זה לוקח כחצי דקה)</p>';
+    if (!main.querySelector('.pay')) main.innerHTML = '<p class="muted pad">טוען…</p>';
     const r = await api('GET', `/api/priority/payments?${q}`);
     if (payFilter.bucket === 'next') payFilter.bucket = r.bucket;
     const company = (c) => me.companies.find((x) => x.code === c)?.name ?? c;
@@ -694,30 +801,32 @@
     const other = (o) => Object.entries(o ?? {}).map(([cur, v]) => `${shekel(v)} ${esc(cur)}`).join(' · ');
     const money = (t) => `₪${shekel(t.ils)}${Object.keys(t.other ?? {}).length ? ` <span class="muted small">+ ${other(t.other)}</span>` : ''}`;
     // כל חודש שיש בו תשלום (ולפחות שלושת הקרובים); באיחור וחסר תנאי — רק כשיש
-    const BUCKETS = [['late', '⚠️ באיחור'], ...r.runs.map((d) => [d, dmy15(d)]), ['none', 'חסר תנאי תשלום'], ['', 'הכל']];
+    const BUCKETS = [['late', 'באיחור'], ...r.runs.map((d) => [d, dmy15(d)]), ['none', 'חסר תנאי תשלום'], ['', 'הכל']];
     const chips = BUCKETS.filter(([k]) => !k || r.runs.includes(k) || r.byBucket[k]?.count).map(([k, label]) => {
       const t = k ? r.byBucket[k] : Object.values(r.byBucket).reduce((a, x) => ({ count: a.count + x.count, ils: a.ils + x.ils }), { count: 0, ils: 0 });
       return `<button type="button" class="chip pay-b${k === 'late' && t?.count ? ' late' : ''}" data-b="${k}" aria-pressed="${payFilter.bucket === k}">
-        <b>${esc(label)}</b>${t ? `<span class="pay-b-sum num">${t.count ? `₪${shekel(t.ils)}` : '—'}</span><span class="pay-b-n num">${t.count} מסמכים</span>` : ''}</button>`;
+        <b>${k === 'late' ? ui('alert') : k === '' ? ui('list') : k === 'none' ? '' : ui('calendar')}${esc(label)}</b>${t ? `<span class="pay-b-sum num">${t.count ? `₪${shekel(t.ils)}` : '—'}</span><span class="pay-b-n num">${t.count} מסמכים</span>` : ''}</button>`;
     }).join('');
     const opt = (v, label, cur) => `<option value="${esc(v)}" ${v === cur ? 'selected' : ''}>${esc(label)}</option>`;
     const rows = r.items.map((i) => `<tr>
-        <td class="num">${i.payDay ? dm(i.payDay) : '<span class="pill p-warn">חסר</span>'}${i.bucket === 'late' ? ' <span class="pill p-bad">באיחור</span>' : ''}</td>
-        <td><span class="pill p-brand">${esc(typeLabel(i.type))}</span></td>
-        <td>${esc(i.supplier.name || i.supplier.code)}${me.companies.length > 1 || r.scope === 'mine' ? `<div class="muted small">${esc(company(i.company))}</div>` : ''}</td>
-        <td><span class="ltr-inline">${esc(i.docno)}</span>${i.booknum ? `<div class="muted small">אסמכתא ${esc(i.booknum)}</div>` : ''}</td>
-        <td class="num">${dm(i.date)}${i.terms ? `<div class="muted small">${esc(i.terms)}</div>` : ''}</td>
-        <td class="num pay-amt">${i.currency === 'ש"ח' ? `₪${shekel(i.amount)}` : `${shekel(i.amount)} ${esc(i.currency)}`}${i.partialInvoiced ? `<div class="muted small" title="${esc(i.invoices.join(', '))}">היתרה שלא בחשבונית, מתוך ₪${shekel(i.total)}</div>` : ''}</td>
-        <td>${esc(i.project.name)}</td>
-        <td>${esc(i.initiatorName || '')}${i.mine && r.scope === 'all' ? ' <span class="pill p-ok">שלך</span>' : ''}</td>
+        <td class="num pay-day" data-label="מועד">${i.payDay ? dm(i.payDay) : '<span class="pill p-warn">חסר</span>'}${i.bucket === 'late' ? ' <span class="pill p-bad">באיחור</span>' : ''}</td>
+        <td class="pay-type" data-label="סוג"><span class="pill p-brand">${esc(typeLabel(i.type))}</span></td>
+        <td class="pay-sup" data-label="ספק">${esc(i.supplier.name || i.supplier.code)}${me.companies.length > 1 || r.scope === 'mine' ? `<div class="muted small">${esc(company(i.company))}</div>` : ''}</td>
+        <td data-label="מסמך"><span class="ltr-inline">${esc(i.docno)}</span>${i.booknum ? `<div class="muted small">אסמכתא ${esc(i.booknum)}</div>` : ''}</td>
+        <td class="num" data-label="תאריך · תנאי">${dm(i.date)}${i.terms ? `<div class="muted small">${esc(i.terms)}</div>` : ''}</td>
+        <td class="num pay-amt" data-label="סכום">${i.currency === 'ש"ח' ? `₪${shekel(i.amount)}` : `${shekel(i.amount)} ${esc(i.currency)}`}${i.partialInvoiced ? `<div class="muted small" title="${esc(i.invoices.join(', '))}">היתרה שלא בחשבונית, מתוך ₪${shekel(i.total)}</div>` : ''}</td>
+        <td data-label="פרויקט">${esc(i.project.name)}</td>
+        <td data-label="יוזם">${esc(i.initiatorName || '')}${i.mine && r.scope !== 'mine' ? ' <span class="pill p-ok">שלך</span>' : ''}</td>
       </tr>`).join('');
-    const errs = r.errors.length ? `<p class="note">⚠️ לא נקרא מפריוריטי: ${esc([...new Set(r.errors.map((e) => company(e.company) || e.message))].join(', '))}. הרשימה חסרה את מה שבהן. ${esc(r.errors[0].message)}</p>` : '';
+    const errs = r.errors.length ? `<p class="note warn">${ui('alert')} לא נקרא מפריוריטי: ${esc([...new Set(r.errors.map((e) => company(e.company) || e.message))].join(', '))}. הרשימה חסרה את מה שבהן. ${esc(r.errors[0].message)}</p>` : '';
     const intro = r.scope === 'all'
       ? 'כל מה שמחכה לתשלום: קבלות סחורה סופיות (רק מה שעוד לא בחשבונית ספק), חשבונות חלקיים מאושרים וחשבונות עסקה מאושרים. מועד התשלום — ה-15 שאחרי סוף החודש ועוד ימי התנאי.'
-      : r.login || r.items.length ? 'המסמכים שיזמת — מתי צפוי התשלום עליהם.' : 'לא מצאנו את שם המשתמש שלך בפריוריטי, ולכן אין כאן מסמכים. פנו למנהל המערכת.';
+      : r.scope === 'team' ? 'מה שאתה והעובדים במחלקה שלך העברתם לתשלום (קבלות סחורה, חשבונות חלקיים, חשבונות עסקה) — ומתי צפוי התשלום.'
+      : r.items.length ? 'מה שהעברת לתשלום (קבלות סחורה, חשבונות חלקיים, חשבונות עסקה) — ומתי צפוי התשלום.'
+        : 'אין כרגע מסמכים שהעברת לתשלום ומחכים לתשלום. אם יש ולא מופיעים — כנראה שם המשתמש שלך בפריוריטי לא מקושר למשימון; פנו למנהל המערכת.';
     main.innerHTML = `<div class="pay">
-      <div class="chain-h"><div><h1>תשלומים</h1><p class="muted">${esc(intro)}</p></div>
-        <div class="row-actions"><button class="btn pay-refresh" type="button">רענון מפריוריטי</button><a class="btn" href="/api/priority/payments?${new URLSearchParams([...q].filter(([k]) => k !== 'refresh'))}&format=xlsx" title="מה שמוצג עכשיו — גיליון לכל חברה">ייצוא לאקסל</a></div></div>
+      <div class="chain-h pay-head"><div><h1>${{ all: 'תשלומים', team: 'תשלומים — המחלקה שלי' }[r.scope] ?? 'התשלומים שלי'}</h1><p class="muted">${esc(intro)}</p></div>
+        <div class="row-actions"><button class="btn pay-refresh" type="button">${ui('refresh')}<span>רענון מפריוריטי</span></button><a class="btn" download href="/api/priority/payments?${new URLSearchParams([...q].filter(([k]) => k !== 'refresh'))}&format=xlsx" title="מה שמוצג עכשיו — גיליון לכל חברה">${ui('download')}<span>ייצוא לאקסל</span></a></div></div>
       ${errs}
       <div class="pay-buckets" role="group" aria-label="מועד התשלום">${chips}</div>
       <div class="grid-form pay-f">
@@ -725,11 +834,11 @@
         ${r.facets.companies.length > 1 || payFilter.company ? `<label>חברה<select data-f="company">${opt('', 'כל החברות', payFilter.company)}${r.facets.companies.map((c) => opt(c, company(c), payFilter.company)).join('')}</select></label>` : ''}
         <label>פרויקט<select data-f="project">${opt('', 'כל הפרויקטים', payFilter.project)}${r.facets.projects.map((p) => opt(p.code, p.name, payFilter.project)).join('')}</select></label>
         <label>ספק<input data-f="supplier" type="search" value="${esc(payFilter.supplier)}" placeholder="שם או מספר ספק"></label>
-        ${r.scope === 'all' ? `<label class="pay-mine"><span><input type="checkbox" data-f="mine" ${payFilter.mine ? 'checked' : ''}> רק מה שיזמתי</span></label>` : ''}
+        ${r.scope !== 'mine' ? `<label class="pay-mine"><span><input type="checkbox" data-f="mine" ${payFilter.mine ? 'checked' : ''}> רק מה שיזמתי</span></label>` : ''}
       </div>
       <div class="pay-body">
-        <section class="panel"><div class="panel-h"><h2>${r.items.length} מסמכים · ${money(r.totals.all)}</h2><p>כולל מע״מ. עודכן ${fmtAt(r.at)}.</p></div>
-          ${rows ? `<div class="scroll"><table class="t pay-t"><tr><th scope="col">מועד</th><th scope="col">סוג</th><th scope="col">ספק</th><th scope="col">מסמך</th><th scope="col">תאריך · תנאי</th><th scope="col">סכום</th><th scope="col">פרויקט</th><th scope="col">יוזם</th></tr>${rows}</table></div>` : '<p class="muted">אין מסמכים במועד הזה.</p>'}
+        <section class="panel"><div class="panel-h"><h2>${r.items.length} מסמכים · ${money(r.totals.all)}</h2><p>כולל מע״מ. עודכן ${fmtAt(r.at)}${r.refreshing ? ' · <span class="pill p-brand">מתעדכן מפריוריטי ברקע…</span>' : ''}.</p></div>
+          ${rows ? `<div class="scroll"><table class="t pay-t"><thead><tr><th scope="col">מועד</th><th scope="col">סוג</th><th scope="col">ספק</th><th scope="col">מסמך</th><th scope="col">תאריך · תנאי</th><th scope="col">סכום</th><th scope="col">פרויקט</th><th scope="col">יוזם</th></tr></thead><tbody>${rows}</tbody></table></div>` : '<p class="muted">אין מסמכים במועד הזה.</p>'}
         </section>
       </div></div>`;
 
@@ -747,9 +856,13 @@
       clearTimeout(typing);
       typing = setTimeout(() => payments().then(() => { const n = main.querySelector(`[data-f="${el.dataset.f}"]`); if (n && el.type === 'search') { n.focus(); n.setSelectionRange(n.value.length, n.value.length); } }), el.type === 'search' ? 350 : 0);
     });
+    // רענון ברקע רץ עכשיו — מציגים את הנתונים הקודמים, ואחרי כמה שניות מביאים את החדשים (בלי לגעת בפריוריטי מהדפדפן)
+    clearTimeout(payPoll);
+    if (r.refreshing) payPoll = setTimeout(() => { if (routeOf() === 'payments' && main.querySelector('.pay')) payments().catch(() => {}); }, 15000);
     main.querySelector('.pay-refresh').addEventListener('click', async (e) => {
-      e.target.disabled = true; e.target.textContent = 'קורא…';
-      try { await payments(true); toast('עודכן מפריוריטי'); } catch (err) { toast(err.message, true); e.target.disabled = false; }
+      const b = e.currentTarget;
+      b.disabled = true; b.querySelector('span').textContent = 'קורא…'; b.classList.add('spin');
+      try { await payments(true); toast('עודכן מפריוריטי'); } catch (err) { toast(err.message, true); b.disabled = false; b.classList.remove('spin'); b.querySelector('span').textContent = 'רענון מפריוריטי'; }
     });
   }
 
@@ -763,7 +876,7 @@
     const conn = s.connection;
 
     main.innerHTML = `
-      ${s.testLock ? '<p class="note">⚠ סביבת בדיקות: אף חברה אינה פתוחה לכתיבה, מה שלא יישמר כאן.</p>' : ''}
+      ${s.testLock ? `<p class="note warn">${ui('alert')} סביבת בדיקות: אף חברה אינה פתוחה לכתיבה, מה שלא יישמר כאן.</p>` : ''}
       <section class="panel">
         <div class="panel-h"><h2>חיבור לפריוריטי</h2><p>משתמש ה-API של הארגון. הסיסמה נשמרת מוצפנת ולא מוצגת שוב — כדי להחליף, מקלידים חדשה.</p></div>
         <div class="grid-form">
@@ -778,11 +891,11 @@
       <section class="panel">
         <div class="panel-h"><h2>חברות</h2><p>כל החברות בפריוריטי. כתיבה — לאן מותר לקלוט מהבוט ומהמסך. התראות — באילו חברות שולחים "הזמנה הועברה לספק" והודעה לחותם הבא על דרישה.</p></div>
         <div class="scroll sticky-wrap" tabindex="0" role="region" aria-label="טבלת החברות"><table class="t" id="co"></table></div>
-        <div class="row-actions"><button class="btn small" id="co-add">+ חברה</button></div>
+        <div class="row-actions"><button class="btn small" id="co-add">${ui('plus')}<span>חברה</span></button></div>
       </section>
 
       <section class="panel">
-        <div class="panel-h"><h2>🆕 רכש — מק"טים לבנייה</h2><p>פריט בדרישת רכש שאין לו מק"ט נשלח במייל לבניית מק"ט (דרישה לא יוצאת עם מק"ט כללי), והיוזם מקבל הודעה כשהמק"ט נבנה. בקבלת סחורה — הבוט שואל אם לשלוח. היא מקבלת גם דרישה שנשארה טיוטא כי פריוריטי דחה שורה (למשל אין תקציב בפרויקט לתת הפרק). ריק — הכל למנהלי המערכת, ובדרישה: רק המזוהים.</p></div>
+        <div class="panel-h"><h2>רכש — מק"טים לבנייה</h2><p>פריט בדרישת רכש שאין לו מק"ט נשלח במייל לבניית מק"ט (דרישה לא יוצאת עם מק"ט כללי), והיוזם מקבל הודעה כשהמק"ט נבנה. בקבלת סחורה — הבוט שואל אם לשלוח. היא מקבלת גם דרישה שנשארה טיוטא כי פריוריטי דחה שורה (למשל אין תקציב בפרויקט לתת הפרק). ריק — הכל למנהלי המערכת, ובדרישה: רק המזוהים.</p></div>
         <div class="grid-form">
           <label for="b-user">מנהלת הרכש — מתוך המשתמשים של משימון<select id="b-user">
             <option value="">— לא הוגדרה —</option>
@@ -801,7 +914,7 @@
 
       <section class="panel">
         <div class="panel-h"><h2>ברירות מחדל לקליטה</h2><p>מה שהמערכת ממלאת כשהמסמך לא אומר. כרגע לקריאה בלבד; יהיו ניתנות לעריכה כשקבלת הסחורה ודרישת הרכש יעברו למסך.</p></div>
-        <div class="scroll"><table class="t">
+        <div class="scroll"><table class="t defs">
           <tr><td>תנאי תשלום</td><td>${esc(pay(s.defaults.payCode))}</td></tr>
           <tr><td>מחסן, כשלפרויקט אין</td><td class="ltr">${esc(s.defaults.warehouse)}</td></tr>
           <tr><td>פריט כללי לשורה בלי מק"ט</td><td class="ltr">${esc(s.defaults.generalPart)}</td></tr>
@@ -813,7 +926,7 @@
         </table></div>
       </section>
 
-      <div class="row-actions" style="position:sticky;bottom:0;background:var(--bg);padding:10px 0">
+      <div class="row-actions savebar">
         <button class="btn pri" id="save">שמירה</button><span id="confirm"></span>
         <span class="hint">${s.updatedAt ? `נשמר לאחרונה ${new Date(s.updatedAt).toLocaleString('he-IL')}${s.updatedBy ? ` · ${esc(s.updatedBy.name)}` : ''}` : 'עוד לא נשמר במסך — הערכים נגזרים מההגדרות הקודמות'}</span>
       </div>
@@ -851,7 +964,7 @@
       const st = $('#c-status'); st.innerHTML = '<span class="muted">בודק…</span>';
       try {
         const r = await api('POST', '/api/priority/settings/test', {});
-        st.innerHTML = r.ok ? `<span class="pill p-ok">מחובר ✓</span> <span class="muted">נבדק מול ${esc(r.company)}</span>` : `<span class="pill p-bad">לא מחובר</span> ${esc(r.error)}`;
+        st.innerHTML = r.ok ? `<span class="pill p-ok">${ui('check')} מחובר</span> <span class="muted">נבדק מול ${esc(r.company)}</span>` : `<span class="pill p-bad">לא מחובר</span> ${esc(r.error)}`;
       } catch (e) { st.innerHTML = `<span class="pill p-bad">שגיאה</span> ${esc(e.message)}`; }
     });
 
@@ -873,6 +986,68 @@
   }
 
   // ---------------------------------------------------------------- הרשאות
+  // ---------------------------------------------------------------- ✍️ סוגי אישורים (מנהלי מערכת)
+  async function approvals() {
+    let v = await api('GET', '/api/priority/waiting/admin');
+    const when = (iso) => (iso ? new Date(iso).toLocaleString('he-IL', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : 'עוד לא');
+    main.innerHTML = '<div class="stack" id="aa"></div>';
+    const root = $('#aa');
+    function draw() {
+      const ok = v.types.filter((t) => t.status === 'ok');
+      const closed = v.types.filter((t) => t.status !== 'ok');
+      root.innerHTML = `
+        <section class="panel">
+          <div class="panel-h"><h2>סוגי אישורים</h2>
+            <p>כל מסך בפריוריטי שיש בו רשימת מאשרים — נמצא לבד, פעם ביום. סוג חדש מופיע לחותמים מיד ב"ממתין לאישורך"; כאן נותנים לו שם בעברית או מכבים. החותם הבא נמצא לפי אותו כלל בכל המסכים, והקישור נבנה לבד.
+            נבדק לאחרונה: ${esc(when(v.discoveredAt))} · סבב אחרון: ${esc(when(v.sweptAt))}${v.errors.length ? ` · <span class="pill p-warn">${v.errors.length} קריאות נכשלו</span>` : ''}</p></div>
+          ${v.types.length ? `<div class="scroll" tabindex="0" role="region" aria-label="סוגי אישורים"><table class="t">
+            <thead><tr><th>שם במשימון</th><th>המסך בפריוריטי</th><th>ממתינים עכשיו</th><th>מוצג</th></tr></thead>
+            <tbody>${ok.map((t) => `<tr>
+              <td><input type="text" data-name="${esc(t.screen)}" value="${esc(t.name)}" placeholder="${esc(t.suggested || 'מסמך לאישור')}" aria-label="שם בעברית ל-${esc(t.screen)}">${t.isNew ? ' <span class="pill p-brand">חדש</span>' : ''}</td>
+              <td class="ltr">${esc(t.screen)}</td><td class="num">${t.count}</td>
+              <td><button type="button" class="tg" role="switch" aria-checked="${t.on}" data-on="${esc(t.screen)}" aria-label="להציג את ${esc(t.name || t.screen)}"></button></td></tr>`).join('')}
+            ${closed.map((t) => `<tr><td class="muted">—</td><td class="ltr">${esc(t.screen)}</td><td colspan="2"><span class="pill p-warn">${t.status === 'blocked' ? 'סגור למשימון' : 'תקלה'}</span>
+              <span class="hint">${t.status === 'blocked' ? 'לבקש ממנהל פריוריטי לפתוח את המסך ל-API' : esc(t.error)}</span></td></tr>`).join('')}</tbody></table></div>` : '<p class="muted">עוד לא נבדק. הבדיקה הראשונה רצה כמה דקות אחרי שהשרת עולה.</p>'}
+        </section>
+        <section class="panel">
+          <div class="panel-h"><h2>חותמים שלא מקושרים למשימון</h2>
+            <p>יש להם מסמכים שממתינים לחתימה, אבל לא נמצא משתמש משימון עם אותו מייל או אותו שם — ולכן הם לא רואים את "ממתין לאישורך". בוחרים משתמש ושומרים.</p></div>
+          ${v.unmapped.length ? `<div class="scroll"><table class="t"><thead><tr><th>משתמש בפריוריטי</th><th>השם בפריוריטי</th><th>ממתינים לו</th><th>משתמש במשימון</th><th></th></tr></thead>
+            <tbody>${v.unmapped.map((u, i) => `<tr><td class="ltr">${esc(u.login)}</td><td>${esc(u.name || '—')}</td><td class="num">${u.count}</td>
+              <td><select id="map-${i}" aria-label="משתמש משימון עבור ${esc(u.login)}"><option value="">— בחירה —</option>${v.users.map((x) => `<option value="${x.id}">${esc(x.name)}</option>`).join('')}</select></td>
+              <td><button class="btn small pri" data-map="${i}">שמירה</button></td></tr>`).join('')}</tbody></table></div>` : '<p class="muted">כל החותמים מקושרים.</p>'}
+          ${v.noSigner.length ? `<p class="hint">${v.noSigner.length} מסמכים ממתינים בלי חותם ידוע (אין רשימת מאשרים): ${v.noSigner.slice(0, 8).map((d) => esc(`${d.docno} (${d.company})`)).join(' · ')}</p>` : ''}
+        </section>`;
+    }
+    draw();
+    root.addEventListener('change', async (e) => {
+      const n = e.target.closest('[data-name]');
+      if (!n) return;
+      try { await api('PUT', `/api/priority/waiting/types/${encodeURIComponent(n.dataset.name)}`, { name: n.value }); toast('השם נשמר'); }
+      catch (err) { toast(err.message, true); }
+    });
+    root.addEventListener('click', async (e) => {
+      const sw = e.target.closest('[data-on]');
+      if (sw) {
+        const on = sw.getAttribute('aria-checked') !== 'true';
+        try {
+          await api('PUT', `/api/priority/waiting/types/${encodeURIComponent(sw.dataset.on)}`, { on });
+          sw.setAttribute('aria-checked', String(on));
+          toast(on ? 'מוצג לחותמים — מהסבב הבא' : 'כבוי — לא מוצג');
+        } catch (err) { toast(err.message, true); }
+        return;
+      }
+      const m = e.target.closest('[data-map]');
+      if (m) {
+        const u = v.unmapped[Number(m.dataset.map)];
+        const userId = Number($(`#map-${m.dataset.map}`).value);
+        if (!userId) { toast('בחרו משתמש משימון', true); return; }
+        try { await api('POST', '/api/priority/waiting/map', { login: u.login, userId }); toast('נשמר — הוא רואה את הממתינים לו מעכשיו'); v = await api('GET', '/api/priority/waiting/admin'); draw(); }
+        catch (err) { toast(err.message, true); }
+      }
+    });
+  }
+
   async function access() {
     const m = await api('GET', '/api/priority/access');
     const users = m.users.map((u) => ({ ...u, docs: [...u.docs], companies: u.companies ? [...u.companies] : null }));
@@ -883,7 +1058,7 @@
     main.innerHTML = `
       <section class="panel">
         <div class="panel-h"><h2>מי יכול מה בפריוריטי</h2>
-          <p>לכל משתמש: סוגי המסמכים (כן או לא — מי שמורשה למסמך מורשה לכל מה שבו, בבוט ובמסך), והחברות שהוא שייך אליהן. מנהלי מערכת מורשים תמיד לכל דבר.</p></div>
+          <p>לכל משתמש: סוגי המסמכים (כן או לא — מי שמורשה למסמך מורשה לכל מה שבו, בבוט ובמסך), והחברות שהוא שייך אליהן. מנהלי מערכת מורשים תמיד לכל דבר. תשלומים: הנהלה, כספים והנהלת חשבונות — הכל, בכל החברות; מנהל מחלקה — מה שהעובדים שלו יזמו; כל עובד — מה שיזם (בלי לסמן כאן).</p></div>
         <div class="scroll sticky-wrap" tabindex="0" role="region" aria-label="מטריצת ההרשאות"><table class="mtx" id="mtx"></table></div>
         <div class="row-actions"><button class="btn pri" id="save" disabled>שמירה</button><span class="dirty" id="dirty"></span></div>
       </section>`;
@@ -894,7 +1069,11 @@
       const keep = f && $('#mtx')?.contains(f) ? ['data-u', 'data-d', 'data-co', 'data-pick'].filter((k) => f.hasAttribute(k)).map((k) => `[${k}="${CSS.escape(f.getAttribute(k))}"]`).join('') : '';
       $('#mtx').innerHTML = `<thead><tr><th>משתמש</th>${m.docs.map((d) => `<th>${esc(d.label)}${d.ready ? '' : '<br><span class="pill p-mute">בקרוב</span>'}</th>`).join('')}<th>חברות</th></tr></thead><tbody>` +
         users.map((u, i) => `<tr><td><b>${esc(u.name)}</b><span>${esc([u.department, ROLE[u.role] ?? u.role].filter(Boolean).join(' · '))}</span></td>
-          ${m.docs.map((d) => `<td><button type="button" class="ck" role="checkbox" aria-checked="${u.docs.includes(d.key)}" aria-label="${esc(u.name)} — ${esc(d.label)}" data-u="${i}" data-d="${d.key}" ${u.admin ? 'disabled' : ''}>✓</button></td>`).join('')}
+          ${m.docs.map((d) => {
+            // 💰 מחלקת כספים — "תשלומים" תמיד, בכל החברות
+            const fixed = u.admin || (u.finance && d.key === 'payments');
+            return `<td><button type="button" class="ck" role="checkbox" aria-checked="${u.docs.includes(d.key)}" aria-label="${esc(u.name)} — ${esc(d.label)}" data-u="${i}" data-d="${d.key}" ${fixed ? 'disabled' : ''} ${u.finance && d.key === 'payments' ? 'title="הנהלה ומחלקת כספים — תמיד, בכל החברות"' : ''}>✓</button></td>`;
+          }).join('')}
           <td><button type="button" class="cobtn" data-pick="${i}" ${u.admin ? 'disabled' : ''} aria-expanded="${picking === i}" aria-label="החברות של ${esc(u.name)}: ${u.companies === null ? 'כל החברות' : u.companies.length ? esc(u.companies.map(coName).join(', ')) : 'אף חברה'}">${u.companies === null ? '<span class="pill p-ok">כל החברות</span>' : u.companies.length ? u.companies.map((c) => `<span class="pill p-brand">${esc(coName(c))}</span>`).join('') : '<span class="pill p-warn">אף חברה</span>'}</button></td></tr>
           ${picking === i ? `<tr class="copick"><td colspan="${m.docs.length + 2}"><div class="pk"><button data-co="*" data-u="${i}" aria-pressed="${u.companies === null}">כל החברות</button>${m.companies.map((c) => `<button data-co="${esc(c.code)}" data-u="${i}" aria-pressed="${Boolean(u.companies?.includes(c.code))}">${esc(c.name)}</button>`).join('')}</div><span class="hint">חברה חדשה בפריוריטי נוספת אוטומטית רק למי שמסומן "כל החברות".</span></td></tr>` : ''}`).join('') + '</tbody>';
       if (keep) $('#mtx').querySelector(keep)?.focus();

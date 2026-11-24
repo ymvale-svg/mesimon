@@ -123,7 +123,8 @@ const SCREEN = {
   org_knowledge_blocklist: { screen: 'agents', label: 'ידע ארגוני — מה לא נכנס' },
   knowledge_topics: { screen: 'agents', label: 'ידע ארגוני — נושאים' },
   pd_notify_companies: { screen: 'priority', label: 'חברות שבהן מודיעים לחותם הבא' },
-  priority_user_map: { screen: 'priority', label: 'שיוך משתמשי פריוריטי למשימון' }
+  priority_user_map: { screen: 'priority', label: 'שיוך משתמשי פריוריטי למשימון' },
+  priority_waiting_types: { screen: 'priority', label: '✍️ סוגי אישורים — שם בעברית, דלוק או כבוי' }
 };
 
 /**
@@ -171,6 +172,8 @@ const INTERNAL = new Set([
   'migr_fast_mode_off', // מצב מהיר כובה פעם אחת (17.11.26)
   'migr_mail_auto_off', // יצירת משימות מהמייל בלי אישור כובתה לכולם פעם אחת (22.11.26)
   'gr_no_po_report_last', // מתי נשלח הדוח השבועי "תעודות בלי מספר הזמנה" — buyer-notices.js
+  'priority_waiting_found', // ✍️ המסכים עם סבב מאשרים שנמצאו בפריוריטי (פעם ביום) — priority-waiting.js
+  'priority_waiting_state', // ✍️ מתי רץ הסבב האחרון של "ממתין לאישורך", ומה נכשל
   'pd_return_chats' // שיחות פתוחות של החזרה לבדיקה (המחזיר / המסביר), לפי עובד, 30 דקות — pd-return.js
 ]);
 

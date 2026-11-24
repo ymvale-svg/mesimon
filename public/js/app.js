@@ -2446,6 +2446,12 @@ const App = (() => {
         el('span.ico', {}, [el('span.nav-emoji', { text: '🗂' })]),
         el('span', { text: 'משימון פריוריטי' })
       ]));
+    } else if (state.actor?.payments) {
+      // 💰 מי שהעביר לתשלום ואין לו הרשאות בפריוריטי — ישר לתשלומים שלו
+      items.push(el('a.nav-item', { href: '/priority/payments', 'aria-label': 'התשלומים שלי', title: 'מה שהעברת לתשלום — ומתי ישולם' }, [
+        el('span.ico', {}, [el('span.nav-emoji', { text: '💰' })]),
+        el('span', { text: 'התשלומים שלי' })
+      ]));
     }
     add('board');
     if (hasTracker()) add('tracker');
