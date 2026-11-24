@@ -241,3 +241,35 @@ test('"תשלומים" הוא דוח — אי אפשר להעלות אליו מ�
   const u = user({ role: 'admin' });
   assert.throws(() => Docs.upload(u, { doc: 'payments', filename: 'x.pdf', mime: 'application/pdf', data: 'JVBERg==' }), /סוג מסמך לא מוכר/);
 });
+
+test('מחלקת כספים / הנהלת חשבונות (וגם תת-מחלקה): כל התשלומים בכל החברות — גם כשבמטריצה סומנו חברות אחרות', async (t) => {
+  reset();
+  fake(t, { a160226: { receipt: [gr('GR70', { USERLOGIN: 'X', OWNERLOGIN: 'X' })] }, elad1: { receipt: [gr('GR71', { USERLOGIN: 'X', OWNERLOGIN: 'X' })] } });
+  const now = new Date().toISOString();
+  const dept = (name, parent = null) => {
+    D.run('INSERT OR IGNORE INTO departments (name, created_at) VALUES (?, ?)', name, now);
+    const id = D.get('SELECT id FROM departments WHERE name = ?', name).id;
+    if (parent) D.run('UPDATE departments SET parent_id = ? WHERE id = ?', parent, id);
+    return id;
+  };
+  const fin = dept('כספים');
+  const acct = dept('הנהלת חשבונות', fin);
+  const eng = dept('הנדסה וביצוע');
+  const a = user({ role: 'employee', department_id: fin });
+  const b = user({ role: 'employee', department_id: acct });
+  const c = user({ role: 'employee', department: 'הנה"ח' });
+  const e = user({ role: 'employee', department_id: eng });
+  Access.save([{ id: b.id, docs: ['receipt'], companies: ['elad1'] }]);
+
+  for (const u of [a, b, c]) {
+    assert.equal(Access.isFinance(u), true, u.full_name);
+    const r = await Payments.report(actor(u), { today: TODAY });
+    assert.equal(r.scope, 'all');
+    assert.deepEqual(r.items.map((i) => i.docno).sort(), ['GR70', 'GR71'], 'כל החברות');
+  }
+  assert.equal(Access.matrix().users.find((x) => x.id === b.id).finance, true, 'במטריצה — מסומן ונעול');
+  assert.equal(Access.isFinance(e), false);
+  const r = await Payments.report(actor(e), { today: TODAY });
+  assert.equal(r.scope, 'mine');
+  assert.deepEqual(r.items, [], 'עובד הנדסה — רק מה שיזם');
+});
