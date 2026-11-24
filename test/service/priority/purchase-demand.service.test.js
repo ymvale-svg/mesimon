@@ -1146,7 +1146,7 @@ test('🏗️ לאיזה בניין? — אחרי הפרויקט; כל השור�
 
   let r = await say('דרישת רכש');
   r = await say('אלעד 49 צפון');
-  assert.match(r.text, /לאיזה בניין\?/);
+  assert.match(r.text, /לאיזה בניין\? \(תת פרק\)/);
   assert.match(r.text, /• מבנה A \(210\)\n• מבנה B \(220\)/);
   H.assertButtons(r.buttons, ['מבנה A', 'מבנה B']);
   r = await say('מבנה B');

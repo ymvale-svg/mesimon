@@ -677,7 +677,7 @@ async function chooseBuilding(s, pre = []) {
   }
   if (list === null && !noChapterForm.has(s.company)) {
     noChapterForm.add(s.company);
-    alertAdmins({ full_name: '' }, s, 'לא נמצאו הבניינים בכרטיס הפרויקט', [`בכרטיס הפרויקט ${s.project.code} לא נמצאה טבלה עם תתי פרקים — הבוט לא שואל "לאיזה בניין?" בחברה הזו.`]);
+    alertAdmins({ full_name: '' }, s, 'לא נמצאו תתי הפרקים של הפרויקט', [`בכרטיס הפרויקט ${s.project.code} לא נמצאו תתי הפרקים (התקציב של הפרויקט) — הבוט לא שואל "לאיזה בניין?" בחברה הזו.`]);
   }
   s.buildings = list ?? [];
   if (s.buildings.length === 0) { s.building = null; return null; }
@@ -688,7 +688,7 @@ async function chooseBuilding(s, pre = []) {
   return askBuilding(s, pre);
 }
 const buildingName = (b) => b.chapterDes || b.chapter;
-function askBuilding(s, pre = [], head = '🏗️ *לאיזה בניין?*') {
+function askBuilding(s, pre = [], head = '🏗️ *לאיזה בניין? (תת פרק)*') {
   s.step = 'building';
   const list = s.buildings ?? [];
   const opts = list.slice(0, 3);
@@ -823,7 +823,7 @@ async function headerCommand(s, t) {
   const bm = t.match(BUILDING_CMD);
   if (bm && s.project?.code && !s.editOf && s.step !== 'building') {
     if (!s.buildings) { s.building = undefined; await chooseBuilding(s); }
-    if (!(s.buildings ?? []).length) return back(s, '🏗️ לפרויקט הזה אין רשימת בניינים בפריוריטי.');
+    if (!(s.buildings ?? []).length) return back(s, '🏗️ לפרויקט הזה אין תתי פרקים בפריוריטי.');
     const what = bm[1].replace(/\s+/g, ' ').trim();
     const b = what && !/^אחר$/.test(what) ? pickBuilding(s, what) : null;
     if (!b) return askBuilding(s);
@@ -1407,7 +1407,7 @@ async function step(user, s, t, file, { reaction, stale = false }) {
     case 'building': {
       if (file) return reply(s, 'קודם הבניין — ואז הרשימה.', s.lastButtons ?? []);
       const b = pickBuilding(s, t);
-      if (!b) return t.split(/\s+/).length >= 6 ? null : askBuilding(s, [], '🏗️ לא מצאתי בניין כזה. לאיזה בניין?');
+      if (!b) return t.split(/\s+/).length >= 6 ? null : askBuilding(s, [], '🏗️ לא מצאתי תת פרק כזה בפרויקט. לאיזה בניין?');
       const had = (s.items ?? []).length;
       setBuilding(s, b);
       if (had) for (const it of s.items) codeForBuilding(s, it);
