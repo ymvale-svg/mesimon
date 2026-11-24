@@ -320,7 +320,7 @@ function totals(items) {
 }
 
 /**
- * הדוח. מי שמורשה ל"תשלומים" — כל מה שבחברות שלו (ואפשר "רק שלי"); כל עובד אחר — רק מה שהוא יזם.
+ * הדוח. מי שמורשה ל"תשלומים" — כל מה שבחברות שלו (מחלקת כספים — כל החברות; ואפשר "רק שלי"); כל עובד אחר — רק מה שהוא יזם.
  * ‎f‎: ‎{ bucket, type, company, project, supplier, mine, refresh }‎.
  */
 async function report(actor, f = {}) {
@@ -329,7 +329,7 @@ async function report(actor, f = {}) {
   const mine = await mineOf(actor);
   const run = nextRun(f.today);
   const name = await initiatorNames(data.items);
-  const allowedCos = Access.filterCompanies(actor, realCompanies());
+  const allowedCos = Access.paymentCompanies(actor, realCompanies());   // מחלקת כספים — כל החברות
   let items = data.items.map((it) => ({ ...it, bucket: bucketOf(it.payDay, run), mine: mine.is(it), initiatorName: name(it) }));
   items = all ? items.filter((it) => allowedCos.includes(it.company)) : items.filter((it) => it.mine);
 
