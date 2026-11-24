@@ -44,7 +44,10 @@ const DEFAULTS = Object.freeze({
   buyerName: '',
   buyerEmail: '',
   // 🏷️ "רכש — מחירונים" — מי מקבל את ההצעות להוסיף למחירון ספק מהזמנה (‎po-pricelist.js‎). מזהי משתמשי משימון; ריק — ההצעות מחכות
-  pricelistHandlers: []
+  pricelistHandlers: [],
+  // 💰 "שולם" — מי עוד מקבל הודעה על תשלום ממחלקה (‎payments.js‎, הוחלט 24.11.26): ‎{ [מזהה מחלקה]: [מזהי משתמשים] }‎.
+  // למשל המזכירות מקבלת את כל ה"שולם" של מחלקת התכנון. בלי זה — מי שיזם ומנהל המחלקה שלו
+  paidCc: {}
 });
 
 /** מה שהיה נכון עד היום — ממשתני הסביבה ומההגדרות הישנות */
@@ -128,6 +131,8 @@ function forDisplay(org = DEFAULT_ORG) {
     defaults: { ...r.defaults, buyerUserId: buyerOf(r.defaults)?.id ?? null },
     // לבחירת מנהלת הרכש — משתמשי משימון פעילים עם מייל
     users: D.all("SELECT id, full_name AS name, email, department FROM users WHERE status = 'active' AND email LIKE '%@%' ORDER BY full_name"),
+    // 💰 "שולם" — מי עוד מקבל, לפי מחלקה
+    departments: D.all("SELECT id, name FROM departments WHERE status = 'active' ORDER BY name"),
     testLock: testLock(),
     updatedAt: r.updatedAt ?? null,
     updatedBy: r.updatedBy ?? null
@@ -199,6 +204,20 @@ function save(input, { org = DEFAULT_ORG, by = null } = {}) {
         if (!u || u.status !== 'active' || u.role === 'vendor') throw new Error(`משתמש ${id} לא יכול לקבל הצעות למחירון`);
       }
       defs.pricelistHandlers = ids;
+    }
+    if ('paidCc' in b.defaults) {
+      const out = {};
+      for (const [dept, list] of Object.entries(b.defaults.paidCc && typeof b.defaults.paidCc === 'object' ? b.defaults.paidCc : {})) {
+        const d = Number(dept);
+        if (!D.get('SELECT 1 FROM departments WHERE id = ?', d)) throw new Error(`מחלקה ${dept} לא קיימת`);
+        const ids = [...new Set((Array.isArray(list) ? list : []).map(Number).filter(Number.isInteger))];
+        for (const id of ids) {
+          const u = D.get('SELECT role, status FROM users WHERE id = ?', id);
+          if (!u || u.status !== 'active' || u.role === 'vendor') throw new Error(`משתמש ${id} לא יכול לקבל הודעות "שולם"`);
+        }
+        if (ids.length) out[d] = ids;
+      }
+      defs.paidCc = out;
     }
     if ('draftTtlHours' in b.defaults) defs.draftTtlHours = Math.min(168, Math.max(1, Number(b.defaults.draftTtlHours) || DEFAULTS.draftTtlHours));
   }

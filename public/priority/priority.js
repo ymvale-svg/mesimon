@@ -786,12 +786,12 @@
   const shekel = (n) => Number(n ?? 0).toLocaleString('he-IL', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const dm = (d) => (d ? `${d.slice(8, 10)}.${d.slice(5, 7)}.${d.slice(2, 4)}` : '');
   const dmy15 = (d) => (d ? `15.${d.slice(5, 7)}${d.slice(0, 4) !== String(new Date().getFullYear()) ? `.${d.slice(2, 4)}` : ''}` : '');
-  const payFilter = { bucket: 'next', type: '', company: '', project: '', supplier: '', mine: false };
+  const payFilter = { view: 'pending', bucket: 'next', type: '', company: '', project: '', supplier: '', mine: false };
 
   let payPoll = null;
   async function payments(refresh = false) {
     const q = new URLSearchParams();
-    for (const [k, v] of Object.entries(payFilter)) if (v) q.set(k, v === true ? '1' : v);
+    for (const [k, v] of Object.entries(payFilter)) if (v && !(k === 'view' && v === 'pending')) q.set(k, v === true ? '1' : v);
     if (refresh) q.set('refresh', '1');
     if (!main.querySelector('.pay')) main.innerHTML = '<p class="muted pad">טוען…</p>';
     const r = await api('GET', `/api/priority/payments?${q}`);
@@ -808,8 +808,22 @@
         <b>${k === 'late' ? ui('alert') : k === '' ? ui('list') : k === 'none' ? '' : ui('calendar')}${esc(label)}</b>${t ? `<span class="pay-b-sum num">${t.count ? `₪${shekel(t.ils)}` : '—'}</span><span class="pay-b-n num">${t.count} מסמכים</span>` : ''}</button>`;
     }).join('');
     const opt = (v, label, cur) => `<option value="${esc(v)}" ${v === cur ? 'selected' : ''}>${esc(label)}</option>`;
+    // 💰 שלב 2: ממתין לתשלום · בחשבונית (יצא מהרשימה של פריוריטי, עוד לא שולם) · שולם (120 הימים האחרונים)
+    const VIEW_LABEL = { pending: 'ממתין לתשלום', invoiced: 'בחשבונית', paid: 'שולם' };
+    const views = Object.entries(VIEW_LABEL).map(([k, label]) => `<button type="button" class="chip pay-v" data-v="${k}" aria-pressed="${r.view === k}">${esc(label)} <span class="num muted">${r.viewCounts?.[k] ?? 0}</span></button>`).join('');
+    const payCell = (i) => {
+      if (i.paidHow === 'guess') return `<span class="pill p-warn" title="תשלום ${esc(i.paymentRef)} באותו סכום לאותו ספק — עוד לא הותאם בפריוריטי">נראה ששולם ${dm(i.paidAt)}</span>`;
+      if (r.view === 'paid') return `<span class="pill p-ok">שולם ${dm(i.paidAt)}</span><div class="muted small ltr-inline">${esc(i.paymentRef)}</div>${i.paidHow === 'amount' ? '<div class="muted small">זוהה לפי סכום</div>' : ''}`;
+      if (r.view === 'invoiced') return `<span class="pill p-brand">בחשבונית</span><div class="muted small ltr-inline">${esc((i.invoices ?? []).join(', '))}</div>`;
+      return '';
+    };
+    // העמודה הראשונה: ממתין — המועד (ו"נראה ששולם"); בחשבונית — החשבונית; שולם — מתי ובמה
+    const firstCol = { pending: 'מועד', invoiced: 'בחשבונית', paid: 'שולם' }[r.view];
+    const first = (i) => (r.view === 'pending'
+      ? `${i.payDay ? dm(i.payDay) : '<span class="pill p-warn">חסר</span>'}${i.bucket === 'late' ? ' <span class="pill p-bad">באיחור</span>' : ''}${i.paidHow === 'guess' ? `<div>${payCell(i)}</div>` : ''}`
+      : payCell(i));
     const rows = r.items.map((i) => `<tr>
-        <td class="num pay-day" data-label="מועד">${i.payDay ? dm(i.payDay) : '<span class="pill p-warn">חסר</span>'}${i.bucket === 'late' ? ' <span class="pill p-bad">באיחור</span>' : ''}</td>
+        <td class="num pay-day" data-label="${firstCol}">${first(i)}</td>
         <td class="pay-type" data-label="סוג"><span class="pill p-brand">${esc(typeLabel(i.type))}</span></td>
         <td class="pay-sup" data-label="ספק">${esc(i.supplier.name || i.supplier.code)}${me.companies.length > 1 || r.scope === 'mine' ? `<div class="muted small">${esc(company(i.company))}</div>` : ''}</td>
         <td data-label="מסמך"><span class="ltr-inline">${esc(i.docno)}</span>${i.booknum ? `<div class="muted small">אסמכתא ${esc(i.booknum)}</div>` : ''}</td>
@@ -828,7 +842,8 @@
       <div class="chain-h pay-head"><div><h1>${{ all: 'תשלומים', team: 'תשלומים — המחלקה שלי' }[r.scope] ?? 'התשלומים שלי'}</h1><p class="muted">${esc(intro)}</p></div>
         <div class="row-actions"><button class="btn pay-refresh" type="button">${ui('refresh')}<span>רענון מפריוריטי</span></button><a class="btn" download href="/api/priority/payments?${new URLSearchParams([...q].filter(([k]) => k !== 'refresh'))}&format=xlsx" title="מה שמוצג עכשיו — גיליון לכל חברה">${ui('download')}<span>ייצוא לאקסל</span></a></div></div>
       ${errs}
-      <div class="pay-buckets" role="group" aria-label="מועד התשלום">${chips}</div>
+      <div class="filters pay-views" role="group" aria-label="סטטוס">${views}</div>
+      ${r.view === 'pending' ? `<div class="pay-buckets" role="group" aria-label="מועד התשלום">${chips}</div>` : `<p class="muted small">${r.view === 'paid' ? 'מה ששולם ב-120 הימים האחרונים. "זוהה לפי סכום" — התשלום עוד לא הותאם לחשבונית בכרטיס הספק בפריוריטי.' : 'מסמכים שהפכו לחשבונית ספק (GI) ועוד לא שולמו.'}</p>`}
       <div class="grid-form pay-f">
         <label>סוג<select data-f="type">${opt('', 'הכל', payFilter.type)}${r.types.map((t) => opt(t.key, t.label, payFilter.type)).join('')}</select></label>
         ${r.facets.companies.length > 1 || payFilter.company ? `<label>חברה<select data-f="company">${opt('', 'כל החברות', payFilter.company)}${r.facets.companies.map((c) => opt(c, company(c), payFilter.company)).join('')}</select></label>` : ''}
@@ -838,11 +853,17 @@
       </div>
       <div class="pay-body">
         <section class="panel"><div class="panel-h"><h2>${r.items.length} מסמכים · ${money(r.totals.all)}</h2><p>כולל מע״מ. עודכן ${fmtAt(r.at)}${r.refreshing ? ' · <span class="pill p-brand">מתעדכן מפריוריטי ברקע…</span>' : ''}.</p></div>
-          ${rows ? `<div class="scroll"><table class="t pay-t"><thead><tr><th scope="col">מועד</th><th scope="col">סוג</th><th scope="col">ספק</th><th scope="col">מסמך</th><th scope="col">תאריך · תנאי</th><th scope="col">סכום</th><th scope="col">פרויקט</th><th scope="col">יוזם</th></tr></thead><tbody>${rows}</tbody></table></div>` : '<p class="muted">אין מסמכים במועד הזה.</p>'}
+          ${rows ? `<div class="scroll"><table class="t pay-t"><thead><tr><th scope="col">${firstCol}</th><th scope="col">סוג</th><th scope="col">ספק</th><th scope="col">מסמך</th><th scope="col">תאריך · תנאי</th><th scope="col">סכום</th><th scope="col">פרויקט</th><th scope="col">יוזם</th></tr></thead><tbody>${rows}</tbody></table></div>` : `<p class="muted">${r.view === 'pending' ? 'אין מסמכים במועד הזה.' : 'אין מסמכים כאן.'}</p>`}
         </section>
       </div></div>`;
 
-    main.querySelector('.pay-buckets').addEventListener('click', (e) => {
+    main.querySelector('.pay-views').addEventListener('click', (e) => {
+      const c = e.target.closest('.pay-v');
+      if (!c) return;
+      payFilter.view = c.dataset.v;
+      payments().then(() => main.querySelector(`.pay-v[data-v="${c.dataset.v}"]`)?.focus());
+    });
+    main.querySelector('.pay-buckets')?.addEventListener('click', (e) => {
       const c = e.target.closest('.chip');
       if (!c) return;
       payFilter.bucket = c.dataset.b;
@@ -913,6 +934,16 @@
       </section>
 
       <section class="panel">
+        <div class="panel-h"><h2>תשלומים — מי עוד מקבל "שולם"</h2><p>כשתשלום יוצא, מקבלים מייל: מי שהעביר לתשלום ומנהל המחלקה שלו. כאן — מי עוד מקבל, לפי המחלקה של מי שהעביר. למשל: המזכירות מקבלת את כל ה"שולם" של מחלקת התכנון.</p></div>
+        <ul class="plain" id="cc-list"></ul>
+        <div class="grid-form">
+          <label for="cc-dept">מחלקה<select id="cc-dept">${(s.departments ?? []).map((d) => `<option value="${d.id}">${esc(d.name)}</option>`).join('')}</select></label>
+          <label for="cc-user">מקבל/ת גם<select id="cc-user">${(s.users ?? []).map((u) => `<option value="${u.id}">${esc(u.name)}${u.department ? ` · ${esc(u.department)}` : ''}</option>`).join('')}</select></label>
+        </div>
+        <div class="row-actions"><button class="btn small" id="cc-add" type="button">${ui('plus')}<span>הוספה</span></button></div>
+      </section>
+
+      <section class="panel">
         <div class="panel-h"><h2>ברירות מחדל לקליטה</h2><p>מה שהמערכת ממלאת כשהמסמך לא אומר. כרגע לקריאה בלבד; יהיו ניתנות לעריכה כשקבלת הסחורה ודרישת הרכש יעברו למסך.</p></div>
         <div class="scroll"><table class="t defs">
           <tr><td>תנאי תשלום</td><td>${esc(pay(s.defaults.payCode))}</td></tr>
@@ -936,6 +967,29 @@
         ${log.items.length ? `<ul class="log">${log.items.map((x) => `<li><span class="num muted">${new Date(x.at).toLocaleString('he-IL')}</span> · ${esc(x.by?.name ?? '—')}: ${x.changes.map(esc).join(' · ')}</li>`).join('')}</ul>` : '<p class="muted">אין שינויים עדיין.</p>'}
       </section>`;
 
+    // 💰 "מי עוד מקבל שולם" — ‎{ [מחלקה]: [משתמשים] }‎
+    const paidCc = Object.fromEntries(Object.entries(s.defaults.paidCc ?? {}).map(([d, ids]) => [d, [...ids].map(Number)]));
+    const deptName = (id) => (s.departments ?? []).find((d) => String(d.id) === String(id))?.name ?? `מחלקה ${id}`;
+    const userName = (id) => (s.users ?? []).find((u) => u.id === Number(id))?.name ?? `משתמש ${id}`;
+    function drawCc() {
+      const items = Object.entries(paidCc).flatMap(([d, ids]) => ids.map((u) => ({ d, u })));
+      $('#cc-list').innerHTML = items.length ? items.map(({ d, u }) => `<li><b>${esc(deptName(d))}</b> ← ${esc(userName(u))} <button type="button" class="btn small" data-cc-del="${d}:${u}" aria-label="להסיר: ${esc(userName(u))} מ${esc(deptName(d))}">הסרה</button></li>`).join('')
+        : '<li class="muted">אין — רק מי שהעביר ומנהל המחלקה שלו.</li>';
+    }
+    drawCc();
+    $('#cc-add').addEventListener('click', () => {
+      const d = $('#cc-dept').value; const u = Number($('#cc-user').value);
+      if (!d || !u) return;
+      paidCc[d] = [...new Set([...(paidCc[d] ?? []), u])]; drawCc();
+    });
+    $('#cc-list').addEventListener('click', (e) => {
+      const b = e.target.closest('[data-cc-del]');
+      if (!b) return;
+      const [d, u] = b.dataset.ccDel.split(':');
+      paidCc[d] = (paidCc[d] ?? []).filter((x) => x !== Number(u));
+      if (!paidCc[d].length) delete paidCc[d];
+      drawCc();
+    });
     const F = { test: 'סביבת בדיקה', write: 'כתיבה', poNotify: 'התראות הזמנות רכש', pdNotify: 'התראה לחותם' };
     const tg = (on, f, i) => `<button type="button" class="tg" role="switch" aria-checked="${Boolean(on)}" data-f="${f}" data-i="${i}" aria-label="${F[f]} — ${esc(companies[i].name || companies[i].code || 'חברה חדשה')}"></button>`;
     function drawCompanies() {
@@ -976,7 +1030,7 @@
         confirmed = true; return;
       }
       const body = { connection: { host: $('#c-host').value, ini: $('#c-ini').value, user: $('#c-user').value }, companies, defaults: { buyerUserId: Number($('#b-user').value) || null,
-        pricelistHandlers: [...main.querySelectorAll('#pl-handlers input:checked')].map((x) => Number(x.value)) } };
+        pricelistHandlers: [...main.querySelectorAll('#pl-handlers input:checked')].map((x) => Number(x.value)), paidCc } };
       if ($('#c-pass').value) body.connection.password = $('#c-pass').value;
       try {
         await api('PUT', '/api/priority/settings', body);

@@ -20,6 +20,8 @@ module.exports = {
   get PriorityChain() { return require('./priority-chain'); },
   get PriorityDesk() { return require('./priority-desk'); },
   get Payments() { return require('./payments'); },
+  get PaymentsPaid() { return require('./payments-paid'); },
+  get PaymentsNotify() { return require('./payments-notify'); },
   get PriorityApprovals() { return require('./priority-approvals'); },
   get PriorityWaiting() { return require('./priority-waiting'); },
   get OpensGuard() { return require('./opens-guard'); },
