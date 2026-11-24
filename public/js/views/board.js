@@ -269,20 +269,20 @@ const BoardView = (() => {
       // ‎canEdit‎ מגיע מהשרת ולא נגזר כאן: ל"יש הרשאת פרויקטים" ול"מותר לערוך
       // את הפרויקט הזה" אין אותה תשובה, ומי שמנחש מציג כפתור שנכשל ב-403
       project?.canEdit
-        ? el('button.btn', { onclick: () => openProjectDialog(project) }, ['✎ עריכת פרויקט'])
+        ? el('button.btn', { onclick: () => openProjectDialog(project) }, [UI.lineIcon('pencil'), 'עריכת פרויקט'])
         : null,
       App.may('export_data')
-        ? el('a.btn', { href: '/api/export/tasks.csv' }, ['⬇ ייצוא CSV'])
+        ? el('a.btn', { href: '/api/export/tasks.csv' }, [UI.lineIcon('download'), 'ייצוא CSV'])
         : null,
       // פרויקט חדש לצד משימה חדשה: פתיחת פרויקט היא פעולה שנעשית מאותו מקום
       // ובאותו רגע — כשמתברר שהמשימה החדשה אינה שייכת לשום פרויקט קיים
       App.may('create_project') && filters.archived !== '1'
-        ? el('button.btn', { onclick: () => openProjectDialog() }, ['＋ פרויקט חדש'])
+        ? el('button.btn', { onclick: () => openProjectDialog() }, [UI.lineIcon('plus'), 'פרויקט חדש'])
         : null,
       App.may('create_task') && filters.archived !== '1'
         ? el('button.btn.btn-primary', {
             onclick: () => openTaskDialog(null, { projectId: filters.projectId, scope: currentScope })
-          }, ['＋ משימה חדשה'])
+          }, [UI.lineIcon('plus'), 'משימה חדשה'])
         : null
     ]);
   }
@@ -456,7 +456,7 @@ const BoardView = (() => {
         'aria-haspopup': 'menu',
         title: chip.implicit ? 'ברירת המחדל של הלוח — לחיצה לבחירת סטטוס אחר' : `שינוי ${chip.field.label}`,
         onclick: (e) => openFilterMenu(e.currentTarget, fields, set, chip.field)
-      }, [chip.text, chip.implicit ? el('span.fchip-caret', { 'aria-hidden': 'true', text: '▾' }) : null]);
+      }, [chip.text, chip.implicit ? el('span.fchip-caret', {}, [UI.lineIcon('chevron-down')]) : null]);
 
       return el(`div.fchip${chip.implicit ? '.is-implicit' : ''}`, { role: 'listitem' }, [
         body,
@@ -486,21 +486,21 @@ const BoardView = (() => {
       dataset: { fk: 'add' },
       onclick: (e) => openFilterMenu(e.currentTarget, fields, set)
     }, [
-      el('span.fa-desk', { text: '＋ סינון' }),
+      el('span.fa-desk', {}, [UI.lineIcon('filter'), 'סינון']),
       // בטלפון השבבים בשורה נגללת ולא תמיד כולם בתצוגה — המונה אומר כמה יש
       el('span.fa-phone', { text: chips.length ? `סינון (${chips.length})` : 'סינון' })
     ]);
 
     const items = [
       el('div.view-switch', { role: 'group', 'aria-label': 'תצוגת הלוח' }, [
-        ['table', '☰ טבלה'], ['kanban', '▦ כרטיסיות'], ['timeline', '▤ ציר זמן']
+        ['table', 'טבלה'], ['kanban', 'כרטיסיות'], ['timeline', 'ציר זמן']
       ].map(([mode, label]) =>
         el(`button${view.mode === mode ? '.active' : ''}`, {
           type: 'button',
           'aria-pressed': String(view.mode === mode),
           // גם מצב התצוגה הוא העדפה — מי שעובד בכרטיסיות לא רוצה לחזור לטבלה בכל כניסה
           onclick: () => { view.mode = mode; App.setPref('boardView', mode); draw(); }
-        }, [label])
+        }, [UI.lineIcon(mode), label])
       )),
       view.mode === 'timeline' ? zoomSwitch() : null,
       searchInput,
@@ -528,7 +528,7 @@ const BoardView = (() => {
           }
         ));
       }
-      items.push(el('button.btn.btn-sm.tb-saved', { onclick: saveCurrentFilter, title: 'שמירת המסננים הנוכחיים' }, ['💾 שמור מסנן']));
+      items.push(el('button.btn.btn-sm.tb-saved', { onclick: saveCurrentFilter, title: 'שמירת המסננים הנוכחיים' }, [UI.lineIcon('save'), 'שמור מסנן']));
     }
 
     return el('div.toolbar.board-toolbar', {}, items);

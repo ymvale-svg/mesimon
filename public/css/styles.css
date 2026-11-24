@@ -4722,3 +4722,22 @@ input.tp-input {
   .my-settings-item { width: auto; white-space: nowrap; padding: 8px 12px; }
   .my-settings-hint { display: none; }
 }
+
+/* ---------- סבב אייקונים (24.11.26): סמלי קו במקום אימוג'י בסרגל, בתפריט ובכלי המסכים הראשיים ---------- */
+.nav-item .ico .li { width: 18px; height: 18px; }
+.nav-prio { width: 16px; height: 19px; display: block; }
+.view-switch button, .seg button, .global-search .gs-ask { display: inline-flex; align-items: center; gap: 6px; }
+.view-switch button .li, .seg button .li, .gs-ask .li { width: 15px; height: 15px; }
+.mic-btn .li { width: 18px; height: 18px; }
+.today-btn .li { color: #d97706; }
+.drawer-btn .li { width: 22px; height: 22px; }
+.alert > .li { width: 18px; height: 18px; margin-top: 1px; }
+h1 > .li, h2 > .li, .today-sec-head b > .li { vertical-align: -3px; color: var(--brand-ink); }
+.fchip-caret .li { width: 12px; height: 12px; vertical-align: -2px; }
+.hab-plus .li { width: 14px; height: 14px; vertical-align: -2px; }
+.fa-desk { display: inline-flex; align-items: center; gap: 5px; }
+.fa-desk .li { width: 14px; height: 14px; }
+.today-clear .e-icon .li { width: 44px; height: 44px; }
+/* דוחות — "עומס לפי עובד": השורה נשברת בטלפון במקום לגלוש החוצה מהכרטיס */
+.wl-row { flex-wrap: wrap; row-gap: 4px; }
+td > .li { vertical-align: -2px; }

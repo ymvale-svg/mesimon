@@ -1418,7 +1418,7 @@ const App = (() => {
         title: 'ניהול התראות — מה קופץ בפינת המסך',
         'aria-label': 'ניהול התראות',
         onclick: () => { onClose(); notifSettingsDialog(); }
-      }, ['⚙']),
+      }, [UI.lineIcon('settings')]),
       // בשורה משלו, ברוחב מלא — לצד הכותרת והפעולות הוא דחק את ⚙ לשורה שבורה
       el('div.np-seg', { role: 'group', 'aria-label': 'אילו התראות להציג' }, [
         segBtn('unread', 'לא נקראו'),
@@ -1961,7 +1961,7 @@ const App = (() => {
       type: 'button',
       title: 'שאלה חופשית — תשובה מהמיילים, מסוכני המחלקות ומהידע הארגוני',
       onclick: () => { hide?.(); AskView.open(); }
-    }, ['✨ שאל את אשל']);
+    }, [UI.lineIcon('sparkles'), 'שאל את אשל']);
 
     const field = el('div.gs-field', {}, [input, icon, kbd, results]);
     const wrap = el(`div.global-search${inline ? '.is-inline' : ''}${askBtn ? '.has-ask' : ''}`, {}, [field, askBtn]);
@@ -2413,7 +2413,7 @@ const App = (() => {
         refreshChrome();
       }
     }, [
-      el('span.ico', { text: pinned ? '⇥' : '⇤' }),
+      el('span.ico', {}, [UI.lineIcon(pinned ? 'panel-unpin' : 'panel-pin')]),
       el('span', { text: pinned ? 'כיווץ התפריט' : 'נעיצת התפריט' })
     ]));
     const add = (name, params, extra = {}) => {
@@ -2436,14 +2436,14 @@ const App = (() => {
       return el(`aside.sidebar#sidebar${sidebarPinned() ? '.pinned' : ''}`, {}, [...items, UI.companyLogo('in-sidebar')]);
     }
 
-    add('today', {}, { icon: el('span.nav-emoji', { text: '☀' }), count: state.todayCount || undefined });
+    add('today', {}, { icon: UI.lineIcon('sun'), count: state.todayCount || undefined });
     add('home');
     // יומן — לכל העובדים: היומן שלי. מזכירות — גם היומנים ששותפו איתן ו"מחכות לקביעה"
-    add('calendar', {}, { icon: el('span.nav-emoji', { text: '📅' }) });
+    add('calendar', {}, { icon: UI.lineIcon('calendar') });
     // 🗂 משימון פריוריטי — מסך נפרד (‎/priority‎), למי שמורשה בו
     if (state.actor?.priority) {
       items.push(el('a.nav-item', { href: '/priority', 'aria-label': 'משימון פריוריטי', title: 'משימון פריוריטי — מסמכי רכש וכספים' }, [
-        el('span.ico', {}, [el('span.nav-emoji', { text: '🗂' })]),
+        el('span.ico', {}, [el('img.nav-prio', { src: '/priority/priority-mark.svg', alt: '' })]),
         el('span', { text: 'משימון פריוריטי' })
       ]));
     } else if (state.actor?.payments) {
@@ -2732,7 +2732,7 @@ const App = (() => {
     return el('header.topbar', {}, [
       // הנראות נקבעת ב-CSS ולא כאן: חישוב רוחב חד-פעמי ב-JS השאיר את הכפתור
       // מוסתר אחרי סיבוב המכשיר, ואז לא הייתה דרך להגיע לניווט
-      el('button.icon-btn.drawer-btn', { onclick: toggleDrawer, 'aria-label': 'תפריט', title: 'תפריט' }, ['☰']),
+      el('button.icon-btn.drawer-btn', { onclick: toggleDrawer, 'aria-label': 'תפריט', title: 'תפריט' }, [UI.lineIcon('menu')]),
       el('div.brand', {}, [UI.logo({ size: 'sm', tagline: true, variant: 'brand' })]),
       /*
        * מרווח משני צדי החיפוש. במסך רחב הוא ממורכז בכל מקרה במיקום מוחלט
@@ -2743,10 +2743,10 @@ const App = (() => {
       globalSearch(),
       el('div.topbar-spacer'),
       !isVendor()
-        ? el(`button.btn.today-btn${state.route.name === 'today' ? '.active' : ''}`, { title: 'מה צריך לעשות היום', onclick: () => navigate('today') }, ['☀ Today', todayBadge()])
+        ? el(`button.btn.today-btn${state.route.name === 'today' ? '.active' : ''}`, { title: 'מה צריך לעשות היום', onclick: () => navigate('today') }, [UI.lineIcon('sun'), 'Today', todayBadge()])
         : null,
       !isVendor() && may('create_task')
-        ? el('button.btn.mic-btn', { title: 'משימה מהקלטה', onclick: () => VoiceView.open() }, ['🎙'])
+        ? el('button.btn.mic-btn', { title: 'משימה מהקלטה', 'aria-label': 'משימה מהקלטה', onclick: () => VoiceView.open() }, [UI.lineIcon('mic')])
         : null,
       !isVendor() && may('create_task')
         ? el('button.btn.btn-primary', { onclick: () => BoardView.openTaskDialog() }, ['＋ משימה חדשה'])
@@ -3049,7 +3049,7 @@ const App = (() => {
     const box = el('div');
     UI.mount(container,
       el('div.page-head', {}, [el('div', {}, [
-        el('h1', { text: '⚙ ההגדרות שלי' }),
+        el('h1', {}, [UI.lineIcon('settings'), ' ההגדרות שלי']),
         el('div.sub', { text: 'ההגדרות האישיות שלך. הגדרות המערכת — אצל מנהל המערכת.' })
       ])]),
       el('div.my-settings', {}, [
@@ -3138,7 +3138,7 @@ const App = (() => {
         onclick: () => { closeDrawer(); navigate(routeName, extra.params ?? {}); }
       }, [
         el('span.ic-wrap', {}, [
-          extra.emoji ? el('span.tab-emoji', { text: extra.emoji }) : UI.icon(iconName),
+          extra.line ? UI.lineIcon(extra.line) : UI.icon(iconName),
           extra.badge ? el('span.tab-dot', { text: String(extra.badge) }) : null
         ]),
         el('span.lbl', { text: label })
@@ -3156,7 +3156,7 @@ const App = (() => {
     }
 
     return el('nav.tabbar', {}, [
-      tab('today', 'my-tasks', 'Today', { emoji: '☀' }),
+      tab('today', 'my-tasks', 'Today', { line: 'sun' }),
       tab('home', 'my-tasks', 'המשימות שלי'),
       tab('board', 'board', 'הלוח'),
       el('button', { onclick: () => toggleNotifPanel(null) }, [
@@ -3184,10 +3184,10 @@ const App = (() => {
     const wake = VoiceWake.enabledInPrefs() && VoiceWake.supported() && may('create_task');
     return el(`div.m-actionbar${wake ? '.has-wake' : ''}`, {}, [
       el(`button.m-action.m-action-today${state.route.name === 'today' ? '.active' : ''}`, { onclick: () => navigate('today') }, [
-        el('span', { text: '☀' }), el('span', { text: 'Today' }), todayBadge()
+        UI.lineIcon('sun'), el('span', { text: 'Today' }), todayBadge()
       ]),
       may('create_task')
-        ? el('button.m-action.m-action-mic', { onclick: () => VoiceView.open() }, [el('span', { text: '🎙' }), el('span', { text: 'הקלטה' })])
+        ? el('button.m-action.m-action-mic', { onclick: () => VoiceView.open() }, [UI.lineIcon('mic'), el('span', { text: 'הקלטה' })])
         : null,
       wake
         ? el(`button.m-action.m-action-wake${VoiceWake.isOn() ? '.on' : ''}`, {
@@ -3215,7 +3215,7 @@ const App = (() => {
         : null,
       // ✨ שאל את אשל — עיגול צף מול ה-＋, בהישג האגודל (במקום כפתור קטן בסרגל העליון)
       phone && !isVendor()
-        ? el('button.fab-ask', { title: 'שאל את אשל', 'aria-label': 'שאל את אשל', onclick: () => AskView.open() }, ['✨'])
+        ? el('button.fab-ask', { title: 'שאל את אשל', 'aria-label': 'שאל את אשל', onclick: () => AskView.open() }, [UI.lineIcon('sparkles')])
         : null
     ]));
     UI.refitLogos(); // הסמל נבנה מחדש בכל רינדור — מיישרים את הכיתוב לרוחב השם

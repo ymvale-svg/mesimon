@@ -635,3 +635,13 @@
   .cal-dock-pill { position: static; align-self: flex-end; box-shadow: none; }
   .cal-dock { top: calc(var(--header-h) + env(safe-area-inset-top, 0px) + 8px); bottom: auto; left: 12px; right: 12px; width: auto; max-height: 65vh; z-index: 60; }
 }
+
+/* סבב אייקונים (24.11.26) — סמלי קו בפס הפעולה, בניווט התחתון ובכפתורים הצפים */
+@media (max-width: 820px) {
+  .m-action > .li { width: 22px; height: 22px; }
+  .m-action-today > .li { color: #b45309; }
+  .tabbar .ic-wrap .li { width: 21px; height: 21px; }
+  .fab-ask .li { width: 22px; height: 22px; }
+  .m-chip { display: inline-flex; align-items: center; gap: 5px; }
+  .m-chip .li { width: 15px; height: 15px; }
+}

@@ -437,7 +437,8 @@ const GridView = (() => {
     const box = el('div.due-box', {
       class: due.tone === 'danger' ? 'is-danger' : due.tone === 'warn' ? 'is-warn' : ''
     }, [
-      el('span', { text: task.dueDate ? UI.formatDate(task.dueDate) : '—' }),
+      // בטלפון — יום וחודש בלבד (השנה תפסה שורה, והעמודה נשברה לשלוש שורות)
+      el('span', { text: task.dueDate ? (slim() ? UI.formatDate(task.dueDate).slice(0, 5) : UI.formatDate(task.dueDate)) : '—' }),
       task.dueDate ? el('small', { text: due.text }) : null
     ]);
 
@@ -683,7 +684,7 @@ const GridView = (() => {
       state.groupBy === 'project' && group.meta.projectId && App.may('create_project')
         ? el('button.btn.btn-sm.btn-ghost', {
             onclick: () => BoardView.openProjectDialog(App.project(group.meta.projectId))
-          }, ['✎ פרויקט'])
+          }, [UI.lineIcon('pencil'), 'פרויקט'])
         : null
     ]);
 
@@ -811,7 +812,7 @@ const GridView = (() => {
           else groups.forEach((g) => state.collapsed.add(g.key));
           ctx.onRedraw();
         }
-      }, [state.collapsed.size ? '⤢ פתיחת הכל' : '⤡ קיפול הכל'])
+      }, [UI.lineIcon(state.collapsed.size ? 'expand' : 'collapse'), state.collapsed.size ? 'פתיחת הכל' : 'קיפול הכל'])
     ]);
 
     if (!ctx.tasks.length) {
