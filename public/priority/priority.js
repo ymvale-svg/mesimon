@@ -83,6 +83,7 @@
 
   const ROLE = { superadmin: 'אדמין על', admin: 'מנהל מערכת', executive: 'הנהלה', manager: 'מנהל מחלקה', employee: 'עובד' };
   let me = null;
+  const workDocs = () => me.docs.filter((d) => d.allowed && !d.report);
 
   // ---------------------------------------------------------------- ניווט
   const ROUTES = { '': home, chain, settings, access, pricelist, payments, approvals };
@@ -97,7 +98,10 @@
 
   function header() {
     const r = routeOf();
-    const tabs = [['/priority', 'בית', '', ui('home')], ['/priority/chain', 'השרשרת', 'chain', ui('chain')], ['/priority/payments', 'תשלומים', 'payments', icon('payments')]];
+    // מי שאין לו אף מסמך לקליטה (רק מה שהעביר לתשלום) — בית ("ממתין לאישורך") ו"התשלומים שלי"
+    const tabs = workDocs().length || me.admin
+      ? [['/priority', 'בית', '', ui('home')], ['/priority/chain', 'השרשרת', 'chain', ui('chain')], ['/priority/payments', 'תשלומים', 'payments', icon('payments')]]
+      : [['/priority', 'בית', '', ui('home')], ['/priority/payments', 'התשלומים שלי', 'payments', icon('payments')]];
     if (me.pricelist !== null && me.pricelist !== undefined) tabs.push(['/priority/pricelist', 'מחירונים', 'pricelist', icon('pricelist')]);
     if (me.admin) tabs.push(['/priority/settings', 'הגדרות', 'settings', ui('settings')], ['/priority/access', 'הרשאות', 'access', ui('shield')], ['/priority/approvals', 'סוגי אישורים', 'approvals', icon('doc')]);
     $('#tabs').innerHTML = tabs.map(([href, label, key, ic]) => `<a href="${href}" data-nav ${r === key ? 'aria-current="page"' : ''}>${ic}<span>${label}</span></a>`).join('');
@@ -844,11 +848,12 @@
   const dmy15 = (d) => (d ? `15.${d.slice(5, 7)}${d.slice(0, 4) !== String(new Date().getFullYear()) ? `.${d.slice(2, 4)}` : ''}` : '');
   const payFilter = { bucket: 'next', type: '', company: '', project: '', supplier: '', mine: false };
 
+  let payPoll = null;
   async function payments(refresh = false) {
     const q = new URLSearchParams();
     for (const [k, v] of Object.entries(payFilter)) if (v) q.set(k, v === true ? '1' : v);
     if (refresh) q.set('refresh', '1');
-    if (!main.querySelector('.pay')) main.innerHTML = '<p class="muted pad">קורא מפריוריטי… (בפעם הראשונה זה לוקח כחצי דקה)</p>';
+    if (!main.querySelector('.pay')) main.innerHTML = '<p class="muted pad">טוען…</p>';
     const r = await api('GET', `/api/priority/payments?${q}`);
     if (payFilter.bucket === 'next') payFilter.bucket = r.bucket;
     const company = (c) => me.companies.find((x) => x.code === c)?.name ?? c;
@@ -871,14 +876,16 @@
         <td class="num" data-label="תאריך · תנאי">${dm(i.date)}${i.terms ? `<div class="muted small">${esc(i.terms)}</div>` : ''}</td>
         <td class="num pay-amt" data-label="סכום">${i.currency === 'ש"ח' ? `₪${shekel(i.amount)}` : `${shekel(i.amount)} ${esc(i.currency)}`}${i.partialInvoiced ? `<div class="muted small" title="${esc(i.invoices.join(', '))}">היתרה שלא בחשבונית, מתוך ₪${shekel(i.total)}</div>` : ''}</td>
         <td data-label="פרויקט">${esc(i.project.name)}</td>
-        <td data-label="יוזם">${esc(i.initiatorName || '')}${i.mine && r.scope === 'all' ? ' <span class="pill p-ok">שלך</span>' : ''}</td>
+        <td data-label="יוזם">${esc(i.initiatorName || '')}${i.mine && r.scope !== 'mine' ? ' <span class="pill p-ok">שלך</span>' : ''}</td>
       </tr>`).join('');
     const errs = r.errors.length ? `<p class="note warn">${ui('alert')} לא נקרא מפריוריטי: ${esc([...new Set(r.errors.map((e) => company(e.company) || e.message))].join(', '))}. הרשימה חסרה את מה שבהן. ${esc(r.errors[0].message)}</p>` : '';
     const intro = r.scope === 'all'
       ? 'כל מה שמחכה לתשלום: קבלות סחורה סופיות (רק מה שעוד לא בחשבונית ספק), חשבונות חלקיים מאושרים וחשבונות עסקה מאושרים. מועד התשלום — ה-15 שאחרי סוף החודש ועוד ימי התנאי.'
-      : r.login || r.items.length ? 'המסמכים שיזמת — מתי צפוי התשלום עליהם.' : 'לא מצאנו את שם המשתמש שלך בפריוריטי, ולכן אין כאן מסמכים. פנו למנהל המערכת.';
+      : r.scope === 'team' ? 'מה שאתה והעובדים במחלקה שלך העברתם לתשלום (קבלות סחורה, חשבונות חלקיים, חשבונות עסקה) — ומתי צפוי התשלום.'
+      : r.items.length ? 'מה שהעברת לתשלום (קבלות סחורה, חשבונות חלקיים, חשבונות עסקה) — ומתי צפוי התשלום.'
+        : 'אין כרגע מסמכים שהעברת לתשלום ומחכים לתשלום. אם יש ולא מופיעים — כנראה שם המשתמש שלך בפריוריטי לא מקושר למשימון; פנו למנהל המערכת.';
     main.innerHTML = `<div class="pay">
-      <div class="chain-h pay-head"><div><h1>תשלומים</h1><p class="muted">${esc(intro)}</p></div>
+      <div class="chain-h pay-head"><div><h1>${{ all: 'תשלומים', team: 'תשלומים — המחלקה שלי' }[r.scope] ?? 'התשלומים שלי'}</h1><p class="muted">${esc(intro)}</p></div>
         <div class="row-actions"><button class="btn pay-refresh" type="button">${ui('refresh')}<span>רענון מפריוריטי</span></button><a class="btn" download href="/api/priority/payments?${new URLSearchParams([...q].filter(([k]) => k !== 'refresh'))}&format=xlsx" title="מה שמוצג עכשיו — גיליון לכל חברה">${ui('download')}<span>ייצוא לאקסל</span></a></div></div>
       ${errs}
       <div class="pay-buckets" role="group" aria-label="מועד התשלום">${chips}</div>
@@ -887,10 +894,10 @@
         ${r.facets.companies.length > 1 || payFilter.company ? `<label>חברה<select data-f="company">${opt('', 'כל החברות', payFilter.company)}${r.facets.companies.map((c) => opt(c, company(c), payFilter.company)).join('')}</select></label>` : ''}
         <label>פרויקט<select data-f="project">${opt('', 'כל הפרויקטים', payFilter.project)}${r.facets.projects.map((p) => opt(p.code, p.name, payFilter.project)).join('')}</select></label>
         <label>ספק<input data-f="supplier" type="search" value="${esc(payFilter.supplier)}" placeholder="שם או מספר ספק"></label>
-        ${r.scope === 'all' ? `<label class="pay-mine"><span><input type="checkbox" data-f="mine" ${payFilter.mine ? 'checked' : ''}> רק מה שיזמתי</span></label>` : ''}
+        ${r.scope !== 'mine' ? `<label class="pay-mine"><span><input type="checkbox" data-f="mine" ${payFilter.mine ? 'checked' : ''}> רק מה שיזמתי</span></label>` : ''}
       </div>
       <div class="pay-body">
-        <section class="panel"><div class="panel-h"><h2>${r.items.length} מסמכים · ${money(r.totals.all)}</h2><p>כולל מע״מ. עודכן ${fmtAt(r.at)}.</p></div>
+        <section class="panel"><div class="panel-h"><h2>${r.items.length} מסמכים · ${money(r.totals.all)}</h2><p>כולל מע״מ. עודכן ${fmtAt(r.at)}${r.refreshing ? ' · <span class="pill p-brand">מתעדכן מפריוריטי ברקע…</span>' : ''}.</p></div>
           ${rows ? `<div class="scroll"><table class="t pay-t"><thead><tr><th scope="col">מועד</th><th scope="col">סוג</th><th scope="col">ספק</th><th scope="col">מסמך</th><th scope="col">תאריך · תנאי</th><th scope="col">סכום</th><th scope="col">פרויקט</th><th scope="col">יוזם</th></tr></thead><tbody>${rows}</tbody></table></div>` : '<p class="muted">אין מסמכים במועד הזה.</p>'}
         </section>
       </div></div>`;
@@ -909,6 +916,9 @@
       clearTimeout(typing);
       typing = setTimeout(() => payments().then(() => { const n = main.querySelector(`[data-f="${el.dataset.f}"]`); if (n && el.type === 'search') { n.focus(); n.setSelectionRange(n.value.length, n.value.length); } }), el.type === 'search' ? 350 : 0);
     });
+    // רענון ברקע רץ עכשיו — מציגים את הנתונים הקודמים, ואחרי כמה שניות מביאים את החדשים (בלי לגעת בפריוריטי מהדפדפן)
+    clearTimeout(payPoll);
+    if (r.refreshing) payPoll = setTimeout(() => { if (routeOf() === 'payments' && main.querySelector('.pay')) payments().catch(() => {}); }, 15000);
     main.querySelector('.pay-refresh').addEventListener('click', async (e) => {
       const b = e.currentTarget;
       b.disabled = true; b.querySelector('span').textContent = 'קורא…'; b.classList.add('spin');
@@ -1108,7 +1118,7 @@
     main.innerHTML = `
       <section class="panel">
         <div class="panel-h"><h2>מי יכול מה בפריוריטי</h2>
-          <p>לכל משתמש: סוגי המסמכים (כן או לא — מי שמורשה למסמך מורשה לכל מה שבו, בבוט ובמסך), והחברות שהוא שייך אליהן. מנהלי מערכת מורשים תמיד לכל דבר. מחלקת כספים והנהלת חשבונות — תמיד רואים את כל התשלומים, בכל החברות.</p></div>
+          <p>לכל משתמש: סוגי המסמכים (כן או לא — מי שמורשה למסמך מורשה לכל מה שבו, בבוט ובמסך), והחברות שהוא שייך אליהן. מנהלי מערכת מורשים תמיד לכל דבר. תשלומים: הנהלה, כספים והנהלת חשבונות — הכל, בכל החברות; מנהל מחלקה — מה שהעובדים שלו יזמו; כל עובד — מה שיזם (בלי לסמן כאן).</p></div>
         <div class="scroll sticky-wrap" tabindex="0" role="region" aria-label="מטריצת ההרשאות"><table class="mtx" id="mtx"></table></div>
         <div class="row-actions"><button class="btn pri" id="save" disabled>שמירה</button><span class="dirty" id="dirty"></span></div>
       </section>`;
@@ -1122,7 +1132,7 @@
           ${m.docs.map((d) => {
             // 💰 מחלקת כספים — "תשלומים" תמיד, בכל החברות
             const fixed = u.admin || (u.finance && d.key === 'payments');
-            return `<td><button type="button" class="ck" role="checkbox" aria-checked="${u.docs.includes(d.key)}" aria-label="${esc(u.name)} — ${esc(d.label)}" data-u="${i}" data-d="${d.key}" ${fixed ? 'disabled' : ''} ${u.finance && d.key === 'payments' ? 'title="מחלקת כספים — תמיד, בכל החברות"' : ''}>✓</button></td>`;
+            return `<td><button type="button" class="ck" role="checkbox" aria-checked="${u.docs.includes(d.key)}" aria-label="${esc(u.name)} — ${esc(d.label)}" data-u="${i}" data-d="${d.key}" ${fixed ? 'disabled' : ''} ${u.finance && d.key === 'payments' ? 'title="הנהלה ומחלקת כספים — תמיד, בכל החברות"' : ''}>✓</button></td>`;
           }).join('')}
           <td><button type="button" class="cobtn" data-pick="${i}" ${u.admin ? 'disabled' : ''} aria-expanded="${picking === i}" aria-label="החברות של ${esc(u.name)}: ${u.companies === null ? 'כל החברות' : u.companies.length ? esc(u.companies.map(coName).join(', ')) : 'אף חברה'}">${u.companies === null ? '<span class="pill p-ok">כל החברות</span>' : u.companies.length ? u.companies.map((c) => `<span class="pill p-brand">${esc(coName(c))}</span>`).join('') : '<span class="pill p-warn">אף חברה</span>'}</button></td></tr>
           ${picking === i ? `<tr class="copick"><td colspan="${m.docs.length + 2}"><div class="pk"><button data-co="*" data-u="${i}" aria-pressed="${u.companies === null}">כל החברות</button>${m.companies.map((c) => `<button data-co="${esc(c.code)}" data-u="${i}" aria-pressed="${Boolean(u.companies?.includes(c.code))}">${esc(c.name)}</button>`).join('')}</div><span class="hint">חברה חדשה בפריוריטי נוספת אוטומטית רק למי שמסומן "כל החברות".</span></td></tr>` : ''}`).join('') + '</tbody>';
