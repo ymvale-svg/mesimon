@@ -294,9 +294,11 @@ const _reset = () => { cache = null; loading = null; };
 function hasMine(userId) {
   const id = Number(userId);
   if (!id) return false;
-  if (cache) return cache.items.some((i) => i.owners?.includes(id));
+  // מנהל מחלקה — גם מה שהעובדים שלו העבירו
+  const ids = [id, ...Access.teamOf(id)];
+  if (cache) return cache.items.some((i) => i.owners?.some((o) => ids.includes(o)));
   return Boolean(D.get(`SELECT 1 FROM payment_items p, json_each(p.data, '$.owners') o
-    WHERE p.org_id = ? AND p.stage = 'open' AND o.value = ? LIMIT 1`, ORG, id));
+    WHERE p.org_id = ? AND p.stage = 'open' AND o.value IN (${ids.map(() => '?').join(',')}) LIMIT 1`, ORG, ...ids));
 }
 
 /** רענון ברקע כל שעה — כדי שהקישור בתפריט יופיע גם למי שעוד לא נכנס למסך */
@@ -365,18 +367,21 @@ function totals(items) {
 }
 
 /**
- * הדוח. מי שמורשה ל"תשלומים" — כל מה שבחברות שלו (מחלקת כספים — כל החברות; ואפשר "רק שלי"); כל עובד אחר — רק מה שהוא יזם.
+ * הדוח. ‎all‎ — הנהלה ומחלקת כספים (כל החברות), או מי שסומן במטריצה (החברות שלו). ‎team‎ — מנהל מחלקה: מה שהוא והעובדים שלו יזמו.
+ * ‎mine‎ — כל עובד אחר: מה שהוא יזם. בכולם אפשר "רק מה שיזמתי".
  * ‎f‎: ‎{ bucket, type, company, project, supplier, mine, refresh }‎.
  */
 async function report(actor, f = {}) {
   const all = Access.can(actor, 'payments');
+  const team = all ? new Set() : Access.teamOf(actor.id);   // מנהל מחלקה — מה שהעובדים שלו יזמו
   const data = await load({ force: Boolean(f.refresh) });
   const mine = await mineOf(actor);
   const run = nextRun(f.today);
   const name = await initiatorNames(data.items);
   const allowedCos = Access.paymentCompanies(actor, realCompanies());   // מחלקת כספים — כל החברות
   let items = data.items.map((it) => ({ ...it, bucket: bucketOf(it.payDay, run), mine: mine.is(it), initiatorName: name(it) }));
-  items = all ? items.filter((it) => allowedCos.includes(it.company)) : items.filter((it) => it.mine);
+  items = all ? items.filter((it) => allowedCos.includes(it.company))
+    : items.filter((it) => it.mine || it.owners?.some((o) => team.has(o)));
 
   const facets = {
     companies: [...new Set(items.map((i) => i.company))],
@@ -392,7 +397,7 @@ async function report(actor, f = {}) {
   const shown = bucket ? filtered.filter((i) => i.bucket === bucket) : filtered;
   shown.sort((a, b) => (a.payDay || '9999').localeCompare(b.payDay || '9999') || a.supplier.name.localeCompare(b.supplier.name, 'he') || a.docno.localeCompare(b.docno));
   return {
-    scope: all ? 'all' : 'mine', login: mine.login, today: f.today ?? todayIL(), run, runs, bucket,
+    scope: all ? 'all' : team.size ? 'team' : 'mine', login: mine.login, today: f.today ?? todayIL(), run, runs, bucket,
     at: new Date(data.at).toISOString(), types: TYPES, facets, byBucket, totals: totals(shown), items: shown,
     errors: all ? data.errors : []
   };

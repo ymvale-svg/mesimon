@@ -303,3 +303,42 @@ test('מי שהעביר לתשלום — רואה את שלו בלי הרשאה,
   assert.equal(Payments.hasMine(yossi.id), false, 'מה שכבר לא מחכה — לא מקפיץ קישור');
   D.setSetting('priority_user_map', {});
 });
+
+test('מי רואה מה: עובד — שלו; מנהל מחלקה — שלו ושל העובדים במחלקות שלו (גם תת-מחלקה); הנהלה — הכל', async (t) => {
+  reset();
+  const now = new Date().toISOString();
+  const dept = (name, parent = null) => {
+    D.run('INSERT OR IGNORE INTO departments (name, created_at) VALUES (?, ?)', name, now);
+    const id = D.get('SELECT id FROM departments WHERE name = ?', name).id;
+    if (parent) D.run('UPDATE departments SET parent_id = ? WHERE id = ?', parent, id);
+    return id;
+  };
+  const eng = dept('ביצוע-בדיקה');
+  const site = dept('אתר-בדיקה', eng);
+  const other = dept('שיווק-בדיקה');
+  const boss = user({ role: 'manager', department_id: eng });
+  D.run('UPDATE departments SET manager_user_id = ? WHERE id = ?', boss.id, eng);
+  const w1 = user({ role: 'employee', department_id: eng });
+  const w2 = user({ role: 'employee', department_id: site });
+  const out = user({ role: 'employee', department_id: other });
+  const exec = user({ role: 'executive', department_id: other });
+  D.setSetting('priority_user_map', { Boss: boss.id, W1: w1.id, W2: w2.id, Out: out.id });
+  const g = (no, who) => gr(no, { USERLOGIN: who, OWNERLOGIN: who });
+  fake(t, { a160226: { receipt: [g('GR90', 'Boss'), g('GR91', 'W1'), g('GR92', 'W2'), g('GR93', 'Out'), g('GR94', 'Nobody')] } });
+
+  const docs = async (u, f = {}) => { const r = await Payments.report(actor(u), { today: TODAY, ...f }); return [r.scope, r.items.map((i) => i.docno).sort()]; };
+  assert.deepEqual(await docs(w1), ['mine', ['GR91']]);
+  assert.deepEqual(await docs(out), ['mine', ['GR93']]);
+  assert.deepEqual(await docs(boss), ['team', ['GR90', 'GR91', 'GR92']], 'מנהל — גם תת-המחלקה');
+  assert.deepEqual(await docs(boss, { mine: true }), ['team', ['GR90']], 'רק מה שיזמתי');
+  assert.deepEqual(await docs(exec), ['all', ['GR90', 'GR91', 'GR92', 'GR93', 'GR94']], 'הנהלה — הכל');
+  assert.equal(Access.of(exec).docs.includes('payments'), true);
+
+  assert.equal(Payments.hasMine(boss.id), true);
+  D.run("UPDATE payment_items SET stage = 'invoiced' WHERE docno = 'GR90'");
+  Payments._reset();
+  assert.equal(Payments.hasMine(boss.id), true, 'מהמסד — עדיין יש של העובדים');
+  D.run("UPDATE payment_items SET stage = 'invoiced' WHERE docno IN ('GR91', 'GR92')");
+  assert.equal(Payments.hasMine(boss.id), false);
+  D.setSetting('priority_user_map', {});
+});

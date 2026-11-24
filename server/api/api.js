@@ -885,7 +885,7 @@ function publicActor(actor) {
     zoomRecordings: actor.type === 'user' && Zoom.isEnabled(),
     // 🗂 משימון פריוריטי (‎/priority‎) — קישור בתפריט למי שמורשה לפחות לסוג מסמך אחד (או מנהל מערכת)
     priority: actor.type === 'user' && (PriorityAccess.isAdmin(actor) || PriorityAccess.of({ id: actor.id, role: actor.role }).docs.length > 0),
-    // 💰 מי שהעביר לתשלום (קבלת סחורה, חשבון חלקי, חשבון עסקה) ומשהו מזה עוד מחכה — "התשלומים שלי", בלי הרשאה
+    // 💰 מי שהעביר לתשלום (קבלת סחורה, חשבון חלקי, חשבון עסקה) — או עובד שלו, למנהל מחלקה — ומשהו מזה עוד מחכה: "התשלומים שלי", בלי הרשאה
     payments: actor.type === 'user' && actor.role !== 'vendor' && Payments.hasMine(actor.id)
   };
 }

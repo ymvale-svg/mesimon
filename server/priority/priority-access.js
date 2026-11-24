@@ -9,7 +9,8 @@
  *   • **מי מנהל:** מנהלי מערכת (‎superadmin‎, ‎admin‎) — וגם תמיד מורשים לכל דבר.
  *
  * נשמר בהגדרה ‎priority_access:<orgId>‎: ‎{ users: { [userId]: { docs: [...], companies: null | [...] } } }‎.
- * 💰 מחלקת כספים / הנהלת חשבונות (גם תת-מחלקה שלה) — תמיד "תשלומים", בכל החברות (הוחלט 24.11.26), בלי קשר למטריצה.
+ * 💰 תשלומים (הוחלט 24.11.26): הנהלה (‎executive‎) ומחלקת כספים / הנהלת חשבונות (גם תת-מחלקה) — הכל, בכל החברות, בלי קשר
+ *   למטריצה. מנהל מחלקה — מה שהעובדים במחלקות שלו יזמו (‎teamOf‎). כל עובד — מה שהוא יזם (‎payments.js‎).
  * משתמש שאין לו שורה — מקבל את מה שהיה מותר לו עד היום בבוט (‎wa_actions‎: קבלת סחורה, דרישת רכש),
  * כך שהמעבר לא משנה דבר עד שמנהל משנה במסך.
  */
@@ -73,14 +74,36 @@ function of(user, org = DEFAULT_ORG) {
     docs: (Array.isArray(row.docs) ? row.docs : []).filter((d) => DOC_KEYS.includes(d)),
     companies: Array.isArray(row.companies) ? [...row.companies] : null
   } : { docs: legacyDocs(u), companies: null };
-  if (isFinance(u)) { out.finance = true; if (!out.docs.includes('payments')) out.docs.push('payments'); }
+  if (seesAllPayments(u)) { out.finance = true; if (!out.docs.includes('payments')) out.docs.push('payments'); }
   return out;
+}
+
+/** הנהלה ומחלקת כספים — רואים את כל התשלומים בכל החברות */
+function seesAllPayments(user) {
+  const id = typeof user === 'object' ? user?.id : user;
+  const u = id ? D.get('SELECT role FROM users WHERE id = ?', id) : null;
+  if (!u) return false;
+  return isAdmin({ type: 'user', role: u.role }) || u.role === 'executive' || isFinance(id);
+}
+
+/**
+ * העובדים של מנהל מחלקה: כל מי שבמחלקות שהוא מנהל (‎departments.manager_user_id‎), כולל תתי-המחלקות. ריק — אינו מנהל מחלקה.
+ */
+function teamOf(userId) {
+  const ids = new Set();
+  for (const d of D.all('SELECT id FROM departments WHERE manager_user_id = ?', Number(userId) || 0)) {
+    const sub = D.departmentSubtree(d.id);
+    if (!sub.length) continue;
+    for (const u of D.all(`SELECT id FROM users WHERE role <> 'vendor' AND department_id IN (${sub.map(() => '?').join(',')})`, ...sub)) ids.add(u.id);
+  }
+  ids.delete(Number(userId));
+  return ids;
 }
 
 /** החברות שבהן רואים תשלומים: מנהל מערכת ומחלקת כספים — כולן; מורשה אחר — החברות שלו */
 function paymentCompanies(actor, codes, org = DEFAULT_ORG) {
   if (!actor || actor.type !== 'user') return [];
-  if (isAdmin(actor) || isFinance(actor.id)) return [...codes];
+  if (seesAllPayments(actor.id)) return [...codes];
   return can(actor, 'payments', null, org) ? filterCompanies(actor, codes, org) : [];
 }
 
@@ -159,4 +182,4 @@ function save(rows, { org = DEFAULT_ORG } = {}) {
   return changes;
 }
 
-module.exports = { DEFAULT_ORG, DOCS, DOC_KEYS, NO_ACCESS, isAdmin, isFinance, paymentCompanies, of, can, any, filterCompanies, filterForUser, matrix, save, _key: key };
+module.exports = { DEFAULT_ORG, DOCS, DOC_KEYS, NO_ACCESS, isAdmin, isFinance, seesAllPayments, teamOf, paymentCompanies, of, can, any, filterCompanies, filterForUser, matrix, save, _key: key };
