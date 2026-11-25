@@ -435,7 +435,11 @@ function totals(items) {
 const VIEWS = ['pending', 'invoiced', 'paid'];
 const PAID_DAYS = 120;
 const json = (s, fb) => { try { return JSON.parse(s); } catch { return fb; } };
-const stageInfo = (r) => ({ invoices: json(r.invoices, []), paidAt: r.paid_at || '', paymentRef: r.payment_ref || '', paidHow: r.paid_how || '' });
+const stageInfo = (r) => {
+  const x = { invoices: json(r.invoices, []), paidAt: r.paid_at || '', paymentRef: r.payment_ref || '', paidHow: r.paid_how || '' };
+  const st = Paid.payStatus(x, todayIL());
+  return { ...x, payKind: st.kind, payLabel: st.label };
+};
 
 /** ממתין לתשלום — ועם "נראה ששולם" (תשלום באותו סכום, ‎guess‎), מהמסד */
 function withGuess(items) {
@@ -497,6 +501,63 @@ async function report(actor, f = {}) {
 }
 
 // ---------------------------------------------------------------------------
+// לפי ספק — 6 חודשים אחורה (הוחלט 25.11.26): כל החשבוניות של הספק, שולמה או פתוחה, מתי ובמה, וכל התשלומים שיצאו לו
+// ---------------------------------------------------------------------------
+
+const HISTORY_MONTHS = 6;
+const forbidden = (msg) => Object.assign(new Error(msg), { status: 403 });
+
+/** מי רואה "לפי ספק": מי שרואה את כל התשלומים (הנהלה, כספים, מורשה) — בחברות שלו */
+function supplierAccess(actor, company) {
+  if (!Access.can(actor, 'payments')) throw forbidden('לפי ספק — למחלקת הכספים ולהנהלה');
+  if (!Access.paymentCompanies(actor, realCompanies()).includes(company)) throw forbidden('החברה אינה פתוחה לך');
+}
+
+async function suppliers(actor, { company, q: text }) {
+  supplierAccess(actor, company);
+  return (await Priority.paySuppliers(company, text)).map((s) => ({ code: s.SUPNAME, name: s.SUPDES ?? '', active: (s.STATDES ?? 'פעיל') === 'פעיל' }));
+}
+
+async function supplierHistory(actor, { company, supplier, today = todayIL(), months = HISTORY_MONTHS }) {
+  supplierAccess(actor, company);
+  if (!supplier) throw Object.assign(new Error('לא נבחר ספק'), { status: 400 });
+  const d = new Date(`${today}T00:00:00Z`);
+  d.setUTCMonth(d.getUTCMonth() - months);
+  const since = d.toISOString().slice(0, 10);
+  const early = new Date(d.getTime() - Paid.EARLY_DAYS * 86400000).toISOString().slice(0, 10);   // תשלום שהקדים חשבונית
+  const [gis, ledger, info] = await Promise.all([
+    Priority.payInvoices(company, since, { supplier }),
+    Priority.payLedger(company, early, { supplier }),
+    Priority.supplierByCode(company, supplier).catch(() => null)
+  ]);
+  const { paid } = Paid.matchLedger(ledger, { today });
+  const closes = new Map();
+  for (const [iv, p] of paid) for (const r of p.ref.split(', ')) closes.set(r, [...(closes.get(r) ?? []), iv]);
+  // חשבונית זיכוי (CV) — לא חשבונית לתשלום
+  const invoices = gis.filter((g) => !/^CV/i.test(g.IVNUM ?? '')).map((g) => {
+    const p = paid.get(g.IVNUM);
+    const st = p ? Paid.payStatus({ paidAt: p.date, paymentRef: p.ref }, today) : { kind: '', label: '' };
+    const payDay = isoDay(g.PAYDATE);
+    return {
+      ivnum: g.IVNUM, date: isoDay(g.IVDATE), amount: num(g.TOTPRICE), payDay, docs: (g.PIVDOC_SUBFORM ?? []).map((x) => x.DOCNO).filter(Boolean),
+      paid: Boolean(p), paidAt: p?.date ?? '', paymentRef: p?.ref ?? '', paidHow: p?.how ?? '', payKind: st.kind, payLabel: st.label,
+      late: !p && payDay && payDay < today
+    };
+  }).sort((a, b) => b.date.localeCompare(a.date));
+  const payments = ledger.filter((l) => l.debit > 0 && ['transfer', 'cheque'].includes(Paid.kindOf(l)) && l.date >= since)
+    .map((l) => {
+      const st = Paid.payStatus({ paidAt: l.date, paymentRef: l.ref }, today);
+      return { ref: l.ref, date: l.date, amount: l.debit, payKind: st.kind, payLabel: st.label, invoices: closes.get(l.ref) ?? [] };
+    }).sort((a, b) => b.date.localeCompare(a.date));
+  const sum = (xs) => round2(xs.reduce((s, x) => s + x.amount, 0));
+  return {
+    company, supplier: { code: supplier, name: info?.SUPDES ?? '' }, since, today,
+    invoices, payments,
+    totals: { open: sum(invoices.filter((i) => !i.paid)), openCount: invoices.filter((i) => !i.paid).length, paid: sum(invoices.filter((i) => i.paid)), payments: sum(payments) }
+  };
+}
+
+// ---------------------------------------------------------------------------
 // ייצוא לאקסל
 // ---------------------------------------------------------------------------
 
@@ -507,8 +568,8 @@ const HEAD = ['מועד התשלום', 'סוג', 'חברה', 'ספק', 'מספר
 const WIDTHS = [13, 13, 22, 28, 14, 12, 11, 12, 13, 7, 26, 16, 34, 30];
 /** עמודת "תשלום": שולם / נראה ששולם / בחשבונית / ממתין */
 function payText(i) {
-  if (i.paidHow === 'guess') return `נראה ששולם ${dmy(i.paidAt)} (${i.paymentRef}) — לפי סכום`;
-  if (i.paidAt || i.paymentRef) return `שולם ${dmy(i.paidAt)}${i.paymentRef ? ` (${i.paymentRef})` : ''}${i.paidHow === 'amount' ? ' — לפי סכום' : ''}`;
+  if (i.paidHow === 'guess') return `נראה ששולם — ${i.payLabel} (לפי סכום)`;
+  if (i.paidAt || i.paymentRef) return `${i.payLabel}${i.paidHow === 'amount' ? ' (לפי סכום)' : ''}`;
   if (i.invoices?.length && !i.partialInvoiced) return `בחשבונית ${i.invoices.join(', ')}`;
   return 'ממתין';
 }
@@ -541,6 +602,6 @@ module.exports = {
   TYPES, STAGES, SOURCES, RESOLVERS,
   payDay, addRuns, nextRun, bucketOf, todayIL,
   fromReceipt, fromPartial, fromDeal, collect, persist, resolve, stageFromStatus, load, report, filterItems, totals, toXlsx,
-  attachOwners, hasMine, start, reload, stage2, VIEWS,
+  attachOwners, hasMine, start, reload, stage2, VIEWS, suppliers, supplierHistory,
   _reset
 };

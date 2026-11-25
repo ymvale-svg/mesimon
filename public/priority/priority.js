@@ -793,7 +793,69 @@
   const payFilter = { view: 'pending', bucket: 'next', type: '', company: '', project: '', supplier: '', mine: false };
 
   let payPoll = null;
+  // לפי ספק — 6 חודשים אחורה (הנהלה, כספים, מורשה)
+  const paySup = { company: '', supplier: '', name: '' };
+  async function supplierView() {
+    const cos = me.companies;
+    if (!paySup.company) paySup.company = cos[0]?.code ?? '';
+    const head = `<div class="chain-h pay-head"><div><h1>תשלומים — לפי ספק</h1><p class="muted">כל החשבוניות של הספק ב-6 החודשים האחרונים — שולמה או פתוחה, מתי ובמה — וכל התשלומים שיצאו לו. נקרא מפריוריטי עכשיו.</p></div>
+        <div class="row-actions"><button class="btn pay-back" type="button">חזרה לתשלומים</button></div></div>
+      <div class="grid-form pay-f">
+        <label>חברה<select id="ps-co">${cos.map((c) => `<option value="${esc(c.code)}" ${c.code === paySup.company ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}</select></label>
+        <label>ספק<input id="ps-q" type="search" value="${esc(paySup.name)}" placeholder="שם או מספר ספק" autocomplete="off"></label>
+      </div>
+      <ul class="plain ps-hits" id="ps-hits"></ul>
+      <div id="ps-body">${paySup.supplier ? '<p class="muted">קורא מפריוריטי…</p>' : '<p class="note">בחרו חברה וספק.</p>'}</div>`;
+    main.innerHTML = `<div class="pay">${head}</div>`;
+    main.querySelector('.pay-back').addEventListener('click', () => { payFilter.view = 'pending'; payments(); });
+    $('#ps-co').addEventListener('change', (e) => { paySup.company = e.target.value; paySup.supplier = ''; paySup.name = ''; supplierView(); });
+    let typing = null;
+    $('#ps-q').addEventListener('input', (e) => {
+      clearTimeout(typing);
+      const t = e.target.value.trim();
+      typing = setTimeout(async () => {
+        if (t.length < 2) { $('#ps-hits').innerHTML = ''; return; }
+        try {
+          const r = await api('GET', `/api/priority/payments/suppliers?${new URLSearchParams({ company: paySup.company, q: t })}`);
+          $('#ps-hits').innerHTML = r.items.map((s) => `<li><button type="button" class="btn small" data-sup="${esc(s.code)}" data-name="${esc(s.name)}">${esc(s.name)} <span class="muted ltr-inline">${esc(s.code)}</span>${s.active ? '' : ' <span class="pill p-mute">לא פעיל</span>'}</button></li>`).join('') || '<li class="muted">לא נמצא ספק</li>';
+        } catch (err) { toast(err.message, true); }
+      }, 350);
+    });
+    $('#ps-hits').addEventListener('click', (e) => {
+      const b = e.target.closest('[data-sup]');
+      if (!b) return;
+      paySup.supplier = b.dataset.sup; paySup.name = b.dataset.name; supplierView();
+    });
+    if (!paySup.supplier) return;
+    let h;
+    try { h = await api('GET', `/api/priority/payments/supplier?${new URLSearchParams({ company: paySup.company, supplier: paySup.supplier })}`); } catch (err) { $('#ps-body').innerHTML = `<p class="note">${esc(err.message)}</p>`; return; }
+    const status = (i) => (i.paid
+      ? `<span class="pill ${i.payKind === 'cheque-issued' ? 'p-warn' : 'p-ok'}">${esc(i.payKind === 'cheque-issued' ? 'המחאה הופקה' : i.payKind === 'cheque-cleared' ? 'המחאה נפרעה' : 'שולם בהעברה')} ${dm(i.paidAt)}</span><div class="muted small ltr-inline">${esc(i.paymentRef)}</div>${i.paidHow === 'amount' ? '<div class="muted small">זוהה לפי סכום</div>' : ''}`
+      : `<span class="pill ${i.late ? 'p-bad' : 'p-mute'}">${i.late ? 'פתוחה — באיחור' : 'פתוחה'}</span>`);
+    const inv = h.invoices.map((i) => `<tr>
+        <td data-label="חשבונית"><span class="ltr-inline">${esc(i.ivnum)}</span>${i.docs.length ? `<div class="muted small ltr-inline">${esc(i.docs.join(', '))}</div>` : ''}</td>
+        <td class="num" data-label="תאריך">${dm(i.date)}</td>
+        <td class="num" data-label="מועד תשלום">${dm(i.payDay)}</td>
+        <td class="num pay-amt" data-label="סכום">₪${shekel(i.amount)}</td>
+        <td data-label="סטטוס">${status(i)}</td></tr>`).join('');
+    const pays = h.payments.map((p) => `<tr>
+        <td data-label="תשלום"><span class="ltr-inline">${esc(p.ref)}</span></td>
+        <td class="num" data-label="תאריך">${dm(p.date)}</td>
+        <td data-label="סוג">${esc(p.payKind === 'cheque-issued' ? 'המחאה — הופקה' : p.payKind === 'cheque-cleared' ? 'המחאה — נפרעה' : 'העברה')}</td>
+        <td class="num pay-amt" data-label="סכום">₪${shekel(p.amount)}</td>
+        <td data-label="סוגר"><span class="ltr-inline muted small">${esc(p.invoices.join(', ') || '—')}</span></td></tr>`).join('');
+    $('#ps-body').innerHTML = `
+      <section class="panel"><div class="panel-h"><h2>${esc(h.supplier.name || h.supplier.code)} · חשבוניות מ-${dm(h.since)}</h2>
+        <p>פתוחות: <b>${h.totals.openCount}</b> · ₪${shekel(h.totals.open)} · שולמו: ₪${shekel(h.totals.paid)}</p></div>
+        ${inv ? `<div class="scroll"><table class="t pay-t"><thead><tr><th scope="col">חשבונית</th><th scope="col">תאריך</th><th scope="col">מועד תשלום</th><th scope="col">סכום</th><th scope="col">סטטוס</th></tr></thead><tbody>${inv}</tbody></table></div>` : '<p class="muted">אין חשבוניות בתקופה.</p>'}
+      </section>
+      <section class="panel"><div class="panel-h"><h2>תשלומים שיצאו לספק</h2><p>העברות והמחאות · סה"כ ₪${shekel(h.totals.payments)}</p></div>
+        ${pays ? `<div class="scroll"><table class="t pay-t"><thead><tr><th scope="col">תשלום</th><th scope="col">תאריך</th><th scope="col">סוג</th><th scope="col">סכום</th><th scope="col">סוגר את</th></tr></thead><tbody>${pays}</tbody></table></div>` : '<p class="muted">אין תשלומים בתקופה.</p>'}
+      </section>`;
+  }
+
   async function payments(refresh = false) {
+    if (payFilter.view === 'supplier') return supplierView();
     const q = new URLSearchParams();
     for (const [k, v] of Object.entries(payFilter)) if (v && !(k === 'view' && v === 'pending')) q.set(k, v === true ? '1' : v);
     if (refresh) q.set('refresh', '1');
@@ -814,10 +876,12 @@
     const opt = (v, label, cur) => `<option value="${esc(v)}" ${v === cur ? 'selected' : ''}>${esc(label)}</option>`;
     // 💰 שלב 2: ממתין לתשלום · בחשבונית (יצא מהרשימה של פריוריטי, עוד לא שולם) · שולם (120 הימים האחרונים)
     const VIEW_LABEL = { pending: 'ממתין לתשלום', invoiced: 'בחשבונית', paid: 'שולם' };
-    const views = Object.entries(VIEW_LABEL).map(([k, label]) => `<button type="button" class="chip pay-v" data-v="${k}" aria-pressed="${r.view === k}">${esc(label)} <span class="num muted">${r.viewCounts?.[k] ?? 0}</span></button>`).join('');
+    if (r.scope === 'all') VIEW_LABEL.supplier = 'לפי ספק';
+    const views = Object.entries(VIEW_LABEL).map(([k, label]) => `<button type="button" class="chip pay-v" data-v="${k}" aria-pressed="${r.view === k}">${esc(label)}${k === 'supplier' ? '' : ` <span class="num muted">${r.viewCounts?.[k] ?? 0}</span>`}</button>`).join('');
     const payCell = (i) => {
-      if (i.paidHow === 'guess') return `<span class="pill p-warn" title="תשלום ${esc(i.paymentRef)} באותו סכום לאותו ספק — עוד לא הותאם בפריוריטי">נראה ששולם ${dm(i.paidAt)}</span>`;
-      if (r.view === 'paid') return `<span class="pill p-ok">שולם ${dm(i.paidAt)}</span><div class="muted small ltr-inline">${esc(i.paymentRef)}</div>${i.paidHow === 'amount' ? '<div class="muted small">זוהה לפי סכום</div>' : ''}`;
+      if (i.paidHow === 'guess') return `<span class="pill p-warn" title="${esc(i.payLabel)} — באותו סכום לאותו ספק, עוד לא הותאם בפריוריטי">נראה ששולם ${dm(i.paidAt)}</span>`;
+      // שולם בהעברה · המחאה הופקה (לפירעון) · המחאה נפרעה
+      if (r.view === 'paid') return `<span class="pill ${i.payKind === 'cheque-issued' ? 'p-warn' : 'p-ok'}">${esc(i.payKind === 'cheque-issued' ? 'המחאה הופקה' : i.payKind === 'cheque-cleared' ? 'המחאה נפרעה' : 'שולם בהעברה')} ${dm(i.paidAt)}</span><div class="muted small ltr-inline">${esc(i.paymentRef)}</div>${i.paidHow === 'amount' ? '<div class="muted small">זוהה לפי סכום</div>' : ''}`;
       if (r.view === 'invoiced') return `<span class="pill p-brand">בחשבונית</span><div class="muted small ltr-inline">${esc((i.invoices ?? []).join(', '))}</div>`;
       return '';
     };
@@ -829,7 +893,7 @@
     const rows = r.items.map((i) => `<tr>
         ${r.view === 'pending' ? `<td class="num pay-day" data-label="מועד">${first(i)}</td>` : `<td class="num pay-day" data-label="${firstCol}">${first(i)}</td>`}
         <td class="pay-type" data-label="סוג"><span class="pill p-brand">${esc(typeLabel(i.type))}</span></td>
-        <td class="pay-sup" data-label="ספק">${esc(i.supplier.name || i.supplier.code)}${me.companies.length > 1 || r.scope === 'mine' ? `<div class="muted small">${esc(company(i.company))}</div>` : ''}</td>
+        <td class="pay-sup" data-label="ספק">${r.scope === 'all' ? `<button type="button" class="linkish" data-sup-co="${esc(i.company)}" data-sup="${esc(i.supplier.code)}" data-name="${esc(i.supplier.name)}" title="כל החשבוניות והתשלומים של הספק">${esc(i.supplier.name || i.supplier.code)}</button>` : esc(i.supplier.name || i.supplier.code)}${me.companies.length > 1 || r.scope === 'mine' ? `<div class="muted small">${esc(company(i.company))}</div>` : ''}</td>
         <td data-label="מסמך"><span class="ltr-inline">${esc(i.docno)}</span>${i.booknum ? `<div class="muted small">אסמכתא ${esc(i.booknum)}</div>` : ''}</td>
         <td class="num" data-label="תאריך · תנאי">${dm(i.date)}${i.terms ? `<div class="muted small">${esc(i.terms)}</div>` : ''}</td>
         <td class="num pay-amt" data-label="סכום">${i.currency === 'ש"ח' ? `₪${shekel(i.amount)}` : `${shekel(i.amount)} ${esc(i.currency)}`}${i.partialInvoiced ? `<div class="muted small" title="${esc(i.invoices.join(', '))}">היתרה שלא בחשבונית, מתוך ₪${shekel(i.total)}</div>` : ''}</td>
@@ -861,6 +925,12 @@
         </section>
       </div></div>`;
 
+    main.querySelector('.pay-t')?.addEventListener('click', (e) => {
+      const b = e.target.closest('[data-sup-co]');
+      if (!b) return;
+      Object.assign(paySup, { company: b.dataset.supCo, supplier: b.dataset.sup, name: b.dataset.name });
+      payFilter.view = 'supplier'; supplierView();
+    });
     main.querySelector('.pay-views').addEventListener('click', (e) => {
       const c = e.target.closest('.pay-v');
       if (!c) return;

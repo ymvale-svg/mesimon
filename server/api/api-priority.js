@@ -127,6 +127,18 @@ function register(router) {
   });
 
   // ---------------------------------------------------------------- 💰 תשלומים ל-15
+  // לפי ספק — 6 חודשים אחורה: חשבוניות (שולמה / פתוחה, מתי ובמה) ותשלומים. הנהלה, כספים ומי שמורשה — בחברות שלו
+  router.get('/api/priority/payments/suppliers', async (req, res, ctx) => {
+    const actor = userOnly(ctx);
+    const sp = parseUrl(req).searchParams;
+    sendJson(res, 200, { items: await docs(() => Payments.suppliers(actor, { company: sp.get('company') || '', q: sp.get('q') || '' })) });
+  });
+  router.get('/api/priority/payments/supplier', async (req, res, ctx) => {
+    const actor = userOnly(ctx);
+    const sp = parseUrl(req).searchParams;
+    sendJson(res, 200, await docs(() => Payments.supplierHistory(actor, { company: sp.get('company') || '', supplier: sp.get('supplier') || '' })));
+  });
+
   router.get('/api/priority/payments', async (req, res, ctx) => {
     const actor = userOnly(ctx);
     const sp = parseUrl(req).searchParams;

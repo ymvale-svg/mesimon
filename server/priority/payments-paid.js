@@ -60,9 +60,23 @@ function debitsFor(debits, amount) {
 }
 
 /**
- * התאמת חשבוניות לתשלומים בכרטיסי הספקים (טהור). ‎lines‎ — מ-‎Priority.payLedger‎; ‎today‎ — תשלום בתאריך עתידי
- * (המחאה דחויה) עוד לא שולם. שורת חובה שלילית מבטלת תשלום באותו סכום (המחאה שבוטלה).
- * מחזיר ‎{ paid: Map(מספר חשבונית → { date, ref, how }), left: [תשלומים שלא נקשרו לשום חשבונית] }‎.
+ * סוג שורת חובה בכרטיס הספק (הוחלט 25.11.26): **תשלום — רק העברה (BT) או המחאה (CH)**, וגם פקודת יומן שהפרטים שלה
+ * אומרים העברה או המחאה ("העב' ל…", "שיק …" — כך נרשמו תשלומים לפני BT / CH; ‎Priority.payLedger‎ נותן להן ‎ref‎
+ * "העברה …" / "המחאה …"). זיכוי (CV) נספר רק יחד עם תשלום (חשבונית פחות זיכוי). שאר הפקודות (הוראת קבע וכו') — לא תשלום.
+ */
+const kindOf = (l) => { const r = String(l.ivnum || l.ref || ''); return /^(BT|העברה)/i.test(r) ? 'transfer' : /^(CH|המחאה)/i.test(r) ? 'cheque' : /^CV/i.test(r) ? 'credit' : 'other'; };
+const isPayment = (l) => ['transfer', 'cheque'].includes(kindOf(l));
+
+/** מה סגר את החשבונית: ‎{ date, ref, how, kind }‎ — ‎kind‎: ‎transfer‎ (יש העברה) / ‎cheque‎ (רק המחאות); ‎date‎ — המאוחר (פירעון) */
+function closedBy(ds, how) {
+  const pays = ds.filter(isPayment);
+  return { date: maxDate(pays.map((d) => d.date)), ref: uniq(ds.map((d) => d.ref)).join(', '), how, kind: pays.some((d) => kindOf(d) === 'transfer') ? 'transfer' : 'cheque' };
+}
+
+/**
+ * התאמת חשבוניות לתשלומים בכרטיסי הספקים (טהור). ‎lines‎ — מ-‎Priority.payLedger‎; ‎today‎ — העברה בתאריך עתידי עוד לא יצאה.
+ * המחאה בתאריך עתידי — **הופקה** (נספרת, ‎date‎ = מועד הפירעון; "נפרעה" כשהמועד עבר). שורת חובה שלילית מבטלת תשלום באותו
+ * סכום (המחאה שבוטלה). מחזיר ‎{ paid: Map(מספר חשבונית → closedBy), left: [תשלומים שלא נקשרו לשום חשבונית] }‎.
  */
 function matchLedger(lines, { today = '9999-12-31' } = {}) {
   const bySup = new Map();
@@ -71,44 +85,60 @@ function matchLedger(lines, { today = '9999-12-31' } = {}) {
   const left = [];
   for (const ls of bySup.values()) {
     const credits = ls.filter((l) => l.credit > 0 && l.ivnum);
-    // תשלומים: בלי מה שבוטל (שורה שלילית באותו סכום), ובלי המחאות דחויות שעוד לא נפרעו
-    const debits = ls.filter((l) => l.debit > 0);
+    // תשלומים וזיכויים: בלי מה שבוטל (שורה שלילית באותו סכום), ובלי העברה עתידית
+    const debits = ls.filter((l) => l.debit > 0 && (isPayment(l) || kindOf(l) === 'credit'));
     for (const neg of ls.filter((l) => l.debit < 0)) {
       const i = debits.findIndex((d) => near(d.debit, -neg.debit));
       if (i >= 0) debits.splice(i, 1);
     }
-    for (let i = debits.length - 1; i >= 0; i--) if (debits[i].date > today) debits.splice(i, 1);
+    for (let i = debits.length - 1; i >= 0; i--) if (debits[i].date > today && kindOf(debits[i]) !== 'cheque') debits.splice(i, 1);
     const used = new Set();
-    // 1. התאמה בכרטיס
+    // 1. התאמה בכרטיס — רק כשיש מולה העברה או המחאה
     for (const c of credits.filter((x) => x.recon > 0)) {
       const ds = debits.filter((d) => d.recon === c.recon);
-      if (!ds.length) continue;
+      if (!ds.some(isPayment)) continue;
       for (const d of ds) used.add(d);
-      paid.set(c.ivnum, { date: maxDate(ds.map((d) => d.date)), ref: uniq(ds.map((d) => d.ref)).join(', '), how: 'recon' });
+      paid.set(c.ivnum, closedBy(ds, 'recon'));
     }
-    // 2. לפי סכום — מה שלא הותאם
-    // מספר התאמה בלי תשלום מותאם (למשל התאמה לשורה אחרת) — כאילו לא הותאם: ממשיך להתאמה לפי סכום
+    // 2. לפי סכום — מה שלא הותאם (מספר התאמה בלי תשלום מולו — כאילו לא הותאם)
     const open = credits.filter((c) => !paid.has(c.ivnum)).sort((a, b) => a.date.localeCompare(b.date));
     const taken = new Set();
-    for (const d of debits.filter((x) => !used.has(x) && !credits.some((c) => c.recon > 0 && c.recon === x.recon)).sort((a, b) => a.date.localeCompare(b.date))) {
+    for (const d of debits.filter((x) => isPayment(x) && !used.has(x) && !credits.some((c) => c.recon > 0 && c.recon === x.recon)).sort((a, b) => a.date.localeCompare(b.date))) {
       const cands = open.filter((c) => !taken.has(c) && c.date <= addDays(d.date, EARLY_DAYS));
       const one = cands.find((c) => near(c.credit, d.debit));
       const hit = one ? [one] : subsetFor(cands, d.debit);
       if (!hit) continue;
       used.add(d);
-      for (const c of hit) { taken.add(c); paid.set(c.ivnum, { date: d.date, ref: d.ref, how: 'amount' }); }
+      for (const c of hit) { taken.add(c); paid.set(c.ivnum, closedBy([d], 'amount')); }
     }
-    // 3. חשבונית שנסגרה בכמה תשלומים יחד (המחאה + זיכוי)
+    // 3. חשבונית שנסגרה בכמה שורות יחד (המחאה + זיכוי) — חייב להיות בהן תשלום
     for (const c of open.filter((x) => !taken.has(x))) {
       const ds = debitsFor(debits.filter((d) => !used.has(d) && c.date <= addDays(d.date, EARLY_DAYS)).sort((a, b) => a.date.localeCompare(b.date)), c.credit);
-      if (!ds) continue;
+      if (!ds || !ds.some(isPayment)) continue;
       for (const d of ds) used.add(d);
       taken.add(c);
-      paid.set(c.ivnum, { date: maxDate(ds.map((d) => d.date)), ref: uniq(ds.map((d) => d.ref)).join(', '), how: 'amount' });
+      paid.set(c.ivnum, closedBy(ds, 'amount'));
     }
-    for (const d of debits) if (!used.has(d)) left.push(d);
+    for (const d of debits) if (!used.has(d) && isPayment(d)) left.push(d);
   }
   return { paid, left };
+}
+
+const dm = (d) => (d ? `${d.slice(8, 10)}.${d.slice(5, 7)}.${d.slice(2, 4)}` : '');
+
+/**
+ * איך שולם — לתצוגה, לאקסל ולמייל (הוחלט 25.11.26): "שולם בהעברה" · "המחאה הופקה, לפירעון …" · "המחאה נפרעה".
+ * ‎{ kind: transfer | cheque-issued | cheque-cleared | '', label }‎. ‎today‎ — ‎YYYY-MM-DD‎.
+ */
+function payStatus({ paidAt = '', paymentRef = '' } = {}, today) {
+  const refs = String(paymentRef).split(/,\s*/).filter(Boolean);
+  if (!refs.length && !paidAt) return { kind: '', label: '' };
+  const transfer = refs.some((r) => /^(BT|העברה)/i.test(r));
+  const cheque = !transfer && refs.some((r) => /^(CH|המחאה)/i.test(r));
+  const pays = refs.filter((r) => /^(BT|CH|העברה|המחאה)/i.test(r)).join(', ') || refs.join(', ');
+  if (cheque && paidAt > today) return { kind: 'cheque-issued', label: `המחאה הופקה ${pays} · לפירעון ${dm(paidAt)}` };
+  if (cheque) return { kind: 'cheque-cleared', label: `המחאה נפרעה ${dm(paidAt)} · ${pays}` };
+  return { kind: 'transfer', label: `שולם בהעברה ${dm(paidAt)}${pays ? ` · ${pays}` : ''}` };
 }
 
 const parse = (s, fb) => { try { return JSON.parse(s); } catch { return fb; } };
@@ -171,4 +201,4 @@ async function resolvePaid(companies, { today, pool }) {
   return { newlyPaid, errors };
 }
 
-module.exports = { matchLedger, subsetFor, resolvePaid, LOOKBACK_DAYS, EARLY_DAYS };
+module.exports = { matchLedger, subsetFor, resolvePaid, kindOf, payStatus, LOOKBACK_DAYS, EARLY_DAYS };

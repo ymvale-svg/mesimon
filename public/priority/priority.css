@@ -471,3 +471,7 @@ table.defs td.ltr { text-align: right; direction: ltr; unicode-bidi: isolate; }
 }
 .appr .chip-alt { margin-inline-start: auto; border-style: dashed; }
 .appr-none { padding: 14px 18px; }
+
+/* 💰 לפי ספק */
+.linkish { background: none; border: 0; padding: 0; color: var(--brand-ink); text-decoration: underline; text-underline-offset: 3px; font: inherit; text-align: start; cursor: pointer; }
+.ps-hits { display: flex; flex-wrap: wrap; gap: 6px; flex-direction: row; }
