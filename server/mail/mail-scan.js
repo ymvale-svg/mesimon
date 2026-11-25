@@ -739,6 +739,10 @@ async function liveRun() {
  * אם מגיעה אחר כך תשובה בשרשור — זו הודעה חדשה, שלא נקראה, והסריקה הרגילה
  * בוחנת אותה כמו כל מייל: רק אם יש בה משימה היא חוזרת לממתינות.
  *
+ * מייל שהעובד בחר ביד ("📧 משימה ממייל שאני בוחר/ת", ‎mail-pick.js‎, ‎data.picked‎) — לא נבדק: הוא
+ * כמעט תמיד כבר נקרא, והעובד בחר אותו במפורש כדי ליצור ממנו משימה. אחרת ההצעה ירדה באמצע העריכה
+ * ו"יצירת המשימה" נכשלה ב"ההצעה כבר טופלה" (דווח 25.11.26).
+ *
  * כל הצעה נבדקת לכל היותר פעם ב-5 דקות, ועד 40 הצעות בסבב.
  */
 const REPLY_CHECK_MS = 5 * 60000;
@@ -750,6 +754,7 @@ async function dropAnswered() {
       WHERE s.status = 'pending' AND s.kind IN ('task', 'duplicate') AND s.gmail_id <> ''
         AND COALESCE(json_extract(s.data, '$.source'), 'email') = 'email'
         AND s.header_id NOT LIKE 'doc:%' AND json_extract(s.data, '$.expiry') IS NULL
+        AND json_extract(s.data, '$.picked') IS NULL
       ORDER BY s.id DESC LIMIT 200`
   ).filter((s) => Date.now() - (replyChecked.get(s.id) ?? 0) > REPLY_CHECK_MS).slice(0, 40);
   for (const s of rows) {
