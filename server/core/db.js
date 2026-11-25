@@ -862,7 +862,8 @@ CREATE INDEX IF NOT EXISTS idx_priority_docs_user ON priority_docs(org_id, user_
  * ‎ref‎ — המפתח הקבוע: ‎חברה:סוג:מספר‎. ‎type‎: receipt · partial · deal.
  * ‎stage‎: open (ממתין לתשלום) · gone (יצא מהרשימה, עוד לא ידוע לאן) · invoiced (עבר לחשבונית ספק) · cancelled · paid (שלב 2).
  * ‎pay_day‎ — ה-15 שבו התשלום יוצא; ‎first_pay_day‎ — המועד בפעם הראשונה שנראה (לראות מה זז).
- * ‎data‎ — השורה האחרונה שנקראה (JSON); ‎invoices‎ — חשבוניות שכבר כוללות חלק מהמסמך (JSON).
+ * ‎data‎ — השורה האחרונה שנקראה (JSON); ‎invoices‎ — חשבוניות (GI) שכוללות את המסמך או חלק ממנו (JSON).
+ * ‎paid_at‎ / ‎payment_ref‎ — תאריך ההעברה ומספרה (BT); ‎paid_how‎ — ‎amount‎ (לפי סכום). ‎notified‎ — מה כבר נשלח (JSON).
  */
 CREATE TABLE IF NOT EXISTS payment_items (
   ref           TEXT    PRIMARY KEY,
@@ -880,7 +881,9 @@ CREATE TABLE IF NOT EXISTS payment_items (
   last_seen     TEXT    NOT NULL,
   stage_at      TEXT    NOT NULL,
   paid_at       TEXT    NOT NULL DEFAULT '',
-  payment_ref   TEXT    NOT NULL DEFAULT ''
+  payment_ref   TEXT    NOT NULL DEFAULT '',
+  paid_how      TEXT    NOT NULL DEFAULT '',
+  notified      TEXT    NOT NULL DEFAULT '{}'
 );
 CREATE INDEX IF NOT EXISTS idx_payment_items_stage ON payment_items(org_id, stage, pay_day);
 
@@ -2326,6 +2329,9 @@ function migrate() {
   relaxUserRoleConstraint();
   relaxAiMessagesChannel();
 
+  // 💰 תשלומים, שלב 2 (24.11.26): איך זוהה "שולם" (‎amount‎ — לפי סכום), ומה כבר נשלח (‎{ paid: true, unpaid: '2026-12-15' }‎)
+  addColumn('payment_items', 'paid_how', "TEXT NOT NULL DEFAULT ''");
+  addColumn('payment_items', 'notified', "TEXT NOT NULL DEFAULT '{}'");
   // 💬 מק"טים לבנייה — אסימון לדף התשובה של הרכש (‎priority/pd-parts.js‎)
   addColumn('pd_part_requests', 'token', 'TEXT');
   // 🏷️ הוספה למחירון — למי ההצעה כבר יצאה (מזהי משתמשים), כדי לשלוח למנהלת הרכש מה שיצא לאחר (באג 25.11.26)

@@ -20,6 +20,8 @@ const Priority = require('../integrations').Priority;
 const Settings = require('./priority-settings');
 const Access = require('./priority-access');
 const Approvals = require('./priority-approvals');
+const Paid = require('./payments-paid');
+const Notify = require('./payments-notify');
 
 const ORG = 1;
 const TTL_MS = 10 * 60 * 1000;
@@ -268,6 +270,31 @@ async function attachOwners(items) {
   }
 }
 
+/**
+ * שלב 2 — "שולם" (‎payments-paid.js‎): פעם בשעה (כרטיסי הספקים — קריאה כבדה יותר), ואחריו ההודעות (‎payments-notify.js‎):
+ * "שולם" — למי שיזם, למנהל המחלקה ולמי שבהגדרה; "לא שולם ב-15" — רק למי שיזם. תקלה כאן לא עוצרת את הרשימה.
+ */
+const PAID_EVERY_MS = 60 * 60 * 1000;
+let paidRanAt = 0;
+let stage2Running = null;
+function stage2(opts) {
+  if (!stage2Running) stage2Running = stage2Now(opts).finally(() => { stage2Running = null; });
+  return stage2Running;
+}
+async function stage2Now({ force = false } = {}) {
+  try {
+    if (force || Date.now() - paidRanAt >= PAID_EVERY_MS) {
+      paidRanAt = Date.now();
+      const r = await Paid.resolvePaid(realCompanies(), { today: todayIL(), pool });
+      if (r.errors.length) console.error('[משימון] תשלומים — "שולם" לא נקרא:', r.errors.map((e) => `${e.company}: ${e.message}`).join('; '));
+      if (r.newlyPaid.length) await Notify.paid(r.newlyPaid);
+    }
+    await Notify.unpaid({ today: todayIL() });
+  } catch (err) {
+    console.error('[משימון] תשלומים — שלב 2 נכשל:', err.message);
+  }
+}
+
 async function refreshNow() {
   if (!Priority.isEnabled()) return { at: Date.now(), items: [], errors: [{ company: '', type: '', message: 'החיבור לפריוריטי אינו מוגדר' }] };
   const { items, errors, read } = await collect(realCompanies());
@@ -300,7 +327,8 @@ function fromDb() {
 /** קריאה מפריוריטי — אחת בכל פעם; מי שמבקש באמצע מקבל את אותה קריאה */
 function reload() {
   if (!loading) {
-    loading = refreshNow().then((r) => { cache = r; return r; }).finally(() => { loading = null; });
+    // הרשימה מוצגת מיד; "שולם" (כרטיסי הספקים — כבד יותר) רץ אחריה, ברקע
+    loading = refreshNow().then((r) => { cache = r; void stage2(); return r; }).finally(() => { loading = null; });
     loading.catch((err) => console.error('[משימון] תשלומים — רענון:', err.message));
   }
   return loading;
@@ -403,6 +431,27 @@ function totals(items) {
   };
 }
 
+/** התצוגות: ממתין לתשלום (הרשימה מפריוריטי) · בחשבונית (יצא מהרשימה, עוד לא שולם) · שולם (120 הימים האחרונים) */
+const VIEWS = ['pending', 'invoiced', 'paid'];
+const PAID_DAYS = 120;
+const json = (s, fb) => { try { return JSON.parse(s); } catch { return fb; } };
+const stageInfo = (r) => ({ invoices: json(r.invoices, []), paidAt: r.paid_at || '', paymentRef: r.payment_ref || '', paidHow: r.paid_how || '' });
+
+/** ממתין לתשלום — ועם "נראה ששולם" (תשלום באותו סכום, ‎guess‎), מהמסד */
+function withGuess(items) {
+  const g = new Map(D.all("SELECT ref, paid_at, payment_ref, paid_how, invoices FROM payment_items WHERE org_id = ? AND stage = 'open' AND paid_how = 'guess'", ORG).map((r) => [r.ref, r]));
+  return items.map((it) => (g.has(it.ref) ? { ...it, ...stageInfo(g.get(it.ref)), invoices: it.invoices } : it));
+}
+
+/** בחשבונית / שולם — מהמסד (מה שכבר יצא מהרשימה של פריוריטי) */
+function fromStage(view, today) {
+  const since = new Date(Date.parse(`${today}T00:00:00Z`) - PAID_DAYS * 86400000).toISOString().slice(0, 10);
+  const rows = view === 'paid'
+    ? D.all("SELECT * FROM payment_items WHERE org_id = ? AND stage = 'paid' AND (paid_at = '' OR paid_at >= ?)", ORG, since)
+    : D.all("SELECT * FROM payment_items WHERE org_id = ? AND stage = 'invoiced'", ORG);
+  return rows.map((r) => { const d = json(r.data, null); return d && d.ref ? { ...d, ...stageInfo(r) } : null; }).filter(Boolean);
+}
+
 /**
  * הדוח. ‎all‎ — הנהלה ומחלקת כספים (כל החברות), או מי שסומן במטריצה (החברות שלו). ‎team‎ — מנהל מחלקה: מה שהוא והעובדים שלו יזמו.
  * ‎mine‎ — כל עובד אחר: מה שהוא יזם. בכולם אפשר "רק מה שיזמתי".
@@ -415,9 +464,16 @@ async function report(actor, f = {}) {
   const mine = mineOf(actor);
   const run = nextRun(f.today);
   const allowedCos = Access.paymentCompanies(actor, realCompanies());   // מחלקת כספים — כל החברות
-  let items = data.items.map((it) => ({ ...it, bucket: bucketOf(it.payDay, run), mine: mine.is(it), initiatorName: it.initiatorName || it.initiator }));
-  items = all ? items.filter((it) => allowedCos.includes(it.company))
-    : items.filter((it) => it.mine || it.owners?.some((o) => team.has(o)));
+  const view = VIEWS.includes(f.view) ? f.view : 'pending';
+  const base = (v) => (v === 'pending' ? withGuess(data.items) : fromStage(v, f.today ?? todayIL()));
+  const visible = (list) => {
+    const xs = list.map((it) => ({ ...it, bucket: bucketOf(it.payDay, run), mine: mine.is(it), initiatorName: it.initiatorName || it.initiator }));
+    return all ? xs.filter((it) => allowedCos.includes(it.company)) : xs.filter((it) => it.mine || it.owners?.some((o) => team.has(o)));
+  };
+  // כמה בכל תצוגה — לכפתורים "ממתין לתשלום / בחשבונית / שולם"
+  const byView = Object.fromEntries(VIEWS.map((v) => [v, visible(base(v))]));
+  const viewCounts = Object.fromEntries(VIEWS.map((v) => [v, filterItems(byView[v], f).length]));
+  let items = byView[view];
 
   const facets = {
     companies: [...new Set(items.map((i) => i.company))],
@@ -425,15 +481,16 @@ async function report(actor, f = {}) {
   };
   const filtered = filterItems(items, f);
   // המועדים: באיחור, כל חודש שיש בו תשלום (ולפחות שלושת הקרובים), חסר תנאי תשלום
-  const runs = [...new Set([0, 1, 2].map((n) => addRuns(run, n)).concat(filtered.map((i) => i.bucket).filter((b) => /^\d{4}-/.test(b))))].sort();
-  const keys = ['late', ...runs, 'none'];
+  const runs = view !== 'pending' ? [] : [...new Set([0, 1, 2].map((n) => addRuns(run, n)).concat(filtered.map((i) => i.bucket).filter((b) => /^\d{4}-/.test(b))))].sort();
+  const keys = view !== 'pending' ? [] : ['late', ...runs, 'none'];
   const byBucket = Object.fromEntries(keys.map((b) => [b, totals(filtered.filter((i) => i.bucket === b)).all]));
   // ‎next‎ — ה-15 הקרוב (ברירת המחדל של המסך)
-  const bucket = f.bucket === 'next' ? run : f.bucket || '';
+  const bucket = view !== 'pending' ? '' : f.bucket === 'next' ? run : f.bucket || '';
   const shown = bucket ? filtered.filter((i) => i.bucket === bucket) : filtered;
-  shown.sort((a, b) => (a.payDay || '9999').localeCompare(b.payDay || '9999') || a.supplier.name.localeCompare(b.supplier.name, 'he') || a.docno.localeCompare(b.docno));
+  if (view === 'paid') shown.sort((a, b) => (b.paidAt || '').localeCompare(a.paidAt || '') || a.docno.localeCompare(b.docno));
+  else shown.sort((a, b) => (a.payDay || '9999').localeCompare(b.payDay || '9999') || a.supplier.name.localeCompare(b.supplier.name, 'he') || a.docno.localeCompare(b.docno));
   return {
-    scope: all ? 'all' : team.size ? 'team' : 'mine', today: f.today ?? todayIL(), run, runs, bucket,
+    scope: all ? 'all' : team.size ? 'team' : 'mine', view, viewCounts, today: f.today ?? todayIL(), run, runs, bucket,
     at: new Date(data.at).toISOString(), refreshing: refreshing(), types: TYPES, facets, byBucket, totals: totals(shown), items: shown,
     errors: all ? data.errors : []
   };
@@ -446,8 +503,15 @@ async function report(actor, f = {}) {
 const dmy = (d) => (d ? `${d.slice(8, 10)}.${d.slice(5, 7)}.${d.slice(0, 4)}` : '');
 const typeLabel = (k) => TYPES.find((t) => t.key === k)?.label ?? k;
 
-const HEAD = ['מועד התשלום', 'סוג', 'חברה', 'ספק', 'מספר', 'אסמכתא', 'תאריך', 'תנאי תשלום', 'סכום', 'מטבע', 'פרויקט', 'יוזם', 'הערה'];
-const WIDTHS = [13, 13, 22, 28, 14, 12, 11, 12, 13, 7, 26, 16, 34];
+const HEAD = ['מועד התשלום', 'סוג', 'חברה', 'ספק', 'מספר', 'אסמכתא', 'תאריך', 'תנאי תשלום', 'סכום', 'מטבע', 'פרויקט', 'יוזם', 'הערה', 'תשלום'];
+const WIDTHS = [13, 13, 22, 28, 14, 12, 11, 12, 13, 7, 26, 16, 34, 30];
+/** עמודת "תשלום": שולם / נראה ששולם / בחשבונית / ממתין */
+function payText(i) {
+  if (i.paidHow === 'guess') return `נראה ששולם ${dmy(i.paidAt)} (${i.paymentRef}) — לפי סכום`;
+  if (i.paidAt || i.paymentRef) return `שולם ${dmy(i.paidAt)}${i.paymentRef ? ` (${i.paymentRef})` : ''}${i.paidHow === 'amount' ? ' — לפי סכום' : ''}`;
+  if (i.invoices?.length && !i.partialInvoiced) return `בחשבונית ${i.invoices.join(', ')}`;
+  return 'ממתין';
+}
 
 /**
  * אקסל: גיליון "הכל", ועוד גיליון לכל חברה (הוחלט 24.11.26 — "לפי חברה"). בסוף כל גיליון — סה"כ, ובגיליון "הכל" גם סה"כ לכל חברה.
@@ -456,7 +520,7 @@ function toXlsx(r) {
   const company = (c) => Settings.companies().find((x) => x.code === c)?.name ?? c;
   const row = (i) => [dmy(i.payDay) || 'חסר תנאי תשלום', typeLabel(i.type), company(i.company), i.supplier.name || i.supplier.code, i.docno, i.booknum,
     dmy(i.date), i.terms, i.amount.toFixed(2), i.currency, i.project.name, i.initiatorName,
-    i.partialInvoiced ? `רק מה שעוד לא בחשבונית (${i.invoices.join(', ')})` : i.contract ? `חוזה ${i.contract}` : ''];
+    i.partialInvoiced ? `רק מה שעוד לא בחשבונית (${i.invoices.join(', ')})` : i.contract ? `חוזה ${i.contract}` : '', payText(i)];
   const money = (t) => [t.ils.toFixed(2), ILS, Object.entries(t.other).map(([c, v]) => `+ ${v.toFixed(2)} ${c}`).join(' ')];
   const sheet = (name, items, extra = []) => {
     const t = totals(items);
@@ -477,6 +541,6 @@ module.exports = {
   TYPES, STAGES, SOURCES, RESOLVERS,
   payDay, addRuns, nextRun, bucketOf, todayIL,
   fromReceipt, fromPartial, fromDeal, collect, persist, resolve, stageFromStatus, load, report, filterItems, totals, toXlsx,
-  attachOwners, hasMine, start, reload,
+  attachOwners, hasMine, start, reload, stage2, VIEWS,
   _reset
 };

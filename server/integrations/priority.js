@@ -1234,6 +1234,32 @@ const payDeals = async (company) => rows(await call(company, 'GET',
   `DINVOICES?$filter=${enc(`STATDES eq '${PAY_STATUS.deal}'`)}`
   + `&$select=IVNUM,IVDATE,SUPNAME,SUPDES,BOOKNUM,PROJDOCNO,PROJDES,TOTPRICE,CODE,PAYDATE,OWNERLOGIN&$top=${PAY_TOP}`)).map(strip);
 
+/*
+ * שלב 2 — "שולם" (‎payments-paid.js‎; "אפיון — מעקב אישורים ותשלומים.md" סעיף 5, נבדק 24.11.26):
+ *   מסמך ← GI (‎PINVOICES‎ — חשבונית ספק מרכזת; ‎PIVDOC_SUBFORM‎ — המסמכים שבה: GR, PC) ← תשלום.
+ *   התשלום — שורת חובה בכרטיס הספק (‎ACCOUNTS_PAYABLE‎ / ‎ACCFNCITEMS_SUBFORM‎): העברה (‎העב‎, BT…), פקודה (‎פ‎) ועוד.
+ *   חשבונית ותשלום שהותאמו בכרטיס — אותו ‎FRECONNUM‎ (חיובי). קריאה אחת לחברה מחזירה את כל הכרטיסים.
+ */
+const payInvoices = async (company, since) => rows(await call(company, 'GET',
+  `PINVOICES?$filter=${enc(`STATDES eq 'סופית' and IVDATE ge ${since}T00:00:00Z`)}`
+  + `&$select=IVNUM,IVDATE,SUPNAME,TOTPRICE,PAYDATE&$expand=PIVDOC_SUBFORM($select=DOCNO)&$top=${PAY_TOP}`)).map(strip);
+
+/** שורות כרטיסי הספקים מ-‎since‎: ‎[{ supplier, ivnum, ref, pattern, debit, credit, date, recon }]‎ */
+async function payLedger(company, since) {
+  const accs = rows(await call(company, 'GET',
+    `ACCOUNTS_PAYABLE?$select=ACCNAME&$expand=ACCFNCITEMS_SUBFORM($select=IVNUM,FNCIREF1,FNCNUM,FNCPATNAME,DEBIT,CREDIT,FNCDATE,CURDATE,FRECONNUM;`
+    + `$filter=CURDATE ge ${since}T00:00:00Z)&$top=${PAY_TOP}`));
+  const out = [];
+  for (const a of accs) {
+    for (const l of a.ACCFNCITEMS_SUBFORM ?? []) {
+      const iv = [l.IVNUM, l.FNCIREF1].find((x) => x && x !== '0') ?? '';
+      out.push({ supplier: a.ACCNAME, ivnum: iv, ref: iv || String(l.FNCNUM ?? ''), pattern: l.FNCPATNAME ?? '',
+        debit: Number(l.DEBIT) || 0, credit: Number(l.CREDIT) || 0, date: String(l.FNCDATE ?? l.CURDATE ?? '').slice(0, 10), recon: Number(l.FRECONNUM) || 0 });
+    }
+  }
+  return out;
+}
+
 /**
  * איפה עומד מסמך שיצא מהרשימה — לשלב של החוב (עבר לחשבונית, בוטל, שולם). ‎null‎ — לא נמצא.
  * ‎{ status, invoiced }‎: ‎invoiced‎ — כולו בחשבונית (‎IVALL = Y‎).
@@ -1347,7 +1373,7 @@ module.exports = {
   finalOrders, orderForNotice, demandInitiator, demandForNotice, projectManager, priorityUser,
   readDialog, createReceipt, addOrderLine, addFreeLine, setLineQty, setLineDes, setHeader, attach, deleteAttachment, setDialog, finalizeReceipt, cancelReceipt, receiptStatus, deleteLines,
   PD_TYPES, demandCodes, recentDemandProjects, createDemand, addDemandLine, setDemand, submitDemand, isNoApproversError, readDemand, waitingDemands, nextSigner, cancelDemand, setDemandDialog, appendDemandDialog, setDemandLine, deleteDemandLine, reopenDemand, REOPEN_STATUS, purchaseOrderOwners, attachDemand, priorityUsers, budgetPairs, isCodingError,
-  PAY_STATUS, payReceipts, payPartials, payDeals, payDocStatus,
+  PAY_STATUS, payReceipts, payPartials, payDeals, payDocStatus, payInvoices, payLedger,
   supplierPriceLists, addPriceListItem, deletePriceListItem, supplierParts, addSupplierPart, deleteSupplierPart,
   parseApprovalScreens, approvalScreens, isBlockedScreen, waitingDocs, waitingDoc, docLink, tenantOf,
   _call: call
