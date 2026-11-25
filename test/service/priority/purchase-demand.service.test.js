@@ -1296,3 +1296,42 @@ test('"התכוונת ל…": "סיים", "תסיים הכל", "רכישת רכ�
   assert.match(r.text, /בטון ב-30 מיוחד/);
   assert.doesNotMatch(r.text, /תבטל|תבדוק/);
 });
+
+// רעיון מסקירה 24.11 (נבנה 24.11): עובד מנה פריטים בשיחה רגילה ("3 סנני מים", "צינור 6 מ"מ 10 מטרים"), הבוט ענה
+// "לפתוח דרישת רכש? כתוב 'דרישת רכש'" — ו"דרישת רכש" נפתחה ריקה. עכשיו: מה שנכתב בשעה האחרונה, שהבוט הציע עליו
+// דרישת רכש (ואחרי הדרישה הקודמת), נכנס לדרישה כשהיא נפתחת, והעובד רואה מה נכנס.
+test('פריטים שנמנו בשיחה רגילה לפני "דרישת רכש" — נכנסים לדרישה כשהיא נפתחת', async (t) => {
+  H.companies(t, 'test11');
+  const u = H.worker();
+  priority(t);
+  const seen = [];
+  H.claude(t, {
+    edit: (input) => { seen.push(JSON.stringify(input)); return { action: 'add', adds: [{ description: 'שק מלט', qty: 10, unit: 'שק', note: '' }], updates: [], removes: [], question: '' }; },
+    match: (input) => ({ results: input.items.map((it) => ({ line: it.line, kind: 'exact', codes: [it.candidates[0]?.code ?? ''], chapter: '20', topic: '20-10', why: '' })) })
+  });
+  const { say } = H.chat(t, u);
+  // דרישה קודמת שבוטלה — מקבעת פרויקט / מחסן / סוג, ומה שנכתב לפניה לא נלקח
+  await toItems(say);
+  await say(BTN.cancel);
+  const { D: Db } = require('../../helpers/db');
+  const row = (text, reply) => Db.run("INSERT INTO wa_log (at, channel, user_id, text, action, status, reply) VALUES (?, 'private', ?, ?, 'other', 'unclear', ?)",
+    new Date().toISOString(), u.id, text, reply);
+  row('10 שקי מלט', 'קיבלתי 👍 לפתוח דרישת רכש? כתוב "דרישת רכש".');
+  row('מה השעה?', 'עכשיו 10:00');
+  let r = await say('דרישת רכש');
+  assert.match(r.text, /לאיזה פרויקט/, 'קודם הפרויקט');
+  // סוג הדרישה כבר זכור — אחרי הפרויקט ישר לפריטים, ומה שנכתב קודם נכנס
+  r = await say('אלעד 49 צפון');
+  assert.match(r.text, /הכנסתי לדרישה את מה שכתבת קודם/);
+  assert.match(r.text, /שק מלט — 10 שק/);
+  assert.equal(seen.length, 1);
+  assert.match(seen[0], /10 שקי מלט/);
+  assert.doesNotMatch(seen[0], /מה השעה/);
+
+  // אחרי שנכנסו — "דרישת רכש" חדשה לא מכניסה אותם שוב
+  await say(BTN.cancel);
+  await say('דרישת רכש');
+  const r2 = await say('אלעד 49 צפון');
+  assert.doesNotMatch(r2.text, /הכנסתי לדרישה/);
+  assert.equal(seen.length, 1);
+});
