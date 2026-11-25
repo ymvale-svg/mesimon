@@ -32,7 +32,7 @@ function doc(o = {}) {
 }
 
 /** פריוריטי מזויף: קריאות של חברה עם ספק אחד, שני פרויקטים, בלי הזמנות פתוחות. ‎status‎ — הסטטוס של ה-GR */
-function priority(t, { status = 'טיוטא', reads = {} } = {}) {
+function priority(t, { status = 'טיוטא', reads = {}, writes = {} } = {}) {
   const state = { status, head: null };
   const pr = H.Fakes.priority(t, {
     findSuppliers: async () => ({ list: [{ SUPNAME: 'S100', SUPDES: 'בטון הצפון' }], by: 'name' }),
@@ -67,7 +67,8 @@ function priority(t, { status = 'טיוטא', reads = {} } = {}) {
     writes: {
       createReceipt: async (c, head) => { state.head = head; return 'GR26000123'; },
       finalizeReceipt: async () => { state.status = 'סופית'; return {}; },
-      cancelReceipt: async () => { state.status = 'מבוטלת'; return {}; }
+      cancelReceipt: async () => { state.status = 'מבוטלת'; return {}; },
+      ...writes
     }
   });
   return { ...pr, state };
@@ -970,4 +971,40 @@ test('📧 חוסר — "לא": שום מייל לא יוצא; בלי חוסר �
   const a = await say(BTN.no);
   assert.match(a.text, /לא נשלח/);
   assert.equal(sent.slice(before).filter((x) => /חוסר/.test(x.subject)).length, 0);
+});
+
+// רעיון מסקירה 24.11 (נבנה 24.11): המק"ט "כמו בקליטות קודמות" נדחה בפריוריטי לפרויקט (תת הפרק לא במהדורת התכנון),
+// והשורה נקלטה על 000 — 4 פעמים ברצף, כל פעם עם תקלה. עכשיו: הדחייה נזכרת לפי חברה ופרויקט, ובקליטה הבאה — ישר
+// לקידוד שעבד, בלי לנסות שוב ובלי תקלה.
+test('מק"ט שנדחה בפרויקט — בקליטה הבאה לאותו פרויקט נקלט ישר על הקידוד שעבד, בלי ניסיון ובלי תקלה', async (t) => {
+  H.companies(t, 'test11');
+  const u = H.worker();
+  const tries = [];
+  const pr = priority(t, { writes: { addFreeLine: async (c, docno, line) => {
+    tries.push(line.part);
+    if (line.part === 'B-30') throw Object.assign(new Error('קודתת פרק 20: יש לבחור תת פרק מרשימת הבחירה'), { status: 400 });
+    return {};
+  } } });
+  ai(t, doc());
+  const { say } = H.chat(t, u);
+
+  // קליטה ראשונה: B-30 נדחה ← 000 (כמו היום)
+  await toProject(say);
+  await say('נהריה מגרש 12');
+  let r = await say(BTN.done);
+  assert.match(r.text, /GR26000123\* — טיוטא לבדיקה/);
+  assert.deepEqual(tries, ['B-30', '000']);
+  await say(BTN.approve);
+  await say(BTN.confirmFinal);
+
+  // קליטה שנייה לאותו פרויקט (ברירת המחדל): ישר 000, בלי לנסות את B-30
+  tries.length = 0;
+  await toProject(say);
+  r = await say(BTN.done);
+  assert.match(r.text, /טיוטא לבדיקה/);
+  assert.deepEqual(tries, ['000'], 'בלי ניסיון נוסף של המק"ט שנדחה');
+  // לדו-שיח הפנימי (כמו כל הערת קליטה) — שהנהלת החשבונות תדע למה 000
+  assert.match(JSON.stringify(pr.wrote('setDialog').at(-1).args), /B-30 לא פתוח בפרויקט הזה/);
+  const line = pr.wrote('addFreeLine').at(-1).args[2];
+  assert.equal(line.part, '000');
 });

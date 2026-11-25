@@ -1321,6 +1321,31 @@ async function submit(user, s) {
 // כניסה
 // ---------------------------------------------------------------------------
 
+/*
+ * 📝 פריטים שנמנו בשיחה רגילה (רעיון מסקירה 24.11, נבנה 24.11): עובד כתב "3 סנני מים", "צינור 6 מ"מ 10 מטרים" בלי
+ * "דרישת רכש", והבוט ענה "לפתוח דרישת רכש? כתוב 'דרישת רכש'" — והדרישה נפתחה ריקה. עכשיו: ההודעות מהשעה האחרונה
+ * שהבוט הציע עליהן דרישת רכש, ואחרי הדרישה הקודמת (כל הודעה בדרישה נרשמת ביומן) — נכנסות לדרישה כשהיא נפתחת.
+ */
+const CHAT_MS = 60 * 60000;
+function chatItems(userId) {
+  const since = new Date(Date.now() - CHAT_MS).toISOString();
+  const lastPd = D.get("SELECT MAX(id) AS id FROM wa_log WHERE user_id = ? AND channel = 'private' AND action = 'purchase_demand'", userId)?.id ?? 0;
+  return D.all(`SELECT text FROM wa_log WHERE user_id = ? AND channel = 'private' AND id > ? AND at >= ? AND action = 'other'
+    AND reply LIKE '%דרישת רכש%' ORDER BY id`, userId, lastPd, since)
+    .map((r) => String(r.text ?? '').replace(/^🎙\s*/, '').replace(/\n\(בתגובה ל:[\s\S]*$/, '').trim()).filter(Boolean).slice(-15);
+}
+
+/** הגענו לשלב הפריטים ויש פריטים מהשיחה שמחכים — מכניסים אותם, ומראים לעובד מה נכנס */
+async function withChatItems(user, s, out, heard) {
+  if (!s?.chatPending?.length || s.step !== 'items' || !Claude.isEnabled()) return out;
+  const earlier = s.chatPending;
+  delete s.chatPending;
+  const r2 = await onText(user, s, earlier.join('\n'));
+  if (!r2?.replies?.length) return out;
+  r2.replies[0] = `${heard.length ? `${heard.join('\n')}\n` : ''}📝 הכנסתי לדרישה את מה שכתבת קודם בשיחה:\n${earlier.map((x) => `• ${x}`).join('\n')}\n\n${r2.replies[0]}`;
+  return r2;
+}
+
 async function start(user, pre = [], hint = '') {
   const s = { step: 'start', uid: user.id, startedAt: Date.now(), date: today(), items: [], files: [], partHint: hint || null };
   const list = writable(user.id);
@@ -1374,6 +1399,13 @@ async function handle({ user, text = '', file = null, reaction = false, voice = 
       if (heard.length && r2 !== out && r2.replies?.length) r2.replies[0] = `${heard.join('\n')}\n${r2.replies[0]}`;
       return finish(user, out.s, r2);
     }
+    // 📝 מה שנמנה קודם בשיחה הרגילה — נכנס לדרישה כשמגיעים לפריטים (עכשיו, או אחרי שאלת הפרויקט / הסוג)
+    if (out.s && !file) {
+      const earlier = chatItems(user.id);
+      if (earlier.length) { out.s.chatPending = earlier; save(user.id, out.s); }
+      const r2 = await withChatItems(user, out.s, out, heard);
+      if (r2 !== out) return finish(user, out.s, r2, 'התחלה עם הפריטים מהשיחה');
+    }
     return finish(user, out.s, out, 'התחלה');
   }
   s.uid = user.id;
@@ -1407,6 +1439,7 @@ async function handle({ user, text = '', file = null, reaction = false, voice = 
     return { pass: true, replies: [], status: 'ok', result: `לא לדרישת רכש (שלב ${s.step})` };
   }
   if (out.s) out.s.prev = snap;
+  out = await withChatItems(user, out.s, out, []);
   if (heard.length && out.replies?.length) out.replies[0] = `${heard.join('\n')}\n${out.replies[0]}`;
   return finish(user, s, out);
 }
