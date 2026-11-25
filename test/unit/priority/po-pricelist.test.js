@@ -88,3 +88,10 @@ test('isRequest — "מחירון PO26000123", "לבטל את ההוספה למ�
   assert.equal(PL.isRequest('לבטל את ההוספה למחירון'), true);
   assert.equal(PL.isRequest('מה המחירון של טובול?'), false);
 });
+
+test('desKey (קישור ספק + תיאור ← מק"ט): "ב-30" = "ב30", גרשיים ורווחים לא משנים', () => {
+  const Parts = require('../../../server/priority/pd-parts');
+  assert.equal(Parts.desKey('בטון ב-30'), Parts.desKey('בטון  ב30'));
+  assert.equal(Parts.desKey('צינור 4" PVC'), Parts.desKey('צינור 4 PVC'));
+  assert.notEqual(Parts.desKey('בטון ב-30'), Parts.desKey('בטון ב-40'));
+});

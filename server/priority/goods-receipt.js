@@ -547,6 +547,12 @@ const isCredit = (l) => Number(l.qty) < 0 || Number(l.price ?? l.unit_price) < 0
 /** 📧 חוסר / פגם: שורות שבהן המקבל תיקן את הכמות כלפי מטה מול התעודה (‎buyer-notices.js‎, ב2) */
 const shortLines = (s) => (s.lines ?? []).filter((l) => !isCredit(l) && l.docQty != null && Number(l.qty) < Number(l.docQty));
 const extraLines = (s) => (s.order ? (s.lines ?? []).filter((l) => !l.order && !isCredit(l)) : []);
+/**
+ * 🚫 קבלה מול הזמנה — **בלי 000** (הוחלט 20.11.26, ובפרק 15 באפיון המאוחד: "נקלטת ומסומנת לרכש — רק עם מק"ט אמיתי").
+ * שורה שלא בהזמנה ובלי מק"ט מתאים — לא נקלטת, ועוברת לרכש. גם רשת הביטחון (שורה שנדחתה ← 000) — לא בקבלה מול הזמנה.
+ */
+const noGeneral = (s) => Boolean(s.order);
+const hasPart = (l) => Boolean(l.part?.code && l.part.code !== '000');
 
 function linesTable(s) {
   return s.lines.map((l) => {
@@ -556,7 +562,7 @@ function linesTable(s) {
       : `   התקבל: *${qtyText(l.qty)}*${l.unit ? ` ${l.unit}` : ''}`;
     const ord = l.order
       ? `   בהזמנה ${l.order.ordname}/${l.order.line}: ${l.order.des} · יתרה ${qtyText(l.order.balance)}${l.qty > l.order.balance ? ' ⚠️ יותר מהיתרה' : ''}${l.order.confidence === 'low' ? ' ❓ התאמה לא ודאית' : ''}`
-      : s.order && !isCredit(l) ? '   ⚠️ לא בהזמנה — יסומן לרכש' : (s.order || s.ordersChecked) ? '   ללא שורת הזמנה' : '';
+      : s.order && !isCredit(l) ? (hasPart(l) || l.part === undefined ? '   ⚠️ לא בהזמנה — יסומן לרכש' : '   ⚠️ לא בהזמנה ובלי מק"ט — לא תיקלט, תעבור לרכש') : (s.order || s.ordersChecked) ? '   ללא שורת הזמנה' : '';
     const hand = l.handwritten ? `   ✍️ ${l.handwritten}` : '';
     const unclear = l.unclear && l.options?.length > 1 ? `   ❓ לא ברור — ${l.options.map(qtyText).join(' או ')}?` : '';
     return [head, got, ord, hand, unclear].filter(Boolean).join('\n');
@@ -1039,6 +1045,10 @@ const where = (s, company) => (company && company !== s.company ? ` (ב${Priorit
 async function codeLines(s) {
   const free = s.lines.filter((l) => !l.order);
   for (const l of free) {
+    // 🔗 קודם — המק"ט שהרכש בנה לפריט הזה מהספק הזה (פער 6, פרק 15 באפיון המאוחד), אם הוא עדיין פעיל
+    const alias = Parts.aliasOf(s.company, s.supplier?.code, l.description);
+    const a = alias ? await Priority.partByCode(s.company, alias).catch(() => null) : null;
+    if (a && (a.STATDES ?? 'פעיל') === 'פעיל') { l.part = partOf(a, 'המק"ט שהרכש בנה לפריט הזה'); continue; }
     const p = await Priority.findPartExact(s.company, l.description).catch(() => null);
     l.part = p ? partOf(p, 'תיאור זהה בקטלוג') : null;
   }
@@ -1111,14 +1121,7 @@ function askParts(s) {
  */
 const NO_WORD = /^(לא|אל|ממש לא|no|👎|❌)([\s,.!]|$)/i;
 const unbuilt = (s) => (Parts.contact() ? s.lines.filter((l) => !l.order && l.part?.code === '000' && !l.req) : []);
-function askBuild(s) {
-  const list = unbuilt(s);
-  if (!list.length) return null;
-  s.step = 'parts_build';
-  const to = Parts.contact();
-  return reply(s, [`🆕 *לא נמצא מק"ט ${list.length === 1 ? 'לשורה' : `ל-${list.length} שורות`}:*`, ...list.map((l) => bullet(`${l.description} — ${qtyText(l.qty)} ${l.unit || "יח'"}`)), '',
-    `*לשלוח ל${to.name} (רכש) לבניית מק"טים?* *כן* 👍 / *לא* 👎`, '_הקליטה ממשיכה בכל מקרה על מק"ט כללי 000._'].join('\n'));
-}
+// "לשלוח לרכש?" — הוסר (פער 4, 25.11.26): השורות עוברות אוטומטית כשהקבלה סופית (‎sendToBuild‎). התשובה — לקליטות שכבר עמדו בשאלה
 async function answerBuild(user, s, yes) {
   const list = unbuilt(s);
   let note = 'בסדר — ממשיכים על מק"ט כללי 000.';
@@ -1131,6 +1134,23 @@ async function answerBuild(user, s, yes) {
   const out = await askProject(s);
   if (out?.replies?.length) out.replies[0] = `${note}\n\n${out.replies[0]}`;
   return out;
+}
+
+/*
+ * 🏗️ קבלה בלי הזמנה, שורות על 000 ← "מק"טים לבנייה" למנהלת הרכש, **אוטומטית** כשהקבלה סופית — בלי שאלה לעובד, הודעה
+ * אחת לכל קבלה (הוחלט 20.11.26; פער 4, פרק 15 באפיון המאוחד). שירות קבוע (הובלה, השכרה) — נכנס; אגרות, ארנונה,
+ * שכר דירה, שכר טרחה ושוברי תשלום — לא (אין מה לבנות להם מק"ט).
+ */
+const FEE = /אגר[הות]|ארנונה|שכר\s*דירה|שכ"?ט|שכר\s*טרחה|קנס|ריבית|עמלת?\s*בנק|היטל/;
+const toBuild = (s) => (s.order || s.doc?.doc_type === 'payment' || s.noVat ? []
+  : s.lines.filter((l) => !l.order && !isCredit(l) && Number(l.qty) !== 0 && l.part?.code === '000' && !l.req && !FEE.test(l.description ?? '')));
+async function sendToBuild(user, s) {
+  const list = toBuild(s);
+  if (!list.length || !Parts.contact()) return '';
+  const r = await Parts.requestBuild(user, s, list.map((l) => ({ n: l.n, description: l.description, qty: l.qty, unit: l.unit || "יח'", note: '', general: l.part })), { source: 'receipt' })
+    .catch((err) => ({ ok: false, error: err.message }));
+  for (const l of list) l.req = r.ok ? 'sent' : 'failed';
+  return r.ok ? `🏗️ ${list.length === 1 ? 'שורה אחת נקלטה' : `${list.length} שורות נקלטו`} על מק"ט כללי — עבר ל${r.to.name} (רכש) לבניית מק"ט. בפעם הבאה הבוט ימצא אותו לבד.` : '';
 }
 
 async function afterLines(s) {
@@ -1327,6 +1347,13 @@ async function createDraft(user, s) {
   }
   // כמות 0 — לא התקבל; כמות במינוס — שורת הנחה / זיכוי מהמסמך, נקלטת כמו שהיא
   for (const l of s.lines.filter((x) => Number(x.qty) !== 0 && Number.isFinite(Number(x.qty)))) {
+    l.skipped = false;
+    // קבלה מול הזמנה: שורה שלא בהזמנה ובלי מק"ט — לא נקלטת על 000; עוברת לרכש (‎extraLines‎ ← ‎buyer-notices.js‎)
+    if (noGeneral(s) && !l.order && !isCredit(l) && !hasPart(l)) {
+      l.skipped = true;
+      (s.notes ??= []).push(`שורה ${l.n} (${l.description}) — לא בהזמנה ובלי מק"ט: לא נקלטה, עברה לרכש`);
+      continue;
+    }
     try {
       if (l.order) await Priority.addOrderLine(c, docno, { ordname: l.order.ordname, line: l.order.line, qty: l.qty });
       else if (l.part && l.part.code !== '000') {
@@ -1356,6 +1383,13 @@ async function createDraft(user, s) {
       // רשת ביטחון: השורה נדחתה (מק"ט בלי תת פרק, יחידה, פריט לא פעיל…) — שוב על מק"ט כללי 000, תת פרק 101 כללי
       // ומשאב 98-10 כללי, עם התיאור מהמסמך. לא קיים בחברה (עותק הבדיקה) — הקידוד הכללי הנפוץ שלה. נכשל — רק אז העובד רואה
       if (l.order) { problems.push({ what: `שורה ${l.n} (${l.description}) לא נקלטה`, err: `שורה ${l.n}: ${err.message}` }); continue; }
+      if (noGeneral(s) && !isCredit(l)) {
+        // קבלה מול הזמנה — בלי 000: השורה לא נקלטת ועוברת לרכש, והפירוט למנהלי המערכת
+        l.skipped = true;
+        (s.notes ??= []).push(`שורה ${l.n} (${l.description}) — ${l.part?.code ?? ''} נדחה בפריוריטי: לא נקלטה, עברה לרכש`);
+        problems.push({ what: null, err: `שורה ${l.n}: ${l.part?.code ?? ''} נדחה (${err.message}) — קבלה מול הזמנה, לא נקלטה על 000` });
+        continue;
+      }
       const whole = Number.isInteger(Number(l.qty));
       const net = Math.round(Number(l.qty) * Number(l.price) * (1 - (Number(l.discount) || 0) / 100) * 100) / 100;
       const line = { part: '000', description: whole ? l.description : `${qtyText(l.qty)} ${l.unit ?? ''} · ${l.description}`,
@@ -2291,7 +2325,8 @@ async function step(user, s, t, file, allow = { gr: true, pd: false }) {
     }
 
     case 'parts': {
-      if (YES.test(t)) return askBuild(s) ?? askProject(s);
+      // 🏗️ שורות 000 — בלי שאלה לעובד: עוברות לרכש אוטומטית כשהקבלה סופית (פער 4, פרק 15 באפיון המאוחד)
+      if (YES.test(t)) return askProject(s);
       const free = s.lines.filter((l) => !l.order);
       // "שורה 2 ..." — רק לשורה הזו; אחרת — לכל השורות
       const lm = t.match(/שורה\s*(\d+)\s*(.*)$/);
@@ -2501,7 +2536,8 @@ async function step(user, s, t, file, allow = { gr: true, pd: false }) {
         Chain.progress(user.id, 'receipt', { stage: 'done', docno: s.docno, company: s.company, supplier: s.supplier?.name ?? '' });
         const stamped = await stampDoc(user, s);
         // 📣 לרכש: שורה שלא בהזמנה (מייל עכשיו), ותעודה בלי מספר הזמנה (לדוח השבועי)
-        const toBuyer = await BuyerNotices.afterFinal(user, s, extraLines(s)).catch((err) => { console.error('[משימון] הודעה לרכש מקבלת סחורה:', err.message); return ''; });
+        const toBuyer = [await BuyerNotices.afterFinal(user, s, extraLines(s)).catch((err) => { console.error('[משימון] הודעה לרכש מקבלת סחורה:', err.message); return ''; }),
+          await sendToBuild(user, s).catch((err) => { console.error('[משימון] מק"טים לבנייה מקבלת סחורה:', err.message); return ''; })].filter(Boolean).join('\n');
         const done = `✅ *קבלת סחורה ${s.docno}* נקלטה כסופית.\n${companyLine(s)}\nספק: ${s.supplier.name}${s.order ? ` · הזמנה ${s.order.ordname}` : ''}${stamped ? `\n🏷️ מספר ה-GR נכתב על ה${docName(s.doc)} — מצורף, ונשמר כנספח בפריוריטי.` : ''}${toBuyer ? `\n${toBuyer}` : ''}`;
         // 📧 חוסר / פגם מול התעודה — "לשלוח לספק ולרכש?" (הקליטה כבר סופית; התשובה לא משנה אותה)
         const short = shortLines(s);
@@ -2543,6 +2579,16 @@ async function step(user, s, t, file, allow = { gr: true, pd: false }) {
         }
         if (changed.length) { s.corrections = [...(s.corrections ?? []), `תיאור: ${changed.join('; ')}`]; await writeDialog(user, s).catch(() => {}); }
         return showDraft(s, problems, user);
+      }
+      if (out.action === 'add' && out.adds?.length && noGeneral(s)) {
+        // קבלה מול הזמנה — שורה שחסרה לא נוספת על 000: נרשמת כשורה שלא בהזמנה, ועוברת לרכש כשהקבלה סופית
+        for (const a of out.adds) {
+          s.lines.push({ n: s.lines.length + 1, description: a.description, qty: a.qty, unit: a.unit, price: a.unit_price, part: null, order: null, skipped: true, added: true });
+        }
+        s.corrections = [...(s.corrections ?? []), `נוספו ע"י המקבל (לא בהזמנה, בלי מק"ט — לרכש): ${out.adds.map((a) => `${a.description} ${qtyText(a.qty)} × ${money(a.unit_price)}`).join('; ')}`];
+        await writeDialog(user, s).catch(() => {});
+        const dv = await showDraft(s, [], user);
+        return { ...dv, replies: [`⚠️ ${out.adds.length === 1 ? 'השורה לא בהזמנה ואין לה מק"ט — לא נוספה לקבלה' : 'השורות לא בהזמנה ואין להן מק"ט — לא נוספו לקבלה'}. כשהקבלה תהיה סופית — יעברו לרכש.\n\n${dv.replies?.[0] ?? ''}`, ...(dv.replies?.slice(1) ?? [])] };
       }
       if (out.action === 'add' && out.adds?.length) {
         // שורה שחסרה — נוספת לטיוטא על המק"ט הכללי, עם הקידוד של שאר השורות (או הכללי של החברה)

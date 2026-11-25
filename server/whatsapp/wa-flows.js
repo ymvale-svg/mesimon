@@ -19,6 +19,7 @@ const MeetCoord = require('../meetings').MeetingCoord;
 const FormFill = require('../mail').FormFill;
 const Rfq = require('../priority').Rfq;
 const PoPricelist = require('../priority').PoPricelist;
+const PdParts = require('../priority').PdParts;
 const Notice = require('./notice');
 const SentFollowup = require('../mail').SentFollowup;
 const MailThread = require('../mail').MailThread;
@@ -384,6 +385,14 @@ async function flowOnPricelist(ctx) {
   }
   ctx.state = state;
   return NEXT;
+}
+
+/** 🏗️ "נפתח" ממנהלת הרכש — בודק מיד אם המק"טים שביקשו נפתחו, ומעדכן את העובדים (‎pd-parts.js‎) */
+async function flowPartsBuilt({ actor, dry, out, state, t }) {
+  if (actor.type !== 'user' || dry || state?.awaiting) return NEXT;
+  const r = await PdParts.builtCommand(actor.id, t).catch((err) => ({ text: 'לא הצלחתי לבדוק כרגע. נסו שוב בעוד רגע 🙏', result: `שגיאה: ${err.message}` }));
+  if (!r) return NEXT;
+  return out(r.text, {}, { action: 'purchase_demand', status: 'ok', result: String(r.result ?? '').slice(0, 300) });
 }
 
 /** "מחירון PO26000123", "לבטל את ההוספה למחירון" */
@@ -1179,5 +1188,5 @@ const switchCancels = () => Boolean(D.getSetting('wa_topic_switch_cancels', true
 const DRAFT_ONLY = /(?:(?:בלי|לא\s+משנה|אין\s+לי\s+(?:את\s+)?|עזוב(?:\s+את)?)\s*ה?(?:כתובת|מייל|נמען)|רק\s+ת?(?:נסח|כתוב)|ת?נסח\s+(?:לי\s+)?(?:רק\s+)?(?:את\s+)?ה?(?:מלל|טקסט|נוסח))/;
 
 module.exports = {
-  SEND_NOW, DRAFT_ONLY, flowAgentsList, flowAlertNo, flowOnMailDose, flowApproval, flowBusinessCommand, flowCancel, flowClosureCommand, flowEmailEdit, flowEmailPick, flowEmailSolve, flowEmailVia, flowFeaturesRequest, flowFormFillRequest, flowGreeting, flowInstinct, flowInstinctExplicit, flowInstinctReply, flowInstinctPilot, flowNoticeToInstinct, flowIntentCancel, flowIntentDenied, flowIntentMenu, flowIntentOther, flowMailFileRequest, flowMailReplyEdit, flowMailWalk, flowMeetCoordRequest, flowMeetingAudioAnswer, flowMeetingAudioRequest, flowMeetingAudioStatus, flowMeetingFollowupRequest, flowMeetingReminderRequest, flowMeetingSummaryRoutine, flowMenuList, flowMenuPick, flowNoAi, flowNoticeRequest, flowOnClosureAddress, flowOnDayEvening, flowOnFormFill, flowOnGoodsStop, flowOnMailFile, flowOnMailMuteSender, flowOnMailRemindOrGoods, flowOnMeetCoord, flowOnMeetingTasks, flowOnPaceOffer, flowOnPlainMail, flowOnReminder, flowOnRfq, flowOnSentFollowup, flowOnPricelist, flowPricelistRequest, flowOnThreadAdd, flowRemindersRequest, flowReplyAsk, flowRfqFollowup, flowRfqRequest, flowRfqSummary, flowSuggestionCommand, flowTranslateRequest, flowWalk, NEXT, switchCancels
+  SEND_NOW, DRAFT_ONLY, flowAgentsList, flowAlertNo, flowOnMailDose, flowApproval, flowBusinessCommand, flowCancel, flowClosureCommand, flowEmailEdit, flowEmailPick, flowEmailSolve, flowEmailVia, flowFeaturesRequest, flowFormFillRequest, flowGreeting, flowInstinct, flowInstinctExplicit, flowInstinctReply, flowInstinctPilot, flowNoticeToInstinct, flowIntentCancel, flowIntentDenied, flowIntentMenu, flowIntentOther, flowMailFileRequest, flowMailReplyEdit, flowMailWalk, flowMeetCoordRequest, flowMeetingAudioAnswer, flowMeetingAudioRequest, flowMeetingAudioStatus, flowMeetingFollowupRequest, flowMeetingReminderRequest, flowMeetingSummaryRoutine, flowMenuList, flowMenuPick, flowNoAi, flowNoticeRequest, flowOnClosureAddress, flowOnDayEvening, flowOnFormFill, flowOnGoodsStop, flowOnMailFile, flowOnMailMuteSender, flowOnMailRemindOrGoods, flowOnMeetCoord, flowOnMeetingTasks, flowOnPaceOffer, flowOnPlainMail, flowOnReminder, flowOnRfq, flowOnSentFollowup, flowOnPricelist, flowPricelistRequest, flowPartsBuilt, flowOnThreadAdd, flowRemindersRequest, flowReplyAsk, flowRfqFollowup, flowRfqRequest, flowRfqSummary, flowSuggestionCommand, flowTranslateRequest, flowWalk, NEXT, switchCancels
 };
