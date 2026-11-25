@@ -11,8 +11,8 @@ const D = require('../core').Db;
 const PriorityAccess = require('../priority').PriorityAccess;
 const PrioritySettings = require('../priority').PrioritySettings;
 
-/** "רכש — מחירונים" (‎po-pricelist.js‎) */
-const pricelistHandlers = () => (PrioritySettings.defaults().pricelistHandlers ?? []).map(Number);
+/** מנהלת הרכש — מקבלת את ההצעות למחירון (‎po-pricelist.js‎) */
+const pricelistBuyer = () => PrioritySettings.buyerOf(PrioritySettings.defaults())?.id ?? null;
 
 const ACTIONS = [
   {
@@ -165,7 +165,7 @@ const ACTIONS = [
   {
     key: 'po_pricelist', icon: '🏷️', label: 'הוספה למחירון ספק מהזמנה', channel: 'proactive',
     section: 'priority', feature: '🏷️ *הוספה למחירון ספק* — "מחירון PO…"',
-    description: 'כשהזמנת רכש בפריוריטי הופכת לסופית: הפריטים שבה שאינם במחירון של הספק (מחירון הפרויקט של ההזמנה או הכללי) נשלחים בבוט למי שברשימה "רכש — מחירונים" (משימון פריוריטי ← הגדרות). כולם / לבחור ("רק 1 ו-3", "בלי 2", "שורה 2 במחיר 30") / לא, סיכום ו"מאשר" — והפריטים נכתבים למחירון, במחיר שאחרי הנחת השורה, וגם ל"מוצרים לספק". פריט שכבר במחירון — לא מוצע. לספק בלי מחירון — רק הודעה. 👍 = כן (גם לייק על השאלה). "לבטל את ההוספה למחירון", או 👎 מיד אחרי ההוספה — שואל, ורק "כן, לבטל" מוחק מה שנוסף. גם לפי בקשה: "מחירון PO26000123". רק בחברות שפתוחות לכתיבה.',
+    description: 'כשהזמנת רכש בפריוריטי הופכת לסופית: הפריטים שבה שאינם במחירון של הספק (מחירון הפרויקט של ההזמנה או הכללי) נשלחים בבוט למנהלת הרכש (משימון פריוריטי ← הגדרות ← "מנהלת הרכש"). כולם / לבחור ("רק 1 ו-3", "בלי 2", "שורה 2 במחיר 30") / לא, סיכום ו"מאשר" — והפריטים נכתבים למחירון, במחיר שאחרי הנחת השורה, וגם ל"מוצרים לספק". פריט שכבר במחירון — לא מוצע. לספק בלי מחירון — רק הודעה. 👍 = כן (גם לייק על השאלה). "לבטל את ההוספה למחירון", או 👎 מיד אחרי ההוספה — שואל, ורק "כן, לבטל" מוחק מה שנוסף. גם לפי בקשה: "מחירון PO26000123". רק בחברות שפתוחות לכתיבה.',
     examples: ['מחירון PO26000123', 'לבטל את ההוספה למחירון'],
     enabled: false
   },
@@ -348,8 +348,8 @@ function allowed(actor, key) {
   if (key === 'instinct' && !D.getSetting('instinct_open', false) && !instinctPilot().includes(actor?.id)) return false;
   if (PILOT_KEYS.has(key) && D.getSetting('bot_pilot', false) && !inPilot(actor)) return false;
   if (PRIORITY_DOC[key]) return Boolean(a?.enabled && PriorityAccess.can(actor, PRIORITY_DOC[key]));
-  // 🏷️ הוספה למחירון — רק מי שברשימה "רכש — מחירונים" (משימון פריוריטי ← הגדרות) ומנהלי מערכת; גם הטיפ
-  if (key === 'po_pricelist') return Boolean(a?.enabled && actor?.type === 'user' && (PriorityAccess.isAdmin(actor) || pricelistHandlers().includes(actor.id)));
+  // 🏷️ הוספה למחירון — רק מנהלת הרכש (משימון פריוריטי ← הגדרות) ומנהלי מערכת; גם הטיפ
+  if (key === 'po_pricelist') return Boolean(a?.enabled && actor?.type === 'user' && (PriorityAccess.isAdmin(actor) || pricelistBuyer() === actor.id));
   return Boolean(a?.enabled && (a.audience === 'all' || isManager(actor)));
 }
 

@@ -963,6 +963,7 @@ CREATE TABLE IF NOT EXISTS po_pricelist_offers (
   list        TEXT,
   lists       TEXT    NOT NULL DEFAULT '[]',
   written     TEXT    NOT NULL DEFAULT '[]',
+  sent_to     TEXT    NOT NULL DEFAULT '[]',
   status      TEXT    NOT NULL DEFAULT 'pending',
   handler_id  INTEGER REFERENCES users(id) ON DELETE SET NULL,
   asked_at    TEXT,
@@ -2327,6 +2328,8 @@ function migrate() {
 
   // 💬 מק"טים לבנייה — אסימון לדף התשובה של הרכש (‎priority/pd-parts.js‎)
   addColumn('pd_part_requests', 'token', 'TEXT');
+  // 🏷️ הוספה למחירון — למי ההצעה כבר יצאה (מזהי משתמשים), כדי לשלוח למנהלת הרכש מה שיצא לאחר (באג 25.11.26)
+  addColumn('po_pricelist_offers', 'sent_to', "TEXT NOT NULL DEFAULT '[]'");
   // 🛒 פנייה לספקים — הדמיה / קובץ שנשלחו עם הבקשה, מצורפים למייל לספקים (‎priority/rfq.js‎, 22.11.26)
   addColumn('rfq', 'file', 'TEXT');
   // 🎙 הקלטת פגישה ארוכה מוואטסאפ — הועלתה ל-Timeless, והתמליל משם (‎meetings/meeting-audio.js‎, 18.11.26)

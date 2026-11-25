@@ -872,8 +872,7 @@
 
   // ---------------------------------------------------------------- הגדרות
   async function settings() {
-    const [s, log, acc] = await Promise.all([api('GET', '/api/priority/settings'), api('GET', '/api/priority/log'), api('GET', '/api/priority/access').catch(() => ({ users: [] }))]);
-    const handlers = new Set((s.defaults.pricelistHandlers ?? []).map(Number));
+    const [s, log] = await Promise.all([api('GET', '/api/priority/settings'), api('GET', '/api/priority/log')]);
     let companies = s.companies.map((c) => ({ ...c }));
     const initialWrite = new Set(s.companies.filter((c) => c.write).map((c) => c.code));
     const pay = (code) => s.payTerms.find((p) => p.code === code)?.name ?? code;
@@ -899,7 +898,7 @@
       </section>
 
       <section class="panel">
-        <div class="panel-h"><h2>רכש — מק"טים לבנייה</h2><p>פריט בדרישת רכש שאין לו מק"ט נשלח במייל לבניית מק"ט (דרישה לא יוצאת עם מק"ט כללי), והיוזם מקבל הודעה כשהמק"ט נבנה. בקבלת סחורה — הבוט שואל אם לשלוח. היא מקבלת גם דרישה שנשארה טיוטא כי פריוריטי דחה שורה (למשל אין תקציב בפרויקט לתת הפרק). ריק — הכל למנהלי המערכת, ובדרישה: רק המזוהים.</p></div>
+        <div class="panel-h"><h2>רכש — מק"טים לבנייה</h2><p>פריט בדרישת רכש שאין לו מק"ט נשלח במייל לבניית מק"ט (דרישה לא יוצאת עם מק"ט כללי), והיוזם מקבל הודעה כשהמק"ט נבנה. בקבלת סחורה — הבוט שואל אם לשלוח. היא מקבלת גם דרישה שנשארה טיוטא כי פריוריטי דחה שורה (למשל אין תקציב בפרויקט לתת הפרק). היא גם מקבלת בבוט את הפריטים מהזמנות סופיות שאינם במחירון הספק (פריטים למחירון). ריק — הכל למנהלי המערכת, ובדרישה: רק המזוהים.</p></div>
         <div class="grid-form">
           <label for="b-user">מנהלת הרכש — מתוך המשתמשים של משימון<select id="b-user">
             <option value="">— לא הוגדרה —</option>
@@ -909,12 +908,6 @@
         </div>
       </section>
 
-      <section class="panel">
-        <div class="panel-h"><h2>רכש — מחירונים</h2><p>מי מקבל בבוט את הפריטים מהזמנת רכש סופית שאינם במחירון הספק, ומוסיף אותם למחירון. אחד או יותר; הראשון שעונה מטפל. ריק — ההצעות מחכות, ומנהלי המערכת מקבלים התראה.</p></div>
-        <div class="checks" id="pl-handlers" role="group" aria-label="רכש — מחירונים">
-          ${acc.users.map((u) => `<label class="check"><input type="checkbox" value="${u.id}" ${handlers.has(u.id) ? 'checked' : ''}> ${esc(u.name)}</label>`).join('') || '<span class="muted">אין משתמשים</span>'}
-        </div>
-      </section>
 
       <section class="panel">
         <div class="panel-h"><h2>ברירות מחדל לקליטה</h2><p>מה שהמערכת ממלאת כשהמסמך לא אומר. כרגע לקריאה בלבד; יהיו ניתנות לעריכה כשקבלת הסחורה ודרישת הרכש יעברו למסך.</p></div>
@@ -979,8 +972,7 @@
         $('#confirm').innerHTML = `<span class="dirty">פותחים כתיבה לחברה אמיתית: ${esc(opened.join(', '))}. ללחוץ שוב על "שמירה" כדי לאשר.</span>`;
         confirmed = true; return;
       }
-      const body = { connection: { host: $('#c-host').value, ini: $('#c-ini').value, user: $('#c-user').value }, companies, defaults: { buyerUserId: Number($('#b-user').value) || null,
-        pricelistHandlers: [...main.querySelectorAll('#pl-handlers input:checked')].map((x) => Number(x.value)) } };
+      const body = { connection: { host: $('#c-host').value, ini: $('#c-ini').value, user: $('#c-user').value }, companies, defaults: { buyerUserId: Number($('#b-user').value) || null } };
       if ($('#c-pass').value) body.connection.password = $('#c-pass').value;
       try {
         await api('PUT', '/api/priority/settings', body);
