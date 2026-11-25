@@ -549,18 +549,45 @@ function askMode(s, pre = []) {
     [known ? BTN_ONLY : null, BTN.cancel].filter(Boolean));
   }
   return reply(s, [...pre, ...list,
-    `📧 הרשימה תישלח ל${to.name} (רכש) לבניית מק"טים בהקדם. *איך להמשיך?*`,
+    unsent(s).length ? `📧 הרשימה תישלח ל${to.name} (רכש) לבניית מק"טים בהקדם. *איך להמשיך?*` : `📨 הרשימה כבר אצל ${to.name} (רכש). *איך להמשיך?*`,
     known ? `• *רק המזוהים* — הדרישה יוצאת עכשיו עם ${known === 1 ? 'הפריט שזוהה' : `${known} הפריטים שזוהו`}; כשהמק"טים ייבנו — אשאל אם לבנות מהם דרישה חדשה נוספת.` : null,
     '• *לחכות לרכש* — שום דבר לא נשלח עכשיו; כשהמק"טים ייבנו — אשאל אם להמשיך בדרישה, וכל הדרישה תצא עם הכמויות שביקשת.'].filter((x) => x !== null).join('\n'),
   [known ? BTN_ONLY : null, BTN_WAIT, BTN.cancel].filter(Boolean));
 }
 
+/** פריטים חסרים שעוד לא נשלחו לרכש (‎reqSent‎ — נשלח מיד כשהפריט נקבע כחסר, פער 1 בפרק 15 של האפיון המאוחד) */
+const unsent = (s) => missing(s).filter((it) => !it.reqSent && !it.vague);
+
+/**
+ * 📨 אונליין (הוחלט 20.11.26): העובד מחכה עם הדרישה, ולכן פריט חסר יוצא למנהלת הרכש **מיד** — ברגע שהרשימה מוצגת והפריט
+ * כבר מתואר במדויק, ולא רק ב"סיום". בקשה אחת לכל דרישה (‎s.partsReq‎), ופריט חסר נוסף מתווסף אליה. בלי מנהלת רכש — ב"סיום", כמו קודם.
+ */
+async function sendMissingNow(user, out) {
+  const s = out?.s;
+  if (!s || s.step !== 'review' || s.editOf || !unsent(s).length || !Parts.contact()) return out;
+  const list = unsent(s);
+  const r = await Parts.requestBuild(user, s, list, { mode: 'wait' }).catch((err) => ({ ok: false, error: err.message }));
+  if (!r.ok) return out;
+  s.sentTo = r.to.name;
+  for (const it of list) { it.reqSent = true; if (it.spec) it.spec.keep = true; }
+  const note = `📨 נשלח ל*${r.to.name}* (רכש) לבניית מק"ט: ${list.map((it) => it.description).join(', ')}. אעדכן כשייפתח.`;
+  return { ...out, replies: out.replies?.length ? [`${note}\n\n${out.replies[0]}`, ...out.replies.slice(1)] : [note] };
+}
+
 /** שולח את החסרים לרכש. ‎null‎ — יצא; אחרת — התשובה לעובד (נשארים בשאלה) */
 async function sendMissing(user, s, mode) {
-  const r = await Parts.requestBuild(user, s, missing(s), { mode });
+  const list = unsent(s);
+  if (!list.length && s.partsReq) {
+    // הכל כבר יצא אונליין — רק מעדכנים את הבחירה (רק המזוהים / לחכות)
+    Parts.setMode(s, mode);
+    s.sentTo = s.sentTo || Parts.contact()?.name || 'הרכש';
+    return null;
+  }
+  const r = await Parts.requestBuild(user, s, list, { mode });
   if (r.ok) {
     s.sentTo = r.to.name;
-    for (const it of missing(s)) if (it.spec) it.spec.keep = true;
+    for (const it of missing(s)) { it.reqSent = true; if (it.spec) it.spec.keep = true; }
+    if (s.partsReq) Parts.setMode(s, mode);
     return null;
   }
   return askMode(s, ['⚠️ לא הצלחתי לשלוח את הרשימה לרכש — מנהל המערכת קיבל פירוט. נסו שוב בעוד כמה דקות.', '']);
@@ -571,7 +598,7 @@ async function waitForParts(user, s) {
   const err = await sendMissing(user, s, 'wait');
   if (err) return err;
   const w = missing(s).length;
-  return { s: null, replies: [[`📧 נשלח ל*${s.sentTo}* במייל: ${w === 1 ? 'מק"ט אחד' : `${w} מק"טים`} לבנייה בהקדם.`,
+  return { s: null, replies: [[`📨 אצל *${s.sentTo}* (רכש), בבוט ובמייל: ${w === 1 ? 'מק"ט אחד' : `${w} מק"טים`} לבנייה בהקדם.`,
     `⏳ *הדרישה נשמרה ומחכה לרכש* — ${s.items.length} ${s.items.length === 1 ? 'פריט' : 'פריטים'}. עוד לא נכתב דבר בפריוריטי.`,
     'כשהמק"טים ייבנו תקבל הודעה כאן ובמייל, ואשאל אם להמשיך בדרישה עם הכמויות שביקשת והמק"טים שנבנו.'].join('\n')],
   buttons: [], status: 'ok', result: `מחכה למק"טים מהרכש (${w})` };
@@ -1439,6 +1466,7 @@ async function handle({ user, text = '', file = null, reaction = false, voice = 
     return { pass: true, replies: [], status: 'ok', result: `לא לדרישת רכש (שלב ${s.step})` };
   }
   if (out.s) out.s.prev = snap;
+  out = await sendMissingNow(user, out);
   out = await withChatItems(user, out.s, out, []);
   if (heard.length && out.replies?.length) out.replies[0] = `${heard.join('\n')}\n${out.replies[0]}`;
   return finish(user, s, out);

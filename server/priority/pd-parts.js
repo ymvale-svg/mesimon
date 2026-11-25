@@ -31,7 +31,8 @@ const Gmail = require('../integrations').Gmail;
 const Settings = require('./priority-settings');
 const { YES, NO, normalize, sameLabel } = require('../whatsapp').WaUi;
 
-const TICK = 20 * 60 * 1000;
+// כל 5 דקות — העובד מחכה עם הדרישה (פער 2, פרק 15 באפיון המאוחד; היה 20). "נפתח" מהרכש — בודק מיד (‎builtCommand‎)
+const TICK = 5 * 60 * 1000;
 // כיתובים משלה — כדי ש"כן" לשאלה אחרת של הבוט לא ייתפס כאן. "כן" / 👍 סתמי — רק בחצי היום שאחרי השאלה
 const BTN_REBUILD = 'כן, להמשיך ✅';
 const BTN_MORE = 'כן, דרישה נוספת ✅';
@@ -200,7 +201,7 @@ async function knownCodes(company, description) {
   return [...new Set([exact?.PARTNAME, ...found.map((x) => x.p?.PARTNAME)].filter(Boolean))].slice(0, 300);
 }
 
-const headerOf = (s) => ({ project: s.project ?? null, warehouse: s.warehouse ?? null, warehouseName: s.warehouseName ?? '', demandCode: s.demandCode ?? null, date: s.date ?? null,
+const headerOf = (s) => ({ supcode: s.supplier?.code ?? null, project: s.project ?? null, warehouse: s.warehouse ?? null, warehouseName: s.warehouseName ?? '', demandCode: s.demandCode ?? null, date: s.date ?? null,
   supplier: s.supplier?.name ?? null, building: s.building ?? null });
 const itemsOf = (s) => (s.items ?? []).map(({ n, description, qty: q, unit, note, status, part, general, req, spec, bcoding, zone }) => ({ n, description, qty: q, unit, note, status, part, general, req, spec, bcoding, zone }));
 
@@ -224,6 +225,8 @@ async function requestBuild(user, s, list, { source = 'demand', mode = 'wait' } 
   if (to.userId) {
     D.notify({ targetType: 'user', targetId: to.userId, kind: 'ai', title: `🆕 מק"טים נדרשים לבנייה — לבקשת ${user.full_name}`,
       body: list.map((it) => `• ${it.description} — ${qty(it.qty)} ${unitOf(it)}`).join('\n') });
+    // 📨 אונליין בבוט (פער 1, פרק 15 באפיון המאוחד) — העובד מחכה. נכשל — המייל כבר יצא
+    if (hooks.send) await Promise.resolve(hooks.send(to.userId, buyerText(user, s, list, source))).catch((err) => console.error('[משימון] מק"טים לבנייה — הודעה לרכש בבוט:', err.message));
   }
   const missing = [];
   for (const it of list) missing.push({ n: it.n, description: it.description, qty: it.qty, unit: unitOf(it), note: it.note ?? '', spec: it.spec ?? null, known: await knownCodes(s.company, it.description), built: null });
@@ -235,6 +238,41 @@ async function requestBuild(user, s, list, { source = 'demand', mode = 'wait' } 
       user.id, s.company, JSON.stringify(headerOf(s)), JSON.stringify(itemsOf(s)), JSON.stringify(missing), mode, to.email, token, D.nowIso()).lastInsertRowid);
   }
   return { ok: true, to };
+}
+
+// ---------------------------------------------------------------------------
+// 🔗 קישור קבוע: ספק + תיאור ← מק"ט (פער 6)
+// ---------------------------------------------------------------------------
+
+/** מפתח לתיאור: בלי גרשיים, רווחים כפולים וסימנים — "בטון ב-30" ו"בטון ב30" הם אותו פריט */
+const desKey = (t) => String(t ?? '').toLowerCase().replace(/["'״׳`]/g, '').replace(/(\S)[-–](?=\S)/g, '$1').replace(/[-–_,.:;()/\\]+/g, ' ').replace(/\s+/g, ' ').trim();
+
+/** מק"ט שנבנה (או צוין) לשורה מספק מסוים — נשמר, והקבלה הבאה של אותו פריט נקלטת עליו */
+function remember(r, m) {
+  const sup = r.header?.supcode;
+  if (!sup || !m?.built?.code || !desKey(m.description)) return;
+  D.run(`INSERT INTO part_aliases (company, supname, des_key, partname, description, created_at) VALUES (?, ?, ?, ?, ?, ?)
+    ON CONFLICT(company, supname, des_key) DO UPDATE SET partname = excluded.partname, created_at = excluded.created_at`,
+  r.company, sup, desKey(m.description), m.built.code, String(m.description).slice(0, 200), D.nowIso());
+}
+
+/** המק"ט שנקבע לפריט הזה מהספק הזה, או ‎null‎ */
+function aliasOf(company, supname, description) {
+  if (!supname || !desKey(description)) return null;
+  return D.get('SELECT partname FROM part_aliases WHERE company = ? AND supname = ? AND des_key = ?', company, supname, desKey(description))?.partname ?? null;
+}
+
+/** ההודעה בבוט למנהלת הרכש: מי, מה, ומה לכתוב כשנפתח */
+function buyerText(user, s, list, source = 'demand') {
+  const receipt = source === 'receipt';
+  return [
+    receipt ? `🏗️ *מק"טים לבנייה — ${user.full_name} קלט סחורה בלי מק"ט*` : `📨 *${user.full_name} פותח דרישת רכש — ${list.length === 1 ? 'חסר מק"ט אחד' : `חסרים ${list.length} מק"טים`}*`,
+    [s.project?.des ? `📁 ${s.project.des}` : null, s.supplier?.name ? `🏪 ${s.supplier.name}` : null, `🏢 ${Priority.companyOf(s.company)?.name ?? s.company}`].filter(Boolean).join(' · '),
+    '',
+    ...list.map((it, i) => `${i + 1}. ${it.description} — ${qty(it.qty)} ${unitOf(it)}${it.spec ? ' (📎 מפרט במייל)' : ''}`),
+    '',
+    receipt ? 'הסחורה כבר נקלטה. כשתפתחי מק"ט — בפעם הבאה הבוט ימצא אותו לבד.' : 'העובד מחכה. כשתפתחי את המק"טים בפריוריטי — כתבי כאן *נפתח*, ואעדכן אותו מיד.'
+  ].join('\n');
 }
 
 /** אחרי "רק המזוהים": מספר הדרישה שיצאה, והשורות כפי שהיו בטיוטא (כולל החסרים) */
@@ -376,7 +414,7 @@ async function tick() {
       const fresh = [];
       for (const m of r.missing.filter((x) => !x.built)) {
         const p = await findBuilt(r.company, m);
-        if (p) { m.built = partOf(p); fresh.push(m); }
+        if (p) { m.built = partOf(p); remember(r, m); fresh.push(m); }
       }
       D.run('UPDATE pd_part_requests SET missing = ?, checked_at = ? WHERE id = ?', JSON.stringify(r.missing), D.nowIso(), id);
       if (!fresh.length) continue;
@@ -392,6 +430,27 @@ async function tick() {
     running = false;
   }
   return { checked, told };
+}
+
+/**
+ * 🏗️ "נפתח" / "פתחתי" / "נבנו" ממנהלת הרכש בבוט — בודק מיד את כל הבקשות הפתוחות (בלי לחכות לסבב), ומעדכן את העובדים.
+ * ‎null‎ — לא ממנהלת הרכש, או לא הודעה כזו.
+ */
+const BUILT_CMD = /^(?:נפתח|נפתחו|נפתחה|פתחתי|פתחנו|נבנה|נבנו|בניתי|בנינו|מוכן|מוכנים)(?:\s+(?:ה?מק"?טים|ה?מק"?ט|הכל|כולם))?\s*[.!✅👍]*$/;
+async function builtCommand(userId, text) {
+  const to = contact();
+  if (!to?.userId || to.userId !== userId || !BUILT_CMD.test(String(text ?? '').trim())) return null;
+  const open = D.all("SELECT id FROM pd_part_requests WHERE status = 'open'").length;
+  if (!open) return { text: 'אין כרגע בקשות פתוחות למק"טים 👍', result: 'נפתח: אין בקשות' };
+  const r = await tick();
+  const left = D.all("SELECT id FROM pd_part_requests WHERE status = 'open' ORDER BY id").map((x) => row(x.id))
+    .flatMap((x) => x.missing.filter((m) => !m.built).map((m) => ({ m, who: nameOf(x.user_id) })));
+  const lines = [
+    r.told ? `✅ בדקתי — ${r.told === 1 ? 'עובד אחד עודכן' : `${r.told} עובדים עודכנו`} שהמק"טים נפתחו.` : null,
+    left.length ? `⏳ עוד לא מצאתי בקטלוג מק"ט חדש ל: ${left.slice(0, 8).map((x) => `${x.m.description} (${x.who})`).join(', ')}.` : null,
+    left.length ? 'אם המק"ט כבר היה קיים, או נפתח בשם אחר — ענו דרך הקישור במייל, וכתבו בו את המק"ט.' : null
+  ].filter(Boolean);
+  return { text: lines.join('\n') || '✅ בדקתי.', result: `נפתח: עודכנו ${r.told}, נשארו ${left.length}` };
 }
 
 let timer = null;
@@ -489,6 +548,7 @@ async function buyerAnswer(token, { n, code = '', note = '' } = {}) {
     if (!p || (p.STATDES ?? 'פעיל') !== 'פעיל') throw Object.assign(new Error(`אין מק"ט פעיל ${c} ב${Priority.companyOf(r.company)?.name ?? r.company}`), { status: 400 });
     part = { ...partOf(p), why: 'לפי הרכש' };
     m.built = part;
+    remember(r, m);
   }
   // 🔒 הקישור בלי התחברות — כל תשובה שולחת לעובד הודעה; לא בלי סוף
   if ((m.answers?.length ?? 0) >= MAX_ANSWERS) throw Object.assign(new Error('יותר מדי תשובות לפריט הזה — כתבו לעובד ישירות'), { status: 429 });
@@ -502,4 +562,4 @@ async function buyerAnswer(token, { n, code = '', note = '' } = {}) {
   return forBuyer(token);
 }
 
-module.exports = { _sendMail: sendMail, _ai: ai, BTN_REBUILD, BTN_MORE, BTN_SKIP, notifyBuyer, mailPerson, alertAdmins, forBuyer, buyerAnswer, cleanup, contact, requestBuild, setMode, tick, start, owns, answer, setHooks, _findBuilt: findBuilt, _mailOf: mailOf, _row: row };
+module.exports = { builtCommand, aliasOf, desKey, _remember: remember, _sendMail: sendMail, _ai: ai, BTN_REBUILD, BTN_MORE, BTN_SKIP, notifyBuyer, mailPerson, alertAdmins, forBuyer, buyerAnswer, cleanup, contact, requestBuild, setMode, tick, start, owns, answer, setHooks, _findBuilt: findBuilt, _mailOf: mailOf, _row: row };
