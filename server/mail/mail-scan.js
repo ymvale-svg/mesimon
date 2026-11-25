@@ -1038,12 +1038,24 @@ function approve(id, actor, edits = {}) {
   return approveAs(id, actor, edits, edits.how === 'bot' ? 'bot' : 'manual');
 }
 
+/*
+ * הערה של עובדת (25.11): "לפעמים רושם 'ההצעה כבר טופלה' ולא נותן ליצור את המשימה". הצעה שדולגה או נדחתה — אפשר
+ * ליצור ממנה משימה (פתחו אותה שוב בכוונה). שכבר נפתחה ממנה משימה או צורפה למשימה — אומרים לאיזו, בלי כפילות.
+ */
+const REOPENABLE = ['pending', 'skipped', 'rejected'];
+function handledText(sug) {
+  const task = sug.task_id ? D.get('SELECT id, title FROM tasks WHERE id = ?', sug.task_id) : null;
+  if (task && ['approved', 'auto'].includes(sug.status)) return `כבר נפתחה מהמייל הזה משימה: #${task.id} "${task.title}"`;
+  if (task && sug.status === 'joined') return `המייל הזה כבר צורף למשימה #${task.id} "${task.title}"`;
+  return 'ההצעה כבר טופלה';
+}
+
 function approveAs(id, actor, edits, how) {
   edits = { ...edits, how };
   const sug = ownSuggestion(id, actor.id);
   if (TaskSync.KINDS.includes(sug.kind)) return TaskSync.approve(sug, actor, edits).then((r) => r.taskId);
   if (sug.kind === 'task_merge') return Dupes.approve(sug, actor);
-  if (sug.status !== 'pending' || sug.kind !== 'task') throw new Error('ההצעה כבר טופלה');
+  if (sug.kind !== 'task' || !REOPENABLE.includes(sug.status)) throw new Error(handledText(sug));
   const taskId = createFromSuggestion(sug, actor, edits);
   D.run("UPDATE ai_suggestions SET status = 'approved', task_id = ?, decided_at = ? WHERE id = ?", taskId, D.nowIso(), id);
   if (edits.trustSender) setSender(actor.id, sug.from_email, 'trust');
