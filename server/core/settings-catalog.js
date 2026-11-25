@@ -179,7 +179,7 @@ const INTERNAL = new Set([
 ]);
 
 /** מצב פנימי — לפי תחילית (‎digest_sent_morning‎, ‎priority_settings:1‎) */
-const INTERNAL_PREFIXES = Object.freeze(['digest_sent_', 'priority_settings:', 'priority_settings_log:', 'priority_access:', 'priority_desk_doc:', 'gr_rejected_part:']);
+const INTERNAL_PREFIXES = Object.freeze(['digest_sent_', 'priority_settings:', 'priority_settings_log:', 'priority_access:', 'priority_desk_doc:', 'gr_rejected_part:', 'gr_supplier_alias:']);
 
 /**
  * ⚠️ נתונים של עובד אחד שעוד יושבים בטבלת ההגדרות של המערכת, מלפני הכלל. הרשימה רק מצטמצמת:
