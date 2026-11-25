@@ -43,8 +43,6 @@ const DEFAULTS = Object.freeze({
   buyerUserId: null,
   buyerName: '',
   buyerEmail: '',
-  // 🏷️ "רכש — מחירונים" — מי מקבל את ההצעות להוסיף למחירון ספק מהזמנה (‎po-pricelist.js‎). מזהי משתמשי משימון; ריק — ההצעות מחכות
-  pricelistHandlers: [],
   // 💰 "שולם" — מי עוד מקבל הודעה על תשלום ממחלקה (‎payments.js‎, הוחלט 24.11.26): ‎{ [מזהה מחלקה]: [מזהי משתמשים] }‎.
   // למשל המזכירות מקבלת את כל ה"שולם" של מחלקת התכנון. בלי זה — מי שיזם ומנהל המחלקה שלו
   paidCc: {}
@@ -196,14 +194,6 @@ function save(input, { org = DEFAULT_ORG, by = null } = {}) {
       const e = str(b.defaults.buyerEmail, 120);
       if (e && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e)) throw new Error(`כתובת מייל לא תקינה למנהלת הרכש: "${e}"`);
       defs.buyerEmail = e;
-    }
-    if ('pricelistHandlers' in b.defaults) {
-      const ids = [...new Set((Array.isArray(b.defaults.pricelistHandlers) ? b.defaults.pricelistHandlers : []).map(Number).filter(Number.isInteger))];
-      for (const id of ids) {
-        const u = D.get("SELECT role, status FROM users WHERE id = ?", id);
-        if (!u || u.status !== 'active' || u.role === 'vendor') throw new Error(`משתמש ${id} לא יכול לקבל הצעות למחירון`);
-      }
-      defs.pricelistHandlers = ids;
     }
     if ('paidCc' in b.defaults) {
       const out = {};

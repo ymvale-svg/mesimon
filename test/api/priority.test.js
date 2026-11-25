@@ -175,7 +175,7 @@ test('💬 מק"טים לבנייה: דף התשובה של הרכש מוגש ב
   assert.equal(p.status, 404);
 });
 
-test('🏷️ פריטים למחירון: עובד שאינו ברשימה — 403 ו-me.pricelist ריק; מנהל — רואה; ברשימה — רואה', async () => {
+test('🏷️ פריטים למחירון: עובד — 403 ו-me.pricelist ריק; מנהל מערכת — רואה; מנהלת הרכש — רואה', async () => {
   const me = await as(emp)('GET', '/api/priority/me');
   assert.equal(me.json.pricelist, null);
   assert.equal((await as(emp)('GET', '/api/priority/pricelist')).status, 403);
@@ -184,14 +184,12 @@ test('🏷️ פריטים למחירון: עובד שאינו ברשימה — 
   assert.equal(a.status, 200, a.text);
   assert.ok(Array.isArray(a.json.open) && Array.isArray(a.json.recent));
   assert.equal((await as(admin)('POST', '/api/priority/pricelist/999999', { action: 'decline' })).status, 404);
-  // העובד נוסף לרשימה "רכש — מחירונים" במסך ההגדרות
-  const s = await as(admin)('PUT', '/api/priority/settings', { defaults: { pricelistHandlers: [empId] } });
+  // העובד נבחר כ"מנהלת הרכש" במסך ההגדרות — מקבל את פריטים למחירון
+  const s = await as(admin)('PUT', '/api/priority/settings', { defaults: { buyerUserId: empId } });
   assert.equal(s.status, 200, s.text);
-  assert.deepEqual(s.json.defaults.pricelistHandlers, [empId]);
   assert.equal((await as(emp)('GET', '/api/priority/pricelist')).status, 200);
   assert.equal(typeof (await as(emp)('GET', '/api/priority/me')).json.pricelist, 'number');
-  assert.equal((await as(admin)('PUT', '/api/priority/settings', { defaults: { pricelistHandlers: [987654] } })).status, 400);
-  await as(admin)('PUT', '/api/priority/settings', { defaults: { pricelistHandlers: [] } });
+  await as(admin)('PUT', '/api/priority/settings', { defaults: { buyerUserId: null } });
 });
 
 test('✍️ ממתין לאישורך: עובד מקבל רק את שלו (ריק כשאין), ומסך סוגי האישורים — רק למנהלים', async () => {

@@ -1351,8 +1351,19 @@ async function waitingDoc(company, s, docno) {
  */
 function docLink(company, screen, docno) {
   const c = credentials();
+  const ini = c.ini || DEFAULT_INI;
   const v = /^[\w.\-/]+$/.test(String(docno)) ? String(docno) : enc(String(docno));
-  return `https://${c.host || DEFAULT_HOST}/webui/openmail.htm?priority:priform@${screen}:${v}:${company}:${c.ini || DEFAULT_INI}:1`;
+  const t = c.tenant || tenantOf(ini);
+  return `https://${c.host || DEFAULT_HOST}/webui/openmail.htm?${t ? `tenant=${t}&` : ''}priority:priform@${screen}:${v}:${company}:${ini}:1`;
+}
+
+/**
+ * הסביבה בענן של פריוריטי (‎tabb2121.ini‎ ← ‎B2121‎ — פריוריטי בדפדפן: ‎/webui/B2121/‎). בלי התוסף של פריוריטי בדפדפן,
+ * ‎openmail.htm‎ מעביר ל-‎/webui/<tenant>/‎ — בלי ‎tenant‎ הוא מעביר לשורש השרת, ושם 404 (קרה לגולן, 24.11.26).
+ */
+function tenantOf(ini) {
+  const m = /^tab(\w+)\.ini$/i.exec(String(ini ?? '').trim());
+  return m ? m[1].toUpperCase() : '';
 }
 
 module.exports = {
@@ -1364,6 +1375,6 @@ module.exports = {
   PD_TYPES, demandCodes, recentDemandProjects, createDemand, addDemandLine, setDemand, submitDemand, isNoApproversError, readDemand, waitingDemands, nextSigner, cancelDemand, setDemandDialog, appendDemandDialog, setDemandLine, deleteDemandLine, reopenDemand, REOPEN_STATUS, purchaseOrderOwners, attachDemand, priorityUsers, budgetPairs, isCodingError,
   PAY_STATUS, payReceipts, payPartials, payDeals, payDocStatus, payInvoices, payLedger,
   supplierPriceLists, addPriceListItem, deletePriceListItem, supplierParts, addSupplierPart, deleteSupplierPart,
-  parseApprovalScreens, approvalScreens, isBlockedScreen, waitingDocs, waitingDoc, docLink,
+  parseApprovalScreens, approvalScreens, isBlockedScreen, waitingDocs, waitingDoc, docLink, tenantOf,
   _call: call
 };

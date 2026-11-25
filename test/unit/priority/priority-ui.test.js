@@ -70,7 +70,7 @@ test('"המערכת קוראת": בועה עם נקודות, השלב, רשימ�
 
 test('✍️ ממתין לאישורך: אין ממתינים — האזור לא מצויר בכלל; יש — מעל האריחים, עם קישור בלשונית חדשה', () => {
   const w = js.slice(js.indexOf('const Waiting = (() => {'), js.indexOf('return { mount };'));
-  assert.match(w, /if \(!items\.length\) \{ box\.innerHTML = ''; return; \}/);
+  assert.match(w, /if \(!items\.length && !alt\.length\) \{ box\.innerHTML = ''; return; \}/);
   assert.match(css, /#waiting:empty \{ display: none; \}/);
   const home = js.slice(js.indexOf('async function home()'), js.indexOf('const Waiting = (() => {'));
   assert.ok(home.indexOf('<div id="waiting"></div>') < home.indexOf('<div class="tiles">'), 'האזור מעל האריחים');
@@ -133,4 +133,12 @@ test('הגדרות: פס שמירה עם רקע, בלי ריק מתחת לטבל
   assert.match(css, /\.savebar \{[^}]*position: sticky; bottom: 0/);
   assert.doesNotMatch(css, /\.sticky-wrap \{[^}]*min-height/);
   assert.match(js, /id="co-add">\$\{ui\('plus'\)\}/);
+});
+
+test('✍️ ממתין לאישורך: "הכל" והמונה — רק מה שהעובד חותם בו; כמחליף — רק בכפתור "כמחליף"', () => {
+  const w = js.slice(js.indexOf('const Waiting = (() => {'), js.indexOf('return { mount };'));
+  assert.match(w, /const items = data\.items\.filter\(\(w\) => !w\.altFor\);/);
+  assert.match(w, /const shown = filter === ALT \? alt : items\.filter/);
+  assert.match(w, /badge num">\$\{items\.length\}/);
+  assert.match(w, /data-f="\$\{ALT\}"[^>]*>כמחליף <b/);
 });

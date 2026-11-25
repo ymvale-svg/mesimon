@@ -3,7 +3,7 @@
  * 🏷️ הוספה למחירון ספק מהזמנת רכש — האפיון: "אפיון — הוספה למחירון ספק מהזמנת רכש.md" (הוחלט 17–22.11.26).
  *
  *   1. הזמנה סופית (הסריקה של ‎po-notify.js‎) — בודקים כל שורה מול מחירוני הספק. קריאה בלבד.
- *   2. פריטים שאינם במחירון — הודעה בבוט למי שברשימה "רכש — מחירונים" (הגדרות משימון פריוריטי, ‎pricelistHandlers‎),
+ *   2. פריטים שאינם במחירון — הודעה בבוט למנהלת הרכש (ההגדרה "מנהלת הרכש" במשימון פריוריטי),
  *      עם *כולם ✅* / *לבחור* / *לא ❌*, ושפה חופשית ("רק 1 ו-3", "בלי הדבק", "שורה 2 במחיר 30", "מחירון 0004").
  *   3. סיכום ← *מאשר ✅* ← כל פריט נכתב למחירון (‎SPARTPRICE_SUBFORM‎) ול"מוצרים לספק" (‎SUPPART_SUBFORM‎), אם עוד לא שם.
  *   4. ביטול — "לבטל את ההוספה למחירון" ← *כן, לבטל 🗑️* ← נמחק רק מה שנכתב בפעולה הזו.
@@ -49,10 +49,14 @@ const enabled = () => Priority.isEnabled() && Boolean(WaActions.byKey(KIND)?.ena
 // מי מקבל
 // ---------------------------------------------------------------------------
 
-/** משתמשי משימון ברשימה "רכש — מחירונים" (פעילים) */
+/**
+ * מי מקבל את ההצעות: **מנהלת הרכש** — ההגדרה "מנהלת הרכש" במשימון פריוריטי (‎Settings.buyerOf‎), כמו שהוחלט 20.11.26.
+ * באג 25.11.26: הרשימה הנפרדת "רכש — מחירונים" שלחה למי שסומן בה (מנהל המערכת) ולא למנהלת הרכש — הוסרה.
+ */
 function handlers() {
-  const ids = (Settings.defaults().pricelistHandlers ?? []).map(Number).filter(Number.isInteger);
-  return ids.map((id) => D.get("SELECT id, full_name, phone FROM users WHERE id = ? AND status = 'active'", id)).filter(Boolean);
+  const b = Settings.buyerOf(Settings.defaults());
+  const u = b ? D.get("SELECT id, full_name, phone FROM users WHERE id = ? AND status = 'active'", b.id) : null;
+  return u ? [u] : [];
 }
 const isAdmin = (userId) => { const u = D.get('SELECT role FROM users WHERE id = ?', userId); return ['superadmin', 'admin'].includes(u?.role); };
 /** רשאי לענות / לבקש: ברשימה, או מנהל מערכת */
@@ -191,11 +195,12 @@ function noListText(r) {
 /** שולח הצעה שמחכה — לכל מי שברשימה. ‎true‎ — יצאה לפחות לאחד */
 async function send(id) {
   const r = row(id);
-  if (!r || !['pending', 'no_list'].includes(r.status)) return false;
+  if (!r || !['pending', 'no_list', 'asked'].includes(r.status)) return false;
+  if (r.status === 'asked' && r.handler_id) return false;
   const hs = handlers();
   if (!hs.length) {
     if (!D.getSetting('po_pricelist_no_handler', false)) {
-      alertAdmins('אין מי שמקבל הצעות למחירון', 'הגדירו את "רכש — מחירונים" במשימון פריוריטי ← הגדרות. ההצעות מחכות עד אז.');
+      alertAdmins('אין מי שמקבל הצעות למחירון', 'בחרו את "מנהלת הרכש" במשימון פריוריטי ← הגדרות. ההצעות מחכות עד אז.');
       D.setSetting('po_pricelist_no_handler', true);
     }
     return false;
@@ -212,13 +217,15 @@ async function send(id) {
     return ok;
   }
   const v = withCurrency(r);
+  const sent = new Set(parse(r.sent_to, []));
+  const to = hs.filter((h) => !sent.has(h.id));
   let ok = false;
-  for (const h of hs) {
-    if (hooks.push && await hooks.push(h.id, { text: offerText(v), buttons: [BTN.all, BTN.pick, BTN.no], draft: draftOf(r, 'pick') }).catch(() => false)) ok = true;
+  for (const h of to) {
+    if (hooks.push && await hooks.push(h.id, { text: offerText(v), buttons: [BTN.all, BTN.pick, BTN.no], draft: draftOf(r, 'pick') }).catch(() => false)) { ok = true; sent.add(h.id); }
   }
   if (ok) {
-    save(r, { status: 'asked', asked_at: D.nowIso() });
-    for (const h of hs) D.notify({ targetType: 'user', targetId: h.id, kind: 'ai', title: `🏷️ ${r.items.length} פריטים מ-${r.ordname} לא במחירון של ${r.supdes || r.supname}`, body: r.items.map((it) => `• ${it.des} — ${money(it.price)}`).join('\n') });
+    save(r, { status: 'asked', asked_at: r.asked_at ?? D.nowIso(), sent_to: JSON.stringify([...sent]) });
+    for (const h of to) D.notify({ targetType: 'user', targetId: h.id, kind: 'ai', title: `🏷️ ${r.items.length} פריטים מ-${r.ordname} לא במחירון של ${r.supdes || r.supname}`, body: r.items.map((it) => `• ${it.des} — ${money(it.price)}`).join('\n') });
   }
   return ok;
 }
@@ -246,6 +253,12 @@ async function flush() {
   const old = new Date(Date.now() - ASK_DAYS * 86400000).toISOString();
   D.run("UPDATE po_pricelist_offers SET status = 'expired' WHERE status IN ('pending','asked') AND created_at < ?", old);
   for (const { id } of D.all("SELECT id FROM po_pricelist_offers WHERE status IN ('pending','no_list') ORDER BY id LIMIT 10")) await send(id).catch(() => false);
+  // הצעה שנשאלה ועוד לא טופלה, ולא יצאה למנהלת הרכש (נשלחה לאחר לפני התיקון של 25.11.26, או שמנהלת הרכש הוחלפה) — יוצאת אליה
+  const me = handlers()[0];
+  if (!me) return;
+  for (const x of D.all("SELECT id, sent_to FROM po_pricelist_offers WHERE status = 'asked' AND handler_id IS NULL ORDER BY id LIMIT 10")) {
+    if (!parse(x.sent_to, []).includes(me.id)) await send(x.id).catch(() => false);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -488,7 +501,7 @@ const view = (r, userId) => ({
 
 /** ‎{ open, recent, noList }‎ — מה שמחכה, מה שטופל בשבוע האחרון, וספקים בלי מחירון. רק מי שברשימה ומנהלי מערכת */
 function forScreen(userId) {
-  if (!mayHandle(userId)) throw err(403, 'הוספה למחירון שמורה למי שברשימה "רכש — מחירונים"');
+  if (!mayHandle(userId)) throw err(403, 'הוספה למחירון שמורה למנהלת הרכש ולמנהלי המערכת');
   const since = new Date(Date.now() - SCREEN_DAYS * 86400000).toISOString();
   const pick = (sql, ...a) => D.all(sql, ...a).map((x) => view(row(x.id), userId));
   return {
@@ -510,7 +523,7 @@ function openCount(userId) {
  * ‎write‎ — הבחירה, המחירים והמחירון מהמסך, ואז הכתיבה. מחזיר ‎{ text, offer }‎.
  */
 async function act(userId, id, body = {}) {
-  if (!mayHandle(userId)) throw err(403, 'הוספה למחירון שמורה למי שברשימה "רכש — מחירונים"');
+  if (!mayHandle(userId)) throw err(403, 'הוספה למחירון שמורה למנהלת הרכש ולמנהלי המערכת');
   const r = row(Number(id));
   if (!r) throw err(404, 'ההצעה לא נמצאה');
   const action = String(body.action ?? '');

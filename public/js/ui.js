@@ -306,6 +306,7 @@ const UI = (() => {
 
     const finish = () => {
       document.removeEventListener('click', onOutside, true);
+      document.removeEventListener('pointerdown', onDown, true);
       layer?.release();
       if (onClose) onClose();
     };
@@ -354,8 +355,17 @@ const UI = (() => {
     ]);
 
     const backdrop = el(`div.modal-backdrop${asSide ? '.is-side' : ''}`, {
-      onclick: (e) => { if (e.target === backdrop) (sticky ? nudge() : close()); }
+      onclick: (e) => { if (e.target === backdrop && !downInside) (sticky ? nudge() : close()); }
     }, [box]);
+
+    /*
+     * סימון טקסט שהתחיל בתוך החלון ונגמר מחוצה לו (גוררים שמאלה כדי למחוק את הכותרת) — הדפדפן
+     * שולח ‎click‎ על האב המשותף, כלומר "בחוץ". זו לא לחיצה בחוץ: החלון נסגר רק כשגם הלחיצה
+     * עצמה (‎pointerdown‎) התחילה בחוץ.
+     */
+    let downInside = false;
+    const onDown = (e) => { downInside = box.contains(e.target); };
+    document.addEventListener('pointerdown', onDown, true);
 
     /*
      * פאנל הצד אינו חוסם את הדף: הרקע שלו שקוף ללחיצות, כדי שאפשר יהיה
@@ -367,7 +377,7 @@ const UI = (() => {
      * כבר יודע אם הלחיצה הזו פתחה משימה.
      */
     const onOutside = (e) => {
-      if (closed || box.contains(e.target)) return;
+      if (closed || downInside || box.contains(e.target)) return;
       // שכבה אחרת מעליו (אישור, תצוגה מקדימה), טוסט או הקפצה — אינם "בחוץ"
       if (e.target.closest?.('#modal-root > *:not(.is-side), .m-sheet-veil, .toast-root, .notif-pop-root')) return;
       setTimeout(() => { if (!closed && !ignoreOutside?.(e)) close(); }, 0);
@@ -435,6 +445,9 @@ const UI = (() => {
       footer ? el('div.m-sheet-foot', {}, footer) : null
     ]);
     const veil = el('div.m-sheet-veil.ui-sheet-veil', {}, [panel]);
+    // סימון שהתחיל במגירה ונגמר על הרקע אינו לחיצה על הרקע (כמו ב-‎modal‎)
+    let downInPanel = false;
+    veil.addEventListener('pointerdown', (e) => { downInPanel = panel.contains(e.target); }, true);
 
     // גובה המגירה ונקודות העצירה בפיקסלים — מחושבים מחדש בכל פתיחה ושינוי גודל
     let height = 0;
@@ -554,7 +567,7 @@ const UI = (() => {
      * מחובר רק אחרי שהמחווה הנוכחית הסתיימה.
      */
     setTimeout(() => {
-      veil.addEventListener('click', (e) => { if (e.target === veil) close(); });
+      veil.addEventListener('click', (e) => { if (e.target === veil && !downInPanel) close(); });
     }, 120);
 
     /*

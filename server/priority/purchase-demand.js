@@ -47,7 +47,11 @@ const FILES_DIR = () => path.join(D.UPLOADS_DIR, 'purchase-demand');
 const TRIGGER = /דרישת\s*רכ[שס](?!ים)|דרישות\s*רכ[שס](?!ים)/;
 const GR_TRIGGER = /קבלת\s*סחורה/;
 // רק כשזו כל ההודעה — "שלח גם 3 שקי מלט" הוא פריט, לא סיום
-const DONE = /^(סיום|סיימתי|זהו|זה הכל|זה הכול|תשלח|שלח|לשלוח|שלח לאישור|תשלח לאישור|לאישור)\s*[!.🏁]*$/u;
+const DONE = /^(סיום|סיימתי|ת?סיים(?:\s+(?:את\s+)?(?:הכל|הכול))?|זהו|זה הכל|זה הכול|תשלח|שלח|לשלוח|שלח לאישור|תשלח לאישור|לאישור)\s*[!.🏁]*$/u;
+// לא תיאור של פריט (סקירה 24.11): פקודה ("סיים", "תסיים הכל"), "רכישת רכש" (במקום "דרישת רכש"), או שאלה
+const notDescription = (t) => DONE.test(t) || /\?\s*$/.test(t) || /^(?:ד?רכישת\s+רכש|דרישת\s+רכש|רכש|דרישה)$/.test(String(t).trim());
+// "תבטל ותבדוק לי גלגל …" / "תחפש לי …" — רק הפריט עצמו
+const ASK_PREFIX = /^(?:ת?בטל\s+(?:את\s+(?:זה|ה\S+)\s+)?ו)?(?:ת?בדוק|ת?חפש|תמצא)\s+(?:לי\s+)?/;
 const NONE = /^(אף אחד|אף אחת|אף אחד מהם|לא אלה|אחר|כללי|מק"?ט כללי|שלח לבנייה|לבנייה|לרכש|לבנות מק"?ט)([\s,.!❌🆕]|$)/;
 // ב"התכוונת ל…": אף אחת מהאפשרויות ← הפריט נשלח לרכש לבניית מק"ט (בתיקון דרישה שהוחזרה — מק"ט כללי, כמו קודם)
 const BTN_NONE = 'שלח לבנייה לרכש 🆕';
@@ -107,7 +111,11 @@ const afterTrigger = (t) => (ASK.test(t) ? t.replace(ASK, '') : t.replace(TRIGGE
 /** פותח דרישה ("דרישת רכש"); וגם החזרה לבדיקה ("החזר לבדיקה PD…") ותשובה של פותח הדרישה (לתקן / הכל נכון) */
 // שאלה על דרישות קיימות ("מה הדרישות הפתוחות?") או בקשה אחרת — לא פותחת דרישה חדשה (‎opens-guard.js‎)
 // וגם תשובה ל"המק"טים נבנו — לבנות את הדרישה מחדש?" (‎pd-parts.js‎)
-const opens = (text, userId = null) => (isTrigger(text) && !notOpening(text)) || Boolean(userId && (Return.owns(userId, text) || Parts.owns(userId, text)));
+// דרישה שמורה (מושהית) — "תשלח את זה כדרישת רכש", "אתה יכול להוציא את הדרישה", "איך להמשיך?" ממשיכים בה (סקירה 24.11:
+// הבקשה נחסמה כ"בקשה אחרת" והדרישה נזרקה)
+const RESUME = /(?:^|\s)(?:ת?שלח|תשלחי|תוציא|להוציא|לשלוח|ת?משיך|להמשיך|נמשיך|תסיים|לסיים)\s+(?:\S+\s+){0,3}?(?:כ?דריש(?:ה|ת|ות)|ה?דרישה)|^\P{L}*(?:איך\s+)?(?:להמשיך|תמשיך|נמשיך|ממשיכים)\P{L}*$/u;
+const resumes = (userId, text) => Boolean(userId && RESUME.test(String(text ?? '').trim()) && (() => { const s = load(userId); return fresh(s) && s.paused; })());
+const opens = (text, userId = null) => (isTrigger(text) && !notOpening(text)) || resumes(userId, text) || Boolean(userId && (Return.owns(userId, text) || Parts.owns(userId, text)));
 
 /** הודעה בנושא אחר כשיש דרישה פתוחה — הדרישה יורדת (עוד לא נכתב כלום בפריוריטי). מחזיר שורת הודעה */
 function abandon(user) {
@@ -475,7 +483,7 @@ async function onDetail(user, s, t) {
     renumber(s);
     return nextQuestion(s, [`🗑️ הוסר: ${it.description}.`, '']);
   }
-  if (DONE.test(t) || YES.test(t)) return reply(s, `קודם — תיאור מדויק ל*${it.description}*, או *להסיר את הפריט*.`, s.lastButtons ?? []);
+  if (notDescription(t) || YES.test(t)) return reply(s, `קודם — תיאור מדויק ל*${it.description}*, או *להסיר את הפריט*.`, s.lastButtons ?? []);
   if (t.split(/\s+/).length >= 12) return onText(user, s, t);
   // "5 ק"ג" — תוספת לתיאור; תיאור מלא — במקומו
   const words = wordsIn(t);
@@ -996,7 +1004,7 @@ async function onPick(user, s, t, { reaction = false } = {}) {
     return nextQuestion(s, [s.editOf ? `🆕 ${it.description} ← מק"ט כללי 000 (${it.general.chapterDes || it.general.chapter} / ${it.general.topicDes || it.general.topic})` : `🆕 ${it.description} ← לא בקטלוג, יישלח לרכש לבניית מק"ט`, '']);
   }
   if (YES.test(t)) return reply(s, 'בחרו אחד מהכפתורים, *אף אחד* ❌, או כתבו תיאור אחר.', s.lastButtons ?? []);
-  if (DONE.test(t)) return reply(s, `קודם — *${it.description}*: בחרו אחד מהכפתורים, או *${s.editOf ? BTN_NONE_EDIT : BTN_NONE}*.`, s.lastButtons ?? []);
+  if (notDescription(t)) return reply(s, `קודם — *${it.description}*: בחרו אחד מהכפתורים, או *${s.editOf ? BTN_NONE_EDIT : BTN_NONE}*.`, s.lastButtons ?? []);
   // מק"ט מפורש
   const code = t.match(/[A-Za-z]*\d[\w]*(?:-[\w]+)+/)?.[0];
   if (code) {
@@ -1007,7 +1015,7 @@ async function onPick(user, s, t, { reaction = false } = {}) {
   }
   // תשובה ארוכה שאינה תיאור — אולי תיקון לרשימה או בקשה אחרת
   if (t.split(/\s+/).length >= 7) return onText(user, s, t);
-  it.description = t.trim().slice(0, 120);
+  it.description = (t.trim().replace(ASK_PREFIX, '').trim() || t.trim()).slice(0, 120);
   it.status = 'new';
   await resolveItems(s, [it]);
   return nextQuestion(s);
@@ -1313,6 +1321,31 @@ async function submit(user, s) {
 // כניסה
 // ---------------------------------------------------------------------------
 
+/*
+ * 📝 פריטים שנמנו בשיחה רגילה (רעיון מסקירה 24.11, נבנה 24.11): עובד כתב "3 סנני מים", "צינור 6 מ"מ 10 מטרים" בלי
+ * "דרישת רכש", והבוט ענה "לפתוח דרישת רכש? כתוב 'דרישת רכש'" — והדרישה נפתחה ריקה. עכשיו: ההודעות מהשעה האחרונה
+ * שהבוט הציע עליהן דרישת רכש, ואחרי הדרישה הקודמת (כל הודעה בדרישה נרשמת ביומן) — נכנסות לדרישה כשהיא נפתחת.
+ */
+const CHAT_MS = 60 * 60000;
+function chatItems(userId) {
+  const since = new Date(Date.now() - CHAT_MS).toISOString();
+  const lastPd = D.get("SELECT MAX(id) AS id FROM wa_log WHERE user_id = ? AND channel = 'private' AND action = 'purchase_demand'", userId)?.id ?? 0;
+  return D.all(`SELECT text FROM wa_log WHERE user_id = ? AND channel = 'private' AND id > ? AND at >= ? AND action = 'other'
+    AND reply LIKE '%דרישת רכש%' ORDER BY id`, userId, lastPd, since)
+    .map((r) => String(r.text ?? '').replace(/^🎙\s*/, '').replace(/\n\(בתגובה ל:[\s\S]*$/, '').trim()).filter(Boolean).slice(-15);
+}
+
+/** הגענו לשלב הפריטים ויש פריטים מהשיחה שמחכים — מכניסים אותם, ומראים לעובד מה נכנס */
+async function withChatItems(user, s, out, heard) {
+  if (!s?.chatPending?.length || s.step !== 'items' || !Claude.isEnabled()) return out;
+  const earlier = s.chatPending;
+  delete s.chatPending;
+  const r2 = await onText(user, s, earlier.join('\n'));
+  if (!r2?.replies?.length) return out;
+  r2.replies[0] = `${heard.length ? `${heard.join('\n')}\n` : ''}📝 הכנסתי לדרישה את מה שכתבת קודם בשיחה:\n${earlier.map((x) => `• ${x}`).join('\n')}\n\n${r2.replies[0]}`;
+  return r2;
+}
+
 async function start(user, pre = [], hint = '') {
   const s = { step: 'start', uid: user.id, startedAt: Date.now(), date: today(), items: [], files: [], partHint: hint || null };
   const list = writable(user.id);
@@ -1366,13 +1399,21 @@ async function handle({ user, text = '', file = null, reaction = false, voice = 
       if (heard.length && r2 !== out && r2.replies?.length) r2.replies[0] = `${heard.join('\n')}\n${r2.replies[0]}`;
       return finish(user, out.s, r2);
     }
+    // 📝 מה שנמנה קודם בשיחה הרגילה — נכנס לדרישה כשמגיעים לפריטים (עכשיו, או אחרי שאלת הפרויקט / הסוג)
+    if (out.s && !file) {
+      const earlier = chatItems(user.id);
+      if (earlier.length) { out.s.chatPending = earlier; save(user.id, out.s); }
+      const r2 = await withChatItems(user, out.s, out, heard);
+      if (r2 !== out) return finish(user, out.s, r2, 'התחלה עם הפריטים מהשיחה');
+    }
     return finish(user, out.s, out, 'התחלה');
   }
   s.uid = user.id;
   // ⏳ 15 דקות בלי תנועה — 👍 / "סיום" לא שולחים: מציגים שוב את הדרישה ושואלים מחדש (#171)
   const stale = Date.now() - (s.at ?? 0) >= idleMs();
+  const resumed = s.paused && !file && RESUME.test(t);
   if (s.paused) s.paused = false;
-  if (isTrigger(t) && !file && s.step !== 'code') return finish(user, s, s.lastPrompt ? reply(s, `🛒 ממשיכים בדרישת הרכש:\n\n${s.lastPrompt}`, s.lastButtons ?? []) : showList(s), 'המשך');
+  if ((isTrigger(t) || resumed) && !file && s.step !== 'code') return finish(user, s, s.lastPrompt ? reply(s, `🛒 ממשיכים בדרישת הרכש:\n\n${s.lastPrompt}`, s.lastButtons ?? []) : showList(s), 'המשך');
   if (GR_TRIGGER.test(t)) { save(user.id, { ...s, paused: true }); return { pass: true, replies: [], status: 'ok', result: 'מעבר לקבלת סחורה' }; }
   if (!file && (CANCEL.test(t) || sameLabel(t, BTN.cancel))) { clear(user.id, s); return { replies: ['דרישת הרכש בוטלה. לא נכתב דבר בפריוריטי.'], status: 'ok', result: 'ביטול' }; }
 
@@ -1398,6 +1439,7 @@ async function handle({ user, text = '', file = null, reaction = false, voice = 
     return { pass: true, replies: [], status: 'ok', result: `לא לדרישת רכש (שלב ${s.step})` };
   }
   if (out.s) out.s.prev = snap;
+  out = await withChatItems(user, out.s, out, []);
   if (heard.length && out.replies?.length) out.replies[0] = `${heard.join('\n')}\n${out.replies[0]}`;
   return finish(user, s, out);
 }
@@ -1527,4 +1569,4 @@ function view(userId) {
   };
 }
 
-module.exports = { view, isTrigger, opens, startEdit, active, pending, docId, abandon, handle, setHooks, _parseDate: parseDate, _resolveItems: resolveItems, _ai: ai, _load: load, _clear: (userId) => clear(userId, load(userId)), _label: label, _labels: labels, _sameLabel: sameLabel, _signerNote: signerNote };
+module.exports = { _pause: (userId) => { const s = load(userId); if (s) save(userId, { ...s, paused: true }); }, view, isTrigger, opens, startEdit, active, pending, docId, abandon, handle, setHooks, _parseDate: parseDate, _resolveItems: resolveItems, _ai: ai, _load: load, _clear: (userId) => clear(userId, load(userId)), _label: label, _labels: labels, _sameLabel: sameLabel, _signerNote: signerNote };

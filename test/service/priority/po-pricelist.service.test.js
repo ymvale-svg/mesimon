@@ -34,7 +34,7 @@ function world(t, { lists = LISTS, supParts = [{ PARTNAME: 'C-3', KLINE: 1 }] } 
   at(t);
   const on = { enabled: true, audience: 'all', examples: [] };
   D.setSetting('wa_actions', { ...D.getSetting('wa_actions', {}), po_pricelist: on });
-  t.mock.method(Settings, 'defaults', () => ({ ...Settings.DEFAULTS, pricelistHandlers: [buyer.id] }));
+  t.mock.method(Settings, 'defaults', () => ({ ...Settings.DEFAULTS, buyerUserId: buyer.id }));
   t.mock.method(Settings, 'writable', () => ['test11']);
   let seq = 100;
   const pr = Fakes.priority(t, { supplierPriceLists: async () => lists(), supplierParts: async () => (typeof supParts === 'function' ? supParts() : supParts) }, {
@@ -247,4 +247,29 @@ test('👎 כהודעה — רק כשההוספה היא הפעולה האחרו
   r = await c.say('👎');
   assert.doesNotMatch(r.text, /לבטל את ההוספה/);
   assert.equal(pr.wrote('deletePriceListItem').length, 0);
+});
+
+test('באג 25.11.26: ההצעה יוצאת רק למנהלת הרכש (ההגדרה "מנהלת הרכש"), לא למי שסומן ברשימה הישנה', async (t) => {
+  const { buyer } = world(t);
+  const admin = worker({ role: 'admin', full_name: 'ישראל', email: `isr-${process.hrtime.bigint()}@test.local` });
+  t.mock.method(Settings, 'defaults', () => ({ ...Settings.DEFAULTS, buyerUserId: buyer.id, pricelistHandlers: [admin.id] }));
+  const c = chat(t, buyer);
+  await PL.offer('test11', order());
+  const sentTo = (u) => c.wa.calls.filter((x) => JSON.stringify(x.body ?? '').includes(u.phone)).length;
+  assert.ok(sentTo(buyer) > 0, 'מנהלת הרכש מקבלת');
+  assert.equal(sentTo(admin), 0, 'מנהל המערכת לא מקבל');
+});
+
+test('הצעה שכבר נשלחה לאחר (לפני התיקון) — יוצאת למנהלת הרכש בסבב הבא', async (t) => {
+  const { buyer } = world(t);
+  const c = chat(t, buyer);
+  const po = order();
+  await PL.offer('test11', po);
+  D.run("UPDATE po_pricelist_offers SET sent_to = '[]' WHERE ordname = ?", po.ORDNAME);
+  c.wa.clear();
+  await PL.flush();
+  assert.match(c.wa.texts().join('\n'), /פריטים שלא במחירון/);
+  c.wa.clear();
+  await PL.flush();
+  assert.deepEqual(c.wa.texts(), [], 'לא פעמיים');
 });
