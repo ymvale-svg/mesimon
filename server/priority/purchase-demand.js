@@ -16,6 +16,7 @@
  * מצב השיחה — בהגדרה ‎purchase_demand:<userId>‎, וצילומי הרשימה — בתיקיית ההעלאות עד הסוף.
  */
 const { notOpening } = require('./opens-guard');
+const MyDocs = require('./my-docs');
 const fs = require('node:fs');
 const Paths = require('../core').Paths;
 const path = require('node:path');
@@ -1283,7 +1284,7 @@ async function submit(user, s) {
   if (s.partsMode === 'partial') Parts.setMode({ ...s, items: [...s.items, ...(s.held ?? [])] }, 'partial', prdno);
   // מי פתח — לפריוריטי הדרישה רשומה לפעמים על משתמש ה-API; כך הוא יקבל "הדרישה אושרה והועברה לספק" (po-notify)
   Prefs.rememberOpener(c, prdno, user.id);
-  Chain.progress(user.id, 'demand', { stage: 'draft', docno: prdno, company: c, supplier: s.project?.des ?? '' });
+  Chain.progress(user.id, 'demand', { stage: 'draft', docno: prdno, company: c, supplier: s.project?.des ?? '', note: MyDocs.itemsNote(s.items) });
   const problems = [];
   for (const it of s.items) await addLine(c, prdno, it, s, problems);
   for (const f of s.files ?? []) {

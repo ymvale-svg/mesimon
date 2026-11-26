@@ -1366,7 +1366,31 @@ function tenantOf(ini) {
   return m ? m[1].toUpperCase() : '';
 }
 
+// ---------------------------------------------------------------------------
+// 🔎 "מה קרה עם המסמך שלי?" (server/priority/my-docs.js) — קריאה בלבד
+// ---------------------------------------------------------------------------
+
+/** דרישות הרכש שהעובד פתח או שבבעלותו (שמות המשתמש בפריוריטי), מ-‎since‎ (‎YYYY-MM-DD‎). החדשה קודם */
+async function myDemands(company, logins, since) {
+  const who = logins.filter(Boolean).flatMap((l) => [`INITUSERLOGIN eq '${q(l)}'`, `OWNERLOGIN eq '${q(l)}'`]);
+  if (!who.length) return [];
+  const f = `(${who.join(' or ')}) and CURDATE ge ${since}T00:00:00Z`;
+  return rows(await call(company, 'GET', `PURDEMANDS?$filter=${enc(f)}&$select=${PD_SEL}`
+    + `&$expand=PDUSER_SUBFORM($select=${PDUSER_SEL}),PRDITEMS_SUBFORM($select=PDES)&$orderby=CURDATE%20desc&$top=40`)).map(strip);
+}
+
+/** ההזמנות שנפתחו מדרישה (‎PRDNO‎ בכותרת ההזמנה) */
+async function ordersOfDemand(company, prdno) {
+  return rows(await call(company, 'GET', `PORDERS?$filter=${enc(`PRDNO eq '${q(prdno)}'`)}&$select=ORDNAME,STATDES,CDES,CURDATE&$top=5`)).map(strip);
+}
+
+/** מסמכים ממסך עם סבב מאשרים (‎s‎ — מ-‎approvalScreens‎), בכל סטטוס, לפי ‎filter‎ — למשל החוזים של העובד */
+async function screenDocs(company, s, filter, top = 30) {
+  return rows(await call(company, 'GET', waitQuery(s, filter, top))).map(strip);
+}
+
 module.exports = {
+  myDemands, ordersOfDemand, screenDocs,
   suppliersByWords, ordersByProject, supplierContact, warehouseAddress, projectChapters,
   COMPANIES, DEFAULT_HOST, DEFAULT_INI, configure, syncCompanies, ping, isEnabled, allowed, companyOf, isTest, resolveCompany, companiesByName, PriorityError,
   GENERAL, NO_VAT_CODE, TAX_CODES, PAY_TERMS, DEFAULT_PAY, payTerm, payLabel, payFromText, dueDate, projectWarehouses, warehouses, warehouseExists, defaultWarehouse, supplierHistory, recentLines, partByCode, findPartsByText, searchParts, generalCoding, warehouseOf, findSuppliers, supplierByCode, findReceiptByBooknum, getOrder, openOrders, findPartExact, lastSubchapter, projects, matchProjects, readReceipt,

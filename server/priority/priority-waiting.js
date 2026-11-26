@@ -337,7 +337,10 @@ function start() {
   setTimeout(tick, 45000).unref?.();
 }
 
+/** ההגדרה של מסך אחד (מפתח, שדות, רשימת מאשרים) — מהגילוי האחרון. ‎null‎ — לא נמצא או כבוי */
+const screenSpec = (screen) => activeScreens().find((s) => s.screen === screen) ?? null;
+
 module.exports = {
-  KNOWN, FALLBACK_NAME, WARN_DAYS, LATE_DAYS,
+  KNOWN, FALLBACK_NAME, WARN_DAYS, LATE_DAYS, screenSpec,
   signerOf, discover, sweep, forUser, refresh, check, adminView, setType, mapUser, start, typeOf
 };

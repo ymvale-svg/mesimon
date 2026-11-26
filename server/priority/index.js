@@ -24,6 +24,7 @@ module.exports = {
   get PaymentsNotify() { return require('./payments-notify'); },
   get PriorityApprovals() { return require('./priority-approvals'); },
   get PriorityWaiting() { return require('./priority-waiting'); },
+  get MyDocs() { return require('./my-docs'); },
   get OpensGuard() { return require('./opens-guard'); },
   get PoNotify() { return require('./po-notify'); },
   get PoPdf() { return require('./po-pdf'); },

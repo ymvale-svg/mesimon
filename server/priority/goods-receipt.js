@@ -25,6 +25,7 @@
  * עד סוף הקליטה.
  */
 const { notOpening } = require('./opens-guard');
+const MyDocs = require('./my-docs');
 const fs = require('node:fs');
 const Paths = require('../core').Paths;
 const path = require('node:path');
@@ -1335,7 +1336,7 @@ async function createDraft(user, s) {
   }
   s.docno = docno;
   markOpened(user.id);
-  Chain.progress(user.id, 'receipt', { stage: 'draft', docno, company: c, supplier: s.supplier?.name ?? '' });
+  Chain.progress(user.id, 'receipt', { stage: 'draft', docno, company: c, supplier: s.supplier?.name ?? '', note: MyDocs.itemsNote(s.lines) });
   // פריוריטי מציב בפתיחה את מחסן הפרויקט, גם כשנשלח מחסן אחר — מעדכנים למחסן שנבחר (לפני השורות, שיורשות אותו)
   if (s.warehouse) await Priority.setHeader(c, docno, { TOWARHSNAME: s.warehouse }).catch((err) => console.error(`[משימון] מחסן ${s.warehouse} ל-${docno}:`, err.message));
   rememberPrefs(user.id, s);
