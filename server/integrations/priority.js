@@ -147,13 +147,82 @@ function companyUrl(company, method = 'GET') {
 
 class PriorityError extends Error {}
 
+/*
+ * 🔐 מפת המסכים — הרשימה הסגורה של מה שמשימון ניגש אליו בפריוריטי ("תוכנית — אבטחת הגישה לפריוריטי.md", שלב 2).
+ * כל פנייה עוברת ב-‎call()‎, וזה בודק אותה מול המפה לפני שהיא יוצאת:
+ *   • קריאה (‎GET‎) — רק ממסך שבמפה (כולל תתי-המסכים שלו). חריג אחד: "ממתין לאישורך" קורא מכל מסך שיש בו סבב מאשרים
+ *     (‎waitingDocs‎ — נמצאים לבד מתוך ‎$metadata‎, רק שדות הסטטוס והמאשרים).
+ *   • כתיבה — רק לחלק שכתוב במפה, ולפי הפעולה. ‎''‎ — המסמך עצמו (הכותרת); אחרת — שם תת-המסך.
+ * מסך או פעולה חדשים = שינוי מכוון כאן (‎test/unit/integrations/priority-screens.test.js‎ נכשל בלעדיו) וגם הרשאה למשתמש
+ * ה-API בפריוריטי. המפה זהה להרשאות שמוגדרות שם.
+ */
+const SCREENS = Object.freeze({
+  DOCUMENTS_P: { label: 'קבלת סחורה', write: {
+    POST: ['', 'TRANSORDER_P_SUBFORM', 'EXTFILES_SUBFORM', 'INTERNALDIALOGTEXT_SUBFORM'],
+    PATCH: ['', 'TRANSORDER_P_SUBFORM', 'DOCPORDI_SUBFORM', 'INTERNALDIALOGTEXT_SUBFORM'],
+    DELETE: ['TRANSORDER_P_SUBFORM', 'EXTFILES_SUBFORM'] } },
+  PURDEMANDS: { label: 'דרישת רכש', write: {
+    POST: ['', 'PRDITEMS_SUBFORM', 'EXTFILES_SUBFORM', 'INTERNALDIALOGTEXT_SUBFORM'],
+    PATCH: ['', 'PRDITEMS_SUBFORM', 'INTERNALDIALOGTEXT_SUBFORM'],
+    DELETE: ['PRDITEMS_SUBFORM'] } },
+  SUPPRICELIST: { label: 'מחירון ספק', write: { POST: ['SPARTPRICE_SUBFORM'], DELETE: ['SPARTPRICE_SUBFORM'] } },
+  SUPPLIERS: { label: 'ספקים', write: { POST: ['SUPPART_SUBFORM'], DELETE: ['SUPPART_SUBFORM'] } },
+  // קריאה בלבד
+  PORDERS: { label: 'הזמנות רכש' },
+  LOGPART: { label: 'מק"טים' },
+  WAREHOUSES: { label: 'מחסנים' },
+  USERSB: { label: 'משתמשים' },
+  DOCUMENTS_p: { label: 'פרויקטים' },
+  MED_DOCUMENTS_P: { label: 'חשבון חלקי' },
+  DINVOICES: { label: 'חשבון עסקה' },
+  PINVOICES: { label: 'חשבונית ספק' },
+  ACCOUNTS_PAYABLE: { label: 'כרטיסי ספקים' },
+  $metadata: { label: 'רשימת המסכים' }
+});
+
+/** ‎'DOCUMENTS_P(DOCNO=\'GR1\',TYPE=\'P\')/TRANSORDER_P_SUBFORM(KLINE=1)?$top=1'‎ ← ‎{ screen: 'DOCUMENTS_P', part: 'TRANSORDER_P_SUBFORM' }‎ */
+function screenOf(path) {
+  const s = String(path ?? '');
+  const screen = /^[^(/?]*/.exec(s)[0];
+  let i = screen.length;
+  if (s[i] === '(') {
+    let quoted = false;
+    for (i += 1; i < s.length; i++) {
+      if (s[i] === "'") quoted = !quoted;
+      else if (s[i] === ')' && !quoted) { i += 1; break; }
+    }
+  }
+  const part = s[i] === '/' ? /^[^(/?]*/.exec(s.slice(i + 1))[0] : '';
+  return { screen, part };
+}
+
+/** מותר? זורק ‎PriorityError‎ לפני שהפנייה יוצאת. ‎approvals‎ — הקריאה של "ממתין לאישורך" (ראו למעלה) */
+function checkScreen(method, path, { approvals = false } = {}) {
+  const { screen, part } = screenOf(path);
+  const entry = Object.hasOwn(SCREENS, screen) ? SCREENS[screen] : null;
+  if (method === 'GET') {
+    if (entry || approvals) return;
+    throw new PriorityError(`המסך ${screen} אינו ברשימת המסכים של משימון (SCREENS) — אין גישה`);
+  }
+  const allowedParts = entry?.write?.[method] ?? [];
+  if (!allowedParts.includes(part)) {
+    throw new PriorityError(`${method} ל-${part ? `${screen}/${part}` : screen} אינו ברשימת המסכים של משימון (SCREENS) — הכתיבה נחסמה`);
+  }
+}
+
 /** הודעת השגיאה של פריוריטי — מגיעה ב-JSON רגיל או כ-XML עטוף */
 function errorText(data, raw) {
   return data?.FORM?.InterfaceErrors?.text ?? data?.error?.message ?? String(raw ?? '').slice(0, 300);
 }
 
-async function call(company, method, path, body = null, { text = false } = {}) {
+async function call(company, method, path, body = null, { text = false, approvals = false } = {}) {
   if (!isEnabled()) throw new PriorityError('החיבור לפריוריטי אינו מוגדר (מסך ההגדרות של משימון פריוריטי)');
+  try {
+    checkScreen(method, path, { approvals });
+  } catch (err) {
+    console.error(`[משימון] פריוריטי — פנייה נחסמה (${company}): ${err.message}`);
+    throw err;
+  }
   const c = credentials();
   const auth = Buffer.from(`${c.user}:${c.password}`).toString('base64');
   const url = companyUrl(company, method) + path;
@@ -1337,12 +1406,12 @@ function waitQuery(s, filter, top) {
 
 /** המסמכים שממתינים לאישור במסך אחד (כל סטטוס שיש בו "לאישור"). ‎s‎ — מ-‎approvalScreens‎ */
 async function waitingDocs(company, s) {
-  return rows(await call(company, 'GET', waitQuery(s, "contains(STATDES,'לאישור')", 500))).map(strip);
+  return rows(await call(company, 'GET', waitQuery(s, "contains(STATDES,'לאישור')", 500), null, { approvals: true })).map(strip);
 }
 
 /** מסמך אחד, בכל סטטוס — לבדיקה אחרי שהעובד חזר מפריוריטי. ‎null‎ — לא נמצא */
 async function waitingDoc(company, s, docno) {
-  return rows(await call(company, 'GET', waitQuery(s, `${s.key} eq '${q(docno)}'`, 1))).map(strip)[0] ?? null;
+  return rows(await call(company, 'GET', waitQuery(s, `${s.key} eq '${q(docno)}'`, 1), null, { approvals: true })).map(strip)[0] ?? null;
 }
 
 /**
@@ -1366,6 +1435,19 @@ function tenantOf(ini) {
   return m ? m[1].toUpperCase() : '';
 }
 
+/**
+ * 🔐 הפונקציות המיוצאות שכותבות לפריוריטי. כל השאר — קריאה בלבד. נבדק מול הקוד
+ * (‎test/unit/integrations/priority-screens.test.js‎): פונקציה חדשה שכותבת ולא כאן ← הבדיקה נכשלת.
+ * תחומים שרק מציגים מידע (רשימת התשלומים, "ממתין לאישורך", סוכני ה-AI, "היום") לא משתמשים באף אחת מהן.
+ */
+const WRITES = Object.freeze([
+  'createReceipt', 'addOrderLine', 'addFreeLine', 'setLineQty', 'setLineDes', 'setHeader', 'attach', 'deleteAttachment', 'setDialog',
+  'finalizeReceipt', 'cancelReceipt', 'deleteLines',
+  'createDemand', 'addDemandLine', 'setDemand', 'submitDemand', 'cancelDemand', 'setDemandDialog', 'appendDemandDialog', 'setDemandLine',
+  'deleteDemandLine', 'reopenDemand', 'attachDemand',
+  'addPriceListItem', 'deletePriceListItem', 'addSupplierPart', 'deleteSupplierPart'
+]);
+
 module.exports = {
   suppliersByWords, ordersByProject, supplierContact, warehouseAddress, projectChapters,
   COMPANIES, DEFAULT_HOST, DEFAULT_INI, configure, syncCompanies, ping, isEnabled, allowed, companyOf, isTest, resolveCompany, companiesByName, PriorityError,
@@ -1376,5 +1458,7 @@ module.exports = {
   PAY_STATUS, payReceipts, payPartials, payDeals, payDocStatus, payInvoices, payLedger,
   supplierPriceLists, addPriceListItem, deletePriceListItem, supplierParts, addSupplierPart, deleteSupplierPart,
   parseApprovalScreens, approvalScreens, isBlockedScreen, waitingDocs, waitingDoc, docLink, tenantOf,
-  _call: call
+  SCREENS, WRITES, screenOf, checkScreen,
+  // לבדיקות ולקריאה אחת ב-‎purchase-demand.js‎ — בלי החריג של "ממתין לאישורך"
+  _call: (company, method, path, body = null) => call(company, method, path, body)
 };
