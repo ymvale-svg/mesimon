@@ -20,6 +20,8 @@ const FormFill = require('../mail').FormFill;
 const Rfq = require('../priority').Rfq;
 const PoPricelist = require('../priority').PoPricelist;
 const PdParts = require('../priority').PdParts;
+const GoodsReceipt = require('../priority').GoodsReceipt;
+const WaQuestions = require('./wa-questions');
 const Notice = require('./notice');
 const SentFollowup = require('../mail').SentFollowup;
 const MailThread = require('../mail').MailThread;
@@ -364,6 +366,24 @@ async function flowOnSentFollowup(ctx) {
       if (r.send) meetCoordRun(actor, () => SentFollowup.send(actor.id, d.followupId));
       return out(r.text, { draft: null }, { action: 'sent_followup', status: 'ok', result: r.result.slice(0, 300), react: r.react });
     }
+    keep.draft = null;
+    state = { ...state, draft: null, awaiting: false };
+  }
+  ctx.state = state;
+  return NEXT;
+}
+
+// 🔒 "להפוך את GR… (טיוטא ישנה) לסופית?" — "כן, לסגור" סוגר; "לא" — נשארת טיוטא (‎GoodsReceipt.finalizeOld‎)
+async function flowOnGrFinalOld(ctx) {
+  let { actor, user, dry, keep, out, state, t } = ctx;
+  if (state.awaiting && state.draft?.kind === 'gr_final_old') {
+    const d = state.draft;
+    const yes = WaUi.sameLabel(t, WaUi.BTN.confirmFinal) || /^(כן|לסגור|סגור|תסגור|מאשר|מאשרת|👍)([\s,.!✅]|$)/.test(t);
+    if (yes) {
+      const r = dry ? { text: '', status: 'ok', result: 'dry' } : await GoodsReceipt.finalizeOld(user ?? actor, d.company, d.docno);
+      return out(r.text, { draft: null }, { action: 'goods_receipt', status: r.status, result: r.result });
+    }
+    if (WaQuestions.isNo(t)) return out(`בסדר — *${d.docno}* נשארת טיוטא.`, { draft: null }, { action: 'goods_receipt', status: 'ok', result: `${d.docno} נשארת טיוטא` });
     keep.draft = null;
     state = { ...state, draft: null, awaiting: false };
   }
@@ -1188,5 +1208,5 @@ const switchCancels = () => Boolean(D.getSetting('wa_topic_switch_cancels', true
 const DRAFT_ONLY = /(?:(?:בלי|לא\s+משנה|אין\s+לי\s+(?:את\s+)?|עזוב(?:\s+את)?)\s*ה?(?:כתובת|מייל|נמען)|רק\s+ת?(?:נסח|כתוב)|ת?נסח\s+(?:לי\s+)?(?:רק\s+)?(?:את\s+)?ה?(?:מלל|טקסט|נוסח))/;
 
 module.exports = {
-  SEND_NOW, DRAFT_ONLY, flowAgentsList, flowAlertNo, flowOnMailDose, flowApproval, flowBusinessCommand, flowCancel, flowClosureCommand, flowEmailEdit, flowEmailPick, flowEmailSolve, flowEmailVia, flowFeaturesRequest, flowFormFillRequest, flowGreeting, flowInstinct, flowInstinctExplicit, flowInstinctReply, flowInstinctPilot, flowNoticeToInstinct, flowIntentCancel, flowIntentDenied, flowIntentMenu, flowIntentOther, flowMailFileRequest, flowMailReplyEdit, flowMailWalk, flowMeetCoordRequest, flowMeetingAudioAnswer, flowMeetingAudioRequest, flowMeetingAudioStatus, flowMeetingFollowupRequest, flowMeetingReminderRequest, flowMeetingSummaryRoutine, flowMenuList, flowMenuPick, flowNoAi, flowNoticeRequest, flowOnClosureAddress, flowOnDayEvening, flowOnFormFill, flowOnGoodsStop, flowOnMailFile, flowOnMailMuteSender, flowOnMailRemindOrGoods, flowOnMeetCoord, flowOnMeetingTasks, flowOnPaceOffer, flowOnPlainMail, flowOnReminder, flowOnRfq, flowOnSentFollowup, flowOnPricelist, flowPricelistRequest, flowPartsBuilt, flowOnThreadAdd, flowRemindersRequest, flowReplyAsk, flowRfqFollowup, flowRfqRequest, flowRfqSummary, flowSuggestionCommand, flowTranslateRequest, flowWalk, NEXT, switchCancels
+  SEND_NOW, DRAFT_ONLY, flowAgentsList, flowAlertNo, flowOnMailDose, flowApproval, flowBusinessCommand, flowCancel, flowClosureCommand, flowEmailEdit, flowEmailPick, flowEmailSolve, flowEmailVia, flowFeaturesRequest, flowFormFillRequest, flowGreeting, flowInstinct, flowInstinctExplicit, flowInstinctReply, flowInstinctPilot, flowNoticeToInstinct, flowIntentCancel, flowIntentDenied, flowIntentMenu, flowIntentOther, flowMailFileRequest, flowMailReplyEdit, flowMailWalk, flowMeetCoordRequest, flowMeetingAudioAnswer, flowMeetingAudioRequest, flowMeetingAudioStatus, flowMeetingFollowupRequest, flowMeetingReminderRequest, flowMeetingSummaryRoutine, flowMenuList, flowMenuPick, flowNoAi, flowNoticeRequest, flowOnClosureAddress, flowOnDayEvening, flowOnFormFill, flowOnGoodsStop, flowOnMailFile, flowOnMailMuteSender, flowOnMailRemindOrGoods, flowOnMeetCoord, flowOnMeetingTasks, flowOnPaceOffer, flowOnPlainMail, flowOnReminder, flowOnRfq, flowOnSentFollowup, flowOnGrFinalOld, flowOnPricelist, flowPricelistRequest, flowPartsBuilt, flowOnThreadAdd, flowRemindersRequest, flowReplyAsk, flowRfqFollowup, flowRfqRequest, flowRfqSummary, flowSuggestionCommand, flowTranslateRequest, flowWalk, NEXT, switchCancels
 };

@@ -856,6 +856,35 @@ function everOpened(userId) {
   return Boolean(hit);
 }
 
+/*
+ * 🔒 טיוטא ישנה (רעיון מסקירה 25.11, נבנה 26.11): "כן, לסגור" על שאלה מאתמול — ה-GR עוד טיוטא, אבל השיחה כבר על מסמך
+ * אחר. ‎oldDraft‎ — באיזו חברה (מאלה שהעובד מורשה) ובאיזה מצב; ‎finalizeOld‎ — סגירה אחרי שאלה חדשה ("כן" שלו).
+ */
+const writableFor = (uid) => Access.filterForUser(uid, Priority.allowed().filter((c) => Priority.COMPANIES.some((x) => x.code === c)));
+async function oldDraft(userId, docno) {
+  if (!/^GR\d+$/.test(String(docno ?? ''))) return null;
+  for (const c of writableFor(userId)) {
+    const st = await Priority.receiptStatus(c, docno).catch(() => null);
+    if (st) return { company: c, docno, status: st };
+  }
+  return null;
+}
+async function finalizeOld(user, company, docno) {
+  if (!writableFor(user.id).includes(company)) return { text: 'החברה הזו כבר לא פתוחה לך לכתיבה מהבוט.', status: 'denied', result: `${docno}: חברה סגורה` };
+  const st = await Priority.receiptStatus(company, docno);
+  if (st === 'סופית') return { text: `✅ *${docno}* כבר סופית.`, status: 'ok', result: `${docno} כבר סופית` };
+  if (st !== 'טיוטא') return { text: `*${docno}* במצב "${st ?? 'לא נמצא'}" — לא סגרתי.`, status: 'ok', result: `${docno}: ${st ?? 'לא נמצא'}` };
+  try {
+    await Priority.finalizeReceipt(company, docno);
+  } catch (err) {
+    alertAdmins(user, { company, docno }, 'GR לא הפך לסופי', [err.message]);
+    return { text: `*${docno}* נשאר טיוטא — לא הפך לסופי. מנהל המערכת קיבל הודעה ויטפל.`, status: 'error', result: `סופית נכשלה: ${err.message}` };
+  }
+  D.setSetting(doneKey(user.id), { docno, company, supplier: '', at: Date.now() });
+  Chain.progress(user.id, 'receipt', { stage: 'done', docno, company, supplier: '' });
+  return { text: `✅ *קבלת סחורה ${docno}* נקלטה כסופית.`, status: 'ok', result: `GR סופי ${docno} (טיוטא ישנה)` };
+}
+
 async function resumeDraft(s, dup) {
   const gr = await Priority.readReceipt(s.company, dup.DOCNO);
   s.docno = dup.DOCNO;
@@ -2694,4 +2723,4 @@ function view(userId) {
   };
 }
 
-module.exports = { _supplierAnswer: supplierAnswer, view, everOpened, markOpened, inMenu, dropMenu, isTrigger, isPriority, opens, active, pending, docId, pausedNote, abandon, switchCancels, wantsUndoFinal, handle, sweep, _jpegToPdf: jpegToPdf, _codeLines: codeLines, _orderDiffs: orderDiffs, _similarLines: similarLines, _askParts: askParts, _projectsOf: projectsOf, _findProjects: findProjects, _ai: ai, _load: load, _clear: (userId) => clear(userId, load(userId)) };
+module.exports = { _supplierAnswer: supplierAnswer, oldDraft, finalizeOld, view, everOpened, markOpened, inMenu, dropMenu, isTrigger, isPriority, opens, active, pending, docId, pausedNote, abandon, switchCancels, wantsUndoFinal, handle, sweep, _jpegToPdf: jpegToPdf, _codeLines: codeLines, _orderDiffs: orderDiffs, _similarLines: similarLines, _askParts: askParts, _projectsOf: projectsOf, _findProjects: findProjects, _ai: ai, _load: load, _clear: (userId) => clear(userId, load(userId)) };

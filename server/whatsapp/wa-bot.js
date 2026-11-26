@@ -86,7 +86,7 @@ const { answerLike, busyFor, meetCoordRun, meetCoordTick, pushToUser, questionTt
 const { businessCommand, closeAlerted, closureDecision, confirmPending, contactOf, createFromDraft, draftEmail, findRecipients, mailActionAlerts, mailAlertFor, mailAlerts, parseThreadAdd, resolveCc, solveText, startGoodsFromMail, suggestionDecision, suggestionFeedback, threadAddText, VIA_EMAIL, VIA_MESIMON } = require('./wa-mail');
 const { MENU, MENU_FREE_HINT, MENU_MORE, PLAIN_AGENTS, agentsText, cut, dayItems, isMenuButton, menuButtonOf, menuButtons, menuOptions, menuPick, menuText, moreMenuGroups, pairsOf, parseClosureCommand, parseSuggestionCommand, recordingReply, todayMessage, walkAction, walkButtons, walkText } = require('./wa-menu');
 const { flowReply, logoIntent, meetingAudioAllowed, meetingAudioTurn, meetingFollowups, processMeetingAudio, receiveMeetingAudio, timelessAudioTick, TRANSLATE } = require('./wa-meeting');
-const { DRAFT_ONLY, flowAgentsList, flowAlertNo, flowOnMailDose, flowApproval, flowBusinessCommand, flowCancel, flowClosureCommand, flowEmailEdit, flowEmailPick, flowEmailSolve, flowEmailVia, flowFeaturesRequest, flowFormFillRequest, flowGreeting, flowInstinct, flowInstinctExplicit, flowInstinctReply, flowInstinctPilot, flowNoticeToInstinct, flowIntentCancel, flowIntentDenied, flowIntentMenu, flowIntentOther, flowMailFileRequest, flowMailReplyEdit, flowMailWalk, flowMeetCoordRequest, flowMeetingAudioAnswer, flowMeetingAudioRequest, flowMeetingAudioStatus, flowMeetingFollowupRequest, flowMeetingReminderRequest, flowMeetingSummaryRoutine, flowMenuList, flowMenuPick, flowNoAi, flowNoticeRequest, flowOnClosureAddress, flowOnDayEvening, flowOnFormFill, flowOnGoodsStop, flowOnMailFile, flowOnMailMuteSender, flowOnMailRemindOrGoods, flowOnMeetCoord, flowOnMeetingTasks, flowOnPaceOffer, flowOnPlainMail, flowOnReminder, flowOnRfq, flowOnSentFollowup, flowOnPricelist, flowPricelistRequest, flowPartsBuilt, flowOnThreadAdd, flowRemindersRequest, flowReplyAsk, flowRfqFollowup, flowRfqRequest, flowRfqSummary, flowSuggestionCommand, flowTranslateRequest, flowWalk, NEXT, switchCancels } = require('./wa-flows');
+const { DRAFT_ONLY, flowAgentsList, flowAlertNo, flowOnMailDose, flowApproval, flowBusinessCommand, flowCancel, flowClosureCommand, flowEmailEdit, flowEmailPick, flowEmailSolve, flowEmailVia, flowFeaturesRequest, flowFormFillRequest, flowGreeting, flowInstinct, flowInstinctExplicit, flowInstinctReply, flowInstinctPilot, flowNoticeToInstinct, flowIntentCancel, flowIntentDenied, flowIntentMenu, flowIntentOther, flowMailFileRequest, flowMailReplyEdit, flowMailWalk, flowMeetCoordRequest, flowMeetingAudioAnswer, flowMeetingAudioRequest, flowMeetingAudioStatus, flowMeetingFollowupRequest, flowMeetingReminderRequest, flowMeetingSummaryRoutine, flowMenuList, flowMenuPick, flowNoAi, flowNoticeRequest, flowOnClosureAddress, flowOnDayEvening, flowOnFormFill, flowOnGoodsStop, flowOnMailFile, flowOnMailMuteSender, flowOnMailRemindOrGoods, flowOnMeetCoord, flowOnMeetingTasks, flowOnPaceOffer, flowOnPlainMail, flowOnReminder, flowOnRfq, flowOnSentFollowup, flowOnGrFinalOld, flowOnPricelist, flowPricelistRequest, flowPartsBuilt, flowOnThreadAdd, flowRemindersRequest, flowReplyAsk, flowRfqFollowup, flowRfqRequest, flowRfqSummary, flowSuggestionCommand, flowTranslateRequest, flowWalk, NEXT, switchCancels } = require('./wa-flows');
 
 const RECENT_FILE_MS = 15 * 60 * 1000;
 
@@ -425,6 +425,7 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
   { const c = { actor, dry, keep, out, state, t }; const r = await flowOnDayEvening(c); if (r !== NEXT) return r; state = c.state; }
   // 📤 "לשלוח תזכורת עדינה?" על מייל ששלחת ולא נענה
   { const c = { actor, dry, keep, out, state, t }; const r = await flowOnSentFollowup(c); if (r !== NEXT) return r; state = c.state; }
+  { const c = { actor, user, dry, keep, out, state, t }; const r = await flowOnGrFinalOld(c); if (r !== NEXT) return r; state = c.state; }
   // 🏷️ הוספה למחירון ספק מהזמנה — התשובה, ו"מחירון PO…" / "לבטל את ההוספה למחירון"
   { const c = { actor, dry, keep, out, state, t }; const r = await flowOnPricelist(c); if (r !== NEXT) return r; state = c.state; }
   { const r = await flowPricelistRequest({ actor, dry, out, state, t }); if (r !== NEXT) return r; }
@@ -1283,6 +1284,17 @@ async function handleDirectAs(msg) {
     return;
   }
   if (otherDoc) {
+    // 🔒 "כן, לסגור" / "מאשר" על GR ישן שעדיין טיוטא, כשאין קליטה פתוחה — שואלים שוב על אותה תעודה (סקירה 25.11)
+    if (pressed.owner === 'goods_receipt' && !GoodsReceipt.active(user.id, true) && !WaQuestions.isNo(text) && (WaUi.sameLabel(text, WaUi.BTN.confirmFinal) || WaUi.sameLabel(text, WaUi.BTN.approve) || /^(כן|מאשר|מאשרת|👍)/.test(text))) {
+      const od = await GoodsReceipt.oldDraft(user.id, pressed.draft.doc).catch(() => null);
+      if (od?.status === 'טיוטא') {
+        const ask = `🔒 *${od.docno}* עדיין טיוטא בפריוריטי. להפוך אותה לסופית?\nאחרי הסגירה אי אפשר לבטל מהבוט — רק בפריוריטי.`;
+        log({ ...base, text, action: 'goods_receipt', status: 'ok', result: `טיוטא ישנה ${od.docno} — שאלה מחדש`, reply: ask });
+        await sendButtons(msg.chatId, ask, [WaUi.BTN.confirmFinal, WaUi.BTN.no], { owner: 'chat', draft: { kind: 'gr_final_old', company: od.company, docno: od.docno }, awaiting: true });
+        saveChat(user.id, { ...chatOf(user.id), draft: { kind: 'gr_final_old', company: od.company, docno: od.docno }, awaiting: true });
+        return;
+      }
+    }
     const no = WaQuestions.isNo(text);
     const reply = no ? WaQuestions.CLOSED_NO_TEXT : WaQuestions.CLOSED_TEXT;
     log({ ...base, text, action: pressed.owner, status: no ? 'ok' : 'unclear', result: `כפתור / תגובה על מסמך אחר (${pressed.draft.doc})${no ? ' (תשובה שלילית)' : ''}`, reply });
