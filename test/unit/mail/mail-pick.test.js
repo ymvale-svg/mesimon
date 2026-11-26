@@ -196,3 +196,25 @@ test('תקלה ב-Gmail — הודעה לעובד בלי הפרטים הטכני
   await assert.rejects(Pick.pick(me.id, 'missing1'), (err) => /נסו שוב/.test(err.message) && !/404/.test(err.message));
   assert.ok(log.mock.calls.length >= 1, 'הפרטים — ליומן');
 });
+
+test('מייל שנבחר ביד כבר נקרא — ההצעה לא יורדת מ"ממתין לאישורך" באמצע העריכה', async (t) => {
+  const Scan = require('../../../server/mail/mail-scan');
+  const me = user();
+  fakeGmail(t, { boxes: { [me.id]: [me.id] }, mails: { mailRead1: rawMail() } });
+  Fakes.claude(t, () => aiTask('משימה ממייל שכבר נקרא'));
+  const r = await Pick.pick(me.id, 'mailRead1');
+
+  // הצעה רגילה של הסריקה, ממייל שנקרא בינתיים — היא כן יורדת (ההתנהגות הקיימת)
+  const scanned = Scan.insertSuggestion(me, {
+    gmailId: 'mailRead2', headerId: `<scan-${Date.now()}@example.test>`, fromName: 'ספק', fromEmail: 'vendor@example.test',
+    subject: 'נקרא', receivedAt: new Date().toISOString(), box: 0
+  }, 'task', { title: 'מהסריקה', summary: '', toMe: false, auto: false });
+
+  // ב-Gmail: שני המיילים כבר נקראו (אין UNREAD)
+  t.mock.method(Gmail, 'has', () => true);
+  t.mock.method(Gmail, 'threadOf', async (who, gmailId) => [{ id: gmailId, labels: ['INBOX'], at: new Date() }]);
+  await Scan.pollMailbox();
+
+  assert.equal(D.get('SELECT status FROM ai_suggestions WHERE id = ?', scanned).status, 'read', 'הצעה מהסריקה ממייל שנקרא — יורדת');
+  assert.equal(D.get('SELECT status FROM ai_suggestions WHERE id = ?', r.suggestion.id).status, 'pending', 'מייל שהעובד בחר ביד — נשאר');
+});
