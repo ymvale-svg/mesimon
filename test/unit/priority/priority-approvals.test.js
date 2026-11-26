@@ -201,3 +201,23 @@ test('sweep — כבוי בלי חיבור לפריוריטי', async (t) => {
   assert.deepEqual(await A.sweep(async () => true, { force: true }), []);
   assert.equal(w.mock.callCount(), 0);
 });
+
+test('sameName — כינוי בסוגריים, ט/ת, אותיות סופיות, כפולות; מילה אחת — לא', () => {
+  assert.equal(A.sameName('חנה (חני) גנוט', 'חנה גנות'), true);
+  assert.equal(A.sameName('גנות חנה', 'חנה (חני) גנוט'), true, 'בכל סדר ובכל כיוון');
+  assert.equal(A.sameName('יוסי כהן', 'יוסי כהנ'), true);
+  assert.equal(A.sameName('דוד לוי', 'דויד לוי'), false);
+  assert.equal(A.sameName('קריית שמונה', 'קרית שמונה'), true);
+  assert.equal(A.sameName('חנה', 'חנה גנוט'), false, 'מילה אחת — לא מספיק');
+  assert.equal(A.sameName('חנה כהן', 'חנה גנוט'), false);
+});
+
+test('שם המשתמש בפריוריטי בעברית עם כינוי ("חנה (חני) גנוט") ↔ "חנה גנות" במשימון — בשני הכיוונים, בלי מייל', async (t) => {
+  const hani = { USERLOGIN: 'חנה (חני) גנוט', SNAME: 'חנה (חני) גנוט', FIRSTNAME: 'חנה', FAMILYNAME: '(חני) גנוט', EMAIL: 'hani@corp.test', STATDES: 'עובד פעיל' };
+  usersMock(t, [...PR_USERS, hani]);
+  const u = user({ full_name: 'חנה גנות', email: 'hana.g@other.test', phone: '0503333333' });
+  const m = await A.mesimonUserFor('חנה (חני) גנוט');
+  assert.equal(m.how, 'name');
+  assert.equal(m.user.id, u.id);
+  assert.equal(await A.priorityLoginFor(u), 'חנה (חני) גנוט');
+});
