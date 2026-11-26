@@ -9,7 +9,6 @@
  */
 const D = require('../core').Db;
 const PriorityAccess = require('../priority').PriorityAccess;
-const PriorityWaiting = require('../priority').PriorityWaiting;
 const PrioritySettings = require('../priority').PrioritySettings;
 
 /** מנהלת הרכש — מקבלת את ההצעות למחירון (‎po-pricelist.js‎) */
@@ -162,13 +161,6 @@ const ACTIONS = [
     description: 'כשהזמנת רכש בפריוריטי הופכת לסופית ("אושרה" / "נשלחה לספק"): מנהל הפרויקט (לפי מסך הפרויקטים בפריוריטי) ויוזם דרישת הרכש מקבלים את ההזמנה — הספק, הפריטים, הכמויות והמחירים, ו-PDF של ההזמנה. במייל — לכתובת שבכרטיס המשתמש בפריוריטי; בוואטסאפ — כשיש משתמש משימון עם אותו מייל וטלפון בפרופיל (בשעות הפעילות). סריקה כל 10 דקות, קריאה בלבד. בהפעלה הראשונה ההזמנות הסופיות הקיימות נרשמות בלי שליחה. בסביבת בדיקה (test11) — רק למנהלי המערכת. החברות: PO_NOTIFY_COMPANIES, או כל החברות שהבוט מכיר. דורש PRIORITY_USER ו-PRIORITY_PASSWORD.',
     examples: [],
     enabled: false
-  },
-  {
-    key: 'priority_waiting', icon: '✍️', label: 'מה מחכה לחתימה שלי בפריוריטי', channel: 'private',
-    section: 'priority', feature: '✍️ *מה מחכה לחתימה שלי* — כל מה שממתין לאישור שלך בפריוריטי',
-    description: '"מה מחכה לחתימה שלי", "מה מחכה לי בפריוריטי", או הכפתור "✍️ מה מחכה לי" בתפריט פריוריטי: כל מסמך בפריוריטי שהעובד הוא החותם הבא בו (דרישות והזמנות רכש, חוזים, חשבונות חלקיים, חשבונות עסקה, וכל מסך אחר עם סבב אישורים), בכל החברות, הוותיק קודם — עם קישור שפותח את המסמך בפריוריטי. "📤 ששלחתי לאישור" — מה שהעובד פתח ושממתין לאחרים, ואצל מי; "🔁 כמחליף" — מה שממתין למי שהוא מחליף. גם אחורה: כל מה שממתין עכשיו, בלי קשר למתי נשלח. האישור עצמו — בפריוריטי. מוצג רק למי שמשתתף בסבב אישורים. קריאה בלבד (מהסבב של "ממתין לאישורך" במשימון פריוריטי, כל 10 דקות).',
-    examples: ['מה מחכה לחתימה שלי', 'מה מחכה לי בפריוריטי', 'ששלחתי לאישור'],
-    enabled: true
   },
   {
     key: 'po_pricelist', icon: '🏷️', label: 'הוספה למחירון ספק מהזמנה', channel: 'proactive',
@@ -358,8 +350,6 @@ function allowed(actor, key) {
   if (PRIORITY_DOC[key]) return Boolean(a?.enabled && PriorityAccess.can(actor, PRIORITY_DOC[key]));
   // 🏷️ הוספה למחירון — רק מנהלת הרכש (משימון פריוריטי ← הגדרות) ומנהלי מערכת; גם הטיפ
   if (key === 'po_pricelist') return Boolean(a?.enabled && actor?.type === 'user' && (PriorityAccess.isAdmin(actor) || pricelistBuyer() === actor.id));
-  // ✍️ מה מחכה לחתימה שלי — רק מי שמשתתף בסבב אישורים בפריוריטי (חותם, מחליף, או ששלח). מי שלא — לא רואה (גם לא טיפ)
-  if (key === 'priority_waiting') return Boolean(a?.enabled && actor?.type === 'user' && PriorityWaiting.involved(actor.id));
   return Boolean(a?.enabled && (a.audience === 'all' || isManager(actor)));
 }
 

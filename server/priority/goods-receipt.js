@@ -623,12 +623,9 @@ function dueText(s, code) {
 /** תפריט פריוריטי — בכפתורים. הכיתוב של כל כפתור הוא הטריגר של הזרימה ("קבלת סחורה", "דרישת רכש") */
 const MENU_GR = '📦 קבלת סחורה';
 const MENU_PD = '🛒 דרישת רכש';
-// ✍️ "מה מחכה לי" — הכיתוב של ‎PriorityWaiting.BOT_BTN.sign‎: בתפריט הוא אינו קליטה, והבוט הרגיל עונה עליו
-const MENU_WAIT = '✍️ מה מחכה לי';
 const MENU_LINES = {
   gr: '📦 *קבלת סחורה* — תעודת משלוח או חשבונית ← GR',
-  pd: '🛒 *דרישת רכש* — רשימת פריטים (צילום, הקלטה או הקלדה) ← דרישה לאישור',
-  wait: '✍️ *מה מחכה לי* — מה שממתין לחתימה שלך, ומה ששלחת לאישור'
+  pd: '🛒 *דרישת רכש* — רשימת פריטים (צילום, הקלטה או הקלדה) ← דרישה לאישור'
 };
 /**
  * תפריט פריוריטי — רק מה שמותר לעובד (מטריצת ההרשאות, ‎priority-access.js‎; הוחלט 13.11.26).
@@ -636,10 +633,10 @@ const MENU_LINES = {
  */
 function menuOf(allow) {
   const a = allow ?? { gr: true, pd: true };
-  const keys = ['gr', 'pd', 'wait'].filter((k) => a[k]);
+  const keys = ['gr', 'pd'].filter((k) => a[k]);
   return {
     text: ['🗂 *פריוריטי* — מה לעשות?', ...keys.map((k) => MENU_LINES[k]), '_או פשוט המשיכו במה שרציתם — זה יגיע למשימות כרגיל._'].join('\n'),
-    buttons: keys.map((k) => ({ gr: MENU_GR, pd: MENU_PD, wait: MENU_WAIT })[k])
+    buttons: keys.map((k) => (k === 'gr' ? MENU_GR : MENU_PD))
   };
 }
 const GR_START = '📦 *קבלת סחורה* — שלחו צילום של תעודת המשלוח או החשבונית (המסמך הראשי, שממנו נקראים הנתונים).';
@@ -1978,12 +1975,12 @@ async function handle({ user, text = '', file = null, reaction = false, allow = 
   // 🔐 רק מה שמותר: קבלת סחורה בלבד — ישר אליה, בלי תפריט; דרישת רכש בלבד — כפתור אחד; כלום — לא פתוח
   if (!s && !file && isPriority(t) && !isTrigger(t)) {
     if (!allow.gr && !allow.pd) return { s: null, replies: [Access.NO_ACCESS], status: 'ok', result: 'פריוריטי — לא מורשה' };
-    if (allow.gr && !allow.pd && !allow.wait) {
+    if (allow.gr && !allow.pd) {
       save(user.id, { step: 'doc', startedAt: Date.now(), lastPrompt: GR_START });
       return { replies: [GR_START], status: 'ok', result: 'פריוריטי ← קבלת סחורה (המסמך היחיד שמותר)', buttons: [BTN.cancel] };
     }
     const m = menuOf(allow);
-    save(user.id, { step: 'menu', startedAt: Date.now(), allow: { gr: Boolean(allow.gr), pd: Boolean(allow.pd), wait: Boolean(allow.wait) } });
+    save(user.id, { step: 'menu', startedAt: Date.now(), allow: { gr: Boolean(allow.gr), pd: Boolean(allow.pd) } });
     return { replies: [m.text], status: 'ok', result: 'תפריט פריוריטי', buttons: m.buttons };
   }
 

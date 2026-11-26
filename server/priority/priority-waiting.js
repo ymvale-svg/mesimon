@@ -350,78 +350,6 @@ function mapUser(login, userId) {
   return { login: l, userId: u.id };
 }
 
-// ---------------------------------------------------------------- 🤖 הבוט: "מה מחכה לי?"
-
-/** הכיתובים של הכפתורים — בדיוק מה שהבוט מבין */
-const BOT_BTN = Object.freeze({ sign: '✍️ מה מחכה לי', sent: '📤 ששלחתי לאישור', alt: '🔁 כמחליף' });
-const BOT_LIMIT = 8;
-
-/** העובד משתתף בסבב אישורים בפריוריטי — חותם, מחליף, או ששלח משהו שממתין עכשיו */
-const involved = (userId) => Boolean(D.get('SELECT 1 AS ok FROM priority_waiting WHERE org_id = ? AND (signer_user_id = ? OR alt_user_id = ? OR owner_user_id = ?) LIMIT 1',
-  ORG, userId, userId, userId));
-
-/**
- * בקשה לבוט: ‎{ kind: 'sign' | 'sent' | 'alt', soft }‎ או ‎null‎. ‎soft‎ — ניסוח שיכול להתכוון גם למשהו אחר
- * ("מה מחכה לי", "מה ממתין לאישורי" — גם ההצעות של משימון): רק כשבאמת יש משהו בפריוריטי, ולא באמצע שאלה פתוחה.
- */
-function botAsk(text) {
-  const raw = String(text ?? '').trim();
-  const t = raw.replace(/^[^\p{L}\d]+/u, '').replace(/[\s?!.]+$/u, '').replace(/\s+/g, ' ');
-  if (!t || t.split(' ').length > 8) return null;
-  if (raw === BOT_BTN.sign) return { kind: 'sign', soft: false };
-  if (raw === BOT_BTN.sent || /^(?:מה\s+)?ש?(?:שלחתי|העברתי)\s+ל?אישור(?:\s+(?:ב|של)?פריוריטי)?$/u.test(t)) return { kind: 'sent', soft: false };
-  if (raw === BOT_BTN.alt || /^(?:מה\s+(?:מחכה|ממתין)\s+(?:לי\s+)?)?כמחליף$/u.test(t)) return { kind: 'alt', soft: false };
-  if (/^מה\s+(?:מחכה|ממתין|ממתינים|ממתינה)\s+(?:לי\s+)?ל?(?:חתימה|חתימתי|חתימה\s+שלי)(?:\s+(?:ב)?פריוריטי)?$/u.test(t)) return { kind: 'sign', soft: false };
-  if (/^מה\s+(?:מחכה|ממתין|ממתינים)\s+(?:לי\s+)?(?:ל?אישור(?:י|\s+שלי)?\s+)?ב?פריוריטי$/u.test(t)) return { kind: 'sign', soft: false };
-  if (/^מה\s+(?:מחכה|ממתין|ממתינים)\s+(?:לי|ל?אישורי|ל?אישור\s+שלי)$/u.test(t)) return { kind: 'sign', soft: true };
-  return null;
-}
-
-const money = (n) => (n === null || n === undefined ? '' : `₪${Math.round(n).toLocaleString('en-US')}`);
-const ageText = (w) => `${w.days === 0 ? 'מהיום' : w.days === 1 ? 'יום אחד' : `${w.days} ימים`}${w.level === 'late' ? ' 🔴' : w.level === 'warn' ? ' 🟠' : ''}`;
-
-/**
- * התשובה בבוט: הרשימה (עד 8, הוותיק קודם) עם קישור לכל מסמך, וכפתורים לשתי הרשימות האחרות כשיש בהן משהו.
- * ‎{ text, buttons, count, result }‎. ‎app‎ — כתובת משימון (ל"ועוד N").
- */
-async function botReply(user, kind = 'sign', { app = '' } = {}) {
-  const userId = typeof user === 'object' ? user.id : user;
-  const { items, at } = await forUser(userId);
-  const by = { sign: items.filter((w) => w.role === 'sign'), alt: items.filter((w) => w.role === 'alt'), sent: items.filter((w) => w.role === 'sent') };
-  const list = by[kind] ?? [];
-  if (!items.length) {
-    const u = typeof user === 'object' ? user : D.get('SELECT id, full_name, email FROM users WHERE id = ?', userId);
-    const login = await Approvals.priorityLoginFor(u).catch(() => null);
-    if (!login) {
-      return { text: 'לא מצאתי אותך כמשתמש בפריוריטי, ולכן אני לא יודע מה ממתין לך שם.\nמנהל המערכת יכול לקשר אותך (משימון פריוריטי ← סוגי אישורים).', buttons: [], count: 0, result: 'לא מקושר לפריוריטי' };
-    }
-  }
-  const head = { sign: '✍️ *ממתין לחתימה שלך בפריוריטי*', alt: '🔁 *ממתין לחתימה שלך — כמחליף*', sent: '📤 *ששלחת לאישור — ממתין לאחרים*' }[kind];
-  const empty = { sign: '✅ אין כרגע שום דבר שממתין לחתימה שלך בפריוריטי.', alt: 'אין כרגע מסמכים שממתינים לך כמחליף.', sent: 'אין כרגע מסמכים ששלחת ושממתינים לאישור.' }[kind];
-  const lines = [];
-  if (!list.length) lines.push(empty);
-  else {
-    lines.push(`${head} — ${list.length}`, '');
-    list.slice(0, BOT_LIMIT).forEach((w, i) => {
-      const who = w.role === 'sent' ? (w.waitingFor ? `ממתין ל${w.waitingFor}` : 'אין חותם ידוע') : w.role === 'alt' ? `כמחליף של ${w.altFor}` : '';
-      lines.push(`${i + 1}. *${w.type} ${w.docno}* · ${w.companyName}`);
-      lines.push(`   ${[w.party, money(w.amount), who, ageText(w)].filter(Boolean).join(' · ')}`);
-      lines.push(`   🔗 ${w.link}`);
-    });
-    if (list.length > BOT_LIMIT) lines.push('', `ועוד ${list.length - BOT_LIMIT}${app ? ` — כולם במשימון פריוריטי: ${app}/priority` : ' — כולם במשימון פריוריטי.'}`);
-    if (kind !== 'sent') lines.push('', '_האישור עצמו — בפריוריטי: הקישור פותח את המסמך._');
-  }
-  const others = ['sign', 'sent', 'alt'].filter((k) => k !== kind && by[k].length);
-  if (others.length) lines.push('', others.map((k) => `${{ sign: '✍️ לחתימה שלך', sent: '📤 ששלחת לאישור', alt: '🔁 כמחליף' }[k]}: ${by[k].length}`).join(' · '));
-  if (at && Date.now() - Date.parse(at) > 20 * 60000) lines.push(`_עודכן מפריוריטי ב-${new Date(at).toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Jerusalem' })}_`);
-  return {
-    text: lines.join('\n'),
-    buttons: others.map((k) => BOT_BTN[k]),
-    count: list.length,
-    result: `${kind}: ${list.length}${others.length ? ` (${others.map((k) => `${k} ${by[k].length}`).join(', ')})` : ''}`
-  };
-}
-
 let timer = null;
 function start() {
   if (timer) clearInterval(timer);
@@ -433,6 +361,5 @@ function start() {
 
 module.exports = {
   KNOWN, FALLBACK_NAME, WARN_DAYS, LATE_DAYS,
-  signerOf, discover, sweep, forUser, refresh, check, adminView, setType, mapUser, start, typeOf,
-  BOT_BTN, involved, botAsk, botReply
+  signerOf, discover, sweep, forUser, refresh, check, adminView, setType, mapUser, start, typeOf
 };

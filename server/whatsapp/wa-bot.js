@@ -86,7 +86,7 @@ const { answerLike, busyFor, meetCoordRun, meetCoordTick, pushToUser, questionTt
 const { businessCommand, closeAlerted, closureDecision, confirmPending, contactOf, createFromDraft, draftEmail, findRecipients, mailActionAlerts, mailAlertFor, mailAlerts, parseThreadAdd, resolveCc, solveText, startGoodsFromMail, suggestionDecision, suggestionFeedback, threadAddText, VIA_EMAIL, VIA_MESIMON } = require('./wa-mail');
 const { MENU, MENU_FREE_HINT, MENU_MORE, PLAIN_AGENTS, agentsText, cut, dayItems, isMenuButton, menuButtonOf, menuButtons, menuOptions, menuPick, menuText, moreMenuGroups, pairsOf, parseClosureCommand, parseSuggestionCommand, recordingReply, todayMessage, walkAction, walkButtons, walkText } = require('./wa-menu');
 const { flowReply, logoIntent, meetingAudioAllowed, meetingAudioTurn, meetingFollowups, processMeetingAudio, receiveMeetingAudio, timelessAudioTick, TRANSLATE } = require('./wa-meeting');
-const { DRAFT_ONLY, flowAgentsList, flowAlertNo, flowOnMailDose, flowApproval, flowBusinessCommand, flowCancel, flowClosureCommand, flowEmailEdit, flowEmailPick, flowEmailSolve, flowEmailVia, flowFeaturesRequest, flowFormFillRequest, flowGreeting, flowInstinct, flowInstinctExplicit, flowInstinctReply, flowInstinctPilot, flowNoticeToInstinct, flowIntentCancel, flowIntentDenied, flowIntentMenu, flowIntentOther, flowMailFileRequest, flowMailReplyEdit, flowMailWalk, flowMeetCoordRequest, flowMeetingAudioAnswer, flowMeetingAudioRequest, flowMeetingAudioStatus, flowMeetingFollowupRequest, flowMeetingReminderRequest, flowMeetingSummaryRoutine, flowMenuList, flowMenuPick, flowNoAi, flowNoticeRequest, flowOnClosureAddress, flowOnDayEvening, flowOnFormFill, flowOnGoodsStop, flowOnMailFile, flowOnMailMuteSender, flowOnMailRemindOrGoods, flowOnMeetCoord, flowOnMeetingTasks, flowOnPaceOffer, flowOnPlainMail, flowOnReminder, flowOnRfq, flowOnSentFollowup, flowOnPricelist, flowPricelistRequest, flowPartsBuilt, flowPriorityWaiting, flowOnThreadAdd, flowRemindersRequest, flowReplyAsk, flowRfqFollowup, flowRfqRequest, flowRfqSummary, flowSuggestionCommand, flowTranslateRequest, flowWalk, NEXT, switchCancels } = require('./wa-flows');
+const { DRAFT_ONLY, flowAgentsList, flowAlertNo, flowOnMailDose, flowApproval, flowBusinessCommand, flowCancel, flowClosureCommand, flowEmailEdit, flowEmailPick, flowEmailSolve, flowEmailVia, flowFeaturesRequest, flowFormFillRequest, flowGreeting, flowInstinct, flowInstinctExplicit, flowInstinctReply, flowInstinctPilot, flowNoticeToInstinct, flowIntentCancel, flowIntentDenied, flowIntentMenu, flowIntentOther, flowMailFileRequest, flowMailReplyEdit, flowMailWalk, flowMeetCoordRequest, flowMeetingAudioAnswer, flowMeetingAudioRequest, flowMeetingAudioStatus, flowMeetingFollowupRequest, flowMeetingReminderRequest, flowMeetingSummaryRoutine, flowMenuList, flowMenuPick, flowNoAi, flowNoticeRequest, flowOnClosureAddress, flowOnDayEvening, flowOnFormFill, flowOnGoodsStop, flowOnMailFile, flowOnMailMuteSender, flowOnMailRemindOrGoods, flowOnMeetCoord, flowOnMeetingTasks, flowOnPaceOffer, flowOnPlainMail, flowOnReminder, flowOnRfq, flowOnSentFollowup, flowOnPricelist, flowPricelistRequest, flowPartsBuilt, flowOnThreadAdd, flowRemindersRequest, flowReplyAsk, flowRfqFollowup, flowRfqRequest, flowRfqSummary, flowSuggestionCommand, flowTranslateRequest, flowWalk, NEXT, switchCancels } = require('./wa-flows');
 
 const RECENT_FILE_MS = 15 * 60 * 1000;
 
@@ -430,8 +430,6 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
   { const r = await flowPricelistRequest({ actor, dry, out, state, t }); if (r !== NEXT) return r; }
   // 🏗️ "נפתח" ממנהלת הרכש — בדיקה מיידית של המק"טים לבנייה
   { const r = await flowPartsBuilt({ actor, dry, out, state, t }); if (r !== NEXT) return r; }
-  // ✍️ "מה מחכה לחתימה שלי" / "ששלחתי לאישור" — מה שממתין בפריוריטי (קריאה בלבד)
-  { const r = await flowPriorityWaiting({ actor, dry, out, state, t }); if (r !== NEXT) return r; }
   // 🔕 "לא להקפיץ יותר מיילים של X?" (‎mail-push.js‎)
   { const c = { actor, dry, keep, out, state, t }; const r = await flowOnMailMuteSender(c); if (r !== NEXT) return r; state = c.state; }
   {
@@ -1261,7 +1259,6 @@ async function handleDirectAs(msg) {
     }
   }
   const pdAllowed = WaActions.allowed(actor, 'purchase_demand');
-  const waitAllowed = WaActions.allowed(actor, 'priority_waiting');
   // ❓ לחיצה על כפתור של שאלה מסוימת — לשאלה הזו, ולא למה שפתוח עכשיו (‎wa-questions.js‎).
   // 🔒 תגובה (Reaction), או ציטוט עם "כן" / "לא" קצר — כמו לחיצה על ההודעה שעליה הם (#171)
   const reaction = msg.kind === 'reactionMessage';
@@ -1377,9 +1374,7 @@ async function handleDirectAs(msg) {
   // 🔐 פריוריטי לא פתוח לעובד (אין לו אף מסמך במטריצה) — "פריוריטי" / "קבלת סחורה" / "דרישת רכש" (גם כפתור מהודעה ישנה):
   // תשובה אחת ברורה, ולא תפריט ולא בקשה ל-AI (הוחלט 13.11.26)
   const shortAsk = String(text ?? '').trim().split(/\s+/).filter(Boolean).length <= 3;
-  // ✍️ מי שמשתתף בסבב אישורים — "פריוריטי" לבד מראה לו מה ממתין לו (‎flowPriorityWaiting‎), לא "לא פתוח לך"
-  const waitOnly = waitAllowed && GoodsReceipt.isPriority(text) && !GoodsReceipt.isTrigger(text) && !PurchaseDemand.opens(text);
-  if (!forceChat && !forceFlow && !grAllowed && !pdAllowed && !msg.file && !waitOnly
+  if (!forceChat && !forceFlow && !grAllowed && !pdAllowed && !msg.file
     && ((shortAsk && (GoodsReceipt.isPriority(text) || GoodsReceipt.isTrigger(text) || PurchaseDemand.opens(text)))
       || /^\P{L}*(?:קבלת\s*סחורה|דרישת\s*רכש)/u.test(String(text ?? '')))) {
     await notice;
@@ -1392,7 +1387,7 @@ async function handleDirectAs(msg) {
     const slowGr = setTimeout(() => react(ref, '🧐'), SLOW_NOTICE_MS);
     let r;
     try {
-      r = await GoodsReceipt.handle({ user, text, file: msg.file, reaction: msg.kind === 'reactionMessage', allow: { gr: grAllowed, pd: pdAllowed, wait: waitAllowed } });
+      r = await GoodsReceipt.handle({ user, text, file: msg.file, reaction: msg.kind === 'reactionMessage', allow: { gr: grAllowed, pd: pdAllowed } });
     } catch (err) {
       console.error('[משימון] קבלת סחורה נכשלה:', err.message);
       r = { replies: ['משהו השתבש בקבלת הסחורה. נסו שוב, או *ביטול*.'], status: 'error', result: err.message };
