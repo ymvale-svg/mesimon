@@ -419,10 +419,29 @@ const AiInboxView = (() => {
     const dismiss = el('button.btn.btn-sm.btn-ghost', { type: 'button', title: 'לא רלוונטי — ההצעה לסגירה יורדת, המשימה נשארת' }, ['✕']);
     dismiss.addEventListener('click', (e) => { stop(e); run(dismiss, () => API.post(`/api/ai/suggestions/${s.id}/closure-dismiss`), reload)(); });
     const line = closureMain(s, c, dismiss, stop, reload);
+    const ask = () => API.post(`/api/ai/suggestions/${s.id}/closure-advise`);
     // עצה בלבד (אין למי לפנות) — ה-✕ עובר אליה
-    if (!line) return agentAdvice(c.agent, dismiss);
-    const advice = agentAdvice(c.agent);
+    if (!line) return agentAdvice(c.agent, dismiss) ?? agentOffer(c.agentOffer, ask, reload, dismiss);
+    const advice = agentAdvice(c.agent) ?? agentOffer(c.agentOffer, ask, reload);
     return advice ? el('div', { onclick: stop }, [line, advice]) : line;
+  }
+
+  /**
+   * 🤖 סוכן המחלקה יכול לייעץ, והעצה עוד לא נכתבה — היא נכתבת רק בלחיצה (סבב 2 בחיסכון, 26.11.26).
+   * ‎ask‎ — הבקשה לשרת; ‎reload‎ — ציור מחדש אחריה. משותף לכרטיס המשימה.
+   */
+  function agentOffer(o, ask, reload, dismiss = null) {
+    if (!o?.key) return null;
+    const btn = el('button.btn.btn-sm', { type: 'button' }, [`${o.icon ?? '🤖'} לשאול את ${o.title}`]);
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      btn.textContent = `${o.icon ?? '🤖'} ${o.title} חושב…`;
+      run(btn, ask, reload)().finally(() => { if (btn.isConnected) btn.textContent = `${o.icon ?? '🤖'} לשאול את ${o.title}`; });
+    });
+    return el('div.ai-closure.ai-advice', { onclick: (e) => e.stopPropagation() }, [
+      el('div.ai-closure-main', {}, [el('b', { text: '💡 יש לסוכן עצה איך לסגור' })]),
+      el('div.ai-closure-actions', {}, [btn, dismiss].filter(Boolean))
+    ]);
   }
 
   /**
@@ -1211,5 +1230,5 @@ const AiInboxView = (() => {
     setTimeout(() => scanDialog(() => HomeView.reload()), 300);
   }
 
-  return { load, card, openGmail, scanDialog, pickMailDialog, handleReturn, editSuggestion, rejectDialog, rejectNow, meetingRow, closureLine, agentAdvice };
+  return { load, card, openGmail, scanDialog, pickMailDialog, handleReturn, editSuggestion, rejectDialog, rejectNow, meetingRow, closureLine, agentAdvice, agentOffer };
 })();
