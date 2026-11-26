@@ -401,3 +401,77 @@ test('מדרישה אחת נפתחו כמה הזמנות — כולן', async (t
   assert.match(r.text, /• \*PO1\* לספק כלי עבודה/);
   assert.match(r.text, /• \*PO2\* לספק ברזל הצפון/);
 });
+
+// ---------------------------------------------------------------- "הוזמן?" — הזמנות הפרויקט לפי הפריט (נבדק מול פריוריטי 26.11.26)
+
+const ORDERS = [
+  { ORDNAME: 'PO26000107', STATDES: 'נשלחה לספק', CURDATE: '2026-10-29T00:00:00Z', CDES: 'גואטה הובלות', PROJDES: 'אלעד סנטר מגרש 50',
+    PORDERITEMS_SUBFORM: [{ PDES: 'מכולה ימית מוסבת למשרד', TQUANT: 1, TUNITNAME: "יח'", DUEDATE: '2026-11-01T00:00:00Z' }] },
+  { ORDNAME: 'PO26000130', STATDES: 'מחכה לאישור', CURDATE: '2026-11-19T00:00:00Z', CDES: 'א. נדב', PROJDES: 'אלעד סנטר מגרש 50',
+    PORDERITEMS_SUBFORM: [{ PDES: 'משאבה בטון עד 28 מטר', TQUANT: 1, TUNITNAME: "יח'" }] },
+  { ORDNAME: 'PO26000082', STATDES: 'אושרה', CURDATE: '2026-09-23T00:00:00Z', CDES: 'רדימיקס', PROJDES: 'אלעד סנטר מגרש 50',
+    PORDERITEMS_SUBFORM: [{ PDES: 'בטון ב-30', TQUANT: 100, TUNITNAME: 'קוב' }] },
+  { ORDNAME: 'PO26000099', STATDES: 'מבוטלת', CURDATE: '2026-09-01T00:00:00Z', CDES: 'X', PROJDES: 'אלעד סנטר מגרש 50',
+    PORDERITEMS_SUBFORM: [{ PDES: 'מכולה', TQUANT: 1, TUNITNAME: "יח'" }] }
+];
+function ordersFake(t) {
+  const asked = [];
+  fake(t, {
+    projects: async (c) => (c === 'a160226' ? [{ code: 'PR4', des: 'אלעד סנטר מגרש 50' }, { code: 'PR5', des: 'כרמיאל טרסה' }, { code: 'PR6', des: 'מבואות מגרש 500' }] : []),
+    projectOrders: async (c, code) => { asked.push(code); return code === 'PR4' ? ORDERS : []; }
+  });
+  return asked;
+}
+
+test('"הוזמנה מכולה 6 מטר למגרש 50?" — כן, הזמנה לספק עם השורה ותאריך האספקה; מבוטלת — לא', async (t) => {
+  reset();
+  const asked = ordersFake(t);
+  const u = user({ role: 'admin' });
+  assert.equal(MyDocs.isRequest('האם הוזמן מכולה 6 מטר למגרש 50'), true);
+  assert.deepEqual(MyDocs.parse('האם הוזמן מכולה 6 מטר למגרש 50').kinds, ['order']);
+  const r = await ask(u, 'האם הוזמן מכולה 6 מטר למגרש 50');
+  assert.deepEqual(asked, ['PR4'], 'רק הפרויקט שהמספר שלו בשאלה (לא "מגרש 500")');
+  assert.match(r.text, /^✅ \*כן, הוזמן\* — "מכולה" באלעד סנטר מגרש 50/);
+  assert.match(r.text, /PO26000107\* · גואטה הובלות · נשלחה לספק · 29\.10\.26/);
+  assert.match(r.text, /מכולה ימית מוסבת למשרד 1 יח' · אספקה 01\.11\.26/);
+  assert.doesNotMatch(r.text, /PO26000099/, 'מבוטלת');
+});
+
+test('"הוזמנה משאבת בטון?" — רק ההזמנות עם הכי הרבה מילים מהפריט; מחכה לאישור — "עוד לא אושרה"', async (t) => {
+  reset(); ordersFake(t);
+  const u = user({ role: 'admin' });
+  const r = await ask(u, 'הוזמנה משאבת בטון למגרש 50?');
+  assert.match(r.text, /^⏳ \*יש הזמנה — עוד לא אושרה\* — "משאבת בטון"/);
+  assert.match(r.text, /PO26000130/);
+  assert.doesNotMatch(r.text, /PO26000082/, 'בטון בלי משאבה');
+});
+
+test('"הוזמן?" — לא נמצא · בלי פרויקט — שואל לאיזה · בלי פריוריטי בבוט — לא', async (t) => {
+  reset(); ordersFake(t);
+  const u = user({ role: 'admin' });
+  assert.match((await ask(u, 'הוזמנו כפפות למגרש 50?')).text, /❌ \*לא מצאתי הזמנה\* של "כפפות" באלעד סנטר מגרש 50/);
+  assert.match((await ask(u, 'הוזמנה מכולה?')).text, /לאיזה פרויקט\?/);
+  // בלי שום מסמך במטריצה של משימון פריוריטי — לא מחפש בהזמנות
+  const Access = require('../../../server/priority/priority-access');
+  const emp = user({ role: 'employee' });
+  Access.save([{ id: emp.id, docs: [], companies: null }]);
+  assert.match((await ask(emp, 'הוזמנה מכולה למגרש 50?')).text, /פתוח רק למי שעובד עם פריוריטי בבוט/);
+  Access.save([]);
+});
+
+test('"הדרישה על הפטישים הפכה להזמנה?" — שאלה על הדרישה; ההזמנות לפי הפרויקט ותאריך הדרישה', async (t) => {
+  reset();
+  let args = null;
+  fake(t, {
+    readDemand: async () => ({ PRDNO: 'PR26000066', STATDES: 'סגורה', PROJDOCNO: 'PR4', CURDATE: '2026-11-23T00:00:00Z', PDUSER_SUBFORM: [] }),
+    ordersOfDemand: async (c, prdno, o) => { args = o; return [{ ORDNAME: 'PO26000138', STATDES: 'נשלחה לספק', CDES: 'טובול' }]; },
+    myDemands: async () => []
+  });
+  const u = user({ role: 'employee' });
+  botDoc(u, 'demand', 'PR26000066', { supplier: 'אלעד סנטר מגרש 50', note: 'פטישים' });
+  assert.deepEqual(MyDocs.parse('הדרישה על הפטישים הפכה להזמנה?').kinds, ['demand']);
+  const r = await ask(u, 'הדרישה על הפטישים הפכה להזמנה?');
+  assert.deepEqual(args, { project: 'PR4', since: '2026-11-23' });
+  assert.match(r.text, /✅ \*כן, אושרה\*/, '"סגורה" — אושרה והפכה להזמנה');
+  assert.match(r.text, /הפכה להזמנה \*PO26000138\* לספק טובול/);
+});
