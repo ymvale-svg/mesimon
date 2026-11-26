@@ -86,7 +86,7 @@ const { answerLike, busyFor, meetCoordRun, meetCoordTick, pushToUser, questionTt
 const { businessCommand, closeAlerted, closureDecision, confirmPending, contactOf, createFromDraft, draftEmail, findRecipients, mailActionAlerts, mailAlertFor, mailAlerts, parseThreadAdd, resolveCc, solveText, startGoodsFromMail, suggestionDecision, suggestionFeedback, threadAddText, VIA_EMAIL, VIA_MESIMON } = require('./wa-mail');
 const { MENU, MENU_FREE_HINT, MENU_MORE, PLAIN_AGENTS, agentsText, cut, dayItems, isMenuButton, menuButtonOf, menuButtons, menuOptions, menuPick, menuText, moreMenuGroups, pairsOf, parseClosureCommand, parseSuggestionCommand, recordingReply, todayMessage, walkAction, walkButtons, walkText } = require('./wa-menu');
 const { flowReply, logoIntent, meetingAudioAllowed, meetingAudioTurn, meetingFollowups, processMeetingAudio, receiveMeetingAudio, timelessAudioTick, TRANSLATE } = require('./wa-meeting');
-const { DRAFT_ONLY, flowAgentsList, flowAlertNo, flowOnMailDose, flowApproval, flowBusinessCommand, flowCancel, flowClosureCommand, flowEmailEdit, flowEmailPick, flowEmailSolve, flowEmailVia, flowFeaturesRequest, flowFormFillRequest, flowGreeting, flowInstinct, flowInstinctExplicit, flowInstinctReply, flowInstinctPilot, flowNoticeToInstinct, flowIntentCancel, flowIntentDenied, flowIntentMenu, flowIntentOther, flowMailFileRequest, flowMailReplyEdit, flowMailWalk, flowMeetCoordRequest, flowMeetingAudioAnswer, flowMeetingAudioRequest, flowMeetingAudioStatus, flowMeetingFollowupRequest, flowMeetingReminderRequest, flowMeetingSummaryRoutine, flowMenuList, flowMenuPick, flowNoAi, flowNoticeRequest, flowOnClosureAddress, flowOnDayEvening, flowOnFormFill, flowOnGoodsStop, flowOnMailFile, flowOnMailMuteSender, flowOnMailRemindOrGoods, flowOnMeetCoord, flowOnMeetingTasks, flowOnPaceOffer, flowOnPlainMail, flowOnReminder, flowOnRfq, flowOnSentFollowup, flowOnPricelist, flowPricelistRequest, flowOnThreadAdd, flowRemindersRequest, flowReplyAsk, flowRfqFollowup, flowRfqRequest, flowRfqSummary, flowSuggestionCommand, flowTranslateRequest, flowWalk, NEXT, switchCancels } = require('./wa-flows');
+const { DRAFT_ONLY, flowAgentsList, flowAlertNo, flowOnMailDose, flowApproval, flowBusinessCommand, flowCancel, flowClosureCommand, flowEmailEdit, flowEmailPick, flowEmailSolve, flowEmailVia, flowFeaturesRequest, flowFormFillRequest, flowGreeting, flowInstinct, flowInstinctExplicit, flowInstinctReply, flowInstinctPilot, flowNoticeToInstinct, flowIntentCancel, flowIntentDenied, flowIntentMenu, flowIntentOther, flowMailFileRequest, flowMailReplyEdit, flowMailWalk, flowMeetCoordRequest, flowMeetingAudioAnswer, flowMeetingAudioRequest, flowMeetingAudioStatus, flowMeetingFollowupRequest, flowMeetingReminderRequest, flowMeetingSummaryRoutine, flowMenuList, flowMenuPick, flowNoAi, flowNoticeRequest, flowOnClosureAddress, flowOnDayEvening, flowOnFormFill, flowOnGoodsStop, flowOnMailFile, flowOnMailMuteSender, flowOnMailRemindOrGoods, flowOnMeetCoord, flowOnMeetingTasks, flowOnPaceOffer, flowOnPlainMail, flowOnReminder, flowOnRfq, flowOnSentFollowup, flowOnPricelist, flowPricelistRequest, flowPartsBuilt, flowOnThreadAdd, flowRemindersRequest, flowReplyAsk, flowRfqFollowup, flowRfqRequest, flowRfqSummary, flowSuggestionCommand, flowTranslateRequest, flowWalk, NEXT, switchCancels } = require('./wa-flows');
 
 const RECENT_FILE_MS = 15 * 60 * 1000;
 
@@ -291,7 +291,7 @@ async function aboutPending(state, text) {
   const lastBot = [...(state.history ?? [])].reverse().find((h) => h.role === 'bot')?.text ?? '';
   try {
     const r = await Claude.json({
-      feature: 'bot.chat',
+      feature: 'bot.chat', light: true,
       system: [
         'אתה מסווג הודעות בשיחת וואטסאפ עם בוט משימות. לעובד יש פריט שממתין לתגובה שלו (טיוטה לאישור, או שאלה של הבוט).',
         'החזר same_topic=true אם ההודעה החדשה מתייחסת לפריט הזה: אישור, תיקון, תוספת, הוראה על הנוסח, תשובה לשאלה, בחירת נמען, או המשך ישיר שלו.',
@@ -428,6 +428,8 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
   // 🏷️ הוספה למחירון ספק מהזמנה — התשובה, ו"מחירון PO…" / "לבטל את ההוספה למחירון"
   { const c = { actor, dry, keep, out, state, t }; const r = await flowOnPricelist(c); if (r !== NEXT) return r; state = c.state; }
   { const r = await flowPricelistRequest({ actor, dry, out, state, t }); if (r !== NEXT) return r; }
+  // 🏗️ "נפתח" ממנהלת הרכש — בדיקה מיידית של המק"טים לבנייה
+  { const r = await flowPartsBuilt({ actor, dry, out, state, t }); if (r !== NEXT) return r; }
   // 🔕 "לא להקפיץ יותר מיילים של X?" (‎mail-push.js‎)
   { const c = { actor, dry, keep, out, state, t }; const r = await flowOnMailMuteSender(c); if (r !== NEXT) return r; state = c.state; }
   {
@@ -597,6 +599,8 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
     let today = null;
     if (WaActions.allowed(actor, 'today')) {
       try {
+        // 📬 העובד מסתכל בתובנות — מעכשיו הן מחושבות לו גם מראש (‎warmWanted‎)
+        if (!dry && insightsAllowed()) MailInsights.noteSeen(actor.id);
         const ins = !dry && insightsAllowed()
           ? Promise.race([
             Today.insightsFor(actor, { mail: mailOn() }).then((r) => (r?.result?.items ?? []).filter((x) => x.kind === 'action')),
@@ -659,6 +663,7 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
         {}, { action: 'mail_insights', status: 'error', result: 'לא זמין' });
     }
     const window = Range.forUser(actor.id, range);
+    if (mailOn()) MailInsights.noteSeen(actor.id);
     const result = await Insights.collect(actor.id, { window, from, mail: mailOn() });
     const f = Insights.format(result);
     return out(f.text, { insights: f.ids, draft: null }, {
@@ -1779,8 +1784,9 @@ async function listen() {
 
 /**
  * תובנות המייל מחושבות מראש, ברקע: כך ה-Today של הבוקר אינו ממתין לקריאת
- * עשרות מיילים ולניתוח שלהם. כל מייל מנותח פעם אחת ממילא (מטמון לשבוע) —
- * החישוב מראש אינו מוסיף עלות, רק מקדים אותה.
+ * עשרות מיילים ולניתוח שלהם. כל מייל מנותח פעם אחת (מטמון לשבוע) — אבל מראש
+ * מנותח **כל** מייל, ולפי בקשה רק עד 40–80 בטווח. ולמי שלא מסתכל — הכול לחינם.
+ * לכן רק למי שהסתכל לאחרונה (‎MailInsights.warmWanted‎; סבב 2 בחיסכון, 26.11.26).
  */
 const warmedAt = new Map(); // userId → ms
 
@@ -1788,6 +1794,7 @@ async function warmInsights() {
   if (!Claude.isEnabled()) return;
   for (const u of orgUsers().filter((x) => x.phone)) {
     if (Date.now() - (warmedAt.get(u.id) ?? 0) < WARM_EVERY_MS) continue;
+    if (!MailInsights.warmWanted(u.id)) continue;
     const actor = Auth.loadActor('user', u.id);
     if (!actor || !WaActions.allowed(actor, 'mail_insights') || !MailInsights.available(u.id)) continue;
     warmedAt.set(u.id, Date.now());
@@ -1991,6 +1998,6 @@ module.exports = {
     storeGroupMessage, processGroup, handleDirect, sanitizeGroup, resolveMentions, candidatesOf, converse, turn, withFollowUps, sendSummaries, YES,
     findRecipients, findContactCards, sourceOf, suggestionFeedback, flushOutbox, todayMessage, splitMessage, parseSuggestionCommand, businessCommand, chatOf, saveChat,
     recordingReply, checkDraft, draftText, createFromDraft, mailAlertFor, closeAlerted, logoIntent, busyFor, userLastAt, staleQuestion,
-    READ_ALOUD, READ_ALOUD_DOWN, readAloudText, readAloudFile, hooks, flowReply, retryTick, alertAdminsAi, dispatch
+    READ_ALOUD, READ_ALOUD_DOWN, readAloudText, readAloudFile, hooks, flowReply, retryTick, alertAdminsAi, dispatch, warmInsights
   }
 };

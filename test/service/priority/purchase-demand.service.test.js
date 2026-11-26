@@ -502,13 +502,16 @@ test('מק"טים לבנייה: "אף אחד" — בלי שאלה בטיוטא; 
   let r = await toMissing(say);
   assert.match(r.text, /בטון — 5 קוב _\(לתקרה\)_\n {3}🆕 לא בקטלוג — יישלח לרכש לבניית מק"ט/);
   assert.match(r.text, /דרישה לא יוצאת עם מק"ט כללי/);
+  // אונליין (פער 1, 20.11.26): הבקשה יוצאת לרכש מיד, לא ב"סיום"
+  assert.match(r.text, /📨 נשלח ל\*רותי רכש\* \(רכש\) לבניית מק"ט: בטון/);
+  assert.equal(sent.length, 1, 'המייל — מיד');
   H.assertButtons(r.buttons, [BTN.done, BTN.cancel]);
 
   r = await say('👍');
   assert.match(r.text, /\*פריט אחד לא נמצא בקטלוג:\*\n• בטון — 5 קוב/);
-  assert.match(r.text, /הרשימה תישלח לרותי רכש \(רכש\) לבניית מק"טים בהקדם/);
+  assert.match(r.text, /הרשימה כבר אצל רותי רכש \(רכש\)/);
   H.assertButtons(r.buttons, ['רק המזוהים ✅', 'לחכות לרכש ⏳', BTN.cancel]);
-  assert.equal(sent.length, 0, 'המייל — רק אחרי הבחירה');
+  assert.equal(sent.length, 1, 'ב"סיום" — לא שוב');
 
   r = await say('עם מק"ט כללי');
   assert.match(r.text, /דרישת רכש לא יוצאת עם מק"ט כללי/);
@@ -535,7 +538,6 @@ test('מק"טים לבנייה: "רק המזוהים" — מייל לרכש (ב�
   assert.match(sent[0].text, /להלן מק"טים נדרשים לבנייה בהקדם/);
   assert.match(sent[0].text, /1\. בטון — 5 קוב \(לתקרה\)/);
   assert.doesNotMatch(sent[0].text, /שק מלט/, 'רק מה שלא זוהה');
-  assert.match(sent[0].text, /הדרישה יוצאת בינתיים עם הפריטים שזוהו/);
 
   assert.match(r.text, /PRD26000007\* נפתחה ועברה \*לאישור\*/);
   assert.match(r.text, /פריט אחד נשלח ל\*רותי רכש\* לבניית מק"ט/);
@@ -563,7 +565,7 @@ test('מק"טים לבנייה: "לחכות לרכש" ← נבנה ← בבוט 
   await toMissing(say);
   await say(BTN.done);
   let r = await say('לחכות לרכש ⏳');
-  assert.match(r.text, /נשלח ל\*רותי רכש\* במייל: מק"ט אחד לבנייה בהקדם/);
+  assert.match(r.text, /אצל \*רותי רכש\* \(רכש\), בבוט ובמייל: מק"ט אחד לבנייה בהקדם/);
   assert.match(r.text, /הדרישה נשמרה ומחכה לרכש/);
   assert.match(r.text, /עוד לא נכתב דבר בפריוריטי/);
   assert.deepEqual(r.buttons, []);
@@ -1334,4 +1336,41 @@ test('פריטים שנמנו בשיחה רגילה לפני "דרישת רכש"
   const r2 = await say('אלעד 49 צפון');
   assert.doesNotMatch(r2.text, /הכנסתי לדרישה/);
   assert.equal(seen.length, 1);
+});
+
+test('פער 1+2 (25.11.26): פריט חסר ← הודעה מיד בבוט למנהלת הרכש; היא כותבת "נפתח" ← בדיקה מיידית ← העובד מעודכן', async (t) => {
+  const u = buyerWorker();
+  phoneSeq += 1;
+  const ruti = H.worker({ full_name: 'רותי רכש', phone: `97258${String(3000000 + phoneSeq)}`, email: `ruti-${process.hrtime.bigint()}@test.local` });
+  H.at(t);
+  H.companies(t, 'test11');
+  const B77 = part('C-77', 'בטון מובא ב-30 לתקרות');
+  let built = false;
+  priority(t, {
+    searchParts: async (c, des) => (/בטון/.test(des) ? [B30, B40, ...(built ? [B77] : [])].map((p) => ({ p, score: 1 })) : []),
+    partByCode: async (c, code) => (code === 'C-77' ? B77 : null)
+  });
+  ai(t);
+  t.mock.method(Settings, 'defaults', () => ({ ...Settings.DEFAULTS, buyerUserId: ruti.id }));
+  t.mock.method(Mailer, 'isEnabled', () => true);
+  t.mock.method(Mailer, 'send', async () => ({}));
+  const { say, wa } = H.chat(t, u);
+
+  await toMissing(say);
+  const toRuti = wa.calls.filter((c) => JSON.stringify(c.body ?? '').includes(ruti.phone)).map((c) => c.body?.message ?? '').join('\n');
+  assert.match(toRuti, /פותח דרישת רכש — חסר מק"ט אחד/);
+  assert.match(toRuti, /1\. בטון — 5 קוב/);
+  assert.match(toRuti, /כתבי כאן \*נפתח\*/);
+
+  // רק הבקשה של הבדיקה הזו פתוחה
+  D.run("UPDATE pd_part_requests SET status = 'expired' WHERE user_id != ?", u.id);
+  const R = H.chat(t, ruti);
+  let r = await R.say('נפתח');
+  assert.match(r.text, /עוד לא מצאתי בקטלוג מק"ט חדש ל: בטון/);
+  built = true;
+  r = await R.say('נפתח');
+  assert.match(r.text, /עובד אחד עודכן/);
+  assert.match(R.wa.texts().join('\n'), /בטון — 5 קוב ← \*בטון מובא ב-30 לתקרות\* \(C-77\)/, 'העובד קיבל את ההודעה');
+  // מי שאינו מנהלת הרכש — "נפתח" לא בודק כלום
+  assert.equal(await Parts.builtCommand(u.id, 'נפתח'), null);
 });

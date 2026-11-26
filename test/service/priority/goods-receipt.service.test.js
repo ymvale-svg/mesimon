@@ -736,7 +736,18 @@ async function toParts(say) {
 }
 const noPart = { findPartExact: async () => null, searchParts: async () => [] };
 
-test('מק"טים לבנייה בקבלת סחורה: "לא נמצא מק"ט — לשלוח לרכש?" ← כן: מייל, והקליטה ממשיכה על 000 עד טיוטא', async (t) => {
+/** מהשאלה "לאיזה פרויקט" — עד "נקלטה כסופית" */
+async function toFinal(say) {
+  let r = await say('נהריה מגרש 12');
+  for (let i = 0; i < 8 && !/נקלטה כסופית/.test(r.text); i++) {
+    const btn = r.buttons.includes(BTN.confirmFinal) ? BTN.confirmFinal : r.buttons.includes(BTN.approve) ? BTN.approve
+      : r.buttons.includes(BTN.done) ? BTN.done : r.buttons.includes(BTN.yes) ? BTN.yes : r.buttons[0];
+    r = await say(btn);
+  }
+  return r;
+}
+
+test('פער 4 (25.11.26): קבלה בלי הזמנה עם 000 — בלי שאלה לעובד; כשהקבלה סופית — לרכש אוטומטית, והמק"ט שנבנה מודיע', async (t) => {
   H.at(t);                                      // שעות העבודה — ההודעות לעובד יוצאות מיד
   H.companies(t, 'test11');
   const u = grWorker();
@@ -748,27 +759,18 @@ test('מק"טים לבנייה בקבלת סחורה: "לא נמצא מק"ט —
   const { say, wa } = H.chat(t, u);
 
   let r = await toParts(say);
-  assert.match(r.text, /לא נמצא מק"ט לשורה/);
-  assert.match(r.text, /בטון ב-30 — 5 קוב/);
-  assert.match(r.text, /לשלוח לרותי רכש \(רכש\) לבניית מק"טים\?/);
-  assert.match(r.text, /הקליטה ממשיכה בכל מקרה על מק"ט כללי 000/);
-  H.assertButtons(r.buttons, [BTN.yes, BTN.no]);
-
-  r = await say(BTN.yes);
-  assert.match(r.text, /נשלח ל\*רותי רכש\* במייל/);
+  assert.doesNotMatch(r.text, /לשלוח ל.* לבניית מק"טים\?/, 'בלי שאלה');
   assert.match(r.text, /לאיזה פרויקט לשייך/);
-  assert.equal(sent.length, 1);
-  assert.equal(sent[0].subject, `❗ מק"טים נדרשים לבנייה בהקדם — לבקשת ${u.full_name}`);
-  assert.equal(sent[0].urgent, true, 'סימן קריאה אדום גם מקבלת הסחורה');
-  assert.match(sent[0].text, /קבלת סחורה מבוט משימון/);
-  assert.match(sent[0].text, /ספק: בטון הצפון \(S100\)/);
-  assert.match(sent[0].text, /1\. בטון ב-30 — 5 קוב/);
-  assert.equal(pr.writes.length, 0);
+  assert.equal(sent.length, 0, 'עוד לא — רק כשהקבלה סופית');
 
-  await say('נהריה מגרש 12');
-  r = await say(BTN.done);
-  assert.match(r.text, /GR26000123\* — טיוטא לבדיקה/);
+  r = await toFinal(say);
+  assert.match(r.text, /נקלטה כסופית/);
   assert.equal(pr.wrote('addFreeLine')[0].args[2].part, '000', 'הקבלה נקלטת על 000 — לא מחכים לרכש');
+  assert.match(r.text, /שורה אחת נקלטה על מק"ט כללי — עבר לרותי רכש \(רכש\) לבניית מק"ט/);
+  const mail = sent.find((m) => /מק"טים נדרשים לבנייה/.test(m.subject));
+  assert.ok(mail);
+  assert.match(mail.text, /קבלת סחורה מבוט משימון/);
+  assert.match(mail.text, /1\. בטון ב-30 — 5 קוב/);
 
   // הרכש בנה — רק הודעה, בלי שאלה על בנייה מחדש
   D.run("UPDATE pd_part_requests SET status = 'expired' WHERE user_id != ?", u.id);
@@ -776,25 +778,23 @@ test('מק"טים לבנייה בקבלת סחורה: "לא נמצא מק"ט —
   wa.clear();
   assert.deepEqual(await Parts.tick(), { checked: 1, told: 1 });
   const note = wa.texts().join('\n');
-  assert.match(note, /המק"טים החסרים נבנו בפריוריטי/);
   assert.match(note, /בטון ב-30 — 5 קוב ← \*בטון ב-30 מובא\* \(B-31\)/);
-  assert.match(note, /הסחורה מבטון הצפון כבר נקלטה על מק"ט כללי 000/);
   assert.doesNotMatch(note, /לבנות/);
-  assert.equal(D.get('SELECT status FROM pd_part_requests WHERE user_id = ?', u.id).status, 'done');
 });
 
-test('מק"טים לבנייה בקבלת סחורה: "לא" — בלי מייל, ממשיכים לפרויקט; בלי מנהלת רכש — בלי השאלה', async (t) => {
+test('פער 4: אגרה / שכר טרחה על 000 — לא נשלחת לבניית מק"ט; בלי מנהלת רכש — כלום', async (t) => {
+  H.at(t);
   H.companies(t, 'test11');
   const u = grWorker();
   priority(t, { reads: noPart });
-  ai(t, doc());
+  ai(t, doc({ lines: [{ ...doc().lines[0], description: 'אגרת שילוט שנתית' }] }));
   const sent = buyer(t);
   const { say } = H.chat(t, u);
   await toParts(say);
-  const r = await say(BTN.no);
-  assert.match(r.text, /ממשיכים על מק"ט כללי 000/);
-  assert.match(r.text, /לאיזה פרויקט לשייך/);
-  assert.equal(sent.length, 0);
+  const r = await toFinal(say);
+  assert.match(r.text, /נקלטה כסופית/);
+  assert.doesNotMatch(r.text, /לבניית מק"ט/);
+  assert.equal(sent.filter((m) => /מק"טים נדרשים לבנייה/.test(m.subject)).length, 0);
 });
 
 test('מק"טים לבנייה בקבלת סחורה: בלי מנהלת רכש מוגדרת — ישר לפרויקט, כמו קודם', async (t) => {
@@ -818,11 +818,11 @@ const PO = { ORDNAME: 'PO26000050', CURDATE: '2026-11-01', PROJDOCNO: 'PR1', PRO
 const WAIT_LINE = { description: 'המתנה במשאבה — שעתיים', supplier_code: '', qty: 2, unit: 'שעה', unit_price: 300, discount_pct: 0, line_total: 600, handwritten: '', unclear: false, options: [] };
 
 /** מהצילום עד "נקלטה כסופית", מול ההזמנה PO26000050 (שורה 1 — בהזמנה, שורה 2 "המתנה" — לא) */
-async function toFinalWithOrder(t, { poNumber = '' } = {}) {
+async function toFinalWithOrder(t, { poNumber = '', reads = {}, writes = {} } = {}) {
   H.at(t);
   H.companies(t, 'test11');
   const u = grWorker();
-  const pr = priority(t, { reads: { openOrders: async () => [PO], getOrder: async (c, n) => (n === PO.ORDNAME ? { ...PO, SUPNAME: 'S100', STATDES: 'אושרה' } : null) } });
+  const pr = priority(t, { writes, reads: { openOrders: async () => [PO], getOrder: async (c, n) => (n === PO.ORDNAME ? { ...PO, SUPNAME: 'S100', STATDES: 'אושרה' } : null), ...reads } });
   H.claude(t, {
     extract: () => doc({ po_number: poNumber, lines: [doc().lines[0], WAIT_LINE] }),
     project: () => ({ codes: [], question: '', unrelated: false }),
@@ -1007,4 +1007,69 @@ test('מק"ט שנדחה בפרויקט — בקליטה הבאה לאותו פ�
   assert.match(JSON.stringify(pr.wrote('setDialog').at(-1).args), /B-30 לא פתוח בפרויקט הזה/);
   const line = pr.wrote('addFreeLine').at(-1).args[2];
   assert.equal(line.part, '000');
+});
+
+test('פער 3 (25.11.26): קבלה מול הזמנה — שורה שלא בהזמנה ובלי מק"ט לא נקלטת על 000, ועוברת לרכש', async (t) => {
+  // "המתנה במשאבה" — אין לה מק"ט בקטלוג (רק הבטון)
+  const { pr, sent, r } = await toFinalWithOrder(t, { poNumber: 'PO26000050', reads: { findPartExact: async (c, des) => (/בטון/.test(des) ? { PARTNAME: 'B-30', PARTDES: des, BUD_SUBCHAPTERNAME: '20', BUD_SUBTOPICNAME: '20-10' } : null) } });
+  assert.equal(pr.wrote('addFreeLine').length, 0, 'אין שורת 000 בקבלה מול הזמנה');
+  assert.equal(pr.wrote('addOrderLine').length, 1);
+  assert.match(r.text, /שורה אחת לא בהזמנה ובלי מק"ט — לא נקלטה ועברה לרכש/);
+  const mail = sent.find((m) => /לא בהזמנה/.test(m.subject));
+  assert.match(mail.text, /לא נקלטו — אין להן מק"ט/);
+  assert.match(mail.text, /המתנה במשאבה — שעתיים — 2 שעה × 300\.00 — לא נקלטה \(בלי מק"ט\)/);
+});
+
+test('פער 5 (25.11.26): קבלה מול הזמנה — שורה עם מק"ט שפריוריטי דחה לא חוזרת ל-000', async (t) => {
+  const { pr, r } = await toFinalWithOrder(t, { poNumber: 'PO26000050', writes: { addFreeLine: async () => { throw new Error('יש לקשר תת פרק'); } } });
+  const written = pr.wrote('addFreeLine').map((w) => w.args[2].part);
+  assert.ok(!written.includes('000'), `לא ניסה 000: ${written.join(', ')}`);
+  assert.match(r.text, /לא בהזמנה/);
+});
+
+test('פער 6 (25.11.26): מק"ט שהרכש בנה לפריט מספק — הקבלה הבאה של אותו פריט נקלטת עליו, לא על 000', async (t) => {
+  H.at(t);
+  H.companies(t, 'test11');
+  const u = grWorker();
+  const NEW = { PARTNAME: 'B-31', PARTDES: 'בטון ב-30 מובא', STATDES: 'פעיל', BUD_SUBCHAPTERNAME: '20', BUD_SUBCHAPTERDES: 'שלד', BUD_SUBTOPICNAME: '20-10', BUD_SUBTOPICDES: 'בטון' };
+  priority(t, { reads: { findPartExact: async () => null, searchParts: async () => [], partByCode: async (c, code) => (code === 'B-31' ? NEW : null) } });
+  ai(t, doc());
+  buyer(t);
+  // הרכש בנה בעבר את B-31 ל"בטון ב30" מהספק S100 (בכתיב קצת אחר)
+  Parts._remember({ company: 'test11', header: { supcode: 'S100' } }, { description: 'בטון ב30', built: { code: 'B-31' } });
+  assert.equal(Parts.aliasOf('test11', 'S100', 'בטון ב-30'), 'B-31');
+  assert.equal(Parts.aliasOf('test11', 'S999', 'בטון ב-30'), null, 'ספק אחר — לא');
+  const { say } = H.chat(t, u);
+  await say('קבלת סחורה', { file: H.photo() });
+  await say('👍');
+  await say('בלי הזמנה ❌');
+  const r = await say(BTN.yes);
+  assert.match(r.text, /B-31/);
+  assert.match(r.text, /המק"ט שהרכש בנה לפריט הזה/);
+  assert.doesNotMatch(r.text, /← 000/);
+});
+
+// סקירה לילית 25.11: במסמך "חברת החשמל לישראל", בפריוריטי "חברת חשמל לישראל" — בכל אחד מ-12 המסמכים הבוט לא
+// מצא, והעובדת כתבה את השם מחדש. עכשיו: הבחירה נזכרת לפי החברה והשם שבמסמך, ובפעם הבאה — הספק נבחר לבד.
+test('ספק שנבחר ידנית לשם שבמסמך — בפעם הבאה, באותה חברה, נבחר לבד ("כמו בפעם הקודמת")', async (t) => {
+  H.companies(t, 'test11');
+  const u = H.worker();
+  priority(t, { reads: {
+    findSuppliers: async (c, { name }) => (name === 'חברת החשמל לישראל'
+      ? { list: [{ SUPNAME: 'S9', SUPDES: 'אן.טי.אס.איי' }], by: 'name', weak: true }
+      : { list: [{ SUPNAME: 'S100', SUPDES: 'חברת חשמל לישראל' }], by: 'name' })
+  } });
+  ai(t, doc({ supplier_name: 'חברת החשמל לישראל' }));
+  const { say } = H.chat(t, u);
+
+  let r = await say('קבלת סחורה', { file: H.photo() });
+  assert.match(r.text, /לא מצאתי בפריוריטי ספק בשם \*חברת החשמל לישראל\*/);
+  r = await say('חברת חשמל לישראל');
+  assert.match(r.text, /ספק: \*חברת חשמל לישראל\* \(S100\) — נבחר ע"י המקבל/);
+  await say(BTN.cancel);
+
+  // מסמך נוסף מאותו ספק — בלי שאלה
+  r = await say('קבלת סחורה', { file: H.photo('b.jpg') });
+  assert.doesNotMatch(r.text, /לא מצאתי בפריוריטי ספק/);
+  assert.match(r.text, /ספק: \*חברת חשמל לישראל\* \(S100\) — כמו בפעם הקודמת/);
 });

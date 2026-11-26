@@ -55,14 +55,15 @@ function extraMail(user, s, lines) {
   const subject = `⚠️ ${lines.length === 1 ? 'שורה שלא בהזמנה' : `${lines.length} שורות שלא בהזמנה`} — ${s.docno} · ${s.supplier?.name ?? ''}`;
   const facts = [['חברה', `${companyName(s.company)} (${s.company})`], ['ספק', `${s.supplier?.name ?? ''} (${s.supplier?.code ?? ''})`],
     ['תעודה', s.doc?.doc_number ?? ''], ['קבלת סחורה', s.docno], ['הזמנה', order], ['נקלטה ע"י', user.full_name]].filter(([, v]) => v);
-  const row = (l) => `${l.description} — ${qty(l.qty)} ${l.unit || "יח'"}${Number(l.price) ? ` × ${money(l.price)}` : ''}`;
-  const text = [`בקבלת הסחורה ${s.docno} יש ${lines.length === 1 ? 'שורה שאינה' : 'שורות שאינן'} בהזמנה ${order}. הן נקלטו ומחכות להחלטת הרכש — לקבל או לא.`, '',
+  const row = (l) => `${l.description} — ${qty(l.qty)} ${l.unit || "יח'"}${Number(l.price) ? ` × ${money(l.price)}` : ''}${l.skipped ? ' — לא נקלטה (בלי מק"ט): צריך מק"ט ולעדכן את ההזמנה' : ''}`;
+  const skipped = lines.filter((l) => l.skipped).length;
+  const text = [`בקבלת הסחורה ${s.docno} יש ${lines.length === 1 ? 'שורה שאינה' : 'שורות שאינן'} בהזמנה ${order}. ${skipped === lines.length ? 'הן לא נקלטו — אין להן מק"ט (בקבלה מול הזמנה אין מק"ט כללי).' : skipped ? 'חלקן נקלטו ומחכות להחלטת הרכש, וחלקן לא נקלטו — אין להן מק"ט.' : 'הן נקלטו ומחכות להחלטת הרכש — לקבל או לא.'}`, '',
     ...facts.map(([k, v]) => `${k}: ${v}`), '', ...lines.map((l, i) => `${i + 1}. ${row(l)}`), '', 'בברכה,', 'משימון'].join('\n');
   const html = `<div dir="rtl" style="font-family:Arial,sans-serif;font-size:14px">
 <p>בקבלת הסחורה <b>${esc(s.docno)}</b> יש ${lines.length === 1 ? 'שורה שאינה' : 'שורות שאינן'} בהזמנה ${esc(order)}. הן נקלטו ומחכות <b>להחלטת הרכש — לקבל או לא</b>.</p>
 <p>${facts.map(([k, v]) => `${esc(k)}: <b>${esc(v)}</b>`).join('<br>')}</p>
 <table style="border-collapse:collapse"><tr><th ${td}>#</th><th ${td}>תיאור</th><th ${td}>כמות</th><th ${td}>יחידה</th><th ${td}>מחיר ליחידה</th></tr>
-${lines.map((l, i) => `<tr><td ${td}>${i + 1}</td><td ${td}>${esc(l.description)}</td><td ${td}>${esc(qty(l.qty))}</td><td ${td}>${esc(l.unit || "יח'")}</td><td ${td}>${Number(l.price) ? esc(money(l.price)) : ''}</td></tr>`).join('\n')}
+${lines.map((l, i) => `<tr><td ${td}>${i + 1}</td><td ${td}>${esc(l.description)}${l.skipped ? '<br><b>לא נקלטה — בלי מק"ט</b>' : ''}</td><td ${td}>${esc(qty(l.qty))}</td><td ${td}>${esc(l.unit || "יח'")}</td><td ${td}>${Number(l.price) ? esc(money(l.price)) : ''}</td></tr>`).join('\n')}
 </table><p>בברכה,<br>משימון</p></div>`;
   return { subject, text, html };
 }
@@ -75,7 +76,10 @@ async function afterFinal(user, s, extra = []) {
   let note = '';
   if (s.order && extra.length) {
     const sent = await toBuyer(user, extraMail(user, s, extra));
-    note = `⚠️ ${extra.length === 1 ? 'שורה אחת לא בהזמנה — סומנה' : `${extra.length} שורות לא בהזמנה — סומנו`} לרכש${sent ? ', והרכש מחליט אם לקבל' : ''}.`;
+    const skipped = extra.filter((l) => l.skipped).length;
+    note = skipped === extra.length
+      ? `⚠️ ${extra.length === 1 ? 'שורה אחת לא בהזמנה ובלי מק"ט — לא נקלטה ועברה' : `${extra.length} שורות לא בהזמנה ובלי מק"ט — לא נקלטו ועברו`} לרכש.`
+      : `⚠️ ${extra.length === 1 ? 'שורה אחת לא בהזמנה — סומנה' : `${extra.length} שורות לא בהזמנה — סומנו`} לרכש${sent ? ', והרכש מחליט אם לקבל' : ''}${skipped ? ` (${skipped} מהן לא נקלטו — בלי מק"ט)` : ''}.`;
   }
   if (s.order && !String(s.doc?.po_number ?? '').trim()) {
     D.run('INSERT INTO gr_no_po (company, supname, supdes, booknum, docno, ordname, user_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',

@@ -976,6 +976,19 @@ CREATE TABLE IF NOT EXISTS po_pricelist_offers (
 );
 CREATE INDEX IF NOT EXISTS idx_po_pricelist_status ON po_pricelist_offers(status);
 /*
+ * 🔗 קישור קבוע: ספק + תיאור ← מק"ט (‎priority/pd-parts.js‎, פער 6 בפרק 15 באפיון המאוחד). נשמר כשהרכש בונה מק"ט לשורה
+ * שנקלטה על 000 (או מציין מק"ט קיים), והקבלה הבאה של אותו פריט מאותו ספק נקלטת עליו (‎goods-receipt.js‎, ‎codeLines‎).
+ */
+CREATE TABLE IF NOT EXISTS part_aliases (
+  company     TEXT    NOT NULL,
+  supname     TEXT    NOT NULL,
+  des_key     TEXT    NOT NULL,
+  partname    TEXT    NOT NULL,
+  description TEXT    NOT NULL DEFAULT '',
+  created_at  TEXT    NOT NULL,
+  PRIMARY KEY (company, supname, des_key)
+);
+/*
  * ✍️ "ממתין לאישורך" (‎priority/priority-waiting.js‎): כל מסמך בפריוריטי שממתין לאישור, ומי החותם הבא.
  * נבנה בסבב כל 10 דקות מכל המסכים שיש בהם סבב מאשרים; מסמך שלא חזר בסבב — נמחק. המסך קורא מכאן.
  * ‎signer‎ / ‎alt‎ — שם המשתמש בפריוריטי של החותם הבא ושל המחליף שלו; ‎*_user_id‎ — המשתמש במשימון (‎null‎ — לא מקושר).
@@ -1978,6 +1991,7 @@ const DEFAULT_SETTINGS = {
   ai_bot_model: '',                        // הבוט וההקלטה — ריק = המודל הראשי
   ai_fast_mode: false,                     // מצב מהיר לשיחה חיה (בוט, הקלטה) — כבוי מ-17.11.26: פי 2 במחיר
   ai_scan_skip_bulk: true,                 // 📭 ניוזלטרים ומענים אוטומטיים — בלי AI (‎mail/mail-bulk.js‎)
+  ai_light_model: 'claude-haiku-5-5',      // 🪶 מיון וסיווג ברקע (‎light: true‎ ב-‎claude.js‎) — ריק = המודל הראשי
   ai_scan_model: 'claude-haiku-5-5',       // מיון המיילים בסריקה (משימה / תשובה / כלום) — זול; התשובה עצמה במודל הראשי
   ai_email_attempts: 2,                    // כמה מיילים שלא נענו לפני מעבר לוואטסאפ
   ai_days_between_emails: 2,
@@ -2018,6 +2032,7 @@ const DEFAULT_SETTINGS = {
   ai_scan_time: '07:00',                   // ריצת הבוקר, שעון ישראל
   ai_scan_daily_limit: 100,                // תקרת מיילים לסריקה ביום, לכל משתמש
   ai_dose_enabled: true,                   // 📉 מינון המייל לפי שימוש (‎mail/mail-dose.js‎)
+  ai_insights_warm_days: 7,                // 📬 תובנות מחושבות מראש רק למי שהסתכל בהן בימים האחרונים (0 = לאף אחד)
   ai_dose_week_days: 5,                    // 📉 כמה ימי עבודה בלי שימוש מורידים מדרגה
 
   /*

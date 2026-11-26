@@ -134,6 +134,9 @@ async function next(userId) {
 
 const html = (body) => `<div dir="auto" style="font-family:Arial,sans-serif;font-size:14px">${String(body).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/\n/g, '<br>')}</div>`;
 
+// תשובה — רק כשכל ההודעה היא תשובה (סקירה 25.11: "תשלח לנעמה מייל מרוכז…" נקרא "כן", ויצאה תזכורת לנמען אחר)
+const YES_ONLY = /^(?:לשלוח|שלח|תשלח|כן|👍|יאללה)(?:[\s,.!]+(?:כן|תשלח|שלח|לשלוח|תזכורת|את|התזכורת|לו|לה|להם|אותה|בבקשה|עכשיו|👍|✅))*[\s,.!👍✅]*$/u;
+const NO_ONLY = /^(?:התעלם|לא|עזוב|👎)(?:[\s,.!]+(?:תודה|צריך|לשלוח|תשלח|עזוב|את|זה|🙈|❌))*[\s,.!🙈❌]*$/u;
 /** "לשלוח תזכורת" / "התעלם". ‎send: true‎ — לשלוח ברקע. ‎null‎ — נושא חדש */
 function answer(userId, d, text) {
   const t = String(text ?? '').trim();
@@ -141,12 +144,12 @@ function answer(userId, d, text) {
   const row = D.get('SELECT * FROM sent_followups WHERE id = ? AND user_id = ?', d.followupId, userId);
   if (!row) return null;
   // שאלה שנדחקה וחזרה (‎wa-questions.js‎) — אולי כבר טופלה: לא שולחים פעמיים ולא משנים
-  const yes = WaUi.sameLabel(t, BTN.send) || /^(לשלוח|שלח|תשלח|כן|👍)([\s,.!]|$)/.test(n);
-  const no = WaUi.sameLabel(t, BTN.ignore) || /^(התעלם|לא|עזוב|👎)([\s,.!]|$)/.test(n);
+  const yes = WaUi.sameLabel(t, BTN.send) || YES_ONLY.test(n);
+  const no = WaUi.sameLabel(t, BTN.ignore) || NO_ONLY.test(n);
   const done = { sent: 'התזכורת כבר נשלחה 👍', answered: `👍 בינתיים ${row.to_name || row.to_email} ענה/תה — אין צורך בתזכורת.`, ignored: 'בסדר, לא אזכיר על זה שוב 🙂' }[row.status];
   if (done && (yes || no)) return { text: done, result: `כבר טופל (${row.status}): ${row.to_email}` };
-  if (WaUi.sameLabel(t, BTN.send) || /^(לשלוח|שלח|תשלח|כן|👍)([\s,.!]|$)/.test(n)) return { send: true, text: '', react: '📤', result: `תזכורת ל${row.to_name || row.to_email}` };
-  if (WaUi.sameLabel(t, BTN.ignore) || /^(התעלם|לא|עזוב|👎)([\s,.!]|$)/.test(n)) {
+  if (yes) return { send: true, text: '', react: '📤', result: `תזכורת ל${row.to_name || row.to_email}` };
+  if (no) {
     D.run("UPDATE sent_followups SET status = 'ignored' WHERE id = ?", row.id);
     return { text: 'בסדר, לא אזכיר על זה שוב 🙂', result: `התעלם: ${row.to_email}` };
   }
