@@ -5,7 +5,7 @@
  *   • "📤 לשלוח למשתתפים" — כל הסיכום (נושאים, החלטות, משימות לפי אחראי) במייל למשתתפים שבהקלטה.
  *   • הבוט לא מציע לפתוח משימות (16.11.26): המשימות — הצעות ב"ממתין לאישורך", כל אחת אצל האחראי שלה.
  *   • "שלח לגולן את הסיכום" — הסיכום המלא, לא נוסח שה-AI כותב מהמילים של הבקשה.
- *   • "2, 5 לגולן" — שינוי אחראי; ההצעה במשימון עוברת אליו.
+ *   • המשימות של השולח עצמו — "☑️ משימה + צ'קליסט" / "📌 משימות נפרדות" (26.11.26; שינוי אחראי — הוסר).
  * בלי רשת: Gmail מזויף, והסיכום כבר שמור (‎meeting_audio‎ / ‎meeting_digests‎).
  */
 const test = require('node:test');
@@ -16,7 +16,6 @@ const Gmail = require('../../../server/integrations/gmail');
 const Followup = require('../../../server/meetings/meeting-followup');
 const MeetingAudio = require('../../../server/meetings/meeting-audio');
 const Bot = require('../../../server/whatsapp/wa-bot');
-const Suggestions = require('../../../server/meetings/meeting-suggestions');
 const MailScan = require('../../../server/mail/mail-scan');
 
 boot();
@@ -68,25 +67,42 @@ function setup(t, { owned = false } = {}) {
   return { me, golan, meeting, dig, audioId, draft, sent, actor: Auth.loadActor('user', me.id) };
 }
 
-test('parseReassign — "2, 5 לגולן", "1-3 לי", "1 ו-3 אצל גולן", "השאר לישראל"; לא: "רק 1 ו-3", "כן"', () => {
-  const p = MeetingAudio.parseReassign;
-  assert.deepEqual(p('2, 5 לגולן'), { nums: [2, 5], name: 'גולן' });
-  assert.deepEqual(p('1-3 לי'), { nums: [1, 2, 3], name: 'י' });
-  assert.deepEqual(p('1 ו-3 אצל גולן'), { nums: [1, 3], name: 'גולן' });
-  assert.deepEqual(p('משימה 4 לישראל'), { nums: [4], name: 'ישראל' });
-  assert.deepEqual(p('השאר לישראל'), { nums: null, name: 'ישראל' });
-  assert.deepEqual(p('כל השאר לי'), { nums: null, name: 'י' });
-  for (const s of ['רק 1 ו-3', 'כן', '1 ו-3', 'לפתוח משימות ✅']) assert.equal(p(s), null, s);
-});
-
-test('בסוף הסיכום: לשלוח את כל הסיכום לגולן / לשנות אחראי — בלי "לפתוח משימות"', (t) => {
+test('בסוף הסיכום: לשלוח את כל הסיכום לגולן; בלי משימות שלי — בלי המרה, ובלי "לשנות אחראי"', (t) => {
   const { meeting, dig, actor, golan } = setup(t);
   const q = MeetingAudio.nextQuestion(meeting, dig, actor);
   assert.match(q, /לשלוח את כל הסיכום.*במייל ל/);
   assert.ok(q.includes(golan.full_name));
-  assert.match(q, /לשנות אחראי/);
-  assert.doesNotMatch(q, /לפתוח/);
-  assert.deepEqual(MeetingAudio.nextButtons(meeting, dig, actor), ['📤 לשלוח למשתתפים', '✏️ לשנות אחראי']);
+  assert.doesNotMatch(q, /לשנות אחראי|להמיר/);
+  assert.deepEqual(MeetingAudio.nextButtons(meeting, dig, actor), ['📤 לשלוח למשתתפים']);
+});
+
+test('משימות שלי בהקלטה — "להמיר?" עם צ\'קליסט / נפרדות (רק שלי)', (t) => {
+  const { me, meeting, dig, actor } = setup(t);
+  dig.items[0] = { ...dig.items[0], _ownerId: me.id }; dig.items[2] = { ...dig.items[2], _ownerId: me.id };
+  assert.match(MeetingAudio.nextQuestion(meeting, dig, actor), /להמיר את 2 המשימות שלך/);
+  assert.deepEqual(MeetingAudio.nextButtons(meeting, dig, actor), ['📤 לשלוח למשתתפים', "☑️ משימה + צ'קליסט", '📌 משימות נפרדות']);
+  dig.items[2] = { ...dig.items[2], _ownerId: null };
+  assert.deepEqual(MeetingAudio.nextButtons(meeting, dig, actor), ['📤 לשלוח למשתתפים', 'לפתוח משימה ✅']);
+});
+
+test('"☑️ משימה + צ\'קליסט" בהקלטה — משימה אחת עם המשימות שלי בלבד, תת-משימה של משימת הפגישה', async (t) => {
+  const { me, golan, actor, draft, audioId } = setup(t);
+  const row = D.get('SELECT digest FROM meeting_audio WHERE id = ?', audioId);
+  const dig = JSON.parse(row.digest);
+  dig.items = dig.items.map((it, i) => ({ ...it, _ownerId: i === 1 ? golan.id : me.id }));
+  D.run('UPDATE meeting_audio SET digest = ? WHERE id = ?', JSON.stringify(dig), audioId);
+  MeetingAudio.suggestFor(actor, audioId, 'פגישה שבועית', dig);
+  const parent = realTask('פגישה');
+  const created = [];
+  t.after(withHook('createTask', (a, body) => { const id = realTask(body.title); created.push(body); return id; }));
+  const state = { ...Bot._internal.chatOf(me.id), draft: { ...draft, taskId: parent }, awaiting: true };
+  const r = await Bot._internal.converse(me, actor, "☑️ משימה + צ'קליסט", state);
+  assert.match(r.reply, /צ'קליסט של 2 פריטים/);
+  assert.equal(created.length, 1);
+  assert.deepEqual(created[0].checklist, ['לבנות רשימת תיוג לפתיחת אתר', 'לגייס מנהל לוגיסטיקה']);
+  assert.equal(created[0].parentTaskId, parent);
+  // ההצעות שלי ירדו; של גולן — נשארת אצלו
+  assert.equal(D.get("SELECT COUNT(*) AS n FROM ai_suggestions WHERE header_id LIKE ? AND status = 'pending'", `meeting:wa:${audioId}:%`).n, 1);
 });
 
 test('המשימות — הצעות ב"ממתין לאישורך" אצל האחראי (בלי אחראי — אצל השולח); אישור במשימון פותח אצל האחראי', (t) => {
@@ -110,40 +126,11 @@ test('המשימות — הצעות ב"ממתין לאישורך" אצל האח�
   assert.equal(created[0].body.title, 'לקבוע ישיבת התארגנות אתר');
 });
 
-test('"2 לגולן" — ההצעה שממתינה עוברת לגולן; "כן" לבד לא פותח משימות', async (t) => {
-  const { me, golan, actor, draft, audioId, dig } = setup(t);
-  MeetingAudio.suggestFor(actor, audioId, 'פגישה שבועית', dig);
-  const state = { ...Bot._internal.chatOf(me.id), draft, awaiting: true };
-  const r = await Bot._internal.converse(me, actor, '2 לגולן', state);
-  assert.match(r.reply, /משימה 2 עברה/);
-  assert.equal(D.get('SELECT user_id FROM ai_suggestions WHERE header_id = ?', Suggestions.headerOf('wa', audioId, 2)).user_id, golan.id);
-  assert.deepEqual(r.buttons, ['📤 לשלוח למשתתפים', '✏️ לשנות אחראי']);
-  let opened = 0;
-  t.after(withHook('createTask', () => ++opened));
-  await Bot._internal.converse(me, actor, 'כן', { ...state, draft: r.next.draft, awaiting: true });
-  assert.equal(opened, 0);
-});
-
 test('משימות בלי אחראי — בסוף, תחת "עוד בלי אחראי" (לא "👤 בלי אחראי" כאילו זה משתתף)', (t) => {
   const { dig } = setup(t);
   const text = MeetingAudio._internal.tasksText(dig);
   assert.match(text, /❓ \*עוד בלי אחראי\*/);
   assert.doesNotMatch(text, /👤 \*בלי אחראי\*/);
-});
-
-test('"2, 3 לגולן" ו"השאר לי" — האחראי נשמר בסיכום, והמשימות מוצגות לפי אחראי', async (t) => {
-  const { me, golan, actor, draft, audioId } = setup(t);
-  const state = { ...Bot._internal.chatOf(me.id), draft, awaiting: true };
-  const r1 = await Bot._internal.converse(me, actor, '2, 3 לגולן', state);
-  assert.match(r1.reply, /משימות 2, 3 עברו/);
-  assert.ok(r1.reply.includes(`👤 *${golan.full_name}*`));
-  assert.equal(r1.next.draft.kind, 'meeting_audio_tasks');
-  const r2 = await Bot._internal.converse(me, actor, 'השאר לי', { ...state, draft: r1.next.draft });
-  assert.match(r2.reply, /משימה 1 עברה/);
-  const dig = JSON.parse(D.get('SELECT digest FROM meeting_audio WHERE id = ?', audioId).digest);
-  assert.deepEqual(dig.items.map((it) => it._ownerId), [me.id, golan.id, golan.id]);
-  const shared = JSON.parse(D.get("SELECT data FROM meeting_digests WHERE source = 'wa' AND ref = ?", String(audioId)).data);
-  assert.equal(shared.items[1].owner_name, golan.full_name);
 });
 
 test('"📤 לשלוח למשתתפים" — כל הסיכום לגולן (מהמשתתפים בהקלטה, בלי יומן), ואחרי "כן" — בלי שאלה על פתיחת משימות', async (t) => {

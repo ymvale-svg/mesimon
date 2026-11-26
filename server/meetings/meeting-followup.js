@@ -57,9 +57,7 @@ const BTN = Object.freeze({
   open: 'לפתוח משימות ✅',
   share: '📤 לשלוח למשתתפים',
   // 📋 המרת המשימות שלי מהפגישה (הוחלט 26.11.26, ישראל) — משימה אחת עם צ'קליסט, או משימה לכל פריט
-  checklist: "☑️ משימה + צ'קליסט",
-  separate: '📌 משימות נפרדות',
-  openOne: 'לפתוח משימה ✅'
+  ...Suggestions.CONVERT_BTN
 });
 
 const parseJson = (t, f) => { try { return JSON.parse(t); } catch { return f; } };
@@ -458,7 +456,7 @@ async function answer(actor, text, { appRoot = '', dry = false, createTask = nul
    * "תפתח אותן" במילים — עדיין פותח (‎openTasks‎).
    */
   const fmtDue = (d) => (/^\d{4}-\d{2}-\d{2}$/.test(d) ? ` · עד ${d.split('-').reverse().slice(0, 2).join('.')}` : '');
-  // הקלטה מוואטסאפ, ומי ששלח אותה — כל המשימות לפי אחראי, ו"📤 לשלוח למשתתפים" / "✏️ לשנות אחראי"
+  // הקלטה מוואטסאפ, ומי ששלח אותה — כל המשימות לפי אחראי, "📤 לשלוח למשתתפים" ולהמיר את שלו למשימות
   if (row.source === 'wa' && dig.items.length) {
     const audio = D.get('SELECT user_id, meeting FROM meeting_audio WHERE id = ?', Number(row.ref));
     if (audio?.user_id === actor.id) {
@@ -693,6 +691,7 @@ function openTasks(actor, draft, { createTask, taskLink = () => null, dry = fals
       title: String(it.task).slice(0, 200),
       description: `🎥 מהפגישה "${draft.title}"\n\n💬 נפתחה מוואטסאפ`,
       projectId: null,
+      parentTaskId: draft.parentTaskId ?? null,
       assigneeType: 'user',
       assigneeId: actor.id,
       extraAssignees: [],
@@ -731,6 +730,7 @@ function openChecklistTask(actor, draft, { createTask, taskLink = () => null, dr
     title,
     description: `🎥 מהפגישה "${draft.title}" — ${items.length} פריטים שהוטלו עלייך, בצ'קליסט\n\n💬 נפתחה מוואטסאפ`,
     projectId: null,
+    parentTaskId: draft.parentTaskId ?? null,
     assigneeType: 'user',
     assigneeId: actor.id,
     extraAssignees: [],

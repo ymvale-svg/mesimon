@@ -58,22 +58,6 @@ function suggest({ source, ref, title, items, fromId, ownerOf = (it) => it._owne
   return added;
 }
 
-/** ✏️ שינוי אחראי: ההצעה שעוד ממתינה עוברת לעובד אחר */
-function move(source, ref, n, userId) {
-  const header = headerOf(source, ref, n);
-  const s = D.get("SELECT id, user_id, data FROM ai_suggestions WHERE header_id = ? AND status = 'pending'", header);
-  if (!s || s.user_id === userId) return false;
-  const data = parseJson(s.data, {});
-  const u = userRow(userId);
-  data.summary = `🎥 מהפגישה "${data.meetingTitle}"\nאחראי לפי הפגישה: ${u?.full_name ?? ''}`;
-  data.unowned = false;
-  // מי שתויג לידיעה הוא מי ששלח את ההקלטה — לא האחראי החדש עצמו
-  data.people = (data.people ?? []).filter((p) => p.userId !== userId);
-  D.run('UPDATE ai_suggestions SET user_id = ?, data = ? WHERE id = ?', userId, JSON.stringify(data), s.id);
-  D.notify({ targetType: 'user', targetId: userId, kind: 'ai', title: `🎥 משימה בשבילך מהפגישה "${data.meetingTitle}"`, body: `${data.title} — ממתין לאישורך` });
-  return true;
-}
-
 /** "תפתח את המשימות" במילים — המשימה נפתחה בבוט, וההצעה במשימון יורדת */
 function markOpened(source, ref, n, taskId) {
   D.run("UPDATE ai_suggestions SET status = 'approved', task_id = ?, decided_at = ? WHERE header_id = ? AND status = 'pending'",
@@ -89,4 +73,13 @@ function pending(source, ref) {
   );
 }
 
-module.exports = { suggest, move, markOpened, pending, headerOf };
+/** 📋 המרת המשימות של העובד מהפגישה (הוחלט 26.11.26) — הכפתורים, משותפים לפגישה מוקלטת ולהקלטה מוואטסאפ */
+const CONVERT_BTN = Object.freeze({ checklist: "☑️ משימה + צ'קליסט", separate: '📌 משימות נפרדות', openOne: 'לפתוח משימה ✅' });
+
+/** הכפתורים להמרה: כמה פריטים — צ'קליסט / נפרדות; אחד — "לפתוח משימה" */
+const convertButtons = (n) => (n > 1 ? [CONVERT_BTN.checklist, CONVERT_BTN.separate] : n === 1 ? [CONVERT_BTN.openOne] : []);
+
+/** שורת השאלה להמרה */
+const convertLine = (n) => (n > 1 ? `📋 *להמיר את ${n} המשימות שלך?* ☑️ משימה אחת עם צ'קליסט, או 📌 משימה לכל פריט.` : n === 1 ? '📋 *להמיר את המשימה שלך?* — *לפתוח משימה* ✅' : '');
+
+module.exports = { suggest, markOpened, pending, headerOf, CONVERT_BTN, convertButtons, convertLine };

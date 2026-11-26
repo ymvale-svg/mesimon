@@ -123,7 +123,7 @@ async function deliverMeetingAudio(actor, audioId, ref, run) {
     const st = chatOf(actor.id);
     const busy = st.awaiting && st.draft;
     // באמצע שאלה אחרת — בלי השאלה בסוף (היא תופסת תשובות); אפשר לחזור אליה: "משימות מהפגישה" / "לשלוח למשתתפים"
-    const text = r.draft && busy ? `${r.text.replace(/\n(?:📤 \*לשלוח את כל הסיכום|✏️ \*לשנות אחראי)[\s\S]*$/, '')}\n\nלשלוח את הסיכום — כתבו *לשלוח למשתתפים*; לשנות אחראי — *משימות מהפגישה*.` : r.text;
+    const text = r.draft && busy ? `${r.text.replace(/\n(?:📤 \*לשלוח את כל הסיכום|📋 \*להמיר)[\s\S]*$/, '')}\n\nלשלוח את הסיכום — כתבו *לשלוח למשתתפים*; להמיר את המשימות שלך — *משימות מהפגישה*.` : r.text;
     const parts = splitMessage(text);
     for (let i = 0; i < parts.length; i++) {
       if (i === parts.length - 1 && r.draft && !busy) await sendButtons(chatId, parts[i], r.buttons);
@@ -293,17 +293,6 @@ async function meetingAudioTurn(user, actor, t, state, { dry, out, converse }) {
       if (!r) return out('לא מצאתי את הסיכום של הפגישה הזו.', { draft: null }, log(`אין סיכום לשליחה: ${d.title}`));
       return out(r.text, r.draft ? { draft: r.draft, awaiting: true } : { draft: d, awaiting: true }, log(r.result, { buttons: r.buttons }));
     }
-    if (WaUi.sameLabel(n, MeetingAudio.BTN.reassign)) {
-      return out('למי להעביר? כתבו את מספרי המשימות ואת השם, למשל: *"2, 5 לגולן"*, *"1 לי"*, *"השאר לישראל"*.', { draft: d, awaiting: true }, log('לשנות אחראי — שאלה'));
-    }
-    // ✏️ "2, 5 לגולן" — האחראי משתנה בסיכום, וההצעה במשימון עוברת אליו
-    const re = MeetingAudio.parseReassign(t);
-    if (re) {
-      const r = MeetingAudio.reassign(actor, d, re);
-      const row = D.get('SELECT meeting, digest FROM meeting_audio WHERE id = ?', d.audioId);
-      const buttons = row ? MeetingAudio.nextButtons(JSON.parse(row.meeting || '{}'), JSON.parse(row.digest || '{"items":[]}'), actor) : [];
-      return out(r.text, { draft: d, awaiting: true }, log(`שינוי אחראי (${r.changed}): ${t}`, { buttons }));
-    }
     // "תפתח את המשימות" / "לפתוח רק 1 ו-3" — רק כשהעובד מבקש במילים; הבוט לא מציע (16.11.26)
     const open = OPEN_WORDS.exec(n);
     if (open && (open[1] || open[2])) {
@@ -313,8 +302,20 @@ async function meetingAudioTurn(user, actor, t, state, { dry, out, converse }) {
       });
       return out(reply, { draft: null }, log(`משימות מהפגישה "${d.title}": ${reply.split('\n')[0]}`));
     }
+    // 📋 המשימות של השולח (רק שלו): ☑️ משימה + צ'קליסט / 📌 משימות נפרדות (26.11.26)
+    const choice = MeetingFollowup.convertChoice(t);
+    if (choice) {
+      const row = D.get('SELECT digest FROM meeting_audio WHERE id = ? AND user_id = ?', d.audioId, actor.id);
+      const items = MeetingAudio.myItems(row ? JSON.parse(row.digest || '{"items":[]}') : null, actor);
+      if (!items.length) return out('לא הוטלו עלייך משימות בפגישה הזו 👍 ההצעות של האחרים מחכות להם במשימון.', { draft: d, awaiting: true }, log(`אין משימות שלי: ${d.title}`));
+      if (!WaActions.allowed(actor, 'create_task') || typeof hooks.createTask !== 'function') return out('פתיחת משימות כבויה לך בוואטסאפ.', { draft: null }, { action: 'meeting_audio', status: 'denied', result: 'פתיחת משימות כבויה' });
+      const draft = { kind: 'meeting_tasks', ref: `wa:${d.audioId}`, title: d.title, items, parentTaskId: d.taskId ?? null };
+      const deps = { createTask: hooks.createTask, taskLink, dry };
+      const reply = choice === 'checklist' && items.length > 1 ? MeetingFollowup.openChecklistTask(actor, draft, deps) : MeetingFollowup.openTasks(actor, draft, deps);
+      return out(reply, { draft: null }, log(`${choice === 'checklist' ? "צ'קליסט" : 'נפרדות'} (${items.length}) מהפגישה "${d.title}"`));
+    }
     if (WaUi.NO.test(n) || CANCEL.test(t)) {
-      return out('בסדר 👍 ההצעות מהפגישה מחכות לך במשימון.', { draft: null }, log(`לא: שליחת סיכום / שינוי אחראי מ"${d.title}"`));
+      return out('בסדר 👍 ההצעות מהפגישה מחכות לך במשימון.', { draft: null }, log(`לא: שליחת סיכום / המרה למשימות מ"${d.title}"`));
     }
   }
   return null;
