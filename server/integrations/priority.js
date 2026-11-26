@@ -586,10 +586,9 @@ async function projects(company) {
   let list = [];
   try {
     // ‎BUD_WARHSNAME‎ — המחסן של הפרויקט; לשם נקלטת הסחורה
-    // ‎MUSERLOGIN‎ — מנהל הפרויקט (רואה בבוט את כל החוזים של הפרויקט — ‎my-docs.js‎)
-    list = rows(await call(company, 'GET', 'DOCUMENTS_p?$select=DOCNO,PROJDES,STATDES,BUD_WARHSNAME,MUSERLOGIN&$top=2000'))
+    list = rows(await call(company, 'GET', 'DOCUMENTS_p?$select=DOCNO,PROJDES,STATDES,BUD_WARHSNAME&$top=2000'))
       .filter((r) => r.DOCNO && r.STATDES !== 'מבוטלת')
-      .map((r) => ({ code: r.DOCNO, des: r.PROJDES ?? '', warehouse: r.BUD_WARHSNAME || '', manager: r.MUSERLOGIN || '' }));
+      .map((r) => ({ code: r.DOCNO, des: r.PROJDES ?? '', warehouse: r.BUD_WARHSNAME || '' }));
   } catch (err) {
     console.error(`[משימון] מסך הפרויקטים בפריוריטי (${company}) לא זמין:`, err.message);
   }
@@ -1290,7 +1289,7 @@ const deleteSupplierPart = (company, supname, kline) => call(company, 'DELETE', 
 
 /** שדות לתצוגה — נבחרים רק מה שקיים במסך */
 const WAIT_FIELDS = ['STATDES', 'NEXTSIGNUSERLOGIN', 'USERLOGIN', 'CDES', 'SUPDES', 'CUSTDES', 'PROJDES', 'DISPRICE', 'QPRICE', 'TOTPRICE',
-  'CURDATE', 'IVDATE', 'OWNERLOGIN', 'CODEDES', 'TYPEDES', 'PROJDOCNO'];
+  'CURDATE', 'IVDATE', 'OWNERLOGIN', 'CODEDES', 'TYPEDES'];
 const APPROVER_FIELDS = ['USERLOGIN', 'ALTUSERLOGIN', 'UFLAG', 'UDATE'];
 
 /**
