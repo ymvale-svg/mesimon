@@ -53,6 +53,13 @@ const DONE = /^(סיום|סיימתי|ת?סיים(?:\s+(?:את\s+)?(?:הכל|ה�
 const notDescription = (t) => DONE.test(t) || /\?\s*$/.test(t) || /^(?:ד?רכישת\s+רכש|דרישת\s+רכש|רכש|דרישה)$/.test(String(t).trim());
 // "תבטל ותבדוק לי גלגל …" / "תחפש לי …" — רק הפריט עצמו
 const ASK_PREFIX = /^(?:ת?בטל\s+(?:את\s+(?:זה|ה\S+)\s+)?ו)?(?:ת?בדוק|ת?חפש|תמצא)\s+(?:לי\s+)?/;
+// "מדובר ב…", "הכוונה ל…", "התכוונתי ל…" (בעיקר בהקלטה, סקירה 26.11) — רק הפריט, ובלי נקודה בסוף
+const SAID_PREFIX = /^(?:מדובר\s+(?:על\s+)?|הכוונה\s+(?:היא\s+)?|התכוונתי\s+|זה\s+)[:\-–]?\s*(?=\S)/;
+const descOf = (t) => {
+  const x = t.trim().replace(ASK_PREFIX, '').trim();
+  const y = SAID_PREFIX.test(x) ? x.replace(SAID_PREFIX, '').trim() : x;
+  return (y || t.trim()).replace(/[.。]+$/, '').trim();
+};
 const NONE = /^(אף אחד|אף אחת|אף אחד מהם|לא אלה|אחר|כללי|מק"?ט כללי|שלח לבנייה|לבנייה|לרכש|לבנות מק"?ט)([\s,.!❌🆕]|$)/;
 // ב"התכוונת ל…": אף אחת מהאפשרויות ← הפריט נשלח לרכש לבניית מק"ט (בתיקון דרישה שהוחזרה — מק"ט כללי, כמו קודם)
 const BTN_NONE = 'שלח לבנייה לרכש 🆕';
@@ -1105,7 +1112,7 @@ async function onPick(user, s, t, { reaction = false } = {}) {
   }
   // תשובה ארוכה שאינה תיאור — אולי תיקון לרשימה או בקשה אחרת
   if (t.split(/\s+/).length >= 7) return onText(user, s, t);
-  it.description = (t.trim().replace(ASK_PREFIX, '').trim() || t.trim()).slice(0, 120);
+  it.description = descOf(t).slice(0, 120);
   it.status = 'new';
   await resolveItems(s, [it]);
   return nextQuestion(s);
