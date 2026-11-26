@@ -1236,15 +1236,25 @@ const PARTICIPANTS_Q = /^(?:מי\s+(?:משתתף|משתתפת|משתתפים|מ�
  * מהיומן של היום: זו שהשם שלה בהודעה, או זו שמתקיימת עכשיו / הבאה.
  * ‎null‎ — ההודעה אינה שאלה כזו.
  */
+// "האם גולן נמצא בישיבת המשך ב 14.30?" / "גולן מגיע לפגישה עם רזבר?" — שאלה על אדם מסוים (סקירה 26.11: נענה "אין לי גישה")
+const PERSON_Q = /^(?:האם\s+)?(\S+(?:\s+\S+)?)\s+(?:נמצא|נמצאת|משתתף|משתתפת|מגיע|מגיעה|מוזמן|מוזמנת|יהיה|תהיה)\s+(?:ב|ל)(?=ישיבה|ישיבת|פגישה|פגישת|זום|שיחה|שיחת)/;
+const TIME_IN = /(?:^|\s|ב)(\d{1,2})[:.](\d{2})(?!\d)/;
 async function participantsAnswer(userId, text) {
-  const t = String(text ?? '').replace(/[👥]/gu, '').trim();
-  if (!PARTICIPANTS_Q.test(t) || t.length > 120) return null;
-  const words = t.replace(PARTICIPANTS_Q, ' ').replace(/[?!.,]/g, ' ').split(/\s+/).filter((w) => w.length > 2 && !['בפגישה', 'בפגישת', 'הפגישה', 'עם', 'של', 'היום', 'הבאה'].includes(w));
+  const t0 = String(text ?? '').replace(/[👥]/gu, '').trim();
+  const person = t0.length <= 120 ? t0.match(PERSON_Q) : null;
+  const t = person ? t0.slice(person[0].length) : t0;
+  if (!person && (!PARTICIPANTS_Q.test(t) || t.length > 120)) return null;
+  const time = t.match(TIME_IN);
+  const words = (person ? t.replace(TIME_IN, ' ') : t.replace(PARTICIPANTS_Q, ' ')).replace(/[?!.,]/g, ' ').split(/\s+/)
+    .map((w) => w.replace(/^(?:ב|ל|ה)(?=ישיבת|פגישת|פגישה|ישיבה)/, ''))
+    .filter((w) => w.length > 2 && !['בפגישה', 'בפגישת', 'הפגישה', 'פגישה', 'פגישת', 'ישיבה', 'ישיבת', 'עם', 'של', 'היום', 'הבאה', 'בשעה'].includes(w));
   let meeting = null;
   if (Calendar.isConnected(userId)) {
     const day = await Calendar.eventsForDay(userId).catch(() => ({ events: [] }));
     const timed = (day.events ?? []).filter((e) => !e.allDay && !e.mesimon);
-    const byName = words.length ? timed.find((e) => words.some((w) => e.title.includes(w))) : null;
+    const hhmmOf = (iso) => new Intl.DateTimeFormat('he-IL', { timeZone: TZ, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(iso));
+    const byTime = time ? timed.find((e) => hhmmOf(e.start) === `${time[1].padStart(2, '0')}:${time[2]}`) : null;
+    const byName = byTime ?? (words.length ? timed.find((e) => words.some((w) => e.title.includes(w))) : null);
     const now = Date.now();
     const current = timed.find((e) => new Date(e.start).getTime() - 20 * MIN <= now && new Date(e.end).getTime() > now)
       ?? timed.find((e) => new Date(e.start).getTime() > now);
@@ -1258,6 +1268,13 @@ async function participantsAnswer(userId, text) {
   if (!meeting) return words.length ? `לא מצאתי היום פגישה בשם "${words.join(' ')}" ביומן.` : 'לא מצאתי פגישה קרובה ביומן שלך היום.';
   const hhmm = new Intl.DateTimeFormat('he-IL', { timeZone: TZ, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(meeting.start));
   const list = (meeting.people ?? []).map((p) => `${RESPONSE[p.response] ?? '⏳'} ${p.name}${p.organizer ? ' (מארגן/ת)' : ''}`);
+  if (person) {
+    const name = person[1].trim();
+    const hit = (meeting.people ?? []).find((p) => String(p.name ?? '').includes(name) || String(p.email ?? '').toLowerCase().includes(name.toLowerCase()));
+    const state = hit ? { accepted: 'אישר/ה', declined: 'דחה/תה', tentative: 'אולי', needsAction: 'עוד לא ענה/תה' }[hit.response] ?? 'עוד לא ענה/תה' : null;
+    const head = hit ? `${RESPONSE[hit.response] ?? '⏳'} *${hit.name}* מוזמן/ת ל*${meeting.title}* · ${hhmm} — ${state}.` : `✕ ${name} לא ברשימת המוזמנים של *${meeting.title}* · ${hhmm}.`;
+    return [head, '', ...(list.length ? ['👥 כל המשתתפים:', ...list] : [])].join('\n');
+  }
   return [
     `👥 *${meeting.title}* · ${hhmm}`,
     list.length ? list.join('\n') : 'אין משתתפים ברשימה — רק את/ה.',
