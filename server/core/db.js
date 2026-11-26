@@ -2029,6 +2029,7 @@ const DEFAULT_SETTINGS = {
   ai_scan_time: '07:00',                   // ריצת הבוקר, שעון ישראל
   ai_scan_daily_limit: 100,                // תקרת מיילים לסריקה ביום, לכל משתמש
   ai_dose_enabled: true,                   // 📉 מינון המייל לפי שימוש (‎mail/mail-dose.js‎)
+  ai_insights_warm_days: 7,                // 📬 תובנות מחושבות מראש רק למי שהסתכל בהן בימים האחרונים (0 = לאף אחד)
   ai_dose_week_days: 5,                    // 📉 כמה ימי עבודה בלי שימוש מורידים מדרגה
 
   /*

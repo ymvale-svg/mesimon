@@ -57,6 +57,20 @@ const skill = () => fs.readFileSync(SKILL, 'utf8');
 const parseJson = (text, fallback) => { try { return JSON.parse(text); } catch { return fallback; } };
 const available = (userId) => Claude.isEnabled() && Gmail.boxesOf(userId, 'mail').length > 0;
 
+/*
+ * 📬 חישוב מראש רק למי שמסתכל (סבב 2 בחיסכון, 26.11.26 — התובנות היו 13% מהעלות): העובד פתח את התובנות
+ * (Today במשימון או בבוט, "תובנות") — ‎noteSeen‎. ‎warmWanted‎ — הסתכל ב-‎ai_insights_warm_days‎ הימים האחרונים.
+ * מייל הבוקר אינו "הסתכלות": הוא נשלח לבד.
+ */
+const SEEN_KEY = 'insightsSeenAt';
+const noteSeen = (userId) => { if (userId) D.setUserPref(userId, SEEN_KEY, D.nowIso()); };
+function warmWanted(userId, now = Date.now()) {
+  const days = Number(D.getSetting('ai_insights_warm_days', 7));
+  if (!(days > 0)) return false;
+  const at = Date.parse(D.userPrefs(userId)?.[SEEN_KEY] ?? '');
+  return Number.isFinite(at) && now - at < days * 86400000;
+}
+
 /** מספר חשבון, כרטיס או ת"ז — רק 4 הספרות האחרונות, גם אם ה-AI שכח */
 const mask = (text) => String(text ?? '')
   .replace(/\b\d{4}[ -]\d{4}[ -]\d{4}[ -]\d{1,4}\b/g, (m) => `***${m.replace(/\D/g, '').slice(-4)}`)
@@ -518,4 +532,4 @@ function prune() {
   D.run('DELETE FROM mail_insights WHERE created_at < ?', new Date(Date.now() - KEEP_DAYS * 864e5).toISOString());
 }
 
-module.exports = { available, collect, itemOf, dismiss, label, detail, draftReply, suggestReply, sendReply, completeReply, learnFromReply, alreadyLearned, prune, mask, HOURS, GROUPS, MAX_MAILS, MAX_MAILS_LONG };
+module.exports = { available, collect, noteSeen, warmWanted, itemOf, dismiss, label, detail, draftReply, suggestReply, sendReply, completeReply, learnFromReply, alreadyLearned, prune, mask, HOURS, GROUPS, MAX_MAILS, MAX_MAILS_LONG };
