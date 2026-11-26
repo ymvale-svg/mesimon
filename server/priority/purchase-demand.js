@@ -285,6 +285,7 @@ async function resolveItems(s, items) {
 }
 async function resolveItems0(s, items) {
   if (!items.length) return;
+  for (const it of items) it.topicPicked = null;
   await inBatches(items, 4, async (it) => {
     const exact = await Priority.findPartExact(s.company, it.description).catch(() => null);
     const found = await Priority.searchParts(s.company, it.description).catch(() => []);
@@ -339,30 +340,64 @@ const buildingPairs = (b) => (b.topics ?? []).map((t) => ({ chapter: b.chapter, 
  * המשאב של הפריט בקטלוג (לפי קוד, ואז לפי שם). לא נמצא — לא אמור לקרות: התראה למנהלי המערכת, והעובד לא נתקע
  * (השורה נשארת על הקידוד של הפריט). בניין בלי משאבים בכרטיס — רק תת הפרק.
  */
+// שורה ששויכה לחלק אחר ("שורה 3 — חניון") — החלק שלה; אחרת — החלק של הדרישה
+const zoneOf = (s, it) => (it.zone && (s.buildings ?? []).find((x) => x.chapter === it.zone)) || s.building || null;
 function codeForBuilding(s, it) {
-  // שורה ששויכה לחלק אחר ("שורה 3 — חניון") — החלק שלה; אחרת — החלק של הדרישה
-  const b = (it.zone && (s.buildings ?? []).find((x) => x.chapter === it.zone)) || s.building;
+  const b = zoneOf(s, it);
+  it.askTopic = false;
   if (!b) { it.bcoding = null; return; }
   const tops = b.topics ?? [];
   const base = it.part ?? it.general ?? {};
   if (!tops.length) { it.bcoding = { chapter: b.chapter, chapterDes: b.chapterDes, topic: base.topic ?? null, topicDes: base.topicDes ?? '' }; return; }
   const byTopic = (x) => (x ? tops.find((t) => t.topic === x) : null);
   const byDes = (d) => (d ? tops.find((x) => normalize(x.topicDes) === normalize(d)) : null);
+  const coding = (t) => ({ chapter: b.chapter, chapterDes: b.chapterDes, topic: t.topic, topicDes: t.topicDes });
+  // 🧾 המשאב שהעובד כבר בחר למק"ט הזה בפרויקט ובתת הפרק — בלי שאלה
+  const mem = tops.length > 1 && it.status !== 'ask' ? rememberedTopic(s, b, it) : null;
+  if (mem) { it.bcoding = coding(mem); it.topicFrom = 'pref'; return; }
   // מעבר לחלק אחר ("שורה 3 — חניון") — אותו סוג משאב שהיה לשורה ("שלד" ← "שלד" של החניון)
   const prev = it.bcoding?.chapter !== b.chapter ? it.bcoding : null;
+  const same = byDes(prev?.topicDes);
   const t = (it.generalFrom === 'ai' && it.general?.chapter === b.chapter ? byTopic(it.general.topic) : null)
-    ?? byDes(prev?.topicDes)
+    ?? same
     ?? (it.generalFrom === 'ai' ? byDes(it.general?.topicDes) : null)
     ?? byTopic(base.topic)
     ?? byDes(base.topicDes);
-  if (t) { it.bcoding = { chapter: b.chapter, chapterDes: b.chapterDes, topic: t.topic, topicDes: t.topicDes }; return; }
+  // 🧾 כמה משאבים מתחת לתת הפרק (הוחלט 26.11.26) — אותו מק"ט יכול להיות בכמה משאבים, והמשאב בכרטיס הפריט הוא רק
+  // ברירת מחדל (ולרוב לא נכון): העובד בוחר, וההצעה של הבוט — הכפתור הראשון. שורה שהעובד כבר בחר לה משאב ועברה
+  // לחלק אחר — אותו סוג משאב, בלי שאלה
+  if (it.topicPicked && same && t === same) it.topicPicked = b.chapter;
+  const ask = tops.length > 1 && it.topicPicked !== b.chapter && !s.editOf;
+  if (t) { it.bcoding = coding(t); it.topicFrom = 'auto'; it.askTopic = ask; return; }
   it.bcoding = null;
+  if (ask) { it.askTopic = true; return; }
   const k = `${b.chapter}|${it.description}`;
   if ((s.noTopicAlerts ??= []).includes(k)) return;
   s.noTopicAlerts.push(k);
   alertAdmins({ full_name: '' }, s, `אין משאב מתאים מתחת לתת הפרק ${buildingName(b)}`, [`פרויקט: ${s.project?.code ?? ''} ${s.project?.des ?? ''}`, `חלק בפרויקט (תת פרק): ${b.chapter} ${b.chapterDes}`,
     `פריט: ${it.description}${it.part?.code ? ` (${it.part.code}, משאב בקטלוג: ${it.part.topic ?? '—'} ${it.part.topicDes ?? ''})` : ''}`,
     `המשאבים מתחת לתת הפרק: ${tops.map((x) => `${x.topic} ${x.topicDes}`).join(', ')}`, 'השורה נשארה על המשאב של הפריט — לבדוק את המשאבים של תת הפרק בפריוריטי.']);
+}
+
+/**
+ * 🧾 המשאב שהעובד בחר לשורה — נזכר לאותו מק"ט (או תיאור, בלי מק"ט) בפרויקט, לפעם הבאה: באותו תת פרק — אותו משאב;
+ * בתת פרק אחר — המשאב באותו שם ("שלד" של מבנה A ← "שלד" של החניון)
+ */
+const topicKey = (s, it) => `${s.project?.code ?? ''}|${it.part?.code && it.part.code !== '000' ? it.part.code : `~${normalize(it.description)}`}`;
+function rememberedTopic(s, b, it) {
+  const m = Prefs.of(s.uid, s.company)?.topics?.[topicKey(s, it)];
+  if (!m) return null;
+  const tops = b.topics ?? [];
+  return (m.chapter === b.chapter && tops.find((x) => x.topic === m.topic)) || (m.des && tops.find((x) => normalize(x.topicDes) === normalize(m.des))) || null;
+}
+function rememberTopic(s, b, it, top) {
+  const all = { ...(Prefs.of(s.uid, s.company)?.topics ?? {}) };
+  const k = topicKey(s, it);
+  delete all[k];
+  all[k] = { chapter: b.chapter, topic: top.topic, des: top.topicDes ?? '' };
+  const keys = Object.keys(all);
+  for (const x of keys.slice(0, Math.max(0, keys.length - 500))) delete all[x];
+  Prefs.set(s.uid, s.company, 'topics', all);
 }
 
 /** צירופי תת פרק ומשאב של רשימת פריטים, הנפוץ קודם: ‎[{ chapter, chapterDes, topic, topicDes, n }]‎ */
@@ -463,7 +498,7 @@ function nextQuestion(s, pre = []) {
 /** פריט שיישלח לרכש, ותיאורו כללי מדי ("פטיש") — מבקשים תיאור מדויק. אין — הסיכום */
 function askDetail(s, pre = []) {
   const it = (s.items ?? []).find((x) => x.status === 'general' && x.vague);
-  if (!it) return showList(s, pre);
+  if (!it) return askResource(s, pre);
   s.step = 'detail';
   s.detailLine = it.n;
   return reply(s, [...pre,
@@ -472,6 +507,53 @@ function askDetail(s, pre = []) {
     `❓ ${it.vagueQ}`, '',
     'כתבו את התיאור המלא, או *להסיר את הפריט*.'].join('\n'),
   [BTN_DROP, BTN.cancel]);
+}
+
+/** 🧾 לאיזה משאב? — שורה שמתחת לתת הפרק שלה יש כמה משאבים: כפתורים (ההצעה של הבוט ראשונה) ושפה חופשית. אין — הסיכום */
+function askResource(s, pre = []) {
+  const it = (s.items ?? []).find((x) => x.askTopic && x.status !== 'ask');
+  const b = it && zoneOf(s, it);
+  if (!it || !(b?.topics ?? []).length) { if (it) it.askTopic = false; return it ? askResource(s, pre) : showList(s, pre); }
+  s.step = 'topic';
+  s.topicLine = it.n;
+  const tops = b.topics;
+  const sug = it.bcoding?.topic ? tops.find((x) => x.topic === it.bcoding.topic) : null;
+  const opts = [sug, ...tops.filter((x) => x !== sug)].filter(Boolean).slice(0, 3);
+  const btns = labels(opts.map((x) => x.topicDes || x.topic));
+  s.topicOptions = opts.map((x, i) => ({ topic: x.topic, btn: btns[i] }));
+  const left = s.items.filter((x) => x.askTopic && x.status !== 'ask').length;
+  const code = it.part?.code && it.part.code !== '000' ? ` (${it.part.code})` : '';
+  return reply(s, [...pre,
+    `🧾 *לאיזה משאב?* — *${it.description}*${code} · ${buildingName(b)}${left > 1 ? ` _(עוד ${left - 1} אחרי זה)_` : ''}`,
+    ...tops.map((x) => `• ${x.topicDes || x.topic} (${x.topic})${sug && x.topic === sug.topic ? ' ← ההצעה שלי' : ''}`),
+    tops.length > 3 ? 'או כתבו את שם המשאב.' : null,
+    '_אזכור את הבחירה למק"ט הזה בפרויקט._'].filter(Boolean).join('\n'), btns);
+}
+
+/** תשובה ל"לאיזה משאב?" — כפתור, כן / 👍 (ההצעה), קוד או שם המשאב */
+async function onResource(user, s, t) {
+  const it = s.items.find((x) => x.n === s.topicLine && x.askTopic);
+  if (!it) return nextQuestion(s);
+  const b = zoneOf(s, it);
+  const tops = b?.topics ?? [];
+  const n = normalize(t);
+  const byBtn = (s.topicOptions ?? []).find((x) => sameLabel(t, x.btn));
+  let top = byBtn ? tops.find((x) => x.topic === byBtn.topic) : null;
+  if (!top && (YES.test(t) || t === '👍') && it.bcoding?.topic) top = tops.find((x) => x.topic === it.bcoding.topic);
+  if (!top) top = tops.find((x) => x.topic === t.trim() || normalize(x.topicDes) === n) ?? null;
+  if (!top && n.length >= 2) { const hits = tops.filter((x) => normalize(x.topicDes).includes(n)); if (hits.length === 1) top = hits[0]; }
+  if (!top) {
+    if (t.split(/\s+/).length >= 6) return onText(user, s, t);
+    return askResource(s, [`🧾 לא מצאתי משאב כזה מתחת ל${buildingName(b)}.`, '']);
+  }
+  it.bcoding = { chapter: b.chapter, chapterDes: b.chapterDes, topic: top.topic, topicDes: top.topicDes };
+  it.askTopic = false;
+  it.topicPicked = b.chapter;
+  it.topicFrom = 'user';
+  rememberTopic(s, b, it, top);
+  // שורות נוספות עם אותו מק"ט שמחכות לשאלה — אותה בחירה
+  for (const x of s.items.filter((y) => y !== it && y.askTopic && y.status !== 'ask')) codeForBuilding(s, x);
+  return nextQuestion(s, [`🧾 ${it.description} ← *${top.topicDes || top.topic}* (${top.topic})`, '']);
 }
 
 /** תשובה ל"תיאור מדויק" — הסרה, או התיאור החדש (חיפוש מחדש בקטלוג, ובדיקה שוב) */
@@ -684,10 +766,11 @@ function pickCompany(s, t) {
 /** הכותרת אחרי שנקבעה סביבה: פרויקט (ברירת מחדל או שאלה), מחסן, ואז הפריטים */
 async function afterCompany(s, pre = []) {
   if (!s.project) {
+    // 📁 הסדר (הוחלט 26.11.26): חברה ← פרויקט (מגרש) ← תת פרק ← מק"ט ← משאב. הפרויקט — שאלה בכל דרישה (הבחירה
+    // האחרונה — הכפתור הראשון), חוץ מכשהבקשה כבר אמרה אותו ("דרישת רכש לנהריה") או כשיש פרויקט אחד
     const all = await projectsOf(s.company);
-    const last = !s.noPref && Prefs.of(s.uid, s.company)?.project;
-    const lastP = last && all.find((p) => p.code === last.code);
-    if (lastP) { s.project = lastP; s.projectFrom = 'pref'; }
+    const hinted = s.partHint ? projectFromText(all, s.partHint) : null;
+    if (hinted) { s.project = hinted; s.projectFrom = 'hint'; }
     else if (all.length === 1) { s.project = all[0]; s.projectFrom = 'only'; }
     else return askProject(s, all, pre);
   }
@@ -726,9 +809,7 @@ async function chooseBuilding(s, pre = []) {
   // הבקשה גוברת ("בלוקים לחניון") — על הבחירה האחרונה
   const hinted = s.partHint ? detectPart(s, s.partHint) : null;
   if (hinted) { s.building = hinted; s.buildingFrom = 'hint'; return null; }
-  const last = Prefs.of(s.uid, s.company)?.buildings?.[s.project.code];
-  const hit = last && s.buildings.find((b) => b.chapter === last);
-  if (hit) { s.building = hit; s.buildingFrom = 'pref'; return null; }
+  // תת הפרק — שאלה בכל דרישה (הוחלט 26.11.26); הבחירה האחרונה בפרויקט — הכפתור הראשון
   return askBuilding(s, pre);
 }
 
@@ -756,7 +837,7 @@ function askBuilding(s, pre = [], head = '📍 *לאיזה חלק בפרויקט
   const opts = [...list.filter((b) => b.chapter === last), ...list.filter((b) => b.chapter !== last)].slice(0, 3);
   const btns = labels(opts.map(buildingName));
   s.buildingOptions = opts.map((b, i) => ({ chapter: b.chapter, btn: btns[i] }));
-  return reply(s, [...pre, head, ...list.map((b) => `• ${buildingName(b)} (${b.chapter})`),
+  return reply(s, [...pre, head, ...list.map((b) => `• ${buildingName(b)} (${b.chapter})${b.chapter === last ? ' ← הבחירה האחרונה שלך' : ''}`),
     list.length > 3 ? 'או כתבו את השם ("חניון", "מבנה 3").' : null, '_שורה לחלק אחר — "שורה 3 — חניון". בפעם הבאה אזכור את הבחירה._'].filter(Boolean).join('\n'), btns);
 }
 /** כפתור, קוד, או שם הבניין ("A", "מבנה B") */
@@ -812,6 +893,26 @@ const GR = require('./goods-receipt');
 const projectsOf = (company) => GR._projectsOf(company);
 
 /**
+ * 📁 הפרויקט מתוך הבקשה ("דרישת רכש לנהריה — 10 שקי מלט"): קוד (PR…), השם המלא, או מילה בשם (לא מספר, 3 אותיות
+ * ומעלה) שיש רק בפרויקט אחד. אין, או כמה — ‎null‎ (שואלים).
+ */
+function projectFromText(all, text) {
+  const tx = ` ${normalize(text).toLowerCase()} `;
+  if (!tx.trim()) return null;
+  const code = text.match(/PR\d+/i)?.[0]?.toUpperCase();
+  const byCode = code && all.find((p) => p.code === code);
+  if (byCode) return byCode;
+  const full = all.filter((p) => p.des && tx.includes(normalize(p.des).toLowerCase()));
+  if (full.length === 1) return full[0];
+  const words = (p) => normalize(p.des ?? '').toLowerCase().split(/\s+/).filter((w) => w.length >= 3 && !/\d/.test(w));
+  const count = new Map();
+  for (const p of all) for (const w of new Set(words(p))) count.set(w, (count.get(w) ?? 0) + 1);
+  const has = (w) => new RegExp(`[\\sלבו־-]${w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[\\s,.;:!?]`).test(tx);
+  const hits = all.filter((p) => words(p).some((w) => count.get(w) === 1 && has(w)));
+  return hits.length === 1 ? hits[0] : null;
+}
+
+/**
  * "לאיזה פרויקט?" — בכפתורים: עד 3 פרויקטים בחברה — כולם; יותר — שני הפרויקטים הנפוצים בדרישות האחרונות של החברה,
  * וכתיבה חופשית ("אלעד 49"). ‎options‎ — תוצאות חיפוש להצגה.
  */
@@ -819,16 +920,20 @@ async function askProject(s, all, pre = [], options = null, head = '📁 *לאי
   s.step = 'project';
   let opts = options ?? (all.length <= 3 ? all : []);
   let many = (options ?? all).length > 3;
+  // הבחירה האחרונה של העובד — הכפתור הראשון
+  const lastCode = Prefs.of(s.uid, s.company)?.project?.code;
+  const lastP = !options && lastCode ? all.find((p) => p.code === lastCode) : null;
   if (!options && all.length > 3) {
     const recent = await Priority.recentDemandProjects(s.company).catch(() => []);
-    opts = recent.map((c) => all.find((p) => p.code === c)).filter(Boolean).slice(0, 2);
+    opts = recent.map((c) => all.find((p) => p.code === c)).filter(Boolean);
     many = true;
   }
+  if (lastP) opts = [lastP, ...opts.filter((p) => p.code !== lastP.code)];
   s.projectOptions = opts.slice(0, many ? 2 : 3);
   const btns = labels(s.projectOptions.map((p) => p.des));
   s.projectOptions = s.projectOptions.map((p, i) => ({ ...p, btn: btns[i] }));
   return reply(s, [...pre, head,
-    ...s.projectOptions.map((p) => `• ${p.des} (${p.code})`),
+    ...s.projectOptions.map((p) => `• ${p.des} (${p.code})${lastP && p.code === lastP.code ? ' ← הבחירה האחרונה שלך' : ''}`),
     many ? `${s.projectOptions.length ? 'או ' : ''}כתבו את שם הפרויקט במילים שלכם ("אלעד 49", "207", "חיפה עין הים").` : null].filter(Boolean).join('\n'),
   [...s.projectOptions.map((p) => p.btn), BTN.cancel].slice(0, 3));
 }
@@ -894,7 +999,7 @@ async function headerCommand(s, t) {
     return back(s, `📍 חלק בפרויקט: *${buildingName(b)}* (${b.chapter}).`);
   }
   // שם החלק לבד ("חניון") — שינוי החלק של הדרישה
-  if ((s.buildings ?? []).length && s.step !== 'building' && !s.editOf && t.split(/\s+/).length <= 3 && !/\d/.test(t)) {
+  if ((s.buildings ?? []).length && s.step !== 'building' && s.step !== 'topic' && !s.editOf && t.split(/\s+/).length <= 3 && !/\d/.test(t)) {
     const b = detectPart(s, t);
     if (b && (normalize(t) === normalize(buildingName(b)) || !/\s/.test(t.trim()))) {
       setBuilding(s, b);
@@ -917,7 +1022,7 @@ async function headerCommand(s, t) {
 
 /** חזרה לשלב שבו היינו (פריטים / בחירה / סיכום), עם שורת עדכון */
 function back(s, note) {
-  if ((s.items ?? []).some((x) => x.status === 'ask')) return nextQuestion(s, [note, '']);
+  if ((s.items ?? []).some((x) => x.status === 'ask' || x.askTopic)) return nextQuestion(s, [note, '']);
   if ((s.items ?? []).length) return showList(s, [note, '']);
   return askItems(s, [note, '']);
 }
@@ -979,7 +1084,9 @@ async function addItems(s, list) {
 }
 
 async function onFile(user, s, file) {
-  const saved = await saveFile(user.id, file);
+  return onSavedFile(user, s, await saveFile(user.id, file));
+}
+async function onSavedFile(user, s, saved) {
   (s.files ??= []).push(saved);
   if (!Claude.isEnabled()) return reply(s, 'קריאת רשימות מצילום דורשת חיבור AI, שעוד לא הוגדר בשרת. הקלידו את הפריטים, או *ביטול*.', [BTN.cancel]);
   const out = await ai.itemsFromFile(saved);
@@ -1024,9 +1131,10 @@ async function onPick(user, s, t, { reaction = false } = {}) {
   const it = s.items.find((x) => x.n === s.pickLine && x.status === 'ask');
   if (!it) return nextQuestion(s);
   const opt = it.options.find((p) => sameLabel(t, p.btn ?? label(p.des)) || normalize(t) === normalize(p.des) || t.trim() === p.code);
-  if (opt) { const { btn, ...part } = opt; it.part = part; it.status = 'ok'; it.options = null; return nextQuestion(s, [`✅ ${it.description} ← ${opt.des} (${opt.code})`, '']); }
+  if (opt) { const { btn, ...part } = opt; it.part = part; it.status = 'ok'; it.options = null; if (s.building) codeForBuilding(s, it); return nextQuestion(s, [`✅ ${it.description} ← ${opt.des} (${opt.code})`, '']); }
   if (NONE.test(t) || sameLabel(t, BTN_NONE) || sameLabel(t, BTN_NONE_EDIT) || (reaction && NO.test(t))) {
     setGeneral(it, 'לא בקטלוג — נבחר ע"י העובד');
+    if (s.building) codeForBuilding(s, it);
     await checkDetail(s, [it]);
     return nextQuestion(s, [s.editOf ? `🆕 ${it.description} ← מק"ט כללי 000 (${it.general.chapterDes || it.general.chapter} / ${it.general.topicDes || it.general.topic})` : `🆕 ${it.description} ← לא בקטלוג, יישלח לרכש לבניית מק"ט`, '']);
   }
@@ -1038,6 +1146,7 @@ async function onPick(user, s, t, { reaction = false } = {}) {
     const p = await Priority.partByCode(s.company, code.toUpperCase()).catch(() => null);
     if (!p) return reply(s, `אין מק"ט ${code} בחברה הזו. בחרו מהכפתורים, *אף אחד* ❌, או תיאור אחר.`, s.lastButtons ?? []);
     it.part = partOf(p, 'נבחר ע"י העובד'); it.status = 'ok'; it.options = null;
+    if (s.building) codeForBuilding(s, it);
     return nextQuestion(s, [`✅ ${it.description} ← ${it.part.des} (${it.part.code})`, '']);
   }
   // תשובה ארוכה שאינה תיאור — אולי תיקון לרשימה או בקשה אחרת
@@ -1227,7 +1336,7 @@ async function submitEdit(user, s) {
 async function submit(user, s) {
   if (s.editOf) return submitEdit(user, s);
 
-  const open = s.items.filter((x) => x.status === 'ask');
+  const open = s.items.filter((x) => x.status === 'ask' || x.askTopic);
   if (open.length) return nextQuestion(s, ['קודם צריך לבחור לפריטים שנשארו פתוחים:', '']);
   const c = s.company;
   if (!writable(user.id).includes(c)) return reply(s, 'הסביבה הזו אינה פתוחה לכתיבה מהבוט. כתבו *סביבה* לבחירת סביבה אחרת, או *ביטול*.', [BTN.cancel]);
@@ -1362,6 +1471,18 @@ function chatItems(userId) {
     .map((r) => String(r.text ?? '').replace(/^🎙\s*/, '').replace(/\n\(בתגובה ל:[\s\S]*$/, '').trim()).filter(Boolean).slice(-15);
 }
 
+/** הגענו לשלב הפריטים, והפריטים מההודעה הראשונה ("דרישת רכש: 10 שקי מלט", צילום) מחכים — מכניסים אותם */
+async function withFirstItems(user, s, out) {
+  if (!s || s.step !== 'items' || (!s.firstText && !s.firstFile)) return out;
+  const { firstText, firstFile } = s;
+  delete s.firstText;
+  delete s.firstFile;
+  const r2 = firstFile ? await onSavedFile(user, s, firstFile) : await onText(user, s, firstText);
+  if (!r2?.replies?.length) return out;
+  if (firstText) r2.replies[0] = `📝 מהבקשה שלך: "${firstText}"\n\n${r2.replies[0]}`;
+  return r2;
+}
+
 /** הגענו לשלב הפריטים ויש פריטים מהשיחה שמחכים — מכניסים אותם, ומראים לעובד מה נכנס */
 async function withChatItems(user, s, out, heard) {
   if (!s?.chatPending?.length || s.step !== 'items' || !Claude.isEnabled()) return out;
@@ -1426,6 +1547,13 @@ async function handle({ user, text = '', file = null, reaction = false, voice = 
       if (heard.length && r2 !== out && r2.replies?.length) r2.replies[0] = `${heard.join('\n')}\n${r2.replies[0]}`;
       return finish(user, out.s, r2);
     }
+    // 📝 פריטים בהודעה הראשונה, והבוט שואל קודם על הפרויקט / תת הפרק — נכנסים כשמגיעים לפריטים
+    if (out.s && (file || rest.split(/\s+/).length >= 2)) {
+      if (file) out.s.firstFile = await saveFile(user.id, file);
+      else out.s.firstText = rest;
+      save(user.id, out.s);
+      return finish(user, out.s, out, 'התחלה — הפריטים מחכים לפרויקט');
+    }
     // 📝 מה שנמנה קודם בשיחה הרגילה — נכנס לדרישה כשמגיעים לפריטים (עכשיו, או אחרי שאלת הפרויקט / הסוג)
     if (out.s && !file) {
       const earlier = chatItems(user.id);
@@ -1467,6 +1595,7 @@ async function handle({ user, text = '', file = null, reaction = false, voice = 
   }
   if (out.s) out.s.prev = snap;
   out = await sendMissingNow(user, out);
+  out = await withFirstItems(user, out.s, out);
   out = await withChatItems(user, out.s, out, []);
   if (heard.length && out.replies?.length) out.replies[0] = `${heard.join('\n')}\n${out.replies[0]}`;
   return finish(user, s, out);
@@ -1550,6 +1679,9 @@ async function step(user, s, t, file, { reaction, stale = false }) {
     case 'pick':
       if (file) return onFile(user, s, file);
       return onPick(user, s, t, { reaction });
+    case 'topic':
+      if (file) return onFile(user, s, file);
+      return onResource(user, s, t);
     case 'items':
     case 'review': {
       if (file) return onFile(user, s, file);
@@ -1565,7 +1697,7 @@ async function step(user, s, t, file, { reaction, stale = false }) {
         if (it) {
           it.zone = z.chapter === s.building?.chapter ? null : z.chapter;
           codeForBuilding(s, it);
-          return showList(s, [`📍 שורה ${it.n} (${it.description}) ← *${buildingName(z)}*`, '']);
+          return nextQuestion(s, [`📍 שורה ${it.n} (${it.description}) ← *${buildingName(z)}*`, '']);
         }
       }
       const exact = LineCmd.parse(t);
@@ -1581,7 +1713,7 @@ async function step(user, s, t, file, { reaction, stale = false }) {
 /**
  * 🗂 תצוגה למסך של משימון פריוריטי (‎priority-desk.js‎) — הדרישה כפי שהיא עכשיו, כנתונים. קריאה בלבד.
  */
-const VIEW_STEP = { start: 'פתיחה', company: 'חברה', project: 'פרויקט', warehouse: 'מחסן', code: 'סוג דרישה', items: 'רשימת הפריטים', pick: 'בחירת פריט', review: 'לפני שליחה לאישור', parts_mode: 'מק"טים מהרכש', detail: 'תיאור מדויק לרכש', building: 'חלק בפרויקט' };
+const VIEW_STEP = { start: 'פתיחה', company: 'חברה', project: 'פרויקט', warehouse: 'מחסן', code: 'סוג דרישה', items: 'רשימת הפריטים', pick: 'בחירת פריט', review: 'לפני שליחה לאישור', parts_mode: 'מק"טים מהרכש', detail: 'תיאור מדויק לרכש', building: 'חלק בפרויקט', topic: 'בחירת משאב' };
 function view(userId) {
   const s = load(userId);
   if (!s || !fresh(s)) return null;

@@ -119,7 +119,7 @@ test('דרישת רכש מלאה בכפתורים: פרויקט, רשימת מא
   assert.equal(Prefs.openerOf('test11', 'PRD26000007'), u.id);
 });
 
-test('ברירות מחדל: דרישה שנייה — פרויקט, מחסן ורשימת מאשרים מהפעם הקודמת, בלי לעצור', async (t) => {
+test('ברירות מחדל: דרישה שנייה — הפרויקט נשאל (הבחירה האחרונה — הכפתור הראשון), המחסן ורשימת המאשרים בלי לעצור', async (t) => {
   H.companies(t, 'test11');
   const u = H.worker();
   const pr = priority(t);
@@ -130,8 +130,12 @@ test('ברירות מחדל: דרישה שנייה — פרויקט, מחסן ו
   await say(BTN.done);
   assert.equal(pr.wrote('createDemand').length, 1);
 
-  const r = await say('דרישת רכש');
-  assert.match(r.text, /פרויקט: \*אלעד 49 צפון\* \(PR1\) — הבחירה האחרונה שלך/);
+  // הסדר (26.11.26): חברה ← פרויקט ← תת פרק ← מק"ט ← משאב — הפרויקט נשאל בכל דרישה
+  let r = await say('דרישת רכש');
+  assert.match(r.text, /לאיזה פרויקט\?/);
+  assert.match(r.text, /• אלעד 49 צפון \(PR1\) ← הבחירה האחרונה שלך/);
+  H.assertButtons(r.buttons, ['אלעד 49 צפון', 'נהריה מגרש 12', BTN.cancel]);
+  r = await say('אלעד 49 צפון');
   assert.match(r.text, /מחסן: \*מחסן אלעד\* \(W1\) — הבחירה האחרונה שלך/);
   assert.match(r.text, /דרישות רכש אתרי — הבחירה האחרונה שלך/);
   assert.match(r.text, /מה צריך\?/, 'ישר לפריטים');
@@ -149,9 +153,14 @@ test('"דרישת מלט 10 שקים" / "בוקר טוב, אני רוצה לעש
   ai(t);
   const { say } = H.chat(t, u);
   let r = await say('דרישת מלט 10 שקים');
+  assert.match(r.text, /לאיזה פרויקט\?/);
+  r = await say('אלעד 49 צפון');
+  assert.match(r.text, /📝 מהבקשה שלך: "מלט 10 שקים"/, 'הפריטים מההודעה הראשונה — אחרי שאלת הפרויקט');
   assert.match(r.text, /נוספו 2 פריטים|נוספו/, 'הפריטים מההודעה עצמה');
   await say(BTN.cancel);
   r = await say('בוקר טוב, אני רוצה לעשות דרישה');
+  assert.match(r.text, /לאיזה פרויקט\?/);
+  r = await say('אלעד 49 צפון');
   assert.match(r.text, /מה צריך\?/);
 });
 
@@ -1162,15 +1171,28 @@ test('📍 לאיזה חלק בפרויקט? — תתי הפרקים כפי שה
   r = await say('אתרי');
   assert.match(r.text, /📍 חלק בפרויקט: \*חניון משותף\* \(230\)/);
   r = await say('10 שקי מלט');
+  // 🧾 שני משאבים מתחת לתת הפרק — העובד בוחר, וההצעה של הבוט (שלד) ראשונה
+  assert.match(r.text, /לאיזה משאב\?\* — \*שק מלט\* \(M-1\) · חניון משותף/);
+  assert.match(r.text, /• שלד \(230-20\) ← ההצעה שלי/);
+  H.assertButtons(r.buttons, ['שלד', 'בטון']);
+  r = await say('שלד');
   assert.match(r.text, /✅ M-1 שק מלט · חניון משותף \/ שלד/);
   await say(BTN.done);
   assert.deepEqual(pr.wrote('addDemandLine')[0].args[2], { part: 'M-1', qty: 10, chapter: '230', topic: '230-20' });
 
-  // הפעם הבאה — בלי שאלה; ושינוי בשם לבד
+  // הפעם הבאה — הפרויקט ותת הפרק נשאלים שוב, הבחירה האחרונה — הכפתור הראשון
   r = await say('דרישת רכש');
-  assert.match(r.text, /📍 חלק בפרויקט: \*חניון משותף\* \(230\) — הבחירה האחרונה שלך/);
+  assert.match(r.text, /לאיזה פרויקט\?/);
+  r = await say('אלעד 49 צפון');
+  assert.match(r.text, /לאיזה חלק בפרויקט\?/);
+  assert.match(r.text, /• חניון משותף \(230\) ← הבחירה האחרונה שלך/);
+  H.assertButtons(r.buttons, ['חניון משותף', 'מבנה A', 'מבנה B']);
   r = await say('מבנה A');
   assert.match(r.text, /📍 חלק בפרויקט: \*מבנה A\* \(210\)/);
+  // המשאב שנבחר לשק מלט בפרויקט — נזכר (באותו שם, בתת הפרק החדש), בלי שאלה
+  r = await say('10 שקי מלט');
+  assert.doesNotMatch(r.text, /לאיזה משאב/);
+  assert.match(r.text, /✅ M-1 שק מלט · מבנה A \/ שלד/);
 });
 
 test('📍 הבקשה גוברת: "דרישת רכש — 10 שקי מלט לחניון" — החלק נבחר לבד, בלי שאלה', async (t) => {
@@ -1183,9 +1205,14 @@ test('📍 הבקשה גוברת: "דרישת רכש — 10 שקי מלט לחנ
   const pr = priority(t, { projectChapters: async () => PARTS });
   partsAi(t, { chapter: '230' });
   const { say } = H.chat(t, u);
-  const r = await say('דרישת רכש — 10 שקי מלט לחניון');
+  let r = await say('דרישת רכש — 10 שקי מלט לחניון');
+  assert.match(r.text, /לאיזה פרויקט\?/);
+  r = await say('אלעד 49 צפון');
   assert.doesNotMatch(r.text, /לאיזה חלק/);
+  assert.match(r.text, /לאיזה משאב\?/);
+  r = await say('כן');                          // כן = ההצעה של הבוט
   assert.match(r.text, /📍 חלק בפרויקט: \*חניון משותף\* \(230\) — לפי הבקשה/);
+  assert.match(r.text, /✅ M-1 שק מלט · חניון משותף \/ שלד/);
   await say(BTN.done);
   assert.equal(pr.wrote('addDemandLine')[0].args[2].chapter, '230');
 });
@@ -1200,9 +1227,14 @@ test('📍 "שורה 2 — חניון": שורה אחת לחלק אחר, ושא�
   const pr = priority(t, { projectChapters: async () => PARTS });
   partsAi(t, { adds: [{ description: 'שק מלט', qty: 10, unit: 'שק', note: '' }, { description: 'שק מלט', qty: 4, unit: 'שק', note: '' }] });
   const { say } = H.chat(t, u);
-  let r = await say('דרישת רכש');
-  assert.match(r.text, /📍 חלק בפרויקט: \*מבנה A\* \(210\) — הבחירה האחרונה שלך/);
-  await say('10 שקי מלט, ועוד 4');
+  await say('דרישת רכש');
+  let r = await say('אלעד 49 צפון');
+  r = await say('מבנה A');
+  assert.match(r.text, /📍 חלק בפרויקט: \*מבנה A\* \(210\)/);
+  r = await say('10 שקי מלט, ועוד 4');
+  assert.match(r.text, /לאיזה משאב\?/);
+  r = await say('שלד');                         // שורה 2 — אותו מק"ט: אותה בחירה, בלי שאלה נוספת
+  assert.doesNotMatch(r.text, /לאיזה משאב/);
   r = await say('שורה 2 — חניון');
   assert.match(r.text, /📍 שורה 2 \(שק מלט\) ← \*חניון משותף\*/);
   assert.match(r.text, /\*1\.\* שק מלט — 10 שק\n {3}✅ M-1 שק מלט · מבנה A \/ שלד/);
@@ -1210,6 +1242,39 @@ test('📍 "שורה 2 — חניון": שורה אחת לחלק אחר, ושא�
   await say(BTN.done);
   assert.deepEqual(pr.wrote('addDemandLine').map((w) => [w.args[2].chapter, w.args[2].topic]), [['210', '210-20'], ['230', '230-20']]);
   // "שורה 1 — 20" — עדיין כמות, לא חלק
+});
+
+test('🧾 הסדר: פרויקט מהבקשה ("לנהריה") ← תת פרק ← מק"ט ← משאב: יותר מ-3 משאבים — שם המשאב בשפה חופשית', async (t) => {
+  H.at(t);
+  H.companies(t, 'test11');
+  const u = buyerWorker();
+  Prefs.remember(u.id, { company: 'test11', project: { code: 'PR1', des: 'אלעד 49 צפון' }, warehouse: 'W1' });
+  Prefs.set(u.id, 'test11', 'demandCode', '01');
+  const MANY = [{ chapter: '310', chapterDes: 'מבנה 1', topics: [{ topic: '310-10', topicDes: 'בטון' }, { topic: '310-20', topicDes: 'שלד' },
+    { topic: '310-30', topicDes: 'חשמל' }, { topic: '310-40', topicDes: 'אינסטלציה' }] }, { chapter: '320', chapterDes: 'מבנה 2', topics: [] }];
+  const pr = priority(t, { projectChapters: async (c, proj) => (proj === 'PR2' ? MANY : []) });
+  partsAi(t, { chapter: '310' });
+  const { say } = H.chat(t, u);
+  let r = await say('דרישת רכש לנהריה');
+  assert.doesNotMatch(r.text, /לאיזה פרויקט/, 'הפרויקט — מהבקשה');
+  assert.match(r.text, /לאיזה חלק בפרויקט\?/);
+  r = await say('מבנה 1');
+  assert.match(r.text, /מה צריך\?/);
+  assert.match(r.text, /פרויקט: \*נהריה מגרש 12\* \(PR2\)/);
+  r = await say('10 שקי מלט');
+  assert.match(r.text, /לאיזה משאב\?/);
+  assert.match(r.text, /• אינסטלציה \(310-40\)/);
+  assert.match(r.text, /או כתבו את שם המשאב/);
+  H.assertButtons(r.buttons, ['שלד', 'בטון', 'חשמל']);
+  r = await say(BTN.done);                      // סיום לפני שבחר — לא נשלח
+  assert.match(r.text, /לאיזה משאב\?/);
+  r = await say('גגות');
+  assert.match(r.text, /לא מצאתי משאב כזה מתחת למבנה 1/);
+  r = await say('אינסטלציה');
+  assert.match(r.text, /🧾 שק מלט ← \*אינסטלציה\* \(310-40\)/);
+  assert.match(r.text, /✅ M-1 שק מלט · מבנה 1 \/ אינסטלציה/);
+  await say(BTN.done);
+  assert.deepEqual(pr.wrote('addDemandLine')[0].args[2], { part: 'M-1', qty: 10, chapter: '310', topic: '310-40' });
 });
 
 test('📍 חלק אחד בפרויקט — בלי שאלה; בלי תתי פרקים — כמו קודם', async (t) => {
