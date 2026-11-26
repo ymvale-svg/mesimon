@@ -40,6 +40,7 @@ const PoNotify = require('./priority').PoNotify;
 const PdParts = require('./priority').PdParts;
 const BuyerNotices = require('./priority').BuyerNotices;
 const Payments = require('./priority').Payments;
+const ApprovalBoard = require('./priority').ApprovalBoard;
 const TimelessMedia = require('./meetings').TimelessMedia;
 const TimelessStore = require('./meetings').TimelessStore;
 
@@ -155,6 +156,8 @@ server.listen(PORT, HOST, () => {
     BuyerNotices.start();
     // 💸 תשלומים ל-15: רענון כל שעה, "שולם" (מייל ליוזם, למנהל המחלקה ולמי שבהגדרה) ו"לא שולם ב-15" (ליוזם)
     Payments.start();
+    // ✍️ לוח האישורים: מייל בוקר למאשר (עם קישורים לפריוריטי) ולמי ששלח (תקוע 3 ימים — בראש)
+    ApprovalBoard.start();
   }
   // התראה למנהלים כשתקרת המעבד מאטה את הסוכנים
   LoadMonitor.start();

@@ -124,7 +124,39 @@
       }).join('')}${me.pricelist !== null && me.pricelist !== undefined ? `<a class="tile" href="/priority/pricelist" data-nav>
           <span class="ic">${icon('pricelist')}</span><h2>פריטים למחירון</h2><span class="sub">הזמנה סופית ← פריטים שאינם במחירון הספק ← למחירון</span>
           <span class="foot"><span class="count num">${me.pricelist}<small>מחכים</small></span><span class="pill p-ok">גם בבוט</span></span></a>` : ''}</div>
+      <div id="approvals" class="ap" aria-live="polite"><p class="muted small">טוען את מה שממתין לאישור…</p></div>
       <p class="note">לחצו על פעולה: בצד שמאל המיילים שהגיעו אליכם עם חשבונית או תעודת משלוח, ואפשר לגרור לשם קבצים. דרישת רכש וקבלת סחורה — המסמך נשלח לבוט, והשיחה ממשיכה בוואטסאפ.</p>`;
+    approvalsPanel();
+  }
+
+  // ---------------------------------------------------------------- ✍️ לוח האישורים (‎approval-board.js‎): ממתין לאישורי · שלחתי לאישור
+  async function approvalsPanel(refresh = false) {
+    const box = main.querySelector('#approvals');
+    if (!box) return;
+    let r;
+    try { r = await api('GET', `/api/priority/approvals${refresh ? '?refresh=1' : ''}`); } catch (e) { box.innerHTML = `<p class="note">לא נקרא מפריוריטי: ${esc(e.message)}</p>`; return; }
+    if (!main.contains(box)) return;
+    const cname = (c) => me.companies.find((x) => x.code === c)?.name ?? c;
+    const color = (k) => r.colors.find((c) => c.key === k)?.label ?? '';
+    const dm = (d) => (d ? `${d.slice(8, 10)}.${d.slice(5, 7)}` : '');
+    const row = (i, who) => `<tr>
+        <td><span class="ap-dot ap-${esc(i.color)}" role="img" aria-label="${esc(color(i.color))}"></span><span class="num">${i.days}</span> <span class="muted small">ימים</span></td>
+        <td>${i.link ? `<a href="${esc(i.link)}" target="_blank" rel="noopener">${esc(i.label)} <span class="ltr-inline">${esc(i.no)}</span></a>` : `${esc(i.label)} <span class="ltr-inline">${esc(i.no)}</span>`}
+          <div class="muted small">${esc([i.supplier, cname(i.company), i.project].filter(Boolean).join(' · '))}</div></td>
+        <td class="num">${i.amount ? `₪${Number(i.amount).toLocaleString('he-IL', { maximumFractionDigits: 0 })}` : ''}</td>
+        <td>${esc(who(i))}<div class="muted small">מ-${esc(dm(i.since))}</div></td>
+      </tr>`;
+    const table = (list, whoHead, who, empty) => (list.length
+      ? `<div class="scroll"><table class="t ap-t"><tr><th scope="col">כמה זמן</th><th scope="col">מסמך</th><th scope="col">סכום</th><th scope="col">${whoHead}</th></tr>${list.map((i) => row(i, who)).join('')}</table></div>`
+      : `<p class="muted">${empty}</p>`);
+    const legend = r.colors.map((c) => `<span class="ap-leg"><span class="ap-dot ap-${c.key}"></span>${esc(c.label)}${c.from ? ` מ-${c.from} ימים` : ''}</span>`).join('');
+    box.innerHTML = `
+      <section class="panel"><div class="panel-h"><h2>ממתין לאישורי · ${r.waiting.length}</h2><p>האישור — בפריוריטי${r.waiting.some((i) => i.link) ? ' (לחיצה על מסמך פותחת אותו)' : ''}.</p></div>
+        ${table(r.waiting, 'שלח/ה', (i) => i.ownerName || i.owner, r.login ? 'אין מסמכים שממתינים לאישורך.' : 'לא מצאנו את שם המשתמש שלך בפריוריטי. פנו למנהל המערכת.')}</section>
+      <section class="panel"><div class="panel-h"><h2>שלחתי לאישור · ${r.sent.length}</h2><p>מה ששלחת ועדיין ממתין — אצל מי זה תקוע וכמה זמן.</p></div>
+        ${table(r.sent, 'תקוע אצל', (i) => i.signerName || i.signer || 'לא ידוע', 'אין מסמכים ששלחת שממתינים לאישור.')}</section>
+      <p class="muted small ap-foot">${legend} · עודכן ${fmtAt(r.at)} <button class="btn ap-refresh" type="button">רענון</button></p>`;
+    box.querySelector('.ap-refresh').addEventListener('click', (e) => { e.target.disabled = true; approvalsPanel(true); });
   }
 
   // ---------------------------------------------------------------- עבודה על פעולה: התור, המיילים והגרירה
@@ -875,6 +907,11 @@
       </section>
 
       <section class="panel">
+        <div class="panel-h"><h2>קישור למסמך בפריוריטי</h2><p>במייל הבוקר למאשר — לכל מסמך קישור שפותח אותו בפריוריטי לאישור. התבנית: <span class="ltr-inline">{form}</span> המסך, <span class="ltr-inline">{doc}</span> מספר המסמך, <span class="ltr-inline">{company}</span> החברה. ריק — בלי קישור.</p></div>
+        <div class="grid-form"><label for="doc-link">תבנית הקישור<input id="doc-link" class="ltr" type="text" value="${esc(s.defaults.docLink ?? '')}" placeholder="https://…{form}…{doc}…{company}"></label></div>
+      </section>
+
+      <section class="panel">
         <div class="panel-h"><h2>"שולם" — מי עוד מקבל מייל</h2><p>כשמזהים בפריוריטי שמסמך שולם, מקבלים מייל מי שיזם אותו ומנהל המחלקה שלו. כאן — מי עוד מקבל, לפי המחלקה של היוזם (למשל המזכירה — על כל מה שמגיע למנהלת התכנון).</p></div>
         ${(s.departments ?? []).map((d) => {
           const on = new Set(((s.defaults.paidNotify ?? {})[String(d.id)] ?? []).map(Number));
@@ -950,6 +987,7 @@
       }
       const body = { connection: { host: $('#c-host').value, ini: $('#c-ini').value, user: $('#c-user').value }, companies, defaults: { buyerUserId: Number($('#b-user').value) || null,
         pricelistHandlers: [...main.querySelectorAll('#pl-handlers input:checked')].map((x) => Number(x.value)),
+        docLink: $('#doc-link').value,
         paidNotify: Object.fromEntries([...main.querySelectorAll('.paid-dept .checks')].map((g) => [g.dataset.dept, [...g.querySelectorAll('input:checked')].map((x) => Number(x.value))])) } };
       if ($('#c-pass').value) body.connection.password = $('#c-pass').value;
       try {

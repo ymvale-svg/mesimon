@@ -47,7 +47,9 @@ const DEFAULTS = Object.freeze({
   pricelistHandlers: [],
   // 💸 "שולם" — מי עוד מקבל מייל, לפי המחלקה של היוזם (‎pay-status.js‎): ‎{ "<מזהה מחלקה>": [מזהי משתמשים] }‎.
   // למשל המזכירה — על כל מה שמגיע למנהלת התכנון (הוחלט 24.11.26). היוזם ומנהל המחלקה מקבלים תמיד
-  paidNotify: {}
+  paidNotify: {},
+  // ✍️ קישור למסמך בפריוריטי — במייל הבוקר למאשר (‎approval-board.js‎). תבנית עם ‎{form} {doc} {company}‎; ריק — בלי קישור
+  docLink: ''
 });
 
 /** מה שהיה נכון עד היום — ממשתני הסביבה ומההגדרות הישנות */
@@ -217,6 +219,12 @@ function save(input, { org = DEFAULT_ORG, by = null } = {}) {
         if (ids.length) out[String(Number(dept))] = ids;
       }
       defs.paidNotify = out;
+    }
+    if ('docLink' in b.defaults) {
+      const v = str(b.defaults.docLink, 500);
+      if (v && !/\{doc\}/.test(v)) throw new Error('בתבנית הקישור לפריוריטי חסר {doc} — מספר המסמך');
+      if (v && !/^(https:\/\/|priority:)/i.test(v)) throw new Error('תבנית הקישור לפריוריטי צריכה להתחיל ב-https://');
+      defs.docLink = v;
     }
     if ('draftTtlHours' in b.defaults) defs.draftTtlHours = Math.min(168, Math.max(1, Number(b.defaults.draftTtlHours) || DEFAULTS.draftTtlHours));
   }

@@ -22,6 +22,7 @@ const Desk = require('../priority').PriorityDesk;
 const PdParts = require('../priority').PdParts;
 const PoPricelist = require('../priority').PoPricelist;
 const Payments = require('../priority').Payments;
+const ApprovalBoard = require('../priority').ApprovalBoard;
 const Priority = require('../integrations').Priority;
 const { HttpError, badRequest, forbidden, readJson, sendJson, parseUrl } = require('../core').HttpKit;
 
@@ -121,6 +122,13 @@ function register(router) {
     const changes = asBad(() => Access.save(b?.rows));
     Settings.note(Settings.DEFAULT_ORG, who(actor), changes);
     sendJson(res, 200, { ...Access.matrix(), companies: Settings.companies().filter((c) => !c.test), changes });
+  });
+
+  // ---------------------------------------------------------------- ✍️ לוח האישורים: ממתין לאישורי · שלחתי לאישור
+  router.get('/api/priority/approvals', async (req, res, ctx) => {
+    const actor = userOnly(ctx);
+    const sp = parseUrl(req).searchParams;
+    sendJson(res, 200, await ApprovalBoard.forUser(actor, { force: sp.get('refresh') === '1' }));
   });
 
   // ---------------------------------------------------------------- 💰 תשלומים ל-15

@@ -22,6 +22,7 @@ module.exports = {
   get Payments() { return require('./payments'); },
   get PayStatus() { return require('./pay-status'); },
   get PriorityApprovals() { return require('./priority-approvals'); },
+  get ApprovalBoard() { return require('./approval-board'); },
   get OpensGuard() { return require('./opens-guard'); },
   get PoNotify() { return require('./po-notify'); },
   get PoPdf() { return require('./po-pdf'); },
