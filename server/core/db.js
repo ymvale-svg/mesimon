@@ -1010,6 +1010,8 @@ CREATE TABLE IF NOT EXISTS priority_waiting (
   project        TEXT    NOT NULL DEFAULT '',
   amount         REAL,
   owner          TEXT    NOT NULL DEFAULT '',
+  owner_login    TEXT,
+  owner_user_id  INTEGER REFERENCES users(id) ON DELETE SET NULL,
   since          TEXT,
   first_seen     TEXT    NOT NULL,
   seen_at        TEXT    NOT NULL,
@@ -2345,6 +2347,9 @@ function migrate() {
   relaxAiMessagesChannel();
 
   // 💰 תשלומים, שלב 2 (24.11.26): איך זוהה "שולם" (‎amount‎ — לפי סכום), ומה כבר נשלח (‎{ paid: true, unpaid: '2026-12-15' }‎)
+  // ✍️ ממתין לאישורך — "ששלחתי לאישור": מי פתח את המסמך (‎priority/priority-waiting.js‎, 26.11.26)
+  addColumn('priority_waiting', 'owner_login', 'TEXT');
+  addColumn('priority_waiting', 'owner_user_id', 'INTEGER');
   addColumn('payment_items', 'paid_how', "TEXT NOT NULL DEFAULT ''");
   addColumn('payment_items', 'notified', "TEXT NOT NULL DEFAULT '{}'");
   // 💬 מק"טים לבנייה — אסימון לדף התשובה של הרכש (‎priority/pd-parts.js‎)

@@ -208,3 +208,28 @@ test('בלי חיבור לפריוריטי — אין סבב, ורשימה רי�
   assert.equal(await W.sweep({ force: true }), null);
   assert.deepEqual((await W.forUser(golan.id)).items, []);
 });
+
+test('ששלחתי לאישור: מי שפתח (OWNERLOGIN, או בבוט — לפי השרשרת) רואה את מה שממתין לאחרים, עם אצל מי; גם מלפני משימון', async (t) => {
+  reset();
+  const ronit = user({ full_name: 'רונית ל', email: 'ronit@corp.test', status: 'active' });
+  const now = new Date().toISOString();
+  D.run("DELETE FROM priority_docs WHERE docno = 'PO7'");
+  D.run(`INSERT INTO priority_docs (org_id, user_id, doc, source, stage, docno, company, created_at, updated_at)
+    VALUES (1, ?, 'demand', 'whatsapp', 'waiting', 'PO7', ?, ?, ?)`, other.id, require('../../../server/priority/priority-settings').companies().find((c) => !c.test).code, now, now);
+  world(t, { docs: { PORDERS: [
+    PO('PO5', [{ USERLOGIN: 'GolanB' }], { CURDATE: '2025-01-01T00:00:00Z' }),           // נשלח לפני משימון — RonitL פתחה
+    PO('PO6', [{ USERLOGIN: 'RonitL' }]),                                                   // RonitL פתחה וגם חותמת — אצלה "הכל"
+    PO('PO7', [{ USERLOGIN: 'GiladK' }], { OWNERLOGIN: 'API VPLANS' }),                    // נפתח בבוט ע"י "מישהו אחר"
+    PO('PO8', [], { OWNERLOGIN: 'API VPLANS' }),                                            // בבוט, לא ידוע מי — לאף אחד
+    PO('PO9', [{ USERLOGIN: 'GolanB' }], { OWNERLOGIN: 'רונית ל' })                         // בחוזים: השם בעברית במקום שם המשתמש
+  ] } });
+  await W.sweep({ force: true });
+  const r = await W.forUser(ronit.id);
+  assert.deepEqual(r.items.map((x) => [x.docno, x.role, x.waitingFor]).sort(), [['PO5', 'sent', 'גולן ב'], ['PO6', 'sign', null], ['PO9', 'sent', 'גולן ב']]);
+  const o = await W.forUser(other.id);
+  assert.deepEqual(o.items.map((x) => [x.docno, x.role, x.waitingFor, x.owner]), [['PO7', 'sent', 'גלעד כ', 'מישהו אחר']]);
+  assert.deepEqual((await W.forUser(golan.id)).items.map((x) => [x.docno, x.role]).sort(), [['PO5', 'sign'], ['PO9', 'sign']]);
+  // חזרה מפריוריטי על מה ששלחתי — עוד ממתין: נשאר
+  const id = r.items.find((x) => x.docno === 'PO5').id;
+  assert.equal((await W.check(ronit.id, id)).gone, false);
+});

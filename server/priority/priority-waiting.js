@@ -9,7 +9,9 @@
  *     מסך סגור ל-API — התראה פעם אחת: לבקש ממנהל פריוריטי לפתוח.
  *   • **סבב — כל 10 דקות** (‎sweep‎): בכל חברה ובכל מסך פעיל — המסמכים בסטטוס "…לאישור", והחותם הבא לפי כלל אחד
  *     (‎signerOf‎). נשמר בטבלה ‎priority_waiting‎; מסמך שלא חזר — נמחק. המסך קורא מהטבלה, מיד.
- *   • **העובד** (‎forUser‎): מה שהוא החותם הבא בו, או המחליף של החותם. הוותיק קודם.
+ *   • **העובד** (‎forUser‎): מה שהוא החותם הבא בו, המחליף של החותם, ומה שהוא שלח לאישור (‎role‎). הוותיק קודם.
+ *     "ששלחתי לאישור" (26.11.26) — מי שפתח את המסמך: ‎OWNERLOGIN‎, ואם המסמך נפתח בבוט (בפריוריטי — משתמש ה-API) —
+ *     העובד שפתח אותו (‎priority_docs‎). מפריוריטי, ולכן גם אחורה — כל מה שממתין עכשיו, בלי קשר למתי נשלח.
  *   • **חזרה מפריוריטי** (‎check‎): בדיקה של מסמך אחד — אושר / עבר הלאה ← יוצא מהרשימה.
  *
  * קריאה בלבד מפריוריטי — שום כתיבה, ולכן בכל החברות האמיתיות.
@@ -140,11 +142,13 @@ async function pool(items, n, fn) {
   }));
 }
 
-const UPSERT = `INSERT INTO priority_waiting (org_id, company, screen, docno, status, signer, signer_user_id, alt, alt_user_id, subtype, party, project, amount, owner, since, first_seen, seen_at)
-  VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+const UPSERT = `INSERT INTO priority_waiting (org_id, company, screen, docno, status, signer, signer_user_id, alt, alt_user_id, subtype, party, project, amount, owner,
+  owner_login, owner_user_id, since, first_seen, seen_at)
+  VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
   ON CONFLICT(org_id, company, screen, docno) DO UPDATE SET status = excluded.status, signer = excluded.signer, signer_user_id = excluded.signer_user_id,
     alt = excluded.alt, alt_user_id = excluded.alt_user_id, subtype = excluded.subtype, party = excluded.party, project = excluded.project,
-    amount = excluded.amount, owner = excluded.owner, since = excluded.since, seen_at = excluded.seen_at`;
+    amount = excluded.amount, owner = excluded.owner, owner_login = excluded.owner_login, owner_user_id = excluded.owner_user_id,
+    since = excluded.since, seen_at = excluded.seen_at`;
 
 async function runSweep() {
   await discover();
@@ -158,6 +162,10 @@ async function runSweep() {
   };
   const prUsers = await Priority.priorityUsers().catch(() => []);
   const nameOf = (login) => prUsers.find((u) => u.USERLOGIN === login)?.SNAME || login || '';
+  // מסמך שנפתח בבוט — בפריוריטי הבעלים הוא משתמש ה-API; מי באמת פתח — בשרשרת (‎priority_docs‎)
+  const bot = new Map(D.all("SELECT company, docno, user_id, full_name FROM priority_docs pd JOIN users u ON u.id = pd.user_id WHERE pd.org_id = ? AND pd.docno <> '' ORDER BY pd.id", ORG)
+    .map((r) => [`${r.company}:${r.docno}`, r]));
+  const isApi = (login) => /^api\b/i.test(String(login ?? '').trim());
   const now = D.nowIso();
   const errors = [];
   const jobs = cos.flatMap((c) => screens.map((s) => ({ c, s })));
@@ -174,10 +182,15 @@ async function runSweep() {
       const docno = String(d[s.key] ?? '').trim();
       if (!docno) continue;
       const g = signerOf(d, s);
+      const b = bot.get(`${c.code}:${docno}`);
+      // בחלק מהמסכים (חוזים) ‎OWNERLOGIN‎ הוא השם בעברית ("חנה (חני) גנוט") ולא שם המשתמש — מתרגמים לפי השם
+      const rawOwner = String(d.OWNERLOGIN ?? '').trim();
+      const ownerLogin = (rawOwner && !prUsers.some((u) => u.USERLOGIN === rawOwner) ? prUsers.find((u) => u.SNAME === rawOwner)?.USERLOGIN : null) || rawOwner || null;
+      const ownerId = b?.user_id ?? (ownerLogin && !isApi(ownerLogin) ? await userId(ownerLogin) : null);
       D.run(UPSERT, ORG, c.code, s.screen, docno, String(d.STATDES ?? ''), g.signer, await userId(g.signer), g.alt, await userId(g.alt),
         String(d.CODEDES || d.TYPEDES || '').slice(0, 80), String(d.CDES || d.SUPDES || d.CUSTDES || '').slice(0, 120), String(d.PROJDES ?? '').slice(0, 120),
         amountOf(d),
-        nameOf(d.OWNERLOGIN), g.since, now, now);
+        b?.full_name ?? nameOf(ownerLogin), ownerLogin, ownerId, g.since, now, now);
       keep.push(docno);
     }
     const marks = keep.map(() => '?').join(',');
@@ -214,7 +227,8 @@ function card(r, userId, names) {
   const t = typeOf(r.screen);
   const f = (found()?.screens ?? []).find((s) => s.screen === r.screen);
   const days = daysSince(r.since);
-  const asAlt = Number(r.signer_user_id) !== Number(userId) && Number(r.alt_user_id) === Number(userId);
+  const me = Number(userId);
+  const role = Number(r.signer_user_id) === me ? 'sign' : Number(r.alt_user_id) === me ? 'alt' : 'sent';
   return {
     id: r.id,
     screen: r.screen,
@@ -231,17 +245,23 @@ function card(r, userId, names) {
     since: r.since,
     days,
     level: days >= LATE_DAYS ? 'late' : days >= WARN_DAYS ? 'warn' : '',
-    altFor: asAlt ? (r.signer ?? '') : null,
+    role,
+    altFor: role === 'alt' ? (r.signer ?? '') : null,
+    // "ששלחתי לאישור" — אצל מי זה עכשיו
+    waitingFor: role === 'sent' ? (r.signer ?? '') : null,
     link: Priority.docLink(r.company, r.screen, r.docno)
   };
 }
 
-/** מה שממתין לעובד — כחותם הבא או כמחליף. הוותיק קודם. ‎{ items, at }‎ */
+/** מה שממתין לעובד — כחותם הבא, כמחליף, ומה ששלח לאישור (‎role‎: sign / alt / sent). הוותיק קודם. ‎{ items, at }‎ */
 async function forUser(userId) {
-  const rows = D.all('SELECT * FROM priority_waiting WHERE org_id = ? AND (signer_user_id = ? OR alt_user_id = ?)', ORG, userId, userId);
+  const rows = D.all('SELECT * FROM priority_waiting WHERE org_id = ? AND (signer_user_id = ? OR alt_user_id = ? OR owner_user_id = ?)', ORG, userId, userId, userId);
   const names = new Map(Settings.companies().map((c) => [c.code, c.name]));
-  const prUsers = rows.some((r) => Number(r.alt_user_id) === Number(userId) && Number(r.signer_user_id) !== Number(userId)) ? await Priority.priorityUsers().catch(() => []) : [];
-  const items = rows.map((r) => card(r, userId, names)).map((c) => (c.altFor ? { ...c, altFor: prUsers.find((u) => u.USERLOGIN === c.altFor)?.SNAME || c.altFor } : c));
+  const cards = rows.map((r) => card(r, userId, names));
+  const prUsers = cards.some((c) => c.role !== 'sign') ? await Priority.priorityUsers().catch(() => []) : [];
+  const nameOf = (login) => prUsers.find((u) => u.USERLOGIN === login)?.SNAME || login;
+  const items = cards.map((c) => (c.role === 'alt' ? { ...c, altFor: nameOf(c.altFor) }
+    : c.role === 'sent' ? { ...c, waitingFor: c.waitingFor ? nameOf(c.waitingFor) : '' } : c));
   items.sort((a, b) => (b.days - a.days) || String(a.since ?? '').localeCompare(String(b.since ?? '')) || a.docno.localeCompare(b.docno));
   return { items, at: state().at ?? null };
 }
@@ -262,14 +282,16 @@ async function refresh(userId) {
  * ‎{ gone, docno, status, next }‎ — ‎next‎: השם של החותם הבא, אם עוד ממתין (אצל מישהו אחר).
  */
 async function check(userId, id) {
-  const r = D.get('SELECT * FROM priority_waiting WHERE id = ? AND org_id = ? AND (signer_user_id = ? OR alt_user_id = ?)', Number(id), ORG, userId, userId);
+  const r = D.get('SELECT * FROM priority_waiting WHERE id = ? AND org_id = ? AND (signer_user_id = ? OR alt_user_id = ? OR owner_user_id = ?)', Number(id), ORG, userId, userId, userId);
   if (!r) return { gone: true, docno: '', status: '', next: '' };
+  const sentOnly = Number(r.signer_user_id) !== Number(userId) && Number(r.alt_user_id) !== Number(userId);
   const s = (found()?.screens ?? []).find((x) => x.screen === r.screen);
   if (!s) return { gone: false, docno: r.docno, status: r.status, next: '' };
   const doc = await Priority.waitingDoc(r.company, s, r.docno);
   const waiting = doc && /לאישור/.test(String(doc.STATDES ?? ''));
   const g = waiting ? signerOf(doc, s) : { signer: null, alt: null };
-  if (waiting && g.signer === r.signer && g.alt === r.alt) return { gone: false, docno: r.docno, status: doc.STATDES, next: '' };
+  // ששלחתי — יוצא רק כשכבר אינו ממתין (חותם אחר — הסבב הבא יעדכן אצל מי)
+  if (waiting && (sentOnly || (g.signer === r.signer && g.alt === r.alt))) return { gone: false, docno: r.docno, status: doc.STATDES, next: '' };
   D.run('DELETE FROM priority_waiting WHERE id = ?', r.id);
   let next = '';
   if (waiting && g.signer) {

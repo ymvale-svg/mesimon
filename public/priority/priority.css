@@ -470,4 +470,5 @@ table.defs td.ltr { text-align: right; direction: ltr; unicode-bidi: isolate; }
   .savebar { border-radius: 0; margin-inline: -16px; border-inline: 0; }
 }
 .appr .chip-alt { margin-inline-start: auto; border-style: dashed; }
+.appr .chip-alt + .chip-alt { margin-inline-start: 0; }
 .appr-none { padding: 14px 18px; }
