@@ -159,6 +159,7 @@
   // האפיון: "אפיון — מסך אישורים במשימון פריוריטי.md". אין שום דבר שממתין — האזור לא קיים בכלל.
   const Waiting = (() => {
     const ALT = '__alt';
+    const SENT = '__sent';
     let box = null, data = { items: [], at: null }, filter = 'all', opened = null;
     const money = (n) => (n === null || n === undefined ? '' : `₪ ${Math.round(n).toLocaleString('he-IL')}`);
     const ago = (iso) => {
@@ -167,24 +168,27 @@
       return m < 1 ? 'עודכן עכשיו' : m < 60 ? `עודכן לפני ${m} דק׳` : `עודכן ב-${new Date(iso).toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit' })}`;
     };
     const age = (w) => `<span class="pill ${w.level === 'late' ? 'p-bad' : w.level === 'warn' ? 'p-warn' : 'p-mute'}">${w.days === 0 ? 'היום' : w.days === 1 ? 'יום אחד' : `${w.days} ימים`}</span>`;
-    const typeCell = (w) => `<span class="wt"><span class="wt-ic">${icon(w.icon)}</span><span>${esc(w.type)}${w.isNew ? ' <span class="pill p-brand">חדש</span>' : ''}${w.altFor ? `<span class="alt">כמחליף של ${esc(w.altFor)}</span>` : ''}</span></span>`;
+    const typeCell = (w) => `<span class="wt"><span class="wt-ic">${icon(w.icon)}</span><span>${esc(w.type)}${w.isNew ? ' <span class="pill p-brand">חדש</span>' : ''}${w.altFor ? `<span class="alt">כמחליף של ${esc(w.altFor)}</span>` : ''}${w.role === 'sent' ? `<span class="alt">${w.waitingFor ? `ממתין ל${esc(w.waitingFor)}` : 'אין חותם ידוע'}</span>` : ''}</span></span>`;
     const openBtn = (w) => `<a class="btn pri small wo" href="${esc(w.link)}" target="_blank" rel="noopener" data-open="${w.id}">פתיחה בפריוריטי ${ui('ext')}<span class="sr-only"> — ${esc(w.type)} ${esc(w.docno)}</span></a>`;
     const sumOf = (w) => money(w.amount) || '—';
 
     function draw() {
       if (!box) return;
-      // "הכל" והמונה — רק מה שהעובד הוא החותם בו. כמחליף — רק בלחיצה על "כמחליף" (הוחלט 24.11.26)
-      const items = data.items.filter((w) => !w.altFor);
-      const alt = data.items.filter((w) => w.altFor);
-      if (!items.length && !alt.length) { box.innerHTML = ''; return; }
+      // "הכל" והמונה — רק מה שהעובד הוא החותם בו. כמחליף — רק בלחיצה על "כמחליף" (הוחלט 24.11.26);
+      // מה שהעובד שלח לאישור — רק בלחיצה על "ששלחתי לאישור" (26.11.26)
+      const items = data.items.filter((w) => (w.role ?? (w.altFor ? 'alt' : 'sign')) === 'sign');
+      const alt = data.items.filter((w) => (w.role ?? (w.altFor ? 'alt' : 'sign')) === 'alt');
+      const sent = data.items.filter((w) => w.role === 'sent');
+      if (!items.length && !alt.length && !sent.length) { box.innerHTML = ''; return; }
       const types = [...new Set(items.map((w) => w.type))];
-      if (filter === ALT ? !alt.length : (filter !== 'all' && !types.includes(filter))) filter = 'all';
-      const shown = filter === ALT ? alt : items.filter((w) => filter === 'all' || w.type === filter);
+      if (filter === ALT ? !alt.length : filter === SENT ? !sent.length : (filter !== 'all' && !types.includes(filter))) filter = 'all';
+      const shown = filter === ALT ? alt : filter === SENT ? sent : items.filter((w) => filter === 'all' || w.type === filter);
       box.innerHTML = `<section class="appr" aria-labelledby="appr-h">
         <div class="appr-head"><h2 id="appr-h">ממתין לאישורך <span class="badge num">${items.length}</span></h2>
           <span class="fresh"><span id="appr-at">${esc(ago(data.at))}</span> <button class="btn small" id="appr-refresh">${ui('refresh')} רענון</button></span></div>
-        ${types.length > 1 || alt.length ? `<div class="chips" role="group" aria-label="סינון לפי סוג"><button class="chip" data-f="all" aria-pressed="${filter === 'all'}">הכל <b class="num">${items.length}</b></button>${types.length > 1 ? types.map((t) => `<button class="chip" data-f="${esc(t)}" aria-pressed="${filter === t}">${esc(t)} <b class="num">${items.filter((w) => w.type === t).length}</b></button>`).join('') : ''}${alt.length ? `<button class="chip chip-alt" data-f="${ALT}" aria-pressed="${filter === ALT}">כמחליף <b class="num">${alt.length}</b></button>` : ''}</div>` : ''}
+        ${types.length > 1 || alt.length || sent.length ? `<div class="chips" role="group" aria-label="סינון לפי סוג"><button class="chip" data-f="all" aria-pressed="${filter === 'all'}">הכל <b class="num">${items.length}</b></button>${types.length > 1 ? types.map((t) => `<button class="chip" data-f="${esc(t)}" aria-pressed="${filter === t}">${esc(t)} <b class="num">${items.filter((w) => w.type === t).length}</b></button>`).join('') : ''}${alt.length ? `<button class="chip chip-alt" data-f="${ALT}" aria-pressed="${filter === ALT}">כמחליף <b class="num">${alt.length}</b></button>` : ''}${sent.length ? `<button class="chip chip-alt chip-sent" data-f="${SENT}" aria-pressed="${filter === SENT}">ששלחתי לאישור <b class="num">${sent.length}</b></button>` : ''}</div>` : ''}
         ${shown.length ? '' : '<p class="muted appr-none">אין מסמכים שממתינים לחתימה שלך.</p>'}
+        ${filter === SENT ? '<p class="muted appr-none">מסמכים שפתחת ושממתינים עכשיו לאישור של אחרים — כל מה שממתין, גם מלפני משימון.</p>' : ''}
         <div class="scroll appr-wide"${shown.length ? '' : ' hidden'}><table class="t appr-t">
           <thead><tr><th>סוג</th><th>מספר</th><th>חברה ופרויקט</th><th>ספק / קבלן</th><th>סכום</th><th>הוגש ע״י</th><th>ממתין</th><th><span class="sr-only">פתיחה</span></th></tr></thead>
           <tbody>${shown.map((w) => w.done ? `<tr class="appr-done"><td colspan="8">${ui('check')} ${esc(w.done)}</td></tr>` : `<tr>

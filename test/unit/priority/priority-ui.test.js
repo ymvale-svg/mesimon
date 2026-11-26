@@ -70,7 +70,7 @@ test('"המערכת קוראת": בועה עם נקודות, השלב, רשימ�
 
 test('✍️ ממתין לאישורך: אין ממתינים — האזור לא מצויר בכלל; יש — מעל האריחים, עם קישור בלשונית חדשה', () => {
   const w = js.slice(js.indexOf('const Waiting = (() => {'), js.indexOf('return { mount };'));
-  assert.match(w, /if \(!items\.length && !alt\.length\) \{ box\.innerHTML = ''; return; \}/);
+  assert.match(w, /if \(!items\.length && !alt\.length && !sent\.length\) \{ box\.innerHTML = ''; return; \}/);
   assert.match(css, /#waiting:empty \{ display: none; \}/);
   const home = js.slice(js.indexOf('async function home()'), js.indexOf('const Waiting = (() => {'));
   assert.ok(home.indexOf('<div id="waiting"></div>') < home.indexOf('<div class="tiles">'), 'האזור מעל האריחים');
@@ -137,8 +137,16 @@ test('הגדרות: פס שמירה עם רקע, בלי ריק מתחת לטבל
 
 test('✍️ ממתין לאישורך: "הכל" והמונה — רק מה שהעובד חותם בו; כמחליף — רק בכפתור "כמחליף"', () => {
   const w = js.slice(js.indexOf('const Waiting = (() => {'), js.indexOf('return { mount };'));
-  assert.match(w, /const items = data\.items\.filter\(\(w\) => !w\.altFor\);/);
-  assert.match(w, /const shown = filter === ALT \? alt : items\.filter/);
+  assert.match(w, /const items = data\.items\.filter\(\(w\) => \(w\.role \?\? \(w\.altFor \? 'alt' : 'sign'\)\) === 'sign'\);/);
+  assert.match(w, /const shown = filter === ALT \? alt : filter === SENT \? sent : items\.filter/);
   assert.match(w, /badge num">\$\{items\.length\}/);
   assert.match(w, /data-f="\$\{ALT\}"[^>]*>כמחליף <b/);
+});
+
+test('✍️ ממתין לאישורך: "ששלחתי לאישור" — כפתור סינון נפרד, לא במונה ולא ב"הכל", עם אצל מי', () => {
+  const w = js.slice(js.indexOf('const Waiting = (() => {'), js.indexOf('return { mount };'));
+  assert.match(w, /const sent = data\.items\.filter\(\(w\) => w\.role === 'sent'\);/);
+  assert.match(w, /filter === SENT \? sent/);
+  assert.match(w, /data-f="\$\{SENT\}"[^>]*>ששלחתי לאישור <b/);
+  assert.match(w, /ממתין ל\$\{esc\(w\.waitingFor\)\}/);
 });
