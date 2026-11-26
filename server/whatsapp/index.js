@@ -21,5 +21,6 @@ module.exports = {
   get Solve() { return require('./solve'); },
   get AiOutage() { return require('./ai-outage'); },
   get BotTips() { return require('./bot-tips'); },
-  get WaReads() { return require('./wa-reads'); }
+  get WaReads() { return require('./wa-reads'); },
+  get Keyboard() { return require('./keyboard-layout'); }
 };

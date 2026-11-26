@@ -43,6 +43,7 @@ const P = require('../core').Permissions;
 const Gmail = require('../integrations').Gmail;
 const GContacts = require('../phonebook').GoogleContacts;
 const Speech = require('../integrations').Speech;
+const Keyboard = require('./keyboard-layout');
 const WaActions = require('./wa-actions');
 const MailInsights = require('../mail').MailInsights;
 const VoiceRouter = require('./voice-router');
@@ -1231,6 +1232,13 @@ async function handleDirectAs(msg) {
       await sendText(msg.chatId, 'לא שמעתי דיבור בהודעה. נסו שוב, או כתבו לי.');
       return;
     }
+  }
+  // ⌨️ הודעה שהוקלדה במקלדת באנגלית ("KHMR EUC. TEXK" = "ליצר קובץ אקסל", סקירה 25.11) — בעברית, ואומרים מה הובן
+  const typed = !voice && !msg.button && !msg.file ? Keyboard.fix(text) : null;
+  if (typed) {
+    log({ ...base, text, action: 'keyboard', status: 'ok', result: `מקלדת באנגלית ← "${typed}"` });
+    await sendText(msg.chatId, `⌨️ נראה שהמקלדת הייתה באנגלית — הבנתי: "${typed}"`);
+    text = typed;
   }
   // דרישת רכש — "דרישת רכש" (כתוב, בהקלטה, או הכפתור בתפריט פריוריטי), ובאמצע דרישה — התשובות לשאלות שלה.
   // לא לדרישה (קבלת סחורה, בקשה אחרת) — ממשיכים לקבלת הסחורה / לבוט הרגיל
