@@ -14,6 +14,7 @@ const Calendar = require('../meetings').Calendar;
 const Gmail = require('../integrations').Gmail;
 const Mailer = require('../integrations').Mailer;
 const Claude = require('../integrations').Claude;
+const MailInsights = require('../mail').MailInsights;
 const VoiceRouter = require('../whatsapp').VoiceRouter;
 const WaBot = require('../whatsapp').WaBot;
 const { badRequest, forbidden, notFound, readJson, sendJson, parseUrl } = require('../core').HttpKit;
@@ -45,6 +46,8 @@ function register(router, h) {
    */
   router.get('/api/today/insights', async (req, res, ctx) => {
     const actor = userOnly(ctx);
+    // 📬 העובד מסתכל בתובנות — מעכשיו הן מחושבות לו גם מראש (‎MailInsights.warmWanted‎)
+    MailInsights.noteSeen(actor.id);
     const out = await Today.insightsFor(actor);
     sendJson(res, 200, { insights: out ? { ...out, result: undefined } : null });
   });

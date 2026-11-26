@@ -239,6 +239,10 @@ function channelAvailable(req, channel) {
 // הקשר ל-AI
 // ---------------------------------------------------------------------------
 
+const HISTORY_FULL = 8;     // הודעות אחרונות בהקשר — במלואן
+const HISTORY_CHARS = 1500; // ...עד כמה תווים כל אחת
+const HISTORY_BRIEF = 10;   // הישנות מהן — שורה אחת כל אחת
+
 function contextText(req, { withHistory = true } = {}) {
   const owner = ownerOf(req);
   const lines = [
@@ -258,19 +262,25 @@ function contextText(req, { withHistory = true } = {}) {
     const history = messagesOf(req.id).filter((m) => m.status === 'sent' || m.status === 'received');
     if (history.length) {
       lines.push('', 'ההתכתבות עד כה (מהישן לחדש):');
-      for (const m of history.slice(-12)) {
+      // 💰 רק ‎HISTORY_FULL‎ האחרונות במלואן; הישנות — שורה אחת (מי, מתי, נושא). סבב 2 בחיסכון, שלב ד'
+      const older = history.slice(0, -HISTORY_FULL).slice(-HISTORY_BRIEF);
+      if (older.length) {
+        lines.push(`(${older.length} הודעות קודמות בקצרה:)`);
+        for (const m of older) lines.push(`- [${(m.sent_at ?? m.created_at).slice(0, 10)}] ${m.direction === 'out' ? 'יצאה' : 'נכנסה'}${m.subject ? ` · ${m.subject}` : ''}: ${m.body.replace(/\s+/g, ' ').slice(0, 120)}`);
+      }
+      for (const m of history.slice(-HISTORY_FULL)) {
         const at = (m.sent_at ?? m.created_at).slice(0, 16).replace('T', ' ');
         if (m.channel === 'note') {
           // עדכון שלא עבר בהתכתבות — מה שסוכם בטלפון גובר על מה שנכתב לפניו
           const label = m.kind === 'owner_contact' ? `${owner?.full_name ?? 'המשתמש'} כתב/ה לנמען בעצמו/ה` : `עדכון של ${owner?.full_name ?? 'המשתמש'} (מחוץ להתכתבות)`;
           lines.push(`--- [${at}] ${label}:`);
-          lines.push(m.body.slice(0, 2500));
+          lines.push(m.body.slice(0, HISTORY_CHARS));
           continue;
         }
         const who = m.direction === 'out' ? `${owner?.full_name ?? 'המשתמש'} ←` : `→ ${req.contact_name || 'הנמען'}`;
         const files = parseJson(m.attachment_ids, []).length;
         lines.push(`--- [${at}] ${m.channel === 'email' ? 'מייל' : 'וואטסאפ'} ${who}${m.subject ? ` · נושא: ${m.subject}` : ''}${files ? ` · ${files} קבצים מצורפים` : ''}`);
-        lines.push(m.body.slice(0, 2500));
+        lines.push(m.body.slice(0, HISTORY_CHARS));
       }
     }
   }
@@ -855,43 +865,71 @@ function storeFiles(req, files) {
   return { saved, skipped };
 }
 
+/*
+ * כמה עמודים ב-PDF — בקירוב, בלי ספרייה: מספר אובייקטי ‎/Type /Page‎, ואם הם דחוסים (‎object stream‎) — ה-‎/Count‎ של
+ * עץ העמודים. לא נמצא — לפי הגודל (~100KB לעמוד סרוק). כל עמוד שנשלח ל-AI הוא טקסט + תמונה: ~1.5–3K טוקנים.
+ */
+function pdfPages(buf) {
+  const s = buf.toString('latin1');
+  const objs = (s.match(/\/Type\s*\/Page(?![a-zA-Z])/g) ?? []).length;
+  if (objs) return objs;
+  const counts = [...s.matchAll(/\/Count\s+(\d+)/g)].map((m) => Number(m[1]));
+  return counts.length ? Math.max(...counts) : Math.max(1, Math.ceil(buf.length / (100 * 1024)));
+}
+
+/*
+ * 💰 תקרה לתוכן הקבצים בהכרעה אחת (סבב 2 בחיסכון, שלב ד', 26.11.26): עד 3 קבצים, ועד 25 עמודי PDF בסך הכול.
+ * משימות AI היו ‏$0.10 לקריאה — בעיקר PDF ארוכים שנשלחו במלואם ל-Opus.
+ */
+const MAX_FILES = 3;
+const MAX_PDF_PAGES = 25;
+
 /**
  * הקבצים עצמם נשלחים ל-AI כשהוא יכול לקרוא אותם — PDF ותמונות. כך ההכרעה
  * "התקבל המסמך" נשענת על התוכן ולא רק על שם הקובץ: קובץ בשם "טופס 4.pdf"
- * שהוא בעצם חשבונית לא יסגור את המשימה.
+ * שהוא בעצם חשבונית לא יסגור את המשימה. קובץ מעבר לתקרה — לא נשלח, ונמסר
+ * בשמו (‎notSent‎), כדי שה-AI לא יסיק מהשם בלבד.
+ * @returns {{ blocks: Array, notSent: string[] }}
  */
 function fileBlocks(saved) {
   const blocks = [];
+  const notSent = [];
   let budget = 12 * 1024 * 1024;
-  for (const f of saved.slice(0, 4)) {
-    if (f.data.length > budget) continue;
+  let pages = MAX_PDF_PAGES;
+  for (const f of saved) {
     const mime = String(f.mime).toLowerCase();
-    if (mime === 'application/pdf') {
-      blocks.push({ type: 'document', title: f.name, source: { type: 'base64', media_type: 'application/pdf', data: f.data.toString('base64') } });
-    } else if (['image/jpeg', 'image/png', 'image/gif', 'image/webp'].includes(mime)) {
-      blocks.push({ type: 'image', source: { type: 'base64', media_type: mime, data: f.data.toString('base64') } });
-    } else {
+    const pdf = mime === 'application/pdf';
+    if (!pdf && !['image/jpeg', 'image/png', 'image/gif', 'image/webp'].includes(mime)) continue;
+    const n = pdf ? pdfPages(f.data) : 0;
+    if (blocks.length >= MAX_FILES || f.data.length > budget || n > pages) {
+      notSent.push(pdf ? `${f.name} (${n} עמודים)` : f.name);
       continue;
     }
+    blocks.push(pdf
+      ? { type: 'document', title: f.name, source: { type: 'base64', media_type: 'application/pdf', data: f.data.toString('base64') } }
+      : { type: 'image', source: { type: 'base64', media_type: mime, data: f.data.toString('base64') } });
     budget -= f.data.length;
+    pages -= n;
   }
-  return blocks;
+  return { blocks, notSent };
 }
 
 async function evaluate(req, { channel, text, saved, skipped, autoSubmitted }) {
+  const files = fileBlocks(saved);
   const intro = [
     contextText(req), '',
     `התקבלה הודעה חדשה מהנמען ב${channel === 'email' ? 'מייל' : 'וואטסאפ'}${autoSubmitted ? ' (מסומנת כמענה אוטומטי)' : ''}:`,
     '<<<', text.slice(0, 12000) || '(ללא טקסט)', '>>>',
     saved.length ? `קבצים מצורפים: ${saved.map((f) => `${f.name} (${f.mime})`).join(', ')}` : 'אין קבצים מצורפים.',
     skipped.length ? `קבצים שלא נשמרו: ${skipped.join(', ')}` : null,
+    files.notSent.length ? `קבצים שתוכנם לא צורף כאן (ארוכים מדי): ${files.notSent.join(', ')} — אל תסיק מהשם בלבד שהבקשה מולאה. אם נראה שזה המסמך המבוקש, בקש מהמשתמש לבדוק אותו (question_for_owner).` : null,
     '', 'הכרע האם הבקשה מולאה, לפי ההנחיות. אם יש קבצים שתוכנם מצורף כאן — בדוק את התוכן עצמו.'
   ].filter((l) => l !== null).join('\n');
 
   const out = await Claude.json({
     feature: 'tasks.ai', userId: req.owner_id,
     system: skill(),
-    content: [...fileBlocks(saved), { type: 'text', text: intro }],
+    content: [...files.blocks, { type: 'text', text: intro }],
     schema: EVAL_SCHEMA
   });
   return tidied(out, ownerOf(req)?.full_name);
@@ -1533,5 +1571,5 @@ module.exports = {
   requestById, signatureMissing, cleanCc, ccOf,
   requestByTask, summaryFor, detailFor, defaultPolicy, cleanPolicy, status, STATE_LABELS, OPEN_STATES,
   // לבדיקות
-  _internal: { nextWindow, inWindow, afterDays, ladder, dateToFollowUp, endOfLocalDay, tidyBody, workdaysUntil }
+  _internal: { nextWindow, inWindow, afterDays, ladder, dateToFollowUp, endOfLocalDay, tidyBody, workdaysUntil, pdfPages, fileBlocks, contextText }
 };

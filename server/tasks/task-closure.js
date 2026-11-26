@@ -325,18 +325,43 @@ function detailsFor(user, row) {
 }
 
 /**
- * ‎actor‎ — כשנמסר, גם סוכן המחלקה המתאים נשאל (במקביל), והעצה שלו מצטרפת
- * להצעה (‎agent‎). בלי איש קשר להמליץ עליו אבל עם עצה — ‎kind: 'advice'‎.
+ * ‎actor‎ — כשנמסר, נבדק גם (בניתוב הזול, במקביל) אם יש סוכן מחלקה שיכול לייעץ. העצה עצמה **לא** נכתבת כאן:
+ * ההצעה נושאת ‎agentOffer: { key, title, icon }‎, ובמשימון כפתור "🤖 לשאול את …" (‎adviseNow‎). בלי איש קשר
+ * להמליץ עליו אבל עם סוכן — ‎kind: 'advice'‎. (סבב 2 בחיסכון, 26.11.26: העצה ברקע לכל הצעה הייתה 26% מהעלות.)
  */
 async function suggest(user, task, { mayVendors = false, actor = null } = {}) {
   if (!D.getSetting('task_closure_enabled', true) || !Claude.isEnabled()) return null;
   const agent = actor
-    ? Ports.get('agents').advise(user, actor, task).catch((err) => { console.error('[משימון] עצת סוכן למשימה נכשלה:', err.message); return null; })
+    ? Ports.get('agents').adviseRoute(user, actor, task).catch((err) => { console.error('[משימון] ניתוב עצת סוכן למשימה נכשל:', err.message); return null; })
     : Promise.resolve(null);
-  const [closure, advice] = await Promise.all([closureOf(user, task, { mayVendors }), agent]);
-  if (!advice) return closure;
-  if (closure) return { ...closure, agent: advice };
-  return { need: String(task.need ?? '').trim(), keywords: task.keywords ?? [], createdAt: D.nowIso(), kind: 'advice', agent: advice };
+  const [closure, offer] = await Promise.all([closureOf(user, task, { mayVendors }), agent]);
+  if (!offer) return closure;
+  if (closure) return { ...closure, agentOffer: offer };
+  return { need: String(task.need ?? '').trim(), keywords: task.keywords ?? [], createdAt: D.nowIso(), kind: 'advice', agentOffer: offer };
+}
+
+/**
+ * 🤖 "לשאול את …" — העצה של הסוכן שהניתוב בחר, על ההצעה לסגירה ‎closure‎ של המשימה ‎task‎ ‎({ title, summary })‎.
+ * מחזיר את ההצעה המעודכנת (‎agent‎ במקום ‎agentOffer‎) — השומר הוא מי שקרא. עצה שכבר נכתבה — לא נכתבת שוב.
+ */
+async function adviseNow(user, actor, closure, task) {
+  if (!closure || closure.dismissed) throw new Error('אין הצעה לסגירה');
+  if (closure.agent?.text) return closure;
+  if (!closure.agentOffer) throw new Error('אין סוכן שמתאים למשימה הזו');
+  const advice = await Ports.get('agents').advise(user, actor, task, { key: closure.agentOffer.key });
+  if (!advice) throw new Error(`ל${closure.agentOffer.title} אין עצה למשימה הזו`);
+  const { agentOffer, ...rest } = closure;
+  return { ...rest, agent: advice };
+}
+
+/** 🤖 על משימה שלא נולדה ממייל — ההצעה שב-‎task_closures‎ */
+async function adviseTask(taskId, actor) {
+  const row = D.get('SELECT t.title, t.description, c.data FROM task_closures c JOIN tasks t ON t.id = c.task_id WHERE c.task_id = ? AND c.user_id = ? AND c.dismissed = 0', taskId, actor.id);
+  if (!row) throw new Error('אין הצעה לסגירה');
+  const user = D.get('SELECT id, full_name, email, role FROM users WHERE id = ?', actor.id);
+  const c = await adviseNow(user, actor, parseJson(row.data, null), { title: row.title, summary: String(row.description ?? '').slice(0, 1500) });
+  D.run('UPDATE task_closures SET data = ? WHERE task_id = ? AND user_id = ?', JSON.stringify(c), taskId, actor.id);
+  return c;
 }
 
 async function closureOf(user, task, { mayVendors = false } = {}) {
@@ -388,7 +413,7 @@ async function closureOf(user, task, { mayVendors = false } = {}) {
     'הצע לפי ההנחיות.'
   ].filter((l) => l !== null).join('\n');
 
-  const out = await Claude.json({ feature: 'tasks.closure', system: skill(), content: [{ type: 'text', text }], schema: CLOSURE_SCHEMA, effort: 'low' });
+  const out = await Claude.json({ feature: 'tasks.closure', light: true, system: skill(), content: [{ type: 'text', text }], schema: CLOSURE_SCHEMA, effort: 'low' });
   return sanitize(out, cands, { need, keywords });
 }
 
@@ -475,4 +500,4 @@ function dismissTask(taskId, viewerId) {
   if (!r.changes) throw new Error('אין הצעה לסגירה');
 }
 
-module.exports = { suggest, forTask, closureOfTask, dismissTask, candidatesFor, _internal: { sanitize, wordsOf, rejectedKeys, skillRows, matchingRows, detailsFor } };
+module.exports = { suggest, adviseNow, adviseTask, forTask, closureOfTask, dismissTask, candidatesFor, _internal: { sanitize, wordsOf, rejectedKeys, skillRows, matchingRows, detailsFor } };

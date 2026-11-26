@@ -259,8 +259,20 @@ const TaskCardView = (() => {
       } catch (err) { dismiss.disabled = false; UI.error(err); }
     });
     const main = closureMain(c, dismiss);
-    if (!main) return AiInboxView.agentAdvice(c.agent, dismiss);
-    const advice = AiInboxView.agentAdvice(c.agent);
+    // 🤖 עצת הסוכן נכתבת רק בלחיצה — אחריה מציירים את הכרטיס מחדש עם העצה
+    const ask = async () => {
+      if (c.taskClosure) {
+        const r = await API.post(`/api/tasks/${task.id}/closure-advise`);
+        task.closure = r.closure;
+      } else {
+        await API.post(`/api/ai/suggestions/${c.suggestionId}/closure-advise`);
+        const r = await API.get(`/api/tasks/${task.id}`);
+        task.closure = (r.task ?? r).closure ?? task.closure;
+      }
+    };
+    const redraw = () => draw(modalRef.box.querySelector('.task-detail'));
+    if (!main) return AiInboxView.agentAdvice(c.agent, dismiss) ?? AiInboxView.agentOffer(c.agentOffer, ask, redraw, dismiss);
+    const advice = AiInboxView.agentAdvice(c.agent) ?? AiInboxView.agentOffer(c.agentOffer, ask, redraw);
     return advice ? el('div', {}, [main, advice]) : main;
   }
 

@@ -780,11 +780,35 @@ async function resolveCompany(s) {
     'לאיזו חברה לקלוט?', ...open.map((c) => bullet(`${Priority.companyOf(c).name} (${c})`)), '', open.length > 3 ? 'בחרו בכפתור, או כתבו את שם החברה. *ביטול* — לבטל.' : 'בחרו בכפתור, או *ביטול*.'].join('\n'));
 }
 
+/*
+ * 🔁 ספק שהעובד בחר לשם שבמסמך (סקירה 25.11: "חברת החשמל לישראל" במסמך, "חברת חשמל לישראל" בפריוריטי — 12 מסמכים,
+ * ובכל אחד הבוט לא מצא והעובדת כתבה מחדש). נזכר לפי החברה והשם שבמסמך; בפעם הבאה — נבחר לבד. רק כשאין התאמה ודאית.
+ */
+const aliasKey = (c) => `gr_supplier_alias:${c}`;
+const aliasName = (name) => String(name ?? '').replace(/["'״׳.,\-–()]/g, ' ').replace(/\s+/g, ' ').trim();
+function supplierAlias(c, docName) {
+  const k = aliasName(docName);
+  return k ? D.getSetting(aliasKey(c), null)?.[k] ?? null : null;
+}
+function rememberSupplierAlias(c, docName, sup) {
+  const k = aliasName(docName);
+  if (!k || !sup?.code) return;
+  const all = D.getSetting(aliasKey(c), null) ?? {};
+  all[k] = { code: sup.code, name: sup.name, at: new Date().toISOString() };
+  D.setSetting(aliasKey(c), all);
+}
+
 async function resolveSupplier(s) {
   const found = await Priority.findSuppliers(s.company, { vat: s.doc.supplier_vat, name: s.doc.supplier_name });
   s.supplierBy = found.by;
   if (found.list.length === 1 && !found.weak) {
     s.supplier = { code: found.list[0].SUPNAME, name: found.list[0].SUPDES };
+    return askHeader(s);
+  }
+  const alias = supplierAlias(s.company, s.doc.supplier_name);
+  if (alias) {
+    s.supplier = { code: alias.code, name: alias.name };
+    s.supplierBy = 'alias';
     return askHeader(s);
   }
   s.step = 'supplier';
@@ -868,7 +892,7 @@ async function askHeader(s) {
     `📦 *קבלת סחורה* — ${docName(d)} ${d.doc_number}`,
     companyLine(s),
     s.via === 'sandbox' ? `   (המסמך מופנה ל${companyMatch(d).matched?.name ?? 'חברה אחרת'} — נקלט לעותק הבדיקה)` : null,
-    `🚚 ספק: *${s.supplier.name}* (${s.supplier.code})${s.supplierBy === 'vat' ? ` — לפי ח.פ. ${String(d.supplier_vat).replace(/\D/g, '')}` : s.supplierBy === 'name' ? (d.supplier_vat ? ` — לפי שם: ח.פ. ${String(d.supplier_vat).replace(/\D/g, '')} שבמסמך לא נמצא בכרטיסי הספקים` : ' — לפי שם, אין ח.פ. במסמך') : s.supplierBy === 'user' ? ' — נבחר ע"י המקבל' : ['vat_near', 'vat_fuzzy'].includes(s.supplierBy) ? ` — לפי שם וח.פ. דומה (במסמך נקרא ${String(d.supplier_vat).replace(/\D/g, '')})` : ''}`,
+    `🚚 ספק: *${s.supplier.name}* (${s.supplier.code})${s.supplierBy === 'vat' ? ` — לפי ח.פ. ${String(d.supplier_vat).replace(/\D/g, '')}` : s.supplierBy === 'name' ? (d.supplier_vat ? ` — לפי שם: ח.פ. ${String(d.supplier_vat).replace(/\D/g, '')} שבמסמך לא נמצא בכרטיסי הספקים` : ' — לפי שם, אין ח.פ. במסמך') : s.supplierBy === 'user' ? ' — נבחר ע"י המקבל' : s.supplierBy === 'alias' ? ' — כמו בפעם הקודמת (נבחר ע"י המקבל לשם שבמסמך)' : ['vat_near', 'vat_fuzzy'].includes(s.supplierBy) ? ` — לפי שם וח.פ. דומה (במסמך נקרא ${String(d.supplier_vat).replace(/\D/g, '')})` : ''}`,
     d.date ? `📅 ${ymdHe(d.date)}${d.delivery_place ? ` · ${d.delivery_place}` : ''}` : null,
     `💳 תנאי תשלום: *${Priority.payLabel(s.payCode ?? Priority.DEFAULT_PAY)}*${(s.payCode ?? Priority.DEFAULT_PAY) === Priority.DEFAULT_PAY ? ' (ברירת מחדל)' : ''}${dueText(s, s.payCode ?? Priority.DEFAULT_PAY)}`,
     s.noVat ? `🧾 מע"מ: *ללא מע"מ* — קוד ${Priority.NO_VAT_CODE} ${Priority.TAX_CODES[Priority.NO_VAT_CODE]}${s.noVatBy === 'user' ? ' (נבחר)' : ' — במסמך אין מע"מ'}` : null,
@@ -2223,6 +2247,7 @@ async function step(user, s, t, file, allow = { gr: true, pd: false }) {
       if (!sup) return reply(s, `לא מצאתי ספק${t && !/^\d+$/.test(t) ? ` בשם "${t}"` : ''} בחברה הזו. כתבו שם אחר או מספר ספק בפריוריטי. אין ספק כזה — צריך לפתוח אותו בפריוריטי (רכש), או *ביטול*.`);
       s.supplier = sup;
       s.supplierBy = 'user';
+      rememberSupplierAlias(s.company, s.doc?.supplier_name, sup);
       return askHeader(s);
     }
 

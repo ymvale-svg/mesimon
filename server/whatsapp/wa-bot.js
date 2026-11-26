@@ -291,7 +291,7 @@ async function aboutPending(state, text) {
   const lastBot = [...(state.history ?? [])].reverse().find((h) => h.role === 'bot')?.text ?? '';
   try {
     const r = await Claude.json({
-      feature: 'bot.chat',
+      feature: 'bot.chat', light: true,
       system: [
         'אתה מסווג הודעות בשיחת וואטסאפ עם בוט משימות. לעובד יש פריט שממתין לתגובה שלו (טיוטה לאישור, או שאלה של הבוט).',
         'החזר same_topic=true אם ההודעה החדשה מתייחסת לפריט הזה: אישור, תיקון, תוספת, הוראה על הנוסח, תשובה לשאלה, בחירת נמען, או המשך ישיר שלו.',
@@ -602,6 +602,8 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
     let today = null;
     if (WaActions.allowed(actor, 'today')) {
       try {
+        // 📬 העובד מסתכל בתובנות — מעכשיו הן מחושבות לו גם מראש (‎warmWanted‎)
+        if (!dry && insightsAllowed()) MailInsights.noteSeen(actor.id);
         const ins = !dry && insightsAllowed()
           ? Promise.race([
             Today.insightsFor(actor, { mail: mailOn() }).then((r) => (r?.result?.items ?? []).filter((x) => x.kind === 'action')),
@@ -664,6 +666,7 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
         {}, { action: 'mail_insights', status: 'error', result: 'לא זמין' });
     }
     const window = Range.forUser(actor.id, range);
+    if (mailOn()) MailInsights.noteSeen(actor.id);
     const result = await Insights.collect(actor.id, { window, from, mail: mailOn() });
     const f = Insights.format(result);
     return out(f.text, { insights: f.ids, draft: null }, {
@@ -1784,8 +1787,9 @@ async function listen() {
 
 /**
  * תובנות המייל מחושבות מראש, ברקע: כך ה-Today של הבוקר אינו ממתין לקריאת
- * עשרות מיילים ולניתוח שלהם. כל מייל מנותח פעם אחת ממילא (מטמון לשבוע) —
- * החישוב מראש אינו מוסיף עלות, רק מקדים אותה.
+ * עשרות מיילים ולניתוח שלהם. כל מייל מנותח פעם אחת (מטמון לשבוע) — אבל מראש
+ * מנותח **כל** מייל, ולפי בקשה רק עד 40–80 בטווח. ולמי שלא מסתכל — הכול לחינם.
+ * לכן רק למי שהסתכל לאחרונה (‎MailInsights.warmWanted‎; סבב 2 בחיסכון, 26.11.26).
  */
 const warmedAt = new Map(); // userId → ms
 
@@ -1793,6 +1797,7 @@ async function warmInsights() {
   if (!Claude.isEnabled()) return;
   for (const u of orgUsers().filter((x) => x.phone)) {
     if (Date.now() - (warmedAt.get(u.id) ?? 0) < WARM_EVERY_MS) continue;
+    if (!MailInsights.warmWanted(u.id)) continue;
     const actor = Auth.loadActor('user', u.id);
     if (!actor || !WaActions.allowed(actor, 'mail_insights') || !MailInsights.available(u.id)) continue;
     warmedAt.set(u.id, Date.now());
@@ -1996,6 +2001,6 @@ module.exports = {
     storeGroupMessage, processGroup, handleDirect, sanitizeGroup, resolveMentions, candidatesOf, converse, turn, withFollowUps, sendSummaries, YES,
     findRecipients, findContactCards, sourceOf, suggestionFeedback, flushOutbox, todayMessage, splitMessage, parseSuggestionCommand, businessCommand, chatOf, saveChat,
     recordingReply, checkDraft, draftText, createFromDraft, mailAlertFor, closeAlerted, logoIntent, busyFor, userLastAt, staleQuestion,
-    READ_ALOUD, READ_ALOUD_DOWN, readAloudText, readAloudFile, hooks, flowReply, retryTick, alertAdminsAi, dispatch
+    READ_ALOUD, READ_ALOUD_DOWN, readAloudText, readAloudFile, hooks, flowReply, retryTick, alertAdminsAi, dispatch, warmInsights
   }
 };

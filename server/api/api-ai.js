@@ -1097,6 +1097,8 @@ function register(router, h) {
   suggestionAction('restore', (id, actor) => MailScan.restore(id, actor));
   suggestionAction('ignore-sender', (id, actor) => MailScan.ignoreSenderOf(id, actor));
   suggestionAction('closure-dismiss', (id, actor) => MailScan.dismissClosure(id, actor));
+  // 🤖 עצת סוכן המחלקה — נכתבת רק בלחיצה (סבב 2 בחיסכון, 26.11.26)
+  suggestionAction('closure-advise', (id, actor) => MailScan.adviseClosure(id, actor));
   suggestionAction('reply-sent', (id, actor) => MailScan.markReply(id, actor, 'sent'));
   suggestionAction('reply-dismiss', (id, actor) => MailScan.markReply(id, actor, 'dismissed'));
   // 📉 מתחת ל-100% התשובה לא הוכנה מראש — נכתבת כשמבקשים (‎mail-dose.js‎)
@@ -1106,6 +1108,12 @@ function register(router, h) {
     const actor = userOnly(ctx);
     try { TaskClosure.dismissTask(Number(ctx.params.taskId), actor.id); } catch (err) { throw badRequest(err.message); }
     sendJson(res, 200, { ok: true });
+  });
+  router.post('/api/tasks/:taskId/closure-advise', async (req, res, ctx) => {
+    const actor = userOnly(ctx);
+    let closure;
+    try { closure = await TaskClosure.adviseTask(Number(ctx.params.taskId), actor); } catch (err) { throw badRequest(err.message); }
+    sendJson(res, 200, { ok: true, closure: { taskClosure: true, ...closure } });
   });
 
   // 📧 משימה ממייל שהעובד בוחר בעצמו — רק מהתיבות שלו (‎mail-pick.js‎)

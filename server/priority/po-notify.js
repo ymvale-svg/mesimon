@@ -184,7 +184,7 @@ async function demandDiffs(d, po) {
   if (want.length === got.length && want.map(sig).sort().join('\n') === got.map(sig).sort().join('\n')) return [];
   if (Claude.isEnabled()) {
     try {
-      const r = await Claude.json({ feature: 'priority.po', system: COMPARE_SYSTEM, schema: COMPARE_SCHEMA, effort: 'low', content: [{ type: 'text', text: JSON.stringify({
+      const r = await Claude.json({ feature: 'priority.po', light: true, system: COMPARE_SYSTEM, schema: COMPARE_SCHEMA, effort: 'low', content: [{ type: 'text', text: JSON.stringify({
         requested: want.map((l) => ({ item: l.PDES, code: l.PARTNAME, qty: l.TQUANT, unit: l.TUNITNAME })),
         ordered: got.map((l) => ({ item: l.PDES, code: l.PARTNAME, qty: l.TQUANT, unit: l.TUNITNAME }))
       }) }] });

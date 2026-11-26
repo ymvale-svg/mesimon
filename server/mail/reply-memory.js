@@ -79,7 +79,7 @@ async function learn(userId, { incoming = {}, sent, source = '' }) {
       body.slice(0, 2500),
       '>>>'
     ].join('\n');
-    const out = await Claude.json({ feature: 'mail.reply_learn', userId, system: SYSTEM, content: [{ type: 'text', text }], schema: LEARN_SCHEMA, effort: 'low' });
+    const out = await Claude.json({ feature: 'mail.reply_learn', light: true, userId, system: SYSTEM, content: [{ type: 'text', text }], schema: LEARN_SCHEMA, effort: 'low' });
     const now = D.nowIso();
     const saved = [];
     for (const r of (out?.rules ?? []).slice(0, 3)) {
