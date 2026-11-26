@@ -1048,3 +1048,28 @@ test('פער 6 (25.11.26): מק"ט שהרכש בנה לפריט מספק — ה�
   assert.match(r.text, /המק"ט שהרכש בנה לפריט הזה/);
   assert.doesNotMatch(r.text, /← 000/);
 });
+
+// סקירה לילית 25.11: במסמך "חברת החשמל לישראל", בפריוריטי "חברת חשמל לישראל" — בכל אחד מ-12 המסמכים הבוט לא
+// מצא, והעובדת כתבה את השם מחדש. עכשיו: הבחירה נזכרת לפי החברה והשם שבמסמך, ובפעם הבאה — הספק נבחר לבד.
+test('ספק שנבחר ידנית לשם שבמסמך — בפעם הבאה, באותה חברה, נבחר לבד ("כמו בפעם הקודמת")', async (t) => {
+  H.companies(t, 'test11');
+  const u = H.worker();
+  priority(t, { reads: {
+    findSuppliers: async (c, { name }) => (name === 'חברת החשמל לישראל'
+      ? { list: [{ SUPNAME: 'S9', SUPDES: 'אן.טי.אס.איי' }], by: 'name', weak: true }
+      : { list: [{ SUPNAME: 'S100', SUPDES: 'חברת חשמל לישראל' }], by: 'name' })
+  } });
+  ai(t, doc({ supplier_name: 'חברת החשמל לישראל' }));
+  const { say } = H.chat(t, u);
+
+  let r = await say('קבלת סחורה', { file: H.photo() });
+  assert.match(r.text, /לא מצאתי בפריוריטי ספק בשם \*חברת החשמל לישראל\*/);
+  r = await say('חברת חשמל לישראל');
+  assert.match(r.text, /ספק: \*חברת חשמל לישראל\* \(S100\) — נבחר ע"י המקבל/);
+  await say(BTN.cancel);
+
+  // מסמך נוסף מאותו ספק — בלי שאלה
+  r = await say('קבלת סחורה', { file: H.photo('b.jpg') });
+  assert.doesNotMatch(r.text, /לא מצאתי בפריוריטי ספק/);
+  assert.match(r.text, /ספק: \*חברת חשמל לישראל\* \(S100\) — כמו בפעם הקודמת/);
+});
