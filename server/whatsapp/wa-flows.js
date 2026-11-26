@@ -761,7 +761,7 @@ async function flowMeetingFollowupRequest({ actor, dry, out, state, t }) {
 
 // 📅 "מי משתתף בפגישה?" — מהיומן (גם פגישות שלא נקבעו ממשימון)
 async function flowMeetingReminderRequest({ actor, out, state, t }) {
-  if (WaActions.byKey('meeting_reminder')?.enabled && !(state.awaiting && state.draft)) {
+  if (WaActions.byKey('meeting_reminder')?.enabled && !(state.awaiting && state.draft && state.draft.kind !== 'menu')) {
     const who = await Meetings.participantsAnswer(actor.id, t).catch(() => null);
     if (who) return out(who, {}, { action: 'meeting_reminder', status: 'ok', result: who.split('\n')[0] });
   }
