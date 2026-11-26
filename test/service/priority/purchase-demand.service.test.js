@@ -1498,3 +1498,17 @@ test('"התכוונת ל\'משקוף\'?": "לא" ← מבקשים לכתוב א�
   assert.equal(seen.at(-1).asked, 'לא הבנתי את "משקור". התכוונת ל"משקוף"?');
   assert.match(r.text, /חלון/);
 });
+
+// סקירה לילית 26.11: בהקלטה, בשאלה "התכוונת ל…": "מדובר מכולת משרד 6 מטר." — התיאור נשמר עם "מדובר" ועם הנקודה
+test('"התכוונת ל…": "מדובר …" — רק הפריט, בלי המילה שלפניו ובלי נקודה בסוף', async (t) => {
+  H.companies(t, 'test11');
+  const u = buyerWorker();
+  priority(t);
+  ai(t);
+  const { say } = H.chat(t, u);
+  await toItems(say);
+  await say('10 שקי מלט, 5 קוב בטון לתקרה');
+  const r = await say('מדובר בטון ב-30 מיוחד.');
+  assert.match(r.text, /בטון ב-30 מיוחד — 5 קוב/);
+  assert.doesNotMatch(r.text, /מדובר|מיוחד\. —/);
+});
