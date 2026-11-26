@@ -216,9 +216,11 @@ const EDIT_SCHEMA = {
     adds: { type: 'array', items: ITEM },
     updates: { type: 'array', items: { type: 'object', properties: { line: { type: 'integer' }, qty: num, description: str }, required: ['line', 'qty', 'description'], additionalProperties: false } },
     removes: { type: 'array', items: { type: 'integer' } },
-    question: str
+    question: str,
+    // "התכוונת ל'משקוף'?" — הפריט שה-AI משער (כפתורי כן / לא). אין השערה — תיאור ריק
+    guess: ITEM
   },
-  required: ['action', 'adds', 'updates', 'removes', 'question'], additionalProperties: false
+  required: ['action', 'adds', 'updates', 'removes', 'question', 'guess'], additionalProperties: false
 };
 
 const DETAIL_SCHEMA = {
@@ -253,8 +255,8 @@ const ai = {
     const content = JSON.stringify({ task: 'detail', items: items.map((it) => ({ line: it.n, description: it.description, qty: it.qty, unit: it.unit, note: it.note ?? '' })) });
     return Claude.json({ system: skill(), content: [{ type: 'text', text: content }], schema: DETAIL_SCHEMA, effort: 'low', live: true });
   },
-  async edit(lines, text) {
-    const content = JSON.stringify({ task: 'edit', lines: lines.map((l) => ({ line: l.n, description: l.description, qty: l.qty, unit: l.unit })), text });
+  async edit(lines, text, asked = '') {
+    const content = JSON.stringify({ task: 'edit', lines: lines.map((l) => ({ line: l.n, description: l.description, qty: l.qty, unit: l.unit })), asked, text });
     return Claude.json({ feature: 'priority.demand', system: skill(), content: [{ type: 'text', text: content }], schema: EDIT_SCHEMA, effort: 'low', live: true });
   }
 };
@@ -978,11 +980,11 @@ async function addItems(s, list) {
   return added;
 }
 
-async function onFile(user, s, file) {
-  const saved = await saveFile(user.id, file);
+async function onFile(user, s, file, read = null) {
+  const saved = read?.saved ?? await saveFile(user.id, file);
   (s.files ??= []).push(saved);
   if (!Claude.isEnabled()) return reply(s, 'קריאת רשימות מצילום דורשת חיבור AI, שעוד לא הוגדר בשרת. הקלידו את הפריטים, או *ביטול*.', [BTN.cancel]);
-  const out = await ai.itemsFromFile(saved);
+  const out = read?.out ?? await ai.itemsFromFile(saved);
   const added = await addItems(s, out.items);
   if (!added.length) return reply(s, out.question || 'לא מצאתי פריטים בצילום. נסו צילום ברור יותר (רשימה מודפסת עדיף), או הקלידו / הקליטו את הפריטים.', [BTN.cancel]);
   return nextQuestion(s, [`📷 קראתי ${added.length} ${added.length === 1 ? 'פריט' : 'פריטים'} מהצילום.`, '']);
@@ -993,8 +995,32 @@ function staleAgain(s) {
   return { ...showList(s, ['⏳ עבר זמן מאז ההודעה האחרונה בדרישה, ולכן עוד לא שלחתי. הנה הדרישה שוב — לבדוק ולאשר מחדש:', '']), result: 'סיום אחרי 15 דקות — הדרישה הוצגה שוב' };
 }
 
+/*
+ * ❓ "התכוונת ל'משקוף'?" — שאלה של ה-AI על מה שהעובד כתב (סקירה 26.11.26, מתן: "משקור" ← "לא" ← "הרשימה עדיין ריקה").
+ * ההשערה נשמרת (‎s.guess‎) ונשאלת בכפתורי כן / לא: "כן" מוסיף אותה, "לא" מבקש לכתוב את הפריט. תשובה אחרת — ל-AI, עם
+ * השאלה האחרונה שלו (‎s.asked‎), כדי שיבין אותה בהקשר.
+ */
+async function onGuess(user, s, t) {
+  const g = s.guess;
+  s.guess = null;
+  if (YES.test(t) || sameLabel(t, BTN.yes)) {
+    s.asked = null;
+    const { typed, ...item } = g;
+    const [it] = await addItems(s, [item]);
+    if (!it) return reply(s, 'שלחו את הפריטים (פריט וכמות).', [BTN.cancel]);
+    return nextQuestion(s, [`➕ נוסף: ${it.description} — ${qtyText(it.qty)} ${it.unit}`, '']);
+  }
+  if (sameLabel(t, BTN.no) || (NO.test(t) && t.trim().split(/\s+/).length <= 2)) {
+    const text = `מה התכוונת במקום "${g.typed}"? כתבו את שם הפריט (וכמות).`;
+    s.asked = text;
+    return reply(s, text, [BTN.cancel]);
+  }
+  return null;
+}
+
 async function onText(user, s, t, exact = null, { stale = false } = {}) {
-  const out = exact ? LineCmd.asDemandEdit(exact) : await ai.edit(s.items ?? [], t);
+  const out = exact ? LineCmd.asDemandEdit(exact) : await ai.edit(s.items ?? [], t, s.asked ?? '');
+  s.guess = null;
   if (out.action === 'unrelated') return null;
   if (out.action === 'cancel') return { s: null, replies: ['דרישת הרכש בוטלה. לא נכתב דבר בפריוריטי.'], buttons: [], result: 'ביטול' };
   if (out.action === 'done' && (s.items ?? []).length) return stale ? staleAgain(s) : submit(user, s);
@@ -1014,9 +1040,45 @@ async function onText(user, s, t, exact = null, { stale = false } = {}) {
   if (added.length) notes.push(added.length === 1 ? "➕ נוסף פריט אחד." : `➕ נוספו ${added.length} פריטים.`);
   if (!notes.length) {
     if (out.action === 'done') return reply(s, 'עוד אין פריטים ברשימה. שלחו צילום, הקלטה או הקלדה של מה שצריך.', [BTN.cancel]);
+    const guess = String(out.guess?.description ?? '').trim();
+    if (out.question && guess) {
+      s.guess = { description: guess, qty: Number(out.guess.qty) > 0 ? Number(out.guess.qty) : 1, unit: out.guess.unit || "יח'", note: out.guess.note ?? '', typed: t.trim().slice(0, 60) };
+      s.asked = out.question;
+      return reply(s, out.question, [BTN.yes, BTN.no, BTN.cancel]);
+    }
+    s.asked = out.question || null;
     return reply(s, out.question || 'לא הבנתי. שלחו פריטים (פריט וכמות), תיקון ("שורה 2 — 20"), או *סיום* 🏁.', s.lastButtons ?? [BTN.cancel]);
   }
+  s.asked = null;
   return nextQuestion(s, [...notes, '']);
+}
+
+/*
+ * 📎 צילום בשאלת "התכוונת ל…" (סקירה 26.11.26, מתן: "אני צריך כזה" + צילום של מתקן מים ← נוסף פריט שני, כפול):
+ * כיתוב "כזה" / "זה" / "מפרט", או צילום שיש בו רק את הפריט ששאלנו עליו — מפרט לפריט הזה, והשאלה נשאלת שוב.
+ * צילום של רשימה (פריטים אחרים) — נקרא ונוסף, כמו קודם.
+ */
+const LIKE_THIS = /(^|\s)(כזה|כזאת|כזו|כאלה|כאלו|הזה|הזאת|הזו|זה|זאת|זו|דוגמה|דוגמא|מפרט|בתמונה|בצילום)([\s,.!?]|$)/;
+const sameThing = (a, b) => { const w = new Set(wordsIn(b).filter((x) => x.length >= 2)); return wordsIn(a).some((x) => w.has(x)); };
+
+async function onPickFile(user, s, file, t) {
+  const it = s.items.find((x) => x.n === s.pickLine && x.status === 'ask');
+  if (!it) return onFile(user, s, file);
+  const caption = String(t ?? '').trim();
+  const saved = await saveFile(user.id, file);
+  if (!LIKE_THIS.test(caption) || /רשימ/.test(caption)) {
+    if (!Claude.isEnabled()) return onFile(user, s, file, { saved });
+    const out = await ai.itemsFromFile(saved);
+    const one = (out.items ?? []).length === 1 && sameThing(out.items[0].description, it.description);
+    if (!one) return onFile(user, s, file, { saved, out });
+  }
+  if (it.spec?.path) { try { fs.unlinkSync(it.spec.path); } catch { /* כבר נמחק */ } }
+  it.spec = saved;
+  // הצילום מספיק כתיאור לבניית מק"ט — בלי "איזה …? כתבו תיאור מדויק"
+  it.vague = false;
+  it.vagueChecked = true;
+  const none = s.editOf ? BTN_NONE_EDIT : BTN_NONE;
+  return nextQuestion(s, [`📎 הצילום נשמר כמפרט ל*${it.description}* — יישלח עם הפריט. אחד מאלה הוא? בחרו אותו. אם לא — *${none}*.`, '']);
 }
 
 /** תשובה ל"התכוונת ל…" — כפתור, "אף אחד", או תיאור אחר (חיפוש מחדש) */
@@ -1548,12 +1610,13 @@ async function step(user, s, t, file, { reaction, stale = false }) {
       if (file) return onDetailFile(user, s, file, t);
       return onDetail(user, s, t);
     case 'pick':
-      if (file) return onFile(user, s, file);
+      if (file) return onPickFile(user, s, file, t);
       return onPick(user, s, t, { reaction });
     case 'items':
     case 'review': {
-      if (file) return onFile(user, s, file);
+      if (file) { s.guess = null; return onFile(user, s, file); }
       if (!t) return reply(s, s.lastPrompt ?? 'שלחו את רשימת הפריטים.', s.lastButtons ?? []);
+      if (s.guess) { const g = await onGuess(user, s, t); if (g) return g; }
       if (s.step === 'review' && (DONE.test(t) || sameLabel(t, BTN.done) || t === '👍')) return stale ? staleAgain(s) : submit(user, s);
       if (s.step === 'items' && (DONE.test(t) || sameLabel(t, BTN.done))) return reply(s, 'עוד אין פריטים ברשימה. שלחו צילום, הקלטה או הקלדה של מה שצריך.', [BTN.cancel]);
       // "שורה 2 כמות 10" — עריכה ישירה מהמסך (או מוקלדת): בלי AI
