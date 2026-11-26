@@ -674,7 +674,7 @@ function afterSummary(reply, draft, result) {
   return [reply, { draft: null }, { action: 'meeting_followup', status: 'ok', result: result.slice(0, 300) }];
 }
 
-// 🎥 אחרי פגישה מוקלטת: "תפתח אותן" (במילים — הבוט לא מציע) על המשימות, ו"כן" / "לא" על שליחת הסיכום למשתתפים
+// 🎥 אחרי פגישה מוקלטת: המשימות שלי — ☑️ משימה אחת עם צ'קליסט / 📌 נפרדות / "רק 1 ו-3", ו"כן" / "לא" על שליחת הסיכום למשתתפים
 async function flowOnMeetingTasks(ctx) {
   let { actor, dry, keep, out, state, t } = ctx;
   if (state.draft?.kind === 'meeting_summary_mail' && state.awaiting) {
@@ -693,10 +693,16 @@ async function flowOnMeetingTasks(ctx) {
   }
   if (state.draft?.kind === 'meeting_tasks' && state.awaiting) {
     const n = WaUi.normalize(t);
-    // רק כשהעובד מבקש במילים ("תפתח אותן") — הבוט לא מציע לפתוח משימות (16.11.26); ההצעות במשימון
-    if (MeetingFollowup.isOpenButton(t)) {
-      if (!WaActions.allowed(actor, 'create_task')) return out('פתיחת משימות כבויה לך בוואטסאפ.', { draft: null }, { action: 'meeting_followup', status: 'denied', result: 'פתיחת משימות כבויה' });
-      const reply = MeetingFollowup.openTasks(actor, state.draft, { createTask: hooks.createTask, taskLink, dry });
+    // 📋 להמיר למשימות (26.11.26): ☑️ משימה אחת עם צ'קליסט · 📌 משימות נפרדות ("תפתח אותן" — נפרדות)
+    const choice = MeetingFollowup.convertChoice(t);
+    if (choice) {
+      if (!WaActions.allowed(actor, 'create_task') || typeof hooks.createTask !== 'function') return out('פתיחת משימות כבויה לך בוואטסאפ.', { draft: null }, { action: 'meeting_followup', status: 'denied', result: 'פתיחת משימות כבויה' });
+      const deps = { createTask: hooks.createTask, taskLink, dry };
+      if (choice === 'checklist' && state.draft.items.length > 1) {
+        const reply = MeetingFollowup.openChecklistTask(actor, state.draft, deps);
+        return out(reply, { draft: null }, { action: 'meeting_followup', status: 'ok', result: `משימה עם צ'קליסט (${state.draft.items.length}) מהפגישה "${state.draft.title}"`.slice(0, 300) });
+      }
+      const reply = MeetingFollowup.openTasks(actor, state.draft, deps);
       return out(reply, { draft: null }, { action: 'meeting_followup', status: 'ok', result: `נפתחו ${state.draft.items.length} משימות מהפגישה "${state.draft.title}"`.slice(0, 300) });
     }
     // "רק 1 ו-3" — חלק מהמשימות

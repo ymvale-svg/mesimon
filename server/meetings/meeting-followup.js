@@ -55,7 +55,11 @@ const BTN = Object.freeze({
   tasks: '📋 משימות מהפגישה',
   recording: '🎥 הקלטת הפגישה',
   open: 'לפתוח משימות ✅',
-  share: '📤 לשלוח למשתתפים'
+  share: '📤 לשלוח למשתתפים',
+  // 📋 המרת המשימות שלי מהפגישה (הוחלט 26.11.26, ישראל) — משימה אחת עם צ'קליסט, או משימה לכל פריט
+  checklist: "☑️ משימה + צ'קליסט",
+  separate: '📌 משימות נפרדות',
+  openOne: 'לפתוח משימה ✅'
 });
 
 const parseJson = (t, f) => { try { return JSON.parse(t); } catch { return f; } };
@@ -442,7 +446,7 @@ async function answer(actor, text, { appRoot = '', dry = false, createTask = nul
       head, '',
       '*על מה דיברו:*', ...dig.summary.map((s) => `• ${s}`),
       dig.decisions.length ? '\n*הוחלט:*' : null, ...dig.decisions.map((s) => `✔ ${s}`),
-      dig.items.length ? `\n📋 ${dig.items.length} משימות להמשך${mine.length ? `, ${mine.length} מהן שלך` : ''}.` : null
+      dig.items.length ? `\n📋 ${dig.items.length} משימות להמשך${mine.length ? `, ${mine.length} מהן שלך — *📋 משימות מהפגישה* מציג אותן, ומשם אפשר להמיר למשימות` : ''}.` : null
     ].filter((l) => l !== null);
     return { text: lines.join('\n'), buttons: [BTN.tasks, BTN.share, ...(row.source === 'zoom' ? [BTN.recording] : [])], result: `סיכום: ${row.title}` };
   }
@@ -482,15 +486,23 @@ async function answer(actor, text, { appRoot = '', dry = false, createTask = nul
   }
   if (!dry) Suggestions.suggest({ source: row.source, ref: row.ref, title: row.title, items: dig.items, fromId: actor.id, ownerOf: () => actor.id, only: mine.map((it) => it.n) });
   const can = typeof createTask === 'function';
+  /*
+   * 📋 להמיר למשימות (הוחלט 26.11.26, ישראל): רק מה שהוטל על העובד — משימה אחת עם צ'קליסט, או משימה לכל פריט.
+   * בכפתורים; ובלי לחיצה — ההצעות מחכות ב"ממתין לאישורך" כמו קודם.
+   */
+  const convert = !can ? []
+    : mine.length > 1 ? ['', '*להמיר למשימות?*', `☑️ *משימה אחת עם צ'קליסט* — כל הפריטים שלך במשימה אחת`, '📌 *משימות נפרדות* — משימה לכל פריט']
+      : ['', '*להמיר למשימה?* — *לפתוח משימה* ✅'];
   return {
     text: [
       head, '',
       `*המשימות שלך מהפגישה (${mine.length}):*`,
       ...mine.map((it, i) => `${i + 1}. ${it.task}${fmtDue(it.due)}`),
       others.length ? `\n_ועוד ${others.length} של משתתפים אחרים — "סיכום" מציג הכול._` : null,
-      `\n💡 הן מחכות לך ב"ממתין לאישורך" במשימון — שם מאשרים, משנים או דוחים.`
+      ...convert,
+      `\n💡 ${can ? 'או שהן יחכו לך' : 'הן מחכות לך'} ב"ממתין לאישורך" במשימון — שם מאשרים, משנים או דוחים.`
     ].filter((l) => l !== null).join('\n'),
-    buttons: [BTN.summary, BTN.share],
+    buttons: !can ? [BTN.summary, BTN.share] : mine.length > 1 ? [BTN.checklist, BTN.separate, BTN.summary] : [BTN.openOne, BTN.summary, BTN.share],
     // "תפתח אותן" במילים — נפתחות מיד
     draft: can ? { kind: 'meeting_tasks', ref: `${row.source}:${row.ref}`, title: row.title, items: mine.map((it, i) => ({ ...it, n: it.n ?? i + 1 })), taskId: parseJson(row.data, {}).taskId ?? null } : null,
     awaiting: can,
@@ -704,6 +716,55 @@ function openTasks(actor, draft, { createTask, taskLink = () => null, dry = fals
   ].join('\n');
 }
 
+/**
+ * ☑️ "משימה אחת עם צ'קליסט" — כל הפריטים של העובד מהפגישה במשימה אחת אצלו: כל פריט — שורה בצ'קליסט
+ * (עם היעד, כשנאמר), ותאריך היעד של המשימה — המוקדם שבהם. ההצעות במשימון יורדות. מחזיר את הטקסט לעובד
+ */
+function openChecklistTask(actor, draft, { createTask, taskLink = () => null, dry = false }) {
+  const items = (draft.items ?? []).filter((it) => String(it.task ?? '').trim());
+  if (!items.length) return 'אין משימות להמיר.';
+  const ddmmOf = (d) => d.split('-').reverse().slice(0, 2).join('.');
+  const dues = items.map((it) => it.due).filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d ?? '')).sort();
+  const checklist = items.map((it) => `${String(it.task).trim()}${/^\d{4}-\d{2}-\d{2}$/.test(it.due ?? '') ? ` (עד ${ddmmOf(it.due)})` : ''}`.slice(0, 300));
+  const title = `משימות מהפגישה "${draft.title}"`.slice(0, 200);
+  const id = dry ? null : createTask(actor, {
+    title,
+    description: `🎥 מהפגישה "${draft.title}" — ${items.length} פריטים שהוטלו עלייך, בצ'קליסט\n\n💬 נפתחה מוואטסאפ`,
+    projectId: null,
+    assigneeType: 'user',
+    assigneeId: actor.id,
+    extraAssignees: [],
+    priority: 'normal',
+    dueDate: dues[0] ? new Date(`${dues[0]}T17:00:00+03:00`).toISOString() : null,
+    checklist,
+    source: 'whatsapp',
+    sourceUserId: actor.id,
+    auditNote: `המשימה נפתחה מוואטסאפ, מהמשימות של הפגישה "${draft.title}" (צ'קליסט)`
+  });
+  if (id && draft.ref) {
+    const [src, ...rest] = String(draft.ref).split(':');
+    for (const it of items) if (it.n) Suggestions.markOpened(src, rest.join(':'), it.n, id);
+  }
+  const link = id ? taskLink(id) : null;
+  return [
+    `✅ נפתחה משימה אחת עם צ'קליסט של ${items.length} פריטים${dry ? ' (בדיקה — לא נפתחה באמת)' : ''}:`,
+    `• ${title}${link ? `\n  ${link}` : ''}`,
+    ...checklist.map((c) => `  ☐ ${c}`)
+  ].join('\n');
+}
+
+/**
+ * הבחירה אחרי "להמיר למשימות?" — ‎'checklist'‎ / ‎'separate'‎ / ‎null‎. הכפתורים, או בשפה חופשית:
+ * "משימה אחת", "עם צ'קליסט", "הכול במשימה אחת" · "נפרדות", "כל אחת לחוד", "תפתח אותן".
+ */
+function convertChoice(text) {
+  const n = WaUi.normalize(text);
+  if (WaUi.sameLabel(n, BTN.checklist) || /צ['׳]?ק\s?ליסט|רשימת\s+(?:תיוג|סימון)|(?:^|\s)(?:ב|ל)?משימה\s+אחת(?:\s|$)|הכול\s+ביחד|הכל\s+ביחד/.test(n)) return 'checklist';
+  if (WaUi.sameLabel(n, BTN.separate) || WaUi.sameLabel(n, BTN.openOne) || isOpenButton(n)
+    || /נפרדות|נפרדים|(?:כל\s+(?:אחת|אחד|משימה)\s+)?(?:בנפרד|לחוד)|משימה\s+לכל/.test(n)) return 'separate';
+  return null;
+}
+
 // "תפתח אותן" / "לפתוח את המשימות" — במילים. אין כפתור: הבוט לא מציע לפתוח משימות (16.11.26)
 const isOpenButton = (t) => WaUi.normalize(t) === WaUi.normalize(BTN.open) || /^(?:לפתוח|תפתח|פתח|תפתחי)(?:\s+לי)?(?:\s+(?:אותן|את\s+(?:כל\s+)?ה?משימות|(?:כל\s+)?ה?משימות))(?:\s+מה?פגישה)?$/.test(WaUi.normalize(t));
 
@@ -716,6 +777,6 @@ function prune() {
 }
 
 module.exports = {
-  sweep, answer, openTasks, isOpenButton, digest, prune, BTN, sendSummaryMail, shareFor, summaryRequest,
+  sweep, answer, openTasks, openChecklistTask, convertChoice, isOpenButton, digest, prune, BTN, sendSummaryMail, shareFor, summaryRequest,
   _internal: { summaryMessage, vttText, myItems, followupFor, askText, alreadyAsked, record, ASK, BARE, norm, timelessMatch, timelessCandidates, invitees, summaryMailText, shareDraft, timelessSummaryFor }
 };
