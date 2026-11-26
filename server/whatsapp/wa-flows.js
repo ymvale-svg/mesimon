@@ -20,6 +20,7 @@ const FormFill = require('../mail').FormFill;
 const Rfq = require('../priority').Rfq;
 const PoPricelist = require('../priority').PoPricelist;
 const PdParts = require('../priority').PdParts;
+const PriorityWaiting = require('../priority').PriorityWaiting;
 const Notice = require('./notice');
 const SentFollowup = require('../mail').SentFollowup;
 const MailThread = require('../mail').MailThread;
@@ -393,6 +394,25 @@ async function flowPartsBuilt({ actor, dry, out, state, t }) {
   const r = await PdParts.builtCommand(actor.id, t).catch((err) => ({ text: 'לא הצלחתי לבדוק כרגע. נסו שוב בעוד רגע 🙏', result: `שגיאה: ${err.message}` }));
   if (!r) return NEXT;
   return out(r.text, {}, { action: 'purchase_demand', status: 'ok', result: String(r.result ?? '').slice(0, 300) });
+}
+
+/**
+ * ✍️ "מה מחכה לחתימה שלי" / "ששלחתי לאישור" / "🔁 כמחליף" (‎priority-waiting.js‎). קריאה בלבד — לא נוגע בשאלה פתוחה.
+ * "מה מחכה לי" / "מה ממתין לאישורי" — רק כשבאמת יש משהו בפריוריטי (אחרת — הזרימות האחרות; גם ההצעות של משימון נקראות כך).
+ * "פריוריטי" לבד, למי שאין לו קבלת סחורה ודרישת רכש — מה שממתין לו (במקום "לא פתוח לך").
+ */
+async function flowPriorityWaiting({ actor, dry, out, state, t }) {
+  if (actor.type !== 'user' || !WaActions.byKey('priority_waiting')?.enabled) return NEXT;
+  let ask = PriorityWaiting.botAsk(t);
+  if (!ask && /^\P{L}*(?:פריוריטי|priority)\P{L}*$/iu.test(String(t ?? '').trim()) && !WaActions.allowed(actor, 'goods_receipt')
+    && !WaActions.allowed(actor, 'purchase_demand') && PriorityWaiting.involved(actor.id)) ask = { kind: 'sign', soft: false };
+  if (!ask) return NEXT;
+  if (ask.soft && (state?.awaiting || !PriorityWaiting.involved(actor.id))) return NEXT;
+  if (dry) return out('(בדיקה) הייתי מראה מה ממתין לחתימה שלך בפריוריטי.', {}, { action: 'priority_waiting', status: 'ok', result: 'בדיקה' });
+  const r = await PriorityWaiting.botReply(actor.id, ask.kind, { app: appRoot() })
+    .catch((err) => ({ text: 'לא הצלחתי לבדוק כרגע. נסו שוב בעוד רגע 🙏', buttons: [], count: 0, result: `שגיאה: ${err.message}`, error: true }));
+  if (ask.soft && !r.error && !r.count) return NEXT;
+  return out(r.text, {}, { action: 'priority_waiting', status: r.error ? 'error' : 'ok', result: String(r.result ?? '').slice(0, 300), buttons: r.buttons });
 }
 
 /** "מחירון PO26000123", "לבטל את ההוספה למחירון" */
@@ -1188,5 +1208,5 @@ const switchCancels = () => Boolean(D.getSetting('wa_topic_switch_cancels', true
 const DRAFT_ONLY = /(?:(?:בלי|לא\s+משנה|אין\s+לי\s+(?:את\s+)?|עזוב(?:\s+את)?)\s*ה?(?:כתובת|מייל|נמען)|רק\s+ת?(?:נסח|כתוב)|ת?נסח\s+(?:לי\s+)?(?:רק\s+)?(?:את\s+)?ה?(?:מלל|טקסט|נוסח))/;
 
 module.exports = {
-  SEND_NOW, DRAFT_ONLY, flowAgentsList, flowAlertNo, flowOnMailDose, flowApproval, flowBusinessCommand, flowCancel, flowClosureCommand, flowEmailEdit, flowEmailPick, flowEmailSolve, flowEmailVia, flowFeaturesRequest, flowFormFillRequest, flowGreeting, flowInstinct, flowInstinctExplicit, flowInstinctReply, flowInstinctPilot, flowNoticeToInstinct, flowIntentCancel, flowIntentDenied, flowIntentMenu, flowIntentOther, flowMailFileRequest, flowMailReplyEdit, flowMailWalk, flowMeetCoordRequest, flowMeetingAudioAnswer, flowMeetingAudioRequest, flowMeetingAudioStatus, flowMeetingFollowupRequest, flowMeetingReminderRequest, flowMeetingSummaryRoutine, flowMenuList, flowMenuPick, flowNoAi, flowNoticeRequest, flowOnClosureAddress, flowOnDayEvening, flowOnFormFill, flowOnGoodsStop, flowOnMailFile, flowOnMailMuteSender, flowOnMailRemindOrGoods, flowOnMeetCoord, flowOnMeetingTasks, flowOnPaceOffer, flowOnPlainMail, flowOnReminder, flowOnRfq, flowOnSentFollowup, flowOnPricelist, flowPricelistRequest, flowPartsBuilt, flowOnThreadAdd, flowRemindersRequest, flowReplyAsk, flowRfqFollowup, flowRfqRequest, flowRfqSummary, flowSuggestionCommand, flowTranslateRequest, flowWalk, NEXT, switchCancels
+  SEND_NOW, DRAFT_ONLY, flowAgentsList, flowAlertNo, flowOnMailDose, flowApproval, flowBusinessCommand, flowCancel, flowClosureCommand, flowEmailEdit, flowEmailPick, flowEmailSolve, flowEmailVia, flowFeaturesRequest, flowFormFillRequest, flowGreeting, flowInstinct, flowInstinctExplicit, flowInstinctReply, flowInstinctPilot, flowNoticeToInstinct, flowIntentCancel, flowIntentDenied, flowIntentMenu, flowIntentOther, flowMailFileRequest, flowMailReplyEdit, flowMailWalk, flowMeetCoordRequest, flowMeetingAudioAnswer, flowMeetingAudioRequest, flowMeetingAudioStatus, flowMeetingFollowupRequest, flowMeetingReminderRequest, flowMeetingSummaryRoutine, flowMenuList, flowMenuPick, flowNoAi, flowNoticeRequest, flowOnClosureAddress, flowOnDayEvening, flowOnFormFill, flowOnGoodsStop, flowOnMailFile, flowOnMailMuteSender, flowOnMailRemindOrGoods, flowOnMeetCoord, flowOnMeetingTasks, flowOnPaceOffer, flowOnPlainMail, flowOnReminder, flowOnRfq, flowOnSentFollowup, flowOnPricelist, flowPricelistRequest, flowPartsBuilt, flowPriorityWaiting, flowOnThreadAdd, flowRemindersRequest, flowReplyAsk, flowRfqFollowup, flowRfqRequest, flowRfqSummary, flowSuggestionCommand, flowTranslateRequest, flowWalk, NEXT, switchCancels
 };
