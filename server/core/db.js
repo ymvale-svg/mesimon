@@ -1989,6 +1989,7 @@ const DEFAULT_SETTINGS = {
   ai_bot_model: '',                        // הבוט וההקלטה — ריק = המודל הראשי
   ai_fast_mode: false,                     // מצב מהיר לשיחה חיה (בוט, הקלטה) — כבוי מ-17.11.26: פי 2 במחיר
   ai_scan_skip_bulk: true,                 // 📭 ניוזלטרים ומענים אוטומטיים — בלי AI (‎mail/mail-bulk.js‎)
+  ai_light_model: 'claude-haiku-5-5',      // 🪶 מיון וסיווג ברקע (‎light: true‎ ב-‎claude.js‎) — ריק = המודל הראשי
   ai_scan_model: 'claude-haiku-5-5',       // מיון המיילים בסריקה (משימה / תשובה / כלום) — זול; התשובה עצמה במודל הראשי
   ai_email_attempts: 2,                    // כמה מיילים שלא נענו לפני מעבר לוואטסאפ
   ai_days_between_emails: 2,

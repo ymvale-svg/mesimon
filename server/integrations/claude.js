@@ -32,6 +32,15 @@ const FAST_MODELS = new Set(['claude-opus-5-5', 'claude-opus-5', 'claude-opus-4-
 const botModel = () => String(D.getSetting('ai_bot_model', '') || '').trim() || model();
 const fastMode = () => Boolean(D.getSetting('ai_fast_mode', true));
 
+/*
+ * 🪶 "מודל קל" — למיון וסיווג ברקע (‎light: true‎), שאין בהם כתיבה שמישהו קורא: סנכרון משימות, כפולות, מסננת הפרטיות,
+ * תובנות… (סבב 2 בחיסכון, שלב ג', 26.11.26). ‎ai_light_model‎, ברירת מחדל Haiku; ריק = המודל הראשי.
+ */
+const LIGHT_DEFAULT = 'claude-haiku-5-5';
+const lightModel = () => String(D.getSetting('ai_light_model', LIGHT_DEFAULT) ?? '').trim() || null;
+// השירות דחה את הבקשה במודל הזה (מודל לא זמין, בקשה שלא נתמכת בו) — שווה לנסות במודל הראשי. 429 / 5xx — תקלה זמנית, כמו תמיד
+const rejected = (err) => err?.status >= 400 && err.status < 500 && err.status !== 429;
+
 const withFallback = (m) => /^claude-(opus|fable|sonnet-5-5)/.test(m);
 
 const status = () => ({ enabled: isEnabled(), model: model(), botModel: botModel(), fast: fastMode() });
@@ -67,14 +76,24 @@ const fail = (err) => { health(false, err); return err; };
  * @param {string} [opts.effort]         low | medium | high
  * @param {boolean} [opts.live]          מישהו מחכה לתשובה — מודל הבוט ומצב מהיר
  * @param {string} [opts.model]          מודל אחר מברירת המחדל — לעבודה רבה וזולה (זיכרון המייל, ניתוב)
+ * @param {boolean} [opts.light]         מיון / סיווג ברקע — ב"מודל הקל" (‎ai_light_model‎); נדחה — במודל הראשי
  * @param {string} opts.feature         איזו תכונה קוראת — לרישום הצריכה (‎ai-usage.js‎ ‎FEATURES‎). חובה
  * @param {number} [opts.userId]         בשביל איזה עובד. בלי — מההקשר (‎forUser‎)
  * @param {(usage: object) => void} [opts.onUsage]  כמה טוקנים נצרכו — למעקב עלות
  * @param {Array}  [opts.serverTools]    כלים שרצים בצד של Anthropic (חיפוש ברשת — ‎WEB_SEARCH‎). התשובה הסופית — עדיין לפי הסכמה
  * @returns {Promise<object>}            התשובה כאובייקט שעבר את הסכמה
  */
-async function json({ system, content, schema, effort = 'medium', live = false, model: modelId = null, onUsage = null, serverTools = null, feature = null, userId = null }) {
+async function json({ system, content, schema, effort = 'medium', live = false, model: modelId = null, light = false, onUsage = null, serverTools = null, feature = null, userId = null }) {
   if (!isEnabled()) throw new AiError('חיבור ה-AI אינו מוגדר בשרת (ANTHROPIC_API_KEY)');
+  const lightId = light && !modelId ? lightModel() : null;
+  if (lightId) {
+    try {
+      return await request({ system, content, schema, effort, model: lightId, fast: false, onUsage, serverTools, feature, userId });
+    } catch (err) {
+      if (!rejected(err)) throw err;
+      console.error(`[משימון] ${feature ?? 'AI'}: ${lightId} נדחה (${err.status}) — במודל הראשי:`, err.message);
+    }
+  }
   const m = String(modelId || (live ? botModel() : model())).trim();
   const fast = live && !modelId && fastMode() && FAST_MODELS.has(m);
   try {

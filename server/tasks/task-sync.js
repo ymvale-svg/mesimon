@@ -289,7 +289,7 @@ async function check(userId, msg, { classify = null } = {}) {
   const candidates = prefilter(contexts, shaped);
   if (!candidates.length) return 0;
 
-  const run = classify ?? ((text) => Claude.json({ feature: 'tasks.sync', system: fs.readFileSync(SKILL, 'utf8'), content: [{ type: 'text', text }], schema: SCHEMA, effort: 'low' }));
+  const run = classify ?? ((text) => Claude.json({ feature: 'tasks.sync', light: true, system: fs.readFileSync(SKILL, 'utf8'), content: [{ type: 'text', text }], schema: SCHEMA, effort: 'low' }));
   const out = await run(prompt(user, shaped, candidates), candidates);
   let added = 0;
   for (const m of sanitize(out, candidates, messages.length)) {
