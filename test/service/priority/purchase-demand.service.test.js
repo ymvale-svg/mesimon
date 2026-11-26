@@ -1374,3 +1374,127 @@ test('פער 1+2 (25.11.26): פריט חסר ← הודעה מיד בבוט למ
   // מי שאינו מנהלת הרכש — "נפתח" לא בודק כלום
   assert.equal(await Parts.builtCommand(u.id, 'נפתח'), null);
 });
+
+// ---------------------------------------------------------------------------
+// סקירה 26.11.26 (מתן): צילום "אני צריך כזה" בשאלת "התכוונת ל…", ושאלת "התכוונת ל'משקוף'?" של ה-AI
+// ---------------------------------------------------------------------------
+
+const BAR = part('150-40-002', 'בר מים');
+const pdLoad = (id) => require('../../../server/priority/purchase-demand')._load(id);
+
+/** "מתקן מים" ← לא בקטלוג; הקרוב: "בר מים". ‎fromPhoto‎ — מה ה-AI "קורא" בצילום */
+function waterAi(t, { fromPhoto = [{ description: 'מתקן מים', qty: 1, unit: "יח'", note: '' }], calls = {} } = {}) {
+  calls.items = 0;
+  return H.claude(t, {
+    edit: () => ({ action: 'add', adds: [{ description: 'מתקן מים', qty: 1, unit: "יח'", note: '' }], updates: [], removes: [], question: '' }),
+    items: () => { calls.items += 1; return { items: fromPhoto, unrelated: false, question: '' }; },
+    match: (input) => ({ results: input.items.map((it) => ({ line: it.line, kind: 'close', codes: ['150-40-002'], chapter: '20', topic: '20-10', why: '' })) }),
+    detail: (input) => ({ results: input.items.map((x) => ({ line: x.line, specific: false, question: 'איזה מתקן מים?' })) })
+  });
+}
+const waterPriority = (t) => priority(t, { searchParts: async (c, des) => (/מים/.test(des) ? [{ p: BAR, score: 1 }] : []) });
+
+test('צילום "אני צריך כזה" בשאלת "התכוונת ל…": מפרט לפריט ששאלנו עליו — לא פריט כפול', async (t) => {
+  H.companies(t, 'test11');
+  const u = buyerWorker();
+  waterPriority(t);
+  const calls = {};
+  waterAi(t, { calls });
+  const { say } = H.chat(t, u);
+  await toItems(say);
+
+  let r = await say('מתקן מים');
+  assert.match(r.text, /מתקן מים\* — 1 יח'/);
+  H.assertButtons(r.buttons, ['בר מים', 'שלח לבנייה לרכש 🆕']);
+
+  r = await say('אני צריך כזה', { file: H.photo('water.jpg') });
+  assert.equal(calls.items, 0, 'הצילום לא נקרא כרשימת פריטים');
+  assert.match(r.text, /📎 הצילום נשמר כמפרט ל\*מתקן מים\*/);
+  assert.doesNotMatch(r.text, /עוד 1 לבחירה/);
+  H.assertButtons(r.buttons, ['בר מים', 'שלח לבנייה לרכש 🆕']);
+  assert.equal(pdLoad(u.id).items.length, 1);
+
+  // "שלח לבנייה" — הצילום מספיק כתיאור; לא שואלים "איזה מתקן מים?"
+  r = await say('שלח לבנייה לרכש 🆕');
+  assert.doesNotMatch(r.text, /תיאור מדויק/);
+  assert.match(r.text, /מתקן מים — 1 יח'\n {3}🆕 לא בקטלוג — יישלח לרכש לבניית מק"ט · 📎 מפרט מצורף/);
+});
+
+test('צילום בלי כיתוב בשאלת "התכוונת ל…": אותו פריט בצילום — מפרט; רשימה של פריטים אחרים — נוספים כרגיל', async (t) => {
+  H.companies(t, 'test11');
+  const u = buyerWorker();
+  waterPriority(t);
+  const calls = {};
+  const photo = [{ description: 'מתקן מים חם קר', qty: 1, unit: "יח'", note: '' }];
+  waterAi(t, { calls, fromPhoto: photo });
+  const { say } = H.chat(t, u);
+  await toItems(say);
+  await say('מתקן מים');
+
+  let r = await say('', { file: H.photo('water.jpg') });
+  assert.equal(calls.items, 1);
+  assert.match(r.text, /📎 הצילום נשמר כמפרט ל\*מתקן מים\*/);
+  assert.equal(pdLoad(u.id).items.length, 1);
+
+  photo.splice(0, 1, { description: 'שק מלט', qty: 10, unit: 'שק', note: '' }, { description: 'בלוק 20', qty: 50, unit: "יח'", note: '' });
+  r = await say('', { file: H.photo('list.jpg') });
+  assert.match(r.text, /קראתי 2 פריטים מהצילום/);
+  assert.equal(pdLoad(u.id).items.length, 3);
+});
+
+/** "משקור" ← ה-AI לא בטוח: "התכוונת ל'משקוף'?" */
+function guessAi(t, seen = []) {
+  return H.claude(t, {
+    edit: (input) => {
+      seen.push(input);
+      if (input.text === 'משקור') return { action: 'unclear', adds: [], updates: [], removes: [], question: 'לא הבנתי את "משקור". התכוונת ל"משקוף"?', guess: { description: 'משקוף', qty: 1, unit: "יח'", note: '' } };
+      if (/חלון/.test(input.text)) return { action: 'add', adds: [{ description: 'חלון', qty: 1, unit: "יח'", note: '' }], updates: [], removes: [], question: '', guess: { description: '', qty: 0, unit: '', note: '' } };
+      return { action: 'unclear', adds: [], updates: [], removes: [], question: 'אילו פריטים?', guess: { description: '', qty: 0, unit: '', note: '' } };
+    },
+    match: (input) => ({ results: input.items.map((it) => ({ line: it.line, kind: 'none', codes: [], chapter: '20', topic: '20-10', why: '' })) }),
+    detail: (input) => ({ results: input.items.map((x) => ({ line: x.line, specific: true, question: '' })) })
+  });
+}
+
+test('"התכוונת ל\'משקוף\'?" של ה-AI: בכפתורי כן / לא, ו"כן" מוסיף את הפריט', async (t) => {
+  H.companies(t, 'test11');
+  const u = buyerWorker();
+  priority(t, { searchParts: async () => [] });
+  const seen = [];
+  guessAi(t, seen);
+  const { say } = H.chat(t, u);
+  await toItems(say);
+
+  let r = await say('משקור');
+  assert.match(r.text, /התכוונת ל"משקוף"\?/);
+  H.assertButtons(r.buttons, [BTN.yes, BTN.no, BTN.cancel]);
+
+  const before = seen.length;
+  r = await say(BTN.yes);
+  assert.equal(seen.length, before, '"כן" לא חוזר ל-AI');
+  assert.match(r.text, /➕ נוסף: משקוף/);
+  assert.equal(pdLoad(u.id).items[0].description, 'משקוף');
+});
+
+test('"התכוונת ל\'משקוף\'?": "לא" ← מבקשים לכתוב את הפריט; תשובה חופשית — ה-AI מקבל גם את השאלה', async (t) => {
+  H.companies(t, 'test11');
+  const u = buyerWorker();
+  priority(t, { searchParts: async () => [] });
+  const seen = [];
+  guessAi(t, seen);
+  const { say } = H.chat(t, u);
+  await toItems(say);
+
+  await say('משקור');
+  const before = seen.length;
+  let r = await say('לא');
+  assert.equal(seen.length, before);
+  assert.match(r.text, /מה התכוונת במקום "משקור"/);
+  assert.doesNotMatch(r.text, /הרשימה עדיין ריקה/);
+  assert.equal((pdLoad(u.id).items ?? []).length, 0);
+
+  await say('משקור');
+  r = await say('לא, התכוונתי לחלון');
+  assert.equal(seen.at(-1).asked, 'לא הבנתי את "משקור". התכוונת ל"משקוף"?');
+  assert.match(r.text, /חלון/);
+});
