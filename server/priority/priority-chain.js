@@ -28,9 +28,10 @@ const BOT_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 /**
  * דיווח מהבוט. ‎doc‎ — receipt / demand. ‎stage‎ — draft / waiting / done / cancelled.
- * ‎docno‎ — המספר בפריוריטי; ‎company‎, ‎supplier‎ — לתצוגה.
+ * ‎docno‎ — המספר בפריוריטי; ‎company‎, ‎supplier‎ — לתצוגה. ‎note‎ — תקציר הפריטים ("פטישים, מסמרים"), כדי שהעובד
+ * יוכל לשאול עליו אחר כך ("אושרה הדרישה על הפטישים?" — ‎my-docs.js‎).
  */
-function progress(userId, doc, { stage, docno = '', company = '', supplier = '' } = {}) {
+function progress(userId, doc, { stage, docno = '', company = '', supplier = '', note = '' } = {}) {
   try {
     if (!userId || !doc || !LABELS[stage]) return null;
     const now = D.nowIso();
@@ -43,13 +44,13 @@ function progress(userId, doc, { stage, docno = '', company = '', supplier = '' 
     if (!row) {
       if (stage === 'cancelled') return null;   // קליטה מוואטסאפ שבוטלה לפני טיוטא — אין מה להראות
       const info = D.run(
-        `INSERT INTO priority_docs (org_id, user_id, doc, source, filename, supplier, stage, docno, company, created_at, updated_at)
-         VALUES (?,?,?, 'whatsapp', '', ?, ?, ?, ?, ?, ?)`, ORG, userId, doc, String(supplier).slice(0, 120), stage, docno, company, now, now
+        `INSERT INTO priority_docs (org_id, user_id, doc, source, filename, supplier, stage, docno, company, note, created_at, updated_at)
+         VALUES (?,?,?, 'whatsapp', '', ?, ?, ?, ?, ?, ?, ?)`, ORG, userId, doc, String(supplier).slice(0, 120), stage, docno, company, String(note).slice(0, 300), now, now
       );
       return Number(info.lastInsertRowid);
     }
-    D.run('UPDATE priority_docs SET stage = ?, docno = ?, company = ?, supplier = ?, updated_at = ? WHERE id = ?',
-      stage, docno || row.docno, company || row.company, supplier || row.supplier, now, row.id);
+    D.run('UPDATE priority_docs SET stage = ?, docno = ?, company = ?, supplier = ?, note = ?, updated_at = ? WHERE id = ?',
+      stage, docno || row.docno, company || row.company, supplier || row.supplier, note ? String(note).slice(0, 300) : row.note, now, row.id);
     return row.id;
   } catch (err) {
     console.error('[משימון] שרשרת פריוריטי — דיווח נכשל:', err.message);

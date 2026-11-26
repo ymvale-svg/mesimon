@@ -52,6 +52,7 @@ const LoadMonitor = require('../core').LoadMonitor;
 const P = require('../integrations').Priority;
 const MailAsk = require('../mail').MailAsk;
 const PriorityPrefs = require('../priority').PriorityPrefs;
+const MyDocs = require('../priority').MyDocs;
 const WaActions = require('../whatsapp').WaActions;
 
 // ---------------------------------------------------------------------------
@@ -208,6 +209,11 @@ const PRIORITY_TOOLS = [
     input_schema: { type: 'object', properties: { project_code: { type: 'string' }, supplier: { type: 'string' }, item: { type: 'string' }, company: { type: 'string' } }, additionalProperties: false }
   },
   {
+    name: 'priority_my_docs',
+    description: 'מצב מסמך ששלח העובד (או עובד בצוות שלו) לפריוריטי — קבלת סחורה, דרישת רכש, חשבון חלקי, חוזה, חשבון עסקה: אושר? אצל מי מחכה? שולם (מתי, איזו העברה)? מתי ישולם (ה-15)? כמה שולם מחוזה. גם "הוזמן?" — הזמנות הרכש של פרויקט לפי הפריט ("הוזמנה מכולה למגרש 50?"). question — השאלה בעברית, כמו שהעובד היה שואל ("שולמה הקבלה של ברזל הצפון?", "כמה שולם מהחוזה בהגפן?", "התשלומים שלי")',
+    input_schema: { type: 'object', properties: { question: { type: 'string' } }, required: ['question'], additionalProperties: false }
+  },
+  {
     name: 'priority_order',
     description: 'הזמנת רכש אחת לפי מספר (PO…): ספק, סטטוס, שורות, יתרות ותאריכי אספקה',
     input_schema: { type: 'object', properties: { ordname: { type: 'string' }, company: { type: 'string' } }, required: ['ordname'], additionalProperties: false }
@@ -346,6 +352,11 @@ async function toolsFor(def, key, user, actor, state) {
         if (i.item) orders = orders.map((o) => ({ ...o, lines: o.lines.filter((l) => String(l.PDES ?? '').includes(i.item)) })).filter((o) => o.lines.length);
       } else return { error: 'צריך פרויקט (project_code) או ספק (supplier)' };
       return { company: c, count: orders.length, orders: orders.slice(0, 15).map(short) };
+    });
+    handlers.set('priority_my_docs', async (i) => {
+      state.sources.add('🗂 פריוריטי');
+      const r = await MyDocs.request(actor, String(i.question ?? ''));
+      return r ? { answer: r.text, choices: r.buttons ?? [] } : { error: 'צריך שאלה על מצב מסמך: סוג (קבלת סחורה / דרישה / חשבון חלקי / חוזה / חשבון עסקה) ושולם / אושר / מתי ישולם' };
     });
     handlers.set('priority_order', async (i) => {
       state.sources.add('🗂 פריוריטי');

@@ -33,6 +33,21 @@ const KEEP = 60 * 24 * 60 * 60 * 1000;
 
 const words = (t) => String(t ?? '').replace(/["'״׳()\-]/g, ' ').split(/\s+/).filter(Boolean).sort().join(' ');
 
+/**
+ * שם במשימון מול שם בפריוריטי (26.11.26 — "חנה גנות" במשימון = "חנה (חני) גנוט" בפריוריטי, וזה גם שם המשתמש שלה שם):
+ *   • כתיב: אותיות סופיות כרגילות, ט = ת, "וו" / "יי" כפולים כאחד.
+ *   • כל המילים של השם הקצר (לפחות שתיים) נמצאות בשם הארוך — כינוי בסוגריים ("חני") או שם שני לא מפריעים.
+ */
+const FINALS = { 'ך': 'כ', 'ם': 'מ', 'ן': 'נ', 'ף': 'פ', 'ץ': 'צ' };
+const nameKeys = (t) => String(t ?? '').replace(/["'״׳()\-]/g, ' ').split(/\s+/).filter(Boolean)
+  .map((w) => w.toLowerCase().replace(/[ךםןףץ]/g, (c) => FINALS[c]).replace(/ט/g, 'ת').replace(/וו/g, 'ו').replace(/יי/g, 'י'));
+function sameName(a, b) {
+  const [x, y] = [nameKeys(a), nameKeys(b)].sort((p, q) => p.length - q.length);
+  return x.length >= 2 && x.every((w) => y.includes(w));
+}
+/** שמות של משתמש פריוריטי — מהשם הפרטי והמשפחה, השם המלא, ושם המשתמש (לפעמים הוא שם בעברית) */
+const prNames = (x) => [`${x.FIRSTNAME ?? ''} ${x.FAMILYNAME ?? ''}`, x.SNAME, x.USERLOGIN].filter((n) => String(n ?? '').trim());
+
 function alertAdmins(title, body) {
   try {
     for (const u of D.all("SELECT id FROM users WHERE status = 'active' AND role IN ('superadmin','admin')")) {
@@ -60,8 +75,7 @@ async function mesimonUserFor(login) {
   const mail = String(pr.EMAIL ?? '').trim().toLowerCase();
   let u = mail ? users.find((x) => String(x.email ?? '').trim().toLowerCase() === mail) : null;
   if (u) return { user: u, how: 'email', pr };
-  const names = [words(`${pr.FIRSTNAME ?? ''} ${pr.FAMILYNAME ?? ''}`), words(pr.SNAME)].filter((x) => x.includes(' '));
-  const hits = users.filter((x) => names.includes(words(x.full_name)));
+  const hits = users.filter((x) => prNames(pr).some((n) => sameName(n, x.full_name)));
   if (hits.length === 1) return { user: hits[0], how: 'name', pr };
   return { user: null, how: null, pr };
 }
@@ -75,8 +89,7 @@ async function priorityLoginFor(user) {
   const mail = String(u?.email ?? '').trim().toLowerCase();
   const byMail = mail ? list.filter((x) => String(x.EMAIL ?? '').trim().toLowerCase() === mail) : [];
   if (byMail.length === 1) return byMail[0].USERLOGIN;
-  const name = words(u?.full_name);
-  const byName = name.includes(' ') ? list.filter((x) => [words(`${x.FIRSTNAME ?? ''} ${x.FAMILYNAME ?? ''}`), words(x.SNAME)].includes(name)) : [];
+  const byName = u?.full_name ? list.filter((x) => prNames(x).some((n) => sameName(n, u.full_name))) : [];
   return byName.length === 1 ? byName[0].USERLOGIN : null;
 }
 
@@ -189,4 +202,4 @@ async function sweep(send, { force = false } = {}) {
   return out;
 }
 
-module.exports = { alertAdmins, mesimonUserFor, priorityLoginFor, mapping, notifyDemand, sweep, messageFor, MAX_FAILS, _words: words };
+module.exports = { sameName, alertAdmins, mesimonUserFor, priorityLoginFor, mapping, notifyDemand, sweep, messageFor, MAX_FAILS, _words: words };
