@@ -43,6 +43,7 @@ const P = require('../core').Permissions;
 const Gmail = require('../integrations').Gmail;
 const GContacts = require('../phonebook').GoogleContacts;
 const Speech = require('../integrations').Speech;
+const Keyboard = require('./keyboard-layout');
 const WaActions = require('./wa-actions');
 const MailInsights = require('../mail').MailInsights;
 const VoiceRouter = require('./voice-router');
@@ -86,7 +87,7 @@ const { answerLike, busyFor, meetCoordRun, meetCoordTick, pushToUser, questionTt
 const { businessCommand, closeAlerted, closureDecision, confirmPending, contactOf, createFromDraft, draftEmail, findRecipients, mailActionAlerts, mailAlertFor, mailAlerts, parseThreadAdd, resolveCc, solveText, startGoodsFromMail, suggestionDecision, suggestionFeedback, threadAddText, VIA_EMAIL, VIA_MESIMON } = require('./wa-mail');
 const { MENU, MENU_FREE_HINT, MENU_MORE, PLAIN_AGENTS, agentsText, cut, dayItems, isMenuButton, menuButtonOf, menuButtons, menuOptions, menuPick, menuText, moreMenuGroups, pairsOf, parseClosureCommand, parseSuggestionCommand, recordingReply, todayMessage, walkAction, walkButtons, walkText } = require('./wa-menu');
 const { flowReply, logoIntent, meetingAudioAllowed, meetingAudioTurn, meetingFollowups, processMeetingAudio, receiveMeetingAudio, timelessAudioTick, TRANSLATE } = require('./wa-meeting');
-const { DRAFT_ONLY, flowAgentsList, flowAlertNo, flowOnMailDose, flowApproval, flowBusinessCommand, flowCancel, flowClosureCommand, flowEmailEdit, flowEmailPick, flowEmailSolve, flowEmailVia, flowFeaturesRequest, flowFormFillRequest, flowGreeting, flowInstinct, flowInstinctExplicit, flowInstinctReply, flowInstinctPilot, flowNoticeToInstinct, flowIntentCancel, flowIntentDenied, flowIntentMenu, flowIntentOther, flowMailFileRequest, flowMailReplyEdit, flowMailWalk, flowMeetCoordRequest, flowMeetingAudioAnswer, flowMeetingAudioRequest, flowMeetingAudioStatus, flowMeetingFollowupRequest, flowMeetingReminderRequest, flowMeetingSummaryRoutine, flowMenuList, flowMenuPick, flowNoAi, flowNoticeRequest, flowOnClosureAddress, flowOnDayEvening, flowOnFormFill, flowOnGoodsStop, flowOnMailFile, flowOnMailMuteSender, flowOnMailRemindOrGoods, flowOnMeetCoord, flowOnMeetingTasks, flowOnPaceOffer, flowOnPlainMail, flowOnReminder, flowOnRfq, flowOnSentFollowup, flowOnPricelist, flowPricelistRequest, flowPartsBuilt, flowOnThreadAdd, flowRemindersRequest, flowReplyAsk, flowRfqFollowup, flowRfqRequest, flowRfqSummary, flowSuggestionCommand, flowTranslateRequest, flowWalk, NEXT, switchCancels } = require('./wa-flows');
+const { DRAFT_ONLY, flowAgentsList, flowMyDocsRequest, flowOnMyDocs, flowAlertNo, flowOnMailDose, flowApproval, flowBusinessCommand, flowCancel, flowClosureCommand, flowEmailEdit, flowEmailPick, flowEmailSolve, flowEmailVia, flowFeaturesRequest, flowFormFillRequest, flowGreeting, flowInstinct, flowInstinctExplicit, flowInstinctReply, flowInstinctPilot, flowNoticeToInstinct, flowIntentCancel, flowIntentDenied, flowIntentMenu, flowIntentOther, flowMailFileRequest, flowMailReplyEdit, flowMailWalk, flowMeetCoordRequest, flowMeetingAudioAnswer, flowMeetingAudioRequest, flowMeetingAudioStatus, flowMeetingFollowupRequest, flowMeetingReminderRequest, flowMeetingSummaryRoutine, flowMenuList, flowMenuPick, flowNoAi, flowNoticeRequest, flowOnClosureAddress, flowOnDayEvening, flowOnFormFill, flowOnGoodsStop, flowOnMailFile, flowOnMailMuteSender, flowOnMailRemindOrGoods, flowOnMeetCoord, flowOnMeetingTasks, flowOnPaceOffer, flowOnPlainMail, flowOnReminder, flowOnRfq, flowOnSentFollowup, flowOnPricelist, flowPricelistRequest, flowPartsBuilt, flowOnThreadAdd, flowRemindersRequest, flowReplyAsk, flowRfqFollowup, flowRfqRequest, flowRfqSummary, flowSuggestionCommand, flowTranslateRequest, flowWalk, NEXT, switchCancels } = require('./wa-flows');
 
 const RECENT_FILE_MS = 15 * 60 * 1000;
 
@@ -428,6 +429,9 @@ async function converse(user, actor, text, state, { dry = false } = {}) {
   // 🏷️ הוספה למחירון ספק מהזמנה — התשובה, ו"מחירון PO…" / "לבטל את ההוספה למחירון"
   { const c = { actor, dry, keep, out, state, t }; const r = await flowOnPricelist(c); if (r !== NEXT) return r; state = c.state; }
   { const r = await flowPricelistRequest({ actor, dry, out, state, t }); if (r !== NEXT) return r; }
+  // 🔎 שולם? אושר? — מצב מסמך ששלחתי לפריוריטי (‎my-docs.js‎)
+  { const c = { actor, dry, keep, out, state, t }; const r = await flowOnMyDocs(c); if (r !== NEXT) return r; state = c.state; }
+  { const r = await flowMyDocsRequest({ actor, dry, out, t }); if (r !== NEXT) return r; }
   // 🏗️ "נפתח" ממנהלת הרכש — בדיקה מיידית של המק"טים לבנייה
   { const r = await flowPartsBuilt({ actor, dry, out, state, t }); if (r !== NEXT) return r; }
   // 🔕 "לא להקפיץ יותר מיילים של X?" (‎mail-push.js‎)
@@ -1228,6 +1232,13 @@ async function handleDirectAs(msg) {
       await sendText(msg.chatId, 'לא שמעתי דיבור בהודעה. נסו שוב, או כתבו לי.');
       return;
     }
+  }
+  // ⌨️ הודעה שהוקלדה במקלדת באנגלית ("KHMR EUC. TEXK" = "ליצר קובץ אקסל", סקירה 25.11) — בעברית, ואומרים מה הובן
+  const typed = !voice && !msg.button && !msg.file ? Keyboard.fix(text) : null;
+  if (typed) {
+    log({ ...base, text, action: 'keyboard', status: 'ok', result: `מקלדת באנגלית ← "${typed}"` });
+    await sendText(msg.chatId, `⌨️ נראה שהמקלדת הייתה באנגלית — הבנתי: "${typed}"`);
+    text = typed;
   }
   // דרישת רכש — "דרישת רכש" (כתוב, בהקלטה, או הכפתור בתפריט פריוריטי), ובאמצע דרישה — התשובות לשאלות שלה.
   // לא לדרישה (קבלת סחורה, בקשה אחרת) — ממשיכים לקבלת הסחורה / לבוט הרגיל

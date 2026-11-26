@@ -1366,7 +1366,53 @@ function tenantOf(ini) {
   return m ? m[1].toUpperCase() : '';
 }
 
+// ---------------------------------------------------------------------------
+// 🔎 "מה קרה עם המסמך שלי?" (server/priority/my-docs.js) — קריאה בלבד
+// ---------------------------------------------------------------------------
+
+/**
+ * דרישות הרכש שהעובד פתח (‎INITUSERLOGIN‎ — מי שפתח; לא הבעלים, שהוא בדרך כלל "לטיפול" — הוחלט 26.11.26),
+ * מ-‎since‎ (‎YYYY-MM-DD‎). החדשה קודם
+ */
+async function myDemands(company, logins, since) {
+  const who = logins.filter(Boolean).map((l) => `INITUSERLOGIN eq '${q(l)}'`);
+  if (!who.length) return [];
+  const f = `(${who.join(' or ')}) and CURDATE ge ${since}T00:00:00Z`;
+  return rows(await call(company, 'GET', `PURDEMANDS?$filter=${enc(f)}&$select=${PD_SEL}`
+    + `&$expand=PDUSER_SUBFORM($select=${PDUSER_SEL}),PRDITEMS_SUBFORM($select=PDES)&$orderby=CURDATE%20desc&$top=40`)).map(strip);
+}
+
+/**
+ * הזמנות הרכש של פרויקט מ-‎since‎ (‎YYYY-MM-DD‎), עם השורות — לשאלה "הוזמנה מכולה למגרש 50?" ולהזמנות של דרישה.
+ * החדשה קודם. נבדק 26.11.26: כ-30 הזמנות לפרויקט בשנה, שנייה וחצי.
+ */
+async function projectOrders(company, projdocno, since) {
+  const f = `PROJDOCNO eq '${q(projdocno)}' and CURDATE ge ${since}T00:00:00Z`;
+  return rows(await call(company, 'GET', `PORDERS?$filter=${enc(f)}&$select=ORDNAME,STATDES,CURDATE,CDES,PRDNO,PROJDOCNO,PROJDES`
+    + '&$expand=PORDERITEMS_SUBFORM($select=PDES,TQUANT,TUNITNAME,DUEDATE,PRDNO)&$orderby=CURDATE%20desc&$top=300')).map(strip);
+}
+
+/**
+ * ההזמנות שנפתחו מדרישה. מדרישה אחת יכולות להיפתח כמה הזמנות (‎PD26000056‎ → שתיים); הזמנה מכמה דרישות — אין.
+ * מספר הדרישה רשום לפעמים רק בשורות ההזמנה (‎PO26000138‎ ← ‎PD26000066‎, נבדק 26.11.26), ופריוריטי לא מסנן לפי שורות
+ * (‎any()‎ — לא נתמך). לכן, כשידוע הפרויקט — כל הזמנות הפרויקט מתאריך הדרישה, ובודקים כותרת ושורות; אחרת — רק כותרת.
+ */
+async function ordersOfDemand(company, prdno, { project = '', since = '' } = {}) {
+  if (project && since) {
+    return (await projectOrders(company, project, since))
+      .filter((o) => o.PRDNO === prdno || (o.PORDERITEMS_SUBFORM ?? []).some((l) => l.PRDNO === prdno))
+      .sort((a, b) => String(a.CURDATE ?? '').localeCompare(String(b.CURDATE ?? '')));
+  }
+  return rows(await call(company, 'GET', `PORDERS?$filter=${enc(`PRDNO eq '${q(prdno)}'`)}&$select=ORDNAME,STATDES,CDES,CURDATE&$orderby=CURDATE&$top=10`)).map(strip);
+}
+
+/** מסמכים ממסך עם סבב מאשרים (‎s‎ — מ-‎approvalScreens‎), בכל סטטוס, לפי ‎filter‎ — למשל החוזים של העובד */
+async function screenDocs(company, s, filter, top = 30) {
+  return rows(await call(company, 'GET', waitQuery(s, filter, top))).map(strip);
+}
+
 module.exports = {
+  myDemands, ordersOfDemand, projectOrders, screenDocs,
   suppliersByWords, ordersByProject, supplierContact, warehouseAddress, projectChapters,
   COMPANIES, DEFAULT_HOST, DEFAULT_INI, configure, syncCompanies, ping, isEnabled, allowed, companyOf, isTest, resolveCompany, companiesByName, PriorityError,
   GENERAL, NO_VAT_CODE, TAX_CODES, PAY_TERMS, DEFAULT_PAY, payTerm, payLabel, payFromText, dueDate, projectWarehouses, warehouses, warehouseExists, defaultWarehouse, supplierHistory, recentLines, partByCode, findPartsByText, searchParts, generalCoding, warehouseOf, findSuppliers, supplierByCode, findReceiptByBooknum, getOrder, openOrders, findPartExact, lastSubchapter, projects, matchProjects, readReceipt,

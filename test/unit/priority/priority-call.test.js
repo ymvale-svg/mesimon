@@ -242,3 +242,29 @@ test('projectChapters — אין טבלה עם תתי פרקים: null (הבוט
   fakeFetch(t, (url) => (/\$metadata/.test(url) ? new Response('<EntityType Name="DOCUMENTS_p"><NavigationProperty Name="X_SUBFORM"/></EntityType>', { status: 200 }) : { value: [{ A: 1 }] }));
   assert.equal(await Priority.projectChapters('tabb22', 'PR1'), null);
 });
+
+test('דרישות של עובד — לפי מי שפתח (INITUSERLOGIN), לא לפי הבעלים (הוחלט 26.11.26)', async (t) => {
+  withCreds(t);
+  const calls = fakeFetch(t, () => ({ value: [{ PRDNO: 'PR1' }] }));
+  const r = await Priority.myDemands('test11', ['RavivK'], '2026-06-01');
+  assert.equal(r[0].PRDNO, 'PR1');
+  const url = decodeURIComponent(calls[0].url);
+  assert.match(url, /PURDEMANDS\?\$filter=\(INITUSERLOGIN eq 'RavivK'\) and CURDATE ge 2026-06-01T00:00:00Z/);
+  assert.doesNotMatch(url, /OWNERLOGIN eq/);
+  assert.deepEqual(await Priority.myDemands('test11', [], '2026-06-01'), [], 'בלי שם משתמש — בלי פנייה');
+  assert.equal(calls.length, 1);
+});
+
+test('הזמנות של דרישה — גם כשמספר הדרישה רק בשורות ההזמנה (PO26000138 ← PD26000066, נבדק 26.11.26)', async (t) => {
+  withCreds(t);
+  const calls = fakeFetch(t, () => ({ value: [
+    { ORDNAME: 'PO2', CURDATE: '2026-11-25', PRDNO: null, PORDERITEMS_SUBFORM: [{ PRDNO: 'PD66' }] },
+    { ORDNAME: 'PO1', CURDATE: '2026-11-24', PRDNO: 'PD66', PORDERITEMS_SUBFORM: [] },
+    { ORDNAME: 'PO3', CURDATE: '2026-11-24', PRDNO: null, PORDERITEMS_SUBFORM: [{ PRDNO: 'PD99' }] }
+  ] }));
+  const r = await Priority.ordersOfDemand('test11', 'PD66', { project: 'PR4', since: '2026-11-23' });
+  assert.deepEqual(r.map((o) => o.ORDNAME), ['PO1', 'PO2'], 'כותרת ושורות, הישנה קודם; דרישה אחרת — לא');
+  const url = decodeURIComponent(calls[0].url);
+  assert.match(url, /PORDERS\?\$filter=PROJDOCNO eq 'PR4' and CURDATE ge 2026-11-23T00:00:00Z/);
+  assert.match(url, /\$expand=PORDERITEMS_SUBFORM\(\$select=PDES,TQUANT,TUNITNAME,DUEDATE,PRDNO\)/);
+});

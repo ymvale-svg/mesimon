@@ -125,9 +125,9 @@
     },
     "priority-data": {
       "dept": "finance", "icon": "🗂", "title": "רכש ופריוריטי",
-      "short": "שאלות על נתוני רכש מפריוריטי ומשימון: מתי מגיעה הזמנה לאתר, כמה הזמנות פתוחות בפרויקט, מה נשאר לקבל מספק או מהזמנה, מה פתוח בפרויקט",
+      "short": "שאלות על נתוני רכש מפריוריטי ומשימון: מתי מגיעה הזמנה לאתר, כמה הזמנות פתוחות בפרויקט, מה נשאר לקבל מספק או מהזמנה, מה פתוח בפרויקט, ומה קרה עם מסמך ששלחתי — אושר? שולם? מתי ישולם?",
       "mcp": [], "calc": [], "project": true, "priority": true,
-      "mesimon": "קריאה בלבד: priority_find_project, priority_open_orders, priority_order, mesimon_project_context, search_my_memory. רק למי שמורשה לקבלת סחורה או לדרישת רכש בבוט (ולמנהלי המערכת)."
+      "mesimon": "קריאה בלבד: priority_find_project, priority_open_orders, priority_order, priority_my_docs (מצב אישור ותשלום של המסמכים של העובד ושל הצוות שלו), mesimon_project_context, search_my_memory. רק למי שמורשה לקבלת סחורה או לדרישת רכש בבוט (ולמנהלי המערכת)."
     },
     "client-context": {
       "dept": "marketing", "icon": "🧭", "title": "מצב לקוח",

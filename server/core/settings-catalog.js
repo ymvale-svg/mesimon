@@ -168,6 +168,7 @@ const INTERNAL = new Set([
   'org_topics_migrated', 'po_notify_baseline', 'po_pricelist_no_handler', 'sent_fu_scanned', 'vapid_private_pem', 'vapid_public', 'wa_mail_alert_since',
   'wa_summary_sent', 'whats_new_anchors_seeded', 'whats_new_files', 'whats_new_seeded', 'mail_rescan_multibox_v1', 'timeless_webhook',
   'pd_approval_notified', 'pd_approval_unmapped', 'pd_approval_nophone', 'pd_approval_failed', 'ai_outage', 'ai_retry',
+  'my_docs_alert_at', // "מה קרה עם המסמך שלי" — מתי מנהלי המערכת קיבלו התראה על קריאה שנכשלה (פעם ב-6 שעות) — my-docs.js
   'pd_openers', // מי פתח כל דרישת רכש מהבוט (לפי חברה ומספר) — להודעת "אושרה"
   'pd_returned', // דרישות שהוחזרו לבדיקה ומחכות לפותח (לפי חברה ומספר) — pd-return.js
   'ai_dose_seeded_at', // 📉 מינון המייל — מתי חושבה נקודת ההתחלה מהשבועיים האחרונים (פעם אחת)
