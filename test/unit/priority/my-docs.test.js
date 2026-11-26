@@ -314,3 +314,82 @@ test('הסוכן "🗂 רכש ופריוריטי" — כלי priority_my_docs ע
   const other = await toolsFor(def, 'priority-data', emp, actor(emp), { sources: new Set(), proposed: [], question: '' });
   assert.ok(!other.tools.some((x) => x.name === 'priority_my_docs'), 'בלי הרשאה לרכש — אין כלי');
 });
+
+// ---------------------------------------------------------------- חוזים לפי תפקיד (הוחלט 26.11.26)
+
+const CONTRACTS = { screens: [{ screen: 'MED_PORDERS', key: 'ORDNAME', status: 'ok', approvers: null, approverFields: [],
+  fields: ['STATDES', 'NEXTSIGNUSERLOGIN', 'CDES', 'PROJDES', 'PROJDOCNO', 'TOTPRICE', 'CURDATE', 'OWNERLOGIN'] }] };
+const PROJECTS = [{ code: 'PR1', des: 'הגפן', manager: 'DanaM' }, { code: 'PR2', des: 'יוקנעם', manager: 'OtherPM' }];
+const CO = { PR1: { ORDNAME: 'CO26000031', STATDES: 'מאושר', CDES: 'קום אדריכלים', PROJDOCNO: 'PR1', PROJDES: 'הגפן', TOTPRICE: 50000, OWNERLOGIN: 'X' },
+  PR2: { ORDNAME: 'CO26000032', STATDES: 'מחכה לאישור', NEXTSIGNUSERLOGIN: 'EladH', CDES: 'אלקטרה', PROJDOCNO: 'PR2', PROJDES: 'יוקנעם', TOTPRICE: 9000, OWNERLOGIN: 'X' } };
+/** פריוריטי מזויף לחוזים: מחזיר את החוזים שהסינון מבקש (לפי ‎PROJDOCNO eq …‎), ורושם את הסינונים */
+function contractsFake(t) {
+  D.setSetting('priority_waiting_found', CONTRACTS);
+  const filters = [];
+  fake(t, {
+    projects: async (c) => (c === 'a160226' ? PROJECTS : []),
+    screenDocs: async (c, s, filter) => {
+      filters.push(filter);
+      if (c !== 'a160226') return [];
+      return Object.values(CO).filter((d) => filter.includes(`PROJDOCNO eq '${d.PROJDOCNO}'`) || filter.includes(d.ORDNAME.slice(2)));
+    }
+  });
+  return filters;
+}
+
+test('מנהל פרויקט — כל החוזים של הפרויקטים שלו (MUSERLOGIN), ולא של פרויקט אחר', async (t) => {
+  reset();
+  const filters = contractsFake(t);
+  const dana = user({ role: 'manager', full_name: 'דנה מנהלת פרויקט' });
+  D.setSetting('priority_user_map', { DanaM: dana.id });
+  pay('partial', 'PC31', [999999], { stage: 'paid', paid_at: '2026-11-15', payment_ref: 'BT31' }, { contract: 'CO26000031', amount: 7000 });
+  D.run("UPDATE payment_items SET amount = 7000 WHERE docno = 'PC31'");
+
+  let r = await ask(dana, 'כמה שולם מהחוזה בהגפן?');
+  assert.match(r.text, /חוזה CO26000031/);
+  assert.match(r.text, /שולמו ₪7,000/, 'כמה שולם — גם מחשבון חלקי שהעביר עובד אחר');
+  assert.match(r.text, /מתוך ₪50,000/);
+  assert.ok(filters.some((f) => f.includes("PROJDOCNO eq 'PR1'")));
+  assert.ok(!filters.some((f) => f.includes("PROJDOCNO eq 'PR2'")), 'לא שואלים על פרויקט שאינו שלה');
+
+  r = await ask(dana, 'אושר החוזה ביוקנעם?');
+  assert.match(r.text, /לא מצאתי/, 'יוקנעם — לא הפרויקט שלה');
+});
+
+test('מנהל ביצוע — כל החוזים בכל הפרויקטים; עובד בלי תפקיד — לא', async (t) => {
+  reset();
+  contractsFake(t);
+  const exec = user({ role: 'manager', full_name: 'מנהל הביצוע' });
+  D.run('INSERT OR IGNORE INTO departments (name, created_at) VALUES (?, ?)', 'הנדסה וביצוע', now());
+  D.run("UPDATE departments SET manager_user_id = ? WHERE name = 'הנדסה וביצוע'", exec.id);
+  assert.equal(MyDocs.isExecManager(exec.id), true);
+  const r = await ask(exec, 'אושר החוזה ביוקנעם?');
+  assert.match(r.text, /^⏳ \*עוד לא אושר\*/);
+  assert.match(r.text, /חוזה CO26000032\* — אלקטרה · יוקנעם/);
+  assert.match(r.text, /מחכה לאישור של \*אלעד ה\*/);
+
+  const emp = user({ role: 'employee' });
+  assert.equal(MyDocs.isExecManager(emp.id), false);
+  assert.match((await ask(emp, 'אושר החוזה ביוקנעם?')).text, /לא מצאתי/);
+});
+
+test('חברה לפי השם בשאלה — רק בה; שם משותף לכמה חברות ("אשל") — כל החברות', () => {
+  assert.equal(MyDocs.parse('אושר החוזה באלעד?').company, 'elad1');
+  assert.equal(MyDocs.parse('כמה שולם מהחוזה של מורדות הכרמל').company, 'mordot');
+  assert.equal(MyDocs.parse('אושר החוזה של אשל בהגפן?').company, '');
+});
+
+test('מדרישה אחת נפתחו כמה הזמנות — כולן', async (t) => {
+  reset();
+  fake(t, {
+    readDemand: async () => ({ PRDNO: 'PR26000800', STATDES: 'אושרה', PDUSER_SUBFORM: [] }),
+    ordersOfDemand: async () => [{ ORDNAME: 'PO1', STATDES: 'נשלחה לספק', CDES: 'כלי עבודה' }, { ORDNAME: 'PO2', STATDES: 'אושרה', CDES: 'ברזל הצפון' }],
+    myDemands: async () => []
+  });
+  const u = user({ role: 'employee' });
+  botDoc(u, 'demand', 'PR26000800', { supplier: 'הגפן', note: 'פטישים, ברזל' });
+  const r = await ask(u, 'אושרה הדרישה על הפטישים?');
+  assert.match(r.text, /נפתחו ממנה 2 הזמנות/);
+  assert.match(r.text, /• \*PO1\* לספק כלי עבודה/);
+  assert.match(r.text, /• \*PO2\* לספק ברזל הצפון/);
+});

@@ -586,9 +586,10 @@ async function projects(company) {
   let list = [];
   try {
     // ‎BUD_WARHSNAME‎ — המחסן של הפרויקט; לשם נקלטת הסחורה
-    list = rows(await call(company, 'GET', 'DOCUMENTS_p?$select=DOCNO,PROJDES,STATDES,BUD_WARHSNAME&$top=2000'))
+    // ‎MUSERLOGIN‎ — מנהל הפרויקט (רואה בבוט את כל החוזים של הפרויקט — ‎my-docs.js‎)
+    list = rows(await call(company, 'GET', 'DOCUMENTS_p?$select=DOCNO,PROJDES,STATDES,BUD_WARHSNAME,MUSERLOGIN&$top=2000'))
       .filter((r) => r.DOCNO && r.STATDES !== 'מבוטלת')
-      .map((r) => ({ code: r.DOCNO, des: r.PROJDES ?? '', warehouse: r.BUD_WARHSNAME || '' }));
+      .map((r) => ({ code: r.DOCNO, des: r.PROJDES ?? '', warehouse: r.BUD_WARHSNAME || '', manager: r.MUSERLOGIN || '' }));
   } catch (err) {
     console.error(`[משימון] מסך הפרויקטים בפריוריטי (${company}) לא זמין:`, err.message);
   }
@@ -1289,7 +1290,7 @@ const deleteSupplierPart = (company, supname, kline) => call(company, 'DELETE', 
 
 /** שדות לתצוגה — נבחרים רק מה שקיים במסך */
 const WAIT_FIELDS = ['STATDES', 'NEXTSIGNUSERLOGIN', 'USERLOGIN', 'CDES', 'SUPDES', 'CUSTDES', 'PROJDES', 'DISPRICE', 'QPRICE', 'TOTPRICE',
-  'CURDATE', 'IVDATE', 'OWNERLOGIN', 'CODEDES', 'TYPEDES'];
+  'CURDATE', 'IVDATE', 'OWNERLOGIN', 'CODEDES', 'TYPEDES', 'PROJDOCNO'];
 const APPROVER_FIELDS = ['USERLOGIN', 'ALTUSERLOGIN', 'UFLAG', 'UDATE'];
 
 /**
@@ -1370,18 +1371,21 @@ function tenantOf(ini) {
 // 🔎 "מה קרה עם המסמך שלי?" (server/priority/my-docs.js) — קריאה בלבד
 // ---------------------------------------------------------------------------
 
-/** דרישות הרכש שהעובד פתח או שבבעלותו (שמות המשתמש בפריוריטי), מ-‎since‎ (‎YYYY-MM-DD‎). החדשה קודם */
+/**
+ * דרישות הרכש שהעובד פתח (‎INITUSERLOGIN‎ — מי שפתח; לא הבעלים, שהוא בדרך כלל "לטיפול" — הוחלט 26.11.26),
+ * מ-‎since‎ (‎YYYY-MM-DD‎). החדשה קודם
+ */
 async function myDemands(company, logins, since) {
-  const who = logins.filter(Boolean).flatMap((l) => [`INITUSERLOGIN eq '${q(l)}'`, `OWNERLOGIN eq '${q(l)}'`]);
+  const who = logins.filter(Boolean).map((l) => `INITUSERLOGIN eq '${q(l)}'`);
   if (!who.length) return [];
   const f = `(${who.join(' or ')}) and CURDATE ge ${since}T00:00:00Z`;
   return rows(await call(company, 'GET', `PURDEMANDS?$filter=${enc(f)}&$select=${PD_SEL}`
     + `&$expand=PDUSER_SUBFORM($select=${PDUSER_SEL}),PRDITEMS_SUBFORM($select=PDES)&$orderby=CURDATE%20desc&$top=40`)).map(strip);
 }
 
-/** ההזמנות שנפתחו מדרישה (‎PRDNO‎ בכותרת ההזמנה) */
+/** ההזמנות שנפתחו מדרישה (‎PRDNO‎ בכותרת ההזמנה). מדרישה אחת יכולות להיפתח כמה הזמנות; הזמנה מכמה דרישות — אין */
 async function ordersOfDemand(company, prdno) {
-  return rows(await call(company, 'GET', `PORDERS?$filter=${enc(`PRDNO eq '${q(prdno)}'`)}&$select=ORDNAME,STATDES,CDES,CURDATE&$top=5`)).map(strip);
+  return rows(await call(company, 'GET', `PORDERS?$filter=${enc(`PRDNO eq '${q(prdno)}'`)}&$select=ORDNAME,STATDES,CDES,CURDATE&$orderby=CURDATE&$top=10`)).map(strip);
 }
 
 /** מסמכים ממסך עם סבב מאשרים (‎s‎ — מ-‎approvalScreens‎), בכל סטטוס, לפי ‎filter‎ — למשל החוזים של העובד */

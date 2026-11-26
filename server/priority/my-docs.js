@@ -95,6 +95,16 @@ function variants(w) {
 const isStop = (w) => variants(w).some((v) => STOP.has(v) || STOP_N.has(norm(v))) || PAID.test(w) || APPROVED.test(w)
   || Object.values(KIND_RE).some((re) => re.test(w));
 
+/** חברה שנזכרה בשאלה ("אלעד", "מורדות הכרמל") — הכי הרבה מילים מהשם; תיקו ("אשל" — כמה חברות) או כלום — ‎''‎ */
+function companyIn(text) {
+  const words = new Set(String(text ?? '').split(/[^֐-׿A-Za-z0-9]+/).filter(Boolean).flatMap((w) => variants(norm(w))));
+  const scored = Settings.companies().filter((c) => !c.test).map((c) => ({
+    code: c.code,
+    score: String(c.name ?? '').replace(/בע["'״׳]?מ/g, ' ').split(/[\s\-]+/).map(norm).filter((w) => w.length >= 3 && words.has(w)).length
+  })).filter((x) => x.score > 0).sort((a, b) => b.score - a.score);
+  return scored.length && (scored.length === 1 || scored[0].score > scored[1].score) ? scored[0].code : '';
+}
+
 /**
  * ‎{ kinds, number, words, personWord, wants: { paid, approved }, howMuch, mineOnly }‎ — טהור, לבדיקות.
  * ‎kinds‎ ריק — כל הסוגים ("חשבונית", מספר מסמך).
@@ -113,7 +123,8 @@ function parse(text) {
   return {
     kinds, number, words, personWord: norm(personWord),
     wants: { paid: wantsPaid, approved: APPROVED.test(t) || (!wantsPaid && WHERE.test(t)) },
-    howMuch: HOW_MUCH.test(t), mineOnly: MINE_ONLY.test(t)
+    howMuch: HOW_MUCH.test(t), mineOnly: MINE_ONLY.test(t),
+    company: companyIn(t)
   };
 }
 
@@ -318,7 +329,7 @@ async function gather(actor, q, { today } = {}) {
   }
 
   const live = { errors: [] };
-  if (q.kinds.includes('contract')) await liveContracts(scope, q, put, live);
+  if (q.kinds.includes('contract')) await liveContracts(actor, scope, q, put, live);
   // 5. דרישות שנפתחו ישר בפריוריטי (לא בבוט)
   if (q.kinds.includes('demand')) await liveDemands(scope, put, live);
 
@@ -346,30 +357,60 @@ async function liveDemands(scope, put, live) {
   });
 }
 
-/** חוזים של העובד מפריוריטי (מסך החוזים, לפי הבעלים) — רק כשהמסך מוכר מהגילוי של "ממתין לאישורך" */
-async function liveContracts(scope, q, put, live) {
+/**
+ * מנהל ביצוע — מנהל של מחלקה ששמה (או מחלקה מעליה) "ביצוע" ("הנדסה וביצוע"). רואה את כל החוזים של כל הפרויקטים
+ * (הוחלט 26.11.26). לפי השם ולא לפי מזהה — כמו מחלקת כספים (‎priority-access.js‎).
+ */
+const EXEC_DEPT = /ביצוע/;
+function isExecManager(userId) {
+  return D.all('SELECT id FROM departments WHERE manager_user_id = ?', Number(userId) || 0)
+    .some((d) => String(D.departmentPath(d.id) ?? '').split(' › ').some((n) => EXEC_DEPT.test(n)));
+}
+
+/**
+ * חוזים מפריוריטי (מסך החוזים, קריאה בלבד) — מי רואה איזה חוזה (הוחלט 26.11.26):
+ *   • מנהל ביצוע, הנהלה וכספים — כל החוזים, בכל הפרויקטים.
+ *   • מנהל פרויקט — כל החוזים של הפרויקטים שלו (‎MUSERLOGIN‎ בכרטיס הפרויקט).
+ *   • כל עובד — החוזים שהוא הבעלים שלהם, ואלה של החשבונות החלקיים שלו (נאספו קודם).
+ * החברה — לפי השם בשאלה ("החוזה של אשל בהגפן"), ואם אין — כל החברות. הפרויקט — לפי המילים בשאלה.
+ */
+async function liveContracts(actor, scope, q, put, live) {
   const s = Waiting.screenSpec('MED_PORDERS');
   if (!s || !Priority.isEnabled()) return;
-  const byLogin = ['OWNERLOGIN', 'USERLOGIN'].filter((f) => s.fields.includes(f));
-  let filter = '';
-  if (q.number) filter = `contains(${s.key},'${q.number}')`;
-  else if (!scope.all && byLogin.length) {
-    const logins = await loginsOf(scope.ids);
-    if (!logins.length) return;
-    filter = logins.flatMap((l) => byLogin.map((f) => `${f} eq '${l.replace(/'/g, "''")}'`)).join(' or ');
-  } else return;
-  await pool(realCompanies(), async (c) => {
-    let list = [];
-    try { list = await Priority.screenDocs(c, s, filter, 30); } catch (err) { if (!Priority.isBlockedScreen(err)) live.errors.push(`${c}: ${err.message}`); return; }
-    for (const d of list) {
-      const it = blank('contract', c, d[s.key]);
-      it.about = d.CDES || d.SUPDES || ''; it.project = d.PROJDES || ''; it.date = isoDay(d.CURDATE);
-      it.total = Number(d.TOTPRICE ?? d.QPRICE ?? 0) || null;
-      const state = approvalOf(d.STATDES);
-      const g = state === 'waiting' ? Waiting.signerOf(d, s) : {};
-      it.approval = { state, status: d.STATDES || '', signerLogin: g.signer || '', signer: '', since: isoDay(g.since), orders: [] };
-      it.owners = [...scope.ids];
-      put(it);
+  const seeAll = scope.all || (!scope.person && isExecManager(actor.id));
+  const [login] = await loginsOf(scope.person ? [scope.person.id] : [actor.id]);
+  const lc = (x) => String(x ?? '').toLowerCase();
+  const projField = s.fields.includes('PROJDOCNO') ? 'PROJDOCNO' : s.fields.includes('PROJDES') ? 'PROJDES' : '';
+  const byOwner = login ? ['OWNERLOGIN', 'USERLOGIN'].filter((f) => s.fields.includes(f)).map((f) => `${f} eq '${login.replace(/'/g, "''")}'`) : [];
+  const esc = (v) => String(v).replace(/'/g, "''");
+  const companies = q.company ? [q.company] : realCompanies();
+  await pool(companies, async (c) => {
+    const projects = await Priority.projects(c).catch(() => []);
+    const managed = login ? projects.filter((p) => p.manager && lc(p.manager) === lc(login)) : [];
+    const allowed = seeAll ? projects : managed;
+    const projClause = (list) => (projField ? list.map((p) => `${projField} eq '${esc(projField === 'PROJDOCNO' ? p.code : p.des)}'`) : []);
+    const filters = [];
+    if (q.number) filters.push(`contains(${s.key},'${esc(q.number)}')`);
+    else {
+      const wanted = q.words.length ? Priority.matchProjects(allowed, [...new Set(q.words.flatMap(variants))].join(' ')).slice(0, 5) : seeAll ? [] : managed;
+      const clauses = [...projClause(wanted), ...(q.words.length && wanted.length ? [] : byOwner)];
+      for (let i = 0; i < clauses.length; i += 10) filters.push(clauses.slice(i, i + 10).join(' or '));
+    }
+    const okProject = (d) => seeAll || allowed.some((p) => p.code === d.PROJDOCNO || (d.PROJDES && p.des === d.PROJDES))
+      || ['OWNERLOGIN', 'USERLOGIN'].some((f) => login && lc(d[f]) === lc(login));
+    for (const filter of filters) {
+      let list = [];
+      try { list = await Priority.screenDocs(c, s, filter, 50); } catch (err) { if (!Priority.isBlockedScreen(err)) live.errors.push(`${c}: ${err.message}`); return; }
+      for (const d of list.filter(okProject)) {
+        const it = blank('contract', c, d[s.key]);
+        it.about = d.CDES || d.SUPDES || ''; it.project = d.PROJDES || ''; it.date = isoDay(d.CURDATE);
+        it.total = Number(d.TOTPRICE ?? d.QPRICE ?? 0) || null;
+        const state = approvalOf(d.STATDES);
+        const g = state === 'waiting' ? Waiting.signerOf(d, s) : {};
+        it.approval = { state, status: d.STATDES || '', signerLogin: g.signer || '', signer: '', since: isoDay(g.since), orders: [] };
+        it.owners = [];
+        put(it);
+      }
     }
   });
 }
@@ -423,19 +464,22 @@ function match(docs, q) {
 const gender = (it, m, f) => (KINDS[it.kind]?.f ? f : m);
 
 /** סכומי החוזה: מה שולם ומה ממתין, מהחשבונות החלקיים שלו */
-function contractMoney(it, docs) {
-  const parts = docs.filter((d) => d.kind === 'partial' && d.company === it.company && d.contract === it.docno && d.pay);
-  const sum = (xs) => xs.reduce((s, d) => s + (d.pay.amount || 0), 0);
-  const paid = parts.filter((d) => d.pay.state === 'paid');
-  const open = parts.filter((d) => !['paid', 'cancelled'].includes(d.pay.state));
-  const next = open.map((d) => d.pay.payDay).filter(Boolean).sort()[0] ?? '';
+function contractMoney(it) {
+  // מי שרואה את החוזה רואה כמה שולם ממנו — כל החשבונות החלקיים שלו, גם של עובדים אחרים
+  const run = Payments.nextRun();
+  const parts = D.all("SELECT * FROM payment_items WHERE org_id = ? AND company = ? AND type = 'partial'", ORG, it.company)
+    .map((row) => ({ row, d: json(row.data, null) })).filter((x) => x.d?.contract === it.docno).map((x) => payOf(x.row, x.d, run));
+  const sum = (xs) => xs.reduce((s, p) => s + (p.amount || 0), 0);
+  const paid = parts.filter((p) => p.state === 'paid');
+  const open = parts.filter((p) => !['paid', 'cancelled'].includes(p.state));
+  const next = open.map((p) => p.payDay).filter(Boolean).sort()[0] ?? '';
   return { count: parts.length, paidCount: paid.length, paid: sum(paid), open: sum(open), next };
 }
 
 function headline(it, q, docs) {
   const a = it.approval.state;
   if (it.kind === 'contract' && (q.wants.paid || q.howMuch)) {
-    const m = contractMoney(it, docs);
+    const m = contractMoney(it);
     return m.paidCount ? `💰 *שולמו ${money(m.paid)}* מהחוזה (${m.paidCount} ${m.paidCount === 1 ? 'חשבון חלקי' : 'חשבונות חלקיים'})`
       : '❌ *עוד לא שולם* מהחוזה';
   }
@@ -487,10 +531,14 @@ function render(it, q, docs, actorId) {
   const a = it.approval;
   if (a.state === 'waiting') lines.push(`⏳ מחכה לאישור${a.signer ? ` של *${a.signer}*` : ''}${a.since ? ` מ-${dmy(a.since)}` : ''}`);
   else if (a.state === 'draft') lines.push('📝 עדיין טיוטא — עוד לא עבר לאישור');
-  if (a.orders?.length) for (const o of a.orders.slice(0, 2)) lines.push(`🧾 הפכה להזמנה *${o.ORDNAME}*${o.CDES ? ` לספק ${o.CDES}` : ''}${o.STATDES ? ` (${o.STATDES})` : ''}`);
+  if (a.orders?.length) {
+    // מדרישה אחת יכולות להיפתח כמה הזמנות (לספקים שונים)
+    if (a.orders.length > 1) lines.push(`🧾 נפתחו ממנה ${a.orders.length} הזמנות:`);
+    for (const o of a.orders.slice(0, 5)) lines.push(`${a.orders.length > 1 ? '• ' : '🧾 הפכה להזמנה '}*${o.ORDNAME}*${o.CDES ? ` לספק ${o.CDES}` : ''}${o.STATDES ? ` (${o.STATDES})` : ''}`);
+  }
   else if (it.kind === 'demand' && a.state === 'approved') lines.push('🧾 עוד לא נפתחה ממנה הזמנה לספק');
   if (it.kind === 'contract') {
-    const m = contractMoney(it, docs);
+    const m = contractMoney(it);
     if (a.status && a.state !== 'waiting') lines.push(`📑 סטטוס בפריוריטי: ${a.status}`);
     if (m.count) {
       lines.push(m.paidCount ? `💰 שולם מהחוזה עד היום: *${money(m.paid)}*${it.total ? ` מתוך ${money(it.total)}` : ''} (${m.paidCount}/${m.count} חשבונות חלקיים)`
@@ -618,4 +666,4 @@ function alertErrors(errors) {
 
 const _reset = () => { prUsers = null; };
 
-module.exports = { KIND, KINDS, MINE_BTN, isRequest, parse, request, answer, itemsNote, approvalOf, match, gather, render, _reset };
+module.exports = { isExecManager, KIND, KINDS, MINE_BTN, isRequest, parse, request, answer, itemsNote, approvalOf, match, gather, render, _reset };

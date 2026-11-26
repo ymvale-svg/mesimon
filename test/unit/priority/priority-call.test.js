@@ -242,3 +242,15 @@ test('projectChapters — אין טבלה עם תתי פרקים: null (הבוט
   fakeFetch(t, (url) => (/\$metadata/.test(url) ? new Response('<EntityType Name="DOCUMENTS_p"><NavigationProperty Name="X_SUBFORM"/></EntityType>', { status: 200 }) : { value: [{ A: 1 }] }));
   assert.equal(await Priority.projectChapters('tabb22', 'PR1'), null);
 });
+
+test('דרישות של עובד — לפי מי שפתח (INITUSERLOGIN), לא לפי הבעלים (הוחלט 26.11.26)', async (t) => {
+  withCreds(t);
+  const calls = fakeFetch(t, () => ({ value: [{ PRDNO: 'PR1' }] }));
+  const r = await Priority.myDemands('test11', ['RavivK'], '2026-06-01');
+  assert.equal(r[0].PRDNO, 'PR1');
+  const url = decodeURIComponent(calls[0].url);
+  assert.match(url, /PURDEMANDS\?\$filter=\(INITUSERLOGIN eq 'RavivK'\) and CURDATE ge 2026-06-01T00:00:00Z/);
+  assert.doesNotMatch(url, /OWNERLOGIN eq/);
+  assert.deepEqual(await Priority.myDemands('test11', [], '2026-06-01'), [], 'בלי שם משתמש — בלי פנייה');
+  assert.equal(calls.length, 1);
+});
