@@ -1167,6 +1167,15 @@ function dismissClosure(id, actor) {
   D.run('UPDATE ai_suggestions SET data = ? WHERE id = ?', JSON.stringify(data), sug.id);
 }
 
+/** 🤖 "לשאול את …" על הצעה ממייל — העצה של סוכן המחלקה נכתבת רק עכשיו (‎TaskClosure.adviseNow‎) */
+async function adviseClosure(id, actor) {
+  const sug = ownSuggestion(id, actor.id);
+  const data = parseJson(sug.data, {});
+  const user = D.get('SELECT id, full_name, email, role FROM users WHERE id = ?', actor.id);
+  data.closure = await Closure.adviseNow(user, actor, data.closure, { title: data.title ?? sug.subject ?? '', summary: String(data.summary ?? '').slice(0, 1500) });
+  D.run('UPDATE ai_suggestions SET data = ? WHERE id = ?', JSON.stringify(data), sug.id);
+}
+
 /** 📧 הצעת התשובה שעל ההצעה: נשלחה (מהחלון) או נדחתה — יורדת מהשורה */
 /**
  * 💡 "להכין הצעת תשובה" — למייל שהשולח מחכה בו לתשובה, כשהתשובה לא הוכנה מראש (📉 מינון מתחת ל-100%, ‎mail-dose.js‎).
@@ -1331,7 +1340,7 @@ function init({ createTask }) {
 module.exports = {
   init, startScan, runScan, rangeOf, morningRun, liveRun, pollMailbox,
   approve, approveAll, attachToOther, newTaskFromMessage, reject, restore, ignoreSenderOf, join, skip, undo, markConverted, setSender, senders,
-  dismissClosure, closureForTask, markReply, prepareReply,
+  dismissClosure, adviseClosure, closureForTask, markReply, prepareReply,
   listFor, sourceLink, suggestionById, captureSourceMail, sourceMailOf, mailSnapshot, suggestionMail,
   // 📧 משימה ממייל שהעובד בוחר (‎mail-pick.js‎) — אותו ניתוח ואותה הצעה כמו בסריקה
   analyze, insertSuggestion, existingTaskFor, involvedIn, shape, recordScanned: record,

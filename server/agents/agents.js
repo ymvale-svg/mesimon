@@ -588,18 +588,35 @@ async function runAgent(key, user, actor, question, { history = [], attachments 
 }
 
 /*
- * 💡 עצה מסוכן המחלקה למשימה — ל"איך לסגור". הנתב בוחר סוכן רק כשהסקיל שלו
- * באמת עונה (מס רכישה, שכר, היתר בנייה); אחרת ‎null‎ ואין עלות מעבר לניתוב
- * הזול. ברקע: בלי מצב מהיר, בלי הצעת משימות, ועד 4 סבבי כלים.
+ * 💡 עצה מסוכן המחלקה למשימה — ל"איך לסגור". שני שלבים (סבב 2 בחיסכון, 26.11.26):
+ * ‎adviseRoute‎ — ברקע, לכל הצעת משימה: רק הניתוב הזול (Haiku) — האם יש סוכן שהסקיל שלו
+ * באמת עונה (מס רכישה, שכר, היתר בנייה). ‎advise‎ — הסוכן עצמו (Opus, כלים, חיפוש ברשת),
+ * **רק כשהעובד לוחץ** "🤖 לשאול את …". עד אז שום קריאה יקרה: רוב ההצעות לא נפתחות לעולם.
  */
-async function advise(user, actor, task) {
-  if (!Claude.isEnabled() || !D.getSetting('task_closure_agents', true)) return null;
+const adviceQuestion = (task) => `איך לסגור את המשימה: ${task.title}${task.summary ? ` — ${String(task.summary).slice(0, 600)}` : ''}`;
+const adviceOn = () => Claude.isEnabled() && D.getSetting('task_closure_agents', true);
+
+/** איזה סוכן יכול לייעץ על המשימה — ‎{ key, title, icon }‎, או ‎null‎ */
+async function adviseRoute(user, actor, task) {
+  if (!adviceOn()) return null;
   const agents = allowedFor(actor);
   if (!agents.length) return null;
-  const question = `איך לסגור את המשימה: ${task.title}${task.summary ? ` — ${String(task.summary).slice(0, 600)}` : ''}`;
-  const routed = await route(user, question, agents, []);
-  if (!routed.agent) return null;
-  const r = await runAgent(routed.agent, user, actor, question, {
+  const routed = await route(user, adviceQuestion(task), agents, []);
+  const def = routed.agent ? agents.find((a) => a.key === routed.agent) : null;
+  return def ? { key: def.key, title: def.title, icon: def.icon } : null;
+}
+
+/** העצה עצמה. ‎key‎ — הסוכן שהניתוב כבר בחר (בלי ניתוב שני); סוכן שכבר לא מורשה — ‎null‎ */
+async function advise(user, actor, task, { key = null } = {}) {
+  if (!adviceOn()) return null;
+  const agents = allowedFor(actor);
+  let agent = key && agents.some((a) => a.key === key) ? key : null;
+  if (!agent) {
+    if (key || !agents.length) return null;
+    agent = (await route(user, adviceQuestion(task), agents, [])).agent;
+    if (!agent) return null;
+  }
+  const r = await runAgent(agent, user, actor, adviceQuestion(task), {
     context: 'זו משימה שכבר נפתחה. תן המלצה קצרה ומעשית איך לסגור אותה (עד 6 שורות): מה לעשות, נתון או חישוב רלוונטי מכלי, ולמי לפנות. לא להציע משימות.',
     simple: false, live: false, propose: false, maxTurns: 4
   });
@@ -852,6 +869,6 @@ function recentLog({ limit = 100 } = {}) {
 }
 
 module.exports = {
-  init, catalog, allowedFor, setConfig, ask, asText, asMessages, runAgent, route, advise, recentLog,
+  init, catalog, allowedFor, setConfig, ask, asText, asMessages, runAgent, route, adviseRoute, advise, recentLog,
   _internal: { isPersonMail, combine, splitDraft, systemFor, toolsFor, skillText, referenceFiles, proposeTasks, projectContext, manifest, runAgent, WEB_RULE }
 };
