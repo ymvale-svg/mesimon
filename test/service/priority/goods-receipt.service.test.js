@@ -1073,3 +1073,24 @@ test('ספק שנבחר ידנית לשם שבמסמך — בפעם הבאה, ב
   assert.doesNotMatch(r.text, /לא מצאתי בפריוריטי ספק/);
   assert.match(r.text, /ספק: \*חברת חשמל לישראל\* \(S100\) — כמו בפעם הקודמת/);
 });
+
+// רעיון מסקירה 25.11 (נבנה 26.11): "כן, לסגור ✅" על שאלה מאתמול (GR שעוד טיוטא) — "השאלה כבר לא פתוחה", ו"לסגור תעודת
+// קבלת סחורה" פתח קליטה חדשה; הטיוטא נשארה פתוחה. עכשיו: הבוט שואל שוב על אותה תעודה, ו"כן" סוגר אותה.
+test('"כן, לסגור" על GR ישן שעדיין טיוטא — הבוט שואל שוב "להפוך את GR… לסופית?", ו"כן" סוגר', async (t) => {
+  H.companies(t, 'test11');
+  const u = H.worker();
+  const pr = priority(t, { reads: { receiptStatus: async (c, docno) => (docno === 'GR26000337' ? 'טיוטא' : null) } });
+  ai(t, doc());
+  const { say } = H.chat(t, u);
+  // שאלה ישנה על GR אחר (לא זו שבשיחה) — כמו לחיצה על כפתור מאתמול
+  const Q = require('../../../server/whatsapp/wa-questions');
+  Q.record(u.id, 'OLDGR', { owner: 'goods_receipt', draft: { doc: 'GR26000337' } });
+  let r = await say(BTN.confirmFinal, { press: 'OLDGR' });
+  assert.match(r.text, /GR26000337\* עדיין טיוטא/);
+  assert.match(r.text, /להפוך אותה לסופית\?/);
+  H.assertButtons(r.buttons, [BTN.confirmFinal, BTN.no]);
+  assert.equal(pr.wrote('finalizeReceipt').length, 0, 'עוד לא — רק שאלה');
+  r = await say(BTN.confirmFinal);
+  assert.match(r.text, /GR26000337\* נקלטה כסופית/);
+  assert.deepEqual(pr.wrote('finalizeReceipt').map((w) => w.args), [['test11', 'GR26000337']]);
+});
