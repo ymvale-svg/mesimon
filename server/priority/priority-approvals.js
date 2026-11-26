@@ -101,6 +101,11 @@ const kindOf = (kind) => (kind === 'demand' ? { label: 'דרישת רכש', icon
 /** שם המסמך בהודעה. חוזה ‎CH‎ — שינוי בחוזה */
 const labelOf = (kind, d) => (kind === 'contract' && d?.MED_TYPE === 'CH' ? 'שינוי בחוזה' : kindOf(kind).label);
 const numOf = (kind, d) => d?.[kindOf(kind).key] ?? '';
+/**
+ * הסוף של כל הודעה (הוחלט 26.11.26): בוואטסאפ — בלי קישורים; מפנים למשימון פריוריטי במחשב, שם הרשימה "ממתין לאישורי".
+ * הקישורים לאישור בפריוריטי — רק במייל הבוקר למאשר.
+ */
+const GO = '💻 נכנסים במחשב למשימון פריוריטי ועוברים על מה שממתין לאישורך.';
 const dmy = (iso) => String(iso).slice(0, 10).split('-').reverse().join('.');
 const money = (d) => (Number(d?.TOTPRICE) > 0 ? `${Math.round(Number(d.TOTPRICE)).toLocaleString('he-IL')} ${d.CODE || 'ש"ח'}` : null);
 const where = (company) => (Priority.isTest(company) ? `🧪 ${company} (סביבת בדיקה)` : `🏢 ${Priority.companyOf(company).name}`);
@@ -117,7 +122,7 @@ function messageFor(company, d, owner, kind = 'demand') {
       `${where(company)}${d.PROJDES ? ` · 📁 ${d.PROJDES}` : ''}`,
       [owner ? `נפתחה ע"י ${owner}` : null, items ? (items === 1 ? 'פריט אחד' : `${items} פריטים`) : null, d.CURDATE ? `מ-${dmy(d.CURDATE)}` : null].filter(Boolean).join(' · '),
       '',
-      'האישור — בפריוריטי (מהבוט אי אפשר לאשר).'
+      GO
     ].join('\n');
   }
   return [
@@ -125,7 +130,7 @@ function messageFor(company, d, owner, kind = 'demand') {
     `${where(company)}${d.PROJDES ? ` · 📁 ${d.PROJDES}` : ''}`,
     [d[k.supplier] ? `🤝 ${d[k.supplier]}` : null, money(d)].filter(Boolean).join(' · '),
     [owner ? `נשלח ע"י ${owner}` : null, d[k.date] ? `מ-${dmy(d[k.date])}` : null].filter(Boolean).join(' · ')
-  ].filter(Boolean).concat('', 'האישור — בפריוריטי (מהבוט אי אפשר לאשר).').join('\n');
+  ].filter(Boolean).concat('', GO).join('\n');
 }
 
 const MAX_LINES = 10;
@@ -139,7 +144,7 @@ function digestFor(items) {
     ...lines,
     more > 0 ? `ועוד ${more}.` : null,
     '',
-    'האישור — בפריוריטי (מהבוט אי אפשר לאשר).'
+    GO
   ].filter((x) => x !== null).join('\n');
 }
 
