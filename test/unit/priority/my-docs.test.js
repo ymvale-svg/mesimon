@@ -402,6 +402,23 @@ test('כספים ששואלים "של <שם>" — גם אז רק בחברות ש
   Access.save([]);
 });
 
+test('כלי הסוכן priority_my_docs — רק למי שהפעולה "מה קרה עם המסמך שלי" פתוחה לו (אבטחה, 27.11.26)', async (t) => {
+  reset(); fake(t);
+  const Agents = require('../../../server/agents/agents');
+  const { toolsFor, manifest } = Agents._internal;
+  const def = manifest().agents['priority-data'];
+  const u = user({ role: 'admin' });
+  pay('receipt', 'GR91', [u.id], { stage: 'paid', paid_at: '2026-11-15', payment_ref: 'BT91' });
+  D.setSetting('wa_actions', { doc_status: { enabled: false } });
+  try {
+    const { tools, run } = await toolsFor(def, 'priority-data', u, actor(u), { sources: new Set(), proposed: [], question: '' });
+    if (tools.some((x) => x.name === 'priority_my_docs')) {
+      const r = await run('priority_my_docs', { question: 'שולמה הקבלה של ברזל הצפון?' });
+      assert.ok(!r.answer, 'הפעולה כבויה — הכלי לא עונה');
+    }
+  } finally { D.setSetting('wa_actions', {}); }
+});
+
 test('מדרישה אחת נפתחו כמה הזמנות — כולן', async (t) => {
   reset();
   fake(t, {

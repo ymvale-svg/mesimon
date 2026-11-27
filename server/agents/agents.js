@@ -354,6 +354,8 @@ async function toolsFor(def, key, user, actor, state) {
       return { company: c, count: orders.length, orders: orders.slice(0, 15).map(short) };
     });
     handlers.set('priority_my_docs', async (i) => {
+      // כמו בבוט (‎docStatusAllowed‎): הפעולה "מה קרה עם המסמך שלי" כבויה לעובד — גם הסוכן לא עונה
+      if (!WaActions.allowed(actor, 'doc_status')) return { error: 'הבדיקה של מצב מסמכים לא פתוחה לך' };
       state.sources.add('🗂 פריוריטי');
       const r = await MyDocs.request(actor, String(i.question ?? ''));
       return r ? { answer: r.text, choices: r.buttons ?? [] } : { error: 'צריך שאלה על מצב מסמך: סוג (קבלת סחורה / דרישה / חשבון חלקי / חוזה / חשבון עסקה) ושולם / אושר / מתי ישולם' };
