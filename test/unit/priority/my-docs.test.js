@@ -387,6 +387,38 @@ test('הנהלה וכספים — הכל, אבל רק בחברות שלהם לפ
   Access.save([]);
 });
 
+test('כספים ששואלים "של <שם>" — גם אז רק בחברות שלהם לפי המטריצה (אבטחה, 27.11.26)', async (t) => {
+  reset(); fake(t);
+  const Access = require('../../../server/priority/priority-access');
+  const acct = user({ role: 'employee', full_name: 'מירב הכספים' });
+  const yossi = user({ role: 'employee', full_name: 'יוסף אברהמי' });
+  Access.save([{ id: acct.id, docs: ['payments'], companies: ['elad1'] }]);
+  pay('receipt', 'GR97', [yossi.id], { company: 'elad1', stage: 'paid', paid_at: '2026-11-15', payment_ref: 'BT97' });
+  pay('receipt', 'GR98', [yossi.id], { company: 'a160226', stage: 'paid', paid_at: '2026-11-15', payment_ref: 'BT98' });
+  const r = await ask(acct, 'שולמה הקבלה של יוסף?');
+  assert.match(r.text, /GR97/);
+  assert.doesNotMatch(r.text, /GR98/, 'חברה שאינה שלו במטריצה — גם כשמבקשים בשם');
+  assert.doesNotMatch(r.text, /BT98/);
+  Access.save([]);
+});
+
+test('כלי הסוכן priority_my_docs — רק למי שהפעולה "מה קרה עם המסמך שלי" פתוחה לו (אבטחה, 27.11.26)', async (t) => {
+  reset(); fake(t);
+  const Agents = require('../../../server/agents/agents');
+  const { toolsFor, manifest } = Agents._internal;
+  const def = manifest().agents['priority-data'];
+  const u = user({ role: 'admin' });
+  pay('receipt', 'GR91', [u.id], { stage: 'paid', paid_at: '2026-11-15', payment_ref: 'BT91' });
+  D.setSetting('wa_actions', { doc_status: { enabled: false } });
+  try {
+    const { tools, run } = await toolsFor(def, 'priority-data', u, actor(u), { sources: new Set(), proposed: [], question: '' });
+    if (tools.some((x) => x.name === 'priority_my_docs')) {
+      const r = await run('priority_my_docs', { question: 'שולמה הקבלה של ברזל הצפון?' });
+      assert.ok(!r.answer, 'הפעולה כבויה — הכלי לא עונה');
+    }
+  } finally { D.setSetting('wa_actions', {}); }
+});
+
 test('מדרישה אחת נפתחו כמה הזמנות — כולן', async (t) => {
   reset();
   fake(t, {
@@ -435,6 +467,19 @@ test('"הוזמנה מכולה 6 מטר למגרש 50?" — כן, הזמנה ל�
   assert.match(r.text, /PO26000107\* · גואטה הובלות · נשלחה לספק · 29\.10\.26/);
   assert.match(r.text, /מכולה ימית מוסבת למשרד 1 יח' · אספקה 01\.11\.26/);
   assert.doesNotMatch(r.text, /PO26000099/, 'מבוטלת');
+});
+
+test('"הוזמן?" — רק בחברות שהעובד מורשה בהן במטריצה (אבטחה, 27.11.26)', async (t) => {
+  reset();
+  const asked = ordersFake(t);
+  const Access = require('../../../server/priority/priority-access');
+  const u = user({ role: 'employee' });
+  Access.save([{ id: u.id, docs: ['receipt'], companies: ['elad1'] }]);
+  try {
+    const r = await ask(u, 'האם הוזמן מכולה 6 מטר למגרש 50');
+    assert.deepEqual(asked, [], 'הפרויקט בחברה שאינה שלו — לא נבדק');
+    assert.doesNotMatch(r.text, /PO26000107/);
+  } finally { Access.save([]); }
 });
 
 test('"הוזמנה משאבת בטון?" — רק ההזמנות עם הכי הרבה מילים מהפריט; מחכה לאישור — "עוד לא אושרה"', async (t) => {

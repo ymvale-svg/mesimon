@@ -215,7 +215,11 @@ function scopeOf(actor, q) {
       const parts = norm(u.full_name).split(/\s+/);
       return parts[0] === q.personWord || parts.includes(q.personWord);
     });
-    if (hit.length === 1) return { all: false, ids: new Set([hit[0].id]), person: hit[0] };
+    // עובד מחוץ לצוות שנמצא רק בזכות הרשאת הכספים — רק בחברות של השואל במטריצה (כמו בענף הכללי)
+    if (hit.length === 1) {
+      const viaFinance = finance && !team.has(Number(hit[0].id));
+      return { all: false, ids: new Set([hit[0].id]), person: hit[0], companies: viaFinance ? new Set(Access.paymentCompanies(actor, realCompanies())) : null };
+    }
   }
   // הנהלה וכספים — הכל, בחברות שלהם לפי המטריצה של משימון פריוריטי (כמו במסך התשלומים)
   return { all: finance, companies: finance ? new Set(Access.paymentCompanies(actor, realCompanies())) : null, ids: new Set([me, ...team]), person: null };
@@ -272,7 +276,7 @@ async function gather(actor, q, { today } = {}) {
     return old;
   };
   const inCompany = (c) => !scope.companies || scope.companies.has(c);
-  const mine = (owners, company) => (scope.all ? inCompany(company) : owners.some((o) => scope.ids.has(Number(o))));
+  const mine = (owners, company) => inCompany(company) && (scope.all || owners.some((o) => scope.ids.has(Number(o))));
   const since = new Date(Date.now() - LOOK_DAYS * DAY).toISOString();
 
   // 1. מה שנקלט / נפתח בבוט
@@ -329,7 +333,8 @@ async function gather(actor, q, { today } = {}) {
     const kind = SCREEN_KIND[w.screen];
     const key = `${w.company}:${w.docno}`;
     if (!kind && !docs.has(key)) continue;
-    if (!docs.has(key) && !(scope.all ? inCompany(w.company) : ownerNames.has(w.owner))) continue;
+    if (!inCompany(w.company)) continue;
+    if (!docs.has(key) && !(scope.all || ownerNames.has(w.owner))) continue;
     const it = blank(docs.get(key)?.kind ?? kind, w.company, w.docno);
     it.about = w.party || ''; it.project = w.project || ''; it.date = isoDay(w.since);
     it.approval = { state: 'waiting', status: w.status, signer: w.signer_user_id ? userName(w.signer_user_id) : '', signerLogin: w.signer || '', since: isoDay(w.since), orders: [] };
@@ -353,7 +358,7 @@ async function liveDemands(scope, put, live) {
   if (!pairs.length) return;
   const idOf = (login) => pairs.find((p) => p.login.toLowerCase() === String(login ?? '').toLowerCase())?.id;
   const since = new Date(Date.now() - DEMAND_DAYS * DAY).toISOString().slice(0, 10);
-  const jobs = realCompanies().flatMap((c) => chunks(pairs.map((p) => p.login), LOGIN_CHUNK).map((logins) => ({ c, logins })));
+  const jobs = realCompanies().filter((c) => !scope.companies || scope.companies.has(c)).flatMap((c) => chunks(pairs.map((p) => p.login), LOGIN_CHUNK).map((logins) => ({ c, logins })));
   await pool(jobs, async ({ c, logins }) => {
     let list = [];
     try { list = await Priority.myDemands(c, logins, since); } catch (err) { live.errors.push(`${c}: ${err.message}`); return; }
@@ -419,7 +424,8 @@ async function liveOrders(actor, q, put, live) {
   const nums = String(q.text).match(/\d{2,}/g) ?? [];
   const ptext = [...q.words.filter((w) => !UNITS.has(w)), ...nums].join(' ');
   const found = [];
-  await pool(realCompanies(), async (c) => {
+  // רק בחברות שהעובד מורשה בהן במטריצה
+  await pool(Access.filterCompanies(actor, realCompanies()), async (c) => {
     const list = await Priority.projects(c).catch(() => []);
     for (const p of Priority.matchProjects(list, ptext)) {
       const numHits = nums.filter((n) => new RegExp(`(^|\\D)${n}(\\D|$)`).test(p.des)).length;
