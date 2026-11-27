@@ -424,7 +424,8 @@ async function liveOrders(actor, q, put, live) {
   const nums = String(q.text).match(/\d{2,}/g) ?? [];
   const ptext = [...q.words.filter((w) => !UNITS.has(w)), ...nums].join(' ');
   const found = [];
-  await pool(realCompanies(), async (c) => {
+  // רק בחברות שהעובד מורשה בהן במטריצה
+  await pool(Access.filterCompanies(actor, realCompanies()), async (c) => {
     const list = await Priority.projects(c).catch(() => []);
     for (const p of Priority.matchProjects(list, ptext)) {
       const numHits = nums.filter((n) => new RegExp(`(^|\\D)${n}(\\D|$)`).test(p.des)).length;

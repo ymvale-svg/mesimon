@@ -452,6 +452,19 @@ test('"הוזמנה מכולה 6 מטר למגרש 50?" — כן, הזמנה ל�
   assert.doesNotMatch(r.text, /PO26000099/, 'מבוטלת');
 });
 
+test('"הוזמן?" — רק בחברות שהעובד מורשה בהן במטריצה (אבטחה, 27.11.26)', async (t) => {
+  reset();
+  const asked = ordersFake(t);
+  const Access = require('../../../server/priority/priority-access');
+  const u = user({ role: 'employee' });
+  Access.save([{ id: u.id, docs: ['receipt'], companies: ['elad1'] }]);
+  try {
+    const r = await ask(u, 'האם הוזמן מכולה 6 מטר למגרש 50');
+    assert.deepEqual(asked, [], 'הפרויקט בחברה שאינה שלו — לא נבדק');
+    assert.doesNotMatch(r.text, /PO26000107/);
+  } finally { Access.save([]); }
+});
+
 test('"הוזמנה משאבת בטון?" — רק ההזמנות עם הכי הרבה מילים מהפריט; מחכה לאישור — "עוד לא אושרה"', async (t) => {
   reset(); ordersFake(t);
   const u = user({ role: 'admin' });
