@@ -387,6 +387,21 @@ test('הנהלה וכספים — הכל, אבל רק בחברות שלהם לפ
   Access.save([]);
 });
 
+test('כספים ששואלים "של <שם>" — גם אז רק בחברות שלהם לפי המטריצה (אבטחה, 27.11.26)', async (t) => {
+  reset(); fake(t);
+  const Access = require('../../../server/priority/priority-access');
+  const acct = user({ role: 'employee', full_name: 'מירב הכספים' });
+  const yossi = user({ role: 'employee', full_name: 'יוסף אברהמי' });
+  Access.save([{ id: acct.id, docs: ['payments'], companies: ['elad1'] }]);
+  pay('receipt', 'GR97', [yossi.id], { company: 'elad1', stage: 'paid', paid_at: '2026-11-15', payment_ref: 'BT97' });
+  pay('receipt', 'GR98', [yossi.id], { company: 'a160226', stage: 'paid', paid_at: '2026-11-15', payment_ref: 'BT98' });
+  const r = await ask(acct, 'שולמה הקבלה של יוסף?');
+  assert.match(r.text, /GR97/);
+  assert.doesNotMatch(r.text, /GR98/, 'חברה שאינה שלו במטריצה — גם כשמבקשים בשם');
+  assert.doesNotMatch(r.text, /BT98/);
+  Access.save([]);
+});
+
 test('מדרישה אחת נפתחו כמה הזמנות — כולן', async (t) => {
   reset();
   fake(t, {
